@@ -36,11 +36,11 @@ func (f *Frame) Call(fn uintptr) {
 	runtime_cgocall(trampABI0, unsafe.Pointer(f))
 }
 
-func (f *Frame) Reset()                  { *f = Frame{} }
-func (f *Frame) Int(i int, v uintptr)    { f.ints[i] = v }
-func (f *Frame) Float(i int, v uint64)   { f.floats[i] = v }
-func (f *Frame) R0() uintptr             { return f.r0 }
-func (f *Frame) F0() uint64              { return f.f[0] }
+func (f *Frame) Reset()                { *f = Frame{} }
+func (f *Frame) Int(i int, v uintptr)  { f.ints[i] = v }
+func (f *Frame) Float(i int, v uint64) { f.floats[i] = v }
+func (f *Frame) R0() uintptr           { return f.r0 }
+func (f *Frame) F0() uint64            { return f.f[0] }
 func (f *Frame) Call2(fn, a, b uintptr) uintptr {
 	f.ints[0], f.ints[1] = a, b
 	f.Call(fn)
@@ -58,10 +58,10 @@ type cbArgs struct {
 // CB is the view a handler gets of one callback invocation.
 type CB cbArgs
 
-func (c *CB) Int(i int) uintptr   { return (*[24]uintptr)(c.args)[8+i] }
-func (c *CB) Float(i int) uint64  { return uint64((*[24]uintptr)(c.args)[i]) }
-func (c *CB) SetInt(v uintptr)    { c.result[0] = v }
-func (c *CB) SetFloat(v uint64)   { c.result[0] = uintptr(v) }
+func (c *CB) Int(i int) uintptr  { return (*[24]uintptr)(c.args)[8+i] }
+func (c *CB) Float(i int) uint64 { return uint64((*[24]uintptr)(c.args)[i]) }
+func (c *CB) SetInt(v uintptr)   { c.result[0] = v }
+func (c *CB) SetFloat(v uint64)  { c.result[0] = uintptr(v) }
 
 const maxCB = 8
 
