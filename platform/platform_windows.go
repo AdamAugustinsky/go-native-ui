@@ -1,0 +1,683 @@
+//go:build windows
+
+package platform
+
+import (
+	"errors"
+	"runtime"
+	"sync/atomic"
+	"syscall"
+	"unsafe"
+
+	"gonativeui/internal/win32"
+)
+
+// Native holds the OS handles the gpu package needs.
+type Native struct{ HWND, HInstance uintptr }
+
+// ---- Win32 constants ------------------------------------------------------
+
+const (
+	wmSize          = 0x0005
+	wmSetFocus      = 0x0007
+	wmKillFocus     = 0x0008
+	wmPaint         = 0x000F
+	wmClose         = 0x0010
+	wmEraseBkgnd    = 0x0014
+	wmKeyDown       = 0x0100
+	wmKeyUp         = 0x0101
+	wmChar          = 0x0102
+	wmSysKeyDown    = 0x0104
+	wmSysKeyUp      = 0x0105
+	wmMouseMove     = 0x0200
+	wmLButtonDown   = 0x0201
+	wmLButtonUp     = 0x0202
+	wmRButtonDown   = 0x0204
+	wmRButtonUp     = 0x0205
+	wmMButtonDown   = 0x0207
+	wmMButtonUp     = 0x0208
+	wmMouseWheel    = 0x020A
+	wmXButtonDown   = 0x020B
+	wmXButtonUp     = 0x020C
+	wmMouseHWheel   = 0x020E
+	wmCaptureChange = 0x0215
+	wmMouseLeave    = 0x02A3
+	wmDpiChanged    = 0x02E0
+	wmWake          = 0x8000 + 1 // WM_APP+1
+
+	sizeRestored  = 0
+	sizeMinimized = 1
+
+	wsOverlappedWindow = 0x00CF0000
+	cwUseDefault       = 0x80000000
+	swShowNormal       = 1
+	idcArrow           = 32512
+
+	swpNoMove     = 0x0002
+	swpNoZOrder   = 0x0004
+	swpNoActivate = 0x0010
+
+	pmRemove = 0x0001
+
+	qsAllInput          = 0x04FF
+	mwmoInputAvail      = 0x0004
+	waitObject0         = 0
+	waitFailed          = 0xFFFFFFFF
+	infinite            = 0xFFFFFFFF
+	tmeLeave            = 0x00000002
+	xButton1            = 1
+	vkShift             = 0x10
+	vkControl           = 0x11
+	vkMenu              = 0x12
+	vkLWin              = 0x5B
+	vkRWin              = 0x5C
+	defaultDPI          = 96
+	wheelDelta          = 120
+	wheelLinesPerNotch  = 3
+	wheelLogicalPerLine = 16
+)
+
+// ---- Win32 structures -------------------------------------------------------
+
+type point struct{ x, y int32 }
+
+type rect struct{ left, top, right, bottom int32 }
+
+// msg is MSG from winuser.h.
+type msg struct {
+	hwnd    uintptr
+	message uint32
+	wParam  uintptr
+	lParam  uintptr
+	time    uint32
+	pt      point
+	private uint32
+}
+
+// wndClassEx is WNDCLASSEXW.
+type wndClassEx struct {
+	size       uint32
+	style      uint32
+	wndProc    uintptr
+	clsExtra   int32
+	wndExtra   int32
+	instance   uintptr
+	icon       uintptr
+	cursor     uintptr
+	background uintptr
+	menuName   *uint16
+	className  *uint16
+	iconSm     uintptr
+}
+
+// trackMouseEvent is TRACKMOUSEEVENT.
+type trackMouseEvent struct {
+	size      uint32
+	flags     uint32
+	hwndTrack uintptr
+	hoverTime uint32
+}
+
+// ---- Entry points (resolved once; System32 only) ------------------------------
+
+var (
+	user32   = win32.LoadSystem("user32.dll")
+	kernel32 = win32.LoadSystem("kernel32.dll")
+
+	pGetModuleHandleW   = win32.Proc(kernel32, "GetModuleHandleW")
+	pRegisterClassExW   = win32.Proc(user32, "RegisterClassExW")
+	pUnregisterClassW   = win32.Proc(user32, "UnregisterClassW")
+	pCreateWindowExW    = win32.Proc(user32, "CreateWindowExW")
+	pDestroyWindow      = win32.Proc(user32, "DestroyWindow")
+	pShowWindow         = win32.Proc(user32, "ShowWindow")
+	pDefWindowProcW     = win32.Proc(user32, "DefWindowProcW")
+	pPeekMessageW       = win32.Proc(user32, "PeekMessageW")
+	pTranslateMessage   = win32.Proc(user32, "TranslateMessage")
+	pDispatchMessageW   = win32.Proc(user32, "DispatchMessageW")
+	pPostMessageW       = win32.Proc(user32, "PostMessageW")
+	pMsgWait            = win32.Proc(user32, "MsgWaitForMultipleObjectsEx")
+	pSetWindowPos       = win32.Proc(user32, "SetWindowPos")
+	pGetClientRect      = win32.Proc(user32, "GetClientRect")
+	pValidateRect       = win32.Proc(user32, "ValidateRect")
+	pLoadCursorW        = win32.Proc(user32, "LoadCursorW")
+	pSetCapture         = win32.Proc(user32, "SetCapture")
+	pReleaseCapture     = win32.Proc(user32, "ReleaseCapture")
+	pGetKeyState        = win32.Proc(user32, "GetKeyState")
+	pScreenToClient     = win32.Proc(user32, "ScreenToClient")
+	pTrackMouseEvent    = win32.Proc(user32, "TrackMouseEvent")
+	pAdjustWindowRectEx = win32.Proc(user32, "AdjustWindowRectEx")
+	pSetDpiAwarenessCtx = win32.Proc(user32, "SetProcessDpiAwarenessContext") // Windows 10 1607+
+	pSetProcessDPIAware = win32.Proc(user32, "SetProcessDPIAware")
+	pGetDpiForWindow    = win32.Proc(user32, "GetDpiForWindow")          // Windows 10 1607+
+	pGetDpiForSystem    = win32.Proc(user32, "GetDpiForSystem")          // Windows 10 1607+
+	pAdjustRectExForDpi = win32.Proc(user32, "AdjustWindowRectExForDpi") // Windows 10 1607+
+	classNameUTF16      = mustUTF16("GoNativeUIWindow")
+	wndProcCallback     = syscall.NewCallback(wndProc) // created once
+	theWindow           *Window                        // the single window; read by wndProc
+	wakeHWND            atomic.Uintptr                 // HWND for osWake, 0 when no window
+	keyMap              = buildKeyMap()
+)
+
+func mustUTF16(s string) *uint16 {
+	p, err := syscall.UTF16PtrFromString(s)
+	if err != nil {
+		panic(err)
+	}
+	return p
+}
+
+// ---- Window -------------------------------------------------------------------
+
+// Window is the single top-level window.
+type Window struct {
+	q eventQueue
+
+	hwnd, hinst uintptr
+	style       uint32
+
+	w, h  int32   // client size, physical pixels
+	scale float32 // pixels per logical unit
+
+	// Last values reported through EvResize, to avoid duplicate events.
+	rw, rh int32
+	rscale float32
+
+	opening   bool // inside Open: WM_SIZE etc. update state but push no events
+	delivered bool // q holds events already returned by Wait
+	visible   bool // last reported visibility
+	minimized bool
+	tracking  bool // TrackMouseEvent(TME_LEAVE) armed
+	buttons   uint8
+
+	frameArmed bool
+	waitable   uintptr
+	handles    [1]uintptr
+
+	hiSurrogate uint16
+	utf8        [4]byte
+
+	// Syscall argument and result storage; kept in the heap-allocated Window
+	// so no pointer to a stack local ever reaches the OS.
+	msg msg
+	rc  rect
+	pt  point
+	tme trackMouseEvent
+	wc  wndClassEx
+}
+
+// Open creates the window. Main thread only.
+func Open(o Options) (*Window, error) {
+	if user32 == 0 || pCreateWindowExW == 0 || pMsgWait == 0 {
+		return nil, errors.New("platform: cannot load user32.dll")
+	}
+	if theWindow != nil {
+		return nil, errors.New("platform: window already open")
+	}
+	if pSetDpiAwarenessCtx == 0 || !win32.Bool(win32.Call(pSetDpiAwarenessCtx, ^uintptr(3))) { // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4
+		if pSetProcessDPIAware != 0 {
+			win32.Call(pSetProcessDPIAware)
+		}
+	}
+
+	title, err := syscall.UTF16PtrFromString(o.Title)
+	if err != nil {
+		return nil, err
+	}
+
+	w := &Window{q: newEventQueue(), opening: true, style: wsOverlappedWindow, rscale: 1}
+	w.hinst = win32.Call(pGetModuleHandleW, 0)
+	theWindow = w // WndProc runs inside CreateWindowExW
+
+	w.wc = wndClassEx{
+		size:      uint32(unsafe.Sizeof(w.wc)),
+		wndProc:   wndProcCallback,
+		instance:  w.hinst,
+		cursor:    win32.Call(pLoadCursorW, 0, idcArrow),
+		className: classNameUTF16,
+	}
+	if win32.Call(pRegisterClassExW, uintptr(unsafe.Pointer(&w.wc)))&0xFFFF == 0 {
+		theWindow = nil
+		return nil, errors.New("platform: RegisterClassExW failed")
+	}
+
+	dpi := uint32(defaultDPI)
+	if pGetDpiForSystem != 0 {
+		dpi = uint32(win32.Call(pGetDpiForSystem))
+	}
+	ow, oh := w.outerSize(o.Width, o.Height, dpi)
+	w.hwnd = win32.Call(pCreateWindowExW,
+		0, uintptr(unsafe.Pointer(classNameUTF16)), uintptr(unsafe.Pointer(title)), uintptr(w.style),
+		cwUseDefault, cwUseDefault, uintptr(ow), uintptr(oh), 0, 0, w.hinst, 0)
+	runtime.KeepAlive(title)
+	if w.hwnd == 0 {
+		win32.Call(pUnregisterClassW, uintptr(unsafe.Pointer(classNameUTF16)), w.hinst)
+		theWindow = nil
+		return nil, errors.New("platform: CreateWindowExW failed")
+	}
+	// The window may have landed on a monitor with a different DPI.
+	if pGetDpiForWindow != 0 {
+		if d := uint32(win32.Call(pGetDpiForWindow, w.hwnd)); d != 0 && d != dpi {
+			dpi = d
+			ow, oh = w.outerSize(o.Width, o.Height, dpi)
+			win32.Call(pSetWindowPos, w.hwnd, 0, 0, 0, uintptr(ow), uintptr(oh), swpNoMove|swpNoZOrder|swpNoActivate)
+		}
+	}
+	w.scale = float32(dpi) / defaultDPI
+
+	win32.Call(pShowWindow, w.hwnd, swShowNormal)
+	w.updateClientSize()
+	w.rw, w.rh, w.rscale = w.w, w.h, w.scale
+	w.opening = false
+	wakeHWND.Store(w.hwnd)
+
+	w.visible = true
+	w.q.push(Event{Kind: EvVisible, Flags: FlagDown, Time: Now()})
+	if takeWake() { // a Wake before Open found no window to post to
+		w.q.push(Event{Kind: EvWake, Time: Now()})
+	}
+	return w, nil
+}
+
+// outerSize returns the window rectangle size (including frame) whose client
+// area is the logical size scaled by dpi.
+func (w *Window) outerSize(lw, lh int, dpi uint32) (int32, int32) {
+	cw := int32(float32(lw)*float32(dpi)/defaultDPI + 0.5)
+	ch := int32(float32(lh)*float32(dpi)/defaultDPI + 0.5)
+	w.rc = rect{0, 0, cw, ch}
+	if pAdjustRectExForDpi != 0 {
+		win32.Call(pAdjustRectExForDpi, uintptr(unsafe.Pointer(&w.rc)), uintptr(w.style), 0, 0, uintptr(dpi))
+	} else {
+		win32.Call(pAdjustWindowRectEx, uintptr(unsafe.Pointer(&w.rc)), uintptr(w.style), 0, 0)
+	}
+	return w.rc.right - w.rc.left, w.rc.bottom - w.rc.top
+}
+
+func (w *Window) updateClientSize() {
+	if win32.Bool(win32.Call(pGetClientRect, w.hwnd, uintptr(unsafe.Pointer(&w.rc)))) {
+		w.w, w.h = w.rc.right-w.rc.left, w.rc.bottom-w.rc.top
+	}
+}
+
+// emitResize reports the current size/scale unless it was already reported.
+func (w *Window) emitResize() {
+	if w.opening || w.w <= 0 || w.h <= 0 {
+		return
+	}
+	if w.w == w.rw && w.h == w.rh && w.scale == w.rscale {
+		return
+	}
+	w.rw, w.rh, w.rscale = w.w, w.h, w.scale
+	w.q.push(Event{Kind: EvResize, W: w.w, H: w.h, Scale: w.scale, Time: Now()})
+}
+
+// Text returns the UTF-8 bytes of an EvText event.
+func (w *Window) Text(r TextRef) []byte { return w.q.textOf(r) }
+
+// RequestFrame arms one EvFrame for the next frame-latency opportunity.
+func (w *Window) RequestFrame() { w.frameArmed = true }
+
+// Size returns the client size in physical pixels and the pixels per logical unit.
+func (w *Window) Size() (int32, int32, float32) { return w.w, w.h, w.scale }
+
+// Native returns the OS handles for the gpu package.
+func (w *Window) Native() Native { return Native{HWND: w.hwnd, HInstance: w.hinst} }
+
+// SetFrameWaitable installs the DXGI frame-latency waitable handle.
+func (w *Window) SetFrameWaitable(h uintptr) { w.waitable = h }
+
+// Close destroys the window.
+func (w *Window) Close() {
+	if w.hwnd == 0 {
+		return
+	}
+	wakeHWND.Store(0)
+	hwnd := w.hwnd
+	w.hwnd = 0
+	win32.Call(pDestroyWindow, hwnd)
+	win32.Call(pUnregisterClassW, uintptr(unsafe.Pointer(classNameUTF16)), w.hinst)
+	theWindow = nil
+}
+
+// osWake posts a message to the window thread; safe from any thread.
+func osWake() {
+	h := wakeHWND.Load()
+	if h == 0 {
+		return // Open picks up the pending wake
+	}
+	if !win32.Bool(win32.Call(pPostMessageW, h, wmWake, 0, 0)) {
+		takeWake() // don't leave the coalescing flag stuck
+	}
+}
+
+// Wait blocks until at least one event is available, a wake or frame slot
+// arrives, or the timeout elapses (negative = no timeout, 0 = poll). The
+// returned slice is valid until the next Wait.
+func (w *Window) Wait(timeoutNs int64) []Event {
+	if w.delivered {
+		w.q.reset()
+		w.delivered = false
+	}
+	var deadline int64
+	if timeoutNs > 0 {
+		deadline = nanotime() + timeoutNs
+	}
+	for {
+		if w.frameArmed && w.waitable == 0 {
+			w.frameArmed = false
+			w.q.push(Event{Kind: EvFrame, Time: Now()})
+		}
+
+		ms := uintptr(infinite)
+		switch {
+		case timeoutNs == 0 || len(w.q.ev) > 0:
+			ms = 0
+		case timeoutNs > 0:
+			ms = 0
+			if rem := deadline - nanotime(); rem > 0 {
+				ms = uintptr(min((rem+999_999)/1_000_000, infinite-1))
+			}
+		}
+		n := uintptr(0)
+		if w.frameArmed {
+			w.handles[0] = w.waitable
+			n = 1
+		}
+		r := uint32(win32.Call(pMsgWait, n, uintptr(unsafe.Pointer(&w.handles[0])), ms, qsAllInput, mwmoInputAvail))
+		if n == 1 {
+			switch r {
+			case waitObject0:
+				w.frameArmed = false
+				w.q.push(Event{Kind: EvFrame, Time: Now()})
+			case waitFailed:
+				w.waitable = 0 // bad handle: fall back to immediate frames
+			}
+		}
+
+		for win32.Bool(win32.Call(pPeekMessageW, uintptr(unsafe.Pointer(&w.msg)), 0, 0, 0, pmRemove)) {
+			win32.Call(pTranslateMessage, uintptr(unsafe.Pointer(&w.msg)))
+			win32.Call(pDispatchMessageW, uintptr(unsafe.Pointer(&w.msg)))
+		}
+
+		if len(w.q.ev) > 0 || timeoutNs == 0 || (timeoutNs > 0 && nanotime() >= deadline) {
+			break
+		}
+	}
+	w.delivered = true
+	return w.q.ev
+}
+
+// ---- Window procedure ---------------------------------------------------------
+
+func loword(v uintptr) int32  { return int32(int16(uint16(v))) }
+func hiword(v uintptr) int32  { return int32(int16(uint16(v >> 16))) }
+func uloword(v uintptr) int32 { return int32(uint16(v)) }
+func uhiword(v uintptr) int32 { return int32(uint16(v >> 16)) }
+
+func keyIsDown(vk uintptr) bool {
+	return uint16(win32.Call(pGetKeyState, vk))&0x8000 != 0
+}
+
+func currentMods() Mods {
+	var m Mods
+	if keyIsDown(vkShift) {
+		m |= ModShift
+	}
+	if keyIsDown(vkControl) {
+		m |= ModCtrl
+	}
+	if keyIsDown(vkMenu) {
+		m |= ModAlt
+	}
+	if keyIsDown(vkLWin) || keyIsDown(vkRWin) {
+		m |= ModSuper
+	}
+	return m
+}
+
+func defProc(hwnd, m, wp, lp uintptr) uintptr {
+	return win32.Call(pDefWindowProcW, hwnd, m, wp, lp)
+}
+
+func wndProc(hwnd, m, wp, lp uintptr) uintptr {
+	w := theWindow
+	if w == nil {
+		return defProc(hwnd, m, wp, lp)
+	}
+	switch m {
+	case wmWake:
+		if takeWake() {
+			w.q.push(Event{Kind: EvWake, Time: Now()})
+		}
+		return 0
+
+	case wmClose:
+		w.q.push(Event{Kind: EvClose, Time: Now()})
+		return 0
+
+	case wmEraseBkgnd:
+		return 1
+
+	case wmPaint:
+		win32.Call(pValidateRect, hwnd, 0)
+		if !w.opening && !w.visible && !w.minimized {
+			w.visible = true
+			w.q.push(Event{Kind: EvVisible, Flags: FlagDown, Time: Now()})
+		}
+		return 0
+
+	case wmSize:
+		if wp == sizeMinimized {
+			w.minimized = true
+			if w.visible && !w.opening {
+				w.visible = false
+				w.q.push(Event{Kind: EvVisible, Time: Now()})
+			}
+			return 0
+		}
+		w.w, w.h = uloword(lp), uhiword(lp)
+		if w.minimized {
+			w.minimized = false
+			if !w.opening {
+				w.visible = true
+				w.q.push(Event{Kind: EvVisible, Flags: FlagDown, Time: Now()})
+			}
+		}
+		w.emitResize()
+		return 0
+
+	case wmDpiChanged:
+		w.scale = float32(uloword(wp)) / defaultDPI
+		if r := (*rect)(win32.Ptr(lp)); r != nil {
+			win32.Call(pSetWindowPos, hwnd, 0,
+				uintptr(r.left), uintptr(r.top), uintptr(r.right-r.left), uintptr(r.bottom-r.top),
+				swpNoZOrder|swpNoActivate)
+		}
+		w.updateClientSize()
+		w.emitResize()
+		return 0
+
+	case wmSetFocus:
+		w.q.push(Event{Kind: EvFocus, Flags: FlagDown, Time: Now()})
+		return 0
+	case wmKillFocus:
+		w.q.push(Event{Kind: EvFocus, Time: Now()})
+		return 0
+
+	case wmKeyDown, wmKeyUp, wmSysKeyDown, wmSysKeyUp:
+		var f Flags
+		if m == wmKeyDown || m == wmSysKeyDown {
+			f = FlagDown
+			if lp&(1<<30) != 0 {
+				f |= FlagRepeat
+			}
+		}
+		code := uint32(lp>>16) & 0xFF
+		if lp&(1<<24) != 0 {
+			code |= 0xE000
+		}
+		var k Key
+		if wp < uintptr(len(keyMap)) {
+			k = keyMap[wp]
+		}
+		w.q.push(Event{Kind: EvKey, Key: k, Code: code, Mods: currentMods(), Flags: f, Time: Now()})
+		if m == wmSysKeyDown || m == wmSysKeyUp {
+			return defProc(hwnd, m, wp, lp) // keeps Alt+F4 and Alt+Space working
+		}
+		return 0
+
+	case wmChar:
+		w.onChar(uint16(wp))
+		return 0
+
+	case wmMouseMove:
+		if !w.tracking {
+			w.tme = trackMouseEvent{size: uint32(unsafe.Sizeof(w.tme)), flags: tmeLeave, hwndTrack: hwnd}
+			if win32.Bool(win32.Call(pTrackMouseEvent, uintptr(unsafe.Pointer(&w.tme)))) {
+				w.tracking = true
+			}
+		}
+		w.q.push(Event{Kind: EvPointerMove, X: float32(loword(lp)), Y: float32(hiword(lp)), Time: Now()})
+		return 0
+
+	case wmMouseLeave:
+		w.tracking = false
+		w.q.push(Event{Kind: EvPointerLeave, Time: Now()})
+		return 0
+
+	case wmLButtonDown:
+		w.button(hwnd, ButtonLeft, true, lp)
+		return 0
+	case wmLButtonUp:
+		w.button(hwnd, ButtonLeft, false, lp)
+		return 0
+	case wmRButtonDown:
+		w.button(hwnd, ButtonRight, true, lp)
+		return 0
+	case wmRButtonUp:
+		w.button(hwnd, ButtonRight, false, lp)
+		return 0
+	case wmMButtonDown:
+		w.button(hwnd, ButtonMiddle, true, lp)
+		return 0
+	case wmMButtonUp:
+		w.button(hwnd, ButtonMiddle, false, lp)
+		return 0
+	case wmXButtonDown, wmXButtonUp:
+		b := ButtonForward
+		if uhiword(wp) == xButton1 {
+			b = ButtonBack
+		}
+		w.button(hwnd, b, m == wmXButtonDown, lp)
+		return 1 // TRUE: XBUTTON messages require it
+
+	case wmCaptureChange:
+		w.buttons = 0
+		return 0
+
+	case wmMouseWheel, wmMouseHWheel:
+		w.pt = point{loword(lp), hiword(lp)} // screen coordinates
+		win32.Call(pScreenToClient, hwnd, uintptr(unsafe.Pointer(&w.pt)))
+		delta := float32(hiword(wp)) / wheelDelta * wheelLinesPerNotch * wheelLogicalPerLine * w.scale
+		e := Event{Kind: EvScroll, X: float32(w.pt.x), Y: float32(w.pt.y), Mods: currentMods(), Time: Now()}
+		if m == wmMouseWheel {
+			e.DY = delta // wheel forward = scroll up = content moves down
+		} else {
+			e.DX = -delta // wheel tilted right = content moves left
+		}
+		w.q.push(e)
+		return 0
+	}
+	return defProc(hwnd, m, wp, lp)
+}
+
+func (w *Window) button(hwnd uintptr, b Button, down bool, lp uintptr) {
+	bit := uint8(1) << b
+	var f Flags
+	if down {
+		f = FlagDown
+		if w.buttons == 0 {
+			win32.Call(pSetCapture, hwnd)
+		}
+		w.buttons |= bit
+	} else {
+		w.buttons &^= bit
+		if w.buttons == 0 {
+			win32.Call(pReleaseCapture)
+		}
+	}
+	w.q.push(Event{Kind: EvPointerButton, Button: b, Flags: f, Mods: currentMods(),
+		X: float32(loword(lp)), Y: float32(hiword(lp)), Time: Now()})
+}
+
+// onChar converts one UTF-16 code unit from WM_CHAR to UTF-8 text.
+func (w *Window) onChar(u uint16) {
+	var r rune
+	switch {
+	case u >= 0xD800 && u < 0xDC00: // high surrogate: wait for the low half
+		w.hiSurrogate = u
+		return
+	case u >= 0xDC00 && u < 0xE000: // low surrogate
+		hi := w.hiSurrogate
+		w.hiSurrogate = 0
+		if hi == 0 {
+			return
+		}
+		r = (rune(hi)-0xD800)<<10 + (rune(u) - 0xDC00) + 0x10000
+	default:
+		w.hiSurrogate = 0
+		if u < 0x20 || u == 0x7F { // control characters are keys, not text
+			return
+		}
+		r = rune(u)
+	}
+	n := 0
+	switch {
+	case r < 0x80:
+		w.utf8[0] = byte(r)
+		n = 1
+	case r < 0x800:
+		w.utf8[0] = 0xC0 | byte(r>>6)
+		w.utf8[1] = 0x80 | byte(r)&0x3F
+		n = 2
+	case r < 0x10000:
+		w.utf8[0] = 0xE0 | byte(r>>12)
+		w.utf8[1] = 0x80 | byte(r>>6)&0x3F
+		w.utf8[2] = 0x80 | byte(r)&0x3F
+		n = 3
+	default:
+		w.utf8[0] = 0xF0 | byte(r>>18)
+		w.utf8[1] = 0x80 | byte(r>>12)&0x3F
+		w.utf8[2] = 0x80 | byte(r>>6)&0x3F
+		w.utf8[3] = 0x80 | byte(r)&0x3F
+		n = 4
+	}
+	w.q.pushText(w.utf8[:n], Now())
+}
+
+// buildKeyMap maps Windows virtual-key codes to platform keys.
+func buildKeyMap() (m [256]Key) {
+	m[0x1B] = KeyEscape
+	m[0x0D] = KeyEnter
+	m[0x09] = KeyTab
+	m[0x08] = KeyBackspace
+	m[0x2E] = KeyDelete
+	m[0x20] = KeySpace
+	m[0x25] = KeyLeft
+	m[0x27] = KeyRight
+	m[0x26] = KeyUp
+	m[0x28] = KeyDown
+	m[0x24] = KeyHome
+	m[0x23] = KeyEnd
+	m[0x21] = KeyPageUp
+	m[0x22] = KeyPageDown
+	for i := 0; i < 12; i++ {
+		m[0x70+i] = KeyF1 + Key(i) // VK_F1..VK_F12
+	}
+	for i := 0; i < 26; i++ {
+		m['A'+i] = KeyA + Key(i)
+	}
+	for i := 0; i < 10; i++ {
+		m['0'+i] = Key0 + Key(i)
+	}
+	return m
+}
