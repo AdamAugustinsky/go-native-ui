@@ -136,6 +136,7 @@ var (
 	pDispatchMessageW   = win32.Proc(user32, "DispatchMessageW")
 	pPostMessageW       = win32.Proc(user32, "PostMessageW")
 	pMsgWait            = win32.Proc(user32, "MsgWaitForMultipleObjectsEx")
+	pWaitForSingleObj   = win32.Proc(kernel32, "WaitForSingleObjectEx")
 	pSetWindowPos       = win32.Proc(user32, "SetWindowPos")
 	pGetClientRect      = win32.Proc(user32, "GetClientRect")
 	pValidateRect       = win32.Proc(user32, "ValidateRect")
@@ -323,7 +324,15 @@ func (w *Window) Size() (int32, int32, float32) { return w.w, w.h, w.scale }
 func (w *Window) Native() Native { return Native{HWND: w.hwnd, HInstance: w.hinst} }
 
 // SetFrameWaitable installs the DXGI frame-latency waitable handle.
-func (w *Window) SetFrameWaitable(h uintptr) { w.waitable = h }
+func (w *Window) SetFrameWaitable(h uintptr) {
+	w.waitable = h
+	if h != 0 {
+		// The waitable starts signalled; consume it before the first frame as
+		// Microsoft's DirectXLatency sample does, or every later frame runs one
+		// frame of latency behind.
+		win32.Call(pWaitForSingleObj, h, 1000, 1)
+	}
+}
 
 // Close destroys the window.
 func (w *Window) Close() {

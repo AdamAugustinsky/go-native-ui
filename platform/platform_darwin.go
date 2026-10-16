@@ -9,7 +9,6 @@ import (
 	"runtime"
 	"sync"
 	"sync/atomic"
-	"unsafe"
 
 	"github.com/ebitengine/purego"
 
@@ -173,7 +172,7 @@ func stringConstant(lib uintptr, name string) objc.ID {
 	if err != nil || p == 0 {
 		return 0
 	}
-	return *(*objc.ID)(unsafe.Pointer(p))
+	return *(*objc.ID)(ffi.PtrFromC(p))
 }
 
 // Open creates and shows the window. Main thread only.

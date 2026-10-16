@@ -72,12 +72,12 @@ var selGetName uintptr
 
 // SelName returns a selector's name (debugging; allocates).
 func SelName(s SEL) string {
-	p := F.Call1(selGetName, uintptr(s))
+	p := ffi.PtrFromC(F.Call1(selGetName, uintptr(s)))
 	n := 0
-	for *(*byte)(unsafe.Add(unsafe.Pointer(p), n)) != 0 {
+	for *(*byte)(unsafe.Add(p, n)) != 0 {
 		n++
 	}
-	return string(unsafe.Slice((*byte)(unsafe.Pointer(p)), n))
+	return string(unsafe.Slice((*byte)(p), n))
 }
 
 // keep holds C strings handed to the Objective-C runtime for the process lifetime.
@@ -174,7 +174,7 @@ func AppendUTF8(dst []byte, str ID) []byte {
 	if p == 0 || n == 0 {
 		return dst
 	}
-	return append(dst, unsafe.Slice((*byte)(unsafe.Pointer(p)), n)...)
+	return append(dst, unsafe.Slice((*byte)(ffi.PtrFromC(p)), n)...)
 }
 
 // Method describes one method added to a runtime-created class.

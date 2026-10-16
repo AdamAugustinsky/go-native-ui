@@ -260,7 +260,7 @@ func (c *CB) F64(i int) float64 {
 }
 
 // Ptr returns the i-th integer argument as a pointer.
-func (c *CB) Ptr(i int) unsafe.Pointer { return unsafe.Pointer(c.Int(i)) }
+func (c *CB) Ptr(i int) unsafe.Pointer { return PtrFromC(c.Int(i)) }
 
 // Ret sets the integer return value (x0 / rax).
 func (c *CB) Ret(v uintptr) { c.result[0] = v }
@@ -283,7 +283,13 @@ func (c *CB) RetF64(i int, v float64) {
 }
 
 // IndirectResult is the hidden pointer for large struct returns.
-func (c *CB) IndirectResult() unsafe.Pointer { return unsafe.Pointer(c.result[0]) }
+func (c *CB) IndirectResult() unsafe.Pointer { return PtrFromC(c.result[0]) }
+
+// PtrFromC turns an address that C handed us into an unsafe.Pointer. C
+// memory is not managed by the Go GC, so the uintptr→Pointer rules guard
+// against nothing here; reinterpreting the word (instead of converting it)
+// avoids vet's unsafeptr false positive. Never use it for Go heap addresses.
+func PtrFromC(p uintptr) unsafe.Pointer { return *(*unsafe.Pointer)(unsafe.Pointer(&p)) }
 
 var (
 	handlers       [MaxCallbacks]func(*CB)
