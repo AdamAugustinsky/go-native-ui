@@ -1,0 +1,13 @@
+go-native-ui (placeholder name)
+
+This project depends on:
+
+- github.com/ebitengine/purego — Apache License 2.0, Copyright The Ebitengine Authors.
+  Some purego files are BSD-3-Clause, copied from the Go project.
+  The internal/ffi call and callback trampolines are our own code. They use
+  the same technique as purego (runtime.cgocall for calls; a callback entry
+  table that reaches Go through crosscall2/runtime.cgocallback) and rely on
+  purego's internal/fakecgo for runtime bootstrap.
+- golang.org/x/sys — BSD-3-Clause, Copyright The Go Authors.
+
+No third-party source code is copied into this repository at present.
