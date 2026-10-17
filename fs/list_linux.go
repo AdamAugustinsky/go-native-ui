@@ -117,7 +117,30 @@ type lxScratch struct {
 	path  [lxPathMax + 1]byte
 }
 
-var lxScratchPool = sync.Pool{New: func() any { return new(lxScratch) }}
+// Scratch goes through a free list, not a sync.Pool: a Pool may hand a
+// goroutine on another P a fresh object and the GC empties it, so a warm
+// listing would still allocate.
+var (
+	lxScratchMu   sync.Mutex
+	lxScratchFree []*lxScratch
+)
+
+func lxGetScratch() *lxScratch {
+	lxScratchMu.Lock()
+	defer lxScratchMu.Unlock()
+	if n := len(lxScratchFree); n > 0 {
+		s := lxScratchFree[n-1]
+		lxScratchFree = lxScratchFree[:n-1]
+		return s
+	}
+	return new(lxScratch)
+}
+
+func lxPutScratch(s *lxScratch) {
+	lxScratchMu.Lock()
+	lxScratchFree = append(lxScratchFree, s)
+	lxScratchMu.Unlock()
+}
 
 // statx availability: 0 unknown, 1 works, 2 unavailable (use ReadDir).
 var lxStatxState atomic.Int32
@@ -160,8 +183,8 @@ func lxListStatx(path string, l *Listing) error {
 	if strings.IndexByte(path, 0) >= 0 {
 		return lxPathErr("fs.list", path, syscall.EINVAL)
 	}
-	s := lxScratchPool.Get().(*lxScratch)
-	defer lxScratchPool.Put(s)
+	s := lxGetScratch()
+	defer lxPutScratch(s)
 	s.path[copy(s.path[:], path)] = 0
 
 	var fd uintptr

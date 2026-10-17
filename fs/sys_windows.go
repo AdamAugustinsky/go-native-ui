@@ -91,17 +91,34 @@ type winScratch struct {
 	big  []uint64 // GetFileInformationByHandleEx buffer (8-byte aligned), lazily allocated
 }
 
-var winScratchPool = sync.Pool{New: func() any {
+// Scratch goes through a free list, not a sync.Pool: a Pool may hand a
+// goroutine on another P a fresh object and the GC empties it, so a warm
+// listing would still allocate.
+var (
+	winScratchMu   sync.Mutex
+	winScratchFree []*winScratch
+)
+
+func winGetScratch() *winScratch {
+	winScratchMu.Lock()
+	defer winScratchMu.Unlock()
+	if n := len(winScratchFree); n > 0 {
+		s := winScratchFree[n-1]
+		winScratchFree = winScratchFree[:n-1]
+		return s
+	}
 	return &winScratch{
 		in:   make([]uint16, 0, winPathCap),
 		full: make([]uint16, winPathCap),
 		pat:  make([]uint16, 0, winPathCap),
 	}
-}}
+}
 
-func winGetScratch() *winScratch { return winScratchPool.Get().(*winScratch) }
-
-func winPutScratch(s *winScratch) { winScratchPool.Put(s) }
+func winPutScratch(s *winScratch) {
+	winScratchMu.Lock()
+	winScratchFree = append(winScratchFree, s)
+	winScratchMu.Unlock()
+}
 
 // winAppendUTF16 appends s as UTF-16 (no terminator). ok is false when s
 // contains a NUL, which no Windows path can.
