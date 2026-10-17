@@ -102,7 +102,7 @@ const (
 // glx holds the resolved GL entry points.
 var glx struct {
 	getString, getError, enable, disable, blendFuncSeparate, colorMask uintptr
-	flush, finish                                                      uintptr
+	flush, finish, getIntegerv                                         uintptr
 	createShader, shaderSource, compileShader, getShaderiv             uintptr
 	getShaderInfoLog, createProgram, attachShader, linkProgram         uintptr
 	getProgramiv, getProgramInfoLog, deleteShader, deleteProgram       uintptr
@@ -171,7 +171,7 @@ func loadGLFuncs() error {
 		}{
 			{"glGetString", &glx.getString}, {"glGetError", &glx.getError}, {"glEnable", &glx.enable},
 			{"glDisable", &glx.disable}, {"glBlendFuncSeparate", &glx.blendFuncSeparate}, {"glColorMask", &glx.colorMask},
-			{"glFlush", &glx.flush}, {"glFinish", &glx.finish},
+			{"glFlush", &glx.flush}, {"glFinish", &glx.finish}, {"glGetIntegerv", &glx.getIntegerv},
 			{"glCreateShader", &glx.createShader}, {"glShaderSource", &glx.shaderSource},
 			{"glCompileShader", &glx.compileShader}, {"glGetShaderiv", &glx.getShaderiv},
 			{"glGetShaderInfoLog", &glx.getShaderInfoLog}, {"glCreateProgram", &glx.createProgram},
@@ -667,6 +667,16 @@ func (r *Renderer) newTarget(w, h int) {
 	if st != glFramebufferComplete {
 		panic(fmt.Sprintf("gpu: offscreen framebuffer incomplete (0x%x)", st))
 	}
+}
+
+// drawFramebuffer returns the name bound as GL_DRAW_FRAMEBUFFER, and false if
+// the query did not answer (the result slot is poisoned first, so a failed
+// call cannot pass for a stale value).
+func (r *Renderer) drawFramebuffer() (uint32, bool) {
+	const poison = 0x7fffffff
+	gls.i32[0] = poison
+	fr.Reset().Arg32(0x8CA6).ArgPtr(unsafe.Pointer(&gls.i32[0])).Call(glx.getIntegerv) // GL_DRAW_FRAMEBUFFER_BINDING
+	return uint32(gls.i32[0]), gls.i32[0] != poison
 }
 
 // flush submits queued GL commands (tests that encode without reading back).

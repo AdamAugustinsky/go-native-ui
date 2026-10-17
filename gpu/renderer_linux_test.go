@@ -8,7 +8,6 @@ import (
 	"runtime"
 	"testing"
 	"time"
-	"unsafe"
 )
 
 var (
@@ -506,13 +505,29 @@ func TestRendererOnExistingContext(t *testing.T) {
 	near(t, "after r2.Destroy", m.at(3, 3), [4]int{255, 0, 0, 255}, 0)
 }
 
-// TestEncodeRestoresDefaultFramebuffer checks that Encode leaves the default
-// framebuffer bound (Surface.Present clears it next).
+// TestEncodeRestoresDefaultFramebuffer checks that Encode and RenderToRGBA
+// leave the default framebuffer bound (Surface.Present clears it next). What
+// "default" is called depends on the context: 0 with a window, whatever the
+// driver reports for a surfaceless context, so compare with the binding
+// before any offscreen target exists rather than with a literal 0.
 func TestEncodeRestoresDefaultFramebuffer(t *testing.T) {
 	r := newTestRenderer(t)
+	before, ok := r.drawFramebuffer()
+	if !ok {
+		t.Fatal("glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING) did not answer")
+	}
+	t.Logf("default framebuffer binding: %d", before)
 	render(r, 8, 8, black, solid(0, 0, 4, 4, 0xFFFFFFFF))
-	fr.Reset().Arg32(0x8CA6).ArgPtr(unsafe.Pointer(&gls.i32[0])).Call(getProc("glGetIntegerv")) // GL_FRAMEBUFFER_BINDING
-	if gls.i32[0] != 0 {
-		t.Fatalf("framebuffer %d bound after Encode, want the default (0)", gls.i32[0])
+	if r.fbo == 0 {
+		t.Fatal("setup: no offscreen target was created")
+	}
+	after, ok := r.drawFramebuffer()
+	if !ok || after != before {
+		t.Fatalf("framebuffer %d bound after RenderToRGBA (offscreen FBO is %d), want the default (%d)", after, r.fbo, before)
+	}
+	// Encode on its own, with a target and with the default.
+	r.Encode(0, uintptr(r.fbo), 8, 8, black, &DrawList{Quads: []Quad{solid(0, 0, 2, 2, 0xFFFFFFFF)}})
+	if after, _ = r.drawFramebuffer(); after != before {
+		t.Fatalf("framebuffer %d bound after Encode into the FBO, want %d", after, before)
 	}
 }
