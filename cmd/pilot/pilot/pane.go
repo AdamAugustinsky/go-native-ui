@@ -3,6 +3,8 @@ package pilot
 import (
 	"math/bits"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"time"
 
 	"gonativeui/fs"
@@ -78,7 +80,7 @@ func newPane(id uint32, src Source, home string) *pane {
 
 func (p *pane) setDir(dir string) {
 	p.dir = dir
-	p.parent = filepath.Dir(dir)
+	p.parent = parentPath(dir)
 	p.base = filepath.Base(dir)
 	if p.base == "." || p.base == string(filepath.Separator) {
 		p.base = dir
@@ -132,7 +134,8 @@ func (p *pane) onResult(r *fs.Result) {
 		if !p.nav.pending || p.nav.kind != navGone {
 			p.nav.gone = p.dir
 		}
-		if !p.canUp() {
+		if !p.canUp() { // a root that is gone: nothing above to go to
+			p.setMsg(p.dir+" was removed", true)
 			return
 		}
 		p.request(p.parent, navGone, "")
@@ -148,7 +151,7 @@ func (p *pane) onListing(l *fs.Listing) {
 			err := l.Err
 			p.release(l)
 			if p.nav.kind == navGone {
-				if parent := filepath.Dir(p.nav.path); parent != p.nav.path {
+				if parent := parentPath(p.nav.path); parent != p.nav.path {
 					p.request(parent, navGone, "")
 					return
 				}
@@ -212,8 +215,18 @@ func findName(l *fs.Listing, name string) int32 {
 			return int32(i)
 		}
 	}
+	if caseFolds { // the folder was typed in another case than the file system keeps
+		for i := range l.Entries {
+			if int(l.Entries[i].NameLen) == len(name) && strings.EqualFold(string(l.Name(i)), name) {
+				return int32(i)
+			}
+		}
+	}
 	return -1
 }
+
+// caseFolds: the usual file systems of these OSes ignore case in names.
+var caseFolds = runtime.GOOS == "windows" || runtime.GOOS == "darwin"
 
 // ---- rows ----
 
@@ -633,7 +646,7 @@ func (p *pane) goForward() {
 
 // goTo navigates to what was typed in the path field.
 func (p *pane) goTo(text string) {
-	p.request(resolvePath(text, p.dir, p.home), navUser, "")
+	p.request(ResolvePath(text, p.dir, p.home), navUser, "")
 }
 
 // sortBy sorts by key; the same key again reverses the order. The new order

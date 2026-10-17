@@ -24,7 +24,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -97,21 +96,18 @@ func renderPNG(path string, w, h int, scale float32) error {
 	return nil
 }
 
-// startDir resolves a command line directory: "~" expands, relative paths are
-// made absolute.
+// startDir resolves a command line directory with the rules of a path field:
+// "~" expands, relative paths are taken against the working directory, a
+// Windows drive or UNC path is kept (pilot.ResolvePath).
 func startDir(arg, home string) string {
-	switch {
-	case arg == "":
+	if arg == "" {
 		return home
-	case arg == "~":
-		return home
-	case strings.HasPrefix(arg, "~/"):
-		return filepath.Join(home, arg[2:])
 	}
-	if abs, err := filepath.Abs(arg); err == nil {
-		return abs
+	cwd, err := os.Getwd()
+	if err != nil {
+		cwd = home
 	}
-	return arg
+	return pilot.ResolvePath(arg, cwd, home)
 }
 
 // listAsync lists and sorts dir on a goroutine, which is the first thing the
@@ -142,7 +138,8 @@ type startup struct {
 func runWindow(args []string, exitFirst, verbose bool, t0, age int64) error {
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
-		home = string(filepath.Separator)
+		cwd, _ := os.Getwd()
+		home = pilot.ResolvePath("/", cwd, "") // the root of the working directory's volume
 	}
 	var dirs [2]string
 	for i := range dirs {

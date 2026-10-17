@@ -71,6 +71,16 @@ func (pl *Pilot) update(c *ui.Context) {
 	pl.keys(c, in)
 }
 
+// isPrimary reports whether mods make a shortcut. On Windows AltGr arrives as
+// Ctrl+Alt and types a character (AltGr+Q is "@" on some layouts), so that
+// pair is not Ctrl.
+func (pl *Pilot) isPrimary(m ui.Mods) bool {
+	if m&pl.primary() == 0 {
+		return false
+	}
+	return !(pl.win && m&ui.ModCtrl != 0 && m&ui.ModAlt != 0)
+}
+
 // primary is the modifier of shortcuts: ⌘ on macOS, Ctrl elsewhere.
 func (pl *Pilot) primary() ui.Mods {
 	if pl.mac {
@@ -91,7 +101,7 @@ func (pl *Pilot) click(c *ui.Context, i int, in *ui.Input) {
 	g := &pl.geo[i]
 	row := int((float64(in.MouseY-g.list[1]) + g.scrollY) / float64(g.rowPx))
 	if row < 0 || row >= v.nRows() {
-		if row >= v.nRows() && in.Mods&(ui.ModShift|pl.primary()) == 0 {
+		if row >= v.nRows() && in.Mods&ui.ModShift == 0 && !pl.isPrimary(in.Mods) {
 			v.clearSel()
 		}
 		return
@@ -101,7 +111,7 @@ func (pl *Pilot) click(c *ui.Context, i int, in *ui.Input) {
 		p.openRow(row)
 	case in.Mods&ui.ModShift != 0:
 		v.selectRange(row)
-	case in.Mods&pl.primary() != 0:
+	case pl.isPrimary(in.Mods):
 		v.toggle(v.entryAt(row), row)
 	default:
 		v.selectOnly(v.entryAt(row), row)
@@ -133,7 +143,7 @@ func (pl *Pilot) keys(c *ui.Context, in *ui.Input) {
 // typed reports whether the frame's text is a start for the filter: printable,
 // not a shortcut, not just a space.
 func (pl *Pilot) typed(in *ui.Input) bool {
-	if in.NText == 0 || in.Mods&(pl.primary()|ui.ModAlt&0) != 0 {
+	if in.NText == 0 || pl.isPrimary(in.Mods) {
 		return false
 	}
 	t := in.Text[:in.NText]
@@ -150,7 +160,7 @@ func (pl *Pilot) move(a *pane, shift bool, r int) {
 }
 
 func (pl *Pilot) key(c *ui.Context, k ui.KeyEvent) {
-	prim := k.Mods&pl.primary() != 0
+	prim := pl.isPrimary(k.Mods)
 	shift := k.Mods&ui.ModShift != 0
 	alt := k.Mods&ui.ModAlt != 0
 	a := pl.panes[pl.active]

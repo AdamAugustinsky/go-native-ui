@@ -348,6 +348,8 @@ func NewSynthBench(rows int) *Bench {
 // fs.Service with watching on.
 func NewDirBench(dir string) (*Bench, error) {
 	home, _ := os.UserHomeDir()
+	cwd, _ := os.Getwd()
+	dir = ResolvePath(dir, cwd, home) // as a path field would: absolute, native separators
 	o := Options{Src: fs.NewService(platform.Wake), Home: home}
 	for i := range o.Initial {
 		l := new(fs.Listing)

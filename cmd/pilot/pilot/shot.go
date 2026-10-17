@@ -92,10 +92,10 @@ func ready(dir string, l *fs.Listing) <-chan Ready {
 // SceneOptions are the Options of the offscreen scene.
 func SceneOptions() Options {
 	return Options{
-		Home: "/Users/rex", Traffic: true, Loc: time.UTC,
+		Home: nativePath("/Users/rex"), Traffic: true, Loc: time.UTC,
 		Initial: [2]<-chan Ready{
-			ready("/Users/rex/Projects/pilot", sceneListing(sceneLeft)),
-			ready("/Users/rex/Downloads", sceneListing(sceneRight)),
+			ready(nativePath("/Users/rex/Projects/pilot"), sceneListing(sceneLeft)),
+			ready(nativePath("/Users/rex/Downloads"), sceneListing(sceneRight)),
 		},
 	}
 }

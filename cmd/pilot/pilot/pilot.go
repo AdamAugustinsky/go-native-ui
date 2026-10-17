@@ -84,6 +84,7 @@ type Pilot struct {
 	src     Source
 	loc     *time.Location
 	mac     bool
+	win     bool // Windows: AltGr is Ctrl+Alt
 
 	panes  [2]*pane
 	active int
@@ -116,7 +117,7 @@ func New(o Options) *Pilot {
 	if o.Loc == nil {
 		o.Loc = time.Local
 	}
-	pl := &Pilot{opt: o, src: o.Src, loc: o.Loc, mac: runtime.GOOS == "darwin", ratio: 0.5, init: o.Initial}
+	pl := &Pilot{opt: o, src: o.Src, loc: o.Loc, mac: runtime.GOOS == "darwin", win: runtime.GOOS == "windows", ratio: 0.5, init: o.Initial}
 	pl.Traffic = o.Traffic
 	for i := range pl.panes {
 		pl.panes[i] = newPane(uint32(i+1), o.Src, o.Home)

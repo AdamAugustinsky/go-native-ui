@@ -134,7 +134,8 @@ func TestShot(t *testing.T) {
 			}
 			t.Skipf("offscreen rendering: %v", err)
 		}
-		if quads < 500 || calls < 5 {
+		// (the draw calls depend on the OS: the icon atlas of SF Symbols adds some)
+		if quads < 500 || calls < 1 {
 			t.Errorf("%d quads, %d draw calls: the scene is empty", quads, calls)
 		}
 		var err2 error
@@ -152,8 +153,29 @@ func TestShot(t *testing.T) {
 	if b := img.Bounds(); b.Dx() != 1200 || b.Dy() != 760 {
 		t.Fatalf("image is %v", b)
 	}
-	// The selected rows of the active (left) pane are tinted blue, the same
-	// rows in the right pane are not: sample a pixel in the middle of a row.
+	// Something is drawn where the rows are: dark pixels (names, sizes and dates
+	// are dark on the light panes, in whatever font the OS has) in both lists.
+	// The left list shows 21 rows from y = 106 and the right one 8, at 1×.
+	dark := func(x0, y0, x1, y1 int) (n int) {
+		for y := y0; y < y1; y++ {
+			for x := x0; x < x1; x++ {
+				r, g, b, _ := img.At(x, y).RGBA()
+				if (299*r+587*g+114*b)/1000 < 140<<8 {
+					n++
+				}
+			}
+		}
+		return n
+	}
+	if n := dark(20, 110, 590, 440); n < 800 {
+		t.Errorf("%d dark pixels in the left list, want text", n)
+	}
+	if n := dark(615, 110, 1185, 235); n < 300 {
+		t.Errorf("%d dark pixels in the right list, want text", n)
+	}
+	if n := dark(20, 452, 590, 700); n > 0 {
+		t.Errorf("%d dark pixels below the last row of the left list, want none", n)
+	}
 	var distinct = map[[3]uint32]int{}
 	for y := 0; y < 760; y += 7 {
 		for x := 0; x < 1200; x += 7 {

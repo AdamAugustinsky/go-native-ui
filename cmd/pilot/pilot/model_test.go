@@ -6,6 +6,7 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -87,7 +88,7 @@ func curName(p *pane) string {
 }
 
 func newTestPane(t testing.TB, src Source, dir string, l *fs.Listing) *pane {
-	p := newPane(1, src, "/home/u")
+	p := newPane(1, src, nativePath("/home/u"))
 	p.setInitial(dir, l)
 	settle(t, p)
 	return p
@@ -105,7 +106,7 @@ var dirItems = []item{
 }
 
 func TestRowsHideHiddenAndSort(t *testing.T) {
-	p := newTestPane(t, &fakeSrc{}, "/d", listing(fs.SortName, false, dirItems...))
+	p := newTestPane(t, &fakeSrc{}, nativePath("/d"), listing(fs.SortName, false, dirItems...))
 	if got, want := names(p), "alpha zeta a.txt b.txt c.txt file2 file10"; got != want {
 		t.Errorf("rows = %q, want %q", got, want)
 	}
@@ -120,7 +121,7 @@ func TestRowsHideHiddenAndSort(t *testing.T) {
 }
 
 func TestSelectionOps(t *testing.T) {
-	p := newTestPane(t, &fakeSrc{}, "/d", listing(fs.SortName, false, dirItems...))
+	p := newTestPane(t, &fakeSrc{}, nativePath("/d"), listing(fs.SortName, false, dirItems...))
 	v := &p.v
 	// rows: 0 alpha, 1 zeta, 2 a.txt, 3 b.txt, 4 c.txt, 5 file2, 6 file10
 	v.selectOnly(v.entryAt(2), 2)
@@ -166,7 +167,7 @@ func TestSelectionOps(t *testing.T) {
 func TestSelectionSurvivesARefreshByName(t *testing.T) {
 	src := &fakeSrc{}
 	a := listing(fs.SortName, false, dirItems...)
-	p := newTestPane(t, src, "/d", a)
+	p := newTestPane(t, src, nativePath("/d"), a)
 	v := &p.v
 	v.selectOnly(v.entryAt(2), 2) // a.txt
 	v.toggle(v.entryAt(4), 4)     // c.txt
@@ -213,7 +214,7 @@ func TestRefreshKeepsTheScrollAnchor(t *testing.T) {
 	for i := 0; i < 500; i++ {
 		items = append(items, item{fmt.Sprintf("f%04d", i), fs.KindFile, 0, int64(i), "2026-10-01 10:00"})
 	}
-	p := newTestPane(t, &fakeSrc{}, "/d", listing(fs.SortName, false, items...))
+	p := newTestPane(t, &fakeSrc{}, nativePath("/d"), listing(fs.SortName, false, items...))
 	// The view is scrolled so that f0123 is half a row from the top.
 	p.topRow, p.topEntry, p.topFrac = 123, p.v.entryAt(123), 0.5
 	more := append([]item{{"a-new", fs.KindFile, 0, 1, "2026-10-01 10:00"}}, items...)
@@ -225,7 +226,7 @@ func TestRefreshKeepsTheScrollAnchor(t *testing.T) {
 }
 
 func TestEntriesTakeTheirHiddenAndQueryStateThroughARefresh(t *testing.T) {
-	p := newTestPane(t, &fakeSrc{}, "/d", listing(fs.SortName, false, dirItems...))
+	p := newTestPane(t, &fakeSrc{}, nativePath("/d"), listing(fs.SortName, false, dirItems...))
 	p.filterOpen = true
 	p.filter.SetString("TXT")
 	p.setQuery()
@@ -246,7 +247,7 @@ func TestEntriesTakeTheirHiddenAndQueryStateThroughARefresh(t *testing.T) {
 }
 
 func TestFilterKeepsTheCursorRowInStep(t *testing.T) {
-	p := newTestPane(t, &fakeSrc{}, "/d", listing(fs.SortName, false, dirItems...))
+	p := newTestPane(t, &fakeSrc{}, nativePath("/d"), listing(fs.SortName, false, dirItems...))
 	v := &p.v
 	v.selectOnly(v.entryAt(4), 4) // c.txt
 	p.filterOpen = true
@@ -269,11 +270,11 @@ func TestFilterKeepsTheCursorRowInStep(t *testing.T) {
 
 func TestNavigationHistory(t *testing.T) {
 	src := &fakeSrc{}
-	p := newTestPane(t, src, "/a", listing(fs.SortName, false, dirItems...))
+	p := newTestPane(t, src, nativePath("/a"), listing(fs.SortName, false, dirItems...))
 	if p.hist.canBack() || p.hist.canForward() {
 		t.Fatal("history starts empty")
 	}
-	for _, d := range []string{"/a/b", "/a/b/c", "/x"} {
+	for _, d := range []string{nativePath("/a/b"), nativePath("/a/b/c"), nativePath("/x")} {
 		p.request(d, navUser, "")
 		if got := src.last(); got != d {
 			t.Fatalf("requested %q, want %q", got, d)
@@ -289,23 +290,23 @@ func TestNavigationHistory(t *testing.T) {
 	}
 	p.goBack()
 	deliver(p, listing(fs.SortName, false, dirItems...))
-	if p.dir != "/a/b/c" || !p.hist.canForward() {
+	if p.dir != nativePath("/a/b/c") || !p.hist.canForward() {
 		t.Fatalf("back: %q", p.dir)
 	}
 	p.goBack()
 	deliver(p, listing(fs.SortName, false, dirItems...))
 	p.goForward()
 	deliver(p, listing(fs.SortName, false, dirItems...))
-	if p.dir != "/a/b/c" {
+	if p.dir != nativePath("/a/b/c") {
 		t.Fatalf("forward: %q", p.dir)
 	}
 	// A new place drops the forward list.
-	p.request("/y", navUser, "")
+	p.request(nativePath("/y"), navUser, "")
 	deliver(p, listing(fs.SortName, false, dirItems...))
-	if p.hist.canForward() || p.hist.dirs[p.hist.i] != "/y" {
+	if p.hist.canForward() || p.hist.dirs[p.hist.i] != nativePath("/y") {
 		t.Errorf("forward list kept after a new place: %+v", p.hist)
 	}
-	if got := src.watched[len(src.watched)-1]; got != "/y" {
+	if got := src.watched[len(src.watched)-1]; got != nativePath("/y") {
 		t.Errorf("watching %q, want /y", got)
 	}
 }
@@ -329,14 +330,14 @@ func TestHistoryIsBounded(t *testing.T) {
 
 func TestUpSelectsTheFolderYouCameFrom(t *testing.T) {
 	src := &fakeSrc{}
-	p := newTestPane(t, src, "/a/zeta", listing(fs.SortName, false, dirItems...))
+	p := newTestPane(t, src, nativePath("/a/zeta"), listing(fs.SortName, false, dirItems...))
 	p.goUp()
-	if src.last() != "/a" || !p.nav.pending {
+	if src.last() != nativePath("/a") || !p.nav.pending {
 		t.Fatalf("up requests %q", src.last())
 	}
 	deliver(p, listing(fs.SortName, false, dirItems...))
 	settle(t, p)
-	if p.dir != "/a" || selected(p) != "zeta" || p.v.curRow != 1 || p.reveal != 1 {
+	if p.dir != nativePath("/a") || selected(p) != "zeta" || p.v.curRow != 1 || p.reveal != 1 {
 		t.Errorf("dir %q selected %q row %d reveal %d", p.dir, selected(p), p.v.curRow, p.reveal)
 	}
 	if p.pendSel != -1 {
@@ -346,18 +347,18 @@ func TestUpSelectsTheFolderYouCameFrom(t *testing.T) {
 
 func TestFailedNavigationKeepsThePaneAndShowsWhy(t *testing.T) {
 	src := &fakeSrc{}
-	p := newTestPane(t, src, "/a", listing(fs.SortName, false, dirItems...))
+	p := newTestPane(t, src, nativePath("/a"), listing(fs.SortName, false, dirItems...))
 	p.goTo("~/nope")
-	if src.last() != "/home/u/nope" {
+	if src.last() != nativePath("/home/u/nope") {
 		t.Fatalf("~ expands to %q", src.last())
 	}
 	bad := new(fs.Listing)
-	bad.Err = &os.PathError{Op: "open", Path: "/home/u/nope", Err: os.ErrPermission}
+	bad.Err = &os.PathError{Op: "open", Path: nativePath("/home/u/nope"), Err: os.ErrPermission}
 	deliver(p, bad)
-	if p.dir != "/a" || p.msg != "Permission denied" || !p.msgErr || p.pathErr != "Permission denied" {
+	if p.dir != nativePath("/a") || p.msg != "Permission denied" || !p.msgErr || p.pathErr != "Permission denied" {
 		t.Errorf("dir %q msg %q path error %q", p.dir, p.msg, p.pathErr)
 	}
-	if src.last() != "/a" {
+	if src.last() != nativePath("/a") {
 		t.Errorf("the service lists %q again, want the directory shown (/a)", src.last())
 	}
 	if p.v.l == nil || p.v.nRows() == 0 {
@@ -367,36 +368,20 @@ func TestFailedNavigationKeepsThePaneAndShowsWhy(t *testing.T) {
 
 func TestGoneMovesToTheNearestAncestor(t *testing.T) {
 	src := &fakeSrc{}
-	p := newTestPane(t, src, "/a/b/c", listing(fs.SortName, false, dirItems...))
+	p := newTestPane(t, src, nativePath("/a/b/c"), listing(fs.SortName, false, dirItems...))
 	p.onResult(&fs.Result{Kind: fs.ResultGone, ID: p.id})
-	if src.last() != "/a/b" {
+	if src.last() != nativePath("/a/b") {
 		t.Fatalf("goes to %q, want /a/b", src.last())
 	}
 	bad := new(fs.Listing)
 	bad.Err = os.ErrNotExist
 	deliver(p, bad) // /a/b is gone as well
-	if src.last() != "/a" {
+	if src.last() != nativePath("/a") {
 		t.Fatalf("then %q, want /a", src.last())
 	}
 	deliver(p, listing(fs.SortName, false, dirItems...))
-	if p.dir != "/a" || !strings.Contains(p.msg, "/a/b/c was removed") {
+	if p.dir != nativePath("/a") || !strings.Contains(p.msg, nativePath("/a/b/c")+" was removed") {
 		t.Errorf("dir %q msg %q", p.dir, p.msg)
-	}
-}
-
-func TestResolvePath(t *testing.T) {
-	for _, tc := range []struct{ in, want string }{
-		{"~", "/home/u"},
-		{"~/Docs", "/home/u/Docs"},
-		{"sub", "/cur/sub"},
-		{"../up/", "/up"},
-		{"/abs//x/./y", "/abs/x/y"},
-		{"  /padded  ", "/padded"},
-		{"", "/cur"},
-	} {
-		if got := resolvePath(tc.in, "/cur", "/home/u"); got != tc.want {
-			t.Errorf("resolvePath(%q) = %q, want %q", tc.in, got, tc.want)
-		}
 	}
 }
 
@@ -421,10 +406,10 @@ type keyRig struct {
 func newKeyRig(t *testing.T, mac bool) *keyRig {
 	t.Helper()
 	src := &fakeSrc{}
-	pl := New(Options{Src: src, Home: "/home/u", Loc: time.UTC})
+	pl := New(Options{Src: src, Home: nativePath("/home/u"), Loc: time.UTC})
 	pl.mac = mac
-	pl.panes[0].setInitial("/a/b", listing(fs.SortName, false, dirItems...))
-	pl.panes[1].setInitial("/other", listing(fs.SortName, false, dirItems[:3]...))
+	pl.panes[0].setInitial(nativePath("/a/b"), listing(fs.SortName, false, dirItems...))
+	pl.panes[1].setInitial(nativePath("/other"), listing(fs.SortName, false, dirItems[:3]...))
 	for _, p := range pl.panes {
 		settle(t, p)
 	}
@@ -494,7 +479,7 @@ func TestKeyboardMap(t *testing.T) {
 			// Enter opens a folder
 			r.press(ui.KeyHome, 0)
 			r.press(ui.KeyEnter, 0)
-			if r.src.last() != "/a/b/alpha" {
+			if r.src.last() != nativePath("/a/b/alpha") {
 				t.Errorf("enter on a folder lists %q", r.src.last())
 			}
 			deliver(a, listing(fs.SortName, false, dirItems...))
@@ -502,7 +487,7 @@ func TestKeyboardMap(t *testing.T) {
 
 			// Backspace goes to the parent and selects the folder it came from
 			r.press(ui.KeyBackspace, 0)
-			if r.src.last() != "/a/b" {
+			if r.src.last() != nativePath("/a/b") {
 				t.Errorf("backspace lists %q", r.src.last())
 			}
 			deliver(a, listing(fs.SortName, false, dirItems...))
@@ -517,7 +502,7 @@ func TestKeyboardMap(t *testing.T) {
 			} else {
 				r.press(ui.KeyLeft, ui.ModAlt)
 			}
-			if r.src.last() != "/a/b/alpha" {
+			if r.src.last() != nativePath("/a/b/alpha") {
 				t.Errorf("back lists %q", r.src.last())
 			}
 			deliver(a, listing(fs.SortName, false, dirItems...))
@@ -526,7 +511,7 @@ func TestKeyboardMap(t *testing.T) {
 			} else {
 				r.press(ui.KeyRight, ui.ModAlt)
 			}
-			if r.src.last() != "/a/b" {
+			if r.src.last() != nativePath("/a/b") {
 				t.Errorf("forward lists %q", r.src.last())
 			}
 			deliver(a, listing(fs.SortName, false, dirItems...))
@@ -537,7 +522,7 @@ func TestKeyboardMap(t *testing.T) {
 			} else {
 				r.press(ui.KeyUp, ui.ModAlt)
 			}
-			if r.src.last() != "/a" {
+			if r.src.last() != nativePath("/a") {
 				t.Errorf("parent shortcut lists %q", r.src.last())
 			}
 
@@ -617,7 +602,7 @@ func TestRefreshOfAGrowingDirectoryAllocatesNothing(t *testing.T) {
 		}
 		return listing(fs.SortName, false, items...)
 	}
-	p := newTestPane(t, &fakeSrc{}, "/d", mk(1000))
+	p := newTestPane(t, &fakeSrc{}, nativePath("/d"), mk(1000))
 	p.v.selectOnly(p.v.entryAt(5), 5)
 	lists := [...]*fs.Listing{mk(1000), mk(1000), mk(1000)}
 	for _, l := range lists[:2] { // warm: the pane's two row buffers and the reconcile tables
@@ -635,5 +620,45 @@ func TestRefreshOfAGrowingDirectoryAllocatesNothing(t *testing.T) {
 	}
 	if n := m1.Mallocs - m0.Mallocs; n != 0 {
 		t.Errorf("a refresh with 3 more entries allocated %d times (%d bytes)", n, m1.TotalAlloc-m0.TotalAlloc)
+	}
+}
+
+func TestErrTextWindows(t *testing.T) {
+	for en, want := range map[syscall.Errno]string{267: "Not a directory", 123: "Invalid name or path", 53: "Network path not found"} {
+		err := &os.PathError{Op: "fs.list", Path: "C:/x", Err: en}
+		if got := errTextWith(true, err); got != want {
+			t.Errorf("errno %d: %q, want %q", en, got, want)
+		}
+	}
+	if got := errTextWith(false, &os.PathError{Err: syscall.Errno(267)}); got == "Not a directory" {
+		t.Error("Windows error numbers mean something else elsewhere")
+	}
+}
+
+// A root has nowhere above it: a pane at a root that disappears (a drive that
+// is gone) says so instead of walking up for ever, and up does nothing there.
+func TestGoneAtARootStops(t *testing.T) {
+	src := &fakeSrc{}
+	root := nativePath("/")
+	p := newTestPane(t, src, root, listing(fs.SortName, false, dirItems...))
+	if p.canUp() {
+		t.Error("a root has no parent to go up to")
+	}
+	p.goUp()
+	n := len(src.lists)
+	p.onResult(&fs.Result{Kind: fs.ResultGone, ID: p.id})
+	if len(src.lists) != n || p.nav.pending || !p.msgErr || !strings.Contains(p.msg, "was removed") {
+		t.Errorf("requests %d→%d, pending %v, msg %q", n, len(src.lists), p.nav.pending, p.msg)
+	}
+	// and a chain of failing ancestors ends at the root
+	p = newTestPane(t, src, nativePath("/a/b"), listing(fs.SortName, false, dirItems...))
+	p.onResult(&fs.Result{Kind: fs.ResultGone, ID: p.id})
+	for i := 0; i < 5 && p.nav.pending; i++ {
+		bad := new(fs.Listing)
+		bad.Err = os.ErrNotExist
+		deliver(p, bad)
+	}
+	if p.nav.pending || !p.msgErr {
+		t.Errorf("walking up did not end at the root: pending %v msg %q (last %q)", p.nav.pending, p.msg, src.last())
 	}
 }

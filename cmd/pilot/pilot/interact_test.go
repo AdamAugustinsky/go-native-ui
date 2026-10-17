@@ -140,7 +140,7 @@ func TestDoubleClickOpensAFolder(t *testing.T) {
 	r.press(1, 0)
 	r.release()
 	r.press(2, 0)
-	if got, want := r.src.last(), "/Users/rex/Projects/pilot/cmd"; got != want {
+	if got, want := r.src.last(), nativePath("/Users/rex/Projects/pilot/cmd"); got != want {
 		t.Fatalf("double-click lists %q, want %q", got, want)
 	}
 	r.release()
@@ -190,7 +190,7 @@ func TestPathFieldNavigates(t *testing.T) {
 		t.Fatal("the shortcut focuses the path field")
 	}
 	r.frames(2)
-	if sel := string(a.path.Selected()); sel != "/Users/rex/Projects/pilot" {
+	if sel := string(a.path.Selected()); sel != nativePath("/Users/rex/Projects/pilot") {
 		t.Errorf("the path is selected: %q", sel)
 	}
 	r.text("~/Docs")
@@ -198,7 +198,7 @@ func TestPathFieldNavigates(t *testing.T) {
 		t.Fatalf("typing replaces the selected path: %q", a.path.String())
 	}
 	r.key(ui.KeyEnter, 0)
-	if r.src.last() != "/Users/rex/Docs" {
+	if r.src.last() != nativePath("/Users/rex/Docs") {
 		t.Errorf("Enter lists %q", r.src.last())
 	}
 	// the listing fails: the text stays, the reason shows
@@ -206,7 +206,7 @@ func TestPathFieldNavigates(t *testing.T) {
 	bad.Err = fs.ErrUnsupported
 	deliver(a, bad)
 	r.frames(2)
-	if a.pathErr == "" || a.path.String() != "~/Docs" || a.dir != "/Users/rex/Projects/pilot" {
+	if a.pathErr == "" || a.path.String() != "~/Docs" || a.dir != nativePath("/Users/rex/Projects/pilot") {
 		t.Errorf("path error %q text %q", a.pathErr, a.path.String())
 	}
 	// Esc restores the directory and gives the focus back to the list
@@ -278,7 +278,7 @@ func TestRegainingFocusRelistsBothPanes(t *testing.T) {
 		t.Errorf("after the relist: selected %q, %d entries", selected(a), a.v.nEntries())
 	}
 	// no relist while a navigation is in flight (its result is fresh anyway)
-	a.request("/x", navUser, "")
+	a.request(nativePath("/x"), navUser, "")
 	n = len(r.src.lists)
 	r.feed(func(in *ui.Input) { in.FocusGained = true })
 	if got := r.src.lists[n:]; len(got) != 1 || got[0] != b.dir {

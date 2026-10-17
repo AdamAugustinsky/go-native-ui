@@ -3,8 +3,6 @@ package pilot
 import (
 	"errors"
 	"os"
-	"path/filepath"
-	"strings"
 	"syscall"
 
 	"gonativeui/fs"
@@ -25,7 +23,27 @@ type Source interface {
 var _ Source = (*fs.Service)(nil)
 
 // errText is a short user-facing message for a file system error.
-func errText(err error) string {
+func errText(err error) string { return errTextWith(onWindows, err) }
+
+// Windows error numbers (winerror.h) that have no portable errors.Is.
+const (
+	winErrBadNetPath   syscall.Errno = 53  // ERROR_BAD_NETPATH
+	winErrInvalidName  syscall.Errno = 123 // ERROR_INVALID_NAME
+	winErrNotDirectory syscall.Errno = 267 // ERROR_DIRECTORY
+)
+
+func errTextWith(win bool, err error) string {
+	var en syscall.Errno
+	if win && errors.As(err, &en) {
+		switch en {
+		case winErrNotDirectory:
+			return "Not a directory"
+		case winErrInvalidName:
+			return "Invalid name or path"
+		case winErrBadNetPath:
+			return "Network path not found"
+		}
+	}
 	switch {
 	case err == nil:
 		return ""
@@ -41,25 +59,4 @@ func errText(err error) string {
 		s = s[:120]
 	}
 	return s
-}
-
-// joinPath is dir/name.
-func joinPath(dir, name string) string { return filepath.Join(dir, name) }
-
-// resolvePath turns what was typed in a path field into a directory path:
-// "~" and "~/x" expand to the home directory, a relative path is taken
-// against dir. It touches no file.
-func resolvePath(text, dir, home string) string {
-	text = strings.TrimSpace(text)
-	switch {
-	case text == "":
-		return dir
-	case text == "~":
-		text = home
-	case strings.HasPrefix(text, "~/") || strings.HasPrefix(text, "~"+string(filepath.Separator)):
-		text = filepath.Join(home, text[2:])
-	case !filepath.IsAbs(text):
-		text = filepath.Join(dir, text)
-	}
-	return filepath.Clean(text)
 }
