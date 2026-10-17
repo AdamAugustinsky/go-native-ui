@@ -104,6 +104,12 @@ type Input struct {
 	NKeys int
 	Text  [MaxText]byte
 	NText int
+	// Text[CommitOff:CommitOff+CommitLen] is the part of Text that ended an
+	// input-method composition (the committed text; 0 length when none). The
+	// text fields give it to the field that was composing, wherever the focus
+	// is by now, and Context.Input().Text no longer contains it (see
+	// Context.Begin); the platform layer sets it.
+	CommitOff, CommitLen int
 	// Focused is true while the window has keyboard focus.
 	Focused bool
 	// FocusGained is true for the frame in which the window gained keyboard
@@ -200,6 +206,7 @@ func (in *Input) ClearFrame() {
 	in.Clicks = [numButtons]uint8{}
 	in.ScrollX, in.ScrollY = 0, 0
 	in.NKeys, in.NText = 0, 0
+	in.CommitOff, in.CommitLen = 0, 0
 	in.FocusGained = false
 }
 

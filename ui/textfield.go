@@ -123,6 +123,16 @@ func (c *Context) IMECancel() bool { return c.imeCancel }
 // composition. If the field is gone altogether, the composition is just
 // discarded. The blink restarts only when the composition itself changes.
 //
+// The text that commits a composition (Input.CommitOff/CommitLen, tagged by
+// the platform layer) belongs to the field that composed, whatever the focus
+// did in the same frame, and in whichever order: Context.Begin takes it out of
+// Input.Text (so neither another field nor the app's own typed-text handling,
+// such as type-to-filter, sees it) and that field inserts it at its caret,
+// focused or not. If that field is not built in the frame, the commit is
+// dropped, not kept for later and never given to another field. A new
+// composition that begins in the same frame as a commit has no owner yet and
+// belongs to the focused field.
+//
 // AltGr (Ctrl+Alt on Windows) types characters and is neither the primary nor
 // the word modifier.
 //
@@ -211,6 +221,13 @@ func (c *Context) TextField(label string, buf *TextBuffer) TextFieldSignal {
 	}
 	if !sig.Dragging && !sig.Pressed {
 		buf.drag = dragNone
+	}
+
+	// The text that committed a composition goes to the field that composed,
+	// focused or not (the focus may have moved in the same frame).
+	if c.nCommit > 0 && c.commitOwner == key {
+		buf.Insert(c.commit[:c.nCommit])
+		touched = touched || active
 	}
 
 	// Typed text, then keys.

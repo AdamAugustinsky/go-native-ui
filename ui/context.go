@@ -157,6 +157,13 @@ type Context struct {
 	// orphaned (its field lost the focus or is gone).
 	imeOwner  Key
 	imeCancel bool
+	// commit[:nCommit] is the text that ended the composition this frame
+	// (taken out of the frame's Input.Text), for commitOwner, the field that
+	// owned that composition. A preedit that is present with a commit is a new
+	// composition: imeOwner starts again from nobody.
+	commit      [MaxText]byte
+	nCommit     int
+	commitOwner Key
 
 	// boxes built this frame with a cursor or the WindowDrag flag (cursor.go)
 	nCursorBoxes, nDragBoxes int
@@ -270,7 +277,8 @@ func (c *Context) Begin(in *Input, widthPx, heightPx int, scale, dt float32) {
 	c.prevOrder, c.order = c.order, c.prevOrder[:0]
 	c.animating, c.scrollSet = false, false
 	c.wakeNs, c.imeOK, c.imeCancel = 0, false, false
-	if in.NPreedit == 0 {
+	c.takeCommit()
+	if in.NPreedit == 0 || c.nCommit > 0 {
 		c.imeOwner = 0
 	}
 	c.nCursorBoxes, c.nDragBoxes = 0, 0
@@ -291,6 +299,32 @@ func (c *Context) Begin(in *Input, widthPx, heightPx int, scale, dt float32) {
 	c.root = root
 	c.parents[0] = root
 	c.nparents = 1
+}
+
+// takeCommit moves the text that committed an input-method composition out of
+// the frame's typed text, when a field is known to own the composition (the one
+// that showed it last frame). The owner inserts it wherever the focus is by now
+// (TextField), a frame with no such field drops it: it must never land in
+// whichever other field has the focus, nor be seen as typed text (type-to-filter
+// of the app). Without an owner the text is ordinary typed text.
+func (c *Context) takeCommit() {
+	in := &c.in
+	off, n := in.CommitOff, in.CommitLen
+	in.CommitOff, in.CommitLen = 0, 0
+	// A commit longer than one frame's text goes on in the next frame, for the
+	// same owner (the platform layer tags the rest too).
+	owner := c.imeOwner
+	if c.nCommit > 0 {
+		owner = c.commitOwner
+	}
+	c.nCommit, c.commitOwner = 0, 0
+	if n <= 0 || off < 0 || off+n > in.NText || owner == 0 {
+		return
+	}
+	c.nCommit = copy(c.commit[:], in.Text[off:off+n])
+	c.commitOwner = owner
+	copy(in.Text[off:], in.Text[off+n:in.NText])
+	in.NText -= n
 }
 
 func (c *Context) resetStyles() {

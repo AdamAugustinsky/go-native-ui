@@ -35,6 +35,13 @@ type translator struct {
 	spare     []deferred
 	spareText []byte
 
+	// afterEnd: the previous event ended an input-method composition, so a text
+	// event that follows at once is its commit (the platform sends them back to
+	// back); forceCommit does the same for a deferred event that was one.
+	afterEnd, forceCommit bool
+	// commitNow: apply is applying a commit's text.
+	commitNow bool
+
 	// refed: endFrame fed deferred events into the input, which wait for the
 	// frame that follows (cleared by take).
 	refed bool
@@ -48,7 +55,8 @@ type translator struct {
 
 type deferred struct {
 	e        platform.Event
-	off, len int // the event's text in carryText
+	off, len int  // the event's text in carryText
+	commit   bool // the text ends a composition (Input.CommitOff)
 }
 
 type clickState struct {
@@ -92,9 +100,13 @@ func (t *translator) touch(e *platform.Event) {
 // every later event, for the next frame: endFrame feeds them in again, and the
 // loop draws that frame at once (pending).
 func (t *translator) event(e *platform.Event, txt []byte) bool {
+	// The text that follows the end of a composition is its commit: Input tags
+	// it so that ui hands it to the field that composed (Input.CommitOff).
+	commit := e.Kind == platform.EvText && (t.afterEnd || t.forceCommit)
+	t.afterEnd = e.Kind == platform.EvPreedit && len(txt) == 0
 	if len(t.carry) > 0 || t.conflicts(e) {
 		t.carryText = append(t.carryText, txt...)
-		t.carry = append(t.carry, deferred{e: *e, off: len(t.carryText) - len(txt), len: len(txt)})
+		t.carry = append(t.carry, deferred{e: *e, off: len(t.carryText) - len(txt), len: len(txt), commit: commit})
 		return true // the frame that is owed will find the rest pending
 	}
 	if free := len(t.in.Text) - t.in.NText; e.Kind == platform.EvText && len(txt) > free {
@@ -110,14 +122,19 @@ func (t *translator) event(e *platform.Event, txt []byte) bool {
 			n += sz
 		}
 		if n > 0 {
+			t.commitNow = commit
 			t.apply(e, txt[:n])
+			t.commitNow = false
 		}
 		rest := txt[n:]
 		t.carryText = append(t.carryText, rest...)
-		t.carry = append(t.carry, deferred{e: *e, off: len(t.carryText) - len(rest), len: len(rest)})
+		t.carry = append(t.carry, deferred{e: *e, off: len(t.carryText) - len(rest), len: len(rest), commit: commit})
 		return true
 	}
-	return t.apply(e, txt)
+	t.commitNow = commit
+	changed := t.apply(e, txt)
+	t.commitNow = false
+	return changed
 }
 
 // transitioned reports whether this frame's batch holds a button edge.
@@ -176,7 +193,9 @@ func (t *translator) endFrame() {
 	t.spare, t.spareText = pending, text
 	for i := range pending {
 		d := &pending[i]
+		t.forceCommit = d.commit
 		t.event(&d.e, text[d.off:d.off+d.len])
+		t.forceCommit = false
 	}
 }
 
@@ -227,6 +246,14 @@ func (t *translator) apply(e *platform.Event, txt []byte) bool {
 	case platform.EvText:
 		if len(txt) == 0 {
 			return false
+		}
+		if t.commitNow {
+			if in.CommitLen == 0 {
+				in.CommitOff = in.NText
+			}
+			if in.CommitOff+in.CommitLen == in.NText { // contiguous with what is tagged already
+				in.CommitLen += min(len(txt), len(in.Text)-in.NText)
+			}
 		}
 		in.NText += copy(in.Text[in.NText:], txt) // event() keeps what does not fit for the next frame
 	case platform.EvPreedit:

@@ -43,6 +43,23 @@ func TestPreeditTranslation(t *testing.T) {
 	if in.NPreedit != 0 || string(in.Text[:in.NText]) != "仮名" {
 		t.Fatalf("commit: preedit %d, text %q", in.NPreedit, in.Text[:in.NText])
 	}
+	// The text right after the end of a composition is tagged as its commit.
+	if in.CommitOff != 0 || in.CommitLen != len("仮名") {
+		t.Fatalf("commit tag %d+%d, want 0+%d", in.CommitOff, in.CommitLen, len("仮名"))
+	}
+	// Text typed after the commit, or a text with no composition before it,
+	// is not part of the tag.
+	tr.event(ev(platform.EvText, nil), []byte("x"))
+	if in.CommitLen != len("仮名") || in.NText != len("仮名")+1 {
+		t.Fatalf("typed text joined the commit: tag %d+%d, %d text bytes", in.CommitOff, in.CommitLen, in.NText)
+	}
+	tr.endFrame()
+	tr.event(ev(platform.EvText, nil), []byte("y"))
+	if in.CommitLen != 0 {
+		t.Fatalf("plain typing tagged: %d+%d", in.CommitOff, in.CommitLen)
+	}
+	tr.endFrame()
+	e3, b3 = preedit("", 0, 0)
 	// Clearing nothing is not an event worth a frame.
 	tr.take()
 	if tr.event(e3, b3) {

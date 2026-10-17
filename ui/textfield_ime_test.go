@@ -298,3 +298,125 @@ func TestTextFieldAltGrTypesOnWindows(t *testing.T) {
 		t.Errorf("Ctrl+Alt+A without the AltGr rule: %q", r.state())
 	}
 }
+
+// commitFrame feeds the end of a composition the way the translator does:
+// preedit cleared, the committed text tagged in Input.Text, after text typed
+// before it (if any).
+func (r *pairRig) commitFrame(typedBefore, commit, typedAfter string) {
+	r.in.SetPreedit(nil, 0, 0)
+	r.in.AppendText(typedBefore)
+	r.in.CommitOff = r.in.NText
+	r.in.AppendText(commit)
+	r.in.CommitLen = r.in.NText - r.in.CommitOff
+	r.in.AppendText(typedAfter)
+}
+
+// The text that commits a composition goes to the field that composed, even
+// when the focus changes in the very frame the commit arrives.
+func TestIMECommitGoesToTheComposingField(t *testing.T) {
+	compose := func() *pairRig {
+		r := newPairRig(t)
+		r.in.SetPreedit([]byte("かな"), 6, 0)
+		r.frame()
+		return r
+	}
+	t.Run("focus moved in the same frame", func(t *testing.T) {
+		r := compose()
+		r.c.SetFocus(r.c.KeyOf(r.rb.ID))
+		r.commitFrame("", "仮名", "")
+		r.frame()
+		if r.a.String() != "仮名" || r.b.String() != "" || !r.ra.Changed || r.rb.Changed {
+			t.Fatalf("a=%q b=%q changed a=%v b=%v", r.a.String(), r.b.String(), r.ra.Changed, r.rb.Changed)
+		}
+		if r.c.Input().NText != 0 {
+			t.Errorf("the commit is still in the frame's typed text: %q", r.c.Input().Text[:r.c.Input().NText])
+		}
+		r.typ("x") // the owner is forgotten with the next frame
+		if r.b.String() != "x" || r.a.String() != "仮名" {
+			t.Errorf("typing afterwards: a=%q b=%q", r.a.String(), r.b.String())
+		}
+	})
+	t.Run("typed text after the commit follows the focus", func(t *testing.T) {
+		r := compose()
+		r.c.SetFocus(r.c.KeyOf(r.rb.ID))
+		r.commitFrame("", "仮名", "z")
+		r.frame()
+		if r.a.String() != "仮名" || r.b.String() != "z" {
+			t.Errorf("a=%q b=%q", r.a.String(), r.b.String())
+		}
+	})
+	t.Run("focus on nothing", func(t *testing.T) {
+		r := compose()
+		r.c.SetFocus(0)
+		r.commitFrame("", "仮名", "")
+		r.frame()
+		if r.a.String() != "仮名" || r.b.String() != "" {
+			t.Errorf("a=%q b=%q", r.a.String(), r.b.String())
+		}
+	})
+	t.Run("window inactive", func(t *testing.T) {
+		r := compose()
+		r.in.Focused = false
+		r.commitFrame("", "仮名", "")
+		r.frame()
+		if r.a.String() != "仮名" || r.b.String() != "" {
+			t.Errorf("a=%q b=%q", r.a.String(), r.b.String())
+		}
+	})
+	t.Run("commit and a new composition in one frame", func(t *testing.T) {
+		r := compose()
+		r.c.SetFocus(r.c.KeyOf(r.rb.ID))
+		r.commitFrame("", "仮名", "")
+		r.in.SetPreedit([]byte("h"), 1, 0) // the next composition has begun
+		r.frame()
+		if r.a.String() != "仮名" || r.b.String() != "" {
+			t.Fatalf("a=%q b=%q", r.a.String(), r.b.String())
+		}
+		// The new composition belongs to the field that has the focus now.
+		if r.c.IMECancel() || !strings.Contains(string(r.c.fr.Cur().Tail(0)), "h") {
+			t.Errorf("new composition not shown in the focused field (cancel %v)", r.c.IMECancel())
+		}
+		if rect, ok := r.c.IMERect(); !ok || rect[1] < 24 {
+			t.Errorf("IME rect %v %v: not in the second field", rect, ok)
+		}
+	})
+	t.Run("owner no longer built: dropped", func(t *testing.T) {
+		r := compose()
+		r.hideA = true
+		r.c.SetFocus(r.c.KeyOf(r.rb.ID))
+		r.commitFrame("", "仮名", "")
+		r.frame()
+		if r.b.String() != "" {
+			t.Fatalf("the commit landed in the other field: %q", r.b.String())
+		}
+		if r.c.Input().NText != 0 {
+			t.Error("the dropped commit is still seen as typed text")
+		}
+		// Built again later: nothing was kept for it.
+		r.hideA = false
+		r.frame()
+		if r.a.String() != "" {
+			t.Errorf("a dropped commit came back: %q", r.a.String())
+		}
+	})
+	t.Run("no composition seen: the tag is ordinary typed text", func(t *testing.T) {
+		r := newPairRig(t)
+		r.commitFrame("", "ab", "")
+		r.frame()
+		if r.a.String() != "ab" {
+			t.Errorf("a=%q", r.a.String())
+		}
+	})
+	t.Run("a commit in the focused owner lands at the caret and keeps its selection semantics", func(t *testing.T) {
+		r := newPairRig(t)
+		r.a.SetString("xyz")
+		r.a.SelectAll()
+		r.in.SetPreedit([]byte("か"), 3, 0)
+		r.frame()
+		r.commitFrame("", "仮", "")
+		r.frame()
+		if r.a.String() != "仮" || r.a.HasSelection() {
+			t.Errorf("a=%q", r.a.String())
+		}
+	})
+}
