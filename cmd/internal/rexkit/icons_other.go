@@ -1,6 +1,6 @@
 //go:build !darwin
 
-package rex
+package rexkit
 
 // rasterSymbol has no system symbol set to draw from here: the icons fall
 // back to text glyphs (icons.go).

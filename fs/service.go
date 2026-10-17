@@ -133,6 +133,16 @@ func NewService(wake func()) *Service {
 	return newService(wake, listDir, newWatcher, defaultDebounce)
 }
 
+// NewServiceWith is NewService with the caller's list function in place of the
+// OS listing and without an OS watcher (Watch reports ResultWatchError with
+// ErrUnsupported). It is for tools that serve listings that are not on disk:
+// the synthetic directories of a benchmark go through the same pool, ring and
+// Release path as real ones. list must be safe to call from any goroutine and
+// should not allocate once l's buffers have grown.
+func NewServiceWith(wake func(), list func(path string, l *Listing) error) *Service {
+	return newService(wake, list, func(func()) (watcher, error) { return nil, ErrUnsupported }, defaultDebounce)
+}
+
 func newService(wake func(), list func(string, *Listing) error, nw func(func()) (watcher, error), debounce time.Duration) *Service {
 	if wake == nil {
 		wake = func() {}

@@ -49,7 +49,7 @@ func (h *hrn) rectOf(slot int) [4]float32 { return h.x.disp[slot] }
 // btn is the centre of header button b of the pane in slot.
 func (h *hrn) btn(slot, b int) (float32, float32) {
 	d := h.rectOf(slot)
-	k := h.x.k
+	k := h.x.K
 	dx := [numBtns]float32{181.5, 133.5, 83, 37.5}
 	return d[2] - dx[b]*k, d[1] + 36.5*k + k
 }
@@ -57,7 +57,7 @@ func (h *hrn) btn(slot, b int) (float32, float32) {
 // blank is a point inside the pane that holds no text and no control.
 func (h *hrn) blank(slot int) (float32, float32) {
 	d := h.rectOf(slot)
-	return d[2] - 30*h.x.k, d[3] - 30*h.x.k
+	return d[2] - 30*h.x.K, d[3] - 30*h.x.K
 }
 
 func (h *hrn) rootDivider() (rect [4]float32, n int8) {
@@ -383,7 +383,7 @@ func TestClickTabAnimatesPill(t *testing.T) {
 func TestNewTabAndCloseTab(t *testing.T) {
 	h := newHarness(t, WindowWidthPt, WindowHeightPt, 2)
 	W := float32(h.w)
-	plus := [2]float32{W - 46.5*h.x.k, 45 * h.x.k}
+	plus := [2]float32{W - 46.5*h.x.K, 45 * h.x.K}
 	h.click(plus[0], plus[1])
 	h.settle()
 	if h.x.nTabs != 4 || h.x.active != 3 {
@@ -687,7 +687,7 @@ func TestCursorHints(t *testing.T) {
 	h := newHarness(t, WindowWidthPt, WindowHeightPt, 2)
 	agent := h.paneSlot(kindAgent)
 	W := float32(h.w)
-	k := h.x.k
+	k := h.x.K
 	check := func(name string, x, y float32, want ui.Cursor) {
 		t.Helper()
 		h.move(x, y)
@@ -809,7 +809,7 @@ func TestTitlebarDragMap(t *testing.T) {
 		}
 		bar := scale * TitlebarPt
 		W := float32(h.w)
-		k := h.x.k
+		k := h.x.K
 		for _, c := range []struct {
 			name string
 			x, y float32

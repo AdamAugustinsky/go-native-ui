@@ -351,6 +351,14 @@ func keyCode(k platform.Key) ui.KeyCode {
 		return ui.KeyCode('0' + (k - platform.Key0))
 	}
 	switch k {
+	case platform.KeyLeftBracket:
+		return ui.KeyLeftBracket
+	case platform.KeyRightBracket:
+		return ui.KeyRightBracket
+	case platform.KeyPeriod:
+		return ui.KeyPeriod
+	}
+	switch k {
 	case platform.KeyEscape:
 		return ui.KeyEscape
 	case platform.KeyEnter:

@@ -25,6 +25,8 @@ func init() {
 		evdevKeys[2+i] = Key0 + 1 + Key(i)
 	}
 	evdevKeys[11] = Key0 // KEY_0
+	// KEY_LEFTBRACE, KEY_RIGHTBRACE, KEY_DOT
+	evdevKeys[26], evdevKeys[27], evdevKeys[52] = KeyLeftBracket, KeyRightBracket, KeyPeriod
 }
 
 // X keysyms (X11/keysymdef.h).

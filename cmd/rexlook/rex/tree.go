@@ -1,6 +1,9 @@
 package rex
 
-import "gonativeui/ui"
+import (
+	"gonativeui/cmd/internal/rexkit"
+	"gonativeui/ui"
+)
 
 // The model: tabs, each holding a binary tree of splits whose leaves are
 // panes. Everything is held in fixed arrays so that changing the layout (a
@@ -274,7 +277,7 @@ func (t *tab) place(n int8, r [4]float32, g *gutters) {
 		lo, hi = first, first
 	}
 	nd.avail, nd.lo, nd.hi = avail, lo, hi
-	mid := snap(a0 + first)
+	mid := rexkit.Snap(a0 + first)
 	ra, rb, gr := r, r, r
 	ra[ax+2] = mid
 	rb[ax] = mid + gut

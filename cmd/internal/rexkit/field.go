@@ -1,10 +1,4 @@
-package rex
-
-// field is the window background and what depends on its geometry: the node
-// grid of the background mesh, its cells (four-corner colour quads) and the
-// composite of an unfocused pane's translucent fill. It is rebuilt when the
-// window size or scale changes (every frame of a live resize), without
-// allocating.
+package rexkit
 
 const (
 	maxNodesX  = 20
@@ -17,7 +11,12 @@ type bgCell struct {
 	c [4]uint32 // TL, TR, BL, BR
 }
 
-type field struct {
+// Field is the window background and what depends on its geometry: the node
+// grid of the background mesh, its cells (four-corner colour quads) and the
+// composite of an unfocused pane's translucent fill. It is rebuilt when the
+// window size or scale changes (every frame of a live resize), without
+// allocating.
+type Field struct {
 	w, h int
 	k    float32 // pixels per reference pixel (the reference is 2×)
 
@@ -29,7 +28,7 @@ type field struct {
 
 // yPx is the pixel position of a reference height: the top 90 reference
 // pixels (the titlebar) keep their size, the rest stretches with the window.
-func (f *field) yPx(y float32) float32 {
+func (f *Field) yPx(y float32) float32 {
 	if y <= 90 {
 		return y * f.k
 	}
@@ -37,15 +36,15 @@ func (f *field) yPx(y float32) float32 {
 }
 
 // yRef is the inverse of yPx.
-func (f *field) yRef(py float32) float32 {
+func (f *Field) yRef(py float32) float32 {
 	if py <= 90*f.k {
 		return py / f.k
 	}
 	return 90 + (py-90*f.k)*(bgStops[len(bgStops)-1].y-90)/(float32(f.h)-90*f.k)
 }
 
-// build lays out the mesh for a w×h pixel window at k pixels per reference pixel.
-func (f *field) build(w, h int, k float32) {
+// Build lays out the mesh for a w×h pixel window at k pixels per reference pixel.
+func (f *Field) Build(w, h int, k float32) {
 	if f.w == w && f.h == h && f.k == k {
 		return
 	}
@@ -53,7 +52,7 @@ func (f *field) build(w, h int, k float32) {
 	W, H := float32(w), float32(h)
 	refW := W / k
 
-	// Mesh x nodes in reference pixels: dense near both edges.
+	// mesh x nodes in reference pixels: dense near both edges.
 	var xs [17]float32
 	n := 0
 	for _, d := range [...]float32{0, 8, 16, 30, 60, 120, 240, 400} {
@@ -81,10 +80,10 @@ func (f *field) build(w, h int, k float32) {
 	}
 	f.nx, f.ny = nn, len(bgStops)
 	for i := 0; i < nn; i++ {
-		f.nodesX[i] = snap(nodes[i] * k)
+		f.nodesX[i] = Snap(nodes[i] * k)
 	}
 	for j := range bgStops {
-		f.nodesY[j] = snap(f.yPx(bgStops[j].y))
+		f.nodesY[j] = Snap(f.yPx(bgStops[j].y))
 	}
 
 	// Corner colours once per node.
@@ -117,7 +116,7 @@ func (f *field) build(w, h int, k float32) {
 // Unfocused panes are translucent white over the background. The composite
 // is evaluated here, on the CPU, into opaque cells (so the pane's shadow
 // never shows through it and the cells can be animated as plain colours):
-// white at fillAlpha over the background field, whose backdrop turns sandier
+// white at fillAlpha over the background Field, whose backdrop turns sandier
 // toward the bottom of the window than the visible gutters do.
 const fillAlpha = 0.575
 
@@ -137,7 +136,7 @@ func backdropBlue(y float32) float32 {
 }
 
 // fillAt is the composited colour of an unfocused pane at reference (x, y).
-func (f *field) fillAt(xRef, yRef float32) uint32 {
+func (f *Field) fillAt(xRef, yRef float32) uint32 {
 	refW := float32(f.w) / f.k
 	u := bgAt(xRef, refW-xRef, yRef)
 	// The backdrop picks up the edge tints in a different hue balance than
@@ -159,11 +158,11 @@ type meshCell struct {
 	radii [4]float32
 }
 
-// mesh is the cached fill of one pane rectangle: a grid of cells whose corner
+// Mesh is the cached fill of one pane rectangle: a grid of cells whose corner
 // colours are the unfocused composite. The outer cells are exactly 2·rad so
 // that only they carry the rounded corners. The colours depend on nothing but
 // the rectangle and the window, so one mesh can serve any pane.
-type mesh struct {
+type Mesh struct {
 	valid bool
 	rect  [4]float32
 	rad   float32
@@ -174,7 +173,7 @@ type mesh struct {
 }
 
 // cut returns the grid lines between lo and hi: both ends, the corner arcs'
-// extents and the field's nodes in between.
+// extents and the Field's nodes in between.
 func cut(dst *[maxMeshLines]float32, lo, hi, rad float32, nodes []float32) int {
 	n := 0
 	dst[n] = lo
@@ -194,8 +193,8 @@ func cut(dst *[maxMeshLines]float32, lo, hi, rad float32, nodes []float32) int {
 	return n
 }
 
-// update makes m the mesh of rect r (pixel rectangle, corner radius rad).
-func (m *mesh) update(f *field, r [4]float32, rad float32) {
+// Update makes m the mesh of rect r (pixel rectangle, corner radius rad).
+func (m *Mesh) Update(f *Field, r [4]float32, rad float32) {
 	if m.valid && m.rect == r && m.rad == rad && m.w == f.w && m.h == f.h && m.k == f.k {
 		return
 	}

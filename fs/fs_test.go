@@ -20,6 +20,19 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
+// report logs a measurement and, when GNUI_FS_REPORT names a file, appends
+// it there too, so CI can show the numbers without running the tests -v.
+func report(t testing.TB, format string, args ...any) {
+	t.Helper()
+	t.Logf(format, args...)
+	if p := os.Getenv("GNUI_FS_REPORT"); p != "" {
+		if f, err := os.OpenFile(p, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
+			fmt.Fprintf(f, "%s/%s %s: %s\n", runtime.GOOS, runtime.GOARCH, t.Name(), fmt.Sprintf(format, args...))
+			f.Close()
+		}
+	}
+}
+
 // bigDir is a 100k-file directory created once and shared by the tests and
 // benchmarks that need it.
 var bigDir struct {
@@ -281,7 +294,7 @@ func TestBig100k(t *testing.T) {
 	q := []byte("family")
 	filter := best(func() { idx = Filter(l, q, idx[:0]) })
 	perEntry := float64(len(l.Names)+len(l.Entries)*24+len(l.Order)*4) / float64(len(l.Entries))
-	t.Logf("100k: list %v, list+sort(name) %v, sort(name) %v, sort(size) %v, sort(mtime) %v, filter(%q → %d) %v; %.1f B/entry incl. names and order (names %.1f B avg)",
+	report(t, "100k: list %v, list+sort(name) %v, sort(name) %v, sort(size) %v, sort(mtime) %v, filter(%q → %d) %v; %.1f B/entry incl. names and order (names %.1f B avg)",
 		list, listSort, sortOnly, sortSize, sortMod, q, len(idx), filter, perEntry, float64(len(l.Names))/float64(len(l.Entries)))
 	if listSort > 600*time.Millisecond { // criterion is 150 ms on the target Mac; this only catches disasters on shared CI
 		t.Errorf("list+sort of 100k took %v", listSort)

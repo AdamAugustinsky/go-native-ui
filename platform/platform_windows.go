@@ -905,7 +905,8 @@ func buildKeyMap() (m [256]Key) {
 // scanKeys maps set-1 scancodes of the letter and digit keys to Key by
 // physical (US) position, so letters/digits match macOS and Linux regardless
 // of the keyboard layout (VK_A..VK_Z follow the layout).
-var scanKeys = func() (t [0x33]Key) {
+var scanKeys = func() (t [0x35]Key) {
+	t[0x1A], t[0x1B], t[0x34] = KeyLeftBracket, KeyRightBracket, KeyPeriod
 	for i, r := range "1234567890" {
 		t[0x02+i] = Key0 + Key(r-'0')
 	}

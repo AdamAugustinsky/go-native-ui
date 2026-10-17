@@ -1,6 +1,6 @@
 //go:build darwin
 
-package rex
+package rexkit
 
 import (
 	"fmt"
@@ -117,6 +117,6 @@ var warned sync.Map
 
 func warnOnce(msg string) {
 	if _, dup := warned.LoadOrStore(msg, true); !dup {
-		fmt.Fprintln(os.Stderr, "rex: icons:", msg)
+		fmt.Fprintln(os.Stderr, "rexkit: icons:", msg)
 	}
 }

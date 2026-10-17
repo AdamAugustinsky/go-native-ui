@@ -161,6 +161,11 @@ const (
 	KeyZ = KeyA + 25
 	Key0 = KeyZ + 1 // Key0..Key9 are contiguous
 	Key9 = Key0 + 9
+
+	// Punctuation keys, by physical (US) position like the letters.
+	KeyLeftBracket  = Key9 + 1 // [
+	KeyRightBracket = Key9 + 2 // ]
+	KeyPeriod       = Key9 + 3 // .
 )
 
 // Cursor is a pointer shape.

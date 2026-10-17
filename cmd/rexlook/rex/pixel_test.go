@@ -94,7 +94,7 @@ func TestRenderInitial(t *testing.T) {
 	x.Traffic = true
 	g.Frames(x, 2)
 	s := snapshot(g)
-	k := x.k
+	k := x.K
 
 	agent, git, snake := x.paneRect(kindAgent), x.paneRect(kindGit), x.paneRect(kindSnake)
 	// The focused pane is opaque white where it has no text; the others are tinted.
@@ -180,7 +180,7 @@ func TestRenderInteractionStates(t *testing.T) {
 	}
 	g, x := newRig(t, WindowWidthPt, WindowHeightPt, 2)
 	x.Traffic = true
-	k := x.k
+	k := x.K
 	click := func(cx, cy float32) {
 		g.Click(x, cx, cy)
 		if n := g.Settle(x, 900); n > 900 {
@@ -312,7 +312,7 @@ func TestRenderSizes(t *testing.T) {
 					continue
 				}
 				r := x.disp[slot]
-				if p := s.at((r[0]+r[2])/2, r[3]-3*x.k*2); p[0] > 250 && p[1] > 250 && p[2] > 250 && x.cur().focus != x.cur().panes[slot].uid {
+				if p := s.at((r[0]+r[2])/2, r[3]-3*x.K*2); p[0] > 250 && p[1] > 250 && p[2] > 250 && x.cur().focus != x.cur().panes[slot].uid {
 					t.Errorf("unfocused pane %v is pure white", r)
 				}
 			}

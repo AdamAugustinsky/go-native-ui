@@ -434,10 +434,10 @@ func TestWinListBackendChoice(t *testing.T) {
 		}
 		times[v.name] = best
 		names = append(names, v.name)
-		t.Logf("%-34s best of 7: %v for %d entries (%.0f ns/entry)", v.name, best, len(l.Entries), float64(best.Nanoseconds())/float64(len(l.Entries)))
+		report(t, "%-34s best of 7: %v for %d entries (%.0f ns/entry)", v.name, best, len(l.Entries), float64(best.Nanoseconds())/float64(len(l.Entries)))
 	}
 	sort.Slice(names, func(i, j int) bool { return times[names[i]] < times[names[j]] })
-	t.Logf("LIST BACKEND CHOICE (windows/%s): %s is fastest: %v; then %s %v (%.2fx), %s %v (%.2fx)",
+	report(t, "LIST BACKEND CHOICE (windows/%s): %s is fastest: %v; then %s %v (%.2fx), %s %v (%.2fx)",
 		runtime.GOARCH, names[0], times[names[0]],
 		names[1], times[names[1]], float64(times[names[1]])/float64(times[names[0]]),
 		names[2], times[names[2]], float64(times[names[2]])/float64(times[names[0]]))

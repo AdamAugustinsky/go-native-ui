@@ -33,7 +33,7 @@ func centre(r [4]float32) (float32, float32) { return (r[0] + r[2]) / 2, (r[1] +
 // btnCentre is the centre of header button b of a pane drawn at rc.
 func (r *Rex) btnCentre(rc [4]float32, b int) (float32, float32) {
 	dx := [numBtns]float32{181.5, 133.5, 83, 37.5}
-	return rc[2] - dx[b]*r.k, rc[1] + 36.5*r.k + r.k
+	return rc[2] - dx[b]*r.K, rc[1] + 36.5*r.K + r.K
 }
 
 // script feeds input to a Rex, one frame of it per call.
@@ -83,7 +83,7 @@ func (s *script) step() {
 		s.move(a+(b-a)*float32(0.5-0.5*math.Cos(float64(f)*math.Pi/100)), y)
 	case f >= 200 && f < 203, f >= 330 && f < 333, f >= 460 && f < 463: // focus another pane by clicking it
 		r := s.pane((f - 200) / 130)
-		s.move(r[2]-30*x.k, r[3]-30*x.k)
+		s.move(r[2]-30*x.K, r[3]-30*x.K)
 		switch f % 130 {
 		case 71:
 			s.down()

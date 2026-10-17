@@ -325,7 +325,7 @@ func TestLinuxListBackendChoice(t *testing.T) {
 			}
 		}
 		times[v.name], counts[v.name] = best, len(l.Entries)
-		t.Logf("%-18s best of 7: %v for %d entries (%.0f ns/entry)", v.name, best, len(l.Entries), float64(best.Nanoseconds())/float64(len(l.Entries)))
+		report(t, "%-18s best of 7: %v for %d entries (%.0f ns/entry)", v.name, best, len(l.Entries), float64(best.Nanoseconds())/float64(len(l.Entries)))
 	}
 	for _, n := range counts {
 		if n != bigN {
@@ -334,7 +334,7 @@ func TestLinuxListBackendChoice(t *testing.T) {
 	}
 	names := []string{lxListers[0].name, lxListers[1].name}
 	sort.Slice(names, func(i, j int) bool { return times[names[i]] < times[names[j]] })
-	t.Logf("LIST BACKEND CHOICE (linux/%s): %s is faster: %v vs %v (%.2fx)",
+	report(t, "LIST BACKEND CHOICE (linux/%s): %s is faster: %v vs %v (%.2fx)",
 		runtime.GOARCH, names[0], times[names[0]], times[names[1]], float64(times[names[1]])/float64(times[names[0]]))
 }
 

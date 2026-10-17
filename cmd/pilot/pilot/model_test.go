@@ -1,0 +1,607 @@
+package pilot
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"strings"
+	"testing"
+	"time"
+
+	"gonativeui/fs"
+	"gonativeui/ui"
+)
+
+// fakeSrc is a Source that records requests; the tests deliver the results.
+type fakeSrc struct {
+	lists    []string
+	watched  []string
+	released int
+	req      uint64
+}
+
+func (f *fakeSrc) List(id uint32, path string, key fs.SortKey, desc bool) uint64 {
+	f.lists = append(f.lists, path)
+	f.req++
+	return f.req
+}
+func (f *fakeSrc) Watch(id uint32, path string)     { f.watched = append(f.watched, path) }
+func (f *fakeSrc) Unwatch(id uint32)                {}
+func (f *fakeSrc) Poll(dst []fs.Result) []fs.Result { return dst }
+func (f *fakeSrc) Release(l *fs.Listing)            { f.released++ }
+func (f *fakeSrc) Close()                           {}
+func (f *fakeSrc) last() string                     { return f.lists[len(f.lists)-1] }
+
+func listing(key fs.SortKey, desc bool, items ...item) *fs.Listing {
+	l := sceneListing(items)
+	fs.Sort(l, key, desc)
+	return l
+}
+
+func deliver(p *pane, l *fs.Listing) {
+	p.onResult(&fs.Result{Kind: fs.ResultListing, ID: p.id, Listing: l})
+}
+
+// settle runs the pane's slices of work until none is left.
+func settle(t testing.TB, p *pane) {
+	t.Helper()
+	for n := 0; p.work(); n++ {
+		if n > 100000 {
+			t.Fatal("pane work does not end")
+		}
+	}
+}
+
+func names(p *pane) string {
+	v := &p.v
+	var sb strings.Builder
+	for r := 0; r < v.nRows(); r++ {
+		if r > 0 {
+			sb.WriteByte(' ')
+		}
+		sb.Write(v.l.Name(int(v.entryAt(r))))
+	}
+	return sb.String()
+}
+
+func selected(p *pane) string {
+	v := &p.v
+	var sb strings.Builder
+	for r := 0; r < v.nRows(); r++ {
+		if e := v.entryAt(r); v.isSel(e) {
+			if sb.Len() > 0 {
+				sb.WriteByte(' ')
+			}
+			sb.Write(v.l.Name(int(e)))
+		}
+	}
+	return sb.String()
+}
+
+func curName(p *pane) string {
+	if p.v.cur < 0 {
+		return ""
+	}
+	return string(p.v.l.Name(int(p.v.cur)))
+}
+
+func newTestPane(t testing.TB, src Source, dir string, l *fs.Listing) *pane {
+	p := newPane(1, src, "/home/u")
+	p.setInitial(dir, l)
+	settle(t, p)
+	return p
+}
+
+var dirItems = []item{
+	{"zeta", fs.KindDir, 0, 0, "2026-10-01 10:00"},
+	{"alpha", fs.KindDir, 0, 0, "2026-10-02 10:00"},
+	{".hidden", fs.KindFile, fs.FlagHidden, 5, "2026-10-03 10:00"},
+	{"b.txt", fs.KindFile, 0, 300, "2026-10-04 10:00"},
+	{"a.txt", fs.KindFile, 0, 100, "2026-10-05 10:00"},
+	{"c.txt", fs.KindFile, 0, 200, "2026-10-06 10:00"},
+	{"file10", fs.KindFile, 0, 1000, "2026-10-07 10:00"},
+	{"file2", fs.KindFile, 0, 2000, "2026-10-08 10:00"},
+}
+
+func TestRowsHideHiddenAndSort(t *testing.T) {
+	p := newTestPane(t, &fakeSrc{}, "/d", listing(fs.SortName, false, dirItems...))
+	if got, want := names(p), "alpha zeta a.txt b.txt c.txt file2 file10"; got != want {
+		t.Errorf("rows = %q, want %q", got, want)
+	}
+	p.toggleHidden()
+	settle(t, p)
+	if got, want := names(p), ".hidden alpha zeta a.txt b.txt c.txt file2 file10"; !strings.HasSuffix(got, "file10") || !strings.Contains(got, ".hidden") {
+		t.Errorf("rows = %q, want %q", got, want)
+	}
+	if p.v.nRows() != 8 {
+		t.Errorf("%d rows with hidden shown, want 8", p.v.nRows())
+	}
+}
+
+func TestSelectionOps(t *testing.T) {
+	p := newTestPane(t, &fakeSrc{}, "/d", listing(fs.SortName, false, dirItems...))
+	v := &p.v
+	// rows: 0 alpha, 1 zeta, 2 a.txt, 3 b.txt, 4 c.txt, 5 file2, 6 file10
+	v.selectOnly(v.entryAt(2), 2)
+	if selected(p) != "a.txt" || v.nSel != 1 || v.selBytes != 100 {
+		t.Fatalf("click: %q %d %d", selected(p), v.nSel, v.selBytes)
+	}
+	v.toggle(v.entryAt(4), 4) // ⌘-click adds
+	if selected(p) != "a.txt c.txt" || v.selBytes != 300 || v.cur != v.entryAt(4) {
+		t.Fatalf("⌘-click: %q %d", selected(p), v.selBytes)
+	}
+	v.toggle(v.entryAt(2), 2) // ⌘-click again removes
+	if selected(p) != "c.txt" || v.selBytes != 200 {
+		t.Fatalf("⌘-click off: %q %d", selected(p), v.selBytes)
+	}
+	// shift-click selects the range from the anchor (the last plain or ⌘ click), replacing the rest
+	v.selectRange(6)
+	if got := selected(p); got != "a.txt b.txt c.txt file2 file10" {
+		// anchor was row 2 (the toggled-off row), so rows 2..6 are selected
+		t.Fatalf("shift-click: %q", got)
+	}
+	v.selectRange(3) // shrinking the range keeps the anchor
+	if got := selected(p); got != "a.txt b.txt" || v.curRow != 3 || v.anchorRow != 2 {
+		t.Fatalf("shift-click back: %q cur %d anchor %d", got, v.curRow, v.anchorRow)
+	}
+	v.selectAll()
+	if v.nSel != 7 || v.selBytes != 100+300+200+1000+2000 {
+		t.Fatalf("select all: %d %d", v.nSel, v.selBytes)
+	}
+	v.moveCursor(0, false)
+	if selected(p) != "alpha" || v.nSel != 1 {
+		t.Fatalf("move: %q", selected(p))
+	}
+	v.moveCursor(1000, true) // clamps, extends from row 0
+	if v.nSel != 7 || v.curRow != 6 {
+		t.Fatalf("extend to the end: %d rows selected, cursor %d", v.nSel, v.curRow)
+	}
+	v.clearSel()
+	if v.nSel != 0 || v.selBytes != 0 || selected(p) != "" {
+		t.Fatal("clear")
+	}
+}
+
+func TestSelectionSurvivesARefreshByName(t *testing.T) {
+	src := &fakeSrc{}
+	a := listing(fs.SortName, false, dirItems...)
+	p := newTestPane(t, src, "/d", a)
+	v := &p.v
+	v.selectOnly(v.entryAt(2), 2) // a.txt
+	v.toggle(v.entryAt(4), 4)     // c.txt
+	v.toggle(v.entryAt(1), 1)     // zeta (a folder: no size)
+	if v.cur < 0 || curName(p) != "zeta" {
+		t.Fatal("setup")
+	}
+
+	// The directory changed: a.txt is gone, b.txt grew, new files appeared, and
+	// the order is by size now (the pane's sort has been changed).
+	changed := []item{
+		{"zeta", fs.KindDir, 0, 0, "2026-10-01 10:00"},
+		{"alpha", fs.KindDir, 0, 0, "2026-10-02 10:00"},
+		{"b.txt", fs.KindFile, 0, 9999, "2026-10-04 10:00"},
+		{"c.txt", fs.KindFile, 0, 200, "2026-10-06 10:00"},
+		{"new.txt", fs.KindFile, 0, 1, "2026-10-09 10:00"},
+		{"file10", fs.KindFile, 0, 1000, "2026-10-07 10:00"},
+	}
+	p.sortKey = fs.SortSize
+	deliver(p, listing(fs.SortSize, false, changed...))
+	if !p.work() && p.rc.active {
+		t.Fatal("reconcile claims to be done in one slice while active")
+	}
+	settle(t, p)
+	if got, want := names(p), "alpha zeta new.txt c.txt file10 b.txt"; got != want {
+		t.Fatalf("rows = %q, want %q", got, want)
+	}
+	if got := selected(p); got != "zeta c.txt" {
+		t.Errorf("selection = %q, want %q", got, "zeta c.txt")
+	}
+	if v.nSel != 2 || v.selBytes != 200 {
+		t.Errorf("count %d bytes %d, want 2 and 200", v.nSel, v.selBytes)
+	}
+	if curName(p) != "zeta" || v.curRow != 1 {
+		t.Errorf("cursor %q at row %d, want zeta at 1", curName(p), v.curRow)
+	}
+	if src.released != 1 {
+		t.Errorf("%d listings released, want the old one", src.released)
+	}
+}
+
+func TestRefreshKeepsTheScrollAnchor(t *testing.T) {
+	var items []item
+	for i := 0; i < 500; i++ {
+		items = append(items, item{fmt.Sprintf("f%04d", i), fs.KindFile, 0, int64(i), "2026-10-01 10:00"})
+	}
+	p := newTestPane(t, &fakeSrc{}, "/d", listing(fs.SortName, false, items...))
+	// The view is scrolled so that f0123 is half a row from the top.
+	p.topRow, p.topEntry, p.topFrac = 123, p.v.entryAt(123), 0.5
+	more := append([]item{{"a-new", fs.KindFile, 0, 1, "2026-10-01 10:00"}}, items...)
+	deliver(p, listing(fs.SortName, false, more...))
+	settle(t, p)
+	if p.scrollRow != 124 || p.scrollOff != 0.5 {
+		t.Errorf("scroll restore row %d off %v, want 124 (one row was added above) and 0.5", p.scrollRow, p.scrollOff)
+	}
+}
+
+func TestEntriesTakeTheirHiddenAndQueryStateThroughARefresh(t *testing.T) {
+	p := newTestPane(t, &fakeSrc{}, "/d", listing(fs.SortName, false, dirItems...))
+	p.filterOpen = true
+	p.filter.SetString("TXT")
+	p.setQuery()
+	settle(t, p)
+	if got := names(p); got != "a.txt b.txt c.txt" {
+		t.Fatalf("filtered rows = %q", got)
+	}
+	deliver(p, listing(fs.SortName, false, append(dirItems, item{"d.txt", fs.KindFile, 0, 1, "2026-10-09 10:00"})...))
+	settle(t, p)
+	if got := names(p); got != "a.txt b.txt c.txt d.txt" {
+		t.Errorf("rows after a refresh = %q", got)
+	}
+	p.closeFilter()
+	settle(t, p)
+	if p.v.nRows() != 8 { // 9 entries, one hidden
+		t.Errorf("%d rows after the filter closed, want 8", p.v.nRows())
+	}
+}
+
+func TestFilterKeepsTheCursorRowInStep(t *testing.T) {
+	p := newTestPane(t, &fakeSrc{}, "/d", listing(fs.SortName, false, dirItems...))
+	v := &p.v
+	v.selectOnly(v.entryAt(4), 4) // c.txt
+	p.filterOpen = true
+	p.filter.SetString("txt")
+	p.setQuery()
+	if v.curRow != -1 {
+		t.Error("the cursor row is not known while the rows are being rebuilt")
+	}
+	settle(t, p)
+	if v.curRow != 2 || curName(p) != "c.txt" {
+		t.Errorf("cursor at row %d (%q), want c.txt at 2", v.curRow, curName(p))
+	}
+	p.filter.SetString("zzz")
+	p.setQuery()
+	settle(t, p)
+	if v.nRows() != 0 || v.curRow != -1 || v.nSel != 1 {
+		t.Errorf("no matches: %d rows, cursor %d, %d selected (selection stays)", v.nRows(), v.curRow, v.nSel)
+	}
+}
+
+func TestNavigationHistory(t *testing.T) {
+	src := &fakeSrc{}
+	p := newTestPane(t, src, "/a", listing(fs.SortName, false, dirItems...))
+	if p.hist.canBack() || p.hist.canForward() {
+		t.Fatal("history starts empty")
+	}
+	for _, d := range []string{"/a/b", "/a/b/c", "/x"} {
+		p.request(d, navUser, "")
+		if got := src.last(); got != d {
+			t.Fatalf("requested %q, want %q", got, d)
+		}
+		deliver(p, listing(fs.SortName, false, dirItems...))
+		settle(t, p)
+		if p.dir != d {
+			t.Fatalf("dir %q, want %q", p.dir, d)
+		}
+	}
+	if !p.hist.canBack() || p.hist.canForward() {
+		t.Fatal("back only")
+	}
+	p.goBack()
+	deliver(p, listing(fs.SortName, false, dirItems...))
+	if p.dir != "/a/b/c" || !p.hist.canForward() {
+		t.Fatalf("back: %q", p.dir)
+	}
+	p.goBack()
+	deliver(p, listing(fs.SortName, false, dirItems...))
+	p.goForward()
+	deliver(p, listing(fs.SortName, false, dirItems...))
+	if p.dir != "/a/b/c" {
+		t.Fatalf("forward: %q", p.dir)
+	}
+	// A new place drops the forward list.
+	p.request("/y", navUser, "")
+	deliver(p, listing(fs.SortName, false, dirItems...))
+	if p.hist.canForward() || p.hist.dirs[p.hist.i] != "/y" {
+		t.Errorf("forward list kept after a new place: %+v", p.hist)
+	}
+	if got := src.watched[len(src.watched)-1]; got != "/y" {
+		t.Errorf("watching %q, want /y", got)
+	}
+}
+
+func TestHistoryIsBounded(t *testing.T) {
+	var h history
+	for i := 0; i < 3*histMax; i++ {
+		h.visit(fmt.Sprint("/d", i))
+	}
+	if h.n != histMax || h.dirs[h.i] != fmt.Sprint("/d", 3*histMax-1) {
+		t.Fatalf("n %d i %d cur %q", h.n, h.i, h.dirs[h.i])
+	}
+	steps := 0
+	for _, ok := h.back(); ok; _, ok = h.back() {
+		steps++
+	}
+	if steps != histMax-1 {
+		t.Errorf("%d steps back, want %d", steps, histMax-1)
+	}
+}
+
+func TestUpSelectsTheFolderYouCameFrom(t *testing.T) {
+	src := &fakeSrc{}
+	p := newTestPane(t, src, "/a/zeta", listing(fs.SortName, false, dirItems...))
+	p.goUp()
+	if src.last() != "/a" || !p.nav.pending {
+		t.Fatalf("up requests %q", src.last())
+	}
+	deliver(p, listing(fs.SortName, false, dirItems...))
+	settle(t, p)
+	if p.dir != "/a" || selected(p) != "zeta" || p.v.curRow != 1 || p.reveal != 1 {
+		t.Errorf("dir %q selected %q row %d reveal %d", p.dir, selected(p), p.v.curRow, p.reveal)
+	}
+	if p.pendSel != -1 {
+		t.Error("the pending selection is taken")
+	}
+}
+
+func TestFailedNavigationKeepsThePaneAndShowsWhy(t *testing.T) {
+	src := &fakeSrc{}
+	p := newTestPane(t, src, "/a", listing(fs.SortName, false, dirItems...))
+	p.goTo("~/nope")
+	if src.last() != "/home/u/nope" {
+		t.Fatalf("~ expands to %q", src.last())
+	}
+	bad := new(fs.Listing)
+	bad.Err = &os.PathError{Op: "open", Path: "/home/u/nope", Err: os.ErrPermission}
+	deliver(p, bad)
+	if p.dir != "/a" || p.msg != "Permission denied" || !p.msgErr || p.pathErr != "Permission denied" {
+		t.Errorf("dir %q msg %q path error %q", p.dir, p.msg, p.pathErr)
+	}
+	if src.last() != "/a" {
+		t.Errorf("the service lists %q again, want the directory shown (/a)", src.last())
+	}
+	if p.v.l == nil || p.v.nRows() == 0 {
+		t.Error("the old listing stays")
+	}
+}
+
+func TestGoneMovesToTheNearestAncestor(t *testing.T) {
+	src := &fakeSrc{}
+	p := newTestPane(t, src, "/a/b/c", listing(fs.SortName, false, dirItems...))
+	p.onResult(&fs.Result{Kind: fs.ResultGone, ID: p.id})
+	if src.last() != "/a/b" {
+		t.Fatalf("goes to %q, want /a/b", src.last())
+	}
+	bad := new(fs.Listing)
+	bad.Err = os.ErrNotExist
+	deliver(p, bad) // /a/b is gone as well
+	if src.last() != "/a" {
+		t.Fatalf("then %q, want /a", src.last())
+	}
+	deliver(p, listing(fs.SortName, false, dirItems...))
+	if p.dir != "/a" || !strings.Contains(p.msg, "/a/b/c was removed") {
+		t.Errorf("dir %q msg %q", p.dir, p.msg)
+	}
+}
+
+func TestResolvePath(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"~", "/home/u"},
+		{"~/Docs", "/home/u/Docs"},
+		{"sub", "/cur/sub"},
+		{"../up/", "/up"},
+		{"/abs//x/./y", "/abs/x/y"},
+		{"  /padded  ", "/padded"},
+		{"", "/cur"},
+	} {
+		if got := resolvePath(tc.in, "/cur", "/home/u"); got != tc.want {
+			t.Errorf("resolvePath(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestErrText(t *testing.T) {
+	if got := errText(&os.PathError{Err: os.ErrNotExist}); got != "No such file or directory" {
+		t.Error(got)
+	}
+	if got := errText(errors.New(strings.Repeat("x", 500))); len(got) != 120 {
+		t.Errorf("long message is %d bytes", len(got))
+	}
+}
+
+// ---- keyboard map, through a Pilot without a window ----
+
+type keyRig struct {
+	t   *testing.T
+	pl  *Pilot
+	src *fakeSrc
+	c   *ui.Context
+}
+
+func newKeyRig(t *testing.T, mac bool) *keyRig {
+	t.Helper()
+	src := &fakeSrc{}
+	pl := New(Options{Src: src, Home: "/home/u", Loc: time.UTC})
+	pl.mac = mac
+	pl.panes[0].setInitial("/a/b", listing(fs.SortName, false, dirItems...))
+	pl.panes[1].setInitial("/other", listing(fs.SortName, false, dirItems[:3]...))
+	for _, p := range pl.panes {
+		settle(t, p)
+	}
+	r := &keyRig{t: t, pl: pl, src: src, c: ui.New(nil)}
+	pl.geo[0].visRows, pl.geo[1].visRows = 4, 4
+	var in ui.Input
+	r.c.Begin(&in, 1200, 760, 1, 1.0/60)
+	return r
+}
+
+func (r *keyRig) press(code ui.KeyCode, mods ui.Mods) {
+	r.pl.key(r.c, ui.KeyEvent{Code: code, Mods: mods, Down: true})
+	settle(r.t, r.pl.panes[r.pl.active])
+}
+
+func (r *keyRig) sel() string { return selected(r.pl.panes[r.pl.active]) }
+
+func TestKeyboardMap(t *testing.T) {
+	for _, mac := range []bool{true, false} {
+		t.Run(fmt.Sprint("mac=", mac), func(t *testing.T) {
+			r := newKeyRig(t, mac)
+			prim := ui.ModCtrl
+			if mac {
+				prim = ui.ModSuper
+			}
+			a := r.pl.panes[0]
+			// rows: 0 alpha, 1 zeta, 2 a.txt, 3 b.txt, 4 c.txt, 5 file2, 6 file10
+			r.press(ui.KeyDown, 0)
+			if r.sel() != "alpha" {
+				t.Fatalf("down from nothing: %q", r.sel())
+			}
+			r.press(ui.KeyDown, 0)
+			r.press(ui.KeyDown, ui.ModShift)
+			r.press(ui.KeyDown, ui.ModShift)
+			if r.sel() != "zeta a.txt b.txt" {
+				t.Errorf("shift+down extends: %q", r.sel())
+			}
+			r.press(ui.KeyUp, ui.ModShift)
+			if r.sel() != "zeta a.txt" {
+				t.Errorf("shift+up shrinks: %q", r.sel())
+			}
+			r.press(ui.KeyPageDown, 0)
+			if r.sel() != "file2" { // 4 rows visible: a page is 3 rows, from the cursor on row 2
+				t.Errorf("page down: %q", r.sel())
+			}
+			r.press(ui.KeyPageUp, 0)
+			if r.sel() != "a.txt" {
+				t.Errorf("page up: %q", r.sel())
+			}
+			r.press(ui.KeyEnd, 0)
+			if r.sel() != "file10" {
+				t.Errorf("end: %q", r.sel())
+			}
+			r.press(ui.KeyHome, 0)
+			if r.sel() != "alpha" {
+				t.Errorf("home: %q", r.sel())
+			}
+			r.press('A', prim)
+			if a.v.nSel != 7 {
+				t.Errorf("select all: %d", a.v.nSel)
+			}
+			r.press(ui.KeyEscape, 0)
+			if a.v.nSel != 0 {
+				t.Error("esc clears the selection")
+			}
+
+			// Enter opens a folder
+			r.press(ui.KeyHome, 0)
+			r.press(ui.KeyEnter, 0)
+			if r.src.last() != "/a/b/alpha" {
+				t.Errorf("enter on a folder lists %q", r.src.last())
+			}
+			deliver(a, listing(fs.SortName, false, dirItems...))
+			settle(t, a)
+
+			// Backspace goes to the parent and selects the folder it came from
+			r.press(ui.KeyBackspace, 0)
+			if r.src.last() != "/a/b" {
+				t.Errorf("backspace lists %q", r.src.last())
+			}
+			deliver(a, listing(fs.SortName, false, dirItems...))
+			settle(t, a)
+			if r.sel() != "alpha" {
+				t.Errorf("came from alpha, selected %q", r.sel())
+			}
+
+			// back / forward
+			if mac {
+				r.press(ui.KeyLeftBracket, ui.ModSuper)
+			} else {
+				r.press(ui.KeyLeft, ui.ModAlt)
+			}
+			if r.src.last() != "/a/b/alpha" {
+				t.Errorf("back lists %q", r.src.last())
+			}
+			deliver(a, listing(fs.SortName, false, dirItems...))
+			if mac {
+				r.press(ui.KeyRightBracket, ui.ModSuper)
+			} else {
+				r.press(ui.KeyRight, ui.ModAlt)
+			}
+			if r.src.last() != "/a/b" {
+				t.Errorf("forward lists %q", r.src.last())
+			}
+			deliver(a, listing(fs.SortName, false, dirItems...))
+
+			// the parent shortcut
+			if mac {
+				r.press(ui.KeyUp, ui.ModSuper)
+			} else {
+				r.press(ui.KeyUp, ui.ModAlt)
+			}
+			if r.src.last() != "/a" {
+				t.Errorf("parent shortcut lists %q", r.src.last())
+			}
+
+			// hidden files
+			if mac {
+				r.press(ui.KeyPeriod, ui.ModSuper|ui.ModShift)
+			} else {
+				r.press('H', ui.ModCtrl)
+			}
+			if a.hideHidden {
+				t.Error("hidden shortcut")
+			}
+
+			// Tab switches the pane; the other pane keeps its own state
+			r.press(ui.KeyTab, 0)
+			if r.pl.active != 1 {
+				t.Error("tab")
+			}
+			r.press(ui.KeyDown, 0)
+			if r.sel() != "alpha" || a.v.nSel != 0 {
+				t.Errorf("right pane selection %q, left %d", r.sel(), a.v.nSel)
+			}
+			r.press(ui.KeyTab, 0)
+			if r.pl.active != 0 {
+				t.Error("tab back")
+			}
+		})
+	}
+}
+
+func TestEscapeClosesTheFilterBeforeTheSelection(t *testing.T) {
+	r := newKeyRig(t, true)
+	a := r.pl.panes[0]
+	r.press(ui.KeyDown, 0)
+	a.filterOpen = true
+	a.filter.SetString("a")
+	a.setQuery()
+	settle(t, a)
+	r.press(ui.KeyEscape, 0)
+	if a.filterOpen || len(a.q) != 0 || a.v.nSel != 1 {
+		t.Fatalf("first Esc: filter open %v query %q selected %d", a.filterOpen, a.q, a.v.nSel)
+	}
+	r.press(ui.KeyEscape, 0)
+	if a.v.nSel != 0 {
+		t.Error("second Esc clears the selection")
+	}
+}
+
+func TestTypingStartsTheFilter(t *testing.T) {
+	r := newKeyRig(t, true)
+	var in ui.Input
+	in.Focused = true
+	in.AppendText("a")
+	if !r.pl.typed(&in) {
+		t.Error("a printable letter starts the filter")
+	}
+	in.ClearFrame()
+	in.AppendText(" ")
+	if r.pl.typed(&in) {
+		t.Error("a leading space does not")
+	}
+	in.ClearFrame()
+	in.Mods = ui.ModSuper
+	in.AppendText("l")
+	if r.pl.typed(&in) {
+		t.Error("a shortcut does not")
+	}
+}

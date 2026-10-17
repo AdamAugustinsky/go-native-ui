@@ -41,6 +41,13 @@ const (
 	KeyPageDown
 )
 
+// Punctuation keys, by physical (US) position; their codes are their ASCII values.
+const (
+	KeyLeftBracket  KeyCode = '['
+	KeyRightBracket KeyCode = ']'
+	KeyPeriod       KeyCode = '.'
+)
+
 // KeyEvent is one key press (Down) or release this frame.
 type KeyEvent struct {
 	Code   KeyCode
