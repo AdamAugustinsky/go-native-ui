@@ -74,17 +74,51 @@ func (c *Context) End(list *gpu.DrawList) {
 
 	list.Reset()
 	win := [4]float32{0, 0, float32(c.w), float32(c.h)}
+	c.droppedGlyphs = false
 	for try := 0; ; try++ {
 		gen := c.sh.AtlasGeneration()
+		// The last attempt cannot be retried, so it keeps track of its glyph
+		// quads: a reset during it clears the atlas they point into, and they
+		// are dropped (dropStaleGlyphs) instead of being submitted.
+		last := try >= emitTries-1
+		c.finalPass, c.passGen, c.glyphQuads = last, gen, c.glyphQuads[:0]
 		c.emit(list, c.root, win)
+		c.finalPass = false
 		// A full atlas resets mid-frame and invalidates the glyph entries
 		// used so far: draw the frame again against the fresh atlas.
-		if gen == c.sh.AtlasGeneration() || try >= 2 {
+		if last || gen == c.sh.AtlasGeneration() {
 			break
 		}
 		list.Reset()
 	}
+	if c.droppedGlyphs {
+		c.animating = true // some text is missing from this list: draw again
+	}
 	c.syncAtlas()
+}
+
+// emitTries is how many times End emits a frame whose glyph lookups reset the
+// atlas before it stops retrying.
+const emitTries = 3
+
+// dropStaleGlyphs removes the glyph quads emitted so far in the final attempt
+// from l: the atlas was reset since, and they reference cleared space.
+func (c *Context) dropStaleGlyphs(l *gpu.DrawList) {
+	if len(c.glyphQuads) == 0 {
+		return
+	}
+	q, w, next := l.Quads, 0, 0
+	for i := range q {
+		if next < len(c.glyphQuads) && int(c.glyphQuads[next]) == i {
+			next++
+			continue
+		}
+		q[w] = q[i]
+		w++
+	}
+	l.Quads = q[:w]
+	c.glyphQuads = c.glyphQuads[:0]
+	c.droppedGlyphs = true
 }
 
 func intersect(a, b [4]float32) [4]float32 {
@@ -323,14 +357,37 @@ func (c *Context) emitText(l *gpu.DrawList, b *box, clip [4]float32) {
 		return
 	}
 
+	// Glyphs well outside the clip are neither looked up (which could
+	// rasterize them and fill the atlas) nor drawn; a glyph's ink reaches at
+	// most about a line height past its advance box.
+	m := fi.ascent + fi.descent
+	if baseline-fi.ascent-m >= tclip[3] || baseline+fi.descent+m <= tclip[1] {
+		return
+	}
 	for i, gid := range v.Glyphs {
 		pen := x + v.X[i]
+		next := x + v.Advance
+		if i+1 < len(v.X) {
+			next = x + v.X[i+1]
+		}
+		if pen-m >= tclip[2] {
+			continue // starts to the right of the clip
+		}
+		if next+m <= tclip[0] {
+			continue
+		}
 		ix := float32(math.Floor(float64(pen)))
 		sub := int((pen-ix)*4 + 0.5)
 		if sub == 4 {
 			sub, ix = 0, ix+1
 		}
 		e := c.sh.Glyph(v.Faces[i], gid, uint8(sub))
+		if c.finalPass {
+			if g := c.sh.AtlasGeneration(); g != c.passGen {
+				c.passGen = g
+				c.dropStaleGlyphs(l)
+			}
+		}
 		if e.W == 0 {
 			continue
 		}
@@ -352,5 +409,8 @@ func (c *Context) emitText(l *gpu.DrawList, b *box, clip [4]float32) {
 			Mode:  mode,
 			Tex:   c.pageTexture(int(e.Page)),
 		})
+		if c.finalPass {
+			c.glyphQuads = append(c.glyphQuads, int32(len(l.Quads)-1))
+		}
 	}
 }

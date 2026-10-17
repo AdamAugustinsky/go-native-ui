@@ -55,6 +55,13 @@ func (c *Context) mouse() {
 	}
 	for btn := 0; btn < 2; btn++ {
 		c.pressedKey[btn], c.releasedKey[btn] = 0, 0
+		// A release followed by a new press in one frame (Down is still true):
+		// the old press ends first, or the new capture would be cleared at once.
+		releaseFirst := in.Released[btn] && in.Pressed[btn] && in.Down[btn]
+		if releaseFirst {
+			c.releasedKey[btn] = c.active[btn]
+			c.active[btn] = 0
+		}
 		if in.Pressed[btn] {
 			if hot != nil && hot.flags&Clickable != 0 {
 				c.active[btn] = hot.key
@@ -66,7 +73,9 @@ func (c *Context) mouse() {
 				c.focusOnPress()
 			}
 		}
-		if in.Released[btn] || (!in.Down[btn] && c.active[btn] != 0) {
+		if in.Cancelled[btn] {
+			c.active[btn] = 0 // dropped without a release: nobody is clicked
+		} else if !releaseFirst && (in.Released[btn] || (!in.Down[btn] && c.active[btn] != 0)) {
 			c.releasedKey[btn] = c.active[btn]
 			c.active[btn] = 0
 		}
@@ -256,7 +265,24 @@ func (c *Context) SetScroll(id ID, x, y float64) {
 }
 
 // ScrollTo sets the scroll target of id; the offset approaches it.
-func (c *Context) ScrollTo(id ID, x, y float64) { c.boxes[id].scrollTgt = [2]float64{x, y} }
+//
+// Called while building, after Begin stepped the offsets, it marks the frame
+// as animating when the target (clamped to the content as of the last layout)
+// is not where the offset already is, so a frame loop that draws only while
+// Animating carries on to the target.
+func (c *Context) ScrollTo(id ID, x, y float64) {
+	b := &c.boxes[id]
+	b.scrollTgt = [2]float64{x, y}
+	for a := 0; a < 2; a++ {
+		if !b.scrollOn(a) {
+			continue
+		}
+		hi := math.Max(0, b.content[a]-float64(b.size[a]))
+		if math.Abs(math.Min(math.Max(b.scrollTgt[a], 0), hi)-b.scroll[a]) >= scrollEps {
+			c.animating = true
+		}
+	}
+}
 
 // ListRange declares box id a virtual list of rows fixed-height rows and
 // returns the half-open row range [first, last) to build: the rows that

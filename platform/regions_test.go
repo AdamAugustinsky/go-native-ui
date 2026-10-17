@@ -179,3 +179,30 @@ func TestFlattenExample(t *testing.T) {
 		t.Errorf("%v", got)
 	}
 }
+
+// WM_SETCURSOR arrives before the WM_MOUSEMOVE of the same movement: crossing
+// a divider, the last position the window saw is still in the old region.
+func TestPointerShapeUsesTheCurrentPosition(t *testing.T) {
+	var m cursorMap
+	header := CursorRegion{[4]float32{0, 0, 100, 20}, CursorPointer}
+	divider := CursorRegion{[4]float32{40, 0, 48, 100}, CursorResizeEW}
+	m.setRegions([]CursorRegion{header, divider})
+	// The last move was inside the header (and outside the divider), the
+	// pointer is now over the divider.
+	if got := m.pointerShape(44, 50, true, 10, 10); got != CursorResizeEW {
+		t.Errorf("over the divider: %v, want the resize cursor (the last known position gives %v)", got, m.at(10, 10))
+	}
+	// And leaving it again.
+	if got := m.pointerShape(80, 50, true, 44, 50); got != CursorArrow {
+		t.Errorf("past the divider: %v, want the arrow", got)
+	}
+	// Without a current position (the OS could not say), the last one is used.
+	if got := m.pointerShape(0, 0, false, 44, 50); got != CursorResizeEW {
+		t.Errorf("fallback: %v", got)
+	}
+	// The override still wins.
+	m.setOverride(CursorText)
+	if got := m.pointerShape(80, 50, true, 10, 10); got != CursorText {
+		t.Errorf("override: %v", got)
+	}
+}

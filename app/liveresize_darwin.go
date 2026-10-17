@@ -45,8 +45,19 @@ func RunLiveResizeTest(cfg Config, b Builder, sizes [][2]float64) (LiveResizeRep
 		}
 	})
 
-	phase, framesAtPhase, start := 0, 0, platform.Now()
+	const pacedWanted = 20
+	rep.PacedWanted = pacedWanted
+	phase, start := 0, platform.Now()
+	var eventsAtPhase, lastFrames int
 	a.hook = func() {
+		if phase == 2 && a.frames > lastFrames { // frames drawn since the last pass: on a frame event or by the fallback
+			if a.p.paced {
+				rep.PacedFramesAfter += a.frames - lastFrames
+			} else {
+				rep.FallbackFramesAfter += a.frames - lastFrames
+			}
+		}
+		lastFrames = a.frames
 		switch phase {
 		case 0: // paced frames first, so the CAMetalDisplayLink is attached
 			if a.frames >= 12 || platform.Now()-start > int64(3e9) { // an occluded window gets no ticks
@@ -56,6 +67,7 @@ func RunLiveResizeTest(cfg Config, b Builder, sizes [][2]float64) (LiveResizeRep
 			}
 			a.p.invalidate()
 		case 1:
+			rep.FrameEventsBefore = a.frameEvents
 			var m0, m1 runtime.MemStats
 			runtime.GC()
 			runtime.ReadMemStats(&m0)
@@ -66,11 +78,12 @@ func RunLiveResizeTest(cfg Config, b Builder, sizes [][2]float64) (LiveResizeRep
 			rep.Mallocs, rep.TotalAlloc = m1.Mallocs-m0.Mallocs, m1.TotalAlloc-m0.TotalAlloc
 			w, h, _ := a.Win.Size()
 			rep.FinalPx = [2]int32{w, h}
-			phase, framesAtPhase, start = 2, a.frames, platform.Now()
+			phase, eventsAtPhase, start = 2, a.frameEvents, platform.Now()
+			lastFrames = a.frames
 			a.p.invalidate()
 		case 2: // frames after the drag must be paced again (the metal link is back)
-			if a.frames-framesAtPhase >= 20 || platform.Now()-start > int64(3e9) {
-				rep.PacedFramesAfter = a.frames - framesAtPhase
+			if rep.PacedFramesAfter >= pacedWanted || platform.Now()-start > int64(3e9) {
+				rep.FrameEventsAfter = a.frameEvents - eventsAtPhase
 				a.done = true
 				break
 			}
@@ -83,6 +96,7 @@ func RunLiveResizeTest(cfg Config, b Builder, sizes [][2]float64) (LiveResizeRep
 	if rep.HandlerCalls > 0 {
 		rep.HandlerMsMean = float64(handlerNs) / 1e6 / float64(rep.HandlerCalls)
 	}
+	rep.Pacing = livePacingVerdict(rep.FrameEventsBefore, rep.PacedFramesAfter, pacedWanted)
 	if rep.Draws > 0 {
 		rep.MallocsPerDraw = float64(rep.Mallocs) / float64(rep.Draws)
 		rep.BytesPerDraw = float64(rep.TotalAlloc) / float64(rep.Draws)

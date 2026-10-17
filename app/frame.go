@@ -12,10 +12,23 @@ const maxLatencyNs = int64(5e9)
 // build runs one ui frame of the Builder: Begin, Build, End, then clears the
 // per-frame input.
 func (a *App) build(w, h int, dt float32) {
+	a.settle = a.settle || a.resized
+	a.resized = false
 	a.UI.Begin(&a.tr.in, w, h, a.scale, dt)
 	a.b.Build(a.UI)
 	a.UI.End(&a.list)
-	a.tr.in.ClearFrame()
+	a.tr.endFrame()
+}
+
+// owed reports whether another frame must follow the one just built: while
+// something animates, for one frame after input with the pointer inside (hit
+// testing uses the previous layout, so what moved under a still pointer is
+// only hovered one frame later), after a resize wherever the pointer is
+// (ListRange, scrollbars and every other builder that reads rectangles read
+// the previous frame's, which had the old size), while events wait for their
+// own frame (translator.event), and while a bench runs.
+func (a *App) owed(animating, dirty bool) bool {
+	return animating || (dirty && a.tr.in.Inside) || a.settle || a.tr.pending() || (a.bench != nil && !a.scriptDone)
 }
 
 // frameDT is the time step of the frame starting at now. The first frame,
@@ -68,6 +81,7 @@ func (a *App) drawFrame(inHandler bool, passes int) bool {
 	}
 	m.evT = evT
 
+	a.settle = false
 	for i := 0; i < passes; i++ {
 		a.build(a.fr.W, a.fr.H, dt)
 	}
@@ -93,11 +107,8 @@ func (a *App) drawFrame(inHandler bool, passes int) bool {
 		m.cpu3 = sysinfo.ThreadCPUNs()
 	}
 
-	// More is owed while something animates, while a bench runs, and for one
-	// frame after input with the pointer inside: hit testing uses the previous
-	// layout, so what moved under a still pointer (a scroll, a new row) is
-	// only hovered one frame later.
-	a.more = animating || (dirty && a.tr.in.Inside) || (a.bench != nil && !a.scriptDone)
+	// See owed.
+	a.more = a.owed(animating, dirty)
 	a.fm = m
 	a.frames++
 	if a.bench == nil && evT != 0 {

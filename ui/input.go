@@ -65,9 +65,19 @@ type Input struct {
 	// Down is the state of the buttons. Pressed and Released are the edges
 	// since the previous frame (both can be set when a click is quicker than
 	// a frame).
+	//
+	// Within one frame a button should have at most one transition, taken at
+	// the pointer position in the same Input; the app's translator ends a
+	// frame's batch of events where more would change the meaning (press on A,
+	// then release over B). If both edges are set with Down true, ui treats it
+	// as a release followed by a new press; with Down false, as a click.
 	Down     [numButtons]bool
 	Pressed  [numButtons]bool
 	Released [numButtons]bool
+	// Cancelled is the edge of a press that ended without a release: the
+	// window lost focus while the button was held. Down is false; ui drops the
+	// capture of the box without Released, Clicked or DoubleClicked.
+	Cancelled [numButtons]bool
 	// Clicks is the click count of a press edge (1, 2 = double click, ...).
 	Clicks [numButtons]uint8
 	// ScrollX, ScrollY: wheel/trackpad deltas this frame. Positive Y scrolls
@@ -101,6 +111,16 @@ func (in *Input) SetButton(b int, down bool, clicks uint8) {
 	}
 }
 
+// Cancel ends a held button without a release (focus loss): Down goes false and
+// Cancelled is set, so the box that holds the capture is not clicked.
+func (in *Input) Cancel(b int) {
+	if b < 0 || b >= numButtons || !in.Down[b] {
+		return
+	}
+	in.Down[b] = false
+	in.Cancelled[b] = true
+}
+
 // AddScroll accumulates a scroll event.
 func (in *Input) AddScroll(dx, dy float32, precise bool) {
 	in.ScrollX += dx
@@ -128,6 +148,7 @@ func (in *Input) AppendText(s string) {
 func (in *Input) ClearFrame() {
 	in.Pressed = [numButtons]bool{}
 	in.Released = [numButtons]bool{}
+	in.Cancelled = [numButtons]bool{}
 	in.Clicks = [numButtons]uint8{}
 	in.ScrollX, in.ScrollY = 0, 0
 	in.NKeys, in.NText = 0, 0

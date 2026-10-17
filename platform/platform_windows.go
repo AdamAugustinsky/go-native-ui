@@ -165,6 +165,7 @@ var (
 	pReleaseCapture     = win32.Proc(user32, "ReleaseCapture")
 	pGetKeyState        = win32.Proc(user32, "GetKeyState")
 	pScreenToClient     = win32.Proc(user32, "ScreenToClient")
+	pGetCursorPos       = win32.Proc(user32, "GetCursorPos")
 	pTrackMouseEvent    = win32.Proc(user32, "TrackMouseEvent")
 	pAdjustWindowRectEx = win32.Proc(user32, "AdjustWindowRectEx")
 	pSetDpiAwarenessCtx = win32.Proc(user32, "SetProcessDpiAwarenessContext") // Windows 10 1607+
@@ -404,11 +405,24 @@ func (w *Window) SetCursorOverride(c Cursor) {
 	}
 }
 
+// pointerNow is the pointer's position in the client area right now, in
+// pixels: GetCursorPos and ScreenToClient, into storage the Window owns.
+func (w *Window) pointerNow(hwnd uintptr) (x, y float32, ok bool) {
+	if !win32.Bool(win32.Call(pGetCursorPos, uintptr(unsafe.Pointer(&w.pt)))) {
+		return 0, 0, false
+	}
+	if !win32.Bool(win32.Call(pScreenToClient, hwnd, uintptr(unsafe.Pointer(&w.pt)))) {
+		return 0, 0, false
+	}
+	return float32(w.pt.x), float32(w.pt.y), true
+}
+
 func (w *Window) applyCursor() {
 	if !w.tracking { // the pointer is over the content: apply now, not at the next mouse move
 		return
 	}
-	if c := w.curs.at(w.ptrX, w.ptrY); c != w.shown {
+	x, y, ok := w.pointerNow(w.hwnd)
+	if c := w.curs.pointerShape(x, y, ok, w.ptrX, w.ptrY); c != w.shown {
 		w.shown = c
 		win32.Call(pSetCursor, w.cursors[c])
 	}
@@ -630,7 +644,8 @@ func wndProc(hwnd, m, wp, lp uintptr) uintptr {
 
 	case wmSetCursor:
 		if uint32(lp&0xFFFF) == htClient {
-			w.shown = w.curs.at(w.ptrX, w.ptrY)
+			x, y, ok := w.pointerNow(hwnd)
+			w.shown = w.curs.pointerShape(x, y, ok, w.ptrX, w.ptrY)
 			win32.Call(pSetCursor, w.cursors[w.shown])
 			return 1
 		}

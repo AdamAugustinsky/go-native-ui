@@ -66,12 +66,17 @@ func TestButtonEdges(t *testing.T) {
 		t.Fatalf("after release: down %v released %v", in.Down, in.Released)
 	}
 
-	// A click faster than a frame shows both edges and no button down.
-	in.ClearFrame()
+	// A click faster than a frame takes two frames: the release waits for the
+	// next one, so no frame holds both transitions of a button.
+	tr.endFrame()
 	tr.event(press(5, 6, 10_000_000_000, platform.ButtonRight), nil)
 	tr.event(release(5, 6, 10_000_000_001, platform.ButtonRight), nil)
-	if in.Down[ui.ButtonRight] || !in.Pressed[ui.ButtonRight] || !in.Released[ui.ButtonRight] {
-		t.Fatalf("fast right click: down %v pressed %v released %v", in.Down, in.Pressed, in.Released)
+	if !in.Down[ui.ButtonRight] || !in.Pressed[ui.ButtonRight] || in.Released[ui.ButtonRight] || len(tr.carry) == 0 {
+		t.Fatalf("fast right click, first frame: down %v pressed %v released %v deferred %d", in.Down, in.Pressed, in.Released, len(tr.carry))
+	}
+	tr.endFrame()
+	if in.Down[ui.ButtonRight] || in.Pressed[ui.ButtonRight] || !in.Released[ui.ButtonRight] || len(tr.carry) != 0 || !tr.pending() {
+		t.Fatalf("fast right click, second frame: down %v pressed %v released %v deferred %d", in.Down, in.Pressed, in.Released, len(tr.carry))
 	}
 
 	// Buttons ui does not have are ignored and do not repaint.
@@ -84,10 +89,12 @@ func TestDoubleClickCount(t *testing.T) {
 	const ms = int64(1e6)
 	tr := newTranslator()
 	click := func(x, y float32, at int64) uint8 {
-		tr.in.ClearFrame()
+		tr.endFrame()
 		tr.event(press(x, y, at, platform.ButtonLeft), nil)
 		c := tr.in.Clicks[ui.ButtonLeft]
-		tr.event(release(x, y, at+10*ms, platform.ButtonLeft), nil)
+		tr.event(release(x, y, at+10*ms, platform.ButtonLeft), nil) // waits for the next frame
+		tr.endFrame()
+		tr.endFrame()
 		return c
 	}
 	base := int64(10_000) * ms
@@ -201,18 +208,18 @@ func TestKeysAndText(t *testing.T) {
 	}
 }
 
-func TestFocusReleasesButtons(t *testing.T) {
+func TestFocusCancelsButtons(t *testing.T) {
 	tr := newTranslator()
 	if !tr.in.Focused {
 		t.Fatal("windows start focused")
 	}
 	tr.event(press(1, 1, 1, platform.ButtonLeft), nil)
-	tr.in.ClearFrame()
+	tr.endFrame()
 	if !tr.event(ev(platform.EvFocus, nil), nil) || tr.in.Focused {
 		t.Fatal("focus loss not applied")
 	}
-	if tr.in.Down[ui.ButtonLeft] || !tr.in.Released[ui.ButtonLeft] {
-		t.Fatal("losing focus must release a held button: its release goes to another window")
+	if tr.in.Down[ui.ButtonLeft] || tr.in.Released[ui.ButtonLeft] || !tr.in.Cancelled[ui.ButtonLeft] {
+		t.Fatal("losing focus must cancel a held button (its release goes to another window), not release it")
 	}
 	if tr.event(ev(platform.EvFocus, nil), nil) {
 		t.Fatal("unchanged focus repaints")

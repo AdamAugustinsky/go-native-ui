@@ -85,6 +85,11 @@ func (o *Offscreen) Frame() (img *image.RGBA, more bool) {
 		}
 		a.scriptFrame++
 	}
+	if r := o.img.Rect; r.Dx() != a.w || r.Dy() != a.h { // a resize event changed the size
+		o.img = image.NewRGBA(image.Rect(0, 0, a.w, a.h))
+	}
+	a.tr.take()
+	a.settle = false
 	a.build(a.w, a.h, 1.0/60)
 	a.R.RenderToRGBA(a.w, a.h, a.cfg.Clear, &a.list, o.img.Pix)
 	return o.img, more

@@ -183,6 +183,14 @@ func runResizeTest() error {
 		return err
 	}
 	printJSON(rep)
+	switch rep.Pacing {
+	case app.PacingFailed:
+		fmt.Fprintf(os.Stderr, "rexlook: live-resize test failed: the frame source delivered %d frame events before the drag but only %d paced frames (%d wanted) after it\n",
+			rep.FrameEventsBefore, rep.PacedFramesAfter, rep.PacedWanted)
+		os.Exit(3)
+	case app.PacingInconclusive:
+		fmt.Fprintln(os.Stderr, "rexlook: pacing after the drag is inconclusive: no frame events arrived even before it (asleep display or occluded window); the frames drawn were the unpaced fallback")
+	}
 	return nil
 }
 

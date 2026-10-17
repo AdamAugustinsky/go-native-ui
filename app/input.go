@@ -24,11 +24,29 @@ type translator struct {
 
 	last [3]clickState // per ui button
 
+	// Events that would change the meaning of the transition already in this
+	// frame's batch wait here, in order, with the bytes of their text, for the
+	// next frame (see conflicts). The two pairs of buffers are swapped by
+	// endFrame, so nothing is allocated once they are warm.
+	carry     []deferred
+	carryText []byte
+	spare     []deferred
+	spareText []byte
+
+	// refed: endFrame fed deferred events into the input, which wait for the
+	// frame that follows (cleared by take).
+	refed bool
+
 	// dirty: an event since the last frame wants a repaint. firstT is the
 	// platform time of the oldest such event with a timestamp (0 if none),
 	// the start of the input-to-photon interval of the frame that handles it.
 	dirty  bool
 	firstT int64
+}
+
+type deferred struct {
+	e        platform.Event
+	off, len int // the event's text in carryText
 }
 
 type clickState struct {
@@ -38,7 +56,9 @@ type clickState struct {
 }
 
 func newTranslator() translator {
-	t := translator{scale: 1, wheelStep: 48}
+	t := translator{scale: 1, wheelStep: 48,
+		carry: make([]deferred, 0, 256), spare: make([]deferred, 0, 256),
+		carryText: make([]byte, 0, 1024), spareText: make([]byte, 0, 1024)}
 	t.in.Focused = true // windows start focused; EvFocus corrects it
 	return t
 }
@@ -47,7 +67,7 @@ func newTranslator() translator {
 // the start of a frame that will handle the input.
 func (t *translator) take() (firstT int64, wasDirty bool) {
 	firstT, wasDirty = t.firstT, t.dirty
-	t.firstT, t.dirty = 0, false
+	t.firstT, t.dirty, t.refed = 0, false, false
 	return
 }
 
@@ -58,11 +78,91 @@ func (t *translator) touch(e *platform.Event) {
 	}
 }
 
-// event applies one platform event. txt is the bytes of an EvText event
-// (Window.Text). It reports whether the event wants a repaint; window events
-// (EvClose, EvResize, EvVisible, EvFrame, EvWake) are the loop's business
-// and are ignored here.
+// event takes one platform event, in order. txt is the bytes of an EvText
+// event (Window.Text). It reports whether the event wants a repaint; window
+// events (EvClose, EvResize, EvVisible, EvFrame, EvWake) are the loop's
+// business and are ignored here.
+//
+// ui sees a frame's input as button edges plus the final pointer position, so
+// a frame can carry at most one transition of each button, at the position it
+// happened at. An event that would break that (a second transition of a
+// button, a move after a press, focus loss after a release) is kept, with
+// every later event, for the next frame: endFrame feeds them in again, and the
+// loop draws that frame at once (pending).
 func (t *translator) event(e *platform.Event, txt []byte) bool {
+	if len(t.carry) > 0 || t.conflicts(e) {
+		t.carryText = append(t.carryText, txt...)
+		t.carry = append(t.carry, deferred{e: *e, off: len(t.carryText) - len(txt), len: len(txt)})
+		return true // the frame that is owed will find the rest pending
+	}
+	return t.apply(e, txt)
+}
+
+// transitioned reports whether this frame's batch holds a button edge.
+func (t *translator) transitioned() bool {
+	in := &t.in
+	for b := range in.Down {
+		if in.Pressed[b] || in.Released[b] || in.Cancelled[b] {
+			return true
+		}
+	}
+	return false
+}
+
+// conflicts reports whether applying e now would change the meaning of a
+// button transition already in the batch.
+func (t *translator) conflicts(e *platform.Event) bool {
+	if !t.transitioned() {
+		return false
+	}
+	in := &t.in
+	switch e.Kind {
+	case platform.EvPointerMove:
+		return !in.Inside || in.MouseX != e.X || in.MouseY != e.Y
+	case platform.EvPointerLeave:
+		return in.Inside
+	case platform.EvPointerButton:
+		b, ok := button(e.Button)
+		if !ok {
+			return false
+		}
+		if in.Down[b] == (e.Flags&platform.FlagDown != 0) {
+			return false // no change of state: nothing to apply
+		}
+		if in.Pressed[b] || in.Released[b] || in.Cancelled[b] {
+			return true // a second transition of the same button
+		}
+		return !in.Inside || in.MouseX != e.X || in.MouseY != e.Y
+	case platform.EvFocus:
+		return e.Flags&platform.FlagDown == 0 && in.Focused // cancels held buttons
+	}
+	return false
+}
+
+// endFrame closes the frame that has just taken the input: it clears the
+// per-frame parts and feeds the deferred events in again, so they become the
+// input of the next frame (which may defer some of them once more).
+func (t *translator) endFrame() {
+	t.in.ClearFrame()
+	if len(t.carry) == 0 {
+		return
+	}
+	t.refed = true
+	pending, text := t.carry, t.carryText
+	t.carry, t.carryText = t.spare[:0], t.spareText[:0]
+	t.spare, t.spareText = pending, text
+	for i := range pending {
+		d := &pending[i]
+		t.event(&d.e, text[d.off:d.off+d.len])
+	}
+}
+
+// pending reports whether events are waiting for a frame of their own: still
+// deferred, or fed into the input by the last endFrame.
+func (t *translator) pending() bool { return len(t.carry) > 0 || t.refed }
+
+// apply applies one platform event to the input.
+func (t *translator) apply(e *platform.Event, txt []byte) bool {
 	in := &t.in
 	switch e.Kind {
 	case platform.EvPointerMove:
@@ -111,9 +211,9 @@ func (t *translator) event(e *platform.Event, txt []byte) bool {
 			return false
 		}
 		in.Focused = down
-		if !down { // a release that happens in another window never arrives
+		if !down { // a release that happens in another window never arrives: cancel, not click
 			for b := range in.Down {
-				in.SetButton(b, false, 0)
+				in.Cancel(b)
 			}
 		}
 	default:

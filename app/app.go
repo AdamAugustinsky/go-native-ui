@@ -115,15 +115,18 @@ type App struct {
 	dragUI  []ui.DragRegion
 	dragPl  []platform.DragRegion
 
+	resized     bool // a resize since the last build
+	settle      bool // the frame being built is the first after a resize (see owed)
 	done        bool
 	more        bool // the last frame left a repaint owed (animation, input to settle)
 	scriptFrame int
 	scriptDone  bool
 
-	frames    int   // frames presented
-	lastStart int64 // platform.Now of the last frame's start; 0 before the first
-	fm        frameMeasure
-	lat       sampler // input-to-commit in Run, ms
+	frames      int   // frames presented
+	frameEvents int   // EvFrame events received (frame-source ticks)
+	lastStart   int64 // platform.Now of the last frame's start; 0 before the first
+	fm          frameMeasure
+	lat         sampler // input-to-commit in Run, ms
 
 	execNs int64 // platform.Now at process start, -1 if unknown
 
@@ -363,7 +366,10 @@ func (a *App) onEvent(e *platform.Event) {
 		if e.W > 0 && e.H > 0 {
 			a.w, a.h, a.scale = int(e.W), int(e.H), e.Scale
 			a.tr.scale = e.Scale
-			a.Surf.Resize(e.W, e.H, e.Scale)
+			if a.Surf != nil {
+				a.Surf.Resize(e.W, e.H, e.Scale)
+			}
+			a.resized = true
 			a.tr.dirty = true // repaint (and settle the hover), but a resize is not input latency
 			a.p.invalidate()
 		}
@@ -374,6 +380,7 @@ func (a *App) onEvent(e *platform.Event) {
 	case platform.EvWake:
 		a.p.invalidate() // a worker published something
 	case platform.EvFrame:
+		a.frameEvents++
 		a.p.frameEvent()
 	default:
 		var txt []byte

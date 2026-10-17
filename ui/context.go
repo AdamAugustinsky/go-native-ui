@@ -139,6 +139,12 @@ type Context struct {
 	// boxes built this frame with a cursor or the WindowDrag flag (cursor.go)
 	nCursorBoxes, nDragBoxes int
 
+	// the final emit attempt of End (draw.go)
+	finalPass     bool
+	passGen       uint32  // atlas generation the glyph quads so far belong to
+	glyphQuads    []int32 // indices of the glyph quads emitted so far
+	droppedGlyphs bool
+
 	fonts []fontInfo
 
 	up      Uploader

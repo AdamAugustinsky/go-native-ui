@@ -160,3 +160,15 @@ func (m *cursorMap) flatten() []CursorRegion {
 func overlaps(a, b [4]float32) bool {
 	return a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3]
 }
+
+// pointerShape is the cursor WM_SETCURSOR shows. Windows sends that message
+// before the WM_MOUSEMOVE of the same movement, so the last position the
+// window saw is the one the pointer just left: the shape is looked up at the
+// pointer's current position (cur, when the OS could give it) and only falls
+// back to the last known one.
+func (m *cursorMap) pointerShape(curX, curY float32, curOK bool, lastX, lastY float32) Cursor {
+	if curOK {
+		return m.at(curX, curY)
+	}
+	return m.at(lastX, lastY)
+}
