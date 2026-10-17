@@ -2,15 +2,20 @@
 
 Each entry records the decision, the evidence, the alternatives and the
 cost. "M:" points to measurements in
-[docs/measurements/phase0-macos.md](docs/measurements/phase0-macos.md).
-Status: **proposed**, awaiting review at the end of phase 0.
+[docs/measurements/phase0-macos.md](docs/measurements/phase0-macos.md);
+"P1:" points to
+[docs/measurements/phase1-macos.md](docs/measurements/phase1-macos.md).
+
+Status: phase 0 was approved, and the review answered D1 (macOS 14), D4
+(pin purego), D5 (`CADisplayLink` only) and D9 (Linux option B). Phase-1
+updates are marked "Phase 1:".
 
 ## D1. Toolchain and targets
 
 - Go 1.27.x, module `gonativeui` (placeholder; final name needs your approval).
 - `CGO_ENABLED=0` on every target. Every target cross-compiles from any host.
 - Targets:
-  - darwin/arm64 + amd64, macOS 13+ (Go 1.27's floor)
+  - darwin/arm64 + amd64, **macOS 14+** (decided at the phase-0 review). Go 1.27's floor is 13; we raise it so `NSView` `CADisplayLink` is always available and no `CVDisplayLink` fallback is needed
   - windows/amd64 + arm64, Windows 10+ (Go's floor since 1.21)
   - linux/amd64 + arm64 with glibc. purego makes Linux binaries dynamically linked against `libc.so.6`/`libdl.so.2`, so musl is not supported out of the box.
 - Release builds use `-trimpath -ldflags="-s -w"`. CI records the stripped size per target.
@@ -33,17 +38,25 @@ excluded.
 | Dependency | Why | Size cost (stripped) | cgo | License |
 |---|---|---|---|---|
 | `github.com/ebitengine/purego` | `Dlopen`/`Dlsym`; the `fakecgo` runtime bootstrap that makes C calls and callbacks legal without cgo (sets `runtime.iscgo`, creates threads with `pthread_create`, provides `crosscall2`); Objective-C class registration at startup. darwin + linux only. | +236 KB (Dlopen + 1 call), +509 KB with `objc` on darwin/arm64; +131–180 KB on linux | no | Apache-2.0 (some files BSD-3 from Go) |
-| `golang.org/x/sys` | `windows`: `NewLazySystemDLL` (System32-only loading), handles, constants. `unix`: `eventfd`, `poll`, `inotify`, `getdents64`, `statx`. | Only the referenced symbols get linked; tens of KB | no | BSD-3-Clause |
-| `github.com/go-text/typesetting` | **Proposed for Linux text only if D9 option B is chosen.** Not added yet. | +2.1–3.4 MB | no | Unlicense OR BSD-3; `harfbuzz/` is MIT |
+| `github.com/go-text/typesetting` | Linux text shaping, bidi and segmentation (**D9 option B, chosen**). Linux builds only. To be added in phase 2. | +2.1–3.4 MB (probe) | no | Unlicense OR BSD-3; `harfbuzz/` is MIT |
+
+**Phase 1: `golang.org/x/sys` dropped.** It was planned for Windows DLL
+loading and Linux syscalls. The Windows and Linux backends ended up needing
+only the standard library's `syscall` package:
+- `LoadLibraryEx` with `LOAD_LIBRARY_SEARCH_SYSTEM32`, `SyscallN`, `NewCallback`;
+- `eventfd2`/`poll` via `syscall.Syscall`.
+
+`go.mod` now requires only purego. If phase 4 needs `inotify`/`statx`
+helpers, x/sys comes back with its own row here.
 
 System libraries we call (OS-provided, not bundled):
 
 - **macOS:** AppKit, Foundation, CoreFoundation, QuartzCore, Metal, CoreText, CoreGraphics, CoreServices (FSEvents), libobjc, libSystem.
 - **Windows:** kernel32, user32, gdi32, shcore, dwmapi, imm32, shell32, ole32, d3d11, dxgi, dwrite.
 - **Linux:**
-  - required: libc, libwayland-client, libwayland-egl, libEGL, libxkbcommon, libX11
+  - required: libc, libEGL, libGL or libOpenGL (libGLESv2 fallback), and libwayland-client + libwayland-egl + libxkbcommon (Wayland) or libX11 (X11)
   - optional: libwayland-cursor, libXcursor
-  - D9 option A: libfontconfig, libfreetype, libharfbuzz
+  - phase 2 (D9 option B): libfontconfig, for font discovery and fallback only
 
 Third-party code we read but did not copy: Gio (MIT/Unlicense), GPUI
 (Apache-2.0), RAD Debugger (MIT), Ebitengine (Apache-2.0). If we adapt code
@@ -78,9 +91,16 @@ are used only at setup.
 - Apple arm64 packs stack arguments by natural alignment, and variadic arguments go on the stack. The `Frame` builder handles both cases explicitly; Linux arm64 uses 8-byte slots.
 - Windows doesn't use this path; it uses `syscall.SyscallN`/`NewCallback`. Their allocation counts are still to be verified on Windows CI.
 
+**Phase 1 (P1).** Implemented in `internal/ffi`, with `ffi_arm64.s` and
+`ffi_amd64.s` shared by darwin and linux.
+- **Speed and allocations:** 20.5 ns integer call, 21.1 ns mixed int/float, 56.6 ns callback, 0 allocations on each path.
+- **Tests:** pass on darwin/arm64 and on darwin/amd64 under Rosetta. Linux runs them in CI (not yet run).
+- **C addresses:** `ffi.PtrFromC` converts C-owned addresses to `unsafe.Pointer` without tripping vet's `unsafeptr` check. It must never be used for Go heap addresses.
+- **Windows gate:** the spike's `-gate` flag covers the `SyscallN` frame path through the exact allocation delta.
+
 ## D4. purego version
 
-**Decision.** In phase 1, pin `github.com/ebitengine/purego` to commit
+**Decision (approved at the phase-0 review).** Pin `github.com/ebitengine/purego` to commit
 `d456b1b` (pseudo-version
 `v0.12.0-alpha.1.0.20261015130536-d456b1bb95e8`), then move to the next
 tagged release as soon as one exists.
@@ -101,16 +121,25 @@ unacceptable, because we profile scrolling.
 - Our own `NSView` subclass, registered at runtime and implementing `NSTextInputClient`. All its methods share one IMP.
 - Worker wake: `postEvent:atStart:` with an application-defined event, coalesced through an atomic flag.
 - `CAMetalLayer` with 2 drawables.
-- Frame pacing: `CADisplayLink` from `NSView` on macOS 14+, `CVDisplayLink` on 13.
+- Frame pacing: `CADisplayLink` from `NSView` only. No `CVDisplayLink` fallback, since the minimum is macOS 14 (D1).
+- The window is shown with `orderFrontRegardless`. Under macOS 14 cooperative activation, a process started from a background shell can't activate itself, and `makeKeyAndOrderFront:` alone may leave the window behind others.
 
 **Evidence (M:2):**
 - The purego probe shows the approach works with no cgo: 2.1 MB binary, first frame committed 83 ms after `main`, 0 CPU while idle, 34 MB footprint.
 - AppKit setup dominates startup: `NSApplication` ≈ 26 ms, the first `NSWindow` ≈ 26 ms, order-front ≈ 12 ms, `finishLaunching` ≈ 10 ms. Metal device creation is 0.17 ms, and the clear plus present is 4 ms.
 - Ebitengine uses the same approach in production: `objc.RegisterClass` for `NSView` + `NSTextInputClient`, `PostEmptyEvent` via `postEvent`, and `CAMetalDisplayLink`/`CVDisplayLink`. That is according to the purego/Ebitengine research report; we did not copy their code.
 
-**Open in phase 1.**
-- Exec → window on screen is 171 ms measured externally, against 83 ms internally; it drops to 139 ms with an explicit `[CATransaction flush]` (M:2). Disabling the window animation is inconclusive so far.
-- The 85 MB peak footprint at startup; it is still 84 MB one second after the window appears.
+**Phase 1 (P1).** Measured with the display asleep and the session locked,
+so the window is occluded and `CADisplayLink` never fires.
+- **Startup:** exec → first present has a median of 134.9 ms.
+- **Idle:** 0 presents and 4.2 ms CPU per 60 s.
+- **Wakes:** worker → loop wake p99 is 201 µs.
+- **Frames:** 0 allocations over 480 unpaced frames.
+- **Memory:** idle footprint is 30.6 MB. The 84 MB startup peak is reclaimable graphics memory and drops to ~34 MB within about 2 s.
+
+The phase-0 "on screen" numbers measured window-server registration, not
+visible pixels. Vsync tracking, time to visible, and the footprint after
+animating (101–105 MB, unpaced into an occluded layer) need a live display.
 
 ## D6. GPU API per OS
 
@@ -148,6 +177,14 @@ reconsider it if GL becomes a measured bottleneck.
 - **Ebitengine** uses `FLIP_SEQUENTIAL`, 2 buffers, no waitable object (`graphics_windows.go:305-320`; `dxgi_windows.go:659-661`).
 - Microsoft recommends flip-model swap chains plus the waitable object for lowest latency ("Reduce latency with DXGI 1.3 swap chains"; that guidance is long-standing, not re-fetched this session).
 
+**Phase 1.** Implemented in `gpu/d3d11_windows.go` and
+`platform/platform_windows.go`, cross-compiled only; runtime unverified.
+- **Swap effect:** `FLIP_DISCARD`, falling back to `FLIP_SEQUENTIAL` on Windows 8.x.
+- **Waitable:** the frame-latency waitable is consumed once at setup, because it starts signalled (as in Microsoft's DirectXLatency sample). After that it is waited on together with the message queue.
+- **DPI:** set with `SetProcessDpiAwarenessContext(PER_MONITOR_AWARE_V2)` at runtime. The embedded manifest (`.syso`) is deferred, so no manifest yet.
+- **Occlusion:** `DXGI_STATUS_OCCLUDED` makes `Present` return false; the spike backs off 50 ms instead of spinning.
+- **Not yet:** device-loss recovery beyond reporting it, and redraw during the live-resize modal loop.
+
 **Cost.** We write the COM bindings by hand for the D3D11, DXGI 1.2–1.5 and DirectWrite interfaces we use. Vtable order is checked against the Windows SDK / mingw-w64 headers, and each interface gets a comment citing the header line ranges. Size: Gio's hand-written D3D11+DXGI binding is 1,694 lines; ours should be smaller (no compute, no generic GPU abstraction).
 
 ## D8. Linux windowing
@@ -167,6 +204,20 @@ reconsider it if GL becomes a measured bottleneck.
 - **Gio** only supports integer Wayland scale (research report, `os_wayland.go:636-639`). Doing better than Gio here is a concrete win.
 - **Ebitengine** has no native Wayland backend; it relies on XWayland.
 
+**Phase 1.** Implemented, cross-compiled only; runtime unverified until CI
+runs on Weston and Xvfb.
+
+Done:
+- **Wayland:** xdg-shell, xdg-decoration, `fractional-scale-v1` + `viewporter` (with an integer `preferred_buffer_scale` fallback), `wl_output`, and an xkbcommon keymap.
+- **Interface tables:** generated by `internal/wl/gen.go` (a `go:build ignore` program) from protocol XML fetched 2026-10-16. The XML is not vendored; the generator header lists the source URLs.
+- **X11 fallback:** libX11 plus EGL on the Xlib `Display*`.
+- **Backend choice:** `GNUI_BACKEND=wayland|x11` forces one backend.
+
+Deferred:
+- cursor-shape-v1, text-input-v3, `wl_data_device`;
+- client-side decorations: today, dragging the top 32 px moves the window;
+- live-resize redraw.
+
 **Alternatives:**
 - **cgo + libwayland (Gio):** loses cross-compilation.
 - **libdecor:** loads GTK, so it's excluded.
@@ -177,9 +228,12 @@ reconsider it if GL becomes a measured bottleneck.
 **Decision:**
 - macOS: **CoreText**.
 - Windows: **DirectWrite**.
-- Linux: **open, you choose:**
-  - **Option A (recommended):** system fontconfig + HarfBuzz + FreeType via `dlopen`, plus a small UAX #9/#29 table for bidi/graphemes.
-  - **Option B:** go-text/typesetting for shaping, bidi and segmentation; fontconfig via `dlopen` for discovery and fallback; a Go rasterizer.
+- Linux: **option B (chosen at the phase-0 review):** go-text/typesetting for shaping, bidi and segmentation; fontconfig via `dlopen` for discovery and fallback; a Go rasterizer.
+  - Option A (system fontconfig + HarfBuzz + FreeType via `dlopen`) was the agent's recommendation, and is kept below for the record.
+  - Consequences we accept: no hinting and no LCD AA on Linux.
+  - Phase 2 must solve two problems the probe found:
+    - load color-emoji tables lazily, never the whole table, given the +190 MB `sbix` result;
+    - avoid re-statting every font at startup; use fontconfig's cache for discovery instead of fontscan's index.
 
 Shaped-run and glyph caches are shared above the backend (ARCHITECTURE §7).
 
@@ -255,9 +309,9 @@ returned-attributes bitmap.
 - **Memory:**
   - macOS `phys_footprint` (Activity Monitor's "Memory"), split into graphics and non-graphics;
   - RSS reported but not gated, since it includes shared framework pages;
-  - Windows: Private Working Set + commit;
+  - Windows: Private Working Set + commit. Phase 1's `internal/sysinfo` reports only commit (`PrivateUsage`) as the footprint and the working set as RSS. The private working set (`PROCESS_MEMORY_COUNTERS_EX2` or `QueryWorkingSetEx`) is a phase-2 follow-up;
   - Linux: PSS (`smaps_rollup`).
-- **Idle:** CPU-time delta over 60 s, presents counted in-app, and wakeups from `top -stats idlew` on macOS. Windows uses ETW/PresentMon; Linux uses `/proc/<pid>/stat` and `perf trace`.
+- **Idle:** CPU-time delta over 60 s, presents counted in-app, and wakeups on macOS. The spike reports package-idle wakeups (`ri_pkg_idle_wkups`, the same counter as `top -stats idlew`) separately from all interrupt wakeups. Windows uses ETW/PresentMon; Linux uses `/proc/<pid>/stat` and `perf trace`.
 - **Input-to-present:** the OS event timestamp until the OS-reported present time (`MTLDrawable.presentedTime`, DXGI frame statistics, `wp_presentation` feedback). This is reported as input-to-photon minus scan-out and device latency. A camera measurement is optional later.
 - **Baselines on this Mac:**
   - Zed: 302 ms to window, 118 MB.
@@ -277,20 +331,43 @@ returned-attributes bitmap.
 GitHub Actions matrix, as in ARCHITECTURE §12. It is written in phase 1 but
 **not pushed**: pushing to GitHub needs your approval.
 
+**Phase 1.** `.github/workflows/ci.yml` has four jobs:
+- **cross:** gofmt; vet and stripped builds for all six targets; a binary-size table; a 10 MiB gate.
+- **macOS 15 arm64:** tests (plus amd64 ffi tests under Rosetta), ffi benchmarks, and the spike.
+- **Windows 2025:** the spike on D3D11, which falls back to WARP on runners.
+- **Ubuntu 24.04:** the spike on X11 (Xvfb) and on Wayland (headless Weston), both with Mesa llvmpipe.
+
+Every spike job runs `spike -bench -gate -timeout 120s`. The run fails if:
+- the idle phase presented anything;
+- the warmed-up animated frames allocated any object or byte;
+- no frames were produced;
+- the run hangs.
+
+Runner timings are uploaded as artifacts but are not gated.
+
+Linux arm64 is cross-compiled only: hosted arm64 Linux runners are not
+assumed for a private repository. None of this has run yet.
+
 ## D16. Licensing
 
 - Our code: license to be chosen with the name.
 - NOTICE lists:
-  - purego (Apache-2.0), which our ffi technique follows (runtime.cgocall + crosscall2);
-  - x/sys (BSD-3).
+  - purego (Apache-2.0), which our ffi technique follows (runtime.cgocall + crosscall2).
+  - x/sys was removed in phase 1 (D2).
 - No third-party source is copied at present.
 
-## Questions for review
+## Phase-0 review answers
 
-1. **D9 Linux text:** do system FreeType/HarfBuzz/fontconfig via `dlopen` count as "system libraries" for this project (option A), or do you prefer pure-Go go-text, at +2–3 MB and no hinting (option B)?
-2. **D4:** OK to pin purego to an unreleased commit until the next tag?
-3. **Testing without Windows/Linux machines:**
-   - (a) a private GitHub repo with CI (needs your OK to push);
-   - (b) Wine via Homebrew on this Mac for Windows smoke tests (functional only, ~1.5 GB);
-   - (c) wait for hardware.
-4. **Minimum macOS:** stay at 13 (Go's floor, needs a `CVDisplayLink` fallback) or raise to 14 (`CADisplayLink` only)?
+1. **D9 Linux text:** option B, pure-Go go-text.
+2. **D4:** pin purego to `d456b1b`.
+3. **Testing without Windows/Linux machines:** cross-compile only for now. Numbers stay "not measured".
+4. **Minimum macOS:** 14.
+
+## Questions for the phase-1 review
+
+See the go/no-go in [docs/measurements/phase1-macos.md](docs/measurements/phase1-macos.md).
+
+1. **Live display.** Can you unlock the Mac and keep the display awake for a measurement run? That gives vsync intervals, time to visible, and the footprint after animating.
+2. **CI.** May we create a private GitHub repo and push, so the workflow produces the first Windows and Linux runtime evidence?
+3. **Key identity for shortcuts.** Should we match by physical key position (scancode: stable across layouts, the same Ctrl+Z spot on AZERTY) or by layout keysym (Ctrl+Z follows the printed letter)? The platform layer reports both; the question is the default for the UI layer's shortcut matcher.
+4. **Wayland protocol XML.** Should we vendor the XML files next to `internal/wl/gen.go` (reproducible, under 100 KB for the four files, MIT-licensed) or keep fetching them from the URLs in the generator header?

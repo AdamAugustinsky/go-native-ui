@@ -92,7 +92,6 @@ waking the app.
 | OS | Mechanism |
 |---|---|
 | macOS 14+ | `CAMetalLayer` (`displaySyncEnabled`, 2 drawables) + `NSView` `CADisplayLink`, unpaused only while animating; its callback goes through our zero-alloc IMP trampoline |
-| macOS 13 | `CVDisplayLink` on its own thread, which wakes the main thread |
 | Windows | flip-model swap chain (`FLIP_DISCARD`, 2 buffers) with `FRAME_LATENCY_WAITABLE_OBJECT`, `SetMaximumFrameLatency(1)`; the loop waits on the waitable handle plus messages with `MsgWaitForMultipleObjectsEx` |
 | Wayland | `wl_surface.frame` callbacks; `eglSwapInterval(0)` so a hidden surface never blocks |
 | X11 | `eglSwapInterval(1)` (blocking swap) while animating; Present extension later |
@@ -148,7 +147,7 @@ close request), `Wait(deadline)`, `Wake()`, clipboard text, cursor shape.
 
 | | macOS | Windows | Linux (Wayland first) | Linux (X11 fallback) |
 |---|---|---|---|---|
-| Binding | AppKit via `objc_msgSend` on `internal/ffi` | Win32 via `syscall` + `x/sys/windows` | `libwayland-client.so.0` via dlopen; `wl_proxy_marshal_array_flags` + `wl_proxy_add_dispatcher`; protocol tables generated from XML by our own generator | `libX11.so.6` via dlopen |
+| Binding | AppKit via `objc_msgSend` on `internal/ffi` | Win32 via stdlib `syscall` (`SyscallN`, `NewCallback`; DLLs loaded from System32 only) | `libwayland-client.so.0` via dlopen; `wl_proxy_marshal_array_flags` + `wl_proxy_add_dispatcher`; protocol tables generated from XML by our own generator | `libX11.so.6` via dlopen |
 | Event loop | own loop: `nextEventMatchingMask:untilDate:` + `sendEvent:` (no `[NSApp run]`) | `MsgWaitForMultipleObjectsEx` + `PeekMessage` | `prepare_read`/`poll`/`read_events`/`dispatch_pending` on display fd + eventfd | `poll` on connection fd + eventfd, `XPending`/`XNextEvent` |
 | DPI | `backingScaleFactor`, `viewDidChangeBackingProperties` | Per-Monitor v2 (manifest + `SetProcessDpiAwarenessContext`), `WM_DPICHANGED` suggested rect | `wp_fractional_scale_v1` + `wp_viewporter`; integer `wl_surface.preferred_buffer_scale` fallback | `Xft.dpi` resource, XSETTINGS later |
 | Keyboard | `keyCode` + `charactersIgnoringModifiers` | scancode/VK + `WM_CHAR` | `wl_keyboard` keymap → libxkbcommon (dlopen) | core events + libxkbcommon-x11 or XKB ext |
@@ -212,7 +211,7 @@ Raster(face FaceID, glyph GlyphID, sizePx float32, subpixelX uint8, out *GlyphBi
 |---|---|---|
 | macOS | CoreText (`CTLine`, system cascade list) | CoreText into a `CGBitmapContext` (grayscale; macOS has no LCD AA) |
 | Windows | DirectWrite (`IDWriteTextAnalyzer`, `IDWriteFontFallback`) | `IDWriteGlyphRunAnalysis` (ClearType 3×1 or grayscale per system setting), color glyphs via `TranslateColorGlyphRun` |
-| Linux | **open question** (see D9): system HarfBuzz + fontconfig via dlopen *or* pure-Go go-text/typesetting | FreeType via dlopen (hinting/LCD per fontconfig) *or* a Go rasterizer |
+| Linux | pure-Go go-text/typesetting (D9 option B, decided); fontconfig via dlopen for discovery and fallback | a Go rasterizer (grayscale AA, no hinting) |
 
 On top, shared by every backend:
 
@@ -305,23 +304,24 @@ All results are cached by (path hash, mtime) with bounded memory.
 These are initial targets, revised after the macOS baselines. Windows and
 Linux targets stay at the brief's values until we have machines.
 
-| Metric | Brief | Revised (macOS) | Measured so far (macOS probe) | Baselines |
+| Metric | Brief | Revised (macOS) | Measured so far (macOS; phase 1 spike unless noted) | Baselines |
 |---|---|---|---|---|
-| Cold start → first interactive frame | < 150 ms | **≤ 150 ms exec → window on screen with content (warm); stretch 120 ms**. "Cold after reboot" is reported separately | 83 ms to first frame committed; 171 ms to window on screen (gap under investigation) | Zed 302 ms |
-| Idle | 0 % CPU, no frames | 0 CPU-time growth over 60 s, 0 presents, ≤ 1 wakeup/s | 0 CPU-time growth / 20 s; 0 presents; 0.6 wakeups/s | Zed 0.36 s CPU / 10 s just after start |
+| Cold start → first interactive frame | < 150 ms | **≤ 150 ms exec → window on screen with content (warm); stretch 120 ms**. "Cold after reboot" is reported separately | 134.9 ms median exec → first present (7 warm runs). Time to visible pixels is **not measured**: the display was asleep and the session locked (P1) | Zed 302 ms |
+| Idle | 0 % CPU, no frames | 0 CPU-time growth over 60 s, 0 presents, ≤ 1 wakeup/s | 0 presents / 60 s; 4.2 ms CPU / 60 s; 1.0 package-idle wakeups/s (0.2/s by `top` in another window) | Zed 0.36 s CPU / 10 s just after start |
 | Scroll 1M rows | < 4 ms CPU/frame, 0 allocs | same; also report GPU time | — | — |
-| Memory, empty demo | < 40 MB RSS | **`phys_footprint` ≤ 40 MB at 960×600 pt @2×**; non-GPU footprint ≤ 12 MB; Go heap ≤ 4 MB. RSS reported but not gated: on macOS it counts shared framework pages (88 MB for a 34 MB-footprint process) | 34 MB footprint, of which 32 MB GPU drawables; 85 MB peak at startup (investigate) | Zed 118 MB, Finder 114 MB |
+| Memory, empty demo | < 40 MB RSS | **`phys_footprint` ≤ 40 MB at 960×600 pt @2×**; non-GPU footprint ≤ 12 MB; Go heap ≤ 4 MB. RSS reported but not gated: on macOS it counts shared framework pages (88 MB for a 34 MB-footprint process) | 30.6 MB after a 60 s idle. Peaks are reclaimable graphics memory: 84 MB at startup, ~100 MB after unpaced animation into an occluded layer (re-measure with a live display) | Zed 118 MB, Finder 114 MB |
 | Bytes per file entry | minimize | ≤ 64 B incl. name (excl. icons) | 24 B + name bytes | — |
-| Binary (stripped) | < 10 MB | < 10 MB hard, ≤ 5 MB target | 2.1 MB (window + Metal clear) | Zed 260 MB, Gio hello 6.1 MB, File Pilot 2.46 MB |
+| Binary (stripped) | < 10 MB | < 10 MB hard, ≤ 5 MB target | spike 2.54–2.82 MB on all six targets (darwin/arm64 2.69 MB) | Zed 260 MB, Gio hello 6.1 MB, File Pilot 2.46 MB |
 | Input-to-photon | measure | report event-timestamp → present time from OS present feedback (`MTLDrawable.presentedTime`, DXGI frame statistics, `wp_presentation`); camera measurement if hardware becomes available | — | — |
 
 ## 12. Testing and CI
 
-- GitHub Actions matrix (not pushed; pushing needs approval):
-  - `macos-latest` (arm64)
-  - `windows-latest` (D3D11 WARP when there is no GPU)
-  - `ubuntu-latest` + Xvfb + Mesa llvmpipe (X11)
-  - `ubuntu-latest` + headless Weston (Wayland; Weston lacks fractional-scale-v1, so integer scale only)
+- GitHub Actions matrix (`.github/workflows/ci.yml`; not pushed, since pushing needs approval):
+  - `macos-15` (arm64; amd64 ffi tests under Rosetta)
+  - `windows-2025` (D3D11, WARP when there is no GPU)
+  - `ubuntu-24.04` + Xvfb + Mesa llvmpipe (X11)
+  - `ubuntu-24.04` + headless Weston (Wayland; Weston lacks fractional-scale-v1, so integer scale only)
+- The spike gate is `spike -bench -gate -timeout 120s` on every OS. It fails on any idle present, any allocation in warmed-up animated frames, zero frames, or a hang.
 - Gates: build + vet on all targets; cross-compile all targets from each
   host with `CGO_ENABLED=0`; unit tests; allocation-exactness tests; spike
   smoke run (open window, wake from worker, present N frames, exit)
@@ -336,10 +336,10 @@ Linux targets stay at the brief's values until we have machines.
 |---|---|---|
 | Own ffi trampolines depend on runtime internals (`runtime.cgocall`, `crosscall2`) via purego's fakecgo | Breakage on a Go upgrade | The Go team keeps these linknames for purego ("hall of shame" list); pin Go minor; CI on tip-1; fallback = purego slow path (allocating) or cgo |
 | purego v0.11.1 darwin signal-mask bug (fakecgo uses Linux `SIG_SETMASK`) | Crash under profiling signals | Pin to fix commit `d456b1b` until a tagged release (D4) |
-| macOS window-on-screen gap (85 ms after first frame) | Startup budget | `CATransaction flush` already measured: 171 → 139 ms. Phase 1: in-app visibility signal (occlusion state), `presentsWithTransaction`, order-front timing, window open animation (inconclusive so far) |
+| macOS time to visible pixels is unmeasured | Startup budget | Phase 1 measured only to first present (134.9 ms median): the display was asleep and the session locked, so the occlusion signal never reported "visible". Phase 0's "on screen" numbers measured window-server registration only. Re-measure with a live display early in phase 2 |
 | Windows and Linux not runnable here | Untested code paths | Small, reference-checked bindings (vtable order checked against SDK headers); CI once push is approved; Wine/VM optional |
 | Wayland via dlopen'd libwayland + EGL without cgo | ABI details (struct layouts, variadics) | Use the non-variadic `wl_proxy_marshal_array_flags`; generated interface tables; smoke tests under Weston in CI |
-| Linux text quality vs binary size (D9) | Blurry text or +3 MB | Decide with you; both paths sketched |
+| Linux text quality vs binary size (D9) | No hinting/LCD AA on 1× Linux displays; +2–3 MB on Linux | Option B chosen. Tune gamma and stem darkening in the Go rasterizer; lazy emoji tables (the probe's +190 MB `sbix` load) |
 | COLRv1 emoji (Windows Segoe UI Emoji, some Linux Noto builds) | Missing emoji | DirectWrite renders COLR; on Linux prefer CBDT emoji fonts, COLRv1 renderer later |
 | Startup drawable memory scales with window size | Footprint budget | 2 drawables instead of 3; budget defined at a fixed window size |
 | Live resize + own event loop on macOS | Content stretching | Render from `windowDidResize:` (callback path is zero-alloc) |

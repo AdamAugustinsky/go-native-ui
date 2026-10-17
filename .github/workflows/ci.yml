@@ -1,0 +1,187 @@
+name: ci
+
+# Phase-1 gates: every target cross-compiles, vets and stays under the binary
+# budget; on each OS the spike opens a real window, presents nothing while
+# idle and allocates nothing while animating. Runner numbers (startup, CPU,
+# memory) are recorded as artifacts but are not budgets: hosted runners have
+# no GPU and noisy neighbours.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash # explicit bash runs with -eo pipefail, so `spike | tee` fails when spike does
+
+env:
+  CGO_ENABLED: "0"
+  # probes/ are throwaway phase-0 programs and are not gated.
+  PKGS: ./cmd/... ./platform/... ./gpu/... ./internal/...
+  MAX_BINARY_BYTES: "10485760"
+
+jobs:
+  cross:
+    name: cross-compile, vet, binary size
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        run: |
+          out=$(gofmt -l cmd platform gpu internal)
+          if [ -n "$out" ]; then echo "::error::gofmt needed:"; echo "$out"; exit 1; fi
+      - name: vet and stripped release builds
+        run: |
+          mkdir -p dist
+          {
+            echo "### Stripped spike binary (-trimpath -ldflags=\"-s -w\")"
+            echo "| target | bytes | MiB |"
+            echo "|---|---:|---:|"
+          } >> "$GITHUB_STEP_SUMMARY"
+          fail=0
+          for t in darwin/arm64 darwin/amd64 windows/amd64 windows/arm64 linux/amd64 linux/arm64; do
+            os=${t%/*}; arch=${t#*/}
+            GOOS=$os GOARCH=$arch go vet $PKGS
+            ext=""; [ "$os" = windows ] && ext=.exe
+            out=dist/spike-$os-$arch$ext
+            GOOS=$os GOARCH=$arch go build -trimpath -ldflags="-s -w" -o "$out" ./cmd/spike
+            size=$(stat -c %s "$out")
+            mib=$(awk -v s="$size" 'BEGIN { printf "%.2f", s / 1048576 }')
+            echo "| $t | $size | $mib |" >> "$GITHUB_STEP_SUMMARY"
+            echo "{\"target\":\"$t\",\"bytes\":$size}" >> dist/sizes.jsonl
+            if [ "$size" -gt "$MAX_BINARY_BYTES" ]; then
+              echo "::error::$t spike is $size bytes (budget $MAX_BINARY_BYTES)"; fail=1
+            fi
+          done
+          exit $fail
+      - uses: actions/upload-artifact@v4
+        with:
+          name: spike-binaries
+          path: dist/
+
+  macos:
+    name: macOS arm64 (Metal)
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: test (arm64)
+        run: go test -count=1 $PKGS
+      - name: test internal/ffi (amd64 under Rosetta)
+        run: |
+          softwareupdate --install-rosetta --agree-to-license >/dev/null 2>&1 || true
+          GOARCH=amd64 go test -count=1 ./internal/ffi
+      - name: ffi benchmarks
+        run: go test -run '^$' -bench . -benchmem ./internal/ffi
+      - name: build spike
+        run: go build -trimpath -ldflags="-s -w" -o bin/spike ./cmd/spike
+      - name: spike bench + gates
+        run: |
+          # The first launch of a new binary pays the Gatekeeper/XProtect scan.
+          ./bin/spike -exit-first -timeout 60s >/dev/null || true
+          ./bin/spike -bench -idle 5s -gate -timeout 120s | tee spike-macos.json
+          { echo '```json'; cat spike-macos.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: spike-macos
+          path: spike-macos.json
+          if-no-files-found: ignore
+
+  windows:
+    name: Windows amd64 (D3D11, WARP on runners)
+    runs-on: windows-2025
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: test
+        run: go test -count=1 $PKGS
+      - name: build spike
+        run: go build -trimpath -ldflags="-s -w" -o bin/spike.exe ./cmd/spike
+      - name: spike bench + gates
+        run: |
+          ./bin/spike.exe -bench -idle 5s -gate -timeout 120s | tee spike-windows.json
+          { echo '```json'; cat spike-windows.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: spike-windows
+          path: spike-windows.json
+          if-no-files-found: ignore
+
+  linux:
+    name: Linux amd64 ${{ matrix.backend }} (EGL, Mesa llvmpipe)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [x11, wayland]
+    env:
+      GNUI_BACKEND: ${{ matrix.backend }}
+      LIBGL_ALWAYS_SOFTWARE: "1"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: install display server and Mesa
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends \
+            xvfb xauth weston \
+            libegl1 libegl-mesa0 libgl1 libopengl0 libgles2 libgl1-mesa-dri \
+            libwayland-client0 libwayland-egl1 libxkbcommon0 libx11-6
+      - name: test
+        run: go test -count=1 $PKGS
+      - name: build spike
+        run: go build -trimpath -ldflags="-s -w" -o bin/spike ./cmd/spike
+      - name: spike bench + gates (X11 on Xvfb)
+        if: matrix.backend == 'x11'
+        run: |
+          xvfb-run -a -s "-screen 0 1280x800x24" \
+            ./bin/spike -bench -idle 5s -gate -timeout 120s | tee spike-linux-x11.json
+      - name: spike bench + gates (Wayland on headless Weston)
+        if: matrix.backend == 'wayland'
+        run: |
+          export XDG_RUNTIME_DIR=$(mktemp -d)
+          chmod 700 "$XDG_RUNTIME_DIR"
+          weston --backend=headless --socket=wayland-ci --width=1280 --height=800 --idle-time=0 \
+            > weston.log 2>&1 &
+          for _ in $(seq 100); do [ -S "$XDG_RUNTIME_DIR/wayland-ci" ] && break; sleep 0.1; done
+          [ -S "$XDG_RUNTIME_DIR/wayland-ci" ] || { cat weston.log; exit 1; }
+          WAYLAND_DISPLAY=wayland-ci ./bin/spike -bench -idle 5s -gate -timeout 120s | tee spike-linux-wayland.json
+      - name: summary
+        if: always()
+        run: |
+          f=spike-linux-${{ matrix.backend }}.json
+          [ -f "$f" ] && { echo '```json'; cat "$f"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          [ -f weston.log ] && tail -n 40 weston.log || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: spike-linux-${{ matrix.backend }}
+          path: spike-linux-${{ matrix.backend }}.json
+          if-no-files-found: ignore

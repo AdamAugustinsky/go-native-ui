@@ -10,3 +10,14 @@ responsive input. A dual-pane file browser will prove it.
 - `probes/`: throwaway phase-0 experiments (each file header has its command)
 
 Toolchain: Go 1.27 with `CGO_ENABLED=0` on every target.
+
+## Phase 1 spike
+
+```sh
+go build -trimpath -ldflags="-s -w" -o bin/spike ./cmd/spike
+./bin/spike                    # interactive: space animates, Esc quits, events are logged
+./bin/spike -bench -gate       # scripted run: JSON report; exit 3 if a gate fails
+```
+
+`GNUI_BACKEND=wayland|x11` forces a Linux backend. The go/no-go report is
+[docs/measurements/phase1-macos.md](docs/measurements/phase1-macos.md).

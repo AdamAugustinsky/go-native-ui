@@ -21,6 +21,7 @@ import (
 	"runtime"
 	"runtime/metrics"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -39,12 +40,14 @@ type report struct {
 	IdleSeconds          float64
 	IdlePresents         int
 	IdleCPUms            float64
-	IdleWakeups          uint64
+	IdleWakeups          uint64 // package-idle wakeups (macOS Activity Monitor "Idle Wake Ups")
+	IdleInterruptWakeups uint64
 	IdleFootprintMB      float64 // empty-demo memory: footprint at the end of the idle window
 	IdleRSSMB            float64
 	WakeLatencyUs        stats
 	Frames               int
 	FramesPaced          bool // false: no EvFrame arrived (window occluded / display asleep); frames ran unpaced
+	PresentFailures      int  // Present returned false (occluded / device lost); retried after presentRetryNs
 	FrameCPUus           float64
 	FrameIntervalMs      stats
 	FrameAllocObjects    uint64
@@ -85,10 +88,14 @@ const (
 	animFrames    = 600
 	animWarmup    = 120
 	visibleWaitNs = int64(3 * time.Second)
+	// presentRetryNs backs off after a failed Present (e.g. DXGI_STATUS_OCCLUDED)
+	// instead of spinning on it.
+	presentRetryNs = int64(50 * time.Millisecond)
 )
 
 var (
 	wakeSentAt atomic.Int64 // Now() when the worker called Wake (bench)
+	curPhase   atomic.Int32 // bench phase, for the -timeout message
 	colorIndex atomic.Uint32
 )
 
@@ -101,7 +108,15 @@ func main() {
 	exitFirst := flag.Bool("exit-first", false, "exit after the first frame is presented and the window is visible")
 	quiet := flag.Bool("quiet", false, "don't log events")
 	idleDuration := flag.Duration("idle", 3*time.Second, "bench: idle window length")
+	gate := flag.Bool("gate", false, "bench: exit with status 3 unless idle presented nothing and animated frames allocated nothing (CI regression gate)")
+	deadline := flag.Duration("timeout", 0, "abort with exit status 2 if the run has not finished after this long (0: never)")
 	flag.Parse()
+	if *deadline > 0 {
+		time.AfterFunc(*deadline, func() {
+			fmt.Fprintf(os.Stderr, "spike: timed out after %v in bench phase %d\n", *deadline, curPhase.Load())
+			os.Exit(2)
+		})
+	}
 
 	ms := func(ns int64) float64 { return float64(ns) / 1e6 }
 	rep := report{OS: runtime.GOOS, Arch: runtime.GOARCH, ExecToMainMs: -1}
@@ -154,6 +169,7 @@ func main() {
 		intervals                  = make([]float64, 0, animFrames)
 		lastFrame                  int64
 		requestedAt                int64
+		presentRetryAt             int64
 		paced                      = true
 		animCPU0                   int64
 		allocSamples               = []metrics.Sample{{Name: "/gc/heap/allocs:objects"}, {Name: "/gc/heap/allocs:bytes"}, {Name: "/gc/cycles/total:gc-cycles"}}
@@ -184,6 +200,11 @@ func main() {
 			timeout = max(idleEnd-platform.Now(), 0)
 		case phase == phaseStartup && (*bench || *exitFirst) && firstPresent != 0:
 			timeout = max(firstPresent+visibleWaitNs-platform.Now(), 0)
+		}
+		if presentRetryAt != 0 {
+			if r := max(presentRetryAt-platform.Now(), 0); timeout < 0 || r < timeout {
+				timeout = r
+			}
 		}
 		for _, e := range win.Wait(timeout) {
 			switch e.Kind {
@@ -246,6 +267,10 @@ func main() {
 			}
 		}
 
+		if presentRetryAt != 0 && platform.Now() >= presentRetryAt {
+			presentRetryAt, frameReady = 0, true
+		}
+
 		// Benchmark state machine.
 		switch phase {
 		case phaseStartup:
@@ -274,6 +299,7 @@ func main() {
 				rep.IdlePresents = presents - idlePresentsBase
 				rep.IdleCPUms = ms(s.CPUNs - idleSnap.CPUNs)
 				rep.IdleWakeups = s.Wakeups - idleSnap.Wakeups
+				rep.IdleInterruptWakeups = s.InterruptWakeups - idleSnap.InterruptWakeups
 				phase = phaseWake
 				startWorkerWakes()
 			}
@@ -302,6 +328,9 @@ func main() {
 				if firstPresent == 0 {
 					firstPresent = platform.Now()
 				}
+			} else {
+				rep.PresentFailures++
+				frameReady, presentRetryAt = false, platform.Now()+presentRetryNs
 			}
 			needDraw = animating
 			if phase == phaseAnimate && presents-idlePresentsBase >= animFrames {
@@ -315,6 +344,7 @@ func main() {
 				phase = phaseDone
 			}
 		}
+		curPhase.Store(int32(phase))
 	}
 
 	if *bench {
@@ -331,6 +361,22 @@ func main() {
 	}
 	surf.Destroy()
 	win.Close()
+	if *bench && *gate {
+		var failed []string
+		if rep.Frames == 0 {
+			failed = append(failed, "no animated frames")
+		}
+		if rep.IdlePresents != 0 {
+			failed = append(failed, fmt.Sprintf("%d presents while idle", rep.IdlePresents))
+		}
+		if rep.FrameAllocObjects != 0 || rep.FrameAllocBytes != 0 {
+			failed = append(failed, fmt.Sprintf("animated frames allocated %d objects / %d bytes", rep.FrameAllocObjects, rep.FrameAllocBytes))
+		}
+		if len(failed) > 0 {
+			fmt.Fprintln(os.Stderr, "spike: gate failed:", strings.Join(failed, "; "))
+			os.Exit(3)
+		}
+	}
 }
 
 // cpuNs is process CPU time; it must not allocate (it runs inside the measured window).

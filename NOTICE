@@ -8,6 +8,5 @@ This project depends on:
   the same technique as purego (runtime.cgocall for calls; a callback entry
   table that reaches Go through crosscall2/runtime.cgocallback) and rely on
   purego's internal/fakecgo for runtime bootstrap.
-- golang.org/x/sys — BSD-3-Clause, Copyright The Go Authors.
 
 No third-party source code is copied into this repository at present.

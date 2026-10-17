@@ -81,7 +81,8 @@ func Read() Snapshot {
 	if rusage() {
 		s.Footprint = info.physFootprint
 		s.RSS = info.residentSize
-		s.Wakeups = info.pkgIdleWkups + info.interruptWkups
+		s.Wakeups = info.pkgIdleWkups
+		s.InterruptWakeups = info.interruptWkups
 	}
 	var ru syscall.Rusage
 	if syscall.Getrusage(syscall.RUSAGE_SELF, &ru) == nil {
