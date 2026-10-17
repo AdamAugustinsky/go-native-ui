@@ -363,8 +363,8 @@ func (s *Surface) Present(r, g, b, a float32) bool {
 	return ok(fr.Call2(eglf.swapBuffers, s.dpy, s.surf))
 }
 
-// FrameWaitable is 0 on Linux.
-func (s *Surface) FrameWaitable() uintptr { return 0 }
+// FrameSource is 0 on Linux.
+func (s *Surface) FrameSource() uintptr { return 0 }
 
 // Destroy releases the EGL objects. Call it before platform.Window.Close.
 func (s *Surface) Destroy() {

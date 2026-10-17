@@ -193,8 +193,8 @@ func (w *Window) Native() Native {
 	return Native{Display: w.x.dpy, X11Window: w.x.win}
 }
 
-// SetFrameWaitable is a no-op on Linux.
-func (w *Window) SetFrameWaitable(uintptr) {}
+// SetFrameSource is a no-op on Linux (frame callbacks / swap pacing).
+func (w *Window) SetFrameSource(uintptr) {}
 
 // Close destroys the window. Destroy the gpu.Surface first.
 func (w *Window) Close() {

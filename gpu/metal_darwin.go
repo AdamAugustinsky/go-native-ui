@@ -4,7 +4,6 @@ package gpu
 
 import (
 	"errors"
-	"os"
 	"sync/atomic"
 	"unsafe"
 
@@ -85,7 +84,7 @@ func NewSurface(n platform.Native, w, h int32, scale float32) (*Surface, error) 
 	objc.Send1(s.layer, selSetDevice, uintptr(s.device))
 	objc.Send1(s.layer, selSetPixelFormat, 80) // MTLPixelFormatBGRA8Unorm
 	objc.Send1(s.layer, selSetFBOnly, 1)
-	objc.Send1(s.layer, selSetMaxDrawables, uintptr(maxDrawables()))
+	objc.Send1(s.layer, selSetMaxDrawables, 2)
 	objc.Send1(s.layer, selSetDisplaySync, 1)
 	objc.Send1(s.layer, selSetOpaque, 1)
 	s.Resize(w, h, scale)
@@ -118,7 +117,14 @@ func (s *Surface) Present(r, g, b, a float32) bool {
 		s.Trace.Start = platform.Now()
 	}
 	pool := F.Call0(objc.PoolPush)
-	drawable := objc.Send(s.layer, selNextDrawable)
+	// A paced frame comes with its drawable (CAMetalDisplayLink); otherwise
+	// (first frame, unpaced) ask the layer, which may block.
+	d, linked := platform.TakeMetalDrawable()
+	drawable := objc.ID(d)
+	taken := drawable != 0
+	if !taken && !linked {
+		drawable = objc.Send(s.layer, selNextDrawable)
+	}
 	if drawable == 0 {
 		F.Call1(objc.PoolPop, pool)
 		return false
@@ -148,6 +154,9 @@ func (s *Surface) Present(r, g, b, a float32) bool {
 	}
 	s.presented++
 	objc.Send1(s.color0, selSetTexture, 0)
+	if taken {
+		objc.Send(drawable, selRelease) // TakeMetalDrawable returned it retained
+	}
 	F.Call1(objc.PoolPop, pool)
 	return true
 }
@@ -209,8 +218,9 @@ func initPresentedBlock() {
 	}
 }
 
-// FrameWaitable is 0 on macOS (pacing comes from the platform display link).
-func (s *Surface) FrameWaitable() uintptr { return 0 }
+// FrameSource returns the CAMetalLayer: the platform drives frames with a
+// CAMetalDisplayLink on it, which hands over the drawable with each tick.
+func (s *Surface) FrameSource() uintptr { return uintptr(s.layer) }
 
 // Destroy releases the Metal objects.
 func (s *Surface) Destroy() {
@@ -218,12 +228,4 @@ func (s *Surface) Destroy() {
 	objc.Send(s.layer, selRelease)
 	objc.Send(s.queue, selRelease)
 	objc.Send(s.device, selRelease)
-}
-
-// maxDrawables is 2 unless GNUI_DRAWABLES overrides it (experiments).
-func maxDrawables() int {
-	if v := os.Getenv("GNUI_DRAWABLES"); v == "3" {
-		return 3
-	}
-	return 2
 }

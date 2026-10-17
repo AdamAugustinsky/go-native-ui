@@ -165,7 +165,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "surface:", err)
 		os.Exit(1)
 	}
-	win.SetFrameWaitable(surf.FrameWaitable())
+	win.SetFrameSource(surf.FrameSource())
 	rep.OpenToSurfaceMs = ms(platform.Now() - tOpen)
 
 	if !*bench && !*exitFirst {

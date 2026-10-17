@@ -326,11 +326,11 @@ func (s *Surface) Present(r, g, b, a float32) bool {
 	return true // other success codes (e.g. DXGI_STATUS_MODE_CHANGED)
 }
 
-// FrameWaitable returns the DXGI frame-latency waitable handle, or 0.
-func (s *Surface) FrameWaitable() uintptr { return s.waitable }
+// FrameSource returns the DXGI frame-latency waitable handle, or 0.
+func (s *Surface) FrameSource() uintptr { return s.waitable }
 
 // Destroy releases all resources. The platform must not wait on the
-// FrameWaitable handle afterwards.
+// FrameSource handle afterwards.
 func (s *Surface) Destroy() {
 	if s.ctx != 0 {
 		win32.Com(s.ctx, vtContextClearState)

@@ -323,8 +323,8 @@ func (w *Window) Size() (int32, int32, float32) { return w.w, w.h, w.scale }
 // Native returns the OS handles for the gpu package.
 func (w *Window) Native() Native { return Native{HWND: w.hwnd, HInstance: w.hinst} }
 
-// SetFrameWaitable installs the DXGI frame-latency waitable handle.
-func (w *Window) SetFrameWaitable(h uintptr) {
+// SetFrameSource installs the DXGI frame-latency waitable handle.
+func (w *Window) SetFrameSource(h uintptr) {
 	w.waitable = h
 	if h != 0 {
 		// The waitable starts signalled; consume it before the first frame as

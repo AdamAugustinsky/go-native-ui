@@ -33,7 +33,10 @@ type Window struct {
 	scale      float32
 	frameArmed bool
 	linkPaused bool
-	idleTicks  int // display-link ticks since the last frame request
+	metalLink  bool    // w.link is a CAMetalDisplayLink (SetFrameSource)
+	metalLayer objc.ID // layer to attach a CAMetalDisplayLink to on the next view-link tick
+	drawable   objc.ID // retained drawable from the current CAMetalDisplayLink tick
+	idleTicks  int     // display-link ticks since the last frame request
 }
 
 const wakeSubtype = 0x4E55 // our NSEventTypeApplicationDefined subtype
@@ -119,6 +122,12 @@ var (
 	selFirstRect         = objc.Sel("firstRectForCharacterRange:actualRange:")
 	selViewBacking       = objc.Sel("viewDidChangeBackingProperties")
 	selDisplayLinkFired  = objc.Sel("gnuiDisplayLink:")
+	selMetalLinkUpdate   = objc.Sel("metalDisplayLink:needsUpdate:")
+	selInitWithLayer     = objc.Sel("initWithMetalLayer:")
+	selSetFrameLatency   = objc.Sel("setPreferredFrameLatency:")
+	selUpdateDrawable    = objc.Sel("drawable")
+	selReleaseObj        = objc.Sel("release")
+	selAutorelease       = objc.Sel("autorelease")
 	selShouldClose       = objc.Sel("windowShouldClose:")
 	selDidResize         = objc.Sel("windowDidResize:")
 	selDidChangeBacking  = objc.Sel("windowDidChangeBackingProperties:")
@@ -128,6 +137,7 @@ var (
 
 	clsNSArray, clsNSAttributedString objc.ID
 	clsNSDate                         objc.ID // cached: objc.Cls allocates, and Wait runs every frame
+	clsMetalLink                      objc.ID
 )
 
 // GNUI_DEBUG=1 traces every Objective-C method our classes receive (allocates).
@@ -158,6 +168,7 @@ func registerClasses() {
 		{Sel: selFirstRect, Types: "{CGRect={CGPoint=dd}{CGSize=dd}}@:{_NSRange=QQ}^{_NSRange=QQ}", IMP: ffi.NewCallback(firstRectIMP)},
 		{Sel: selViewBacking, Types: "v@:"},
 		{Sel: selDisplayLinkFired, Types: "v@:@"},
+		{Sel: selMetalLinkUpdate, Types: "v@:@@"},
 	})
 	delegateClass = objc.NewClass("GNUIWindowDelegate", objc.Cls("NSObject"), []string{"NSWindowDelegate"}, imp, []objc.Method{
 		{Sel: selShouldClose, Types: "c@:@"},
@@ -168,6 +179,7 @@ func registerClasses() {
 		{Sel: selDidChangeOcclus, Types: "v@:@"},
 	})
 	clsNSArray, clsNSAttributedString = objc.Cls("NSArray"), objc.Cls("NSAttributedString")
+	clsMetalLink = objc.Cls("CAMetalDisplayLink") // macOS 14+
 }
 
 func loadFramework(path string) (uintptr, error) {
@@ -274,11 +286,7 @@ func Open(o Options) (*Window, error) {
 	}
 	objc.Send2(w.link, selAddToRunLoop, uintptr(objc.Send(objc.Cls("NSRunLoop"), selMainRunLoop)), uintptr(commonModes))
 	objc.Send1(w.link, selSetPaused, 1)
-	// Ask for the display's full rate while animating (ProMotion would
-	// otherwise pick a lower adaptive rate).
-	if fps := float32(objc.Send(objc.Send(w.win, selScreen), selMaxFPS)); fps > 0 {
-		F.Reset().Arg(uintptr(w.link)).Arg(uintptr(selSetRateRange)).ArgFloat3(fps/2, fps, fps).Call(objc.MsgSend)
-	}
+	w.setRateRange(w.link)
 	w.updateSize()
 	markOpen("displayLink")
 	if wakePending.Load() { // a Wake before Open found no window to post to
@@ -487,12 +495,22 @@ func impHandler(c *ffi.CB) {
 		if w != nil {
 			w.pushResize()
 		}
-	case selDisplayLinkFired:
+	case selDisplayLinkFired, selMetalLinkUpdate:
 		if w == nil {
 			return
 		}
+		if sel == selDisplayLinkFired && w.metalLayer != 0 {
+			w.attachMetalLink() // its first tick delivers this frame, with a drawable
+			break
+		}
 		if w.frameArmed {
 			w.frameArmed, w.idleTicks = false, 0
+			if sel == selMetalLinkUpdate { // metalDisplayLink:needsUpdate: (link, update)
+				if w.drawable != 0 {
+					objc.Send(w.drawable, selReleaseObj) // an earlier tick's drawable nobody presented
+				}
+				w.drawable = objc.Retain(objc.Send(objc.ID(c.Int(3)), selUpdateDrawable))
+			}
 			w.q.push(Event{Kind: EvFrame, Time: Now()})
 			objc.Send2(w.app, selPostEvent, uintptr(w.wakeEv), 0) // unblock nextEventMatchingMask
 			break
@@ -545,12 +563,80 @@ func (w *Window) Size() (int32, int32, float32) { return w.wPx, w.hPx, w.scale }
 // Native returns the AppKit handles.
 func (w *Window) Native() Native { return Native{NSWindow: uintptr(w.win), NSView: uintptr(w.view)} }
 
-// SetFrameWaitable is a no-op on macOS.
-func (w *Window) SetFrameWaitable(uintptr) {}
+// SetFrameSource switches frame pacing to a CAMetalDisplayLink on the given
+// CAMetalLayer (the GPU surface's FrameSource). Each tick then hands over a
+// drawable (TakeMetalDrawable), so presenting never blocks in nextDrawable;
+// the view's CADisplayLink blocked the main thread for most of each frame.
+//
+// A layer driven by a CAMetalDisplayLink refuses nextDrawable, but the first
+// frame is drawn before the run loop first spins (draw-first startup), so
+// the switch happens on the view link's first tick, which always follows the
+// first present.
+func (w *Window) SetFrameSource(layer uintptr) {
+	if clsMetalLink != 0 {
+		w.metalLayer = objc.ID(layer)
+	}
+}
+
+// attachMetalLink replaces the view's CADisplayLink with a CAMetalDisplayLink
+// on w.metalLayer. Called from the view link's own tick (invalidating it
+// there is allowed; it is autoreleased, not released, while on the stack).
+func (w *Window) attachMetalLink() {
+	layer := w.metalLayer
+	w.metalLayer = 0
+	link := objc.Send(clsMetalLink, selAlloc)
+	link = objc.Send1(link, selInitWithLayer, uintptr(layer))
+	if link == 0 {
+		return
+	}
+	objc.Send1(link, selSetDelegate, uintptr(w.view))
+	objc.F.Reset().Arg(uintptr(link)).Arg(uintptr(selSetFrameLatency)).ArgF32(metalLinkLatency).Call(objc.MsgSend)
+	w.setRateRange(link)
+	objc.Send2(link, selAddToRunLoop, uintptr(objc.Send(objc.Cls("NSRunLoop"), selMainRunLoop)), uintptr(commonModes))
+	objc.Send1(link, selSetPaused, 1)
+	objc.Send(w.link, selInvalidate)
+	objc.Send(w.link, selAutorelease)
+	w.link, w.linkPaused, w.metalLink = link, true, true
+	if w.frameArmed {
+		objc.Send1(w.link, selSetPaused, 0)
+		w.linkPaused = false
+	}
+}
+
+// metalLinkLatency is CAMetalDisplayLink.preferredFrameLatency: how many
+// frames ahead of display the drawable is handed over.
+const metalLinkLatency = 1
+
+// TakeMetalDrawable returns the drawable delivered with the current frame
+// tick, retained (the caller releases it after presenting), or 0. linked
+// reports that a CAMetalDisplayLink drives the layer: then a 0 drawable
+// means no frame is ready, and the caller must not call nextDrawable (the
+// layer throws). Main thread only.
+func TakeMetalDrawable() (drawable uintptr, linked bool) {
+	w := theWindow.Load()
+	if w == nil {
+		return 0, false
+	}
+	d := w.drawable
+	w.drawable = 0
+	return uintptr(d), w.metalLink
+}
+
+func (w *Window) setRateRange(link objc.ID) {
+	// Ask for the display's full rate while animating (ProMotion would
+	// otherwise pick a lower adaptive rate).
+	if fps := float32(objc.Send(objc.Send(w.win, selScreen), selMaxFPS)); fps > 0 {
+		objc.F.Reset().Arg(uintptr(link)).Arg(uintptr(selSetRateRange)).ArgFloat3(fps/2, fps, fps).Call(objc.MsgSend)
+	}
+}
 
 // Close closes the window.
 func (w *Window) Close() {
 	objc.Send(w.link, selInvalidate)
+	if w.drawable != 0 {
+		objc.Send(w.drawable, selReleaseObj)
+		w.drawable = 0
+	}
 	objc.Send(w.win, selClose)
 	theWindow.Store(nil)
 }

@@ -11,7 +11,9 @@
 //	(*Window).RequestFrame()              arm one EvFrame at the next vsync opportunity
 //	(*Window).Size() (w, h int32, scale)  content size in physical pixels, pixels per logical unit
 //	(*Window).Native() Native             OS handles for the gpu package
-//	(*Window).SetFrameWaitable(h)         Windows: DXGI frame-latency waitable; no-op elsewhere
+//	(*Window).SetFrameSource(h)           the GPU surface's frame source: Windows DXGI frame-latency waitable, macOS CAMetalLayer (CAMetalDisplayLink); no-op on Linux.
+//	                                      With a frame source set, draw on EvFrame: on macOS, after the first frame,
+//	                                      Present outside a frame tick returns false (no drawable is available)
 //	(*Window).Close()
 //	Wake()                                any goroutine; coalesced
 //	Now() int64                           monotonic ns, same timebase as Event.Time

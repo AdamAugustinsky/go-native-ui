@@ -9,7 +9,7 @@
 //	NewSurface(n platform.Native, w, h int32, scale float32) (*Surface, error)
 //	(*Surface).Resize(w, h int32, scale float32)      physical pixels
 //	(*Surface).Present(r, g, b, a float32) bool       clear + present; false if nothing was presented
-//	(*Surface).FrameWaitable() uintptr                Windows: DXGI frame-latency waitable; 0 elsewhere
+//	(*Surface).FrameSource() uintptr                  pass to Window.SetFrameSource: DXGI waitable (Windows), CAMetalLayer (macOS), 0 (Linux)
 //	(*Surface).Destroy()
 //
 // Backends: Metal (darwin), Direct3D 11 (windows), OpenGL 3.3 core / GLES 3.0
