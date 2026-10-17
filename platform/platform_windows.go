@@ -19,6 +19,10 @@ type Native struct{ HWND, HInstance uintptr }
 
 const (
 	wmSize          = 0x0005
+	wmSetCursor     = 0x0020
+	wmTimer         = 0x0113
+	wmEnterSizeMove = 0x0231
+	wmExitSizeMove  = 0x0232
 	wmSetFocus      = 0x0007
 	wmKillFocus     = 0x0008
 	wmPaint         = 0x000F
@@ -52,6 +56,13 @@ const (
 	cwUseDefault       = 0x80000000
 	swShowNormal       = 1
 	idcArrow           = 32512
+	idcIBeam           = 32513
+	idcSizeWE          = 32644
+	idcSizeNS          = 32645
+	idcHand            = 32649
+	htClient           = 1
+	sizeMoveTimerID    = 1
+	sizeMoveTimerMs    = 16 // USER_TIMER_MINIMUM is 10; ~60 Hz is plenty for requested frames
 
 	swpNoMove     = 0x0002
 	swpNoZOrder   = 0x0004
@@ -141,6 +152,9 @@ var (
 	pGetClientRect      = win32.Proc(user32, "GetClientRect")
 	pValidateRect       = win32.Proc(user32, "ValidateRect")
 	pLoadCursorW        = win32.Proc(user32, "LoadCursorW")
+	pSetCursor          = win32.Proc(user32, "SetCursor")
+	pSetTimer           = win32.Proc(user32, "SetTimer")
+	pKillTimer          = win32.Proc(user32, "KillTimer")
 	pSetCapture         = win32.Proc(user32, "SetCapture")
 	pReleaseCapture     = win32.Proc(user32, "ReleaseCapture")
 	pGetKeyState        = win32.Proc(user32, "GetKeyState")
@@ -194,6 +208,13 @@ type Window struct {
 	waitable   uintptr
 	handles    [1]uintptr
 
+	handler   func() // SetFrameHandler
+	inHandler bool
+	sizeMove  bool // inside the size/move modal loop (WM_ENTERSIZEMOVE .. WM_EXITSIZEMOVE)
+
+	cursor  Cursor
+	cursors [numCursors]uintptr // HCURSORs, loaded at Open
+
 	hiSurrogate uint16
 	utf8        [4]byte
 
@@ -229,11 +250,18 @@ func Open(o Options) (*Window, error) {
 	w.hinst = win32.Call(pGetModuleHandleW, 0)
 	theWindow = w // WndProc runs inside CreateWindowExW
 
+	w.cursors = [numCursors]uintptr{
+		CursorArrow:    win32.Call(pLoadCursorW, 0, idcArrow),
+		CursorPointer:  win32.Call(pLoadCursorW, 0, idcHand),
+		CursorText:     win32.Call(pLoadCursorW, 0, idcIBeam),
+		CursorResizeEW: win32.Call(pLoadCursorW, 0, idcSizeWE),
+		CursorResizeNS: win32.Call(pLoadCursorW, 0, idcSizeNS),
+	}
 	w.wc = wndClassEx{
 		size:      uint32(unsafe.Sizeof(w.wc)),
 		wndProc:   wndProcCallback,
 		instance:  w.hinst,
-		cursor:    win32.Call(pLoadCursorW, 0, idcArrow),
+		cursor:    w.cursors[CursorArrow],
 		className: classNameUTF16,
 	}
 	if win32.Call(pRegisterClassExW, uintptr(unsafe.Pointer(&w.wc)))&0xFFFF == 0 {
@@ -309,6 +337,47 @@ func (w *Window) emitResize() {
 	}
 	w.rw, w.rh, w.rscale = w.w, w.h, w.scale
 	w.q.push(Event{Kind: EvResize, W: w.w, H: w.h, Scale: w.scale, Time: Now()})
+}
+
+// SetFrameHandler registers fn to run inside the size/move modal loop, which
+// DefWindowProc enters when the user drags the frame or title bar and in
+// which Wait does not return. It runs from WM_SIZE (a size change; the
+// swap chain must be resized from the EvResize in Pending before drawing)
+// and from a ~16 ms WM_TIMER while a frame is requested (RequestFrame), so
+// animations keep running during a drag.
+func (w *Window) SetFrameHandler(fn func()) { w.handler = fn }
+
+// Pending returns and clears the events queued so far without pumping
+// messages. The slice is valid until the next Pending or Wait call.
+func (w *Window) Pending() []Event {
+	if w.delivered {
+		w.q.reset()
+		w.delivered = false
+	}
+	return w.q.takePending()
+}
+
+// runHandler calls the frame handler unless it is already running. Called
+// from wndProc, i.e. from inside Wait's DispatchMessage or a modal loop.
+func (w *Window) runHandler() {
+	if w.handler == nil || w.inHandler || w.opening {
+		return
+	}
+	w.inHandler = true
+	w.handler()
+	w.inHandler = false
+}
+
+// SetCursor sets the pointer shape shown over the content. It only touches
+// the OS when the shape changes; WM_SETCURSOR keeps it in place.
+func (w *Window) SetCursor(c Cursor) {
+	if c >= numCursors || c == w.cursor {
+		return
+	}
+	w.cursor = c
+	if w.tracking { // the pointer is over the content: apply now, not at the next mouse move
+		win32.Call(pSetCursor, w.cursors[c])
+	}
 }
 
 // Text returns the UTF-8 bytes of an EvText event.
@@ -496,7 +565,38 @@ func wndProc(hwnd, m, wp, lp uintptr) uintptr {
 			}
 		}
 		w.emitResize()
+		if w.sizeMove {
+			w.runHandler() // draw in step with the frame being dragged
+		}
 		return 0
+
+	case wmEnterSizeMove:
+		w.sizeMove = true
+		win32.Call(pSetTimer, hwnd, sizeMoveTimerID, sizeMoveTimerMs, 0)
+		return 0
+
+	case wmExitSizeMove:
+		w.sizeMove = false
+		win32.Call(pKillTimer, hwnd, sizeMoveTimerID)
+		return 0
+
+	case wmTimer:
+		if wp != sizeMoveTimerID {
+			return defProc(hwnd, m, wp, lp)
+		}
+		if w.sizeMove && w.frameArmed {
+			w.frameArmed = false
+			w.q.push(Event{Kind: EvFrame, Time: Now()})
+			w.runHandler()
+		}
+		return 0
+
+	case wmSetCursor:
+		if uint32(lp&0xFFFF) == htClient {
+			win32.Call(pSetCursor, w.cursors[w.cursor])
+			return 1
+		}
+		return defProc(hwnd, m, wp, lp)
 
 	case wmDpiChanged:
 		w.scale = float32(uloword(wp)) / defaultDPI

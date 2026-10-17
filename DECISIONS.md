@@ -427,6 +427,13 @@ on the surface's layer (`preferredFrameLatency` 1). The first frame uses
 - With an occluded window or a sleeping display the link stops: nothing is drawn, and the bench times out instead of running unpaced.
 - The transient footprint while animating is ~20 MB higher, which looks like two extra full-size drawables. Idle is unchanged.
 
+**Live-resize exception (phase 3, 2026-10-17).** While the user drags a window edge, AppKit runs its own loop, so frames come from somewhere else:
+- At `windowWillStartLiveResize:` the metal link is invalidated and released, and a plain view `CADisplayLink` takes over.
+- The app's frame handler (`Window.SetFrameHandler`) is called from `windowDidResize:` and from that link's ticks.
+- `gpu.Surface` sees `platform.InLiveResize()` and gets drawables with `nextDrawable`. It presents with `presentsWithTransaction`, so each frame commits together with the window's new size.
+- At `windowDidEndLiveResize:` a new metal link is attached.
+- **Evidence:** a MacBook probe showed `nextDrawable` works again after the link is invalidated (39/39 presents), and the new link paces again (20/20). The layer's `contentsGravity` is top-left, so a frame that isn't redrawn yet is never stretched.
+
 ## D19. Measurement tools may be Objective-C
 
 **Decision.** Development and measurement tools that aren't part of the

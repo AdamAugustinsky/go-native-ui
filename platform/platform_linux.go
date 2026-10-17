@@ -197,6 +197,21 @@ func (w *Window) Native() Native {
 // the window is already visible.
 func (w *Window) Show() {}
 
+// SetFrameHandler is accepted and never called on Linux: neither Wayland nor
+// X11 runs an application-blocking modal loop, so resizes arrive as ordinary
+// events from Wait (configure / ConfigureNotify), which the app's own loop
+// redraws.
+func (w *Window) SetFrameHandler(func()) {}
+
+// Pending returns nothing on Linux: events are only queued inside Wait, which
+// hands them all out. It exists so frame-handler code is the same on every OS.
+func (w *Window) Pending() []Event { return nil }
+
+// SetCursor is a no-op on Linux for now. Wayland will use
+// wp_cursor_shape_v1 (fallback: the libwayland-cursor theme) and X11
+// XDefineCursor with Xcursor, later.
+func (w *Window) SetCursor(Cursor) {}
+
 // SetFrameSource is a no-op on Linux (frame callbacks / swap pacing).
 func (w *Window) SetFrameSource(uintptr) {}
 

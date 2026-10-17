@@ -9,6 +9,9 @@
 //	rexlook -exit-first        print the startup timeline as JSON and exit
 //	rexlook -bench             re-render the whole scene every frame (120 warm-up
 //	                           + 600 measured), print allocation, CPU and pacing as JSON
+//	rexlook -live-resize-test  run a scripted live resize through the frame-handler path
+//	                           (what dragging a window edge does) and print frame counts
+//	                           and allocation deltas as JSON
 //	rexlook -o out.png         render the same scene offscreen at 2114×1278 px
 //	                           (the reference size) with our own traffic lights
 //	                           and write a PNG plus out.png.metrics.json for
@@ -21,6 +24,7 @@ import (
 	"fmt"
 	"image"
 	"image/png"
+	"math"
 	"os"
 	"runtime"
 	"slices"
@@ -82,6 +86,72 @@ func summarize(xs []float64) stats {
 	return stats{P50: s[len(s)/2], P99: s[len(s)*99/100], Max: s[len(s)-1], Mean: sum / float64(len(s))}
 }
 
+var resizeTest *bool
+
+// resizeStats runs and measures the scripted live resize (-live-resize-test).
+type resizeStats struct {
+	on                   bool
+	calls                int   // frame handler calls
+	draws, drawFails     int   // draws inside the handler
+	handlerNs            int64 // total time in the handler (events, scene build, draw)
+	drawMallocs, drawBts uint64
+	afterDrawBase        int // nDraw when the scripted resize ended
+	pacedAfter           int // frames drawn on the normal path after it (of 20 wanted)
+	steps                int
+	m0, m1               runtime.MemStats
+	finalW, finalH       int32
+}
+
+func (t *resizeStats) beforeDraw() { runtime.ReadMemStats(&t.m0) }
+func (t *resizeStats) afterDraw(ok bool) {
+	runtime.ReadMemStats(&t.m1)
+	t.drawMallocs += t.m1.Mallocs - t.m0.Mallocs
+	t.drawBts += t.m1.TotalAlloc - t.m0.TotalAlloc
+	if ok {
+		t.draws++
+	} else {
+		t.drawFails++
+	}
+}
+
+// run resizes the window through enterLiveResize → setContentSize × N →
+// exitLiveResize, the same platform path a mouse drag takes.
+func (t *resizeStats) run(win *platform.Window, w, h int32, scale float32) {
+	t.on = true
+	var sizes [][2]float64
+	pw, ph := float64(w)/float64(scale), float64(h)/float64(scale)
+	for i := 0; i < 150; i++ {
+		f := float64(i) / 149
+		sizes = append(sizes, [2]float64{pw - 250 + 450*math.Abs(math.Sin(f*math.Pi*2)), ph - 150 + 250*f})
+	}
+	t.steps = len(sizes)
+	win.SimulateLiveResize(sizes)
+	t.on = false
+	t.finalW, t.finalH, _ = win.Size()
+}
+
+func (t *resizeStats) print() {
+	out := struct {
+		Steps, HandlerCalls, Draws, DrawFails int
+		HandlerMsMean                         float64 // events + scene rebuild + draw
+		DrawMallocsPerFrame                   float64 // BeginFrame..EndFrame only (platform + gpu path)
+		DrawBytesPerFrame                     float64
+		FinalPx                               [2]int32
+		PacedFramesAfter                      int // normal-path frames after the drag, 20 wanted: the CAMetalDisplayLink is back
+	}{
+		Steps: t.steps, HandlerCalls: t.calls, Draws: t.draws, DrawFails: t.drawFails,
+		FinalPx: [2]int32{t.finalW, t.finalH}, PacedFramesAfter: t.pacedAfter,
+	}
+	if t.calls > 0 {
+		out.HandlerMsMean = float64(t.handlerNs) / 1e6 / float64(t.calls)
+	}
+	if t.draws > 0 {
+		out.DrawMallocsPerFrame = float64(t.drawMallocs) / float64(t.draws)
+		out.DrawBytesPerFrame = float64(t.drawBts) / float64(t.draws)
+	}
+	printJSON(out)
+}
+
 func printJSON(v any) {
 	b, _ := json.MarshalIndent(v, "", "  ")
 	fmt.Println(string(b))
@@ -94,6 +164,7 @@ func main() {
 	exitFirst := flag.Bool("exit-first", false, "print the startup timeline as JSON and exit once the first frame is on glass")
 	bench := flag.Bool("bench", false, "re-render the scene every frame and print allocation/CPU/pacing as JSON")
 	verbose := flag.Bool("v", false, "print the startup stage timings to stderr")
+	resizeTest = flag.Bool("live-resize-test", false, "run a scripted live resize through the frame handler and print the result as JSON")
 	allowUnpaced := flag.Bool("allow-unpaced", false, "bench: accept unpaced frames (display asleep); exit with status 3 if allocations or CPU budgets fail")
 	flag.Parse()
 
@@ -245,12 +316,14 @@ func runWindow(tMain, age int64, exitFirst, bench, allowUnpaced, verbose bool) e
 	stage("scene+warm")
 
 	var fr gpu.Frame
+	nDraw := 0 // successful draws, main loop and frame handler
 	draw := func() bool {
 		if !surf.BeginFrame(&fr) {
 			return false
 		}
 		r.Encode(fr.CmdBuf, fr.Target, fr.W, fr.H, clearColor, &sc.list)
 		surf.EndFrame(&fr)
+		nDraw++
 		return true
 	}
 	if !draw() { // draw-first startup: before the first Wait runs AppKit's deferred work
@@ -280,6 +353,75 @@ func runWindow(tMain, age int64, exitFirst, bench, allowUnpaced, verbose bool) e
 	}
 	startWait := platform.Now()
 
+	// inHandler: onEvent runs from the frame handler, inside AppKit's resize
+	// loop. A requested frame would then only add a stray tick after the drag.
+	inHandler := false
+	onEvent := func(e platform.Event) {
+		switch e.Kind {
+		case platform.EvClose:
+			done = true
+		case platform.EvKey:
+			if e.Flags&platform.FlagDown != 0 && e.Key == platform.KeyEscape {
+				done = true
+			}
+		case platform.EvResize:
+			surf.Resize(e.W, e.H, e.Scale)
+			sc.build(int(e.W), int(e.H), e.Scale)
+			sc.frame()
+			needDraw, frameReady = true, false
+			if !inHandler {
+				win.RequestFrame()
+			}
+		case platform.EvVisible:
+			if e.Flags&platform.FlagDown != 0 {
+				needDraw, frameReady = true, false
+				win.RequestFrame()
+			}
+		case platform.EvFrame:
+			frameReady = true
+		case platform.EvPointerMove:
+			win.SetCursor(sc.cursorAt(e.X, e.Y))
+		case platform.EvPointerLeave:
+			win.SetCursor(platform.CursorArrow)
+		}
+	}
+
+	// Frame handler: called by the platform from inside AppKit's live-resize
+	// loop (and Windows' size/move loop), where Wait does not return. It does
+	// what the main loop does for the same events and draws right away; the
+	// surface presents the frame in the window's own transaction.
+	var tst resizeStats
+	if !bench && !exitFirst {
+		win.SetFrameHandler(func() {
+			t0 := platform.Now()
+			inHandler = true
+			for _, e := range win.Pending() {
+				onEvent(e)
+			}
+			if needDraw && !done {
+				needDraw, frameReady = false, false
+				if tst.on {
+					tst.beforeDraw()
+				}
+				ok := draw()
+				if tst.on {
+					tst.afterDraw(ok)
+				}
+				if !ok {
+					needDraw = true
+					win.RequestFrame()
+				}
+			}
+			inHandler = false
+			if tst.on {
+				tst.calls++
+				tst.handlerNs += platform.Now() - t0
+			}
+		})
+	}
+	var phaseT int64
+	testPhase := 0 // -live-resize-test: 0 warm up on the normal path, 1 resize, 2 verify the normal path again
+
 	for !done {
 		timeout := int64(-1)
 		switch {
@@ -287,30 +429,41 @@ func runWindow(tMain, age int64, exitFirst, bench, allowUnpaced, verbose bool) e
 			timeout = 1
 		case exitFirst:
 			timeout = int64(5 * time.Millisecond)
+		case *resizeTest:
+			timeout = int64(50 * time.Millisecond) // the test's phases time out
 		case bench && paced && requested != 0:
 			timeout = max(requested+int64(time.Second)-platform.Now(), 0)
 		}
 		for _, e := range win.Wait(timeout) {
-			switch e.Kind {
-			case platform.EvClose:
-				done = true
-			case platform.EvKey:
-				if e.Flags&platform.FlagDown != 0 && e.Key == platform.KeyEscape {
-					done = true
-				}
-			case platform.EvResize:
-				surf.Resize(e.W, e.H, e.Scale)
-				sc.build(int(e.W), int(e.H), e.Scale)
-				sc.frame()
-				needDraw, frameReady = true, false
-				win.RequestFrame()
-			case platform.EvVisible:
-				if e.Flags&platform.FlagDown != 0 {
+			onEvent(e)
+		}
+
+		if *resizeTest && !exitFirst && !bench {
+			switch testPhase {
+			case 0: // ten paced frames first, so the CAMetalDisplayLink is attached
+				if nDraw >= 12 || platform.Now()-startWait > int64(3*time.Second) { // an occluded window gets no ticks
+					testPhase, phaseT = 1, platform.Now()
+				} else if !needDraw {
 					needDraw, frameReady = true, false
 					win.RequestFrame()
 				}
-			case platform.EvFrame:
-				frameReady = true
+			case 1:
+				for _, c := range [...]platform.Cursor{platform.CursorPointer, platform.CursorText, platform.CursorResizeEW, platform.CursorResizeNS, platform.CursorArrow} {
+					win.SetCursor(c) // exercises invalidateCursorRectsForView: → resetCursorRects (GNUI_DEBUG=1 traces it)
+				}
+				tst.run(win, w, h, scale)
+				testPhase, tst.afterDrawBase, phaseT = 2, nDraw, platform.Now()
+				needDraw, frameReady = true, false
+				win.RequestFrame()
+			case 2: // frames after the drag must be paced again (link re-attached)
+				if nDraw-tst.afterDrawBase >= 20 || platform.Now()-phaseT > int64(3*time.Second) {
+					tst.pacedAfter = nDraw - tst.afterDrawBase
+					tst.print()
+					done = true
+				} else if !needDraw {
+					needDraw, frameReady = true, false
+					win.RequestFrame()
+				}
 			}
 		}
 
@@ -382,4 +535,31 @@ func runWindow(tMain, age int64, exitFirst, bench, allowUnpaced, verbose bool) e
 	surf.Destroy()
 	win.Close()
 	return nil
+}
+
+// cursorAt returns the cursor for the pointer at (x, y) pixels: resize
+// arrows on the pane dividers, a pointing hand over the tab capsule and the
+// focused pane's header buttons, the arrow elsewhere.
+func (sc *scene) cursorAt(x, y float32) platform.Cursor {
+	k := sc.k
+	in := func(r rect) bool { return x >= r.x0 && x < r.x1 && y >= r.y0 && y < r.y1 }
+	p1, p2, p3 := sc.layout()
+	grab := 3 * sc.s // the dividers are 7 pt; grab a little outside as well
+	if in(rect{p1.x1 - grab, p3.y0, p3.x0 + grab, p3.y1}) {
+		return platform.CursorResizeEW
+	}
+	if in(rect{p1.x0, p1.y1 - grab, p1.x1, p2.y0 + grab}) {
+		return platform.CursorResizeNS
+	}
+	if in(rect{402 * k, 12 * k, 1734 * k, 80 * k}) { // tab capsule
+		return platform.CursorPointer
+	}
+	hc := p1.y0 + 36.5*k + k
+	for _, dx := range [...]float32{181.5, 133.5, 83, 37.5} { // split, split, maximise, close
+		cx := p1.x1 - dx*k
+		if in(rect{cx - 14*k, hc - 14*k, cx + 14*k, hc + 14*k}) {
+			return platform.CursorPointer
+		}
+	}
+	return platform.CursorArrow
 }

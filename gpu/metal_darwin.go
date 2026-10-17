@@ -21,6 +21,7 @@ type Surface struct {
 	rpd, color0          objc.ID // reused MTLRenderPassDescriptor and its colour attachment 0
 	presented            int
 	w, h                 int    // drawable size in pixels
+	live                 bool   // layer.presentsWithTransaction is on: a live resize with a frame handler is in progress
 	frame                Frame  // Present's frame (kept here so Present doesn't allocate)
 	reveal               func() // shows the window inside the first frame's transaction (RevealOnFirstFrame)
 	Trace                FirstPresentTrace
@@ -60,6 +61,7 @@ var (
 	selSetPresentsWithTx = objc.Sel("setPresentsWithTransaction:")
 	selWaitScheduled     = objc.Sel("waitUntilScheduled")
 	selPresent           = objc.Sel("present")
+	selSetGravity        = objc.Sel("setContentsGravity:")
 	selBegin             = objc.Sel("begin")
 	selPresentedTime     = objc.Sel("presentedTime")
 
@@ -97,6 +99,9 @@ func NewSurface(n platform.Native, w, h int32, scale float32) (*Surface, error) 
 	objc.Send1(s.layer, selSetMaxDrawables, 2)
 	objc.Send1(s.layer, selSetDisplaySync, 1)
 	objc.Send1(s.layer, selSetOpaque, 1)
+	// A frame that is not redrawn yet while the layer grows (live resize) must
+	// stay anchored at the top-left at its own size, never stretched.
+	objc.Send1(s.layer, selSetGravity, uintptr(objc.Str("topLeft")))
 	// Tag the drawables as sRGB so the window server colour-matches them to
 	// the display (P3 on recent Macs). Without a colour space the values go to
 	// the display unmatched and sRGB designs look oversaturated.
@@ -161,6 +166,17 @@ func (s *Surface) BeginFrame(f *Frame) bool {
 		s.Trace.Start = platform.Now()
 	}
 	f.pool = F.Call0(objc.PoolPush)
+	// During a live resize the platform has no CAMetalDisplayLink (the layer
+	// would throw on nextDrawable) and the frame is presented inside the
+	// window's Core Animation transaction (see EndFrame).
+	if live := platform.InLiveResize(); live != s.live {
+		s.live = live
+		var on uintptr
+		if live {
+			on = 1
+		}
+		objc.Send1(s.layer, selSetPresentsWithTx, on)
+	}
 	// A paced frame comes with its drawable (CAMetalDisplayLink); otherwise
 	// (first frame, unpaced) ask the layer, which may block.
 	d, linked := platform.TakeMetalDrawable()
@@ -211,6 +227,15 @@ func (s *Surface) EndFrame(f *Frame) {
 		// of the run-loop turn: measured 171 → 139 ms to window-on-screen.
 		objc.Send(clsCATransaction, selFlush)
 		s.Trace.Done = platform.Now()
+	} else if s.live {
+		// Live resize: present in step with the window. With
+		// presentsWithTransaction the drawable shows up when the transaction
+		// that carries the window's new size commits, so the content and the
+		// window frame change together. Order is Apple's: commit, wait until
+		// scheduled, then present the drawable (presentDrawable: is not used).
+		objc.Send(cb, selCommit)
+		objc.Send(cb, selWaitScheduled)
+		objc.Send(f.drawable, selPresent)
 	} else {
 		objc.Send1(cb, selPresentDrawable, uintptr(f.drawable))
 		objc.Send(cb, selCommit)

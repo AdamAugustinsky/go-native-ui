@@ -24,6 +24,7 @@ type Native struct{ NSWindow, NSView uintptr }
 type Window struct {
 	q        eventQueue
 	returned bool // q was handed out by the previous Wait
+	nOut     int  // how many events that Wait handed out
 
 	app, win, view, link, wakeEv objc.ID
 	distantPast, distantFuture   objc.ID
@@ -39,6 +40,19 @@ type Window struct {
 	metalLayer objc.ID // layer to attach a CAMetalDisplayLink to on the next view-link tick
 	drawable   objc.ID // retained drawable from the current CAMetalDisplayLink tick
 	idleTicks  int     // display-link ticks since the last frame request
+
+	// Live resize (SetFrameHandler). AppKit runs its own loop inside
+	// sendEvent while the user drags a window edge; between
+	// windowWillStartLiveResize: and windowDidEndLiveResize: the frame
+	// handler draws from windowDidResize: and from view-link ticks.
+	handler    func()
+	inHandler  bool
+	live       bool    // live resize in progress and a handler is set
+	relink     bool    // the CAMetalDisplayLink was replaced by a view link for the live resize
+	frameLayer objc.ID // the CAMetalLayer given to SetFrameSource, to re-attach a metal link to
+
+	cursor    Cursor
+	pointerIn bool // the pointer is over the view (tracking area enter/exit and mouse events)
 }
 
 const wakeSubtype = 0x4E55 // our NSEventTypeApplicationDefined subtype
@@ -143,10 +157,22 @@ var (
 	selDidBecomeKey      = objc.Sel("windowDidBecomeKey:")
 	selDidResignKey      = objc.Sel("windowDidResignKey:")
 	selDidChangeOcclus   = objc.Sel("windowDidChangeOcclusionState:")
+	selWillStartLive     = objc.Sel("windowWillStartLiveResize:")
+	selDidEndLive        = objc.Sel("windowDidEndLiveResize:")
+	selInLiveResize      = objc.Sel("inLiveResize")
+	selSetContentSize    = objc.Sel("setContentSize:")
+
+	// Cursors.
+	selResetCursorRects  = objc.Sel("resetCursorRects")
+	selAddCursorRect     = objc.Sel("addCursorRect:cursor:")
+	selInvalidateCursors = objc.Sel("invalidateCursorRectsForView:")
+	selCursorSet         = objc.Sel("set")
 
 	clsNSArray, clsNSAttributedString objc.ID
 	clsNSDate                         objc.ID // cached: objc.Cls allocates, and Wait runs every frame
 	clsMetalLink                      objc.ID
+	clsRunLoop                        objc.ID
+	cursorObjs                        [numCursors]objc.ID // NSCursor singletons, cached at registerClasses
 )
 
 // GNUI_DEBUG=1 traces every Objective-C method our classes receive (allocates).
@@ -178,6 +204,7 @@ func registerClasses() {
 		{Sel: selViewBacking, Types: "v@:"},
 		{Sel: selDisplayLinkFired, Types: "v@:@"},
 		{Sel: selMetalLinkUpdate, Types: "v@:@@"},
+		{Sel: selResetCursorRects, Types: "v@:"},
 	})
 	delegateClass = objc.NewClass("GNUIWindowDelegate", objc.Cls("NSObject"), []string{"NSWindowDelegate"}, imp, []objc.Method{
 		{Sel: selShouldClose, Types: "c@:@"},
@@ -186,9 +213,22 @@ func registerClasses() {
 		{Sel: selDidBecomeKey, Types: "v@:@"},
 		{Sel: selDidResignKey, Types: "v@:@"},
 		{Sel: selDidChangeOcclus, Types: "v@:@"},
+		{Sel: selWillStartLive, Types: "v@:@"},
+		{Sel: selDidEndLive, Types: "v@:@"},
 	})
 	clsNSArray, clsNSAttributedString = objc.Cls("NSArray"), objc.Cls("NSAttributedString")
 	clsMetalLink = objc.Cls("CAMetalDisplayLink") // macOS 14+
+	clsRunLoop = objc.Cls("NSRunLoop")
+	clsCursor := objc.Cls("NSCursor")
+	for c, name := range [numCursors]string{
+		CursorArrow:    "arrowCursor",
+		CursorPointer:  "pointingHandCursor",
+		CursorText:     "IBeamCursor",
+		CursorResizeEW: "resizeLeftRightCursor",
+		CursorResizeNS: "resizeUpDownCursor",
+	} {
+		cursorObjs[c] = objc.Retain(objc.Send(clsCursor, objc.Sel(name)))
+	}
 }
 
 func loadFramework(path string) (uintptr, error) {
@@ -296,19 +336,29 @@ func Open(o Options) (*Window, error) {
 
 	// Display link (macOS 14+), created once the view is on a screen; paused
 	// until RequestFrame.
-	w.link = objc.Retain(objc.Send2(w.view, selDisplayLinkWith, uintptr(w.view), uintptr(selDisplayLinkFired)))
-	if w.link == 0 {
+	if w.link = w.makeViewLink(); w.link == 0 {
 		return nil, errors.New("platform: displayLinkWithTarget:selector: failed (macOS 14+ required)")
 	}
-	objc.Send2(w.link, selAddToRunLoop, uintptr(objc.Send(objc.Cls("NSRunLoop"), selMainRunLoop)), uintptr(commonModes))
-	objc.Send1(w.link, selSetPaused, 1)
-	w.setRateRange(w.link)
 	w.updateSize()
 	markOpen("displayLink")
 	if wakePending.Load() { // a Wake before Open found no window to post to
 		osWake()
 	}
 	return w, nil
+}
+
+// makeViewLink creates the view's CADisplayLink, retained, paused and added
+// to the main run loop in the common modes (so it also ticks inside AppKit's
+// tracking loops). It returns 0 before macOS 14.
+func (w *Window) makeViewLink() objc.ID {
+	link := objc.Retain(objc.Send2(w.view, selDisplayLinkWith, uintptr(w.view), uintptr(selDisplayLinkFired)))
+	if link == 0 {
+		return 0
+	}
+	objc.Send2(link, selAddToRunLoop, uintptr(objc.Send(clsRunLoop, selMainRunLoop)), uintptr(commonModes))
+	objc.Send1(link, selSetPaused, 1)
+	w.setRateRange(link)
+	return link
 }
 
 // Show orders the window front and activates the app. Open calls it unless
@@ -362,20 +412,23 @@ func (w *Window) updateSize() bool {
 	return changed
 }
 
-func (w *Window) pushResize() {
+// pushResize queues an EvResize if the size or scale changed and reports
+// whether it did.
+func (w *Window) pushResize() bool {
 	if !w.updateSize() {
-		return
+		return false
 	}
 	if n := len(w.q.ev); n > 0 && w.q.ev[n-1].Kind == EvResize {
 		w.q.ev = w.q.ev[:n-1] // coalesce
 	}
 	w.q.push(Event{Kind: EvResize, W: w.wPx, H: w.hPx, Scale: w.scale, Time: Now()})
+	return true
 }
 
 // Wait blocks until at least one event, a wake, a frame slot or the timeout.
 func (w *Window) Wait(timeoutNs int64) []Event {
 	if w.returned {
-		w.q.reset()
+		w.q.dropFirst(w.nOut)
 		w.returned = false
 	}
 	F := objc.F
@@ -388,11 +441,14 @@ func (w *Window) Wait(timeoutNs int64) []Event {
 		until = objc.ID(F.Reset().Arg(uintptr(clsNSDate)).Arg(uintptr(selDateSinceNow)).
 			ArgF64(float64(timeoutNs) / 1e9).Call(objc.MsgSend).R0())
 	}
+	if w.live && !objc.SendBool(w.win, selInLiveResize) {
+		w.exitLiveResize() // windowDidEndLiveResize: never arrived (or the resize ended inside a nested loop)
+	}
 	for ev := w.nextEvent(until); ev != 0; ev = w.nextEvent(w.distantPast) {
 		w.handle(ev)
 	}
 	F.Call1(objc.PoolPop, pool)
-	w.returned = true
+	w.returned, w.nOut = true, len(w.q.ev)
 	return w.q.ev
 }
 
@@ -458,8 +514,12 @@ func (w *Window) handle(ev objc.ID) {
 				e.Flags = FlagDown
 			}
 		}
+		w.pointerIn = true
 		w.q.push(e)
+	case 8: // mouse entered (the tracking area)
+		w.pointerIn = true
 	case 9: // mouse exited
+		w.pointerIn = false
 		w.q.push(Event{Kind: EvPointerLeave, Time: t})
 	case 22: // scroll wheel
 		dx, dy := objc.SendF64(ev, selScrollDX), objc.SendF64(ev, selScrollDY)
@@ -550,15 +610,38 @@ func impHandler(c *ffi.CB) {
 		if w != nil {
 			if sel == selDidResize {
 				w.layoutChrome() // AppKit re-lays out the titlebar on resize
+				if !w.live && w.handler != nil && objc.SendBool(w.win, selInLiveResize) {
+					w.enterLiveResize() // the will-start notification was missed
+				}
 			}
-			w.pushResize()
+			if w.pushResize() && w.live {
+				w.runHandler() // inside AppKit's resize loop: draw in step with the window
+			}
+		}
+	case selWillStartLive:
+		if w != nil {
+			w.enterLiveResize()
+		}
+	case selDidEndLive:
+		if w != nil {
+			w.exitLiveResize()
+		}
+	case selResetCursorRects:
+		// AppKit calls this after SetCursor invalidated the rects, and
+		// whenever it rebuilds them: the whole view shows the current cursor.
+		if w != nil {
+			b := objc.SendRect(w.view, selBounds)
+			objc.F.Reset().Arg(uintptr(w.view)).Arg(uintptr(selAddCursorRect)).ArgRect(b.X, b.Y, b.W, b.H).
+				Arg(uintptr(cursorObjs[w.cursor])).Call(objc.MsgSend)
 		}
 	case selDisplayLinkFired, selMetalLinkUpdate:
 		if w == nil {
 			return
 		}
-		if sel == selDisplayLinkFired && w.metalLayer != 0 {
-			w.attachMetalLink() // its first tick delivers this frame, with a drawable
+		if sel == selDisplayLinkFired && w.metalLayer != 0 && !w.live {
+			layer := w.metalLayer
+			w.metalLayer = 0
+			w.attachMetalLink(layer) // its first tick delivers this frame, with a drawable
 			break
 		}
 		// A drawable is held for one tick at most: one kept through an idle
@@ -575,6 +658,9 @@ func impHandler(c *ffi.CB) {
 			}
 			w.q.push(Event{Kind: EvFrame, Time: Now()})
 			objc.Send2(w.app, selPostEvent, uintptr(w.wakeEv), 0) // unblock nextEventMatchingMask
+			if w.live {
+				w.runHandler() // a requested frame (animation) while AppKit's resize loop runs
+			}
 			break
 		}
 		// Keep ticking through short gaps: pausing after every tick made the
@@ -636,16 +722,15 @@ func (w *Window) Native() Native { return Native{NSWindow: uintptr(w.win), NSVie
 // first present.
 func (w *Window) SetFrameSource(layer uintptr) {
 	if clsMetalLink != 0 {
-		w.metalLayer = objc.ID(layer)
+		w.metalLayer, w.frameLayer = objc.ID(layer), objc.ID(layer)
 	}
 }
 
 // attachMetalLink replaces the view's CADisplayLink with a CAMetalDisplayLink
-// on w.metalLayer. Called from the view link's own tick (invalidating it
-// there is allowed; it is autoreleased, not released, while on the stack).
-func (w *Window) attachMetalLink() {
-	layer := w.metalLayer
-	w.metalLayer = 0
+// on layer. Called from the view link's own tick (invalidating it there is
+// allowed; it is autoreleased, not released, while on the stack) and when a
+// live resize ends.
+func (w *Window) attachMetalLink(layer objc.ID) {
 	link := objc.Send(clsMetalLink, selAlloc)
 	link = objc.Send1(link, selInitWithLayer, uintptr(layer))
 	if link == 0 {
@@ -654,7 +739,7 @@ func (w *Window) attachMetalLink() {
 	objc.Send1(link, selSetDelegate, uintptr(w.view))
 	objc.F.Reset().Arg(uintptr(link)).Arg(uintptr(selSetFrameLatency)).ArgF32(metalLinkLatency).Call(objc.MsgSend)
 	w.setRateRange(link)
-	objc.Send2(link, selAddToRunLoop, uintptr(objc.Send(objc.Cls("NSRunLoop"), selMainRunLoop)), uintptr(commonModes))
+	objc.Send2(link, selAddToRunLoop, uintptr(objc.Send(clsRunLoop, selMainRunLoop)), uintptr(commonModes))
 	objc.Send1(link, selSetPaused, 1)
 	objc.Send(w.link, selInvalidate)
 	objc.Send(w.link, selAutorelease)
@@ -663,6 +748,115 @@ func (w *Window) attachMetalLink() {
 		objc.Send1(w.link, selSetPaused, 0)
 		w.linkPaused = false
 	}
+}
+
+// SetFrameHandler registers fn to be called, on the main thread, from inside
+// AppKit's live-resize loop. While the user drags a window edge, sendEvent:
+// does not return and Wait does not either, so the app's loop cannot draw;
+// the handler is the way to keep the content in step with the window.
+//
+// It runs from windowDidResize: (size changed) and, while a frame is
+// requested with RequestFrame, from display-link ticks. Take Pending, resize
+// the surface on EvResize, build, draw, present. gpu.Surface presents those
+// frames with presentsWithTransaction so each commits in the same Core
+// Animation transaction as the window's new size. See enterLiveResize.
+//
+// Without a handler a live resize keeps the old behaviour: the app is not
+// redrawn until the drag ends.
+func (w *Window) SetFrameHandler(fn func()) { w.handler = fn }
+
+// Pending returns and clears the events queued so far without pumping the
+// OS, so it is safe to call from inside the frame handler. The slice is valid
+// until the next Pending or Wait call.
+func (w *Window) Pending() []Event {
+	if w.returned {
+		w.q.dropFirst(w.nOut)
+		w.returned = false
+	}
+	return w.q.takePending()
+}
+
+// InLiveResize reports whether a live resize with a frame handler is in
+// progress: the frame source is then not a CAMetalDisplayLink (which makes
+// nextDrawable throw), so gpu.Surface acquires drawables with nextDrawable
+// and presents with presentsWithTransaction. Main thread only.
+func InLiveResize() bool {
+	w := theWindow.Load()
+	return w != nil && w.live
+}
+
+func (w *Window) runHandler() {
+	if w.handler == nil || w.inHandler {
+		return
+	}
+	w.inHandler = true
+	w.handler()
+	w.inHandler = false
+}
+
+// enterLiveResize starts the live-resize mode. A layer driven by a
+// CAMetalDisplayLink refuses nextDrawable, so the metal link is invalidated
+// and released and replaced by a plain view CADisplayLink (the one the first
+// frames used); exitLiveResize re-attaches a new metal link.
+func (w *Window) enterLiveResize() {
+	if w.live || w.handler == nil {
+		return
+	}
+	if w.drawable != 0 { // a tick's drawable must not outlive its link
+		objc.Send(w.drawable, selReleaseObj)
+		w.drawable = 0
+	}
+	if w.metalLink {
+		link := w.makeViewLink()
+		if link == 0 {
+			return
+		}
+		objc.Send(w.link, selInvalidate)
+		objc.Send(w.link, selReleaseObj)
+		w.link, w.linkPaused, w.metalLink, w.relink = link, true, false, true
+		if w.frameArmed {
+			objc.Send1(w.link, selSetPaused, 0)
+			w.linkPaused = false
+		}
+	}
+	w.live = true
+	if debugIMP {
+		println("live resize begins; metal link detached:", w.relink)
+	}
+}
+
+// exitLiveResize leaves the live-resize mode and restores the
+// CAMetalDisplayLink if the live resize had replaced it.
+func (w *Window) exitLiveResize() {
+	if !w.live {
+		return
+	}
+	w.live = false
+	if w.relink {
+		w.relink = false
+		w.attachMetalLink(w.frameLayer)
+	}
+}
+
+// SetCursor sets the pointer shape over the content. It does nothing when
+// the shape is unchanged, so it can be called every frame.
+//
+// Two mechanisms make the shape stick. [NSCursor set] applies it at once
+// (only while the pointer is over the view, or the cursor would change over
+// other windows). AppKit, though, resets the cursor to the arrow whenever
+// the mouse moves and the view has no cursor rects. So the view also
+// implements resetCursorRects, which covers its whole bounds with the
+// current cursor, and SetCursor invalidates the rects; AppKit rebuilds
+// them before the next mouse move is processed.
+func (w *Window) SetCursor(c Cursor) {
+	if c >= numCursors || c == w.cursor {
+		return
+	}
+	w.cursor = c
+	if w.pointerIn {
+		objc.Send(cursorObjs[c], selCursorSet)
+	}
+	objc.Send1(w.win, selInvalidateCursors, uintptr(w.view))
 }
 
 // metalLinkLatency is CAMetalDisplayLink.preferredFrameLatency: how many

@@ -14,9 +14,22 @@
 //	(*Window).SetFrameSource(h)           the GPU surface's frame source: Windows DXGI frame-latency waitable, macOS CAMetalLayer (CAMetalDisplayLink); no-op on Linux.
 //	                                      With a frame source set, draw on EvFrame: on macOS, after the first frame,
 //	                                      Present outside a frame tick returns false (no drawable is available)
+//	(*Window).SetFrameHandler(fn)         fn runs synchronously inside OS modal loops (macOS live resize, the Windows size/move
+//	                                      loop) when a frame is due; Wait does not return during them. Never called on Linux.
+//	(*Window).Pending() []Event           the events queued so far, without pumping the OS (for the frame handler)
+//	(*Window).SetCursor(Cursor)           pointer shape over the content; cheap to call every frame
 //	(*Window).Close()
 //	Wake()                                any goroutine; coalesced
 //	Now() int64                           monotonic ns, same timebase as Event.Time
+//
+// Frame handler: while the user drags a window edge, macOS and Windows run
+// their own loop inside Wait and the app's loop does not run. An app that
+// wants its content redrawn in step with the window registers a handler;
+// the platform calls it from inside that loop, on the main thread, whenever
+// a frame is due (a size change, or a requested frame while the loop is
+// running). The handler is expected to take Pending, resize its surface on
+// EvResize, build and draw and present exactly as the main loop would. It
+// is never re-entered, and it must not call Wait.
 //
 // Steady-state use allocates nothing: events and text live in buffers owned
 // by the Window and reused by every Wait call.
@@ -125,6 +138,18 @@ const (
 	Key9 = Key0 + 9
 )
 
+// Cursor is a pointer shape.
+type Cursor uint8
+
+const (
+	CursorArrow    Cursor = iota // the default arrow
+	CursorPointer                // pointing hand (links, tabs, buttons)
+	CursorText                   // I-beam
+	CursorResizeEW               // horizontal resize (left-right arrows)
+	CursorResizeNS               // vertical resize (up-down arrows)
+	numCursors
+)
+
 // TextRef locates UTF-8 text in the Window's per-Wait text buffer.
 type TextRef struct{ Off, Len uint32 }
 
@@ -165,13 +190,40 @@ type Options struct {
 type eventQueue struct {
 	ev   []Event
 	text []byte
+	pend []Event // what takePending hands out (a copy: later pushes reuse ev)
 }
 
 func newEventQueue() eventQueue {
-	return eventQueue{ev: make([]Event, 0, 256), text: make([]byte, 0, 4096)}
+	return eventQueue{ev: make([]Event, 0, 256), text: make([]byte, 0, 4096), pend: make([]Event, 0, 256)}
+}
+
+// takePending moves the queued events into the pending slice and clears the
+// queue. The text buffer stays: EvText events of the returned slice still
+// index it, and it is only recycled once the queue is empty at the next call
+// (the previous slice is dead by then) or by reset.
+func (q *eventQueue) takePending() []Event {
+	if len(q.ev) == 0 {
+		q.text = q.text[:0]
+		q.pend = q.pend[:0]
+		return q.pend
+	}
+	q.pend = append(q.pend[:0], q.ev...)
+	q.ev = q.ev[:0]
+	return q.pend
 }
 
 func (q *eventQueue) reset() { q.ev, q.text = q.ev[:0], q.text[:0] }
+
+// dropFirst discards the first n events, which were already handed out.
+// Events pushed since (a synchronous AppKit callback between two Waits) stay,
+// and so does the text buffer they may index.
+func (q *eventQueue) dropFirst(n int) {
+	if n >= len(q.ev) {
+		q.reset()
+		return
+	}
+	q.ev = q.ev[:copy(q.ev, q.ev[n:])]
+}
 
 func (q *eventQueue) push(e Event) { q.ev = append(q.ev, e) }
 
