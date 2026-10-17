@@ -83,6 +83,12 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+      - name: keep the display awake
+        # The windowed benches need display-link frames; a runner VM whose
+        # display drifts towards sleep stops delivering them.
+        run: |
+          sudo pmset -a displaysleep 0 sleep 0 disksleep 0 || true
+          nohup caffeinate -dimsu >/dev/null 2>&1 &
       - name: test (arm64)
         run: |
           GNUI_FS_REPORT=$RUNNER_TEMP/fs-report.txt go test -count=1 $PKGS
