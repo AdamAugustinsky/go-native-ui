@@ -84,7 +84,12 @@ Details: [measurements/phase3-macos.md](measurements/phase3-macos.md).
    - the `rexlook` pointer script (900 frames);
    - `listbench` scrolling 1M rows (600 frames).
 
-   Also on Windows and Linux CI, with Linux helped by the patched go-text (D23).
+   On Windows and Linux CI the evidence is narrower:
+   - the windowed `listbench` bench passes its allocation gate;
+   - the `app`/`ui` offscreen allocation tests with real text pass;
+   - Rex's scripts pass on a fake shaper only. Rex's real-text allocation gate runs only on macOS so far.
+
+   Linux reaches zero with the patched go-text (D23).
 3. **1M-row scroll: passes.** 1.1–1.3 ms main-thread CPU per frame against < 4 ms, paced at 120 Hz.
 4. **Interactive `rexlook`: passes** (your hand test).
    - Paced, idle presents nothing, and live resize redraws cleanly.

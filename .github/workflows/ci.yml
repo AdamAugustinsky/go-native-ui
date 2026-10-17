@@ -67,6 +67,8 @@ jobs:
             fi
           done
           exit $fail
+      - name: patched go-text (third_party/typesetting) tests
+        run: cd third_party/typesetting && go test -count=1 ./font/opentype/tables/
       - uses: actions/upload-artifact@v4
         with:
           name: spike-binaries

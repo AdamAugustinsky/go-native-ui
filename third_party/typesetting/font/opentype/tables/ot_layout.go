@@ -495,7 +495,7 @@ func parseValueRecord(format ValueFormat, data []byte, offset int) (out ValueRec
 	if len(data[offset:]) < 2*size {
 		return out, 0, fmt.Errorf("invalid value record: EOF")
 	}
-	var values [8]uint16
+	var values [16]uint16 // size counts all 16 format bits, reserved ones included (as upstream reads them)
 	for i := 0; i < size; i++ {
 		values[i] = binary.BigEndian.Uint16(data[offset+2*i:])
 	}

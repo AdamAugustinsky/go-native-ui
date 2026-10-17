@@ -26,7 +26,7 @@ go-text's own tests and test data are not copied.
 
 - `harfbuzz/ot_layout_gsubgpos.go`: `matcherFunc` is a small struct, not a per-lookup closure.
 - `harfbuzz/ot_shape_normalize.go`, `harfbuzz/buffer.go`: the normalize context lives in a field on `Buffer`, and the shaper is called directly.
-- `font/opentype/tables/ot_layout.go`: `parseValueRecord` reads into a stack array.
+- `font/opentype/tables/ot_layout.go`: `parseValueRecord` reads into a 16-element stack array. Sixteen because the size counts every format bit, reserved ones included; the regression test is `font/opentype/tables/zeroalloc_test.go`, which CI runs.
 
 ## Updating
 
