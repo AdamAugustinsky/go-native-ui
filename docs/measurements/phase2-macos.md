@@ -187,10 +187,10 @@ On the MacBook:
 - Our work after `Open` takes ~35–50 ms: scene and text 13 ms; the first frame 18–34 ms, mostly the window server commit when the window appears.
 - A trivial native AppKit app takes a median 149 ms on the same machine.
 
-**The ≤150 ms budget isn't met.**
-- **What the budget measures:** ARCHITECTURE §11 measures from the launch request to complete content on screen. On the MacBook that is 281–336 ms, with LaunchServices taking ~110–150 ms before exec.
-- **Exec → on glass** is a diagnostic only: ~95 ms on the Mac mini, a median of ~189 ms on the MacBook.
-- **Mac mini:** not measured from the launch request, because its display is asleep.
+**The ≤150 ms budget** counts from program start (your decision, 2026-10-17; ARCHITECTURE §11):
+- **Mac mini:** ~95 ms, met.
+- **MacBook:** a median of ~189 ms, not met. A trivial native AppKit app takes ~149 ms there.
+- **Before exec:** launch request → complete content through LaunchServices is 281–336 ms on the MacBook, with ~110–150 ms spent before exec. That part is judged by the half-bounce target.
 - **Next lever:** building the scene and text on a worker while AppKit sets up the window (ARCHITECTURE §3 rule 2). It is worth about 15 ms.
 - **Prerequisite:** per-thread call contexts in `internal/objc`, because today it has one shared call frame.
 

@@ -57,14 +57,12 @@ cross-compiled only until CI is approved.
 
 Details are in [measurements/phase2-macos.md](measurements/phase2-macos.md).
 
-1. **Visual match:** 40/40 automated checks pass. *Waiting for your side-by-side review.*
+1. **Visual match: passes.** 40/40 automated checks; you approved the side-by-side ("they look pretty similar", 2026-10-17). Matching the reference's slightly bolder text is not needed.
 2. **Startup:**
    - **Content-first:** 0 partial frames in 10 of 10 recorded launches.
    - **Half-bounce: passes.** Content arrives about 8 % into the first bounce.
-   - **≤ 150 ms launch → complete content (ARCHITECTURE §11): not met.**
-     - On the MacBook, launch request → complete content is 281–336 ms. LaunchServices accounts for ~110–150 ms of that before our process even starts.
-     - Exec → on glass, a diagnostic only: MacBook median ~189 ms (a trivial native AppKit app: ~149 ms), Mac mini ~95 ms.
-     - Not measured on the Mac mini from the launch request, because its display is asleep.
+   - **≤ 150 ms (ARCHITECTURE §11), counted from program start (your decision, 2026-10-17):** met on the Mac mini (~95 ms); **not met on the MacBook** (164–212 ms, median ~189 ms, under your load on battery; a trivial native AppKit app takes a median ~149 ms there).
+     - Launch request → complete content, through LaunchServices, is 281–336 ms on the MacBook; the time before exec is covered by the half-bounce target.
 3. **Animation: passes.** 120 Hz, p99 ≤ 8.7 ms, 0 allocations, rexlook main thread 0.6 ms per frame.
 4. **Idle: passes.** 0 presents, 0 package-idle wakeups over 60 s, 29 ms of CPU in total.
 5. **Memory:**

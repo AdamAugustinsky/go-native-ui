@@ -460,3 +460,16 @@ The rasterizer is our own (`text/raster.go`, signed-area coverage), and so is th
 
 **Windows note:** the DirectWrite backend needed `internal/com`, which holds hand-written COM vtable calls plus a small windows/arm64 trampoline. `syscall.SyscallN` doesn't load float registers on arm64, and three DirectWrite methods take `FLOAT` arguments.
 
+## D21. Startup budget counts from program start (user, 2026-10-17)
+
+**Decision.** The ≤ 150 ms startup budget (ARCHITECTURE §11) is measured from
+program start (exec) to the first frame with complete content on screen.
+
+**Reasoning.**
+- On the test MacBook, LaunchServices spends ~110–150 ms before exec. We can't influence that time.
+- The user-facing launch experience is covered by the half-bounce target, measured from the launch request with `tools/bouncerec`.
+
+**Also decided (2026-10-17):**
+- The static Rex frame is approved visually.
+- Matching the reference's slightly bolder text is not needed.
+
