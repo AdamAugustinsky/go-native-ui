@@ -194,3 +194,7 @@ Each item: the test that failed first, then the fix. Nothing committed.
 macOS IME review (same classes of issue): UTF-16 ↔ byte conversions (`u16ToByte`, `utf16Len`) are now pinned by `TestUTF16ByteConversions` (surrogate pairs count two, an offset inside a pair rounds up, clamping); `setMarkedText` clamps `NSNotFound` and over-long ranges; `markedRange`/`selectedRange` report UTF-16 units of the marked text. Left as is: `replacementRange` (see Open issues), `attributedSubstringForProposedRange` (nil), an NSString with unpaired surrogates (UTF8String fails, the composition would read as empty).
 
 Validation after the fixes: gofmt clean; vet ×6 (+ `-tags textengine` darwin/windows) clean; `go test -count=1 ./text/ ./ui/ ./platform/ ./app/` ok on arm64 and amd64 (Rosetta); `-tags textengine ./text/` ok on both; `go build ./...` ok; `go test ./cmd/...` ok; `TestTextFieldZeroAllocs` 0 allocs and `TestRealTextFieldTyping` 0 mallocs (second attempt, as before).
+
+## Commit ownership (third pass)
+
+Text that ends a composition is tagged by the translator (`Input.CommitOff`/`CommitLen`). `Context.Begin` removes it from `Input.Text` and delivers it only to the field that composed it, whatever focus did in the same frame. If that field is not built in the frame, the commit is dropped rather than given to another field. Tests: `TestCommitGoesToTheComposingField` (app, through translator events), `TestIMECommitGoesToTheComposingField` (ui).

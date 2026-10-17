@@ -62,3 +62,15 @@ is built to prove (ARCHITECTURE §1, §10; D12; D17: the original Rex look).
    - `fs` listing and watching tests pass in CI;
    - CI renders Pilot offscreen;
    - text-field tests pass.
+
+## Status (2026-10-17)
+
+Built and pushed: `fs` (listing, sorting, filtering, watching and opening on all three OSes), text editing (carets, text field, clipboard, input methods), and Pilot. All 8 CI jobs pass, including the exact allocation gate for Pilot's bench on every OS. An independent review (two review-sol passes, then a scoped re-review of the high-severity fixes) found 34 issues; all are fixed with regression tests except two documented decisions (D27 startup cap) and the known gap below.
+
+Results per exit criterion: [measurements/phase4-macos.md](measurements/phase4-macos.md). Met so far: 1 (132 ms on the MacBook), 2, 3, 4, 5 (content-first and exec → on glass), 8. Still to run on the MacBook: paced benches with the exact gate, idle with watching, BounceRec, and your hand test (criterion 7).
+
+Known gaps carried forward:
+- Press-and-hold accents may produce "eé" (`replacementRange` ignored; design in phase4-text.md).
+- Linux: clipboard is in-process only; no input method; no cursors.
+- Windows: input method and clipboard untested with a real IME and other apps.
+- kqueue watcher gaps (D26), covered by relisting when the window gains focus.
