@@ -1,0 +1,152 @@
+--- a/harfbuzz/buffer.go
++++ b/harfbuzz/buffer.go
+@@ -54,6 +54,7 @@
+ // Buffer is the main structure holding the input text segment and its properties before shaping,
+ // and output glyphs and their information after shaping.
+ type Buffer struct {
++	normCtx otNormalizeContext
+ 	// Info is used as internal storage during the shaping,
+ 	// and also exposes the result: the glyph to display
+ 	// and its original Cluster value.
+--- a/harfbuzz/ot_layout_gsubgpos.go
++++ b/harfbuzz/ot_layout_gsubgpos.go
+@@ -105,26 +105,30 @@
+ }
+ 
+ // `value` interpretation is dictated by the context
+-type matcherFunc = func(gid gID, value uint16) bool
+-
+-// interprets `value` as a Glyph
+-func matchGlyph(gid gID, value uint16) bool { return gid == gID(value) }
+-
+-// interprets `value` as a Class
+-func matchClass(class tables.ClassDef) matcherFunc {
+-	return func(gid gID, value uint16) bool {
+-		c, _ := class.Class(gid)
+-		return uint16(c) == value
+-	}
++type matcherFunc struct {
++	kind uint8 // 0: none, 1: glyph, 2: class, 3: coverage
++	class tables.ClassDef
++	covs  []tables.Coverage
+ }
+ 
+-// interprets `value` as an index in coverage array
+-func matchCoverage(covs []tables.Coverage) matcherFunc {
+-	return func(gid gID, value uint16) bool {
+-		_, covered := covs[value].Index(gid)
++func (m matcherFunc) call(gid gID, value uint16) bool {
++	switch m.kind {
++	case 1:
++		return gid == gID(value)
++	case 2:
++		c, _ := m.class.Class(gid)
++		return uint16(c) == value
++	default:
++		_, covered := m.covs[value].Index(gid)
+ 		return covered
+ 	}
+ }
++
++var matchGlyph = matcherFunc{kind: 1}
++
++func matchClass(class tables.ClassDef) matcherFunc { return matcherFunc{kind: 2, class: class} }
++
++func matchCoverage(covs []tables.Coverage) matcherFunc { return matcherFunc{kind: 3, covs: covs} }
+ 
+ const (
+ 	no uint8 = iota
+@@ -144,7 +148,7 @@
+ }
+ 
+ func (m *otApplyContextMatcher) init(c *otApplyContext, contextMatch bool) {
+-	m.matchFunc = nil
++	m.matchFunc = matcherFunc{}
+ 	m.lookupProps = c.lookupProps
+ 	/* Ignore ZWNJ if we are matching GPOS, or matching GSUB context and asked to. */
+ 	m.ignoreZWNJ = c.tableIndex == 1 || (contextMatch && c.autoZWNJ)
+@@ -167,8 +171,8 @@
+ 		return no
+ 	}
+ 
+-	if m.matchFunc != nil {
+-		if m.matchFunc(gID(info.Glyph), glyphData[0]) {
++	if m.matchFunc.kind != 0 {
++		if m.matchFunc.call(gID(info.Glyph), glyphData[0]) {
+ 			return yes
+ 		}
+ 		return no
+@@ -653,7 +657,7 @@
+ 	}
+ 
+ 	for i, glyph := range input {
+-		if !matchFunc(gID(c.glyphs[i+1]), glyph) {
++		if !matchFunc.call(gID(c.glyphs[i+1]), glyph) {
+ 			return false
+ 		}
+ 	}
+--- a/harfbuzz/ot_shape_normalize.go
++++ b/harfbuzz/ot_shape_normalize.go
+@@ -65,8 +65,7 @@
+ 	plan      *otShapePlan
+ 	buffer    *Buffer
+ 	font      *Font
+-	decompose func(c *otNormalizeContext, ab rune) (a, b rune, ok bool)
+-	compose   func(c *otNormalizeContext, a, b rune) (ab rune, ok bool)
++	shaper    otComplexShaper
+ }
+ 
+ func setGlyph(info *GlyphInfo, font *Font) {
+@@ -89,7 +88,7 @@
+ 	var aGlyph, bGlyph GID
+ 	buffer := c.buffer
+ 	font := c.font
+-	a, b, ok := c.decompose(c, ab)
++	a, b, ok := c.shaper.decompose(c, ab)
+ 	if !ok {
+ 		return 0
+ 	}
+@@ -260,13 +259,8 @@
+ 			mode = nmComposedDiacritics
+ 		}
+ 	}
+-	c := otNormalizeContext{
+-		plan,
+-		buffer,
+-		font,
+-		plan.shaper.decompose,
+-		plan.shaper.compose,
+-	}
++	c := &buffer.normCtx
++	*c = otNormalizeContext{plan, buffer, font, plan.shaper}
+ 
+ 	alwaysShortCircuit := mode == nmNone
+ 	mightShortCircuit := alwaysShortCircuit ||
+@@ -408,7 +402,7 @@
+ 				if starter == len(buffer.outInfo)-1 ||
+ 					buffer.prev().getModifiedCombiningClass() < buffer.cur(0).getModifiedCombiningClass() {
+ 					/* And compose. */
+-					composed, ok := c.compose(&c, buffer.outInfo[starter].codepoint, buffer.cur(0).codepoint)
++					composed, ok := c.shaper.compose(c, buffer.outInfo[starter].codepoint, buffer.cur(0).codepoint)
+ 					if ok { // And the font has glyph for the composite.
+ 						glyph, ok := font.face.NominalGlyph(composed) /* Composes. */
+ 						if ok {
+--- a/font/opentype/tables/ot_layout.go
++++ b/font/opentype/tables/ot_layout.go
+@@ -492,10 +492,13 @@
+ 		return out, offset, nil
+ 	}
+ 	// start by parsing the list of values
+-	values, err := ParseUint16s(data[offset:], size)
+-	if err != nil {
+-		return out, 0, fmt.Errorf("invalid value record: %s", err)
++	if len(data[offset:]) < 2*size {
++		return out, 0, fmt.Errorf("invalid value record: EOF")
+ 	}
++	var values [8]uint16
++	for i := 0; i < size; i++ {
++		values[i] = binary.BigEndian.Uint16(data[offset+2*i:])
++	}
+ 	// follow the order
+ 	cursor := 0
+ 	if format&XPlacement != 0 {

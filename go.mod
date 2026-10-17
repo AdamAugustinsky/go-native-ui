@@ -8,3 +8,6 @@ require (
 )
 
 require golang.org/x/image v0.23.0 // indirect
+
+// Patched copy: zero-allocation shaping (DECISIONS.md D23).
+replace github.com/go-text/typesetting => ./third_party/typesetting

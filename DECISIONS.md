@@ -507,3 +507,42 @@ lowest-level benchmark.
 - `ui` still never imports `platform`.
 - Per-frame paths in `app` are zero-alloc. The `Build` callback is an interface method, not a closure created per frame.
 
+## D23. Patched go-text kept in the repo (user, 2026-10-17)
+
+**Decision.** `third_party/typesetting` holds the 12 packages of
+`github.com/go-text/typesetting` v0.3.5 that the Linux text engine uses,
+with our `zeroalloc.patch` applied. `go.mod` points the module there with a
+`replace` directive. The user chose this over three alternatives: a fork plus
+an upstream PR, accepting allocations on Linux, or system HarfBuzz.
+
+**Why.** On Linux, shaping a string that isn't cached yet allocated inside
+`harfbuzz.Buffer.Shape`:
+- 3–770 objects per call, depending on the font;
+- the causes were a closure per contextual lookup, the normalize context, and one slice per GPOS value record.
+
+A list that scrolls through new text therefore allocated every frame. macOS
+(CoreText) and Windows (DirectWrite) were already at zero.
+
+**The patch** is about 35 lines in 4 files. It:
+- turns the closures into small structs;
+- keeps the normalize context in a field on `Buffer`;
+- uses a stack array for value records.
+
+With it, every test font shapes at 0 objects per call, about 1 µs per miss through the engine.
+
+**Our own changes.** The engine also bypasses go-text's `Segmenter` and
+`HarfbuzzShaper` for left-to-right text (`text/shape.go`):
+- it does its own script itemization;
+- it reuses one `harfbuzz.Buffer`;
+- it caches one `harfbuzz.Font` per face.
+
+Right-to-left and bidi text still takes go-text's allocating path.
+
+**Licence.** go-text is Unlicense OR BSD-3-Clause. HarfBuzz's part is MIT.
+Both licence files are kept in the copy.
+
+**Verification:**
+- `text/engine_alloc_test.go` asserts exactly 0 allocations per miss.
+- `text/shape_test.go` checks the new path against go-text's reference pipeline, including a 6000-string fuzz.
+- Update procedure: `third_party/typesetting/README.md`.
+

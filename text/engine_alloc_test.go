@@ -207,5 +207,10 @@ func TestEngineMissAllocsAreHarfbuzzsAlone(t *testing.T) {
 	if em > rm || eb > rb {
 		t.Fatalf("the engine allocates %d objects, %d bytes over %.0f misses, Buffer.Shape alone %d, %d", em, eb, strs, rm, rb)
 	}
+	// With the patched go-text copy (third_party/typesetting, D23) a miss
+	// allocates nothing at all.
+	if em != 0 || eb != 0 {
+		t.Fatalf("shaping misses allocated %d objects, %d bytes over %.0f misses (want 0: is third_party/typesetting's zeroalloc.patch applied?)", em, eb, strs)
+	}
 	_ = sink
 }
