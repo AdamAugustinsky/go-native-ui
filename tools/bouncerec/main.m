@@ -70,7 +70,7 @@ static Params defaultParams(void) {
 	Params p;
 	p.probeStep = 8; p.skipW = 90; p.skipH = 46; p.border = 2; p.corner = 24;
 	p.tol = 24; p.slack = 1; p.matchFrac = 0.98; p.offX = -1; p.offY = -1;
-	p.diffTol = 12; p.firstFrac = 0.02;
+	p.diffTol = 12; p.firstFrac = 0.5; // a window appearing changes most of its region; unrelated screen activity (alerts, other apps) under the bounds must not count
 	p.bounceTol = 16; p.minCols = 12; p.extraFactor = 1.6; p.restGap = 0; p.shadow = 48;
 	p.valleyFrac = 0.35; p.minPeak = 4.0; p.startThresh = 1.0; p.maxInterp = 40.0;
 	return p;

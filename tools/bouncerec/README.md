@@ -94,8 +94,11 @@ window origins and downsampling differences). Render the expected PNG in sRGB;
 the stream is captured in sRGB too.
 
 A window smaller than the expected content (still animating to its final size)
-scores 0. "Has pixels" means ≥ 2 % of sampled pixels in the window bounds differ
-from the baseline by more than 12 per channel (`-firstfrac`, `-difftol`).
+scores 0. "Has pixels" means ≥ 50 % of sampled pixels in the window bounds differ
+from the baseline by more than 12 per channel (`-firstfrac`, `-difftol`). A
+window appearing changes most of its region; the first real run showed that a
+2 % threshold counted unrelated screen activity (a system alert under the
+window's future bounds) as the window's first pixels.
 
 ## Output (`-out`)
 
