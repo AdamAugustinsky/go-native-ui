@@ -11,9 +11,10 @@ import (
 	"strconv"
 
 	"github.com/go-text/typesetting/bidi"
-	"github.com/go-text/typesetting/di"
 	"github.com/go-text/typesetting/font"
 	ot "github.com/go-text/typesetting/font/opentype"
+	"github.com/go-text/typesetting/harfbuzz"
+	"github.com/go-text/typesetting/language"
 	"github.com/go-text/typesetting/shaping"
 )
 
@@ -78,6 +79,7 @@ type gtFace struct {
 	strike     int // CBDT strike for sizePx
 	strikePpem int
 	weight     int
+	hb         *harfbuzz.Font // lazily created by shape.go
 }
 
 type gtFont struct {
@@ -114,9 +116,16 @@ type goSystem struct {
 	runs  *runCache
 	atlas *atlas
 
-	shaper shaping.HarfbuzzShaper
-	seg    shaping.Segmenter
-	para   bidi.Paragraph
+	// Shaping state (shape.go). seg and para are only used for text that
+	// needs several scripts or bidirectional reordering.
+	hbuf    *harfbuzz.Buffer // reused; keeps the shape-plan cache of every face
+	shapeFn func(*harfbuzz.Buffer, *harfbuzz.Font)
+	langs   map[language.Script]language.Language
+	segs    []gtSeg // pieces of the level run being shaped
+	sruns   []gtSeg // script runs of the text being itemized
+	delims  []delimEntry
+	seg     shaping.Segmenter
+	para    bidi.Paragraph
 
 	cur   FontKey // font being shaped (the Fontmap context)
 	runes []rune
@@ -139,6 +148,9 @@ func newGoSystem(f fontFinder) *goSystem {
 		datas:    make(map[dataKey]*fontData),
 		faceOf:   make(map[*font.Face]FaceID),
 		fb:       make(map[uint64]uint32),
+		hbuf:     harfbuzz.NewBuffer(),
+		langs:    make(map[language.Script]language.Language),
+		shapeFn:  func(b *harfbuzz.Buffer, f *harfbuzz.Font) { b.Shape(f, nil) },
 		runs:     newRunCache(),
 		atlas:    newAtlas(),
 		gbuf:     make([]uint16, 0, 128),
@@ -399,37 +411,6 @@ func (s *goSystem) Shape(f FontKey, utf8 []byte) RunRef {
 	return s.shapeMiss(f, utf8)
 }
 
-func (s *goSystem) shapeMiss(f FontKey, b []byte) RunRef {
-	s.runes = s.runes[:0]
-	for _, r := range string(b) {
-		s.runes = append(s.runes, r)
-	}
-	s.gbuf, s.xbuf, s.fbuf = s.gbuf[:0], s.xbuf[:0], s.fbuf[:0]
-	var pen float32
-	s.cur = f
-	for start := 0; start < len(s.runes); {
-		// One bidi paragraph at a time: the algorithm stops at a separator.
-		runs := s.para.Segment(s.runes[start:], bidi.Neutral)
-		s.bruns = s.bruns[:0]
-		for i := 0; i < runs.NumRuns(); i++ {
-			r := runs.Run(i)
-			s.bruns = append(s.bruns, bidiRun{start + r.Start, start + r.End, int(r.Level)})
-		}
-		end := len(s.runes)
-		if n := len(s.bruns); n > 0 {
-			end = s.bruns[n-1].end
-		} else {
-			s.bruns = append(s.bruns, bidiRun{start, end, 0})
-		}
-		s.visualOrder()
-		for _, i := range s.order {
-			pen = s.shapeLevelRun(f, s.bruns[i], pen)
-		}
-		start = end
-	}
-	return s.runs.insert(f, b, s.gbuf, s.xbuf, s.fbuf, pen)
-}
-
 // visualOrder fills s.order with the indices of s.bruns in display order
 // (UAX #9 rule L2: from the highest level down to the lowest odd level,
 // reverse every maximal run of runs at that level or higher).
@@ -459,55 +440,6 @@ func (s *goSystem) visualOrder() {
 			i = j
 		}
 	}
-}
-
-// setSize assigns a whole number of pixels to a shaping.Input.Size (a
-// 26.6 fixed-point integer type from x/image, which we need not import).
-func setSize[T ~int32](dst *T, px int) { *dst = T(px << 6) }
-
-// shapeLevelRun shapes one bidi run (one direction) starting at pen and
-// appends its glyphs; it returns the pen after the run.
-func (s *goSystem) shapeLevelRun(f FontKey, br bidiRun, pen float32) float32 {
-	fe := &s.fonts[f]
-	dir := di.DirectionLTR
-	if br.level%2 == 1 {
-		dir = di.DirectionRTL
-	}
-	// go-text shapes at whole pixel sizes; the exact fractional size is
-	// restored by scaling the (1/64 px) results.
-	ceilPx := int(math.Ceil(float64(fe.px)))
-	k := fe.px / float32(ceilPx) / 64
-	in := shaping.Input{Text: s.runes, RunStart: br.start, RunEnd: br.end, Direction: dir, Face: s.faces[fe.face].face}
-	setSize(&in.Size, ceilPx)
-	pieces := s.seg.Split(in, s)
-	emit := func(p shaping.Input) {
-		p.Direction = dir
-		if p.Face == nil {
-			p.Face = in.Face
-		}
-		fid := s.faceOf[p.Face]
-		out := s.shaper.ShapeNoExtents(p)
-		for _, g := range out.Glyphs {
-			gid := uint16(0xFFFF)
-			if g.GlyphID < 0xFFFF {
-				gid = uint16(g.GlyphID)
-			}
-			s.gbuf = append(s.gbuf, gid)
-			s.xbuf = append(s.xbuf, pen+float32(int32(g.XOffset))*k)
-			s.fbuf = append(s.fbuf, fid)
-			pen += float32(int32(g.Advance)) * k
-		}
-	}
-	if dir == di.DirectionRTL { // pieces are in logical order
-		for i := len(pieces) - 1; i >= 0; i-- {
-			emit(pieces[i])
-		}
-	} else {
-		for _, p := range pieces {
-			emit(p)
-		}
-	}
-	return pen
 }
 
 // Run returns the shaped run. The view is valid until the next eviction
