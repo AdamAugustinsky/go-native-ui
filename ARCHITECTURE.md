@@ -226,7 +226,9 @@ type Renderer interface {
   worker thread, in parallel with AppKit window creation (no Xcode on the
   dev machine to precompile a metallib; revisit later). HLSL is
   precompiled to DXBC in CI (fxc), embedded as bytes, so we don't depend on
-  `d3dcompiler_47.dll`. GLSL 330 core / GLSL ES 300 text is compiled by
+  `d3dcompiler_47.dll`. Until Windows CI is approved, the interim path is
+`D3DCompile` at startup from the system copy of `d3dcompiler_47.dll` in
+System32 (PHASE2-PLAN). GLSL 330 core / GLSL ES 300 text is compiled by
   the driver.
 - **Additions for the visual bar** ([rex-benchmark.md](docs/design/rex-benchmark.md)):
   - backgrounds: three-or-more-stop and four-corner gradients;
