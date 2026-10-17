@@ -259,3 +259,29 @@ func TestWindowEventsAreNotInput(t *testing.T) {
 		t.Fatal("window events dirtied the input")
 	}
 }
+
+// FocusGained is the edge of the window becoming active: set for the frame
+// that takes the gain, not for the focus event of a window that already has
+// it (the one every window gets as it is shown), cleared by the frame's end.
+func TestFocusGainedIsAnEdge(t *testing.T) {
+	down := func(e *platform.Event) { e.Flags = platform.FlagDown }
+	tr := newTranslator()
+	tr.event(ev(platform.EvFocus, down), nil) // shown: already focused
+	if tr.in.FocusGained {
+		t.Fatal("the focus a new window starts with is not a gain")
+	}
+	tr.event(ev(platform.EvFocus, nil), nil) // lost
+	tr.endFrame()
+	tr.event(ev(platform.EvFocus, nil), nil) // (the loss is applied by the frame after it was deferred)
+	tr.endFrame()
+	if tr.in.Focused {
+		t.Fatal("setup: focus should be lost")
+	}
+	if !tr.event(ev(platform.EvFocus, down), nil) || !tr.in.Focused || !tr.in.FocusGained {
+		t.Fatalf("a regained focus is a gain: focused %v gained %v", tr.in.Focused, tr.in.FocusGained)
+	}
+	tr.endFrame()
+	if tr.in.FocusGained {
+		t.Error("FocusGained lasts one frame")
+	}
+}

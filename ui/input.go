@@ -106,6 +106,10 @@ type Input struct {
 	NText int
 	// Focused is true while the window has keyboard focus.
 	Focused bool
+	// FocusGained is true for the frame in which the window gained keyboard
+	// focus (became the active window). A caller that shows the file system or
+	// the like can look again; it costs nothing while nothing happens.
+	FocusGained bool
 
 	// Time is the platform clock (monotonic nanoseconds, platform.Now) at the
 	// start of the frame. Text fields blink their caret by it; 0 means no
@@ -196,6 +200,7 @@ func (in *Input) ClearFrame() {
 	in.Clicks = [numButtons]uint8{}
 	in.ScrollX, in.ScrollY = 0, 0
 	in.NKeys, in.NText = 0, 0
+	in.FocusGained = false
 }
 
 // Signal is what a box reports about the pointer and keyboard this frame.

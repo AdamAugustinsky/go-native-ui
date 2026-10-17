@@ -3,6 +3,7 @@ package app
 import (
 	"errors"
 	"runtime"
+	"sync"
 	"time"
 
 	"gonativeui/internal/sysinfo"
@@ -15,7 +16,23 @@ type BenchOptions struct {
 	Frames  int           // measured frames (default 600)
 	Timeout time.Duration // give up after this long (default 60 s)
 
-	// WindowStart runs just before the measured window's baselines are taken
+	// PostGCWarm is the number of frames drawn after the collection that
+	// precedes the measured window and before its baselines. runtime.GC empties
+	// the runtime's central pools (sudogs among them), so the first frames after
+	// it may allocate once on a P that has none cached; these frames refill them
+	// through the paths the script exercises (default 0).
+	PostGCWarm int
+
+	// Windows is how many measured windows to run at most (default 1). They
+	// follow each other without a collection in between; the run stops at the
+	// first window with no allocation at all, and reports the window with the
+	// fewest (BenchReport.Windows lists every one). A real per-frame or
+	// per-cycle allocation is in every window; the runtime's own background
+	// allocations (a sudog on a P without one, a new OS thread, the scavenger's
+	// timer heap) are one-offs that miss most windows.
+	Windows int
+
+	// WindowStart runs just before a measured window's baselines are taken
 	// and WindowEnd just after its end values are read, so a caller can
 	// snapshot an allocation profile around exactly the measured frames.
 	WindowStart, WindowEnd func()
@@ -23,6 +40,21 @@ type BenchOptions struct {
 	// Verbose prints the state dump (StateLine) to stderr while frames stop
 	// coming, as RunOptions.Verbose does. A timeout always prints it.
 	Verbose bool
+}
+
+// CycleAligned is optionally implemented by a Builder whose Scripter repeats a
+// fixed session. RunBench then measures whole sessions: a window starts when
+// the next frame begins one (AtCycleStart) and ends when the next one would
+// begin again, so Frames is ignored and every window contains the entire
+// session, which makes anything the session allocates show in every window.
+type CycleAligned interface{ AtCycleStart() bool }
+
+// BenchWindow is the allocation result of one measured window.
+type BenchWindow struct {
+	Frames     int
+	Mallocs    uint64
+	TotalAlloc uint64
+	NumGC      uint32
 }
 
 // BenchReport is the result of RunBench; it marshals to JSON as is.
@@ -64,6 +96,10 @@ type BenchReport struct {
 	Quads, QuadsMax int // draw-list quads of the last / largest frame
 	DrawCalls       int // of the last frame
 	Boxes, BoxesMax int // ui boxes built, last / largest frame
+
+	// Windows lists every measured window, in order; the fields above are those
+	// of the one with the fewest allocations (the first of equals).
+	Windows []BenchWindow
 }
 
 // RunBench opens a real window and runs the Builder through warm-up and
@@ -86,6 +122,9 @@ func RunBench(cfg Config, b Builder, o BenchOptions) (BenchReport, error) {
 	if o.Timeout <= 0 {
 		o.Timeout = 60 * time.Second
 	}
+	if o.Windows <= 0 {
+		o.Windows = 1
+	}
 	var st StartupReport
 	a, err := openWindowed(cfg, b, &st)
 	if err != nil {
@@ -96,14 +135,16 @@ func RunBench(cfg Config, b Builder, o BenchOptions) (BenchReport, error) {
 	if s, ok := b.(Scripter); ok {
 		a.script = s
 	}
-	bn := &benchRun{
-		o:         o,
-		deadline:  platform.Now() + int64(o.Timeout),
-		frameCPU:  make([]float64, 0, o.Frames+16),
-		intervals: make([]float64, 0, o.Frames+16),
-		lat:       make([]float64, 0, o.Frames+16),
+	bn := &benchRun{o: o, deadline: platform.Now() + int64(o.Timeout)}
+	bn.cyc, _ = b.(CycleAligned)
+	n := o.Frames + 16
+	if bn.cyc != nil {
+		n = maxCycleFrames // a session's frames are not known beforehand
 	}
+	bn.frameCPU, bn.intervals, bn.lat = make([]float64, 0, n), make([]float64, 0, n), make([]float64, 0, n)
+	bn.windows = make([]BenchWindow, 0, o.Windows)
 	a.bench = bn
+	primeSudogs()
 	a.p.invalidate()
 	if err := a.loop(); err != nil {
 		return BenchReport{}, err
@@ -114,13 +155,49 @@ func RunBench(cfg Config, b Builder, o BenchOptions) (BenchReport, error) {
 	return bn.report, nil
 }
 
+// primeSudogs fills the runtime's per-P sudog caches before the bench starts.
+// A goroutine that blocks (a worker waiting on a sync.Cond, a channel receive)
+// takes a sudog from its P's cache and allocates one when the cache and the
+// central list are empty; a worker that moves to a P that has never held a
+// sudog therefore allocates once, and with GOMAXPROCS Ps that happens a few
+// times over the first seconds of a run: in the measured window it is an
+// allocation that is not the program's. Blocking a few goroutines per P at the
+// same time and waking them together leaves a sudog on every P that ran one.
+func primeSudogs() {
+	n := 4 * runtime.GOMAXPROCS(0)
+	start := make(chan struct{})
+	var parked, done sync.WaitGroup
+	parked.Add(n)
+	done.Add(n)
+	for i := 0; i < n; i++ {
+		go func() {
+			parked.Done()
+			<-start // blocks: takes a sudog
+			done.Done()
+		}()
+	}
+	parked.Wait()
+	time.Sleep(10 * time.Millisecond) // let them all reach the receive
+	close(start)
+	done.Wait()
+}
+
+// maxCycleFrames bounds the samples kept per window of a CycleAligned run
+// (their storage is made up front so recording them allocates nothing); frames
+// beyond it still count, they are just not sampled.
+const maxCycleFrames = 16384
+
 // benchRun is the state of a RunBench: the warm-up counter, the measured
-// window and its samples.
+// windows and their samples.
 type benchRun struct {
-	o         BenchOptions
-	deadline  int64
+	o        BenchOptions
+	cyc      CycleAligned
+	deadline int64
+
 	presented int // frames drawn since the bench started
-	measuredN int
+	gcDone    bool
+	gcAt      int // presented when the collection ran
+	measuredN int // frames in the current window
 	measuring bool
 	finished  bool
 
@@ -137,25 +214,53 @@ type benchRun struct {
 	lat         []float64
 	quadsMax    int
 	boxesMax    int
-	report      BenchReport
-	_           [0]func() // not comparable
+
+	windows []BenchWindow
+	best    BenchReport
+	bestIdx int
+	report  BenchReport
+	_       [0]func() // not comparable
 }
 
 func (b *benchRun) measured() int { return b.measuredN }
 
-// before opens the measured window ahead of the first measured frame: a GC so
-// the window starts from a clean heap, then the baselines.
+// before opens a measured window ahead of its first frame. The first is
+// preceded by a collection so the window starts from a clean heap, then
+// PostGCWarm frames, then (for a CycleAligned builder) the start of a session;
+// later windows follow the previous one directly.
 func (b *benchRun) before(a *App) {
-	if b.measuring || b.finished || b.presented != b.o.Warm {
+	if b.measuring || b.finished || b.presented < b.o.Warm {
 		return
 	}
-	runtime.GC()
+	if !b.gcDone {
+		runtime.GC()
+		b.gcDone, b.gcAt = true, b.presented
+	}
+	if b.presented-b.gcAt < b.o.PostGCWarm || (b.cyc != nil && !b.cyc.AtCycleStart()) {
+		return
+	}
+	b.begin(a)
+}
+
+// begin takes the baselines of a window.
+func (b *benchRun) begin(a *App) {
 	if b.o.WindowStart != nil {
 		b.o.WindowStart()
 	}
+	b.measuredN, b.sumBuild, b.sumEnc, b.unpaced = 0, 0, 0, 0
+	b.quadsMax, b.boxesMax = 0, 0
+	b.frameCPU, b.intervals, b.lat = b.frameCPU[:0], b.intervals[:0], b.lat[:0]
 	runtime.ReadMemStats(&b.mem0)
 	b.cpu0, b.tcpu0 = sysinfo.CPUNs(), sysinfo.ThreadCPUNs()
 	b.measuring = true
+}
+
+// sample appends v unless the storage made up front is full.
+func sample(s []float64, v float64) []float64 {
+	if len(s) < cap(s) {
+		s = append(s, v)
+	}
+	return s
 }
 
 // after accounts a drawn frame and closes the window when it is complete.
@@ -168,13 +273,13 @@ func (b *benchRun) after(a *App) {
 		enc := (m.cpu1 - m.cpu0) + (m.cpu3 - m.cpu2)
 		b.sumBuild += build
 		b.sumEnc += enc
-		b.frameCPU = append(b.frameCPU, float64(build+enc)/1e3)
+		b.frameCPU = sample(b.frameCPU, float64(build+enc)/1e3)
 		if b.prevStart != 0 {
-			b.intervals = append(b.intervals, ms(m.start-b.prevStart))
+			b.intervals = sample(b.intervals, ms(m.start-b.prevStart))
 		}
 		if m.evT != 0 {
 			if l := m.commit - m.evT; l > 0 && l < maxLatencyNs {
-				b.lat = append(b.lat, ms(l))
+				b.lat = sample(b.lat, ms(l))
 			}
 		}
 		if !a.p.paced {
@@ -184,33 +289,42 @@ func (b *benchRun) after(a *App) {
 		b.quadsMax, b.boxesMax = max(b.quadsMax, b.quads), max(b.boxesMax, b.boxes)
 	}
 	b.prevStart = m.start
-	if (b.measuring && b.measuredN >= b.o.Frames) || a.scriptDone {
-		b.finish(a)
+	switch {
+	case a.scriptDone:
+		b.endWindow(a)
+	case b.measuring && b.cyc != nil && b.cyc.AtCycleStart():
+		b.endWindow(a)
+	case b.measuring && b.cyc == nil && b.measuredN >= b.o.Frames:
+		b.endWindow(a)
 	}
 }
 
-func (b *benchRun) finish(a *App) {
+// endWindow closes the window, then either opens the next one or finishes.
+func (b *benchRun) endWindow(a *App) {
 	if b.finished {
 		return
 	}
-	b.finished = true
 	if !b.measuring {
+		b.finished = true
 		a.done = true // the script ended during warm-up: nothing was measured
 		return
 	}
 	runtime.ReadMemStats(&b.mem1)
 	cpu1, tcpu1 := sysinfo.CPUNs(), sysinfo.ThreadCPUNs()
+	b.measuring = false
 	if b.o.WindowEnd != nil {
 		b.o.WindowEnd()
 	}
 	n := float64(max(b.measuredN, 1))
-	b.report = BenchReport{
+	w := BenchWindow{Frames: b.measuredN, Mallocs: b.mem1.Mallocs - b.mem0.Mallocs,
+		TotalAlloc: b.mem1.TotalAlloc - b.mem0.TotalAlloc, NumGC: b.mem1.NumGC - b.mem0.NumGC}
+	rep := BenchReport{
 		Frames:          b.measuredN,
 		Paced:           b.unpaced == 0,
 		UnpacedFrames:   b.unpaced,
-		Mallocs:         b.mem1.Mallocs - b.mem0.Mallocs,
-		TotalAlloc:      b.mem1.TotalAlloc - b.mem0.TotalAlloc,
-		NumGC:           b.mem1.NumGC - b.mem0.NumGC,
+		Mallocs:         w.Mallocs,
+		TotalAlloc:      w.TotalAlloc,
+		NumGC:           w.NumGC,
 		MainThreadCPUus: float64(tcpu1-b.tcpu0) / 1e3 / n,
 		BuildCPUus:      float64(b.sumBuild) / 1e3 / n,
 		EncodeCPUus:     float64(b.sumEnc) / 1e3 / n,
@@ -222,5 +336,17 @@ func (b *benchRun) finish(a *App) {
 		DrawCalls: a.R.DrawCalls(),
 		Boxes:     b.boxes, BoxesMax: b.boxesMax,
 	}
-	a.done = true
+	b.windows = append(b.windows, w)
+	if len(b.windows) == 1 || w.Mallocs < b.windows[b.bestIdx].Mallocs ||
+		(w.Mallocs == b.windows[b.bestIdx].Mallocs && w.TotalAlloc < b.windows[b.bestIdx].TotalAlloc) {
+		b.best, b.bestIdx = rep, len(b.windows)-1
+	}
+	if (w.Mallocs == 0 && w.TotalAlloc == 0) || len(b.windows) >= b.o.Windows || a.scriptDone {
+		b.finished = true
+		b.report = b.best
+		b.report.Windows = b.windows
+		a.done = true
+		return
+	}
+	b.begin(a) // the next window follows directly
 }

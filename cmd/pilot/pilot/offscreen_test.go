@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
-	"time"
 
 	"gonativeui/app"
 	"gonativeui/fs"
@@ -74,38 +73,49 @@ func TestSessionDrivesThePanes(t *testing.T) {
 
 // The session allocates nothing once warm: scrolling, hovering, selecting,
 // typing a filter, sorting, dragging the divider and relisting, through the
-// real file system service with synthetic directories (counters are process
-// wide, so the workers' buffers are included; the runtime's own background
-// allocations make a window now and then fail, so one clean window of several
-// counts, as in the other zero-allocation tests).
+// real file system service with synthetic directories. The counters are exact
+// ReadMemStats deltas over whole sessions, so everything the session does is in
+// every window; they are process wide, so the workers' buffers are included. A
+// collection empties the runtime's central pools and the workers' next waits
+// may allocate a sudog on a P that has none (the runtime's, not ours): a session
+// is therefore warmed up after the collection, and one clean window of several
+// counts. A real allocation of the session is in every window and fails.
 func TestSessionAllocatesNothing(t *testing.T) {
 	b := NewSynthBench(20000)
 	defer b.Close()
 	o := newOffscreen(t, b)
-	for n := 0; b.Cycles() < 2 && n < 60000; n++ {
-		o.Frame()
-	}
-	if b.Cycles() < 2 {
-		t.Fatal("warm-up did not finish two sessions")
-	}
-	const window, attempts = 700, 6
-	var mallocs, bytes uint64
-	for a := 0; a < attempts; a++ {
-		runtime.GC()
-		time.Sleep(20 * time.Millisecond)
-		var m0, m1 runtime.MemStats
-		runtime.ReadMemStats(&m0)
-		for i := 0; i < window; i++ {
+	cycle := func() int { // frames of one whole session, from one boundary to the next
+		for !b.AtCycleStart() {
 			o.Frame()
 		}
+		n := 0
+		for first := true; first || !b.AtCycleStart(); first = false {
+			o.Frame()
+			n++
+			if n > 60000 {
+				t.Fatal("a session does not end")
+			}
+		}
+		return n
+	}
+	cycle()
+	cycle()
+	runtime.GC()
+	cycle() // after the collection
+	const attempts = 8
+	var m0, m1 runtime.MemStats
+	var mallocs, bytes uint64
+	for a := 0; a < attempts; a++ {
+		runtime.ReadMemStats(&m0)
+		n := cycle()
 		runtime.ReadMemStats(&m1)
 		mallocs, bytes = m1.Mallocs-m0.Mallocs, m1.TotalAlloc-m0.TotalAlloc
-		t.Logf("window %d: %d frames, %d quads: %d mallocs, %d bytes", a+1, window, len(o.Quads()), mallocs, bytes)
+		t.Logf("session %d: %d frames, %d quads: %d mallocs, %d bytes, %d GCs", a+1, n, len(o.Quads()), mallocs, bytes, m1.NumGC-m0.NumGC)
 		if mallocs == 0 && bytes == 0 {
 			return
 		}
 	}
-	t.Errorf("the session allocated in all %d windows (last: %d mallocs, %d bytes over %d frames)", attempts, mallocs, bytes, window)
+	t.Errorf("the session allocated in all %d whole sessions (last: %d mallocs, %d bytes)", attempts, mallocs, bytes)
 }
 
 // The offscreen scene renders the same pixels twice and has what it should show.

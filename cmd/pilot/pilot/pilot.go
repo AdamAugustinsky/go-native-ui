@@ -63,7 +63,7 @@ type Options struct {
 	// Initial are the first listings of the two panes, in flight or done (a
 	// channel that already holds its Ready works as well). Init waits for them
 	// up to Wait; a pane whose listing has not landed shows "Loading…" and
-	// takes it when it does (the sender must wake the loop, platform.Wake).
+	// takes it when it does (the sender must wake the loop: platform.Wake, which is safe before the window exists).
 	Initial [2]<-chan Ready
 	Wait    time.Duration // default 150 ms
 
@@ -131,9 +131,6 @@ var _ app.Initer = (*Pilot)(nil)
 // for scrolling through endless new names, and the first listings.
 func (pl *Pilot) Init(a *app.App) error {
 	pl.a = a
-	if a.Win != nil {
-		markAwake()
-	}
 	_, _, scale := a.Size()
 	pl.Kit.Init(a.Text, iconSpecs[:], 2, scale)
 	pl.IC.Attach(a.R)

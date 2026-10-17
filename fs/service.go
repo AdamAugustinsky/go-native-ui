@@ -1,7 +1,6 @@
 package fs
 
 import (
-	"os"
 	"sync"
 	"time"
 
@@ -397,15 +396,6 @@ func (s *Service) control() {
 			}
 		}
 	}
-}
-
-// dirMTime is the directory's own modification time.
-func dirMTime(path string) (int64, bool) {
-	fi, err := os.Stat(path)
-	if err != nil {
-		return 0, false
-	}
-	return fi.ModTime().UnixNano(), true
 }
 
 // watchActive runs after the OS watch for id is established.

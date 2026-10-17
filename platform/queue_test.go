@@ -52,3 +52,22 @@ func TestSteadyStatePendingAllocatesNothing(t *testing.T) {
 		t.Fatalf("%v allocations per run", n)
 	}
 }
+
+// A Wake before the window exists is not lost: it leaves the coalescing flag
+// set, which Open checks once the OS can be woken (darwin, windows and linux
+// each do), and the flag is cleared exactly when the loop takes the wake.
+func TestWakeBeforeTheWindowStaysPending(t *testing.T) {
+	takeWake() // whatever an earlier test left
+	Wake()     // no window: osWake finds nothing to post to
+	Wake()     // coalesced
+	if !wakePending.Load() {
+		t.Fatal("a Wake with no window must stay pending for Open to find")
+	}
+	if !takeWake() || takeWake() {
+		t.Error("the pending wake is taken once")
+	}
+	Wake()
+	if !takeWake() {
+		t.Error("a Wake after the pending one was taken is pending again")
+	}
+}

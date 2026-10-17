@@ -6,7 +6,8 @@
 //	                            stderr with -v) and exit once the first frame is on glass
 //	pilot -bench                scripted session on synthetic directories (100k entries by default, -rows N up
 //	                            to 1M): scroll, hover, select, filter, switch panes, sort by each column, drag
-//	                            the divider, relists: 1000 warm-up + 900 measured frames, JSON report
+//	                            the divider, relists: 1000 warm-up frames, a collection, 400 more, then whole sessions measured
+//	                            one after another until one allocates nothing (all listed in the JSON)
 //	pilot -bench -bench-dir DIR the same session on a real directory through the real file system service
 //	pilot -bench -gate          also exit with status 3 unless 0 allocations, main-thread CPU within budget
 //	                            and frames were paced
@@ -39,24 +40,14 @@ const (
 	// The session is long and mostly waits for the worker; the warm-up covers
 	// the whole of it once so that every buffer has reached its size.
 	warmFrames = 1000
-	measFrames = 900
 
-	// The counters are process-wide, and the file system workers and the Go
-	// runtime run beside the UI thread: a worker that wakes on a P whose sudog
-	// cache is empty, or the scavenger growing its timer heap, allocates one small
-	// object now and then (-allocsites shows them). The gate accepts that floor;
-	// every allocation of the UI thread or of a listing is far above it (a
-	// listing that grows a buffer is megabytes), and the in-process test
-	// (TestSessionAllocatesNothing) demands exactly 0 in one of several windows.
-	noiseMallocs = 4
-	noiseBytes   = 1024
-	// On a real directory the service also stats it on every relist of a watched
-	// directory (fs.dirMTime: os.Stat, two small objects), and the session
-	// relists a dozen times in the measured frames. That is the worker's, not the
-	// UI thread's (-allocsites says so); the floor leaves room for it until the
-	// stat is made allocation-free.
-	dirNoiseMallocs = 64
-	dirNoiseBytes   = 16 << 10
+	// After the collection that opens the measurement: frames that refill the
+	// runtime's pools through the session's paths (a collection empties the
+	// central sudog cache, so the file system workers' first waits afterwards
+	// may allocate), and up to this many whole sessions, one after another,
+	// stopping at the first that allocates nothing.
+	postGCWarm = 400
+	maxWindows = 12
 
 	defaultMaxCPUus = 4000 // ARCHITECTURE §11: main-thread CPU per frame at 1M entries
 	defaultRows     = 100_000
@@ -125,7 +116,7 @@ func startDir(arg, home string) string {
 
 // listAsync lists and sorts dir on a goroutine, which is the first thing the
 // process does, before the window system exists; the result goes to the
-// returned channel and wakes the loop (safely before the window exists).
+// returned channel and wakes the loop (platform.Wake is safe before the window exists: Open picks the wake up).
 func listAsync(dir string) <-chan pilot.Ready {
 	ch := make(chan pilot.Ready, 1)
 	go func() {
@@ -134,7 +125,7 @@ func listAsync(dir string) <-chan pilot.Ready {
 			fs.Sort(l, fs.SortName, false)
 		}
 		ch <- pilot.Ready{Dir: dir, L: l, At: platform.Now()}
-		pilot.Wake()
+		platform.Wake()
 	}()
 	return ch
 }
@@ -161,7 +152,7 @@ func runWindow(args []string, exitFirst, verbose bool, t0, age int64) error {
 		}
 		dirs[i] = startDir(a, home)
 	}
-	o := pilot.Options{Home: home, Src: fs.NewService(pilot.Wake)}
+	o := pilot.Options{Home: home, Src: fs.NewService(platform.Wake)}
 	for i, d := range dirs {
 		o.Initial[i] = listAsync(d)
 	}
@@ -216,7 +207,7 @@ func runBench(rows int, dir string, gate, allowUnpaced, sites bool, maxCPU float
 	}
 	defer b.Close()
 	b.StartCounting()
-	opt := app.BenchOptions{Warm: warmFrames, Frames: measFrames, Timeout: timeout, Verbose: verbose}
+	opt := app.BenchOptions{Warm: warmFrames, PostGCWarm: postGCWarm, Windows: maxWindows, Timeout: timeout, Verbose: verbose}
 	var as allocSites
 	if sites {
 		opt.WindowStart, opt.WindowEnd = as.start, as.end
@@ -232,7 +223,7 @@ func runBench(rows int, dir string, gate, allowUnpaced, sites bool, maxCPU float
 		rep.Rows = b.LeftEntries()
 	}
 	if gate {
-		rep.GateFailures = gateFailures(rep, allowUnpaced, maxCPU, dir != "")
+		rep.GateFailures = gateFailures(rep, allowUnpaced, maxCPU)
 	}
 	printJSON(rep)
 	if len(rep.GateFailures) > 0 {
@@ -242,17 +233,13 @@ func runBench(rows int, dir string, gate, allowUnpaced, sites bool, maxCPU float
 	return nil
 }
 
-func gateFailures(r report, allowUnpaced bool, maxCPU float64, realDir bool) []string {
+func gateFailures(r report, allowUnpaced bool, maxCPU float64) []string {
 	var f []string
-	floorM, floorB := uint64(noiseMallocs), uint64(noiseBytes)
-	if realDir {
-		floorM, floorB = dirNoiseMallocs, dirNoiseBytes
+	if r.Frames < 300 {
+		f = append(f, fmt.Sprintf("%d measured frames in the session, want at least 300", r.Frames))
 	}
-	if r.Frames < 600 {
-		f = append(f, fmt.Sprintf("%d measured frames, want at least 600", r.Frames))
-	}
-	if r.Mallocs > floorM || r.TotalAlloc > floorB {
-		f = append(f, fmt.Sprintf("%d mallocs / %d bytes allocated over the measured frames (floor %d / %d)", r.Mallocs, r.TotalAlloc, floorM, floorB))
+	if r.Mallocs != 0 || r.TotalAlloc != 0 {
+		f = append(f, fmt.Sprintf("every one of %d whole sessions allocated (fewest: %d mallocs / %d bytes)", len(r.Windows), r.Mallocs, r.TotalAlloc))
 	}
 	if maxCPU > 0 && r.MainThreadCPUus > maxCPU {
 		f = append(f, fmt.Sprintf("main-thread CPU %.0f µs/frame, budget %.0f", r.MainThreadCPUus, maxCPU))

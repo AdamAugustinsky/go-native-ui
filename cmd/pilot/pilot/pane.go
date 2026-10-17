@@ -246,7 +246,7 @@ func (p *pane) startRows() {
 	p.jobPos = 0
 	p.jobBusy = v.filtered || v.cur >= 0 || v.anchor >= 0 || p.pendSel >= 0
 	if v.filtered && cap(v.rows) < len(v.l.Order) {
-		v.rows = make([]uint32, 0, len(v.l.Order))
+		v.rows = make([]uint32, 0, withSlack(len(v.l.Order)))
 	}
 }
 
@@ -412,7 +412,7 @@ func (p *pane) startReconcile(l *fs.Listing) {
 	}
 	w := (len(l.Entries) + 63) >> 6
 	if cap(rc.newSel) < w {
-		rc.newSel = make([]uint64, w)
+		rc.newSel = make([]uint64, withSlack(w))
 	}
 	rc.newSel = rc.newSel[:w]
 	clear(rc.newSel)
@@ -492,7 +492,7 @@ func (p *pane) reconcileStep(b *budget) {
 		}
 		if p.hideHidden || len(p.q) > 0 {
 			if rc.rowsPos == 0 && cap(rc.rows) < len(rc.l.Order) {
-				rc.rows = make([]uint32, 0, len(rc.l.Order))
+				rc.rows = make([]uint32, 0, withSlack(len(rc.l.Order)))
 			}
 			step := chunk
 			if len(p.q) > 0 {

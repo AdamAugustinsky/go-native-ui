@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -603,5 +604,36 @@ func TestTypingStartsTheFilter(t *testing.T) {
 	in.AppendText("l")
 	if r.pl.typed(&in) {
 		t.Error("a shortcut does not")
+	}
+}
+
+// A directory that gains a few files between two refreshes must not make the
+// pane reallocate its row and selection buffers: they are made with slack.
+func TestRefreshOfAGrowingDirectoryAllocatesNothing(t *testing.T) {
+	mk := func(n int) *fs.Listing {
+		items := make([]item, n)
+		for i := range items {
+			items[i] = item{fmt.Sprintf("f%05d", i), fs.KindFile, 0, int64(i), "2026-10-01 10:00"}
+		}
+		return listing(fs.SortName, false, items...)
+	}
+	p := newTestPane(t, &fakeSrc{}, "/d", mk(1000))
+	p.v.selectOnly(p.v.entryAt(5), 5)
+	lists := [...]*fs.Listing{mk(1000), mk(1000), mk(1000)}
+	for _, l := range lists[:2] { // warm: the pane's two row buffers and the reconcile tables
+		deliver(p, l)
+		settle(t, p)
+	}
+	bigger := mk(1003)
+	var m0, m1 runtime.MemStats
+	runtime.ReadMemStats(&m0)
+	deliver(p, bigger)
+	settle(t, p)
+	runtime.ReadMemStats(&m1)
+	if p.v.nEntries() != 1003 || p.v.nSel != 1 {
+		t.Fatalf("refresh did not land: %d entries, %d selected", p.v.nEntries(), p.v.nSel)
+	}
+	if n := m1.Mallocs - m0.Mallocs; n != 0 {
+		t.Errorf("a refresh with 3 more entries allocated %d times (%d bytes)", n, m1.TotalAlloc-m0.TotalAlloc)
 	}
 }

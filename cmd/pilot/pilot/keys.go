@@ -11,6 +11,17 @@ import (
 func (pl *Pilot) update(c *ui.Context) {
 	in := c.Input()
 
+	// Coming back to the window: look at both folders again. The watchers have
+	// documented gaps (writes in the milliseconds before a watch registers,
+	// in-place writes in very large folders, stale subfolder times, renamed
+	// ancestors, network volumes), and this is when a person would notice.
+	// Selection and scroll position are kept, as for any relist.
+	if in.FocusGained {
+		for i := range pl.panes {
+			pl.Refresh(i, nil)
+		}
+	}
+
 	// The pane the pointer goes down in has the keyboard.
 	if in.Pressed[ui.ButtonLeft] {
 		for i := range pl.panes {
@@ -151,6 +162,13 @@ func (pl *Pilot) key(c *ui.Context, k ui.KeyEvent) {
 	// Shortcuts that work wherever the focus is.
 	switch {
 	case k.Code == ui.KeyTab && k.Mods&(ui.ModCtrl|ui.ModSuper|ui.ModAlt) == 0:
+		// Tab switches panes from the list and from either text field (the field
+		// is left, not given a tab character: its focus goes before it is built).
+		// A path being edited is dropped like Esc drops it; a filter stays.
+		if inPath {
+			a.path.SetString(a.dir)
+			a.pathErr = ""
+		}
 		pl.active ^= 1
 		c.SetFocus(0)
 		return

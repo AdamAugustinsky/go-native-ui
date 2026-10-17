@@ -32,6 +32,7 @@ var (
 	pGetFileInformationByHandleEx = win32.Proc(winK32, "GetFileInformationByHandleEx")
 	pGetFullPathNameW             = win32.Proc(winK32, "GetFullPathNameW")
 	pGetFileAttributesW           = win32.Proc(winK32, "GetFileAttributesW")
+	pGetFileAttributesExW         = win32.Proc(winK32, "GetFileAttributesExW")
 	pCreateEventW                 = win32.Proc(winK32, "CreateEventW")
 	pSetEvent                     = win32.Proc(winK32, "SetEvent")
 	pResetEvent                   = win32.Proc(winK32, "ResetEvent")

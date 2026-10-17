@@ -21,7 +21,7 @@ type nameSet struct {
 // reset empties the set and sizes it for up to n names.
 func (s *nameSet) reset(n int) {
 	sz := 16
-	for sz < 2*n {
+	for sz < 2*withSlack(n) {
 		sz <<= 1
 	}
 	if cap(s.t) < sz {
@@ -61,3 +61,9 @@ func (s *nameSet) has(h uint64) bool {
 
 // entryName is entry e's name in l.
 func entryName(l *fs.Listing, e int32) []byte { return l.Name(int(e)) }
+
+// withSlack is the capacity to make for n elements that a directory may grow
+// by: a refresh that brings a few more entries than the last listing must not
+// reallocate (the buffers only ever grow, so a shrinking and growing directory
+// settles at its largest).
+func withSlack(n int) int { return n + n/8 + 64 }

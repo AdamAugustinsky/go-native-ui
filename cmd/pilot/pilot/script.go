@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"gonativeui/fs"
+	"gonativeui/platform"
 	"gonativeui/ui"
 )
 
@@ -92,6 +93,8 @@ var benchSteps = [...]step{
 	{op: opWheel, a: 1, b: -30, n: 30},
 	{op: opClick, a: 1, b: 4},
 	{op: opIdle, n: 2},
+	{op: opKey, a: int(ui.KeyHome)}, // back to the top: the session must end where it began
+	{op: opIdle, n: 8},
 	{op: opKey, a: 'A', m: modPrim},
 	{op: opIdle, n: 3},
 	{op: opKey, a: int(ui.KeyEscape)},
@@ -312,6 +315,11 @@ func (b *Bench) Script(frame int, in *ui.Input) bool {
 	return true
 }
 
+// AtCycleStart implements app.CycleAligned: the next frame begins the session.
+func (b *Bench) AtCycleStart() bool {
+	return b.s.idx >= len(benchSteps) || (b.s.idx == 0 && b.s.t == 0)
+}
+
 // Cycles is how many times the session has run through.
 func (b *Bench) Cycles() int { return b.s.cycles }
 
@@ -320,7 +328,7 @@ func (b *Bench) Cycles() int { return b.s.cycles }
 // Both are listed and sorted before it returns.
 func NewSynthBench(rows int) *Bench {
 	synth := &SynthSource{}
-	src := fs.NewServiceWith(Wake, synth.List)
+	src := fs.NewServiceWith(platform.Wake, synth.List)
 	left, right := synthDir(rows), synthDir(max(rows/10, 100))
 	o := Options{Src: src, Home: "/", Loc: time.UTC}
 	for i, dir := range [2]string{left, right} {
@@ -340,7 +348,7 @@ func NewSynthBench(rows int) *Bench {
 // fs.Service with watching on.
 func NewDirBench(dir string) (*Bench, error) {
 	home, _ := os.UserHomeDir()
-	o := Options{Src: fs.NewService(Wake), Home: home}
+	o := Options{Src: fs.NewService(platform.Wake), Home: home}
 	for i := range o.Initial {
 		l := new(fs.Listing)
 		if err := fs.ListDir(dir, l); err != nil {

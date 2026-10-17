@@ -252,3 +252,82 @@ func TestDividerDragResizesThePanes(t *testing.T) {
 		t.Errorf("left pane %v wide, was %v: the drag did not widen it", w, w0)
 	}
 }
+
+func TestRegainingFocusRelistsBothPanes(t *testing.T) {
+	r := newDrive(t)
+	pl := r.d.Pilot
+	a, b := pl.panes[0], pl.panes[1]
+	r.rowAt(0, 2)
+	r.click(0)
+	r.frames(2)
+	n := len(r.src.lists)
+	r.frames(5)
+	if len(r.src.lists) != n {
+		t.Fatal("frames without a focus change list nothing")
+	}
+	r.feed(func(in *ui.Input) { in.FocusGained = true })
+	if got := r.src.lists[n:]; len(got) != 2 || got[0] != a.dir || got[1] != b.dir {
+		t.Fatalf("regaining focus lists %q, want both panes' folders", got)
+	}
+	// the new listings arrive with a file more: the selection stays
+	changed := append([]item{{"zz-new.txt", fs.KindFile, 0, 1, "2026-10-17 12:00"}}, sceneLeft...)
+	deliver(a, listing(fs.SortName, false, changed...))
+	deliver(b, listing(fs.SortName, false, sceneRight...))
+	r.settle()
+	if selected(a) != "docs" || a.v.nEntries() != len(sceneLeft)+1 {
+		t.Errorf("after the relist: selected %q, %d entries", selected(a), a.v.nEntries())
+	}
+	// no relist while a navigation is in flight (its result is fresh anyway)
+	a.request("/x", navUser, "")
+	n = len(r.src.lists)
+	r.feed(func(in *ui.Input) { in.FocusGained = true })
+	if got := r.src.lists[n:]; len(got) != 1 || got[0] != b.dir {
+		t.Errorf("with a navigation pending, lists %q", got)
+	}
+}
+
+// Tab in a text field leaves it for the other pane: no tab character is typed
+// into the field, the focus returns to a list, and the keyboard is the other
+// pane's.
+func TestTabInATextFieldSwitchesPanes(t *testing.T) {
+	r := newDrive(t)
+	pl := r.d.Pilot
+	a, b := pl.panes[0], pl.panes[1]
+
+	// the filter field
+	r.rowAt(0, 0)
+	r.click(0)
+	r.text("m")
+	if r.o.UI.FocusKey() != filterKey(0) {
+		t.Fatal("setup: the filter has the focus")
+	}
+	r.feed(func(in *ui.Input) {
+		in.MouseX, in.MouseY = r.x, r.y
+		in.PushKey(ui.KeyEvent{Code: ui.KeyTab, Down: true})
+		in.AppendText("\t") // what the platform sends along with the key
+	})
+	if pl.active != 1 || r.o.UI.FocusKey() != 0 {
+		t.Errorf("Tab in the filter: active %d focus %v", pl.active, r.o.UI.FocusKey())
+	}
+	if a.filter.String() != "m" || string(a.q) != "m" || !a.filterOpen {
+		t.Errorf("the filter took the Tab: text %q query %q open %v", a.filter.String(), a.q, a.filterOpen)
+	}
+
+	// the path field of the other pane (now active)
+	r.key('L', pl.primary())
+	r.text("~/x")
+	if r.o.UI.FocusKey() != pathKey(1) || b.path.String() != "~/x" {
+		t.Fatalf("setup: path field of pane 1: focus %v text %q", r.o.UI.FocusKey(), b.path.String())
+	}
+	r.feed(func(in *ui.Input) {
+		in.MouseX, in.MouseY = r.x, r.y
+		in.PushKey(ui.KeyEvent{Code: ui.KeyTab, Down: true})
+		in.AppendText("\t")
+	})
+	if pl.active != 0 || r.o.UI.FocusKey() != 0 {
+		t.Errorf("Tab in the path field: active %d focus %v", pl.active, r.o.UI.FocusKey())
+	}
+	if b.path.String() != b.dir || b.pathErr != "" {
+		t.Errorf("the edited path stays after Tab: %q (dir %q)", b.path.String(), b.dir)
+	}
+}

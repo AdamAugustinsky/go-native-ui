@@ -115,7 +115,7 @@ func (v *view) setSel(e int32, on bool) {
 func (v *view) sizeSel(n int) {
 	w := (n + 63) >> 6
 	if cap(v.sel) < w {
-		v.sel = make([]uint64, w)
+		v.sel = make([]uint64, withSlack(w))
 	}
 	v.sel = v.sel[:w]
 	clear(v.sel)

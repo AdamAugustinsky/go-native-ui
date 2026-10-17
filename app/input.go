@@ -244,6 +244,7 @@ func (t *translator) apply(e *platform.Event, txt []byte) bool {
 			return false
 		}
 		in.Focused = down
+		in.FocusGained = down
 		if !down { // a release that happens in another window never arrives: cancel, not click
 			for b := range in.Down {
 				in.Cancel(b)
