@@ -5,41 +5,32 @@ package text
 import (
 	"bytes"
 	"encoding/binary"
-	"hash/crc32"
+	"image"
+	"image/png"
 	"runtime"
 	"testing"
 )
 
-// A tiny PNG whose IHDR claims 100000×100000 pixels must be rejected before
-// the decoder allocates the image.
-func TestPNGHugeIHDRRejectedCheaply(t *testing.T) {
+// A PNG over the size limit must be rejected before the decoder allocates
+// its pixels. 4097×128 is one column over the 4096 limit; decoding it would
+// allocate ~2 MB, so a check made only after decoding fails the allocation
+// bound below.
+func TestPNGOversizeRejectedBeforeDecode(t *testing.T) {
 	var b bytes.Buffer
-	b.WriteString("\x89PNG\r\n\x1a\n")
-	ihdr := make([]byte, 13)
-	binary.BigEndian.PutUint32(ihdr[0:], 100000)
-	binary.BigEndian.PutUint32(ihdr[4:], 100000)
-	ihdr[8], ihdr[9] = 8, 6 // 8-bit RGBA
-	chunk := func(typ string, data []byte) {
-		var n [4]byte
-		binary.BigEndian.PutUint32(n[:], uint32(len(data)))
-		b.Write(n[:])
-		b.WriteString(typ)
-		b.Write(data)
-		binary.BigEndian.PutUint32(n[:], crc32.ChecksumIEEE(append([]byte(typ), data...)))
-		b.Write(n[:])
+	if err := png.Encode(&b, image.NewNRGBA(image.Rect(0, 0, 4097, 128))); err != nil {
+		t.Fatal(err)
 	}
-	chunk("IHDR", ihdr)
-	chunk("IEND", nil)
+	data := b.Bytes()
 
 	var m0, m1 runtime.MemStats
 	runtime.ReadMemStats(&m0)
-	_, _, _, err := pngPremultiplied(b.Bytes())
+	_, _, _, err := pngPremultiplied(data)
 	runtime.ReadMemStats(&m1)
 	if err == nil {
 		t.Fatal("oversized PNG accepted")
 	}
 	if d := m1.TotalAlloc - m0.TotalAlloc; d > 1<<20 {
-		t.Fatalf("rejecting it allocated %d bytes", d)
+		t.Fatalf("rejecting it allocated %d bytes (decoded before checking the size?)", d)
 	}
 }
 
