@@ -115,10 +115,15 @@ sources.
 **Rules:**
 
 1. **The first visible frame is a complete frame.** The window reaches the screen together with its first content frame, never before it.
-   - **macOS:** create the window without ordering it front and render the first frame into the `CAMetalLayer`. Then commit the present and `orderFront` in one `CATransaction`, presenting the first frame with `presentsWithTransaction`, then back to asynchronous presents. *Phase-2 experiment: confirm no empty frame reaches the screen.*
+   - **macOS:** create the window without ordering it front and render the first frame into the `CAMetalLayer`. Present the first frame with `presentsWithTransaction`, then switch back to asynchronous presents. That needs a different present path from today's `presentDrawable:`; Apple's required sequence is:
+     1. commit the command buffer;
+     2. `waitUntilScheduled`;
+     3. call the drawable's own `present` inside the `CATransaction` that also does `orderFront`.
+
+     *Phase-2 experiment: confirm no empty frame reaches the screen.*
    - **Windows:** create the window cloaked (`DWMWA_CLOAK`), present the first frame, then uncloak and show it. No white flash.
    - **Wayland:** a surface maps only when its first buffer is committed, so commit only a complete frame.
-   - **X11:** no background pixmap (no flash of background). Map the window, then draw immediately. *Phase-2 research: frame-drawn sync with compositors.*
+   - **X11: unresolved.** Mapping happens before drawing, and X11 leaves a newly mapped window's contents undefined, so a compositor may show it before the first swap. A `None` background pixmap only avoids the background clear. *Phase-2 research:* compositor frame synchronisation (`_NET_WM_SYNC_REQUEST` / frame-drawn), validated visually.
 2. **The main thread's critical path is OS window setup only.** On macOS that is ~92 ms of AppKit setup (P1). Workers start at the top of `main` and must finish before AppKit does:
    - read the initial directory (persisted last path), or render a persisted snapshot of the last listing validated by mtime, then revalidate;
    - load fonts, shape and rasterise only the glyphs of the visible rows;
