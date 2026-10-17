@@ -5,6 +5,8 @@ package gpu
 import (
 	"errors"
 	"fmt"
+	"strings"
+	"sync"
 	"unsafe"
 
 	"github.com/ebitengine/purego"
@@ -19,25 +21,30 @@ import (
 
 // EGL constants (Khronos egl.h / eglext.h).
 const (
-	eglNone                  = 0x3038
-	eglSurfaceType           = 0x3033
-	eglWindowBit             = 0x0004
-	eglRenderableType        = 0x3040
-	eglOpenGLBit             = 0x0008
-	eglOpenGLES3Bit          = 0x0040
-	eglRedSize               = 0x3024
-	eglGreenSize             = 0x3023
-	eglBlueSize              = 0x3022
-	eglAlphaSize             = 0x3021
-	eglOpenGLAPI             = 0x30A2
-	eglOpenGLESAPI           = 0x30A0
-	eglContextMajorVersion   = 0x3098 // == EGL_CONTEXT_CLIENT_VERSION
-	eglContextMinorVersion   = 0x30FB
-	eglContextProfileMask    = 0x30FD
-	eglContextCoreProfileBit = 0x0001
-	eglPlatformWaylandKHR    = 0x31D8
-	eglPlatformX11KHR        = 0x31D5
-	eglNativeVisualID        = 0x302E
+	eglNone                   = 0x3038
+	eglSurfaceType            = 0x3033
+	eglWindowBit              = 0x0004
+	eglRenderableType         = 0x3040
+	eglOpenGLBit              = 0x0008
+	eglOpenGLES3Bit           = 0x0040
+	eglRedSize                = 0x3024
+	eglGreenSize              = 0x3023
+	eglBlueSize               = 0x3022
+	eglAlphaSize              = 0x3021
+	eglOpenGLAPI              = 0x30A2
+	eglOpenGLESAPI            = 0x30A0
+	eglContextMajorVersion    = 0x3098 // == EGL_CONTEXT_CLIENT_VERSION
+	eglContextMinorVersion    = 0x30FB
+	eglContextProfileMask     = 0x30FD
+	eglContextCoreProfileBit  = 0x0001
+	eglPlatformWaylandKHR     = 0x31D8
+	eglPlatformX11KHR         = 0x31D5
+	eglNativeVisualID         = 0x302E
+	eglPbufferBit             = 0x0001
+	eglWidth                  = 0x3057
+	eglHeight                 = 0x3056
+	eglPlatformSurfacelessKHR = 0x31DD // EGL_MESA_platform_surfaceless
+	eglPlatformDeviceEXT      = 0x313F // EGL_EXT_platform_device
 
 	glColorBufferBit = 0x4000
 	maxConfigs       = 64
@@ -62,6 +69,7 @@ var eglf struct {
 	initialize, terminate, bindAPI, chooseConfig, getConfigAttrib         uintptr
 	createContext, destroyContext, createWindowSurface, destroySurface    uintptr
 	makeCurrent, swapInterval, swapBuffers, getError                      uintptr
+	getCurrentContext, createPbufferSurface                               uintptr
 }
 
 var wlegl struct{ create, resize, destroy uintptr }
@@ -102,6 +110,8 @@ func loadEGL() error {
 		{"eglSwapInterval", &eglf.swapInterval, false},
 		{"eglSwapBuffers", &eglf.swapBuffers, false},
 		{"eglGetError", &eglf.getError, false},
+		{"eglGetCurrentContext", &eglf.getCurrentContext, false},
+		{"eglCreatePbufferSurface", &eglf.createPbufferSurface, false},
 	} {
 		p, err := purego.Dlsym(h, s.name)
 		if (err != nil || p == 0) && !s.optional {
@@ -184,6 +194,9 @@ type Surface struct {
 	num                      int32
 	attr                     int32
 	cfgs                     [maxConfigs]uintptr
+
+	frame   Frame // Present's frame (kept here so Present doesn't allocate)
+	swapped bool  // result of the last EndFrame's eglSwapBuffers
 
 	Trace FirstPresentTrace // not recorded on this backend yet
 }
@@ -354,13 +367,59 @@ func (s *Surface) Resize(w, h int32, scale float32) {
 	}
 }
 
-// Present clears to the colour and swaps. On Wayland the swap commits the
-// surface, which also carries the frame callback requested before it.
+// Device and Queue return the EGLDisplay and the EGLContext, for
+// gpu.NewRenderer. The surface keeps owning them. (Names follow the other
+// backends: on EGL the "queue" is the context that commands are issued on.)
+func (s *Surface) Device() uintptr { return s.dpy }
+func (s *Surface) Queue() uintptr  { return s.ctx }
+
+// Frame is one frame being drawn: render into Target with Renderer.Encode,
+// then call EndFrame.
+type Frame struct {
+	CmdBuf uintptr // always 0: OpenGL has no command buffers; pass it to Encode as is
+	Target uintptr // framebuffer object name; 0 is the window's default framebuffer
+	W, H   int     // target size in pixels
+}
+
+// BeginFrame prepares a frame on the window's default framebuffer. It makes
+// the surface's context current on the calling thread if it is not already
+// (rendering threads should be locked with runtime.LockOSThread, as the
+// context is bound to the thread). It returns false if the surface is not
+// usable. Every successful BeginFrame must be followed by EndFrame on the
+// same thread.
+func (s *Surface) BeginFrame(f *Frame) bool {
+	if s.dpy == 0 || s.surf == 0 || s.w <= 0 || s.h <= 0 {
+		return false
+	}
+	if fr.Call0(eglf.getCurrentContext) != s.ctx {
+		if !ok(fr.Call4(eglf.makeCurrent, s.dpy, s.surf, s.surf, s.ctx)) {
+			return false
+		}
+	}
+	*f = Frame{Target: 0, W: int(s.w), H: int(s.h)}
+	return true
+}
+
+// EndFrame swaps the window's buffers. On Wayland the swap commits the
+// surface, which also carries the frame callback requested before it; on
+// X11 the blocking swap is the vsync throttle.
+func (s *Surface) EndFrame(f *Frame) {
+	s.swapped = ok(fr.Call2(eglf.swapBuffers, s.dpy, s.surf))
+	*f = Frame{}
+}
+
+// Present clears to the colour and swaps. It returns false if the frame
+// could not be started or the swap failed.
 func (s *Surface) Present(r, g, b, a float32) bool {
-	fr.Reset().Arg32(0).Arg32(0).Arg32(uint32(s.w)).Arg32(uint32(s.h)).Call(glf.viewport)
+	f := &s.frame
+	if !s.BeginFrame(f) {
+		return false
+	}
+	fr.Reset().Arg32(0).Arg32(0).Arg32(uint32(f.W)).Arg32(uint32(f.H)).Call(glf.viewport)
 	fr.Reset().ArgF32(r).ArgF32(g).ArgF32(b).ArgF32(a).Call(glf.clearColor)
 	fr.Call1(glf.clear, glColorBufferBit)
-	return ok(fr.Call2(eglf.swapBuffers, s.dpy, s.surf))
+	s.EndFrame(f)
+	return s.swapped
 }
 
 // RevealOnFirstFrame is a no-op: content-first startup isn't implemented
@@ -387,4 +446,176 @@ func (s *Surface) Destroy() {
 		fr.Call1(wlegl.destroy, s.win)
 	}
 	*s = Surface{}
+}
+
+// ---- Offscreen contexts (no window) ----
+
+// Attribute lists for windowless contexts (package variables: ffi frames
+// hold their addresses).
+var (
+	cfgOff     = [...]int32{eglSurfaceType, eglPbufferBit, eglRenderableType, eglOpenGLBit, eglRedSize, 8, eglGreenSize, 8, eglBlueSize, 8, eglAlphaSize, 8, eglNone}
+	cfgOffGLES = [...]int32{eglSurfaceType, eglPbufferBit, eglRenderableType, eglOpenGLES3Bit, eglRedSize, 8, eglGreenSize, 8, eglBlueSize, 8, eglAlphaSize, 8, eglNone}
+	pbufAttrs  = [...]int32{eglWidth, 1, eglHeight, 1, eglNone}
+)
+
+// offDisplays counts the offscreen renderers using each EGLDisplay, so that
+// the last one to go terminates it (displays are shared per platform
+// device, and eglTerminate is not reference counted).
+var offDisplays struct {
+	mu        sync.Mutex
+	users     map[uintptr]int
+	terminate map[uintptr]bool
+}
+
+// NewOffscreenRenderer creates an EGL display without a window system
+// connection, an OpenGL 3.3 core context on it (OpenGL ES 3.0 if that is all
+// the driver has), and a Renderer in that context, which it makes current on
+// the calling thread (lock the goroutine to its OS thread first). Destroy
+// releases all of it. Displays are tried in order: Mesa's surfaceless
+// platform (EGL_MESA_platform_surfaceless), then each device of
+// EGL_EXT_platform_device, then the default display. It returns an error
+// wrapping ErrNoDevice if none works.
+func NewOffscreenRenderer() (*Renderer, error) {
+	if err := loadEGL(); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrNoDevice, err)
+	}
+	r := &Renderer{ownsCtx: true}
+	var why []string
+	try := func(what string, dpy uintptr, terminate bool) bool {
+		if dpy == 0 {
+			why = append(why, what+": no display")
+			return false
+		}
+		if err := r.setupOffscreenContext(dpy, terminate); err != nil {
+			why = append(why, what+": "+err.Error())
+			return false
+		}
+		return true
+	}
+	ok1 := try("surfaceless", platformDisplay(eglPlatformSurfacelessKHR, 0), true)
+	if !ok1 {
+		for _, dev := range eglDevices() {
+			if ok1 = try("device", platformDisplay(eglPlatformDeviceEXT, dev), true); ok1 {
+				break
+			}
+		}
+	}
+	if !ok1 {
+		ok1 = try("default display", fr.Call1(eglf.getDisplay, 0), false)
+	}
+	if !ok1 {
+		return nil, fmt.Errorf("%w: %s", ErrNoDevice, strings.Join(why, "; "))
+	}
+	if err := r.init(); err != nil {
+		r.Destroy()
+		return nil, err
+	}
+	return r, nil
+}
+
+// platformDisplay calls eglGetPlatformDisplay(EXT) with no attributes.
+func platformDisplay(platform, native uintptr) uintptr {
+	if eglf.getPlatformDisplay != 0 {
+		if d := fr.Call3(eglf.getPlatformDisplay, platform, native, 0); d != 0 {
+			return d
+		}
+	}
+	if eglf.getPlatformDisplayEXT != 0 {
+		return fr.Call3(eglf.getPlatformDisplayEXT, platform, native, 0)
+	}
+	return 0
+}
+
+// eglDevices lists EGLDeviceEXT handles (EGL_EXT_device_enumeration).
+func eglDevices() []uintptr {
+	q := getProc("eglQueryDevicesEXT")
+	if q == 0 {
+		return nil
+	}
+	gls.num = 0
+	if !ok(fr.Call3(q, uintptr(len(gls.devs)), uintptr(unsafe.Pointer(&gls.devs[0])), uintptr(unsafe.Pointer(&gls.num)))) || gls.num <= 0 {
+		return nil
+	}
+	return append([]uintptr(nil), gls.devs[:min(int(gls.num), len(gls.devs))]...)
+}
+
+// setupOffscreenContext initializes dpy and makes a context current on it,
+// preferring desktop OpenGL 3.3 core, then ES 3. On failure nothing is left
+// allocated (the display's init is not undone: it may be shared).
+func (r *Renderer) setupOffscreenContext(dpy uintptr, terminate bool) error {
+	if !ok(fr.Call3(eglf.initialize, dpy, uintptr(unsafe.Pointer(&gls.maj)), uintptr(unsafe.Pointer(&gls.min)))) {
+		return errors.New("eglInitialize failed")
+	}
+	var last error
+	for _, gl := range [...]bool{true, false} {
+		api, cfg, ctxAttr := uintptr(eglOpenGLESAPI), &cfgOffGLES[0], &ctxGLES[0]
+		if gl {
+			api, cfg, ctxAttr = eglOpenGLAPI, &cfgOff[0], &ctxGL[0]
+		}
+		if !ok(fr.Call1(eglf.bindAPI, api)) {
+			last = errors.New("eglBindAPI failed")
+			continue
+		}
+		gls.num = 0
+		if !ok(fr.Call5(eglf.chooseConfig, dpy, uintptr(unsafe.Pointer(cfg)), uintptr(unsafe.Pointer(&gls.cfg[0])), 1, uintptr(unsafe.Pointer(&gls.num)))) || gls.num == 0 {
+			last = errors.New("no pbuffer-capable EGL config")
+			continue
+		}
+		ctx := fr.Call4(eglf.createContext, dpy, gls.cfg[0], 0, uintptr(unsafe.Pointer(ctxAttr)))
+		if ctx == 0 {
+			last = fmt.Errorf("eglCreateContext failed (EGL error 0x%x)", uint32(fr.Call0(eglf.getError)))
+			continue
+		}
+		// EGL_KHR_surfaceless_context first, a 1×1 pbuffer otherwise.
+		var pbuf uintptr
+		if !ok(fr.Call4(eglf.makeCurrent, dpy, 0, 0, ctx)) {
+			pbuf = fr.Call3(eglf.createPbufferSurface, dpy, gls.cfg[0], uintptr(unsafe.Pointer(&pbufAttrs[0])))
+			if pbuf == 0 || !ok(fr.Call4(eglf.makeCurrent, dpy, pbuf, pbuf, ctx)) {
+				if pbuf != 0 {
+					fr.Call2(eglf.destroySurface, dpy, pbuf)
+				}
+				fr.Call2(eglf.destroyContext, dpy, ctx)
+				last = fmt.Errorf("eglMakeCurrent failed (EGL error 0x%x)", uint32(fr.Call0(eglf.getError)))
+				continue
+			}
+		}
+		r.dpy, r.ctx, r.pbuf = dpy, ctx, pbuf
+		offDisplays.mu.Lock()
+		if offDisplays.users == nil {
+			offDisplays.users, offDisplays.terminate = map[uintptr]int{}, map[uintptr]bool{}
+		}
+		offDisplays.users[dpy]++
+		offDisplays.terminate[dpy] = terminate
+		offDisplays.mu.Unlock()
+		return nil
+	}
+	return last
+}
+
+// releaseOffscreen destroys the context created by NewOffscreenRenderer and
+// terminates its display when no other offscreen renderer uses it.
+func (r *Renderer) releaseOffscreen() {
+	if r.dpy == 0 {
+		return
+	}
+	if r.ctx != 0 {
+		fr.Call4(eglf.makeCurrent, r.dpy, 0, 0, 0)
+		if r.pbuf != 0 {
+			fr.Call2(eglf.destroySurface, r.dpy, r.pbuf)
+		}
+		fr.Call2(eglf.destroyContext, r.dpy, r.ctx)
+	}
+	offDisplays.mu.Lock()
+	offDisplays.users[r.dpy]--
+	last := offDisplays.users[r.dpy] <= 0
+	term := offDisplays.terminate[r.dpy]
+	if last {
+		delete(offDisplays.users, r.dpy)
+		delete(offDisplays.terminate, r.dpy)
+	}
+	offDisplays.mu.Unlock()
+	if last && term {
+		fr.Call1(eglf.terminate, r.dpy)
+	}
+	r.dpy, r.ctx, r.pbuf = 0, 0, 0
 }
