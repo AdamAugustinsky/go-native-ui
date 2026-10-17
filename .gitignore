@@ -4,3 +4,6 @@
 *.prof
 *.trace
 .DS_Store
+
+# third-party reference images (not ours to redistribute)
+/docs/design/ref/

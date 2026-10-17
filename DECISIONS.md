@@ -365,6 +365,31 @@ assumed for a private repository. None of this has run yet.
   - x/sys was removed in phase 1 (D2).
 - No third-party source is copied at present.
 
+## D17. Visual quality bar
+
+**Decision (user, 2026-10-16).** Interfaces must look modern. The
+benchmark is a recreation of Superlogical Rex's frontend (`cmd/rexlook`).
+The measured spec and acceptance method are in
+[docs/design/rex-benchmark.md](docs/design/rex-benchmark.md).
+
+- **Phase 2:** a static frame on macOS, compared against the public screenshot (flat-region ΔE ≤ 3, geometry ±1 px at 2×).
+- **Phase 3:** interactive, under the same zero-allocation, idle and half-bounce gates as everything else.
+
+**Boundaries.**
+- It is an internal benchmark, not our product identity.
+- The reference image stays out of git.
+- No Superlogical or third-party assets, fonts or code.
+
+**Cost.** Renderer additions:
+- multi-stop and four-corner gradients;
+- fade masks for truncated text;
+- device-pixel hairlines;
+- layered shadows;
+- system-symbol icons;
+- custom window chrome per OS.
+
+Linux needs an icon set of our own, with a licence to decide.
+
 ## Phase-0 review answers
 
 1. **D9 Linux text:** option B, pure-Go go-text.

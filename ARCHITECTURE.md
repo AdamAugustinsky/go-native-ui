@@ -17,6 +17,10 @@ File Pilot's engineering bar: it starts instantly, uses little memory, burns
 no CPU when idle, and responds to input immediately. The proof is a
 reference app, a dual-pane file browser.
 
+Two further bars (user, 2026-10-16):
+- **Startup: half-bounce or better.** The first visible frame is complete content (§3).
+- **Visuals: modern.** The benchmark is a recreation of Superlogical Rex's frontend in our framework (`cmd/rexlook`; [docs/design/rex-benchmark.md](docs/design/rex-benchmark.md)), held to the same performance gates.
+
 What we know about File Pilot, and where it comes from:
 
 | Fact | Source |
@@ -37,6 +41,7 @@ keep the product surface small.
 
 ```
 cmd/pilot             reference app: dual-pane browser (phase 4)
+cmd/rexlook           visual benchmark: Rex frontend recreation (static in phase 2, interactive in phase 3)
 ui                    immediate-mode builder, keyed box cache, layout, input, scroll, text edit
 text                  shaping + fallback + rasterization per OS, run cache, glyph atlas
 gpu                   Renderer interface; backends: metal (darwin), d3d11 (windows), gl (linux)
@@ -223,6 +228,13 @@ type Renderer interface {
   precompiled to DXBC in CI (fxc), embedded as bytes, so we don't depend on
   `d3dcompiler_47.dll`. GLSL 330 core / GLSL ES 300 text is compiled by
   the driver.
+- **Additions for the visual bar** ([rex-benchmark.md](docs/design/rex-benchmark.md)):
+  - backgrounds: three-or-more-stop and four-corner gradients;
+  - text: an alpha fade mask for truncated runs;
+  - edges: device-pixel hairlines and inner highlights, and two shadows per card;
+  - icons: OS system symbols rasterised into the atlas;
+  - focus dimming: an animated colour transform per subtree;
+  - window chrome: custom on each OS.
 - Partial presents (dirty rects) are a later optimisation. A full redraw
   of a file-browser frame is cheap; the point is that idle frames are
   never drawn.
