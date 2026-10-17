@@ -19,40 +19,47 @@ type Surface struct {
 	device, queue, layer objc.ID
 	rpd, color0          objc.ID // reused MTLRenderPassDescriptor and its colour attachment 0
 	presented            int
+	w, h                 int    // drawable size in pixels
+	frame                Frame  // Present's frame (kept here so Present doesn't allocate)
+	reveal               func() // shows the window inside the first frame's transaction (RevealOnFirstFrame)
 	Trace                FirstPresentTrace
 }
 
 var (
-	selNewCommandQueue = objc.Sel("newCommandQueue")
-	selLayer           = objc.Sel("layer")
-	selSetDevice       = objc.Sel("setDevice:")
-	selSetPixelFormat  = objc.Sel("setPixelFormat:")
-	selSetFBOnly       = objc.Sel("setFramebufferOnly:")
-	selSetMaxDrawables = objc.Sel("setMaximumDrawableCount:")
-	selSetDisplaySync  = objc.Sel("setDisplaySyncEnabled:")
-	selSetOpaque       = objc.Sel("setOpaque:")
-	selSetScale        = objc.Sel("setContentsScale:")
-	selSetDrawableSize = objc.Sel("setDrawableSize:")
-	selSetLayer        = objc.Sel("setLayer:")
-	selSetWantsLayer   = objc.Sel("setWantsLayer:")
-	selRenderPassDesc  = objc.Sel("renderPassDescriptor")
-	selColorAttach     = objc.Sel("colorAttachments")
-	selObjectAtIndexed = objc.Sel("objectAtIndexedSubscript:")
-	selSetLoadAction   = objc.Sel("setLoadAction:")
-	selSetStoreAction  = objc.Sel("setStoreAction:")
-	selSetClearColor   = objc.Sel("setClearColor:")
-	selSetTexture      = objc.Sel("setTexture:")
-	selNextDrawable    = objc.Sel("nextDrawable")
-	selTexture         = objc.Sel("texture")
-	selCommandBuffer   = objc.Sel("commandBuffer")
-	selRenderEncoder   = objc.Sel("renderCommandEncoderWithDescriptor:")
-	selEndEncoding     = objc.Sel("endEncoding")
-	selPresentDrawable = objc.Sel("presentDrawable:")
-	selCommit          = objc.Sel("commit")
-	selFlush           = objc.Sel("flush")
-	selRelease         = objc.Sel("release")
-	selAddPresented    = objc.Sel("addPresentedHandler:")
-	selPresentedTime   = objc.Sel("presentedTime")
+	selNewCommandQueue   = objc.Sel("newCommandQueue")
+	selLayer             = objc.Sel("layer")
+	selSetDevice         = objc.Sel("setDevice:")
+	selSetPixelFormat    = objc.Sel("setPixelFormat:")
+	selSetFBOnly         = objc.Sel("setFramebufferOnly:")
+	selSetMaxDrawables   = objc.Sel("setMaximumDrawableCount:")
+	selSetDisplaySync    = objc.Sel("setDisplaySyncEnabled:")
+	selSetOpaque         = objc.Sel("setOpaque:")
+	selSetScale          = objc.Sel("setContentsScale:")
+	selSetDrawableSize   = objc.Sel("setDrawableSize:")
+	selSetLayer          = objc.Sel("setLayer:")
+	selSetWantsLayer     = objc.Sel("setWantsLayer:")
+	selRenderPassDesc    = objc.Sel("renderPassDescriptor")
+	selColorAttach       = objc.Sel("colorAttachments")
+	selObjectAtIndexed   = objc.Sel("objectAtIndexedSubscript:")
+	selSetLoadAction     = objc.Sel("setLoadAction:")
+	selSetStoreAction    = objc.Sel("setStoreAction:")
+	selSetClearColor     = objc.Sel("setClearColor:")
+	selSetTexture        = objc.Sel("setTexture:")
+	selNextDrawable      = objc.Sel("nextDrawable")
+	selTexture           = objc.Sel("texture")
+	selCommandBuffer     = objc.Sel("commandBuffer")
+	selRenderEncoder     = objc.Sel("renderCommandEncoderWithDescriptor:")
+	selEndEncoding       = objc.Sel("endEncoding")
+	selPresentDrawable   = objc.Sel("presentDrawable:")
+	selCommit            = objc.Sel("commit")
+	selFlush             = objc.Sel("flush")
+	selRelease           = objc.Sel("release")
+	selAddPresented      = objc.Sel("addPresentedHandler:")
+	selSetPresentsWithTx = objc.Sel("setPresentsWithTransaction:")
+	selWaitScheduled     = objc.Sel("waitUntilScheduled")
+	selPresent           = objc.Sel("present")
+	selBegin             = objc.Sel("begin")
+	selPresentedTime     = objc.Sel("presentedTime")
 
 	mtlCreateSystemDefaultDevice uintptr
 	clsCATransaction             objc.ID
@@ -106,58 +113,120 @@ func (s *Surface) Resize(w, h int32, scale float32) {
 	}
 	objc.F.Reset().Arg(uintptr(s.layer)).Arg(uintptr(selSetScale)).ArgF64(float64(scale)).Call(objc.MsgSend)
 	objc.F.Reset().Arg(uintptr(s.layer)).Arg(uintptr(selSetDrawableSize)).ArgPoint(float64(w), float64(h)).Call(objc.MsgSend)
+	s.w, s.h = int(w), int(h)
 }
 
-// Present clears the next drawable to the colour and presents it. It
-// returns false if no drawable was available.
-func (s *Surface) Present(r, g, b, a float32) bool {
+// Device and Queue return the id<MTLDevice> and id<MTLCommandQueue>, for
+// gpu.NewRenderer. The surface keeps owning them.
+func (s *Surface) Device() uintptr { return uintptr(s.device) }
+func (s *Surface) Queue() uintptr  { return uintptr(s.queue) }
+
+// RevealOnFirstFrame makes the first EndFrame call show (typically the
+// platform Window's Show, for a window opened with Options.Hidden) inside
+// the Core Animation transaction that presents the first frame, so the
+// window appears with its content: no empty frame reaches the screen.
+func (s *Surface) RevealOnFirstFrame(show func()) { s.reveal = show }
+
+// Frame is one frame being drawn: render into Target with commands encoded
+// into CmdBuf, then call EndFrame.
+type Frame struct {
+	CmdBuf uintptr // id<MTLCommandBuffer>
+	Target uintptr // id<MTLTexture>: the drawable's texture, BGRA8Unorm
+	W, H   int     // target size in pixels
+
+	drawable objc.ID
+	taken    bool
+	pool     uintptr
+}
+
+// BeginFrame acquires the frame's drawable and a command buffer. It returns
+// false if no drawable is available: with a CAMetalDisplayLink driving the
+// layer (after the first frame) a drawable comes only with a frame tick, so
+// draw on EvFrame. Every successful BeginFrame must be followed by EndFrame
+// on the same thread.
+func (s *Surface) BeginFrame(f *Frame) bool {
 	F := objc.F
 	first := s.presented == 0
 	if first {
 		s.Trace.Start = platform.Now()
 	}
-	pool := F.Call0(objc.PoolPush)
+	f.pool = F.Call0(objc.PoolPush)
 	// A paced frame comes with its drawable (CAMetalDisplayLink); otherwise
 	// (first frame, unpaced) ask the layer, which may block.
 	d, linked := platform.TakeMetalDrawable()
-	drawable := objc.ID(d)
-	taken := drawable != 0
-	if !taken && !linked {
-		drawable = objc.Send(s.layer, selNextDrawable)
+	f.drawable, f.taken = objc.ID(d), d != 0
+	if !f.taken && !linked {
+		f.drawable = objc.Send(s.layer, selNextDrawable)
 	}
-	if drawable == 0 {
-		F.Call1(objc.PoolPop, pool)
+	if f.drawable == 0 {
+		F.Call1(objc.PoolPop, f.pool)
 		return false
 	}
 	if first {
 		s.Trace.Acquired = platform.Now()
 		if presentedBlock.invoke != 0 {
 			onGlassTarget.Store(&s.Trace.OnGlass)
-			objc.Send1(drawable, selAddPresented, uintptr(unsafe.Pointer(&presentedBlock)))
+			objc.Send1(f.drawable, selAddPresented, uintptr(unsafe.Pointer(&presentedBlock)))
 		}
 	}
-	objc.Send1(s.color0, selSetTexture, uintptr(objc.Send(drawable, selTexture)))
-	// MTLClearColor is 4 doubles: an HFA on arm64, MEMORY class on amd64 (ArgRect handles both).
-	F.Reset().Arg(uintptr(s.color0)).Arg(uintptr(selSetClearColor)).
-		ArgRect(float64(r), float64(g), float64(b), float64(a)).Call(objc.MsgSend)
-	cb := objc.Send(s.queue, selCommandBuffer)
-	enc := objc.Send1(cb, selRenderEncoder, uintptr(s.rpd))
-	objc.Send(enc, selEndEncoding)
-	objc.Send1(cb, selPresentDrawable, uintptr(drawable))
-	objc.Send(cb, selCommit)
-	if first {
-		s.Trace.Committed = platform.Now()
-		// Commit the implicit Core Animation transaction now instead of at the
-		// end of the run-loop turn: measured 171 → 139 ms to window-on-screen.
+	f.Target = uintptr(objc.Send(f.drawable, selTexture))
+	f.CmdBuf = uintptr(objc.Send(s.queue, selCommandBuffer))
+	f.W, f.H = s.w, s.h
+	return true
+}
+
+// EndFrame commits the frame's commands and presents its drawable.
+func (s *Surface) EndFrame(f *Frame) {
+	cb := objc.ID(f.CmdBuf)
+	if s.presented == 0 {
+		if s.reveal != nil {
+			// Apple's sequence for presenting in step with other Core
+			// Animation changes: commit, wait until scheduled, then present
+			// the drawable inside the transaction that also shows the window.
+			objc.Send1(s.layer, selSetPresentsWithTx, 1)
+			objc.Send(cb, selCommit)
+			objc.Send(cb, selWaitScheduled)
+			s.Trace.Committed = platform.Now()
+			objc.Send(clsCATransaction, selBegin)
+			objc.Send(f.drawable, selPresent)
+			s.reveal()
+			objc.Send(clsCATransaction, selCommit)
+			objc.Send1(s.layer, selSetPresentsWithTx, 0)
+		} else {
+			objc.Send1(cb, selPresentDrawable, uintptr(f.drawable))
+			objc.Send(cb, selCommit)
+			s.Trace.Committed = platform.Now()
+		}
+		// Commit the enclosing implicit transaction now instead of at the end
+		// of the run-loop turn: measured 171 → 139 ms to window-on-screen.
 		objc.Send(clsCATransaction, selFlush)
 		s.Trace.Done = platform.Now()
+	} else {
+		objc.Send1(cb, selPresentDrawable, uintptr(f.drawable))
+		objc.Send(cb, selCommit)
 	}
 	s.presented++
-	objc.Send1(s.color0, selSetTexture, 0)
-	if taken {
-		objc.Send(drawable, selRelease) // TakeMetalDrawable returned it retained
+	if f.taken {
+		objc.Send(f.drawable, selRelease) // TakeMetalDrawable returned it retained
 	}
-	F.Call1(objc.PoolPop, pool)
+	objc.F.Call1(objc.PoolPop, f.pool)
+	*f = Frame{}
+}
+
+// Present clears the next drawable to the colour and presents it. It
+// returns false if no drawable was available (see BeginFrame).
+func (s *Surface) Present(r, g, b, a float32) bool {
+	f := &s.frame
+	if !s.BeginFrame(f) {
+		return false
+	}
+	objc.Send1(s.color0, selSetTexture, f.Target)
+	// MTLClearColor is 4 doubles: an HFA on arm64, MEMORY class on amd64 (ArgRect handles both).
+	objc.F.Reset().Arg(uintptr(s.color0)).Arg(uintptr(selSetClearColor)).
+		ArgRect(float64(r), float64(g), float64(b), float64(a)).Call(objc.MsgSend)
+	objc.Send(objc.Send1(objc.ID(f.CmdBuf), selRenderEncoder, uintptr(s.rpd)), selEndEncoding)
+	objc.Send1(s.color0, selSetTexture, 0)
+	s.EndFrame(f)
 	return true
 }
 

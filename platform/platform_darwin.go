@@ -271,12 +271,10 @@ func Open(o Options) (*Window, error) {
 	markOpen("view+setup")
 	objc.Send(w.app, selFinishLaunching)
 	markOpen("finishLaunching")
-	objc.Send1(w.win, selMakeKeyFront, 0)
-	// A process started from a background shell may not activate itself
-	// (macOS 14 cooperative activation); its window would open occluded.
-	objc.Send(w.win, selOrderFrontRegardless)
-	objc.Send(w.app, selActivate)
-	markOpen("orderFront+activate")
+	if !o.Hidden {
+		w.Show()
+		markOpen("orderFront+activate")
+	}
 
 	// Display link (macOS 14+), created once the view is on a screen; paused
 	// until RequestFrame.
@@ -293,6 +291,19 @@ func Open(o Options) (*Window, error) {
 		osWake()
 	}
 	return w, nil
+}
+
+// Show orders the window front and activates the app. Open calls it unless
+// Options.Hidden is set.
+func (w *Window) Show() {
+	objc.Send1(w.win, selMakeKeyFront, 0)
+	// A process started from a background shell may not activate itself
+	// (macOS 14 cooperative activation); its window would open occluded.
+	objc.Send(w.win, selOrderFrontRegardless)
+	objc.Send(w.app, selActivate)
+	if w.link != 0 {
+		w.setRateRange(w.link) // the screen is known for certain once shown
+	}
 }
 
 func (w *Window) updateSize() bool {

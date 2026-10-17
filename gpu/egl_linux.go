@@ -363,6 +363,11 @@ func (s *Surface) Present(r, g, b, a float32) bool {
 	return ok(fr.Call2(eglf.swapBuffers, s.dpy, s.surf))
 }
 
+// RevealOnFirstFrame is a no-op: content-first startup isn't implemented
+// on this OS yet, and the window is shown at Open (platform Options.Hidden
+// is ignored here).
+func (s *Surface) RevealOnFirstFrame(show func()) {}
+
 // FrameSource is 0 on Linux.
 func (s *Surface) FrameSource() uintptr { return 0 }
 

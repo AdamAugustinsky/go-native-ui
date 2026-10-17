@@ -120,6 +120,7 @@ func main() {
 	gate := flag.Bool("gate", false, "bench: exit with status 3 unless idle presented nothing, animated frames allocated nothing and were vsync-paced (CI regression gate)")
 	allowUnpaced := flag.Bool("allow-unpaced", false, "gate: accept unpaced frames (no frame callbacks, e.g. display asleep)")
 	allocSites := flag.Bool("allocsites", false, "bench: profile every allocation and, if the measured frames allocate, print the allocating call stacks")
+	showFirst := flag.Bool("show-first", false, "startup: show the window at Open, before its first frame (old order, for comparison)")
 	waitFirst := flag.Bool("wait-first", false, "startup: pump OS events before drawing the first frame (old order, for comparison)")
 	deadline := flag.Duration("timeout", 0, "abort with exit status 2 if the run has not finished after this long (0: never)")
 	flag.Parse()
@@ -147,7 +148,7 @@ func main() {
 		return ms(t - execNs)
 	}
 
-	win, err := platform.Open(platform.Options{Title: "gnui spike", Width: 960, Height: 600})
+	win, err := platform.Open(platform.Options{Title: "gnui spike", Width: 960, Height: 600, Hidden: !*showFirst})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "open:", err)
 		os.Exit(1)
@@ -166,6 +167,9 @@ func main() {
 		os.Exit(1)
 	}
 	win.SetFrameSource(surf.FrameSource())
+	if !*showFirst {
+		surf.RevealOnFirstFrame(win.Show) // content-first: the window appears with its first frame
+	}
 	rep.OpenToSurfaceMs = ms(platform.Now() - tOpen)
 
 	if !*bench && !*exitFirst {

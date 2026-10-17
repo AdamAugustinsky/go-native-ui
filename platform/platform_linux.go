@@ -193,6 +193,10 @@ func (w *Window) Native() Native {
 	return Native{Display: w.x.dpy, X11Window: w.x.win}
 }
 
+// Show is a no-op: Options.Hidden is not implemented on this OS yet, so
+// the window is already visible.
+func (w *Window) Show() {}
+
 // SetFrameSource is a no-op on Linux (frame callbacks / swap pacing).
 func (w *Window) SetFrameSource(uintptr) {}
 

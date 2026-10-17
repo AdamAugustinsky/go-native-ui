@@ -326,6 +326,11 @@ func (s *Surface) Present(r, g, b, a float32) bool {
 	return true // other success codes (e.g. DXGI_STATUS_MODE_CHANGED)
 }
 
+// RevealOnFirstFrame is a no-op: content-first startup isn't implemented
+// on this OS yet, and the window is shown at Open (platform Options.Hidden
+// is ignored here).
+func (s *Surface) RevealOnFirstFrame(show func()) {}
+
 // FrameSource returns the DXGI frame-latency waitable handle, or 0.
 func (s *Surface) FrameSource() uintptr { return s.waitable }
 

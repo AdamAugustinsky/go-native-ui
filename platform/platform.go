@@ -148,6 +148,11 @@ type Event struct {
 type Options struct {
 	Title         string
 	Width, Height int // logical units (points / DIPs)
+	// Hidden opens the window without showing it; call Show, or hand Show to
+	// the GPU surface (macOS: Surface.RevealOnFirstFrame) so the window
+	// appears together with its first frame. Content-first startup is
+	// implemented on macOS only so far; elsewhere Hidden is ignored.
+	Hidden bool
 }
 
 // eventQueue is the reusable per-Window event and text storage.

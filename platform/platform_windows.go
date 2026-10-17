@@ -323,6 +323,10 @@ func (w *Window) Size() (int32, int32, float32) { return w.w, w.h, w.scale }
 // Native returns the OS handles for the gpu package.
 func (w *Window) Native() Native { return Native{HWND: w.hwnd, HInstance: w.hinst} }
 
+// Show is a no-op: Options.Hidden is not implemented on this OS yet, so
+// the window is already visible.
+func (w *Window) Show() {}
+
 // SetFrameSource installs the DXGI frame-latency waitable handle.
 func (w *Window) SetFrameSource(h uintptr) {
 	w.waitable = h
