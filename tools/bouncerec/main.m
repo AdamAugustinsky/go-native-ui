@@ -55,11 +55,16 @@ typedef struct {
 	int diffTol;       // per-channel diff vs baseline that counts as changed (-difftol)
 	double firstFrac;  // fraction of sampled pixels changed for "has pixels" (-firstfrac)
 	// Dock bounce.
-	int bounceTol;     // per-channel diff vs baseline that counts as changed (-bouncetol)
+	int bounceTol;     // per-channel diff vs the settled frame that counts as changed (-bouncetol)
 	int minCols;       // columns that must agree on the topmost changed row (-mincols)
-	double extraFactor;// bounce search height above the Dock, x Dock thickness (-extra)
-	int restGap;       // also scan this many rows inside the Dock below its top edge (-restgap)
-	int shadow;        // margin added around the target window when masking the bounce area (-shadow)
+	int minRun;        // consecutive changed rows that make a "top" (-minrun)
+	int dockPad;       // points above the Dock that are stored/analysed (-dockpad)
+	int tile;          // Dock icon size in points; 0 = unknown (-tile; read from com.apple.dock tilesize)
+	int commonCols;    // columns sharing one top row = Dock-wide change, not an icon; 0 = 2 x icon width (-commoncols)
+	double restTop;    // icon resting top row (depth); <0 = estimate (-resttop)
+	int shadow;        // margin added around the target window when masking the Dock strip (-shadow)
+	int motionPx;      // changed pixels between consecutive Dock strips that count as "Dock moving" (-motionpx)
+	int settleMs;      // quiet time after the last Dock motion before the recording may end (-settle)
 	double valleyFrac; // two bounce peaks are separate if the valley between is below this x the lower peak
 	double minPeak;    // smallest peak (pt) that counts as a bounce
 	double startThresh;// displacement (pt) that counts as "moving" (>1 pt per brief)
@@ -71,7 +76,8 @@ static Params defaultParams(void) {
 	p.probeStep = 8; p.skipW = 90; p.skipH = 46; p.border = 2; p.corner = 24;
 	p.tol = 24; p.slack = 1; p.matchFrac = 0.98; p.offX = -1; p.offY = -1;
 	p.diffTol = 12; p.firstFrac = 0.5; // a window appearing changes most of its region; unrelated screen activity (alerts, other apps) under the bounds must not count
-	p.bounceTol = 16; p.minCols = 12; p.extraFactor = 1.6; p.restGap = 0; p.shadow = 48;
+	p.bounceTol = 16; p.minCols = 12; p.minRun = 2; p.dockPad = 40; p.tile = 0; p.commonCols = 0;
+	p.restTop = -1; p.shadow = 48; p.motionPx = 30; p.settleMs = 1500;
 	p.valleyFrac = 0.35; p.minPeak = 4.0; p.startThresh = 1.0; p.maxInterp = 40.0;
 	return p;
 }
@@ -148,8 +154,9 @@ static double diffFraction(const Img *f, const Img *base, IRect win, const Param
 // ---- Dock geometry --------------------------------------------------------
 // The Dock is described in its own axes so bottom/left/right share one code
 // path: `along` runs along the Dock, `depth` runs from the screen edge into the
-// screen (bounces increase depth). Rows [0, thickness) are the Dock itself,
-// rows above are where a bouncing icon pokes out.
+// screen (a bounce increases depth). Rows [0, thickness) are the Dock itself
+// (thickness = NSScreen visibleFrame inset), rows above are the dockPad band
+// where a high bounce pokes out over the desktop.
 typedef struct { int edge; int thickness; int sw, sh; } DockGeom; // edge: 0 bottom, 1 left, 2 right
 static void dockXY(const DockGeom *g, int along, int depth, int *x, int *y) {
 	switch (g->edge) {
@@ -159,57 +166,229 @@ static void dockXY(const DockGeom *g, int along, int depth, int *x, int *y) {
 	}
 }
 static int dockAlongLen(const DockGeom *g) { return g->edge == 0 ? g->sw : g->sh; }
+// Strip depth stored/analysed per frame: the Dock plus dockPad points above it.
+static int dockDepth(const DockGeom *g, const Params *P) {
+	int d = g->thickness + P->dockPad, lim = g->edge == 0 ? g->sh : g->sw;
+	if (d > lim) d = lim;
+	return d > 500 ? 500 : d;
+}
 
-typedef struct { double disp; int colMin, colMax; } DockSample;
+// One captured frame of the Dock strip only (never the rest of the screen),
+// stored in Dock axes, column-major: px[(along*D + depth)*4] (BGRA).
+typedef struct {
+	double tMs;           // ms after the launch request
+	uint8_t *px;
+	int hasMask; IRect mask; // target window + shadow (display points): ignored when diffing
+} DockFrame;
 
-// Vertical displacement (points) of the bouncing icon relative to the Dock's
-// top edge, measured by diffing against the baseline. For each column along the
-// Dock, find the topmost row (largest depth) that changed. The icon is the
-// depth that at least `minCols` columns reach; narrower spikes (noise, a
-// cursor, an unrelated sliver of change) are ignored. Pixels covered by `excl`
-// rects (the target window plus its shadow) are ignored.
-static DockSample dockMeasure(const Img *f, const Img *base, const DockGeom *g,
-                              const IRect *excl, int nexcl, const Params *P) {
-	DockSample s = {0, -1, -1};
+static void copyDockStrip(const Img *f, const DockGeom *g, int D, uint8_t *dst) {
 	int along = dockAlongLen(g);
-	int floorD = g->thickness - P->restGap;
-	if (floorD < 0) floorD = 0;
-	int topD = g->thickness + (int)ceil(P->extraFactor * g->thickness);
-	if (topD > 500) topD = 500;
-	if (topD <= floorD) return s;
-	int hist[512];
-	memset(hist, 0, sizeof hist);
-	int *colTop = malloc(sizeof(int) * (size_t)along);
-	if (!colTop) return s;
-	for (int a = 0; a < along; a++) {
-		colTop[a] = -1;
-		for (int d = topD - 1; d >= floorD; d--) {
+	for (int a = 0; a < along; a++)
+		for (int d = 0; d < D; d++) {
 			int x, y;
 			dockXY(g, a, d, &x, &y);
-			int masked = 0;
-			for (int i = 0; i < nexcl; i++)
-				if (x >= excl[i].x && x < excl[i].x + excl[i].w && y >= excl[i].y && y < excl[i].y + excl[i].h) { masked = 1; break; }
-			if (masked) continue;
-			const uint8_t *a1 = pixAt(f, x, y), *b1 = pixAt(base, x, y);
-			if (!a1 || !b1) continue;
-			if (chanDiff(a1, b1) > P->bounceTol) { colTop[a] = d; hist[d]++; break; }
+			const uint8_t *p = pixAt(f, x, y);
+			uint8_t *o = dst + ((size_t)a * D + d) * 4;
+			if (p) memcpy(o, p, 4); else memset(o, 0, 4);
+		}
+}
+
+// Depth range [lo, hi] masked in column `a` by the frame's window rect.
+static int maskRange(const DockGeom *g, const DockFrame *fr, int a, int *lo, int *hi) {
+	if (!fr->hasMask) return 0;
+	IRect r = fr->mask;
+	int a0, a1, d0, d1; // along [a0, a1), depth [d0, d1]
+	switch (g->edge) {
+	case 1: a0 = r.y; a1 = r.y + r.h; d0 = r.x; d1 = r.x + r.w - 1; break;
+	case 2: a0 = r.y; a1 = r.y + r.h; d0 = g->sw - (r.x + r.w); d1 = g->sw - 1 - r.x; break;
+	default: a0 = r.x; a1 = r.x + r.w; d0 = g->sh - (r.y + r.h); d1 = g->sh - 1 - r.y; break;
+	}
+	if (a < a0 || a >= a1) return 0;
+	*lo = d0; *hi = d1;
+	return 1;
+}
+
+// Topmost row (largest depth <= start) of a run of >= minRun rows that differ
+// from the reference frame `ff`; -1 if none. Masked rows (either frame) break runs.
+static int scanColumn(const DockFrame *fk, const DockFrame *ff, const DockGeom *g, int a, int D, int start, const Params *P) {
+	int l1 = 0, h1 = -1, l2 = 0, h2 = -1;
+	int m1 = maskRange(g, fk, a, &l1, &h1), m2 = maskRange(g, ff, a, &l2, &h2);
+	const uint8_t *pa = fk->px + (size_t)a * D * 4, *pf = ff->px + (size_t)a * D * 4;
+	int run = 0;
+	for (int d = start; d >= 0; d--) {
+		if ((m1 && d >= l1 && d <= h1) || (m2 && d >= l2 && d <= h2)) { run = 0; continue; }
+		if (chanDiff(pa + d * 4, pf + d * 4) > P->bounceTol) {
+			if (++run >= P->minRun) return d + P->minRun - 1;
+		} else run = 0;
+	}
+	return -1;
+}
+
+// Number of pixels that differ between two strips (stops counting at stopAt).
+static int dockChangedPixels(const DockFrame *x, const DockFrame *y, const DockGeom *g, int D, int tol, int stopAt) {
+	int along = dockAlongLen(g), n = 0;
+	for (int a = 0; a < along; a++) {
+		int l1 = 0, h1 = -1, l2 = 0, h2 = -1;
+		int m1 = maskRange(g, x, a, &l1, &h1), m2 = maskRange(g, y, a, &l2, &h2);
+		const uint8_t *pa = x->px + (size_t)a * D * 4, *pb = y->px + (size_t)a * D * 4;
+		for (int d = 0; d < D; d++) {
+			if ((m1 && d >= l1 && d <= h1) || (m2 && d >= l2 && d <= h2)) continue;
+			if (chanDiff(pa + d * 4, pb + d * 4) > tol && ++n >= stopAt) return n;
 		}
 	}
-	int cum = 0, found = -1;
-	for (int d = topD - 1; d >= floorD; d--) {
-		cum += hist[d];
-		if (cum >= P->minCols) { found = d; break; }
-	}
-	if (found >= 0) {
-		s.disp = found + 1 - floorD;
+	return n;
+}
+
+// Common-mode rejection. While many columns (>= commonCols, i.e. more than an
+// icon's width) share the same topmost changed row, that row is not the new icon:
+// it is the Dock re-laying out (every icon sliding, the glass edge/highlight
+// shifting). Re-scan those columns below that row. A single icon (narrower than
+// commonCols) is never peeled, so the bouncing icon's own top survives.
+static void peelTops(int16_t *tops, const DockFrame *fk, const DockFrame *ff, const DockGeom *g, int D, int commonCols, const Params *P) {
+	int along = dockAlongLen(g);
+	int hist[512];
+	for (int iter = 0; iter < 80; iter++) {
+		memset(hist, 0, sizeof hist);
+		for (int a = 0; a < along; a++) if (tops[a] >= 0) hist[tops[a]]++;
+		int big = -1;
+		for (int d = D - 1; d >= 0; d--) if (hist[d] >= commonCols) { big = d; break; }
+		if (big < 0) return;
 		for (int a = 0; a < along; a++)
-			if (colTop[a] >= found - 12) {
-				if (s.colMin < 0) s.colMin = a;
-				s.colMax = a;
-			}
+			if (tops[a] == big) tops[a] = (int16_t)(big > 0 ? scanColumn(fk, ff, g, a, D, big - 1, P) : -1);
 	}
-	free(colTop);
-	return s;
+}
+
+// Depth reached by at least minCols of the columns inside (or outside) [c0, c1].
+static int reachDepth(const int16_t *tops, int along, int c0, int c1, int inside, int D, int minCols) {
+	int hist[512];
+	memset(hist, 0, sizeof hist);
+	for (int a = 0; a < along; a++) {
+		int in = a >= c0 && a <= c1;
+		if (in != inside || tops[a] < 0) continue;
+		hist[tops[a]]++;
+	}
+	int cum = 0;
+	for (int d = D - 1; d >= 0; d--) { cum += hist[d]; if (cum >= minCols) return d; }
+	return -1;
+}
+
+// Widest/heaviest run of columns with cnt >= need (gaps of up to 3 columns allowed).
+static int bestCluster(const int *cnt, int along, int need, int minWidth, int *c0, int *c1) {
+	long best = 0;
+	int found = 0;
+	for (int a = 0; a < along;) {
+		if (cnt[a] < need) { a++; continue; }
+		int start = a, end = a;
+		long w = cnt[a];
+		for (int b = a + 1; b < along && b - end <= 4; b++) if (cnt[b] >= need) { end = b; w += cnt[b]; }
+		if (end - start + 1 >= minWidth && w > best) { best = w; *c0 = start; *c1 = end; found = 1; }
+		a = end + 1;
+	}
+	return found;
+}
+
+typedef struct {
+	int ok;                    // a bounce icon was located
+	const char *method, *restMethod;
+	double restTop;            // row index (depth) of the icons' resting top
+	double assumedRest;        // same, from the symmetric-padding assumption (sanity check)
+	double maxDisp, slideEndMs;
+	int colMin, colMax, wideFrames;
+} DockAnalysis;
+
+// Bounce displacement series from stored Dock-strip frames.
+//
+// Every frame is diffed against the FINAL frame (the Dock after it has settled),
+// not against the pre-launch baseline: inserting the new icon re-lays out the
+// whole centred Dock, so against the baseline every icon looks changed for the
+// whole recording. Against the final frame only the slide (while it lasts) and
+// the bouncing icon differ.
+//   1. Per frame and column: topmost changed row (scanColumn), then common-mode
+//      peeling (peelTops) to drop rows shared by the whole Dock.
+//   2. "Wide" frames (changed columns > 3 icon widths) are the insertion slide.
+//      After the last wide frame only the bouncing icon differs: its columns are
+//      the largest cluster of columns changed in those frames.
+//   3. rest top = (lowest icon top seen after the slide) - minRun: a lift is only
+//      visible once it spans minRun rows, so the lowest visible top sits about
+//      minRun rows above rest. Falls back to symmetric Dock padding.
+//   4. displacement(t) = max(0, top reached by >= minCols columns around the icon
+//      (icon columns +- half an icon, because it also slides) - restTop). The final
+//      frame is appended at 0. Columns far from the icon are deliberately ignored:
+//      the glass widening at the Dock's ends is a full-height change that is not a bounce.
+// outT/outV must hold n entries.
+static void dockAnalyze(const DockFrame *fr, int n, const DockGeom *g, int D, const Params *P,
+                        double *outT, double *outV, int *outN, DockAnalysis *R) {
+	memset(R, 0, sizeof *R);
+	R->restTop = R->slideEndMs = NAN;
+	R->colMin = R->colMax = -1;
+	R->method = R->restMethod = "none";
+	*outN = 0;
+	if (n < 3 || D < 8 || D > 500) { R->method = "too few frames"; return; }
+	int along = dockAlongLen(g), m = n - 1;
+	int iconW = P->tile > 0 ? P->tile : 56, margin = iconW / 2 + 4;
+	int commonCols = P->commonCols > 0 ? P->commonCols : 2 * iconW;
+	const DockFrame *F = &fr[m];
+	R->assumedRest = P->tile > 0 ? g->thickness - (g->thickness - P->tile) / 2 - 1 : g->thickness - 14;
+	int16_t *tops = malloc(sizeof(int16_t) * (size_t)m * along), *raw = malloc(sizeof(int16_t) * (size_t)m * along);
+	int *rawCols = calloc((size_t)m, sizeof(int)), *cnt = calloc((size_t)along, sizeof(int)), *cnt2 = calloc((size_t)along, sizeof(int));
+	if (!tops || !raw || !rawCols || !cnt || !cnt2) {
+		R->method = "out of memory";
+		free(tops); free(raw); free(rawCols); free(cnt); free(cnt2);
+		return;
+	}
+	for (int k = 0; k < m; k++)
+		for (int a = 0; a < along; a++) {
+			int t = scanColumn(&fr[k], F, g, a, D, D - 1, P);
+			tops[(size_t)k * along + a] = (int16_t)t;
+			if (t >= 0) rawCols[k]++;
+		}
+	memcpy(raw, tops, sizeof(int16_t) * (size_t)m * along);
+	int s = -1;
+	for (int k = 0; k < m; k++) if (rawCols[k] > 3 * iconW) { s = k; R->wideFrames++; }
+	if (s >= 0) R->slideEndMs = fr[s].tMs;
+	for (int k = 0; k < m; k++) peelTops(tops + (size_t)k * along, &fr[k], F, g, D, commonCols, P);
+
+	int c0 = -1, c1 = -1, npost = 0;
+	for (int k = s + 1; k < m; k++)
+		if (rawCols[k] >= P->minCols) {
+			npost++;
+			for (int a = 0; a < along; a++) if (raw[(size_t)k * along + a] >= 0) cnt[a]++;
+		}
+	double rest = NAN;
+	if (npost > 0 && bestCluster(cnt, along, npost >= 3 ? 2 : 1, P->minCols, &c0, &c1)) {
+		R->method = "post-slide-cluster";
+		int tmin = 1 << 30, tfloor = P->tile > 0 ? P->tile / 2 : 24;
+		for (int k = s + 1; k < m; k++) {
+			int T = reachDepth(tops + (size_t)k * along, along, c0 - margin, c1 + margin, 1, D, P->minCols);
+			if (T >= tfloor && T < tmin) tmin = T;
+		}
+		if (P->restTop >= 0) { rest = P->restTop; R->restMethod = "flag -resttop"; }
+		else if (tmin < (1 << 30)) { rest = tmin - P->minRun; R->restMethod = "lowest post-slide icon top - minRun"; }
+		else { rest = R->assumedRest; R->restMethod = "assumed symmetric padding"; }
+		R->ok = 1;
+	} else {
+		rest = P->restTop >= 0 ? P->restTop : R->assumedRest;
+		R->restMethod = P->restTop >= 0 ? "flag -resttop" : "assumed symmetric padding";
+		for (int k = 0; k < m; k++)
+			for (int a = 0; a < along; a++) if (tops[(size_t)k * along + a] > rest + 2) cnt2[a]++;
+		if (bestCluster(cnt2, along, 1, P->minCols, &c0, &c1)) { R->method = "excess-over-assumed-rest"; R->ok = 1; }
+	}
+	R->restTop = rest;
+	R->colMin = R->ok ? c0 : -1;
+	R->colMax = R->ok ? c1 : -1;
+	for (int k = 0; k < m; k++) {
+		double v = 0;
+		if (R->ok) {
+			const int16_t *row = tops + (size_t)k * along;
+			int T = reachDepth(row, along, c0 - margin, c1 + margin, 1, D, P->minCols);
+			if (T >= 0 && T > rest) v = T - rest;
+		}
+		outT[k] = fr[k].tMs; outV[k] = v;
+		if (v > R->maxDisp) R->maxDisp = v;
+	}
+	outT[m] = fr[m].tMs; outV[m] = 0; // the settled frame is at rest by definition
+	*outN = n;
+	free(tops); free(raw); free(rawCols); free(cnt); free(cnt2);
 }
 
 // ---- Bounce-curve analysis ---------------------------------------------------
@@ -244,13 +423,33 @@ static double crossTime(const double *t, const double *v, int j, double thr, dou
 	return t[j - 1] + (thr - v[j - 1]) / (v[j] - v[j - 1]) * (t[j] - t[j - 1]);
 }
 
+// Time of the peak at sample i. Displacements are quantised to about a point and
+// frames are change-driven (a state is held until the next frame), so the apex is
+// the middle of the contiguous plateau of samples within 1 pt of the maximum; the
+// last plateau sample counts until the next frame (a few ms of bias on dense data). A single dense sample is refined with a
+// parabola through its neighbours.
+static double peakTime(const double *t, const double *v, int i, int n, const Params *P, double *val) {
+	double lim = v[i] - 1.0;
+	int l = i, r = i;
+	while (l > 0 && v[l - 1] >= lim) l--;
+	while (r + 1 < n && v[r + 1] >= lim) r++;
+	int hold = r + 1 < n && t[r + 1] - t[r] > P->maxInterp;
+	if (r > l || hold) { *val = v[i]; return 0.5 * (t[l] + (r + 1 < n ? t[r + 1] : t[r])); }
+	return refinePeak(t, v, i, n, val);
+}
+
 static void analyzeBounce(const double *t, const double *v, int n, const Params *P, BounceResult *r) {
 	r->count = 0; r->hasEnd = 0;
 	r->start = r->apex = r->apexDisp = r->end = r->period = NAN;
 	if (n < 2) return;
 	enum { MAXPK = 256 };
 	int pk[MAXPK], np = 0;
-	for (int i = 0; i < n; i++) {
+	// A bounce rises from rest: a series that starts above the threshold and only
+	// decays (e.g. the Dock glass finishing its widening) is not a bounce.
+	int firstRest = -1;
+	for (int i = 0; i < n; i++) if (v[i] <= P->startThresh) { firstRest = i; break; }
+	if (firstRest < 0) return;
+	for (int i = firstRest; i < n; i++) {
 		double left = i > 0 ? v[i - 1] : 0, right = i < n - 1 ? v[i + 1] : -1;
 		if (v[i] < P->minPeak || !(v[i] > left) || !(v[i] >= right)) continue;
 		if (np > 0) { // merge peaks that are not separated by a deep valley
@@ -265,7 +464,7 @@ static void analyzeBounce(const double *t, const double *v, int n, const Params 
 	r->count = np;
 	if (np == 0) return;
 	int a = pk[0];
-	r->apex = refinePeak(t, v, a, n, &r->apexDisp);
+	r->apex = peakTime(t, v, a, n, P, &r->apexDisp);
 	// start: first sample above the threshold on the way up to the first peak
 	int s = a;
 	while (s > 0 && v[s - 1] > P->startThresh) s--;
@@ -285,7 +484,7 @@ static void analyzeBounce(const double *t, const double *v, int n, const Params 
 	}
 	if (np >= 2) {
 		double first = r->apex, last = first, tmp;
-		last = refinePeak(t, v, pk[np - 1], n, &tmp);
+		last = peakTime(t, v, pk[np - 1], n, P, &tmp);
 		r->period = (last - first) / (np - 1);
 	}
 }
@@ -461,48 +660,6 @@ static void testMatch(void) {
 	free(base.buf); free(c.buf); bmFree(&ex);
 }
 
-static void testDock(void) {
-	Params P = defaultParams();
-	for (int edge = 0; edge < 3; edge++) {
-		DockGeom g = {edge, 70, 800, 600};
-		Canvas base = cvNew(800, 600, 100, 100, 100);
-		// Dock strip: dark glass.
-		for (int a = 0; a < dockAlongLen(&g); a++)
-			for (int d = 0; d < g.thickness; d++) { int x, y; dockXY(&g, a, d, &x, &y); cvRect(&base, x, y, 1, 1, 30, 30, 30); }
-		Img bi = cvImg(&base);
-		struct { int lift; double want; } cases[] = {{0, 0}, {10, 0}, {40, 28}, {80, 68}};
-		for (unsigned k = 0; k < sizeof cases / sizeof cases[0]; k++) {
-			Canvas f = cvCopy(&base);
-			// icon 50 wide at along 300..350, rests at depth 8..58, lifted by `lift`.
-			for (int a = 300; a < 350; a++)
-				for (int d = 8 + cases[k].lift; d < 58 + cases[k].lift; d++) { int x, y; dockXY(&g, a, d, &x, &y); cvRect(&f, x, y, 1, 1, 200, 50, 50); }
-			Img fi = cvImg(&f);
-			DockSample s = dockMeasure(&fi, &bi, &g, NULL, 0, &P);
-			// With restGap 0 only rows above the Dock's top edge count.
-			CHECK(fabs(s.disp - cases[k].want) < 0.5, "edge %d lift %d: disp %.1f want %.1f", edge, cases[k].lift, s.disp, cases[k].want);
-			if (cases[k].want > 0) CHECK(s.colMin >= 295 && s.colMax <= 355 && s.colMin <= 305 && s.colMax >= 345, "cols %d..%d", s.colMin, s.colMax);
-			free(f.buf);
-		}
-		// Narrow spike (5 columns) is ignored; a masked window region is ignored.
-		Canvas f = cvCopy(&base);
-		for (int a = 100; a < 105; a++)
-			for (int d = 70; d < 120; d++) { int x, y; dockXY(&g, a, d, &x, &y); cvRect(&f, x, y, 1, 1, 255, 255, 255); }
-		Img fi = cvImg(&f);
-		CHECK(dockMeasure(&fi, &bi, &g, NULL, 0, &P).disp == 0, "narrow spike must be ignored");
-		for (int a = 400; a < 500; a++)
-			for (int d = 70; d < 100; d++) { int x, y; dockXY(&g, a, d, &x, &y); cvRect(&f, x, y, 1, 1, 255, 255, 255); }
-		fi = cvImg(&f);
-		DockSample unmasked = dockMeasure(&fi, &bi, &g, NULL, 0, &P);
-		CHECK(unmasked.disp > 20, "unmasked change seen (%.1f)", unmasked.disp);
-		IRect ex[1];
-		int x0, y0, x1, y1;
-		dockXY(&g, 390, 60, &x0, &y0); dockXY(&g, 510, 110, &x1, &y1);
-		ex[0] = (IRect){x0 < x1 ? x0 : x1, y0 < y1 ? y0 : y1, abs(x1 - x0) + 1, abs(y1 - y0) + 1};
-		CHECK(dockMeasure(&fi, &bi, &g, ex, 1, &P).disp == 0, "masked change must be ignored");
-		free(f.buf); free(base.buf);
-	}
-}
-
 // h(t) for `nb` parabolic hops of height `hgt`, period `per`, first start at `t0`.
 static double hop(double t, double t0, double per, int nb, double hgt) {
 	for (int i = 0; i < nb; i++) {
@@ -522,7 +679,7 @@ static void testBounce(void) {
 	analyzeBounce(t, v, n, &P, &r);
 	CHECK(r.count == 3, "count %d", r.count);
 	CHECK(fabs(r.start - 100) < 8, "start %.1f", r.start);
-	CHECK(fabs(r.apex - 300) < 4, "apex %.1f", r.apex);
+	CHECK(fabs(r.apex - 300) <= 5, "apex %.1f", r.apex);
 	CHECK(r.hasEnd && fabs(r.end - 500) < 8, "end %.1f", r.end);
 	CHECK(fabs(r.period - 400) < 5, "period %.1f", r.period);
 	HalfBounce h = halfBounce(250, &r, 1);
@@ -548,7 +705,7 @@ static void testBounce(void) {
 	analyzeBounce(t, v, n, &P, &r);
 	CHECK(r.count == 1 && r.hasEnd, "driven count %d", r.count);
 	CHECK(r.start >= 700 && r.start < 720, "no interpolation across the gap: start %.1f", r.start);
-	CHECK(fabs(r.apex - 904) < 4 && fabs(r.end - 1104) < 12, "driven apex %.1f end %.1f", r.apex, r.end);
+	CHECK(fabs(r.apex - 904) <= 5 && fabs(r.end - 1104) < 12, "driven apex %.1f end %.1f", r.apex, r.end);
 	CHECK(isnan(r.period), "single bounce has no period");
 
 	// Shallow valley (30 of 40 pt) between two overlapping hops: one bounce, not two.
@@ -566,6 +723,11 @@ static void testBounce(void) {
 	analyzeBounce(t, v, n, &P, &r);
 	CHECK(r.count == 1 && !r.hasEnd, "cut count %d hasEnd %d", r.count, r.hasEnd);
 
+	// Starts high and only decays (glass finishing its widening): not a bounce.
+	for (int i = 0; i < 40; i++) { t[i] = i * 8; v[i] = i < 30 ? 13 - i * 0.4 : 0; }
+	analyzeBounce(t, v, 40, &P, &r);
+	CHECK(r.count == 0, "decay-only series count %d", r.count);
+
 	// No bounce at all.
 	for (int i = 0; i < 50; i++) { t[i] = i * 8; v[i] = 0; }
 	analyzeBounce(t, v, 50, &P, &r);
@@ -574,6 +736,139 @@ static void testBounce(void) {
 	CHECK(h.pass == -1, "no bounce -> unknown");
 	h = halfBounce(NAN, &r, 1);
 	CHECK(h.pass == 0, "no content -> fail");
+}
+
+// Dock axes: strip copy and window-mask ranges must agree with dockXY for all three edges.
+static void testDockAxes(void) {
+	for (int edge = 0; edge < 3; edge++) {
+		DockGeom g = {edge, 70, 800, 600};
+		Canvas c = cvNew(800, 600, 100, 100, 100);
+		int x, y;
+		dockXY(&g, 123, 17, &x, &y);
+		cvRect(&c, x, y, 1, 1, 1, 2, 3);
+		Img ci = cvImg(&c);
+		int D = 40;
+		uint8_t *strip = malloc((size_t)dockAlongLen(&g) * D * 4);
+		copyDockStrip(&ci, &g, D, strip);
+		const uint8_t *p = strip + ((size_t)123 * D + 17) * 4;
+		CHECK(p[0] == 1 && p[1] == 2 && p[2] == 3, "edge %d: strip pixel (%d,%d,%d)", edge, p[0], p[1], p[2]);
+		const uint8_t *q = strip + ((size_t)123 * D + 18) * 4;
+		CHECK(q[0] == 100, "edge %d: neighbour untouched", edge);
+		free(strip);
+		// Window rect covering along 390..510, depth 60..110.
+		int x0, y0, x1, y1;
+		dockXY(&g, 390, 60, &x0, &y0); dockXY(&g, 510, 110, &x1, &y1);
+		DockFrame fr = {0, NULL, 1, {x0 < x1 ? x0 : x1, y0 < y1 ? y0 : y1, abs(x1 - x0) + 1, abs(y1 - y0) + 1}};
+		int lo = -1, hi = -1;
+		CHECK(maskRange(&g, &fr, 400, &lo, &hi) && lo == 60 && hi == 110, "edge %d: mask range %d..%d", edge, lo, hi);
+		CHECK(!maskRange(&g, &fr, 380, &lo, &hi) && !maskRange(&g, &fr, 520, &lo, &hi), "edge %d: mask outside", edge);
+		free(c.buf);
+	}
+}
+
+// ---- Synthetic wide Dock (the real MacBook case) ------------------------------
+// 1512 pt wide Dock, 74 pt thick (visibleFrame inset), 48 pt icons resting at rows
+// 13..60. Inserting the new (23rd) icon re-lays the centred Dock out: for 250 ms
+// every other icon slides by half an icon (28 pt) and the glass widens, and the
+// glass top-edge highlight (row 73) changes along its whole length. Meanwhile the
+// new icon hops twice, peak 10 pt: its top reaches row 70, BELOW the boundary.
+enum { kSynthAlong = 1512, kSynthD = 114 };
+static void synthSet(uint8_t *buf, int a, int d, int b, int g, int r) {
+	if (a < 0 || a >= kSynthAlong || d < 0 || d >= kSynthD) return;
+	uint8_t *p = buf + ((size_t)a * kSynthD + d) * 4;
+	p[0] = (uint8_t)b; p[1] = (uint8_t)g; p[2] = (uint8_t)r; p[3] = 255;
+}
+static int synthLift(double t, int bounce) { return bounce ? (int)lround(hop(t, 100, 350, 2, 10)) : 0; }
+static void synthDock(uint8_t *buf, double t, int bounce) {
+	int off = (int)lround(28.0 * (1.0 - fmin(t, 250.0) / 250.0));
+	int gx0 = 88 + off, gx1 = 1403;
+	for (int a = 0; a < kSynthAlong; a++)
+		for (int d = 0; d < kSynthD; d++) {
+			int v = 110; // wallpaper
+			if (a >= gx0 && a <= gx1 && d < 74) v = d >= 71 ? (off ? 210 : 150) : 70; // glass + 3-row top-edge highlight, brighter while the Dock re-lays out
+			synthSet(buf, a, d, v, v, v);
+		}
+	for (int i = 0; i < 23; i++) {
+		int x0 = 100 + i * 57 + (i < 22 ? off : 0), lift = i == 22 ? synthLift(t, bounce) : 0;
+		for (int a = x0; a < x0 + 48; a++)
+			for (int d = 13 + lift; d < 61 + lift; d++) synthSet(buf, a, d, 160 + (i * 37) % 90, 30 + (i * 91) % 60, 140 + (i * 53) % 100);
+	}
+}
+
+// Emit frames the way ScreenCaptureKit would: only when the screen changed, at most every 8 ms.
+static int synthFrames(DockFrame *out, int bounce) {
+	size_t sz = (size_t)kSynthAlong * kSynthD * 4;
+	uint8_t *cur = malloc(sz), *last = malloc(sz);
+	synthDock(last, 0, 0);
+	int n = 0;
+	double lastT = -1e9;
+	for (int ms = 1; ms <= 1200; ms++) {
+		synthDock(cur, ms, bounce);
+		int changed = memcmp(cur, last, sz) != 0;
+		if (changed && (ms - lastT >= 8 || ms == 1200)) {
+			out[n].tMs = ms; out[n].hasMask = 0; out[n].px = malloc(sz); memcpy(out[n].px, cur, sz);
+			memcpy(last, cur, sz); lastT = ms; n++;
+		}
+	}
+	free(cur); free(last);
+	return n;
+}
+
+static void testDockSlide(void) {
+	Params P = defaultParams();
+	P.tile = 48;
+	DockGeom g = {0, 74, 1512, 982};
+	DockFrame *fr = calloc(400, sizeof *fr);
+	double *t = malloc(sizeof(double) * 400), *v = malloc(sizeof(double) * 400);
+	int outN = 0;
+	DockAnalysis A;
+	BounceResult r;
+
+	// Slide only: no bounce. Everything shifts, nothing hops.
+	int n = synthFrames(fr, 0);
+	CHECK(n > 20 && n < 60, "slide-only frame count %d", n);
+	dockAnalyze(fr, n, &g, kSynthD, &P, t, v, &outN, &A);
+	analyzeBounce(t, v, outN, &P, &r);
+	// (The glass widening at the Dock's end shows up as a decaying full-height change; it must not become a bounce.)
+	CHECK(r.count == 0, "slide alone must not read as a bounce (count %d, max %.1f, method %s)", r.count, A.maxDisp, A.method);
+	for (int i = 0; i < n; i++) free(fr[i].px);
+
+	// Slide + bounce.
+	memset(fr, 0, 400 * sizeof *fr);
+	n = synthFrames(fr, 1);
+	dockAnalyze(fr, n, &g, kSynthD, &P, t, v, &outN, &A);
+	analyzeBounce(t, v, outN, &P, &r);
+	// Ground truth: the same integer lift sampled every millisecond.
+	double tt[1300], tv[1300];
+	for (int ms = 0; ms < 1300; ms++) { tt[ms] = ms; tv[ms] = synthLift(ms, 1); }
+	BounceResult tr;
+	analyzeBounce(tt, tv, 1300, &P, &tr);
+	printf("  frames %d, method %s, restTop %.0f (%s), icon cols %d..%d, slide end %.0f ms, wide frames %d\n",
+	       n, A.method, A.restTop, A.restMethod, A.colMin, A.colMax, A.slideEndMs, A.wideFrames);
+	if (getenv("BR_DEBUG")) for (int i = 0; i < outN; i++) printf("    t=%.0f v=%.0f\n", t[i], v[i]);
+	printf("  measured start %.1f apex %.1f end %.1f count %d | truth start %.1f apex %.1f end %.1f count %d\n",
+	       r.start, r.apex, r.end, r.count, tr.start, tr.apex, tr.end, tr.count);
+	CHECK(A.ok && strcmp(A.method, "post-slide-cluster") == 0, "method %s", A.method);
+	CHECK(A.colMin >= 1350 && A.colMin <= 1358 && A.colMax >= 1397 && A.colMax <= 1405, "icon columns %d..%d (want ~1354..1401)", A.colMin, A.colMax);
+	CHECK(fabs(A.restTop - 60) <= 1, "restTop %.1f (want 60)", A.restTop);
+	CHECK(A.slideEndMs > 200 && A.slideEndMs < 260, "slide end %.1f", A.slideEndMs);
+	CHECK(r.count == 2 && tr.count == 2, "bounce count %d (truth %d)", r.count, tr.count);
+	CHECK(fabs(r.start - tr.start) <= 10, "start %.1f vs %.1f", r.start, tr.start);
+	CHECK(fabs(r.apex - tr.apex) <= 10, "apex %.1f vs %.1f", r.apex, tr.apex);
+	CHECK(r.hasEnd && fabs(r.end - tr.end) <= 10, "end %.1f vs %.1f", r.end, tr.end);
+	CHECK(fabs(r.period - tr.period) <= 12, "period %.1f vs %.1f", r.period, tr.period);
+	HalfBounce h = halfBounce(150, &r, 1); // content on screen while the first hop is still rising
+	CHECK(h.pass == 1, "content at 150 ms is before the apex");
+	h = halfBounce(300, &r, 1);
+	CHECK(h.pass == 0, "content at 300 ms is after the apex");
+
+	// A user-supplied rest top is honoured.
+	P.restTop = 60;
+	dockAnalyze(fr, n, &g, kSynthD, &P, t, v, &outN, &A);
+	CHECK(A.ok && A.restTop == 60 && strcmp(A.restMethod, "flag -resttop") == 0, "-resttop override");
+
+	for (int i = 0; i < n; i++) free(fr[i].px);
+	free(fr); free(t); free(v);
 }
 
 static void testPNG(NSString *tmp) {
@@ -608,8 +903,9 @@ static int runSelfTest(void) {
 	};
 	NSString *tmp = NSTemporaryDirectory();
 	section("match/diff fractions (empty, partial, complete, shift, tolerance)", ^{ testMatch(); });
-	section("dock displacement (bottom/left/right, spike + window mask)", ^{ testDock(); });
+	section("dock axes (strip copy + window mask, bottom/left/right)", ^{ testDockAxes(); });
 	section("bounce curve (start/apex/end/period/count, change-driven gaps, half-bounce)", ^{ testBounce(); });
+	section("wide Dock: insertion slide + bounce below the visibleFrame boundary", ^{ testDockSlide(); });
 	section("expected PNG load + 2x->1x downsample", ^{ testPNG(tmp); });
 	printf("%s\n", gFail ? "SELFTEST FAIL" : "SELFTEST PASS");
 	return gFail ? 1 : 0;
@@ -624,7 +920,7 @@ static double rnd(double v, int dec) { double m = pow(10, dec); return round(v *
 static id jnum(double v) { return isnan(v) || isinf(v) ? (id)[NSNull null] : (id)@(rnd(v, 3)); }
 
 typedef struct {
-	NSString *target, *expect, *out, *videoDir;
+	NSString *target, *expect, *out, *videoDir, *dockVideoDir;
 	double timeout;      // seconds after launch
 	int warmMs;          // wait after first frame before launching
 	int keep, fps, expectDiv, verbose;
@@ -689,13 +985,13 @@ enum { kRing = 3 };
 	double tWindowListed, tFirstPixels, tComplete;
 	int serFirst, serComplete, partial;
 	NSMutableArray *partialTimes, *winFrames, *notes;
-	// dock series
-	double *sT, *sV; int sN, sCap;
-	double maxDisp; int iconColMin, iconColMax;
+	// Dock strip frames, analysed after the recording against the settled frame
+	DockFrame *dfr; int dn, dcap, dmax, dockD; DockFrame baseStrip;
+	int64_t lastMotionNs; BOOL sawMotion; int lastMotionIdx; BOOL dockCapped;
 	double clockCheckMs, displayVsPtsMs;
-	dispatch_group_t videoGroup; int videoCount;
+	dispatch_group_t videoGroup; int videoCount, dockVideoCount;
 	SCStream *stream; NSRunningApplication *app;
-	NSString *streamError;
+	NSString *streamError; BOOL dockSettled;
 }
 - (instancetype)initWithOptions:(Options)o;
 - (int)run; // blocking; returns exit code
@@ -710,11 +1006,11 @@ enum { kRing = 3 };
 		firstFrameSem = dispatch_semaphore_create(0);
 		tWindowListed = tFirstPixels = tComplete = NAN;
 		partialTimes = [NSMutableArray array]; winFrames = [NSMutableArray array]; notes = [NSMutableArray array];
-		sCap = 4096; sT = malloc(sizeof(double) * sCap); sV = malloc(sizeof(double) * sCap);
+		dcap = 256; dfr = calloc((size_t)dcap, sizeof(DockFrame));
+		lastMotionIdx = -1;
 		clockCheckMs = displayVsPtsMs = NAN;
 		videoGroup = dispatch_group_create();
 		scale = 1;
-		iconColMin = iconColMax = -1;
 	}
 	return self;
 }
@@ -790,6 +1086,8 @@ enum { kRing = 3 };
 	}
 }
 
+static size_t dockBytesFor(const DockGeom *g, int D) { return (size_t)dockAlongLen(g) * (size_t)D * 4; }
+
 static IRect toIRect(CGRect b, int ox, int oy) {
 	return (IRect){(int)lrint(b.origin.x) - ox, (int)lrint(b.origin.y) - oy, (int)lrint(b.size.width), (int)lrint(b.size.height)};
 }
@@ -850,19 +1148,29 @@ static IRect toIRect(CGRect b, int ox, int oy) {
 		[self evalWindowFrame:&f base:&base tMs:tMs win:winRect];
 	}
 
-	// ---- dock bounce ----
+	// ---- Dock strip (analysed after the recording; see dockAnalyze) ----
 	if (dockAvail) {
-		IRect ex1[1];
-		int nex = 0;
-		if (haveLastWin) { // mask the window and its shadow so its pixels don't read as an icon
-			int s = O.P.shadow;
-			ex1[0] = (IRect){lastWin.x - s, lastWin.y - s, lastWin.w + 2 * s, lastWin.h + 2 * s};
-			nex = 1;
+		if (!baseStrip.px) { // pre-launch Dock, only used as the first reference for the "Dock moving" test
+			baseStrip.px = malloc(dockBytesFor(&dock, dockD));
+			copyDockStrip(&base, &dock, dockD, baseStrip.px);
 		}
-		DockSample ds = dockMeasure(&f, &base, &dock, ex1, nex, &O.P);
-		if (sN == sCap) { sCap *= 2; sT = realloc(sT, sizeof(double) * sCap); sV = realloc(sV, sizeof(double) * sCap); }
-		sT[sN] = tMs; sV[sN] = ds.disp; sN++;
-		if (ds.disp > maxDisp) { maxDisp = ds.disp; iconColMin = ds.colMin; iconColMax = ds.colMax; }
+		if (dn >= dmax) {
+			if (!dockCapped) { dockCapped = YES; [self note:[NSString stringWithFormat:@"Dock strip store full (%d frames); later frames were not analysed", dmax]]; }
+		} else {
+			DockFrame cur = {tMs, malloc(dockBytesFor(&dock, dockD)), 0, {0, 0, 0, 0}};
+			copyDockStrip(&f, &dock, dockD, cur.px);
+			if (haveLastWin) { // mask the window and its shadow so its pixels don't read as an icon
+				int sh = O.P.shadow;
+				cur.hasMask = 1;
+				cur.mask = (IRect){lastWin.x - sh, lastWin.y - sh, lastWin.w + 2 * sh, lastWin.h + 2 * sh};
+			}
+			const DockFrame *prev = dn ? &dfr[dn - 1] : &baseStrip;
+			if (dockChangedPixels(prev, &cur, &dock, dockD, O.P.bounceTol, O.P.motionPx) >= O.P.motionPx) {
+				lastMotionNs = ptsNs; sawMotion = YES; lastMotionIdx = dn;
+			}
+			if (dn == dcap) { dcap *= 2; dfr = realloc(dfr, sizeof(DockFrame) * (size_t)dcap); }
+			dfr[dn++] = cur;
+		}
 	}
 	CVPixelBufferUnlockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);
 
@@ -908,6 +1216,9 @@ static void waitOn(dispatch_semaphore_t s, double secs) { dispatch_semaphore_wai
 	dispW = (int)disp.width; dispH = (int)disp.height;
 	dispOX = (int)lrint(disp.frame.origin.x); dispOY = (int)lrint(disp.frame.origin.y);
 	dock.sw = dispW; dock.sh = dispH;
+	dockD = dockDepth(&dock, &O.P);
+	dmax = dockAvail ? (int)fmin(2400.0, 1.5e9 / (double)dockBytesFor(&dock, dockD)) : 0; // ~1.5 GB cap
+	if (O.dockVideoDir) [[NSFileManager defaultManager] createDirectoryAtPath:O.dockVideoDir withIntermediateDirectories:YES attributes:nil error:nil];
 
 	// Stream: 1x (point-sized) BGRA, change-driven frames at up to the display rate.
 	SCContentFilter *filter = [[SCContentFilter alloc] initWithDisplay:disp excludingWindows:@[]];
@@ -957,11 +1268,23 @@ static void waitOn(dispatch_semaphore_t s, double secs) { dispatch_semaphore_wai
 		return [self failWith:[NSString stringWithFormat:@"launch failed: %@", launchErr.localizedDescription ?: @"timeout"] code:3 extra:nil];
 	}
 
-	// Record until the timeout (counted from the launch request).
-	double elapsed = (double)(mach_absolute_time() - launchMach);
+	// Record until the Dock has settled, or until the timeout (both counted from
+	// the launch request). "Settled" = the Dock strip has been still for -settle ms
+	// after it last moved; the last frame is then the reference for the bounce
+	// analysis. While the Dock keeps moving the recording is extended up to -timeout.
 	mach_timebase_info_data_t tb; mach_timebase_info(&tb);
-	elapsed = elapsed * tb.numer / tb.denom / 1e9;
-	if (O.timeout > elapsed) usleep((useconds_t)((O.timeout - elapsed) * 1e6));
+	BOOL settled = NO;
+	for (;;) {
+		usleep(50000);
+		double elapsed = (double)(mach_absolute_time() - launchMach) * tb.numer / tb.denom / 1e9;
+		if (elapsed >= O.timeout) break;
+		if (!dockAvail) continue;
+		__block BOOL saw = NO;
+		__block int64_t lastNs = 0;
+		dispatch_sync(cq, ^{ saw = self->sawMotion; lastNs = self->lastMotionNs; });
+		if (saw && (cmNs(CMClockGetTime(CMClockGetHostTimeClock())) - lastNs) / 1e6 >= O.P.settleMs) { settled = YES; break; }
+	}
+	dockSettled = settled;
 
 	dispatch_semaphore_t stopped = dispatch_semaphore_create(0);
 	[stream stopCaptureWithCompletionHandler:^(NSError *e) { dispatch_semaphore_signal(stopped); }];
@@ -978,9 +1301,36 @@ static void waitOn(dispatch_semaphore_t s, double secs) { dispatch_semaphore_wai
 	return [self finishWithPid:apid mach:launchMach tb:tb fps:fps];
 }
 
+// -dockvideo: the Dock strip (only that strip) of every frame from launch until the
+// Dock settled, oriented with the screen edge at the bottom and depth growing upward.
+- (void)writeDockVideo {
+	if (!O.dockVideoDir || !dn) return;
+	int along = dockAlongLen(&dock), last = lastMotionIdx + 1 < dn ? lastMotionIdx + 1 : dn - 1;
+	for (int k = 0; k <= last; k++) {
+		CGContextRef cg = CGBitmapContextCreate(NULL, (size_t)along, (size_t)dockD, 8, (size_t)along * 4, sRGB(), kCGBitmapByteOrder32Little | kCGImageAlphaNoneSkipFirst);
+		uint8_t *dst = CGBitmapContextGetData(cg);
+		size_t stride = CGBitmapContextGetBytesPerRow(cg);
+		for (int y = 0; y < dockD; y++)
+			for (int a = 0; a < along; a++) memcpy(dst + (size_t)y * stride + (size_t)a * 4, dfr[k].px + ((size_t)a * dockD + (dockD - 1 - y)) * 4, 4);
+		CGImageRef img = CGBitmapContextCreateImage(cg);
+		CGContextRelease(cg);
+		NSString *p = [O.dockVideoDir stringByAppendingPathComponent:[NSString stringWithFormat:@"d%05d_t%+010.2fms.png", k, dfr[k].tMs]];
+		dockVideoCount++;
+		dispatch_group_async(videoGroup, dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{ writePNG(img, p); CGImageRelease(img); });
+	}
+	dispatch_group_wait(videoGroup, dispatch_time(DISPATCH_TIME_NOW, 60 * NSEC_PER_SEC));
+}
+
 - (int)finishWithPid:(pid_t)apid mach:(uint64_t)mach tb:(mach_timebase_info_data_t)tb fps:(int)fps {
 	BounceResult br;
+	DockAnalysis da;
+	memset(&da, 0, sizeof da);
+	da.restTop = da.slideEndMs = NAN; da.colMin = da.colMax = -1; da.method = da.restMethod = "none";
+	double *sT = malloc(sizeof(double) * (size_t)(dn + 1)), *sV = malloc(sizeof(double) * (size_t)(dn + 1));
+	int sN = 0;
+	if (dockAvail) dockAnalyze(dfr, dn, &dock, dockD, &O.P, sT, sV, &sN, &da);
 	analyzeBounce(sT, sV, sN, &O.P, &br);
+	[self writeDockVideo];
 	HalfBounce hb = halfBounce(tComplete, &br, dockAvail);
 	BOOL contentFirst = !isnan(tComplete) && tComplete == tFirstPixels && partial == 0;
 
@@ -988,7 +1338,9 @@ static void waitOn(dispatch_semaphore_t s, double secs) { dispatch_semaphore_wai
 	else if (isnan(tComplete)) [self note:@"window appeared but its content never matched -expect (check offset/size/colours; see framesInWindow)"];
 	if (!isnan(tFirstPixels) && !isnan(tWindowListed) && tFirstPixels < tWindowListed - 0.001)
 		[self note:@"pixels were already on glass in a frame before the window list showed the window (recovered via lookback)"];
-	if (dockAvail && br.count == 0) [self note:[NSString stringWithFormat:@"no Dock bounce observed (max displacement %.1f pt); the app may have launched before the Dock bounced, or the icon region/threshold needs tuning", maxDisp]];
+	if (dockAvail && br.count == 0) [self note:[NSString stringWithFormat:@"no Dock bounce observed (method %s, max displacement %.1f pt); the app may have launched before the Dock bounced, or the thresholds need tuning (inspect with -dockvideo)", da.method, da.maxDisp]];
+	if (dockAvail && !dockSettled) [self note:@"the Dock had not settled when -timeout expired: the final frame is not at rest, so displacements are unreliable (raise -timeout)"];
+	if (dockAvail && da.ok && fabs(da.restTop - da.assumedRest) > 8) [self note:[NSString stringWithFormat:@"estimated icon rest top (%.0f) differs from the symmetric-padding assumption (%.0f) by more than 8 pt", da.restTop, da.assumedRest]];
 	if (dockAvail && br.count > 0 && !br.hasEnd) [self note:@"first bounce had not ended when recording stopped; fractionOfFirstBounce unavailable"];
 	if (streamError) [self note:[NSString stringWithFormat:@"stream stopped with error: %@", streamError]];
 	[self note:@"frames are change-driven: no frame is delivered while the screen is static; tFirstPixels/tComplete are the first frames that SHOW the state, not when it began"];
@@ -1010,8 +1362,13 @@ static void waitOn(dispatch_semaphore_t s, double secs) { dispatch_semaphore_wai
 			@"unavailableReason": dockWhy ?: (id)[NSNull null],
 			@"start": jnum(br.start), @"apex": jnum(br.apex), @"apexDisplacementPt": jnum(br.apexDisp),
 			@"end": jnum(br.end), @"periodMs": jnum(br.period), @"count": @(br.count),
-			@"iconColumnsPt": iconColMin >= 0 ? @[@(iconColMin), @(iconColMax)] : (id)[NSNull null],
-			@"maxDisplacementPt": jnum(maxDisp),
+			@"method": @(da.method), @"restTopMethod": @(da.restMethod),
+			@"restTopPt": jnum(da.restTop), @"restTopAssumedPt": jnum(da.assumedRest),
+			@"iconColumnsPt": da.colMin >= 0 ? @[@(da.colMin), @(da.colMax)] : (id)[NSNull null],
+			@"maxDisplacementPt": jnum(da.maxDisp),
+			@"slideEndMs": jnum(da.slideEndMs), @"slideFrames": @(da.wideFrames),
+			@"settled": @(dockSettled), @"dockFrames": @(dn),
+			@"finalFrameMs": dn ? jnum(dfr[dn - 1].tMs) : (id)[NSNull null],
 		},
 		@"halfBounce": @{
 			@"contentVsBounceStartMs": jnum(hb.contentVsStart),
@@ -1021,15 +1378,16 @@ static void waitOn(dispatch_semaphore_t s, double secs) { dispatch_semaphore_wai
 		@"frames": @(frames),
 		@"framesAfterLaunch": @(framesAfter),
 		@"framesInWindow": winFrames, // [t, matchedFraction, changedFraction]
-		@"dockSeries": series,        // [t, displacementPt] per frame after launch
+		@"dockSeries": series,        // [t, displacementPt] per Dock-strip frame after launch
 		@"screen": @{@"widthPt": @(dispW), @"heightPt": @(dispH), @"captureScale": jnum(scale), @"maxFps": @(fps),
 		             @"dockEdge": @[@"bottom", @"left", @"right"][dock.edge], @"dockThicknessPt": @(dock.thickness)},
 		@"clock": @{@"clockCheckMs": jnum(clockCheckMs), @"displayTimeMinusPtsMs": jnum(displayVsPtsMs)},
 		@"params": @{@"tol": @(p.tol), @"slack": @(p.slack), @"matchFrac": @(p.matchFrac), @"step": @(p.probeStep),
 		             @"diffTol": @(p.diffTol), @"firstFrac": @(p.firstFrac), @"bounceTol": @(p.bounceTol),
-		             @"minCols": @(p.minCols), @"restGap": @(p.restGap), @"extra": @(p.extraFactor),
+		             @"minCols": @(p.minCols), @"minRun": @(p.minRun), @"dockPad": @(p.dockPad), @"tile": @(p.tile),
+		             @"commonCols": @(p.commonCols), @"settleMs": @(p.settleMs),
 		             @"expectW": @(ex.w), @"expectH": @(ex.h)},
-		@"videoFrames": @(videoCount),
+		@"videoFrames": @(videoCount), @"dockVideoFrames": @(dockVideoCount),
 		@"notes": notes,
 	};
 	writeJSONFile(r, O.out);
@@ -1062,6 +1420,11 @@ static void waitOn(dispatch_semaphore_t s, double secs) { dispatch_semaphore_wai
 		opts.dockAvail = opts.dock.thickness >= 8;
 		opts.screenMaxFps = (int)scr.maximumFramesPerSecond;
 	}
+	if (opts.P.tile <= 0) { // icon size from the Dock's preferences (used for icon width / rest-top sanity check)
+		CFPropertyListRef v = CFPreferencesCopyAppValue(CFSTR("tilesize"), CFSTR("com.apple.dock"));
+		if (v && CFGetTypeID(v) == CFNumberGetTypeID()) { int ts = 0; CFNumberGetValue(v, kCFNumberIntType, &ts); opts.P.tile = ts; }
+		if (v) CFRelease(v);
+	}
 	dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
 		Recorder *rec = [[Recorder alloc] initWithOptions:opts];
 		int code = [rec run];
@@ -1074,7 +1437,8 @@ static void usage(void) {
 	fprintf(stderr,
 	        "usage: BounceRec -target App.app -expect expected.png -out result.json [-video dir] [-timeout 5]\n"
 	        "       [-keep] [-warm 500] [-expectscale 2] [-fps N] [-tol 24] [-slack 1] [-match 0.98] [-step 8]\n"
-	        "       [-difftol 12] [-firstfrac 0.02] [-bouncetol 16] [-mincols 12] [-restgap 0] [-extra 1.6]\n"
+	        "       [-difftol 12] [-firstfrac 0.5] [-dockvideo dir] [-settle 1500] [-bouncetol 16] [-mincols 12]\n"
+	        "       [-minrun 2] [-dockpad 40] [-tile N] [-commoncols N] [-resttop N] [-motionpx 30]\n"
 	        "       [-shadow 48] [-corner 24] [-offset x,y] [-v]\n"
 	        "       BounceRec -selftest\n");
 }
@@ -1106,14 +1470,22 @@ int main(int argc, const char **argv) {
 			else if (ARG("-firstfrac")) o.P.firstFrac = atof(argv[++i]);
 			else if (ARG("-bouncetol")) o.P.bounceTol = atoi(argv[++i]);
 			else if (ARG("-mincols")) o.P.minCols = atoi(argv[++i]);
-			else if (ARG("-restgap")) o.P.restGap = atoi(argv[++i]);
-			else if (ARG("-extra")) o.P.extraFactor = atof(argv[++i]);
+			else if (ARG("-dockvideo")) o.dockVideoDir = absPath(@(argv[++i]));
+			else if (ARG("-settle")) o.P.settleMs = atoi(argv[++i]);
+			else if (ARG("-minrun")) o.P.minRun = atoi(argv[++i]);
+			else if (ARG("-dockpad")) o.P.dockPad = atoi(argv[++i]);
+			else if (ARG("-tile")) o.P.tile = atoi(argv[++i]);
+			else if (ARG("-commoncols")) o.P.commonCols = atoi(argv[++i]);
+			else if (ARG("-resttop")) o.P.restTop = atof(argv[++i]);
+			else if (ARG("-motionpx")) o.P.motionPx = atoi(argv[++i]);
 			else if (ARG("-shadow")) o.P.shadow = atoi(argv[++i]);
 			else if (ARG("-corner")) o.P.corner = atoi(argv[++i]);
 			else if (ARG("-offset")) sscanf(argv[++i], "%d,%d", &o.P.offX, &o.P.offY);
 			// anything else (e.g. -NSDocumentRevisionsDebugMode, -ApplePersistence...) is AppKit's
 		}
 		if (o.P.probeStep < 1) o.P.probeStep = 8;
+		if (o.P.minRun < 1) o.P.minRun = 1;
+		if (o.P.dockPad < 0) o.P.dockPad = 0;
 		if (o.P.slack < 0) o.P.slack = 0;
 		if (o.expectDiv < 1) o.expectDiv = 2;
 		if (!o.target || !o.expect || !o.out) { usage(); return 64; }

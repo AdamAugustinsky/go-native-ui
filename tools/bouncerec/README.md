@@ -56,7 +56,7 @@ the session unlocked.
 open -W -n --stdout /tmp/bouncerec.log --stderr /tmp/bouncerec.err \
   tools/bouncerec/bin/BounceRec.app --args \
   -target /abs/path/Target.app -expect /abs/path/expected.png \
-  -out /abs/path/result.json [-video /abs/path/frames-dir] [-timeout 5]
+  -out /abs/path/result.json [-video /abs/path/frames-dir] [-dockvideo /abs/path/dock-dir] [-timeout 5]
 cat /abs/path/result.json
 ```
 
@@ -69,14 +69,24 @@ cat /abs/path/result.json
   wraps a bare executable into a minimal ad-hoc signed bundle.
 * Other flags: `-keep` (do not quit the target afterwards), `-warm 500` (ms to
   wait after the first frame before launching), `-expectscale 2` (scale of the
-  expected PNG), `-fps N`, `-v`, and the thresholds below.
+  expected PNG), `-fps N`, `-v`, `-settle 1500` (ms of Dock stillness that ends
+  the recording), the Dock thresholds (`-tile`, `-minrun`, `-mincols`,
+  `-bouncetol`, `-commoncols`, `-resttop`, `-dockpad`, `-motionpx`) and the
+  match thresholds below.
 
 Launching follows the brief: capture starts, the first frame is the (continuously
 refreshed) baseline, then `NSWorkspace openApplicationAtURL:configuration:` with
 `activates = YES`, `createsNewApplicationInstance = YES`. The launch request is
 stamped on the capture clock immediately before that call. The target is
-terminated at the end unless `-keep`. Recording stops `-timeout` seconds after
-the launch request regardless.
+terminated at the end unless `-keep`.
+
+**When recording stops.** `-timeout` (default 5 s after the launch request) is the
+maximum. If the Dock strip moved after the launch, recording ends earlier, as
+soon as the strip has been still for `-settle` ms (1500). So a short app is
+recorded for about (Dock motion + 1.5 s), and a Dock that keeps bouncing
+extends the recording up to `-timeout` (then `bounce.settled` is false and the
+numbers are unreliable: raise `-timeout`). The **last** frame is the Dock at
+rest and is the reference for the bounce analysis.
 
 ## Expected PNG
 
@@ -108,7 +118,8 @@ tWindowListed  tFirstPixels  tComplete          ms after launch request (null = 
 contentFirst   true iff tFirstPixels == tComplete frame and partialFrames == 0
 partialFrames, partialFrameTimes      frames with pixels but incomplete content, before tComplete
 bounce        {available, unavailableReason, start, apex, apexDisplacementPt, end, periodMs, count,
-               iconColumnsPt, maxDisplacementPt}
+               method, restTopMethod, restTopPt, restTopAssumedPt, iconColumnsPt, maxDisplacementPt,
+               slideEndMs, slideFrames, settled, dockFrames, finalFrameMs}
 halfBounce    {contentVsBounceStartMs, fractionOfFirstBounce = (tComplete-start)/(end-start),
                pass = tComplete <= apex   (null if no bounce was observed / Dock hidden)}
 frames, framesAfterLaunch, framesInWindow [[t, matchedFraction, changedFraction]...]
@@ -118,6 +129,13 @@ dockSeries [[t, displacementPt]...]   screen {...}   clock {...}   params   note
 `-video dir` writes every captured frame inside the window bounds as PNG
 `fNNNNN_t+MMMMM.MMms_{blank,partial,complete,later}.png`, to inspect partial
 frames by eye.
+
+`-dockvideo dir` writes the Dock strip of every frame from launch until the Dock
+settled as 1× PNG `dNNNNN_t+MMMMM.MMms.png` (full width × Dock thickness + 40 pt,
+`-dockpad`; screen edge at the bottom, rotated for a side Dock). Only that strip
+is saved, never the rest of the screen (note it includes the 40 pt band above
+the Dock, which can contain parts of other windows). Use it to check the
+displacement curve by eye.
 
 ## Heuristics and limits (read before trusting a number)
 
@@ -142,31 +160,52 @@ frames by eye.
   frames (correct for the goal). Set `animationBehavior = none` in apps under
   test or the check cannot pass.
 * **Bounce measurement.** The Dock edge and thickness come from `NSScreen`
-  `visibleFrame` vs `frame`. If the Dock is hidden/auto-hide the thickness is 0
-  and `bounce.available` is false. Otherwise the area above the Dock
-  (`-extra` × thickness, default 1.6×) is diffed against the baseline. For each
-  column the topmost changed row is found; the icon's displacement is the height
-  that at least 12 columns (`-mincols`) reach, relative to the Dock's top edge.
-  That ignores thin spikes. The target window plus 48 pt shadow margin
-  (`-shadow`) is masked out. The icon column range at maximum displacement is
-  reported (`iconColumnsPt`) to check it is really the target icon.
-  * The rest position of the icon is inside the Dock, so the first few points
-    of lift are invisible: `start` (first displacement > 1 pt above the Dock top)
-    is biased late by a few ms. `apex` and `end` are not. `-restgap N` also
-    scans N rows inside the Dock below its top edge (try 4–6) at the risk of
-    reading the glass shimmer as motion.
-  * The Dock may slide icons to make room for the new one; this changes pixels
-    inside the Dock but is only counted above its top edge, and is rejected if
-    narrower than `-mincols`.
-  * Another app's window changing in the area above the Dock, a notification
-    banner, or a different bouncing icon (e.g. apps already starting) will read
-    as bounce. Run on a quiet desktop.
-  * Samples are interpolated (threshold crossings, parabolic apex refinement)
-    only if neighbouring frames are < 40 ms apart; across longer gaps the time
-    of the frame that showed the change is used. A bounce ends at the first sample
-    ≤ 1 pt after the apex, or at the valley minimum before the next bounce if the
-    icon never reads as rest. Two peaks are separate bounces if the valley between
-    is below 0.35 × the lower peak and each peak ≥ 4 pt.
+  `visibleFrame` vs `frame`; if the Dock is hidden/auto-hide the thickness is 0
+  and `bounce.available` is false. On the Liquid-Glass Dock the bounce can stay
+  *inside* that strip (peak below the boundary) and inserting the new icon
+  re-lays out the whole centred Dock, so diffing against the pre-launch baseline
+  is useless. The method (`bounce.method`):
+  1. The Dock strip (Dock + `-dockpad` 40 pt above it, full width) is stored for
+     every frame (about 0.7 MB each at 1512 pt; capped at about 1.5 GB).
+  2. After the recording every frame is diffed against the **final, settled**
+     frame. Per column, the topmost row of a run of ≥ `-minrun` (2) rows that
+     differ by more than `-bouncetol` (16) is the column's top.
+  3. **Common-mode rejection:** rows shared by ≥ `-commoncols` columns (default
+     2 × icon width) are the Dock re-laying out (every icon sliding, the glass
+     edge and highlight shifting), not the icon: those columns are re-scanned
+     below that row, repeatedly. A single icon is narrower than that and is
+     never peeled.
+  4. Frames where more than 3 icon widths of columns changed are the insertion
+     slide (`slideEndMs` is the last one). After it only the bouncing icon
+     differs from the final frame, so its columns (`iconColumnsPt`) are the
+     largest cluster of columns changed in those frames. (If there are no such
+     frames the icon is the largest cluster rising more than 2 pt above the
+     assumed rest: `excess-over-assumed-rest`.)
+  5. **Rest top** (`restTopPt`, row index of the icons' resting top): the lowest
+     icon top seen after the slide minus `-minrun`, because a lift is only
+     visible once it spans `-minrun` rows. `restTopAssumedPt` is the same from
+     the assumption of symmetric padding around the icons (`-tile` icon size,
+     read from `com.apple.dock` `tilesize`); a note is added if they differ by
+     more than 8 pt. Override with `-resttop N` (row index; e.g. 60 for a 74 pt
+     Dock with 48 pt icons resting 13 pt below the boundary).
+  6. `displacement(t)` = (top reached by ≥ `-mincols` (12) columns around the
+     icon, ± half an icon because it slides too) − restTop, 0 at the final
+     frame. The existing curve analysis then gives start/apex/end/period/count.
+  * Limits: the icon top is hidden while another Dock-wide change covers its
+    rows (the displacement can be off by about a point while the glass
+    highlight overlaps the icon's peak); `start` (first displacement > 1 pt) is
+    late by about `-minrun` rows of lift; the glass widening at the Dock's ends
+    is a full-height change that is ignored by restricting to the icon's columns
+    (it can fool the method only if the new icon sits at the very end of the Dock);
+    a different bouncing icon, a notification banner or another window changing
+    in the strip would read as bounce, so use a quiet desktop. Samples are
+    interpolated only if neighbouring frames are < 40 ms apart; the apex is the
+    middle of the plateau within 1 pt of the maximum (frames are change-driven, so
+    a displacement can hold for tens of ms without a frame). A bounce ends at the
+    first sample ≤ 1 pt after the apex, or at the valley minimum before the next
+    bounce if the icon never reads as rest; two peaks are separate if the valley
+    between is below 0.35 × the lower peak and each peak ≥ 4 pt; a series that
+    starts above 1 pt and only decays is not a bounce.
   * `count` and `periodMs` (mean apex-to-apex) depend on the Dock continuing to
     bounce while recording. The Dock stops bouncing when the app finishes
     launching, so a fast app can produce 0 or 1 bounce; then `halfBounce.pass` is
@@ -186,9 +225,13 @@ frames by eye.
 ## Self-test
 
 `BounceRec -selftest` runs the probe matching (empty / partial / complete /
-shifted / colour-error frames), Dock displacement on a synthetic Dock for bottom,
-left and right edges (including the spike and window-mask rules), the bounce-curve
-analysis (3 bounces, shallow valleys, change-driven gaps, cut-off series, no
-bounce) and the half-bounce decision, plus a PNG load + 2×→1× round trip. It
+shifted / colour-error frames), Dock strip copy and window-mask ranges for bottom,
+left and right edges, the bounce-curve analysis (3 bounces, shallow valleys,
+change-driven gaps, cut-off and decay-only series, no bounce) and the half-bounce
+decision, a synthetic wide Dock (1512 pt, 23 icons: every icon slides half an icon
+for 250 ms, the glass highlight changes along the whole Dock, one icon hops twice
+below the Dock's visible boundary, change-driven frames; the slide alone must give
+no bounce and start/apex/end must match the ground truth within 10 ms), plus a PNG
+load + 2×→1× round trip. It
 prints PASS/FAIL per section and exits non-zero on failure. It does not exercise
 ScreenCaptureKit or the Dock; that needs a real run on the test Mac.
