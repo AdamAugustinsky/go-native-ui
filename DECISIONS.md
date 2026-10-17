@@ -376,10 +376,14 @@ The measured spec and acceptance method are in
 - **Phase 2:** a static frame on macOS, compared against the public screenshot (flat-region ΔE ≤ 3, geometry ±1 px at 2×).
 - **Phase 3:** interactive, under the same zero-allocation, idle and half-bounce gates as everything else.
 
+**Product look (user, 2026-10-16): the original Rex style.** The file
+browser and the framework's default theme use the Rex look, not a
+derivative.
+
 **Boundaries.**
-- It is an internal benchmark, not our product identity.
 - The reference image stays out of git.
-- No Superlogical or third-party assets, fonts or code.
+- No Superlogical or third-party assets, logos, fonts or code: icons are system symbols or our own, and fonts are system fonts.
+- **Risk (flagged, accepted by you):** shipping another product's distinctive look publicly can draw trade-dress objections. The public repo makes the resemblance visible early. If that becomes a concern, the theme is data (colours, radii, spacing) and can be changed without touching the renderer.
 
 **Cost.** Renderer additions:
 - multi-stop and four-corner gradients;

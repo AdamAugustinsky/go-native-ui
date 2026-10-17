@@ -19,7 +19,7 @@ reference app, a dual-pane file browser.
 
 Two further bars (user, 2026-10-16):
 - **Startup: half-bounce or better.** The first visible frame is complete content (§3).
-- **Visuals: modern.** The benchmark is a recreation of Superlogical Rex's frontend in our framework (`cmd/rexlook`; [docs/design/rex-benchmark.md](docs/design/rex-benchmark.md)), held to the same performance gates.
+- **Visuals: modern, in the original Rex style.** The benchmark is a recreation of Superlogical Rex's frontend in our framework (`cmd/rexlook`; [docs/design/rex-benchmark.md](docs/design/rex-benchmark.md)), held to the same performance gates. The same look becomes the default theme (D17).
 
 What we know about File Pilot, and where it comes from:
 

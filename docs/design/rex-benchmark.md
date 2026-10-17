@@ -17,12 +17,12 @@ mkdir -p docs/design/ref &&
 
 ## Boundaries
 
-This is an internal benchmark, not our product's identity.
+The Rex look is both the benchmark and our product's look (user,
+2026-10-16; DECISIONS D17, including the trade-dress risk note).
 
 - **The reference image:** kept in the gitignored `docs/design/ref/`, never committed.
-- **No assets copied:** none of Superlogical's or third parties' logos, app icons, fonts or code. Icons are our own placeholders or OS system symbols.
-- **What we reproduce:** layout, proportions, colour, depth and motion, to prove the renderer can reach this quality.
-- **Our own product look:** chosen separately (open question).
+- **No assets copied:** none of Superlogical's or third parties' logos, app icons, fonts or code. Icons are our own or OS system symbols.
+- **What we reproduce:** layout, proportions, colour, depth and motion, expressed as a theme (data) that the renderer draws.
 
 ## Measured spec
 
