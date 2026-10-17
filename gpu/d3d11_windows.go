@@ -77,6 +77,8 @@ const (
 	vtContextFlush                 = 111
 )
 
+// The renderer's slots (renderer_windows.go) are listed and sourced there.
+
 // ---- GUIDs (checked against the MIDL_INTERFACE lines of the same headers) --
 
 var (
@@ -146,7 +148,11 @@ type Surface struct {
 	waitable uintptr // frame-latency waitable (owned: closed in Destroy)
 	hwnd     uintptr
 
-	Trace FirstPresentTrace // not recorded on this backend yet
+	Trace FirstPresentTrace // Start, Acquired, Committed and Done of the first frame; OnGlass is not recorded on this backend yet
+
+	frame     Frame // Present's frame (kept here so Present doesn't allocate)
+	presented int   // frames handed to the swap chain
+	lastShown bool  // whether the last EndFrame presented
 
 	dxgiDev, adapter, factory, sc1 uintptr // creation-time interfaces
 
@@ -161,13 +167,6 @@ type Surface struct {
 // NewSurface creates a D3D11 device and a swap chain for the window.
 // w and h are physical pixels.
 func NewSurface(n platform.Native, w, h int32, scale float32) (*Surface, error) {
-	if d3d11DLL == 0 {
-		d3d11DLL = win32.LoadSystem("d3d11.dll")
-		pD3D11CreateDevice = win32.Proc(d3d11DLL, "D3D11CreateDevice")
-	}
-	if pD3D11CreateDevice == 0 {
-		return nil, errors.New("gpu: cannot load d3d11.dll")
-	}
 	w, h = max(w, 1), max(h, 1)
 	s := &Surface{hwnd: n.HWND, w: w, h: h}
 	if err := s.init(); err != nil {
@@ -238,12 +237,28 @@ func (s *Surface) init() error {
 
 // createDevice creates a hardware device, falling back to WARP.
 func (s *Surface) createDevice() error {
-	s.levels = [4]uint32{d3dFeatureLevel11_1, d3dFeatureLevel11_0, d3dFeatureLevel10_1, d3dFeatureLevel10_0}
+	return createD3DDevice(&s.levels, &s.dev, &s.featureLvl, &s.ctx)
+}
+
+// createD3DDevice creates a BGRA-capable device and its immediate context on
+// the hardware, falling back to WARP (the software rasterizer, which is what
+// headless CI machines have). The pointers must point into heap memory (a
+// field of a heap object or a package variable), never at stack locals: the
+// OS writes through them.
+func createD3DDevice(levels *[4]uint32, dev *uintptr, featureLvl *uint32, ctx *uintptr) error {
+	*levels = [4]uint32{d3dFeatureLevel11_1, d3dFeatureLevel11_0, d3dFeatureLevel10_1, d3dFeatureLevel10_0}
+	if d3d11DLL == 0 {
+		d3d11DLL = win32.LoadSystem("d3d11.dll")
+		pD3D11CreateDevice = win32.Proc(d3d11DLL, "D3D11CreateDevice")
+	}
+	if pD3D11CreateDevice == 0 {
+		return errors.New("gpu: cannot load d3d11.dll")
+	}
 	var hr int32
 	for _, driver := range [...]uintptr{d3dDriverTypeHardware, d3dDriverTypeWarp} {
-		hr = s.tryCreate(driver, 0, 4)
+		hr = tryCreateDevice(levels, driver, 0, 4, dev, featureLvl, ctx)
 		if hr == eInvalidArg { // Windows 7 without the platform update rejects 11_1
-			hr = s.tryCreate(driver, 1, 3)
+			hr = tryCreateDevice(levels, driver, 1, 3, dev, featureLvl, ctx)
 		}
 		if hr >= 0 {
 			return nil
@@ -252,11 +267,11 @@ func (s *Surface) createDevice() error {
 	return hresultError("D3D11CreateDevice", hr)
 }
 
-func (s *Surface) tryCreate(driver uintptr, firstLevel, nLevels uintptr) int32 {
+func tryCreateDevice(levels *[4]uint32, driver, firstLevel, nLevels uintptr, dev *uintptr, featureLvl *uint32, ctx *uintptr) int32 {
 	return win32.HR(win32.Call(pD3D11CreateDevice,
 		0, driver, 0, d3d11CreateBGRA,
-		uintptr(unsafe.Pointer(&s.levels[firstLevel])), nLevels, d3d11SDKVersion,
-		uintptr(unsafe.Pointer(&s.dev)), uintptr(unsafe.Pointer(&s.featureLvl)), uintptr(unsafe.Pointer(&s.ctx))))
+		uintptr(unsafe.Pointer(&levels[firstLevel])), nLevels, d3d11SDKVersion,
+		uintptr(unsafe.Pointer(dev)), uintptr(unsafe.Pointer(featureLvl)), uintptr(unsafe.Pointer(ctx))))
 }
 
 func (s *Surface) createSwapChain() int32 {
@@ -303,27 +318,82 @@ func (s *Surface) Resize(w, h int32, scale float32) {
 	}
 }
 
+// Device and Queue return the ID3D11Device and the immediate
+// ID3D11DeviceContext (the Metal back end's device and command queue), for
+// gpu.NewRenderer. The surface keeps owning them.
+func (s *Surface) Device() uintptr { return s.dev }
+func (s *Surface) Queue() uintptr  { return s.ctx }
+
+// Frame is one frame being drawn: render into Target with commands issued on
+// CmdBuf, then call EndFrame.
+type Frame struct {
+	CmdBuf uintptr // ID3D11DeviceContext (the immediate context)
+	Target uintptr // ID3D11RenderTargetView of the back buffer, BGRA8 UNORM
+	W, H   int     // target size in pixels
+
+	begun bool
+}
+
+// BeginFrame returns the frame's context and back-buffer view. It returns
+// false if the swap chain has no usable back buffer (a failed resize). The
+// back buffer is not cleared; the renderer's Encode (or the caller) does
+// that. Every successful BeginFrame must be followed by EndFrame on the same
+// thread. It does not allocate.
+func (s *Surface) BeginFrame(f *Frame) bool {
+	if s.rtv == 0 || s.ctx == 0 {
+		return false
+	}
+	if s.presented == 0 {
+		s.Trace.Start = platform.Now()
+		s.Trace.Acquired = s.Trace.Start // D3D11 flip chains hand out buffer 0 without waiting
+	}
+	f.CmdBuf, f.Target = s.ctx, s.rtv
+	f.W, f.H = int(s.w), int(s.h)
+	f.begun = true
+	return true
+}
+
+// EndFrame presents the back buffer with vsync (the platform paces frames
+// with the swap chain's frame-latency waitable, FrameSource). A frame whose
+// presentation was refused (window occluded, device lost) is dropped; Present
+// reports it. The Frame is reset.
+func (s *Surface) EndFrame(f *Frame) {
+	if !f.begun {
+		return
+	}
+	first := s.presented == 0
+	if first {
+		s.Trace.Committed = platform.Now()
+	}
+	hr := win32.HR(win32.Com(s.sc, vtSwapChainPresent, 1, 0))
+	runtime.KeepAlive(s)
+	s.lastShown = true
+	switch {
+	case hr == dxgiStatusOccluded:
+		s.lastShown = false
+	case hr < 0:
+		s.reportLost("IDXGISwapChain.Present", hr)
+		s.lastShown = false
+	} // other success codes (e.g. DXGI_STATUS_MODE_CHANGED) count as shown
+	s.presented++
+	if first {
+		s.Trace.Done = platform.Now()
+	}
+	*f = Frame{}
+}
+
 // Present clears the back buffer to the colour and presents it with vsync.
 // It returns false if nothing was presented (occluded or device error).
 func (s *Surface) Present(r, g, b, a float32) bool {
-	if s.rtv == 0 {
+	f := &s.frame
+	if !s.BeginFrame(f) {
 		return false
 	}
 	s.color = [4]float32{r, g, b, a}
-	win32.Com(s.ctx, vtContextOMSetRenderTargets, 1, uintptr(unsafe.Pointer(&s.rtv)), 0)
-	win32.Com(s.ctx, vtContextClearRenderTargetView, s.rtv, uintptr(unsafe.Pointer(&s.color[0])))
-	hr := win32.HR(win32.Com(s.sc, vtSwapChainPresent, 1, 0))
-	runtime.KeepAlive(s)
-	switch {
-	case hr == 0:
-		return true
-	case hr == dxgiStatusOccluded:
-		return false
-	case hr < 0:
-		s.reportLost("IDXGISwapChain.Present", hr)
-		return false
-	}
-	return true // other success codes (e.g. DXGI_STATUS_MODE_CHANGED)
+	win32.Com(f.CmdBuf, vtContextOMSetRenderTargets, 1, uintptr(unsafe.Pointer(&f.Target)), 0)
+	win32.Com(f.CmdBuf, vtContextClearRenderTargetView, f.Target, uintptr(unsafe.Pointer(&s.color[0])))
+	s.EndFrame(f)
+	return s.lastShown
 }
 
 // RevealOnFirstFrame is a no-op: content-first startup isn't implemented
