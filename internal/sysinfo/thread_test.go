@@ -27,10 +27,16 @@ func TestThreadCPUNs(t *testing.T) {
 	if t0 < 0 {
 		t.Fatal("ThreadCPUNs unavailable")
 	}
-	sink = burn(60 * time.Millisecond)
-	t1 := ThreadCPUNs()
-	if d := time.Duration(t1 - t0); d < 30*time.Millisecond || d > 500*time.Millisecond {
-		t.Errorf("burning 60 ms advanced the thread clock by %v", d)
+	// Burn until the thread clock shows 60 ms (a shared CI runner may give
+	// the thread only part of a core), then check it never ran ahead of the
+	// wall clock. A unit mistake (µs as ns, or the reverse) fails either way.
+	start := time.Now()
+	for time.Duration(ThreadCPUNs()-t0) < 60*time.Millisecond && time.Since(start) < 3*time.Second {
+		sink += burn(5 * time.Millisecond)
+	}
+	t1, wall := ThreadCPUNs(), time.Since(start)
+	if d := time.Duration(t1 - t0); d < 60*time.Millisecond || d > wall+20*time.Millisecond {
+		t.Errorf("busy for %v of wall time, the thread clock advanced by %v", wall, d)
 	}
 	// Sleeping consumes no CPU time.
 	time.Sleep(80 * time.Millisecond)
