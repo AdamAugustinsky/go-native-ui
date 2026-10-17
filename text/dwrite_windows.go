@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 	"sync"
 	"syscall"
 	"unsafe"
@@ -48,7 +49,7 @@ const (
 // IDWriteFont (dwrite.h:1942-1992): GetFontFamily 3, GetWeight 4,
 // GetStretch 5, GetStyle 6, GetFaceNames 8, CreateFontFace 13.
 // IDWriteFontFace (dwrite.h:1694-1781): GetFiles 4, GetIndex 5,
-// GetSimulations 6, GetMetrics 8, TryGetFontTable 12, ReleaseFontTable 13.
+// GetSimulations 6, GetMetrics 8, GetGlyphIndices 11 (dwrite.h:1737), TryGetFontTable 12, ReleaseFontTable 13.
 // IDWriteFontFile (dwrite.h:1090-1111): GetReferenceKey 3.
 // IDWriteLocalizedStrings (dwrite.h:1381-1418): GetCount 3, GetStringLength 7,
 // GetString 8.
@@ -67,6 +68,7 @@ const (
 	vtFaceGetIndex             = 5
 	vtFaceGetSimulations       = 6
 	vtFaceGetMetrics           = 8
+	vtFaceGetGlyphIndices      = 11
 	vtFaceTryGetFontTable      = 12
 	vtFaceReleaseFontTable     = 13
 	vtFileGetReferenceKey      = 3
@@ -217,6 +219,7 @@ type fontEnt struct {
 	weight  uint32
 	face    FaceID
 	metrics Metrics
+	lookup  string // which families were tried and what came of it, for diagnostics
 }
 
 // faceEnt is a concrete face at a concrete size: the primary face of a
@@ -268,6 +271,10 @@ type System struct {
 	ia                        []float32
 	io                        []float32
 	ix                        []float32
+	cps                       []uint32 // code points of u16
+	cpPos                     []int32  // their UTF-16 offsets
+	cgl                       []uint16 // their glyphs in the primary face
+	tried                     []string // family lookups of the Font call in progress
 	gbuf                      []uint16
 	xbuf                      []float32
 	fbuf                      []FaceID
@@ -386,21 +393,26 @@ func (s *System) findFont(names []string, weight int) (font uintptr, family stri
 	for _, n := range names {
 		p := &s.utf16z(n)[0]
 		s.b1 = 0
-		if hr := win32.HR(com.Call(s.collection, vtCollectionFindFamilyName, uintptr(unsafe.Pointer(p)), uintptr(unsafe.Pointer(&s.index)), uintptr(unsafe.Pointer(&s.b1)))); hr < 0 || s.b1 == 0 {
+		hr := win32.HR(com.Call(s.collection, vtCollectionFindFamilyName, uintptr(unsafe.Pointer(p)), uintptr(unsafe.Pointer(&s.index)), uintptr(unsafe.Pointer(&s.b1))))
+		if hr < 0 || s.b1 == 0 {
+			s.tried = append(s.tried, fmt.Sprintf("%q: not in the system collection (hr %#08x, exists %d)", n, uint32(hr), s.b1))
 			continue
 		}
 		s.out1 = 0
 		if hr := win32.HR(com.Call(s.collection, vtCollectionGetFontFamily, uintptr(s.index), uintptr(unsafe.Pointer(&s.out1)))); hr < 0 {
+			s.tried = append(s.tried, fmt.Sprintf("%q: GetFontFamily failed (hr %#08x)", n, uint32(hr)))
 			continue
 		}
 		fam := s.out1
 		s.out1 = 0
-		hr := win32.HR(com.Call(fam, vtFamilyGetFirstMatching, uintptr(weight), dwStretchNormal, dwStyleNormal, uintptr(unsafe.Pointer(&s.out1))))
+		hr = win32.HR(com.Call(fam, vtFamilyGetFirstMatching, uintptr(weight), dwStretchNormal, dwStyleNormal, uintptr(unsafe.Pointer(&s.out1))))
 		com.Release(fam)
 		if hr < 0 || s.out1 == 0 {
+			s.tried = append(s.tried, fmt.Sprintf("%q: GetFirstMatchingFont(%d) failed (hr %#08x)", n, weight, uint32(hr)))
 			continue
 		}
 		font, s.out1 = s.out1, 0
+		s.tried = append(s.tried, fmt.Sprintf("%q: found (family index %d)", n, s.index))
 		return font, n
 	}
 	return 0, ""
@@ -419,6 +431,7 @@ func (s *System) Font(d FontDesc) FontKey {
 		return 0
 	}
 	weight := min(max(d.Weight, 1), 999)
+	s.tried = s.tried[:0]
 	var font uintptr
 	var fam string
 	switch {
@@ -430,13 +443,14 @@ func (s *System) Font(d FontDesc) FontKey {
 		font, fam = s.findFont(uiFamilies, weight)
 	}
 	if font == 0 {
+		s.tried = append(s.tried, "falling back to the default UI family")
 		font, fam = s.findFont([]string{s.defFamily}, weight)
 	}
 	if font == 0 {
 		return 0
 	}
 	px := d.SizePt * d.Scale
-	fe := fontEnt{desc: d, weight: uint32(weight)}
+	fe := fontEnt{desc: d, weight: uint32(weight), lookup: strings.Join(s.tried, "; ")}
 	fe.family = append([]uint16(nil), s.utf16z(fam)...)
 	face, ok := s.faceFromFont(font, px)
 	com.Release(font)

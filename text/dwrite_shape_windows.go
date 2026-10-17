@@ -284,32 +284,31 @@ func (s *System) shapeLine(fe *fontEnt) float32 {
 	}
 
 	s.items, s.ig, s.ia, s.io = s.items[:0], s.ig[:0], s.ia[:0], s.io[:0]
-	basePx := s.faces[fe.face].sizePx
-	for pos := 0; pos < n; {
-		s.mapLen, s.out1, s.scale = 0, 0, 1
-		hr := win32.HR(com.Call(s.fallback, vtFallbackMapCharacters,
-			src, uintptr(pos), uintptr(n-pos), 0, uintptr(unsafe.Pointer(&fe.family[0])),
-			uintptr(fe.weight), dwStyleNormal, dwStretchNormal,
-			uintptr(unsafe.Pointer(&s.mapLen)), uintptr(unsafe.Pointer(&s.out1)), uintptr(unsafe.Pointer(&s.scale))))
-		length := int(s.mapLen)
-		if hr < 0 || length <= 0 || length > n-pos {
-			length = n - pos
+
+	// The font's own face shapes every stretch of text it has glyphs for;
+	// IDWriteFontFallback.MapCharacters is asked only about the rest.
+	// (MapCharacters is not trusted to hand back the base family for text the
+	// base family covers: on Windows Server 2025 it returned its own "Segoe
+	// UI" for both Segoe UI Variable Text and Consolas bases, which gave the
+	// run a second FaceID for the primary font's own Latin text and silently
+	// replaced monospace fonts. It is also much slower than a cmap lookup.)
+	s.faceCoverage(fe.face)
+	start, state := 0, -1 // state: 1 covered, 0 not, -1 only neutral characters so far
+	for i, cp := range s.cps {
+		if neutralRune(cp) {
+			continue
 		}
-		face := fe.face
-		if font := s.out1; font != 0 {
-			s.out1 = 0
-			sc := s.scale
-			if !(sc > 0) {
-				sc = 1
-			}
-			if id, ok := s.faceFromFont(font, basePx*sc); ok {
-				face = id
-			}
-			com.Release(font)
+		st := 0
+		if s.cgl[i] != 0 {
+			st = 1
 		}
-		s.shapeSpan(pos, pos+length, face)
-		pos += length
+		if state >= 0 && st != state {
+			s.shapeCovered(fe, src, start, int(s.cpPos[i]), state == 1)
+			start = int(s.cpPos[i])
+		}
+		state = st
 	}
+	s.shapeCovered(fe, src, start, n, state != 0)
 
 	// Visual order: UAX #9 rule L2 over the items.
 	order := s.order[:0]
@@ -375,6 +374,79 @@ func (s *System) shapeLine(fe *fontEnt) float32 {
 		x += it.width
 	}
 	return x
+}
+
+// faceCoverage fills s.cps (code points), s.cpPos (their UTF-16 offsets) and
+// s.cgl (the glyph each has in face, 0 if none) for s.u16.
+func (s *System) faceCoverage(face FaceID) {
+	s.cps, s.cpPos = s.cps[:0], s.cpPos[:0]
+	for i := 0; i < len(s.u16); i++ {
+		c := rune(s.u16[i])
+		if c >= 0xD800 && c < 0xDC00 && i+1 < len(s.u16) && s.u16[i+1] >= 0xDC00 && s.u16[i+1] < 0xE000 {
+			c = 0x10000 + (c-0xD800)<<10 + rune(s.u16[i+1]) - 0xDC00
+			s.cps, s.cpPos = append(s.cps, uint32(c)), append(s.cpPos, int32(i))
+			i++
+			continue
+		}
+		s.cps, s.cpPos = append(s.cps, uint32(c)), append(s.cpPos, int32(i))
+	}
+	if cap(s.cgl) < len(s.cps) {
+		s.cgl = make([]uint16, len(s.cps), 2*len(s.cps))
+	}
+	s.cgl = s.cgl[:len(s.cps)]
+	clear(s.cgl) // on failure everything counts as uncovered and goes to font fallback
+	com.Call(s.faces[face].face, vtFaceGetGlyphIndices, uintptr(unsafe.Pointer(&s.cps[0])), uintptr(len(s.cps)), uintptr(unsafe.Pointer(&s.cgl[0])))
+}
+
+// neutralRune reports characters that take the face of their neighbours:
+// controls, joiners, bidi marks and variation selectors have no glyph in most
+// fonts and must not split a run.
+func neutralRune(c uint32) bool {
+	switch {
+	case c < 0x20, c >= 0x7F && c < 0xA0, c == 0xAD, c == 0x34F,
+		c >= 0x200B && c <= 0x200F, c >= 0x202A && c <= 0x202E, c >= 0x2060 && c <= 0x206F,
+		c >= 0xFE00 && c <= 0xFE0F, c == 0xFEFF:
+		return true
+	}
+	return false
+}
+
+// shapeCovered shapes [a, b) of s.u16 either with the primary face (covered)
+// or with whatever IDWriteFontFallback.MapCharacters picks, piece by piece.
+func (s *System) shapeCovered(fe *fontEnt, src uintptr, a, b int, covered bool) {
+	if a >= b {
+		return
+	}
+	if covered {
+		s.shapeSpan(a, b, fe.face)
+		return
+	}
+	basePx := s.faces[fe.face].sizePx
+	for pos := a; pos < b; {
+		s.mapLen, s.out1, s.scale = 0, 0, 1
+		hr := win32.HR(com.Call(s.fallback, vtFallbackMapCharacters,
+			src, uintptr(pos), uintptr(b-pos), 0, uintptr(unsafe.Pointer(&fe.family[0])),
+			uintptr(fe.weight), dwStyleNormal, dwStretchNormal,
+			uintptr(unsafe.Pointer(&s.mapLen)), uintptr(unsafe.Pointer(&s.out1)), uintptr(unsafe.Pointer(&s.scale))))
+		length := int(s.mapLen)
+		if hr < 0 || length <= 0 || length > b-pos {
+			length = b - pos
+		}
+		face := fe.face
+		if font := s.out1; font != 0 {
+			s.out1 = 0
+			sc := s.scale
+			if !(sc > 0) {
+				sc = 1
+			}
+			if id, ok := s.faceFromFont(font, basePx*sc); ok {
+				face = id
+			}
+			com.Release(font)
+		}
+		s.shapeSpan(pos, pos+length, face)
+		pos += length
+	}
 }
 
 // shapeSpan shapes [start, end) of s.u16, which one face covers, splitting at

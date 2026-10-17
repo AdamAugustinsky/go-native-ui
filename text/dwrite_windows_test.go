@@ -6,6 +6,7 @@ import (
 	"errors"
 	"math"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
@@ -34,7 +35,7 @@ func shapeStr(s *System, f FontKey, str string) RunView { return s.Run(s.Shape(f
 func TestShapeHello(t *testing.T) {
 	s := newSys(t)
 	f := uiFont(s)
-	t.Logf("UI font: %s (family %q)", s.faceName(s.fonts[f].face), s.defFamily)
+	t.Logf("UI font: %s (family %q); lookup: %s", s.faceName(s.fonts[f].face), s.defFamily, s.fonts[f].lookup)
 	v := shapeStr(s, f, "Hello")
 	if len(v.Glyphs) != 5 || len(v.X) != 5 || len(v.Faces) != 5 {
 		t.Fatalf("got %d/%d/%d glyphs, want 5", len(v.Glyphs), len(v.X), len(v.Faces))
@@ -133,11 +134,21 @@ func TestMonoAdvance(t *testing.T) {
 	s := newSys(t)
 	f := s.Font(FontDesc{Mono: true, SizePt: 13, Scale: 2})
 	m := s.Metrics(f)
+	name := s.faceName(s.fonts[f].face)
+	t.Logf("mono font: %s; lookup: %s", name, s.fonts[f].lookup)
+	if !strings.HasPrefix(name, "Cascadia") && !strings.HasPrefix(name, "Consolas") && !strings.HasPrefix(name, "Courier") {
+		t.Fatalf("the monospace font resolved to %q; candidates tried: %s", name, s.fonts[f].lookup)
+	}
 	if m.MonoAdvance <= 0 {
 		t.Fatalf("MonoAdvance = %v", m.MonoAdvance)
 	}
 	v := shapeStr(s, f, "iW.M0 lmw")
 	t.Logf("mono face %s advance %v", s.faceName(v.Faces[0]), m.MonoAdvance)
+	for i, face := range v.Faces {
+		if face != s.fonts[f].face {
+			t.Fatalf("glyph %d left the monospace face for %q", i, s.faceName(face))
+		}
+	}
 	for i := 1; i < len(v.X); i++ {
 		if d := v.X[i] - v.X[i-1]; math.Abs(float64(d-m.MonoAdvance)) > 1e-3 {
 			t.Fatalf("glyph %d advances %v, want %v (X=%v)", i-1, d, m.MonoAdvance, v.X)
