@@ -217,3 +217,37 @@ Paced 120 Hz, exact allocation deltas. Runs were started with `open`, so the win
 - Windows (amd64 and arm64) renders `rexlook` and `listbench` offscreen; the PNGs are artifacts, reviewed by eye.
 - The windowed `listbench` bench passes the allocation gate, paced on WARP.
 - Linux passes with the patched go-text (D23), including the exact zero-allocation scroll tests.
+
+### Bench stalls explained (2026-10-17)
+
+Bench timeouts now print a state line, which settles the cause.
+
+- **The run that stalled** (1 of 6) had its window occluded from launch, and the app never became active:
+  - `occ=8192(hidden) lastvis=hidden@38.6s-ago key=0 active=0`;
+  - you were working in another app.
+- **What macOS did:** it throttled the hidden window's `CAMetalDisplayLink` to ~8 ticks/s (`evframes=317` in 40 s). The bench could not reach its frame count.
+- **No delivery bug:** the platform and pacer code showed no path that stops frames while the window is visible.
+- **The other 5 runs** were paced at 120 Hz, with 0 allocations.
+  - Main-thread CPU: 1.06–1.24 ms per frame.
+  - Build: 0.57–0.68 ms per frame.
+  - Encode: ~0.2 ms per frame.
+
+### Independent review
+
+- **review-sol, phase-3 review:** 9 findings.
+- **Scoped re-review of the fixes:** 6 more.
+
+All 15 are fixed, each with a regression test that fails without its fix. The fixes:
+- **Input:**
+  - mouse transitions are applied in order;
+  - focus loss cancels instead of clicking;
+  - a release keeps its own click metadata.
+- **Frame loop:** frames are requested for all owed work, including inside OS modal loops; resize settles; scroll settling is decided after layout.
+- **Text atlas:** glyphs can't go stale; repaints after an atlas overflow are bounded.
+- **Glyph culling:** pre-lookup culling was removed, because it dropped overhanging glyphs.
+- **Windows:** the cursor comes from the current pointer position.
+- **Live resize:** the report tells paced frames from fallback frames.
+- **go-text patch:** reads a 16-value array (bounds).
+- **Docs:** one claim was narrowed.
+
+The second round of fixes was not re-reviewed (edge cases, no high-risk changes).
