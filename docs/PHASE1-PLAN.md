@@ -25,7 +25,7 @@ On macOS (measured here):
 1. Exec → window visible with first frame: median ≤ 150 ms warm, measured both externally and in-app (occlusion state "visible").
 2. Idle: CPU time unchanged over 60 s, 0 presents, wakeups reported.
 3. Worker → loop wake latency measured (target < 1 ms at p99).
-4. Animating: frame intervals track the display refresh (vsync). Exactly 0 heap objects and 0 bytes allocated over 600 warmed-up frames, measured with `runtime/metrics` deltas.
+4. Animating: frame intervals track the display refresh (vsync). Exactly 0 heap objects and 0 bytes allocated over 600 warmed-up frames, measured with exact allocation deltas. (Phase 1 found that `runtime/metrics` deltas are not exact; `ReadMemStats` is used instead, see DECISIONS D11.)
 5. Memory: `phys_footprint` ≤ 40 MB at 960×600 pt @2× after settling. Peak footprint reported.
 6. Stripped binary ≤ 5 MB.
 7. DPI: the window moved between scales (or a scale change simulated with `-scale`) resizes the drawable correctly.

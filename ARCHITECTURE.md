@@ -103,6 +103,31 @@ synchronously from the OS resize callback (`windowDidResize:` with
 `presentsWithTransaction` on macOS, `WM_SIZE`/`WM_PAINT` inside the modal
 loop on Windows, configure events on Wayland).
 
+### Content-first startup (half-bounce goal)
+
+**Goal (user, 2026-10-16):** half-bounce or better on macOS. The window
+must be on screen with its real content, and usable, before the Dock icon
+finishes the first half of its first launch bounce. Windows and Linux use
+the same wall-clock threshold. A blank or placeholder window followed by
+content later does not count. See P1 "Half-bounce" for the definition and
+sources.
+
+**Rules:**
+
+1. **The first visible frame is a complete frame.** The window reaches the screen together with its first content frame, never before it.
+   - **macOS:** create the window without ordering it front and render the first frame into the `CAMetalLayer`. Then commit the present and `orderFront` in one `CATransaction`, presenting the first frame with `presentsWithTransaction`, then back to asynchronous presents. *Phase-2 experiment: confirm no empty frame reaches the screen.*
+   - **Windows:** create the window cloaked (`DWMWA_CLOAK`), present the first frame, then uncloak and show it. No white flash.
+   - **Wayland:** a surface maps only when its first buffer is committed, so commit only a complete frame.
+   - **X11:** no background pixmap (no flash of background). Map the window, then draw immediately. *Phase-2 research: frame-drawn sync with compositors.*
+2. **The main thread's critical path is OS window setup only.** On macOS that is ~92 ms of AppKit setup (P1). Workers start at the top of `main` and must finish before AppKit does:
+   - read the initial directory (persisted last path), or render a persisted snapshot of the last listing validated by mtime, then revalidate;
+   - load fonts, shape and rasterise only the glyphs of the visible rows;
+   - create the GPU pipeline; precompile shaders if runtime compilation turns out to be on the critical path (D14).
+3. **Persisted UI state** (window frame, panes, sort, scroll position) is read synchronously at startup. It is small, and it lets the first frame lay out without a second pass.
+4. **Measure what the user sees.**
+   - **External:** a `.app` bundle launched with `open` and recorded with ScreenCaptureKit at ≥ 60 fps. Measure launch → first frame with complete content, and the Dock bounce period from the same recording.
+   - **In-app:** present feedback (`MTLDrawable` presented time, DXGI frame statistics, `wp_presentation`) on top of exec → first present.
+
 ## 4. Calling the OS without cgo, without allocating
 
 Measured on darwin/arm64 (`probes/ffi*`): every purego call path allocates
@@ -306,12 +331,12 @@ Linux targets stay at the brief's values until we have machines.
 
 | Metric | Brief | Revised (macOS) | Measured so far (macOS; phase 1 spike unless noted) | Baselines |
 |---|---|---|---|---|
-| Cold start → first interactive frame | < 150 ms | **≤ 150 ms exec → window on screen with content (warm); stretch 120 ms**. "Cold after reboot" is reported separately | 134.9 ms median exec → first present (7 warm runs). Time to visible pixels is **not measured**: the display was asleep and the session locked (P1) | Zed 302 ms |
-| Idle | 0 % CPU, no frames | 0 CPU-time growth over 60 s, 0 presents, ≤ 1 wakeup/s | 0 presents / 60 s; 4.2 ms CPU / 60 s; 1.0 package-idle wakeups/s (0.2/s by `top` in another window) | Zed 0.36 s CPU / 10 s just after start |
+| Cold start → first interactive frame | < 150 ms | **Headline: half-bounce or better on macOS** (§3, content-first startup), the same wall-clock threshold on Windows/Linux. Operational budget: **≤ 150 ms from launch (`open` / Dock click) → first frame with complete content on screen (warm); stretch 120 ms**. The bounce duration is still to be measured on this Mac. "Cold after reboot" is reported separately | 134.9 ms median exec → first present (7 warm runs). Time to visible pixels is **not measured**: the display was asleep and the session locked (P1) | Zed 302 ms |
+| Idle | 0 % CPU, no frames | 0 CPU-time growth over 60 s, 0 presents, ≤ 1 wakeup/s | 0 presents / 60 s; 3.9–4.2 ms CPU / 60 s (unattributed); 0.17–1.0 package-idle wakeups/s across runs | Zed 0.36 s CPU / 10 s just after start |
 | Scroll 1M rows | < 4 ms CPU/frame, 0 allocs | same; also report GPU time | — | — |
 | Memory, empty demo | < 40 MB RSS | **`phys_footprint` ≤ 40 MB at 960×600 pt @2×**; non-GPU footprint ≤ 12 MB; Go heap ≤ 4 MB. RSS reported but not gated: on macOS it counts shared framework pages (88 MB for a 34 MB-footprint process) | 30.6 MB after a 60 s idle. Peaks are reclaimable graphics memory: 84 MB at startup, ~100 MB after unpaced animation into an occluded layer (re-measure with a live display) | Zed 118 MB, Finder 114 MB |
 | Bytes per file entry | minimize | ≤ 64 B incl. name (excl. icons) | 24 B + name bytes | — |
-| Binary (stripped) | < 10 MB | < 10 MB hard, ≤ 5 MB target | spike 2.54–2.82 MB on all six targets (darwin/arm64 2.69 MB) | Zed 260 MB, Gio hello 6.1 MB, File Pilot 2.46 MB |
+| Binary (stripped) | < 10 MB | < 10 MB hard, ≤ 5 MB target | spike 2.52–2.76 MiB on all six targets (darwin/arm64 2.64 MiB) | Zed 260 MB, Gio hello 6.1 MB, File Pilot 2.46 MB |
 | Input-to-photon | measure | report event-timestamp → present time from OS present feedback (`MTLDrawable.presentedTime`, DXGI frame statistics, `wp_presentation`); camera measurement if hardware becomes available | — | — |
 
 ## 12. Testing and CI
@@ -321,7 +346,11 @@ Linux targets stay at the brief's values until we have machines.
   - `windows-2025` (D3D11, WARP when there is no GPU)
   - `ubuntu-24.04` + Xvfb + Mesa llvmpipe (X11)
   - `ubuntu-24.04` + headless Weston (Wayland; Weston lacks fractional-scale-v1, so integer scale only)
-- The spike gate is `spike -bench -gate -timeout 120s` on every OS. It fails on any idle present, any allocation in warmed-up animated frames, zero frames, or a hang.
+- The spike gate is `spike -bench -gate -timeout 120s` on every OS. It fails if:
+  - anything is presented while idle;
+  - any of the 600 warmed-up animated frames allocates (exact `ReadMemStats` deltas);
+  - frames are not paced by the OS frame signal;
+  - the run hangs.
 - Gates: build + vet on all targets; cross-compile all targets from each
   host with `CGO_ENABLED=0`; unit tests; allocation-exactness tests; spike
   smoke run (open window, wake from worker, present N frames, exit)

@@ -671,8 +671,12 @@ func (w *Window) onXdgSurface(op uint32, a unsafe.Pointer) {
 	if op != 0 { // configure(serial)
 		return
 	}
-	if y.pendW > 0 && y.pendH > 0 {
-		w.lw, w.lh = y.pendW, y.pendH
+	// A zero dimension means "client's choice"; keep our current value for it.
+	if y.pendW > 0 {
+		w.lw = y.pendW
+	}
+	if y.pendH > 0 {
+		w.lh = y.pendH
 	}
 	y.args[0] = uint64(argU(a, 0))
 	w.req(y.xdgSurface, 4, 0, y.xdgSurfaceV, 0) // ack_configure

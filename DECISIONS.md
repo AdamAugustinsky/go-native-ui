@@ -133,8 +133,8 @@ unacceptable, because we profile scrolling.
 so the window is occluded and `CADisplayLink` never fires.
 - **Startup:** exec → first present has a median of 134.9 ms.
 - **Idle:** 0 presents and 4.2 ms CPU per 60 s.
-- **Wakes:** worker → loop wake p99 is 201 µs.
-- **Frames:** 0 allocations over 480 unpaced frames.
+- **Wakes:** worker → loop wake p99 is 152–340 µs across runs.
+- **Frames:** 0 allocations over 600 unpaced frames (exact `ReadMemStats` deltas, D11).
 - **Memory:** idle footprint is 30.6 MB. The 84 MB startup peak is reclaimable graphics memory and drops to ~34 MB within about 2 s.
 
 The phase-0 "on screen" numbers measured window-server registration, not
@@ -280,7 +280,12 @@ hit testing and virtualized lists (ARCHITECTURE §8).
 - Index handles instead of pointers.
 - Double-buffered frame arenas.
 - No `GOEXPERIMENT=arenas`.
-- Zero-allocation frames are a CI gate. The gate asserts exact `runtime/metrics` allocation deltas over warmed-up, isolated frame sequences; `testing.AllocsPerRun` is used only for micro hot paths.
+- Zero-allocation frames are a CI gate. The gate asserts exact allocation deltas over warmed-up, isolated frame sequences; `testing.AllocsPerRun` is used only for micro hot paths.
+- **Phase 1 correction: the exact deltas come from `runtime.ReadMemStats`** (`Mallocs`, `TotalAlloc`, `NumGC`), not `runtime/metrics`.
+  - The `/gc/heap/allocs:*` counters are credited a whole span at a time on per-P cache refill, so allocations within an already-credited span go unseen.
+  - Measured: 600 small allocations after `runtime.GC()` read as 0 via `runtime/metrics`, and as 600 via `ReadMemStats`, which flushes the caches first.
+  - A per-frame allocation planted in the spike reads 601 objects with the corrected gate (P1).
+  - `runtime/metrics` stays fine for GC-cycle and live-heap measurements (M:4).
 
 **Evidence (M:4).** For 1M entries, Go strings cost 8.94 ms of GC CPU per
 cycle and leave 1,000,259 heap objects. Offsets cost 0.16 ms and leave 241
@@ -302,8 +307,12 @@ returned-attributes bitmap.
 
 ## D13. How we measure
 
-- **Startup:**
-  - an external timer from exec until the child's first layer-0 window is on screen (`probes/startwin`, `CGWindowListCopyWindowInfo`);
+- **Startup, headline: half-bounce or better** (user goal, 2026-10-16; ARCHITECTURE §3 "Content-first startup").
+  - On macOS: from `open` of a `.app` bundle until the first frame with complete content is on screen, compared against the Dock bounce period. Both come from one ScreenCaptureKit recording at ≥ 60 fps, the same method as Bounce Lab.
+  - On Windows/Linux: the same threshold in milliseconds, from launch request to first content frame, using present feedback (DXGI frame statistics, `wp_presentation`).
+  - Phase 1 found that the window-list timer below only proves window-server registration, not pixels; it remains a secondary signal.
+- **Startup, secondary signals:**
+  - an external timer from exec until the child's first layer-0 window is listed by the window server (`probes/startwin`, `CGWindowListCopyWindowInfo`);
   - an internal timeline (process start → first present).
   - Warm runs are reported as a median of ≥ 5. "Cold after reboot" is reported separately when available. The first launch of a new binary is excluded, since it includes the Gatekeeper scan.
 - **Memory:**
@@ -340,7 +349,7 @@ GitHub Actions matrix, as in ARCHITECTURE §12. It is written in phase 1 but
 Every spike job runs `spike -bench -gate -timeout 120s`. The run fails if:
 - the idle phase presented anything;
 - the warmed-up animated frames allocated any object or byte;
-- no frames were produced;
+- the 600 warmed-up frames were not all produced, or were not paced by the OS frame signal;
 - the run hangs.
 
 Runner timings are uploaded as artifacts but are not gated.

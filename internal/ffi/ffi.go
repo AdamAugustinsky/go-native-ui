@@ -141,8 +141,8 @@ func (f *Frame) ArgF32(v float32) *Frame {
 // ArgRect appends a CGRect/NSRect (4 doubles) by value: an HFA in d-registers
 // on arm64, MEMORY class (copied to the stack) on amd64 SysV.
 func (f *Frame) ArgRect(x, y, w, h float64) *Frame {
-	if runtime.GOARCH == "arm64" && f.nf+4 <= numFloatRegs {
-		return f.ArgF64(x).ArgF64(y).ArgF64(w).ArgF64(h)
+	if runtime.GOARCH == "arm64" {
+		return f.argHFA(x, y, w, h)
 	}
 	for _, v := range [4]float64{x, y, w, h} {
 		f.push(uintptr(math.Float64bits(v)), 8)
@@ -151,8 +151,38 @@ func (f *Frame) ArgRect(x, y, w, h float64) *Frame {
 }
 
 // ArgPoint appends a CGPoint/CGSize (2 doubles) by value: HFA on arm64, two
-// SSE eightbytes on amd64. Both use two float registers.
-func (f *Frame) ArgPoint(x, y float64) *Frame { return f.ArgF64(x).ArgF64(y) }
+// SSE eightbytes on amd64. Either way it takes two float registers or, if
+// fewer remain, goes wholly on the stack.
+func (f *Frame) ArgPoint(x, y float64) *Frame {
+	if runtime.GOARCH == "arm64" {
+		return f.argHFA(x, y)
+	}
+	if f.nf+2 <= numFloatRegs {
+		return f.ArgF64(x).ArgF64(y)
+	}
+	// SysV: an argument whose eightbytes don't all fit in registers goes on
+	// the stack, and the remaining registers stay available for later ones.
+	f.push(uintptr(math.Float64bits(x)), 8)
+	f.push(uintptr(math.Float64bits(y)), 8)
+	return f
+}
+
+// argHFA passes a homogeneous double aggregate (AAPCS64 C.2/C.3): in
+// consecutive d-registers if all fit; otherwise wholly on the stack, and no
+// later float argument may use a register (NSRN = 8).
+func (f *Frame) argHFA(v ...float64) *Frame {
+	if f.nf+len(v) <= numFloatRegs {
+		for _, x := range v {
+			f.ArgF64(x)
+		}
+		return f
+	}
+	f.nf = numFloatRegs
+	for _, x := range v {
+		f.push(uintptr(math.Float64bits(x)), 8)
+	}
+	return f
+}
 
 // SetIndirectResult sets the hidden pointer for large struct returns: x8 on
 // arm64. On amd64 the pointer is the first integer argument, so callers must

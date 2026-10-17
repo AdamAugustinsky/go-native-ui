@@ -123,6 +123,7 @@ var (
 	selDidChangeOcclus   = objc.Sel("windowDidChangeOcclusionState:")
 
 	clsNSArray, clsNSAttributedString objc.ID
+	clsNSDate                         objc.ID // cached: objc.Cls allocates, and Wait runs every frame
 )
 
 // GNUI_DEBUG=1 traces every Objective-C method our classes receive (allocates).
@@ -148,7 +149,9 @@ func registerClasses() {
 		{Sel: selValidAttrs, Types: "@@:"},
 		{Sel: selAttrSubstring, Types: "@@:{_NSRange=QQ}^{_NSRange=QQ}"},
 		{Sel: selCharIndexForPoint, Types: "Q@:{CGPoint=dd}"},
-		{Sel: selFirstRect, Types: "{CGRect={CGPoint=dd}{CGSize=dd}}@:{_NSRange=QQ}^{_NSRange=QQ}"},
+		// Returns a CGRect: through a hidden pointer on amd64, which shifts
+		// self/_cmd by one argument, so it gets its own IMP.
+		{Sel: selFirstRect, Types: "{CGRect={CGPoint=dd}{CGSize=dd}}@:{_NSRange=QQ}^{_NSRange=QQ}", IMP: ffi.NewCallback(firstRectIMP)},
 		{Sel: selViewBacking, Types: "v@:"},
 		{Sel: selDisplayLinkFired, Types: "v@:@"},
 	})
@@ -238,9 +241,9 @@ func Open(o Options) (*Window, error) {
 	w.wakeEv = objc.Retain(objc.ID(F.Reset().Arg(uintptr(objc.Cls("NSEvent"))).Arg(uintptr(selOtherEvent)).
 		Arg(15 /* NSEventTypeApplicationDefined */).ArgPoint(0, 0).Arg(0).ArgF64(0).Arg(0).Arg(0).
 		Arg(wakeSubtype).Arg(0).Arg(0).Call(objc.MsgSend).R0()))
-	nsDate := objc.Cls("NSDate")
-	w.distantPast = objc.Retain(objc.Send(nsDate, selDistantPast))
-	w.distantFuture = objc.Retain(objc.Send(nsDate, selDistantFuture))
+	clsNSDate = objc.Cls("NSDate")
+	w.distantPast = objc.Retain(objc.Send(clsNSDate, selDistantPast))
+	w.distantFuture = objc.Retain(objc.Send(clsNSDate, selDistantFuture))
 
 	theWindow.Store(w)
 	objc.Send(w.app, selFinishLaunching)
@@ -259,6 +262,9 @@ func Open(o Options) (*Window, error) {
 	objc.Send2(w.link, selAddToRunLoop, uintptr(objc.Send(objc.Cls("NSRunLoop"), selMainRunLoop)), uintptr(commonModes))
 	objc.Send1(w.link, selSetPaused, 1)
 	w.updateSize()
+	if wakePending.Load() { // a Wake before Open found no window to post to
+		osWake()
+	}
 	return w, nil
 }
 
@@ -297,7 +303,7 @@ func (w *Window) Wait(timeoutNs int64) []Event {
 	case len(w.q.ev) > 0 || timeoutNs == 0:
 		until = w.distantPast
 	case timeoutNs > 0:
-		until = objc.ID(F.Reset().Arg(uintptr(objc.Cls("NSDate"))).Arg(uintptr(selDateSinceNow)).
+		until = objc.ID(F.Reset().Arg(uintptr(clsNSDate)).Arg(uintptr(selDateSinceNow)).
 			ArgF64(float64(timeoutNs) / 1e9).Call(objc.MsgSend).R0())
 	}
 	for ev := w.nextEvent(until); ev != 0; ev = w.nextEvent(w.distantPast) {
@@ -402,7 +408,22 @@ func (w *Window) handle(ev objc.ID) {
 	objc.Send1(w.app, selSendEvent, uintptr(ev))
 }
 
-// impHandler is the IMP of every method on GNUIView and GNUIWindowDelegate.
+// firstRectIMP implements firstRectForCharacterRange:actualRange: (the IME
+// candidate-window anchor). Phase 1 returns an empty rect; IME is phase 3.
+// amd64: argument 0 is the hidden result pointer, which the trampoline also
+// returns in rax. arm64: CGRect is an HFA returned in d0-d3.
+func firstRectIMP(c *ffi.CB) {
+	if runtime.GOARCH == "amd64" {
+		*(*objc.Rect)(c.IndirectResult()) = objc.Rect{}
+		return
+	}
+	for i := range 4 {
+		c.RetF64(i, 0)
+	}
+}
+
+// impHandler is the IMP of every method on GNUIView and GNUIWindowDelegate,
+// except firstRectIMP.
 // Arguments: 0 = self, 1 = _cmd, 2.. = method arguments.
 func impHandler(c *ffi.CB) {
 	w := theWindow.Load()
@@ -443,15 +464,6 @@ func impHandler(c *ffi.CB) {
 		c.Ret(0)
 	case selCharIndexForPoint:
 		c.Ret(uintptr(math.MaxInt64))
-	case selFirstRect:
-		if runtime.GOARCH == "amd64" { // NSRect is returned through a hidden pointer
-			*(*objc.Rect)(c.IndirectResult()) = objc.Rect{}
-		} else {
-			c.RetF64(0, 0)
-			c.RetF64(1, 0)
-			c.RetF64(2, 0)
-			c.RetF64(3, 0)
-		}
 	case selViewBacking, selDidChangeBacking, selDidResize:
 		if w != nil {
 			w.pushResize()
@@ -533,11 +545,14 @@ func osWake() {
 	if w == nil {
 		return
 	}
+	// Autorelease pools are per thread: stay on one OS thread from push to pop.
+	runtime.LockOSThread()
 	wakeMu.Lock()
 	pool := wakeFrame.Call0(objc.PoolPush)
 	wakeFrame.Call4(objc.MsgSend, uintptr(w.app), uintptr(selPostEvent), uintptr(w.wakeEv), 0)
 	wakeFrame.Call1(objc.PoolPop, pool)
 	wakeMu.Unlock()
+	runtime.UnlockOSThread()
 }
 
 // macKey maps a kVK_* virtual key code to Key.

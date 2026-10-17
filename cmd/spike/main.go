@@ -8,8 +8,8 @@
 // -bench runs a scripted sequence and prints a JSON report:
 //
 //	startup timeline → idle window (0 presents expected) → 200 worker
-//	wakes (latency) → 600 animated frames (vsync intervals, exact heap
-//	allocation deltas) → exit
+//	wakes (latency) → 120 warm-up + 600 measured animated frames (vsync
+//	intervals, exact heap allocation deltas) → exit
 package main
 
 import (
@@ -19,7 +19,6 @@ import (
 	"math"
 	"os"
 	"runtime"
-	"runtime/metrics"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -36,7 +35,7 @@ type report struct {
 	MainToOpenMs         float64
 	OpenToSurfaceMs      float64
 	ExecToFirstPresent   float64 `json:"ExecToFirstPresentMs"`
-	ExecToVisibleMs      float64
+	ExecToVisibleMs      float64 // first present AND occlusion state visible (an OS signal, not proof of pixels); -1 if never visible
 	IdleSeconds          float64
 	IdlePresents         int
 	IdleCPUms            float64
@@ -85,7 +84,7 @@ const (
 
 const (
 	wakeCount     = 200
-	animFrames    = 600
+	animFrames    = 600 // measured, after animWarmup
 	animWarmup    = 120
 	visibleWaitNs = int64(3 * time.Second)
 	// presentRetryNs backs off after a failed Present (e.g. DXGI_STATUS_OCCLUDED)
@@ -95,6 +94,7 @@ const (
 
 var (
 	wakeSentAt atomic.Int64 // Now() when the worker called Wake (bench)
+	wakeAck    = make(chan struct{}, 1)
 	curPhase   atomic.Int32 // bench phase, for the -timeout message
 	colorIndex atomic.Uint32
 )
@@ -108,7 +108,8 @@ func main() {
 	exitFirst := flag.Bool("exit-first", false, "exit after the first frame is presented and the window is visible")
 	quiet := flag.Bool("quiet", false, "don't log events")
 	idleDuration := flag.Duration("idle", 3*time.Second, "bench: idle window length")
-	gate := flag.Bool("gate", false, "bench: exit with status 3 unless idle presented nothing and animated frames allocated nothing (CI regression gate)")
+	gate := flag.Bool("gate", false, "bench: exit with status 3 unless idle presented nothing, animated frames allocated nothing and were vsync-paced (CI regression gate)")
+	allowUnpaced := flag.Bool("allow-unpaced", false, "gate: accept unpaced frames (no frame callbacks, e.g. display asleep)")
 	deadline := flag.Duration("timeout", 0, "abort with exit status 2 if the run has not finished after this long (0: never)")
 	flag.Parse()
 	if *deadline > 0 {
@@ -166,22 +167,27 @@ func main() {
 		idleEnd                    int64
 		idleSnap                   sysinfo.Snapshot
 		wakeLat                    = make([]float64, 0, wakeCount)
-		intervals                  = make([]float64, 0, animFrames)
+		intervals                  = make([]float64, 0, animFrames+16) // headroom: append must never grow inside the measured window
 		lastFrame                  int64
 		requestedAt                int64
 		presentRetryAt             int64
 		paced                      = true
 		animCPU0                   int64
-		allocSamples               = []metrics.Sample{{Name: "/gc/heap/allocs:objects"}, {Name: "/gc/heap/allocs:bytes"}, {Name: "/gc/cycles/total:gc-cycles"}}
-		alloc0                     [3]uint64
-		t                          float32
+		// ReadMemStats flushes the per-P allocation caches, so its deltas are
+		// exact. runtime/metrics heap counters are credited a whole span at a
+		// time and miss small allocations (see DECISIONS D11).
+		mem0, mem1 runtime.MemStats
+		t          float32
 	)
 	startWorkerWakes := func() {
 		go func() {
+			// One wake in flight at a time: Wake coalesces, so a wake sent
+			// before the loop reported the previous one would be lost.
 			for i := 0; i < wakeCount; i++ {
 				time.Sleep(5 * time.Millisecond)
 				wakeSentAt.Store(platform.Now())
 				platform.Wake()
+				<-wakeAck
 			}
 		}()
 	}
@@ -192,8 +198,13 @@ func main() {
 			paced, frameReady = false, true // display link silent: occluded window or display asleep
 		}
 		switch {
-		case needDraw && frameReady:
+		case needDraw && frameReady && presentRetryAt == 0:
 			timeout = 0
+			if phase == phaseAnimate {
+				// Unpaced frames still take the finite-deadline Wait path that
+				// paced frames use, so the allocation gate covers it.
+				timeout = 1
+			}
 		case phase == phaseAnimate && paced:
 			timeout = max(requestedAt+int64(time.Second)-platform.Now(), 0)
 		case phase == phaseIdle:
@@ -233,6 +244,7 @@ func main() {
 			case platform.EvWake:
 				if phase == phaseWake {
 					wakeLat = append(wakeLat, float64(platform.Now()-wakeSentAt.Load())/1e3)
+					wakeAck <- struct{}{}
 					if len(wakeLat) == wakeCount {
 						phase = phaseAnimate
 						animating, needDraw = true, true
@@ -278,7 +290,7 @@ func main() {
 				rep.ExecToFirstPresent = sinceExec(firstPresent)
 				rep.ExecToVisibleMs = -1
 				if visibleAt != 0 {
-					rep.ExecToVisibleMs = sinceExec(visibleAt)
+					rep.ExecToVisibleMs = sinceExec(max(visibleAt, firstPresent))
 				}
 				if *exitFirst {
 					printJSON(rep)
@@ -305,13 +317,10 @@ func main() {
 			}
 		}
 
-		if needDraw && frameReady {
+		if needDraw && frameReady && presentRetryAt == 0 {
 			if phase == phaseAnimate && presents-idlePresentsBase == animWarmup {
 				runtime.GC()
-				metrics.Read(allocSamples)
-				for i := range alloc0 {
-					alloc0[i] = allocSamples[i].Value.Uint64()
-				}
+				runtime.ReadMemStats(&mem0)
 				animCPU0 = cpuNs()
 			}
 			c := palette[int(colorIndex.Load())%len(palette)]
@@ -330,17 +339,18 @@ func main() {
 				}
 			} else {
 				rep.PresentFailures++
-				frameReady, presentRetryAt = false, platform.Now()+presentRetryNs
+				presentRetryAt = platform.Now() + presentRetryNs
 			}
-			needDraw = animating
-			if phase == phaseAnimate && presents-idlePresentsBase >= animFrames {
-				metrics.Read(allocSamples)
+			needDraw = animating || presentRetryAt != 0 // a failed frame is still owed
+			if phase == phaseAnimate && presents-idlePresentsBase >= animWarmup+animFrames {
+				cpu1 := cpuNs()
+				runtime.ReadMemStats(&mem1)
 				rep.Frames = presents - idlePresentsBase - animWarmup
-				rep.FrameAllocObjects = allocSamples[0].Value.Uint64() - alloc0[0]
-				rep.FrameAllocBytes = allocSamples[1].Value.Uint64() - alloc0[1]
-				rep.FrameGCs = allocSamples[2].Value.Uint64() - alloc0[2]
+				rep.FrameAllocObjects = mem1.Mallocs - mem0.Mallocs
+				rep.FrameAllocBytes = mem1.TotalAlloc - mem0.TotalAlloc
+				rep.FrameGCs = uint64(mem1.NumGC - mem0.NumGC)
 				rep.FramesPaced = paced
-				rep.FrameCPUus = float64(cpuNs()-animCPU0) / 1e3 / float64(rep.Frames)
+				rep.FrameCPUus = float64(cpu1-animCPU0) / 1e3 / float64(rep.Frames)
 				phase = phaseDone
 			}
 		}
@@ -363,8 +373,11 @@ func main() {
 	win.Close()
 	if *bench && *gate {
 		var failed []string
-		if rep.Frames == 0 {
-			failed = append(failed, "no animated frames")
+		if rep.Frames != animFrames {
+			failed = append(failed, fmt.Sprintf("%d measured frames, want %d", rep.Frames, animFrames))
+		}
+		if !rep.FramesPaced && !*allowUnpaced {
+			failed = append(failed, "frames were not vsync-paced (no frame callbacks)")
 		}
 		if rep.IdlePresents != 0 {
 			failed = append(failed, fmt.Sprintf("%d presents while idle", rep.IdlePresents))

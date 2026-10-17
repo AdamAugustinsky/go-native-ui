@@ -525,7 +525,10 @@ func wndProc(hwnd, m, wp, lp uintptr) uintptr {
 			code |= 0xE000
 		}
 		var k Key
-		if wp < uintptr(len(keyMap)) {
+		if code < uint32(len(scanKeys)) {
+			k = scanKeys[code]
+		}
+		if k == KeyUnknown && wp < uintptr(len(keyMap)) {
 			k = keyMap[wp]
 		}
 		w.q.push(Event{Kind: EvKey, Key: k, Code: code, Mods: currentMods(), Flags: f, Time: Now()})
@@ -682,11 +685,24 @@ func buildKeyMap() (m [256]Key) {
 	for i := 0; i < 12; i++ {
 		m[0x70+i] = KeyF1 + Key(i) // VK_F1..VK_F12
 	}
-	for i := 0; i < 26; i++ {
-		m['A'+i] = KeyA + Key(i)
-	}
-	for i := 0; i < 10; i++ {
-		m['0'+i] = Key0 + Key(i)
-	}
 	return m
 }
+
+// scanKeys maps set-1 scancodes of the letter and digit keys to Key by
+// physical (US) position, so letters/digits match macOS and Linux regardless
+// of the keyboard layout (VK_A..VK_Z follow the layout).
+var scanKeys = func() (t [0x33]Key) {
+	for i, r := range "1234567890" {
+		t[0x02+i] = Key0 + Key(r-'0')
+	}
+	rows := [...]struct {
+		first   int
+		letters string
+	}{{0x10, "QWERTYUIOP"}, {0x1E, "ASDFGHJKL"}, {0x2C, "ZXCVBNM"}}
+	for _, row := range rows {
+		for i, r := range row.letters {
+			t[row.first+i] = KeyA + Key(r-'A')
+		}
+	}
+	return t
+}()

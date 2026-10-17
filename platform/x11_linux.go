@@ -92,6 +92,7 @@ var xf struct {
 	selectInput, internAtom, setWMProtocols, storeName, mapWindow, flush                  uintptr
 	pending, nextEvent, connectionNumber, resourceManagerString                           uintptr
 	lookupString, destroyWindow, setDetectableAutoRepeat                                  uintptr
+	keysymToUTF8                                                                          uintptr // optional, libxkbcommon
 }
 
 var xLoaded bool
@@ -112,6 +113,7 @@ type x11 struct {
 	supp     int32      // XkbSetDetectableAutoRepeat out parameter (Bool)
 	keyDown  [32]uint8  // pressed keycodes, to flag auto-repeat
 	keyBuf   [32]byte
+	utf8     [8]byte // xkb_keysym_to_utf8 output
 	title    [128]byte
 }
 
@@ -145,6 +147,11 @@ func loadX11() error {
 		{"XkbSetDetectableAutoRepeat", &xf.setDetectableAutoRepeat},
 	}); err != nil {
 		return err
+	}
+	// XLookupString only yields Latin-1; libxkbcommon converts any keysym to
+	// UTF-8. Optional: without it, non-Latin-1 layouts produce no text.
+	if xh, err := dlopen("libxkbcommon.so.0", "libxkbcommon.so"); err == nil {
+		_ = dlsyms(xh, "libxkbcommon", []symRef{{"xkb_keysym_to_utf8", &xf.keysymToUTF8}})
 	}
 	xLoaded = true
 	return nil
@@ -261,20 +268,21 @@ func (w *Window) waitX11(timeoutNs int64) {
 			w.q.push(Event{Kind: EvFrame, Time: nanotime()})
 		}
 		w.flushResize()
-		if len(w.q.ev) > 0 {
-			return
-		}
-		now := nanotime()
 		tmo := int64(-1)
 		if deadline >= 0 {
-			if now >= deadline {
-				return
-			}
-			tmo = deadline - now
+			tmo = max(deadline-nanotime(), 0)
 		}
+		if len(w.q.ev) > 0 {
+			tmo = 0
+		}
+		// Poll even when returning at once, so worker wakes are not starved
+		// while frames keep the queue non-empty.
 		w.pfd[0].events = pollIn
 		w.pollWait(tmo)
 		w.drainWake()
+		if tmo == 0 {
+			return
+		}
 	}
 }
 
@@ -335,13 +343,28 @@ func (w *Window) x11Event() {
 			x.keyDown[kc>>3&31] &^= bit
 		}
 		w.q.push(ev)
-		if down && n > 0 && x.keyBuf[0] >= 0x20 && x.keyBuf[0] != 0x7f {
-			if n == 1 && x.keyBuf[0] >= 0x80 { // Latin-1 -> UTF-8
-				c := x.keyBuf[0]
-				x.keyBuf[0], x.keyBuf[1] = 0xC0|c>>6, 0x80|c&0x3F
-				n = 2
+		if down {
+			var text []byte
+			if xf.keysymToUTF8 != 0 {
+				// Shortcut chords produce no text.
+				if mods&(ModCtrl|ModAlt|ModSuper) == 0 {
+					m := int32(fr.Reset().Arg32(uint32(x.keysym)).Arg(uintptr(unsafe.Pointer(&x.utf8[0]))).
+						Arg(uintptr(len(x.utf8))).Call(xf.keysymToUTF8).R0())
+					if m > 1 { // byte count includes the terminating NUL
+						text = x.utf8[:m-1]
+					}
+				}
+			} else if n > 0 {
+				if n == 1 && x.keyBuf[0] >= 0x80 { // Latin-1 -> UTF-8
+					c := x.keyBuf[0]
+					x.keyBuf[0], x.keyBuf[1] = 0xC0|c>>6, 0x80|c&0x3F
+					n = 2
+				}
+				text = x.keyBuf[:n]
 			}
-			w.q.pushText(x.keyBuf[:n], now)
+			if len(text) > 0 && text[0] >= 0x20 && text[0] != 0x7f {
+				w.q.pushText(text, now)
+			}
 		}
 	case xButtonPress, xButtonRelease:
 		down := x.i32(xoType) == xButtonPress

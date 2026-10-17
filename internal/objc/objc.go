@@ -180,11 +180,13 @@ func AppendUTF8(dst []byte, str ID) []byte {
 // Method describes one method added to a runtime-created class.
 type Method struct {
 	Sel   SEL
-	Types string // Objective-C type encoding, e.g. "v@:@"
+	Types string  // Objective-C type encoding, e.g. "v@:@"
+	IMP   uintptr // overrides the class's shared IMP when non-zero
 }
 
-// NewClass creates and registers a class whose methods all share imp (an
-// ffi callback that dispatches on the selector in argument 1).
+// NewClass creates and registers a class whose methods share imp (an ffi
+// callback that dispatches on the selector in argument 1), unless a Method
+// sets its own IMP.
 func NewClass(name string, super ID, protocols []string, imp uintptr, methods []Method) ID {
 	cls := ID(F.Call3(allocPair, uintptr(super), uintptr(unsafe.Pointer(CString(name))), 0))
 	if cls == 0 {
@@ -196,7 +198,11 @@ func NewClass(name string, super ID, protocols []string, imp uintptr, methods []
 		}
 	}
 	for _, m := range methods {
-		F.Call4(addMethod, uintptr(cls), uintptr(m.Sel), imp, uintptr(unsafe.Pointer(CString(m.Types))))
+		f := imp
+		if m.IMP != 0 {
+			f = m.IMP
+		}
+		F.Call4(addMethod, uintptr(cls), uintptr(m.Sel), f, uintptr(unsafe.Pointer(CString(m.Types))))
 	}
 	F.Call1(registerPair, uintptr(cls))
 	return cls

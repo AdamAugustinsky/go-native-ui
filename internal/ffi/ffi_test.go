@@ -5,7 +5,7 @@ package ffi
 import (
 	"math"
 	"runtime"
-	"runtime/metrics"
+	"slices"
 	"testing"
 	"unsafe"
 
@@ -107,10 +107,14 @@ func TestCallback(t *testing.T) {
 	}
 }
 
+var memStats runtime.MemStats
+
+// allocs reads exact cumulative allocation counts. ReadMemStats flushes the
+// per-P allocation caches; runtime/metrics' heap counters are credited a
+// span at a time and would miss small allocations.
 func allocs() (objects, bytes uint64) {
-	s := [2]metrics.Sample{{Name: "/gc/heap/allocs:objects"}, {Name: "/gc/heap/allocs:bytes"}}
-	metrics.Read(s[:])
-	return s[0].Value.Uint64(), s[1].Value.Uint64()
+	runtime.ReadMemStats(&memStats)
+	return memStats.Mallocs, memStats.TotalAlloc
 }
 
 // TestZeroAlloc asserts exact heap-allocation deltas over many calls and
@@ -157,5 +161,30 @@ func BenchmarkCallback(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		sortArr[0], sortArr[1] = 2, 1
 		fr.Call4(fnQs, uintptr(unsafe.Pointer(sortArr)), 2, 8, cmpCB)
+	}
+}
+
+// TestAggregateSpill checks the ABI rule for a by-value double aggregate
+// that no longer fits in the remaining float registers: it goes wholly on
+// the stack. AAPCS64 then closes the float registers to later arguments
+// (NSRN = 8); SysV leaves the remaining register to the next double.
+func TestAggregateSpill(t *testing.T) {
+	bits := func(v float64) uintptr { return uintptr(math.Float64bits(v)) }
+	f := new(Frame)
+	for range 7 {
+		f.ArgF64(1)
+	}
+	f.ArgPoint(2, 3).ArgF64(4)
+	want := []uintptr{bits(2), bits(3)}
+	if runtime.GOARCH == "arm64" {
+		want = append(want, bits(4))
+		if f.nf != numFloatRegs {
+			t.Errorf("arm64: nf = %d after spilled HFA, want %d", f.nf, numFloatRegs)
+		}
+	} else if f.floats[7] != uint64(bits(4)) {
+		t.Errorf("amd64: last float register = %#x, want the double after the spilled struct", f.floats[7])
+	}
+	if got := f.stack[:f.nsb/8]; !slices.Equal(got, want) {
+		t.Errorf("stack = %#x, want %#x", got, want)
 	}
 }

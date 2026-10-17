@@ -297,11 +297,17 @@ func (s *Surface) makeContext(gl bool) error {
 		// The X window uses the default visual; pick a config for it.
 		vis := fr.Call2(xlib.defaultVisual, s.native.Display, fr.Call1(xlib.defaultScreen, s.native.Display))
 		id := fr.Call1(xlib.visualID, vis)
+		found := false
 		for i := int32(0); i < s.num && i < maxConfigs; i++ {
 			if ok(fr.Call4(eglf.getConfigAttrib, s.dpy, s.cfgs[i], eglNativeVisualID, uintptr(unsafe.Pointer(&s.attr)))) && uintptr(s.attr) == id {
-				s.cfg = s.cfgs[i]
+				s.cfg, found = s.cfgs[i], true
 				break
 			}
+		}
+		if !found {
+			// eglCreateWindowSurface would fail with EGL_BAD_MATCH; let the
+			// caller try the next API instead.
+			return errors.New("no EGL config matches the X11 default visual")
 		}
 	}
 	s.ctx = fr.Call4(eglf.createContext, s.dpy, s.cfg, 0, uintptr(unsafe.Pointer(ctx)))
