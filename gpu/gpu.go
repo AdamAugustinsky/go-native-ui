@@ -15,3 +15,20 @@
 // Backends: Metal (darwin), Direct3D 11 (windows), OpenGL 3.3 core / GLES 3.0
 // via EGL (linux). Present must not allocate on the Go heap.
 package gpu
+
+import "sync/atomic"
+
+// FirstPresentTrace holds platform.Now timestamps of the stages of a
+// surface's first Present, for startup analysis. Backends that don't record
+// a stage leave it 0.
+type FirstPresentTrace struct {
+	Start     int64 // Present entered
+	Acquired  int64 // drawable / back buffer acquired
+	Committed int64 // commands committed and present scheduled
+	Done      int64 // Present returning (after any first-frame flush)
+	// OnGlass is when the first frame was shown on the display, from the OS
+	// present feedback (Metal: presentedTime, or the presented handler's call
+	// time where presentedTime reads 0). Written from another thread. 0 = not
+	// (yet) known.
+	OnGlass atomic.Int64
+}

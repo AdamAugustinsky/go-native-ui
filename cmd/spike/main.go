@@ -34,8 +34,12 @@ type report struct {
 	ExecToMainMs         float64
 	MainToOpenMs         float64
 	OpenToSurfaceMs      float64
-	ExecToFirstPresent   float64 `json:"ExecToFirstPresentMs"`
-	ExecToVisibleMs      float64 // first present AND occlusion state visible (an OS signal, not proof of pixels); -1 if never visible
+	OpenStagesMs         []stageMs  // platform.Open's timeline, each stage's duration
+	FirstWaitMs          float64    // the loop's first Wait (pending AppKit/OS events) before the first frame
+	FirstPresentMs       [3]float64 // first Present: acquire drawable, encode+commit, first-frame flush
+	ExecToFirstPresent   float64    `json:"ExecToFirstPresentMs"`
+	ExecToOnGlassMs      float64    // first frame shown on the display (OS present feedback); -1 if unknown
+	ExecToVisibleMs      float64    // first present AND occlusion state visible (an OS signal, not proof of pixels); -1 if never visible
 	IdleSeconds          float64
 	IdlePresents         int
 	IdleCPUms            float64
@@ -58,6 +62,11 @@ type report struct {
 }
 
 type stats struct{ P50, P99, Max, Mean float64 }
+
+type stageMs struct {
+	Stage string
+	Ms    float64
+}
 
 func summarize(xs []float64) stats {
 	if len(xs) == 0 {
@@ -110,8 +119,13 @@ func main() {
 	idleDuration := flag.Duration("idle", 3*time.Second, "bench: idle window length")
 	gate := flag.Bool("gate", false, "bench: exit with status 3 unless idle presented nothing, animated frames allocated nothing and were vsync-paced (CI regression gate)")
 	allowUnpaced := flag.Bool("allow-unpaced", false, "gate: accept unpaced frames (no frame callbacks, e.g. display asleep)")
+	allocSites := flag.Bool("allocsites", false, "bench: profile every allocation and, if the measured frames allocate, print the allocating call stacks")
+	waitFirst := flag.Bool("wait-first", false, "startup: pump OS events before drawing the first frame (old order, for comparison)")
 	deadline := flag.Duration("timeout", 0, "abort with exit status 2 if the run has not finished after this long (0: never)")
 	flag.Parse()
+	if *allocSites {
+		runtime.MemProfileRate = 1
+	}
 	if *deadline > 0 {
 		time.AfterFunc(*deadline, func() {
 			fmt.Fprintf(os.Stderr, "spike: timed out after %v in bench phase %d\n", *deadline, curPhase.Load())
@@ -140,6 +154,11 @@ func main() {
 	}
 	tOpen := platform.Now()
 	rep.MainToOpenMs = ms(tOpen - tMain)
+	prev := tMain
+	for _, st := range platform.OpenTimeline() {
+		rep.OpenStagesMs = append(rep.OpenStagesMs, stageMs{st.Name, ms(st.T - prev)})
+		prev = st.T
+	}
 	w, h, scale := win.Size()
 	surf, err := gpu.NewSurface(win.Native(), w, h, scale)
 	if err != nil {
@@ -177,6 +196,7 @@ func main() {
 		// exact. runtime/metrics heap counters are credited a whole span at a
 		// time and miss small allocations (see DECISIONS D11).
 		mem0, mem1 runtime.MemStats
+		sites0     map[[32]uintptr]int64
 		t          float32
 	)
 	startWorkerWakes := func() {
@@ -192,6 +212,7 @@ func main() {
 		}()
 	}
 
+	tLoop0, tWait0 := platform.Now(), int64(0)
 	for phase != phaseDone {
 		timeout := int64(-1)
 		if phase == phaseAnimate && !frameReady && paced && requestedAt != 0 && platform.Now()-requestedAt > int64(time.Second) {
@@ -211,13 +232,26 @@ func main() {
 			timeout = max(idleEnd-platform.Now(), 0)
 		case phase == phaseStartup && (*bench || *exitFirst) && firstPresent != 0:
 			timeout = max(firstPresent+visibleWaitNs-platform.Now(), 0)
+			if visibleAt != 0 {
+				timeout = min(timeout, int64(5*time.Millisecond)) // poll for the on-glass feedback, set off-thread
+			}
 		}
 		if presentRetryAt != 0 {
 			if r := max(presentRetryAt-platform.Now(), 0); timeout < 0 || r < timeout {
 				timeout = r
 			}
 		}
-		for _, e := range win.Wait(timeout) {
+		var evs []platform.Event
+		if firstPresent != 0 || *waitFirst {
+			// The first Wait runs AppKit's deferred launch work (~50-90 ms on
+			// the MacBook), so by default the first frame is drawn before it.
+			evs = win.Wait(timeout)
+			if tWait0 == 0 {
+				tWait0 = platform.Now()
+				rep.FirstWaitMs = ms(tWait0 - tLoop0)
+			}
+		}
+		for _, e := range evs {
 			switch e.Kind {
 			case platform.EvClose:
 				phase = phaseDone
@@ -286,9 +320,12 @@ func main() {
 		// Benchmark state machine.
 		switch phase {
 		case phaseStartup:
-			if (*bench || *exitFirst) && firstPresent != 0 && (visibleAt != 0 || platform.Now()-firstPresent > visibleWaitNs) {
+			if (*bench || *exitFirst) && firstPresent != 0 && ((visibleAt != 0 && surf.Trace.OnGlass.Load() != 0) || platform.Now()-firstPresent > visibleWaitNs) {
 				rep.ExecToFirstPresent = sinceExec(firstPresent)
-				rep.ExecToVisibleMs = -1
+				rep.ExecToVisibleMs, rep.ExecToOnGlassMs = -1, -1
+				if t := surf.Trace.OnGlass.Load(); t != 0 {
+					rep.ExecToOnGlassMs = sinceExec(t)
+				}
 				if visibleAt != 0 {
 					rep.ExecToVisibleMs = sinceExec(max(visibleAt, firstPresent))
 				}
@@ -320,6 +357,9 @@ func main() {
 		if needDraw && frameReady && presentRetryAt == 0 {
 			if phase == phaseAnimate && presents-idlePresentsBase == animWarmup {
 				runtime.GC()
+				if *allocSites {
+					sites0 = allocProfile()
+				}
 				runtime.ReadMemStats(&mem0)
 				animCPU0 = cpuNs()
 			}
@@ -336,6 +376,9 @@ func main() {
 				frameReady = !paced
 				if firstPresent == 0 {
 					firstPresent = platform.Now()
+					if tr := &surf.Trace; tr.Start != 0 && tr.Done != 0 {
+						rep.FirstPresentMs = [3]float64{ms(tr.Acquired - tr.Start), ms(tr.Committed - tr.Acquired), ms(tr.Done - tr.Committed)}
+					}
 				}
 			} else {
 				rep.PresentFailures++
@@ -345,6 +388,9 @@ func main() {
 			if phase == phaseAnimate && presents-idlePresentsBase >= animWarmup+animFrames {
 				cpu1 := cpuNs()
 				runtime.ReadMemStats(&mem1)
+				if *allocSites && mem1.Mallocs != mem0.Mallocs {
+					printAllocSites(sites0, allocProfile())
+				}
 				rep.Frames = presents - idlePresentsBase - animWarmup
 				rep.FrameAllocObjects = mem1.Mallocs - mem0.Mallocs
 				rep.FrameAllocBytes = mem1.TotalAlloc - mem0.TotalAlloc
@@ -388,6 +434,67 @@ func main() {
 		if len(failed) > 0 {
 			fmt.Fprintln(os.Stderr, "spike: gate failed:", strings.Join(failed, "; "))
 			os.Exit(3)
+		}
+	}
+}
+
+// allocProfile returns cumulative allocation counts per call stack, as of
+// the latest GC cycles (the runtime publishes profile data at GC).
+func allocProfile() map[[32]uintptr]int64 {
+	runtime.GC()
+	runtime.GC()
+	recs := make([]runtime.MemProfileRecord, 1024)
+	n, ok := runtime.MemProfile(recs, true)
+	for !ok {
+		recs = make([]runtime.MemProfileRecord, n+256)
+		n, ok = runtime.MemProfile(recs, true)
+	}
+	m := make(map[[32]uintptr]int64, n)
+	for _, r := range recs[:n] {
+		m[r.Stack0] += r.AllocObjects
+	}
+	return m
+}
+
+// printAllocSites prints the stacks whose allocation count grew.
+func printAllocSites(before, after map[[32]uintptr]int64) {
+	fmt.Fprintln(os.Stderr, "spike: allocations during the measured frames:")
+	for stk, n := range after {
+		if d := n - before[stk]; d > 0 {
+			pcs := stk[:]
+			for i, pc := range pcs {
+				if pc == 0 {
+					pcs = pcs[:i]
+					break
+				}
+			}
+			if ownProfiling(pcs) {
+				continue
+			}
+			fmt.Fprintf(os.Stderr, "  %d object(s) at:\n", d)
+			frames := runtime.CallersFrames(pcs)
+			for {
+				f, more := frames.Next()
+				fmt.Fprintf(os.Stderr, "    %s\n        %s:%d\n", f.Function, f.File, f.Line)
+				if !more {
+					break
+				}
+			}
+		}
+	}
+}
+
+// ownProfiling reports whether a stack belongs to allocProfile itself (its
+// snapshot maps are published by the GC that the next snapshot runs).
+func ownProfiling(pcs []uintptr) bool {
+	frames := runtime.CallersFrames(pcs)
+	for {
+		f, more := frames.Next()
+		if f.Function == "main.allocProfile" {
+			return true
+		}
+		if !more {
+			return false
 		}
 	}
 }

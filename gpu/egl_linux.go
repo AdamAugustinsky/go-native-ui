@@ -184,6 +184,8 @@ type Surface struct {
 	num                      int32
 	attr                     int32
 	cfgs                     [maxConfigs]uintptr
+
+	Trace FirstPresentTrace // not recorded on this backend yet
 }
 
 // NewSurface creates the EGL display, context and window surface for the

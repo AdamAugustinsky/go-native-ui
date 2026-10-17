@@ -183,6 +183,8 @@ func Open(o Options) (*Window, error) {
 	if theWindow.Load() != nil {
 		return nil, errors.New("platform: only one window is supported in phase 1")
 	}
+	nOpenStages = 0
+	markOpen("start")
 	appKit, err := loadFramework("/System/Library/Frameworks/AppKit.framework/AppKit")
 	if err != nil {
 		return nil, err
@@ -194,7 +196,9 @@ func Open(o Options) (*Window, error) {
 	defaultMode = stringConstant(foundation, "NSDefaultRunLoopMode")
 	commonModes = stringConstant(foundation, "NSRunLoopCommonModes")
 	_ = appKit
+	markOpen("frameworks")
 	classesOnce.Do(registerClasses)
+	markOpen("classes")
 
 	F := objc.F
 	pool := F.Call0(objc.PoolPush)
@@ -203,6 +207,7 @@ func Open(o Options) (*Window, error) {
 	w := &Window{q: newEventQueue(), scale: 1, linkPaused: true}
 	w.app = objc.Send(objc.Cls("NSApplication"), selSharedApplication)
 	objc.Send1(w.app, selSetActivation, 0) // NSApplicationActivationPolicyRegular
+	markOpen("NSApplication")
 
 	width, height := float64(o.Width), float64(o.Height)
 	if width <= 0 || height <= 0 {
@@ -216,6 +221,7 @@ func Open(o Options) (*Window, error) {
 		return nil, errors.New("platform: NSWindow init failed")
 	}
 	objc.Send1(w.win, selSetReleased, 0)
+	markOpen("NSWindow")
 	w.view = objc.Send(viewClass, selAlloc)
 	w.view = objc.ID(F.Reset().Arg(uintptr(w.view)).Arg(uintptr(selInitWithFrame)).
 		ArgRect(0, 0, width, height).Call(objc.MsgSend).R0())
@@ -246,12 +252,15 @@ func Open(o Options) (*Window, error) {
 	w.distantFuture = objc.Retain(objc.Send(clsNSDate, selDistantFuture))
 
 	theWindow.Store(w)
+	markOpen("view+setup")
 	objc.Send(w.app, selFinishLaunching)
+	markOpen("finishLaunching")
 	objc.Send1(w.win, selMakeKeyFront, 0)
 	// A process started from a background shell may not activate itself
 	// (macOS 14 cooperative activation); its window would open occluded.
 	objc.Send(w.win, selOrderFrontRegardless)
 	objc.Send(w.app, selActivate)
+	markOpen("orderFront+activate")
 
 	// Display link (macOS 14+), created once the view is on a screen; paused
 	// until RequestFrame.
@@ -262,6 +271,7 @@ func Open(o Options) (*Window, error) {
 	objc.Send2(w.link, selAddToRunLoop, uintptr(objc.Send(objc.Cls("NSRunLoop"), selMainRunLoop)), uintptr(commonModes))
 	objc.Send1(w.link, selSetPaused, 1)
 	w.updateSize()
+	markOpen("displayLink")
 	if wakePending.Load() { // a Wake before Open found no window to post to
 		osWake()
 	}

@@ -146,6 +146,8 @@ type Surface struct {
 	waitable uintptr // frame-latency waitable (owned: closed in Destroy)
 	hwnd     uintptr
 
+	Trace FirstPresentTrace // not recorded on this backend yet
+
 	dxgiDev, adapter, factory, sc1 uintptr // creation-time interfaces
 
 	w, h       int32

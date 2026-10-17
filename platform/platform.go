@@ -186,8 +186,27 @@ func Wake() {
 // takeWake reports whether a wake was pending and clears it.
 func takeWake() bool { return wakePending.Swap(false) }
 
-//go:linkname nanotime runtime.nanotime
-func nanotime() int64
-
 // Now returns monotonic nanoseconds in the same timebase as Event.Time.
 func Now() int64 { return nanotime() }
+
+// Stage is one named timestamp (Now) of Open's startup timeline.
+type Stage struct {
+	Name string
+	T    int64
+}
+
+var (
+	openStages  [16]Stage
+	nOpenStages int
+)
+
+func markOpen(name string) {
+	if nOpenStages < len(openStages) {
+		openStages[nOpenStages] = Stage{name, Now()}
+		nOpenStages++
+	}
+}
+
+// OpenTimeline returns the stages the last Open recorded, in order (backends
+// that don't record stages return none).
+func OpenTimeline() []Stage { return openStages[:nOpenStages] }
