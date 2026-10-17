@@ -86,7 +86,7 @@ jobs:
       - name: test (arm64)
         run: |
           GNUI_FS_REPORT=$RUNNER_TEMP/fs-report.txt go test -count=1 $PKGS
-          { echo '```'; cat $RUNNER_TEMP/fs-report.txt || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          { echo '```'; cat $RUNNER_TEMP/fs-report.txt || true; echo '```'; } | tee -a "$GITHUB_STEP_SUMMARY"
       - name: test internal/ffi (amd64 under Rosetta)
         run: |
           softwareupdate --install-rosetta --agree-to-license >/dev/null 2>&1 || true
@@ -152,7 +152,7 @@ jobs:
       - name: test
         run: |
           GNUI_FS_REPORT=$RUNNER_TEMP/fs-report.txt go test -count=1 $PKGS
-          { echo '```'; cat $RUNNER_TEMP/fs-report.txt || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          { echo '```'; cat $RUNNER_TEMP/fs-report.txt || true; echo '```'; } | tee -a "$GITHUB_STEP_SUMMARY"
       - name: build spike
         run: go build -trimpath -ldflags="-s -w" -o bin/spike.exe ./cmd/spike
       - name: spike bench + gates
@@ -216,7 +216,7 @@ jobs:
       - name: test
         run: |
           GNUI_FS_REPORT=$RUNNER_TEMP/fs-report.txt go test -count=1 $PKGS
-          { echo '```'; cat $RUNNER_TEMP/fs-report.txt || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          { echo '```'; cat $RUNNER_TEMP/fs-report.txt || true; echo '```'; } | tee -a "$GITHUB_STEP_SUMMARY"
       - name: build spike
         run: go build -trimpath -ldflags="-s -w" -o bin/spike ./cmd/spike
       - name: spike bench + gates (X11 on Xvfb)
