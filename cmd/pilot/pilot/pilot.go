@@ -101,6 +101,7 @@ type Pilot struct {
 	lastH     int
 	listBuf   [2]ui.ID
 	prevFocus ui.Key     // the focus key at the end of the previous frame
+	composing bool       // an input method was composing in the previous frame
 	dragFrom  [2]float64 // scrollbar drag: the scroll offset at the press
 
 	// What the last Build did, for the script and the tests.

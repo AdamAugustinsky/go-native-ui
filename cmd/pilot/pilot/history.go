@@ -33,19 +33,27 @@ func (h *history) visit(dir string) {
 	}
 }
 
-// back and forward move the position and return the directory there.
-func (h *history) back() (string, bool) {
-	if !h.canBack() {
+// at is the directory at position i (ok false outside the list). The position
+// itself moves only when the pane has shown that directory (goTo), so a failed
+// Back or Forward leaves the list as it was.
+func (h *history) at(i int) (string, bool) {
+	if i < 0 || i >= h.n {
 		return "", false
 	}
-	h.i--
-	return h.dirs[h.i], true
+	return h.dirs[i], true
 }
 
-func (h *history) forward() (string, bool) {
-	if !h.canForward() {
-		return "", false
+// goTo makes position i the current one.
+func (h *history) goTo(i int) {
+	if i >= 0 && i < h.n {
+		h.i = i
 	}
-	h.i++
-	return h.dirs[h.i], true
+}
+
+// replaceCurrent puts dir in place of the current entry (the folder it names is
+// gone and the pane shows an ancestor instead).
+func (h *history) replaceCurrent(dir string) {
+	if h.n > 0 {
+		h.dirs[h.i] = dir
+	}
 }

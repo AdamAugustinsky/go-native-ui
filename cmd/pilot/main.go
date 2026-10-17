@@ -213,6 +213,9 @@ func runBench(rows int, dir string, gate, allowUnpaced, sites bool, maxCPU float
 	if err != nil {
 		return err
 	}
+	if err := b.Err(); err != nil {
+		return err
+	}
 	rep.BenchReport = br
 	rep.RowsBuiltPerFrame, rep.RowsBuiltMax = b.RowsBuilt()
 	rep.SessionCycles = b.Cycles()

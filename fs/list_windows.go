@@ -19,10 +19,12 @@ import (
 //     batching, older info class (EaSize carries the reparse tag).
 //
 // DECISIONS D12 says to choose by measurement: TestWinListBackendChoice logs
-// the numbers on CI. listDir uses winListExtd, falling back to winListFull
-// and then winListFind when the file system rejects the info class (network
-// shares, FAT on old systems return ERROR_INVALID_PARAMETER / NOT_SUPPORTED /
-// INVALID_LEVEL).
+// the numbers on CI. FileFullDirectoryInfo was fastest on both CI runners
+// (100k entries: 57.6 / 55.0 ms on amd64 / arm64; FileIdExtd 1–6 % slower,
+// FindFirstFileExW 10–34 % slower), and Pilot needs no file IDs, so listDir
+// uses winListFull, falling back to winListFind when the file system rejects
+// the info class (network shares, FAT on old systems return
+// ERROR_INVALID_PARAMETER / NOT_SUPPORTED / INVALID_LEVEL).
 //
 // Symlinks and junctions are reported as KindSymlink, with FlagSymlinkDir
 // when the link is a directory link (the directory attribute is set on the
@@ -141,7 +143,7 @@ const (
 var errWinFallback = errors.New("fs: info class not supported")
 
 // listDir lists path into l without sorting.
-func listDir(path string, l *Listing) error { return winListExtd(path, l) }
+func listDir(path string, l *Listing) error { return winListFull(path, l) }
 
 func winListExtd(path string, l *Listing) error {
 	err := winListByHandle(path, l, true)

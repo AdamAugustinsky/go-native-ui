@@ -40,6 +40,11 @@ func newDrive(t *testing.T) *drive {
 	opt.Src = src
 	d := &driver{Pilot: New(opt)}
 	dr := &drive{t: t, d: d, src: src}
+	t.Cleanup(func() {
+		if src.ignored != 0 {
+			t.Errorf("%d Release calls the Service would have ignored (stale or missing lease)", src.ignored)
+		}
+	})
 	dr.o = newOffscreen(t, d)
 	for i := 0; i < 5; i++ {
 		dr.o.Frame()

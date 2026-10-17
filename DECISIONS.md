@@ -295,8 +295,8 @@ objects.
 
 **Decision:**
 - macOS: `getattrlistbulk`.
-- Windows: `FindFirstFileExW` (basic info, large fetch) vs `GetFileInformationByHandleEx`; choose by measurement in phase 4.
-- Linux: `getdents64` + `statx` vs `os.ReadDir`; measure in phase 4.
+- Windows: `GetFileInformationByHandleEx(FileFullDirectoryInfo)`, falling back to `FindFirstFileExW` (basic info, large fetch). Chosen by measurement in phase 4 (CI, 100k entries, 2026-10-17): 57.6 ms on amd64 and 55.0 ms on arm64; `FileIdExtdDirectoryInfo` was 1–6 % slower and `FindFirstFileExW` 10–34 % slower.
+- Linux: `getdents64` + `statx`. Measured in phase 4 (CI, 100k entries): 1.4–2.0× faster than `os.ReadDir` + `Info` (amd64 236–295 ms vs 333–455 ms; arm64 147–148 ms vs 208–294 ms on the runners' disks).
 - Watching: kqueue on macOS (D26 replaced FSEvents), `ReadDirectoryChangesW`, inotify.
 - Results are cached by (path, mtime).
 
@@ -611,6 +611,7 @@ A relist when the window becomes active would cover all of these cheaply.
 - **Structure.** `cmd/pilot` is a thin `main.go` plus a `pilot` package (Builder, Initer, script, shot), like rexlook. The chrome both apps share (palette, backdrop field, glass panes, titlebar, traffic lights, icon atlas, dividers) lives in `cmd/internal/rexkit`; rexlook renders byte-identically after the move.
 - **Pane model.** Pointer-free: the listing, a row permutation (only when hidden files or a filter apply), a selection bitset by entry index, cursor and anchor. A refresh carries selection, cursor, anchor and scroll position across by name (hashes of the old names, matched in the new listing). Work that scales with the listing (filtering, matching, row building) runs in 1 ms slices per frame, bounded by the clock, not by an entry count.
 - **Startup.** Both start listings begin on goroutines as the first thing in `main`, before the window system exists. The first frame waits for them up to 150 ms. Local folders are ready in 23–34 ms on the MacBook, so they are always in the first frame (exit criterion 5 is about local start folders). A slower volume (network share, sleeping disk) does not hold the window back beyond that cap: the window appears with that pane's status line saying "Loading…", and the listing fills in when it lands. A window that stays invisible for seconds is worse than an honest status.
+- **Accepting results.** A pane takes only the answer to its latest request: a listing whose request is older than the pane's floor, a refresh while a navigation is pending, or an unrequested listing is released with its own lease and dropped. Changes to selection, cursor or filter during a multi-frame reconcile restart the affected phase, and a reconciled listing is drawn in the frame it finishes.
 - **Watch gaps.** Pilot relists both panes when its window gains focus (`ui.Input.FocusGained`), which covers the kqueue watcher's documented gaps (D26) at no idle cost.
 - **Allocation gate.** The bench measures whole script sessions as windows, back to back, after a GC and a post-GC warm-up, and passes on the first window with exactly 0 mallocs and 0 bytes (up to 12 windows; every window is reported). A real allocation in the session recurs in every window and fails; a one-off allocation elsewhere in the process does not. The counters are process-wide, and the fs workers' parking (`acquireSudog` on a P with an empty sudog cache) and the runtime's timer heap occasionally allocate once; `primeSudogs` reduces that before the run.
 - **Paths.** Path resolution is a pure function with a Unix and a Windows rule set, both tested on every OS. Windows: `\` and `/`, volumes, root-relative paths on the shown volume, drive letters, drive-relative paths, UNC shares, surrounding quotes; a root is its own parent.

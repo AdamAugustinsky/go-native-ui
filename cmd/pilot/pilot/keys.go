@@ -27,7 +27,7 @@ func (pl *Pilot) update(c *ui.Context) {
 		for i := range pl.panes {
 			g := &pl.geo[i]
 			if in.MouseX >= g.rect[0] && in.MouseX < g.rect[2] && in.MouseY >= g.rect[1] && in.MouseY < g.rect[3] {
-				pl.active = i
+				pl.setActive(c, i)
 			}
 		}
 	}
@@ -60,7 +60,7 @@ func (pl *Pilot) update(c *ui.Context) {
 		for ci, key := range [3]fs.SortKey{fs.SortName, fs.SortSize, fs.SortModified} {
 			if c.PeekSignal(hdrKey(i, ci)).Clicked {
 				p.sortBy(key)
-				pl.active = i
+				pl.setActive(c, i)
 			}
 		}
 		if in.Pressed[ui.ButtonLeft] && c.HotKey() == listKey(i) {
@@ -69,6 +69,20 @@ func (pl *Pilot) update(c *ui.Context) {
 	}
 
 	pl.keys(c, in)
+}
+
+// setActive gives pane i the keyboard. A text field of the pane that had it
+// loses the focus: keys act on the active pane's list or field, and a field of
+// the other pane that kept the focus would edit the same keys. (A click into a
+// field of pane i takes the focus again while the frame is built.)
+func (pl *Pilot) setActive(c *ui.Context, i int) {
+	if i == pl.active {
+		return
+	}
+	pl.active = i
+	if fk := c.FocusKey(); fk != 0 && (fk == pathKey(i^1) || fk == filterKey(i^1)) {
+		c.SetFocus(0)
+	}
 }
 
 // isPrimary reports whether mods make a shortcut. On Windows AltGr arrives as
@@ -93,7 +107,7 @@ func (pl *Pilot) primary() ui.Mods {
 func (pl *Pilot) click(c *ui.Context, i int, in *ui.Input) {
 	p := pl.panes[i]
 	v := &p.v
-	pl.active = i
+	pl.setActive(c, i)
 	c.SetFocus(0)
 	if v.l == nil {
 		return
@@ -131,10 +145,15 @@ func (pl *Pilot) keys(c *ui.Context, in *ui.Input) {
 	// composing (its keys never reach us as text).
 	a := pl.panes[pl.active]
 	fk := c.FocusKey()
+	composing := pl.composing
+	pl.composing = in.NPreedit > 0
 	if fk == pathKey(pl.active) || fk == filterKey(pl.active) || !in.Focused {
 		return
 	}
-	if in.NPreedit > 0 || pl.typed(in) {
+	// Only a composition that begins now starts the filter. One that goes on
+	// belongs to the field it started in; if that lost the focus (a click in
+	// the list) it was committed there and is dropped, not taken up again.
+	if (in.NPreedit > 0 && !composing) || pl.typed(in) {
 		a.filterOpen = true
 		c.SetFocus(filterKey(pl.active))
 	}
@@ -168,6 +187,9 @@ func (pl *Pilot) key(c *ui.Context, k ui.KeyEvent) {
 	inPath := fk == pathKey(pl.active)
 	inFilter := fk == filterKey(pl.active)
 	list := !inPath && !inFilter
+	if !list && c.Input().NPreedit > 0 {
+		return // an input method is composing in the field: the keys are its (as in the field itself)
+	}
 
 	// Shortcuts that work wherever the focus is.
 	switch {

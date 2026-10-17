@@ -142,6 +142,7 @@ type script struct {
 	lastX, lastY float32
 	divX         float32
 	cycles       int
+	err          error // the first step that did not complete
 }
 
 func (s *script) mods(m uint8) ui.Mods {
@@ -158,13 +159,24 @@ func (s *script) mods(m uint8) ui.Mods {
 	return r
 }
 
+// busy reports whether anything the session asked for is still on its way: a
+// navigation, a relist (sorting, a refresh) that has not been delivered, or the
+// work on a delivered listing.
 func (s *script) busy() bool {
 	for _, p := range s.pl.panes {
-		if p.loading() || p.jobBusy || p.rc.active {
+		if p.loading() || p.relPending || p.jobBusy || p.rc.active {
 			return true
 		}
 	}
 	return false
+}
+
+// fail records that the session did not do what it says (the first such thing
+// is kept): a measurement of a session that skipped work is not one.
+func (s *script) fail(format string, args ...any) {
+	if s.err == nil {
+		s.err = fmt.Errorf("pilot: bench session step %d: "+format, append([]any{s.idx}, args...)...)
+	}
 }
 
 // listPoint is a point inside visible row r of pane i's list.
@@ -215,6 +227,9 @@ func (s *script) frame(in *ui.Input) {
 		done = s.t+1 >= st.n
 	case opWait:
 		done = s.t >= 1 && (!s.busy() || s.t+1 >= st.n)
+		if done && s.busy() {
+			s.fail("still loading after %d frames", st.n)
+		}
 	case opWheel:
 		if s.t == 0 || s.lastX == 0 {
 			x, y := s.listPoint(st.a, 4)
@@ -299,7 +314,7 @@ func (pl *Pilot) Refresh(i int, synth *SynthSource) {
 	if synth != nil {
 		synth.Bump()
 	}
-	p.src.List(p.id, p.dir, p.sortKey, p.desc)
+	p.relist()
 }
 
 // Bench is a Pilot that runs the benchmark session as its app.Scripter.
@@ -319,6 +334,11 @@ func (b *Bench) Script(frame int, in *ui.Input) bool {
 func (b *Bench) AtCycleStart() bool {
 	return b.s.idx >= len(benchSteps) || (b.s.idx == 0 && b.s.t == 0)
 }
+
+// Err is the first step of the session whose wait ran out with work still
+// outstanding, nil if every step completed. A bench with an Err did not measure
+// the session it claims to.
+func (b *Bench) Err() error { return b.s.err }
 
 // Cycles is how many times the session has run through.
 func (b *Bench) Cycles() int { return b.s.cycles }

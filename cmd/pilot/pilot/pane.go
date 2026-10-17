@@ -54,7 +54,18 @@ type pane struct {
 		kind    navKind
 		sel     string // folder name to select when the listing arrives
 		gone    string // navGone: the folder that disappeared
+		hidx    int    // navHist: the history position of the folder
 	}
+
+	// Which listings the pane takes. Every List the pane makes has a number
+	// (the Source's numbers only grow) and supersedes the ones before: floor is
+	// the latest, and a listing that answers a lower one is stale however late
+	// Poll hands it over. relPending: a relist of dir (sorting, a refresh, putting
+	// back after a failed navigation) is owed. goneInNav: dir was reported gone
+	// while a navigation elsewhere was already in flight.
+	floor      uint64
+	relPending bool
+	goneInNav  bool
 
 	rc      reconcile
 	jobPos  int   // rows job: next index in l.Order
@@ -114,15 +125,29 @@ func (p *pane) watch() {
 	}
 }
 
-// request lists path for display; the result arrives through onResult.
+// request lists path for display; the result arrives through onResult. It
+// supersedes any other List of the pane.
 func (p *pane) request(path string, kind navKind, sel string) {
 	if p.src == nil {
 		p.setMsg("Not available", true)
 		return
 	}
 	p.nav.pending, p.nav.path, p.nav.kind, p.nav.sel = true, path, kind, sel
+	p.relPending = false
 	p.nav.req = p.src.List(p.id, path, p.sortKey, p.desc)
+	p.floor = p.nav.req
 	p.msg, p.pathErr = "", ""
+}
+
+// relist asks for dir again, as a change on disk, another sort order or a
+// failed navigation (the Source lists its last path again on a change: put it
+// back) needs. A navigation in flight is not disturbed.
+func (p *pane) relist() {
+	if p.src == nil || p.dir == "" || p.nav.pending {
+		return
+	}
+	p.floor = p.src.List(p.id, p.dir, p.sortKey, p.desc)
+	p.relPending = true
 }
 
 func (p *pane) setMsg(s string, isErr bool) { p.msg, p.msgErr = s, isErr }
@@ -131,16 +156,19 @@ func (p *pane) setMsg(s string, isErr bool) { p.msg, p.msgErr = s, isErr }
 func (p *pane) onResult(r *fs.Result) {
 	switch r.Kind {
 	case fs.ResultListing:
-		p.onListing(r.Listing, r.Lease)
+		p.onListing(r)
 	case fs.ResultGone:
+		p.relPending = false // the Source dropped what was queued for the folder
+		if p.nav.pending && p.nav.kind != navGone && p.nav.path != p.dir {
+			// the user is already going elsewhere (the Source leaves that
+			// request standing); if it fails, the pane moves up from here
+			p.goneInNav = true
+			return
+		}
 		if !p.nav.pending || p.nav.kind != navGone {
 			p.nav.gone = p.dir
 		}
-		if !p.canUp() { // a root that is gone: nothing above to go to
-			p.setMsg(p.dir+" was removed", true)
-			return
-		}
-		p.request(p.parent, navGone, "")
+		p.goUpFromGone()
 	case fs.ResultWatchError:
 		// no live updates for this directory; the listing itself is fine
 	case fs.ResultOpenError:
@@ -148,42 +176,87 @@ func (p *pane) onResult(r *fs.Result) {
 	}
 }
 
-func (p *pane) onListing(l *fs.Listing, lease uint32) {
-	if p.nav.pending {
-		p.nav.pending = false
-		if l.Err != nil {
-			err := l.Err
-			p.release(l, lease)
-			if p.nav.kind == navGone {
-				if parent := parentPath(p.nav.path); parent != p.nav.path {
-					p.request(parent, navGone, "")
-					return
-				}
-			}
-			p.setMsg(errText(err), true)
-			p.pathErr = errText(err)
-			if p.dir != "" { // the Service lists its last path again on a change: put it back
-				p.src.List(p.id, p.dir, p.sortKey, p.desc)
-			}
-			return
-		}
-		kind, path, sel := p.nav.kind, p.nav.path, p.nav.sel
-		p.install(path, l, lease, sel)
-		switch kind {
-		case navUser, navUp:
-			p.hist.visit(path)
-		case navGone:
-			p.setMsg(p.nav.gone+" was removed; showing "+path, true)
-		}
-		p.watch()
+// goUpFromGone shows the parent of a folder that disappeared (the nearest
+// ancestor that exists, one step at a time).
+func (p *pane) goUpFromGone() {
+	if !p.canUp() { // a root that is gone: nothing above to go to
+		p.setMsg(p.dir+" was removed", true)
 		return
 	}
-	if l.Err != nil {
+	p.request(p.parent, navGone, "")
+}
+
+func (p *pane) onListing(r *fs.Result) {
+	l, lease := r.Listing, r.Lease
+	if l == nil {
+		return
+	}
+	// Take only the answer to the latest request. The Source drops superseded
+	// results itself, but a Poll batch can still hold a listing that an earlier
+	// event in the same batch (a folder gone, a new navigation) made obsolete,
+	// and the pane does not rely on that order: such a listing must never be
+	// shown under the path of a later request. A relist of a changed folder
+	// (Refresh) is the only listing nobody asked for, and only when no
+	// navigation is in flight.
+	switch {
+	case r.Req < p.floor,
+		p.nav.pending && r.Refresh,
+		!p.nav.pending && !p.relPending && !r.Refresh:
 		p.release(l, lease)
-		p.setMsg(errText(l.Err), true)
+		return
+	}
+	p.floor = max(p.floor, r.Req)
+	if p.nav.pending {
+		p.onNavListing(l, lease)
+		return
+	}
+	if !r.Refresh {
+		p.relPending = false
+	}
+	if l.Err != nil {
+		err := l.Err // (before the listing goes back: a worker may reuse it at once)
+		p.release(l, lease)
+		p.setMsg(errText(err), true)
 		return
 	}
 	p.startReconcile(l, lease)
+}
+
+// onNavListing takes the answer to the navigation in flight.
+func (p *pane) onNavListing(l *fs.Listing, lease uint32) {
+	p.nav.pending = false
+	if l.Err != nil {
+		err := l.Err
+		p.release(l, lease)
+		if p.nav.kind == navGone {
+			if parent := parentPath(p.nav.path); parent != p.nav.path {
+				p.request(parent, navGone, "")
+				return
+			}
+		}
+		if p.goneInNav { // the folder shown is gone and the way out failed: up from here
+			p.goneInNav = false
+			p.nav.gone = p.dir
+			p.goUpFromGone()
+			return
+		}
+		p.setMsg(errText(err), true)
+		p.pathErr = errText(err)
+		p.relist()
+		return
+	}
+	kind, path, sel, hidx := p.nav.kind, p.nav.path, p.nav.sel, p.nav.hidx
+	p.install(path, l, lease, sel)
+	switch kind {
+	case navUser, navUp:
+		p.hist.visit(path)
+	case navHist:
+		p.hist.goTo(hidx) // the position moves when the folder is shown, not when it is asked for
+	case navGone:
+		p.hist.replaceCurrent(path)
+		p.setMsg(p.nav.gone+" was removed; showing "+path, true)
+	}
+	p.watch()
 }
 
 // install makes l the pane's listing in dir, dropping the selection and the
@@ -194,6 +267,7 @@ func (p *pane) install(dir string, l *fs.Listing, lease uint32, sel string) {
 		p.rc.active, p.rc.l, p.rc.lease = false, nil, 0
 	}
 	p.release(p.v.l, p.v.lease)
+	p.goneInNav = false
 	p.setDir(dir)
 	p.v.reset()
 	p.v.l, p.v.lease = l, lease
@@ -292,17 +366,15 @@ func filterChunk(l *fs.Listing, q []byte, hide bool, rows []uint32, pos, n int) 
 func (p *pane) scanTargets(rows []uint32, base int) {
 	v := &p.v
 	cur, anchor, pend := uint32(v.cur), uint32(v.anchor), uint32(p.pendSel) // -1 never matches
-	for i, e := range rows {
-		switch e {
-		case cur:
+	for i, e := range rows {                                                // (one entry can be several of them)
+		if e == cur {
 			v.curRow = base + i
-		case anchor:
-			v.anchorRow = base + i
-		case pend:
-			p.pendRow = base + i
 		}
-		if e == cur && e == anchor {
+		if e == anchor {
 			v.anchorRow = base + i
+		}
+		if e == pend {
+			p.pendRow = base + i
 		}
 	}
 }
@@ -447,11 +519,17 @@ func (p *pane) startReconcile(l *fs.Listing, lease uint32) {
 
 func (p *pane) reconcileStep(b *budget) {
 	rc, v := &p.rc, &p.v
-	if rc.ver != v.ver && rc.phase < 2 { // the selection changed meanwhile: start over
+	// The new listing is reconciled with the selection and the filter as they
+	// were when each phase began. If either changed since, what was carried over
+	// or built is out of date and would overwrite what the person just did.
+	if rc.ver != v.ver { // the selection or the cursor changed: start over
 		l, lease := rc.l, rc.lease
 		rc.l, rc.lease = nil, 0
 		rc.active = false
 		p.startReconcile(l, lease)
+	}
+	if rc.phase == 3 && rc.fver != p.fver { // the query or the hidden setting changed: build the rows again
+		rc.phase, rc.pos = 2, 0
 	}
 	if rc.phase == 0 && v.l != nil {
 		for rc.pos < len(v.sel) {
@@ -527,6 +605,7 @@ func (p *pane) reconcileStep(b *budget) {
 			}
 		}
 		rc.phase, rc.pos = 3, 0
+		rc.curRow, rc.anchorRow, rc.topRow = -1, -1, -1
 	}
 	if rc.phase == 3 {
 		if rc.newCur >= 0 || rc.newAnchor >= 0 || rc.newTop >= 0 {
@@ -536,17 +615,15 @@ func (p *pane) reconcileStep(b *budget) {
 			}
 			for rc.pos < len(rows) {
 				end := min(rc.pos+4*chunk, len(rows))
-				for i, e := range rows[rc.pos:end] {
-					switch int32(e) {
-					case rc.newCur:
+				for i, e := range rows[rc.pos:end] { // (one entry can be several of them)
+					if int32(e) == rc.newCur {
 						rc.curRow = rc.pos + i
-					case rc.newAnchor:
-						rc.anchorRow = rc.pos + i
-					case rc.newTop:
-						rc.topRow = rc.pos + i
 					}
-					if int32(e) == rc.newCur && int32(e) == rc.newAnchor {
+					if int32(e) == rc.newAnchor {
 						rc.anchorRow = rc.pos + i
+					}
+					if int32(e) == rc.newTop {
+						rc.topRow = rc.pos + i
 					}
 				}
 				rc.pos = end
@@ -638,17 +715,28 @@ func (p *pane) goUp() {
 	p.request(p.parent, navUp, filepath.Base(p.dir))
 }
 
-func (p *pane) goBack() {
-	if d, ok := p.hist.back(); ok {
+// histPos is the history position Back and Forward start from: the one being
+// asked for if a Back or Forward is in flight (so that pressing Back twice
+// goes two back), else the one shown.
+func (p *pane) histPos() int {
+	if p.nav.pending && p.nav.kind == navHist {
+		return p.nav.hidx
+	}
+	return p.hist.i
+}
+
+// goHist shows the folder at history position i. The position becomes the
+// current one only when that folder is on screen: if it cannot be listed
+// (deleted since), the pane and its history stay as they were.
+func (p *pane) goHist(i int) {
+	if d, ok := p.hist.at(i); ok {
 		p.request(d, navHist, "")
+		p.nav.hidx = i
 	}
 }
 
-func (p *pane) goForward() {
-	if d, ok := p.hist.forward(); ok {
-		p.request(d, navHist, "")
-	}
-}
+func (p *pane) goBack()    { p.goHist(p.histPos() - 1) }
+func (p *pane) goForward() { p.goHist(p.histPos() + 1) }
 
 // goTo navigates to what was typed in the path field.
 func (p *pane) goTo(text string) {
@@ -663,8 +751,14 @@ func (p *pane) sortBy(key fs.SortKey) {
 	} else {
 		p.sortKey, p.desc = key, false
 	}
-	if p.src != nil && p.dir != "" && !p.nav.pending {
-		p.src.List(p.id, p.dir, p.sortKey, p.desc)
+	switch {
+	case p.src == nil || p.dir == "":
+	case p.nav.pending:
+		// the header shows the new order, so the folder on its way must come in it
+		p.nav.req = p.src.List(p.id, p.nav.path, p.sortKey, p.desc)
+		p.floor = p.nav.req
+	default:
+		p.relist()
 	}
 }
 

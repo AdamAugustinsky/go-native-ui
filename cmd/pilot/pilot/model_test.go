@@ -14,27 +14,67 @@ import (
 	"gonativeui/ui"
 )
 
-// fakeSrc is a Source that records requests; the tests deliver the results.
+// fakeSrc is a Source that records requests; the tests deliver the results. It
+// numbers requests and leases like fs.Service and counts the Release calls that
+// the Service would ignore (a lease that is not the one handed out).
 type fakeSrc struct {
 	lists    []string
+	keys     []fs.SortKey // the sort key of each List
 	watched  []string
 	released int
 	opened   []string
 	req      uint64
+	poll     []fs.Result // what the next Poll returns
+
+	lease   uint32
+	leased  map[*fs.Listing]uint32
+	ignored int
 }
 
 func (f *fakeSrc) List(id uint32, path string, key fs.SortKey, desc bool) uint64 {
 	f.lists = append(f.lists, path)
+	f.keys = append(f.keys, key)
 	f.req++
 	return f.req
 }
-func (f *fakeSrc) Watch(id uint32, path string)        { f.watched = append(f.watched, path) }
-func (f *fakeSrc) Unwatch(id uint32)                   {}
-func (f *fakeSrc) Poll(dst []fs.Result) []fs.Result    { return dst }
-func (f *fakeSrc) Release(l *fs.Listing, lease uint32) { f.released++ }
-func (f *fakeSrc) Open(id uint32, path string)         { f.opened = append(f.opened, path) }
-func (f *fakeSrc) Close()                              {}
-func (f *fakeSrc) last() string                        { return f.lists[len(f.lists)-1] }
+func (f *fakeSrc) Watch(id uint32, path string) { f.watched = append(f.watched, path) }
+func (f *fakeSrc) Unwatch(id uint32)            {}
+func (f *fakeSrc) Poll(dst []fs.Result) []fs.Result {
+	dst = append(dst, f.poll...)
+	f.poll = f.poll[:0]
+	return dst
+}
+func (f *fakeSrc) Release(l *fs.Listing, lease uint32) {
+	f.released++
+	want, ok := f.leased[l]
+	switch {
+	case ok && lease == want:
+		delete(f.leased, l)
+	case ok || lease != 0:
+		f.ignored++
+	}
+}
+func (f *fakeSrc) Open(id uint32, path string) { f.opened = append(f.opened, path) }
+func (f *fakeSrc) Close()                      {}
+func (f *fakeSrc) last() string                { return f.lists[len(f.lists)-1] }
+
+// result is a finished listing as Poll would hand it over: leased, and
+// answering request req.
+func (f *fakeSrc) result(id uint32, l *fs.Listing, req uint64, refresh bool) fs.Result {
+	f.lease++
+	if f.leased == nil {
+		f.leased = map[*fs.Listing]uint32{}
+	}
+	f.leased[l] = f.lease
+	return fs.Result{Kind: fs.ResultListing, ID: id, Req: req, Refresh: refresh, Listing: l, Lease: f.lease}
+}
+
+// refresh is a listing of a changed folder: the Service's own request, numbered
+// after every List made so far.
+func (f *fakeSrc) refresh(id uint32, l *fs.Listing) fs.Result {
+	f.req++
+	return f.result(id, l, f.req, true)
+}
 
 func listing(key fs.SortKey, desc bool, items ...item) *fs.Listing {
 	l := sceneListing(items)
@@ -42,8 +82,25 @@ func listing(key fs.SortKey, desc bool, items ...item) *fs.Listing {
 	return l
 }
 
+// deliver hands the pane the listing that answers what it asked for last (a
+// navigation, a relist), or, when it asked for nothing, a refresh of a changed
+// folder.
 func deliver(p *pane, l *fs.Listing) {
-	p.onResult(&fs.Result{Kind: fs.ResultListing, ID: p.id, Listing: l})
+	f, ok := p.src.(interface {
+		result(id uint32, l *fs.Listing, req uint64, refresh bool) fs.Result
+		refresh(id uint32, l *fs.Listing) fs.Result
+	})
+	if !ok {
+		p.onResult(&fs.Result{Kind: fs.ResultListing, ID: p.id, Listing: l})
+		return
+	}
+	var r fs.Result
+	if p.nav.pending || p.relPending {
+		r = f.result(p.id, l, p.floor, false)
+	} else {
+		r = f.refresh(p.id, l)
+	}
+	p.onResult(&r)
 }
 
 // settle runs the pane's slices of work until none is left.
@@ -93,6 +150,13 @@ func newTestPane(t testing.TB, src Source, dir string, l *fs.Listing) *pane {
 	p := newPane(1, src, nativePath("/home/u"))
 	p.setInitial(dir, l)
 	settle(t, p)
+	if f, ok := src.(*fakeSrc); ok { // every Release carried the lease it was handed out with
+		t.Cleanup(func() {
+			if f.ignored != 0 {
+				t.Errorf("%d Release calls the Service would have ignored (stale or missing lease)", f.ignored)
+			}
+		})
+	}
 	return p
 }
 
@@ -322,7 +386,8 @@ func TestHistoryIsBounded(t *testing.T) {
 		t.Fatalf("n %d i %d cur %q", h.n, h.i, h.dirs[h.i])
 	}
 	steps := 0
-	for _, ok := h.back(); ok; _, ok = h.back() {
+	for h.canBack() {
+		h.goTo(h.i - 1)
 		steps++
 	}
 	if steps != histMax-1 {
@@ -647,8 +712,12 @@ func TestGoneAtARootStops(t *testing.T) {
 		t.Error("a root has no parent to go up to")
 	}
 	p.goUp()
+	p.relist()
 	n := len(src.lists)
 	p.onResult(&fs.Result{Kind: fs.ResultGone, ID: p.id})
+	if p.relPending {
+		t.Error("a relist the Source dropped with the folder is still awaited")
+	}
 	if len(src.lists) != n || p.nav.pending || !p.msgErr || !strings.Contains(p.msg, "was removed") {
 		t.Errorf("requests %d→%d, pending %v, msg %q", n, len(src.lists), p.nav.pending, p.msg)
 	}
@@ -690,9 +759,13 @@ func TestOpenFileIsAsync(t *testing.T) {
 func TestListingsReleasedWithTheirLease(t *testing.T) {
 	src := &leaseSrc{}
 	p := newTestPane(t, src, nativePath("/d"), listing(fs.SortName, false, dirItems...))
-	p.onResult(&fs.Result{Kind: fs.ResultListing, ID: p.id, Listing: listing(fs.SortName, false, dirItems...), Lease: 11})
+	r11 := src.refresh(p.id, listing(fs.SortName, false, dirItems...))
+	r11.Lease = 11
+	p.onResult(&r11)
 	settle(t, p) // the refresh is swapped in; the initial listing (lease 0) goes back
-	p.onResult(&fs.Result{Kind: fs.ResultListing, ID: p.id, Listing: listing(fs.SortName, false, dirItems...), Lease: 12})
+	r12 := src.refresh(p.id, listing(fs.SortName, false, dirItems...))
+	r12.Lease = 12
+	p.onResult(&r12)
 	settle(t, p) // lease 11 goes back
 	if got := fmt.Sprint(src.leases); got != "[0 11]" {
 		t.Errorf("released leases %s, want [0 11]", got)

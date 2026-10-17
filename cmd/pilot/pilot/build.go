@@ -125,16 +125,28 @@ func (pl *Pilot) Build(c *ui.Context) {
 	pl.Fld.Build(w, h, pl.K)
 	pl.poll()
 	pl.update(c)
+	pl.work()
 	pl.draw(c)
-	pl.work(c)
+	pl.workLeft(c)
 	pl.prevFocus = c.FocusKey()
 }
 
-// work advances the panes' bounded background-style work, asking for another
-// frame while any is left.
-func (pl *Pilot) work(c *ui.Context) {
+// work advances the panes' bounded background-style work by one slice. It runs
+// before the frame is drawn, so that the frame shows what the work finished (a
+// reconciled listing swapped in, the rows of a filter); work done after the
+// draw would leave the old state on screen until something else asked for a
+// frame.
+func (pl *Pilot) work() {
 	for _, p := range pl.panes {
-		if p.work() {
+		p.work()
+	}
+}
+
+// workLeft asks for another frame while any pane has work left, including work
+// the draw itself started (a changed filter, a submitted path).
+func (pl *Pilot) workLeft(c *ui.Context) {
+	for _, p := range pl.panes {
+		if p.rc.active || p.jobBusy {
 			c.RequestFrame()
 		}
 	}

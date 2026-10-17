@@ -69,6 +69,12 @@ func TestSessionDrivesThePanes(t *testing.T) {
 	if rows, _ := b.RowsBuilt(); rows != 0 {
 		t.Error("rows counted before StartCounting")
 	}
+	if err := b.Err(); err != nil {
+		t.Error(err)
+	}
+	if n := b.src.(*fs.Service).IgnoredReleases(); n != 0 {
+		t.Errorf("%d Releases were ignored by the Service: a listing went back with a lease that was not its own", n)
+	}
 }
 
 // The session allocates nothing once warm: scrolling, hovering, selecting,
@@ -100,6 +106,9 @@ func TestSessionAllocatesNothing(t *testing.T) {
 	}
 	cycle()
 	cycle()
+	if err := b.Err(); err != nil {
+		t.Fatal(err)
+	}
 	runtime.GC()
 	cycle() // after the collection
 	const attempts = 8
