@@ -52,3 +52,21 @@ cross-compiled only until CI is approved.
 4. **Idle** (§11 budgets): 0 presents, CPU-time growth ≈ 0, and ≤ 1 package-idle wakeup/s over 60 s. Report any residual CPU with its source.
 5. **Memory:** idle footprint ≤ 40 MB. Footprint while animating is explained, and is no worse than a native Metal app doing the same.
 6. **Windows and Linux:** renderer and text backends cross-compile and vet clean. Runtime unverified unless CI is approved.
+
+## Status (2026-10-17)
+
+Details are in [measurements/phase2-macos.md](measurements/phase2-macos.md).
+
+1. **Visual match:** 40/40 automated checks pass. *Waiting for your side-by-side review.*
+2. **Startup:**
+   - **Content-first:** 0 partial frames in 10 of 10 recorded launches.
+   - **Half-bounce: passes.** Content arrives about 8 % into the first bounce.
+   - **≤ 150 ms exec → on glass:** met on the Mac mini (~95 ms), **not met on the MacBook** (median ~189 ms, with a native-app floor of ~149 ms).
+3. **Animation: passes.** 120 Hz, p99 ≤ 8.7 ms, 0 allocations, rexlook main thread 0.6 ms per frame.
+4. **Idle: passes.** 0 presents, 0 package-idle wakeups over 60 s, 29 ms of CPU in total.
+5. **Memory:**
+   - Spike: 32 MB, passes.
+   - rexlook: 37–51 MB, borderline. One reclaimable 10.8 MB drawable makes the difference.
+   - Footprint while animating: explained, at parity with native.
+6. **Windows and Linux:** exceeded. Both run, and pass the renderer and text tests in CI.
+
