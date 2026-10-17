@@ -92,9 +92,21 @@ each frame waiting there.
 - Raising to 3 drawables doesn't change CPU or intervals.
 - Blocking costs input responsiveness, not CPU.
 
-**Next step:** move frame delivery to `CAMetalDisplayLink` (macOS 14+). It
-hands over the drawable with the tick, so the main thread never blocks in
-`nextDrawable`, and `preferredFrameLatency` controls latency.
+**Done: frames now come from `CAMetalDisplayLink`** (macOS 14+,
+`preferredFrameLatency` 1). It hands over the drawable with the tick, so
+the main thread never waits in `nextDrawable`.
+- **Constraint:** a layer driven by the link throws on `nextDrawable`. The draw-first frame is presented before the run loop first spins, so the platform swaps the view's `CADisplayLink` for the metal link on the view link's first tick, which always comes after the first present.
+- **Contract:** after that, `Present` outside a frame tick returns false, so apps draw on `EvFrame`.
+- **Occluded window or sleeping display:** the link stops ticking and nothing is drawn. That is correct for an app; a bench run in that state times out instead of falling back to unpaced frames.
+
+| 9 runs, 600 frames each | CPU per frame | intervals |
+|---|---|---|
+| View `CADisplayLink` + `nextDrawable` (before) | 1.89–2.09 ms | p50 8.33 ms |
+| Native Objective-C, same old approach | 1.70–1.79 ms | 8.33 ms mean |
+| **`CAMetalDisplayLink` (now)** | **1.24–1.48 ms** | p50 8.33 ms, p99 8.6–8.7 ms, max ≤ 11 ms |
+
+- **Drawables:** 2 vs 3 drawables and latency 1 vs 2 made no measurable difference, so we keep 2 drawables and latency 1.
+- **Cost:** the footprint just after animating rose to ~161 MB, from 134–143 MB. The link seems to keep about two extra full-size drawables (9.2 MB each at this size). Idle settles at the same 33 MB.
 
 ### Graphics memory
 
