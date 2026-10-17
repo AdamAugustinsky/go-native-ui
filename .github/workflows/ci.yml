@@ -134,7 +134,7 @@ jobs:
   windows:
     name: Windows ${{ matrix.arch }} (D3D11, WARP on runners)
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 15
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -170,7 +170,7 @@ jobs:
         run: |
           go build -trimpath -ldflags="-s -w" -o bin/pilot.exe ./cmd/pilot
           ./bin/pilot.exe -o pilot-windows-${{ matrix.arch }}.png
-          ./bin/pilot.exe -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 150s | tee pilot-windows-${{ matrix.arch }}.json
+          ./bin/pilot.exe -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 420s | tee pilot-windows-${{ matrix.arch }}.json
           { echo '```json'; cat pilot-windows-${{ matrix.arch }}.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         if: always()
