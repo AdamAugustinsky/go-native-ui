@@ -1,0 +1,69 @@
+{
+  "note": "Comparison masks and probes for the Rex look, in reference pixels (docs/design/ref/rex-screenshot@2x.png, 2114x1278; x right, y down; rects are [x0, y0, x1, y1) half-open). Read by tools/rexcompare. Regions exclude text, icons, a 3 px band at every image edge (the window rim and rounded corners) and the shadow zones next to pane, capsule and pill edges. Colour: median and 95th percentile of the per-pixel CIEDE2000 between the reference and the candidate. Probes: the 50% crossing between the median colours of range a and range b along the scanline; both images are measured and must agree within edgePx. Text: cell advance and row pitch are measured on both images as the DFT peak of the ink profile of a band; the advance bands hold 69 and 70 cells of one row, the pitch band 29 rows. nominalCellAdvancePt is 7.5, not the spec's rounded 7.6: on the reference, four text rows of 69-70 cells give a period of 15.00 px and the game's food dots are exactly 30.00 px apart (two cells).",
+  "ref": { "w": 2114, "h": 1278 },
+  "thresholds": { "medianDeltaE": 3, "p95DeltaE": 6, "edgePx": 1, "textPct": 1 },
+  "regions": [
+    { "name": "bg-top-band", "group": "background",
+      "rects": [[24, 5, 2090, 11]] },
+    { "name": "bg-titlebar-bottom", "group": "background",
+      "rects": [[24, 83, 390, 88], [1744, 83, 2090, 88]] },
+    { "name": "bg-left-gutter", "group": "background",
+      "rects": [[4, 120, 11, 1240]] },
+    { "name": "bg-right-gutter", "group": "background",
+      "rects": [[2102, 120, 2111, 1240]] },
+    { "name": "bg-middle-gutter", "group": "background",
+      "rects": [[1150, 120, 1156, 1240]] },
+    { "name": "bg-bottom-strip", "group": "background",
+      "rects": [[24, 1268, 2090, 1275]] },
+
+    { "name": "pane1-interior", "group": "pane-focused",
+      "rects": [[40, 146, 1130, 168], [40, 556, 1130, 586], [1120, 150, 1140, 550], [22, 150, 36, 550]] },
+    { "name": "pane2-interior", "group": "pane-unfocused",
+      "rects": [[50, 820, 380, 1075], [1060, 720, 1100, 1075], [640, 622, 1135, 664], [60, 1228, 1130, 1246]] },
+    { "name": "pane3-interior", "group": "pane-unfocused",
+      "rects": [[1250, 330, 1450, 440], [1650, 520, 1870, 700], [1250, 1090, 1480, 1150], [1530, 1000, 1900, 1140]] },
+
+    { "name": "tab-capsule", "group": "tabs",
+      "rects": [[1320, 22, 1690, 30], [1320, 60, 1690, 70], [1704, 24, 1728, 68], [852, 22, 864, 70]] },
+    { "name": "active-pill", "group": "tabs",
+      "rects": [[520, 20, 780, 32], [520, 60, 780, 72], [822, 22, 838, 70]] }
+  ],
+  "probes": [
+    { "name": "pane1-left", "axis": "x", "at": 400, "a": [3, 12], "b": [20, 40] },
+    { "name": "pane1-right", "axis": "x", "at": 400, "a": [1120, 1140], "b": [1150, 1156] },
+    { "name": "pane2-left", "axis": "x", "at": 900, "a": [3, 12], "b": [20, 40] },
+    { "name": "pane2-right", "axis": "x", "at": 900, "a": [1120, 1140], "b": [1150, 1156] },
+    { "name": "pane3-left", "axis": "x", "at": 900, "a": [1150, 1156], "b": [1170, 1176] },
+    { "name": "pane3-right", "axis": "x", "at": 900, "a": [2060, 2090], "b": [2102, 2110] },
+    { "name": "pane1-top", "axis": "y", "at": 700, "a": [84, 89], "b": [95, 100] },
+    { "name": "pane1-bottom", "axis": "y", "at": 700, "a": [580, 590], "b": [597, 603] },
+    { "name": "pane2-top", "axis": "y", "at": 700, "a": [597, 604], "b": [607, 610] },
+    { "name": "pane2-bottom", "axis": "y", "at": 700, "a": [1235, 1245], "b": [1266, 1272] },
+    { "name": "pane3-top", "axis": "y", "at": 1700, "a": [84, 89], "b": [95, 100] },
+    { "name": "pane3-bottom", "axis": "y", "at": 1700, "a": [1235, 1245], "b": [1266, 1272] },
+    { "name": "pane1-corner-row", "axis": "x", "at": 95, "a": [3, 12], "b": [40, 60] },
+    { "name": "pane1-corner-col", "axis": "y", "at": 22, "a": [84, 92], "b": [104, 112] },
+    { "name": "pane3-corner-row", "axis": "x", "at": 95, "a": [2040, 2070], "b": [2102, 2108] },
+    { "name": "pane2-corner-row", "axis": "x", "at": 1257, "a": [3, 12], "b": [40, 60] },
+    { "name": "pill-left", "axis": "x", "at": 46, "a": [402, 405], "b": [408, 420] },
+    { "name": "pill-right", "axis": "x", "at": 46, "a": [820, 844], "b": [850, 856] },
+    { "name": "pill-top", "axis": "y", "at": 650, "a": [13, 15], "b": [18, 28] },
+    { "name": "pill-bottom", "axis": "y", "at": 650, "a": [62, 74], "b": [77, 80] },
+    { "name": "capsule-left", "axis": "x", "at": 46, "a": [385, 400], "b": [402, 405] },
+    { "name": "capsule-right", "axis": "x", "at": 46, "a": [1704, 1730], "b": [1737, 1750] },
+    { "name": "capsule-top", "axis": "y", "at": 1500, "a": [8, 10], "b": [16, 24] },
+    { "name": "capsule-bottom", "axis": "y", "at": 1500, "a": [66, 76], "b": [82, 90] }
+  ],
+  "text": {
+    "nominalCellAdvancePt": 7.5,
+    "nominalRowPitchPt": 16,
+    "pxPerPt": 2,
+    "advance": [
+      { "name": "pane1-row8", "rect": [60, 424, 1110, 456], "min": 40 },
+      { "name": "pane1-row10", "rect": [60, 488, 1110, 520], "min": 40 }
+    ],
+    "pitch": [
+      { "name": "pane3-bars", "rect": [1180, 232, 1200, 1160], "min": 8 }
+    ]
+  }
+}
