@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"runtime"
 	"sync"
 	"unsafe"
 
@@ -37,6 +38,7 @@ func openPath(path string) error {
 	copy(b, path)
 	fr := new(ffi.Frame) // heap: a Frame must not live on a stack
 	url := fr.Reset().Arg(0).ArgPtr(unsafe.Pointer(&b[0])).Arg(uintptr(len(path))).ArgBool(fi.IsDir()).Call(ls.urlFromFS).R0()
+	runtime.KeepAlive(b) // the frame holds only the address; CF copies the bytes during the call
 	if url == 0 {
 		return errors.New("fs: cannot make a file URL for " + path)
 	}

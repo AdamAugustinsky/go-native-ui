@@ -493,6 +493,11 @@ func (s *Service) control() {
 					continue
 				}
 				s.mu.Lock()
+				if s.closed { // Close gave up waiting for us and has already run
+					s.mu.Unlock()
+					w.close()
+					return
+				}
 				s.w = w
 				s.mu.Unlock()
 			}

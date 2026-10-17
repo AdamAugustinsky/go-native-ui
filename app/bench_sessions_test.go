@@ -51,8 +51,17 @@ func TestBenchWindowsAreWholeSessions(t *testing.T) {
 		cy := &cycler{n: 10}
 		bn, a := newBenchRig(t, BenchOptions{Warm: 7, PostGCWarm: 3, Windows: 6}, cy)
 		driveBench(t, bn, a, cy, func(w, f int) bool { return w == 0 && f == 4 })
-		if got := len(bn.report.Windows); got != 2 {
-			t.Fatalf("%d windows, want 2 (stop at the first clean one): %+v", got, bn.report.Windows)
+		// The counters are process-wide, so runtime noise can dirty a further
+		// window; what matters is that the run stops at the first clean one.
+		ws := bn.report.Windows
+		if len(ws) < 2 {
+			t.Fatalf("%d windows, want at least 2 (the injected allocation, then a clean one): %+v", len(ws), ws)
+		}
+		for i, w := range ws {
+			clean := w.Mallocs == 0 && w.TotalAlloc == 0
+			if clean != (i == len(ws)-1) {
+				t.Fatalf("window %d clean=%v: the run must stop at the first clean window: %+v", i, clean, ws)
+			}
 		}
 		for _, w := range bn.report.Windows {
 			if w.Frames != 10 {

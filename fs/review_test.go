@@ -407,3 +407,33 @@ func TestServiceCloseBounded(t *testing.T) {
 		t.Fatal("Close hangs on stuck file system work")
 	}
 }
+
+// A watcher whose construction outlives a bounded Close is closed, not leaked.
+func TestServiceClosesAWatcherCreatedAfterClose(t *testing.T) {
+	old := closeWait
+	closeWait = 100 * time.Millisecond
+	defer func() { closeWait = old }()
+	fs := &fakeFS{gate: make(chan struct{})}
+	w := &fakeWatcher{}
+	gate, building := make(chan struct{}), make(chan struct{})
+	s := newService(func() {}, fs.list, func(func()) (watcher, error) {
+		close(building)
+		<-gate
+		return w, nil
+	}, 20*time.Millisecond)
+	s.Watch(1, "/late")
+	<-building
+	s.Close() // gives up on the stuck construction after closeWait
+	close(gate)
+	waitFor(t, "the late watcher closed", 2*time.Second, func() bool {
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		return w.closed
+	})
+	w.mu.Lock()
+	added := len(w.added)
+	w.mu.Unlock()
+	if added != 0 {
+		t.Errorf("the late watcher was used after Close: %d adds", added)
+	}
+}
