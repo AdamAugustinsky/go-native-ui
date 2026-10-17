@@ -15,8 +15,8 @@ import (
 // handled without DefWindowProc, which therefore does not turn the result
 // into WM_IME_CHAR), so the composition arrives as EvPreedit and the result as
 // EvPreedit (empty) followed by EvText. The keys the input method processes
-// reach the window as VK_PROCESSKEY, which the platform maps to no key, so
-// they never become EvKey.
+// reach the window as VK_PROCESSKEY; winKey drops them, so they never become
+// EvKey.
 //
 // This path is compiled and vetted in CI only; it has not been exercised with
 // a real input method yet (docs/measurements/phase4-text.md).
@@ -76,7 +76,16 @@ func (w *Window) imePlace() {
 // having it while an input method is composing, the composition is cancelled
 // (EvPreedit with no text follows). Main thread.
 func (w *Window) SetTextInput(active bool) {
-	if active || !w.composing {
+	if !active {
+		w.DiscardComposition()
+	}
+}
+
+// DiscardComposition cancels the input method's composition in progress
+// without committing it (EvPreedit with no text follows, and no EvText); it
+// does nothing when none is composing. Main thread.
+func (w *Window) DiscardComposition() {
+	if !w.composing {
 		return
 	}
 	if himc := w.imeContext(); himc != 0 {
@@ -117,7 +126,9 @@ func (w *Window) compString(himc, kind uintptr) []byte {
 }
 
 // onImeComposition handles WM_IME_COMPOSITION: the result string (committed
-// text) and/or the composition string with its caret.
+// text) and/or the composition string with its caret. A message that only
+// moves the cursor (GCS_CURSORPOS alone, as when the user arrows through the
+// composition) republishes the current composition with the new caret.
 func (w *Window) onImeComposition(flags uintptr) {
 	himc := w.imeContext()
 	if himc == 0 {
@@ -130,20 +141,19 @@ func (w *Window) onImeComposition(flags uintptr) {
 			w.q.pushText(res, Now())
 		}
 	}
-	if flags&gcsCompStr != 0 {
+	if compositionChanged(flags) {
 		comp := w.compString(himc, gcsCompStr)
 		if len(comp) == 0 {
-			w.imeEnded()
+			if flags&gcsCompStr != 0 {
+				w.imeEnded()
+			}
 			return
 		}
-		sel := 0
+		var cursor16 uintptr
 		if flags&gcsCursorPos != 0 {
-			// The caret as a UTF-16 index into the composition string.
-			sel = u16ToByte(comp, win32.Call(pImmGetCompStringW, himc, gcsCursorPos, 0, 0)&0xFFFF)
-		} else {
-			sel = len(comp)
+			cursor16 = win32.Call(pImmGetCompStringW, himc, gcsCursorPos, 0, 0) & 0xFFFF
 		}
 		w.composing = true
-		w.q.pushPreedit(comp, int32(sel), 0, Now())
+		w.q.pushPreedit(comp, int32(compositionCaret(flags, comp, cursor16)), 0, Now())
 	}
 }

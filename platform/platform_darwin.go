@@ -148,46 +148,48 @@ var (
 	selInvalidateCoords     = objc.Sel("invalidateCharacterCoordinates")
 
 	// Methods implemented by our classes (dispatched in impHandler).
-	selAcceptsFirstResp  = objc.Sel("acceptsFirstResponder")
-	selKeyDown           = objc.Sel("keyDown:")
-	selKeyUp             = objc.Sel("keyUp:")
-	selFlagsChanged      = objc.Sel("flagsChanged:")
-	selInsertText        = objc.Sel("insertText:replacementRange:")
-	selDoCommand         = objc.Sel("doCommandBySelector:")
-	selHasMarkedText     = objc.Sel("hasMarkedText")
-	selMarkedRange       = objc.Sel("markedRange")
-	selSelectedRange     = objc.Sel("selectedRange")
-	selSetMarkedText     = objc.Sel("setMarkedText:selectedRange:replacementRange:")
-	selUnmarkText        = objc.Sel("unmarkText")
-	selValidAttrs        = objc.Sel("validAttributesForMarkedText")
-	selAttrSubstring     = objc.Sel("attributedSubstringForProposedRange:actualRange:")
-	selCharIndexForPoint = objc.Sel("characterIndexForPoint:")
-	selFirstRect         = objc.Sel("firstRectForCharacterRange:actualRange:")
-	selViewBacking       = objc.Sel("viewDidChangeBackingProperties")
-	selDisplayLinkFired  = objc.Sel("gnuiDisplayLink:")
-	selMetalLinkUpdate   = objc.Sel("metalDisplayLink:needsUpdate:")
-	selInitWithLayer     = objc.Sel("initWithMetalLayer:")
-	selSetFrameLatency   = objc.Sel("setPreferredFrameLatency:")
-	selUpdateDrawable    = objc.Sel("drawable")
-	selReleaseObj        = objc.Sel("release")
-	selAutorelease       = objc.Sel("autorelease")
-	selStdButton         = objc.Sel("standardWindowButton:")
-	selSuperview         = objc.Sel("superview")
-	selFrame             = objc.Sel("frame")
-	selSetFrame          = objc.Sel("setFrame:")
-	selSetFrameOrigin    = objc.Sel("setFrameOrigin:")
-	selSetTitlebarClear  = objc.Sel("setTitlebarAppearsTransparent:")
-	selSetTitleVisible   = objc.Sel("setTitleVisibility:")
-	selShouldClose       = objc.Sel("windowShouldClose:")
-	selDidResize         = objc.Sel("windowDidResize:")
-	selDidChangeBacking  = objc.Sel("windowDidChangeBackingProperties:")
-	selDidBecomeKey      = objc.Sel("windowDidBecomeKey:")
-	selDidResignKey      = objc.Sel("windowDidResignKey:")
-	selDidChangeOcclus   = objc.Sel("windowDidChangeOcclusionState:")
-	selWillStartLive     = objc.Sel("windowWillStartLiveResize:")
-	selDidEndLive        = objc.Sel("windowDidEndLiveResize:")
-	selInLiveResize      = objc.Sel("inLiveResize")
-	selSetContentSize    = objc.Sel("setContentSize:")
+	selAcceptsFirstResp     = objc.Sel("acceptsFirstResponder")
+	selKeyDown              = objc.Sel("keyDown:")
+	selKeyUp                = objc.Sel("keyUp:")
+	selFlagsChanged         = objc.Sel("flagsChanged:")
+	selInsertText           = objc.Sel("insertText:replacementRange:")
+	selDoCommand            = objc.Sel("doCommandBySelector:")
+	selHasMarkedText        = objc.Sel("hasMarkedText")
+	selMarkedRange          = objc.Sel("markedRange")
+	selSelectedRange        = objc.Sel("selectedRange")
+	selSetMarkedText        = objc.Sel("setMarkedText:selectedRange:replacementRange:")
+	selUnmarkText           = objc.Sel("unmarkText")
+	selValidAttrs           = objc.Sel("validAttributesForMarkedText")
+	selAttrSubstring        = objc.Sel("attributedSubstringForProposedRange:actualRange:")
+	selCharIndexForPoint    = objc.Sel("characterIndexForPoint:")
+	selFirstRect            = objc.Sel("firstRectForCharacterRange:actualRange:")
+	selViewBacking          = objc.Sel("viewDidChangeBackingProperties")
+	selDisplayLinkFired     = objc.Sel("gnuiDisplayLink:")
+	selMetalLinkUpdate      = objc.Sel("metalDisplayLink:needsUpdate:")
+	selInitWithLayer        = objc.Sel("initWithMetalLayer:")
+	selSetFrameLatency      = objc.Sel("setPreferredFrameLatency:")
+	selUpdateDrawable       = objc.Sel("drawable")
+	selReleaseObj           = objc.Sel("release")
+	selAutorelease          = objc.Sel("autorelease")
+	selStdButton            = objc.Sel("standardWindowButton:")
+	selSuperview            = objc.Sel("superview")
+	selFrame                = objc.Sel("frame")
+	selConvertPointToView   = objc.Sel("convertPoint:toView:")
+	selConvertPointToScreen = objc.Sel("convertPointToScreen:")
+	selSetFrame             = objc.Sel("setFrame:")
+	selSetFrameOrigin       = objc.Sel("setFrameOrigin:")
+	selSetTitlebarClear     = objc.Sel("setTitlebarAppearsTransparent:")
+	selSetTitleVisible      = objc.Sel("setTitleVisibility:")
+	selShouldClose          = objc.Sel("windowShouldClose:")
+	selDidResize            = objc.Sel("windowDidResize:")
+	selDidChangeBacking     = objc.Sel("windowDidChangeBackingProperties:")
+	selDidBecomeKey         = objc.Sel("windowDidBecomeKey:")
+	selDidResignKey         = objc.Sel("windowDidResignKey:")
+	selDidChangeOcclus      = objc.Sel("windowDidChangeOcclusionState:")
+	selWillStartLive        = objc.Sel("windowWillStartLiveResize:")
+	selDidEndLive           = objc.Sel("windowDidEndLiveResize:")
+	selInLiveResize         = objc.Sel("inLiveResize")
+	selSetContentSize       = objc.Sel("setContentSize:")
 
 	// Cursors.
 	selResetCursorRects   = objc.Sel("resetCursorRects")
@@ -650,14 +652,20 @@ func firstRectIMP(c *ffi.CB) {
 }
 
 // imeScreenRect converts the app's IME rectangle (window pixels, y down) to
-// screen points (y up): the view is the content view, whose frame origin is
-// relative to the window frame's.
+// screen points (y up) with AppKit: the rectangle's lower left corner goes from
+// the view's coordinates (the view is not flipped, so y counts from the bottom
+// of its bounds) through the window's base coordinates to the screen, which
+// accounts for wherever the view sits (a full-size content view under a custom
+// titlebar, a view nested in a container) and for the window's position.
 func (w *Window) imeScreenRect() objc.Rect {
 	s := float64(w.scale)
-	wf, vf := objc.SendRect(w.win, selFrame), objc.SendRect(w.view, selFrame)
 	x, y := float64(w.imeRect[0])/s, float64(w.imeRect[1])/s
 	rw, rh := float64(w.imeRect[2])/s, float64(w.imeRect[3])/s
-	return objc.Rect{X: wf.X + vf.X + x, Y: wf.Y + vf.Y + w.hPt - y - rh, W: rw, H: rh}
+	b := objc.SendRect(w.view, selBounds)
+	f := objc.F.Reset().Arg(uintptr(w.view)).Arg(uintptr(selConvertPointToView)).ArgPoint(x, b.H-y-rh).Arg(0).Call(objc.MsgSend)
+	px, py := f.F64(0), f.F64(1) // window base coordinates
+	f = objc.F.Reset().Arg(uintptr(w.win)).Arg(uintptr(selConvertPointToScreen)).ArgPoint(px, py).Call(objc.MsgSend)
+	return objc.Rect{X: f.F64(0), Y: f.F64(1), W: rw, H: rh}
 }
 
 // SetIMERect tells the input method where the text caret (or the composition,
@@ -683,11 +691,23 @@ func (w *Window) SetTextInput(active bool) {
 		return
 	}
 	w.textInput = active
-	if !active && len(w.marked) > 0 {
-		if ctx := objc.Send(w.view, selInputContext); ctx != 0 {
-			objc.Send(ctx, selDiscardMarked)
-		}
-		w.setMarkedFrom(nil, 0, 0, 0)
+	if !active {
+		w.DiscardComposition()
+	}
+}
+
+// DiscardComposition drops the input method's composition in progress without
+// committing it (EvPreedit with no text follows, and no EvText); it does
+// nothing when none is composing. Main thread.
+func (w *Window) DiscardComposition() {
+	if len(w.marked) == 0 {
+		return
+	}
+	// The composition is forgotten first: should AppKit answer discardMarkedText
+	// with unmarkText, there is nothing left to commit as text.
+	w.setMarkedFrom(nil, 0, 0, 0)
+	if ctx := objc.Send(w.view, selInputContext); ctx != 0 {
+		objc.Send(ctx, selDiscardMarked)
 	}
 }
 

@@ -6,7 +6,6 @@ import (
 	"os"
 	"sync"
 	"syscall"
-	"unicode/utf8"
 	"unsafe"
 
 	"gonativeui/internal/win32"
@@ -37,6 +36,7 @@ var (
 	pSetEvent                     = win32.Proc(winK32, "SetEvent")
 	pResetEvent                   = win32.Proc(winK32, "ResetEvent")
 	pWaitForMultipleObjects       = win32.Proc(winK32, "WaitForMultipleObjects")
+	pWaitForSingleObject          = win32.Proc(winK32, "WaitForSingleObject")
 	pReadDirectoryChangesW        = win32.Proc(winK32, "ReadDirectoryChangesW")
 	pGetOverlappedResult          = win32.Proc(winK32, "GetOverlappedResult")
 	pCancelIoEx                   = win32.Proc(winK32, "CancelIoEx")
@@ -121,54 +121,6 @@ func winPutScratch(s *winScratch) {
 	winScratchMu.Unlock()
 }
 
-// winAppendUTF16 appends s as UTF-16 (no terminator). ok is false when s
-// contains a NUL, which no Windows path can.
-func winAppendUTF16(dst []uint16, s string) (out []uint16, ok bool) {
-	for i := 0; i < len(s); {
-		c := s[i]
-		if c < utf8.RuneSelf {
-			if c == 0 {
-				return dst, false
-			}
-			dst = append(dst, uint16(c))
-			i++
-			continue
-		}
-		r, n := utf8.DecodeRuneInString(s[i:])
-		i += n
-		if r >= 0x10000 {
-			r -= 0x10000
-			dst = append(dst, uint16(0xD800+(r>>10)), uint16(0xDC00+(r&0x3FF)))
-		} else {
-			dst = append(dst, uint16(r)) // invalid UTF-8 became U+FFFD
-		}
-	}
-	return dst, true
-}
-
-// winAppendUTF8 appends the UTF-16 text w as UTF-8; unpaired surrogates
-// become U+FFFD. It does not allocate beyond growing dst.
-func winAppendUTF8(dst []byte, w []uint16) []byte {
-	for i := 0; i < len(w); i++ {
-		c := w[i]
-		switch {
-		case c < 0x80:
-			dst = append(dst, byte(c))
-		case c < 0x800:
-			dst = append(dst, 0xC0|byte(c>>6), 0x80|byte(c&0x3F))
-		case c >= 0xD800 && c < 0xDC00 && i+1 < len(w) && w[i+1] >= 0xDC00 && w[i+1] < 0xE000:
-			r := (rune(c)-0xD800)<<10 | (rune(w[i+1]) - 0xDC00) + 0x10000
-			i++
-			dst = append(dst, 0xF0|byte(r>>18), 0x80|byte(r>>12&0x3F), 0x80|byte(r>>6&0x3F), 0x80|byte(r&0x3F))
-		case c >= 0xD800 && c < 0xE000: // unpaired surrogate
-			dst = append(dst, 0xEF, 0xBF, 0xBD)
-		default:
-			dst = append(dst, 0xE0|byte(c>>12), 0x80|byte(c>>6&0x3F), 0x80|byte(c&0x3F))
-		}
-	}
-	return dst
-}
-
 func winIsSep(c uint16) bool { return c == '\\' || c == '/' }
 
 // winDirPath converts path to the absolute, \\?\-prefixed UTF-16 form used
@@ -179,7 +131,7 @@ func (s *winScratch) winDirPath(path string) (p []uint16, err syscall.Errno) {
 	if path == "" {
 		return nil, winErrFileNotFound
 	}
-	in, ok := winAppendUTF16(s.in[:0], path)
+	in, ok := appendUTF16(s.in[:0], path)
 	if !ok {
 		return nil, winErrInvalidName
 	}
@@ -299,9 +251,13 @@ func winUnixNanos(ft uint64) int64 {
 // winAddEntry appends one directory entry to l. name is UTF-16 without NUL.
 // tag is the reparse tag (valid when attr has the reparse-point bit). It
 // skips "." and "..".
-func winAddEntry(l *Listing, name []uint16, attr, tag uint32, size int64, ftWrite uint64) {
+//
+// It returns errNameTooLong when the name does not fit Entry.NameLen (the
+// entry is not added) and errArenaFull when the names arena would pass
+// 4 GiB (nothing more can be added).
+func winAddEntry(l *Listing, name []uint16, attr, tag uint32, size int64, ftWrite uint64) error {
 	if len(name) <= 2 && len(name) > 0 && name[0] == '.' && (len(name) == 1 || name[1] == '.') {
-		return
+		return nil
 	}
 	var kind Kind
 	var flags uint8
@@ -329,7 +285,11 @@ func winAddEntry(l *Listing, name []uint16, attr, tag uint32, size int64, ftWrit
 		flags |= FlagReadOnly
 	}
 	off := len(l.Names)
-	l.Names = winAppendUTF8(l.Names, name)
+	l.Names = appendWTF8(l.Names, name)
+	if err := checkName(off, len(l.Names)-off); err != nil {
+		l.Names = l.Names[:off]
+		return err
+	}
 	l.Entries = append(l.Entries, Entry{
 		Size:    size,
 		MTime:   winUnixNanos(ftWrite),
@@ -338,4 +298,5 @@ func winAddEntry(l *Listing, name []uint16, attr, tag uint32, size int64, ftWrit
 		Kind:    kind,
 		Flags:   flags,
 	})
+	return nil
 }

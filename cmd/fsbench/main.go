@@ -56,7 +56,7 @@ func main() {
 			fatal(err)
 		}
 		for i := 0; i < *mk; i++ {
-			f, err := os.Create(filepath.Join(dir, fmt.Sprintf("file_%07d_some_typical_name.txt", (i*7919)%*mk)))
+			f, err := os.Create(filepath.Join(dir, benchName(i)))
 			if err != nil {
 				fatal(err)
 			}
@@ -108,6 +108,9 @@ func main() {
 	out, _ := json.MarshalIndent(r, "", "  ")
 	fmt.Println(string(out))
 }
+
+// benchName is the name of the i-th synthetic file: unique for every i.
+func benchName(i int) string { return fmt.Sprintf("file_%07d_some_typical_name.txt", i) }
 
 func fatal(err error) {
 	fmt.Fprintln(os.Stderr, err)

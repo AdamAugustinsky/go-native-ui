@@ -38,6 +38,7 @@ func platformCursor(c ui.Cursor) platform.Cursor { return platform.Cursor(c) }
 type textTarget interface {
 	SetIMERect(x, y, w, h float32)
 	SetTextInput(active bool)
+	DiscardComposition()
 }
 
 // syncText hands the focused text field's state to the window: where its caret
@@ -45,12 +46,21 @@ type textTarget interface {
 // field has focus at all, and arms the wake-up for the field's next caret
 // blink. The platform compares, so calling it every frame changes nothing when
 // nothing moved; start is the platform time the frame began at.
+//
+// When ui reports the input method's composition orphaned (IMECancel: its field
+// lost the focus and committed it, or is gone) the platform's composition is
+// discarded, without committing it a second time, and the translator forgets
+// it at once so that no field sees it again.
 func (a *App) syncText(win textTarget, start int64) {
 	r, ok := a.UI.IMERect()
 	if ok {
 		win.SetIMERect(r[0], r[1], r[2], r[3])
 	}
 	win.SetTextInput(ok)
+	if a.UI.IMECancel() {
+		win.DiscardComposition()
+		a.tr.in.SetPreedit(nil, 0, 0)
+	}
 	a.wakeAt = 0
 	if ns := a.UI.WakeAfter(); ns > 0 {
 		a.wakeAt = start + ns

@@ -86,6 +86,7 @@ type lxWatcher struct {
 	efd  int // eventfd: written by close
 	done chan struct{}
 	buf  []uint64 // worker-only read buffer
+	rm   []int32  // worker-only: descriptors to drop from the kernel after a batch
 
 	tmu    sync.Mutex
 	ws     []lxWatch
@@ -236,12 +237,18 @@ func (w *lxWatcher) run() {
 	}
 }
 
-// readEvents reads and handles every queued inotify event, then calls wake
-// once if anything was queued. It returns false when the instance is dead.
+// lxMaxBatches bounds how many read() batches one round handles before it
+// goes back to ppoll, which is where close() (the eventfd) is noticed.
+const lxMaxBatches = 8
+
+// readEvents reads and handles up to lxMaxBatches batches of queued inotify
+// events, calling wake after each batch that queued a change, so a producer
+// that never lets the queue run dry can neither delay the announcement of
+// changes nor starve close(). Events still queued are picked up by the next
+// ppoll. It returns false when the instance is dead.
 func (w *lxWatcher) readEvents() bool {
 	buf := unsafe.Slice((*byte)(unsafe.Pointer(&w.buf[0])), lxReadBuf)
-	queued := false
-	for {
+	for batch := 0; batch < lxMaxBatches; {
 		n, _, e := syscall.Syscall(syscall.SYS_READ, uintptr(w.ifd), uintptr(unsafe.Pointer(&buf[0])), lxReadBuf)
 		if e == syscall.EINTR {
 			continue
@@ -255,12 +262,15 @@ func (w *lxWatcher) readEvents() bool {
 		if n == 0 {
 			break
 		}
-		if w.handle(buf[:n]) {
-			queued = true
+		batch++
+		queued := w.handle(buf[:n])
+		for _, wd := range w.rm {
+			syscall.Syscall(syscall.SYS_INOTIFY_RM_WATCH, uintptr(w.ifd), uintptr(wd), 0)
 		}
-	}
-	if queued && w.wake != nil {
-		w.wake()
+		w.rm = w.rm[:0]
+		if queued && w.wake != nil {
+			w.wake()
+		}
 	}
 	return true
 }
@@ -297,7 +307,7 @@ func (w *lxWatcher) handle(b []byte) (queued bool) {
 				w.ws = append(w.ws[:i], w.ws[i+1:]...)
 			}
 			if mask&lxInIgnored == 0 { // still alive in the kernel (moved, unmounted)
-				syscall.Syscall(syscall.SYS_INOTIFY_RM_WATCH, uintptr(w.ifd), uintptr(wd), 0)
+				w.rm = append(w.rm, wd) // removed by readEvents, outside the locks
 			}
 		default:
 			for _, x := range w.ws {

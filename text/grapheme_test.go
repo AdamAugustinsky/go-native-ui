@@ -147,3 +147,115 @@ func TestGraphemeAllocs(t *testing.T) {
 		t.Errorf("%v allocs", n)
 	}
 }
+
+// sanitizedBoundaries returns the grapheme boundaries of b (as byte offsets
+// into b) computed on the text the shapers see: every invalid byte one U+FFFD.
+func sanitizedBoundaries(t *testing.T, seg *segmenter.Segmenter, b []byte) []int {
+	t.Helper()
+	var san []byte
+	var starts []int // offset in b of each byte of san
+	for i := 0; i < len(b); {
+		r, n := utf8.DecodeRune(b[i:])
+		if r == utf8.RuneError && n == 1 {
+			san = utf8.AppendRune(san, utf8.RuneError)
+			starts = append(starts, i, i, i)
+		} else {
+			san = append(san, b[i:i+n]...)
+			for k := 0; k < n; k++ {
+				starts = append(starts, i)
+			}
+		}
+		i += n
+	}
+	starts = append(starts, len(b))
+	gt := gtBoundaries(t, seg, string(san))
+	out := make([]int, len(gt))
+	for i, o := range gt {
+		out[i] = starts[o]
+	}
+	return out
+}
+
+// Malformed UTF-8: every invalid byte is a cluster of its own, whatever its
+// value (a stray continuation byte included), and a continuation byte inside a
+// valid sequence is never a boundary.
+func TestGraphemeMalformedUTF8(t *testing.T) {
+	cases := [][]byte{
+		{0x80, 0x81, 'a'},                   // stray continuation bytes
+		{0x80, 0x80, 0x80, 0x80, 0x80},      // a run of them
+		{'a', 0xE2, 0x82, 'b'},              // truncated 3-byte sequence
+		{0xE2, 0x82},                        // truncated at the end
+		{0xF0, 0x9F, 0x98},                  // truncated 4-byte sequence
+		{0xC0, 0x80, 'x'},                   // overlong NUL
+		{0xE0, 0x80, 0x80},                  // overlong
+		{0xC1, 0xBF},                        // overlong
+		{0xED, 0xA0, 0x80},                  // UTF-16 surrogate D800
+		{0xED, 0xBF, 0xBF, 'z'},             // surrogate DFFF
+		{0xF4, 0x90, 0x80, 0x80},            // above U+10FFFF
+		{0xF8, 0x88, 0x80, 0x80, 0x80},      // 5-byte form
+		{'e', 0xCC, 0x81, 0x80, 'x'},        // é then a stray continuation byte
+		{0xE2, 0x82, 0xAC, 0x82, 0xAC},      // € then stray continuations
+		{0xFF, 0xFE, 0xE2, 0x82, 0xAC},      // invalid then valid
+		{'a', 0xCC, 0x81, 0xFF, 0xCC, 0x81}, // marks after invalid bytes
+	}
+	var seg segmenter.Segmenter
+	for _, b := range cases {
+		want := sanitizedBoundaries(t, &seg, b)
+		var got []int
+		for off := 0; off <= len(b); off++ {
+			if IsGraphemeBoundary(b, off) {
+				got = append(got, off)
+			}
+		}
+		if !slices.Equal(want, got) {
+			t.Errorf("% x: boundaries %v, want %v", b, got, want)
+			continue
+		}
+		// Navigation agrees with the boundaries, both ways.
+		var fwd []int
+		for off := 0; ; {
+			fwd = append(fwd, off)
+			if off >= len(b) {
+				break
+			}
+			off = NextGrapheme(b, off)
+		}
+		if !slices.Equal(fwd, want) {
+			t.Errorf("% x: NextGrapheme walk %v, want %v", b, fwd, want)
+		}
+		for i := len(want) - 1; i > 0; i-- {
+			if p := PrevGrapheme(b, want[i]); p != want[i-1] {
+				t.Errorf("% x: PrevGrapheme(%d) = %d, want %d", b, want[i], p, want[i-1])
+			}
+		}
+		for off := 0; off <= len(b); off++ {
+			s := GraphemeStart(b, off)
+			if !slices.Contains(want, s) || s > off || (off < len(b) && NextGrapheme(b, s) <= off) {
+				t.Errorf("% x: GraphemeStart(%d) = %d", b, off, s)
+			}
+		}
+	}
+}
+
+// Random byte soup: the same property for arbitrary bytes.
+func TestGraphemeRandomBytes(t *testing.T) {
+	pool := []byte{0x80, 0x81, 0xBF, 0xC2, 0xCC, 0xE2, 0xED, 0xF0, 0xF4, 0xFF, 'a', 'e', 0x9F, 0x98, 0x82, 0xAC, 0x81, '\r', '\n'}
+	var seg segmenter.Segmenter
+	rng := rand.New(rand.NewSource(7))
+	for n := 0; n < 20000; n++ {
+		b := make([]byte, 1+rng.Intn(10))
+		for i := range b {
+			b[i] = pool[rng.Intn(len(pool))]
+		}
+		want := sanitizedBoundaries(t, &seg, b)
+		var got []int
+		for off := 0; off <= len(b); off++ {
+			if IsGraphemeBoundary(b, off) {
+				got = append(got, off)
+			}
+		}
+		if !slices.Equal(want, got) {
+			t.Fatalf("% x: boundaries %v, want %v", b, got, want)
+		}
+	}
+}

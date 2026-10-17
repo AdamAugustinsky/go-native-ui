@@ -50,3 +50,6 @@ func (w *Window) SetIMERect(x, y, wd, h float32) {}
 
 // SetTextInput is a no-op on Linux (see SetIMERect).
 func (w *Window) SetTextInput(active bool) {}
+
+// DiscardComposition is a no-op on Linux (see SetIMERect).
+func (w *Window) DiscardComposition() {}

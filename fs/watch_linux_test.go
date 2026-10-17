@@ -480,3 +480,61 @@ func TestLinuxWatchDrainZeroAlloc(t *testing.T) {
 		t.Errorf("drain/post allocate: %d mallocs over 1000 rounds", n)
 	}
 }
+
+// A producer that never lets the inotify queue run dry must neither delay
+// the announcement of changes nor keep close() from stopping the worker.
+func TestLinuxWatchSustainedEvents(t *testing.T) {
+	h := lxNewHarness(t)
+	dir := t.TempDir()
+	if err := h.w.add(1, dir); err != nil {
+		t.Fatal(err)
+	}
+	stop := make(chan struct{})
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		p := filepath.Join(dir, "busy")
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			os.WriteFile(p, []byte("x"), 0o644) // create/modify events, as fast as possible
+			os.Remove(p)
+		}
+	}()
+	defer func() { close(stop); <-finished }()
+
+	// Announced while the producer is still running, many times over.
+	wakes := 0
+	deadline := time.After(1500 * time.Millisecond)
+	first := time.Now()
+loop:
+	for {
+		select {
+		case <-h.wake:
+			if wakes == 0 {
+				t.Logf("first wake after %v", time.Since(first))
+				if d := time.Since(first); d > 250*time.Millisecond {
+					t.Errorf("first announcement took %v under sustained events", d)
+				}
+			}
+			wakes++
+			h.w.drain(nil)
+		case <-deadline:
+			break loop
+		}
+	}
+	t.Logf("%d wakes in 1.5 s of continuous events", wakes)
+	if wakes < 10 {
+		t.Errorf("only %d wakes in 1.5 s of continuous events", wakes)
+	}
+	closed := make(chan struct{})
+	go func() { h.w.close(); close(closed) }()
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("close() did not finish while events kept coming")
+	}
+}

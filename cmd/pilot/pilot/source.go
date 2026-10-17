@@ -16,7 +16,8 @@ type Source interface {
 	Watch(id uint32, path string)
 	Unwatch(id uint32)
 	Poll(dst []fs.Result) []fs.Result
-	Release(l *fs.Listing)
+	Release(l *fs.Listing, lease uint32)
+	Open(id uint32, path string)
 	Close()
 }
 

@@ -44,21 +44,36 @@ import (
 // its ancestors is refused by Windows while any handle is open below it,
 // for every watcher).
 //
-// Locking: mu guards the watch table, the pending changes and closed. The
-// worker takes it only after a wait returns, never while waiting; add,
-// remove and close take it for short, non-blocking stretches (add opens
-// directories before taking it, since that can be slow on network shares).
+// Ownership and locking. The worker goroutine owns the watch table and
+// every handle, event and OVERLAPPED buffer once a watch is handed to it:
+// it alone issues reads, reaps them, cancels them and closes the handles,
+// and only between waits, so a handle is never closed while a wait uses it.
+// A cancelled read's buffer stays referenced until the kernel has completed
+// it (it is Go heap memory, which never moves); if a cancellation does not
+// complete within winCancelWait the watch and its handles are leaked on
+// purpose instead of freeing memory the kernel may still write.
+//
+// add and remove are synchronous commands to the worker (open and first read
+// happen on the caller, which may be slow on network shares; the worker only
+// links the watch in). Two mutexes, both held only for in-memory work and
+// never across a system call that can block: cmu guards the command queue
+// and closed; pmu guards the pending changes. drain, which runs on the UI
+// thread, takes only pmu.
 
 const (
 	winMaxWatches = 63
 	winNotifyBuf  = 32 << 10 // bytes; DWORD-aligned by construction (uint64 array)
 	winLivenessMs = 5000
 
+	// winCancelWait bounds the wait for a cancelled read to complete.
+	winCancelWait = 10000 // ms
+
 	// winnt.h:6197-6201.
 	winNotifyDir    = 0x1 | 0x2 | 0x4 | 0x8 | 0x10 // FILE_NAME | DIR_NAME | ATTRIBUTES | SIZE | LAST_WRITE
 	winNotifyParent = 0x2                          // FILE_NOTIFY_CHANGE_DIR_NAME
 
 	winStatusPending = 0x103
+	winWaitObject0   = 0
 	winWaitTimeout   = 0x102
 	winWaitFailed    = 0xFFFFFFFF
 	winInfinite      = 0xFFFFFFFF
@@ -108,16 +123,39 @@ type winStandardInfo struct {
 	Directory      uint8
 }
 
+// winCmd is an add or a remove, executed by the worker. For an add, x is the
+// opened and armed directory watch and cand an optional opened parent watch
+// (both already issued their first read); the worker owns them from the
+// moment the command is queued.
+type winCmd struct {
+	id    uint32
+	x     *winWatch // nil: remove id
+	cand  *winWatch
+	pp    []uint16 // the parent's path
+	reply chan error
+}
+
+var errWinClosed = errors.New("fs: watcher closed")
+
 type winWatcher struct {
 	wake func()
-	ctl  uintptr // auto-reset event: the table changed, or close
+	ctl  uintptr // auto-reset event: a command is queued, or close
 	done chan struct{}
 
-	mu     sync.Mutex
-	ws     []*winWatch // directory watches and parent watches
-	pend   []Change
+	cmu    sync.Mutex
+	cmds   []*winCmd
 	closed bool
-	std    winStandardInfo // scratch for the delete-pending query; guarded by mu
+
+	pmu  sync.Mutex
+	pend []Change
+
+	// Worker-only state.
+	ws   []*winWatch // directory watches and parent watches
+	std  winStandardInfo
+	grew bool // a change was queued during this round
+
+	// Published by the worker for tests and diagnostics.
+	nDirs, nAll atomic.Int32
 }
 
 func newWatcher(wake func()) (watcher, error) {
@@ -195,8 +233,32 @@ func winSamePath(a, b []uint16) bool {
 	return true
 }
 
+// submit queues c for the worker and waits for its answer.
+func (w *winWatcher) submit(c *winCmd) error {
+	c.reply = make(chan error, 1)
+	w.cmu.Lock()
+	if w.closed {
+		w.cmu.Unlock()
+		return errWinClosed
+	}
+	w.cmds = append(w.cmds, c)
+	syscall.SyscallN(pSetEvent, w.ctl) // ctl stays open while !closed
+	w.cmu.Unlock()
+	select {
+	case err := <-c.reply:
+		return err
+	case <-w.done:
+		// The worker answers every queued command before it exits.
+		select {
+		case err := <-c.reply:
+			return err
+		default:
+			return errWinClosed
+		}
+	}
+}
+
 func (w *winWatcher) add(id uint32, path string) error {
-	w.remove(id) // re-adding an id replaces its watch
 	s := winGetScratch()
 	dir, e := s.winDirPath(path)
 	var p []uint16
@@ -212,144 +274,56 @@ func (w *winWatcher) add(id uint32, path string) error {
 		return winPathErr("fs.watch", path, e)
 	}
 	x.id = id
-
-	// The parent watch is optional. Reuse one if there is, else open one
-	// outside the lock (the open can be slow).
-	pp, hasParent := winParentPath(p)
-	var par, cand *winWatch
-	if hasParent {
-		w.mu.Lock()
-		par = w.findParent(pp)
-		room := len(w.ws)+2 <= winMaxWatches
-		w.mu.Unlock()
-		if par == nil && room {
-			if c, e := winOpenWatch(pp, winNotifyParent); e == 0 {
-				c.isParent = true
-				cand = c
+	c := &winCmd{id: id, x: x}
+	// The parent watch is optional. It is opened here, off the worker (the
+	// open can be slow); the worker uses it unless one already exists.
+	if pp, ok := winParentPath(p); ok {
+		if cand, e := winOpenWatch(pp, winNotifyParent); e == 0 {
+			cand.isParent = true
+			c.cand, c.pp = cand, pp
+		}
+	}
+	if err := w.submit(c); err != nil {
+		if err == errWinClosed {
+			// Never queued, or answered by the exiting worker, which has
+			// already stopped them; stop is idempotent.
+			x.stop()
+			if c.cand != nil {
+				c.cand.stop()
 			}
+			return err
 		}
-	}
-
-	w.mu.Lock()
-	if w.closed {
-		w.mu.Unlock()
-		x.stop()
-		if cand != nil {
-			cand.stop()
-		}
-		return errors.New("fs: watcher closed")
-	}
-	if len(w.ws)+1 > winMaxWatches {
-		w.mu.Unlock()
-		x.stop()
-		if cand != nil {
-			cand.stop()
-		}
-		return errors.New("fs: too many watched directories (Windows waits on at most 63 watches)")
-	}
-	if par == nil || par.dead {
-		par = w.findParent(pp)
-	}
-	if par == nil && cand != nil && len(w.ws)+2 <= winMaxWatches {
-		w.ws = append(w.ws, cand)
-		par, cand = cand, nil
-	}
-	if cand != nil {
-		cand.stop() // lost the race, or no room after all
-	}
-	if par != nil {
-		par.refs++
-		x.parent = par
-	}
-	w.ws = append(w.ws, x)
-	syscall.SyscallN(pSetEvent, w.ctl) // the wait set changed; ctl is open while !closed
-	w.mu.Unlock()
-	return nil
-}
-
-// findParent returns the live parent watch of directory path pp; w.mu is held.
-func (w *winWatcher) findParent(pp []uint16) *winWatch {
-	for _, o := range w.ws {
-		if o.isParent && !o.dead && winSamePath(o.path, pp) {
-			return o
-		}
+		return err
 	}
 	return nil
 }
 
 func (w *winWatcher) remove(id uint32) {
-	w.mu.Lock()
-	for _, x := range w.ws {
-		if !x.isParent && x.id == id {
-			x.dead = true
-		}
-	}
-	w.sweep()
+	w.submit(&winCmd{id: id})
+	w.pmu.Lock()
 	w.dropPending(id)
-	if !w.closed {
-		syscall.SyscallN(pSetEvent, w.ctl)
-	}
-	w.mu.Unlock()
-}
-
-// sweep stops and unlinks every dead watch, and parent watches nothing
-// relies on any more; w.mu is held.
-func (w *winWatcher) sweep() {
-	for _, x := range w.ws {
-		if x.dead && !x.isParent && x.parent != nil {
-			x.parent.refs--
-			x.parent = nil
-		}
-	}
-	for _, x := range w.ws {
-		if x.isParent && x.refs <= 0 {
-			x.dead = true
-		}
-	}
-	for _, x := range w.ws { // children of a parent that died on its own
-		if !x.isParent && !x.dead && x.parent != nil && x.parent.dead {
-			x.parent.refs--
-			x.parent = nil
-		}
-	}
-	j := 0
-	for _, x := range w.ws {
-		if x.dead {
-			x.stop()
-			continue
-		}
-		w.ws[j] = x
-		j++
-	}
-	clear(w.ws[j:])
-	w.ws = w.ws[:j]
+	w.pmu.Unlock()
 }
 
 func (w *winWatcher) drain(dst []Change) []Change {
-	w.mu.Lock()
+	w.pmu.Lock()
 	dst = append(dst, w.pend...)
 	w.pend = w.pend[:0]
-	w.mu.Unlock()
+	w.pmu.Unlock()
 	return dst
 }
 
 func (w *winWatcher) close() {
-	w.mu.Lock()
+	w.cmu.Lock()
 	if w.closed {
-		w.mu.Unlock()
+		w.cmu.Unlock()
+		<-w.done
 		return
 	}
 	w.closed = true
 	syscall.SyscallN(pSetEvent, w.ctl)
-	w.mu.Unlock()
-	<-w.done // the worker is out of its wait and will not touch the table again
-	w.mu.Lock()
-	for _, x := range w.ws {
-		x.stop()
-	}
-	w.ws, w.pend = nil, nil
-	w.mu.Unlock()
-	winCloseHandle(w.ctl)
+	w.cmu.Unlock()
+	<-w.done // the worker stops every watch and closes ctl before it exits
 }
 
 // arm issues the (next) overlapped ReadDirectoryChangesW. It returns the
@@ -381,13 +355,31 @@ func (x *winWatch) pending() bool {
 	return x.armed && uint32(atomic.LoadUintptr(&x.ov.Internal)) == winStatusPending
 }
 
-// stop cancels the outstanding read, waits until the kernel is done with
-// the buffer, and closes the handles. The caller holds w.mu (or owns x).
+// winLeaked keeps the memory of watches whose cancellation did not complete
+// alive for the life of the process: the kernel may still write to them.
+var (
+	winLeakMu sync.Mutex
+	winLeaked []*winWatch
+)
+
+// stop cancels the outstanding read, waits (bounded) until the kernel is
+// done with the buffer, and closes the handles. It is idempotent. Only the
+// goroutine that owns x calls it, and never while a wait uses x's event.
 func (x *winWatch) stop() {
+	if x.h == winInvalidHandle {
+		return
+	}
 	if x.pending() {
 		syscall.SyscallN(pCancelIoEx, x.h, uintptr(unsafe.Pointer(&x.ov)))
-		var n uint32
-		syscall.SyscallN(pGetOverlappedResult, x.h, uintptr(unsafe.Pointer(&x.ov)), uintptr(unsafe.Pointer(&n)), 1)
+		r, _, _ := syscall.SyscallN(pWaitForSingleObject, uintptr(x.ov.HEvent), winCancelWait)
+		if uint32(r) != winWaitObject0 && x.pending() {
+			// Not completed: neither free the buffer nor close the handles.
+			winLeakMu.Lock()
+			winLeaked = append(winLeaked, x)
+			winLeakMu.Unlock()
+			x.h, x.armed = winInvalidHandle, false
+			return
+		}
 	}
 	x.armed = false
 	winCloseHandle(x.h)
@@ -395,7 +387,7 @@ func (x *winWatch) stop() {
 	x.h = winInvalidHandle
 }
 
-// dropPending removes id's queued change; w.mu is held.
+// dropPending removes id's queued change; w.pmu is held.
 func (w *winWatcher) dropPending(id uint32) {
 	for i := range w.pend {
 		if w.pend[i].ID == id {
@@ -406,8 +398,11 @@ func (w *winWatcher) dropPending(id uint32) {
 }
 
 // post queues a change for id, coalescing with an earlier one (Gone beats
-// Overflow beats Dir); w.mu is held.
+// Overflow beats Dir). A change coalesced into an already queued one needs
+// no new wake: the queued one was announced when it was posted.
 func (w *winWatcher) post(id uint32, k ChangeKind) {
+	w.pmu.Lock()
+	defer w.pmu.Unlock()
 	for i := range w.pend {
 		if w.pend[i].ID == id {
 			if k > w.pend[i].Kind {
@@ -417,6 +412,7 @@ func (w *winWatcher) post(id uint32, k ChangeKind) {
 		}
 	}
 	w.pend = append(w.pend, Change{ID: id, Kind: k})
+	w.grew = true
 }
 
 // reap collects the result of x's finished read.
@@ -428,7 +424,7 @@ func (x *winWatch) reap() (ok bool, n uint32, e syscall.Errno) {
 
 // completeDir handles a finished read of a watched directory and re-arms
 // it, or marks the watch dead (and queues ChangeGone) when the directory is
-// gone; w.mu is held.
+// gone. Worker only.
 func (w *winWatcher) completeDir(x *winWatch) {
 	ok, n, e := x.reap()
 	switch {
@@ -450,7 +446,7 @@ func (w *winWatcher) completeDir(x *winWatch) {
 
 // completeParent handles a finished read of a parent watch: a directory was
 // created, deleted or renamed in the parent, so its watched children may be
-// gone. w.mu is held.
+// gone. Worker only.
 func (w *winWatcher) completeParent(x *winWatch) {
 	ok, _, e := x.reap()
 	over := !ok && e != winErrNotifyEnumDir // the parent itself is gone or unreadable
@@ -488,11 +484,9 @@ func (w *winWatcher) deletePending(x *winWatch) bool {
 	return uint32(r) != 0 && w.std.DeletePending != 0
 }
 
-// scan reaps every completed read and reports whether any change was
-// queued; w.mu is held. liveness additionally checks that each watched path
-// still exists.
-func (w *winWatcher) scan(liveness bool) (changed bool) {
-	before := len(w.pend)
+// scan reaps every completed read; liveness additionally checks that each
+// watched path still exists. Worker only.
+func (w *winWatcher) scan(liveness bool) {
 	for _, x := range w.ws {
 		switch {
 		case x.dead:
@@ -507,47 +501,172 @@ func (w *winWatcher) scan(liveness bool) (changed bool) {
 		}
 	}
 	w.sweep()
-	// A change coalesced into an already queued one needs no new wake: the
-	// queued one was announced when it was posted.
-	return len(w.pend) > before
+}
+
+// findParent returns the live parent watch of directory path pp. Worker only.
+func (w *winWatcher) findParent(pp []uint16) *winWatch {
+	for _, o := range w.ws {
+		if o.isParent && !o.dead && winSamePath(o.path, pp) {
+			return o
+		}
+	}
+	return nil
+}
+
+// sweep stops and unlinks every dead watch, and parent watches nothing
+// relies on any more. Worker only.
+func (w *winWatcher) sweep() {
+	for _, x := range w.ws {
+		if x.dead && !x.isParent && x.parent != nil {
+			x.parent.refs--
+			x.parent = nil
+		}
+	}
+	for _, x := range w.ws {
+		if x.isParent && x.refs <= 0 {
+			x.dead = true
+		}
+	}
+	for _, x := range w.ws { // children of a parent that died on its own
+		if !x.isParent && !x.dead && x.parent != nil && x.parent.dead {
+			x.parent.refs--
+			x.parent = nil
+		}
+	}
+	j := 0
+	for _, x := range w.ws {
+		if x.dead {
+			x.stop()
+			continue
+		}
+		w.ws[j] = x
+		j++
+	}
+	clear(w.ws[j:])
+	w.ws = w.ws[:j]
+	w.publishCounts()
+}
+
+func (w *winWatcher) publishCounts() {
+	dirs := 0
+	for _, x := range w.ws {
+		if !x.isParent {
+			dirs++
+		}
+	}
+	w.nDirs.Store(int32(dirs))
+	w.nAll.Store(int32(len(w.ws)))
+}
+
+// apply executes one command. Worker only.
+func (w *winWatcher) apply(c *winCmd) {
+	for _, x := range w.ws { // add replaces an existing id; remove drops it
+		if !x.isParent && x.id == c.id {
+			x.dead = true
+		}
+	}
+	w.sweep()
+	if c.x == nil {
+		c.reply <- nil
+		return
+	}
+	if len(w.ws)+1 > winMaxWatches {
+		c.x.stop()
+		if c.cand != nil {
+			c.cand.stop()
+		}
+		c.reply <- errors.New("fs: too many watched directories (Windows waits on at most 63 watches)")
+		return
+	}
+	var par *winWatch
+	if c.cand != nil {
+		par = w.findParent(c.pp)
+		if par == nil && len(w.ws)+2 <= winMaxWatches {
+			w.ws = append(w.ws, c.cand)
+			par = c.cand
+		} else {
+			c.cand.stop() // one exists already, or no room
+		}
+	}
+	if par != nil {
+		par.refs++
+		c.x.parent = par
+	}
+	w.ws = append(w.ws, c.x)
+	w.publishCounts()
+	c.reply <- nil
+}
+
+// reject stops the watches of unexecuted commands and answers them "closed".
+func (w *winWatcher) reject(cmds []*winCmd) {
+	for _, c := range cmds {
+		if c.x != nil {
+			c.x.stop()
+		}
+		if c.cand != nil {
+			c.cand.stop()
+		}
+		c.reply <- errWinClosed
+	}
+}
+
+// takeCmds hands the queued commands to the worker; closed reports close().
+func (w *winWatcher) takeCmds(buf []*winCmd) (cmds []*winCmd, closed bool) {
+	w.cmu.Lock()
+	cmds = append(buf[:0], w.cmds...)
+	clear(w.cmds)
+	w.cmds = w.cmds[:0]
+	closed = w.closed
+	w.cmu.Unlock()
+	return cmds, closed
 }
 
 func (w *winWatcher) run() {
-	defer close(w.done)
 	var hs [winMaxWatches + 1]uintptr
+	var cmds []*winCmd
+	defer func() {
+		// Close: answer the commands that raced with it, stop everything,
+		// and only then close the control event and report done.
+		w.reject(cmds)
+		more, _ := w.takeCmds(nil)
+		w.reject(more)
+		for _, x := range w.ws {
+			x.stop()
+		}
+		w.ws = nil
+		w.publishCounts()
+		winCloseHandle(w.ctl)
+		close(w.done)
+	}()
 	for {
-		w.mu.Lock()
-		if w.closed {
-			w.mu.Unlock()
+		var closed bool
+		cmds, closed = w.takeCmds(cmds)
+		if closed {
 			return
 		}
+		for _, c := range cmds {
+			w.apply(c)
+		}
+
 		hs[0] = w.ctl
 		n := 1
 		for _, x := range w.ws {
 			hs[n] = uintptr(x.ov.HEvent)
 			n++
 		}
-		w.mu.Unlock()
-
 		timeout := uintptr(winInfinite)
 		if n > 1 {
 			timeout = winLivenessMs
 		}
+		// Only this goroutine closes the events in hs, and only here, never
+		// during the wait.
 		r, _, _ := syscall.SyscallN(pWaitForMultipleObjects, uintptr(n), uintptr(unsafe.Pointer(&hs[0])), 0, timeout)
-
 		if uint32(r) == winWaitFailed {
-			// A handle in the set was closed under the wait (remove/add
-			// racing with it). The set is rebuilt next round.
-			time.Sleep(10 * time.Millisecond)
+			time.Sleep(10 * time.Millisecond) // never a hot loop
 		}
-		w.mu.Lock()
-		if w.closed {
-			w.mu.Unlock()
-			return
-		}
-		changed := w.scan(uint32(r) == winWaitTimeout)
-		w.mu.Unlock()
-		if changed && w.wake != nil {
+		w.grew = false
+		w.scan(uint32(r) == winWaitTimeout)
+		if w.grew && w.wake != nil {
 			w.wake()
 		}
 	}

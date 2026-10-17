@@ -4,6 +4,7 @@ package fs
 
 import (
 	"errors"
+	"os"
 	"syscall"
 	"unsafe"
 )
@@ -161,6 +162,15 @@ func winListFull(path string, l *Listing) error {
 	return err
 }
 
+// winListResult is the result of a listing that read the whole directory:
+// nil, or the partial-listing error of an entry that could not be added.
+func winListResult(path string, skipped error) error {
+	if skipped == nil {
+		return nil
+	}
+	return &os.PathError{Op: "fs.list", Path: path, Err: skipped}
+}
+
 // winListByHandle lists with GetFileInformationByHandleEx. extd selects
 // FileIdExtdDirectoryInfo, otherwise FileFullDirectoryInfo.
 func winListByHandle(path string, l *Listing, extd bool) error {
@@ -189,12 +199,13 @@ func winListByHandle(path string, l *Listing, extd bool) error {
 	}
 	entries0, names0 := len(l.Entries), len(l.Names)
 	first := true
+	var skipped error // an entry that could not be added; reported at the end
 	for {
 		r, _, e := syscall.SyscallN(pGetFileInformationByHandleEx, h, uintptr(class), uintptr(buf), winDirBufSize)
 		if uint32(r) == 0 {
 			switch {
 			case e == winErrNoMoreFiles, first && e == winErrFileNotFound:
-				return nil // done; or an empty volume root, which has no "." and ".." to return
+				return winListResult(path, skipped) // done; or an empty volume root, which has no "." and ".." to return
 			case first && (e == winErrInvalidParam || e == winErrNotSupported || e == winErrInvalidLevel):
 				l.Entries, l.Names = l.Entries[:entries0], l.Names[:names0]
 				return errWinFallback
@@ -226,7 +237,12 @@ func winListByHandle(path string, l *Listing, extd bool) error {
 				return winPathErr("fs.list", path, winErrInvalidParam)
 			}
 			name := unsafe.Slice((*uint16)(unsafe.Add(p, nameOff)), nameLen/2)
-			winAddEntry(l, name, attr, tag, size, uint64(write))
+			if err := winAddEntry(l, name, attr, tag, size, uint64(write)); err != nil {
+				if err == errArenaFull {
+					return winListResult(path, err)
+				}
+				skipped = err
+			}
 			if nextOff == 0 {
 				break
 			}
@@ -259,6 +275,7 @@ func winListFind(path string, l *Listing) error {
 		return winPathErr("fs.list", path, e)
 	}
 	defer winFindClose(h)
+	var skipped error // an entry that could not be added; reported at the end
 	for {
 		n := 0
 		for n < len(fd.FileName) && fd.FileName[n] != 0 {
@@ -266,11 +283,16 @@ func winListFind(path string, l *Listing) error {
 		}
 		size := int64(fd.SizeHigh)<<32 | int64(fd.SizeLow)
 		write := uint64(fd.Write[1])<<32 | uint64(fd.Write[0])
-		winAddEntry(l, fd.FileName[:n], fd.Attr, fd.Reserved0, size, write)
+		if err := winAddEntry(l, fd.FileName[:n], fd.Attr, fd.Reserved0, size, write); err != nil {
+			if err == errArenaFull {
+				return winListResult(path, err)
+			}
+			skipped = err
+		}
 		r, _, e := syscall.SyscallN(pFindNextFileW, h, uintptr(unsafe.Pointer(fd)))
 		if uint32(r) == 0 {
 			if e == winErrNoMoreFiles {
-				return nil
+				return winListResult(path, skipped)
 			}
 			return winPathErr("fs.list", path, e)
 		}

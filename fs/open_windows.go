@@ -3,6 +3,7 @@
 package fs
 
 import (
+	"os"
 	"runtime"
 	"sync"
 	"syscall"
@@ -52,10 +53,12 @@ const (
 	winCoApartment  = 0x2 // COINIT_APARTMENTTHREADED
 	winCoNoOle1DDE  = 0x4 // COINIT_DISABLE_OLE1DDE
 
-	// winOpenWait bounds how long openPath blocks its caller (the UI
-	// thread): a handler that takes longer to start is assumed to be
-	// starting fine.
-	winOpenWait = 250 * time.Millisecond
+	// winOpenWait bounds how long openPath waits for ShellExecuteExW. The
+	// call normally returns once the handler process is created; a handler
+	// that hangs (a stuck DDE server, an unreachable share) must not hang the
+	// caller forever, so past this the request is reported as timed out and
+	// the call finishes, detached, on its own thread.
+	winOpenWait = 20 * time.Second
 )
 
 var (
@@ -76,31 +79,34 @@ func winLoadShell() {
 }
 
 // openPath opens path with its default application (a folder in Explorer)
-// via ShellExecuteExW "open". The call runs on a dedicated locked thread
-// with its own COM apartment (shell verbs can need an STA), and openPath
-// waits at most winOpenWait for the result, so the UI thread never blocks
-// on a slow handler; an error that comes back later is not reported.
+// via ShellExecuteExW "open". It may block (it runs on a Service worker, not
+// the UI thread). The call runs on a dedicated locked thread with its own COM
+// apartment (shell verbs can need an STA) and returns the real error of
+// ShellExecuteExW; if it takes longer than winOpenWait it returns a timeout
+// error and the thread finishes the call on its own.
 func openPath(path string) error {
 	winShellOnce.Do(winLoadShell)
 	if winShellLoadFailed {
 		return winPathErr("open", path, winErrNotSupported)
 	}
-	file, ok := winAppendUTF16(nil, path)
+	file, ok := appendUTF16(nil, path)
 	if !ok || len(file) == 0 {
 		return winPathErr("open", path, winErrInvalidName)
 	}
 	file = append(file, 0)
-	done := make(chan error, 1)
+	done := make(chan error, 1) // buffered: a late result is dropped, not blocked on
 	go func() {
 		runtime.LockOSThread()
 		defer runtime.UnlockOSThread()
 		done <- winShellExecute(path, file)
 	}()
+	t := time.NewTimer(winOpenWait)
+	defer t.Stop()
 	select {
 	case err := <-done:
 		return err
-	case <-time.After(winOpenWait):
-		return nil
+	case <-t.C:
+		return &os.PathError{Op: "open", Path: path, Err: os.ErrDeadlineExceeded}
 	}
 }
 

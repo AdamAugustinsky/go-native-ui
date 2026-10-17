@@ -84,16 +84,22 @@ type fakeWatcher struct {
 	added   []string
 	removed []uint32
 	addErr  error
-	addGate chan struct{} // if set, add waits for it to close
+	addGate chan struct{}                      // if set, add waits for it to close
+	addFn   func(id uint32, path string) error // if set, decides add's outcome (may block)
 	closed  bool
 }
 
 func (w *fakeWatcher) add(id uint32, path string) error {
 	w.mu.Lock()
-	gate := w.addGate
+	gate, fn := w.addGate, w.addFn
 	w.mu.Unlock()
 	if gate != nil {
 		<-gate
+	}
+	if fn != nil {
+		if err := fn(id, path); err != nil {
+			return err
+		}
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -106,6 +112,14 @@ func (w *fakeWatcher) add(id uint32, path string) error {
 func (w *fakeWatcher) remove(id uint32) {
 	w.mu.Lock()
 	w.removed = append(w.removed, id)
+	n := 0 // the watcher contract: nothing of a removed watch is delivered afterwards
+	for _, c := range w.pending {
+		if c.ID != id {
+			w.pending[n] = c
+			n++
+		}
+	}
+	w.pending = w.pending[:n]
 	w.mu.Unlock()
 }
 func (w *fakeWatcher) drain(dst []Change) []Change {
@@ -182,6 +196,9 @@ func (h *harness) await(timeout time.Duration, match func(Result) bool) Result {
 // expectNone polls for d and fails if any result arrives.
 func (h *harness) expectNone(d time.Duration) {
 	h.t.Helper()
+	if len(h.held) > 0 {
+		h.t.Fatalf("unexpected result %+v", h.held[0])
+	}
 	deadline := time.After(d)
 	for {
 		h.buf = h.s.Poll(h.buf[:0])
@@ -208,14 +225,14 @@ func TestServiceList(t *testing.T) {
 		t.Fatalf("result %+v, want req %d", r, req)
 	}
 	checkFake(t, r.Listing, "n:12:abc")
-	h.s.Release(r.Listing)
+	h.s.Release(r.Listing, r.Lease)
 
 	h.s.List(2, "fail", SortName, false)
 	r = h.await(2*time.Second, isListing(2))
 	if r.Listing.Err == nil || len(r.Listing.Entries) != 0 {
 		t.Fatalf("failed listing: %+v", r.Listing)
 	}
-	h.s.Release(r.Listing)
+	h.s.Release(r.Listing, r.Lease)
 }
 
 func TestServiceSupersede(t *testing.T) {
@@ -243,7 +260,7 @@ func TestServiceSupersede(t *testing.T) {
 		if r.ID == 1 {
 			checkFake(t, r.Listing, "n:4:new")
 		}
-		h.s.Release(r.Listing)
+		h.s.Release(r.Listing, r.Lease)
 	}
 	if c := h.fs.calls.Load(); c != 3 {
 		t.Errorf("fake listed %d times, want 3: the superseded request must never run", c)
@@ -259,7 +276,7 @@ func TestServiceSupersede(t *testing.T) {
 	close(h2.fs.gate)
 	r := h2.await(2*time.Second, isListing(1))
 	checkFake(t, r.Listing, "n:5:b")
-	h2.s.Release(r.Listing)
+	h2.s.Release(r.Listing, r.Lease)
 	h2.expectNone(80 * time.Millisecond)
 }
 
@@ -271,19 +288,19 @@ func TestServicePoolReuse(t *testing.T) {
 		r := h.await(2*time.Second, isListing(1))
 		checkFake(t, r.Listing, "n:50:p")
 		seen[r.Listing] = true
-		h.s.Release(r.Listing)
+		h.s.Release(r.Listing, r.Lease)
 	}
 	if len(seen) > 2 {
 		t.Errorf("%d distinct Listings for 40 sequential requests; the pool is not reusing", len(seen))
 	}
 	// Double release and foreign listings are ignored.
 	l := new(Listing)
-	h.s.Release(l)
-	h.s.Release(nil)
+	h.s.Release(l, 0)
+	h.s.Release(nil, 0)
 	h.s.List(1, "n:2:q", SortName, false)
 	r := h.await(2*time.Second, isListing(1))
-	h.s.Release(r.Listing)
-	h.s.Release(r.Listing)
+	h.s.Release(r.Listing, r.Lease)
+	h.s.Release(r.Listing, r.Lease)
 	h.s.List(1, "n:2:q", SortName, false)
 	h.s.List(2, "n:2:q", SortName, false)
 	a := h.await(2*time.Second, isListing(1))
@@ -316,7 +333,11 @@ func TestServiceStress(t *testing.T) {
 	done := make(chan struct{})
 	go func() { wg.Wait(); close(done) }()
 
-	var held []*Listing // the UI keeps a few listings for a while
+	type lease struct {
+		l *Listing
+		n uint32
+	}
+	var held []lease // the UI keeps a few listings for a while
 	delivered := 0
 	handle := func(r Result) {
 		delivered++
@@ -325,9 +346,9 @@ func TestServiceStress(t *testing.T) {
 		name := string(l.Name(0))
 		tag := name[:strings.LastIndexByte(name, '-')]
 		checkFake(t, l, fmt.Sprintf("n:%d:%s", len(l.Entries), tag))
-		held = append(held, l)
+		held = append(held, lease{l, r.Lease})
 		if len(held) > 5 {
-			h.s.Release(held[0])
+			h.s.Release(held[0].l, held[0].n)
 			held = held[1:]
 		}
 	}
@@ -369,8 +390,8 @@ func TestServiceStress(t *testing.T) {
 			t.Fatalf("only %d final results", len(finals))
 		}
 	}
-	for _, l := range held {
-		h.s.Release(l)
+	for _, x := range held {
+		h.s.Release(x.l, x.n)
 	}
 	h.s.mu.Lock()
 	pool := len(h.s.all)
@@ -405,7 +426,7 @@ func TestServiceWatchDebounce(t *testing.T) {
 		t.Error("watch relist not marked Refresh")
 	}
 	checkFake(t, r.Listing, "n:4:w")
-	h.s.Release(r.Listing)
+	h.s.Release(r.Listing, r.Lease)
 	h.expectNone(100 * time.Millisecond)
 	if c := h.fs.calls.Load() - before; c != 1 {
 		t.Errorf("%d relists for 6 events in one window, want 1", c)
@@ -443,7 +464,7 @@ func TestServiceWatchGoneOverflowError(t *testing.T) {
 	for len(got) < 2 {
 		r := h.await(2*time.Second, func(r Result) bool { return r.Kind == ResultListing })
 		got[r.ID] = r.Refresh
-		h.s.Release(r.Listing)
+		h.s.Release(r.Listing, r.Lease)
 	}
 	if !got[1] || !got[2] {
 		t.Errorf("overflow refreshed %v, want both marked Refresh", got)
@@ -505,7 +526,7 @@ func TestServiceRefreshFlag(t *testing.T) {
 	if r.Refresh {
 		t.Error("answer to an outstanding List reported as Refresh")
 	}
-	h.s.Release(r.Listing)
+	h.s.Release(r.Listing, r.Lease)
 }
 
 // The UI-thread side must not allocate once warm: Poll when idle, and a
@@ -514,7 +535,8 @@ func TestServiceUIZeroAlloc(t *testing.T) {
 	h := newHarness(t)
 	for i := 0; i < 5; i++ { // warm the pool, maps and result slices
 		h.s.List(1, "n:100:z", SortName, false)
-		h.s.Release(h.await(2*time.Second, isListing(1)).Listing)
+		r0 := h.await(2*time.Second, isListing(1))
+		h.s.Release(r0.Listing, r0.Lease)
 	}
 	if a := testing.AllocsPerRun(50, func() { h.buf = h.s.Poll(h.buf[:0]) }); a != 0 {
 		t.Errorf("idle Poll allocates %v", a)
@@ -533,7 +555,7 @@ func TestServiceUIZeroAlloc(t *testing.T) {
 			<-h.wake
 		}
 		for _, r := range h.buf {
-			h.s.Release(r.Listing)
+			h.s.Release(r.Listing, r.Lease)
 		}
 	}
 	runtime.ReadMemStats(&m1)
@@ -559,7 +581,7 @@ func TestServiceWatchGap(t *testing.T) {
 	if len(r.Listing.Entries) != 1 {
 		t.Fatalf("%d entries", len(r.Listing.Entries))
 	}
-	h.s.Release(r.Listing)
+	h.s.Release(r.Listing, r.Lease)
 	time.Sleep(30 * time.Millisecond)
 	os.WriteFile(filepath.Join(dir, "during"), nil, 0o644) // the watch is not active yet
 	close(h.w.addGate)
@@ -567,6 +589,6 @@ func TestServiceWatchGap(t *testing.T) {
 	if !r.Refresh || len(r.Listing.Entries) != 2 {
 		t.Errorf("gap relist: refresh=%v, %d entries", r.Refresh, len(r.Listing.Entries))
 	}
-	h.s.Release(r.Listing)
+	h.s.Release(r.Listing, r.Lease)
 	h.expectNone(150 * time.Millisecond) // and only once
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -140,5 +141,133 @@ func TestKqueueNoDescriptorLeak(t *testing.T) {
 	}
 	if after := openFDs(t); after != before {
 		t.Errorf("descriptors: %d before, %d after", before, after)
+	}
+}
+
+// Finding 14: after an atomic save (write a temp file, rename it over the
+// original) the replacement must be watched, however the kevent batches fall
+// relative to the directory's resync.
+func TestKqueueAtomicReplace(t *testing.T) {
+	dir := t.TempDir()
+	const n = 300
+	name := func(i int) string { return filepath.Join(dir, fmt.Sprintf("doc%03d.txt", i)) }
+	for i := 0; i < n; i++ {
+		os.WriteFile(name(i), []byte("v1"), 0o644)
+	}
+	r := newWatchRig(t)
+	if err := r.w.add(1, dir); err != nil {
+		t.Fatal(err)
+	}
+	r.quiet()
+	for round := 0; round < 3; round++ {
+		for i := 0; i < n; i++ { // a burst of replacements: events span several kevent batches
+			tmp := filepath.Join(dir, fmt.Sprintf(".tmp%03d", i))
+			if err := os.WriteFile(tmp, []byte("v2"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Rename(tmp, name(i)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		r.quiet()
+		// Every replacement is now watched: an in-place write is noticed.
+		missed := 0
+		for i := 0; i < n; i++ {
+			start := time.Now()
+			os.WriteFile(name(i), []byte(fmt.Sprintf("round %d file %d", round, i)), 0o644)
+			deadline := time.After(300 * time.Millisecond)
+		wait:
+			for {
+				r.buf = r.w.drain(r.buf[:0])
+				for _, c := range r.buf {
+					if c.ID == 1 {
+						break wait
+					}
+				}
+				select {
+				case <-r.wake:
+				case <-deadline:
+					missed++
+					break wait
+				}
+			}
+			_ = start
+		}
+		if missed > 0 {
+			t.Fatalf("round %d: %d of %d in-place writes to replaced files went unnoticed", round, missed, n)
+		}
+	}
+	if got := fileWatches(r.w); got != n {
+		t.Errorf("%d file watches, want %d", got, n)
+	}
+}
+
+// Finding 14, deterministic: the directory's event is handled (and its
+// resync keeps the name-keyed watch of the old file) before the old file's
+// own delete event. The later event must lead to the replacement being
+// watched.
+func TestKqueueReplaceEventOrder(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a")
+	os.WriteFile(path, []byte("old"), 0o644)
+	os.WriteFile(filepath.Join(dir, "b"), []byte("other"), 0o644)
+	k, err := newKq(func() {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { close(k.done); k.close() }()
+	if err := k.add(1, dir); err != nil {
+		t.Fatal(err)
+	}
+	k.mu.Lock()
+	d := k.dirs[1]
+	dirFD := d.fd
+	k.mu.Unlock()
+
+	tmp := filepath.Join(dir, ".tmp")
+	os.WriteFile(tmp, []byte("new"), 0o644)
+	if err := os.Rename(tmp, path); err != nil { // atomic replace
+		t.Fatal(err)
+	}
+	var dirEvs, fileEvs []syscall.Kevent_t
+	buf := make([]syscall.Kevent_t, 32)
+	ts := syscall.NsecToTimespec(int64(200 * time.Millisecond))
+	for len(dirEvs) == 0 || len(fileEvs) == 0 {
+		n, err := syscall.Kevent(k.kq, nil, buf, &ts)
+		if err != nil || n == 0 {
+			t.Skipf("kernel delivered dir=%d file=%d events (err %v)", len(dirEvs), len(fileEvs), err)
+		}
+		for _, ev := range buf[:n] {
+			if ev.Filter != syscall.EVFILT_VNODE {
+				continue
+			}
+			if int(ev.Ident) == dirFD {
+				dirEvs = append(dirEvs, ev)
+			} else {
+				fileEvs = append(fileEvs, ev)
+			}
+		}
+	}
+	k.process(dirEvs) // resync: "a" still names the old vnode's watch
+	k.process(fileEvs)
+
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	f := d.files["a"]
+	if f == nil {
+		t.Fatal(`no watch on "a" after its old file went away`)
+	}
+	var fst, pst syscall.Stat_t
+	if err := syscall.Fstat(f.fd, &fst); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Stat(path, &pst); err != nil {
+		t.Fatal(err)
+	}
+	if fst.Ino != pst.Ino {
+		t.Errorf(`the watch on "a" is on inode %d, the file is inode %d`, fst.Ino, pst.Ino)
+	}
+	if len(d.files) != 2 {
+		t.Errorf("%d file watches, want 2", len(d.files))
 	}
 }

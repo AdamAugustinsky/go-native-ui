@@ -130,7 +130,9 @@ func listDir(path string, l *Listing) error {
 		if n == 0 {
 			return nil
 		}
-		parseBulk(s, int(n), l)
+		if err := parseBulk(s, int(n), l); err != nil {
+			return &os.PathError{Op: "getattrlistbulk", Path: path, Err: err}
+		}
 	}
 }
 
@@ -146,13 +148,13 @@ func containsNUL(s string) bool {
 // parseBulk appends the n entries in s.buf to l. Fields are read according
 // to the returned-attributes bitmap of each entry, never by assumption:
 // directories have no ATTR_FILE_DATALENGTH (D12).
-func parseBulk(s *bulkScratch, n int, l *Listing) {
+func parseBulk(s *bulkScratch, n int, l *Listing) error {
 	buf := s.buf[:]
 	p := 0
 	for i := 0; i < n && p+24 <= len(buf); i++ {
 		length := int(le32(buf[p:]))
 		if length < 24 || p+length > len(buf) {
-			return
+			return nil
 		}
 		e := buf[p : p+length]
 		p += length
@@ -188,8 +190,10 @@ func parseBulk(s *bulkScratch, n int, l *Listing) {
 		if nameLen <= 0 || nameStart < 0 || nameStart+nameLen > len(e) {
 			continue
 		}
-		if nameLen > 0xFFFF {
-			nameLen = 0xFFFF
+		// Entry.NameLen is 16 bits and NameOff 32: refuse, rather than
+		// truncate a name or wrap an offset.
+		if nameLen > 0xFFFF || !arenaFits32(uint64(len(l.Names)), uint64(nameLen)) || !arenaFits32(uint64(len(l.Entries)), 1) {
+			return ErrTooLarge
 		}
 		name := e[nameStart : nameStart+nameLen]
 
@@ -224,6 +228,7 @@ func parseBulk(s *bulkScratch, n int, l *Listing) {
 		})
 		l.Names = append(l.Names, name...)
 	}
+	return nil
 }
 
 // symlinkIsDir stats the link's target. Links are rare enough that one

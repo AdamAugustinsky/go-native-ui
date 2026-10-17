@@ -81,6 +81,11 @@ const (
 	ChangeGone                       // the watched directory was deleted or moved away
 )
 
+// ErrTooLarge is reported (in Listing.Err, with a partial listing) when a
+// directory does not fit the 32-bit offsets of the name arena, the entry
+// indices or the sort keys.
+var ErrTooLarge = errors.New("fs: directory too large for 32-bit offsets")
+
 // ErrUnsupported is returned by backends that are not implemented yet.
 var ErrUnsupported = errors.New("fs: not supported on this OS yet")
 
@@ -107,6 +112,11 @@ var ErrUnsupported = errors.New("fs: not supported on this OS yet")
 //
 // Paths passed to add are what the caller listed: a backend resolves
 // symlinks or case itself if its notification API needs it.
+//
+// Once remove(id) has returned, no change of the removed watch is delivered
+// any more (drain may still return ones recorded earlier for other ids):
+// the Service relies on this to tell a replaced watch's events from the new
+// watch's.
 type watcher interface {
 	add(id uint32, path string) error // id is the caller's handle for the directory
 	remove(id uint32)
@@ -115,12 +125,15 @@ type watcher interface {
 }
 
 // openPath opens path with the OS default application (a folder in the
-// file manager). Implemented per OS and exposed as Open:
+// file manager). Implemented per OS and exposed as Open and, for the UI,
+// as Service.Open:
 //
 //	openPath(path string) error
 //
-// It is called on the UI thread (NSWorkspace on macOS, ShellExecuteExW on
-// Windows, xdg-open on Linux) and must not block it for long.
+// It is called on a goroutine of its own, never on the UI thread, so it may
+// block (checking the path on a dead network mount, waiting for the shell).
+// It may be called from several goroutines at once. On macOS it launches
+// through Launch Services, which is safe off the main thread.
 
 // Change is one coalesced watch notification for the directory with the
 // caller's id.

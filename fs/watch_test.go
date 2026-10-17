@@ -237,7 +237,7 @@ func TestServiceRealWatch(t *testing.T) {
 				if match(r) {
 					return r
 				}
-				s.Release(r.Listing)
+				s.Release(r.Listing, r.Lease)
 			}
 			select {
 			case <-wake:
@@ -261,7 +261,7 @@ func TestServiceRealWatch(t *testing.T) {
 	if !has(r.Listing, "one") || len(r.Listing.Entries) != 1 {
 		t.Fatalf("first listing: %d entries", len(r.Listing.Entries))
 	}
-	s.Release(r.Listing)
+	s.Release(r.Listing, r.Lease)
 	time.Sleep(500 * time.Millisecond) // let the OS watch settle
 
 	for _, step := range []struct {
@@ -279,7 +279,7 @@ func TestServiceRealWatch(t *testing.T) {
 			r := await(func(r Result) bool { return r.Kind == ResultListing })
 			ok := r.Listing.Err == nil && step.check(r.Listing)
 			refresh := r.Refresh
-			s.Release(r.Listing)
+			s.Release(r.Listing, r.Lease)
 			if ok {
 				if !refresh {
 					t.Error("watch relist not marked Refresh")
@@ -300,7 +300,7 @@ func TestServiceRealWatch(t *testing.T) {
 	for {
 		r := await(func(r Result) bool { return r.Kind == ResultGone || r.Kind == ResultListing })
 		if r.Kind == ResultListing {
-			s.Release(r.Listing)
+			s.Release(r.Listing, r.Lease)
 			continue
 		}
 		t.Logf("remove dir → gone after %v", time.Since(start).Round(time.Millisecond))

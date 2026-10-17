@@ -136,6 +136,39 @@ func TestIMEMarkedTextFlow(t *testing.T) {
 	}
 }
 
+// Discarding a composition (a field lost the focus) ends it without turning
+// it into text, also when the input method answers with unmarkText.
+func TestIMEDiscardComposition(t *testing.T) {
+	r := newIMERig(t)
+	r.w.DiscardComposition() // nothing composing: nothing happens
+	if ev := r.events(); len(ev) != 0 {
+		t.Fatalf("events without a composition: %+v", ev)
+	}
+	r.setMarked("かな", 1, 0)
+	r.events()
+	r.w.DiscardComposition()
+	ev := r.events()
+	if len(ev) != 1 || ev[0].Kind != EvPreedit || ev[0].Text.Len != 0 {
+		t.Fatalf("discard: %+v", ev)
+	}
+	if objc.SendBool(r.view, selHasMarkedText) {
+		t.Error("still marked after the discard")
+	}
+	// A late unmarkText from the input method must not resurrect it as text.
+	objc.Send(r.view, selUnmarkText)
+	if ev = r.events(); len(ev) != 0 {
+		t.Errorf("unmarkText after the discard: %+v", ev)
+	}
+	// SetTextInput(false) discards as well.
+	r.setMarked("あ", 1, 0)
+	r.events()
+	r.w.textInput = true
+	r.w.SetTextInput(false)
+	if ev = r.events(); len(ev) != 1 || ev[0].Kind != EvPreedit || ev[0].Text.Len != 0 {
+		t.Fatalf("SetTextInput(false): %+v", ev)
+	}
+}
+
 func TestIMEKeyConsumption(t *testing.T) {
 	w := &Window{q: newEventQueue()}
 	key := func() int { w.q.push(Event{Kind: EvKey, Key: KeyEnter, Flags: FlagDown}); return len(w.q.ev) - 1 }
@@ -180,11 +213,113 @@ func TestIMEKeyConsumption(t *testing.T) {
 	}
 }
 
+// screenRig is a real NSWindow (never shown) positioned on the screen, whose
+// view is placed by the test, so that the IME rectangle's conversion runs
+// through AppKit's coordinate conversion. It is built and used on the main
+// thread (onMain); why is non-empty when the machine cannot make one.
+type screenRig struct {
+	w    *Window
+	win  objc.ID
+	view objc.ID
+}
+
+func newScreenRig(style uintptr, nested bool) (r *screenRig, why string) {
+	if theWindow.Load() != nil {
+		return nil, "a window is open"
+	}
+	if _, err := loadFramework("/System/Library/Frameworks/AppKit.framework/AppKit"); err != nil {
+		return nil, "no AppKit: " + err.Error()
+	}
+	classesOnce.Do(registerClasses)
+	if objc.Send(objc.Cls("NSApplication"), selSharedApplication) == 0 {
+		return nil, "no NSApplication"
+	}
+	win := objc.Send(objc.Cls("NSWindow"), selAlloc)
+	win = objc.ID(objc.F.Reset().Arg(uintptr(win)).Arg(uintptr(selInitWindow)).
+		ArgRect(0, 0, 400, 300).Arg(style).Arg(2).ArgBool(false).Call(objc.MsgSend).R0())
+	if win == 0 {
+		return nil, "cannot create an NSWindow (no window server?)"
+	}
+	objc.Send1(win, selSetReleased, 0)
+	r = &screenRig{win: win}
+	newView := func(x, y, w, h float64) objc.ID {
+		v := objc.Send(viewClass, selAlloc)
+		return objc.ID(objc.F.Reset().Arg(uintptr(v)).Arg(uintptr(selInitWithFrame)).ArgRect(x, y, w, h).Call(objc.MsgSend).R0())
+	}
+	if nested {
+		// contentView > container (10,20) > view (5,7, 200x100)
+		content := newView(0, 0, 400, 300)
+		objc.Send1(win, selSetContentView, uintptr(content))
+		container := newView(10, 20, 300, 200)
+		objc.Send1(content, objc.Sel("addSubview:"), uintptr(container))
+		r.view = newView(5, 7, 200, 100)
+		objc.Send1(container, objc.Sel("addSubview:"), uintptr(r.view))
+	} else {
+		r.view = newView(0, 0, 400, 300)
+		objc.Send1(win, selSetContentView, uintptr(r.view))
+	}
+	objc.F.Reset().Arg(uintptr(win)).Arg(uintptr(selSetFrameOrigin)).ArgPoint(300, 200).Call(objc.MsgSend)
+	r.w = &Window{win: win, view: r.view, marked: make([]byte, 0, 64), tmp: make([]byte, 0, 64)}
+	return r, ""
+}
+
+func (r *screenRig) rect(scale float64, x, y, w, h float32) objc.Rect {
+	r.w.scale = float32(scale)
+	r.w.imeRect = [4]float32{x, y, w, h}
+	return r.w.imeScreenRect()
+}
+
+// The IME rectangle (window pixels, top left origin) lands where the view
+// puts it on the screen: for the full-size content view the custom-titlebar
+// windows use (Pilot, Rex), for a plain titled window whose content view
+// starts below the titlebar, and for a view nested in other views; at scale 1
+// and 2.
 func TestIMERectScreenConversion(t *testing.T) {
-	w := &Window{scale: 2, hPt: 100}
-	w.SetIMERect(20, 10, 2, 26) // 2x: x=10pt, y=5pt from the top, 1×13 pt
-	r := w.imeScreenRect()
-	if r.X != 10 || r.W != 1 || r.H != 13 || r.Y != 100-5-13 {
-		t.Fatalf("rect %+v", r)
+	const titled, resizable, fullSize = 1, 8, 1 << 15
+	for _, c := range []struct {
+		name   string
+		style  uintptr
+		nested bool
+		// the view's origin in window base coordinates (its size is read back)
+		ox, oy float64
+	}{
+		{"full-size content view", titled | resizable | fullSize, false, 0, 0},
+		{"plain titled window", titled | resizable, false, 0, 0},
+		{"nested view", titled | resizable, true, 15, 27},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var (
+				why    string
+				wf, b  objc.Rect
+				got    [2]objc.Rect
+				scales = [2]float64{1, 2}
+			)
+			onMain(func() {
+				var r *screenRig
+				if r, why = newScreenRig(c.style, c.nested); r == nil {
+					return
+				}
+				wf, b = objc.SendRect(r.win, selFrame), objc.SendRect(r.view, selBounds)
+				for i, s := range scales {
+					got[i] = r.rect(s, 60, 30, 20, 10) // 20x10 px at (60, 30) px from the top left
+				}
+			})
+			if why != "" {
+				t.Skip(why)
+			}
+			if wf.X != 300 || wf.Y != 200 {
+				t.Skipf("the window did not take its position: %+v", wf)
+			}
+			for i, scale := range scales {
+				want := objc.Rect{
+					X: wf.X + c.ox + 60/scale,
+					Y: wf.Y + c.oy + b.H - 30/scale - 10/scale,
+					W: 20 / scale, H: 10 / scale,
+				}
+				if got[i] != want {
+					t.Errorf("scale %v: rect %+v, want %+v", scale, got[i], want)
+				}
+			}
+		})
 	}
 }

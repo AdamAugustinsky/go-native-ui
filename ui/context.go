@@ -152,6 +152,11 @@ type Context struct {
 	wakeNs  int64
 	imeRect [4]float32
 	imeOK   bool
+	// imeOwner is the field the input method's composition (Input.Preedit)
+	// belongs to, imeCancel whether this frame found the composition
+	// orphaned (its field lost the focus or is gone).
+	imeOwner  Key
+	imeCancel bool
 
 	// boxes built this frame with a cursor or the WindowDrag flag (cursor.go)
 	nCursorBoxes, nDragBoxes int
@@ -264,7 +269,10 @@ func (c *Context) Begin(in *Input, widthPx, heightPx int, scale, dt float32) {
 	c.fmtA.Reset()
 	c.prevOrder, c.order = c.order, c.prevOrder[:0]
 	c.animating, c.scrollSet = false, false
-	c.wakeNs, c.imeOK = 0, false
+	c.wakeNs, c.imeOK, c.imeCancel = 0, false, false
+	if in.NPreedit == 0 {
+		c.imeOwner = 0
+	}
 	c.nCursorBoxes, c.nDragBoxes = 0, 0
 	c.rHot = rate(c.Rates.Hot, dt)
 	c.rActive = rate(c.Rates.Active, dt)

@@ -19,6 +19,7 @@ type fakeSrc struct {
 	lists    []string
 	watched  []string
 	released int
+	opened   []string
 	req      uint64
 }
 
@@ -27,12 +28,13 @@ func (f *fakeSrc) List(id uint32, path string, key fs.SortKey, desc bool) uint64
 	f.req++
 	return f.req
 }
-func (f *fakeSrc) Watch(id uint32, path string)     { f.watched = append(f.watched, path) }
-func (f *fakeSrc) Unwatch(id uint32)                {}
-func (f *fakeSrc) Poll(dst []fs.Result) []fs.Result { return dst }
-func (f *fakeSrc) Release(l *fs.Listing)            { f.released++ }
-func (f *fakeSrc) Close()                           {}
-func (f *fakeSrc) last() string                     { return f.lists[len(f.lists)-1] }
+func (f *fakeSrc) Watch(id uint32, path string)        { f.watched = append(f.watched, path) }
+func (f *fakeSrc) Unwatch(id uint32)                   {}
+func (f *fakeSrc) Poll(dst []fs.Result) []fs.Result    { return dst }
+func (f *fakeSrc) Release(l *fs.Listing, lease uint32) { f.released++ }
+func (f *fakeSrc) Open(id uint32, path string)         { f.opened = append(f.opened, path) }
+func (f *fakeSrc) Close()                              {}
+func (f *fakeSrc) last() string                        { return f.lists[len(f.lists)-1] }
 
 func listing(key fs.SortKey, desc bool, items ...item) *fs.Listing {
 	l := sceneListing(items)
@@ -662,3 +664,44 @@ func TestGoneAtARootStops(t *testing.T) {
 		t.Errorf("walking up did not end at the root: pending %v msg %q (last %q)", p.nav.pending, p.msg, src.last())
 	}
 }
+
+// Opening a file asks the Source (a non-blocking call) and a failure that
+// comes back through Poll lands in the status line.
+func TestOpenFileIsAsync(t *testing.T) {
+	src := &fakeSrc{}
+	p := newTestPane(t, src, nativePath("/d"), listing(fs.SortName, false, dirItems...))
+	p.v.selectOnly(p.v.entryAt(2), 2) // a.txt
+	p.v.curRow = 2
+	p.openCursor()
+	if len(src.opened) != 1 || src.opened[0] != joinPath(nativePath("/d"), "a.txt") {
+		t.Fatalf("opened %q", src.opened)
+	}
+	if p.msgErr {
+		t.Errorf("status %q reported as an error before anything failed", p.msg)
+	}
+	p.onResult(&fs.Result{Kind: fs.ResultOpenError, ID: p.id, Err: os.ErrNotExist})
+	if !p.msgErr || p.msg == "" {
+		t.Errorf("open failure not shown: %q (err %v)", p.msg, p.msgErr)
+	}
+}
+
+// A listing is released with the lease it arrived with, including when a
+// refresh replaces it.
+func TestListingsReleasedWithTheirLease(t *testing.T) {
+	src := &leaseSrc{}
+	p := newTestPane(t, src, nativePath("/d"), listing(fs.SortName, false, dirItems...))
+	p.onResult(&fs.Result{Kind: fs.ResultListing, ID: p.id, Listing: listing(fs.SortName, false, dirItems...), Lease: 11})
+	settle(t, p) // the refresh is swapped in; the initial listing (lease 0) goes back
+	p.onResult(&fs.Result{Kind: fs.ResultListing, ID: p.id, Listing: listing(fs.SortName, false, dirItems...), Lease: 12})
+	settle(t, p) // lease 11 goes back
+	if got := fmt.Sprint(src.leases); got != "[0 11]" {
+		t.Errorf("released leases %s, want [0 11]", got)
+	}
+}
+
+type leaseSrc struct {
+	fakeSrc
+	leases []uint32
+}
+
+func (f *leaseSrc) Release(l *fs.Listing, lease uint32) { f.leases = append(f.leases, lease) }

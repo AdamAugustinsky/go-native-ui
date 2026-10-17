@@ -42,7 +42,7 @@ func TestNewServiceWith(t *testing.T) {
 	if got := string(r.Listing.Name(int(r.Listing.Order[0]))); got != "a" {
 		t.Errorf("sorted first = %q, want a", got)
 	}
-	s.Release(r.Listing)
+	s.Release(r.Listing, r.Lease)
 
 	s.Watch(7, "zed")
 	res = res[:0]

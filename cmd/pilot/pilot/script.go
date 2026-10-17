@@ -415,7 +415,7 @@ func prewarm(src *fs.Service, dir string) error {
 	held = append(held, res...)
 	for i := range held {
 		if held[i].Listing != nil {
-			src.Release(held[i].Listing)
+			src.Release(held[i].Listing, held[i].Lease)
 		}
 	}
 	held = nil

@@ -2,7 +2,9 @@ package text
 
 import (
 	"math"
+	"slices"
 	"testing"
+	"unicode/utf8"
 )
 
 // The cluster and caret checks every backend runs on its own shaper: the
@@ -49,6 +51,12 @@ func runClusterChecks(t *testing.T, env clusterEnv) {
 		{"ligature", "office fi fl ffi", true},
 		{"devanagari conjunct", "कक्षा", true},
 		{"invalid utf-8", "a\xffb\xe6\x97c", true},
+		{"stray continuation bytes", "a\x80\x81\x80b", true},
+		{"continuation run", "\x80\x80\x80\x80", true},
+		{"truncated sequences", "x\xe2\x82y\xf0\x9f\x98z\xe2\x82", true},
+		{"overlong", "a\xc0\x80\xe0\x80\x80b", true},
+		{"encoded surrogates", "a\xed\xa0\x80\xed\xbf\xbfb", true},
+		{"invalid beside a mark", "e\u0301\x80e\u0301", true},
 		{"arabic", "مرحبا", false},
 		{"hebrew", "שלום", false},
 		{"mixed bidi", "abc مرحبا def", false},
@@ -187,6 +195,15 @@ func checkCluster(t *testing.T, v RunView, s string, ltr bool) {
 		}
 	}
 	stops := boundaries(s)
+	// Every invalid byte is a stop of its own (the shapers draw one U+FFFD
+	// for it), so a caret can sit before it and the click can reach it.
+	for i := 0; i < len(s); {
+		r, n := utf8.DecodeRuneInString(s[i:])
+		if r == utf8.RuneError && n == 1 && !slices.Contains(stops, i) {
+			t.Fatalf("offset %d (invalid byte %#x) is not a caret stop: %v", i, s[i], stops)
+		}
+		i += n
+	}
 	prev := float32(-1)
 	for _, o := range stops {
 		x := v.CaretX(o)

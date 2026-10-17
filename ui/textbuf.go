@@ -30,6 +30,7 @@ type TextBuffer struct {
 	activity  int64   // Input.Time of the last interaction (caret blink origin)
 	focused   bool    // the field had keyboard focus in the window's active state last frame
 	composing bool    // an input-method composition was shown last frame
+	preHash   uint64  // identifies that composition (text and caret), to notice changes
 	drag      dragKind
 	dragLo    int // the word a word-drag started on
 	dragHi    int
@@ -164,6 +165,12 @@ func cleanText(dst, p []byte, room int) []byte {
 }
 
 // replace replaces [lo, hi) of the text with ins and puts the caret after it.
+// What stands next to the edit may join with it into one cluster (a letter
+// typed in front of a combining mark, a ZWJ between two emoji, a flag letter
+// beside another, text removed between a base and its mark), so the caret is
+// moved onto a cluster boundary: forward after an insertion (past the
+// cluster the typed text became part of), back after a deletion (it does not
+// jump over text that was not touched).
 func (t *TextBuffer) replace(lo, hi int, ins []byte) {
 	old := len(t.b)
 	n := old - (hi - lo) + len(ins)
@@ -176,7 +183,13 @@ func (t *TextBuffer) replace(lo, hi int, ins []byte) {
 	copy(t.b[lo+len(ins):], t.b[hi:old])
 	copy(t.b[lo:], ins)
 	t.b = t.b[:n]
-	t.caret, t.anchor = lo+len(ins), lo+len(ins)
+	at := lo + len(ins)
+	if len(ins) > 0 {
+		at = snapUp(t.b, at)
+	} else {
+		at = text.GraphemeStart(t.b, at)
+	}
+	t.caret, t.anchor = at, at
 	t.rev++
 }
 

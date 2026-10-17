@@ -3,6 +3,7 @@
 package fs
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -13,8 +14,9 @@ import (
 	"syscall"
 	"testing"
 	"time"
-	"unicode/utf16"
-	"unicode/utf8"
+	"unsafe"
+
+	"gonativeui/internal/win32"
 )
 
 // These tests run on the real file systems of the CI runners. Behaviour
@@ -461,44 +463,6 @@ func BenchmarkWinList100k(b *testing.B) {
 
 // ---- pure helpers --------------------------------------------------------
 
-func TestWinUTF16RoundTrip(t *testing.T) {
-	for _, s := range []string{"", "a", "plain ascii.txt", "é", "日本語", "😀", "a😀b😀😀c", "\U0010FFFF", "\u0800\uFFFD", strings.Repeat("ü😀", 130)} {
-		w, ok := winAppendUTF16(nil, s)
-		if !ok {
-			t.Errorf("%q: rejected", s)
-			continue
-		}
-		if want := utf16.Encode([]rune(s)); !equalU16(w, want) {
-			t.Errorf("%q: UTF-16 %x, want %x", s, w, want)
-		}
-		if back := winAppendUTF8([]byte("pre"), w); string(back) != "pre"+s {
-			t.Errorf("%q: round trip %q", s, back)
-		}
-	}
-	if _, ok := winAppendUTF16(nil, "a\x00b"); ok {
-		t.Error("NUL accepted")
-	}
-	// Unpaired surrogates become U+FFFD instead of corrupting the arena.
-	for _, w := range [][]uint16{{0xD800}, {0xDC00}, {'a', 0xD800, 'b'}, {0xD800, 0xD800, 0xDC00}} {
-		got := winAppendUTF8(nil, w)
-		if !utf8.Valid(got) || !strings.ContainsRune(string(got), utf8.RuneError) {
-			t.Errorf("%x: %q", w, got)
-		}
-	}
-}
-
-func equalU16(a, b []uint16) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
 func TestWinFiletime(t *testing.T) {
 	ft := func(tm time.Time) uint64 { return uint64(tm.UnixNano()/100) + winFiletimeEpochDiff }
 	for _, tm := range []time.Time{
@@ -523,9 +487,157 @@ func TestWinIsExecName(t *testing.T) {
 		"exe": false, ".exe": false, "a.exex": false, "a.ex": false, "a.ps2": false, "a.exe.txt": false,
 		"": false, "é.exe": true, "日本.cmd": true,
 	} {
-		w, _ := winAppendUTF16(nil, name)
+		w, _ := appendUTF16(nil, name)
 		if got := winIsExecName(w); got != want {
 			t.Errorf("%q: %v, want %v", name, got, want)
 		}
+	}
+}
+
+// ---- unpaired surrogates (WTF-8) -------------------------------------------
+
+// winRawCreate creates a file or directory whose name is the raw UTF-16
+// sequence name (which may hold unpaired surrogates), bypassing every
+// string conversion.
+func winRawCreate(t *testing.T, dir string, name []uint16, isDir bool) {
+	t.Helper()
+	full := appendUTF16Must(`\\?\` + dir + `\`)
+	full = append(full, name...)
+	full = append(full, 0)
+	if isDir {
+		r, _, e := syscall.SyscallN(pCreateDirectoryW, uintptr(unsafe.Pointer(&full[0])), 0)
+		if r == 0 {
+			ostCannot(t, "cannot create a directory with an unpaired surrogate in its name: %v", e)
+		}
+		return
+	}
+	h, err := syscall.CreateFile(&full[0], syscall.GENERIC_WRITE, 0, nil, syscall.CREATE_NEW, syscall.FILE_ATTRIBUTE_NORMAL, 0)
+	if err != nil {
+		ostCannot(t, "cannot create a file with an unpaired surrogate in its name: %v", err)
+	}
+	syscall.CloseHandle(h)
+}
+
+func appendUTF16Must(s string) []uint16 {
+	w, _ := appendUTF16(nil, s)
+	return w
+}
+
+var pCreateDirectoryW = win32.Proc(winK32, "CreateDirectoryW")
+
+func TestWinListUnpairedSurrogates(t *testing.T) {
+	dir := t.TempDir()
+	names := map[string][]uint16{
+		"lone high": {'h', 'i', 0xD800, '.', 't', 'x', 't'},
+		"lone low":  {'h', 'i', 0xDC00, '.', 't', 'x', 't'},
+		"fffd":      {'h', 'i', 0xFFFD, '.', 't', 'x', 't'},
+		"low,high":  {0xDC00, 0xD800, '.', 't'},
+		"pair":      {'p', 0xD83D, 0xDE00, '.', 't'},
+		"end":       {'e', 'n', 'd', 0xDBFF},
+	}
+	for _, n := range names {
+		winRawCreate(t, dir, n, false)
+	}
+	subName := []uint16{'d', 'i', 'r', 0xD801, 'x'}
+	winRawCreate(t, dir, subName, true)
+	// A file inside the odd directory, found through a path built from its
+	// listed name.
+	for _, v := range winListers {
+		t.Run(v.name, func(t *testing.T) {
+			l := new(Listing)
+			if err := v.fn(dir, l); err != nil {
+				t.Fatal(err)
+			}
+			got := entries(l)
+			if len(got) != len(names)+1 {
+				t.Fatalf("listed %d entries, want %d: %v", len(got), len(names)+1, got)
+			}
+			for what, n := range names {
+				want := string(appendWTF8(nil, n))
+				e, ok := got[want]
+				if !ok {
+					t.Errorf("%s: no entry named %q", what, want)
+					continue
+				}
+				if e.Kind != KindFile {
+					t.Errorf("%s: kind %d", what, e.Kind)
+				}
+				// The listed name opens the same file through os-level APIs.
+				p := dir + `\` + want
+				if fi, err := os.Stat(p); err != nil || fi.IsDir() {
+					t.Errorf("%s: os.Stat(%q): %v", what, p, err)
+				}
+				if _, err := os.ReadFile(p); err != nil {
+					t.Errorf("%s: os.ReadFile: %v", what, err)
+				}
+			}
+			sub := dir + `\` + string(appendWTF8(nil, subName))
+			if e, ok := got[string(appendWTF8(nil, subName))]; !ok || e.Kind != KindDir {
+				t.Fatalf("directory with a surrogate missing or wrong: %+v", e)
+			}
+			// ...and our own path building opens it: list inside it.
+			if err := os.WriteFile(sub+`\inner.txt`, []byte("x"), 0o644); err != nil {
+				t.Fatalf("create inside via the listed name: %v", err)
+			}
+			l2 := new(Listing)
+			if err := v.fn(sub, l2); err != nil || len(l2.Entries) != 1 || string(l2.Name(0)) != "inner.txt" {
+				t.Errorf("listing the odd directory by its listed name: %d entries, err %v", len(l2.Entries), err)
+			}
+			os.Remove(sub + `\inner.txt`)
+		})
+	}
+	// mtime and watch work through the same path building.
+	sub := dir + `\` + string(appendWTF8(nil, subName))
+	if _, ok := dirMTime(sub); !ok {
+		t.Error("dirMTime of a directory with an unpaired surrogate")
+	}
+}
+
+func TestWinWatchUnpairedSurrogates(t *testing.T) {
+	h := winNewHarness(t)
+	defer h.w.close()
+	dir := t.TempDir()
+	subName := []uint16{'w', 0xD800, 'x'}
+	winRawCreate(t, dir, subName, true)
+	sub := dir + `\` + string(appendWTF8(nil, subName))
+	if err := h.w.add(1, sub); err != nil {
+		t.Fatal(err)
+	}
+	h.flush()
+	winMustWrite(t, sub+`\f`, "x")
+	h.expect(1, ChangeDir, 250*time.Millisecond)
+}
+
+// A name that does not fit Entry.NameLen is skipped, the rest of the
+// directory is still listed, and the partial result is reported.
+func TestWinAddEntryNameTooLong(t *testing.T) {
+	l := new(Listing)
+	ok := appendUTF16Must("ok.txt")
+	if err := winAddEntry(l, ok, 0, 0, 1, 0); err != nil {
+		t.Fatal(err)
+	}
+	long := make([]uint16, 25000) // 3 bytes each in UTF-8: 75000 > 65535
+	for i := range long {
+		long[i] = 0x65E5
+	}
+	names, entries := len(l.Names), len(l.Entries)
+	if err := winAddEntry(l, long, 0, 0, 1, 0); err != errNameTooLong {
+		t.Fatalf("long name: %v", err)
+	}
+	if len(l.Names) != names || len(l.Entries) != entries {
+		t.Errorf("a rejected name left %d name bytes and %d entries behind", len(l.Names)-names, len(l.Entries)-entries)
+	}
+	fits := long[:21000] // 63000 bytes
+	if err := winAddEntry(l, fits, 0, 0, 1, 0); err != nil || l.Entries[len(l.Entries)-1].NameLen != 63000 {
+		t.Errorf("name of 63000 bytes: %v", err)
+	}
+	if err := winAddEntry(l, appendUTF16Must(".."), 0, 0, 0, 0); err != nil || len(l.Entries) != 2 {
+		t.Errorf("dot-dot: %v, %d entries", err, len(l.Entries))
+	}
+	if got := winListResult("p", nil); got != nil {
+		t.Errorf("nil result: %v", got)
+	}
+	if got := winListResult("p", errNameTooLong); !errors.Is(got, errNameTooLong) {
+		t.Errorf("partial result: %v", got)
 	}
 }

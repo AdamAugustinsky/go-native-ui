@@ -11,7 +11,8 @@ import (
 // keyboard cursor by entry index. Everything is pointer-free apart from the
 // listing and the slices, which are reused.
 type view struct {
-	l *fs.Listing
+	l     *fs.Listing
+	lease uint32 // the Source lease l came with (0: not leased)
 
 	// rows lists the visible entries in display order when some are filtered
 	// out (filtered); otherwise every entry is visible in l.Order order.
@@ -29,7 +30,7 @@ type view struct {
 }
 
 func (v *view) reset() {
-	v.l, v.rows, v.filtered = nil, v.rows[:0], false
+	v.l, v.lease, v.rows, v.filtered = nil, 0, v.rows[:0], false
 	v.clearSel()
 	v.cur, v.anchor, v.curRow, v.anchorRow = -1, -1, -1, -1
 }

@@ -208,7 +208,7 @@ func (pl *Pilot) poll() {
 		if i := int(r.ID) - 1; i >= 0 && i < len(pl.panes) {
 			pl.panes[i].onResult(r)
 		} else if r.Listing != nil {
-			pl.src.Release(r.Listing)
+			pl.src.Release(r.Listing, r.Lease)
 		}
 	}
 }

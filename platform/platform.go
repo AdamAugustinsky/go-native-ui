@@ -22,6 +22,7 @@
 //	(*Window).SetDragRegions(r)           custom-titlebar areas that move the window (macOS; no-op elsewhere)
 //	(*Window).SetIMERect(x, y, w, h)      where the text caret or composition is (window pixels), for input-method candidate windows; copied, cheap to call every frame
 //	(*Window).SetTextInput(active)        whether a text field has focus; losing it cancels a composition in progress
+//	(*Window).DiscardComposition()        cancel a composition in progress without committing it (EvPreedit with no text follows)
 //	(*Window).Close()
 //	Clipboard() string                    plain UTF-8 text of the system clipboard; main thread
 //	SetClipboard(text string)             replace the clipboard with plain text; main thread
@@ -33,9 +34,10 @@
 // first: while it does, EvPreedit reports the not yet committed text and the
 // caret inside it (an empty one ends the composition), and the keys the input
 // method consumed produce no EvKey. The commit arrives as EvPreedit (empty)
-// followed by EvText. SetTextInput(false) cancels a composition in progress
-// (the app calls it when its text field loses focus; EvPreedit with no text
-// follows). SetIMERect tells the input method where to put its candidate
+// followed by EvText. SetTextInput(false) and DiscardComposition cancel a
+// composition in progress without committing it (the app calls them when its
+// text field loses focus or the composition is orphaned; EvPreedit with no
+// text follows, no EvText). SetIMERect tells the input method where to put its candidate
 // window. An input method that is active composes whether or not the app has a
 // field to show it in: an app without one focused sees EvPreedit and no EvKey
 // for the keys the input method took, and should focus a field then.

@@ -91,9 +91,11 @@ func (p *pane) canUp() bool { return p.dir != "" && p.parent != p.dir }
 
 func (p *pane) loading() bool { return p.nav.pending || p.v.l == nil }
 
-func (p *pane) release(l *fs.Listing) {
+// release gives a listing back to the Source with the lease it came with
+// (0 for listings the Source did not make).
+func (p *pane) release(l *fs.Listing, lease uint32) {
 	if l != nil && p.src != nil {
-		p.src.Release(l)
+		p.src.Release(l, lease)
 	}
 }
 
@@ -101,7 +103,7 @@ func (p *pane) release(l *fs.Listing) {
 
 // setInitial installs a listing made before the window existed.
 func (p *pane) setInitial(dir string, l *fs.Listing) {
-	p.install(dir, l, "")
+	p.install(dir, l, 0, "")
 	p.hist.visit(dir)
 	p.watch()
 }
@@ -129,7 +131,7 @@ func (p *pane) setMsg(s string, isErr bool) { p.msg, p.msgErr = s, isErr }
 func (p *pane) onResult(r *fs.Result) {
 	switch r.Kind {
 	case fs.ResultListing:
-		p.onListing(r.Listing)
+		p.onListing(r.Listing, r.Lease)
 	case fs.ResultGone:
 		if !p.nav.pending || p.nav.kind != navGone {
 			p.nav.gone = p.dir
@@ -141,15 +143,17 @@ func (p *pane) onResult(r *fs.Result) {
 		p.request(p.parent, navGone, "")
 	case fs.ResultWatchError:
 		// no live updates for this directory; the listing itself is fine
+	case fs.ResultOpenError:
+		p.setMsg(errText(r.Err), true)
 	}
 }
 
-func (p *pane) onListing(l *fs.Listing) {
+func (p *pane) onListing(l *fs.Listing, lease uint32) {
 	if p.nav.pending {
 		p.nav.pending = false
 		if l.Err != nil {
 			err := l.Err
-			p.release(l)
+			p.release(l, lease)
 			if p.nav.kind == navGone {
 				if parent := parentPath(p.nav.path); parent != p.nav.path {
 					p.request(parent, navGone, "")
@@ -164,7 +168,7 @@ func (p *pane) onListing(l *fs.Listing) {
 			return
 		}
 		kind, path, sel := p.nav.kind, p.nav.path, p.nav.sel
-		p.install(path, l, sel)
+		p.install(path, l, lease, sel)
 		switch kind {
 		case navUser, navUp:
 			p.hist.visit(path)
@@ -175,24 +179,24 @@ func (p *pane) onListing(l *fs.Listing) {
 		return
 	}
 	if l.Err != nil {
-		p.release(l)
+		p.release(l, lease)
 		p.setMsg(errText(l.Err), true)
 		return
 	}
-	p.startReconcile(l)
+	p.startReconcile(l, lease)
 }
 
 // install makes l the pane's listing in dir, dropping the selection and the
 // scroll position (a different directory).
-func (p *pane) install(dir string, l *fs.Listing, sel string) {
+func (p *pane) install(dir string, l *fs.Listing, lease uint32, sel string) {
 	if p.rc.active {
-		p.release(p.rc.l)
-		p.rc.active, p.rc.l = false, nil
+		p.release(p.rc.l, p.rc.lease)
+		p.rc.active, p.rc.l, p.rc.lease = false, nil, 0
 	}
-	p.release(p.v.l)
+	p.release(p.v.l, p.v.lease)
 	p.setDir(dir)
 	p.v.reset()
-	p.v.l = l
+	p.v.l, p.v.lease = l, lease
 	p.v.sizeSel(len(l.Entries))
 	p.path.SetString(dir)
 	p.pathErr, p.msg = "", ""
@@ -378,6 +382,7 @@ func (p *pane) toggleHidden() {
 type reconcile struct {
 	active bool
 	l      *fs.Listing
+	lease  uint32 // the Source lease l came with
 	phase  int
 	pos    int
 	ver    uint32 // the view's selection version when it began
@@ -398,13 +403,13 @@ type reconcile struct {
 	curRow, anchorRow, topRow int
 }
 
-func (p *pane) startReconcile(l *fs.Listing) {
+func (p *pane) startReconcile(l *fs.Listing, lease uint32) {
 	rc := &p.rc
 	if rc.active {
-		p.release(rc.l)
+		p.release(rc.l, rc.lease)
 	}
 	v := &p.v
-	rc.active, rc.l, rc.phase, rc.pos = true, l, 0, 0
+	rc.active, rc.l, rc.lease, rc.phase, rc.pos = true, l, lease, 0, 0
 	rc.ver, rc.fver = v.ver, p.fver
 	rc.hCur, rc.hAnchor, rc.hTop = 0, 0, 0
 	rc.nNew, rc.newBytes, rc.newCur, rc.newAnchor, rc.newTop = 0, 0, -1, -1, -1
@@ -443,10 +448,10 @@ func (p *pane) startReconcile(l *fs.Listing) {
 func (p *pane) reconcileStep(b *budget) {
 	rc, v := &p.rc, &p.v
 	if rc.ver != v.ver && rc.phase < 2 { // the selection changed meanwhile: start over
-		l := rc.l
-		rc.l = nil
+		l, lease := rc.l, rc.lease
+		rc.l, rc.lease = nil, 0
 		rc.active = false
-		p.startReconcile(l)
+		p.startReconcile(l, lease)
 	}
 	if rc.phase == 0 && v.l != nil {
 		for rc.pos < len(v.sel) {
@@ -562,8 +567,8 @@ func (p *pane) foundAll() bool {
 // swapIn replaces the shown listing by the reconciled one.
 func (p *pane) swapIn() {
 	rc, v := &p.rc, &p.v
-	old := v.l
-	v.l = rc.l
+	old, oldLease := v.l, v.lease
+	v.l, v.lease = rc.l, rc.lease
 	v.sel, rc.newSel = rc.newSel, v.sel
 	v.nSel, v.selBytes = rc.nNew, rc.newBytes
 	v.cur, v.anchor = rc.newCur, rc.newAnchor
@@ -574,12 +579,12 @@ func (p *pane) swapIn() {
 	} else {
 		v.rows = v.rows[:0]
 	}
-	rc.active, rc.l = false, nil
+	rc.active, rc.l, rc.lease = false, nil, 0
 	p.jobBusy, p.pendSel = false, -1
 	if rc.topRow >= 0 {
 		p.scrollRow, p.scrollOff = rc.topRow, rc.topFrac
 	}
-	p.release(old)
+	p.release(old, oldLease)
 	p.msg = ""
 }
 
@@ -615,11 +620,12 @@ func (p *pane) openRow(r int) {
 		p.request(full, navUser, "")
 		return
 	}
-	if err := fs.Open(full); err != nil {
-		p.setMsg(errText(err), true)
+	if p.src == nil {
+		p.setMsg("Not available", true)
 		return
 	}
-	p.setMsg("Opened "+string(v.l.Name(int(e))), false)
+	p.src.Open(p.id, full) // does not block; a failure comes back as ResultOpenError
+	p.setMsg("Opening "+string(v.l.Name(int(e))), false)
 }
 
 // openCursor opens the cursor row, or, with a single selected folder, that one.

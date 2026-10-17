@@ -267,3 +267,39 @@ func TestFilterNoAlloc(t *testing.T) {
 		}
 	}
 }
+
+// Finding 10: case folding must agree with Sort's, including runes that fold
+// to ASCII (KELVIN SIGN U+212A lowercases to 'k').
+func TestFilterUnicodeToASCIIFolds(t *testing.T) {
+	l := synth("\u212Aelvin.txt", "kelvin.txt", "plain.txt", "INDIA.txt", "\u0130stanbul.txt")
+	Sort(l, SortName, false)
+	names := func(q string) []string {
+		var out []string
+		for _, i := range Filter(l, []byte(q), nil) {
+			out = append(out, string(l.Name(int(i))))
+		}
+		return out
+	}
+	for _, q := range []string{"kelvin", "KELVIN", "\u212Aelvin", "kelv"} {
+		got := names(q)
+		if len(got) != 2 {
+			t.Errorf("Filter(%q) = %q, want both Kelvin names", q, got)
+		}
+	}
+	if got := names("k"); len(got) != 2 {
+		t.Errorf("Filter(k) = %q", got)
+	}
+	// And the sort treats them as equal-folding names: adjacent.
+	Sort(l, SortName, false)
+	o := ordered(l)
+	for i, n := range o {
+		if n == "kelvin.txt" && o[(i+1)%len(o)] != "\u212Aelvin.txt" && o[(i+len(o)-1)%len(o)] != "\u212Aelvin.txt" {
+			t.Errorf("Kelvin names not adjacent in sort order: %q", o)
+		}
+	}
+	dst := make([]uint32, 0, 8)
+	q := []byte("kelvin")
+	if a := testing.AllocsPerRun(10, func() { dst = Filter(l, q, dst[:0]) }); a != 0 {
+		t.Errorf("Filter allocates %v", a)
+	}
+}

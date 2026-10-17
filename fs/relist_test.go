@@ -121,7 +121,7 @@ func TestServiceRelistAllocatesNothing(t *testing.T) {
 					if res[i].Listing.Err != nil {
 						panic(res[i].Listing.Err)
 					}
-					s.Release(res[i].Listing)
+					s.Release(res[i].Listing, res[i].Lease)
 					got = true
 				}
 			}
@@ -139,7 +139,7 @@ func TestServiceRelistAllocatesNothing(t *testing.T) {
 	time.Sleep(200 * time.Millisecond) // let the watcher settle: no stray refreshes in the window
 	res = s.Poll(res[:0])
 	for i := range res {
-		s.Release(res[i].Listing)
+		s.Release(res[i].Listing, res[i].Lease)
 	}
 	old := runtime.GOMAXPROCS(1)
 	defer runtime.GOMAXPROCS(old)

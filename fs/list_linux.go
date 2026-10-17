@@ -203,6 +203,7 @@ func lxListStatx(path string, l *Listing) error {
 	defer syscall.Syscall(syscall.SYS_CLOSE, fd, 0, 0)
 
 	entries0, names0 := len(l.Entries), len(l.Names)
+	var skipped error // an entry that could not be added; reported at the end
 	buf := unsafe.Slice((*byte)(unsafe.Pointer(&s.dents[0])), lxDentsSize)
 	for {
 		n, _, e := syscall.Syscall(syscall.SYS_GETDENTS64, fd, uintptr(unsafe.Pointer(&buf[0])), lxDentsSize)
@@ -213,7 +214,7 @@ func lxListStatx(path string, l *Listing) error {
 			return lxPathErr("fs.list", path, e)
 		}
 		if n == 0 {
-			return nil
+			return lxListResult(path, skipped)
 		}
 		for off := 0; off < int(n); {
 			if off+lxDirentName+1 > int(n) {
@@ -238,6 +239,13 @@ func lxListStatx(path string, l *Listing) error {
 			}
 			if nl == len(nm) { // not NUL-terminated within the record: corrupt
 				return lxPathErr("fs.list", path, syscall.EIO)
+			}
+			if err := checkName(len(l.Names), nl); err != nil {
+				if err == errArenaFull {
+					return lxListResult(path, err) // nothing more fits
+				}
+				skipped = err
+				continue
 			}
 
 			e := lxStatxAt(int(fd), &nm[0], lxAtSymlinkNoFollow|lxAtNoAutomount|lxAtStatxDontSync, &s.stx)
@@ -266,7 +274,18 @@ func lxListStatx(path string, l *Listing) error {
 	}
 }
 
-// lxAddEntry appends the entry whose statx result is in s.stx.
+// lxListResult is the result of a listing that read the whole directory:
+// nil, or the partial-listing error of an entry that could not be added.
+func lxListResult(path string, skipped error) error {
+	if skipped == nil {
+		return nil
+	}
+	return &os.PathError{Op: "fs.list", Path: path, Err: skipped}
+}
+
+// lxAddEntry appends the entry whose statx result is in s.stx. The caller
+// has checked that the name fits (checkName): Entry.NameOff and NameLen are
+// narrowed here.
 func lxAddEntry(l *Listing, s *lxScratch, dirfd int, cname *byte, name []byte) {
 	st := &s.stx
 	var kind Kind
@@ -339,9 +358,17 @@ func lxListReadDir(path string, l *Listing) error {
 	}
 	defer f.Close()
 	des, err := f.ReadDir(-1)
+	var skipped error
 	for _, de := range des {
 		name := de.Name()
-		if name == "" || len(name) > 0xFFFF {
+		if name == "" {
+			continue
+		}
+		if cerr := checkName(len(l.Names), len(name)); cerr != nil {
+			if cerr == errArenaFull {
+				return lxListResult(path, cerr)
+			}
+			skipped = cerr
 			continue
 		}
 		info, ierr := de.Info()
@@ -392,5 +419,5 @@ func lxListReadDir(path string, l *Listing) error {
 	if err != nil {
 		return err
 	}
-	return nil
+	return lxListResult(path, skipped)
 }

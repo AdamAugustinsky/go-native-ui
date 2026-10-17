@@ -100,16 +100,18 @@ func TestTextOverflowCarries(t *testing.T) {
 func validUTF8(b []byte) bool { return strings.ToValidUTF8(string(b), "") == string(b) }
 
 type fakeText struct {
-	rect   [4]float32
-	rects  int
-	input  bool
-	inputs int
+	rect     [4]float32
+	rects    int
+	input    bool
+	inputs   int
+	discards int
 }
 
 func (f *fakeText) SetIMERect(x, y, w, h float32) {
 	f.rect, f.rects = [4]float32{x, y, w, h}, f.rects+1
 }
 func (f *fakeText) SetTextInput(a bool) { f.input, f.inputs = a, f.inputs+1 }
+func (f *fakeText) DiscardComposition() { f.discards++ }
 
 // fieldApp is a Builder with one text field.
 type fieldApp struct {
@@ -181,6 +183,32 @@ func TestTextFieldThroughTranslator(t *testing.T) {
 	if b.buf.String() != "ab仮名" || o.tr.in.NPreedit != 0 {
 		t.Fatalf("commit: %q, preedit %d", b.buf.String(), o.tr.in.NPreedit)
 	}
+
+	// A composition whose field loses the focus is committed into it and the
+	// platform's is dropped, once; the translator forgets it too.
+	e, p = preedit("ほげ", 6, 0)
+	o.tr.event(e, p)
+	frame()
+	sink = fakeText{}
+	o.syncText(&sink, 0)
+	if sink.discards != 0 {
+		t.Errorf("composition discarded while its field has the focus: %+v", sink)
+	}
+	o.UI.SetFocus(0)
+	frame()
+	o.syncText(&sink, 0)
+	if b.buf.String() != "ab仮名ほげ" || sink.discards != 1 || o.tr.in.NPreedit != 0 || sink.input {
+		t.Fatalf("focus lost while composing: %q, %+v, preedit %d", b.buf.String(), sink, o.tr.in.NPreedit)
+	}
+	// The platform's late "composition ended" changes nothing.
+	e, p = preedit("", 0, 0)
+	if o.tr.event(e, p) {
+		t.Error("the platform's empty preedit repainted")
+	}
+	b.buf.SetString("ab仮名")
+	b.focus = true
+	frame()
+	frame()
 
 	// Backspace and the arrow keys edit through ui.KeyEvent translation.
 	o.tr.event(ev(platform.EvKey, func(e *platform.Event) { e.Key, e.Flags = platform.KeyBackspace, platform.FlagDown }), nil)

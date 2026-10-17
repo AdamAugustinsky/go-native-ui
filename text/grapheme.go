@@ -53,13 +53,34 @@ func icbClass(r rune) uint8 {
 
 func extPict(r rune) bool { return emojiLookup(r) == 1 }
 
+// runeBoundary reports whether 0 < off < len(b) is where a rune of b starts,
+// counting each invalid byte (a stray continuation byte, a truncated or
+// overlong sequence, an encoded surrogate) as a rune of its own, which is how
+// DecodeRune walks the text and how the shapers see it. Only a continuation
+// byte that belongs to a valid sequence starting up to three bytes before it
+// is not a boundary.
+func runeBoundary(b []byte, off int) bool {
+	if utf8.RuneStart(b[off]) {
+		return true
+	}
+	for k := 1; k <= 3 && off-k >= 0; k++ {
+		s := off - k
+		if !utf8.RuneStart(b[s]) {
+			continue
+		}
+		_, n := utf8.DecodeRune(b[s:])
+		return n <= k // a valid sequence reaching past off contains it
+	}
+	return true
+}
+
 // IsGraphemeBoundary reports whether off is a grapheme cluster boundary of b:
 // 0 and len(b) always are; an offset inside a UTF-8 sequence never is.
 func IsGraphemeBoundary(b []byte, off int) bool {
 	if off <= 0 || off >= len(b) {
 		return off == 0 || off == len(b)
 	}
-	if !utf8.RuneStart(b[off]) {
+	if !runeBoundary(b, off) {
 		return false
 	}
 	r0, n0 := utf8.DecodeLastRune(b[:off])

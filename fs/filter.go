@@ -1,6 +1,7 @@
 package fs
 
 import (
+	"encoding/binary"
 	"unicode"
 	"unicode/utf8"
 )
@@ -11,7 +12,7 @@ import (
 // it allocates nothing.
 //
 // Case folding is the one Sort uses: unicode.ToLower per rune, with an
-// ASCII fast path. A query longer than 128 bytes takes a slower path that
+// ASCII fast path for names without non-ASCII bytes. A query longer than 128 bytes takes a slower path that
 // still does not allocate.
 func Filter(l *Listing, query []byte, dst []uint32) []uint32 {
 	if len(query) == 0 {
@@ -23,9 +24,20 @@ func Filter(l *Listing, query []byte, dst []uint32) []uint32 {
 			q[i] = foldTable[c]
 		}
 		qb := q[:len(query)]
+		allASCII := isASCII(l.Names) // the common case: no per-name check at all
 		for _, idx := range l.Order {
 			e := &l.Entries[idx]
-			if containsFoldASCII(l.Names[e.NameOff:e.NameOff+uint32(e.NameLen)], qb) {
+			name := l.Names[e.NameOff : e.NameOff+uint32(e.NameLen)]
+			// A name with any non-ASCII byte takes the rune path: some runes
+			// fold to ASCII (U+212A KELVIN SIGN lowercases to 'k'), which a byte
+			// comparison cannot see.
+			var ok bool
+			if allASCII || isASCII(name) {
+				ok = containsFoldASCII(name, qb)
+			} else {
+				ok = containsFoldRunes(name, qb)
+			}
+			if ok {
 				dst = append(dst, idx)
 			}
 		}
@@ -53,6 +65,12 @@ var foldTable = func() (t [256]byte) {
 }()
 
 func isASCII(b []byte) bool {
+	for len(b) >= 8 {
+		if binary.LittleEndian.Uint64(b)&0x8080808080808080 != 0 {
+			return false
+		}
+		b = b[8:]
+	}
 	for _, c := range b {
 		if c >= utf8.RuneSelf {
 			return false

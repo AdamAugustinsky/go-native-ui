@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -86,16 +87,11 @@ func (h *winHarness) quiet(d time.Duration) {
 	}
 }
 
-// count is the number of watched directories (not counting parent watches).
+// count is the number of watched directories, and of watches including
+// parent watches, as last published by the worker (add and remove are
+// synchronous, so it is current after they return).
 func (w *winWatcher) count() (dirs, total int) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	for _, x := range w.ws {
-		if !x.isParent {
-			dirs++
-		}
-	}
-	return dirs, len(w.ws)
+	return int(w.nDirs.Load()), int(w.nAll.Load())
 }
 
 func winMustWrite(t *testing.T, path, content string) {
@@ -533,11 +529,9 @@ func TestWinWatchDrainZeroAlloc(t *testing.T) {
 	w := &winWatcher{}
 	dst := make([]Change, 0, 8)
 	post := func() {
-		w.mu.Lock()
 		w.post(1, ChangeDir)
 		w.post(2, ChangeGone)
 		w.post(1, ChangeOverflow)
-		w.mu.Unlock()
 	}
 	post() // grow pend once
 	dst = w.drain(dst[:0])
@@ -567,4 +561,114 @@ func TestWinOpenPathErrors(t *testing.T) {
 	if err := openPath("a\x00b"); err == nil {
 		t.Error("path with NUL accepted")
 	}
+}
+
+// add and remove (which cancel reads and close handles on the worker) never
+// stall drain, the call the UI thread makes, and handles are never closed
+// under a wait: many add/remove cycles with events flying must neither hang
+// nor lose a watch that stays.
+func TestWinWatchChurnDoesNotStallDrain(t *testing.T) {
+	h := winNewHarness(t)
+	defer h.w.close()
+	keep, noisy := t.TempDir(), t.TempDir()
+	if err := h.w.add(1, keep); err != nil {
+		t.Fatal(err)
+	}
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { // events in the churned directory
+		defer wg.Done()
+		for i := 0; ; i++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			os.WriteFile(filepath.Join(noisy, "f"), []byte{byte(i)}, 0o644)
+			time.Sleep(time.Millisecond)
+		}
+	}()
+	var worst time.Duration
+	var drains int
+	go func() { // the UI thread
+		defer wg.Done()
+		var dst []Change
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			t0 := time.Now()
+			dst = h.w.drain(dst[:0])
+			if d := time.Since(t0); d > worst {
+				worst = d
+			}
+			drains++
+			time.Sleep(200 * time.Microsecond)
+		}
+	}()
+	t0 := time.Now()
+	const cycles = 60
+	for i := 0; i < cycles; i++ {
+		id := uint32(10 + i%5)
+		if err := h.w.add(id, noisy); err != nil {
+			t.Fatalf("cycle %d: %v", i, err)
+		}
+		if i%3 == 0 {
+			h.w.remove(id)
+		}
+	}
+	for id := uint32(10); id < 15; id++ {
+		h.w.remove(id)
+	}
+	elapsed := time.Since(t0)
+	close(stop)
+	wg.Wait()
+	t.Logf("%d add/remove cycles in %v (%v each); %d drains, worst %v", cycles, elapsed, elapsed/cycles, drains, worst)
+	if worst > 250*time.Millisecond {
+		t.Errorf("drain stalled for %v while the worker was adding and removing", worst)
+	}
+	if n, total := h.w.count(); n != 1 || total > 2 {
+		t.Errorf("%d watches (%d with parents) left, want the one kept", n, total)
+	}
+	h.flush()
+	winMustWrite(t, filepath.Join(keep, "still"), "x")
+	h.expect(1, ChangeDir, 250*time.Millisecond)
+}
+
+// close() during add/remove traffic answers every caller and stops the worker.
+func TestWinWatchCloseDuringTraffic(t *testing.T) {
+	h := winNewHarness(t)
+	dirs := make([]string, 4)
+	for i := range dirs {
+		dirs[i] = t.TempDir()
+	}
+	var wg sync.WaitGroup
+	for i := range dirs {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			for j := 0; j < 100; j++ {
+				if h.w.add(uint32(i), dirs[i]) != nil {
+					return // closed
+				}
+				h.w.remove(uint32(i))
+			}
+		}(i)
+	}
+	time.Sleep(50 * time.Millisecond)
+	h.w.close()
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("add/remove callers still blocked after close")
+	}
+	if err := h.w.add(1, dirs[0]); err == nil {
+		t.Error("add after close succeeded")
+	}
+	h.w.remove(1)
 }

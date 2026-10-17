@@ -11,6 +11,11 @@ import (
 // variable so that tests can exercise both.
 var macKeys = runtime.GOOS == "darwin"
 
+// altGrIsCtrlAlt is true where AltGr arrives as Ctrl+Alt (Windows): that pair
+// types a character (AltGr+A is ą on a Polish layout) and is neither the
+// primary nor the word modifier. A variable so that tests can exercise it.
+var altGrIsCtrlAlt = runtime.GOOS == "windows"
+
 // TextEditStyle styles the text fields of a Context.
 type TextEditStyle struct {
 	// Selection is the highlight of the selected text (RGBA8) in a focused field.
@@ -56,6 +61,13 @@ func (c *Context) wakeAfter(ns int64) {
 // has focus.
 func (c *Context) IMERect() (r [4]float32, ok bool) { return c.imeRect, c.imeOK }
 
+// IMECancel reports, after the frame was built, that the input method's
+// composition (Input.Preedit) is orphaned: it belongs to a field that lost the
+// focus (which committed it into its text) or no longer exists, and no field
+// shows it. The app discards the platform's composition (Window.DiscardComposition)
+// and clears its Input.Preedit.
+func (c *Context) IMECancel() bool { return c.imeCancel }
+
 // TextField builds a single-line text field editing buf; label identifies the
 // field like any box label.
 //
@@ -97,11 +109,22 @@ func (c *Context) IMERect() (r [4]float32, ok bool) { return c.imeRect, c.imeOK 
 //
 // # Input methods
 //
-// While Input.Preedit is set (the platform reports marked text) the field
-// shows it at the caret, underlined, with its own caret inside, and reports
-// the rectangle of the composition through Context.IMERect so the candidate
-// window can be placed. A selection that exists when the composition starts
-// is replaced by it. Keys are not interpreted while composing.
+// While Input.Preedit is set (the platform reports marked text) the focused
+// field shows it at the caret, underlined, with its own caret inside, and
+// reports the rectangle of the composition through Context.IMERect so the
+// candidate window can be placed. A selection that exists when the composition
+// starts is shown replaced by it but stays in the buffer: committing the text
+// replaces it, cancelling the composition leaves it as it was. Keys are not
+// interpreted while composing. The composition belongs to the field it started
+// in: if the focus moves to another field or to nothing, the field that showed
+// it commits the composition into its text (what AppKit does when the first
+// responder changes), the field that got the focus neither shows nor commits
+// it, and Context.IMECancel tells the app to discard the platform's
+// composition. If the field is gone altogether, the composition is just
+// discarded. The blink restarts only when the composition itself changes.
+//
+// AltGr (Ctrl+Alt on Windows) types characters and is neither the primary nor
+// the word modifier.
 //
 // # Caret blink and the idle budget
 //
@@ -147,7 +170,14 @@ func (c *Context) TextField(label string, buf *TextBuffer) TextFieldSignal {
 	}
 	caretW := float32(math.Max(1, math.Round(float64(c.scale))))
 
-	composing := active && in.NPreedit > 0
+	// The composition belongs to the field it started in (imeOwner); a field
+	// that did not start it neither shows nor commits it.
+	pre := in.NPreedit > 0
+	mine := pre && (c.imeOwner == 0 || c.imeOwner == key)
+	composing := active && mine
+	if composing {
+		c.imeOwner = key
+	}
 	if !active {
 		buf.drag = dragNone
 	}
@@ -193,28 +223,48 @@ func (c *Context) TextField(label string, buf *TextBuffer) TextFieldSignal {
 			touched = c.editKeys(buf, &res) || touched
 		}
 	}
-	if composing && !buf.composing {
-		buf.deleteSelection() // the composition replaces the selection
-		touched = true
+	switch {
+	case !focused && pre && buf.composing && c.imeOwner == key:
+		// The focus left the field with its composition on screen: the text is
+		// committed here, as AppKit does when the first responder changes, and
+		// the platform's composition is dropped (IMECancel).
+		buf.Insert(in.Preedit[:in.NPreedit])
+		c.imeCancel = true
+	case active && pre && !mine:
+		c.imeCancel = true // the composition's field is gone: nobody shows it
 	}
-	buf.composing = composing
 	if composing {
-		touched = true
+		// Only a change of the composition is activity: the frames of an
+		// untouched composition (the blink's own) must not restart the blink.
+		h := preeditHash(in.Preedit[:in.NPreedit], in.PreeditSel)
+		if !buf.composing || h != buf.preHash {
+			touched = true
+		}
+		buf.preHash = h
+	}
+	if active {
+		buf.composing = composing
+	} else if !focused {
+		buf.composing = false // (a window that is only inactive keeps it)
 	}
 	if touched && in.Time != 0 {
 		buf.activity = in.Time
 	}
 	res.Changed = buf.rev != rev0
 
-	// What is shown: the text with the composition inserted at the caret.
-	pre := in.Preedit[:in.NPreedit]
+	// What is shown: the text with the composition in place of the selection
+	// (or at the caret). The buffer itself is not touched until the
+	// composition is committed, so cancelling it leaves the selection as it was.
+	preText := in.Preedit[:in.NPreedit]
 	disp := buf.b
 	pos := buf.caret
 	if composing {
+		var end int
+		pos, end = buf.Selection()
 		start := c.fmtA.Len()
 		c.fmtA.AppendBytes(buf.b[:pos])
-		c.fmtA.AppendBytes(pre)
-		c.fmtA.AppendBytes(buf.b[pos:])
+		c.fmtA.AppendBytes(preText)
+		c.fmtA.AppendBytes(buf.b[end:])
 		disp = c.fmtA.Tail(start)
 	}
 	v := c.sh.Run(c.sh.Shape(font, disp))
@@ -234,7 +284,7 @@ func (c *Context) TextField(label string, buf *TextBuffer) TextFieldSignal {
 		}
 	}
 	if composing {
-		px0, px1 = v.CaretX(pos), v.CaretX(pos+len(pre))
+		px0, px1 = v.CaretX(pos), v.CaretX(pos+len(preText))
 		ph0, ph1 = v.CaretX(pos+in.PreeditSel[0]), v.CaretX(pos+in.PreeditSel[0]+in.PreeditSel[1])
 	}
 
@@ -332,6 +382,17 @@ func (c *Context) TextField(label string, buf *TextBuffer) TextFieldSignal {
 	return res
 }
 
+// preeditHash identifies a composition (text and caret/selection) cheaply, to
+// notice that it changed.
+func preeditHash(p []byte, sel [2]int) uint64 {
+	h := uint64(14695981039346656037)
+	for _, b := range p {
+		h = (h ^ uint64(b)) * 1099511628211
+	}
+	h = (h ^ uint64(sel[0])) * 1099511628211
+	return (h ^ uint64(sel[1])) * 1099511628211
+}
+
 // hitText returns the byte offset of the caret stop at x (pixels from the start
 // of the text).
 func (c *Context) hitText(font text.FontKey, buf *TextBuffer, x float32) int {
@@ -386,6 +447,9 @@ func (c *Context) editKeys(buf *TextBuffer, res *TextFieldSignal) (pressed bool)
 		shift := e.Mods&ModShift != 0
 		primary := e.Mods&primaryMod != 0
 		word := e.Mods&wordMod != 0
+		if altGrIsCtrlAlt && e.Mods&ModCtrl != 0 && e.Mods&ModAlt != 0 {
+			primary, word = false, false // AltGr types a character
+		}
 		line := macKeys && primary // ⌘ + arrow, ⌘ + Backspace
 		b := buf.b
 		switch e.Code {

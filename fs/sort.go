@@ -2,6 +2,7 @@ package fs
 
 import (
 	"bytes"
+	"math"
 	"slices"
 	"sync"
 	"unicode"
@@ -24,6 +25,18 @@ import (
 // Sorting builds one folded key per name (digit runs become '0', a length
 // byte, then the digits without leading zeros) in a recycled scratch
 // buffer, so every comparison is a single bytes.Compare.
+
+// arenaLimit is the largest arena (names, keys, entry count) that 32-bit
+// offsets can address. A variable only so tests can exercise the overflow
+// paths without gigabytes.
+var arenaLimit uint64 = math.MaxUint32
+
+// arenaFits32 reports whether an arena holding used bytes can take add more
+// and stay addressable: every offset and every end offset (offset + length)
+// must fit the limit, with no wraparound in the sum.
+func arenaFits32(used, add uint64) bool {
+	return used <= arenaLimit && add <= arenaLimit-used
+}
 
 // sorter is the recycled scratch of one Sort call.
 type sorter struct {
@@ -73,6 +86,13 @@ func Sort(l *Listing, key SortKey, desc bool) {
 
 func (s *sorter) sort(l *Listing, key SortKey, desc bool) {
 	n := len(l.Entries)
+	if !arenaFits32(0, uint64(n)) { // Order holds uint32 indices
+		l.Order = l.Order[:0]
+		if l.Err == nil {
+			l.Err = ErrTooLarge
+		}
+		return
+	}
 	if cap(l.Order) < n {
 		l.Order = make([]uint32, n)
 	}
@@ -83,12 +103,19 @@ func (s *sorter) sort(l *Listing, key SortKey, desc bool) {
 	if n < 2 {
 		return
 	}
-	s.buildKeys(l)
+	if !s.buildKeys(l) { // the keys do not fit 32-bit offsets: leave the order as listed
+		if l.Err == nil {
+			l.Err = ErrTooLarge
+		}
+		return
+	}
 	c := cmpCtx{l: l, s: s, key: key, desc: desc}
 	slices.SortFunc(l.Order, c.cmp)
 }
 
-func (s *sorter) buildKeys(l *Listing) {
+// buildKeys folds every name into s.keys; false if the keys outgrow the
+// 32-bit offsets.
+func (s *sorter) buildKeys(l *Listing) bool {
 	n := len(l.Entries)
 	if cap(s.off) < n+1 {
 		s.off = make([]uint32, n+1)
@@ -101,9 +128,14 @@ func (s *sorter) buildKeys(l *Listing) {
 	for i := range l.Entries {
 		s.off[i] = uint32(len(keys))
 		keys = appendKey(keys, l.Name(i))
+		if uint64(len(keys)) > arenaLimit {
+			s.keys = keys[:0]
+			return false
+		}
 	}
 	s.off[n] = uint32(len(keys))
 	s.keys = keys
+	return true
 }
 
 // appendKey appends the folded natural-order key of name to dst.

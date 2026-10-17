@@ -95,9 +95,23 @@ type kqWatcher struct {
 
 	pmu     sync.Mutex // guards pending (drain never waits for file system work)
 	pending []Change
+
+	scrChanged []Change // process's scratch (one caller at a time)
+	scrResync  []*kqDir
 }
 
 func newWatcher(wake func()) (watcher, error) {
+	w, err := newKq(wake)
+	if err != nil {
+		return nil, err
+	}
+	go w.loop()
+	return w, nil
+}
+
+// newKq creates the watcher without its event loop (tests drive process
+// themselves to control the order in which events are handled).
+func newKq(wake func()) (*kqWatcher, error) {
 	kq, err := syscall.Kqueue()
 	if err != nil {
 		return nil, os.NewSyscallError("kqueue", err)
@@ -114,7 +128,6 @@ func newWatcher(wake func()) (watcher, error) {
 		dirs: make(map[uint32]*kqDir), byFD: make(map[int]kqRef),
 		pending: make([]Change, 0, 16),
 	}
-	go w.loop()
 	return w, nil
 }
 
@@ -333,72 +346,91 @@ func (w *kqWatcher) resync(d *kqDir) {
 func (w *kqWatcher) loop() {
 	defer close(w.done)
 	var evs [64]syscall.Kevent_t
-	changed := make([]Change, 0, 16)
-	resync := make([]*kqDir, 0, 4)
 	for {
 		n, err := kevent(w.kq, nil, evs[:])
 		if err != nil {
 			return // the queue was closed under us
 		}
-		changed, resync = changed[:0], resync[:0]
-		w.mu.Lock()
-		if w.closed {
-			w.mu.Unlock()
+		if !w.process(evs[:n]) {
 			return
 		}
-		for i := 0; i < n; i++ {
-			ev := &evs[i]
-			if ev.Filter != syscall.EVFILT_VNODE {
+	}
+}
+
+// process handles one batch of kevents; false once the watcher is closed.
+func (w *kqWatcher) process(evs []syscall.Kevent_t) bool {
+	changed, resync := w.scrChanged[:0], w.scrResync[:0]
+	need := func(d *kqDir) {
+		for _, x := range resync {
+			if x == d {
+				return
+			}
+		}
+		resync = append(resync, d)
+	}
+	w.mu.Lock()
+	if w.closed {
+		w.mu.Unlock()
+		return false
+	}
+	for i := range evs {
+		ev := &evs[i]
+		if ev.Filter != syscall.EVFILT_VNODE {
+			continue
+		}
+		ref, ok := w.byFD[int(ev.Ident)]
+		if !ok {
+			continue // a descriptor closed since the event was queued
+		}
+		d := ref.d
+		fl := ev.Fflags
+		switch {
+		case ref.name != "": // a file in the directory
+			if fl&noteGone != 0 {
+				if f := d.files[ref.name]; f != nil && f.fd == int(ev.Ident) {
+					syscall.Close(f.fd)
+					delete(w.byFD, f.fd)
+					delete(d.files, ref.name)
+					d.nfiles--
+					w.nfiles--
+				}
+				// The name may now belong to a replacement (an atomic save
+				// renames a new file over it): a resync that ran before this
+				// event kept the old watch under that name, so look again.
+				need(d)
+			}
+			changed = append(changed, Change{d.id, ChangeDir})
+		case fl&noteGone != 0:
+			// Confirm that the directory really is gone from its path.
+			if !stillAt(d) {
+				w.dropDirLocked(d)
+				changed = append(changed, Change{d.id, ChangeGone})
 				continue
 			}
-			ref, ok := w.byFD[int(ev.Ident)]
-			if !ok {
-				continue // a descriptor closed since the event was queued
+			fallthrough
+		default:
+			changed = append(changed, Change{d.id, ChangeDir})
+			if fl&syscall.NOTE_WRITE != 0 {
+				need(d)
 			}
-			d := ref.d
-			fl := ev.Fflags
-			switch {
-			case ref.name != "": // a file in the directory
-				if fl&noteGone != 0 {
-					if f := d.files[ref.name]; f != nil {
-						syscall.Close(f.fd)
-						delete(w.byFD, f.fd)
-						delete(d.files, ref.name)
-						d.nfiles--
-						w.nfiles--
-					}
-				}
-				changed = append(changed, Change{d.id, ChangeDir})
-			case fl&noteGone != 0:
-				// Confirm that the directory really is gone from its path.
-				if !stillAt(d) {
-					w.dropDirLocked(d)
-					changed = append(changed, Change{d.id, ChangeGone})
-					continue
-				}
-				fallthrough
-			default:
-				changed = append(changed, Change{d.id, ChangeDir})
-				if fl&syscall.NOTE_WRITE != 0 {
-					resync = append(resync, d)
-				}
-			}
-		}
-		w.mu.Unlock()
-
-		w.pmu.Lock()
-		for _, c := range changed {
-			w.noteLocked(c.ID, c.Kind)
-		}
-		woke := len(w.pending) > 0
-		w.pmu.Unlock()
-		for _, d := range resync {
-			w.resync(d)
-		}
-		if woke {
-			w.wake()
 		}
 	}
+	w.mu.Unlock()
+
+	w.pmu.Lock()
+	for _, c := range changed {
+		w.noteLocked(c.ID, c.Kind)
+	}
+	woke := len(w.pending) > 0
+	w.pmu.Unlock()
+	for _, d := range resync {
+		w.resync(d)
+	}
+	w.scrChanged, w.scrResync = changed, resync
+	if woke {
+		w.wake()
+	}
+	return true
 }
 
 // noteLocked records kind for id, keeping the strongest per id

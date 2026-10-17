@@ -609,13 +609,17 @@ func TestTextFieldPreedit(t *testing.T) {
 	if len(r.quads(0x00FF00FF)) != 0 {
 		t.Error("underline remains after the commit")
 	}
-	// A selection is replaced by the composition.
+	// A selection is replaced by the composition on screen, in the buffer
+	// only once it is committed (TestIMESelectionSurvivesCancel).
 	r.buf.SelectAll()
 	r.frame()
 	r.in.SetPreedit([]byte("x"), 1, 0)
 	r.frame()
-	if r.text() != "" {
-		t.Fatalf("selection not replaced when composing: %q", r.text())
+	if r.text() != "a仮名b" || !r.buf.HasSelection() {
+		t.Fatalf("composing changed the buffer: %q", r.text())
+	}
+	if got := string(r.c.fr.Cur().Tail(0)); strings.Contains(got, "仮名") {
+		t.Fatalf("selection still shown while composing over it: %q", got)
 	}
 	// Focus elsewhere: no IME rect.
 	r.in.SetPreedit(nil, 0, 0)
