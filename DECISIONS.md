@@ -480,3 +480,30 @@ program start (exec) to the first frame with complete content on screen.
 - The static Rex frame is approved visually.
 - Matching the reference's slightly bolder text is not needed.
 
+## D22. An `app` package owns the frame loop (phase 3, 2026-10-17)
+
+**Decision.** A new `app` package ties `platform`, `gpu`, `text` and `ui`
+together:
+- content-first startup;
+- the event-driven, paced frame loop, including the occluded and asleep fallback;
+- the live-resize frame handler;
+- turning platform events into `ui.Input`;
+- atlas sync;
+- cursors from `ui` state;
+- the bench and offscreen modes.
+
+An app implements `Build(c *ui.Context)` on its own state and calls
+`app.Run`.
+
+**Reasoning:**
+- The spike and `rexlook` each hand-wrote this loop.
+- The phase-2 display-link stall was a bug in exactly that code: a frame was treated as ready after its tick's drawable had expired.
+- One owned loop gets the frame contract right once, on every OS.
+
+`cmd/spike` stays on the raw `platform` and `gpu` API as the
+lowest-level benchmark.
+
+**Constraints:**
+- `ui` still never imports `platform`.
+- Per-frame paths in `app` are zero-alloc. The `Build` callback is an interface method, not a closure created per frame.
+

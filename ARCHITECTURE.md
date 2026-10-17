@@ -42,6 +42,8 @@ keep the product surface small.
 ```
 cmd/pilot             reference app: dual-pane browser (phase 4)
 cmd/rexlook           visual benchmark: Rex frontend recreation (static in phase 2, interactive in phase 3)
+cmd/listbench         1M-row virtual-list scroll benchmark (phase 3)
+app                   glue: window + surface + renderer + text + ui, the frame loop, input translation (D22)
 ui                    immediate-mode builder, keyed box cache, layout, input, scroll, text edit
 text                  shaping + fallback + rasterization per OS, run cache, glyph atlas
 gpu                   Renderer interface; backends: metal (darwin), d3d11 (windows), gl (linux)
