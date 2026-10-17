@@ -94,17 +94,33 @@ var ErrUnsupported = errors.New("fs: not supported on this OS yet")
 
 // watcher is the per-OS change notifier (FSEvents, ReadDirectoryChangesW,
 // inotify). It runs its own goroutine or OS callback thread, calls wake
-// when it has changes, and hands them over through drain on the UI
-// thread. Implemented per OS:
+// when it has changes, and hands them over through drain. Implemented per
+// OS:
 //
 //	newWatcher(wake func()) (watcher, error)
 //
-//	type watcher interface {
-//		add(id uint32, path string) error  // id is the caller's handle for the directory
-//		remove(id uint32)
-//		drain(dst []Change) []Change       // UI thread; zero-alloc with a reused dst
-//		close()
-//	}
+// The Service calls add, remove and close from one control goroutine (they
+// may be slow: FSEvents restarts its stream) and drain from the UI thread,
+// so a backend must make drain safe against concurrent add/remove and
+// against its own notification thread. wake may be called from any thread
+// and must not block.
+//
+// Paths passed to add are what the caller listed: a backend resolves
+// symlinks or case itself if its notification API needs it.
+type watcher interface {
+	add(id uint32, path string) error // id is the caller's handle for the directory
+	remove(id uint32)
+	drain(dst []Change) []Change // appends to dst; zero-alloc with a reused dst
+	close()
+}
+
+// openPath opens path with the OS default application (a folder in the
+// file manager). Implemented per OS and exposed as Open:
+//
+//	openPath(path string) error
+//
+// It is called on the UI thread (NSWorkspace on macOS, ShellExecuteExW on
+// Windows, xdg-open on Linux) and must not block it for long.
 
 // Change is one coalesced watch notification for the directory with the
 // caller's id.
