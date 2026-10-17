@@ -420,8 +420,9 @@ func TestDirtyLifecycle(t *testing.T) {
 	if !ok {
 		t.Fatal("not dirty after rasterizing")
 	}
-	if x != int(e.X) || y != int(e.Y) || w != int(e.W) || h != int(e.H) || stride != PageSize {
-		t.Fatalf("dirty %d,%d %dx%d stride %d, entry %+v", x, y, w, h, stride, e)
+	// A new page is dirty in full (its texture starts undefined).
+	if x != 0 || y != 0 || w != PageSize || h != PageSize || stride != PageSize {
+		t.Fatalf("new page dirty %d,%d %dx%d stride %d, want the whole page", x, y, w, h, stride)
 	}
 	nz := 0
 	for r := 0; r < h; r++ {
@@ -442,8 +443,8 @@ func TestDirtyLifecycle(t *testing.T) {
 	v2 := shapeStr(s, uiFont(s), "B")
 	e2 := s.Glyph(v2.Faces[0], v2.Glyphs[0], 0)
 	x, y, w, h, _, _, ok = s.Dirty(int(e2.Page))
-	if !ok || x > int(e2.X) || y > int(e2.Y) || x+w < int(e2.X)+int(e2.W) || y+h < int(e2.Y)+int(e2.H) {
-		t.Fatalf("dirty %d,%d %dx%d does not cover %+v", x, y, w, h, e2)
+	if !ok || x != int(e2.X) || y != int(e2.Y) || w != int(e2.W) || h != int(e2.H) {
+		t.Fatalf("dirty %d,%d %dx%d, want exactly the new glyph %+v", x, y, w, h, e2)
 	}
 	if w2, h2, _ := s.PageInfo(99); w2 != 0 || h2 != 0 {
 		t.Fatal("PageInfo of a missing page")

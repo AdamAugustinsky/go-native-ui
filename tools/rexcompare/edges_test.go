@@ -74,3 +74,16 @@ func TestPeriod(t *testing.T) {
 		}
 	}
 }
+
+// Opacity counts: correct RGB with zero alpha must not read as a match.
+func TestPixelCompositesAlpha(t *testing.T) {
+	img := image.NewNRGBA(image.Rect(0, 0, 2, 1))
+	img.SetNRGBA(0, 0, color.NRGBA{240, 230, 220, 255})
+	img.SetNRGBA(1, 0, color.NRGBA{240, 230, 220, 0})
+	if p := pixel(img, 0, 0); p != (rgb{240, 230, 220}) {
+		t.Fatalf("opaque pixel = %v", p)
+	}
+	if p := pixel(img, 1, 0); p != (rgb{}) {
+		t.Fatalf("transparent pixel = %v, want black", p)
+	}
+}

@@ -98,6 +98,7 @@ func readSfntDirectory(r io.ReaderAt, index int) (*sfntDir, error) {
 	if _, err := r.ReadAt(rec, off+12); err != nil {
 		return nil, fmt.Errorf("reading table directory: %w", err)
 	}
+	size, sized := readerSize(r)
 	d.tables = make([]sfntTable, n)
 	for i := range d.tables {
 		b := rec[16*i:]
@@ -105,8 +106,26 @@ func readSfntDirectory(r io.ReaderAt, index int) (*sfntDir, error) {
 			tag: binary.BigEndian.Uint32(b[0:]), checksum: binary.BigEndian.Uint32(b[4:]),
 			offset: binary.BigEndian.Uint32(b[8:]), length: binary.BigEndian.Uint32(b[12:]),
 		}
+		// Font files are untrusted: a table that runs past the end of the
+		// file would make loaders allocate its forged length.
+		if t := d.tables[i]; sized && uint64(t.offset)+uint64(t.length) > uint64(size) {
+			return nil, fmt.Errorf("table %08x [%d, +%d) runs past the end of the file (%d bytes)", t.tag, t.offset, t.length, size)
+		}
 	}
 	return d, nil
+}
+
+// readerSize returns the size of r when it knows it (*os.File, bytes.Reader…).
+func readerSize(r io.ReaderAt) (int64, bool) {
+	switch v := r.(type) {
+	case interface{ Size() int64 }:
+		return v.Size(), true
+	case interface{ Stat() (os.FileInfo, error) }:
+		if fi, err := v.Stat(); err == nil {
+			return fi.Size(), true
+		}
+	}
+	return 0, false
 }
 
 // sfntView is an io.ReaderAt/io.ReadSeeker over a font file with a rewritten

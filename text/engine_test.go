@@ -379,8 +379,9 @@ func TestEngineDirtyLifecycle(t *testing.T) {
 	v := eShape(s, f, "A")
 	e := s.Glyph(v.Faces[0], v.Glyphs[0], 0)
 	x, y, w, h, px, stride, ok := s.Dirty(int(e.Page))
-	if !ok || x != int(e.X) || y != int(e.Y) || w != int(e.W) || h != int(e.H) || stride != PageSize {
-		t.Fatalf("dirty %d,%d %dx%d stride %d ok=%v, entry %+v", x, y, w, h, stride, ok, e)
+	// A new page is dirty in full (its texture starts undefined).
+	if !ok || x != 0 || y != 0 || w != PageSize || h != PageSize || stride != PageSize {
+		t.Fatalf("new page dirty %d,%d %dx%d stride %d ok=%v, want the whole page", x, y, w, h, stride, ok)
 	}
 	nz := 0
 	for r := 0; r < h; r++ {
@@ -399,8 +400,8 @@ func TestEngineDirtyLifecycle(t *testing.T) {
 	}
 	e2 := s.Glyph(eShape(s, f, "B").Faces[0], eShape(s, f, "B").Glyphs[0], 0)
 	x, y, w, h, _, _, ok = s.Dirty(int(e2.Page))
-	if !ok || x > int(e2.X) || y > int(e2.Y) || x+w < int(e2.X)+int(e2.W) || y+h < int(e2.Y)+int(e2.H) {
-		t.Fatalf("dirty %d,%d %dx%d does not cover %+v", x, y, w, h, e2)
+	if !ok || x != int(e2.X) || y != int(e2.Y) || w != int(e2.W) || h != int(e2.H) {
+		t.Fatalf("dirty %d,%d %dx%d, want exactly the new glyph %+v", x, y, w, h, e2)
 	}
 }
 

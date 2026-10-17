@@ -19,8 +19,8 @@ func inkProfile(img *image.NRGBA, r [4]int, axis string) []float64 {
 	out := make([]float64, n)
 	for y := r[1]; y < r[3]; y++ {
 		for x := r[0]; x < r[2]; x++ {
-			o := img.PixOffset(x, y)
-			luma := 0.2126*float64(img.Pix[o]) + 0.7152*float64(img.Pix[o+1]) + 0.0722*float64(img.Pix[o+2])
+			c := pixel(img, x, y)
+			luma := 0.2126*c[0] + 0.7152*c[1] + 0.0722*c[2]
 			if axis == "x" {
 				out[x-r[0]] += 255 - luma
 			} else {

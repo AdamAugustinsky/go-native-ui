@@ -102,6 +102,11 @@ func TestAtlasDirtyRegion(t *testing.T) {
 	if !ok {
 		t.Fatal("alloc")
 	}
+	// A new page is dirty in full: its GPU texture starts undefined.
+	if dx, dy, dw, dh, _, _, ok := a.dirtyRegion(pg); !ok || dx != 0 || dy != 0 || dw != 64 || dh != 64 {
+		t.Fatalf("new page dirty = %d,%d %dx%d ok=%v, want the whole page", dx, dy, dw, dh, ok)
+	}
+	a.clearDirty(pg)
 	src := []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}
 	a.write(pg, x, y, 4, 3, src, 4)
 	dx, dy, dw, dh, px, stride, ok := a.dirtyRegion(pg)
@@ -244,4 +249,21 @@ func TestRunCacheEvictAllWhenAllReferenced(t *testing.T) {
 		t.Fatalf("no headroom after evicting a fully referenced cache: %d resident", len(c.ents))
 	}
 	checkStr(t, c, 0, "overflow")
+}
+
+// A reset page is dirty in full, so stale glyph pixels in the GPU texture get
+// overwritten (they would show through the new glyphs' padding).
+func TestAtlasResetDirtiesWholePage(t *testing.T) {
+	a := newAtlas()
+	a.pageDim = 64
+	pg, x, y, ok := a.alloc(false, 4, 3)
+	if !ok {
+		t.Fatal("alloc")
+	}
+	a.write(pg, x, y, 4, 3, make([]byte, 12), 4)
+	a.clearDirty(pg)
+	a.reset()
+	if dx, dy, dw, dh, _, _, ok := a.dirtyRegion(pg); !ok || dx != 0 || dy != 0 || dw != 64 || dh != 64 {
+		t.Fatalf("after reset dirty = %d,%d %dx%d ok=%v, want the whole page", dx, dy, dw, dh, ok)
+	}
 }

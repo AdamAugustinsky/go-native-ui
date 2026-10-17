@@ -91,10 +91,13 @@ func (a *atlas) newPage(color bool) *page {
 	if color {
 		bpp = 4
 	}
+	// A new page is dirty in full: GPU textures start with undefined
+	// contents, and the transparent padding between glyphs must reach them.
 	return &page{
 		color: color, bpp: bpp,
-		pix:  make([]byte, a.pageDim*a.pageDim*bpp),
-		pack: packer{w: a.pageDim, h: a.pageDim},
+		pix:   make([]byte, a.pageDim*a.pageDim*bpp),
+		pack:  packer{w: a.pageDim, h: a.pageDim},
+		dirty: true, dx1: a.pageDim, dy1: a.pageDim,
 	}
 }
 
@@ -113,7 +116,10 @@ func (a *atlas) reset() {
 	for _, p := range a.pages {
 		clear(p.pix)
 		p.pack.reset()
-		p.dirty = false
+		// Upload the cleared page whole: old glyph pixels in the GPU texture
+		// would otherwise show through the new glyphs' padding.
+		p.dirty = true
+		p.dx0, p.dy0, p.dx1, p.dy1 = 0, 0, a.pageDim, a.pageDim
 		p.usedPixels = 0
 	}
 	a.glyphs.clear()

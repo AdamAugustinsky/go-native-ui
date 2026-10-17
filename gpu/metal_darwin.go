@@ -4,6 +4,7 @@ package gpu
 
 import (
 	"errors"
+	"sync"
 	"sync/atomic"
 	"unsafe"
 
@@ -78,7 +79,7 @@ func NewSurface(n platform.Native, w, h int32, scale float32) (*Surface, error) 
 		return nil, err
 	}
 	clsCATransaction = objc.Cls("CATransaction")
-	initPresentedBlock()
+	presentedOnce.Do(initPresentedBlock) // one ffi callback slot per process, however many surfaces
 	F := objc.F
 	pool := F.Call0(objc.PoolPush)
 	defer F.Call1(objc.PoolPop, pool)
@@ -261,6 +262,7 @@ var (
 	presentedSignature = [...]byte{'v', '1', '6', '@', '?', '0', '@', '8', 0} // void (^)(id<MTLDrawable>)
 	presentedFrame     = new(ffi.Frame)                                       // used only by the handler's thread
 	onGlassTarget      atomic.Pointer[atomic.Int64]
+	presentedOnce      sync.Once
 )
 
 func initPresentedBlock() {

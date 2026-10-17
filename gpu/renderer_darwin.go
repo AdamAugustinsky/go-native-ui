@@ -300,11 +300,34 @@ func (r *Renderer) Upload(t TextureID, x, y, w, h int, pixels []byte, stride int
 	if stride < w*bpp || len(pixels) < (h-1)*stride+w*bpp {
 		panic("gpu: Upload: pixels too short for region")
 	}
+	// replaceRegion doesn't synchronise with the GPU: wait until frames
+	// already submitted have stopped sampling the texture.
+	r.waitSubmitted()
 	pinnedBytes = &pixels[0] // force the backing array onto the heap while C reads it
-	argRegion(objc.F.Reset().Arg(uintptr(r.textures[t])).Arg(uintptr(rsReplace)), x, y, w, h).
-		Arg(0).Arg(uintptr(unsafe.Pointer(&pixels[0]))).Arg(uintptr(stride)).Call(objc.MsgSend)
+	if stride%bpp == 0 {
+		argRegion(objc.F.Reset().Arg(uintptr(r.textures[t])).Arg(uintptr(rsReplace)), x, y, w, h).
+			Arg(0).Arg(uintptr(unsafe.Pointer(&pixels[0]))).Arg(uintptr(stride)).Call(objc.MsgSend)
+	} else { // Metal needs bytesPerRow to be a multiple of the pixel size: copy row by row
+		for row := 0; row < h; row++ {
+			argRegion(objc.F.Reset().Arg(uintptr(r.textures[t])).Arg(uintptr(rsReplace)), x, y+row, w, 1).
+				Arg(0).Arg(uintptr(unsafe.Pointer(&pixels[row*stride]))).Arg(uintptr(w * bpp)).Call(objc.MsgSend)
+		}
+	}
 	pinnedBytes = nil
 	runtime.KeepAlive(pixels)
+}
+
+// waitSubmitted waits for every committed command buffer that may still read
+// the renderer's textures. A buffer that isn't committed yet (the frame being
+// built) is left alone: it reads the new contents.
+func (r *Renderer) waitSubmitted() {
+	for i := range r.slots {
+		if cb := r.slots[i].cb; cb != 0 {
+			if st := objc.Send(cb, rsStatus); st >= 2 && st < 4 { // Committed, Scheduled
+				objc.Send(cb, rsWait)
+			}
+		}
+	}
 }
 
 // growSlot (re)allocates a ring slot's instance buffer. The caller must have

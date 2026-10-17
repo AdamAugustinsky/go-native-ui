@@ -34,7 +34,10 @@ type cbdt struct {
 func openCBDT(r io.ReaderAt, d *sfntDir) *cbdt {
 	loc, ok1 := d.find(tagCBLC)
 	dat, ok2 := d.find(tagCBDT)
-	if !ok1 || !ok2 || loc.length < 8 || dat.length < 4 {
+	// maxCBLC bounds the index table read whole (Noto Color Emoji's is ~50 KB);
+	// the directory is also checked against the file size when it's known.
+	const maxCBLC = 16 << 20
+	if !ok1 || !ok2 || loc.length < 8 || dat.length < 4 || loc.length > maxCBLC {
 		return nil
 	}
 	raw := make([]byte, loc.length)
@@ -164,6 +167,15 @@ func parseCBImage(format uint16, buf []byte, big *tables.BigGlyphMetrics) (cbGly
 
 // pngPremultiplied decodes a PNG into premultiplied RGBA bytes (4 per pixel).
 func pngPremultiplied(data []byte) (pix []byte, w, h int, err error) {
+	// Check the declared size before decoding allocates it: a tiny PNG can
+	// claim enormous dimensions.
+	cfg, err := png.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	if cfg.Width <= 0 || cfg.Height <= 0 || cfg.Width > 4096 || cfg.Height > 4096 {
+		return nil, 0, 0, errors.New("implausible bitmap size")
+	}
 	img, err := png.Decode(bytes.NewReader(data))
 	if err != nil {
 		return nil, 0, 0, err

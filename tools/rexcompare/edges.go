@@ -6,13 +6,16 @@ import (
 	"sort"
 )
 
-// rgb is an 8-bit colour read from an image (alpha ignored: both images are
-// compared as the composited sRGB pixels they contain).
+// rgb is an 8-bit sRGB colour read from an image, composited over black
+// (see pixel).
 type rgb [3]float64
 
+// pixel returns the pixel composited over black, so a candidate that is
+// transparent where the reference is opaque reads as wrong, not as its RGB.
 func pixel(img *image.NRGBA, x, y int) rgb {
 	o := img.PixOffset(x, y)
-	return rgb{float64(img.Pix[o]), float64(img.Pix[o+1]), float64(img.Pix[o+2])}
+	a := float64(img.Pix[o+3]) / 255
+	return rgb{float64(img.Pix[o]) * a, float64(img.Pix[o+1]) * a, float64(img.Pix[o+2]) * a}
 }
 
 // scanline returns the pixels of probe p over [from, to).

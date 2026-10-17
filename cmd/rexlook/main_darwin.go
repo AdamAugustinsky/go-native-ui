@@ -347,8 +347,9 @@ func runWindow(tMain, age int64, exitFirst, bench, allowUnpaced, verbose bool) e
 				needDraw, frameReady = false, false
 			}
 			if !draw() {
-				// no drawable (occluded): try again on the next frame tick
-				frameReady = false
+				// No drawable (occluded, or this tick's drawable expired): the
+				// repaint is still owed, so draw on the next frame tick.
+				needDraw, frameReady = true, false
 				win.RequestFrame()
 				continue
 			}
