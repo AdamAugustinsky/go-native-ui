@@ -96,7 +96,7 @@ waking the app.
 
 | OS | Mechanism |
 |---|---|
-| macOS 14+ | `CAMetalLayer` (`displaySyncEnabled`, 2 drawables) + `NSView` `CADisplayLink`, unpaused only while animating; its callback goes through our zero-alloc IMP trampoline |
+| macOS 14+ | `CAMetalLayer` (`displaySyncEnabled`, 2 drawables, sRGB colour space). The first frame is drawn with `nextDrawable`; on the view `CADisplayLink`'s first tick the platform switches to a `CAMetalDisplayLink` (`preferredFrameLatency` 1, full-rate `preferredFrameRateRange`), which hands over the drawable with each tick, so the main thread never blocks in `nextDrawable`. Links run only while frames are requested (4-tick hysteresis), and callbacks go through our zero-alloc IMP trampoline |
 | Windows | flip-model swap chain (`FLIP_DISCARD`, 2 buffers) with `FRAME_LATENCY_WAITABLE_OBJECT`, `SetMaximumFrameLatency(1)`; the loop waits on the waitable handle plus messages with `MsgWaitForMultipleObjectsEx` |
 | Wayland | `wl_surface.frame` callbacks; `eglSwapInterval(0)` so a hidden surface never blocks |
 | X11 | `eglSwapInterval(1)` (blocking swap) while animating; Present extension later |
@@ -125,7 +125,8 @@ sources.
      2. `waitUntilScheduled`;
      3. call the drawable's own `present` inside the `CATransaction` that also does `orderFront`.
 
-     *Phase-2 experiment: confirm no empty frame reaches the screen.*
+     *Implemented in phase 2* (`Options.Hidden` + `Surface.RevealOnFirstFrame`). *Still to confirm from recordings (BounceRec): no empty frame reaches the screen.*
+   - **Draw before the first event pump (all OSes).** On macOS the first `nextEventMatchingMask` runs 50–100 ms of AppKit's deferred launch work. Drawing the first frame before it cut exec → on glass from a 246 ms median to 159 ms (phase-2 measurements).
    - **Windows:** create the window cloaked (`DWMWA_CLOAK`), present the first frame, then uncloak and show it. No white flash.
    - **Wayland:** a surface maps only when its first buffer is committed, so commit only a complete frame.
    - **X11: unresolved.** Mapping happens before drawing, and X11 leaves a newly mapped window's contents undefined, so a compositor may show it before the first swap. A `None` background pixmap only avoids the background clear. *Phase-2 research:* compositor frame synchronisation (`_NET_WM_SYNC_REQUEST` / frame-drawn), validated visually.

@@ -410,3 +410,32 @@ See the go/no-go in [docs/measurements/phase1-macos.md](docs/measurements/phase1
 2. **CI.** May we create a private GitHub repo and push, so the workflow produces the first Windows and Linux runtime evidence?
 3. **Key identity for shortcuts.** Should we match by physical key position (scancode: stable across layouts, the same Ctrl+Z spot on AZERTY) or by layout keysym (Ctrl+Z follows the printed letter)? The platform layer reports both; the question is the default for the UI layer's shortcut matcher.
 4. **Wayland protocol XML.** Should we vendor the XML files next to `internal/wl/gen.go` (reproducible, under 100 KB for the four files, MIT-licensed) or keep fetching them from the URLs in the generator header?
+
+## D18. macOS frame delivery: CAMetalDisplayLink (phase 2)
+
+**Decision.** After the first frame, frames come from a `CAMetalDisplayLink`
+on the surface's layer (`preferredFrameLatency` 1). The first frame uses
+`nextDrawable`, because it is drawn before the run loop first spins.
+
+**Evidence** (MacBook Pro M3 Pro, 120 Hz, `docs/measurements/phase2-macos.md`):
+- **Before:** with the view's `CADisplayLink`, `sample` showed the main thread blocked in `nextDrawable` for ~96 % of each frame.
+- **After:** process CPU per frame fell from 1.89–2.09 ms to 1.24–1.48 ms, below a native Objective-C app using the old approach (1.70–1.79 ms). Intervals: p50 8.33 ms, p99 ≤ 8.7 ms.
+- 2 vs 3 drawables and latency 1 vs 2 made no measurable difference.
+
+**Consequences:**
+- A layer driven by the link throws on `nextDrawable`, so after the first frame `BeginFrame`/`Present` outside a tick return false; apps draw on `EvFrame`.
+- With an occluded window or a sleeping display the link stops: nothing is drawn, and the bench times out instead of running unpaced.
+- The transient footprint while animating is ~20 MB higher, which looks like two extra full-size drawables. Idle is unchanged.
+
+## D19. Measurement tools may be Objective-C
+
+**Decision.** Development and measurement tools that aren't part of the
+framework or its apps may be Objective-C built with clang. Current tools:
+- `probes/nativebaseline`: the native AppKit + Metal baseline;
+- `tools/bouncerec`: the ScreenCaptureKit half-bounce recorder.
+
+**Reasoning.** The no-cgo rule protects the framework's build and
+distribution. ScreenCaptureKit is block- and delegate-heavy, and driving it
+through our FFI would cost days for a tool nobody ships. The framework and
+`cmd/*` apps stay pure Go.
+
