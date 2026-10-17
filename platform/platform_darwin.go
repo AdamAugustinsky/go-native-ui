@@ -41,6 +41,12 @@ type Window struct {
 	drawable   objc.ID // retained drawable from the current CAMetalDisplayLink tick
 	idleTicks  int     // display-link ticks since the last frame request
 
+	// Frame-delivery diagnostics (DebugState); plain counters and times.
+	ticks, ticksSinceFrame, pauses uint64
+	armedT, lastTickT, lastFrameT  int64
+	visible                        int8 // last EvVisible: 1, 0, or -1 before any
+	visibleT                       int64
+
 	// Live resize (SetFrameHandler). AppKit runs its own loop inside
 	// sendEvent while the user drags a window edge; between
 	// windowWillStartLiveResize: and windowDidEndLiveResize: the frame
@@ -286,7 +292,7 @@ func Open(o Options) (*Window, error) {
 	pool := F.Call0(objc.PoolPush)
 	defer F.Call1(objc.PoolPop, pool)
 
-	w := &Window{q: newEventQueue(), scale: 1, linkPaused: true}
+	w := &Window{q: newEventQueue(), scale: 1, linkPaused: true, visible: -1}
 	w.app = objc.Send(objc.Cls("NSApplication"), selSharedApplication)
 	objc.Send1(w.app, selSetActivation, 0) // NSApplicationActivationPolicyRegular
 	loadCursors()
@@ -677,6 +683,8 @@ func impHandler(c *ffi.CB) {
 			w.attachMetalLink(layer) // its first tick delivers this frame, with a drawable
 			break
 		}
+		now := Now()
+		w.ticks, w.ticksSinceFrame, w.lastTickT = w.ticks+1, w.ticksSinceFrame+1, now
 		// A drawable is held for one tick at most: one kept through an idle
 		// period would leave the link without a free drawable (2 in the
 		// pool), and it stops ticking.
@@ -689,7 +697,8 @@ func impHandler(c *ffi.CB) {
 			if sel == selMetalLinkUpdate { // metalDisplayLink:needsUpdate: (link, update)
 				w.drawable = objc.Retain(objc.Send(objc.ID(c.Int(3)), selUpdateDrawable))
 			}
-			w.q.push(Event{Kind: EvFrame, Time: Now()})
+			w.ticksSinceFrame, w.lastFrameT = 0, now
+			w.q.push(Event{Kind: EvFrame, Time: now})
 			objc.Send2(w.app, selPostEvent, uintptr(w.wakeEv), 0) // unblock nextEventMatchingMask
 			if w.live {
 				w.runHandler() // a requested frame (animation) while AppKit's resize loop runs
@@ -701,6 +710,7 @@ func impHandler(c *ffi.CB) {
 		if w.idleTicks++; w.idleTicks >= linkIdleTicks && !w.linkPaused {
 			objc.Send1(w.link, selSetPaused, 1)
 			w.linkPaused = true
+			w.pauses++
 		}
 	case selShouldClose:
 		if w != nil {
@@ -718,8 +728,10 @@ func impHandler(c *ffi.CB) {
 	case selDidChangeOcclus:
 		if w != nil {
 			e := Event{Kind: EvVisible, Time: Now()}
+			w.visible, w.visibleT = 0, e.Time
 			if uintptr(objc.Send(w.win, selOcclusionState))&2 != 0 { // NSWindowOcclusionStateVisible
 				e.Flags = FlagDown
+				w.visible = 1
 			}
 			w.q.push(e)
 		}
@@ -731,6 +743,9 @@ func (w *Window) Text(r TextRef) []byte { return w.q.textOf(r) }
 
 // RequestFrame arms one EvFrame at the next display refresh.
 func (w *Window) RequestFrame() {
+	if !w.frameArmed {
+		w.armedT = Now()
+	}
 	w.frameArmed = true
 	if w.linkPaused {
 		objc.Send1(w.link, selSetPaused, 0)

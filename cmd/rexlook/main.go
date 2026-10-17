@@ -57,7 +57,7 @@ func main() {
 	timeout := flag.Duration("timeout", 120*time.Second, "with -bench: give up after this long")
 	resizeTest := flag.Bool("live-resize-test", false, "macOS: drag the window size through the frame handler and print the result as JSON")
 	probe := flag.Bool("probe-titlebar", false, "macOS: print the titlebar hit-test and drag-map probe as JSON and exit")
-	verbose := flag.Bool("v", false, "print the startup timeline to stderr")
+	verbose := flag.Bool("v", false, "print the startup timeline to stderr; with -bench or in a window, also a state line every second while frames stop coming")
 	flag.Parse()
 
 	var err error
@@ -65,7 +65,7 @@ func main() {
 	case *out != "":
 		err = renderPNG(*out)
 	case *bench:
-		err = runBench(*gate, *allowUnpaced, *maxCPU, *timeout)
+		err = runBench(*gate, *allowUnpaced, *maxCPU, *timeout, *verbose)
 	case *resizeTest:
 		err = runResizeTest()
 	case *probe:
@@ -100,7 +100,7 @@ func (b *builder) Build(c *ui.Context) {
 }
 
 func runWindow(exitFirst, verbose bool) error {
-	res, err := app.RunWith(rex.Config(), newBuilder(), app.RunOptions{ExitFirst: exitFirst})
+	res, err := app.RunWith(rex.Config(), newBuilder(), app.RunOptions{ExitFirst: exitFirst, Verbose: verbose})
 	if err != nil {
 		return err
 	}
@@ -134,9 +134,9 @@ type report struct {
 	GateFailures  []string `json:",omitempty"`
 }
 
-func runBench(gate, allowUnpaced bool, maxCPU float64, timeout time.Duration) error {
+func runBench(gate, allowUnpaced bool, maxCPU float64, timeout time.Duration, verbose bool) error {
 	x := rex.NewApp()
-	br, err := app.RunBench(rex.Config(), rex.NewBench(x), app.BenchOptions{Warm: warmFrames, Frames: measFrames, Timeout: timeout})
+	br, err := app.RunBench(rex.Config(), rex.NewBench(x), app.BenchOptions{Warm: warmFrames, Frames: measFrames, Timeout: timeout, Verbose: verbose})
 	if err != nil {
 		return err
 	}

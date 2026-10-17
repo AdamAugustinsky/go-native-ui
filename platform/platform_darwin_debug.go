@@ -64,3 +64,32 @@ func (w *Window) DebugDragAt(xPx, yPx float32) bool {
 // follows (AppleActionOnDoubleClick: "Maximize", "Fill", "Minimize", "None";
 // "" when unset, which zooms).
 func (w *Window) DebugDoubleClickSetting() string { return defaultsString("AppleActionOnDoubleClick") }
+
+var (
+	selIsPausedLink = objc.Sel("isPaused")
+	selIsKeyWindow  = objc.Sel("isKeyWindow")
+	selIsActiveApp  = objc.Sel("isActive")
+	selIsMini       = objc.Sel("isMiniaturized")
+)
+
+// DebugState returns a snapshot of the frame-delivery state (see DebugState).
+// Main thread; it sends four Objective-C messages and allocates nothing.
+func (w *Window) DebugState() DebugState {
+	occ := uint32(uintptr(objc.Send(w.win, selOcclusionState)))
+	s := DebugState{
+		Valid: true, Now: Now(),
+		Occlusion: occ, Visible: occ&2 != 0, LastVisible: w.visible, LastVisibleT: w.visibleT,
+		Key:       objc.SendBool(w.win, selIsKeyWindow),
+		AppActive: objc.SendBool(w.app, selIsActiveApp),
+		Mini:      objc.SendBool(w.win, selIsMini),
+		MetalLink: w.metalLink, LinkPaused: w.linkPaused,
+		FrameArmed: w.frameArmed, ArmedT: w.armedT,
+		Drawable: w.drawable != 0, Live: w.live, Relink: w.relink,
+		Ticks: w.ticks, TicksSinceFrame: w.ticksSinceFrame, LastTickT: w.lastTickT, LastFrameT: w.lastFrameT,
+		Pauses: w.pauses, IdleTicks: w.idleTicks,
+	}
+	if w.link != 0 {
+		s.LinkPausedOS = objc.SendBool(w.link, selIsPausedLink)
+	}
+	return s
+}

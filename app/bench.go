@@ -19,6 +19,10 @@ type BenchOptions struct {
 	// and WindowEnd just after its end values are read, so a caller can
 	// snapshot an allocation profile around exactly the measured frames.
 	WindowStart, WindowEnd func()
+
+	// Verbose prints the state dump (StateLine) to stderr while frames stop
+	// coming, as RunOptions.Verbose does. A timeout always prints it.
+	Verbose bool
 }
 
 // BenchReport is the result of RunBench; it marshals to JSON as is.
@@ -88,6 +92,7 @@ func RunBench(cfg Config, b Builder, o BenchOptions) (BenchReport, error) {
 		return BenchReport{}, err
 	}
 	defer a.close()
+	a.verbose = o.Verbose
 	if s, ok := b.(Scripter); ok {
 		a.script = s
 	}

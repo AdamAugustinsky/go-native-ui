@@ -70,6 +70,9 @@ func (c *Context) End(list *gpu.DrawList) {
 	}
 	c.layout()
 	c.animateBoxes()
+	if c.scrollSet && c.scrollPending() {
+		c.animating = true
+	}
 	c.prune()
 
 	list.Reset()
@@ -92,10 +95,33 @@ func (c *Context) End(list *gpu.DrawList) {
 		list.Reset()
 	}
 	if c.droppedGlyphs {
-		c.animating = true // some text is missing from this list: draw again
+		// Some text is missing from this list. The atlas is fresh now, so
+		// drawing again usually shows it; but a visible glyph set larger
+		// than the atlas drops glyphs on every frame. After
+		// maxOverflowRepaints frames in a row the loop stops asking: the
+		// degraded list stands (TextDegraded) until a frame drops nothing.
+		c.overflowRun++
+		c.overflowFrames++
+		if c.overflowRun <= maxOverflowRepaints {
+			c.animating = true
+		}
+	} else {
+		c.overflowRun = 0
 	}
 	c.syncAtlas()
 }
+
+// maxOverflowRepaints is how many frames in a row that dropped glyphs (atlas
+// overflow) End asks to be redrawn.
+const maxOverflowRepaints = 3
+
+// TextDegraded reports whether the last frames dropped glyphs because the
+// visible glyph set does not fit the atlas, beyond the repaints End asked for:
+// the frame shows text missing and the context no longer requests frames for it.
+func (c *Context) TextDegraded() bool { return c.overflowRun > maxOverflowRepaints }
+
+// AtlasOverflowFrames counts the frames that dropped glyphs to an atlas reset.
+func (c *Context) AtlasOverflowFrames() uint64 { return c.overflowFrames }
 
 // emitTries is how many times End emits a frame whose glyph lookups reset the
 // atlas before it stops retrying.
@@ -357,25 +383,10 @@ func (c *Context) emitText(l *gpu.DrawList, b *box, clip [4]float32) {
 		return
 	}
 
-	// Glyphs well outside the clip are neither looked up (which could
-	// rasterize them and fill the atlas) nor drawn; a glyph's ink reaches at
-	// most about a line height past its advance box.
-	m := fi.ascent + fi.descent
-	if baseline-fi.ascent-m >= tclip[3] || baseline+fi.descent+m <= tclip[1] {
-		return
-	}
+	// Every glyph is looked up: how far its ink reaches past its advance box
+	// is only known from the entry. Quads outside the clip are dropped below.
 	for i, gid := range v.Glyphs {
 		pen := x + v.X[i]
-		next := x + v.Advance
-		if i+1 < len(v.X) {
-			next = x + v.X[i+1]
-		}
-		if pen-m >= tclip[2] {
-			continue // starts to the right of the clip
-		}
-		if next+m <= tclip[0] {
-			continue
-		}
 		ix := float32(math.Floor(float64(pen)))
 		sub := int((pen-ix)*4 + 0.5)
 		if sub == 4 {

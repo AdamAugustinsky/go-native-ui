@@ -146,10 +146,14 @@ func TestScrollToKeepsAnimating(t *testing.T) {
 type alwaysResetShaper struct {
 	*fakeShaper
 	glyphCalls int
+	quiet      bool // stop resetting
 }
 
 func (r *alwaysResetShaper) Glyph(f text.FaceID, gid uint16, sub uint8) text.GlyphEntry {
 	r.glyphCalls++
+	if r.quiet {
+		return r.fakeShaper.Glyph(f, gid, sub)
+	}
 	r.atlasGen++ // the lookup resets the atlas, then rasterizes into the fresh one
 	e := r.fakeShaper.Glyph(f, gid, sub)
 	if e.W != 0 {
@@ -191,46 +195,196 @@ func TestAtlasResetOnEveryAttemptSubmitsNoStaleQuads(t *testing.T) {
 	}
 }
 
-// Text clipped away is not looked up: nothing is rasterized for glyphs the
-// clip hides, from whole boxes down to single glyphs of a long run.
-func TestClippedGlyphsAreNotLooked(t *testing.T) {
-	rs := &countingShaper{fakeShaper: newFake()}
-	c := New(rs)
+// Glyph ink is not confined to its advance box. A glyph looked up is drawn
+// whenever its real bounds meet the clip: one that overhangs far to the
+// right of its origin, and one from a fallback face that reaches far to the
+// left of its pen position, both with the pen outside the clip.
+type inkShaper struct {
+	*fakeShaper
+	faces [fakeMaxGlyphs]text.FaceID
+}
+
+func (r *inkShaper) Run(ref text.RunRef) text.RunView {
+	v := r.fakeShaper.Run(ref)
+	for i := range v.Faces {
+		r.faces[i] = 0
+		if i > 0 && i == len(v.Faces)-1 {
+			r.faces[i] = 1 // the last glyph comes from a fallback face
+		}
+	}
+	v.Faces = r.faces[:len(v.Faces)]
+	return v
+}
+
+func (r *inkShaper) Glyph(f text.FaceID, gid uint16, sub uint8) text.GlyphEntry {
+	e := r.fakeShaper.Glyph(f, gid, sub)
+	switch {
+	case f == 1:
+		e.W, e.BearingX = 90, -80 // reaches 80 px left of the pen
+	case gid == 'a':
+		e.W, e.BearingX = 40, 0 // 40 px wide at an 8 px advance
+	}
+	return e
+}
+
+func inkQuads(t *testing.T, text string, textX, clipX, clipW float32) []gpu.Quad {
+	c := New(&inkShaper{fakeShaper: newFake()})
 	var in Input
 	var list gpu.DrawList
 	c.Begin(&in, 400, 200, 1, 0.016)
-	// A 600 px run in a 100 px clip, 150 px in from the run's left end.
-	c.NextSize(Px(100), Px(30))
-	c.NextPos(10, 10)
+	c.NextSize(Px(clipW), Px(30))
+	c.NextPos(clipX, 10)
 	cl := c.Box(Clip|FloatingX|FloatingY, "clip")
 	c.Push(cl)
-	c.NextSize(Px(600), Px(30))
-	c.NextPos(-150, 0)
-	c.Box(DrawText|FloatingX|FloatingY, "0123456789012345678901234567890123456789"[:40])
+	c.NextSize(Px(200), Px(30))
+	c.NextPos(textX-clipX, 0)
+	c.Box(DrawText|FloatingX|FloatingY, text)
 	c.Pop()
 	c.End(&list)
-	// 40 glyphs of 8 px; the clip shows x in [150, 250) of the run: about 13
-	// glyphs plus the margin of a line (13 px) on each side.
-	if rs.glyphCalls >= 25 || rs.glyphCalls < 12 {
-		t.Errorf("%d glyph lookups for 12 visible glyphs in a 40 glyph run", rs.glyphCalls)
-	}
-	n := 0
+	var out []gpu.Quad
 	for _, q := range list.Quads {
 		if q.Mode == gpu.ModeMaskR8 {
-			n++
+			out = append(out, q)
 		}
 	}
-	if n < 12 || n > 14 {
-		t.Errorf("%d glyph quads drawn", n)
+	return out
+}
+
+func TestOverhangingGlyphsReachTheClip(t *testing.T) {
+	// "ab" at x=0: glyph a is [0,40), the pen of b (fallback, ink [-72,18))
+	// is at 8. The clip [30,50) shows only a.
+	q := inkQuads(t, "ab", 0, 30, 20)
+	if len(q) != 1 || q[0].Rect[0] != 0 || q[0].Rect[2] != 40 {
+		t.Errorf("right overhang: quads %+v, want glyph a (ink 0..40) in the clip 30..50", q)
+	}
+	// Eight x then b, at x=40: b's pen is at 104, right of the clip, and its
+	// ink [24,114) meets [30,50).
+	q = inkQuads(t, "xxxxxxxxb", 40, 30, 20)
+	found := false
+	for _, g := range q {
+		if g.Rect[0] == 24 {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("left overhang from a fallback face: quads %+v, want the glyph with ink 24..114", q)
 	}
 }
 
-type countingShaper struct {
-	*fakeShaper
-	glyphCalls int
+// ---- re-review: release metadata, ScrollTo and growth, overflow bound ----
+
+// A release and the next press in one frame: Clicked, DoubleClicked and
+// DragDelta describe the press that ended, not the one that began.
+func TestReleaseKeepsItsOwnClickCountAndOrigin(t *testing.T) {
+	for _, c := range []struct {
+		oldClicks, newClicks uint8
+		wantDouble           bool
+	}{{1, 2, false}, {2, 1, true}} {
+		h := newHarness(t, 400, 100)
+		var ia ID
+		build := func(c *Context) { ia, _ = twoButtons(c) }
+		h.frame(build)
+		h.move(50, 30)
+		h.frame(build)
+		h.in.SetButton(ButtonLeft, true, c.oldClicks)
+		h.frame(build)
+		h.move(80, 30)
+		h.in.Released[ButtonLeft], h.in.Pressed[ButtonLeft], h.in.Clicks[ButtonLeft] = true, true, c.newClicks
+		h.in.Down[ButtonLeft] = true
+		var s Signal
+		h.frame(func(cx *Context) { ia, _ = twoButtons(cx); s = cx.Signal(ia) })
+		if !s.Clicked || !s.Pressed {
+			t.Errorf("old %d new %d: %+v", c.oldClicks, c.newClicks, s)
+		}
+		if s.DoubleClicked != c.wantDouble {
+			t.Errorf("old %d new %d: DoubleClicked %v, want %v (the release ends the first press)", c.oldClicks, c.newClicks, s.DoubleClicked, c.wantDouble)
+		}
+		if s.DragDelta != [2]float32{30, 0} {
+			t.Errorf("old %d new %d: DragDelta %v, want {30 0} from the first press's origin", c.oldClicks, c.newClicks, s.DragDelta)
+		}
+	}
 }
 
-func (r *countingShaper) Glyph(f text.FaceID, gid uint16, sub uint8) text.GlyphEntry {
-	r.glyphCalls++
-	return r.fakeShaper.Glyph(f, gid, sub)
+// The target becomes valid only through content built in the same frame: an
+// empty box, then 300 px of children and ScrollTo(150). A loop that draws
+// only while Animating must reach it.
+func TestScrollToWithContentBuiltThisFrame(t *testing.T) {
+	h := newHarness(t, 400, 300)
+	var sc ID
+	build := func(rows int) func(*Context) {
+		return func(c *Context) {
+			c.NextSize(Px(200), Px(100))
+			sc = c.Box(ScrollY|Clip|Hoverable, "sc")
+			c.Push(sc)
+			for i := 0; i < rows; i++ {
+				c.NextSize(Pct(1), Px(30))
+				c.Box(Hoverable, string(rune('a'+i)))
+			}
+			c.Pop()
+		}
+	}
+	h.frame(build(0))
+	h.frame(build(0))
+	if h.c.Animating() {
+		t.Fatal("a still scene animates")
+	}
+	h.frame(func(c *Context) { build(10)(c); c.ScrollTo(sc, 0, 150) })
+	if !h.c.Animating() {
+		t.Fatal("ScrollTo made valid by this frame's content did not keep the loop animating")
+	}
+	n := 0
+	for ; h.c.Animating() && n < 1000; n++ {
+		h.frame(build(10))
+	}
+	if _, y := h.c.Scroll(sc); y != 150 {
+		t.Errorf("after %d frames the offset is %v, want 150", n, y)
+	}
+	// A target beyond what the content allows clamps; at the end, quiet.
+	h.frame(func(c *Context) { build(10)(c); c.ScrollTo(sc, 0, 9999) })
+	for i := 0; h.c.Animating() && i < 1000; i++ {
+		h.frame(build(10))
+	}
+	h.frame(func(c *Context) { build(10)(c); c.ScrollTo(sc, 0, 9999) })
+	if h.c.Animating() {
+		t.Error("ScrollTo past the end while at the end animates")
+	}
+}
+
+// A glyph set that never fits the atlas must not keep a settled app drawing:
+// the frame loop (which draws only while Animating) stops after a bounded
+// number of frames, the result is flagged degraded and counted.
+func TestAtlasOverflowRepaintsAreBounded(t *testing.T) {
+	rs := &alwaysResetShaper{fakeShaper: newFake()}
+	c := New(rs)
+	c.AtlasSync(&fakeUploader{})
+	var in Input
+	var list gpu.DrawList
+	frame := func() {
+		c.Begin(&in, 200, 100, 1, 0.016)
+		c.NextSize(Px(100), Px(30))
+		c.Box(DrawText, "abcdef")
+		c.End(&list)
+	}
+	frame()
+	n := 1
+	for ; c.Animating() && n < 100; n++ {
+		frame()
+	}
+	if n > maxOverflowRepaints+1 {
+		t.Errorf("%d frames drawn for one overflow, want at most %d", n, maxOverflowRepaints+1)
+	}
+	if c.Animating() || !c.TextDegraded() || c.AtlasOverflowFrames() != uint64(n) {
+		t.Errorf("animating %v degraded %v overflow frames %d (drawn %d)", c.Animating(), c.TextDegraded(), c.AtlasOverflowFrames(), n)
+	}
+	// Further frames (input) stay degraded and still do not ask for more.
+	frame()
+	if c.Animating() || !c.TextDegraded() {
+		t.Error("a later overflow frame asks for repaints")
+	}
+	// Once the atlas stops overflowing the next frame is whole and clean.
+	rs.quiet = true
+	frame()
+	if c.TextDegraded() || c.Animating() || len(list.Quads) != 6 {
+		t.Errorf("a quiet atlas: degraded %v animating %v quads %d", c.TextDegraded(), c.Animating(), len(list.Quads))
+	}
 }

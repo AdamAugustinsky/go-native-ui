@@ -126,12 +126,13 @@ func (t *translator) conflicts(e *platform.Event) bool {
 		if !ok {
 			return false
 		}
-		if in.Down[b] == (e.Flags&platform.FlagDown != 0) {
-			return false // no change of state: nothing to apply
-		}
-		if in.Pressed[b] || in.Released[b] || in.Cancelled[b] {
+		if in.Down[b] != (e.Flags&platform.FlagDown != 0) &&
+			(in.Pressed[b] || in.Released[b] || in.Cancelled[b]) {
 			return true // a second transition of the same button
 		}
+		// A button event that changes no state (an up for a button that is
+		// up) still carries a pointer position, which apply takes over: it
+		// moves the pointer like a move does.
 		return !in.Inside || in.MouseX != e.X || in.MouseY != e.Y
 	case platform.EvFocus:
 		return e.Flags&platform.FlagDown == 0 && in.Focused // cancels held buttons
@@ -182,8 +183,9 @@ func (t *translator) apply(e *platform.Event, txt []byte) bool {
 		}
 		in.MouseX, in.MouseY, in.Inside = e.X, e.Y, true
 		in.Mods = mods(e.Mods)
-		down := e.Flags&platform.FlagDown != 0
-		in.SetButton(b, down, t.clicks(b, e, down))
+		if down := e.Flags&platform.FlagDown != 0; in.Down[b] != down { // else only the position counts
+			in.SetButton(b, down, t.clicks(b, e, down))
+		}
 	case platform.EvScroll:
 		if e.DX == 0 && e.DY == 0 {
 			return false

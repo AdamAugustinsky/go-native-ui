@@ -60,6 +60,7 @@ func (c *Context) mouse() {
 		releaseFirst := in.Released[btn] && in.Pressed[btn] && in.Down[btn]
 		if releaseFirst {
 			c.releasedKey[btn] = c.active[btn]
+			c.relPos[btn], c.relClicks[btn] = c.pressPos[btn], c.pressClicks[btn] // before the new press replaces them
 			c.active[btn] = 0
 		}
 		if in.Pressed[btn] {
@@ -77,6 +78,7 @@ func (c *Context) mouse() {
 			c.active[btn] = 0 // dropped without a release: nobody is clicked
 		} else if !releaseFirst && (in.Released[btn] || (!in.Down[btn] && c.active[btn] != 0)) {
 			c.releasedKey[btn] = c.active[btn]
+			c.relPos[btn], c.relClicks[btn] = c.pressPos[btn], c.pressClicks[btn]
 			c.active[btn] = 0
 		}
 	}
@@ -175,9 +177,11 @@ func (c *Context) Signal(id ID) Signal {
 		s.Dragging = c.active[0] == k && c.in.Down[0]
 		s.Released = c.releasedKey[0] == k
 		s.Clicked = s.Released && hot
-		s.DoubleClicked = s.Clicked && c.pressClicks[0] >= 2
+		s.DoubleClicked = s.Clicked && c.relClicks[0] >= 2
 		s.RightClicked = c.releasedKey[1] == k && hot
-		if c.active[0] == k || s.Released {
+		if s.Released { // the press that ended, even if a new one began in the same frame
+			s.DragDelta = [2]float32{c.in.MouseX - c.relPos[0][0], c.in.MouseY - c.relPos[0][1]}
+		} else if c.active[0] == k {
 			s.DragDelta = [2]float32{c.in.MouseX - c.pressPos[0][0], c.in.MouseY - c.pressPos[0][1]}
 		}
 	}
@@ -264,24 +268,29 @@ func (c *Context) SetScroll(id ID, x, y float64) {
 	b.scroll, b.scrollTgt = [2]float64{x, y}, [2]float64{x, y}
 }
 
-// ScrollTo sets the scroll target of id; the offset approaches it.
-//
-// Called while building, after Begin stepped the offsets, it marks the frame
-// as animating when the target (clamped to the content as of the last layout)
-// is not where the offset already is, so a frame loop that draws only while
-// Animating carries on to the target.
+// ScrollTo sets the scroll target of id; the offset approaches it. The target
+// is clamped to the content when the frame is laid out (End), and End marks the
+// frame animating if the offset is not there yet, so a frame loop that draws
+// only while Animating carries on to the target, also when this frame's own
+// content is what makes the target valid.
 func (c *Context) ScrollTo(id ID, x, y float64) {
-	b := &c.boxes[id]
-	b.scrollTgt = [2]float64{x, y}
-	for a := 0; a < 2; a++ {
-		if !b.scrollOn(a) {
-			continue
-		}
-		hi := math.Max(0, b.content[a]-float64(b.size[a]))
-		if math.Abs(math.Min(math.Max(b.scrollTgt[a], 0), hi)-b.scroll[a]) >= scrollEps {
-			c.animating = true
+	c.boxes[id].scrollTgt = [2]float64{x, y}
+	c.scrollSet = true
+}
+
+// scrollPending reports whether a scroll offset of a box built this frame is
+// still short of its (laid out, so clamped) target. End calls it after layout
+// when ScrollTo was used this frame.
+func (c *Context) scrollPending() bool {
+	for _, id := range c.order {
+		b := &c.boxes[id]
+		for a := 0; a < 2; a++ {
+			if b.scrollOn(a) && math.Abs(b.scrollTgt[a]-b.scroll[a]) >= scrollEps {
+				return true
+			}
 		}
 	}
+	return false
 }
 
 // ListRange declares box id a virtual list of rows fixed-height rows and

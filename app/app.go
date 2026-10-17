@@ -132,7 +132,22 @@ type App struct {
 
 	bench *benchRun
 	hook  func() // runs after every iteration of the loop (RunLiveResizeTest)
+
+	req frameRequester // where drawFrame asks for the next frame (the Win)
+
+	// Diagnostics (diag.go).
+	owedWhy     owedMask // why the last frame left another owed
+	beginFails  int      // draw attempts that found no frame to draw into
+	consecFails int      // ... in a row
+	lastFrameEv int64    // platform.Now of the last EvFrame, 0 = none
+	lastDrawT   int64    // platform.Now of the last frame drawn (of the start before the first)
+	lastDumpT   int64
+	verbose     bool
+	diagBuf     []byte
 }
+
+// frameRequester is the part of platform.Window that arms the next frame.
+type frameRequester interface{ RequestFrame() }
 
 // Quit ends the run after the current iteration.
 func (a *App) Quit() { a.done = true }
@@ -164,6 +179,11 @@ type StartupReport struct {
 
 // RunOptions are the optional parts of RunWith.
 type RunOptions struct {
+	// Verbose prints a one-line state dump (see StateLine) to stderr every
+	// second while a repaint is owed and no frame has been drawn for more than
+	// a second.
+	Verbose bool
+
 	// ExitFirst ends the run once the first frame is on glass (macOS: the
 	// presented feedback; elsewhere right after it is committed), for
 	// startup measurement.
@@ -194,6 +214,7 @@ func RunWith(cfg Config, b Builder, o RunOptions) (RunResult, error) {
 		return res, err
 	}
 	defer a.close()
+	a.verbose = o.Verbose
 	if !o.ExitFirst {
 		a.Win.SetFrameHandler(a.frameHandler)
 	}
@@ -218,7 +239,8 @@ func openWindowed(cfg Config, b Builder, st *StartupReport) (*App, error) {
 		st.ExecToMainMs = ms(age)
 	}
 
-	a := &App{cfg: cfg, b: b, tr: newTranslator(), p: newPacer(), lat: newSampler(8192)}
+	a := &App{cfg: cfg, b: b, tr: newTranslator(), p: newPacer(), lat: newSampler(8192), diagBuf: make([]byte, 0, 2048)}
+	a.lastDrawT = tEntry
 	if cfg.Width <= 0 || cfg.Height <= 0 {
 		return nil, errors.New("app: Config.Width and Height must be positive")
 	}
@@ -230,7 +252,7 @@ func openWindowed(cfg Config, b Builder, st *StartupReport) (*App, error) {
 	if err != nil {
 		return nil, fmt.Errorf("app: open window: %w", err)
 	}
-	a.Win = win
+	a.Win, a.req = win, win
 	t0 := platform.Now()
 	st.OpenMs = ms(t0 - tEntry)
 
@@ -320,7 +342,7 @@ func (a *App) loop() error {
 	for !a.done {
 		now := platform.Now()
 		if a.bench != nil && now > a.bench.deadline {
-			return fmt.Errorf("app: bench timed out after %v with %d of %d frames", a.bench.o.Timeout, a.bench.measured(), a.bench.o.Frames)
+			return a.benchTimeout(now)
 		}
 		evs := a.Win.Wait(a.timeout(now))
 		a.tr.wheelStep = a.UI.WheelStep
@@ -331,6 +353,9 @@ func (a *App) loop() error {
 			break
 		}
 		now = platform.Now()
+		if a.verbose {
+			a.dumpIfStalled(now)
+		}
 		draw, request := a.p.poll(now)
 		if request {
 			a.Win.RequestFrame()
@@ -381,6 +406,7 @@ func (a *App) onEvent(e *platform.Event) {
 		a.p.invalidate() // a worker published something
 	case platform.EvFrame:
 		a.frameEvents++
+		a.lastFrameEv = platform.Now()
 		a.p.frameEvent()
 	default:
 		var txt []byte
@@ -417,12 +443,15 @@ func (a *App) present(inHandler bool, passes int) bool {
 	ok := a.drawFrame(inHandler, passes)
 	now := platform.Now()
 	if ok {
+		a.consecFails, a.lastDrawT = 0, now
 		a.p.drawn(a.more)
 		if bn := a.bench; bn != nil {
 			bn.after(a)
 		}
 		return true
 	}
+	a.beginFails++
+	a.consecFails++
 	// Nothing was painted: the repaint is still owed, and so is the frame
 	// request that will bring the slot to draw it in.
 	a.p.failed(now)

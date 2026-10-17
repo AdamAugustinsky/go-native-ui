@@ -125,8 +125,11 @@ type Context struct {
 	releasedKey       [2]Key
 	pressPos          [2][2]float32
 	pressClicks       [2]uint8
+	relPos            [2][2]float32 // the origin and click count of the press that this frame's release ended
+	relClicks         [2]uint8
 	focusKey          Key
 	scrollApplied     [2]float32
+	scrollSet         bool // ScrollTo was called this frame (End decides whether the scroll is still moving)
 
 	// animation (see anim.go)
 	animating             bool
@@ -140,10 +143,12 @@ type Context struct {
 	nCursorBoxes, nDragBoxes int
 
 	// the final emit attempt of End (draw.go)
-	finalPass     bool
-	passGen       uint32  // atlas generation the glyph quads so far belong to
-	glyphQuads    []int32 // indices of the glyph quads emitted so far
-	droppedGlyphs bool
+	finalPass      bool
+	passGen        uint32  // atlas generation the glyph quads so far belong to
+	glyphQuads     []int32 // indices of the glyph quads emitted so far
+	droppedGlyphs  bool
+	overflowRun    int    // frames in a row that dropped glyphs
+	overflowFrames uint64 // ... in total
 
 	fonts []fontInfo
 
@@ -243,7 +248,7 @@ func (c *Context) Begin(in *Input, widthPx, heightPx int, scale, dt float32) {
 	c.fr.Swap()
 	c.fmtA.Reset()
 	c.prevOrder, c.order = c.order, c.prevOrder[:0]
-	c.animating = false
+	c.animating, c.scrollSet = false, false
 	c.nCursorBoxes, c.nDragBoxes = 0, 0
 	c.rHot = rate(c.Rates.Hot, dt)
 	c.rActive = rate(c.Rates.Active, dt)

@@ -254,3 +254,80 @@ func TestLivePacingVerdict(t *testing.T) {
 		}
 	}
 }
+
+// ---- re-review ----
+
+type fakeReq struct{ n int }
+
+func (f *fakeReq) RequestFrame() { f.n++ }
+
+// Inside AppKit's resize loop the main loop cannot run, so whatever is owed
+// beyond an animation needs the next frame armed by the handler path itself:
+// the settle frame after one resize that is then held still, and input that
+// waits for a frame of its own.
+func TestHandlerPathArmsOwedSettleAndCarriedInput(t *testing.T) {
+	l := &listScene{}
+	o, err := NewOffscreen(Config{}, 400, 300, 1, l)
+	if err != nil {
+		skipOrFail(t, "offscreen rendering", err)
+	}
+	defer o.Close()
+	req := &fakeReq{}
+	o.req = req
+	settle(o, 10)
+
+	// One resize, then the drag is held still: no further size change.
+	o.onEvent(ev(platform.EvResize, func(e *platform.Event) { e.W, e.H, e.Scale = 400, 3000, 1 }))
+	o.Frame() // the handler's frame at the new size
+	why := o.arm(true, o.UI.Animating(), false, 0)
+	if why&owedSettle == 0 || req.n != 1 {
+		t.Fatalf("after a resize the handler frame must arm the settle frame: owed %v, requests %d", why, req.n)
+	}
+	o.Frame() // the settle frame builds the rows for the new height
+	if l.last < 3000/20 {
+		t.Fatalf("settle frame built rows up to %d", l.last)
+	}
+	req.n = 0
+	if why := o.arm(true, o.UI.Animating(), false, 0); why != 0 || req.n != 0 {
+		t.Fatalf("nothing is owed after the settle frame, yet owed %v with %d requests", why, req.n)
+	}
+
+	// A transition that has to wait for the next frame.
+	o.tr.event(press(1, 1, 1, platform.ButtonLeft), nil)
+	o.tr.event(release(1, 1, 2, platform.ButtonLeft), nil)
+	o.Frame()
+	if why := o.arm(true, false, false, 0); why&owedInput == 0 || req.n != 1 {
+		t.Fatalf("carried input must arm the next frame: owed %v, requests %d", why, req.n)
+	}
+	// Outside the handler the request is always made.
+	req.n = 0
+	o.arm(false, false, false, 0)
+	if req.n != 1 {
+		t.Error("the main loop path must request the frame")
+	}
+}
+
+// The middle-up for a button that is already up carries a position, but it
+// must not move the pointer under a left press that is waiting in the same
+// frame: the press belongs to A, where it happened.
+func TestUnchangedButtonEventCannotMoveAPendingPress(t *testing.T) {
+	o, p := newPairRig(t)
+	o.onEvent(moveTo(50, 30))
+	settle(o, 10)
+	o.onEvent(press(50, 30, 1, platform.ButtonLeft))
+	o.onEvent(release(250, 30, 2, platform.ButtonMiddle)) // middle was up: no state change, but over B
+	o.Frame()
+	if !p.sa.A.Pressed || p.sa.B.Pressed {
+		t.Errorf("the left press happened over A: A %+v B %+v", p.sa.A, p.sa.B)
+	}
+	o.Frame()
+	if p.sa.B.Pressed || p.sa.B.Clicked {
+		t.Errorf("B: %+v", p.sa.B)
+	}
+	// Alone, the same event only moves the pointer.
+	tr := newTranslator()
+	tr.event(release(7, 8, 1, platform.ButtonMiddle), nil)
+	if !tr.in.Inside || tr.in.MouseX != 7 || tr.in.MouseY != 8 || tr.in.Released[ui.ButtonLeft] {
+		t.Errorf("position not taken: %+v", tr.in)
+	}
+}

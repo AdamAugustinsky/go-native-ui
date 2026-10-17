@@ -20,15 +20,74 @@ func (a *App) build(w, h int, dt float32) {
 	a.tr.endFrame()
 }
 
-// owed reports whether another frame must follow the one just built: while
-// something animates, for one frame after input with the pointer inside (hit
-// testing uses the previous layout, so what moved under a still pointer is
-// only hovered one frame later), after a resize wherever the pointer is
-// (ListRange, scrollbars and every other builder that reads rectangles read
-// the previous frame's, which had the old size), while events wait for their
-// own frame (translator.event), and while a bench runs.
-func (a *App) owed(animating, dirty bool) bool {
-	return animating || (dirty && a.tr.in.Inside) || a.settle || a.tr.pending() || (a.bench != nil && !a.scriptDone)
+// owedMask says why another frame must follow the one just built.
+type owedMask uint8
+
+const (
+	owedAnimating owedMask = 1 << iota // something animates
+	owedHover                          // input with the pointer inside: hit testing uses the previous layout, so what moved under a still pointer is only hovered one frame later
+	owedSettle                         // a resize: ListRange, scrollbars and every builder that reads rectangles read the previous frame's, which had the old size
+	owedInput                          // events wait for a frame of their own (translator.event)
+	owedBench                          // a bench is running
+)
+
+// String lists the reasons as letters (A H S I B), "-" for none.
+func (m owedMask) String() string { // for tests and logs; the dump uses appendTo
+	if m == 0 {
+		return "-"
+	}
+	var b [5]byte
+	n := 0
+	for i, c := range "AHSIB" {
+		if m&(1<<uint(i)) != 0 {
+			b[n] = byte(c)
+			n++
+		}
+	}
+	return string(b[:n])
+}
+
+// owedReasons computes why a frame is owed after the one just built.
+func (a *App) owedReasons(animating, dirty bool) owedMask {
+	var m owedMask
+	if animating {
+		m |= owedAnimating
+	}
+	if dirty && a.tr.in.Inside {
+		m |= owedHover
+	}
+	if a.settle {
+		m |= owedSettle
+	}
+	if a.tr.pending() {
+		m |= owedInput
+	}
+	if a.bench != nil && !a.scriptDone {
+		m |= owedBench
+	}
+	return m
+}
+
+// owed reports whether another frame must follow the one just built.
+func (a *App) owed(animating, dirty bool) bool { return a.owedReasons(animating, dirty) != 0 }
+
+// arm asks the platform for the next frame and returns why one is owed. The
+// request must precede the present (Wayland attaches the frame callback to the
+// commit). The OS modal loop (live resize) normally drives the handler by
+// itself, one call per size change, and an unneeded request would only add a
+// stray tick after the drag; but whatever is owed that no size change will
+// bring — the settle frame after a resize that is then held still, input
+// carried over to the next frame — needs the request as much as an animation
+// does, because the main loop cannot run until the modal loop ends.
+func (a *App) arm(inHandler, animating, dirty bool, start int64) owedMask {
+	why := a.owedReasons(animating, dirty)
+	if !inHandler || why != 0 {
+		a.req.RequestFrame()
+		a.p.requested(start)
+	} else {
+		a.p.requestedAt = 0
+	}
+	return why
 }
 
 // frameDT is the time step of the frame starting at now. The first frame,
@@ -90,16 +149,8 @@ func (a *App) drawFrame(inHandler bool, passes int) bool {
 		m.cpu2 = sysinfo.ThreadCPUNs()
 	}
 
-	// The request must precede the present (Wayland attaches the frame
-	// callback to the commit). In the OS modal loop a frame is only asked for
-	// while something animates: the resize itself drives the handler.
 	animating := a.UI.Animating()
-	if !inHandler || animating {
-		a.Win.RequestFrame()
-		a.p.requested(m.start)
-	} else {
-		a.p.requestedAt = 0
-	}
+	why := a.arm(inHandler, animating, dirty, m.start)
 	a.R.Encode(a.fr.CmdBuf, a.fr.Target, a.fr.W, a.fr.H, a.cfg.Clear, &a.list)
 	a.Surf.EndFrame(&a.fr)
 	m.commit = platform.Now()
@@ -107,8 +158,8 @@ func (a *App) drawFrame(inHandler bool, passes int) bool {
 		m.cpu3 = sysinfo.ThreadCPUNs()
 	}
 
-	// See owed.
-	a.more = a.owed(animating, dirty)
+	a.owedWhy = why
+	a.more = why != 0
 	a.fm = m
 	a.frames++
 	if a.bench == nil && evT != 0 {
