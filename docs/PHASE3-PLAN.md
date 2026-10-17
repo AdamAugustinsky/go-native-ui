@@ -74,3 +74,28 @@ DECISIONS D10, and the "Phase 3" section of
 6. **Windows and Linux:**
    - `ui`, `core`, `listbench` and the `rexlook` scene build everywhere;
    - CI renders `rexlook` offscreen on Windows and Linux (artifact PNGs for review by eye) and runs the `ui`/`core` tests.
+
+## Status (2026-10-17)
+
+Details: [measurements/phase3-macos.md](measurements/phase3-macos.md).
+
+1. **UI core correctness: passes.** `ui`/`core` unit tests run on all 8 CI jobs.
+2. **Zero allocations: passes.** 0 objects and 0 bytes on the MacBook for both:
+   - the `rexlook` pointer script (900 frames);
+   - `listbench` scrolling 1M rows (600 frames).
+
+   Also on Windows and Linux CI, with Linux helped by the patched go-text (D23).
+3. **1M-row scroll: passes.** 1.1–1.3 ms main-thread CPU per frame against < 4 ms, paced at 120 Hz.
+4. **Interactive `rexlook`: passes** (your hand test).
+   - Paced, idle presents nothing, and live resize redraws cleanly.
+   - Its frame costs ~1.3 ms of main-thread CPU, over the 1 ms aspiration; to profile.
+5. **Startup unchanged: passes.**
+   - Content-first 6 of 6, half-bounce 6 of 6.
+   - Exec → on glass median ~190 ms, the same as phase 2. It still misses D21's 150 ms on this MacBook.
+6. **Windows and Linux: passes.**
+   - Everything builds.
+   - CI renders `rexlook` and `listbench` offscreen on every OS.
+   - `ui`/`core`/`app` tests and the `listbench` allocation gate run there.
+
+**Not done:** step 6, worker-thread startup preparation (optional; carried over).
+

@@ -169,3 +169,51 @@ About the CPU figure: a CPU profile of the bench puts the UI build and region wa
 - The bench's CPU instrumentation is itself a visible cost (above); `FrameCPUus`/`MainThreadCPUus` read about 100–300 µs high.
 - **Wayland:** with server-side decorations (`decoMode == 2`) the app's drag map is not used; X11 and Windows ignore it. Cursors on Linux are still no-ops.
 - A `DECISIONS.md` entry for the cursor/drag-map design (the region lists as the only cursor mechanism, `App.SetCursor` removed) should be added by whoever owns that file.
+
+## Phase-3 results (MacBook M3 Pro, 2026-10-17)
+
+### Interactions
+You tested by hand and everything works:
+- hover;
+- focus dimming;
+- tab switching;
+- split side by side, split stacked, maximise, close and `+`;
+- divider drags;
+- cursors: the resize cursor across the whole divider band, the pointing hand over tabs and buttons, the arrow restored elsewhere, and the cursor held during a drag;
+- the titlebar: dragging empty space moves the window, tabs don't, double-click follows the system setting, and the traffic lights and edges work;
+- live resize, and Esc / ⌘Q.
+
+### Startup
+**BounceRec**, 6 launches through LaunchServices, Dock auto-hide temporarily off:
+- complete content at 267–304 ms after the launch request;
+- 0 partial frames, content-first in 6 of 6;
+- half-bounce passes 6 of 6, with content usually before the icon even starts to bounce (~285 ms).
+
+**`rexlook -exit-first`,** exec → on glass: 177–234 ms, median ~190 ms, under your load. Phase 2 was a median of ~189 ms, so this is unchanged (D21 budget: ≤ 150 ms; not met on this MacBook).
+
+### Animation
+Paced 120 Hz, exact allocation deltas. Runs were started with `open`, so the window was in front.
+
+| | Frames | Allocations | Main-thread CPU per frame | Build | Encode | Interval p50 / p99 |
+|---|---|---|---|---|---|---|
+| `rexlook -bench` (pointer script: hover, focus, divider drag) | 900 | 0 / 0 B / 0 GC | 1.27–1.30 ms | ~0.7 ms | ~0.24 ms | 8.33 / ~9.1 ms |
+| `listbench -bench` (1M rows; budget < 4 ms) | 600 | 0 / 0 B / 0 GC | 1.10–1.30 ms | 0.57–0.75 ms | ~0.2 ms | 8.33 / 8.6–9.9 ms |
+
+- **`rexlook` is over the 1 ms main-thread target** from phase 2, which phase 3 kept as an aspiration. Phase 2's static frame took 0.53–0.6 ms.
+- **The same scene builds in ~0.09 ms in a hot loop on the Mac mini.** The 7× gap on the MacBook is unexplained so far. A likely cause is low clocks for bursty 1 ms work every 8 ms, plus the bench's own CPU-clock reads. To profile.
+- **Runs started over SSH** stalled twice, because the frame source stops when your windows cover the bench window (D18). Runs with the window in front never stalled (5 of 5).
+
+### Idle
+`rexlook` in the background, so no pointer input:
+- 0.0 % CPU;
+- 10 ms of CPU over 30 s;
+- about 0.2 package-idle wakeups per second (`top` IDLEW).
+
+**Footprint:**
+- 50 MB, of which 21 MB is IOSurface (two full-size drawables), the same as phase 2.
+- 87 MB was seen right after interaction, before the drawables are reclaimed.
+
+### CI
+- Windows (amd64 and arm64) renders `rexlook` and `listbench` offscreen; the PNGs are artifacts, reviewed by eye.
+- The windowed `listbench` bench passes the allocation gate, paced on WARP.
+- Linux passes with the patched go-text (D23), including the exact zero-allocation scroll tests.
