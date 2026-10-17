@@ -182,6 +182,13 @@ func (h *hrn) click(x, y float32) {
 	h.frame()
 }
 
-func centre(r [4]float32) (float32, float32) { return (r[0] + r[2]) / 2, (r[1] + r[3]) / 2 }
-
 func (h *hrn) cur() *tab { return &h.x.tabs[h.x.active] }
+
+// tscript is a script that also runs the frame its input is for.
+type tscript struct {
+	script
+	frame func()
+}
+
+func (s *tscript) step()       { s.script.step(); s.frame() }
+func (s *tscript) structural() { s.script.structural(); s.frame() }

@@ -7,8 +7,6 @@ import "gonativeui/ui"
 // with precise deltas, as a trackpad flick, so each frame builds rows it has
 // never built. On top of that:
 //
-//	frames 30, 60    jumps to row 500000 and back to 0: the box pool grows to its peak
-//	                 here, before the measured window (ui.Context.Reserve does not size it)
 //	frame 200        jump to row 900000
 //	frame 290        click: selects the hovered row
 //	frames 300-359   the wheel stops and Down moves the selection (and scrolls it into view)
@@ -36,10 +34,6 @@ func (l *listApp) benchScript(warm, total int) func(frame int, in *ui.Input) boo
 			in.AddScroll(0, -float32(l.scrollRows)*l.rowPx, true) // toward the end
 		}
 		switch f {
-		case 30:
-			l.jump = 500000
-		case 60:
-			l.jump = 0
 		case 200:
 			l.jump = 900000
 		case 420:

@@ -293,11 +293,18 @@ func (r *Rex) drawFill(c *ui.Context, kg *keyGen, slot int8, d [4]float32, ft fl
 	}
 }
 
-// drawDividers builds the grab areas of the gutters between panes. A divider
-// shows a slim handle while the pointer is on it or it is dragged.
+// gutterGrabPt is the least width, in points, of a divider's grab area across
+// the gutter.
+const gutterGrabPt = 13
+
+// drawDividers builds the grab areas of the gutters between panes: a box
+// centred on the gutter, at least gutterGrabPt wide across it and running the
+// whole length of the split. It carries the resize cursor, so the window shows
+// it over the whole box (and, through the active box, wherever the pointer
+// goes while the divider is dragged). A divider shows a slim handle while the
+// pointer is on it or it is dragged.
 func (r *Rex) drawDividers(c *ui.Context, t *tab) {
 	s := r.scale
-	grab := 3 * s
 	for i := range t.nodes {
 		n := &t.nodes[i]
 		if !n.used || n.leaf {
@@ -305,16 +312,24 @@ func (r *Rex) drawDividers(c *ui.Context, t *tab) {
 		}
 		key := divKey(n.uid)
 		g := n.gut
-		cur := CursorResizeEW
-		x0, y0, x1, y1 := g[0]-grab, n.rect[1], g[2]+grab, n.rect[3]
+		cur := ui.CursorResizeEW
+		x0, y0, x1, y1 := g[0], n.rect[1], g[2], n.rect[3]
 		if n.axis == ui.AxisY {
-			cur = CursorResizeNS
-			x0, y0, x1, y1 = n.rect[0], g[1]-grab, n.rect[2], g[3]+grab
+			cur = ui.CursorResizeNS
+			x0, y0, x1, y1 = n.rect[0], g[1], n.rect[2], g[3]
+		}
+		// Grow across the gutter to the grab width, evenly on both sides.
+		if n.axis == ui.AxisY {
+			grow := max(gutterGrabPt*s-(y1-y0), 6*s) / 2
+			y0, y1 = snap(y0-grow), snap(y1+grow)
+		} else {
+			grow := max(gutterGrabPt*s-(x1-x0), 6*s) / 2
+			x0, x1 = snap(x0-grow), snap(x1+grow)
 		}
 		show := max(c.HotTOf(key), c.ActiveTOf(key))
 		at(c, x0, y0, x1-x0, y1-y0)
+		c.NextCursor(cur)
 		c.BoxKeyed(ui.Clickable|ui.HotAnimation|ui.ActiveAnimation|fl, key, nil)
-		r.addCursor(key, cur)
 		if show > 0.004 {
 			// the handle: a short rounded bar centred in the gutter
 			hx, hy := (g[0]+g[2])/2, (g[1]+g[3])/2

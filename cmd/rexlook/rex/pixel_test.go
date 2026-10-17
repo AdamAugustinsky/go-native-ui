@@ -88,11 +88,6 @@ func (r *Rex) paneRect(kind paneKind) [4]float32 {
 	return [4]float32{}
 }
 
-func (r *Rex) btnCentre(rc [4]float32, b int) (float32, float32) {
-	dx := [numBtns]float32{181.5, 133.5, 83, 37.5}
-	return rc[2] - dx[b]*r.k, rc[1] + 36.5*r.k + r.k
-}
-
 // The initial state at the reference size, as the window loop draws it.
 func TestRenderInitial(t *testing.T) {
 	g, x := newRig(t, WindowWidthPt, WindowHeightPt, 2)

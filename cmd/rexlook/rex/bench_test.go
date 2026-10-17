@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"gonativeui/cmd/rexlook/rex/rexrig"
+	"gonativeui/ui"
 )
 
 // Cost of one frame's Begin + Build + End (layout, hit test, animation and
@@ -43,7 +44,7 @@ func BenchmarkFrameIdle(b *testing.B) {
 
 func BenchmarkFramePointerScript(b *testing.B) {
 	g, x := benchRig(b)
-	s := &script{x: x, in: &g.In, frame: func() { g.Frame(x) }}
+	s := &tscript{script: script{x: x, in: &g.In}, frame: func() { g.Frame(x) }}
 	for i := 0; i < 1800; i++ {
 		s.step()
 	}
@@ -58,7 +59,7 @@ func BenchmarkFramePointerScript(b *testing.B) {
 
 func BenchmarkFrameLayoutScript(b *testing.B) {
 	g, x := benchRig(b)
-	s := &script{x: x, in: &g.In, frame: func() { g.Frame(x) }}
+	s := &tscript{script: script{x: x, in: &g.In}, frame: func() { g.Frame(x) }}
 	for i := 0; i < 1920; i++ {
 		s.structural()
 	}
@@ -87,4 +88,23 @@ func BenchmarkFrameLiveResize(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		step()
 	}
+}
+
+// The pointer map the window loop hands to the platform after every frame:
+// cursor regions, the active cursor and the titlebar drag map.
+func BenchmarkRegions(b *testing.B) {
+	g, x := benchRig(b)
+	g.Frames(x, 60)
+	var cr []ui.CursorRegion
+	var dr []ui.DragRegion
+	cr, dr = g.C.PointerRegions(cr, dr)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		cr, dr = g.C.PointerRegions(cr, dr)
+		_ = g.C.ActiveCursor()
+	}
+	b.StopTimer()
+	b.ReportMetric(float64(len(cr)), "cursor-regions")
+	b.ReportMetric(float64(len(dr)), "drag-regions")
 }

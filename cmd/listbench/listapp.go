@@ -4,7 +4,6 @@ import (
 	"math"
 
 	"gonativeui/app"
-	"gonativeui/platform"
 	"gonativeui/text"
 	"gonativeui/ui"
 )
@@ -348,9 +347,7 @@ func (l *listApp) scrollbar(c *ui.Context, list ui.ID) {
 	c.NextPos(c.Pt(2), float32(top))
 	c.NextBG(colThumb)
 	c.NextRadius(c.Pt(4))
-	thumb := c.Box(ui.DrawBackground|ui.Clickable|ui.FloatingX|ui.FloatingY|ui.HotAnimation|ui.DrawHotEffects, "thumb")
-	if c.Signal(thumb).Hovering || l.dragging {
-		l.a.SetCursor(platform.CursorPointer)
-	}
+	c.NextCursor(ui.CursorPointer) // also while the thumb is dragged
+	c.Box(ui.DrawBackground|ui.Clickable|ui.FloatingX|ui.FloatingY|ui.HotAnimation|ui.DrawHotEffects, "thumb")
 	c.Pop()
 }

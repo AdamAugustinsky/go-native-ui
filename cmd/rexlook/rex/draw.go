@@ -86,6 +86,7 @@ func (r *Rex) iconButton(c *ui.Context, key ui.Key, id iconID, cx, cy, hit float
 	bx, by := snap(cx-hit/2), snap(cy-hit/2)
 	if enabled {
 		flags |= ui.Clickable | ui.HotAnimation | ui.ActiveAnimation
+		c.NextCursor(ui.CursorPointer)
 		c.NextBG(colA(0x2A2030, 0.08*t+0.07*pressed))
 	} else {
 		c.PushOpacity(0.4)
@@ -95,9 +96,6 @@ func (r *Rex) iconButton(c *ui.Context, key ui.Key, id iconID, cx, cy, hit float
 	btn := c.BoxKeyed(flags, key, nil)
 	if !enabled {
 		c.PopOpacity()
-	}
-	if enabled {
-		r.addCursor(key, CursorPointer)
 	}
 	// The icon is placed against the parent's grid, not the button's.
 	c.Push(btn)
@@ -131,6 +129,11 @@ func (r *Rex) drawTitlebar(c *ui.Context) {
 	tabW = max(min(tabW, maxTabWRef), 40)
 	tabX := func(i int) float32 { return (capsuleL + tabInset + float32(i)*tabW) * k }
 	y0, y1 := snap(16*k), snap(76*k)
+
+	// The titlebar band moves the window: a drag area under the tabs and
+	// buttons, which keep their presses (ui.Context.DragRegions).
+	at(c, 0, 0, W, snap(TitlebarPt*r.scale))
+	c.BoxKeyed(ui.WindowDrag|fl, ui.KeyN(keyBar, 99), nil)
 	capsule := [4]float32{snap(capsuleL * k), snap(12 * k), snap(tabX(n) + tabInset*k), snap(80 * k)}
 	r.capsule = capsule
 	for i := 0; i < n; i++ {
@@ -217,8 +220,8 @@ func (r *Rex) drawTab(c *ui.Context, i int, act, absX, tabW float32) {
 	at(c, rc[0]-ox, rc[1]-oy, rc[2]-rc[0], rc[3]-rc[1])
 	c.NextBG(colA(0xFFFFFF, 0.55*hot*(1-act)))
 	c.NextRadius(30 * k)
+	c.NextCursor(ui.CursorPointer)
 	tb := c.BoxKeyed(ui.DrawBackground|ui.Clip|ui.Clickable|ui.HotAnimation|ui.ActiveAnimation|fl, key, nil)
-	r.addCursor(key, CursorPointer)
 	c.Push(tb)
 	defer c.Pop()
 	tx, ty := rc[0], rc[1]

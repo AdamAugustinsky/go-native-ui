@@ -13,6 +13,23 @@ import (
 
 // ---- geometry helpers ----
 
+// cursor is the cursor the window would show at the pointer after the last
+// frame: that of the box holding the mouse button, else of the topmost cursor
+// region under the pointer.
+func (h *hrn) cursor() ui.Cursor {
+	if c := h.c.ActiveCursor(); c != ui.CursorArrow {
+		return c
+	}
+	regs := h.c.CursorRegions(nil)
+	for i := len(regs) - 1; i >= 0; i-- {
+		r := regs[i].Rect
+		if h.in.MouseX >= r[0] && h.in.MouseX < r[2] && h.in.MouseY >= r[1] && h.in.MouseY < r[3] {
+			return regs[i].Cursor
+		}
+	}
+	return ui.CursorArrow
+}
+
 func (h *hrn) tabRect(i int) [4]float32 { return h.x.tabRects[i] }
 
 // paneSlot returns the slot of the pane of the given kind in the current tab.
@@ -290,7 +307,7 @@ func TestHoverTab(t *testing.T) {
 	if !hasFill() {
 		t.Error("a hovered inactive tab shows no hover fill")
 	}
-	if got := h.x.Cursor(); got != CursorPointer {
+	if got := h.cursor(); got != ui.CursorPointer {
 		t.Errorf("cursor over a tab = %v, want the pointer", got)
 	}
 	h.settle()
@@ -307,7 +324,7 @@ func TestHoverTab(t *testing.T) {
 	}
 	h.move(5, 700)
 	h.settle()
-	if hasFill() || h.x.Cursor() != CursorArrow {
+	if hasFill() || h.cursor() != ui.CursorArrow {
 		t.Error("hover state stays after the pointer left")
 	}
 }
@@ -473,8 +490,8 @@ func TestDragVerticalDivider(t *testing.T) {
 	h.move(cx, cy)
 	h.frame()
 	h.frame()
-	if h.x.Cursor() != CursorResizeEW {
-		t.Errorf("cursor over the vertical divider = %v", h.x.Cursor())
+	if h.cursor() != ui.CursorResizeEW {
+		t.Errorf("cursor over the vertical divider = %v", h.cursor())
 	}
 	h.in.SetButton(ui.ButtonLeft, true, 1)
 	h.frame()
@@ -485,8 +502,8 @@ func TestDragVerticalDivider(t *testing.T) {
 		if got := h.rectOf(agent)[2] - x1; math.Abs(float64(got-dx)) > 1 {
 			t.Errorf("dragged by %v: divider moved %v", dx, got)
 		}
-		if h.x.Cursor() != CursorResizeEW {
-			t.Errorf("cursor while dragging = %v", h.x.Cursor())
+		if h.cursor() != ui.CursorResizeEW {
+			t.Errorf("cursor while dragging = %v", h.cursor())
 		}
 		if got := h.rectOf(snake)[0] - h.rectOf(agent)[2]; got != 14 {
 			t.Errorf("gutter %v while dragging", got)
@@ -541,8 +558,8 @@ func TestDragHorizontalDivider(t *testing.T) {
 	h.move(cx, cy)
 	h.frame()
 	h.frame()
-	if h.x.Cursor() != CursorResizeNS {
-		t.Errorf("cursor over the horizontal divider = %v", h.x.Cursor())
+	if h.cursor() != ui.CursorResizeNS {
+		t.Errorf("cursor over the horizontal divider = %v", h.cursor())
 	}
 	h.in.SetButton(ui.ButtonLeft, true, 1)
 	h.frame()
@@ -671,33 +688,33 @@ func TestCursorHints(t *testing.T) {
 	agent := h.paneSlot(kindAgent)
 	W := float32(h.w)
 	k := h.x.k
-	check := func(name string, x, y float32, want Cursor) {
+	check := func(name string, x, y float32, want ui.Cursor) {
 		t.Helper()
 		h.move(x, y)
 		h.settle()
-		if got := h.x.Cursor(); got != want {
+		if got := h.cursor(); got != want {
 			t.Errorf("%s: cursor %v, want %v", name, got, want)
 		}
 	}
-	check("window background", 4, 4, CursorArrow)
+	check("window background", 4, 4, ui.CursorArrow)
 	bx, by := h.blank(agent)
-	check("pane body", bx, by, CursorArrow)
+	check("pane body", bx, by, ui.CursorArrow)
 	tx, ty := centre(h.tabRect(1))
-	check("tab", tx, ty, CursorPointer)
-	check("+", W-46.5*k, 45*k, CursorPointer)
-	check("command", W-115.5*k, 45*k, CursorPointer)
+	check("tab", tx, ty, ui.CursorPointer)
+	check("+", W-46.5*k, 45*k, ui.CursorPointer)
+	check("command", W-115.5*k, 45*k, ui.CursorPointer)
 	mx, my := h.btn(agent, btnMax)
-	check("maximise button", mx, my, CursorPointer)
+	check("maximise button", mx, my, ui.CursorPointer)
 	g, _ := h.rootDivider()
-	check("vertical divider", (g[0]+g[2])/2, (g[1]+g[3])/2, CursorResizeEW)
-	check("vertical divider, grab margin", g[0]-3, (g[1]+g[3])/2, CursorResizeEW)
+	check("vertical divider", (g[0]+g[2])/2, (g[1]+g[3])/2, ui.CursorResizeEW)
+	check("vertical divider, grab margin", g[0]-3, (g[1]+g[3])/2, ui.CursorResizeEW)
 	var hg [4]float32
 	for i := range h.cur().nodes {
 		if n := &h.cur().nodes[i]; n.used && !n.leaf && n.axis == ui.AxisY {
 			hg = n.gut
 		}
 	}
-	check("horizontal divider", (hg[0]+hg[2])/2, (hg[1]+hg[3])/2, CursorResizeNS)
+	check("horizontal divider", (hg[0]+hg[2])/2, (hg[1]+hg[3])/2, ui.CursorResizeNS)
 }
 
 // Degenerate windows (minimised, a sliver, a few pixels) build without panics.
@@ -766,6 +783,99 @@ func TestIdleWhenSettled(t *testing.T) {
 		h.frame()
 		if h.c.Animating() {
 			t.Fatal("animating at rest after a focus change")
+		}
+	}
+}
+
+// dragAt decides a press the way the platform does with the map the window
+// loop hands it: the last rectangle that contains the point.
+func dragAt(regs []ui.DragRegion, x, y float32) bool {
+	for i := len(regs) - 1; i >= 0; i-- {
+		r := regs[i].Rect
+		if x >= r[0] && x < r[2] && y >= r[1] && y < r[3] {
+			return !regs[i].Block
+		}
+	}
+	return false
+}
+
+// The titlebar band moves the window except where a tab or a button is.
+func TestTitlebarDragMap(t *testing.T) {
+	for _, scale := range []float32{1, 2} {
+		h := newHarness(t, WindowWidthPt, WindowHeightPt, scale)
+		regs := h.c.DragRegions(nil)
+		if len(regs) < 5 {
+			t.Fatalf("scale %v: %d drag regions %v", scale, len(regs), regs)
+		}
+		bar := scale * TitlebarPt
+		W := float32(h.w)
+		k := h.x.k
+		for _, c := range []struct {
+			name string
+			x, y float32
+			want bool
+		}{
+			{"band, left of the host block", 100 * scale, 10 * scale, true},
+			{"band, right of the capsule", W - 150*scale, 23 * scale, true},
+			{"band, above the capsule", W / 2, 2 * scale, true},
+			{"band, last row, under the tabs", 330 * scale, bar - 1, true},
+			{"host block text", 130 * scale, 22 * scale, true},
+			{"band between capsule and +, last row", W - 180*scale, bar - 1, true},
+			{"tab 1", 330 * scale, 23 * scale, false},
+			{"tab 2", 330*scale + (h.tabRect(1)[0] - h.tabRect(0)[0]), 23 * scale, false},
+			{"+", W - 46.5*k, 45 * k, false},
+			{"command", W - 115.5*k, 45 * k, false},
+			{"just below the band", 330 * scale, bar + 1, false},
+			{"pane body", 400 * scale, 300 * scale, false},
+		} {
+			if got := dragAt(regs, c.x, c.y); got != c.want {
+				t.Errorf("scale %v, %s (%v,%v): drag %v, want %v", scale, c.name, c.x, c.y, got, c.want)
+			}
+		}
+	}
+}
+
+// A divider's grab area is at least 8 pt across and centred on the gutter,
+// and spans the whole split, at every scale.
+func TestDividerGrabArea(t *testing.T) {
+	for _, scale := range []float32{1, 2, 3} {
+		h := newHarness(t, WindowWidthPt, WindowHeightPt, scale)
+		regs := h.c.CursorRegions(nil)
+		found := 0
+		for i := range h.cur().nodes {
+			n := &h.cur().nodes[i]
+			if !n.used || n.leaf {
+				continue
+			}
+			want, ax := ui.CursorResizeEW, 0
+			if n.axis == ui.AxisY {
+				want, ax = ui.CursorResizeNS, 1
+			}
+			cx, cy := centre(n.gut)
+			var got [4]float32
+			ok := false
+			for _, r := range regs {
+				if r.Cursor == want && cx >= r.Rect[0] && cx < r.Rect[2] && cy >= r.Rect[1] && cy < r.Rect[3] {
+					got, ok = r.Rect, true
+				}
+			}
+			if !ok {
+				t.Fatalf("scale %v: no %v region over the gutter %v", scale, want, n.gut)
+			}
+			found++
+			if w := got[ax+2] - got[ax]; w < 8*scale {
+				t.Errorf("scale %v: grab area %v pt across, want at least 8", scale, w/scale)
+			}
+			if mid, gm := (got[ax]+got[ax+2])/2, (n.gut[ax]+n.gut[ax+2])/2; mid < gm-1 || mid > gm+1 {
+				t.Errorf("scale %v: grab area %v is not centred on the gutter %v", scale, got, n.gut)
+			}
+			other := 1 - ax
+			if got[other] > n.rect[other]+1 || got[other+2] < n.rect[other+2]-1 {
+				t.Errorf("scale %v: grab area %v does not span the split %v", scale, got, n.rect)
+			}
+		}
+		if found != 2 {
+			t.Errorf("scale %v: %d dividers, want 2", scale, found)
 		}
 	}
 }

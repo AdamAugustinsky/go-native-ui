@@ -4,13 +4,17 @@
 // can be focused, split, maximised, closed and resized.
 //
 // It is OS-independent: it draws through ui.Context and the text system it is
-// given, never touches the platform and renders the same on every backend.
+// given and renders the same on every backend. Only app.go, the glue to package
+// app, knows about the window loop; the scene never touches the platform.
 // The window loop owns the frame (see package app):
 //
 //	x := rex.New(ts, scale)       // fonts and icons at the backing scale
 //	x.AttachRenderer(renderer)    // icon atlas texture (and again if the renderer is recreated)
 //	each frame: c.Begin(in, w, h, scale, dt); x.Build(c); c.End(&list)
-//	after the frame: platformSetCursor(x.Cursor())
+//	after the frame: hand c.CursorRegions, c.ActiveCursor and c.DragRegions to the window
+//
+// Package app does all of that for a *Rex built with NewApp (it implements
+// app.Builder and app.Initer, see app.go); Config is its window.
 //
 // Lengths are written in the reference screenshot's pixels (2×) and scaled by
 // c.Scale()/2, so the look is exact at scale 2 and scales elsewhere.
@@ -50,16 +54,6 @@ type TextSystem interface {
 
 var _ TextSystem = (*text.System)(nil)
 
-// Cursor is the pointer shape the window should show.
-type Cursor uint8
-
-const (
-	CursorArrow Cursor = iota
-	CursorPointer
-	CursorResizeEW
-	CursorResizeNS
-)
-
 // Rex is the state of the scene: the tabs and panes, animations that are not
 // stored in the ui context, and the fonts and icons.
 type Rex struct {
@@ -97,31 +91,29 @@ type Rex struct {
 	capsule  [4]float32
 	tabRects [maxTabs][4]float32
 	pill     [4]float32
-
-	curs   [maxCursorKeys]cursorEnt
-	nCurs  int
-	hotKey ui.Key
-	actKey ui.Key
 }
 
 type fontMet struct{ h, off float32 }
-
-type cursorEnt struct {
-	key ui.Key
-	cur Cursor
-}
-
-const maxCursorKeys = 64
 
 // New creates the scene for a window at scale pixels per point. ts must stay
 // valid for the life of the Rex and is used from the thread that builds
 // frames.
 func New(ts TextSystem, scale float32) *Rex {
-	r := &Rex{ts: ts, nextUID: 1}
+	r := NewApp()
+	r.init(ts, scale)
+	return r
+}
+
+// NewApp returns a Rex that the window loop (package app) finishes in Init,
+// once the text system and the renderer exist; set Traffic before that if the
+// scene draws the traffic lights itself.
+func NewApp() *Rex { return &Rex{nextUID: 1} }
+
+func (r *Rex) init(ts TextSystem, scale float32) {
+	r.ts = ts
 	r.ic = newIcons()
 	r.setScale(scale)
 	r.initTabs()
-	return r
 }
 
 // AttachRenderer gives the icon atlas a texture on u (the renderer) and
@@ -134,35 +126,6 @@ func (r *Rex) CellAdvancePt() float64 { return float64(r.adv) / float64(r.scale)
 func (r *Rex) RowPitchPt() float64    { return float64(r.rowPitch) / float64(r.scale) }
 func (r *Rex) MonoFace() string       { return r.monoFace }
 func (r *Rex) MonoSizePt() float64    { return float64(r.monoSizePt) }
-
-// Cursor is the pointer shape for the state of the last Build: resize arrows
-// on a divider (also while it is dragged), a pointing hand on tabs and
-// buttons, the arrow elsewhere.
-func (r *Rex) Cursor() Cursor {
-	if r.actKey != 0 {
-		return r.cursorOf(r.actKey)
-	}
-	return r.cursorOf(r.hotKey)
-}
-
-func (r *Rex) cursorOf(k ui.Key) Cursor {
-	if k == 0 {
-		return CursorArrow
-	}
-	for i := 0; i < r.nCurs; i++ {
-		if r.curs[i].key == k {
-			return r.curs[i].cur
-		}
-	}
-	return CursorArrow
-}
-
-func (r *Rex) addCursor(k ui.Key, cur Cursor) {
-	if r.nCurs < len(r.curs) {
-		r.curs[r.nCurs] = cursorEnt{k, cur}
-		r.nCurs++
-	}
-}
 
 func (r *Rex) uid() uint32 {
 	r.nextUID++
@@ -301,7 +264,6 @@ func btnKey(paneUID uint32, b int) ui.Key { return ui.KeyN(paneKey(paneUID), uin
 func (r *Rex) Build(c *ui.Context) {
 	w, h := c.Size()
 	if w <= 0 || h <= 0 || c.Scale() <= 0 {
-		r.nCurs, r.hotKey, r.actKey = 0, 0, 0
 		return // minimised or not yet laid out: nothing to draw
 	}
 	if s := c.Scale(); s != r.scale {
@@ -312,10 +274,7 @@ func (r *Rex) Build(c *ui.Context) {
 		r.lastW, r.lastH = w, h
 	}
 	r.fld.build(w, h, r.k)
-	r.nCurs = 0
 
 	r.update(c)
 	r.draw(c)
-
-	r.hotKey, r.actKey = c.HotKey(), c.ActiveKey()
 }
