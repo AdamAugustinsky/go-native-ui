@@ -339,3 +339,29 @@ func TestRingStress(t *testing.T) {
 	}
 	t.Logf("%d messages, producers hit a full ring %d times", got, full.Load())
 }
+
+func TestPoolReserve(t *testing.T) {
+	p := NewPool(4)
+	var hs []Handle
+	for i := 0; i < 3; i++ {
+		hs = append(hs, p.Alloc())
+	}
+	p.Reserve(5000)
+	for i, h := range hs { // existing slots survive
+		if !p.Valid(h) || p.Handle(h.Index()) != h || int(h.Index()) != i {
+			t.Fatalf("slot %d lost by Reserve", i)
+		}
+	}
+	var m0, m1 runtime.MemStats
+	runtime.ReadMemStats(&m0)
+	for i := 0; i < 4000; i++ {
+		p.Alloc()
+	}
+	for i := uint32(0); i < 4003; i++ {
+		p.FreeIndex(i)
+	}
+	runtime.ReadMemStats(&m1)
+	if n := m1.Mallocs - m0.Mallocs; n != 0 {
+		t.Errorf("%d allocations growing to 4003 slots after Reserve(5000)", n)
+	}
+}

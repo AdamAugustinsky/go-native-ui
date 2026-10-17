@@ -51,8 +51,9 @@ type Window struct {
 	relink     bool    // the CAMetalDisplayLink was replaced by a view link for the live resize
 	frameLayer objc.ID // the CAMetalLayer given to SetFrameSource, to re-attach a metal link to
 
-	cursor    Cursor
-	pointerIn bool // the pointer is over the view (tracking area enter/exit and mouse events)
+	curs      cursorMap // cursor regions and override (SetCursorRegions)
+	drags     dragMap   // titlebar drag areas (SetDragRegions)
+	pointerIn bool      // the pointer is over the view (tracking area enter/exit and mouse events)
 }
 
 const wakeSubtype = 0x4E55 // our NSEventTypeApplicationDefined subtype
@@ -167,7 +168,15 @@ var (
 	selDiscardCursorRects = objc.Sel("discardCursorRects")
 	selAddCursorRect      = objc.Sel("addCursorRect:cursor:")
 	selInvalidateCursors  = objc.Sel("invalidateCursorRectsForView:")
-	selSetContentMinSize  = objc.Sel("setContentMinSize:")
+
+	selMouseDownCanMoveWindow = objc.Sel("mouseDownCanMoveWindow")
+	selMouseDown              = objc.Sel("mouseDown:")
+	selHitTest                = objc.Sel("hitTest:")
+	selPerformWindowDrag      = objc.Sel("performWindowDragWithEvent:")
+	selClickCount             = objc.Sel("clickCount")
+	selZoom                   = objc.Sel("zoom:")
+	selMiniaturize            = objc.Sel("miniaturize:")
+	selSetContentMinSize      = objc.Sel("setContentMinSize:")
 
 	clsNSArray, clsNSAttributedString objc.ID
 	clsNSDate                         objc.ID // cached: objc.Cls allocates, and Wait runs every frame
@@ -206,6 +215,8 @@ func registerClasses() {
 		{Sel: selDisplayLinkFired, Types: "v@:@"},
 		{Sel: selMetalLinkUpdate, Types: "v@:@@"},
 		{Sel: selResetCursorRects, Types: "v@:"},
+		{Sel: selMouseDownCanMoveWindow, Types: "c@:"},
+		{Sel: selMouseDown, Types: "v@:@"},
 	})
 	delegateClass = objc.NewClass("GNUIWindowDelegate", objc.Cls("NSObject"), []string{"NSWindowDelegate"}, imp, []objc.Method{
 		{Sel: selShouldClose, Types: "c@:@"},
@@ -220,6 +231,11 @@ func registerClasses() {
 	clsNSArray, clsNSAttributedString = objc.Cls("NSArray"), objc.Cls("NSAttributedString")
 	clsMetalLink = objc.Cls("CAMetalDisplayLink") // macOS 14+
 	clsRunLoop = objc.Cls("NSRunLoop")
+}
+
+// loadCursors caches the NSCursor singletons. It runs once NSApplication
+// exists: before that +arrowCursor and +IBeamCursor return nil.
+func loadCursors() {
 	clsCursor := objc.Cls("NSCursor")
 	for c, name := range [numCursors]string{
 		CursorArrow:    "arrowCursor",
@@ -273,6 +289,7 @@ func Open(o Options) (*Window, error) {
 	w := &Window{q: newEventQueue(), scale: 1, linkPaused: true}
 	w.app = objc.Send(objc.Cls("NSApplication"), selSharedApplication)
 	objc.Send1(w.app, selSetActivation, 0) // NSApplicationActivationPolicyRegular
+	loadCursors()
 	markOpen("NSApplication")
 
 	width, height := float64(o.Width), float64(o.Height)
@@ -519,6 +536,17 @@ func (w *Window) handle(ev objc.ID) {
 			}
 		}
 		w.pointerIn = true
+		if typ == 1 && w.drags.at(e.X, e.Y) && w.hitsView(lx, ly) {
+			// A press on the titlebar drag map belongs to the window: the
+			// double-click action, or a drag by the window server. The app
+			// never sees it and AppKit's titlebar views do not get it.
+			if objc.Send(ev, selClickCount) >= 2 {
+				w.titlebarDoubleClick()
+			} else {
+				objc.Send1(w.win, selPerformWindowDrag, uintptr(ev))
+			}
+			return
+		}
 		w.q.push(e)
 	case 8: // mouse entered (the tracking area)
 		w.pointerIn = true
@@ -631,13 +659,14 @@ func impHandler(c *ffi.CB) {
 			w.exitLiveResize()
 		}
 	case selResetCursorRects:
-		// The view's bounds show the current cursor, the arrow included, so
-		// every change is one rect replacing another.
 		if w != nil {
-			b := objc.SendRect(w.view, selBounds)
-			objc.F.Reset().Arg(uintptr(w.view)).Arg(uintptr(selAddCursorRect)).ArgRect(b.X, b.Y, b.W, b.H).
-				Arg(uintptr(cursorObjs[w.cursor])).Call(objc.MsgSend)
+			w.addCursorRects()
 		}
+	case selMouseDown:
+		// Swallowed: a press the app did not take must not fall through to the
+		// window's titlebar handling (which would start a window drag).
+	case selMouseDownCanMoveWindow:
+		c.RetBool(false) // a press in the view is the app's; window drags are explicit (SetDragRegions)
 	case selDisplayLinkFired, selMetalLinkUpdate:
 		if w == nil {
 			return
@@ -842,25 +871,108 @@ func (w *Window) exitLiveResize() {
 	}
 }
 
-// SetCursor sets the pointer shape over the content. It does nothing when
-// the shape is unchanged, so it can be called every frame.
+// SetCursorRegions sets the cursor regions: where in the content the pointer
+// shows which shape (later entries are on top). Everything outside them shows
+// the arrow. Main thread. It copies into storage the window owns and does
+// nothing when the list equals the previous one, so it can be called every
+// frame without allocating.
 //
-// AppKit's cursor rects are the only mechanism: the view's bounds carry the
-// current cursor (resetCursorRects), and AppKit applies it as the pointer
-// moves, restores the arrow outside the view, and cooperates with the
-// titlebar and other views. On a change the rects are rebuilt at once
-// (discard + reset), not lazily: a lazily rebuilt stale rect reset the
-// cursor on the next mouse move. [NSCursor set] alone is not used either:
-// AppKit ignores a repeated set of the instance it believes is current,
-// which left the arrow unrestorable.
-func (w *Window) SetCursor(c Cursor) {
-	if c >= numCursors || c == w.cursor {
-		return
+// AppKit's cursor rects are the only mechanism, one rect per region, as
+// NSSplitView does for its dividers: AppKit applies them as the pointer moves
+// (so a divider's cursor needs no mouse event from us), restores the arrow
+// outside them, and cooperates with the titlebar and other views. A change
+// rebuilds the rects at once (discard + reset + invalidate), not lazily: a
+// lazily rebuilt stale rect reset the cursor on the next mouse move. [NSCursor
+// set] alone is not used: AppKit ignores a repeated set of the instance it
+// believes is current, which left the arrow unrestorable. See addCursorRects
+// for how overlapping regions are resolved.
+func (w *Window) SetCursorRegions(r []CursorRegion) {
+	if w.curs.setRegions(r) && w.curs.override == CursorArrow {
+		w.rebuildCursorRects()
 	}
-	w.cursor = c
+}
+
+// SetCursorOverride shows c over the whole content while it is not
+// CursorArrow, whatever the regions say (a drag keeps its cursor wherever the
+// pointer goes). CursorArrow removes the override. Main thread. A change
+// rebuilds the cursor rects; while an override is set, changes of the regions
+// do not.
+func (w *Window) SetCursorOverride(c Cursor) {
+	if w.curs.setOverride(c) {
+		w.rebuildCursorRects()
+	}
+}
+
+func (w *Window) rebuildCursorRects() {
 	objc.Send(w.view, selDiscardCursorRects)
 	objc.Send(w.view, selResetCursorRects)
 	objc.Send1(w.win, selInvalidateCursors, uintptr(w.view)) // AppKit re-evaluates the rects at the pointer now
+}
+
+// addCursorRects is the view's resetCursorRects: the override as one rect over
+// the bounds, else the regions.
+func (w *Window) addCursorRects() {
+	add := func(x, y, wd, h float64, c Cursor) {
+		objc.F.Reset().Arg(uintptr(w.view)).Arg(uintptr(selAddCursorRect)).ArgRect(x, y, wd, h).
+			Arg(uintptr(cursorObjs[c])).Call(objc.MsgSend)
+	}
+	b := objc.SendRect(w.view, selBounds)
+	if o := w.curs.override; o != CursorArrow {
+		add(b.X, b.Y, b.W, b.H, o)
+		return
+	}
+	s := float64(w.scale)
+	// AppKit does not specify which of two overlapping cursor rects of a view
+	// wins, so it gets none: the regions are cut down so that each point
+	// belongs to the topmost one only.
+	for _, r := range w.curs.flatten() {
+		// The view is not flipped: y runs up from the bottom edge.
+		add(b.X+float64(r.Rect[0])/s, b.Y+b.H-float64(r.Rect[3])/s,
+			float64(r.Rect[2]-r.Rect[0])/s, float64(r.Rect[3]-r.Rect[1])/s, r.Cursor)
+	}
+}
+
+// SetDragRegions sets the window drag map (see DragRegion): a left press in a
+// drag area moves the window (and a double click does what the system's "double-click a window's title bar"
+// setting says) instead of reaching the app. Main thread; copies, and does
+// nothing when unchanged.
+func (w *Window) SetDragRegions(r []DragRegion) { w.drags.set(r) }
+
+// hitsView reports whether AppKit's hit test, asked of the theme frame (the
+// content view's superview, which also holds the titlebar container and the
+// window buttons) at a point in window coordinates, finds our view. A press on
+// a window button or the resize border is somebody else's; only a press that
+// would reach our view is a window drag.
+func (w *Window) hitsView(x, y float64) bool {
+	frame := objc.Send(w.view, selSuperview)
+	if frame == 0 {
+		return true
+	}
+	hit := objc.ID(objc.F.Reset().Arg(uintptr(frame)).Arg(uintptr(selHitTest)).ArgPoint(x, y).Call(objc.MsgSend).R0())
+	return hit == w.view
+}
+
+// titlebarDoubleClick is what a double click on a drag area does: the system
+// setting AppleActionOnDoubleClick ("Maximize" and "Fill" zoom, "Minimize"
+// miniaturizes, "None" nothing); zoom when it is not set.
+func (w *Window) titlebarDoubleClick() {
+	switch defaultsString("AppleActionOnDoubleClick") {
+	case "Minimize":
+		objc.Send1(w.win, selMiniaturize, 0)
+	case "None":
+	default:
+		objc.Send1(w.win, selZoom, 0)
+	}
+}
+
+// defaultsString reads a string from the global defaults domain ("" if unset).
+func defaultsString(key string) string {
+	d := objc.Send(objc.Cls("NSUserDefaults"), objc.Sel("standardUserDefaults"))
+	str := objc.Send1(d, objc.Sel("stringForKey:"), uintptr(objc.Str(key)))
+	if str == 0 {
+		return ""
+	}
+	return string(objc.AppendUTF8(nil, str))
 }
 
 // metalLinkLatency is CAMetalDisplayLink.preferredFrameLatency: how many

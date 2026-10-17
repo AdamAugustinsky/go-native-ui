@@ -220,7 +220,10 @@ type Window struct {
 	inHandler bool
 	sizeMove  bool // inside the size/move modal loop (WM_ENTERSIZEMOVE .. WM_EXITSIZEMOVE)
 
-	cursor  Cursor
+	curs    cursorMap // cursor regions and override (SetCursorRegions)
+	shown   Cursor    // the shape last applied with SetCursor
+	ptrX    float32   // last pointer position in the content (WM_MOUSEMOVE), pixels
+	ptrY    float32
 	cursors [numCursors]uintptr // HCURSORs, loaded at Open
 
 	hiSurrogate uint16
@@ -376,17 +379,43 @@ func (w *Window) runHandler() {
 	w.inHandler = false
 }
 
-// SetCursor sets the pointer shape shown over the content. It only touches
-// the OS when the shape changes; WM_SETCURSOR keeps it in place.
-func (w *Window) SetCursor(c Cursor) {
-	if c >= numCursors || c == w.cursor {
+// SetCursorRegions sets the cursor regions: where in the content the pointer
+// shows which shape (later entries are on top; elsewhere the arrow). Main
+// thread. It copies into storage the window owns and does nothing when the
+// list equals the previous one, so it can be called every frame without
+// allocating.
+//
+// WM_SETCURSOR (HTCLIENT) looks the shape up at the pointer's position (the
+// override first, then the topmost region, then the arrow), so a divider needs
+// no mouse event from the app; a change of the lists applies at once when the
+// pointer is over the content.
+func (w *Window) SetCursorRegions(r []CursorRegion) {
+	if w.curs.setRegions(r) {
+		w.applyCursor()
+	}
+}
+
+// SetCursorOverride shows c over the whole content while it is not
+// CursorArrow, whatever the regions say (a drag keeps its cursor wherever the
+// pointer goes). CursorArrow removes the override. Main thread.
+func (w *Window) SetCursorOverride(c Cursor) {
+	if w.curs.setOverride(c) {
+		w.applyCursor()
+	}
+}
+
+func (w *Window) applyCursor() {
+	if !w.tracking { // the pointer is over the content: apply now, not at the next mouse move
 		return
 	}
-	w.cursor = c
-	if w.tracking { // the pointer is over the content: apply now, not at the next mouse move
+	if c := w.curs.at(w.ptrX, w.ptrY); c != w.shown {
+		w.shown = c
 		win32.Call(pSetCursor, w.cursors[c])
 	}
 }
+
+// SetDragRegions is a no-op on Windows: the window keeps its system titlebar.
+func (w *Window) SetDragRegions([]DragRegion) {}
 
 // Text returns the UTF-8 bytes of an EvText event.
 func (w *Window) Text(r TextRef) []byte { return w.q.textOf(r) }
@@ -601,7 +630,8 @@ func wndProc(hwnd, m, wp, lp uintptr) uintptr {
 
 	case wmSetCursor:
 		if uint32(lp&0xFFFF) == htClient {
-			win32.Call(pSetCursor, w.cursors[w.cursor])
+			w.shown = w.curs.at(w.ptrX, w.ptrY)
+			win32.Call(pSetCursor, w.cursors[w.shown])
 			return 1
 		}
 		return defProc(hwnd, m, wp, lp)
@@ -672,7 +702,8 @@ func wndProc(hwnd, m, wp, lp uintptr) uintptr {
 				w.tracking = true
 			}
 		}
-		w.q.push(Event{Kind: EvPointerMove, X: float32(loword(lp)), Y: float32(hiword(lp)), Time: Now()})
+		w.ptrX, w.ptrY = float32(loword(lp)), float32(hiword(lp))
+		w.q.push(Event{Kind: EvPointerMove, X: w.ptrX, Y: w.ptrY, Time: Now()})
 		return 0
 
 	case wmMouseLeave:

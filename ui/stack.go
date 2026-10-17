@@ -87,6 +87,13 @@ func (c *Context) NextBorderSides(s Sides) { c.sSides.set(s) }
 func (c *Context) PushBorderSides(s Sides) { c.sSides.push(s) }
 func (c *Context) PopBorderSides()         { c.sSides.pop() }
 
+// Pointer cursor shown over the box (default CursorArrow, which marks nothing);
+// see Context.CursorRegions.
+
+func (c *Context) NextCursor(cur Cursor) { c.sCursor.set(cur) }
+func (c *Context) PushCursor(cur Cursor) { c.sCursor.push(cur) }
+func (c *Context) PopCursor()            { c.sCursor.pop() }
+
 // Image drawn by DrawImage: the texel rectangle (u0, v0, u1, v1) of texture t
 // in the given mode.
 

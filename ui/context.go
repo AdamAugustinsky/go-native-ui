@@ -40,6 +40,7 @@ type box struct {
 	borderColor uint32
 	borderW     float32
 	sides       Sides
+	cursor      Cursor
 	img         Image
 	radii       [4]float32
 	shadow      [2]Shadow
@@ -100,6 +101,7 @@ type Context struct {
 	sText    stack[uint32]
 	sBorder  stack[border]
 	sSides   stack[Sides]
+	sCursor  stack[Cursor]
 	sImage   stack[Image]
 	sRadii   stack[[4]float32]
 	sShadow  stack[[2]Shadow]
@@ -134,6 +136,9 @@ type Context struct {
 	avPool                *core.Pool
 	avTable               *core.Table
 
+	// boxes built this frame with a cursor or the WindowDrag flag (cursor.go)
+	nCursorBoxes, nDragBoxes int
+
 	fonts []fontInfo
 
 	up      Uploader
@@ -164,6 +169,7 @@ func New(sh Shaper) *Context {
 	c.sText.init(0xFFFFFFFF)
 	c.sBorder.init(border{})
 	c.sSides.init(SidesAll)
+	c.sCursor.init(CursorArrow)
 	c.sImage.init(Image{})
 	c.sRadii.init([4]float32{})
 	c.sShadow.init([2]Shadow{})
@@ -183,6 +189,7 @@ func New(sh Shaper) *Context {
 // building up to n boxes never grows it.
 func (c *Context) Reserve(n int) {
 	c.table.Reserve(n)
+	c.pool.Reserve(n + 1)
 	if cap(c.boxes) < n+1 {
 		nb := make([]box, len(c.boxes), n+1)
 		copy(nb, c.boxes)
@@ -231,6 +238,7 @@ func (c *Context) Begin(in *Input, widthPx, heightPx int, scale, dt float32) {
 	c.fmtA.Reset()
 	c.prevOrder, c.order = c.order, c.prevOrder[:0]
 	c.animating = false
+	c.nCursorBoxes, c.nDragBoxes = 0, 0
 	c.rHot = rate(c.Rates.Hot, dt)
 	c.rActive = rate(c.Rates.Active, dt)
 	c.rFocus = rate(c.Rates.Focus, dt)
@@ -255,6 +263,7 @@ func (c *Context) resetStyles() {
 	c.sText.reset()
 	c.sBorder.reset()
 	c.sSides.reset()
+	c.sCursor.reset()
 	c.sImage.reset()
 	c.sRadii.reset()
 	c.sShadow.reset()
@@ -388,6 +397,13 @@ func (c *Context) newBox(flags Flags, key Key) ID {
 	bd := c.sBorder.take()
 	b.borderColor, b.borderW = bd.Color, bd.Width
 	b.sides = c.sSides.take()
+	b.cursor = c.sCursor.take()
+	if b.cursor != CursorArrow {
+		c.nCursorBoxes++
+	}
+	if flags&WindowDrag != 0 {
+		c.nDragBoxes++
+	}
 	b.img = c.sImage.take()
 	b.radii = c.sRadii.take()
 	b.shadow = c.sShadow.take()

@@ -17,7 +17,9 @@
 //	(*Window).SetFrameHandler(fn)         fn runs synchronously inside OS modal loops (macOS live resize, the Windows size/move
 //	                                      loop) when a frame is due; Wait does not return during them. Never called on Linux.
 //	(*Window).Pending() []Event           the events queued so far, without pumping the OS (for the frame handler)
-//	(*Window).SetCursor(Cursor)           pointer shape over the content; cheap to call every frame
+//	(*Window).SetCursorRegions(r)         pointer shapes by content rectangle (later entries on top); copied, cheap to call every frame
+//	(*Window).SetCursorOverride(Cursor)   one shape over the whole content while not CursorArrow (a drag in progress)
+//	(*Window).SetDragRegions(r)           custom-titlebar areas that move the window (macOS; no-op elsewhere)
 //	(*Window).Close()
 //	Wake()                                any goroutine; coalesced
 //	Now() int64                           monotonic ns, same timebase as Event.Time

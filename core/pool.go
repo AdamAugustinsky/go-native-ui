@@ -35,6 +35,21 @@ func NewPool(capacity int) *Pool {
 	}
 }
 
+// Reserve makes room for n slots, so that allocating up to n slots in total
+// (live plus free) never grows the pool. Existing slots are kept.
+func (p *Pool) Reserve(n int) {
+	if cap(p.gen) < n {
+		p.gen = append(make([]uint32, 0, n), p.gen...)
+	}
+	if cap(p.live) < n {
+		p.live = append(make([]bool, 0, n), p.live...)
+	}
+	// Free must never allocate: the free list can hold every slot.
+	if cap(p.free) < max(n, 2*len(p.gen)) {
+		p.free = append(make([]uint32, 0, max(n, 2*len(p.gen))), p.free...)
+	}
+}
+
 // Alloc returns a free slot, reusing the most recently freed one first.
 func (p *Pool) Alloc() Handle {
 	var idx uint32

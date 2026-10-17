@@ -12,7 +12,6 @@ const maxLatencyNs = int64(5e9)
 // build runs one ui frame of the Builder: Begin, Build, End, then clears the
 // per-frame input.
 func (a *App) build(w, h int, dt float32) {
-	a.cursor = platform.CursorArrow
 	a.UI.Begin(&a.tr.in, w, h, a.scale, dt)
 	a.b.Build(a.UI)
 	a.UI.End(&a.list)
@@ -72,12 +71,9 @@ func (a *App) drawFrame(inHandler bool, passes int) bool {
 	for i := 0; i < passes; i++ {
 		a.build(a.fr.W, a.fr.H, dt)
 	}
+	a.syncRegions()
 	if metered {
 		m.cpu2 = sysinfo.ThreadCPUNs()
-	}
-	if a.cursor != a.appliedCursor {
-		a.Win.SetCursor(a.cursor)
-		a.appliedCursor = a.cursor
 	}
 
 	// The request must precede the present (Wayland attaches the frame

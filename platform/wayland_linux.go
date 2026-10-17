@@ -740,6 +740,15 @@ func (w *Window) onSeatCaps(caps uint32) {
 	}
 }
 
+// dragsAt reports whether a press at the pointer position (physical pixels)
+// moves the window: the drag map if the app set one, else the top strip.
+func (w *Window) dragsAt(x, y, scale float32) bool {
+	if len(w.drags.regs) > 0 {
+		return w.drags.at(x, y)
+	}
+	return y < titleBarDragHeight*scale
+}
+
 func (w *Window) onPointer(op uint32, a unsafe.Pointer) {
 	y := &w.wy
 	scale := float32(w.s120) / 120
@@ -759,9 +768,9 @@ func (w *Window) onPointer(op uint32, a unsafe.Pointer) {
 		if b == ButtonNone {
 			return
 		}
-		if st != 0 && b == ButtonLeft && y.decoMode != 2 && y.ptrY < titleBarDragHeight*scale {
-			// No server-side decoration: the top strip drags the window
-			// until we draw our own client-side title bar. xdg_toplevel.move (5)
+		if st != 0 && b == ButtonLeft && y.decoMode != 2 && w.dragsAt(y.ptrX, y.ptrY, scale) {
+			// No server-side decoration: the app's drag map, or without one
+			// the top strip, drags the window. xdg_toplevel.move (5)
 			y.args[0], y.args[1] = uint64(y.seat), uint64(serial)
 			w.req(y.toplevel, 5, 0, y.toplevelV, 0)
 			return

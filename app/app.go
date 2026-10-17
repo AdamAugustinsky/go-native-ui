@@ -22,8 +22,9 @@
 //   - The frame handler for OS modal loops (macOS live resize, the Windows
 //     size/move loop): it takes the pending events, resizes the surface and
 //     draws in step with the window.
-//   - Atlas sync, the cursor requested through App.SetCursor, input-to-commit
-//     latency sampling.
+//   - Atlas sync, the cursor regions and window drag areas of the finished
+//     frame handed to the window (regions.go), input-to-commit latency
+//     sampling.
 //
 // # Threading
 //
@@ -107,11 +108,17 @@ type App struct {
 	w, h  int     // surface size in pixels
 	scale float32 // pixels per point
 
-	cursor, appliedCursor platform.Cursor
-	done                  bool
-	more                  bool // the last frame left a repaint owed (animation, input to settle)
-	scriptFrame           int
-	scriptDone            bool
+	// Cursor regions and the titlebar drag map handed to the window after
+	// every frame (regions.go); the buffers are reused.
+	curUI   []ui.CursorRegion
+	curPlat []platform.CursorRegion
+	dragUI  []ui.DragRegion
+	dragPl  []platform.DragRegion
+
+	done        bool
+	more        bool // the last frame left a repaint owed (animation, input to settle)
+	scriptFrame int
+	scriptDone  bool
 
 	frames    int   // frames presented
 	lastStart int64 // platform.Now of the last frame's start; 0 before the first
@@ -121,13 +128,8 @@ type App struct {
 	execNs int64 // platform.Now at process start, -1 if unknown
 
 	bench *benchRun
+	hook  func() // runs after every iteration of the loop (RunLiveResizeTest)
 }
-
-// SetCursor sets the pointer shape for the frame being built. Call it from
-// Build (typically from the signal of the box under the pointer); the shape
-// resets to the arrow at the start of every frame, and the window is only
-// told when it changes.
-func (a *App) SetCursor(c platform.Cursor) { a.cursor = c }
 
 // Quit ends the run after the current iteration.
 func (a *App) Quit() { a.done = true }
@@ -333,6 +335,9 @@ func (a *App) loop() error {
 		}
 		if draw {
 			a.present(false, 1)
+		}
+		if a.hook != nil {
+			a.hook()
 		}
 	}
 	return nil

@@ -58,6 +58,8 @@ type Window struct {
 	visible  bool // first frame/map was reported
 	frameReq bool // X11: RequestFrame pending
 
+	drags dragMap // SetDragRegions
+
 	wy wayland
 	x  x11
 }
@@ -207,10 +209,20 @@ func (w *Window) SetFrameHandler(func()) {}
 // hands them all out. It exists so frame-handler code is the same on every OS.
 func (w *Window) Pending() []Event { return nil }
 
-// SetCursor is a no-op on Linux for now. Wayland will use
+// SetCursorRegions and SetCursorOverride are no-ops on Linux for now: the
+// pointer keeps the compositor's default arrow. Wayland will use
 // wp_cursor_shape_v1 (fallback: the libwayland-cursor theme) and X11
-// XDefineCursor with Xcursor, later.
-func (w *Window) SetCursor(Cursor) {}
+// XDefineCursor with Xcursor, later; both need a lookup at the pointer
+// position, for which the region map of regions.go is ready.
+func (w *Window) SetCursorRegions([]CursorRegion) {}
+func (w *Window) SetCursorOverride(Cursor)        {}
+
+// SetDragRegions sets the window drag map (see DragRegion). On Wayland without
+// server-side decorations a left press in a drag area starts xdg_toplevel.move
+// (and is not delivered to the app); with a map set it replaces the fixed top
+// strip that serves apps without a titlebar of their own. X11 ignores it for
+// now (the window manager's decorations move the window).
+func (w *Window) SetDragRegions(r []DragRegion) { w.drags.set(r) }
 
 // SetFrameSource is a no-op on Linux (frame callbacks / swap pacing).
 func (w *Window) SetFrameSource(uintptr) {}

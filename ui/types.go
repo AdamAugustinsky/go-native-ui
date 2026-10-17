@@ -80,6 +80,12 @@ const (
 	// DrawImage draws the box's Image (see NextImage) centred in its padded
 	// rectangle at the image's own size, tinted by the text colour.
 	DrawImage
+
+	// WindowDrag marks an area that moves the window when it is pressed and
+	// dragged (a custom titlebar) and that the window's double-click action
+	// applies to. Boxes that take input and are drawn above it keep their
+	// clicks; see Context.DragRegions. The box itself takes no input.
+	WindowDrag
 )
 
 // scrollable flags, either axis.

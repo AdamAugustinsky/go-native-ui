@@ -546,3 +546,26 @@ Both licence files are kept in the copy.
 - `text/shape_test.go` checks the new path against go-text's reference pipeline, including a 6000-string fuzz.
 - Update procedure: `third_party/typesetting/README.md`.
 
+## D24. Cursors and titlebar drag come from UI regions (phase 3, 2026-10-17)
+
+**Decision.**
+
+- **Cursor.** A `ui` box carries a cursor (`NextCursor`/`PushCursor`). After layout, `ui` reports:
+  - the cursor regions, as pixel rects in draw order, clipped by their ancestors;
+  - the cursor of the pointer-captured box, as an override.
+- **Titlebar drag.** Boxes flagged `ui.WindowDrag` (rex's titlebar background) become drag regions. Hit-testable boxes drawn above them are not.
+- **Passing to the platform.** `app` hands the regions over with `platform.SetCursorRegions`, `SetCursorOverride` and `SetDragRegions`, only when they change.
+
+**Per OS:**
+
+- **macOS cursors:** one AppKit cursor rect per region, flattened so none overlap and the topmost wins, or a single bounds rect for the override. AppKit then shows the cursor on entering a rect and restores the arrow on leaving, as `NSSplitView` does.
+- **macOS window drag:** the view refuses `mouseDownCanMoveWindow`. A left press in a drag region that the theme frame hit-tests to our view calls `performWindowDragWithEvent:`. A double click there does what `AppleActionOnDoubleClick` says.
+- **Windows:** `WM_SETCURSOR` hit-tests the same regions.
+- **Linux:** cursors not yet. On Wayland the drag map replaces the fixed 32 px move strip.
+
+**Why.** Two earlier designs failed by hand on the MacBook:
+
+- Setting the cursor directly with `[NSCursor set]`, plus one bounds-sized rect swapped on every change: the cursor flickered and the arrow never came back.
+- Part of the cause was that `+arrowCursor` returns nil before `NSApplication` exists, so the arrow had been cached as nil. The cursors are now cached after the app object exists.
+- Separate hit-test geometry in the app made the zones feel like 1-pixel lines. The regions now come from the same layout the clicks hit-test against.
+
