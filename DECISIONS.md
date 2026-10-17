@@ -439,3 +439,24 @@ distribution. ScreenCaptureKit is block- and delegate-heavy, and driving it
 through our FFI would cost days for a tool nobody ships. The framework and
 `cmd/*` apps stay pure Go.
 
+## D20. Linux text dependencies (phase 2)
+
+**Added:**
+- `github.com/go-text/typesetting v0.3.5`, pinned: shaping (the HarfBuzz port), bidi and font parsing, as D9 chose;
+- `golang.org/x/image v0.23.0`, indirect: go-text requires it.
+
+The rasterizer is our own (`text/raster.go`, signed-area coverage), and so is the CBDT colour-emoji reader (`text/cbdt.go`).
+
+**D9 problems, resolved:**
+- **Colour-emoji tables load lazily.** `text/sfnt.go` hides CBDT, sbix and SVG from go-text, and one glyph's PNG is read on demand. In a test, a synthetic 24 MiB CBDT rasterized a glyph with 4.7 MiB allocated.
+- **No font index:** fonts are found through fontconfig's own cache, via `dlopen`.
+
+**Cost:** about +2.5 MB on a stripped Linux binary that uses `text`. It was measured with a minimal program at 4.2 MB, against a 1.7 MB purego baseline. Binaries that don't import `text` are unchanged.
+
+**Limits:**
+- COLRv1, SVG and sbix colour fonts aren't rendered.
+- There is no hinting and no LCD antialiasing (D9).
+- The UI font is fontconfig's `sans-serif`, not the desktop's GSettings/KDE setting.
+
+**Windows note:** the DirectWrite backend needed `internal/com`, which holds hand-written COM vtable calls plus a small windows/arm64 trampoline. `syscall.SyscallN` doesn't load float registers on arm64, and three DirectWrite methods take `FLOAT` arguments.
+
