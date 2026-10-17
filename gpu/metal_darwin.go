@@ -55,6 +55,7 @@ var (
 	selFlush             = objc.Sel("flush")
 	selRelease           = objc.Sel("release")
 	selAddPresented      = objc.Sel("addPresentedHandler:")
+	selSetColorspace     = objc.Sel("setColorspace:")
 	selSetPresentsWithTx = objc.Sel("setPresentsWithTransaction:")
 	selWaitScheduled     = objc.Sel("waitUntilScheduled")
 	selPresent           = objc.Sel("present")
@@ -62,6 +63,7 @@ var (
 	selPresentedTime     = objc.Sel("presentedTime")
 
 	mtlCreateSystemDefaultDevice uintptr
+	cgColorSpaceRelease          uintptr
 	clsCATransaction             objc.ID
 )
 
@@ -94,6 +96,13 @@ func NewSurface(n platform.Native, w, h int32, scale float32) (*Surface, error) 
 	objc.Send1(s.layer, selSetMaxDrawables, 2)
 	objc.Send1(s.layer, selSetDisplaySync, 1)
 	objc.Send1(s.layer, selSetOpaque, 1)
+	// Tag the drawables as sRGB so the window server colour-matches them to
+	// the display (P3 on recent Macs). Without a colour space the values go to
+	// the display unmatched and sRGB designs look oversaturated.
+	if cs := srgbColorSpace(); cs != 0 {
+		objc.Send1(s.layer, selSetColorspace, cs)
+		F.Call1(cgColorSpaceRelease, cs)
+	}
 	s.Resize(w, h, scale)
 	view := objc.ID(n.NSView)
 	objc.Send1(view, selSetLayer, uintptr(s.layer))
@@ -285,6 +294,23 @@ func initPresentedBlock() {
 			}
 		}),
 	}
+}
+
+// srgbColorSpace returns a new CGColorSpaceRef for sRGB (the caller
+// releases it), or 0.
+func srgbColorSpace() uintptr {
+	cg, err := purego.Dlopen("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics", purego.RTLD_NOW|purego.RTLD_GLOBAL)
+	if err != nil {
+		return 0
+	}
+	create, err1 := purego.Dlsym(cg, "CGColorSpaceCreateWithName")
+	release, err2 := purego.Dlsym(cg, "CGColorSpaceRelease")
+	name, err3 := purego.Dlsym(cg, "kCGColorSpaceSRGB") // the address of a CFStringRef
+	if err1 != nil || err2 != nil || err3 != nil {
+		return 0
+	}
+	cgColorSpaceRelease = release
+	return objc.F.Call1(create, *(*uintptr)(ffi.PtrFromC(name)))
 }
 
 // FrameSource returns the CAMetalLayer: the platform drives frames with a
