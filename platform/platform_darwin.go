@@ -29,6 +29,8 @@ type Window struct {
 	distantPast, distantFuture   objc.ID
 
 	wPt, hPt   float64
+	titlebar   float64    // custom titlebar height in points (Options.Titlebar); 0 = standard
+	lights     [2]float32 // close button centre (Options.TrafficLights)
 	wPx, hPx   int32
 	scale      float32
 	frameArmed bool
@@ -128,6 +130,13 @@ var (
 	selUpdateDrawable    = objc.Sel("drawable")
 	selReleaseObj        = objc.Sel("release")
 	selAutorelease       = objc.Sel("autorelease")
+	selStdButton         = objc.Sel("standardWindowButton:")
+	selSuperview         = objc.Sel("superview")
+	selFrame             = objc.Sel("frame")
+	selSetFrame          = objc.Sel("setFrame:")
+	selSetFrameOrigin    = objc.Sel("setFrameOrigin:")
+	selSetTitlebarClear  = objc.Sel("setTitlebarAppearsTransparent:")
+	selSetTitleVisible   = objc.Sel("setTitleVisibility:")
 	selShouldClose       = objc.Sel("windowShouldClose:")
 	selDidResize         = objc.Sel("windowDidResize:")
 	selDidChangeBacking  = objc.Sel("windowDidChangeBackingProperties:")
@@ -229,7 +238,10 @@ func Open(o Options) (*Window, error) {
 	if width <= 0 || height <= 0 {
 		width, height = 960, 600
 	}
-	const style = 1 | 2 | 4 | 8 // titled | closable | miniaturizable | resizable
+	style := uintptr(1 | 2 | 4 | 8) // titled | closable | miniaturizable | resizable
+	if o.Titlebar > 0 {
+		style |= 1 << 15 // NSWindowStyleMaskFullSizeContentView
+	}
 	w.win = objc.Send(objc.Cls("NSWindow"), selAlloc)
 	w.win = objc.ID(F.Reset().Arg(uintptr(w.win)).Arg(uintptr(selInitWindow)).
 		ArgRect(0, 0, width, height).Arg(style).Arg(2 /* buffered */).ArgBool(false).Call(objc.MsgSend).R0())
@@ -237,6 +249,12 @@ func Open(o Options) (*Window, error) {
 		return nil, errors.New("platform: NSWindow init failed")
 	}
 	objc.Send1(w.win, selSetReleased, 0)
+	if o.Titlebar > 0 {
+		w.titlebar, w.lights = float64(o.Titlebar), o.TrafficLights
+		objc.Send1(w.win, selSetTitlebarClear, 1)
+		objc.Send1(w.win, selSetTitleVisible, 1) // NSWindowTitleHidden
+		w.layoutChrome()
+	}
 	markOpen("NSWindow")
 	w.view = objc.Send(viewClass, selAlloc)
 	w.view = objc.ID(F.Reset().Arg(uintptr(w.view)).Arg(uintptr(selInitWithFrame)).
@@ -303,6 +321,32 @@ func (w *Window) Show() {
 	objc.Send(w.app, selActivate)
 	if w.link != 0 {
 		w.setRateRange(w.link) // the screen is known for certain once shown
+	}
+	w.layoutChrome()
+}
+
+// layoutChrome sizes the titlebar container to the custom titlebar height
+// and moves the window buttons (the approach Electron's trafficLightPosition
+// uses). The container's superview, the theme frame, is not flipped.
+func (w *Window) layoutChrome() {
+	if w.titlebar == 0 {
+		return
+	}
+	var btn [3]objc.ID
+	for i := range btn {
+		if btn[i] = objc.Send1(w.win, selStdButton, uintptr(i)); btn[i] == 0 {
+			return
+		}
+	}
+	container := objc.Send(objc.Send(btn[0], selSuperview), selSuperview)
+	wf, cf := objc.SendRect(w.win, selFrame), objc.SendRect(container, selFrame)
+	objc.F.Reset().Arg(uintptr(container)).Arg(uintptr(selSetFrame)).ArgRect(cf.X, wf.H-w.titlebar, cf.W, w.titlebar).Call(objc.MsgSend)
+	f0, f1 := objc.SendRect(btn[0], selFrame), objc.SendRect(btn[1], selFrame)
+	space := f1.X - f0.X
+	x0 := float64(w.lights[0]) - f0.W/2
+	y := w.titlebar - float64(w.lights[1]) - f0.H/2
+	for i, b := range btn {
+		objc.F.Reset().Arg(uintptr(b)).Arg(uintptr(selSetFrameOrigin)).ArgPoint(x0+float64(i)*space, y).Call(objc.MsgSend)
 	}
 }
 
@@ -504,6 +548,9 @@ func impHandler(c *ffi.CB) {
 		c.Ret(uintptr(math.MaxInt64))
 	case selViewBacking, selDidChangeBacking, selDidResize:
 		if w != nil {
+			if sel == selDidResize {
+				w.layoutChrome() // AppKit re-lays out the titlebar on resize
+			}
 			w.pushResize()
 		}
 	case selDisplayLinkFired, selMetalLinkUpdate:

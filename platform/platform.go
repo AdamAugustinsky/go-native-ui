@@ -153,6 +153,12 @@ type Options struct {
 	// appears together with its first frame. Content-first startup is
 	// implemented on macOS only so far; elsewhere Hidden is ignored.
 	Hidden bool
+	// Titlebar > 0 extends the content under a transparent titlebar band of
+	// that height in logical units; the app draws the band. The close
+	// button's centre goes to TrafficLights (logical units from the window's
+	// top-left), keeping the native button spacing. macOS only so far.
+	Titlebar      float32
+	TrafficLights [2]float32
 }
 
 // eventQueue is the reusable per-Window event and text storage.
