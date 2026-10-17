@@ -561,12 +561,16 @@ func impHandler(c *ffi.CB) {
 			w.attachMetalLink() // its first tick delivers this frame, with a drawable
 			break
 		}
+		// A drawable is held for one tick at most: one kept through an idle
+		// period would leave the link without a free drawable (2 in the
+		// pool), and it stops ticking.
+		if w.drawable != 0 {
+			objc.Send(w.drawable, selReleaseObj)
+			w.drawable = 0
+		}
 		if w.frameArmed {
 			w.frameArmed, w.idleTicks = false, 0
 			if sel == selMetalLinkUpdate { // metalDisplayLink:needsUpdate: (link, update)
-				if w.drawable != 0 {
-					objc.Send(w.drawable, selReleaseObj) // an earlier tick's drawable nobody presented
-				}
 				w.drawable = objc.Retain(objc.Send(objc.ID(c.Int(3)), selUpdateDrawable))
 			}
 			w.q.push(Event{Kind: EvFrame, Time: Now()})
@@ -666,10 +670,11 @@ func (w *Window) attachMetalLink() {
 const metalLinkLatency = 1
 
 // TakeMetalDrawable returns the drawable delivered with the current frame
-// tick, retained (the caller releases it after presenting), or 0. linked
-// reports that a CAMetalDisplayLink drives the layer: then a 0 drawable
-// means no frame is ready, and the caller must not call nextDrawable (the
-// layer throws). Main thread only.
+// tick, retained (the caller releases it after presenting), or 0. A tick's
+// drawable is valid until the next tick, so draw on EvFrame. linked reports
+// that a CAMetalDisplayLink drives the layer: then a 0 drawable means no
+// frame is ready (one is requested), and the caller must not call
+// nextDrawable (the layer throws). Main thread only.
 func TakeMetalDrawable() (drawable uintptr, linked bool) {
 	w := theWindow.Load()
 	if w == nil {
@@ -677,6 +682,9 @@ func TakeMetalDrawable() (drawable uintptr, linked bool) {
 	}
 	d := w.drawable
 	w.drawable = 0
+	if d == 0 && w.metalLink {
+		w.RequestFrame() // no frame is ready: the caller draws on the EvFrame that follows
+	}
 	return uintptr(d), w.metalLink
 }
 

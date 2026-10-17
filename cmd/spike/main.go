@@ -193,6 +193,7 @@ func main() {
 		intervals                  = make([]float64, 0, animFrames+16) // headroom: append must never grow inside the measured window
 		lastFrame                  int64
 		requestedAt                int64
+		armed                      bool // a frame is requested and its EvFrame hasn't arrived
 		presentRetryAt             int64
 		paced                      = true
 		animCPU0                   int64
@@ -271,7 +272,8 @@ func main() {
 				}
 				needDraw = true
 			case platform.EvFrame:
-				frameReady = true
+				frameReady, armed = true, false
+				presentRetryAt = 0 // a fresh frame supersedes the retry backstop
 				if phase == phaseAnimate {
 					now := platform.Now()
 					if lastFrame != 0 && presents-idlePresentsBase > animWarmup {
@@ -319,6 +321,16 @@ func main() {
 
 		if presentRetryAt != 0 && platform.Now() >= presentRetryAt {
 			presentRetryAt, frameReady = 0, true
+		}
+		// A paced frame is valid for its own tick only (macOS: the drawable
+		// is dropped at the next tick), so an unused one expires, and drawing
+		// later starts by requesting a fresh frame.
+		if paced && frameReady && !needDraw && firstPresent != 0 {
+			frameReady = false
+		}
+		if paced && needDraw && !frameReady && !armed && firstPresent != 0 {
+			win.RequestFrame()
+			requestedAt, armed = platform.Now(), true
 		}
 
 		// Benchmark state machine.
@@ -374,7 +386,7 @@ func main() {
 				c = [3]float32{c[0] + 0.25*k, c[1] + 0.1*k, c[2] + 0.3*(1-k)}
 			}
 			win.RequestFrame()
-			requestedAt = platform.Now()
+			requestedAt, armed = platform.Now(), true
 			if surf.Present(c[0], c[1], c[2], 1) {
 				presents++
 				frameReady = !paced
@@ -387,6 +399,7 @@ func main() {
 			} else {
 				rep.PresentFailures++
 				presentRetryAt = platform.Now() + presentRetryNs
+				frameReady = !paced // paced: wait for the next frame (requested above)
 			}
 			needDraw = animating || presentRetryAt != 0 // a failed frame is still owed
 			if phase == phaseAnimate && presents-idlePresentsBase >= animWarmup+animFrames {
