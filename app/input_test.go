@@ -202,7 +202,7 @@ func TestKeysAndText(t *testing.T) {
 	for i := range long {
 		long[i] = 'x'
 	}
-	tr.event(ev(platform.EvText, nil), long) // overflow is dropped, not a panic
+	tr.event(ev(platform.EvText, nil), long) // what does not fit waits for the next frame (see TestTextOverflowCarries)
 	if in.NText != ui.MaxText {
 		t.Fatalf("NText %d after overflow, want %d", in.NText, ui.MaxText)
 	}

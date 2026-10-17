@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"math"
 	"runtime"
-	"strings"
 	"sync"
+	"unicode/utf8"
 	"unsafe"
 
 	"github.com/ebitengine/purego"
@@ -41,6 +41,7 @@ var sy struct {
 	ctLineGetTypographicBounds                           uintptr
 	ctRunGetGlyphCount, ctRunGetGlyphs                   uintptr
 	ctRunGetPositions, ctRunGetAttributes                uintptr
+	ctRunGetStringIndices, ctRunGetStatus                uintptr
 	// CoreGraphics
 	cgColorSpaceCreateDeviceGray, cgColorSpaceCreateDeviceRGB uintptr
 	cgBitmapContextCreate                                     uintptr
@@ -134,6 +135,7 @@ func loadSyms() error {
 		sy.ctLineGetTypographicBounds = sym(ct, "CTLineGetTypographicBounds")
 		sy.ctRunGetGlyphCount, sy.ctRunGetGlyphs = sym(ct, "CTRunGetGlyphCount"), sym(ct, "CTRunGetGlyphs")
 		sy.ctRunGetPositions, sy.ctRunGetAttributes = sym(ct, "CTRunGetPositions"), sym(ct, "CTRunGetAttributes")
+		sy.ctRunGetStringIndices, sy.ctRunGetStatus = sym(ct, "CTRunGetStringIndices"), sym(ct, "CTRunGetStatus")
 
 		sy.cgColorSpaceCreateDeviceGray, sy.cgColorSpaceCreateDeviceRGB = sym(cg, "CGColorSpaceCreateDeviceGray"), sym(cg, "CGColorSpaceCreateDeviceRGB")
 		sy.cgBitmapContextCreate = sym(cg, "CGBitmapContextCreate")
@@ -193,7 +195,11 @@ type System struct {
 	gbuf  []uint16
 	xbuf  []float32
 	fbuf  []FaceID
+	cbuf  []uint32  // cluster per glyph (RunView.Clusters) of the line being shaped
 	pos   []float64 // CTRunGetPositions output, x,y pairs
+	idx   []int64   // CTRunGetStringIndices output (CFIndex, UTF-16 units)
+	u16b  []uint32  // byte offset in the source of each UTF-16 unit of the CFString, plus the length
+	san   []byte    // the source with every invalid byte replaced by U+FFFD
 	keys  [2]uintptr
 	vals  [2]uintptr
 	num   [1]float64
@@ -220,7 +226,9 @@ func New() (*System, error) {
 	s.tmp = make([]byte, 0, 256)
 	s.name = make([]byte, 0, 256)
 	s.gbuf, s.xbuf, s.fbuf = make([]uint16, 0, 128), make([]float32, 0, 128), make([]FaceID, 0, 128)
+	s.cbuf = make([]uint32, 0, 128)
 	s.pos = make([]float64, 256)
+	s.idx = make([]int64, 128)
 	return s, nil
 }
 
@@ -460,7 +468,8 @@ func (s *System) faceName(f FaceID) string {
 
 // Shape shapes utf8 with font f using CoreText (CTLine: bidi, ligatures,
 // clusters, the OS font-fallback cascade) and returns a handle into the run
-// cache. A hit allocates nothing. Invalid UTF-8 is shaped as U+FFFD.
+// cache. A hit allocates nothing. Every invalid UTF-8 byte is shaped as U+FFFD
+// (one character, and one cluster offset).
 func (s *System) Shape(f FontKey, utf8 []byte) RunRef {
 	if int(f) >= len(s.fonts) {
 		return 0
@@ -475,12 +484,13 @@ func (s *System) shapeMiss(f FontKey, b []byte) RunRef {
 	pool := s.poolPush()
 	defer s.poolPop(pool)
 	fe := &s.fonts[f]
-	s.gbuf, s.xbuf, s.fbuf = s.gbuf[:0], s.xbuf[:0], s.fbuf[:0]
+	s.gbuf, s.xbuf, s.fbuf, s.cbuf = s.gbuf[:0], s.xbuf[:0], s.fbuf[:0], s.cbuf[:0]
 	var advance float32
 	if len(b) > 0 {
+		s.indexUTF16(b)
 		str := s.cfString(b)
 		if str == 0 {
-			str = s.cfString([]byte(strings.ToValidUTF8(string(b), "\uFFFD")))
+			str = s.cfString(s.sanitized(b))
 		}
 		if str != 0 {
 			as := s.fr.Reset().Arg(0).Arg(str).Arg(fe.attrs).Call(sy.cfAttributedStringCreate).R0()
@@ -499,10 +509,43 @@ func (s *System) shapeMiss(f FontKey, b []byte) RunRef {
 			s.release(str)
 		}
 	}
-	return s.runs.insert(f, b, s.gbuf, s.xbuf, s.fbuf, advance)
+	return s.runs.insert(f, b, s.gbuf, s.xbuf, s.fbuf, s.cbuf, advance)
 }
 
-// appendRun appends one CTRun's glyphs, pen positions and face.
+// indexUTF16 fills s.u16b for b: the byte offset of every UTF-16 unit of the
+// CFString made from it (both units of a surrogate pair map to the pair's
+// first byte), then len(b). An invalid byte is one unit (U+FFFD, see
+// sanitized).
+func (s *System) indexUTF16(b []byte) {
+	s.u16b = s.u16b[:0]
+	for i := 0; i < len(b); {
+		r, n := utf8.DecodeRune(b[i:])
+		s.u16b = append(s.u16b, uint32(i))
+		if r >= 0x10000 {
+			s.u16b = append(s.u16b, uint32(i))
+		}
+		i += n
+	}
+	s.u16b = append(s.u16b, uint32(len(b)))
+}
+
+// sanitized returns b with every invalid byte replaced by U+FFFD, so that the
+// CFString has one unit per invalid byte and indexUTF16 stays exact.
+func (s *System) sanitized(b []byte) []byte {
+	s.san = s.san[:0]
+	for i := 0; i < len(b); {
+		r, n := utf8.DecodeRune(b[i:])
+		if r == utf8.RuneError && n == 1 {
+			s.san = append(s.san, "\uFFFD"...)
+		} else {
+			s.san = append(s.san, b[i:i+n]...)
+		}
+		i += n
+	}
+	return s.san
+}
+
+// appendRun appends one CTRun's glyphs, pen positions, face and clusters.
 func (s *System) appendRun(run uintptr, primary FaceID) {
 	n := int(s.fr.Call1(sy.ctRunGetGlyphCount, run))
 	if n == 0 {
@@ -521,12 +564,27 @@ func (s *System) appendRun(run uintptr, primary FaceID) {
 		s.pos = make([]float64, 2*n)
 	}
 	s.pos = s.pos[:cap(s.pos)]
+	if cap(s.idx) < n {
+		s.idx = make([]int64, n)
+	}
+	s.idx = s.idx[:cap(s.idx)]
 	// CFRange{0,0} is passed by value in two integer registers.
 	s.fr.Reset().Arg(run).Arg(0).Arg(0).ArgPtr(unsafe.Pointer(&s.gbuf[g0])).Call(sy.ctRunGetGlyphs)
 	s.fr.Reset().Arg(run).Arg(0).Arg(0).ArgPtr(unsafe.Pointer(&s.pos[0])).Call(sy.ctRunGetPositions)
+	s.fr.Reset().Arg(run).Arg(0).Arg(0).ArgPtr(unsafe.Pointer(&s.idx[0])).Call(sy.ctRunGetStringIndices)
+	var rtl uint32
+	if uint32(s.fr.Call1(sy.ctRunGetStatus, run))&1 != 0 { // kCTRunStatusRightToLeft
+		rtl = ClusterRTL
+	}
+	last := len(s.u16b) - 1
 	for i := 0; i < n; i++ {
 		s.xbuf = append(s.xbuf, float32(s.pos[2*i]))
 		s.fbuf = append(s.fbuf, face)
+		u := int(s.idx[i])
+		if u < 0 || u > last {
+			u = last
+		}
+		s.cbuf = append(s.cbuf, s.u16b[u]|rtl)
 	}
 }
 

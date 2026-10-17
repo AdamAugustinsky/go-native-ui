@@ -32,6 +32,10 @@ const (
 	wmKeyDown       = 0x0100
 	wmKeyUp         = 0x0101
 	wmChar          = 0x0102
+	wmImeStartComp  = 0x010D
+	wmImeEndComp    = 0x010E
+	wmImeComp       = 0x010F
+	wmImeSetContext = 0x0281
 	wmSysKeyDown    = 0x0104
 	wmSysKeyUp      = 0x0105
 	wmMouseMove     = 0x0200
@@ -87,6 +91,16 @@ const (
 	wheelDelta          = 120
 	wheelLinesPerNotch  = 3
 	wheelLogicalPerLine = 16
+
+	// Input method (imm32.dll).
+	gcsCompStr        = 0x0008
+	gcsCursorPos      = 0x0080
+	gcsResultStr      = 0x0800
+	cfsPoint          = 0x0002
+	cfsCandidatePos   = 0x0040
+	niCompositionStr  = 0x0015
+	cpsCancel         = 0x0004
+	iscShowCompWindow = 0x80000000 // ISC_SHOWUICOMPOSITIONWINDOW: the app draws the composition itself
 )
 
 // ---- Win32 structures -------------------------------------------------------
@@ -173,6 +187,13 @@ var (
 	pGetDpiForWindow    = win32.Proc(user32, "GetDpiForWindow")          // Windows 10 1607+
 	pGetDpiForSystem    = win32.Proc(user32, "GetDpiForSystem")          // Windows 10 1607+
 	pAdjustRectExForDpi = win32.Proc(user32, "AdjustWindowRectExForDpi") // Windows 10 1607+
+	imm32               = win32.LoadSystem("imm32.dll")
+	pImmGetContext      = win32.Proc(imm32, "ImmGetContext")
+	pImmReleaseContext  = win32.Proc(imm32, "ImmReleaseContext")
+	pImmGetCompStringW  = win32.Proc(imm32, "ImmGetCompositionStringW")
+	pImmSetCompWindow   = win32.Proc(imm32, "ImmSetCompositionWindow")
+	pImmSetCandWindow   = win32.Proc(imm32, "ImmSetCandidateWindow")
+	pImmNotifyIME       = win32.Proc(imm32, "ImmNotifyIME")
 	classNameUTF16      = mustUTF16("GoNativeUIWindow")
 	wndProcCallback     = syscall.NewCallback(wndProc) // created once
 	theWindow           *Window                        // the single window; read by wndProc
@@ -229,6 +250,15 @@ type Window struct {
 
 	hiSurrogate uint16
 	utf8        [4]byte
+
+	// Input method state (ime_windows.go): the composition is on screen, the
+	// caret rectangle the app reported, and storage the IME calls write into.
+	composing bool
+	imeRect   [4]float32
+	imeU16    [512]uint16
+	imeU8     []byte
+	compForm  compositionForm
+	candForm  candidateForm
 
 	// Syscall argument and result storage; kept in the heap-allocated Window
 	// so no pointer to a stack local ever reaches the OS.
@@ -708,6 +738,20 @@ func wndProc(hwnd, m, wp, lp uintptr) uintptr {
 
 	case wmChar:
 		w.onChar(uint16(wp))
+		return 0
+
+	case wmImeSetContext:
+		// The app draws the composition itself (EvPreedit); the candidate
+		// list stays the system's.
+		return defProc(hwnd, m, wp, lp&^iscShowCompWindow)
+	case wmImeStartComp:
+		w.imePlace()
+		return 0
+	case wmImeEndComp:
+		w.imeEnded()
+		return 0
+	case wmImeComp:
+		w.onImeComposition(lp)
 		return 0
 
 	case wmMouseMove:

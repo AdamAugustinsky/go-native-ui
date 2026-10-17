@@ -38,6 +38,14 @@ func (s *stack[T]) pop() {
 	s.n--
 }
 
+// peek is the value the next box would take, without taking it.
+func (s *stack[T]) peek() T {
+	if s.hasNext {
+		return s.next
+	}
+	return s.v[s.n]
+}
+
 func (s *stack[T]) set(x T) { s.next, s.hasNext = x, true }
 
 func (s *stack[T]) take() T {

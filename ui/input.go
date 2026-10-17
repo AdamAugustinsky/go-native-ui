@@ -1,5 +1,7 @@
 package ui
 
+import "unicode/utf8"
+
 // Mouse buttons (indices into the Input arrays).
 const (
 	ButtonLeft = iota
@@ -52,6 +54,8 @@ const (
 	MaxKeys = 8
 	// MaxText is the number of bytes of typed text per frame.
 	MaxText = 64
+	// MaxPreedit is the number of bytes of input-method composition text.
+	MaxPreedit = 256
 )
 
 // Input is one frame of input, filled by the app from platform events. It is
@@ -95,6 +99,21 @@ type Input struct {
 	NText int
 	// Focused is true while the window has keyboard focus.
 	Focused bool
+
+	// Time is the platform clock (monotonic nanoseconds, platform.Now) at the
+	// start of the frame. Text fields blink their caret by it; 0 means no
+	// clock, and carets stay solid.
+	Time int64
+
+	// Preedit[:NPreedit] is the text an input method is composing (marked
+	// text), shown by a focused text field at its caret; empty when no
+	// composition is in progress. PreeditSel is the caret or selected part
+	// inside it: byte offset and length. Unlike Text, which is the text typed
+	// during one frame, the preedit is state: it stays until the input method
+	// changes or clears it (SetPreedit).
+	Preedit    [MaxPreedit]byte
+	NPreedit   int
+	PreeditSel [2]int
 }
 
 // SetButton records a button change as a state and an edge.
@@ -138,9 +157,27 @@ func (in *Input) PushKey(e KeyEvent) bool {
 	return true
 }
 
-// AppendText queues typed text, dropping what does not fit.
+// AppendText queues typed text, dropping what does not fit (whole characters
+// only: a character that would be cut is dropped with the rest).
 func (in *Input) AppendText(s string) {
-	in.NText += copy(in.Text[in.NText:], s)
+	n := min(len(s), len(in.Text)-in.NText)
+	for n < len(s) && n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	in.NText += copy(in.Text[in.NText:], s[:n])
+}
+
+// SetPreedit sets the composition text and the caret or selection inside it
+// (byte offset and length into p); an empty p clears the composition. Text that
+// does not fit MaxPreedit is cut at a character boundary.
+func (in *Input) SetPreedit(p []byte, selStart, selLen int) {
+	n := min(len(p), len(in.Preedit))
+	for n < len(p) && n > 0 && !utf8.RuneStart(p[n]) {
+		n--
+	}
+	in.NPreedit = copy(in.Preedit[:], p[:n])
+	in.PreeditSel = [2]int{min(max(selStart, 0), in.NPreedit), 0}
+	in.PreeditSel[1] = min(max(selLen, 0), in.NPreedit-in.PreeditSel[0])
 }
 
 // ClearFrame clears the per-frame parts (edges, scroll, keys, text) and

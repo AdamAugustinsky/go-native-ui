@@ -569,3 +569,16 @@ Both licence files are kept in the copy.
 - Part of the cause was that `+arrowCursor` returns nil before `NSApplication` exists, so the arrow had been cached as nil. The cursors are now cached after the app object exists.
 - Separate hit-test geometry in the app made the zones feel like 1-pixel lines. The regions now come from the same layout the clicks hit-test against.
 
+
+## D25. Text editing: grapheme carets, caret blink, clipboard and IME scope (phase 4, 2026-10-17)
+
+**Decision.**
+
+- **Carets.** Every shaped run keeps one `uint32` per glyph with the byte offset of its cluster (`RunView.Clusters`, bit 31 = right-to-left). `CaretX`/`HitByte` refine shaper clusters to grapheme clusters at query time (our own UAX #29 on go-text's property tables, `text/unidata.go`), so caret stops are the same on CoreText, DirectWrite and go-text. Shaping itself stays cheap for lists that never need a caret.
+- **Caret blink.** 500 ms half-period, only while a field has focus in the key window and for 10 s after the last interaction; then the caret is solid and the app is back to 0 wakeups. The field asks for its next frame through `Context.WakeAfter()`; it is not an animation, so the loop sleeps between transitions. The blink counts as activity, like any animation: exit criterion 6 (idle) is measured once it has stopped. `TextEdit.BlinkHalfNs`/`BlinkTimeoutNs` change it.
+- **Clipboard.** Plain UTF-8 text. macOS `NSPasteboard`, Windows `CF_UNICODETEXT`. Linux has a process-local fallback for now; Wayland `wl_data_device` and the X11 `CLIPBOARD` selection come later.
+- **IME.** macOS: the view implements `NSTextInputClient` (marked text → `EvPreedit`, commits → `EvText`, `firstRectForCharacterRange:` from `Window.SetIMERect`). Windows: imm32 (`WM_IME_COMPOSITION`), untested with a real IME. Linux: later (`zwp_text_input_v3`, XIM/IBus).
+
+**Why.** A per-glyph offset is the smallest pointer-free record that supports carets on every backend. Grapheme refinement at query time keeps the cost on the one focused field, not on every shaped name. A 10 s blink window keeps the familiar caret while still letting an untouched app go fully idle.
+
+**Known gaps.** No undo, no reconversion, `replacementRange` ignored (press-and-hold accents to be checked by hand), no bidi-aware arrow movement.

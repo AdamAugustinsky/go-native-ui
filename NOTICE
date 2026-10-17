@@ -9,4 +9,18 @@ This project depends on:
   table that reaches Go through crosscall2/runtime.cgocallback) and rely on
   purego's internal/fakecgo for runtime bootstrap.
 
-No third-party source code is copied into this repository at present.
+- github.com/go-text/typesetting v0.3.5 — Unlicense OR BSD-3-Clause,
+  Copyright the go-text authors. Used through the patched copy below.
+- golang.org/x/image — BSD-3-Clause, Copyright The Go Authors (indirect,
+  through go-text).
+
+Third-party source copied into this repository:
+
+- third_party/typesetting/: 12 packages of github.com/go-text/typesetting
+  v0.3.5 (Unlicense OR BSD-3-Clause; its LICENSE file is alongside), with
+  our zero-allocation patch (third_party/typesetting/zeroalloc.patch,
+  DECISIONS.md D23).
+- text/delims.go: a copy of go-text/typesetting shaping/paired_delims_table.go
+  (v0.3.5), Unlicense OR BSD-3-Clause.
+- text/unidata.go: a copy of go-text/typesetting's internal/unicodedata
+  grapheme property tables (v0.3.5), Unlicense OR BSD-3-Clause.

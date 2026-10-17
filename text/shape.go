@@ -39,11 +39,13 @@ type gtSeg struct {
 }
 
 func (s *goSystem) shapeMiss(f FontKey, b []byte) RunRef {
-	s.runes = s.runes[:0]
-	for _, r := range string(b) {
+	s.runes, s.rbyte = s.runes[:0], s.rbyte[:0]
+	for i, r := range string(b) { // an invalid byte is one U+FFFD rune
 		s.runes = append(s.runes, r)
+		s.rbyte = append(s.rbyte, uint32(i))
 	}
-	s.gbuf, s.xbuf, s.fbuf = s.gbuf[:0], s.xbuf[:0], s.fbuf[:0]
+	s.rbyte = append(s.rbyte, uint32(len(b)))
+	s.gbuf, s.xbuf, s.fbuf, s.cbuf = s.gbuf[:0], s.xbuf[:0], s.fbuf[:0], s.cbuf[:0]
 	var pen float32
 	s.cur = f
 	for start := 0; start < len(s.runes); {
@@ -63,7 +65,7 @@ func (s *goSystem) shapeMiss(f FontKey, b []byte) RunRef {
 		}
 		start = end
 	}
-	return s.runs.insert(f, b, s.gbuf, s.xbuf, s.fbuf, pen)
+	return s.runs.insert(f, b, s.gbuf, s.xbuf, s.fbuf, s.cbuf, pen)
 }
 
 // isSeparator reports whether r is a paragraph separator (bidi class B).
@@ -373,6 +375,11 @@ func (s *goSystem) shapePiece(f FontKey, p gtSeg, rtl bool, pen float32) float32
 		s.gbuf = append(s.gbuf, gid)
 		s.xbuf = append(s.xbuf, pen+float32(b.Pos[i].XOffset)*k)
 		s.fbuf = append(s.fbuf, p.face)
+		c := s.rbyte[min(int(b.Info[i].Cluster), len(s.runes))]
+		if rtl {
+			c |= ClusterRTL
+		}
+		s.cbuf = append(s.cbuf, c)
 		pen += float32(b.Pos[i].XAdvance) * k
 	}
 	return pen

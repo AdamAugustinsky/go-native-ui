@@ -118,7 +118,11 @@ func allocs() (objects, bytes uint64) {
 }
 
 // TestZeroAlloc asserts exact heap-allocation deltas over many calls and
-// callbacks (not a truncated average).
+// callbacks (not a truncated average). The counters are process-wide, so a
+// rare one-off allocation elsewhere in the process can land in the window
+// (seen once in CI: 7 objects over 8000 calls). An allocation per call or
+// callback shows up thousands of times in every round, so one clean round
+// out of three passes.
 func TestZeroAlloc(t *testing.T) {
 	lib(t)
 	run := func() {
@@ -130,12 +134,18 @@ func TestZeroAlloc(t *testing.T) {
 		}
 	}
 	run() // warm up
-	runtime.GC()
-	o0, b0 := allocs()
-	run()
-	o1, b1 := allocs()
-	if o1 != o0 || b1 != b0 {
-		t.Fatalf("allocated %d objects / %d bytes over 6000 calls + 2000 callbacks", o1-o0, b1-b0)
+	for round := 1; ; round++ {
+		runtime.GC()
+		o0, b0 := allocs()
+		run()
+		o1, b1 := allocs()
+		if o1 == o0 && b1 == b0 {
+			return
+		}
+		if round == 3 {
+			t.Fatalf("allocated %d objects / %d bytes over 6000 calls + 2000 callbacks (in each of 3 rounds)", o1-o0, b1-b0)
+		}
+		t.Logf("round %d: %d objects / %d bytes (retrying)", round, o1-o0, b1-b0)
 	}
 }
 

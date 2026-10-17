@@ -151,11 +151,11 @@ func TestGlyphTable(t *testing.T) {
 
 func insertStr(c *runCache, font FontKey, s string) RunRef {
 	n := len(s)
-	g, x, f := make([]uint16, n), make([]float32, n), make([]FaceID, n)
+	g, x, f, cl := make([]uint16, n), make([]float32, n), make([]FaceID, n), make([]uint32, n)
 	for i := range s {
-		g[i], x[i], f[i] = uint16(s[i]), float32(i), FaceID(font)
+		g[i], x[i], f[i], cl[i] = uint16(s[i]), float32(i), FaceID(font), uint32(i)|ClusterRTL
 	}
-	return c.insert(font, []byte(s), g, x, f, float32(n))
+	return c.insert(font, []byte(s), g, x, f, cl, float32(n))
 }
 
 func checkStr(t *testing.T, c *runCache, font FontKey, s string) {
@@ -169,9 +169,12 @@ func checkStr(t *testing.T, c *runCache, font FontKey, s string) {
 		t.Fatalf("%q: view = %+v", s, v)
 	}
 	for i := range s {
-		if v.Glyphs[i] != uint16(s[i]) || v.X[i] != float32(i) || v.Faces[i] != FaceID(font) {
+		if v.Glyphs[i] != uint16(s[i]) || v.X[i] != float32(i) || v.Faces[i] != FaceID(font) || v.Clusters[i] != uint32(i)|ClusterRTL {
 			t.Fatalf("%q: glyph %d corrupted: %+v", s, i, v)
 		}
+	}
+	if string(v.Text) != s {
+		t.Fatalf("%q: text %q", s, v.Text)
 	}
 }
 

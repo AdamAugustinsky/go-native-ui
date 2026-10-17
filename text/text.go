@@ -12,6 +12,15 @@
 //     in 1024×1024 pages (R8 coverage, RGBA premultiplied for colour glyphs)
 //     and track the region changed since the last upload.
 //
+// # Carets
+//
+// A shaped run knows which source bytes each glyph came from
+// (RunView.Clusters, filled by every backend) and RunView.CaretX/HitByte turn
+// that into text-editing geometry: the x of a byte offset and the offset
+// nearest an x, on grapheme cluster boundaries (grapheme.go, UAX #29), with
+// ligatures split evenly and right-to-left runs in visual order (caret.go).
+// NextGrapheme, PrevGrapheme and GraphemeStart move over clusters.
+//
 // Bulk data is pointer-free: glyph ids, pen positions and faces live in
 // slabs, and every handle (FontKey, FaceID, RunRef) is an index.
 //
@@ -63,14 +72,32 @@ type Metrics struct {
 // invalid and has no glyphs.
 type RunRef uint32
 
-// RunView is a shaped string. Glyphs, X and Faces have the same length. The
-// slices alias cache storage: do not modify or append to them.
+// RunView is a shaped string. Glyphs, X, Faces and Clusters have the same
+// length. The slices alias cache storage: do not modify or append to them.
+//
+// Glyphs are in visual order (X increases), also in right-to-left runs.
 type RunView struct {
 	Glyphs  []uint16
 	X       []float32 // pen x per glyph in pixels, relative to the run origin
 	Faces   []FaceID  // face per glyph
 	Advance float32   // total advance in pixels
+
+	// Clusters maps each glyph back to the source text: the byte offset in
+	// Text of the first character of the glyph's cluster (the characters the
+	// shaper turned into this glyph, possibly together with its neighbours:
+	// a ligature, a base with its marks). Bit 31 (ClusterRTL) is set for
+	// glyphs of a right-to-left run, whose clusters descend with X. Offsets
+	// are UTF-8 byte offsets; an invalid byte counts as one character.
+	// Clusters are what the shaper reports; CaretX and HitByte refine them
+	// to grapheme boundaries. Nil for views that carry no cluster
+	// information (their carets are spread evenly over the graphemes).
+	Clusters []uint32
+	// Text is the shaped source string (aliasing cache storage).
+	Text []byte
 }
+
+// ClusterRTL is set in RunView.Clusters entries of right-to-left glyphs.
+const ClusterRTL = 1 << 31
 
 // GlyphEntry locates a rasterized glyph in an atlas page.
 type GlyphEntry struct {

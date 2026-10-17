@@ -77,6 +77,13 @@ type Context struct {
 	Rates Rates
 	// WheelStep is the number of pixels one wheel notch scrolls (default 48).
 	WheelStep float32
+	// TextEdit styles the text fields (colours and caret blink); see TextField.
+	TextEdit TextEditStyle
+	// ClipboardGet and ClipboardSet read and write the system clipboard (plain
+	// text) for the copy, cut and paste shortcuts of text fields; the app sets
+	// them (app.Run does). Nil functions disable the shortcuts.
+	ClipboardGet func() string
+	ClipboardSet func(string)
 
 	sh Shaper
 
@@ -139,6 +146,13 @@ type Context struct {
 	avPool                *core.Pool
 	avTable               *core.Table
 
+	// text fields (textfield.go): the earliest time a field wants a frame
+	// again (ns from the frame start, 0 = none), and the input-method
+	// rectangle of the focused field.
+	wakeNs  int64
+	imeRect [4]float32
+	imeOK   bool
+
 	// boxes built this frame with a cursor or the WindowDrag flag (cursor.go)
 	nCursorBoxes, nDragBoxes int
 
@@ -164,6 +178,7 @@ func New(sh Shaper) *Context {
 		WheelStep: 48,
 		Theme:     Theme{HotOverlay: 0xFFFFFF1C, ActiveOverlay: 0x00000026},
 		Rates:     Rates{Hot: 50, Active: 50, Focus: 50, Scroll: 40},
+		TextEdit:  defaultTextEdit,
 		pool:      core.NewPool(256),
 		table:     core.NewTable(256),
 		avPool:    core.NewPool(16),
@@ -249,6 +264,7 @@ func (c *Context) Begin(in *Input, widthPx, heightPx int, scale, dt float32) {
 	c.fmtA.Reset()
 	c.prevOrder, c.order = c.order, c.prevOrder[:0]
 	c.animating, c.scrollSet = false, false
+	c.wakeNs, c.imeOK = 0, false
 	c.nCursorBoxes, c.nDragBoxes = 0, 0
 	c.rHot = rate(c.Rates.Hot, dt)
 	c.rActive = rate(c.Rates.Active, dt)

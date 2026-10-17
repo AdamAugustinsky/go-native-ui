@@ -134,6 +134,8 @@ type goSystem struct {
 	gbuf  []uint16
 	xbuf  []float32
 	fbuf  []FaceID
+	cbuf  []uint32 // cluster per glyph (RunView.Clusters)
+	rbyte []uint32 // byte offset in the source of each rune of runes
 
 	rast rasterizer
 	cov  []byte
@@ -156,6 +158,8 @@ func newGoSystem(f fontFinder) *goSystem {
 		gbuf:     make([]uint16, 0, 128),
 		xbuf:     make([]float32, 0, 128),
 		fbuf:     make([]FaceID, 0, 128),
+		cbuf:     make([]uint32, 0, 128),
+		rbyte:    make([]uint32, 0, 128),
 	}
 }
 

@@ -163,3 +163,119 @@ func BenchmarkListScroll1MRealText(b *testing.B) {
 	b.StopTimer()
 	b.ReportMetric(float64(len(s.list.Quads)), "quads")
 }
+
+// A text field with the real shaper: clicks map through CoreText's clusters,
+// and typing, caret moves, selection and composition allocate nothing in
+// steady state (each keystroke shapes a new string, so this covers run-cache
+// misses of text that keeps changing).
+func TestRealTextFieldTyping(t *testing.T) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	ts, err := text.New()
+	if err != nil {
+		t.Skip("no text system:", err)
+	}
+	defer ts.Close()
+	r, err := gpu.NewOffscreenRenderer()
+	if err != nil {
+		t.Skip("no Metal device:", err)
+	}
+	defer r.Destroy()
+	ts.ReserveRuns(text.MaxCachedRuns, text.MaxCachedGlyphs, text.MaxCachedTextBytes)
+
+	font := ts.Font(text.FontDesc{SizePt: 13, Weight: 400, Scale: 2})
+	c := New(ts)
+	c.AtlasSync(r)
+	var buf TextBuffer
+	var in Input
+	var list gpu.DrawList
+	in.Inside, in.Focused = true, true
+	now := int64(1e9)
+	var f TextFieldSignal
+	frame := func() {
+		now += 16e6
+		in.Time = now
+		c.Begin(&in, 600, 100, 2, 1.0/60)
+		c.PushFont(font)
+		c.NextSize(Px(400), Px(48))
+		c.NextPad(12)
+		f = c.TextField("f", &buf)
+		c.PopFont()
+		c.End(&list)
+		in.ClearFrame()
+	}
+	frame()
+	c.SetFocus(c.KeyOf(f.ID))
+	frame()
+
+	// Mapping a click back to the text with CoreText clusters: "Hello wörld é".
+	buf.SetString("Hello w\u00f6rld e\u0301!")
+	frame()
+	frame()
+	v := ts.Run(ts.Shape(font, buf.Bytes()))
+	for _, off := range []int{0, 5, 12} {
+		x := v.CaretX(off)
+		in.MouseX, in.MouseY = f2px(c, f.ID, x), 24
+		frame()
+		in.SetButton(ButtonLeft, true, 1)
+		frame()
+		in.SetButton(ButtonLeft, false, 0)
+		frame()
+		if buf.Caret() != off {
+			t.Errorf("click at the caret stop of offset %d put the caret at %d", off, buf.Caret())
+		}
+	}
+
+	words := []string{"a", "é", "fi", "日本", "x y", " ", "e\u0301"}
+	step := func(i int) {
+		switch i % 12 {
+		case 0, 2, 4, 6:
+			in.AppendText(words[(i/2)%len(words)])
+		case 1:
+			in.PushKey(KeyEvent{Code: KeyLeft, Down: true})
+		case 3:
+			in.PushKey(KeyEvent{Code: KeyRight, Mods: ModShift, Down: true})
+		case 5:
+			in.PushKey(KeyEvent{Code: KeyBackspace, Down: true})
+		case 7:
+			in.PushKey(KeyEvent{Code: KeyLeft, Mods: ModAlt, Down: true})
+		case 8:
+			in.PushKey(KeyEvent{Code: KeyEnd, Down: true})
+		case 9:
+			in.MouseX, in.MouseY = 12+float32(i%25)*9, 24
+			in.SetButton(ButtonLeft, true, 1)
+		case 10:
+			in.MouseX = 12 + float32(i%31)*8
+		case 11:
+			in.SetButton(ButtonLeft, false, 0)
+			if i%24 == 11 {
+				in.SetPreedit(nil, 0, 0)
+			} else {
+				in.SetPreedit([]byte("かな"), 3, 0)
+			}
+		}
+		frame()
+		if buf.Len() > 200 {
+			buf.SetString("restart")
+		}
+	}
+	i := 0
+	for ; i < 1200; i++ {
+		step(i)
+	}
+	var mallocs, bytes uint64
+	for a := 0; a < 5; a++ {
+		mallocs, bytes = measure(func() { step(i); i++ }, 900)
+		t.Logf("attempt %d: %d mallocs, %d bytes over 900 frames", a+1, mallocs, bytes)
+		if mallocs == 0 && bytes == 0 {
+			return
+		}
+	}
+	t.Errorf("typing allocated in every window (last %d mallocs, %d bytes)", mallocs, bytes)
+}
+
+// f2px converts an x in the text of a field to window pixels.
+func f2px(c *Context, id ID, x float32) float32 {
+	r := c.Rect(id)
+	return r[0] + 12 + x
+}

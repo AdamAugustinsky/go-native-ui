@@ -214,34 +214,37 @@ func (s *System) Shape(f FontKey, utf8 []byte) RunRef {
 
 func (s *System) shapeMiss(f FontKey, b []byte) RunRef {
 	fe := &s.fonts[f]
-	s.gbuf, s.xbuf, s.fbuf = s.gbuf[:0], s.xbuf[:0], s.fbuf[:0]
+	s.gbuf, s.xbuf, s.fbuf, s.cbuf = s.gbuf[:0], s.xbuf[:0], s.fbuf[:0], s.cbuf[:0]
 	s.toUTF16(b)
 	var advance float32
 	if len(s.u16) > 0 {
 		s.paraRTL = firstStrongRTL(b)
 		advance = s.shapeLine(fe)
 	}
-	return s.runs.insert(f, b, s.gbuf, s.xbuf, s.fbuf, advance)
+	return s.runs.insert(f, b, s.gbuf, s.xbuf, s.fbuf, s.cbuf, advance)
 }
 
-// toUTF16 converts to UTF-16 in s.u16, replacing invalid sequences with
-// U+FFFD.
+// toUTF16 converts to UTF-16 in s.u16, replacing every invalid byte with
+// U+FFFD, and records in s.u16b the byte offset of each UTF-16 unit (both
+// units of a surrogate pair map to the first byte of the character).
 func (s *System) toUTF16(b []byte) {
-	u := s.u16[:0]
+	u, ub := s.u16[:0], s.u16b[:0]
 	for i := 0; i < len(b); {
 		r, n := utf8.DecodeRune(b[i:])
-		i += n
 		if r == utf8.RuneError {
 			r = 0xFFFD
 		}
 		if r >= 0x10000 {
 			r -= 0x10000
 			u = append(u, uint16(0xD800+(r>>10)), uint16(0xDC00+(r&0x3ff)))
+			ub = append(ub, uint32(i), uint32(i))
 		} else {
 			u = append(u, uint16(r))
+			ub = append(ub, uint32(i))
 		}
+		i += n
 	}
-	s.u16 = u
+	s.u16, s.u16b = u, ub
 }
 
 // firstStrongRTL reports whether the first letter of b belongs to a
@@ -283,7 +286,7 @@ func (s *System) shapeLine(fe *fontEnt) float32 {
 		s.scripts = s.scripts[:0]
 	}
 
-	s.items, s.ig, s.ia, s.io = s.items[:0], s.ig[:0], s.ia[:0], s.io[:0]
+	s.items, s.ig, s.ia, s.io, s.ic = s.items[:0], s.ig[:0], s.ia[:0], s.io[:0], s.ic[:0]
 
 	// The font's own face shapes every stretch of text it has glyphs for;
 	// IDWriteFontFallback.MapCharacters is asked only about the rest.
@@ -350,12 +353,14 @@ func (s *System) shapeLine(fe *fontEnt) float32 {
 		ads := s.ia[it.g0 : it.g0+it.n]
 		offs := s.io[it.g0 : it.g0+it.n]
 		gids := s.ig[it.g0 : it.g0+it.n]
+		cls := s.ic[it.g0 : it.g0+it.n]
 		if it.level&1 == 0 {
 			cum := x
 			for k := range gids {
 				s.gbuf = append(s.gbuf, gids[k])
 				s.xbuf = append(s.xbuf, cum+offs[k])
 				s.fbuf = append(s.fbuf, it.face)
+				s.cbuf = append(s.cbuf, cls[k])
 				cum += ads[k]
 			}
 		} else {
@@ -369,6 +374,7 @@ func (s *System) shapeLine(fe *fontEnt) float32 {
 				s.gbuf = append(s.gbuf, gids[k])
 				s.xbuf = append(s.xbuf, s.ix[k])
 				s.fbuf = append(s.fbuf, it.face)
+				s.cbuf = append(s.cbuf, cls[k]|ClusterRTL)
 			}
 		}
 		x += it.width
@@ -521,6 +527,28 @@ func (s *System) shapeItem(p, q int, face FaceID, level uint8, sa scriptAnalysis
 		return
 	}
 	it := shapeItem{g0: len(s.ig), n: n, level: level, face: face}
+	// The cluster map gives each text position the first glyph of its
+	// cluster; a glyph's cluster starts at the first position that maps to
+	// it, and glyphs that no position maps to (the later glyphs of a
+	// multi-glyph cluster) continue the cluster before them. Glyphs are in
+	// logical order here.
+	ic0 := len(s.ic)
+	for k := 0; k < n; k++ {
+		s.ic = append(s.ic, ^uint32(0))
+	}
+	for t := length - 1; t >= 0; t-- { // the first position wins
+		if g := int(s.cmap[t]); g < n {
+			s.ic[ic0+g] = s.u16b[p+t]
+		}
+	}
+	for k := 0; k < n; k++ {
+		if s.ic[ic0+k] == ^uint32(0) {
+			s.ic[ic0+k] = 0
+			if k > 0 {
+				s.ic[ic0+k] = s.ic[ic0+k-1]
+			}
+		}
+	}
 	for k := 0; k < n; k++ {
 		off := s.goff[k].AdvanceOffset
 		if rtl {

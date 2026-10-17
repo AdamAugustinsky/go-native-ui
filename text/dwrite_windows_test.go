@@ -618,3 +618,19 @@ func TestCloseIsIdempotent(t *testing.T) {
 	s.Close()
 	s.Close()
 }
+
+// TestDWriteClusters runs the backend-independent cluster and caret checks
+// on DirectWrite (the UI font, with the system font fallback for the other
+// scripts).
+func TestDWriteClusters(t *testing.T) {
+	s := newSys(t)
+	f := uiFont(s)
+	runClusterChecks(t, clusterEnv{
+		shape: func(str string) RunView { return shapeStr(s, f, str) },
+		rtl:   true,
+		ligShape: func(str string) RunView {
+			lf := s.Font(FontDesc{Family: "Times New Roman", SizePt: 13, Scale: 2, Weight: 400})
+			return shapeStr(s, lf, str)
+		},
+	})
+}

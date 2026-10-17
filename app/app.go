@@ -115,8 +115,9 @@ type App struct {
 	dragUI  []ui.DragRegion
 	dragPl  []platform.DragRegion
 
-	resized     bool // a resize since the last build
-	settle      bool // the frame being built is the first after a resize (see owed)
+	wakeAt      int64 // platform.Now at which the UI wants a frame although nothing animates (ui.Context.WakeAfter); 0 = none
+	resized     bool  // a resize since the last build
+	settle      bool  // the frame being built is the first after a resize (see owed)
 	done        bool
 	more        bool // the last frame left a repaint owed (animation, input to settle)
 	scriptFrame int
@@ -308,6 +309,7 @@ func openWindowed(cfg Config, b Builder, st *StartupReport) (*App, error) {
 // initUI creates the ui context and runs the Initer.
 func (a *App) initUI() error {
 	a.UI = ui.New(a.Text)
+	a.UI.ClipboardGet, a.UI.ClipboardSet = platform.Clipboard, platform.SetClipboard
 	a.UI.AtlasSync(a.R)
 	if in, ok := a.b.(Initer); ok {
 		if err := in.Init(a); err != nil {
@@ -353,6 +355,10 @@ func (a *App) loop() error {
 			break
 		}
 		now = platform.Now()
+		if a.wakeAt != 0 && now >= a.wakeAt {
+			a.wakeAt = 0
+			a.p.invalidate() // a text field's caret blink is due
+		}
 		if a.verbose {
 			a.dumpIfStalled(now)
 		}
@@ -374,6 +380,11 @@ func (a *App) loop() error {
 // timeout is the Wait timeout; a bench also wakes in time for its deadline.
 func (a *App) timeout(now int64) int64 {
 	t := a.p.timeout(now)
+	if a.wakeAt != 0 { // the UI asked for a frame at a time (WakeAfter)
+		if d := max(a.wakeAt-now, 0); t < 0 || d < t {
+			t = d
+		}
+	}
 	if a.bench != nil {
 		if d := max(a.bench.deadline-now, 0); t < 0 || d < t {
 			t = d
@@ -410,7 +421,7 @@ func (a *App) onEvent(e *platform.Event) {
 		a.p.frameEvent()
 	default:
 		var txt []byte
-		if e.Kind == platform.EvText {
+		if e.Kind == platform.EvText || e.Kind == platform.EvPreedit {
 			txt = a.Win.Text(e.Text)
 		}
 		if a.tr.event(e, txt) {

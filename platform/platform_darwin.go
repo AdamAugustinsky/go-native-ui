@@ -60,6 +60,23 @@ type Window struct {
 	curs      cursorMap // cursor regions and override (SetCursorRegions)
 	drags     dragMap   // titlebar drag areas (SetDragRegions)
 	pointerIn bool      // the pointer is over the view (tracking area enter/exit and mouse events)
+
+	// Input method (NSTextInputClient). marked is the UTF-8 of the marked
+	// text the input method is composing, markedSel the caret/selection in it
+	// (UTF-8 bytes) and markedSel16 the same in UTF-16 units, which is what
+	// AppKit asks for. imeUsed and cmdCalled record, during one key event's
+	// sendEvent, whether the input method took the key (setMarkedText,
+	// unmarkText, a commit while composing) and whether it handed it back as a
+	// command (doCommandBySelector:).
+	marked      []byte
+	tmp         []byte // scratch for decoding NSStrings
+	markedSel   [2]int32
+	markedSel16 [2]uintptr
+	marked16    uintptr
+	imeRect     [4]float32 // caret/composition rectangle, window pixels (SetIMERect)
+	textInput   bool
+	imeUsed     bool
+	cmdCalled   bool
 }
 
 const wakeSubtype = 0x4E55 // our NSEventTypeApplicationDefined subtype
@@ -126,6 +143,9 @@ var (
 	selIsKindOfClass        = objc.Sel("isKindOfClass:")
 	selString               = objc.Sel("string")
 	selRespondsTo           = objc.Sel("respondsToSelector:")
+	selInputContext         = objc.Sel("inputContext")
+	selDiscardMarked        = objc.Sel("discardMarkedText")
+	selInvalidateCoords     = objc.Sel("invalidateCharacterCoordinates")
 
 	// Methods implemented by our classes (dispatched in impHandler).
 	selAcceptsFirstResp  = objc.Sel("acceptsFirstResponder")
@@ -292,7 +312,7 @@ func Open(o Options) (*Window, error) {
 	pool := F.Call0(objc.PoolPush)
 	defer F.Call1(objc.PoolPop, pool)
 
-	w := &Window{q: newEventQueue(), scale: 1, linkPaused: true, visible: -1}
+	w := &Window{q: newEventQueue(), scale: 1, linkPaused: true, visible: -1, marked: make([]byte, 0, 256), tmp: make([]byte, 0, 256)}
 	w.app = objc.Send(objc.Cls("NSApplication"), selSharedApplication)
 	objc.Send1(w.app, selSetActivation, 0) // NSApplicationActivationPolicyRegular
 	loadCursors()
@@ -501,6 +521,7 @@ func mods(flags uintptr) Mods {
 }
 
 func (w *Window) handle(ev objc.ID) {
+	keyIdx := -1 // index in the queue of the EvKey of this key-down event
 	typ := uintptr(objc.Send(ev, selType))
 	if typ == 15 && uintptr(objc.Send(ev, selSubtype))&0xFFFF == wakeSubtype {
 		if takeWake() {
@@ -581,24 +602,117 @@ func (w *Window) handle(ev objc.ID) {
 			}
 		}
 		w.q.push(e)
+		if typ == 10 {
+			keyIdx = len(w.q.ev) - 1
+		}
 		if typ == 10 && m == ModSuper && code == 0x0C { // Cmd+Q (there is no menu yet)
 			w.q.push(Event{Kind: EvClose, Time: t})
 		}
 	}
+	// The key reaches the view's keyDown: through interpretKeyEvents: the input
+	// method sees it first. A key it consumed (composition keys, the key that
+	// commits) is not a key press for the app; one it hands back as a command
+	// (an arrow or Enter with nothing composing, doCommandBySelector:) is.
+	markedBefore := len(w.marked) > 0
+	w.imeUsed, w.cmdCalled = false, false
 	objc.Send1(w.app, selSendEvent, uintptr(ev))
+	w.dropConsumedKey(keyIdx, markedBefore)
+}
+
+// dropConsumedKey removes the EvKey at keyIdx (if >= 0) when the input method
+// consumed the key: it was composing before the key or took the key during
+// it, and did not hand it back as a command.
+func (w *Window) dropConsumedKey(keyIdx int, markedBefore bool) {
+	if keyIdx >= 0 && keyIdx < len(w.q.ev) && (markedBefore || w.imeUsed) && !w.cmdCalled {
+		w.q.ev = append(w.q.ev[:keyIdx], w.q.ev[keyIdx+1:]...)
+	}
 }
 
 // firstRectIMP implements firstRectForCharacterRange:actualRange: (the IME
-// candidate-window anchor). Phase 1 returns an empty rect; IME is phase 3.
+// candidate-window anchor): the rectangle the app gave SetIMERect, in screen
+// coordinates. The range asked about is ignored: the app reports the caret or
+// the composition, which is all an input method asks for.
 // amd64: argument 0 is the hidden result pointer, which the trampoline also
 // returns in rax. arm64: CGRect is an HFA returned in d0-d3.
 func firstRectIMP(c *ffi.CB) {
+	var r objc.Rect
+	if w := theWindow.Load(); w != nil {
+		r = w.imeScreenRect()
+	}
 	if runtime.GOARCH == "amd64" {
-		*(*objc.Rect)(c.IndirectResult()) = objc.Rect{}
+		*(*objc.Rect)(c.IndirectResult()) = r
 		return
 	}
-	for i := range 4 {
-		c.RetF64(i, 0)
+	c.RetF64(0, r.X)
+	c.RetF64(1, r.Y)
+	c.RetF64(2, r.W)
+	c.RetF64(3, r.H)
+}
+
+// imeScreenRect converts the app's IME rectangle (window pixels, y down) to
+// screen points (y up): the view is the content view, whose frame origin is
+// relative to the window frame's.
+func (w *Window) imeScreenRect() objc.Rect {
+	s := float64(w.scale)
+	wf, vf := objc.SendRect(w.win, selFrame), objc.SendRect(w.view, selFrame)
+	x, y := float64(w.imeRect[0])/s, float64(w.imeRect[1])/s
+	rw, rh := float64(w.imeRect[2])/s, float64(w.imeRect[3])/s
+	return objc.Rect{X: wf.X + vf.X + x, Y: wf.Y + vf.Y + w.hPt - y - rh, W: rw, H: rh}
+}
+
+// SetIMERect tells the input method where the text caret (or the composition,
+// while one is shown) is, in window pixels with the origin at the top left;
+// candidate windows are placed next to it. Main thread; does nothing when the
+// rectangle is unchanged, so it can be called every frame.
+func (w *Window) SetIMERect(x, y, wd, h float32) {
+	r := [4]float32{x, y, wd, h}
+	if r == w.imeRect {
+		return
+	}
+	w.imeRect = r
+	if ctx := objc.Send(w.view, selInputContext); ctx != 0 {
+		objc.Send(ctx, selInvalidateCoords)
+	}
+}
+
+// SetTextInput says whether a text field has keyboard focus. When it stops
+// having it while an input method is composing, the composition is discarded
+// (EvPreedit with no text follows). Main thread.
+func (w *Window) SetTextInput(active bool) {
+	if w.textInput == active {
+		return
+	}
+	w.textInput = active
+	if !active && len(w.marked) > 0 {
+		if ctx := objc.Send(w.view, selInputContext); ctx != 0 {
+			objc.Send(ctx, selDiscardMarked)
+		}
+		w.setMarkedFrom(nil, 0, 0, 0)
+	}
+}
+
+// setMarkedFrom records the marked text and queues an EvPreedit for it (an empty
+// text clears it). sel16 is the selection in UTF-16 units of the marked
+// string; the same range in bytes goes into the event.
+func (w *Window) setMarkedFrom(b []byte, loc16, len16, total16 uintptr) {
+	w.marked = append(w.marked[:0], b...)
+	w.marked16 = total16
+	w.markedSel16 = [2]uintptr{loc16, len16}
+	start := u16ToByte(b, loc16)
+	end := u16ToByte(b, loc16+len16)
+	w.markedSel = [2]int32{int32(start), int32(end - start)}
+	w.q.pushPreedit(w.marked, w.markedSel[0], w.markedSel[1], Now())
+}
+
+// commitMarked turns the marked text into typed text: the composition ends
+// and the same text arrives as EvText.
+func (w *Window) commitMarked() {
+	off := len(w.q.text)
+	w.q.text = append(w.q.text, w.marked...)
+	n := len(w.q.text) - off
+	w.setMarkedFrom(nil, 0, 0, 0)
+	if n > 0 {
+		w.q.push(Event{Kind: EvText, Text: TextRef{uint32(off), uint32(n)}, Time: Now()})
 	}
 }
 
@@ -617,8 +731,43 @@ func impHandler(c *ffi.CB) {
 	case selKeyDown:
 		arr := objc.Send1(clsNSArray, selArrayWithObject, c.Int(2))
 		objc.Send1(objc.ID(c.Int(0)), selInterpretKeys, uintptr(arr))
-	case selKeyUp, selFlagsChanged, selDoCommand, selSetMarkedText, selUnmarkText:
-		// Swallowed: no beep. IME preedit comes in phase 3.
+	case selKeyUp, selFlagsChanged:
+		// Swallowed: no beep.
+	case selDoCommand:
+		// Swallowed (the key is the app's: it already has its EvKey), but
+		// remember that the input method handed this key back.
+		if w != nil {
+			w.cmdCalled = true
+		}
+	case selSetMarkedText:
+		// setMarkedText:selectedRange:replacementRange: — the composition
+		// (an NSString or NSAttributedString) and the caret or selection inside
+		// it, in UTF-16 units. The replacement range is not used: the app owns
+		// the text and shows the composition at its caret.
+		if w == nil {
+			return
+		}
+		str := objc.ID(c.Int(2))
+		if str != 0 && objc.SendBool1(str, selIsKindOfClass, uintptr(clsNSAttributedString)) {
+			str = objc.Send(str, selString)
+		}
+		w.tmp = objc.AppendUTF8(w.tmp[:0], str)
+		b := w.tmp
+		total := utf16Len(b)
+		loc, n := c.Int(3), c.Int(4)
+		if loc > total { // NSNotFound or past the end
+			loc = total
+		}
+		n = min(n, total-loc)
+		w.imeUsed = true
+		w.setMarkedFrom(b, loc, n, total)
+	case selUnmarkText:
+		// The input method gives up the marking and leaves the text: it
+		// becomes ordinary typed text.
+		if w != nil && len(w.marked) > 0 {
+			w.imeUsed = true
+			w.commitMarked()
+		}
 	case selInsertText:
 		if w == nil {
 			return
@@ -629,15 +778,30 @@ func impHandler(c *ffi.CB) {
 		}
 		off := len(w.q.text)
 		w.q.text = objc.AppendUTF8(w.q.text, str)
-		if n := len(w.q.text) - off; n > 0 {
+		n := len(w.q.text) - off
+		if len(w.marked) > 0 { // a commit: the composition ends where the text lands
+			w.imeUsed = true
+			w.setMarkedFrom(nil, 0, 0, 0)
+		}
+		if n > 0 {
 			w.q.push(Event{Kind: EvText, Text: TextRef{uint32(off), uint32(n)}, Time: Now()})
 		}
 	case selHasMarkedText:
-		c.RetBool(false)
+		c.RetBool(w != nil && len(w.marked) > 0)
 	case selMarkedRange:
-		c.Ret2(uintptr(math.MaxInt64), 0) // {NSNotFound, 0}
+		// The app owns the text and has no document positions to report: the
+		// marked text is described as starting at 0.
+		if w != nil && len(w.marked) > 0 {
+			c.Ret2(0, w.marked16)
+		} else {
+			c.Ret2(uintptr(math.MaxInt64), 0) // {NSNotFound, 0}
+		}
 	case selSelectedRange:
-		c.Ret2(0, 0)
+		if w != nil && len(w.marked) > 0 {
+			c.Ret2(w.markedSel16[0], w.markedSel16[1])
+		} else {
+			c.Ret2(0, 0)
+		}
 	case selValidAttrs:
 		c.Ret(uintptr(objc.Send(clsNSArray, selArray)))
 	case selAttrSubstring:

@@ -7,7 +7,7 @@
 //
 //	Open(Options) (*Window, error)        main thread only
 //	(*Window).Wait(timeoutNs) []Event     block until events, a wake, a frame slot or the timeout
-//	(*Window).Text(TextRef) []byte        UTF-8 bytes of an EvText event
+//	(*Window).Text(TextRef) []byte        UTF-8 bytes of an EvText or EvPreedit event
 //	(*Window).RequestFrame()              arm one EvFrame at the next vsync opportunity
 //	(*Window).Size() (w, h int32, scale)  content size in physical pixels, pixels per logical unit
 //	(*Window).Native() Native             OS handles for the gpu package
@@ -20,9 +20,30 @@
 //	(*Window).SetCursorRegions(r)         pointer shapes by content rectangle (later entries on top); copied, cheap to call every frame
 //	(*Window).SetCursorOverride(Cursor)   one shape over the whole content while not CursorArrow (a drag in progress)
 //	(*Window).SetDragRegions(r)           custom-titlebar areas that move the window (macOS; no-op elsewhere)
+//	(*Window).SetIMERect(x, y, w, h)      where the text caret or composition is (window pixels), for input-method candidate windows; copied, cheap to call every frame
+//	(*Window).SetTextInput(active)        whether a text field has focus; losing it cancels a composition in progress
 //	(*Window).Close()
+//	Clipboard() string                    plain UTF-8 text of the system clipboard; main thread
+//	SetClipboard(text string)             replace the clipboard with plain text; main thread
 //	Wake()                                any goroutine; coalesced
 //	Now() int64                           monotonic ns, same timebase as Event.Time
+//
+// Text input. Typed characters arrive as EvText together with the EvKey of
+// the key that produced them. An input method (macOS, Windows) composes text
+// first: while it does, EvPreedit reports the not yet committed text and the
+// caret inside it (an empty one ends the composition), and the keys the input
+// method consumed produce no EvKey. The commit arrives as EvPreedit (empty)
+// followed by EvText. SetTextInput(false) cancels a composition in progress
+// (the app calls it when its text field loses focus; EvPreedit with no text
+// follows). SetIMERect tells the input method where to put its candidate
+// window. An input method that is active composes whether or not the app has a
+// field to show it in: an app without one focused sees EvPreedit and no EvKey
+// for the keys the input method took, and should focus a field then.
+//
+// Clipboard text is plain UTF-8 with \n line ends. macOS and Windows use the
+// system clipboard. Linux keeps it in the process (clipboard_linux.go): copy
+// and paste work within the application only, until the Wayland data-device
+// and X11 selection protocols are implemented.
 //
 // Frame handler: while the user drags a window edge, macOS and Windows run
 // their own loop inside Wait and the app's loop does not run. An app that
@@ -47,6 +68,7 @@ package platform
 import (
 	"runtime"
 	"sync/atomic"
+	"unicode/utf8"
 	_ "unsafe" // go:linkname
 )
 
@@ -67,6 +89,7 @@ const (
 	EvScroll                  // DX, DY in physical pixels; FlagPrecise for trackpads
 	EvKey                     // Key, Code, Mods, FlagDown, FlagRepeat
 	EvText                    // Text: committed UTF-8 text input
+	EvPreedit                 // Text: input-method composition (marked text), empty when it ended; SelStart, SelLen: caret/selection inside it
 	EvWake                    // a goroutine called Wake
 	EvFrame                   // the frame slot armed by RequestFrame is available
 )
@@ -167,8 +190,11 @@ type Event struct {
 	DX, DY float32 // scroll delta, physical pixels, positive = content moves right/down
 	W, H   int32   // EvResize: content size in physical pixels
 	Scale  float32 // EvResize: physical pixels per logical unit
-	Text   TextRef // EvText
-	Time   int64   // OS event time in Now() nanoseconds; 0 if unknown
+	Text   TextRef // EvText, EvPreedit
+	// EvPreedit: the caret (SelLen 0) or the part being converted inside the
+	// composition, as a byte offset and length into the UTF-8 text.
+	SelStart, SelLen int32
+	Time             int64 // OS event time in Now() nanoseconds; 0 if unknown
 }
 
 // Options configure Open.
@@ -236,6 +262,43 @@ func (q *eventQueue) pushText(b []byte, t int64) {
 	off := len(q.text)
 	q.text = append(q.text, b...)
 	q.push(Event{Kind: EvText, Text: TextRef{uint32(off), uint32(len(b))}, Time: t})
+}
+
+// u16ToByte converts an offset in UTF-16 units of b (decoded as UTF-8) to a
+// byte offset, clamped to the text.
+func u16ToByte(b []byte, units uintptr) int {
+	i := 0
+	for u := uintptr(0); u < units && i < len(b); {
+		r, n := utf8.DecodeRune(b[i:])
+		i += n
+		u++
+		if r >= 0x10000 {
+			u++
+		}
+	}
+	return i
+}
+
+// utf16Len is the length of b (UTF-8) in UTF-16 units.
+func utf16Len(b []byte) uintptr {
+	var u uintptr
+	for i := 0; i < len(b); {
+		r, n := utf8.DecodeRune(b[i:])
+		i += n
+		u++
+		if r >= 0x10000 {
+			u++
+		}
+	}
+	return u
+}
+
+// pushPreedit queues the input-method composition b (empty ends it) with the
+// caret or selection inside it.
+func (q *eventQueue) pushPreedit(b []byte, selStart, selLen int32, t int64) {
+	off := len(q.text)
+	q.text = append(q.text, b...)
+	q.push(Event{Kind: EvPreedit, Text: TextRef{uint32(off), uint32(len(b))}, SelStart: selStart, SelLen: selLen, Time: t})
 }
 
 func (q *eventQueue) textOf(r TextRef) []byte { return q.text[r.Off : r.Off+r.Len] }

@@ -31,7 +31,7 @@ func makeRuns(prefix string, n int) []strRun {
 }
 
 func (r *strRun) insert(c *runCache) RunRef {
-	return c.insert(1, r.b, r.g, r.xs, r.fs, float32(len(r.b)))
+	return c.insert(1, r.b, r.g, r.xs, r.fs, nil, float32(len(r.b)))
 }
 
 // allocFree runs setup (unmeasured) and then the function it returns, measured,

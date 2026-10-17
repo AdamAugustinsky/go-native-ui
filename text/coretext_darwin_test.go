@@ -493,3 +493,16 @@ func TestCloseIsIdempotent(t *testing.T) {
 	s.Close()
 	s.Close()
 }
+
+func TestCoreTextClusters(t *testing.T) {
+	s := newSys(t)
+	f := uiFont(s)
+	runClusterChecks(t, clusterEnv{
+		shape: func(str string) RunView { return s.Run(s.Shape(f, []byte(str))) },
+		rtl:   true,
+		ligShape: func(str string) RunView {
+			lf := s.Font(FontDesc{Family: "Hoefler Text", SizePt: 13, Scale: 2, Weight: 400})
+			return s.Run(s.Shape(lf, []byte(str)))
+		},
+	})
+}

@@ -896,3 +896,14 @@ func TestFontFallsBackWhenMatchIsUnreadable(t *testing.T) {
 		t.Fatal("an unusable font should give an inert key")
 	}
 }
+
+// TestEngineClusters runs the backend-independent cluster and caret checks
+// on the go-text shaper (Roboto, with Amiri for Arabic).
+func TestEngineClusters(t *testing.T) {
+	s, _ := newEngine(t)
+	f := ui(s)
+	runClusterChecks(t, clusterEnv{
+		shape: func(str string) RunView { return eShape(s, f, str) },
+		rtl:   true,
+	})
+}

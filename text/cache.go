@@ -31,6 +31,7 @@ type runCache struct {
 	glyph []uint16
 	xs    []float32
 	faces []FaceID
+	clus  []uint32 // per glyph, see RunView.Clusters
 	gen   uint32
 
 	maxRuns, maxGlyphs, maxText int
@@ -84,6 +85,9 @@ func (c *runCache) reserve(runs, glyphs, textBytes int) {
 	if cap(c.faces) < glyphs {
 		c.faces = append(make([]FaceID, 0, glyphs), c.faces...)
 	}
+	if cap(c.clus) < glyphs {
+		c.clus = append(make([]uint32, 0, glyphs), c.clus...)
+	}
 	// insert grows the table when entries*2 > len(table).
 	size := len(c.table)
 	for size < runs*2 {
@@ -123,9 +127,10 @@ func (c *runCache) lookup(font FontKey, b []byte) (RunRef, bool) {
 }
 
 // insert stores a shaped run (the slices are copied) and returns its ref.
+// clusters has one entry per glyph (RunView.Clusters); nil stores zeros.
 // It may evict older entries first, which invalidates earlier RunRefs and
 // RunViews (the generation changes).
-func (c *runCache) insert(font FontKey, b []byte, glyphs []uint16, xs []float32, faces []FaceID, advance float32) RunRef {
+func (c *runCache) insert(font FontKey, b []byte, glyphs []uint16, xs []float32, faces []FaceID, clusters []uint32, advance float32) RunRef {
 	if len(c.ents)+1 > c.maxRuns || len(c.text)+len(b) > c.maxText || len(c.glyph)+len(glyphs) > c.maxGlyphs {
 		c.evict()
 	}
@@ -140,6 +145,11 @@ func (c *runCache) insert(font FontKey, b []byte, glyphs []uint16, xs []float32,
 	c.glyph = append(c.glyph, glyphs...)
 	c.xs = append(c.xs, xs...)
 	c.faces = append(c.faces, faces...)
+	if clusters != nil {
+		c.clus = append(c.clus, clusters[:len(glyphs)]...)
+	} else {
+		c.clus = append(c.clus, make([]uint32, len(glyphs))...)
+	}
 	c.ents = append(c.ents, e)
 	if len(c.ents)*2 > len(c.table) {
 		c.rehash(len(c.table) * 2)
@@ -184,7 +194,7 @@ func (c *runCache) evict() {
 	}
 	if keep == 0 {
 		c.ents = c.ents[:0]
-		c.text, c.glyph, c.xs, c.faces = c.text[:0], c.glyph[:0], c.xs[:0], c.faces[:0]
+		c.text, c.glyph, c.xs, c.faces, c.clus = c.text[:0], c.glyph[:0], c.xs[:0], c.faces[:0], c.clus[:0]
 		clear(c.table)
 		return
 	}
@@ -199,6 +209,7 @@ func (c *runCache) evict() {
 		copy(c.glyph[gw:], c.glyph[e.off:e.off+e.n])
 		copy(c.xs[gw:], c.xs[e.off:e.off+e.n])
 		copy(c.faces[gw:], c.faces[e.off:e.off+e.n])
+		copy(c.clus[gw:], c.clus[e.off:e.off+e.n])
 		e.textOff, e.off, e.ref = uint32(tw), uint32(gw), false
 		tw += int(e.textLen)
 		gw += int(e.n)
@@ -206,7 +217,7 @@ func (c *runCache) evict() {
 		w++
 	}
 	c.ents = c.ents[:w]
-	c.text, c.glyph, c.xs, c.faces = c.text[:tw], c.glyph[:gw], c.xs[:gw], c.faces[:gw]
+	c.text, c.glyph, c.xs, c.faces, c.clus = c.text[:tw], c.glyph[:gw], c.xs[:gw], c.faces[:gw], c.clus[:gw]
 	c.rehash(len(c.table))
 }
 
@@ -218,10 +229,12 @@ func (c *runCache) view(r RunRef) RunView {
 	e := &c.ents[r-1]
 	o, n := e.off, e.n
 	return RunView{
-		Glyphs:  c.glyph[o : o+n : o+n],
-		X:       c.xs[o : o+n : o+n],
-		Faces:   c.faces[o : o+n : o+n],
-		Advance: e.advance,
+		Glyphs:   c.glyph[o : o+n : o+n],
+		X:        c.xs[o : o+n : o+n],
+		Faces:    c.faces[o : o+n : o+n],
+		Clusters: c.clus[o : o+n : o+n],
+		Text:     c.text[e.textOff : e.textOff+e.textLen : e.textOff+e.textLen],
+		Advance:  e.advance,
 	}
 }
 

@@ -1,6 +1,8 @@
 package app
 
 import (
+	"unicode/utf8"
+
 	"gonativeui/platform"
 	"gonativeui/ui"
 )
@@ -94,6 +96,26 @@ func (t *translator) event(e *platform.Event, txt []byte) bool {
 		t.carryText = append(t.carryText, txt...)
 		t.carry = append(t.carry, deferred{e: *e, off: len(t.carryText) - len(txt), len: len(txt)})
 		return true // the frame that is owed will find the rest pending
+	}
+	if free := len(t.in.Text) - t.in.NText; e.Kind == platform.EvText && len(txt) > free {
+		// More text than one frame's Input holds (a long commit from an input
+		// method, a burst of typing): what fits whole characters-wise goes in
+		// now, the rest waits for the next frame, in order, so nothing is lost.
+		n := 0
+		for n < free {
+			_, sz := utf8.DecodeRune(txt[n:])
+			if n+sz > free {
+				break
+			}
+			n += sz
+		}
+		if n > 0 {
+			t.apply(e, txt[:n])
+		}
+		rest := txt[n:]
+		t.carryText = append(t.carryText, rest...)
+		t.carry = append(t.carry, deferred{e: *e, off: len(t.carryText) - len(rest), len: len(rest)})
+		return true
 	}
 	return t.apply(e, txt)
 }
@@ -206,7 +228,16 @@ func (t *translator) apply(e *platform.Event, txt []byte) bool {
 		if len(txt) == 0 {
 			return false
 		}
-		in.NText += copy(in.Text[in.NText:], txt) // what does not fit is dropped
+		in.NText += copy(in.Text[in.NText:], txt) // event() keeps what does not fit for the next frame
+	case platform.EvPreedit:
+		sel, n := int(e.SelStart), int(e.SelLen)
+		if len(txt) == 0 && in.NPreedit == 0 {
+			return false
+		}
+		if string(txt) == string(in.Preedit[:in.NPreedit]) && in.PreeditSel == [2]int{sel, n} {
+			return false
+		}
+		in.SetPreedit(txt, sel, n)
 	case platform.EvFocus:
 		down := e.Flags&platform.FlagDown != 0
 		if in.Focused == down {

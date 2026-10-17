@@ -278,6 +278,9 @@ type System struct {
 	gbuf                      []uint16
 	xbuf                      []float32
 	fbuf                      []FaceID
+	cbuf                      []uint32 // cluster per glyph (RunView.Clusters)
+	u16b                      []uint32 // byte offset in the source of each UTF-16 unit of u16
+	ic                        []uint32 // cluster (byte offset) per glyph of ig, in logical order
 	sa                        scriptAnalysis
 
 	// Out parameters and small buffers the OS reads or writes through
@@ -329,6 +332,7 @@ func New() (*System, error) {
 	}
 	s.name = make([]byte, 0, 512)
 	s.gbuf, s.xbuf, s.fbuf = make([]uint16, 0, 128), make([]float32, 0, 128), make([]FaceID, 0, 128)
+	s.cbuf, s.u16b = make([]uint32, 0, 128), make([]uint32, 0, 128)
 
 	if hr := win32.HR(win32.Call(dw.createFactory, dwFactoryShared, uintptr(unsafe.Pointer(&iidFactory)), uintptr(unsafe.Pointer(&s.out1)))); hr < 0 {
 		return nil, fmt.Errorf("%w: %w", errNoFactory, hrError("DWriteCreateFactory", hr))
