@@ -163,10 +163,11 @@ var (
 	selSetContentSize    = objc.Sel("setContentSize:")
 
 	// Cursors.
-	selResetCursorRects  = objc.Sel("resetCursorRects")
-	selAddCursorRect     = objc.Sel("addCursorRect:cursor:")
-	selInvalidateCursors = objc.Sel("invalidateCursorRectsForView:")
-	selCursorSet         = objc.Sel("set")
+	selResetCursorRects   = objc.Sel("resetCursorRects")
+	selDiscardCursorRects = objc.Sel("discardCursorRects")
+	selAddCursorRect      = objc.Sel("addCursorRect:cursor:")
+	selInvalidateCursors  = objc.Sel("invalidateCursorRectsForView:")
+	selSetContentMinSize  = objc.Sel("setContentMinSize:")
 
 	clsNSArray, clsNSAttributedString objc.ID
 	clsNSDate                         objc.ID // cached: objc.Cls allocates, and Wait runs every frame
@@ -304,6 +305,9 @@ func Open(o Options) (*Window, error) {
 	delegate := objc.Send(objc.Send(delegateClass, selAlloc), objc.Sel("init"))
 	objc.Send1(w.win, selSetDelegate, uintptr(delegate))
 	objc.Send1(w.win, selSetMouseMoved, 1)
+	if o.MinWidth > 0 || o.MinHeight > 0 {
+		F.Reset().Arg(uintptr(w.win)).Arg(uintptr(selSetContentMinSize)).ArgPoint(float64(o.MinWidth), float64(o.MinHeight)).Call(objc.MsgSend)
+	}
 	objc.Send1(w.win, selSetTitle, uintptr(objc.Str(o.Title)))
 	objc.Send(w.win, selCenter)
 	if os.Getenv("GNUI_NOANIM") != "" {
@@ -627,8 +631,8 @@ func impHandler(c *ffi.CB) {
 			w.exitLiveResize()
 		}
 	case selResetCursorRects:
-		// AppKit calls this after SetCursor invalidated the rects, and
-		// whenever it rebuilds them: the whole view shows the current cursor.
+		// The view's bounds show the current cursor, the arrow included, so
+		// every change is one rect replacing another.
 		if w != nil {
 			b := objc.SendRect(w.view, selBounds)
 			objc.F.Reset().Arg(uintptr(w.view)).Arg(uintptr(selAddCursorRect)).ArgRect(b.X, b.Y, b.W, b.H).
@@ -841,22 +845,22 @@ func (w *Window) exitLiveResize() {
 // SetCursor sets the pointer shape over the content. It does nothing when
 // the shape is unchanged, so it can be called every frame.
 //
-// Two mechanisms make the shape stick. [NSCursor set] applies it at once
-// (only while the pointer is over the view, or the cursor would change over
-// other windows). AppKit, though, resets the cursor to the arrow whenever
-// the mouse moves and the view has no cursor rects. So the view also
-// implements resetCursorRects, which covers its whole bounds with the
-// current cursor, and SetCursor invalidates the rects; AppKit rebuilds
-// them before the next mouse move is processed.
+// AppKit's cursor rects are the only mechanism: the view's bounds carry the
+// current cursor (resetCursorRects), and AppKit applies it as the pointer
+// moves, restores the arrow outside the view, and cooperates with the
+// titlebar and other views. On a change the rects are rebuilt at once
+// (discard + reset), not lazily: a lazily rebuilt stale rect reset the
+// cursor on the next mouse move. [NSCursor set] alone is not used either:
+// AppKit ignores a repeated set of the instance it believes is current,
+// which left the arrow unrestorable.
 func (w *Window) SetCursor(c Cursor) {
 	if c >= numCursors || c == w.cursor {
 		return
 	}
 	w.cursor = c
-	if w.pointerIn {
-		objc.Send(cursorObjs[c], selCursorSet)
-	}
-	objc.Send1(w.win, selInvalidateCursors, uintptr(w.view))
+	objc.Send(w.view, selDiscardCursorRects)
+	objc.Send(w.view, selResetCursorRects)
+	objc.Send1(w.win, selInvalidateCursors, uintptr(w.view)) // AppKit re-evaluates the rects at the pointer now
 }
 
 // metalLinkLatency is CAMetalDisplayLink.preferredFrameLatency: how many

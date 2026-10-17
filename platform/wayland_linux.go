@@ -276,6 +276,10 @@ func (w *Window) openWayland(o Options) (err error) {
 	w.req(y.toplevel, 2, 0, y.toplevelV, 0)
 	y.args[0] = uint64(uintptr(unsafe.Pointer(&appID[0])))
 	w.req(y.toplevel, 3, 0, y.toplevelV, 0)
+	if o.MinWidth > 0 || o.MinHeight > 0 { // xdg_toplevel.set_min_size (8), surface-local units
+		y.args[0], y.args[1] = uint64(uint32(o.MinWidth)), uint64(uint32(o.MinHeight))
+		w.req(y.toplevel, 8, 0, y.toplevelV, 0)
+	}
 
 	// zxdg_decoration_manager_v1.get_toplevel_decoration (1) + set_mode(server_side=2) (1)
 	if y.decoMgr != 0 {

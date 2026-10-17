@@ -173,6 +173,9 @@ type Event struct {
 type Options struct {
 	Title         string
 	Width, Height int // logical units (points / DIPs)
+	// MinWidth, MinHeight bound the content size the user can resize the
+	// window to (logical units); 0 means no minimum.
+	MinWidth, MinHeight int
 	// Hidden opens the window without showing it; call Show, or hand Show to
 	// the GPU surface (macOS: Surface.RevealOnFirstFrame) so the window
 	// appears together with its first frame. Content-first startup is

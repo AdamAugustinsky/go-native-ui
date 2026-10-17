@@ -19,6 +19,7 @@ type Native struct{ HWND, HInstance uintptr }
 
 const (
 	wmSize          = 0x0005
+	wmGetMinMaxInfo = 0x0024
 	wmSetCursor     = 0x0020
 	wmTimer         = 0x0113
 	wmEnterSizeMove = 0x0231
@@ -93,6 +94,11 @@ const (
 type point struct{ x, y int32 }
 
 type rect struct{ left, top, right, bottom int32 }
+
+// minMaxInfo is MINMAXINFO.
+type minMaxInfo struct {
+	reserved, maxSize, maxPosition, minTrack, maxTrack point
+}
 
 // msg is MSG from winuser.h.
 type msg struct {
@@ -193,6 +199,8 @@ type Window struct {
 	w, h  int32   // client size, physical pixels
 	scale float32 // pixels per logical unit
 
+	minW, minH int // Options.MinWidth/MinHeight (logical), for WM_GETMINMAXINFO
+
 	// Last values reported through EvResize, to avoid duplicate events.
 	rw, rh int32
 	rscale float32
@@ -246,7 +254,7 @@ func Open(o Options) (*Window, error) {
 		return nil, err
 	}
 
-	w := &Window{q: newEventQueue(), opening: true, style: wsOverlappedWindow, rscale: 1}
+	w := &Window{q: newEventQueue(), opening: true, style: wsOverlappedWindow, rscale: 1, minW: o.MinWidth, minH: o.MinHeight}
 	w.hinst = win32.Call(pGetModuleHandleW, 0)
 	theWindow = w // WndProc runs inside CreateWindowExW
 
@@ -595,6 +603,18 @@ func wndProc(hwnd, m, wp, lp uintptr) uintptr {
 		if uint32(lp&0xFFFF) == htClient {
 			win32.Call(pSetCursor, w.cursors[w.cursor])
 			return 1
+		}
+		return defProc(hwnd, m, wp, lp)
+
+	case wmGetMinMaxInfo:
+		// The minimum client size at the current DPI, as a window size.
+		// Sent before the DPI is known too (inside CreateWindowExW).
+		if (w.minW > 0 || w.minH > 0) && w.scale > 0 {
+			if mmi := (*minMaxInfo)(win32.Ptr(lp)); mmi != nil {
+				ow, oh := w.outerSize(w.minW, w.minH, uint32(w.scale*defaultDPI+0.5))
+				mmi.minTrack = point{ow, oh}
+				return 0
+			}
 		}
 		return defProc(hwnd, m, wp, lp)
 

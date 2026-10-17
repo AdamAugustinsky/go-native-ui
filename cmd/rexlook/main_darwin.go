@@ -270,6 +270,7 @@ func runWindow(tMain, age int64, exitFirst, bench, allowUnpaced, verbose bool) e
 	win, err := platform.Open(platform.Options{
 		Title: "rexlook", Width: winW, Height: winH, Hidden: true,
 		Titlebar: 46, TrafficLights: [2]float32{21, 22},
+		MinWidth: 960, MinHeight: 560, // the static scene overlaps below this
 	})
 	if err != nil {
 		return fmt.Errorf("open: %w", err)
@@ -449,7 +450,7 @@ func runWindow(tMain, age int64, exitFirst, bench, allowUnpaced, verbose bool) e
 				}
 			case 1:
 				for _, c := range [...]platform.Cursor{platform.CursorPointer, platform.CursorText, platform.CursorResizeEW, platform.CursorResizeNS, platform.CursorArrow} {
-					win.SetCursor(c) // exercises invalidateCursorRectsForView: → resetCursorRects (GNUI_DEBUG=1 traces it)
+					win.SetCursor(c) // exercises the SetCursor path
 				}
 				tst.run(win, w, h, scale)
 				testPhase, tst.afterDrawBase, phaseT = 2, nDraw, platform.Now()

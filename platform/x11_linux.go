@@ -90,6 +90,7 @@ const (
 var xf struct {
 	initThreads, openDisplay, closeDisplay, defaultScreen, rootWindow, createSimpleWindow uintptr
 	selectInput, internAtom, setWMProtocols, storeName, mapWindow, flush                  uintptr
+	setWMNormalHints                                                                      uintptr
 	pending, nextEvent, connectionNumber, resourceManagerString                           uintptr
 	lookupString, destroyWindow, setDetectableAutoRepeat                                  uintptr
 	keysymToUTF8                                                                          uintptr // optional, libxkbcommon
@@ -115,6 +116,7 @@ type x11 struct {
 	keyBuf   [32]byte
 	utf8     [8]byte // xkb_keysym_to_utf8 output
 	title    [128]byte
+	hints    xSizeHints
 }
 
 func loadX11() error {
@@ -136,6 +138,7 @@ func loadX11() error {
 		{"XInternAtom", &xf.internAtom},
 		{"XSetWMProtocols", &xf.setWMProtocols},
 		{"XStoreName", &xf.storeName},
+		{"XSetWMNormalHints", &xf.setWMNormalHints},
 		{"XMapWindow", &xf.mapWindow},
 		{"XFlush", &xf.flush},
 		{"XPending", &xf.pending},
@@ -222,6 +225,12 @@ func (w *Window) openX11(o Options) (err error) {
 
 	copy(x.title[:len(x.title)-1], o.Title)
 	fr.Call3(xf.storeName, x.dpy, x.win, uintptr(unsafe.Pointer(&x.title[0])))
+	if o.MinWidth > 0 || o.MinHeight > 0 {
+		scale := float32(w.s120) / 120
+		x.hints = xSizeHints{flags: pMinSize,
+			minWidth: int32(float32(o.MinWidth)*scale + 0.5), minHeight: int32(float32(o.MinHeight)*scale + 0.5)}
+		fr.Call3(xf.setWMNormalHints, x.dpy, x.win, uintptr(unsafe.Pointer(&x.hints)))
+	}
 	// Held keys then produce repeated KeyPress without KeyRelease in between.
 	fr.Call3(xf.setDetectableAutoRepeat, x.dpy, 1, uintptr(unsafe.Pointer(&x.supp)))
 
@@ -450,3 +459,15 @@ func (w *Window) x11Event() {
 		}
 	}
 }
+
+// xSizeHints is Xlib's XSizeHints (LP64: flags is a C long).
+type xSizeHints struct {
+	flags                                          int64
+	x, y, width, height                            int32
+	minWidth, minHeight, maxWidth, maxHeight       int32
+	widthInc, heightInc                            int32
+	minAspectX, minAspectY, maxAspectX, maxAspectY int32
+	baseWidth, baseHeight, winGravity              int32
+}
+
+const pMinSize = 1 << 4
