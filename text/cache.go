@@ -42,12 +42,55 @@ const (
 	defaultMaxText   = 4 << 20
 )
 
+// The run cache holds at most this many runs, glyphs and bytes of source
+// text; beyond that it evicts. They are the clamps of System.ReserveRuns.
+const (
+	MaxCachedRuns      = defaultMaxRuns
+	MaxCachedGlyphs    = defaultMaxGlyphs
+	MaxCachedTextBytes = defaultMaxText
+)
+
 func newRunCache() *runCache {
 	return &runCache{
 		table:     make([]int32, 1024),
 		maxRuns:   defaultMaxRuns,
 		maxGlyphs: defaultMaxGlyphs,
 		maxText:   defaultMaxText,
+	}
+}
+
+// reserve sizes the storage for up to runs entries, glyphs glyphs (also the
+// size of the position and face slabs) and textBytes bytes of text, each
+// clamped to the cache's limits, so that filling the cache that far, and
+// every later eviction, allocates nothing. Existing entries are kept. It is a
+// setup call: it allocates what it reserves (about 15 MiB at the limits, of
+// which untouched pages cost no resident memory).
+func (c *runCache) reserve(runs, glyphs, textBytes int) {
+	runs = min(max(runs, 0), c.maxRuns)
+	glyphs = min(max(glyphs, 0), c.maxGlyphs)
+	textBytes = min(max(textBytes, 0), c.maxText)
+	if cap(c.ents) < runs {
+		c.ents = append(make([]runEnt, 0, runs), c.ents...)
+	}
+	if cap(c.text) < textBytes {
+		c.text = append(make([]byte, 0, textBytes), c.text...)
+	}
+	if cap(c.glyph) < glyphs {
+		c.glyph = append(make([]uint16, 0, glyphs), c.glyph...)
+	}
+	if cap(c.xs) < glyphs {
+		c.xs = append(make([]float32, 0, glyphs), c.xs...)
+	}
+	if cap(c.faces) < glyphs {
+		c.faces = append(make([]FaceID, 0, glyphs), c.faces...)
+	}
+	// insert grows the table when entries*2 > len(table).
+	size := len(c.table)
+	for size < runs*2 {
+		size *= 2
+	}
+	if size != len(c.table) {
+		c.rehash(size)
 	}
 }
 

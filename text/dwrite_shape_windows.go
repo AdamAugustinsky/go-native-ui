@@ -557,3 +557,10 @@ func (s *System) Run(r RunRef) RunView { return s.runs.view(r) }
 // after shaping a batch of strings: if it changed, earlier RunRefs and
 // RunViews may be stale and must be re-shaped.
 func (s *System) RunGeneration() uint32 { return s.runs.gen }
+
+// ReserveRuns pre-sizes the run cache for up to runs shaped runs, glyphs
+// glyphs and textBytes bytes of source text (clamped to MaxCachedRuns,
+// MaxCachedGlyphs and MaxCachedTextBytes), so that shaping new strings until
+// the cache holds that much, and every eviction after that, allocates no Go
+// memory. Call it once at setup. Without it the cache grows by doubling.
+func (s *System) ReserveRuns(runs, glyphs, textBytes int) { s.runs.reserve(runs, glyphs, textBytes) }
