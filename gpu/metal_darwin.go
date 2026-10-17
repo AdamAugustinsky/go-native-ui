@@ -4,6 +4,7 @@ package gpu
 
 import (
 	"errors"
+	"os"
 	"sync/atomic"
 	"unsafe"
 
@@ -84,7 +85,7 @@ func NewSurface(n platform.Native, w, h int32, scale float32) (*Surface, error) 
 	objc.Send1(s.layer, selSetDevice, uintptr(s.device))
 	objc.Send1(s.layer, selSetPixelFormat, 80) // MTLPixelFormatBGRA8Unorm
 	objc.Send1(s.layer, selSetFBOnly, 1)
-	objc.Send1(s.layer, selSetMaxDrawables, 2)
+	objc.Send1(s.layer, selSetMaxDrawables, uintptr(maxDrawables()))
 	objc.Send1(s.layer, selSetDisplaySync, 1)
 	objc.Send1(s.layer, selSetOpaque, 1)
 	s.Resize(w, h, scale)
@@ -217,4 +218,12 @@ func (s *Surface) Destroy() {
 	objc.Send(s.layer, selRelease)
 	objc.Send(s.queue, selRelease)
 	objc.Send(s.device, selRelease)
+}
+
+// maxDrawables is 2 unless GNUI_DRAWABLES overrides it (experiments).
+func maxDrawables() int {
+	if v := os.Getenv("GNUI_DRAWABLES"); v == "3" {
+		return 3
+	}
+	return 2
 }

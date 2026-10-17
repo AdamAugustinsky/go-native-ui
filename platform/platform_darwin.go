@@ -33,6 +33,7 @@ type Window struct {
 	scale      float32
 	frameArmed bool
 	linkPaused bool
+	idleTicks  int // display-link ticks since the last frame request
 }
 
 const wakeSubtype = 0x4E55 // our NSEventTypeApplicationDefined subtype
@@ -84,6 +85,9 @@ var (
 	selScrollDY             = objc.Sel("scrollingDeltaY")
 	selPrecise              = objc.Sel("hasPreciseScrollingDeltas")
 	selDisplayLinkWith      = objc.Sel("displayLinkWithTarget:selector:")
+	selScreen               = objc.Sel("screen")
+	selMaxFPS               = objc.Sel("maximumFramesPerSecond")
+	selSetRateRange         = objc.Sel("setPreferredFrameRateRange:")
 	selAddToRunLoop         = objc.Sel("addToRunLoop:forMode:")
 	selMainRunLoop          = objc.Sel("mainRunLoop")
 	selSetPaused            = objc.Sel("setPaused:")
@@ -270,6 +274,11 @@ func Open(o Options) (*Window, error) {
 	}
 	objc.Send2(w.link, selAddToRunLoop, uintptr(objc.Send(objc.Cls("NSRunLoop"), selMainRunLoop)), uintptr(commonModes))
 	objc.Send1(w.link, selSetPaused, 1)
+	// Ask for the display's full rate while animating (ProMotion would
+	// otherwise pick a lower adaptive rate).
+	if fps := float32(objc.Send(objc.Send(w.win, selScreen), selMaxFPS)); fps > 0 {
+		F.Reset().Arg(uintptr(w.link)).Arg(uintptr(selSetRateRange)).ArgFloat3(fps/2, fps, fps).Call(objc.MsgSend)
+	}
 	w.updateSize()
 	markOpen("displayLink")
 	if wakePending.Load() { // a Wake before Open found no window to post to
@@ -483,11 +492,14 @@ func impHandler(c *ffi.CB) {
 			return
 		}
 		if w.frameArmed {
-			w.frameArmed = false
+			w.frameArmed, w.idleTicks = false, 0
 			w.q.push(Event{Kind: EvFrame, Time: Now()})
-			objc.Send4(w.app, selPostEvent, uintptr(w.wakeEv), 0, 0, 0) // unblock nextEventMatchingMask
+			objc.Send2(w.app, selPostEvent, uintptr(w.wakeEv), 0) // unblock nextEventMatchingMask
+			break
 		}
-		if !w.linkPaused {
+		// Keep ticking through short gaps: pausing after every tick made the
+		// link re-sync on each RequestFrame (uneven intervals on ProMotion).
+		if w.idleTicks++; w.idleTicks >= linkIdleTicks && !w.linkPaused {
 			objc.Send1(w.link, selSetPaused, 1)
 			w.linkPaused = true
 		}
@@ -542,6 +554,10 @@ func (w *Window) Close() {
 	objc.Send(w.win, selClose)
 	theWindow.Store(nil)
 }
+
+// linkIdleTicks is how many display-link ticks without a frame request pass
+// before the link is paused (idle must stay at zero wakeups).
+const linkIdleTicks = 4
 
 var (
 	wakeMu    sync.Mutex

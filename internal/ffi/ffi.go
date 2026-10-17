@@ -167,6 +167,31 @@ func (f *Frame) ArgPoint(x, y float64) *Frame {
 	return f
 }
 
+// ArgFloat3 appends a struct of three floats by value (e.g. CAFrameRateRange):
+// an HFA in three s-registers on arm64; on amd64 SysV two SSE eightbytes,
+// {x,y} packed in one register and z in the next.
+func (f *Frame) ArgFloat3(x, y, z float32) *Frame {
+	bx, by, bz := math.Float32bits(x), math.Float32bits(y), math.Float32bits(z)
+	if runtime.GOARCH == "arm64" {
+		if f.nf+3 <= numFloatRegs {
+			return f.ArgF32(x).ArgF32(y).ArgF32(z)
+		}
+		f.nf = numFloatRegs
+		f.push(uintptr(bx)|uintptr(by)<<32, 8)
+		f.push(uintptr(bz), 8)
+		return f
+	}
+	if f.nf+2 <= numFloatRegs {
+		f.floats[f.nf] = uint64(bx) | uint64(by)<<32
+		f.floats[f.nf+1] = uint64(bz)
+		f.nf += 2
+		return f
+	}
+	f.push(uintptr(bx)|uintptr(by)<<32, 8)
+	f.push(uintptr(bz), 8)
+	return f
+}
+
 // argHFA passes a homogeneous double aggregate (AAPCS64 C.2/C.3): in
 // consecutive d-registers if all fit; otherwise wholly on the stack, and no
 // later float argument may use a register (NSRN = 8).

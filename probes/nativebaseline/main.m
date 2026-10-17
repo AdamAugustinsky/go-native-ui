@@ -14,9 +14,25 @@
 #include <mach/mach_time.h>
 #include <sys/sysctl.h>
 #include <unistd.h>
+#include <string.h>
+#include <sys/resource.h>
 
 static mach_timebase_info_data_t tb;
 static double nowMs(void) { return (double)mach_absolute_time() * tb.numer / tb.denom / 1e6; }
+
+static double cpuNowUs(void) {
+	struct rusage ru;
+	getrusage(RUSAGE_SELF, &ru);
+	return (ru.ru_utime.tv_sec + ru.ru_stime.tv_sec) * 1e6 + ru.ru_utime.tv_usec + ru.ru_stime.tv_usec;
+}
+
+@interface Ticker : NSObject
+@property(copy) void (^tick)(void);
+- (void)fire:(CADisplayLink *)l;
+@end
+@implementation Ticker
+- (void)fire:(CADisplayLink *)l { self.tick(); }
+@end
 
 // Process start in the same clock: age from proc_pid_rusage's ri_proc_start_abstime.
 static double procStartMs(void) {
@@ -89,7 +105,45 @@ int main(int argc, const char **argv) {
 			                                 dequeue:YES];
 			if (ev) [app sendEvent:ev];
 		}
-		printf("{\"ExecToMainMs\":%.1f,\"NSApplicationMs\":%.1f,\"NSWindowMs\":%.1f,\"SetupMs\":%.1f,"
+		// -anim: 120 warm-up + 600 frames paced by the view's CADisplayLink
+		// (rendered from the link callback), reporting process CPU per frame.
+		double cpuPerFrameUs = -1, meanIntervalMs = -1;
+		if (argc > 1 && strcmp(argv[1], "-anim") == 0) {
+			__block int n = 0;
+			__block double cpu0 = 0, t0f = 0, tLast = 0;
+			__block BOOL done = NO;
+			Ticker *tk = [Ticker new];
+			tk.tick = ^{
+				id<CAMetalDrawable> dd = [layer nextDrawable];
+				if (!dd) return;
+				MTLRenderPassDescriptor *r = [MTLRenderPassDescriptor renderPassDescriptor];
+				r.colorAttachments[0].texture = dd.texture;
+				r.colorAttachments[0].loadAction = MTLLoadActionClear;
+				r.colorAttachments[0].storeAction = MTLStoreActionStore;
+				r.colorAttachments[0].clearColor = MTLClearColorMake(0.1 + 0.001 * (n % 100), 0.12, 0.14, 1);
+				id<MTLCommandBuffer> c = [q commandBuffer];
+				[[c renderCommandEncoderWithDescriptor:r] endEncoding];
+				[c presentDrawable:dd];
+				[c commit];
+				if (++n == 120) { cpu0 = cpuNowUs(); t0f = nowMs(); }
+				if (n == 720) { tLast = nowMs(); done = YES; }
+			};
+			CADisplayLink *link = [view displayLinkWithTarget:tk selector:@selector(fire:)];
+			NSInteger fps = win.screen.maximumFramesPerSecond;
+			link.preferredFrameRateRange = CAFrameRateRangeMake(fps / 2, fps, fps);
+			[link addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
+			while (!done) {
+				NSEvent *ev = [app nextEventMatchingMask:NSEventMaskAny untilDate:[NSDate dateWithTimeIntervalSinceNow:0.05] inMode:NSDefaultRunLoopMode dequeue:YES];
+				if (ev) [app sendEvent:ev];
+			}
+			cpuPerFrameUs = (cpuNowUs() - cpu0) / 600;
+			meanIntervalMs = (tLast - t0f) / 600;
+			[link invalidate];
+		}
+		struct rusage_info_v4 rf;
+		double fpMB = proc_pid_rusage(getpid(), RUSAGE_INFO_V4, (rusage_info_t *)&rf) == 0 ? rf.ri_phys_footprint / 1048576.0 : -1;
+		printf("{\"FootprintMB\":%.1f,\"CPUPerFrameUs\":%.0f,\"MeanIntervalMs\":%.2f,", fpMB, cpuPerFrameUs, meanIntervalMs);
+		printf("\"ExecToMainMs\":%.1f,\"NSApplicationMs\":%.1f,\"NSWindowMs\":%.1f,\"SetupMs\":%.1f,"
 		       "\"FinishLaunchingMs\":%.1f,\"OrderFrontMs\":%.1f,\"FirstPresentMs\":%.1f,"
 		       "\"ExecToFirstPresentMs\":%.1f,\"ExecToOnGlassMs\":%.1f}\n",
 		       tMain - t0, tApp - tMain, tWin - tApp, tSetup - tWin, tFinish - tSetup, tFront - tFinish,
