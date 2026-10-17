@@ -149,6 +149,69 @@ re-measuring with a live display before it counts against the budget.
 | linux/amd64 | 2,896,135 | 2.76 |
 | linux/arm64 | 2,818,311 | 2.69 |
 
+## Live-display results: MacBook Pro (added 2026-10-16)
+
+**Setup.** This session runs on the Mac mini. The spike is cross-built
+there and run over SSH (Tailscale) on a MacBook Pro 14" (M3 Pro,
+`Mac15,6`, macOS 27.2, built-in ProMotion XDR display). A process started
+over SSH opens its window in the logged-in GUI session.
+
+```sh
+GNUI_TEST_HOST=user@host tools/remote-run.sh -bench -idle 60s -gate -quiet
+```
+
+**Conditions.** The machine was on battery (54%, discharging) and you
+were actively using it, so the numbers are noisy and pessimistic. The
+first launch of each newly copied binary pays the XProtect scan
+(326 ms / 421 ms visible) and is excluded.
+
+### Startup (7 warm runs)
+
+| Segment | Median | Range |
+|---|---|---|
+| exec → `main` | 16.9 ms | 12.6–29.1 |
+| `main` → window open | 98.2 ms | 84.7–155.4 |
+| exec → first present returned | **203.2 ms** | 159.9–273.2 |
+| exec → first present **and** occlusion-visible | **214.0 ms** | 161.5–302.0 |
+
+**Over the 150 ms budget.** Open → first present takes ~60–90 ms on this
+machine. On the Mac mini, with its display asleep, the same step took
+~30 ms; surface creation is about 1 ms on both. The missing time sits in
+the first frame's present path (`nextDrawable`, commit, or the first
+`CATransaction` flush). Breaking that step down is the first half-bounce
+task.
+
+### Strict bench (`-gate`, passes)
+
+| Metric | Value |
+|---|---|
+| Frames | 600, **paced by `CADisplayLink`** |
+| Heap allocations | **0 objects / 0 bytes / 0 GC** (exact) |
+| Frame interval | p50 16.17 ms, mean 14.26 ms, p99 23.2 ms, max 25.7 ms |
+| Process CPU per frame | **2.20 ms** (all threads) |
+| Idle 60 s | **0 presents**; 54.6 ms CPU; 1 package-idle wakeup, 109 interrupt wakeups |
+| Wake latency | p50 157 µs, **p99 1.02 ms**, max 1.57 ms |
+| Footprint, idle | 29.6 MB |
+| Footprint, animating / 1 s after | **134–141 MB** |
+
+### Findings
+
+1. **Pacing is not steady.** A mean (14.3 ms) below the p50 (16.2 ms) means the intervals mix ~8 ms and ~16 ms ticks on the 120 Hz ProMotion panel, with misses up to 25 ms.
+   - Suspects: the link is paused after every tick and unpaused by `RequestFrame`, and no `preferredFrameRateRange` is set.
+2. **CPU per frame is high for a clear:** 2.2 ms, against 0.6 ms unpaced on the mini. Not yet attributed. Candidates:
+   - per-frame link pause/unpause;
+   - Go runtime thread wakeups around each callback;
+   - CoreAnimation work.
+3. **Graphics memory while animating:** 88 MB of "owned physical footprint (graphics)", none of it reclaimable, plus 18 MB of IOSurface (2 drawables).
+   - It is ~126 MB at startup, drops to 32 MB when idle, and returns to ~134 MB while animating.
+   - The occluded-layer explanation from the Mac mini runs does not apply here.
+   - Next step: compare with a minimal native Metal clear app on the same machine.
+4. **Wake latency p99 just over 1 ms** on battery under user load. The target is < 1 ms.
+
+Criterion 4's vsync part now has data, and the data says "not yet". The
+other blocked criteria still are: visibility timing is in-app only, and
+DPI is not exercised.
+
 ## Windows and Linux
 
 **Not measured.** There are no machines and nothing has been pushed to CI.
