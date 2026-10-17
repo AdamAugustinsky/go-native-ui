@@ -343,8 +343,8 @@ GitHub Actions matrix, as in ARCHITECTURE §12. It is written in phase 1 but
 **Phase 1.** `.github/workflows/ci.yml` has four jobs:
 - **cross:** gofmt; vet and stripped builds for all six targets; a binary-size table; a 10 MiB gate.
 - **macOS 15 arm64:** tests (plus amd64 ffi tests under Rosetta), ffi benchmarks, and the spike.
-- **Windows 2025:** the spike on D3D11, which falls back to WARP on runners.
-- **Ubuntu 24.04:** the spike on X11 (Xvfb) and on Wayland (headless Weston), both with Mesa llvmpipe.
+- **Windows 2025 (amd64) and Windows 11 arm64:** the spike on D3D11, which falls back to WARP on runners.
+- **Ubuntu 24.04, amd64 and arm64:** the spike on X11 (Xvfb) and on Wayland (headless Weston), both with Mesa llvmpipe.
 
 Every spike job runs `spike -bench -gate -timeout 120s`. The run fails if:
 - the idle phase presented anything;
@@ -354,8 +354,9 @@ Every spike job runs `spike -bench -gate -timeout 120s`. The run fails if:
 
 Runner timings are uploaded as artifacts but are not gated.
 
-Linux arm64 is cross-compiled only: hosted arm64 Linux runners are not
-assumed for a private repository. None of this has run yet.
+The repository is public (user, 2026-10-16), so hosted arm64 runners are
+available. That covers Linux arm64's 8-byte stack-slot ABI and Windows
+arm64's `SyscallN` path at runtime.
 
 ## D16. Licensing
 

@@ -105,9 +105,15 @@ jobs:
           if-no-files-found: ignore
 
   windows:
-    name: Windows amd64 (D3D11, WARP on runners)
-    runs-on: windows-2025
+    name: Windows ${{ matrix.arch }} (D3D11, WARP on runners)
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: amd64, runner: windows-2025 }
+          - { arch: arm64, runner: windows-11-arm }
     defaults:
       run:
         shell: bash
@@ -122,23 +128,27 @@ jobs:
         run: go build -trimpath -ldflags="-s -w" -o bin/spike.exe ./cmd/spike
       - name: spike bench + gates
         run: |
-          ./bin/spike.exe -bench -idle 5s -gate -timeout 120s | tee spike-windows.json
-          { echo '```json'; cat spike-windows.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          ./bin/spike.exe -bench -idle 5s -gate -timeout 120s | tee spike-windows-${{ matrix.arch }}.json
+          { echo '```json'; cat spike-windows-${{ matrix.arch }}.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: spike-windows
-          path: spike-windows.json
+          name: spike-windows-${{ matrix.arch }}
+          path: spike-windows-${{ matrix.arch }}.json
           if-no-files-found: ignore
 
   linux:
-    name: Linux amd64 ${{ matrix.backend }} (EGL, Mesa llvmpipe)
-    runs-on: ubuntu-24.04
+    name: Linux ${{ matrix.arch }} ${{ matrix.backend }} (EGL, Mesa llvmpipe)
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        backend: [x11, wayland]
+        include:
+          - { arch: amd64, backend: x11, runner: ubuntu-24.04 }
+          - { arch: amd64, backend: wayland, runner: ubuntu-24.04 }
+          - { arch: arm64, backend: x11, runner: ubuntu-24.04-arm }
+          - { arch: arm64, backend: wayland, runner: ubuntu-24.04-arm }
     env:
       GNUI_BACKEND: ${{ matrix.backend }}
       LIBGL_ALWAYS_SOFTWARE: "1"
@@ -162,7 +172,7 @@ jobs:
         if: matrix.backend == 'x11'
         run: |
           xvfb-run -a -s "-screen 0 1280x800x24" \
-            ./bin/spike -bench -idle 5s -gate -timeout 120s | tee spike-linux-x11.json
+            ./bin/spike -bench -idle 5s -gate -timeout 120s | tee spike-linux-${{ matrix.arch }}-x11.json
       - name: spike bench + gates (Wayland on headless Weston)
         if: matrix.backend == 'wayland'
         run: |
@@ -172,16 +182,16 @@ jobs:
             > weston.log 2>&1 &
           for _ in $(seq 100); do [ -S "$XDG_RUNTIME_DIR/wayland-ci" ] && break; sleep 0.1; done
           [ -S "$XDG_RUNTIME_DIR/wayland-ci" ] || { cat weston.log; exit 1; }
-          WAYLAND_DISPLAY=wayland-ci ./bin/spike -bench -idle 5s -gate -timeout 120s | tee spike-linux-wayland.json
+          WAYLAND_DISPLAY=wayland-ci ./bin/spike -bench -idle 5s -gate -timeout 120s | tee spike-linux-${{ matrix.arch }}-wayland.json
       - name: summary
         if: always()
         run: |
-          f=spike-linux-${{ matrix.backend }}.json
+          f=spike-linux-${{ matrix.arch }}-${{ matrix.backend }}.json
           [ -f "$f" ] && { echo '```json'; cat "$f"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
           [ -f weston.log ] && tail -n 40 weston.log || true
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: spike-linux-${{ matrix.backend }}
-          path: spike-linux-${{ matrix.backend }}.json
+          name: spike-linux-${{ matrix.arch }}-${{ matrix.backend }}
+          path: spike-linux-${{ matrix.arch }}-${{ matrix.backend }}.json
           if-no-files-found: ignore
