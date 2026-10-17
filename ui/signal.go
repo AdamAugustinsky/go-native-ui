@@ -185,6 +185,40 @@ func (c *Context) Signal(id ID) Signal {
 	return s
 }
 
+// PeekSignal is Signal for the box with key k as the previous frame left it,
+// usable before the box is built this frame (a widget that wants to change
+// the state its own build reads, such as a splitter that moves the layout).
+// It reports the zero Signal for a key no box had last frame.
+func (c *Context) PeekSignal(k Key) Signal {
+	if v, ok := c.table.Get(uint64(k)); ok {
+		return c.Signal(ID(v))
+	}
+	return Signal{}
+}
+
+// HotTOf, ActiveTOf and FocusTOf are HotT, ActiveT and FocusT of the box
+// with key k as of the previous End, 0 for a key no box had; styling a box
+// from its own animation value needs them, because the box cannot be asked
+// before it is built.
+func (c *Context) HotTOf(k Key) float32    { return c.tOf(k, 0) }
+func (c *Context) ActiveTOf(k Key) float32 { return c.tOf(k, 1) }
+func (c *Context) FocusTOf(k Key) float32  { return c.tOf(k, 2) }
+
+func (c *Context) tOf(k Key, which int) float32 {
+	v, ok := c.table.Get(uint64(k))
+	if !ok {
+		return 0
+	}
+	b := &c.boxes[v]
+	switch which {
+	case 0:
+		return b.hotT
+	case 1:
+		return b.activeT
+	}
+	return b.focusT
+}
+
 // Hot reports whether id is the box under the pointer (ignoring captures).
 func (c *Context) Hot(id ID) bool { return id != 0 && c.hotKey == c.boxes[id].key }
 

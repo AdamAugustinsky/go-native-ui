@@ -39,6 +39,8 @@ type box struct {
 	textColor   uint32
 	borderColor uint32
 	borderW     float32
+	sides       Sides
+	img         Image
 	radii       [4]float32
 	shadow      [2]Shadow
 	tint        Tint
@@ -97,6 +99,8 @@ type Context struct {
 	sBG      stack[[4]uint32]
 	sText    stack[uint32]
 	sBorder  stack[border]
+	sSides   stack[Sides]
+	sImage   stack[Image]
 	sRadii   stack[[4]float32]
 	sShadow  stack[[2]Shadow]
 	sFont    stack[text.FontKey]
@@ -159,6 +163,8 @@ func New(sh Shaper) *Context {
 	c.sBG.init([4]uint32{})
 	c.sText.init(0xFFFFFFFF)
 	c.sBorder.init(border{})
+	c.sSides.init(SidesAll)
+	c.sImage.init(Image{})
 	c.sRadii.init([4]float32{})
 	c.sShadow.init([2]Shadow{})
 	c.sFont.init(0)
@@ -248,6 +254,8 @@ func (c *Context) resetStyles() {
 	c.sBG.reset()
 	c.sText.reset()
 	c.sBorder.reset()
+	c.sSides.reset()
+	c.sImage.reset()
 	c.sRadii.reset()
 	c.sShadow.reset()
 	c.sFont.reset()
@@ -379,6 +387,8 @@ func (c *Context) newBox(flags Flags, key Key) ID {
 	b.textColor = c.sText.take()
 	bd := c.sBorder.take()
 	b.borderColor, b.borderW = bd.Color, bd.Width
+	b.sides = c.sSides.take()
+	b.img = c.sImage.take()
 	b.radii = c.sRadii.take()
 	b.shadow = c.sShadow.take()
 	b.tint = c.sTint.take()

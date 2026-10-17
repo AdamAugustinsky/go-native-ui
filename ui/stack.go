@@ -1,6 +1,9 @@
 package ui
 
-import "gonativeui/text"
+import (
+	"gonativeui/gpu"
+	"gonativeui/text"
+)
 
 const maxStack = 32
 
@@ -77,6 +80,23 @@ func (c *Context) PopTextColor()            { c.sText.pop() }
 func (c *Context) NextBorder(col uint32, width float32) { c.sBorder.set(border{col, width}) }
 func (c *Context) PushBorder(col uint32, width float32) { c.sBorder.push(border{col, width}) }
 func (c *Context) PopBorder()                           { c.sBorder.pop() }
+
+// Border sides: which edges DrawBorder outlines (default SidesAll).
+
+func (c *Context) NextBorderSides(s Sides) { c.sSides.set(s) }
+func (c *Context) PushBorderSides(s Sides) { c.sSides.push(s) }
+func (c *Context) PopBorderSides()         { c.sSides.pop() }
+
+// Image drawn by DrawImage: the texel rectangle (u0, v0, u1, v1) of texture t
+// in the given mode.
+
+func (c *Context) NextImage(t gpu.TextureID, uv [4]float32, mode gpu.Mode) {
+	c.sImage.set(Image{t, uv, mode})
+}
+func (c *Context) PushImage(t gpu.TextureID, uv [4]float32, mode gpu.Mode) {
+	c.sImage.push(Image{t, uv, mode})
+}
+func (c *Context) PopImage() { c.sImage.pop() }
 
 // Corner radii (TL, TR, BR, BL), pixels.
 

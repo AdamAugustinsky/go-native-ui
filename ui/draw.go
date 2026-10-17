@@ -152,17 +152,28 @@ func (c *Context) emit(l *gpu.DrawList, id ID, clip [4]float32) {
 					draw = draw || bg&255 != 0
 				}
 			}
+			partial := false
 			if b.flags&DrawBorder != 0 && b.borderW > 0 && b.borderColor&255 != 0 {
-				q.Border, q.BorderColor = b.borderW, b.col(b.borderColor)
-				draw = true
+				if b.sides == SidesAll {
+					q.Border, q.BorderColor = b.borderW, b.col(b.borderColor)
+					draw = true
+				} else {
+					partial = b.sides&SidesAll != 0
+				}
 			}
 			if draw {
 				l.Add(q)
+			}
+			if partial {
+				c.emitSides(l, b, clip)
 			}
 		}
 		if b.flags&DrawHotEffects != 0 {
 			c.overlay(l, b, clip, c.Theme.HotOverlay, b.hotT)
 			c.overlay(l, b, clip, c.Theme.ActiveOverlay, b.activeT)
+		}
+		if b.flags&DrawImage != 0 && b.img.Tex != 0 {
+			c.emitImage(l, b, clip)
 		}
 		if b.flags&DrawText != 0 && b.txt.Len > 0 {
 			c.emitText(l, b, clip)
@@ -186,6 +197,76 @@ func (c *Context) emit(l *gpu.DrawList, id ID, clip [4]float32) {
 			c.emit(l, ch, cclip)
 		}
 	}
+}
+
+// emitSides draws the outline of b along some of its sides only (b.sides is
+// not SidesAll): the full outline quad, once per strip of the box rectangle
+// that holds a selected side, each strip clipped by the shader. A strip along
+// a left or right side spans the whole height and is as wide as the corner
+// radius there, so it carries the arcs of both corners on that side; strips
+// along the top and bottom cover only what the side strips leave.
+func (c *Context) emitSides(l *gpu.DrawList, b *box, clip [4]float32) {
+	r := b.rect
+	bw := b.borderW
+	ring := gpu.Quad{Rect: r, Radii: b.radii, Border: bw, BorderColor: b.col(b.borderColor)}
+	wl := max(b.radii[0], b.radii[3], bw)
+	wr := max(b.radii[1], b.radii[2], bw)
+	ht := max(b.radii[0], b.radii[1], bw)
+	hb := max(b.radii[3], b.radii[2], bw)
+	left, right := b.sides&SideLeft != 0, b.sides&SideRight != 0
+	if left {
+		strip(l, &ring, intersect([4]float32{r[0] - 1, r[1] - 1, r[0] + wl, r[3] + 1}, clip))
+	}
+	if right {
+		strip(l, &ring, intersect([4]float32{r[2] - wr, r[1] - 1, r[2] + 1, r[3] + 1}, clip))
+	}
+	xa, xb := r[0]-1, r[2]+1
+	if left {
+		xa = r[0] + wl
+	}
+	if right {
+		xb = r[2] - wr
+	}
+	if b.sides&SideTop != 0 {
+		strip(l, &ring, intersect([4]float32{xa, r[1] - 1, xb, r[1] + ht}, clip))
+	}
+	if b.sides&SideBottom != 0 {
+		strip(l, &ring, intersect([4]float32{xa, r[3] - hb, xb, r[3] + 1}, clip))
+	}
+}
+
+func strip(l *gpu.DrawList, ring *gpu.Quad, clip [4]float32) {
+	if empty(clip) {
+		return
+	}
+	q := *ring
+	q.Clip = clip
+	l.Add(q)
+}
+
+// emitImage draws b's image centred in the padded rectangle.
+func (c *Context) emitImage(l *gpu.DrawList, b *box, clip [4]float32) {
+	uv := b.img.UV
+	w, h := uv[2]-uv[0], uv[3]-uv[1]
+	r := b.rect
+	cx := (r[0] + b.pad[0] + r[2] - b.pad[2]) / 2
+	cy := (r[1] + b.pad[1] + r[3] - b.pad[3]) / 2
+	x0, y0 := snap(cx-w/2), snap(cy-h/2)
+	col := b.col(b.textColor)
+	if b.img.Mode == gpu.ModeRGBA {
+		col = 0xFFFFFF00 | col&255
+	}
+	if col&255 == 0 {
+		return
+	}
+	l.Add(gpu.Quad{
+		Rect:  [4]float32{x0, y0, x0 + w, y0 + h},
+		Clip:  clip,
+		UV:    uv,
+		Color: [4]uint32{col, col, col, col},
+		Mode:  b.img.Mode,
+		Tex:   b.img.Tex,
+	})
 }
 
 func (c *Context) overlay(l *gpu.DrawList, b *box, clip [4]float32, color uint32, t float32) {

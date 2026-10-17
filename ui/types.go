@@ -33,7 +33,10 @@
 // text.System it drives.
 package ui
 
-import "gonativeui/text"
+import (
+	"gonativeui/gpu"
+	"gonativeui/text"
+)
 
 // Key identifies a box across frames. 0 is the nil key.
 type Key uint64
@@ -73,6 +76,10 @@ const (
 	HotAnimation    // animate hot_t toward hover
 	ActiveAnimation // animate active_t toward press
 	FocusAnimation  // animate focus_t toward focus
+
+	// DrawImage draws the box's Image (see NextImage) centred in its padded
+	// rectangle at the image's own size, tinted by the text colour.
+	DrawImage
 )
 
 // scrollable flags, either axis.
@@ -155,6 +162,32 @@ type Shadow struct {
 	OffX, OffY float32
 	Sigma      float32
 	Color      uint32 // RGBA8, 0xRRGGBBAA
+}
+
+// Sides selects the edges of a box outline that DrawBorder draws. A corner
+// belongs to the sides that touch it: with SideLeft|SideRight the outline runs
+// down both sides and round all four corners (the arcs up to where the top and
+// bottom edges turn straight), and the flat top and bottom edges stay bare.
+type Sides uint8
+
+const (
+	SideLeft Sides = 1 << iota
+	SideTop
+	SideRight
+	SideBottom
+	// SidesAll, the default, draws the whole outline in one quad.
+	SidesAll = SideLeft | SideTop | SideRight | SideBottom
+)
+
+// Image is a rectangle of a texture drawn by DrawImage: UV is the texel
+// rectangle (u0, v0, u1, v1), which is also the size in pixels it is drawn at.
+// Mode is gpu.ModeMaskR8 for coverage masks such as symbols (tinted by the
+// box's text colour) or gpu.ModeRGBA for premultiplied colour images (drawn
+// with the alpha of the text colour).
+type Image struct {
+	Tex  gpu.TextureID
+	UV   [4]float32
+	Mode gpu.Mode
 }
 
 // Tint is the palette transform: every colour of a box (background, border,
