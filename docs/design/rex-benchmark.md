@@ -10,7 +10,8 @@ emulation, no PTYs, no networking.
 2026-10-05): `https://www.superlogical.com/rex-screenshot@2x.webp`, 2114 × 1278 px at 2×.
 
 ```sh
-curl -sSLo /tmp/rex.webp https://www.superlogical.com/rex-screenshot@2x.webp &&
+mkdir -p docs/design/ref &&
+  curl -sSLo /tmp/rex.webp https://www.superlogical.com/rex-screenshot@2x.webp &&
   sips -s format png /tmp/rex.webp --out docs/design/ref/rex-screenshot@2x.png
 ```
 
@@ -94,8 +95,8 @@ atlases. The Rex look also needs:
 3. **Exact hairlines:** 0.5 pt (one device pixel at 2×) borders and inner highlights snapped to device pixels.
 4. **Layered shadows:** two per card, a tight one plus an ambient one.
 5. **System symbols:**
-   - macOS: SF Symbols via `NSImage imageWithSystemSymbolName:`, rasterised into the atlas;
-   - Windows: the Segoe Fluent Icons font;
+   - macOS: SF Symbols via `+[NSImage imageWithSystemSymbolName:accessibilityDescription:]` (description may be `nil`), rasterised into the atlas;
+   - Windows: the Segoe Fluent Icons font on Windows 11. Windows 10 lacks it by default, so detect it and fall back to Segoe MDL2 Assets glyphs or vectors of our own. We never redistribute either font;
    - Linux: a small icon set of our own (licence to decide).
 6. **Custom window chrome:**
    - macOS: a transparent full-size titlebar of custom height, with the traffic lights repositioned;
@@ -111,11 +112,22 @@ ANSI-coloured text matching the screenshot, the tab bar, and the host
 block.
 
 **Phase 2 (renderer + text): a static frame on macOS.**
-- **Capture:** render at 1057 × 639 pt on a 2× display (the test MacBook) and capture the window with `screencapture -l <windowid>`.
-- **Side-by-side review:** reference and capture next to each other, plus a flicker overlay.
-- **Flat regions** (background, pane fills, tab capsule and pills): CIEDE2000 ΔE ≤ 3 against the reference.
-- **Geometry** (pane edges, radii, gutters, tab pills): within ±1 px at 2×.
-- **Text:** metrics within ±0.5 pt (cell size, line height, baseline). The glyph shapes differ wherever the font differs, so judge them by eye.
+
+Comparison inputs, so that any checker gets the same answer:
+
+- **Capture.** Render at 1057 × 639 pt on a 2× display (the test MacBook). Capture the window without its shadow (`screencapture -o -l <windowid>`, run inside the GUI session; see PHASE2-PLAN step 2). The result is 2114 × 1278 px and is registered to the reference by its window bounds.
+- **Colour space.** Convert both images to sRGB before sampling (`sips --matchTo` the sRGB profile). Treat the reference WebP as sRGB.
+- **Region masks.** `docs/design/rex-regions.json`, written with the tool, lists rectangles in reference pixels for:
+  - background bands;
+  - pane interiors (focused and unfocused);
+  - the tab capsule;
+  - the active pill.
+
+  The masks exclude text, icons, a 3 px band at every edge, and shadow zones. Gradients and translucent fills are compared as composited pixels, which is what both images contain.
+- **Colour metric.** Per region, the median CIEDE2000 ΔE ≤ 3 and the 95th percentile ≤ 6.
+- **Geometry.** On probe scanlines listed in the same file, an edge is the 50 % crossing between the two neighbouring plateau colours. Pane edges, corner insets at fixed offsets, gutters and pill bounds must fall within ±1 px of the reference.
+- **Text.** Cell advance (over ≥ 40 cells on one row) and row pitch (over ≥ 8 rows) within ±1 % of 7.6 pt and 16 pt. Baseline and alignment are judged in the side-by-side review, because the reference font is unidentified and its baseline can't be recovered reliably from the raster.
+- **Review.** Reference and capture side by side, plus a flicker overlay.
 
 **Phase 3 (UI core): interactive.**
 - **Interactions:** hover states; focus switching with animated dimming; tab switching; split, close and maximise; live pane resize.
