@@ -340,7 +340,7 @@ On top, shared by every backend:
 
 | | Listing | Watching | Icons / thumbnails |
 |---|---|---|---|
-| macOS | `getattrlistbulk` (2.2× faster than `ReadDir`+`Info` at 100k entries) | FSEvents (`FSEventStreamCreate` on a dispatch queue → wake) | `NSWorkspace iconForFile:` / QuickLook thumbnails on workers |
+| macOS | `getattrlistbulk` (2.2× faster than `ReadDir`+`Info` at 100k entries) | kqueue `EVFILT_VNODE` on the directory and its files (non-recursive; D26 — FSEvents is recursive and woke the process 20–45×/s on `~`) | `NSWorkspace iconForFile:` / QuickLook thumbnails on workers |
 | Windows | `FindFirstFileExW` (`FindExInfoBasic`, `FIND_FIRST_EX_LARGE_FETCH`) vs `GetFileInformationByHandleEx(FileIdExtdDirectoryInfo)`; measure both | `ReadDirectoryChangesW` (overlapped) on a worker | `SHGetFileInfoW` / `IShellItemImageFactory` on STA workers |
 | Linux | `getdents64` + `statx` (batched; `io_uring` later if useful) vs `os.ReadDir` | inotify (fd in the worker's poll set) | freedesktop icon theme lookup (own, pure Go) + thumbnail cache spec (`~/.cache/thumbnails`) |
 

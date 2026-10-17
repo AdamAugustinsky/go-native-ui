@@ -51,7 +51,7 @@ helpers, x/sys comes back with its own row here.
 
 System libraries we call (OS-provided, not bundled):
 
-- **macOS:** AppKit, Foundation, CoreFoundation, QuartzCore, Metal, CoreText, CoreGraphics, CoreServices (FSEvents), libobjc, libSystem.
+- **macOS:** AppKit, Foundation, CoreFoundation, QuartzCore, Metal, CoreText, CoreGraphics, libobjc, libSystem.
 - **Windows:** kernel32, user32, gdi32, shcore, dwmapi, imm32, shell32, ole32, d3d11, dxgi, dwrite.
 - **Linux:**
   - required: libc, libEGL, libGL or libOpenGL (libGLESv2 fallback), and libwayland-client + libwayland-egl + libxkbcommon (Wayland) or libX11 (X11)
@@ -297,7 +297,7 @@ objects.
 - macOS: `getattrlistbulk`.
 - Windows: `FindFirstFileExW` (basic info, large fetch) vs `GetFileInformationByHandleEx`; choose by measurement in phase 4.
 - Linux: `getdents64` + `statx` vs `os.ReadDir`; measure in phase 4.
-- Watching: FSEvents, `ReadDirectoryChangesW`, inotify.
+- Watching: kqueue on macOS (D26 replaced FSEvents), `ReadDirectoryChangesW`, inotify.
 - Results are cached by (path, mtime).
 
 **Evidence (M:5).** `getattrlistbulk` is 88 ms against 198 ms for
@@ -582,3 +582,24 @@ Both licence files are kept in the copy.
 **Why.** A per-glyph offset is the smallest pointer-free record that supports carets on every backend. Grapheme refinement at query time keeps the cost on the one focused field, not on every shaped name. A 10 s blink window keeps the familiar caret while still letting an untouched app go fully idle.
 
 **Known gaps.** No undo, no reconversion, `replacementRange` ignored (press-and-hold accents to be checked by hand), no bidi-aware arrow movement.
+
+## D26. macOS directory watching uses kqueue, not FSEvents (phase 4, 2026-10-17)
+
+**Decision.** The darwin watcher is one goroutine blocked in `kevent`:
+
+- an `EVFILT_VNODE` watch on an `O_EVTONLY` fd for the directory (write, extend, attrib, link, delete, rename, revoke): a write means entries were added, removed or renamed;
+- the same watch on every regular file in the directory, resynced after each directory write, so in-place writes (size, mtime) are seen. Cap: 2048 files per directory and 4096 in total, all-or-nothing per directory; above it, structure only;
+- `ChangeGone` only after checking that the fd no longer names the directory at its path (`F_GETPATH` plus an inode comparison; `F_GETPATH` alone still answers for a deleted directory);
+- an `EVFILT_USER` event wakes the loop for close.
+
+**Why.** FSEvents is recursive. Watching `~` or `/` on the Mac mini gave about 2 callbacks/s at idle from churn elsewhere in the tree (e.g. `~/Library`), each costing 10–20 process wakeups: 20–45 wakeups/s against the ≤ 1/s idle budget. Its exclusion list holds only 8 paths. kqueue has no idle wakeups on any path measured (`~`, `/`, `~/Documents`, `~/Downloads`, a temp dir) and reports changes in about 1 ms. `~` needed 381 file watches (11 ms to add). It also removes the CoreServices dependency and the process-wide ffi callback.
+
+**Known gaps.**
+
+- A file created and written in the few milliseconds before its watch is registered.
+- In-place writes in directories above the cap.
+- A subdirectory's shown modification time can go stale (entries added inside a child don't touch the parent).
+- A rename of an ancestor of the watched directory.
+- Network volumes may not deliver vnode events.
+
+A relist when the window becomes active would cover all of these cheaply.

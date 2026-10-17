@@ -30,7 +30,7 @@ is built to prove (ARCHITECTURE §1, §10; D12; D17: the original Rex look).
      - `getattrlistbulk` on macOS;
      - `FindFirstFileExW` vs `GetFileInformationByHandleEx` on Windows, chosen by measurement (D12);
      - `getdents64` + `statx` vs `os.ReadDir` on Linux.
-   - **watching:** FSEvents, `ReadDirectoryChangesW`, inotify.
+   - **watching:** kqueue (D26; FSEvents was replaced because it is recursive), `ReadDirectoryChangesW`, inotify.
    - **worker service:** list, sort and watch on worker goroutines, then hand the results to the UI thread through `core.Ring` and a wake. Pointer-free 24-byte entries.
    - **sorting and filtering:** natural name order, case-insensitive.
    - **opening files:** with the OS default app.

@@ -92,15 +92,15 @@ var ErrUnsupported = errors.New("fs: not supported on this OS yet")
 //
 // var listDir func(path string, l *Listing) error
 
-// watcher is the per-OS change notifier (FSEvents, ReadDirectoryChangesW,
-// inotify). It runs its own goroutine or OS callback thread, calls wake
+// watcher is the per-OS change notifier (kqueue, ReadDirectoryChangesW,
+// inotify; all non-recursive, D26). It runs its own goroutine or OS callback thread, calls wake
 // when it has changes, and hands them over through drain. Implemented per
 // OS:
 //
 //	newWatcher(wake func()) (watcher, error)
 //
 // The Service calls add, remove and close from one control goroutine (they
-// may be slow: FSEvents restarts its stream) and drain from the UI thread,
+// may be slow: they open handles and register watches) and drain from the UI thread,
 // so a backend must make drain safe against concurrent add/remove and
 // against its own notification thread. wake may be called from any thread
 // and must not block.
