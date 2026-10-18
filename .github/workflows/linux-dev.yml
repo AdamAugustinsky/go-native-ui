@@ -1,0 +1,39 @@
+name: linux-dev
+on:
+  push:
+    branches: [p5-linux]
+    paths: ['.github/workflows/linux-dev.yml']
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: install
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends weston wl-clipboard xclip xvfb xauth cage sway wayland-utils x11-utils xdotool imagemagick x11-apps
+          weston --version; cage -v || true; sway --version || true; dpkg -l | grep -E "wayland|weston|wlroots" | awk '{print $2, $3}'
+      - name: weston globals and clipboard
+        run: |
+          export XDG_RUNTIME_DIR=$(mktemp -d); chmod 700 $XDG_RUNTIME_DIR
+          weston --backend=headless --socket=wayland-ci --width=1280 --height=800 --idle-time=0 > weston.log 2>&1 &
+          for _ in $(seq 100); do [ -S "$XDG_RUNTIME_DIR/wayland-ci" ] && break; sleep 0.1; done
+          export WAYLAND_DISPLAY=wayland-ci
+          wayland-info || true
+          echo hello-from-wl-copy | timeout 10 wl-copy; echo "wl-copy rc=$?"
+          timeout 10 wl-paste; echo "wl-paste rc=$?"
+          cat weston.log | tail -20
+      - name: sway headless
+        run: |
+          export XDG_RUNTIME_DIR=$(mktemp -d); chmod 700 $XDG_RUNTIME_DIR
+          export WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 WLR_RENDERER=pixman
+          sway > sway.log 2>&1 &
+          sleep 3; ls $XDG_RUNTIME_DIR
+          S=$(ls $XDG_RUNTIME_DIR | grep wayland- | grep -v lock | head -1); export WAYLAND_DISPLAY=$S
+          wayland-info || true
+          echo hello-sway | timeout 10 wl-copy; echo "wl-copy rc=$?"
+          timeout 10 wl-paste; echo "wl-paste rc=$?"
+          tail -5 sway.log
+      - name: xvfb + xclip
+        run: |
+          xvfb-run -a -s "-screen 0 1280x800x24" bash -c 'echo hello-xclip | xclip -selection clipboard -i; xclip -selection clipboard -o; echo rc=$?; xdpyinfo | head -20; xdpyinfo -ext all | grep -i -E "glx|present|composite|damage" | head'
