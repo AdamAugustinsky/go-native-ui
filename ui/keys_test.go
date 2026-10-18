@@ -251,3 +251,52 @@ func TestUndoChords(t *testing.T) {
 		}
 	}
 }
+
+// A frame's keys, edit actions and typed text act on the field that had the
+// focus at Begin, once, even when a handler moves the focus to a field built
+// later in the same frame.
+func TestFocusTransferDuringBuildAppliesInputOnce(t *testing.T) {
+	cases := []struct {
+		name  string
+		push  func(in *Input)
+		a, b  string // the texts after the frame
+		setup func(a, b *TextBuffer)
+	}{
+		{"edit delete", func(in *Input) { in.PushEdit(EditDelete) }, "", "hello",
+			func(a, b *TextBuffer) { a.SetString("hello"); a.SelectAll(); b.SetString("hello"); b.SelectAll() }},
+		{"backspace", func(in *Input) { in.PushKey(KeyEvent{Code: KeyBackspace, Down: true}) }, "hell", "hello",
+			func(a, b *TextBuffer) { a.SetString("hello"); b.SetString("hello") }},
+		{"typed text", func(in *Input) { in.AppendText("x") }, "hellox", "hello",
+			func(a, b *TextBuffer) { a.SetString("hello"); b.SetString("hello") }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newRig(t, false)
+			var a, b TextBuffer
+			var ka, kb Key
+			build := func(c *Context) {
+				c.NextSize(Px(200), Px(24))
+				ra := c.TextField("a", &a)
+				if ra.Changed {
+					c.SetFocus(kb) // (kb: the key from the previous frame)
+				}
+				c.NextSize(Px(200), Px(24))
+				rb := c.TextField("b", &b)
+				ka, kb = c.KeyOf(ra.ID), c.KeyOf(rb.ID)
+			}
+			r.harness.frame(build)
+			r.c.SetFocus(ka)
+			r.harness.frame(build)
+			tc.setup(&a, &b)
+			r.harness.frame(build)
+			tc.push(&r.in)
+			r.harness.frame(build)
+			if a.String() != tc.a || b.String() != tc.b {
+				t.Fatalf("a=%q b=%q, want a=%q b=%q", a.String(), b.String(), tc.a, tc.b)
+			}
+			if r.c.FocusKey() != kb {
+				t.Fatal("the focus did not move")
+			}
+		})
+	}
+}

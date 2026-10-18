@@ -130,7 +130,7 @@ func fieldWants(e *KeyEvent) bool {
 // claimFieldKeys is the first step of key distribution (Begin): the focused
 // text field claims the keys it handles.
 func (c *Context) claimFieldKeys() {
-	c.fieldFocus, c.fieldKeys = false, 0
+	c.fieldFocus, c.fieldKeys, c.fieldOwner = false, 0, 0
 	if c.focusKey == 0 || !c.in.Focused {
 		return
 	}
@@ -142,7 +142,7 @@ func (c *Context) claimFieldKeys() {
 	if !b.field || b.lastFrame != c.frame-1 || b.flags&Disabled != 0 || c.blocked(b) {
 		return
 	}
-	c.fieldFocus = true
+	c.fieldFocus, c.fieldOwner = true, c.focusKey
 	for i := 0; i < c.in.NKeys; i++ {
 		if fieldWants(&c.in.Keys[i]) {
 			c.fieldKeys |= 1 << uint(i)

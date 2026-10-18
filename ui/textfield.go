@@ -263,19 +263,32 @@ func (c *Context) TextField(label string, buf *TextBuffer) TextFieldSignal {
 
 	// Typed text, then keys and edit actions.
 	if active {
-		c.fieldKey, c.fieldBuilt = key, true
+		// The frame's keys, edit actions and typed text are applied once. The
+		// keys were claimed at Begin for the field that had the focus then
+		// (fieldOwner), and so are the edit actions; if a handler moves the
+		// focus to a field built later in the same frame, that field applies
+		// none of them. (When no field was known to have the focus at Begin,
+		// the first focused field takes the edit actions.)
+		mine := c.fieldOwner == key || (c.fieldOwner == 0 && !c.fieldBuilt)
+		if mine {
+			c.fieldKey, c.fieldBuilt = key, true
+		}
 		typed := in.Text[:in.NText]
-		if in.HasReplace { // press-and-hold accents: the first part of the text replaces a range
+		if c.textTaken {
+			typed = nil
+		} else if in.HasReplace { // press-and-hold accents: the first part of the text replaces a range
 			n := min(in.ReplaceN, len(typed))
 			buf.ReplaceUTF16(int(in.ReplaceStart), int(in.ReplaceLen), typed[:n])
 			typed = typed[n:]
 			touched = true
+			c.textTaken = true
 		}
 		if len(typed) > 0 {
 			buf.Insert(typed)
 			touched = true
+			c.textTaken = true
 		}
-		if !composing {
+		if !composing && mine {
 			touched = c.editKeys(buf, &res) || touched
 			for i := 0; i < in.NEdit; i++ {
 				c.applyEdit(buf, in.Edit[i])
