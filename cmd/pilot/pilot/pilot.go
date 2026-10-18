@@ -1,7 +1,11 @@
-// Package pilot is the dual-pane file browser on app + ui + fs, in the Rex look
-// (cmd/internal/rexkit). It is OS-independent: the window loop, the file
-// system service and the text system come in through Options and app.App, so
-// the same code is the window, the benchmark and the offscreen screenshot.
+// Package pilot is the dual-pane file browser on app + ui + fs, built from the
+// widget kit and the Rex theme: a widget.Table for each file list (selection by
+// entry index, sorting from the header, resizable columns), a widget.Splitter
+// between the panes, widget.TextFields for the path and the filter, and the
+// theme's chrome for the window. It follows the system's light or dark mode and
+// accent colour. It is OS-independent: the window loop, the file system service
+// and the text system come in through Options and app.App, so the same code is
+// the window, the benchmark and the offscreen screenshot.
 //
 //	pl := pilot.New(pilot.Options{...})
 //	app.RunWith(pilot.Config(), pl, app.RunOptions{})   // or RunBench / NewOffscreen
@@ -9,8 +13,9 @@
 // Package layout: view.go and pane.go are the model (listing, rows,
 // selection, navigation and history, reconciling a new listing of the same
 // directory by name, all in slices of bounded work per frame); keys.go maps
-// input to it; build.go draws a frame; script.go drives the benchmark;
-// synth.go makes synthetic directories; shot.go renders the offscreen scene.
+// the keys the table does not take to it; build.go builds a frame; script.go
+// drives the benchmark; synth.go makes synthetic directories; shot.go renders
+// the offscreen scene.
 package pilot
 
 import (
@@ -18,10 +23,12 @@ import (
 	"time"
 
 	"gonativeui/app"
-	"gonativeui/cmd/internal/rexkit"
 	"gonativeui/fs"
 	"gonativeui/text"
+	"gonativeui/theme"
+	"gonativeui/theme/rex"
 	"gonativeui/ui"
+	"gonativeui/widget"
 )
 
 // Window geometry, in points.
@@ -32,13 +39,16 @@ const (
 	MinHeightPt    = 400
 )
 
+// titlebarPt is the height of the titlebar band in points: the Rex theme's.
+const titlebarPt = 46
+
 // Config is Pilot's window: the Rex chrome (46 pt titlebar, traffic lights at
 // (21, 22)) at 1200×760 pt, at least 600×400.
 func Config() app.Config {
 	return app.Config{
 		Title: "Pilot", Width: WindowWidthPt, Height: WindowHeightPt,
 		MinWidth: MinWidthPt, MinHeight: MinHeightPt,
-		Titlebar: rexkit.TitlebarPt, TrafficLights: [2]float32{21, 22},
+		Titlebar: titlebarPt, TrafficLights: [2]float32{21, 22},
 		Clear: [4]float32{0.9, 0.9, 0.9, 1}, // the background mesh covers every pixel
 	}
 }
@@ -67,6 +77,10 @@ type Options struct {
 	Initial [2]<-chan Ready
 	Wait    time.Duration // default 150 ms
 
+	// Preference is which mode the window shows: the system's (the zero value),
+	// or a forced light or dark one.
+	Preference theme.Preference
+
 	// Traffic makes the scene draw the traffic lights (offscreen only).
 	Traffic bool
 	// Loc is the time zone modification times are shown in (default time.Local).
@@ -76,10 +90,11 @@ type Options struct {
 // Pilot is the scene: both panes and the chrome. It implements app.Builder and
 // app.Initer.
 type Pilot struct {
-	rexkit.Kit
+	k *widget.Kit
 	// Traffic makes the scene draw the window's traffic lights (offscreen output).
 	Traffic bool
 	opt     Options
+	ico     entryIcons
 	a       *app.App
 	src     Source
 	loc     *time.Location
@@ -88,8 +103,7 @@ type Pilot struct {
 
 	panes  [2]*pane
 	active int
-	ratio  float32 // share of the width the left pane gets
-	ratio0 float32 // at the start of a divider drag
+	split  widget.SplitState // the share of the width each pane gets
 
 	init     [2]<-chan Ready
 	listedAt [2]int64
@@ -99,10 +113,8 @@ type Pilot struct {
 	geo       [2]geometry
 	lastW     int
 	lastH     int
-	listBuf   [2]ui.ID
-	prevFocus ui.Key     // the focus key at the end of the previous frame
-	composing bool       // an input method was composing in the previous frame
-	dragFrom  [2]float64 // scrollbar drag: the scroll offset at the press
+	prevFocus ui.Key // the focus key at the end of the previous frame
+	composing bool   // an input method was composing in the previous frame
 
 	// What the last Build did, for the script and the tests.
 	counting                       bool
@@ -118,10 +130,13 @@ func New(o Options) *Pilot {
 	if o.Loc == nil {
 		o.Loc = time.Local
 	}
-	pl := &Pilot{opt: o, src: o.Src, loc: o.Loc, mac: runtime.GOOS == "darwin", win: runtime.GOOS == "windows", ratio: 0.5, init: o.Initial}
+	pl := &Pilot{opt: o, src: o.Src, loc: o.Loc, mac: runtime.GOOS == "darwin", win: runtime.GOOS == "windows", init: o.Initial}
+	pl.split = widget.NewSplitState(1, 1)
+	pl.split.Min = [widget.MaxPanes]float32{minPanePt, minPanePt}
 	pl.Traffic = o.Traffic
 	for i := range pl.panes {
 		pl.panes[i] = newPane(uint32(i+1), o.Src, o.Home)
+		pl.panes[i].initColumns()
 	}
 	return pl
 }
@@ -129,13 +144,15 @@ func New(o Options) *Pilot {
 var _ app.Builder = (*Pilot)(nil)
 var _ app.Initer = (*Pilot)(nil)
 
-// Init implements app.Initer: fonts and icons, the box and run caches sized
-// for scrolling through endless new names, and the first listings.
+// Init implements app.Initer: the widget kit with the icons of the entry kinds,
+// the box and run caches sized for scrolling through endless new names, and the
+// first listings.
 func (pl *Pilot) Init(a *app.App) error {
 	pl.a = a
-	_, _, scale := a.Size()
-	pl.Kit.Init(a.Text, iconSpecs[:], 2, scale)
-	pl.IC.Attach(a.R)
+	pl.k = widget.NewKit(a.UI, a.Text, rex.Theme())
+	pl.k.SetPreference(pl.opt.Preference)
+	pl.k.ReduceMotion = true // nothing in Pilot indicates progress
+	pl.ico = entryIcons{link: pl.k.AddIcon(specLink), exec: pl.k.AddIcon(specExec), other: pl.k.AddIcon(specOther)}
 	a.UI.Reserve(4096)
 	a.Text.ReserveRuns(text.MaxCachedRuns, text.MaxCachedGlyphs, text.MaxCachedTextBytes)
 

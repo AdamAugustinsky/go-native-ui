@@ -10,6 +10,7 @@ import (
 
 	"gonativeui/app"
 	"gonativeui/fs"
+	"gonativeui/ui"
 )
 
 // A small window keeps the offscreen frames (with their readback) cheap.
@@ -38,7 +39,7 @@ func TestSessionDrivesThePanes(t *testing.T) {
 	var seen struct {
 		sortSize, sortMod, filter, otherActive, selected, hiddenShown, refreshed, divider bool
 	}
-	ratio0 := b.ratio
+	ratio0 := b.split.Ratio[0]
 	l0 := b.panes[0].v.l
 	for n := 0; n < 20000 && b.Cycles() < 1; n++ {
 		o.Frame()
@@ -47,10 +48,10 @@ func TestSessionDrivesThePanes(t *testing.T) {
 		seen.sortMod = seen.sortMod || l.sortKey == fs.SortModified
 		seen.filter = seen.filter || (l.filterOpen && len(l.q) > 0)
 		seen.otherActive = seen.otherActive || b.active == 1
-		seen.selected = seen.selected || l.v.nSel > 1
+		seen.selected = seen.selected || l.v.nSel() > 1
 		seen.hiddenShown = seen.hiddenShown || !l.hideHidden
 		seen.refreshed = seen.refreshed || (l.v.l != l0 && l.v.l != nil)
-		seen.divider = seen.divider || b.ratio != ratio0
+		seen.divider = seen.divider || b.split.Ratio[0] != ratio0
 	}
 	if b.Cycles() < 1 {
 		t.Fatal("the session did not finish in 20000 frames")
@@ -218,5 +219,50 @@ func TestIdleSettles(t *testing.T) {
 		if o.UI.Animating() {
 			t.Fatalf("frame %d after settling is animating again", n)
 		}
+	}
+}
+
+// Pilot follows the system's mode: a dark system gives a dark first frame (no
+// light frame, no crossfade), a change of the system crossfades to the other
+// mode, and the chrome the OS draws is told the mode shown.
+func TestFollowsTheSystemMode(t *testing.T) {
+	pl := New(SceneOptions())
+	o := newOffscreen(t, pl)
+	o.UI.SetSystemAppearance(ui.Appearance{Dark: true, Known: true})
+	o.Frame()
+	if pl.k.Theme().T != 1 {
+		t.Fatalf("the first frame has the mix %v, want the dark mode at once", pl.k.Theme().T)
+	}
+	if dark, ok := o.UI.ChromeDark(); !ok || !dark {
+		t.Errorf("ChromeDark = %v, %v after the first frame, want declared dark", dark, ok)
+	}
+	img, _ := o.Frame()
+	var sum, n float64
+	for y := 0; y < th; y += 9 {
+		for x := 0; x < tw; x += 9 {
+			i := (y*tw + x) * 4
+			sum += float64(int(img.Pix[i])+int(img.Pix[i+1])+int(img.Pix[i+2])) / 3 / 255
+			n++
+		}
+	}
+	if mean := sum / n; mean > 0.35 {
+		t.Errorf("mean brightness %.2f in the dark mode: light pixels where the dark background should be", mean)
+	}
+	for n := 0; n < 600 && o.UI.Animating(); n++ { // the scene's own animations settle
+		o.Frame()
+	}
+	o.UI.SetSystemAppearance(ui.Appearance{Known: true})
+	o.Frame()
+	if mix := pl.k.Theme().T; mix <= 0 || mix >= 1 || !o.UI.Animating() {
+		t.Errorf("one frame after the system went light the mix is %v (animating %v), want a crossfade under way", mix, o.UI.Animating())
+	}
+	for n := 0; n < 600 && o.UI.Animating(); n++ {
+		o.Frame()
+	}
+	if pl.k.Theme().T != 0 {
+		t.Errorf("the crossfade ended at %v, want the light mode", pl.k.Theme().T)
+	}
+	if dark, _ := o.UI.ChromeDark(); dark {
+		t.Error("the chrome is still declared dark")
 	}
 }

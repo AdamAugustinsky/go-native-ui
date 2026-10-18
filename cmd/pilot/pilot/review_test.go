@@ -255,17 +255,18 @@ func TestSelectionChangedDuringReconciliationSurvives(t *testing.T) {
 		p := bigPane(t)
 		v := &p.v
 		e := findName(v.l, "f2500.txt")
-		v.selectOnly(e, v.rowOf(e))
+		v.selectOnly(e)
+		p.topEntry, p.topRow = findName(v.l, "f1000.txt"), 1000 // a place to keep: phase 3 looks for its row
 		deliver(p, refreshed())
 		toPhase(t, p, phase)
 		c := findName(v.l, "f0200.txt")
-		v.selectOnly(c, v.rowOf(c)) // a click in the listing still on screen
+		v.selectOnly(c) // a click in the listing still on screen
 		settle(t, p)
 		if selected(p) != "f0200.txt" || curName(p) != "f0200.txt" {
 			t.Errorf("phase %d: selected %q cursor %q after the click, want f0200.txt", phase, selected(p), curName(p))
 		}
-		if v.curRow != v.rowOf(v.cur) || v.curRow < 0 {
-			t.Errorf("phase %d: cursor row %d", phase, v.curRow)
+		if v.curRow() < 0 {
+			t.Errorf("phase %d: cursor row %d", phase, v.curRow())
 		}
 	}
 }
@@ -277,7 +278,8 @@ func TestFilterChangedDuringReconciliationApplies(t *testing.T) {
 		p := bigPane(t)
 		v := &p.v
 		e := findName(v.l, "f0150.txt")
-		v.selectOnly(e, v.rowOf(e)) // a cursor to find in phase 3
+		v.selectOnly(e)
+		p.topEntry, p.topRow = findName(v.l, "f1000.txt"), 1000 // a place to keep: phase 3 looks for its row
 		deliver(p, refreshed())
 		toPhase(t, p, phase)
 		p.filterOpen = true
@@ -287,8 +289,8 @@ func TestFilterChangedDuringReconciliationApplies(t *testing.T) {
 		if got := names(p); got != "f0150.txt" {
 			t.Errorf("phase %d: rows %q, want f0150.txt only", phase, got)
 		}
-		if v.curRow != 0 || curName(p) != "f0150.txt" {
-			t.Errorf("phase %d: cursor row %d (%q)", phase, v.curRow, curName(p))
+		if v.curRow() != 0 || curName(p) != "f0150.txt" {
+			t.Errorf("phase %d: cursor row %d (%q)", phase, v.curRow(), curName(p))
 		}
 		p.closeFilter()
 		settle(t, p)
@@ -306,7 +308,7 @@ func TestScrollPositionKeptWhenTheTopEntryIsTheCursor(t *testing.T) {
 	v := &p.v
 	e := findName(v.l, "b.txt")
 	row := v.rowOf(e)
-	v.selectOnly(e, row) // cursor and anchor
+	v.selectOnly(e) // cursor and anchor
 	p.topEntry, p.topRow, p.topFrac = e, row, 0.25
 	deliver(p, listing(fs.SortName, false, append(slices.Clone(dirItems), item{"aaa.txt", fs.KindFile, 0, 7, "2026-10-09 10:00"})...)) // appears above
 	settle(t, p)
@@ -472,14 +474,14 @@ func TestClickingTheOtherPaneLeavesTheTextField(t *testing.T) {
 	g := &pl.geo[1]
 	r.at(g.rect[0]+40, g.rect[3]-4) // the status line of the right pane
 	r.click(0)
-	if pl.active != 1 || r.o.UI.FocusKey() != 0 {
+	if pl.active != 1 || r.o.UI.FocusKey() != listKey(1) {
 		t.Fatalf("active %d focus %v: the left field kept the keyboard", pl.active, r.o.UI.FocusKey())
 	}
-	cur := pl.panes[1].v.curRow
+	cur := pl.panes[1].v.curRow()
 	before := pl.panes[0].path.String()
 	r.key(ui.KeyDown, 0)
 	r.text("x")
-	if pl.panes[1].v.curRow == cur && pl.panes[1].v.nRows() > 1 && !pl.panes[1].filterOpen {
+	if pl.panes[1].v.curRow() == cur && pl.panes[1].v.nRows() > 1 && !pl.panes[1].filterOpen {
 		t.Error("keys do not reach the active pane's list")
 	}
 	if pl.panes[0].path.String() != before {
@@ -500,8 +502,7 @@ func TestClickingTheOtherPaneLeavesTheTextField(t *testing.T) {
 		t.Errorf("header click: active %d focus %v", pl.active, r.o.UI.FocusKey())
 	}
 	// clicking into a field of the other pane still focuses that field
-	L := pl.layoutPane(pl.geo[0].rect[2]-pl.geo[0].rect[0], pl.geo[0].rect[3]-pl.geo[0].rect[1], false)
-	r.at(pl.geo[0].rect[0]+(L.path[0]+L.path[2])/2, pl.geo[0].rect[1]+(L.path[1]+L.path[3])/2)
+	r.at(r.center(pathKey(0)))
 	r.click(0)
 	if pl.active != 0 || r.o.UI.FocusKey() != pathKey(0) {
 		t.Errorf("click into a field: active %d focus %v", pl.active, r.o.UI.FocusKey())
@@ -554,7 +555,7 @@ func TestCompositionInTheFilter(t *testing.T) {
 	r.frames(1)
 	r.rowAt(0, 3)
 	r.press(1, 0)
-	if r.o.UI.FocusKey() != 0 {
+	if r.o.UI.FocusKey() != listKey(0) {
 		t.Errorf("the list click did not keep the focus: %v (the composition took it back)", r.o.UI.FocusKey())
 	}
 	if a.filter.String() != "日本ご" {
@@ -566,7 +567,7 @@ func TestCompositionInTheFilter(t *testing.T) {
 	r.release()
 	r.endComposition("")
 	r.frames(2)
-	if r.o.UI.FocusKey() != 0 {
+	if r.o.UI.FocusKey() != listKey(0) {
 		t.Errorf("focus %v after the composition ended", r.o.UI.FocusKey())
 	}
 }
@@ -586,8 +587,7 @@ func TestCompositionAndTabAndFieldClicks(t *testing.T) {
 	if pl.active != 0 || r.o.UI.FocusKey() != filterKey(0) || !a.filterOpen {
 		t.Fatalf("keys while composing: active %d focus %v filter open %v", pl.active, r.o.UI.FocusKey(), a.filterOpen)
 	}
-	L := pl.layoutPane(pl.geo[0].rect[2]-pl.geo[0].rect[0], pl.geo[0].rect[3]-pl.geo[0].rect[1], true)
-	r.at(pl.geo[0].rect[0]+(L.path[0]+L.path[2])/2, pl.geo[0].rect[1]+(L.path[1]+L.path[3])/2)
+	r.at(r.center(pathKey(0)))
 	r.press(1, 0)
 	if r.o.UI.FocusKey() != pathKey(0) {
 		t.Fatalf("focus %v, want the path field", r.o.UI.FocusKey())

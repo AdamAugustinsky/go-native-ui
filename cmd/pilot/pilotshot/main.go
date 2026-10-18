@@ -4,6 +4,7 @@
 // the renderer does (Metal, Direct3D 11, OpenGL).
 //
 //	go run ./cmd/pilot/pilotshot -o pilot.png      # 2400×1520 px at 2×, traffic lights, window corners
+//	go run ./cmd/pilot/pilotshot -o dark.png -mode dark
 package main
 
 import (
@@ -12,6 +13,9 @@ import (
 	"os"
 
 	"gonativeui/cmd/pilot/pilot"
+	"gonativeui/platform"
+	"gonativeui/theme"
+	"gonativeui/ui"
 )
 
 func main() {
@@ -20,8 +24,22 @@ func main() {
 	h := flag.Int("h", 1520, "height in pixels")
 	scale := flag.Float64("scale", 2, "pixels per point")
 	corners := flag.Bool("corners", true, "make the window corners transparent (superellipse)")
+	mode := flag.String("mode", "light", "light, dark or system (what this machine says)")
 	flag.Parse()
-	quads, calls, err := pilot.RenderShot(*out, *w, *h, float32(*scale), *corners)
+	var look pilot.Look
+	switch *mode {
+	case "light":
+		look.Preference = theme.ForceLight
+	case "dark":
+		look.Preference = theme.ForceDark
+	case "system":
+		a := platform.SystemAppearance()
+		look.System = ui.Appearance{Dark: a.Dark, Accent: a.Accent, Known: a.Known}
+	default:
+		fmt.Fprintf(os.Stderr, "pilotshot: -mode %q: want light, dark or system\n", *mode)
+		os.Exit(2)
+	}
+	quads, calls, err := pilot.RenderShotLook(*out, *w, *h, float32(*scale), *corners, look)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "pilotshot:", err)
 		os.Exit(1)

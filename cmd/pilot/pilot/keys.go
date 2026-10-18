@@ -1,13 +1,15 @@
 package pilot
 
 import (
-	"gonativeui/fs"
 	"gonativeui/ui"
 )
 
 // update applies the frame's input to the model before anything is built, so
-// the frame that shows a click or a key is the frame it happens in. Geometry
-// is the previous frame's, the layout the pointer was hit-tested against.
+// the frame that shows a click or a key is the frame it happens in. What the
+// table takes itself (a click in the list, the arrow keys, Page Up and Down,
+// Home and End, select all, Enter and a double click to open) it does while it
+// is built; this is the rest. Geometry is the previous frame's, the layout the
+// pointer was hit-tested against.
 func (pl *Pilot) update(c *ui.Context) {
 	in := c.Input()
 
@@ -31,57 +33,37 @@ func (pl *Pilot) update(c *ui.Context) {
 			}
 		}
 	}
-	a := pl.panes[pl.active]
-
-	// Titlebar buttons.
-	switch {
-	case c.PeekSignal(keyBack).Clicked:
-		a.goBack()
-	case c.PeekSignal(keyFwd).Clicked:
-		a.goForward()
-	case c.PeekSignal(keyUp).Clicked:
-		a.goUp()
-	}
-
-	// The divider: the left pane follows the pointer.
-	ds := c.PeekSignal(keyDiv)
-	if ds.Pressed {
-		pl.ratio0 = pl.ratio
-	}
-	if ds.Dragging || ds.Released {
-		wa := pl.workArea()
-		if avail := wa[2] - wa[0] - pl.Scale*gutterPt; avail > 0 {
-			pl.ratio = min(max(pl.ratio0+ds.DragDelta[0]/avail, 0.05), 0.95)
-		}
-	}
-
-	// Column headers and the list.
-	for i, p := range pl.panes {
-		for ci, key := range [3]fs.SortKey{fs.SortName, fs.SortSize, fs.SortModified} {
-			if c.PeekSignal(hdrKey(i, ci)).Clicked {
-				p.sortBy(key)
-				pl.setActive(c, i)
-			}
-		}
-		if in.Pressed[ui.ButtonLeft] && c.HotKey() == listKey(i) {
-			pl.click(c, i, in)
-		}
-	}
 
 	pl.keys(c, in)
+	pl.syncFocus(c)
 }
 
-// setActive gives pane i the keyboard. A text field of the pane that had it
-// loses the focus: keys act on the active pane's list or field, and a field of
-// the other pane that kept the focus would edit the same keys. (A click into a
-// field of pane i takes the focus again while the frame is built.)
+// setActive gives pane i the keyboard: the focus moves to its list, unless it is
+// in one of its text fields. (A text field of the other pane that kept the focus
+// would edit the same keys.)
 func (pl *Pilot) setActive(c *ui.Context, i int) {
 	if i == pl.active {
 		return
 	}
 	pl.active = i
-	if fk := c.FocusKey(); fk != 0 && (fk == pathKey(i^1) || fk == filterKey(i^1)) {
-		c.SetFocus(0)
+	pl.syncFocus(c)
+}
+
+// focusList gives the active pane's list the focus.
+func (pl *Pilot) focusList(c *ui.Context) { c.SetFocus(listKey(pl.active)) }
+
+// syncFocus keeps the keyboard focus where the active pane is: in its list or
+// one of its fields. When it is nowhere (a click on nothing) or in the other
+// pane, it moves to the active pane's list. A focus elsewhere (the divider) is
+// left alone.
+func (pl *Pilot) syncFocus(c *ui.Context) {
+	a := pl.active
+	fk := c.FocusKey()
+	if fk == listKey(a) || fk == pathKey(a) || fk == filterKey(a) {
+		return
+	}
+	if fk == 0 || fk == listKey(a^1) || fk == pathKey(a^1) || fk == filterKey(a^1) {
+		pl.focusList(c)
 	}
 }
 
@@ -103,44 +85,17 @@ func (pl *Pilot) primary() ui.Mods {
 	return ui.ModCtrl
 }
 
-// click applies a press in the list of pane i.
-func (pl *Pilot) click(c *ui.Context, i int, in *ui.Input) {
-	p := pl.panes[i]
-	v := &p.v
-	pl.setActive(c, i)
-	c.SetFocus(0)
-	if v.l == nil {
-		return
-	}
-	g := &pl.geo[i]
-	row := int((float64(in.MouseY-g.list[1]) + g.scrollY) / float64(g.rowPx))
-	if row < 0 || row >= v.nRows() {
-		if row >= v.nRows() && in.Mods&ui.ModShift == 0 && !pl.isPrimary(in.Mods) {
-			v.clearSel()
-		}
-		return
-	}
-	switch {
-	case in.Clicks[ui.ButtonLeft] >= 2:
-		p.openRow(row)
-	case in.Mods&ui.ModShift != 0:
-		v.selectRange(row)
-	case pl.isPrimary(in.Mods):
-		v.toggle(v.entryAt(row), row)
-	default:
-		v.selectOnly(v.entryAt(row), row)
-	}
-}
-
-// keys handles the frame's key events and typed text.
+// keys handles the frame's key events and typed text: those the table does not
+// take.
 func (pl *Pilot) keys(c *ui.Context, in *ui.Input) {
 	for n := 0; n < in.NKeys; n++ {
 		k := in.Keys[n]
 		if !k.Down {
 			continue
 		}
-		pl.key(c, k)
-		c.ClaimKey(n) // Pilot's: ui's own handlers (Tab traversal) leave it alone
+		if pl.key(c, k) {
+			c.ClaimKey(n) // Pilot's: ui's own handlers (Tab traversal, the list's Enter) leave it alone
+		}
 	}
 	// Typing with the list focused starts the filter; so does an input method
 	// composing (its keys never reach us as text).
@@ -148,7 +103,7 @@ func (pl *Pilot) keys(c *ui.Context, in *ui.Input) {
 	fk := c.FocusKey()
 	composing := pl.composing
 	pl.composing = in.NPreedit > 0
-	if fk == pathKey(pl.active) || fk == filterKey(pl.active) || !in.Focused {
+	if (fk != 0 && fk != listKey(pl.active)) || !in.Focused {
 		return
 	}
 	// Only a composition that begins now starts the filter. One that goes on
@@ -173,13 +128,12 @@ func (pl *Pilot) typed(in *ui.Input) bool {
 	return true
 }
 
-// move puts the cursor of a on row r (extending the selection with shift) and scrolls it into view.
-func (pl *Pilot) move(a *pane, shift bool, r int) {
-	a.v.moveCursor(r, shift)
-	a.reveal = a.v.curRow
-}
-
-func (pl *Pilot) key(c *ui.Context, k ui.KeyEvent) {
+// key handles one key-down and reports whether it was Pilot's (the caller then
+// claims it). The keys of the list itself (the arrows, Page Up and Down, Home
+// and End, with Shift to extend; select all; Enter to open) are the table's
+// while the list has the focus; from the filter field Pilot sends the same
+// keys to the list.
+func (pl *Pilot) key(c *ui.Context, k ui.KeyEvent) bool {
 	prim := pl.isPrimary(k.Mods)
 	shift := k.Mods&ui.ModShift != 0
 	alt := k.Mods&ui.ModAlt != 0
@@ -187,9 +141,9 @@ func (pl *Pilot) key(c *ui.Context, k ui.KeyEvent) {
 	fk := c.FocusKey()
 	inPath := fk == pathKey(pl.active)
 	inFilter := fk == filterKey(pl.active)
-	list := !inPath && !inFilter
-	if !list && c.Input().NPreedit > 0 {
-		return // an input method is composing in the field: the keys are its (as in the field itself)
+	inList := fk == 0 || fk == listKey(pl.active)
+	if (inPath || inFilter) && c.Input().NPreedit > 0 {
+		return true // an input method is composing in the field: the keys are its (as in the field itself)
 	}
 
 	// Shortcuts that work wherever the focus is.
@@ -203,36 +157,40 @@ func (pl *Pilot) key(c *ui.Context, k ui.KeyEvent) {
 			a.pathErr = ""
 		}
 		pl.active ^= 1
-		c.SetFocus(0)
-		return
+		pl.focusList(c)
+		c.SetFocusVisible(true)
+		return true
 	case prim && k.Code == 'L' && !shift:
 		c.SetFocus(pathKey(pl.active))
 		a.path.SelectAll()
-		return
+		return true
 	case pl.mac && prim && k.Code == ui.KeyLeftBracket:
 		a.goBack()
-		return
+		return true
 	case pl.mac && prim && k.Code == ui.KeyRightBracket:
 		a.goForward()
-		return
+		return true
 	case !pl.mac && alt && !inPath && k.Code == ui.KeyLeft:
 		a.goBack()
-		return
+		return true
 	case !pl.mac && alt && !inPath && k.Code == ui.KeyRight:
 		a.goForward()
-		return
+		return true
 	case pl.mac && prim && shift && k.Code == ui.KeyPeriod, !pl.mac && prim && k.Code == 'H':
 		if !inPath {
 			a.toggleHidden()
 		}
-		return
+		return true
 	}
 	if inPath {
-		return // the field edits; Enter and Esc come back through its signal
+		return true // the field edits; Enter and Esc come back through its signal
+	}
+	if !inList && !inFilter {
+		return false // the divider or something else has the keyboard
 	}
 
-	v := &a.v
-	cur := v.curRow
+	ts := &a.v.ts
+	last := a.v.nRows() - 1
 	page := max(pl.geo[pl.active].visRows-1, 1)
 	upMod, downMod := alt, alt // parent and open: ⌘↑/⌘↓ on macOS, Alt+↑ / Alt+↓ elsewhere
 	if pl.mac {
@@ -244,46 +202,67 @@ func (pl *Pilot) key(c *ui.Context, k ui.KeyEvent) {
 		case upMod:
 			a.goUp()
 		case pl.mac && alt:
-			pl.move(a, shift, 0)
+			ts.MoveTo(0, shift)
+		case inFilter:
+			ts.MoveBy(-1, shift)
 		default:
-			pl.move(a, shift, max(cur-1, 0))
+			return false
 		}
 	case ui.KeyDown:
 		switch {
 		case downMod:
 			a.openCursor()
 		case pl.mac && alt:
-			pl.move(a, shift, v.nRows()-1)
+			ts.MoveTo(last, shift)
+		case inFilter:
+			ts.MoveBy(1, shift)
 		default:
-			pl.move(a, shift, cur+1)
+			return false
 		}
 	case ui.KeyPageUp:
-		pl.move(a, shift, max(cur, 0)-page)
+		if !inFilter {
+			return false
+		}
+		ts.MoveBy(-page, shift)
 	case ui.KeyPageDown:
-		pl.move(a, shift, max(cur, 0)+page)
+		if !inFilter {
+			return false
+		}
+		ts.MoveBy(page, shift)
 	case ui.KeyHome:
-		pl.move(a, shift, 0)
+		if !inFilter {
+			return false
+		}
+		ts.MoveTo(0, shift)
 	case ui.KeyEnd:
-		pl.move(a, shift, v.nRows()-1)
+		if !inFilter {
+			return false
+		}
+		ts.MoveTo(last, shift)
 	case ui.KeyEnter:
+		if !inFilter {
+			return false // the list opens its cursor row (List.Activated)
+		}
 		a.openCursor()
+	case ui.KeySpace:
+		return inList // a space does nothing in the list (it would open the cursor row)
 	case ui.KeyBackspace:
-		if list {
-			a.goUp()
+		if !inList {
+			return false
 		}
-	case 'A':
-		if list && prim {
-			v.selectAll()
-		}
+		a.goUp()
 	case ui.KeyEscape:
 		switch {
 		case inFilter:
 			a.closeFilter()
-			c.SetFocus(0)
+			pl.focusList(c)
 		case a.filterOpen || len(a.q) > 0:
 			a.closeFilter()
 		default:
-			v.clearSel()
+			a.v.ts.Sel.Clear()
 		}
+	default:
+		return false
 	}
+	return true
 }
