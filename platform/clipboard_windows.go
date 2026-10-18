@@ -76,28 +76,25 @@ func Clipboard() string {
 }
 
 // SetClipboard replaces the system clipboard with the plain text s (as
-// CF_UNICODETEXT, with \r\n line ends). Main thread.
+// CF_UNICODETEXT, with \r\n line ends), waiting briefly for another process
+// that has the clipboard open. SetClipboardText is the version that never
+// waits. Main thread.
 func SetClipboard(s string) {
-	s = strings.ReplaceAll(strings.ReplaceAll(strings.ToValidUTF8(s, "\uFFFD"), "\r\n", "\n"), "\n", "\r\n")
-	u := append(utf16.Encode([]rune(s)), 0)
-	mem := win32.Call(pGlobalAlloc, gmemMoveable, uintptr(len(u)*2))
+	mem := allocClipboardText(unsafe.Slice(unsafe.StringData(s), len(s))) // read-only: the call copies
 	if mem == 0 {
 		return
 	}
-	p := win32.Call(pGlobalLock, mem)
-	if p == 0 {
-		win32.Call(pGlobalFree, mem)
-		return
+	if pendingSet != 0 { // an older copy must not land after this one
+		win32.Call(pGlobalFree, pendingSet)
+		pendingSet = 0
 	}
-	copy(unsafe.Slice((*uint16)(win32.Ptr(p)), len(u)), u)
-	win32.Call(pGlobalUnlock, mem)
 	if !openClipboard() {
 		win32.Call(pGlobalFree, mem)
 		return
 	}
-	defer win32.Call(pCloseClipboard)
 	win32.Call(pEmptyClipboard)
 	if win32.Call(pSetClipboardData, cfUnicodeText, mem) == 0 {
 		win32.Call(pGlobalFree, mem) // on success the system owns the memory
 	}
+	win32.Call(pCloseClipboard)
 }

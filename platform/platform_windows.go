@@ -225,6 +225,7 @@ type Window struct {
 
 	opening   bool // inside Open: WM_SIZE etc. update state but push no events
 	delivered bool // q holds events already returned by Wait
+	nOut      int  // how many of them
 	visible   bool // last reported visibility
 	minimized bool
 	tracking  bool // TrackMouseEvent(TME_LEAVE) armed
@@ -246,6 +247,14 @@ type Window struct {
 
 	hiSurrogate uint16
 	utf8        [4]byte
+
+	// The clipboard request that waits for another process to let go of it
+	// (paste_windows.go): a paste with its tag and time to give up, and when
+	// Wait tries next (0: nothing waits).
+	pasteOn   bool
+	pasteTag  uint64
+	pasteGive int64
+	clipDue   int64
 
 	// Input method state (ime_windows.go): the composition is on screen, the
 	// caret rectangle the app reported, and storage the IME calls write into.
@@ -389,7 +398,7 @@ func (w *Window) SetFrameHandler(fn func()) { w.handler = fn }
 // messages. The slice is valid until the next Pending or Wait call.
 func (w *Window) Pending() []Event {
 	if w.delivered {
-		w.q.reset()
+		w.q.dropFirst(w.nOut)
 		w.delivered = false
 	}
 	return w.q.takePending()
@@ -490,6 +499,10 @@ func (w *Window) Close() {
 		return
 	}
 	wakeHWND.Store(0)
+	if pendingSet != 0 { // the copy that never got the clipboard
+		win32.Call(pGlobalFree, pendingSet)
+		pendingSet = 0
+	}
 	hwnd := w.hwnd
 	w.hwnd = 0
 	win32.Call(pDestroyWindow, hwnd)
@@ -513,7 +526,7 @@ func osWake() {
 // returned slice is valid until the next Wait.
 func (w *Window) Wait(timeoutNs int64) []Event {
 	if w.delivered {
-		w.q.reset()
+		w.q.dropFirst(w.nOut) // what the app asked for since (RequestPaste) stays
 		w.delivered = false
 	}
 	var deadline int64
@@ -521,6 +534,9 @@ func (w *Window) Wait(timeoutNs int64) []Event {
 		deadline = nanotime() + timeoutNs
 	}
 	for {
+		if w.clipDue != 0 && nanotime() >= w.clipDue {
+			w.clipStep()
+		}
 		if w.frameArmed && w.waitable == 0 {
 			w.frameArmed = false
 			w.q.push(Event{Kind: EvFrame, Time: Now()})
@@ -535,6 +551,13 @@ func (w *Window) Wait(timeoutNs int64) []Event {
 			if rem := deadline - nanotime(); rem > 0 {
 				ms = uintptr(min((rem+999_999)/1_000_000, infinite-1))
 			}
+		}
+		if w.clipDue != 0 { // do not sleep past the next try at the clipboard
+			d := uintptr(0)
+			if rem := w.clipDue - nanotime(); rem > 0 {
+				d = uintptr((rem + 999_999) / 1_000_000)
+			}
+			ms = min(ms, d)
 		}
 		n := uintptr(0)
 		if w.frameArmed {
@@ -561,7 +584,7 @@ func (w *Window) Wait(timeoutNs int64) []Event {
 			break
 		}
 	}
-	w.delivered = true
+	w.delivered, w.nOut = true, len(w.q.ev)
 	return w.q.ev
 }
 
