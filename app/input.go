@@ -39,6 +39,10 @@ type translator struct {
 	// event that follows at once is its commit (the platform sends them back to
 	// back); forceCommit does the same for a deferred event that was one.
 	afterEnd, forceCommit bool
+	// afterTab: the previous event was a Tab key press. The character some
+	// platforms send along with it (a lone "\t" EvText) belongs to the key, which
+	// ui handles as a key, and is not text.
+	afterTab bool
 	// commitNow: apply is applying a commit's text.
 	commitNow bool
 
@@ -104,6 +108,11 @@ func (t *translator) event(e *platform.Event, txt []byte) bool {
 	// it so that ui hands it to the field that composed (Input.CommitOff).
 	commit := e.Kind == platform.EvText && !replacing(e) && (t.afterEnd || t.forceCommit)
 	t.afterEnd = e.Kind == platform.EvPreedit && len(txt) == 0
+	tabChar := e.Kind == platform.EvText && t.afterTab && !replacing(e) && string(txt) == "\t"
+	t.afterTab = e.Kind == platform.EvKey && e.Key == platform.KeyTab && e.Flags&platform.FlagDown != 0
+	if tabChar {
+		return false // Tab's own character (the key was delivered as a key); a commit that holds a tab is text and stays
+	}
 	if len(t.carry) > 0 || t.conflicts(e) {
 		t.carryText = append(t.carryText, txt...)
 		t.carry = append(t.carry, deferred{e: *e, off: len(t.carryText) - len(txt), len: len(txt), commit: commit})

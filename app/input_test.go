@@ -285,3 +285,51 @@ func TestFocusGainedIsAnEdge(t *testing.T) {
 		t.Error("FocusGained lasts one frame")
 	}
 }
+
+// The character some platforms send along with a Tab key is not text: a lone
+// "\t" that directly follows the key press is dropped. Text that holds a tab
+// (an input-method commit) or a "\t" that follows anything else stays.
+func TestTabCharacterIsNotText(t *testing.T) {
+	tab := func(down platform.Flags) *platform.Event {
+		return ev(platform.EvKey, func(e *platform.Event) { e.Key, e.Flags = platform.KeyTab, down })
+	}
+	text := func(tr *translator, s string) { tr.event(ev(platform.EvText, nil), []byte(s)) }
+	got := func(tr *translator) string { return string(tr.in.Text[:tr.in.NText]) }
+
+	tr := newTranslator()
+	tr.event(tab(platform.FlagDown), nil)
+	text(&tr, "\t")
+	if got(&tr) != "" || tr.in.NKeys != 1 || tr.in.Keys[0].Code != ui.KeyTab {
+		t.Fatalf("Tab's own character: text %q, %d keys", got(&tr), tr.in.NKeys)
+	}
+	text(&tr, "\t") // a second one does not follow the key
+	if got(&tr) != "\t" {
+		t.Fatalf("a tab that does not follow a Tab key: %q", got(&tr))
+	}
+
+	// a commit that holds a tab, batched with a Tab key
+	tr = newTranslator()
+	tr.event(tab(platform.FlagDown), nil)
+	tr.event(ev(platform.EvPreedit, nil), nil) // the composition ends ...
+	text(&tr, "a\tb")                          // ... and commits
+	if got(&tr) != "a\tb" || tr.in.CommitLen != 3 {
+		t.Fatalf("a commit with a tab: text %q, commit %d bytes", got(&tr), tr.in.CommitLen)
+	}
+	// even straight after the key
+	tr = newTranslator()
+	tr.event(tab(platform.FlagDown), nil)
+	text(&tr, "a\tb")
+	if got(&tr) != "a\tb" {
+		t.Fatalf("text with a tab after a Tab key: %q", got(&tr))
+	}
+	// a key release, or another key, does not arm it
+	tr = newTranslator()
+	tr.event(tab(0), nil)
+	text(&tr, "\t")
+	tr.event(tab(platform.FlagDown), nil)
+	tr.event(ev(platform.EvKey, func(e *platform.Event) { e.Key, e.Flags = platform.KeyDown, platform.FlagDown }), nil)
+	text(&tr, "\t")
+	if got(&tr) != "\t\t" {
+		t.Fatalf("tabs after a release and after another key: %q", got(&tr))
+	}
+}

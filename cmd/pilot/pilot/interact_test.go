@@ -382,8 +382,9 @@ func TestTabInATextFieldSwitchesPanes(t *testing.T) {
 	}
 	r.feed(func(in *ui.Input) {
 		in.MouseX, in.MouseY = r.x, r.y
+		// The platforms send no character with Tab (and the translator drops
+		// one that does: app's TestTabCharacterIsNotText), so Tab is only a key.
 		in.PushKey(ui.KeyEvent{Code: ui.KeyTab, Down: true})
-		in.AppendText("\t") // what the platform sends along with the key
 	})
 	if pl.active != 1 || r.o.UI.FocusKey() != listKey(1) {
 		t.Errorf("Tab in the filter: active %d focus %v", pl.active, r.o.UI.FocusKey())
@@ -401,7 +402,6 @@ func TestTabInATextFieldSwitchesPanes(t *testing.T) {
 	r.feed(func(in *ui.Input) {
 		in.MouseX, in.MouseY = r.x, r.y
 		in.PushKey(ui.KeyEvent{Code: ui.KeyTab, Down: true})
-		in.AppendText("\t")
 	})
 	if pl.active != 0 || r.o.UI.FocusKey() != listKey(0) {
 		t.Errorf("Tab in the path field: active %d focus %v", pl.active, r.o.UI.FocusKey())
