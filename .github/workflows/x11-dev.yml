@@ -35,10 +35,6 @@ jobs:
         run: |
           for v in base np nf base np nf; do
             echo "=== variant $v"
-            GNUI_XDBG=$v xvfb-run -a -s "-screen 0 1280x800x24" ./bin/pilot -bench -allow-unpaced -max-cpu-us 0 -timeout 200s > out.json 2>err.txt || true
-            python3 - <<'PY'
-          import json
-          d=json.load(open('out.json'))
-          print([w['Mallocs'] for w in d['Windows']])
-          PY
+            GNUI_XDBG=$v xvfb-run -a -s "-screen 0 1280x800x24" ./bin/pilot -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 200s > out.json 2>err.txt || true
+            python3 -c "import json;d=json.load(open('out.json'));print([w['Mallocs'] for w in d['Windows']])"
           done
