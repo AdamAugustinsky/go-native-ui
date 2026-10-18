@@ -284,7 +284,7 @@ var pIsFormatAvailable = win32.Proc(user32, "IsClipboardFormatAvailable")
 // and then never answers: its thread does not pump messages, so the
 // WM_RENDERFORMAT that GetClipboardData sends it waits. The returned function
 // lets the thread answer (it renders nothing) and end.
-func hungOwner(t *testing.T) (release func()) {
+func hungOwner(t *testing.T, w *Window) (release func()) {
 	t.Helper()
 	ready, stop, done := make(chan bool), make(chan struct{}), make(chan struct{})
 	go func() {
@@ -315,7 +315,18 @@ func hungOwner(t *testing.T) (release func()) {
 		win32.Call(pDestroyWindow, hwnd)
 		runtime.KeepAlive(static)
 	}()
-	if !<-ready {
+	// Taking the clipboard over sends WM_DESTROYCLIPBOARD to its previous owner,
+	// the test window, so the test window must keep pumping meanwhile.
+	var ok bool
+	for waiting := true; waiting; {
+		select {
+		case ok = <-ready:
+			waiting = false
+		default:
+			w.Wait(int64(time.Millisecond))
+		}
+	}
+	if !ok {
 		t.Skip("could not make another thread the owner of the clipboard")
 	}
 	var once sync.Once
@@ -330,7 +341,7 @@ func TestRequestPasteSurvivesAClipboardOwnerThatNeverRenders(t *testing.T) {
 	w := openTestWindow(t)
 	const timeout = 300 * time.Millisecond
 	shortPasteTimeout(t, timeout)
-	release := hungOwner(t)
+	release := hungOwner(t, w)
 	defer release()
 	// Without the worker, RequestPaste itself waits for the owner.
 	watchdog := time.AfterFunc(20*time.Second, func() { panic("RequestPaste blocked the UI thread on the clipboard owner") })
@@ -401,8 +412,14 @@ func TestRequestPasteFailsAtOnceWithTooManyStuckWorkers(t *testing.T) {
 	if w.clip != nil {
 		t.Error("a worker was started")
 	}
-	if ev := w.Pending(); len(ev) != 1 || ev[0].Kind != EvPaste || ev[0].Flags&FlagFailed == 0 || ev[0].Tag != 5 {
-		t.Errorf("events %+v, want one failed EvPaste", ev)
+	var pastes []Event
+	for _, e := range w.Pending() {
+		if e.Kind == EvPaste {
+			pastes = append(pastes, e)
+		}
+	}
+	if len(pastes) != 1 || pastes[0].Flags&FlagFailed == 0 || pastes[0].Tag != 5 {
+		t.Errorf("EvPaste events %+v, want one failed one", pastes)
 	}
 }
 

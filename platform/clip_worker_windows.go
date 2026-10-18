@@ -26,12 +26,17 @@ const (
 	clipOpenSleep = 2 * time.Millisecond
 )
 
+var staticClass = mustUTF16("STATIC")
+
+const hwndMessage = ^uintptr(2) // HWND_MESSAGE, (HWND)-3
+
 // clipStuck counts the abandoned workers that are still in their system call.
 var clipStuck atomic.Int32
 
 type clipWorker struct {
-	park *core.Parker
-	hwnd uintptr // the window wmClip goes to
+	park  *core.Parker
+	hwnd  uintptr // the window wmClip goes to
+	owner uintptr // the worker's own message-only window, which opens the clipboard (set by run)
 
 	mu      core.Mutex
 	req     struct{ seq uint64 } // the request waiting to be taken; seq 0: none
@@ -118,6 +123,12 @@ const (
 func (c *clipWorker) run() {
 	runtime.LockOSThread() // the thread ends with the goroutine, stuck or not
 	defer c.park.Close()
+	// OpenClipboard with no window is one opener for every thread of the
+	// process, so it would not exclude the window's own copies; a window of
+	// its own does. A message-only window never shows and gets no messages,
+	// as the worker owns nothing on the clipboard.
+	c.owner = win32.Call(pCreateWindowExW, 0, uintptr(unsafe.Pointer(staticClass)), 0, 0, 0, 0, 0, 0, hwndMessage, 0, 0, 0)
+	defer win32.Call(pDestroyWindow, c.owner)
 	for c.park.Park() {
 		for {
 			seq, give, st := c.take()
@@ -175,7 +186,7 @@ func (c *clipWorker) finish(seq uint64, n int, ok bool) bool {
 // c.buf. It reports the length and whether there is any text (not empty, not
 // over MaxPaste). Blocking is fine here.
 func (c *clipWorker) read(give int64) (n int, ok bool) {
-	for !win32.Bool(win32.Call(pOpenClipboard, 0)) {
+	for !win32.Bool(win32.Call(pOpenClipboard, c.owner)) {
 		if nanotime() >= give {
 			return 0, false
 		}

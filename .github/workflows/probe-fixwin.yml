@@ -1,0 +1,27 @@
+name: probe-fixwin
+# Temporary: fast Windows iteration for the p5-fixwin branch. Removed before the branch is done.
+on:
+  push:
+    branches: [p5-fixwin]
+env:
+  CGO_ENABLED: "0"
+jobs:
+  windows:
+    name: probe Windows ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: amd64, runner: windows-2025 }
+          - { arch: arm64, runner: windows-11-arm }
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - run: go test -count=1 -v -run 'Paste|Clipboard' ./platform/
