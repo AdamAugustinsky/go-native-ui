@@ -267,7 +267,9 @@ func powershell(t *testing.T, script string, env ...string) {
 }
 
 // What SetClipboardText puts on the clipboard another process reads, and what
-// another process puts there RequestPaste answers with: UTF-16, line ends.
+// another process puts there RequestPaste answers with: UTF-16, line ends. One
+// PowerShell run does both, because starting it is slow (a minute on the
+// arm64 runner).
 func TestClipboardWithPowerShell(t *testing.T) {
 	if _, err := exec.LookPath("powershell.exe"); err != nil {
 		t.Skip("no powershell.exe")
@@ -275,21 +277,19 @@ func TestClipboardWithPowerShell(t *testing.T) {
 	w := openTestWindow(t)
 	dir := t.TempDir()
 	in, out := filepath.Join(dir, "in.txt"), filepath.Join(dir, "out.txt")
-	const readBack = `[IO.File]::WriteAllText($env:GNUI_OUT, (Get-Clipboard -Raw), (New-Object Text.UTF8Encoding $false))`
-
-	text := "from gonativeui \u00e9\u65e5 \U0001F600\nsecond line"
-	SetClipboardText([]byte(text))
-	powershell(t, readBack, "GNUI_OUT="+out)
-	if got, err := os.ReadFile(out); err != nil || string(got) != strings.ReplaceAll(text, "\n", "\r\n") {
-		t.Errorf("Get-Clipboard read %q (%v), want the text with \\r\\n line ends", got, err)
-	}
-
-	text = "from Set-Clipboard \u00fc\u6f22 \U0001F680\r\nline 2"
-	if err := os.WriteFile(in, []byte(text), 0o600); err != nil {
+	fromUs := "from gonativeui \u00e9\u65e5 \U0001F600\nsecond line"
+	fromThem := "from Set-Clipboard \u00fc\u6f22 \U0001F680\r\nline 2"
+	if err := os.WriteFile(in, []byte(fromThem), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	powershell(t, `Set-Clipboard -Value ([IO.File]::ReadAllText($env:GNUI_IN, [Text.Encoding]::UTF8))`, "GNUI_IN="+in)
-	if e, got := pasteOf(t, w, 6, 2*time.Second); e.Flags != 0 || got != strings.ReplaceAll(text, "\r\n", "\n") {
+	SetClipboardText([]byte(fromUs))
+	powershell(t, `[IO.File]::WriteAllText($env:GNUI_OUT, (Get-Clipboard -Raw), (New-Object Text.UTF8Encoding $false));`+
+		`Set-Clipboard -Value ([IO.File]::ReadAllText($env:GNUI_IN, [Text.Encoding]::UTF8))`, "GNUI_OUT="+out, "GNUI_IN="+in)
+
+	if got, err := os.ReadFile(out); err != nil || string(got) != strings.ReplaceAll(fromUs, "\n", "\r\n") {
+		t.Errorf("Get-Clipboard read %q (%v), want the text with \\r\\n line ends", got, err)
+	}
+	if e, got := pasteOf(t, w, 6, 2*time.Second); e.Flags != 0 || got != strings.ReplaceAll(fromThem, "\r\n", "\n") {
 		t.Errorf("RequestPaste answered %q (flags %v) after Set-Clipboard", got, e.Flags)
 	}
 }

@@ -347,6 +347,7 @@ func Open(o Options) (*Window, error) {
 
 	if o.Hidden { // content-first: shown, but cloaked until the first frame is presented
 		w.cloaked = w.setCloak(true)
+		markOpen("cloak")
 	}
 	win32.Call(pShowWindow, w.hwnd, swShowNormal)
 	markOpen("shown")
