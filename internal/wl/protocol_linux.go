@@ -9,7 +9,7 @@ import "unsafe"
 
 // strs is the NUL-separated pool of every interface name, message name and
 // signature. s(off) is a pointer to the C string at offset off (read-only data).
-const strs = "xdg_wm_base\x00destroy\x00\x00create_positioner\x00n\x00get_xdg_surface\x00no\x00pong\x00u\x00ping\x00xdg_positioner\x00set_size\x00ii\x00set_anchor_rect\x00iiii\x00set_anchor\x00set_gravity\x00set_constraint_adjustment\x00set_offset\x00set_reactive\x003\x00set_parent_size\x003ii\x00set_parent_configure\x003u\x00xdg_surface\x00get_toplevel\x00get_popup\x00n?oo\x00set_window_geometry\x00ack_configure\x00configure\x00xdg_toplevel\x00set_parent\x00?o\x00set_title\x00s\x00set_app_id\x00show_window_menu\x00ouii\x00move\x00ou\x00resize\x00ouu\x00set_max_size\x00set_min_size\x00set_maximized\x00unset_maximized\x00set_fullscreen\x00unset_fullscreen\x00set_minimized\x00iia\x00close\x00configure_bounds\x004ii\x00wm_capabilities\x005a\x00xdg_popup\x00grab\x00reposition\x003ou\x00popup_done\x00repositioned\x00zxdg_decoration_manager_v1\x00get_toplevel_decoration\x00zxdg_toplevel_decoration_v1\x00set_mode\x00unset_mode\x00wp_fractional_scale_manager_v1\x00get_fractional_scale\x00wp_fractional_scale_v1\x00preferred_scale\x00wp_viewporter\x00get_viewport\x00wp_viewport\x00set_source\x00ffff\x00set_destination\x00"
+const strs = "xdg_wm_base\x00destroy\x00\x00create_positioner\x00n\x00get_xdg_surface\x00no\x00pong\x00u\x00ping\x00xdg_positioner\x00set_size\x00ii\x00set_anchor_rect\x00iiii\x00set_anchor\x00set_gravity\x00set_constraint_adjustment\x00set_offset\x00set_reactive\x003\x00set_parent_size\x003ii\x00set_parent_configure\x003u\x00xdg_surface\x00get_toplevel\x00get_popup\x00n?oo\x00set_window_geometry\x00ack_configure\x00configure\x00xdg_toplevel\x00set_parent\x00?o\x00set_title\x00s\x00set_app_id\x00show_window_menu\x00ouii\x00move\x00ou\x00resize\x00ouu\x00set_max_size\x00set_min_size\x00set_maximized\x00unset_maximized\x00set_fullscreen\x00unset_fullscreen\x00set_minimized\x00iia\x00close\x00configure_bounds\x004ii\x00wm_capabilities\x005a\x00xdg_popup\x00grab\x00reposition\x003ou\x00popup_done\x00repositioned\x00zxdg_decoration_manager_v1\x00get_toplevel_decoration\x00zxdg_toplevel_decoration_v1\x00set_mode\x00unset_mode\x00wp_fractional_scale_manager_v1\x00get_fractional_scale\x00wp_fractional_scale_v1\x00preferred_scale\x00wp_viewporter\x00get_viewport\x00wp_viewport\x00set_source\x00ffff\x00set_destination\x00wp_cursor_shape_manager_v1\x00get_pointer\x00get_tablet_tool_v2\x00wp_cursor_shape_device_v1\x00set_shape\x00uu\x00zxdg_exporter_v2\x00export_toplevel\x00zxdg_importer_v2\x00import_toplevel\x00ns\x00zxdg_exported_v2\x00handle\x00zxdg_imported_v2\x00set_parent_of\x00o\x00destroyed\x00zwp_text_input_v3\x00enable\x00disable\x00set_surrounding_text\x00sii\x00set_text_change_cause\x00set_content_type\x00set_cursor_rectangle\x00commit\x00set_available_actions\x002a\x00show_input_panel\x002\x00hide_input_panel\x00enter\x00leave\x00preedit_string\x00?sii\x00commit_string\x00?s\x00delete_surrounding_text\x00done\x00action\x002uu\x00language\x002s\x00preedit_hint\x002uuu\x00zwp_text_input_manager_v3\x00get_text_input\x00"
 
 func s(off uintptr) *byte { return (*byte)(unsafe.Add(unsafe.Pointer(unsafe.StringData(strs)), off)) }
 
@@ -181,11 +181,122 @@ var wpViewportMethods = [3]Message{
 	{s(865), s(96), &nullTypes[0]},  // request 2 set_destination(ii)
 }
 
+// wp_cursor_shape_manager_v1: version 2, 3 requests, 0 events.
+var WpCursorShapeManagerV1 = Interface{Name: s(881), Version: 2, MethodCount: 3, Methods: &wpCursorShapeManagerV1Methods[0], EventCount: 0, Events: nil}
+
+var wpCursorShapeManagerV1Methods = [3]Message{
+	{s(12), s(20), &nullTypes[0]},                                           // request 0 destroy()
+	{s(908), s(57), &wpCursorShapeManagerV1MethodsT1_get_pointer[0]},        // request 1 get_pointer(no)
+	{s(920), s(57), &wpCursorShapeManagerV1MethodsT2_get_tablet_tool_v2[0]}, // request 2 get_tablet_tool_v2(no)
+}
+
+var wpCursorShapeManagerV1MethodsT1_get_pointer [2]uintptr
+var wpCursorShapeManagerV1MethodsT2_get_tablet_tool_v2 [2]uintptr
+
+// wp_cursor_shape_device_v1: version 2, 2 requests, 0 events.
+var WpCursorShapeDeviceV1 = Interface{Name: s(939), Version: 2, MethodCount: 2, Methods: &wpCursorShapeDeviceV1Methods[0], EventCount: 0, Events: nil}
+
+var wpCursorShapeDeviceV1Methods = [2]Message{
+	{s(12), s(20), &nullTypes[0]},   // request 0 destroy()
+	{s(965), s(975), &nullTypes[0]}, // request 1 set_shape(uu)
+}
+
+// zxdg_exporter_v2: version 1, 2 requests, 0 events.
+var ZxdgExporterV2 = Interface{Name: s(978), Version: 1, MethodCount: 2, Methods: &zxdgExporterV2Methods[0], EventCount: 0, Events: nil}
+
+var zxdgExporterV2Methods = [2]Message{
+	{s(12), s(20), &nullTypes[0]},                                // request 0 destroy()
+	{s(995), s(57), &zxdgExporterV2MethodsT1_export_toplevel[0]}, // request 1 export_toplevel(no)
+}
+
+var zxdgExporterV2MethodsT1_export_toplevel [2]uintptr
+
+// zxdg_importer_v2: version 1, 2 requests, 0 events.
+var ZxdgImporterV2 = Interface{Name: s(1011), Version: 1, MethodCount: 2, Methods: &zxdgImporterV2Methods[0], EventCount: 0, Events: nil}
+
+var zxdgImporterV2Methods = [2]Message{
+	{s(12), s(20), &nullTypes[0]},                                   // request 0 destroy()
+	{s(1028), s(1044), &zxdgImporterV2MethodsT1_import_toplevel[0]}, // request 1 import_toplevel(ns)
+}
+
+var zxdgImporterV2MethodsT1_import_toplevel [2]uintptr
+
+// zxdg_exported_v2: version 1, 1 requests, 1 events.
+var ZxdgExportedV2 = Interface{Name: s(1047), Version: 1, MethodCount: 1, Methods: &zxdgExportedV2Methods[0], EventCount: 1, Events: &zxdgExportedV2Events[0]}
+
+var zxdgExportedV2Methods = [1]Message{
+	{s(12), s(20), &nullTypes[0]}, // request 0 destroy()
+}
+
+var zxdgExportedV2Events = [1]Message{
+	{s(1064), s(360), &nullTypes[0]}, // event 0 handle(s)
+}
+
+// zxdg_imported_v2: version 1, 2 requests, 1 events.
+var ZxdgImportedV2 = Interface{Name: s(1071), Version: 1, MethodCount: 2, Methods: &zxdgImportedV2Methods[0], EventCount: 1, Events: &zxdgImportedV2Events[0]}
+
+var zxdgImportedV2Methods = [2]Message{
+	{s(12), s(20), &nullTypes[0]},                                 // request 0 destroy()
+	{s(1088), s(1102), &zxdgImportedV2MethodsT1_set_parent_of[0]}, // request 1 set_parent_of(o)
+}
+
+var zxdgImportedV2MethodsT1_set_parent_of [1]uintptr
+
+var zxdgImportedV2Events = [1]Message{
+	{s(1104), s(20), &nullTypes[0]}, // event 0 destroyed()
+}
+
+// zwp_text_input_v3: version 2, 11 requests, 9 events.
+var ZwpTextInputV3 = Interface{Name: s(1114), Version: 2, MethodCount: 11, Methods: &zwpTextInputV3Methods[0], EventCount: 9, Events: &zwpTextInputV3Events[0]}
+
+var zwpTextInputV3Methods = [11]Message{
+	{s(12), s(20), &nullTypes[0]},     // request 0 destroy()
+	{s(1132), s(20), &nullTypes[0]},   // request 1 enable()
+	{s(1139), s(20), &nullTypes[0]},   // request 2 disable()
+	{s(1147), s(1168), &nullTypes[0]}, // request 3 set_surrounding_text(sii)
+	{s(1172), s(65), &nullTypes[0]},   // request 4 set_text_change_cause(u)
+	{s(1194), s(975), &nullTypes[0]},  // request 5 set_content_type(uu)
+	{s(1211), s(115), &nullTypes[0]},  // request 6 set_cursor_rectangle(iiii)
+	{s(1232), s(20), &nullTypes[0]},   // request 7 commit()
+	{s(1239), s(1261), &nullTypes[0]}, // request 8 set_available_actions(2a)
+	{s(1264), s(1281), &nullTypes[0]}, // request 9 show_input_panel(2)
+	{s(1283), s(1281), &nullTypes[0]}, // request 10 hide_input_panel(2)
+}
+
+var zwpTextInputV3Events = [9]Message{
+	{s(1300), s(1102), &zwpTextInputV3EventsT0_enter[0]}, // event 0 enter(o)
+	{s(1306), s(1102), &zwpTextInputV3EventsT1_leave[0]}, // event 1 leave(o)
+	{s(1312), s(1327), &nullTypes[0]},                    // event 2 preedit_string(?sii)
+	{s(1332), s(1346), &nullTypes[0]},                    // event 3 commit_string(?s)
+	{s(1349), s(975), &nullTypes[0]},                     // event 4 delete_surrounding_text(uu)
+	{s(1373), s(65), &nullTypes[0]},                      // event 5 done(u)
+	{s(1378), s(1385), &nullTypes[0]},                    // event 6 action(2uu)
+	{s(1389), s(1398), &nullTypes[0]},                    // event 7 language(2s)
+	{s(1401), s(1414), &nullTypes[0]},                    // event 8 preedit_hint(2uuu)
+}
+
+var zwpTextInputV3EventsT0_enter [1]uintptr
+var zwpTextInputV3EventsT1_leave [1]uintptr
+
+// zwp_text_input_manager_v3: version 2, 2 requests, 0 events.
+var ZwpTextInputManagerV3 = Interface{Name: s(1419), Version: 2, MethodCount: 2, Methods: &zwpTextInputManagerV3Methods[0], EventCount: 0, Events: nil}
+
+var zwpTextInputManagerV3Methods = [2]Message{
+	{s(12), s(20), &nullTypes[0]},                                       // request 0 destroy()
+	{s(1445), s(57), &zwpTextInputManagerV3MethodsT1_get_text_input[0]}, // request 1 get_text_input(no)
+}
+
+var zwpTextInputManagerV3MethodsT1_get_text_input [2]uintptr
+
 // Link fills the types[] arrays. sym resolves a data symbol in libwayland-client.
 func Link(sym func(name string) uintptr) error {
 	cWlOutput := sym("wl_output_interface")
 	if cWlOutput == 0 {
 		return errMissing("wl_output_interface")
+	}
+	cWlPointer := sym("wl_pointer_interface")
+	if cWlPointer == 0 {
+		return errMissing("wl_pointer_interface")
 	}
 	cWlSeat := sym("wl_seat_interface")
 	if cWlSeat == 0 {
@@ -215,5 +326,16 @@ func Link(sym func(name string) uintptr) error {
 	wpFractionalScaleManagerV1MethodsT1_get_fractional_scale[1] = cWlSurface
 	wpViewporterMethodsT1_get_viewport[0] = WpViewport.Addr()
 	wpViewporterMethodsT1_get_viewport[1] = cWlSurface
+	wpCursorShapeManagerV1MethodsT1_get_pointer[0] = WpCursorShapeDeviceV1.Addr()
+	wpCursorShapeManagerV1MethodsT1_get_pointer[1] = cWlPointer
+	wpCursorShapeManagerV1MethodsT2_get_tablet_tool_v2[0] = WpCursorShapeDeviceV1.Addr()
+	zxdgExporterV2MethodsT1_export_toplevel[0] = ZxdgExportedV2.Addr()
+	zxdgExporterV2MethodsT1_export_toplevel[1] = cWlSurface
+	zxdgImporterV2MethodsT1_import_toplevel[0] = ZxdgImportedV2.Addr()
+	zxdgImportedV2MethodsT1_set_parent_of[0] = cWlSurface
+	zwpTextInputV3EventsT0_enter[0] = cWlSurface
+	zwpTextInputV3EventsT1_leave[0] = cWlSurface
+	zwpTextInputManagerV3MethodsT1_get_text_input[0] = ZwpTextInputV3.Addr()
+	zwpTextInputManagerV3MethodsT1_get_text_input[1] = cWlSeat
 	return nil
 }

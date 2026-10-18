@@ -33,6 +33,8 @@ var wlf struct {
 // Core interface tables exported by libwayland-client (wayland-client-protocol).
 var wlc struct {
 	registry, compositor, surface, callback, seat, pointer, keyboard, output, region uintptr
+	dataDeviceManager, dataDevice, dataSource, dataOffer                             uintptr
+	shm, shmPool, buffer                                                             uintptr
 }
 
 // libxkbcommon entry points (optional: without them there is no keyboard).
@@ -75,25 +77,56 @@ type wayland struct {
 	compositorV, wmBaseV  uint32
 	seatV                 uint32
 
+	im wlIM // text input (im_linux.go)
+
+	// window export (export_linux.go)
+	exporter, exported uintptr
+	handle             string
+
+	// cursors (cursor_wl_linux.go)
+	shapeMgr, shapeDev, shm, curSurf uintptr
+	shmV, shapeMgrV                  uint32
+	curScale                         int32 // buffer scale set on the cursor surface
+	theme                            uintptr
+	themeScale                       int32
+	themeFailed                      bool
+	ras                              rasterSet
+
+	// clipboard (clipboard_wl_linux.go)
+	ddm, dd, src uintptr
+	ddmV         uint32
+	offers       [maxOffers]wlOffer
+	sel          int    // index of the selection's offer in offers, or -1
+	serial       uint32 // serial of the latest input event, for set_selection
+
 	surface, xdgSurface, toplevel uintptr
 	deco, frac, viewport          uintptr
 	surfaceV, xdgSurfaceV         uint32
 	toplevelV                     uint32
 	frameCB                       uintptr
 
-	configured   bool
-	pendW, pendH int32
-	fracPref     int32 // wp_fractional_scale preferred scale, 1/120 units
-	bufScale     int32 // wl_surface.preferred_buffer_scale
-	decoMode     uint32
-	suspended    bool
-	outputs      [maxOutputs]wlOutput
-	outMask      uint32
-	dead         bool
+	configured                   bool
+	pendW, pendH                 int32
+	fracPref                     int32 // wp_fractional_scale preferred scale, 1/120 units
+	bufScale                     int32 // wl_surface.preferred_buffer_scale
+	decoMode                     uint32
+	pendDeco                     uint32 // configured, applied at the next xdg_surface.configure
+	maximized, fullscreen, tiled bool
+	pendMax, pendFull, pendTiled bool
+	insets                       [4]int32 // shadow insets, logical px (decor_wl_linux.go)
+	geomSent                     bool
+	lastDragOK                   bool
+	lastDragMs                   uint32
+	lastDragX, lastDragY         float32
+	swallowRelease               bool
+	suspended                    bool
+	outputs                      [maxOutputs]wlOutput
+	outMask                      uint32
+	dead                         bool
 
 	// input
 	pointer, keyboard uintptr
-	ptrX, ptrY        float32 // physical pixels
+	enterSerial       uint32 // serial of the latest wl_pointer.enter, for set_cursor
 	btnSerial         uint32
 	axisSource        uint32
 	xkbCtx            uintptr
@@ -140,6 +173,13 @@ func loadWayland() error {
 		{"wl_keyboard_interface", &wlc.keyboard},
 		{"wl_output_interface", &wlc.output},
 		{"wl_region_interface", &wlc.region},
+		{"wl_data_device_manager_interface", &wlc.dataDeviceManager},
+		{"wl_data_device_interface", &wlc.dataDevice},
+		{"wl_data_source_interface", &wlc.dataSource},
+		{"wl_data_offer_interface", &wlc.dataOffer},
+		{"wl_shm_interface", &wlc.shm},
+		{"wl_shm_pool_interface", &wlc.shmPool},
+		{"wl_buffer_interface", &wlc.buffer},
 	}); err != nil {
 		return err
 	}
@@ -251,7 +291,10 @@ func (w *Window) openWayland(o Options) (err error) {
 	if y.compositor == 0 || y.wmBase == 0 {
 		return errors.New("wayland: compositor lacks wl_compositor or xdg_wm_base")
 	}
-	if int32(fr.Call1(wlf.roundtrip, y.display)) < 0 { // seat capabilities, output scales
+	y.sel = -1
+	w.wlInitDataDevice()
+	w.wlInitIM()
+	if int32(fr.Call1(wlf.roundtrip, y.display)) < 0 { // seat capabilities, output scales, selection
 		return errors.New("wayland: roundtrip failed")
 	}
 
@@ -322,6 +365,10 @@ func (w *Window) closeWayland() {
 	if y.display == 0 {
 		return
 	}
+	w.wlClipClose()
+	w.wlCursorClose()
+	w.wlExportClose()
+	w.wlIMClose()
 	w.release(y.frameCB, 0, 99) // wl_callback has no destructor request
 	w.release(y.keyboard, 0, 3) // wl_keyboard.release
 	w.release(y.pointer, 1, 3)  // wl_pointer.release
@@ -516,8 +563,8 @@ func (w *Window) wlEvent(proxy uintptr, op uint32, a unsafe.Pointer) {
 			w.req(y.wmBase, 3, 0, y.wmBaseV, 0)
 		}
 	case y.deco:
-		if op == 0 { // configure(mode)
-			y.decoMode = argU(a, 0)
+		if op == 0 { // configure(mode): applied with the xdg_surface.configure that follows
+			y.pendDeco = argU(a, 0)
 		}
 	case y.frac:
 		if op == 0 { // preferred_scale(scale)
@@ -532,8 +579,18 @@ func (w *Window) wlEvent(proxy uintptr, op uint32, a unsafe.Pointer) {
 		w.onPointer(op, a)
 	case y.keyboard:
 		w.onKeyboard(op, a)
+	case y.exported:
+		w.onExported(op, a)
+	case y.im.ti:
+		w.onTextInput(op, a)
+	case y.dd:
+		w.onDataDevice(op, a)
+	case y.src:
+		w.onDataSource(op, a)
 	default:
-		w.onOutput(proxy, op, a)
+		if !w.onOffer(proxy, op, a) {
+			w.onOutput(proxy, op, a)
+		}
 	}
 }
 
@@ -567,6 +624,19 @@ func (w *Window) onRegistry(op uint32, a unsafe.Pointer) {
 			y.seat = w.bind(name, wlc.seat, peekPtr(wlc.seat), y.seatV)
 		case y.decoMgr == 0 && cstrIs(iface, "zxdg_decoration_manager_v1"):
 			y.decoMgr = w.bind(name, wl.ZxdgDecorationManagerV1.Addr(), wl.ZxdgDecorationManagerV1.NameAddr(), 1)
+		case y.ddm == 0 && cstrIs(iface, "wl_data_device_manager"):
+			y.ddmV = minU32(adv, 3, ifaceVersion(wlc.dataDeviceManager)) // 2: release, 3: actions (unused)
+			y.ddm = w.bind(name, wlc.dataDeviceManager, peekPtr(wlc.dataDeviceManager), y.ddmV)
+		case y.shm == 0 && cstrIs(iface, "wl_shm"):
+			y.shmV = minU32(adv, 2, ifaceVersion(wlc.shm)) // 2: release
+			y.shm = w.bind(name, wlc.shm, peekPtr(wlc.shm), y.shmV)
+		case y.im.mgr == 0 && cstrIs(iface, "zwp_text_input_manager_v3"):
+			y.im.mgr = w.bind(name, wl.ZwpTextInputManagerV3.Addr(), wl.ZwpTextInputManagerV3.NameAddr(), 1)
+		case y.exporter == 0 && cstrIs(iface, "zxdg_exporter_v2"):
+			y.exporter = w.bind(name, wl.ZxdgExporterV2.Addr(), wl.ZxdgExporterV2.NameAddr(), 1)
+		case y.shapeMgr == 0 && cstrIs(iface, "wp_cursor_shape_manager_v1"):
+			y.shapeMgrV = 1
+			y.shapeMgr = w.bind(name, wl.WpCursorShapeManagerV1.Addr(), wl.WpCursorShapeManagerV1.NameAddr(), 1)
 		case y.fracMgr == 0 && cstrIs(iface, "wp_fractional_scale_manager_v1"):
 			y.fracMgr = w.bind(name, wl.WpFractionalScaleManagerV1.Addr(), wl.WpFractionalScaleManagerV1.NameAddr(), 1)
 		case y.viewporter == 0 && cstrIs(iface, "wp_viewporter"):
@@ -653,6 +723,7 @@ func (w *Window) wlUpdateScale() {
 	}
 	w.s120 = s
 	w.wlApplyGeometry(true)
+	w.wlCursorScaleChanged()
 }
 
 // wlApplyGeometry derives the pixel size from the logical size and scale and
@@ -676,14 +747,17 @@ func (w *Window) onXdgSurface(op uint32, a unsafe.Pointer) {
 		return
 	}
 	// A zero dimension means "client's choice"; keep our current value for it.
+	// The configure sizes name the visible window; the surface adds the insets.
 	if y.pendW > 0 {
-		w.lw = y.pendW
+		w.lw = y.pendW + y.insets[0] + y.insets[2]
 	}
 	if y.pendH > 0 {
-		w.lh = y.pendH
+		w.lh = y.pendH + y.insets[1] + y.insets[3]
 	}
 	y.args[0] = uint64(argU(a, 0))
 	w.req(y.xdgSurface, 4, 0, y.xdgSurfaceV, 0) // ack_configure
+	w.wlSendGeometry()
+	w.applyDecoState()
 	y.configured = true
 	w.wlApplyGeometry(false)
 }
@@ -695,10 +769,18 @@ func (w *Window) onToplevel(op uint32, a unsafe.Pointer) {
 		y.pendW, y.pendH = int32(argU(a, 0)), int32(argU(a, 1))
 		arr := argP(a, 2) // struct wl_array { size_t size; size_t alloc; void *data; }
 		suspended := false
+		y.pendMax, y.pendFull, y.pendTiled = false, false, false
 		if arr != 0 {
 			size, data := peekPtr(arr), peekPtr(arr+16)
 			for off := uintptr(0); off+4 <= size; off += 4 {
-				if peekU32(data+off) == 9 { // XDG_TOPLEVEL_STATE_SUSPENDED (since 6)
+				switch st := peekU32(data + off); {
+				case st == 1:
+					y.pendMax = true
+				case st == 2:
+					y.pendFull = true
+				case st >= 5 && st <= 8: // tiled left, right, top, bottom
+					y.pendTiled = true
+				case st == 9: // XDG_TOPLEVEL_STATE_SUSPENDED (since 6)
 					suspended = true
 				}
 			}
@@ -726,9 +808,16 @@ func (w *Window) onSeatCaps(caps uint32) {
 		y.args[0] = 0
 		y.pointer = w.req(y.seat, 0, wlc.pointer, y.seatV, 0)
 		listen(y.pointer)
+		if y.shapeMgr != 0 { // wp_cursor_shape_manager_v1.get_pointer(id, pointer)
+			y.args[0], y.args[1] = 0, uint64(y.pointer)
+			y.shapeDev = w.req(y.shapeMgr, 1, wl.WpCursorShapeDeviceV1.Addr(), y.shapeMgrV, 0)
+		}
 	} else if caps&1 == 0 && y.pointer != 0 {
+		w.release(y.shapeDev, 0, 1)
+		y.shapeDev = 0
 		w.release(y.pointer, 1, 3)
 		y.pointer = 0
+		w.ptrIn, w.curSet = false, false
 	}
 	if caps&2 != 0 && y.keyboard == 0 && xkLoaded { // wl_seat.get_keyboard (1)
 		y.args[0] = 0
@@ -755,27 +844,36 @@ func (w *Window) onPointer(op uint32, a unsafe.Pointer) {
 	now := nanotime()
 	switch op {
 	case 0: // enter(serial, surface, x, y)
-		y.ptrX, y.ptrY = argFixed(a, 2)*scale, argFixed(a, 3)*scale
-		w.q.push(Event{Kind: EvPointerMove, X: y.ptrX, Y: y.ptrY, Mods: w.mods, Time: now})
+		y.serial, y.enterSerial = argU(a, 0), argU(a, 0)
+		w.ptrX, w.ptrY = argFixed(a, 2)*scale, argFixed(a, 3)*scale
+		w.ptrIn = true
+		w.cursorSync(true) // the compositor forgot the cursor
+		w.q.push(Event{Kind: EvPointerMove, X: w.ptrX, Y: w.ptrY, Mods: w.mods, Time: now})
 	case 1: // leave(serial, surface)
+		w.ptrIn, w.curSet = false, false
 		w.q.push(Event{Kind: EvPointerLeave, Time: now})
 	case 2: // motion(time, x, y)
-		y.ptrX, y.ptrY = argFixed(a, 1)*scale, argFixed(a, 2)*scale
-		w.q.push(Event{Kind: EvPointerMove, X: y.ptrX, Y: y.ptrY, Mods: w.mods, Time: now})
+		w.ptrX, w.ptrY = argFixed(a, 1)*scale, argFixed(a, 2)*scale
+		w.cursorSync(false)
+		w.q.push(Event{Kind: EvPointerMove, X: w.ptrX, Y: w.ptrY, Mods: w.mods, Time: now})
 	case 3: // button(serial, time, button, state)
 		serial, code, st := argU(a, 0), argU(a, 2), argU(a, 3)
+		y.serial = serial
 		b := evdevButton(code)
 		if b == ButtonNone {
 			return
 		}
-		if st != 0 && b == ButtonLeft && y.decoMode != 2 && w.dragsAt(y.ptrX, y.ptrY, scale) {
-			// No server-side decoration: the app's drag map, or without one
-			// the top strip, drags the window. xdg_toplevel.move (5)
-			y.args[0], y.args[1] = uint64(y.seat), uint64(serial)
-			w.req(y.toplevel, 5, 0, y.toplevelV, 0)
+		if st != 0 && b == ButtonLeft && w.wlPress(serial, argU(a, 1)) {
+			// Client-side decoration: a resize border, the app's drag map (or
+			// without one the top strip) or a double click is ours.
+			y.swallowRelease = true
 			return
 		}
-		ev := Event{Kind: EvPointerButton, Button: b, X: y.ptrX, Y: y.ptrY, Mods: w.mods, Time: now}
+		if st == 0 && b == ButtonLeft && y.swallowRelease {
+			y.swallowRelease = false
+			return
+		}
+		ev := Event{Kind: EvPointerButton, Button: b, X: w.ptrX, Y: w.ptrY, Mods: w.mods, Time: now}
 		if st != 0 {
 			ev.Flags = FlagDown
 		}
@@ -806,11 +904,13 @@ func (w *Window) onKeyboard(op uint32, a unsafe.Pointer) {
 	case 0: // keymap(format, fd, size)
 		w.loadKeymap(argU(a, 0), int(int32(argU(a, 1))), argU(a, 2))
 	case 1: // enter(serial, surface, keys)
+		y.serial = argU(a, 0)
 		w.q.push(Event{Kind: EvFocus, Flags: FlagDown, Time: now})
 	case 2: // leave(serial, surface)
 		y.repCode = 0
 		w.q.push(Event{Kind: EvFocus, Time: now})
 	case 3: // key(serial, time, key, state)
+		y.serial = argU(a, 0)
 		code, st := argU(a, 2), argU(a, 3)
 		down := st != 0
 		w.wlKeyEvent(code, down, st == 2, now)
@@ -822,6 +922,7 @@ func (w *Window) onKeyboard(op uint32, a unsafe.Pointer) {
 			y.repCode = 0
 		}
 	case 4: // modifiers(serial, depressed, latched, locked, group)
+		y.serial = argU(a, 0)
 		if y.xkbState == 0 {
 			return
 		}

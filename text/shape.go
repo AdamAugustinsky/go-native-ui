@@ -5,6 +5,7 @@ package text
 import (
 	"math"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/go-text/typesetting/bidi"
 	"github.com/go-text/typesetting/di"
@@ -24,8 +25,9 @@ import (
 // shaping.Segmenter, kept in step with it by shape_test.go) and fed straight
 // to a reused harfbuzz.Buffer with one cached harfbuzz.Font per face. Other
 // text (Hebrew, Arabic and other right-to-left scripts, explicit bidi
-// controls) takes the go-text Segmenter, which allocates; the shaping itself
-// is the same code in both paths.
+// controls) takes shapeBidi, which runs go-text's bidi algorithm on a reused
+// Paragraph (patched to keep its scratch, see third_party/typesetting) and
+// then the same shaping; TestEngineRTLMissAllocatesNothing holds it at zero.
 //
 // What still allocates inside harfbuzz.Buffer.Shape depends on the font: see
 // the ShapeAllocs numbers in engine_alloc_test.go.
@@ -40,9 +42,12 @@ type gtSeg struct {
 
 func (s *goSystem) shapeMiss(f FontKey, b []byte) RunRef {
 	s.runes, s.rbyte = s.runes[:0], s.rbyte[:0]
-	for i, r := range string(b) { // an invalid byte is one U+FFFD rune
+	// (Not range string(b): that copies text longer than 32 bytes to the heap.)
+	for i := 0; i < len(b); {
+		r, n := utf8.DecodeRune(b[i:]) // an invalid byte is one U+FFFD rune
 		s.runes = append(s.runes, r)
 		s.rbyte = append(s.rbyte, uint32(i))
+		i += n
 	}
 	s.rbyte = append(s.rbyte, uint32(len(b)))
 	s.gbuf, s.xbuf, s.fbuf, s.cbuf = s.gbuf[:0], s.xbuf[:0], s.fbuf[:0], s.cbuf[:0]

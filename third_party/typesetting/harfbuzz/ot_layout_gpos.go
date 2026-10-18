@@ -158,7 +158,7 @@ func positionFinishOffsetsGPOS(font *Font, buffer *Buffer) {
 
 func applyRecurseGPOS(c *otApplyContext, lookupIndex uint16) bool {
 	gpos := c.font.face.GPOS
-	l := lookupGPOS(gpos.Lookups[lookupIndex])
+	l := (*lookupGPOS)(&gpos.Lookups[lookupIndex]) // a pointer: boxing the struct would allocate
 	return c.applyRecurseLookup(lookupIndex, l)
 }
 

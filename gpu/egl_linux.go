@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"syscall"
 	"unsafe"
 
 	"github.com/ebitengine/purego"
@@ -74,7 +75,7 @@ var eglf struct {
 
 var wlegl struct{ create, resize, destroy uintptr }
 
-var glf struct{ viewport, clearColor, clear uintptr }
+var glf struct{ viewport, clearColor, clear, readPixels uintptr }
 
 var xlib struct{ defaultScreen, defaultVisual, visualID uintptr }
 
@@ -195,8 +196,9 @@ type Surface struct {
 	attr                     int32
 	cfgs                     [maxConfigs]uintptr
 
-	frame   Frame // Present's frame (kept here so Present doesn't allocate)
-	swapped bool  // result of the last EndFrame's eglSwapBuffers
+	reveal  func() // RevealOnFirstFrame's callback, until the first frame ends
+	frame   Frame  // Present's frame (kept here so Present doesn't allocate)
+	swapped bool   // result of the last EndFrame's eglSwapBuffers
 
 	Trace FirstPresentTrace // not recorded on this backend yet
 }
@@ -345,7 +347,7 @@ func (s *Surface) loadGL() error {
 	for _, g := range []struct {
 		name string
 		dst  *uintptr
-	}{{"glViewport", &glf.viewport}, {"glClearColor", &glf.clearColor}, {"glClear", &glf.clear}} {
+	}{{"glViewport", &glf.viewport}, {"glClearColor", &glf.clearColor}, {"glClear", &glf.clear}, {"glReadPixels", &glf.readPixels}} {
 		name := cstr(g.name)
 		p := fr.Call1(eglf.getProcAddress, uintptr(unsafe.Pointer(&name[0])))
 		if p == 0 && lib != 0 {
@@ -404,6 +406,10 @@ func (s *Surface) BeginFrame(f *Frame) bool {
 // surface, which also carries the frame callback requested before it; on
 // X11 the blocking swap is the vsync throttle.
 func (s *Surface) EndFrame(f *Frame) {
+	if show := s.reveal; show != nil {
+		s.reveal = nil
+		s.revealFirstFrame(show)
+	}
 	s.swapped = ok(fr.Call2(eglf.swapBuffers, s.dpy, s.surf))
 	*f = Frame{}
 }
@@ -422,10 +428,38 @@ func (s *Surface) Present(r, g, b, a float32) bool {
 	return s.swapped
 }
 
-// RevealOnFirstFrame is a no-op: content-first startup isn't implemented
-// on this OS yet, and the window is shown at Open (platform Options.Hidden
-// is ignored here).
-func (s *Surface) RevealOnFirstFrame(show func()) {}
+// RevealOnFirstFrame arranges for show to run when the first frame is complete,
+// just before its swap, so that the window appears together with its content.
+//
+// X11: the window opens unmapped (platform Options.Hidden), and an unmapped
+// window keeps nothing that is drawn to it, so the first frame is read back
+// and handed to the platform, which makes it the window's background for the
+// moment of mapping (platform.SetFirstFrame): the first thing on glass is the
+// frame itself, with or without a compositor. Wayland: a window appears with
+// its first buffer, which is this frame's swap; show runs just before it.
+func (s *Surface) RevealOnFirstFrame(show func()) { s.reveal = show }
+
+// revealFirstFrame hands the finished first frame to the platform (X11) and
+// shows the window.
+func (s *Surface) revealFirstFrame(show func()) {
+	if !s.native.Wayland && s.w > 0 && s.h > 0 && glf.readPixels != 0 {
+		// glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, data): rows
+		// bottom first, which the platform flips.
+		// Outside the Go heap: a few MB of garbage right at startup would
+		// wake the runtime's scavenger during the first measured frames.
+		buf, err := syscall.Mmap(-1, 0, int(s.w)*int(s.h)*4, syscall.PROT_READ|syscall.PROT_WRITE, syscall.MAP_ANON|syscall.MAP_PRIVATE)
+		if err != nil {
+			show()
+			return
+		}
+		defer syscall.Munmap(buf)
+		fr.Reset().Arg32(0).Arg32(0).Arg32(uint32(s.w)).Arg32(uint32(s.h)).Arg32(0x1908).Arg32(0x1401).
+			Arg(uintptr(unsafe.Pointer(&buf[0]))).Call(glf.readPixels)
+		platform.SetFirstFrame(s.w, s.h, buf)
+		defer platform.SetFirstFrame(0, 0, nil) // buf is unmapped on return
+	}
+	show()
+}
 
 // FrameSource is 0 on Linux.
 func (s *Surface) FrameSource() uintptr { return 0 }

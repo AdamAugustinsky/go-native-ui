@@ -331,6 +331,7 @@ type otApplyContext struct {
 	iterInput   skippingIterator
 
 	nestingLevelLeft int
+	recurseScratch   [maxNestingLevel + 1][8]int // see applyRecurseLookup
 	tableIndex       uint8 // 0 for GSUB, 1 for GPOS
 	lookupMask       GlyphMask
 	lookupProps      uint32
@@ -408,8 +409,9 @@ func (c *otApplyContext) applyRecurseLookup(lookupIndex uint16, l layoutLookup) 
 	c.setLookupProps(l.Props())
 
 	savedMatchPositions := c.matchPositions
-	var stackMatchPositions [8]int
-	c.matchPositions = stackMatchPositions[:]
+	// One scratch array per nesting level, in the context: a stack array
+	// stored in c would be moved to the heap.
+	c.matchPositions = c.recurseScratch[maxNestingLevel-c.nestingLevelLeft][:]
 
 	ret := l.dispatchApply(c)
 

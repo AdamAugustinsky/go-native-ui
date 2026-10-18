@@ -1,8 +1,7 @@
 package bidi
 
 import (
-	"container/list"
-	"sort"
+	"slices"
 
 	ucd "github.com/go-text/typesetting/internal/unicodedata"
 )
@@ -68,7 +67,7 @@ func (b bracketPairs) Less(i, j int) bool { return b[i].opener < b[j].opener }
 func resolvePairedBrackets(s *isolatingRunSequence) {
 	p := bracketPairer{
 		sos:              s.sos,
-		openers:          list.New(),
+		pairPositions:    s.p.pairs[:0],
 		codesIsolatedRun: s.types,
 		indexes:          s.indexes,
 	}
@@ -78,6 +77,7 @@ func resolvePairedBrackets(s *isolatingRunSequence) {
 	}
 	p.locateBrackets(s.p.pairTypes, s.p.pairValues)
 	p.resolveBrackets(dirEmbed, s.p.initialTypes)
+	s.p.pairs = p.pairPositions[:0] // keep the grown storage
 }
 
 type bracketPairer struct {
@@ -102,7 +102,9 @@ type bracketPairer struct {
 	// slices contain the rune of the opening bracket after normalization for
 	// any opening or closing bracket.
 
-	openers *list.List // list of positions for opening brackets
+	// positions of the opening brackets seen, the most recent last
+	openers [maxPairingDepth]int
+	nOpen   int
 
 	// bracket pair positions sorted by location of opening bracket
 	pairPositions bracketPairs
@@ -146,34 +148,35 @@ func (p *bracketPairer) locateBrackets(pairTypes []bracketType, pairValues []run
 		switch pairTypes[index] {
 		case bpOpen:
 			// check if maximum pairing depth reached
-			if p.openers.Len() == maxPairingDepth {
-				p.openers.Init()
+			if p.nOpen == maxPairingDepth {
+				p.nOpen = 0
+				slices.SortFunc(p.pairPositions, func(a, b bracketPair) int { return a.opener - b.opener })
 				return
 			}
-			// remember opener location, most recent first
-			p.openers.PushFront(i)
+			// remember opener location, most recent last
+			p.openers[p.nOpen] = i
+			p.nOpen++
 
 		case bpClose:
-			// see if there is a match
+			// see if there is a match, most recent opener first
 			count := 0
-			for elem := p.openers.Front(); elem != nil; elem = elem.Next() {
+			for k := p.nOpen - 1; k >= 0; k-- {
 				count++
-				opener := elem.Value.(int)
+				opener := p.openers[k]
 				if p.matchOpener(pairValues, opener, i) {
 					// if the opener matches, add nested pair to the ordered list
 					p.pairPositions = append(p.pairPositions, bracketPair{opener, i})
 					// remove up to and including matched opener
-					for ; count > 0; count-- {
-						p.openers.Remove(p.openers.Front())
-					}
+					p.nOpen -= count
 					break
 				}
 			}
-			sort.Sort(p.pairPositions)
-			// if we get here, the closing bracket matched no openers
-			// and gets ignored
+			// if we get here with no match, the closing bracket matched no
+			// openers and gets ignored
 		}
 	}
+	// pairs are processed in the order of their opening brackets
+	slices.SortFunc(p.pairPositions, func(a, b bracketPair) int { return a.opener - b.opener })
 }
 
 // Bracket pairs within an isolating run sequence are processed as units so

@@ -84,7 +84,9 @@ func (p *Paragraph) run() {
 
 	// Rule X10.
 	// Run remainder of algorithm one isolating run sequence at a time
-	for _, seq := range p.determineIsolatingRunSequences() {
+	seqs := p.determineIsolatingRunSequences()
+	for i := range seqs {
+		seq := &seqs[i]
 		// 3) resolving weak types
 		// Rules W1-W7.
 		seq.resolveWeakTypes()
@@ -349,9 +351,13 @@ func (i *isolatingRunSequence) Len() int { return len(i.indexes) }
 
 // Rule X10, second bullet: Determine the start-of-sequence (sos) and end-of-sequence (eos) types,
 // either L or R, for each isolating run sequence.
-func (p *Paragraph) isolatingRunSequence(indexes []int) *isolatingRunSequence {
+//
+// The type and level arrays are cut from the paragraph's scratch buffers
+// (sized for all sequences by determineIsolatingRunSequences) so that the
+// algorithm allocates nothing once the buffers are warm.
+func (p *Paragraph) isolatingRunSequence(indexes []int, off int) isolatingRunSequence {
 	length := len(indexes)
-	types := make([]ucd.BidiClass, length)
+	types := p.seqTypes[off : off+length : off+length]
 	for i, x := range indexes {
 		types[i] = p.resultTypes[x]
 	}
@@ -381,13 +387,14 @@ func (p *Paragraph) isolatingRunSequence(indexes []int) *isolatingRunSequence {
 		}
 	}
 	level := p.resultLevels[indexes[0]]
-	return &isolatingRunSequence{
-		p:       p,
-		indexes: indexes,
-		types:   types,
-		level:   level,
-		sos:     typeForLevel(max(prevLevel, level)),
-		eos:     typeForLevel(max(succLevel, level)),
+	return isolatingRunSequence{
+		p:              p,
+		indexes:        indexes,
+		types:          types,
+		resolvedLevels: p.seqLevels[off : off+length : off+length],
+		level:          level,
+		sos:            typeForLevel(max(prevLevel, level)),
+		eos:            typeForLevel(max(succLevel, level)),
 	}
 }
 
@@ -582,8 +589,7 @@ func (s *isolatingRunSequence) resolveImplicitLevels() {
 	// on entry, only these types can be in resultTypes
 	// s.assertOnly(L, R, EN, AN)
 
-	s.resolvedLevels = make([]Level, len(s.types))
-	setLevels(s.resolvedLevels, s.level)
+	setLevels(s.resolvedLevels, s.level) // cut from the paragraph's scratch by isolatingRunSequence
 
 	if (s.level & 1) == 0 { // even level
 		for i, t := range s.types {
@@ -645,15 +651,14 @@ func (s *isolatingRunSequence) findRunLimit(index int, validSet ucd.BidiClass) i
 // 	}
 // }
 
-// determineLevelRuns returns an array of level runs. Each level run is
-// described as an array of indexes into the input string.
+// determineLevelRuns determines the level runs into p.lrIdx (the indexes into
+// the input of every run, one after the other) and p.lrEnd (where each run
+// ends in p.lrIdx).
 //
-// Determines the level runs. Rule X9 will be applied in determining the
-// runs, in the way that makes sure the characters that are supposed to be
-// removed are not included in the runs.
-func (p *Paragraph) determineLevelRuns() [][]int {
-	run := []int{}
-	allRuns := [][]int{}
+// Rule X9 is applied in determining the runs, in the way that makes sure the
+// characters that are supposed to be removed are not included in the runs.
+func (p *Paragraph) determineLevelRuns() {
+	p.lrIdx, p.lrEnd = p.lrIdx[:0], p.lrEnd[:0]
 	currentLevel := implicitLevel
 
 	for i := range p.initialTypes {
@@ -661,58 +666,76 @@ func (p *Paragraph) determineLevelRuns() [][]int {
 			if p.resultLevels[i] != currentLevel {
 				// we just encountered a new run; wrap up last run
 				if currentLevel >= 0 { // only wrap it up if there was a run
-					allRuns = append(allRuns, run)
-					run = nil
+					p.lrEnd = append(p.lrEnd, len(p.lrIdx))
 				}
 				// Start new run
 				currentLevel = p.resultLevels[i]
 			}
-			run = append(run, i)
+			p.lrIdx = append(p.lrIdx, i)
 		}
 	}
 	// Wrap up the final run, if any
-	if len(run) > 0 {
-		allRuns = append(allRuns, run)
+	if n := len(p.lrIdx); n > 0 && (len(p.lrEnd) == 0 || p.lrEnd[len(p.lrEnd)-1] < n) {
+		p.lrEnd = append(p.lrEnd, n)
 	}
-	return allRuns
 }
 
-// Definition BD13. Determine isolating run sequences.
-func (p *Paragraph) determineIsolatingRunSequences() []*isolatingRunSequence {
-	levelRuns := p.determineLevelRuns()
+// levelRun returns the indexes of level run i.
+func (p *Paragraph) levelRun(i int) []int {
+	start := 0
+	if i > 0 {
+		start = p.lrEnd[i-1]
+	}
+	return p.lrIdx[start:p.lrEnd[i]]
+}
+
+// Definition BD13. Determine isolating run sequences. The result is p.seqs,
+// valid until the next call; the sequences share three scratch arrays of the
+// paragraph (indexes, types, levels). Their total length is that of the level
+// runs, since every level run is in exactly one sequence.
+func (p *Paragraph) determineIsolatingRunSequences() []isolatingRunSequence {
+	p.determineLevelRuns()
+	nRuns, total := len(p.lrEnd), len(p.lrIdx)
 
 	// Compute the run that each character belongs to
-	for i, run := range levelRuns {
-		for _, index := range run {
+	for i := 0; i < nRuns; i++ {
+		for _, index := range p.levelRun(i) {
 			p.runForCharacter[index] = i
 		}
 	}
 
-	sequences := []*isolatingRunSequence{}
+	if cap(p.seqIdx) < total {
+		p.seqIdx = make([]int, 0, total)
+	}
+	if cap(p.seqTypes) < total {
+		p.seqTypes = make([]ucd.BidiClass, total)
+		p.seqLevels = make([]Level, total)
+	}
+	p.seqTypes, p.seqLevels = p.seqTypes[:cap(p.seqTypes)], p.seqLevels[:cap(p.seqLevels)]
+	p.seqIdx = p.seqIdx[:0] // appends below stay within its capacity, so earlier sequences keep their memory
+	p.seqs = p.seqs[:0]
 
-	var currentRunSequence []int
-
-	for _, run := range levelRuns {
+	for r := 0; r < nRuns; r++ {
+		run := p.levelRun(r)
 		first := run[0]
 		if p.initialTypes[first] != ucd.BD_PDI || p.matchingIsolateInitiator[first] == -1 {
-			currentRunSequence = nil
-			// int run = i;
+			off := len(p.seqIdx)
 			for {
-				// Copy this level run into currentRunSequence
-				currentRunSequence = append(currentRunSequence, run...)
+				// Copy this level run into the sequence
+				p.seqIdx = append(p.seqIdx, run...)
 
-				last := currentRunSequence[len(currentRunSequence)-1]
+				last := p.seqIdx[len(p.seqIdx)-1]
 				lastT := p.initialTypes[last]
 				if lastT&(ucd.BD_LRI|ucd.BD_RLI|ucd.BD_FSI) != 0 && p.matchingPDI[last] != p.len() {
-					run = levelRuns[p.runForCharacter[p.matchingPDI[last]]]
+					run = p.levelRun(p.runForCharacter[p.matchingPDI[last]])
 				} else {
 					break
 				}
 			}
-			sequences = append(sequences, p.isolatingRunSequence(currentRunSequence))
+			p.seqs = append(p.seqs, p.isolatingRunSequence(p.seqIdx[off:len(p.seqIdx):len(p.seqIdx)], off))
 		}
 	}
-	return sequences
+	return p.seqs
 }
 
 // Assign level information to characters removed by rule X9. This is for

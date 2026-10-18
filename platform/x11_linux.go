@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"unsafe"
+
+	"gonativeui/internal/ffi"
 )
 
 // X11 backend (libX11.so.6 through dlopen). The window is created in
@@ -94,7 +96,20 @@ var xf struct {
 	pending, nextEvent, connectionNumber, resourceManagerString                           uintptr
 	lookupString, destroyWindow, setDetectableAutoRepeat                                  uintptr
 	keysymToUTF8                                                                          uintptr // optional, libxkbcommon
+
+	// selections (clipboard_x11_linux.go)
+	setSelectionOwner, getSelectionOwner, convertSelection, getWindowProperty uintptr
+	changeProperty, deleteProperty, sendEvent, free, setErrorHandler          uintptr
+
+	createFontCursor, defineCursor uintptr
+
+	// content-first startup (startup_x11_linux.go)
+	setWindowBackgroundPixmap, defaultVisual, defaultDepth, createPixmap, freePixmap uintptr
+	createGC, freeGC, putImage, createImage                                          uintptr
 }
+
+// xErrCB is Xlib's error handler: it ignores every error (see x11ClipInit).
+var xErrCB uintptr
 
 var xLoaded bool
 
@@ -117,6 +132,8 @@ type x11 struct {
 	utf8     [8]byte // xkb_keysym_to_utf8 output
 	title    [128]byte
 	hints    xSizeHints
+	x11Clip
+	cursors [numShapes]uintptr // XDefineCursor cursors by shape, 0: not made yet
 }
 
 func loadX11() error {
@@ -148,9 +165,30 @@ func loadX11() error {
 		{"XLookupString", &xf.lookupString},
 		{"XDestroyWindow", &xf.destroyWindow},
 		{"XkbSetDetectableAutoRepeat", &xf.setDetectableAutoRepeat},
+		{"XSetSelectionOwner", &xf.setSelectionOwner},
+		{"XGetSelectionOwner", &xf.getSelectionOwner},
+		{"XConvertSelection", &xf.convertSelection},
+		{"XGetWindowProperty", &xf.getWindowProperty},
+		{"XChangeProperty", &xf.changeProperty},
+		{"XDeleteProperty", &xf.deleteProperty},
+		{"XSendEvent", &xf.sendEvent},
+		{"XFree", &xf.free},
+		{"XSetErrorHandler", &xf.setErrorHandler},
+		{"XCreateFontCursor", &xf.createFontCursor},
+		{"XDefineCursor", &xf.defineCursor},
+		{"XSetWindowBackgroundPixmap", &xf.setWindowBackgroundPixmap},
+		{"XDefaultVisual", &xf.defaultVisual},
+		{"XDefaultDepth", &xf.defaultDepth},
+		{"XCreatePixmap", &xf.createPixmap},
+		{"XFreePixmap", &xf.freePixmap},
+		{"XCreateGC", &xf.createGC},
+		{"XFreeGC", &xf.freeGC},
+		{"XPutImage", &xf.putImage},
+		{"XCreateImage", &xf.createImage},
 	}); err != nil {
 		return err
 	}
+	xErrCB = ffi.NewCallback(func(c *ffi.CB) { c.Ret(0) })
 	// XLookupString only yields Latin-1; libxkbcommon converts any keysym to
 	// UTF-8. Optional: without it, non-Latin-1 layouts produce no text.
 	if xh, err := dlopen("libxkbcommon.so.0", "libxkbcommon.so"); err == nil {
@@ -215,8 +253,9 @@ func (w *Window) openX11(o Options) (err error) {
 	}
 	mask := uintptr(xKeyPressMask | xKeyReleaseMask | xButtonPressMask | xButtonReleaseMask |
 		xEnterWindowMask | xLeaveWindowMask | xPointerMotionMask | xExposureMask |
-		xVisibilityChangeMask | xStructureNotifyMask | xFocusChangeMask)
+		xVisibilityChangeMask | xStructureNotifyMask | xFocusChangeMask | xPropertyChangeMask)
 	fr.Call3(xf.selectInput, x.dpy, x.win, mask)
+	w.x11ClipInit()
 
 	x.wmDelete = fr.Call3(xf.internAtom, x.dpy, uintptr(unsafe.Pointer(&nameWMDelete[0])), 0)
 	x.wmProto = fr.Call3(xf.internAtom, x.dpy, uintptr(unsafe.Pointer(&nameWMProtocols[0])), 0)
@@ -234,7 +273,15 @@ func (w *Window) openX11(o Options) (err error) {
 	// Held keys then produce repeated KeyPress without KeyRelease in between.
 	fr.Call3(xf.setDetectableAutoRepeat, x.dpy, 1, uintptr(unsafe.Pointer(&x.supp)))
 
-	fr.Call2(xf.mapWindow, x.dpy, x.win)
+	// No background: the server paints nothing when the window is mapped or
+	// exposed, so only the app's own pixels ever show (see x11Show).
+	fr.Call3(xf.setWindowBackgroundPixmap, x.dpy, x.win, 0)
+	if o.Hidden {
+		w.hidden = true
+		w.showBy = nanotime() + hiddenTimeout
+	} else {
+		fr.Call2(xf.mapWindow, x.dpy, x.win)
+	}
 	fr.Call1(xf.flush, x.dpy)
 
 	w.pfd[0] = pollfd{fd: int32(fr.Call1(xf.connectionNumber, x.dpy)), events: pollIn}
@@ -280,6 +327,13 @@ func (w *Window) waitX11(timeoutNs int64) {
 		tmo := int64(-1)
 		if deadline >= 0 {
 			tmo = max(deadline-nanotime(), 0)
+		}
+		if w.hidden { // never leave a window hidden for good
+			if d := w.showBy - nanotime(); d <= 0 {
+				w.x11Show()
+			} else if tmo < 0 || d < tmo {
+				tmo = d
+			}
 		}
 		if len(w.q.ev) > 0 {
 			tmo = 0
@@ -418,13 +472,18 @@ func (w *Window) x11Event() {
 		w.q.push(ev)
 	case xMotionNotify:
 		w.mods = xMods(x.u32(xoState))
+		w.ptrX, w.ptrY, w.ptrIn = float32(x.i32(xoX)), float32(x.i32(xoY)), true
+		w.cursorSync(false)
 		w.q.push(Event{Kind: EvPointerMove, X: float32(x.i32(xoX)), Y: float32(x.i32(xoY)), Mods: w.mods, Time: now})
 	case xEnterNotify:
 		if x.i32(xoMode) == 0 { // NotifyNormal
+			w.ptrX, w.ptrY, w.ptrIn = float32(x.i32(xoX)), float32(x.i32(xoY)), true
+			w.cursorSync(false)
 			w.q.push(Event{Kind: EvPointerMove, X: float32(x.i32(xoX)), Y: float32(x.i32(xoY)), Mods: w.mods, Time: now})
 		}
 	case xLeaveNotify:
 		if x.i32(xoMode) == 0 {
+			w.ptrIn = false
 			w.q.push(Event{Kind: EvPointerLeave, Time: now})
 		}
 	case xFocusIn, xFocusOut:
@@ -453,6 +512,14 @@ func (w *Window) x11Event() {
 			w.lw = int32((int64(pw)*120 + int64(w.s120)/2) / int64(w.s120))
 			w.lh = int32((int64(ph)*120 + int64(w.s120)/2) / int64(w.s120))
 		}
+	case xSelectionRequest:
+		w.x11SelectionRequest()
+	case xSelectionClear:
+		w.x11SelectionClear()
+	case xSelectionNotify:
+		w.x11SelectionNotify()
+	case xPropertyNotify:
+		w.x11PropertyNotify()
 	case xClientMessage:
 		if uintptr(x.i64(xoMsgType)) == x.wmProto && x.i32(xoMsgFormat) == 32 && uintptr(x.i64(xoMsgData0)) == x.wmDelete {
 			w.q.push(Event{Kind: EvClose, Time: now})
