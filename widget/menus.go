@@ -13,8 +13,11 @@ import (
 // the arrow keys move between the items, Right opens a submenu and Left closes
 // it, Enter and Space choose. A choice is not acted on at once: it is handed to
 // the model like a native menu item, so Kit.Command sees it in the next frame,
-// and a command with an edit role acts on the text field that has the focus
-// again by then.
+// and a command with an edit role acts on the text field that had the focus
+// when the menu opened: a click on the bar leaves the focus where it is
+// (ui.KeepFocus), and a choice gives it back at once, so that the next frame
+// delivers the command as an edit action of that field. (A MenuButton is a
+// button and takes the focus when clicked, like any button.)
 
 const maxMenuDepth = 4
 
@@ -36,6 +39,10 @@ type popup struct {
 	at    [4]float32
 	hi    [maxMenuDepth]int32  // the submenu item open at each level, -1 none
 	row   [maxMenuDepth]ui.Key // the row of that item
+	// restore is the box that had the focus when the menu opened (the text
+	// field an Edit menu acts on); a choice gives the focus back to it at once,
+	// so that the command reaches it in the next frame.
+	restore ui.Key
 }
 
 func (p *popup) reset() {
@@ -64,7 +71,9 @@ func (k *Kit) OpenContextMenu(menuIdx int, x, y float32) {
 	if k.menu == nil || menuIdx < 0 || menuIdx >= len(k.menu.Menus()) {
 		return
 	}
+	r := k.popRestore()
 	k.pop.reset()
+	k.pop.restore = r
 	k.pop.kind, k.pop.menu, k.pop.at = popContext, menuIdx, [4]float32{x, y, x, y}
 	k.c.RequestFrame()
 }
@@ -76,12 +85,28 @@ func (k *Kit) contextMenu() {
 	}
 }
 
+// popRestore is the focus to give back when the menu that is about to open
+// closes: the one the open menu will give back (a menu replaces another in the
+// bar), else the focus now.
+func (k *Kit) popRestore() ui.Key {
+	if k.pop.open() {
+		return k.pop.restore
+	}
+	return k.c.FocusKey()
+}
+
 // choose hands a command the user picked to the model's queue for the next
-// frame and closes the menus.
+// frame and closes the menus. The focus goes back at once to the box that had
+// it when the menu opened (the menu rows have it now, and give it up only at
+// the end of the next frame), so that the next frame's Begin sees the text
+// field an edit command is meant for.
 func (k *Kit) choose(id menu.ID) {
 	if k.npend < len(k.pend) {
 		k.pend[k.npend] = id
 		k.npend++
+	}
+	if r := k.pop.restore; r != 0 {
+		k.c.SetFocus(r)
 	}
 	k.pop.reset()
 	k.c.RequestFrame()
@@ -445,6 +470,9 @@ func (k *Kit) MenuBar() Signal {
 		w := theme.Snap(k.textW(k.r.Font.UI, title) + 2*px.Pad)
 		hi := max(c.HotTOf(key), c.FocusTOf(key))
 		flags := k.flags() | ui.DrawText
+		if !k.off() {
+			flags |= ui.KeepFocus // a click on the bar does not take the focus from the field it acts on
+		}
 		var bg uint32
 		if open || hi > 0.004 {
 			flags |= ui.DrawBackground
@@ -494,7 +522,9 @@ func (k *Kit) MenuBar() Signal {
 	}
 	c.Pop()
 	if want >= 0 {
+		r := k.popRestore()
 		k.pop.reset()
+		k.pop.restore = r
 		k.pop.kind, k.pop.owner, k.pop.menu = popMenu, ui.KeyN(bkey, uint64(want)), bar[want]
 		k.pop.row[0] = k.pop.owner
 		k.barKey = bkey
@@ -553,7 +583,9 @@ func (k *Kit) MenuButton(label string, menuIdx int) Signal {
 		if open {
 			k.pop.reset()
 		} else {
+			r := k.popRestore()
 			k.pop.reset()
+			k.pop.restore = r
 			k.pop.kind, k.pop.owner, k.pop.menu = popMenu, key, menuIdx
 			k.pop.row[0] = key
 			c.RequestFrame()

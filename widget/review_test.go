@@ -167,3 +167,56 @@ func TestEscapeClearsSearchFieldBeforeCancellingDialog(t *testing.T) {
 		t.Fatalf("second Escape: cancelled=%d open=%v", v.cancelled[0], v.open[0])
 	}
 }
+
+// An edit command chosen in a drawn menu acts on the text field that was
+// focused when the menu opened: once, as an edit action, and not as an app
+// command.
+func TestEditCommandFromDrawnMenuEditsTheField(t *testing.T) {
+	for _, via := range []string{"menubar", "context"} {
+		t.Run(via, func(t *testing.T) {
+			g, v := newShell(t)
+			var copied []string
+			g.c.ClipboardSet = func(b []byte) { copied = append(copied, string(b)) }
+			g.click(centre(g.must(ui.RoleTextField, "Name")))
+			g.typ("hello world")
+			g.key('A', ui.PrimaryMod())
+			fieldKey := g.c.FocusKey()
+			switch via {
+			case "menubar":
+				g.clickOn(ui.RoleMenuItem, "View")
+				if !g.k.MenuOpen() {
+					t.Fatal("the View menu did not open")
+				}
+			case "context":
+				g.k.OpenContextMenu(1, 300, 300)
+				g.frames(3)
+			}
+			g.clickOn(ui.RoleMenuItem, "Copy")
+			g.frames(4)
+			if len(copied) != 1 || copied[0] != "hello world" {
+				t.Fatalf("clipboard callback got %q, want the selection once", copied)
+			}
+			if len(v.cmds) != 0 {
+				t.Fatalf("an app command fired for an edit role: %v", v.cmds)
+			}
+			if g.c.FocusKey() != fieldKey {
+				t.Fatal("the field does not have the focus after the menu closed")
+			}
+		})
+	}
+}
+
+// Clicking the menu bar leaves the focus where it is.
+func TestMenuBarClickKeepsTheFieldFocus(t *testing.T) {
+	g, _ := newShell(t)
+	g.click(centre(g.must(ui.RoleTextField, "Name")))
+	f := g.c.FocusKey()
+	x, y := centre(g.must(ui.RoleMenuItem, "File"))
+	g.in.MouseX, g.in.MouseY = x, y
+	g.frame()
+	g.in.SetButton(ui.ButtonLeft, true, 1)
+	g.frame()
+	if g.c.FocusKey() != f {
+		t.Fatal("a press on the menu bar took the focus from the field")
+	}
+}

@@ -121,7 +121,7 @@ func (c *Context) mouse() {
 }
 
 // focusOnPress moves focus to the nearest focusable box at or above the box
-// under the pointer; a press on nothing clears focus.
+// under the pointer (unless it has KeepFocus); a press on nothing clears focus.
 func (c *Context) focusOnPress() {
 	if c.hotID == 0 {
 		c.focusKey = 0
@@ -129,7 +129,9 @@ func (c *Context) focusOnPress() {
 	}
 	for id := c.hotID; id != 0; id = c.boxes[id].parent {
 		if c.boxes[id].flags&(Focusable|Disabled) == Focusable {
-			c.focusKey = c.boxes[id].key
+			if c.boxes[id].flags&KeepFocus == 0 {
+				c.focusKey = c.boxes[id].key
+			}
 			return
 		}
 	}

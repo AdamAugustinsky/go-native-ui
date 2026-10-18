@@ -99,6 +99,13 @@ const (
 	// and draws it line by line. A box whose height is TextSize is as high as
 	// the lines. A width left on auto is Pct(1). See Context.Label.
 	WrapText
+
+	// KeepFocus makes a press on the box (or on a descendant that takes none)
+	// leave the keyboard focus where it is, as the menu bar of an operating
+	// system does: a click on it does not take the focus from the text field
+	// it acts on. The box can still take the focus from the keyboard (Tab,
+	// SetFocus).
+	KeepFocus
 )
 
 // scrollable flags, either axis.
