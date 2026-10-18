@@ -1,3 +1,314 @@
+--- a/bidi/bidi.go
++++ b/bidi/bidi.go
+@@ -40,6 +40,16 @@
+ 
+ 	// exclusive indice of output runs: the run is at text[previousEnd:end]
+ 	runsEnd []int
++
++	// Scratch reused by every Segment call, so that a warm Paragraph
++	// allocates nothing: level runs (core.go), isolating run sequences and
++	// the arrays they are cut from, and bracket pairs (bracket.go).
++	lrIdx, lrEnd []int
++	seqIdx       []int
++	seqTypes     []ucd.BidiClass
++	seqLevels    []Level
++	seqs         []isolatingRunSequence
++	pairs        bracketPairs
+ }
+ 
+ // Run is a slice of text with a constant direction.
+--- a/bidi/bracket.go
++++ b/bidi/bracket.go
+@@ -1,8 +1,7 @@
+ package bidi
+ 
+ import (
+-	"container/list"
+-	"sort"
++	"slices"
+ 
+ 	ucd "github.com/go-text/typesetting/internal/unicodedata"
+ )
+@@ -68,7 +67,7 @@
+ func resolvePairedBrackets(s *isolatingRunSequence) {
+ 	p := bracketPairer{
+ 		sos:              s.sos,
+-		openers:          list.New(),
++		pairPositions:    s.p.pairs[:0],
+ 		codesIsolatedRun: s.types,
+ 		indexes:          s.indexes,
+ 	}
+@@ -78,6 +77,7 @@
+ 	}
+ 	p.locateBrackets(s.p.pairTypes, s.p.pairValues)
+ 	p.resolveBrackets(dirEmbed, s.p.initialTypes)
++	s.p.pairs = p.pairPositions[:0] // keep the grown storage
+ }
+ 
+ type bracketPairer struct {
+@@ -102,7 +102,9 @@
+ 	// slices contain the rune of the opening bracket after normalization for
+ 	// any opening or closing bracket.
+ 
+-	openers *list.List // list of positions for opening brackets
++	// positions of the opening brackets seen, the most recent last
++	openers [maxPairingDepth]int
++	nOpen   int
+ 
+ 	// bracket pair positions sorted by location of opening bracket
+ 	pairPositions bracketPairs
+@@ -146,34 +148,35 @@
+ 		switch pairTypes[index] {
+ 		case bpOpen:
+ 			// check if maximum pairing depth reached
+-			if p.openers.Len() == maxPairingDepth {
+-				p.openers.Init()
++			if p.nOpen == maxPairingDepth {
++				p.nOpen = 0
++				slices.SortFunc(p.pairPositions, func(a, b bracketPair) int { return a.opener - b.opener })
+ 				return
+ 			}
+-			// remember opener location, most recent first
+-			p.openers.PushFront(i)
++			// remember opener location, most recent last
++			p.openers[p.nOpen] = i
++			p.nOpen++
+ 
+ 		case bpClose:
+-			// see if there is a match
++			// see if there is a match, most recent opener first
+ 			count := 0
+-			for elem := p.openers.Front(); elem != nil; elem = elem.Next() {
++			for k := p.nOpen - 1; k >= 0; k-- {
+ 				count++
+-				opener := elem.Value.(int)
++				opener := p.openers[k]
+ 				if p.matchOpener(pairValues, opener, i) {
+ 					// if the opener matches, add nested pair to the ordered list
+ 					p.pairPositions = append(p.pairPositions, bracketPair{opener, i})
+ 					// remove up to and including matched opener
+-					for ; count > 0; count-- {
+-						p.openers.Remove(p.openers.Front())
+-					}
++					p.nOpen -= count
+ 					break
+ 				}
+ 			}
+-			sort.Sort(p.pairPositions)
+-			// if we get here, the closing bracket matched no openers
+-			// and gets ignored
++			// if we get here with no match, the closing bracket matched no
++			// openers and gets ignored
+ 		}
+ 	}
++	// pairs are processed in the order of their opening brackets
++	slices.SortFunc(p.pairPositions, func(a, b bracketPair) int { return a.opener - b.opener })
+ }
+ 
+ // Bracket pairs within an isolating run sequence are processed as units so
+--- a/bidi/core.go
++++ b/bidi/core.go
+@@ -84,7 +84,9 @@
+ 
+ 	// Rule X10.
+ 	// Run remainder of algorithm one isolating run sequence at a time
+-	for _, seq := range p.determineIsolatingRunSequences() {
++	seqs := p.determineIsolatingRunSequences()
++	for i := range seqs {
++		seq := &seqs[i]
+ 		// 3) resolving weak types
+ 		// Rules W1-W7.
+ 		seq.resolveWeakTypes()
+@@ -349,9 +351,13 @@
+ 
+ // Rule X10, second bullet: Determine the start-of-sequence (sos) and end-of-sequence (eos) types,
+ // either L or R, for each isolating run sequence.
+-func (p *Paragraph) isolatingRunSequence(indexes []int) *isolatingRunSequence {
++//
++// The type and level arrays are cut from the paragraph's scratch buffers
++// (sized for all sequences by determineIsolatingRunSequences) so that the
++// algorithm allocates nothing once the buffers are warm.
++func (p *Paragraph) isolatingRunSequence(indexes []int, off int) isolatingRunSequence {
+ 	length := len(indexes)
+-	types := make([]ucd.BidiClass, length)
++	types := p.seqTypes[off : off+length : off+length]
+ 	for i, x := range indexes {
+ 		types[i] = p.resultTypes[x]
+ 	}
+@@ -381,13 +387,14 @@
+ 		}
+ 	}
+ 	level := p.resultLevels[indexes[0]]
+-	return &isolatingRunSequence{
+-		p:       p,
+-		indexes: indexes,
+-		types:   types,
+-		level:   level,
+-		sos:     typeForLevel(max(prevLevel, level)),
+-		eos:     typeForLevel(max(succLevel, level)),
++	return isolatingRunSequence{
++		p:              p,
++		indexes:        indexes,
++		types:          types,
++		resolvedLevels: p.seqLevels[off : off+length : off+length],
++		level:          level,
++		sos:            typeForLevel(max(prevLevel, level)),
++		eos:            typeForLevel(max(succLevel, level)),
+ 	}
+ }
+ 
+@@ -582,8 +589,7 @@
+ 	// on entry, only these types can be in resultTypes
+ 	// s.assertOnly(L, R, EN, AN)
+ 
+-	s.resolvedLevels = make([]Level, len(s.types))
+-	setLevels(s.resolvedLevels, s.level)
++	setLevels(s.resolvedLevels, s.level) // cut from the paragraph's scratch by isolatingRunSequence
+ 
+ 	if (s.level & 1) == 0 { // even level
+ 		for i, t := range s.types {
+@@ -645,15 +651,14 @@
+ // 	}
+ // }
+ 
+-// determineLevelRuns returns an array of level runs. Each level run is
+-// described as an array of indexes into the input string.
++// determineLevelRuns determines the level runs into p.lrIdx (the indexes into
++// the input of every run, one after the other) and p.lrEnd (where each run
++// ends in p.lrIdx).
+ //
+-// Determines the level runs. Rule X9 will be applied in determining the
+-// runs, in the way that makes sure the characters that are supposed to be
+-// removed are not included in the runs.
+-func (p *Paragraph) determineLevelRuns() [][]int {
+-	run := []int{}
+-	allRuns := [][]int{}
++// Rule X9 is applied in determining the runs, in the way that makes sure the
++// characters that are supposed to be removed are not included in the runs.
++func (p *Paragraph) determineLevelRuns() {
++	p.lrIdx, p.lrEnd = p.lrIdx[:0], p.lrEnd[:0]
+ 	currentLevel := implicitLevel
+ 
+ 	for i := range p.initialTypes {
+@@ -661,58 +666,76 @@
+ 			if p.resultLevels[i] != currentLevel {
+ 				// we just encountered a new run; wrap up last run
+ 				if currentLevel >= 0 { // only wrap it up if there was a run
+-					allRuns = append(allRuns, run)
+-					run = nil
++					p.lrEnd = append(p.lrEnd, len(p.lrIdx))
+ 				}
+ 				// Start new run
+ 				currentLevel = p.resultLevels[i]
+ 			}
+-			run = append(run, i)
++			p.lrIdx = append(p.lrIdx, i)
+ 		}
+ 	}
+ 	// Wrap up the final run, if any
+-	if len(run) > 0 {
+-		allRuns = append(allRuns, run)
++	if n := len(p.lrIdx); n > 0 && (len(p.lrEnd) == 0 || p.lrEnd[len(p.lrEnd)-1] < n) {
++		p.lrEnd = append(p.lrEnd, n)
+ 	}
+-	return allRuns
+ }
+ 
+-// Definition BD13. Determine isolating run sequences.
+-func (p *Paragraph) determineIsolatingRunSequences() []*isolatingRunSequence {
+-	levelRuns := p.determineLevelRuns()
++// levelRun returns the indexes of level run i.
++func (p *Paragraph) levelRun(i int) []int {
++	start := 0
++	if i > 0 {
++		start = p.lrEnd[i-1]
++	}
++	return p.lrIdx[start:p.lrEnd[i]]
++}
+ 
++// Definition BD13. Determine isolating run sequences. The result is p.seqs,
++// valid until the next call; the sequences share three scratch arrays of the
++// paragraph (indexes, types, levels). Their total length is that of the level
++// runs, since every level run is in exactly one sequence.
++func (p *Paragraph) determineIsolatingRunSequences() []isolatingRunSequence {
++	p.determineLevelRuns()
++	nRuns, total := len(p.lrEnd), len(p.lrIdx)
++
+ 	// Compute the run that each character belongs to
+-	for i, run := range levelRuns {
+-		for _, index := range run {
++	for i := 0; i < nRuns; i++ {
++		for _, index := range p.levelRun(i) {
+ 			p.runForCharacter[index] = i
+ 		}
+ 	}
+ 
+-	sequences := []*isolatingRunSequence{}
++	if cap(p.seqIdx) < total {
++		p.seqIdx = make([]int, 0, total)
++	}
++	if cap(p.seqTypes) < total {
++		p.seqTypes = make([]ucd.BidiClass, total)
++		p.seqLevels = make([]Level, total)
++	}
++	p.seqTypes, p.seqLevels = p.seqTypes[:cap(p.seqTypes)], p.seqLevels[:cap(p.seqLevels)]
++	p.seqIdx = p.seqIdx[:0] // appends below stay within its capacity, so earlier sequences keep their memory
++	p.seqs = p.seqs[:0]
+ 
+-	var currentRunSequence []int
+-
+-	for _, run := range levelRuns {
++	for r := 0; r < nRuns; r++ {
++		run := p.levelRun(r)
+ 		first := run[0]
+ 		if p.initialTypes[first] != ucd.BD_PDI || p.matchingIsolateInitiator[first] == -1 {
+-			currentRunSequence = nil
+-			// int run = i;
++			off := len(p.seqIdx)
+ 			for {
+-				// Copy this level run into currentRunSequence
+-				currentRunSequence = append(currentRunSequence, run...)
++				// Copy this level run into the sequence
++				p.seqIdx = append(p.seqIdx, run...)
+ 
+-				last := currentRunSequence[len(currentRunSequence)-1]
++				last := p.seqIdx[len(p.seqIdx)-1]
+ 				lastT := p.initialTypes[last]
+ 				if lastT&(ucd.BD_LRI|ucd.BD_RLI|ucd.BD_FSI) != 0 && p.matchingPDI[last] != p.len() {
+-					run = levelRuns[p.runForCharacter[p.matchingPDI[last]]]
++					run = p.levelRun(p.runForCharacter[p.matchingPDI[last]])
+ 				} else {
+ 					break
+ 				}
+ 			}
+-			sequences = append(sequences, p.isolatingRunSequence(currentRunSequence))
++			p.seqs = append(p.seqs, p.isolatingRunSequence(p.seqIdx[off:len(p.seqIdx):len(p.seqIdx)], off))
+ 		}
+ 	}
+-	return sequences
++	return p.seqs
+ }
+ 
+ // Assign level information to characters removed by rule X9. This is for
+--- a/font/opentype/tables/ot_layout.go
++++ b/font/opentype/tables/ot_layout.go
+@@ -492,10 +492,13 @@
+ 		return out, offset, nil
+ 	}
+ 	// start by parsing the list of values
+-	values, err := ParseUint16s(data[offset:], size)
+-	if err != nil {
+-		return out, 0, fmt.Errorf("invalid value record: %s", err)
++	if len(data[offset:]) < 2*size {
++		return out, 0, fmt.Errorf("invalid value record: EOF")
+ 	}
++	var values [16]uint16 // size counts all 16 format bits, reserved ones included (as upstream reads them)
++	for i := 0; i < size; i++ {
++		values[i] = binary.BigEndian.Uint16(data[offset+2*i:])
++	}
+ 	// follow the order
+ 	cursor := 0
+ 	if format&XPlacement != 0 {
 --- a/harfbuzz/buffer.go
 +++ b/harfbuzz/buffer.go
 @@ -54,6 +54,7 @@
@@ -8,9 +319,31 @@
  	// Info is used as internal storage during the shaping,
  	// and also exposes the result: the glyph to display
  	// and its original Cluster value.
+--- a/harfbuzz/ot_layout_gpos.go
++++ b/harfbuzz/ot_layout_gpos.go
+@@ -158,7 +158,7 @@
+ 
+ func applyRecurseGPOS(c *otApplyContext, lookupIndex uint16) bool {
+ 	gpos := c.font.face.GPOS
+-	l := lookupGPOS(gpos.Lookups[lookupIndex])
++	l := (*lookupGPOS)(&gpos.Lookups[lookupIndex]) // a pointer: boxing the struct would allocate
+ 	return c.applyRecurseLookup(lookupIndex, l)
+ }
+ 
+--- a/harfbuzz/ot_layout_gsub.go
++++ b/harfbuzz/ot_layout_gsub.go
+@@ -64,7 +64,7 @@
+ 
+ func applyRecurseGSUB(c *otApplyContext, lookupIndex uint16) bool {
+ 	gsub := c.font.face.GSUB
+-	l := lookupGSUB(gsub.Lookups[lookupIndex])
++	l := (*lookupGSUB)(&gsub.Lookups[lookupIndex]) // a pointer: boxing the struct would allocate
+ 	return c.applyRecurseLookup(lookupIndex, l)
+ }
+ 
 --- a/harfbuzz/ot_layout_gsubgpos.go
 +++ b/harfbuzz/ot_layout_gsubgpos.go
-@@ -105,26 +105,30 @@
+@@ -105,27 +105,31 @@
  }
  
  // `value` interpretation is dictated by the context
@@ -47,15 +380,16 @@
  		return covered
  	}
  }
-+
+ 
 +var matchGlyph = matcherFunc{kind: 1}
 +
 +func matchClass(class tables.ClassDef) matcherFunc { return matcherFunc{kind: 2, class: class} }
 +
 +func matchCoverage(covs []tables.Coverage) matcherFunc { return matcherFunc{kind: 3, covs: covs} }
- 
++
  const (
  	no uint8 = iota
+ 	yes
 @@ -144,7 +148,7 @@
  }
  
@@ -76,7 +410,27 @@
  			return yes
  		}
  		return no
-@@ -653,7 +657,7 @@
+@@ -327,6 +331,7 @@
+ 	iterInput   skippingIterator
+ 
+ 	nestingLevelLeft int
++	recurseScratch   [maxNestingLevel + 1][8]int // see applyRecurseLookup
+ 	tableIndex       uint8 // 0 for GSUB, 1 for GPOS
+ 	lookupMask       GlyphMask
+ 	lookupProps      uint32
+@@ -404,8 +409,9 @@
+ 	c.setLookupProps(l.Props())
+ 
+ 	savedMatchPositions := c.matchPositions
+-	var stackMatchPositions [8]int
+-	c.matchPositions = stackMatchPositions[:]
++	// One scratch array per nesting level, in the context: a stack array
++	// stored in c would be moved to the heap.
++	c.matchPositions = c.recurseScratch[maxNestingLevel-c.nestingLevelLeft][:]
+ 
+ 	ret := l.dispatchApply(c)
+ 
+@@ -653,7 +659,7 @@
  	}
  
  	for i, glyph := range input {
@@ -85,6 +439,42 @@
  			return false
  		}
  	}
+--- a/harfbuzz/ot_shape_arabic.go
++++ b/harfbuzz/ot_shape_arabic.go
+@@ -368,7 +368,7 @@
+ }
+ 
+ func arabicFallbackShape(plan *otShapePlan, font *Font, buffer *Buffer) bool {
+-	arabicPlan := plan.shaper.(*complexShaperArabic).plan
++	arabicPlan := &plan.shaper.(*complexShaperArabic).plan
+ 
+ 	if !arabicPlan.doFallback {
+ 		return false
+@@ -378,6 +378,7 @@
+ 	if fallbackPlan == nil {
+ 		// this sucks. We need a font to build the fallback plan...
+ 		fallbackPlan = newArabicFallbackPlan(plan, font)
++		arabicPlan.fallbackPlan = fallbackPlan // the plan belongs to this face: build it once
+ 	}
+ 
+ 	fallbackPlan.shape(font, buffer)
+@@ -841,6 +842,7 @@
+ 	accelArray [arabicFallbackMaxLookups]otLayoutLookupAccelerator
+ 	numLookups int
+ 	maskArray  [arabicFallbackMaxLookups]GlyphMask
++	ctx        otApplyContext // reused by shape
+ }
+ 
+ func (fbPlan *arabicFallbackPlan) initWin1256(plan *otShapePlan, font *Font) bool {
+@@ -907,7 +909,7 @@
+ }
+ 
+ func (fbPlan *arabicFallbackPlan) shape(font *Font, buffer *Buffer) {
+-	var c otApplyContext
++	c := &fbPlan.ctx
+ 	c.reset(0, font, buffer)
+ 	for i := 0; i < fbPlan.numLookups; i++ {
+ 		if fbPlan.accelArray[i].lookup != nil {
 --- a/harfbuzz/ot_shape_normalize.go
 +++ b/harfbuzz/ot_shape_normalize.go
 @@ -65,8 +65,7 @@
@@ -131,22 +521,3 @@
  					if ok { // And the font has glyph for the composite.
  						glyph, ok := font.face.NominalGlyph(composed) /* Composes. */
  						if ok {
---- a/font/opentype/tables/ot_layout.go
-+++ b/font/opentype/tables/ot_layout.go
-@@ -492,10 +492,13 @@
- 		return out, offset, nil
- 	}
- 	// start by parsing the list of values
--	values, err := ParseUint16s(data[offset:], size)
--	if err != nil {
--		return out, 0, fmt.Errorf("invalid value record: %s", err)
-+	if len(data[offset:]) < 2*size {
-+		return out, 0, fmt.Errorf("invalid value record: EOF")
- 	}
-+	var values [16]uint16 // size counts all 16 format bits, reserved ones included (as upstream reads them)
-+	for i := 0; i < size; i++ {
-+		values[i] = binary.BigEndian.Uint16(data[offset+2*i:])
-+	}
- 	// follow the order
- 	cursor := 0
- 	if format&XPlacement != 0 {

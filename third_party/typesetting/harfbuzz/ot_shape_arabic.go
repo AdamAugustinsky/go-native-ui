@@ -368,7 +368,7 @@ func (cs *complexShaperArabic) setupMasks(plan *otShapePlan, buffer *Buffer, _ *
 }
 
 func arabicFallbackShape(plan *otShapePlan, font *Font, buffer *Buffer) bool {
-	arabicPlan := plan.shaper.(*complexShaperArabic).plan
+	arabicPlan := &plan.shaper.(*complexShaperArabic).plan
 
 	if !arabicPlan.doFallback {
 		return false
@@ -378,6 +378,7 @@ func arabicFallbackShape(plan *otShapePlan, font *Font, buffer *Buffer) bool {
 	if fallbackPlan == nil {
 		// this sucks. We need a font to build the fallback plan...
 		fallbackPlan = newArabicFallbackPlan(plan, font)
+		arabicPlan.fallbackPlan = fallbackPlan // the plan belongs to this face: build it once
 	}
 
 	fallbackPlan.shape(font, buffer)
@@ -841,6 +842,7 @@ type arabicFallbackPlan struct {
 	accelArray [arabicFallbackMaxLookups]otLayoutLookupAccelerator
 	numLookups int
 	maskArray  [arabicFallbackMaxLookups]GlyphMask
+	ctx        otApplyContext // reused by shape
 }
 
 func (fbPlan *arabicFallbackPlan) initWin1256(plan *otShapePlan, font *Font) bool {
@@ -907,7 +909,7 @@ func newArabicFallbackPlan(plan *otShapePlan, font *Font) *arabicFallbackPlan {
 }
 
 func (fbPlan *arabicFallbackPlan) shape(font *Font, buffer *Buffer) {
-	var c otApplyContext
+	c := &fbPlan.ctx
 	c.reset(0, font, buffer)
 	for i := 0; i < fbPlan.numLookups; i++ {
 		if fbPlan.accelArray[i].lookup != nil {

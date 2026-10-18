@@ -22,10 +22,13 @@ go-text's own tests and test data are not copied.
 
 ## Our change
 
-`zeroalloc.patch` makes `harfbuzz.Buffer.Shape` allocate nothing per call:
+`zeroalloc.patch` makes `harfbuzz.Buffer.Shape` and `bidi.Paragraph.Segment` allocate nothing per call once warm:
 
 - `harfbuzz/ot_layout_gsubgpos.go`: `matcherFunc` is a small struct, not a per-lookup closure.
 - `harfbuzz/ot_shape_normalize.go`, `harfbuzz/buffer.go`: the normalize context lives in a field on `Buffer`, and the shaper is called directly.
+- `harfbuzz/ot_layout_gsub.go`, `ot_layout_gpos.go`, `ot_layout_gsubgpos.go`: recursive lookups use a per-level scratch array in the context and a pointer to the lookup, not a stack array stored in the context and a boxed copy.
+- `harfbuzz/ot_shape_arabic.go`: the Arabic fallback plan is kept on the shape plan once built (upstream rebuilt it on every call), with its apply context.
+- `bidi/bidi.go`, `core.go`, `bracket.go`: level runs, isolating run sequences and bracket pairs live in scratch buffers on `Paragraph`; the bracket opener stack is an array, not a `container/list`. The regression test is `text/rtl_alloc_test.go`.
 - `font/opentype/tables/ot_layout.go`: `parseValueRecord` reads into a 16-element stack array. Sixteen because the size counts every format bit, reserved ones included; the regression test is `font/opentype/tables/zeroalloc_test.go`, which CI runs.
 
 ## Updating

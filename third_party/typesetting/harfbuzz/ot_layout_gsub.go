@@ -64,7 +64,7 @@ func (l lookupGSUB) isReverse() bool {
 
 func applyRecurseGSUB(c *otApplyContext, lookupIndex uint16) bool {
 	gsub := c.font.face.GSUB
-	l := lookupGSUB(gsub.Lookups[lookupIndex])
+	l := (*lookupGSUB)(&gsub.Lookups[lookupIndex]) // a pointer: boxing the struct would allocate
 	return c.applyRecurseLookup(lookupIndex, l)
 }
 

@@ -40,6 +40,16 @@ type Paragraph struct {
 
 	// exclusive indice of output runs: the run is at text[previousEnd:end]
 	runsEnd []int
+
+	// Scratch reused by every Segment call, so that a warm Paragraph
+	// allocates nothing: level runs (core.go), isolating run sequences and
+	// the arrays they are cut from, and bracket pairs (bracket.go).
+	lrIdx, lrEnd []int
+	seqIdx       []int
+	seqTypes     []ucd.BidiClass
+	seqLevels    []Level
+	seqs         []isolatingRunSequence
+	pairs        bracketPairs
 }
 
 // Run is a slice of text with a constant direction.
