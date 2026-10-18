@@ -17,11 +17,20 @@ func sawWake(t *testing.T, w *Window) bool {
 	return pump(t, w, 3*time.Second, func(e Event) bool { return e.Kind == EvWake })
 }
 
+// request pumps the window until the compositor has received a request that
+// starts with prefix (the client sends its requests from inside Wait) and
+// returns it.
+func request(t *testing.T, w *Window, f *fakeWL, prefix string) string {
+	t.Helper()
+	pumpUntil(t, w, 3*time.Second, func() bool { return f.seen(prefix) })
+	return f.wait(prefix, time.Second)
+}
+
 func TestWaylandDecorationMode(t *testing.T) {
 	// The compositor's choice decides, at any time.
 	f := startFakeWL(t, "")
 	w := openFake(t, f)
-	f.wait("REQ zxdg_toplevel_decoration_v1.set_mode 2", 3*time.Second) // we ask for server-side
+	request(t, w, f, "REQ zxdg_toplevel_decoration_v1.set_mode 2") // we ask for server-side
 	if w.ClientDecorations() {
 		t.Fatal("client decorations while the compositor decorates")
 	}
@@ -72,7 +81,7 @@ func TestWaylandClientDecorationProtocol(t *testing.T) {
 	f.do("pointer 100 20")
 	f.wait("ENTER", 3*time.Second)
 	pumpUntil(t, w, time.Second, func() bool { return f.seen("REQ wp_cursor_shape_device_v1.set_shape") })
-	f.wait("REQ wp_cursor_shape_device_v1.set_shape", time.Second)
+	request(t, w, f, "REQ wp_cursor_shape_device_v1.set_shape")
 
 	var events []Event
 	collect := func(d time.Duration) {
@@ -92,7 +101,7 @@ func TestWaylandClientDecorationProtocol(t *testing.T) {
 	// A press in the drag region moves the window and is not the app's; neither
 	// is its release.
 	serial := strings.TrimPrefix(press(btnLeft, 1, 1000), "SERIAL ")
-	if l := f.wait("REQ xdg_toplevel.move", 3*time.Second); !strings.HasSuffix(l, " "+serial) {
+	if l := request(t, w, f, "REQ xdg_toplevel.move"); !strings.HasSuffix(l, " "+serial) {
 		t.Errorf("move: %q, want the press serial %s", l, serial)
 	}
 	press(btnLeft, 0, 1050)
@@ -103,10 +112,10 @@ func TestWaylandClientDecorationProtocol(t *testing.T) {
 
 	// A double click maximizes; the compositor's configure makes it so; again restores.
 	press(btnLeft, 1, 2000)
-	f.wait("REQ xdg_toplevel.move", 3*time.Second)
+	request(t, w, f, "REQ xdg_toplevel.move")
 	press(btnLeft, 0, 2040)
 	press(btnLeft, 1, 2200)
-	f.wait("REQ xdg_toplevel.set_maximized", 3*time.Second)
+	request(t, w, f, "REQ xdg_toplevel.set_maximized")
 	if !sawWake(t, w) || !w.Maximized() {
 		t.Fatal("not maximized after the compositor's configure")
 	}
@@ -114,7 +123,7 @@ func TestWaylandClientDecorationProtocol(t *testing.T) {
 	press(btnLeft, 1, 5000)
 	press(btnLeft, 0, 5030)
 	press(btnLeft, 1, 5150)
-	f.wait("REQ xdg_toplevel.unset_maximized", 3*time.Second)
+	request(t, w, f, "REQ xdg_toplevel.unset_maximized")
 	if !sawWake(t, w) || w.Maximized() {
 		t.Fatal("still maximized after the second double click")
 	}
@@ -124,21 +133,21 @@ func TestWaylandClientDecorationProtocol(t *testing.T) {
 	// edge cursors.
 	f.do("motion 2 150")
 	pumpUntil(t, w, 2*time.Second, func() bool { return f.seen("REQ wp_cursor_shape_device_v1.set_shape") })
-	if l := f.wait("REQ wp_cursor_shape_device_v1.set_shape", time.Second); !strings.HasSuffix(l, " 25") { // w_resize
+	if l := request(t, w, f, "REQ wp_cursor_shape_device_v1.set_shape"); !strings.HasSuffix(l, " 25") { // w_resize
 		t.Errorf("left edge cursor: %q", l)
 	}
 	press(btnLeft, 1, 9000)
-	if l := f.wait("REQ xdg_toplevel.resize", 3*time.Second); !strings.HasSuffix(l, " 4") { // left
+	if l := request(t, w, f, "REQ xdg_toplevel.resize"); !strings.HasSuffix(l, " 4") { // left
 		t.Errorf("left edge resize: %q", l)
 	}
 	press(btnLeft, 0, 9010)
 	f.do("motion 2 2")
 	pumpUntil(t, w, 2*time.Second, func() bool { return f.seen("REQ wp_cursor_shape_device_v1.set_shape") })
-	if l := f.wait("REQ wp_cursor_shape_device_v1.set_shape", time.Second); !strings.HasSuffix(l, " 21") { // nw_resize
+	if l := request(t, w, f, "REQ wp_cursor_shape_device_v1.set_shape"); !strings.HasSuffix(l, " 21") { // nw_resize
 		t.Errorf("corner cursor: %q", l)
 	}
 	press(btnLeft, 1, 9100)
-	if l := f.wait("REQ xdg_toplevel.resize", 3*time.Second); !strings.HasSuffix(l, " 5") { // top|left
+	if l := request(t, w, f, "REQ xdg_toplevel.resize"); !strings.HasSuffix(l, " 5") { // top|left
 		t.Errorf("corner resize: %q", l)
 	}
 	press(btnLeft, 0, 9110)
@@ -150,7 +159,7 @@ func TestWaylandClientDecorationProtocol(t *testing.T) {
 	})
 	f.do("motion 395 50")
 	press(btnLeft, 1, 12000)
-	if l := f.wait("REQ xdg_toplevel.resize", 3*time.Second); !strings.HasSuffix(l, " 8") { // right
+	if l := request(t, w, f, "REQ xdg_toplevel.resize"); !strings.HasSuffix(l, " 8") { // right
 		t.Errorf("right edge resize: %q", l)
 	}
 	press(btnLeft, 0, 12010)
@@ -170,7 +179,7 @@ func TestWaylandClientDecorationProtocol(t *testing.T) {
 
 	// Window buttons.
 	w.Minimize()
-	f.wait("REQ xdg_toplevel.set_minimized", 3*time.Second)
+	request(t, w, f, "REQ xdg_toplevel.set_minimized")
 	w.RequestClose()
 	if !pump(t, w, time.Second, func(e Event) bool { return e.Kind == EvClose }) {
 		t.Error("RequestClose produced no EvClose")
@@ -181,7 +190,7 @@ func TestWaylandShadowInsets(t *testing.T) {
 	f := startFakeWL(t, "clientdeco")
 	w := openFake(t, f)
 	w.SetShadowInsets(10, 10, 10, 10)
-	if l := f.wait("REQ xdg_surface.set_window_geometry", 3*time.Second); l != "REQ xdg_surface.set_window_geometry 10 10 400 300" {
+	if l := request(t, w, f, "REQ xdg_surface.set_window_geometry"); l != "REQ xdg_surface.set_window_geometry 10 10 400 300" {
 		t.Errorf("geometry: %q", l)
 	}
 	if pw, ph, _ := w.Size(); pw != 420 || ph != 320 {
@@ -189,7 +198,7 @@ func TestWaylandShadowInsets(t *testing.T) {
 	}
 	f.do("configure 500 400") // the visible window's new size
 	pump(t, w, time.Second, func(e Event) bool { return e.Kind == EvResize })
-	if l := f.wait("REQ xdg_surface.set_window_geometry", 3*time.Second); l != "REQ xdg_surface.set_window_geometry 10 10 500 400" {
+	if l := request(t, w, f, "REQ xdg_surface.set_window_geometry"); l != "REQ xdg_surface.set_window_geometry 10 10 500 400" {
 		t.Errorf("geometry after configure: %q", l)
 	}
 	if pw, ph, _ := w.Size(); pw != 520 || ph != 420 {
@@ -203,7 +212,7 @@ func TestWaylandExternalHandle(t *testing.T) {
 	if h, ok := w.ExternalHandle(); ok {
 		t.Fatalf("handle %q before the export finished", h)
 	}
-	f.wait("REQ zxdg_exporter_v2.export_toplevel", 3*time.Second)
+	request(t, w, f, "REQ zxdg_exporter_v2.export_toplevel")
 	if !pumpUntil(t, w, 3*time.Second, func() bool { _, ok := w.ExternalHandle(); return ok }) {
 		t.Fatal("no handle after the export")
 	}
