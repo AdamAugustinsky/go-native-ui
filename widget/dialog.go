@@ -42,6 +42,8 @@ type Dialog struct {
 //
 // Everything beneath the dialog is inert: no pointer, scrolling, drags,
 // text input or shortcuts reach it (ui.OverlayModal), and Tab stays inside.
+// Commands of a menu model are held back too, except the edit commands for a
+// text field in the dialog and the ones marked menu.Command.InModal.
 // Choosing an action closes the dialog (sets *open to false) and returns true
 // from Action once. Escape cancels: it closes the dialog and sets Cancelled.
 // Enter chooses the primary action (the first ButtonPrimary) when the focus is

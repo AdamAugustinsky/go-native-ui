@@ -18,8 +18,13 @@ import "gonativeui/ui"
 // When no text field has the focus it fires like any other command, so that
 // a list can copy its selection.
 //
-// While a modal overlay is open (ui.Context.ModalOpen) shortcuts do not match
-// and system commands are dropped: the dialog owns the keys.
+// While a modal overlay is open (ui.Context.ModalOpen) the dialog owns the
+// keys, and commands are held back with two exceptions: a command with an edit
+// role still reaches a text field that has the focus inside the modal, as an
+// edit action (the shortcut of an edit command that the field did not claim
+// too); and a command marked InModal fires as usual. Every other command and
+// shortcut is dropped (a system command) or left unmatched (a shortcut, whose
+// key stays unclaimed for the dialog's own widgets).
 //
 // The commands of a frame wait in a queue of 16; more are dropped. They are
 // kept until the next Match of another frame.
@@ -34,11 +39,11 @@ func (m *Model) Match(c *ui.Context) {
 		if !ok {
 			break
 		}
-		if i, known := m.index(ID(id)); known && !modal {
+		if i, known := m.index(ID(id)); known && (!modal || m.inModal(c, i)) {
 			m.dispatch(c, i)
 		}
 	}
-	if modal || len(m.keys) == 0 {
+	if len(m.keys) == 0 {
 		return
 	}
 	for k := 0; k < c.KeyCount(); k++ {
@@ -48,7 +53,7 @@ func (m *Model) Match(c *ui.Context) {
 		}
 		for j := range m.keys {
 			if m.keys[j].key == e.Code && m.keys[j].mods == e.Mods {
-				if i := m.keys[j].idx; !hasBit(m.off, i) {
+				if i := m.keys[j].idx; !hasBit(m.off, i) && (!modal || m.inModal(c, i)) {
 					c.ClaimKey(k)
 					m.dispatch(c, i)
 				}
@@ -56,6 +61,13 @@ func (m *Model) Match(c *ui.Context) {
 			}
 		}
 	}
+}
+
+// inModal reports whether command i may act while a modal overlay is open: it
+// is marked InModal, or it has an edit role and a text field has the focus.
+func (m *Model) inModal(c *ui.Context, i int) bool {
+	cmd := &m.cmds[i]
+	return cmd.InModal || (cmd.Role.editAction() != 0 && c.TextFieldFocused())
 }
 
 // dispatch queues command i, or turns it into an edit action.
