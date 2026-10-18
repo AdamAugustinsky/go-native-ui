@@ -296,6 +296,9 @@ jobs:
           go build -trimpath -ldflags="-s -w" -o bin/pilot ./cmd/pilot
           xvfb-run -a -s "-screen 0 1280x800x24" \
             ./bin/pilot -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 420s | tee pilot-linux-${{ matrix.arch }}-x11.json
+          go build -trimpath -ldflags="-s -w" -o bin/gallery ./cmd/gallery
+          xvfb-run -a -s "-screen 0 1280x800x24" \
+            ./bin/gallery -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 420s | tee gallery-linux-${{ matrix.arch }}-x11.json
       - name: spike bench + gates (Wayland on headless Weston)
         if: matrix.backend == 'wayland'
         run: |
@@ -310,15 +313,18 @@ jobs:
           WAYLAND_DISPLAY=wayland-ci ./bin/listbench -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 120s | tee listbench-linux-${{ matrix.arch }}-wayland.json
           go build -trimpath -ldflags="-s -w" -o bin/pilot ./cmd/pilot
           WAYLAND_DISPLAY=wayland-ci ./bin/pilot -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 420s | tee pilot-linux-${{ matrix.arch }}-wayland.json
-      - name: listbench + rex + pilot offscreen PNGs
+          go build -trimpath -ldflags="-s -w" -o bin/gallery ./cmd/gallery
+          WAYLAND_DISPLAY=wayland-ci ./bin/gallery -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 420s | tee gallery-linux-${{ matrix.arch }}-wayland.json
+      - name: listbench + rex + pilot + gallery offscreen PNGs
         run: |
           go run ./cmd/rexlook/rex/rexshot -o rex-linux-${{ matrix.arch }}-${{ matrix.backend }}.png
           go run ./cmd/listbench -o listbench-linux-${{ matrix.arch }}-${{ matrix.backend }}.png
           go run ./cmd/pilot/pilotshot -o pilot-linux-${{ matrix.arch }}-${{ matrix.backend }}.png
+          go run ./cmd/gallery -o gallery-linux-${{ matrix.arch }}-${{ matrix.backend }}.png -o-dark gallery-linux-${{ matrix.arch }}-${{ matrix.backend }}-dark.png
       - name: summary
         if: always()
         run: |
-          for f in spike-linux-${{ matrix.arch }}-${{ matrix.backend }}.json listbench-linux-${{ matrix.arch }}-${{ matrix.backend }}.json pilot-linux-${{ matrix.arch }}-${{ matrix.backend }}.json; do
+          for f in spike-linux-${{ matrix.arch }}-${{ matrix.backend }}.json listbench-linux-${{ matrix.arch }}-${{ matrix.backend }}.json pilot-linux-${{ matrix.arch }}-${{ matrix.backend }}.json gallery-linux-${{ matrix.arch }}-${{ matrix.backend }}.json; do
             [ -f "$f" ] && { echo '```json'; cat "$f"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
           done
           [ -f weston.log ] && tail -n 40 weston.log || true
@@ -333,4 +339,7 @@ jobs:
             rex-linux-${{ matrix.arch }}-${{ matrix.backend }}.png
             pilot-linux-${{ matrix.arch }}-${{ matrix.backend }}.json
             pilot-linux-${{ matrix.arch }}-${{ matrix.backend }}.png
+            gallery-linux-${{ matrix.arch }}-${{ matrix.backend }}.json
+            gallery-linux-${{ matrix.arch }}-${{ matrix.backend }}.png
+            gallery-linux-${{ matrix.arch }}-${{ matrix.backend }}-dark.png
           if-no-files-found: ignore
