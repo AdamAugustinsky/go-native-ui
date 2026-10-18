@@ -1,6 +1,10 @@
 package ui
 
-import "unicode/utf8"
+import (
+	"unicode/utf8"
+
+	"gonativeui/platform"
+)
 
 // Mouse buttons (indices into the Input arrays).
 const (
@@ -216,7 +220,7 @@ type Input struct {
 	// for the frame it arrives in, PasteTag names the field that asked. Only
 	// the text field with that key takes it, and only while it has focus,
 	// like an input-method commit; otherwise it is dropped. Set it with
-	// SetPaste, which reuses Paste's storage.
+	// SetPaste, which reuses Paste's storage (kept up to MaxKeptPaste).
 	Paste    []byte
 	PasteTag Key
 	HasPaste bool
@@ -368,14 +372,30 @@ func (in *Input) ClearFrame() {
 	in.FocusGained = false
 	in.NEdit, in.NCommands, in.NActions = 0, 0, 0
 	in.HasPaste, in.HasReplace, in.ReplaceN = false, false, 0
-	if cap(in.Paste) > maxKeptPaste { // do not hold on to a huge paste
+	if cap(in.Paste) > MaxKeptPaste { // do not hold on to more than a supported paste
 		in.Paste = nil
 	}
 	in.Paste = in.Paste[:0]
 }
 
-// maxKeptPaste is the largest Paste buffer ClearFrame keeps.
-const maxKeptPaste = 1 << 20
+// MaxKeptPaste is the largest storage for pasted text that an Input keeps from
+// one frame to the next: the most the platform delivers (platform.MaxPaste,
+// 16 MiB), so that repeated supported pastes of any size reuse the storage the
+// first one grew and allocate nothing. The storage stays reserved after a
+// large paste; ReleasePaste gives it back.
+const MaxKeptPaste = platform.MaxPaste
+
+// ReservePaste makes room for a paste of up to n bytes (at most MaxKeptPaste)
+// now, so that not even the first one allocates.
+func (in *Input) ReservePaste(n int) {
+	n = min(max(n, 0), MaxKeptPaste)
+	if cap(in.Paste) < n {
+		in.Paste = append(make([]byte, 0, n), in.Paste...)
+	}
+}
+
+// ReleasePaste drops the storage of pasted text; the next paste grows it again.
+func (in *Input) ReleasePaste() { in.Paste = nil }
 
 // Signal is what a box reports about the pointer and keyboard this frame.
 type Signal struct {

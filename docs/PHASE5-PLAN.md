@@ -116,11 +116,18 @@ func (v *Files) Build(c *ui.Context) {
 3. commands, through `menu` shortcut matching;
 4. the widgets' own keys (activation, list navigation, Tab traversal).
 
+**Escape.**
+- A text field in the main tree claims it and reports Cancelled.
+- A text field inside a popup or a modal sees it and reports Cancelled but does not claim it: the overlay takes it too. Escape in a dialog's text field cancels the dialog; in a popup's, it closes the popup. A search field that clears itself on Escape takes the key, so the dialog is not also cancelled.
+- While the field shows an input-method composition, Escape cancels only the composition (`Context.IMECancel`); the key goes no further.
+- With overlays stacked, only the topmost popup or modal takes Enter and Escape, whatever order they are built in (`Context.OverlayTopmost`). A dialog's default action never takes Enter while disabled.
+
 **macOS menus.** Native menus pre-empt keys, so the Edit menu's items become edit actions on the focused field. The field's own chords are then not also delivered as keys. A chord is handled once.
 
 **The clipboard is asynchronous.**
 - **Copy and cut** give the platform the bytes (`platform.SetClipboard([]byte)`); it copies them into its own buffer.
 - **Paste** is a request (`platform.RequestPaste`). The bytes arrive later in an `EvPaste` event, in a reusable buffer, tagged for the field that asked. They are dropped if focus has moved, which is the rule IME commits already follow.
+- **Storage:** `ui.Input` keeps the paste buffer between frames up to `ui.MaxKeptPaste` (the platform's `MaxPaste`, 16 MiB), so repeated pastes of any supported size allocate only the first time. `ReservePaste` grows it up front; `ReleasePaste` gives it back.
 - **Limits:** transfers are size-limited and cancellable. On macOS and Windows the event comes within the same frame or the next. On Linux it comes when the transfer from the other app finishes.
 - **Gate:** the exact allocation gate covers copy, cut and paste.
 
@@ -133,7 +140,12 @@ func (v *Files) Build(c *ui.Context) {
 - Escape closes the innermost popup;
 - focus moves into it when it opens and goes back when it closes.
 
-**A modal** (Dialog) blocks everything beneath it: hit testing, scrolling, drags (an active drag is cancelled), text input, and every shortcut except its own. Tab is trapped inside it.
+**A modal** (Dialog) blocks everything beneath it: hit testing, scrolling, drags (an active drag is cancelled), text input, and all commands and shortcuts, with these exceptions (see "Commands and menus"):
+- Edit-role commands (Copy, Cut, Paste, Undo, Redo, Select All, Delete) still reach a text field that has the focus inside the topmost modal, as edit actions.
+- A command marked `Command.InModal` fires as usual.
+- The modal's own keys (Enter, Escape, its widgets' keys) are taken by its widgets through the usual key claiming; a shortcut that is held back stays unclaimed for them.
+
+Tab is trapped inside it. With modals stacked, only the topmost takes input.
 
 **Focus traversal:**
 - Tab and Shift+Tab move through focusable boxes in build order;
@@ -162,6 +174,14 @@ func (v *Files) Build(c *ui.Context) {
 **Registration.** Commands are registered once: id, title, shortcut, and whether they are app-wide (Quit, About, New Window) or per window. Shortcuts use Primary: ⌘ on macOS, Ctrl elsewhere.
 
 **State.** A command's enabled and checked state is mutable. The focused window's Build sets it each frame, and app-wide commands also have defaults.
+
+**While a modal is open.**
+- Edit-role commands (Copy, Cut, Paste, Undo, Redo, Select All, Delete), from a native menu, a drawn menu or a shortcut, still reach a focused text field inside the topmost modal, as edit actions (acting once, never as app commands). Without such a field they are dropped.
+- Every other command and shortcut is dropped, unless the command is marked `Command.InModal` (Quit, a Help window): it then fires normally, and its key is claimed.
+- A shortcut that is held back is not claimed, so the dialog's widgets can take the key.
+- A text field beneath the modal never counts as focused.
+
+**A drawn menu's edit commands** act on the text field that had the focus when the menu opened: a click on the menu bar leaves the focus alone (`ui.KeepFocus`), and choosing an item gives the focus back before the next frame, where the command is dispatched as an edit action.
 
 **Delivery.**
 - Per-window commands go to the focused window's next Build (`k.Command(id)`), queued in order, each delivered exactly once.

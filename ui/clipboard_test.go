@@ -124,10 +124,10 @@ func TestSetPasteReusesStorage(t *testing.T) {
 	if in.HasPaste || len(in.Paste) != 0 {
 		t.Fatal("a failed answer delivers nothing")
 	}
-	in.SetPaste(9, make([]byte, 2<<20), true)
+	in.SetPaste(9, make([]byte, MaxKeptPaste+1), true)
 	in.ClearFrame()
-	if cap(in.Paste) > maxKeptPaste {
-		t.Fatal("a huge paste buffer is kept")
+	if cap(in.Paste) > MaxKeptPaste {
+		t.Fatal("a paste buffer beyond the platform's limit is kept")
 	}
 }
 
@@ -281,5 +281,40 @@ func TestClipboardCycleAllocatesNothing(t *testing.T) {
 	}
 	if n := testing.AllocsPerRun(30, cycle); n != 0 {
 		t.Fatalf("%v allocations per copy/cut/paste/undo/redo cycle", n)
+	}
+}
+
+// Repeated supported pastes reuse the storage of the first: even a large one
+// allocates nothing after it.
+func TestLargePasteReusesStorage(t *testing.T) {
+	big := make([]byte, 2<<20)
+	for i := range big {
+		big[i] = 'a' + byte(i%26)
+	}
+	var in Input
+	cycle := func() {
+		in.SetPaste(7, big, true)
+		if !in.HasPaste || len(in.Paste) != len(big) {
+			t.Fatal("paste not delivered")
+		}
+		in.ClearFrame()
+	}
+	cycle() // the first grows the storage
+	if n := testing.AllocsPerRun(20, cycle); n != 0 {
+		t.Fatalf("a repeated 2 MiB paste allocates %v times", n)
+	}
+	// a paste over the platform's limit is not kept
+	in.SetPaste(7, make([]byte, MaxKeptPaste+1), true)
+	in.ClearFrame()
+	if cap(in.Paste) != 0 {
+		t.Fatalf("storage of %d bytes kept beyond the limit", cap(in.Paste))
+	}
+	in.ReservePaste(1 << 20)
+	if n := testing.AllocsPerRun(20, func() { in.SetPaste(7, big[:1<<20], true); in.ClearFrame() }); n != 0 {
+		t.Fatalf("a reserved paste allocates %v times", n)
+	}
+	in.ReleasePaste()
+	if cap(in.Paste) != 0 {
+		t.Fatal("ReleasePaste kept the storage")
 	}
 }

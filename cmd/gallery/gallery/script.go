@@ -17,22 +17,23 @@ type step = widgettest.Step
 
 // Step constructors; the target comes first.
 var (
-	click    = widgettest.Click
-	rclick   = widgettest.RClick
-	move     = widgettest.Move
-	pause    = widgettest.Pause
-	idle     = widgettest.Idle
-	settle   = widgettest.Settle
-	key      = widgettest.Key
-	keys     = widgettest.Keys
-	typeText = widgettest.Type
-	waitFor  = widgettest.WaitFor
-	waitGone = widgettest.WaitGone
-	wheel    = widgettest.Wheel
-	drag     = widgettest.Drag
-	sweep    = widgettest.Sweep
-	down     = widgettest.Down
-	up       = widgettest.Up
+	click      = widgettest.Click
+	rclick     = widgettest.RClick
+	move       = widgettest.Move
+	pause      = widgettest.Pause
+	idle       = widgettest.Idle
+	settle     = widgettest.Settle
+	key        = widgettest.Key
+	keys       = widgettest.Keys
+	typeText   = widgettest.Type
+	waitFor    = widgettest.WaitFor
+	waitGone   = widgettest.WaitGone
+	waitChange = widgettest.WaitChange
+	wheel      = widgettest.Wheel
+	drag       = widgettest.Drag
+	sweep      = widgettest.Sweep
+	down       = widgettest.Down
+	up         = widgettest.Up
 )
 
 // The modifiers of a step: the primary one is ⌘ on macOS and Ctrl elsewhere.
