@@ -114,7 +114,10 @@ func TestSetClipboardTextAndRequestPaste(t *testing.T) {
 	if _, got := pasteOf(t, w, 1, time.Second); got != "a\uFFFDb" {
 		t.Errorf("invalid UTF-8 pasted as %q", got)
 	}
-	// No text on the clipboard: the paste fails.
+	// No text on the clipboard: the paste fails (after the settle time).
+	old := clipSettleNs
+	clipSettleNs = int64(50 * time.Millisecond)
+	defer func() { clipSettleNs = old }()
 	opened := false
 	for i := 0; i < 200 && !opened; i++ { // another program (a clipboard manager) may have it open for a moment
 		if opened = win32.Bool(win32.Call(pOpenClipboard, w.hwnd)); !opened {
@@ -765,6 +768,70 @@ func waitIdleOrExit(t *testing.T, w *Window) {
 	t.Fatal("the worker did not finish")
 }
 
+// replaceClipboardAfter has another thread replace the clipboard after d with the
+// bytes of a private format, or with the text when text is not empty, or leave
+// it empty when neither; it returns when that is done.
+func replaceClipboardAfter(t *testing.T, d time.Duration, text string, private bool) (done chan struct{}) {
+	done = make(chan struct{})
+	go func() {
+		defer close(done)
+		runtime.LockOSThread()
+		time.Sleep(d)
+		for i := 0; i < 200; i++ {
+			if win32.Bool(win32.Call(pOpenClipboard, 0)) {
+				break
+			}
+			time.Sleep(time.Millisecond)
+		}
+		win32.Call(pEmptyClipboard)
+		switch {
+		case text != "":
+			win32.Call(pSetClipboardData, cfUnicodeText, allocClipboardText([]byte(text)))
+		case private:
+			win32.Call(pSetClipboardData, 0x200, win32.Call(pGlobalAlloc, gmemMoveable, 8))
+		}
+		win32.Call(pCloseClipboard)
+	}()
+	return done
+}
+
+// A clipboard that is momentarily empty (another program has emptied it and not
+// yet set its text) is looked at again, so the paste gets the text instead of
+// a failure; a clipboard with nothing in it, or only other formats, fails, the
+// first one after the settle time and the second at once.
+func TestRequestPasteLooksAgainAtAnEmptyClipboard(t *testing.T) {
+	w := openTestWindow(t)
+	emptyClipboardOwnerless(t)
+
+	// Text arrives 100 ms after the request.
+	done := replaceClipboardAfter(t, 100*time.Millisecond, "arrives late", false)
+	start := time.Now()
+	e, got := pasteOf(t, w, 1, 2*time.Second)
+	<-done
+	if e.Flags != 0 || got != "arrives late" {
+		t.Errorf("answered %q (flags %v) after %v, want the text that arrived 100 ms later", got, e.Flags, time.Since(start))
+	}
+
+	// Nothing ever arrives: the failure comes after the settle time, not at once.
+	old := clipSettleNs
+	clipSettleNs = int64(200 * time.Millisecond)
+	defer func() { clipSettleNs = old }()
+	emptyClipboardOwnerless(t)
+	start = time.Now()
+	e, got = pasteOf(t, w, 2, 2*time.Second)
+	if d := time.Since(start); e.Flags&FlagFailed == 0 || d < 150*time.Millisecond || d > time.Second {
+		t.Errorf("empty clipboard: %+v %q after %v, want a failure after about 200 ms", e, got, d)
+	}
+
+	// Other formats only: no text will come, so it fails at once.
+	<-replaceClipboardAfter(t, 0, "", true)
+	start = time.Now()
+	e, got = pasteOf(t, w, 3, 2*time.Second)
+	if d := time.Since(start); e.Flags&FlagFailed == 0 || d > 100*time.Millisecond {
+		t.Errorf("clipboard with another format: %+v %q after %v, want a failure at once", e, got, d)
+	}
+}
+
 // powershell runs a script in Windows PowerShell, the other process of the
 // round trips.
 func powershell(t *testing.T, script string, env ...string) {
@@ -800,25 +867,9 @@ func TestClipboardWithPowerShell(t *testing.T) {
 	if got, err := os.ReadFile(out); err != nil || string(got) != strings.ReplaceAll(fromUs, "\n", "\r\n") {
 		t.Errorf("Get-Clipboard read %q (%v), want the text with \\r\\n line ends", got, err)
 	}
-	// The other process has exited, but what it put on the clipboard (an OLE
-	// data object it flushes as it ends) may take a moment to be readable under
-	// load: the first answers on a busy runner were failures at once, with the
-	// text there a moment later. Ask again for a few seconds.
-	want := strings.ReplaceAll(fromThem, "\r\n", "\n")
-	var e Event
-	var got string
-	tries := 0
-	for end := time.Now().Add(10 * time.Second); ; {
-		tries++
-		if e, got = pasteOf(t, w, 6, 2*time.Second); (e.Flags == 0 && got == want) || time.Now().After(end) {
-			break
-		}
-		w.Wait(int64(250 * time.Millisecond))
-	}
-	if e.Flags != 0 || got != want {
-		t.Logf("DIAG %q", clipDiag)
-		t.Errorf("RequestPaste answered %q (flags %v) after Set-Clipboard, %d tries; a synchronous read sees %q", got, e.Flags, tries, Clipboard())
-	} else if tries > 1 {
-		t.Logf("DIAG the text of the other process was readable at try %d: %q", tries, clipDiag)
+	// The other process's text may take a moment to be readable after it has
+	// emptied the clipboard; the paste looks again (see clipWorker.read).
+	if e, got := pasteOf(t, w, 6, 2*time.Second); e.Flags != 0 || got != strings.ReplaceAll(fromThem, "\r\n", "\n") {
+		t.Errorf("RequestPaste answered %q (flags %v) after Set-Clipboard; a synchronous read sees %q", got, e.Flags, Clipboard())
 	}
 }

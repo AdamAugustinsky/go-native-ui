@@ -3,9 +3,7 @@ package platform
 import (
 	"runtime"
 	"slices"
-	"strconv"
 	"sync/atomic"
-	"syscall"
 	"time"
 	"unsafe"
 
@@ -49,9 +47,10 @@ import (
 // between.
 
 const (
-	wmClip        = 0x8000 + 2 // WM_APP+2: the clipboard worker has finished a request
-	clipOpenSleep = 2 * time.Millisecond
-	clipCloseWait = 20 * time.Millisecond // how long Close waits for an idle worker to end
+	wmClip         = 0x8000 + 2 // WM_APP+2: the clipboard worker has finished a request
+	clipOpenSleep  = 2 * time.Millisecond
+	clipSettleStep = 10 * time.Millisecond // between two looks at a clipboard that has no text yet
+	clipCloseWait  = 20 * time.Millisecond // how long Close waits for an idle worker to end
 )
 
 // clipHook, when set, is called on the worker's thread at the stages of a
@@ -71,6 +70,10 @@ func clipStage(stage int) {
 		(*h)(stage)
 	}
 }
+
+// clipSettleNs is how long a paste keeps looking at a clipboard that has no
+// text yet but may get it (see read). A variable so that tests can shorten it.
+var clipSettleNs int64 = 500_000_000
 
 // The kinds of request the worker runs.
 const (
@@ -375,52 +378,46 @@ func (c *clipWorker) open(owner uintptr, r clipReq) bool {
 // read decodes the clipboard's text into c.buf. It reports the length and
 // whether there is any text (not empty, not over MaxPaste). Blocking is fine
 // here.
+//
+// A clipboard with no text is not always final. When another program replaces
+// the clipboard, the moment between its EmptyClipboard and the text being
+// readable can be seen from outside (measured on a loaded runner, right after a
+// PowerShell Set-Clipboard: the clipboard had no format at all, and
+// GetClipboardData(CF_UNICODETEXT) failed at once with ERROR_NOT_FOUND; the
+// text was there a moment later). So a clipboard with no format at all, or one
+// that offers the text and gives no handle, is looked at again for up to
+// clipSettleNs (or until the request's limit); a clipboard that holds other
+// formats only, or text that is empty or too long, is answered at once.
 func (c *clipWorker) read(owner uintptr, r clipReq) (n int, ok bool) {
-	if !c.open(owner, r) {
-		clipDiag = append(clipDiag, "open failed")
-		return 0, false
-	}
-	buf := c.buf[:0]
-	diag := ""
-	h, _, e := syscall.SyscallN(pGetClipboardData, cfUnicodeText)
-	if h == 0 {
-		fm := ""
-		for f := uintptr(0); ; {
-			f = win32.Call(pEnumClipboardFormats, f)
-			if f == 0 {
-				break
-			}
-			fm += " " + strconv.Itoa(int(f))
+	settle := min(nanotime()+clipSettleNs, r.give)
+	for {
+		if !c.open(owner, r) {
+			return 0, false
 		}
-		diag = "GetClipboardData NULL err=" + strconv.Itoa(int(e)) + " avail13=" + strconv.Itoa(int(win32.Call(pIsClipboardFormatAvailable, 13))) + " count=" + strconv.Itoa(int(win32.Call(pCountClipboardFormats))) + " formats:" + fm + " owner=" + strconv.Itoa(int(win32.Call(pGetClipboardOwner))) + " t=" + time.Now().Format("15:04:05.000")
-	} else if c.alive(r) {
-		if p := win32.Call(pGlobalLock, h); p != 0 {
-			u := unsafe.Slice((*uint16)(win32.Ptr(p)), int(win32.Call(pGlobalSize, h))/2)
-			buf = slices.Grow(buf, min(3*len(u), MaxPaste+4)) // a unit is at most 3 bytes of UTF-8
-			buf, ok = utf16Decode(buf, u, MaxPaste)
-			win32.Call(pGlobalUnlock, h)
-			if !ok || len(buf) == 0 {
-				diag = "decode not ok or empty, units=" + strconv.Itoa(len(u))
+		buf := c.buf[:0]
+		h := win32.Call(pGetClipboardData, cfUnicodeText)
+		retry := false
+		if h != 0 {
+			if c.alive(r) { // an owner that took its time may have been given up on
+				if p := win32.Call(pGlobalLock, h); p != 0 {
+					u := unsafe.Slice((*uint16)(win32.Ptr(p)), int(win32.Call(pGlobalSize, h))/2)
+					buf = slices.Grow(buf, min(3*len(u), MaxPaste+4)) // a unit is at most 3 bytes of UTF-8
+					buf, ok = utf16Decode(buf, u, MaxPaste)
+					win32.Call(pGlobalUnlock, h)
+				}
 			}
 		} else {
-			diag = "GlobalLock NULL"
+			retry = win32.Call(pCountClipboardFormats) == 0 || win32.Bool(win32.Call(pIsClipboardFormatAvailable, cfUnicodeText))
 		}
+		win32.Call(pCloseClipboard)
+		c.buf = buf // only this goroutine uses buf until it publishes the answer
+		if retry && nanotime() < settle && c.alive(r) {
+			time.Sleep(clipSettleStep)
+			continue
+		}
+		return len(buf), ok && len(buf) > 0
 	}
-	win32.Call(pCloseClipboard)
-	if diag != "" {
-		clipDiag = append(clipDiag, diag)
-	}
-	c.buf = buf // only this goroutine uses buf until it publishes the answer
-	return len(buf), ok && len(buf) > 0
 }
-
-var (
-	clipDiag                    []string // TEMPORARY
-	pEnumClipboardFormats       = win32.Proc(user32, "EnumClipboardFormats")
-	pIsClipboardFormatAvailable = win32.Proc(user32, "IsClipboardFormatAvailable")
-	pCountClipboardFormats      = win32.Proc(user32, "CountClipboardFormats")
-	pGetClipboardOwner          = win32.Proc(user32, "GetClipboardOwner")
-)
 
 // write puts c.cwork on the clipboard as CF_UNICODETEXT. If the clipboard
 // stays busy until the request's limit, the copy is dropped. The clipboard is
