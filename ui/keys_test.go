@@ -300,3 +300,48 @@ func TestFocusTransferDuringBuildAppliesInputOnce(t *testing.T) {
 		})
 	}
 }
+
+// Escape in a text field: the field reports Cancelled. In the main tree the
+// field claims the key; inside an overlay it leaves it for the overlay, so a
+// dialog's field does not swallow the dialog's Escape.
+func TestEscapePropagationFromTextField(t *testing.T) {
+	for _, inOverlay := range []bool{false, true} {
+		r := newRig(t, false)
+		var cancelled, taken int
+		build := func(c *Context) {
+			if inOverlay {
+				c.BeginOverlay(1, OverlayModal, [4]float32{0, 0, 400, 100}, PlaceCenter)
+			}
+			c.NextSize(Px(200), Px(24))
+			res := c.TextField("g", &r.buf)
+			if res.Cancelled {
+				cancelled++
+			}
+			if inOverlay {
+				if c.TakeKey(KeyEscape, 0) { // what the owning modal does
+					taken++
+				}
+				c.EndOverlay()
+			}
+			r.res = res
+		}
+		for i := 0; i < 3; i++ {
+			r.harness.frame(build)
+		}
+		var key Key
+		build2 := func(c *Context) { build(c); key = c.KeyOf(r.res.ID) }
+		r.harness.frame(build2)
+		r.c.SetFocus(key)
+		r.harness.frame(build2)
+		r.harness.frame(build2)
+		cancelled, taken = 0, 0
+		r.in.PushKey(KeyEvent{Code: KeyEscape, Down: true})
+		r.harness.frame(build2)
+		if cancelled != 1 {
+			t.Fatalf("overlay=%v: field reported Cancelled %d times", inOverlay, cancelled)
+		}
+		if want := map[bool]int{false: 0, true: 1}[inOverlay]; taken != want {
+			t.Fatalf("overlay=%v: the owner took Escape %d times, want %d", inOverlay, taken, want)
+		}
+	}
+}

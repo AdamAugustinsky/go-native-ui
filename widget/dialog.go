@@ -19,6 +19,7 @@ type Dialog struct {
 
 	k       *Kit
 	open    *bool
+	okey    ui.Key // the overlay's key
 	opening bool
 	defSeen bool
 	onAct   bool // the focus is on an action built earlier
@@ -45,7 +46,14 @@ type Dialog struct {
 // from Action once. Escape cancels: it closes the dialog and sets Cancelled.
 // Enter chooses the primary action (the first ButtonPrimary) when the focus is
 // not on another action or a text field. The primary action has the focus
-// when the dialog opens. Text that is too long wraps (Paragraph).
+// when the dialog opens; a disabled one (BeginDisabled) neither takes the
+// focus nor Enter. Text that is too long wraps (Paragraph).
+//
+// With dialogs stacked, only the topmost takes Enter and Escape, whatever
+// order they are built in (ui.Context.OverlayTopmost); a dialog that opens
+// above another takes them from the next frame on. Escape in a text field
+// inside a dialog cancels the dialog too, unless the field is showing an
+// input-method composition, which Escape cancels instead.
 func (k *Kit) BeginDialog(label, title string, open *bool) Dialog {
 	d := Dialog{k: k, open: open}
 	if !*open {
@@ -55,6 +63,7 @@ func (k *Kit) BeginDialog(label, title string, open *bool) Dialog {
 	p, px := &k.r.Pal, &k.r.Px
 	_, ident := ui.SplitLabel(label)
 	okey := ui.HashString(c.ParentKey(), ident)
+	d.okey = okey
 	d.Visible = true
 	d.opening = !c.OverlayOpen(okey)
 	t := c.AnimateValueFrom(ui.KeyN(dialogBase, uint64(okey)+1), 0, 1, k.r.Motion.Fade)
@@ -131,7 +140,7 @@ func (d *Dialog) Action(label string, kind ButtonKind) bool {
 	def := kind == ButtonPrimary && !d.defSeen
 	if def {
 		d.defSeen = true
-		if d.opening {
+		if d.opening && !k.off() {
 			c.SetFocus(key)
 			c.SetFocusVisible(false)
 		}
@@ -141,7 +150,7 @@ func (d *Dialog) Action(label string, kind ButtonKind) bool {
 	}
 	s := k.ButtonKind(label, kind)
 	chosen := s.Clicked
-	if def && !chosen && !d.onAct && !c.TextFieldFocused() && c.TakeKey(ui.KeyEnter, 0) {
+	if def && !chosen && !k.off() && !d.onAct && !c.TextFieldFocused() && c.OverlayTopmost(d.okey) && c.TakeKey(ui.KeyEnter, 0) {
 		chosen = true
 	}
 	if chosen {
@@ -158,7 +167,7 @@ func (k *Kit) EndDialog(d *Dialog) {
 	}
 	c := k.c
 	d.EndActions()
-	if c.TakeKey(ui.KeyEscape, 0) {
+	if c.OverlayTopmost(d.okey) && c.TakeKey(ui.KeyEscape, 0) {
 		d.Cancelled = true
 		*d.open = false
 		c.RequestFrame()

@@ -116,6 +116,12 @@ func (v *Files) Build(c *ui.Context) {
 3. commands, through `menu` shortcut matching;
 4. the widgets' own keys (activation, list navigation, Tab traversal).
 
+**Escape.**
+- A text field in the main tree claims it and reports Cancelled.
+- A text field inside a popup or a modal sees it and reports Cancelled but does not claim it: the overlay takes it too. Escape in a dialog's text field cancels the dialog; in a popup's, it closes the popup. A search field that clears itself on Escape takes the key, so the dialog is not also cancelled.
+- While the field shows an input-method composition, Escape cancels only the composition (`Context.IMECancel`); the key goes no further.
+- With overlays stacked, only the topmost popup or modal takes Enter and Escape, whatever order they are built in (`Context.OverlayTopmost`). A dialog's default action never takes Enter while disabled.
+
 **macOS menus.** Native menus pre-empt keys, so the Edit menu's items become edit actions on the focused field. The field's own chords are then not also delivered as keys. A chord is handled once.
 
 **The clipboard is asynchronous.**
