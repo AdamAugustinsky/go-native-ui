@@ -328,7 +328,7 @@ jobs:
             ./bin/listbench -bench -gate -allocsites -allow-unpaced -max-cpu-us 0 -timeout 120s | tee listbench-linux-${{ matrix.arch }}-x11.json
           go build -trimpath -ldflags="-s -w" -o bin/pilot ./cmd/pilot
           xvfb-run -a -s "-screen 0 1280x800x24" \
-            ./bin/pilot -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 420s | tee pilot-linux-${{ matrix.arch }}-x11.json
+            ./bin/pilot -bench -gate -allocsites -allow-unpaced -max-cpu-us 0 -timeout 420s | tee pilot-linux-${{ matrix.arch }}-x11.json
           go build -trimpath -ldflags="-s -w" -o bin/gallery ./cmd/gallery
           xvfb-run -a -s "-screen 0 1280x800x24" \
             ./bin/gallery -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 420s | tee gallery-linux-${{ matrix.arch }}-x11.json
@@ -348,7 +348,7 @@ jobs:
           go build -trimpath -ldflags="-s -w" -o bin/listbench ./cmd/listbench
           WAYLAND_DISPLAY=wayland-ci ./bin/listbench -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 120s | tee listbench-linux-${{ matrix.arch }}-wayland.json
           go build -trimpath -ldflags="-s -w" -o bin/pilot ./cmd/pilot
-          WAYLAND_DISPLAY=wayland-ci ./bin/pilot -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 420s | tee pilot-linux-${{ matrix.arch }}-wayland.json
+          WAYLAND_DISPLAY=wayland-ci ./bin/pilot -bench -gate -allocsites -allow-unpaced -max-cpu-us 0 -timeout 420s | tee pilot-linux-${{ matrix.arch }}-wayland.json
           go build -trimpath -ldflags="-s -w" -o bin/gallery ./cmd/gallery
           WAYLAND_DISPLAY=wayland-ci ./bin/gallery -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 420s | tee gallery-linux-${{ matrix.arch }}-wayland.json
           go build -trimpath -ldflags="-s -w" -o bin/notes ./examples/notes
