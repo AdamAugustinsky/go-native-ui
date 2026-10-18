@@ -365,22 +365,35 @@ func NewSynthBench(rows int) *Bench {
 }
 
 // NewDirBench is a Pilot on a real directory (both panes) through the real
-// fs.Service with watching on.
-func NewDirBench(dir string) (*Bench, error) {
+// fs.Service with watching on. The setup lists the directory off the main
+// thread and gives up after timeout: a listing can block indefinitely (a
+// macOS privacy prompt for ~/Documents, a dead network mount), and the main
+// thread must stay free to report it.
+func NewDirBench(dir string, timeout time.Duration) (*Bench, error) {
 	home, _ := os.UserHomeDir()
 	cwd, _ := os.Getwd()
 	dir = ResolvePath(dir, cwd, home) // as a path field would: absolute, native separators
 	o := Options{Src: fs.NewService(platform.Wake), Home: home}
-	for i := range o.Initial {
-		l := new(fs.Listing)
-		if err := fs.ListDir(dir, l); err != nil {
-			return nil, fmt.Errorf("pilot: %s: %w", dir, err)
+	done := make(chan error, 1)
+	go func() {
+		for i := range o.Initial {
+			l := new(fs.Listing)
+			if err := fs.ListDir(dir, l); err != nil {
+				done <- fmt.Errorf("pilot: %s: %w", dir, err)
+				return
+			}
+			fs.Sort(l, fs.SortName, false)
+			o.Initial[i] = ready(dir, l)
 		}
-		fs.Sort(l, fs.SortName, false)
-		o.Initial[i] = ready(dir, l)
-	}
-	if err := prewarm(o.Src.(*fs.Service), dir); err != nil {
-		return nil, err
+		done <- prewarm(o.Src.(*fs.Service), dir)
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			return nil, err
+		}
+	case <-time.After(timeout):
+		return nil, fmt.Errorf("pilot: listing %s took longer than %v (a privacy prompt waiting for an answer, or a stuck volume?)", dir, timeout)
 	}
 	pl := New(o)
 	return &Bench{Pilot: pl, s: script{pl: pl}}, nil

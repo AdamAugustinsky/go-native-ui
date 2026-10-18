@@ -126,12 +126,34 @@ func (pl *Pilot) ScenePost() {
 	}
 }
 
+// RenderDirsShot renders the first frame Pilot shows for two real directories
+// (sorted by name, hidden files hidden, local time), without traffic lights
+// since a window draws its own. BounceRec uses it as the expected complete
+// content of a launch (tools/bouncerec).
+func RenderDirsShot(path string, w, h int, scale float32, home string, dirs [2]string) (quads, drawCalls int, err error) {
+	opt := Options{Home: home}
+	for i, d := range dirs {
+		l := new(fs.Listing)
+		if err := fs.ListDir(d, l); err == nil {
+			fs.Sort(l, fs.SortName, false)
+		}
+		opt.Initial[i] = ready(d, l)
+	}
+	return shoot(New(opt), path, w, h, scale, true, nil, nil)
+}
+
 // RenderShot renders the scene offscreen at w×h pixels and the given scale
 // (the window is 1200×760 pt) into a PNG at path (with the window's
 // superellipse corners as transparency when corners is set), and returns the
 // quads and draw calls of the frame. It runs on every OS the renderer does.
 func RenderShot(path string, w, h int, scale float32, corners bool) (quads, drawCalls int, err error) {
 	pl := New(SceneOptions())
+	return shoot(pl, path, w, h, scale, corners, pl.SceneSetup, pl.ScenePost)
+}
+
+// shoot renders pl offscreen until it settles (setup before the first frame,
+// post once the rows exist; either may be nil) and writes the PNG.
+func shoot(pl *Pilot, path string, w, h int, scale float32, corners bool, setup, post func()) (quads, drawCalls int, err error) {
 	o, err := app.NewOffscreen(Config(), w, h, scale, pl)
 	if err != nil {
 		return 0, 0, err
@@ -146,11 +168,15 @@ func RenderShot(path string, w, h int, scale float32, corners bool) (quads, draw
 		}
 		return errors.New("pilot: the scene did not settle")
 	}
-	pl.SceneSetup()
+	if setup != nil {
+		setup()
+	}
 	if err := settle(); err != nil {
 		return 0, 0, err
 	}
-	pl.ScenePost()
+	if post != nil {
+		post()
+	}
 	if err := settle(); err != nil {
 		return 0, 0, err
 	}

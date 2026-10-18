@@ -13,6 +13,9 @@
 //	                            and frames were paced
 //	pilot -o out.png            render the offscreen scene (fixed names, sizes and UTC times; a selection
 //	                            and a filter) at 2400×1520 px (-w -h -scale) with traffic lights and corners
+//	pilot -o out.png LEFT [RIGHT]
+//	                            render the first frame for real directories, without traffic lights (the
+//	                            expected complete content for tools/bouncerec)
 //
 // Startup is content-first: both start directories are listed and sorted on
 // goroutines that run before the window system is touched, and the first frame
@@ -74,6 +77,8 @@ func main() {
 
 	var err error
 	switch {
+	case *out != "" && flag.NArg() > 0:
+		err = renderDirsPNG(*out, *w, *h, float32(*scale), flag.Args())
 	case *out != "":
 		err = renderPNG(*out, *w, *h, float32(*scale))
 	case *bench:
@@ -89,6 +94,26 @@ func main() {
 
 func renderPNG(path string, w, h int, scale float32) error {
 	quads, calls, err := pilot.RenderShot(path, w, h, scale, true)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("%d quads, %d draw calls -> %s\n", quads, calls, path)
+	return nil
+}
+
+// renderDirsPNG renders the first frame for real directories (pilot -o out.png
+// LEFT [RIGHT]), the expected content for BounceRec.
+func renderDirsPNG(path string, w, h int, scale float32, args []string) error {
+	home, _ := os.UserHomeDir()
+	var dirs [2]string
+	for i := range dirs {
+		var a string
+		if i < len(args) {
+			a = args[i]
+		}
+		dirs[i] = startDir(a, home)
+	}
+	quads, calls, err := pilot.RenderDirsShot(path, w, h, scale, home, dirs)
 	if err != nil {
 		return err
 	}
@@ -195,7 +220,7 @@ func runBench(rows int, dir string, gate, allowUnpaced, sites bool, maxCPU float
 	rep := report{OS: runtime.GOOS, Arch: runtime.GOARCH, Rows: max(rows, 100)}
 	if dir != "" {
 		var err error
-		if b, err = pilot.NewDirBench(dir); err != nil {
+		if b, err = pilot.NewDirBench(dir, timeout); err != nil {
 			return err
 		}
 		rep.Rows, rep.Dir = 0, dir
