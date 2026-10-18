@@ -123,6 +123,11 @@ jobs:
           ./bin/pilot -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 150s | tee pilot-macos.json
           ./bin/pilot -bench -rows 1000000 -gate -allow-unpaced -max-cpu-us 0 -timeout 150s | tee pilot-1m-macos.json
           { echo '```json'; cat pilot-macos.json pilot-1m-macos.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: live resize (two draws per transaction must not starve the drawable pool)
+        run: |
+          go build -trimpath -ldflags="-s -w" -o bin/rexlook ./cmd/rexlook
+          ./bin/rexlook -live-resize-test | tee rexlook-live-resize-macos.json
+          ./bin/pilot -live-resize-test | tee pilot-live-resize-macos.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:

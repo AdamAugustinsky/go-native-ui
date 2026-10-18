@@ -26,6 +26,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"math"
 	"os"
 	"runtime"
 	"strings"
@@ -72,6 +73,7 @@ func main() {
 	maxCPU := flag.Float64("max-cpu-us", defaultMaxCPUus, "with -gate: main-thread CPU budget in µs per frame (0: do not gate on CPU)")
 	timeout := flag.Duration("timeout", 180*time.Second, "with -bench: give up after this long")
 	sites := flag.Bool("allocsites", false, "with -bench: profile every allocation and print the call stacks of those inside the measured frames")
+	resizeTest := flag.Bool("live-resize-test", false, "macOS: drag the window size through the frame handler (as a user resizing does) and print the result as JSON")
 	verbose := flag.Bool("v", false, "print the startup timeline and listing times to stderr; in a window or bench also a state line every second while frames stop coming")
 	flag.Parse()
 
@@ -81,6 +83,8 @@ func main() {
 		err = renderDirsPNG(*out, *w, *h, float32(*scale), flag.Args())
 	case *out != "":
 		err = renderPNG(*out, *w, *h, float32(*scale))
+	case *resizeTest:
+		err = runResizeTest(flag.Args())
 	case *bench:
 		err = runBench(*rows, *benchDir, *gate, *allowUnpaced, *sites, *maxCPU, *timeout, *verbose)
 	default:
@@ -98,6 +102,45 @@ func renderPNG(path string, w, h int, scale float32) error {
 		return err
 	}
 	fmt.Printf("%d quads, %d draw calls -> %s\n", quads, calls, path)
+	return nil
+}
+
+// runResizeTest opens the normal window (real service, the given or home
+// directories) and drags its size through AppKit's live-resize path
+// (app.RunLiveResizeTest), then prints how many steps drew and what they cost.
+func runResizeTest(args []string) error {
+	home, _ := os.UserHomeDir()
+	o := pilot.Options{Home: home, Src: fs.NewService(platform.Wake)}
+	for i := range o.Initial {
+		var a string
+		if i < len(args) {
+			a = args[i]
+		}
+		o.Initial[i] = listAsync(startDir(a, home))
+	}
+	pl := pilot.New(o)
+	defer pl.Close()
+	cfg := pilot.Config()
+	var sizes [][2]float64
+	for i := 0; i < 150; i++ {
+		f := float64(i) / 149
+		sizes = append(sizes, [2]float64{float64(cfg.Width) - 300 + 400*math.Abs(math.Sin(f*math.Pi*2)), float64(cfg.Height) - 200 + 250*f})
+	}
+	rep, err := app.RunLiveResizeTest(cfg, pl, sizes)
+	if err != nil {
+		return err
+	}
+	printJSON(rep)
+	if rep.HandlerMsMax > app.LiveResizeMaxHandlerMs || rep.DrawFails == rep.HandlerCalls {
+		fmt.Fprintf(os.Stderr, "%s: live-resize test failed: slowest step %.0f ms (limit %d), %d of %d handler calls drew nothing\n",
+			"pilot", rep.HandlerMsMax, app.LiveResizeMaxHandlerMs, rep.DrawFails, rep.HandlerCalls)
+		os.Exit(3)
+	}
+	if rep.Pacing == app.PacingFailed {
+		fmt.Fprintf(os.Stderr, "pilot: live-resize test failed: %d frame events before the drag, %d paced frames after it (%d wanted)\n",
+			rep.FrameEventsBefore, rep.PacedFramesAfter, rep.PacedWanted)
+		os.Exit(3)
+	}
 	return nil
 }
 

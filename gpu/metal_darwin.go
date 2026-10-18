@@ -182,7 +182,11 @@ func (s *Surface) BeginFrame(f *Frame) bool {
 	d, linked := platform.TakeMetalDrawable()
 	f.drawable, f.taken = objc.ID(d), d != 0
 	if !f.taken && !linked {
+		t0 := platform.Now()
 		f.drawable = objc.Send(s.layer, selNextDrawable)
+		if d := platform.Now() - t0; s.live && d > 20e6 && platform.TraceLive() {
+			println("gnui live: nextDrawable blocked", d/1e6, "ms; got a drawable:", f.drawable != 0)
+		}
 	}
 	if f.drawable == 0 {
 		F.Call1(objc.PoolPop, f.pool)
@@ -233,9 +237,20 @@ func (s *Surface) EndFrame(f *Frame) {
 		// that carries the window's new size commits, so the content and the
 		// window frame change together. Order is Apple's: commit, wait until
 		// scheduled, then present the drawable (presentDrawable: is not used).
+		//
+		// Then commit the transaction at once. A presented drawable stays in
+		// use until its transaction commits, and two draws can land in one
+		// transaction (windowDidResize: and a display-link tick in the same
+		// run-loop turn): then the pool runs dry and the next nextDrawable
+		// blocks for its full 1 s timeout, because the commit it waits for
+		// cannot happen while we block. Measured on the MacBook (hand resize,
+		// GNUI_TRACE_LIVE): nextDrawable blocked 1003 ms. Flushing commits the
+		// window's new size and this frame together, so they still change in
+		// step, and leaves at most one present uncommitted.
 		objc.Send(cb, selCommit)
 		objc.Send(cb, selWaitScheduled)
 		objc.Send(f.drawable, selPresent)
+		objc.Send(clsCATransaction, selFlush)
 	} else {
 		objc.Send1(cb, selPresentDrawable, uintptr(f.drawable))
 		objc.Send(cb, selCommit)

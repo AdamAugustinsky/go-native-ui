@@ -433,6 +433,7 @@ on the surface's layer (`preferredFrameLatency` 1). The first frame uses
 - `gpu.Surface` sees `platform.InLiveResize()` and gets drawables with `nextDrawable`. It presents with `presentsWithTransaction`, so each frame commits together with the window's new size.
 - At `windowDidEndLiveResize:` a new metal link is attached.
 - **Evidence:** a MacBook probe showed `nextDrawable` works again after the link is invalidated (39/39 presents), and the new link paces again (20/20). The layer's `contentsGravity` is top-left, so a frame that isn't redrawn yet is never stretched.
+- **Amendment (phase 4, 2026-10-17): flush after every live present.** Your hand resize froze for 1–2 s at a time, in rexlook and Pilot alike (and in the phase-3 build). A presented drawable stays in use until its transaction commits, and `windowDidResize:` plus a display-link tick could draw twice in one run-loop turn; the pool then ran dry and `nextDrawable` blocked for its full 1 s timeout (measured 1003 ms with `GNUI_TRACE_LIVE=1`). `gpu.Surface` now calls `[CATransaction flush]` right after a live present: the window's new size and the frame still commit together, and at most one present is uncommitted. Slowest step after the fix: 27 ms by hand, 19–24 ms in the simulation. `SimulateLiveResize` now also draws as a tick does after each step, so `-live-resize-test` reproduces the bug (1005 ms without the fix) and fails any step over 250 ms; the macOS CI job runs it for rexlook and Pilot.
 
 ## D19. Measurement tools may be Objective-C
 

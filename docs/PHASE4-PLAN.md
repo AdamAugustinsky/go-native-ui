@@ -67,7 +67,7 @@ is built to prove (ARCHITECTURE §1, §10; D12; D17: the original Rex look).
 
 Built and pushed: `fs` (listing, sorting, filtering, watching and opening on all three OSes), text editing (carets, text field, clipboard, input methods), and Pilot. All 8 CI jobs pass, including the exact allocation gate for Pilot's bench on every OS. An independent review (two review-sol passes, then a scoped re-review of the high-severity fixes) found 34 issues; all are fixed with regression tests except two documented decisions (D27 startup cap) and the known gap below.
 
-Results per exit criterion: [measurements/phase4-macos.md](measurements/phase4-macos.md). Met: 1 (132 ms on the MacBook; frames paced while listing real folders), 2 (58 B/entry; 1M at 1.40–1.48 ms/frame, 0 allocations), 3, 4, 5 (content-first, exec → on glass 161–184 ms, half-bounce 6 of 6), 6 (0 % CPU, 0 idle wakeups while watching `~`), 8. Remaining: your hand test (criterion 7).
+Results per exit criterion: [measurements/phase4-macos.md](measurements/phase4-macos.md). Met: 1 (132 ms on the MacBook; frames paced while listing real folders), 2 (58 B/entry; 1M at 1.40–1.48 ms/frame, 0 allocations), 3, 4, 5 (content-first, exec → on glass 161–184 ms, half-bounce 6 of 6), 6 (0 % CPU, 0 idle wakeups while watching `~`), 7 (your hand test: everything worked except live resize, which froze for 1–2 s; fixed, D18 amendment, and now smooth), 8. **Phase 4 is complete.**
 
 Known gaps carried forward:
 - Press-and-hold accents may produce "eé" (`replacementRange` ignored; design in phase4-text.md).

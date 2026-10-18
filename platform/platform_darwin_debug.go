@@ -16,10 +16,22 @@ var (
 // delivers windowDidResize: synchronously, which calls the frame handler)
 // and leaves live resize mode. Call it from the main thread between Wait
 // calls, with a frame handler registered.
+//
+// After each size it also does what a display-link tick does when the app
+// has asked for a frame (the frame after a resize, an animation), in the same
+// run-loop turn, as a real drag does: two draws then land in one Core
+// Animation transaction, which once starved the drawable pool (nextDrawable
+// blocked for its 1 s timeout on every step; gpu.Surface.EndFrame).
 func (w *Window) SimulateLiveResize(sizes [][2]float64) {
 	w.enterLiveResize()
 	for _, s := range sizes {
 		objc.F.Reset().Arg(uintptr(w.win)).Arg(uintptr(selSetContentSize)).ArgPoint(s[0], s[1]).Call(objc.MsgSend)
+		if w.frameArmed {
+			now := Now()
+			w.frameArmed, w.idleTicks, w.ticksSinceFrame, w.lastFrameT = false, 0, 0, now
+			w.q.push(Event{Kind: EvFrame, Time: now})
+			w.runHandlerFrom(true)
+		}
 	}
 	w.exitLiveResize()
 }

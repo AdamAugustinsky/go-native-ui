@@ -30,7 +30,7 @@ func RunLiveResizeTest(cfg Config, b Builder, sizes [][2]float64) (LiveResizeRep
 	var rep LiveResizeReport
 	rep.Steps = len(sizes)
 	inDrag := false
-	var handlerNs int64
+	var handlerNs, handlerMaxNs int64
 	a.Win.SetFrameHandler(func() {
 		t0 := platform.Now()
 		before := a.frames
@@ -41,7 +41,9 @@ func RunLiveResizeTest(cfg Config, b Builder, sizes [][2]float64) (LiveResizeRep
 			if a.frames == before {
 				rep.DrawFails++
 			}
-			handlerNs += platform.Now() - t0
+			d := platform.Now() - t0
+			handlerNs += d
+			handlerMaxNs = max(handlerMaxNs, d)
 		}
 	})
 
@@ -95,6 +97,7 @@ func RunLiveResizeTest(cfg Config, b Builder, sizes [][2]float64) (LiveResizeRep
 	}
 	if rep.HandlerCalls > 0 {
 		rep.HandlerMsMean = float64(handlerNs) / 1e6 / float64(rep.HandlerCalls)
+		rep.HandlerMsMax = float64(handlerMaxNs) / 1e6
 	}
 	rep.Pacing = livePacingVerdict(rep.FrameEventsBefore, rep.PacedFramesAfter, pacedWanted)
 	if rep.Draws > 0 {

@@ -15,6 +15,7 @@ type LiveResizeReport struct {
 	BytesPerDraw   float64
 
 	HandlerMsMean float64  // mean time in the handler per call: events, build, draw
+	HandlerMsMax  float64  // the slowest call (a starved drawable pool shows as ~1000 ms)
 	FinalPx       [2]int32 // the surface size after the drag
 
 	// Pacing after the drag. The platform's frame source (the
@@ -37,6 +38,10 @@ const (
 	PacingFailed       = "failed"       // it delivered frames before the drag but not enough after it
 	PacingInconclusive = "inconclusive" // it never delivered a frame, even before the drag (asleep display, occluded window): the fallback drew everything
 )
+
+// LiveResizeMaxHandlerMs is the slowest handler call a live resize may have:
+// one step must never stall the drag (a starved drawable pool blocks 1 s).
+const LiveResizeMaxHandlerMs = 250
 
 // livePacingVerdict decides the Pacing of a report from its counts.
 func livePacingVerdict(before, pacedAfter, wanted int) string {

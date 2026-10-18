@@ -107,9 +107,24 @@ Two things spoiled the first attempts. A macOS privacy prompt for `~/Documents`,
 
 The first `-bench-dir ~/Documents` run never finished: the bench setup listed the folder synchronously on the main thread before the window existed, and `open()` waited on the privacy prompt. The setup now lists on a goroutine and gives up after the bench timeout (b040421). Normal startup was never affected: start listings run on goroutines and the first frame waits at most 150 ms (D27). macOS ties the permission to the exact signature, and Pilot is ad-hoc signed, so every new build asks again.
 
+## Live resize (found in your hand test)
+
+**Symptom:** resizing by hand froze for 1–2 s, then the window jumped to its new size. It happened in Pilot, in rexlook, and in a rexlook built from the end of phase 3.
+
+**Cause:** a trace of a real drag (`GNUI_TRACE_LIVE=1`) showed `nextDrawable` blocked for 1003 ms in a draw from a display-link tick. During a live resize each frame is presented inside the window's Core Animation transaction, and its drawable stays in use until that transaction commits. A resize draw and a tick draw could land in the same run-loop turn, leaving no free drawable; the commit `nextDrawable` waited for could not happen while it blocked, so only the 1 s timeout ended it.
+
+**Fix:** `[CATransaction flush]` right after each live present (D18 amendment).
+
+| | Before | After |
+|---|---|---|
+| Hand resize, Pilot | 1003 ms block | slowest `nextDrawable` 27 ms, slowest step 29 ms; you: "Smooth now" |
+| Hand resize, rexlook | freezes | slowest step 23 ms |
+| `-live-resize-test` (now with a tick draw after each step), rexlook | slowest step 1005 ms, fails | 23.8 ms, 300 of 300 draws, 0 allocations |
+| Same, Pilot | — | 18.8 ms, 300 of 300 draws, 1 allocation over the drag |
+
 ## Pending on the MacBook
 
-Your hand test (criterion 7; list below and in [phase4-text.md](phase4-text.md)).
+Nothing: your hand test passed after the live-resize fix ("all working", then "Smooth now").
 
 ## Hand-test checklist
 

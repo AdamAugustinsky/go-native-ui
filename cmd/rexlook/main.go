@@ -183,6 +183,11 @@ func runResizeTest() error {
 		return err
 	}
 	printJSON(rep)
+	if rep.HandlerMsMax > app.LiveResizeMaxHandlerMs || rep.DrawFails == rep.HandlerCalls {
+		fmt.Fprintf(os.Stderr, "%s: live-resize test failed: slowest step %.0f ms (limit %d), %d of %d handler calls drew nothing\n",
+			"rexlook", rep.HandlerMsMax, app.LiveResizeMaxHandlerMs, rep.DrawFails, rep.HandlerCalls)
+		os.Exit(3)
+	}
 	switch rep.Pacing {
 	case app.PacingFailed:
 		fmt.Fprintf(os.Stderr, "rexlook: live-resize test failed: the frame source delivered %d frame events before the drag but only %d paced frames (%d wanted) after it\n",
