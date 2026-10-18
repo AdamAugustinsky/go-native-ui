@@ -93,6 +93,8 @@ type fakeComp struct {
 	extStall                          bool
 	decoMode                          uint32 // 0: no decoration global behaviour, 1 client, 2 server
 	exports                           int
+	ti                                *fobj // the text input
+	tiSerial                          uint32
 	maximized                         bool
 	cfgW, cfgH                        int32
 }
@@ -543,6 +545,8 @@ func (s *fakeComp) request(o *fobj, name string, a []farg) {
 		s.event(s.deco, "configure", s.decoMode)
 	case "wp_cursor_shape_manager_v1.get_pointer":
 		s.adopt(a[0].v, &wl.WpCursorShapeDeviceV1, o.ver)
+	case "zwp_text_input_manager_v3.get_text_input":
+		s.ti = s.adopt(a[0].v, &wl.ZwpTextInputV3, o.ver)
 	case "zxdg_exporter_v2.export_toplevel":
 		e := s.adopt(a[0].v, &wl.ZxdgExportedV2, o.ver)
 		s.exports++
@@ -641,6 +645,23 @@ func (s *fakeComp) command(line string) {
 			ser := s.nextSerial()
 			s.say("ENTER %d", ser)
 			s.event(s.ptr, "enter", ser, s.mainSurface(), fx(num(0)), fx(num(1)))
+		}
+	case "ti_enter", "ti_leave": // the text input gets / loses the surface
+		if s.ti != nil && s.mainSurface() != nil {
+			s.event(s.ti, strings.TrimPrefix(f[0], "ti_"), s.mainSurface())
+		}
+	case "preedit": // text cursor_begin cursor_end
+		if s.ti != nil {
+			s.event(s.ti, "preedit_string", strings.Fields(arg)[0], int32(num(1)), int32(num(2)))
+		}
+	case "commit": // text
+		if s.ti != nil {
+			s.event(s.ti, "commit_string", arg)
+		}
+	case "done":
+		if s.ti != nil {
+			s.tiSerial++
+			s.event(s.ti, "done", s.tiSerial)
 		}
 	case "scale": // preferred_buffer_scale on the main surface
 		if m := s.mainSurface(); m != nil {

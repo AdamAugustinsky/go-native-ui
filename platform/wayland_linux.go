@@ -77,6 +77,8 @@ type wayland struct {
 	compositorV, wmBaseV  uint32
 	seatV                 uint32
 
+	im wlIM // text input (im_linux.go)
+
 	// window export (export_linux.go)
 	exporter, exported uintptr
 	handle             string
@@ -291,6 +293,7 @@ func (w *Window) openWayland(o Options) (err error) {
 	}
 	y.sel = -1
 	w.wlInitDataDevice()
+	w.wlInitIM()
 	if int32(fr.Call1(wlf.roundtrip, y.display)) < 0 { // seat capabilities, output scales, selection
 		return errors.New("wayland: roundtrip failed")
 	}
@@ -365,6 +368,7 @@ func (w *Window) closeWayland() {
 	w.wlClipClose()
 	w.wlCursorClose()
 	w.wlExportClose()
+	w.wlIMClose()
 	w.release(y.frameCB, 0, 99) // wl_callback has no destructor request
 	w.release(y.keyboard, 0, 3) // wl_keyboard.release
 	w.release(y.pointer, 1, 3)  // wl_pointer.release
@@ -577,6 +581,8 @@ func (w *Window) wlEvent(proxy uintptr, op uint32, a unsafe.Pointer) {
 		w.onKeyboard(op, a)
 	case y.exported:
 		w.onExported(op, a)
+	case y.im.ti:
+		w.onTextInput(op, a)
 	case y.dd:
 		w.onDataDevice(op, a)
 	case y.src:
@@ -624,6 +630,8 @@ func (w *Window) onRegistry(op uint32, a unsafe.Pointer) {
 		case y.shm == 0 && cstrIs(iface, "wl_shm"):
 			y.shmV = minU32(adv, 2, ifaceVersion(wlc.shm)) // 2: release
 			y.shm = w.bind(name, wlc.shm, peekPtr(wlc.shm), y.shmV)
+		case y.im.mgr == 0 && cstrIs(iface, "zwp_text_input_manager_v3"):
+			y.im.mgr = w.bind(name, wl.ZwpTextInputManagerV3.Addr(), wl.ZwpTextInputManagerV3.NameAddr(), 1)
 		case y.exporter == 0 && cstrIs(iface, "zxdg_exporter_v2"):
 			y.exporter = w.bind(name, wl.ZxdgExporterV2.Addr(), wl.ZxdgExporterV2.NameAddr(), 1)
 		case y.shapeMgr == 0 && cstrIs(iface, "wp_cursor_shape_manager_v1"):

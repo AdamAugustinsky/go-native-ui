@@ -293,15 +293,3 @@ func SetClipboard(s string) {
 	clipText = strings.ToValidUTF8(s, "\uFFFD")
 	clipMu.Unlock()
 }
-
-// SetIMERect is a no-op on Linux: there is no input-method support yet.
-// Next step: zwp_text_input_v3 on Wayland (enable on focus, set_cursor_rectangle,
-// preedit_string / commit_string events mapped to EvPreedit / EvText) and XIM
-// (XOpenIM with XIMPreeditCallbacks) or an IBus/fcitx client on X11.
-func (w *Window) SetIMERect(x, y, wd, h float32) {}
-
-// SetTextInput is a no-op on Linux (see SetIMERect).
-func (w *Window) SetTextInput(active bool) {}
-
-// DiscardComposition is a no-op on Linux (see SetIMERect).
-func (w *Window) DiscardComposition() {}
