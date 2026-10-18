@@ -1,7 +1,6 @@
 package platform
 
 import (
-	"fmt"
 	"runtime"
 	"slices"
 	"sync/atomic"
@@ -74,7 +73,7 @@ func clipStage(stage int) {
 
 // clipSettleNs is how long a paste keeps looking at a clipboard that has no
 // text yet but may get it (see read). A variable so that tests can shorten it.
-var clipSettleNs int64 = 500_000_000
+var clipSettleNs int64 = 250_000_000
 
 // The kinds of request the worker runs.
 const (
@@ -143,7 +142,6 @@ func (c *clipWorker) stuck() bool {
 func (c *clipWorker) submitPaste(seq uint64, give int64) bool {
 	c.mu.Lock()
 	if c.stuckLocked() || c.closed {
-		clipDiag = append(clipDiag, fmt.Sprintf("submitPaste refused stuck=%v closed=%v run=%+v", c.stuckLocked(), c.closed, c.run))
 		c.mu.Unlock()
 		return false
 	}
@@ -381,15 +379,16 @@ func (c *clipWorker) open(owner uintptr, r clipReq) bool {
 // whether there is any text (not empty, not over MaxPaste). Blocking is fine
 // here.
 //
-// A clipboard with no text is not always final. When another program replaces
-// the clipboard, the moment between its EmptyClipboard and the text being
-// readable can be seen from outside (measured on a loaded runner, right after a
-// PowerShell Set-Clipboard: the clipboard had no format at all, and
-// GetClipboardData(CF_UNICODETEXT) failed at once with ERROR_NOT_FOUND; the
-// text was there a moment later). So a clipboard with no format at all, or one
-// that offers the text and gives no handle, is looked at again for up to
-// clipSettleNs (or until the request's limit); a clipboard that holds other
-// formats only, or text that is empty or too long, is answered at once.
+// A clipboard with no text is not always final. Right after another program
+// has put its text there, the clipboard can be seen in between: on a loaded CI
+// runner, a paste right after a PowerShell Set-Clipboard found the text
+// format offered with an empty text (the same call a few milliseconds later
+// returned the text); and a clipboard just emptied by its previous owner has
+// no format at all and GetClipboardData fails at once with ERROR_NOT_FOUND. So
+// a clipboard with no format, a text format without a handle, or an empty text
+// is looked at again for up to clipSettleNs (or until the request's limit),
+// and is answered as having no text only then. A clipboard that holds other
+// formats only, or text that is too long, is answered at once.
 func (c *clipWorker) read(owner uintptr, r clipReq) (n int, ok bool) {
 	settle := min(nanotime()+clipSettleNs, r.give)
 	for {
@@ -408,19 +407,9 @@ func (c *clipWorker) read(owner uintptr, r clipReq) (n int, ok bool) {
 					win32.Call(pGlobalUnlock, h)
 				}
 			}
+			retry = ok && len(buf) == 0
 		} else {
 			retry = win32.Call(pCountClipboardFormats) == 0 || win32.Bool(win32.Call(pIsClipboardFormatAvailable, cfUnicodeText))
-		}
-		{ // TEMPORARY diagnostics
-			var fm []uintptr
-			for f := uintptr(0); ; {
-				f = win32.Call(pEnumClipboardFormats, f)
-				if f == 0 {
-					break
-				}
-				fm = append(fm, f)
-			}
-			clipDiag = append(clipDiag, fmt.Sprintf("read h=%x ok=%v len=%d retry=%v alive=%v count=%d avail=%v formats=%v t=%s", h, ok, len(buf), retry, c.alive(r), win32.Call(pCountClipboardFormats), win32.Bool(win32.Call(pIsClipboardFormatAvailable, cfUnicodeText)), fm, time.Now().Format("15:04:05.000")))
 		}
 		win32.Call(pCloseClipboard)
 		c.buf = buf // only this goroutine uses buf until it publishes the answer
@@ -489,8 +478,3 @@ func allocClipboardText(b []byte) uintptr {
 	win32.Call(pGlobalUnlock, mem)
 	return mem
 }
-
-var (
-	clipDiag              []string // TEMPORARY
-	pEnumClipboardFormats = win32.Proc(user32, "EnumClipboardFormats")
-)

@@ -1,11 +1,5 @@
 package platform
 
-import (
-	"fmt"
-	"runtime"
-	"time"
-)
-
 // The asynchronous clipboard (see paste.go) on CF_UNICODETEXT. The UI thread
 // never waits for another process.
 //
@@ -96,8 +90,6 @@ func (w *Window) RequestPaste(tag uint64) {
 
 // failPaste answers the paste being waited for with FlagFailed.
 func (w *Window) failPaste() {
-	_, _, line, _ := runtime.Caller(1)
-	clipDiag = append(clipDiag, fmt.Sprintf("failPaste from line %d now=%d give=%d t=%s", line, nanotime(), w.pasteGive, time.Now().Format("15:04:05.000")))
 	w.pasteOn = false
 	w.q.push(Event{Kind: EvPaste, Flags: FlagFailed, Tag: w.pasteTag, Time: Now()})
 }
