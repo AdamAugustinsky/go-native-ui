@@ -251,3 +251,97 @@ func TestUndoChords(t *testing.T) {
 		}
 	}
 }
+
+// A frame's keys, edit actions and typed text act on the field that had the
+// focus at Begin, once, even when a handler moves the focus to a field built
+// later in the same frame.
+func TestFocusTransferDuringBuildAppliesInputOnce(t *testing.T) {
+	cases := []struct {
+		name  string
+		push  func(in *Input)
+		a, b  string // the texts after the frame
+		setup func(a, b *TextBuffer)
+	}{
+		{"edit delete", func(in *Input) { in.PushEdit(EditDelete) }, "", "hello",
+			func(a, b *TextBuffer) { a.SetString("hello"); a.SelectAll(); b.SetString("hello"); b.SelectAll() }},
+		{"backspace", func(in *Input) { in.PushKey(KeyEvent{Code: KeyBackspace, Down: true}) }, "hell", "hello",
+			func(a, b *TextBuffer) { a.SetString("hello"); b.SetString("hello") }},
+		{"typed text", func(in *Input) { in.AppendText("x") }, "hellox", "hello",
+			func(a, b *TextBuffer) { a.SetString("hello"); b.SetString("hello") }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newRig(t, false)
+			var a, b TextBuffer
+			var ka, kb Key
+			build := func(c *Context) {
+				c.NextSize(Px(200), Px(24))
+				ra := c.TextField("a", &a)
+				if ra.Changed {
+					c.SetFocus(kb) // (kb: the key from the previous frame)
+				}
+				c.NextSize(Px(200), Px(24))
+				rb := c.TextField("b", &b)
+				ka, kb = c.KeyOf(ra.ID), c.KeyOf(rb.ID)
+			}
+			r.harness.frame(build)
+			r.c.SetFocus(ka)
+			r.harness.frame(build)
+			tc.setup(&a, &b)
+			r.harness.frame(build)
+			tc.push(&r.in)
+			r.harness.frame(build)
+			if a.String() != tc.a || b.String() != tc.b {
+				t.Fatalf("a=%q b=%q, want a=%q b=%q", a.String(), b.String(), tc.a, tc.b)
+			}
+			if r.c.FocusKey() != kb {
+				t.Fatal("the focus did not move")
+			}
+		})
+	}
+}
+
+// Escape in a text field: the field reports Cancelled. In the main tree the
+// field claims the key; inside an overlay it leaves it for the overlay, so a
+// dialog's field does not swallow the dialog's Escape.
+func TestEscapePropagationFromTextField(t *testing.T) {
+	for _, inOverlay := range []bool{false, true} {
+		r := newRig(t, false)
+		var cancelled, taken int
+		build := func(c *Context) {
+			if inOverlay {
+				c.BeginOverlay(1, OverlayModal, [4]float32{0, 0, 400, 100}, PlaceCenter)
+			}
+			c.NextSize(Px(200), Px(24))
+			res := c.TextField("g", &r.buf)
+			if res.Cancelled {
+				cancelled++
+			}
+			if inOverlay {
+				if c.TakeKey(KeyEscape, 0) { // what the owning modal does
+					taken++
+				}
+				c.EndOverlay()
+			}
+			r.res = res
+		}
+		for i := 0; i < 3; i++ {
+			r.harness.frame(build)
+		}
+		var key Key
+		build2 := func(c *Context) { build(c); key = c.KeyOf(r.res.ID) }
+		r.harness.frame(build2)
+		r.c.SetFocus(key)
+		r.harness.frame(build2)
+		r.harness.frame(build2)
+		cancelled, taken = 0, 0
+		r.in.PushKey(KeyEvent{Code: KeyEscape, Down: true})
+		r.harness.frame(build2)
+		if cancelled != 1 {
+			t.Fatalf("overlay=%v: field reported Cancelled %d times", inOverlay, cancelled)
+		}
+		if want := map[bool]int{false: 0, true: 1}[inOverlay]; taken != want {
+			t.Fatalf("overlay=%v: the owner took Escape %d times, want %d", inOverlay, taken, want)
+		}
+	}
+}

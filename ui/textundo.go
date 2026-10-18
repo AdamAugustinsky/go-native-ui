@@ -68,6 +68,19 @@ func (u *undoLog) dropOldest() {
 	}
 }
 
+// dropOne removes one record to make the history smaller. The oldest goes
+// first, as long as it has been applied: the text then simply can no longer be
+// undone that far. If everything that is left was undone, the oldest records
+// are the prerequisites of the rest (redo takes them first), so the newest,
+// which depend on them, go instead.
+func (u *undoLog) dropOne() {
+	if u.at > u.head {
+		u.dropOldest()
+		return
+	}
+	u.truncate(len(u.recs) - 1)
+}
+
 // truncate removes the records from index at on (the redo tail).
 func (u *undoLog) truncate(at int) {
 	u.recs = u.recs[:at]
@@ -152,7 +165,7 @@ func (t *TextBuffer) SetUndoLimit(steps, bytes int) {
 		if len(u.recs) == u.head {
 			break
 		}
-		u.dropOldest()
+		u.dropOne()
 	}
 	if u.at > len(u.recs) {
 		u.at = len(u.recs)

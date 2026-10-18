@@ -150,6 +150,30 @@ func (c *Context) OverlayOpen(key Key) bool {
 	return ok && c.boxes[v].lastFrame == c.frame-1 && c.boxes[v].ovRoot
 }
 
+// OverlayTopmost reports whether the overlay with the given key (as passed to
+// BeginOverlay) is the one that takes the keys of this frame: the topmost
+// popup or modal of the previous frame's stack (tooltips do not count), or,
+// when that frame had none, an overlay that opens in this one and is the first
+// built. Only that overlay may act on Enter, Escape and the like, whatever
+// order the overlays are built in: a dialog that does not check this lets the
+// dialog beneath it take the key first. An overlay that opens above others
+// takes keys from the next frame on.
+func (c *Context) OverlayTopmost(key Key) bool {
+	okey := KeyN(overlayBase, uint64(key))
+	for i := c.nOvPrev - 1; i >= 0; i-- {
+		if c.ovPrev[i].kind != OverlayTooltip {
+			return c.ovPrev[i].key == okey
+		}
+	}
+	// None before: the first overlay built now is it.
+	for i := 0; i < c.nOvs; i++ {
+		if c.ovs[i].kind != OverlayTooltip {
+			return c.ovs[i].key == okey
+		}
+	}
+	return false
+}
+
 // topModal is the index of the topmost modal overlay of the previous frame, -1
 // if there is none.
 func (c *Context) topModal() int {

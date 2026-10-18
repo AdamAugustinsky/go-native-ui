@@ -1,6 +1,7 @@
 package widgettest
 
 import (
+	"bytes"
 	"fmt"
 
 	"gonativeui/app"
@@ -53,6 +54,7 @@ type Player struct {
 	revKey    ui.Key
 	revFrames int
 	x, y      float32 // the pointer
+	base      []byte  // the value a WaitChange step started from
 }
 
 var _ app.Scripter = (*Player)(nil)
@@ -302,6 +304,22 @@ func (p *Player) run(st *Step, in *ui.Input) bool {
 		}
 		if timedOut() {
 			p.fail("a node with role %d named %q is still there after %d ms", st.role, st.name, within(st))
+			return true
+		}
+	case opWaitChange:
+		i := p.find(st.role, st.name, st.nth)
+		if i < 0 {
+			p.fail("no node with role %d named %q (#%d) in the semantic tree", st.role, st.name, st.nth)
+			return true
+		}
+		v := p.sem.Text(p.sem.Nodes[i].Value)
+		switch {
+		case p.t == 0:
+			p.base = append(p.base[:0], v...)
+		case !bytes.Equal(v, p.base):
+			return true
+		case timedOut():
+			p.fail("the value of the node with role %d named %q did not change in %d ms", st.role, st.name, within(st))
 			return true
 		}
 	case opMove:

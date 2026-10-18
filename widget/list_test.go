@@ -318,3 +318,180 @@ func TestListTypeToFindReportsQuery(t *testing.T) {
 		t.Fatalf("GoTo(7): cursor %d, selection %v", c, items(&v.st.Sel))
 	}
 }
+
+// The rows of a disabled list are disabled: they export no actions and an
+// assistive technology's press does not select them.
+func TestDisabledListRowsRejectAccessibilityActions(t *testing.T) {
+	var st ListState
+	var changed bool
+	disabled := true
+	g := newRig(t, 300, 300, func(k *Kit) {
+		k.BeginDisabled(disabled)
+		l := k.BeginList("things", &st, 5)
+		for r := l.First; r < l.Last; r++ {
+			l.RowNamed(r, uint32(r), []byte("row "+string(rune('0'+r))))
+		}
+		k.EndList(&l)
+		k.EndDisabled()
+		changed = changed || l.Changed
+	})
+	g.frames(2)
+	n := g.must(ui.RoleListItem, "row 2")
+	if n.State&ui.SemDisabled == 0 || n.Actions != 0 {
+		t.Fatalf("a row of a disabled list: state %v actions %v, want disabled and none", n.State, n.Actions)
+	}
+	for _, a := range []ui.SemAction{ui.ActPress, ui.ActFocus} {
+		g.in.PushAction(ui.SemRequest{Key: n.Key, Action: a})
+		g.frames(2)
+	}
+	if st.Sel.Count() != 0 || changed {
+		t.Fatalf("a disabled row took an action: selected %d, changed %v", st.Sel.Count(), changed)
+	}
+	// enabled, the same request selects the row
+	disabled = false
+	g.frames(2)
+	n = g.must(ui.RoleListItem, "row 2")
+	if n.State&ui.SemDisabled != 0 || n.Actions&ui.ActPress == 0 {
+		t.Fatalf("an enabled row: state %v actions %v", n.State, n.Actions)
+	}
+	g.in.PushAction(ui.SemRequest{Key: n.Key, Action: ui.ActPress})
+	g.frames(2)
+	if !st.Sel.Has(2) || st.Sel.Count() != 1 {
+		t.Fatalf("press on an enabled row: selected %d", st.Sel.Count())
+	}
+}
+
+// A resize drag belongs to the column's ID: reordering the columns while the
+// button is down moves it with its column.
+func TestTableResizeDragFollowsTheColumnWhenColumnsAreReordered(t *testing.T) {
+	g, v := newBigTable(t, 100)
+	hdr := g.must(ui.RoleColumnHeader, "Name")
+	edge := hdr.Bounds[2]
+	y := (hdr.Bounds[1] + hdr.Bounds[3]) / 2
+	g.in.MouseX, g.in.MouseY = edge, y
+	g.frame()
+	g.in.SetButton(ui.ButtonLeft, true, 1)
+	g.frame()
+	g.in.MouseX = edge + 20
+	g.frames(2)
+	// the app moves the Name column to the end mid-drag
+	v.cols[0], v.cols[1], v.cols[2] = v.cols[1], v.cols[2], v.cols[0]
+	g.in.MouseX = edge + 40
+	g.frames(3)
+	width := func(id uint32) float32 {
+		for _, c := range v.cols {
+			if c.ID == id {
+				return c.Width
+			}
+		}
+		return -1
+	}
+	if w := width(10); w < 185 || w > 195 {
+		t.Fatalf("Name (ID 10) is %v wide after a 40 px drag across a reorder, want about 190", w)
+	}
+	if width(11) != 80 || width(12) != 60 {
+		t.Fatalf("another column was resized: Size %v, Kind %v", width(11), width(12))
+	}
+	g.in.SetButton(ui.ButtonLeft, false, 0)
+	g.frames(2)
+}
+
+// Every header is a tab stop, in order, before the rows; Enter and Space sort,
+// Alt+arrows resize, and the semantics say what the header is and does.
+func TestTableHeadersAreKeyboardOperable(t *testing.T) {
+	g, v := newBigTable(t, 100)
+	// Tab reaches the three headers, then the rows
+	var seen []ui.Key
+	for i := 0; i < 4; i++ {
+		g.key(ui.KeyTab, 0)
+		seen = append(seen, g.c.FocusKey())
+	}
+	for i, name := range []string{"Name", "Size", "Kind"} {
+		if seen[i] != g.must(ui.RoleColumnHeader, name).Key {
+			t.Fatalf("Tab %d did not reach the %s header", i+1, name)
+		}
+	}
+	if seen[3] != TableKey(g.c.KeyOf(g.c.Root()), "files") {
+		t.Fatal("Tab after the headers did not reach the rows")
+	}
+	g.key(ui.KeyTab, ui.ModShift)
+	g.key(ui.KeyTab, ui.ModShift) // back to the Size header
+	if g.c.FocusKey() != g.must(ui.RoleColumnHeader, "Size").Key {
+		t.Fatal("Shift+Tab did not go back to the Size header")
+	}
+	// Space sorts the focused sortable header; the direction flips with Enter
+	g.key(ui.KeySpace, 0)
+	g.key(ui.KeyEnter, 0)
+	if len(v.sorted) != 2 || v.sorted[0].Column != 11 || v.sorted[0].Descending || !v.sorted[1].Descending {
+		t.Fatalf("keyboard sort changes: %v", v.sorted)
+	}
+	sz := g.must(ui.RoleColumnHeader, "Size")
+	if sz.State&ui.SemSortDescending == 0 || sz.Actions&ui.ActPress == 0 || sz.State&ui.SemFocused == 0 {
+		t.Fatalf("Size header state %v actions %v, want sorted descending, press, focused", sz.State, sz.Actions)
+	}
+	if nm := g.must(ui.RoleColumnHeader, "Name"); nm.State&(ui.SemSortAscending|ui.SemSortDescending) != 0 {
+		t.Fatal("an unsorted header reports a sort direction")
+	}
+	// Alt+arrows resize it, Shift in bigger steps, down to the minimum
+	g.key(ui.KeyRight, ui.ModAlt)
+	if w := v.cols[1].Width; w != 88 {
+		t.Fatalf("Alt+Right: width %v, want 88", w)
+	}
+	g.key(ui.KeyLeft, ui.ModAlt|ui.ModShift)
+	if w := v.cols[1].Width; w != 56 {
+		t.Fatalf("Alt+Shift+Left: width %v, want 56", w)
+	}
+	g.key(ui.KeyLeft, ui.ModAlt|ui.ModShift)
+	if w := v.cols[1].Width; w != defaultMinColumnPt {
+		t.Fatalf("Alt+Shift+Left past the minimum: width %v, want %d", w, defaultMinColumnPt)
+	}
+	// a column that cannot sort is still resizable, and does not sort
+	g.key(ui.KeyTab, 0)
+	if g.c.FocusKey() != g.must(ui.RoleColumnHeader, "Kind").Key {
+		t.Fatal("Tab did not reach the Kind header")
+	}
+	kind := g.must(ui.RoleColumnHeader, "Kind")
+	if kind.Actions&ui.ActPress != 0 || kind.Actions&ui.ActIncrement == 0 {
+		t.Fatalf("Kind header actions %v: no press, but a width", kind.Actions)
+	}
+	g.key(ui.KeyEnter, 0)
+	if len(v.sorted) != 2 {
+		t.Fatal("Enter on a header that is not sortable sorted")
+	}
+	g.key(ui.KeyRight, ui.ModAlt)
+	if w := v.cols[2].Width; w != 68 {
+		t.Fatalf("Kind width %v after Alt+Right, want 68", w)
+	}
+}
+
+// An assistive technology presses a header to sort and increments it to widen.
+func TestTableHeaderAccessibilityActions(t *testing.T) {
+	g, v := newBigTable(t, 100)
+	name := g.must(ui.RoleColumnHeader, "Name")
+	g.in.PushAction(ui.SemRequest{Key: name.Key, Action: ui.ActPress})
+	g.frame()
+	if len(v.sorted) != 1 || v.sorted[0].Column != 10 {
+		t.Fatalf("ActPress on a header: sort changes %v", v.sorted)
+	}
+	g.in.PushAction(ui.SemRequest{Key: name.Key, Action: ui.ActIncrement})
+	g.frame()
+	g.in.PushAction(ui.SemRequest{Key: name.Key, Action: ui.ActDecrement})
+	g.frame()
+	g.in.PushAction(ui.SemRequest{Key: name.Key, Action: ui.ActDecrement})
+	g.frame()
+	if w := v.cols[0].Width; w != 142 {
+		t.Fatalf("increment, decrement, decrement: width %v, want 142", w)
+	}
+}
+
+// A click on a header sorts but leaves the keyboard focus in the rows.
+func TestTableHeaderClickKeepsTheFocus(t *testing.T) {
+	g, v := newBigTable(t, 100)
+	x, y := g.rowCentre(ui.RoleRow, 2)
+	g.click(x, y)
+	f := g.c.FocusKey()
+	g.click(centre(g.must(ui.RoleColumnHeader, "Name")))
+	if len(v.sorted) != 1 || g.c.FocusKey() != f {
+		t.Fatalf("sorted %d times, focus moved: %v", len(v.sorted), g.c.FocusKey() != f)
+	}
+}

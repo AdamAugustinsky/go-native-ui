@@ -83,14 +83,16 @@ const (
 type SemState uint16
 
 const (
-	SemChecked  SemState = 1 << iota // checked, on or pressed
-	SemMixed                         // neither checked nor unchecked
-	SemSelected                      // part of the selection
-	SemExpanded                      // open (a menu, a combo box, a tree row)
-	SemDisabled                      // set by the export for boxes with the Disabled flag
-	SemFocused                       // set by the export for the focused box
-	SemEditable                      // the value can be edited (text fields)
-	SemModal                         // a modal overlay: everything beneath it is inert
+	SemChecked        SemState = 1 << iota // checked, on or pressed
+	SemMixed                               // neither checked nor unchecked
+	SemSelected                            // part of the selection
+	SemExpanded                            // open (a menu, a combo box, a tree row)
+	SemDisabled                            // set by the export for boxes with the Disabled flag
+	SemFocused                             // set by the export for the focused box
+	SemEditable                            // the value can be edited (text fields)
+	SemModal                               // a modal overlay: everything beneath it is inert
+	SemSortAscending                       // a column header the table is sorted by, ascending
+	SemSortDescending                      // a column header the table is sorted by, descending
 )
 
 // SemAction are the actions a node supports (SemNode.Actions) and that an
@@ -332,11 +334,13 @@ func (c *Context) Semantics(dst *SemTree) {
 			}
 			n.Pos = [2]int32{int32(idx), int32(pb.listRows)}
 		}
-		if rec.sel != [2]int32{} {
-			n.TextSel = rec.sel
-		}
 		n.Name = c.semText(dst, rec.name)
 		n.Value = c.semText(dst, rec.value)
+		if rec.sel != [2]int32{} {
+			// The selection is offsets into the exported value: when the value
+			// did not fit the byte budget it is empty, and so is the selection.
+			n.TextSel = [2]int32{min(rec.sel[0], int32(n.Value[1])), min(rec.sel[1], int32(n.Value[1]))}
+		}
 
 		// The parent: the nearest ancestor with a role; an overlay hangs from the window.
 		p := b.parent

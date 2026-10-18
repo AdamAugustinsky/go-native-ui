@@ -433,8 +433,9 @@ func (e *encoder) members(sig string, xs []any, depth int) error {
 	return nil
 }
 
-func validPath(s string) bool {
-	if s == "/" {
+// validPath reports whether s (a string or []byte) is a valid object path.
+func validPath[T ~string | ~[]byte](s T) bool {
+	if len(s) == 1 && s[0] == '/' {
 		return true
 	}
 	if len(s) < 2 || s[0] != '/' || s[len(s)-1] == '/' {

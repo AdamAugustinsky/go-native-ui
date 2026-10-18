@@ -2,6 +2,7 @@ package platform
 
 import (
 	"context"
+	"runtime"
 	"sort"
 	"sync"
 	"testing"
@@ -217,12 +218,14 @@ func TestPortalSettingChanged(t *testing.T) {
 	})
 }
 
-// A portal that is slow to answer (started by activation) must not hold up
-// the first frame: the first call returns "unknown" after firstWait, later
-// calls do not wait, and the answer arrives with a serial bump and a wake.
+// A portal that answers after the first call's bound (one that D-Bus has to
+// start on demand) must not hold up the first frame: the first call returns
+// Known false after firstWait, later calls do not wait, and the late answer
+// reports dark with a serial bump and a wake. That is the documented limit of
+// "the first frame is in the system's mode" on Linux (D32).
 func TestPortalSlowAnswer(t *testing.T) {
 	b := dbustest.Broker(t)
-	startFakePortal(t, b, map[string]dbus.Variant{"color-scheme": colorScheme(1)}, func(p *fakePortal) { p.delay = 300 * time.Millisecond })
+	startFakePortal(t, b, map[string]dbus.Variant{"color-scheme": colorScheme(1)}, func(p *fakePortal) { p.delay = 100 * time.Millisecond })
 	f := startFollower(b)
 	takeWake()
 	t0 := time.Now()
@@ -230,6 +233,9 @@ func TestPortalSlowAnswer(t *testing.T) {
 	first := time.Since(t0)
 	if got.Known || got.Dark {
 		t.Errorf("first call: %+v", got)
+	}
+	if f.done.Load() {
+		t.Error("the portal answered before its delay: the test does not test the slow case")
 	}
 	if first < firstWait-5*time.Millisecond || first > firstWait+100*time.Millisecond {
 		t.Errorf("first call took %v, want about %v", first, firstWait)
@@ -341,4 +347,113 @@ func TestPortalAnswerTime(t *testing.T) {
 
 func TestSetDarkChromeIsANoop(t *testing.T) {
 	(&Window{}).SetDarkChrome(true)
+}
+
+// An initial read whose reply is overtaken by a change signal must not
+// overwrite the newer value: the reply is in, a newer SettingChanged is
+// applied, and only then does the read's goroutine get to apply the reply.
+func TestPortalStaleReadDroppedAfterSignal(t *testing.T) {
+	b := dbustest.Broker(t)
+	p := startFakePortal(t, b, map[string]dbus.Variant{"color-scheme": colorScheme(2), "accent-color": accentColor(0.2, 0.4, 0.6)})
+	f := follower(b)
+	reached, release := make(chan int, 2), make(chan struct{})
+	f.beforeApply = func(k int) {
+		if k == keyScheme {
+			reached <- k
+			<-release
+		}
+	}
+	f.start()
+	select {
+	case <-reached: // the reply (prefer light) is in and not yet applied
+	case <-time.After(5 * time.Second):
+		t.Fatal("the read never answered")
+	}
+	p.set(appearanceNS, "color-scheme", colorScheme(1)) // newer: prefer dark
+	waitUntil(t, "the signal to be applied", func() bool { return f.cache.Load()&pDark != 0 })
+	close(release)
+	select {
+	case <-f.ready:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the follower never finished")
+	}
+	if got := f.get(); !got.Dark || !got.Known || got.Accent != 0x336699FF {
+		t.Errorf("the stale reply won: %+v", got)
+	}
+}
+
+// settingChanged is a marshalled SettingChanged signal from the portal.
+func settingChanged(t *testing.T, serial uint32, key string, v dbus.Variant) []byte {
+	t.Helper()
+	m := &dbus.Message{Type: dbus.TypeSignal, Serial: serial, Sender: ":1.99", Path: portalPath, Interface: settingsIface, Member: "SettingChanged",
+		Signature: "ssv", Body: []any{appearanceNS, key, v}}
+	raw, err := m.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+// A change signal from the portal allocates nothing once warm: a real
+// system-mode switch during a measured session must not show up in the
+// allocation gate, which counts the whole process. The signals are written to
+// the follower's socket by the broker's Inject, so no sender or router in this
+// process allocates inside the window. Like the bench gate (D27), it passes on
+// the first window with exactly 0 mallocs; an allocation in the signal path
+// recurs in every window and fails.
+func TestPortalSignalPathAllocs(t *testing.T) {
+	b := dbustest.Broker(t)
+	startFakePortal(t, b, map[string]dbus.Variant{"color-scheme": colorScheme(2), "accent-color": accentColor(0.9, 0.8, 0.7)})
+	f := startFollower(b)
+	if got := f.get(); !got.Known || got.Dark {
+		t.Fatalf("start: %+v", got)
+	}
+	// Alternating scheme and accent changes, each of which changes the value,
+	// ending where they began.
+	const n = 100
+	var msgs [n][]byte
+	for i := range msgs {
+		j := i / 2
+		switch {
+		case i%2 == 0 && j%2 == 0:
+			msgs[i] = settingChanged(t, uint32(i+1), "color-scheme", colorScheme(1))
+		case i%2 == 0:
+			msgs[i] = settingChanged(t, uint32(i+1), "color-scheme", colorScheme(2))
+		case j%2 == 0:
+			msgs[i] = settingChanged(t, uint32(i+1), "accent-color", accentColor(0.1, 0.2, 0.3))
+		default:
+			msgs[i] = settingChanged(t, uint32(i+1), "accent-color", accentColor(0.9, 0.8, 0.7))
+		}
+	}
+	to := f.conn.Name()
+	window := func() uint64 {
+		want := f.serial.Load() + n
+		runtime.GC()
+		var m0, m1 runtime.MemStats
+		runtime.ReadMemStats(&m0)
+		for _, raw := range msgs {
+			if err := b.Inject(to, raw); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for f.serial.Load() != want {
+			time.Sleep(100 * time.Microsecond)
+		}
+		runtime.ReadMemStats(&m1)
+		return m1.Mallocs - m0.Mallocs
+	}
+	window() // warm-up: the first signals grow the buffers and prime the runtime
+	var counts []uint64
+	for w := 0; w < 8; w++ {
+		c := window()
+		counts = append(counts, c)
+		if c == 0 {
+			t.Logf("window %d of %d signals: 0 mallocs (earlier windows: %v)", w+1, n, counts[:w])
+			if got := f.get(); got.Dark || got.Accent != 0xE6CCB3FF {
+				t.Errorf("end state %+v", got)
+			}
+			return
+		}
+	}
+	t.Errorf("every window allocated: %v mallocs per %d signals", counts, n)
 }

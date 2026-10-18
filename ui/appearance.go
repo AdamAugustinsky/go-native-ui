@@ -25,7 +25,9 @@ func (c *Context) SetSystemAppearance(a Appearance) { c.ap.sys = a }
 
 // SystemAppearance is the system's light or dark mode and accent colour. Apps
 // that follow the system read it each frame; the first frame already has it,
-// so it is drawn in the right mode (no light flash in dark mode).
+// so it is drawn in the right mode (no light flash in dark mode), except on
+// Linux when the desktop portal has not answered within 25 ms (Known false;
+// see platform.SystemAppearance).
 func (c *Context) SystemAppearance() Appearance { return c.ap.sys }
 
 // SetChromeDark declares the mode the app is showing, so that the parts of the

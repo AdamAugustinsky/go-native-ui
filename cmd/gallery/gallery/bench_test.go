@@ -22,7 +22,7 @@ func TestBenchSessionDrivesTheGallery(t *testing.T) {
 	g := b.Gallery
 
 	var seen struct {
-		tooltip, typed, cut, undone, select_, scrolled, end, selectedMany, desc, dialog, deleted, context, dark, activity, menu, divider bool
+		tooltip, typed, cut, undone, pasted, select_, scrolled, end, selectedMany, desc, dialog, deleted, context, dark, activity, menu, divider bool
 	}
 	notes0 := ""
 	var first struct {
@@ -56,6 +56,8 @@ func TestBenchSessionDrivesTheGallery(t *testing.T) {
 		notes := string(g.notes.Bytes())
 		seen.typed = seen.typed || notes == "Hello, gallery!abc" || notes == "Hello, galleryabcde"
 		seen.cut = seen.cut || notes == ""
+		// the paste brings back what the copy took, after the original text
+		seen.pasted = seen.pasted || (len(r.Clipboard()) > 0 && notes == notes0+string(r.Clipboard()))
 		seen.undone = seen.undone || (seen.cut && notes != "")
 		seen.select_ = seen.select_ || g.sel == 1
 		seen.selectedMany = seen.selectedMany || g.table.Sel.Count() > 3
@@ -73,7 +75,7 @@ func TestBenchSessionDrivesTheGallery(t *testing.T) {
 		t.Fatalf("the session did not finish in %d frames", frames)
 	}
 	for name, ok := range map[string]bool{
-		"a tooltip": seen.tooltip, "typed text": seen.typed, "a cut": seen.cut, "an undo": seen.undone,
+		"a tooltip": seen.tooltip, "typed text": seen.typed, "a cut": seen.cut, "an undo": seen.undone, "a paste": seen.pasted,
 		"a choice in the Select": seen.select_, "scrolling the table": seen.scrolled, "the table's last row": seen.end,
 		"a selection of many rows": seen.selectedMany, "a descending sort": seen.desc, "the modal dialog": seen.dialog,
 		"the dialog's action": seen.deleted, "the context menu's command": seen.context, "the dark mode": seen.dark,

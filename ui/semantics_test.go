@@ -413,3 +413,55 @@ func TestSemanticsCaps(t *testing.T) {
 		t.Error("the nodes that fit are linked")
 	}
 }
+
+// A text field whose value does not fit the export's byte budget exports an
+// empty value and so no selection; one that fits exactly keeps both.
+func TestSemanticsSelectionFollowsTheValueAtTheByteBudget(t *testing.T) {
+	const value = "héllo" // 6 bytes
+	for _, tc := range []struct {
+		name string
+		room int // bytes left for the field's value after the filler
+		fits bool
+	}{
+		{"exactly fits", len(value), true},
+		{"one byte short", len(value) - 1, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newRig(t, true)
+			r.buf.SetString(value)
+			r.buf.SetSelection(1, 4)
+			filler := make([]byte, MaxSemBytes-tc.room)
+			var tree SemTree
+			r.harness.frame(func(c *Context) {
+				c.NextSize(Px(10), Px(10))
+				c.NextRole(RoleLabel)
+				c.NextSemNameBytes(filler)
+				c.Box(0, "filler")
+				c.NextSize(Px(200), Px(24))
+				r.res = c.TextField("f", &r.buf)
+			})
+			r.c.Semantics(&tree)
+			var n SemNode
+			for _, x := range tree.Nodes {
+				if x.Role == RoleTextField {
+					n = x
+				}
+			}
+			if n.Role != RoleTextField {
+				t.Fatal("no text field node")
+			}
+			got := string(tree.Text(n.Value))
+			switch {
+			case tc.fits && (got != value || n.TextSel != [2]int32{1, 4}):
+				t.Fatalf("value %q selection %v, want %q and [1 4]", got, n.TextSel, value)
+			case !tc.fits && (got != "" || n.TextSel != [2]int32{}):
+				t.Fatalf("value %q selection %v, want an empty value and no selection", got, n.TextSel)
+			}
+			for _, x := range tree.Nodes {
+				if int(x.TextSel[0]) > len(tree.Text(x.Value)) || int(x.TextSel[1]) > len(tree.Text(x.Value)) {
+					t.Fatalf("a selection %v points outside its value of %d bytes", x.TextSel, len(tree.Text(x.Value)))
+				}
+			}
+		})
+	}
+}

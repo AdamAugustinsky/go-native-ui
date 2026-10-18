@@ -5,22 +5,23 @@ import "gonativeui/ui"
 type opKind uint8
 
 const (
-	opIdle     opKind = iota // n frames without input
-	opPause                  // ms of clock time (at least 2 frames)
-	opSettle                 // until nothing animates (at most ms of clock time)
-	opWaitFor                // until a node with the role and name exists (at most ms)
-	opWaitGone               // until no such node exists (at most ms)
-	opMove                   // the pointer to the target
-	opClick                  // the target: move and press, release a frame later
-	opRClick                 // the same with the right button
-	opDown                   // move to the target and press the left button
-	opUp                     // release the left button
-	opKey                    // key code with modifiers, once
-	opKeys                   // key code with modifiers on each of n frames
-	opText                   // type text
-	opWheel                  // over the target: dy pixels of trackpad scroll on each of n frames
-	opSweep                  // the pointer down the target, top to bottom, over n frames
-	opDrag                   // press on the target, move dx pixels along x on each of n frames, let go
+	opIdle       opKind = iota // n frames without input
+	opPause                    // ms of clock time (at least 2 frames)
+	opSettle                   // until nothing animates (at most ms of clock time)
+	opWaitFor                  // until a node with the role and name exists (at most ms)
+	opWaitGone                 // until no such node exists (at most ms)
+	opWaitChange               // until the value of the node differs from what it was when the step began (at most ms)
+	opMove                     // the pointer to the target
+	opClick                    // the target: move and press, release a frame later
+	opRClick                   // the same with the right button
+	opDown                     // move to the target and press the left button
+	opUp                       // release the left button
+	opKey                      // key code with modifiers, once
+	opKeys                     // key code with modifiers on each of n frames
+	opText                     // type text
+	opWheel                    // over the target: dy pixels of trackpad scroll on each of n frames
+	opSweep                    // the pointer down the target, top to bottom, over n frames
+	opDrag                     // press on the target, move dx pixels along x on each of n frames, let go
 )
 
 // Step is one thing a person does: move the pointer to a node, click it, press a
@@ -61,6 +62,17 @@ func WaitFor(role ui.Role, name string) Step { return Step{op: opWaitFor, role: 
 // WaitGone waits until no node with the role and name is in the tree, at most
 // DefaultWaitMs, and fails the run if one still is.
 func WaitGone(role ui.Role, name string) Step { return Step{op: opWaitGone, role: role, name: name} }
+
+// WaitChange waits until the value of the node with the role and name (the
+// text of a text field) differs from what it was when the step began, at most
+// DefaultWaitMs, and fails the run if it does not. It is how a script waits for
+// a paste: the clipboard text arrives asynchronously, a frame or more after the
+// key, so a step waits for the field to change instead of counting frames. The
+// step before it should be the one that causes the change; it begins in the
+// frame after, from the tree of the frame in which the field has not changed yet.
+func WaitChange(role ui.Role, name string) Step {
+	return Step{op: opWaitChange, role: role, name: name}
+}
 
 // Move moves the pointer to the centre of the node with the role and name.
 func Move(role ui.Role, name string) Step { return Step{op: opMove, role: role, name: name} }

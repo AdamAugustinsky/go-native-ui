@@ -124,10 +124,26 @@ func (m *Message) Marshal() ([]byte, error) {
 }
 
 // ReadMessage reads and decodes one message, refusing anything over
-// [MaxMessage].
+// [MaxMessage]. It allocates the message, its strings and its containers; a
+// [Conn] reads its own traffic with [readFrame] instead and takes the
+// allocation-free path for the signals subscribed with [Conn.SubscribeSignal].
 func ReadMessage(r io.Reader) (*Message, error) {
-	var fixed [16]byte
-	if _, err := io.ReadFull(r, fixed[:]); err != nil {
+	buf, err := readFrame(r, nil)
+	if err != nil {
+		return nil, err
+	}
+	return parseMessage(buf)
+}
+
+// readFrame reads the bytes of one message. They go into scratch when the
+// message fits (the caller reuses scratch, so the result is valid until the
+// next call), and into a new slice when it does not.
+func readFrame(r io.Reader, scratch []byte) ([]byte, error) {
+	if cap(scratch) < 16 {
+		scratch = make([]byte, 16)
+	}
+	fixed := scratch[:16]
+	if _, err := io.ReadFull(r, fixed); err != nil {
 		return nil, err
 	}
 	if fixed[0] != 'l' {
@@ -142,12 +158,17 @@ func ReadMessage(r io.Reader) (*Message, error) {
 		return nil, fmt.Errorf("dbus: message too large (fields %d, body %d)", fieldsLen, bodyLen)
 	}
 	hdr := (16 + int(fieldsLen) + 7) &^ 7
-	buf := make([]byte, hdr+int(bodyLen))
-	copy(buf, fixed[:])
+	total := hdr + int(bodyLen)
+	buf := scratch[:cap(scratch)]
+	if total > len(buf) {
+		buf = make([]byte, total)
+		copy(buf, fixed)
+	}
+	buf = buf[:total]
 	if _, err := io.ReadFull(r, buf[16:]); err != nil {
 		return nil, err
 	}
-	return parseMessage(buf)
+	return buf, nil
 }
 
 // parseMessage decodes a whole message held in buf (whose lengths ReadMessage

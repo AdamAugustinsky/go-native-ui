@@ -217,9 +217,12 @@ type Context struct {
 	// key claiming and edit actions (keys.go)
 	claimed    uint16              // bit i: key event i is handled
 	fieldKeys  uint16              // bit i: key event i was claimed for the focused text field
+	fieldPeek  uint16              // bit i: key event i (Escape) is seen by the focused field in an overlay but not claimed
 	fieldFocus bool                // the focused box is a text field that takes keys
 	fieldBuilt bool                // the focused field applied this frame's edit actions already
 	fieldKey   Key                 // the key of that field
+	fieldOwner Key                 // the text field that had the focus at Begin and owns this frame's keys and edit actions; 0 none
+	textTaken  bool                // a field applied this frame's typed text
 	carry      [MaxEdit]EditAction // edit actions queued after the field was built: for the next frame
 	nCarry     int
 	cmdTaken   int // Input.Commands taken so far this frame (TakeCommand)
@@ -350,7 +353,7 @@ func (c *Context) Begin(in *Input, widthPx, heightPx int, scale, dt float32) {
 	c.nOvs, c.nOvOpen, c.parentless = 0, 0, false
 	c.modalIdx = c.topModal()
 	c.claimed, c.cmdTaken, c.activated = 0, 0, 0
-	c.fieldBuilt, c.pasteReq, c.pasteTag = false, false, 0
+	c.fieldBuilt, c.textTaken, c.pasteReq, c.pasteTag = false, false, false, 0
 	for i := 0; i < c.nCarry; i++ { // edit actions the previous frame could not give its field
 		c.in.PushEdit(c.carry[i])
 	}

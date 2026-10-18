@@ -65,7 +65,9 @@ func (c *Context) IMERect() (r [4]float32, ok bool) { return c.imeRect, c.imeOK 
 // IMECancel reports, after the frame was built, that the input method's
 // composition (Input.Preedit) is orphaned: it belongs to a field that lost the
 // focus (which committed it into its text) or no longer exists, and no field
-// shows it. The app discards the platform's composition (Window.DiscardComposition)
+// shows it; or that Escape went down while a field showed it, which cancels
+// the composition (the key is then not also the field's, nor an overlay's).
+// The app discards the platform's composition (Window.DiscardComposition)
 // and clears its Input.Preedit.
 func (c *Context) IMECancel() bool { return c.imeCancel }
 
@@ -99,7 +101,7 @@ func (c *Context) IMECancel() bool { return c.imeCancel }
 //	word modifier + Backspace/Delete   delete a word; ⌘Backspace (macOS): to the start
 //	primary + A/C/X/V select all, copy, cut, paste (copy and cut through Context.ClipboardSet, paste as below)
 //	primary + Z, shift + primary + Z, Ctrl+Y (not on macOS)   undo, redo (TextBuffer.Undo, Redo)
-//	Enter, Escape     TextFieldSignal.Submitted, .Cancelled (the text is untouched)
+//	Enter, Escape     TextFieldSignal.Submitted, .Cancelled (the text is untouched); Escape in a popup or modal overlay is also the overlay's (see keys.go)
 //
 // The mouse places the caret (shift-click extends), a drag selects, a double
 // click selects a word and drags by words, a triple click selects all.
@@ -263,19 +265,42 @@ func (c *Context) TextField(label string, buf *TextBuffer) TextFieldSignal {
 
 	// Typed text, then keys and edit actions.
 	if active {
-		c.fieldKey, c.fieldBuilt = key, true
+		// The frame's keys, edit actions and typed text are applied once. The
+		// keys were claimed at Begin for the field that had the focus then
+		// (fieldOwner), and so are the edit actions; if a handler moves the
+		// focus to a field built later in the same frame, that field applies
+		// none of them. (When no field was known to have the focus at Begin,
+		// the first focused field takes the edit actions.)
+		mine := c.fieldOwner == key || (c.fieldOwner == 0 && !c.fieldBuilt)
+		if mine {
+			c.fieldKey, c.fieldBuilt = key, true
+		}
 		typed := in.Text[:in.NText]
-		if in.HasReplace { // press-and-hold accents: the first part of the text replaces a range
+		if c.textTaken {
+			typed = nil
+		} else if in.HasReplace { // press-and-hold accents: the first part of the text replaces a range
 			n := min(in.ReplaceN, len(typed))
 			buf.ReplaceUTF16(int(in.ReplaceStart), int(in.ReplaceLen), typed[:n])
 			typed = typed[n:]
 			touched = true
+			c.textTaken = true
 		}
 		if len(typed) > 0 {
 			buf.Insert(typed)
 			touched = true
+			c.textTaken = true
 		}
-		if !composing {
+		if composing && mine {
+			// Escape cancels the composition: the app discards the platform's
+			// and clears Input.Preedit. The key goes no further.
+			for i := 0; i < in.NKeys; i++ {
+				if e := &in.Keys[i]; e.Down && e.Code == KeyEscape && (c.fieldKeys|c.fieldPeek)&(1<<uint(i)) != 0 {
+					c.imeCancel = true
+					c.ClaimKey(i) // (in an overlay too: it is not also the overlay's)
+				}
+			}
+		}
+		if !composing && mine {
 			touched = c.editKeys(buf, &res) || touched
 			for i := 0; i < in.NEdit; i++ {
 				c.applyEdit(buf, in.Edit[i])
@@ -508,7 +533,7 @@ func (c *Context) editKeys(buf *TextBuffer, res *TextFieldSignal) (pressed bool)
 	}
 	for i := 0; i < in.NKeys; i++ {
 		e := in.Keys[i]
-		if !e.Down || c.fieldKeys&(1<<uint(i)) == 0 { // only the keys claimed for the field
+		if !e.Down || (c.fieldKeys|c.fieldPeek)&(1<<uint(i)) == 0 { // only the keys claimed for the field
 			continue
 		}
 		pressed = true

@@ -296,7 +296,11 @@ func TestBig100k(t *testing.T) {
 	perEntry := float64(len(l.Names)+len(l.Entries)*24+len(l.Order)*4) / float64(len(l.Entries))
 	report(t, "100k: list %v, list+sort(name) %v, sort(name) %v, sort(size) %v, sort(mtime) %v, filter(%q → %d) %v; %.1f B/entry incl. names and order (names %.1f B avg)",
 		list, listSort, sortOnly, sortSize, sortMod, q, len(idx), filter, perEntry, float64(len(l.Names))/float64(len(l.Entries)))
-	if listSort > 600*time.Millisecond { // criterion is 150 ms on the target Mac; this only catches disasters on shared CI
+	// The criterion is 150 ms on the target Mac (measured there); this only
+	// catches disasters on shared CI. Linux runners measured 290–610 ms for the
+	// same code across phase 5 (best of 7: their disks vary run to run), so a
+	// tighter bound here flakes without catching anything.
+	if listSort > 2*time.Second {
 		t.Errorf("list+sort of 100k took %v", listSort)
 	}
 }

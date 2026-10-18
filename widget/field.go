@@ -153,6 +153,7 @@ func (k *Kit) searchDecor(wkey, fkey ui.Key, buf *ui.TextBuffer, h, iconX, clear
 	c.BoxKeyed(f|fl, ui.KeyN(wkey, 3), disp)
 
 	if res.Cancelled && buf.Len() > 0 {
+		c.TakeKey(ui.KeyEscape, 0) // the clear is Escape's whole effect (not also a dialog's cancel)
 		buf.Reset()
 		res.Changed, res.Cancelled = true, false
 	}

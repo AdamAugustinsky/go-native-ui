@@ -14,6 +14,13 @@ package ui
 //  3. Widget keys: Signal.Activated and a widget's own keys use TakeKey and
 //     ClaimKey; Tab traversal takes Tab at End if it is still unclaimed.
 //
+// Escape. A field in the main tree claims it (it reports Cancelled; while the
+// field shows an input-method composition, Escape cancels the composition:
+// Context.IMECancel). A field inside a popup or modal overlay sees it and
+// reports Cancelled too, but does not claim it: the overlay takes it as well,
+// so Escape in a dialog's text field cancels the dialog, and in a popup's
+// closes the popup (see BeginOverlay).
+//
 // The Escape key also closes the innermost popup overlay (see BeginOverlay)
 // before the commands see it.
 
@@ -130,7 +137,7 @@ func fieldWants(e *KeyEvent) bool {
 // claimFieldKeys is the first step of key distribution (Begin): the focused
 // text field claims the keys it handles.
 func (c *Context) claimFieldKeys() {
-	c.fieldFocus, c.fieldKeys = false, 0
+	c.fieldFocus, c.fieldKeys, c.fieldPeek, c.fieldOwner = false, 0, 0, 0
 	if c.focusKey == 0 || !c.in.Focused {
 		return
 	}
@@ -142,11 +149,19 @@ func (c *Context) claimFieldKeys() {
 	if !b.field || b.lastFrame != c.frame-1 || b.flags&Disabled != 0 || c.blocked(b) {
 		return
 	}
-	c.fieldFocus = true
+	c.fieldFocus, c.fieldOwner = true, c.focusKey
 	for i := 0; i < c.in.NKeys; i++ {
-		if fieldWants(&c.in.Keys[i]) {
-			c.fieldKeys |= 1 << uint(i)
+		e := &c.in.Keys[i]
+		if !fieldWants(e) {
+			continue
 		}
+		if e.Code == KeyEscape && b.ovl != 0 {
+			// In a popup or modal Escape is the overlay's too: the field sees
+			// it (and reports Cancelled) but leaves it for the overlay.
+			c.fieldPeek |= 1 << uint(i)
+			continue
+		}
+		c.fieldKeys |= 1 << uint(i)
 	}
 	c.claimed |= c.fieldKeys
 }

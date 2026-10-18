@@ -13,8 +13,10 @@ package platform
 // call on every frame: a cached value, refreshed when the system reports a
 // change. Its first call must not delay the first frame by more than a few
 // milliseconds, because the first frame is drawn in the mode it returns
-// (content-first: a dark-mode user must never see a light first frame). Main
-// thread.
+// (content-first: a dark-mode user should not see a light first frame). On
+// Linux the first call waits at most 25 ms for the desktop portal; a portal
+// slower than that (one started on demand) gives Known false, a light first
+// frame, and a crossfade when the answer arrives (D32). Main thread.
 //
 // AppearanceSerial counts changes of the system appearance. When the system
 // reports one, the serial changes and Wake is called, so an idle app wakes

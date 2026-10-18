@@ -132,6 +132,11 @@ type Command struct {
 	Shortcut Shortcut // zero: none
 	Scope    Scope
 	Role     Role
+	// InModal lets the command act while a modal overlay (a dialog) is open.
+	// Without it every command and shortcut is held back then, except the edit
+	// roles for a text field with the focus inside the modal (see Match). Mark
+	// the few that belong to everything: Quit, a Help window.
+	InModal bool
 }
 
 // ItemKind selects what a menu item is.

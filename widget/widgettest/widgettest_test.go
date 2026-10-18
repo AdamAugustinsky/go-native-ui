@@ -175,3 +175,27 @@ func TestOpenPlaysOnTheRealWindow(t *testing.T) {
 		t.Errorf("items %q, quads %d", g.items, len(r.Quads()))
 	}
 }
+
+// WaitChange waits for the asynchronous answer of a paste, not for a number of
+// frames, and fails when nothing changes.
+func TestWaitChangeWaitsForThePaste(t *testing.T) {
+	r, a := newCounter(t)
+	prim := ui.PrimaryMod()
+	r.Play(widgettest.Click(ui.RoleTextField, "Item"), widgettest.Type("milk"), widgettest.Idle(2),
+		widgettest.Key('A', prim), widgettest.Key('C', prim), widgettest.Idle(2), widgettest.Key(ui.KeyEnd, 0),
+		widgettest.Key('V', prim), widgettest.WaitChange(ui.RoleTextField, "Item"))
+	r.Frames(2)
+	if a.input.String() != "milkmilk" {
+		t.Fatalf("after the paste the field holds %q, want %q", a.input.String(), "milkmilk")
+	}
+
+	// nothing changes: the step fails, saying so
+	p := widgettest.NewPlayer(r, []widgettest.Step{widgettest.WaitChange(ui.RoleTextField, "Item").Within(50)}, widgettest.Options{Synthetic: true})
+	r.Use(p)
+	for i := 0; i < 600 && p.Err() == nil; i++ {
+		r.Frame()
+	}
+	if err := p.Err(); err == nil || !strings.Contains(err.Error(), "did not change") {
+		t.Fatalf("a wait for a change that never comes gave %v", err)
+	}
+}

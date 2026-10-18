@@ -334,8 +334,9 @@ in the frame's arena and `LabelBytesStyle` copies the bytes (section 10).
 A `Dialog` is an in-window modal, open while the app's `bool` is true. Build its
 content only when `Visible`. Everything under it is inert: no pointer, scrolling,
 text input or shortcut reaches the window, and Tab stays inside the dialog. An
-`Action` closes the dialog and returns true once. Escape cancels. The first
-`ButtonPrimary` is the default action: it has the focus when the dialog opens, and
+`Action` closes the dialog and returns true once. Escape cancels, also from a text
+field in the dialog; with dialogs stacked only the topmost takes Enter and Escape.
+The first `ButtonPrimary` is the default action: it has the focus when the dialog opens, and
 Enter chooses it. Build Cancel first, so that Enter on a focused Cancel is
 Cancel's.
 
@@ -410,7 +411,9 @@ the widgets' own keys. While a field has the focus it takes every key but Tab
 unless the primary modifier is down, and with it A, C, X, V, Z, the arrows,
 Home, End, Backspace and Delete. So ⌘N works while you type, but ⌘Backspace in
 the field means "delete to the start of the line", and it removes notes only when
-the focus is elsewhere. A modal dialog takes every shortcut except its own.
+the focus is elsewhere. A modal dialog holds back every command and shortcut
+except the edit commands for a text field in it and the commands marked
+`menu.Command.InModal`; its own keys are taken by its widgets.
 
 **Where the menu shows.** `Kit.MenuBar` draws the bar inside the window on every
 OS today. D29 plans a native menu bar on macOS built from the same model, with
@@ -422,8 +425,10 @@ menu and are not needed here, because the field handles its own chords.
 
 Nothing in the example chooses a mode. A kit follows the system by default
 (`theme.System`): the first frame is already drawn in the system's light or dark
-mode and accent colour, a change while the app runs crossfades with no polling,
-and the OS-drawn parts of the window (the Windows title bar, the macOS traffic
+mode and accent colour (on Linux, when the desktop portal answers within 25 ms,
+which a running portal does; a portal that has to start on demand gives a light
+first frame that crossfades to dark), a change while the app runs crossfades
+with no polling, and the OS-drawn parts of the window (the Windows title bar, the macOS traffic
 lights) follow what the app shows (D32). An app that wants a mode of its own calls
 `Kit.SetPreference` with `theme.ForceLight` or `theme.ForceDark`; the gallery has a
 Select for it. Colours come from the theme's palette, never from constants in

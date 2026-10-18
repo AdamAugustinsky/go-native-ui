@@ -12,10 +12,11 @@ const (
 )
 
 // benchSteps is the benchmark's session: hover and press on buttons and a
-// tooltip, typing then copy, cut, select all and undo (paste needs a clipboard
-// round trip and is not in it), choices, a Select, the table (scrolling a
-// million rows, Page Down, Shift selection, a sort, a context menu), a Dialog,
-// and the light/dark crossfade.
+// tooltip, typing then copy, cut, select all and undo, then paste (through the
+// platform's clipboard in a window, whose answer the script waits for) and its
+// undo, choices, a Select, the table (scrolling a million rows, Page Down,
+// Shift selection, a sort, a context menu), a Dialog, and the light/dark
+// crossfade.
 func benchSteps() []step {
 	prim, shift := modPrim, modShift
 	s := []step{idle(6)}
@@ -36,6 +37,12 @@ func benchSteps() []step {
 		key('A', prim), key('X', prim), idle(3),
 		key('Z', prim), idle(2), key('Z', prim), idle(2), key('Z', prim), idle(2),
 		keys(ui.KeyLeft, shift, 3), idle(2), key(ui.KeyEnd, 0), idle(2))
+
+	// paste: the clipboard holds what the copy took; the request goes to the
+	// platform and the text comes back some frames later, so the script waits
+	// for the field to change, then undoes the paste (one step)
+	add(key('V', prim), waitChange(ui.RoleTextField, "Notes"), idle(3),
+		key('Z', prim), idle(3))
 
 	// choices
 	add(click(ui.RoleCheckbox, "Enable feature"), idle(4), click(ui.RoleCheckbox, "Enable feature"), idle(4),

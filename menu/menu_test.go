@@ -446,3 +446,161 @@ func TestMatchAllocatesNothing(t *testing.T) {
 		t.Fatalf("%v allocations per frame", n)
 	}
 }
+
+// modalRig is a window with a modal overlay open, holding a text field with a
+// selection, and optionally a field in the main tree.
+type modalRig struct {
+	*rig
+	main, modal ui.TextBuffer
+	copied      []string
+	fired       []ID
+	withModal   bool
+	withMain    bool
+	mainKey     ui.Key
+}
+
+func newModalRig(t *testing.T, cmds []Command) *modalRig {
+	m, err := NewModel(cmds, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := &modalRig{rig: newRig(t), withModal: true}
+	r.m = m
+	r.main.SetString("main text")
+	r.main.SelectAll()
+	r.modal.SetString("hello")
+	r.modal.SelectAll()
+	r.c.ClipboardSet = func(b []byte) { r.copied = append(r.copied, string(b)) }
+	for i := 0; i < 4; i++ {
+		r.step()
+	}
+	return r
+}
+
+func (r *modalRig) build(c *ui.Context) {
+	r.m.Match(c)
+	if r.withMain {
+		c.NextSize(ui.Px(200), ui.Px(24))
+		r.mainKey = c.KeyOf(c.TextField("main", &r.main).ID)
+	}
+	if r.withModal {
+		c.BeginOverlay(1, ui.OverlayModal, [4]float32{0, 0, 400, 300}, ui.PlaceCenter)
+		c.NextSize(ui.Px(200), ui.Px(24))
+		c.TextField("modal", &r.modal)
+		c.EndOverlay()
+	}
+	for id, ok := r.m.Next(); ok; id, ok = r.m.Next() {
+		r.fired = append(r.fired, id)
+	}
+}
+
+// step runs a frame and returns what fired in it, with the copies it made.
+func (r *modalRig) step() []ID {
+	r.fired, r.copied = nil, nil
+	r.frame(r.build)
+	return r.fired
+}
+
+func TestCommandsWhileAModalIsOpen(t *testing.T) {
+	pm := ui.PrimaryMod()
+	cmds := append(testCommands(), Command{ID: 20, Title: "Help", InModal: true, Shortcut: Shortcut{Key: 'H', Primary: true}})
+
+	t.Run("other commands stay blocked and their keys stay free", func(t *testing.T) {
+		r := newModalRig(t, cmds)
+		r.in.PushCommand(uint16(cmdSave)) // from a native menu
+		r.in.PushCommand(uint16(cmdQuit))
+		r.chord('N', pm) // a shortcut
+		var free bool
+		r.fired, r.copied = nil, nil
+		r.frame(func(c *ui.Context) {
+			r.build(c)
+			_, claimed := c.KeyAt(0)
+			free = !claimed
+		})
+		if len(r.fired) != 0 {
+			t.Fatalf("commands fired beneath a modal: %v", r.fired)
+		}
+		if !free {
+			t.Fatal("a blocked shortcut was claimed: the dialog's own widgets could not take it")
+		}
+	})
+
+	t.Run("a command marked InModal fires", func(t *testing.T) {
+		r := newModalRig(t, cmds)
+		r.in.PushCommand(20)
+		if got := r.step(); len(got) != 1 || got[0] != 20 {
+			t.Fatalf("system command fired %v", got)
+		}
+		r.chord('H', pm)
+		var claimed bool
+		r.fired = nil
+		r.frame(func(c *ui.Context) {
+			r.build(c)
+			_, claimed = c.KeyAt(0)
+		})
+		if len(r.fired) != 1 || r.fired[0] != 20 || !claimed {
+			t.Fatalf("shortcut fired %v, claimed %v", r.fired, claimed)
+		}
+	})
+
+	t.Run("edit commands reach the focused field in the modal", func(t *testing.T) {
+		r := newModalRig(t, cmds)
+		if !r.c.TextFieldFocused() {
+			t.Fatal("the field in the modal does not have the focus")
+		}
+		r.in.PushCommand(uint16(cmdCopy))
+		if got := r.step(); len(got) != 0 {
+			t.Fatalf("Copy fired as a command: %v", got)
+		}
+		if len(r.copied) != 1 || r.copied[0] != "hello" {
+			t.Fatalf("Copy from a native menu gave %q, want the selection once", r.copied)
+		}
+		// the same through a shortcut the field did not claim (here: none, the
+		// field claims its chords; ⌘C acts once)
+		r.chord('C', pm)
+		if got := r.step(); len(got) != 0 || len(r.copied) != 1 {
+			t.Fatalf("⌘C: fired %v, copied %q", got, r.copied)
+		}
+		// Undo through the field's history, from the menu
+		r.chord('X', pm) // cut: deletes the selection
+		r.step()
+		if r.modal.String() != "" {
+			t.Fatalf("cut left %q", r.modal.String())
+		}
+		r.in.PushCommand(uint16(cmdUndo))
+		if got := r.step(); len(got) != 0 || r.modal.String() != "hello" {
+			t.Fatalf("Undo from the menu: fired %v, text %q", got, r.modal.String())
+		}
+	})
+
+	t.Run("edit commands without a field in the modal are dropped", func(t *testing.T) {
+		r := newModalRig(t, cmds)
+		r.withMain, r.withModal = true, true
+		r.c.SetFocus(0)
+		r.step()
+		r.step()
+		// a field in the main tree has the focus, beneath the modal: not eligible
+		r.c.SetFocus(r.mainKey)
+		r.in.PushCommand(uint16(cmdCopy))
+		if got := r.step(); len(got) != 0 || len(r.copied) != 0 {
+			t.Fatalf("Copy beneath a modal: fired %v, copied %q", got, r.copied)
+		}
+		r.c.SetFocus(0)
+		r.step()
+		r.in.PushCommand(uint16(cmdPaste))
+		if got := r.step(); len(got) != 0 {
+			t.Fatalf("Paste with no field focused fired beneath a modal: %v", got)
+		}
+	})
+
+	t.Run("without a modal everything works", func(t *testing.T) {
+		r := newModalRig(t, cmds)
+		r.withModal = false
+		r.step()
+		r.step()
+		r.in.PushCommand(uint16(cmdSave))
+		if got := r.step(); len(got) != 1 || got[0] != cmdSave {
+			t.Fatalf("fired %v", got)
+		}
+	})
+}

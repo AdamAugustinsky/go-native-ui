@@ -54,6 +54,13 @@ type Conn struct {
 
 	subs atomic.Pointer[[]*Subscription] // copy on write
 
+	// Owned by the reader goroutine: the reusable receive buffer, and the
+	// header and signal views built over it (fields so that handing them to a
+	// callback does not allocate).
+	rbuf []byte
+	hdr  header
+	sig  Signal
+
 	done chan struct{}
 	err  error // set before done is closed
 	once sync.Once
@@ -185,7 +192,7 @@ func newConn(ctx context.Context, nc net.Conn) (*Conn, error) {
 	if !strings.HasPrefix(string(line), "OK ") {
 		return nil, fmt.Errorf("dbus: authentication refused: %q", strings.TrimSpace(string(line)))
 	}
-	c := &Conn{nc: nc, pending: map[uint32]chan *Message{}, objects: map[objKey]Handler{}, done: make(chan struct{})}
+	c := &Conn{nc: nc, pending: map[uint32]chan *Message{}, objects: map[objKey]Handler{}, done: make(chan struct{}), rbuf: make([]byte, recvBufSize)}
 	go c.readLoop(br)
 	r, err := c.CallContext(ctx, busName, busPath, busName, "Hello", "")
 	if err != nil {
@@ -233,13 +240,44 @@ func (c *Conn) fail(err error) {
 
 func (c *Conn) readLoop(br *bufio.Reader) {
 	for {
-		m, err := ReadMessage(br)
+		buf, err := readFrame(br, c.rbuf)
+		if err != nil {
+			c.fail(err)
+			return
+		}
+		if parseHeader(buf, &c.hdr) && c.hdr.typ == TypeSignal && c.dispatchSignal() {
+			continue
+		}
+		m, err := parseMessage(buf)
 		if err != nil {
 			c.fail(err)
 			return
 		}
 		c.dispatch(m)
 	}
+}
+
+// dispatchSignal delivers the signal whose header is in c.hdr to the
+// [Conn.SubscribeSignal] subscriptions that match it, in place. It reports
+// whether that was all: false when a [Conn.Subscribe] subscription may match
+// too, and the message must be decoded for that one.
+func (c *Conn) dispatchSignal() (done bool) {
+	p := c.subs.Load()
+	if p == nil {
+		return true
+	}
+	h := &c.hdr
+	decode := false
+	for _, s := range *p {
+		switch {
+		case s.raw != nil && s.mayMatch(h):
+			c.sig = Signal{Serial: h.serial, Sender: h.sender, Path: h.path, Interface: h.iface, Member: h.member, Signature: h.sig, body: h.body}
+			s.raw(&c.sig)
+		case s.fn != nil && s.mayMatch(h):
+			decode = true
+		}
+	}
+	return !decode
 }
 
 func (c *Conn) dispatch(m *Message) {
@@ -255,7 +293,7 @@ func (c *Conn) dispatch(m *Message) {
 	case TypeSignal:
 		if p := c.subs.Load(); p != nil {
 			for _, s := range *p {
-				if s.matches(m) {
+				if s.fn != nil && s.matches(m) {
 					s.fn(m)
 				}
 			}
@@ -364,7 +402,17 @@ type Subscription struct {
 	c    *Conn
 	m    Match
 	rule string
-	fn   func(*Message)
+	fn   func(*Message) // a Subscribe subscription: decoded messages
+	raw  func(*Signal)  // a SubscribeSignal subscription: in place
+}
+
+// mayMatch compares a header read in place with the subscription. An Arg0
+// match needs the body, so it counts as a possible match.
+func (s *Subscription) mayMatch(h *header) bool {
+	if s.m.Path != "" && string(h.path) != string(s.m.Path) || s.m.Interface != "" && string(h.iface) != s.m.Interface || s.m.Member != "" && string(h.member) != s.m.Member {
+		return false
+	}
+	return true
 }
 
 func (s *Subscription) matches(m *Message) bool {
@@ -388,15 +436,29 @@ func (m *Message) firstString() (string, bool) {
 	return s, ok
 }
 
-// Subscribe delivers matching signals to fn (see the package comment for what
-// fn may do). It returns once the bus has installed the match, so a call made
-// afterwards cannot lose the signal it provokes.
+// Subscribe delivers matching signals to fn, decoded into a [Message] (which
+// allocates; see [Conn.SubscribeSignal] for the allocation-free form). It
+// returns once the bus has installed the match, so a call made afterwards
+// cannot lose the signal it provokes. See the package comment for what fn may
+// do.
 func (c *Conn) Subscribe(ctx context.Context, m Match, fn func(*Message)) (*Subscription, error) {
-	rule, err := m.rule()
+	return c.subscribe(ctx, &Subscription{c: c, m: m, fn: fn})
+}
+
+// SubscribeSignal is Subscribe with the signal handed over in place, without
+// allocating (see the comment on [Signal]). Match.Arg0 filters at the bus only
+// (the connection does not decode the body to test it). The callback runs on
+// the reader goroutine and must not block or call [Conn.Call].
+func (c *Conn) SubscribeSignal(ctx context.Context, m Match, fn func(*Signal)) (*Subscription, error) {
+	return c.subscribe(ctx, &Subscription{c: c, m: m, raw: fn})
+}
+
+func (c *Conn) subscribe(ctx context.Context, s *Subscription) (*Subscription, error) {
+	rule, err := s.m.rule()
 	if err != nil {
 		return nil, err
 	}
-	s := &Subscription{c: c, m: m, rule: rule, fn: fn}
+	s.rule = rule
 	c.mu.Lock()
 	old := c.subs.Load()
 	var next []*Subscription
