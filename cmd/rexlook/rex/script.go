@@ -3,6 +3,7 @@ package rex
 import (
 	"math"
 
+	"gonativeui/theme"
 	"gonativeui/ui"
 )
 
@@ -43,6 +44,12 @@ type script struct {
 	f     int
 	dragX float32
 	dragY float32
+	// modes makes step end each round with a switch to dark and back, so that
+	// the crossfades are part of what an allocation test measures. The window
+	// bench leaves it off: switching the window's appearance is an OS call
+	// that costs milliseconds, which does not belong in a per-frame CPU budget.
+	modes bool
+	base  theme.Preference // the preference to return to after the mode switch
 }
 
 func (s *script) move(x, y float32) { s.in.MouseX, s.in.MouseY = x, y; s.in.Inside = true }
@@ -75,6 +82,17 @@ func (s *script) step() {
 	f := s.f % 900
 	s.f++
 	x := s.x
+	if s.modes {
+		switch f {
+		case 780:
+			s.base = x.Preference()
+			x.SetPreference(theme.ForceDark)
+		case 850:
+			x.SetPreference(theme.ForceLight)
+		case 899:
+			x.SetPreference(s.base)
+		}
+	}
 	switch {
 	case f < 200: // hover across the tabs and back
 		a, _ := centre(x.tabRects[0])

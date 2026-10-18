@@ -124,16 +124,25 @@ type hrn struct {
 	list  gpu.DrawList
 	w, h  int
 	scale float32
+	sys   ui.Appearance // what the system says, in every frame
 }
 
 // newHarness creates a harness for a w×h point window at the given scale.
 func newHarness(t *testing.T, wPt, hPt int, scale float32) *hrn {
+	h := newHarnessRaw(t, wPt, hPt, scale, ui.Appearance{})
+	h.settle()
+	return h
+}
+
+// newHarnessRaw is a harness that has not run a frame yet, for a system that
+// says sys.
+func newHarnessRaw(t *testing.T, wPt, hPt int, scale float32, sys ui.Appearance) *hrn {
 	// New rasterises the system symbols through AppKit on macOS, whose
 	// autorelease pools belong to one thread: stay on this one.
 	runtime.LockOSThread()
 	t.Cleanup(runtime.UnlockOSThread)
 	ft := newFake()
-	h := &hrn{t: t, w: int(float32(wPt) * scale), h: int(float32(hPt) * scale), scale: scale}
+	h := &hrn{t: t, w: int(float32(wPt) * scale), h: int(float32(hPt) * scale), scale: scale, sys: sys}
 	h.x = New(ft, scale)
 	h.c = ui.New(ft)
 	h.c.Reserve(4096)
@@ -142,11 +151,11 @@ func newHarness(t *testing.T, wPt, hPt int, scale float32) *hrn {
 	h.c.AtlasSync(&fakeUploader{})
 	h.in.Inside, h.in.Focused = true, true
 	h.in.MouseX, h.in.MouseY = -100, -100
-	h.settle()
 	return h
 }
 
 func (h *hrn) frame() {
+	h.c.SetSystemAppearance(h.sys)
 	h.c.Begin(&h.in, h.w, h.h, h.scale, 1.0/60)
 	h.x.Build(h.c)
 	h.c.End(&h.list)

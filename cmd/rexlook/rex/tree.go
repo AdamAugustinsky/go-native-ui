@@ -1,7 +1,7 @@
 package rex
 
 import (
-	"gonativeui/cmd/internal/rexkit"
+	"gonativeui/theme"
 	"gonativeui/ui"
 )
 
@@ -277,7 +277,7 @@ func (t *tab) place(n int8, r [4]float32, g *gutters) {
 		lo, hi = first, first
 	}
 	nd.avail, nd.lo, nd.hi = avail, lo, hi
-	mid := rexkit.Snap(a0 + first)
+	mid := theme.Snap(a0 + first)
 	ra, rb, gr := r, r, r
 	ra[ax+2] = mid
 	rb[ax] = mid + gut

@@ -4,7 +4,9 @@
 // focused, split, maximised, closed and resized. It builds on every OS; the
 // scene lives in package rex.
 //
-//	rexlook                    show the window; Esc or the close button quits
+//	rexlook                    show the window, in the system's light or dark mode and accent colour, which it
+//	                           follows while it runs (-mode system, the default; -mode light or dark forces
+//	                           one; a change crossfades); Esc or the close button quits
 //	rexlook -exit-first        print the startup timeline as JSON and exit once the first frame is on glass
 //	rexlook -bench             scripted pointer run (hover across the tabs, focus switching, both dividers
 //	                           dragged back and forth): 1000 warm-up + 900 measured frames; print allocation,
@@ -17,7 +19,10 @@
 //	                           how the drag map decides there, and exit
 //	rexlook -o out.png         render the initial state offscreen at 2114×1278 px (the reference
 //	                           size) with our own traffic lights and the window's corners, and write a
-//	                           PNG plus out.png.metrics.json for tools/rexcompare
+//	                           PNG plus out.png.metrics.json for tools/rexcompare; light unless -mode is
+//	                           given (-mode system renders what this machine says)
+//	rexlook -o out.png -o-dark dark.png
+//	                           render the light and the dark picture
 package main
 
 import (
@@ -32,6 +37,8 @@ import (
 
 	"gonativeui/app"
 	"gonativeui/cmd/rexlook/rex"
+	"gonativeui/platform"
+	"gonativeui/theme"
 	"gonativeui/ui"
 )
 
@@ -49,6 +56,8 @@ const (
 
 func main() {
 	out := flag.String("o", "", "render offscreen at 2114×1278 px into this PNG and exit")
+	outDark := flag.String("o-dark", "", "with -o: also render the dark mode into this PNG")
+	mode := flag.String("mode", "system", "system (follow the system's light or dark mode and accent: the default), light or dark; with -o the default is light")
 	exitFirst := flag.Bool("exit-first", false, "print the startup timeline as JSON and exit once the first frame is on glass")
 	bench := flag.Bool("bench", false, "scripted run; print allocation, CPU, pacing and latency as JSON")
 	gate := flag.Bool("gate", false, "with -bench: exit with status 3 unless there were 0 allocations, main-thread CPU within budget and frames were paced")
@@ -60,23 +69,50 @@ func main() {
 	verbose := flag.Bool("v", false, "print the startup timeline to stderr; with -bench or in a window, also a state line every second while frames stop coming")
 	flag.Parse()
 
-	var err error
-	switch {
-	case *out != "":
-		err = renderPNG(*out)
-	case *bench:
-		err = runBench(*gate, *allowUnpaced, *maxCPU, *timeout, *verbose)
-	case *resizeTest:
-		err = runResizeTest()
-	case *probe:
-		err = runProbe()
-	default:
-		err = runWindow(*exitFirst, *verbose)
+	pref, err := parseMode(*mode)
+	explicit := false
+	flag.Visit(func(f *flag.Flag) { explicit = explicit || f.Name == "mode" })
+	if err == nil {
+		switch {
+		case *out != "":
+			if !explicit {
+				pref = theme.ForceLight // a picture is the same on every machine unless it is asked to follow this one
+			}
+			err = renderPNG(*out, *outDark, pref)
+		case *bench:
+			err = runBench(pref, *gate, *allowUnpaced, *maxCPU, *timeout, *verbose)
+		case *resizeTest:
+			err = runResizeTest(pref)
+		case *probe:
+			err = runProbe()
+		default:
+			err = runWindow(pref, *exitFirst, *verbose)
+		}
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "rexlook:", err)
 		os.Exit(1)
 	}
+}
+
+// parseMode maps the -mode flag to a preference.
+func parseMode(s string) (theme.Preference, error) {
+	switch s {
+	case "system":
+		return theme.System, nil
+	case "light":
+		return theme.ForceLight, nil
+	case "dark":
+		return theme.ForceDark, nil
+	}
+	return 0, fmt.Errorf("-mode %q: want system, light or dark", s)
+}
+
+// newScene is the scene showing the mode pref asks for.
+func newScene(pref theme.Preference) *rex.Rex {
+	x := rex.NewApp()
+	x.SetPreference(pref)
+	return x
 }
 
 // builder is the scene plus Esc to quit, for the window modes.
@@ -85,7 +121,7 @@ type builder struct {
 	a *app.App
 }
 
-func newBuilder() *builder { return &builder{Rex: rex.NewApp()} }
+func newBuilder(pref theme.Preference) *builder { return &builder{Rex: newScene(pref)} }
 
 func (b *builder) Init(a *app.App) error { b.a = a; return b.Rex.Init(a) }
 
@@ -99,8 +135,8 @@ func (b *builder) Build(c *ui.Context) {
 	b.Rex.Build(c)
 }
 
-func runWindow(exitFirst, verbose bool) error {
-	res, err := app.RunWith(rex.Config(), newBuilder(), app.RunOptions{ExitFirst: exitFirst, Verbose: verbose})
+func runWindow(pref theme.Preference, exitFirst, verbose bool) error {
+	res, err := app.RunWith(rex.Config(), newBuilder(pref), app.RunOptions{ExitFirst: exitFirst, Verbose: verbose})
 	if err != nil {
 		return err
 	}
@@ -114,13 +150,26 @@ func runWindow(exitFirst, verbose bool) error {
 }
 
 // renderPNG draws the initial state offscreen at the reference size and
-// writes it, with the layout metrics the compare tool checks.
-func renderPNG(path string) error {
-	quads, calls, err := rex.RenderShot(path, refW, refH, 2, true)
+// writes it, with the layout metrics the compare tool checks; with dark, also
+// the dark mode into that file.
+func renderPNG(path, dark string, pref theme.Preference) error {
+	o := rex.ShotOptions{Width: refW, Height: refH, Scale: 2, Corners: true, Preference: pref}
+	if pref == theme.System { // an offscreen window has no system: ask this machine
+		a := platform.SystemAppearance()
+		o.System = ui.Appearance{Dark: a.Dark, Accent: a.Accent, Known: a.Known}
+	}
+	quads, calls, err := rex.RenderShot(path, o)
 	if err != nil {
 		return err
 	}
 	fmt.Printf("%d quads, %d draw calls -> %s\n", quads, calls, path)
+	if dark != "" {
+		o.Preference = theme.ForceDark
+		if quads, calls, err = rex.RenderShot(dark, o); err != nil {
+			return err
+		}
+		fmt.Printf("%d quads, %d draw calls -> %s\n", quads, calls, dark)
+	}
 	return nil
 }
 
@@ -134,8 +183,8 @@ type report struct {
 	GateFailures  []string `json:",omitempty"`
 }
 
-func runBench(gate, allowUnpaced bool, maxCPU float64, timeout time.Duration, verbose bool) error {
-	x := rex.NewApp()
+func runBench(pref theme.Preference, gate, allowUnpaced bool, maxCPU float64, timeout time.Duration, verbose bool) error {
+	x := newScene(pref)
 	br, err := app.RunBench(rex.Config(), rex.NewBench(x), app.BenchOptions{Warm: warmFrames, Frames: measFrames, Timeout: timeout, Verbose: verbose})
 	if err != nil {
 		return err
@@ -171,14 +220,14 @@ func gateFailures(r report, allowUnpaced bool, maxCPU float64) []string {
 }
 
 // runResizeTest drags the window through 150 sizes, like a user dragging an edge.
-func runResizeTest() error {
+func runResizeTest(pref theme.Preference) error {
 	cfg := rex.Config()
 	var sizes [][2]float64
 	for i := 0; i < 150; i++ {
 		f := float64(i) / 149
 		sizes = append(sizes, [2]float64{float64(cfg.Width) - 250 + 450*math.Abs(math.Sin(f*math.Pi*2)), float64(cfg.Height) - 150 + 250*f})
 	}
-	rep, err := app.RunLiveResizeTest(cfg, newBuilder(), sizes)
+	rep, err := app.RunLiveResizeTest(cfg, newBuilder(pref), sizes)
 	if err != nil {
 		return err
 	}
