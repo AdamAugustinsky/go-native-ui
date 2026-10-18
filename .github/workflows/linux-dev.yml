@@ -52,11 +52,11 @@ jobs:
           sway -c swaycfg > sway.log 2>&1 &
           sleep 3
           export WAYLAND_DISPLAY=$(ls $XDG_RUNTIME_DIR | grep '^wayland-' | grep -v lock | head -1)
-          echo "--- seat before"; wayland-info | grep -A6 "wl_seat" | head -12
+          echo "--- seat before"; wayland-info | sed -n "/wl_seat/,/zwp_primary/p" | tr "\t" " " | head -12
           wtype -s 20000 a > wtype.log 2>&1 &
           sleep 2
-          echo "--- seat with wtype"; wayland-info | grep -A6 "wl_seat" | head -12
+          echo "--- seat with wtype"; wayland-info | sed -n "/wl_seat/,/zwp_primary/p" | tr "\t" " " | head -12
           cat wtype.log
           wlrctl pointer move 10 10; echo "wlrctl rc=$?"
-          echo "--- seat with wlrctl"; wayland-info | grep -A6 "wl_seat" | head -12
+          echo "--- seat with wlrctl"; wayland-info | sed -n "/wl_seat/,/zwp_primary/p" | tr "\t" " " | head -12
           tail -5 sway.log
