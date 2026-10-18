@@ -61,6 +61,13 @@ jobs:
             echo "| target | bytes | MiB |"
             echo "|---|---:|---:|"
           } > "$gsum"
+          nsum=$(mktemp)
+          {
+            echo ""
+            echo "### Stripped notes example binary (-trimpath -ldflags=\"-s -w\")"
+            echo "| target | bytes | MiB |"
+            echo "|---|---:|---:|"
+          } > "$nsum"
           fail=0
           for t in darwin/arm64 darwin/amd64 windows/amd64 windows/arm64 linux/amd64 linux/arm64; do
             os=${t%/*}; arch=${t#*/}
@@ -84,8 +91,17 @@ jobs:
             if [ "$gsize" -gt "$MAX_BINARY_BYTES" ]; then
               echo "::error::$t gallery is $gsize bytes (budget $MAX_BINARY_BYTES)"; fail=1
             fi
+            nout=dist/notes-$os-$arch$ext
+            GOOS=$os GOARCH=$arch go build -trimpath -ldflags="-s -w" -o "$nout" ./examples/notes
+            nsize=$(stat -c %s "$nout")
+            nmib=$(awk -v s="$nsize" 'BEGIN { printf "%.2f", s / 1048576 }')
+            echo "| $t | $nsize | $nmib |" >> "$nsum"
+            echo "{\"target\":\"$t\",\"notes_bytes\":$nsize}" >> dist/sizes.jsonl
+            if [ "$nsize" -gt "$MAX_BINARY_BYTES" ]; then
+              echo "::error::$t notes is $nsize bytes (budget $MAX_BINARY_BYTES)"; fail=1
+            fi
           done
-          cat "$gsum" >> "$GITHUB_STEP_SUMMARY"
+          cat "$gsum" "$nsum" >> "$GITHUB_STEP_SUMMARY"
           exit $fail
       - name: patched go-text (third_party/typesetting) tests
         run: cd third_party/typesetting && go test -count=1 ./font/opentype/tables/
@@ -150,6 +166,12 @@ jobs:
           ./bin/gallery -o gallery-macos.png -o-dark gallery-macos-dark.png
           ./bin/gallery -bench -gate -allow-unpaced -timeout 150s | tee gallery-macos.json
           { echo '```json'; cat gallery-macos.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: notes example (windowed bench with the allocation gate)
+        if: ${{ !cancelled() }}
+        run: |
+          go build -trimpath -ldflags="-s -w" -o bin/notes ./examples/notes
+          ./bin/notes -bench -gate -allow-unpaced -timeout 150s | tee notes-macos.json
+          { echo '```json'; cat notes-macos.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - name: live resize (two draws per transaction must not starve the drawable pool)
         run: |
           go build -trimpath -ldflags="-s -w" -o bin/rexlook ./cmd/rexlook
@@ -170,6 +192,7 @@ jobs:
             gallery-macos.json
             gallery-macos.png
             gallery-macos-dark.png
+            notes-macos.json
           if-no-files-found: ignore
 
   windows:
@@ -219,6 +242,11 @@ jobs:
           ./bin/gallery.exe -o gallery-windows-${{ matrix.arch }}.png -o-dark gallery-windows-${{ matrix.arch }}-dark.png
           ./bin/gallery.exe -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 420s | tee gallery-windows-${{ matrix.arch }}.json
           { echo '```json'; cat gallery-windows-${{ matrix.arch }}.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: notes example (windowed bench with the allocation gate)
+        run: |
+          go build -trimpath -ldflags="-s -w" -o bin/notes.exe ./examples/notes
+          ./bin/notes.exe -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 420s | tee notes-windows-${{ matrix.arch }}.json
+          { echo '```json'; cat notes-windows-${{ matrix.arch }}.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -233,6 +261,7 @@ jobs:
             gallery-windows-${{ matrix.arch }}.json
             gallery-windows-${{ matrix.arch }}.png
             gallery-windows-${{ matrix.arch }}-dark.png
+            notes-windows-${{ matrix.arch }}.json
           if-no-files-found: ignore
 
   linux:
@@ -299,6 +328,9 @@ jobs:
           go build -trimpath -ldflags="-s -w" -o bin/gallery ./cmd/gallery
           xvfb-run -a -s "-screen 0 1280x800x24" \
             ./bin/gallery -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 420s | tee gallery-linux-${{ matrix.arch }}-x11.json
+          go build -trimpath -ldflags="-s -w" -o bin/notes ./examples/notes
+          xvfb-run -a -s "-screen 0 1280x800x24" \
+            ./bin/notes -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 420s | tee notes-linux-${{ matrix.arch }}-x11.json
       - name: spike bench + gates (Wayland on headless Weston)
         if: matrix.backend == 'wayland'
         run: |
@@ -315,6 +347,8 @@ jobs:
           WAYLAND_DISPLAY=wayland-ci ./bin/pilot -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 420s | tee pilot-linux-${{ matrix.arch }}-wayland.json
           go build -trimpath -ldflags="-s -w" -o bin/gallery ./cmd/gallery
           WAYLAND_DISPLAY=wayland-ci ./bin/gallery -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 420s | tee gallery-linux-${{ matrix.arch }}-wayland.json
+          go build -trimpath -ldflags="-s -w" -o bin/notes ./examples/notes
+          WAYLAND_DISPLAY=wayland-ci ./bin/notes -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 420s | tee notes-linux-${{ matrix.arch }}-wayland.json
       - name: listbench + rex + pilot + gallery offscreen PNGs
         run: |
           go run ./cmd/rexlook/rex/rexshot -o rex-linux-${{ matrix.arch }}-${{ matrix.backend }}.png
@@ -324,7 +358,7 @@ jobs:
       - name: summary
         if: always()
         run: |
-          for f in spike-linux-${{ matrix.arch }}-${{ matrix.backend }}.json listbench-linux-${{ matrix.arch }}-${{ matrix.backend }}.json pilot-linux-${{ matrix.arch }}-${{ matrix.backend }}.json gallery-linux-${{ matrix.arch }}-${{ matrix.backend }}.json; do
+          for f in spike-linux-${{ matrix.arch }}-${{ matrix.backend }}.json listbench-linux-${{ matrix.arch }}-${{ matrix.backend }}.json pilot-linux-${{ matrix.arch }}-${{ matrix.backend }}.json gallery-linux-${{ matrix.arch }}-${{ matrix.backend }}.json notes-linux-${{ matrix.arch }}-${{ matrix.backend }}.json; do
             [ -f "$f" ] && { echo '```json'; cat "$f"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
           done
           [ -f weston.log ] && tail -n 40 weston.log || true
@@ -342,4 +376,5 @@ jobs:
             gallery-linux-${{ matrix.arch }}-${{ matrix.backend }}.json
             gallery-linux-${{ matrix.arch }}-${{ matrix.backend }}.png
             gallery-linux-${{ matrix.arch }}-${{ matrix.backend }}-dark.png
+            notes-linux-${{ matrix.arch }}-${{ matrix.backend }}.json
           if-no-files-found: ignore
