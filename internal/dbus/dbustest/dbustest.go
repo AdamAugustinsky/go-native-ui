@@ -28,6 +28,13 @@ type Bus struct {
 	Name    string // "broker" or "dbus-daemon"
 	Address string
 	Stop    func() // ends the bus: its clients lose their connection
+
+	// Inject writes already marshalled bytes straight to the client with the
+	// given unique name, without the bus decoding or routing them. Only the
+	// broker has it (nil for the dbus-daemon). A test that counts the process's
+	// allocations needs it: a sender or a router in the same process would be
+	// counted too.
+	Inject func(to string, raw []byte) error
 }
 
 // Each runs fn as a subtest against every bus available: the in-process
@@ -99,7 +106,7 @@ func Daemon(t *testing.T) *Bus {
 			t.Fatal("dbus-daemon printed no address")
 		}
 		t.Logf("dbus-daemon at %s", a)
-		return &Bus{"dbus-daemon", a, stop}
+		return &Bus{Name: "dbus-daemon", Address: a, Stop: stop}
 	case <-time.After(10 * time.Second):
 		t.Fatal("dbus-daemon did not print its address")
 	}
@@ -147,7 +154,19 @@ func Broker(t *testing.T) *Bus {
 		b.mu.Unlock()
 	}
 	t.Cleanup(stop)
-	return &Bus{"broker", "unix:path=" + dir + "/bus,guid=0123456789abcdef0123456789abcdef", stop}
+	inject := func(to string, raw []byte) error {
+		b.mu.Lock()
+		c := b.clients[to]
+		b.mu.Unlock()
+		if c == nil {
+			return fmt.Errorf("dbustest: no client %q", to)
+		}
+		c.wmu.Lock()
+		defer c.wmu.Unlock()
+		_, err := c.nc.Write(raw)
+		return err
+	}
+	return &Bus{Name: "broker", Address: "unix:path=" + dir + "/bus,guid=0123456789abcdef0123456789abcdef", Stop: stop, Inject: inject}
 }
 
 func (b *broker) accept() {

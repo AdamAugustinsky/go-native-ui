@@ -256,3 +256,92 @@ func TestParseAddress(t *testing.T) {
 		}
 	}
 }
+
+// parseHeader reads the same fields as parseMessage, and neither panics on
+// damaged input.
+func TestParseHeaderAgreesWithParseMessage(t *testing.T) {
+	msgs := []*Message{
+		{Type: TypeSignal, Serial: 9, Path: "/org/freedesktop/portal/desktop", Interface: "org.freedesktop.portal.Settings",
+			Member: "SettingChanged", Sender: ":1.5", Signature: "ssv",
+			Body: []any{"org.freedesktop.appearance", "color-scheme", V(uint32(1))}},
+		{Type: TypeMethodReturn, Serial: 3, ReplySerial: 2, Destination: ":1.7", Signature: "s", Body: []any{"x"}},
+		{Type: TypeError, Serial: 4, ReplySerial: 2, ErrorName: "org.example.Error", Destination: ":1.7"},
+		{Type: TypeMethodCall, Serial: 5, Path: "/", Interface: "a.b", Member: "M", Destination: "a.b", Flags: FlagNoReplyExpected},
+	}
+	for _, m := range msgs {
+		b, err := m.Marshal()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var h header
+		if !parseHeader(b, &h) {
+			t.Fatalf("%v: parseHeader refused a valid message", m.Type)
+		}
+		if h.typ != m.Type || h.flags != m.Flags || h.serial != m.Serial || h.replySerial != m.ReplySerial ||
+			string(h.path) != string(m.Path) || string(h.iface) != m.Interface || string(h.member) != m.Member ||
+			string(h.errName) != m.ErrorName || string(h.dest) != m.Destination || string(h.sender) != m.Sender || string(h.sig) != m.Signature {
+			t.Errorf("%v: header %+v does not match %+v", m.Type, h, m)
+		}
+		for i := range b {
+			for _, x := range []byte{0x00, 0x01, 0x7f, 0xff} {
+				c := append([]byte(nil), b...)
+				c[i] = x
+				parseHeader(c, &h)
+			}
+		}
+		for n := 0; n < len(b); n++ {
+			if parseHeader(b[:n], &h) {
+				t.Errorf("%v: prefix of %d bytes accepted", m.Type, n)
+			}
+		}
+	}
+	// A header field the fast reader does not know sends the message down the
+	// general path (which ignores it).
+	b, _ := (&Message{Type: TypeSignal, Serial: 1, Path: "/a", Interface: "a.b", Member: "M"}).Marshal()
+	var h header
+	if !parseHeader(b, &h) {
+		t.Fatal("plain signal refused")
+	}
+}
+
+func TestBodyReader(t *testing.T) {
+	body := enc(t, "ssv", "org.freedesktop.appearance", "accent-color", Variant{"(ddd)", Struct{0.25, 0.5, 1.0}})
+	r := BodyReader{b: body}
+	if string(r.Str()) != "org.freedesktop.appearance" || string(r.Str()) != "accent-color" || string(r.Variant()) != "(ddd)" {
+		t.Fatal("strings")
+	}
+	r.Struct()
+	if a, b, c := r.Float64(), r.Float64(), r.Float64(); a != 0.25 || b != 0.5 || c != 1 || !r.Ok() || r.off != len(body) {
+		t.Fatalf("floats %v %v %v ok=%v off=%d/%d", a, b, c, r.Ok(), r.off, len(body))
+	}
+	// Every truncation and corruption fails cleanly.
+	for n := 0; n < len(body); n++ {
+		r := BodyReader{b: body[:n]}
+		r.Str()
+		r.Str()
+		r.Variant()
+		r.Struct()
+		r.Float64()
+		r.Float64()
+		r.Float64()
+		if r.Ok() {
+			t.Errorf("truncation to %d bytes read fine", n)
+		}
+	}
+	for name, b := range map[string][]byte{
+		"string longer than the body": append(binary.LittleEndian.AppendUint32(nil, 1<<30), 'a', 0),
+		"string without NUL":          append(binary.LittleEndian.AppendUint32(nil, 1), 'a', 'b'),
+		"string with NUL":             append(binary.LittleEndian.AppendUint32(nil, 2), 'a', 0, 0),
+		"string not UTF-8":            append(binary.LittleEndian.AppendUint32(nil, 1), 0xff, 0),
+	} {
+		r := BodyReader{b: b}
+		if r.Str(); r.Ok() {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	r = BodyReader{b: []byte{1, 1, 0, 0, 5, 0, 0, 0}} // padding that is not zero before the u32
+	r.byte()
+	if r.Uint32(); r.Ok() {
+		t.Error("non-zero padding accepted")
+	}
+}

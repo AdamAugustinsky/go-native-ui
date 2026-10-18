@@ -323,3 +323,70 @@ func TestMisbehavingBus(t *testing.T) {
 		}
 	})
 }
+
+// SubscribeSignal hands over the signal in place, with the same matching as
+// Subscribe, and a signal both kinds of subscription want reaches both.
+func TestSubscribeSignal(t *testing.T) {
+	dbustest.Each(t, func(t *testing.T, b *dbustest.Bus) {
+		s := startService(t, b)
+		c := dial(t, b)
+		type got struct {
+			path, iface, member, sig, ns string
+			v                            uint32
+			ok                           bool
+		}
+		raw := make(chan got, 8)
+		decoded := make(chan *Message, 8)
+		if _, err := c.SubscribeSignal(context.Background(), Match{Sender: svcName, Path: svcPath, Interface: svcIface, Member: "Changed"}, func(s *Signal) {
+			r := s.Body()
+			g := got{path: string(s.Path), iface: string(s.Interface), member: string(s.Member), sig: string(s.Signature)}
+			g.ns = string(r.Str())
+			if string(r.Variant()) == "u" {
+				g.v = r.Uint32()
+			}
+			g.ok = r.Ok()
+			raw <- g
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := c.Subscribe(context.Background(), Match{Sender: svcName, Interface: svcIface, Member: "Changed"}, func(m *Message) { decoded <- m }); err != nil {
+			t.Fatal(err)
+		}
+		other := make(chan struct{}, 1)
+		if _, err := c.SubscribeSignal(context.Background(), Match{Interface: svcIface, Member: "Other"}, func(*Signal) { other <- struct{}{} }); err != nil {
+			t.Fatal(err)
+		}
+		s.Emit(svcPath, svcIface, "Changed", "sv", "ns", V(uint32(42)))
+		// A body larger than the receive buffer takes the one-off buffer.
+		s.Emit(svcPath, svcIface, "Changed", "sv", strings.Repeat("n", 20000), V(uint32(7)))
+		s.Emit(svcPath, svcIface, "Other", "")
+		for _, want := range []got{
+			{svcPath2, svcIface, "Changed", "sv", "ns", 42, true},
+			{svcPath2, svcIface, "Changed", "sv", strings.Repeat("n", 20000), 7, true},
+		} {
+			select {
+			case g := <-raw:
+				if g != want {
+					t.Errorf("raw: %+v, want %+v", g, want)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("raw signal never arrived")
+			}
+			select {
+			case m := <-decoded:
+				if m.Body[0] != want.ns {
+					t.Errorf("decoded: %+v", m)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("decoded signal never arrived")
+			}
+		}
+		select {
+		case <-other:
+		case <-time.After(5 * time.Second):
+			t.Fatal("the second raw subscription got nothing")
+		}
+	})
+}
+
+const svcPath2 = string(svcPath)
