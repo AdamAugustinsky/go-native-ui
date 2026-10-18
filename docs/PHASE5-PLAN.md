@@ -417,10 +417,16 @@ The protocol work starts at once, in platform files only. Its integration into `
   - a Wayland input method (text-input-v3; scripted compositor only).
   - Not done: the X11 PRIMARY selection and an X11 input method. Tested only against scripted compositors (Sway for the clipboard), not GNOME or KDE.
 - **Pilot's gated bench** includes copy, cut, paste and undo through the platform clipboard on every OS.
+- **Sleeping without allocating:**
+  - **`core.Parker`:** a pipe read in the netpoller on Unix, an event wait on Windows; no runtime sudog.
+  - **`core.Mutex`:** TryLock plus spinning; it never parks, and is meant for short critical sections only.
+  - **Use:** the `fs` workers and shared locks use them, and `primeSudogs` is gone.
+  - **Why:** this was the cause of the intermittent macOS CI gate failure. A probe on the runner found `sync.Cond.Wait` allocating a sudog in the `fs` workers.
+  - **Result:** Pilot's gate now passes on the first window on macOS, Windows and Linux Wayland, at 100k and 1M rows.
 
 **In progress:**
 - widgets and the gallery (step 4);
-- sudog-free worker parking. This is the cause of the intermittent macOS CI gate failure: a probe on the runner found the runtime allocating when the `fs` workers park.
+- X11: Pilot's gate needs a second window there (4–9 allocations in the first, likely the X11 clipboard warming up); being located.
 
 **Known gaps so far:**
 - Pilot's startup on Windows CI is about 160–180 ms (amd64), over the 150 ms budget.
