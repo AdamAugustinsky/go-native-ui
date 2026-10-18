@@ -335,7 +335,7 @@ Cancel's.
 ```go examples/notes/notes/notes.go
 	d := k.BeginDialog("remove", "Remove notes?", &n.confirm)
 	if d.Visible {
-		k.Paragraph(c.Fmt().Str("Remove ").Int(n.list.Sel.Count()).Str(" selected notes? This cannot be undone.").String())
+		k.Paragraph(c.Fmt().Str("Notes selected: ").Int(n.list.Sel.Count()).Str(". Removing them cannot be undone.").String())
 		d.BeginActions()
 		d.Action("Cancel", widget.ButtonDefault)
 		if d.Action("Remove", widget.ButtonPrimary) {
