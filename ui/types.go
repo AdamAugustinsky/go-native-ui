@@ -122,8 +122,11 @@ const (
 type Align uint8
 
 const (
+	// AlignLeft starts the text at the left of the padded rectangle.
 	AlignLeft Align = iota
+	// AlignCenter centres the text.
 	AlignCenter
+	// AlignRight ends the text at the right of the padded rectangle.
 	AlignRight
 )
 
@@ -154,8 +157,11 @@ const (
 // shrinks, 0 gives way entirely, and the overflow is shared between siblings
 // in proportion to size×(1−strictness).
 type Size struct {
-	Kind       SizeKind
-	Value      float32
+	// Kind selects how Value is read.
+	Kind SizeKind
+	// Value is the size in pixels, a fraction or extra pixels, according to Kind.
+	Value float32
+	// Strictness (0..1) is how unwilling the size is to shrink when the parent is too small.
 	Strictness float32
 }
 
@@ -178,9 +184,11 @@ func (s Size) Strict(f float32) Size { s.Strictness = f; return s }
 // (OffX, OffY), blurred with a gaussian of the given sigma. Sigma 0 disables
 // the layer.
 type Shadow struct {
+	// OffX and OffY are the shadow's offset from the box, in pixels.
 	OffX, OffY float32
-	Sigma      float32
-	Color      uint32 // RGBA8, 0xRRGGBBAA
+	// Sigma is the gaussian blur sigma in pixels; 0 disables the layer.
+	Sigma float32
+	Color uint32 // RGBA8, 0xRRGGBBAA
 }
 
 // Sides selects the edges of a box outline that DrawBorder draws. A corner
@@ -190,9 +198,13 @@ type Shadow struct {
 type Sides uint8
 
 const (
+	// SideLeft is the left edge.
 	SideLeft Sides = 1 << iota
+	// SideTop is the top edge.
 	SideTop
+	// SideRight is the right edge.
 	SideRight
+	// SideBottom is the bottom edge.
 	SideBottom
 	// SidesAll, the default, draws the whole outline in one quad.
 	SidesAll = SideLeft | SideTop | SideRight | SideBottom
@@ -204,8 +216,11 @@ const (
 // box's text colour) or gpu.ModeRGBA for premultiplied colour images (drawn
 // with the alpha of the text colour).
 type Image struct {
-	Tex  gpu.TextureID
-	UV   [4]float32
+	// Tex is the texture to draw.
+	Tex gpu.TextureID
+	// UV is the texel rectangle u0, v0, u1, v1.
+	UV [4]float32
+	// Mode is how the texture is read (gpu.ModeMaskR8 or gpu.ModeRGBA).
 	Mode gpu.Mode
 }
 
@@ -213,8 +228,10 @@ type Image struct {
 // text, shadows, hover overlay) is moved toward Color's RGB by T (0 = none,
 // 1 = Color), alpha unchanged. Push it around a subtree to dim it.
 type Tint struct {
+	// Color is the colour (RGBA8; its alpha is ignored) the box's colours move toward.
 	Color uint32
-	T     float32
+	// T is how far they move: 0 not at all, 1 all the way.
+	T float32
 }
 
 // Theme holds the colours of the built-in hover/press overlay.
@@ -224,7 +241,16 @@ type Theme struct {
 }
 
 // Rates are the animation rates k in rate = 1−2^(−k·dt), per second.
-type Rates struct{ Hot, Active, Focus, Scroll float32 }
+type Rates struct {
+	// Hot is the rate of the hover animation (HotT).
+	Hot float32
+	// Active is the rate of the press animation (ActiveT).
+	Active float32
+	// Focus is the rate of the focus animation (FocusT).
+	Focus float32
+	// Scroll is the rate at which a scroll offset approaches its target.
+	Scroll float32
+}
 
 // Shaper is the part of text.System that ui uses; *text.System satisfies it.
 // Tests substitute a deterministic fake.

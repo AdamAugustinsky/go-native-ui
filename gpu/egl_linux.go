@@ -373,7 +373,9 @@ func (s *Surface) Resize(w, h int32, scale float32) {
 // gpu.NewRenderer. The surface keeps owning them. (Names follow the other
 // backends: on EGL the "queue" is the context that commands are issued on.)
 func (s *Surface) Device() uintptr { return s.dpy }
-func (s *Surface) Queue() uintptr  { return s.ctx }
+
+// Queue returns the EGLContext; see Device.
+func (s *Surface) Queue() uintptr { return s.ctx }
 
 // Frame is one frame being drawn: render into Target with Renderer.Encode,
 // then call EndFrame.

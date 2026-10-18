@@ -46,21 +46,37 @@ const (
 type Role uint8
 
 const (
+	// RoleNone is a command without a role.
 	RoleNone Role = iota
+	// RoleAbout is the standard About command.
 	RoleAbout
+	// RoleQuit is the standard Quit command.
 	RoleQuit
+	// RoleHide is the standard Hide command (hide the application).
 	RoleHide
+	// RoleHideOthers is the standard Hide Others command.
 	RoleHideOthers
+	// RoleShowAll is the standard Show All command.
 	RoleShowAll
+	// RoleUndo is the standard Undo command; it acts on the focused text field.
 	RoleUndo
+	// RoleRedo is the standard Redo command; it acts on the focused text field.
 	RoleRedo
+	// RoleCut is the standard Cut command; it acts on the focused text field.
 	RoleCut
+	// RoleCopy is the standard Copy command; it acts on the focused text field.
 	RoleCopy
+	// RolePaste is the standard Paste command; it acts on the focused text field.
 	RolePaste
+	// RoleSelectAll is the standard Select All command; it acts on the focused text field.
 	RoleSelectAll
+	// RoleDelete is the standard Delete command; it acts on the focused text field.
 	RoleDelete
+	// RoleMinimize is the standard Minimize command (minimize the window).
 	RoleMinimize
+	// RoleZoom is the standard Zoom command (zoom the window).
 	RoleZoom
+	// RoleCloseWindow is the standard Close Window command.
 	RoleCloseWindow
 )
 
@@ -88,8 +104,11 @@ func (r Role) editAction() ui.EditAction {
 // Shortcut is a key chord. Primary adds the platform's primary modifier to
 // Mods: ⌘ on macOS, Ctrl elsewhere.
 type Shortcut struct {
-	Key     ui.KeyCode
-	Mods    ui.Mods
+	// Key is the key of the chord.
+	Key ui.KeyCode
+	// Mods are the modifiers the chord needs besides the primary one.
+	Mods ui.Mods
+	// Primary adds the platform's primary modifier (⌘ on macOS, Ctrl elsewhere).
 	Primary bool
 }
 
@@ -107,6 +126,7 @@ func (s Shortcut) Effective() ui.Mods {
 
 // Command is something the user can ask the app to do.
 type Command struct {
+	// ID names the command; it is what a menu item, a shortcut match and the command handler refer to.
 	ID       ID
 	Title    string   // the menu text; may be empty for a command with a Role (the system supplies it)
 	Shortcut Shortcut // zero: none
@@ -125,6 +145,7 @@ const (
 
 // Item is one entry of a menu.
 type Item struct {
+	// Kind selects which of the other fields apply.
 	Kind    ItemKind
 	Command ID     // ItemCommand: the command
 	Submenu int    // ItemSubmenu: index into the model's menus
@@ -134,7 +155,9 @@ type Item struct {
 // Menu is a list of items with a title. A menu is shown as a top-level menu of
 // the bar (Model bar), as a submenu of an item, or by itself as a context menu.
 type Menu struct {
+	// Title is the menu's name (a bar entry or the title of a submenu).
 	Title string
+	// Items are the menu's entries, in order.
 	Items []Item
 }
 

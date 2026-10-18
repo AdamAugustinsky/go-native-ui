@@ -79,6 +79,7 @@ type Scripter interface {
 
 // Config describes the window and the frame.
 type Config struct {
+	// Title is the window title.
 	Title         string
 	Width, Height float32 // content size in points
 	MinWidth      float32 // smallest content size the user can resize to, in points; 0: no limit
@@ -196,8 +197,10 @@ type RunOptions struct {
 
 // RunResult is what RunWith learned.
 type RunResult struct {
+	// Startup is the start-up timeline.
 	Startup StartupReport
-	Frames  int
+	// Frames is the number of frames drawn.
+	Frames int
 	// InputToCommitMs: from the platform timestamp of the oldest input event
 	// behind a frame to the return of that frame's EndFrame (the commit),
 	// over the last 8192 input-driven frames.

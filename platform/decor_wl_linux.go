@@ -33,9 +33,13 @@ import "slices"
 type ResizeEdges uint8
 
 const (
+	// EdgeTop is the top edge.
 	EdgeTop ResizeEdges = 1 << iota
+	// EdgeBottom is the bottom edge.
 	EdgeBottom
+	// EdgeLeft is the left edge.
 	EdgeLeft
+	// EdgeRight is the right edge.
 	EdgeRight
 )
 
@@ -45,7 +49,9 @@ const (
 // the point wins; Edges 0 makes it a rectangle that keeps its presses (content
 // laid over a border).
 type ResizeRegion struct {
-	Rect  [4]float32
+	// Rect is x0, y0, x1, y1 in pixels, origin top left.
+	Rect [4]float32
+	// Edges are the window edges a press drags; a corner is two edges.
 	Edges ResizeEdges
 }
 

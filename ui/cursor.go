@@ -15,7 +15,9 @@ const (
 // CursorRegion is a screen rectangle (x0, y0, x1, y1 in pixels, origin top
 // left) in which the pointer shows Cursor.
 type CursorRegion struct {
-	Rect   [4]float32
+	// Rect is x0, y0, x1, y1 in pixels.
+	Rect [4]float32
+	// Cursor is the shape shown inside Rect.
 	Cursor Cursor
 }
 
@@ -24,7 +26,9 @@ type CursorRegion struct {
 // them. The topmost (last) rectangle containing a point decides: a point is
 // in the titlebar drag area when that rectangle is not a Block.
 type DragRegion struct {
-	Rect  [4]float32
+	// Rect is x0, y0, x1, y1 in pixels.
+	Rect [4]float32
+	// Block true makes the rectangle keep its presses; false makes it a window-drag area.
 	Block bool
 }
 

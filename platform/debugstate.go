@@ -7,8 +7,10 @@ import "strconv"
 // -v). Taking it allocates nothing. Times are Now() nanoseconds, 0 = never.
 // Only macOS fills it in (Valid); elsewhere it is the zero value.
 type DebugState struct {
+	// Valid is true when the state was filled in (macOS only).
 	Valid bool
-	Now   int64
+	// Now is the time of the snapshot, in Now() nanoseconds.
+	Now int64
 
 	Occlusion    uint32 // [NSWindow occlusionState]; bit 2 = visible
 	Visible      bool   // Occlusion&2 != 0

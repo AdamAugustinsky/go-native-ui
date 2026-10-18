@@ -14,6 +14,7 @@ const (
 type Mods uint8
 
 const (
+	// ModShift, ModCtrl and ModAlt are the Shift, Control and Alt (Option on macOS) keys.
 	ModShift Mods = 1 << iota
 	ModCtrl
 	ModAlt
@@ -34,6 +35,8 @@ func PrimaryMod() Mods {
 type KeyCode uint16
 
 const (
+	// KeyEnter and the codes after it are the named non-character keys; letters and digits
+	// are not listed here, they use their ASCII upper-case value.
 	KeyEnter KeyCode = 0x100 + iota
 	KeySpace
 	KeyEscape
@@ -59,9 +62,13 @@ const (
 
 // KeyEvent is one key press (Down) or release this frame.
 type KeyEvent struct {
-	Code   KeyCode
-	Mods   Mods
-	Down   bool
+	// Code is the key.
+	Code KeyCode
+	// Mods are the modifiers held at the event.
+	Mods Mods
+	// Down is true for a press (or auto-repeat), false for a release.
+	Down bool
+	// Repeat is true for the auto-repeat of a held key.
 	Repeat bool
 }
 
@@ -87,9 +94,12 @@ const (
 // (one bit of SemAction), Value its argument (ActSetValue: the new value of a
 // range; the text of a text field is not carried).
 type SemRequest struct {
-	Key    Key
+	// Key is the key of the target box.
+	Key Key
+	// Action is the requested action: one bit of SemAction.
 	Action SemAction
-	Value  float64
+	// Value is the argument of ActSetValue.
+	Value float64
 }
 
 const (

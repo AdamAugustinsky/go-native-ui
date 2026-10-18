@@ -303,7 +303,9 @@ func (c *Context) Reserve(n int) {
 }
 
 // Scale is the pixels-per-point factor passed to Begin; Pt converts points.
-func (c *Context) Scale() float32       { return c.scale }
+func (c *Context) Scale() float32 { return c.scale }
+
+// Pt converts v from points to pixels with the scale given to Begin.
 func (c *Context) Pt(v float32) float32 { return v * c.scale }
 
 // Size is the window size in pixels passed to Begin.

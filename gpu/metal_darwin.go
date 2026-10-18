@@ -134,7 +134,9 @@ func (s *Surface) Resize(w, h int32, scale float32) {
 // Device and Queue return the id<MTLDevice> and id<MTLCommandQueue>, for
 // gpu.NewRenderer. The surface keeps owning them.
 func (s *Surface) Device() uintptr { return uintptr(s.device) }
-func (s *Surface) Queue() uintptr  { return uintptr(s.queue) }
+
+// Queue returns the id<MTLCommandQueue>; see Device.
+func (s *Surface) Queue() uintptr { return uintptr(s.queue) }
 
 // RevealOnFirstFrame makes the first EndFrame call show (typically the
 // platform Window's Show, for a window opened with Options.Hidden) inside
