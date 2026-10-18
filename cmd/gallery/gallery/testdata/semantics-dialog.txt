@@ -112,6 +112,7 @@ Window
     Slider "Volume" range=0..100 value=40 step=1
     Label "40"
     ComboBox "Format" value="Plain text"
+    ComboBox "Appearance" value="System"
     Label "Buttons"
     Button "Open…"
     Button "Save"
@@ -120,7 +121,6 @@ Window
     Button "Add item"
     Button "Menu"
     Button "Delete…"
-    Switch "Dark mode"
     Switch "Show activity" [checked]
     Label "Tabs"
     TabList "Sections"

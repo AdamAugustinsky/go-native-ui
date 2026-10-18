@@ -157,9 +157,19 @@ func TestShotsRender(t *testing.T) {
 	if d := probe("dialog", dialog); d == light {
 		t.Error("the dialog scene looks like the main scene")
 	}
-	small.Mode = theme.Dark
+	small.Preference = theme.ForceDark
 	if dark := probe("dark", small); dark >= light-0.2 {
 		t.Errorf("the dark picture's mean brightness %.2f is not well below the light's %.2f", dark, light)
+	}
+	// following the system: a dark system gives the dark picture, a light one the light
+	small.Preference = theme.System
+	small.System = ui.Appearance{Dark: true, Known: true}
+	if d := probe("system-dark", small); d >= light-0.2 {
+		t.Errorf("a dark system gives the mean brightness %.2f, not well below the light's %.2f", d, light)
+	}
+	small.System.Dark = false
+	if l := probe("system-light", small); l < light-0.01 || l > light+0.01 {
+		t.Errorf("a light system gives the mean brightness %.2f, want the light's %.2f", l, light)
 	}
 }
 
