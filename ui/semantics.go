@@ -83,14 +83,16 @@ const (
 type SemState uint16
 
 const (
-	SemChecked  SemState = 1 << iota // checked, on or pressed
-	SemMixed                         // neither checked nor unchecked
-	SemSelected                      // part of the selection
-	SemExpanded                      // open (a menu, a combo box, a tree row)
-	SemDisabled                      // set by the export for boxes with the Disabled flag
-	SemFocused                       // set by the export for the focused box
-	SemEditable                      // the value can be edited (text fields)
-	SemModal                         // a modal overlay: everything beneath it is inert
+	SemChecked        SemState = 1 << iota // checked, on or pressed
+	SemMixed                               // neither checked nor unchecked
+	SemSelected                            // part of the selection
+	SemExpanded                            // open (a menu, a combo box, a tree row)
+	SemDisabled                            // set by the export for boxes with the Disabled flag
+	SemFocused                             // set by the export for the focused box
+	SemEditable                            // the value can be edited (text fields)
+	SemModal                               // a modal overlay: everything beneath it is inert
+	SemSortAscending                       // a column header the table is sorted by, ascending
+	SemSortDescending                      // a column header the table is sorted by, descending
 )
 
 // SemAction are the actions a node supports (SemNode.Actions) and that an

@@ -50,9 +50,10 @@ type TableState struct {
 	// Sort is the current sort; set it to show the app's initial order.
 	Sort SortState
 
-	resizeCol int
-	resizeW   float32
-	colPx     [MaxColumns]float32
+	resizeID uint32 // the column being dragged wider or narrower, by ID
+	resizing bool
+	resizeW  float32
+	colPx    [MaxColumns]float32
 }
 
 // Table is an open table. See BeginTable.
@@ -108,7 +109,16 @@ func (t *Table) HeaderHeight() float32 { return t.hh }
 //
 // Columns keep their IDs and widths, can be dragged wider and narrower down to
 // their minimum, align their text, and fade out text that does not fit. At
-// most MaxColumns columns are shown.
+// most MaxColumns columns are shown. The header state (hover, focus, an active
+// drag) belongs to the column's ID, so reordering or hiding columns keeps it
+// with its column.
+//
+// The headers are tab stops, before the rows. On a focused header Enter or
+// Space sorts (a sortable column), Alt+Left and Alt+Right (Option on macOS)
+// narrow and widen the column by 8 points, with Shift by 32, down to its
+// minimum. A header is a ui.RoleColumnHeader that reports its sort direction
+// (ui.SemSortAscending, ui.SemSortDescending) and the actions press (sortable
+// columns), increment and decrement (the width) and focus.
 func (k *Kit) BeginTable(label string, st *TableState, cols []Column, rows int) Table {
 	c := k.c
 	px := &k.r.Px
@@ -142,6 +152,16 @@ func (k *Kit) BeginTable(label string, st *TableState, cols []Column, rows int) 
 	return t
 }
 
+// columnStepPt is how far Alt+Left and Alt+Right (and an assistive technology's
+// increment) change the width of a column, in points; with Shift, four steps.
+const columnStepPt = 8
+
+// headerKey is the key of the header cell of the column with the given ID.
+func headerKey(hkey ui.Key, id uint32) ui.Key { return ui.KeyN(hkey, uint64(id)) }
+
+// resizeKey is the key of the drag handle at the right edge of that column.
+func resizeKey(hkey ui.Key, id uint32) ui.Key { return ui.KeyN(hkey, 1<<32|uint64(id)) }
+
 // layoutColumns computes the pixel widths of the columns.
 func (t *Table) layoutColumns(k *Kit, avail float32) {
 	var sum float32
@@ -174,27 +194,58 @@ func (t *Table) header(k *Kit, tkey ui.Key, ident string) {
 	hh := t.hh
 	hkey := t.hkey
 
-	// resizing and sorting come from the previous frame's header boxes
+	// resizing and sorting come from the previous frame's header boxes, which
+	// are keyed by the column's ID: reordering or hiding columns moves a drag
+	// or the focus with the column, not with its place in the slice
 	if !k.off() {
 		for i := range t.cols {
-			rk := ui.KeyN(hkey, uint64(100+i))
+			col := &t.cols[i]
+			rk := resizeKey(hkey, col.ID)
 			if ps := c.PeekSignal(rk); ps.Pressed {
-				st.resizeCol, st.resizeW = i, t.cols[i].Width
-			} else if ps.Dragging && st.resizeCol == i {
-				w := max(st.resizeW+ps.DragDelta[0]/k.scale, t.minWidth(i))
-				if w != t.cols[i].Width {
-					t.cols[i].Width = w
+				st.resizeID, st.resizing, st.resizeW = col.ID, true, col.Width
+			} else if ps.Dragging && st.resizing && st.resizeID == col.ID {
+				if w := max(st.resizeW+ps.DragDelta[0]/k.scale, t.minWidth(i)); w != col.Width {
+					col.Width = w
 					t.ColumnsChanged = true
 				}
 			}
-			if t.cols[i].Sortable && c.PeekSignal(ui.KeyN(hkey, uint64(i))).Clicked {
+			hk := headerKey(hkey, col.ID)
+			hs := c.PeekSignal(hk)
+			if col.Sortable && (hs.Clicked || hs.Activated) {
 				s := &st.Sort
-				if s.Active && s.Column == t.cols[i].ID {
+				if s.Active && s.Column == col.ID {
 					s.Descending = !s.Descending
 				} else {
-					*s = SortState{Active: true, Column: t.cols[i].ID}
+					*s = SortState{Active: true, Column: col.ID}
 				}
 				t.SortChanged = true
+			}
+			// the keyboard (and an assistive technology) sets the width
+			var steps float32
+			if c.FocusKey() == hk {
+				switch {
+				case c.TakeKey(ui.KeyRight, ui.ModAlt):
+					steps = 1
+				case c.TakeKey(ui.KeyLeft, ui.ModAlt):
+					steps = -1
+				case c.TakeKey(ui.KeyRight, ui.ModAlt|ui.ModShift):
+					steps = 4
+				case c.TakeKey(ui.KeyLeft, ui.ModAlt|ui.ModShift):
+					steps = -4
+				}
+			}
+			if hs.Action&ui.ActIncrement != 0 {
+				steps++
+			}
+			if hs.Action&ui.ActDecrement != 0 {
+				steps--
+			}
+			if steps != 0 {
+				if w := max(col.Width+steps*columnStepPt, t.minWidth(i)); w != col.Width {
+					col.Width = w
+					t.ColumnsChanged = true
+				}
+				c.RequestFrame()
 			}
 		}
 	}
@@ -212,11 +263,25 @@ func (t *Table) header(k *Kit, tkey ui.Key, ident string) {
 	for i := range t.cols {
 		col := &t.cols[i]
 		w := st.colPx[i]
-		ckey := ui.KeyN(hkey, uint64(i))
+		ckey := headerKey(hkey, col.ID)
 		sorted := st.Sort.Active && st.Sort.Column == col.ID
-		flags := ui.Flags(0)
-		if col.Sortable && !k.off() {
-			flags = ui.Clickable | ui.HotAnimation
+		// every header is a tab stop (a click leaves the focus where it is, as
+		// in a file manager); a sortable one is clickable
+		flags := ui.Focusable | ui.KeepFocus | ui.FocusAnimation
+		acts := ui.ActFocus | ui.ActIncrement | ui.ActDecrement
+		if col.Sortable {
+			flags |= ui.Clickable | ui.HotAnimation
+			acts |= ui.ActPress
+		}
+		if k.off() {
+			flags = ui.Disabled
+		}
+		var state ui.SemState
+		if sorted {
+			state = ui.SemSortAscending
+			if st.Sort.Descending {
+				state = ui.SemSortDescending
+			}
 		}
 		hot := c.HotTOf(ckey)
 		c.NextSize(ui.Px(w), ui.Px(hh))
@@ -225,6 +290,8 @@ func (t *Table) header(k *Kit, tkey ui.Key, ident string) {
 		c.NextPadding(t.pad, 0, t.pad, 0)
 		c.NextRole(ui.RoleColumnHeader)
 		c.NextSemName(col.Title)
+		c.NextSemState(state)
+		c.NextSemActions(acts)
 		if hot > 0.004 {
 			flags |= ui.DrawBackground
 			c.NextBG(theme.WithAlpha(p.HoverOverlay, hot))
@@ -250,6 +317,9 @@ func (t *Table) header(k *Kit, tkey ui.Key, ident string) {
 			k.center(ih, hh)
 			c.BoxKeyed(f|ui.FloatingY, ui.KeyN(ckey, 2), disp)
 		}
+		if ring := c.FocusTOf(ckey); ring > 0.004 && c.FocusVisible() && !k.off() {
+			k.ringBox(ckey, w, hh, px.RadiusSmall, ring)
+		}
 		c.Pop()
 		x += w
 		// the edge between this column and the next, to drag
@@ -260,7 +330,7 @@ func (t *Table) header(k *Kit, tkey ui.Key, ident string) {
 		if k.off() {
 			rflags = fl
 		}
-		c.BoxKeyed(rflags, ui.KeyN(hkey, uint64(100+i)), nil)
+		c.BoxKeyed(rflags, resizeKey(hkey, col.ID), nil)
 	}
 	c.Pop()
 }
