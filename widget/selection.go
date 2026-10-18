@@ -46,7 +46,9 @@ func (s *Selection) grow(item uint32) {
 		if w > cap(s.bits) {
 			s.bits = append(make([]uint64, 0, w+w/2), s.bits...)
 		}
+		old := len(s.bits)
 		s.bits = s.bits[:w]
+		clear(s.bits[old:]) // (the capacity beyond the length holds what Remap recycled)
 	}
 }
 

@@ -173,3 +173,29 @@ func TestSelectionNextSet(t *testing.T) {
 		t.Errorf("a walk allocates %v times", n)
 	}
 }
+
+// Growing the bitset must not bring back items that an earlier, larger
+// selection left in recycled storage.
+func TestSelectionGrowAfterRemapShowsNoStaleItems(t *testing.T) {
+	var s Selection
+	s.Only(100)
+	s.Remap(nil, 1) // every item is gone
+	s.Remap(nil, 1)
+	if s.Count() != 0 {
+		t.Fatalf("count %d after remapping everything away", s.Count())
+	}
+	s.Set(64, true)
+	if s.Has(100) {
+		t.Fatal("item 100 came back")
+	}
+	if got := s.Items(nil); !slices.Equal(got, []uint32{64}) || s.Count() != 1 {
+		t.Fatalf("items %v, count %d, want [64] and 1", got, s.Count())
+	}
+	s.SelectAll(130)
+	s.Remap(nil, 1)
+	s.Remap(nil, 1)
+	s.Set(129, true)
+	if got := s.Items(nil); !slices.Equal(got, []uint32{129}) {
+		t.Fatalf("items %v after SelectAll, remaps and growth, want [129]", got)
+	}
+}
