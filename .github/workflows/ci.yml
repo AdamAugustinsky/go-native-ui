@@ -223,14 +223,30 @@ jobs:
         run: |
           sudo apt-get update -q
           sudo apt-get install -y -q --no-install-recommends \
-            xvfb xauth weston \
+            xvfb xauth weston xclip wl-clipboard sway wtype x11-utils \
             libegl1 libegl-mesa0 libgl1 libopengl0 libgles2 libgl1-mesa-dri \
-            libwayland-client0 libwayland-egl1 libxkbcommon0 libx11-6 \
+            libwayland-client0 libwayland-cursor0 libwayland-egl1 libxkbcommon0 libx11-6 libxfixes3 libxcursor1 \
             fontconfig fonts-dejavu-core fonts-noto-cjk fonts-noto-color-emoji
       - name: test
         run: |
           GNUI_FS_REPORT=$RUNNER_TEMP/fs-report.txt go test -count=1 $(go list $PKGS | grep -v -E "$PKGS_EXCLUDE")
           { echo '```'; cat $RUNNER_TEMP/fs-report.txt || true; echo '```'; } | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: platform tests (X11 on Xvfb: clipboard, cursors, content-first startup)
+        if: matrix.backend == 'x11'
+        run: xvfb-run -a -s "-screen 0 1280x800x24" go test -count=1 -v -run 'X11' ./platform
+      - name: platform tests (Wayland: scripted compositor, and Sway as a real one)
+        if: matrix.backend == 'wayland'
+        run: |
+          go test -count=1 -v -run 'Wayland' ./platform
+          export XDG_RUNTIME_DIR=$(mktemp -d); chmod 700 "$XDG_RUNTIME_DIR"
+          export WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 WLR_RENDERER=pixman
+          echo 'output HEADLESS-1 mode 1280x800' > sway.conf
+          sway -c sway.conf > sway.log 2>&1 &
+          for _ in $(seq 100); do ls "$XDG_RUNTIME_DIR" | grep -q '^wayland-[0-9]*$' && break; sleep 0.1; done
+          export WAYLAND_DISPLAY=$(ls "$XDG_RUNTIME_DIR" | grep '^wayland-[0-9]*$' | head -1)
+          wtype -s 900000 a > /dev/null 2>&1 &   # a virtual keyboard gives the seat keyboard focus to give
+          sleep 1
+          GNUI_TEST_SWAY=1 go test -count=1 -v -run 'Sway' ./platform
       - name: build spike
         run: go build -trimpath -ldflags="-s -w" -o bin/spike ./cmd/spike
       - name: spike bench + gates (X11 on Xvfb)
