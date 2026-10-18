@@ -253,3 +253,27 @@ func TestOffscreenAllocMeterDetects(t *testing.T) {
 		t.Fatalf("planted allocation read as %d mallocs", m1.Mallocs-m0.Mallocs)
 	}
 }
+
+// A Scripter that says false is not asked again: the script is over for good.
+// A test that plays several scripts keeps its Scripter saying true between them
+// (widget/widgettest.Rig does).
+func TestOffscreenStopsAskingAScripterThatSaidFalse(t *testing.T) {
+	calls := 0
+	b := &tiny{script: func(frame int, in *ui.Input) bool {
+		calls++
+		return frame < 2
+	}}
+	o, err := NewOffscreen(Config{}, 100, 100, 1, b)
+	if err != nil {
+		skipOrFail(t, "offscreen rendering", err)
+		return
+	}
+	defer o.Close()
+	var more [6]bool
+	for i := range more {
+		_, more[i] = o.Frame()
+	}
+	if calls != 3 || more != [6]bool{true, true, false, true, true, true} {
+		t.Errorf("the Scripter was asked %d times (want 3), more = %v: only the frame where it said false reports the end", calls, more)
+	}
+}

@@ -23,7 +23,7 @@ func benchSteps() []step {
 
 	// buttons: hover, press, a tooltip
 	add(move(roleButton, "Save"), idle(3),
-		step{op: opDown, role: roleButton, name: "Save"}, idle(3), step{op: opUp}, idle(3),
+		down(roleButton, "Save"), idle(3), up(), idle(3),
 		move(roleButton, "Open…"), waitFor(ui.RoleTooltip, ""), idle(4),
 		move(roleButton, "Remove"), waitGone(ui.RoleTooltip, ""),
 		move(roleButton, "Add item"), waitFor(ui.RoleTooltip, ""),
@@ -58,15 +58,15 @@ func benchSteps() []step {
 
 	// the table: a million rows
 	add(sweep(ui.RoleTable, "", 24), idle(2),
-		click(rowRole, "").nthOf(3), idle(2),
-		click(rowRole, "").nthOf(8).with(shift), idle(2),
+		click(rowRole, "").Nth(3), idle(2),
+		click(rowRole, "").Nth(8).With(shift), idle(2),
 		keys(ui.KeyPageDown, 0, 3), keys(ui.KeyDown, shift, 6), keys(ui.KeyPageUp, shift, 2), idle(2),
 		key('A', prim), idle(3),
 		wheel(ui.RoleTable, "", -40, 80), idle(2), wheel(ui.RoleTable, "", 55, 60), idle(2),
 		key(ui.KeyEnd, 0), idle(60), key(ui.KeyHome, 0), idle(60),
 		click(ui.RoleColumnHeader, "ID"), idle(4), click(ui.RoleColumnHeader, "ID"), idle(4),
-		click(rowRole, "").nthOf(2), idle(2),
-		rclick(ui.RoleRow, "").nthOf(2), waitFor(ui.RoleMenuItem, "Copy Path"), idle(2),
+		click(rowRole, "").Nth(2), idle(2),
+		rclick(ui.RoleRow, "").Nth(2), waitFor(ui.RoleMenuItem, "Copy Path"), idle(2),
 		click(ui.RoleMenuItem, "Copy Path"), waitGone(ui.RoleMenuItem, "Copy Path"), idle(2))
 
 	// the divider between the first two panes, there and back
@@ -95,7 +95,7 @@ type scene struct {
 // Scenes are the states Shot renders.
 var scenes = []scene{
 	{"main", func() []step {
-		return []step{idle(4), click(rowRole, "").nthOf(3), click(rowRole, "").nthOf(6).with(modShift),
+		return []step{idle(4), click(rowRole, "").Nth(3), click(rowRole, "").Nth(6).With(modShift),
 			click(ui.RoleTextField, "Notes"), idle(2), key('A', modPrim), idle(2), move(roleButton, "Save"), settle(), idle(2)}
 	}},
 	{"menu", func() []step {
@@ -106,11 +106,11 @@ var scenes = []scene{
 		return []step{idle(4), click(ui.RoleComboBox, "Format"), waitFor(ui.RoleListItem, "HTML"), move(ui.RoleListItem, "Markdown"), settle(), idle(2)}
 	}},
 	{"context", func() []step {
-		return []step{idle(4), click(rowRole, "").nthOf(2), rclick(rowRole, "").nthOf(2),
+		return []step{idle(4), click(rowRole, "").Nth(2), rclick(rowRole, "").Nth(2),
 			waitFor(ui.RoleMenuItem, "Copy Path"), move(ui.RoleMenuItem, "Copy Path"), settle(), idle(2)}
 	}},
 	{"dialog", func() []step {
-		return []step{idle(4), click(rowRole, "").nthOf(3), click(rowRole, "").nthOf(6).with(modShift),
+		return []step{idle(4), click(rowRole, "").Nth(3), click(rowRole, "").Nth(6).With(modShift),
 			click(roleButton, "Delete…"), waitFor(ui.RoleDialog, ""), settle(), idle(2)}
 	}},
 	{"tooltip", func() []step {

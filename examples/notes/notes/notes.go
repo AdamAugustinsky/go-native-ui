@@ -12,7 +12,6 @@ import (
 	"gonativeui/app"
 	"gonativeui/menu"
 	"gonativeui/text"
-	"gonativeui/theme"
 	"gonativeui/theme/rex"
 	"gonativeui/ui"
 	"gonativeui/widget"
@@ -41,7 +40,6 @@ const (
 // Notes is the application: its notes, the state of its widgets and the kit
 // that builds them. It implements app.Builder and app.Initer.
 type Notes struct {
-	c     *ui.Context
 	k     *widget.Kit
 	model *menu.Model
 
@@ -100,12 +98,20 @@ func newModel() (*menu.Model, error) {
 
 // Init implements app.Initer: it makes the kit and sizes the caches.
 func (n *Notes) Init(a *app.App) error {
-	n.c = a.UI
 	n.k = widget.NewKit(a.UI, a.Text, rex.Theme())
 	n.k.SetMenu(n.model)
 	a.UI.Reserve(1024)
 	a.Text.ReserveRuns(text.MaxCachedRuns, text.MaxCachedGlyphs, text.MaxCachedTextBytes)
 	return nil
+}
+
+// Context is the window's ui context, which the tests and the scripted
+// session read the semantic tree from (it is nil before Init).
+func (n *Notes) Context() *ui.Context {
+	if n.k == nil {
+		return nil
+	}
+	return n.k.Context()
 }
 
 // Count is the number of notes.
@@ -161,14 +167,8 @@ func (n *Notes) Build(c *ui.Context) {
 	k := n.k
 	k.Begin(c)
 	n.commands()
-	k.Background() // its boxes float; so does the window's content, built after them
-
-	w, h := c.Size()
-	theme.At(c, 0, 0, float32(w), float32(h))
-	c.Push(c.Box(theme.Floating, "window"))
-	k.NextSize(widget.Fill, widget.Fill)
 	k.NextPad(10)
-	k.Column("content")
+	k.BeginWindow() // the background, and the window's content in flow layout over it
 	k.MenuBar()
 	k.NextHeight(widget.Fill)
 	k.BeginCard("card")
@@ -176,21 +176,21 @@ func (n *Notes) Build(c *ui.Context) {
 
 	k.Row("add")
 	f := k.TextField("New note", &n.input, "Add a note…")
-	n.field = c.KeyOf(f.ID)
+	n.field = f.Key
 	k.BeginDisabled(n.input.Len() == 0 || n.count == maxNotes)
 	added := k.ButtonKind("Add", widget.ButtonPrimary).Clicked
 	k.EndDisabled()
 	k.EndRow()
 	if added || f.Submitted {
 		n.add()
-		c.SetFocus(n.field)
+		k.Focus(n.field)
 	}
 
 	k.NextHeight(widget.Fill)
 	l := k.BeginList("notes", &n.list, n.count)
 	for r := l.First; r < l.Last; r++ {
-		id := n.list.Order[r] // the stable id of the note in row r
-		l.Row(r, id)
+		id := n.list.Item(r) // the stable id of the note in row r
+		l.RowNamed(r, id, n.Text(int(id)))
 		k.NextWidth(widget.Fill)
 		k.LabelBytes(n.Text(int(id)))
 	}
@@ -209,8 +209,7 @@ func (n *Notes) Build(c *ui.Context) {
 	k.EndRow()
 	k.LabelBytesStyle(c.Fmt().Int(n.count).Str(" notes, ").Int(n.list.Sel.Count()).Str(" selected").Bytes(), widget.TextMuted)
 	k.EndCard()
-	k.EndColumn()
-	c.Pop()
+	k.EndWindow()
 
 	d := k.BeginDialog("remove", "Remove notes?", &n.confirm)
 	if d.Visible {
@@ -230,7 +229,7 @@ func (n *Notes) Build(c *ui.Context) {
 func (n *Notes) commands() {
 	k := n.k
 	if k.Command(cmdNew) {
-		n.c.SetFocus(n.field)
+		k.Focus(n.field)
 	}
 	if k.Command(cmdNewest) {
 		n.newest = !n.newest

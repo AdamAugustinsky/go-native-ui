@@ -9,6 +9,7 @@ import (
 	"gonativeui/app"
 	"gonativeui/theme"
 	"gonativeui/ui"
+	"gonativeui/widget/widgettest"
 )
 
 // ShotOptions are the settings of Shot.
@@ -64,7 +65,7 @@ func Shot(path string, o ShotOptions) (quads int, err error) {
 	if err != nil {
 		return 0, err
 	}
-	pl := newPlayer(g, sc.steps(), false, true)
+	pl := widgettest.NewPlayer(g, sc.steps(), widgettest.Options{Synthetic: true})
 	b := &scripted{Gallery: g, p: pl, sys: o.System}
 	off, err := app.NewOffscreen(Config(), o.Width, o.Height, o.Scale, b)
 	if err != nil {
@@ -106,7 +107,7 @@ func Shot(path string, o ShotOptions) (quads int, err error) {
 // scripted is a Gallery with a script.
 type scripted struct {
 	*Gallery
-	p   *Player
+	p   *widgettest.Player
 	sys ui.Appearance // what the system says, in every frame (an offscreen run has no system)
 }
 

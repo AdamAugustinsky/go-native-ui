@@ -18,7 +18,7 @@ func TestBenchSessionDrivesTheGallery(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := newRigFor(t, b.Gallery)
-	r.p = b.p
+	r.Use(b.p)
 	g := b.Gallery
 
 	var seen struct {
@@ -38,8 +38,8 @@ func TestBenchSessionDrivesTheGallery(t *testing.T) {
 	sem.Reserve(4096, 1<<16)
 	frames := 0
 	for ; frames < 60000 && b.Cycles() < 1; frames++ {
-		r.frame()
-		r.c.Semantics(&sem)
+		r.Frame()
+		r.Context().Semantics(&sem)
 		for _, n := range sem.Nodes {
 			switch n.Role {
 			case ui.RoleTooltip:
@@ -108,8 +108,8 @@ func TestSceneScriptsRun(t *testing.T) {
 	for _, sc := range scenes {
 		t.Run(sc.name, func(t *testing.T) {
 			r := newRig(t, Options{Still: true, Synthetic: true})
-			r.frames(5)
-			r.run(sc.steps()...)
+			r.Frames(5)
+			r.Play(sc.steps()...)
 		})
 	}
 }
@@ -182,17 +182,17 @@ func TestBenchSessionInASmallWindow(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := newRigFor(t, b.Gallery)
-	r.w, r.h = MinWidthPt, MinHeightPt
-	r.p = b.p
+	r.Resize(MinWidthPt, MinHeightPt)
+	r.Use(b.p)
 	frames := 0
 	for ; frames < 60000 && b.Cycles() < 2 && b.Err() == nil; frames++ {
-		r.frame()
+		r.Frame()
 	}
 	if err := b.Err(); err != nil {
 		t.Fatal(err)
 	}
 	if b.Cycles() < 2 {
-		t.Fatalf("two sessions did not finish in %d frames; at step %d (%+v), frame %d of it, cycles %d", frames, b.p.idx, b.p.steps[b.p.idx], b.p.t, b.Cycles())
+		t.Fatalf("two sessions did not finish in %d frames; cycles %d", frames, b.Cycles())
 	}
 	if b.Gallery.Mode() != theme.Light || b.Gallery.askDelete {
 		t.Error("the session does not end where it began")

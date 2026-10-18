@@ -118,6 +118,20 @@ const (
 	AxisY             // children stacked top to bottom (the default)
 )
 
+// Cross is where a box places its flow children across its layout axis: at
+// the start (the top of a row, the left of a column), centred, or at the end.
+type Cross uint8
+
+const (
+	// CrossStart places the children at the start of the padded area (the
+	// default).
+	CrossStart Cross = iota
+	// CrossCenter centres each child across the padded area.
+	CrossCenter
+	// CrossEnd places each child at the end of the padded area.
+	CrossEnd
+)
+
 // Align positions a box's text horizontally inside its padded rectangle.
 type Align uint8
 

@@ -120,7 +120,6 @@ type Gallery struct {
 	m matrix // the values of the state matrix
 
 	// the benchmark and the screenshots
-	sem   ui.SemTree
 	nodes int
 	// the window of the last frame, for the benchmark's report
 	winW, winH int
@@ -164,7 +163,6 @@ func New(o Options) (*Gallery, error) {
 		g.m.chk[i], g.m.sw[i] = true, true
 		g.m.tri[i] = widget.Mixed
 	}
-	g.sem.Reserve(4096, 1<<16)
 	g.setStatus("Ready")
 	return g, nil
 }
@@ -194,6 +192,10 @@ func (g *Gallery) Attach(c *ui.Context, ts widget.TextSystem) {
 // WindowPx is the size in pixels and the scale of the window as of the last
 // frame.
 func (g *Gallery) WindowPx() (w, h int, scale float32) { return g.winW, g.winH, g.winScale }
+
+// Context is the window's ui context (nil before Init or Attach); it makes the
+// gallery a widgettest.Host.
+func (g *Gallery) Context() *ui.Context { return g.c }
 
 // Kit is the gallery's widget kit (nil before Init or Attach).
 func (g *Gallery) Kit() *Kit { return g.k }

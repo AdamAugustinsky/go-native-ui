@@ -1,105 +1,51 @@
 package notes
 
 import (
-	"os"
 	"runtime"
 	"testing"
 
-	"gonativeui/app"
 	"gonativeui/theme"
 	"gonativeui/ui"
+	"gonativeui/widget/widgettest"
 )
 
-// driven is the application with steps that a test hands it, one list after
-// another. Between lists it only keeps the window focused and the clock going.
-type driven struct {
-	*Notes
-	p *player
-}
-
-func (d *driven) Script(frame int, in *ui.Input) bool {
-	if d.p != nil && d.p.idx < len(d.p.steps) {
-		d.p.Script(frame, in)
-		return true
-	}
-	in.Inside, in.Focused = true, true
-	in.Time = 1_000_000_000 + int64(frame)*16_666_667
-	return true
-}
-
-// rig is the application in an offscreen window of the window's size at scale 1.
+// rig is the application in an offscreen window of the window's size at scale
+// 1, on the real text system and renderer.
 type rig struct {
+	*widgettest.Rig
 	t *testing.T
-	d *driven
-	o *app.Offscreen
+	d *Notes
 }
 
-// newRig opens the offscreen window with the application in it.
+// newRig opens the offscreen window with the application in it, with the
+// system in dark mode or not, set before the first frame as a window's first
+// frame would find it.
 func newRig(t *testing.T, dark bool) *rig {
 	t.Helper()
 	n, err := New()
 	if err != nil {
 		t.Fatal(err)
 	}
-	d := &driven{Notes: n}
-	r := &rig{t: t, d: d, o: open(t, d, dark)}
-	r.frames(4)
+	cfg := Config()
+	r := &rig{Rig: widgettest.Open(t, cfg, int(cfg.Width), int(cfg.Height), 1, n), t: t, d: n}
+	r.Offscreen().UI.SetSystemAppearance(ui.Appearance{Dark: dark, Known: true})
+	r.Frames(4)
 	return r
 }
 
-// open opens an offscreen window of the window's size at scale 1, with the
-// system in dark mode or not, set before the first frame as a window's first
-// frame would find it. Where offscreen rendering is not available the test is
-// skipped, but not in CI.
-func open(t *testing.T, b app.Builder, dark bool) *app.Offscreen {
-	t.Helper()
-	cfg := Config()
-	o, err := app.NewOffscreen(cfg, int(cfg.Width), int(cfg.Height), 1, b)
-	if err != nil {
-		if os.Getenv("CI") == "" {
-			t.Skipf("offscreen rendering: %v", err)
-		}
-		t.Fatal(err)
-	}
-	t.Cleanup(o.Close)
-	o.UI.SetSystemAppearance(ui.Appearance{Dark: dark, Known: true})
-	return o
-}
-
-func (r *rig) frames(n int) {
-	for i := 0; i < n; i++ {
-		r.o.Frame()
-	}
-}
-
-// play runs the steps to their end and two frames more, and fails the test if
-// a step did not do what it says.
+// play runs the steps to their end and two frames more, so that their effects
+// show; it fails the test if a step did not do what it says.
 func (r *rig) play(steps ...step) {
 	r.t.Helper()
-	r.d.p = newPlayer(r.d.Notes, steps, false, true)
-	for i := 0; r.d.p.idx < len(steps) && r.d.p.err == nil; i++ {
-		if i > 5000 {
-			r.t.Fatalf("step %d did not end", r.d.p.idx)
-		}
-		r.o.Frame()
-	}
-	if err := r.d.p.err; err != nil {
-		r.t.Fatal(err)
-	}
-	r.frames(2)
+	r.Play(steps...)
+	r.Frames(2)
 }
 
 // has reports whether the last frame has a node with the role and name, and
 // returns its state.
 func (r *rig) has(role ui.Role, name string) (ui.SemState, bool) {
-	r.d.p.find(role, name, 0) // exports the tree into the player
-	for i := range r.d.p.sem.Nodes {
-		n := &r.d.p.sem.Nodes[i]
-		if n.Role == role && string(r.d.p.sem.Text(n.Name)) == name {
-			return n.State, true
-		}
-	}
-	return 0, false
+	n, ok := r.Find(role, name)
+	return n.State, ok
 }
 
 func (r *rig) texts() []string {
@@ -118,7 +64,7 @@ func TestRendersInLightAndDark(t *testing.T) {
 		if got, want := r.d.k.Mode(), map[bool]theme.Mode{false: theme.Light, true: theme.Dark}[dark]; got != want {
 			t.Errorf("dark=%v: the window shows mode %v", dark, got)
 		}
-		img, _ := r.o.Frame()
+		img, _ := r.Offscreen().Frame()
 		var sum float64
 		for i := 0; i < len(img.Pix); i += 4 * 7 {
 			sum += float64(img.Pix[i]) + float64(img.Pix[i+1]) + float64(img.Pix[i+2])
@@ -144,7 +90,7 @@ func TestAddSelectAndRemove(t *testing.T) {
 		t.Fatalf("after Add the notes are %q", got)
 	}
 
-	r.play(click(ui.RoleListItem, "").nthOf(3), key(ui.KeyDown, ui.ModShift))
+	r.play(click(ui.RoleListItem, "").Nth(3), key(ui.KeyDown, ui.ModShift))
 	if d.Selected() != 2 || !d.list.Sel.Has(3) || !d.list.Sel.Has(4) {
 		t.Fatalf("%d selected, want the two new notes", d.Selected())
 	}
@@ -198,7 +144,7 @@ func TestUndoInTheField(t *testing.T) {
 func TestKeyboardAndShortcuts(t *testing.T) {
 	r := newRig(t, false)
 	d := r.d
-	r.play(click(ui.RoleListItem, "").nthOf(0), key(ui.KeyDown, 0), key(ui.KeyDown, 0))
+	r.play(click(ui.RoleListItem, "").Nth(0), key(ui.KeyDown, 0), key(ui.KeyDown, 0))
 	if it, ok := d.list.Sel.Cursor(); !ok || it != 2 || d.Selected() != 1 {
 		t.Fatalf("after two Downs the cursor is on %d (%v) with %d selected, want note 2", it, ok, d.Selected())
 	}
@@ -219,7 +165,7 @@ func TestKeyboardAndShortcuts(t *testing.T) {
 	}
 
 	// the switch reverses the list and the selection stays on its note
-	r.play(click(ui.RoleListItem, "").nthOf(0), click(ui.RoleSwitch, "Newest first"), settle())
+	r.play(click(ui.RoleListItem, "").Nth(0), click(ui.RoleSwitch, "Newest first"), settle())
 	if !d.newest || d.list.Order[0] != 1 || !d.list.Sel.Has(0) || d.Selected() != 1 {
 		t.Errorf("newest first %v, order %v, %d selected", d.newest, d.list.Order, d.Selected())
 	}
@@ -248,8 +194,10 @@ func TestSteadyStateAllocatesNothing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	b := &Bench{Notes: n, p: newPlayer(n, session(), true, true)}
-	o := open(t, b, true)
+	b := &Bench{Notes: n, p: widgettest.NewPlayer(n, session(), widgettest.Options{Loop: true, Synthetic: true})}
+	cfg := Config()
+	o := widgettest.NewOffscreen(t, cfg, int(cfg.Width), int(cfg.Height), 1, b)
+	o.UI.SetSystemAppearance(ui.Appearance{Dark: true, Known: true})
 	for b.Cycles() < 2 { // warm-up: whole sessions
 		o.Frame()
 	}

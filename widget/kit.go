@@ -153,8 +153,16 @@ func (k *Kit) Theme() *theme.Resolved { return &k.r }
 // Icons is the window's icon atlas.
 func (k *Kit) Icons() *icon.Atlas { return k.icons }
 
-// Context is the ui context the kit builds in.
+// Context is the ui context the kit builds in: the one it was made for and
+// the one of its latest Begin. It stays valid after End, so that a driver, a
+// test or a command handler can reach the window's context through the kit.
 func (k *Kit) Context() *ui.Context { return k.c }
+
+// Focus gives the keyboard focus to the box with the key, in the next frame
+// that builds it: the key of a text field (FieldSignal.Key, FieldKey), of a
+// list or table (TableKey), or of any focusable box. It is ui.Context.SetFocus
+// through the kit.
+func (k *Kit) Focus(key ui.Key) { k.c.SetFocus(key) }
 
 // Pt converts points to pixels at the window's scale.
 func (k *Kit) Pt(v float32) float32 { return v * k.scale }
@@ -253,11 +261,10 @@ func (k *Kit) resolve(s float32) {
 	}
 }
 
-// End finishes the frame: it builds the context menu if one is open and checks
-// that the containers the app opened are closed.
+// End finishes the frame: it builds the context menu if one is open. The kit
+// keeps its context (Context).
 func (k *Kit) End() {
 	k.contextMenu()
-	k.c = nil
 }
 
 // Command reports whether menu command id fired this frame, once: a shortcut,

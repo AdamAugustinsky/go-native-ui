@@ -151,6 +151,15 @@ func (c *Context) NextRole(r Role) { c.semNext.role = r }
 // is copied.
 func (c *Context) NextSemName(s string) { c.semNext.name = c.semA.AppendString(s) }
 
+// SetSemNameBytes names box id, which was built in this frame with a role, from
+// bytes (copied): for a name that is known only from the box's content, after
+// the box was built. It does nothing for a box without a role.
+func (c *Context) SetSemNameBytes(id ID, b []byte) {
+	if r := c.semOf(id); r != nil {
+		r.name = c.semA.AppendBytes(b)
+	}
+}
+
 // NextSemNameBytes is NextSemName for bytes (such as a Fmt result).
 func (c *Context) NextSemNameBytes(b []byte) { c.semNext.name = c.semA.AppendBytes(b) }
 

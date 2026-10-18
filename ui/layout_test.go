@@ -340,3 +340,73 @@ func TestPassOrderChildrenOfPercent(t *testing.T) {
 		t.Errorf("col %v", r)
 	}
 }
+
+// NextCross places the flow children across the layout axis; the default and
+// CrossStart leave them at the start, and a child larger than the room stays
+// there.
+func TestCrossAxisPlacement(t *testing.T) {
+	h := newHarness(t, 800, 600)
+	var row, a, b, big [3]ID
+	build := func(cr Cross) func(c *Context) {
+		return func(c *Context) {
+			for i, cross := range [3]Cross{cr, CrossStart, cr} {
+				c.NextSize(Px(300), Px(100))
+				c.NextAxis(AxisX)
+				c.NextPadding(4, 6, 4, 10)
+				c.NextCross(cross)
+				row[i] = c.Box(0, "row"+string(rune('0'+i)))
+				c.Push(row[i])
+				c.NextSize(Px(40), Px(20))
+				a[i] = c.Box(0, "a")
+				c.NextSize(Px(40), Px(41))
+				b[i] = c.Box(0, "b")
+				c.NextSize(Px(40), Px(200)) // taller than the row
+				big[i] = c.Box(0, "big")
+				c.Pop()
+			}
+		}
+	}
+	// the padded area of a row is 84 px high: y 6 to 90 inside the row
+	h.frame(build(CrossCenter))
+	rel := func(i int, id ID) float32 { return h.rect(id)[1] - h.rect(row[i])[1] }
+	if got := rel(0, a[0]); got != 6+32 { // (84-20)/2 = 32
+		t.Errorf("centred a at %v, want 38", got)
+	}
+	if got := rel(0, b[0]); got != 6+snap(float32(84-41)/2) { // 21.5 rounds to 22
+		t.Errorf("centred b at %v, want 28", got)
+	}
+	if got := rel(0, big[0]); got != 6 {
+		t.Errorf("a child taller than the room is at %v, want the start (6)", got)
+	}
+	if got := rel(1, a[1]); got != 6 {
+		t.Errorf("CrossStart a at %v, want 6", got)
+	}
+	h.frame(build(CrossEnd))
+	if got := rel(0, a[0]); got != 6+64 {
+		t.Errorf("end-aligned a at %v, want 70", got)
+	}
+	if got := rel(2, b[2]); got != 6+43 {
+		t.Errorf("end-aligned b at %v, want 49", got)
+	}
+	var plain, centred ID
+	h.frame(func(c *Context) {
+		c.NextSize(Px(300), Px(100)) // the default: the start
+		c.NextAxis(AxisX)
+		c.Push(c.Box(0, "plain"))
+		c.NextSize(Px(40), Px(20))
+		plain = c.Box(0, "x")
+		c.Pop()
+		c.NextSize(Px(300), Px(100)) // a column centres the widths
+		c.NextCross(CrossCenter)
+		c.Push(c.Box(0, "col"))
+		c.NextSize(Px(100), Px(10))
+		centred = c.Box(0, "x")
+		c.Pop()
+	})
+	if got := h.rect(plain)[1]; got != 0 {
+		t.Errorf("without NextCross the child is at y %v, want 0", got)
+	}
+	if got := h.rect(centred)[0]; got != 100 {
+		t.Errorf("a centred column puts a 100 px child at x %v, want 100", got)
+	}
+}

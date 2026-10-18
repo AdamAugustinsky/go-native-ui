@@ -392,7 +392,7 @@ func (pl *Pilot) drawList(c *ui.Context, r *theme.Resolved, i int, p *pane, pane
 		for row := t.First; row < t.Last; row++ {
 			e := v.entryAt(row)
 			ent := &v.l.Entries[e]
-			t.Row(row, uint32(e))
+			t.RowNamed(row, uint32(e), v.l.Name(int(e)))
 			selected := t.RowSelected()
 			col := dimmed(r, pl.kindColor(r, ent), ft)
 			font := mono

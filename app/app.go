@@ -72,7 +72,10 @@ type Initer interface{ Init(a *App) error }
 // PushKey...); the pending per-frame parts are cleared after each frame.
 // frame counts the frames drawn so far from 0. Returning false means the
 // script is over: that frame is still drawn, without more input, and the
-// run ends.
+// run ends. It ends for good: RunBench finishes its window and the Offscreen
+// never asks the Scripter again, so a test that plays one script after another
+// returns true between them and false only when it is done, as
+// widget/widgettest.Rig does for the window it drives.
 type Scripter interface {
 	Script(frame int, in *ui.Input) bool
 }

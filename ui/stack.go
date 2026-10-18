@@ -249,6 +249,20 @@ func (c *Context) PushAxis(a Axis) { c.sAxis.push(a) }
 // PopAxis pops the axis pushed by PushAxis.
 func (c *Context) PopAxis() { c.sAxis.pop() }
 
+// Cross-axis placement of the children.
+
+// NextCross sets where the next box places its flow children across its layout
+// axis (CrossStart by default): the heights of the children of a row, the
+// widths of the children of a column. A child larger than the room (a box
+// that overflows its parent) stays at the start.
+func (c *Context) NextCross(a Cross) { c.sCross.set(a) }
+
+// PushCross pushes the cross-axis placement until PopCross.
+func (c *Context) PushCross(a Cross) { c.sCross.push(a) }
+
+// PopCross pops the placement pushed by PushCross.
+func (c *Context) PopCross() { c.sCross.pop() }
+
 // Preferred sizes per axis.
 
 // NextWidth sets the preferred width of the next box only.

@@ -47,7 +47,12 @@ func (k *Kit) LabelStyle(s string, st TextStyle) ui.ID {
 }
 
 // LabelBytes is Label for text built at run time (see ui.Context.Fmt); the
-// bytes are copied. The box is identified by its position among its siblings.
+// bytes are copied. The text is not part of the box's identity, so it may
+// change every frame. Any number of them can be built in one container: they
+// are told apart by their order among the container's children that were built
+// the same way, as any boxes with equal labels are (ui.Context.Box), so keep
+// that order from frame to frame. A label's state is not interactive, so a
+// shift costs only its text run being shaped again.
 func (k *Kit) LabelBytes(b []byte) ui.ID { return k.LabelBytesStyle(b, TextBody) }
 
 // LabelBytesStyle is LabelBytes in a style.

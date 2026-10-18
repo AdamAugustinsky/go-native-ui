@@ -104,7 +104,7 @@ func (k *Kit) BeginDialog(label, title string, open *bool) Dialog {
 func (d *Dialog) BeginActions() {
 	k := d.k
 	k.NextGap(k.r.Px.GapSmall / k.scale)
-	k.container(ui.AxisX, "actions", ui.Pct(1), ui.Children(1), 0)
+	k.container(ui.AxisX, ui.CrossCenter, "actions", ui.Pct(1), ui.Children(1), 0)
 	k.Spacer()
 	d.rowOpen = true
 }

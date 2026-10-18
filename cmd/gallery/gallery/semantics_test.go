@@ -3,79 +3,16 @@ package gallery
 import (
 	"bytes"
 	"flag"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"gonativeui/ui"
+	"gonativeui/widget/widgettest"
 )
 
 var update = flag.Bool("update", false, "rewrite the golden files of testdata")
-
-var roleNames = map[ui.Role]string{
-	ui.RoleWindow: "Window", ui.RoleGroup: "Group", ui.RoleLabel: "Label", ui.RoleImage: "Image",
-	ui.RoleButton: "Button", ui.RoleCheckbox: "Checkbox", ui.RoleSwitch: "Switch", ui.RoleRadio: "Radio",
-	ui.RoleRadioGroup: "RadioGroup", ui.RoleSlider: "Slider", ui.RoleTextField: "TextField",
-	ui.RoleSearchField: "SearchField", ui.RoleComboBox: "ComboBox", ui.RoleList: "List",
-	ui.RoleListItem: "ListItem", ui.RoleTable: "Table", ui.RoleRow: "Row", ui.RoleCell: "Cell",
-	ui.RoleColumnHeader: "ColumnHeader", ui.RoleScrollArea: "ScrollArea", ui.RoleScrollBar: "ScrollBar",
-	ui.RoleSplitter: "Splitter", ui.RoleTabList: "TabList", ui.RoleTab: "Tab", ui.RoleTabPanel: "TabPanel",
-	ui.RoleMenuBar: "MenuBar", ui.RoleMenu: "Menu", ui.RoleMenuItem: "MenuItem",
-	ui.RoleMenuItemCheckbox: "MenuItemCheckbox", ui.RoleDialog: "Dialog", ui.RoleTooltip: "Tooltip",
-	ui.RoleProgressBar: "ProgressBar",
-}
-
-var semStateNames = [...]struct {
-	bit  ui.SemState
-	name string
-}{
-	{ui.SemChecked, "checked"}, {ui.SemMixed, "mixed"}, {ui.SemSelected, "selected"},
-	{ui.SemExpanded, "expanded"}, {ui.SemDisabled, "disabled"}, {ui.SemFocused, "focused"},
-	{ui.SemEditable, "editable"}, {ui.SemModal, "modal"},
-}
-
-// dump writes the semantic tree as indented text: roles, names, values, states,
-// ranges and positions in a list, without bounds (which depend on the fonts).
-func dump(t *ui.SemTree) string {
-	var b strings.Builder
-	depth := make([]int, len(t.Nodes))
-	for i, n := range t.Nodes {
-		if n.Parent >= 0 {
-			depth[i] = depth[n.Parent] + 1
-		}
-		b.WriteString(strings.Repeat("  ", depth[i]))
-		role := roleNames[n.Role]
-		if role == "" {
-			role = fmt.Sprintf("Role%d", n.Role)
-		}
-		b.WriteString(role)
-		if name := t.Text(n.Name); len(name) > 0 {
-			fmt.Fprintf(&b, " %q", name)
-		}
-		if v := t.Text(n.Value); len(v) > 0 {
-			fmt.Fprintf(&b, " value=%q", v)
-		}
-		var st []string
-		for _, s := range semStateNames {
-			if n.State&s.bit != 0 {
-				st = append(st, s.name)
-			}
-		}
-		if len(st) > 0 {
-			fmt.Fprintf(&b, " [%s]", strings.Join(st, " "))
-		}
-		if n.Range != [4]float64{} && n.Role != ui.RoleScrollBar { // a scroll bar's range is the layout's, in float noise
-			fmt.Fprintf(&b, " range=%g..%g value=%.3g step=%g", n.Range[0], n.Range[1], n.Range[2], n.Range[3])
-		}
-		if n.Pos[1] > 0 {
-			fmt.Fprintf(&b, " pos=%d/%d", n.Pos[0], n.Pos[1])
-		}
-		b.WriteByte('\n')
-	}
-	return b.String()
-}
 
 func golden(t *testing.T, name, got string) {
 	t.Helper()
@@ -112,13 +49,17 @@ func golden(t *testing.T, name, got string) {
 }
 
 // The semantic tree of the window as it opens, and with the dialog open over
-// four selected rows.
+// four selected rows. The rows are named by their first cell, so that a person
+// using assistive technology, and a test, find "row 3" by its text.
 func TestSemanticsGolden(t *testing.T) {
 	r := newRig(t, Options{Still: true})
-	r.frames(5)
-	golden(t, "semantics-main.txt", dump(r.tree()))
+	r.Frames(5)
+	golden(t, "semantics-main.txt", widgettest.Dump(r.Tree()))
+	if n, ok := r.Find(ui.RoleRow, "3"); !ok || n.Pos != [2]int32{3, 1_000_000} {
+		t.Errorf("the table row named 3: found %v, at %v", ok, n.Pos)
+	}
 
-	r.run(click(rowRole, "").nthOf(3), click(rowRole, "").nthOf(6).with(modShift),
+	r.Play(click(rowRole, "").Nth(3), click(rowRole, "").Nth(6).With(modShift),
 		click(roleButton, "Delete…"), waitFor(ui.RoleDialog, ""), settle(), idle(2))
-	golden(t, "semantics-dialog.txt", dump(r.tree()))
+	golden(t, "semantics-dialog.txt", widgettest.Dump(r.Tree()))
 }

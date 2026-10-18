@@ -286,6 +286,8 @@ func (t *Table) EndCell() { t.k.c.Pop() }
 
 // CellBytes builds cell col of the row being built as one line of text, in the
 // column's alignment, fading out where it does not fit. The bytes are copied.
+// The text of column 0 is the accessible name of the row, unless RowNamed gave
+// it one.
 func (t *Table) CellBytes(col int, b []byte) {
 	k := t.k
 	c := k.c
@@ -297,6 +299,10 @@ func (t *Table) CellBytes(col int, b []byte) {
 	c.NextRole(ui.RoleCell)
 	c.NextSemNameBytes(b)
 	c.BoxKeyed(ui.DrawText|ui.FadeOverflowX|ui.Clip, ui.KeyN(t.rowKey, uint64(col)), b)
+	if col == 0 && !t.rowNamed { // the first cell names its row
+		c.SetSemNameBytes(t.row, b)
+		t.rowNamed = true
+	}
 }
 
 // CellText is CellBytes for a string.

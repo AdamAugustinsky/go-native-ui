@@ -10,7 +10,7 @@ import (
 // rowNodes returns the table's row nodes of the last frame.
 func (r *rig) rowNodes() []ui.SemNode {
 	var rows []ui.SemNode
-	for _, n := range r.tree().Nodes {
+	for _, n := range r.Tree().Nodes {
 		if n.Role == ui.RoleRow {
 			rows = append(rows, n)
 		}
@@ -22,7 +22,7 @@ func (r *rig) rowNodes() []ui.SemNode {
 // and each reports its place in the whole.
 func TestVirtualRowsReportTheirPosition(t *testing.T) {
 	r := newRig(t, Options{Still: true})
-	r.frames(5)
+	r.Frames(5)
 	rows := r.rowNodes()
 	if len(rows) < 10 || len(rows) > 80 {
 		t.Fatalf("%d row nodes in a table of a million rows, want only the visible ones", len(rows))
@@ -35,7 +35,7 @@ func TestVirtualRowsReportTheirPosition(t *testing.T) {
 	// to the end: the last visible row is the last of the million
 	r.focusOn(ui.RoleTable, "rows")
 	r.press(ui.KeyEnd, 0)
-	r.frames(150)
+	r.Frames(150)
 	rows = r.rowNodes()
 	last := rows[len(rows)-1]
 	if last.Pos != [2]int32{999_999, 1_000_000} {
@@ -47,12 +47,12 @@ func TestVirtualRowsReportTheirPosition(t *testing.T) {
 		}
 	}
 	// the labels agree with the positions
-	if _, ok := r.find(ui.RoleLabel, "item-999999"); !ok {
+	if _, ok := r.Find(ui.RoleLabel, "item-999999"); !ok {
 		t.Error("the last row's label is not built after End")
 	}
 	// and back to the top
 	r.press(ui.KeyHome, 0)
-	r.frames(150)
+	r.Frames(150)
 	if first := r.rowNodes()[0]; first.Pos[0] != 0 {
 		t.Errorf("after Home the first visible row reports %v, want position 0", first.Pos)
 	}
@@ -62,8 +62,8 @@ func TestVirtualRowsReportTheirPosition(t *testing.T) {
 // the rows under it.
 func TestTableSelectionAndSortAreExported(t *testing.T) {
 	r := newRig(t, Options{Still: true})
-	r.frames(5)
-	r.run(click(rowRole, "").nthOf(2), click(rowRole, "").nthOf(4).with(modShift), idle(2))
+	r.Frames(5)
+	r.Play(click(rowRole, "").Nth(2), click(rowRole, "").Nth(4).With(modShift), idle(2))
 	var sel []int32
 	for _, n := range r.rowNodes() {
 		if n.State&ui.SemSelected != 0 {
@@ -73,8 +73,8 @@ func TestTableSelectionAndSortAreExported(t *testing.T) {
 	if len(sel) != 3 || sel[0] != 2 || sel[2] != 4 {
 		t.Fatalf("selected rows %v after a click and a Shift+click, want 2, 3, 4", sel)
 	}
-	r.run(click(ui.RoleColumnHeader, "ID"), idle(3))
-	if _, ok := r.find(ui.RoleLabel, "item-999999"); !ok {
+	r.Play(click(ui.RoleColumnHeader, "ID"), idle(3))
+	if _, ok := r.Find(ui.RoleLabel, "item-999999"); !ok {
 		t.Error("sorting by ID descending does not show the last item first")
 	}
 	var again []int32
@@ -91,15 +91,15 @@ func TestTableSelectionAndSortAreExported(t *testing.T) {
 // Values and states the controls export, set with the pointer.
 func TestControlsExportTheirValuesAndStates(t *testing.T) {
 	r := newRig(t, Options{Still: true})
-	r.frames(5)
+	r.Frames(5)
 
-	vol := r.must(ui.RoleSlider, "Volume")
+	vol := r.Must(ui.RoleSlider, "Volume")
 	if vol.Range != [4]float64{0, 100, 40, 1} {
 		t.Fatalf("Volume exports %v, want {0 100 40 1}", vol.Range)
 	}
-	r.run(click(ui.RoleSlider, "Volume"))
-	r.frames(2)
-	n := r.must(ui.RoleSlider, "Volume")
+	r.Play(click(ui.RoleSlider, "Volume"))
+	r.Frames(2)
+	n := r.Must(ui.RoleSlider, "Volume")
 	if v := n.Range[2]; v < 40 || v > 60 { // the middle of the track
 		t.Errorf("a click in the middle of the slider set %v, want about 50", v)
 	}
@@ -110,7 +110,7 @@ func TestControlsExportTheirValuesAndStates(t *testing.T) {
 	if r.state(ui.RoleCheckbox, "Enable feature")&ui.SemChecked == 0 {
 		t.Fatal("Enable feature starts unchecked")
 	}
-	r.run(click(ui.RoleCheckbox, "Enable feature"), idle(2))
+	r.Play(click(ui.RoleCheckbox, "Enable feature"), idle(2))
 	if r.state(ui.RoleCheckbox, "Enable feature")&ui.SemChecked != 0 {
 		t.Error("a click did not uncheck the checkbox")
 	}
@@ -119,27 +119,27 @@ func TestControlsExportTheirValuesAndStates(t *testing.T) {
 	if s := r.state(ui.RoleCheckbox, "All options"); s&(ui.SemMixed|ui.SemChecked) != 0 {
 		t.Errorf("All options has state %b with both options off, want neither checked nor mixed", s)
 	}
-	r.run(click(ui.RoleCheckbox, "All options"), idle(3))
+	r.Play(click(ui.RoleCheckbox, "All options"), idle(3))
 	if !r.g.check || !r.g.sw {
 		t.Errorf("a click on All options left the feature %v and the notifications %v", r.g.check, r.g.sw)
 	}
 	if r.state(ui.RoleCheckbox, "All options")&ui.SemChecked == 0 || r.state(ui.RoleSwitch, "Notifications")&ui.SemChecked == 0 {
 		t.Error("the semantic tree does not show both options on")
 	}
-	r.run(click(ui.RoleRadio, "Three"), idle(2))
+	r.Play(click(ui.RoleRadio, "Three"), idle(2))
 	if r.state(ui.RoleRadio, "Three")&ui.SemChecked == 0 || r.state(ui.RoleRadio, "One")&ui.SemChecked != 0 {
 		t.Error("clicking Three did not move the choice from One to Three")
 	}
-	r.run(click(ui.RoleTab, "History"), idle(2))
+	r.Play(click(ui.RoleTab, "History"), idle(2))
 	if r.state(ui.RoleTab, "History")&ui.SemSelected == 0 {
 		t.Error("clicking History did not select the tab")
 	}
-	if _, ok := r.find(ui.RoleLabel, "What happened to it."); !ok {
+	if _, ok := r.Find(ui.RoleLabel, "What happened to it."); !ok {
 		t.Error("the History tab's text is not shown")
 	}
 	// disabled widgets say so
 	disabled := 0
-	for _, nd := range r.tree().Nodes {
+	for _, nd := range r.Tree().Nodes {
 		if nd.State&ui.SemDisabled != 0 {
 			disabled++
 		}
@@ -152,30 +152,30 @@ func TestControlsExportTheirValuesAndStates(t *testing.T) {
 // The dialog is modal, and its actions reach the app.
 func TestDialogIsModalAndItsActionsReachTheApp(t *testing.T) {
 	r := newRig(t, Options{Still: true})
-	r.frames(5)
+	r.Frames(5)
 	g := r.g
 	selectRows := func() {
-		r.run(click(rowRole, "").nthOf(2), click(rowRole, "").nthOf(4).with(modShift), idle(2))
+		r.Play(click(rowRole, "").Nth(2), click(rowRole, "").Nth(4).With(modShift), idle(2))
 		if g.table.Sel.Count() != 3 {
 			t.Fatalf("%d rows selected, want 3", g.table.Sel.Count())
 		}
 	}
 	open := func() {
-		r.run(click(roleButton, "Delete…"), waitFor(ui.RoleDialog, ""), settle(), idle(2))
+		r.Play(click(roleButton, "Delete…"), waitFor(ui.RoleDialog, ""), settle(), idle(2))
 	}
 	selectRows()
 	open()
 
-	d, ok := r.find(ui.RoleDialog, "Delete the selected rows?")
+	d, ok := r.Find(ui.RoleDialog, "Delete the selected rows?")
 	if !ok || d.State&ui.SemModal == 0 {
 		t.Fatalf("the dialog is %v (found %v), want a modal node", d.State, ok)
 	}
-	if n := r.must(ui.RoleButton, "Delete"); n.State&ui.SemFocused == 0 {
+	if n := r.Must(ui.RoleButton, "Delete"); n.State&ui.SemFocused == 0 {
 		t.Error("the default action does not have the focus when the dialog opens")
 	}
 
 	// what is beneath it is inert: pointer, keys and shortcuts
-	r.run(click(ui.RoleCheckbox, "Enable feature"), idle(2))
+	r.Play(click(ui.RoleCheckbox, "Enable feature"), idle(2))
 	if !g.check {
 		t.Error("a click on the checkbox beneath the dialog went through")
 	}
@@ -185,21 +185,21 @@ func TestDialogIsModalAndItsActionsReachTheApp(t *testing.T) {
 	}
 	for i := 0; i < 12; i++ { // Tab stays inside the dialog
 		r.press(ui.KeyTab, 0)
-		n, ok := r.focused()
-		if !ok || (n.Role != ui.RoleButton || (string(r.tree().Text(n.Name)) != "Cancel" && string(r.tree().Text(n.Name)) != "Delete")) {
-			t.Fatalf("Tab moved the focus out of the dialog to role %d %q (found %v)", n.Role, r.tree().Text(n.Name), ok)
+		n, ok := r.Focused()
+		if !ok || (n.Role != ui.RoleButton || (string(r.Tree().Text(n.Name)) != "Cancel" && string(r.Tree().Text(n.Name)) != "Delete")) {
+			t.Fatalf("Tab moved the focus out of the dialog to role %d %q (found %v)", n.Role, r.Tree().Text(n.Name), ok)
 		}
 	}
 	// Cancel: the rows stay, the dialog closes
-	r.run(click(ui.RoleButton, "Cancel"), waitGone(ui.RoleDialog, ""), idle(2))
+	r.Play(click(ui.RoleButton, "Cancel"), waitGone(ui.RoleDialog, ""), idle(2))
 	if g.table.Sel.Count() != 3 {
 		t.Errorf("Cancel changed the selection to %d rows", g.table.Sel.Count())
 	}
 	// Escape cancels as well
 	open()
 	r.press(ui.KeyEscape, 0)
-	r.frames(30)
-	if _, ok := r.find(ui.RoleDialog, ""); ok {
+	r.Frames(30)
+	if _, ok := r.Find(ui.RoleDialog, ""); ok {
 		t.Error("Escape did not close the dialog")
 	}
 	if g.table.Sel.Count() != 3 {
@@ -207,7 +207,7 @@ func TestDialogIsModalAndItsActionsReachTheApp(t *testing.T) {
 	}
 	// Delete takes the action
 	open()
-	r.run(click(ui.RoleButton, "Delete"), waitGone(ui.RoleDialog, ""), idle(2))
+	r.Play(click(ui.RoleButton, "Delete"), waitGone(ui.RoleDialog, ""), idle(2))
 	if g.table.Sel.Count() != 0 {
 		t.Errorf("Delete left %d rows selected", g.table.Sel.Count())
 	}
@@ -215,7 +215,7 @@ func TestDialogIsModalAndItsActionsReachTheApp(t *testing.T) {
 		t.Errorf("the status is %q, want Deleted", g.status)
 	}
 	// and the window works again
-	r.run(click(ui.RoleCheckbox, "Enable feature"), idle(2))
+	r.Play(click(ui.RoleCheckbox, "Enable feature"), idle(2))
 	if g.check {
 		t.Error("the checkbox does not respond after the dialog closed")
 	}
@@ -225,12 +225,12 @@ func TestDialogIsModalAndItsActionsReachTheApp(t *testing.T) {
 // app's command.
 func TestRowContextMenu(t *testing.T) {
 	r := newRig(t, Options{Still: true})
-	r.frames(5)
-	r.run(rclick(rowRole, "").nthOf(2), waitFor(ui.RoleMenuItem, "Copy Path"), idle(2))
+	r.Frames(5)
+	r.Play(rclick(rowRole, "").Nth(2), waitFor(ui.RoleMenuItem, "Copy Path"), idle(2))
 	if r.g.table.Sel.Count() != 1 {
 		t.Errorf("a right-click selected %d rows, want the one under the pointer", r.g.table.Sel.Count())
 	}
-	r.run(click(ui.RoleMenuItem, "Copy Path"), waitGone(ui.RoleMenuItem, "Copy Path"), idle(2))
+	r.Play(click(ui.RoleMenuItem, "Copy Path"), waitGone(ui.RoleMenuItem, "Copy Path"), idle(2))
 	if got := string(r.g.status); got != "Chose “Copy Path”" {
 		t.Errorf("the status is %q after choosing Copy Path", got)
 	}
@@ -240,20 +240,20 @@ func TestRowContextMenu(t *testing.T) {
 // the mode crossfades: the palette is in between for some frames, then settled.
 func TestAppearanceCycleCrossfades(t *testing.T) {
 	r := newRig(t, Options{Still: true})
-	r.frames(5)
+	r.Frames(5)
 	r.press('D', ui.PrimaryMod()|ui.ModShift) // System (light here) to forced light: no change of mode
-	if r.g.Preference() != theme.ForceLight || r.c.Animating() {
-		t.Fatalf("the first press gives the preference %d, animating %v", r.g.Preference(), r.c.Animating())
+	if r.g.Preference() != theme.ForceLight || r.Context().Animating() {
+		t.Fatalf("the first press gives the preference %d, animating %v", r.g.Preference(), r.Context().Animating())
 	}
 	r.press('D', ui.PrimaryMod()|ui.ModShift)
 	if r.g.Mode() != theme.Dark {
 		t.Fatal("the second press did not switch to the dark mode")
 	}
-	if !r.c.Animating() {
+	if !r.Context().Animating() {
 		t.Error("the mode switch does not animate")
 	}
-	r.run(settle())
-	if r.c.Animating() {
+	r.Play(settle())
+	if r.Context().Animating() {
 		t.Error("the crossfade never settled")
 	}
 	r.press('D', ui.PrimaryMod()|ui.ModShift)
@@ -267,26 +267,26 @@ func TestAppearanceCycleCrossfades(t *testing.T) {
 // same with the real text system and the whole session).
 func TestSteadyFramesAllocateNothing(t *testing.T) {
 	r := newRig(t, Options{Still: true})
-	r.frames(30)
+	r.Frames(30)
 	check := func(name string) {
 		t.Helper()
-		r.frames(40) // animations done, caches warm
-		if n := testing.AllocsPerRun(50, r.frame); n != 0 {
+		r.Frames(40) // animations done, caches warm
+		if n := testing.AllocsPerRun(50, r.Frame); n != 0 {
 			t.Errorf("%s: %v allocations per frame, want 0", name, n)
 		}
 	}
 	check("idle")
-	r.run(click(ui.RoleMenuItem, "File"), waitFor(ui.RoleMenuItem, "Open Recent"), click(ui.RoleMenuItem, "Open Recent"), idle(2))
+	r.Play(click(ui.RoleMenuItem, "File"), waitFor(ui.RoleMenuItem, "Open Recent"), click(ui.RoleMenuItem, "Open Recent"), idle(2))
 	check("menu and submenu open")
 	r.press(ui.KeyEscape, 0)
 	r.press(ui.KeyEscape, 0)
-	r.run(click(ui.RoleComboBox, "Format"), waitFor(ui.RoleListItem, "HTML"), idle(2))
+	r.Play(click(ui.RoleComboBox, "Format"), waitFor(ui.RoleListItem, "HTML"), idle(2))
 	check("select open")
 	r.press(ui.KeyEscape, 0)
-	r.run(move(roleButton, "Open…"), waitFor(ui.RoleTooltip, ""), idle(2))
+	r.Play(move(roleButton, "Open…"), waitFor(ui.RoleTooltip, ""), idle(2))
 	check("tooltip showing")
-	r.run(move(roleButton, "Save"), idle(2), click(rowRole, "").nthOf(3), click(rowRole, "").nthOf(6).with(modShift), idle(2))
+	r.Play(move(roleButton, "Save"), idle(2), click(rowRole, "").Nth(3), click(rowRole, "").Nth(6).With(modShift), idle(2))
 	check("rows selected")
-	r.run(click(roleButton, "Delete…"), waitFor(ui.RoleDialog, ""), settle(), idle(2))
+	r.Play(click(roleButton, "Delete…"), waitFor(ui.RoleDialog, ""), settle(), idle(2))
 	check("dialog open")
 }

@@ -54,6 +54,11 @@ type moveReq struct {
 	extend  bool
 }
 
+// Item is the item shown in display row r: Order[r], or r when Order is nil.
+// Use it wherever the app needs the item of a row, so that a list that is not
+// reordered need not keep an Order.
+func (st *ListState) Item(r int) uint32 { return itemAt(st.Order, r) }
+
 // GoTo moves the cursor to display row r, selects that row alone and scrolls
 // it into view, in the next frame the list is built. The app calls it to answer
 // type-to-find.
@@ -156,11 +161,12 @@ type List struct {
 	table  bool
 
 	// the row being built
-	row     ui.ID
-	rowKey  ui.Key
-	rowItem uint32
-	rowSel  bool
-	textCol uint32
+	row      ui.ID
+	rowKey   ui.Key
+	rowItem  uint32
+	rowSel   bool
+	rowNamed bool // the row has an accessible name
+	textCol  uint32
 }
 
 // BeginList starts a list of rows rows of the theme's row height, scrolling
@@ -359,7 +365,7 @@ func (l *List) moveTo(r int, extend bool) {
 		st.Sel.SelectRange(st.Order, a, r)
 		st.ancRow = a
 	} else {
-		st.Sel.Only(itemAt(st.Order, r))
+		st.Sel.Only(st.Item(r))
 		st.ancRow = r
 	}
 	st.curRow = r
@@ -402,7 +408,7 @@ func (l *List) input(ps ui.Signal, rect [4]float32) {
 				l.Changed = true
 			}
 		} else {
-			item := itemAt(st.Order, r)
+			item := st.Item(r)
 			switch {
 			case in.Mods&ui.ModShift != 0:
 				l.moveTo(r, true)
@@ -419,12 +425,12 @@ func (l *List) input(ps ui.Signal, rect [4]float32) {
 	}
 	if ps.DoubleClicked {
 		if r := l.rowAt(ps.Mouse[1]); r >= 0 {
-			l.Activated, l.Item = true, itemAt(st.Order, r)
+			l.Activated, l.Item = true, st.Item(r)
 		}
 	}
 	if ps.RightClicked {
 		if r := l.rowAt(ps.Mouse[1]); r >= 0 {
-			item := itemAt(st.Order, r)
+			item := st.Item(r)
 			if !st.Sel.Has(item) {
 				st.Sel.Only(item)
 				st.curRow, st.ancRow = r, r
@@ -474,7 +480,7 @@ func (l *List) input(ps ui.Signal, rect [4]float32) {
 		c.SetFocusVisible(true)
 	}
 	if cur >= 0 && ps.Activated { // Enter, Space, or an assistive technology's press
-		l.Activated, l.Item = true, itemAt(st.Order, cur)
+		l.Activated, l.Item = true, st.Item(cur)
 	}
 	l.typeToFind(in)
 }
@@ -517,7 +523,15 @@ func (l *List) typeToFind(in *ui.Input) {
 // and cursor, and whose children flow left to right. It ends the row before
 // it. The boxes of the row are keyed by the item, so their state follows it
 // through sorting and scrolling.
-func (l *List) Row(r int, item uint32) {
+//
+// The row has no accessible name; RowNamed gives it one, and so does the first
+// cell of a Table row (Table.CellBytes).
+func (l *List) Row(r int, item uint32) { l.RowNamed(r, item, nil) }
+
+// RowNamed is Row with the accessible name of the row, its text (the bytes are
+// copied): what an assistive technology reads for the row, and what a test
+// finds it by (ui.RoleListItem, or ui.RoleRow in a table).
+func (l *List) RowNamed(r int, item uint32, name []byte) {
 	l.endRow()
 	k := l.k
 	c := k.c
@@ -559,7 +573,11 @@ func (l *List) Row(r int, item uint32) {
 	c.NextRole(role)
 	c.NextSemState(state)
 	c.NextSemPos(r, l.Rows)
+	if name != nil {
+		c.NextSemNameBytes(name)
+	}
 	l.row = c.BoxKeyed(flags, key, nil)
+	l.rowNamed = name != nil
 	l.rowKey, l.rowItem, l.rowSel = key, item, sel
 	l.textCol = p.Text
 	if sel {

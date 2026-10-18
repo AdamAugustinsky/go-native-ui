@@ -56,6 +56,7 @@ type box struct {
 	font        text.FontKey
 	align       Align
 	axis        Axis
+	cross       Cross
 	pad         [4]float32 // l, t, r, b
 	gap         float32
 	pref        [2]Size
@@ -132,6 +133,7 @@ type Context struct {
 	sPad     stack[[4]float32]
 	sGap     stack[float32]
 	sAxis    stack[Axis]
+	sCross   stack[Cross]
 	sW, sH   stack[Size]
 	sOpacity stack[float32]
 	sTint    stack[Tint]
@@ -277,6 +279,7 @@ func New(sh Shaper) *Context {
 	c.sPad.init([4]float32{})
 	c.sGap.init(0)
 	c.sAxis.init(AxisY)
+	c.sCross.init(CrossStart)
 	c.sW.init(Size{})
 	c.sH.init(Size{})
 	c.sOpacity.init(1)
@@ -422,6 +425,7 @@ func (c *Context) resetStyles() {
 	c.sPad.reset()
 	c.sGap.reset()
 	c.sAxis.reset()
+	c.sCross.reset()
 	c.sW.reset()
 	c.sH.reset()
 	c.sOpacity.reset()
@@ -572,6 +576,7 @@ func (c *Context) newBox(flags Flags, key Key) ID {
 	b.font = c.sFont.take()
 	b.align = c.sAlign.take()
 	b.axis = c.sAxis.take()
+	b.cross = c.sCross.take()
 	b.pad = c.sPad.take()
 	b.gap = c.sGap.take()
 	b.pref = [2]Size{c.sW.take(), c.sH.take()}

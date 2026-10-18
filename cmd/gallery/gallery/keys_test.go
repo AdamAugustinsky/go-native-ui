@@ -12,9 +12,9 @@ import (
 func (r *rig) focusOn(role ui.Role, name string) ui.SemNode {
 	r.t.Helper()
 	for i := 0; i < 400; i++ {
-		r.key(ui.KeyTab, 0)
-		r.frames(2)
-		if n, ok := r.focused(); ok && n.Role == role && string(r.tree().Text(n.Name)) == name {
+		r.Key(ui.KeyTab, 0)
+		r.Frames(2)
+		if n, ok := r.Focused(); ok && n.Role == role && string(r.Tree().Text(n.Name)) == name {
 			return n
 		}
 	}
@@ -24,26 +24,26 @@ func (r *rig) focusOn(role ui.Role, name string) ui.SemNode {
 
 // press sends a key and lets the frames after it run.
 func (r *rig) press(code ui.KeyCode, mods ui.Mods) {
-	r.key(code, mods)
-	r.frames(2)
+	r.Key(code, mods)
+	r.Frames(2)
 }
 
 func (r *rig) value(role ui.Role, name string) string {
 	r.t.Helper()
-	n := r.must(role, name)
-	return string(r.tree().Text(n.Value))
+	n := r.Must(role, name)
+	return string(r.Tree().Text(n.Value))
 }
 
 func (r *rig) state(role ui.Role, name string) ui.SemState {
 	r.t.Helper()
-	return r.must(role, name).State
+	return r.Must(role, name).State
 }
 
 // Every kind of widget of the gallery can be reached with Tab, and so can each
 // of the live controls; the tab order closes into a ring.
 func TestEveryWidgetIsReachableByTab(t *testing.T) {
 	r := newRig(t, Options{Still: true})
-	r.frames(5)
+	r.Frames(5)
 	type id struct {
 		role ui.Role
 		name string
@@ -70,7 +70,7 @@ func TestEveryWidgetIsReachableByTab(t *testing.T) {
 	ringed := false
 	for i := 0; i < 400 && !ringed; i++ {
 		r.press(ui.KeyTab, 0)
-		n, ok := r.focused()
+		n, ok := r.Focused()
 		if !ok {
 			continue
 		}
@@ -79,7 +79,7 @@ func TestEveryWidgetIsReachableByTab(t *testing.T) {
 		} else if n.Key == first {
 			ringed = true
 		}
-		delete(want, id{n.Role, string(r.tree().Text(n.Name))})
+		delete(want, id{n.Role, string(r.Tree().Text(n.Name))})
 	}
 	if !ringed {
 		t.Error("Tab never came back to the first stop")
@@ -93,14 +93,14 @@ func TestEveryWidgetIsReachableByTab(t *testing.T) {
 // reports what it did.
 func TestKeyboardOnlyOperation(t *testing.T) {
 	r := newRig(t, Options{Still: true})
-	r.frames(5)
+	r.Frames(5)
 	g := r.g
 
 	t.Run("text field", func(t *testing.T) {
 		r.focusOn(ui.RoleTextField, "Notes")
 		r.press(ui.KeyEnd, 0)
-		r.typ("!")
-		r.frames(2)
+		r.Type("!")
+		r.Frames(2)
 		if got := r.value(ui.RoleTextField, "Notes"); got != "Hello, gallery!" {
 			t.Fatalf("Notes = %q after typing, want %q", got, "Hello, gallery!")
 		}
@@ -114,15 +114,15 @@ func TestKeyboardOnlyOperation(t *testing.T) {
 		prim := ui.PrimaryMod()
 		r.press('A', prim)
 		r.press('C', prim)
-		if string(r.clip) != "Hello, gallery" {
-			t.Fatalf("the clipboard holds %q after select all and copy, want %q", r.clip, "Hello, gallery")
+		if string(r.Clipboard()) != "Hello, gallery" {
+			t.Fatalf("the clipboard holds %q after select all and copy, want %q", r.Clipboard(), "Hello, gallery")
 		}
 		r.press('X', prim)
 		if got := r.value(ui.RoleTextField, "Notes"); got != "" {
 			t.Fatalf("Notes = %q after cut, want it empty", got)
 		}
 		r.press('V', prim)
-		r.frames(2)
+		r.Frames(2)
 		if got := r.value(ui.RoleTextField, "Notes"); got != "Hello, gallery" {
 			t.Fatalf("Notes = %q after paste, want %q", got, "Hello, gallery")
 		}
@@ -134,8 +134,8 @@ func TestKeyboardOnlyOperation(t *testing.T) {
 	})
 	t.Run("search field", func(t *testing.T) {
 		r.focusOn(ui.RoleSearchField, "Filter")
-		r.typ("abc")
-		r.frames(2)
+		r.Type("abc")
+		r.Frames(2)
 		if got := r.value(ui.RoleSearchField, "Filter"); got != "abc" {
 			t.Fatalf("Filter = %q, want abc", got)
 		}
@@ -194,33 +194,33 @@ func TestKeyboardOnlyOperation(t *testing.T) {
 	})
 	t.Run("slider", func(t *testing.T) {
 		r.focusOn(ui.RoleSlider, "Volume")
-		if v := r.must(ui.RoleSlider, "Volume").Range; v != [4]float64{0, 100, 40, 1} {
+		if v := r.Must(ui.RoleSlider, "Volume").Range; v != [4]float64{0, 100, 40, 1} {
 			t.Fatalf("the slider's range is %v, want min 0, max 100, value 40, step 1", v)
 		}
 		for i := 0; i < 5; i++ {
 			r.press(ui.KeyRight, 0)
 		}
-		if v := r.must(ui.RoleSlider, "Volume").Range[2]; v != 45 {
+		if v := r.Must(ui.RoleSlider, "Volume").Range[2]; v != 45 {
 			t.Errorf("slider = %v after five Right, want 45", v)
 		}
 		r.press(ui.KeyEnd, 0)
-		if v := r.must(ui.RoleSlider, "Volume").Range[2]; v != 100 {
+		if v := r.Must(ui.RoleSlider, "Volume").Range[2]; v != 100 {
 			t.Errorf("slider = %v after End, want 100", v)
 		}
 		r.press(ui.KeyHome, 0)
-		if v := r.must(ui.RoleSlider, "Volume").Range[2]; v != 0 {
+		if v := r.Must(ui.RoleSlider, "Volume").Range[2]; v != 0 {
 			t.Errorf("slider = %v after Home, want 0", v)
 		}
 	})
 	t.Run("select", func(t *testing.T) {
 		r.focusOn(ui.RoleComboBox, "Format")
 		r.press(ui.KeyDown, 0)
-		if _, ok := r.find(ui.RoleListItem, "Markdown"); !ok {
+		if _, ok := r.Find(ui.RoleListItem, "Markdown"); !ok {
 			t.Fatal("Down did not open the select")
 		}
 		r.press(ui.KeyDown, 0)
 		r.press(ui.KeyEnter, 0)
-		if _, ok := r.find(ui.RoleListItem, "Markdown"); ok {
+		if _, ok := r.Find(ui.RoleListItem, "Markdown"); ok {
 			t.Error("Enter did not close the select")
 		}
 		if got := r.value(ui.RoleComboBox, "Format"); got != "Markdown" {
@@ -260,7 +260,7 @@ func TestKeyboardOnlyOperation(t *testing.T) {
 	t.Run("menu bar and shortcut", func(t *testing.T) {
 		r.focusOn(ui.RoleMenuItem, "View")
 		r.press(ui.KeyDown, 0)
-		if _, ok := r.find(ui.RoleMenuItem, "Cycle Appearance"); !ok {
+		if _, ok := r.Find(ui.RoleMenuItem, "Cycle Appearance"); !ok {
 			t.Fatal("Down did not open the View menu")
 		}
 		r.press(ui.KeyEnter, 0)
@@ -279,11 +279,11 @@ func TestKeyboardOnlyOperation(t *testing.T) {
 	t.Run("menu button", func(t *testing.T) {
 		r.focusOn(ui.RoleButton, "Menu")
 		r.press(ui.KeyEnter, 0)
-		if _, ok := r.find(ui.RoleMenuItem, "Open…"); !ok {
+		if _, ok := r.Find(ui.RoleMenuItem, "Open…"); !ok {
 			t.Fatal("Enter did not open the menu")
 		}
 		r.press(ui.KeyEscape, 0)
-		if _, ok := r.find(ui.RoleMenuItem, "Open…"); ok {
+		if _, ok := r.Find(ui.RoleMenuItem, "Open…"); ok {
 			t.Error("Escape did not close the menu")
 		}
 	})
@@ -307,19 +307,19 @@ func TestKeyboardOnlyOperation(t *testing.T) {
 		if n := g.table.Sel.Count(); n != 1_000_000 {
 			t.Errorf("%d rows selected after select all, want 1000000", n)
 		}
-		if n := r.must(ui.RoleTable, "rows"); n.State&ui.SemFocused == 0 {
+		if n := r.Must(ui.RoleTable, "rows"); n.State&ui.SemFocused == 0 {
 			t.Error("the table does not report the focus")
 		}
 	})
 	t.Run("dialog button", func(t *testing.T) {
 		r.focusOn(ui.RoleButton, "Delete…")
 		r.press(ui.KeyEnter, 0)
-		if _, ok := r.find(ui.RoleDialog, "Delete the selected rows?"); !ok {
+		if _, ok := r.Find(ui.RoleDialog, "Delete the selected rows?"); !ok {
 			t.Fatal("Enter on Delete… did not open the dialog")
 		}
 		r.press(ui.KeyEscape, 0)
-		r.frames(20)
-		if _, ok := r.find(ui.RoleDialog, "Delete the selected rows?"); ok {
+		r.Frames(20)
+		if _, ok := r.Find(ui.RoleDialog, "Delete the selected rows?"); ok {
 			t.Error("Escape did not close the dialog")
 		}
 	})

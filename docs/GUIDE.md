@@ -27,7 +27,7 @@ go test ./examples/notes/...                  # the tests of the example
 |---|---|
 | `examples/notes/main.go` | the command: window, offscreen render, `-bench`, `-exit-first` |
 | `examples/notes/notes/notes.go` | the app: state, `Build`, menu model |
-| `examples/notes/notes/script.go` | a scripted session that gives the app the input a person would |
+| `examples/notes/notes/script.go` | a scripted session (`widget/widgettest` steps) that gives the app the input a person would |
 | `examples/notes/notes/notes_test.go` | the tests: render, interaction, zero allocations |
 
 ## 1. The model
@@ -96,7 +96,6 @@ what keeps the frames allocation-free (section 10).
 
 ```go examples/notes/notes/notes.go
 func (n *Notes) Init(a *app.App) error {
-	n.c = a.UI
 	n.k = widget.NewKit(a.UI, a.Text, rex.Theme())
 	n.k.SetMenu(n.model)
 	a.UI.Reserve(1024)
@@ -107,46 +106,48 @@ func (n *Notes) Init(a *app.App) error {
 
 `Build` brackets everything with `k.Begin(c)` and `k.End()`. `Begin` resolves the
 theme for the window's scale, steps the light/dark crossfade and matches the
-menu shortcuts (section 8). `Background` draws the Rex window background.
+menu shortcuts (section 8). `End` builds the open context menu, if any. The kit
+keeps its context for good, so `k.Context()` reaches it from anywhere, also
+between frames.
 
 ```go examples/notes/notes/notes.go
 func (n *Notes) Build(c *ui.Context) {
 	k := n.k
 	k.Begin(c)
 	n.commands()
-	k.Background() // its boxes float; so does the window's content, built after them
 	// …
 	k.End()
 }
 ```
+
+Between the two, the smallest app is `k.BeginWindow()`, widgets, `k.EndWindow()`:
+the next section shows it in the example.
 
 The first frame is built and drawn before the window is shown, so the window
 appears with its content (D21).
 
 ## 3. Layout
 
-The background's boxes float and draw above ordinary boxes, so the content goes in a
-floating box that covers the window, built after the background. `theme.At`
-places the next box and `theme.Floating` makes it float. Inside it, layout is
-flow layout: `Column` stacks children top to bottom, `Row` lays them left to
-right, and `Card` is a raised surface, a column with the theme's padding.
+`BeginWindow` draws the theme's window background and opens the content: a
+column that covers the window, over the background, with the theme's padding
+and gap (`NextPad` changes the padding, as here). Everything built until
+`EndWindow` is in flow layout: `Column` stacks children top to bottom, `Row`
+lays them left to right, and `Card` is a raised surface, a column with the
+theme's padding. A `Row` centres its children across, so that a switch and a
+button of different heights sit on one line (`NextCross` changes that).
 
 ```go examples/notes/notes/notes.go
-	w, h := c.Size()
-	theme.At(c, 0, 0, float32(w), float32(h))
-	c.Push(c.Box(theme.Floating, "window"))
-	k.NextSize(widget.Fill, widget.Fill)
 	k.NextPad(10)
-	k.Column("content")
+	k.BeginWindow() // the background, and the window's content in flow layout over it
 	k.MenuBar()
 	k.NextHeight(widget.Fill)
 	k.BeginCard("card")
 	k.LabelStyle("Notes", widget.TextSemi)
 ```
 
-- **Begin and End pair up.** `Column` ends with `EndColumn`, `Row` with `EndRow`,
-  `BeginCard` with `EndCard`. The label identifies the container among its
-  siblings.
+- **Begin and End pair up.** `BeginWindow` ends with `EndWindow`, `Column` with
+  `EndColumn`, `Row` with `EndRow`, `BeginCard` with `EndCard`. The label
+  identifies the container among its siblings.
 - **`Next…` applies to the next widget only.** `NextSize`, `NextWidth`,
   `NextHeight`, `NextPad` and `NextGap` set one property of the next widget or
   container, and are then forgotten.
@@ -154,8 +155,10 @@ right, and `Card` is a raised surface, a column with the theme's padding.
   its siblings leave, and `Kit.Fixed(pt)` is a fixed size.
 - **Units.** The widget API takes points (`NextPad(10)`); boxes are in
   pixels, as everywhere in `ui`.
-- **Absolute placement** stays available (`theme.At` above is one), and the
-  gallery uses it for its panes.
+- **Absolute placement** stays available. The background and the window's
+  box float, so that the content draws over them, and an app that places its
+  panes itself builds `Background` and floating boxes of its own (`theme.At`
+  places the next box, `theme.Floating` makes it float), as the gallery does.
 
 ## 4. State, a text field and a button
 
@@ -198,23 +201,24 @@ func New() (*Notes, error) {
 
 `Build`, the row with the field and the button. `TextField` edits the buffer in
 place (caret, selection, copy, cut, paste, undo and the input method are all
-handled) and returns a `FieldSignal`. `BeginDisabled(true)` draws what is inside
-dimmed, takes it out of the Tab order and makes it deaf to the pointer, the
-keyboard and any activation already queued. The pair can wrap a widget
-conditionally. Enter in the field or a click on Add adds the note, and `SetFocus`
-puts the keyboard back in the field.
+handled) and returns a `FieldSignal`, which carries the field's key (`f.Key`,
+the same in every frame, unlike `f.ID`). `BeginDisabled(true)` draws what is
+inside dimmed, takes it out of the Tab order and makes it deaf to the pointer,
+the keyboard and any activation already queued. The pair can wrap a widget
+conditionally. Enter in the field or a click on Add adds the note, and
+`Kit.Focus` puts the keyboard back in the field.
 
 ```go examples/notes/notes/notes.go
 	k.Row("add")
 	f := k.TextField("New note", &n.input, "Add a note…")
-	n.field = c.KeyOf(f.ID)
+	n.field = f.Key
 	k.BeginDisabled(n.input.Len() == 0 || n.count == maxNotes)
 	added := k.ButtonKind("Add", widget.ButtonPrimary).Clicked
 	k.EndDisabled()
 	k.EndRow()
 	if added || f.Submitted {
 		n.add()
-		c.SetFocus(n.field)
+		k.Focus(n.field)
 	}
 ```
 
@@ -235,8 +239,8 @@ func (n *Notes) add() {
 
 A note's *id* is its index in the array, and the list works in ids. A
 `widget.ListState` holds the selection (`Sel`, a `widget.Selection` indexed by
-id), the display order (`Order`, which maps a display row to an id) and the scroll
-state. Because the selection is by id and not by row, reordering the list keeps
+id), the display order (`Order`, which maps a display row to an id; `Item(r)` is
+the id in row `r`, and `r` itself while `Order` is nil) and the scroll state. Because the selection is by id and not by row, reordering the list keeps
 the selection on the same notes.
 
 `rebuild` sets the order: the ids, or the ids reversed for the switch.
@@ -255,16 +259,19 @@ func (n *Notes) rebuild() {
 
 `Build`, the list. `BeginList` is virtual: `First` and `Last` are the rows in view
 plus two, so a frame costs what a screenful costs, whether there are 3 rows or a
-million. `Row(r, id)` starts a row whose boxes are keyed by the id, so their state
-follows the note when the order changes. The row's children flow left to right.
-The loop is an ordinary `for`; there is no closure or interface call per row.
+million. `RowNamed(r, id, name)` starts a row whose boxes are keyed by the id, so
+their state follows the note when the order changes, and whose accessible name is
+the note's text: what assistive technology reads for the row, and what a test
+finds it by (`Row` without a name is for rows that have none; in a `Table` the
+first cell's text names the row). The row's children flow left to right. The
+loop is an ordinary `for`; there is no closure or interface call per row.
 
 ```go examples/notes/notes/notes.go
 	k.NextHeight(widget.Fill)
 	l := k.BeginList("notes", &n.list, n.count)
 	for r := l.First; r < l.Last; r++ {
-		id := n.list.Order[r] // the stable id of the note in row r
-		l.Row(r, id)
+		id := n.list.Item(r) // the stable id of the note in row r
+		l.RowNamed(r, id, n.Text(int(id)))
 		k.NextWidth(widget.Fill)
 		k.LabelBytes(n.Text(int(id)))
 	}
@@ -300,7 +307,8 @@ func (n *Notes) removeSelected() {
 ## 6. A switch, a button and a status line
 
 `Switch` edits a `bool` of the app's and reports `Changed`; the order is rebuilt
-when it does. `Spacer` pushes the Remove button to the right. Remove is disabled
+when it does. `Spacer` pushes the Remove button to the right, and the row centres
+the switch and the button across, whatever their heights. Remove is disabled
 while nothing is selected. The status line is dynamic text: `c.Fmt()` builds it
 in the frame's arena and `LabelBytesStyle` copies the bytes (section 10).
 
@@ -318,8 +326,7 @@ in the frame's arena and `LabelBytesStyle` copies the bytes (section 10).
 	k.EndRow()
 	k.LabelBytesStyle(c.Fmt().Int(n.count).Str(" notes, ").Int(n.list.Sel.Count()).Str(" selected").Bytes(), widget.TextMuted)
 	k.EndCard()
-	k.EndColumn()
-	c.Pop()
+	k.EndWindow()
 ```
 
 ## 7. A confirmation dialog
@@ -383,7 +390,7 @@ frame.
 func (n *Notes) commands() {
 	k := n.k
 	if k.Command(cmdNew) {
-		n.c.SetFocus(n.field)
+		k.Focus(n.field)
 	}
 	if k.Command(cmdNewest) {
 		n.newest = !n.newest
@@ -426,7 +433,7 @@ An offscreen window has no system to ask, so the test hands the context the
 appearance before the first frame, as a window's first frame would find it:
 
 ```go examples/notes/notes/notes_test.go
-	o.UI.SetSystemAppearance(ui.Appearance{Dark: dark, Known: true})
+	r.Offscreen().UI.SetSystemAppearance(ui.Appearance{Dark: dark, Known: true})
 ```
 
 ## 10. Performance rules
@@ -454,21 +461,32 @@ proves it twice, offscreen in a test and in a window with the benchmark
    records, like `note`, are what make a store simple.
 4. **State is app-owned values.** A struct of plain fields, arrays and the widgets'
    state types. No maps that grow, no slices appended to in `Build`.
-5. **`LabelBytes` boxes are identified by their parent**, so build one per
-   container; put a second in a `Row`. A `string` label is identified by its text.
+5. **Boxes with equal labels are told apart by order.** A `string` label is
+   identified by its text; a `LabelBytes` is identified by its place among the
+   container's other `LabelBytes`, so its text can change every frame and any
+   number of them can share a container. Keep their order from frame to frame.
 6. **Do not keep a `ui.ID` between frames.** IDs and rectangles belong to a frame;
-   keys last. The example keeps the text field's `ui.Key` to focus it.
+   keys last. The example keeps the text field's `ui.Key` (`FieldSignal.Key`) to
+   focus it.
 7. **Animations ask for frames.** `Context.Animating` is what keeps the loop
    running; when nothing animates the app sleeps. The ordinary widgets handle it. If
    you animate a value of your own, call `Context.RequestFrame` while it moves.
 
 ## 11. Testing and benchmarking
 
-`script.go` holds a session that drives the app like a person would: it moves the
-pointer, presses, types and presses keys. It finds its targets by role and name in the
-semantic tree of the last frame (`ui.Context.Semantics`), so a step says "the Add
-button", not a coordinate, and it waits on conditions rather than frame counts.
-The tests run pieces of it offscreen, on the real text system and renderer, and the
+`widget/widgettest` drives an app like a person would: it moves the pointer, presses,
+types and presses keys, through `ui.Input` as translated platform events would. A
+step finds its target by role and name in the semantic tree of the last frame
+(`ui.Context.Semantics`), so it says "the Add button", not a coordinate, and it waits
+on conditions rather than frame counts. `Click`, `Key`, `Type`, `WaitFor`, `WaitGone`,
+`Settle` and the rest build steps; `Step.Nth` picks the n-th match and `Step.With`
+holds modifiers. A `widgettest.Player` runs a list of steps as an `app.Scripter`, and
+a `widgettest.Rig` is a window the tests drive: `Open` runs the app offscreen on the
+real text system and renderer, `NewRig` on a fake text system without a GPU. `Play`
+runs lists of steps one after another (the rig keeps scripting going between them),
+and `Find`, `Must`, `Tree` and `Dump` look into the semantic tree.
+
+`script.go` holds the example's session. The tests run pieces of it, and the
 benchmark loops the whole of it.
 
 ```go examples/notes/notes/script.go
@@ -491,7 +509,7 @@ and confirms:
 		t.Fatalf("after Enter the notes are %q, the field holds %q", got, d.input.String())
 	}
 	// …
-	r.play(click(ui.RoleListItem, "").nthOf(3), key(ui.KeyDown, ui.ModShift))
+	r.play(click(ui.RoleListItem, "").Nth(3), key(ui.KeyDown, ui.ModShift))
 	// …
 	r.play(click(ui.RoleButton, "Remove…"), waitFor(ui.RoleDialog, ""))
 	// …

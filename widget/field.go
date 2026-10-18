@@ -16,6 +16,10 @@ type FieldSignal struct {
 	Cancelled bool
 	// Pressed: the left button went down on the field in this frame.
 	Pressed bool
+	// Key is the key of the box that takes the keyboard focus, which lasts
+	// across frames where Signal.ID does not: an app that wants to move the
+	// focus into the field (Kit.Focus) keeps it.
+	Key ui.Key
 }
 
 // FieldKey is the key of the box that takes the keyboard focus in the field
@@ -114,7 +118,7 @@ func (k *Kit) field(label string, buf *ui.TextBuffer, placeholder string, search
 	fs := c.TextField(ident, buf)
 	res := FieldSignal{
 		Signal:    Signal{ID: fs.ID, Hovering: fs.Hovering, Focused: fs.Focused, Changed: fs.Changed, Clicked: fs.Clicked},
-		Submitted: fs.Submitted, Cancelled: fs.Cancelled, Pressed: fs.Pressed,
+		Submitted: fs.Submitted, Cancelled: fs.Cancelled, Pressed: fs.Pressed, Key: fkey,
 	}
 
 	if search {

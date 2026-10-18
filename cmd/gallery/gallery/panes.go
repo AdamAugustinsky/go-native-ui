@@ -255,10 +255,7 @@ func (g *Gallery) tablePane(c *ui.Context) {
 		g.status = appendInt(g.status, int(t.Item))
 	}
 	for r := t.First; r < t.Last; r++ {
-		item := uint32(r)
-		if g.table.Order != nil {
-			item = g.table.Order[r]
-		}
+		item := g.table.Item(r)
 		t.Row(r, item)
 		n := int(item)
 		t.CellBytes(0, c.Fmt().Int(n).Bytes())
