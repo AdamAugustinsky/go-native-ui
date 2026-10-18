@@ -177,6 +177,7 @@ func (w *Window) Wait(timeoutNs int64) []Event {
 	} else {
 		w.waitX11(timeoutNs)
 	}
+	w.clip.inWait = false
 	return w.q.ev
 }
 

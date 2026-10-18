@@ -292,8 +292,10 @@ func (s *fakeComp) decode(sig string, types *uintptr, b []byte) []farg {
 }
 
 func (s *fakeComp) newObj(ifc *wl.Interface, ver uint32) *fobj {
-	s.next++
+	// libwayland requires server-created ids to start at 0xff000000 and
+	// follow one another.
 	o := &fobj{id: s.next, name: goString(ifc.Name), ifc: ifc, ver: ver}
+	s.next++
 	s.objs[o.id] = o
 	return o
 }

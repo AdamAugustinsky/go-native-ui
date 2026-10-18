@@ -122,6 +122,7 @@ func TestWaylandCopyToOtherApp(t *testing.T) {
 	const n = 4 << 20
 	big := bigText(n)
 	SetClipboardText([]byte(big))
+	f.wait("REQ wl_data_device.set_selection", 5*time.Second)
 	f.do("paste")
 	if !pumpUntil(t, w, 20*time.Second, func() bool { return f.seen("PASTED") }) {
 		t.Fatal("big copy: nothing pasted")
@@ -133,6 +134,7 @@ func TestWaylandCopyToOtherApp(t *testing.T) {
 
 	// Invalid UTF-8 becomes U+FFFD; CRLF becomes LF.
 	SetClipboardText([]byte("a\xffb\r\nc"))
+	f.wait("REQ wl_data_device.set_selection", 5*time.Second)
 	f.do("paste")
 	if !pumpUntil(t, w, 5*time.Second, func() bool { return f.seen("PASTED") }) {
 		t.Fatal("nothing pasted")
@@ -176,10 +178,14 @@ func TestWaylandClipboardNoAlloc(t *testing.T) {
 	step := func() {
 		SetClipboardText(text)
 		w.RequestPaste(1)
+		got := false
 		for _, e := range w.Wait(0) {
-			if e.Kind == EvPaste && len(w.Text(e.Text)) != len(text) {
-				panic("short paste")
+			if e.Kind == EvPaste && len(w.Text(e.Text)) == len(text) {
+				got = true
 			}
+		}
+		if !got {
+			panic("no paste")
 		}
 	}
 	for i := 0; i < 20; i++ {
@@ -309,10 +315,14 @@ func TestX11ClipboardNoAlloc(t *testing.T) {
 	step := func() {
 		SetClipboardText(text)
 		w.RequestPaste(1)
+		got := false
 		for _, e := range w.Wait(0) {
-			if e.Kind == EvPaste && len(w.Text(e.Text)) != len(text) {
-				panic("short paste")
+			if e.Kind == EvPaste && len(w.Text(e.Text)) == len(text) {
+				got = true
 			}
+		}
+		if !got {
+			panic("no paste")
 		}
 	}
 	for i := 0; i < 20; i++ {
