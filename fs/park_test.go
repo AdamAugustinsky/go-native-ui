@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -144,5 +145,56 @@ func runParkTest(t *testing.T, spin bool) {
 			return
 		}
 	}
-	t.Errorf("mallocs per window %v: the second and third must be 0", deltas)
+	t.Errorf("mallocs per window %v: the second and third must be 0; allocation sites of one more attempt:\n%s",
+		deltas, profileAttempt(func() { measureWindows(t, s, w, dirs, 3, 1000, spin) }))
+}
+
+// profileAttempt runs f with every allocation profiled and returns the call
+// stacks that allocated during it (the same diagnosis as cmd/pilot -allocsites),
+// so a failure says what allocated.
+func profileAttempt(f func()) string {
+	old := runtime.MemProfileRate
+	runtime.MemProfileRate = 1
+	defer func() { runtime.MemProfileRate = old }()
+	before := allocProfile()
+	f()
+	var sb strings.Builder
+	for stk, n := range allocProfile() {
+		if n-before[stk] <= 0 {
+			continue
+		}
+		pcs := stk[:]
+		for i, pc := range pcs {
+			if pc == 0 {
+				pcs = pcs[:i]
+				break
+			}
+		}
+		fmt.Fprintf(&sb, "  %d object(s):\n", n-before[stk])
+		frames := runtime.CallersFrames(pcs)
+		for {
+			fr, more := frames.Next()
+			fmt.Fprintf(&sb, "    %s:%d\n", fr.Function, fr.Line)
+			if !more {
+				break
+			}
+		}
+	}
+	return sb.String()
+}
+
+func allocProfile() map[[32]uintptr]int64 {
+	runtime.GC()
+	runtime.GC()
+	recs := make([]runtime.MemProfileRecord, 1024)
+	n, ok := runtime.MemProfile(recs, true)
+	for !ok {
+		recs = make([]runtime.MemProfileRecord, n+256)
+		n, ok = runtime.MemProfile(recs, true)
+	}
+	m := make(map[[32]uintptr]int64, n)
+	for _, r := range recs[:n] {
+		m[r.Stack0] += r.AllocObjects
+	}
+	return m
 }
