@@ -537,7 +537,7 @@ With it, every test font shapes at 0 objects per call, about 1 µs per miss thro
 - it reuses one `harfbuzz.Buffer`;
 - it caches one `harfbuzz.Font` per face.
 
-Right-to-left and bidi text still takes go-text's allocating path.
+Right-to-left and bidi text (phase 5, 2026-10-18): go-text's bidi package and its Arabic fallback plan, which upstream rebuilt on every call, now reuse their storage (patched in `third_party/typesetting`, in `zeroalloc.patch`), and `text/shape.go` no longer converts long text to a string. An RTL shaping miss went from 40 objects to 0 (`TestEngineRTLMissAllocatesNothing`).
 
 **Licence.** go-text is Unlicense OR BSD-3-Clause. HarfBuzz's part is MIT.
 Both licence files are kept in the copy.

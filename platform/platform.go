@@ -225,7 +225,9 @@ type Options struct {
 	// the GPU surface (Surface.RevealOnFirstFrame) so the window appears
 	// together with its first frame. macOS keeps the window ordered out;
 	// Windows shows it cloaked (DWMWA_CLOAK) and uncloaks it after the first
-	// present. Linux ignores Hidden so far.
+	// present. X11 maps the window with the first frame as its background
+	// (startup_x11_linux.go); a Wayland window appears with its first buffer
+	// anyway.
 	Hidden bool
 	// Titlebar > 0 extends the content under a transparent titlebar band of
 	// that height in logical units; the app draws the band. The close
