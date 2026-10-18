@@ -151,7 +151,6 @@ func (pl *Pilot) Init(a *app.App) error {
 	pl.a = a
 	pl.k = widget.NewKit(a.UI, a.Text, rex.Theme())
 	pl.k.SetPreference(pl.opt.Preference)
-	pl.k.ReduceMotion = true // nothing in Pilot indicates progress
 	pl.ico = entryIcons{link: pl.k.AddIcon(specLink), exec: pl.k.AddIcon(specExec), other: pl.k.AddIcon(specOther)}
 	a.UI.Reserve(4096)
 	a.Text.ReserveRuns(text.MaxCachedRuns, text.MaxCachedGlyphs, text.MaxCachedTextBytes)
