@@ -436,8 +436,13 @@ The protocol work starts at once, in platform files only. Its integration into `
   - dark, following the system.
 - **Doc comments:** every exported identifier of the public packages has one; `tools/doccheck` runs in CI.
 
+- **Pilot port (step 5):** on `widget.Table` with `Selection`, `widget.Splitter`, `widget.TextField`, the Rex theme's chrome; follows the system mode (dark Rex).
+  - The port found two real bugs: the glass sampled the background at the wrong offset inside a splitter, which the gallery had too, and the panes sat 1 px low. Both are fixed.
+  - Remaining differences from the phase-4 render (5% of pixels, all in the content) come from the shared table: a semibold header, row padding, and a 2 pt focus ring.
+  - Gates: 0 allocations, 0.5–0.6 ms CPU per frame at 1M rows in CI, both listings in the first frame.
+  - `cmd/internal/rexkit` is deleted: rexlook, Pilot and the gallery use only public packages.
+
 **In progress:**
-- the Pilot port;
 - the guide and its example app;
 - widgets and the gallery (step 4);
 - X11: Pilot's gate needs a second window there (4–9 allocations in the first, likely the X11 clipboard warming up); being located.
