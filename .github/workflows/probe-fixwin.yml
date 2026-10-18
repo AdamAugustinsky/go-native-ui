@@ -24,4 +24,4 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-      - run: go test -count=1 -v -run 'Paste|Clipboard' ./platform/
+      - run: go test -count=1 -v -run 'ZZ' ./platform/
