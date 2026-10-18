@@ -57,7 +57,7 @@ const (
 	wmCaptureChange = 0x0215
 	wmMouseLeave    = 0x02A3
 	wmDpiChanged    = 0x02E0
-	wmWake          = 0x8000 + 1 // WM_APP+1
+	wmWake          = 0x8000 + 1 // WM_APP+1 (WM_APP+2 is wmClip)
 
 	sizeRestored  = 0
 	sizeMinimized = 1
@@ -255,13 +255,17 @@ type Window struct {
 	hiSurrogate uint16
 	utf8        [4]byte
 
-	// The clipboard request that waits for another process to let go of it
-	// (paste_windows.go): a paste with its tag and time to give up, and when
-	// Wait tries next (0: nothing waits).
+	// The clipboard requests in flight (paste_windows.go): the paste being
+	// waited for, with its tag and time limit, the worker that reads it, and
+	// when Wait looks at them next (0: nothing is due).
 	pasteOn   bool
 	pasteTag  uint64
+	pasteSeq  uint64 // counts requests, so that an answer to a replaced one is recognised
+	pasteSent bool   // the request is with the worker (a copy ahead of it goes first)
 	pasteGive int64
 	clipDue   int64
+	clip      *clipWorker // reads the clipboard for pastes; nil until the first one
+	jobGive   int64       // the time limit of the worker's current request (0: none out)
 
 	// Input method state (ime_windows.go): the composition is on screen, the
 	// caret rectangle the app reported, and storage the IME calls write into.
@@ -510,6 +514,10 @@ func (w *Window) Close() {
 		return
 	}
 	wakeHWND.Store(0)
+	if w.clip != nil { // its thread ends with the read it may be in
+		w.clip.abandon()
+		w.clip = nil
+	}
 	if pendingSet != 0 { // the copy that never got the clipboard
 		win32.Call(pGlobalFree, pendingSet)
 		pendingSet = 0
@@ -641,6 +649,10 @@ func wndProc(hwnd, m, wp, lp uintptr) uintptr {
 		if takeWake() {
 			w.q.push(Event{Kind: EvWake, Time: Now()})
 		}
+		return 0
+
+	case wmClip:
+		w.clipCollect()
 		return 0
 
 	case wmClose:
