@@ -32,7 +32,7 @@ jobs:
           sway > sway.log 2>&1 &
           sleep 3; ls $XDG_RUNTIME_DIR
           S=$(ls $XDG_RUNTIME_DIR | grep wayland- | grep -v lock | head -1); export WAYLAND_DISPLAY=$S
-          wayland-info || true
+          wayland-info | grep -E "^interface|capabilities" | cut -c1-80
           echo hello-sway | timeout 10 wl-copy; echo "wl-copy rc=$?"
           timeout 10 wl-paste; echo "wl-paste rc=$?"
           tail -5 sway.log
