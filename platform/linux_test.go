@@ -28,9 +28,8 @@ type fakeWL struct {
 	dir  string
 	sock string
 
-	mu   sync.Mutex
-	log  []string
-	read int // lines before this index were consumed by wait
+	mu  sync.Mutex
+	log []string // what the compositor reported and no wait has taken yet
 }
 
 func startFakeWL(t *testing.T, opts string) *fakeWL {
@@ -67,8 +66,8 @@ func startFakeWL(t *testing.T, opts string) *fakeWL {
 	return f
 }
 
-// wait returns the first unconsumed log line that starts with prefix and
-// consumes everything up to it; it fails the test after d.
+// wait takes the first unconsumed log line that starts with prefix off the log
+// and returns it; it fails the test after d.
 func (f *fakeWL) wait(prefix string, d time.Duration) string {
 	f.t.Helper()
 	if l, ok := f.tryWait(prefix, d); ok {
@@ -76,7 +75,7 @@ func (f *fakeWL) wait(prefix string, d time.Duration) string {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.t.Fatalf("no %q from the compositor within %v; log:\n%s", prefix, d, strings.Join(f.log[f.read:], "\n"))
+	f.t.Fatalf("no %q from the compositor within %v; log:\n%s", prefix, d, strings.Join(f.log, "\n"))
 	return ""
 }
 
@@ -84,10 +83,10 @@ func (f *fakeWL) tryWait(prefix string, d time.Duration) (string, bool) {
 	end := time.Now().Add(d)
 	for {
 		f.mu.Lock()
-		for i := f.read; i < len(f.log); i++ {
+		for i := range f.log {
 			if strings.HasPrefix(f.log[i], prefix) {
-				f.read = i + 1
 				l := f.log[i]
+				f.log = append(f.log[:i], f.log[i+1:]...)
 				f.mu.Unlock()
 				return l, true
 			}
@@ -104,7 +103,7 @@ func (f *fakeWL) tryWait(prefix string, d time.Duration) (string, bool) {
 func (f *fakeWL) seen(prefix string) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	for _, l := range f.log[f.read:] {
+	for _, l := range f.log {
 		if strings.HasPrefix(l, prefix) {
 			return true
 		}

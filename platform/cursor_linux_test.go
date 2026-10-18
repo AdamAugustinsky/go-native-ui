@@ -42,7 +42,7 @@ func TestWaylandCursorShape(t *testing.T) {
 	want(4)
 	w.Wait(0)
 	if f.seen("REQ wp_cursor_shape_device_v1.set_shape") {
-		t.Errorf("a shape was sent twice; log:\n%s", strings.Join(f.log[f.read:], "\n"))
+		t.Errorf("a shape was sent twice; log:\n%s", strings.Join(f.log, "\n"))
 	}
 	// A second enter forgets the cursor: the shape is set again with the new serial.
 	f.do("leave")
