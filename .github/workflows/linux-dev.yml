@@ -2,7 +2,7 @@ name: linux-dev
 on:
   push:
     branches: [p5-linux]
-    paths: ['.github/workflows/linux-dev.yml', 'platform/**', 'internal/wl/**', 'text/**']
+    paths: ['.github/workflows/linux-dev.yml', 'platform/**', 'internal/wl/**', 'text/**', 'gpu/**']
 jobs:
   platform:
     name: platform tests ${{ matrix.arch }}
@@ -16,6 +16,7 @@ jobs:
           - { arch: arm64, runner: ubuntu-24.04-arm }
     env:
       CGO_ENABLED: "0"
+      LIBGL_ALWAYS_SOFTWARE: "1"
     defaults:
       run:
         shell: bash
@@ -28,7 +29,7 @@ jobs:
         run: |
           sudo apt-get update -q
           sudo apt-get install -y -q --no-install-recommends xvfb xauth xclip wl-clipboard weston sway wtype wayland-utils \
-            libwayland-client0 libwayland-cursor0 libxkbcommon0 libx11-6 libxfixes3 libxcursor1 libegl1 libegl-mesa0 libgl1-mesa-dri x11-utils imagemagick
+            libwayland-client0 libwayland-cursor0 libxkbcommon0 libx11-6 libxfixes3 libxcursor1 libegl1 libegl-mesa0 libgl1 libopengl0 libgles2 libgl1-mesa-dri x11-utils imagemagick
       - name: wayland (scripted compositor)
         run: go test -count=1 -v -run 'Wayland' ./platform 2>&1 | tail -150
       - name: x11 (xvfb)

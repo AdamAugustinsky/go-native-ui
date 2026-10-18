@@ -47,3 +47,6 @@ func (w *Window) SetShadowInsets(left, top, right, bottom float32) {}
 
 // ExternalHandle reports no handle off Linux.
 func (w *Window) ExternalHandle() (string, bool) { return "", false }
+
+// SetFirstFrame does nothing off Linux (X11 content-first startup).
+func SetFirstFrame(w, h int32, rgba []byte) {}

@@ -102,6 +102,10 @@ var xf struct {
 	changeProperty, deleteProperty, sendEvent, free, setErrorHandler          uintptr
 
 	createFontCursor, defineCursor uintptr
+
+	// content-first startup (startup_x11_linux.go)
+	setWindowBackgroundPixmap, defaultVisual, defaultDepth, createPixmap, freePixmap uintptr
+	createGC, freeGC, putImage, createImage                                          uintptr
 }
 
 // xErrCB is Xlib's error handler: it ignores every error (see x11ClipInit).
@@ -172,6 +176,15 @@ func loadX11() error {
 		{"XSetErrorHandler", &xf.setErrorHandler},
 		{"XCreateFontCursor", &xf.createFontCursor},
 		{"XDefineCursor", &xf.defineCursor},
+		{"XSetWindowBackgroundPixmap", &xf.setWindowBackgroundPixmap},
+		{"XDefaultVisual", &xf.defaultVisual},
+		{"XDefaultDepth", &xf.defaultDepth},
+		{"XCreatePixmap", &xf.createPixmap},
+		{"XFreePixmap", &xf.freePixmap},
+		{"XCreateGC", &xf.createGC},
+		{"XFreeGC", &xf.freeGC},
+		{"XPutImage", &xf.putImage},
+		{"XCreateImage", &xf.createImage},
 	}); err != nil {
 		return err
 	}
@@ -260,7 +273,15 @@ func (w *Window) openX11(o Options) (err error) {
 	// Held keys then produce repeated KeyPress without KeyRelease in between.
 	fr.Call3(xf.setDetectableAutoRepeat, x.dpy, 1, uintptr(unsafe.Pointer(&x.supp)))
 
-	fr.Call2(xf.mapWindow, x.dpy, x.win)
+	// No background: the server paints nothing when the window is mapped or
+	// exposed, so only the app's own pixels ever show (see x11Show).
+	fr.Call3(xf.setWindowBackgroundPixmap, x.dpy, x.win, 0)
+	if o.Hidden {
+		w.hidden = true
+		w.showBy = nanotime() + hiddenTimeout
+	} else {
+		fr.Call2(xf.mapWindow, x.dpy, x.win)
+	}
 	fr.Call1(xf.flush, x.dpy)
 
 	w.pfd[0] = pollfd{fd: int32(fr.Call1(xf.connectionNumber, x.dpy)), events: pollIn}
@@ -306,6 +327,13 @@ func (w *Window) waitX11(timeoutNs int64) {
 		tmo := int64(-1)
 		if deadline >= 0 {
 			tmo = max(deadline-nanotime(), 0)
+		}
+		if w.hidden { // never leave a window hidden for good
+			if d := w.showBy - nanotime(); d <= 0 {
+				w.x11Show()
+			} else if tmo < 0 || d < tmo {
+				tmo = d
+			}
 		}
 		if len(w.q.ev) > 0 {
 			tmo = 0

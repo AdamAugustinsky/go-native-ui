@@ -65,6 +65,9 @@ type Window struct {
 	drags dragMap   // SetDragRegions
 	clip  clipboard // clipboard_linux.go
 
+	hidden   bool           // X11: opened unmapped, not shown yet (Options.Hidden)
+	showBy   int64          // when a hidden window is shown regardless (nanotime)
+	first    firstFrame     // SetFirstFrame
 	resizes  []ResizeRegion // SetResizeRegions
 	closeReq bool           // RequestClose: EvClose at the next Wait
 
@@ -222,9 +225,15 @@ func (w *Window) Native() Native {
 	return Native{Display: w.x.dpy, X11Window: w.x.win}
 }
 
-// Show is a no-op: Options.Hidden is not implemented on this OS yet, so
-// the window is already visible.
-func (w *Window) Show() {}
+// Show maps a window opened with Options.Hidden (X11; a Wayland window appears
+// with its first buffer, which is content-first by nature, and Show does
+// nothing there). If SetFirstFrame gave the first frame, the window is mapped
+// with it as its background, so it appears complete. Main thread.
+func (w *Window) Show() {
+	if !w.wl {
+		w.x11Show()
+	}
+}
 
 // SetFrameHandler is accepted and never called on Linux: neither Wayland nor
 // X11 runs an application-blocking modal loop, so resizes arrive as ordinary
