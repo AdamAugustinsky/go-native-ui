@@ -1,9 +1,12 @@
 // Command gallery shows every widget of package widget in every state, in the
 // Rex theme, light and dark, next to a table of a million rows.
 //
-//	gallery                    show the window (-mode light|dark|system; ⇧⌘D toggles with a crossfade)
+//	gallery                    show the window, in the system's light or dark mode and accent colour, which it
+//	                           follows while it runs (-mode system, the default; -mode light or dark forces one;
+//	                           ⇧⌘D cycles System, Light, Dark; a change crossfades)
 //	gallery -o out.png         render the scene offscreen at 2560×1600 px and exit
 //	gallery -o out.png -mode dark
+//	                           -o renders light unless -mode is given; -mode system renders what this machine says
 //	gallery -o out.png -o-dark dark.png
 //	                           render the light and the dark picture
 //	gallery -o out.png -scene dialog
@@ -27,7 +30,9 @@ import (
 
 	"gonativeui/app"
 	"gonativeui/cmd/gallery/gallery"
+	"gonativeui/platform"
 	"gonativeui/theme"
+	"gonativeui/ui"
 )
 
 const (
@@ -45,7 +50,7 @@ func main() {
 	h := flag.Int("h", 1600, "with -o: height in pixels")
 	scale := flag.Float64("scale", 2, "with -o: pixels per point")
 	scene := flag.String("scene", "main", "with -o: the state to render ("+strings.Join(gallery.SceneNames(), ", ")+")")
-	mode := flag.String("mode", "light", "light, dark or system (system is light for now)")
+	mode := flag.String("mode", "system", "system (follow the system: the default), light or dark; with -o the default is light")
 	rows := flag.Int("rows", gallery.DefaultRows, "rows of the table")
 	bench := flag.Bool("bench", false, "scripted session; print allocation, CPU, pacing and latency as JSON")
 	gate := flag.Bool("gate", false, "with -bench: exit with status 3 unless there were 0 allocations, main-thread CPU within budget and frames were paced")
@@ -57,9 +62,14 @@ func main() {
 	flag.Parse()
 
 	m, err := parseMode(*mode)
+	explicit := false
+	flag.Visit(func(f *flag.Flag) { explicit = explicit || f.Name == "mode" })
 	if err == nil {
 		switch {
 		case *out != "":
+			if !explicit {
+				m = theme.ForceLight // a picture is the same on every machine unless it is asked to follow this one
+			}
 			err = render(*out, *outDark, *w, *h, float32(*scale), *scene, m, *rows)
 		case *bench:
 			err = runBench(*rows, m, *gate, *allowUnpaced, *sites, *maxCPU, *timeout, *verbose)
@@ -73,27 +83,32 @@ func main() {
 	}
 }
 
-// parseMode maps the -mode flag to a theme mode; system follows the light mode
-// until the platform reports the appearance.
-func parseMode(s string) (theme.Mode, error) {
+// parseMode maps the -mode flag to a preference.
+func parseMode(s string) (theme.Preference, error) {
 	switch s {
-	case "light", "system":
-		return theme.Light, nil
+	case "system":
+		return theme.System, nil
+	case "light":
+		return theme.ForceLight, nil
 	case "dark":
-		return theme.Dark, nil
+		return theme.ForceDark, nil
 	}
-	return 0, fmt.Errorf("-mode %q: want light, dark or system", s)
+	return 0, fmt.Errorf("-mode %q: want system, light or dark", s)
 }
 
-func render(path, dark string, w, h int, scale float32, scene string, m theme.Mode, rows int) error {
-	o := gallery.ShotOptions{Width: w, Height: h, Scale: scale, Scene: scene, Mode: m, Rows: rows}
+func render(path, dark string, w, h int, scale float32, scene string, m theme.Preference, rows int) error {
+	o := gallery.ShotOptions{Width: w, Height: h, Scale: scale, Scene: scene, Preference: m, Rows: rows}
+	if m == theme.System { // an offscreen window has no system: ask this machine
+		a := platform.SystemAppearance()
+		o.System = ui.Appearance{Dark: a.Dark, Accent: a.Accent, Known: a.Known}
+	}
 	quads, err := gallery.Shot(path, o)
 	if err != nil {
 		return err
 	}
 	fmt.Printf("%d quads -> %s\n", quads, path)
 	if dark != "" {
-		o.Mode = theme.Dark
+		o.Preference = theme.ForceDark
 		if quads, err = gallery.Shot(dark, o); err != nil {
 			return err
 		}
@@ -102,8 +117,8 @@ func render(path, dark string, w, h int, scale float32, scene string, m theme.Mo
 	return nil
 }
 
-func runWindow(rows int, m theme.Mode) error {
-	g, err := gallery.New(gallery.Options{Rows: rows, Mode: m})
+func runWindow(rows int, m theme.Preference) error {
+	g, err := gallery.New(gallery.Options{Rows: rows, Preference: m})
 	if err != nil {
 		return err
 	}
@@ -122,8 +137,8 @@ type report struct {
 	GateFailures  []string `json:",omitempty"`
 }
 
-func runBench(rows int, m theme.Mode, gate, allowUnpaced, sites bool, maxCPU float64, timeout time.Duration, verbose bool) error {
-	b, err := gallery.NewBench(gallery.Options{Rows: rows, Mode: m})
+func runBench(rows int, m theme.Preference, gate, allowUnpaced, sites bool, maxCPU float64, timeout time.Duration, verbose bool) error {
+	b, err := gallery.NewBench(gallery.Options{Rows: rows, Preference: m})
 	if err != nil {
 		return err
 	}

@@ -82,7 +82,7 @@ func benchSteps() []step {
 	add(click(ui.RoleSwitch, "Show activity"), pause(120), click(ui.RoleSwitch, "Show activity"), settle())
 
 	// light and dark
-	add(key('D', prim|shift), settle(), idle(3), key('D', prim|shift), settle(), idle(3))
+	add(key('D', prim|shift), settle(), idle(3), key('D', prim|shift), settle(), idle(3), key('D', prim|shift), settle(), idle(3))
 	return s
 }
 

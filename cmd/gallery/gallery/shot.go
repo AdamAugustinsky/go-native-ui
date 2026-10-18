@@ -17,7 +17,12 @@ type ShotOptions struct {
 	// per point (2560×1600 at 2 by default).
 	Width, Height int
 	Scale         float32
-	Mode          theme.Mode
+	// Preference is the mode to render; System renders the appearance in
+	// System (light when it is not set).
+	Preference theme.Preference
+	// System is the system appearance the scene sees (the zero value: not known,
+	// so light).
+	System ui.Appearance
 	// Scene is the state to render: one of SceneNames (main by default).
 	Scene string
 	// Rows is the table's row count (DefaultRows when zero).
@@ -55,12 +60,12 @@ func Shot(path string, o ShotOptions) (quads int, err error) {
 	if sc == nil {
 		return 0, fmt.Errorf("gallery: no scene %q (have %v)", o.Scene, SceneNames())
 	}
-	g, err := New(Options{Rows: o.Rows, Mode: o.Mode, Traffic: true, Still: true, Synthetic: true})
+	g, err := New(Options{Rows: o.Rows, Preference: o.Preference, Traffic: true, Still: true, Synthetic: true})
 	if err != nil {
 		return 0, err
 	}
 	pl := newPlayer(g, sc.steps(), false, true)
-	b := &scripted{Gallery: g, p: pl}
+	b := &scripted{Gallery: g, p: pl, sys: o.System}
 	off, err := app.NewOffscreen(Config(), o.Width, o.Height, o.Scale, b)
 	if err != nil {
 		return 0, err
@@ -101,7 +106,11 @@ func Shot(path string, o ShotOptions) (quads int, err error) {
 // scripted is a Gallery with a script.
 type scripted struct {
 	*Gallery
-	p *Player
+	p   *Player
+	sys ui.Appearance // what the system says, in every frame (an offscreen run has no system)
 }
 
-func (s *scripted) Script(frame int, in *ui.Input) bool { return s.p.Script(frame, in) }
+func (s *scripted) Script(frame int, in *ui.Input) bool {
+	s.Gallery.c.SetSystemAppearance(s.sys)
+	return s.p.Script(frame, in)
+}

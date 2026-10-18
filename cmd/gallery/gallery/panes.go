@@ -7,6 +7,10 @@ import (
 	"gonativeui/widget"
 )
 
+// scrollPadPt is the room the content of a scroll pane leaves at its right for
+// the overlay scroll bar, in points.
+const scrollPadPt = 14
+
 // nameColPt is the width of the column of widget names, in points.
 const nameColPt = 64
 
@@ -97,6 +101,7 @@ func (g *Gallery) statesPane(c *ui.Context) {
 	k := g.k
 	sv := k.BeginScroll("states", &g.scroll[0], widget.ScrollBoth)
 	k.NextGap(6)
+	k.NextPadding(0, 0, scrollPadPt, 0)
 	k.Column("states")
 	g.heading("States")
 	k.NextGap(4)
@@ -136,6 +141,7 @@ func (g *Gallery) livePane(c *ui.Context) {
 	k := g.k
 	sv := k.BeginScroll("controls", &g.scroll[1], widget.ScrollVertical)
 	k.NextGap(8)
+	k.NextPadding(0, 0, scrollPadPt, 0) // the overlay scroll bar must not sit on the content
 	k.Column("controls")
 
 	g.heading("Text")
@@ -174,6 +180,11 @@ func (g *Gallery) livePane(c *ui.Context) {
 	k.LabelBytes(c.Fmt().Int(int(g.slider)).Bytes())
 	k.EndRow()
 	k.Select("Format", &g.sel, []string{"Plain text", "Markdown", "HTML"})
+	appearance := int(g.pref)
+	k.Select("Appearance", &appearance, appearanceNames[:])
+	if appearance != int(g.pref) {
+		g.SetPreference(theme.Preference(appearance))
+	}
 
 	g.heading("Buttons")
 	k.NextGap(6)
@@ -193,14 +204,6 @@ func (g *Gallery) livePane(c *ui.Context) {
 	k.EndRow()
 	k.NextGap(6)
 	k.Row("switches")
-	dark := g.mode == theme.Dark
-	if k.Switch("Dark mode", &dark).Changed {
-		if dark {
-			g.SetMode(theme.Dark)
-		} else {
-			g.SetMode(theme.Light)
-		}
-	}
 	k.Switch("Show activity", &g.working)
 	k.EndRow()
 
@@ -222,6 +225,8 @@ func (g *Gallery) livePane(c *ui.Context) {
 	k.EndColumn()
 	k.EndScroll(sv)
 }
+
+var appearanceNames = [...]string{"System", "Light", "Dark"}
 
 var tabText = [3]string{"A summary of the thing.", "Every detail of it.", "What happened to it."}
 

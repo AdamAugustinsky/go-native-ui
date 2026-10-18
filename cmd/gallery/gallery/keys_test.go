@@ -60,7 +60,7 @@ func TestEveryWidgetIsReachableByTab(t *testing.T) {
 		{ui.RoleCheckbox, "All options"}, {ui.RoleSwitch, "Notifications"}, {ui.RoleRadio, "One"},
 		{ui.RoleSlider, "Volume"}, {ui.RoleComboBox, "Format"}, {ui.RoleButton, "Open…"}, {ui.RoleButton, "Save"},
 		{ui.RoleButton, "More"}, {ui.RoleButton, "Remove"}, {ui.RoleButton, "Add item"}, {ui.RoleButton, "Menu"},
-		{ui.RoleButton, "Delete…"}, {ui.RoleSwitch, "Dark mode"}, {ui.RoleSwitch, "Show activity"},
+		{ui.RoleButton, "Delete…"}, {ui.RoleComboBox, "Appearance"}, {ui.RoleSwitch, "Show activity"},
 		{ui.RoleTab, "Overview"}, {ui.RoleList, "items"}, {ui.RoleSearchField, "Search rows"}, {ui.RoleTable, "rows"},
 		{ui.RoleSplitter, "Divider"},
 	} {
@@ -237,30 +237,43 @@ func TestKeyboardOnlyOperation(t *testing.T) {
 			t.Errorf("g.tab = %d, want 1", g.tab)
 		}
 	})
-	t.Run("dark mode switch", func(t *testing.T) {
-		r.focusOn(ui.RoleSwitch, "Dark mode")
-		r.press(ui.KeySpace, 0)
-		if g.Mode() != theme.Dark {
-			t.Error("Space on the Dark mode switch did not switch to the dark mode")
+	t.Run("appearance select", func(t *testing.T) {
+		r.focusOn(ui.RoleComboBox, "Appearance")
+		if v := r.value(ui.RoleComboBox, "Appearance"); v != "System" {
+			t.Fatalf("Appearance starts as %q, want System", v)
 		}
-		r.press(ui.KeySpace, 0)
-		if g.Mode() != theme.Light {
-			t.Error("Space again did not return to the light mode")
+		r.press(ui.KeyDown, 0) // open
+		r.press(ui.KeyDown, 0) // Light
+		r.press(ui.KeyDown, 0) // Dark
+		r.press(ui.KeyEnter, 0)
+		if g.Preference() != theme.ForceDark || g.Mode() != theme.Dark {
+			t.Errorf("choosing Dark gives the preference %d and the mode %v", g.Preference(), g.Mode())
+		}
+		r.press(ui.KeyDown, 0)
+		r.press(ui.KeyUp, 0)
+		r.press(ui.KeyUp, 0)
+		r.press(ui.KeyEnter, 0)
+		if g.Preference() != theme.System {
+			t.Errorf("choosing System gives the preference %d", g.Preference())
 		}
 	})
 	t.Run("menu bar and shortcut", func(t *testing.T) {
 		r.focusOn(ui.RoleMenuItem, "View")
 		r.press(ui.KeyDown, 0)
-		if _, ok := r.find(ui.RoleMenuItem, "Toggle Dark Mode"); !ok {
+		if _, ok := r.find(ui.RoleMenuItem, "Cycle Appearance"); !ok {
 			t.Fatal("Down did not open the View menu")
 		}
 		r.press(ui.KeyEnter, 0)
-		if g.Mode() != theme.Dark {
-			t.Error("choosing Toggle Dark Mode did not switch to the dark mode")
+		if g.Preference() != theme.ForceLight {
+			t.Errorf("choosing Cycle Appearance gives the preference %d, want light after System", g.Preference())
 		}
 		r.press('D', ui.PrimaryMod()|ui.ModShift)
-		if g.Mode() != theme.Light {
-			t.Error("the shortcut did not switch back")
+		if g.Preference() != theme.ForceDark || g.Mode() != theme.Dark {
+			t.Errorf("the shortcut gives the preference %d, want dark", g.Preference())
+		}
+		r.press('D', ui.PrimaryMod()|ui.ModShift)
+		if g.Preference() != theme.System {
+			t.Errorf("the shortcut gives the preference %d, want System again", g.Preference())
 		}
 	})
 	t.Run("menu button", func(t *testing.T) {

@@ -73,10 +73,7 @@ const (
 // disabledOpacity is how much of its colour a disabled widget keeps.
 const disabledOpacity = 0.45
 
-var (
-	keyRoot = ui.HashString(0, "widget")
-	keyMode = ui.HashString(keyRoot, "mode")
-)
+var keyRoot = ui.HashString(0, "widget")
 
 // Kit builds the widgets of one window. Make it with NewKit, call Begin at
 // the start of every frame and End at its end.
@@ -89,11 +86,10 @@ type Kit struct {
 	extra []icon.Spec
 	gl    glyphs
 
-	scale float32
-	ready bool
-	mode  theme.Mode
-	mixT  float32
-	acc   uint32
+	scale  float32
+	ready  bool
+	fol    theme.Follower
+	target theme.Mode // what the follower aimed for in the last Begin
 
 	menu    *menu.Model
 	pend    [pendingCommands]menu.ID // commands drawn menus chose, delivered at the next Begin
@@ -161,22 +157,37 @@ func (k *Kit) Context() *ui.Context { return k.c }
 // Pt converts points to pixels at the window's scale.
 func (k *Kit) Pt(v float32) float32 { return v * k.scale }
 
-// SetMode switches between light and dark. The palette crossfades over about
-// a third of a second (the theme's Motion.Mode); the first Begin takes the
-// mode at once.
-func (k *Kit) SetMode(m theme.Mode) { k.mode = m }
+// SetPreference sets which mode the window shows: theme.System (the default,
+// the system's light or dark mode, which the window follows while it runs and
+// shows already in its first frame), theme.ForceLight or theme.ForceDark. A
+// change crossfades over about a third of a second (the theme's Motion.Mode);
+// only the first Begin takes the mode at once. Kit uses a theme.Follower.
+func (k *Kit) SetPreference(p theme.Preference) { k.fol.SetPreference(p) }
 
-// Mode is the mode set with SetMode.
-func (k *Kit) Mode() theme.Mode { return k.mode }
+// Preference is the preference set with SetPreference.
+func (k *Kit) Preference() theme.Preference { return k.fol.Preference() }
 
-// SetAccent applies the system accent colour (0xRRGGBBAA; 0 returns to the
-// theme's own) to themes that follow it.
-func (k *Kit) SetAccent(rgba uint32) {
-	k.acc = rgba
-	if k.ready {
-		k.r.SetAccent(rgba)
+// SetMode forces the light or the dark mode: SetPreference(theme.PreferenceOf(m)).
+// Return to following the system with SetPreference(theme.System).
+func (k *Kit) SetMode(m theme.Mode) { k.fol.SetPreference(theme.PreferenceOf(m)) }
+
+// Mode is the mode the window shows or is fading to, as of the last Begin
+// (before the first, the forced mode, or light).
+func (k *Kit) Mode() theme.Mode {
+	if !k.ready {
+		switch k.fol.Preference() {
+		case theme.ForceDark:
+			return theme.Dark
+		}
+		return theme.Light
 	}
+	return k.target
 }
+
+// SetAccent makes the accent colour (0xRRGGBBAA) the app's own, whatever the
+// system's is, for themes that take the system accent; 0 hands the choice back
+// to the system, whose accent the kit applies when it knows one.
+func (k *Kit) SetAccent(rgba uint32) { k.fol.SetAccent(rgba) }
 
 // SetMenu sets the command model: its shortcuts are matched in Begin, and
 // MenuBar, ContextMenu and Command use it.
@@ -197,12 +208,7 @@ func (k *Kit) Begin(c *ui.Context) {
 	k.nDis, k.nOff, k.force = 0, 0, 0
 	k.hasW, k.hasH, k.hasAlign = false, false, false
 
-	target := k.mode.T()
-	t := c.AnimateValue(keyMode, target, k.r.Motion.Mode)
-	if t != k.mixT || !k.ready {
-		k.mixT = t
-		k.r.Mix(t)
-	}
+	k.target = k.fol.Update(c, &k.r)
 	k.ready = true
 	c.Theme = k.r.UITheme()
 	c.Rates = k.r.Motion.Rates()
@@ -225,17 +231,24 @@ func (k *Kit) Begin(c *ui.Context) {
 // resolve makes the theme, the fonts and the icons for scale s.
 func (k *Kit) resolve(s float32) {
 	k.scale = s
-	k.r = k.th.Resolve(k.ts, s, k.mode)
-	if k.acc != 0 {
-		k.r.SetAccent(k.acc)
+	mode := k.fol.Target(k.c)
+	if k.ready { // a new scale: keep the mix the window is at
+		mode = theme.Light
+		if k.r.Dark() {
+			mode = theme.Dark
+		}
 	}
+	t := k.r.T
+	k.r = k.th.Resolve(k.ts, s, mode)
+	k.fol.Invalidate()
 	if k.icons == nil {
 		k.icons = icon.New(k.ts, k.extra...)
 	}
 	k.icons.Raster(s)
 	k.icons.Attach(k.c.Uploader())
-	k.mixT = k.mode.T()
-	k.r.Mix(k.mixT)
+	if k.ready {
+		k.r.Mix(t)
+	}
 }
 
 // End finishes the frame: it builds the context menu if one is open and checks
