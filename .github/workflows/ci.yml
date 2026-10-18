@@ -130,7 +130,7 @@ jobs:
       - name: listbench + rex (offscreen PNGs, windowed bench with the allocation gate)
         run: |
           go build -trimpath -ldflags="-s -w" -o bin/listbench ./cmd/listbench
-          go run ./cmd/rexlook/rex/rexshot -o rex-macos.png
+          go run ./cmd/rexlook/rex/rexshot -o rex-macos.png -o-dark rex-macos-dark.png
           ./bin/listbench -o listbench-macos.png
           ./bin/listbench -exit-first -timeout 60s >/dev/null || true
           ./bin/listbench -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 120s | tee listbench-macos.json
@@ -164,6 +164,7 @@ jobs:
             listbench-macos.json
             listbench-macos.png
             rex-macos.png
+            rex-macos-dark.png
             pilot-macos.json
             pilot-1m-macos.json
             pilot-macos.png
@@ -203,7 +204,7 @@ jobs:
       - name: listbench + rex (offscreen PNGs, windowed bench with the allocation gate)
         run: |
           go build -trimpath -ldflags="-s -w" -o bin/listbench.exe ./cmd/listbench
-          go run ./cmd/rexlook/rex/rexshot -o rex-windows-${{ matrix.arch }}.png
+          go run ./cmd/rexlook/rex/rexshot -o rex-windows-${{ matrix.arch }}.png -o-dark rex-windows-${{ matrix.arch }}-dark.png
           ./bin/listbench.exe -o listbench-windows-${{ matrix.arch }}.png
           ./bin/listbench.exe -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 120s | tee listbench-windows-${{ matrix.arch }}.json
           { echo '```json'; cat listbench-windows-${{ matrix.arch }}.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
@@ -228,6 +229,7 @@ jobs:
             listbench-windows-${{ matrix.arch }}.json
             listbench-windows-${{ matrix.arch }}.png
             rex-windows-${{ matrix.arch }}.png
+            rex-windows-${{ matrix.arch }}-dark.png
             pilot-windows-${{ matrix.arch }}.json
             pilot-windows-${{ matrix.arch }}.png
             gallery-windows-${{ matrix.arch }}.json
@@ -317,7 +319,7 @@ jobs:
           WAYLAND_DISPLAY=wayland-ci ./bin/gallery -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 420s | tee gallery-linux-${{ matrix.arch }}-wayland.json
       - name: listbench + rex + pilot + gallery offscreen PNGs
         run: |
-          go run ./cmd/rexlook/rex/rexshot -o rex-linux-${{ matrix.arch }}-${{ matrix.backend }}.png
+          go run ./cmd/rexlook/rex/rexshot -o rex-linux-${{ matrix.arch }}-${{ matrix.backend }}.png -o-dark rex-linux-${{ matrix.arch }}-${{ matrix.backend }}-dark.png
           go run ./cmd/listbench -o listbench-linux-${{ matrix.arch }}-${{ matrix.backend }}.png
           go run ./cmd/pilot/pilotshot -o pilot-linux-${{ matrix.arch }}-${{ matrix.backend }}.png
           go run ./cmd/gallery -o gallery-linux-${{ matrix.arch }}-${{ matrix.backend }}.png -o-dark gallery-linux-${{ matrix.arch }}-${{ matrix.backend }}-dark.png
@@ -337,6 +339,7 @@ jobs:
             listbench-linux-${{ matrix.arch }}-${{ matrix.backend }}.json
             listbench-linux-${{ matrix.arch }}-${{ matrix.backend }}.png
             rex-linux-${{ matrix.arch }}-${{ matrix.backend }}.png
+            rex-linux-${{ matrix.arch }}-${{ matrix.backend }}-dark.png
             pilot-linux-${{ matrix.arch }}-${{ matrix.backend }}.json
             pilot-linux-${{ matrix.arch }}-${{ matrix.backend }}.png
             gallery-linux-${{ matrix.arch }}-${{ matrix.backend }}.json
