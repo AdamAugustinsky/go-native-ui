@@ -116,7 +116,7 @@ func TestWaylandClientDecorationProtocol(t *testing.T) {
 	press(btnLeft, 0, 2040)
 	press(btnLeft, 1, 2200)
 	request(t, w, f, "REQ xdg_toplevel.set_maximized")
-	if !sawWake(t, w) || !w.Maximized() {
+	if !pumpUntil(t, w, 3*time.Second, w.Maximized) {
 		t.Fatal("not maximized after the compositor's configure")
 	}
 	press(btnLeft, 0, 2230)
@@ -124,7 +124,7 @@ func TestWaylandClientDecorationProtocol(t *testing.T) {
 	press(btnLeft, 0, 5030)
 	press(btnLeft, 1, 5150)
 	request(t, w, f, "REQ xdg_toplevel.unset_maximized")
-	if !sawWake(t, w) || w.Maximized() {
+	if !pumpUntil(t, w, 3*time.Second, func() bool { return !w.Maximized() }) {
 		t.Fatal("still maximized after the second double click")
 	}
 	press(btnLeft, 0, 5200)
