@@ -259,6 +259,17 @@ type report struct {
 	GateFailures      []string `json:",omitempty"`
 }
 
+// platformClipboardInBench: whether the bench session copies to and pastes from
+// the system clipboard through the platform. Not on Linux for now: its
+// clipboard is still the synchronous one that allocates (a Go string per copy
+// and per paste), and on a headless X11 or Wayland session it does not even
+// hand the copied text back (CI: "the pasted text did not arrive"). There the
+// session runs its clipboard steps against the Bench's own clipboard, so the
+// ui side (chords, requests, answers, undo) is still gated; only the platform
+// call is not. Remove this condition when the asynchronous Linux clipboard
+// lands (the p5 Linux branch).
+var platformClipboardInBench = runtime.GOOS != "linux"
+
 func runBench(rows int, dir string, gate, allowUnpaced, sites bool, maxCPU float64, timeout time.Duration, verbose bool) error {
 	var b *pilot.Bench
 	rep := report{OS: runtime.GOOS, Arch: runtime.GOARCH, Rows: max(rows, 100)}
@@ -272,7 +283,9 @@ func runBench(rows int, dir string, gate, allowUnpaced, sites bool, maxCPU float
 		b = pilot.NewSynthBench(rep.Rows)
 	}
 	defer b.Close()
-	b.UsePlatformClipboard()
+	if platformClipboardInBench {
+		b.UsePlatformClipboard()
+	}
 	b.StartCounting()
 	opt := app.BenchOptions{Warm: warmFrames, PostGCWarm: postGCWarm, Windows: maxWindows, Timeout: timeout, Verbose: verbose}
 	var as allocSites
