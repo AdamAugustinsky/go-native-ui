@@ -246,7 +246,9 @@ func (k *Kit) radioGroup(label string, sel *int, options []string, axis ui.Axis)
 		stop = 0
 	}
 	var changed bool
-	want := -1
+	if !k.off() {
+		changed = k.chooseByInput(gkey, sel, n)
+	}
 
 	c.NextRole(ui.RoleRadioGroup)
 	c.NextSemName(display)
@@ -264,13 +266,6 @@ func (k *Kit) radioGroup(label string, sel *int, options []string, axis ui.Axis)
 	for i, opt := range options {
 		key := ui.KeyN(gkey, uint64(i))
 		on := i == *sel
-		if !k.off() {
-			if s := c.PeekSignal(key); s.Clicked || s.Action&ui.ActPress != 0 {
-				want = i
-				c.SetFocus(key)
-				c.SetFocusVisible(false)
-			}
-		}
 		v := k.vis(key)
 		flags := k.flags()
 		if i != stop && !k.off() {
@@ -301,24 +296,8 @@ func (k *Kit) radioGroup(label string, sel *int, options []string, axis ui.Axis)
 		c.Pop()
 		k.labelBox(key, opt, h)
 		c.Pop()
-		if c.Focused(id) && !k.off() && n > 1 {
-			switch {
-			case c.TakeKey(ui.KeyDown, 0) || c.TakeKey(ui.KeyRight, 0):
-				want = (i + 1) % n
-			case c.TakeKey(ui.KeyUp, 0) || c.TakeKey(ui.KeyLeft, 0):
-				want = (i + n - 1) % n
-			}
-			if want >= 0 && want != i {
-				c.SetFocus(ui.KeyN(gkey, uint64(want)))
-				c.SetFocusVisible(true)
-			}
-		}
 	}
 	c.Pop()
-	if want >= 0 && want != *sel {
-		*sel = want
-		changed = true
-	}
 	k.undim(dim)
 	return Signal{ID: gid, Changed: changed, Focused: n > 0 && c.Focused(gid)}
 }
@@ -439,4 +418,39 @@ func (k *Kit) sliderInput(key ui.Key, val, lo, hi, step, thumb float32) float32 
 		val = lo + float32(math.Round(float64((val-lo)/step)))*step
 	}
 	return min(max(val, lo), hi)
+}
+
+// chooseByInput applies the clicks, presses and arrow keys of the previous
+// frame to the choice *sel among the n items keyed KeyN(group, i), before the
+// items are built, so that they all show the new choice. Arrow keys move the
+// choice and the focus together, wrapping at the ends. It reports whether the
+// choice changed.
+func (k *Kit) chooseByInput(group ui.Key, sel *int, n int) bool {
+	c := k.c
+	want := -1
+	for i := 0; i < n; i++ {
+		key := ui.KeyN(group, uint64(i))
+		if s := c.PeekSignal(key); s.Clicked || s.Action&ui.ActPress != 0 {
+			want = i
+			c.SetFocus(key)
+			c.SetFocusVisible(false)
+		}
+		if c.FocusKey() == key && n > 1 {
+			switch {
+			case c.TakeKey(ui.KeyDown, 0) || c.TakeKey(ui.KeyRight, 0):
+				want = (i + 1) % n
+			case c.TakeKey(ui.KeyUp, 0) || c.TakeKey(ui.KeyLeft, 0):
+				want = (i + n - 1) % n
+			}
+			if want >= 0 && want != i {
+				c.SetFocus(ui.KeyN(group, uint64(want)))
+				c.SetFocusVisible(true)
+			}
+		}
+	}
+	if want >= 0 && want != *sel {
+		*sel = want
+		return true
+	}
+	return false
 }

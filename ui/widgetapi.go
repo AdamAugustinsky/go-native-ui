@@ -25,3 +25,11 @@ func (c *Context) RectOf(k Key) [4]float32 {
 	}
 	return [4]float32{}
 }
+
+// BoxOf is the ID of the box with key k as of the last frame it was built in;
+// it is only meaningful for the frame that follows that one, in which the box
+// is rebuilt (or not).
+func (c *Context) BoxOf(k Key) (ID, bool) {
+	v, ok := c.table.Get(uint64(k))
+	return ID(v), ok
+}

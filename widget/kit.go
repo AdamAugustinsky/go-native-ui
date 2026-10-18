@@ -112,9 +112,14 @@ type Kit struct {
 	mouse     [2]float32 // pointer position at the previous Begin
 	mouseMove bool       // the pointer moved since then
 
-	lay layoutState
-	pop popup
-	tip tipState
+	lay    layoutState
+	pop    popup
+	barKey ui.Key // the menu bar the open menu belongs to
+	tip    tipState
+
+	// TooltipDelayNs is how long the pointer rests on a widget before its
+	// tooltip shows (DefaultTooltipDelayNs when zero).
+	TooltipDelayNs int64
 }
 
 // pendingCommands is how many menu choices wait for the next frame.
@@ -209,7 +214,6 @@ func (k *Kit) Begin(c *ui.Context) {
 	if k.menu != nil {
 		k.menu.Match(c)
 	}
-	k.tipBegin()
 }
 
 // resolve makes the theme, the fonts and the icons for scale s.
