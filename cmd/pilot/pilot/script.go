@@ -32,6 +32,7 @@ const (
 	opRefresh               // pane a is listed again (a changed directory when synthetic)
 	opDrag                  // drag the divider b pixels per frame for n frames and let go
 	opToggle                // toggle hidden files in pane a (a key press)
+	opPaste                 // paste (primary V) into the active pane's filter and wait, at most n frames, for the text to arrive
 )
 
 // modifiers of a step; modPrim is ⌘ on macOS and Ctrl elsewhere.
@@ -85,6 +86,24 @@ var benchSteps = [...]step{
 	{op: opWait, n: 200},
 	{op: opKeys, a: int(ui.KeyDown), n: 4},
 	{op: opKeys, a: int(ui.KeyBackspace), n: 1},
+	{op: opWait, n: 200},
+	// the clipboard and undo in the filter field: select all, copy, cut,
+	// paste twice, undo and redo through the pastes and the cut
+	{op: opKey, a: 'A', m: modPrim},
+	{op: opIdle, n: 2},
+	{op: opKey, a: 'C', m: modPrim},
+	{op: opIdle, n: 2},
+	{op: opKey, a: 'X', m: modPrim},
+	{op: opWait, n: 200},
+	{op: opPaste, n: 60},
+	{op: opWait, n: 200},
+	{op: opPaste, n: 60},
+	{op: opWait, n: 200},
+	{op: opKey, a: 'Z', m: modPrim},
+	{op: opWait, n: 200},
+	{op: opKey, a: 'Z', m: modPrim | modShift},
+	{op: opWait, n: 200},
+	{op: opKeys, a: 'Z', m: modPrim, n: 3},
 	{op: opWait, n: 200},
 	{op: opKey, a: int(ui.KeyEscape)},
 	{op: opWait, n: 200},
@@ -142,6 +161,7 @@ type script struct {
 	lastX, lastY float32
 	divX         float32
 	cycles       int
+	pasteLen     int   // length of the filter text when a paste began
 	err          error // the first step that did not complete
 }
 
@@ -270,6 +290,19 @@ func (s *script) frame(in *ui.Input) {
 	case opText:
 		in.AppendText(scriptTexts[st.a])
 		done = true
+	case opPaste:
+		f := &pl.panes[pl.active].filter
+		if s.t == 0 {
+			s.pasteLen = f.Len()
+			in.Mods = s.mods(modPrim)
+			in.PushKey(ui.KeyEvent{Code: 'V', Mods: in.Mods, Down: true})
+			in.Mods = 0
+		} else if f.Len() != s.pasteLen {
+			done = true // the platform answered (a frame or more later) and the field took the text
+		} else if s.t+1 >= st.n {
+			s.fail("the pasted text did not arrive in %d frames", st.n)
+			done = true
+		}
 	case opHeader:
 		if s.t == 0 {
 			x, y := s.headerPoint(st.b, st.a)
@@ -318,16 +351,59 @@ func (pl *Pilot) Refresh(i int, synth *SynthSource) {
 }
 
 // Bench is a Pilot that runs the benchmark session as its app.Scripter.
+//
+// The session copies, cuts and pastes in a text field. A Bench keeps its own
+// clipboard unless UsePlatformClipboard is called: it takes the copies and
+// answers the paste requests itself, one frame after the field asked, as the
+// platform does. That is what an offscreen test needs (there is no window to
+// ask), and it leaves the user's clipboard alone.
 type Bench struct {
 	*Pilot
 	s script
+
+	own     bool // the Bench is the clipboard
+	ctx     *ui.Context
+	clip    []byte
+	clipSet func([]byte)
 }
+
+// Build implements app.Builder: the Pilot's, and the Bench's clipboard.
+func (b *Bench) Build(c *ui.Context) {
+	if b.own {
+		b.ctx = c
+		c.ClipboardSet = b.clipSet
+	}
+	b.Pilot.Build(c)
+}
+
+// UsePlatformClipboard makes the session copy to and paste from the system
+// clipboard, through the platform (for a bench in a window: that is the path
+// whose allocations the gate is about). It replaces the clipboard's text.
+func (b *Bench) UsePlatformClipboard() { b.own = false }
 
 // Script implements app.Scripter. It never ends; the bench stops after its
 // measured frames.
 func (b *Bench) Script(frame int, in *ui.Input) bool {
+	if b.own && b.ctx != nil {
+		if tag, ok := b.ctx.PasteRequest(); ok {
+			in.SetPaste(tag, b.clip, len(b.clip) > 0)
+		}
+	}
 	b.s.frame(in)
 	return true
+}
+
+// newBench is a Bench on pl that keeps its own clipboard.
+func newBench(pl *Pilot, s script) *Bench {
+	b := &Bench{Pilot: pl, s: s, own: true, clip: make([]byte, 0, 256)}
+	b.clipSet = func(p []byte) { b.clip = append(b.clip[:0], p...) }
+	for _, p := range pl.panes { // the session fills the history of the fields: have it all from the start
+		for _, f := range []*ui.TextBuffer{&p.filter, &p.path} {
+			f.SetUndoLimit(64, 4<<10)
+			f.Reserve(512)
+		}
+	}
+	return b
 }
 
 // AtCycleStart implements app.CycleAligned: the next frame begins the session.
@@ -361,7 +437,7 @@ func NewSynthBench(rows int) *Bench {
 		panic(err)
 	}
 	pl := New(o)
-	return &Bench{Pilot: pl, s: script{pl: pl, synth: synth}}
+	return newBench(pl, script{pl: pl, synth: synth})
 }
 
 // NewDirBench is a Pilot on a real directory (both panes) through the real
@@ -396,7 +472,7 @@ func NewDirBench(dir string, timeout time.Duration) (*Bench, error) {
 		return nil, fmt.Errorf("pilot: listing %s took longer than %v (a privacy prompt waiting for an answer, or a stuck volume?)", dir, timeout)
 	}
 	pl := New(o)
-	return &Bench{Pilot: pl, s: script{pl: pl}}, nil
+	return newBench(pl, script{pl: pl}), nil
 }
 
 // StartCounting makes Build count the rows it builds (RowsBuilt).

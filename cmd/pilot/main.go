@@ -6,7 +6,8 @@
 //	                            stderr with -v) and exit once the first frame is on glass
 //	pilot -bench                scripted session on synthetic directories (100k entries by default, -rows N up
 //	                            to 1M): scroll, hover, select, filter, switch panes, sort by each column, drag
-//	                            the divider, relists: 1000 warm-up frames, a collection, 400 more, then whole sessions measured
+//	                            the divider, relists, and copy, cut, paste and undo in the filter field through the
+//	                            system clipboard (it replaces the clipboard's text): 1000 warm-up frames, a collection, 400 more, then whole sessions measured
 //	                            one after another until one allocates nothing (all listed in the JSON)
 //	pilot -bench -bench-dir DIR the same session on a real directory through the real file system service
 //	pilot -bench -gate          also exit with status 3 unless 0 allocations, main-thread CPU within budget
@@ -271,6 +272,7 @@ func runBench(rows int, dir string, gate, allowUnpaced, sites bool, maxCPU float
 		b = pilot.NewSynthBench(rep.Rows)
 	}
 	defer b.Close()
+	b.UsePlatformClipboard()
 	b.StartCounting()
 	opt := app.BenchOptions{Warm: warmFrames, PostGCWarm: postGCWarm, Windows: maxWindows, Timeout: timeout, Verbose: verbose}
 	var as allocSites
