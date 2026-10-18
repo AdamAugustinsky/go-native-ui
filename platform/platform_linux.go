@@ -42,8 +42,12 @@ type Window struct {
 	open bool
 	wl   bool // Wayland backend; otherwise X11
 
-	efd  int       // eventfd for osWake
-	pfd  [2]pollfd // display/connection fd, eventfd
+	efd int // eventfd for osWake
+	// pfd is the poll set: the display/connection fd, the eventfd, then the
+	// descriptors of in-flight clipboard transfers (clipPollFDs); npfd of
+	// them are polled.
+	pfd  [maxPollFDs]pollfd
+	npfd int
 	ts   syscall.Timespec
 	efdb [8]byte // eventfd drain buffer
 
@@ -58,13 +62,18 @@ type Window struct {
 	visible  bool // first frame/map was reported
 	frameReq bool // X11: RequestFrame pending
 
-	drags dragMap // SetDragRegions
+	drags dragMap   // SetDragRegions
+	clip  clipboard // clipboard_linux.go
 
 	wy wayland
 	x  x11
 }
 
 var theWindow Window
+
+// maxPollFDs bounds the poll set: connection, eventfd, one paste pipe and
+// maxSends clipboard writers.
+const maxPollFDs = 3 + maxSends
 
 type pollfd struct {
 	fd      int32
@@ -114,6 +123,7 @@ func Open(o Options) (*Window, error) {
 	}
 
 	*w = Window{q: newEventQueue(), efd: -1}
+	w.clip.init()
 	efd, _, errno := syscall.RawSyscall(syscall.SYS_EVENTFD2, 0, syscall.O_NONBLOCK|syscall.O_CLOEXEC, 0)
 	if errno != 0 {
 		return nil, fmt.Errorf("platform: eventfd: %v", errno)
@@ -131,6 +141,7 @@ func Open(o Options) (*Window, error) {
 	}
 	if !opened && (force == "x11" || (force == "" && os.Getenv("DISPLAY") != "")) {
 		*w = Window{q: w.q, efd: w.efd}
+		w.clip.init()
 		if err := w.openX11(o); err != nil {
 			errs = append(errs, err)
 		} else {
@@ -160,6 +171,7 @@ func Open(o Options) (*Window, error) {
 // forever, 0 poll). The returned slice is reused by the next call.
 func (w *Window) Wait(timeoutNs int64) []Event {
 	w.q.reset()
+	w.clipDeliver()
 	if w.wl {
 		w.waitWayland(timeoutNs)
 	} else {
@@ -233,6 +245,7 @@ func (w *Window) Close() {
 		return
 	}
 	wakeFD.Store(-1)
+	w.clip.inWait = false
 	if w.wl {
 		w.closeWayland()
 	} else {
@@ -242,21 +255,38 @@ func (w *Window) Close() {
 	w.open = false
 }
 
-// pollWait polls the connection fd and the eventfd. timeoutNs < 0 blocks.
-// It reports how many descriptors are ready (0 on timeout or EINTR).
+// pollWait polls the connection fd, the eventfd and the clipboard transfers'
+// descriptors. timeoutNs < 0 blocks; a clipboard deadline shortens it. It
+// reports how many descriptors are ready (0 on timeout or EINTR).
 func (w *Window) pollWait(timeoutNs int64) int {
+	w.npfd = 2
+	if w.wl {
+		w.wlPollFDs()
+	}
+	if d := w.clipDeadline(); d >= 0 {
+		if r := max(d-nanotime(), 0); timeoutNs < 0 || r < timeoutNs {
+			timeoutNs = r
+		}
+	}
 	var n uintptr
 	var errno syscall.Errno
 	if timeoutNs < 0 {
-		n, _, errno = syscall.Syscall6(syscall.SYS_PPOLL, uintptr(unsafe.Pointer(&w.pfd[0])), 2, 0, 0, 0, 0)
+		n, _, errno = syscall.Syscall6(syscall.SYS_PPOLL, uintptr(unsafe.Pointer(&w.pfd[0])), uintptr(w.npfd), 0, 0, 0, 0)
 	} else {
 		w.ts.Sec = timeoutNs / 1e9
 		w.ts.Nsec = timeoutNs % 1e9
-		n, _, errno = syscall.Syscall6(syscall.SYS_PPOLL, uintptr(unsafe.Pointer(&w.pfd[0])), 2, uintptr(unsafe.Pointer(&w.ts)), 0, 0, 0)
+		n, _, errno = syscall.Syscall6(syscall.SYS_PPOLL, uintptr(unsafe.Pointer(&w.pfd[0])), uintptr(w.npfd), uintptr(unsafe.Pointer(&w.ts)), 0, 0, 0)
 	}
 	if errno != 0 {
-		w.pfd[0].revents, w.pfd[1].revents = 0, 0
-		return 0
+		for i := 0; i < w.npfd; i++ {
+			w.pfd[i].revents = 0
+		}
+		n = 0
+	}
+	if w.wl {
+		w.wlPollDone()
+	} else {
+		w.x11PollDone()
 	}
 	return int(n)
 }

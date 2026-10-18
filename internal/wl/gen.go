@@ -15,8 +15,9 @@
 //
 // Usage (from this directory):
 //
-//	go run gen.go -o protocol_linux.go xdg-shell.xml xdg-decoration-unstable-v1.xml \
-//	    fractional-scale-v1.xml viewporter.xml
+//	go run gen.go -o protocol_linux.go -null zwp_tablet_tool_v2 \
+//	    xdg-shell.xml xdg-decoration-unstable-v1.xml fractional-scale-v1.xml viewporter.xml \
+//	    cursor-shape-v1.xml xdg-foreign-unstable-v2.xml text-input-unstable-v3.xml
 //
 // Sources (fetched 2026-10-16):
 //
@@ -24,6 +25,15 @@
 //	https://gitlab.freedesktop.org/wayland/wayland-protocols/-/raw/main/unstable/xdg-decoration/xdg-decoration-unstable-v1.xml
 //	https://gitlab.freedesktop.org/wayland/wayland-protocols/-/raw/main/staging/fractional-scale/fractional-scale-v1.xml
 //	https://gitlab.freedesktop.org/wayland/wayland-protocols/-/raw/main/stable/viewporter/viewporter.xml
+//
+// and, fetched 2026-10-18:
+//
+//	.../staging/cursor-shape/cursor-shape-v1.xml
+//	.../unstable/xdg-foreign/xdg-foreign-unstable-v2.xml
+//	.../unstable/text-input/text-input-unstable-v3.xml
+//
+// (cursor-shape's get_tablet_tool_v2 names zwp_tablet_tool_v2, which we do
+// not bind; -null keeps that entry NULL.)
 package main
 
 import (
@@ -100,7 +110,14 @@ func signature(m msg) string {
 
 func main() {
 	out := flag.String("o", "protocol_linux.go", "output file")
+	nullList := flag.String("null", "", "comma-separated interfaces that are referenced but not defined and not exported by libwayland-client: their types[] entries stay NULL (libwayland only needs types for new_id arguments)")
 	flag.Parse()
+	null := map[string]bool{}
+	for _, n := range strings.Split(*nullList, ",") {
+		if n != "" {
+			null[n] = true
+		}
+	}
 
 	var all []iface
 	for _, f := range flag.Args() {
@@ -173,6 +190,9 @@ func main() {
 						tname = fmt.Sprintf("%sT%d_%s", kind.arr, n, m.Name)
 						fmt.Fprintf(&decls, "var %s [%d]uintptr\n", tname, len(m.Args))
 						types = "&" + tname + "[0]"
+					}
+					if null[a.Interface] {
+						continue
 					}
 					refs = append(refs, ref{tname, k, a.Interface})
 					if !own[a.Interface] {

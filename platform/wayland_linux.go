@@ -33,6 +33,7 @@ var wlf struct {
 // Core interface tables exported by libwayland-client (wayland-client-protocol).
 var wlc struct {
 	registry, compositor, surface, callback, seat, pointer, keyboard, output, region uintptr
+	dataDeviceManager, dataDevice, dataSource, dataOffer                             uintptr
 }
 
 // libxkbcommon entry points (optional: without them there is no keyboard).
@@ -74,6 +75,13 @@ type wayland struct {
 	fracMgr, viewporter   uintptr
 	compositorV, wmBaseV  uint32
 	seatV                 uint32
+
+	// clipboard (clipboard_wl_linux.go)
+	ddm, dd, src uintptr
+	ddmV         uint32
+	offers       [maxOffers]wlOffer
+	sel          int    // index of the selection's offer in offers, or -1
+	serial       uint32 // serial of the latest input event, for set_selection
 
 	surface, xdgSurface, toplevel uintptr
 	deco, frac, viewport          uintptr
@@ -140,6 +148,10 @@ func loadWayland() error {
 		{"wl_keyboard_interface", &wlc.keyboard},
 		{"wl_output_interface", &wlc.output},
 		{"wl_region_interface", &wlc.region},
+		{"wl_data_device_manager_interface", &wlc.dataDeviceManager},
+		{"wl_data_device_interface", &wlc.dataDevice},
+		{"wl_data_source_interface", &wlc.dataSource},
+		{"wl_data_offer_interface", &wlc.dataOffer},
 	}); err != nil {
 		return err
 	}
@@ -251,7 +263,9 @@ func (w *Window) openWayland(o Options) (err error) {
 	if y.compositor == 0 || y.wmBase == 0 {
 		return errors.New("wayland: compositor lacks wl_compositor or xdg_wm_base")
 	}
-	if int32(fr.Call1(wlf.roundtrip, y.display)) < 0 { // seat capabilities, output scales
+	y.sel = -1
+	w.wlInitDataDevice()
+	if int32(fr.Call1(wlf.roundtrip, y.display)) < 0 { // seat capabilities, output scales, selection
 		return errors.New("wayland: roundtrip failed")
 	}
 
@@ -322,6 +336,7 @@ func (w *Window) closeWayland() {
 	if y.display == 0 {
 		return
 	}
+	w.wlClipClose()
 	w.release(y.frameCB, 0, 99) // wl_callback has no destructor request
 	w.release(y.keyboard, 0, 3) // wl_keyboard.release
 	w.release(y.pointer, 1, 3)  // wl_pointer.release
@@ -532,8 +547,14 @@ func (w *Window) wlEvent(proxy uintptr, op uint32, a unsafe.Pointer) {
 		w.onPointer(op, a)
 	case y.keyboard:
 		w.onKeyboard(op, a)
+	case y.dd:
+		w.onDataDevice(op, a)
+	case y.src:
+		w.onDataSource(op, a)
 	default:
-		w.onOutput(proxy, op, a)
+		if !w.onOffer(proxy, op, a) {
+			w.onOutput(proxy, op, a)
+		}
 	}
 }
 
@@ -567,6 +588,9 @@ func (w *Window) onRegistry(op uint32, a unsafe.Pointer) {
 			y.seat = w.bind(name, wlc.seat, peekPtr(wlc.seat), y.seatV)
 		case y.decoMgr == 0 && cstrIs(iface, "zxdg_decoration_manager_v1"):
 			y.decoMgr = w.bind(name, wl.ZxdgDecorationManagerV1.Addr(), wl.ZxdgDecorationManagerV1.NameAddr(), 1)
+		case y.ddm == 0 && cstrIs(iface, "wl_data_device_manager"):
+			y.ddmV = minU32(adv, 3, ifaceVersion(wlc.dataDeviceManager)) // 2: release, 3: actions (unused)
+			y.ddm = w.bind(name, wlc.dataDeviceManager, peekPtr(wlc.dataDeviceManager), y.ddmV)
 		case y.fracMgr == 0 && cstrIs(iface, "wp_fractional_scale_manager_v1"):
 			y.fracMgr = w.bind(name, wl.WpFractionalScaleManagerV1.Addr(), wl.WpFractionalScaleManagerV1.NameAddr(), 1)
 		case y.viewporter == 0 && cstrIs(iface, "wp_viewporter"):
@@ -755,6 +779,7 @@ func (w *Window) onPointer(op uint32, a unsafe.Pointer) {
 	now := nanotime()
 	switch op {
 	case 0: // enter(serial, surface, x, y)
+		y.serial = argU(a, 0)
 		y.ptrX, y.ptrY = argFixed(a, 2)*scale, argFixed(a, 3)*scale
 		w.q.push(Event{Kind: EvPointerMove, X: y.ptrX, Y: y.ptrY, Mods: w.mods, Time: now})
 	case 1: // leave(serial, surface)
@@ -764,6 +789,7 @@ func (w *Window) onPointer(op uint32, a unsafe.Pointer) {
 		w.q.push(Event{Kind: EvPointerMove, X: y.ptrX, Y: y.ptrY, Mods: w.mods, Time: now})
 	case 3: // button(serial, time, button, state)
 		serial, code, st := argU(a, 0), argU(a, 2), argU(a, 3)
+		y.serial = serial
 		b := evdevButton(code)
 		if b == ButtonNone {
 			return
@@ -806,11 +832,13 @@ func (w *Window) onKeyboard(op uint32, a unsafe.Pointer) {
 	case 0: // keymap(format, fd, size)
 		w.loadKeymap(argU(a, 0), int(int32(argU(a, 1))), argU(a, 2))
 	case 1: // enter(serial, surface, keys)
+		y.serial = argU(a, 0)
 		w.q.push(Event{Kind: EvFocus, Flags: FlagDown, Time: now})
 	case 2: // leave(serial, surface)
 		y.repCode = 0
 		w.q.push(Event{Kind: EvFocus, Time: now})
 	case 3: // key(serial, time, key, state)
+		y.serial = argU(a, 0)
 		code, st := argU(a, 2), argU(a, 3)
 		down := st != 0
 		w.wlKeyEvent(code, down, st == 2, now)
@@ -822,6 +850,7 @@ func (w *Window) onKeyboard(op uint32, a unsafe.Pointer) {
 			y.repCode = 0
 		}
 	case 4: // modifiers(serial, depressed, latched, locked, group)
+		y.serial = argU(a, 0)
 		if y.xkbState == 0 {
 			return
 		}

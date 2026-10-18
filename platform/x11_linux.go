@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"unsafe"
+
+	"gonativeui/internal/ffi"
 )
 
 // X11 backend (libX11.so.6 through dlopen). The window is created in
@@ -94,7 +96,14 @@ var xf struct {
 	pending, nextEvent, connectionNumber, resourceManagerString                           uintptr
 	lookupString, destroyWindow, setDetectableAutoRepeat                                  uintptr
 	keysymToUTF8                                                                          uintptr // optional, libxkbcommon
+
+	// selections (clipboard_x11_linux.go)
+	setSelectionOwner, getSelectionOwner, convertSelection, getWindowProperty uintptr
+	changeProperty, deleteProperty, sendEvent, free, setErrorHandler          uintptr
 }
+
+// xErrCB is Xlib's error handler: it ignores every error (see x11ClipInit).
+var xErrCB uintptr
 
 var xLoaded bool
 
@@ -117,6 +126,7 @@ type x11 struct {
 	utf8     [8]byte // xkb_keysym_to_utf8 output
 	title    [128]byte
 	hints    xSizeHints
+	x11Clip
 }
 
 func loadX11() error {
@@ -148,9 +158,19 @@ func loadX11() error {
 		{"XLookupString", &xf.lookupString},
 		{"XDestroyWindow", &xf.destroyWindow},
 		{"XkbSetDetectableAutoRepeat", &xf.setDetectableAutoRepeat},
+		{"XSetSelectionOwner", &xf.setSelectionOwner},
+		{"XGetSelectionOwner", &xf.getSelectionOwner},
+		{"XConvertSelection", &xf.convertSelection},
+		{"XGetWindowProperty", &xf.getWindowProperty},
+		{"XChangeProperty", &xf.changeProperty},
+		{"XDeleteProperty", &xf.deleteProperty},
+		{"XSendEvent", &xf.sendEvent},
+		{"XFree", &xf.free},
+		{"XSetErrorHandler", &xf.setErrorHandler},
 	}); err != nil {
 		return err
 	}
+	xErrCB = ffi.NewCallback(func(c *ffi.CB) { c.Ret(0) })
 	// XLookupString only yields Latin-1; libxkbcommon converts any keysym to
 	// UTF-8. Optional: without it, non-Latin-1 layouts produce no text.
 	if xh, err := dlopen("libxkbcommon.so.0", "libxkbcommon.so"); err == nil {
@@ -215,8 +235,9 @@ func (w *Window) openX11(o Options) (err error) {
 	}
 	mask := uintptr(xKeyPressMask | xKeyReleaseMask | xButtonPressMask | xButtonReleaseMask |
 		xEnterWindowMask | xLeaveWindowMask | xPointerMotionMask | xExposureMask |
-		xVisibilityChangeMask | xStructureNotifyMask | xFocusChangeMask)
+		xVisibilityChangeMask | xStructureNotifyMask | xFocusChangeMask | xPropertyChangeMask)
 	fr.Call3(xf.selectInput, x.dpy, x.win, mask)
+	w.x11ClipInit()
 
 	x.wmDelete = fr.Call3(xf.internAtom, x.dpy, uintptr(unsafe.Pointer(&nameWMDelete[0])), 0)
 	x.wmProto = fr.Call3(xf.internAtom, x.dpy, uintptr(unsafe.Pointer(&nameWMProtocols[0])), 0)
@@ -453,6 +474,14 @@ func (w *Window) x11Event() {
 			w.lw = int32((int64(pw)*120 + int64(w.s120)/2) / int64(w.s120))
 			w.lh = int32((int64(ph)*120 + int64(w.s120)/2) / int64(w.s120))
 		}
+	case xSelectionRequest:
+		w.x11SelectionRequest()
+	case xSelectionClear:
+		w.x11SelectionClear()
+	case xSelectionNotify:
+		w.x11SelectionNotify()
+	case xPropertyNotify:
+		w.x11PropertyNotify()
 	case xClientMessage:
 		if uintptr(x.i64(xoMsgType)) == x.wmProto && x.i32(xoMsgFormat) == 32 && uintptr(x.i64(xoMsgData0)) == x.wmDelete {
 			w.q.push(Event{Kind: EvClose, Time: now})
