@@ -3,6 +3,7 @@ package ui
 import (
 	"math"
 	"runtime"
+	"unicode/utf8"
 
 	"gonativeui/text"
 )
@@ -185,7 +186,6 @@ func (c *Context) TextField(label string, buf *TextBuffer) TextFieldSignal {
 	key := b.key
 	sig := c.Signal(id)
 	disabled := b.flags&Disabled != 0
-
 	in := &c.in
 	res := TextFieldSignal{ID: id, Signal: sig}
 	focused := c.focusKey == key && !disabled && !c.blocked(b) // (beneath a modal overlay a field takes no input)
@@ -303,6 +303,15 @@ func (c *Context) TextField(label string, buf *TextBuffer) TextFieldSignal {
 		buf.activity = in.Time
 	}
 	res.Changed = buf.rev != rev0
+	if rec := c.semOf(id); rec != nil { // the value and the selection, for assistive technologies
+		n := min(len(buf.b), maxSemValue)
+		for n < len(buf.b) && n > 0 && !utf8.RuneStart(buf.b[n]) {
+			n--
+		}
+		rec.state |= SemEditable
+		rec.value = c.semA.AppendBytes(buf.b[:n])
+		rec.sel = [2]int32{int32(min(buf.anchor, n)), int32(min(buf.caret, n))}
+	}
 
 	// What is shown: the text with the composition in place of the selection
 	// (or at the caret). The buffer itself is not touched until the

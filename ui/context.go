@@ -136,6 +136,7 @@ type Context struct {
 	// of this frame's boxes that have a role
 	semNext semNext
 	sems    []semRec
+	semA    core.Arena // the names and values of this frame's semantics
 
 	// interaction (see signal.go)
 	hotKey, scrollKey Key
@@ -345,11 +346,13 @@ func (c *Context) Begin(in *Input, widthPx, heightPx int, scale, dt float32) {
 	c.mouse()
 	c.claimFieldKeys()
 	c.overlayEscape()
+	c.semActions()
 	c.stepScroll()
 
 	c.nparents = 0
 	c.resetStyles()
 	c.sems = c.sems[:0]
+	c.semA.Reset()
 	c.semNext = semNext{role: RoleWindow}
 	root := c.newBox(0, rootKey)
 	b := &c.boxes[root]

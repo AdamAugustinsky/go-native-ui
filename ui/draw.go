@@ -69,6 +69,7 @@ func (c *Context) End(list *gpu.DrawList) {
 		panic("ui: unbalanced Push/Pop or BeginOverlay/EndOverlay at End")
 	}
 	c.layout()
+	c.semScroll()
 	c.traverseFocus()
 	c.animateBoxes()
 	if c.scrollSet && c.scrollPending() {
