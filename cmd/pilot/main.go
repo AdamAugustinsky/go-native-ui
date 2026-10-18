@@ -271,9 +271,7 @@ func runBench(rows int, dir string, gate, allowUnpaced, sites bool, maxCPU float
 		b = pilot.NewSynthBench(rep.Rows)
 	}
 	defer b.Close()
-	if os.Getenv("GNUI_XDBG") != "nc" {
-		b.UsePlatformClipboard()
-	}
+	b.UsePlatformClipboard()
 	b.StartCounting()
 	opt := app.BenchOptions{Warm: warmFrames, PostGCWarm: postGCWarm, Windows: maxWindows, Timeout: timeout, Verbose: verbose}
 	var as allocSites

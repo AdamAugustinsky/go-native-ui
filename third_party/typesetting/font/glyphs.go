@@ -9,6 +9,7 @@ import (
 	"image"
 	"image/jpeg"
 	"image/png"
+	"slices"
 
 	ot "github.com/go-text/typesetting/font/opentype"
 	"github.com/go-text/typesetting/font/opentype/tables"
@@ -42,13 +43,42 @@ const (
 	phantomCount
 )
 
-type glyphSet map[tables.GlyphID]struct{}
+// glyfScratch is the working storage of getPointsForGlyph, kept on the Face so
+// that outlines are extracted without allocating once it has grown to the
+// largest glyph seen (and it starts at a size that covers ordinary glyphs).
+// Everything that getPointsForGlyph returns, and buildSegments builds from it,
+// lives here and is valid until the next call on the same Face.
+type glyfScratch struct {
+	out   []contourPoint                        // the points returned
+	level [maxCompositeNesting + 1]levelScratch // per nesting depth
+	seen  []tables.GlyphID                      // the components being expanded (loop guard)
+	segs  []Segment                             // buildSegments's result
+}
 
+type levelScratch struct {
+	points []contourPoint // this glyph's own points
+	comp   []contourPoint // the result of expanding one component
+}
+
+// getPointsForGlyph returns the points of gid, phantoms included, in storage
+// that the next call reuses.
 func (f *Face) getPointsForGlyph(gid tables.GlyphID) []contourPoint {
-	var out []contourPoint
-	seenGlyphs := make(glyphSet) // used to deny loops
-	f.getPointsForGlyphRec(gid, 0, seenGlyphs, &out)
-	return out
+	s := &f.glyfScratch
+	if s.out == nil {
+		s.out = make([]contourPoint, 0, 512)
+		s.level[0].points = make([]contourPoint, 0, 512)
+		for i := 0; i < 4; i++ { // the depths composites ordinarily reach
+			s.level[i].comp = make([]contourPoint, 0, 128)
+			if i > 0 {
+				s.level[i].points = make([]contourPoint, 0, 128)
+			}
+		}
+		s.segs = make([]Segment, 0, 768)
+		s.seen = make([]tables.GlyphID, 0, 16)
+	}
+	s.out, s.seen = s.out[:0], s.seen[:0] // seen is used to deny loops
+	f.getPointsForGlyphRec(gid, 0, &s.out)
+	return s.out
 }
 
 const maxCompositeNesting = 20 // protect against malicious fonts
@@ -58,7 +88,7 @@ const maxCompositeNesting = 20 // protect against malicious fonts
 // for composite, recursively calls itself; allPoints includes phantom points and is
 // always at least of length phantomCount, even for a missing, too-deeply-nested or
 // otherwise malformed glyph (in which case an empty-but-valid outline is produced).
-func (f *Face) getPointsForGlyphRec(gid tables.GlyphID, currentDepth int, currentGlyphs glyphSet, allPoints *[]contourPoint /* OUT */) {
+func (f *Face) getPointsForGlyphRec(gid tables.GlyphID, currentDepth int, allPoints *[]contourPoint /* OUT */) {
 	// adapted from harfbuzz/src/OT/glyf/Glyph.hh
 
 	if currentDepth > maxCompositeNesting || int(gid) >= len(f.glyf) {
@@ -70,16 +100,18 @@ func (f *Face) getPointsForGlyphRec(gid tables.GlyphID, currentDepth int, curren
 	}
 
 	g := f.glyf[gid]
+	lv := &f.glyfScratch.level[currentDepth]
 
-	var points []contourPoint
+	points := lv.points[:0]
 	if data, ok := g.Data.(tables.SimpleGlyph); ok {
-		points = getContourPoints(data) // fetch the "real" points
+		points = appendContourPoints(points, data) // fetch the "real" points
 	} else { // zeros values are enough
-		points = make([]contourPoint, pointNumbersCount(g))
+		points = append(points, make([]contourPoint, pointNumbersCount(g))...)
 	}
 
 	// init phantom point
 	points = append(points, make([]contourPoint, phantomCount)...)
+	lv.points = points[:0] // keep the grown storage
 	phantoms := points[len(points)-phantomCount:]
 
 	hDelta := float32(g.XMin - f.hmtx.SideBearing(gid))
@@ -100,15 +132,15 @@ func (f *Face) getPointsForGlyphRec(gid tables.GlyphID, currentDepth int, curren
 		*allPoints = append(*allPoints, points...)
 	case tables.CompositeGlyph:
 		for compIndex, item := range data.Glyphs {
-			if _, has := currentGlyphs[item.GlyphIndex]; has {
+			if slices.Contains(f.glyfScratch.seen, item.GlyphIndex) {
 				continue
 			}
-			currentGlyphs[item.GlyphIndex] = struct{}{}
+			f.glyfScratch.seen = append(f.glyfScratch.seen, item.GlyphIndex)
 
 			// recurse on component
-			var compPoints []contourPoint
-
-			f.getPointsForGlyphRec(item.GlyphIndex, currentDepth+1, currentGlyphs, &compPoints)
+			lv.comp = lv.comp[:0]
+			f.getPointsForGlyphRec(item.GlyphIndex, currentDepth+1, &lv.comp)
+			compPoints := lv.comp
 
 			// getPointsForGlyphRec guarantees at least the phantom points, so a
 			// component always contributes a well-formed slice here.
@@ -140,7 +172,7 @@ func (f *Face) getPointsForGlyphRec(gid tables.GlyphID, currentDepth int, curren
 
 			*allPoints = append(*allPoints, compPoints[0:LC-phantomCount]...)
 
-			delete(currentGlyphs, item.GlyphIndex)
+			f.glyfScratch.seen = f.glyfScratch.seen[:len(f.glyfScratch.seen)-1]
 		}
 
 		*allPoints = append(*allPoints, phantoms...)
@@ -171,11 +203,13 @@ func pointNumbersCount(g tables.Glyph) int {
 	return 0
 }
 
-// return all the contour points, without phantoms
-func getContourPoints(sg tables.SimpleGlyph) []contourPoint {
+// appendContourPoints appends all the contour points, without phantoms, to dst.
+func appendContourPoints(dst []contourPoint, sg tables.SimpleGlyph) []contourPoint {
 	const flagOnCurve = 1 << 0 // 0x0001
 
-	points := make([]contourPoint, len(sg.Points))
+	n := len(dst)
+	dst = append(dst, make([]contourPoint, len(sg.Points))...) // zeroed
+	points := dst[n:]
 	for _, end := range sg.EndPtsOfContours {
 		points[end].isEndPoint = true
 	}
@@ -183,7 +217,7 @@ func getContourPoints(sg tables.SimpleGlyph) []contourPoint {
 		points[i].X, points[i].Y = float32(p.X), float32(p.Y)
 		points[i].isOnCurve = p.Flag&flagOnCurve != 0
 	}
-	return points
+	return dst
 }
 
 func extentsFromPoints(allPoints []contourPoint) (ext GlyphExtents) {
