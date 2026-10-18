@@ -127,6 +127,7 @@ func (v *Files) Build(c *ui.Context) {
 **The clipboard is asynchronous.**
 - **Copy and cut** give the platform the bytes (`platform.SetClipboard([]byte)`); it copies them into its own buffer.
 - **Paste** is a request (`platform.RequestPaste`). The bytes arrive later in an `EvPaste` event, in a reusable buffer, tagged for the field that asked. They are dropped if focus has moved, which is the rule IME commits already follow.
+- **Storage:** `ui.Input` keeps the paste buffer between frames up to `ui.MaxKeptPaste` (the platform's `MaxPaste`, 16 MiB), so repeated pastes of any supported size allocate only the first time. `ReservePaste` grows it up front; `ReleasePaste` gives it back.
 - **Limits:** transfers are size-limited and cancellable. On macOS and Windows the event comes within the same frame or the next. On Linux it comes when the transfer from the other app finishes.
 - **Gate:** the exact allocation gate covers copy, cut and paste.
 
