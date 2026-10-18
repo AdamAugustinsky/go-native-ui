@@ -264,8 +264,15 @@ func (c *Context) TextField(label string, buf *TextBuffer) TextFieldSignal {
 	// Typed text, then keys and edit actions.
 	if active {
 		c.fieldKey, c.fieldBuilt = key, true
-		if in.NText > 0 {
-			buf.Insert(in.Text[:in.NText])
+		typed := in.Text[:in.NText]
+		if in.HasReplace { // press-and-hold accents: the first part of the text replaces a range
+			n := min(in.ReplaceN, len(typed))
+			buf.ReplaceUTF16(int(in.ReplaceStart), int(in.ReplaceLen), typed[:n])
+			typed = typed[n:]
+			touched = true
+		}
+		if len(typed) > 0 {
+			buf.Insert(typed)
 			touched = true
 		}
 		if !composing {

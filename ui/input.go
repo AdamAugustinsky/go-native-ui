@@ -174,6 +174,19 @@ type Input struct {
 	NPreedit   int
 	PreeditSel [2]int
 
+	// HasReplace is set when the first ReplaceN bytes of Text are not typed at
+	// the caret but replace a range of the focused field's text (macOS
+	// press-and-hold accents: "replace the character before the caret"). The
+	// range is ReplaceLen UTF-16 units starting ReplaceStart units from the
+	// caret (negative: before it), the units AppKit counts in; the field
+	// converts them with its own text. The rest of Text is typed after it as
+	// usual. A frame holds at most one replacement and it comes first. Set it
+	// with ReplaceText.
+	HasReplace   bool
+	ReplaceStart int32
+	ReplaceLen   int32
+	ReplaceN     int
+
 	// Edit[:NEdit] are this frame's edit actions for the focused text field
 	// (PushEdit).
 	Edit  [MaxEdit]EditAction
@@ -287,6 +300,28 @@ func (in *Input) PushKey(e KeyEvent) bool {
 	return true
 }
 
+// CanReplace reports whether ReplaceText can be used now: the frame has no
+// replacement yet and no typed text, which a replacement must precede.
+func (in *Input) CanReplace() bool { return !in.HasReplace && in.NText == 0 }
+
+// ReplaceText records a replacement of the range of units UTF-16 units that
+// starts start units from the caret (see HasReplace) by s, which may be empty
+// (a removal), and queues s as the typed text of the frame. It reports false,
+// changing nothing, if the frame cannot take one (CanReplace); text that does
+// not fit is dropped whole characters at a time, as AppendText does.
+func (in *Input) ReplaceText(start, units int32, s []byte) bool {
+	if !in.CanReplace() {
+		return false
+	}
+	n := min(len(s), len(in.Text)-in.NText)
+	for n < len(s) && n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	in.NText += copy(in.Text[in.NText:], s[:n])
+	in.HasReplace, in.ReplaceStart, in.ReplaceLen, in.ReplaceN = true, start, units, in.NText
+	return true
+}
+
 // AppendText queues typed text, dropping what does not fit (whole characters
 // only: a character that would be cut is dropped with the rest).
 func (in *Input) AppendText(s string) {
@@ -322,7 +357,7 @@ func (in *Input) ClearFrame() {
 	in.CommitOff, in.CommitLen = 0, 0
 	in.FocusGained = false
 	in.NEdit, in.NCommands, in.NActions = 0, 0, 0
-	in.HasPaste = false
+	in.HasPaste, in.HasReplace, in.ReplaceN = false, false, 0
 	if cap(in.Paste) > maxKeptPaste { // do not hold on to a huge paste
 		in.Paste = nil
 	}

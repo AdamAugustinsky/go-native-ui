@@ -102,7 +102,7 @@ func (t *translator) touch(e *platform.Event) {
 func (t *translator) event(e *platform.Event, txt []byte) bool {
 	// The text that follows the end of a composition is its commit: Input tags
 	// it so that ui hands it to the field that composed (Input.CommitOff).
-	commit := e.Kind == platform.EvText && (t.afterEnd || t.forceCommit)
+	commit := e.Kind == platform.EvText && !replacing(e) && (t.afterEnd || t.forceCommit)
 	t.afterEnd = e.Kind == platform.EvPreedit && len(txt) == 0
 	if len(t.carry) > 0 || t.conflicts(e) {
 		t.carryText = append(t.carryText, txt...)
@@ -128,7 +128,9 @@ func (t *translator) event(e *platform.Event, txt []byte) bool {
 		}
 		rest := txt[n:]
 		t.carryText = append(t.carryText, rest...)
-		t.carry = append(t.carry, deferred{e: *e, off: len(t.carryText) - len(rest), len: len(rest), commit: commit})
+		re := *e
+		re.SelStart, re.SelLen = 0, 0 // only the first part replaces; the rest is typed after it
+		t.carry = append(t.carry, deferred{e: re, off: len(t.carryText) - len(rest), len: len(rest), commit: commit})
 		return true
 	}
 	t.commitNow = commit
@@ -136,6 +138,10 @@ func (t *translator) event(e *platform.Event, txt []byte) bool {
 	t.commitNow = false
 	return changed
 }
+
+// replacing reports whether an EvText replaces text instead of being typed at
+// the caret (platform.Event.SelStart).
+func replacing(e *platform.Event) bool { return e.SelStart != 0 || e.SelLen != 0 }
 
 // transitioned reports whether this frame's batch holds a button edge.
 func (t *translator) transitioned() bool {
@@ -151,6 +157,11 @@ func (t *translator) transitioned() bool {
 // conflicts reports whether applying e now would change the meaning of a
 // button transition already in the batch.
 func (t *translator) conflicts(e *platform.Event) bool {
+	// A replacement of text (press-and-hold accents) acts on the text before
+	// it: it starts a frame of its own, after the frame that has the letter.
+	if e.Kind == platform.EvText && replacing(e) && !t.in.CanReplace() {
+		return true
+	}
 	if !t.transitioned() {
 		return false
 	}
@@ -244,6 +255,12 @@ func (t *translator) apply(e *platform.Event, txt []byte) bool {
 			Down: e.Flags&platform.FlagDown != 0, Repeat: e.Flags&platform.FlagRepeat != 0,
 		})
 	case platform.EvText:
+		if replacing(e) { // may have no text: a removal
+			if in.ReplaceText(e.SelStart, e.SelLen, txt) {
+				break
+			}
+			return false // (conflicts keeps this from happening)
+		}
 		if len(txt) == 0 {
 			return false
 		}

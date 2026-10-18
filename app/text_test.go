@@ -347,3 +347,126 @@ func TestPasteRoundTrip(t *testing.T) {
 		t.Fatalf("the request is repeated: %v", sink.pastes)
 	}
 }
+
+// replEv is an EvText that replaces the units UTF-16 units that start start
+// units from the caret (macOS press-and-hold accents).
+func replEv(start, units int32) *platform.Event {
+	return ev(platform.EvText, func(e *platform.Event) { e.SelStart, e.SelLen = start, units })
+}
+
+// Press-and-hold accents, from the platform's events to the field: the letter
+// is typed, then the accent replaces it ("é", not "eé").
+func TestReplacingTextThroughTranslator(t *testing.T) {
+	b := &fieldApp{focus: true}
+	o, err := NewOffscreen(Config{Width: 400, Height: 200}, 800, 400, 2, b)
+	if err != nil {
+		skipOrFail(t, "offscreen renderer", err)
+	}
+	defer o.Close()
+	o.Frame()
+	o.Frame()
+	if !b.res.Focused {
+		t.Fatal("field not focused")
+	}
+	steps := []struct {
+		name   string
+		events func()
+		frames int
+		want   string
+	}{
+		{"letter and accent in one batch", func() {
+			o.tr.event(ev(platform.EvText, nil), []byte("e"))
+			o.tr.event(replEv(-1, 1), []byte("é"))
+		}, 2, "é"},
+		{"letter, then the accent in a later frame", func() { o.tr.event(ev(platform.EvText, nil), []byte("a")) }, 1, "éa"},
+		{"", func() { o.tr.event(replEv(-1, 1), []byte("á")) }, 1, "éá"},
+		{"a replacement with no text removes", func() { o.tr.event(replEv(-1, 1), nil) }, 1, "é"},
+		{"text typed after the replacement lands after it", func() {
+			o.tr.event(replEv(-1, 1), []byte("ê"))
+			o.tr.event(ev(platform.EvText, nil), []byte("xy"))
+		}, 1, "êxy"},
+		{"astral characters count two units", func() {
+			o.tr.event(ev(platform.EvText, nil), []byte("😀"))
+			o.tr.event(replEv(-2, 2), []byte("🙂"))
+		}, 2, "êxy🙂"},
+		{"multi-byte characters count one", func() {
+			o.tr.event(ev(platform.EvText, nil), []byte("日本"))
+			o.tr.event(replEv(-2, 2), []byte("語"))
+		}, 2, "êxy🙂語"},
+		{"empty replacement that begins a composition", func() {
+			o.tr.event(replEv(-1, 1), nil)
+			e, p := preedit("か", 3, 0)
+			o.tr.event(e, p)
+		}, 1, "êxy🙂"},
+	}
+	for _, s := range steps {
+		s.events()
+		for i := 0; i < s.frames; i++ {
+			o.Frame()
+		}
+		if b.buf.String() != s.want {
+			t.Fatalf("%s: %q, want %q", s.name, b.buf.String(), s.want)
+		}
+	}
+	if o.tr.in.NPreedit == 0 {
+		t.Error("the composition that followed the replacement was lost")
+	}
+	// The accent is one undo step of its own: undoing it brings the letter back.
+	e, p := preedit("", 0, 0)
+	o.tr.event(e, p)
+	o.tr.event(ev(platform.EvText, nil), []byte("e"))
+	o.Frame()
+	o.tr.event(replEv(-1, 1), []byte("é"))
+	o.Frame()
+	o.UI.QueueEdit(ui.EditUndo)
+	o.Frame()
+	if got := b.buf.String(); got != "êxy🙂e" {
+		t.Fatalf("undo of an accent: %q", got)
+	}
+}
+
+// Only the first part of a replacement that does not fit one frame replaces;
+// the rest is typed after it.
+func TestReplacingTextOverflow(t *testing.T) {
+	tr := newTranslator()
+	long := strings.Repeat("é", len(tr.in.Text)) // twice what a frame holds
+	tr.event(replEv(-1, 1), []byte(long))
+	if !tr.in.HasReplace || tr.in.NText == 0 || tr.in.NText > len(tr.in.Text) {
+		t.Fatalf("first part: replace %v, %d bytes", tr.in.HasReplace, tr.in.NText)
+	}
+	first := tr.in.NText
+	tr.endFrame()
+	if tr.in.HasReplace || tr.in.ReplaceN != 0 {
+		t.Fatal("the replacement came back with the rest of its text")
+	}
+	if tr.in.NText == 0 || tr.in.NText+first != len(long) {
+		t.Fatalf("rest: %d bytes after %d of %d", tr.in.NText, first, len(long))
+	}
+}
+
+func TestReplacingTextAllocatesNothing(t *testing.T) {
+	tr := newTranslator()
+	accent, letter := []byte("é"), []byte("e")
+	typed, repl := ev(platform.EvText, nil), replEv(-1, 1)
+	cycle := func() {
+		tr.take()
+		tr.event(typed, letter)
+		tr.event(repl, accent) // deferred to the next frame, and fed back
+		tr.endFrame()
+		tr.take()
+		tr.endFrame()
+	}
+	cycle()
+	cycle()
+	tr.event(typed, letter)
+	tr.event(repl, accent)
+	if len(tr.carry) != 1 {
+		t.Fatalf("the replacement was not deferred behind the letter (%d deferred)", len(tr.carry))
+	}
+	tr.endFrame()
+	tr.take()
+	tr.endFrame()
+	if n := testing.AllocsPerRun(100, cycle); n != 0 {
+		t.Fatalf("%v allocs", n)
+	}
+}

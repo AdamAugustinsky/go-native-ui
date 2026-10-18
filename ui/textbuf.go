@@ -151,6 +151,60 @@ func (t *TextBuffer) insertSealed(p []byte) {
 	t.breakRun()
 }
 
+// ReplaceUTF16 replaces the text range that starts start UTF-16 units from the
+// caret (negative: before it) and is units long with p, which it does not keep,
+// and puts the caret after p. It is what a platform input method asks for in
+// UTF-16 terms (press-and-hold accents: -1, 1 replaces the character before the
+// caret); an astral character counts two units, a range boundary inside one
+// moves over the whole character, and a range beyond the text is cut to it. p
+// is cleaned like Insert's; an empty p removes the range. The replacement is
+// one undo step. An existing selection is not part of the range.
+func (t *TextBuffer) ReplaceUTF16(start, units int, p []byte) {
+	lo := t.moveUnits(t.caret, start)
+	hi := t.moveUnits(t.caret, start+units)
+	if hi < lo {
+		lo, hi = hi, lo
+	}
+	room := -1
+	if t.Max > 0 {
+		room = max(t.Max-(len(t.b)-(hi-lo)), 0)
+	}
+	t.tmp = cleanText(t.tmp[:0], p, room)
+	if len(t.tmp) == 0 && lo == hi {
+		return
+	}
+	t.breakRun()
+	t.replace(lo, hi, t.tmp)
+	t.breakRun()
+}
+
+// moveUnits returns the byte offset that is units UTF-16 units from byte offset
+// from (negative: before), clamped to the text; a unit boundary inside an
+// astral character moves over the whole character.
+func (t *TextBuffer) moveUnits(from, units int) int {
+	b, i := t.b, from
+	if units > 0 {
+		for units > 0 && i < len(b) {
+			r, n := utf8.DecodeRune(b[i:])
+			i += n
+			units--
+			if r >= 0x10000 {
+				units--
+			}
+		}
+		return i
+	}
+	for units < 0 && i > 0 {
+		r, n := utf8.DecodeLastRune(b[:i])
+		i -= n
+		units++
+		if r >= 0x10000 {
+			units++
+		}
+	}
+	return i
+}
+
 // InsertString is Insert for a string.
 func (t *TextBuffer) InsertString(s string) { t.Insert(unsafeBytes(s)) }
 
