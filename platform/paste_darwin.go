@@ -53,7 +53,8 @@ func SetClipboardText(b []byte) {
 // On macOS it is on the queue when RequestPaste returns, so the next Wait or
 // Poll delivers it. A newer request replaces a pending one, whose answer then
 // never arrives. The Text of an EvPaste stays valid like that of EvText: until
-// the next Wait or Poll. Main thread.
+// the next Wait or Poll. Main thread. Text over MaxPaste bytes is measured,
+// not copied.
 func (w *Window) RequestPaste(tag uint64) {
 	pbInit()
 	q := &w.q
@@ -65,7 +66,13 @@ func (w *Window) RequestPaste(tag uint64) {
 	off := len(q.text)
 	pool := objc.F.Call0(objc.PoolPush)
 	if pb := objc.Send(clsPasteboard, selGeneralPB); pb != 0 {
-		q.text = objc.AppendUTF8(q.text, objc.Send1(pb, selStringForType, uintptr(pbType)))
+		// The size is asked for before any byte is copied, so an oversized
+		// clipboard costs the scan and nothing on the Go heap.
+		if str := objc.Send1(pb, selStringForType, uintptr(pbType)); str != 0 {
+			if n := int(objc.Send1(str, selLenBytes, 4 /* NSUTF8StringEncoding */)); n > 0 && n <= MaxPaste {
+				q.text = objc.AppendUTF8(q.text, str)
+			}
+		}
 	}
 	objc.F.Call1(objc.PoolPop, pool)
 	n := len(q.text) - off

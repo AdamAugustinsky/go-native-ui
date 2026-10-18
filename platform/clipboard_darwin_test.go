@@ -154,15 +154,34 @@ func TestRequestPasteNewerReplacesPending(t *testing.T) {
 	}
 }
 
+// A clipboard over MaxPaste is rejected by its size: none of it is copied
+// into the Go heap (17 MiB would otherwise be allocated on the main thread
+// just to be thrown away).
 func TestRequestPasteOverMaxFails(t *testing.T) {
 	r := newPasteRig(t)
-	SetClipboardText(make([]byte, MaxPaste+1))
-	if got := Clipboard(); len(got) != MaxPaste+1 {
-		t.Skipf("the pasteboard kept %d of %d bytes", len(got), MaxPaste+1)
+	big := make([]byte, MaxPaste+1<<20)
+	for i := range big {
+		big[i] = 'a'
 	}
-	e, got := r.paste(4)
-	if e.Flags&FlagFailed == 0 || got != "" || len(r.w.q.text) != 0 {
-		t.Errorf("flags %v, %d text bytes, %d kept in the queue", e.Flags, len(got), len(r.w.q.text))
+	SetClipboardText(big)
+	if got := Clipboard(); len(got) != len(big) {
+		t.Skipf("the pasteboard kept %d of %d bytes", len(got), len(big))
+	}
+	var before, after runtime.MemStats
+	r.w.q.reset()
+	runtime.ReadMemStats(&before)
+	r.w.RequestPaste(4)
+	runtime.ReadMemStats(&after)
+	if len(r.w.q.ev) != 1 || r.w.q.ev[0].Kind != EvPaste || r.w.q.ev[0].Flags&FlagFailed == 0 || r.w.q.ev[0].Tag != 4 || len(r.w.q.text) != 0 {
+		t.Errorf("events %+v, %d text bytes", r.w.q.ev, len(r.w.q.text))
+	}
+	if grown := after.TotalAlloc - before.TotalAlloc; grown > 1<<20 {
+		t.Errorf("rejecting a %d-byte clipboard allocated %d bytes on the Go heap, want about none", len(big), grown)
+	}
+	// Just inside the limit it is delivered whole.
+	SetClipboardText(big[:MaxPaste])
+	if e, got := r.paste(5); e.Flags != 0 || len(got) != MaxPaste {
+		t.Errorf("a paste of exactly MaxPaste: flags %v, %d bytes", e.Flags, len(got))
 	}
 }
 
