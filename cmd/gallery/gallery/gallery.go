@@ -25,8 +25,8 @@ import (
 const (
 	WindowWidthPt  = 1280
 	WindowHeightPt = 800
-	MinWidthPt     = 900
-	MinHeightPt    = 560
+	MinWidthPt     = 1000
+	MinHeightPt    = 600
 )
 
 // DefaultRows is the number of rows of the table unless Options.Rows says
@@ -119,6 +119,9 @@ type Gallery struct {
 	// the benchmark and the screenshots
 	sem   ui.SemTree
 	nodes int
+	// the window of the last frame, for the benchmark's report
+	winW, winH int
+	winScale   float32
 }
 
 // Kit is the widget kit; the alias keeps the gallery's signatures short.
@@ -135,10 +138,10 @@ func New(o Options) (*Gallery, error) {
 	}
 	g := &Gallery{opt: o, model: m, mode: o.Mode, rows: o.Rows}
 	g.cols = [4]widget.Column{
-		{ID: colID, Title: "ID", Width: 64, MinWidth: 48, Align: ui.AlignRight, Sortable: true},
-		{ID: colName, Title: "Name", Width: 116, MinWidth: 64, Sortable: true},
-		{ID: colKind, Title: "Kind", Width: 84, MinWidth: 48},
-		{ID: colSize, Title: "Size", Width: 70, MinWidth: 48, Align: ui.AlignRight, Fill: true},
+		{ID: colID, Title: "ID", Width: 56, MinWidth: 48, Align: ui.AlignRight, Sortable: true},
+		{ID: colName, Title: "Name", Width: 100, MinWidth: 64, Sortable: true},
+		{ID: colKind, Title: "Kind", Width: 76, MinWidth: 48},
+		{ID: colSize, Title: "Size", Width: 60, MinWidth: 44, Align: ui.AlignRight, Fill: true},
 	}
 	g.table.Sel.Reserve(g.rows)
 	g.table.Sort = widget.SortState{Active: true, Column: colID}
@@ -147,6 +150,7 @@ func New(o Options) (*Gallery, error) {
 		g.rev[i] = uint32(g.rows - 1 - i)
 	}
 	g.split = widget.NewSplitState(0.42, 0.27, 0.31)
+	g.split.Min = [widget.MaxPanes]float32{360, 280, 300}
 	g.slider, g.working = 40, o.Still
 	g.check, g.sw, g.showRows = true, false, true
 	g.notes.SetString("Hello, gallery")
@@ -184,6 +188,10 @@ func (g *Gallery) Attach(c *ui.Context, ts widget.TextSystem) {
 	g.k.ReduceMotion = g.opt.Still
 }
 
+// WindowPx is the size in pixels and the scale of the window as of the last
+// frame.
+func (g *Gallery) WindowPx() (w, h int, scale float32) { return g.winW, g.winH, g.winScale }
+
 // Kit is the gallery's widget kit (nil before Init or Attach).
 func (g *Gallery) Kit() *Kit { return g.k }
 
@@ -210,6 +218,7 @@ func (g *Gallery) Build(c *ui.Context) {
 		return
 	}
 	k := g.k
+	g.winW, g.winH, g.winScale = w, h, c.Scale()
 	k.Begin(c)
 	g.commands(c)
 	r := k.Theme()

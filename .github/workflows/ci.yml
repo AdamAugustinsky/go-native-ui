@@ -147,7 +147,7 @@ jobs:
         run: |
           go build -trimpath -ldflags="-s -w" -o bin/gallery ./cmd/gallery
           ./bin/gallery -o gallery-macos.png -o-dark gallery-macos-dark.png
-          ./bin/gallery -bench -gate -allow-unpaced -allocsites -v -timeout 400s | tee gallery-macos.json
+          ./bin/gallery -bench -gate -allow-unpaced -timeout 150s | tee gallery-macos.json
           { echo '```json'; cat gallery-macos.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - name: live resize (two draws per transaction must not starve the drawable pool)
         run: |
@@ -216,7 +216,7 @@ jobs:
         run: |
           go build -trimpath -ldflags="-s -w" -o bin/gallery.exe ./cmd/gallery
           ./bin/gallery.exe -o gallery-windows-${{ matrix.arch }}.png -o-dark gallery-windows-${{ matrix.arch }}-dark.png
-          ./bin/gallery.exe -bench -gate -allow-unpaced -max-cpu-us 0 -allocsites -v -timeout 600s | tee gallery-windows-${{ matrix.arch }}.json
+          ./bin/gallery.exe -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 420s | tee gallery-windows-${{ matrix.arch }}.json
           { echo '```json'; cat gallery-windows-${{ matrix.arch }}.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         if: always()

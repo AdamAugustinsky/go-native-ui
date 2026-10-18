@@ -107,7 +107,13 @@ type Player struct {
 
 	rect [4]float32 // the current step's target
 	ok   bool
-	x, y float32 // the pointer
+	// reveal: the target is in a scroll area but out of view (a window smaller
+	// than the scene's): the wheel scrolls the area (revKey) until it shows
+	begun     bool // the current step has been resolved
+	reveal    bool
+	revKey    ui.Key
+	revFrames int
+	x, y      float32 // the pointer
 }
 
 // newPlayer returns a Player of steps on g.
@@ -135,18 +141,25 @@ func (p *Player) Script(frame int, in *ui.Input) bool {
 		if !p.loop {
 			return false
 		}
-		p.idx, p.t = 0, 0
+		p.idx, p.t, p.begun = 0, 0, false
 		p.cycles++
 	}
+	if p.err != nil { // a step did not do what it says: the run ends
+		return false
+	}
 	st := &p.steps[p.idx]
-	if p.t == 0 {
+	if !p.begun {
+		p.begun = true
 		p.t0 = p.now()
 		p.resolve(st)
+	}
+	if p.reveal && !p.revealFrame(st, in) {
+		return p.err == nil
 	}
 	done := p.run(st, in)
 	if done {
 		p.idx++
-		p.t = 0
+		p.t, p.begun = 0, false
 	} else {
 		p.t++
 	}
@@ -214,6 +227,53 @@ func (p *Player) visible(i int) bool {
 	return true
 }
 
+// scrollAncestor is the index of the nearest scroll area around node i, or -1.
+func (p *Player) scrollAncestor(i int) int {
+	t := &p.g.sem
+	for a := t.Nodes[i].Parent; a >= 0; a = t.Nodes[a].Parent {
+		if t.Nodes[a].Role == ui.RoleScrollArea {
+			return int(a)
+		}
+	}
+	return -1
+}
+
+// revealFrame scrolls the scroll area around the target by one wheel step
+// towards it, and reports whether the target is in view now (the step then
+// carries on in the same frame).
+func (p *Player) revealFrame(st *step, in *ui.Input) bool {
+	i := p.find(st.role, st.name, st.nth)
+	if i < 0 {
+		p.reveal = false
+		p.fail("the %d named %q (#%d) vanished while it was scrolled into view", st.role, st.name, st.nth)
+		return false
+	}
+	if p.visible(i) {
+		p.reveal, p.ok = false, true
+		p.rect = p.g.sem.Nodes[i].Bounds
+		return true
+	}
+	if p.revFrames++; p.revFrames > 200 {
+		p.reveal = false
+		p.fail("the %d named %q (#%d) did not come into view in 200 frames", st.role, st.name, st.nth)
+		return false
+	}
+	t := &p.g.sem
+	var b [4]float32
+	for k := range t.Nodes {
+		if t.Nodes[k].Key == p.revKey && t.Nodes[k].Role == ui.RoleScrollArea {
+			b = t.Nodes[k].Bounds
+		}
+	}
+	dy := float32(60) // toward the start
+	if ty := (t.Nodes[i].Bounds[1] + t.Nodes[i].Bounds[3]) / 2; ty >= b[3] {
+		dy = -60 // toward the end
+	}
+	p.goTo(in, (b[0]+b[2])/2, (b[1]+b[3])/2)
+	in.AddScroll(0, dy, true)
+	return false
+}
+
 // exists reports whether a node with the role and name is in the tree.
 func (p *Player) exists(role ui.Role, name string) bool {
 	return p.find(role, name, 0) >= 0
@@ -230,7 +290,11 @@ func (p *Player) resolve(st *step) {
 			p.fail("no %d named %q (#%d) in the semantic tree", st.role, st.name, st.nth)
 		case !p.visible(i):
 			p.ok = false
-			p.fail("the %d named %q (#%d) is scrolled out of view or outside the window", st.role, st.name, st.nth)
+			if a := p.scrollAncestor(i); a >= 0 {
+				p.reveal, p.revKey, p.revFrames = true, p.g.sem.Nodes[a].Key, 0
+			} else {
+				p.fail("the %d named %q (#%d) is outside the window", st.role, st.name, st.nth)
+			}
 		default:
 			p.rect = p.g.sem.Nodes[i].Bounds
 		}

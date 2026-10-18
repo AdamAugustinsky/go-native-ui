@@ -116,6 +116,8 @@ type report struct {
 	OS, Arch string
 	Rows     int
 	app.BenchReport
+	WindowPx      [2]int // the window's size at the end
+	WindowScale   float32
 	SessionCycles int      // times the session ran through (warm-up and measured frames)
 	GateFailures  []string `json:",omitempty"`
 }
@@ -132,14 +134,17 @@ func runBench(rows int, m theme.Mode, gate, allowUnpaced, sites bool, maxCPU flo
 		opt.WindowStart, opt.WindowEnd = as.start, as.end
 	}
 	br, err := app.RunBench(gallery.Config(), b, opt)
-	if err != nil {
-		return err
+	if serr := b.Err(); serr != nil { // a step that failed ends the run: say which
+		w, h, sc := b.WindowPx()
+		return fmt.Errorf("%w (window %d×%d px at %.1f×)", serr, w, h, sc)
 	}
-	if err := b.Err(); err != nil {
+	if err != nil {
 		return err
 	}
 	rep.BenchReport = br
 	rep.SessionCycles = b.Cycles()
+	w, h, sc := b.WindowPx()
+	rep.WindowPx, rep.WindowScale = [2]int{w, h}, sc
 	if gate {
 		rep.GateFailures = gateFailures(rep, allowUnpaced, maxCPU)
 	}

@@ -162,3 +162,29 @@ func TestShotsRender(t *testing.T) {
 		t.Errorf("the dark picture's mean brightness %.2f is not well below the light's %.2f", dark, light)
 	}
 }
+
+// A window smaller than the scene (the smallest the window may be, which is
+// what a small CI display gives) still runs the whole session: the steps
+// scroll their targets into view.
+func TestBenchSessionInASmallWindow(t *testing.T) {
+	b, err := NewBench(Options{Synthetic: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := newRigFor(t, b.Gallery)
+	r.w, r.h = MinWidthPt, MinHeightPt
+	r.p = b.p
+	frames := 0
+	for ; frames < 60000 && b.Cycles() < 2 && b.Err() == nil; frames++ {
+		r.frame()
+	}
+	if err := b.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if b.Cycles() < 2 {
+		t.Fatalf("two sessions did not finish in %d frames; at step %d (%+v), frame %d of it, cycles %d", frames, b.p.idx, b.p.steps[b.p.idx], b.p.t, b.Cycles())
+	}
+	if b.Gallery.Mode() != theme.Light || b.Gallery.askDelete {
+		t.Error("the session does not end where it began")
+	}
+}

@@ -95,7 +95,7 @@ func (g *Gallery) stateWidget(kind, i int) {
 // statesPane shows every widget in each of its states.
 func (g *Gallery) statesPane(c *ui.Context) {
 	k := g.k
-	sv := k.BeginScroll("states", &g.scroll[0], widget.ScrollVertical)
+	sv := k.BeginScroll("states", &g.scroll[0], widget.ScrollBoth)
 	k.NextGap(6)
 	k.Column("states")
 	g.heading("States")
@@ -182,10 +182,10 @@ func (g *Gallery) livePane(c *ui.Context) {
 	k.ButtonKind("Save", widget.ButtonPrimary)
 	k.ButtonKind("More", widget.ButtonPlain)
 	k.ButtonKind("Remove", widget.ButtonDanger)
-	k.Tooltip(k.IconButton(icon.Plus, "Add item", widget.ButtonDefault).ID, "Add an item")
 	k.EndRow()
 	k.NextGap(6)
 	k.Row("buttons2")
+	k.Tooltip(k.IconButton(icon.Plus, "Add item", widget.ButtonDefault).ID, "Add an item")
 	k.MenuButton("Menu", menuFile)
 	if k.Button("Delete…").Clicked {
 		g.askDelete = true
