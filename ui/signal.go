@@ -9,12 +9,22 @@ import "math"
 // box's children after it, floating children after their siblings) so that
 // the last box drawn wins. Clip boxes hide their subtree outside their
 // rectangle.
+//
+// Overlays are hit-tested after the main tree, in order, so the topmost wins;
+// everything beneath a modal is skipped, and tooltips are never hit.
 func (c *Context) hitTest() {
 	c.hotID, c.hotKey, c.scrollKey = 0, 0, 0
 	if c.root == 0 || !c.in.Inside {
 		return
 	}
-	c.hitWalk(c.root, c.in.MouseX, c.in.MouseY)
+	if c.modalIdx < 0 {
+		c.hitWalk(c.root, c.in.MouseX, c.in.MouseY)
+	}
+	for i := max(c.modalIdx, 0); i < c.nOvPrev; i++ {
+		if c.ovPrev[i].kind != OverlayTooltip {
+			c.hitWalk(c.ovPrev[i].id, c.in.MouseX, c.in.MouseY)
+		}
+	}
 	if c.hotID != 0 {
 		c.hotKey = c.boxes[c.hotID].key
 	}
@@ -63,7 +73,7 @@ func (c *Context) mouse() {
 			c.relPos[btn], c.relClicks[btn] = c.pressPos[btn], c.pressClicks[btn] // before the new press replaces them
 			c.active[btn] = 0
 		}
-		if in.Pressed[btn] {
+		if in.Pressed[btn] && !c.pressConsumed {
 			c.focusVisible = false // the pointer, not the keyboard, moves the focus now
 			if hot != nil && hot.flags&Clickable != 0 {
 				c.active[btn] = hot.key
@@ -165,7 +175,7 @@ func (c *Context) Signal(id ID) Signal {
 	}
 	b := &c.boxes[id]
 	k := b.key
-	if b.flags&Disabled != 0 {
+	if b.flags&Disabled != 0 || c.blocked(b) {
 		return s // inert: also an activation or press that was queued before
 	}
 	for i := 0; i < c.in.NActions; i++ {

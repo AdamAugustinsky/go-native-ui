@@ -65,8 +65,8 @@ func (c *Context) syncAtlas() {
 // prunes boxes that were not built, and appends the frame's quads to list
 // (which it resets first). It must follow a Begin with balanced Push/Pop.
 func (c *Context) End(list *gpu.DrawList) {
-	if c.nparents != 1 {
-		panic("ui: unbalanced Push/Pop at End")
+	if c.nparents != 1 || c.nOvOpen != 0 {
+		panic("ui: unbalanced Push/Pop or BeginOverlay/EndOverlay at End")
 	}
 	c.layout()
 	c.traverseFocus()
@@ -87,6 +87,9 @@ func (c *Context) End(list *gpu.DrawList) {
 		last := try >= emitTries-1
 		c.finalPass, c.passGen, c.glyphQuads = last, gen, c.glyphQuads[:0]
 		c.emit(list, c.root, win)
+		for i := 0; i < c.nOvs; i++ { // the overlays above it, in build order
+			c.emit(list, c.ovs[i].id, win)
+		}
 		c.finalPass = false
 		// A full atlas resets mid-frame and invalidates the glyph entries
 		// used so far: draw the frame again against the fresh atlas.

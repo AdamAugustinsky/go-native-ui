@@ -188,7 +188,7 @@ func (c *Context) TextField(label string, buf *TextBuffer) TextFieldSignal {
 
 	in := &c.in
 	res := TextFieldSignal{ID: id, Signal: sig}
-	focused := c.focusKey == key && !disabled
+	focused := c.focusKey == key && !disabled && !c.blocked(b) // (beneath a modal overlay a field takes no input)
 	active := focused && in.Focused
 	res.Focused = focused
 	buf.now = in.Time

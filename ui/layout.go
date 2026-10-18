@@ -59,6 +59,14 @@ func (c *Context) layout() {
 	for _, id := range order {
 		b := &boxes[id]
 		if b.parent == 0 {
+			if b.ovRoot { // an overlay's percentages are fractions of the window
+				win := [2]float32{float32(c.w), float32(c.h)}
+				for a := 0; a < 2; a++ {
+					if b.pref[a].Kind == SizeParentPct {
+						b.size[a] = win[a] * b.pref[a].Value
+					}
+				}
+			}
 			continue
 		}
 		pb := &boxes[b.parent]
@@ -149,6 +157,9 @@ func (c *Context) layout() {
 	setRect(r)
 	for _, id := range order {
 		p := &boxes[id]
+		if p.ovRoot {
+			c.placeOverlay(p)
+		}
 		la := p.layoutAxis()
 		// Content extent and scroll clamping first: they set the offsets.
 		for a := 0; a < 2; a++ {

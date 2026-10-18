@@ -2,7 +2,8 @@ package ui
 
 // Focus traversal (phase 5, D28). Tab and Shift+Tab move the keyboard focus
 // through the focusable boxes of the frame in build order, wrapping around;
-// disabled boxes are skipped. Tab is taken at End, so any handler
+// disabled boxes are skipped, and with a popup or modal overlay open the
+// traversal stays inside the topmost one. Tab is taken at End, so any handler
 // that claimed it during the build (a field in a code editor) keeps it.
 
 // FocusVisible reports whether the focus came from the keyboard (Tab, or
@@ -18,6 +19,8 @@ func (c *Context) SetFocusVisible(v bool) { c.focusVisible = v }
 // traverseFocus handles Tab and Shift+Tab after the frame was built, and drops
 // the focus from a box that became disabled.
 func (c *Context) traverseFocus() {
+	c.overlayFocus()
+	c.cancelBeneathModal()
 	if c.focusKey != 0 {
 		if v, ok := c.table.Get(uint64(c.focusKey)); ok {
 			if b := &c.boxes[v]; b.lastFrame == c.frame && b.flags&Disabled != 0 {
@@ -31,11 +34,12 @@ func (c *Context) traverseFocus() {
 	if !fwd && !back {
 		return
 	}
+	scope := c.focusScope()
 	var first, last, prev, next ID
 	seenCur := false
 	for _, id := range c.order {
 		b := &c.boxes[id]
-		if b.flags&Focusable == 0 || b.flags&Disabled != 0 {
+		if b.flags&Focusable == 0 || b.flags&Disabled != 0 || b.ovl != scope || b.ovRoot {
 			continue
 		}
 		if first == 0 {

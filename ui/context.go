@@ -25,6 +25,8 @@ type persist struct {
 	size      [2]float32
 	origin    [2]float32 // unsnapped top-left
 	content   [2]float64 // extent of the children incl. padding (virtual extent for lists)
+	// savedFocus is, for an overlay root, the focus when it opened.
+	savedFocus Key
 }
 
 // box is one record of the pointer-free box pool. Everything after persist
@@ -34,7 +36,9 @@ type box struct {
 
 	flags                           Flags
 	parent, first, last, next, prev ID
-	field                           bool // a text field (TextField): it takes the keys of keys.go when focused
+	field                           bool  // a text field (TextField): it takes the keys of keys.go when focused
+	ovRoot                          bool  // the root box of an overlay
+	ovl                             uint8 // the overlay the box belongs to, 1 + its index in the frame's overlays; 0 for the main tree
 
 	bg          [4]uint32
 	textColor   uint32
@@ -175,6 +179,22 @@ type Context struct {
 	nCommit     int
 	commitOwner Key
 
+	// overlays (overlay.go): this frame's, in build order, and the previous
+	// frame's (what hit testing and the input steps of Begin see)
+	ovs        [maxOverlays]overlay
+	nOvs       int
+	ovPrev     [maxOverlays]overlay
+	nOvPrev    int
+	ovOpen     [maxOverlays]int // c.nparents at each open BeginOverlay
+	nOvOpen    int
+	parentless bool // the next box has no parent (an overlay root)
+	modalIdx   int  // the topmost modal of the previous frame, -1 none
+	// the popups the user closed this frame (OverlaySignal.Dismissed), and
+	// whether this frame's press was consumed by closing them
+	dismissed     [maxOverlays]Key
+	nDismiss      int
+	pressConsumed bool
+
 	// key claiming and edit actions (keys.go)
 	claimed    uint16              // bit i: key event i is handled
 	fieldKeys  uint16              // bit i: key event i was claimed for the focused text field
@@ -302,6 +322,9 @@ func (c *Context) Begin(in *Input, widthPx, heightPx int, scale, dt float32) {
 	c.animating, c.scrollSet = false, false
 	c.wakeNs, c.imeOK, c.imeCancel = 0, false, false
 	c.takeCommit()
+	c.ovPrev, c.nOvPrev = c.ovs, c.nOvs
+	c.nOvs, c.nOvOpen, c.parentless = 0, 0, false
+	c.modalIdx = c.topModal()
 	c.claimed, c.cmdTaken, c.activated = 0, 0, 0
 	c.fieldBuilt, c.pasteReq, c.pasteTag = false, false, 0
 	for i := 0; i < c.nCarry; i++ { // edit actions the previous frame could not give its field
@@ -318,8 +341,10 @@ func (c *Context) Begin(in *Input, widthPx, heightPx int, scale, dt float32) {
 	c.rScroll = rate(c.Rates.Scroll, dt)
 
 	c.hitTest()
+	c.overlayInput()
 	c.mouse()
 	c.claimFieldKeys()
+	c.overlayEscape()
 	c.stepScroll()
 
 	c.nparents = 0
@@ -485,6 +510,9 @@ func (c *Context) newBox(flags Flags, key Key) ID {
 	b.flags = flags
 
 	parent := c.Parent()
+	if c.parentless {
+		parent = 0
+	}
 	b.parent = parent
 	if parent != 0 {
 		pb := &c.boxes[parent]
@@ -497,6 +525,9 @@ func (c *Context) newBox(flags Flags, key Key) ID {
 		pb.last = id
 	}
 	c.order = append(c.order, id)
+	if parent != 0 {
+		b.ovl = c.boxes[parent].ovl
+	}
 
 	b.bg = c.sBG.take()
 	b.textColor = c.sText.take()

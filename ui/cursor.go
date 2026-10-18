@@ -71,7 +71,21 @@ func (c *Context) regions(cursors []CursorRegion, drags []DragRegion, wantCursor
 	if c.root == 0 || !(w.wantCursor || w.wantDrag) {
 		return w.cursors, w.drags
 	}
-	c.walkRegions(c.root, [4]float32{0, 0, float32(c.w), float32(c.h)}, &w)
+	win := [4]float32{0, 0, float32(c.w), float32(c.h)}
+	m := -1 // the topmost modal hides everything beneath it
+	for i := 0; i < c.nOvs; i++ {
+		if c.ovs[i].kind == OverlayModal {
+			m = i
+		}
+	}
+	if m < 0 {
+		c.walkRegions(c.root, win, &w)
+	}
+	for i := max(m, 0); i < c.nOvs; i++ {
+		if c.ovs[i].kind != OverlayTooltip {
+			c.walkRegions(c.ovs[i].id, win, &w)
+		}
+	}
 	if w.wantDrag {
 		w.drags = trimBlocks(w.drags)
 	}

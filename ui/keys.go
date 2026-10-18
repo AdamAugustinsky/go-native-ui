@@ -139,7 +139,7 @@ func (c *Context) claimFieldKeys() {
 		return
 	}
 	b := &c.boxes[v]
-	if !b.field || b.lastFrame != c.frame-1 || b.flags&Disabled != 0 {
+	if !b.field || b.lastFrame != c.frame-1 || b.flags&Disabled != 0 || c.blocked(b) {
 		return
 	}
 	c.fieldFocus = true
