@@ -261,10 +261,9 @@ type Window struct {
 	pasteOn   bool
 	pasteTag  uint64
 	pasteSeq  uint64 // counts requests, so that an answer to a replaced one is recognised
-	pasteSent bool   // the request is with the worker (a copy ahead of it goes first)
 	pasteGive int64
 	clipDue   int64
-	clip      *clipWorker // reads the clipboard for pastes; nil until the first one
+	clip      *clipWorker // does the clipboard operations; nil until the first request
 
 	// Input method state (ime_windows.go): the composition is on screen, the
 	// caret rectangle the app reported, and storage the IME calls write into.
@@ -507,14 +506,20 @@ func (w *Window) SetFrameSource(h uintptr) {
 	}
 }
 
-// Close destroys the window.
+// Close destroys the window. The clipboard worker is told to stop and Close
+// waits for it only a moment: a worker inside a native clipboard call ends when
+// the call returns. It touches nothing of the Window after Close (it holds only
+// its own state and, under its lock, the window handle, which Close zeroes
+// first), sends no message, and publishes no copy: it checks that under its
+// lock before SetClipboardData. A stale handle can at worst make an open that
+// was already under way fail or be closed unused.
 func (w *Window) Close() {
 	if w.hwnd == 0 {
 		return
 	}
 	wakeHWND.Store(0)
-	if w.clip != nil { // its thread ends with the read it may be in
-		w.clip.abandon()
+	if w.clip != nil { // ends now, or when the native call it may be in returns; publishes nothing either way
+		w.clip.close()
 		w.clip = nil
 	}
 	hwnd := w.hwnd
