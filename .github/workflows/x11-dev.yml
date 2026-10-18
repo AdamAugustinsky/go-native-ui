@@ -31,12 +31,22 @@ jobs:
           sudo apt-get update -q
           sudo apt-get install -y -q --no-install-recommends xvfb xauth libegl1 libegl-mesa0 libgl1 libopengl0 libgles2 libgl1-mesa-dri libxkbcommon0 libx11-6 fontconfig fonts-dejavu-core fonts-noto-cjk fonts-noto-color-emoji
           go build -trimpath -ldflags="-s -w" -o bin/pilot ./cmd/pilot
-      - name: variants
+      - name: strace
         run: |
-          for v in prime noprime prime noprime prime noprime; do
-            echo "=== variant $v"
-            GODEBUG=schedtrace=250 GNUI_NO_PRIME_THREADS=$([ "$v" = prime ] || echo 1) xvfb-run -a -s "-screen 0 1280x800x24" ./bin/pilot -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 200s > all.txt 2>&1 || true
-            grep -v '^SCHED' all.txt > out.json
+          sudo apt-get install -y -q strace
+          for v in 1 2 3; do
+            echo "=== run $v"
+            GNUI_NO_PRIME_THREADS=1 xvfb-run -a -s "-screen 0 1280x800x24" strace -f -ttt -e trace=clone,clone3,exit,exit_group -o strace.txt ./bin/pilot -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 200s > out.json 2>err.txt || true
             python3 -c "import json;d=json.load(open('out.json'));print([w['Mallocs'] for w in d['Windows']])"
-            grep '^SCHED' all.txt | sed -E 's/^SCHED ([0-9]+)ms: gomaxprocs=[0-9]+ idleprocs=([0-9]+) threads=([0-9]+) spinningthreads=[0-9]+ needspinning=[0-9]+ idlethreads=([0-9]+).*/\1ms idleP=\2 threads=\3 idleM=\4/' | awk '{ k=$3" "$4; if (k != last) { print; last=k } }' | head -60
+            python3 - <<'PY'
+          import re
+          t0=None
+          for l in open('strace.txt'):
+              m=re.match(r'(\d+) ([0-9.]+) (.*)',l)
+              if not m: continue
+              pid,t,rest=m.groups(); t=float(t)
+              if t0 is None: t0=t
+              if 'clone' in rest or 'exit(' in rest:
+                  print('%7.2f %s %s'%(t-t0,pid,rest[:90]))
+          PY
           done
