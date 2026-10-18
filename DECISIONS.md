@@ -618,3 +618,58 @@ A relist when the window becomes active would cover all of these cheaply.
 - **Paths.** Path resolution is a pure function with a Unix and a Windows rule set, both tested on every OS. Windows: `\` and `/`, volumes, root-relative paths on the shown volume, drive letters, drive-relative paths, UNC shares, surrounding quotes; a root is its own parent.
 
 **Why.** The model keeps per-frame work bounded and allocation-free at 1M entries. A time slice is the only bound that holds when entries are cache-cold. Whole-session windows make the gate exact without letting a real allocation through.
+
+## D28. Public packages and the widget API (phase 5, 2026-10-18)
+
+**Decision.** The framework's public surface is layered `core`/`gpu`/`text`/`platform` → `ui` → `menu` → `theme` → `theme/rex`, `icon` → `widget` → `task` → `app` (each imports only earlier ones; `fs` stays optional; `widget` never imports `app`). Widgets are immediate-mode calls on a per-window `widget.Kit` (made from the window's `ui.Context`, the text system and a theme) that build `ui` boxes and return signal structs by value; their persistent state is app-owned, pointer-free values (`TableState`, `Selection`, `ui.TextBuffer`) or `ui`'s box cache. Rex is the default theme (D17) and gets a dark variant. Every widget is keyboard-operable, shows a keyboard focus ring, has a disabled state, works in light and dark, and records its semantics (role, name, value, state) in `ui` for the phase-6 accessibility bridges.
+
+**Reasoning:**
+- Pilot and rexlook proved the bar on private code (`cmd/internal/rexkit`, hand-placed rows, columns and dividers); a framework has to offer that to every app.
+- Immediate mode keeps `ui`'s zero-allocation, pointer-free contract (D10) without retained widget objects to synchronise.
+- Recording semantics now costs little; retrofitting roles into finished widgets would mean revisiting every one.
+
+**Constraints:**
+- Steady-state 0 allocations, including widget interactions, once the working set is warm; every growable store has a `Reserve` and an overflow policy (undo history is bounded).
+- No closures or interfaces per row; labels are `string` constants or `[]byte`.
+- Flow layout by default, absolute placement still possible.
+- A key event is handled at most once: input method, then the focused text field's editing chords, then commands, then widget keys (claimed bit). Paste is asynchronous (`platform.RequestPaste` → `EvPaste` for the requesting field); copy hands the platform bytes.
+- `widget.Selection` is indexed by the app's stable item id, not the display row.
+- Contract details: [docs/PHASE5-PLAN.md](docs/PHASE5-PLAN.md), "Contracts".
+
+## D29. Menus: native on macOS, drawn on Windows and Linux (phase 5, 2026-10-18)
+
+**Decision.** One OS-independent command and menu model in package `menu` (`Command`: id, title, shortcut, app-wide or per window; enabled and checked are mutable state set by the focused window's Build). Per-window commands reach that window's next Build exactly once, in order; app-wide ones (Quit, About, New Window) reach an `app.CommandHandler` even with no window open. On macOS it becomes a native NSMenu bar (app menu with About, Hide, Quit; an Edit menu wired to the focused text field; the app's menus) and native context menus. On Windows and Linux the same model is drawn by `widget.MenuBar` and `widget.ContextMenu` in a `ui` overlay inside the window.
+
+**Reasoning:**
+- macOS apps must have the global menu bar; ⌘Q, the Edit menu, Services and key equivalents are expected there, and only NSMenu provides them.
+- Win32 menus cannot follow dark mode through a documented API and look unlike the rest of a drawn UI; Linux has no native toolkit we may use (no GTK/Qt).
+- Drawn menus inside the window need no popup surfaces. Menus that extend past the window edge (popup windows, `xdg_popup`) are later.
+
+## D30. More than one window (phase 5, 2026-10-18)
+
+**Decision.** `app` opens and closes windows at runtime. One GPU device, renderer, text system and glyph atlas are shared; each window has its own platform window, surface, `ui.Context` and kit, is paced on its own, and presents only when it has something new. On all three OSes the platform layer's single-window globals become a window registry.
+
+**What that requires:**
+- `app` owns the GPU device and shared resources; a surface owns only its swapchain or layer. Linux shares one EGL display and context (`eglMakeCurrent` per surface; `eglTerminate` at exit only).
+- Atlas textures are shared, and uploads are coordinated once for all contexts (today each `ui.Context` owns its textures and clears the text system's dirty regions).
+- One app-wide event pump waits on every window (one run loop with a display link per window; `MsgWaitForMultipleObjects` over the swapchain waitables; one Wayland or X11 connection), with window-tagged events.
+- Window changes are queued and applied at safe points between frames; close requests can be refused; the app quits on the last close (optional on macOS).
+- The frame handler that keeps drawing during live resize generalises to every native modal or tracking loop (file dialogs, menu tracking, Windows size/move), without re-entering Build or leaving the main thread.
+
+**Reasoning:** dialogs, inspectors and documents need windows; sharing the atlas keeps memory and startup flat as windows are added; per-window pacing keeps idle at 0 presents.
+
+## D31. Linux D-Bus: an in-house minimal client (phase 5, 2026-10-18)
+
+**Decision.** The xdg-desktop-portal calls (FileChooser, Settings for appearance and accent colour) and, if time allows, IBus use a small in-house D-Bus client: session bus over a Unix socket, EXTERNAL authentication, method calls, and signal matching.
+
+**Alternatives:**
+- `github.com/godbus/dbus/v5` (pure Go, BSD-2-Clause): complete and well tested, but reflection-based and larger than the handful of calls needed.
+- No D-Bus: no native file dialog or system appearance on Linux.
+
+**Reasoning:** we need about five calls and one signal; the project has two dependencies (purego, go-text) and keeps it that way unless a dependency clearly earns its place.
+
+**Constraints:**
+- Bus I/O runs on its own goroutine, never on the UI thread or the startup path; results reach the UI through a ring and a wake.
+- Portal requests subscribe to the `Response` signal before the call (the documented race), correlate by request handle, and handle cancellation, the owner window closing, a missing or disconnected portal, and version differences in Settings. Messages are decoded with size bounds.
+- Dialog parents: `x11:<XID>`, or a Wayland handle exported with xdg-foreign; an empty parent when neither is available.
+- Tests run against a real `dbus-daemon` in CI with a fake portal, including immediate responses and an absent service.
