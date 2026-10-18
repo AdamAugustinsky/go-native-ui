@@ -484,6 +484,9 @@ func (s *goSystem) Glyph(face FaceID, gid uint16, sub uint8) GlyphEntry {
 	if e, ok := s.atlas.glyphs.lookup(key); ok {
 		return e
 	}
+	if dbgGlyph {
+		dbgGlyphMiss(face, gid, sub)
+	}
 	e := s.rasterize(face, gid, sub)
 	s.atlas.glyphs.insert(key, e)
 	return e

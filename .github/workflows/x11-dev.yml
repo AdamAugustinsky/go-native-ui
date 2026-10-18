@@ -31,10 +31,11 @@ jobs:
           sudo apt-get update -q
           sudo apt-get install -y -q --no-install-recommends xvfb xauth libegl1 libegl-mesa0 libgl1 libopengl0 libgles2 libgl1-mesa-dri libxkbcommon0 libx11-6 fontconfig fonts-dejavu-core fonts-noto-cjk fonts-noto-color-emoji
           go build -trimpath -ldflags="-s -w" -o bin/pilot ./cmd/pilot
-      - name: allocsites with priming
+      - name: glyph misses
         run: |
-          for v in 1 2 3 4 5 6 7 8; do
+          for v in 1 2 3 4; do
             echo "=== run $v"
-            xvfb-run -a -s "-screen 0 1280x800x24" ./bin/pilot -bench -gate -allocsites -allow-unpaced -max-cpu-us 0 -timeout 200s > all.txt 2>err.txt || true
-            { grep -h -v '^ *$' err.txt all.txt | grep -E "object\(s\)|gonativeui|Mallocs|^  \"Windows|pilot:" | head -60; } || true
+            GNUI_XDBG=glyph xvfb-run -a -s "-screen 0 1280x800x24" ./bin/pilot -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 200s > all.txt 2>err.txt || true
+            { grep -h "GLYPHMISS" err.txt all.txt | head -40; } || true
+            { grep -h -c "GLYPHMISS" err.txt all.txt; } || true
           done
