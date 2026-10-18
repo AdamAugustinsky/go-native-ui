@@ -66,8 +66,6 @@ type farg struct {
 	b    []byte
 	fd   int
 	ifc  *wl.Interface // typed new_id
-	ver  uint32        // untyped new_id
-	name string        // untyped new_id: interface name
 }
 
 type nid uint32 // an object id argument
@@ -282,14 +280,10 @@ func (s *fakeComp) decode(sig string, types *uintptr, b []byte) []farg {
 			s.fds = s.fds[1:]
 		case 'n':
 			ti := *(*uintptr)(unsafe.Add(unsafe.Pointer(types), k*8))
-			if ti == 0 { // untyped: interface name, version, id
-				a.name = str()
-				a.ver = u32()
-				a.v = u32()
-			} else {
+			if ti != 0 {
 				a.ifc = (*wl.Interface)(ptr(ti))
-				a.v = u32()
 			}
+			a.v = u32()
 		}
 		out = append(out, a)
 		k++
@@ -438,12 +432,12 @@ func (s *fakeComp) request(o *fobj, name string, a []farg) {
 			s.global(reg, uint32(i+1), e.iface, e.ver)
 		}
 	case "wl_registry.bind":
-		ifc := s.byName[a[1].name] // bind(name, new_id) with the new_id's interface and version inline
+		ifc := s.byName[a[1].s] // bind(name, interface, version, new_id): the signature is "usun"
 		if ifc == nil {
-			s.say("WARN bind of unknown %q", a[1].name)
+			s.say("WARN bind of unknown %q", a[1].s)
 			return
 		}
-		b := s.adopt(a[1].v, ifc, a[1].ver)
+		b := s.adopt(a[3].v, ifc, a[2].v)
 		if b.name == "wl_seat" {
 			s.seat = b
 			s.event(b, "capabilities", uint32(3))
