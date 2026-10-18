@@ -18,7 +18,11 @@ import (
 // goroutine locked to its own OS thread, so a hung owner blocks that thread and
 // nothing else. It sleeps in a core.Parker (a channel's sudog would allocate),
 // takes the requests the UI thread left for it, and posts wmClip to the window
-// when it has finished one; the UI thread then collects a paste's text. Request
+// when it has finished one; the UI thread then collects a paste's text. The
+// app's window opens the clipboard from the worker's thread and so owns what a
+// copy puts there: another program's EmptyClipboard (and ours) sends the owner
+// WM_DESTROYCLIPBOARD, which must be answered by a thread that pumps messages,
+// as a thread parked in the worker's Parker would not. Request
 // and answer travel under a core.Mutex held for field updates and the final
 // copy only.
 //
@@ -32,10 +36,7 @@ const (
 	wmClip        = 0x8000 + 2 // WM_APP+2: a clipboard worker has finished a request
 	maxStuckClip  = 3          // abandoned workers allowed alive at once
 	clipOpenSleep = 2 * time.Millisecond
-	hwndMessage   = ^uintptr(2) // HWND_MESSAGE, (HWND)-3
 )
-
-var staticClass = mustUTF16("STATIC")
 
 // clipStuck counts the abandoned workers that are still in their system call.
 var clipStuck atomic.Int32
@@ -55,9 +56,8 @@ type clipReq struct {
 }
 
 type clipWorker struct {
-	park  *core.Parker
-	hwnd  uintptr // the window wmClip goes to
-	owner uintptr // the worker's own message-only window, which opens the clipboard (set by run)
+	park *core.Parker
+	hwnd uintptr // the app's window: wmClip goes to it, and it opens the clipboard and so owns what is copied
 
 	mu      core.Mutex
 	paste   clipReq // the paste waiting to be taken (kind clipNone: none)
@@ -179,12 +179,6 @@ func (c *clipWorker) collect(seq uint64, want bool, q *eventQueue) (a clipAnswer
 func (c *clipWorker) run1() {
 	runtime.LockOSThread() // the thread ends with the goroutine, stuck or not
 	defer c.park.Close()
-	// OpenClipboard with no window is one opener for every thread of the
-	// process, so it would not exclude the window's own opens; a window of its
-	// own does. A message-only window never shows and gets no messages, as the
-	// worker owns nothing on the clipboard that it has not already handed over.
-	c.owner = win32.Call(pCreateWindowExW, 0, uintptr(unsafe.Pointer(staticClass)), 0, 0, 0, 0, 0, 0, hwndMessage, 0, 0, 0)
-	defer win32.Call(pDestroyWindow, c.owner)
 	for c.park.Park() {
 		for {
 			r, st := c.take()
@@ -261,7 +255,7 @@ func (c *clipWorker) finish(r clipReq, n int, ok bool) bool {
 
 // open opens the clipboard, retrying until give.
 func (c *clipWorker) open(give int64) bool {
-	for !win32.Bool(win32.Call(pOpenClipboard, c.owner)) {
+	for !win32.Bool(win32.Call(pOpenClipboard, c.hwnd)) {
 		if nanotime() >= give {
 			return false
 		}

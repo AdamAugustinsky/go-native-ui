@@ -522,8 +522,11 @@ func TestReplacingACompletedPasteKeepsItsOwnDeadline(t *testing.T) {
 // another thread.
 func TestRequestPasteFailsAtOnceWithTooManyStuckWorkers(t *testing.T) {
 	w := openTestWindow(t)
+	w.clip.abandon() // the worker the test window's setup started
+	w.clip = nil
 	clipStuck.Store(maxStuckClip)
 	defer clipStuck.Store(0)
+	SetClipboardText([]byte("dropped"))
 	w.RequestPaste(5)
 	if w.clip != nil {
 		t.Error("a worker was started")
