@@ -2,7 +2,10 @@
 
 package platform
 
-import "unsafe"
+import (
+	"syscall"
+	"unsafe"
+)
 
 // Content-first startup on X11.
 //
@@ -73,8 +76,13 @@ func (w *Window) x11FramePixmap(f firstFrame) uintptr {
 		return 0
 	}
 	// RGBA bottom-up -> the server's BGRX top-down (little endian ZPixmap, 32 bits per pixel).
+	// (Outside the Go heap, like the frame: see gpu.Surface.RevealOnFirstFrame.)
 	n := int(f.w) * int(f.h) * 4
-	data := make([]byte, n)
+	data, err := syscall.Mmap(-1, 0, n, syscall.PROT_READ|syscall.PROT_WRITE, syscall.MAP_ANON|syscall.MAP_PRIVATE)
+	if err != nil {
+		return 0
+	}
+	defer syscall.Munmap(data)
 	row := int(f.w) * 4
 	for y := 0; y < int(f.h); y++ {
 		src := f.rgba[(int(f.h)-1-y)*row : (int(f.h)-y)*row]

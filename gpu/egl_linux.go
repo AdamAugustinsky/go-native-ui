@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"syscall"
 	"unsafe"
 
 	"github.com/ebitengine/purego"
@@ -444,10 +445,18 @@ func (s *Surface) revealFirstFrame(show func()) {
 	if !s.native.Wayland && s.w > 0 && s.h > 0 && glf.readPixels != 0 {
 		// glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, data): rows
 		// bottom first, which the platform flips.
-		buf := make([]byte, int(s.w)*int(s.h)*4)
+		// Outside the Go heap: a few MB of garbage right at startup would
+		// wake the runtime's scavenger during the first measured frames.
+		buf, err := syscall.Mmap(-1, 0, int(s.w)*int(s.h)*4, syscall.PROT_READ|syscall.PROT_WRITE, syscall.MAP_ANON|syscall.MAP_PRIVATE)
+		if err != nil {
+			show()
+			return
+		}
+		defer syscall.Munmap(buf)
 		fr.Reset().Arg32(0).Arg32(0).Arg32(uint32(s.w)).Arg32(uint32(s.h)).Arg32(0x1908).Arg32(0x1401).
 			Arg(uintptr(unsafe.Pointer(&buf[0]))).Call(glf.readPixels)
 		platform.SetFirstFrame(s.w, s.h, buf)
+		defer platform.SetFirstFrame(0, 0, nil) // buf is unmapped on return
 	}
 	show()
 }
