@@ -223,10 +223,12 @@ type Window struct {
 	rw, rh int32
 	rscale float32
 
-	opening   bool // inside Open: WM_SIZE etc. update state but push no events
-	delivered bool // q holds events already returned by Wait
-	nOut      int  // how many of them
-	visible   bool // last reported visibility
+	opening   bool   // inside Open: WM_SIZE etc. update state but push no events
+	delivered bool   // q holds events already returned by Wait
+	nOut      int    // how many of them
+	visible   bool   // last reported visibility
+	cloaked   bool   // opened with Options.Hidden and not yet shown (dwm_windows.go)
+	cloakVal  uint32 // the BOOL DwmSetWindowAttribute reads
 	minimized bool
 	tracking  bool // TrackMouseEvent(TME_LEAVE) armed
 	buttons   uint8
@@ -282,6 +284,8 @@ func Open(o Options) (*Window, error) {
 	if theWindow != nil {
 		return nil, errors.New("platform: window already open")
 	}
+	nOpenStages = 0
+	markOpen("start")
 	if pSetDpiAwarenessCtx == 0 || !win32.Bool(win32.Call(pSetDpiAwarenessCtx, ^uintptr(3))) { // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4
 		if pSetProcessDPIAware != 0 {
 			win32.Call(pSetProcessDPIAware)
@@ -330,6 +334,7 @@ func Open(o Options) (*Window, error) {
 		theWindow = nil
 		return nil, errors.New("platform: CreateWindowExW failed")
 	}
+	markOpen("window")
 	// The window may have landed on a monitor with a different DPI.
 	if pGetDpiForWindow != 0 {
 		if d := uint32(win32.Call(pGetDpiForWindow, w.hwnd)); d != 0 && d != dpi {
@@ -340,7 +345,11 @@ func Open(o Options) (*Window, error) {
 	}
 	w.scale = float32(dpi) / defaultDPI
 
+	if o.Hidden { // content-first: shown, but cloaked until the first frame is presented
+		w.cloaked = w.setCloak(true)
+	}
 	win32.Call(pShowWindow, w.hwnd, swShowNormal)
+	markOpen("shown")
 	w.updateClientSize()
 	w.rw, w.rh, w.rscale = w.w, w.h, w.scale
 	w.opening = false
@@ -477,10 +486,6 @@ func (w *Window) Size() (int32, int32, float32) { return w.w, w.h, w.scale }
 
 // Native returns the OS handles for the gpu package.
 func (w *Window) Native() Native { return Native{HWND: w.hwnd, HInstance: w.hinst} }
-
-// Show is a no-op: Options.Hidden is not implemented on this OS yet, so
-// the window is already visible.
-func (w *Window) Show() {}
 
 // SetFrameSource installs the DXGI frame-latency waitable handle.
 func (w *Window) SetFrameSource(h uintptr) {

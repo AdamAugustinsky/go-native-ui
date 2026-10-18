@@ -150,9 +150,10 @@ type Surface struct {
 
 	Trace FirstPresentTrace // Start, Acquired, Committed and Done of the first frame; OnGlass is not recorded on this backend yet
 
-	frame     Frame // Present's frame (kept here so Present doesn't allocate)
-	presented int   // frames handed to the swap chain
-	lastShown bool  // whether the last EndFrame presented
+	frame     Frame  // Present's frame (kept here so Present doesn't allocate)
+	presented int    // frames handed to the swap chain
+	lastShown bool   // whether the last EndFrame presented
+	reveal    func() // shows the window right after the first frame's present (RevealOnFirstFrame)
 
 	dxgiDev, adapter, factory, sc1 uintptr // creation-time interfaces
 
@@ -378,6 +379,11 @@ func (s *Surface) EndFrame(f *Frame) {
 	s.presented++
 	if first {
 		s.Trace.Done = platform.Now()
+		if s.reveal != nil {
+			reveal := s.reveal
+			s.reveal = nil
+			reveal()
+		}
 	}
 	*f = Frame{}
 }
@@ -396,10 +402,11 @@ func (s *Surface) Present(r, g, b, a float32) bool {
 	return s.lastShown
 }
 
-// RevealOnFirstFrame is a no-op: content-first startup isn't implemented
-// on this OS yet, and the window is shown at Open (platform Options.Hidden
-// is ignored here).
-func (s *Surface) RevealOnFirstFrame(show func()) {}
+// RevealOnFirstFrame makes the first EndFrame call show (typically the
+// platform Window's Show, for a window opened with Options.Hidden) right
+// after it presented: the window is shown but cloaked until then (DWM), so
+// no empty frame reaches the screen.
+func (s *Surface) RevealOnFirstFrame(show func()) { s.reveal = show }
 
 // FrameSource returns the DXGI frame-latency waitable handle, or 0.
 func (s *Surface) FrameSource() uintptr { return s.waitable }
