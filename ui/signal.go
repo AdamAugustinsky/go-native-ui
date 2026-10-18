@@ -24,7 +24,7 @@ func (c *Context) hitWalk(id ID, x, y float32) {
 	b := &c.boxes[id]
 	inside := x >= b.rect[0] && x < b.rect[2] && y >= b.rect[1] && y < b.rect[3]
 	if inside {
-		if b.flags&hitMask != 0 {
+		if b.flags&hitMask != 0 && b.flags&Disabled == 0 {
 			c.hotID = id
 		}
 		if b.flags&scrollMask != 0 {
@@ -64,6 +64,7 @@ func (c *Context) mouse() {
 			c.active[btn] = 0
 		}
 		if in.Pressed[btn] {
+			c.focusVisible = false // the pointer, not the keyboard, moves the focus now
 			if hot != nil && hot.flags&Clickable != 0 {
 				c.active[btn] = hot.key
 				c.pressedKey[btn] = hot.key
@@ -117,7 +118,7 @@ func (c *Context) focusOnPress() {
 		return
 	}
 	for id := c.hotID; id != 0; id = c.boxes[id].parent {
-		if c.boxes[id].flags&Focusable != 0 {
+		if c.boxes[id].flags&(Focusable|Disabled) == Focusable {
 			c.focusKey = c.boxes[id].key
 			return
 		}
