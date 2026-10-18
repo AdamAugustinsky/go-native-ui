@@ -135,6 +135,7 @@ func Open(o Options) (*Window, error) {
 		return nil, fmt.Errorf("platform: GNUI_BACKEND=%q, want wayland or x11", force)
 	}
 
+	primeThreads()
 	*w = Window{q: newEventQueue(), efd: -1}
 	w.clip.init()
 	efd, _, errno := syscall.RawSyscall(syscall.SYS_EVENTFD2, 0, syscall.O_NONBLOCK|syscall.O_CLOEXEC, 0)

@@ -33,8 +33,8 @@ jobs:
           go build -trimpath -ldflags="-s -w" -o bin/pilot ./cmd/pilot
       - name: variants
         run: |
-          for v in base np nf base np nf; do
+          for v in prime noprime nc-noprime prime noprime nc-noprime prime noprime nc-noprime; do
             echo "=== variant $v"
-            GNUI_XDBG=$v xvfb-run -a -s "-screen 0 1280x800x24" ./bin/pilot -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 200s > out.json 2>err.txt || true
+            GNUI_XDBG=${v%%-*} GNUI_NO_PRIME_THREADS=$([ "$v" = prime ] || echo 1) xvfb-run -a -s "-screen 0 1280x800x24" ./bin/pilot -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 200s > out.json 2>err.txt || true
             python3 -c "import json;d=json.load(open('out.json'));print([w['Mallocs'] for w in d['Windows']])"
           done

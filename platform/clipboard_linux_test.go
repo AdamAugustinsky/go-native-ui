@@ -174,7 +174,7 @@ func TestWaylandOwnership(t *testing.T) {
 // nothing once warm (the compositor is another process, so only this
 // process's allocations count).
 func TestWaylandClipboardNoAlloc(t *testing.T) {
-	_, w := focused(t, "")
+	f, w := focused(t, "")
 	text := []byte(bigText(2000))
 	step := func() {
 		SetClipboardText(text)
@@ -192,6 +192,11 @@ func TestWaylandClipboardNoAlloc(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		step()
 	}
+	// Every copy is a request the compositor logs, and the harness goroutine
+	// that reads the log allocates a string per line, in this process. Silence
+	// the log: what is measured is the platform's own code.
+	f.do("quiet")
+	f.wait("OK quiet", 3*time.Second)
 	if n := testing.AllocsPerRun(50, step); n != 0 {
 		t.Errorf("copy + own paste allocate %.1f times per round, want 0", n)
 	}
