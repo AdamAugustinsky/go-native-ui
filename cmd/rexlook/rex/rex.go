@@ -47,7 +47,7 @@ import (
 const (
 	WindowWidthPt  = 1057
 	WindowHeightPt = 639
-	TitlebarPt     = 46 // the Rex theme's TitlebarH (TestTitlebarMatchesTheme)
+	TitlebarPt     = 46 // the Rex theme's TitlebarH (TestTitlebarAndIconsMatchTheme)
 )
 
 // TextSystem is what the scene needs from the text system: shaping through
