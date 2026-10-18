@@ -654,9 +654,11 @@ func (s *fakeComp) command(line string) {
 		if s.ptr != nil {
 			s.event(s.ptr, "motion", uint32(0), fx(num(0)), fx(num(1)))
 		}
-	case "button": // button code, 1 = down
+	case "button": // button code, 1 = down, time in ms
 		if s.ptr != nil {
-			s.event(s.ptr, "button", s.nextSerial(), uint32(0), uint32(num(0)), uint32(num(1)))
+			ser := s.nextSerial()
+			s.say("SERIAL %d", ser)
+			s.event(s.ptr, "button", ser, uint32(num(2)), uint32(num(0)), uint32(num(1)))
 		}
 	case "ext-copy": // another application copies arg
 		s.extText = []byte(arg)

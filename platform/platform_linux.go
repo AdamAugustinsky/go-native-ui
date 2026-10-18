@@ -65,6 +65,9 @@ type Window struct {
 	drags dragMap   // SetDragRegions
 	clip  clipboard // clipboard_linux.go
 
+	resizes  []ResizeRegion // SetResizeRegions
+	closeReq bool           // RequestClose: EvClose at the next Wait
+
 	// Pointer: the app's cursor map, where the pointer is, and the shape shown.
 	cur        cursorMap
 	ptrIn      bool
@@ -179,6 +182,10 @@ func Open(o Options) (*Window, error) {
 func (w *Window) Wait(timeoutNs int64) []Event {
 	w.q.reset()
 	w.clipDeliver()
+	if w.closeReq {
+		w.closeReq = false
+		w.q.push(Event{Kind: EvClose, Time: nanotime()})
+	}
 	if w.wl {
 		w.waitWayland(timeoutNs)
 	} else {
