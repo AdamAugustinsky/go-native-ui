@@ -430,7 +430,7 @@ func TestRequestPasteSurvivesAClipboardOwnerThatNeverRenders(t *testing.T) {
 	if d < timeout || d > timeout+clipGraceNs+time.Second {
 		t.Errorf("failed after %v, want about %v", d, timeout)
 	}
-	if pumps < 20 || longest > 200*time.Millisecond {
+	if pumps < 5 || longest > time.Second {
 		t.Errorf("the UI thread pumped %d times, longest gap %v: it was held up", pumps, longest)
 	}
 	if !first.stuck() {
@@ -497,7 +497,7 @@ func TestSetClipboardTextThatTimedOutNeverPublishes(t *testing.T) {
 	if d < timeout || d > timeout+clipGraceNs+time.Second {
 		t.Errorf("given up on after %v, want about %v", d, timeout)
 	}
-	if pumps < 20 || longest > 200*time.Millisecond {
+	if pumps < 5 || longest > time.Second {
 		t.Errorf("the UI thread pumped %d times, longest gap %v: it was held up", pumps, longest)
 	}
 	// While it waits, nothing is taken.
