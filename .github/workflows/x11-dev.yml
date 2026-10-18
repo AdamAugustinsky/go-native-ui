@@ -31,12 +31,11 @@ jobs:
           sudo apt-get update -q
           sudo apt-get install -y -q --no-install-recommends xvfb xauth libegl1 libegl-mesa0 libgl1 libopengl0 libgles2 libgl1-mesa-dri libxkbcommon0 libx11-6 fontconfig fonts-dejavu-core fonts-noto-cjk fonts-noto-color-emoji
           go build -trimpath -ldflags="-s -w" -o bin/pilot ./cmd/pilot
-      - name: fine schedtrace
+      - name: allocsites with priming
         run: |
-          for v in prime noprime prime noprime prime noprime; do
-            echo "=== variant $v"
-            GODEBUG=schedtrace=10 GNUI_NO_PRIME_THREADS=$([ "$v" = prime ] || echo 1) xvfb-run -a -s "-screen 0 1280x800x24" ./bin/pilot -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 200s > all.txt 2>&1 || true
-            grep -v '^SCHED' all.txt > out.json
-            python3 -c "import json;d=json.load(open('out.json'));print([w['Mallocs'] for w in d['Windows']], 'last SCHED:', open('all.txt').read().count('SCHED'))"
-            grep '^SCHED' all.txt | sed -E 's/^SCHED ([0-9]+)ms: gomaxprocs=[0-9]+ idleprocs=([0-9]+) threads=([0-9]+) spinningthreads=([0-9]+) needspinning=[0-9]+ idlethreads=([0-9]+).*/\1ms idleP=\2 threads=\3 spin=\4 idleM=\5/' | awk '{ split($3,a,"="); split($5,b,"="); if (a[2] != lt || b[2] <= 1) { print; lt=a[2] } }' | head -40
+          for v in 1 2 3 4 5 6; do
+            echo "=== run $v"
+            xvfb-run -a -s "-screen 0 1280x800x24" ./bin/pilot -bench -gate -allocsites -allow-unpaced -max-cpu-us 0 -timeout 200s > all.txt 2>err.txt || true
+            python3 -c "import json;d=json.load(open('all.txt'));print([w['Mallocs'] for w in d['Windows']])" 2>/dev/null || true
+            grep -v '^ *$' err.txt | head -60
           done
