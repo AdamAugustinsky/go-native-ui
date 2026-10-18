@@ -1,0 +1,44 @@
+name: x11-dev
+on:
+  push:
+    branches: [p5-x11alloc]
+    paths: ['.github/workflows/x11-dev.yml', 'platform/**']
+jobs:
+  pilot:
+    name: pilot x11 ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: amd64, runner: ubuntu-24.04 }
+          - { arch: arm64, runner: ubuntu-24.04-arm }
+    env:
+      CGO_ENABLED: "0"
+      LIBGL_ALWAYS_SOFTWARE: "1"
+      GNUI_BACKEND: x11
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: install
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends xvfb xauth libegl1 libegl-mesa0 libgl1 libopengl0 libgles2 libgl1-mesa-dri libxkbcommon0 libx11-6 fontconfig fonts-dejavu-core fonts-noto-cjk fonts-noto-color-emoji
+          go build -trimpath -ldflags="-s -w" -o bin/pilot ./cmd/pilot
+      - name: variants
+        run: |
+          for v in base np nf base np nf; do
+            echo "=== variant $v"
+            GNUI_XDBG=$v xvfb-run -a -s "-screen 0 1280x800x24" ./bin/pilot -bench -allow-unpaced -max-cpu-us 0 -timeout 200s > out.json 2>err.txt || true
+            python3 - <<'PY'
+          import json
+          d=json.load(open('out.json'))
+          print([w['Mallocs'] for w in d['Windows']])
+          PY
+          done

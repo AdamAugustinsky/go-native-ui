@@ -3,6 +3,7 @@
 package platform
 
 import (
+	"os"
 	"unsafe"
 )
 
@@ -118,8 +119,14 @@ func (x *x11) pasteTarget(n int) uintptr {
 
 func (w *Window) x11Publish() {
 	x := &w.x
+	dbg := os.Getenv("GNUI_XDBG")
+	if dbg == "np" {
+		return
+	}
 	fr.Call4(xf.setSelectionOwner, x.dpy, x.aClipboard, x.win, 0)
-	fr.Call1(xf.flush, x.dpy)
+	if dbg != "nf" {
+		fr.Call1(xf.flush, x.dpy)
+	}
 }
 
 func (w *Window) x11SelectionClear() {
