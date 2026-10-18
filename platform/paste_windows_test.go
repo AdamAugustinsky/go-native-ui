@@ -13,6 +13,7 @@ import (
 	"time"
 	"unsafe"
 
+	"gonativeui/core"
 	"gonativeui/internal/win32"
 )
 
@@ -256,8 +257,8 @@ func TestRequestPasteFailsWhenTheClipboardStaysBusy(t *testing.T) {
 	if w.clipPending() {
 		t.Error("still waiting after the failure")
 	}
-	if n := clipStuck.Load(); n != 0 {
-		t.Errorf("%d stuck workers after a clipboard that was only busy", n)
+	if w.clip.stuck() {
+		t.Error("the worker is stuck after a clipboard that was only busy")
 	}
 }
 
@@ -372,10 +373,28 @@ func hungOwner(t *testing.T, w *Window) (release func()) {
 	return func() { once.Do(func() { close(stop) }); <-done }
 }
 
+// pumpUntil keeps the window pumping until cond holds or d has passed, and
+// reports whether it held, how many times the window pumped and the longest
+// time between two pumps (a UI thread that is held up shows there).
+func pumpUntil(w *Window, d time.Duration, cond func() bool) (ok bool, pumps int, longest time.Duration) {
+	last := time.Now()
+	for end := last.Add(d); time.Now().Before(end); {
+		if cond() {
+			return true, pumps, longest
+		}
+		w.Wait(int64(5 * time.Millisecond))
+		pumps++
+		longest = max(longest, time.Since(last))
+		last = time.Now()
+	}
+	return cond(), pumps, longest
+}
+
 // A clipboard owner that never renders its text cannot stop the UI thread: the
 // request returns at once, the window keeps pumping, the paste fails within
-// its bound, the next request gets a new worker, and once the owner lets go
-// pastes work again.
+// its bound. While the worker waits for the owner, a request made fails at
+// once and a copy is dropped, with no second worker; once the owner lets go the
+// same worker serves the clipboard again.
 func TestRequestPasteSurvivesAClipboardOwnerThatNeverRenders(t *testing.T) {
 	w := openTestWindow(t)
 	const timeout = 300 * time.Millisecond
@@ -394,7 +413,7 @@ func TestRequestPasteSurvivesAClipboardOwnerThatNeverRenders(t *testing.T) {
 	first := w.clip
 	var got Event
 	pumps, longest, last := 0, time.Duration(0), time.Now()
-	for end := start.Add(5 * time.Second); got.Kind != EvPaste && time.Now().Before(end); {
+	for end := last.Add(5 * time.Second); got.Kind != EvPaste && time.Now().Before(end); {
 		for _, e := range w.Wait(int64(5 * time.Millisecond)) {
 			if e.Kind == EvPaste {
 				got = e
@@ -414,39 +433,46 @@ func TestRequestPasteSurvivesAClipboardOwnerThatNeverRenders(t *testing.T) {
 	if pumps < 20 || longest > 200*time.Millisecond {
 		t.Errorf("the UI thread pumped %d times, longest gap %v: it was held up", pumps, longest)
 	}
-	if clipStuck.Load() != 1 || w.clip != nil {
-		t.Errorf("the stuck worker was not abandoned: %d stuck, worker %v", clipStuck.Load(), w.clip)
+	if !first.stuck() {
+		t.Fatal("the worker is not stuck behind the owner")
 	}
 
-	// The next request does not queue behind the stuck worker.
+	// Nothing queues behind it, and no second worker comes.
+	start = time.Now()
 	w.RequestPaste(2)
-	if w.clip == nil || w.clip == first {
-		t.Errorf("the next request did not get a new worker")
+	var failed []Event
+	for _, e := range w.q.ev {
+		if e.Kind == EvPaste {
+			failed = append(failed, e)
+		}
 	}
-	if e := waitPaste(w, 5*time.Second); e.Tag != 2 || e.Flags&FlagFailed == 0 {
-		t.Errorf("second request: %+v", e)
+	if len(failed) != 1 || failed[0].Tag != 2 || failed[0].Flags&FlagFailed == 0 || time.Since(start) > 100*time.Millisecond {
+		t.Errorf("a request made while the worker is stuck: %+v after %v, want a failure at once", failed, time.Since(start))
+	}
+	SetClipboardText([]byte("dropped while stuck"))
+	if first.copyReq.kind != clipNone {
+		t.Error("a copy made while the worker is stuck was queued")
+	}
+	if w.clip != first {
+		t.Error("a second worker was started")
 	}
 
-	// The owner answers: the stuck worker ends, and a normal round trip works.
+	// The owner answers: the same worker serves the clipboard again.
 	release()
-	for end := time.Now().Add(5 * time.Second); clipStuck.Load() != 0 && time.Now().Before(end); {
-		w.Wait(int64(10 * time.Millisecond))
-	}
-	if n := clipStuck.Load(); n != 0 {
-		t.Fatalf("%d workers still stuck after the owner answered", n)
+	if ok, _, _ := pumpUntil(w, 8*time.Second, func() bool { return !first.stuck() }); !ok {
+		t.Fatal("the worker is still stuck after the owner answered")
 	}
 	SetClipboardText([]byte("after the hung owner"))
-	if e, text := pasteOf(t, w, 3, 3*time.Second); e.Flags != 0 || text != "after the hung owner" {
-		t.Errorf("round trip afterwards: %+v %q", e, text)
+	if e, text := pasteOf(t, w, 3, 3*time.Second); e.Flags != 0 || text != "after the hung owner" || w.clip != first {
+		t.Errorf("round trip afterwards: %+v %q (same worker: %v)", e, text, w.clip == first)
 	}
 }
 
 // A previous clipboard owner that never answers WM_DESTROYCLIPBOARD (its
 // thread does not pump) makes EmptyClipboard wait. That wait is the worker's:
-// SetClipboardText returns at once, the window keeps pumping, the stuck worker
-// is abandoned when the copy is overdue, the next copy goes to a new worker,
-// and once the owner lets go a copy and a paste work again.
-func TestSetClipboardTextSurvivesAClipboardOwnerThatNeverAnswers(t *testing.T) {
+// SetClipboardText returns at once, the window keeps pumping, and the copy that
+// ran out of time is never published when EmptyClipboard finally returns.
+func TestSetClipboardTextThatTimedOutNeverPublishes(t *testing.T) {
 	w := openTestWindow(t)
 	const timeout = 300 * time.Millisecond
 	shortPasteTimeout(t, timeout)
@@ -456,54 +482,83 @@ func TestSetClipboardTextSurvivesAClipboardOwnerThatNeverAnswers(t *testing.T) {
 	watchdog := time.AfterFunc(20*time.Second, func() { panic("SetClipboardText blocked the UI thread on the previous clipboard owner") })
 	defer watchdog.Stop()
 
+	const abandoned = "copy that ran out of time"
 	start := time.Now()
-	b := []byte("copy behind a hung owner")
-	SetClipboardText(b)
+	SetClipboardText([]byte(abandoned))
 	if d := time.Since(start); d > 100*time.Millisecond {
 		t.Errorf("SetClipboardText took %v", d)
 	}
-	first := w.clip
-	pumps, longest, last := 0, time.Duration(0), time.Now()
-	for end := start.Add(5 * time.Second); clipStuck.Load() == 0 && time.Now().Before(end); {
-		w.Wait(int64(5 * time.Millisecond))
-		pumps++
-		longest = max(longest, time.Since(last))
-		last = time.Now()
-	}
+	c := w.clip
+	ok, pumps, longest := pumpUntil(w, 5*time.Second, c.stuck)
 	d := time.Since(start)
-	if clipStuck.Load() != 1 || w.clip != nil {
-		t.Fatalf("the worker stuck in EmptyClipboard was not abandoned (%d stuck, worker %v) after %v", clipStuck.Load(), w.clip, d)
+	if !ok {
+		t.Fatalf("the worker waiting in EmptyClipboard was not given up on after %v", d)
 	}
 	if d < timeout || d > timeout+clipGraceNs+time.Second {
-		t.Errorf("abandoned after %v, want about %v", d, timeout)
+		t.Errorf("given up on after %v, want about %v", d, timeout)
 	}
 	if pumps < 20 || longest > 200*time.Millisecond {
 		t.Errorf("the UI thread pumped %d times, longest gap %v: it was held up", pumps, longest)
 	}
-
-	// The next copy goes to a new worker, not behind the stuck one.
-	SetClipboardText(b)
-	if w.clip == nil || w.clip == first {
-		t.Error("the next copy did not get a new worker")
+	// While it waits, nothing is taken.
+	SetClipboardText([]byte("second copy while stuck"))
+	if c.copyReq.kind != clipNone || w.clip != c {
+		t.Error("a copy made while the worker is stuck was queued, or a second worker started")
 	}
 
+	// The owner answers after the deadline: EmptyClipboard returns and the
+	// abandoned copy must not be put on the clipboard.
 	release()
-	for end := time.Now().Add(5 * time.Second); clipStuck.Load() != 0 && time.Now().Before(end); {
-		w.Wait(int64(10 * time.Millisecond))
+	if ok, _, _ := pumpUntil(w, 8*time.Second, func() bool { return !c.stuck() }); !ok {
+		t.Fatal("the worker is still stuck after the owner answered")
 	}
-	if n := clipStuck.Load(); n != 0 {
-		t.Fatalf("%d workers still stuck after the owner answered", n)
+	if got := Clipboard(); strings.Contains(got, "ran out of time") || strings.Contains(got, "while stuck") {
+		t.Errorf("the clipboard holds %q: a copy that timed out was published", got)
 	}
-	SetClipboardText([]byte("after the hung owner"))
-	if e, text := pasteOf(t, w, 3, 3*time.Second); e.Flags != 0 || text != "after the hung owner" {
-		t.Errorf("copy and paste afterwards: %+v %q", e, text)
+	SetClipboardText([]byte("fresh copy"))
+	if e, text := pasteOf(t, w, 4, 3*time.Second); e.Flags != 0 || text != "fresh copy" || w.clip != c {
+		t.Errorf("copy and paste afterwards: %+v %q (same worker: %v)", e, text, w.clip == c)
+	}
+}
+
+// Close while the worker waits in a native call returns promptly, and when the
+// call returns the worker ends without publishing the copy it was running.
+func TestCloseWhileTheWorkerIsStuckPublishesNothing(t *testing.T) {
+	w := openTestWindow(t)
+	release := hungOwner(t, w)
+	defer release()
+	watchdog := time.AfterFunc(20*time.Second, func() { panic("Close waited for the stuck clipboard worker") })
+	defer watchdog.Stop()
+
+	SetClipboardText([]byte("copy in flight at Close"))
+	c := w.clip
+	if ok, _, _ := pumpUntil(w, 2*time.Second, func() bool {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return c.run.kind == clipCopy
+	}); !ok {
+		t.Fatal("the worker did not start the copy")
+	}
+	time.Sleep(50 * time.Millisecond) // in EmptyClipboard, waiting for the owner
+	start := time.Now()
+	w.Close()
+	if d := time.Since(start); d > time.Second {
+		t.Errorf("Close took %v with the worker stuck", d)
+	}
+	release() // the owner answers; the worker returns from EmptyClipboard
+	for end := time.Now().Add(8 * time.Second); !c.exited.Load() && time.Now().Before(end); time.Sleep(5 * time.Millisecond) {
+	}
+	if !c.exited.Load() {
+		t.Fatal("the worker did not end after the call returned")
+	}
+	if got := Clipboard(); strings.Contains(got, "in flight") {
+		t.Errorf("the clipboard holds %q: the worker published after Close", got)
 	}
 }
 
 // A paste that completed but whose notification the UI thread has not handled
-// yet is replaced by a newer one: the newer paste keeps its own time limit. It
-// must not be judged by the older one's (which has passed), nor cost a new
-// worker.
+// yet is replaced by a newer one: the newer paste keeps its own time limit and
+// is answered by the same worker, though the older one's limit has passed.
 func TestReplacingACompletedPasteKeepsItsOwnDeadline(t *testing.T) {
 	w := openTestWindow(t)
 	shortPasteTimeout(t, 150*time.Millisecond)
@@ -532,32 +587,51 @@ func TestReplacingACompletedPasteKeepsItsOwnDeadline(t *testing.T) {
 	if len(got) != 1 || got[0].Tag != 2 || got[0].Flags != 0 || string(w.Text(got[0].Text)) != "text for B" {
 		t.Fatalf("answers %+v, want B's text", got)
 	}
-	if w.clip != c || clipStuck.Load() != 0 {
-		t.Errorf("a new worker was started for B (worker changed: %v, %d stuck)", w.clip != c, clipStuck.Load())
+	if w.clip != c || c.stuck() {
+		t.Error("B was judged by A's limit")
 	}
 }
 
-// With maxStuckClip workers stuck, a request fails at once instead of adding
-// another thread.
-func TestRequestPasteFailsAtOnceWithTooManyStuckWorkers(t *testing.T) {
-	w := openTestWindow(t)
-	w.clip.abandon() // the worker the test window's setup started
-	w.clip = nil
-	clipStuck.Store(maxStuckClip)
-	defer clipStuck.Store(0)
-	SetClipboardText([]byte("dropped"))
-	w.RequestPaste(5)
-	if w.clip != nil {
-		t.Error("a worker was started")
+// expire judges the request being run, and each waiting one, by its own limit:
+// one that has not run out of time is not cancelled because an earlier request
+// did, and one that is past its limit is, whatever came before it.
+func TestExpireJudgesEachRequestByItsOwnLimit(t *testing.T) {
+	const grace = clipGraceNs
+	late := int64(1000 + grace + 1)
+	c := &clipWorker{park: core.NewParker()}
+	defer c.park.Close()
+
+	c.run = clipRun{clipReq: clipReq{kind: clipPaste, seq: 2, give: late + 500}} // B, which started when A finished
+	c.copyReq = clipReq{kind: clipCopy, give: 1000}                              // a copy waiting past its limit
+	c.paste = clipReq{kind: clipPaste, seq: 3, give: late + 500}
+	if c.expire(late) {
+		t.Error("the running request was cancelled by an older limit")
 	}
-	var pastes []Event
-	for _, e := range w.Pending() {
-		if e.Kind == EvPaste {
-			pastes = append(pastes, e)
-		}
+	if c.copyReq.kind != clipNone {
+		t.Error("a waiting copy past its limit was kept")
 	}
-	if len(pastes) != 1 || pastes[0].Flags&FlagFailed == 0 || pastes[0].Tag != 5 {
-		t.Errorf("EvPaste events %+v, want one failed one", pastes)
+	if c.paste.kind == clipNone {
+		t.Error("a waiting paste within its limit was dropped")
+	}
+	if d := c.due(); d != late+500+grace {
+		t.Errorf("due %d, want %d", d, late+500+grace)
+	}
+
+	c.run.give = 1000 // the running request is past its limit
+	c.copyReq = clipReq{kind: clipCopy, give: late + 500}
+	if !c.expire(late) || !c.stuck() {
+		t.Error("a running request past its limit was not cancelled")
+	}
+	if c.copyReq.kind != clipNone || c.paste.kind != clipNone {
+		t.Error("requests were left waiting behind a stuck call")
+	}
+	if c.submitPaste(9, late+500) || c.submitCopy([]byte("x"), late+500) {
+		t.Error("a stuck worker took a request")
+	}
+
+	c.run = clipRun{clipReq: clipReq{kind: clipCopy, give: 1000}, committed: true} // handed to the system: past cancelling
+	if c.expire(late) {
+		t.Error("a committed copy was cancelled")
 	}
 }
 
