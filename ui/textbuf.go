@@ -13,9 +13,13 @@ import (
 // the field needs between frames (drag mode, caret blink origin).
 //
 // The app owns it and passes it to Context.TextField every frame. A
-// TextBuffer holds one slice and no other pointers; its storage grows only
+// TextBuffer holds a few slices and no other pointers; its storage grows only
 // past its high-water mark, so editing allocates nothing in steady state.
 // The zero value is an empty buffer. It must not be copied once in use.
+//
+// The buffer keeps an undo history of the edits made to it (Undo, Redo,
+// SetUndoLimit). Replacing the whole text (SetString, SetBytes, Reset) empties
+// the history.
 type TextBuffer struct {
 	// Max is the largest text size in bytes (0 = unlimited). Input that would
 	// exceed it is cut at a character boundary.
@@ -23,6 +27,8 @@ type TextBuffer struct {
 
 	b             []byte
 	tmp           []byte // sanitized input waiting to be inserted
+	undo          undoLog
+	now           int64 // Input.Time of the frame being applied (set by TextField), 0 without a clock
 	caret, anchor int
 	rev           uint32 // changes with every change of the text
 
@@ -58,6 +64,7 @@ func (t *TextBuffer) Rev() uint32 { return t.rev }
 
 // Reset empties the text.
 func (t *TextBuffer) Reset() {
+	t.undo.clear()
 	t.b = t.b[:0]
 	t.caret, t.anchor, t.scroll = 0, 0, 0
 	t.rev++
@@ -70,6 +77,7 @@ func (t *TextBuffer) SetString(s string) { t.SetBytes(unsafeBytes(s)) }
 
 // SetBytes is SetString for a byte slice (which it does not keep).
 func (t *TextBuffer) SetBytes(p []byte) {
+	t.undo.clear()
 	room := -1
 	if t.Max > 0 {
 		room = t.Max
@@ -101,6 +109,7 @@ func (t *TextBuffer) Selected() []byte {
 // SetSelection selects from anchor to caret (byte offsets, clamped and moved
 // back to character cluster boundaries).
 func (t *TextBuffer) SetSelection(anchor, caret int) {
+	t.breakRun()
 	t.anchor, t.caret = t.snap(anchor), t.snap(caret)
 }
 
@@ -108,7 +117,10 @@ func (t *TextBuffer) SetSelection(anchor, caret int) {
 func (t *TextBuffer) SetCaret(off int) { t.SetSelection(off, off) }
 
 // SelectAll selects the whole text.
-func (t *TextBuffer) SelectAll() { t.anchor, t.caret = 0, len(t.b) }
+func (t *TextBuffer) SelectAll() {
+	t.breakRun()
+	t.anchor, t.caret = 0, len(t.b)
+}
 
 func (t *TextBuffer) snap(off int) int {
 	return text.GraphemeStart(t.b, min(max(off, 0), len(t.b)))
@@ -129,6 +141,14 @@ func (t *TextBuffer) Insert(p []byte) {
 		return
 	}
 	t.replace(lo, hi, t.tmp)
+}
+
+// insertSealed is Insert as a step of its own (a paste): it neither continues
+// the typing run before it nor is continued by the typing after it.
+func (t *TextBuffer) insertSealed(p []byte) {
+	t.breakRun()
+	t.Insert(p)
+	t.breakRun()
 }
 
 // InsertString is Insert for a string.
@@ -172,6 +192,13 @@ func cleanText(dst, p []byte, room int) []byte {
 // cluster the typed text became part of), back after a deletion (it does not
 // jump over text that was not touched).
 func (t *TextBuffer) replace(lo, hi int, ins []byte) {
+	t.record(lo, hi, ins)
+	t.splice(lo, hi, ins)
+	t.noteAfter()
+}
+
+// splice is replace without the history.
+func (t *TextBuffer) splice(lo, hi int, ins []byte) {
 	old := len(t.b)
 	n := old - (hi - lo) + len(ins)
 	if n > cap(t.b) {
@@ -213,6 +240,7 @@ func (t *TextBuffer) deleteSelection() bool {
 
 // moveTo puts the caret at off; without extend the selection collapses.
 func (t *TextBuffer) moveTo(off int, extend bool) {
+	t.breakRun()
 	t.caret = off
 	if !extend {
 		t.anchor = off
