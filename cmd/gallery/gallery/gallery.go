@@ -7,8 +7,10 @@
 // drawn normal, hovered, pressed, focused and disabled), live controls
 // (text entry with copy, cut, paste and undo, choices, buttons with tooltips,
 // menus, a dialog, tabs and progress), and the table with a context menu on
-// its rows. Toggle Dark Mode (the View menu, or the shortcut) crossfades
-// between the two modes.
+// its rows. The window follows the system's light or dark mode and accent
+// colour; the Appearance select (System, Light, Dark) or ⇧⌘D (the View menu's
+// Cycle Appearance, which goes System, Light, Dark and round again) changes
+// that, and a change crossfades.
 package gallery
 
 import (
@@ -51,8 +53,9 @@ func Config() app.Config {
 type Options struct {
 	// Rows is the number of rows of the table (DefaultRows when zero).
 	Rows int
-	// Mode is the light or dark mode the window starts in.
-	Mode theme.Mode
+	// Preference is the mode the window shows: the system's (the zero value),
+	// or a forced light or dark.
+	Preference theme.Preference
 	// Traffic makes the titlebar draw the macOS traffic lights (offscreen
 	// renders; in a window the system draws them).
 	Traffic bool
@@ -82,7 +85,7 @@ type Gallery struct {
 	k     *Kit
 	c     *ui.Context
 	model *menu.Model
-	mode  theme.Mode
+	pref  theme.Preference
 
 	// the table
 	rows   int
@@ -136,12 +139,12 @@ func New(o Options) (*Gallery, error) {
 	if err != nil {
 		return nil, err
 	}
-	g := &Gallery{opt: o, model: m, mode: o.Mode, rows: o.Rows}
+	g := &Gallery{opt: o, model: m, pref: o.Preference, rows: o.Rows}
 	g.cols = [4]widget.Column{
-		{ID: colID, Title: "ID", Width: 56, MinWidth: 48, Align: ui.AlignRight, Sortable: true},
-		{ID: colName, Title: "Name", Width: 100, MinWidth: 64, Sortable: true},
-		{ID: colKind, Title: "Kind", Width: 76, MinWidth: 48},
-		{ID: colSize, Title: "Size", Width: 60, MinWidth: 44, Align: ui.AlignRight, Fill: true},
+		{ID: colID, Title: "ID", Width: 52, MinWidth: 48, Align: ui.AlignRight, Sortable: true},
+		{ID: colName, Title: "Name", Width: 92, MinWidth: 64, Sortable: true},
+		{ID: colKind, Title: "Kind", Width: 88, MinWidth: 80},
+		{ID: colSize, Title: "Size", Width: 56, MinWidth: 44, Align: ui.AlignRight, Fill: true},
 	}
 	g.table.Sel.Reserve(g.rows)
 	g.table.Sort = widget.SortState{Active: true, Column: colID}
@@ -184,7 +187,7 @@ func (g *Gallery) Attach(c *ui.Context, ts widget.TextSystem) {
 	g.c = c
 	g.k = widget.NewKit(c, ts, rex.Theme())
 	g.k.SetMenu(g.model)
-	g.k.SetMode(g.mode)
+	g.k.SetPreference(g.pref)
 	g.k.ReduceMotion = g.opt.Still
 }
 
@@ -196,13 +199,21 @@ func (g *Gallery) WindowPx() (w, h int, scale float32) { return g.winW, g.winH, 
 func (g *Gallery) Kit() *Kit { return g.k }
 
 // Mode is the mode the gallery shows (during a crossfade, the one it fades to).
-func (g *Gallery) Mode() theme.Mode { return g.mode }
+func (g *Gallery) Mode() theme.Mode {
+	if g.k == nil {
+		return theme.Light
+	}
+	return g.k.Mode()
+}
 
-// SetMode sets the mode; the palette crossfades to it.
-func (g *Gallery) SetMode(m theme.Mode) {
-	g.mode = m
+// Preference is the mode the gallery has been asked to show.
+func (g *Gallery) Preference() theme.Preference { return g.pref }
+
+// SetPreference sets the mode to show; the palette crossfades to it.
+func (g *Gallery) SetPreference(p theme.Preference) {
+	g.pref = p
 	if g.k != nil {
-		g.k.SetMode(m)
+		g.k.SetPreference(p)
 	}
 }
 
@@ -246,14 +257,13 @@ func (g *Gallery) Build(c *ui.Context) {
 // commands applies the commands of the frame.
 func (g *Gallery) commands(c *ui.Context) {
 	k := g.k
-	if k.Command(cmdToggleDark) {
-		g.SetMode(1 - g.mode)
+	if k.Command(cmdCycleAppearance) {
+		g.SetPreference((g.pref + 1) % 3) // System, Light, Dark, System …
 	}
 	if k.Command(cmdRowNumbers) {
 		g.showRows = !g.showRows
 	}
 	g.model.SetChecked(cmdRowNumbers, g.showRows)
-	g.model.SetChecked(cmdToggleDark, g.mode == theme.Dark)
 	g.model.SetEnabled(cmdPrint, false)
 	for _, id := range [...]menu.ID{cmdOpen, cmdSave, cmdRecent1, cmdRecent2, cmdRecent3, cmdRowOpen, cmdRowCopyPath, cmdRowInfo} {
 		if k.Command(id) {

@@ -236,14 +236,18 @@ func TestRowContextMenu(t *testing.T) {
 	}
 }
 
-// Toggling the mode crossfades: the palette is in between for some frames, then
-// settled in the other mode.
-func TestModeToggleCrossfades(t *testing.T) {
+// Cycling the appearance goes System, Light, Dark and round, and a change of
+// the mode crossfades: the palette is in between for some frames, then settled.
+func TestAppearanceCycleCrossfades(t *testing.T) {
 	r := newRig(t, Options{Still: true})
 	r.frames(5)
+	r.press('D', ui.PrimaryMod()|ui.ModShift) // System (light here) to forced light: no change of mode
+	if r.g.Preference() != theme.ForceLight || r.c.Animating() {
+		t.Fatalf("the first press gives the preference %d, animating %v", r.g.Preference(), r.c.Animating())
+	}
 	r.press('D', ui.PrimaryMod()|ui.ModShift)
 	if r.g.Mode() != theme.Dark {
-		t.Fatal("the shortcut did not switch to the dark mode")
+		t.Fatal("the second press did not switch to the dark mode")
 	}
 	if !r.c.Animating() {
 		t.Error("the mode switch does not animate")
@@ -251,6 +255,10 @@ func TestModeToggleCrossfades(t *testing.T) {
 	r.run(settle())
 	if r.c.Animating() {
 		t.Error("the crossfade never settled")
+	}
+	r.press('D', ui.PrimaryMod()|ui.ModShift)
+	if r.g.Preference() != theme.System || r.g.Mode() != theme.Light {
+		t.Errorf("the third press gives the preference %d and the mode %v, want System and light", r.g.Preference(), r.g.Mode())
 	}
 }
 
