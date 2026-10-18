@@ -29,7 +29,10 @@
 package rex
 
 import (
-	"gonativeui/cmd/internal/rexkit"
+	"gonativeui/icon"
+	"gonativeui/text"
+	"gonativeui/theme"
+	rextheme "gonativeui/theme/rex"
 	"gonativeui/ui"
 )
 
@@ -39,16 +42,21 @@ import (
 const (
 	WindowWidthPt  = 1057
 	WindowHeightPt = 639
-	TitlebarPt     = rexkit.TitlebarPt
+	TitlebarPt     = 46 // the Rex theme's TitlebarH (TestTitlebarMatchesTheme)
 )
 
 // TextSystem is what the scene needs from the text system: shaping through
 // ui.Shaper plus creating fonts. *text.System satisfies it.
-type TextSystem = rexkit.TextSystem
+type TextSystem interface {
+	ui.Shaper
+	Font(d text.FontDesc) text.FontKey
+}
+
+var _ TextSystem = (*text.System)(nil)
 
 type (
-	keyGen  = rexkit.KeyGen
-	palette = rexkit.Palette
+	keyGen  = theme.KeyGen
+	palette = rextheme.Terminal
 )
 
 // Rex is the state of the scene: the tabs and panes, animations that are not
@@ -58,9 +66,17 @@ type Rex struct {
 	// offscreen output; in a window the system draws them).
 	Traffic bool
 
-	// The shared chrome: scale, fonts on the terminal grid, icons, the
-	// background field and the pane fills.
-	rexkit.Kit
+	ts    TextSystem
+	Scale float32 // pixels per point
+	K     float32 // pixels per reference pixel (the reference is 2×)
+
+	// The Rex theme resolved for this window (fonts, metrics, palette and the
+	// chrome that draws the background, panes, dividers and titlebar), the
+	// monospace cell grid of the terminal content, and the icons.
+	th     theme.Resolved
+	cells  rextheme.Grid
+	icons  *icon.Atlas
+	accent uint32 // the system accent applied to the theme (0xRRGGBBAA; 0: the theme's own)
 
 	tabs    [maxTabs]tab
 	nTabs   int
@@ -95,14 +111,16 @@ func New(ts TextSystem, scale float32) *Rex {
 func NewApp() *Rex { return &Rex{nextUID: 1} }
 
 func (r *Rex) init(ts TextSystem, scale float32) {
-	r.Kit.Init(ts, iconSpecs[:], maxPanes, scale)
+	r.ts = ts
+	r.icons = icon.New(ts, iconSpecs[:]...)
+	r.SetScale(scale)
 	r.initTabs()
 }
 
 // AttachRenderer gives the icon atlas a texture on u (the renderer) and
 // uploads it. Call it before the first frame and again when the renderer is
-// recreated; icons draw as text glyphs until it has been called.
-func (r *Rex) AttachRenderer(u ui.Uploader) { r.IC.Attach(u) }
+// recreated; symbol icons draw nothing until it has been called.
+func (r *Rex) AttachRenderer(u ui.Uploader) { r.icons.Attach(u) }
 
 func (r *Rex) uid() uint32 {
 	r.nextUID++
@@ -156,7 +174,6 @@ func (r *Rex) Build(c *ui.Context) {
 		r.glide = false // a resize follows the window exactly
 		r.lastW, r.lastH = w, h
 	}
-	r.Fld.Build(w, h, r.K)
 
 	r.update(c)
 	r.draw(c)

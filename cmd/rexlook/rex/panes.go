@@ -1,7 +1,8 @@
 package rex
 
 import (
-	"gonativeui/cmd/internal/rexkit"
+	"gonativeui/theme"
+	rextheme "gonativeui/theme/rex"
 	"gonativeui/ui"
 )
 
@@ -34,12 +35,12 @@ var paneTitles = [...]paneTitle{
 func (r *Rex) work() [4]float32 {
 	s := r.Scale
 	W, H := float32(r.lastW), float32(r.lastH)
-	return [4]float32{rexkit.Snap(7.5 * s), rexkit.Snap(45.5 * s), W - rexkit.Snap(7.5*s), H - rexkit.Snap(7.5*s)}
+	return [4]float32{theme.Snap(7.5 * s), theme.Snap(45.5 * s), W - theme.Snap(7.5*s), H - theme.Snap(7.5*s)}
 }
 
 func (r *Rex) gutters() gutters {
 	s := r.Scale
-	return gutters{x: rexkit.Snap(7 * s), y: rexkit.Snap(7.5 * s), minW: 150 * s, minH: 100 * s}
+	return gutters{x: theme.Snap(7 * s), y: theme.Snap(7.5 * s), minW: 150 * s, minH: 100 * s}
 }
 
 func (r *Rex) drawPanes(c *ui.Context) {
@@ -100,7 +101,7 @@ func (r *Rex) drawPanes(c *ui.Context) {
 		}
 		mt = c.AnimateValue(ui.KeyN(keyMaxT, uint64(p.uid)), mt, maxRate)
 		for i := 0; i < 4; i++ {
-			d[i] = rexkit.Snap(rexkit.Lerp(d[i], work[i], mt))
+			d[i] = theme.Snap(theme.Lerp(d[i], work[i], mt))
 		}
 		r.disp[slot] = d
 
@@ -137,7 +138,7 @@ func (r *Rex) drawPanes(c *ui.Context) {
 	c.PushOpacity(fade)
 	// All shadows first, so no pane's shadow lands on a neighbour's fill.
 	for _, slot := range ord[:n] {
-		r.DrawShadow(c, t.panes[slot].uid, r.disp[slot], ft[slot], opa[slot])
+		r.th.Chrome.SurfaceShadow(c, &r.th, r.surface(t, slot, ft[slot], opa[slot]))
 	}
 	for _, slot := range ord[:n] {
 		r.drawPane(c, t, slot, r.disp[slot], ft[slot], opa[slot])
@@ -146,6 +147,12 @@ func (r *Rex) drawPanes(c *ui.Context) {
 		r.drawDividers(c, t)
 	}
 	c.PopOpacity()
+}
+
+// surface describes the pane in slot, drawn at r.disp[slot], to the chrome.
+func (r *Rex) surface(t *tab, slot int8, ft, opa float32) theme.Surface {
+	d := r.disp[slot]
+	return theme.Surface{Key: paneKey(t.panes[slot].uid), Slot: int(slot), Rect: d, Focus: ft, Opacity: opa, Top: d[1] <= r.work()[1]+0.5}
 }
 
 // drawPane builds one pane: its fill (white when focused, a translucent
@@ -157,20 +164,21 @@ func (r *Rex) drawPane(c *ui.Context, t *tab, slot int8, d [4]float32, ft, opa f
 	w, h := d[2]-d[0], d[3]-d[1]
 	key := paneKey(p.uid)
 
-	kg := r.BeginPane(c, key, int(slot), d, ft, opa, d[1] <= r.work()[1]+0.5)
+	s := r.surface(t, slot, ft, opa)
+	kg := r.th.Chrome.BeginSurface(c, &r.th, s)
 
 	// Header: process icon and title; the buttons only on the focused pane.
 	hc := 36.5 * k
-	titleCol := rexkit.Col(rexkit.MixRGB(0x606064, 0x202228, ft))
+	titleCol := theme.Col(theme.MixRGB(0x606064, 0x202228, ft))
 	pt := paneTitles[p.kind]
 	r.IconAt(c, &kg, pt.icon, 39*k, hc, titleCol)
-	avail := w - 62*k - rexkit.Lerp(20*k, 206*k, ft)
+	avail := w - 62*k - theme.Lerp(20*k, 206*k, ft)
 	if avail > 4 {
-		adv := r.Width(r.FUISemi, pt.title)
+		adv := r.Width(r.th.Font.UISemi, pt.title)
 		if adv > avail {
-			r.Put(c, &kg, r.FUISemi, pt.title, 62*k, 47*k, titleCol, avail, ui.FadeOverflowX)
+			r.Put(c, &kg, r.th.Font.UISemi, pt.title, 62*k, 47*k, titleCol, avail, ui.FadeOverflowX)
 		} else {
-			r.Put(c, &kg, r.FUISemi, pt.title, 62*k, 47*k, titleCol, adv+2, 0)
+			r.Put(c, &kg, r.th.Font.UISemi, pt.title, 62*k, 47*k, titleCol, adv+2, 0)
 		}
 	}
 	if ft > 0.02 {
@@ -191,7 +199,7 @@ func (r *Rex) drawPane(c *ui.Context, t *tab, slot int8, d [4]float32, ft, opa f
 	}
 
 	// Terminal content.
-	g := grid{r: r, c: c, kg: keyGen{Base: ui.KeyN(key, 700)}, x0: 20 * k, y0: 101 * k, pal: rexkit.MixPalette(ft), ft: ft, w: w, h: h}
+	g := grid{r: r, c: c, kg: keyGen{Base: ui.KeyN(key, 700)}, x0: 20 * k, y0: 101 * k, pal: rextheme.TerminalAt(r.th.T, ft), ft: ft, w: w, h: h}
 	switch p.kind {
 	case kindAgent:
 		g.agent()
@@ -205,16 +213,16 @@ func (r *Rex) drawPane(c *ui.Context, t *tab, slot int8, d [4]float32, ft, opa f
 		g.shell()
 	}
 
-	r.EndPane(c, &kg, d, ft)
+	r.th.Chrome.EndSurface(c, &r.th, s, kg)
 }
 
-// drawDividers builds the grab areas of the gutters between panes (rexkit.Divider).
+// drawDividers builds the grab areas of the gutters between panes (theme.Chrome.Divider).
 func (r *Rex) drawDividers(c *ui.Context, t *tab) {
 	for i := range t.nodes {
 		n := &t.nodes[i]
 		if !n.used || n.leaf {
 			continue
 		}
-		r.Divider(c, divKey(n.uid), n.axis, n.rect, n.gut)
+		r.th.Chrome.Divider(c, &r.th, divKey(n.uid), n.axis, n.rect, n.gut)
 	}
 }

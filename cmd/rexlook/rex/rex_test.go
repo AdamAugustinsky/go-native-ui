@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"gonativeui/gpu"
+	"gonativeui/icon"
+	rextheme "gonativeui/theme/rex"
 	"gonativeui/ui"
 )
 
@@ -750,6 +752,24 @@ func TestScaleChange(t *testing.T) {
 			t.Errorf("scale %v: row pitch %.3f pt, want 16", s, got)
 		}
 		h.checkLayout(WindowWidthPt, WindowHeightPt, s)
+	}
+}
+
+// The titlebar the scene is made for is the theme's, and every icon of the
+// atlas (the standard ones, then the scene's) has a size to draw at.
+func TestTitlebarAndIconsMatchTheme(t *testing.T) {
+	if got := rextheme.Theme().Metrics.TitlebarH; got != TitlebarPt {
+		t.Errorf("TitlebarPt = %d, the Rex theme's titlebar is %v pt", TitlebarPt, got)
+	}
+	h := newHarness(t, WindowWidthPt, WindowHeightPt, 2)
+	ic := h.x.icons
+	if ic.Len() != int(icon.NumStandard)+numIcons {
+		t.Fatalf("%d icons in the atlas, want %d", ic.Len(), int(icon.NumStandard)+numIcons)
+	}
+	for id := iconID(0); int(id) < ic.Len(); id++ {
+		if w, hh := ic.Size(id); w <= 0 || hh <= 0 {
+			t.Errorf("icon %d has no size", id)
+		}
 	}
 }
 
