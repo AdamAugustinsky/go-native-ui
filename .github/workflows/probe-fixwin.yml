@@ -1,0 +1,46 @@
+name: probe-fixwin
+# Temporary: Windows probes. Removed before the branch is done.
+on:
+  push:
+    branches: [p5-fixwin]
+env:
+  CGO_ENABLED: "0"
+  PKGS: ./...
+  PKGS_EXCLUDE: /probes/|/third_party/
+jobs:
+  quick:
+    name: quick ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: amd64, runner: windows-2025 }
+          - { arch: arm64, runner: windows-11-arm }
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - run: go test -count=1 -v -timeout 120s -run 'LateNative|CancelledCopy|Paste|Clipboard|Expire|Close' ./platform/ 2>&1 | grep -E "^\s*(---|ok|FAIL|panic)|_test.go" 
+  loaded:
+    name: loaded ${{ matrix.rep }}
+    runs-on: windows-11-arm
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        rep: [1, 2, 3, 4]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - run: GNUI_FS_REPORT=$RUNNER_TEMP/fs-report.txt go test -count=1 -v $(go list $PKGS | grep -v -E "$PKGS_EXCLUDE") 2>&1 | grep -E "^(--- FAIL|ok|FAIL|panic)|paste_windows_test|DIAG" | cut -c1-1500

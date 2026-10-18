@@ -816,8 +816,9 @@ func TestClipboardWithPowerShell(t *testing.T) {
 		w.Wait(int64(250 * time.Millisecond))
 	}
 	if e.Flags != 0 || got != want {
+		t.Logf("DIAG %q", clipDiag)
 		t.Errorf("RequestPaste answered %q (flags %v) after Set-Clipboard, %d tries; a synchronous read sees %q", got, e.Flags, tries, Clipboard())
 	} else if tries > 1 {
-		t.Logf("the text of the other process was readable at try %d", tries)
+		t.Logf("DIAG the text of the other process was readable at try %d: %q", tries, clipDiag)
 	}
 }

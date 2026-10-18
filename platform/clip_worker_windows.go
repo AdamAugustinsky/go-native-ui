@@ -3,7 +3,9 @@ package platform
 import (
 	"runtime"
 	"slices"
+	"strconv"
 	"sync/atomic"
+	"syscall"
 	"time"
 	"unsafe"
 
@@ -375,21 +377,50 @@ func (c *clipWorker) open(owner uintptr, r clipReq) bool {
 // here.
 func (c *clipWorker) read(owner uintptr, r clipReq) (n int, ok bool) {
 	if !c.open(owner, r) {
+		clipDiag = append(clipDiag, "open failed")
 		return 0, false
 	}
 	buf := c.buf[:0]
-	if h := win32.Call(pGetClipboardData, cfUnicodeText); h != 0 && c.alive(r) { // an owner that took its time may have been given up on
+	diag := ""
+	h, _, e := syscall.SyscallN(pGetClipboardData, cfUnicodeText)
+	if h == 0 {
+		fm := ""
+		for f := uintptr(0); ; {
+			f = win32.Call(pEnumClipboardFormats, f)
+			if f == 0 {
+				break
+			}
+			fm += " " + strconv.Itoa(int(f))
+		}
+		diag = "GetClipboardData NULL err=" + strconv.Itoa(int(e)) + " avail13=" + strconv.Itoa(int(win32.Call(pIsClipboardFormatAvailable, 13))) + " count=" + strconv.Itoa(int(win32.Call(pCountClipboardFormats))) + " formats:" + fm + " owner=" + strconv.Itoa(int(win32.Call(pGetClipboardOwner))) + " t=" + time.Now().Format("15:04:05.000")
+	} else if c.alive(r) {
 		if p := win32.Call(pGlobalLock, h); p != 0 {
 			u := unsafe.Slice((*uint16)(win32.Ptr(p)), int(win32.Call(pGlobalSize, h))/2)
 			buf = slices.Grow(buf, min(3*len(u), MaxPaste+4)) // a unit is at most 3 bytes of UTF-8
 			buf, ok = utf16Decode(buf, u, MaxPaste)
 			win32.Call(pGlobalUnlock, h)
+			if !ok || len(buf) == 0 {
+				diag = "decode not ok or empty, units=" + strconv.Itoa(len(u))
+			}
+		} else {
+			diag = "GlobalLock NULL"
 		}
 	}
 	win32.Call(pCloseClipboard)
+	if diag != "" {
+		clipDiag = append(clipDiag, diag)
+	}
 	c.buf = buf // only this goroutine uses buf until it publishes the answer
 	return len(buf), ok && len(buf) > 0
 }
+
+var (
+	clipDiag                    []string // TEMPORARY
+	pEnumClipboardFormats       = win32.Proc(user32, "EnumClipboardFormats")
+	pIsClipboardFormatAvailable = win32.Proc(user32, "IsClipboardFormatAvailable")
+	pCountClipboardFormats      = win32.Proc(user32, "CountClipboardFormats")
+	pGetClipboardOwner          = win32.Proc(user32, "GetClipboardOwner")
+)
 
 // write puts c.cwork on the clipboard as CF_UNICODETEXT. If the clipboard
 // stays busy until the request's limit, the copy is dropped. The clipboard is
