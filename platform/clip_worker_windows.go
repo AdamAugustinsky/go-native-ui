@@ -143,6 +143,7 @@ func (c *clipWorker) stuck() bool {
 func (c *clipWorker) submitPaste(seq uint64, give int64) bool {
 	c.mu.Lock()
 	if c.stuckLocked() || c.closed {
+		clipDiag = append(clipDiag, fmt.Sprintf("submitPaste refused stuck=%v closed=%v run=%+v", c.stuckLocked(), c.closed, c.run))
 		c.mu.Unlock()
 		return false
 	}
@@ -410,7 +411,7 @@ func (c *clipWorker) read(owner uintptr, r clipReq) (n int, ok bool) {
 		} else {
 			retry = win32.Call(pCountClipboardFormats) == 0 || win32.Bool(win32.Call(pIsClipboardFormatAvailable, cfUnicodeText))
 		}
-		if h == 0 { // TEMPORARY diagnostics
+		{ // TEMPORARY diagnostics
 			var fm []uintptr
 			for f := uintptr(0); ; {
 				f = win32.Call(pEnumClipboardFormats, f)
@@ -419,7 +420,7 @@ func (c *clipWorker) read(owner uintptr, r clipReq) (n int, ok bool) {
 				}
 				fm = append(fm, f)
 			}
-			clipDiag = append(clipDiag, fmt.Sprintf("NULL count=%d avail=%v formats=%v retry=%v settleLeft=%v t=%s", win32.Call(pCountClipboardFormats), win32.Bool(win32.Call(pIsClipboardFormatAvailable, cfUnicodeText)), fm, retry, time.Duration(settle-nanotime()), time.Now().Format("15:04:05.000")))
+			clipDiag = append(clipDiag, fmt.Sprintf("read h=%x ok=%v len=%d retry=%v alive=%v count=%d avail=%v formats=%v t=%s", h, ok, len(buf), retry, c.alive(r), win32.Call(pCountClipboardFormats), win32.Bool(win32.Call(pIsClipboardFormatAvailable, cfUnicodeText)), fm, time.Now().Format("15:04:05.000")))
 		}
 		win32.Call(pCloseClipboard)
 		c.buf = buf // only this goroutine uses buf until it publishes the answer

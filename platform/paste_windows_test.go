@@ -867,8 +867,7 @@ func TestClipboardWithPowerShell(t *testing.T) {
 	if got, err := os.ReadFile(out); err != nil || string(got) != strings.ReplaceAll(fromUs, "\n", "\r\n") {
 		t.Errorf("Get-Clipboard read %q (%v), want the text with \\r\\n line ends", got, err)
 	}
-	// The other process's text may take a moment to be readable after it has
-	// emptied the clipboard; the paste looks again (see clipWorker.read).
+	clipDiag = nil
 	if e, got := pasteOf(t, w, 6, 2*time.Second); e.Flags != 0 || got != strings.ReplaceAll(fromThem, "\r\n", "\n") {
 		t0 := time.Now()
 		seen := Clipboard()
@@ -877,8 +876,8 @@ func TestClipboardWithPowerShell(t *testing.T) {
 			seen = Clipboard()
 		}
 		d := clipDiag
-		if len(d) > 8 {
-			d = d[len(d)-8:]
+		if len(d) > 12 {
+			d = d[len(d)-12:]
 		}
 		t.Errorf("DIAG RequestPaste answered %q (flags %v) after Set-Clipboard; a synchronous read sees %q after %v more; worker %q", got, e.Flags, seen, time.Since(t0), d)
 	}
