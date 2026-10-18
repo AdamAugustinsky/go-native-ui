@@ -49,7 +49,12 @@ func openClipboard() bool {
 }
 
 // Clipboard returns the plain text on the system clipboard (CF_UNICODETEXT),
-// with \n line ends; "" if there is none. Main thread.
+// with \n line ends; "" if there is none. It reads on the calling thread, so
+// an owner that renders on demand and never answers blocks it: the paste path
+// (RequestPaste) reads on a worker instead, and nothing in the framework calls
+// this. There is no synchronous SetClipboard on Windows for the same reason
+// (EmptyClipboard waits for the previous owner); SetClipboardText copies on the
+// worker. Main thread.
 func Clipboard() string {
 	if !openClipboard() {
 		return ""
@@ -73,28 +78,4 @@ func Clipboard() string {
 		}
 	}
 	return strings.ReplaceAll(string(utf16.Decode(u)), "\r\n", "\n")
-}
-
-// SetClipboard replaces the system clipboard with the plain text s (as
-// CF_UNICODETEXT, with \r\n line ends), waiting briefly for another process
-// that has the clipboard open. SetClipboardText is the version that never
-// waits. Main thread.
-func SetClipboard(s string) {
-	mem := allocClipboardText(unsafe.Slice(unsafe.StringData(s), len(s))) // read-only: the call copies
-	if mem == 0 {
-		return
-	}
-	if pendingSet != 0 { // an older copy must not land after this one
-		win32.Call(pGlobalFree, pendingSet)
-		pendingSet = 0
-	}
-	if !openClipboard() {
-		win32.Call(pGlobalFree, mem)
-		return
-	}
-	win32.Call(pEmptyClipboard)
-	if win32.Call(pSetClipboardData, cfUnicodeText, mem) == 0 {
-		win32.Call(pGlobalFree, mem) // on success the system owns the memory
-	}
-	win32.Call(pCloseClipboard)
 }
