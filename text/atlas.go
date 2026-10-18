@@ -96,7 +96,7 @@ func (a *atlas) newPage(color bool) *page {
 	return &page{
 		color: color, bpp: bpp,
 		pix:   make([]byte, a.pageDim*a.pageDim*bpp),
-		pack:  packer{w: a.pageDim, h: a.pageDim},
+		pack:  packer{w: a.pageDim, h: a.pageDim, shelves: make([]shelf, 0, 64)}, // 64: a page fills up before a growth
 		dirty: true, dx1: a.pageDim, dy1: a.pageDim,
 	}
 }

@@ -160,6 +160,8 @@ func newGoSystem(f fontFinder) *goSystem {
 		fbuf:     make([]FaceID, 0, 128),
 		cbuf:     make([]uint32, 0, 128),
 		rbyte:    make([]uint32, 0, 128),
+		cov:      make([]byte, 0, 128*128),
+		rast:     rasterizer{acc: make([]float32, 0, 130*128)},
 	}
 }
 

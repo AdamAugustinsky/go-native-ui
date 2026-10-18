@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 
 	ot "github.com/go-text/typesetting/font/opentype"
 	"github.com/go-text/typesetting/font/opentype/tables"
@@ -216,7 +217,10 @@ func midPoint(p, q SegmentPoint) SegmentPoint {
 }
 
 // build the segments from the resolved contour points
-func buildSegments(points []contourPoint) []Segment {
+//
+// The segments are built in out[:0] (grown if it is too small), which the
+// caller keeps for the next call.
+func buildSegments(out []Segment, points []contourPoint) []Segment {
 	if len(points) == 0 {
 		return nil
 	}
@@ -226,7 +230,7 @@ func buildSegments(points []contourPoint) []Segment {
 		firstOnCurve, firstOffCurve, lastOffCurve                SegmentPoint
 	)
 
-	out := make([]Segment, 0, len(points)+2)
+	out = slices.Grow(out[:0], len(points)+2)
 
 	for _, point := range points {
 		p := point.SegmentPoint
@@ -343,7 +347,10 @@ func (f *Face) glyphDataFromGlyf(glyph gID) (GlyphOutline, error) {
 		return GlyphOutline{}, errGlyphOutOfRange(glyph)
 	}
 	points := f.getPointsForGlyph(glyph)
-	segments := buildSegments(points[:len(points)-phantomCount])
+	segments := buildSegments(f.glyfScratch.segs, points[:len(points)-phantomCount])
+	if segments != nil {
+		f.glyfScratch.segs = segments[:0]
+	}
 	return GlyphOutline{Segments: segments}, nil
 }
 
@@ -432,6 +439,10 @@ func (f *Face) GlyphData(gid GID) GlyphData {
 //
 // It is a bit faster than calling [Face.GlyphData] and may be used for instance
 // when rendering colored glyphs (from the 'COLR' table).
+//
+// For a glyf outline the Segments are in storage owned by the Face and valid
+// until the next call of GlyphDataOutline (or any extraction of glyph points)
+// on it: extracting allocates nothing once that storage has grown.
 func (f *Face) GlyphDataOutline(gid GID) (GlyphOutline, bool) {
 	g := gID(gid)
 	out, err := f.glyphDataFromCFF1(g)

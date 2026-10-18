@@ -117,7 +117,7 @@ func (f *fakeWL) do(format string, a ...any) {
 	line := fmt.Sprintf(format, a...)
 	fmt.Fprintln(f.in, line)
 	f.in.Flush()
-	f.wait("OK "+strings.Fields(line)[0], 10*time.Second)
+	f.wait("OK "+strings.Fields(line)[0], 30*time.Second) // generous: the test binaries of a whole `go test ./...` share the machine
 }
 
 // lockThread pins the test goroutine to its OS thread for the test, as the

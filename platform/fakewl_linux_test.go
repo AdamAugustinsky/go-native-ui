@@ -94,6 +94,7 @@ type fakeComp struct {
 	decoMode                          uint32 // 0: no decoration global behaviour, 1 client, 2 server
 	exports                           int
 	ti                                *fobj // the text input
+	quiet                             bool  // "quiet": requests are no longer logged
 	tiSerial                          uint32
 	maximized                         bool
 	cfgW, cfgH                        int32
@@ -243,7 +244,9 @@ func (s *fakeComp) dispatch(msg []byte) {
 			fmt.Fprintf(&sb, " %d", a.v)
 		}
 	}
-	s.say("REQ %s.%s%s", o.name, name, sb.String())
+	if !s.quiet {
+		s.say("REQ %s.%s%s", o.name, name, sb.String())
+	}
 	s.request(o, name, args)
 }
 
@@ -632,6 +635,8 @@ func (s *fakeComp) command(line string) {
 		return v
 	}
 	switch f[0] {
+	case "quiet": // stop logging requests (the test measures this process's allocations; the log reader would allocate)
+		s.quiet = true
 	case "focus":
 		if s.kb != nil && s.mainSurface() != nil {
 			s.event(s.kb, "enter", s.nextSerial(), s.mainSurface(), []byte{})

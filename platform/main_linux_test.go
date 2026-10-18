@@ -14,5 +14,9 @@ func TestMain(m *testing.M) {
 		fakeCompositorMain()
 		return
 	}
+	if os.Getenv("GNUI_THREADS_CHILD") != "" {
+		threadsChild()
+		return
+	}
 	os.Exit(m.Run())
 }

@@ -281,7 +281,7 @@ func (t *glyphTable) lookup(key uint64) (GlyphEntry, bool) {
 func (t *glyphTable) insert(key uint64, e GlyphEntry) {
 	if len(t.slots) == 0 || (t.n+1)*2 > len(t.slots) {
 		old := t.slots
-		size := 1024
+		size := 4096 // room for 2048 glyph images before the first growth
 		if len(old) > 0 {
 			size = len(old) * 2
 		}
