@@ -86,6 +86,19 @@ const (
 	// applies to. Boxes that take input and are drawn above it keep their
 	// clicks; see Context.DragRegions. The box itself takes no input.
 	WindowDrag
+
+	// Disabled takes the box out of interaction: it is not hit-tested, cannot
+	// take focus (Tab skips it, and it loses the focus it had), and its Signal
+	// reports nothing, also for an activation or press that was already
+	// queued. Its drawing is unchanged: a widget dims itself. The flag
+	// applies to this box only; set it on each box that should be inert.
+	Disabled
+
+	// WrapText breaks the box's display text into lines at the box's width,
+	// at the line break opportunities of UAX #14 (and at newline characters),
+	// and draws it line by line. A box whose height is TextSize is as high as
+	// the lines. A width left on auto is Pct(1). See Context.Label.
+	WrapText
 )
 
 // scrollable flags, either axis.

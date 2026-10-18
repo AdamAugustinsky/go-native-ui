@@ -122,13 +122,15 @@ type fakeText struct {
 	input    bool
 	inputs   int
 	discards int
+	pastes   []uint64
 }
 
 func (f *fakeText) SetIMERect(x, y, w, h float32) {
 	f.rect, f.rects = [4]float32{x, y, w, h}, f.rects+1
 }
-func (f *fakeText) SetTextInput(a bool) { f.input, f.inputs = a, f.inputs+1 }
-func (f *fakeText) DiscardComposition() { f.discards++ }
+func (f *fakeText) SetTextInput(a bool)     { f.input, f.inputs = a, f.inputs+1 }
+func (f *fakeText) DiscardComposition()     { f.discards++ }
+func (f *fakeText) RequestPaste(tag uint64) { f.pastes = append(f.pastes, tag) }
 
 // fieldApp is a Builder with one text field.
 type fieldApp struct {
@@ -245,7 +247,7 @@ func TestTextFieldThroughTranslator(t *testing.T) {
 	}
 
 	// The clipboard hooks are the platform's.
-	if o.UI.ClipboardGet == nil || o.UI.ClipboardSet == nil {
+	if o.UI.ClipboardSet == nil {
 		t.Error("clipboard not wired")
 	}
 }
@@ -269,5 +271,79 @@ func TestWakeAtShortensTheWait(t *testing.T) {
 	a.wakeAt = 1000 + 5e9
 	if got := a.timeout(1000); got != 0 {
 		t.Fatalf("a frame owed and ready: %d", got)
+	}
+}
+
+func TestPasteTranslation(t *testing.T) {
+	tr := newTranslator()
+	in := &tr.in
+	if !tr.event(ev(platform.EvPaste, func(e *platform.Event) { e.Tag = 42 }), []byte("clip")) {
+		t.Fatal("a paste does not wake a frame")
+	}
+	if !in.HasPaste || in.PasteTag != 42 || string(in.Paste) != "clip" {
+		t.Fatalf("paste: has=%v tag=%d %q", in.HasPaste, in.PasteTag, in.Paste)
+	}
+	tr.endFrame()
+	if in.HasPaste {
+		t.Fatal("the answer survives its frame")
+	}
+	// A failed paste delivers nothing.
+	tr.event(ev(platform.EvPaste, func(e *platform.Event) { e.Tag, e.Flags = 43, platform.FlagFailed }), nil)
+	if in.HasPaste || len(in.Paste) != 0 {
+		t.Fatalf("failed paste: has=%v %q", in.HasPaste, in.Paste)
+	}
+	// Behind a button transition, it keeps its place and its text.
+	tr.event(ev(platform.EvPointerButton, func(e *platform.Event) { e.Button, e.Flags = platform.ButtonLeft, platform.FlagDown }), nil)
+	tr.event(ev(platform.EvPointerButton, func(e *platform.Event) { e.Button = platform.ButtonLeft }), nil) // release: deferred
+	tr.event(ev(platform.EvPaste, func(e *platform.Event) { e.Tag = 44 }), []byte("later"))
+	if in.HasPaste {
+		t.Fatal("a paste overtook the events before it")
+	}
+	tr.endFrame()
+	if !in.HasPaste || in.PasteTag != 44 || string(in.Paste) != "later" {
+		t.Fatalf("deferred paste: has=%v tag=%d %q", in.HasPaste, in.PasteTag, in.Paste)
+	}
+}
+
+// The paste chord reaches the platform as a request tagged with the field, and
+// the answer reaches that field through the translator.
+func TestPasteRoundTrip(t *testing.T) {
+	b := &fieldApp{focus: true}
+	o, err := NewOffscreen(Config{Width: 400, Height: 200}, 800, 400, 2, b)
+	if err != nil {
+		skipOrFail(t, "offscreen renderer", err)
+	}
+	defer o.Close()
+	o.Frame()
+	o.Frame()
+	pm := platform.ModCtrl
+	if ui.PrimaryMod() == ui.ModSuper {
+		pm = platform.ModSuper
+	}
+	o.tr.event(ev(platform.EvKey, func(e *platform.Event) {
+		e.Key, e.Mods, e.Flags = platform.KeyA+('V'-'A'), pm, platform.FlagDown
+	}), nil)
+	o.Frame()
+	var sink fakeText
+	o.syncText(&sink, 0)
+	if len(sink.pastes) != 1 {
+		t.Fatalf("paste requests forwarded: %v", sink.pastes)
+	}
+	if b.buf.String() != "" {
+		t.Fatalf("pasted before the answer: %q", b.buf.String())
+	}
+	tag := sink.pastes[0]
+	// An answer for another field is dropped; the field's own is inserted.
+	o.tr.event(ev(platform.EvPaste, func(e *platform.Event) { e.Tag = tag + 1 }), []byte("not mine"))
+	o.Frame()
+	o.tr.event(ev(platform.EvPaste, func(e *platform.Event) { e.Tag = tag }), []byte("mine"))
+	o.Frame()
+	if b.buf.String() != "mine" {
+		t.Fatalf("text %q", b.buf.String())
+	}
+	sink = fakeText{}
+	o.syncText(&sink, 0)
+	if len(sink.pastes) != 0 {
+		t.Fatalf("the request is repeated: %v", sink.pastes)
 	}
 }

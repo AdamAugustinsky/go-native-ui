@@ -164,6 +164,18 @@ func (c *Context) Signal(id ID) Signal {
 	}
 	b := &c.boxes[id]
 	k := b.key
+	if b.flags&Disabled != 0 {
+		return s // inert: also an activation or press that was queued before
+	}
+	for i := 0; i < c.in.NActions; i++ {
+		if r := &c.in.Actions[i]; r.Key == k {
+			s.Action |= r.Action
+			s.ActionValue = r.Value
+			if r.Action&ActPress != 0 {
+				s.Activated = true
+			}
+		}
+	}
 	if b.flags&(hitMask|scrollMask) == 0 {
 		return s
 	}
@@ -189,8 +201,13 @@ func (c *Context) Signal(id ID) Signal {
 		s.Scroll = c.scrollApplied
 	}
 	if c.focusKey == k && b.flags&Focusable != 0 {
-		for i := 0; i < c.in.NKeys; i++ {
-			if e := &c.in.Keys[i]; e.Down && !e.Repeat && (e.Code == KeyEnter || e.Code == KeySpace) {
+		if c.activated == k {
+			s.Activated = true // taken by an earlier call this frame
+		}
+		for i := 0; i < c.in.NKeys && !s.Activated; i++ {
+			if e := &c.in.Keys[i]; e.Down && !e.Repeat && (e.Code == KeyEnter || e.Code == KeySpace) && c.claimed&(1<<uint(i)) == 0 {
+				c.claimed |= 1 << uint(i)
+				c.activated = k
 				s.Activated = true
 			}
 		}

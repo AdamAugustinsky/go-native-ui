@@ -34,6 +34,7 @@ type box struct {
 
 	flags                           Flags
 	parent, first, last, next, prev ID
+	field                           bool // a text field (TextField): it takes the keys of keys.go when focused
 
 	bg          [4]uint32
 	textColor   uint32
@@ -62,6 +63,8 @@ type box struct {
 	listRows  int
 	listFirst int
 	listRowH  float32
+
+	sem int32 // 1 + the index of its record in Context.sems, 0 without a role
 }
 
 type fontInfo struct {
@@ -79,11 +82,11 @@ type Context struct {
 	WheelStep float32
 	// TextEdit styles the text fields (colours and caret blink); see TextField.
 	TextEdit TextEditStyle
-	// ClipboardGet and ClipboardSet read and write the system clipboard (plain
-	// text) for the copy, cut and paste shortcuts of text fields; the app sets
-	// them (app.Run does). Nil functions disable the shortcuts.
-	ClipboardGet func() string
-	ClipboardSet func(string)
+	// ClipboardSet puts plain UTF-8 text on the system clipboard for the copy
+	// and cut of text fields; it must copy b, which aliases the field's text.
+	// The app sets it (app.Run does); a nil function disables copy and cut.
+	// Pasting is asynchronous: see PasteRequest and Input.SetPaste.
+	ClipboardSet func(b []byte)
 
 	sh Shaper
 
@@ -123,6 +126,12 @@ type Context struct {
 
 	nextPos    [2]float32
 	hasNextPos bool
+	nextFlags  Flags
+
+	// semantics (semantics.go): the setters for the next box, and the records
+	// of this frame's boxes that have a role
+	semNext semNext
+	sems    []semRec
 
 	// interaction (see signal.go)
 	hotKey, scrollKey Key
@@ -135,6 +144,7 @@ type Context struct {
 	relPos            [2][2]float32 // the origin and click count of the press that this frame's release ended
 	relClicks         [2]uint8
 	focusKey          Key
+	focusVisible      bool // focus came from the keyboard (FocusVisible)
 	scrollApplied     [2]float32
 	scrollSet         bool // ScrollTo was called this frame (End decides whether the scroll is still moving)
 
@@ -164,6 +174,20 @@ type Context struct {
 	commit      [MaxText]byte
 	nCommit     int
 	commitOwner Key
+
+	// key claiming and edit actions (keys.go)
+	claimed    uint16              // bit i: key event i is handled
+	fieldKeys  uint16              // bit i: key event i was claimed for the focused text field
+	fieldFocus bool                // the focused box is a text field that takes keys
+	fieldBuilt bool                // the focused field applied this frame's edit actions already
+	fieldKey   Key                 // the key of that field
+	carry      [MaxEdit]EditAction // edit actions queued after the field was built: for the next frame
+	nCarry     int
+	cmdTaken   int // Input.Commands taken so far this frame (TakeCommand)
+	activated  Key // the box that took its Enter/Space activation this frame (Signal)
+	// a text field asked for the clipboard text (PasteRequest)
+	pasteTag Key
+	pasteReq bool
 
 	// boxes built this frame with a cursor or the WindowDrag flag (cursor.go)
 	nCursorBoxes, nDragBoxes int
@@ -278,6 +302,12 @@ func (c *Context) Begin(in *Input, widthPx, heightPx int, scale, dt float32) {
 	c.animating, c.scrollSet = false, false
 	c.wakeNs, c.imeOK, c.imeCancel = 0, false, false
 	c.takeCommit()
+	c.claimed, c.cmdTaken, c.activated = 0, 0, 0
+	c.fieldBuilt, c.pasteReq, c.pasteTag = false, false, 0
+	for i := 0; i < c.nCarry; i++ { // edit actions the previous frame could not give its field
+		c.in.PushEdit(c.carry[i])
+	}
+	c.nCarry = 0
 	if in.NPreedit == 0 || c.nCommit > 0 {
 		c.imeOwner = 0
 	}
@@ -289,10 +319,13 @@ func (c *Context) Begin(in *Input, widthPx, heightPx int, scale, dt float32) {
 
 	c.hitTest()
 	c.mouse()
+	c.claimFieldKeys()
 	c.stepScroll()
 
 	c.nparents = 0
 	c.resetStyles()
+	c.sems = c.sems[:0]
+	c.semNext = semNext{role: RoleWindow}
 	root := c.newBox(0, rootKey)
 	b := &c.boxes[root]
 	b.pref = [2]Size{Px(float32(widthPx)), Px(float32(heightPx))}
@@ -346,6 +379,8 @@ func (c *Context) resetStyles() {
 	c.sOpacity.reset()
 	c.sTint.reset()
 	c.hasNextPos = false
+	c.nextFlags = 0
+	c.semNext = semNext{}
 }
 
 // Push makes id the parent of the boxes built next.
@@ -420,6 +455,8 @@ func (c *Context) Spacer(w, h Size) ID {
 }
 
 func (c *Context) newBox(flags Flags, key Key) ID {
+	flags |= c.nextFlags
+	c.nextFlags = 0
 	var id ID
 	found := false
 	for n := uint64(0); ; n++ {
@@ -488,6 +525,12 @@ func (c *Context) newBox(flags Flags, key Key) ID {
 		b.fixed = c.nextPos
 		c.hasNextPos = false
 	}
+	if n := &c.semNext; n.role != RoleNone {
+		c.sems = append(c.sems, semRec{id: id, role: n.role, state: n.state, actions: n.actions, hasActions: n.hasActions,
+			name: n.name, value: n.value, rng: n.rng, hasRange: n.hasRange, pos: n.pos, hasPos: n.hasPos})
+		b.sem = int32(len(c.sems))
+	}
+	c.semNext = semNext{}
 	return id
 }
 

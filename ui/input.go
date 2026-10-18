@@ -20,6 +20,15 @@ const (
 	ModSuper // Cmd on macOS, Windows key elsewhere
 )
 
+// PrimaryMod is the modifier of the shortcut chords: Super (⌘) on macOS, Ctrl
+// elsewhere.
+func PrimaryMod() Mods {
+	if macKeys {
+		return ModSuper
+	}
+	return ModCtrl
+}
+
 // KeyCode is a platform-independent key identifier. The app maps platform
 // key codes to these (letters and digits use their ASCII upper-case value).
 type KeyCode uint16
@@ -56,9 +65,42 @@ type KeyEvent struct {
 	Repeat bool
 }
 
+// EditAction is an edit command for the focused text field that does not come
+// as a key chord: the Edit menu of a native menu bar pushes them
+// (Input.PushEdit), and a menu command with an edit role becomes one (package
+// menu). The field applies them exactly as it applies the matching chord. The
+// zero value is no action.
+type EditAction uint8
+
+const (
+	EditCopy      EditAction = iota + 1 // copy the selection
+	EditCut                             // copy the selection, then delete it
+	EditPaste                           // ask for the clipboard text (Context.PasteRequest)
+	EditUndo                            // undo the last typing run or edit
+	EditRedo                            // redo what was undone
+	EditSelectAll                       // select the whole text
+	EditDelete                          // delete the selection
+)
+
+// SemRequest is an assistive technology's request for an action on a box,
+// delivered through Input.Actions: Key names the box, Action which action
+// (one bit of SemAction), Value its argument (ActSetValue: the new value of a
+// range; the text of a text field is not carried).
+type SemRequest struct {
+	Key    Key
+	Action SemAction
+	Value  float64
+}
+
 const (
 	// MaxKeys is the number of key events per frame.
 	MaxKeys = 8
+	// MaxEdit is the number of edit actions per frame.
+	MaxEdit = 4
+	// MaxCommands is the number of menu commands per frame.
+	MaxCommands = 8
+	// MaxActions is the number of accessibility action requests per frame.
+	MaxActions = 4
 	// MaxText is the number of bytes of typed text per frame.
 	MaxText = 64
 	// MaxPreedit is the number of bytes of input-method composition text.
@@ -131,6 +173,77 @@ type Input struct {
 	Preedit    [MaxPreedit]byte
 	NPreedit   int
 	PreeditSel [2]int
+
+	// Edit[:NEdit] are this frame's edit actions for the focused text field
+	// (PushEdit).
+	Edit  [MaxEdit]EditAction
+	NEdit int
+	// Commands[:NCommands] are the ids of the menu commands the system
+	// delivered this frame, such as a native menu item (PushCommand); package
+	// menu takes them with the commands that matched a shortcut.
+	Commands  [MaxCommands]uint16
+	NCommands int
+	// Actions[:NActions] are this frame's accessibility action requests
+	// (PushAction); Signal.Action reports them to the box they name.
+	Actions  [MaxActions]SemRequest
+	NActions int
+
+	// Paste is the clipboard text that answers a paste request
+	// (Context.PasteRequest, platform.Window.RequestPaste); HasPaste is set
+	// for the frame it arrives in, PasteTag names the field that asked. Only
+	// the text field with that key takes it, and only while it has focus,
+	// like an input-method commit; otherwise it is dropped. Set it with
+	// SetPaste, which reuses Paste's storage.
+	Paste    []byte
+	PasteTag Key
+	HasPaste bool
+}
+
+// PushEdit queues an edit action for the focused text field; it reports false
+// if the frame's queue is full.
+func (in *Input) PushEdit(a EditAction) bool {
+	if in.NEdit >= MaxEdit {
+		return false
+	}
+	in.Edit[in.NEdit] = a
+	in.NEdit++
+	return true
+}
+
+// PushCommand queues the menu command with the given id; it reports false if
+// the frame's queue is full.
+func (in *Input) PushCommand(id uint16) bool {
+	if in.NCommands >= MaxCommands {
+		return false
+	}
+	in.Commands[in.NCommands] = id
+	in.NCommands++
+	return true
+}
+
+// PushAction queues an accessibility action request; it reports false if the
+// frame's queue is full.
+func (in *Input) PushAction(r SemRequest) bool {
+	if in.NActions >= MaxActions {
+		return false
+	}
+	in.Actions[in.NActions] = r
+	in.NActions++
+	return true
+}
+
+// SetPaste records the answer to a paste request made by the field with key
+// tag: ok is false when the clipboard had no text (nothing is delivered). The
+// text is copied into Paste, reusing its capacity, so it does not allocate once
+// the buffer has grown to the largest paste. A later answer in the same frame
+// replaces an earlier one.
+func (in *Input) SetPaste(tag Key, b []byte, ok bool) {
+	in.PasteTag, in.HasPaste = tag, ok
+	if !ok {
+		in.Paste = in.Paste[:0]
+		return
+	}
+	in.Paste = append(in.Paste[:0], b...)
 }
 
 // SetButton records a button change as a state and an edge.
@@ -208,18 +321,29 @@ func (in *Input) ClearFrame() {
 	in.NKeys, in.NText = 0, 0
 	in.CommitOff, in.CommitLen = 0, 0
 	in.FocusGained = false
+	in.NEdit, in.NCommands, in.NActions = 0, 0, 0
+	in.HasPaste = false
+	if cap(in.Paste) > maxKeptPaste { // do not hold on to a huge paste
+		in.Paste = nil
+	}
+	in.Paste = in.Paste[:0]
 }
+
+// maxKeptPaste is the largest Paste buffer ClearFrame keeps.
+const maxKeptPaste = 1 << 20
 
 // Signal is what a box reports about the pointer and keyboard this frame.
 type Signal struct {
-	Hovering      bool // the pointer is over the box (and nothing else holds the mouse)
-	Pressed       bool // the left button went down on the box this frame
-	Released      bool // the left button went up this frame after going down on the box (the pointer may be elsewhere)
-	Clicked       bool // Released with the pointer still over the box
-	DoubleClicked bool // Clicked, and the press was a double click
-	RightClicked  bool // same as Clicked for the right button
-	Dragging      bool // the left button is held after going down on the box, wherever the pointer is
-	Activated     bool // the box has focus and Enter or Space went down
+	Hovering      bool      // the pointer is over the box (and nothing else holds the mouse)
+	Pressed       bool      // the left button went down on the box this frame
+	Released      bool      // the left button went up this frame after going down on the box (the pointer may be elsewhere)
+	Clicked       bool      // Released with the pointer still over the box
+	DoubleClicked bool      // Clicked, and the press was a double click
+	RightClicked  bool      // same as Clicked for the right button
+	Dragging      bool      // the left button is held after going down on the box, wherever the pointer is
+	Activated     bool      // the box has focus and Enter or Space went down, or an assistive technology asked to press it
+	Action        SemAction // the accessibility actions requested of the box this frame (Input.Actions)
+	ActionValue   float64   // the argument of the last requested action (ActSetValue)
 	DragDelta     [2]float32
 	Scroll        [2]float32 // scroll applied to the box this frame, in pixels (positive scrolls the view toward the end)
 	Mouse         [2]float32 // pointer position relative to the box's top-left corner (previous frame's rectangle)

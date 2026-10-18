@@ -96,7 +96,8 @@ func (c *Context) IMECancel() bool { return c.imeCancel }
 //	Shift             extends the selection with any of the moves above
 //	Backspace/Delete  delete the selection, else the character cluster before/after the caret
 //	word modifier + Backspace/Delete   delete a word; ⌘Backspace (macOS): to the start
-//	primary + A/C/X/V select all, copy, cut, paste (via Context.ClipboardGet/Set)
+//	primary + A/C/X/V select all, copy, cut, paste (copy and cut through Context.ClipboardSet, paste as below)
+//	primary + Z, shift + primary + Z, Ctrl+Y (not on macOS)   undo, redo (TextBuffer.Undo, Redo)
 //	Enter, Escape     TextFieldSignal.Submitted, .Cancelled (the text is untouched)
 //
 // The mouse places the caret (shift-click extends), a drag selects, a double
@@ -104,8 +105,26 @@ func (c *Context) IMECancel() bool { return c.imeCancel }
 // Typed text is applied before the frame's keys, so a Backspace in the same
 // frame as the letters it follows deletes the last of them.
 //
-// Not implemented: undo/redo, bidirectional visual caret movement (← and →
+// Not implemented: bidirectional visual caret movement (← and →
 // move logically), and the macOS Emacs bindings (Ctrl+A/E/K...).
+//
+// # Keys, edit actions and the clipboard
+//
+// The field handles the keys it claims (see keys.go): of the keys listed above
+// and of every key-down without the primary modifier but Tab, so a shortcut
+// of the app does not also act on the focused field and the field's chords
+// are not also seen as commands. The edit actions of Input.Edit (EditCopy,
+// EditUndo and so on, pushed by a native Edit menu or by package menu) are
+// applied exactly as their chords.
+//
+// Copy and cut hand the selection to Context.ClipboardSet. Paste is
+// asynchronous: the chord or EditPaste only records a request
+// (Context.PasteRequest, valid after End); the app asks the platform for the
+// text and the answer returns in Input.SetPaste, tagged with this field's key.
+// The field inserts it, as one undo step, only if it has the focus then;
+// otherwise the text is dropped, like an input-method commit. A single-line
+// field turns line breaks and tabs in pasted text into spaces (CR, LF and CRLF
+// are one space each) and drops other control characters.
 //
 // # Input methods
 //
@@ -157,16 +176,22 @@ func (c *Context) TextField(label string, buf *TextBuffer) TextFieldSignal {
 		c.NextWidth(Pct(1))
 	}
 	c.NextCursor(CursorText)
+	if c.semNext.role == RoleNone {
+		c.NextRole(RoleTextField)
+	}
 	id := c.Box(Clickable|Focusable|Clip|DrawBackground|DrawBorder|HotAnimation|FocusAnimation, label)
 	b := &c.boxes[id]
+	b.field = true
 	key := b.key
 	sig := c.Signal(id)
+	disabled := b.flags&Disabled != 0
 
 	in := &c.in
 	res := TextFieldSignal{ID: id, Signal: sig}
-	focused := c.focusKey == key
+	focused := c.focusKey == key && !disabled
 	active := focused && in.Focused
 	res.Focused = focused
+	buf.now = in.Time
 	rev0 := buf.rev
 	touched := active && !buf.focused // focus just arrived
 	buf.focused = active
@@ -230,14 +255,24 @@ func (c *Context) TextField(label string, buf *TextBuffer) TextFieldSignal {
 		touched = touched || active
 	}
 
-	// Typed text, then keys.
+	// The pasted text answers this field's own request.
+	if focused && in.HasPaste && in.PasteTag == key && len(in.Paste) > 0 {
+		buf.insertSealed(in.Paste)
+		touched = touched || active
+	}
+
+	// Typed text, then keys and edit actions.
 	if active {
+		c.fieldKey, c.fieldBuilt = key, true
 		if in.NText > 0 {
 			buf.Insert(in.Text[:in.NText])
 			touched = true
 		}
 		if !composing {
 			touched = c.editKeys(buf, &res) || touched
+			for i := 0; i < in.NEdit; i++ {
+				c.applyEdit(buf, in.Edit[i])
+			}
 		}
 	}
 	switch {
@@ -457,7 +492,7 @@ func (c *Context) editKeys(buf *TextBuffer, res *TextFieldSignal) (pressed bool)
 	}
 	for i := 0; i < in.NKeys; i++ {
 		e := in.Keys[i]
-		if !e.Down {
+		if !e.Down || c.fieldKeys&(1<<uint(i)) == 0 { // only the keys claimed for the field
 			continue
 		}
 		pressed = true
@@ -532,20 +567,60 @@ func (c *Context) editKeys(buf *TextBuffer, res *TextFieldSignal) (pressed bool)
 			res.Cancelled = true
 		case 'A':
 			if primary {
-				buf.SelectAll()
+				c.applyEdit(buf, EditSelectAll)
 			}
-		case 'C', 'X':
-			if primary && buf.HasSelection() && c.ClipboardSet != nil {
-				c.ClipboardSet(string(buf.Selected()))
-				if e.Code == 'X' {
-					buf.deleteSelection()
-				}
+		case 'C':
+			if primary {
+				c.applyEdit(buf, EditCopy)
+			}
+		case 'X':
+			if primary {
+				c.applyEdit(buf, EditCut)
 			}
 		case 'V':
-			if primary && c.ClipboardGet != nil {
-				buf.InsertString(c.ClipboardGet())
+			if primary {
+				c.applyEdit(buf, EditPaste)
+			}
+		case 'Z':
+			if primary && shift {
+				c.applyEdit(buf, EditRedo)
+			} else if primary {
+				c.applyEdit(buf, EditUndo)
+			}
+		case 'Y':
+			if primary && !macKeys {
+				c.applyEdit(buf, EditRedo)
 			}
 		}
 	}
 	return pressed
+}
+
+// applyEdit does one edit action to the buffer of the focused field; the chords
+// and the edit actions of Input.Edit both end here.
+func (c *Context) applyEdit(buf *TextBuffer, a EditAction) {
+	switch a {
+	case EditSelectAll:
+		buf.SelectAll()
+	case EditCopy, EditCut:
+		if !buf.HasSelection() || c.ClipboardSet == nil {
+			return
+		}
+		c.ClipboardSet(buf.Selected())
+		if a == EditCut {
+			buf.breakRun()
+			buf.deleteSelection()
+			buf.breakRun()
+		}
+	case EditPaste:
+		c.pasteTag, c.pasteReq = c.fieldKey, true
+	case EditUndo:
+		buf.Undo()
+	case EditRedo:
+		buf.Redo()
+	case EditDelete:
+		buf.breakRun()
+		buf.deleteSelection()
+		buf.breakRun()
+	}
 }

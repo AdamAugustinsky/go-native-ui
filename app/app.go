@@ -309,7 +309,7 @@ func openWindowed(cfg Config, b Builder, st *StartupReport) (*App, error) {
 // initUI creates the ui context and runs the Initer.
 func (a *App) initUI() error {
 	a.UI = ui.New(a.Text)
-	a.UI.ClipboardGet, a.UI.ClipboardSet = platform.Clipboard, platform.SetClipboard
+	a.UI.ClipboardSet = platform.SetClipboardText
 	a.UI.AtlasSync(a.R)
 	if in, ok := a.b.(Initer); ok {
 		if err := in.Init(a); err != nil {
@@ -421,7 +421,7 @@ func (a *App) onEvent(e *platform.Event) {
 		a.p.frameEvent()
 	default:
 		var txt []byte
-		if e.Kind == platform.EvText || e.Kind == platform.EvPreedit {
+		if e.Kind == platform.EvText || e.Kind == platform.EvPreedit || e.Kind == platform.EvPaste {
 			txt = a.Win.Text(e.Text)
 		}
 		if a.tr.event(e, txt) {

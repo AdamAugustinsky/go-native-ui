@@ -16,6 +16,8 @@ type fieldRig struct {
 	res  TextFieldSignal
 	clip string // clipboard
 	now  int64
+	// pastes counts the requests the fake platform answered with clip.
+	pastes int
 }
 
 const (
@@ -34,8 +36,7 @@ func newRig(t *testing.T, mac bool) *fieldRig {
 	h.in.MouseX, h.in.MouseY = -100, -100
 	r := &fieldRig{harness: h, now: 1e9}
 	h.c.TextEdit.Caret = 0xFF0000FF
-	h.c.ClipboardGet = func() string { return r.clip }
-	h.c.ClipboardSet = func(s string) { r.clip = s }
+	h.c.ClipboardSet = func(b []byte) { r.clip = string(b) }
 	r.frame() // layout
 	r.focus()
 	return r
@@ -53,6 +54,13 @@ func (r *fieldRig) step(dtMs int64) {
 		c.NextTextColor(0x00FF00FF)
 		r.res = c.TextField("f", &r.buf)
 	})
+	// The platform answers a paste request with the clipboard text; the answer
+	// reaches the next frame.
+	if tag, ok := r.c.PasteRequest(); ok {
+		r.pastes++
+		r.in.SetPaste(tag, []byte(r.clip), true)
+		r.step(dtMs)
+	}
 }
 
 func (r *fieldRig) focus() {
@@ -339,15 +347,14 @@ func TestTextFieldClipboard(t *testing.T) {
 	if r.clip != "keep" {
 		t.Errorf("copy without selection changed the clipboard: %q", r.clip)
 	}
-	r.c.ClipboardGet, r.c.ClipboardSet = nil, nil
-	r.key('V', ModSuper)
+	r.c.ClipboardSet = nil // without a way to set the clipboard, copy and cut do nothing
 	r.key('A', ModSuper)
 	r.key('X', ModSuper)
 	if r.text() == "" {
 		t.Error("cut without a clipboard deleted the text")
 	}
 	// Ctrl is not the shortcut modifier on macOS.
-	r.c.ClipboardGet = func() string { return "zzz" }
+	r.clip = "zzz"
 	r.buf.SetCaret(0)
 	r.key('V', ModCtrl)
 	if strings.Contains(r.text(), "zzz") {

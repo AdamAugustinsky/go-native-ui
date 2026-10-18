@@ -141,6 +141,11 @@ func (c *Context) NextAlign(a Align) { c.sAlign.set(a) }
 func (c *Context) PushAlign(a Align) { c.sAlign.push(a) }
 func (c *Context) PopAlign()         { c.sAlign.pop() }
 
+// Extra flags for the next box built: they are added to the flags its builder
+// gives it (Disabled on a TextField, for one).
+
+func (c *Context) NextFlags(f Flags) { c.nextFlags |= f }
+
 // Padding (left, top, right, bottom): the inset of the content area in which
 // children are laid out and text is drawn.
 
