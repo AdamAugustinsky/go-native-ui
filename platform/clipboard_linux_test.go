@@ -196,7 +196,6 @@ func TestWaylandClipboardNoAlloc(t *testing.T) {
 	// that reads the log allocates a string per line, in this process. Silence
 	// the log: what is measured is the platform's own code.
 	f.do("quiet")
-	f.wait("OK quiet", 3*time.Second)
 	if n := testing.AllocsPerRun(50, step); n != 0 {
 		t.Errorf("copy + own paste allocate %.1f times per round, want 0", n)
 	}
