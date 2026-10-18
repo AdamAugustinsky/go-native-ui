@@ -318,3 +318,45 @@ func TestListTypeToFindReportsQuery(t *testing.T) {
 		t.Fatalf("GoTo(7): cursor %d, selection %v", c, items(&v.st.Sel))
 	}
 }
+
+// The rows of a disabled list are disabled: they export no actions and an
+// assistive technology's press does not select them.
+func TestDisabledListRowsRejectAccessibilityActions(t *testing.T) {
+	var st ListState
+	var changed bool
+	disabled := true
+	g := newRig(t, 300, 300, func(k *Kit) {
+		k.BeginDisabled(disabled)
+		l := k.BeginList("things", &st, 5)
+		for r := l.First; r < l.Last; r++ {
+			l.RowNamed(r, uint32(r), []byte("row "+string(rune('0'+r))))
+		}
+		k.EndList(&l)
+		k.EndDisabled()
+		changed = changed || l.Changed
+	})
+	g.frames(2)
+	n := g.must(ui.RoleListItem, "row 2")
+	if n.State&ui.SemDisabled == 0 || n.Actions != 0 {
+		t.Fatalf("a row of a disabled list: state %v actions %v, want disabled and none", n.State, n.Actions)
+	}
+	for _, a := range []ui.SemAction{ui.ActPress, ui.ActFocus} {
+		g.in.PushAction(ui.SemRequest{Key: n.Key, Action: a})
+		g.frames(2)
+	}
+	if st.Sel.Count() != 0 || changed {
+		t.Fatalf("a disabled row took an action: selected %d, changed %v", st.Sel.Count(), changed)
+	}
+	// enabled, the same request selects the row
+	disabled = false
+	g.frames(2)
+	n = g.must(ui.RoleListItem, "row 2")
+	if n.State&ui.SemDisabled != 0 || n.Actions&ui.ActPress == 0 {
+		t.Fatalf("an enabled row: state %v actions %v", n.State, n.Actions)
+	}
+	g.in.PushAction(ui.SemRequest{Key: n.Key, Action: ui.ActPress})
+	g.frames(2)
+	if !st.Sel.Has(2) || st.Sel.Count() != 1 {
+		t.Fatalf("press on an enabled row: selected %d", st.Sel.Count())
+	}
+}

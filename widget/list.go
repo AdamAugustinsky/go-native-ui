@@ -159,6 +159,7 @@ type List struct {
 	ring   bool
 	axes   ScrollAxes
 	table  bool
+	off    bool // built in a disabled region: the rows are disabled too
 
 	// the row being built
 	row      ui.ID
@@ -199,7 +200,7 @@ func (k *Kit) beginList(label string, st *ListState, rows int, table bool) List 
 		rowH = theme.Snap(k.Pt(k.rowPt))
 	}
 	k.rowPt = 0
-	l := List{k: k, st: st, Rows: rows, rowH: rowH, hover: -1, key: okey, table: table, axes: ScrollVertical}
+	l := List{k: k, st: st, Rows: rows, rowH: rowH, hover: -1, key: okey, table: table, axes: ScrollVertical, off: k.off()}
 
 	k.size(ui.Pct(1), ui.Pct(1))
 	l.o = c.BoxKeyed(ui.Clip, okey, nil)
@@ -551,6 +552,9 @@ func (l *List) RowNamed(r int, item uint32, name []byte) {
 		}
 	}
 	flags := ui.Flags(0)
+	if l.off {
+		flags |= ui.Disabled // no semantic actions, and a queued press is rejected
+	}
 	if bg != 0 {
 		flags |= ui.DrawBackground
 	}
