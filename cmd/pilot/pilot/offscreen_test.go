@@ -81,11 +81,10 @@ func TestSessionDrivesThePanes(t *testing.T) {
 // typing a filter, sorting, dragging the divider and relisting, through the
 // real file system service with synthetic directories. The counters are exact
 // ReadMemStats deltas over whole sessions, so everything the session does is in
-// every window; they are process wide, so the workers' buffers are included. A
-// collection empties the runtime's central pools and the workers' next waits
-// may allocate a sudog on a P that has none (the runtime's, not ours): a session
-// is therefore warmed up after the collection, and one clean window of several
-// counts. A real allocation of the session is in every window and fails.
+// every window; they are process wide, so the workers' buffers are included,
+// and so are the runtime's own one-offs (a new thread, its timer heap): a
+// session is therefore warmed up after the collection, and one clean window of
+// several counts. A real allocation of the session is in every window and fails.
 func TestSessionAllocatesNothing(t *testing.T) {
 	b := NewSynthBench(20000)
 	defer b.Close()

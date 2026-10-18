@@ -46,9 +46,8 @@ const (
 	warmFrames = 1000
 
 	// After the collection that opens the measurement: frames that refill the
-	// runtime's pools through the session's paths (a collection empties the
-	// central sudog cache, so the file system workers' first waits afterwards
-	// may allocate), and up to this many whole sessions, one after another,
+	// runtime's pools through the session's paths (a collection empties its
+	// central pools), and up to this many whole sessions, one after another,
 	// stopping at the first that allocates nothing.
 	postGCWarm = 400
 	maxWindows = 12

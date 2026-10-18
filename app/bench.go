@@ -17,9 +17,9 @@ type BenchOptions struct {
 
 	// PostGCWarm is the number of frames drawn after the collection that
 	// precedes the measured window and before its baselines. runtime.GC empties
-	// the runtime's central pools (sudogs among them), so the first frames after
-	// it may allocate once on a P that has none cached; these frames refill them
-	// through the paths the script exercises (default 0).
+	// the runtime's central pools, so the first frames after it may allocate
+	// once on a path that refills one; these frames refill them through the
+	// paths the script exercises (default 0).
 	PostGCWarm int
 
 	// Windows is how many measured windows to run at most (default 1). They
@@ -27,8 +27,9 @@ type BenchOptions struct {
 	// first window with no allocation at all, and reports the window with the
 	// fewest (BenchReport.Windows lists every one). A real per-frame or
 	// per-cycle allocation is in every window; the runtime's own background
-	// allocations (a sudog on a P without one, a new OS thread, the scavenger's
-	// timer heap) are one-offs that miss most windows.
+	// allocations (a new OS thread, the scavenger's timer heap, a sudog when
+	// some goroutine parks through a channel or sync primitive) are one-offs
+	// that miss most windows.
 	Windows int
 
 	// WindowStart runs just before a measured window's baselines are taken
