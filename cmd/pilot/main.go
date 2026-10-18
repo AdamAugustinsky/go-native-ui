@@ -259,7 +259,6 @@ type report struct {
 	GateFailures      []string `json:",omitempty"`
 }
 
-
 func runBench(rows int, dir string, gate, allowUnpaced, sites bool, maxCPU float64, timeout time.Duration, verbose bool) error {
 	var b *pilot.Bench
 	rep := report{OS: runtime.GOOS, Arch: runtime.GOARCH, Rows: max(rows, 100)}
