@@ -220,3 +220,37 @@ func TestMenuBarClickKeepsTheFieldFocus(t *testing.T) {
 		t.Fatal("a press on the menu bar took the focus from the field")
 	}
 }
+
+// Escape cleared the search field; the very next Escape, in the next frame,
+// reaches the dialog. The same after the field's clear button.
+func TestSearchFieldEscapeTakesTwoPressesInConsecutiveFrames(t *testing.T) {
+	for _, how := range []string{"escape", "clear button"} {
+		t.Run(how, func(t *testing.T) {
+			v := &stacked{order: [2]int{0, 1}, withField: true, search: true}
+			g := newRig(t, 600, 500, v.build)
+			v.open[0] = true
+			g.frames(6)
+			g.click(centre(g.must(ui.RoleSearchField, "Name")))
+			g.typ("abc")
+			g.frames(2)
+			if how == "escape" {
+				g.key(ui.KeyEscape, 0)
+			} else {
+				x, y := centre(g.must(ui.RoleButton, "Clear"))
+				g.in.MouseX, g.in.MouseY = x, y
+				g.frame()
+				g.in.SetButton(ui.ButtonLeft, true, 1)
+				g.frame()
+				g.in.SetButton(ui.ButtonLeft, false, 0)
+				g.frame() // the click is handled in this frame; Escape follows at once
+			}
+			if v.field.Len() != 0 || v.cancelled[0] != 0 || !v.open[0] {
+				t.Fatalf("clearing: text %q, cancelled %d, open %v", v.field.String(), v.cancelled[0], v.open[0])
+			}
+			g.key(ui.KeyEscape, 0) // the next frame
+			if v.cancelled[0] != 1 || v.open[0] {
+				t.Fatalf("the second Escape: cancelled %d, open %v (it needed a third press)", v.cancelled[0], v.open[0])
+			}
+		})
+	}
+}

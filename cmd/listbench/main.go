@@ -32,6 +32,7 @@ const (
 	pngW, pngH = 800, 500  // points; the PNG is at 2×
 	warmFrames = 120
 	measFrames = 600
+	maxWindows = 3 // 3 × 600 frames fit CI's 120 s timeout at the runners' ~20 fps
 
 	defaultMaxCPUus = 4000 // ARCHITECTURE §11: main-thread CPU per frame
 )
@@ -113,8 +114,13 @@ func renderPNG(l *listApp, path string, row int) error {
 }
 
 func runBench(l *listApp, gate, allowUnpaced, sites bool, maxCPU float64, timeout time.Duration) error {
-	l.script = l.benchScript(warmFrames, warmFrames+measFrames+30)
-	o := app.BenchOptions{Warm: warmFrames, Frames: measFrames, Timeout: timeout}
+	// Up to maxWindows measured windows, stopping at the first that allocates
+	// nothing (D27): the counters are process-wide and the runtime's own
+	// one-offs (a new OS thread: 6-7 objects, about 5 KiB, seen once on macOS
+	// and once on Windows CI) can land in one; an allocation of the list's
+	// own recurs in every window, as the script repeats its events in each.
+	l.script = l.benchScript(warmFrames, measFrames, warmFrames+maxWindows*measFrames+30)
+	o := app.BenchOptions{Warm: warmFrames, Frames: measFrames, Windows: maxWindows, Timeout: timeout}
 	var as allocSites
 	if sites {
 		o.WindowStart, o.WindowEnd = as.start, as.end

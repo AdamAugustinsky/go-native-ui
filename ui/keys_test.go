@@ -465,6 +465,7 @@ func (e *escRig) build(c *Context) {
 			e.cancelled++
 			if e.clears && e.buf.Len() > 0 {
 				e.buf.Reset()
+				c.FieldEmptied(res.ID)
 			}
 		}
 		c.EndOverlay()
@@ -527,8 +528,8 @@ func TestEscapeClearsPopupSearchFieldBeforeClosingPopup(t *testing.T) {
 	e.in.AppendText("abc")
 	e.harness.frame(e.build)
 	e.harness.frame(e.build)
+	// two Escapes in consecutive frames, with no rebuild between them
 	e.esc()
-	e.harness.frame(e.build)
 	if e.buf.Len() != 0 || e.dismissed != 0 || !e.popup || e.modalEsc != 0 {
 		t.Fatalf("first Escape: text %q, popup dismissed %d, open %v, modal took %d", e.buf.String(), e.dismissed, e.popup, e.modalEsc)
 	}
@@ -542,20 +543,15 @@ func TestEscapeClearsPopupSearchFieldBeforeClosingPopup(t *testing.T) {
 	}
 }
 
-// The character a platform sends along with a Tab key is not typed text.
-func TestTabCharacterWithTabKeyIsNotTyped(t *testing.T) {
+// Text typed in the frame of a Tab key is text: ui does not take tabs out of
+// it (a commit "a\tb" batched with a traversal Tab). A single-line field turns
+// the tab into a space.
+func TestTextWithATabIsKeptInTheFrameOfATabKey(t *testing.T) {
 	r := newRig(t, false)
-	r.typ("ab")
 	r.in.PushKey(KeyEvent{Code: KeyTab, Down: true})
-	r.in.AppendText("\t")
+	r.in.AppendText("a\tb")
 	r.frame()
-	if r.text() != "ab" {
-		t.Fatalf("Tab typed into the field: %q", r.text())
-	}
-	r.focus()
-	r.in.AppendText("c\td") // no Tab key: text, which a field keeps with the tab as a space
-	r.frame()
-	if r.text() != "abc d" {
-		t.Fatalf("typed text with a tab: %q", r.text())
+	if r.text() != "a b" {
+		t.Fatalf("the field holds %q, want %q", r.text(), "a b")
 	}
 }

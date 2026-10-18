@@ -157,6 +157,7 @@ func (k *Kit) searchDecor(wkey, fkey ui.Key, buf *ui.TextBuffer, h, iconX, clear
 
 	if res.Cancelled && buf.Len() > 0 {
 		buf.Reset()
+		c.FieldEmptied(res.ID)
 		res.Changed, res.Cancelled = true, false
 	}
 	if buf.Len() == 0 {
@@ -184,6 +185,7 @@ func (k *Kit) searchDecor(wkey, fkey ui.Key, buf *ui.TextBuffer, h, iconX, clear
 	c.Pop()
 	if c.Signal(cb).Clicked {
 		buf.Reset()
+		c.FieldEmptied(res.ID)
 		res.Changed = true
 		c.SetFocus(fkey)
 		c.SetFocusVisible(false)
