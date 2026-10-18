@@ -202,6 +202,13 @@ type Event struct {
 	Text   TextRef // EvText, EvPreedit
 	// EvPreedit: the caret (SelLen 0) or the part being converted inside the
 	// composition, as a byte offset and length into the UTF-8 text.
+	//
+	// EvText (macOS): when not both 0, Text replaces the SelLen UTF-16 units
+	// that start SelStart units from the caret (negative: before it), and the
+	// caret goes after Text. Press-and-hold accents send {-1, 1}: "replace
+	// the character before the caret". Text may be empty (a pure removal).
+	// UTF-16 because AppKit counts in it and the platform does not hold the
+	// text; the text field converts with its own buffer.
 	SelStart, SelLen int32
 	Time             int64  // OS event time in Now() nanoseconds; 0 if unknown
 	Tag              uint64 // EvPaste: the tag given to RequestPaste
@@ -215,9 +222,10 @@ type Options struct {
 	// window to (logical units); 0 means no minimum.
 	MinWidth, MinHeight int
 	// Hidden opens the window without showing it; call Show, or hand Show to
-	// the GPU surface (macOS: Surface.RevealOnFirstFrame) so the window
-	// appears together with its first frame. Content-first startup is
-	// implemented on macOS only so far; elsewhere Hidden is ignored.
+	// the GPU surface (Surface.RevealOnFirstFrame) so the window appears
+	// together with its first frame. macOS keeps the window ordered out;
+	// Windows shows it cloaked (DWMWA_CLOAK) and uncloaks it after the first
+	// present. Linux ignores Hidden so far.
 	Hidden bool
 	// Titlebar > 0 extends the content under a transparent titlebar band of
 	// that height in logical units; the app draws the band. The close

@@ -9,8 +9,8 @@
 //
 //   - Content-first startup: the window opens hidden, the first frame is
 //     built and drawn before the first Wait, and the window appears together
-//     with it (macOS: gpu.Surface.RevealOnFirstFrame; elsewhere Show is a
-//     no-op and the window is already visible). The first frame is built
+//     with it (gpu.Surface.RevealOnFirstFrame: macOS orders the window in,
+//     Windows uncloaks it; on Linux the window is already visible). The first frame is built
 //     twice so that layout-dependent builders (scrollbars sized from their
 //     list) start from a settled layout.
 //   - An event-driven loop: platform events become ui.Input (input.go), a
