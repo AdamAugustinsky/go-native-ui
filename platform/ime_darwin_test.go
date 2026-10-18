@@ -45,8 +45,20 @@ func (r *imeRig) setMarked(s string, loc, n uintptr) {
 }
 
 func (r *imeRig) insert(s string) {
+	r.insertReplacing(s, nsNotFound, 0)
+}
+
+// insertReplacing sends insertText:replacementRange: with the range AppKit
+// would pass.
+func (r *imeRig) insertReplacing(s string, loc, n uintptr) {
 	str := objc.Str(s)
-	objc.F.Reset().Arg(uintptr(r.view)).Arg(uintptr(selInsertText)).Arg(uintptr(str)).Arg(^uintptr(0)).Arg(0).Call(objc.MsgSend)
+	objc.F.Reset().Arg(uintptr(r.view)).Arg(uintptr(selInsertText)).Arg(uintptr(str)).Arg(loc).Arg(n).Call(objc.MsgSend)
+}
+
+// range16 sends a message that returns an NSRange.
+func (r *imeRig) range16(sel objc.SEL) (loc, n uintptr) {
+	objc.F.Reset().Arg(uintptr(r.view)).Arg(uintptr(sel)).Call(objc.MsgSend)
+	return objc.F.R0(), objc.F.R1()
 }
 
 func (r *imeRig) events() []Event {
@@ -78,13 +90,11 @@ func TestIMEMarkedTextFlow(t *testing.T) {
 	if !objc.SendBool(r.view, selHasMarkedText) || !r.w.imeUsed {
 		t.Fatal("hasMarkedText")
 	}
-	// markedRange {0, 2}, selectedRange {1, 0}.
-	objc.F.Reset().Arg(uintptr(r.view)).Arg(uintptr(selMarkedRange)).Call(objc.MsgSend)
-	if a, b := objc.F.R0(), objc.F.R1(); a != 0 || b != 2 {
+	// The composition sits at the caret: markedRange {anchor, 2}, selectedRange {anchor+1, 0}.
+	if a, b := r.range16(selMarkedRange); a != imeAnchor || b != 2 {
 		t.Errorf("markedRange = {%d, %d}", a, b)
 	}
-	objc.F.Reset().Arg(uintptr(r.view)).Arg(uintptr(selSelectedRange)).Call(objc.MsgSend)
-	if a, b := objc.F.R0(), objc.F.R1(); a != 1 || b != 0 {
+	if a, b := r.range16(selSelectedRange); a != imeAnchor+1 || b != 0 {
 		t.Errorf("selectedRange = {%d, %d}", a, b)
 	}
 	// A surrogate pair counts two UTF-16 units: selection of the second
@@ -322,4 +332,101 @@ func TestIMERectScreenConversion(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Press and hold: AppKit types the letter, then replaces it with the accent
+// picked in the popover. The caret it is told about (imeAnchor) makes the
+// range it sends relative to the caret, and the platform passes that on.
+func TestIMEPressAndHoldAccent(t *testing.T) {
+	r := newIMERig(t)
+	// With nothing composing the caret is at the anchor and nothing is marked.
+	if a, b := r.range16(selSelectedRange); a != imeAnchor || b != 0 {
+		t.Errorf("selectedRange = {%d, %d}, want {anchor, 0}", a, b)
+	}
+	if a, b := r.range16(selMarkedRange); a != nsNotFound || b != 0 {
+		t.Errorf("markedRange = {%d, %d}, want {NSNotFound, 0}", a, b)
+	}
+	// The held letter arrives like any typed text.
+	r.insert("e")
+	ev := r.events()
+	if len(ev) != 1 || ev[0].Kind != EvText || ev[0].SelStart != 0 || ev[0].SelLen != 0 || r.imeUsedAndReset() {
+		t.Fatalf("typed letter: %+v", ev)
+	}
+	// The accent replaces the character before the caret: {anchor-1, 1}.
+	r.insertReplacing("é", imeAnchor-1, 1)
+	used := r.imeUsedAndReset()
+	ev = r.w.q.ev
+	if len(ev) != 1 || ev[0].Kind != EvText || string(r.w.q.textOf(ev[0].Text)) != "é" || ev[0].SelStart != -1 || ev[0].SelLen != 1 {
+		t.Fatalf("accent: %+v", ev)
+	}
+	if !used {
+		t.Error("the key that picked the accent was not marked as taken by the input method")
+	}
+	// A longer range, a range after the caret, and an empty insertion at the caret.
+	r.events()
+	r.insertReplacing("ñ", imeAnchor-3, 3)
+	r.insertReplacing("z", imeAnchor+2, 1)
+	r.insertReplacing("x", imeAnchor, 0)
+	ev = r.events()
+	if len(ev) != 3 || ev[0].SelStart != -3 || ev[0].SelLen != 3 || ev[1].SelStart != 2 || ev[1].SelLen != 1 || ev[2].SelStart != 0 || ev[2].SelLen != 0 {
+		t.Errorf("ranges: %+v", ev)
+	}
+	// Deleting the character: an empty text with a range is still an event.
+	r.insertReplacing("", imeAnchor-1, 1)
+	if ev = r.events(); len(ev) != 1 || ev[0].Kind != EvText || ev[0].Text.Len != 0 || ev[0].SelStart != -1 || ev[0].SelLen != 1 {
+		t.Errorf("empty replacement: %+v", ev)
+	}
+	// Ranges that are not from this document are plain insertions: a position
+	// near 0 (an absolute offset), NSNotFound, and absurd lengths.
+	r.imeUsedAndReset()
+	r.insertReplacing("a", 0, 1)
+	r.insertReplacing("b", nsNotFound, 0)
+	r.insertReplacing("c", imeAnchor-1, imeMaxReplace+1)
+	r.insertReplacing("d", imeAnchor-imeMaxReplace-1, 1)
+	ev = r.events()
+	if len(ev) != 4 || r.imeUsedAndReset() {
+		t.Fatalf("foreign ranges: %+v", ev)
+	}
+	for i, e := range ev {
+		if e.SelStart != 0 || e.SelLen != 0 {
+			t.Errorf("event %d carries the range %d+%d", i, e.SelStart, e.SelLen)
+		}
+	}
+}
+
+// While composing, the composition is what a range at the caret means; a range
+// before it is still a replacement.
+func TestIMEReplacementWhileComposing(t *testing.T) {
+	r := newIMERig(t)
+	r.setMarked("かな", 2, 0)
+	r.events()
+	r.insertReplacing("仮名", imeAnchor, 2) // the marked range: the commit replaces the composition
+	ev := r.events()
+	if len(ev) != 2 || ev[0].Kind != EvPreedit || ev[1].Kind != EvText || ev[1].SelStart != 0 || ev[1].SelLen != 0 {
+		t.Fatalf("commit over the marked range: %+v", ev)
+	}
+	// A composition that also replaces the character before the caret: the
+	// removal comes first, as an empty EvText, then the composition.
+	r.setMarkedReplacing("ä", 1, 0, imeAnchor-1, 1)
+	ev = r.events()
+	if len(ev) != 2 || ev[0].Kind != EvText || ev[0].Text.Len != 0 || ev[0].SelStart != -1 || ev[0].SelLen != 1 ||
+		ev[1].Kind != EvPreedit || r.text(ev[1]) != "ä" {
+		t.Fatalf("composition replacing text: %+v", ev)
+	}
+	// Re-marking inside the composition is not a replacement of document text.
+	r.setMarkedReplacing("ä̈", 1, 0, imeAnchor, 1)
+	if ev = r.events(); len(ev) != 1 || ev[0].Kind != EvPreedit {
+		t.Errorf("replacement inside the composition: %+v", ev)
+	}
+}
+
+func (r *imeRig) imeUsedAndReset() bool {
+	u := r.w.imeUsed
+	r.w.imeUsed = false
+	return u
+}
+
+func (r *imeRig) setMarkedReplacing(s string, loc, n, rloc, rn uintptr) {
+	str := objc.Str(s)
+	objc.F.Reset().Arg(uintptr(r.view)).Arg(uintptr(selSetMarkedText)).Arg(uintptr(str)).Arg(loc).Arg(n).Arg(rloc).Arg(rn).Call(objc.MsgSend)
 }
