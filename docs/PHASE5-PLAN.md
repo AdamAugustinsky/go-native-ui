@@ -407,11 +407,19 @@ The protocol work starts at once, in platform files only. Its integration into `
   - a zero-allocation clipboard (Windows round trip with other processes in CI);
   - content-first startup on Windows (DWM cloak, checked by screen capture in CI);
   - press-and-hold accents, platform and `ui` side. Your hand test of the real accent popover is still to do.
-- **Pilot's gated bench** now includes copy, cut, paste and undo (the platform clipboard on macOS and Windows; on Linux, until its clipboard branch merges, the bench's own).
+- **Parity, Linux:**
+  - the clipboard with other apps: Wayland data device, X11 CLIPBOARD with INCR; round trips with `wl-copy`/`wl-paste` under Sway and with `xclip` in CI;
+  - cursors: `wp_cursor_shape_v1`, then the `libwayland-cursor` theme, then our own raster cursors; on X11, Xcursor, then the core font;
+  - Wayland decorations follow the configured mode, with move, edge resize, maximise, minimise and close (the protocol side; the drawing comes from the theme);
+  - window handles for portal dialogs (`ExternalHandle`, xdg-foreign);
+  - content-first startup on X11 (the window maps with its first frame);
+  - RTL shaping allocates nothing;
+  - a Wayland input method (text-input-v3; scripted compositor only).
+  - Not done: the X11 PRIMARY selection and an X11 input method. Tested only against scripted compositors (Sway for the clipboard), not GNOME or KDE.
+- **Pilot's gated bench** includes copy, cut, paste and undo through the platform clipboard on every OS.
 
 **In progress:**
 - widgets and the gallery (step 4);
-- Linux parity;
 - sudog-free worker parking. This is the cause of the intermittent macOS CI gate failure: a probe on the runner found the runtime allocating when the `fs` workers park.
 
 **Known gaps so far:**
