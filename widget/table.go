@@ -71,6 +71,7 @@ type Table struct {
 	root ui.ID
 	hkey ui.Key
 	hh   float32
+	pad  float32 // the padding at the sides of a cell
 }
 
 // TableKey is the key of the list box of the table that BeginTable builds with
@@ -117,9 +118,9 @@ func (k *Kit) BeginTable(label string, st *TableState, cols []Column, rows int) 
 	t := Table{ts: st, cols: cols}
 	_, ident := ui.SplitLabel(label)
 	tkey := ui.HashString(c.ParentKey(), ident)
-	t.hh = theme.Snap(px.RowH)
-	if k.rowPt > 0 { // compact rows keep a header a little taller than themselves
-		t.hh = theme.Snap(k.Pt(k.rowPt + 4))
+	t.hh, t.pad = theme.Snap(px.RowH), px.Pad
+	if k.rowPt > 0 { // compact rows keep a header a little taller than themselves, and the cells close
+		t.hh, t.pad = theme.Snap(k.Pt(k.rowPt+4)), px.GapSmall
 	}
 	t.hkey = ui.KeyN(tkey, 2)
 
@@ -221,7 +222,7 @@ func (t *Table) header(k *Kit, tkey ui.Key, ident string) {
 		c.NextSize(ui.Px(w), ui.Px(hh))
 		c.NextAxis(ui.AxisX)
 		c.NextGap(px.GapSmall)
-		c.NextPadding(px.Pad, 0, px.Pad, 0)
+		c.NextPadding(t.pad, 0, t.pad, 0)
 		c.NextRole(ui.RoleColumnHeader)
 		c.NextSemName(col.Title)
 		if hot > 0.004 {
@@ -273,7 +274,7 @@ func (t *Table) BeginCell(col int) ui.ID {
 	c.NextSize(ui.Px(t.ts.colPx[col]), ui.Pct(1))
 	c.NextAxis(ui.AxisX)
 	c.NextGap(k.r.Px.GapSmall)
-	c.NextPadding(k.r.Px.Pad, 0, k.r.Px.Pad, 0)
+	c.NextPadding(t.pad, 0, t.pad, 0)
 	c.NextRole(ui.RoleCell)
 	id := c.BoxKeyed(ui.Clip, ui.KeyN(t.rowKey, uint64(col)), nil)
 	c.Push(id)
@@ -289,7 +290,7 @@ func (t *Table) CellBytes(col int, b []byte) {
 	k := t.k
 	c := k.c
 	c.NextSize(ui.Px(t.ts.colPx[col]), ui.Pct(1))
-	c.NextPadding(k.r.Px.Pad, 0, k.r.Px.Pad, 0)
+	c.NextPadding(t.pad, 0, t.pad, 0)
 	c.NextFont(k.r.Font.UI)
 	c.NextTextColor(t.textCol)
 	c.NextAlign(t.cols[col].Align)

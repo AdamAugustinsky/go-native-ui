@@ -78,11 +78,13 @@ func (ch *chrome) drawFill(c *ui.Context, r *theme.Resolved, s theme.Surface, kg
 	}
 	m := ch.meshes[s.Slot]
 	d, ft := s.Rect, s.Focus
-	m.Update(&ch.fld, d, r.Px.RadiusLarge)
+	// the glass samples the background where the surface is in the window
+	win := [4]float32{d[0] + s.Origin[0], d[1] + s.Origin[1], d[2] + s.Origin[0], d[3] + s.Origin[1]}
+	m.Update(&ch.fld, win, r.Px.RadiusLarge)
 	to := r.Pal.Surface | 0xFF
 	for i := 0; i < m.n; i++ {
 		cell := &m.cells[i]
-		theme.At(c, cell.r[0]-d[0], cell.r[1]-d[1], cell.r[2]-cell.r[0], cell.r[3]-cell.r[1])
+		theme.At(c, cell.r[0]-win[0], cell.r[1]-win[1], cell.r[2]-cell.r[0], cell.r[3]-cell.r[1])
 		c.NextBG4(theme.MixRGBA(cell.c[0], to, ft), theme.MixRGBA(cell.c[1], to, ft),
 			theme.MixRGBA(cell.c[2], to, ft), theme.MixRGBA(cell.c[3], to, ft))
 		c.NextRadii(cell.radii[0], cell.radii[1], cell.radii[2], cell.radii[3])

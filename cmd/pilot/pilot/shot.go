@@ -209,8 +209,12 @@ func shoot(pl *Pilot, path string, w, h int, scale float32, corners bool, sys ui
 	}
 	o.UI.SetSystemAppearance(sys)
 	img, _ := o.Frame()
+	face := monoFace()
+	if face == "" {
+		face = "system monospaced"
+	}
 	meta := map[string]any{
-		"cellAdvancePt": pl.cellAdvancePt(), "rowPitchPt": float64(listRowPt), "monoFace": "system monospaced",
+		"cellAdvancePt": pl.cellAdvancePt(), "rowPitchPt": float64(listRowPt), "monoFace": face,
 		"quads": len(o.Quads()), "drawCalls": o.R.DrawCalls(),
 	}
 	if err := rexrig.WritePNG(path, img.Pix, w, h, corners, meta); err != nil {

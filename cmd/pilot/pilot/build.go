@@ -21,15 +21,17 @@ const (
 	minPanePt    = 220 // the least width of a pane
 	paneInsetPt  = 4   // the room at the sides of a pane's content: the list and the fields start 4 pt in
 	paneTopPt    = 8   // and the path field this far below the pane's top edge
-	paneGapPt    = 4   // between the parts of a pane
+	paneGapPt    = 3   // between the parts of a pane
+	fieldHPt     = 26  // the path and filter fields, a little lower than the theme's controls
+	fieldInsetPt = 4   // and this much further in than the list
 	showSizePt   = 240 // the Size column shows from this width of the list
 	showDatePt   = 330 // the Modified column shows from this width of the list
 	nameColPt    = 80  // the least width of the Name column
 	sizeColPt    = 80  // the Size column: eight cells of 7.5 pt, the cell's padding and a little room
-	dateColPt    = 144 // the Modified column: sixteen cells, the padding and a little room
+	dateColPt    = 132 // the Modified column: sixteen cells and the padding
 	navFirstPt   = 90  // the titlebar's back button starts here, clear of the window's own buttons
 	navGapPt     = 2
-	titleGapPt   = 12
+	titleGapPt   = 26 // between the buttons and the title
 	titleRightPt = 24
 )
 
@@ -138,15 +140,18 @@ func b2f(b bool) float32 {
 }
 
 // surface is the chrome's description of pane i's surface.
-func surface(i int, rect [4]float32, focus float32) theme.Surface {
-	return theme.Surface{Key: paneKey(i), Slot: i, Rect: rect, Focus: focus, Opacity: 1, Top: true}
+// origin is where the box the surface is built in starts in the window: the
+// glass samples the window background there.
+func surface(i int, rect [4]float32, origin [2]float32, focus float32) theme.Surface {
+	return theme.Surface{Key: paneKey(i), Slot: i, Rect: rect, Origin: origin, Focus: focus, Opacity: 1, Top: true}
 }
 
 // drawPanes builds the splitter with the two glass surfaces.
 func (pl *Pilot) drawPanes(c *ui.Context, r *theme.Resolved) {
 	k := pl.k
 	w, h := c.Size()
-	ox, oy := theme.Snap(r.Px.Inset), theme.Snap(r.Px.TitlebarH)
+	// the panes start half a point above the titlebar's lower edge, as in the Rex reference
+	ox, oy := theme.Snap(r.Px.Inset), theme.Snap(r.Px.TitlebarH-0.5*r.Scale)
 	theme.At(c, ox, oy, float32(w)-2*ox, float32(h)-oy-ox)
 	area := c.BoxKeyed(fl, keyArea, nil)
 	c.Push(area)
@@ -156,14 +161,14 @@ func (pl *Pilot) drawPanes(c *ui.Context, r *theme.Resolved) {
 		ft[i] = c.AnimateValue(ui.KeyN(keyFocus, uint64(i)), b2f(i == pl.active), r.Motion.Dim)
 	}
 	for i := range pl.panes {
-		r.Chrome.SurfaceShadow(c, r, surface(i, sp.PaneRect(i), ft[i]))
+		r.Chrome.SurfaceShadow(c, r, surface(i, sp.PaneRect(i), [2]float32{ox, oy}, ft[i]))
 	}
 	pl.frameRows = 0
 	for i := range pl.panes {
 		pr := sp.PaneRect(i)
 		pl.geo[i].rect = [4]float32{ox + pr[0], oy + pr[1], ox + pr[2], oy + pr[3]}
 		sp.Pane(i)
-		pl.drawPane(c, r, i, pr[2]-pr[0], pr[3]-pr[1], ft[i])
+		pl.drawPane(c, r, i, pr[2]-pr[0], pr[3]-pr[1], [2]float32{ox + pr[0], oy + pr[1]}, ft[i])
 		sp.EndPane()
 	}
 	k.EndSplitter(&sp)
@@ -190,9 +195,9 @@ func (pl *Pilot) vbox(c *ui.Context, key ui.Key, w, h ui.Size, padL, padT, padR,
 
 // ---- one pane ----
 
-func (pl *Pilot) drawPane(c *ui.Context, r *theme.Resolved, i int, w, h, ft float32) {
+func (pl *Pilot) drawPane(c *ui.Context, r *theme.Resolved, i int, w, h float32, origin [2]float32, ft float32) {
 	p := pl.panes[i]
-	s := surface(i, [4]float32{0, 0, w, h}, ft)
+	s := surface(i, [4]float32{0, 0, w, h}, origin, ft)
 	kg := r.Chrome.BeginSurface(c, r, s)
 	// The surface's fill and edges are floating boxes, which draw above the
 	// flow's, so the content is a floating box too (built after them).
@@ -221,14 +226,16 @@ func (pl *Pilot) drawPane(c *ui.Context, r *theme.Resolved, i int, w, h, ft floa
 
 func (pl *Pilot) drawPathField(c *ui.Context, r *theme.Resolved, i int, p *pane) {
 	k := pl.k
-	pl.vbox(c, pathBoxKey(i), ui.Pct(1), ui.Px(theme.Snap(r.Px.ControlH)), 0, 0, 0, 0, 0)
+	pl.vbox(c, pathBoxKey(i), ui.Pct(1), ui.Px(theme.Snap(k.Pt(fieldHPt))), fieldInsetPt, 0, fieldInsetPt, 0, 0)
+	k.NextHeight(ui.Px(theme.Snap(k.Pt(fieldHPt))))
+	k.NextMono()
 	f := k.TextField("path", &p.path, "")
 	if p.pathErr != "" { // the reason, inside the field at its right end
-		cw := theme.Snap(r.Px.ControlH)
+		cw := theme.Snap(k.Pt(fieldHPt))
 		fm := r.Met(r.Font.Small)
 		fw := c.Rect(c.Parent())
 		wd := fw[2] - fw[0]
-		theme.At(c, wd*0.4, theme.Snap((cw-fm.H)/2), max(wd*0.6-r.Px.Pad-r.Px.Gap, 0), fm.H)
+		theme.At(c, wd*0.4, theme.Snap((cw-fm.H)/2), max(wd*0.6-k.Pt(fieldInsetPt)-r.Px.Pad-r.Px.Gap, 0), fm.H)
 		c.NextFont(r.Font.Small)
 		c.NextTextColor(r.Pal.Danger)
 		c.NextAlign(ui.AlignRight)
@@ -257,7 +264,9 @@ func (pl *Pilot) drawFilterField(c *ui.Context, i int, p *pane) {
 		return
 	}
 	k := pl.k
-	pl.vbox(c, filterBoxKey(i), ui.Pct(1), ui.Px(theme.Snap(k.Theme().Px.ControlH)), 0, 0, 0, 0, 0)
+	pl.vbox(c, filterBoxKey(i), ui.Pct(1), ui.Px(theme.Snap(k.Pt(fieldHPt))), fieldInsetPt, 0, fieldInsetPt, 0, 0)
+	k.NextHeight(ui.Px(theme.Snap(k.Pt(fieldHPt))))
+	k.NextMono()
 	f := k.TextField("filter", &p.filter, "Filter")
 	c.Pop()
 	if f.Changed {
@@ -497,7 +506,7 @@ func (pl *Pilot) drawStatus(c *ui.Context, r *theme.Resolved, i int, p *pane) {
 		tx = f.Bytes()
 	}
 	c.NextSize(ui.Pct(1), ui.Px(theme.Snap(k.Pt(statusHPt))))
-	c.NextPadding(k.Pt(paneInsetPt), 0, k.Pt(paneInsetPt), 0)
+	c.NextPadding(k.Pt(paneInsetPt+2), 0, k.Pt(paneInsetPt), theme.Snap(k.Pt(2)))
 	box := c.BoxKeyed(0, statusKey(i), nil)
 	c.Push(box)
 	c.NextSize(ui.Pct(1), ui.Pct(1))

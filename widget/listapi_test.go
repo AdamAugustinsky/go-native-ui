@@ -195,3 +195,24 @@ func TestFocusKeysNameTheWidgets(t *testing.T) {
 		t.Errorf("a click in the field focuses key %v, FieldKey says %v", got, want)
 	}
 }
+
+// NextHeight sets the height of the next text field, once.
+func TestTextFieldTakesNextHeight(t *testing.T) {
+	var a, b ui.TextBuffer
+	var low float32
+	g := newRig(t, 400, 300, func(k *Kit) {
+		low = k.Fixed(20).Value
+		k.NextHeight(k.Fixed(20))
+		k.TextField("low", &a, "")
+		k.TextField("normal", &b, "")
+	})
+	g.frames(2)
+	n := g.must(ui.RoleTextField, "low")
+	if h := n.Bounds[3] - n.Bounds[1]; h != low {
+		t.Errorf("a field after NextHeight is %v px high, want %v", h, low)
+	}
+	n = g.must(ui.RoleTextField, "normal")
+	if h := n.Bounds[3] - n.Bounds[1]; h <= low {
+		t.Errorf("the next field is %v px high, NextHeight must not carry over (want more than %v)", h, low)
+	}
+}

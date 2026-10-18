@@ -26,7 +26,6 @@ import (
 	"gonativeui/fs"
 	"gonativeui/text"
 	"gonativeui/theme"
-	"gonativeui/theme/rex"
 	"gonativeui/ui"
 	"gonativeui/widget"
 )
@@ -149,7 +148,7 @@ var _ app.Initer = (*Pilot)(nil)
 // first listings.
 func (pl *Pilot) Init(a *app.App) error {
 	pl.a = a
-	pl.k = widget.NewKit(a.UI, a.Text, rex.Theme())
+	pl.k = widget.NewKit(a.UI, a.Text, look())
 	pl.k.SetPreference(pl.opt.Preference)
 	pl.ico = entryIcons{link: pl.k.AddIcon(specLink), exec: pl.k.AddIcon(specExec), other: pl.k.AddIcon(specOther)}
 	a.UI.Reserve(4096)

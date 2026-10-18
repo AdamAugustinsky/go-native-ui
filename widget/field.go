@@ -50,6 +50,13 @@ func (k *Kit) field(label string, buf *ui.TextBuffer, placeholder string, search
 	display, ident := ui.SplitLabel(label)
 	dim := k.dim()
 	h := theme.Snap(px.ControlH)
+	if k.hasH && k.nh.Kind == ui.SizePixels { // NextHeight with a fixed height
+		h = k.nh.Value
+	}
+	font := k.r.Font.UI
+	if k.nextMono {
+		font, k.nextMono = k.r.Font.Mono, false
+	}
 	wkey := ui.HashString(c.ParentKey(), ident)
 	fkey := ui.HashString(wkey, ident)
 
@@ -93,7 +100,7 @@ func (k *Kit) field(label string, buf *ui.TextBuffer, placeholder string, search
 	c.NextBorder(border, bw)
 	c.NextRadius(px.RadiusMedium)
 	c.NextPadding(padL, 0, padR, 0)
-	c.NextFont(k.r.Font.UI)
+	c.NextFont(font)
 	c.NextTextColor(p.Text)
 	if k.off() {
 		c.NextFlags(ui.Disabled)
@@ -116,7 +123,7 @@ func (k *Kit) field(label string, buf *ui.TextBuffer, placeholder string, search
 	if buf.Len() == 0 && placeholder != "" && !k.composing(fs) {
 		theme.At(c, padL, 0, 0, h)
 		c.NextSize(ui.TextSize(0), ui.Px(h))
-		c.NextFont(k.r.Font.UI)
+		c.NextFont(font)
 		c.NextTextColor(p.TextMuted)
 		c.BoxKeyed(ui.DrawText|fl, ui.KeyN(wkey, 2), strBytes(placeholder))
 	}
