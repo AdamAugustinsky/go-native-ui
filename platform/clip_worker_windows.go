@@ -1,6 +1,7 @@
 package platform
 
 import (
+	"fmt"
 	"runtime"
 	"slices"
 	"sync/atomic"
@@ -409,6 +410,17 @@ func (c *clipWorker) read(owner uintptr, r clipReq) (n int, ok bool) {
 		} else {
 			retry = win32.Call(pCountClipboardFormats) == 0 || win32.Bool(win32.Call(pIsClipboardFormatAvailable, cfUnicodeText))
 		}
+		if h == 0 { // TEMPORARY diagnostics
+			var fm []uintptr
+			for f := uintptr(0); ; {
+				f = win32.Call(pEnumClipboardFormats, f)
+				if f == 0 {
+					break
+				}
+				fm = append(fm, f)
+			}
+			clipDiag = append(clipDiag, fmt.Sprintf("NULL count=%d avail=%v formats=%v retry=%v settleLeft=%v t=%s", win32.Call(pCountClipboardFormats), win32.Bool(win32.Call(pIsClipboardFormatAvailable, cfUnicodeText)), fm, retry, time.Duration(settle-nanotime()), time.Now().Format("15:04:05.000")))
+		}
 		win32.Call(pCloseClipboard)
 		c.buf = buf // only this goroutine uses buf until it publishes the answer
 		if retry && nanotime() < settle && c.alive(r) {
@@ -476,3 +488,8 @@ func allocClipboardText(b []byte) uintptr {
 	win32.Call(pGlobalUnlock, mem)
 	return mem
 }
+
+var (
+	clipDiag              []string // TEMPORARY
+	pEnumClipboardFormats = win32.Proc(user32, "EnumClipboardFormats")
+)

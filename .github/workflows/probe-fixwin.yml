@@ -34,7 +34,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        rep: [1, 2, 3, 4]
+        rep: [1, 2, 3, 4, 5, 6]
     defaults:
       run:
         shell: bash
