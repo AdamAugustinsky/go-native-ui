@@ -670,8 +670,24 @@ func TestClipboardWithPowerShell(t *testing.T) {
 	if got, err := os.ReadFile(out); err != nil || string(got) != strings.ReplaceAll(fromUs, "\n", "\r\n") {
 		t.Errorf("Get-Clipboard read %q (%v), want the text with \\r\\n line ends", got, err)
 	}
-	start := time.Now()
-	if e, got := pasteOf(t, w, 6, 2*time.Second); e.Flags != 0 || got != strings.ReplaceAll(fromThem, "\r\n", "\n") {
-		t.Errorf("RequestPaste answered %q (flags %v) after %v, after Set-Clipboard; a synchronous read sees %q; worker stuck: %v", got, e.Flags, time.Since(start), Clipboard(), w.clip.stuck())
+	// The other process has exited, but what it put on the clipboard (an OLE
+	// data object it flushes as it ends) may take a moment to be readable under
+	// load: the first answers on a busy runner were failures at once, with the
+	// text there a moment later. Ask again for a few seconds.
+	want := strings.ReplaceAll(fromThem, "\r\n", "\n")
+	var e Event
+	var got string
+	tries := 0
+	for end := time.Now().Add(10 * time.Second); ; {
+		tries++
+		if e, got = pasteOf(t, w, 6, 2*time.Second); (e.Flags == 0 && got == want) || time.Now().After(end) {
+			break
+		}
+		w.Wait(int64(250 * time.Millisecond))
+	}
+	if e.Flags != 0 || got != want {
+		t.Errorf("RequestPaste answered %q (flags %v) after Set-Clipboard, %d tries; a synchronous read sees %q", got, e.Flags, tries, Clipboard())
+	} else if tries > 1 {
+		t.Logf("the text of the other process was readable at try %d", tries)
 	}
 }
