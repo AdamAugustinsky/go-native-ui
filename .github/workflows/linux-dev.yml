@@ -33,3 +33,30 @@ jobs:
         run: go test -count=1 -v -run 'Wayland' ./platform 2>&1 | tail -150
       - name: x11 (xvfb)
         run: xvfb-run -a -s "-screen 0 1280x800x24" go test -count=1 -v -run 'X11' ./platform 2>&1 | tail -150
+  sway-probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: install
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends sway wtype wl-clipboard wayland-utils wlrctl
+      - name: probe
+        run: |
+          set +e
+          export XDG_RUNTIME_DIR=$(mktemp -d); chmod 700 $XDG_RUNTIME_DIR
+          export WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 WLR_RENDERER=pixman
+          cat > swaycfg <<'EOC'
+          output HEADLESS-1 mode 1280x800
+          EOC
+          sway -c swaycfg > sway.log 2>&1 &
+          sleep 3
+          export WAYLAND_DISPLAY=$(ls $XDG_RUNTIME_DIR | grep '^wayland-' | grep -v lock | head -1)
+          echo "--- seat before"; wayland-info | grep -A6 "wl_seat" | head -12
+          wtype -s 20000 a > wtype.log 2>&1 &
+          sleep 2
+          echo "--- seat with wtype"; wayland-info | grep -A6 "wl_seat" | head -12
+          cat wtype.log
+          wlrctl pointer move 10 10; echo "wlrctl rc=$?"
+          echo "--- seat with wlrctl"; wayland-info | grep -A6 "wl_seat" | head -12
+          tail -5 sway.log
