@@ -130,8 +130,7 @@ func TestWaylandCursorTheme(t *testing.T) {
 // TestWaylandCursorRaster: with neither cursor-shape nor a theme the cursors
 // are our own, one image per shape, at the buffer scale.
 func TestWaylandCursorRaster(t *testing.T) {
-	t.Setenv("XCURSOR_PATH", t.TempDir()) // no themes
-	t.Setenv("XCURSOR_THEME", "none")
+	t.Setenv("GNUI_NO_CURSOR_THEME", "1") // libwayland-cursor even has a built-in arrow
 	t.Setenv("XCURSOR_SIZE", "24")
 	f := startFakeWL(t, "")
 	w := openFake(t, f)

@@ -27,7 +27,13 @@ var wlcur struct {
 	names                                [numShapes][][]byte // theme names as C strings
 }
 
+// loadWaylandCursor loads libwayland-cursor. GNUI_NO_CURSOR_THEME=1 skips it
+// (the cursors are then our own), for testing and for systems whose theme
+// is unwanted.
 func loadWaylandCursor() bool {
+	if os.Getenv("GNUI_NO_CURSOR_THEME") != "" {
+		return false
+	}
 	if wlcur.tried {
 		return wlcur.ok
 	}

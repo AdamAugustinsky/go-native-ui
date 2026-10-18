@@ -32,8 +32,10 @@ jobs:
       - name: wayland (scripted compositor)
         run: go test -count=1 -v -run 'Wayland' ./platform 2>&1 | tail -150
       - name: x11 (xvfb)
+        if: always()
         run: xvfb-run -a -s "-screen 0 1280x800x24" go test -count=1 -v -run 'X11' ./platform 2>&1 | tail -150
       - name: wayland (Sway, a real compositor)
+        if: always()
         run: |
           export XDG_RUNTIME_DIR=$(mktemp -d); chmod 700 "$XDG_RUNTIME_DIR"
           export WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 WLR_RENDERER=pixman

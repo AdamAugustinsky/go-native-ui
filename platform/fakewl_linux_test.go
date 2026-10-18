@@ -52,6 +52,7 @@ type fobj struct {
 type fpool struct {
 	mem  []byte
 	size int
+	fd   int
 }
 
 type fbuf struct {
@@ -474,12 +475,22 @@ func (s *fakeComp) request(o *fobj, name string, a []farg) {
 		p := s.adopt(a[0].v, s.byName["wl_shm_pool"], 1)
 		sz := int(int32(a[2].v))
 		mem, err := syscall.Mmap(a[1].fd, 0, sz, syscall.PROT_READ, syscall.MAP_SHARED)
-		syscall.Close(a[1].fd)
 		if err != nil {
 			s.say("WARN mmap: %v", err)
 			return
 		}
-		p.pool = &fpool{mem: mem, size: sz}
+		p.pool = &fpool{mem: mem, size: sz, fd: a[1].fd}
+	case "wl_shm_pool.resize": // the pool grows (libwayland-cursor): map the new size
+		if o.pool != nil {
+			syscall.Munmap(o.pool.mem)
+			sz := int(int32(a[0].v))
+			mem, err := syscall.Mmap(o.pool.fd, 0, sz, syscall.PROT_READ, syscall.MAP_SHARED)
+			if err != nil {
+				s.say("WARN remap: %v", err)
+				return
+			}
+			o.pool.mem, o.pool.size = mem, sz
+		}
 	case "wl_shm_pool.create_buffer":
 		b := s.adopt(a[0].v, s.byName["wl_buffer"], 1)
 		b.buffer = &fbuf{pool: o.pool, off: int32(a[1].v), w: int32(a[2].v), h: int32(a[3].v), stride: int32(a[4].v)}
