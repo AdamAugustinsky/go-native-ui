@@ -37,5 +37,5 @@ jobs:
             echo "=== run $v"
             xvfb-run -a -s "-screen 0 1280x800x24" ./bin/pilot -bench -gate -allocsites -allow-unpaced -max-cpu-us 0 -timeout 200s > all.txt 2>err.txt || true
             python3 -c "import json;d=json.load(open('all.txt'));print([w['Mallocs'] for w in d['Windows']])" 2>/dev/null || true
-            grep -v '^ *$' err.txt | head -60
+            { grep -v '^ *$' err.txt | head -70; } || true
           done
