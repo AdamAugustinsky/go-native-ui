@@ -314,8 +314,8 @@ func parkedState() string {
 func TestParkerSleepsWithoutSudog(t *testing.T) {
 	p := NewParker()
 	defer p.Close()
-	if p.r == nil {
-		t.Skip("no pipe could be made")
+	if p.ch != nil {
+		t.Skip("no OS object could be made")
 	}
 	done := make(chan struct{})
 	go func() { p.Park(); close(done) }()

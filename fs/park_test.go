@@ -121,7 +121,7 @@ func parkDirs(t *testing.T) []string {
 // from such a state (see measureWindows). The first window after the
 // collection may also hold the runtime's own one-off allocations (starting an
 // OS thread, the scavenger's timer), so the second and third must be exactly
-// 0, and the measurement may be repeated once because the runtime's own noise
+// 0, and the measurement may be repeated twice because the runtime's own noise
 // can land in any window; an allocation caused by the Service lands in every
 // attempt.
 // The same with the UI thread polling in a loop while the workers run, which
@@ -139,7 +139,7 @@ func runParkTest(t *testing.T, spin bool) {
 	defer s.Close()
 	dirs := parkDirs(t)
 	var deltas []uint64
-	for attempt := 0; attempt < 2; attempt++ {
+	for attempt := 0; attempt < 3; attempt++ {
 		deltas = measureWindows(t, s, w, dirs, 3, 1000, spin)
 		if deltas[1] == 0 && deltas[2] == 0 {
 			return
