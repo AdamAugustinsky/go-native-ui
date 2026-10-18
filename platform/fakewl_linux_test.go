@@ -627,7 +627,13 @@ func (s *fakeComp) command(line string) {
 		}
 	case "pointer": // enter at x y
 		if s.ptr != nil {
-			s.event(s.ptr, "enter", s.nextSerial(), s.mainSurface(), fx(num(0)), fx(num(1)))
+			ser := s.nextSerial()
+			s.say("ENTER %d", ser)
+			s.event(s.ptr, "enter", ser, s.mainSurface(), fx(num(0)), fx(num(1)))
+		}
+	case "scale": // preferred_buffer_scale on the main surface
+		if m := s.mainSurface(); m != nil {
+			s.event(m, "preferred_buffer_scale", int32(num(0)))
 		}
 	case "leave":
 		if s.ptr != nil {

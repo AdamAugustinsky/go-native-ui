@@ -28,7 +28,7 @@ jobs:
         run: |
           sudo apt-get update -q
           sudo apt-get install -y -q --no-install-recommends xvfb xauth xclip wl-clipboard weston sway wtype wayland-utils \
-            libwayland-client0 libwayland-cursor0 libxkbcommon0 libx11-6 libegl1 libegl-mesa0 libgl1-mesa-dri x11-utils imagemagick
+            libwayland-client0 libwayland-cursor0 libxkbcommon0 libx11-6 libxfixes3 libxcursor1 libegl1 libegl-mesa0 libgl1-mesa-dri x11-utils imagemagick
       - name: wayland (scripted compositor)
         run: go test -count=1 -v -run 'Wayland' ./platform 2>&1 | tail -150
       - name: x11 (xvfb)

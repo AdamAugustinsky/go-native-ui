@@ -65,6 +65,13 @@ type Window struct {
 	drags dragMap   // SetDragRegions
 	clip  clipboard // clipboard_linux.go
 
+	// Pointer: the app's cursor map, where the pointer is, and the shape shown.
+	cur        cursorMap
+	ptrIn      bool
+	ptrX, ptrY float32 // physical pixels
+	curShape   shape
+	curSet     bool
+
 	wy wayland
 	x  x11
 }
@@ -221,14 +228,6 @@ func (w *Window) SetFrameHandler(func()) {}
 // Pending returns nothing on Linux: events are only queued inside Wait, which
 // hands them all out. It exists so frame-handler code is the same on every OS.
 func (w *Window) Pending() []Event { return nil }
-
-// SetCursorRegions and SetCursorOverride are no-ops on Linux for now: the
-// pointer keeps the compositor's default arrow. Wayland will use
-// wp_cursor_shape_v1 (fallback: the libwayland-cursor theme) and X11
-// XDefineCursor with Xcursor, later; both need a lookup at the pointer
-// position, for which the region map of regions.go is ready.
-func (w *Window) SetCursorRegions([]CursorRegion) {}
-func (w *Window) SetCursorOverride(Cursor)        {}
 
 // SetDragRegions sets the window drag map (see DragRegion). On Wayland without
 // server-side decorations a left press in a drag area starts xdg_toplevel.move

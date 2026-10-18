@@ -100,6 +100,8 @@ var xf struct {
 	// selections (clipboard_x11_linux.go)
 	setSelectionOwner, getSelectionOwner, convertSelection, getWindowProperty uintptr
 	changeProperty, deleteProperty, sendEvent, free, setErrorHandler          uintptr
+
+	createFontCursor, defineCursor uintptr
 }
 
 // xErrCB is Xlib's error handler: it ignores every error (see x11ClipInit).
@@ -127,6 +129,7 @@ type x11 struct {
 	title    [128]byte
 	hints    xSizeHints
 	x11Clip
+	cursors [numShapes]uintptr // XDefineCursor cursors by shape, 0: not made yet
 }
 
 func loadX11() error {
@@ -167,6 +170,8 @@ func loadX11() error {
 		{"XSendEvent", &xf.sendEvent},
 		{"XFree", &xf.free},
 		{"XSetErrorHandler", &xf.setErrorHandler},
+		{"XCreateFontCursor", &xf.createFontCursor},
+		{"XDefineCursor", &xf.defineCursor},
 	}); err != nil {
 		return err
 	}
@@ -439,13 +444,18 @@ func (w *Window) x11Event() {
 		w.q.push(ev)
 	case xMotionNotify:
 		w.mods = xMods(x.u32(xoState))
+		w.ptrX, w.ptrY, w.ptrIn = float32(x.i32(xoX)), float32(x.i32(xoY)), true
+		w.cursorSync(false)
 		w.q.push(Event{Kind: EvPointerMove, X: float32(x.i32(xoX)), Y: float32(x.i32(xoY)), Mods: w.mods, Time: now})
 	case xEnterNotify:
 		if x.i32(xoMode) == 0 { // NotifyNormal
+			w.ptrX, w.ptrY, w.ptrIn = float32(x.i32(xoX)), float32(x.i32(xoY)), true
+			w.cursorSync(false)
 			w.q.push(Event{Kind: EvPointerMove, X: float32(x.i32(xoX)), Y: float32(x.i32(xoY)), Mods: w.mods, Time: now})
 		}
 	case xLeaveNotify:
 		if x.i32(xoMode) == 0 {
+			w.ptrIn = false
 			w.q.push(Event{Kind: EvPointerLeave, Time: now})
 		}
 	case xFocusIn, xFocusOut:

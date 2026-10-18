@@ -198,6 +198,11 @@ func rasterCursor(dst []byte, sh shape, size int) (hx, hy int32) {
 			dst[o], dst[o+1], dst[o+2], dst[o+3] = byte(w), byte(w), byte(w), byte(a)
 		}
 	}
-	h := rasterHot[look]
+	return rasterHotspot(sh, size)
+}
+
+// rasterHotspot is the hotspot of sh at size pixels.
+func rasterHotspot(sh shape, size int) (hx, hy int32) {
+	h := rasterHot[sh.rasterLook()]
 	return int32(h[0]*float32(size)/24 + 0.5), int32(h[1]*float32(size)/24 + 0.5)
 }
