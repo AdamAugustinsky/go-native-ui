@@ -73,7 +73,8 @@ func (r *Rex) drawTitlebar(c *ui.Context) {
 	// Capsule: a translucent group that clips what is inside it (the pill's
 	// shadows stay within).
 	theme.At(c, capsule[0], capsule[1], capsule[2]-capsule[0], capsule[3]-capsule[1])
-	c.NextBG4(theme.Col(0xE8DCE9), theme.Col(0xE8DCE9), theme.Col(0xE2DCE2), theme.Col(0xE2DCE2))
+	capTop, capBot := r.col(0xE8DCE9, 0x2B2C3B), r.col(0xE2DCE2, 0x282937)
+	c.NextBG4(capTop, capTop, capBot, capBot)
 	c.NextRadius(34 * k)
 	cap := c.BoxKeyed(ui.DrawBackground|ui.Clip|fl, ui.KeyN(keyBar, 1), nil)
 	c.Push(cap)
@@ -81,11 +82,12 @@ func (r *Rex) drawTitlebar(c *ui.Context) {
 
 	// Pill, with the edge ring around the two end caps only.
 	theme.At(c, pill[0]-ox, pill[1]-oy, pill[2]-pill[0], pill[3]-pill[1])
-	c.NextBG4(theme.Col(0xFFFAFF), theme.Col(0xFFFAFF), theme.Col(0xFCF8FC), theme.Col(0xFCF8FC))
+	pillTop, pillBot := r.col(0xFFFAFF, 0x4A4D66), r.col(0xFCF8FC, 0x434559)
+	c.NextBG4(pillTop, pillTop, pillBot, pillBot)
 	c.NextRadius(30 * k)
-	c.NextShadows(ui.Shadow{OffY: 2 * k, Sigma: 2.5 * k, Color: theme.ColA(0x3A2A4A, 0.13)},
-		ui.Shadow{OffY: 0, Sigma: 1.5 * k, Color: theme.ColA(0x3A2A4A, 0.14)})
-	c.NextBorder(theme.Col(0xBEB9C0), max(1, k))
+	c.NextShadows(ui.Shadow{OffY: 2 * k, Sigma: 2.5 * k, Color: r.colA(0x3A2A4A, 0x000000, 0.13, 0.40)},
+		ui.Shadow{OffY: 0, Sigma: 1.5 * k, Color: r.colA(0x3A2A4A, 0x000000, 0.14, 0.45)})
+	c.NextBorder(r.col(0xBEB9C0, 0x5C5F7A), max(1, k))
 	c.NextBorderSides(ui.SideLeft | ui.SideRight)
 	c.BoxKeyed(ui.DrawBackground|ui.DrawShadow|ui.DrawBorder|fl, ui.KeyN(keyBar, 2), nil)
 
@@ -97,7 +99,7 @@ func (r *Rex) drawTitlebar(c *ui.Context) {
 		}
 		b := tabX(i + 1)
 		theme.At(c, theme.Snap(b-k)-ox, theme.Snap(28*k)-oy, theme.Snap(b+k)-theme.Snap(b-k), theme.Snap(63*k)-theme.Snap(28*k))
-		c.NextBG(theme.ColA(0x8C8290, a))
+		c.NextBG(r.colA(0x8C8290, 0xB9B3CC, a, 0.6*a))
 		c.BoxKeyed(ui.DrawBackground|fl, ui.KeyN(keyBar, uint64(10+i)), nil)
 	}
 
@@ -108,14 +110,14 @@ func (r *Rex) drawTitlebar(c *ui.Context) {
 
 	// Host block: device glyph, host name over machine name.
 	kg := keyGen{Base: ui.KeyN(keyBar, 3)}
-	r.IconAt(c, &kg, icDevice, 209*k, 43*k, theme.Col(0x5F5E63))
-	r.Put(c, &kg, r.th.Font.UISemi, "rex-snake", 245*k, 42*k, theme.Col(0x5F5D64), 0, 0)
-	r.Put(c, &kg, r.th.Font.Small, "Mac Studio", 245*k, 66*k, theme.Col(0x87848B), 0, 0)
+	r.IconAt(c, &kg, icDevice, 209*k, 43*k, r.col(0x5F5E63, 0xA3A7B8))
+	r.Put(c, &kg, r.th.Font.UISemi, "rex-snake", 245*k, 42*k, r.col(0x5F5D64, 0xB8BBCB), 0, 0)
+	r.Put(c, &kg, r.th.Font.Small, "Mac Studio", 245*k, 66*k, r.col(0x87848B, 0x8D91A3), 0, 0)
 
 	// Right edge: ⌘ and +.
 	hit := 28 * k
-	r.IconButton(c, keyCmd, icCommand, W-115.5*k, 45*k, hit, 0x5F5D62, 0x1E2227, true)
-	r.IconButton(c, keyPlus, icPlus, W-46.5*k, 45*k, hit, 0x5F5D62, 0x1E2227, r.nTabs < maxTabs)
+	r.IconButton(c, keyCmd, icCommand, W-115.5*k, 45*k, hit, r.tone(0x5F5D62, 0xA3A7B8), r.tone(0x1E2227, 0xECEDF3), true)
+	r.IconButton(c, keyPlus, icPlus, W-46.5*k, 45*k, hit, r.tone(0x5F5D62, 0xA3A7B8), r.tone(0x1E2227, 0xECEDF3), r.nTabs < maxTabs)
 }
 
 // drawTab builds tab i: hover background, the stacked-card icon and the title.
@@ -128,7 +130,7 @@ func (r *Rex) drawTab(c *ui.Context, i int, act, absX, tabW float32) {
 	ox, oy := r.capsule[0], r.capsule[1]
 
 	theme.At(c, rc[0]-ox, rc[1]-oy, rc[2]-rc[0], rc[3]-rc[1])
-	c.NextBG(theme.ColA(0xFFFFFF, 0.55*hot*(1-act)))
+	c.NextBG(theme.ColA(0xFFFFFF, theme.Lerp(0.55, 0.10, r.th.T)*hot*(1-act)))
 	c.NextRadius(30 * k)
 	c.NextCursor(ui.CursorPointer)
 	tb := c.BoxKeyed(ui.DrawBackground|ui.Clip|ui.Clickable|ui.HotAnimation|ui.ActiveAnimation|fl, key, nil)
@@ -161,8 +163,8 @@ func (r *Rex) drawTab(c *ui.Context, i int, act, absX, tabW float32) {
 	c.BoxKeyed(flags|ui.DrawBackground|ui.DrawBorder|ui.DrawShadow|fl, kg.Next(), disp)
 
 	// Title: the name, then the lighter path; text that does not fit fades out.
-	nameCol := theme.Col(theme.MixRGB(0x5A5A60, 0x1E2227, act))
-	pathCol := theme.Col(theme.MixRGB(0x928F95, 0x1E2227, act))
+	nameCol := r.col(theme.MixRGB(0x5A5A60, 0x1E2227, act), theme.MixRGB(0xA9ACBB, 0xF1F2F8, act))
+	pathCol := r.col(theme.MixRGB(0x928F95, 0x1E2227, act), theme.MixRGB(0x8D91A8, 0xF1F2F8, act))
 	x := absX + st.textX*k
 	end := rc[2] - 10*r.Scale // right limit of the title
 	base := 55 * k

@@ -18,14 +18,15 @@ const fl = theme.Floating
 
 // SetScale (re)creates everything that depends on the backing scale: the
 // resolved theme (fonts, metrics, a fresh chrome), the terminal cell grid and
-// the icons. It keeps the light/dark mix and the accent of the theme it
-// replaces. It allocates; call it on the thread that owns the text system.
+// the icons. It keeps the light/dark mix of the theme it replaces; the
+// follower applies the accent to the new one. It allocates; call it on the
+// thread that owns the text system.
 func (r *Rex) SetScale(s float32) {
 	r.Scale, r.K = s, s/2
-	t, acc := r.th.T, r.accent
+	t := r.th.T
 	r.th = rextheme.Theme().Resolve(r.ts, s, theme.Light)
-	r.th.SetAccent(acc)
 	r.th.Mix(t)
+	r.fol.Invalidate()
 	r.cells = rextheme.NewGrid(r.ts, s)
 	r.icons.Raster(s)
 }
@@ -42,6 +43,18 @@ func (r *Rex) MonoFace() string { return r.cells.Face }
 
 // MonoSizePt is the size in points of the grid's monospace font.
 func (r *Rex) MonoSizePt() float64 { return float64(r.cells.SizePt) }
+
+// tone is the colour (0xRRGGBB) between a light and a dark one at the theme's
+// mix of the two modes: the light one at T = 0, the dark one at T = 1.
+func (r *Rex) tone(light, dark uint32) uint32 { return theme.MixRGB(light, dark, r.th.T) }
+
+// col is tone as an opaque 0xRRGGBBAA colour.
+func (r *Rex) col(light, dark uint32) uint32 { return theme.Col(r.tone(light, dark)) }
+
+// colA is tone with alpha: lightA in the light mode, darkA in the dark one.
+func (r *Rex) colA(light, dark uint32, lightA, darkA float32) uint32 {
+	return theme.ColA(r.tone(light, dark), theme.Lerp(lightA, darkA, r.th.T))
+}
 
 // strBytes views s as bytes without copying.
 func strBytes(s string) []byte { return unsafe.Slice(unsafe.StringData(s), len(s)) }
@@ -107,7 +120,7 @@ func (r *Rex) IconButton(c *ui.Context, key ui.Key, id iconID, cx, cy, hit float
 	if enabled {
 		flags |= ui.Clickable | ui.HotAnimation | ui.ActiveAnimation
 		c.NextCursor(ui.CursorPointer)
-		c.NextBG(theme.ColA(0x2A2030, 0.08*t+0.07*pressed))
+		c.NextBG(theme.ColA(r.tone(0x2A2030, 0xFFFFFF), 0.08*t+0.07*pressed))
 	} else {
 		c.PushOpacity(0.4)
 	}

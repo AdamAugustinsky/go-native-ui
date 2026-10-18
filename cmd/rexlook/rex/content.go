@@ -254,9 +254,14 @@ const (
 // snakeEdge is "+---…---+" across the board.
 var snakeEdge = "+" + strings.Repeat("-", snakeCols-1) + "+"
 
+// snakeCol is the colour of a game piece at the pane's focus and the theme's mix.
+func (g *grid) snakeCol(c *[4]uint32) uint32 {
+	return g.r.col(theme.MixRGB(c[0], c[1], g.ft), theme.MixRGB(c[2], c[3], g.ft))
+}
+
 func (g *grid) snake() {
 	r, k := g.r, g.r.K
-	teal := theme.Col(theme.MixRGB(scTeal[0], scTeal[1], g.ft))
+	teal := g.snakeCol(&scTeal)
 	g.cell(0, 0, "S N A K E", r.cells.Mono, teal)
 	g.cell(0, 12, "Score: 43", r.cells.Mono, teal)
 	g.cell(1, 0, snakeEdge, r.cells.Mono, teal)
@@ -272,7 +277,7 @@ func (g *grid) snake() {
 		return g.cellCentre(c), theme.Snap(g.y0-10*k+float32(row)*r.cells.RowPitch) + 0.5*k
 	}
 	d := 14 * k
-	food, body := theme.Col(theme.MixRGB(scFood[0], scFood[1], g.ft)), theme.Col(theme.MixRGB(scBody[0], scBody[1], g.ft))
+	food, body := g.snakeCol(&scFood), g.snakeCol(&scBody)
 	for _, f := range snakeFoods {
 		x, y := at(f[0], f[1])
 		x0, y0 := theme.Snap(x-d/2), theme.Snap(y-d/2)
@@ -283,7 +288,7 @@ func (g *grid) snake() {
 		x0, y0 := theme.Snap(x-d/2), theme.Snap(y-d/2)
 		g.fill(x0, y0, x0+d, y0+d, body)
 	}
-	g.cell(snakeHeadP[1], snakeHeadP[0], "◆", r.cells.Mono, theme.Col(theme.MixRGB(scHead[0], scHead[1], g.ft)))
+	g.cell(snakeHeadP[1], snakeHeadP[0], "◆", r.cells.Mono, g.snakeCol(&scHead))
 }
 
 func (g *grid) bun() {

@@ -6,6 +6,7 @@ import (
 
 	"gonativeui/gpu"
 	"gonativeui/icon"
+	"gonativeui/theme"
 	rextheme "gonativeui/theme/rex"
 	"gonativeui/ui"
 )
@@ -770,6 +771,61 @@ func TestTitlebarAndIconsMatchTheme(t *testing.T) {
 		if w, hh := ic.Size(id); w <= 0 || hh <= 0 {
 			t.Errorf("icon %d has no size", id)
 		}
+	}
+}
+
+// The scene follows the system's mode (D32): a dark system gives a dark first
+// frame with no crossfade and a dark window chrome, a later change crossfades,
+// and a forced preference wins over the system.
+func TestFollowsSystemMode(t *testing.T) {
+	dark := ui.Appearance{Dark: true, Known: true}
+	h := newHarnessRaw(t, WindowWidthPt, WindowHeightPt, 2, dark)
+	h.frame()
+	if h.x.th.T != 1 {
+		t.Fatalf("first frame at mix %v, want 1: a dark-mode user must not see a light frame", h.x.th.T)
+	}
+	if d, ok := h.c.ChromeDark(); !ok || !d {
+		t.Errorf("ChromeDark = %v, %v after the first frame in a dark system", d, ok)
+	}
+	h.settle()
+
+	h.sys = ui.Appearance{Known: true}
+	h.frame()
+	if tt := h.x.th.T; tt <= 0 || tt >= 1 {
+		t.Errorf("one frame after the system went light the mix is %v, want a crossfade in progress", tt)
+	}
+	if d, _ := h.c.ChromeDark(); d {
+		t.Error("the window chrome must go light at once, with the mode the UI heads for")
+	}
+	if !h.c.Animating() {
+		t.Error("the crossfade asks for no frames")
+	}
+	h.settle()
+	if h.x.th.T != 0 {
+		t.Errorf("settled at mix %v, want 0", h.x.th.T)
+	}
+
+	h.x.SetPreference(theme.ForceDark)
+	h.settle()
+	if h.x.th.T != 1 {
+		t.Errorf("a forced dark preference settled at mix %v under a light system", h.x.th.T)
+	}
+	h.x.SetPreference(theme.System)
+	h.settle()
+	if h.x.th.T != 0 {
+		t.Errorf("handing the choice back to the light system settled at mix %v", h.x.th.T)
+	}
+}
+
+// The mix survives a change of scale (the window moves to another display).
+func TestScaleChangeKeepsMode(t *testing.T) {
+	h := newHarnessRaw(t, WindowWidthPt, WindowHeightPt, 2, ui.Appearance{Dark: true, Known: true})
+	h.settle()
+	h.scale = 1
+	h.w, h.h = WindowWidthPt, WindowHeightPt
+	h.frame()
+	if h.x.th.T != 1 {
+		t.Errorf("mix %v after the scale changed in a dark system, want 1", h.x.th.T)
 	}
 }
 

@@ -169,7 +169,7 @@ func (r *Rex) drawPane(c *ui.Context, t *tab, slot int8, d [4]float32, ft, opa f
 
 	// Header: process icon and title; the buttons only on the focused pane.
 	hc := 36.5 * k
-	titleCol := theme.Col(theme.MixRGB(0x606064, 0x202228, ft))
+	titleCol := r.col(theme.MixRGB(0x606064, 0x202228, ft), theme.MixRGB(0xA3A7B6, 0xE6E8EF, ft))
 	pt := paneTitles[p.kind]
 	r.IconAt(c, &kg, pt.icon, 39*k, hc, titleCol)
 	avail := w - 62*k - theme.Lerp(20*k, 206*k, ft)
@@ -193,7 +193,7 @@ func (r *Rex) drawPane(c *ui.Context, t *tab, slot int8, d [4]float32, ft, opa f
 			case btnClose:
 				enabled = enabled && r.canClose()
 			}
-			r.IconButton(c, btnKey(p.uid, b), icons[b], w-dx[b]*k, hc+k, 28*k, 0x96999B, 0x3F4246, enabled)
+			r.IconButton(c, btnKey(p.uid, b), icons[b], w-dx[b]*k, hc+k, 28*k, r.tone(0x96999B, 0x8A8EA1), r.tone(0x3F4246, 0xECEDF3), enabled)
 		}
 		c.PopOpacity()
 	}
