@@ -73,13 +73,53 @@ func (r *rig) run(steps ...step) {
 		}
 		r.frame()
 	}
+	err := r.p.Err()
 	r.p = nil
-	if err := newErr(r); err != nil {
+	if err != nil {
 		r.t.Fatal(err)
 	}
 }
 
-func newErr(r *rig) error { return nil }
+// find returns the first node with the role and name.
+func (r *rig) find(role ui.Role, name string) (ui.SemNode, bool) {
+	t := r.tree()
+	for _, n := range t.Nodes {
+		if n.Role == role && string(t.Text(n.Name)) == name {
+			return n, true
+		}
+	}
+	return ui.SemNode{}, false
+}
+
+func (r *rig) must(role ui.Role, name string) ui.SemNode {
+	r.t.Helper()
+	n, ok := r.find(role, name)
+	if !ok {
+		r.t.Fatalf("no node with role %d named %q in the semantic tree", role, name)
+	}
+	return n
+}
+
+// focused returns the node that has the focus.
+func (r *rig) focused() (ui.SemNode, bool) {
+	for _, n := range r.tree().Nodes {
+		if n.State&ui.SemFocused != 0 {
+			return n, true
+		}
+	}
+	return ui.SemNode{}, false
+}
+
+// key sends a key press and runs a frame.
+func (r *rig) key(code ui.KeyCode, mods ui.Mods) {
+	r.in.PushKey(ui.KeyEvent{Code: code, Mods: mods, Down: true})
+	r.frame()
+}
+
+func (r *rig) typ(s string) {
+	r.in.AppendText(s)
+	r.frame()
+}
 
 // tree exports the semantic tree of the last frame.
 func (r *rig) tree() *ui.SemTree {

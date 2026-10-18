@@ -123,7 +123,7 @@ func (g *Gallery) statesPane(c *ui.Context) {
 	k.LabelStyle("A card groups related controls.", widget.TextMuted)
 	k.NextGap(6)
 	k.Row("card-buttons")
-	k.Button("Cancel")
+	k.Button("Revert")
 	k.ButtonKind("Apply", widget.ButtonPrimary)
 	k.EndRow()
 	k.EndCard()
@@ -151,13 +151,24 @@ func (g *Gallery) livePane(c *ui.Context) {
 
 	g.heading("Choices")
 	k.Checkbox("Enable feature", &g.check)
-	k.CheckboxTri("Partial", &g.tri)
+	// the tri-state checkbox shows what the two options below it add up to, and
+	// sets them both (or neither) when clicked
+	g.tri = widget.Mixed
+	switch {
+	case g.check && g.sw:
+		g.tri = widget.Checked
+	case !g.check && !g.sw:
+		g.tri = widget.Unchecked
+	}
+	if k.CheckboxTri("All options", &g.tri).Changed {
+		g.check, g.sw = g.tri == widget.Checked, g.tri == widget.Checked
+	}
 	k.Switch("Notifications", &g.sw)
 	k.RadioGroup("Radio", &g.radio, []string{"One", "Two", "Three"})
 	k.NextGap(8)
 	k.Row("volume")
 	k.NextWidth(k.Fixed(48))
-	k.Label("Volume")
+	k.Label("Volume###volume-name")
 	k.Slider("Volume", &g.slider, 0, 100, 1)
 	k.NextWidth(k.Fixed(30))
 	k.LabelBytes(c.Fmt().Int(int(g.slider)).Bytes())
@@ -179,6 +190,9 @@ func (g *Gallery) livePane(c *ui.Context) {
 	if k.Button("Delete…").Clicked {
 		g.askDelete = true
 	}
+	k.EndRow()
+	k.NextGap(6)
+	k.Row("switches")
 	dark := g.mode == theme.Dark
 	if k.Switch("Dark mode", &dark).Changed {
 		if dark {
@@ -187,18 +201,17 @@ func (g *Gallery) livePane(c *ui.Context) {
 			g.SetMode(theme.Light)
 		}
 	}
+	k.Switch("Show activity", &g.working)
 	k.EndRow()
 
 	g.heading("Tabs")
-	k.Tabs("Tabs", &g.tab, []string{"Overview", "Details", "History"})
+	k.Tabs("Sections", &g.tab, []string{"Overview", "Details", "History"})
 	k.LabelStyle(tabText[g.tab], widget.TextMuted)
-
-	g.heading("Activity")
-	k.Switch("Show activity", &g.working)
 
 	g.heading("List")
 	k.NextHeight(k.Fixed(120))
-	l := k.BeginList("items", &g.list, 40)
+	l := k.BeginList("items", &g.list, listItems)
+	g.listFocus = l.Focused
 	for r := l.First; r < l.Last; r++ {
 		l.Row(r, uint32(r))
 		k.NextWidth(widget.Fill)
@@ -253,6 +266,7 @@ func (g *Gallery) tablePane(c *ui.Context) {
 		t.CellText(2, kinds[n%len(kinds)])
 		t.CellBytes(3, c.Fmt().Int(n%9973*17).Str(" KB").Bytes())
 	}
+	g.tableFocus = t.Focused
 	k.EndTable(&t)
 
 	k.NextGap(4)

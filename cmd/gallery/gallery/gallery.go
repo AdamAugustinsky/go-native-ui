@@ -33,6 +33,9 @@ const (
 // otherwise.
 const DefaultRows = 1_000_000
 
+// listItems is the number of items of the small list.
+const listItems = 40
+
 // Config is the gallery's window: the Rex titlebar band (46 pt, traffic lights
 // at (21, 22)) at 1280×800 pt.
 func Config() app.Config {
@@ -57,6 +60,9 @@ type Options struct {
 	// progress bar does not sweep (Kit.ReduceMotion) and is shown from the
 	// start.
 	Still bool
+	// Synthetic makes the scripted session's clock the frame count at 60 Hz,
+	// for runs without a clock (offscreen); a window uses the platform's.
+	Synthetic bool
 }
 
 // The ids of the table's columns.
@@ -104,7 +110,9 @@ type Gallery struct {
 	list      widget.ListState
 	askDelete bool
 	showRows  bool
-	working   bool
+	// which list had the keyboard in the last frame, for Select All
+	tableFocus, listFocus bool
+	working               bool
 
 	m matrix // the values of the state matrix
 
@@ -140,8 +148,7 @@ func New(o Options) (*Gallery, error) {
 	}
 	g.split = widget.NewSplitState(0.42, 0.27, 0.31)
 	g.slider, g.working = 40, o.Still
-	g.check, g.sw, g.showRows = true, true, true
-	g.tri = widget.Mixed
+	g.check, g.sw, g.showRows = true, false, true
 	g.notes.SetString("Hello, gallery")
 	g.status = make([]byte, 0, 96)
 	for i := range g.m.text {
@@ -249,7 +256,14 @@ func (g *Gallery) commands(c *ui.Context) {
 		}
 	}
 	for id := cmdUndo; id <= cmdSelectAll; id++ { // edit commands that no text field took
-		k.Command(id)
+		if k.Command(id) && id == cmdSelectAll { // Select All, which the menu's shortcut takes from the lists
+			switch {
+			case g.tableFocus:
+				g.table.Sel.SelectAll(g.rows)
+			case g.listFocus:
+				g.list.Sel.SelectAll(listItems)
+			}
+		}
 	}
 }
 

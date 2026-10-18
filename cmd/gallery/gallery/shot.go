@@ -55,7 +55,7 @@ func Shot(path string, o ShotOptions) (quads int, err error) {
 	if sc == nil {
 		return 0, fmt.Errorf("gallery: no scene %q (have %v)", o.Scene, SceneNames())
 	}
-	g, err := New(Options{Rows: o.Rows, Mode: o.Mode, Traffic: true, Still: true})
+	g, err := New(Options{Rows: o.Rows, Mode: o.Mode, Traffic: true, Still: true, Synthetic: true})
 	if err != nil {
 		return 0, err
 	}

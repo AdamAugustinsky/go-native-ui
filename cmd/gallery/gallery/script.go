@@ -34,6 +34,7 @@ const (
 	opText                   // type text
 	opWheel                  // over the target: dy pixels of trackpad scroll on each of n frames
 	opSweep                  // the pointer down the target, top to bottom, over n frames
+	opDrag                   // press on the target, move dx pixels along x on each of n frames, let go
 )
 
 // modifiers of a step; modPrim is ⌘ on macOS and Ctrl elsewhere.
@@ -53,6 +54,7 @@ type step struct {
 	n    int
 	ms   int64
 	dy   float32
+	dx   float32
 	text string
 }
 
@@ -79,6 +81,9 @@ func waitGone(role ui.Role, name string) step {
 }
 func wheel(role ui.Role, name string, dy float32, n int) step {
 	return step{op: opWheel, role: role, name: name, dy: dy, n: n}
+}
+func drag(role ui.Role, name string, dx float32, n int) step {
+	return step{op: opDrag, role: role, name: name, dx: dx, n: n}
 }
 func sweep(role ui.Role, name string, n int) step {
 	return step{op: opSweep, role: role, name: name, n: n}
@@ -167,9 +172,9 @@ func (p *Player) fail(format string, args ...any) {
 	}
 }
 
-// find returns the bounds of the nth node with the role and name in the
-// semantic tree of the last frame.
-func (p *Player) find(role ui.Role, name string, nth int) ([4]float32, bool) {
+// find returns the index in the semantic tree of the last frame of the nth node
+// with the role and name, or -1.
+func (p *Player) find(role ui.Role, name string, nth int) int {
 	g := p.g
 	g.c.Semantics(&g.sem)
 	t := &g.sem
@@ -179,26 +184,55 @@ func (p *Player) find(role ui.Role, name string, nth int) ([4]float32, bool) {
 			continue
 		}
 		if nth == 0 {
-			return n.Bounds, true
+			return i
 		}
 		nth--
 	}
-	return [4]float32{}, false
+	return -1
+}
+
+// visible reports whether the centre of node i is in the window and inside
+// every scrolling container around it: a pointer step on a target scrolled out
+// of view would click on whatever is there instead.
+func (p *Player) visible(i int) bool {
+	t := &p.g.sem
+	r := t.Nodes[i].Bounds
+	x, y := (r[0]+r[2])/2, (r[1]+r[3])/2
+	w, h := p.g.c.Size()
+	if x < 0 || y < 0 || x >= float32(w) || y >= float32(h) {
+		return false
+	}
+	for a := t.Nodes[i].Parent; a >= 0; a = t.Nodes[a].Parent {
+		switch t.Nodes[a].Role {
+		case ui.RoleScrollArea, ui.RoleList, ui.RoleTable:
+			b := t.Nodes[a].Bounds
+			if x < b[0] || x >= b[2] || y < b[1] || y >= b[3] {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // exists reports whether a node with the role and name is in the tree.
 func (p *Player) exists(role ui.Role, name string) bool {
-	_, ok := p.find(role, name, 0)
-	return ok
+	return p.find(role, name, 0) >= 0
 }
 
 // resolve finds the target of a step that has one.
 func (p *Player) resolve(st *step) {
 	switch st.op {
-	case opMove, opClick, opRClick, opDown, opWheel, opSweep:
-		p.rect, p.ok = p.find(st.role, st.name, st.nth)
-		if !p.ok {
+	case opMove, opClick, opRClick, opDown, opWheel, opSweep, opDrag:
+		i := p.find(st.role, st.name, st.nth)
+		p.ok = i >= 0
+		switch {
+		case !p.ok:
 			p.fail("no %d named %q (#%d) in the semantic tree", st.role, st.name, st.nth)
+		case !p.visible(i):
+			p.ok = false
+			p.fail("the %d named %q (#%d) is scrolled out of view or outside the window", st.role, st.name, st.nth)
+		default:
+			p.rect = p.g.sem.Nodes[i].Bounds
 		}
 	}
 }
@@ -277,6 +311,21 @@ func (p *Player) run(st *step, in *ui.Input) bool {
 		in.SetButton(b, false, 0)
 		in.Mods = 0
 		return true
+	case opDrag:
+		if !p.ok {
+			return true
+		}
+		cx, cy := p.centre()
+		switch {
+		case p.t == 0:
+			p.goTo(in, cx, cy)
+			in.SetButton(ui.ButtonLeft, true, 1)
+		case p.t <= st.n:
+			p.goTo(in, cx+st.dx*float32(p.t), cy)
+		default:
+			in.SetButton(ui.ButtonLeft, false, 0)
+			return true
+		}
 	case opDown:
 		if p.ok {
 			p.goTo(in, p.x0(), p.y0())
@@ -344,7 +393,7 @@ func NewBench(o Options) (*Bench, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Bench{Gallery: g, p: newPlayer(g, benchSteps(), true, false)}, nil
+	return &Bench{Gallery: g, p: newPlayer(g, benchSteps(), true, o.Synthetic)}, nil
 }
 
 // Script implements app.Scripter.

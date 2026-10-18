@@ -39,7 +39,8 @@ func benchSteps() []step {
 
 	// choices
 	add(click(ui.RoleCheckbox, "Enable feature"), idle(4), click(ui.RoleCheckbox, "Enable feature"), idle(4),
-		click(ui.RoleCheckbox, "Partial"), idle(3),
+		click(ui.RoleCheckbox, "All options"), idle(3), click(ui.RoleCheckbox, "All options"), idle(3),
+		click(ui.RoleCheckbox, "Enable feature"), idle(3),
 		click(ui.RoleSwitch, "Notifications"), idle(4), click(ui.RoleSwitch, "Notifications"), idle(4),
 		click(ui.RoleRadio, "Two"), idle(3), click(ui.RoleRadio, "One"), idle(3),
 		click(ui.RoleSlider, "Volume"), idle(2), keys(ui.KeyRight, 0, 4), keys(ui.KeyLeft, 0, 4), idle(2),
@@ -49,7 +50,7 @@ func benchSteps() []step {
 	add(click(ui.RoleComboBox, "Format"), waitFor(ui.RoleListItem, "Markdown"), idle(3),
 		click(ui.RoleListItem, "Markdown"), waitGone(ui.RoleListItem, "HTML"), idle(2),
 		click(ui.RoleComboBox, "Format"), waitFor(ui.RoleListItem, "HTML"), idle(2),
-		key(ui.KeyUp, 0), key(ui.KeyUp, 0), key(ui.KeyEnter, 0), waitGone(ui.RoleListItem, "HTML"), idle(2))
+		key(ui.KeyUp, 0), key(ui.KeyEnter, 0), waitGone(ui.RoleListItem, "HTML"), idle(2))
 
 	// a menu from the bar
 	add(click(ui.RoleMenuItem, "Edit"), waitFor(ui.RoleMenuItem, "Undo"), idle(3),
@@ -67,6 +68,9 @@ func benchSteps() []step {
 		click(rowRole, "").nthOf(2), idle(2),
 		rclick(ui.RoleRow, "").nthOf(2), waitFor(ui.RoleMenuItem, "Copy Path"), idle(2),
 		click(ui.RoleMenuItem, "Copy Path"), waitGone(ui.RoleMenuItem, "Copy Path"), idle(2))
+
+	// the divider between the first two panes, there and back
+	add(drag(ui.RoleSplitter, "Divider", 3, 20), idle(2), drag(ui.RoleSplitter, "Divider", -3, 20), idle(2))
 
 	// the dialog: open it, close it with Escape; then once more and take the action
 	add(click(roleButton, "Delete…"), waitFor(ui.RoleDialog, ""), settle(), idle(3),
