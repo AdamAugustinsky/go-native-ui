@@ -6,23 +6,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"gonativeui/app"
 	"gonativeui/theme"
 	"gonativeui/ui"
 )
-
-func offscreen(t testing.TB, b app.Builder, w, h int) *app.Offscreen {
-	t.Helper()
-	o, err := app.NewOffscreen(Config(), w, h, 1, b)
-	if err != nil {
-		if os.Getenv("CI") != "" {
-			t.Fatalf("offscreen rendering on CI: %v", err)
-		}
-		t.Skipf("offscreen rendering: %v", err)
-	}
-	t.Cleanup(o.Close)
-	return o
-}
 
 // The benchmark session does what it says: every part of it takes effect, and
 // it ends where it began.
@@ -31,7 +17,8 @@ func TestBenchSessionDrivesTheGallery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	o := offscreen(t, b, 1280, 800)
+	r := newRigFor(t, b.Gallery)
+	r.p = b.p
 	g := b.Gallery
 
 	var seen struct {
@@ -51,8 +38,8 @@ func TestBenchSessionDrivesTheGallery(t *testing.T) {
 	sem.Reserve(4096, 1<<16)
 	frames := 0
 	for ; frames < 60000 && b.Cycles() < 1; frames++ {
-		o.Frame()
-		o.UI.Semantics(&sem)
+		r.frame()
+		r.c.Semantics(&sem)
 		for _, n := range sem.Nodes {
 			switch n.Role {
 			case ui.RoleTooltip:
@@ -115,9 +102,21 @@ func TestBenchSessionDrivesTheGallery(t *testing.T) {
 	}
 }
 
-// The scenes render: each is a PNG of the window's size with something drawn,
-// and the dark mode is darker than the light.
-func TestScenesRender(t *testing.T) {
+// The scenes' scripts run to their end on the fake text system: every target
+// they name exists and is in view.
+func TestSceneScriptsRun(t *testing.T) {
+	for _, sc := range scenes {
+		t.Run(sc.name, func(t *testing.T) {
+			r := newRig(t, Options{Still: true, Synthetic: true})
+			r.frames(5)
+			r.run(sc.steps()...)
+		})
+	}
+}
+
+// The pictures render: a PNG of the requested size, the dark mode darker than
+// the light, and the dialog scene different from the main one.
+func TestShotsRender(t *testing.T) {
 	dir := t.TempDir()
 	probe := func(name string, o ShotOptions) float64 {
 		t.Helper()
@@ -151,16 +150,15 @@ func TestScenesRender(t *testing.T) {
 		}
 		return sum / float64(n)
 	}
-	small := ShotOptions{Width: 1280, Height: 800, Scale: 1, Rows: 5000}
+	small := ShotOptions{Width: 960, Height: 600, Scale: 0.75, Rows: 5000}
 	light := probe("light", small)
-	small.Mode = theme.Dark
-	dark := probe("dark", small)
-	if dark >= light-0.2 {
-		t.Errorf("the dark picture's mean brightness %.2f is not well below the light's %.2f", dark, light)
+	dialog := small
+	dialog.Scene = "dialog"
+	if d := probe("dialog", dialog); d == light {
+		t.Error("the dialog scene looks like the main scene")
 	}
-	for _, name := range SceneNames() {
-		o := small
-		o.Scene = name
-		probe("scene-"+name, o)
+	small.Mode = theme.Dark
+	if dark := probe("dark", small); dark >= light-0.2 {
+		t.Errorf("the dark picture's mean brightness %.2f is not well below the light's %.2f", dark, light)
 	}
 }

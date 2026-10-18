@@ -109,6 +109,29 @@ func TestKeyboardOnlyOperation(t *testing.T) {
 			t.Fatalf("Notes = %q after undo, want %q", got, "Hello, gallery")
 		}
 	})
+	t.Run("copy, cut and paste", func(t *testing.T) {
+		r.focusOn(ui.RoleTextField, "Notes")
+		prim := ui.PrimaryMod()
+		r.press('A', prim)
+		r.press('C', prim)
+		if string(r.clip) != "Hello, gallery" {
+			t.Fatalf("the clipboard holds %q after select all and copy, want %q", r.clip, "Hello, gallery")
+		}
+		r.press('X', prim)
+		if got := r.value(ui.RoleTextField, "Notes"); got != "" {
+			t.Fatalf("Notes = %q after cut, want it empty", got)
+		}
+		r.press('V', prim)
+		r.frames(2)
+		if got := r.value(ui.RoleTextField, "Notes"); got != "Hello, gallery" {
+			t.Fatalf("Notes = %q after paste, want %q", got, "Hello, gallery")
+		}
+		r.press('Z', prim) // undo the paste
+		r.press('Z', prim) // undo the cut
+		if got := r.value(ui.RoleTextField, "Notes"); got != "Hello, gallery" {
+			t.Errorf("Notes = %q after two undos, want the original", got)
+		}
+	})
 	t.Run("search field", func(t *testing.T) {
 		r.focusOn(ui.RoleSearchField, "Filter")
 		r.typ("abc")

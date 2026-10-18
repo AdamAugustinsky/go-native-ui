@@ -93,6 +93,7 @@ func golden(t *testing.T, name, got string) {
 	if err != nil {
 		t.Fatalf("%v (run the test with -update to write it)", err)
 	}
+	want = bytes.ReplaceAll(want, []byte("\r\n"), []byte("\n")) // a Windows checkout may have converted the line endings
 	if !bytes.Equal(want, []byte(got)) {
 		wl, gl := strings.Split(string(want), "\n"), strings.Split(got, "\n")
 		for i := 0; i < len(wl) || i < len(gl); i++ {

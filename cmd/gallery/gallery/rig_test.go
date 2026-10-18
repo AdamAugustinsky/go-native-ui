@@ -1,6 +1,7 @@
 package gallery
 
 import (
+	"runtime"
 	"testing"
 
 	"gonativeui/gpu"
@@ -19,6 +20,7 @@ type rig struct {
 	w, h int
 	n    int
 	p    *Player
+	clip []byte // the clipboard
 }
 
 func newRig(t *testing.T, o Options) *rig {
@@ -30,12 +32,21 @@ func newRig(t *testing.T, o Options) *rig {
 	if err != nil {
 		t.Fatal(err)
 	}
+	return newRigFor(t, g)
+}
+
+// newRigFor runs frames of g.
+func newRigFor(t *testing.T, g *Gallery) *rig {
+	t.Helper()
+	runtime.LockOSThread() // see widget's newRig: the icon atlas rasterises through AppKit
+	t.Cleanup(runtime.UnlockOSThread)
 	ts := fakeui.New()
 	c := ui.New(ts)
 	c.Reserve(8192)
 	c.AtlasSync(&fakeui.Uploader{})
 	g.Attach(c, ts)
 	r := &rig{t: t, g: g, c: c, w: WindowWidthPt, h: WindowHeightPt}
+	c.ClipboardSet = func(b []byte) { r.clip = append(r.clip[:0], b...) }
 	r.in.Inside, r.in.Focused = true, true
 	r.in.MouseX, r.in.MouseY = -100, -100
 	r.list.Quads = make([]gpu.Quad, 0, 1<<14)
@@ -54,6 +65,9 @@ func (r *rig) frame() {
 	r.g.Build(r.c)
 	r.c.End(&r.list)
 	r.in.ClearFrame()
+	if tag, ok := r.c.PasteRequest(); ok { // the platform answers a paste request with the clipboard
+		r.in.SetPaste(tag, r.clip, len(r.clip) > 0)
+	}
 }
 
 func (r *rig) frames(n int) {

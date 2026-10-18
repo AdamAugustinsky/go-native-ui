@@ -1,6 +1,7 @@
 package widget
 
 import (
+	"runtime"
 	"testing"
 
 	"gonativeui/gpu"
@@ -27,6 +28,10 @@ type rig struct {
 
 func newRig(t *testing.T, w, h int, build func(k *Kit)) *rig {
 	t.Helper()
+	// the icon atlas rasterises symbols through AppKit on macOS, which wants a
+	// thread of its own (as the tests of package icon give it)
+	runtime.LockOSThread()
+	t.Cleanup(runtime.UnlockOSThread)
 	ts := fakeui.New()
 	c := ui.New(ts)
 	c.Reserve(4096)
