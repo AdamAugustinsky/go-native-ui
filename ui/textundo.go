@@ -165,6 +165,48 @@ func (t *TextBuffer) SetUndoLimit(steps, bytes int) {
 	}
 }
 
+// Reserve makes the buffer steady-state ready for text of up to n bytes: it
+// reserves the text, the buffer for sanitized input and the whole undo history
+// (all records, and a ring of the history's byte bound), so that editing text
+// that stays within n bytes allocates nothing from the first edit on, instead
+// of after the history has been filled. It keeps the current text and history;
+// call it after SetUndoLimit if the limits are not the defaults. Longer text
+// still grows the buffers.
+func (t *TextBuffer) Reserve(n int) {
+	n = max(n, 0)
+	if n > 0 && t.Max > 0 {
+		n = min(n, t.Max)
+	}
+	t.b = growCap(t.b, n)
+	t.tmp = growCap(t.tmp, n)
+	u := &t.undo
+	steps, maxBytes := u.limits()
+	if steps <= 0 || maxBytes <= 0 {
+		return
+	}
+	if cap(u.recs) < steps {
+		nr := make([]undoRec, len(u.recs)-u.head, steps)
+		copy(nr, u.recs[u.head:])
+		u.at -= u.head
+		u.recs, u.head = nr, 0
+	}
+	if len(u.ring) < maxBytes {
+		u.growRing(maxBytes)
+	}
+	// One record holds at most what an edit of n bytes removed and inserted.
+	u.scratch = growCap(u.scratch, min(2*n, maxBytes))
+}
+
+// growCap returns b with capacity for at least n bytes, keeping its contents.
+func growCap(b []byte, n int) []byte {
+	if cap(b) >= n {
+		return b
+	}
+	nb := make([]byte, len(b), n)
+	copy(nb, b)
+	return nb
+}
+
 // breakRun ends the typing run: the next edit starts a new step.
 func (t *TextBuffer) breakRun() { t.undo.open = false }
 
