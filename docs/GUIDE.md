@@ -505,7 +505,7 @@ the runtime's own background allocations (a new OS thread, a timer) miss most of
 them.
 
 ```go examples/notes/notes/notes_test.go
-	for b.Cycles() < 3 { // warm-up: whole sessions
+	for b.Cycles() < 2 { // warm-up: whole sessions
 		o.Frame()
 	}
 	runtime.GC()

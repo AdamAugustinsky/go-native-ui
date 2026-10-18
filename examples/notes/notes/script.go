@@ -73,7 +73,7 @@ func session() []step {
 		key('N', prim|shift), settle(), key('N', prim|shift), settle(),
 		key(ui.KeyBackspace, prim), waitFor(ui.RoleDialog, ""), settle(),
 		click(ui.RoleButton, "Remove"), waitGone(ui.RoleDialog, ""), settle(),
-		key('N', prim), idle(100), // and a rest, which a window with nothing to do still draws
+		key('N', prim), idle(300), // and a rest, which a window with nothing to do still draws
 	}
 }
 

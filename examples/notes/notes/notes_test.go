@@ -250,7 +250,7 @@ func TestSteadyStateAllocatesNothing(t *testing.T) {
 	}
 	b := &Bench{Notes: n, p: newPlayer(n, session(), true, true)}
 	o := open(t, b, true)
-	for b.Cycles() < 3 { // warm-up: whole sessions
+	for b.Cycles() < 2 { // warm-up: whole sessions
 		o.Frame()
 	}
 	runtime.GC()
