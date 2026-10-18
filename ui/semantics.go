@@ -332,11 +332,13 @@ func (c *Context) Semantics(dst *SemTree) {
 			}
 			n.Pos = [2]int32{int32(idx), int32(pb.listRows)}
 		}
-		if rec.sel != [2]int32{} {
-			n.TextSel = rec.sel
-		}
 		n.Name = c.semText(dst, rec.name)
 		n.Value = c.semText(dst, rec.value)
+		if rec.sel != [2]int32{} {
+			// The selection is offsets into the exported value: when the value
+			// did not fit the byte budget it is empty, and so is the selection.
+			n.TextSel = [2]int32{min(rec.sel[0], int32(n.Value[1])), min(rec.sel[1], int32(n.Value[1]))}
+		}
 
 		// The parent: the nearest ancestor with a role; an overlay hangs from the window.
 		p := b.parent
