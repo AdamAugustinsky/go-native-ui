@@ -3,7 +3,6 @@ package app
 import (
 	"errors"
 	"runtime"
-	"sync"
 	"time"
 
 	"gonativeui/internal/sysinfo"
@@ -144,7 +143,6 @@ func RunBench(cfg Config, b Builder, o BenchOptions) (BenchReport, error) {
 	bn.frameCPU, bn.intervals, bn.lat = make([]float64, 0, n), make([]float64, 0, n), make([]float64, 0, n)
 	bn.windows = make([]BenchWindow, 0, o.Windows)
 	a.bench = bn
-	primeSudogs()
 	a.p.invalidate()
 	if err := a.loop(); err != nil {
 		return BenchReport{}, err
@@ -153,33 +151,6 @@ func RunBench(cfg Config, b Builder, o BenchOptions) (BenchReport, error) {
 		return BenchReport{}, errors.New("app: bench ended before its measured frames (window closed)")
 	}
 	return bn.report, nil
-}
-
-// primeSudogs fills the runtime's per-P sudog caches before the bench starts.
-// A goroutine that blocks (a worker waiting on a sync.Cond, a channel receive)
-// takes a sudog from its P's cache and allocates one when the cache and the
-// central list are empty; a worker that moves to a P that has never held a
-// sudog therefore allocates once, and with GOMAXPROCS Ps that happens a few
-// times over the first seconds of a run: in the measured window it is an
-// allocation that is not the program's. Blocking a few goroutines per P at the
-// same time and waking them together leaves a sudog on every P that ran one.
-func primeSudogs() {
-	n := 4 * runtime.GOMAXPROCS(0)
-	start := make(chan struct{})
-	var parked, done sync.WaitGroup
-	parked.Add(n)
-	done.Add(n)
-	for i := 0; i < n; i++ {
-		go func() {
-			parked.Done()
-			<-start // blocks: takes a sudog
-			done.Done()
-		}()
-	}
-	parked.Wait()
-	time.Sleep(10 * time.Millisecond) // let them all reach the receive
-	close(start)
-	done.Wait()
 }
 
 // maxCycleFrames bounds the samples kept per window of a CycleAligned run
