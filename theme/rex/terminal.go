@@ -7,7 +7,12 @@ import "gonativeui/theme"
 // fill when it is not, and a dark pair designed for the dark surfaces.
 // Colours are 0xRRGGBB (see theme.Col).
 type Terminal struct {
-	FG, Dim, Blue, Teal, Red, Green, Bullet, Op, Purple, Orange, Line uint32
+	// FG is the foreground (text); Dim the secondary text; Line the colour of
+	// rules and box-drawing.
+	FG, Dim, Line uint32
+	// Blue, Teal, Red, Green, Purple and Orange are the accents of syntax and
+	// status; Bullet is the green of list bullets; Op is the colour of operators.
+	Blue, Teal, Red, Green, Bullet, Op, Purple, Orange uint32
 }
 
 var (

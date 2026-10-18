@@ -20,13 +20,15 @@ var _ GridText = (*text.System)(nil)
 // reference: a system monospace face sized so that a cell is 7.5 pt wide, on
 // a row pitch of 16 pt.
 type Grid struct {
-	// Mono and MonoBold are the fonts, with the line boxes Met and BoldMet.
+	// Mono and MonoBold are the fonts.
 	Mono, MonoBold text.FontKey
-	Met, BoldMet   theme.FontMet
+	// Met and BoldMet are their line boxes.
+	Met, BoldMet theme.FontMet
 	// Adv is the width of a cell and RowPitch the height of a row, in pixels.
 	Adv, RowPitch float32
-	// Face names the face in use and SizePt its size in points.
-	Face   string
+	// Face names the face in use.
+	Face string
+	// SizePt is its size in points.
 	SizePt float32
 	scale  float32
 }

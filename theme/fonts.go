@@ -20,12 +20,18 @@ type Fonts struct {
 
 // FontKeys are the fonts of a Resolved theme, created in a text system.
 type FontKeys struct {
+	// UI, UISemi, Small, Mono, MonoBold and Symbols are the keys of the fonts
+	// of the same names in Fonts.
 	UI, UISemi, Small, Mono, MonoBold, Symbols text.FontKey
 }
 
 // FontMet places the baseline in a text box of one whole-pixel line: H is the
 // box height, Off the baseline's distance from its top.
-type FontMet struct{ H, Off float32 }
+type FontMet struct {
+	// H is the height of the box and Off the baseline's distance from its top,
+	// in pixels.
+	H, Off float32
+}
 
 // TextSystem is what a theme needs from the text system to resolve fonts;
 // *text.System satisfies it.

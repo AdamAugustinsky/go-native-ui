@@ -14,6 +14,7 @@ func At(c *ui.Context, x, y, w, h float32) {
 
 // KeyGen hands out distinct keys for the boxes of one container.
 type KeyGen struct {
+	// Base is the key the generated keys derive from.
 	Base ui.Key
 	n    uint64
 }
