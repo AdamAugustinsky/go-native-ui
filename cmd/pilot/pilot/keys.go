@@ -140,6 +140,7 @@ func (pl *Pilot) keys(c *ui.Context, in *ui.Input) {
 			continue
 		}
 		pl.key(c, k)
+		c.ClaimKey(n) // Pilot's: ui's own handlers (Tab traversal) leave it alone
 	}
 	// Typing with the list focused starts the filter; so does an input method
 	// composing (its keys never reach us as text).

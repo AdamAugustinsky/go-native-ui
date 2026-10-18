@@ -39,6 +39,7 @@ type textTarget interface {
 	SetIMERect(x, y, w, h float32)
 	SetTextInput(active bool)
 	DiscardComposition()
+	RequestPaste(tag uint64)
 }
 
 // syncText hands the focused text field's state to the window: where its caret
@@ -51,12 +52,19 @@ type textTarget interface {
 // lost the focus and committed it, or is gone) the platform's composition is
 // discarded, without committing it a second time, and the translator forgets
 // it at once so that no field sees it again.
+//
+// A paste request of a field (the paste chord or the Edit menu) is forwarded to
+// the platform with the field's key as the tag; the answer comes back as an
+// EvPaste event, which the translator gives to that field only.
 func (a *App) syncText(win textTarget, start int64) {
 	r, ok := a.UI.IMERect()
 	if ok {
 		win.SetIMERect(r[0], r[1], r[2], r[3])
 	}
 	win.SetTextInput(ok)
+	if tag, ok := a.UI.PasteRequest(); ok {
+		win.RequestPaste(uint64(tag))
+	}
 	if a.UI.IMECancel() {
 		win.DiscardComposition()
 		a.tr.in.SetPreedit(nil, 0, 0)

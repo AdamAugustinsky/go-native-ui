@@ -9,12 +9,22 @@ import "math"
 // box's children after it, floating children after their siblings) so that
 // the last box drawn wins. Clip boxes hide their subtree outside their
 // rectangle.
+//
+// Overlays are hit-tested after the main tree, in order, so the topmost wins;
+// everything beneath a modal is skipped, and tooltips are never hit.
 func (c *Context) hitTest() {
 	c.hotID, c.hotKey, c.scrollKey = 0, 0, 0
 	if c.root == 0 || !c.in.Inside {
 		return
 	}
-	c.hitWalk(c.root, c.in.MouseX, c.in.MouseY)
+	if c.modalIdx < 0 {
+		c.hitWalk(c.root, c.in.MouseX, c.in.MouseY)
+	}
+	for i := max(c.modalIdx, 0); i < c.nOvPrev; i++ {
+		if c.ovPrev[i].kind != OverlayTooltip {
+			c.hitWalk(c.ovPrev[i].id, c.in.MouseX, c.in.MouseY)
+		}
+	}
 	if c.hotID != 0 {
 		c.hotKey = c.boxes[c.hotID].key
 	}
@@ -24,7 +34,7 @@ func (c *Context) hitWalk(id ID, x, y float32) {
 	b := &c.boxes[id]
 	inside := x >= b.rect[0] && x < b.rect[2] && y >= b.rect[1] && y < b.rect[3]
 	if inside {
-		if b.flags&hitMask != 0 {
+		if b.flags&hitMask != 0 && b.flags&Disabled == 0 {
 			c.hotID = id
 		}
 		if b.flags&scrollMask != 0 {
@@ -63,7 +73,8 @@ func (c *Context) mouse() {
 			c.relPos[btn], c.relClicks[btn] = c.pressPos[btn], c.pressClicks[btn] // before the new press replaces them
 			c.active[btn] = 0
 		}
-		if in.Pressed[btn] {
+		if in.Pressed[btn] && !c.pressConsumed {
+			c.focusVisible = false // the pointer, not the keyboard, moves the focus now
 			if hot != nil && hot.flags&Clickable != 0 {
 				c.active[btn] = hot.key
 				c.pressedKey[btn] = hot.key
@@ -117,7 +128,7 @@ func (c *Context) focusOnPress() {
 		return
 	}
 	for id := c.hotID; id != 0; id = c.boxes[id].parent {
-		if c.boxes[id].flags&Focusable != 0 {
+		if c.boxes[id].flags&(Focusable|Disabled) == Focusable {
 			c.focusKey = c.boxes[id].key
 			return
 		}
@@ -164,6 +175,18 @@ func (c *Context) Signal(id ID) Signal {
 	}
 	b := &c.boxes[id]
 	k := b.key
+	if b.flags&Disabled != 0 || c.blocked(b) {
+		return s // inert: also an activation or press that was queued before
+	}
+	for i := 0; i < c.in.NActions; i++ {
+		if r := &c.in.Actions[i]; r.Key == k {
+			s.Action |= r.Action
+			s.ActionValue = r.Value
+			if r.Action&ActPress != 0 {
+				s.Activated = true
+			}
+		}
+	}
 	if b.flags&(hitMask|scrollMask) == 0 {
 		return s
 	}
@@ -189,8 +212,13 @@ func (c *Context) Signal(id ID) Signal {
 		s.Scroll = c.scrollApplied
 	}
 	if c.focusKey == k && b.flags&Focusable != 0 {
-		for i := 0; i < c.in.NKeys; i++ {
-			if e := &c.in.Keys[i]; e.Down && !e.Repeat && (e.Code == KeyEnter || e.Code == KeySpace) {
+		if c.activated == k {
+			s.Activated = true // taken by an earlier call this frame
+		}
+		for i := 0; i < c.in.NKeys && !s.Activated; i++ {
+			if e := &c.in.Keys[i]; e.Down && !e.Repeat && (e.Code == KeyEnter || e.Code == KeySpace) && c.claimed&(1<<uint(i)) == 0 {
+				c.claimed |= 1 << uint(i)
+				c.activated = k
 				s.Activated = true
 			}
 		}
@@ -291,6 +319,44 @@ func (c *Context) scrollPending() bool {
 		}
 	}
 	return false
+}
+
+// ScrollExtent returns the size of the content of the scrolling box id and of
+// its view (the box itself), in pixels, from the previous layout: the content
+// is what the box scrolls over, padding included, and scrolls by at most
+// content − view on each axis. Both are zero for a box that was not laid out.
+func (c *Context) ScrollExtent(id ID) (content, view [2]float32) {
+	b := &c.boxes[id]
+	return [2]float32{float32(b.content[0]), float32(b.content[1])}, b.size
+}
+
+// ScrollIntoView scrolls box id by the smallest amount that shows the
+// rectangle r (x0, y0, x1, y1) of its content, in content coordinates: from the
+// top left corner of the content, padding included (ScrollExtent's space). A
+// rectangle already in view moves nothing, one that is larger than the view is
+// aligned at its start. The offset approaches the target like ScrollTo, and
+// the target is clamped to the content when the frame is laid out. It
+// compares with the target of an earlier ScrollTo or ScrollIntoView of the
+// frame, so a series of calls (a selection that grows) accumulates. Axes the
+// box does not scroll on are left alone.
+func (c *Context) ScrollIntoView(id ID, r [4]float32) {
+	b := &c.boxes[id]
+	for a := 0; a < 2; a++ {
+		if !b.scrollOn(a) {
+			continue
+		}
+		view := float64(b.size[a])
+		lo, hi := float64(r[a]), float64(r[a+2])
+		t := b.scrollTgt[a]
+		switch {
+		case hi-lo >= view || lo < t:
+			t = lo
+		case hi > t+view:
+			t = hi - view
+		}
+		b.scrollTgt[a] = math.Max(t, 0)
+	}
+	c.scrollSet = true
 }
 
 // ListRange declares box id a virtual list of rows fixed-height rows and

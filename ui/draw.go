@@ -4,6 +4,7 @@ import (
 	"math"
 
 	"gonativeui/gpu"
+	"gonativeui/text"
 )
 
 // Uploader is the part of gpu.Renderer that creates and fills the textures
@@ -65,10 +66,12 @@ func (c *Context) syncAtlas() {
 // prunes boxes that were not built, and appends the frame's quads to list
 // (which it resets first). It must follow a Begin with balanced Push/Pop.
 func (c *Context) End(list *gpu.DrawList) {
-	if c.nparents != 1 {
-		panic("ui: unbalanced Push/Pop at End")
+	if c.nparents != 1 || c.nOvOpen != 0 {
+		panic("ui: unbalanced Push/Pop or BeginOverlay/EndOverlay at End")
 	}
 	c.layout()
+	c.semScroll()
+	c.traverseFocus()
 	c.animateBoxes()
 	if c.scrollSet && c.scrollPending() {
 		c.animating = true
@@ -86,6 +89,9 @@ func (c *Context) End(list *gpu.DrawList) {
 		last := try >= emitTries-1
 		c.finalPass, c.passGen, c.glyphQuads = last, gen, c.glyphQuads[:0]
 		c.emit(list, c.root, win)
+		for i := 0; i < c.nOvs; i++ { // the overlays above it, in build order
+			c.emit(list, c.ovs[i].id, win)
+		}
 		c.finalPass = false
 		// A full atlas resets mid-frame and invalidates the glyph entries
 		// used so far: draw the frame again against the fresh atlas.
@@ -348,6 +354,10 @@ func (c *Context) emitText(l *gpu.DrawList, b *box, clip [4]float32) {
 		b.run = c.sh.Shape(b.font, bytes)
 		b.runGen = c.sh.RunGeneration()
 	}
+	if b.flags&WrapText != 0 && b.lnN > 0 {
+		c.emitWrapped(l, b, clip)
+		return
+	}
 	v := c.sh.Run(b.run)
 	if len(v.Glyphs) == 0 {
 		return
@@ -383,8 +393,13 @@ func (c *Context) emitText(l *gpu.DrawList, b *box, clip [4]float32) {
 		return
 	}
 
-	// Every glyph is looked up: how far its ink reaches past its advance box
-	// is only known from the entry. Quads outside the clip are dropped below.
+	c.emitGlyphs(l, b, v, x, baseline, tclip, fade, col)
+}
+
+// emitGlyphs draws the glyphs of v with the pen starting at (x, baseline).
+// Every glyph is looked up: how far its ink reaches past its advance box is
+// only known from the entry. Quads outside the clip are dropped.
+func (c *Context) emitGlyphs(l *gpu.DrawList, b *box, v text.RunView, x, baseline float32, tclip [4]float32, fade [2]float32, col uint32) {
 	for i, gid := range v.Glyphs {
 		pen := x + v.X[i]
 		ix := float32(math.Floor(float64(pen)))

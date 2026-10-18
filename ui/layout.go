@@ -28,117 +28,18 @@ func snap(v float32) float32 { return float32(math.Floor(float64(v) + 0.5)) }
 //  3. downward-dependent: sums over the children (children first)
 //  4. violations: children that overflow their parent shrink by strictness
 //  5. positions: flow placement, floating boxes, scroll offsets, snapping
+//
+// Stages 1 to 4 are done for the X axis, then for the Y axis: the axes do not
+// depend on each other except that the height of wrapped text (WrapText)
+// follows from its final width, which is why X comes first and the lines are
+// broken between the two.
 func (c *Context) layout() {
 	boxes := c.boxes
 	order := c.order
 
-	// 1. standalone
-	for _, id := range order {
-		b := &boxes[id]
-		for a := 0; a < 2; a++ {
-			switch p := b.pref[a]; p.Kind {
-			case SizePixels:
-				b.size[a] = p.Value
-			case SizeText:
-				var ext float32
-				if b.txt.Len > 0 {
-					if a == 0 {
-						ext = b.textW
-					} else {
-						ext = c.fontInfo(b.font).lh
-					}
-				}
-				b.size[a] = ext + b.padSum(a) + p.Value
-			default:
-				b.size[a] = 0
-			}
-		}
-	}
-
-	// 2. parent percentages (the parent is resolved unless it sums its children)
-	for _, id := range order {
-		b := &boxes[id]
-		if b.parent == 0 {
-			continue
-		}
-		pb := &boxes[b.parent]
-		for a := 0; a < 2; a++ {
-			if b.pref[a].Kind == SizeParentPct {
-				b.size[a] = max(0, pb.size[a]-pb.padSum(a)) * b.pref[a].Value
-			}
-		}
-	}
-
-	// 3. children sums, deepest first
-	for i := len(order) - 1; i >= 0; i-- {
-		b := &boxes[order[i]]
-		for a := 0; a < 2; a++ {
-			if b.pref[a].Kind != SizeChildren {
-				continue
-			}
-			b.size[a] = c.childExtent(b, a) + b.padSum(a)
-		}
-	}
-
-	// 4. violations, parents first so a shrunk parent shrinks its children in turn
-	for _, id := range order {
-		p := &boxes[id]
-		if p.first == 0 {
-			continue
-		}
-		la := p.layoutAxis()
-		for a := 0; a < 2; a++ {
-			inner := max(0, p.size[a]-p.padSum(a))
-			// Percentages follow the parent's final size.
-			for ch := p.first; ch != 0; ch = boxes[ch].next {
-				if cb := &boxes[ch]; cb.pref[a].Kind == SizeParentPct {
-					cb.size[a] = inner * cb.pref[a].Value
-				}
-			}
-			if p.scrollOn(a) {
-				continue // overflow scrolls
-			}
-			if a == la {
-				var total float32
-				n := 0
-				for ch := p.first; ch != 0; ch = boxes[ch].next {
-					if cb := &boxes[ch]; !cb.floatingOn(a) {
-						total += cb.size[a]
-						n++
-					}
-				}
-				if n > 1 {
-					total += p.gap * float32(n-1)
-				}
-				if excess := total - inner; excess > 0.001 {
-					var fix float32
-					for ch := p.first; ch != 0; ch = boxes[ch].next {
-						if cb := &boxes[ch]; !cb.floatingOn(a) {
-							fix += cb.size[a] * (1 - clamp01(cb.pref[a].Strictness))
-						}
-					}
-					if fix > 0 {
-						take := min(excess, fix)
-						for ch := p.first; ch != 0; ch = boxes[ch].next {
-							if cb := &boxes[ch]; !cb.floatingOn(a) {
-								cb.size[a] -= take * cb.size[a] * (1 - clamp01(cb.pref[a].Strictness)) / fix
-							}
-						}
-					}
-				}
-			} else {
-				for ch := p.first; ch != 0; ch = boxes[ch].next {
-					cb := &boxes[ch]
-					if cb.floatingOn(a) {
-						continue
-					}
-					if excess := cb.size[a] - inner; excess > 0 {
-						cb.size[a] -= min(excess, cb.size[a]*(1-clamp01(cb.pref[a].Strictness)))
-					}
-				}
-			}
-		}
-	}
+	c.sizeAxis(0)
+	c.wrapLines()
+	c.sizeAxis(1)
 
 	// 5. positions
 	if len(order) == 0 {
@@ -149,6 +50,9 @@ func (c *Context) layout() {
 	setRect(r)
 	for _, id := range order {
 		p := &boxes[id]
+		if p.ovRoot {
+			c.placeOverlay(p)
+		}
 		la := p.layoutAxis()
 		// Content extent and scroll clamping first: they set the offsets.
 		for a := 0; a < 2; a++ {
@@ -193,6 +97,118 @@ func (c *Context) layout() {
 				cb.origin[a] = p.origin[a] + rel
 			}
 			setRect(cb)
+		}
+	}
+}
+
+// sizeAxis runs the size stages 1 to 4 of layout for axis a (0 = x, 1 = y).
+func (c *Context) sizeAxis(a int) {
+	boxes := c.boxes
+	order := c.order
+
+	// 1. standalone
+	for _, id := range order {
+		b := &boxes[id]
+		switch p := b.pref[a].Kind; p {
+		case SizePixels:
+			b.size[a] = b.pref[a].Value
+		case SizeText:
+			var ext float32
+			if b.txt.Len > 0 {
+				switch {
+				case a == 0:
+					ext = b.textW
+				case b.flags&WrapText != 0:
+					ext = c.fontInfo(b.font).lh * float32(max(b.lnN, 1))
+				default:
+					ext = c.fontInfo(b.font).lh
+				}
+			}
+			b.size[a] = ext + b.padSum(a) + b.pref[a].Value
+		default:
+			b.size[a] = 0
+		}
+	}
+
+	// 2. parent percentages (the parent is resolved unless it sums its children)
+	for _, id := range order {
+		b := &boxes[id]
+		if b.parent == 0 {
+			if b.ovRoot && b.pref[a].Kind == SizeParentPct { // an overlay's percentages are fractions of the window
+				b.size[a] = [2]float32{float32(c.w), float32(c.h)}[a] * b.pref[a].Value
+			}
+			continue
+		}
+		pb := &boxes[b.parent]
+		if b.pref[a].Kind == SizeParentPct {
+			b.size[a] = max(0, pb.size[a]-pb.padSum(a)) * b.pref[a].Value
+		}
+	}
+
+	// 3. children sums, deepest first
+	for i := len(order) - 1; i >= 0; i-- {
+		b := &boxes[order[i]]
+		if b.pref[a].Kind != SizeChildren {
+			continue
+		}
+		b.size[a] = c.childExtent(b, a) + b.padSum(a)
+	}
+
+	// 4. violations, parents first so a shrunk parent shrinks its children in turn
+	for _, id := range order {
+		p := &boxes[id]
+		if p.first == 0 {
+			continue
+		}
+		la := p.layoutAxis()
+		inner := max(0, p.size[a]-p.padSum(a))
+		// Percentages follow the parent's final size.
+		for ch := p.first; ch != 0; ch = boxes[ch].next {
+			if cb := &boxes[ch]; cb.pref[a].Kind == SizeParentPct {
+				cb.size[a] = inner * cb.pref[a].Value
+			}
+		}
+		if p.scrollOn(a) {
+			continue // overflow scrolls
+		}
+		if a == la {
+			var total float32
+			n := 0
+			for ch := p.first; ch != 0; ch = boxes[ch].next {
+				if cb := &boxes[ch]; !cb.floatingOn(a) {
+					total += cb.size[a]
+					n++
+				}
+			}
+			if n > 1 {
+				total += p.gap * float32(n-1)
+			}
+			if excess := total - inner; excess > 0.001 {
+				var fix float32
+				for ch := p.first; ch != 0; ch = boxes[ch].next {
+					if cb := &boxes[ch]; !cb.floatingOn(a) {
+						fix += cb.size[a] * (1 - clamp01(cb.pref[a].Strictness))
+					}
+				}
+				if fix > 0 {
+					take := min(excess, fix)
+					for ch := p.first; ch != 0; ch = boxes[ch].next {
+						if cb := &boxes[ch]; !cb.floatingOn(a) {
+							cb.size[a] -= take * cb.size[a] * (1 - clamp01(cb.pref[a].Strictness)) / fix
+						}
+					}
+				}
+			}
+		} else {
+			for ch := p.first; ch != 0; ch = boxes[ch].next {
+				cb := &boxes[ch]
+				if cb.floatingOn(a) {
+					continue
+				}
+				if excess := cb.size[a] - inner; excess > 0 {
+					cb.size[a] -= min(excess, cb.size[a]*(1-clamp01(cb.pref[a].Strictness)))
+				}
+			}
 		}
 	}
 }
