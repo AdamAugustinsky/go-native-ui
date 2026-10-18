@@ -313,6 +313,34 @@ func (c *Context) Semantics(dst *SemTree) {
 		}
 		dst.Nodes = append(dst.Nodes, n)
 	}
+	c.semFocusBubble(dst)
+}
+
+// semFocusBubble marks the node of the nearest ancestor with a role as focused
+// when the focused box has none of its own (a widget whose inner box takes the
+// keyboard, such as the scrolling body of a table): the focus is then reported
+// on the widget. The window's node is never marked this way.
+func (c *Context) semFocusBubble(dst *SemTree) {
+	if c.focusKey == 0 {
+		return
+	}
+	for i := range dst.Nodes {
+		if dst.Nodes[i].State&SemFocused != 0 {
+			return
+		}
+	}
+	v, ok := c.table.Get(uint64(c.focusKey))
+	if !ok {
+		return
+	}
+	for p := c.boxes[v].parent; p != 0 && p != c.root; p = c.boxes[p].parent {
+		if sem := c.boxes[p].sem; sem != 0 {
+			if n := c.sems[sem-1].node; n >= 0 && int(n) < len(dst.Nodes) {
+				dst.Nodes[n].State |= SemFocused
+			}
+			return
+		}
+	}
 }
 
 // semText copies the span from the frame's arena to the export's byte store.

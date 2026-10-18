@@ -1,0 +1,357 @@
+Window
+  MenuBar "Menu bar"
+    MenuItem "File"
+    MenuItem "Edit"
+    MenuItem "View"
+  ScrollArea "states"
+    Label "States"
+    Label "Normal"
+    Label "Hover"
+    Label "Pressed"
+    Label "Focused"
+    Label "Disabled"
+    Label "Button"
+    Button "Button"
+    Button "Button"
+    Button "Button"
+    Button "Button"
+    Button "Button" [disabled]
+    Label "Primary"
+    Button "Primary"
+    Button "Primary"
+    Button "Primary"
+    Button "Primary"
+    Button "Primary" [disabled]
+    Label "Plain"
+    Button "Plain"
+    Button "Plain"
+    Button "Plain"
+    Button "Plain"
+    Button "Plain" [disabled]
+    Label "Icon"
+    Button "Add"
+    Button "Add"
+    Button "Add"
+    Button "Add"
+    Button "Add" [disabled]
+    Label "Checkbox"
+    Checkbox "Check" [checked]
+    Checkbox "Check" [checked]
+    Checkbox "Check" [checked]
+    Checkbox "Check" [checked]
+    Checkbox "Check" [checked disabled]
+    Label "Mixed"
+    Checkbox "Mixed" [mixed]
+    Checkbox "Mixed" [mixed]
+    Checkbox "Mixed" [mixed]
+    Checkbox "Mixed" [mixed]
+    Checkbox "Mixed" [mixed disabled]
+    Label "Switch"
+    Switch "Wi-Fi" [checked]
+    Switch "Wi-Fi" [checked]
+    Switch "Wi-Fi" [checked]
+    Switch "Wi-Fi" [checked]
+    Switch "Wi-Fi" [checked disabled]
+    Label "Radio"
+    RadioGroup "Radio"
+      Radio "Radio" [checked] pos=0/1
+    RadioGroup "Radio"
+      Radio "Radio" [checked] pos=0/1
+    RadioGroup "Radio"
+      Radio "Radio" [checked] pos=0/1
+    RadioGroup "Radio"
+      Radio "Radio" [checked] pos=0/1
+    RadioGroup "Radio"
+      Radio "Radio" [checked disabled] pos=0/1
+    Label "Slider"
+    Slider "Slider" range=0..100 value=40 step=1
+    Slider "Slider" range=0..100 value=40 step=1
+    Slider "Slider" range=0..100 value=40 step=1
+    Slider "Slider" range=0..100 value=40 step=1
+    Slider "Slider" [disabled] range=0..100 value=40 step=1
+    Label "Field"
+    TextField "Field" value="Field" [editable]
+    TextField "Field" value="Field" [editable]
+    TextField "Field" value="Field" [editable]
+    TextField "Field" value="Field" [editable]
+    TextField "Field" value="Field" [disabled editable]
+    Label "Select"
+    ComboBox "Choice" value="Choice"
+    ComboBox "Choice" value="Choice"
+    ComboBox "Choice" value="Choice"
+    ComboBox "Choice" value="Choice"
+    ComboBox "Choice" value="Choice" [disabled]
+    Label "Progress"
+    ProgressBar "Empty" range=0..1 value=0 step=0
+    ProgressBar "Half" range=0..1 value=0.5 step=0
+    ProgressBar "Full" range=0..1 value=1 step=0
+    ProgressBar "Working"
+    Label "Card"
+    Label "A card groups related controls."
+    Button "Revert"
+    Button "Apply"
+  ScrollArea "controls"
+    Label "Text"
+    Label "Body text, the default style"
+    Label "Muted secondary text"
+    Label "Small caption"
+    Label "Monospace 0123456789"
+    Label "Wrapped text breaks at the width it is given, at the line break opportunities of Unicode, and keeps the long words whole where it can."
+    Label "Entry"
+    TextField "Notes" value="Hello, gallery" [editable]
+    SearchField "Filter" [editable]
+    Label "Choices"
+    Checkbox "Enable feature" [checked]
+    Checkbox "All options" [mixed]
+    Switch "Notifications"
+    RadioGroup "Radio"
+      Radio "One" [checked] pos=0/3
+      Radio "Two" pos=1/3
+      Radio "Three" pos=2/3
+    Label "Volume"
+    Slider "Volume" range=0..100 value=40 step=1
+    Label "40"
+    ComboBox "Format" value="Plain text"
+    Label "Buttons"
+    Button "Open…"
+    Button "Save"
+    Button "More"
+    Button "Remove"
+    Button "Add item"
+    Button "Menu"
+    Button "Delete…"
+    Switch "Dark mode"
+    Switch "Show activity" [checked]
+    Label "Tabs"
+    TabList "Sections"
+      Tab "Overview" [selected] pos=0/3
+      Tab "Details" pos=1/3
+      Tab "History" pos=2/3
+    Label "A summary of the thing."
+    Label "List"
+    List "items"
+      ListItem pos=0/40
+        Label "List item 1"
+      ListItem pos=1/40
+        Label "List item 2"
+      ListItem pos=2/40
+        Label "List item 3"
+      ListItem pos=3/40
+        Label "List item 4"
+      ListItem pos=4/40
+        Label "List item 5"
+      ListItem pos=5/40
+        Label "List item 6"
+      ListItem pos=6/40
+        Label "List item 7"
+    ScrollBar "Vertical scroll bar"
+    ScrollBar "Vertical scroll bar"
+  Label "Table"
+  Label "1,000,000 rows"
+  SearchField "Search rows" [editable]
+  Table "rows"
+    ColumnHeader "ID"
+    ColumnHeader "Name"
+    ColumnHeader "Kind"
+    ColumnHeader "Size"
+    Row pos=0/1000000
+      Cell "0"
+      Cell
+        Image
+        Label "item-0"
+      Cell "Document"
+      Cell "0 KB"
+    Row pos=1/1000000
+      Cell "1"
+      Cell
+        Image
+        Label "item-1"
+      Cell "Image"
+      Cell "17 KB"
+    Row pos=2/1000000
+      Cell "2"
+      Cell
+        Image
+        Label "item-2"
+      Cell "Archive"
+      Cell "34 KB"
+    Row pos=3/1000000
+      Cell "3"
+      Cell
+        Image
+        Label "item-3"
+      Cell "Folder"
+      Cell "51 KB"
+    Row pos=4/1000000
+      Cell "4"
+      Cell
+        Image
+        Label "item-4"
+      Cell "Audio"
+      Cell "68 KB"
+    Row pos=5/1000000
+      Cell "5"
+      Cell
+        Image
+        Label "item-5"
+      Cell "Document"
+      Cell "85 KB"
+    Row pos=6/1000000
+      Cell "6"
+      Cell
+        Image
+        Label "item-6"
+      Cell "Image"
+      Cell "102 KB"
+    Row pos=7/1000000
+      Cell "7"
+      Cell
+        Image
+        Label "item-7"
+      Cell "Archive"
+      Cell "119 KB"
+    Row pos=8/1000000
+      Cell "8"
+      Cell
+        Image
+        Label "item-8"
+      Cell "Folder"
+      Cell "136 KB"
+    Row pos=9/1000000
+      Cell "9"
+      Cell
+        Image
+        Label "item-9"
+      Cell "Audio"
+      Cell "153 KB"
+    Row pos=10/1000000
+      Cell "10"
+      Cell
+        Image
+        Label "item-10"
+      Cell "Document"
+      Cell "170 KB"
+    Row pos=11/1000000
+      Cell "11"
+      Cell
+        Image
+        Label "item-11"
+      Cell "Image"
+      Cell "187 KB"
+    Row pos=12/1000000
+      Cell "12"
+      Cell
+        Image
+        Label "item-12"
+      Cell "Archive"
+      Cell "204 KB"
+    Row pos=13/1000000
+      Cell "13"
+      Cell
+        Image
+        Label "item-13"
+      Cell "Folder"
+      Cell "221 KB"
+    Row pos=14/1000000
+      Cell "14"
+      Cell
+        Image
+        Label "item-14"
+      Cell "Audio"
+      Cell "238 KB"
+    Row pos=15/1000000
+      Cell "15"
+      Cell
+        Image
+        Label "item-15"
+      Cell "Document"
+      Cell "255 KB"
+    Row pos=16/1000000
+      Cell "16"
+      Cell
+        Image
+        Label "item-16"
+      Cell "Image"
+      Cell "272 KB"
+    Row pos=17/1000000
+      Cell "17"
+      Cell
+        Image
+        Label "item-17"
+      Cell "Archive"
+      Cell "289 KB"
+    Row pos=18/1000000
+      Cell "18"
+      Cell
+        Image
+        Label "item-18"
+      Cell "Folder"
+      Cell "306 KB"
+    Row pos=19/1000000
+      Cell "19"
+      Cell
+        Image
+        Label "item-19"
+      Cell "Audio"
+      Cell "323 KB"
+    Row pos=20/1000000
+      Cell "20"
+      Cell
+        Image
+        Label "item-20"
+      Cell "Document"
+      Cell "340 KB"
+    Row pos=21/1000000
+      Cell "21"
+      Cell
+        Image
+        Label "item-21"
+      Cell "Image"
+      Cell "357 KB"
+    Row pos=22/1000000
+      Cell "22"
+      Cell
+        Image
+        Label "item-22"
+      Cell "Archive"
+      Cell "374 KB"
+    Row pos=23/1000000
+      Cell "23"
+      Cell
+        Image
+        Label "item-23"
+      Cell "Folder"
+      Cell "391 KB"
+    Row pos=24/1000000
+      Cell "24"
+      Cell
+        Image
+        Label "item-24"
+      Cell "Audio"
+      Cell "408 KB"
+    Row pos=25/1000000
+      Cell "25"
+      Cell
+        Image
+        Label "item-25"
+      Cell "Document"
+      Cell "425 KB"
+    Row pos=26/1000000
+      Cell "26"
+      Cell
+        Image
+        Label "item-26"
+      Cell "Image"
+      Cell "442 KB"
+    Row pos=27/1000000
+      Cell "27"
+      Cell
+        Image
+        Label "item-27"
+      Cell "Archive"
+      Cell "459 KB"
+    ScrollBar "Vertical scroll bar"
+  Label "0 selected ·"
+  Label "Ready"
+  Splitter "Divider" range=0..1 value=0.42 step=0.01 pos=0/2
+  Splitter "Divider" range=0..1 value=0.27 step=0.01 pos=1/2
