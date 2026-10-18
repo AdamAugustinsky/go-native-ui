@@ -1,0 +1,32 @@
+name: probe-winmac
+# Temporary: fast Windows iteration for the p5-winmac branch. Removed before the branch is done.
+on:
+  push:
+    branches: [p5-winmac]
+env:
+  CGO_ENABLED: "0"
+jobs:
+  windows:
+    name: probe Windows ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: amd64, runner: windows-2025 }
+          - { arch: arm64, runner: windows-11-arm }
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: platform and gpu tests
+        run: go test -count=1 -v -run 'Reveal|FirstFrame|Clipboard|Paste|UTF16' ./platform/ ./gpu/
+      - name: spike startup
+        run: |
+          go build -o bin/spike.exe ./cmd/spike
+          ./bin/spike.exe -exit-first -v -timeout 60s || true
