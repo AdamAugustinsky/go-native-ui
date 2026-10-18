@@ -7,10 +7,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"syscall"
 	"unsafe"
+
+	"gonativeui/core"
 )
 
 // Linux directory listing: getdents64 reads a directory in 64 KiB batches
@@ -121,7 +122,7 @@ type lxScratch struct {
 // goroutine on another P a fresh object and the GC empties it, so a warm
 // listing would still allocate.
 var (
-	lxScratchMu   sync.Mutex
+	lxScratchMu   core.Mutex
 	lxScratchFree []*lxScratch
 )
 

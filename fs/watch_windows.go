@@ -9,6 +9,8 @@ import (
 	"syscall"
 	"time"
 	"unsafe"
+
+	"gonativeui/core"
 )
 
 // ReadDirectoryChangesW watcher.
@@ -146,7 +148,7 @@ type winWatcher struct {
 	cmds   []*winCmd
 	closed bool
 
-	pmu  sync.Mutex
+	pmu  core.Mutex
 	pend []Change
 
 	// Worker-only state.

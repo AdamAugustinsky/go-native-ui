@@ -4,10 +4,10 @@ package fs
 
 import (
 	"os"
-	"sync"
 	"syscall"
 	"unsafe"
 
+	"gonativeui/core"
 	"gonativeui/internal/win32"
 )
 
@@ -96,7 +96,7 @@ type winScratch struct {
 // goroutine on another P a fresh object and the GC empties it, so a warm
 // listing would still allocate.
 var (
-	winScratchMu   sync.Mutex
+	winScratchMu   core.Mutex
 	winScratchFree []*winScratch
 )
 
