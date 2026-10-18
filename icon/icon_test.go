@@ -102,18 +102,23 @@ func allIDs(a *Atlas) []ID {
 	return ids
 }
 
-// inkIn counts the pixels of cell i that are not the white of the target, and
-// returns the sum of their channels (r, g, b) to tell the tint.
-func inkIn(g *rig, pix []byte, s *sheet, i int) (n int, tint [3]int) {
+// inkIn scans cell i of the sheet for pixels that are not the white of the
+// target. It returns how many there are, the sum over them of red minus green
+// (positive for ink tinted red, whatever its coverage) and how many are not
+// shades between white and red at all.
+func inkIn(g *rig, pix []byte, s *sheet, i int) (n, redness, offHue int) {
 	x0, y0 := (i%s.cols)*int(s.cell), (i/s.cols)*int(s.cell)
 	for y := y0; y < y0+int(s.cell); y++ {
 		for x := x0; x < x0+int(s.cell); x++ {
 			o := (y*g.w + x) * 4
-			if d := 3*255 - int(pix[o]) - int(pix[o+1]) - int(pix[o+2]); d > 3*40 {
+			r, gr, b := int(pix[o]), int(pix[o+1]), int(pix[o+2])
+			if 3*255-r-gr-b > 3*40 {
 				n++
-				tint[0] += int(pix[o])
-				tint[1] += int(pix[o+1])
-				tint[2] += int(pix[o+2])
+				redness += r - gr
+				// white to 0xCC1100 keeps green within 17 of blue and red above green
+				if r < gr-2 || gr-b > 24 || b-gr > 6 {
+					offHue++
+				}
 			}
 		}
 	}
@@ -152,14 +157,14 @@ func TestStandardIconsDraw(t *testing.T) {
 					t.Errorf("%vx icon %d (%q): source %v, want the fallback glyph", scale, id, standard[id].Fallback, src)
 				}
 			}
-			n, tint := inkIn(g, pix, s, int(id))
+			n, redness, off := inkIn(g, pix, s, int(id))
 			if n < int(4*scale*scale) {
 				t.Errorf("%vx icon %d (%v): only %d inked pixels", scale, id, src, n)
 				continue
 			}
-			// Tinted by the colour given: red dominates the ink.
-			if !(tint[0] > tint[1]*2 && tint[0] > tint[2]*2) {
-				t.Errorf("%vx icon %d: ink is not tinted red: %v", scale, id, tint)
+			// Tinted by the colour given: every inked pixel is a shade of it.
+			if redness < 15*n || off > n/20 {
+				t.Errorf("%vx icon %d: ink is not tinted red (%d inked pixels, redness %d, %d off hue)", scale, id, n, redness, off)
 			}
 			w, h := a.Size(id)
 			if w <= 0 || h <= 0 || w > s.cell || h > s.cell {
@@ -194,7 +199,7 @@ func TestFallbackGlyphsDraw(t *testing.T) {
 			t.Errorf("icon %d (%q): source %v, want the fallback glyph", id, specs[id].Fallback, src)
 			continue
 		}
-		if n, _ := inkIn(g, pix, s, int(id)); n < 8 {
+		if n, _, _ := inkIn(g, pix, s, int(id)); n < 8 {
 			t.Errorf("icon %d (%q): only %d inked pixels", id, specs[id].Fallback, n)
 		}
 	}
