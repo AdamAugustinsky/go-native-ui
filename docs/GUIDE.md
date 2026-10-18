@@ -334,8 +334,9 @@ in the frame's arena and `LabelBytesStyle` copies the bytes (section 10).
 A `Dialog` is an in-window modal, open while the app's `bool` is true. Build its
 content only when `Visible`. Everything under it is inert: no pointer, scrolling,
 text input or shortcut reaches the window, and Tab stays inside the dialog. An
-`Action` closes the dialog and returns true once. Escape cancels. The first
-`ButtonPrimary` is the default action: it has the focus when the dialog opens, and
+`Action` closes the dialog and returns true once. Escape cancels, also from a text
+field in the dialog; with dialogs stacked only the topmost takes Enter and Escape.
+The first `ButtonPrimary` is the default action: it has the focus when the dialog opens, and
 Enter chooses it. Build Cancel first, so that Enter on a focused Cancel is
 Cancel's.
 
@@ -410,7 +411,9 @@ the widgets' own keys. While a field has the focus it takes every key but Tab
 unless the primary modifier is down, and with it A, C, X, V, Z, the arrows,
 Home, End, Backspace and Delete. So ⌘N works while you type, but ⌘Backspace in
 the field means "delete to the start of the line", and it removes notes only when
-the focus is elsewhere. A modal dialog takes every shortcut except its own.
+the focus is elsewhere. A modal dialog holds back every command and shortcut
+except the edit commands for a text field in it and the commands marked
+`menu.Command.InModal`; its own keys are taken by its widgets.
 
 **Where the menu shows.** `Kit.MenuBar` draws the bar inside the window on every
 OS today. D29 plans a native menu bar on macOS built from the same model, with
