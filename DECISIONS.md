@@ -673,3 +673,14 @@ A relist when the window becomes active would cover all of these cheaply.
 - Portal requests subscribe to the `Response` signal before the call (the documented race), correlate by request handle, and handle cancellation, the owner window closing, a missing or disconnected portal, and version differences in Settings. Messages are decoded with size bounds.
 - Dialog parents: `x11:<XID>`, or a Wayland handle exported with xdg-foreign; an empty parent when neither is available.
 - Tests run against a real `dbus-daemon` in CI with a fake portal, including immediate responses and an absent service.
+
+## D32. System appearance: read at startup, followed without polling (phase 5, 2026-10-18)
+
+**Decision.** `platform` reports the system's light or dark mode and accent colour (`SystemAppearance`, `AppearanceSerial`, contract in `platform/appearance.go`), and `(*Window).SetDarkChrome` makes the OS-drawn chrome match the app's mode. Apps follow the system by default, can force light or dark, and crossfade between modes. Moved from 5B into 5A at the user's request ("make sure that we have support for dark/light system mode").
+
+**How, per OS:**
+- **Startup:** the first frame is drawn in the system's mode. macOS (`effectiveAppearance`, `controlAccentColor`) and Windows (`AppsUseLightTheme`, DWM `AccentColor`) answer synchronously in microseconds. Linux asks the desktop portal over D-Bus (D31) on a goroutine started at launch; the first frame waits for it a bounded time, and a later answer crossfades.
+- **Changes:** no polling. macOS observes the appearance and system-colour notifications; Windows waits in `RegNotifyChangeKeyValue` on the two registry keys on a blocked goroutine (so the window procedure needs no change); Linux listens for the portal's `SettingChanged`. Each change bumps a serial and calls `Wake`; an idle app costs nothing until then.
+- **Chrome:** Windows sets `DWMWA_USE_IMMERSIVE_DARK_MODE` (20 on Windows 11 build 22000+, 19 on Windows 10 builds that have it, nothing otherwise; Windows 10 stays supported). macOS sets the window's `NSAppearance`, which covers the traffic lights and menus. Linux has nothing to set: client-side decorations are drawn by the theme.
+
+**Reasoning:** content-first startup (D21) means the first frame must already be in the right mode; following the system with notifications keeps the idle budget (0 wakeups) intact.

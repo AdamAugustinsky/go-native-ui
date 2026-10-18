@@ -241,6 +241,19 @@ func (v *Files) Build(c *ui.Context) {
 3. **`theme`, `theme/rex`, `icon`:**
    - `rexkit` moves out; Rex gets a dark variant (a new design, for you to judge at the 5A review);
    - the `Chrome` interface also covers Wayland's client-side decorations: the titlebar and window buttons.
+3b. **System appearance (D32), moved up from 5B at your request** (2026-10-18), so the 5A review shows it:
+   - **reading at startup,** fast, so the first frame is already in the right mode (a dark-mode user never sees a light frame):
+     - macOS: `effectiveAppearance` and `controlAccentColor`;
+     - Windows: `AppsUseLightTheme` and DWM's `AccentColor`;
+     - Linux: the portal's `color-scheme` and `accent-color`, read on a goroutine started at launch, with a bounded wait at the first frame;
+   - **following changes live** with no polling and no idle wakeups:
+     - macOS: the appearance and system-colour notifications;
+     - Windows: `RegNotifyChangeKeyValue` on the two registry keys;
+     - Linux: the portal's `SettingChanged` signal (the D-Bus client of D31);
+   - **OS-drawn chrome matches the app's mode:**
+     - Windows: the dark title bar through `DWMWA_USE_IMMERSIVE_DARK_MODE` (attribute 20 on Windows 11 build 22000+, 19 on Windows 10 builds that have it, nothing where neither works; the minimum OS stays Windows 10);
+     - macOS: the window's `NSAppearance`, which covers the traffic lights and menus;
+   - **the app** follows the system by default, can force light or dark, and crossfades between modes; the gallery, Pilot and rexlook follow it.
 4. **`widget`, `menu` matching, `cmd/gallery`:**
    - The gallery shows every widget in every state, in light and dark.
    - CI renders it offscreen on all three OSes and runs a scripted bench with the exact allocation gate: hover, press, typing, copy, cut and paste, scrolling a 1M-row table, a menu, a dialog, switching light/dark.
@@ -265,15 +278,7 @@ func (v *Files) Build(c *ui.Context) {
    - **Windows:** `IFileOpenDialog` and `IFileSaveDialog` (hand-written COM) on the UI thread, outside Build and outside the frame handler. The dialog is launched at a safe point; while its own message loop runs, the frame handler keeps our windows drawing.
    - **Linux:** the portal's FileChooser over D-Bus (D31).
    - Results arrive as events.
-10. **Appearance:** light or dark, and the accent colour, from the OS and updated live.
-    - **macOS:** `effectiveAppearance` and the control accent colour.
-    - **Windows:**
-      - light or dark from `AppsUseLightTheme`;
-      - the accent from DWM's `AccentColor`/`ColorizationColor`;
-      - updates from `WM_SETTINGCHANGE` (`ImmersiveColorSet`) and `WM_DWMCOLORIZATIONCOLORCHANGED`;
-      - a dark title bar through `DWMWA_USE_IMMERSIVE_DARK_MODE`: attribute 20 on Windows 11 (build 22000+), 19 on Windows 10 builds that have it, and nothing where neither works. The minimum OS stays Windows 10.
-    - **Linux:** the portal's `color-scheme` and `accent-color` settings.
-    - The theme crossfades between modes; apps can force either.
+10. **Appearance:** moved to 5A (step 3b).
 11. **Drop into a window:** files and text, with the hover position during the drag.
     - **macOS:** NSDraggingDestination on our view.
     - **Windows:**
@@ -356,12 +361,11 @@ The protocol work starts at once, in platform files only. Its integration into `
    - **macOS, your hand test:** ⌘Q with a refusing window; Edit → Copy and ⌘C in a text field, each acting once; an app shortcut while a field has focus; a command with no window open.
    - **Windows and Linux CI:** the drawn menus, scripted.
 7. **Dialogs, appearance, drop:**
-   - **macOS, your hand test:** open and save return their paths; a light/dark switch; dropping files.
+   - **macOS, your hand test:** open and save return their paths; dropping files.
    - **Windows CI:**
      - an open dialog completed by automation returns its path;
      - a save dialog does the same;
      - our windows animate while either is open;
-     - an appearance change through the registry and `WM_SETTINGCHANGE`;
      - `IDropTarget` driven with a real `IDataObject`.
    - **Linux CI:**
      - the portal client against a fake portal on a real `dbus-daemon`, covering immediate responses, cancellation, owner close and a missing portal;
@@ -373,8 +377,13 @@ The protocol work starts at once, in platform files only. Its integration into `
    - Wayland decorations under Weston (CI capture), both without xdg-decoration and with it configured client-side;
    - first-frame captures on X11 and Windows show content, not a blank window;
    - press-and-hold gives "é" (your hand test).
-9. **You:** a look at the gallery and the ported Pilot after 5A, then a hand test of the gallery and Pilot on the MacBook at the end.
-10. **Numbers:** Windows and Linux numbers come only from CI. Anything CI cannot exercise (a real Windows IME, Wayland drop from a real app) is listed as untested, not claimed.
+9. **System appearance:**
+   - the first frame is in the system's mode on every OS (CI starts in dark where the runner allows it: the registry on Windows, a fake portal on Linux);
+   - a change while running reaches the app with no idle cost: on Windows by writing the registry in CI; on Linux through the fake portal's signal; on macOS by your hand switch;
+   - Windows CI checks the dark title bar attribute;
+   - the light/dark crossfade passes the exact allocation gate.
+10. **You:** a look at the gallery and the ported Pilot after 5A, including a light/dark switch, then a hand test of the gallery and Pilot on the MacBook at the end.
+11. **Numbers:** Windows and Linux numbers come only from CI. Anything CI cannot exercise (a real Windows IME, Wayland drop from a real app) is listed as untested, not claimed.
 
 ## Status (2026-10-18)
 
