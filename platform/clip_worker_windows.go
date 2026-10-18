@@ -132,16 +132,20 @@ func (c *clipWorker) abandon() (text []byte, give int64) {
 	return text, give
 }
 
-// due is when the request being run is overdue (its time limit plus the grace
-// a worker that is only retrying gets to finish it itself); 0 when the worker
-// is idle. UI thread.
-func (c *clipWorker) due() int64 {
+// due is when the worker is overdue: when the request it is running, or a copy
+// it has not started, is past its time limit plus the grace a worker that is
+// only retrying gets to finish it itself. 0 when it has neither. (A paste waiting
+// behind a stuck request is timed by the window.) UI thread.
+func (c *clipWorker) due() (d int64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.run.kind == clipNone {
-		return 0
+	if c.run.kind != clipNone {
+		d = c.run.give + clipGraceNs
 	}
-	return c.run.give + clipGraceNs
+	if c.copyReq.kind != clipNone && (d == 0 || c.copyReq.give+clipGraceNs < d) {
+		d = c.copyReq.give + clipGraceNs
+	}
+	return d
 }
 
 // clipAnswer describes what collect found.

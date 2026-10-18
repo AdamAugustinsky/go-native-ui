@@ -157,7 +157,7 @@ func TestRequestPasteNewerReplacesPending(t *testing.T) {
 
 // holdClipboard has another thread (another "process" as far as the clipboard
 // is concerned) keep it open until the returned function is called.
-func holdClipboard(t *testing.T) (release func()) {
+func holdClipboard(t *testing.T, w *Window) (release func()) {
 	t.Helper()
 	held, done, stop := make(chan bool), make(chan struct{}), make(chan struct{})
 	go func() {
@@ -175,7 +175,18 @@ func holdClipboard(t *testing.T) (release func()) {
 			win32.Call(pCloseClipboard)
 		}
 	}()
-	if !<-held {
+	// The window keeps pumping meanwhile: a copy of its own that is being
+	// written waits for it to answer WM_DESTROYCLIPBOARD.
+	var ok bool
+	for waiting := true; waiting; {
+		select {
+		case ok = <-held:
+			waiting = false
+		default:
+			w.Wait(int64(time.Millisecond))
+		}
+	}
+	if !ok {
 		t.Skip("could not take the clipboard to test a busy one")
 	}
 	return func() {
@@ -191,7 +202,7 @@ func holdClipboard(t *testing.T) (release func()) {
 func TestRequestPasteWaitsForABusyClipboard(t *testing.T) {
 	w := openTestWindow(t)
 	SetClipboardText([]byte("after the wait"))
-	release := holdClipboard(t)
+	release := holdClipboard(t, w)
 	defer release()
 	w.RequestPaste(3)
 	for _, e := range w.Wait(0) {
@@ -222,7 +233,7 @@ func TestRequestPasteFailsWhenTheClipboardStaysBusy(t *testing.T) {
 	w := openTestWindow(t)
 	const timeout = 200 * time.Millisecond
 	shortPasteTimeout(t, timeout)
-	release := holdClipboard(t)
+	release := holdClipboard(t, w)
 	defer release()
 	start := time.Now()
 	w.RequestPaste(4)
@@ -248,7 +259,7 @@ func TestSetClipboardTextWaitsForABusyClipboard(t *testing.T) {
 	w := openTestWindow(t)
 	SetClipboardText([]byte("old"))
 	settleCopy(w)
-	release := holdClipboard(t)
+	release := holdClipboard(t, w)
 	defer release()
 	SetClipboardText([]byte("new"))
 	w.RequestPaste(5)
@@ -570,6 +581,7 @@ func TestClipboardWithPowerShell(t *testing.T) {
 		t.Fatal(err)
 	}
 	SetClipboardText([]byte(fromUs))
+	settleCopy(w)
 	powershell(t, `[IO.File]::WriteAllText($env:GNUI_OUT, (Get-Clipboard -Raw), (New-Object Text.UTF8Encoding $false));`+
 		`Set-Clipboard -Value ([IO.File]::ReadAllText($env:GNUI_IN, [Text.Encoding]::UTF8))`, "GNUI_OUT="+out, "GNUI_IN="+in)
 
