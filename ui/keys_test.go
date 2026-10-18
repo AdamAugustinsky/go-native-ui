@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"testing"
 )
 
@@ -343,5 +344,218 @@ func TestEscapePropagationFromTextField(t *testing.T) {
 		if want := map[bool]int{false: 0, true: 1}[inOverlay]; taken != want {
 			t.Fatalf("overlay=%v: the owner took Escape %d times, want %d", inOverlay, taken, want)
 		}
+	}
+}
+
+// The frame's input belongs to the field that had the focus at Begin, however
+// the focus moves during the build: when the build moves it to B before A is
+// built, A still gets all of it and B none, in either build order.
+func TestInputOwnershipIsFixedAtBegin(t *testing.T) {
+	cases := []struct {
+		name  string
+		setup func(a, b *TextBuffer)
+		push  func(in *Input)
+		a, b  string
+	}{
+		{"typed text", func(a, b *TextBuffer) {}, func(in *Input) { in.AppendText("x") }, "hellox", "world"},
+		{"backspace", func(a, b *TextBuffer) {}, func(in *Input) { in.PushKey(KeyEvent{Code: KeyBackspace, Down: true}) }, "hell", "world"},
+		{"edit action", func(a, b *TextBuffer) { a.SelectAll(); b.SelectAll() }, func(in *Input) { in.PushEdit(EditDelete) }, "", "world"},
+		{"replacement", func(a, b *TextBuffer) {}, func(in *Input) { in.ReplaceText(-1, 1, []byte("X")) }, "hellX", "world"},
+		{"typed text and a key", func(a, b *TextBuffer) {}, func(in *Input) {
+			in.AppendText("x")
+			in.PushKey(KeyEvent{Code: KeyLeft, Down: true})
+		}, "hellox", "world"},
+	}
+	for _, order := range [][2]int{{0, 1}, {1, 0}} {
+		for _, tc := range cases {
+			t.Run(fmt.Sprint(tc.name, order), func(t *testing.T) {
+				r := newRig(t, false)
+				var bufs [2]TextBuffer
+				bufs[0].SetString("hello")
+				bufs[1].SetString("world")
+				var keys [2]Key
+				move := false
+				build := func(c *Context) {
+					if move {
+						c.SetFocus(keys[1]) // before A is built, whatever the order
+					}
+					for _, i := range order {
+						c.NextSize(Px(200), Px(24))
+						keys[i] = c.KeyOf(c.TextField([...]string{"a", "b"}[i], &bufs[i]).ID)
+					}
+				}
+				r.harness.frame(build)
+				r.c.SetFocus(keys[0])
+				r.harness.frame(build)
+				r.harness.frame(build)
+				bufs[0].SetCaret(5)
+				bufs[1].SetCaret(5)
+				tc.setup(&bufs[0], &bufs[1])
+				move = true
+				tc.push(&r.in)
+				r.harness.frame(build)
+				if bufs[0].String() != tc.a || bufs[1].String() != tc.b {
+					t.Fatalf("order %v: a=%q b=%q, want a=%q b=%q", order, bufs[0].String(), bufs[1].String(), tc.a, tc.b)
+				}
+				if r.c.FocusKey() != keys[1] {
+					t.Fatal("the focus did not move to b")
+				}
+			})
+		}
+	}
+}
+
+// A paste answers the field that asked while that field owns the frame's
+// input; a focus move during the build does not redirect it.
+func TestPasteFollowsInputOwnership(t *testing.T) {
+	r := newRig(t, false)
+	var a, b TextBuffer
+	var ka, kb Key
+	move := false
+	build := func(c *Context) {
+		if move {
+			c.SetFocus(kb)
+		}
+		c.NextSize(Px(200), Px(24))
+		ka = c.KeyOf(c.TextField("a", &a).ID)
+		c.NextSize(Px(200), Px(24))
+		kb = c.KeyOf(c.TextField("b", &b).ID)
+	}
+	r.harness.frame(build)
+	r.c.SetFocus(ka)
+	r.harness.frame(build)
+	r.harness.frame(build)
+	move = true
+	r.in.SetPaste(ka, []byte("pasted"), true)
+	r.harness.frame(build)
+	if a.String() != "pasted" || b.String() != "" {
+		t.Fatalf("a=%q b=%q", a.String(), b.String())
+	}
+}
+
+// A popup above a modal, holding a text field. Escape in the field is the
+// field's when it is composing or clears itself; otherwise it closes the popup.
+type escRig struct {
+	*fieldRig
+	popup     bool
+	clears    bool // the field is marked NextEscapeClears (and clears itself on Cancelled, like a search field)
+	dismissed int  // frames in which the popup was dismissed
+	modalEsc  int  // times the modal below took Escape
+	cancelled int
+	key       Key
+}
+
+func (e *escRig) build(c *Context) {
+	c.BeginOverlay(1, OverlayModal, [4]float32{0, 0, 400, 100}, PlaceCenter)
+	c.NextSize(Px(300), Px(60))
+	c.Box(0, "dialog")
+	if e.popup {
+		os := c.BeginOverlay(2, OverlayPopup, [4]float32{0, 0, 100, 10}, PlaceBelow)
+		if os.Dismissed {
+			e.dismissed++
+			e.popup = false
+		}
+		c.NextSize(Px(200), Px(24))
+		if e.clears {
+			c.NextEscapeClears()
+		}
+		res := c.TextField("f", &e.buf)
+		e.key = c.KeyOf(res.ID)
+		if res.Cancelled {
+			e.cancelled++
+			if e.clears && e.buf.Len() > 0 {
+				e.buf.Reset()
+			}
+		}
+		c.EndOverlay()
+	}
+	if c.TakeKey(KeyEscape, 0) { // the modal's owner
+		e.modalEsc++
+	}
+	c.EndOverlay()
+}
+
+func newEscRig(t *testing.T) *escRig {
+	e := &escRig{fieldRig: newRig(t, false)}
+	for i := 0; i < 3; i++ {
+		e.harness.frame(e.build)
+	}
+	e.popup = true
+	for i := 0; i < 4; i++ {
+		e.harness.frame(e.build)
+	}
+	return e
+}
+
+func (e *escRig) esc() {
+	e.in.PushKey(KeyEvent{Code: KeyEscape, Down: true})
+	e.harness.frame(e.build)
+}
+
+func TestEscapeInPopupFieldCancelsOnlyTheComposition(t *testing.T) {
+	e := newEscRig(t)
+	if e.c.FocusKey() != e.key || !e.c.TextFieldFocused() {
+		t.Fatal("the focus did not move into the popup's field")
+	}
+	e.in.SetPreedit([]byte("か"), 3, 0)
+	e.harness.frame(e.build)
+	e.harness.frame(e.build)
+	e.esc()
+	if !e.c.IMECancel() {
+		t.Fatal("Escape did not cancel the composition")
+	}
+	e.harness.frame(e.build)
+	if e.dismissed != 0 || !e.popup || e.modalEsc != 0 {
+		t.Fatalf("Escape during a composition: popup dismissed %d times, open %v, modal took %d", e.dismissed, e.popup, e.modalEsc)
+	}
+	// with the composition gone Escape reaches the popup
+	e.in.SetPreedit(nil, 0, 0)
+	e.harness.frame(e.build)
+	e.esc()
+	e.harness.frame(e.build)
+	if e.dismissed != 1 || e.popup {
+		t.Fatalf("the next Escape: popup dismissed %d times, open %v", e.dismissed, e.popup)
+	}
+	if e.modalEsc != 0 {
+		t.Fatalf("the modal below took Escape %d times", e.modalEsc)
+	}
+}
+
+func TestEscapeClearsPopupSearchFieldBeforeClosingPopup(t *testing.T) {
+	e := newEscRig(t)
+	e.clears = true
+	e.in.AppendText("abc")
+	e.harness.frame(e.build)
+	e.harness.frame(e.build)
+	e.esc()
+	e.harness.frame(e.build)
+	if e.buf.Len() != 0 || e.dismissed != 0 || !e.popup || e.modalEsc != 0 {
+		t.Fatalf("first Escape: text %q, popup dismissed %d, open %v, modal took %d", e.buf.String(), e.dismissed, e.popup, e.modalEsc)
+	}
+	e.esc()
+	e.harness.frame(e.build)
+	if e.dismissed != 1 || e.popup {
+		t.Fatalf("second Escape: popup dismissed %d times, open %v", e.dismissed, e.popup)
+	}
+	if e.modalEsc != 0 {
+		t.Fatalf("the modal below took Escape %d times", e.modalEsc)
+	}
+}
+
+// The character a platform sends along with a Tab key is not typed text.
+func TestTabCharacterWithTabKeyIsNotTyped(t *testing.T) {
+	r := newRig(t, false)
+	r.typ("ab")
+	r.in.PushKey(KeyEvent{Code: KeyTab, Down: true})
+	r.in.AppendText("\t")
+	r.frame()
+	if r.text() != "ab" {
+		t.Fatalf("Tab typed into the field: %q", r.text())
+	}
+	r.focus()
+	r.in.AppendText("c\td") // no Tab key: text, which a field keeps with the tab as a space
+	r.frame()
+	if r.text() != "abc d" {
+		t.Fatalf("typed text with a tab: %q", r.text())
 	}
 }

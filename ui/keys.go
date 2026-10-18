@@ -19,10 +19,21 @@ package ui
 // Context.IMECancel). A field inside a popup or modal overlay sees it and
 // reports Cancelled too, but does not claim it: the overlay takes it as well,
 // so Escape in a dialog's text field cancels the dialog, and in a popup's
-// closes the popup (see BeginOverlay).
+// closes the popup (see BeginOverlay). Escape is claimed by the field even in
+// an overlay when the field has its own use for it, decided at Begin before the
+// overlay's dismissal: while it shows a composition (the composition ends and
+// the overlay stays), and when NextEscapeClears marked it and it has text (it
+// clears, and the overlay stays; the next Escape finds it empty and reaches
+// the overlay).
 //
 // The Escape key also closes the innermost popup overlay (see BeginOverlay)
 // before the commands see it.
+
+// NextEscapeClears marks the next TextField as one that clears itself on
+// Escape (a search field): while it has text, a focused field in a popup or
+// modal claims Escape for itself, and TextFieldSignal.Cancelled tells the
+// widget to clear it; once it is empty Escape reaches the overlay.
+func (c *Context) NextEscapeClears() { c.nextEscClr = true }
 
 // KeyCount is the number of key events of this frame (Input.NKeys).
 func (c *Context) KeyCount() int { return c.in.NKeys }
@@ -150,14 +161,19 @@ func (c *Context) claimFieldKeys() {
 		return
 	}
 	c.fieldFocus, c.fieldOwner = true, c.focusKey
+	// the field shows an input-method composition (as TextField decides it)
+	composing := c.in.NPreedit > 0 && (c.imeOwner == 0 || c.imeOwner == c.focusKey)
 	for i := 0; i < c.in.NKeys; i++ {
 		e := &c.in.Keys[i]
 		if !fieldWants(e) {
 			continue
 		}
-		if e.Code == KeyEscape && b.ovl != 0 {
+		if e.Code == KeyEscape && b.ovl != 0 && !composing && !b.escClears {
 			// In a popup or modal Escape is the overlay's too: the field sees
-			// it (and reports Cancelled) but leaves it for the overlay.
+			// it (and reports Cancelled) but leaves it for the overlay. Not
+			// when the field has something of its own to do with it: end a
+			// composition, or clear its text. That is decided here, before the
+			// popup's dismissal (overlayEscape) looks at the key.
 			c.fieldPeek |= 1 << uint(i)
 			continue
 		}

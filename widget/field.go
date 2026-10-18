@@ -115,6 +115,9 @@ func (k *Kit) field(label string, buf *ui.TextBuffer, placeholder string, search
 	}
 	c.NextRole(role)
 	c.NextSemName(display)
+	if search {
+		c.NextEscapeClears() // Escape clears it, and is not also the popup's or dialog's
+	}
 	fs := c.TextField(ident, buf)
 	res := FieldSignal{
 		Signal:    Signal{ID: fs.ID, Hovering: fs.Hovering, Focused: fs.Focused, Changed: fs.Changed, Clicked: fs.Clicked},
@@ -153,7 +156,6 @@ func (k *Kit) searchDecor(wkey, fkey ui.Key, buf *ui.TextBuffer, h, iconX, clear
 	c.BoxKeyed(f|fl, ui.KeyN(wkey, 3), disp)
 
 	if res.Cancelled && buf.Len() > 0 {
-		c.TakeKey(ui.KeyEscape, 0) // the clear is Escape's whole effect (not also a dialog's cancel)
 		buf.Reset()
 		res.Changed, res.Cancelled = true, false
 	}

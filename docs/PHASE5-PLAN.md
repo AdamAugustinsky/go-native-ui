@@ -119,7 +119,10 @@ func (v *Files) Build(c *ui.Context) {
 **Escape.**
 - A text field in the main tree claims it and reports Cancelled.
 - A text field inside a popup or a modal sees it and reports Cancelled but does not claim it: the overlay takes it too. Escape in a dialog's text field cancels the dialog; in a popup's, it closes the popup. A search field that clears itself on Escape takes the key, so the dialog is not also cancelled.
-- While the field shows an input-method composition, Escape cancels only the composition (`Context.IMECancel`); the key goes no further.
+- While the field shows an input-method composition, Escape cancels only the composition (`Context.IMECancel`); the key goes no further, also inside a popup or modal.
+- A field marked `NextEscapeClears` (the search field) that has text claims Escape in an overlay too, and clears itself; the next Escape, with the field empty, reaches the overlay. Both are decided at Begin, before the popup's dismissal looks at the key.
+
+**Who owns a frame's input.** The field that had the focus at Begin owns the frame's keys, edit actions, typed text, replacement and paste, and no other field applies any of them, whatever `SetFocus` does during the build: a field that loses the focus to a later-built field still gets its input, and the later field none. (Without a focused field at Begin the first focused field built takes them.) An input-method commit goes to the field that composed, by its own tag. The character a platform sends along with a Tab key is not typed text.
 - With overlays stacked, only the topmost popup or modal takes Enter and Escape, whatever order they are built in (`Context.OverlayTopmost`). A dialog's default action never takes Enter while disabled.
 
 **macOS menus.** Native menus pre-empt keys, so the Edit menu's items become edit actions on the focused field. The field's own chords are then not also delivered as keys. A chord is handled once.

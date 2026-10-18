@@ -170,6 +170,8 @@ func (c *Context) IMECancel() bool { return c.imeCancel }
 // 1 s (a 2 s blink period) or BlinkTimeoutNs to 0 (a solid caret).
 func (c *Context) TextField(label string, buf *TextBuffer) TextFieldSignal {
 	font, pad, textColor := c.sFont.peek(), c.sPad.peek(), c.sText.peek()
+	escClears := c.nextEscClr // (a box resets the styles)
+	c.nextEscClr = false
 	fi := c.fontInfo(font)
 	lh := fi.ascent + fi.descent
 	if c.sH.peek().Kind == SizeAuto {
@@ -193,6 +195,18 @@ func (c *Context) TextField(label string, buf *TextBuffer) TextFieldSignal {
 	focused := c.focusKey == key && !disabled && !c.blocked(b) // (beneath a modal overlay a field takes no input)
 	active := focused && in.Focused
 	res.Focused = focused
+	// Input ownership is fixed at Begin (fieldOwner: the field that had the
+	// focus then) and does not follow the focus during the build: this frame's
+	// keys, edit actions, typed text, replacement and paste all belong to that
+	// field, whether or not it still has the focus when it is built, and to no
+	// other. When no field was known to have the focus at Begin, the first
+	// focused field built takes them.
+	owns := false
+	if c.fieldOwner != 0 {
+		owns = c.fieldOwner == key && in.Focused && !disabled && !c.blocked(b)
+	} else {
+		owns = active && !c.fieldBuilt
+	}
 	buf.now = in.Time
 	rev0 := buf.rev
 	touched := active && !buf.focused // focus just arrived
@@ -258,49 +272,40 @@ func (c *Context) TextField(label string, buf *TextBuffer) TextFieldSignal {
 	}
 
 	// The pasted text answers this field's own request.
-	if focused && in.HasPaste && in.PasteTag == key && len(in.Paste) > 0 {
+	if (owns || (c.fieldOwner == 0 && focused)) && in.HasPaste && in.PasteTag == key && len(in.Paste) > 0 {
 		buf.insertSealed(in.Paste)
 		touched = touched || active
 	}
 
+	// The focus left the field with its composition on screen (see below): the
+	// composition is committed and its keys are not interpreted.
+	orphan := !focused && pre && buf.composing && c.imeOwner == key
+
 	// Typed text, then keys and edit actions.
-	if active {
-		// The frame's keys, edit actions and typed text are applied once. The
-		// keys were claimed at Begin for the field that had the focus then
-		// (fieldOwner), and so are the edit actions; if a handler moves the
-		// focus to a field built later in the same frame, that field applies
-		// none of them. (When no field was known to have the focus at Begin,
-		// the first focused field takes the edit actions.)
-		mine := c.fieldOwner == key || (c.fieldOwner == 0 && !c.fieldBuilt)
-		if mine {
-			c.fieldKey, c.fieldBuilt = key, true
-		}
+	if owns {
+		c.fieldKey, c.fieldBuilt = key, true
 		typed := in.Text[:in.NText]
-		if c.textTaken {
-			typed = nil
-		} else if in.HasReplace { // press-and-hold accents: the first part of the text replaces a range
+		if in.HasReplace { // press-and-hold accents: the first part of the text replaces a range
 			n := min(in.ReplaceN, len(typed))
 			buf.ReplaceUTF16(int(in.ReplaceStart), int(in.ReplaceLen), typed[:n])
 			typed = typed[n:]
 			touched = true
-			c.textTaken = true
 		}
 		if len(typed) > 0 {
 			buf.Insert(typed)
 			touched = true
-			c.textTaken = true
 		}
-		if composing && mine {
+		if composing {
 			// Escape cancels the composition: the app discards the platform's
 			// and clears Input.Preedit. The key goes no further.
 			for i := 0; i < in.NKeys; i++ {
 				if e := &in.Keys[i]; e.Down && e.Code == KeyEscape && (c.fieldKeys|c.fieldPeek)&(1<<uint(i)) != 0 {
 					c.imeCancel = true
-					c.ClaimKey(i) // (in an overlay too: it is not also the overlay's)
+					c.ClaimKey(i)
 				}
 			}
 		}
-		if !composing && mine {
+		if !composing && !orphan {
 			touched = c.editKeys(buf, &res) || touched
 			for i := 0; i < in.NEdit; i++ {
 				c.applyEdit(buf, in.Edit[i])
@@ -308,7 +313,7 @@ func (c *Context) TextField(label string, buf *TextBuffer) TextFieldSignal {
 		}
 	}
 	switch {
-	case !focused && pre && buf.composing && c.imeOwner == key:
+	case orphan:
 		// The focus left the field with its composition on screen: the text is
 		// committed here, as AppKit does when the first responder changes, and
 		// the platform's composition is dropped (IMECancel).
@@ -335,7 +340,8 @@ func (c *Context) TextField(label string, buf *TextBuffer) TextFieldSignal {
 		buf.activity = in.Time
 	}
 	res.Changed = buf.rev != rev0
-	if rec := c.semOf(id); rec != nil { // the value and the selection, for assistive technologies
+	b.escClears = escClears && buf.Len() > 0 // (what the next Begin reads: the text as this frame leaves it)
+	if rec := c.semOf(id); rec != nil {      // the value and the selection, for assistive technologies
 		n := min(len(buf.b), maxSemValue)
 		for n < len(buf.b) && n > 0 && !utf8.RuneStart(buf.b[n]) {
 			n--

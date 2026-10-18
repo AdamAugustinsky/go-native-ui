@@ -39,6 +39,7 @@ type box struct {
 	flags                           Flags
 	parent, first, last, next, prev ID
 	field                           bool  // a text field (TextField): it takes the keys of keys.go when focused
+	escClears                       bool  // a text field that clears itself on Escape and has text to clear (NextEscapeClears)
 	ovRoot                          bool  // the root box of an overlay
 	ovl                             uint8 // the overlay the box belongs to, 1 + its index in the frame's overlays; 0 for the main tree
 
@@ -217,12 +218,12 @@ type Context struct {
 	// key claiming and edit actions (keys.go)
 	claimed    uint16              // bit i: key event i is handled
 	fieldKeys  uint16              // bit i: key event i was claimed for the focused text field
+	nextEscClr bool                // the next TextField clears itself on Escape (NextEscapeClears)
 	fieldPeek  uint16              // bit i: key event i (Escape) is seen by the focused field in an overlay but not claimed
 	fieldFocus bool                // the focused box is a text field that takes keys
 	fieldBuilt bool                // the focused field applied this frame's edit actions already
 	fieldKey   Key                 // the key of that field
 	fieldOwner Key                 // the text field that had the focus at Begin and owns this frame's keys and edit actions; 0 none
-	textTaken  bool                // a field applied this frame's typed text
 	carry      [MaxEdit]EditAction // edit actions queued after the field was built: for the next frame
 	nCarry     int
 	cmdTaken   int // Input.Commands taken so far this frame (TakeCommand)
@@ -347,13 +348,14 @@ func (c *Context) Begin(in *Input, widthPx, heightPx int, scale, dt float32) {
 	c.animating, c.scrollSet = false, false
 	c.wakeNs, c.imeOK, c.imeCancel = 0, false, false
 	c.takeCommit()
+	c.dropTabText()
 	c.lineCur ^= 1
 	c.lineBuf[c.lineCur] = c.lineBuf[c.lineCur][:0]
 	c.ovPrev, c.nOvPrev = c.ovs, c.nOvs
 	c.nOvs, c.nOvOpen, c.parentless = 0, 0, false
 	c.modalIdx = c.topModal()
 	c.claimed, c.cmdTaken, c.activated = 0, 0, 0
-	c.fieldBuilt, c.textTaken, c.pasteReq, c.pasteTag = false, false, false, 0
+	c.fieldBuilt, c.pasteReq, c.pasteTag = false, false, 0
 	for i := 0; i < c.nCarry; i++ { // edit actions the previous frame could not give its field
 		c.in.PushEdit(c.carry[i])
 	}
@@ -386,6 +388,37 @@ func (c *Context) Begin(in *Input, widthPx, heightPx int, scale, dt float32) {
 	c.root = root
 	c.parents[0] = root
 	c.nparents = 1
+}
+
+// dropTabText removes the tab characters from the frame's typed text when a Tab
+// key went down in it: some platforms send the character along with the key,
+// and Tab is a key (focus traversal, an app's pane switch), not text. Pasted
+// text is not affected (a field turns its tabs into spaces).
+func (c *Context) dropTabText() {
+	in := &c.in
+	if in.NText == 0 {
+		return
+	}
+	tab := false
+	for i := 0; i < in.NKeys && !tab; i++ {
+		tab = in.Keys[i].Down && in.Keys[i].Code == KeyTab
+	}
+	if !tab {
+		return
+	}
+	// (the replacement of press-and-hold accents is a position in the text; it
+	// does not come with a Tab, and a frame with one keeps the text as is)
+	if in.HasReplace {
+		return
+	}
+	n := 0
+	for i := 0; i < in.NText; i++ {
+		if in.Text[i] != '\t' {
+			in.Text[n] = in.Text[i]
+			n++
+		}
+	}
+	in.NText = n
 }
 
 // takeCommit moves the text that committed an input-method composition out of
@@ -435,6 +468,7 @@ func (c *Context) resetStyles() {
 	c.sTint.reset()
 	c.hasNextPos = false
 	c.nextFlags = 0
+	c.nextEscClr = false
 	c.semNext = semNext{}
 }
 
