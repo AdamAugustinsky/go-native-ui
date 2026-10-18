@@ -3,7 +3,11 @@ package app
 import "slices"
 
 // Stats summarises a sample set.
-type Stats struct{ P50, P99, Max, Mean float64 }
+type Stats struct {
+	// P50, P99, Max and Mean are the median, the 99th percentile, the maximum
+	// and the arithmetic mean, in the unit of the samples.
+	P50, P99, Max, Mean float64
+}
 
 // Summarize returns the percentiles, maximum and mean of xs (xs is not
 // modified). It allocates; call it at report time.

@@ -12,18 +12,43 @@ type System struct{}
 // New always fails on this OS.
 func New() (*System, error) { return nil, errors.New("text: backend not implemented on this OS yet") }
 
-func (s *System) Font(FontDesc) FontKey                   { return 0 }
-func (s *System) Metrics(FontKey) Metrics                 { return Metrics{} }
-func (s *System) Shape(FontKey, []byte) RunRef            { return 0 }
-func (s *System) Run(RunRef) RunView                      { return RunView{} }
-func (s *System) Glyph(FaceID, uint16, uint8) GlyphEntry  { return GlyphEntry{} }
-func (s *System) RunGeneration() uint32                   { return 0 }
-func (s *System) AtlasGeneration() uint32                 { return 0 }
-func (s *System) Pages() int                              { return 0 }
-func (s *System) PageInfo(int) (w, h int, color bool)     { return 0, 0, false }
-func (s *System) ClearDirty(int)                          {}
-func (s *System) Close()                                  {}
+// Font returns the zero FontKey on this OS.
+func (s *System) Font(FontDesc) FontKey { return 0 }
+
+// Metrics returns zero Metrics on this OS.
+func (s *System) Metrics(FontKey) Metrics { return Metrics{} }
+
+// Shape returns the invalid RunRef on this OS.
+func (s *System) Shape(FontKey, []byte) RunRef { return 0 }
+
+// Run returns an empty RunView on this OS.
+func (s *System) Run(RunRef) RunView { return RunView{} }
+
+// Glyph returns an empty GlyphEntry on this OS.
+func (s *System) Glyph(FaceID, uint16, uint8) GlyphEntry { return GlyphEntry{} }
+
+// RunGeneration is always 0 on this OS.
+func (s *System) RunGeneration() uint32 { return 0 }
+
+// AtlasGeneration is always 0 on this OS.
+func (s *System) AtlasGeneration() uint32 { return 0 }
+
+// Pages is always 0 on this OS.
+func (s *System) Pages() int { return 0 }
+
+// PageInfo returns zero values on this OS.
+func (s *System) PageInfo(int) (w, h int, color bool) { return 0, 0, false }
+
+// ClearDirty does nothing on this OS.
+func (s *System) ClearDirty(int) {}
+
+// Close does nothing on this OS.
+func (s *System) Close() {}
+
+// ReserveRuns does nothing on this OS.
 func (s *System) ReserveRuns(runs, glyphs, textBytes int) {}
+
+// Dirty reports no dirty region on this OS.
 func (s *System) Dirty(int) (x, y, w, h int, pixels []byte, stride int, ok bool) {
 	return
 }

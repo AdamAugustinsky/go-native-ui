@@ -61,6 +61,10 @@ type FontDesc struct {
 
 // Metrics are font metrics in pixels.
 type Metrics struct {
+	// Ascent and Descent are the distances from the baseline to the top and the
+	// bottom of the line, LineGap is the extra space between lines and LineHeight
+	// is Ascent+Descent+LineGap. CapHeight and XHeight are the heights of capital
+	// letters and of the lowercase x. All in pixels and positive.
 	Ascent, Descent, LineGap, LineHeight float32
 	CapHeight, XHeight                   float32
 	// MonoAdvance is the advance of "0". For a monospace font it is the
@@ -77,6 +81,7 @@ type RunRef uint32
 //
 // Glyphs are in visual order (X increases), also in right-to-left runs.
 type RunView struct {
+	// Glyphs are the glyph ids, in visual order.
 	Glyphs  []uint16
 	X       []float32 // pen x per glyph in pixels, relative to the run origin
 	Faces   []FaceID  // face per glyph

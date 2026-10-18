@@ -51,10 +51,14 @@ type CycleAligned interface{ AtCycleStart() bool }
 
 // BenchWindow is the allocation result of one measured window.
 type BenchWindow struct {
-	Frames     int
-	Mallocs    uint64
+	// Frames is the number of frames measured in the window.
+	Frames int
+	// Mallocs is the number of heap allocations over the window.
+	Mallocs uint64
+	// TotalAlloc is the number of heap bytes allocated over the window.
 	TotalAlloc uint64
-	NumGC      uint32
+	// NumGC is the number of garbage collections completed over the window.
+	NumGC uint32
 }
 
 // BenchReport is the result of RunBench; it marshals to JSON as is.

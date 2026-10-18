@@ -46,6 +46,8 @@ jobs:
         run: |
           out=$(gofmt -l $(ls -d */ | grep -v -E '^(probes|third_party|bin|docs)/$'))
           if [ -n "$out" ]; then echo "::error::gofmt needed:"; echo "$out"; exit 1; fi
+      - name: doc comments on exported identifiers
+        run: go run ./tools/doccheck
       - name: vet and stripped release builds
         run: |
           mkdir -p dist

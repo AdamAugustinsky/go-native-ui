@@ -57,7 +57,10 @@ var _ = [1]struct{}{}[unsafe.Sizeof(Quad{})-quadSize] // Quad must be exactly qu
 
 // DrawList is the pointer-free instance list of one frame. Quads are drawn
 // in order.
-type DrawList struct{ Quads []Quad }
+type DrawList struct {
+	// Quads are the instances, in draw order.
+	Quads []Quad
+}
 
 // Reset empties the list and keeps its capacity.
 func (l *DrawList) Reset() { l.Quads = l.Quads[:0] }

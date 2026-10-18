@@ -17,7 +17,12 @@ import (
 )
 
 // Native holds the AppKit handles a GPU surface attaches to.
-type Native struct{ NSWindow, NSView uintptr }
+type Native struct {
+	// NSWindow is the window's NSWindow*.
+	NSWindow uintptr
+	// NSView is the window's content NSView*, which the Metal layer is attached to.
+	NSView uintptr
+}
 
 // Window is an AppKit window driven by our own event loop
 // (nextEventMatchingMask + sendEvent; [NSApp run] is never called).

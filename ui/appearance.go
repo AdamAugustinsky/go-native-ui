@@ -3,6 +3,7 @@ package ui
 // Appearance is the system's light or dark mode and accent colour, as the app
 // hands them to the UI before each frame (platform.SystemAppearance; D32).
 type Appearance struct {
+	// Dark is true when the system is in dark mode.
 	Dark   bool
 	Accent uint32 // RGBA8, 0xRRGGBBAA; 0 when the system has none or it is not known
 	// Known is false when the system could not be asked (yet); show light.

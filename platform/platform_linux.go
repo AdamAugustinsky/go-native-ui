@@ -20,7 +20,9 @@ import (
 //	Wayland: Display = wl_display*, Surface = wl_surface*
 //	X11:     Display = Display*,    X11Window = Window id
 type Native struct {
-	Wayland                     bool
+	// Wayland is true when Display and Surface are Wayland objects, false when the window is an X11 one.
+	Wayland bool
+	// Display, Surface and X11Window are the handles listed above; the ones that do not apply are 0.
 	Display, Surface, X11Window uintptr
 }
 

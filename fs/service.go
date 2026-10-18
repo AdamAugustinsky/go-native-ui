@@ -151,7 +151,9 @@ const (
 
 // Result is one thing Poll reports.
 type Result struct {
-	Kind    ResultKind
+	// Kind says what the other fields mean.
+	Kind ResultKind
+	// ID is the caller's id of the directory.
 	ID      uint32
 	Req     uint64   // ResultListing: the List request it answers (or a watch refresh's own number)
 	Refresh bool     // ResultListing: relisted because the directory changed, not because of a List call

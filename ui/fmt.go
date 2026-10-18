@@ -25,11 +25,22 @@ func (c *Context) Fmt() *Fmt {
 	return &c.fmt
 }
 
-func (f *Fmt) Str(s string) *Fmt              { f.a.AppendString(s); return f }
-func (f *Fmt) Byte(b byte) *Fmt               { f.a.AppendByte(b); return f }
-func (f *Fmt) Int(v int) *Fmt                 { f.a.AppendInt(int64(v)); return f }
-func (f *Fmt) Int64(v int64) *Fmt             { f.a.AppendInt(v); return f }
-func (f *Fmt) Uint64(v uint64) *Fmt           { f.a.AppendUint(v); return f }
+// Str appends s.
+func (f *Fmt) Str(s string) *Fmt { f.a.AppendString(s); return f }
+
+// Byte appends the byte b as it is.
+func (f *Fmt) Byte(b byte) *Fmt { f.a.AppendByte(b); return f }
+
+// Int appends v in decimal.
+func (f *Fmt) Int(v int) *Fmt { f.a.AppendInt(int64(v)); return f }
+
+// Int64 appends v in decimal.
+func (f *Fmt) Int64(v int64) *Fmt { f.a.AppendInt(v); return f }
+
+// Uint64 appends v in decimal.
+func (f *Fmt) Uint64(v uint64) *Fmt { f.a.AppendUint(v); return f }
+
+// Float appends v with prec digits after the decimal point.
 func (f *Fmt) Float(v float64, prec int) *Fmt { f.a.AppendFloat(v, prec); return f }
 
 // Bytes returns the label.

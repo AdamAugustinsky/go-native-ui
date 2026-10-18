@@ -241,9 +241,13 @@ func (c *Context) PeekSignal(k Key) Signal {
 // with key k as of the previous End, 0 for a key no box had; styling a box
 // from its own animation value needs them, because the box cannot be asked
 // before it is built.
-func (c *Context) HotTOf(k Key) float32    { return c.tOf(k, 0) }
+func (c *Context) HotTOf(k Key) float32 { return c.tOf(k, 0) }
+
+// ActiveTOf is ActiveT of the box with key k as of the previous End; see HotTOf.
 func (c *Context) ActiveTOf(k Key) float32 { return c.tOf(k, 1) }
-func (c *Context) FocusTOf(k Key) float32  { return c.tOf(k, 2) }
+
+// FocusTOf is FocusT of the box with key k as of the previous End; see HotTOf.
+func (c *Context) FocusTOf(k Key) float32 { return c.tOf(k, 2) }
 
 func (c *Context) tOf(k Key, which int) float32 {
 	v, ok := c.table.Get(uint64(k))
@@ -280,9 +284,13 @@ func (c *Context) Focused(id ID) bool { return id != 0 && c.focusKey == c.boxes[
 
 // HotT, ActiveT and FocusT are the animated 0..1 values of a box (they move
 // only when the matching animation flag is set).
-func (c *Context) HotT(id ID) float32    { return c.boxes[id].hotT }
+func (c *Context) HotT(id ID) float32 { return c.boxes[id].hotT }
+
+// ActiveT is the animated 0..1 press value of box id; see HotT.
 func (c *Context) ActiveT(id ID) float32 { return c.boxes[id].activeT }
-func (c *Context) FocusT(id ID) float32  { return c.boxes[id].focusT }
+
+// FocusT is the animated 0..1 focus value of box id; see HotT.
+func (c *Context) FocusT(id ID) float32 { return c.boxes[id].focusT }
 
 // ---- scrolling and lists ----
 

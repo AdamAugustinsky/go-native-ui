@@ -15,8 +15,11 @@ import "errors"
 type Kind uint8
 
 const (
+	// KindFile is a regular file.
 	KindFile Kind = iota
+	// KindDir is a directory.
 	KindDir
+	// KindSymlink is a symbolic link.
 	KindSymlink
 	KindOther // devices, sockets, FIFOs, ...
 )
@@ -32,7 +35,9 @@ const (
 // Entry is one directory entry: 24 bytes, pointer-free. Size is 0 for
 // directories. MTime is nanoseconds since the Unix epoch.
 type Entry struct {
-	Size    int64
+	// Size is the size in bytes; 0 for directories.
+	Size int64
+	// MTime is the modification time in nanoseconds since the Unix epoch.
 	MTime   int64
 	NameOff uint32 // into Listing.Names
 	NameLen uint16
@@ -45,10 +50,13 @@ type Entry struct {
 // UTF-16 once, while listing). Order is a permutation of the entry
 // indices in the requested sort order.
 type Listing struct {
+	// Entries are the directory's entries, in the order the OS returned them.
 	Entries []Entry
-	Names   []byte
-	Order   []uint32
-	Err     error // non-nil: the listing failed or is partial
+	// Names holds the entries' names back to back; see Name.
+	Names []byte
+	// Order lists the indices into Entries in the requested sort order.
+	Order []uint32
+	Err   error // non-nil: the listing failed or is partial
 }
 
 // Name returns entry i's name. It aliases l.Names.
@@ -138,6 +146,8 @@ type watcher interface {
 // Change is one coalesced watch notification for the directory with the
 // caller's id.
 type Change struct {
-	ID   uint32
+	// ID is the caller's id of the directory (the id given to Watch).
+	ID uint32
+	// Kind says what happened.
 	Kind ChangeKind
 }
