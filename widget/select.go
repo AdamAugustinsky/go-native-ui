@@ -98,7 +98,7 @@ func (k *Kit) selectPopup(id ui.ID, key ui.Key, sel *int, options []string, minW
 		lw = max(lw, k.textW(k.r.Font.UI, o))
 	}
 	pad := theme.Snap(px.GapSmall)
-	rowW := max(theme.Snap(2*px.Pad+iconW+lw), minW-2*pad)
+	rowW := max(theme.Snap(2*px.Pad+iconW+lw+labelSlack), minW-2*pad)
 	okey := ui.KeyN(popBase, 5000)
 	opening := !c.OverlayOpen(okey)
 

@@ -117,6 +117,12 @@ type Kit struct {
 	barKey ui.Key // the menu bar the open menu belongs to
 	tip    tipState
 
+	// ReduceMotion makes the sweeping segment of an indeterminate ProgressBar
+	// stand still (and stop asking for frames), as the system setting for
+	// reduced motion asks. Screenshots and tests that wait for a window to
+	// settle set it as well.
+	ReduceMotion bool
+
 	// TooltipDelayNs is how long the pointer rests on a widget before its
 	// tooltip shows (DefaultTooltipDelayNs when zero).
 	TooltipDelayNs int64

@@ -305,7 +305,7 @@ func (k *Kit) menuPanel(level, mi int, anchor [4]float32, place ui.Placement) {
 		}
 		hasSub = hasSub || it.Kind == menu.ItemSubmenu
 	}
-	lw = theme.Snap(lw)
+	lw = theme.Snap(lw + labelSlack) // snapping must not leave the widest title narrower than its text
 	sw = theme.Snap(sw)
 	rowW := 2*px.Pad + iconW + lw
 	if sw > 0 {

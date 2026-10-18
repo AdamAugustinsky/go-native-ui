@@ -285,3 +285,16 @@ func (k *Kit) EndSplitter(s *Splitter) {
 	}
 	c.Pop()
 }
+
+// PaneRect is the rectangle (x0, y0, x1, y1) of pane i in the splitter's own
+// coordinates, as of the last layout. A look that draws behind the panes (the
+// shadows of glass surfaces) uses it before the panes are built.
+func (s *Splitter) PaneRect(i int) [4]float32 {
+	if i < 0 || i >= s.st.N {
+		return [4]float32{}
+	}
+	if s.axis == ui.AxisX {
+		return [4]float32{s.panes[i][0], 0, s.panes[i][0] + s.panes[i][1], s.h}
+	}
+	return [4]float32{0, s.panes[i][0], s.w, s.panes[i][0] + s.panes[i][1]}
+}

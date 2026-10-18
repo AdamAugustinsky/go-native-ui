@@ -208,7 +208,7 @@ func (t *Table) header(k *Kit, tkey ui.Key, ident string) {
 		}
 		cell := c.BoxKeyed(flags|ui.Clip, ckey, nil)
 		c.Push(cell)
-		c.NextSize(ui.TextSize(0), ui.Px(hh))
+		c.NextSize(ui.TextSize(labelSlack), ui.Px(hh))
 		c.NextFont(k.r.Font.UISemi)
 		c.NextTextColor(p.TextMuted)
 		c.BoxKeyed(ui.DrawText|ui.FadeOverflowX, ui.KeyN(ckey, 1), strBytes(col.Title))

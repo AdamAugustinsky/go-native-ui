@@ -13,7 +13,8 @@ const indeterminateNs = 1400e6
 // is an indeterminate bar: a segment sweeps along the track for as long as the
 // bar is visible, and only then does it ask for frames; a window whose bar is
 // scrolled or covered out of view goes back to idle. The width fills the
-// parent unless NextWidth says otherwise. The label is the accessible name.
+// parent unless NextWidth says otherwise. With Kit.ReduceMotion the segment
+// stands still. The label is the accessible name.
 func (k *Kit) ProgressBar(label string, frac float32) ui.ID {
 	c := k.c
 	p, px := &k.r.Pal, &k.r.Px
@@ -37,12 +38,12 @@ func (k *Kit) ProgressBar(label string, frac float32) ui.ID {
 	r := c.Rect(id)
 	w := r[2] - r[0]
 	if indeterminate {
-		if k.visible(r) {
-			c.RequestFrame()
-		}
-		t := float32(0)
-		if now := c.Input().Time; now != 0 {
-			t = float32(now%int64(indeterminateNs)) / indeterminateNs
+		t := float32(0.3) // where the segment stands with ReduceMotion
+		if !k.ReduceMotion {
+			if k.visible(r) {
+				c.RequestFrame()
+			}
+			t = float32(c.Input().Time%int64(indeterminateNs)) / indeterminateNs
 		}
 		seg := w * 0.4
 		theme.At(c, -seg+t*(w+seg), 0, seg, h)

@@ -14,9 +14,6 @@ import (
 	"gonativeui/ui"
 )
 
-// Text is a deterministic text system for the tests: one glyph per rune,
-// every glyph advancing half the font size, no ink for spaces. Runs live in
-// fixed slots, so shaping allocates nothing once the slots are made.
 // Text is the fake text system; it implements ui.Shaper and the text-system
 // interfaces of theme, icon and widget.
 type Text struct {

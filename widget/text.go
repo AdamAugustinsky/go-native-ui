@@ -5,6 +5,11 @@ import (
 	"gonativeui/ui"
 )
 
+// labelSlack is the pixel a label's box is wider than its text: layout snaps
+// the box's edges to whole pixels, which can leave it a fraction narrower than
+// the text, and a label that is narrower than its text fades out at the edge.
+const labelSlack = 1
+
 // TextStyle selects the font and colour of a label.
 type TextStyle uint8
 
@@ -33,7 +38,7 @@ func (k *Kit) Label(s string) ui.ID { return k.LabelStyle(s, TextBody) }
 
 // LabelStyle is Label in a style.
 func (k *Kit) LabelStyle(s string, st TextStyle) ui.ID {
-	k.size(ui.TextSize(0), ui.TextSize(0))
+	k.size(ui.TextSize(labelSlack), ui.TextSize(0))
 	k.styleNext(st)
 	k.c.NextRole(ui.RoleLabel)
 	display, _ := ui.SplitLabel(s)
@@ -47,7 +52,7 @@ func (k *Kit) LabelBytes(b []byte) ui.ID { return k.LabelBytesStyle(b, TextBody)
 
 // LabelBytesStyle is LabelBytes in a style.
 func (k *Kit) LabelBytesStyle(b []byte, st TextStyle) ui.ID {
-	k.size(ui.TextSize(0), ui.TextSize(0))
+	k.size(ui.TextSize(labelSlack), ui.TextSize(0))
 	k.styleNext(st)
 	k.c.NextRole(ui.RoleLabel)
 	k.c.NextSemNameBytes(b)
@@ -78,7 +83,8 @@ func (k *Kit) styleNext(st TextStyle) {
 }
 
 // Icon builds the icon id of the kit's atlas in colour (RGBA; 0 takes the text
-// colour) in the box the icon needs. An icon that cannot be drawn on this
+// colour) in the box the icon needs (NextHeight makes the box taller, with the
+// glyph centred in it). An icon that cannot be drawn on this
 // system builds an empty box.
 func (k *Kit) Icon(id icon.ID, color uint32) ui.ID {
 	if color == 0 {
@@ -86,6 +92,11 @@ func (k *Kit) Icon(id icon.ID, color uint32) ui.ID {
 	}
 	c := k.c
 	flags, disp := k.icons.Prepare(c, id, color)
+	if k.hasH && flags != 0 { // a height set with NextHeight: the glyph stays centred in it
+		w, _ := k.icons.Size(id)
+		c.NextSize(ui.Px(w), k.nh)
+	}
+	k.hasH = false
 	c.NextRole(ui.RoleImage)
 	return c.BoxKeyed(flags, ui.KeyN(c.ParentKey(), 7000+uint64(id)), disp)
 }
