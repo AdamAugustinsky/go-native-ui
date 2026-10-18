@@ -13,19 +13,19 @@ Text editing has its own document: [phase4-text.md](phase4-text.md).
 |---|---|---|---|
 | 1 | 100k entries listed + sorted on a worker in ≤ 150 ms | **132 ms** (list 107 ms) | MacBook, `fsbench` |
 | | Windows / Linux, reported | Windows 64–65 ms (amd64/arm64); Linux 198–401 ms (runner disks) | CI `TestBig100k` |
-| | Frames paced while listing | pending | MacBook, `pilot -bench -bench-dir` |
+| | Frames paced while listing | **paced at 120 Hz, 0 allocations** on real folders with watching on: `/usr/bin` 1.46 ms/frame, `~/Documents` 1.55–1.60 ms | MacBook, `pilot -bench -bench-dir` (b040421) |
 | 2 | ≤ 64 B per entry incl. name | **58 B** on the MacBook's long names (47.7 B in the synthetic CI set) | MacBook, CI |
-| | 1M entries scroll < 4 ms main-thread CPU/frame, 0 allocations | **0.95 ms** paced (b07d6a8; 3 background mallocs before the exact gate existed); 1.24 ms offscreen, 0 allocations (Mac mini, 62b76e7) | MacBook; rerun with the exact gate pending |
+| | 1M entries scroll < 4 ms main-thread CPU/frame, 0 allocations | **1.40–1.48 ms** paced at 120 Hz, frame-CPU p99 2.5–2.6 ms, **0 allocations** (exact gate, first window) | MacBook (a48b3e9) |
 | 3 | Steady-state frames allocate 0 | **0** on every CI job (best whole-session window), 100k and 1M; `-bench-dir` 0 | CI 7352d81, 41edb06; Mac mini |
 | 4 | Watched changes appear in ≤ 250 ms | macOS ~1 ms raw, ~52 ms refreshed listing (debounce); Windows and Linux pass the 250 ms tests | Mac mini; CI |
 | 5 | Content-first, start listings in the first frame | **9 of 9** runs, incl. `/usr/bin` and `/Applications`; listings ready 23–34 ms after exec | MacBook (b07d6a8) |
 | | exec → on glass no slower than rexlook (~190 ms) | **161–184 ms**, median ~169 ms | MacBook (b07d6a8) |
-| | Half-bounce (BounceRec) | pending | MacBook |
-| 6 | Idle: 0 presents, ≤ 1 wakeup/s while watching | watcher: 0 wakeups/s on `~`, `/`, `~/Documents`, `~/Downloads` (kqueue, D26; FSEvents was 20–45/s); the app's idle run is pending | Mac mini; MacBook |
+| | Half-bounce (BounceRec) | **6 of 6**, content-first 6 of 6 (0 partial frames): complete content 260–342 ms after the launch request, bounce apex 424–445 ms | MacBook (b040421) |
+| 6 | Idle: 0 presents, ≤ 1 wakeup/s while watching | **0.0 % CPU, 0 idle wakeups, 0 CPU time** over 60 s with both panes on `~` and watching it (kqueue, D26; FSEvents was 20–45 wakeups/s) | MacBook (a48b3e9) |
 | 7 | Your hand test | pending | MacBook |
 | 8 | Windows/Linux: fs tests, offscreen Pilot, text-field tests | **pass** on all 8 jobs | CI 7352d81, 41edb06 |
 
-Binary size: `pilot` 3.8 MB (darwin/arm64, stripped).
+Binary size: `pilot` 3.8 MB (darwin/arm64, stripped). Idle memory footprint 73 MB with two panes on `~`; most of it is the window's three 2400×1520 drawables (~44 MB). The ≤ 40 MB budget is the empty demo's.
 
 ## File system (fs)
 
@@ -67,8 +67,10 @@ FSEvents measurement that led to D26 (Mac mini, 40–65 s per path, idle): `~` 1
 
 | Run | Paced | Allocations (best window) | Main-thread CPU/frame |
 |---|---|---|---|
-| MacBook, 100k (b07d6a8) | 120 Hz, p50/p99 8.33/8.62 ms | 0 | 0.86 ms |
-| MacBook, 1M (b07d6a8) | 120 Hz, p50/p99 8.33/8.63 ms | 3 objects / 240 B (background; before the exact gate) | 0.95 ms |
+| MacBook, 100k (a48b3e9, 2 runs) | 120 Hz, p50/p99 8.33/8.79 ms | 0 (first window; second run: third window, 2 background mallocs before) | 1.38–1.72 ms |
+| MacBook, 1M (a48b3e9, 2 runs) | 120 Hz, p50/p99 8.33/8.53 ms | 0 (first window) | 1.40–1.48 ms |
+| MacBook, `-bench-dir /usr/bin`, `~/Documents` | 120 Hz | 0 (first window) | 1.46–1.60 ms |
+| MacBook, 100k / 1M (b07d6a8, before the review fixes) | 120 Hz | 0 / 3 objects | 0.86 / 0.95 ms |
 | Mac mini offscreen, 100k (62b76e7) | — | 0 | 0.89 ms |
 | Mac mini offscreen, 1M (62b76e7) | — | 0 | 1.24 ms |
 | CI macOS 100k / 1M | yes | 0 / 0 | 1.9 / 2.1 ms |
@@ -84,14 +86,30 @@ On Linux CI the earlier windows of a run show one-off 48–2,400 B allocations f
 | `~`, `~` (6 runs) | 27–34 ms | 162–184 ms | both, 6 of 6 |
 | `/usr/bin`, `/Applications` (3 runs) | 23–68 ms | 165–183 ms | both, 3 of 3 |
 
+The review fixes made each bench session wait for its refreshes and sorts to be delivered and reconciled, so a session now does more work per frame than at b07d6a8.
+
+### Half-bounce (BounceRec, MacBook, b040421)
+
+The expected content is `pilot -o expect.png ~ ~` rendered on the MacBook (its home folder and fonts). Six launches through LaunchServices, Dock auto-hide temporarily off and restored afterwards:
+
+| Run | Complete content | Bounce start / apex / end | Partial frames | Half-bounce |
+|---|---|---|---|---|
+| 1 | 332 ms | 257 / 445 / 753 ms | 0 | pass |
+| 2 | 284 ms | 238 / 438 / 746 ms | 0 | pass |
+| 3 | 291 ms | 237 / 432 / 745 ms | 0 | pass |
+| 4 | 342 ms | 245 / 430 / 734 ms | 0 | pass |
+| 5 | 274 ms | 228 / 424 / 736 ms | 0 | pass |
+| 6 | 260 ms | 254 / 435 / 739 ms | 0 | pass |
+
+Two things spoiled the first attempts. A macOS privacy prompt for `~/Documents`, left from a bench run, covered the window. And writing results into `~/gnui-test` changed a row's modified time between the expected render and the runs; results now go to `/tmp`.
+
+### Privacy prompts and the main thread
+
+The first `-bench-dir ~/Documents` run never finished: the bench setup listed the folder synchronously on the main thread before the window existed, and `open()` waited on the privacy prompt. The setup now lists on a goroutine and gives up after the bench timeout (b040421). Normal startup was never affected: start listings run on goroutines and the first frame waits at most 150 ms (D27). macOS ties the permission to the exact signature, and Pilot is ad-hoc signed, so every new build asks again.
+
 ## Pending on the MacBook
 
-These need the lid open, the screen unlocked and nothing else in front for about 10 minutes:
-
-1. `pilot -bench -gate` at 100k and 1M with the exact gate, and `-bench-dir ~/Documents` (criterion 1's paced frames while listing).
-2. Idle: Pilot on `~` in both panes, untouched for 60 s: CPU, idle wakeups, memory.
-3. BounceRec half-bounce (needs Dock auto-hide off for the run, then restored).
-4. The hand test (criterion 7; list below and in [phase4-text.md](phase4-text.md)).
+Your hand test (criterion 7; list below and in [phase4-text.md](phase4-text.md)).
 
 ## Hand-test checklist
 
