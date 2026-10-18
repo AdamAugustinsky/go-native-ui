@@ -241,7 +241,7 @@ func zeroAllocScroll(t *testing.T, rowsPerFrame, warm, window int, wantEvictions
 	l := newListApp(defRows)
 	l.scrollRows = rowsPerFrame
 	total := warm + window*5 + 10
-	l.script = l.benchScript(warm, total)
+	l.script = l.benchScript(warm, total, total) // one pass of the events, as before
 	o := newOffscreen(t, l)
 	frame := func() { o.Frame() }
 	for i := 0; i < warm; i++ {
