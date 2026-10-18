@@ -144,6 +144,7 @@ jobs:
           ./bin/pilot -bench -rows 1000000 -gate -allow-unpaced -max-cpu-us 0 -timeout 150s | tee pilot-1m-macos.json
           { echo '```json'; cat pilot-macos.json pilot-1m-macos.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - name: gallery (offscreen PNGs in light and dark, windowed bench with the allocation gate)
+        if: ${{ !cancelled() }} # a stalled pilot bench of the runner must not hide the gallery's result
         run: |
           go build -trimpath -ldflags="-s -w" -o bin/gallery ./cmd/gallery
           ./bin/gallery -o gallery-macos.png -o-dark gallery-macos-dark.png
