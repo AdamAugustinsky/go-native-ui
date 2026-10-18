@@ -70,8 +70,14 @@ type Surface struct {
 	// slot across frames; two surfaces drawn in one frame need two slots. The
 	// cache grows the first time a slot is used.
 	Slot int
-	// Rect is the surface's rectangle in pixels: x0, y0, x1, y1.
+	// Rect is the surface's rectangle in pixels: x0, y0, x1, y1, in the
+	// coordinates of the box the surface is built in.
 	Rect [4]float32
+	// Origin is where that box's top left corner is in the window, in pixels
+	// (zero when it is the window). A look that samples the window background
+	// for the surface (glass) needs the window position of Rect; the surface is
+	// still placed by Rect in its parent.
+	Origin [2]float32
 	// Focus is how focused the surface is: 1 is fully focused (drawn
 	// opaque), 0 not at all (drawn as translucent glass over the window
 	// background); values between are mid-animation.

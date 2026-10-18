@@ -142,3 +142,34 @@ func TestSelectionAllocatesNothingWhenReserved(t *testing.T) {
 		t.Fatalf("selection operations allocated %v times", n)
 	}
 }
+
+// NextSet walks the selected items in order, across words and past gaps.
+func TestSelectionNextSet(t *testing.T) {
+	var s Selection
+	if _, ok := s.NextSet(0); ok {
+		t.Fatal("an empty selection has a next item")
+	}
+	want := []uint32{0, 3, 63, 64, 200, 4097}
+	for _, it := range want {
+		s.Set(it, true)
+	}
+	var got []uint32
+	for it, ok := s.NextSet(0); ok; it, ok = s.NextSet(it + 1) {
+		got = append(got, it)
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("walked %v, want %v", got, want)
+	}
+	if it, ok := s.NextSet(65); !ok || it != 200 {
+		t.Errorf("NextSet(65) = %d, %v, want 200", it, ok)
+	}
+	if _, ok := s.NextSet(4098); ok {
+		t.Error("NextSet past the last item found one")
+	}
+	if n := testing.AllocsPerRun(10, func() {
+		for it, ok := s.NextSet(0); ok; it, ok = s.NextSet(it + 1) {
+		}
+	}); n != 0 {
+		t.Errorf("a walk allocates %v times", n)
+	}
+}

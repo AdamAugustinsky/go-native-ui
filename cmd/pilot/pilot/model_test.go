@@ -103,6 +103,15 @@ func deliver(p *pane, l *fs.Listing) {
 	p.onResult(&r)
 }
 
+// curRow is the row the cursor is on, -1 if it is on none; anchorRow likewise.
+func (v *view) curRow() int { return v.rowOf(v.cursor()) }
+func (v *view) anchorRow() int {
+	if it, ok := v.ts.Sel.Anchor(); ok {
+		return v.rowOf(int32(it))
+	}
+	return -1
+}
+
 // settle runs the pane's slices of work until none is left.
 func settle(t testing.TB, p *pane) {
 	t.Helper()
@@ -140,10 +149,10 @@ func selected(p *pane) string {
 }
 
 func curName(p *pane) string {
-	if p.v.cur < 0 {
+	if p.v.cursor() < 0 {
 		return ""
 	}
-	return string(p.v.l.Name(int(p.v.cur)))
+	return string(p.v.l.Name(int(p.v.cursor())))
 }
 
 func newTestPane(t testing.TB, src Source, dir string, l *fs.Listing) *pane {
@@ -186,46 +195,50 @@ func TestRowsHideHiddenAndSort(t *testing.T) {
 	}
 }
 
+// The pane's selection is the table's: by entry index, counted with the size of
+// what is selected, and a range runs over display rows (here with the hidden
+// file out of sight).
 func TestSelectionOps(t *testing.T) {
 	p := newTestPane(t, &fakeSrc{}, nativePath("/d"), listing(fs.SortName, false, dirItems...))
 	v := &p.v
+	sel := &v.ts.Sel
 	// rows: 0 alpha, 1 zeta, 2 a.txt, 3 b.txt, 4 c.txt, 5 file2, 6 file10
-	v.selectOnly(v.entryAt(2), 2)
-	if selected(p) != "a.txt" || v.nSel != 1 || v.selBytes != 100 {
-		t.Fatalf("click: %q %d %d", selected(p), v.nSel, v.selBytes)
+	v.selectOnly(v.entryAt(2))
+	if selected(p) != "a.txt" || v.nSel() != 1 || v.selBytes() != 100 {
+		t.Fatalf("click: %q %d %d", selected(p), v.nSel(), v.selBytes())
 	}
-	v.toggle(v.entryAt(4), 4) // ⌘-click adds
-	if selected(p) != "a.txt c.txt" || v.selBytes != 300 || v.cur != v.entryAt(4) {
-		t.Fatalf("⌘-click: %q %d", selected(p), v.selBytes)
+	sel.Toggle(uint32(v.entryAt(4))) // ⌘-click adds
+	if selected(p) != "a.txt c.txt" || v.selBytes() != 300 || v.cursor() != v.entryAt(4) {
+		t.Fatalf("⌘-click: %q %d", selected(p), v.selBytes())
 	}
-	v.toggle(v.entryAt(2), 2) // ⌘-click again removes
-	if selected(p) != "c.txt" || v.selBytes != 200 {
-		t.Fatalf("⌘-click off: %q %d", selected(p), v.selBytes)
+	sel.Toggle(uint32(v.entryAt(2))) // ⌘-click again removes
+	if selected(p) != "c.txt" || v.selBytes() != 200 {
+		t.Fatalf("⌘-click off: %q %d", selected(p), v.selBytes())
 	}
 	// shift-click selects the range from the anchor (the last plain or ⌘ click), replacing the rest
-	v.selectRange(6)
+	sel.SelectRange(v.order(), v.anchorRow(), 6)
 	if got := selected(p); got != "a.txt b.txt c.txt file2 file10" {
 		// anchor was row 2 (the toggled-off row), so rows 2..6 are selected
 		t.Fatalf("shift-click: %q", got)
 	}
-	v.selectRange(3) // shrinking the range keeps the anchor
-	if got := selected(p); got != "a.txt b.txt" || v.curRow != 3 || v.anchorRow != 2 {
-		t.Fatalf("shift-click back: %q cur %d anchor %d", got, v.curRow, v.anchorRow)
+	sel.SelectRange(v.order(), v.anchorRow(), 3) // shrinking the range keeps the anchor
+	if got := selected(p); got != "a.txt b.txt" || v.curRow() != 3 || v.anchorRow() != 2 {
+		t.Fatalf("shift-click back: %q cur %d anchor %d", got, v.curRow(), v.anchorRow())
 	}
-	v.selectAll()
-	if v.nSel != 7 || v.selBytes != 100+300+200+1000+2000 {
-		t.Fatalf("select all: %d %d", v.nSel, v.selBytes)
+	sel.SelectRange(v.order(), 0, v.nRows()-1) // all the rows shown
+	if v.nSel() != 7 || v.selBytes() != 100+300+200+1000+2000 {
+		t.Fatalf("select all: %d %d", v.nSel(), v.selBytes())
 	}
-	v.moveCursor(0, false)
-	if selected(p) != "alpha" || v.nSel != 1 {
+	v.selectOnly(v.entryAt(0))
+	if selected(p) != "alpha" || v.nSel() != 1 {
 		t.Fatalf("move: %q", selected(p))
 	}
-	v.moveCursor(1000, true) // clamps, extends from row 0
-	if v.nSel != 7 || v.curRow != 6 {
-		t.Fatalf("extend to the end: %d rows selected, cursor %d", v.nSel, v.curRow)
+	sel.SelectRange(v.order(), v.anchorRow(), v.nRows()-1) // extends from row 0
+	if v.nSel() != 7 || v.curRow() != 6 {
+		t.Fatalf("extend to the end: %d rows selected, cursor %d", v.nSel(), v.curRow())
 	}
-	v.clearSel()
-	if v.nSel != 0 || v.selBytes != 0 || selected(p) != "" {
+	sel.Clear()
+	if v.nSel() != 0 || v.selBytes() != 0 || selected(p) != "" {
 		t.Fatal("clear")
 	}
 }
@@ -235,10 +248,10 @@ func TestSelectionSurvivesARefreshByName(t *testing.T) {
 	a := listing(fs.SortName, false, dirItems...)
 	p := newTestPane(t, src, nativePath("/d"), a)
 	v := &p.v
-	v.selectOnly(v.entryAt(2), 2) // a.txt
-	v.toggle(v.entryAt(4), 4)     // c.txt
-	v.toggle(v.entryAt(1), 1)     // zeta (a folder: no size)
-	if v.cur < 0 || curName(p) != "zeta" {
+	v.selectOnly(v.entryAt(2))            // a.txt
+	v.ts.Sel.Toggle(uint32(v.entryAt(4))) // c.txt
+	v.ts.Sel.Toggle(uint32(v.entryAt(1))) // zeta (a folder: no size)
+	if v.cursor() < 0 || curName(p) != "zeta" {
 		t.Fatal("setup")
 	}
 
@@ -264,11 +277,11 @@ func TestSelectionSurvivesARefreshByName(t *testing.T) {
 	if got := selected(p); got != "zeta c.txt" {
 		t.Errorf("selection = %q, want %q", got, "zeta c.txt")
 	}
-	if v.nSel != 2 || v.selBytes != 200 {
-		t.Errorf("count %d bytes %d, want 2 and 200", v.nSel, v.selBytes)
+	if v.nSel() != 2 || v.selBytes() != 200 {
+		t.Errorf("count %d bytes %d, want 2 and 200", v.nSel(), v.selBytes())
 	}
-	if curName(p) != "zeta" || v.curRow != 1 {
-		t.Errorf("cursor %q at row %d, want zeta at 1", curName(p), v.curRow)
+	if curName(p) != "zeta" || v.curRow() != 1 {
+		t.Errorf("cursor %q at row %d, want zeta at 1", curName(p), v.curRow())
 	}
 	if src.released != 1 {
 		t.Errorf("%d listings released, want the old one", src.released)
@@ -315,22 +328,19 @@ func TestEntriesTakeTheirHiddenAndQueryStateThroughARefresh(t *testing.T) {
 func TestFilterKeepsTheCursorRowInStep(t *testing.T) {
 	p := newTestPane(t, &fakeSrc{}, nativePath("/d"), listing(fs.SortName, false, dirItems...))
 	v := &p.v
-	v.selectOnly(v.entryAt(4), 4) // c.txt
+	v.selectOnly(v.entryAt(4)) // c.txt
 	p.filterOpen = true
 	p.filter.SetString("txt")
 	p.setQuery()
-	if v.curRow != -1 {
-		t.Error("the cursor row is not known while the rows are being rebuilt")
-	}
 	settle(t, p)
-	if v.curRow != 2 || curName(p) != "c.txt" {
-		t.Errorf("cursor at row %d (%q), want c.txt at 2", v.curRow, curName(p))
+	if v.curRow() != 2 || curName(p) != "c.txt" {
+		t.Errorf("cursor at row %d (%q), want c.txt at 2", v.curRow(), curName(p))
 	}
 	p.filter.SetString("zzz")
 	p.setQuery()
 	settle(t, p)
-	if v.nRows() != 0 || v.curRow != -1 || v.nSel != 1 {
-		t.Errorf("no matches: %d rows, cursor %d, %d selected (selection stays)", v.nRows(), v.curRow, v.nSel)
+	if v.nRows() != 0 || v.curRow() != -1 || v.nSel() != 1 {
+		t.Errorf("no matches: %d rows, cursor %d, %d selected (selection stays)", v.nRows(), v.curRow(), v.nSel())
 	}
 }
 
@@ -404,8 +414,8 @@ func TestUpSelectsTheFolderYouCameFrom(t *testing.T) {
 	}
 	deliver(p, listing(fs.SortName, false, dirItems...))
 	settle(t, p)
-	if p.dir != nativePath("/a") || selected(p) != "zeta" || p.v.curRow != 1 || p.reveal != 1 {
-		t.Errorf("dir %q selected %q row %d reveal %d", p.dir, selected(p), p.v.curRow, p.reveal)
+	if p.dir != nativePath("/a") || selected(p) != "zeta" || p.v.curRow() != 1 || p.reveal != 1 {
+		t.Errorf("dir %q selected %q row %d reveal %d", p.dir, selected(p), p.v.curRow(), p.reveal)
 	}
 	if p.pendSel != -1 {
 		t.Error("the pending selection is taken")
@@ -498,56 +508,22 @@ func TestKeyboardMap(t *testing.T) {
 	for _, mac := range []bool{true, false} {
 		t.Run(fmt.Sprint("mac=", mac), func(t *testing.T) {
 			r := newKeyRig(t, mac)
-			prim := ui.ModCtrl
-			if mac {
-				prim = ui.ModSuper
-			}
 			a := r.pl.panes[0]
 			// rows: 0 alpha, 1 zeta, 2 a.txt, 3 b.txt, 4 c.txt, 5 file2, 6 file10
-			r.press(ui.KeyDown, 0)
-			if r.sel() != "alpha" {
-				t.Fatalf("down from nothing: %q", r.sel())
-			}
-			r.press(ui.KeyDown, 0)
-			r.press(ui.KeyDown, ui.ModShift)
-			r.press(ui.KeyDown, ui.ModShift)
-			if r.sel() != "zeta a.txt b.txt" {
-				t.Errorf("shift+down extends: %q", r.sel())
-			}
-			r.press(ui.KeyUp, ui.ModShift)
-			if r.sel() != "zeta a.txt" {
-				t.Errorf("shift+up shrinks: %q", r.sel())
-			}
-			r.press(ui.KeyPageDown, 0)
-			if r.sel() != "file2" { // 4 rows visible: a page is 3 rows, from the cursor on row 2
-				t.Errorf("page down: %q", r.sel())
-			}
-			r.press(ui.KeyPageUp, 0)
-			if r.sel() != "a.txt" {
-				t.Errorf("page up: %q", r.sel())
-			}
-			r.press(ui.KeyEnd, 0)
-			if r.sel() != "file10" {
-				t.Errorf("end: %q", r.sel())
-			}
-			r.press(ui.KeyHome, 0)
-			if r.sel() != "alpha" {
-				t.Errorf("home: %q", r.sel())
-			}
-			r.press('A', prim)
-			if a.v.nSel != 7 {
-				t.Errorf("select all: %d", a.v.nSel)
-			}
+			// (the arrow keys, Page Up and Down, Home and End, select all and Enter
+			// belong to the table: see TestListKeysGoThroughTheTable)
 			r.press(ui.KeyEscape, 0)
-			if a.v.nSel != 0 {
+			a.v.selectOnly(a.v.entryAt(2))
+			r.press(ui.KeyEscape, 0)
+			if a.v.nSel() != 0 {
 				t.Error("esc clears the selection")
 			}
 
-			// Enter opens a folder
-			r.press(ui.KeyHome, 0)
-			r.press(ui.KeyEnter, 0)
+			// a folder is opened, then Backspace goes to the parent and selects
+			// the folder it came from
+			a.openRow(0)
 			if r.src.last() != nativePath("/a/b/alpha") {
-				t.Errorf("enter on a folder lists %q", r.src.last())
+				t.Errorf("opening a folder lists %q", r.src.last())
 			}
 			deliver(a, listing(fs.SortName, false, dirItems...))
 			settle(t, a)
@@ -608,9 +584,9 @@ func TestKeyboardMap(t *testing.T) {
 			if r.pl.active != 1 {
 				t.Error("tab")
 			}
-			r.press(ui.KeyDown, 0)
-			if r.sel() != "alpha" || a.v.nSel != 0 {
-				t.Errorf("right pane selection %q, left %d", r.sel(), a.v.nSel)
+			r.pl.panes[1].v.selectOnly(r.pl.panes[1].v.entryAt(0))
+			if r.sel() != "alpha" || a.v.nSel() != 0 {
+				t.Errorf("right pane selection %q, left %d", r.sel(), a.v.nSel())
 			}
 			r.press(ui.KeyTab, 0)
 			if r.pl.active != 0 {
@@ -623,17 +599,17 @@ func TestKeyboardMap(t *testing.T) {
 func TestEscapeClosesTheFilterBeforeTheSelection(t *testing.T) {
 	r := newKeyRig(t, true)
 	a := r.pl.panes[0]
-	r.press(ui.KeyDown, 0)
+	a.v.selectOnly(a.v.entryAt(0))
 	a.filterOpen = true
 	a.filter.SetString("a")
 	a.setQuery()
 	settle(t, a)
 	r.press(ui.KeyEscape, 0)
-	if a.filterOpen || len(a.q) != 0 || a.v.nSel != 1 {
-		t.Fatalf("first Esc: filter open %v query %q selected %d", a.filterOpen, a.q, a.v.nSel)
+	if a.filterOpen || len(a.q) != 0 || a.v.nSel() != 1 {
+		t.Fatalf("first Esc: filter open %v query %q selected %d", a.filterOpen, a.q, a.v.nSel())
 	}
 	r.press(ui.KeyEscape, 0)
-	if a.v.nSel != 0 {
+	if a.v.nSel() != 0 {
 		t.Error("second Esc clears the selection")
 	}
 }
@@ -670,7 +646,7 @@ func TestRefreshOfAGrowingDirectoryAllocatesNothing(t *testing.T) {
 		return listing(fs.SortName, false, items...)
 	}
 	p := newTestPane(t, &fakeSrc{}, nativePath("/d"), mk(1000))
-	p.v.selectOnly(p.v.entryAt(5), 5)
+	p.v.selectOnly(p.v.entryAt(5))
 	lists := [...]*fs.Listing{mk(1000), mk(1000), mk(1000)}
 	for _, l := range lists[:2] { // warm: the pane's two row buffers and the reconcile tables
 		deliver(p, l)
@@ -682,8 +658,8 @@ func TestRefreshOfAGrowingDirectoryAllocatesNothing(t *testing.T) {
 	deliver(p, bigger)
 	settle(t, p)
 	runtime.ReadMemStats(&m1)
-	if p.v.nEntries() != 1003 || p.v.nSel != 1 {
-		t.Fatalf("refresh did not land: %d entries, %d selected", p.v.nEntries(), p.v.nSel)
+	if p.v.nEntries() != 1003 || p.v.nSel() != 1 {
+		t.Fatalf("refresh did not land: %d entries, %d selected", p.v.nEntries(), p.v.nSel())
 	}
 	if n := m1.Mallocs - m0.Mallocs; n != 0 {
 		t.Errorf("a refresh with 3 more entries allocated %d times (%d bytes)", n, m1.TotalAlloc-m0.TotalAlloc)
@@ -739,8 +715,7 @@ func TestGoneAtARootStops(t *testing.T) {
 func TestOpenFileIsAsync(t *testing.T) {
 	src := &fakeSrc{}
 	p := newTestPane(t, src, nativePath("/d"), listing(fs.SortName, false, dirItems...))
-	p.v.selectOnly(p.v.entryAt(2), 2) // a.txt
-	p.v.curRow = 2
+	p.v.selectOnly(p.v.entryAt(2)) // a.txt
 	p.openCursor()
 	if len(src.opened) != 1 || src.opened[0] != joinPath(nativePath("/d"), "a.txt") {
 		t.Fatalf("opened %q", src.opened)

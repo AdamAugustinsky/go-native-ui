@@ -100,10 +100,12 @@ type Kit struct {
 	nDis    int
 	nOff    int // how many of them are on
 
+	rowPt      float32 // NextRowHeight, in points; 0 when none
 	nw, nh     ui.Size // Size for the next widget (NextSize)
 	hasW, hasH bool
 	nextAlign  ui.Align
 	hasAlign   bool
+	nextMono   bool // NextMono
 
 	mouse     [2]float32 // pointer position at the previous Begin
 	mouseMove bool       // the pointer moved since then
@@ -206,7 +208,7 @@ func (k *Kit) Begin(c *ui.Context) {
 		k.resolve(s)
 	}
 	k.nDis, k.nOff, k.force = 0, 0, 0
-	k.hasW, k.hasH, k.hasAlign = false, false, false
+	k.hasW, k.hasH, k.hasAlign, k.nextMono = false, false, false, false
 
 	k.target = k.fol.Update(c, &k.r)
 	k.ready = true

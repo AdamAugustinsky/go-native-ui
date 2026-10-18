@@ -199,32 +199,26 @@ func (s *script) fail(format string, args ...any) {
 	}
 }
 
-// listPoint is a point inside visible row r of pane i's list.
+// listPoint is a point inside visible row r of pane i's list (r counts from the
+// row at the top of the view).
 func (s *script) listPoint(i, r int) (x, y float32) {
 	g := &s.pl.geo[i]
 	if g.rowPx == 0 {
 		return g.rect[0] + 100, g.rect[1] + 100
 	}
-	return g.list[0] + 0.45*(g.list[2]-g.list[0]), g.list[1] + (float32(r)+0.5)*g.rowPx
+	return g.list[0] + 0.45*(g.list[2]-g.list[0]), g.list[1] + s.pl.panes[i].v.ts.PadPx() + (float32(r)+0.5)*g.rowPx
 }
 
-// headerPoint is a point on the header of column col in pane i.
+// headerPoint is a point on the header of column col in pane i (the Name column
+// where that one is not shown).
 func (s *script) headerPoint(i, col int) (x, y float32) {
-	pl := s.pl
-	g := &pl.geo[i]
-	L := pl.layoutPane(g.rect[2]-g.rect[0], g.rect[3]-g.rect[1], pl.panes[i].filterOpen)
-	y = g.rect[1] + (L.hdr[1]+L.hdr[3])/2
-	switch col {
-	case 1:
-		if L.showSize {
-			return g.rect[0] + L.list[0] + L.sizeR - 4*pl.Adv, y
-		}
-	case 2:
-		if L.showDate {
-			return g.rect[0] + L.list[0] + L.dateX + 6*pl.Adv, y
-		}
+	g := &s.pl.geo[i]
+	y = (g.hdr[1] + g.hdr[3]) / 2
+	if c := g.cols[col]; c[1] > c[0] {
+		return (c[0] + c[1]) / 2, y
 	}
-	return g.rect[0] + L.list[0] + L.nameX + 2*pl.Adv, y
+	c := g.cols[0]
+	return (c[0] + c[1]) / 2, y
 }
 
 func (s *script) move(in *ui.Input, x, y float32) {
@@ -316,14 +310,15 @@ func (s *script) frame(in *ui.Input) {
 		pl.Refresh(st.a, s.synth)
 		done = true
 	case opDrag:
-		_, g, _ := pl.paneRects()
+		l, r := pl.geo[0].rect, pl.geo[1].rect // the gutter is between them
+		y := (l[1] + l[3]) / 2
 		if s.t == 0 {
-			s.divX = (g[0] + g[2]) / 2
-			s.move(in, s.divX, (g[1]+g[3])/2)
+			s.divX = (l[2] + r[0]) / 2
+			s.move(in, s.divX, y)
 			in.SetButton(ui.ButtonLeft, true, 1)
 		} else if s.t < st.n {
-			s.divX += float32(st.b) * pl.Scale
-			s.move(in, s.divX, (g[1]+g[3])/2)
+			s.divX += float32(st.b) * pl.k.Theme().Scale
+			s.move(in, s.divX, y)
 		} else {
 			in.SetButton(ui.ButtonLeft, false, 0)
 			done = true

@@ -251,11 +251,12 @@ func (k *Kit) EndSplitter(s *Splitter) {
 	p := &k.r.Pal
 	s.EndPane()
 	for i := 0; i+1 < s.st.N; i++ {
+		// the gutter is the room before the start of pane i+1
 		var gut [4]float32
 		if s.axis == ui.AxisX {
-			gut = [4]float32{s.pos[i+1], 0, s.pos[i+1] + s.gut, s.h}
+			gut = [4]float32{s.pos[i+1] - s.gut, 0, s.pos[i+1], s.h}
 		} else {
-			gut = [4]float32{0, s.pos[i+1], s.w, s.pos[i+1] + s.gut}
+			gut = [4]float32{0, s.pos[i+1] - s.gut, s.w, s.pos[i+1]}
 		}
 		dk := s.dividerKey(i)
 		dim := k.dim()

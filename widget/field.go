@@ -14,6 +14,17 @@ type FieldSignal struct {
 	// Cancelled: Escape went down in the field (a search field clears itself
 	// then).
 	Cancelled bool
+	// Pressed: the left button went down on the field in this frame.
+	Pressed bool
+}
+
+// FieldKey is the key of the box that takes the keyboard focus in the field
+// that TextField or SearchField builds with label inside the box whose key is
+// parent. An app moves the focus there with ui.Context.SetFocus before the
+// field has been built.
+func FieldKey(parent ui.Key, label string) ui.Key {
+	_, ident := ui.SplitLabel(label)
+	return ui.HashString(ui.HashString(parent, ident), ident)
 }
 
 // TextField builds a single-line text field editing buf, styled by the theme,
@@ -39,6 +50,13 @@ func (k *Kit) field(label string, buf *ui.TextBuffer, placeholder string, search
 	display, ident := ui.SplitLabel(label)
 	dim := k.dim()
 	h := theme.Snap(px.ControlH)
+	if k.hasH && k.nh.Kind == ui.SizePixels { // NextHeight with a fixed height
+		h = k.nh.Value
+	}
+	font := k.r.Font.UI
+	if k.nextMono {
+		font, k.nextMono = k.r.Font.Mono, false
+	}
 	wkey := ui.HashString(c.ParentKey(), ident)
 	fkey := ui.HashString(wkey, ident)
 
@@ -82,7 +100,7 @@ func (k *Kit) field(label string, buf *ui.TextBuffer, placeholder string, search
 	c.NextBorder(border, bw)
 	c.NextRadius(px.RadiusMedium)
 	c.NextPadding(padL, 0, padR, 0)
-	c.NextFont(k.r.Font.UI)
+	c.NextFont(font)
 	c.NextTextColor(p.Text)
 	if k.off() {
 		c.NextFlags(ui.Disabled)
@@ -96,7 +114,7 @@ func (k *Kit) field(label string, buf *ui.TextBuffer, placeholder string, search
 	fs := c.TextField(ident, buf)
 	res := FieldSignal{
 		Signal:    Signal{ID: fs.ID, Hovering: fs.Hovering, Focused: fs.Focused, Changed: fs.Changed, Clicked: fs.Clicked},
-		Submitted: fs.Submitted, Cancelled: fs.Cancelled,
+		Submitted: fs.Submitted, Cancelled: fs.Cancelled, Pressed: fs.Pressed,
 	}
 
 	if search {
@@ -105,7 +123,7 @@ func (k *Kit) field(label string, buf *ui.TextBuffer, placeholder string, search
 	if buf.Len() == 0 && placeholder != "" && !k.composing(fs) {
 		theme.At(c, padL, 0, 0, h)
 		c.NextSize(ui.TextSize(0), ui.Px(h))
-		c.NextFont(k.r.Font.UI)
+		c.NextFont(font)
 		c.NextTextColor(p.TextMuted)
 		c.BoxKeyed(ui.DrawText|fl, ui.KeyN(wkey, 2), strBytes(placeholder))
 	}

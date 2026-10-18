@@ -305,10 +305,11 @@ func (g *Gallery) panes(c *ui.Context, r *theme.Resolved) {
 	k := g.k
 	sp := k.BeginSplitter("main", &g.split, ui.AxisX)
 	in := c.Input()
+	origin := [2]float32{r.Px.Inset, theme.Snap(r.Px.TitlebarH)} // where the area, the splitter's box, is in the window
 	for i := 0; i < 3; i++ {
 		pr := sp.PaneRect(i)
 		focus := c.AnimateValue(ui.KeyN(keyPane, uint64(100+i)), b2f(g.active == i), r.Motion.Dim)
-		r.Chrome.SurfaceShadow(c, r, g.surface(i, pr, focus))
+		r.Chrome.SurfaceShadow(c, r, g.surface(i, pr, origin, focus))
 	}
 	for i := 0; i < 3; i++ {
 		pr := sp.PaneRect(i)
@@ -320,7 +321,7 @@ func (g *Gallery) panes(c *ui.Context, r *theme.Resolved) {
 		}
 		focus := c.AnimateValue(ui.KeyN(keyPane, uint64(100+i)), b2f(g.active == i), r.Motion.Dim)
 		sp.Pane(i)
-		s := g.surface(i, [4]float32{0, 0, pr[2] - pr[0], pr[3] - pr[1]}, focus)
+		s := g.surface(i, [4]float32{0, 0, pr[2] - pr[0], pr[3] - pr[1]}, [2]float32{origin[0] + pr[0], origin[1] + pr[1]}, focus)
 		kg := r.Chrome.BeginSurface(c, r, s)
 		// The surface's fill and edges are floating boxes, which draw above the
 		// flow's, so the content is a floating box too (built after them).
@@ -347,8 +348,8 @@ func (g *Gallery) panes(c *ui.Context, r *theme.Resolved) {
 	k.EndSplitter(&sp)
 }
 
-func (g *Gallery) surface(i int, rect [4]float32, focus float32) theme.Surface {
-	return theme.Surface{Key: ui.KeyN(keyPane, uint64(i)), Slot: i, Rect: rect, Focus: focus, Opacity: 1}
+func (g *Gallery) surface(i int, rect [4]float32, origin [2]float32, focus float32) theme.Surface {
+	return theme.Surface{Key: ui.KeyN(keyPane, uint64(i)), Slot: i, Rect: rect, Origin: origin, Focus: focus, Opacity: 1}
 }
 
 func b2f(b bool) float32 {

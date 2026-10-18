@@ -69,7 +69,26 @@ type Table struct {
 	ts   *TableState
 	cols []Column
 	root ui.ID
+	hkey ui.Key
+	hh   float32
+	pad  float32 // the padding at the sides of a cell
 }
+
+// TableKey is the key of the list box of the table that BeginTable builds with
+// label inside the box whose key is parent: the box that takes the keyboard
+// focus. An app moves the focus to a table with ui.Context.SetFocus before it
+// has been built.
+func TableKey(parent ui.Key, label string) ui.Key {
+	_, ident := ui.SplitLabel(label)
+	tkey := ui.HashString(parent, ident)
+	return ui.KeyN(ui.HashString(tkey, ident), 1)
+}
+
+// HeaderKey is the key of the header row of the table, for ui.Context.RectOf.
+func (t *Table) HeaderKey() ui.Key { return t.hkey }
+
+// HeaderHeight is the height in pixels of the header row.
+func (t *Table) HeaderHeight() float32 { return t.hh }
 
 // BeginTable starts a table: a header row with the columns' titles above a
 // List of rows rows. It reads like a list:
@@ -99,6 +118,11 @@ func (k *Kit) BeginTable(label string, st *TableState, cols []Column, rows int) 
 	t := Table{ts: st, cols: cols}
 	_, ident := ui.SplitLabel(label)
 	tkey := ui.HashString(c.ParentKey(), ident)
+	t.hh, t.pad = theme.Snap(px.RowH), px.Pad
+	if k.rowPt > 0 { // compact rows keep a header a little taller than themselves, and the cells close
+		t.hh, t.pad = theme.Snap(k.Pt(k.rowPt+4)), px.GapSmall
+	}
+	t.hkey = ui.KeyN(tkey, 2)
 
 	k.size(ui.Pct(1), ui.Pct(1))
 	c.NextAxis(ui.AxisY)
@@ -147,8 +171,8 @@ func (t *Table) header(k *Kit, tkey ui.Key, ident string) {
 	c := k.c
 	px, p := &k.r.Px, &k.r.Pal
 	st := t.ts
-	hh := theme.Snap(px.RowH)
-	hkey := ui.KeyN(tkey, 2)
+	hh := t.hh
+	hkey := t.hkey
 
 	// resizing and sorting come from the previous frame's header boxes
 	if !k.off() {
@@ -198,7 +222,7 @@ func (t *Table) header(k *Kit, tkey ui.Key, ident string) {
 		c.NextSize(ui.Px(w), ui.Px(hh))
 		c.NextAxis(ui.AxisX)
 		c.NextGap(px.GapSmall)
-		c.NextPadding(px.Pad, 0, px.Pad, 0)
+		c.NextPadding(t.pad, 0, t.pad, 0)
 		c.NextRole(ui.RoleColumnHeader)
 		c.NextSemName(col.Title)
 		if hot > 0.004 {
@@ -208,6 +232,10 @@ func (t *Table) header(k *Kit, tkey ui.Key, ident string) {
 		}
 		cell := c.BoxKeyed(flags|ui.Clip, ckey, nil)
 		c.Push(cell)
+		if col.Align == ui.AlignRight { // the title (and the sort mark) at the right, over the numbers
+			c.NextSize(ui.Pct(1), ui.Px(hh))
+			c.BoxKeyed(0, ui.KeyN(ckey, 3), nil)
+		}
 		c.NextSize(ui.TextSize(labelSlack), ui.Px(hh))
 		c.NextFont(k.r.Font.UISemi)
 		c.NextTextColor(p.TextMuted)
@@ -246,7 +274,7 @@ func (t *Table) BeginCell(col int) ui.ID {
 	c.NextSize(ui.Px(t.ts.colPx[col]), ui.Pct(1))
 	c.NextAxis(ui.AxisX)
 	c.NextGap(k.r.Px.GapSmall)
-	c.NextPadding(k.r.Px.Pad, 0, k.r.Px.Pad, 0)
+	c.NextPadding(t.pad, 0, t.pad, 0)
 	c.NextRole(ui.RoleCell)
 	id := c.BoxKeyed(ui.Clip, ui.KeyN(t.rowKey, uint64(col)), nil)
 	c.Push(id)
@@ -262,7 +290,7 @@ func (t *Table) CellBytes(col int, b []byte) {
 	k := t.k
 	c := k.c
 	c.NextSize(ui.Px(t.ts.colPx[col]), ui.Pct(1))
-	c.NextPadding(k.r.Px.Pad, 0, k.r.Px.Pad, 0)
+	c.NextPadding(t.pad, 0, t.pad, 0)
 	c.NextFont(k.r.Font.UI)
 	c.NextTextColor(t.textCol)
 	c.NextAlign(t.cols[col].Align)

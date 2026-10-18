@@ -197,6 +197,31 @@ func itemAt(order []uint32, r int) uint32 {
 	return order[r]
 }
 
+// NextSet is the first selected item that is at least from, if there is one. A
+// loop over all selected items is
+//
+//	for it, ok := s.NextSet(0); ok; it, ok = s.NextSet(it + 1) { … }
+//
+// which takes time in proportion to the bitset and the selected items, and
+// allocates nothing.
+func (s *Selection) NextSet(from uint32) (uint32, bool) {
+	w := int(from >> 6)
+	if w >= len(s.bits) {
+		return 0, false
+	}
+	x := s.bits[w] >> (from & 63) << (from & 63)
+	for {
+		if x != 0 {
+			return uint32(w<<6 + bits.TrailingZeros64(x)), true
+		}
+		w++
+		if w >= len(s.bits) {
+			return 0, false
+		}
+		x = s.bits[w]
+	}
+}
+
 // Items appends the selected items, in increasing order, to dst.
 func (s *Selection) Items(dst []uint32) []uint32 {
 	for w, x := range s.bits {

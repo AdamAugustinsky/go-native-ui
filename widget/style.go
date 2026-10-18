@@ -31,6 +31,15 @@ func (k *Kit) NextWidth(w ui.Size) { k.nw, k.hasW = w, true }
 // NextHeight sets the height of the next widget or container.
 func (k *Kit) NextHeight(h ui.Size) { k.nh, k.hasH = h, true }
 
+// NextRowHeight sets the height of the rows of the next List or Table, in
+// points, in place of the theme's. A table with compact rows (a file browser)
+// keeps a header four points taller than its rows and closer cell padding.
+func (k *Kit) NextRowHeight(pt float32) { k.rowPt = pt }
+
+// NextMono sets the next TextField or SearchField in the monospace font (its
+// text and its placeholder), for a path or a command rather than prose.
+func (k *Kit) NextMono() { k.nextMono = true }
+
 // NextAlign sets the horizontal alignment of the next label or button text.
 func (k *Kit) NextAlign(a ui.Align) { k.nextAlign, k.hasAlign = a, true }
 

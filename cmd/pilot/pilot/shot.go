@@ -9,6 +9,7 @@ import (
 	"gonativeui/cmd/rexlook/rex/rexrig"
 	"gonativeui/fs"
 	"gonativeui/platform"
+	"gonativeui/theme"
 	"gonativeui/ui"
 )
 
@@ -113,17 +114,27 @@ func (pl *Pilot) SceneSetup() {
 	pl.active = 0
 }
 
-// ScenePost selects rows 5..7 of the left pane (the cursor on the last).
+// ScenePost selects rows 5..7 of the left pane (the cursor on the last) and
+// shows the keyboard cursor, as the left pane has the keyboard.
 func (pl *Pilot) ScenePost() {
 	v := &pl.panes[0].v
 	if v.nRows() > 8 {
-		v.selectOnly(v.entryAt(5), 5)
-		v.selectRange(7)
+		v.selectOnly(v.entryAt(5))
+		v.ts.Sel.SelectRange(v.order(), 5, 7)
 		pl.panes[0].reveal = 7
 	}
 	if rv := &pl.panes[1].v; rv.nRows() > 0 {
-		rv.selectOnly(rv.entryAt(0), 0)
+		rv.selectOnly(rv.entryAt(0))
 	}
+	pl.a.UI.SetFocusVisible(true)
+}
+
+// Look is how a picture is made light or dark. An offscreen window has no
+// system to follow: System says what the system's appearance is (the zero
+// value: not known, so light), and Preference whether the window follows it.
+type Look struct {
+	Preference theme.Preference
+	System     ui.Appearance
 }
 
 // RenderDirsShot renders the first frame Pilot shows for two real directories
@@ -131,7 +142,12 @@ func (pl *Pilot) ScenePost() {
 // since a window draws its own. BounceRec uses it as the expected complete
 // content of a launch (tools/bouncerec).
 func RenderDirsShot(path string, w, h int, scale float32, home string, dirs [2]string) (quads, drawCalls int, err error) {
-	opt := Options{Home: home}
+	return RenderDirsShotLook(path, w, h, scale, home, dirs, Look{})
+}
+
+// RenderDirsShotLook is RenderDirsShot in a Look.
+func RenderDirsShotLook(path string, w, h int, scale float32, home string, dirs [2]string, look Look) (quads, drawCalls int, err error) {
+	opt := Options{Home: home, Preference: look.Preference}
 	for i, d := range dirs {
 		l := new(fs.Listing)
 		if err := fs.ListDir(d, l); err == nil {
@@ -139,7 +155,7 @@ func RenderDirsShot(path string, w, h int, scale float32, home string, dirs [2]s
 		}
 		opt.Initial[i] = ready(d, l)
 	}
-	return shoot(New(opt), path, w, h, scale, true, nil, nil)
+	return shoot(New(opt), path, w, h, scale, true, look.System, nil, nil)
 }
 
 // RenderShot renders the scene offscreen at w×h pixels and the given scale
@@ -147,21 +163,32 @@ func RenderDirsShot(path string, w, h int, scale float32, home string, dirs [2]s
 // superellipse corners as transparency when corners is set), and returns the
 // quads and draw calls of the frame. It runs on every OS the renderer does.
 func RenderShot(path string, w, h int, scale float32, corners bool) (quads, drawCalls int, err error) {
-	pl := New(SceneOptions())
-	return shoot(pl, path, w, h, scale, corners, pl.SceneSetup, pl.ScenePost)
+	return RenderShotLook(path, w, h, scale, corners, Look{})
+}
+
+// RenderShotLook is RenderShot in a Look.
+func RenderShotLook(path string, w, h int, scale float32, corners bool, look Look) (quads, drawCalls int, err error) {
+	opt := SceneOptions()
+	opt.Preference = look.Preference
+	pl := New(opt)
+	return shoot(pl, path, w, h, scale, corners, look.System, pl.SceneSetup, pl.ScenePost)
 }
 
 // shoot renders pl offscreen until it settles (setup before the first frame,
 // post once the rows exist; either may be nil) and writes the PNG.
-func shoot(pl *Pilot, path string, w, h int, scale float32, corners bool, setup, post func()) (quads, drawCalls int, err error) {
+func shoot(pl *Pilot, path string, w, h int, scale float32, corners bool, sys ui.Appearance, setup, post func()) (quads, drawCalls int, err error) {
 	o, err := app.NewOffscreen(Config(), w, h, scale, pl)
 	if err != nil {
 		return 0, 0, err
 	}
 	defer o.Close()
+	frame := func() {
+		o.UI.SetSystemAppearance(sys)
+		o.Frame()
+	}
 	settle := func() error {
 		for n := 0; n < 600; n++ {
-			o.Frame()
+			frame()
 			if !o.UI.Animating() {
 				return nil
 			}
@@ -180,9 +207,14 @@ func shoot(pl *Pilot, path string, w, h int, scale float32, corners bool, setup,
 	if err := settle(); err != nil {
 		return 0, 0, err
 	}
+	o.UI.SetSystemAppearance(sys)
 	img, _ := o.Frame()
+	face := monoFace()
+	if face == "" {
+		face = "system monospaced"
+	}
 	meta := map[string]any{
-		"cellAdvancePt": pl.CellAdvancePt(), "rowPitchPt": pl.RowPitchPt(), "monoFace": pl.MonoFace(),
+		"cellAdvancePt": pl.cellAdvancePt(), "rowPitchPt": float64(listRowPt), "monoFace": face,
 		"quads": len(o.Quads()), "drawCalls": o.R.DrawCalls(),
 	}
 	if err := rexrig.WritePNG(path, img.Pix, w, h, corners, meta); err != nil {
@@ -191,4 +223,9 @@ func shoot(pl *Pilot, path string, w, h int, scale float32, corners bool, setup,
 	return len(o.Quads()), o.R.DrawCalls(), nil
 }
 
-var _ = ui.KeyEnter
+// cellAdvancePt is the advance of a character of the list's monospace font in
+// points.
+func (pl *Pilot) cellAdvancePt() float64 {
+	r := pl.k.Theme()
+	return float64(pl.a.Text.Metrics(r.Font.Mono).MonoAdvance) / float64(r.Scale)
+}

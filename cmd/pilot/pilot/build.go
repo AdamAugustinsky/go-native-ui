@@ -1,133 +1,105 @@
 package pilot
 
 import (
-	"gonativeui/cmd/internal/rexkit"
+	"unsafe"
+
 	"gonativeui/fs"
+	"gonativeui/icon"
+	"gonativeui/text"
+	"gonativeui/theme"
 	"gonativeui/ui"
+	"gonativeui/widget"
 )
 
-const fl = rexkit.Fl
+// fl is the flag set of a floating box.
+const fl = theme.Floating
 
 // Layout, in points.
 const (
-	padPt     = 8
-	pathYPt   = 8
-	pathHPt   = 26
-	hdrYPt    = 40
-	hdrHPt    = 20
-	listYPt   = 61
-	statusHPt = 22
-	filterHPt = 28
-	iconCXPt  = 14
-	nameXPt   = 26
-	edgePt    = 12
-	gutterPt  = 7
-	minPanePt = 220
-	dimRate   = 20
-	thumbWPt  = 4
-	thumbHit  = 12
+	listRowPt    = 16  // the height of a row of the file list: dense, like a terminal's
+	statusHPt    = 20  // the status line
+	minPanePt    = 220 // the least width of a pane
+	paneInsetPt  = 4   // the room at the sides of a pane's content: the list and the fields start 4 pt in
+	paneTopPt    = 8   // and the path field this far below the pane's top edge
+	paneGapPt    = 3   // between the parts of a pane
+	fieldHPt     = 26  // the path and filter fields, a little lower than the theme's controls
+	fieldInsetPt = 4   // and this much further in than the list
+	showSizePt   = 240 // the Size column shows from this width of the list
+	showDatePt   = 330 // the Modified column shows from this width of the list
+	nameColPt    = 80  // the least width of the Name column
+	sizeColPt    = 80  // the Size column: eight cells of 7.5 pt, the cell's padding and a little room
+	dateColPt    = 132 // the Modified column: sixteen cells and the padding
+	navFirstPt   = 90  // the titlebar's back button starts here, clear of the window's own buttons
+	navGapPt     = 2
+	titleGapPt   = 26 // between the buttons and the title
+	titleRightPt = 24
 )
+
+// The columns of the file list. A column's ID is the fs.SortKey it sorts by,
+// plus one (0 is not an ID).
+const (
+	colName uint32 = uint32(fs.SortName) + 1
+	colSize        = uint32(fs.SortSize) + 1
+	colMod         = uint32(fs.SortModified) + 1
+)
+
+func sortKeyOf(id uint32) fs.SortKey { return fs.SortKey(id - 1) }
 
 var (
-	keyRoot   = ui.HashString(0, "pilot")
-	keyFocus  = ui.HashString(keyRoot, "focus")
-	keyDiv    = ui.HashString(keyRoot, "divider")
-	keyBack   = ui.HashString(keyRoot, "back")
-	keyFwd    = ui.HashString(keyRoot, "forward")
-	keyUp     = ui.HashString(keyRoot, "up")
-	keyTitle  = ui.HashString(keyRoot, "title")
-	loadingTx = []byte("Loading…")
-	emptyTx   = []byte("Empty folder")
-	noMatchTx = []byte("No matches")
-	dashTx    = []byte("--")
-	hdrName   = []byte("Name")
-	hdrSize   = []byte("Size")
-	hdrMod    = []byte("Modified")
-	arrowUp   = []byte("▲")
-	arrowDown = []byte("▼")
+	keyRoot     = ui.HashString(0, "pilot")
+	keyFocus    = ui.HashString(keyRoot, "focus")
+	keyArea     = ui.HashString(keyRoot, "area")
+	keyNav      = ui.HashString(keyRoot, "nav")
+	keyTitle    = ui.HashString(keyRoot, "title")
+	keyPaneRoot = ui.HashString(keyRoot, "pane")
+	loadingTx   = []byte("Loading…")
+	emptyTx     = []byte("Empty folder")
+	noMatchTx   = []byte("No matches")
+	dashTx      = []byte("--")
 )
 
-func paneUID(i int) uint32     { return uint32(i + 1) }
-func paneKey(i int) ui.Key     { return rexkit.PaneKey(paneUID(i)) }
-func listKey(i int) ui.Key     { return ui.KeyN(paneKey(i), 3) }
-func thumbKey(i int) ui.Key    { return ui.KeyN(paneKey(i), 4) }
-func hdrKey(i, col int) ui.Key { return ui.KeyN(paneKey(i), uint64(10+col)) }
-func pathWrap(i int) ui.Key    { return ui.KeyN(paneKey(i), 1) }
-func filterWrap(i int) ui.Key  { return ui.KeyN(paneKey(i), 2) }
+// The keys of a pane's parts. The widgets derive theirs from their parents', so
+// these are enough to name the table and the fields before they exist (a key
+// press that moves the focus to the filter field opens it in the same frame).
+func paneKey(i int) ui.Key      { return ui.KeyN(keyPaneRoot, uint64(i)) }
+func contentKey(i int) ui.Key   { return ui.KeyN(paneKey(i), 1) }
+func colKey(i int) ui.Key       { return ui.KeyN(paneKey(i), 2) }
+func pathBoxKey(i int) ui.Key   { return ui.KeyN(paneKey(i), 3) }
+func filterBoxKey(i int) ui.Key { return ui.KeyN(paneKey(i), 4) }
+func statusKey(i int) ui.Key    { return ui.KeyN(paneKey(i), 5) }
+func barKey(i int) ui.Key       { return ui.KeyN(paneKey(i), 6) }
 
-// pathKey and filterKey are the keys of the text fields (TextField hashes its
-// label with the parent's key).
-func pathKey(i int) ui.Key   { return ui.HashString(pathWrap(i), "path") }
-func filterKey(i int) ui.Key { return ui.HashString(filterWrap(i), "filter") }
+// listKey is the key of the file list, which takes the keyboard focus.
+func listKey(i int) ui.Key   { return widget.TableKey(colKey(i), "files") }
+func pathKey(i int) ui.Key   { return widget.FieldKey(pathBoxKey(i), "path") }
+func filterKey(i int) ui.Key { return widget.FieldKey(filterBoxKey(i), "filter") }
 
-// geometry is what the model needs of the last frame's layout: the pane and
-// list rectangles (window pixels), the row pitch and the scroll offset.
+// geometry is what the model and the benchmark's script need of the last
+// frame's layout, in window pixels: the pane, the list under the header, the
+// header, the row pitch, and the columns shown (x0, x1; zero when hidden).
 type geometry struct {
-	rect, list [4]float32
-	rowPx      float32
-	scrollY    float64
-	visRows    int
-	hover      int // row under the pointer, -1
+	rect, list, hdr [4]float32
+	rowPx           float32
+	visRows         int
+	cols            [3][2]float32
 }
 
-// paneLayout positions the parts of a pane (pixels; x, y of rects relative to
-// the pane, columns relative to the list's left edge).
-type paneLayout struct {
-	path, hdr, list, filter, status [4]float32
-	iconCX, nameX, nameW            float32
-	sizeR, dateX                    float32
-	showSize, showDate              bool
-}
-
-func (pl *Pilot) layoutPane(w, h float32, filter bool) paneLayout {
-	s := pl.Scale
-	var L paneLayout
-	pad := padPt * s
-	L.path = [4]float32{pad, pathYPt * s, w - pad, (pathYPt + pathHPt) * s}
-	L.hdr = [4]float32{pad / 2, hdrYPt * s, w - pad/2, (hdrYPt + hdrHPt) * s}
-	bottom := h - statusHPt*s
-	if filter {
-		L.filter = [4]float32{pad, bottom - filterHPt*s + 2*s, w - pad, bottom - 2*s}
-		bottom -= filterHPt * s
-	}
-	L.list = [4]float32{pad / 2, listYPt * s, w - pad/2, max(bottom, listYPt*s)}
-	L.status = [4]float32{pad, h - statusHPt*s, w - pad, h}
-
-	lw := L.list[2] - L.list[0]
-	L.iconCX, L.nameX = iconCXPt*s, nameXPt*s
-	right := lw - edgePt*s
-	dateW, sizeW := 16*pl.Adv, 8*pl.Adv
-	if lw >= 330*s {
-		L.showDate = true
-		L.dateX = right - dateW
-		right = L.dateX - 12*s
-	}
-	if lw >= 240*s {
-		L.showSize = true
-		L.sizeR = right
-		right = L.sizeR - sizeW - 8*s
-	}
-	L.nameW = max(right-L.nameX, 8*s)
-	return L
-}
-
-// Build builds the frame: it applies the frame's input to the model, then
-// builds every box. It implements app.Builder.
+// Build builds the frame: the kit's frame, the model's work, then every box. It
+// implements app.Builder.
 func (pl *Pilot) Build(c *ui.Context) {
 	w, h := c.Size()
 	if w <= 0 || h <= 0 || c.Scale() <= 0 {
 		return
 	}
-	if s := c.Scale(); s != pl.Scale {
-		pl.SetScale(s)
-	}
+	k := pl.k
+	k.Begin(c)
 	pl.lastW, pl.lastH = w, h
-	pl.Fld.Build(w, h, pl.K)
 	pl.poll()
 	pl.update(c)
 	pl.work()
 	pl.draw(c)
 	pl.workLeft(c)
+	k.End()
 	pl.prevFocus = c.FocusKey()
 }
 
@@ -152,55 +124,55 @@ func (pl *Pilot) workLeft(c *ui.Context) {
 	}
 }
 
-func (pl *Pilot) workArea() [4]float32 {
-	s := pl.Scale
-	W, H := float32(pl.lastW), float32(pl.lastH)
-	return [4]float32{rexkit.Snap(7.5 * s), rexkit.Snap(45.5 * s), W - rexkit.Snap(7.5*s), H - rexkit.Snap(7.5*s)}
-}
-
-// paneRects splits the work area at the divider.
-func (pl *Pilot) paneRects() (l, g, r [4]float32) {
-	s := pl.Scale
-	wa := pl.workArea()
-	gw := rexkit.Snap(gutterPt * s)
-	avail := wa[2] - wa[0] - gw
-	lw := rexkit.Snap(avail * pl.ratio)
-	lw = min(max(lw, minPanePt*s), max(avail-minPanePt*s, minPanePt*s))
-	l = [4]float32{wa[0], wa[1], wa[0] + lw, wa[3]}
-	g = [4]float32{l[2], wa[1], l[2] + gw, wa[3]}
-	r = [4]float32{g[2], wa[1], wa[2], wa[3]}
-	return
-}
-
 func (pl *Pilot) draw(c *ui.Context) {
-	pl.DrawBackground(c)
-	pl.drawPanes(c)
-	pl.drawTitlebar(c)
-	if pl.Traffic {
-		pl.DrawTrafficLights(c)
-	}
+	k := pl.k
+	r := k.Theme()
+	k.Background()
+	pl.drawTitlebar(c, r)
+	pl.drawPanes(c, r)
 }
 
-func (pl *Pilot) drawPanes(c *ui.Context) {
-	lr, gut, rr := pl.paneRects()
-	rects := [2][4]float32{lr, rr}
+func b2f(b bool) float32 {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// surface is the chrome's description of pane i's surface.
+// origin is where the box the surface is built in starts in the window: the
+// glass samples the window background there.
+func surface(i int, rect [4]float32, origin [2]float32, focus float32) theme.Surface {
+	return theme.Surface{Key: paneKey(i), Slot: i, Rect: rect, Origin: origin, Focus: focus, Opacity: 1, Top: true}
+}
+
+// drawPanes builds the splitter with the two glass surfaces.
+func (pl *Pilot) drawPanes(c *ui.Context, r *theme.Resolved) {
+	k := pl.k
+	w, h := c.Size()
+	// the panes start half a point above the titlebar's lower edge, as in the Rex reference
+	ox, oy := theme.Snap(r.Px.Inset), theme.Snap(r.Px.TitlebarH-0.5*r.Scale)
+	theme.At(c, ox, oy, float32(w)-2*ox, float32(h)-oy-ox)
+	area := c.BoxKeyed(fl, keyArea, nil)
+	c.Push(area)
+	sp := k.BeginSplitter("panes", &pl.split, ui.AxisX)
 	var ft [2]float32
 	for i := range pl.panes {
-		foc := float32(0)
-		if i == pl.active {
-			foc = 1
-		}
-		ft[i] = c.AnimateValue(ui.KeyN(keyFocus, uint64(i)), foc, dimRate)
+		ft[i] = c.AnimateValue(ui.KeyN(keyFocus, uint64(i)), b2f(i == pl.active), r.Motion.Dim)
 	}
 	for i := range pl.panes {
-		pl.DrawShadow(c, paneUID(i), rects[i], ft[i], 1)
+		r.Chrome.SurfaceShadow(c, r, surface(i, sp.PaneRect(i), [2]float32{ox, oy}, ft[i]))
 	}
 	pl.frameRows = 0
 	for i := range pl.panes {
-		pl.drawPane(c, i, rects[i], ft[i])
+		pr := sp.PaneRect(i)
+		pl.geo[i].rect = [4]float32{ox + pr[0], oy + pr[1], ox + pr[2], oy + pr[3]}
+		sp.Pane(i)
+		pl.drawPane(c, r, i, pr[2]-pr[0], pr[3]-pr[1], [2]float32{ox + pr[0], oy + pr[1]}, ft[i])
+		sp.EndPane()
 	}
-	wa := pl.workArea()
-	pl.Divider(c, keyDiv, ui.AxisX, wa, gut)
+	k.EndSplitter(&sp)
+	c.Pop()
 	if pl.counting {
 		pl.buildCalls++
 		pl.rowsBuilt += pl.frameRows
@@ -208,426 +180,306 @@ func (pl *Pilot) drawPanes(c *ui.Context) {
 	}
 }
 
+// vbox builds a box that stacks its children top to bottom, pushes it, and
+// returns it; the caller pops it. Sizes are in points where they are numbers.
+func (pl *Pilot) vbox(c *ui.Context, key ui.Key, w, h ui.Size, padL, padT, padR, padB, gap float32) ui.ID {
+	k := pl.k
+	c.NextSize(w, h)
+	c.NextAxis(ui.AxisY)
+	c.NextGap(k.Pt(gap))
+	c.NextPadding(k.Pt(padL), k.Pt(padT), k.Pt(padR), k.Pt(padB))
+	id := c.BoxKeyed(0, key, nil)
+	c.Push(id)
+	return id
+}
+
 // ---- one pane ----
 
-func (pl *Pilot) drawPane(c *ui.Context, i int, d [4]float32, ft float32) {
+func (pl *Pilot) drawPane(c *ui.Context, r *theme.Resolved, i int, w, h float32, origin [2]float32, ft float32) {
 	p := pl.panes[i]
-	s, k := pl.Scale, pl.K
-	w, h := d[2]-d[0], d[3]-d[1]
-	pal := rexkit.MixPalette(ft)
-	key := paneKey(i)
-	L := pl.layoutPane(w, h, p.filterOpen)
-	g := &pl.geo[i]
-	g.rect = d
-	g.list = [4]float32{d[0] + L.list[0], d[1] + L.list[1], d[0] + L.list[2], d[1] + L.list[3]}
+	s := surface(i, [4]float32{0, 0, w, h}, origin, ft)
+	kg := r.Chrome.BeginSurface(c, r, s)
+	// The surface's fill and edges are floating boxes, which draw above the
+	// flow's, so the content is a floating box too (built after them).
+	theme.At(c, 0, 0, w, h)
+	wrap := c.BoxKeyed(fl, contentKey(i), nil)
+	c.Push(wrap)
 
-	kg := pl.BeginPane(c, key, i, d, ft, 1, true)
-	pk := rexkit.KeyGen{Base: ui.KeyN(key, 900)}
+	pl.vbox(c, colKey(i), ui.Pct(1), ui.Pct(1), paneInsetPt, paneTopPt, paneInsetPt, 0, paneGapPt)
+	pl.drawPathField(c, r, i, p)
+	pl.drawList(c, r, i, p, w, ft)
+	pl.drawFilterField(c, i, p)
+	pl.drawStatus(c, r, i, p)
+	c.Pop() // the column
 
 	// The active pane: an accent bar along the top edge.
 	if ft > 0.01 {
-		rexkit.At(c, 22*s, 0, w-44*s, 2*s)
-		c.NextBG(rexkit.ColA(pal.Blue, ft))
-		c.NextRadius(s)
-		c.BoxKeyed(ui.DrawBackground|fl, kg.Next(), nil)
+		sc := r.Scale
+		theme.At(c, 22*sc, 0, w-44*sc, 2*sc)
+		c.NextBG(theme.WithAlpha(r.Pal.Accent, ft))
+		c.NextRadius(sc)
+		c.BoxKeyed(ui.DrawBackground|fl, ui.KeyN(paneKey(i), 7), nil)
 	}
-
-	pl.drawPathField(c, i, p, &L, &pal, ft)
-	pl.drawHeader(c, i, p, &L, &pal)
-	pl.drawFilterField(c, i, p, &L, &pal, ft)
-	pl.drawList(c, i, p, &L, &pal, ft, &pk)
-	pl.drawStatus(c, p, &L, &pal)
-	_ = k
-	pl.EndPane(c, &kg, d, ft)
+	c.Pop() // the wrap
+	r.Chrome.EndSurface(c, r, s, kg)
 }
 
-func (pl *Pilot) fieldStyle(c *ui.Context, pal *rexkit.Palette, focused bool, ft float32) {
-	s := pl.Scale
-	lh := pl.FM[pl.FMono].H
-	c.NextFont(pl.FMono)
-	c.NextTextColor(rexkit.Col(pal.FG))
-	c.NextPadding(8*s, max((pathHPt*s-lh)/2, 0), 8*s, max((pathHPt*s-lh)/2, 0))
-	c.NextHeight(ui.Px(pathHPt * s))
-	c.NextRadius(6 * s)
-	c.NextBG(rexkit.ColA(0xFFFFFF, 0.7))
-	border := rexkit.ColA(pal.Line, 0.16)
-	if focused {
-		border = rexkit.ColA(pal.Blue, 0.9)
+func (pl *Pilot) drawPathField(c *ui.Context, r *theme.Resolved, i int, p *pane) {
+	k := pl.k
+	pl.vbox(c, pathBoxKey(i), ui.Pct(1), ui.Px(theme.Snap(k.Pt(fieldHPt))), fieldInsetPt, 0, fieldInsetPt, 0, 0)
+	k.NextHeight(ui.Px(theme.Snap(k.Pt(fieldHPt))))
+	k.NextMono()
+	f := k.TextField("path", &p.path, "")
+	if p.pathErr != "" { // the reason, inside the field at its right end
+		cw := theme.Snap(k.Pt(fieldHPt))
+		fm := r.Met(r.Font.Small)
+		fw := c.Rect(c.Parent())
+		wd := fw[2] - fw[0]
+		theme.At(c, wd*0.4, theme.Snap((cw-fm.H)/2), max(wd*0.6-k.Pt(fieldInsetPt)-r.Px.Pad-r.Px.Gap, 0), fm.H)
+		c.NextFont(r.Font.Small)
+		c.NextTextColor(r.Pal.Danger)
+		c.NextAlign(ui.AlignRight)
+		c.BoxKeyed(ui.DrawText|ui.FadeOverflowX|fl, ui.KeyN(pathBoxKey(i), 77), strBytes(p.pathErr))
 	}
-	c.NextBorder(border, max(1, pl.K))
-}
-
-func (pl *Pilot) drawPathField(c *ui.Context, i int, p *pane, L *paneLayout, pal *rexkit.Palette, ft float32) {
-	r := L.path
-	rexkit.At(c, r[0], r[1], r[2]-r[0], r[3]-r[1])
-	wrap := c.BoxKeyed(fl, pathWrap(i), nil)
-	c.Push(wrap)
-	focused := c.FocusKey() == pathKey(i)
-	pl.fieldStyle(c, pal, focused, ft)
-	f := c.TextField("path", &p.path)
 	c.Pop()
 	switch {
 	case f.Cancelled:
 		p.path.SetString(p.dir)
 		p.pathErr = ""
-		c.SetFocus(0)
+		pl.focusList(c)
 	case f.Submitted:
 		p.goTo(p.path.String())
-		c.SetFocus(0)
 		pl.active = i
+		pl.focusList(c)
 	case f.Changed:
 		p.pathErr = ""
 	}
 	if f.Focused && f.Pressed && pl.prevFocus != pathKey(i) { // a click that brought focus here selects all
 		p.path.SelectAll()
 	}
-	if p.pathErr != "" {
-		// the reason, inside the field at its right end
-		kg := rexkit.KeyGen{Base: ui.KeyN(pathWrap(i), 77)}
-		c.Push(wrap)
-		tx := rexkit.StrBytes(p.pathErr)
-		wd := float32(len(tx)) * pl.Adv
-		if wd > (r[2]-r[0])*0.6 {
-			wd = (r[2] - r[0]) * 0.6
-		}
-		base := rexkit.Snap((pathHPt*pl.Scale-pl.FM[pl.FSub].H)/2) + pl.FM[pl.FSub].Off
-		pl.PutBytes(c, &kg, pl.FSub, tx, (r[2]-r[0])-wd-10*pl.Scale, base, rexkit.Col(0xCF3E4B), wd, ui.FadeOverflowX)
-		c.Pop()
-	}
 }
 
-func (pl *Pilot) drawFilterField(c *ui.Context, i int, p *pane, L *paneLayout, pal *rexkit.Palette, ft float32) {
+func (pl *Pilot) drawFilterField(c *ui.Context, i int, p *pane) {
 	if !p.filterOpen {
 		return
 	}
-	r := L.filter
-	rexkit.At(c, r[0], r[1], r[2]-r[0], r[3]-r[1])
-	wrap := c.BoxKeyed(fl, filterWrap(i), nil)
-	c.Push(wrap)
-	focused := c.FocusKey() == filterKey(i)
-	pl.fieldStyle(c, pal, focused, ft)
-	f := c.TextField("filter", &p.filter)
+	k := pl.k
+	pl.vbox(c, filterBoxKey(i), ui.Pct(1), ui.Px(theme.Snap(k.Pt(fieldHPt))), fieldInsetPt, 0, fieldInsetPt, 0, 0)
+	k.NextHeight(ui.Px(theme.Snap(k.Pt(fieldHPt))))
+	k.NextMono()
+	f := k.TextField("filter", &p.filter, "Filter")
 	c.Pop()
 	if f.Changed {
 		p.setQuery()
 	}
 }
 
-func (pl *Pilot) drawHeader(c *ui.Context, i int, p *pane, L *paneLayout, pal *rexkit.Palette) {
-	s := pl.Scale
-	r := L.hdr
-	kg := rexkit.KeyGen{Base: ui.KeyN(paneKey(i), 950)}
-	listL := L.list[0]
-	cols := [3]struct {
-		show   bool
-		x0, x1 float32 // relative to the pane
-		label  []byte
-		key    fs.SortKey
-		right  bool
-	}{
-		{true, listL + L.nameX, listL + L.nameX + L.nameW, hdrName, fs.SortName, false},
-		{L.showSize, listL + L.sizeR - 8*pl.Adv, listL + L.sizeR, hdrSize, fs.SortSize, true},
-		{L.showDate, listL + L.dateX, listL + L.dateX + 16*pl.Adv, hdrMod, fs.SortModified, false},
+// columns is the columns of pane p's list shown at list width wPx: the Name
+// column always, Size from 240 pt, Modified from 330 pt.
+func (pl *Pilot) columns(p *pane, wPx float32) []widget.Column {
+	sc := pl.k.Theme().Scale
+	n := 1
+	if wPx >= showSizePt*sc {
+		n = 2
 	}
-	base := rexkit.Snap((r[3]-r[1]-pl.FM[pl.FSub].H)/2) + pl.FM[pl.FSub].Off
-	for ci := range cols {
-		cl := &cols[ci]
-		if !cl.show {
-			continue
-		}
-		active := p.sortKey == cl.key
-		t := c.HotTOf(hdrKey(i, ci))
-		x0, x1 := cl.x0-6*s, cl.x1+6*s
-		if ci == 0 {
-			x0 = listL + 2*s
-		}
-		rexkit.At(c, x0, r[1], x1-x0, r[3]-r[1])
-		c.NextBG(rexkit.ColA(0x2A2030, 0.06*t))
-		c.NextRadius(5 * s)
-		c.NextCursor(ui.CursorPointer)
-		hb := c.BoxKeyed(ui.DrawBackground|ui.Clickable|ui.HotAnimation|fl, hdrKey(i, ci), nil)
-		c.Push(hb)
-		col := pal.Dim
-		if active {
-			col = pal.FG
-		}
-		font := pl.FSub
-		wd := float32(len(cl.label)) * pl.Adv * 0.9
-		wd = pl.TS.Run(pl.TS.Shape(font, cl.label)).Advance
-		x := cl.x0 - x0
-		if cl.right {
-			x = cl.x1 - x0 - wd
-			if active {
-				x -= 12 * s
-			}
-		}
-		pl.PutBytes(c, &kg, font, cl.label, x, base, rexkit.Col(col), 0, 0)
-		if active {
-			arrow := arrowUp
-			if p.desc {
-				arrow = arrowDown
-			}
-			pl.PutBytes(c, &kg, pl.FSub, arrow, x+wd+3*s, base, rexkit.Col(pal.Blue), 0, 0)
-		}
-		c.Pop()
+	if wPx >= showDatePt*sc {
+		n = 3
 	}
-	// hairline under the header
-	rexkit.At(c, L.list[0]+2*s, listYPt*s-1, L.list[2]-L.list[0]-4*s, max(1, pl.K))
-	c.NextBG(rexkit.ColA(pal.Line, 0.1))
-	c.BoxKeyed(ui.DrawBackground|fl, kg.Next(), nil)
+	return p.cols[:n]
 }
 
-func (pl *Pilot) kindColor(pal *rexkit.Palette, e *fs.Entry) uint32 {
+func (p *pane) initColumns() {
+	p.cols = [3]widget.Column{
+		{ID: colName, Title: "Name", Width: nameColPt, MinWidth: nameColPt, Fill: true, Sortable: true},
+		{ID: colSize, Title: "Size", Width: sizeColPt, MinWidth: 56, Align: ui.AlignRight, Sortable: true},
+		{ID: colMod, Title: "Modified", Width: dateColPt, MinWidth: 96, Sortable: true},
+	}
+}
+
+// dimmed is col as it shows in a pane that does not have the keyboard: faded
+// toward the surface by the pane's focus animation.
+func dimmed(r *theme.Resolved, col uint32, ft float32) uint32 {
+	if ft >= 1 {
+		return col
+	}
+	return theme.MixRGBA(col, r.Pal.Surface, 0.27*(1-ft))
+}
+
+// purple is the colour of symlinks, which the palette has no role for.
+func purple(r *theme.Resolved) uint32 { return theme.MixRGBA(0x8839EFFF, 0xC3A3FFFF, r.T) }
+
+func (pl *Pilot) kindColor(r *theme.Resolved, e *fs.Entry) uint32 {
 	var col uint32
 	switch {
 	case e.Kind == fs.KindSymlink:
-		col = pal.Purple
+		col = purple(r)
 	case e.Kind == fs.KindDir || e.Flags&fs.FlagSymlinkDir != 0:
-		col = pal.Blue
+		col = r.Pal.Accent
 	case e.Flags&fs.FlagExecutable != 0:
-		col = pal.Green
+		col = r.Pal.Success
 	case e.Kind == fs.KindOther:
-		col = pal.Orange
+		col = r.Pal.Warning
 	default:
-		col = pal.FG
+		col = r.Pal.Text
 	}
 	if e.Flags&fs.FlagHidden != 0 {
-		col = rexkit.MixRGB(col, 0xE6E2E8, 0.55)
+		col = theme.MixRGBA(col, r.Pal.Surface, 0.55-0.15*r.T) // a little less faded in the dark, where the surface is close to the text
 	}
 	return col
 }
 
-func kindIcon(e *fs.Entry) iconID {
+func (pl *Pilot) kindIcon(e *fs.Entry) icon.ID {
 	switch {
 	case e.Kind == fs.KindSymlink:
-		return icLink
+		return pl.ico.link
 	case e.Kind == fs.KindDir || e.Flags&fs.FlagSymlinkDir != 0:
-		return icFolder
+		return icon.Folder
 	case e.Flags&fs.FlagExecutable != 0:
-		return icExec
+		return pl.ico.exec
 	case e.Kind == fs.KindOther:
-		return icOther
+		return pl.ico.other
 	}
-	return icFile
+	return icon.File
 }
 
-func (pl *Pilot) drawList(c *ui.Context, i int, p *pane, L *paneLayout, pal *rexkit.Palette, ft float32, pk *rexkit.KeyGen) {
-	s := pl.Scale
+// drawList builds the table of pane i.
+func (pl *Pilot) drawList(c *ui.Context, r *theme.Resolved, i int, p *pane, paneW, ft float32) {
+	k := pl.k
 	v := &p.v
 	g := &pl.geo[i]
-	rowPx := pl.RowPitch
-	g.rowPx = rowPx
-	lw, lh := L.list[2]-L.list[0], L.list[3]-L.list[1]
-	rexkit.At(c, L.list[0], L.list[1], lw, lh)
-	c.NextCursor(ui.CursorArrow)
-	lk := listKey(i)
-	list := c.BoxKeyed(ui.ScrollY|ui.Clip|ui.Clickable|fl, lk, nil)
-	pl.listBuf[i] = list
 	nRows := v.nRows()
-	g.visRows = int(lh / rowPx)
 
-	// scrollbar drag, keyboard reveal and scroll restore, before the range is taken
-	_, sy := c.Scroll(list)
-	span := float64(nRows)*float64(rowPx) - float64(lh)
-	ts := c.PeekSignal(thumbKey(i))
-	if ts.Pressed {
-		pl.dragFrom[i] = sy
-	}
-	if (ts.Dragging || ts.Released) && span > 0 {
-		trackH := float64(lh)
-		thumbH := max(trackH*float64(lh)/(float64(nRows)*float64(rowPx)), float64(24*s))
-		if room := trackH - thumbH; room > 0 {
-			c.SetScroll(list, 0, min(max(pl.dragFrom[i]+float64(ts.DragDelta[1])*span/room, 0), span))
-		}
-	}
-	if p.scrollRow >= 0 {
-		c.SetScroll(list, 0, min((float64(p.scrollRow)+float64(p.scrollOff))*float64(rowPx), max(span, 0)))
+	v.ts.Order = v.order()
+	v.ts.Sort = widget.SortState{Active: true, Column: uint32(p.sortKey) + 1, Descending: p.desc}
+	if p.scrollRow >= 0 { // a swapped-in listing: the place the view had
+		v.ts.SetTopRow(p.scrollRow, p.scrollOff)
 		p.scrollRow = -1
 	}
 	if p.reveal >= 0 && nRows > 0 {
-		pl.revealRow(c, list, p.reveal, rowPx, lh)
+		v.ts.Reveal(p.reveal)
 		p.reveal = -1
 	}
-	_, sy = c.Scroll(list)
-	g.scrollY = sy
 
-	first, last := c.ListRange(list, nRows, rowPx, 2)
-	pl.frameRows += last - first
-	// what Build keeps for the model: the entry at the top of the view
-	top := int(sy / float64(rowPx))
-	p.topRow = top
-	p.topEntry = -1
-	if v.l != nil && top >= 0 && top < nRows {
-		p.topEntry = v.entryAt(top)
+	k.NextRowHeight(listRowPt)
+	t := k.BeginTable("files", &v.ts, pl.columns(p, paneW-2*k.Pt(paneInsetPt)), nRows)
+	if t.SortChanged {
+		p.sortBy(sortKeyOf(t.Sort.Column))
+		pl.setActive(c, i)
 	}
-	p.topFrac = float32(sy/float64(rowPx) - float64(top))
+	if t.Activated {
+		p.openEntry(int32(t.Item))
+		pl.setActive(c, i)
+	}
+	g.rowPx = v.ts.RowPx()
+	lr := c.RectOf(t.Key())
+	g.list, g.hdr = lr, c.RectOf(t.HeaderKey())
+	g.visRows = 0
+	if g.rowPx > 0 {
+		g.visRows = int((lr[3] - lr[1]) / g.rowPx)
+	}
+	x := g.hdr[0] + theme.Snap(r.Px.GapSmall)
+	g.cols = [3][2]float32{}
+	for ci := range pl.columns(p, paneW-2*k.Pt(paneInsetPt)) {
+		wd := t.ColumnWidth(ci)
+		g.cols[ci] = [2]float32{x, x + wd}
+		x += wd
+	}
+	showSize, showDate := g.cols[1][1] > 0, g.cols[2][1] > 0
 
-	hot := c.HotKey() == lk
-	g.hover = -1
-	in := c.Input()
-	if hot && in.Inside {
-		if r := int((float64(in.MouseY-g.list[1]) + sy) / float64(rowPx)); r >= 0 && r < nRows {
-			g.hover = r
+	mono, bold := r.Font.Mono, r.Font.MonoBold
+	if v.l != nil {
+		pl.frameRows += t.Last - t.First
+		for row := t.First; row < t.Last; row++ {
+			e := v.entryAt(row)
+			ent := &v.l.Entries[e]
+			t.Row(row, uint32(e))
+			selected := t.RowSelected()
+			col := dimmed(r, pl.kindColor(r, ent), ft)
+			font := mono
+			if ent.Kind == fs.KindDir || ent.Flags&fs.FlagSymlinkDir != 0 {
+				font = bold
+			}
+			t.BeginCell(0)
+			k.NextHeight(widget.Fill)
+			k.Icon(pl.kindIcon(ent), col)
+			c.NextSize(ui.Pct(1), ui.Pct(1))
+			c.NextFont(font)
+			c.NextTextColor(col)
+			c.NextRole(ui.RoleLabel)
+			c.NextSemNameBytes(v.l.Name(int(e)))
+			c.BoxKeyed(ui.DrawText|ui.FadeOverflowX, ui.KeyN(c.ParentKey(), 1), v.l.Name(int(e)))
+			t.EndCell()
+
+			dim := dimmed(r, r.Pal.TextMuted, ft)
+			if selected {
+				dim = dimmed(r, r.Pal.Text, ft)
+			}
+			if showSize {
+				var tx []byte
+				if ent.Kind == fs.KindDir {
+					tx = dashTx
+				} else {
+					f := c.Fmt()
+					appendSize(f, ent.Size)
+					tx = f.Bytes()
+				}
+				pl.cell(c, &t, 1, mono, dim, ui.AlignRight, tx)
+			}
+			if showDate {
+				f := c.Fmt()
+				appendDate(f, ent.MTime, pl.loc)
+				pl.cell(c, &t, 2, mono, dim, ui.AlignLeft, f.Bytes())
+			}
 		}
 	}
-
-	c.Push(list)
-	if v.l != nil && nRows > 0 {
-		for r := first; r < last; r++ {
-			pl.drawRow(c, i, p, L, pal, ft, r, lk, rowPx, lw)
-		}
-	}
-	c.Pop()
-
-	// empty / loading note
-	if nRows == 0 {
-		var msg []byte
-		switch {
-		case p.loading():
-			msg = loadingTx
-		case p.jobBusy:
-			msg = nil
-		case len(p.q) > 0:
-			msg = noMatchTx
-		default:
-			msg = emptyTx
-		}
-		if msg != nil {
-			kg := rexkit.KeyGen{Base: ui.KeyN(lk, 99999)}
-			c.Push(list)
-			pl.PutBytes(c, &kg, pl.FMono, msg, 10*s, rexkit.Snap(rowPx*0.5+pl.FM[pl.FMono].H*0.3), rexkit.Col(pal.Dim), 0, 0)
-			c.Pop()
-		}
-	}
-
-	// scrollbar thumb
-	if span > 0 {
-		trackH := float64(lh)
-		content := float64(nRows) * float64(rowPx)
-		thumbH := max(trackH*float64(lh)/content, float64(24*s))
-		top := (trackH - thumbH) * min(max(sy/span, 0), 1)
-		hit := thumbHit * s
-		x := L.list[2] - hit
-		t := max(c.HotTOf(thumbKey(i)), c.ActiveTOf(thumbKey(i)))
-		rexkit.At(c, x, L.list[1]+float32(top), hit, float32(thumbH))
-		c.NextCursor(ui.CursorArrow)
-		tb := c.BoxKeyed(ui.Clickable|ui.HotAnimation|ui.ActiveAnimation|fl, thumbKey(i), nil)
-		c.Push(tb)
-		tw := thumbWPt*s + 2*s*t
-		rexkit.At(c, hit-tw-3*s, 0, tw, float32(thumbH))
-		c.NextBG(rexkit.ColA(0x6E6378, 0.28+0.3*t))
-		c.NextRadius(tw / 2)
-		c.BoxKeyed(ui.DrawBackground|fl, ui.KeyN(thumbKey(i), 1), nil)
-		c.Pop()
-	}
-}
-
-// revealRow scrolls so that row r is in view (a far jump is instant, a near
-// one glides).
-func (pl *Pilot) revealRow(c *ui.Context, list ui.ID, r int, rowPx, viewH float32) {
-	top := float64(r) * float64(rowPx)
-	bottom := top + float64(rowPx)
-	_, sy := c.Scroll(list)
-	view := float64(viewH)
-	var target float64
+	// the body of a list without rows
+	var msg []byte
 	switch {
-	case top < sy:
-		target = top
-	case bottom > sy+view:
-		target = bottom - view
+	case p.loading():
+		msg = loadingTx
+	case p.jobBusy:
+	case len(p.q) > 0:
+		msg = noMatchTx
 	default:
-		return
+		msg = emptyTx
 	}
-	d := target - sy
-	if d < 0 {
-		d = -d
-	}
-	if d > 4*view {
-		c.SetScroll(list, 0, target)
-	} else {
-		c.ScrollTo(list, 0, target)
+	t.Empty(msg, widget.TextMono)
+	k.EndTable(&t)
+
+	// the cursor row of the pane that was just built: what Build keeps for the model
+	row, frac := v.ts.TopRow()
+	p.topRow, p.topFrac, p.topEntry = row, frac, -1
+	if v.l != nil && row >= 0 && row < nRows {
+		p.topEntry = v.entryAt(row)
 	}
 }
 
-func (pl *Pilot) drawRow(c *ui.Context, i int, p *pane, L *paneLayout, pal *rexkit.Palette, ft float32, r int, lk ui.Key, rowPx, lw float32) {
-	s := pl.Scale
-	v := &p.v
-	e := v.entryAt(r)
-	ent := &v.l.Entries[e]
-	selected := v.isSel(e)
-	hover := r == pl.geo[i].hover
-	isCur := v.curRow == r
-
-	c.NextSize(ui.Pct(1), ui.Px(rowPx))
-	rk := ui.KeyN(lk, uint64(r))
-	row := c.BoxKeyed(0, rk, nil)
-	c.Push(row)
-	kg := rexkit.KeyGen{Base: ui.KeyN(rk, 1)}
-
-	if selected || hover {
-		var bg uint32
-		switch {
-		case selected:
-			bg = rexkit.ColA(pal.Blue, rexkit.Lerp(0.1, 0.17, ft))
-		default:
-			bg = rexkit.ColA(0x2A2030, 0.05)
-		}
-		rexkit.At(c, 3*s, 0, lw-6*s, rowPx)
-		c.NextBG(bg)
-		c.NextRadius(4 * s)
-		flags := ui.DrawBackground | fl
-		if isCur && selected && ft > 0.5 {
-			c.NextBorder(rexkit.ColA(pal.Blue, 0.6), max(1, pl.K))
-			flags |= ui.DrawBorder
-		}
-		c.BoxKeyed(flags, kg.Next(), nil)
-	}
-
-	col := rexkit.Col(pl.kindColor(pal, ent))
-	font := pl.FMono
-	if ent.Kind == fs.KindDir || ent.Flags&fs.FlagSymlinkDir != 0 {
-		font = pl.FMonoBold
-	}
-	fm := pl.FM[pl.FMono]
-	base := rexkit.Snap((rowPx-fm.H)/2) + fm.Off
-
-	pl.IconAt(c, &kg, kindIcon(ent), L.iconCX, rowPx/2, col)
-	pl.PutBytes(c, &kg, font, v.l.Name(int(e)), L.nameX, base, col, L.nameW, ui.FadeOverflowX)
-
-	dim := rexkit.Col(pal.Dim)
-	if selected {
-		dim = rexkit.Col(pal.FG)
-	}
-	if L.showSize {
-		var tx []byte
-		if ent.Kind == fs.KindDir {
-			tx = dashTx
-		} else {
-			f := c.Fmt()
-			appendSize(f, ent.Size)
-			tx = f.Bytes()
-		}
-		pl.PutBytes(c, &kg, pl.FMono, tx, L.sizeR-float32(len(tx))*pl.Adv, base, dim, 0, 0)
-	}
-	if L.showDate {
-		f := c.Fmt()
-		appendDate(f, ent.MTime, pl.loc)
-		pl.PutBytes(c, &kg, pl.FMono, f.Bytes(), L.dateX, base, dim, 0, 0)
-	}
-	c.Pop()
+// cell builds text cell col of the file row being built in a font and colour of
+// its own, aligned al, fading out where it does not fit.
+func (pl *Pilot) cell(c *ui.Context, t *widget.Table, col int, font text.FontKey, color uint32, al ui.Align, tx []byte) {
+	t.BeginCell(col)
+	c.NextSize(ui.Pct(1), ui.Pct(1))
+	c.NextFont(font)
+	c.NextTextColor(color)
+	c.NextAlign(al)
+	c.NextRole(ui.RoleCell)
+	c.NextSemNameBytes(tx)
+	c.BoxKeyed(ui.DrawText|ui.FadeOverflowX, ui.KeyN(c.ParentKey(), 1), tx)
+	t.EndCell()
 }
 
-func (pl *Pilot) drawStatus(c *ui.Context, p *pane, L *paneLayout, pal *rexkit.Palette) {
-	r := L.status
-	kg := rexkit.KeyGen{Base: ui.KeyN(paneKey(int(p.id)-1), 960)}
+// drawStatus builds the status line of pane i: an error or a note, or the
+// counts of the listing and the selection.
+func (pl *Pilot) drawStatus(c *ui.Context, r *theme.Resolved, i int, p *pane) {
+	k := pl.k
 	v := &p.v
 	var tx []byte
-	col := pal.Dim
+	col := r.Pal.TextMuted
 	switch {
 	case p.msg != "":
-		tx = rexkit.StrBytes(p.msg)
+		tx = strBytes(p.msg)
 		if p.msgErr {
-			col = 0xCF3E4B
+			col = r.Pal.Danger
 		}
 	case p.loading():
 		tx = loadingTx
@@ -638,13 +490,13 @@ func (pl *Pilot) drawStatus(c *ui.Context, p *pane, L *paneLayout, pal *rexkit.P
 			f.Str("…")
 		}
 		f.Str(" items")
-		if v.nSel > 0 {
+		if n := v.nSel(); n > 0 {
 			f.Str("   ")
-			appendCount(f, v.nSel)
+			appendCount(f, n)
 			f.Str(" selected")
-			if v.selBytes > 0 {
+			if b := v.selBytes(); b > 0 {
 				f.Str(" (")
-				appendSize(f, v.selBytes)
+				appendSize(f, b)
 				f.Byte(')')
 			}
 		}
@@ -653,34 +505,82 @@ func (pl *Pilot) drawStatus(c *ui.Context, p *pane, L *paneLayout, pal *rexkit.P
 		}
 		tx = f.Bytes()
 	}
-	fm := pl.FM[pl.FSub]
-	base := rexkit.Snap((r[3]-r[1]-fm.H)/2) + fm.Off
-	rexkit.At(c, r[0], r[1], r[2]-r[0], r[3]-r[1])
-	box := c.BoxKeyed(fl, kg.Next(), nil)
+	c.NextSize(ui.Pct(1), ui.Px(theme.Snap(k.Pt(statusHPt))))
+	c.NextPadding(k.Pt(paneInsetPt+2), 0, k.Pt(paneInsetPt), theme.Snap(k.Pt(2)))
+	box := c.BoxKeyed(0, statusKey(i), nil)
 	c.Push(box)
-	pl.PutBytes(c, &kg, pl.FSub, tx, 2*pl.Scale, base, rexkit.Col(col), r[2]-r[0]-4*pl.Scale, ui.FadeOverflowX)
+	c.NextSize(ui.Pct(1), ui.Pct(1))
+	c.NextFont(r.Font.Small)
+	c.NextTextColor(col)
+	c.BoxKeyed(ui.DrawText|ui.FadeOverflowX, ui.KeyN(statusKey(i), 1), tx)
 	c.Pop()
 }
 
 // ---- titlebar ----
 
-func (pl *Pilot) drawTitlebar(c *ui.Context) {
-	k, s := pl.K, pl.Scale
-	W := float32(pl.lastW)
-	pl.TitlebarDrag(c, W)
-	p := pl.panes[pl.active]
-	hit := 28 * s
-	cy := 22.5 * s
-	pl.IconButton(c, keyBack, icBack, 104*s, cy, hit, 0x5F5D62, 0x1E2227, p.hist.canBack())
-	pl.IconButton(c, keyFwd, icForward, 134*s, cy, hit, 0x5F5D62, 0x1E2227, p.hist.canForward())
-	pl.IconButton(c, keyUp, icUp, 164*s, cy, hit, 0x5F5D62, 0x1E2227, p.canUp())
-
-	kg := rexkit.KeyGen{Base: ui.KeyN(keyTitle, 1)}
-	name := p.base
-	x := 204 * s
-	room := W - x - 24*s
-	if room > 8*s {
-		pl.PutBytes(c, &kg, pl.FUISemi, rexkit.StrBytes(name), x, 42*k, rexkit.Col(0x3D3B42), min(pl.Width(pl.FUISemi, name)+2, room), ui.FadeOverflowX)
-		pl.PutBytes(c, &kg, pl.FSub, rexkit.StrBytes(p.dir), x, 66*k, rexkit.Col(0x87848B), min(pl.Width(pl.FSub, p.dir)+2, room), ui.FadeOverflowX)
+// drawTitlebar builds the titlebar: the theme's band, the back, forward and up
+// buttons, and the folder's name and path.
+func (pl *Pilot) drawTitlebar(c *ui.Context, r *theme.Resolved) {
+	k := pl.k
+	buttons := theme.ButtonsNone
+	if pl.Traffic {
+		buttons = theme.ButtonsTraffic
 	}
+	bar := k.Titlebar("", buttons, false)
+	h := theme.Snap(r.Px.TitlebarH)
+	bh := theme.Snap(r.Px.ControlH)
+	gap := k.Pt(navGapPt)
+	a := pl.panes[pl.active]
+
+	x := max(bar.Free[0], theme.Snap(k.Pt(navFirstPt)))
+	theme.At(c, x, theme.Snap((h-bh)/2), 0, bh)
+	c.NextWidth(ui.Children(1))
+	c.NextAxis(ui.AxisX)
+	c.NextGap(gap)
+	nav := c.BoxKeyed(fl, keyNav, nil)
+	c.Push(nav)
+	for n, b := range [3]struct {
+		ic   icon.ID
+		name string
+		can  bool
+	}{
+		{icon.ChevronLeft, "Back", a.hist.canBack()},
+		{icon.ChevronRight, "Forward", a.hist.canForward()},
+		{icon.ChevronUp, "Enclosing folder", a.canUp()},
+	} {
+		k.BeginDisabled(!b.can)
+		sig := k.IconButton(b.ic, b.name, widget.ButtonPlain)
+		k.EndDisabled()
+		if sig.Clicked {
+			switch n {
+			case 0:
+				a.goBack()
+			case 1:
+				a.goForward()
+			default:
+				a.goUp()
+			}
+		}
+	}
+	c.Pop()
+
+	// the folder's name over its path, left-aligned after the buttons
+	tx := x + 3*bh + 2*gap + k.Pt(titleGapPt)
+	room := float32(pl.lastW) - tx - k.Pt(titleRightPt)
+	if room <= k.Pt(8) {
+		return
+	}
+	fs, fm := r.Met(r.Font.UISemi), r.Met(r.Font.Small)
+	top := theme.Snap((h - fs.H - fm.H) / 2)
+	theme.At(c, tx, top, room, fs.H)
+	c.NextFont(r.Font.UISemi)
+	c.NextTextColor(r.Pal.Text)
+	c.BoxKeyed(ui.DrawText|ui.FadeOverflowX|fl, ui.KeyN(keyTitle, 1), strBytes(a.base))
+	theme.At(c, tx, top+fs.H, room, fm.H)
+	c.NextFont(r.Font.Small)
+	c.NextTextColor(r.Pal.TextMuted)
+	c.BoxKeyed(ui.DrawText|ui.FadeOverflowX|fl, ui.KeyN(keyTitle, 2), strBytes(a.dir))
 }
+
+// strBytes views s as bytes without copying; the bytes must not be changed.
+func strBytes(s string) []byte { return unsafe.Slice(unsafe.StringData(s), len(s)) }
