@@ -737,6 +737,47 @@ func (w *Window) commitMarked() {
 	}
 }
 
+// The document the input method sees. The app owns the text, so AppKit cannot
+// be told where in it the caret is. It is told the caret is at imeAnchor, in
+// UTF-16 units, always: selectedRange is {imeAnchor, 0}, and while composing
+// markedRange is {imeAnchor, n} and selectedRange lies inside it. A range
+// AppKit then sends as a replacementRange (press-and-hold accents replace the
+// letter just typed: insertText:@"é" replacementRange:{imeAnchor-1, 1}) is
+// therefore relative to the caret, and goes to the app that way:
+//
+//	EvText (also an empty one) with SelStart, SelLen not both 0:
+//	    replace the SelLen UTF-16 units that start SelStart units from the
+//	    caret (SelStart < 0: before it) with Text, then leave the caret after
+//	    Text. {-1, 1} is "the character before the caret".
+//
+// Units are UTF-16 because that is what AppKit counts in and the platform has
+// no text to convert them with. Ranges beyond imeMaxReplace units are not
+// replacements AppKit made from this document and are ignored.
+const (
+	imeAnchor     = 1 << 20
+	imeMaxReplace = 1 << 16
+	nsNotFound    = math.MaxInt64
+)
+
+// replacement turns the replacementRange of insertText: or setMarkedText:
+// into the SelStart and SelLen of the event (see above); ok is false when the
+// text goes in at the caret as usual: no range (NSNotFound), the caret itself,
+// the composition (which the text replaces anyway), or a range that is not in
+// the document described above.
+func (w *Window) replacement(loc, n uintptr) (start, length int32, ok bool) {
+	if loc == nsNotFound || n > imeMaxReplace {
+		return 0, 0, false
+	}
+	rel := int64(loc) - imeAnchor
+	if rel < -imeMaxReplace || rel > imeMaxReplace || (rel == 0 && n == 0) {
+		return 0, 0, false
+	}
+	if len(w.marked) > 0 && rel >= 0 && uintptr(rel)+n <= w.marked16 {
+		return 0, 0, false
+	}
+	return int32(rel), int32(n), true
+}
+
 // impHandler is the IMP of every method on GNUIView and GNUIWindowDelegate,
 // except firstRectIMP.
 // Arguments: 0 = self, 1 = _cmd, 2.. = method arguments.
@@ -763,8 +804,9 @@ func impHandler(c *ffi.CB) {
 	case selSetMarkedText:
 		// setMarkedText:selectedRange:replacementRange: — the composition
 		// (an NSString or NSAttributedString) and the caret or selection inside
-		// it, in UTF-16 units. The replacement range is not used: the app owns
-		// the text and shows the composition at its caret.
+		// it, in UTF-16 units. The app shows the composition at its caret; a
+		// replacement range outside the composition (see imeAnchor) first
+		// removes that text, as an empty EvText.
 		if w == nil {
 			return
 		}
@@ -781,6 +823,9 @@ func impHandler(c *ffi.CB) {
 		}
 		n = min(n, total-loc)
 		w.imeUsed = true
+		if rs, rn, ok := w.replacement(c.Int(5), c.Int(6)); ok {
+			w.q.push(Event{Kind: EvText, SelStart: rs, SelLen: rn, Time: Now()})
+		}
 		w.setMarkedFrom(b, loc, n, total)
 	case selUnmarkText:
 		// The input method gives up the marking and leaves the text: it
@@ -800,28 +845,32 @@ func impHandler(c *ffi.CB) {
 		off := len(w.q.text)
 		w.q.text = objc.AppendUTF8(w.q.text, str)
 		n := len(w.q.text) - off
+		rs, rn, replace := w.replacement(c.Int(3), c.Int(4))
 		if len(w.marked) > 0 { // a commit: the composition ends where the text lands
 			w.imeUsed = true
 			w.setMarkedFrom(nil, 0, 0, 0)
 		}
-		if n > 0 {
-			w.q.push(Event{Kind: EvText, Text: TextRef{uint32(off), uint32(n)}, Time: Now()})
+		if replace {
+			w.imeUsed = true // the accent popover took the key that picked it
+		}
+		if n > 0 || replace {
+			w.q.push(Event{Kind: EvText, Text: TextRef{uint32(off), uint32(n)}, SelStart: rs, SelLen: rn, Time: Now()})
 		}
 	case selHasMarkedText:
 		c.RetBool(w != nil && len(w.marked) > 0)
 	case selMarkedRange:
-		// The app owns the text and has no document positions to report: the
-		// marked text is described as starting at 0.
+		// The app owns the text: the marked text is described as sitting at the
+		// caret, which is at imeAnchor.
 		if w != nil && len(w.marked) > 0 {
-			c.Ret2(0, w.marked16)
+			c.Ret2(imeAnchor, w.marked16)
 		} else {
-			c.Ret2(uintptr(math.MaxInt64), 0) // {NSNotFound, 0}
+			c.Ret2(nsNotFound, 0)
 		}
 	case selSelectedRange:
 		if w != nil && len(w.marked) > 0 {
-			c.Ret2(w.markedSel16[0], w.markedSel16[1])
+			c.Ret2(imeAnchor+w.markedSel16[0], w.markedSel16[1])
 		} else {
-			c.Ret2(0, 0)
+			c.Ret2(imeAnchor, 0)
 		}
 	case selValidAttrs:
 		c.Ret(uintptr(objc.Send(clsNSArray, selArray)))

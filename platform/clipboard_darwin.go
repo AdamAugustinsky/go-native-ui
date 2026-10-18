@@ -3,9 +3,8 @@
 package platform
 
 import (
-	"runtime"
-	"strings"
 	"sync"
+	"unicode/utf8"
 	"unsafe"
 
 	"gonativeui/internal/objc"
@@ -49,23 +48,33 @@ func Clipboard() string {
 // SetClipboard replaces the system clipboard with the plain text s. Main
 // thread.
 func SetClipboard(s string) {
-	pbInit()
-	pool := objc.F.Call0(objc.PoolPush)
-	defer objc.F.Call1(objc.PoolPop, pool)
-	pb := objc.Send(clsPasteboard, selGeneralPB)
-	if pb == 0 {
-		return
+	SetClipboardText(unsafe.Slice(unsafe.StringData(s), len(s))) // read-only: the call copies
+}
+
+// appendValidUTF8 appends b to dst with each run of invalid bytes replaced by
+// one U+FFFD (what strings.ToValidUTF8 does), without allocating once dst has
+// the capacity.
+func appendValidUTF8(dst, b []byte) []byte {
+	bad := false
+	for i := 0; i < len(b); {
+		if c := b[i]; c < utf8.RuneSelf {
+			dst = append(dst, c)
+			i++
+			bad = false
+			continue
+		}
+		r, n := utf8.DecodeRune(b[i:])
+		if r == utf8.RuneError && n == 1 {
+			if !bad {
+				dst = append(dst, "\uFFFD"...)
+			}
+			bad = true
+			i++
+			continue
+		}
+		dst = append(dst, b[i:i+n]...)
+		i += n
+		bad = false
 	}
-	s = strings.ToValidUTF8(s, "\uFFFD")
-	b := make([]byte, len(s)+1) // a non-nil pointer even for ""
-	copy(b, s)
-	str := objc.ID(objc.F.Reset().Arg(uintptr(objc.Send(clsNSString, selAllocStr))).Arg(uintptr(selInitBytes)).
-		ArgPtr(unsafe.Pointer(&b[0])).Arg(uintptr(len(s))).Arg(4 /* NSUTF8StringEncoding */).Call(objc.MsgSend).R0())
-	if str == 0 {
-		return
-	}
-	objc.Send(pb, selClearContents)
-	objc.Send2(pb, selSetStrFT, uintptr(str), uintptr(pbType))
-	objc.Release(str)
-	runtime.KeepAlive(b)
+	return dst
 }

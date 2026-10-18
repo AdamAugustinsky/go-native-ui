@@ -223,9 +223,12 @@ type Window struct {
 	rw, rh int32
 	rscale float32
 
-	opening   bool // inside Open: WM_SIZE etc. update state but push no events
-	delivered bool // q holds events already returned by Wait
-	visible   bool // last reported visibility
+	opening   bool   // inside Open: WM_SIZE etc. update state but push no events
+	delivered bool   // q holds events already returned by Wait
+	nOut      int    // how many of them
+	visible   bool   // last reported visibility
+	cloaked   bool   // opened with Options.Hidden and not yet shown (dwm_windows.go)
+	cloakVal  uint32 // the BOOL DwmSetWindowAttribute reads
 	minimized bool
 	tracking  bool // TrackMouseEvent(TME_LEAVE) armed
 	buttons   uint8
@@ -246,6 +249,14 @@ type Window struct {
 
 	hiSurrogate uint16
 	utf8        [4]byte
+
+	// The clipboard request that waits for another process to let go of it
+	// (paste_windows.go): a paste with its tag and time to give up, and when
+	// Wait tries next (0: nothing waits).
+	pasteOn   bool
+	pasteTag  uint64
+	pasteGive int64
+	clipDue   int64
 
 	// Input method state (ime_windows.go): the composition is on screen, the
 	// caret rectangle the app reported, and storage the IME calls write into.
@@ -273,6 +284,8 @@ func Open(o Options) (*Window, error) {
 	if theWindow != nil {
 		return nil, errors.New("platform: window already open")
 	}
+	nOpenStages = 0
+	markOpen("start")
 	if pSetDpiAwarenessCtx == 0 || !win32.Bool(win32.Call(pSetDpiAwarenessCtx, ^uintptr(3))) { // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4
 		if pSetProcessDPIAware != 0 {
 			win32.Call(pSetProcessDPIAware)
@@ -321,6 +334,7 @@ func Open(o Options) (*Window, error) {
 		theWindow = nil
 		return nil, errors.New("platform: CreateWindowExW failed")
 	}
+	markOpen("window")
 	// The window may have landed on a monitor with a different DPI.
 	if pGetDpiForWindow != 0 {
 		if d := uint32(win32.Call(pGetDpiForWindow, w.hwnd)); d != 0 && d != dpi {
@@ -331,7 +345,12 @@ func Open(o Options) (*Window, error) {
 	}
 	w.scale = float32(dpi) / defaultDPI
 
+	if o.Hidden { // content-first: shown, but cloaked until the first frame is presented
+		w.cloaked = w.setCloak(true)
+		markOpen("cloak")
+	}
 	win32.Call(pShowWindow, w.hwnd, swShowNormal)
+	markOpen("shown")
 	w.updateClientSize()
 	w.rw, w.rh, w.rscale = w.w, w.h, w.scale
 	w.opening = false
@@ -389,7 +408,7 @@ func (w *Window) SetFrameHandler(fn func()) { w.handler = fn }
 // messages. The slice is valid until the next Pending or Wait call.
 func (w *Window) Pending() []Event {
 	if w.delivered {
-		w.q.reset()
+		w.q.dropFirst(w.nOut)
 		w.delivered = false
 	}
 	return w.q.takePending()
@@ -469,10 +488,6 @@ func (w *Window) Size() (int32, int32, float32) { return w.w, w.h, w.scale }
 // Native returns the OS handles for the gpu package.
 func (w *Window) Native() Native { return Native{HWND: w.hwnd, HInstance: w.hinst} }
 
-// Show is a no-op: Options.Hidden is not implemented on this OS yet, so
-// the window is already visible.
-func (w *Window) Show() {}
-
 // SetFrameSource installs the DXGI frame-latency waitable handle.
 func (w *Window) SetFrameSource(h uintptr) {
 	w.waitable = h
@@ -490,6 +505,10 @@ func (w *Window) Close() {
 		return
 	}
 	wakeHWND.Store(0)
+	if pendingSet != 0 { // the copy that never got the clipboard
+		win32.Call(pGlobalFree, pendingSet)
+		pendingSet = 0
+	}
 	hwnd := w.hwnd
 	w.hwnd = 0
 	win32.Call(pDestroyWindow, hwnd)
@@ -513,7 +532,7 @@ func osWake() {
 // returned slice is valid until the next Wait.
 func (w *Window) Wait(timeoutNs int64) []Event {
 	if w.delivered {
-		w.q.reset()
+		w.q.dropFirst(w.nOut) // what the app asked for since (RequestPaste) stays
 		w.delivered = false
 	}
 	var deadline int64
@@ -521,6 +540,9 @@ func (w *Window) Wait(timeoutNs int64) []Event {
 		deadline = nanotime() + timeoutNs
 	}
 	for {
+		if w.clipDue != 0 && nanotime() >= w.clipDue {
+			w.clipStep()
+		}
 		if w.frameArmed && w.waitable == 0 {
 			w.frameArmed = false
 			w.q.push(Event{Kind: EvFrame, Time: Now()})
@@ -535,6 +557,13 @@ func (w *Window) Wait(timeoutNs int64) []Event {
 			if rem := deadline - nanotime(); rem > 0 {
 				ms = uintptr(min((rem+999_999)/1_000_000, infinite-1))
 			}
+		}
+		if w.clipDue != 0 { // do not sleep past the next try at the clipboard
+			d := uintptr(0)
+			if rem := w.clipDue - nanotime(); rem > 0 {
+				d = uintptr((rem + 999_999) / 1_000_000)
+			}
+			ms = min(ms, d)
 		}
 		n := uintptr(0)
 		if w.frameArmed {
@@ -561,7 +590,7 @@ func (w *Window) Wait(timeoutNs int64) []Event {
 			break
 		}
 	}
-	w.delivered = true
+	w.delivered, w.nOut = true, len(w.q.ev)
 	return w.q.ev
 }
 
