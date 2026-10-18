@@ -242,10 +242,10 @@ func (v *Files) Build(c *ui.Context) {
    - `rexkit` moves out; Rex gets a dark variant (a new design, for you to judge at the 5A review);
    - the `Chrome` interface also covers Wayland's client-side decorations: the titlebar and window buttons.
 3b. **System appearance (D32), moved up from 5B at your request** (2026-10-18), so the 5A review shows it:
-   - **reading at startup,** fast, so the first frame is already in the right mode (a dark-mode user never sees a light frame):
+   - **reading at startup,** fast, so the first frame is already in the right mode (a dark-mode user never sees a light frame; on Linux that holds when the portal answers within the 25 ms bound, see below):
      - macOS: `effectiveAppearance` and `controlAccentColor`;
      - Windows: `AppsUseLightTheme` and DWM's `AccentColor`;
-     - Linux: the portal's `color-scheme` and `accent-color`, read on a goroutine started at launch, with a bounded wait at the first frame;
+     - Linux: the portal's `color-scheme` and `accent-color`, read on a goroutine started at launch, with a bounded wait (25 ms) at the first frame: the first frame is in the system's mode when the portal answers within that bound (a running portal does, in about a millisecond); a portal that has to start on demand can answer later, and then the first frame is light and crossfades;
    - **following changes live** with no polling and no idle wakeups:
      - macOS: the appearance and system-colour notifications;
      - Windows: `RegNotifyChangeKeyValue` on the two registry keys;
@@ -378,7 +378,7 @@ The protocol work starts at once, in platform files only. Its integration into `
    - first-frame captures on X11 and Windows show content, not a blank window;
    - press-and-hold gives "é" (your hand test).
 9. **System appearance:**
-   - the first frame is in the system's mode on every OS (CI starts in dark where the runner allows it: the registry on Windows, a fake portal on Linux);
+   - the first frame is in the system's mode on every OS (CI starts in dark where the runner allows it: the registry on Windows, a fake portal on Linux). On Linux this holds when the portal answers within the first call's 25 ms bound; a fake portal that answers after 100 ms must give `Known` false at the first call and then dark with a serial bump, which is the documented limit;
    - a change while running reaches the app with no idle cost: on Windows by writing the registry in CI; on Linux through the fake portal's signal; on macOS by your hand switch;
    - Windows CI checks the dark title bar attribute;
    - the light/dark crossfade passes the exact allocation gate.
@@ -402,7 +402,7 @@ The protocol work starts at once, in platform files only. Its integration into `
 - **Step 3, theme:** `theme`, `theme/rex` and `icon`.
   - Light Rex is pixel-identical to `rexkit` (six scenes, all OSes).
   - The dark Rex is a first design; contrast is asserted.
-- **Step 3b, system appearance:** macOS, Windows and Linux (the in-house D-Bus client and the desktop portal), wired into the frame loop. The first frame has the system mode, and the OS-drawn chrome follows the mode the UI declares. Following it in the theme comes with the widget kit.
+- **Step 3b, system appearance:** macOS, Windows and Linux (the in-house D-Bus client and the desktop portal), wired into the frame loop. The first frame has the system mode (on Linux, when the portal answers within 25 ms), and the OS-drawn chrome follows the mode the UI declares. Following it in the theme comes with the widget kit.
 - **Parity, Windows and macOS:**
   - a zero-allocation clipboard (Windows round trip with other processes in CI);
   - content-first startup on Windows (DWM cloak, checked by screen capture in CI);
@@ -429,7 +429,7 @@ The protocol work starts at once, in platform files only. Its integration into `
   - the gallery in CI on all three OSes, with the exact allocation gate;
   - a 1M-row table at 0.7–1.4 ms of CPU per frame;
   - keyboard reachability and semantics tests.
-- **Following the system mode:** `theme.Follower` is the one implementation, used by `widget.Kit` and rexlook. The first frame is in the system mode; later changes crossfade.
+- **Following the system mode:** `theme.Follower` is the one implementation, used by `widget.Kit` and rexlook. The first frame is in the system mode (on Linux, when the portal answers within 25 ms); later changes crossfade.
 - **rexlook port (step 5):**
   - on `theme`, `theme/rex` and `icon`;
   - light is pixel-identical to before (0 pixels in 15 scenes), and rexcompare is 40/40;

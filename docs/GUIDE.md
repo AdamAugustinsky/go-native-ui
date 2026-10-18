@@ -422,8 +422,10 @@ menu and are not needed here, because the field handles its own chords.
 
 Nothing in the example chooses a mode. A kit follows the system by default
 (`theme.System`): the first frame is already drawn in the system's light or dark
-mode and accent colour, a change while the app runs crossfades with no polling,
-and the OS-drawn parts of the window (the Windows title bar, the macOS traffic
+mode and accent colour (on Linux, when the desktop portal answers within 25 ms,
+which a running portal does; a portal that has to start on demand gives a light
+first frame that crossfades to dark), a change while the app runs crossfades
+with no polling, and the OS-drawn parts of the window (the Windows title bar, the macOS traffic
 lights) follow what the app shows (D32). An app that wants a mode of its own calls
 `Kit.SetPreference` with `theme.ForceLight` or `theme.ForceDark`; the gallery has a
 Select for it. Colours come from the theme's palette, never from constants in
