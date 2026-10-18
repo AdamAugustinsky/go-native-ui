@@ -88,7 +88,7 @@ func (k *Kit) BeginSplitter(label string, st *SplitState, axis ui.Axis) Splitter
 	return s
 }
 
-func (s *Splitter) a() int { return int(1 - s.axis) } // 0 for AxisX, 1 for AxisY
+func (s *Splitter) a() int { return int(s.axis) } // 0 for AxisX, 1 for AxisY
 
 // avail is the room the panes share: the extent along the axis less the gutters.
 func (s *Splitter) avail() float32 {
@@ -266,10 +266,7 @@ func (k *Kit) EndSplitter(s *Splitter) {
 		c.NextSemName("Divider")
 		c.NextSemRange(0, 1, float64(s.st.Ratio[i]), 0.01)
 		c.NextSemPos(i, s.st.N-1)
-		id := c.Rect // keep the linter quiet about the unused method value
-		_ = id
-		g := k.r.Chrome.Divider(c, &k.r, dk, s.axis, [4]float32{0, 0, s.w, s.h}, gut)
-		_ = g
+		k.r.Chrome.Divider(c, &k.r, dk, s.axis, [4]float32{0, 0, s.w, s.h}, gut)
 		if ft := c.FocusTOf(dk); !k.off() && c.FocusVisible() && ft > 0.004 {
 			lw := theme.Snap(k.r.Px.FocusRingW)
 			if s.axis == ui.AxisX {
