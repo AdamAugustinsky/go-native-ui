@@ -442,8 +442,13 @@ The protocol work starts at once, in platform files only. Its integration into `
   - Gates: 0 allocations, 0.5–0.6 ms CPU per frame at 1M rows in CI, both listings in the first frame.
   - `cmd/internal/rexkit` is deleted: rexlook, Pilot and the gallery use only public packages.
 
+- **Guide (step 6):** `docs/GUIDE.md` builds `examples/notes` step by step.
+  - Every code block is an excerpt of the real example, checked by a test.
+  - The example is gated in CI on all three OSes: 0 allocations, 0.5–1.2 ms CPU per frame, 3.6–6.9 MB binaries.
+  - Writing it surfaced API friction. For example, the obvious minimal app drew only the background, and two byte-labels in one container collided. It is being fixed before the review.
+
 **In progress:**
-- the guide and its example app;
+- the API friction fixes from the guide;
 - widgets and the gallery (step 4);
 - X11: Pilot's gate needs a second window there (4–9 allocations in the first, likely the X11 clipboard warming up); being located.
 
