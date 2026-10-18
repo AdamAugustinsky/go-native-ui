@@ -321,6 +321,44 @@ func (c *Context) scrollPending() bool {
 	return false
 }
 
+// ScrollExtent returns the size of the content of the scrolling box id and of
+// its view (the box itself), in pixels, from the previous layout: the content
+// is what the box scrolls over, padding included, and scrolls by at most
+// content − view on each axis. Both are zero for a box that was not laid out.
+func (c *Context) ScrollExtent(id ID) (content, view [2]float32) {
+	b := &c.boxes[id]
+	return [2]float32{float32(b.content[0]), float32(b.content[1])}, b.size
+}
+
+// ScrollIntoView scrolls box id by the smallest amount that shows the
+// rectangle r (x0, y0, x1, y1) of its content, in content coordinates: from the
+// top left corner of the content, padding included (ScrollExtent's space). A
+// rectangle already in view moves nothing, one that is larger than the view is
+// aligned at its start. The offset approaches the target like ScrollTo, and
+// the target is clamped to the content when the frame is laid out. It
+// compares with the target of an earlier ScrollTo or ScrollIntoView of the
+// frame, so a series of calls (a selection that grows) accumulates. Axes the
+// box does not scroll on are left alone.
+func (c *Context) ScrollIntoView(id ID, r [4]float32) {
+	b := &c.boxes[id]
+	for a := 0; a < 2; a++ {
+		if !b.scrollOn(a) {
+			continue
+		}
+		view := float64(b.size[a])
+		lo, hi := float64(r[a]), float64(r[a+2])
+		t := b.scrollTgt[a]
+		switch {
+		case hi-lo >= view || lo < t:
+			t = lo
+		case hi > t+view:
+			t = hi - view
+		}
+		b.scrollTgt[a] = math.Max(t, 0)
+	}
+	c.scrollSet = true
+}
+
 // ListRange declares box id a virtual list of rows fixed-height rows and
 // returns the half-open row range [first, last) to build: the rows that
 // intersect the box (its previous-frame height, or the window height the
