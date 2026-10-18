@@ -1,8 +1,10 @@
 package rex
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"image/png"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +13,8 @@ import (
 	"testing"
 
 	"gonativeui/cmd/rexlook/rex/rexrig"
+	"gonativeui/theme"
+	"gonativeui/ui"
 )
 
 // Offscreen pixel tests: the real text system and renderer of the OS (Metal on
@@ -168,6 +172,131 @@ func TestRenderInitial(t *testing.T) {
 		t.Errorf("green light = %v", c)
 	}
 	s.save(os.Getenv("REX_SHOTS"), "initial")
+}
+
+// light counts the pixels of a rectangle that are light enough to read on a
+// dark ground.
+func (s shot) light(r [4]float32) int {
+	n := 0
+	for y := int(r[1]); y < int(r[3]); y++ {
+		for x := int(r[0]); x < int(r[2]); x++ {
+			if c := s.at(float32(x), float32(y)); c[0] > 150 && c[1] > 150 && c[2] > 150 {
+				n++
+			}
+		}
+	}
+	return n
+}
+
+// The dark mode (forced, once the crossfade has settled): the focused pane is the
+// dark surface, the capsule and the window are dark, and every kind of text the
+// scene sets in its own colours is light enough to read on them.
+func TestRenderDark(t *testing.T) {
+	g, x := newRig(t, WindowWidthPt, WindowHeightPt, 2)
+	x.Traffic = true
+	x.SetPreference(theme.ForceDark)
+	if n := g.Settle(x, 600); n > 600 {
+		t.Fatal("the crossfade did not settle")
+	}
+	s := snapshot(g)
+	k := x.K
+
+	agent, git := x.paneRect(kindAgent), x.paneRect(kindGit)
+	if c, want := s.at(agent[2]-30*k, agent[3]-30*k), [3]int{0x2A, 0x2C, 0x3A}; c != want {
+		t.Errorf("focused pane at its blank corner = %v, want the dark surface %v", c, want)
+	}
+	if c := s.at(git[2]-30*k, git[3]-30*k); c[0] > 90 || c[1] > 90 || c[2] > 100 {
+		t.Errorf("unfocused pane at its blank corner = %v: want a dark glass", c)
+	}
+	if c := s.at((agent[2]+x.paneRect(kindSnake)[0])/2, 300*k); c[0] > 60 || c[1] > 60 || c[2] > 70 {
+		t.Errorf("gutter = %v: want the dark window background", c)
+	}
+	cx, _ := centre(x.tabRects[1])
+	if c := s.at(cx, x.capsule[1]+2*k); c[0] > 90 { // the band above the tabs
+		t.Errorf("capsule = %v: want it dark", c)
+	}
+	pill := x.pill
+	if c, cap := s.at(pill[0]+8*k, (pill[1]+pill[3])/2), s.at(cx, x.capsule[1]+2*k); c[0] <= cap[0] {
+		t.Errorf("the pill (%v) is not lighter than the capsule (%v)", c, cap)
+	}
+	for name, r := range map[string][4]float32{
+		"focused pane title":   {agent[0] + 62*k, agent[1] + 22*k, agent[0] + 400*k, agent[1] + 52*k},
+		"unfocused pane title": {git[0] + 62*k, git[1] + 22*k, git[0] + 400*k, git[1] + 52*k},
+		"agent first row":      {agent[0] + 20*k, agent[1] + 90*k, agent[2] - 20*k, agent[1] + 130*k},
+		"host name":            {245 * k, 14 * k, 330 * k, 50 * k},
+		"active tab title":     {x.tabRects[0][0] + 100*k, x.tabRects[0][1] + 8*k, x.tabRects[0][2] - 30*k, x.tabRects[0][3] - 8*k},
+		"inactive tab title":   {x.tabRects[1][0] + 60*k, x.tabRects[1][1] + 8*k, x.tabRects[1][2] - 60*k, x.tabRects[1][3] - 8*k},
+	} {
+		if n := s.light(r); n < 40 {
+			t.Errorf("%s has only %d light pixels on the dark ground", name, n)
+		}
+	}
+	s.save(os.Getenv("REX_SHOTS"), "dark-initial")
+}
+
+// RenderShot draws the mode asked for from the first frame, and the metrics
+// file says which.
+func TestRenderShotModes(t *testing.T) {
+	dir := t.TempDir()
+	mean := map[string]float64{}
+	for _, m := range []struct {
+		name string
+		pref theme.Preference
+		sys  ui.Appearance
+	}{
+		{"light", theme.ForceLight, ui.Appearance{Dark: true, Known: true}},
+		{"dark", theme.ForceDark, ui.Appearance{}},
+		{"system-dark", theme.System, ui.Appearance{Dark: true, Known: true}},
+		{"system-unknown", theme.System, ui.Appearance{}},
+	} {
+		path := filepath.Join(dir, m.name+".png")
+		_, _, err := RenderShot(path, ShotOptions{Width: 600, Height: 400, Scale: 1, Preference: m.pref, System: m.sys})
+		if errors.Is(err, rexrig.ErrNoDevice) || (err != nil && strings.Contains(err.Error(), "renderer")) {
+			if os.Getenv("CI") != "" {
+				t.Fatalf("no offscreen renderer on CI: %v", err)
+			}
+			t.Skipf("no offscreen renderer: %v", err)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		f, err := os.Open(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		img, err := png.Decode(f)
+		f.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var sum, n float64
+		for y := 0; y < 400; y += 4 {
+			for x := 0; x < 600; x += 4 {
+				r, g, b, _ := img.At(x, y).RGBA()
+				sum += float64(r+g+b) / 3 / 0xFFFF
+				n++
+			}
+		}
+		mean[m.name] = sum / n
+		meta, err := os.ReadFile(path + ".metrics.json")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var md struct{ Mode string }
+		if err := json.Unmarshal(meta, &md); err != nil {
+			t.Fatal(err)
+		}
+		if want := map[string]string{"light": "light", "dark": "dark", "system-dark": "dark", "system-unknown": "light"}[m.name]; md.Mode != want {
+			t.Errorf("%s: the metrics say mode %q, want %q", m.name, md.Mode, want)
+		}
+	}
+	if !(mean["dark"] < 0.3 && mean["light"] > 0.6) {
+		t.Errorf("mean brightness: light %.2f, dark %.2f", mean["light"], mean["dark"])
+	}
+	if mean["system-dark"] != mean["dark"] || mean["system-unknown"] != mean["light"] {
+		t.Errorf("system preference: dark system %.3f (want %.3f), unknown system %.3f (want %.3f)",
+			mean["system-dark"], mean["dark"], mean["system-unknown"], mean["light"])
+	}
 }
 
 // Hover, focus, tab, split, maximise and drag change what is on screen.

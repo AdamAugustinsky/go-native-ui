@@ -14,6 +14,8 @@ import (
 // the pointer across the tabs, switch the focus between the panes by clicking,
 // drag a divider back and forth, and — in the second script — split, maximise,
 // restore, close and switch tabs, with animations running most of the time.
+// The pointer script of these tests also ends each round with a switch to dark
+// and back, so the light/dark crossfade is measured too.
 
 func readMem(run func(), frames int) (mallocs, bytes uint64) {
 	runtime.GC()
@@ -48,7 +50,7 @@ func zeroAlloc(t *testing.T, name string, run func(), animating func() bool, box
 
 func TestZeroAllocFake(t *testing.T) {
 	h := newHarness(t, WindowWidthPt, WindowHeightPt, 2)
-	s := &tscript{script: script{x: h.x, in: &h.in}, frame: h.frame}
+	s := &tscript{script: script{x: h.x, in: &h.in, modes: true}, frame: h.frame}
 	zeroAlloc(t, "pointer script, fake text", s.step, h.c.Animating, h.c.Boxes, 1800, 900)
 
 	h2 := newHarness(t, WindowWidthPt, WindowHeightPt, 2)
@@ -85,7 +87,7 @@ func TestZeroAllocRealText(t *testing.T) {
 		t.Skip("the exact allocation gate runs against CoreText; elsewhere the fake text system stands in (TestZeroAllocFake)")
 	}
 	g, x := newRig(t, WindowWidthPt, WindowHeightPt, 2)
-	s := &tscript{script: script{x: x, in: &g.In}, frame: func() { g.Frame(x) }}
+	s := &tscript{script: script{x: x, in: &g.In, modes: true}, frame: func() { g.Frame(x) }}
 	zeroAlloc(t, "pointer script, real text", s.step, g.C.Animating, g.C.Boxes, 1800, 900)
 	s2 := &tscript{script: script{x: x, in: &g.In}, frame: func() { g.Frame(x) }}
 	zeroAlloc(t, "layout script, real text", s2.structural, g.C.Animating, g.C.Boxes, 1920, 960)
@@ -98,6 +100,7 @@ func TestScriptsExercise(t *testing.T) {
 	h := newHarness(t, WindowWidthPt, WindowHeightPt, 2)
 	var (
 		animating, hovered, focusChanges, tabChanges, maxSeen, minSeen, maximised int
+		darkFrames, fading, lightAgain                                            int
 		ratios                                                                    = map[float32]bool{}
 		lastFocus                                                                 uint32
 		lastTab                                                                   = -1
@@ -111,6 +114,14 @@ func TestScriptsExercise(t *testing.T) {
 		}
 		if h.cursor() == ui.CursorPointer {
 			hovered++
+		}
+		switch tt := x.th.T; {
+		case tt == 1:
+			darkFrames++
+		case tt > 0:
+			fading++
+		case darkFrames > 0:
+			lightAgain++
 		}
 		tb := x.cur()
 		if tb.focus != lastFocus {
@@ -132,9 +143,12 @@ func TestScriptsExercise(t *testing.T) {
 			}
 		}
 	}
-	s := &tscript{script: script{x: h.x, in: &h.in}, frame: track}
+	s := &tscript{script: script{x: h.x, in: &h.in, modes: true}, frame: track}
 	for i := 0; i < 900; i++ {
 		s.step()
+	}
+	if darkFrames < 10 || fading < 20 || lightAgain < 3 {
+		t.Errorf("pointer script: %d dark frames, %d crossfading frames, %d light frames after the dark ones", darkFrames, fading, lightAgain)
 	}
 	if focusChanges < 3 || hovered < 100 || len(ratios) < 40 || animating < 150 {
 		t.Errorf("pointer script: %d focus changes, %d frames over a tab, %d divider positions, %d animating frames", focusChanges, hovered, len(ratios), animating)

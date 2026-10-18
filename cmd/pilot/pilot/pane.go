@@ -1,7 +1,6 @@
 package pilot
 
 import (
-	"math/bits"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -9,6 +8,7 @@ import (
 
 	"gonativeui/fs"
 	"gonativeui/ui"
+	"gonativeui/widget"
 )
 
 type navKind uint8
@@ -21,7 +21,7 @@ const (
 )
 
 // pane is one side of Pilot: a directory, how it is shown and the state that
-// goes with it. It owns no widgets; build.go draws it from this.
+// goes with it (the table state, the text buffers). build.go draws it from this.
 type pane struct {
 	id   uint32
 	src  Source
@@ -80,6 +80,8 @@ type pane struct {
 	reveal    int // row to scroll into view at the next build, -1 none
 	scrollRow int // row to put at the top at the next build (after a swap), -1 none
 	scrollOff float32
+
+	cols [3]widget.Column // the table's columns: Name, Size, Modified (the user can resize them)
 }
 
 func newPane(id uint32, src Source, home string) *pane {
@@ -271,7 +273,7 @@ func (p *pane) install(dir string, l *fs.Listing, lease uint32, sel string) {
 	p.setDir(dir)
 	p.v.reset()
 	p.v.l, p.v.lease = l, lease
-	p.v.sizeSel(len(l.Entries))
+	p.v.ts.Sel.Reserve(withSlack(len(l.Entries)))
 	p.path.SetString(dir)
 	p.pathErr, p.msg = "", ""
 	p.filter.Reset()
@@ -332,10 +334,10 @@ func (p *pane) startRows() {
 	}
 	p.fver++
 	v.rows = v.rows[:0]
-	v.curRow, v.anchorRow, p.pendRow = -1, -1, -1
+	p.pendRow = -1
 	v.filtered = p.hideHidden || len(p.q) > 0
 	p.jobPos = 0
-	p.jobBusy = v.filtered || v.cur >= 0 || v.anchor >= 0 || p.pendSel >= 0
+	p.jobBusy = v.filtered || p.pendSel >= 0
 	if v.filtered && cap(v.rows) < len(v.l.Order) {
 		v.rows = make([]uint32, 0, withSlack(len(v.l.Order)))
 	}
@@ -361,18 +363,11 @@ func filterChunk(l *fs.Listing, q []byte, hide bool, rows []uint32, pos, n int) 
 	return rows, end
 }
 
-// scanTargets notes the rows of the cursor, the anchor and the folder to select
-// among rows, which are the entries of rows base, base+1, ...
+// scanTargets notes the row of the folder to select among rows, which are the
+// entries of rows base, base+1, ...
 func (p *pane) scanTargets(rows []uint32, base int) {
-	v := &p.v
-	cur, anchor, pend := uint32(v.cur), uint32(v.anchor), uint32(p.pendSel) // -1 never matches
-	for i, e := range rows {                                                // (one entry can be several of them)
-		if e == cur {
-			v.curRow = base + i
-		}
-		if e == anchor {
-			v.anchorRow = base + i
-		}
+	pend := uint32(p.pendSel) // -1 never matches
+	for i, e := range rows {
 		if e == pend {
 			p.pendRow = base + i
 		}
@@ -412,7 +407,7 @@ func (p *pane) rowsDone() {
 	if e := p.pendSel; e >= 0 {
 		p.pendSel = -1
 		if p.pendRow >= 0 {
-			p.v.selectOnly(e, p.pendRow)
+			p.v.selectOnly(e)
 			p.reveal = p.pendRow
 		}
 	}
@@ -448,31 +443,30 @@ func (p *pane) toggleHidden() {
 
 // reconcile carries the selection, the cursor and the scroll position over to a
 // fresh listing of the directory by name, a time slice per frame, while the old
-// listing stays on screen. Phases: 0 hashes the selected names of the old
-// listing, 1 looks for them in the new one, 2 builds the new rows, 3 finds the
-// rows of the cursor, the anchor and the top entry, then the swap.
+// listing stays on screen. Phases: 0 hashes the names of the selected entries,
+// the cursor and the anchor of the old listing, 1 looks for them in the new one
+// and notes where each went (the map Selection.Remap takes), 2 builds the new
+// rows, 3 finds the row of the top entry, then the swap.
 type reconcile struct {
 	active bool
 	l      *fs.Listing
 	lease  uint32 // the Source lease l came with
 	phase  int
 	pos    int
-	ver    uint32 // the view's selection version when it began
+	ver    uint32 // the selection's version when it began
 	fver   uint32
 
-	tab                 nameSet
-	hCur, hAnchor, hTop uint64
-	newSel              []uint64
-	nNew                int
-	newBytes            int64
-	newCur, newAnchor   int32
-	newTop              int32
-	topFrac             float32
+	tab     nameMap  // name hash -> entry of the old listing, for what is carried over
+	m       []uint32 // entry of the old listing -> entry of the new one, widget.NoItem if gone
+	found   int      // entries of tab found in the new listing
+	hTop    uint64
+	newTop  int32
+	topFrac float32
 
 	rows    []uint32
 	rowsPos int
 
-	curRow, anchorRow, topRow int
+	topRow int
 }
 
 func (p *pane) startReconcile(l *fs.Listing, lease uint32) {
@@ -481,36 +475,39 @@ func (p *pane) startReconcile(l *fs.Listing, lease uint32) {
 		p.release(rc.l, rc.lease)
 	}
 	v := &p.v
+	sel := &v.ts.Sel
 	rc.active, rc.l, rc.lease, rc.phase, rc.pos = true, l, lease, 0, 0
-	rc.ver, rc.fver = v.ver, p.fver
-	rc.hCur, rc.hAnchor, rc.hTop = 0, 0, 0
-	rc.nNew, rc.newBytes, rc.newCur, rc.newAnchor, rc.newTop = 0, 0, -1, -1, -1
-	rc.curRow, rc.anchorRow, rc.topRow = -1, -1, -1
+	rc.ver, rc.fver = sel.Version(), p.fver
+	rc.hTop, rc.newTop, rc.topRow, rc.found = 0, -1, -1, 0
 	rc.rowsPos = 0
 	rc.rows = rc.rows[:0]
+	rc.tab.reset(sel.Count() + 2)
 	if v.l != nil {
-		if v.cur >= 0 {
-			rc.hCur = nameHash(v.l.Name(int(v.cur)))
+		n := len(v.l.Entries)
+		if cap(rc.m) < n {
+			rc.m = make([]uint32, withSlack(n))
 		}
-		if v.anchor >= 0 {
-			rc.hAnchor = nameHash(v.l.Name(int(v.anchor)))
+		rc.m = rc.m[:n]
+		for i := range rc.m {
+			rc.m[i] = widget.NoItem
+		}
+		if e, ok := sel.Cursor(); ok && int(e) < n {
+			rc.tab.add(nameHash(v.l.Name(int(e))), e)
+		}
+		if e, ok := sel.Anchor(); ok && int(e) < n {
+			rc.tab.add(nameHash(v.l.Name(int(e))), e)
 		}
 		if p.topEntry >= 0 && p.topRow > 0 {
 			rc.hTop = nameHash(v.l.Name(int(p.topEntry)))
 			rc.topFrac = p.topFrac
 		}
 	}
-	w := (len(l.Entries) + 63) >> 6
-	if cap(rc.newSel) < w {
-		rc.newSel = make([]uint64, withSlack(w))
-	}
-	rc.newSel = rc.newSel[:w]
-	clear(rc.newSel)
-	rc.tab.reset(v.nSel)
+	// the new listing may be bigger: have the selection's bitsets ready for it
+	sel.Reserve(withSlack(len(l.Entries)))
 	switch {
-	case v.nSel > 0:
+	case sel.Count() > 0:
 		rc.phase = 0
-	case rc.hCur != 0 || rc.hAnchor != 0 || rc.hTop != 0:
+	case rc.tab.n > 0 || rc.hTop != 0:
 		rc.phase = 1
 	default:
 		rc.phase = 2
@@ -522,7 +519,7 @@ func (p *pane) reconcileStep(b *budget) {
 	// The new listing is reconciled with the selection and the filter as they
 	// were when each phase began. If either changed since, what was carried over
 	// or built is out of date and would overwrite what the person just did.
-	if rc.ver != v.ver { // the selection or the cursor changed: start over
+	if rc.ver != v.ts.Sel.Version() { // the selection or the cursor changed: start over
 		l, lease := rc.l, rc.lease
 		rc.l, rc.lease = nil, 0
 		rc.active = false
@@ -532,15 +529,17 @@ func (p *pane) reconcileStep(b *budget) {
 		rc.phase, rc.pos = 2, 0
 	}
 	if rc.phase == 0 && v.l != nil {
-		for rc.pos < len(v.sel) {
-			x := v.sel[rc.pos]
-			for x != 0 {
-				i := rc.pos<<6 + trailing(x)
-				x &= x - 1
-				rc.tab.add(nameHash(v.l.Name(i)))
+		sel := &v.ts.Sel
+		for n := 0; ; n++ {
+			it, ok := sel.NextSet(uint32(rc.pos))
+			if !ok {
+				break
 			}
-			rc.pos++
-			if rc.pos&15 == 0 && b.over() {
+			rc.pos = int(it) + 1
+			if int(it) < len(v.l.Entries) {
+				rc.tab.add(nameHash(v.l.Name(int(it))), it)
+			}
+			if n&255 == 255 && b.over() {
 				return
 			}
 		}
@@ -552,26 +551,14 @@ func (p *pane) reconcileStep(b *budget) {
 			i := rc.pos
 			rc.pos++
 			h := nameHash(l.Name(i))
-			if rc.tab.has(h) {
-				w, m := i>>6, uint64(1)<<(uint(i)&63)
-				if rc.newSel[w]&m == 0 {
-					rc.newSel[w] |= m
-					rc.nNew++
-					if e := &l.Entries[i]; e.Kind != fs.KindDir {
-						rc.newBytes += e.Size
-					}
-				}
-			}
-			if h == rc.hCur && rc.newCur < 0 {
-				rc.newCur = int32(i)
-			}
-			if h == rc.hAnchor && rc.newAnchor < 0 {
-				rc.newAnchor = int32(i)
+			if old, ok := rc.tab.get(h); ok && rc.m[old] == widget.NoItem {
+				rc.m[old] = uint32(i)
+				rc.found++
 			}
 			if h == rc.hTop && rc.newTop < 0 {
 				rc.newTop = int32(i)
 			}
-			if rc.nNew == rc.tab.n && p.foundAll() { // everything looked for is found
+			if rc.found == rc.tab.n && (rc.hTop == 0 || rc.newTop >= 0) { // everything looked for is found
 				rc.pos = len(l.Entries)
 			}
 			if rc.pos&255 == 0 && b.over() {
@@ -605,23 +592,17 @@ func (p *pane) reconcileStep(b *budget) {
 			}
 		}
 		rc.phase, rc.pos = 3, 0
-		rc.curRow, rc.anchorRow, rc.topRow = -1, -1, -1
+		rc.topRow = -1
 	}
 	if rc.phase == 3 {
-		if rc.newCur >= 0 || rc.newAnchor >= 0 || rc.newTop >= 0 {
+		if rc.newTop >= 0 {
 			rows := rc.l.Order
 			if p.hideHidden || len(p.q) > 0 {
 				rows = rc.rows
 			}
 			for rc.pos < len(rows) {
 				end := min(rc.pos+4*chunk, len(rows))
-				for i, e := range rows[rc.pos:end] { // (one entry can be several of them)
-					if int32(e) == rc.newCur {
-						rc.curRow = rc.pos + i
-					}
-					if int32(e) == rc.newAnchor {
-						rc.anchorRow = rc.pos + i
-					}
+				for i, e := range rows[rc.pos:end] {
 					if int32(e) == rc.newTop {
 						rc.topRow = rc.pos + i
 					}
@@ -636,20 +617,12 @@ func (p *pane) reconcileStep(b *budget) {
 	}
 }
 
-func (p *pane) foundAll() bool {
-	rc := &p.rc
-	return (rc.hCur == 0 || rc.newCur >= 0) && (rc.hAnchor == 0 || rc.newAnchor >= 0) && (rc.hTop == 0 || rc.newTop >= 0)
-}
-
 // swapIn replaces the shown listing by the reconciled one.
 func (p *pane) swapIn() {
 	rc, v := &p.rc, &p.v
 	old, oldLease := v.l, v.lease
 	v.l, v.lease = rc.l, rc.lease
-	v.sel, rc.newSel = rc.newSel, v.sel
-	v.nSel, v.selBytes = rc.nNew, rc.newBytes
-	v.cur, v.anchor = rc.newCur, rc.newAnchor
-	v.curRow, v.anchorRow = rc.curRow, rc.anchorRow
+	v.ts.Sel.Remap(rc.m, len(rc.l.Entries))
 	v.filtered = p.hideHidden || len(p.q) > 0
 	if v.filtered {
 		v.rows, rc.rows = rc.rows, v.rows
@@ -690,7 +663,15 @@ func (p *pane) openRow(r int) {
 	if r < 0 || r >= v.nRows() {
 		return
 	}
-	e := v.entryAt(r)
+	p.openEntry(v.entryAt(r))
+}
+
+// openEntry opens entry e of the listing shown.
+func (p *pane) openEntry(e int32) {
+	v := &p.v
+	if v.l == nil || e < 0 || int(e) >= len(v.l.Entries) {
+		return
+	}
 	ent := &v.l.Entries[e]
 	full := joinPath(p.dir, string(v.l.Name(int(e))))
 	if ent.Kind == fs.KindDir || ent.Flags&fs.FlagSymlinkDir != 0 {
@@ -705,8 +686,12 @@ func (p *pane) openRow(r int) {
 	p.setMsg("Opening "+string(v.l.Name(int(e))), false)
 }
 
-// openCursor opens the cursor row, or, with a single selected folder, that one.
-func (p *pane) openCursor() { p.openRow(p.v.curRow) }
+// openCursor opens the entry the cursor is on, if its row is shown.
+func (p *pane) openCursor() {
+	if e := p.v.cursor(); e >= 0 && p.v.rowOf(e) >= 0 {
+		p.openEntry(e)
+	}
+}
 
 func (p *pane) goUp() {
 	if !p.canUp() {
@@ -761,5 +746,3 @@ func (p *pane) sortBy(key fs.SortKey) {
 		p.relist()
 	}
 }
-
-func trailing(x uint64) int { return bits.TrailingZeros64(x) }

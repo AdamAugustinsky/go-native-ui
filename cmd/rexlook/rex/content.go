@@ -1,10 +1,10 @@
 package rex
 
 import (
-	"gonativeui/cmd/internal/rexkit"
 	"strings"
 
 	"gonativeui/text"
+	"gonativeui/theme"
 	"gonativeui/ui"
 )
 
@@ -34,11 +34,11 @@ type span struct {
 
 func (g *grid) row(row int, spans ...span) {
 	for _, sp := range spans {
-		f := g.r.FMono
+		f := g.r.cells.Mono
 		if sp.bold {
-			f = g.r.FMonoBold
+			f = g.r.cells.MonoBold
 		}
-		g.cell(row, sp.col, sp.s, f, rexkit.Col(sp.c))
+		g.cell(row, sp.col, sp.s, f, theme.Col(sp.c))
 	}
 }
 
@@ -47,12 +47,12 @@ func (g *grid) row(row int, spans ...span) {
 // column, so fallback faces never shift the grid.
 func (g *grid) cell(row, colN int, str string, f text.FontKey, color uint32) {
 	r := g.r
-	if g.y0+float32(row-1)*r.RowPitch > g.h { // below the pane
+	if g.y0+float32(row-1)*r.cells.RowPitch > g.h { // below the pane
 		return
 	}
-	baseline := rexkit.Snap(g.y0 + float32(row)*r.RowPitch)
+	baseline := theme.Snap(g.y0 + float32(row)*r.cells.RowPitch)
 	put := func(s string, c int) {
-		r.Put(g.c, &g.kg, f, s, g.x0+float32(c)*r.Adv, baseline, color, 0, 0)
+		r.Put(g.c, &g.kg, f, s, g.x0+float32(c)*r.cells.Adv, baseline, color, 0, 0)
 	}
 	start, startCol, c := 0, colN, colN
 	for i := 0; i < len(str); {
@@ -84,23 +84,23 @@ func (g *grid) fill(x0, y0, x1, y1 float32, color uint32) {
 	if x1 <= x0 || y1 <= y0 {
 		return
 	}
-	rexkit.At(g.c, x0, y0, x1-x0, y1-y0)
+	theme.At(g.c, x0, y0, x1-x0, y1-y0)
 	g.c.NextBG(color)
 	g.c.BoxKeyed(ui.DrawBackground|fl, g.kg.Next(), nil)
 }
 
 func (g *grid) round(x0, y0, x1, y1, rad float32, color uint32) {
-	rexkit.At(g.c, x0, y0, x1-x0, y1-y0)
+	theme.At(g.c, x0, y0, x1-x0, y1-y0)
 	g.c.NextBG(color)
 	g.c.NextRadius(rad)
 	g.c.BoxKeyed(ui.DrawBackground|fl, g.kg.Next(), nil)
 }
 
 func (g *grid) lineY(row int) float32 {
-	return rexkit.Snap(g.y0 - 10*g.r.K + float32(row)*g.r.RowPitch)
+	return theme.Snap(g.y0 - 10*g.r.K + float32(row)*g.r.cells.RowPitch)
 }
 
-func (g *grid) cellCentre(c int) float32 { return g.x0 + (float32(c)+0.5)*g.r.Adv }
+func (g *grid) cellCentre(c int) float32 { return g.x0 + (float32(c)+0.5)*g.r.cells.Adv }
 
 // hline draws a horizontal line at a grid row from x0 to x1 pixels, leaving
 // out the cell ranges in cuts (ordered left to right).
@@ -109,14 +109,14 @@ func (g *grid) hline(row int, x0, x1 float32, cuts [][2]int, color uint32) {
 	y := g.lineY(row)
 	from := x0
 	for _, cut := range cuts {
-		cx0, cx1 := g.x0+float32(cut[0])*g.r.Adv, g.x0+float32(cut[1]+1)*g.r.Adv
+		cx0, cx1 := g.x0+float32(cut[0])*g.r.cells.Adv, g.x0+float32(cut[1]+1)*g.r.cells.Adv
 		if cx0 > from {
-			g.fill(rexkit.Snap(from), y, rexkit.Snap(min(cx0, x1)), y+lw, color)
+			g.fill(theme.Snap(from), y, theme.Snap(min(cx0, x1)), y+lw, color)
 		}
 		from = max(from, cx1)
 	}
 	if from < x1 {
-		g.fill(rexkit.Snap(from), y, rexkit.Snap(x1), y+lw, color)
+		g.fill(theme.Snap(from), y, theme.Snap(x1), y+lw, color)
 	}
 }
 
@@ -131,8 +131,8 @@ func (g *grid) frame(b frame) {
 	k := g.r.K
 	lw := max(1, k)
 	br := 8 * k
-	color := rexkit.Col(g.pal.Line)
-	xl, xr := rexkit.Snap(g.cellCentre(b.c0)), rexkit.Snap(g.cellCentre(b.c1))
+	color := theme.Col(g.pal.Line)
+	xl, xr := theme.Snap(g.cellCentre(b.c0)), theme.Snap(g.cellCentre(b.c1))
 	yt, yb := g.lineY(b.r0), g.lineY(b.r1)
 	g.fill(xl, yt+br, xl+lw, yb+lw-br, color)
 	g.fill(xr, yt+br, xr+lw, yb+lw-br, color)
@@ -149,10 +149,10 @@ func (g *grid) frame(b frame) {
 // size 2br whose rounded corner is the one in radii.
 func (g *grid) corner(x, y, br, lw float32, color uint32, radii [4]float32, qx, qy float32) {
 	c := g.c
-	rexkit.At(c, x, y, br, br)
+	theme.At(c, x, y, br, br)
 	cl := c.BoxKeyed(ui.Clip|fl, g.kg.Next(), nil)
 	c.Push(cl)
-	rexkit.At(c, -qx*br, -qy*br, 2*br, 2*br)
+	theme.At(c, -qx*br, -qy*br, 2*br, 2*br)
 	c.NextRadii(radii[0], radii[1], radii[2], radii[3])
 	c.NextBorder(color, lw)
 	c.BoxKeyed(ui.DrawBorder|fl, g.kg.Next(), nil)
@@ -181,7 +181,7 @@ func (g *grid) agent() {
 
 func (g *grid) git() {
 	p := &g.pal
-	line := rexkit.Col(p.Line)
+	line := theme.Col(p.Line)
 
 	// Left column: collapsed panels as title lines, and the Files box.
 	g.hline(0, g.cellCentre(0), g.cellCentre(23), [][2]int{{2, 4}, {6, 11}}, line)
@@ -220,7 +220,7 @@ func (g *grid) git() {
 	g.row(11, span{25, "+let HEIGHT = 14;", p.Green, false})
 	// Scroll thumb on the right edge of the diff box.
 	k := g.r.K
-	xr, y1 := rexkit.Snap(g.cellCentre(71)), g.lineY(1)
+	xr, y1 := theme.Snap(g.cellCentre(71)), g.lineY(1)
 	g.round(xr-k, y1-16*k, xr+8*k, y1+16*k, 2*k, line)
 
 	// Command log box.
@@ -232,8 +232,8 @@ func (g *grid) git() {
 	g.row(16, span{0, "Stage: <space> | Commit: c | Stash: s | …", p.Blue, false},
 		span{46, "Donate", p.Purple, false}, span{53, "Ask Question", p.Orange, false}, span{66, "0.65.1", p.FG, false})
 	ul := func(c0, c1 int, c uint32) {
-		y := rexkit.Snap(g.y0+16*g.r.RowPitch) + 4*k
-		g.fill(rexkit.Snap(g.x0+float32(c0)*g.r.Adv), y, rexkit.Snap(g.x0+float32(c1+1)*g.r.Adv), y+max(1, k), rexkit.Col(c))
+		y := theme.Snap(g.y0+16*g.r.cells.RowPitch) + 4*k
+		g.fill(theme.Snap(g.x0+float32(c0)*g.r.cells.Adv), y, theme.Snap(g.x0+float32(c1+1)*g.r.cells.Adv), y+max(1, k), theme.Col(c))
 	}
 	ul(46, 51, p.Purple)
 	ul(53, 64, p.Orange)
@@ -254,36 +254,41 @@ const (
 // snakeEdge is "+---…---+" across the board.
 var snakeEdge = "+" + strings.Repeat("-", snakeCols-1) + "+"
 
+// snakeCol is the colour of a game piece at the pane's focus and the theme's mix.
+func (g *grid) snakeCol(c *[4]uint32) uint32 {
+	return g.r.col(theme.MixRGB(c[0], c[1], g.ft), theme.MixRGB(c[2], c[3], g.ft))
+}
+
 func (g *grid) snake() {
 	r, k := g.r, g.r.K
-	teal := rexkit.Col(rexkit.MixRGB(scTeal[0], scTeal[1], g.ft))
-	g.cell(0, 0, "S N A K E", r.FMono, teal)
-	g.cell(0, 12, "Score: 43", r.FMono, teal)
-	g.cell(1, 0, snakeEdge, r.FMono, teal)
+	teal := g.snakeCol(&scTeal)
+	g.cell(0, 0, "S N A K E", r.cells.Mono, teal)
+	g.cell(0, 12, "Score: 43", r.cells.Mono, teal)
+	g.cell(1, 0, snakeEdge, r.cells.Mono, teal)
 	for row := snakeFirst; row <= snakeLast; row++ {
-		g.cell(row, 0, "|", r.FMono, teal)
-		g.cell(row, snakeCols, "|", r.FMono, teal)
+		g.cell(row, 0, "|", r.cells.Mono, teal)
+		g.cell(row, snakeCols, "|", r.cells.Mono, teal)
 	}
-	g.cell(snakeLast+1, 0, snakeEdge, r.FMono, teal)
-	g.cell(snakeLast+2, 0, "Paused · Space resume · R restart · Ctrl+C quit", r.FMono, rexkit.Col(g.pal.Dim))
+	g.cell(snakeLast+1, 0, snakeEdge, r.cells.Mono, teal)
+	g.cell(snakeLast+2, 0, "Paused · Space resume · R restart · Ctrl+C quit", r.cells.Mono, theme.Col(g.pal.Dim))
 
 	// Game pieces are shapes: 14 px food dots and body squares, one head.
 	at := func(c, row int) (float32, float32) {
-		return g.cellCentre(c), rexkit.Snap(g.y0-10*k+float32(row)*r.RowPitch) + 0.5*k
+		return g.cellCentre(c), theme.Snap(g.y0-10*k+float32(row)*r.cells.RowPitch) + 0.5*k
 	}
 	d := 14 * k
-	food, body := rexkit.Col(rexkit.MixRGB(scFood[0], scFood[1], g.ft)), rexkit.Col(rexkit.MixRGB(scBody[0], scBody[1], g.ft))
+	food, body := g.snakeCol(&scFood), g.snakeCol(&scBody)
 	for _, f := range snakeFoods {
 		x, y := at(f[0], f[1])
-		x0, y0 := rexkit.Snap(x-d/2), rexkit.Snap(y-d/2)
+		x0, y0 := theme.Snap(x-d/2), theme.Snap(y-d/2)
 		g.round(x0, y0, x0+d, y0+d, d/2, food)
 	}
 	for _, b := range snakeBodys {
 		x, y := at(b[0], b[1])
-		x0, y0 := rexkit.Snap(x-d/2), rexkit.Snap(y-d/2)
+		x0, y0 := theme.Snap(x-d/2), theme.Snap(y-d/2)
 		g.fill(x0, y0, x0+d, y0+d, body)
 	}
-	g.cell(snakeHeadP[1], snakeHeadP[0], "◆", r.FMono, rexkit.Col(rexkit.MixRGB(scHead[0], scHead[1], g.ft)))
+	g.cell(snakeHeadP[1], snakeHeadP[0], "◆", r.cells.Mono, g.snakeCol(&scHead))
 }
 
 func (g *grid) bun() {

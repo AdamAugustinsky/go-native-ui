@@ -96,6 +96,12 @@ func (r *drive) text(s string) {
 	})
 }
 
+// center is the middle of the box with key k, as of the last frame.
+func (r *drive) center(k ui.Key) (x, y float32) {
+	b := r.o.UI.RectOf(k)
+	return (b[0] + b[2]) / 2, (b[1] + b[3]) / 2
+}
+
 func (r *drive) rowAt(pane, row int) {
 	s := script{pl: r.d.Pilot}
 	r.at(s.listPoint(pane, row))
@@ -134,8 +140,76 @@ func TestClickingSelectsAndSwitchesPanes(t *testing.T) {
 	if pl.active != 1 || selected(b) != "Reports" {
 		t.Errorf("clicking the other pane: active %d, selected %q", pl.active, selected(b))
 	}
-	if a.v.nSel != 4 {
+	if a.v.nSel() != 4 {
 		t.Error("the other pane keeps its selection")
+	}
+}
+
+// The keys of the list are the table's: the arrows move the cursor and select,
+// Shift extends, Page Up and Down, Home and End jump, select all selects all,
+// Esc clears, Enter opens the cursor row, Backspace goes up.
+func TestListKeysGoThroughTheTable(t *testing.T) {
+	r := newDrive(t)
+	pl := r.d.Pilot
+	a := pl.panes[0]
+	prim := pl.primary()
+	// rows with the hidden files out of sight: 0 app, 1 cmd, 2 docs, 3 fs, 4 latest, 5 ui, 6 build.sh …
+	r.rowAt(0, 0)
+	r.click(0)
+	if selected(a) != "app" {
+		t.Fatalf("setup: selected %q", selected(a))
+	}
+	r.key(ui.KeyDown, 0)
+	if selected(a) != "cmd" {
+		t.Errorf("down: %q", selected(a))
+	}
+	r.key(ui.KeyDown, ui.ModShift)
+	r.key(ui.KeyDown, ui.ModShift)
+	if selected(a) != "cmd docs fs" {
+		t.Errorf("shift+down extends: %q", selected(a))
+	}
+	r.key(ui.KeyUp, ui.ModShift)
+	if selected(a) != "cmd docs" {
+		t.Errorf("shift+up shrinks: %q", selected(a))
+	}
+	r.key(ui.KeyPageDown, 0)
+	if want := min(pl.geo[0].visRows-1+2, a.v.nRows()-1); a.v.curRow() != want {
+		t.Errorf("page down: cursor on row %d, want %d", a.v.curRow(), want)
+	}
+	r.key(ui.KeyPageUp, 0)
+	r.key(ui.KeyEnd, 0)
+	if a.v.curRow() != a.v.nRows()-1 || a.v.nSel() != 1 {
+		t.Errorf("end: cursor on row %d of %d, %d selected", a.v.curRow(), a.v.nRows(), a.v.nSel())
+	}
+	r.key(ui.KeyHome, 0)
+	if selected(a) != "app" {
+		t.Errorf("home: %q", selected(a))
+	}
+	r.key('A', prim)
+	if a.v.nSel() != a.v.nRows() {
+		t.Errorf("select all: %d of %d", a.v.nSel(), a.v.nRows())
+	}
+	r.key(ui.KeyEscape, 0)
+	if a.v.nSel() != 0 {
+		t.Error("esc clears the selection")
+	}
+	r.key(ui.KeyHome, 0)
+	r.key(ui.KeyEnter, 0)
+	if want := nativePath("/Users/rex/Projects/pilot/app"); r.src.last() != want {
+		t.Errorf("enter on a folder lists %q, want %q", r.src.last(), want)
+	}
+	// ↑/↓ with the filter focused drive the list too (Home and End do as well)
+	deliver(a, listing(fs.SortName, false, sceneLeft...))
+	r.settle()
+	r.text("o") // opens the filter
+	r.settle()
+	r.key(ui.KeyDown, 0)
+	r.key(ui.KeyDown, 0)
+	r.key(ui.KeyUp, ui.ModShift)
+	// (from no cursor, the first ↓ goes to the first row, the second to the next;
+	// shift+↑ then takes the range from that one back to the first)
+	if a.v.nSel() != 2 || a.v.curRow() != 0 {
+		t.Errorf("↓↓ and shift+↑ from the filter: %d selected, cursor on row %d", a.v.nSel(), a.v.curRow())
 	}
 }
 
@@ -145,10 +219,10 @@ func TestDoubleClickOpensAFolder(t *testing.T) {
 	r.press(1, 0)
 	r.release()
 	r.press(2, 0)
+	r.release() // the table reports the double click when the button comes up
 	if got, want := r.src.last(), nativePath("/Users/rex/Projects/pilot/cmd"); got != want {
 		t.Fatalf("double-click lists %q, want %q", got, want)
 	}
-	r.release()
 }
 
 func TestTypingFiltersTheList(t *testing.T) {
@@ -173,11 +247,11 @@ func TestTypingFiltersTheList(t *testing.T) {
 	}
 	// ↑/↓ and Enter still drive the list with the filter focused
 	r.key(ui.KeyDown, 0)
-	if a.v.curRow < 0 {
+	if a.v.curRow() < 0 {
 		t.Error("down with the filter focused moves the cursor")
 	}
 	r.key(ui.KeyEscape, 0)
-	if a.filterOpen || len(a.q) != 0 || r.o.UI.FocusKey() != 0 {
+	if a.filterOpen || len(a.q) != 0 || r.o.UI.FocusKey() != listKey(0) {
 		t.Error("Esc closes the filter and returns the focus to the list")
 	}
 	r.settle()
@@ -217,7 +291,7 @@ func TestPathFieldNavigates(t *testing.T) {
 	// Esc restores the directory and gives the focus back to the list
 	r.key('L', pl.primary())
 	r.key(ui.KeyEscape, 0)
-	if a.path.String() != a.dir || r.o.UI.FocusKey() != 0 {
+	if a.path.String() != a.dir || r.o.UI.FocusKey() != listKey(0) {
 		t.Errorf("Esc: text %q focus %v", a.path.String(), r.o.UI.FocusKey())
 	}
 }
@@ -246,8 +320,8 @@ func TestHeaderClickSorts(t *testing.T) {
 func TestDividerDragResizesThePanes(t *testing.T) {
 	r := newDrive(t)
 	pl := r.d.Pilot
-	_, g, _ := pl.paneRects()
-	r.at((g[0]+g[2])/2, (g[1]+g[3])/2)
+	l, rt := pl.geo[0].rect, pl.geo[1].rect // the gutter is between the panes
+	r.at((l[2]+rt[0])/2, (l[1]+l[3])/2)
 	w0 := pl.geo[0].rect[2] - pl.geo[0].rect[0]
 	r.press(1, 0)
 	r.feed(func(in *ui.Input) { r.x += 120; in.MouseX, in.MouseY = r.x, r.y; in.SetButton(ui.ButtonLeft, true, 0) })
@@ -311,7 +385,7 @@ func TestTabInATextFieldSwitchesPanes(t *testing.T) {
 		in.PushKey(ui.KeyEvent{Code: ui.KeyTab, Down: true})
 		in.AppendText("\t") // what the platform sends along with the key
 	})
-	if pl.active != 1 || r.o.UI.FocusKey() != 0 {
+	if pl.active != 1 || r.o.UI.FocusKey() != listKey(1) {
 		t.Errorf("Tab in the filter: active %d focus %v", pl.active, r.o.UI.FocusKey())
 	}
 	if a.filter.String() != "m" || string(a.q) != "m" || !a.filterOpen {
@@ -329,7 +403,7 @@ func TestTabInATextFieldSwitchesPanes(t *testing.T) {
 		in.PushKey(ui.KeyEvent{Code: ui.KeyTab, Down: true})
 		in.AppendText("\t")
 	})
-	if pl.active != 0 || r.o.UI.FocusKey() != 0 {
+	if pl.active != 0 || r.o.UI.FocusKey() != listKey(0) {
 		t.Errorf("Tab in the path field: active %d focus %v", pl.active, r.o.UI.FocusKey())
 	}
 	if b.path.String() != b.dir || b.pathErr != "" {

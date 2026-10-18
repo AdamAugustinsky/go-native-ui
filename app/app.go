@@ -72,13 +72,17 @@ type Initer interface{ Init(a *App) error }
 // PushKey...); the pending per-frame parts are cleared after each frame.
 // frame counts the frames drawn so far from 0. Returning false means the
 // script is over: that frame is still drawn, without more input, and the
-// run ends.
+// run ends. It ends for good: RunBench finishes its window and the Offscreen
+// never asks the Scripter again, so a test that plays one script after another
+// returns true between them and false only when it is done, as
+// widget/widgettest.Rig does for the window it drives.
 type Scripter interface {
 	Script(frame int, in *ui.Input) bool
 }
 
 // Config describes the window and the frame.
 type Config struct {
+	// Title is the window title.
 	Title         string
 	Width, Height float32 // content size in points
 	MinWidth      float32 // smallest content size the user can resize to, in points; 0: no limit
@@ -196,8 +200,10 @@ type RunOptions struct {
 
 // RunResult is what RunWith learned.
 type RunResult struct {
+	// Startup is the start-up timeline.
 	Startup StartupReport
-	Frames  int
+	// Frames is the number of frames drawn.
+	Frames int
 	// InputToCommitMs: from the platform timestamp of the oldest input event
 	// behind a frame to the return of that frame's EndFrame (the commit),
 	// over the last 8192 input-driven frames.

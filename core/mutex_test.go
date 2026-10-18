@@ -87,14 +87,14 @@ func TestMutexContentionZeroAlloc(t *testing.T) {
 			runtime.ReadMemStats(&m1)
 			deltas[w] = m1.Mallocs - m0.Mallocs
 		}
-		if zeroAfterFirst(deltas[:]) {
+		if cleanWindow(deltas[:]) {
 			break
 		}
 		t.Logf("attempt %d: mallocs per window %v", attempt, deltas)
 	}
 	stop.Store(true)
 	within(t, 10*time.Second, "lockers", wg.Wait)
-	if !zeroAfterFirst(deltas[:]) {
-		t.Errorf("mallocs per window under contention: %v, want 0 after the first", deltas)
+	if !cleanWindow(deltas[:]) {
+		t.Errorf("mallocs per window under contention: %v, want a window after the first with 0", deltas)
 	}
 }

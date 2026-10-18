@@ -11,38 +11,71 @@ import "gonativeui/core"
 type Role uint8
 
 const (
+	// RoleNone is not part of the semantic tree.
 	RoleNone Role = iota
+	// RoleWindow is the window, the root of the tree.
 	RoleWindow
+	// RoleGroup is a container with no behaviour of its own.
 	RoleGroup
+	// RoleLabel is static text.
 	RoleLabel
+	// RoleImage is a picture or icon.
 	RoleImage
+	// RoleButton is a push button.
 	RoleButton
+	// RoleCheckbox is a check box.
 	RoleCheckbox
+	// RoleSwitch is an on/off switch.
 	RoleSwitch
+	// RoleRadio is a radio button.
 	RoleRadio
+	// RoleRadioGroup is the container of a set of radio buttons.
 	RoleRadioGroup
+	// RoleSlider is a slider (its value is a range, see SemNode.Range).
 	RoleSlider
+	// RoleTextField is an editable text field.
 	RoleTextField
+	// RoleSearchField is a text field for searching.
 	RoleSearchField
+	// RoleComboBox is a drop-down choice.
 	RoleComboBox
+	// RoleList is a list of items.
 	RoleList
+	// RoleListItem is an item of a list.
 	RoleListItem
+	// RoleTable is a table.
 	RoleTable
+	// RoleRow is a row of a table.
 	RoleRow
+	// RoleCell is a cell of a table row.
 	RoleCell
+	// RoleColumnHeader is the header of a table column.
 	RoleColumnHeader
+	// RoleScrollArea is a scrollable region.
 	RoleScrollArea
+	// RoleScrollBar is a scroll bar (its value is a range, see SemNode.Range).
 	RoleScrollBar
+	// RoleSplitter is a draggable divider between two panes.
 	RoleSplitter
+	// RoleTabList is the container of a set of tabs.
 	RoleTabList
+	// RoleTab is a tab.
 	RoleTab
+	// RoleTabPanel is the content shown for a tab.
 	RoleTabPanel
+	// RoleMenuBar is a menu bar.
 	RoleMenuBar
+	// RoleMenu is a menu or popup menu.
 	RoleMenu
+	// RoleMenuItem is an item of a menu.
 	RoleMenuItem
+	// RoleMenuItemCheckbox is a menu item that can be checked.
 	RoleMenuItemCheckbox
+	// RoleDialog is a dialog.
 	RoleDialog
+	// RoleTooltip is a tooltip.
 	RoleTooltip
+	// RoleProgressBar is a progress indicator (its value is a range, see SemNode.Range).
 	RoleProgressBar
 )
 
@@ -118,6 +151,15 @@ func (c *Context) NextRole(r Role) { c.semNext.role = r }
 // is copied.
 func (c *Context) NextSemName(s string) { c.semNext.name = c.semA.AppendString(s) }
 
+// SetSemNameBytes names box id, which was built in this frame with a role, from
+// bytes (copied): for a name that is known only from the box's content, after
+// the box was built. It does nothing for a box without a role.
+func (c *Context) SetSemNameBytes(id ID, b []byte) {
+	if r := c.semOf(id); r != nil {
+		r.name = c.semA.AppendBytes(b)
+	}
+}
+
 // NextSemNameBytes is NextSemName for bytes (such as a Fmt result).
 func (c *Context) NextSemNameBytes(b []byte) { c.semNext.name = c.semA.AppendBytes(b) }
 
@@ -165,9 +207,13 @@ const (
 // and Value are (offset, length) pairs into SemTree.Bytes, and the tree is
 // linked by indices into SemTree.Nodes, -1 for none.
 type SemNode struct {
-	Key     Key
-	Role    Role
-	State   SemState
+	// Key is the key of the box.
+	Key Key
+	// Role is the box's role.
+	Role Role
+	// State is the node's state bits.
+	State SemState
+	// Actions are the actions the node supports.
 	Actions SemAction
 	Bounds  [4]float32 // x0, y0, x1, y1 in window pixels
 	// Parent is the nearest ancestor box that has a role (an overlay's is the
@@ -188,6 +234,7 @@ type SemNode struct {
 // SemTree is a snapshot of the semantic tree. Nodes are in build order, parents
 // before children; Nodes[0] is the window.
 type SemTree struct {
+	// Nodes are the tree's nodes in build order; Nodes[0] is the window.
 	Nodes []SemNode
 	Bytes []byte // the text of the names and values
 	// Dropped is the number of boxes with a role left out of the last export
@@ -312,6 +359,34 @@ func (c *Context) Semantics(dst *SemTree) {
 			pr.lastChild = self
 		}
 		dst.Nodes = append(dst.Nodes, n)
+	}
+	c.semFocusBubble(dst)
+}
+
+// semFocusBubble marks the node of the nearest ancestor with a role as focused
+// when the focused box has none of its own (a widget whose inner box takes the
+// keyboard, such as the scrolling body of a table): the focus is then reported
+// on the widget. The window's node is never marked this way.
+func (c *Context) semFocusBubble(dst *SemTree) {
+	if c.focusKey == 0 {
+		return
+	}
+	for i := range dst.Nodes {
+		if dst.Nodes[i].State&SemFocused != 0 {
+			return
+		}
+	}
+	v, ok := c.table.Get(uint64(c.focusKey))
+	if !ok {
+		return
+	}
+	for p := c.boxes[v].parent; p != 0 && p != c.root; p = c.boxes[p].parent {
+		if sem := c.boxes[p].sem; sem != 0 {
+			if n := c.sems[sem-1].node; n >= 0 && int(n) < len(dst.Nodes) {
+				dst.Nodes[n].State |= SemFocused
+			}
+			return
+		}
 	}
 }
 

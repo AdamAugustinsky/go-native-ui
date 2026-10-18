@@ -93,6 +93,12 @@ func (c *Context) layout() {
 					flow = true
 				default:
 					rel = p.pad[a] - float32(p.scroll[a])
+					if room := p.size[a] - p.padSum(a) - cb.size[a]; p.cross != CrossStart && room > 0 {
+						if p.cross == CrossCenter {
+							room = snap(room / 2)
+						}
+						rel += room
+					}
 				}
 				cb.origin[a] = p.origin[a] + rel
 			}

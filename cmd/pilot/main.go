@@ -1,5 +1,6 @@
-// Command pilot is the dual-pane file browser on app + ui + fs, in the Rex look
-// (cmd/internal/rexkit); the scene lives in package pilot. It builds on every OS.
+// Command pilot is the dual-pane file browser on app + ui + fs, built from the
+// widget kit and the Rex theme; the scene lives in package pilot. It builds on
+// every OS. The window follows the system's light or dark mode and accent colour.
 //
 //	pilot [left [right]]        show the window; both panes start in the home directory by default
 //	pilot -exit-first -v        print the startup timeline as JSON (and exec → listings ready on
@@ -17,6 +18,8 @@
 //	pilot -o out.png LEFT [RIGHT]
 //	                            render the first frame for real directories, without traffic lights (the
 //	                            expected complete content for tools/bouncerec)
+//	pilot -o out.png -mode dark the picture in the dark mode (-mode light, the default with -o; -mode system
+//	                            renders what this machine says)
 //
 // Startup is content-first: both start directories are listed and sorted on
 // goroutines that run before the window system is touched, and the first frame
@@ -38,6 +41,8 @@ import (
 	"gonativeui/fs"
 	"gonativeui/internal/sysinfo"
 	"gonativeui/platform"
+	"gonativeui/theme"
+	"gonativeui/ui"
 )
 
 const (
@@ -74,15 +79,20 @@ func main() {
 	timeout := flag.Duration("timeout", 180*time.Second, "with -bench: give up after this long")
 	sites := flag.Bool("allocsites", false, "with -bench: profile every allocation and print the call stacks of those inside the measured frames")
 	resizeTest := flag.Bool("live-resize-test", false, "macOS: drag the window size through the frame handler (as a user resizing does) and print the result as JSON")
+	mode := flag.String("mode", "light", "with -o: light (the default), dark or system (what this machine says)")
 	verbose := flag.Bool("v", false, "print the startup timeline and listing times to stderr; in a window or bench also a state line every second while frames stop coming")
 	flag.Parse()
 
-	var err error
+	look, err := parseLook(*mode)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "pilot:", err)
+		os.Exit(2)
+	}
 	switch {
 	case *out != "" && flag.NArg() > 0:
-		err = renderDirsPNG(*out, *w, *h, float32(*scale), flag.Args())
+		err = renderDirsPNG(*out, *w, *h, float32(*scale), flag.Args(), look)
 	case *out != "":
-		err = renderPNG(*out, *w, *h, float32(*scale))
+		err = renderPNG(*out, *w, *h, float32(*scale), look)
 	case *resizeTest:
 		err = runResizeTest(flag.Args())
 	case *bench:
@@ -96,8 +106,23 @@ func main() {
 	}
 }
 
-func renderPNG(path string, w, h int, scale float32) error {
-	quads, calls, err := pilot.RenderShot(path, w, h, scale, true)
+// parseLook maps the -mode flag to how a picture is made: an offscreen window
+// has no system, so "system" asks this machine.
+func parseLook(mode string) (pilot.Look, error) {
+	switch mode {
+	case "light":
+		return pilot.Look{Preference: theme.ForceLight}, nil
+	case "dark":
+		return pilot.Look{Preference: theme.ForceDark}, nil
+	case "system":
+		a := platform.SystemAppearance()
+		return pilot.Look{Preference: theme.System, System: ui.Appearance{Dark: a.Dark, Accent: a.Accent, Known: a.Known}}, nil
+	}
+	return pilot.Look{}, fmt.Errorf("-mode %q: want light, dark or system", mode)
+}
+
+func renderPNG(path string, w, h int, scale float32, look pilot.Look) error {
+	quads, calls, err := pilot.RenderShotLook(path, w, h, scale, true, look)
 	if err != nil {
 		return err
 	}
@@ -146,7 +171,7 @@ func runResizeTest(args []string) error {
 
 // renderDirsPNG renders the first frame for real directories (pilot -o out.png
 // LEFT [RIGHT]), the expected content for BounceRec.
-func renderDirsPNG(path string, w, h int, scale float32, args []string) error {
+func renderDirsPNG(path string, w, h int, scale float32, args []string, look pilot.Look) error {
 	home, _ := os.UserHomeDir()
 	var dirs [2]string
 	for i := range dirs {
@@ -156,7 +181,7 @@ func renderDirsPNG(path string, w, h int, scale float32, args []string) error {
 		}
 		dirs[i] = startDir(a, home)
 	}
-	quads, calls, err := pilot.RenderDirsShot(path, w, h, scale, home, dirs)
+	quads, calls, err := pilot.RenderDirsShotLook(path, w, h, scale, home, dirs, look)
 	if err != nil {
 		return err
 	}

@@ -57,14 +57,20 @@ func TestFormatsDoNotAllocate(t *testing.T) {
 	}
 }
 
-func TestNameSetAndHash(t *testing.T) {
-	var s nameSet
+func TestNameMapAndHash(t *testing.T) {
+	var s nameMap
 	s.reset(3)
-	for _, n := range []string{"a", "bb", "ccc"} {
-		s.add(nameHash([]byte(n)))
+	for i, n := range []string{"a", "bb", "ccc"} {
+		s.add(nameHash([]byte(n)), uint32(i+10))
 	}
-	s.add(nameHash([]byte("a")))
-	if s.n != 3 || !s.has(nameHash([]byte("bb"))) || s.has(nameHash([]byte("d"))) {
-		t.Errorf("set: %d entries", s.n)
+	s.add(nameHash([]byte("a")), 99) // the first number stays
+	if v, ok := s.get(nameHash([]byte("a"))); s.n != 3 || !ok || v != 10 {
+		t.Errorf("a: %d entries, got %d %v", s.n, v, ok)
+	}
+	if v, ok := s.get(nameHash([]byte("bb"))); !ok || v != 11 {
+		t.Errorf("bb: got %d %v", v, ok)
+	}
+	if _, ok := s.get(nameHash([]byte("d"))); ok {
+		t.Error("d is not in the map")
 	}
 }

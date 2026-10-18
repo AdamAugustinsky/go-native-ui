@@ -80,6 +80,7 @@ func init() { runtime.LockOSThread() }
 type EventKind uint8
 
 const (
+	// EvNone is no event (the zero value).
 	EvNone          EventKind = iota
 	EvClose                   // the user asked to close the window
 	EvResize                  // W, H (physical pixels) and Scale changed
@@ -111,6 +112,7 @@ const (
 type Mods uint16
 
 const (
+	// ModShift, ModCtrl and ModAlt are the Shift, Control and Alt (Option on macOS) keys.
 	ModShift Mods = 1 << iota
 	ModCtrl
 	ModAlt
@@ -121,6 +123,8 @@ const (
 type Button uint8
 
 const (
+	// ButtonNone is no button (the zero value); ButtonLeft, ButtonRight and ButtonMiddle are the
+	// main buttons and ButtonBack and ButtonForward the side buttons.
 	ButtonNone Button = iota
 	ButtonLeft
 	ButtonRight
@@ -134,6 +138,8 @@ const (
 type Key uint16
 
 const (
+	// KeyUnknown is a key without a name here (Event.Code still identifies it). The keys after it, up to
+	// KeyF12, are the named non-character keys; KeyF1..KeyF12 are contiguous.
 	KeyUnknown Key = iota
 	KeyEscape
 	KeyEnter
@@ -185,14 +191,22 @@ const (
 )
 
 // TextRef locates UTF-8 text in the Window's per-Wait text buffer.
-type TextRef struct{ Off, Len uint32 }
+type TextRef struct {
+	// Off is the byte offset into the buffer and Len the length in bytes.
+	Off, Len uint32
+}
 
 // Event is one input or window event. It is pointer-free.
 type Event struct {
-	Kind   EventKind
+	// Kind is the kind of event; it says which of the other fields are set.
+	Kind EventKind
+	// Button is the button of an EvPointerButton.
 	Button Button
-	Flags  Flags
-	Mods   Mods
+	// Flags qualify the event (FlagDown, FlagRepeat, FlagPrecise, FlagFailed).
+	Flags Flags
+	// Mods are the modifier keys held at the event.
+	Mods Mods
+	// Key is the key of an EvKey.
 	Key    Key
 	Code   uint32  // raw OS key code (macOS keyCode, Windows scancode, evdev/X11 keycode)
 	X, Y   float32 // pointer position, physical pixels, origin at the content's top-left
@@ -216,6 +230,7 @@ type Event struct {
 
 // Options configure Open.
 type Options struct {
+	// Title is the window title.
 	Title         string
 	Width, Height int // logical units (points / DIPs)
 	// MinWidth, MinHeight bound the content size the user can resize the
@@ -356,8 +371,10 @@ func Now() int64 { return nanotime() }
 
 // Stage is one named timestamp (Now) of Open's startup timeline.
 type Stage struct {
+	// Name names the stage.
 	Name string
-	T    int64
+	// T is the stage's time in Now() nanoseconds.
+	T int64
 }
 
 var (

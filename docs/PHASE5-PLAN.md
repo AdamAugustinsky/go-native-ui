@@ -417,10 +417,40 @@ The protocol work starts at once, in platform files only. Its integration into `
   - a Wayland input method (text-input-v3; scripted compositor only).
   - Not done: the X11 PRIMARY selection and an X11 input method. Tested only against scripted compositors (Sway for the clipboard), not GNOME or KDE.
 - **Pilot's gated bench** includes copy, cut, paste and undo through the platform clipboard on every OS.
+- **Sleeping without allocating:**
+  - **`core.Parker`:** a pipe read in the netpoller on Unix, an event wait on Windows; no runtime sudog.
+  - **`core.Mutex`:** TryLock plus spinning; it never parks, and is meant for short critical sections only.
+  - **Use:** the `fs` workers and shared locks use them, and `primeSudogs` is gone.
+  - **Why:** this was the cause of the intermittent macOS CI gate failure. A probe on the runner found `sync.Cond.Wait` allocating a sudog in the `fs` workers.
+  - **Result:** Pilot's gate now passes on the first window on macOS, Windows and Linux Wayland, at 100k and 1M rows.
+
+- **Widgets and the gallery (step 4):**
+  - all the planned widgets, in light and dark;
+  - the gallery in CI on all three OSes, with the exact allocation gate;
+  - a 1M-row table at 0.7–1.4 ms of CPU per frame;
+  - keyboard reachability and semantics tests.
+- **Following the system mode:** `theme.Follower` is the one implementation, used by `widget.Kit` and rexlook. The first frame is in the system mode; later changes crossfade.
+- **rexlook port (step 5):**
+  - on `theme`, `theme/rex` and `icon`;
+  - light is pixel-identical to before (0 pixels in 15 scenes), and rexcompare is 40/40;
+  - dark, following the system.
+- **Doc comments:** every exported identifier of the public packages has one; `tools/doccheck` runs in CI.
+
+- **Pilot port (step 5):** on `widget.Table` with `Selection`, `widget.Splitter`, `widget.TextField`, the Rex theme's chrome; follows the system mode (dark Rex).
+  - The port found two real bugs: the glass sampled the background at the wrong offset inside a splitter, which the gallery had too, and the panes sat 1 px low. Both are fixed.
+  - Remaining differences from the phase-4 render (5% of pixels, all in the content) come from the shared table: a semibold header, row padding, and a 2 pt focus ring.
+  - Gates: 0 allocations, 0.5–0.6 ms CPU per frame at 1M rows in CI, both listings in the first frame.
+  - `cmd/internal/rexkit` is deleted: rexlook, Pilot and the gallery use only public packages.
+
+- **Guide (step 6):** `docs/GUIDE.md` builds `examples/notes` step by step.
+  - Every code block is an excerpt of the real example, checked by a test.
+  - The example is gated in CI on all three OSes: 0 allocations, 0.5–1.2 ms CPU per frame, 3.6–6.9 MB binaries.
+  - Writing it surfaced API friction. For example, the obvious minimal app drew only the background, and two byte-labels in one container collided. It is being fixed before the review.
 
 **In progress:**
+- the API friction fixes from the guide;
 - widgets and the gallery (step 4);
-- sudog-free worker parking. This is the cause of the intermittent macOS CI gate failure: a probe on the runner found the runtime allocating when the `fs` workers park.
+- X11: Pilot's gate needs a second window there (4–9 allocations in the first, likely the X11 clipboard warming up); being located.
 
 **Known gaps so far:**
 - Pilot's startup on Windows CI is about 160–180 ms (amd64), over the 150 ms budget.

@@ -17,7 +17,10 @@ import (
 // Span locates bytes in an Arena by offset and length. Spans stay valid when
 // the arena grows, which is why they, and not slices, are the handles that
 // pointer-free records store.
-type Span struct{ Off, Len uint32 }
+type Span struct {
+	// Off is the byte offset into the arena and Len the length in bytes.
+	Off, Len uint32
+}
 
 // Arena is an append-only byte arena. Reset empties it but keeps its
 // capacity, so a warmed arena never allocates.

@@ -1,7 +1,7 @@
 package rex
 
 import (
-	"gonativeui/cmd/internal/rexkit"
+	"gonativeui/theme"
 	"gonativeui/ui"
 )
 
@@ -9,9 +9,9 @@ import (
 // screenshot; the others have their own panes so that switching tabs shows
 // something.
 var tabStyles = [...]tabStyle{
-	{front: 0xF6F6F4FF, border: rexkit.ColA(0x000000, 0.18), backs: [2]uint32{0x52B35B, 0x2F8F4E}, step: 11, iconX: 23, textX: 112, icon: icTabAgent, symbol: 0x23262B},
-	{front: 0xF6EFD6FF, border: rexkit.ColA(0x000000, 0.18), backs: [2]uint32{0x3C7DBE, 0}, step: 12, iconX: 21, textX: 99, icon: icTabFace, symbol: 0x3A3A3C},
-	{front: 0x2B2D30FF, border: rexkit.ColA(0x000000, 0.35), backs: [2]uint32{0xF0963C, 0xA266DA}, step: 8, iconX: 21, textX: 97, icon: icTabTerm, symbol: 0x6FE08A},
+	{front: 0xF6F6F4FF, border: theme.ColA(0x000000, 0.18), backs: [2]uint32{0x52B35B, 0x2F8F4E}, step: 11, iconX: 23, textX: 112, icon: icTabAgent, symbol: 0x23262B},
+	{front: 0xF6EFD6FF, border: theme.ColA(0x000000, 0.18), backs: [2]uint32{0x3C7DBE, 0}, step: 12, iconX: 21, textX: 99, icon: icTabFace, symbol: 0x3A3A3C},
+	{front: 0x2B2D30FF, border: theme.ColA(0x000000, 0.35), backs: [2]uint32{0xF0963C, 0xA266DA}, step: 8, iconX: 21, textX: 97, icon: icTabTerm, symbol: 0x6FE08A},
 }
 
 func (r *Rex) initTabs() {

@@ -13,7 +13,12 @@ import (
 )
 
 // Native holds the OS handles the gpu package needs.
-type Native struct{ HWND, HInstance uintptr }
+type Native struct {
+	// HWND is the window's HWND.
+	HWND uintptr
+	// HInstance is the HINSTANCE of the executable (GetModuleHandleW(NULL)).
+	HInstance uintptr
+}
 
 // ---- Win32 constants ------------------------------------------------------
 

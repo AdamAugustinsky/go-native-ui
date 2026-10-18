@@ -28,6 +28,7 @@ package platform
 
 // Appearance is the system's light or dark mode and its accent colour.
 type Appearance struct {
+	// Dark is true when the system is in dark mode.
 	Dark bool
 	// Accent is the user's accent colour, RGBA8 (0xRRGGBBAA); 0 when the
 	// system has none or it is not known.

@@ -198,15 +198,19 @@ func TestParkerCloseRace(t *testing.T) {
 // under test does so in every attempt.
 const attempts = 3
 
-// zeroAfterFirst reports whether every window but the first allocated nothing;
-// the first one follows a collection and may hold its allocations.
-func zeroAfterFirst(deltas []uint64) bool {
+// cleanWindow reports whether a window after the first allocated nothing (the
+// first follows a collection and may hold its allocations). The counters are
+// process-wide, so the runtime's own one-offs (a new thread, its timer heap)
+// can land in any window, more often on a busy CI runner; an allocation per
+// park, wake or lock (thousands per window) is in every window and fails. The
+// rule is the bench gate's (D27).
+func cleanWindow(deltas []uint64) bool {
 	for _, d := range deltas[1:] {
-		if d != 0 {
-			return false
+		if d == 0 {
+			return true
 		}
 	}
-	return true
+	return false
 }
 
 // Parking and waking, across Ps, allocates nothing: the sudogs of sync.Cond
@@ -273,7 +277,7 @@ func zeroAllocRing(t *testing.T, mk func() *Parker) {
 			runtime.ReadMemStats(&m1)
 			deltas[w] = m1.Mallocs - m0.Mallocs
 		}
-		if zeroAfterFirst(deltas[:]) {
+		if cleanWindow(deltas[:]) {
 			break
 		}
 		t.Logf("attempt %d: mallocs per window %v", attempt, deltas)
@@ -283,8 +287,8 @@ func zeroAllocRing(t *testing.T, mk func() *Parker) {
 		p.Unpark()
 	}
 	within(t, 10*time.Second, "players", wg.Wait)
-	if !zeroAfterFirst(deltas[:]) {
-		t.Errorf("mallocs per window over %d park/wake rounds: %v, want 0 after the first", rounds, deltas)
+	if !cleanWindow(deltas[:]) {
+		t.Errorf("mallocs per window over %d park/wake rounds: %v, want a window after the first with 0", rounds, deltas)
 	}
 }
 

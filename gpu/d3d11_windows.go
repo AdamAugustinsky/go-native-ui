@@ -323,7 +323,9 @@ func (s *Surface) Resize(w, h int32, scale float32) {
 // ID3D11DeviceContext (the Metal back end's device and command queue), for
 // gpu.NewRenderer. The surface keeps owning them.
 func (s *Surface) Device() uintptr { return s.dev }
-func (s *Surface) Queue() uintptr  { return s.ctx }
+
+// Queue returns the immediate ID3D11DeviceContext; see Device.
+func (s *Surface) Queue() uintptr { return s.ctx }
 
 // Frame is one frame being drawn: render into Target with commands issued on
 // CmdBuf, then call EndFrame.
