@@ -146,9 +146,17 @@ func (k *Kit) Space(pt float32) ui.ID {
 // Close it with EndWindow; a dialog is built after that. The background's
 // boxes and the window's box float, so that the content draws over the
 // background; an app that places its panes itself (as the gallery does) calls
-// Background and ui.Context.NextPos with theme.Floating instead, and an app
-// with a titlebar of its own builds Titlebar inside this box and leaves room
-// for it with NextPadding.
+// Background and ui.Context.NextPos with theme.Floating instead.
+//
+// A window whose titlebar the app has to draw (ui.Context.Decorations: Wayland
+// compositors that ask for client-side decorations) gets one: the theme's
+// titlebar with the title (Config.Title) and the minimise, maximise and close
+// buttons, which move, maximise and close the window, and the content below it.
+// Where the system draws the titlebar nothing is added, and the content starts
+// at the window's top: a macOS window without a custom titlebar has the
+// system's above its content, and one with a custom titlebar (app.Config.Titlebar)
+// builds its own band with Titlebar, which leaves the system's window buttons
+// their room (TitlebarResult.Free).
 func (k *Kit) BeginWindow() ui.ID {
 	c := k.c
 	k.Background()
@@ -157,7 +165,23 @@ func (k *Kit) BeginWindow() ui.ID {
 	if !k.lay.hasPad {
 		k.NextPad(k.r.Px.Pad / k.scale)
 	}
-	return k.container(ui.AxisY, ui.CrossStart, "window", ui.Px(float32(w)), ui.Px(float32(h)), fl)
+	deco := c.Decorations()
+	if deco.Client {
+		k.lay.pad[1] += k.r.Px.TitlebarH / k.scale // the band's height, in points
+	}
+	id := k.container(ui.AxisY, ui.CrossStart, "window", ui.Px(float32(w)), ui.Px(float32(h)), fl)
+	if deco.Client {
+		bar := k.Titlebar(c.WindowTitle(), theme.ButtonsCaption, deco.Maximized)
+		switch bar.Clicked {
+		case theme.ButtonClose:
+			c.RequestWindowAction(ui.ActionClose)
+		case theme.ButtonMinimise:
+			c.RequestWindowAction(ui.ActionMinimise)
+		case theme.ButtonMaximise:
+			c.RequestWindowAction(ui.ActionToggleMaximise)
+		}
+	}
+	return id
 }
 
 // EndWindow ends the box BeginWindow started.

@@ -275,3 +275,77 @@ func TestTitlebar(t *testing.T) {
 		t.Errorf("no buttons: free %v, want the full band", s.barRes.Free)
 	}
 }
+
+// A live macOS window has the system draw the window buttons over the
+// titlebar band (ui.Context.SystemButtons) and an offscreen render draws them
+// itself (ButtonsTraffic): both leave the app the same part of the band, at
+// every scale, so the layout of a window and of its screenshot cannot differ.
+// And a band the system draws nothing over is free from end to end.
+func TestTitlebarFreeIsTheSameForSystemAndDrawnButtons(t *testing.T) {
+	for _, scale := range []float32{1, 1.5, 2, 3} {
+		g := newRig(t, int(900*scale), int(560*scale), scale)
+		r := Theme().Resolve(g.ts, scale, theme.Light)
+		s := &scene{r: &r, focus: [2]float32{1, 0}}
+		W := float32(g.w)
+
+		s.buttons = theme.ButtonsTraffic
+		g.c.SetSystemButtons([4]float32{})
+		g.settle(s)
+		drawn := s.barRes.Free
+
+		s.buttons = theme.ButtonsNone
+		g.c.SetSystemButtons(theme.TrafficRect(scale))
+		g.settle(s)
+		system := s.barRes.Free
+
+		if drawn != system {
+			t.Errorf("scale %v: free %v with drawn buttons, %v with the system's", scale, drawn, system)
+		}
+		if want := theme.Snap(76*scale + r.Px.Gap); drawn != [2]float32{want, W} {
+			t.Errorf("scale %v: free %v, want [%v %v]", scale, drawn, want, W)
+		}
+
+		// buttons on the right of the band: the free part ends before them
+		g.c.SetSystemButtons([4]float32{W - 80*scale, 10, W - 10*scale, 40})
+		g.frame(s)
+		if want := theme.Snap(W - 80*scale - r.Px.Gap); s.barRes.Free != [2]float32{0, want} {
+			t.Errorf("scale %v: buttons on the right: free %v, want [0 %v]", scale, s.barRes.Free, want)
+		}
+
+		g.c.SetSystemButtons([4]float32{})
+		g.frame(s)
+		if s.barRes.Free != [2]float32{0, W} {
+			t.Errorf("scale %v: no buttons over the band: free %v, want the full band", scale, s.barRes.Free)
+		}
+	}
+}
+
+// The drawn traffic lights are where the geometry says (theme.TrafficDiscs),
+// which is where the system puts its own: the pixel under the centre of each
+// is the button's colour.
+func TestDrawnTrafficLightsSitAtTheSharedGeometry(t *testing.T) {
+	g := newRig(t, 900, 560, 2)
+	r := Theme().Resolve(g.ts, 2, theme.Light)
+	s := &scene{r: &r, focus: [2]float32{1, 0}, buttons: theme.ButtonsTraffic}
+	g.settle(s)
+	pix := g.pixels()
+	for i, d := range theme.TrafficDiscs(2) {
+		x, y := int((d[0]+d[2])/2), int((d[1]+d[3])/2)
+		c := g.at(pix, x, y)
+		red, green := (c>>24)&0xFF, (c>>16)&0xFF
+		switch i {
+		case 0:
+			if red < 200 || green > 160 {
+				t.Errorf("close button centre %d,%d is %#x, want red", x, y, c)
+			}
+		case 1:
+			if red < 200 || green < 160 {
+				t.Errorf("minimise button centre %d,%d is %#x, want yellow", x, y, c)
+			}
+		case 2:
+			if green < 160 || red > 200 {
+				t.Errorf("zoom button centre %d,%d is %#x, want green", x, y, c)
+			}
+		}
+	}
+}

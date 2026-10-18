@@ -249,3 +249,61 @@ func TestRowCentresItsChildren(t *testing.T) {
 		t.Errorf("with CrossStart the tops are %v and %v", sw.Bounds[1], bt.Bounds[1])
 	}
 }
+
+// Where the compositor leaves the window's decorations to the client (GNOME on
+// Wayland), an app that is no more than BeginWindow still has a titlebar: the
+// theme's, with a band that moves the window and the three buttons, under which
+// the content starts. The buttons ask the window (ui.Context.TakeWindowAction)
+// to close, minimise and maximise it. Where the system decorates, nothing is
+// added.
+func TestBeginWindowDrawsTheTitlebarWhereTheClientMust(t *testing.T) {
+	g := newRig(t, 800, 500, func(k *Kit) {
+		k.BeginWindow()
+		k.Button("Content")
+		k.EndWindow()
+	})
+	band := g.k.Theme().Px.TitlebarH
+	contentTop := func() float32 { return g.must(ui.RoleButton, "Content").Bounds[1] }
+	system := contentTop()
+	if _, ok := g.find(ui.RoleButton, "Close"); ok || g.c.TakeWindowAction() != ui.ActionNone {
+		t.Fatal("a window the system decorates has a titlebar of its own")
+	}
+
+	g.c.SetDecorations(ui.Decorations{Client: true})
+	g.frames(3)
+	if top := contentTop(); top < band || top < system+band-1 {
+		t.Errorf("content starts at y=%v with a %v px titlebar (%v without it)", top, band, system)
+	}
+	dragged := false
+	for _, d := range g.c.DragRegions(nil) {
+		dragged = dragged || (d.Rect[1] <= band/2 && d.Rect[3] >= band/2 && d.Rect[0] <= 400 && d.Rect[2] >= 400 && !d.Block)
+	}
+	if !dragged {
+		t.Error("the middle of the titlebar does not move the window")
+	}
+	for _, c := range []struct {
+		name string
+		want ui.WindowAction
+	}{{"Minimise", ui.ActionMinimise}, {"Maximise", ui.ActionToggleMaximise}, {"Close", ui.ActionClose}} {
+		g.clickOn(ui.RoleButton, c.name)
+		if got := g.c.TakeWindowAction(); got != c.want {
+			t.Errorf("%s asked for %d, want %d", c.name, got, c.want)
+		}
+		if g.c.TakeWindowAction() != ui.ActionNone {
+			t.Errorf("%s: the request stays after it was taken", c.name)
+		}
+	}
+
+	g.c.SetDecorations(ui.Decorations{Client: true, Maximized: true})
+	g.frames(2)
+	g.clickOn(ui.RoleButton, "Restore")
+	if got := g.c.TakeWindowAction(); got != ui.ActionToggleMaximise {
+		t.Errorf("Restore asked for %d", got)
+	}
+
+	g.c.SetDecorations(ui.Decorations{})
+	g.frames(3)
+	if _, ok := g.find(ui.RoleButton, "Close"); ok || contentTop() != system {
+		t.Error("the titlebar stays after the compositor took the decorations back")
+	}
+}

@@ -227,12 +227,16 @@ func (ch *chrome) Titlebar(c *ui.Context, r *theme.Resolved, t theme.Titlebar) t
 	theme.At(c, 0, 0, t.Width, h)
 	c.BoxKeyed(ui.WindowDrag|fl, ui.KeyN(keyBar, 99), nil)
 
-	res := theme.TitlebarResult{Free: [2]float32{0, t.Width}}
+	// The band the buttons leave: the system's own (ui.Context.SystemButtons;
+	// empty where the OS draws none over the content), or the decorative ones,
+	// which sit where the system's would, through the same function.
+	res := theme.TitlebarResult{Free: theme.FreeBand(t.Width, r.Px.Gap, c.SystemButtons())}
 	switch t.Buttons {
 	case theme.ButtonsTraffic:
 		trafficLights(c, r)
-		res.Free[0] = theme.Snap(76*r.Scale + r.Px.Gap)
+		res.Free = theme.FreeBand(t.Width, r.Px.Gap, theme.TrafficRect(r.Scale))
 	case theme.ButtonsCaption:
+		res.Free = [2]float32{0, t.Width}
 		res.Clicked, res.Free[1] = captionButtons(c, r, t, h)
 	}
 	if t.Title != "" {
@@ -255,24 +259,23 @@ func (ch *chrome) Titlebar(c *ui.Context, r *theme.Resolved, t theme.Titlebar) t
 }
 
 // trafficLights draws the three macOS window buttons (for offscreen output;
-// in a window the system draws them).
+// in a window the system draws them) at theme.TrafficDiscs.
 func trafficLights(c *ui.Context, r *theme.Resolved) {
 	kk := r.Scale / 2
 	kg := theme.KeyGen{Base: ui.KeyN(keyBar, 4)}
-	for _, l := range [...]struct {
-		cx          float32
+	discs := theme.TrafficDiscs(r.Scale)
+	for i, l := range [...]struct {
 		top, bottom uint32
 		ring        uint32
 	}{
-		{46, 0xEC766A, 0xE48980, 0xBF3A30},
-		{92, 0xF4C653, 0xF2C85E, 0xB5701F},
-		{138, 0x8ED064, 0x91D068, 0x3E8F30},
+		{0xEC766A, 0xE48980, 0xBF3A30},
+		{0xF4C653, 0xF2C85E, 0xB5701F},
+		{0x8ED064, 0x91D068, 0x3E8F30},
 	} {
-		d := 28 * kk
-		x0, y0 := theme.Snap(l.cx*kk-d/2), theme.Snap(46*kk-d/2)
-		theme.At(c, x0, y0, theme.Snap(l.cx*kk+d/2)-x0, theme.Snap(46*kk+d/2)-y0)
+		d := discs[i]
+		theme.At(c, d[0], d[1], d[2]-d[0], d[3]-d[1])
 		c.NextBG4(theme.Col(l.top), theme.Col(l.top), theme.Col(l.bottom), theme.Col(l.bottom))
-		c.NextRadius(d / 2)
+		c.NextRadius(theme.TrafficDiameterPt * r.Scale / 2)
 		c.NextBorder(theme.ColA(l.ring, 0.85), max(1, 1.5*kk))
 		c.BoxKeyed(ui.DrawBackground|ui.DrawBorder|fl, kg.Next(), nil)
 	}
@@ -286,6 +289,19 @@ var (
 		theme.GlyphRestore:  []byte("❐"),
 	}
 )
+
+// buttonName is the accessible name of a window button.
+func buttonName(b theme.WindowButton, maximised bool) string {
+	switch {
+	case b == theme.ButtonClose:
+		return "Close"
+	case b == theme.ButtonMinimise:
+		return "Minimise"
+	case maximised:
+		return "Restore"
+	}
+	return "Maximise"
+}
 
 // captionButtons draws minimise, maximise and close at the right end of the
 // band, each a full-height hit box with a rounded pill that lights on hover and
@@ -304,6 +320,8 @@ func captionButtons(c *ui.Context, r *theme.Resolved, t theme.Titlebar, h float3
 		x := left + float32(i)*bw
 		theme.At(c, x, 0, bw, h)
 		c.NextCursor(ui.CursorArrow)
+		c.NextRole(ui.RoleButton)
+		c.NextSemName(buttonName(b, t.Maximised))
 		id := c.BoxKeyed(ui.Clickable|ui.HotAnimation|ui.ActiveAnimation|fl, key, nil)
 		if c.Signal(id).Clicked {
 			clicked = b

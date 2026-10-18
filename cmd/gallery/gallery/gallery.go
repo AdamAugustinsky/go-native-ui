@@ -38,13 +38,14 @@ const DefaultRows = 1_000_000
 // listItems is the number of items of the small list.
 const listItems = 40
 
-// Config is the gallery's window: the Rex titlebar band (46 pt, traffic lights
-// at (21, 22)) at 1280×800 pt.
+// Config is the gallery's window: the Rex titlebar band (46 pt, the system's
+// window buttons where ButtonsTraffic draws its own, theme.TrafficCentrePt) at
+// 1280×800 pt.
 func Config() app.Config {
 	return app.Config{
 		Title: "Widget gallery", Width: WindowWidthPt, Height: WindowHeightPt,
 		MinWidth: MinWidthPt, MinHeight: MinHeightPt,
-		Titlebar: 46, TrafficLights: [2]float32{21, 22},
+		Titlebar: 46, TrafficLights: theme.TrafficCentrePt,
 		Clear: [4]float32{0.9, 0.9, 0.9, 1}, // the background mesh covers every pixel
 	}
 }
