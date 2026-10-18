@@ -635,6 +635,136 @@ func TestExpireJudgesEachRequestByItsOwnLimit(t *testing.T) {
 	}
 }
 
+// setClipHook installs a clipHook for the test.
+func setClipHook(t *testing.T, f func(stage int)) {
+	t.Helper()
+	clipHook.Store(&f)
+	t.Cleanup(func() { clipHook.Store(nil) })
+}
+
+// waitIdle polls, without pumping the window (so that nothing calls expire),
+// until the worker has no request running or waiting.
+func waitIdle(t *testing.T, c *clipWorker) {
+	t.Helper()
+	for end := time.Now().Add(5 * time.Second); time.Now().Before(end); time.Sleep(time.Millisecond) {
+		c.mu.Lock()
+		idle := c.run.kind == clipNone && c.copyReq.kind == clipNone && c.paste.kind == clipNone
+		c.mu.Unlock()
+		if idle {
+			return
+		}
+	}
+	t.Fatal("the worker did not finish")
+}
+
+// emptyClipboardOwnerless empties the clipboard with no window as its owner, so
+// that a later EmptyClipboard has no previous owner to wait for (and no
+// WM_DESTROYCLIPBOARD for a test that does not pump).
+func emptyClipboardOwnerless(t *testing.T) {
+	t.Helper()
+	for i := 0; i < 200; i++ {
+		if win32.Bool(win32.Call(pOpenClipboard, 0)) {
+			win32.Call(pEmptyClipboard)
+			win32.Call(pCloseClipboard)
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("could not open the clipboard")
+}
+
+// A native step that returns after the request's limit, with no expire in
+// between (the UI thread has not run), must not publish: a copy is not made and
+// a paste's answer is not left for the UI thread. The worker behaves as if
+// expire had cancelled the request.
+func TestALateNativeStepPublishesNothing(t *testing.T) {
+	late := func(t *testing.T, stage int) {
+		const timeout = 100 * time.Millisecond
+		shortPasteTimeout(t, timeout)
+		setClipHook(t, func(s int) {
+			if s == stage {
+				time.Sleep(timeout + clipGraceNs + 100*time.Millisecond)
+			}
+		})
+	}
+	t.Run("copy", func(t *testing.T) {
+		w := openTestWindow(t)
+		emptyClipboardOwnerless(t)
+		late(t, clipStageEmptied)
+		SetClipboardText([]byte("overdue copy"))
+		waitIdle(t, w.clip) // the window does not pump meanwhile
+		if got := Clipboard(); got != "" {
+			t.Errorf("the clipboard holds %q: a copy that ran out of time was made", got)
+		}
+	})
+	t.Run("paste", func(t *testing.T) {
+		w := openTestWindow(t) // the clipboard holds the probe text
+		late(t, clipStageDone)
+		w.RequestPaste(1)
+		waitIdle(t, w.clip)
+		w.clip.mu.Lock()
+		have := w.clip.have
+		w.clip.mu.Unlock()
+		if have {
+			t.Error("the answer of a paste that ran out of time was published")
+		}
+		// And the UI thread fails it.
+		got := waitPaste(w, time.Second)
+		if got.Kind != EvPaste || got.Flags&FlagFailed == 0 || got.Tag != 1 {
+			t.Errorf("answer %+v, want FlagFailed", got)
+		}
+	})
+}
+
+// A copy that was cancelled, or whose window was closed, before it opened the
+// clipboard does not empty it: the clipboard keeps its content.
+func TestCancelledCopyLeavesTheClipboardAlone(t *testing.T) {
+	cancel := func(w *Window) { w.clip.mu.Lock(); w.clip.run.cancelled = true; w.clip.mu.Unlock() }
+	closeIt := func(w *Window) { w.clip.mu.Lock(); w.clip.closed = true; w.clip.mu.Unlock() }
+	for _, tc := range []struct {
+		name  string
+		stage int
+		do    func(*Window)
+	}{
+		{"cancelled while encoding", clipStageEncoded, cancel},
+		{"closed while encoding", clipStageEncoded, closeIt},
+		{"cancelled while opening", clipStageOpened, cancel},
+		{"closed while opening", clipStageOpened, closeIt},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := openTestWindow(t)
+			SetClipboardText([]byte("existing content"))
+			settleCopy(w)
+			setClipHook(t, func(s int) {
+				if s == tc.stage {
+					tc.do(w)
+				}
+			})
+			SetClipboardText([]byte("replacement"))
+			waitIdleOrExit(t, w)
+			if got := Clipboard(); got != "existing content" {
+				t.Errorf("the clipboard holds %q, want what it held before", got)
+			}
+		})
+	}
+}
+
+// waitIdleOrExit pumps until the worker has finished the request (or ended
+// because it was closed).
+func waitIdleOrExit(t *testing.T, w *Window) {
+	t.Helper()
+	c := w.clip
+	for end := time.Now().Add(5 * time.Second); time.Now().Before(end); w.Wait(int64(2 * time.Millisecond)) {
+		c.mu.Lock()
+		idle := c.run.kind == clipNone && c.copyReq.kind == clipNone
+		c.mu.Unlock()
+		if idle || c.exited.Load() {
+			return
+		}
+	}
+	t.Fatal("the worker did not finish")
+}
+
 // powershell runs a script in Windows PowerShell, the other process of the
 // round trips.
 func powershell(t *testing.T, script string, env ...string) {

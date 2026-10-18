@@ -52,6 +52,24 @@ const (
 	clipCloseWait = 20 * time.Millisecond // how long Close waits for an idle worker to end
 )
 
+// clipHook, when set, is called on the worker's thread at the stages of a
+// request, for tests that make a native step late. Nil in the program.
+var clipHook atomic.Pointer[func(stage int)]
+
+// The stages clipHook is called at.
+const (
+	clipStageEncoded = iota // a copy has been encoded, the clipboard not yet opened
+	clipStageOpened         // a copy has the clipboard open, before it empties it
+	clipStageEmptied        // a copy has emptied the clipboard, before it publishes
+	clipStageDone           // a request has finished, before its result is published
+)
+
+func clipStage(stage int) {
+	if h := clipHook.Load(); h != nil {
+		(*h)(stage)
+	}
+}
+
 // The kinds of request the worker runs.
 const (
 	clipNone = iota
@@ -291,8 +309,9 @@ func (c *clipWorker) take() (r clipReq, owner uintptr, st int) {
 // request was cancelled, and the UI thread is told. It reports false when the
 // worker was closed meanwhile, which then ends.
 func (c *clipWorker) finish(r clipReq, n int, ok bool) bool {
+	clipStage(clipStageDone)
 	c.mu.Lock()
-	cancelled := c.run.cancelled
+	cancelled := !c.liveLocked(r) // overdue, as if expire had got to it first
 	c.run = clipRun{}
 	if c.closed {
 		c.mu.Unlock()
@@ -310,23 +329,45 @@ func (c *clipWorker) finish(r clipReq, n int, ok bool) bool {
 	return true
 }
 
-// live reports whether the request being run should go on: the worker is not
-// closed and the request was not cancelled.
-func (c *clipWorker) live() bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return !c.closed && !c.run.cancelled
+// liveLocked reports whether the request r being run may go on and publish: the
+// worker is not closed, the request was not cancelled, and it is not past its
+// limit. A request found past its limit is cancelled here, exactly as expire
+// would have done, so a native call that returns late cannot publish before the
+// UI thread's next expire. c.mu held.
+func (c *clipWorker) liveLocked(r clipReq) bool {
+	if c.closed || c.run.cancelled {
+		return false
+	}
+	if !c.run.committed && nanotime() >= r.give+clipGraceNs {
+		c.run.cancelled = true
+		return false
+	}
+	return true
 }
 
-// open opens the clipboard, retrying until the request's limit.
+// alive is liveLocked under the lock.
+func (c *clipWorker) alive(r clipReq) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.liveLocked(r)
+}
+
+// open opens the clipboard, retrying until the request's limit. It looks at
+// whether the request is still live before every try, so a request that is
+// cancelled or closed while it waits never takes the clipboard.
 func (c *clipWorker) open(owner uintptr, r clipReq) bool {
-	for !win32.Bool(win32.Call(pOpenClipboard, owner)) {
-		if nanotime() >= r.give || !c.live() {
+	for {
+		if !c.alive(r) {
+			return false
+		}
+		if win32.Bool(win32.Call(pOpenClipboard, owner)) {
+			return true
+		}
+		if nanotime() >= r.give {
 			return false
 		}
 		time.Sleep(clipOpenSleep)
 	}
-	return true
 }
 
 // read decodes the clipboard's text into c.buf. It reports the length and
@@ -337,7 +378,7 @@ func (c *clipWorker) read(owner uintptr, r clipReq) (n int, ok bool) {
 		return 0, false
 	}
 	buf := c.buf[:0]
-	if h := win32.Call(pGetClipboardData, cfUnicodeText); h != 0 && c.live() { // an owner that took its time may have been given up on
+	if h := win32.Call(pGetClipboardData, cfUnicodeText); h != 0 && c.alive(r) { // an owner that took its time may have been given up on
 		if p := win32.Call(pGlobalLock, h); p != 0 {
 			u := unsafe.Slice((*uint16)(win32.Ptr(p)), int(win32.Call(pGlobalSize, h))/2)
 			buf = slices.Grow(buf, min(3*len(u), MaxPaste+4)) // a unit is at most 3 bytes of UTF-8
@@ -351,21 +392,31 @@ func (c *clipWorker) read(owner uintptr, r clipReq) (n int, ok bool) {
 }
 
 // write puts c.cwork on the clipboard as CF_UNICODETEXT. If the clipboard
-// stays busy until the request's limit, the copy is dropped. It publishes only
-// if the request is still current when EmptyClipboard (which may take the whole
-// time the previous owner needs) has returned.
+// stays busy until the request's limit, the copy is dropped. The clipboard is
+// emptied only if the request is still live when it has been opened, and the
+// text is published only if it is still live (not cancelled, closed or past its
+// limit) when EmptyClipboard, which may take the whole time the previous owner
+// needs, has returned.
 func (c *clipWorker) write(owner uintptr, r clipReq) {
 	mem := allocClipboardText(c.cwork)
 	if mem == 0 {
 		return
 	}
+	clipStage(clipStageEncoded)
 	if !c.open(owner, r) {
 		win32.Call(pGlobalFree, mem)
 		return
 	}
+	clipStage(clipStageOpened)
+	if !c.alive(r) { // cancelled while the clipboard was being opened: leave it as it is
+		win32.Call(pCloseClipboard)
+		win32.Call(pGlobalFree, mem)
+		return
+	}
 	win32.Call(pEmptyClipboard) // waits for the previous owner's WM_DESTROYCLIPBOARD
+	clipStage(clipStageEmptied)
 	c.mu.Lock()
-	if c.closed || c.run.cancelled {
+	if !c.liveLocked(r) {
 		c.mu.Unlock()
 		win32.Call(pGlobalFree, mem)
 	} else {
