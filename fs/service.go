@@ -47,8 +47,10 @@ type Service struct {
 	// UI-thread scratch.
 	changes []Change
 
-	mu      sync.Mutex
-	cond    *sync.Cond // signalled when the job queue gains work or the service closes
+	// mu is a core.Mutex: a contended sync.Mutex parks its waiter on a runtime
+	// sudog, which is heap-allocated when the P's cache and the central list
+	// are empty (see core.Parker). Nothing under mu does I/O or blocks.
+	mu      core.Mutex
 	closed  bool
 	nextReq uint64
 	ids     map[uint32]*idState
@@ -68,9 +70,16 @@ type Service struct {
 	opens  int    // Open calls in flight
 	openFn func(path string) error
 
+	// The workers and the control goroutine sleep in core.Parkers, which take
+	// no runtime sudog (a sync.Cond or channel wait does, and allocates one on
+	// a P that has none). idle[i] says worker i is (about to be) parked and
+	// has not been woken since; it is guarded by mu, and a wake that arrives
+	// before the Park is kept by the Parker.
+	parks   [numWorkers]*core.Parker
+	idle    [numWorkers]bool
+	ctlPark *core.Parker
+
 	ops   []ctlOp
-	ctl   chan struct{}
-	done  chan struct{} // closed by Close
 	w     watcher
 	werrs []Result // watch and open errors waiting for Poll
 }
@@ -183,15 +192,16 @@ func newService(wake func(), list func(string, *Listing) error, nw func(func()) 
 		ring:   core.NewRing[resMsg](ringCapacity),
 		ids:    make(map[uint32]*idState),
 		slotOf: make(map[*Listing]int32),
-		ctl:    make(chan struct{}, 1),
-		done:   make(chan struct{}),
 	}
-	s.cond = sync.NewCond(&s.mu)
+	for i := range s.parks {
+		s.parks[i] = core.NewParker()
+	}
+	s.ctlPark = core.NewParker()
 	s.timer = time.AfterFunc(time.Hour, wake)
 	s.timer.Stop()
 	for i := 0; i < numWorkers; i++ {
 		s.wg.Add(1)
-		go s.worker()
+		go s.worker(i)
 	}
 	s.wg.Add(1)
 	go s.control()
@@ -226,9 +236,21 @@ func (s *Service) enqueueLocked(id uint32, st *idState, path string, key SortKey
 	if !st.pending {
 		st.pending = true
 		s.queue = append(s.queue, id)
-		s.cond.Signal()
+		s.wakeWorkerLocked()
 	}
 	return st.req
+}
+
+// wakeWorkerLocked wakes one parked worker, if there is one: a worker that is
+// busy looks at the queue again when it finishes. s.mu held.
+func (s *Service) wakeWorkerLocked() {
+	for i := range s.idle {
+		if s.idle[i] {
+			s.idle[i] = false
+			s.parks[i].Unpark()
+			return
+		}
+	}
 }
 
 // invalidateLocked drops id's list request: a queued job will not run (its
@@ -286,12 +308,7 @@ func (s *Service) unwatchLocked(id uint32, st *idState) {
 	s.ops = append(s.ops, ctlOp{id: id, gen: st.wgen})
 }
 
-func (s *Service) kick() {
-	select {
-	case s.ctl <- struct{}{}:
-	default:
-	}
-}
+func (s *Service) kick() { s.ctlPark.Unpark() }
 
 // maxOpens bounds the Open calls in flight; opens beyond it fail at once.
 const maxOpens = 8
@@ -396,12 +413,21 @@ func (s *Service) freeSlotLocked(slot int32) {
 	s.free = append(s.free, slot)
 }
 
-func (s *Service) worker() {
+func (s *Service) worker(i int) {
 	defer s.wg.Done()
+	park := s.parks[i]
 	for {
 		s.mu.Lock()
 		for s.qhead == len(s.queue) && !s.closed {
-			s.cond.Wait()
+			s.idle[i] = true
+			s.mu.Unlock()
+			ok := park.Park()
+			s.mu.Lock()
+			s.idle[i] = false // a wake from Close or a stale token leaves it set
+			if !ok {          // the Parker was closed by Close
+				s.mu.Unlock()
+				return
+			}
 		}
 		if s.closed {
 			s.mu.Unlock()
@@ -461,9 +487,13 @@ func (s *Service) worker() {
 func (s *Service) control() {
 	defer s.wg.Done()
 	for {
-		select {
-		case <-s.ctl:
-		case <-s.done:
+		if !s.ctlPark.Park() {
+			return
+		}
+		s.mu.Lock()
+		closed := s.closed
+		s.mu.Unlock()
+		if closed {
 			return
 		}
 		for {
@@ -690,9 +720,11 @@ func (s *Service) Close() {
 		return
 	}
 	s.closed = true
-	s.cond.Broadcast()
+	for _, p := range s.parks {
+		p.Unpark()
+	}
+	s.ctlPark.Unpark()
 	s.mu.Unlock()
-	close(s.done)
 	stopped := make(chan struct{})
 	go func() { s.wg.Wait(); close(stopped) }()
 	select {
@@ -700,6 +732,10 @@ func (s *Service) Close() {
 	case <-time.After(closeWait):
 	}
 	s.timer.Stop()
+	for _, p := range s.parks { // a goroutine detached above returns from its Park
+		p.Close()
+	}
+	s.ctlPark.Close()
 	s.mu.Lock()
 	w := s.w
 	s.w = nil

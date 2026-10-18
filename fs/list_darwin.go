@@ -5,9 +5,10 @@ package fs
 import (
 	"encoding/binary"
 	"os"
-	"sync"
 	"syscall"
 	"unsafe"
+
+	"gonativeui/core"
 )
 
 // getattrlistbulk(2) lists a directory with the attributes of every entry
@@ -60,7 +61,7 @@ type bulkScratch struct {
 }
 
 var (
-	scratchMu   sync.Mutex
+	scratchMu   core.Mutex
 	scratchFree []*bulkScratch
 )
 

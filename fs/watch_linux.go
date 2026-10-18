@@ -9,6 +9,8 @@ import (
 	"sync"
 	"syscall"
 	"unsafe"
+
+	"gonativeui/core"
 )
 
 // inotify watcher.
@@ -92,7 +94,7 @@ type lxWatcher struct {
 	ws     []lxWatch
 	closed bool
 
-	pmu  sync.Mutex
+	pmu  core.Mutex
 	pend []Change
 }
 

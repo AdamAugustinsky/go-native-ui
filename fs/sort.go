@@ -4,9 +4,10 @@ import (
 	"bytes"
 	"math"
 	"slices"
-	"sync"
 	"unicode"
 	"unicode/utf8"
+
+	"gonativeui/core"
 )
 
 // Name order. Names compare as natural, case-insensitive UTF-8:
@@ -45,7 +46,7 @@ type sorter struct {
 }
 
 var (
-	sorterMu   sync.Mutex
+	sorterMu   core.Mutex
 	sorterFree []*sorter
 )
 

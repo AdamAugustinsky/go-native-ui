@@ -8,6 +8,8 @@ import (
 	"sync"
 	"syscall"
 	"unsafe"
+
+	"gonativeui/core"
 )
 
 // kqueue watcher.
@@ -93,7 +95,7 @@ type kqWatcher struct {
 	nfiles int
 	closed bool
 
-	pmu     sync.Mutex // guards pending (drain never waits for file system work)
+	pmu     core.Mutex // guards pending (drain never waits for file system work)
 	pending []Change
 
 	scrChanged []Change // process's scratch (one caller at a time)
