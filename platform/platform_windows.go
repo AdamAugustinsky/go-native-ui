@@ -265,7 +265,6 @@ type Window struct {
 	pasteGive int64
 	clipDue   int64
 	clip      *clipWorker // reads the clipboard for pastes; nil until the first one
-	jobGive   int64       // the time limit of the worker's current request (0: none out)
 
 	// Input method state (ime_windows.go): the composition is on screen, the
 	// caret rectangle the app reported, and storage the IME calls write into.
@@ -517,10 +516,6 @@ func (w *Window) Close() {
 	if w.clip != nil { // its thread ends with the read it may be in
 		w.clip.abandon()
 		w.clip = nil
-	}
-	if pendingSet != 0 { // the copy that never got the clipboard
-		win32.Call(pGlobalFree, pendingSet)
-		pendingSet = 0
 	}
 	hwnd := w.hwnd
 	w.hwnd = 0

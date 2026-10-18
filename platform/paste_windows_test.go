@@ -29,12 +29,30 @@ func openTestWindow(t *testing.T) *Window {
 	}
 	t.Cleanup(w.Close)
 	orig := Clipboard()
-	t.Cleanup(func() { SetClipboard(orig) })
+	t.Cleanup(func() {
+		SetClipboardText([]byte(orig))
+		settleCopy(w)
+	})
 	SetClipboardText([]byte("gonativeui clipboard probe"))
+	settleCopy(w)
 	if got := Clipboard(); got != "gonativeui clipboard probe" {
 		t.Skipf("the clipboard cannot be written here: it holds %q", got)
 	}
 	return w
+}
+
+// settleCopy pumps the window until the worker has no copy waiting or running
+// (at most 2 s).
+func settleCopy(w *Window) {
+	for end := time.Now().Add(2 * time.Second); w.clip != nil && time.Now().Before(end); {
+		w.clip.mu.Lock()
+		busy := w.clip.copyReq.kind != clipNone || w.clip.run.kind == clipCopy
+		w.clip.mu.Unlock()
+		if !busy {
+			return
+		}
+		w.Wait(int64(time.Millisecond))
+	}
 }
 
 // paste requests a paste and waits for its answer.
@@ -73,9 +91,9 @@ func waitPaste(w *Window, d time.Duration) Event {
 // shortPasteTimeout shortens the time a paste waits, for the tests that wait
 // it out.
 func shortPasteTimeout(t *testing.T, d time.Duration) {
-	old := clipPasteTimeoutNs
-	clipPasteTimeoutNs = int64(d)
-	t.Cleanup(func() { clipPasteTimeoutNs = old })
+	old := clipTimeoutNs
+	clipTimeoutNs = int64(d)
+	t.Cleanup(func() { clipTimeoutNs = old })
 }
 
 func TestSetClipboardTextAndRequestPaste(t *testing.T) {
@@ -96,7 +114,15 @@ func TestSetClipboardTextAndRequestPaste(t *testing.T) {
 		t.Errorf("invalid UTF-8 pasted as %q", got)
 	}
 	// No text on the clipboard: the paste fails.
-	win32.Call(pOpenClipboard, w.hwnd)
+	opened := false
+	for i := 0; i < 200 && !opened; i++ { // another program (a clipboard manager) may have it open for a moment
+		if opened = win32.Bool(win32.Call(pOpenClipboard, w.hwnd)); !opened {
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+	if !opened {
+		t.Fatal("could not open the clipboard to empty it")
+	}
 	win32.Call(pEmptyClipboard)
 	win32.Call(pCloseClipboard)
 	if e, got := pasteOf(t, w, 2, time.Second); e.Flags&FlagFailed == 0 || got != "" {
@@ -139,7 +165,7 @@ func TestRequestPasteNewerReplacesPending(t *testing.T) {
 
 // holdClipboard has another thread (another "process" as far as the clipboard
 // is concerned) keep it open until the returned function is called.
-func holdClipboard(t *testing.T) (release func()) {
+func holdClipboard(t *testing.T, w *Window) (release func()) {
 	t.Helper()
 	held, done, stop := make(chan bool), make(chan struct{}), make(chan struct{})
 	go func() {
@@ -157,7 +183,18 @@ func holdClipboard(t *testing.T) (release func()) {
 			win32.Call(pCloseClipboard)
 		}
 	}()
-	if !<-held {
+	// The window keeps pumping meanwhile: a copy of its own that is being
+	// written waits for it to answer WM_DESTROYCLIPBOARD.
+	var ok bool
+	for waiting := true; waiting; {
+		select {
+		case ok = <-held:
+			waiting = false
+		default:
+			w.Wait(int64(time.Millisecond))
+		}
+	}
+	if !ok {
 		t.Skip("could not take the clipboard to test a busy one")
 	}
 	return func() {
@@ -173,7 +210,7 @@ func holdClipboard(t *testing.T) (release func()) {
 func TestRequestPasteWaitsForABusyClipboard(t *testing.T) {
 	w := openTestWindow(t)
 	SetClipboardText([]byte("after the wait"))
-	release := holdClipboard(t)
+	release := holdClipboard(t, w)
 	defer release()
 	w.RequestPaste(3)
 	for _, e := range w.Wait(0) {
@@ -195,7 +232,7 @@ func TestRequestPasteWaitsForABusyClipboard(t *testing.T) {
 	if got.Kind != EvPaste || got.Flags != 0 || string(w.Text(got.Text)) != "after the wait" || got.Tag != 3 {
 		t.Fatalf("answer %+v %q", got, w.Text(got.Text))
 	}
-	if d := time.Since(start); d > clipGiveUpNs {
+	if d := time.Since(start); d > 500*time.Millisecond {
 		t.Errorf("the answer took %v after the release", d)
 	}
 }
@@ -204,7 +241,7 @@ func TestRequestPasteFailsWhenTheClipboardStaysBusy(t *testing.T) {
 	w := openTestWindow(t)
 	const timeout = 200 * time.Millisecond
 	shortPasteTimeout(t, timeout)
-	release := holdClipboard(t)
+	release := holdClipboard(t, w)
 	defer release()
 	start := time.Now()
 	w.RequestPaste(4)
@@ -229,24 +266,26 @@ func TestRequestPasteFailsWhenTheClipboardStaysBusy(t *testing.T) {
 func TestSetClipboardTextWaitsForABusyClipboard(t *testing.T) {
 	w := openTestWindow(t)
 	SetClipboardText([]byte("old"))
-	release := holdClipboard(t)
+	settleCopy(w)
+	release := holdClipboard(t, w)
 	defer release()
 	SetClipboardText([]byte("new"))
-	if pendingSet == 0 {
-		t.Fatal("the copy was not kept for later")
-	}
 	w.RequestPaste(5)
 	time.AfterFunc(30*time.Millisecond, release)
-	var got Event
-	for end := time.Now().Add(time.Second); got.Kind != EvPaste && time.Now().Before(end); {
-		for _, e := range w.Wait(int64(time.Until(end))) {
-			if e.Kind == EvPaste {
-				got = e
-			}
-		}
+	got := waitPaste(w, 2*time.Second)
+	if got.Kind != EvPaste || got.Tag != 5 || string(w.Text(got.Text)) != "new" {
+		t.Errorf("pasted %q (flags %v), want the copy made while the clipboard was busy", w.Text(got.Text), got.Flags)
 	}
-	if got.Kind != EvPaste || string(w.Text(got.Text)) != "new" || pendingSet != 0 {
-		t.Errorf("pasted %q (flags %v), want the copy made while it was busy; pending %v", w.Text(got.Text), got.Flags, pendingSet)
+}
+
+// The caller may reuse its slice as soon as SetClipboardText returns.
+func TestSetClipboardTextCopiesItsArgument(t *testing.T) {
+	w := openTestWindow(t)
+	b := []byte("first text")
+	SetClipboardText(b)
+	copy(b, "XXXXXXXXXX")
+	if _, got := pasteOf(t, w, 1, 2*time.Second); got != "first text" {
+		t.Errorf("pasted %q after the caller overwrote its slice", got)
 	}
 }
 
@@ -402,12 +441,111 @@ func TestRequestPasteSurvivesAClipboardOwnerThatNeverRenders(t *testing.T) {
 	}
 }
 
+// A previous clipboard owner that never answers WM_DESTROYCLIPBOARD (its
+// thread does not pump) makes EmptyClipboard wait. That wait is the worker's:
+// SetClipboardText returns at once, the window keeps pumping, the stuck worker
+// is abandoned when the copy is overdue, the next copy goes to a new worker,
+// and once the owner lets go a copy and a paste work again.
+func TestSetClipboardTextSurvivesAClipboardOwnerThatNeverAnswers(t *testing.T) {
+	w := openTestWindow(t)
+	const timeout = 300 * time.Millisecond
+	shortPasteTimeout(t, timeout)
+	release := hungOwner(t, w)
+	defer release()
+	// Without the worker, SetClipboardText itself waits in EmptyClipboard.
+	watchdog := time.AfterFunc(20*time.Second, func() { panic("SetClipboardText blocked the UI thread on the previous clipboard owner") })
+	defer watchdog.Stop()
+
+	start := time.Now()
+	b := []byte("copy behind a hung owner")
+	SetClipboardText(b)
+	if d := time.Since(start); d > 100*time.Millisecond {
+		t.Errorf("SetClipboardText took %v", d)
+	}
+	first := w.clip
+	pumps, longest, last := 0, time.Duration(0), time.Now()
+	for end := start.Add(5 * time.Second); clipStuck.Load() == 0 && time.Now().Before(end); {
+		w.Wait(int64(5 * time.Millisecond))
+		pumps++
+		longest = max(longest, time.Since(last))
+		last = time.Now()
+	}
+	d := time.Since(start)
+	if clipStuck.Load() != 1 || w.clip != nil {
+		t.Fatalf("the worker stuck in EmptyClipboard was not abandoned (%d stuck, worker %v) after %v", clipStuck.Load(), w.clip, d)
+	}
+	if d < timeout || d > timeout+clipGraceNs+time.Second {
+		t.Errorf("abandoned after %v, want about %v", d, timeout)
+	}
+	if pumps < 20 || longest > 200*time.Millisecond {
+		t.Errorf("the UI thread pumped %d times, longest gap %v: it was held up", pumps, longest)
+	}
+
+	// The next copy goes to a new worker, not behind the stuck one.
+	SetClipboardText(b)
+	if w.clip == nil || w.clip == first {
+		t.Error("the next copy did not get a new worker")
+	}
+
+	release()
+	for end := time.Now().Add(5 * time.Second); clipStuck.Load() != 0 && time.Now().Before(end); {
+		w.Wait(int64(10 * time.Millisecond))
+	}
+	if n := clipStuck.Load(); n != 0 {
+		t.Fatalf("%d workers still stuck after the owner answered", n)
+	}
+	SetClipboardText([]byte("after the hung owner"))
+	if e, text := pasteOf(t, w, 3, 3*time.Second); e.Flags != 0 || text != "after the hung owner" {
+		t.Errorf("copy and paste afterwards: %+v %q", e, text)
+	}
+}
+
+// A paste that completed but whose notification the UI thread has not handled
+// yet is replaced by a newer one: the newer paste keeps its own time limit. It
+// must not be judged by the older one's (which has passed), nor cost a new
+// worker.
+func TestReplacingACompletedPasteKeepsItsOwnDeadline(t *testing.T) {
+	w := openTestWindow(t)
+	shortPasteTimeout(t, 150*time.Millisecond)
+	SetClipboardText([]byte("text for B"))
+	settleCopy(w)
+	w.RequestPaste(1) // A
+	c := w.clip
+	for end := time.Now().Add(2 * time.Second); time.Now().Before(end); time.Sleep(time.Millisecond) { // the worker answers; the UI thread does not look
+		c.mu.Lock()
+		done := c.have
+		c.mu.Unlock()
+		if done {
+			break
+		}
+	}
+	time.Sleep(time.Duration(clipTimeoutNs+clipGraceNs) + 50*time.Millisecond) // A's time limit and grace are over
+	w.RequestPaste(2)                                                          // B
+	var got []Event
+	for end := time.Now().Add(time.Second); len(got) == 0 && time.Now().Before(end); {
+		for _, e := range w.Wait(int64(10 * time.Millisecond)) {
+			if e.Kind == EvPaste {
+				got = append(got, e)
+			}
+		}
+	}
+	if len(got) != 1 || got[0].Tag != 2 || got[0].Flags != 0 || string(w.Text(got[0].Text)) != "text for B" {
+		t.Fatalf("answers %+v, want B's text", got)
+	}
+	if w.clip != c || clipStuck.Load() != 0 {
+		t.Errorf("a new worker was started for B (worker changed: %v, %d stuck)", w.clip != c, clipStuck.Load())
+	}
+}
+
 // With maxStuckClip workers stuck, a request fails at once instead of adding
 // another thread.
 func TestRequestPasteFailsAtOnceWithTooManyStuckWorkers(t *testing.T) {
 	w := openTestWindow(t)
+	w.clip.abandon() // the worker the test window's setup started
+	w.clip = nil
 	clipStuck.Store(maxStuckClip)
 	defer clipStuck.Store(0)
+	SetClipboardText([]byte("dropped"))
 	w.RequestPaste(5)
 	if w.clip != nil {
 		t.Error("a worker was started")
@@ -451,6 +589,7 @@ func TestClipboardWithPowerShell(t *testing.T) {
 		t.Fatal(err)
 	}
 	SetClipboardText([]byte(fromUs))
+	settleCopy(w)
 	powershell(t, `[IO.File]::WriteAllText($env:GNUI_OUT, (Get-Clipboard -Raw), (New-Object Text.UTF8Encoding $false));`+
 		`Set-Clipboard -Value ([IO.File]::ReadAllText($env:GNUI_IN, [Text.Encoding]::UTF8))`, "GNUI_OUT="+out, "GNUI_IN="+in)
 
