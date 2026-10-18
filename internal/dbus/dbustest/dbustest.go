@@ -1,3 +1,5 @@
+//go:build unix
+
 // Package dbustest starts buses for tests: the system's dbus-daemon when it
 // is installed, and a small in-process broker that implements just what the
 // tests use (Hello, RequestName, AddMatch and RemoveMatch, routing by name,
