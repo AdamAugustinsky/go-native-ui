@@ -4,6 +4,7 @@ import (
 	"math"
 
 	"gonativeui/gpu"
+	"gonativeui/text"
 )
 
 // Uploader is the part of gpu.Renderer that creates and fills the textures
@@ -353,6 +354,10 @@ func (c *Context) emitText(l *gpu.DrawList, b *box, clip [4]float32) {
 		b.run = c.sh.Shape(b.font, bytes)
 		b.runGen = c.sh.RunGeneration()
 	}
+	if b.flags&WrapText != 0 && b.lnN > 0 {
+		c.emitWrapped(l, b, clip)
+		return
+	}
 	v := c.sh.Run(b.run)
 	if len(v.Glyphs) == 0 {
 		return
@@ -388,8 +393,13 @@ func (c *Context) emitText(l *gpu.DrawList, b *box, clip [4]float32) {
 		return
 	}
 
-	// Every glyph is looked up: how far its ink reaches past its advance box
-	// is only known from the entry. Quads outside the clip are dropped below.
+	c.emitGlyphs(l, b, v, x, baseline, tclip, fade, col)
+}
+
+// emitGlyphs draws the glyphs of v with the pen starting at (x, baseline).
+// Every glyph is looked up: how far its ink reaches past its advance box is
+// only known from the entry. Quads outside the clip are dropped.
+func (c *Context) emitGlyphs(l *gpu.DrawList, b *box, v text.RunView, x, baseline float32, tclip [4]float32, fade [2]float32, col uint32) {
 	for i, gid := range v.Glyphs {
 		pen := x + v.X[i]
 		ix := float32(math.Floor(float64(pen)))

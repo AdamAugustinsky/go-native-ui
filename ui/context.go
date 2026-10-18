@@ -27,6 +27,8 @@ type persist struct {
 	content   [2]float64 // extent of the children incl. padding (virtual extent for lists)
 	// savedFocus is, for an overlay root, the focus when it opened.
 	savedFocus Key
+	// wrap is what the line breaking of a WrapText box was computed for.
+	wrap wrapCache
 }
 
 // box is one record of the pointer-free box pool. Everything after persist
@@ -69,6 +71,10 @@ type box struct {
 	listRowH  float32
 
 	sem int32 // 1 + the index of its record in Context.sems, 0 without a role
+
+	// the lines of a WrapText box: lnN of them, their ends at lnOff in this
+	// frame's line buffer
+	lnOff, lnN int32
 }
 
 type fontInfo struct {
@@ -131,6 +137,14 @@ type Context struct {
 	nextPos    [2]float32
 	hasNextPos bool
 	nextFlags  Flags
+
+	// wrapped text (wrap.go): the line ends of this frame's wrapped boxes and
+	// of the previous frame's (the cache), the line breaker and its scratch
+	lineBuf  [2][]int32
+	lineCur  int
+	lb       text.LineBreaker
+	brk      []uint32
+	wrapRuns uint64 // how often the lines of a box were broken (not taken from the cache)
 
 	// semantics (semantics.go): the setters for the next box, and the records
 	// of this frame's boxes that have a role
@@ -323,6 +337,8 @@ func (c *Context) Begin(in *Input, widthPx, heightPx int, scale, dt float32) {
 	c.animating, c.scrollSet = false, false
 	c.wakeNs, c.imeOK, c.imeCancel = 0, false, false
 	c.takeCommit()
+	c.lineCur ^= 1
+	c.lineBuf[c.lineCur] = c.lineBuf[c.lineCur][:0]
 	c.ovPrev, c.nOvPrev = c.ovs, c.nOvs
 	c.nOvs, c.nOvOpen, c.parentless = 0, 0, false
 	c.modalIdx = c.topModal()
@@ -582,7 +598,9 @@ func (c *Context) resolveAuto(id ID) {
 	b := &c.boxes[id]
 	for a := 0; a < 2; a++ {
 		if b.pref[a].Kind == SizeAuto {
-			if b.txt.Len > 0 {
+			if a == 0 && b.flags&WrapText != 0 && b.txt.Len > 0 {
+				b.pref[a] = Pct(1) // wrapped text fills the width it is given
+			} else if b.txt.Len > 0 {
 				b.pref[a] = TextSize(0)
 			} else {
 				b.pref[a] = Children(1)

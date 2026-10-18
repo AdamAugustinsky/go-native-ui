@@ -279,3 +279,54 @@ func f2px(c *Context, id ID, x float32) float32 {
 	r := c.Rect(id)
 	return r[0] + 12 + x
 }
+
+// Wrapped text against the real text system: the lines break at the box's
+// width by the real glyph advances, the box grows with the lines, and a
+// steady frame allocates nothing.
+func TestRealWrappedText(t *testing.T) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	ts, err := text.New()
+	if err != nil {
+		t.Skip("no text system:", err)
+	}
+	defer ts.Close()
+	font := ts.Font(text.FontDesc{SizePt: 13, Weight: 400, Scale: 2})
+	c := New(ts)
+	var in Input
+	var list gpu.DrawList
+	para := "Wrapped text breaks at the width of its box, between words where it can and inside a word where it must: supercalifragilisticexpialidocious."
+	var label ID
+	var h float32
+	build := func(width float32) {
+		c.Begin(&in, 600, 400, 2, 1.0/60)
+		c.PushFont(font)
+		c.NextWidth(Px(width))
+		c.NextHeight(TextSize(0))
+		label = c.Box(DrawText|WrapText, para)
+		c.PopFont()
+		c.End(&list)
+		h = c.boxes[label].size[1]
+	}
+	build(300)
+	build(300)
+	wide, lh := h, c.fontInfo(font).lh
+	build(120)
+	build(120)
+	narrow := h
+	if wide < 2*lh || narrow <= wide {
+		t.Fatalf("heights: %v at 300 px, %v at 120 px, line %v: narrower must be taller, and 300 px takes several lines", wide, narrow, lh)
+	}
+	if n := narrow / lh; n != float32(int(n)) {
+		t.Fatalf("height %v is not a whole number of lines of %v", narrow, lh)
+	}
+	// No line is wider than the box: every glyph quad ends inside it.
+	for _, q := range list.Quads {
+		if q.Rect[2] > 120+2 {
+			t.Fatalf("a glyph reaches x=%v beyond the 120 px box", q.Rect[2])
+		}
+	}
+	if n := testing.AllocsPerRun(30, func() { build(120) }); n != 0 {
+		t.Fatalf("%v allocations per frame with wrapped text", n)
+	}
+}
