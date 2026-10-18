@@ -116,6 +116,8 @@ type App struct {
 	dragPl  []platform.DragRegion
 
 	wakeAt      int64 // platform.Now at which the UI wants a frame although nothing animates (ui.Context.WakeAfter); 0 = none
+	chromeDark  bool  // the mode last given to Win.SetDarkChrome
+	chromeSet   bool  // SetDarkChrome was called
 	resized     bool  // a resize since the last build
 	settle      bool  // the frame being built is the first after a resize (see owed)
 	done        bool

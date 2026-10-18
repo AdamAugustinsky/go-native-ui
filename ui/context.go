@@ -98,6 +98,8 @@ type Context struct {
 	// Pasting is asynchronous: see PasteRequest and Input.SetPaste.
 	ClipboardSet func(b []byte)
 
+	ap appearance // system appearance in, the shown mode out (appearance.go)
+
 	sh Shaper
 
 	boxes     []box

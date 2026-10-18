@@ -142,11 +142,13 @@ func (a *App) drawFrame(inHandler bool, passes int) bool {
 	a.tr.in.Time = m.start
 
 	a.settle = false
+	a.syncAppearance()
 	for i := 0; i < passes; i++ {
 		a.build(a.fr.W, a.fr.H, dt)
 	}
 	a.syncRegions()
 	a.syncText(a.Win, m.start)
+	a.syncChrome(a.Win)
 	if metered {
 		m.cpu2 = sysinfo.ThreadCPUNs()
 	}
