@@ -1,4 +1,4 @@
-package dbus
+package dbus_test
 
 import (
 	"context"
@@ -10,15 +10,18 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	. "gonativeui/internal/dbus"
+	"gonativeui/internal/dbus/dbustest"
 )
 
-func dial(t *testing.T, b *testBus) *Conn {
+func dial(t *testing.T, b *dbustest.Bus) *Conn {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	c, err := Dial(ctx, b.address)
+	c, err := Dial(ctx, b.Address)
 	if err != nil {
-		t.Fatalf("Dial %s: %v", b.address, err)
+		t.Fatalf("Dial %s: %v", b.Address, err)
 	}
 	t.Cleanup(func() { c.Close() })
 	return c
@@ -31,7 +34,7 @@ const (
 )
 
 // A service that owns svcName and answers a few methods.
-func startService(t *testing.T, b *testBus) *Conn {
+func startService(t *testing.T, b *dbustest.Bus) *Conn {
 	t.Helper()
 	s := dial(t, b)
 	s.Export(svcPath, svcIface, func(m *Message) (string, []any, error) {
@@ -61,7 +64,7 @@ func startService(t *testing.T, b *testBus) *Conn {
 }
 
 func TestCallAndReply(t *testing.T) {
-	eachBus(t, func(t *testing.T, b *testBus) {
+	dbustest.Each(t, func(t *testing.T, b *dbustest.Bus) {
 		startService(t, b)
 		c := dial(t, b)
 		if !strings.HasPrefix(c.Name(), ":") {
@@ -97,7 +100,7 @@ func TestCallAndReply(t *testing.T) {
 }
 
 func TestCallContext(t *testing.T) {
-	eachBus(t, func(t *testing.T, b *testBus) {
+	dbustest.Each(t, func(t *testing.T, b *dbustest.Bus) {
 		startService(t, b)
 		c := dial(t, b)
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
@@ -111,17 +114,11 @@ func TestCallContext(t *testing.T) {
 		if _, err := c.Call(svcName, svcPath, svcIface, "Swap", "su", "a", uint32(1)); err != nil {
 			t.Error(err)
 		}
-		c.mu.Lock()
-		n := len(c.pending)
-		c.mu.Unlock()
-		if n != 0 {
-			t.Errorf("%d calls still pending", n)
-		}
 	})
 }
 
 func TestSignals(t *testing.T) {
-	eachBus(t, func(t *testing.T, b *testBus) {
+	dbustest.Each(t, func(t *testing.T, b *dbustest.Bus) {
 		s := startService(t, b)
 		c := dial(t, b)
 		got := make(chan *Message, 8)
@@ -188,7 +185,7 @@ func TestSignals(t *testing.T) {
 // A signal sent while the call is being answered reaches a subscription made
 // before the call, before the reply: what the portal's Response needs.
 func TestSubscribeBeforeCall(t *testing.T) {
-	eachBus(t, func(t *testing.T, b *testBus) {
+	dbustest.Each(t, func(t *testing.T, b *dbustest.Bus) {
 		startService(t, b)
 		c := dial(t, b)
 		var seen atomic.Bool
@@ -205,7 +202,7 @@ func TestSubscribeBeforeCall(t *testing.T) {
 }
 
 func TestConnectionLost(t *testing.T) {
-	eachBus(t, func(t *testing.T, b *testBus) {
+	dbustest.Each(t, func(t *testing.T, b *dbustest.Bus) {
 		startService(t, b)
 		c := dial(t, b)
 		var wg sync.WaitGroup
@@ -216,7 +213,7 @@ func TestConnectionLost(t *testing.T) {
 			_, callErr = c.Call(svcName, svcPath, svcIface, "Block", "")
 		}()
 		time.Sleep(50 * time.Millisecond)
-		b.stop()
+		b.Stop()
 		wg.Wait()
 		if callErr == nil {
 			t.Error("a call in flight survived the bus")

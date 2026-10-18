@@ -71,8 +71,8 @@ func (e *Error) Error() string {
 	return e.Name
 }
 
-// marshal encodes m. m.Serial must be set.
-func (m *Message) marshal() ([]byte, error) {
+// Marshal encodes m. m.Serial must be set.
+func (m *Message) Marshal() ([]byte, error) {
 	var body encoder
 	if err := body.values(m.Signature, m.Body); err != nil {
 		return nil, err
@@ -123,8 +123,9 @@ func (m *Message) marshal() ([]byte, error) {
 	return e.b, nil
 }
 
-// readMessage reads and decodes one message.
-func readMessage(r io.Reader) (*Message, error) {
+// ReadMessage reads and decodes one message, refusing anything over
+// [MaxMessage].
+func ReadMessage(r io.Reader) (*Message, error) {
 	var fixed [16]byte
 	if _, err := io.ReadFull(r, fixed[:]); err != nil {
 		return nil, err
@@ -149,8 +150,8 @@ func readMessage(r io.Reader) (*Message, error) {
 	return parseMessage(buf)
 }
 
-// parseMessage decodes a whole message held in buf (whose lengths readMessage
-// has already bounded).
+// parseMessage decodes a whole message held in buf (whose lengths ReadMessage
+// ReadMessage has already bounded).
 func parseMessage(buf []byte) (*Message, error) {
 	if len(buf) < 16 {
 		return nil, errShort

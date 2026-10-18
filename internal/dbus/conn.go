@@ -233,7 +233,7 @@ func (c *Conn) fail(err error) {
 
 func (c *Conn) readLoop(br *bufio.Reader) {
 	for {
-		m, err := readMessage(br)
+		m, err := ReadMessage(br)
 		if err != nil {
 			c.fail(err)
 			return
@@ -273,7 +273,7 @@ func (c *Conn) send(m *Message) error {
 	if m.Serial == 0 {
 		m.Serial = c.last.Add(1)
 	}
-	b, err := m.marshal()
+	b, err := m.Marshal()
 	if err != nil {
 		return err
 	}

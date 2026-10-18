@@ -1,4 +1,9 @@
-package dbus
+// Package dbustest starts buses for tests: the system's dbus-daemon when it
+// is installed, and a small in-process broker that implements just what the
+// tests use (Hello, RequestName, AddMatch and RemoveMatch, routing by name,
+// signal matching). The broker lets a suite run where no daemon is installed;
+// only the daemon checks the client against an independent implementation.
+package dbustest
 
 import (
 	"bufio"
@@ -12,29 +17,28 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"gonativeui/internal/dbus"
 )
 
-// Two buses for the same tests: the real dbus-daemon when the binary exists
-// (CI installs it), and a small broker written here that implements just
-// what the tests use (Hello, RequestName, AddMatch, routing by name, signal
-// matching). The broker lets the suite run where no daemon is installed; only
-// the daemon checks the client against an independent implementation.
-
-type testBus struct {
-	name    string
-	address string
-	stop    func()
+// Bus is a running private bus.
+type Bus struct {
+	Name    string // "broker" or "dbus-daemon"
+	Address string
+	Stop    func() // ends the bus: its clients lose their connection
 }
 
-// buses starts every bus available and runs fn against each as a subtest.
-func eachBus(t *testing.T, fn func(t *testing.T, b *testBus)) {
+// Each runs fn as a subtest against every bus available: the in-process
+// broker, and the dbus-daemon when the binary exists (the subtest is skipped
+// with a message otherwise).
+func Each(t *testing.T, fn func(t *testing.T, b *Bus)) {
 	t.Helper()
 	t.Run("broker", func(t *testing.T) {
-		b := startBroker(t)
+		b := Broker(t)
 		fn(t, b)
 	})
 	t.Run("dbus-daemon", func(t *testing.T) {
-		b := startDaemon(t)
+		b := Daemon(t)
 		if b == nil {
 			t.Skip("dbus-daemon is not installed: the client was only checked against the in-process broker")
 		}
@@ -42,7 +46,8 @@ func eachBus(t *testing.T, fn func(t *testing.T, b *testBus)) {
 	})
 }
 
-func startDaemon(t *testing.T) *testBus {
+// Daemon starts a private dbus-daemon, or returns nil when none is installed.
+func Daemon(t *testing.T) *Bus {
 	t.Helper()
 	path, err := exec.LookPath("dbus-daemon")
 	if err != nil {
@@ -92,7 +97,7 @@ func startDaemon(t *testing.T) *testBus {
 			t.Fatal("dbus-daemon printed no address")
 		}
 		t.Logf("dbus-daemon at %s", a)
-		return &testBus{"dbus-daemon", a, stop}
+		return &Bus{"dbus-daemon", a, stop}
 	case <-time.After(10 * time.Second):
 		t.Fatal("dbus-daemon did not print its address")
 	}
@@ -117,7 +122,8 @@ type brokerClient struct {
 	rules []map[string]string
 }
 
-func startBroker(t *testing.T) *testBus {
+// Broker starts the in-process broker.
+func Broker(t *testing.T) *Bus {
 	t.Helper()
 	dir, err := os.MkdirTemp("/tmp", "gnuibroker")
 	if err != nil {
@@ -139,7 +145,7 @@ func startBroker(t *testing.T) *testBus {
 		b.mu.Unlock()
 	}
 	t.Cleanup(stop)
-	return &testBus{"broker", "unix:path=" + dir + "/bus,guid=0123456789abcdef0123456789abcdef", stop}
+	return &Bus{"broker", "unix:path=" + dir + "/bus,guid=0123456789abcdef0123456789abcdef", stop}
 }
 
 func (b *broker) accept() {
@@ -183,7 +189,7 @@ func (b *broker) serve(nc net.Conn) {
 		b.mu.Unlock()
 	}()
 	for {
-		m, err := readMessage(br)
+		m, err := dbus.ReadMessage(br)
 		if err != nil {
 			return
 		}
@@ -191,8 +197,8 @@ func (b *broker) serve(nc net.Conn) {
 	}
 }
 
-func (c *brokerClient) write(m *Message) {
-	buf, err := m.marshal()
+func (c *brokerClient) write(m *dbus.Message) {
+	buf, err := m.Marshal()
 	if err != nil {
 		return
 	}
@@ -201,15 +207,15 @@ func (c *brokerClient) write(m *Message) {
 	c.wmu.Unlock()
 }
 
-func (b *broker) reply(c *brokerClient, to *Message, sig string, body ...any) {
-	c.write(&Message{Type: TypeMethodReturn, Serial: 1000000 + to.Serial, ReplySerial: to.Serial, Destination: c.name, Sender: busName, Signature: sig, Body: body})
+func (b *broker) reply(c *brokerClient, to *dbus.Message, sig string, body ...any) {
+	c.write(&dbus.Message{Type: dbus.TypeMethodReturn, Serial: 1000000 + to.Serial, ReplySerial: to.Serial, Destination: c.name, Sender: "org.freedesktop.DBus", Signature: sig, Body: body})
 }
 
-func (b *broker) fail(c *brokerClient, to *Message, name, text string) {
-	if to.Flags&FlagNoReplyExpected != 0 {
+func (b *broker) fail(c *brokerClient, to *dbus.Message, name, text string) {
+	if to.Flags&dbus.FlagNoReplyExpected != 0 {
 		return
 	}
-	c.write(&Message{Type: TypeError, Serial: 1000000 + to.Serial, ReplySerial: to.Serial, ErrorName: name, Destination: c.name, Sender: busName, Signature: "s", Body: []any{text}})
+	c.write(&dbus.Message{Type: dbus.TypeError, Serial: 1000000 + to.Serial, ReplySerial: to.Serial, ErrorName: name, Destination: c.name, Sender: "org.freedesktop.DBus", Signature: "s", Body: []any{text}})
 }
 
 func parseRule(s string) map[string]string {
@@ -221,11 +227,11 @@ func parseRule(s string) map[string]string {
 	return r
 }
 
-func (b *broker) route(c *brokerClient, m *Message) {
+func (b *broker) route(c *brokerClient, m *dbus.Message) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	m.Sender = c.name
-	if m.Type == TypeSignal {
+	if m.Type == dbus.TypeSignal {
 		for _, o := range b.clients {
 			for _, r := range o.rules {
 				if b.ruleMatches(r, m) {
@@ -236,7 +242,7 @@ func (b *broker) route(c *brokerClient, m *Message) {
 		}
 		return
 	}
-	if m.Destination == busName {
+	if m.Destination == "org.freedesktop.DBus" {
 		switch m.Member {
 		case "Hello":
 			b.reply(c, m, "s", c.name)
@@ -277,7 +283,7 @@ func (b *broker) route(c *brokerClient, m *Message) {
 	o.write(m)
 }
 
-func (b *broker) ruleMatches(r map[string]string, m *Message) bool {
+func (b *broker) ruleMatches(r map[string]string, m *dbus.Message) bool {
 	if t := r["type"]; t != "" && t != "signal" {
 		return false
 	}
@@ -294,9 +300,17 @@ func (b *broker) ruleMatches(r map[string]string, m *Message) bool {
 		return false
 	}
 	if v := r["arg0"]; v != "" {
-		if a, ok := m.firstString(); !ok || a != v {
+		if a, ok := firstString(m); !ok || a != v {
 			return false
 		}
 	}
 	return true
+}
+
+func firstString(m *dbus.Message) (string, bool) {
+	if len(m.Body) == 0 {
+		return "", false
+	}
+	s, ok := m.Body[0].(string)
+	return s, ok
 }

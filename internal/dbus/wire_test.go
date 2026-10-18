@@ -50,7 +50,7 @@ func TestEncodeGolden(t *testing.T) {
 // The Hello call as every D-Bus client sends it (header length 0x6e).
 func TestHelloGolden(t *testing.T) {
 	m := &Message{Type: TypeMethodCall, Serial: 1, Destination: busName, Path: busPath, Interface: busName, Member: "Hello"}
-	got, err := m.marshal()
+	got, err := m.Marshal()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,7 +197,7 @@ func TestParseMessageNeverPanics(t *testing.T) {
 	m := &Message{Type: TypeSignal, Serial: 9, Path: "/org/freedesktop/portal/desktop", Interface: "org.freedesktop.portal.Settings",
 		Member: "SettingChanged", Sender: ":1.5", Signature: "ssv",
 		Body: []any{"org.freedesktop.appearance", "accent-color", Variant{"(ddd)", Struct{0.1, 0.2, 0.3}}}}
-	b, err := m.marshal()
+	b, err := m.Marshal()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,7 +231,7 @@ func TestReadMessageLimits(t *testing.T) {
 		"big endian":            append([]byte{'B'}, hdr(0, 0)[1:]...),
 		"protocol version 2":    append([]byte{'l', 4, 0, 2}, hdr(0, 0)[4:]...),
 	} {
-		if _, err := readMessage(bytes.NewReader(b)); err == nil {
+		if _, err := ReadMessage(bytes.NewReader(b)); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
 	}
