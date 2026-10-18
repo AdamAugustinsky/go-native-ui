@@ -150,6 +150,7 @@ func TestWaylandOwnership(t *testing.T) {
 
 	// While we own the clipboard, pasting is answered from our copy.
 	SetClipboardText([]byte("mine"))
+	f.wait("REQ wl_data_device.set_selection", 5*time.Second)
 	if got, failed, ok := paste(t, w, 1, 2*time.Second); !ok || failed || got != "mine" {
 		t.Fatalf("own paste = %q failed=%v answered=%v", got, failed, ok)
 	}
