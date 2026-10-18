@@ -442,7 +442,7 @@ func TestRequestPasteSurvivesAClipboardOwnerThatNeverRenders(t *testing.T) {
 	w.RequestPaste(2)
 	var failed []Event
 	for _, e := range w.q.ev {
-		if e.Kind == EvPaste {
+		if e.Kind == EvPaste && e.Tag == 2 {
 			failed = append(failed, e)
 		}
 	}
