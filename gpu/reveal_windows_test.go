@@ -50,6 +50,9 @@ var (
 	pBrush  = win32.Proc(gdi32, "CreateSolidBrush")
 	pDwmGet = win32.Proc(dwmapi, "DwmGetWindowAttribute")
 	pDwmSet = win32.Proc(dwmapi, "DwmSetWindowAttribute")
+	pVisibl = win32.Proc(user32, "IsWindowVisible")
+	pWinRct = win32.Proc(user32, "GetWindowRect")
+	pIconic = win32.Proc(user32, "IsIconic")
 )
 
 const (
@@ -194,26 +197,41 @@ func cloaked(hwnd uintptr) bool {
 	return win32.HR(win32.Call(pDwmGet, hwnd, dwmaCloaked, uintptr(unsafe.Pointer(v)), 4)) >= 0 && *v != 0
 }
 
-func TestFirstFrameIsContent(t *testing.T) {
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-	if pDwmGet == 0 || pDwmSet == 0 {
-		t.Skip("no DWM")
-	}
+// revealRun opens a window (cloaked until its first frame when hidden),
+// presents magenta as the first frame and returns what the screen under the
+// window showed, in order, as runs of one colour.
+type run struct {
+	colour uint32
+	n      int
+	first  int64
+}
 
-	win, err := platform.Open(platform.Options{Title: "gnui reveal test", Width: 400, Height: 300, Hidden: true})
+type revealResult struct {
+	runs       []run
+	revealedAt int64
+	cloakedAt  bool // the window was still cloaked when the first present returned
+	cloakedEnd bool // and was cloaked after the reveal
+	printed    uint32
+	w, h       int32
+}
+
+func revealRun(t *testing.T, hidden bool, again bool) revealResult {
+	t.Helper()
+	var r revealResult
+	win, err := platform.Open(platform.Options{Title: "gnui reveal test", Width: 400, Height: 300, Hidden: hidden})
 	if err != nil {
 		t.Skipf("no window: %v", err)
 	}
 	defer win.Close()
 	hwnd := win.Native().HWND
-	if !cloaked(hwnd) {
+	if hidden && !cloaked(hwnd) {
 		t.Skip("DWM does not cloak windows here (composition off?)")
 	}
 	off := new(uint32)
 	*off = 1
 	win32.Call(pDwmSet, hwnd, dwmaTransitionsOff, uintptr(unsafe.Pointer(off)), 4) // no fade between the screen's colours
 	w, h, scale := win.Size()
+	r.w, r.h = w, h
 	surf, err := NewSurface(win.Native(), w, h, scale)
 	if errors.Is(err, ErrNoDevice) {
 		t.Skipf("no Direct3D 11 device: %v", err)
@@ -227,12 +245,14 @@ func TestFirstFrameIsContent(t *testing.T) {
 	bd := newBackdrop(t, green)
 	defer bd.destroy()
 	var revealedAt atomic.Int64
-	var cloakedAtReveal bool
-	surf.RevealOnFirstFrame(func() {
-		cloakedAtReveal = cloaked(hwnd) // still hidden when the present has returned
-		win.Show()
-		revealedAt.Store(time.Now().UnixNano())
-	})
+	if hidden {
+		surf.RevealOnFirstFrame(func() {
+			r.cloakedAt = cloaked(hwnd) // still hidden when the present has returned
+			win.Show()
+			r.cloakedEnd = cloaked(hwnd)
+			revealedAt.Store(time.Now().UnixNano())
+		})
+	}
 
 	pt := &screenPt{w / 2, h / 2}
 	win32.Call(pClient, hwnd, uintptr(unsafe.Pointer(pt)))
@@ -243,23 +263,29 @@ func TestFirstFrameIsContent(t *testing.T) {
 		}
 	}
 
-	pump(150 * time.Millisecond) // the window is shown but cloaked: the screen shows the backdrop
-	if c := smp.seen.Load(); !colourNear(c, green) {
-		smp.finish()
-		t.Skipf("the screen cannot be read here (centre pixel %06x, want the backdrop %06x)", c, green)
+	pump(300 * time.Millisecond) // the backdrop is painted
+	rc := new([4]int32)
+	win32.Call(pWinRct, hwnd, uintptr(unsafe.Pointer(rc)))
+	t.Logf("window: rect %v visible %v iconic %v cloaked %v; sampling %d,%d", *rc, win32.Bool(win32.Call(pVisibl, hwnd)), win32.Bool(win32.Call(pIconic, hwnd)), cloaked(hwnd), pt.x, pt.y)
+	if c := smp.seen.Load(); !hidden || !colourNear(c, green) {
+		t.Logf("before the first frame the centre pixel is %06x", c)
+		if hidden {
+			smp.finish()
+			t.Skipf("the screen cannot be read here (centre pixel %06x, want the backdrop %06x)", c, green)
+		}
 	}
+	start := time.Now().UnixNano()
 	if !surf.Present(1, 0, 1, 1) {
-		t.Logf("the first Present of a cloaked window reported it was not shown (occluded)")
+		t.Logf("the first Present reported that the window was not shown (occluded)")
 	}
 	t.Logf("first present: start-to-done %.2f ms", float64(surf.Trace.Done-surf.Trace.Start)/1e6)
-	if revealedAt.Load() == 0 {
-		t.Fatal("the first present did not reveal the window")
+	if !hidden {
+		revealedAt.Store(time.Now().UnixNano())
 	}
-	if !cloakedAtReveal {
-		t.Error("the window was already uncloaked when the first present returned")
-	}
-	if cloaked(hwnd) {
-		t.Error("the window is still cloaked after the reveal")
+	r.revealedAt = revealedAt.Load()
+	if again {
+		pump(50 * time.Millisecond)
+		surf.Present(1, 0, 1, 1)
 	}
 
 	// Wait for the content to reach the screen.
@@ -267,38 +293,52 @@ func TestFirstFrameIsContent(t *testing.T) {
 		win.Wait(int64(time.Millisecond))
 	}
 	pump(100 * time.Millisecond)
-	samples := smp.finish()
-
-	// What was on the screen, in order, as runs of one colour.
-	type run struct {
-		colour uint32
-		n      int
-		first  int64
-	}
-	var runs []run
-	for _, s := range samples {
-		if n := len(runs); n > 0 && runs[n-1].colour == s.colour {
-			runs[n-1].n++
+	for _, s := range smp.finish() {
+		if s.t < start {
+			continue // the backdrop being painted
+		}
+		if n := len(r.runs); n > 0 && r.runs[n-1].colour == s.colour {
+			r.runs[n-1].n++
 			continue
 		}
-		runs = append(runs, run{s.colour, 1, s.t})
+		r.runs = append(r.runs, run{s.colour, 1, s.t})
+	}
+	r.printed = printWindowPixel(hwnd, w, h)
+	return r
+}
+
+func TestFirstFrameIsContent(t *testing.T) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	if pDwmGet == 0 || pDwmSet == 0 {
+		t.Skip("no DWM")
+	}
+	r := revealRun(t, true, false)
+	if r.revealedAt == 0 {
+		t.Fatal("the first present did not reveal the window")
+	}
+	if !r.cloakedAt {
+		t.Error("the window was already uncloaked when the first present returned")
+	}
+	if r.cloakedEnd {
+		t.Error("the window is still cloaked after the reveal")
 	}
 	sawContent := false
-	for _, r := range runs {
-		t.Logf("screen: %06x x%d (+%.1f ms from the reveal)", r.colour, r.n, float64(r.first-revealedAt.Load())/1e6)
+	for _, u := range r.runs {
+		t.Logf("screen: %06x x%d (%+.1f ms from the reveal)", u.colour, u.n, float64(u.first-r.revealedAt)/1e6)
 		switch {
-		case colourNear(r.colour, magenta):
+		case colourNear(u.colour, magenta):
 			sawContent = true
-		case colourNear(r.colour, green):
+		case colourNear(u.colour, green):
 			if sawContent {
 				t.Errorf("the backdrop came back after the content")
 			}
 		default:
-			t.Errorf("colour %06x was on the screen: neither the desktop nor the frame", r.colour)
+			t.Errorf("colour %06x was on the screen: neither the desktop nor the frame", u.colour)
 		}
 	}
 	if !sawContent {
-		if c := printWindowPixel(hwnd, w, h); colourNear(c, magenta) {
+		if colourNear(r.printed, magenta) {
 			t.Skipf("the window has the frame (PrintWindow), but the screen capture never showed it: it cannot see windows here")
 		}
 		t.Error("the frame never reached the window or the screen")
