@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"runtime"
 	"runtime/pprof"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -17,7 +18,7 @@ func threadsMade() int { return pprof.Lookup("threadcreate").Count() }
 
 // threadsChild runs in a fresh process (a test thread count is only
 // meaningful in one that has not started its threads yet): it primes the
-// threads (unless GNUI_NO_PRIME_THREADS), then makes four goroutines each hold
+// threads (unless GNUI_NO_PRIME_THREADS), then makes burst goroutines each hold
 // an OS thread at the same moment, as a frame spent in C calls while other
 // goroutines wake does, and prints the thread counts before and after.
 func threadsChild() {
@@ -26,7 +27,8 @@ func threadsChild() {
 	c1 := threadsMade()
 	var up, done sync.WaitGroup
 	release := make(chan struct{})
-	for i := 0; i < spareThreads; i++ {
+	burst, _ := strconv.Atoi(os.Getenv("GNUI_THREADS_BURST"))
+	for i := 0; i < burst; i++ {
 		up.Add(1)
 		done.Add(1)
 		go func() {
@@ -43,10 +45,10 @@ func threadsChild() {
 	fmt.Println("THREADS", c0, c1, threadsMade())
 }
 
-func runThreadsChild(t *testing.T, env ...string) (c0, c1, c2 int) {
+func runThreadsChild(t *testing.T, burst int, env ...string) (c0, c1, c2 int) {
 	t.Helper()
 	cmd := exec.Command(os.Args[0], "-test.run=^$")
-	cmd.Env = append(os.Environ(), append([]string{"GNUI_THREADS_CHILD=1"}, env...)...)
+	cmd.Env = append(os.Environ(), append([]string{"GNUI_THREADS_CHILD=1", "GNUI_THREADS_BURST=" + strconv.Itoa(burst)}, env...)...)
 	out, err := cmd.Output()
 	if err != nil {
 		t.Fatalf("child: %v", err)
@@ -65,14 +67,14 @@ func runThreadsChild(t *testing.T, env ...string) (c0, c1, c2 int) {
 // a measured frame); without it they do, which shows that the count measures
 // something.
 func TestPrimedThreadsAreReused(t *testing.T) {
-	c0, c1, c2 := runThreadsChild(t)
+	c0, c1, c2 := runThreadsChild(t, spareThreads-2) // two threads are left to the goroutines that wait for them
 	if c1 <= c0 && c0 < spareThreads {
 		t.Errorf("priming made no thread: %d -> %d", c0, c1)
 	}
 	if c2 != c1 {
-		t.Errorf("after priming, holding the spare threads at once created %d more", c2-c1)
+		t.Errorf("after priming, holding most of the spare threads at once created %d more", c2-c1)
 	}
-	n0, n1, n2 := runThreadsChild(t, "GNUI_NO_PRIME_THREADS=1")
+	n0, n1, n2 := runThreadsChild(t, spareThreads+2, "GNUI_NO_PRIME_THREADS=1")
 	if n1 != n0 {
 		t.Errorf("GNUI_NO_PRIME_THREADS still made threads: %d -> %d", n0, n1)
 	}
