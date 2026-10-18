@@ -13,9 +13,12 @@ import (
 // goes as INCR chunks, each written when the requestor deletes the previous
 // one (PropertyNotify), so nothing waits on the main thread.
 //
-// Requestor: XConvertSelection into the window property GNUI_PASTE; the
+// Requestor: XConvertSelection into the property GNUI_PASTE of a request
+// window of the request's own (the next of a ring of x11ReqWins): the
 // SelectionNotify says whether and where the owner put the text; an INCR
-// property starts a transfer of chunks, one per PropertyNotify.
+// property starts a transfer of chunks, one per PropertyNotify. The window
+// tells a request from the ones it replaced, whose late answers (text,
+// refusals, chunks) reach other windows and are ignored.
 //
 // XEvent offsets (LP64, see x11_linux.go):
 //
@@ -57,6 +60,10 @@ type x11Send struct {
 	deadline                    int64
 }
 
+// x11ReqWins is the number of request windows: an answer is taken for the
+// wrong request only if it comes after this many newer requests.
+const x11ReqWins = 8
+
 // x11Clip is the X11 side of the clipboard state, part of x11.
 type x11Clip struct {
 	aClipboard, aUTF8, aTargets, aPlainUTF8, aPlain, aIncr, aProp uintptr
@@ -65,6 +72,16 @@ type x11Clip struct {
 	sends [maxSends]x11Send
 	nsend int
 	sev   [24]int64 // outgoing XEvent
+
+	// Each paste request converts the selection into a window of its own,
+	// the next of reqWin: the requestor field of SelectionNotify, and the
+	// window of PropertyNotify, then say which request an answer belongs
+	// to (the property and the time of ConvertSelection cannot: a refusal
+	// carries neither). The answer of a request that was replaced reaches
+	// another window than the current request's and is ignored.
+	reqWin [x11ReqWins]uintptr
+	gen    int     // requests started, counting; reqWin[gen%x11ReqWins] is current
+	cur    uintptr // the current request's window
 
 	// A paste in progress: which target is being tried, and whether the
 	// owner is delivering the text in INCR chunks.
@@ -87,9 +104,17 @@ func (x *x11) intern(name []byte) uintptr {
 
 // x11ClipInit interns the atoms and installs an error handler that ignores
 // BadWindow and friends: requestors vanish at any time, and Xlib's default
-// handler would exit the process.
-func (w *Window) x11ClipInit() {
+// handler would exit the process. It creates the request windows (root is
+// their parent).
+func (w *Window) x11ClipInit(root uintptr) {
 	x := &w.x
+	for i := range x.reqWin {
+		// InputOutput, 1x1 and never mapped: it only receives properties.
+		x.reqWin[i] = fr.Reset().Arg(x.dpy).Arg(root).Arg32(0).Arg32(0).Arg32(1).Arg32(1).
+			Arg32(0).Arg(0).Arg(0).Call(xf.createSimpleWindow).R0()
+		fr.Call3(xf.selectInput, x.dpy, x.reqWin[i], xPropertyChangeMask)
+	}
+	x.cur = x.reqWin[0]
 	x.aClipboard = x.intern(nameClipboard)
 	x.aUTF8 = x.intern(nameUTF8Str)
 	x.aTargets = x.intern(nameTargets)
@@ -206,7 +231,7 @@ func (x *x11) notify(requestor, selection, target, prop, tm uintptr) {
 func (w *Window) x11PropertyNotify() {
 	x := &w.x
 	win, atom, state := uintptr(x.i64(32)), uintptr(x.i64(40)), x.i32(56)
-	if win == x.win && atom == x.aProp && state == xPropNewValue && x.incr {
+	if win == x.cur && atom == x.aProp && state == xPropNewValue && x.incr {
 		w.x11PasteChunk()
 		return
 	}
@@ -231,12 +256,21 @@ func (w *Window) x11PropertyNotify() {
 	}
 }
 
+// x11DropSend ends send i. The requestor's property events were subscribed to
+// for it; they stay so while another send uses the same requestor window
+// (with another property).
 func (w *Window) x11DropSend(i int) {
 	x := &w.x
-	fr.Call3(xf.selectInput, x.dpy, x.sends[i].requestor, 0)
+	req := x.sends[i].requestor
 	x.nsend--
 	x.sends[i] = x.sends[x.nsend]
 	x.sends[x.nsend] = x11Send{}
+	for j := 0; j < x.nsend; j++ {
+		if x.sends[j].requestor == req {
+			return
+		}
+	}
+	fr.Call3(xf.selectInput, x.dpy, req, 0)
 }
 
 func (w *Window) x11SendDeadline() int64 {
@@ -271,6 +305,8 @@ func (w *Window) x11BeginPaste() bool {
 		return false
 	}
 	x.pasteIdx, x.incr = 0, false
+	x.gen++
+	x.cur = x.reqWin[x.gen%x11ReqWins]
 	w.clip.buf = w.clip.buf[:0]
 	w.x11Convert()
 	return true
@@ -279,15 +315,15 @@ func (w *Window) x11BeginPaste() bool {
 func (w *Window) x11Convert() {
 	x := &w.x
 	x.pasteWait = true
-	fr.Call3(xf.deleteProperty, x.dpy, x.win, x.aProp)
-	fr.Reset().Arg(x.dpy).Arg(x.aClipboard).Arg(x.pasteTarget(x.pasteIdx)).Arg(x.aProp).Arg(x.win).Arg(0).Call(xf.convertSelection)
+	fr.Call3(xf.deleteProperty, x.dpy, x.cur, x.aProp)
+	fr.Reset().Arg(x.dpy).Arg(x.aClipboard).Arg(x.pasteTarget(x.pasteIdx)).Arg(x.aProp).Arg(x.cur).Arg(0).Call(xf.convertSelection)
 	fr.Call1(xf.flush, x.dpy)
 }
 
 func (w *Window) x11CancelPaste() {
 	x := &w.x
 	if x.incr {
-		fr.Call3(xf.deleteProperty, x.dpy, x.win, x.aProp)
+		fr.Call3(xf.deleteProperty, x.dpy, x.cur, x.aProp)
 	}
 	x.pasteWait, x.incr = false, false
 }
@@ -297,7 +333,7 @@ func (w *Window) x11CancelPaste() {
 func (x *x11) getProp() bool {
 	x.pData = 0
 	long := uintptr((MaxPaste+1+3)/4 + 1)
-	st := fr.Reset().Arg(x.dpy).Arg(x.win).Arg(x.aProp).Arg(0).Arg(long).Arg(1).Arg(0).
+	st := fr.Reset().Arg(x.dpy).Arg(x.cur).Arg(x.aProp).Arg(0).Arg(long).Arg(1).Arg(0).
 		Arg(uintptr(unsafe.Pointer(&x.pType))).Arg(uintptr(unsafe.Pointer(&x.pFormat))).
 		Arg(uintptr(unsafe.Pointer(&x.pItems))).Arg(uintptr(unsafe.Pointer(&x.pAfter))).
 		Arg(uintptr(unsafe.Pointer(&x.pData))).Call(xf.getWindowProperty).R0()
@@ -305,7 +341,7 @@ func (x *x11) getProp() bool {
 		return false
 	}
 	if x.pAfter > 0 { // more than we take: the property stays, remove it
-		fr.Call3(xf.deleteProperty, x.dpy, x.win, x.aProp)
+		fr.Call3(xf.deleteProperty, x.dpy, x.cur, x.aProp)
 	}
 	return true
 }
@@ -342,7 +378,9 @@ func (w *Window) x11Append(latin bool) {
 // x11SelectionNotify handles the owner's answer to XConvertSelection.
 func (w *Window) x11SelectionNotify() {
 	x := &w.x
-	if !x.pasteWait || !w.clip.pending || uintptr(x.i64(40)) != x.aClipboard {
+	// requestor @32, selection @40, property @56. An answer to another
+	// request than the current one reaches another window.
+	if !x.pasteWait || !w.clip.pending || uintptr(x.i64(32)) != x.cur || uintptr(x.i64(40)) != x.aClipboard {
 		return
 	}
 	x.pasteWait = false

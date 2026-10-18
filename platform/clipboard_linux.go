@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"unicode/utf8"
+	"unsafe"
 )
 
 // The Linux clipboard (phase 5; see paste.go for the contract).
@@ -55,8 +56,13 @@ type clipSend struct {
 type clipboard struct {
 	// own is the text offered to other applications (valid UTF-8, \n line
 	// ends). Writes in flight hold slices of it, so it is replaced, never
-	// rewritten, while any of them is active.
+	// rewritten, while any of them is active. spare are the buffers it was
+	// swapped with: at most maxSends writes are in flight, so with maxSends
+	// spares one of the maxSends+1 buffers is always free, and copying while
+	// other applications are still reading the previous text allocates
+	// nothing once the buffers have grown to the text's size.
 	own   []byte
+	spare [maxSends][]byte
 	owned bool // this application holds the selection
 
 	// The pending paste request.
@@ -83,7 +89,7 @@ type clipboard struct {
 }
 
 func (c *clipboard) init() {
-	*c = clipboard{rfd: -1, pollRead: -1, own: c.own[:0], buf: c.buf[:0]}
+	*c = clipboard{rfd: -1, pollRead: -1, own: c.own[:0], spare: c.spare, buf: c.buf[:0]}
 	for i := range c.pollSend {
 		c.pollSend[i] = -1
 	}
@@ -120,8 +126,8 @@ func (w *Window) clipSet(b []byte) {
 	if !utf8.Valid(b) {
 		b = []byte(strings.ToValidUTF8(string(b), "\uFFFD"))
 	}
-	if w.clipBusy() {
-		c.own = nil // writes in flight keep the old backing array
+	if w.clipUses(c.own) { // writes in flight keep the old backing array
+		w.clipSwapOwn()
 	}
 	c.own = append(c.own[:0], b...)
 	c.own = cleanText(c.own)
@@ -252,8 +258,46 @@ func (w *Window) clipDeadline() int64 {
 	return d
 }
 
-// clipBusy reports whether a write in flight still refers to c.own.
-func (w *Window) clipBusy() bool { return w.clip.nsend > 0 || (!w.wl && w.x.nsend > 0) }
+// clipUses reports whether a write in flight still refers to the memory of b.
+func (w *Window) clipUses(b []byte) bool {
+	if cap(b) == 0 {
+		return false
+	}
+	for i := 0; i < w.clip.nsend; i++ {
+		if sameArray(w.clip.sends[i].data, b) {
+			return true
+		}
+	}
+	for i := 0; !w.wl && i < w.x.nsend; i++ {
+		if sameArray(w.x.sends[i].data, b) {
+			return true
+		}
+	}
+	return false
+}
+
+// sameArray reports whether the first byte of a lies in the backing array of
+// b (the writes hold b or slices of it).
+func sameArray(a, b []byte) bool {
+	if len(a) == 0 || cap(b) == 0 {
+		return false
+	}
+	pa, pb := uintptr(unsafe.Pointer(unsafe.SliceData(a))), uintptr(unsafe.Pointer(unsafe.SliceData(b)))
+	return pa >= pb && pa < pb+uintptr(cap(b))
+}
+
+// clipSwapOwn makes a buffer no write refers to the new c.own, keeping the
+// old one among the spares until its writes are done.
+func (w *Window) clipSwapOwn() {
+	c := &w.clip
+	for i := range c.spare {
+		if !w.clipUses(c.spare[i]) {
+			c.spare[i], c.own = c.own, c.spare[i]
+			return
+		}
+	}
+	c.own = nil // unreachable with maxSends spares; a fresh buffer is always correct
+}
 
 // clipTick fails a pending request that made no progress; the backends call
 // it after every poll.

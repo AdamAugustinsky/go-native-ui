@@ -255,7 +255,7 @@ func (w *Window) openX11(o Options) (err error) {
 		xEnterWindowMask | xLeaveWindowMask | xPointerMotionMask | xExposureMask |
 		xVisibilityChangeMask | xStructureNotifyMask | xFocusChangeMask | xPropertyChangeMask)
 	fr.Call3(xf.selectInput, x.dpy, x.win, mask)
-	w.x11ClipInit()
+	w.x11ClipInit(root)
 
 	x.wmDelete = fr.Call3(xf.internAtom, x.dpy, uintptr(unsafe.Pointer(&nameWMDelete[0])), 0)
 	x.wmProto = fr.Call3(xf.internAtom, x.dpy, uintptr(unsafe.Pointer(&nameWMProtocols[0])), 0)

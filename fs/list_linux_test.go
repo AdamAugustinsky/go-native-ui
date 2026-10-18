@@ -294,13 +294,22 @@ func TestLinuxListZeroAlloc(t *testing.T) {
 		runtime.ReadMemStats(&b)
 		return b.Mallocs - a.Mallocs
 	}
-	ms, mb := measure(small), measure(big)
-	t.Logf("20 warm listings: %d mallocs for 11 entries, %d for 3001", ms, mb)
-	if mb > ms+5 { // background noise only; a per-entry allocation would add 60,000
-		t.Errorf("allocations scale with entries: %d (11 entries) vs %d (3001 entries)", ms, mb)
+	// The counters are the process's: a runtime one-off in the window (a new
+	// OS thread for a syscall that ran long, 4+ mallocs each) shows in them
+	// though the listing did not allocate. A listing that allocates does it
+	// every time, so one clean attempt of three is the evidence.
+	var ms, mb uint64
+	ok := false
+	for attempt := 0; attempt < 3 && !ok; attempt++ {
+		ms, mb = measure(small), measure(big)
+		t.Logf("20 warm listings: %d mallocs for 11 entries, %d for 3001", ms, mb)
+		// background noise only; a per-entry allocation would add 60,000,
+		// and one per listing 20
+		ok = mb <= ms+5 && mb <= 20
 	}
-	if mb > 20 { // at most one per listing
-		t.Errorf("%d mallocs over 20 listings", mb)
+	if !ok {
+		t.Errorf("allocations scale with entries or with listings: %d (11 entries) vs %d (3001 entries) in the last of three attempts; allocation sites of one more:\n%s",
+			ms, mb, profileAttempt(func() { measure(big) }))
 	}
 }
 

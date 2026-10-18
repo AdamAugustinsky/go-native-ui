@@ -1,6 +1,8 @@
 package menu
 
 import (
+	"fmt"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -443,8 +445,64 @@ func TestMatchAllocatesNothing(t *testing.T) {
 		frame()
 	}
 	if n := testing.AllocsPerRun(50, frame); n != 0 {
-		t.Fatalf("%v allocations per frame", n)
+		// Say what allocates (as cmd/pilot -allocsites does): a frame that
+		// allocates every time shows its stacks here, and a one-off in the
+		// process (a runtime thread or GC worker start) shows none.
+		t.Fatalf("%v allocations per frame; allocation sites of 50 more frames (none: a one-off):\n%s",
+			n, profileAllocs(func() {
+				for i := 0; i < 50; i++ {
+					frame()
+				}
+			}))
 	}
+}
+
+// profileAllocs runs f with every allocation profiled and returns the call
+// stacks that allocated during it.
+func profileAllocs(f func()) string {
+	old := runtime.MemProfileRate
+	runtime.MemProfileRate = 1
+	defer func() { runtime.MemProfileRate = old }()
+	snapshot := func() map[[32]uintptr]int64 {
+		runtime.GC()
+		runtime.GC()
+		recs := make([]runtime.MemProfileRecord, 1024)
+		n, ok := runtime.MemProfile(recs, true)
+		for !ok {
+			recs = make([]runtime.MemProfileRecord, n+256)
+			n, ok = runtime.MemProfile(recs, true)
+		}
+		m := make(map[[32]uintptr]int64, n)
+		for _, r := range recs[:n] {
+			m[r.Stack0] += r.AllocObjects
+		}
+		return m
+	}
+	before := snapshot()
+	f()
+	var sb strings.Builder
+	for stk, n := range snapshot() {
+		if n-before[stk] <= 0 {
+			continue
+		}
+		fmt.Fprintf(&sb, "  %d object(s):\n", n-before[stk])
+		pcs := stk[:]
+		for i, pc := range pcs {
+			if pc == 0 {
+				pcs = pcs[:i]
+				break
+			}
+		}
+		frames := runtime.CallersFrames(pcs)
+		for {
+			fr, more := frames.Next()
+			fmt.Fprintf(&sb, "    %s:%d\n", fr.Function, fr.Line)
+			if !more {
+				break
+			}
+		}
+	}
+	return sb.String()
 }
 
 // modalRig is a window with a modal overlay open, holding a text field with a

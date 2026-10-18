@@ -93,8 +93,9 @@ type fakeComp struct {
 	extStall                          bool
 	decoMode                          uint32 // 0: no decoration global behaviour, 1 client, 2 server
 	exports                           int
-	ti                                *fobj // the text input
-	quiet                             bool  // "quiet": requests are no longer logged
+	ti                                *fobj      // the text input
+	outMu                             sync.Mutex // guards out (see say)
+	quiet                             bool       // "quiet": requests are no longer logged
 	tiSerial                          uint32
 	maximized                         bool
 	cfgW, cfgH                        int32
@@ -163,7 +164,13 @@ func goString(p *byte) string {
 	return string(b)
 }
 
+// say reports a line to the test. It is called from the request loop, from
+// the command goroutine (after it let go of s.mu) and from the goroutines of
+// pasteFromClient, so the writer has a lock of its own: an unsynchronized
+// bufio.Writer garbled lines and lost acknowledgements.
 func (s *fakeComp) say(format string, a ...any) {
+	s.outMu.Lock()
+	defer s.outMu.Unlock()
 	fmt.Fprintf(s.out, format+"\n", a...)
 	s.out.Flush()
 }
@@ -635,6 +642,12 @@ func (s *fakeComp) command(line string) {
 		return v
 	}
 	switch f[0] {
+	case "spam": // n: n lines from a goroutine of their own, as the paste goroutines report
+		go func(n int) {
+			for i := 0; i < n; i++ {
+				s.say("SPAM %d %s", i, strings.Repeat("x", 40))
+			}
+		}(int(num(0)))
 	case "quiet": // stop logging requests (the test measures this process's allocations; the log reader would allocate)
 		s.quiet = true
 	case "focus":

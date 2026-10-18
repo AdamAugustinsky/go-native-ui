@@ -337,3 +337,39 @@ func TestX11ClipboardNoAlloc(t *testing.T) {
 		t.Errorf("copy + own paste allocate %.1f times per round, want 0", n)
 	}
 }
+
+// Copying while a write of the previous text is still in flight (another
+// application reading slowly) allocates nothing once the buffers have grown,
+// and leaves the text the write holds alone. The backends keep their writes in
+// the same place the pool looks at, so a window without a connection shows it.
+func TestCopyDuringWriteNoAlloc(t *testing.T) {
+	w := new(Window)
+	w.wl = true
+	w.clip.init()
+	a, b := []byte(bigText(300<<10)), []byte(bigText(300<<10))
+	b[0] = 'H'
+	w.clipSet(a)
+	held := w.clip.own[:len(a)/2]
+	heldCopy := string(held)
+	w.clip.sends[0] = clipSend{data: held, deadline: nanotime() + 1e12}
+	w.clip.nsend = 1
+
+	flip := false
+	step := func() {
+		flip = !flip
+		if flip {
+			w.clipSet(b)
+		} else {
+			w.clipSet(a)
+		}
+	}
+	for i := 0; i < 10; i++ {
+		step()
+	}
+	if n := testing.AllocsPerRun(50, step); n != 0 {
+		t.Errorf("copying during a write allocates %.1f times per round, want 0", n)
+	}
+	if string(held) != heldCopy {
+		t.Error("the text of the write in flight was overwritten")
+	}
+}
