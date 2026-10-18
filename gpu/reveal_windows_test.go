@@ -61,10 +61,11 @@ const (
 	pwRenderFullContent = 2
 	dwmaCloaked         = 14
 	dwmaTransitionsOff  = 3
-	hwndBottom          = 1
+	hwndTopmost         = ^uintptr(0) // (HWND)-1
 	wsPopup             = 0x80000000
 	wsVisible           = 0x10000000
 	wsExToolWindow      = 0x00000080
+	wsExTopmost         = 0x00000008
 	swpNoSize           = 0x0001
 	swpNoMove           = 0x0002
 	swpNoActivate       = 0x0010
@@ -90,8 +91,9 @@ type wndClass struct {
 
 type screenPt struct{ x, y int32 }
 
-// backdrop is a window covering the primary screen in one solid colour, kept
-// below every other window of the process.
+// backdrop is a topmost window covering the primary screen in one solid
+// colour. The window under test is made topmost after it, so it is above the
+// backdrop and the runner's console window is below both.
 type backdrop struct {
 	hwnd, brush uintptr
 	cls         wndClass
@@ -110,12 +112,11 @@ func newBackdrop(t *testing.T, colour uintptr) *backdrop {
 		t.Skip("cannot register the backdrop window class")
 	}
 	cx, cy := win32.Call(pMetric, 0), win32.Call(pMetric, 1) // SM_CXSCREEN, SM_CYSCREEN
-	b.hwnd = win32.Call(pCreate, wsExToolWindow, uintptr(unsafe.Pointer(&b.name[0])), 0, wsPopup|wsVisible, 0, 0, cx, cy, 0, 0, 0, 0)
+	b.hwnd = win32.Call(pCreate, wsExToolWindow|wsExTopmost, uintptr(unsafe.Pointer(&b.name[0])), 0, wsPopup|wsVisible, 0, 0, cx, cy, 0, 0, 0, 0)
 	if b.hwnd == 0 {
 		win32.Call(pUnrCls, uintptr(unsafe.Pointer(&b.name[0])), 0)
 		t.Skip("cannot create the backdrop window")
 	}
-	win32.Call(pSetPos, b.hwnd, hwndBottom, 0, 0, 0, 0, swpNoMove|swpNoSize|swpNoActivate)
 	return b
 }
 
@@ -244,6 +245,7 @@ func revealRun(t *testing.T, hidden bool, again bool) revealResult {
 
 	bd := newBackdrop(t, green)
 	defer bd.destroy()
+	win32.Call(pSetPos, hwnd, hwndTopmost, 0, 0, 0, 0, swpNoMove|swpNoSize|swpNoActivate)
 	var revealedAt atomic.Int64
 	if hidden {
 		surf.RevealOnFirstFrame(func() {
