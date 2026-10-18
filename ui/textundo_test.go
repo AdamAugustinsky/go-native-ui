@@ -300,3 +300,123 @@ func TestUndoZeroAllocWhenFull(t *testing.T) {
 		t.Fatalf("%v allocs per cycle with a full history", n)
 	}
 }
+
+// Lowering the limit while steps are undone must not drop the steps that redo
+// needs first.
+func TestSetUndoLimitKeepsRedoPrerequisites(t *testing.T) {
+	var b TextBuffer
+	b.now = 1e9
+	b.InsertString("a")
+	b.SetCaret(1) // ends the run
+	b.InsertString("b")
+	if !b.Undo() || !b.Undo() || b.String() != "" {
+		t.Fatalf("undo twice: %q", b.String())
+	}
+	b.SetUndoLimit(1, 1024)
+	if !b.Redo() || b.String() != "a" {
+		t.Fatalf("redo after SetUndoLimit: %q", b.String())
+	}
+	if b.Redo() {
+		t.Fatal("the dependent step was kept")
+	}
+	if !b.Undo() || b.String() != "" {
+		t.Fatalf("undo: %q", b.String())
+	}
+}
+
+// A model of the history: states to go back to and states to go forward to.
+type undoModel struct {
+	cur         string
+	back, ahead []string // back: oldest first; ahead: the next redo last
+	steps       int
+}
+
+func (m *undoModel) edit(s string) {
+	m.ahead = m.ahead[:0]
+	for len(m.back) >= m.steps {
+		m.back = m.back[1:]
+	}
+	m.back = append(m.back, m.cur)
+	m.cur = s
+}
+
+func (m *undoModel) undo() bool {
+	if len(m.back) == 0 {
+		return false
+	}
+	m.ahead = append(m.ahead, m.cur)
+	m.cur, m.back = m.back[len(m.back)-1], m.back[:len(m.back)-1]
+	return true
+}
+
+func (m *undoModel) redo() bool {
+	if len(m.ahead) == 0 {
+		return false
+	}
+	m.back = append(m.back, m.cur)
+	m.cur, m.ahead = m.ahead[len(m.ahead)-1], m.ahead[:len(m.ahead)-1]
+	return true
+}
+
+func (m *undoModel) limit(steps int) {
+	m.steps = steps
+	for len(m.back)+len(m.ahead) > steps {
+		if len(m.back) > 0 {
+			m.back = m.back[1:]
+		} else {
+			m.ahead = m.ahead[1:] // the farthest redo
+		}
+	}
+}
+
+func TestUndoRedoLimitAgainstModel(t *testing.T) {
+	seed := uint64(88172645463325252)
+	rnd := func(n int) int {
+		seed ^= seed << 13
+		seed ^= seed >> 7
+		seed ^= seed << 17
+		return int(seed % uint64(n))
+	}
+	for trial := 0; trial < 300; trial++ {
+		var b TextBuffer
+		b.now = 1e9
+		m := &undoModel{steps: defaultUndoSteps}
+		for op := 0; op < 60; op++ {
+			switch k := rnd(10); {
+			case k < 4: // an edit of its own: append a letter
+				b.SetCaret(b.Len())
+				b.InsertString(string(rune('a' + rnd(26))))
+				m.edit(b.String())
+			case k < 6:
+				if got, want := b.Undo(), m.undo(); got != want {
+					t.Fatalf("trial %d op %d: undo = %v, model %v", trial, op, got, want)
+				}
+			case k < 8:
+				if got, want := b.Redo(), m.redo(); got != want {
+					t.Fatalf("trial %d op %d: redo = %v, model %v", trial, op, got, want)
+				}
+			default:
+				n := 1 + rnd(6)
+				b.SetUndoLimit(n, 1<<20)
+				m.limit(n)
+			}
+			if b.String() != m.cur {
+				t.Fatalf("trial %d op %d: text %q, model %q", trial, op, b.String(), m.cur)
+			}
+		}
+		// drain: everything the model can undo and redo, the buffer can
+		for m.undo() {
+			if !b.Undo() || b.String() != m.cur {
+				t.Fatalf("trial %d: draining undo: %q, model %q", trial, b.String(), m.cur)
+			}
+		}
+		for m.redo() {
+			if !b.Redo() || b.String() != m.cur {
+				t.Fatalf("trial %d: draining redo: %q, model %q", trial, b.String(), m.cur)
+			}
+		}
+		if b.Redo() {
+			t.Fatalf("trial %d: redo beyond the model", trial)
+		}
+	}
+}
