@@ -43,6 +43,27 @@ func TestTooltipAppearsAfterTheDelay(t *testing.T) {
 	}
 }
 
+// The divider lies over the gutter between the panes, centred on it: that is
+// where the pointer finds it.
+func TestSplitterDividerIsOverTheGutter(t *testing.T) {
+	sp := NewSplitState(0.5, 0.5)
+	var p0, p1 [4]float32
+	g := newRig(t, 600, 300, func(k *Kit) {
+		s := k.BeginSplitter("main", &sp, ui.AxisX)
+		p0, p1 = s.PaneRect(0), s.PaneRect(1)
+		for i := 0; i < 2; i++ {
+			s.Pane(i)
+			s.EndPane()
+		}
+		k.EndSplitter(&s)
+	})
+	g.frames(2)
+	x, _ := centre(g.must(ui.RoleSplitter, "Divider"))
+	if want := (p0[2] + p1[0]) / 2; x < want-0.5 || x > want+0.5 {
+		t.Errorf("the divider is centred at x = %v, the gutter (%v to %v) at %v", x, p0[2], p1[0], want)
+	}
+}
+
 // A splitter's divider moves with the pointer and with the keyboard, and no
 // pane goes below its minimum.
 func TestSplitterDragAndKeys(t *testing.T) {

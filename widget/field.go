@@ -14,6 +14,17 @@ type FieldSignal struct {
 	// Cancelled: Escape went down in the field (a search field clears itself
 	// then).
 	Cancelled bool
+	// Pressed: the left button went down on the field in this frame.
+	Pressed bool
+}
+
+// FieldKey is the key of the box that takes the keyboard focus in the field
+// that TextField or SearchField builds with label inside the box whose key is
+// parent. An app moves the focus there with ui.Context.SetFocus before the
+// field has been built.
+func FieldKey(parent ui.Key, label string) ui.Key {
+	_, ident := ui.SplitLabel(label)
+	return ui.HashString(ui.HashString(parent, ident), ident)
 }
 
 // TextField builds a single-line text field editing buf, styled by the theme,
@@ -96,7 +107,7 @@ func (k *Kit) field(label string, buf *ui.TextBuffer, placeholder string, search
 	fs := c.TextField(ident, buf)
 	res := FieldSignal{
 		Signal:    Signal{ID: fs.ID, Hovering: fs.Hovering, Focused: fs.Focused, Changed: fs.Changed, Clicked: fs.Clicked},
-		Submitted: fs.Submitted, Cancelled: fs.Cancelled,
+		Submitted: fs.Submitted, Cancelled: fs.Cancelled, Pressed: fs.Pressed,
 	}
 
 	if search {

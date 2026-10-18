@@ -31,17 +31,87 @@ type ListState struct {
 
 	curRow, ancRow int     // where the cursor and anchor were last seen (hints)
 	shown          float64 // the scroll offset the last frame laid out
+	rowPx, padPx   float32 // the row pitch and the padding above the first row, in the last frame
 	goRow          int
 	goPending      bool
 	find           [findMax]byte
 	nFind          int
 	findT          int64
+
+	mv      moveReq // a cursor move the app asked for
+	revRow  int
+	revWant bool
+	topRow  int
+	topFrac float32
+	topWant bool
+}
+
+// moveReq is a pending MoveTo or MoveBy.
+type moveReq struct {
+	pending bool
+	abs     bool // row is a display row; else a number of rows from the cursor
+	row     int
+	extend  bool
 }
 
 // GoTo moves the cursor to display row r, selects that row alone and scrolls
 // it into view, in the next frame the list is built. The app calls it to answer
 // type-to-find.
 func (st *ListState) GoTo(r int) { st.goRow, st.goPending = r, true }
+
+// MoveTo moves the cursor to display row r (clamped to the rows) in the next
+// frame the list is built, whether or not the list has the keyboard: the row
+// is selected alone, or with extend the range from the anchor to it is, and it
+// is scrolled into view. An app that sends the arrow keys of a text field to
+// the list uses it.
+func (st *ListState) MoveTo(r int, extend bool) {
+	st.mv = moveReq{pending: true, abs: true, row: r, extend: extend}
+}
+
+// MoveBy is MoveTo for the row n rows from the cursor's (n may be negative; the
+// cursor is taken as the row before the first when there is none). Several
+// moves in one frame add up when they extend alike.
+func (st *ListState) MoveBy(n int, extend bool) {
+	if st.mv.pending && !st.mv.abs && st.mv.extend == extend {
+		n += st.mv.row
+	}
+	st.mv = moveReq{pending: true, row: n, extend: extend}
+}
+
+// Reveal scrolls display row r into view in the next frame the list is built:
+// a far jump is instant, a near one glides. The selection does not change.
+func (st *ListState) Reveal(r int) { st.revRow, st.revWant = r, true }
+
+// TopRow is the display row at the top of the view as of the last frame, and
+// how far it has scrolled out (0 up to but not including 1).
+func (st *ListState) TopRow() (row int, frac float32) {
+	if st.rowPx <= 0 {
+		return 0, 0
+	}
+	f := max(st.shown, 0) / float64(st.rowPx)
+	row = int(f)
+	return row, float32(f - float64(row))
+}
+
+// SetTopRow scrolls so that display row r, scrolled out by frac of its height,
+// is at the top, in the next frame the list is built; an app that replaced its
+// rows uses it to keep the place.
+func (st *ListState) SetTopRow(r int, frac float32) {
+	st.topRow, st.topFrac, st.topWant = r, frac, true
+}
+
+// RowTop is the distance in pixels from the top of the list's box to the top of
+// display row r as of the last frame (negative above the view).
+func (st *ListState) RowTop(r int) float32 {
+	return st.padPx + float32(r)*st.rowPx - float32(st.shown)
+}
+
+// PadPx is the room in pixels above the first row inside the list's box, as of
+// the last frame.
+func (st *ListState) PadPx() float32 { return st.padPx }
+
+// RowPx is the height in pixels of a row as of the last frame.
+func (st *ListState) RowPx() float32 { return st.rowPx }
 
 // List is an open virtualised list. Build rows First to Last-1 with Row, then
 // EndList. The other fields are what happened this frame.
@@ -74,6 +144,7 @@ type List struct {
 	st     *ListState
 	o, s   ui.ID
 	key    ui.Key
+	skey   ui.Key
 	rowH   float32
 	padT   float32
 	inRow  bool
@@ -118,6 +189,10 @@ func (k *Kit) beginList(label string, st *ListState, rows int, table bool) List 
 	_, ident := ui.SplitLabel(label)
 	okey := ui.HashString(c.ParentKey(), ident)
 	rowH := theme.Snap(px.RowH)
+	if k.rowPt > 0 {
+		rowH = theme.Snap(k.Pt(k.rowPt))
+	}
+	k.rowPt = 0
 	l := List{k: k, st: st, Rows: rows, rowH: rowH, hover: -1, key: okey, table: table, axes: ScrollVertical}
 
 	k.size(ui.Pct(1), ui.Pct(1))
@@ -146,8 +221,11 @@ func (k *Kit) beginList(label string, st *ListState, rows int, table bool) List 
 	l.Focused = c.Focused(l.s) && !k.off()
 	l.ring = l.Focused && c.FocusVisible()
 
+	st.rowPx, st.padPx = rowH, l.padT
+	l.scrollRequests()
 	l.First, l.Last = c.ListRange(l.s, rows, rowH, 2)
 	_, sy := c.Scroll(l.s)
+	l.skey = skey
 
 	if !k.off() {
 		l.input(ps, c.Rect(l.s))
@@ -158,6 +236,47 @@ func (k *Kit) beginList(label string, st *ListState, rows int, table bool) List 
 		l.cursor, l.hasCur = it, true
 	}
 	return l
+}
+
+// Key is the key of the list's box, the one that takes the keyboard focus: an
+// app moves the focus to the list with ui.Context.SetFocus(l.Key()).
+func (l *List) Key() ui.Key { return l.skey }
+
+// scrollRequests applies the app's Reveal and SetTopRow before the rows in
+// view are chosen.
+func (l *List) scrollRequests() {
+	st, c := l.st, l.k.c
+	if st.topWant {
+		st.topWant = false
+		span := float64(l.padT)*2 + float64(l.Rows)*float64(l.rowH) - float64(c.Rect(l.s)[3]-c.Rect(l.s)[1])
+		c.SetScroll(l.s, 0, min(max((float64(st.topRow)+float64(st.topFrac))*float64(l.rowH), 0), max(span, 0)))
+	}
+	if st.revWant {
+		st.revWant = false
+		if l.Rows == 0 {
+			return
+		}
+		r := min(max(st.revRow, 0), l.Rows-1)
+		rect := c.Rect(l.s)
+		view := float64(rect[3] - rect[1])
+		top := float64(l.padT) + float64(r)*float64(l.rowH)
+		bottom := top + float64(l.rowH)
+		_, sy := c.Scroll(l.s)
+		var target float64
+		switch {
+		case top < sy:
+			target = top
+		case bottom > sy+view:
+			target = bottom - view
+		default:
+			return
+		}
+		if math.Abs(target-sy) > 4*view {
+			c.SetScroll(l.s, 0, target)
+		} else {
+			c.ScrollTo(l.s, 0, target)
+		}
+	}
 }
 
 // hoverFrom finds the display row under the pointer from the signal of the
@@ -199,16 +318,27 @@ func (l *List) rowOfItem(item uint32, hint int) int {
 	return -1
 }
 
+// cursorRow is the display row of the cursor, -1 if there is none or it is not
+// shown. A scan that was needed is remembered, so that a stale hint costs one
+// scan and not one per frame.
 func (l *List) cursorRow() int {
 	if it, ok := l.st.Sel.Cursor(); ok {
-		return l.rowOfItem(it, l.st.curRow)
+		r := l.rowOfItem(it, l.st.curRow)
+		if r >= 0 {
+			l.st.curRow = r
+		}
+		return r
 	}
 	return -1
 }
 
 func (l *List) anchorRow() int {
 	if it, ok := l.st.Sel.Anchor(); ok {
-		return l.rowOfItem(it, l.st.ancRow)
+		r := l.rowOfItem(it, l.st.ancRow)
+		if r >= 0 {
+			l.st.ancRow = r
+		}
+		return r
 	}
 	return -1
 }
@@ -254,9 +384,24 @@ func (l *List) input(ps ui.Signal, rect [4]float32) {
 		st.goPending = false
 		l.moveTo(st.goRow, false)
 	}
+	if m := st.mv; m.pending {
+		st.mv.pending = false
+		r := m.row
+		if !m.abs {
+			r += max(l.cursorRow(), -1) // from the row before the first when there is no cursor
+		}
+		l.moveTo(r, m.extend)
+	}
 
-	if ps.Pressed && l.Rows > 0 {
-		if r := l.rowAt(ps.Mouse[1]); r >= 0 {
+	if ps.Pressed {
+		if r := l.rowAt(ps.Mouse[1]); r < 0 {
+			// the empty room below the rows: a press there deselects, as in a
+			// file manager, unless the press is extending a selection
+			if in.Mods&(ui.ModShift|prim) == 0 && st.Sel.Count() > 0 {
+				st.Sel.Clear()
+				l.Changed = true
+			}
+		} else {
 			item := itemAt(st.Order, r)
 			switch {
 			case in.Mods&ui.ModShift != 0:
@@ -295,6 +440,7 @@ func (l *List) input(ps ui.Signal, rect [4]float32) {
 	view := rect[3] - rect[1]
 	page := max(int(view/l.rowH)-1, 1)
 	cur := l.cursorRow()
+	was := l.Changed
 	switch {
 	case c.TakeKey(ui.KeyDown, 0):
 		l.moveTo(cur+1, false)
@@ -321,8 +467,11 @@ func (l *List) input(ps ui.Signal, rect [4]float32) {
 	case c.TakeKey(ui.KeyEnd, ui.ModShift):
 		l.moveTo(l.Rows-1, true)
 	case c.TakeKey('A', prim):
-		st.Sel.SelectAll(l.itemCount())
+		l.selectAllRows()
 		l.Changed = true
+	}
+	if l.Changed && !was { // the keyboard moved the cursor: show it
+		c.SetFocusVisible(true)
 	}
 	if cur >= 0 && ps.Activated { // Enter, Space, or an assistive technology's press
 		l.Activated, l.Item = true, itemAt(st.Order, cur)
@@ -330,14 +479,19 @@ func (l *List) input(ps ui.Signal, rect [4]float32) {
 	l.typeToFind(in)
 }
 
-// itemCount is the number of items select-all covers: the rows, or with an
-// order the largest item it names plus one.
-func (l *List) itemCount() int {
-	n := l.Rows
-	for _, it := range l.st.Order[:min(len(l.st.Order), l.Rows)] {
-		n = max(n, int(it)+1)
+// selectAllRows selects the items of the rows: all items 0..Rows-1 without an
+// order, exactly the ones the order shows with one (items that a filter hides
+// are not selected).
+func (l *List) selectAllRows() {
+	st := l.st
+	if len(st.Order) == 0 {
+		st.Sel.SelectAll(l.Rows)
+		return
 	}
-	return n
+	st.Sel.Clear()
+	for _, it := range st.Order[:min(len(st.Order), l.Rows)] {
+		st.Sel.Set(it, true)
+	}
 }
 
 // typeToFind collects the characters typed into the focused list.
@@ -419,6 +573,26 @@ func (l *List) Row(r int, item uint32) {
 		l.Changed = true
 	}
 }
+
+// Empty shows msg in the body of a list that has no rows, in style st. Call it
+// after the loop that builds the rows; with rows it builds nothing.
+func (l *List) Empty(msg []byte, st TextStyle) {
+	if l.Rows != 0 || len(msg) == 0 {
+		return
+	}
+	l.endRow()
+	k := l.k
+	c := k.c
+	c.NextSize(ui.Pct(1), ui.Px(l.rowH))
+	c.NextPadding(k.r.Px.Pad, 0, k.r.Px.Pad, 0)
+	k.styleNext(st)
+	c.NextRole(ui.RoleLabel)
+	c.NextSemNameBytes(msg)
+	c.BoxKeyed(ui.DrawText|ui.FadeOverflowX, ui.KeyN(l.key, 2), msg)
+}
+
+// RowSelected reports whether the row being built is selected.
+func (l *List) RowSelected() bool { return l.rowSel }
 
 // TextColor is the text colour for the row being built: the theme's, or its
 // selection text colour on a selected row.

@@ -100,6 +100,7 @@ type Kit struct {
 	nDis    int
 	nOff    int // how many of them are on
 
+	rowPt      float32 // NextRowHeight, in points; 0 when none
 	nw, nh     ui.Size // Size for the next widget (NextSize)
 	hasW, hasH bool
 	nextAlign  ui.Align
