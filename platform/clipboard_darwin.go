@@ -18,7 +18,7 @@ var (
 	clsPasteboard, clsNSString                                    objc.ID
 	pbType                                                        objc.ID
 	selGeneralPB, selStringForType, selClearContents, selSetStrFT objc.SEL
-	selAllocStr, selInitBytes                                     objc.SEL
+	selAllocStr, selInitBytes, selLenBytes                        objc.SEL
 )
 
 func pbInit() {
@@ -29,6 +29,7 @@ func pbInit() {
 		selGeneralPB, selStringForType = objc.Sel("generalPasteboard"), objc.Sel("stringForType:")
 		selClearContents, selSetStrFT = objc.Sel("clearContents"), objc.Sel("setString:forType:")
 		selAllocStr, selInitBytes = objc.Sel("alloc"), objc.Sel("initWithBytes:length:encoding:")
+		selLenBytes = objc.Sel("lengthOfBytesUsingEncoding:")
 	})
 }
 
