@@ -185,6 +185,7 @@ func Open(o Options) (*Window, error) {
 func (w *Window) Wait(timeoutNs int64) []Event {
 	w.q.reset()
 	w.clipDeliver()
+	w.imDeliver()
 	if w.closeReq {
 		w.closeReq = false
 		w.q.push(Event{Kind: EvClose, Time: nanotime()})

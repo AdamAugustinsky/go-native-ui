@@ -41,6 +41,7 @@ type wlIM struct {
 	active     bool // the app has a text field focused (SetTextInput)
 	enabled    bool // enable() sent and not disabled since
 	composing  bool // an EvPreedit with text is outstanding
+	endPending bool // the app ended it between Waits: the EvPreedit is queued by the next Wait
 	rect       [4]int32
 	rectSet    bool
 	pre, com   []byte // pending preedit and commit text, until done
@@ -92,10 +93,10 @@ func (w *Window) onTextInput(op uint32, a unsafe.Pointer) {
 	switch op {
 	case 0: // enter(surface)
 		im.entered = true
-		w.imSync()
+		w.imSync(true)
 	case 1: // leave(surface)
 		im.entered, im.enabled = false, false
-		w.imEndComposition()
+		w.imEndComposition(true)
 	case 2: // preedit_string(text, cursor_begin, cursor_end)
 		im.pre = copyCString(im.pre, argP(a, 0))
 		im.preB, im.preE = int32(argU(a, 1)), int32(argU(a, 2))
@@ -106,9 +107,25 @@ func (w *Window) onTextInput(op uint32, a unsafe.Pointer) {
 	}
 }
 
-func (w *Window) imEndComposition() {
+// imEndComposition reports that the composition ended. Called from the event
+// dispatch (inside Wait) the EvPreedit is queued at once; the app's own calls
+// (SetTextInput, DiscardComposition) come between Waits, whose start resets the
+// queue, so imDeliver queues it at the next one.
+func (w *Window) imEndComposition(inWait bool) {
 	if im := &w.wy.im; im.composing {
 		im.composing = false
+		if inWait {
+			w.q.pushPreedit(nil, 0, 0, nanotime())
+		} else {
+			im.endPending = true
+		}
+	}
+}
+
+// imDeliver queues what the app's calls ended since the last Wait.
+func (w *Window) imDeliver() {
+	if im := &w.wy.im; im.endPending {
+		im.endPending = false
 		w.q.pushPreedit(nil, 0, 0, nanotime())
 	}
 }
@@ -119,7 +136,7 @@ func (w *Window) imDone() {
 	im := &w.wy.im
 	t := nanotime()
 	if len(im.com) > 0 {
-		w.imEndComposition()
+		w.imEndComposition(true)
 		w.q.pushText(im.com, t)
 	}
 	if n := int32(len(im.pre)); n > 0 {
@@ -134,14 +151,14 @@ func (w *Window) imDone() {
 		w.q.pushPreedit(im.pre, b, e-b, t)
 		im.composing = true
 	} else {
-		w.imEndComposition()
+		w.imEndComposition(true)
 	}
 	im.pre, im.com = im.pre[:0], im.com[:0]
 }
 
 // imSync enables or disables the text input to match focus and the app's
 // text field.
-func (w *Window) imSync() {
+func (w *Window) imSync(inWait bool) {
 	y := &w.wy
 	im := &y.im
 	if im.ti == 0 {
@@ -157,7 +174,7 @@ func (w *Window) imSync() {
 		w.imSendRect()
 	} else {
 		w.req(im.ti, 2, 0, version(im.ti), 0) // disable
-		w.imEndComposition()
+		w.imEndComposition(inWait)
 	}
 	w.req(im.ti, 7, 0, version(im.ti), 0) // commit
 	w.wlFlush()
@@ -204,7 +221,7 @@ func (w *Window) SetTextInput(active bool) {
 		return
 	}
 	w.wy.im.active = active
-	w.imSync()
+	w.imSync(false)
 }
 
 // DiscardComposition cancels a composition in progress without committing it:
@@ -214,7 +231,7 @@ func (w *Window) DiscardComposition() {
 		return
 	}
 	im := &w.wy.im
-	w.imEndComposition()
+	w.imEndComposition(false)
 	if im.enabled { // disable and enable again: the input method drops its state
 		w.req(im.ti, 2, 0, version(im.ti), 0)
 		w.req(im.ti, 7, 0, version(im.ti), 0)
