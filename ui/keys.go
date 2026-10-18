@@ -181,3 +181,14 @@ func (c *Context) claimFieldKeys() {
 	}
 	c.claimed |= c.fieldKeys
 }
+
+// FieldEmptied tells ui that the app emptied the text of the field box id
+// after TextField returned (a search field's Escape or clear button): the
+// field's claim on Escape in an overlay (NextEscapeClears), which was decided
+// from the text as the field's own build left it, ends at once, so the next
+// Escape, in the very next frame, reaches the overlay.
+func (c *Context) FieldEmptied(id ID) {
+	if id != 0 {
+		c.boxes[id].escClears = false
+	}
+}

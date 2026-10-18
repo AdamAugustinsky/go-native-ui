@@ -348,7 +348,6 @@ func (c *Context) Begin(in *Input, widthPx, heightPx int, scale, dt float32) {
 	c.animating, c.scrollSet = false, false
 	c.wakeNs, c.imeOK, c.imeCancel = 0, false, false
 	c.takeCommit()
-	c.dropTabText()
 	c.lineCur ^= 1
 	c.lineBuf[c.lineCur] = c.lineBuf[c.lineCur][:0]
 	c.ovPrev, c.nOvPrev = c.ovs, c.nOvs
@@ -388,37 +387,6 @@ func (c *Context) Begin(in *Input, widthPx, heightPx int, scale, dt float32) {
 	c.root = root
 	c.parents[0] = root
 	c.nparents = 1
-}
-
-// dropTabText removes the tab characters from the frame's typed text when a Tab
-// key went down in it: some platforms send the character along with the key,
-// and Tab is a key (focus traversal, an app's pane switch), not text. Pasted
-// text is not affected (a field turns its tabs into spaces).
-func (c *Context) dropTabText() {
-	in := &c.in
-	if in.NText == 0 {
-		return
-	}
-	tab := false
-	for i := 0; i < in.NKeys && !tab; i++ {
-		tab = in.Keys[i].Down && in.Keys[i].Code == KeyTab
-	}
-	if !tab {
-		return
-	}
-	// (the replacement of press-and-hold accents is a position in the text; it
-	// does not come with a Tab, and a frame with one keeps the text as is)
-	if in.HasReplace {
-		return
-	}
-	n := 0
-	for i := 0; i < in.NText; i++ {
-		if in.Text[i] != '\t' {
-			in.Text[n] = in.Text[i]
-			n++
-		}
-	}
-	in.NText = n
 }
 
 // takeCommit moves the text that committed an input-method composition out of
