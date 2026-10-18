@@ -424,7 +424,21 @@ The protocol work starts at once, in platform files only. Its integration into `
   - **Why:** this was the cause of the intermittent macOS CI gate failure. A probe on the runner found `sync.Cond.Wait` allocating a sudog in the `fs` workers.
   - **Result:** Pilot's gate now passes on the first window on macOS, Windows and Linux Wayland, at 100k and 1M rows.
 
+- **Widgets and the gallery (step 4):**
+  - all the planned widgets, in light and dark;
+  - the gallery in CI on all three OSes, with the exact allocation gate;
+  - a 1M-row table at 0.7–1.4 ms of CPU per frame;
+  - keyboard reachability and semantics tests.
+- **Following the system mode:** `theme.Follower` is the one implementation, used by `widget.Kit` and rexlook. The first frame is in the system mode; later changes crossfade.
+- **rexlook port (step 5):**
+  - on `theme`, `theme/rex` and `icon`;
+  - light is pixel-identical to before (0 pixels in 15 scenes), and rexcompare is 40/40;
+  - dark, following the system.
+- **Doc comments:** every exported identifier of the public packages has one; `tools/doccheck` runs in CI.
+
 **In progress:**
+- the Pilot port;
+- the guide and its example app;
 - widgets and the gallery (step 4);
 - X11: Pilot's gate needs a second window there (4–9 allocations in the first, likely the X11 clipboard warming up); being located.
 
