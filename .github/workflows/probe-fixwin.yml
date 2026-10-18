@@ -1,0 +1,27 @@
+name: probe-fixwin
+# Temporary: Windows arm64 full-suite flake hunt. Removed before the branch is done.
+on:
+  push:
+    branches: [p5-fixwin]
+env:
+  CGO_ENABLED: "0"
+  PKGS: ./...
+  PKGS_EXCLUDE: /probes/|/third_party/
+jobs:
+  windows:
+    name: probe ${{ matrix.rep }}
+    runs-on: windows-11-arm
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        rep: [1, 2, 3]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - run: GNUI_FS_REPORT=$RUNNER_TEMP/fs-report.txt go test -count=1 -v $(go list $PKGS | grep -v -E "$PKGS_EXCLUDE") 2>&1 | grep -E "^(--- |ok|FAIL|panic)|paste_windows_test" | grep -v "^--- PASS"

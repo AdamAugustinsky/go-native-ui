@@ -670,7 +670,8 @@ func TestClipboardWithPowerShell(t *testing.T) {
 	if got, err := os.ReadFile(out); err != nil || string(got) != strings.ReplaceAll(fromUs, "\n", "\r\n") {
 		t.Errorf("Get-Clipboard read %q (%v), want the text with \\r\\n line ends", got, err)
 	}
+	start := time.Now()
 	if e, got := pasteOf(t, w, 6, 2*time.Second); e.Flags != 0 || got != strings.ReplaceAll(fromThem, "\r\n", "\n") {
-		t.Errorf("RequestPaste answered %q (flags %v) after Set-Clipboard", got, e.Flags)
+		t.Errorf("RequestPaste answered %q (flags %v) after %v, after Set-Clipboard; a synchronous read sees %q; worker stuck: %v", got, e.Flags, time.Since(start), Clipboard(), w.clip.stuck())
 	}
 }
