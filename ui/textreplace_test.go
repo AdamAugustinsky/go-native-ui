@@ -175,11 +175,42 @@ func TestTextFieldReplaceAllocatesNothing(t *testing.T) {
 
 // After Reserve even the first edits allocate nothing: the history does not
 // have to be filled before the buffer is in steady state.
+//
+// The counters are process-wide, so a one-off allocation by the runtime (a new
+// thread on a busy runner) can land in a measurement. As in the bench gate
+// (D27), the test passes on the first of a few fresh buffers that allocates
+// exactly nothing: an allocation of the buffer's own recurs in every attempt.
 func TestReserveAvoidsWarmUp(t *testing.T) {
+	var counts [5]uint64
+	for i := range counts {
+		if counts[i] = reservedFirstEditMallocs(); counts[i] == 0 {
+			break
+		}
+		if i == len(counts)-1 {
+			t.Fatalf("mallocs in the first edits after Reserve, per attempt: %v", counts)
+		}
+	}
+	var m0, m1 runtime.MemStats
+	// Without it, the same edits do allocate (the test would pass vacuously otherwise).
+	var c TextBuffer
+	runtime.ReadMemStats(&m0)
+	c.InsertString("ab")
+	c.breakRun()
+	c.InsertString("c")
+	runtime.ReadMemStats(&m1)
+	if m1.Mallocs == m0.Mallocs {
+		t.Error("an unreserved buffer did not allocate for its first edits: the test measures nothing")
+	}
+}
+
+// reservedFirstEditMallocs counts the mallocs of a session of edits on a fresh
+// buffer right after Reserve.
+func reservedFirstEditMallocs() uint64 {
 	var b TextBuffer
 	b.Reserve(256)
 	b.now = 1e9
 	var m0, m1 runtime.MemStats
+	runtime.GC()
 	runtime.ReadMemStats(&m0)
 	for i := 0; i < 150; i++ { // more steps than the history keeps
 		b.now += 2e9
@@ -203,17 +234,5 @@ func TestReserveAvoidsWarmUp(t *testing.T) {
 		}
 	}
 	runtime.ReadMemStats(&m1)
-	if n := m1.Mallocs - m0.Mallocs; n != 0 {
-		t.Fatalf("%d mallocs in the first edits after Reserve", n)
-	}
-	// Without it, the same edits do allocate (the test would pass vacuously otherwise).
-	var c TextBuffer
-	runtime.ReadMemStats(&m0)
-	c.InsertString("ab")
-	c.breakRun()
-	c.InsertString("c")
-	runtime.ReadMemStats(&m1)
-	if m1.Mallocs == m0.Mallocs {
-		t.Error("an unreserved buffer did not allocate for its first edits: the test measures nothing")
-	}
+	return m1.Mallocs - m0.Mallocs
 }

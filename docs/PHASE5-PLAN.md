@@ -387,4 +387,33 @@ The protocol work starts at once, in platform files only. Its integration into `
 
 ## Status (2026-10-18)
 
-Planned and independently reviewed; nothing built yet.
+**On `main`** (all merged branches were green on all 8 CI jobs):
+- **Step 1, contracts:** the asynchronous clipboard (`RequestPaste` → `EvPaste`), the appearance contract, and CI gating every package.
+- **Step 2, `ui`** (all nine items):
+  - key claiming (one chord, one handler) and edit actions;
+  - asynchronous paste and bounded undo/redo (`Reserve`);
+  - press-and-hold replacements;
+  - focus traversal, `FocusVisible`, `Disabled`;
+  - overlays and modality;
+  - semantics;
+  - scroll extents;
+  - wrapped text.
+  - Plus the `menu` package.
+- **Step 3, theme:** `theme`, `theme/rex` and `icon`.
+  - Light Rex is pixel-identical to `rexkit` (six scenes, all OSes).
+  - The dark Rex is a first design; contrast is asserted.
+- **Step 3b, system appearance:** macOS, Windows and Linux (the in-house D-Bus client and the desktop portal), wired into the frame loop. The first frame has the system mode, and the OS-drawn chrome follows the mode the UI declares. Following it in the theme comes with the widget kit.
+- **Parity, Windows and macOS:**
+  - a zero-allocation clipboard (Windows round trip with other processes in CI);
+  - content-first startup on Windows (DWM cloak, checked by screen capture in CI);
+  - press-and-hold accents, platform and `ui` side. Your hand test of the real accent popover is still to do.
+- **Pilot's gated bench** now includes copy, cut, paste and undo (the platform clipboard on macOS and Windows; on Linux, until its clipboard branch merges, the bench's own).
+
+**In progress:**
+- widgets and the gallery (step 4);
+- Linux parity;
+- sudog-free worker parking. This is the cause of the intermittent macOS CI gate failure: a probe on the runner found the runtime allocating when the `fs` workers park.
+
+**Known gaps so far:**
+- Pilot's startup on Windows CI is about 160–180 ms (amd64), over the 150 ms budget.
+- The macOS spike step sometimes fails "not vsync-paced", from the runner's display.
