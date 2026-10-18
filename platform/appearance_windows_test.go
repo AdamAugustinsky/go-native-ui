@@ -80,6 +80,25 @@ func waitFor(cond func() bool, d time.Duration) bool {
 	return cond()
 }
 
+// The first read is what the first frame waits for (content-first startup):
+// loading the entry points, opening and arming both keys, reading the values.
+// Meaningful only as the first read in the process.
+func TestAppearanceFirstCall(t *testing.T) {
+	if apCache.Load() != 0 {
+		t.Skip("an earlier test already read the appearance")
+	}
+	t0 := time.Now()
+	a := SystemAppearance()
+	d := time.Since(t0)
+	t.Logf("first SystemAppearance call: %v (dark=%v accent=%08x)", d, a.Dark, a.Accent)
+	if !a.Known {
+		t.Error("not known")
+	}
+	if d > 50*time.Millisecond {
+		t.Errorf("the first call took %v", d)
+	}
+}
+
 func TestAppearanceFollowsDarkMode(t *testing.T) {
 	needRegistry(t)
 	a0 := SystemAppearance() // starts the watcher
