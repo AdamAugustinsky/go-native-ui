@@ -114,7 +114,15 @@ func TestSetClipboardTextAndRequestPaste(t *testing.T) {
 		t.Errorf("invalid UTF-8 pasted as %q", got)
 	}
 	// No text on the clipboard: the paste fails.
-	win32.Call(pOpenClipboard, w.hwnd)
+	opened := false
+	for i := 0; i < 200 && !opened; i++ { // another program (a clipboard manager) may have it open for a moment
+		if opened = win32.Bool(win32.Call(pOpenClipboard, w.hwnd)); !opened {
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+	if !opened {
+		t.Fatal("could not open the clipboard to empty it")
+	}
 	win32.Call(pEmptyClipboard)
 	win32.Call(pCloseClipboard)
 	if e, got := pasteOf(t, w, 2, time.Second); e.Flags&FlagFailed == 0 || got != "" {
