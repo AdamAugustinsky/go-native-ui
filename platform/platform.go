@@ -94,6 +94,7 @@ const (
 	EvPreedit                 // Text: input-method composition (marked text), empty when it ended; SelStart, SelLen: caret/selection inside it
 	EvWake                    // a goroutine called Wake
 	EvFrame                   // the frame slot armed by RequestFrame is available
+	EvPaste                   // the answer to RequestPaste: Text (plain text), Tag; FlagFailed when there is none
 )
 
 // Flags qualify an Event.
@@ -103,6 +104,7 @@ const (
 	FlagDown    Flags = 1 << iota // key/button pressed, focus gained, became visible
 	FlagRepeat                    // key auto-repeat
 	FlagPrecise                   // scroll deltas are precise pixels (trackpad)
+	FlagFailed                    // EvPaste: no text (empty, not text, over MaxPaste, or the transfer failed)
 )
 
 // Mods are the modifier keys held during an event.
@@ -201,7 +203,8 @@ type Event struct {
 	// EvPreedit: the caret (SelLen 0) or the part being converted inside the
 	// composition, as a byte offset and length into the UTF-8 text.
 	SelStart, SelLen int32
-	Time             int64 // OS event time in Now() nanoseconds; 0 if unknown
+	Time             int64  // OS event time in Now() nanoseconds; 0 if unknown
+	Tag              uint64 // EvPaste: the tag given to RequestPaste
 }
 
 // Options configure Open.
@@ -264,6 +267,18 @@ func (q *eventQueue) dropFirst(n int) {
 }
 
 func (q *eventQueue) push(e Event) { q.ev = append(q.ev, e) }
+
+// pushPaste queues an EvPaste with a copy of b (nil b: FlagFailed). The text
+// buffer keeps the capacity of the largest paste.
+func (q *eventQueue) pushPaste(b []byte, tag uint64, t int64) {
+	if b == nil || len(b) > MaxPaste {
+		q.push(Event{Kind: EvPaste, Flags: FlagFailed, Tag: tag, Time: t})
+		return
+	}
+	off := len(q.text)
+	q.text = append(q.text, b...)
+	q.push(Event{Kind: EvPaste, Text: TextRef{uint32(off), uint32(len(b))}, Tag: tag, Time: t})
+}
 
 func (q *eventQueue) pushText(b []byte, t int64) {
 	off := len(q.text)

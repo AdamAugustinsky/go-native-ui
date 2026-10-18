@@ -25,8 +25,11 @@ defaults:
 
 env:
   CGO_ENABLED: "0"
-  # probes/ are throwaway phase-0 programs and are not gated.
-  PKGS: ./cmd/... ./app/... ./fs/... ./platform/... ./gpu/... ./text/... ./core/... ./ui/... ./internal/... ./tools/...
+  # Every package of the module except probes/ (throwaway phase-0 programs)
+  # and third_party/ (vendored, tested upstream): the patterns name the
+  # top-level directories, so a new package is gated as soon as it exists.
+  PKGS: ./...
+  PKGS_EXCLUDE: /probes/|/third_party/
   MAX_BINARY_BYTES: "10485760"
 
 jobs:
@@ -41,7 +44,7 @@ jobs:
           go-version-file: go.mod
       - name: gofmt
         run: |
-          out=$(gofmt -l cmd app fs platform gpu text core ui internal tools)
+          out=$(gofmt -l $(ls -d */ | grep -v -E '^(probes|third_party|bin|docs)/$'))
           if [ -n "$out" ]; then echo "::error::gofmt needed:"; echo "$out"; exit 1; fi
       - name: vet and stripped release builds
         run: |
@@ -54,7 +57,7 @@ jobs:
           fail=0
           for t in darwin/arm64 darwin/amd64 windows/amd64 windows/arm64 linux/amd64 linux/arm64; do
             os=${t%/*}; arch=${t#*/}
-            GOOS=$os GOARCH=$arch go vet $PKGS
+            GOOS=$os GOARCH=$arch go vet $(GOOS=$os GOARCH=$arch go list $PKGS | grep -v -E "$PKGS_EXCLUDE")
             ext=""; [ "$os" = windows ] && ext=.exe
             out=dist/spike-$os-$arch$ext
             GOOS=$os GOARCH=$arch go build -trimpath -ldflags="-s -w" -o "$out" ./cmd/spike
@@ -91,7 +94,7 @@ jobs:
           nohup caffeinate -dimsu >/dev/null 2>&1 &
       - name: test (arm64)
         run: |
-          GNUI_FS_REPORT=$RUNNER_TEMP/fs-report.txt go test -count=1 $PKGS
+          GNUI_FS_REPORT=$RUNNER_TEMP/fs-report.txt go test -count=1 $(go list $PKGS | grep -v -E "$PKGS_EXCLUDE")
           { echo '```'; cat $RUNNER_TEMP/fs-report.txt || true; echo '```'; } | tee -a "$GITHUB_STEP_SUMMARY"
       - name: test internal/ffi (amd64 under Rosetta)
         run: |
@@ -162,7 +165,7 @@ jobs:
           go-version-file: go.mod
       - name: test
         run: |
-          GNUI_FS_REPORT=$RUNNER_TEMP/fs-report.txt go test -count=1 $PKGS
+          GNUI_FS_REPORT=$RUNNER_TEMP/fs-report.txt go test -count=1 $(go list $PKGS | grep -v -E "$PKGS_EXCLUDE")
           { echo '```'; cat $RUNNER_TEMP/fs-report.txt || true; echo '```'; } | tee -a "$GITHUB_STEP_SUMMARY"
       - name: build spike
         run: go build -trimpath -ldflags="-s -w" -o bin/spike.exe ./cmd/spike
@@ -226,7 +229,7 @@ jobs:
             fontconfig fonts-dejavu-core fonts-noto-cjk fonts-noto-color-emoji
       - name: test
         run: |
-          GNUI_FS_REPORT=$RUNNER_TEMP/fs-report.txt go test -count=1 $PKGS
+          GNUI_FS_REPORT=$RUNNER_TEMP/fs-report.txt go test -count=1 $(go list $PKGS | grep -v -E "$PKGS_EXCLUDE")
           { echo '```'; cat $RUNNER_TEMP/fs-report.txt || true; echo '```'; } | tee -a "$GITHUB_STEP_SUMMARY"
       - name: build spike
         run: go build -trimpath -ldflags="-s -w" -o bin/spike ./cmd/spike
