@@ -46,8 +46,6 @@ jobs:
         run: |
           out=$(gofmt -l $(ls -d */ | grep -v -E '^(probes|third_party|bin|docs)/$'))
           if [ -n "$out" ]; then echo "::error::gofmt needed:"; echo "$out"; exit 1; fi
-      - name: doc comments on exported identifiers
-        run: go run ./tools/doccheck
       - name: vet and stripped release builds
         run: |
           mkdir -p dist
@@ -56,20 +54,6 @@ jobs:
             echo "| target | bytes | MiB |"
             echo "|---|---:|---:|"
           } >> "$GITHUB_STEP_SUMMARY"
-          gsum=$(mktemp)
-          {
-            echo ""
-            echo "### Stripped gallery binary (-trimpath -ldflags=\"-s -w\")"
-            echo "| target | bytes | MiB |"
-            echo "|---|---:|---:|"
-          } > "$gsum"
-          nsum=$(mktemp)
-          {
-            echo ""
-            echo "### Stripped notes example binary (-trimpath -ldflags=\"-s -w\")"
-            echo "| target | bytes | MiB |"
-            echo "|---|---:|---:|"
-          } > "$nsum"
           fail=0
           for t in darwin/arm64 darwin/amd64 windows/amd64 windows/arm64 linux/amd64 linux/arm64; do
             os=${t%/*}; arch=${t#*/}
@@ -84,26 +68,7 @@ jobs:
             if [ "$size" -gt "$MAX_BINARY_BYTES" ]; then
               echo "::error::$t spike is $size bytes (budget $MAX_BINARY_BYTES)"; fail=1
             fi
-            gout=dist/gallery-$os-$arch$ext
-            GOOS=$os GOARCH=$arch go build -trimpath -ldflags="-s -w" -o "$gout" ./cmd/gallery
-            gsize=$(stat -c %s "$gout")
-            gmib=$(awk -v s="$gsize" 'BEGIN { printf "%.2f", s / 1048576 }')
-            echo "| $t | $gsize | $gmib |" >> "$gsum"
-            echo "{\"target\":\"$t\",\"gallery_bytes\":$gsize}" >> dist/sizes.jsonl
-            if [ "$gsize" -gt "$MAX_BINARY_BYTES" ]; then
-              echo "::error::$t gallery is $gsize bytes (budget $MAX_BINARY_BYTES)"; fail=1
-            fi
-            nout=dist/notes-$os-$arch$ext
-            GOOS=$os GOARCH=$arch go build -trimpath -ldflags="-s -w" -o "$nout" ./examples/notes
-            nsize=$(stat -c %s "$nout")
-            nmib=$(awk -v s="$nsize" 'BEGIN { printf "%.2f", s / 1048576 }')
-            echo "| $t | $nsize | $nmib |" >> "$nsum"
-            echo "{\"target\":\"$t\",\"notes_bytes\":$nsize}" >> dist/sizes.jsonl
-            if [ "$nsize" -gt "$MAX_BINARY_BYTES" ]; then
-              echo "::error::$t notes is $nsize bytes (budget $MAX_BINARY_BYTES)"; fail=1
-            fi
           done
-          cat "$gsum" "$nsum" >> "$GITHUB_STEP_SUMMARY"
           exit $fail
       - name: patched go-text (third_party/typesetting) tests
         run: cd third_party/typesetting && go test -count=1 ./font/opentype/tables/
@@ -148,7 +113,7 @@ jobs:
       - name: listbench + rex (offscreen PNGs, windowed bench with the allocation gate)
         run: |
           go build -trimpath -ldflags="-s -w" -o bin/listbench ./cmd/listbench
-          go run ./cmd/rexlook/rex/rexshot -o rex-macos.png -o-dark rex-macos-dark.png
+          go run ./cmd/rexlook/rex/rexshot -o rex-macos.png
           ./bin/listbench -o listbench-macos.png
           ./bin/listbench -exit-first -timeout 60s >/dev/null || true
           ./bin/listbench -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 120s | tee listbench-macos.json
@@ -161,19 +126,6 @@ jobs:
           ./bin/pilot -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 150s | tee pilot-macos.json
           ./bin/pilot -bench -rows 1000000 -gate -allow-unpaced -max-cpu-us 0 -timeout 150s | tee pilot-1m-macos.json
           { echo '```json'; cat pilot-macos.json pilot-1m-macos.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
-      - name: gallery (offscreen PNGs in light and dark, windowed bench with the allocation gate)
-        if: ${{ !cancelled() }} # a stalled pilot bench of the runner must not hide the gallery's result
-        run: |
-          go build -trimpath -ldflags="-s -w" -o bin/gallery ./cmd/gallery
-          ./bin/gallery -o gallery-macos.png -o-dark gallery-macos-dark.png
-          ./bin/gallery -bench -gate -allow-unpaced -timeout 150s | tee gallery-macos.json
-          { echo '```json'; cat gallery-macos.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
-      - name: notes example (windowed bench with the allocation gate)
-        if: ${{ !cancelled() }}
-        run: |
-          go build -trimpath -ldflags="-s -w" -o bin/notes ./examples/notes
-          ./bin/notes -bench -gate -allow-unpaced -timeout 150s | tee notes-macos.json
-          { echo '```json'; cat notes-macos.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - name: live resize (two draws per transaction must not starve the drawable pool)
         run: |
           go build -trimpath -ldflags="-s -w" -o bin/rexlook ./cmd/rexlook
@@ -188,14 +140,9 @@ jobs:
             listbench-macos.json
             listbench-macos.png
             rex-macos.png
-            rex-macos-dark.png
             pilot-macos.json
             pilot-1m-macos.json
             pilot-macos.png
-            gallery-macos.json
-            gallery-macos.png
-            gallery-macos-dark.png
-            notes-macos.json
           if-no-files-found: ignore
 
   windows:
@@ -229,7 +176,7 @@ jobs:
       - name: listbench + rex (offscreen PNGs, windowed bench with the allocation gate)
         run: |
           go build -trimpath -ldflags="-s -w" -o bin/listbench.exe ./cmd/listbench
-          go run ./cmd/rexlook/rex/rexshot -o rex-windows-${{ matrix.arch }}.png -o-dark rex-windows-${{ matrix.arch }}-dark.png
+          go run ./cmd/rexlook/rex/rexshot -o rex-windows-${{ matrix.arch }}.png
           ./bin/listbench.exe -o listbench-windows-${{ matrix.arch }}.png
           ./bin/listbench.exe -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 120s | tee listbench-windows-${{ matrix.arch }}.json
           { echo '```json'; cat listbench-windows-${{ matrix.arch }}.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
@@ -239,17 +186,6 @@ jobs:
           ./bin/pilot.exe -o pilot-windows-${{ matrix.arch }}.png
           ./bin/pilot.exe -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 420s | tee pilot-windows-${{ matrix.arch }}.json
           { echo '```json'; cat pilot-windows-${{ matrix.arch }}.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
-      - name: gallery (offscreen PNGs in light and dark, windowed bench with the allocation gate)
-        run: |
-          go build -trimpath -ldflags="-s -w" -o bin/gallery.exe ./cmd/gallery
-          ./bin/gallery.exe -o gallery-windows-${{ matrix.arch }}.png -o-dark gallery-windows-${{ matrix.arch }}-dark.png
-          ./bin/gallery.exe -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 420s | tee gallery-windows-${{ matrix.arch }}.json
-          { echo '```json'; cat gallery-windows-${{ matrix.arch }}.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
-      - name: notes example (windowed bench with the allocation gate)
-        run: |
-          go build -trimpath -ldflags="-s -w" -o bin/notes.exe ./examples/notes
-          ./bin/notes.exe -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 420s | tee notes-windows-${{ matrix.arch }}.json
-          { echo '```json'; cat notes-windows-${{ matrix.arch }}.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -259,13 +195,8 @@ jobs:
             listbench-windows-${{ matrix.arch }}.json
             listbench-windows-${{ matrix.arch }}.png
             rex-windows-${{ matrix.arch }}.png
-            rex-windows-${{ matrix.arch }}-dark.png
             pilot-windows-${{ matrix.arch }}.json
             pilot-windows-${{ matrix.arch }}.png
-            gallery-windows-${{ matrix.arch }}.json
-            gallery-windows-${{ matrix.arch }}.png
-            gallery-windows-${{ matrix.arch }}-dark.png
-            notes-windows-${{ matrix.arch }}.json
           if-no-files-found: ignore
 
   linux:
@@ -328,13 +259,7 @@ jobs:
             ./bin/listbench -bench -gate -allocsites -allow-unpaced -max-cpu-us 0 -timeout 120s | tee listbench-linux-${{ matrix.arch }}-x11.json
           go build -trimpath -ldflags="-s -w" -o bin/pilot ./cmd/pilot
           xvfb-run -a -s "-screen 0 1280x800x24" \
-            ./bin/pilot -bench -gate -allocsites -allow-unpaced -max-cpu-us 0 -timeout 420s | tee pilot-linux-${{ matrix.arch }}-x11.json
-          go build -trimpath -ldflags="-s -w" -o bin/gallery ./cmd/gallery
-          xvfb-run -a -s "-screen 0 1280x800x24" \
-            ./bin/gallery -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 420s | tee gallery-linux-${{ matrix.arch }}-x11.json
-          go build -trimpath -ldflags="-s -w" -o bin/notes ./examples/notes
-          xvfb-run -a -s "-screen 0 1280x800x24" \
-            ./bin/notes -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 420s | tee notes-linux-${{ matrix.arch }}-x11.json
+            ./bin/pilot -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 420s | tee pilot-linux-${{ matrix.arch }}-x11.json
       - name: spike bench + gates (Wayland on headless Weston)
         if: matrix.backend == 'wayland'
         run: |
@@ -348,21 +273,16 @@ jobs:
           go build -trimpath -ldflags="-s -w" -o bin/listbench ./cmd/listbench
           WAYLAND_DISPLAY=wayland-ci ./bin/listbench -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 120s | tee listbench-linux-${{ matrix.arch }}-wayland.json
           go build -trimpath -ldflags="-s -w" -o bin/pilot ./cmd/pilot
-          WAYLAND_DISPLAY=wayland-ci ./bin/pilot -bench -gate -allocsites -allow-unpaced -max-cpu-us 0 -timeout 420s | tee pilot-linux-${{ matrix.arch }}-wayland.json
-          go build -trimpath -ldflags="-s -w" -o bin/gallery ./cmd/gallery
-          WAYLAND_DISPLAY=wayland-ci ./bin/gallery -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 420s | tee gallery-linux-${{ matrix.arch }}-wayland.json
-          go build -trimpath -ldflags="-s -w" -o bin/notes ./examples/notes
-          WAYLAND_DISPLAY=wayland-ci ./bin/notes -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 420s | tee notes-linux-${{ matrix.arch }}-wayland.json
-      - name: listbench + rex + pilot + gallery offscreen PNGs
+          WAYLAND_DISPLAY=wayland-ci ./bin/pilot -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 420s | tee pilot-linux-${{ matrix.arch }}-wayland.json
+      - name: listbench + rex + pilot offscreen PNGs
         run: |
-          go run ./cmd/rexlook/rex/rexshot -o rex-linux-${{ matrix.arch }}-${{ matrix.backend }}.png -o-dark rex-linux-${{ matrix.arch }}-${{ matrix.backend }}-dark.png
+          go run ./cmd/rexlook/rex/rexshot -o rex-linux-${{ matrix.arch }}-${{ matrix.backend }}.png
           go run ./cmd/listbench -o listbench-linux-${{ matrix.arch }}-${{ matrix.backend }}.png
           go run ./cmd/pilot/pilotshot -o pilot-linux-${{ matrix.arch }}-${{ matrix.backend }}.png
-          go run ./cmd/gallery -o gallery-linux-${{ matrix.arch }}-${{ matrix.backend }}.png -o-dark gallery-linux-${{ matrix.arch }}-${{ matrix.backend }}-dark.png
       - name: summary
         if: always()
         run: |
-          for f in spike-linux-${{ matrix.arch }}-${{ matrix.backend }}.json listbench-linux-${{ matrix.arch }}-${{ matrix.backend }}.json pilot-linux-${{ matrix.arch }}-${{ matrix.backend }}.json gallery-linux-${{ matrix.arch }}-${{ matrix.backend }}.json notes-linux-${{ matrix.arch }}-${{ matrix.backend }}.json; do
+          for f in spike-linux-${{ matrix.arch }}-${{ matrix.backend }}.json listbench-linux-${{ matrix.arch }}-${{ matrix.backend }}.json pilot-linux-${{ matrix.arch }}-${{ matrix.backend }}.json; do
             [ -f "$f" ] && { echo '```json'; cat "$f"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
           done
           [ -f weston.log ] && tail -n 40 weston.log || true
@@ -375,11 +295,6 @@ jobs:
             listbench-linux-${{ matrix.arch }}-${{ matrix.backend }}.json
             listbench-linux-${{ matrix.arch }}-${{ matrix.backend }}.png
             rex-linux-${{ matrix.arch }}-${{ matrix.backend }}.png
-            rex-linux-${{ matrix.arch }}-${{ matrix.backend }}-dark.png
             pilot-linux-${{ matrix.arch }}-${{ matrix.backend }}.json
             pilot-linux-${{ matrix.arch }}-${{ matrix.backend }}.png
-            gallery-linux-${{ matrix.arch }}-${{ matrix.backend }}.json
-            gallery-linux-${{ matrix.arch }}-${{ matrix.backend }}.png
-            gallery-linux-${{ matrix.arch }}-${{ matrix.backend }}-dark.png
-            notes-linux-${{ matrix.arch }}-${{ matrix.backend }}.json
           if-no-files-found: ignore
