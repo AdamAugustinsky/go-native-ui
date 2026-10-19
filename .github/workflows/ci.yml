@@ -143,7 +143,7 @@ jobs:
         run: |
           # The first launch of a new binary pays the Gatekeeper/XProtect scan.
           ./bin/spike -exit-first -timeout 60s >/dev/null || true
-          ./bin/spike -bench -idle 5s -gate -allocsites -timeout 120s | tee spike-macos.json
+          ./bin/spike -bench -idle 5s -gate -allocsites -timeout 180s | tee spike-macos.json
           { echo '```json'; cat spike-macos.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
           # The runner's display link sometimes stops for 20-60 s; the spike
           # restarts its measured frames after such a stall and says so.
@@ -227,7 +227,7 @@ jobs:
         run: go build -trimpath -ldflags="-s -w" -o bin/spike.exe ./cmd/spike
       - name: spike bench + gates
         run: |
-          ./bin/spike.exe -bench -idle 5s -gate -allocsites -timeout 120s | tee spike-windows-${{ matrix.arch }}.json
+          ./bin/spike.exe -bench -idle 5s -gate -allocsites -timeout 180s | tee spike-windows-${{ matrix.arch }}.json
           { echo '```json'; cat spike-windows-${{ matrix.arch }}.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - name: listbench + rex (offscreen PNGs, windowed bench with the allocation gate)
         run: |
@@ -325,7 +325,7 @@ jobs:
         if: matrix.backend == 'x11'
         run: |
           xvfb-run -a -s "-screen 0 1280x800x24" \
-            ./bin/spike -bench -idle 5s -gate -allocsites -timeout 120s | tee spike-linux-${{ matrix.arch }}-x11.json
+            ./bin/spike -bench -idle 5s -gate -allocsites -timeout 180s | tee spike-linux-${{ matrix.arch }}-x11.json
           go build -trimpath -ldflags="-s -w" -o bin/listbench ./cmd/listbench
           xvfb-run -a -s "-screen 0 1280x800x24" \
             ./bin/listbench -bench -gate -allocsites -allow-unpaced -max-cpu-us 0 -timeout 120s | tee listbench-linux-${{ matrix.arch }}-x11.json
@@ -347,7 +347,7 @@ jobs:
             > weston.log 2>&1 &
           for _ in $(seq 100); do [ -S "$XDG_RUNTIME_DIR/wayland-ci" ] && break; sleep 0.1; done
           [ -S "$XDG_RUNTIME_DIR/wayland-ci" ] || { cat weston.log; exit 1; }
-          WAYLAND_DISPLAY=wayland-ci ./bin/spike -bench -idle 5s -gate -allocsites -timeout 120s | tee spike-linux-${{ matrix.arch }}-wayland.json
+          WAYLAND_DISPLAY=wayland-ci ./bin/spike -bench -idle 5s -gate -allocsites -timeout 180s | tee spike-linux-${{ matrix.arch }}-wayland.json
           go build -trimpath -ldflags="-s -w" -o bin/listbench ./cmd/listbench
           WAYLAND_DISPLAY=wayland-ci ./bin/listbench -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 120s | tee listbench-linux-${{ matrix.arch }}-wayland.json
           go build -trimpath -ldflags="-s -w" -o bin/pilot ./cmd/pilot

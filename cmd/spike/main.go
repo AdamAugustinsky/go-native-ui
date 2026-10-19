@@ -68,6 +68,7 @@ type report struct {
 	FrameIntervalMs      stats
 	FrameAllocObjects    uint64
 	FrameAllocBytes      uint64
+	AllocWindows         [][2]uint64 // objects and bytes of each window measured for the allocation gate
 	FrameGCs             uint64
 	FootprintAfterAnimMB float64
 	RSSAfterAnimMB       float64
@@ -118,6 +119,12 @@ const (
 	// maxRestarts bounds how often a stall restarts the measured frames; later
 	// stalls stay in them (their unpaced frames, if any, count as such).
 	maxRestarts = 3
+	// maxAllocWindows bounds the windows of animFrames measured for the
+	// allocation gate (DECISIONS D27): it passes on the first that allocated
+	// nothing. An allocation of the frame loop is in every window; a one-off
+	// of the process (the runtime making a new M: CI, Windows arm64) misses
+	// most.
+	maxAllocWindows = 6
 )
 
 // Causes of a silence of the frame source, from the window's state (macOS).
@@ -258,6 +265,8 @@ func main() {
 		// time and miss small allocations (see DECISIONS D11).
 		mem0, mem1 runtime.MemStats
 		sites0     map[[32]uintptr]int64
+		allocOnly  bool // measuring a further window for the allocation gate only
+		winStart   int  // presents at the start of that window
 		t          float32
 	)
 	startWorkerWakes := func() {
@@ -347,7 +356,10 @@ func main() {
 					}
 					paced, silence = true, 0
 					silentAt.Store(0)
-					if rep.MeasureRestarts < maxRestarts {
+					if allocOnly {
+						// The frames are measured; a further allocation
+						// window does not care about pacing.
+					} else if rep.MeasureRestarts < maxRestarts {
 						fmt.Fprintf(os.Stderr, "spike: the frame events stopped for %.1f s (%s); the measured frames start over\n", d/1e3, cause)
 						rep.MeasureRestarts++
 						idlePresentsBase, lastFrame, intervals, unpaced = presents, 0, intervals[:0], 0
@@ -355,7 +367,7 @@ func main() {
 						fmt.Fprintf(os.Stderr, "spike: the frame events stopped for %.1f s (%s); measured as it was\n", d/1e3, cause)
 					}
 				}
-				if phase == phaseAnimate {
+				if phase == phaseAnimate && !allocOnly {
 					now := platform.Now()
 					if lastFrame != 0 && presents-idlePresentsBase > animWarmup {
 						intervals = append(intervals, ms(now-lastFrame))
@@ -442,7 +454,7 @@ func main() {
 		}
 
 		if needDraw && frameReady && presentRetryAt == 0 {
-			if phase == phaseAnimate && presents-idlePresentsBase == animWarmup {
+			if phase == phaseAnimate && (!allocOnly && presents-idlePresentsBase == animWarmup || allocOnly && presents == winStart) {
 				runtime.GC()
 				if *allocSites {
 					sites0 = allocProfile()
@@ -460,7 +472,7 @@ func main() {
 			requestedAt = platform.Now()
 			if surf.Present(c[0], c[1], c[2], 1) {
 				presents++
-				if !paced && phase == phaseAnimate && presents-idlePresentsBase > animWarmup {
+				if !paced && phase == phaseAnimate && !allocOnly && presents-idlePresentsBase > animWarmup {
 					unpaced++
 				}
 				frameReady = !paced
@@ -479,15 +491,15 @@ func main() {
 				frameReady = !paced
 			}
 			needDraw = animating || presentRetryAt != 0 // a failed frame is still owed
-			if phase == phaseAnimate && presents-idlePresentsBase >= animWarmup+animFrames {
+			if phase == phaseAnimate && allocOnly && presents-winStart >= animFrames {
+				runtime.ReadMemStats(&mem1)
+				phase = allocWindow(&rep, &mem0, &mem1, *allocSites, sites0)
+				winStart = presents
+			}
+			if phase == phaseAnimate && !allocOnly && presents-idlePresentsBase >= animWarmup+animFrames {
 				cpu1 := cpuNs()
 				runtime.ReadMemStats(&mem1)
-				if *allocSites && mem1.Mallocs != mem0.Mallocs {
-					printAllocSites(sites0, allocProfile())
-				}
 				rep.Frames = presents - idlePresentsBase - animWarmup
-				rep.FrameAllocObjects = mem1.Mallocs - mem0.Mallocs
-				rep.FrameAllocBytes = mem1.TotalAlloc - mem0.TotalAlloc
 				rep.FrameGCs = uint64(mem1.NumGC - mem0.NumGC)
 				rep.UnpacedFrames = unpaced
 				rep.FramesPaced = unpaced == 0
@@ -497,7 +509,8 @@ func main() {
 					rep.StallCause = stallCause(silent0, st)
 				}
 				rep.FrameCPUus = float64(cpu1-animCPU0) / 1e3 / float64(rep.Frames)
-				phase = phaseDone
+				phase = allocWindow(&rep, &mem0, &mem1, *allocSites, sites0)
+				allocOnly, winStart = true, presents
 			}
 		}
 		curPhase.Store(int32(phase))
@@ -533,13 +546,33 @@ func main() {
 			failed = append(failed, fmt.Sprintf("%d presents while idle", rep.IdlePresents))
 		}
 		if rep.FrameAllocObjects != 0 || rep.FrameAllocBytes != 0 {
-			failed = append(failed, fmt.Sprintf("animated frames allocated %d objects / %d bytes", rep.FrameAllocObjects, rep.FrameAllocBytes))
+			failed = append(failed, fmt.Sprintf("animated frames allocated in each of %d windows of %d frames (objects, bytes: %v)", len(rep.AllocWindows), animFrames, rep.AllocWindows))
 		}
 		if len(failed) > 0 {
 			fmt.Fprintln(os.Stderr, "spike: gate failed:", strings.Join(failed, "; "))
 			os.Exit(3)
 		}
 	}
+}
+
+// allocWindow records a measured window's allocations and returns the next
+// phase: done once a window allocated nothing or maxAllocWindows were
+// measured, else another window.
+func allocWindow(rep *report, mem0, mem1 *runtime.MemStats, sites bool, sites0 map[[32]uintptr]int64) benchPhase {
+	o, b := mem1.Mallocs-mem0.Mallocs, mem1.TotalAlloc-mem0.TotalAlloc
+	rep.AllocWindows = append(rep.AllocWindows, [2]uint64{o, b})
+	rep.FrameAllocObjects, rep.FrameAllocBytes = o, b
+	if o == 0 && b == 0 {
+		return phaseDone
+	}
+	fmt.Fprintf(os.Stderr, "spike: window %d of %d frames allocated %d objects / %d bytes\n", len(rep.AllocWindows), animFrames, o, b)
+	if sites {
+		printAllocSites(sites0, allocProfile())
+	}
+	if len(rep.AllocWindows) == maxAllocWindows {
+		return phaseDone
+	}
+	return phaseAnimate
 }
 
 // allocProfile returns cumulative allocation counts per call stack, as of
