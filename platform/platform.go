@@ -266,11 +266,14 @@ type Options struct {
 	// Window.SystemButtons reports.
 	Titlebar      float32
 	TrafficLights [2]float32
-	// PublicAPIOnly keeps the window from using any private system interface
-	// (for a store build: Mac App Store guideline 2.5.1). On macOS the window
-	// buttons of a custom titlebar are then not moved to TrafficLights: they
-	// stay at AppKit's default place, which Window.SystemButtons reports so
-	// the app keeps its content clear of them (DECISIONS.md D52).
+	// PublicAPIOnly keeps the window from using any private system
+	// interface, as a build with the gnui_publicapi tag does for the whole
+	// binary (a Mac App Store build, guideline 2.5.1, uses the tag, which
+	// also leaves the private names out of the binary; the option tests the
+	// public path without rebuilding). On macOS the window buttons of a
+	// custom titlebar then stay at AppKit's default place, not at
+	// TrafficLights; Window.SystemButtons reports where, so the app keeps its
+	// content clear of them (DECISIONS.md D53).
 	PublicAPIOnly bool
 
 	// Backdrop puts a system material behind the content, which shows

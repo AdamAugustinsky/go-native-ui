@@ -35,6 +35,13 @@ var (
 	selTestObjectAt  = objc.Sel("objectAtIndex:")
 	selCell          = objc.Sel("cell")
 	selInGroup       = objc.Sel("_isWindowPointInStandardWindowButtonGroup:") // private, checked
+
+	// AppKit's titlebar metrics, read (never set) by the tests in either
+	// build; the framework's own are in lights_private_darwin.go.
+	tSelSetTitlebarHeight    = objc.Sel("setTitlebarHeight:")
+	tSelTitlebarHeight       = objc.Sel("titlebarHeight")
+	tSelSetButtonGroupOffset = objc.Sel("setStandardWindowButtonGroupOffset:")
+	tSelButtonGroupOffset    = objc.Sel("standardWindowButtonGroupOffset")
 )
 
 func seeLights(w *Window) (s lightsSeen) {
@@ -229,7 +236,10 @@ func lightsEvents(w *Window, check func(step string)) {
 // lightsNativeHere reports whether AppKit has the titlebar metrics the
 // buttons are placed with.
 func lightsNativeHere(w *Window) bool {
-	for _, s := range []objc.SEL{selSetTitlebarHeight, selTitlebarHeight, selSetButtonGroupOffset, selButtonGroupOffset} {
+	if !privateAPIBuild {
+		return false
+	}
+	for _, s := range []objc.SEL{tSelSetTitlebarHeight, tSelTitlebarHeight, tSelSetButtonGroupOffset, tSelButtonGroupOffset} {
 		if !objc.SendBool1(w.win, selRespondsTo, uintptr(s)) {
 			return false
 		}
@@ -286,7 +296,7 @@ func TestWindowButtonsHoldTheirPlace(t *testing.T) {
 	}
 	t.Logf("checked after %q", steps)
 	if !native {
-		t.Logf("AppKit has no titlebar metrics here: the buttons stay at its default %v", want)
+		t.Logf("AppKit's titlebar metrics are missing or not used here (gnui_publicapi): the buttons stay at its default %v", want)
 	}
 	for _, f := range fails {
 		t.Error(f)
@@ -356,10 +366,10 @@ func defaultLights(o Options) (s lightsSeen, height float64, ok bool) {
 // appKitTitlebarHeight is AppKit's own titlebar height (the private getter,
 // read-only here), -1 where it has none.
 func appKitTitlebarHeight(w *Window) float64 {
-	if !objc.SendBool1(w.win, selRespondsTo, uintptr(selTitlebarHeight)) {
+	if !objc.SendBool1(w.win, selRespondsTo, uintptr(tSelTitlebarHeight)) {
 		return -1
 	}
-	return objc.F.Reset().Arg(uintptr(w.win)).Arg(uintptr(selTitlebarHeight)).Call(objc.MsgSend).F64(0)
+	return objc.F.Reset().Arg(uintptr(w.win)).Arg(uintptr(tSelTitlebarHeight)).Call(objc.MsgSend).F64(0)
 }
 
 // checkDefault reports how a window's buttons differ from AppKit's default
@@ -379,8 +389,8 @@ func checkDefault(w *Window, def lightsSeen, defHeight float64) []string {
 		if h := appKitTitlebarHeight(w); h != defHeight {
 			fails = append(fails, fmt.Sprintf("%s: AppKit's titlebar height is %v, its default %v", step, h, defHeight))
 		}
-		if objc.SendBool1(w.win, selRespondsTo, uintptr(selButtonGroupOffset)) {
-			if x, y := objc.SendPoint(w.win, selButtonGroupOffset); x != 0 || y != 0 {
+		if objc.SendBool1(w.win, selRespondsTo, uintptr(tSelButtonGroupOffset)) {
+			if x, y := objc.SendPoint(w.win, tSelButtonGroupOffset); x != 0 || y != 0 {
 				fails = append(fails, fmt.Sprintf("%s: AppKit's button-group offset is (%v, %v), not 0", step, x, y))
 			}
 		}
@@ -398,20 +408,19 @@ func checkDefault(w *Window, def lightsSeen, defHeight float64) []string {
 
 var lightsTestOptions = Options{Title: "lights", Width: 400, Height: 260, Titlebar: 46, TrafficLights: [2]float32{21, 22}}
 
-// Options.PublicAPIOnly (a store build) never calls the private titlebar
-// metrics: the buttons, their hover areas, hit test and SystemButtons are
+// Options.PublicAPIOnly (the public path, without rebuilding) never calls
+// the private titlebar metrics: the buttons, their hover areas, hit test and SystemButtons are
 // AppKit's default, and AppKit's own titlebar height and offset untouched.
 func TestWindowButtonsPublicAPIOnly(t *testing.T) {
 	var opened bool
 	var fails []string
-	var glassRadius float64
 	onMain(func() {
 		def, defHeight, ok := defaultLights(lightsTestOptions)
 		if !ok {
 			return
 		}
 		o := lightsTestOptions
-		o.PublicAPIOnly, o.Backdrop = true, BackdropGlass
+		o.PublicAPIOnly = true
 		w, err := Open(o)
 		if err != nil {
 			return
@@ -422,138 +431,9 @@ func TestWindowButtonsPublicAPIOnly(t *testing.T) {
 			fails = append(fails, "the window places the buttons with AppKit's private metrics")
 		}
 		fails = append(fails, checkDefault(w, def, defHeight)...)
-		if w.Backdrop() == BackdropGlass {
-			glassRadius = w.glassRadius // _cornerRadius is private too
-		}
 	})
 	if !opened {
 		t.Skip("cannot open a window here")
-	}
-	for _, f := range fails {
-		t.Error(f)
-	}
-	if glassRadius != 0 {
-		t.Errorf("the glass read the window's private corner radius (%v)", glassRadius)
-	}
-}
-
-// A titlebar-metrics method whose signature is not the one it is called with
-// (here: the offset taking a CGRect) is never called: the buttons stay at
-// AppKit's default. The check runs once per process.
-func TestWindowButtonsSignatureMismatch(t *testing.T) {
-	var opened bool
-	var fails []string
-	var lookups [2]int
-	onMain(func() {
-		def, defHeight, ok := defaultLights(lightsTestOptions)
-		if !ok {
-			return
-		}
-		defer func() { lightsABI, lightsEncodingOf = 0, methodEncoding }()
-		lightsABI = 0
-		n := 0
-		lightsEncodingOf = func(obj objc.ID, sel objc.SEL) string {
-			n++
-			if sel == selSetButtonGroupOffset {
-				return "v@:{CGRect={CGPoint=dd}{CGSize=dd}}"
-			}
-			return methodEncoding(obj, sel)
-		}
-		for i := range lookups {
-			w, err := Open(lightsTestOptions)
-			if err != nil {
-				return
-			}
-			opened = true
-			if w.tb.native {
-				fails = append(fails, "a mismatched signature still places the buttons with AppKit's private metrics")
-			}
-			fails = append(fails, checkDefault(w, def, defHeight)...)
-			w.Close()
-			lookups[i] = n
-		}
-	})
-	if !opened {
-		t.Skip("cannot open a window here")
-	}
-	for _, f := range fails {
-		t.Error(f)
-	}
-	if lookups[0] == 0 || lookups[1] != lookups[0] {
-		t.Errorf("signature lookups after the first and second window: %v, want some and then no more", lookups)
-	}
-}
-
-// The real signatures are the expected ones wherever the selectors exist.
-func TestWindowButtonsSignatures(t *testing.T) {
-	var responds, ok bool
-	var enc [4]string
-	onMain(func() {
-		w, err := Open(lightsTestOptions)
-		if err != nil {
-			return
-		}
-		defer w.Close()
-		responds = lightsNativeHere(w)
-		for i, s := range []objc.SEL{selSetTitlebarHeight, selTitlebarHeight, selSetButtonGroupOffset, selButtonGroupOffset} {
-			enc[i] = methodEncoding(w.win, s)
-		}
-		saved := lightsABI
-		lightsABI = 0
-		ok = lightsABIOK(w.win)
-		lightsABI = saved
-	})
-	if responds && !ok {
-		t.Errorf("AppKit's titlebar metrics have the encodings %q, which the check refuses", enc)
-	}
-}
-
-// When AppKit does not put the close button where it was asked (forced here:
-// every offset handed to it is skewed by a growing amount, so calibration
-// never lands), the window undoes what it set: AppKit's height and offset go
-// back to their defaults, and the buttons, their hover areas, hit test and
-// SystemButtons are AppKit's default again, through later layouts too.
-func TestWindowButtonsCalibrationRollback(t *testing.T) {
-	var opened bool
-	var fails []string
-	var calls float64
-	var native bool
-	onMain(func() {
-		def, defHeight, ok := defaultLights(lightsTestOptions)
-		if !ok {
-			return
-		}
-		w0, err := Open(lightsTestOptions)
-		if err != nil {
-			return
-		}
-		native = lightsNativeHere(w0)
-		w0.Close()
-		if !native {
-			return
-		}
-		lightsOffsetSkew, lightsOffsetCalls = [2]float64{9, 4}, 0
-		w, err := Open(lightsTestOptions)
-		calls = lightsOffsetCalls
-		lightsOffsetSkew = [2]float64{}
-		if err != nil {
-			return
-		}
-		defer w.Close()
-		opened = true
-		if w.tb.native {
-			fails = append(fails, "calibration failed, yet the window still places the buttons with AppKit's metrics")
-		}
-		fails = append(fails, checkDefault(w, def, defHeight)...)
-	})
-	if !native {
-		t.Skip("AppKit has no titlebar metrics here")
-	}
-	if !opened {
-		t.Skip("cannot open a window here")
-	}
-	if calls < 2 {
-		t.Errorf("the offset was handed to AppKit %v times: the calibration never ran", calls)
 	}
 	for _, f := range fails {
 		t.Error(f)

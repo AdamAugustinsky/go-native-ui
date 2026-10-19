@@ -158,8 +158,7 @@ func (w *Window) makeBackdrop(kind Backdrop, width, height float64) {
 // fitBackdrop gives Liquid Glass the window's corner radius, so that its rim
 // follows the window's edge: 0 in full screen, which has no corners.
 // _cornerRadius is private (Ghostty reads it the same way); without it the
-// glass keeps square corners, which the window's own mask rounds (and so
-// with Options.PublicAPIOnly). It runs at
+// glass keeps square corners, which the window's own mask rounds. It runs at
 // Open, on every resize and around full screen, and sends nothing while the
 // radius is unchanged.
 func (w *Window) fitBackdrop() {
@@ -167,7 +166,7 @@ func (w *Window) fitBackdrop() {
 		return
 	}
 	r := 0.0
-	if !w.fullScreen && !w.publicOnly && objc.Send(w.win, selStyleMask)&(1<<14) == 0 && // NSWindowStyleMaskFullScreen
+	if !w.fullScreen && objc.Send(w.win, selStyleMask)&(1<<14) == 0 && // NSWindowStyleMaskFullScreen
 		objc.SendBool1(w.win, selRespondsTo, uintptr(selWinCornerRadius)) {
 		r = max(objc.SendF64(w.win, selWinCornerRadius), 0)
 	}

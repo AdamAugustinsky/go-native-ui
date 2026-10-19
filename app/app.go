@@ -90,7 +90,7 @@ type Config struct {
 	MinHeight     float32
 	Titlebar      float32    // macOS custom titlebar height (pt); ignored elsewhere
 	TrafficLights [2]float32 // macOS close-button centre (pt); ignored elsewhere
-	PublicAPIOnly bool       // no private system interfaces (a store build); see platform.Options.PublicAPIOnly
+	PublicAPIOnly bool       // no private system interfaces at run time (a store build uses the gnui_publicapi tag); see platform.Options.PublicAPIOnly
 	Clear         [4]float32 // clear colour, with the semantics of gpu.Renderer.Encode's clear
 
 	// Backdrop and Buttons are the native shell of platform.Options (macOS;
