@@ -1,0 +1,45 @@
+name: gnui-debug
+on:
+  push:
+    branches: [p6-gnuicli]
+jobs:
+  kc:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: experiments
+        shell: bash
+        run: |
+          set +e
+          export CGO_ENABLED=0
+          sw_vers; security list-keychains; security default-keychain
+          go build -o /tmp/gnui ./cmd/gnui
+          export GNUI_DEV_KEYCHAIN=$RUNNER_TEMP/dbg.keychain-db
+          /tmp/gnui doctor -setup-dev-cert | tail -8
+          KC=$GNUI_DEV_KEYCHAIN
+          security find-identity -p codesigning "$KC"
+          security find-identity -p codesigning
+          cp /usr/bin/true $RUNNER_TEMP/p1
+          H=$(security find-identity -p codesigning "$KC" | awk '/gnui-dev/{print $2; exit}')
+          echo "--- A: hash + --keychain, not in search list"
+          codesign --force --sign $H --keychain "$KC" $RUNNER_TEMP/p1; echo rc=$?
+          echo "--- A2: name + --keychain"
+          codesign --force --sign gnui-dev --keychain "$KC" $RUNNER_TEMP/p1; echo rc=$?
+          echo "--- B: add to search list"
+          security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
+          security list-keychains
+          codesign --force --sign $H --keychain "$KC" $RUNNER_TEMP/p1; echo rc=$?
+          codesign --force --sign $H $RUNNER_TEMP/p1; echo rc-nokeychainflag=$?
+          security list-keychains -d user -s $(security list-keychains -d user | tr -d '"' | grep -v dbg)
+          echo "--- C: pkcs12 import in a fresh keychain"
+          KC2=$RUNNER_TEMP/p12.keychain-db
+          /usr/bin/openssl req -x509 -newkey rsa:2048 -nodes -keyout $RUNNER_TEMP/k.pem -out $RUNNER_TEMP/c.pem -days 3650 -subj "/CN=gnui-dev12" -addext "keyUsage=critical,digitalSignature" -addext "extendedKeyUsage=critical,codeSigning" 2>&1 | tail -2
+          /usr/bin/openssl pkcs12 -export -inkey $RUNNER_TEMP/k.pem -in $RUNNER_TEMP/c.pem -out $RUNNER_TEMP/i.p12 -passout pass:x
+          security create-keychain -p "" $KC2; security set-keychain-settings $KC2; security unlock-keychain -p "" $KC2
+          security import $RUNNER_TEMP/i.p12 -k $KC2 -P x -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "" $KC2
+          H2=$(security find-identity -p codesigning "$KC2" | awk '/gnui-dev12/{print $2; exit}')
+          codesign --force --sign $H2 --keychain "$KC2" $RUNNER_TEMP/p1; echo rc=$?
