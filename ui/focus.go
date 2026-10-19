@@ -23,7 +23,7 @@ func (c *Context) traverseFocus() {
 	c.cancelBeneathModal()
 	if c.focusKey != 0 {
 		if v, ok := c.table.Get(uint64(c.focusKey)); ok {
-			if b := &c.boxes[v]; b.lastFrame == c.frame && b.flags&Disabled != 0 {
+			if b := &c.boxes[v]; b.lastFrame == c.frame && (b.flags&Disabled != 0 || b.hid) {
 				c.focusKey = 0
 				c.animating = true
 			}
@@ -39,7 +39,7 @@ func (c *Context) traverseFocus() {
 	seenCur := false
 	for _, id := range c.order {
 		b := &c.boxes[id]
-		if b.flags&Focusable == 0 || b.flags&Disabled != 0 || b.ovl != scope || b.ovRoot {
+		if b.flags&Focusable == 0 || b.flags&Disabled != 0 || b.hid || b.ovl != scope || b.ovRoot {
 			continue
 		}
 		if first == 0 {

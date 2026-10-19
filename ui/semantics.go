@@ -297,6 +297,10 @@ func (c *Context) Semantics(dst *SemTree) {
 	for i := range c.sems {
 		rec := &c.sems[i]
 		b := &c.boxes[rec.id]
+		if b.hid { // hidden by a flow's MaxLines
+			rec.node = -1
+			continue
+		}
 		if len(dst.Nodes) >= MaxSemNodes {
 			dst.Dropped = len(c.sems) - i
 			break

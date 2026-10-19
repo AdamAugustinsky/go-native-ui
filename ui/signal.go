@@ -32,6 +32,9 @@ func (c *Context) hitTest() {
 
 func (c *Context) hitWalk(id ID, x, y float32) {
 	b := &c.boxes[id]
+	if b.hid {
+		return
+	}
 	inside := x >= b.rect[0] && x < b.rect[2] && y >= b.rect[1] && y < b.rect[3]
 	if inside {
 		if b.flags&hitMask != 0 && b.flags&Disabled == 0 {

@@ -29,6 +29,8 @@ type persist struct {
 	savedFocus Key
 	// wrap is what the line breaking of a WrapText box was computed for.
 	wrap wrapCache
+	// flowOut is what the last layout of a flow box found (flow.go).
+	flowOut flowOut
 }
 
 // box is one record of the pointer-free box pool. Everything after persist
@@ -73,6 +75,9 @@ type box struct {
 	listRowH  float32
 
 	sem int32 // 1 + the index of its record in Context.sems, 0 without a role
+
+	flow flowSpec // the options of a flow box (AxisFlow, flow.go)
+	hid  bool     // hidden by the MaxLines of the flow it is in, or inside such a box (flow.go)
 
 	// the lines of a WrapText box: lnN of them, their ends at lnOff in this
 	// frame's line buffer
@@ -146,6 +151,8 @@ type Context struct {
 
 	// wrapped text (wrap.go): the line ends of this frame's wrapped boxes and
 	// of the previous frame's (the cache), the line breaker and its scratch
+	flowHidden bool // a flow hid children this layout (flow.go)
+
 	lineBuf  [2][]int32
 	lineCur  int
 	lb       text.LineBreaker
