@@ -106,6 +106,12 @@ const (
 	// it acts on. The box can still take the focus from the keyboard (Tab,
 	// SetFocus).
 	KeepFocus
+
+	// NoFontSmoothing draws the box's text without the operating system's
+	// font smoothing: on macOS, glyph stems keep their outline weight instead
+	// of the thickening AppKit gives labels (D38). For terminal-like content,
+	// as Ghostty draws by default; UI text keeps the default.
+	NoFontSmoothing
 )
 
 // scrollable flags, either axis.
