@@ -1,6 +1,7 @@
 package img
 
 import (
+	"sync/atomic"
 	"time"
 
 	"gonativeui/core"
@@ -52,7 +53,10 @@ type Cache struct {
 	fr                             *cframe // the owner's C call frame (C memory on macOS)
 	wmu                            core.Mutex
 	workers                        []*worker
-	leases                         []Lease // by entry: a lease held for its decode
+	leases                         []Lease         // by entry: a lease held for its decode
+	jobs                           []atomic.Uint32 // by entry: who owns its decode's resources (jobIdle...)
+	jobCopy, jobOut                []int32         // by entry: its decode's inline copy and output buffer, -1 if none
+	refs                           atomic.Int32    // after Close: Close and the decodes it left running; the last drains the buffers
 	ents                           []entry
 	slots                          []int32 // open-addressing key table: entry index + 1, 0 = empty
 	free                           []int32
@@ -91,12 +95,15 @@ func NewCache(o Options) *Cache {
 	queue := 64
 	c := &Cache{
 		r: o.Renderer, gpuBudget: o.GPUBytes, cpuBudget: o.CPUBytes, upBudget: o.UploadBytes,
-		fr:     new(cframe),
-		leases: make([]Lease, n),
-		ents:   make([]entry, n),
-		free:   make([]int32, n),
-		upq:    make([]int32, n),
-		head:   -1, tail: -1,
+		fr:      new(cframe),
+		leases:  make([]Lease, n),
+		jobs:    make([]atomic.Uint32, n),
+		jobCopy: make([]int32, n),
+		jobOut:  make([]int32, n),
+		ents:    make([]entry, n),
+		free:    make([]int32, n),
+		upq:     make([]int32, n),
+		head:    -1, tail: -1,
 	}
 	slots := 1
 	for slots < 2*n {
@@ -155,7 +162,7 @@ func (c *Cache) Request(key Key, src Source) (Handle, State) {
 	if i < 0 {
 		return c.refuse(src)
 	}
-	j := job{src: src, copy: -1, w: key.W, h: key.H, flags: key.Flags}
+	j := job{ent: i, src: src, copy: -1, w: key.W, h: key.H, flags: key.Flags}
 	if src.kind == srcBytes {
 		n := len(src.bytes)
 		if n > 0 {
@@ -169,7 +176,10 @@ func (c *Cache) Request(key Key, src Source) (Handle, State) {
 		j.src.bytes = nil // the worker reads the copy
 	}
 	e := &c.ents[i]
+	c.jobCopy[i] = j.copy
+	c.jobs[i].Store(jobQueued)
 	if _, err := c.pool.Submit(j, taskKey(i, e.gen)); err != nil {
+		c.jobs[i].Store(jobIdle)
 		if j.copy >= 0 {
 			c.bufs.put(j.copy, c.fr)
 		}
@@ -347,6 +357,7 @@ func (c *Cache) finish(r *task.Result[result]) {
 	gen := uint32((r.Key - 1) >> 32)
 	e := &c.ents[i]
 	out := &r.Out
+	c.jobs[i].Store(jobIdle)
 	c.st.Decodes++
 	c.st.DecodeNs += out.ns
 	if l := c.leases[i]; l != nil {
@@ -571,23 +582,38 @@ func (c *Cache) remove(i int32) {
 }
 
 // Close stops the workers (waiting up to wait for running decodes) and frees
-// every texture, buffer and lease. The cache must not be used afterwards.
+// every texture, buffer and lease. A decode still running past the wait
+// keeps its source (inline copy, lease) until its decoder returns, then frees
+// it and its output on the worker; the last of them returns the pooled
+// memory. The cache must not be used afterwards.
 func (c *Cache) Close(wait time.Duration) {
 	if c.closed {
 		return
 	}
 	c.closed = true
-	c.pool.Close(wait)
-	for _, r := range c.pool.Poll(c.results[:0]) {
-		i := int32(uint32(r.Key - 1))
-		if r.Out.buf >= 0 {
-			c.bufs.put(r.Out.buf, c.fr)
+	c.refs.Store(1) // Close's own, dropped at the end
+	for i := range c.jobs {
+		c.refs.Add(1) // before the swap: a running decode may drop it at once
+		switch c.jobs[i].Swap(jobClosed) {
+		case jobRunning: // its worker frees everything and drops the reference
+			c.leases[i] = nil
+			continue
+		case jobQueued: // never started (or never will)
+			if k := c.jobCopy[i]; k >= 0 {
+				c.bufs.put(k, c.fr)
+			}
+		case jobDone: // finished, not polled
+			if k := c.jobOut[i]; k >= 0 {
+				c.bufs.put(k, c.fr)
+			}
 		}
+		c.refs.Add(-1)
 		if l := c.leases[i]; l != nil {
 			c.leases[i] = nil
 			l.Release()
 		}
 	}
+	c.pool.Close(wait)
 	for i := range c.ents {
 		e := &c.ents[i]
 		if e.stage == stFree {
@@ -600,10 +626,6 @@ func (c *Cache) Close(wait time.Duration) {
 			c.bufs.put(e.buf, c.fr)
 			e.buf = -1
 		}
-		if l := c.leases[i]; l != nil { // a decode still running past the wait
-			c.leases[i] = nil
-			l.Release()
-		}
 		e.stage = stFree
 	}
 	for k, pg := range c.pages {
@@ -612,8 +634,16 @@ func (c *Cache) Close(wait time.Duration) {
 			c.pages[k] = nil
 		}
 	}
-	c.bufs.drain(c.fr)
 	c.gpuUsed, c.cpuUsed = 0, 0
+	c.unref(c.fr)
+}
+
+// unref drops a reference to the pooled buffers after Close; the last one
+// releases them.
+func (c *Cache) unref(fr *cframe) {
+	if c.refs.Add(-1) == 0 {
+		c.bufs.drain(fr)
+	}
 }
 
 // ---- the key table, the LRU list and the upload queue -------------------

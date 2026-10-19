@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"errors"
 	"image"
+	"image/draw"
 	_ "image/gif"  // registers the GIF decoder
 	_ "image/jpeg" // registers the JPEG decoder
 	_ "image/png"  // registers the PNG decoder
@@ -15,10 +16,6 @@ import (
 // osDecoder has no state: the standard library's decoders allocate their
 // own images (on the worker).
 type osDecoder struct{}
-
-// maxPixels bounds the images the standard decoders are asked to decode in
-// full (a decompression bomb is refused before any pixel is allocated).
-const maxPixels = 100 << 20
 
 // decode decodes the image in data (or the file j.src.path) with the
 // standard library and scales it to its display size by area averaging,
@@ -63,6 +60,7 @@ func (w *worker) decode(c *Cache, j *job, data []byte) result {
 		orient = exifOrientation(data)
 	case "gif":
 		frames, delay = gifFrames(data)
+		m = onCanvas(m, cfg.Width, cfg.Height)
 	}
 	sw, sh := int32(m.Bounds().Dx()), int32(m.Bounds().Dy())
 	ow, oh := sw, sh
@@ -85,4 +83,17 @@ func (w *worker) decode(c *Cache, j *job, data []byte) result {
 		padEdges(pix, int(tw), int(th))
 	}
 	return result{buf: buf, w: tw, h: th, pad: pad, frames: frames, dlay: delay}
+}
+
+// onCanvas places a GIF's first frame, decoded with the frame's own bounds,
+// on the image's w×h logical screen at its offset, the rest transparent.
+func onCanvas(m image.Image, w, h int) image.Image {
+	canvas := image.Rect(0, 0, w, h)
+	if m.Bounds() == canvas {
+		return m
+	}
+	out := image.NewRGBA(canvas)
+	r := m.Bounds().Intersect(canvas)
+	draw.Draw(out, r, m, r.Min, draw.Src)
+	return out
 }

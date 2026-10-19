@@ -112,3 +112,23 @@ func BenchmarkDecode(b *testing.B) {
 		})
 	}
 }
+
+// TestRequestLoadsNoFramework: copying a new image's inline bytes on the
+// owner's goroutine (C memory) does not load ImageIO and the frameworks
+// under it; only a worker does, when it decodes. The only worker is held in
+// a lease's Bytes, so nothing decodes while the owner requests.
+func TestRequestLoadsNoFramework(t *testing.T) {
+	c, _ := newTestCache(t, Options{Workers: 1})
+	png := encPNG(t, gradient(16, 16))
+	l := newBlockingLease(png)
+	c.Request(Key{Hash: 1, W: 16, H: 16}, Leased(l))
+	<-l.started
+	defer close(l.open)
+	n := imageIOLoads.Load()
+	for k := 0; k < 8; k++ {
+		c.Request(Key{Hash: uint64(2 + k), W: 16, H: 16}, Bytes(png))
+	}
+	if d := imageIOLoads.Load() - n; d != 0 {
+		t.Fatalf("Request loaded the decoding frameworks %d times on the owner's goroutine", d)
+	}
+}

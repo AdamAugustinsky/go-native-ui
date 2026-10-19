@@ -34,14 +34,17 @@
 // pools (C memory on macOS).
 //
 //   - macOS: ImageIO (CGImageSourceCreateThumbnailAtIndex with
-//     kCGImageSourceThumbnailMaxPixelSize and the EXIF transform), drawn into
-//     an sRGB bitmap context, on each worker's own ffi.Frame. JPEG, PNG, GIF,
-//     HEIC, WebP and whatever else the system decodes.
+//     kCGImageSourceThumbnailMaxPixelSize), drawn into an sRGB bitmap
+//     context, on each worker's own ffi.Frame, then turned to its EXIF
+//     orientation. JPEG, PNG, GIF, HEIC, WebP and whatever else the system
+//     decodes. The frameworks are loaded by the first worker that decodes.
 //   - Windows and Linux: the standard library's PNG, JPEG and GIF decoders,
 //     scaled by area averaging. JPEG's EXIF orientation is applied (a scan of
 //     the APP1 segment). WebP and other formats fail with ErrUnsupported.
 //
-// A GIF decodes its first frame; Info reports the frame count and the first
+// An image whose header gives it more than 100 megapixels fails with
+// ErrTooLarge before any pixel is decoded. A GIF decodes its first frame, on
+// the image's logical screen; Info reports the frame count and the first
 // frame's delay for the animation work to come (C6).
 //
 // # GPU memory
@@ -152,8 +155,10 @@ func HashString(s string) uint64 {
 }
 
 // Lease is encoded bytes the app owns and lends to the cache: Bytes is read
-// on a worker while the image decodes, and Release is called once, on the
-// cache's goroutine, when the cache no longer needs them.
+// on a worker while the image decodes, and Release is called once, when the
+// cache no longer needs them: on the cache's goroutine, except for a decode
+// still running when Close returns, whose worker releases its lease once the
+// decoder has stopped reading it.
 type Lease interface {
 	Bytes() []byte
 	Release()
@@ -232,7 +237,8 @@ var (
 	ErrDecode = errors.New("img: cannot decode the image")
 	// ErrRead: the file cannot be read.
 	ErrRead = errors.New("img: cannot read the image file")
-	// ErrTooLarge: the decoded image would not fit a texture.
+	// ErrTooLarge: the image has more than 100 megapixels, or the decoded
+	// image would not fit a texture.
 	ErrTooLarge = errors.New("img: image too large")
 )
 

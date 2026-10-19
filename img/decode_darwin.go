@@ -8,6 +8,7 @@ import (
 	"os"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"unsafe"
 
 	"github.com/ebitengine/purego"
@@ -30,7 +31,6 @@ var iio struct {
 	once sync.Once
 	err  error
 
-	malloc, free                                         uintptr
 	cfRelease, cfDataNoCopy, cfDictCreate, cfDictGet     uintptr
 	cfNumCreate, cfNumGet, cfURLFromPath                 uintptr
 	allocNull, boolTrue, dictKeyCB, dictValCB            uintptr
@@ -48,7 +48,14 @@ var iio struct {
 	cgColorSpaceCreate                                   uintptr
 }
 
+// imageIOLoads counts calls to loadImageIO: tests check that the owner's
+// goroutine never makes one (the first loads three frameworks).
+var imageIOLoads atomic.Int32
+
+// loadImageIO loads ImageIO, Core Graphics and Core Foundation, on first use:
+// on a worker, the first time one decodes.
 func loadImageIO() error {
+	imageIOLoads.Add(1)
 	iio.once.Do(func() {
 		open := func(path string) uintptr {
 			h, err := purego.Dlopen(path, purego.RTLD_NOW|purego.RTLD_GLOBAL)
@@ -57,7 +64,6 @@ func loadImageIO() error {
 			}
 			return h
 		}
-		sys := open("/usr/lib/libSystem.B.dylib")
 		cf := open("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
 		cg := open("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")
 		io := open("/System/Library/Frameworks/ImageIO.framework/ImageIO")
@@ -83,7 +89,6 @@ func loadImageIO() error {
 			}
 			return *(*uintptr)(ffi.PtrFromC(p))
 		}
-		iio.malloc, iio.free = fn(sys, "malloc"), fn(sys, "free")
 		iio.cfRelease = fn(cf, "CFRelease")
 		iio.cfDataNoCopy = fn(cf, "CFDataCreateWithBytesNoCopy")
 		iio.cfDictCreate = fn(cf, "CFDictionaryCreate")
@@ -139,22 +144,43 @@ func loadImageIO() error {
 	return iio.err
 }
 
-// allocMem allocates n bytes of C memory.
+// libc's malloc and free, looked up among the libraries already loaded
+// (libSystem always is): the owner copies inline bytes into C memory, and
+// must not load the decoding frameworks to do it.
+var cmem struct {
+	once         sync.Once
+	malloc, free uintptr
+}
+
+func loadMem() {
+	cmem.once.Do(func() {
+		m, err1 := purego.Dlsym(purego.RTLD_DEFAULT, "malloc")
+		f, err2 := purego.Dlsym(purego.RTLD_DEFAULT, "free")
+		if err1 == nil && err2 == nil && m != 0 && f != 0 {
+			cmem.malloc, cmem.free = m, f
+		}
+	})
+}
+
+// allocMem allocates n bytes of C memory (Go memory if libc's malloc could
+// not be found).
 func allocMem(n int, fr *ffi.Frame) (unsafe.Pointer, []byte) {
-	if loadImageIO() != nil {
+	loadMem()
+	if cmem.malloc == 0 {
 		b := make([]byte, n)
 		return unsafe.Pointer(&b[0]), b
 	}
-	p := fr.Call1(iio.malloc, uintptr(n))
+	p := fr.Call1(cmem.malloc, uintptr(n))
 	if p == 0 {
 		panic("img: out of memory")
 	}
 	return ffi.PtrFromC(p), nil
 }
 
+// freeMem frees memory from allocMem (Go memory: nothing to do).
 func freeMem(p unsafe.Pointer, fr *ffi.Frame) {
-	if p != nil && iio.free != 0 {
-		fr.Call1(iio.free, uintptr(p))
+	if p != nil && cmem.free != 0 {
+		fr.Call1(cmem.free, uintptr(p))
 	}
 }
 
@@ -226,6 +252,9 @@ func (w *worker) decode(c *Cache, j *job, data []byte) result {
 	fr.Call1(iio.cfRelease, props)
 	if !okW || !okH || pw <= 0 || ph <= 0 {
 		return fail(errDecode)
+	}
+	if int64(pw)*int64(ph) > maxPixels { // from the header, before any pixel is decoded
+		return fail(errTooLarge)
 	}
 	ow, oh := pw, ph
 	if orient >= 5 {

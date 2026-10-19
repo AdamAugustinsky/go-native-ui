@@ -109,6 +109,15 @@ func (p *bufPool) put(i int32, fr *cframe) {
 	p.mu.Unlock()
 }
 
+// held is the number of buffers that hold memory (C memory on macOS),
+// handed out or free.
+func (p *bufPool) held() int {
+	p.mu.Lock()
+	n := len(p.bufs) - len(p.unused)
+	p.mu.Unlock()
+	return n
+}
+
 // drain releases every free buffer (Close).
 func (p *bufPool) drain(fr *cframe) {
 	p.mu.Lock()

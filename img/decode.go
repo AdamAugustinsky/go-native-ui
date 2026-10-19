@@ -9,6 +9,7 @@ import (
 
 // job is one decode, as submitted to the workers.
 type job struct {
+	ent   int32 // the entry it decodes
 	src   Source
 	copy  int32 // pooled copy of inline bytes, -1 if none
 	copyN int32
@@ -29,6 +30,21 @@ type result struct {
 // maxSide is the largest decoded side: what every backend's textures take.
 const maxSide = 16384
 
+// maxPixels bounds the source images the decoders accept (a decompression
+// bomb is refused from its header, before any pixel is decoded).
+const maxPixels = 100 << 20
+
+// Who owns a job's resources (its inline copy, its lease, its output): the
+// cache's jobs table holds one of these per entry, moved by compare-and-swap
+// so that exactly one side frees each resource.
+const (
+	jobIdle    uint32 = iota // no job, or its result was taken by Poll
+	jobQueued                // submitted: Close frees its copy and lease if it never starts
+	jobRunning               // a worker decodes it: the worker frees its copy; its lease and output go with the result
+	jobDone                  // finished: its output (jobOut) waits for Poll, or for Close to free it
+	jobClosed                // Close took the job; a worker still running it frees everything itself
+)
+
 // worker is a decoding goroutine's private state: its C call frame (a
 // Frame must not live on a stack) and the OS decoder's scratch.
 type worker struct {
@@ -36,16 +52,22 @@ type worker struct {
 	osDecoder
 }
 
-// decodeJob runs on a worker.
+// decodeJob runs on a worker. A job Close took before it started is left
+// alone (Close freed its copy and lease); one Close took while it ran frees
+// its own copy, output and lease here, once nothing reads them any more.
 func (c *Cache) decodeJob(t task.Token, j job) result {
+	st := &c.jobs[j.ent]
+	if !st.CompareAndSwap(jobQueued, jobRunning) {
+		return result{buf: -1, err: errDecode}
+	}
 	w := c.takeWorker()
 	defer c.putWorker(w)
 	t0 := platform.Now()
 	var data []byte
-	switch j.src.kind {
-	case srcBytes:
+	switch {
+	case j.src.kind == srcBytes && j.copy >= 0:
 		data = c.bufs.bytes(j.copy, int(j.copyN))
-	case srcLease:
+	case j.src.kind == srcLease:
 		data = j.src.lease.Bytes()
 	}
 	var r result
@@ -58,7 +80,19 @@ func (c *Cache) decodeJob(t task.Token, j job) result {
 		c.bufs.put(j.copy, &w.fr)
 	}
 	r.ns = platform.Now() - t0
-	return r
+	c.jobOut[j.ent] = r.buf
+	if st.CompareAndSwap(jobRunning, jobDone) {
+		return r
+	}
+	// Closed while it ran: nobody takes the result.
+	if r.buf >= 0 {
+		c.bufs.put(r.buf, &w.fr)
+	}
+	if j.src.kind == srcLease {
+		j.src.lease.Release()
+	}
+	c.unref(&w.fr)
+	return result{buf: -1, err: errDecode}
 }
 
 func (c *Cache) takeWorker() *worker {

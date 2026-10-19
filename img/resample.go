@@ -7,10 +7,11 @@ import (
 
 // resample scales src, shown with EXIF orientation orient (1 to 8), to
 // tw×th premultiplied RGBA by area averaging, into dst (stride bytes per
-// row). The decoders never enlarge, so each destination pixel averages the
-// block of source pixels it covers, split at whole-pixel boundaries. Every
-// source pixel is read once, straight from the decoder's image (YCbCr, RGBA,
-// NRGBA, paletted and grey without a conversion pass).
+// row): each destination pixel is the mean of the source area it covers,
+// every source pixel weighted by the part of it inside (a fractional
+// reduction splits a source pixel between two destination pixels). Every
+// source pixel is read straight from the decoder's image (YCbCr, RGBA, NRGBA,
+// paletted and grey without a conversion pass).
 func resample(dst []byte, stride, tw, th int, src image.Image, orient int) {
 	b := src.Bounds()
 	sw, sh := b.Dx(), b.Dy()
@@ -19,26 +20,32 @@ func resample(dst []byte, stride, tw, th int, src image.Image, orient int) {
 	if orient >= 5 {
 		ow, oh = sh, sw
 	}
+	// In x, a source pixel is tw units wide and a destination pixel ow, so
+	// the weights of one destination pixel add up to ow (to oh in y), and
+	// a sum of 8-bit samples is at most 255·ow·oh: 64 bits hold it for any
+	// image.
+	total := uint64(ow) * uint64(oh)
 	for dy := 0; dy < th; dy++ {
-		y0, y1 := dy*oh/th, (dy+1)*oh/th
-		y1 = max(y1, y0+1)
+		ya, yb := dy*oh, (dy+1)*oh
+		y0, y1 := ya/th, (yb+th-1)/th
 		for dx := 0; dx < tw; dx++ {
-			x0, x1 := dx*ow/tw, (dx+1)*ow/tw
-			x1 = max(x1, x0+1)
-			var r, g, bl, a, n uint32
+			xa, xb := dx*ow, (dx+1)*ow
+			x0, x1 := xa/tw, (xb+tw-1)/tw
+			var r, g, bl, a uint64
 			for oy := y0; oy < y1; oy++ {
+				wy := uint64(min((oy+1)*th, yb) - max(oy*th, ya))
 				for ox := x0; ox < x1; ox++ {
+					wt := wy * uint64(min((ox+1)*tw, xb)-max(ox*tw, xa))
 					sx, sy := orientedToStored(ox, oy, sw, sh, orient)
 					p := fetch(b.Min.X+sx, b.Min.Y+sy)
-					r += uint32(p[0])
-					g += uint32(p[1])
-					bl += uint32(p[2])
-					a += uint32(p[3])
-					n++
+					r += uint64(p[0]) * wt
+					g += uint64(p[1]) * wt
+					bl += uint64(p[2]) * wt
+					a += uint64(p[3]) * wt
 				}
 			}
 			d := dst[dy*stride+dx*4:]
-			d[0], d[1], d[2], d[3] = byte((r+n/2)/n), byte((g+n/2)/n), byte((bl+n/2)/n), byte((a+n/2)/n)
+			d[0], d[1], d[2], d[3] = byte((r+total/2)/total), byte((g+total/2)/total), byte((bl+total/2)/total), byte((a+total/2)/total)
 		}
 	}
 }
