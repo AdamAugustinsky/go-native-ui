@@ -32,6 +32,7 @@ var _ app.Initer = (*Rex)(nil)
 func (r *Rex) Init(a *app.App) error {
 	_, _, scale := a.Size()
 	r.init(a.Text, scale)
+	r.attachNative(a.Win)
 	r.AttachRenderer(a.R)
 	a.UI.Reserve(4096)
 	return nil

@@ -17,7 +17,7 @@ var tabStyles = [...]tabStyle{
 func (r *Rex) initTabs() {
 	r.nTabs = 3
 	t := &r.tabs[0]
-	*t = tab{used: true, uid: r.uid(), name: "Stress-test Snake demo ", path: "| rex-snake", style: tabStyles[0]}
+	*t = tab{used: true, uid: r.uid(), name: "Stress-test Snake demo ", path: "| rex-snake", label: "Stress-test Snake demo | rex-snake", style: tabStyles[0]}
 	// (agent over git) beside the game, with the measured ratios.
 	t.setRoot(r.uid(), kindAgent, r.uid())
 	t.splitLeaf(0, ui.AxisX, 0.54638, r.uid(), kindSnake, r.uid(), r.uid())
@@ -25,13 +25,13 @@ func (r *Rex) initTabs() {
 	t.focus = t.panes[0].uid
 
 	t = &r.tabs[1]
-	*t = tab{used: true, uid: r.uid(), name: "Bun ", path: "~/sites/announcement-draft", style: tabStyles[1]}
+	*t = tab{used: true, uid: r.uid(), name: "Bun ", path: "~/sites/announcement-draft", label: "Bun ~/sites/announcement-draft", style: tabStyles[1]}
 	t.setRoot(r.uid(), kindBun, r.uid())
 	t.splitLeaf(0, ui.AxisX, 0.58, r.uid(), kindShell, r.uid(), r.uid())
 	t.focus = t.panes[0].uid
 
 	t = &r.tabs[2]
-	*t = tab{used: true, uid: r.uid(), name: "fish ", path: "~/sites/macos-client-update", style: tabStyles[2]}
+	*t = tab{used: true, uid: r.uid(), name: "fish ", path: "~/sites/macos-client-update", label: "fish ~/sites/macos-client-update", style: tabStyles[2]}
 	t.setRoot(r.uid(), kindShell, r.uid())
 	r.active = 0
 }
@@ -52,7 +52,7 @@ func (r *Rex) newTab() {
 		return
 	}
 	t := &r.tabs[r.nTabs]
-	*t = tab{used: true, uid: r.uid(), name: "fish ", path: "~/Sites", style: tabStyles[2]}
+	*t = tab{used: true, uid: r.uid(), name: "fish ", path: "~/Sites", label: "fish ~/Sites", style: tabStyles[2]}
 	t.setRoot(r.uid(), kindShell, r.uid())
 	r.nTabs++
 	r.selectTab(r.nTabs - 1)
@@ -83,6 +83,7 @@ func (r *Rex) canSplit() bool { return r.tabs[r.active].numPanes() < maxPanes }
 // update applies this frame's input to the model, before anything is built,
 // so the frame that shows a click or a drag is the frame it happens in.
 func (r *Rex) update(c *ui.Context) {
+	r.commands(c)
 	for i := 0; i < r.nTabs; i++ {
 		if c.PeekSignal(tabKey(r.tabs[i].uid)).Clicked {
 			r.selectTab(i)

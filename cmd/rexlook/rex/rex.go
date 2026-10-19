@@ -35,6 +35,7 @@ package rex
 
 import (
 	"gonativeui/icon"
+	"gonativeui/platform"
 	"gonativeui/text"
 	"gonativeui/theme"
 	rextheme "gonativeui/theme/rex"
@@ -94,6 +95,15 @@ type Rex struct {
 
 	lastW, lastH int
 	disp         [maxPanes][4]float32 // rectangles the panes were drawn at
+
+	// The window's native shell (native.go): a backdrop instead of the
+	// painted field, a toolbar instead of the drawn titlebar controls.
+	backdrop bool
+	bar      nativeBar
+	barTabs  [maxTabs]platform.ToolbarTab
+	// shellShot: an offscreen picture of the native shell's content (the
+	// window's parts left out; ShotOptions.Native).
+	shellShot bool
 
 	// geometry of the latest frame
 	capsule  [4]float32
@@ -183,6 +193,7 @@ func (r *Rex) Build(c *ui.Context) {
 		r.SetScale(s)
 	}
 	r.fol.Update(c, &r.th)
+	r.th.Backdrop = r.backdrop
 	if w != r.lastW || h != r.lastH {
 		r.glide = false // a resize follows the window exactly
 		r.lastW, r.lastH = w, h

@@ -9,10 +9,17 @@ import (
 
 // draw builds the whole frame in tree order: background, panes, titlebar (with
 // the traffic lights, if the scene draws them). Every box is a floating child
-// of its container with a whole-pixel position and size.
+// of its container with a whole-pixel position and size. With a native
+// toolbar the titlebar is the window's: the scene only keeps it in step.
 func (r *Rex) draw(c *ui.Context) {
 	r.th.Chrome.Background(c, &r.th)
 	r.drawPanes(c)
+	if r.bar != nil {
+		r.syncBar()
+	}
+	if r.bar != nil || r.shellShot {
+		return
+	}
 	r.drawTitlebar(c)
 }
 

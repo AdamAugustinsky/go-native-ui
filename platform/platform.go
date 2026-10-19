@@ -96,6 +96,7 @@ const (
 	EvWake                    // a goroutine called Wake
 	EvFrame                   // the frame slot armed by RequestFrame is available
 	EvPaste                   // the answer to RequestPaste: Text (plain text), Tag; FlagFailed when there is none
+	EvCommand                 // a native control was chosen: Tag is its command id (ToolbarItem.ID, ToolbarTab.ID); experimental
 )
 
 // Flags qualify an Event.
@@ -250,6 +251,91 @@ type Options struct {
 	// top-left), keeping the native button spacing. macOS only so far.
 	Titlebar      float32
 	TrafficLights [2]float32
+
+	// Backdrop puts a system material behind the content, which shows
+	// wherever the app paints nothing: the GPU surface is transparent
+	// (Native.Transparent) and the app clears to alpha 0. Window.Backdrop
+	// says which one the window got; it is BackdropNone where the OS has
+	// none (Windows and Linux so far), and the app then draws its own
+	// background. Experimental (the phase 6 native-shell spike): D41's
+	// material regions are meant to replace it.
+	Backdrop Backdrop
+	// Toolbar, when not empty, gives the window a native toolbar in a unified
+	// titlebar (macOS; ignored elsewhere, see Window.HasToolbar): the window
+	// buttons, the title and Subtitle at the leading edge, then the items.
+	// The content extends under the band, as with Titlebar, but the band is
+	// the system's: its empty parts move the window and the app gets no
+	// presses there. Titlebar and TrafficLights are ignored. Experimental.
+	Toolbar []ToolbarItem
+	// ToolbarCompact picks the compact toolbar style (a lower band) over the
+	// regular unified one. Experimental.
+	ToolbarCompact bool
+	// Subtitle is a second, quieter line under the title in a toolbar window
+	// (macOS). Experimental.
+	Subtitle string
+}
+
+// Backdrop is a system material behind a window's content (Options.Backdrop).
+// Experimental.
+type Backdrop uint8
+
+const (
+	// BackdropNone is no material: the content is opaque (the default).
+	BackdropNone Backdrop = iota
+	// BackdropWindow is the window-background material blurred from behind
+	// the window (macOS: NSVisualEffectView, under-window background,
+	// behind-window blending).
+	BackdropWindow
+	// BackdropGlass is Liquid Glass (macOS 26 and later: NSGlassEffectView,
+	// regular style); BackdropWindow on earlier systems.
+	BackdropGlass
+	// BackdropGlassClear is the clear Liquid Glass style (more of the desktop
+	// shows); BackdropWindow before macOS 26.
+	BackdropGlassClear
+)
+
+// ToolbarItemKind is the kind of a ToolbarItem. Experimental.
+type ToolbarItemKind uint8
+
+const (
+	// ToolbarButton is a button showing an SF Symbol; a click delivers
+	// EvCommand with the item's ID.
+	ToolbarButton ToolbarItemKind = iota
+	// ToolbarTabs is a group of tabs of which one is selected (a segmented
+	// control); choosing tab i delivers EvCommand with Tabs[i].ID.
+	ToolbarTabs
+	// ToolbarFlexibleSpace takes the room the other items leave.
+	ToolbarFlexibleSpace
+	// ToolbarSpace is a fixed gap.
+	ToolbarSpace
+)
+
+// ToolbarItem is one item of a native toolbar (Options.Toolbar). Experimental.
+type ToolbarItem struct {
+	// Kind is the kind of item.
+	Kind ToolbarItemKind
+	// ID identifies the item for SetToolbarTabs and SetToolbarEnabled, and is
+	// a button's command id (EvCommand's Tag).
+	ID uint16
+	// Symbol is a button's SF Symbol name ("plus", "command").
+	Symbol string
+	// Label is the accessibility description and tooltip.
+	Label string
+	// Tabs are the tabs of a ToolbarTabs item, Selected the index of the
+	// selected one, and TabWidth the width of each in points (0: 180).
+	Tabs     []ToolbarTab
+	Selected int
+	TabWidth float32
+	// Disabled opens the item disabled (SetToolbarEnabled changes it).
+	Disabled bool
+}
+
+// ToolbarTab is one tab of a ToolbarTabs item. Experimental.
+type ToolbarTab struct {
+	// ID is the command id delivered when the user picks the tab.
+	ID uint16
+	// Symbol is an SF Symbol shown before Label ("" for none).
+	Symbol, Label string
 }
 
 // eventQueue is the reusable per-Window event and text storage.

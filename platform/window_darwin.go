@@ -62,7 +62,7 @@ func Open(o Options) (*Window, error) {
 	foundation, _ := loadFramework("/System/Library/Frameworks/Foundation.framework/Foundation")
 	defaultMode = stringConstant(foundation, "NSDefaultRunLoopMode")
 	commonModes = stringConstant(foundation, "NSRunLoopCommonModes")
-	_ = appKit
+	appKitLib = appKit
 	markOpen("frameworks")
 	classesOnce.Do(registerClasses)
 	markOpen("classes")
@@ -82,7 +82,10 @@ func Open(o Options) (*Window, error) {
 		width, height = 960, 600
 	}
 	style := uintptr(1 | 2 | 4 | 8) // titled | closable | miniaturizable | resizable
-	if o.Titlebar > 0 {
+	if len(o.Toolbar) > 0 {
+		o.Titlebar = 0 // the toolbar's band is the system's
+	}
+	if o.Titlebar > 0 || len(o.Toolbar) > 0 {
 		style |= 1 << 15 // NSWindowStyleMaskFullSizeContentView
 	}
 	w.win = objc.Send(objc.Cls("NSWindow"), selAlloc)
@@ -102,10 +105,20 @@ func Open(o Options) (*Window, error) {
 	w.view = objc.Send(viewClass, selAlloc)
 	w.view = objc.ID(F.Reset().Arg(uintptr(w.view)).Arg(uintptr(selInitWithFrame)).
 		ArgRect(0, 0, width, height).Call(objc.MsgSend).R0())
-	objc.Send1(w.win, selSetContentView, uintptr(w.view))
+	w.content = w.view
+	if o.Backdrop != BackdropNone {
+		w.content = w.makeBackdrop(o.Backdrop, width, height)
+		markOpen("backdrop")
+	}
+	objc.Send1(w.win, selSetContentView, uintptr(w.content))
 	objc.Send1(w.win, selMakeFirstResp, uintptr(w.view))
 	delegate := objc.Send(objc.Send(delegateClass, selAlloc), objc.Sel("init"))
 	objc.Send1(w.win, selSetDelegate, uintptr(delegate))
+	if len(o.Toolbar) > 0 {
+		w.makeToolbar(o, delegate)
+		markOpen("toolbar")
+	}
+	w.fitBackdrop()
 	objc.Send1(w.win, selSetMouseMoved, 1)
 	if o.MinWidth > 0 || o.MinHeight > 0 {
 		F.Reset().Arg(uintptr(w.win)).Arg(uintptr(selSetContentMinSize)).ArgPoint(float64(o.MinWidth), float64(o.MinHeight)).Call(objc.MsgSend)
@@ -252,7 +265,9 @@ func (w *Window) pushResize() bool {
 func (w *Window) Size() (int32, int32, float32) { return w.wPx, w.hPx, w.scale }
 
 // Native returns the AppKit handles.
-func (w *Window) Native() Native { return Native{NSWindow: uintptr(w.win), NSView: uintptr(w.view)} }
+func (w *Window) Native() Native {
+	return Native{NSWindow: uintptr(w.win), NSView: uintptr(w.view), Transparent: w.backdrop != BackdropNone}
+}
 
 // Close closes the window.
 func (w *Window) Close() {

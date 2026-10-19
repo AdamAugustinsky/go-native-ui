@@ -23,6 +23,12 @@
 //	                           given (-mode system renders what this machine says)
 //	rexlook -o out.png -o-dark dark.png
 //	                           render the light and the dark picture
+//	rexlook -o out.png -native render what the scene draws in the native shell (no field, no titlebar)
+//
+// On macOS the window modes use the native shell (rex.NativeConfig,
+// experimental): a Liquid Glass backdrop where the field was and an NSToolbar
+// with the tabs, ⌘ and +; -drawn uses the drawn field and titlebar instead.
+// Other systems have no native shell and always draw them.
 package main
 
 import (
@@ -66,9 +72,14 @@ func main() {
 	timeout := flag.Duration("timeout", 120*time.Second, "with -bench: give up after this long")
 	resizeTest := flag.Bool("live-resize-test", false, "macOS: drag the window size through the frame handler and print the result as JSON")
 	probe := flag.Bool("probe-titlebar", false, "macOS: print the titlebar hit-test and drag-map probe as JSON and exit")
+	drawn := flag.Bool("drawn", false, "macOS: draw the field and the titlebar instead of the native shell (backdrop and toolbar)")
+	native := flag.Bool("native", false, "with -o: render the native shell's content (no field, no titlebar)")
 	verbose := flag.Bool("v", false, "print the startup timeline to stderr; with -bench or in a window, also a state line every second while frames stop coming")
 	flag.Parse()
 
+	if *drawn {
+		config = rex.Config
+	}
 	pref, err := parseMode(*mode)
 	explicit := false
 	flag.Visit(func(f *flag.Flag) { explicit = explicit || f.Name == "mode" })
@@ -78,7 +89,7 @@ func main() {
 			if !explicit {
 				pref = theme.ForceLight // a picture is the same on every machine unless it is asked to follow this one
 			}
-			err = renderPNG(*out, *outDark, pref)
+			err = renderPNG(*out, *outDark, pref, *native)
 		case *bench:
 			err = runBench(pref, *gate, *allowUnpaced, *maxCPU, *timeout, *verbose)
 		case *resizeTest:
@@ -135,8 +146,18 @@ func (b *builder) Build(c *ui.Context) {
 	b.Rex.Build(c)
 }
 
+// config is the window of the window modes: the native shell on macOS
+// (-drawn: the drawn one), the drawn one elsewhere.
+var config = rex.Config
+
+func init() {
+	if runtime.GOOS == "darwin" {
+		config = rex.NativeConfig
+	}
+}
+
 func runWindow(pref theme.Preference, exitFirst, verbose bool) error {
-	res, err := app.RunWith(rex.Config(), newBuilder(pref), app.RunOptions{ExitFirst: exitFirst, Verbose: verbose})
+	res, err := app.RunWith(config(), newBuilder(pref), app.RunOptions{ExitFirst: exitFirst, Verbose: verbose})
 	if err != nil {
 		return err
 	}
@@ -152,8 +173,8 @@ func runWindow(pref theme.Preference, exitFirst, verbose bool) error {
 // renderPNG draws the initial state offscreen at the reference size and
 // writes it, with the layout metrics the compare tool checks; with dark, also
 // the dark mode into that file.
-func renderPNG(path, dark string, pref theme.Preference) error {
-	o := rex.ShotOptions{Width: refW, Height: refH, Scale: 2, Corners: true, Preference: pref}
+func renderPNG(path, dark string, pref theme.Preference, native bool) error {
+	o := rex.ShotOptions{Width: refW, Height: refH, Scale: 2, Corners: true, Preference: pref, Native: native}
 	if pref == theme.System { // an offscreen window has no system: ask this machine
 		a := platform.SystemAppearance()
 		o.System = ui.Appearance{Dark: a.Dark, Accent: a.Accent, Known: a.Known}
@@ -185,7 +206,7 @@ type report struct {
 
 func runBench(pref theme.Preference, gate, allowUnpaced bool, maxCPU float64, timeout time.Duration, verbose bool) error {
 	x := newScene(pref)
-	br, err := app.RunBench(rex.Config(), rex.NewBench(x), app.BenchOptions{Warm: warmFrames, Frames: measFrames, Timeout: timeout, Verbose: verbose})
+	br, err := app.RunBench(config(), rex.NewBench(x), app.BenchOptions{Warm: warmFrames, Frames: measFrames, Timeout: timeout, Verbose: verbose})
 	if err != nil {
 		return err
 	}
@@ -221,7 +242,7 @@ func gateFailures(r report, allowUnpaced bool, maxCPU float64) []string {
 
 // runResizeTest drags the window through 150 sizes, like a user dragging an edge.
 func runResizeTest(pref theme.Preference) error {
-	cfg := rex.Config()
+	cfg := config()
 	var sizes [][2]float64
 	for i := 0; i < 150; i++ {
 		f := float64(i) / 149

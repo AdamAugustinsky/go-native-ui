@@ -84,6 +84,12 @@ func (w *Window) pointerEvent(ev objc.ID, typ uintptr, t int64) (consumed bool) 
 		}
 	}
 	w.pointerIn = true
+	if w.tb != nil && (typ == 1 || typ == 3 || typ == 25) && !w.hitsView(lx, ly) {
+		// A press on the toolbar (or a window button) is AppKit's: its
+		// controls track the release themselves, so ui would see a press
+		// that never ends.
+		return false
+	}
 	if typ == 1 && w.drags.at(e.X, e.Y) && w.hitsView(lx, ly) {
 		// A press on the titlebar drag map belongs to the window: the
 		// double-click action, or a drag by the window server. The app
@@ -204,7 +210,11 @@ func (w *Window) SetDragRegions(r []DragRegion) { w.drags.set(r) }
 // a window button or the resize border is somebody else's; only a press that
 // would reach our view is a window drag.
 func (w *Window) hitsView(x, y float64) bool {
-	frame := objc.Send(w.view, selSuperview)
+	content := w.content
+	if content == 0 {
+		content = w.view
+	}
+	frame := objc.Send(content, selSuperview)
 	if frame == 0 {
 		return true
 	}

@@ -43,7 +43,7 @@ func (w *Window) SimulateLiveResize(sizes [][2]float64) {
 // name ("" if none). It says who a mouse press at the point would be routed
 // to. Main thread.
 func (w *Window) DebugHitTest(xPx, yPx float32) string {
-	frame := objc.Send(w.view, selSuperview)
+	frame := objc.Send(w.content, selSuperview)
 	if frame == 0 {
 		return ""
 	}
