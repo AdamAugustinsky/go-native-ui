@@ -363,6 +363,99 @@ func TestParaGeometry(t *testing.T) {
 	}
 }
 
+// oneLine is a hand-made paragraph of one line: glyph i at x[i] with cluster
+// c[i] (ClusterRTL included), the line Width and Advance wide.
+func oneLine(txt string, x []float32, c []uint32, width, adv float32, flags uint8) ParaView {
+	n := len(x)
+	return ParaView{
+		Text:     []byte(txt),
+		Lines:    []Line{{End: uint32(len(txt)), G1: uint32(n), Height: 14, Baseline: 10, Width: width, Advance: adv, Flags: flags}},
+		Glyphs:   make([]uint16, n),
+		X:        x,
+		Faces:    make([]FaceID, n),
+		Clusters: c,
+		SpanOf:   make([]uint16, n),
+		Width:    width,
+		Height:   14,
+	}
+}
+
+// A ligature stands for several graphemes: a range of part of them covers
+// that part of the glyph, split at its caret stops as Caret places them.
+func TestParaRangeRectsSplitLigatures(t *testing.T) {
+	const r = ClusterRTL
+	// "office fi" with an "ffi" and a "fi" ligature (as Hoefler Text sets it).
+	v := oneLine("office fi", []float32{0, 10, 40, 50, 60, 70}, []uint32{0, 1, 4, 5, 6, 7}, 90, 90, 0)
+	// "لا" (lam alef): one right-to-left glyph for two graphemes.
+	la := oneLine("لا", []float32{0}, []uint32{0 | r}, 20, 20, LineRTL)
+	for _, c := range []struct {
+		v        *ParaView
+		from, to int
+		want     string
+	}{
+		{&v, 1, 2, "[[10 0 20 14]]"}, {&v, 2, 3, "[[20 0 30 14]]"}, {&v, 3, 4, "[[30 0 40 14]]"},
+		{&v, 2, 5, "[[20 0 50 14]]"}, {&v, 7, 8, "[[70 0 80 14]]"}, {&v, 8, 9, "[[80 0 90 14]]"},
+		{&v, 0, 9, "[[0 0 90 14]]"},
+		{&la, 0, 2, "[[10 0 20 14]]"}, {&la, 2, 4, "[[0 0 10 14]]"}, {&la, 0, 4, "[[0 0 20 14]]"},
+	} {
+		w := c.v.Width
+		if got := fmt.Sprint(c.v.RangeRects(c.from, c.to, w, nil)); got != c.want {
+			t.Errorf("%q [%d, %d): %s, want %s", c.v.Text, c.from, c.to, got, c.want)
+		}
+		// The edges are the carets of the range's ends.
+		_, a := c.v.Caret(c.from, w)
+		_, b := c.v.Caret(c.to, w)
+		if want := fmt.Sprint([][4]float32{{min(a, b), 0, max(a, b), 14}}); want != c.want {
+			t.Errorf("%q [%d, %d): carets at %v and %v", c.v.Text, c.from, c.to, a, b)
+		}
+	}
+}
+
+// A right-to-left line broken after spaces has them hanging left of its
+// origin, at negative X: they are hit, covered and caret-placed there, and the
+// rightmost cell ends at the line's Width, not at its Advance.
+func TestParaHangingWhiteSpaceLeftOfTheOrigin(t *testing.T) {
+	const r = ClusterRTL
+	// "אב גד  ": two spaces hang left; visually "  דג בא".
+	v := oneLine("אב גד  ", []float32{-20, -10, 0, 10, 20, 30, 40}, []uint32{10 | r, 9 | r, 7 | r, 5 | r, 4 | r, 2 | r, 0 | r}, 50, 70, LineRTL)
+	const w = 100 // the line's origin is at 50
+	if x0, x1 := v.LineExtent(0); x0 != -20 || x1 != 50 {
+		t.Errorf("extent %v..%v, want -20..50", x0, x1)
+	}
+	for _, c := range []struct {
+		x    float32
+		want int
+	}{{25, -1}, {35, 0}, {45, 1}, {55, 2}, {95, 6}, {99.5, 6}, {100, -1}, {115, -1}} {
+		if g := v.GlyphAt(c.x, 5, w); g != c.want {
+			t.Errorf("glyph at %v: %d, want %d", c.x, g, c.want)
+		}
+	}
+	for _, c := range []struct {
+		from, to int
+		want     string
+	}{
+		{9, 11, "[[30 0 50 14]]"}, {10, 11, "[[30 0 40 14]]"}, {0, 2, "[[90 0 100 14]]"}, {0, 11, "[[30 0 100 14]]"},
+	} {
+		if got := fmt.Sprint(v.RangeRects(c.from, c.to, w, nil)); got != c.want {
+			t.Errorf("[%d, %d): %s, want %s", c.from, c.to, got, c.want)
+		}
+	}
+	// Every caret stop hit-tests back to itself; the end of the line is the
+	// hanging spaces' left edge.
+	for off := 0; off <= len(v.Text); off = NextGrapheme(v.Text, off) {
+		_, x := v.Caret(off, w)
+		if got := v.HitTest(x, 5, w); got != off {
+			t.Errorf("caret of %d at %v hit-tests to %d", off, x, got)
+		}
+		if off == len(v.Text) {
+			if x != 30 {
+				t.Errorf("caret at the end at %v, want 30", x)
+			}
+			break
+		}
+	}
+}
+
 func TestParaCacheHitsAndInvalidation(t *testing.T) {
 	sh := new(gridShaper)
 	l := NewBasicLayouter(sh)

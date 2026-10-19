@@ -204,7 +204,9 @@ func (p *ParaView) LineOf(off int) int {
 // LineRun returns line i as a RunView, for RunView.CaretX and HitByte: its
 // glyphs, with clusters and Text indexing the paragraph's text. Text ends
 // where the line's glyphs do: before the newline that ends it, and before
-// trailing white space that has no glyphs.
+// trailing white space that has no glyphs. Advance is the right end of the
+// line's glyphs (LineExtent), which is less than the line's Advance when its
+// hanging white space is left of its origin.
 func (p *ParaView) LineRun(i int) RunView {
 	l := &p.Lines[i]
 	g0, g1 := l.G0, l.G1
@@ -218,14 +220,28 @@ func (p *ParaView) LineRun(i int) RunView {
 			e = max(trimEnd(p.Text, last, e), NextGrapheme(p.Text[:e], last))
 		}
 	}
+	_, xr := p.LineExtent(i)
 	return RunView{
 		Glyphs:   p.Glyphs[g0:g1:g1],
 		X:        p.X[g0:g1:g1],
 		Faces:    p.Faces[g0:g1:g1],
 		Clusters: p.Clusters[g0:g1:g1],
 		Text:     p.Text[:e:e],
-		Advance:  l.Advance,
+		Advance:  xr,
 	}
+}
+
+// LineExtent returns the x interval of line i's glyphs from its origin, the
+// line's Advance wide: from 0 to Advance, or, when white space hangs left of
+// the origin (a right-to-left line broken after spaces: CoreText gives them
+// negative X), from the leftmost glyph to Width. The last glyph's cell (see
+// GlyphAt) ends at its right end.
+func (p *ParaView) LineExtent(i int) (x0, x1 float32) {
+	l := &p.Lines[i]
+	for g := l.G0; g < l.G1; g++ {
+		x0 = min(x0, p.X[g])
+	}
+	return x0, x0 + l.Advance
 }
 
 // lineEndCaret is the last caret offset of line i: its end, before the
@@ -271,37 +287,30 @@ func (p *ParaView) HitTest(x, y, width float32) int {
 }
 
 // GlyphAt returns the glyph whose cell contains (x, y) (relative to the
-// paragraph's origin, drawn width wide), -1 when the point is on no glyph: left
-// or right of its line's ink, or below the last line. A cell runs from the
-// glyph's pen position to the next glyph's on the line.
+// paragraph's origin, drawn width wide), -1 when the point is on no glyph:
+// outside its line's extent (LineExtent), or below the last line. A cell runs
+// from the glyph's pen position (the running maximum along the line, as in
+// RunView.CaretX) to the next glyph's, the last one to the line's right end.
 func (p *ParaView) GlyphAt(x, y, width float32) int {
 	if len(p.Lines) == 0 || y < 0 || y >= p.Height {
 		return -1
 	}
 	i := p.LineAt(y)
 	l := &p.Lines[i]
-	x -= p.LineLeft(i, width)
-	if x < 0 {
+	if l.G1 == l.G0 {
 		return -1
 	}
-	hit := -1
-	var m float32
+	x -= p.LineLeft(i, width)
+	if x0, x1 := p.LineExtent(i); x < x0 || x >= x1 {
+		return -1
+	}
+	hit := int(l.G0)
+	m := min(0, p.X[l.G0])
 	for g := l.G0; g < l.G1; g++ {
-		m = max(m, p.X[g])
-		if m > x {
+		if m = max(m, p.X[g]); m > x {
 			break
 		}
 		hit = int(g)
-	}
-	if hit < 0 {
-		return -1
-	}
-	end := l.Advance
-	if hit+1 < int(l.G1) {
-		end = p.X[hit+1]
-	}
-	if x >= end && hit == int(l.G1)-1 {
-		return -1
 	}
 	return hit
 }
@@ -334,49 +343,109 @@ func (p *ParaView) Caret(off int, width float32) (line int, x float32) {
 }
 
 // RangeRects appends to dst the rectangles (x0, y0, x1, y1, relative to the
-// paragraph's origin, drawn width wide) that cover the bytes [from, to): per
-// line, one rectangle per stretch of glyphs in visual order whose characters
-// are in the range (a bidirectional line can need several), as high as the
-// line. A range that runs over the end of a line covers its trailing white
-// space too.
+// paragraph's origin, drawn width wide) that cover the bytes [from, to),
+// widened to grapheme boundaries: per line, one rectangle per stretch of
+// glyphs in visual order whose characters are in the range (a bidirectional
+// line can need several), as high as the line. It uses Caret's model (see
+// caret.go): a glyph standing for several graphemes (a ligature such as
+// "fi") is split evenly at its caret stops, so part of it can be covered. A
+// range that runs over the end of a line covers its trailing white space too.
 func (p *ParaView) RangeRects(from, to int, width float32, dst [][4]float32) [][4]float32 {
+	from, to = max(from, 0), min(to, len(p.Text))
 	if from >= to {
 		return dst
 	}
+	from = GraphemeStart(p.Text, from)
+	if s := GraphemeStart(p.Text, to); s != to {
+		to = NextGrapheme(p.Text, s)
+	}
 	for i := range p.Lines {
 		l := &p.Lines[i]
-		if int(l.End) <= from || int(l.Start) >= to {
+		if int(l.End) <= from || int(l.Start) >= to || l.G1 == l.G0 {
 			continue
 		}
 		left := p.LineLeft(i, width)
 		y0, y1 := l.Top, l.Top+l.Height
+		v := p.LineRun(i)
+		n := len(v.Glyphs)
 		open := false
 		var x0, x1 float32
-		var m float32
-		for g := l.G0; g < l.G1; g++ {
-			m = max(m, p.X[g])
-			cs := m
-			ce := l.Advance
-			if g+1 < l.G1 {
-				ce = max(m, p.X[g+1])
+		m := v.xStart() // the running maximum of X: cells, as in caret.go
+		for lo := 0; lo < n; {
+			s := v.clusterOf(lo)
+			hi := lo + 1
+			for hi < n && v.clusterOf(hi) == s {
+				hi++
 			}
-			c := int(p.Clusters[g] &^ ClusterRTL)
-			in := c >= from && c < to
+			g := glyphGroup{lo: lo, hi: hi, start: s, rtl: v.Clusters[lo]&ClusterRTL != 0}
+			g.xl = max(m, v.X[lo])
+			for k := lo; k < hi; k++ {
+				m = max(m, v.X[k])
+			}
+			if hi < n {
+				g.xr = max(m, v.X[hi])
+			} else {
+				g.xr = max(m, v.Advance)
+			}
+			a, b, in := v.groupCover(&g, from, to)
 			switch {
-			case in && !open:
-				open, x0, x1 = true, cs, ce
+			case in && open && a <= x1+0.01:
+				x0, x1 = min(x0, a), max(x1, b)
 			case in:
-				x1 = ce
+				if open {
+					dst = append(dst, [4]float32{left + x0, y0, left + x1, y1})
+				}
+				open, x0, x1 = true, a, b
 			case open:
 				dst = append(dst, [4]float32{left + x0, y0, left + x1, y1})
 				open = false
 			}
+			lo = hi
 		}
 		if open {
 			dst = append(dst, [4]float32{left + x0, y0, left + x1, y1})
 		}
 	}
 	return dst
+}
+
+// groupCover returns the part [a, b] of group g's x interval that the bytes
+// [from, to) (grapheme boundaries) cover, and whether there is one. A group
+// that stands for no grapheme (an ellipsis, at the cut) is covered whole when
+// its offset is in the range.
+func (v *RunView) groupCover(g *glyphGroup, from, to int) (a, b float32, ok bool) {
+	g.end = v.groupEnd(g.lo, g.hi, g.start)
+	if g.end <= g.start {
+		return g.xl, g.xr, g.start >= from && g.start < to
+	}
+	s, e := max(from, g.start), min(to, g.end)
+	if s >= e {
+		return 0, 0, false
+	}
+	n := v.graphemes(g.start, g.end)
+	a, b = g.stopX(v.graphemes(g.start, s), n), g.stopX(v.graphemes(g.start, e), n)
+	if a > b {
+		a, b = b, a
+	}
+	return a, b, true
+}
+
+// groupEnd is where the group of glyphs [lo, hi) whose grapheme starts at s
+// ends: at the next group's start in logical order (see glyphGroup), the end
+// of the text for the last one. In most text a neighbouring group starts the
+// next grapheme, and nothing else can start before it.
+func (v *RunView) groupEnd(lo, hi, s int) int {
+	ng := NextGrapheme(v.Text, s)
+	if ng >= len(v.Text) || lo > 0 && v.clusterOf(lo-1) == ng || hi < len(v.Glyphs) && v.clusterOf(hi) == ng {
+		return min(ng, len(v.Text))
+	}
+	end := len(v.Text)
+	for k := range v.Glyphs {
+		if c := v.clusterOf(k); c > s && c < end {
+			end = c
+		}
+	}
+	return end
 }
 
 // ---- helpers shared by the layouts ----

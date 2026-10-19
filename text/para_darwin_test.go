@@ -489,6 +489,64 @@ func TestParagraphEllipsisFontCoreText(t *testing.T) {
 	}
 }
 
+// Selection geometry on real layouts: part of a ligature, and the white
+// space that hangs left of a right-to-left line broken after it.
+func TestParagraphGeometryCoreText(t *testing.T) {
+	s := newSys(t)
+	hf := s.Font(FontDesc{Family: "Hoefler Text", SizePt: 13, Scale: 2})
+	txt := "office fi"
+	v := s.Paragraph(s.Layout(&Para{Text: []byte(txt), Fonts: []FontKey{hf}, Width: 1000}))
+	if len(v.Glyphs) >= len(txt) {
+		t.Fatalf("no ligatures: %d glyphs", len(v.Glyphs))
+	}
+	for _, r := range [][2]int{{1, 2}, {2, 3}, {3, 4}, {7, 8}, {8, 9}, {2, 5}} {
+		rects := v.RangeRects(r[0], r[1], 1000, nil)
+		_, a := v.Caret(r[0], 1000)
+		_, b := v.Caret(r[1], 1000)
+		if len(rects) != 1 || math.Abs(float64(rects[0][0]-a)) > 0.01 || math.Abs(float64(rects[0][2]-b)) > 0.01 || b-a < 1 {
+			t.Errorf("%q [%d, %d): %v, carets %v..%v", txt, r[0], r[1], rects, a, b)
+		}
+	}
+
+	f := s.Font(FontDesc{SizePt: 13, Scale: 2})
+	txt = "שלום עולם   טוב מאוד"
+	const w = 130
+	v = s.Paragraph(s.Layout(&Para{Text: []byte(txt), Fonts: []FontKey{f}, Width: w}))
+	ln := v.Lines[0]
+	if got := txt[ln.Start:ln.End]; got != "שלום עולם   " {
+		t.Fatalf("first line %q", got)
+	}
+	x0, x1 := v.LineExtent(0)
+	left := v.LineLeft(0, w)
+	if x0 >= 0 || math.Abs(float64(x1-ln.Width)) > 0.01 {
+		t.Fatalf("extent %v..%v, line width %v advance %v", x0, x1, ln.Width, ln.Advance)
+	}
+	// The hanging spaces (bytes 17, 18, 19) are hit and covered left of the
+	// origin.
+	if g := v.GlyphAt(left+x0+1, 5, w); g < 0 || v.Clusters[g]&^ClusterRTL < 17 {
+		t.Errorf("hanging space not hit: glyph %d", g)
+	}
+	if r := v.RangeRects(17, 20, w, nil); len(r) != 1 || math.Abs(float64(r[0][0]-(left+x0))) > 0.01 || math.Abs(float64(r[0][2]-left)) > 0.01 {
+		t.Errorf("hanging spaces covered by %v, want %v..%v", r, left+x0, left)
+	}
+	// The rightmost cell, the first letter's, ends at the line's width.
+	if g := v.GlyphAt(left+ln.Width-0.5, 5, w); g < 0 || v.Clusters[g]&^ClusterRTL != 0 {
+		t.Errorf("the first letter is not at the right end: glyph %d", g)
+	}
+	if g := v.GlyphAt(left+ln.Width+0.5, 5, w); g >= 0 {
+		t.Errorf("glyph %d right of the line", g)
+	}
+	if r := v.RangeRects(0, 2, w, nil); len(r) != 1 || math.Abs(float64(r[0][2]-(left+ln.Width))) > 0.01 {
+		t.Errorf("the first letter covered by %v, line ends at %v", r, left+ln.Width)
+	}
+	for off := 0; off < int(ln.End); off = NextGrapheme([]byte(txt), off) {
+		i, x := v.Caret(off, w)
+		if got := v.HitTest(x, v.Lines[i].Top+1, w); got != off {
+			t.Errorf("caret of %d at %v hit-tests to %d", off, x, got)
+		}
+	}
+}
+
 // Every caret position of a line hit-tests back to itself, on left-to-right
 // and right-to-left lines.
 func TestParagraphCaretRoundTripCoreText(t *testing.T) {

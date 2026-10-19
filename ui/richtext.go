@@ -498,7 +498,7 @@ func (c *Context) emitRich(l *gpu.DrawList, b *box, r *richRec, clip [4]float32)
 				e++
 			}
 			if st := styleOf(g); styles[st].BG&255 != 0 {
-				bx0, bx1 := ox+cellLeft(&pv, ln, g), ox+cellRight(&pv, ln, e-1)
+				bx0, bx1 := ox+cellLeft(&pv, i, g), ox+cellRight(&pv, i, e-1)
 				col := b.col(styles[st].BG)
 				q := gpu.Quad{Rect: [4]float32{snap(bx0), snap(top), snap(bx1), snap(top + ln.Height)}, Clip: clip,
 					Color: [4]uint32{col, col, col, col}}
@@ -537,7 +537,7 @@ func (c *Context) emitRich(l *gpu.DrawList, b *box, r *richRec, clip [4]float32)
 			if deco&(DecoUnderline|DecoStrike) != 0 {
 				col := colOf(st)
 				m := c.sh.Metrics(r.fonts[st])
-				bx0, bx1 := ox+cellLeft(&pv, ln, g), ox+cellRight(&pv, ln, e-1)
+				bx0, bx1 := ox+cellLeft(&pv, i, g), ox+cellRight(&pv, i, e-1)
 				// Leave out the white space that ends the line (right of a
 				// left-to-right line's content, left of a right-to-left one's).
 				bx0, bx1 = max(bx0, ox), min(bx1, ox+ln.Width)
@@ -576,16 +576,17 @@ func (c *Context) rule(l *gpu.DrawList, x0, x1, y, th float32, col uint32, clip 
 	l.Add(gpu.Quad{Rect: [4]float32{x0, y, x1, y + th}, Clip: clip, Color: [4]uint32{col, col, col, col}})
 }
 
-// cellLeft and cellRight are the x interval of glyph g of line ln (from the
-// line's origin): from its pen position to the next glyph's, or the line's
-// advance for the last.
-func cellLeft(pv *text.ParaView, ln *text.Line, g uint32) float32 { return pv.X[g] }
+// cellLeft and cellRight are the x interval of glyph g of line i (from the
+// line's origin): from its pen position to the next glyph's, or the right end
+// of the line's glyphs for the last (text.ParaView.LineExtent).
+func cellLeft(pv *text.ParaView, i int, g uint32) float32 { return pv.X[g] }
 
-func cellRight(pv *text.ParaView, ln *text.Line, g uint32) float32 {
-	if g+1 < ln.G1 {
+func cellRight(pv *text.ParaView, i int, g uint32) float32 {
+	if ln := &pv.Lines[i]; g+1 < ln.G1 {
 		return max(pv.X[g+1], pv.X[g])
 	}
-	return max(ln.Advance, pv.X[g])
+	_, x1 := pv.LineExtent(i)
+	return max(x1, pv.X[g])
 }
 
 // RichLayout returns the paragraph of the RichText box id with where its
