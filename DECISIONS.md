@@ -706,8 +706,213 @@ The whole UI is rewritten in Go on the framework with the Rex design system, mac
 - **The ABI.** Plain C calls, with no callbacks into Go where avoidable: commands in, events out, through a pollable fd plus a drain call. Memory ownership is explicit at the boundary. The Rust threads (tokio) never touch the UI.
 - **Budgets.** The app keeps them: zero allocations per steady-state frame on the UI side, an idle loop with no wakeups, and content-first startup. Loading the library must not block the first frame.
 
-## D34. macOS text: fonts in points, AppKit's font smoothing (phase 6, 2026-10-18)
+## D34. Phase 6 is macOS-first (phase 6, 2026-10-18)
 
-**Decision.** The macOS text system sets text the way AppKit does (native audit, problem 1):
-- **Point-sized fonts.** CTFonts are created at `SizePt`, not `SizePt × Scale`. CoreText picks the optical size and the `trak` tracking from the font size, so a 13 pt label on a 2× display was set in SF's 26 pt design: advance per em 13.49 instead of AppKit's 14.28. Metrics and pen positions are CoreText's points times `Scale`; glyphs are drawn through a `Scale` CTM. Pinning `opsz` on a pixel-sized font was rejected: it fixes SF but not the fallback fonts of the cascade (Arabic, Hebrew, CJK and emoji runs stayed 1.8–14 % narrower than AppKit).
-- **Font smoothing.** Glyphs are rasterised with CoreGraphics font smoothing, as AppKit draws labels, unless the user set `AppleFontSmoothing` to 0. CoreGraphics thickens stems by one of four amounts chosen from the text colour's linear luminance (bands at 1/8, 3/8 and 5/8). `text.SmoothLevel(colour)` replicates the choice, and the level is part of the glyph variant (`GlyphVariant`), so a glyph has at most four smoothed bitmaps (in practice one or two per theme); the bitmap is still coverage, coloured by the renderer. Measured live on the MacBook (macOS 27.2) for 13 pt SF at 2×: AppKit stems 2.58 px for dark text and 2.91 px for light; ours were 2.23 px for both, and are now 2.57 and 2.91.
+**Decision (user, 2026-10-18):** "it should feel macos native (we take care of other operating systems afterwards)". New APIs ship macOS implementations. On Windows and Linux they compile and return `ErrUnsupported`, or keep today's drawn equivalent (menus, dialogs); a second window is refused there. CI stays green on all 8 jobs, and everything phase 5 delivered on Windows and Linux keeps passing. Windows and Linux numbers come only from CI.
+
+**Alternatives:** all three OSes per feature, as phases 1–5 did. That roughly triples the native work before ZapFast is possible.
+
+**Cost:** a parity phase later, whose size grows with this one: hosted views need child HWNDs and Wayland subsurfaces, and the native pieces need drawn versions.
+
+## D35. `clib`: C calls for apps (phase 6, 2026-10-18)
+
+**Decision.** A public package for dlopen/dlsym and plain C calls on `internal/ffi`'s trampolines (D3): integer, pointer, `float32`/`float64` and `bool` arguments and results; no callbacks, no structs by value, no variadics; 0 allocations per call after `NewCall`. darwin and linux now; Windows `ErrUnsupported`.
+
+**Reasoning:**
+- D33's ZapFast core lives in another module and cannot import `internal/ffi`. A narrow public surface is safer than exporting `ffi.Frame`, and it keeps callbacks (the hard part) internal.
+- D2 is unchanged: the framework bundles nothing and loads only OS libraries. What an app loads is that app's decision, recorded by the app (D33).
+
+**Constraints:**
+- Pointer arguments point to Go heap or C memory, never a goroutine stack; C keeps nothing after the call.
+- **Errors come back in the same call.** Consecutive calls may run on different OS threads, so thread-local error state (`errno`, `dlerror`, a library's "last error") cannot be read after a call. Libraries designed for `clib` return errors through caller-owned storage in the call itself (ZapFast's `zf_err`, D49). `Open` and `Func` read `dlerror` with the thread pinned for that one call; a caller that must read a thread-local error from an existing library pins the thread around the call and the read.
+- A library's own threads must coexist with Go's signal handling under fakecgo: tested with a fixture library whose threads spin and block while Go runs under `SIGPROF` and async preemption.
+
+## D36. The Objective-C runtime grows (phase 6, 2026-10-18)
+
+**Decision.**
+- **Classes across files:** `objc.Define` collects methods and ivars from several files; `platform/platform_darwin.go` is split by concern onto it in wave 0. One `uintptr` ivar per instance indexes a Go-side table, replacing the global window. `objc_msgSendSuper` for overrides.
+- **Per-request blocks** (completion handlers) are stack-class literals: `_NSConcreteStackBlock`, `BLOCK_HAS_SIGNATURE`, an ffi callback as invoke, and two captured integers, the slot and its generation. An API that keeps the block copies it, and `_Block_copy` makes a heap copy with its own captures, freed by `Block_release`. No copy or dispose helpers are needed. A call whose captured generation no longer matches the slot is dropped (after any acknowledgement the API requires); cancelling bumps the generation and frees the slot at once. Slots come from a fixed table of 256; a full table fails the request.
+- **Process-lifetime blocks** that carry no per-request state may be global, with both `_NSConcreteGlobalBlock` and the `BLOCK_IS_GLOBAL` flag (`_Block_copy` tests the flag, not the isa).
+- **Multi-shot callbacks** use selector-based observers where the API has them; the AVAudioEngine tap is a per-request block whose generation is bumped when it is removed.
+- **Cancellation is specified per API** (the phase-6 plan's table): which blocks are called exactly once, how each request is cancelled, and which acknowledgement a stale call still makes. Blocks given to us (`willPresentNotification:`, file promises) are always called by the framework code that received them.
+- **Foreign-thread callbacks** (GCD threads of UserNotifications, AVFoundation, file promises) take an `ffi.Frame` from a lock-free pool of C-allocated frames for the duration of the call and return it after, so nothing is keyed by thread and nothing leaks when GCD retires a thread. The pool grows in chunks of 64 up to 1024; at the limit a callback yields until a lease returns, and the wait is counted. Handlers only copy into the app's event records, signal and wake.
+
+**Reasoning:**
+- Every report found blocks the blocking prerequisite (`egui.md` §3, `electron-tauri.md` §1, `gpui-ghostty.md` §3.2).
+- A recycled global block is unsafe: `_Block_copy` returns a global block unchanged, so AppKit keeps our literal's address, and a late callback after a cancellation would run whichever request reused the slot. Letting the runtime copy a stack-class literal puts the generation in a copy we never reuse.
+- GCD promises nothing about how many threads it uses, so frames keyed by `pthread_self` would leak or run out; leases scoped to the invocation are bounded by concurrency, not by thread churn.
+
+**Constraints:**
+- Feasibility is proven before anything builds on it: concurrent callbacks (`dispatch_apply` and 10,000 from many queues), thread churn, cold attachment on a fresh thread, a late callback after a cancelled and reused slot, the block flags, and **Go allocations measured** with exact `ReadMemStats` deltas.
+- A callback on a thread Go has never seen attaches through `needm`, which may allocate an M the first time concurrency reaches a new high; the steady state allocates nothing.
+
+**Alternative rejected:** dispatching everything to the main queue. AVFoundation and UserNotifications still call us on their queues, and their completion handlers must be called.
+
+## D37. The application object (phase 6, 2026-10-18)
+
+**Decision.** An NSApplication delegate set before `finishLaunching`, one pump owned by the app (it runs with zero windows), and `app.Main`/`Handler`/`Post`, with `KeepRunning`, `StartHidden` and the Accessory policy. D30 is built for macOS in this phase.
+- **App events are dispatched by a run-loop source,** not by the pump or a frame: a version-0 `CFRunLoopSource` on the main run loop in `kCFRunLoopCommonModes`, signalled from any thread. It fires in the default, modal-panel and event-tracking modes, so it keeps working with zero windows and inside native loops (`NSTerminateLater`'s wait, menu tracking, sheets). Native loops start only at safe points, so it never fires during Build.
+- **Four delivery classes; only observations can be lost:**
+  1. main-thread native events (reopen, quit requests, opens, activation, sleep and wake, screens, menu commands) are delivered synchronously from the delegate method, with a startup list for events before `Start` returns;
+  2. request completions use a ticket bound to a completion record reserved when the request is made (64 per service); a full table fails the request, never the completion;
+  3. unsolicited events from other threads (a notification response, a second instance's arguments) have a reserved ring per source plus a bounded pending list retried after each dispatch; only the oldest pending record can be dropped, counted and reported as `EvLost`;
+  4. observations (levels, positions, thermal state) are one coalesced latest value per source.
+  - `app.Post` is the app's own path from its goroutines, allocation-free and non-blocking (false when full). Native acknowledgements and resource release never depend on a successful delivery.
+- **Quit:** every route (⌘Q, Dock → Quit, logout, `a.Quit()`, signals) arrives as `EvQuitRequested`. `applicationShouldTerminate:` returns `NSTerminateLater`; the default handler asks each window's `CloseRequested`, and `a.ReplyQuit(allow)` answers now or later. A handler that never replies is answered "allow" by a 30 s watchdog at logout and power-off.
+
+**Reasoning:**
+- `electron-tauri.md` §1 ("No application object"), `go-and-others.md` §2a, `gpui-ghostty.md` §2: no app can run windowless, refuse a quit or receive an open-URL event without this.
+- `NSTerminateLater` runs the run loop in `NSModalPanelRunLoopMode` until the reply, so the pump cannot be the only dispatcher; a common-modes source is. Cancelling the termination and calling `terminate:` again after approval was rejected: at logout, cancelling makes macOS abandon the logout, and a later `terminate:` does not resume it.
+- Events, not callbacks: closures per event break the zero-allocation and main-thread rules (`go-and-others.md` §3.1). Gio's app-global event stream is the Go-idiomatic model.
+
+**Constraints:** tested in macOS CI through AppKit state: Dock Quit (a self-sent quit Apple event) and ⌘Q with zero, one and two windows; delayed replies with app events delivered meanwhile; refusals; and saturation of the lossy paths during a quit with every completion still delivered.
+
+## D38. Text at the point size (phase 6, 2026-10-18)
+
+**Decision.** Fonts are created at the point size, shaped and laid out there, and rasterised through a context scaled by the backing scale; metrics, pen positions and advances are CoreText's points times the scale. Faces carry their scale, so the glyph-cache key is a face at one scale, a glyph and a variant. Glyphs are rasterised with AppKit's font smoothing, which text can opt out of. rexlook's text metrics needed no refit: rexcompare stays 40/40 (its terminal text is monospace, whose advance does not change).
+
+**Evidence:**
+- **Point size.** The advance per em at 13 pt is 14.28 in AppKit and was 13.49 for us at 2× (`docs/design/native-audit.md`, problem 1): SF's 26 pt optical size and tracking. Now it equals `NSFont`'s within 0.05 % at 9–26 pt, at 1× and 2× (`text/opsz_darwin_test.go`). GPUI does it this way (`gpui_apple/src/text_system.rs:489-526`).
+- **The cascade.** Pinning `opsz` (`kCTFontOpticalSizeAttribute`) on a pixel-sized font fixes SF but not the fallback fonts CoreText picks: at 13 pt and 2×, Arabic, Hebrew, CJK and emoji runs stayed 1.8–14 % narrower than AppKit's. Point-sized fonts get the point-sized fallbacks.
+- **Smoothing.** The condition this entry set, a GnuiShot capture of AppKit text beside ours showing a weight difference, was met with an AppKit `NSTextField` label (the hosted `NSTextView` of N4 does not exist yet) on the MacBook, macOS 27.2: 13 pt SF at 2× has stems of 2.58 px for dark text and 2.91 px for light text in AppKit, and had 2.23 px for both in ours. They are now 2.57 and 2.91. This revisits D21's "slightly bolder text is not needed" on that evidence; rexlook's terminal panes keep their weight (the opt-out).
+
+**How:**
+- **Smoothing bands.** CoreGraphics picks one of four dilations from the fill colour's linear luminance Y: below 1/8, below 3/8, below 5/8, and above (found by scanning grey and RGB fills). `text.SmoothLevel(rgba)` returns the band as 1–4, or 0 when the user set `AppleFontSmoothing` to 0. A glyph is drawn into an alpha-only context in the grey at the middle of its band, so the bitmap is still coverage and the renderer still applies the colour.
+- **`GlyphVariant` bits.** `Glyph`'s `sub` argument holds the quarter-pixel offset in bits 0–1 and the smoothing level in bits 2–4 (`text.GlyphVariant`). A glyph has at most four smoothed bitmaps, one or two per theme in practice. Colour glyphs ignore the level; the Windows and Linux backends mask it off.
+- **The opt-out.** `ui.NoFontSmoothing` on a text box draws its glyphs at level 0. It is a box flag because `ui` is where the run's colour, and so its level, is known; a font role would split the shared faces and the glyph key for one rasterisation choice. `widget` and `rexui` pass it like any other `ui` flag. rexlook's terminal panes use it, as Ghostty draws without thickening by default (`font-thicken`); their pixels are those of d32d248.
+
+## D39. Design tokens v2 (phase 6, 2026-10-18)
+
+**Decision.** `docs/design/rex-design-system.md` §2: colour roles indexed by `Role`, each with a System or Rex source; macOS text styles; control sizes; space, radii, elevation, materials and motion. System values are read live from `NSColor` through the D32 path, without polling, and Reduce Motion, Reduce Transparency and Increase Contrast are followed. Rex keeps its identity roles; dark surfaces are neutral; white goes on the accent.
+- **Native colours win over a fixed ratio.** System roles are exactly the system's colours, alpha included: light `secondaryLabelColor` (`#0000007F`, about 3.95:1 composited on white) is kept, though the proposal asked 4.5:1 of `Label2`.
+- **Contrast is checked composited.** `theme.ContrastOn(fg, bg, under)` composites the foreground over its real background (itself composited over what is under it); `theme.Contrast` ignores alpha. Floors: primary text ≥ 4.5:1 on every background it is used on; secondary, tertiary and quaternary text and placeholders ≥ AppKit's own composited contrast for that role on `windowBackgroundColor` in the same appearance, computed from live system values. The secondary floor is AppKit's, and is documented as such.
+- **Traffic lights are stored as the close button's centre,** the unit `app.Config.TrafficLights`, `theme.TrafficCentrePt` and `layoutChrome` take, converted from AppKitRef's frame origins (x + 7): plain 16, 39, 62 at y 16; compact 19, 42, 65 at y 20; unified 26, 49, 72 at y 26; Rex 23, 46, 69 at y 23; spacing 23 pt. This supersedes the origins listed in `rex-design-system.md` §2.3.
+
+**Evidence:** audit problems 3–8 and 11–20; `~/Projects/research/appkit-ref/macbook-blue/metrics.json` (`windows.*.trafficLights`).
+
+**Alternative:** retuning `widget` in place (option A). Rejected as the end state: no variants and no sizes.
+
+## D40. Component layering (phase 6, 2026-10-18)
+
+**Decision.** `widget/base` holds the `Kit` and the headless primitives; `rexui` holds the styled components, one file each, copyable with `tools/rexui add`; `widget` keeps its API as wrappers (`widget.Kit` embeds `*base.Kit`; state types are aliases).
+
+**Reasoning:** with the primitives inside `widget`, the wrappers would import `rexui` and `rexui` would import `widget`: a cycle (`rex-design-system.md` §4.2).
+
+**Alternatives rejected:** painter interfaces (option C: interface calls per row, escaping arguments), and hosting NSButton and friends (option D).
+
+**Amends D28's layering line:** `… → theme/rex, icon → widget/base → rexui → widget → task → app`.
+
+## D41. Native AppKit where the OS adds behaviour (phase 6, 2026-10-18)
+
+**Decision.** On macOS these are native: the menu bar, context and popup menus, NSAlert, the open and save panels, tooltips, materials (`NSVisualEffectView`), the chat composer (`NSTextView`) and accessibility. Everything else is drawn.
+
+**Constraints:**
+- Native views are wholly above or below the Metal layer, never interleaved; geometry changes are presented in the same transaction; a host is hidden while a drawn overlay covers it, so popups for a host are placed beside it.
+- **The composer's contract:** the app sees UTF-8 byte ranges on scalar boundaries, mapped to AppKit's UTF-16 through a checkpoint table; marked text is visible state (`Marked`, a `Composing` flag) and blocks programmatic replacement; `Replace` runs as a user edit, so it is one undo step; while the app holds a completion active, `doCommandBySelector:` diverts Up, Down, Tab, Backtab, Enter and Escape to the app as host commands; mention styles are temporary attributes, outside the undo stack.
+- **Acceptance of the composer** is an automated real-editor matrix run in-process on the MacBook (and in macOS CI where possible): keys through `[NSApp sendEvent:]`, IME input through the `NSTextInputClient` calls an input method makes; covering marked text, undo and redo, paste, autocorrect off and on, completion navigation, the Edit menu, and focus after a sheet. The user runs a short hand checklist before ZapFast's checkpoint: a real Japanese or Chinese input method, dictation, Writing Tools.
+
+**Evidence:** `gpui-ghostty.md` §1 ("Ghostty feels native because the chrome is AppKit") and §3; `rex-design-system.md` §3 ("Draw / host").
+
+**Alternative rejected:** hosting standard controls (option D: AppKit's heap per control, no gain in behaviour).
+
+**Cost:** two text renderers side by side (D38 mitigates), synchronous presents on frames that move hosts (measured), and a z-order rule designers must follow.
+
+## D42. Rich text and selection (phase 6, 2026-10-18)
+
+**Decision.** Pointer-free spans and a per-kit style table. On macOS, paragraphs are laid out by `CTTypesetter` (native breaking, per-line bidi, fallback), cached pointer-free and buildable on workers.
+- **Selection is in document order, independent of built boxes.** A `SelectionScope` holds two endpoints, each (stable item id, text part, byte offset), compared through an `Orderer` from item id to current index (`*VListState` implements it). Built items receive the clipped range they cover; unbuilt rows in between are selected without being built. Dragging past the edge auto-scrolls and keeps extending; ⌘A selects without building; prepends leave endpoints alone; removing an endpoint's item moves the endpoint to the nearest survivor.
+- **Copy is the app's:** `Selected()` returns the normalised range and `ForEachSelected` iterates the item ids in it, allocation-free; the app assembles the text from its own model, so copying never depends on what was built.
+
+**Evidence:** the P0 rich-text and selection rows in `zapfast.md` §2, `egui.md` §2.3 and `go-and-others.md` §2b. `ui/wrap.go` is one font per box and left-to-right only.
+
+**Alternative:** our own UAX #9 and UAX #14 on every OS now. Left for the Windows and Linux phase.
+
+## D43. Variable-height lists (phase 6, 2026-10-18)
+
+**Decision.** `VList`: a position held as (anchor item id, offset), measured heights with estimates, and a Fenwick tree for totals and lookups. The state keeps the app's item ids with an id→index table, and changes only with the app's model: `Splice(at, removed, inserted)` (prepend and append are special cases), `Move(from, n, to)` with heights travelling with their items, and `Reset(ids)`. Edits above the anchor shift its index and keep the view still; deleting the anchor item moves the anchor to the next survivor at offset 0; a move keeps the anchor on its item; a reset keeps it if the id survives. Stick-to-bottom and jump-to-item as before. The fixed-pitch `List`/`Table` remain the fast path.
+
+**Evidence:** Gio's `layout.List` position model (`go-and-others.md` §3.4), egui's heterogeneous rows (`egui.md` §2.4), ZapFast's height cache (`zapfast/src/ui/conversation.rs:2289-2300`). ZapFast deletes messages for everyone, backfills history mid-list and reorders its chat list, so these rules are fixed before the interface freezes.
+
+**Constraints:** 0 allocations, edits included within `Reserve`; under 4 ms of CPU per frame scrolling 1M mixed-height items.
+
+## D44. Images (phase 6, 2026-10-18)
+
+**Decision.**
+- Decoding on workers through ImageIO at display size; a cache keyed by content and size, with GPU and CPU byte budgets and LRU eviction, never evicting what is in view; `gpu.FreeTexture` with generations, and RGBA atlas pages for small images; animated frames decoded lazily for visible images only; the standard library's decoders on Windows and Linux for now.
+- **External textures** (`CVPixelBuffer` through `CVMetalTextureCache`) are leased: the lease retains the pixel buffer and both plane textures until the command buffer that used them has completed. Leases belong to the renderer's ring slot and are released when `Encode` reuses the slot after waiting for it, at once for a frame that was never committed, and on window close after its in-flight frames finish. At most 16 imports per frame (48 per window with three slots in flight); beyond that an import returns `ErrBusy`.
+
+**Evidence:** `egui.md` §2.5 (egui decodes every GIF frame up front; textures need freeing), `go-and-others.md` §5 gap 1; our textures are append-only (`gpu/renderer_darwin.go:257`). Metal textures from `CVMetalTextureCache` alias the pixel buffer's memory, which Core Video recycles once released.
+
+## D45. App services (phase 6, 2026-10-18)
+
+**Decision.** One package per service under `app/` (notify, dock, tray, secret, paths, prefs, log, winstate, instance, shell, login, power, perm, locale), imported only when used. Requests go in; completions, unsolicited events and changes come out by D37's delivery classes. Frameworks are loaded on first use after the first frame; the notification delegate is the opt-in exception. Everything is keyed by `AppConfig.ID`. Window state uses our own file, read before the window exists.
+- **Login items:** `app/login` covers the app itself (`SMAppService mainAppService`, which passes no arguments) and bundled launch agents (`agentServiceWithPlistName:`). `gnui package` generates each agent's plist from `gnui.json`, with the label `<id>.<name>` and the program `/usr/bin/open -g -b <id> --args …` taken from the bundle id being built, never a fixed string. An app that starts hidden at login uses an agent with `--start-hidden`.
+
+**Evidence:** `electron-tauri.md` §3; `go-and-others.md` §3.2 and §3.12. Upstream ZapFast's `packaging/macos/autostart.plist` hard-codes its own bundle id.
+
+**Alternatives:** Fyne- or Wails-style callback APIs, rejected for the allocation rule; `setFrameAutosaveName:`, rejected because it is macOS-only and cannot carry app state.
+
+## D46. Media (phase 6, 2026-10-18)
+
+**Decision.** AVAudioEngine for voice-note playback (with time-pitch speed) and recording taps; AVPlayer with `AVPlayerItemVideoOutput` → `CVMetalTextureCache` for inline video (D44's leases), never a hosted player layer; codecs the OS lacks or that are unverified (Opus, WebP encoding) stay with the app, and ZapFast's core already has them.
+
+**Evidence:** `zapfast.md` §2 ("Media"), `gpui-ghostty.md` §2 ("Inline video").
+
+**Risk:** Go code on AVAudio's queues. Handlers only copy into preallocated rings, on D36's frame leases.
+
+## D47. Tooling and the native-feel instruments (phase 6, 2026-10-18)
+
+**Decision.**
+- `cmd/gnui` (`package`, `run`, `doctor`) on `gnui.json`, shelling out only to tools that ship with macOS (`codesign`, `hdiutil`, `security`, `plutil`) plus `notarytool` and `stapler` from the Command Line Tools;
+- a self-signed `gnui-dev` identity for development bundles (bundle id plus `.dev`), so TCC and Keychain grants survive rebuilds;
+- GnuiShot (D19) on the MacBook as the acceptance instrument for live windows, with AppKitRef's live mode as the reference;
+- a live harness that drives real AppKit input in-process (`NSEvent`s through `[NSApp sendEvent:]`, `NSTextInputClient` calls on hosted text views), used for gestures and the composer's real-editor matrix;
+- a debug overlay with repaint causes, and a loopback agent bridge in development builds, both zero-cost when off.
+
+**Evidence:** `electron-tauri.md` §4; `egui.md` §4; `go-and-others.md` §4.
+
+**Alternative:** ad-hoc signing (today's `mkapp.sh`). Every rebuild voids the grants (GnuiShot README, "Rebuild caveat").
+
+## D48. Our own QR encoder (phase 6, 2026-10-18)
+
+**Decision.** `qr` is written here (byte mode, versions 1–40, mask selection, Reed–Solomon), with a darwin test that decodes our output with Vision and known-answer vectors elsewhere.
+
+**Reasoning:** pairing needs it (`zapfast.md` §2, "UI shell"). An encoder is a few hundred lines; a dependency would need a D2 row and a licence review (`go-and-others.md` §2b, "QR code").
+
+## D49. The ZapFast core ABI (phase 7, 2026-10-18)
+
+**Decision.** Refines D33. A `zapfast_core` cdylib with C ABI v1 (`zapfast-gnui:docs/GNUI-MIGRATION-PLAN.md`, "The core ABI"):
+- every command and event is a little-endian binary record generated from one schema (`zfcore/abi/zf.schema`) for both Rust and Go;
+- **records are bounded:** at most `ZF_MAX_RECORD` (1 MiB), checked by the generator from per-field maxima and enforced in Rust before enqueueing. Large payloads (decoded pictures such as `Event::ClipboardImage`, pixels in commands, media) travel behind blob ids; history, chat-list and path batches are chunked. An oversized record becomes a small `EventDropped`; a malformed record is skipped; a bad length prefix fails the core rather than spinning. No record can stay pending and block the ones after it;
+- **errors come back in the same call** through a caller-owned `zf_err` (code and a 256-byte message), because `clib` calls may change OS thread between calls (D35); there is no thread-local last error;
+- a pipe fd plus a drain call, with lossless wakeups; blobs (read in ranges) and frames owned by Rust until freed or released;
+- `catch_unwind` under a `panic = "unwind"` profile; an abort remains fatal;
+- open (with the cached chat list) split from start (the startup permit, after the first frame);
+- a demo core with injection for tests without an account.
+
+**Reasoning:** the allocation gate is process-wide (D27) and receiving messages is steady state, so decoding must allocate nothing on any thread.
+
+**Alternatives:** JSON off the main thread (allocates on every event); callbacks into Go (`clib` has none, D35).
+
+## D50. ZapFast's fork layout and upstream merges (phase 7, 2026-10-18)
+
+**Decision.**
+- Upstream's crate gains a `headless` feature. Every seam from the core to egui, eframe, winit, glow, wgpu, rfd, the egui-dependent fastframe crates or a UI module is moved to a new file that the old module re-exports (the inventory is in the migration plan: call frames and `crate::video`, `animation::poster`, `fastframe_shell::Waker`, `AttachmentId`/`ComposerMention`/`PAGE` from `app`, `eframe::storage_dir`, the settings, markup and wallpaper helpers, the UI's `Action` enum with `app_lock` and `notify`, the file dialogs, opener and updater). The target is under about 600 changed lines in upstream's files.
+- **Gate:** `zapfast_core` builds and tests with `headless` only, a script over `cargo tree` fails on any UI crate, the dylib contains none of upstream's GPL-2.0 sounds, and upstream's own `cargo test` still passes. `--all-features` is not the gate.
+- **Licences:** our own script over `cargo metadata` audits every transitive dependency of `zapfast_core` against an allow-list and writes a generated section of `THIRD-PARTY-NOTICES.md`; it runs at every merge.
+- New code lives in `zfcore/` and `gnui/`; the framework is pinned as a git submodule; `upstream/main` is merged weekly and at releases with merge commits; exhaustive DTO matches catch ABI drift and a triaged summary of upstream UI commits catches UI drift.
+- **The split stays private** (user default, 2026-10-18, revisable): nothing is offered to crmne/zapfast.
+
+**Alternative:** a patch queue rebased on every upstream commit. Rejected: `gnui` is published, and upstream moves daily (`zapfast-gnui:AGENTS.md`, "Branches").
+
+## D51. ZapFast's budgets and identity (phase 7, 2026-10-18)
+
+**Decision.**
+- **Budgets:** startup ≤ 150 ms warm to a first frame with content (skeleton rows when the archive is slow or a migration is pending); 0 allocations in steady state over a scripted demo session; < 4 ms CPU per frame scrolling a 10k-message transcript; idle at 0 presents and ≤ 1 wakeup/s with the demo core; `phys_footprint` ≤ 150 MB idle (stretch 120 MB); the Go executable < 10 MB per architecture, and the dylib's ceiling set by the user after Z0 measures it.
+- **The user's defaults, 2026-10-18 (revisable):**
+  - a separate identity, `dev.gonativeui.zapfast`, with its own Application Support folder and Keychain items, never sharing upstream ZapFast's archive; its login agent is generated from that id (D45);
+  - the updater is built against a local test feed until the user's Apple identity and a release feed exist;
+  - full Rex: the Rex field and glass panes around the chat list and conversation;
+  - no plaintext chat-list snapshot: names and previews never leave SQLCipher for startup.
+
+**Reasoning:** a separate identity means this app can never open the real ZapFast's archive while it runs; the budgets are the framework's, applied to a real app.
