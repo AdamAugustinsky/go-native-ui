@@ -55,10 +55,11 @@ type Outline struct {
 
 // BeginOutline starts an outline of the tree t with the state st:
 //
-//	ol := rexui.BeginOutline(k, "files", &v.tree, &v.nodes, rexui.OutlineOpts{})
+//	ol := rexui.BeginOutline(k, "files", &v.outline, &v.tree, rexui.OutlineOpts{})
 //	for r := ol.First; r < ol.Last; r++ {
-//		node := ol.Row(r, v.name(r))
-//		rexui.LabelBytes(k, v.nameOf(node), rexui.LabelOpts{Color: ol.Text()})
+//		node := v.outline.Rows()[r]
+//		ol.Row(r, v.names[node])
+//		ol.TextBytes(v.names[node])
 //	}
 //	rexui.EndOutline(k, &ol)
 //

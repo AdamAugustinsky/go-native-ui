@@ -41,6 +41,9 @@ var components = map[string][]string{
 	"separator":   {"separator.go"},
 	"text":        {"text.go"},
 	"card":        {"card.go"},
+	"list":        {"list.go"},
+	"table":       {"table.go", "list.go"},
+	"outline":     {"outline.go", "list.go"},
 }
 
 const shared = "tint.go"

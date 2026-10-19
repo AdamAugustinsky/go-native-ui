@@ -96,9 +96,9 @@ type TableHead struct {
 	hkey  ui.Key
 	label string
 	hh    float32
-	pad   float32 // the padding at the sides of a cell
+	pad   float32    // the padding at the sides of a cell
 	edge  [2]float32 // the padding at the outer sides of the first and last cells
-	inset float32 // the room at the sides of the header and the rows
+	inset float32    // the room at the sides of the header and the rows
 	avail float32
 	hx    float32 // where the next header cell starts
 }
