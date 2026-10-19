@@ -21,11 +21,13 @@ func registerClasses() {
 	registerViewTextInput(view)
 	registerViewDraw(view)
 	registerViewMouse(view)
+	registerViewEdit(view)
 	viewClass = view.Register()
 	delegate := objc.Define("GNUIWindowDelegate", objc.Cls("NSObject"), []string{"NSWindowDelegate"})
 	registerWindowDelegate(delegate)
 	registerButtons(delegate)
 	delegateClass = delegate.Register()
+	registerMenuTarget()
 	clsNSArray, clsNSAttributedString = objc.Cls("NSArray"), objc.Cls("NSAttributedString")
 	clsMetalLink = objc.Cls("CAMetalDisplayLink") // macOS 14+
 	clsRunLoop = objc.Cls("NSRunLoop")

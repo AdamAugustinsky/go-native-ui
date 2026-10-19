@@ -234,6 +234,12 @@ type Context struct {
 	pasteTag Key
 	pasteReq bool
 
+	// native menus (nativemenu.go)
+	nativeMenus bool
+	menuReq     MenuRequest
+	menuReqSet  bool
+	menuOpts    []string // the copy of menuReq.Options
+
 	// boxes built this frame with a cursor or the WindowDrag flag (cursor.go)
 	nCursorBoxes, nDragBoxes int
 
@@ -267,6 +273,7 @@ func New(sh Shaper) *Context {
 		boxes:     make([]box, 1, 256),
 		order:     make([]ID, 0, 256),
 		prevOrder: make([]ID, 0, 256),
+		modalIdx:  -1, // no modal before the first frame
 	}
 	c.pool.Alloc() // slot 0 is the nil ID
 	c.avPool.Alloc()

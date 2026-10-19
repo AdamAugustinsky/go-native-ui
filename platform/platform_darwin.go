@@ -96,6 +96,7 @@ type Window struct {
 	textInput   bool
 	imeUsed     bool
 	cmdCalled   bool
+	menuActed   bool // a native menu item acted during this event's sendEvent (menu_darwin.go)
 }
 
 const wakeSubtype = 0x4E55 // our NSEventTypeApplicationDefined subtype

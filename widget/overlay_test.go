@@ -336,3 +336,52 @@ func TestTextFieldPlaceholderEditAndUndo(t *testing.T) {
 		t.Fatal("text field not editable in the tree")
 	}
 }
+
+// With native menus the kit draws no menu bar and no popups: a select, a
+// pull-down and a context menu ask the app for a native menu, and a list
+// choice comes back to the select.
+func TestNativeMenusAreRequested(t *testing.T) {
+	v := &shell{}
+	g := newRig(t, 600, 500, v.build)
+	v.m = testMenu()
+	g.k.SetMenu(v.m)
+	g.c.SetNativeMenus(true)
+	g.frames(3)
+	if _, ok := g.find(ui.RoleMenuBar, "Menu bar"); ok {
+		t.Fatal("the menu bar is drawn with native menus")
+	}
+
+	g.clickOn(ui.RoleComboBox, "Format")
+	r, ok := g.c.TakeMenuRequest()
+	if !ok || r.Kind != ui.MenuList || len(r.Options) != 3 || r.Options[1] != "Markdown" || r.Selected != 0 || r.Rect[2] <= r.Rect[0] {
+		t.Fatalf("select request %+v %v", r, ok)
+	}
+	if _, open := g.find(ui.RoleList, "Options"); open || g.k.MenuOpen() {
+		t.Fatal("the select drew its options")
+	}
+	g.in.SetMenuChoice(r.Owner, 2)
+	g.frame()
+	if v.sel != 2 {
+		t.Fatalf("the choice gave sel %d, want 2", v.sel)
+	}
+
+	x, y := centre(g.rowNode(ui.RoleListItem, 2))
+	g.in.MouseX, g.in.MouseY = x, y
+	g.frame()
+	g.in.SetButton(ui.ButtonRight, true, 1)
+	g.frame()
+	g.in.SetButton(ui.ButtonRight, false, 0)
+	g.frames(2)
+	r, ok = g.c.TakeMenuRequest()
+	if !ok || r.Kind != ui.MenuContext || r.Menu != 1 || r.Rect[0] != x || r.Rect[1] != y || g.k.MenuOpen() {
+		t.Fatalf("context request %+v %v (drawn menu open %v)", r, ok, g.k.MenuOpen())
+	}
+	if _, ok := g.c.TakeMenuRequest(); ok {
+		t.Fatal("a request was taken twice")
+	}
+	g.in.PushCommand(4) // the native item's command
+	g.frames(2)
+	if !slices.Equal(v.cmds, []menu.ID{4}) {
+		t.Fatalf("the native menu's command delivered %v", v.cmds)
+	}
+}

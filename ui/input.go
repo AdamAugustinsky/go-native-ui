@@ -224,6 +224,13 @@ type Input struct {
 	Paste    []byte
 	PasteTag Key
 	HasPaste bool
+
+	// MenuIndex is the option the user chose in the native list menu that
+	// the box MenuOwner requested (Context.RequestMenu), for the frame
+	// HasMenuChoice is set in. Set it with SetMenuChoice.
+	MenuOwner     Key
+	MenuIndex     int32
+	HasMenuChoice bool
 }
 
 // PushEdit queues an edit action for the focused text field; it reports false
@@ -372,6 +379,7 @@ func (in *Input) ClearFrame() {
 	in.FocusGained = false
 	in.NEdit, in.NCommands, in.NActions = 0, 0, 0
 	in.HasPaste, in.HasReplace, in.ReplaceN = false, false, 0
+	in.HasMenuChoice = false
 	if cap(in.Paste) > MaxKeptPaste { // do not hold on to more than a supported paste
 		in.Paste = nil
 	}
