@@ -153,7 +153,13 @@ type Input struct {
 	// applied directly; otherwise they count wheel notches.
 	ScrollX, ScrollY float32
 	Precise          bool
-	Mods             Mods
+	// ScrollAt says the frame's scroll happened at ScrollAtX, ScrollAtY while
+	// the pointer is not ui's (Inside is false: it is over a hosted native
+	// view, which handed the scroll back). The scroll goes to the scroll
+	// container there; nothing is hovered.
+	ScrollAt             bool
+	ScrollAtX, ScrollAtY float32
+	Mods                 Mods
 	// Keys[:NKeys] are this frame's key events; Text[:NText] is the UTF-8
 	// text typed this frame.
 	Keys  [MaxKeys]KeyEvent
@@ -375,7 +381,7 @@ func (in *Input) ClearFrame() {
 	in.Released = [numButtons]bool{}
 	in.Cancelled = [numButtons]bool{}
 	in.Clicks = [numButtons]uint8{}
-	in.ScrollX, in.ScrollY = 0, 0
+	in.ScrollX, in.ScrollY, in.ScrollAt = 0, 0, false
 	in.NKeys, in.NText = 0, 0
 	in.CommitOff, in.CommitLen = 0, 0
 	in.FocusGained = false

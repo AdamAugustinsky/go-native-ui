@@ -275,11 +275,17 @@ Rules that differ from the spike:
   frames present asynchronously.
 - **Inactive windows and Increase Contrast** are AppKit's: the configured
   glass and effect views draw them.
-- **Private API.** The sidebar and inspector variants and the backdrop's
-  `_cornerRadius` are private AppKit. The shell's `noPrivateAPI` switch
-  (internal for now, to follow the coming public-API-only option for Mac App
-  Store builds) turns them off: public regular glass, which stays lighter
-  when inactive, and square backdrop corners rounded by the window's mask.
+- **Private API.** The sidebar and inspector variants (`set_variant:`,
+  `set_adaptiveAppearance:`, read back with `_variant` and
+  `_adaptiveAppearance` on systems not listed) and the backdrop's
+  `_cornerRadius` are private AppKit. They live in
+  `platform/material_private_darwin.go`, which the build tag
+  `gnui_publicapi` leaves out (a Mac App Store binary then contains none of
+  those selectors; `TestPublicAPIBuildHasNoPrivateSelectors` scans one). At
+  run time `Window.publicAPIOnly` turns the same calls off (to be wired to
+  `Options.PublicAPIOnly`). Without them: public regular glass, which stays
+  lighter when inactive, and square backdrop corners rounded by the window's
+  mask.
 
 ## Numbers (MacBook, macOS 27.2, under the user's load)
 

@@ -1,6 +1,9 @@
 package ui
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+)
 
 // shellRig is a 400×300 window with a sidebar material, a host in a 100×60
 // scrolling list and, on request, a popup and a modal.
@@ -191,5 +194,79 @@ func TestHostFocusHandOff(t *testing.T) {
 	r.frame(r.build)
 	if f := r.c.FocusedHost(); f != 0 {
 		t.Errorf("FocusHostBox of an unknown host focused %d", f)
+	}
+}
+
+// Hosts and materials inside a flow's MaxLines overflow, however deep, are
+// hidden like the boxes around them, and keep their slots.
+func TestShellRegionsHiddenByFlow(t *testing.T) {
+	h := newHarness(t, 400, 300)
+	lines := 1
+	build := func(c *Context) {
+		c.NextWidth(Px(100))
+		c.BeginFlow("flow", FlowOpts{MaxLines: lines})
+		for i := 0; i < 3; i++ {
+			c.NextSize(Px(60), Px(20))
+			c.Open(0, fmt.Sprint("chip", i))
+			c.NextSize(Px(50), Px(20))
+			c.Open(0, "inner")
+			c.NextSize(Px(40), Px(20))
+			c.Material(c.Box(0, "capsule"), AreaToolbarCapsule, 1, 0)
+			c.NextSize(Px(10), Px(10))
+			c.Host(uint32(10+i), 1, 0)
+			c.Close()
+			c.Close()
+		}
+		c.EndFlow()
+	}
+	h.frame(build)
+	h.frame(build)
+	hosts, mats := h.c.HostRegions(nil), h.c.MaterialRegions(nil)
+	if len(hosts) != 3 || len(mats) != 3 {
+		t.Fatalf("%d hosts and %d materials, want 3 each (slots kept)", len(hosts), len(mats))
+	}
+	if hosts[0].Hidden || empty(mats[0].Rect) {
+		t.Errorf("the first chip's host %+v or material %+v is hidden", hosts[0], mats[0])
+	}
+	for i := 1; i < 3; i++ {
+		if !hosts[i].Hidden || hosts[i].Clip != [4]float32{} || mats[i].Rect != [4]float32{} {
+			t.Errorf("chip %d in the overflow: host %+v, material %+v, want hidden and empty", i, hosts[i], mats[i])
+		}
+	}
+	lines = 3
+	h.frame(build)
+	hosts, mats = h.c.HostRegions(hosts), h.c.MaterialRegions(mats)
+	for i := range 3 {
+		if hosts[i].Hidden || empty(mats[i].Rect) || hosts[i].ID != uint32(10+i) {
+			t.Errorf("chip %d with room: host %+v, material %+v, want shown", i, hosts[i], mats[i])
+		}
+	}
+}
+
+// Materials are reported in the order their boxes are drawn: a floating box
+// built first is drawn after its flowed siblings, and an overlay's after the
+// main tree.
+func TestMaterialRegionsInDrawOrder(t *testing.T) {
+	h := newHarness(t, 400, 300)
+	build := func(c *Context) {
+		c.NextSize(Px(100), Px(40))
+		c.NextPos(10, 10)
+		c.Material(c.Box(FloatingX|FloatingY, "hud"), AreaHUD, 1, 0)
+		c.BeginOverlay(1, OverlayPopup, [4]float32{200, 200, 260, 200}, PlaceBelow)
+		c.NextSize(Px(60), Px(40))
+		c.Material(c.Box(0, "pop"), AreaPopover, 1, 0)
+		c.EndOverlay()
+		c.NextSize(Px(120), Px(300))
+		c.Material(c.Box(0, "side"), AreaSidebar, 1, 0)
+	}
+	h.frame(build)
+	h.frame(build)
+	m := h.c.MaterialRegions(nil)
+	if len(m) != 3 || m[0].Area != AreaSidebar || m[1].Area != AreaHUD || m[2].Area != AreaPopover {
+		t.Fatalf("regions %+v: want the sidebar, the HUD floating above it, then the popover", m)
+	}
+	allocs := testing.AllocsPerRun(50, func() { m = h.c.MaterialRegions(m) })
+	if allocs != 0 {
+		t.Errorf("MaterialRegions allocates %.1f times", allocs)
 	}
 }

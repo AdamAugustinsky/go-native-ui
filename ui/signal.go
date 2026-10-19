@@ -14,16 +14,23 @@ import "math"
 // everything beneath a modal is skipped, and tooltips are never hit.
 func (c *Context) hitTest() {
 	c.hotID, c.hotKey, c.scrollKey = 0, 0, 0
-	if c.root == 0 || !c.in.Inside {
+	x, y := c.in.MouseX, c.in.MouseY
+	if !c.in.Inside {
+		x, y = c.in.ScrollAtX, c.in.ScrollAtY
+	}
+	if c.root == 0 || !c.in.Inside && !c.in.ScrollAt {
 		return
 	}
 	if c.modalIdx < 0 {
-		c.hitWalk(c.root, c.in.MouseX, c.in.MouseY)
+		c.hitWalk(c.root, x, y)
 	}
 	for i := max(c.modalIdx, 0); i < c.nOvPrev; i++ {
 		if c.ovPrev[i].kind != OverlayTooltip {
-			c.hitWalk(c.ovPrev[i].id, c.in.MouseX, c.in.MouseY)
+			c.hitWalk(c.ovPrev[i].id, x, y)
 		}
+	}
+	if !c.in.Inside {
+		c.hotID = 0 // a scroll over a hosted view finds its container; it hovers nothing
 	}
 	if c.hotID != 0 {
 		c.hotKey = c.boxes[c.hotID].key

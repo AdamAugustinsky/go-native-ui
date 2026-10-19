@@ -217,7 +217,11 @@ func TestGlassCornersFullScreen(t *testing.T) {
 	case !responds:
 		t.Fatal("the window delegate takes no full-screen notifications")
 	}
-	if r0 <= 0 || rFull != 0 || rBack != r0 || rFail != r0 {
+	if !privateAPI { // the window's radius is private: square throughout
+		if r0 != 0 || rFull != 0 || rBack != 0 || rFail != 0 {
+			t.Errorf("glass radius %v windowed, %v in full screen, %v after, %v after a failed entry without private API: want 0", r0, rFull, rBack, rFail)
+		}
+	} else if r0 <= 0 || rFull != 0 || rBack != r0 || rFail != r0 {
 		t.Errorf("glass radius %v windowed, %v in full screen, %v after, %v after a failed entry: want >0, 0, %v, %v", r0, rFull, rBack, rFail, r0, r0)
 	}
 }

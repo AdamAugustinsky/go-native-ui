@@ -122,6 +122,7 @@ func (w *Window) scrollEvent(ev objc.ID, t int64) {
 		unit *= 16 // lines → logical pixels
 	}
 	e.DX, e.DY = float32(dx*unit), float32(dy*unit)
+	w.overHostScroll(&e, ev)
 	w.q.push(e)
 }
 

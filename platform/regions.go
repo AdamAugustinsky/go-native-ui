@@ -110,18 +110,19 @@ const maxFlat = 512
 // cursor at every point: each region keeps only what no later (higher) region
 // covers. AppKit's behaviour for overlapping cursor rects of one view is not
 // specified, so none are handed to it. Empty results are dropped; if the pieces
-// would exceed maxFlat the remaining regions are added whole. The result is
-// owned by the map and valid until the next call.
+// would exceed maxFlat the remaining regions are added whole, except that no
+// piece is ever left over a hole: one that would have to be split is dropped.
+// The result is owned by the map and valid until the next call.
 func (m *cursorMap) flatten() []CursorRegion {
 	m.flat = m.flat[:0]
 	for i, r := range m.regs {
 		start := len(m.flat)
 		m.flat = append(m.flat, r)
 		for _, hi := range m.regs[i+1:] {
-			m.cut(start, r.Cursor, hi.Rect)
+			m.cut(start, r.Cursor, hi.Rect, false)
 		}
 		for _, h := range m.holes {
-			m.cut(start, r.Cursor, h)
+			m.cut(start, r.Cursor, h, true)
 		}
 	}
 	// Drop what was covered completely.
@@ -137,14 +138,20 @@ func (m *cursorMap) flatten() []CursorRegion {
 
 // cut removes rectangle cut from the pieces flat[start:] (of one region, with
 // cursor c): each piece it overlaps is replaced by what is left of it above,
-// below, left and right of cut.
-func (m *cursorMap) cut(start int, c Cursor, cut [4]float32) {
+// below, left and right of cut. Past maxFlat pieces it stops, leaving the
+// rest overlapping cut, unless the cut is mandatory (a hole): then a piece
+// that overlaps it is dropped.
+func (m *cursorMap) cut(start int, c Cursor, cut [4]float32, mandatory bool) {
 	for p := start; p < len(m.flat); p++ {
-		if len(m.flat) >= maxFlat {
-			break
-		}
 		piece := m.flat[p].Rect
 		if !overlaps(piece, cut) {
+			continue
+		}
+		if len(m.flat) >= maxFlat {
+			if !mandatory {
+				break
+			}
+			m.flat[p].Rect = [4]float32{} // no room to split it
 			continue
 		}
 		var keep [4][4]float32

@@ -52,7 +52,6 @@ var (
 	selSetEffectState        = objc.Sel("setState:")
 	selSetGlassStyle         = objc.Sel("setStyle:")
 	selSetCornerRadius       = objc.Sel("setCornerRadius:")
-	selWinCornerRadius       = objc.Sel("_cornerRadius")
 	selSetImage              = objc.Sel("setImage:")
 	selSetImagePosition      = objc.Sel("setImagePosition:")
 	selSetBezelStyle         = objc.Sel("setBezelStyle:")
@@ -83,16 +82,11 @@ type shell struct {
 	effect      objc.ID // the backdrop's effect view (Options.Backdrop), 0 without one
 	backdrop    Backdrop
 	buttons     []nativeButton // Options.Buttons, each a pinned host
-	glassRadius float64        // the backdrop glass's corner radius as last set (fitBackdrop)
+	glassRadius float64        // the backdrop glass's corner radius as last set (fitBackdrop), -1 before
 	fullScreen  bool           // between windowWillEnterFullScreen: and its exit
 	materials   bool           // Options.Materials: the surface is transparent over an opaque window
-	// noPrivateAPI turns off the shell's private AppKit calls: the sidebar's
-	// and inspector's glass variants (set_variant:, set_adaptiveAppearance:,
-	// read with _variant), and the window's _cornerRadius for the backdrop.
-	// The glass then uses the public NSGlassEffectView styles, and the
-	// backdrop keeps square corners that the window's mask rounds. To be set
-	// from Options.PublicAPIOnly (Mac App Store builds) once that option
-	// exists; until then it is off.
+	// noPrivateAPI is publicAPIOnly's answer, set by tests until
+	// Options.PublicAPIOnly exists.
 	noPrivateAPI bool
 	delegate     objc.ID // the window delegate, the native buttons' target
 
@@ -210,7 +204,16 @@ func (w *Window) makeBackdrop(kind Backdrop, width, height float64) {
 	clear := objc.F.Reset().Arg(uintptr(objc.Cls("NSColor"))).Arg(uintptr(selColorWhiteAlpha)).ArgF64(1).ArgF64(0.001).Call(objc.MsgSend).R0()
 	objc.Send1(w.win, selSetBGColor, clear)
 	w.effect, w.backdrop = effect, got
+	w.glassRadius = -1 // not set yet: the glass view's own default is not the window's
 }
+
+// publicAPIOnly reports whether the window keeps to public AppKit API at run
+// time (Options.PublicAPIOnly once it exists; false until then): no private
+// glass variants for the sidebar and the inspector, which use the public
+// regular NSGlassEffectView style, and no window corner radius for the
+// backdrop. A build with the gnui_publicapi tag has none of these calls in
+// any case (material_private_darwin.go).
+func (w *Window) publicAPIOnly() bool { return w.noPrivateAPI || !privateAPI }
 
 // newViewOf is [[cls alloc] initWithFrame:] (a +1 reference), 0 for a class
 // the system does not have.
@@ -224,8 +227,9 @@ func newViewOf(cls objc.ID, x, y, width, height float64) objc.ID {
 
 // fitBackdrop gives Liquid Glass the window's corner radius, so that its rim
 // follows the window's edge: 0 in full screen, which has no corners.
-// _cornerRadius is private (Ghostty reads it the same way); without it the
-// glass keeps square corners, which the window's own mask rounds. It runs at
+// The radius is private (windowCornerRadius); without it (publicAPIOnly, the
+// gnui_publicapi tag) the glass keeps square corners, which the window's own
+// mask rounds. It runs at
 // Open, on every resize and around full screen, and sends nothing while the
 // radius is unchanged.
 func (w *Window) fitBackdrop() {
@@ -233,9 +237,10 @@ func (w *Window) fitBackdrop() {
 		return
 	}
 	r := 0.0
-	if !w.fullScreen && !w.noPrivateAPI && objc.Send(w.win, selStyleMask)&(1<<14) == 0 && // NSWindowStyleMaskFullScreen
-		objc.SendBool1(w.win, selRespondsTo, uintptr(selWinCornerRadius)) {
-		r = max(objc.SendF64(w.win, selWinCornerRadius), 0)
+	if !w.fullScreen && !w.publicAPIOnly() && objc.Send(w.win, selStyleMask)&(1<<14) == 0 { // NSWindowStyleMaskFullScreen
+		if v, ok := windowCornerRadius(w.win); ok {
+			r = max(v, 0)
+		}
 	}
 	if r == w.glassRadius {
 		return

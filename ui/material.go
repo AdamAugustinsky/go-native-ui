@@ -95,33 +95,75 @@ func (c *Context) Material(id ID, area MaterialArea, token uint8, solid uint32) 
 	}
 	c.shell.mats[c.shell.nMats] = matRec{id: id, area: area, token: token, solid: solid}
 	c.shell.nMats++
+	c.boxes[id].mat = uint8(c.shell.nMats)
 }
 
 // MaterialRegions appends to dst the material regions of the last finished
-// frame (after End), in draw order: the main tree first, then each overlay
-// above the one before, each in build order. Regions clipped away entirely
-// are reported with an empty Rect, so a region's slot stays stable while it
-// scrolls out of view. It allocates nothing when dst has room.
+// frame (after End), in the order their boxes are drawn: the main tree first,
+// then each overlay above the one before. Regions clipped away entirely, or
+// in a part of the tree a flow hides (MaxLines), are reported with an empty
+// Rect, so a region's slot stays stable while it scrolls out of view or is
+// hidden. It allocates nothing when dst has room.
 func (c *Context) MaterialRegions(dst []MaterialRegion) []MaterialRegion {
 	dst = dst[:0]
-	if c.shell.frame != c.frame {
+	if c.shell.frame != c.frame || c.shell.nMats == 0 || c.root == 0 {
 		return dst
 	}
-	for ovl := 0; ovl <= c.nOvs; ovl++ { // draw order: the main tree, then the overlays
-		for i := 0; i < c.shell.nMats; i++ {
-			m := &c.shell.mats[i]
-			b := &c.boxes[m.id]
-			if b.lastFrame != c.frame || int(b.ovl) != ovl {
-				continue
-			}
-			r := c.clippedRect(m.id)
-			if empty(r) {
-				r = [4]float32{}
-			}
-			dst = append(dst, MaterialRegion{Area: m.area, Token: m.token, Rect: r, Radii: b.radii, Solid: m.solid})
+	win := [4]float32{0, 0, float32(c.w), float32(c.h)}
+	w := matWalk{dst: dst}
+	c.walkMaterials(c.root, win, false, &w)
+	for i := 0; i < c.nOvs && w.left(c); i++ {
+		c.walkMaterials(c.ovs[i].id, win, false, &w)
+	}
+	return w.dst
+}
+
+type matWalk struct {
+	dst   []MaterialRegion
+	found int
+}
+
+func (w *matWalk) left(c *Context) bool { return w.found < c.shell.nMats }
+
+// walkMaterials appends the material regions of id's subtree in draw order
+// (emit's: a box, its children, then its floating children), with clip the
+// clip of id's ancestors and hidden whether a flow hides id or an ancestor.
+func (c *Context) walkMaterials(id ID, clip [4]float32, hidden bool, w *matWalk) {
+	b := &c.boxes[id]
+	hidden = hidden || b.hid
+	if m := int(b.mat) - 1; m >= 0 && m < c.shell.nMats && c.shell.mats[m].id == id {
+		r := intersect(b.rect, clip)
+		if hidden || empty(r) {
+			r = [4]float32{}
+		}
+		rec := &c.shell.mats[m]
+		w.dst = append(w.dst, MaterialRegion{Area: rec.area, Token: rec.token, Rect: r, Radii: b.radii, Solid: rec.solid})
+		w.found++
+	}
+	if b.flags&Clip != 0 {
+		clip = intersect(clip, b.rect)
+	}
+	for ch := b.first; ch != 0 && w.left(c); ch = c.boxes[ch].next {
+		if c.boxes[ch].flags&floatingMask == 0 {
+			c.walkMaterials(ch, clip, hidden, w)
 		}
 	}
-	return dst
+	for ch := b.first; ch != 0 && w.left(c); ch = c.boxes[ch].next {
+		if c.boxes[ch].flags&floatingMask != 0 {
+			c.walkMaterials(ch, clip, hidden, w)
+		}
+	}
+}
+
+// hiddenByLayout reports whether a flow hides box id or one of its ancestors
+// (MaxLines overflow): nothing of it is drawn.
+func (c *Context) hiddenByLayout(id ID) bool {
+	for ; id != 0; id = c.boxes[id].parent {
+		if c.boxes[id].hid {
+			return true
+		}
+	}
+	return false
 }
 
 // clippedRect is box id's rectangle clipped by the clip rectangles of its

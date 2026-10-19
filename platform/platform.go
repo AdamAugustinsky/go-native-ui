@@ -121,6 +121,7 @@ const (
 	FlagPrecise                    // scroll deltas are precise pixels (trackpad)
 	FlagFailed                     // EvPaste: no text (empty, not text, over MaxPaste, or the transfer failed)
 	FlagStandard                   // EvCommand: Tag is the MenuAction of a standard edit item without a command (menu.go)
+	FlagOverHost                   // EvScroll: a scroll a hosted native view handed back; X, Y are where it happened (over the host, so not a pointer position of ui's)
 )
 
 // Mods are the modifier keys held during an event.

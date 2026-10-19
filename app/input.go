@@ -252,6 +252,9 @@ func (t *translator) apply(e *platform.Event, txt []byte) bool {
 			return false
 		}
 		in.Mods = mods(e.Mods)
+		if e.Flags&platform.FlagOverHost != 0 {
+			in.ScrollAt, in.ScrollAtX, in.ScrollAtY = true, e.X, e.Y
+		}
 		t.scroll(e)
 	case platform.EvKey:
 		in.Mods = mods(e.Mods)

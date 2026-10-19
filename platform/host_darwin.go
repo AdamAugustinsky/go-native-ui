@@ -42,6 +42,7 @@ var (
 	selSelectPreceding  = objc.Sel("selectKeyViewPrecedingView:")
 	selSetClipsToBounds = objc.Sel("setClipsToBounds:")
 	selFirstResponder   = objc.Sel("firstResponder")
+	selEndEditingFor    = objc.Sel("endEditingFor:")
 	selSubviews         = objc.Sel("subviews")
 	selFirstObject      = objc.Sel("firstObject")
 
@@ -256,7 +257,7 @@ func (w *Window) ReleaseHost(id HostID) {
 	}
 	i := int(id&0xFF) - 1
 	if w.hosts.focus == i+1 {
-		objc.Send1(w.win, selMakeFirstResp, uintptr(w.view))
+		w.takeKeyboardBack()
 		w.hosts.focus = 0
 	}
 	if s.kind == HostButton {
@@ -267,6 +268,20 @@ func (w *Window) ReleaseHost(id HostID) {
 	*s = hostSlot{gen: gen}
 	liveHosts.Add(-1)
 	w.hosts.dirty = true // the routing rectangles change
+}
+
+// takeKeyboardBack makes the app's view the first responder again, out of a
+// host about to go. A view may refuse to give up the keyboard (a text field
+// whose formatter rejects its text): its editing is then ended by force
+// (endEditingFor:, which makes a field editor resign whatever it answers)
+// and the view asked again. Should even that be refused, the view's removal
+// leaves the window first responder (AppKit's), not a removed view.
+func (w *Window) takeKeyboardBack() {
+	if objc.SendBool1(w.win, selMakeFirstResp, uintptr(w.view)) {
+		return
+	}
+	objc.Send1(w.win, selEndEditingFor, 0)
+	objc.SendBool1(w.win, selMakeFirstResp, uintptr(w.view))
 }
 
 // releaseAllHosts releases every host (closeShell).
@@ -525,6 +540,19 @@ func hostScrollWheel(c *ffi.CB) {
 	w.hosts.bubbling = true
 	w.scrollEvent(ev, int64(objc.SendF64(ev, selTimestamp)*1e9))
 	w.hosts.bubbling = false
+}
+
+// overHostScroll marks scroll event e, which a host handed back, with where
+// it happened: ui is told the pointer left when it went onto the host, so the
+// scroll's own position is what finds the scroll container around the host.
+func (w *Window) overHostScroll(e *Event, ev objc.ID) {
+	if !w.hosts.bubbling {
+		return
+	}
+	lx, ly := objc.SendPoint(ev, selLocation)
+	s := float64(w.scale)
+	e.Flags |= FlagOverHost
+	e.X, e.Y = float32(lx*s), float32((w.hPt-ly)*s)
 }
 
 // hostKeyDown is GNUIHostClip's keyDown:: a key the host's view did not

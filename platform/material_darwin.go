@@ -45,6 +45,7 @@ var (
 	selSetMasksToBnds  = objc.Sel("setMasksToBounds:")
 	selSetCornerCurve  = objc.Sel("setCornerCurve:")
 	selLayerOf         = objc.Sel("layer")
+	selSetMaskedCorner = objc.Sel("setMaskedCorners:")
 )
 
 // forceReduceTransparency (GNUI_REDUCE_TRANSPARENCY=1) shows every material
@@ -69,6 +70,7 @@ type matSlot struct {
 	view   objc.ID // owned by its superview
 	kind   matView
 	hidden bool
+	masked bool // the view's layer clips it to some corners (cornerShape)
 }
 
 // matState is the window's material regions: the list asked for (want) and
@@ -197,123 +199,19 @@ func clsGlassContainer() objc.ID {
 // the inspector of an NSSplitViewController use their own private glass
 // variants with adaptive appearance 1; toolbar item platters and the composer
 // are regular glass with interactive effects (effectIsInteractive). With
-// private false (Window.noPrivateAPI) the sidebar and inspector keep the
-// public regular style.
+// private false (Window.publicAPIOnly, or a build with the gnui_publicapi
+// tag) the sidebar and inspector keep the public regular style.
 func configureGlass(v objc.ID, a MaterialArea, private bool) {
 	switch a {
 	case AreaSidebar, AreaInspector:
-		if !private {
-			return
-		}
-		sv := splitGlass()
-		g := sv[0]
-		if a == AreaInspector {
-			g = sv[1]
-		}
-		if g.ok && objc.SendBool1(v, selRespondsTo, uintptr(selSetVariant)) {
-			objc.Send1(v, selSetVariant, uintptr(g.variant))
-			objc.Send1(v, selSetAdaptive, uintptr(g.adaptive))
+		if private {
+			setSplitGlass(v, a)
 		}
 	case AreaToolbarCapsule, AreaComposer:
 		if objc.SendBool1(v, selRespondsTo, uintptr(selSetInteractive)) {
 			objc.Send1(v, selSetInteractive, 1)
 		}
 	}
-}
-
-// glassConfig is a private NSGlassEffectView configuration.
-type glassConfig struct {
-	variant, adaptive int64
-	ok                bool
-}
-
-var (
-	selSetVariant  = objc.Sel("set_variant:")
-	selSetAdaptive = objc.Sel("set_adaptiveAppearance:")
-	selVariant     = objc.Sel("_variant")
-	selAdaptive    = objc.Sel("_adaptiveAppearance")
-
-	splitGlassCfg  [2]glassConfig // sidebar, inspector
-	splitGlassDone bool
-)
-
-// knownSplitGlass are the sidebar and inspector glass configurations of
-// NSSplitViewController by macOS major version, as AppKit sets them (read
-// from its views; TestSplitGlassMatchesAppKit checks the running system's).
-// The private variant numbers moved between macOS 26 and 27, so a version
-// that is not listed is asked at run time (splitGlass).
-var knownSplitGlass = map[int][2]glassConfig{
-	27: {{18, 1, true}, {19, 1, true}},
-}
-
-// splitGlass is the sidebar's and the inspector's glass configuration on
-// this system: from knownSplitGlass, or else read once from the glass views
-// of a throwaway NSSplitViewController with a sidebar and an inspector (about
-// 17 ms, once per process, only on systems not listed).
-func splitGlass() [2]glassConfig {
-	if !splitGlassDone {
-		splitGlassDone = true
-		if c, ok := knownSplitGlass[osMajor()]; ok {
-			splitGlassCfg = c
-		} else {
-			splitGlassCfg = readSplitGlass()
-		}
-	}
-	return splitGlassCfg
-}
-
-// readSplitGlass builds an NSSplitViewController with a sidebar and an
-// inspector, lays it out without a window and reads its glass views'
-// configuration.
-func readSplitGlass() (out [2]glassConfig) {
-	svcCls, itemCls, vcCls := objc.Cls("NSSplitViewController"), objc.Cls("NSSplitViewItem"), objc.Cls("NSViewController")
-	if svcCls == 0 || clsGlass() == 0 {
-		return out
-	}
-	pool := objc.F.Call0(objc.PoolPush)
-	defer objc.F.Call1(objc.PoolPop, pool)
-	newObj := func(c objc.ID) objc.ID { return objc.Send(objc.Send(c, selAlloc), selInitPlain) }
-	svc := newObj(svcCls)
-	for _, sel := range [2]objc.SEL{objc.Sel("sidebarWithViewController:"), objc.Sel("inspectorWithViewController:")} {
-		vc := newObj(vcCls)
-		v := newObj(nsViewClass())
-		objc.Send1(vc, objc.Sel("setView:"), uintptr(v))
-		objc.Send(v, selReleaseObj)
-		objc.Send1(svc, objc.Sel("addSplitViewItem:"), uintptr(objc.Send1(itemCls, sel, uintptr(vc))))
-		objc.Send(vc, selReleaseObj)
-	}
-	v := objc.Send(svc, objc.Sel("view"))
-	objc.Send(v, objc.Sel("layoutSubtreeIfNeeded"))
-	n := 0
-	var walk func(v objc.ID)
-	walk = func(v objc.ID) {
-		if n < 2 && objc.SendBool1(v, selIsKindOfClass, uintptr(clsGlass())) && objc.SendBool1(v, selRespondsTo, uintptr(selVariant)) {
-			out[n] = glassConfig{int64(objc.Send(v, selVariant)), int64(objc.Send(v, selAdaptive)), true}
-			n++
-		}
-		subs := objc.Send(v, selSubviews)
-		for i := 0; i < int(objc.Send(subs, objc.Sel("count"))); i++ {
-			walk(objc.Send1(subs, objc.Sel("objectAtIndex:"), uintptr(i)))
-		}
-	}
-	walk(v)
-	objc.Send(svc, selReleaseObj)
-	return out
-}
-
-// osMajor is the running macOS's major version (0 if unknown).
-func osMajor() int {
-	pi := objc.Send(objc.Cls("NSProcessInfo"), objc.Sel("processInfo"))
-	s := string(objc.AppendUTF8(nil, objc.Send(pi, objc.Sel("operatingSystemVersionString")))) // "Version 27.2 (Build …)"
-	n, seen := 0, false
-	for i := 0; i < len(s); i++ {
-		if c := s[i]; c >= '0' && c <= '9' {
-			n, seen = n*10+int(c-'0'), true
-		} else if seen {
-			break
-		}
-	}
-	return n
 }
 
 // effectMaterial is the NSVisualEffectMaterial and blending mode of an area
@@ -353,7 +251,10 @@ func (w *Window) applyMaterials() {
 	for i := 0; i < m.nWant; i++ {
 		s, r := &m.slots[i], &m.want[i]
 		k := viewFor(r, rt)
-		if s.view != 0 && s.kind != k {
+		// A view made for another area keeps that area's configuration
+		// (material, glass variant, interactivity): a new one is made. A
+		// solid box has none.
+		if s.view != 0 && (s.kind != k || s.kind != mvSolid && s.r.Area != r.Area) {
 			w.dropMaterial(s)
 		}
 		fresh := s.view == 0
@@ -384,7 +285,7 @@ func (w *Window) newMaterial(r *MaterialRegion, k matView) objc.ID {
 	case mvGlass, mvCapsule:
 		v = newViewOf(clsGlass(), 0, 0, 0, 0)
 		objc.Send1(v, selSetGlassStyle, 0) // regular
-		configureGlass(v, r.Area, !w.noPrivateAPI)
+		configureGlass(v, r.Area, !w.publicAPIOnly())
 	case mvEffect:
 		if effectCls == 0 {
 			effectCls = objc.Cls("NSVisualEffectView")
@@ -462,22 +363,71 @@ func (w *Window) updateMaterial(s *matSlot, r *MaterialRegion, fresh bool) {
 		objc.F.Reset().Arg(uintptr(s.view)).Arg(uintptr(selSetFrame)).
 			ArgRect(x, y, float64(r.Rect[2])/scale-x, float64(r.Rect[3])/scale-y).Call(objc.MsgSend)
 	}
-	if fresh || r.Radii != s.r.Radii {
-		rad := float64(max(r.Radii[0], r.Radii[1], r.Radii[2], r.Radii[3])) / scale
+	if fresh || r.Radii != s.r.Radii || s.masked && r.Rect != s.r.Rect { // a masked radius is clamped to the size
+		rad, mask := cornerShape(r, scale)
 		switch s.kind {
 		case mvGlass, mvCapsule, mvSolid:
-			objc.F.Reset().Arg(uintptr(s.view)).Arg(uintptr(selSetCornerRadius)).ArgF64(rad).Call(objc.MsgSend)
+			if mask == allCorners {
+				objc.F.Reset().Arg(uintptr(s.view)).Arg(uintptr(selSetCornerRadius)).ArgF64(rad).Call(objc.MsgSend)
+				if s.masked {
+					clipCorners(s.view, 0, allCorners)
+				}
+			} else {
+				// The view's own corner radius rounds all four: it is left
+				// square and its layer clips the rounded corners.
+				objc.F.Reset().Arg(uintptr(s.view)).Arg(uintptr(selSetCornerRadius)).ArgF64(0).Call(objc.MsgSend)
+				objc.Send1(s.view, selSetWantsLayerV, 1)
+				clipCorners(s.view, rad, mask)
+			}
 		case mvEffect:
-			l := objc.Send(s.view, selLayerOf)
-			objc.F.Reset().Arg(uintptr(l)).Arg(uintptr(selSetCornerRadius)).ArgF64(rad).Call(objc.MsgSend)
-			objc.Send1(l, selSetMasksToBnds, uintptr(boolU(rad > 0)))
-			objc.Send1(l, selSetCornerCurve, uintptr(objc.Str("continuous")))
+			clipCorners(s.view, rad, mask)
 		}
+		s.masked = mask != allCorners
 	}
 	if s.kind == mvSolid && (fresh || r.Solid != s.r.Solid) {
 		objc.Send1(s.view, selSetFillColor, uintptr(solidColor(r.Solid)))
 	}
 	s.r = *r
+}
+
+// allCorners is a CACornerMask of the four corners.
+const allCorners = 15
+
+// cornerShape is the corner radius (points) and the CACornerMask of the
+// corners it rounds for region r. A layer has one radius: the corners with a
+// radius take the largest of them, clamped to half the shorter side as the
+// drawn box's corners are, and the others stay square. Corners with
+// different non-zero radii are therefore drawn with one (a restriction of
+// the native views; ui's boxes behind materials use one radius or none).
+func cornerShape(r *MaterialRegion, scale float64) (rad float64, mask uintptr) {
+	// TL, TR, BR, BL in the layer of a view that is not flipped (y up): the
+	// top corners are MaxY (kCALayerMinXMaxYCorner 4, kCALayerMaxXMaxYCorner
+	// 8), the bottom ones MinY (kCALayerMaxXMinYCorner 2, kCALayerMinXMinYCorner 1).
+	bits := [4]uintptr{4, 8, 2, 1}
+	var m float32
+	for i, v := range r.Radii {
+		if v > 0 {
+			mask |= bits[i]
+			m = max(m, v)
+		}
+	}
+	if mask == 0 {
+		return 0, allCorners
+	}
+	if mask != allCorners {
+		m = min(m, (r.Rect[2]-r.Rect[0])/2, (r.Rect[3]-r.Rect[1])/2)
+	}
+	return float64(max(m, 0)) / scale, mask
+}
+
+// clipCorners rounds the corners in mask of view v's layer with radius rad
+// (points) and clips the view to them.
+func clipCorners(v objc.ID, rad float64, mask uintptr) {
+	l := objc.Send(v, selLayerOf)
+	objc.F.Reset().Arg(uintptr(l)).Arg(uintptr(selSetCornerRadius)).ArgF64(rad).Call(objc.MsgSend)
+	objc.Send1(l, selSetMaskedCorner, mask)
+	objc.Send1(l, selSetMasksToBnds, uintptr(boolU(rad > 0)))
+	objc.Send1(l, selSetCornerCurve, uintptr(objc.Str("continuous")))
 }
 
 func boolU(b bool) int {

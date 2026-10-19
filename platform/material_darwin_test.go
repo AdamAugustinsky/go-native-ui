@@ -23,35 +23,6 @@ func subviewClasses(v objc.ID) []string {
 	return out
 }
 
-// The sidebar's and the inspector's glass configurations listed for this
-// macOS are the ones AppKit's NSSplitViewController gives its own glass.
-func TestSplitGlassMatchesAppKit(t *testing.T) {
-	var known, read [2]glassConfig
-	var listed bool
-	var major int
-	onMain(func() {
-		w, err := Open(Options{Title: "split glass", Width: 300, Height: 200, Hidden: true}) // AppKit set up as for an app
-		if err != nil {
-			return
-		}
-		defer w.Close()
-		pool := objc.F.Call0(objc.PoolPush)
-		defer objc.F.Call1(objc.PoolPop, pool)
-		major = osMajor()
-		known, listed = knownSplitGlass[major]
-		read = readSplitGlass()
-	})
-	if !read[0].ok || !read[1].ok {
-		t.Skipf("macOS %d: AppKit's split view has no configurable glass", major)
-	}
-	if !listed {
-		t.Skipf("macOS %d is not listed: AppKit's %+v is read at run time", major, read)
-	}
-	if known != read {
-		t.Errorf("macOS %d: knownSplitGlass %+v, AppKit uses %+v", major, known, read)
-	}
-}
-
 // matRig is a hidden 600×400 window with Options.Materials and Finder-like
 // regions: a sidebar, the toolbar band's bar and two toolbar capsules.
 type matRig struct {
@@ -142,8 +113,11 @@ func TestMaterialsApply(t *testing.T) {
 		if m.glass != 0 {
 			r.inGlass = subviewClasses(m.glassContent)
 		}
-		if objc.SendBool1(m.slots[0].view, selRespondsTo, uintptr(selVariant)) {
-			r.sideVariant, r.wantVariant = int64(objc.Send(m.slots[0].view, selVariant)), splitGlass()[0].variant
+		if v, ok := glassVariant(m.slots[0].view); ok {
+			r.sideVariant, r.wantVariant = v, v
+			if want, ok := splitVariant(0); ok {
+				r.wantVariant = want
+			}
 		}
 		r.barFill = srgbOf(objc.Send(m.slots[1].view, objc.Sel("fillColor")))
 
@@ -289,12 +263,17 @@ func TestMaterialsReduceTransparency(t *testing.T) {
 	}
 }
 
-// With the shell's private API off (noPrivateAPI, for Mac App Store builds)
-// the sidebar is plain public glass: no private variant is set on it.
+// With the shell's private API off at run time (publicAPIOnly) or left out
+// of the build (gnui_publicapi), the sidebar and the inspector are plain
+// public glass, regular style, with no private variant set, and the backdrop
+// glass does not take the window's private corner radius.
 func TestMaterialsWithoutPrivateAPI(t *testing.T) {
 	var err error
-	var glass, responds bool
-	var got, plain int64
+	var glass, readable bool
+	var styles [2]int64
+	var got, plain [2]int64
+	var radius, privRadius float64
+	var backdrop bool
 	onMain(func() {
 		rig, e := openMatRig()
 		if e != nil {
@@ -309,25 +288,49 @@ func TestMaterialsWithoutPrivateAPI(t *testing.T) {
 			return
 		}
 		w.noPrivateAPI, w.mat.rtTest = true, -1
-		w.SetMaterials(rig.regs)
+		r := [4]float32{0, 0, 200, 400}
+		w.SetMaterials([]MaterialRegion{{Area: AreaSidebar, Rect: r}, {Area: AreaInspector, Rect: r}})
 		w.FlushShell()
-		v := w.mat.slots[0].view
-		if responds = objc.SendBool1(v, selRespondsTo, uintptr(selVariant)); !responds {
-			return
-		}
 		fresh := newViewOf(clsGlass(), 0, 0, 10, 10)
 		objc.Send1(fresh, selSetGlassStyle, 0) // regular, as the shell sets it
-		got, plain = int64(objc.Send(v, selVariant)), int64(objc.Send(fresh, selVariant))
+		for i := range 2 {
+			v := w.mat.slots[i].view
+			styles[i] = int64(objc.Send(v, objc.Sel("style")))
+			var ok bool
+			if got[i], ok = glassVariant(v); ok {
+				plain[i], readable = func() int64 { p, _ := glassVariant(fresh); return p }(), true
+			}
+		}
 		objc.Send(fresh, selReleaseObj)
+
+		bw, e := Open(Options{Title: "backdrop", Width: 300, Height: 200, Hidden: true, Titlebar: 46, Backdrop: BackdropGlass})
+		if e != nil || bw.effect == 0 {
+			if bw != nil {
+				bw.Close()
+			}
+			return
+		}
+		defer bw.Close()
+		viewRadius := func() float64 { return objc.SendF64(bw.effect, objc.Sel("cornerRadius")) }
+		backdrop, privRadius = true, viewRadius()
+		bw.noPrivateAPI = true
+		bw.fitBackdrop()
+		radius = viewRadius()
 	})
 	switch {
 	case err != nil:
 		t.Skipf("cannot open a window here: %v", err)
-	case !glass || !responds:
-		t.Skip("no configurable Liquid Glass here")
+	case !glass:
+		t.Skip("no Liquid Glass here")
 	}
-	if got != plain {
-		t.Errorf("sidebar glass variant %d without private API, want the public default %d", got, plain)
+	if styles != [2]int64{} {
+		t.Errorf("sidebar and inspector glass styles %v without private API, want regular (0)", styles)
+	}
+	if readable && got != plain {
+		t.Errorf("sidebar and inspector glass variants %v without private API, want the public default %v", got, plain)
+	}
+	if backdrop && radius != 0 {
+		t.Errorf("the backdrop glass took the corner radius %v without private API (%v with it)", radius, privRadius)
 	}
 }
 
@@ -371,5 +374,122 @@ func TestTitlebarRegionLeavesWindowButtons(t *testing.T) {
 	}
 	if sys[2] <= sys[0] || sys[3] <= sys[1] {
 		t.Errorf("SystemButtons %v with a titlebar region: want the buttons' rectangle", sys)
+	}
+}
+
+// A slot whose region changes area gets that area's configuration, not the
+// one its view was made with: a menu that becomes a HUD shows the HUD
+// material, a sidebar that becomes an inspector the inspector's glass.
+func TestMaterialAreaChangeReconfigures(t *testing.T) {
+	var err error
+	var mat int64
+	var glass bool
+	var variant, want int64
+	onMain(func() {
+		rig, e := openMatRig()
+		if e != nil {
+			err = e
+			return
+		}
+		w := rig.w
+		defer w.Close()
+		pool := objc.F.Call0(objc.PoolPush)
+		defer objc.F.Call1(objc.PoolPop, pool)
+		w.mat.rtTest = -1
+		r := [4]float32{0, 0, 200, 200}
+		w.SetMaterials([]MaterialRegion{{Area: AreaMenu, Rect: r}})
+		w.FlushShell()
+		w.SetMaterials([]MaterialRegion{{Area: AreaHUD, Rect: r}})
+		w.FlushShell()
+		mat = int64(objc.Send(w.mat.slots[0].view, objc.Sel("material")))
+
+		var ok bool
+		if want, ok = splitVariant(1); !rig.glass || !ok {
+			return
+		}
+		glass = true
+		w.SetMaterials([]MaterialRegion{{Area: AreaSidebar, Rect: r}})
+		w.FlushShell()
+		w.SetMaterials([]MaterialRegion{{Area: AreaInspector, Rect: r}})
+		w.FlushShell()
+		variant, _ = glassVariant(w.mat.slots[0].view)
+	})
+	if err != nil {
+		t.Skipf("cannot open a window here: %v", err)
+	}
+	if mat != 13 {
+		t.Errorf("a menu region that became a HUD shows material %d, want 13", mat)
+	}
+	if !glass {
+		t.Log("no configurable Liquid Glass here: sidebar → inspector untested")
+	} else if variant != want {
+		t.Errorf("a sidebar region that became an inspector has glass variant %d, want %d", variant, want)
+	}
+}
+
+// Corner radii that differ round only the corners that have one (layer
+// maskedCorners), not all four with the largest; a single radius keeps the
+// views' own corner radius.
+func TestMaterialCorners(t *testing.T) {
+	var err error
+	var boxRadius, effectMasks, boxMasks, uniformMasks int64
+	var boxLayerRadius float64
+	onMain(func() {
+		rig, e := openMatRig()
+		if e != nil {
+			err = e
+			return
+		}
+		w := rig.w
+		defer w.Close()
+		pool := objc.F.Call0(objc.PoolPush)
+		defer objc.F.Call1(objc.PoolPop, pool)
+		w.mat.rtTest = -1
+		s := w.scale
+		p := func(x0, y0, x1, y1 float32) [4]float32 { return [4]float32{x0 * s, y0 * s, x1 * s, y1 * s} }
+		w.SetMaterials([]MaterialRegion{
+			{Area: AreaTitlebar, Rect: p(20, 60, 180, 220), Radii: p(0, 40, 0, 0), Solid: 0xFF0000FF}, // top right
+			{Area: AreaMenu, Rect: p(220, 60, 380, 220), Radii: p(40, 0, 0, 0)},                       // top left
+			{Area: AreaPopover, Rect: p(420, 60, 580, 220), Radii: p(12, 12, 12, 12)},
+		})
+		w.FlushShell()
+		box, effect, uniform := w.mat.slots[0].view, w.mat.slots[1].view, w.mat.slots[2].view
+		masks := func(v objc.ID) int64 { return int64(objc.Send(objc.Send(v, selLayerOf), objc.Sel("maskedCorners"))) }
+		boxRadius = int64(objc.SendF64(box, objc.Sel("cornerRadius")))
+		boxLayerRadius = objc.SendF64(objc.Send(box, selLayerOf), objc.Sel("cornerRadius"))
+		boxMasks, effectMasks, uniformMasks = masks(box), masks(effect), masks(uniform)
+	})
+	if err != nil {
+		t.Skipf("cannot open a window here: %v", err)
+	}
+	// In a layer that is not flipped, the top corners are MaxY: top left 4, top right 8.
+	if boxRadius != 0 || boxLayerRadius != 40 || boxMasks != 8 {
+		t.Errorf("a solid box rounded top right only: box radius %d, layer radius %v, corners %b; want 0, 40, 1000", boxRadius, boxLayerRadius, boxMasks)
+	}
+	if effectMasks != 4 {
+		t.Errorf("an effect view rounded top left only has corners %b, want 100", effectMasks)
+	}
+	if uniformMasks != allCorners {
+		t.Errorf("one radius on all corners masks %b", uniformMasks)
+	}
+}
+
+func TestCornerShape(t *testing.T) {
+	for _, c := range []struct {
+		radii [4]float32
+		rect  [4]float32
+		rad   float64
+		mask  uintptr
+	}{
+		{[4]float32{}, [4]float32{0, 0, 100, 100}, 0, allCorners},
+		{[4]float32{8, 8, 8, 8}, [4]float32{0, 0, 100, 100}, 4, allCorners},
+		{[4]float32{0, 8, 8, 0}, [4]float32{0, 0, 100, 100}, 4, 8 | 2},   // a sidebar's inner edge
+		{[4]float32{6, 0, 0, 10}, [4]float32{0, 0, 100, 100}, 5, 4 | 1},  // different radii: the largest
+		{[4]float32{0, 0, 80, 80}, [4]float32{0, 0, 100, 40}, 10, 2 | 1}, // clamped to half the height
+	} {
+		r := MaterialRegion{Rect: c.rect, Radii: c.radii}
+		if rad, mask := cornerShape(&r, 2); rad != c.rad || mask != c.mask {
+			t.Errorf("radii %v in %v: radius %v, corners %b; want %v, %b", c.radii, c.rect, rad, mask, c.rad, c.mask)
+		}
 	}
 }

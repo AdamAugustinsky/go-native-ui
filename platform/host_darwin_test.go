@@ -267,6 +267,7 @@ func TestHostRouting(t *testing.T) {
 		scrollOn, bubbled      []EventKind
 		scrollOff              []EventKind
 		noScroll               bool
+		bubbledAt, offAt       bool // the scrolls carry FlagOverHost and a position over the host
 		keyFocused, keyApp     []EventKind
 		focusEv                []Event
 	}
@@ -297,8 +298,13 @@ func TestHostRouting(t *testing.T) {
 			// The host's view did not use it: up the responder chain to the
 			// clip view, which queues it for ui.
 			objc.Send1(w.hosts.slot(rig.id).clip, selScrollWheel, uintptr(ev))
+			if len(w.q.ev) == 1 {
+				e := w.q.ev[0]
+				r.bubbledAt = e.Flags&FlagOverHost != 0 && w.overHost(e.X, e.Y)
+			}
 			r.bubbled = take()
 			w.scrollEvent(rig.scroll(30, 30, -3), 5)
+			r.offAt = len(w.q.ev) == 1 && w.q.ev[0].Flags&FlagOverHost != 0
 			r.scrollOff = take()
 		} else {
 			r.noScroll = true
@@ -325,6 +331,8 @@ func TestHostRouting(t *testing.T) {
 		t.Log("no scroll events can be made here: scroll routing untested")
 	} else if len(r.scrollOn) != 0 || !equalKinds(r.bubbled, EvScroll) || !equalKinds(r.scrollOff, EvScroll) {
 		t.Errorf("scroll over the host %v, handed back %v, elsewhere %v: want [], [scroll], [scroll]", r.scrollOn, r.bubbled, r.scrollOff)
+	} else if !r.bubbledAt || r.offAt {
+		t.Errorf("the handed-back scroll is marked over the host at its position: %v; a scroll elsewhere is: %v", r.bubbledAt, r.offAt)
 	}
 	if len(r.focusEv) != 2 || r.focusEv[0].Kind != EvHostFocus || r.focusEv[0].Tag == 0 || r.focusEv[1].Kind != EvHostFocus || r.focusEv[1].Tag != 0 {
 		t.Errorf("focus events %+v: want EvHostFocus with the host, then with 0", r.focusEv)
@@ -447,5 +455,47 @@ func TestKeyEquivalentWithHostFocused(t *testing.T) {
 	}
 	if plainKeys != 0 {
 		t.Errorf("a plain key with a host focused reached ui %d times", plainKeys)
+	}
+}
+
+// Releasing a host whose view refuses to give up the keyboard (a text field
+// whose formatter rejects its text) still leaves no removed view first
+// responder: the keyboard goes back to the app's view.
+func TestReleaseHostThatRefusesToResign(t *testing.T) {
+	var err error
+	var refused, toView, holds bool
+	onMain(func() {
+		rig, e := openHostRig()
+		if e != nil {
+			err = e
+			return
+		}
+		w := rig.w
+		defer w.Close()
+		pool := objc.F.Call0(objc.PoolPush)
+		defer objc.F.Call1(objc.PoolPop, pool)
+		f := objc.Send(objc.Send(objc.Cls("NSNumberFormatter"), selAlloc), selInitPlain)
+		objc.Send1(rig.field, objc.Sel("setFormatter:"), uintptr(f))
+		objc.Send(f, selReleaseObj)
+		objc.Send1(w.win, selMakeFirstResp, uintptr(rig.field))
+		editor := objc.Send(w.win, selFirstResponder)
+		objc.Send1(editor, objc.Sel("insertText:"), uintptr(objc.Str("not a number")))
+		// The field does not let go of the keyboard by itself.
+		refused = !objc.SendBool1(w.win, selMakeFirstResp, uintptr(w.view))
+		objc.Send(rig.field, selRetainV) // to look at it after the release
+		defer objc.Send(rig.field, selReleaseObj)
+		w.ReleaseHost(rig.id)
+		fr := objc.Send(w.win, selFirstResponder)
+		toView = fr == w.view
+		holds = fr == editor || w.hostFocused()
+	})
+	if err != nil {
+		t.Skipf("cannot open a window here: %v", err)
+	}
+	if !refused {
+		t.Skip("the field gave up the keyboard with a rejected text here")
+	}
+	if !toView || holds {
+		t.Errorf("after releasing the host: first responder is the app's view %v, still the field's editor or a host %v", toView, holds)
 	}
 }

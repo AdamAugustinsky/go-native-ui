@@ -37,8 +37,8 @@ type HostRegion struct {
 	// Clip is Rect clipped by the box's ancestors' clip rectangles and the
 	// window: the part of the view that shows.
 	Clip [4]float32
-	// Hidden: a drawn popup, tooltip or modal is above it, or it is clipped
-	// away.
+	// Hidden: a drawn popup, tooltip or modal is above it, it is clipped
+	// away, or a flow hides it or a box around it (MaxLines).
 	Hidden bool
 }
 
@@ -84,6 +84,9 @@ func (c *Context) HostRegions(dst []HostRegion) []HostRegion {
 			continue
 		}
 		clip := c.clippedRect(h.id)
+		if c.hiddenByLayout(h.id) {
+			clip = [4]float32{}
+		}
 		hidden := empty(clip) || c.coveredAbove(b.ovl, clip)
 		if empty(clip) {
 			clip = [4]float32{}

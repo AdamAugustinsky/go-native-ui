@@ -163,3 +163,53 @@ func TestOffscreenHostPlaceholder(t *testing.T) {
 		t.Errorf("placeholder %+v: want the host's rectangle in the placeholder grey", q)
 	}
 }
+
+// A scroll a host hands back reaches the scroll container around the host:
+// the pointer left ui when it went onto the host (EvPointerLeave), and the
+// scroll's own position (FlagOverHost) finds the container. Nothing is
+// hovered meanwhile.
+func TestHostScrollReachesItsContainer(t *testing.T) {
+	c := ui.New(noText{})
+	tr := newTranslator()
+	var list ui.ID
+	var l gpu.DrawList
+	build := func() {
+		c.Begin(&tr.in, 800, 600, 2, 1.0/60)
+		c.NextSize(ui.Px(300), ui.Px(200))
+		c.NextPos(100, 100)
+		c.NextPad(0)
+		list = c.Box(ui.ScrollY|ui.Clip|ui.Hoverable|ui.FloatingX|ui.FloatingY, "page")
+		c.Push(list)
+		c.NextSize(ui.Px(300), ui.Px(40))
+		c.Box(0, "above")
+		c.NextSize(ui.Px(200), ui.Px(60))
+		c.Host(5, 1, 0)
+		c.NextSize(ui.Px(300), ui.Px(800))
+		c.Box(0, "below")
+		c.Pop()
+		c.End(&l)
+		tr.endFrame()
+	}
+	build()
+	build()
+	tr.event(&platform.Event{Kind: platform.EvPointerMove, X: 150, Y: 120}, nil)
+	build()
+	if c.HotKey() == 0 {
+		t.Fatal("the page is not hovered with the pointer over it")
+	}
+	tr.event(&platform.Event{Kind: platform.EvPointerLeave}, nil) // onto the host at 100,140–300,200
+	tr.event(&platform.Event{Kind: platform.EvScroll, DY: -30, Flags: platform.FlagPrecise | platform.FlagOverHost, X: 150, Y: 160}, nil)
+	build()
+	if _, y := c.Scroll(list); y != 30 {
+		t.Errorf("the page scrolled to %v by a scroll its host handed back, want 30", y)
+	}
+	if c.HotKey() != 0 {
+		t.Error("a scroll over the host hovers a box")
+	}
+	// A scroll the host handed back without its position (as before) is lost.
+	tr.event(&platform.Event{Kind: platform.EvScroll, DY: -30, Flags: platform.FlagPrecise}, nil)
+	build()
+	if _, y := c.Scroll(list); y != 30 {
+		t.Errorf("a scroll with no position moved the page to %v", y)
+	}
+}
