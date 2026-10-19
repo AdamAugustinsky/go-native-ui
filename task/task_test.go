@@ -76,6 +76,27 @@ func awaitStart(t *testing.T, g *gated, n int) {
 	}
 }
 
+// awaitStarts waits for jobs ns to start, in either order (two workers pick
+// them up concurrently).
+func awaitStarts(t *testing.T, g *gated, ns ...int) {
+	t.Helper()
+	want := map[int]bool{}
+	for _, n := range ns {
+		want[n] = true
+	}
+	for len(want) > 0 {
+		select {
+		case got := <-g.started:
+			if !want[got] {
+				t.Fatalf("started %d, want one of %v", got, ns)
+			}
+			delete(want, got)
+		case <-time.After(5 * time.Second):
+			t.Fatalf("jobs %v never started", want)
+		}
+	}
+}
+
 func pollAll(t *testing.T, p *Pool[req, resp], want int) []Result[resp] {
 	t.Helper()
 	var all []Result[resp]
@@ -240,8 +261,7 @@ func TestSupersedingRunningJobsNeverReturnsErrFull(t *testing.T) {
 	h1, h2 := make(chan struct{}), make(chan struct{})
 	p.Submit(req{N: 1, Hold: h1}, 1)
 	p.Submit(req{N: 2, Hold: h2}, 2)
-	awaitStart(t, g, 1)
-	awaitStart(t, g, 2)
+	awaitStarts(t, g, 1, 2)
 	if _, err := p.Submit(req{N: 11}, 1); err != nil {
 		t.Fatalf("replace running 1: %v", err)
 	}
@@ -325,8 +345,7 @@ func TestKeepAndSweep(t *testing.T) {
 	}
 	p.Keep(2, req{N: 2})
 	p.Sweep()
-	awaitStart(t, g, 1)
-	awaitStart(t, g, 2)
+	awaitStarts(t, g, 1, 2)
 	// Frames 2 and 3 declare both again: nothing restarts, even after B finished.
 	for f := 0; f < 2; f++ {
 		if tk, _ := p.Keep(1, req{N: 99}); tk != ta {
