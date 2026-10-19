@@ -16,19 +16,13 @@ import (
 // fl makes a box a floating child of its container, placed by NextPos.
 const fl = theme.Floating
 
-// SetScale (re)creates everything that depends on the backing scale: the
-// resolved theme (fonts, metrics, a fresh chrome), the terminal cell grid and
-// the icons. It keeps the light/dark mix of the theme it replaces; the
-// follower applies the accent to the new one. It allocates; call it on the
-// thread that owns the text system.
+// SetScale (re)creates the terminal cell grid for the backing scale. The
+// kit recreates the resolved theme (fonts, metrics, a fresh chrome) and the
+// icons in the next frame's Begin, keeping the light/dark mix. It allocates;
+// call it on the thread that owns the text system.
 func (r *Rex) SetScale(s float32) {
 	r.Scale, r.K = s, s/2
-	t := r.th.T
-	r.th = rextheme.Theme().Resolve(r.ts, s, theme.Light)
-	r.th.Mix(t)
-	r.fol.Invalidate()
 	r.cells = rextheme.NewGrid(r.ts, s)
-	r.icons.Raster(s)
 }
 
 // CellAdvancePt, RowPitchPt, MonoFace and MonoSizePt describe the terminal
@@ -102,8 +96,8 @@ func (r *Rex) PutBytes(c *ui.Context, kg *keyGen, f text.FontKey, s []byte, x, b
 // IconAt builds a box that shows icon id centred at (cx, cy) in the parent's
 // coordinates, in colour col (RGBA).
 func (r *Rex) IconAt(c *ui.Context, kg *keyGen, id iconID, cx, cy float32, color uint32) {
-	flags, disp := r.icons.Prepare(c, id, color)
-	w, h := r.icons.Size(id)
+	flags, disp := r.k.Icons().Prepare(c, id, color)
+	w, h := r.k.IconSize(id)
 	theme.At(c, theme.Snap(cx-w/2), theme.Snap(cy-h/2), w, h)
 	c.BoxKeyed(flags|fl, kg.Next(), disp)
 }

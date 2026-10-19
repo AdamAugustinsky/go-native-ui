@@ -75,6 +75,28 @@ func (r *Rex) closeTab(i int) {
 	r.glide = false
 }
 
+// moveTab moves tab from to the place to, the tabs between shifting by one;
+// the chosen tab stays chosen.
+func (r *Rex) moveTab(from, to int) {
+	if from == to || from < 0 || to < 0 || from >= r.nTabs || to >= r.nTabs {
+		return
+	}
+	act := r.tabs[r.active].uid
+	t := r.tabs[from]
+	if from < to {
+		copy(r.tabs[from:to], r.tabs[from+1:to+1])
+	} else {
+		copy(r.tabs[to+1:from+1], r.tabs[to:from])
+	}
+	r.tabs[to] = t
+	for i := 0; i < r.nTabs; i++ {
+		if r.tabs[i].uid == act {
+			r.active = i
+		}
+	}
+	r.fillTabList()
+}
+
 // canClose reports whether the focused pane's close button does anything: the
 // last pane of the last tab stays.
 func (r *Rex) canClose() bool { return r.tabs[r.active].numPanes() > 1 || r.nTabs > 1 }
@@ -86,13 +108,19 @@ func (r *Rex) canSplit() bool { return r.tabs[r.active].numPanes() < maxPanes }
 func (r *Rex) update(c *ui.Context) {
 	r.commands(c)
 	r.tabKeys(c)
-	// A tab is chosen on the press, as in AppKit's tab bars and segmented
-	// controls, not on the release.
-	for i := 0; i < r.nTabs; i++ {
-		if c.PeekSignal(tabKey(r.tabs[i].uid)).Pressed {
-			r.selectTab(i)
-			break
-		}
+	// The tab bar: a tab is chosen on the press, as in AppKit's tab bars and
+	// segmented controls, not on the release; its close button or a middle
+	// click closes it; a drag moves it; ⌃Tab, ⌘⇧] and ⌘1… choose.
+	r.fillTabList()
+	ev := r.bar.Update(r.k, r.tabList[:r.nTabs], r.active)
+	if ev.Select >= 0 {
+		r.selectTab(ev.Select)
+	}
+	if ev.MoveFrom >= 0 {
+		r.moveTab(ev.MoveFrom, ev.MoveTo)
+	}
+	if ev.Close >= 0 {
+		r.closeTab(ev.Close)
 	}
 	if c.PeekSignal(keyPlus).Clicked {
 		r.newTab()
@@ -177,35 +205,11 @@ func (r *Rex) button(t *tab, slot int8, b int) {
 	}
 }
 
-// tabKeys applies the system's tab shortcuts: ⌘1…⌘8 a tab and ⌘9 the last,
-// ⌃Tab and ⌘⇧] the next, ⌃⇧Tab and ⌘⇧[ the previous (both wrap), ⌘T a new
-// tab.
+// tabKeys applies ⌘T, a new tab. The tab bar takes the system's other tab
+// shortcuts: ⌘1…⌘8 a tab and ⌘9 the last, ⌃Tab and ⌘⇧] the next, ⌃⇧Tab and
+// ⌘⇧[ the previous (both wrap).
 func (r *Rex) tabKeys(c *ui.Context) {
-	in := c.Input()
-	for i := 0; i < in.NKeys; i++ {
-		k := in.Keys[i]
-		if !k.Down {
-			continue
-		}
-		cmd, shift, ctrl := k.Mods&ui.ModSuper != 0, k.Mods&ui.ModShift != 0, k.Mods&ui.ModCtrl != 0
-		next := 0
-		switch {
-		case cmd && !shift && k.Code >= '1' && k.Code <= '8':
-			r.selectTab(int(k.Code - '1'))
-		case cmd && !shift && k.Code == '9':
-			r.selectTab(r.nTabs - 1)
-		case cmd && !shift && k.Code == 'T':
-			r.newTab()
-		case ctrl && k.Code == ui.KeyTab, cmd && shift && k.Code == ui.KeyRightBracket:
-			next = 1
-			if ctrl && shift {
-				next = -1
-			}
-		case cmd && shift && k.Code == ui.KeyLeftBracket:
-			next = -1
-		}
-		if next != 0 && r.nTabs > 1 {
-			r.selectTab((r.active + next + r.nTabs) % r.nTabs)
-		}
+	if c.TakeKey('T', ui.PrimaryMod()) {
+		r.newTab()
 	}
 }
