@@ -19,6 +19,12 @@ type CheckboxRecipe struct {
 	// at regular size, 14 small and 18 large (tools/appkitref; theme's
 	// SizeSpec.Check says 14, 12 and 16, which is the box of macOS 15).
 	Box [theme.NumSizes]float32
+	// Radius is the box's corner radius per size, in points. AppKit draws a
+	// continuous (squircle) corner; a circular corner of the same uncovered
+	// area, measured 5.6, 4.3 and 6.3 pt at the three sizes
+	// (tools/appkitref/measure), matches it best. theme's Radii.Checkbox
+	// (3.5) is visibly squarer.
+	Radius [theme.NumSizes]float32
 	// Off, OffPressed and OffDisabled fill an unchecked box: systemFill,
 	// #00000030 measured pressed (FillPressed), tertiarySystemFill disabled.
 	Off, OffPressed, OffDisabled Tint
@@ -36,8 +42,9 @@ type CheckboxRecipe struct {
 
 // CheckboxLook is the checkboxes' recipe.
 var CheckboxLook = CheckboxRecipe{
-	Box: [theme.NumSizes]float32{theme.SizeRegular: 16, theme.SizeMini: 12, theme.SizeSmall: 14, theme.SizeLarge: 18, theme.SizeXLarge: 18},
-	Off: Of(theme.Fill1), OffPressed: Of(theme.FillPressed), OffDisabled: Of(theme.Fill3),
+	Box:    [theme.NumSizes]float32{theme.SizeRegular: 16, theme.SizeMini: 12, theme.SizeSmall: 14, theme.SizeLarge: 18, theme.SizeXLarge: 18},
+	Radius: [theme.NumSizes]float32{theme.SizeRegular: 5.5, theme.SizeMini: 4, theme.SizeSmall: 4.5, theme.SizeLarge: 6.25, theme.SizeXLarge: 6.25},
+	Off:    Of(theme.Fill1), OffPressed: Of(theme.FillPressed), OffDisabled: Of(theme.Fill3),
 	On: Of(theme.Accent), OnPressed: Of(theme.AccentPressed), OnDisabled: Of(theme.Fill2),
 	Mark: Of(theme.OnAccent), MarkDisabled: Of(theme.Label3),
 	Label: Of(theme.Label), LabelDisabled: Of(theme.TextDisabled),
@@ -69,7 +76,7 @@ func CheckboxTri(k *base.Kit, label string, st *base.CheckState, o CheckboxOpts)
 	t := k.ToggleState(label, st, base.HoverOff)
 	on := t.State != base.Unchecked
 	box := pt(k.Scale(), rc.Box[size])
-	radius := theme.Snap(r.Radii.Checkbox)
+	radius := k.Pt(rc.Radius[size])
 
 	fill, mark, lc := rc.Off.RGBA(r), rc.Mark.RGBA(r), rc.Label.RGBA(r)
 	switch {

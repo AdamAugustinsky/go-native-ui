@@ -87,7 +87,10 @@ func field(k *base.Kit, label string, buf *ui.TextBuffer, placeholder string, o 
 	padR := padL
 	var clearW float32
 	if search {
-		radius = h / 2
+		// AppKit's outline is 26 pt tall outside with corners of about
+		// 12.4 pt, between a capsule of the frame (12) and one of the
+		// outline (13): half an outline's width less than the outline's
+		radius = h/2 - pt(k.Scale(), rc.BorderW)/2
 		padL = pt(k.Scale(), sr.TextX)
 		cw, _ := k.IconSize(icon.ClearField)
 		clearW = theme.Snap(k.Pt(sr.ClearRight) + cw/2)
@@ -142,7 +145,11 @@ func field(k *base.Kit, label string, buf *ui.TextBuffer, placeholder string, o 
 	if !ti.Inactive {
 		ring.Ring = ti.Focus
 	}
-	k.FocusRing(res.ID, ring, radius)
+	ringR := radius
+	if search { // AppKit rings a search field's frame as a capsule
+		ringR = h / 2
+	}
+	k.FocusRing(res.ID, ring, ringR)
 	k.EndTextInput(&ti)
 	return res
 }

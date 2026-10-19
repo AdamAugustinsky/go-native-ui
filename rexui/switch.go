@@ -40,8 +40,8 @@ var SwitchLook = SwitchRecipe{
 	Inset: [theme.NumSizes]float32{theme.SizeRegular: 2, theme.SizeMini: 1.5, theme.SizeSmall: 2, theme.SizeLarge: 2, theme.SizeXLarge: 2},
 	Off:   Of(theme.Fill1), OffPressed: Of(theme.FillPressed), OffDisabled: Of(theme.Fill3),
 	On: Of(theme.Accent), OnPressed: Of(theme.AccentPressed), OnDisabled: OfAlpha(theme.Accent, 0.7, 0.7),
-	Knob: Of(theme.OnAccent), KnobShadow: OfAlpha(theme.Shadow, 0.3, 0),
-	KnobShadowY: 1, KnobShadowBlur: 1.5,
+	Knob: Of(theme.OnAccent), KnobShadow: OfAlpha(theme.Shadow, 0.15, 0),
+	KnobShadowY: 1, KnobShadowBlur: 1,
 	Label: Of(theme.Label), LabelDisabled: Of(theme.TextDisabled),
 }
 

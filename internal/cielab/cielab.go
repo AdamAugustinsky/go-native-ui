@@ -1,4 +1,6 @@
-package main
+// Package cielab converts sRGB colours to CIE L*a*b* and measures their
+// CIEDE2000 difference, for the tools and tests that compare renders.
+package cielab
 
 import "math"
 
@@ -33,6 +35,9 @@ func labF(t float64) float64 {
 	}
 	return t/(3*d*d) + 4.0/29
 }
+
+// RGBA is the L*a*b* of an opaque 0xRRGGBBAA colour (its alpha is ignored).
+func RGBA(c uint32) Lab { return SRGBToLab(uint8(c>>24), uint8(c>>16), uint8(c>>8)) }
 
 // SRGBToLab converts an 8-bit sRGB colour to CIE L*a*b* (D65).
 func SRGBToLab(r, g, b uint8) Lab {

@@ -23,7 +23,73 @@ type Sample struct {
 	W, H float32
 	// build builds our control and returns its root.
 	build func(s *State) ui.ID
+	// Spec is what the measurements compare (tools/appkitref/measure, and
+	// rexui's recipe test against the committed numbers).
+	Spec Spec
 }
+
+// Measure is a set of measurements of a sample.
+type Measure uint8
+
+const (
+	// MeasureW is the shape's width along the probe's row and MeasureH its
+	// height along the column through the middle of that width, focus ring
+	// included.
+	MeasureW Measure = 1 << iota
+	MeasureH
+	// MeasureRadius is the corner radius at the top left of the outermost
+	// shape (the focus ring's, when there is one).
+	MeasureRadius
+	// MeasureFill is the colour at the probe.
+	MeasureFill
+	// MeasureLabel is the colour of the label's ink (Spec.Label).
+	MeasureLabel
+	// MeasureRing is the focus ring's colour, 1.5 pt inside its outer edge on
+	// the probe's row.
+	MeasureRing
+)
+
+// Spec says where and what to measure in a sample. Coordinates are points
+// from the top left of AppKit's frame. A shape's edges are found from outside,
+// scanning inward from the render's edges (on the right, from Label's left
+// edge when there is a Label) along the probe's row and the column through the
+// middle of that row's extent: a check mark, a label or a knob inside the
+// shape, even one the colour of the background, does not cut it short.
+type Spec struct {
+	// Probe is a point inside the control's shape, away from its corners and
+	// its label.
+	Probe [2]float32
+	// What is the measurements; none leaves the sample to the eye (Note
+	// says why).
+	What Measure
+	// Label is the region of the label's ink (x0, y0, x1, y1), right of the
+	// shape; empty, the label is inside the shape.
+	Label [4]float32
+	// Note says why a measurement is left out.
+	Note string
+}
+
+const (
+	shape    = MeasureH | MeasureRadius | MeasureFill
+	shapeW   = shape | MeasureW
+	labelled = shape | MeasureLabel
+)
+
+// at is a Spec probing (x, y) for what.
+func at(x, y float32, what Measure) Spec { return Spec{Probe: [2]float32{x, y}, What: what} }
+
+// boxed is a checkbox's or radio button's Spec: the probe near the left of
+// its box of size b, clear of the mark, and the label right of the box. A
+// focused one's ring reaches into the label's region: its width is left out.
+func boxed(b float32, what Measure) Spec {
+	return Spec{Probe: [2]float32{1.5, b / 2}, What: what, Label: [4]float32{b + 2, 0, b + 60, b}}
+}
+
+// fieldSpec is a text field's Spec.
+func fieldSpec(h float32, what Measure) Spec { return at(4, h/2, what) }
+
+// skip leaves a sample to the eye.
+func skip(why string) Spec { return Spec{Note: why} }
 
 // State is the values the samples edit, owned by whoever draws them. Make it
 // with NewState.
@@ -217,77 +283,77 @@ const (
 
 // Samples are the samples, in AppKitRef's order, with AppKit's frames.
 var Samples = []Sample{
-	{"push-mini", 45.5, 16, push("Button", rexui.ButtonDefault, theme.SizeMini, 0, false)},
-	{"push-small", 55, 20, push("Button", rexui.ButtonDefault, theme.SizeSmall, 0, false)},
-	{"push-regular", 64.5, 24, push("Button", rexui.ButtonDefault, theme.SizeRegular, 0, false)},
-	{"push-large", 68.5, 28, push("Button", rexui.ButtonDefault, theme.SizeLarge, 0, false)},
-	{"push-xlarge", 76.5, 36, push("Button", rexui.ButtonDefault, theme.SizeXLarge, 0, false)},
-	{"push-default", 68, 24, push("Default", rexui.ButtonPrimary, theme.SizeRegular, 0, false)},
-	{"push-default-small", 58, 20, push("Default", rexui.ButtonPrimary, theme.SizeSmall, 0, false)},
-	{"push-default-inactive", 68, 24, push("Default", rexui.ButtonPrimary, theme.SizeRegular, inactive, false)},
-	{"push-pressed", 64.5, 24, push("Button", rexui.ButtonDefault, theme.SizeRegular, pressed, false)},
-	{"push-default-pressed", 68, 24, push("Default", rexui.ButtonPrimary, theme.SizeRegular, pressed, false)},
-	{"push-disabled", 64.5, 24, push("Button", rexui.ButtonDefault, theme.SizeRegular, 0, true)},
-	{"push-default-disabled", 68, 24, push("Default", rexui.ButtonPrimary, theme.SizeRegular, 0, true)},
-	{"push-focused", 64.5, 24, push("Button", rexui.ButtonDefault, theme.SizeRegular, focused, false)},
-	{"push-destructive", 63.5, 24, push("Delete", rexui.ButtonDestructive, theme.SizeRegular, 0, false)},
-	{"push-glass", 57.5, 24, push("Glass", rexui.ButtonGlass, theme.SizeRegular, 0, false)},
-	{"icon-rounded", 37.5, 24, iconButton(iconPlus, rexui.IconBordered)},
-	{"icon-toolbar", 30, 23, iconButton(iconSidebar, rexui.IconToolbar)},
-	{"icon-borderless", 16, 16, iconButton(iconGear, rexui.IconBorderless)},
-	{"checkbox-off", 60.5, 16, check(base.Unchecked, theme.SizeRegular, 0, false)},
-	{"checkbox-on", 60.5, 16, check(base.Checked, theme.SizeRegular, 0, false)},
-	{"checkbox-mixed", 60.5, 16, check(base.Mixed, theme.SizeRegular, 0, false)},
-	{"checkbox-on-disabled", 60.5, 16, check(base.Checked, theme.SizeRegular, 0, true)},
-	{"checkbox-off-disabled", 60.5, 16, check(base.Unchecked, theme.SizeRegular, 0, true)},
-	{"checkbox-off-pressed", 60.5, 16, check(base.Unchecked, theme.SizeRegular, pressed, false)},
-	{"checkbox-on-focused", 60.5, 16, check(base.Checked, theme.SizeRegular, focused, false)},
-	{"checkbox-on-small", 51.5, 14, check(base.Checked, theme.SizeSmall, 0, false)},
-	{"checkbox-on-large", 62.5, 18, check(base.Checked, theme.SizeLarge, 0, false)},
-	{"radio-off", 56.5, 16, radio(false, 0, false)},
-	{"radio-on", 56.5, 16, radio(true, 0, false)},
-	{"radio-on-disabled", 56.5, 16, radio(true, 0, true)},
-	{"radio-on-focused", 56.5, 16, radio(true, focused, false)},
-	{"switch-off", 54, 24, toggle(false, theme.SizeRegular, 0, false)},
-	{"switch-on", 54, 24, toggle(true, theme.SizeRegular, 0, false)},
-	{"switch-on-disabled", 54, 24, toggle(true, theme.SizeRegular, 0, true)},
-	{"switch-on-focused", 54, 24, toggle(true, theme.SizeRegular, focused, false)},
-	{"switch-on-small", 54, 24, toggle(true, theme.SizeSmall, 0, false)},
-	{"switch-on-mini", 54, 24, toggle(true, theme.SizeMini, 0, false)},
-	{"switch-on-large", 54, 24, toggle(true, theme.SizeLarge, 0, false)},
-	{"popup", 124, 24, popup(rexui.SelectDefault, 124, theme.SizeRegular, 0, false)},
-	{"popup-small", 106, 20, popup(rexui.SelectDefault, 106, theme.SizeSmall, 0, false)},
-	{"popup-disabled", 124, 24, popup(rexui.SelectDefault, 124, theme.SizeRegular, 0, true)},
-	{"popup-focused", 124, 24, popup(rexui.SelectDefault, 124, theme.SizeRegular, focused, false)},
-	{"pulldown", 93, 24, popup(rexui.SelectPullDown, 93, theme.SizeRegular, 0, false)},
-	{"popup-borderless", 122, 25, popup(rexui.SelectBorderless, 122, theme.SizeRegular, 0, false)},
-	{"segmented", 157.5, 24, segmented(0, theme.SizeRegular)},
-	{"segmented-small", 133.5, 20, segmented(1, theme.SizeSmall)},
-	{"slider", 200, 16, slider(theme.SizeRegular, 0, false)},
-	{"slider-small", 200, 14, slider(theme.SizeSmall, 0, false)},
-	{"slider-disabled", 200, 16, slider(theme.SizeRegular, 0, true)},
-	{"slider-focused", 200, 16, slider(theme.SizeRegular, focused, false)},
-	{"field-placeholder", 200, 24, field(0, "", "Placeholder", false, theme.SizeRegular, 0, false)},
-	{"field-text", 200, 24, field(1, "Hello, world", "Placeholder", false, theme.SizeRegular, 0, false)},
-	{"field-focused", 200, 24, field(2, "Hello, world", "Placeholder", false, theme.SizeRegular, focused, false)},
-	{"field-disabled", 200, 24, field(3, "Hello, world", "Placeholder", false, theme.SizeRegular, 0, true)},
-	{"field-small", 200, 22, field(4, "Hello, world", "Placeholder", false, theme.SizeSmall, 0, false)},
-	{"field-large", 200, 24, field(5, "Hello, world", "Placeholder", false, theme.SizeLarge, 0, false)},
-	{"search-empty", 200, 24, field(6, "", "Search", true, theme.SizeRegular, 0, false)},
-	{"search-text", 200, 24, field(7, "query", "Search", true, theme.SizeRegular, 0, false)},
-	{"search-focused", 200, 24, field(7, "query", "Search", true, theme.SizeRegular, focused, false)},
+	{"push-mini", 45.5, 16, push("Button", rexui.ButtonDefault, theme.SizeMini, 0, false), at(3, 8, labelled)},
+	{"push-small", 55, 20, push("Button", rexui.ButtonDefault, theme.SizeSmall, 0, false), at(3, 10, labelled)},
+	{"push-regular", 64.5, 24, push("Button", rexui.ButtonDefault, theme.SizeRegular, 0, false), at(3, 12, labelled)},
+	{"push-large", 68.5, 28, push("Button", rexui.ButtonDefault, theme.SizeLarge, 0, false), at(4, 14, labelled)},
+	{"push-xlarge", 76.5, 36, push("Button", rexui.ButtonDefault, theme.SizeXLarge, 0, false), at(5, 18, labelled)},
+	{"push-default", 68, 24, push("Default", rexui.ButtonPrimary, theme.SizeRegular, 0, false), at(3, 12, labelled)},
+	{"push-default-small", 58, 20, push("Default", rexui.ButtonPrimary, theme.SizeSmall, 0, false), at(3, 10, labelled)},
+	{"push-default-inactive", 68, 24, push("Default", rexui.ButtonPrimary, theme.SizeRegular, inactive, false), at(3, 12, labelled)},
+	{"push-pressed", 64.5, 24, push("Button", rexui.ButtonDefault, theme.SizeRegular, pressed, false), at(3, 12, labelled)},
+	{"push-default-pressed", 68, 24, push("Default", rexui.ButtonPrimary, theme.SizeRegular, pressed, false), at(3, 12, labelled)},
+	{"push-disabled", 64.5, 24, push("Button", rexui.ButtonDefault, theme.SizeRegular, 0, true), at(3, 12, labelled)},
+	{"push-default-disabled", 68, 24, push("Default", rexui.ButtonPrimary, theme.SizeRegular, 0, true), at(3, 12, labelled)},
+	{"push-focused", 64.5, 24, push("Button", rexui.ButtonDefault, theme.SizeRegular, focused, false), at(3, 12, labelled|MeasureRing)},
+	{"push-destructive", 63.5, 24, push("Delete", rexui.ButtonDestructive, theme.SizeRegular, 0, false), Spec{Probe: [2]float32{3, 12}, What: MeasureH | MeasureRadius, Note: "red on red at 25 %, as in an alert: AppKit draws a push-destructive button outside an alert as push-regular"}},
+	{"push-glass", 57.5, 24, push("Glass", rexui.ButtonGlass, theme.SizeRegular, 0, false), skip("AppKitRef renders Liquid Glass offscreen as a bare label; judged on live captures")},
+	{"icon-rounded", 37.5, 24, iconButton(iconPlus, rexui.IconBordered), at(3, 12, labelled)},
+	{"icon-toolbar", 30, 23, iconButton(iconSidebar, rexui.IconToolbar), skip("NSBezelStyleToolbar outside a toolbar draws a 30 × 23 rounded rectangle; ours is the in-toolbar capsule of the window tokens")},
+	{"icon-borderless", 16, 16, iconButton(iconGear, rexui.IconBorderless), Spec{What: MeasureLabel, Label: [4]float32{0, 0, 16, 16}}},
+	{"checkbox-off", 60.5, 16, check(base.Unchecked, theme.SizeRegular, 0, false), boxed(16, shapeW|MeasureLabel)},
+	{"checkbox-on", 60.5, 16, check(base.Checked, theme.SizeRegular, 0, false), boxed(16, shapeW|MeasureLabel)},
+	{"checkbox-mixed", 60.5, 16, check(base.Mixed, theme.SizeRegular, 0, false), boxed(16, shapeW|MeasureLabel)},
+	{"checkbox-on-disabled", 60.5, 16, check(base.Checked, theme.SizeRegular, 0, true), boxed(16, shapeW|MeasureLabel)},
+	{"checkbox-off-disabled", 60.5, 16, check(base.Unchecked, theme.SizeRegular, 0, true), boxed(16, shapeW|MeasureLabel)},
+	{"checkbox-off-pressed", 60.5, 16, check(base.Unchecked, theme.SizeRegular, pressed, false), boxed(16, shapeW|MeasureLabel)},
+	{"checkbox-on-focused", 60.5, 16, check(base.Checked, theme.SizeRegular, focused, false), boxed(16, labelled|MeasureRing)},
+	{"checkbox-on-small", 51.5, 14, check(base.Checked, theme.SizeSmall, 0, false), boxed(14, shapeW|MeasureLabel)},
+	{"checkbox-on-large", 62.5, 18, check(base.Checked, theme.SizeLarge, 0, false), boxed(18, shapeW|MeasureLabel)},
+	{"radio-off", 56.5, 16, radio(false, 0, false), boxed(16, shapeW|MeasureLabel)},
+	{"radio-on", 56.5, 16, radio(true, 0, false), boxed(16, shapeW|MeasureLabel)},
+	{"radio-on-disabled", 56.5, 16, radio(true, 0, true), boxed(16, shapeW|MeasureLabel)},
+	{"radio-on-focused", 56.5, 16, radio(true, focused, false), boxed(16, labelled|MeasureRing)},
+	{"switch-off", 54, 24, toggle(false, theme.SizeRegular, 0, false), Spec{Probe: [2]float32{50, 12}, What: MeasureW | MeasureH | MeasureFill, Note: "radius on switch-on: the knob lies over this corner"}},
+	{"switch-on", 54, 24, toggle(true, theme.SizeRegular, 0, false), at(4, 12, shapeW)},
+	{"switch-on-disabled", 54, 24, toggle(true, theme.SizeRegular, 0, true), at(4, 12, shapeW)},
+	{"switch-on-focused", 54, 24, toggle(true, theme.SizeRegular, focused, false), Spec{Probe: [2]float32{4, 12}, What: MeasureFill, Note: "AppKitRef draws no focus ring for NSSwitch"}},
+	{"switch-on-small", 54, 24, toggle(true, theme.SizeSmall, 0, false), at(8, 12, shapeW)},
+	{"switch-on-mini", 54, 24, toggle(true, theme.SizeMini, 0, false), at(12, 12, shapeW)},
+	{"switch-on-large", 54, 24, toggle(true, theme.SizeLarge, 0, false), at(-2, 12, shapeW)},
+	{"popup", 124, 24, popup(rexui.SelectDefault, 124, theme.SizeRegular, 0, false), at(3, 12, labelled|MeasureW)},
+	{"popup-small", 106, 20, popup(rexui.SelectDefault, 106, theme.SizeSmall, 0, false), at(3, 10, labelled|MeasureW)},
+	{"popup-disabled", 124, 24, popup(rexui.SelectDefault, 124, theme.SizeRegular, 0, true), at(3, 12, labelled|MeasureW)},
+	{"popup-focused", 124, 24, popup(rexui.SelectDefault, 124, theme.SizeRegular, focused, false), at(3, 12, labelled|MeasureW|MeasureRing)},
+	{"pulldown", 93, 24, popup(rexui.SelectPullDown, 93, theme.SizeRegular, 0, false), at(3, 12, labelled|MeasureW)},
+	{"popup-borderless", 122, 25, popup(rexui.SelectBorderless, 122, theme.SizeRegular, 0, false), skip("no shape; AppKitRef's cacheDisplay draws its label twice, as label-styles' (#060606 for labelColor)")},
+	{"segmented", 157.5, 24, segmented(0, theme.SizeRegular), at(3, 12, shape)},
+	{"segmented-small", 133.5, 20, segmented(1, theme.SizeSmall), at(3, 10, shape)},
+	{"slider", 200, 16, slider(theme.SizeRegular, 0, false), at(3, 8, shapeW)},
+	{"slider-small", 200, 14, slider(theme.SizeSmall, 0, false), at(3, 7, shapeW)},
+	{"slider-disabled", 200, 16, slider(theme.SizeRegular, 0, true), at(3, 8, shapeW)},
+	{"slider-focused", 200, 16, slider(theme.SizeRegular, focused, false), Spec{Probe: [2]float32{3, 8}, What: MeasureFill, Note: "AppKitRef draws no focus ring for NSSlider"}},
+	{"field-placeholder", 200, 24, field(0, "", "Placeholder", false, theme.SizeRegular, 0, false), fieldSpec(24, shapeW)},
+	{"field-text", 200, 24, field(1, "Hello, world", "Placeholder", false, theme.SizeRegular, 0, false), fieldSpec(24, shapeW)},
+	{"field-focused", 200, 24, field(2, "Hello, world", "Placeholder", false, theme.SizeRegular, focused, false), fieldSpec(24, shapeW|MeasureRing)},
+	{"field-disabled", 200, 24, field(3, "Hello, world", "Placeholder", false, theme.SizeRegular, 0, true), fieldSpec(24, shapeW)},
+	{"field-small", 200, 22, field(4, "Hello, world", "Placeholder", false, theme.SizeSmall, 0, false), fieldSpec(22, shapeW)},
+	{"field-large", 200, 24, field(5, "Hello, world", "Placeholder", false, theme.SizeLarge, 0, false), fieldSpec(24, shapeW)},
+	{"search-empty", 200, 24, field(6, "", "Search", true, theme.SizeRegular, 0, false), fieldSpec(24, shapeW)},
+	{"search-text", 200, 24, field(7, "query", "Search", true, theme.SizeRegular, 0, false), fieldSpec(24, shapeW)},
+	{"search-focused", 200, 24, field(7, "query", "Search", true, theme.SizeRegular, focused, false), fieldSpec(24, shapeW|MeasureRing)},
 	{"separator", 200, 1, func(s *State) ui.ID {
 		s.k.NextWidth(s.k.Fixed(200))
 		return rexui.Separator(s.k, rexui.SeparatorOpts{})
-	}},
+	}, at(100, 0, MeasureW|MeasureH|MeasureFill)},
 	{"box", 220, 90, func(s *State) ui.ID {
 		s.k.NextWidth(s.k.Fixed(220))
 		cd := rexui.BeginCard(s.k, "box", rexui.CardOpts{Variant: rexui.CardBox, Title: "Group"})
 		s.k.Space(54) // AppKit's box is 78 pt below the title
 		rexui.EndCard(s.k, &cd)
 		return cd.ID()
-	}},
-	{"label-styles", 375, 337, labelStyles},
+	}, at(4, 50, shapeW)},
+	{"label-styles", 375, 337, labelStyles, skip("text rendering: AppKitRef's cacheDisplay draws labels darker than a live window does")},
 }
 
 var styleNames = [...]struct {
