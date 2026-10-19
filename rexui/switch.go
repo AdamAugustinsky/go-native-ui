@@ -26,9 +26,14 @@ type SwitchRecipe struct {
 	// #ED4D98B4 for the pink accent).
 	Off, OffPressed, OffDisabled, On, OnPressed, OnDisabled Tint
 	// Knob is the knob's colour; KnobShadow the colour of its shadow, which
-	// lies KnobShadowY points below it with KnobShadowBlur points of blur.
-	Knob, KnobShadow            Tint
-	KnobShadowY, KnobShadowBlur float32
+	// lies KnobShadowY points below it with KnobShadowBlur points of blur,
+	// and KnobAmbient that of a second, wide one (KnobAmbientY,
+	// KnobAmbientBlur): a live window's Liquid Glass knob floats in a faint
+	// halo some 14 pt wide in light, none in dark (GnuiShot captures of
+	// AppKitRef -live; offscreen renders do not show it).
+	Knob, KnobShadow, KnobAmbient Tint
+	KnobShadowY, KnobShadowBlur   float32
+	KnobAmbientY, KnobAmbientBlur float32
 	// Label and LabelDisabled colour the label, which follows the switch at
 	// the theme's ControlGap.
 	Label, LabelDisabled Tint
@@ -42,6 +47,7 @@ var SwitchLook = SwitchRecipe{
 	On: Of(theme.Accent), OnPressed: Of(theme.AccentPressed), OnDisabled: OfAlpha(theme.Accent, 0.7, 0.7),
 	Knob: Of(theme.OnAccent), KnobShadow: OfAlpha(theme.Shadow, 0.15, 0),
 	KnobShadowY: 1, KnobShadowBlur: 1,
+	KnobAmbient: OfAlpha(theme.Shadow, 0.13, 0), KnobAmbientY: 2, KnobAmbientBlur: 10,
 	Label: Of(theme.Label), LabelDisabled: Of(theme.TextDisabled),
 }
 
@@ -86,8 +92,13 @@ func Switch(k *base.Kit, label string, on *bool, o SwitchOpts) base.Signal {
 	c.NextBG(rc.Knob.RGBA(r))
 	c.NextRadius(kh / 2)
 	flags := ui.DrawBackground | base.Floating
-	if sh := rc.KnobShadow.RGBA(r); sh&0xFF != 0 && !tg.Disabled {
-		c.NextShadow(ui.Shadow{OffY: k.Pt(rc.KnobShadowY), Sigma: k.Pt(rc.KnobShadowBlur), Color: sh})
+	if sh := rc.KnobShadow.RGBA(r); sh&0xFF != 0 { // disabled too, as AppKit
+		near := ui.Shadow{OffY: k.Pt(rc.KnobShadowY), Sigma: k.Pt(rc.KnobShadowBlur), Color: sh}
+		if am := rc.KnobAmbient.RGBA(r); am&0xFF != 0 {
+			c.NextShadows(ui.Shadow{OffY: k.Pt(rc.KnobAmbientY), Sigma: k.Pt(rc.KnobAmbientBlur), Color: am}, near)
+		} else {
+			c.NextShadow(near)
+		}
 		flags |= ui.DrawShadow
 	}
 	c.BoxKeyed(flags, ui.KeyN(tg.Key, 3), nil)

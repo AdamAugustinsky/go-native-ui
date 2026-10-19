@@ -1610,9 +1610,9 @@ static int pairSheet(NSString *manifest, NSString *outPath) {
 @implementation FlippedView
 - (BOOL)isFlipped { return YES; }
 - (void)drawRect:(NSRect)r {
-	if (self.fill) {
+	if (self.fill) { // the dirty rectangle can reach outside the bounds (clipsToBounds is NO)
 		[self.fill setFill];
-		NSRectFill(r);
+		NSRectFill(NSIntersectionRect(r, self.bounds));
 	}
 }
 @end
@@ -1625,7 +1625,7 @@ static int pairSheet(NSString *manifest, NSString *outPath) {
 // window shows for seconds seconds in the appearance named apName, then the
 // app quits. Pressed samples are highlighted; focus and inactive samples
 // cannot be shown in one key window and draw their normal look.
-static int runLive(NSString *namesPath, NSString *apName, double seconds, CGFloat maxW) {
+static int runLive(NSString *namesPath, NSString *apName, double seconds, CGFloat maxW, NSString *dump) {
 	NSString *list = [NSString stringWithContentsOfFile:namesPath encoding:NSUTF8StringEncoding error:nil];
 	if (!list) {
 		fprintf(stderr, "no names file %s\n", namesPath.UTF8String);
@@ -1701,7 +1701,7 @@ static int runLive(NSString *namesPath, NSString *apName, double seconds, CGFloa
 	title.font = [NSFont boldSystemFontOfSize:13];
 	title.textColor = fg;
 	[title sizeToFit];
-	[title setFrameOrigin:NSMakePoint(margin, margin)];
+	[title setFrameOrigin:NSMakePoint(margin - 2, margin)];
 	[root addSubview:title];
 	for (NSUInteger i = 0; i < views.count; i++) {
 		NSView *v = views[i];
@@ -1719,13 +1719,22 @@ static int runLive(NSString *namesPath, NSString *apName, double seconds, CGFloa
 		cap.font = [NSFont systemFontOfSize:10];
 		cap.textColor = fg2;
 		[cap sizeToFit];
-		[cap setFrameOrigin:NSMakePoint(p.x, p.y + cell.frame.size.height + 1)];
+		[cap setFrameOrigin:NSMakePoint(p.x - 2, p.y + cell.frame.size.height + 1)]; // a label's text sits 2 pt in
 		[root addSubview:cap];
 	}
 	[w center];
 	[w makeKeyAndOrderFront:nil];
 	[w makeFirstResponder:nil];
 	[NSApp activateIgnoringOtherApps:YES];
+	if (dump) { // what the views draw, for checking the window without a screen capture
+		[NSTimer scheduledTimerWithTimeInterval:0.5
+		                                repeats:NO
+		                                  block:^(NSTimer *t) {
+			                                  NSBitmapImageRep *rep = newRep(root.bounds.size);
+			                                  [root cacheDisplayInRect:root.bounds toBitmapImageRep:rep];
+			                                  savePNG(rep, dump);
+		                                  }];
+	}
 	[NSTimer scheduledTimerWithTimeInterval:seconds
 	                                repeats:NO
 	                                  block:^(NSTimer *t) {
@@ -1744,7 +1753,7 @@ int main(int argc, const char **argv) {
 		[ARApp sharedApplication];
 		[NSApp setActivationPolicy:NSApplicationActivationPolicyProhibited];
 		keep = [NSMutableArray array];
-		NSString *outDir = nil, *live = nil, *liveAp = NSAppearanceNameAqua;
+		NSString *outDir = nil, *live = nil, *liveAp = NSAppearanceNameAqua, *dump = nil;
 		double seconds = 8, maxW = 1440;
 		for (int i = 1; i < argc; i++) {
 			if (!strcmp(argv[i], "-o") && i + 1 < argc) outDir = [NSString stringWithUTF8String:argv[++i]];
@@ -1754,8 +1763,9 @@ int main(int argc, const char **argv) {
 			else if (!strcmp(argv[i], "-mode") && i + 1 < argc) liveAp = strcmp(argv[++i], "dark") ? NSAppearanceNameAqua : NSAppearanceNameDarkAqua;
 			else if (!strcmp(argv[i], "-seconds") && i + 1 < argc) seconds = atof(argv[++i]);
 			else if (!strcmp(argv[i], "-width") && i + 1 < argc) maxW = atof(argv[++i]);
+			else if (!strcmp(argv[i], "-dump") && i + 1 < argc) dump = [NSString stringWithUTF8String:argv[++i]];
 		}
-		if (live) return runLive(live, liveAp, seconds, maxW);
+		if (live) return runLive(live, liveAp, seconds, maxW, dump);
 		if (!outDir) {
 			fprintf(stderr, "usage: AppKitRef -o DIR [-AppleAccentColor N]\n       AppKitRef -sheet MANIFEST.json OUT.png\n"
 			                "       AppKitRef -live NAMES.txt [-mode light|dark] [-seconds 8] [-width 1440]\n");

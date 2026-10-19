@@ -16,6 +16,8 @@
 //
 //	go run ./tools/appkitref/measure -ref DIR [-ours DIR] [-write FILE]
 //	go run ./tools/appkitref/measure -names 0 > names.txt   # for AppKitRef -live
+//	go run ./tools/appkitref/measure -cut capture.png -page 0 -o DIR/light
+//	go run ./tools/appkitref/measure -live -ref APPKIT_CELLS -ours OUR_CELLS
 //
 // Both renders are at 2× with AppKit's frame at 14 pt from the top left, as
 // AppKitRef and ours write them.
@@ -84,7 +86,21 @@ func main() {
 	ours := flag.String("ours", "", "tools/appkitref/ours output directory to compare")
 	write := flag.String("write", "", "write AppKit's numbers as JSON to this file")
 	names := flag.Int("names", -1, "print the sample names of grid page N (catalog.Pages), one per line, for AppKitRef -live, and exit")
+	cutFrom := flag.String("cut", "", "cut this 2× capture of a grid page into one PNG per sample in -o, and exit")
+	page := flag.Int("page", 0, "with -cut: the grid page the capture shows")
+	cutTo := flag.String("o", "", "with -cut: the output directory")
+	live := flag.Bool("live", false, "the -ref cells are cut from AppKitRef -live captures: leave out the samples one key window cannot show (focused, inactive)")
 	flag.Parse()
+	if *cutFrom != "" {
+		if *cutTo == "" || *page < 0 || *page >= len(catalog.Pages) {
+			fmt.Fprintln(os.Stderr, "usage: measure -cut CAPTURE.png -page N -o DIR")
+			os.Exit(2)
+		}
+		if err := cut(*cutFrom, *page, *cutTo); err != nil {
+			fail(err)
+		}
+		return
+	}
 	if *names >= 0 && *names < len(catalog.Pages) {
 		for _, i := range catalog.Page(*names) {
 			fmt.Println(catalog.Samples[i].Name)
@@ -95,12 +111,15 @@ func main() {
 		fmt.Fprintln(os.Stderr, "usage: measure -ref DIR [-ours DIR] [-write FILE]")
 		os.Exit(2)
 	}
-	metrics, err := loadMetrics(filepath.Join(*ref, "metrics.json"))
-	if err != nil {
+	meta, err := loadMetrics(filepath.Join(*ref, "metrics.json"))
+	if err != nil && (*write != "" || !os.IsNotExist(err)) {
 		fail(err)
 	}
+	if meta == nil { // cells cut from live captures: no metrics, no focus rings
+		meta = &metrics{}
+	}
 	out := File{
-		Source:  "tools/appkitref/measure -ref " + filepath.Base(*ref) + " (AppKitRef, " + metrics.System.OS + ")",
+		Source:  "tools/appkitref/measure -ref " + filepath.Base(*ref) + " (AppKitRef, " + meta.System.OS + ")",
 		Scale:   scale,
 		System:  map[string]map[string]string{},
 		Samples: map[string]map[string]Result{},
@@ -108,7 +127,7 @@ func main() {
 	for mi, ap := range [...]string{"NSAppearanceNameAqua", "NSAppearanceNameDarkAqua"} {
 		cs := map[string]string{}
 		for _, name := range platform.SystemColorNames {
-			if v, ok := metrics.Colors[ap][name]; ok {
+			if v, ok := meta.Colors[ap][name]; ok {
 				var hex string
 				if json.Unmarshal(v, &hex) == nil {
 					cs[name] = hex
@@ -125,6 +144,12 @@ func main() {
 	checked, failed := 0, 0
 	for _, s := range catalog.Samples {
 		sp := s.Spec
+		if *live && (strings.HasSuffix(s.Name, "-focused") || strings.HasSuffix(s.Name, "-inactive")) {
+			if *ours != "" {
+				fmt.Fprintf(tw, "%s\t\t—\t\t\t\t%s\t\n", s.Name, "not shown live: one key window, no first responder")
+			}
+			continue
+		}
 		if sp.What == 0 {
 			if *ours != "" {
 				fmt.Fprintf(tw, "%s\t\t—\t\t\t\t%s\t\n", s.Name, sp.Note)
@@ -134,11 +159,14 @@ func main() {
 		per := map[string]Result{}
 		for mi, mode := range modes {
 			a, err := measureFile(filepath.Join(*ref, mode, s.Name+".png"), sp)
+			if os.IsNotExist(err) && *write == "" { // not on the page that was cut
+				continue
+			}
 			if err != nil {
 				fail(err)
 			}
 			if sp.What&catalog.MeasureRing != 0 {
-				if fr, ok := metrics.Controls[mode][s.Name]; ok && fr.FocusRing != nil {
+				if fr, ok := meta.Controls[mode][s.Name]; ok && fr.FocusRing != nil {
 					a.RingOutset = round2(fr.FocusRing.OutsetFromBody)
 					// a width across the whole control is a mask AppKitRef
 					// could not read the band of (a checkbox's fills its box)
@@ -325,23 +353,41 @@ func edges(p px, bg [3]int, cx, cy, right int) (l, r, t, b float64) {
 }
 
 // edge is where a shape begins along a line of pixels get(i), scanning from
-// i = from toward stop in steps of dir: the first pixel that is ink, then on
-// while the pixels grow further from bg (an antialiased edge, or a faint
-// shadow before it) to the colour the edge blends toward; the edge lies short
-// of that pixel by the coverage of the ones before it. In pixel coordinates.
+// i = from toward stop in steps of dir. A shape's edge is a sharp rise in the
+// difference from bg, antialiased over a pixel or two; a halo or soft shadow
+// before it rises gently and is passed over. The edge lies short of the
+// pixel where the rise ends, whose colour it blends toward, by the coverage
+// of the pixels from the one before the rise. In pixel coordinates.
 func edge(get func(int) [3]int, bg [3]int, from, stop, dir int) float64 {
+	sharp := func(lo, hi int) bool { return hi-lo >= thresh && float64(hi-lo) >= 0.4*float64(hi) }
 	i := from
 	for i != stop && !ink(get(i), bg) {
 		i += dir
 	}
-	j := i
-	for k := 0; k < 6 && j != stop && dist(get(j+dir), bg) > dist(get(j), bg); k++ {
+	k, prev, found := i, dist(get(i-dir), bg), false
+	for n := 0; n < 60 && k != stop; n++ {
+		d := dist(get(k), bg)
+		if found = sharp(prev, d); found {
+			break
+		}
+		prev, k = d, k+dir
+	}
+	if !found { // no sharp rise (a corner's row, a soft edge): from the first ink
+		k = i
+	}
+	// on while the rise lasts: sharp, or any rise where there was no sharp one
+	j := k
+	for m := 0; m < 6 && j != stop; m++ {
+		a, b := dist(get(j), bg), dist(get(j+dir), bg)
+		if b <= a || found && !sharp(a, b) {
+			break
+		}
 		j += dir
 	}
 	f := get(j)
 	partial := 0.0
-	for k := i; k != j; k += dir {
-		partial += coverage(get(k), f, bg)
+	for m := k - dir; m != j; m += dir {
+		partial += coverage(get(m), f, bg)
 	}
 	if dir > 0 {
 		return float64(j) - partial

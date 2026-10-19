@@ -352,7 +352,7 @@ var Samples = []Sample{
 		s.k.Space(54) // AppKit's box is 78 pt below the title
 		rexui.EndCard(s.k, &cd)
 		return cd.ID()
-	}, at(4, 50, shapeW)},
+	}, Spec{Probe: [2]float32{4, 50}, What: MeasureW | MeasureH | MeasureFill, Note: "radius by eye: the title crosses the top-left corner"}},
 	{"label-styles", 375, 337, labelStyles, skip("text rendering: AppKitRef's cacheDisplay draws labels darker than a live window does")},
 }
 
