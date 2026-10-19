@@ -18,10 +18,15 @@ var (
 	testKeychainOnce sync.Once
 	testKeychainErr  error
 	testKeychainDir  string
+
+	addedToSearchList bool
 )
 
 func TestMain(m *testing.M) {
 	code := m.Run()
+	if addedToSearchList {
+		removeFromSearchList()
+	}
 	if testKeychainDir != "" {
 		if kc := filepath.Join(testKeychainDir, "gnui-dev-test.keychain-db"); runtime.GOOS == "darwin" {
 			runOut("security", "delete-keychain", kc)
@@ -45,7 +50,17 @@ func needMac(t *testing.T) {
 		}
 		testKeychainDir, _ = filepath.EvalSymlinks(testKeychainDir)
 		os.Setenv("GNUI_DEV_KEYCHAIN", filepath.Join(testKeychainDir, "gnui-dev-test.keychain-db"))
-		_, testKeychainErr = setupDevIdentity(func(string, ...any) {})
+		if _, testKeychainErr = setupDevIdentity(func(string, ...any) {}); testKeychainErr != nil {
+			return
+		}
+		// macOS 15 (the CI runners) finds the signing key only in keychains on
+		// the search list; newer releases do not need it. Add it only if
+		// signing fails without, and take it out again in TestMain.
+		if signRoundTrip() != nil {
+			if testKeychainErr = addToSearchList(); testKeychainErr == nil {
+				addedToSearchList = true
+			}
+		}
 	})
 	if testKeychainErr != nil {
 		t.Fatalf("creating the test identity: %v", testKeychainErr)

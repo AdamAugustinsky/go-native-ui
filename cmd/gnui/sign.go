@@ -103,13 +103,13 @@ func signBundle(app string, o signOptions) ([]string, error) {
 	}
 	for _, p := range nested {
 		if out, err := runOut("codesign", o.codesignArgs(p, "")...); err != nil {
-			return nil, fmt.Errorf("signing %s: %w", p, err)
+			return nil, fmt.Errorf("signing %s: %w", p, searchListHint(err, o.Spec))
 		} else if o.Log != nil && strings.TrimSpace(out) != "" {
 			fmt.Fprint(o.Log, out)
 		}
 	}
 	if _, err := runOut("codesign", o.codesignArgs(app, o.Entitlements)...); err != nil {
-		return nil, fmt.Errorf("signing %s: %w", app, err)
+		return nil, fmt.Errorf("signing %s: %w", app, searchListHint(err, o.Spec))
 	}
 	return nested, nil
 }

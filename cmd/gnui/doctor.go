@@ -37,6 +37,7 @@ func cmdDoctor(args []string, stdout, stderr io.Writer) error {
 	fs := newFlagSet("doctor", stderr)
 	cfgPath := fs.String("c", "gnui.json", "path of a gnui.json to check (skipped when the file does not exist)")
 	setup := fs.Bool("setup-dev-cert", false, "create the gnui-dev signing identity if it does not exist")
+	searchList := fs.Bool("search-list", false, "add the gnui-dev keychain to your user keychain search list (macOS 15 needs it for codesign to find the key)")
 	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
@@ -110,6 +111,13 @@ func cmdDoctor(args []string, stdout, stderr io.Writer) error {
 			d.fail("creating the %s identity: %v", devIdentityName, err)
 		} else if created {
 			d.ok("created the %s identity in %s", devIdentityName, devKeychainPath())
+		}
+	}
+	if *searchList {
+		if err := addToSearchList(); err != nil {
+			d.fail("adding %s to the keychain search list: %v", filepath.Base(devKeychainPath()), err)
+		} else {
+			d.ok("%s is on the user keychain search list", filepath.Base(devKeychainPath()))
 		}
 	}
 	d.checkDevIdentity()
@@ -218,7 +226,7 @@ func signRoundTrip() error {
 	}
 	o := signOptions{Spec: spec}
 	if _, err := runOut("codesign", o.codesignArgs(p, "")...); err != nil {
-		return err
+		return searchListHint(err, spec)
 	}
 	_, err = runOut("codesign", "--verify", "--strict", p)
 	return err

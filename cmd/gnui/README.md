@@ -146,7 +146,12 @@ SHA-1>"`, which does not change when the code does.
   (`$GNUI_DEV_KEYCHAIN` overrides it; the tests use a temporary one). It has
   an empty password, no auto-lock, and is **not** added to the keychain search
   list: gnui passes `--keychain` to `codesign`. The login keychain and the
-  system trust settings are never touched.
+  system trust settings are never touched. (macOS 15.7, checked on a GitHub
+  runner, still wants the keychain on the search list before `codesign`
+  finds the key: signing then fails with "The specified item could not be
+  found in the keychain" and gnui says so. `gnui doctor -search-list` adds it
+  to the user search list, the one preference gnui ever changes, and only on
+  request. macOS 27.2, checked here, does not need it.)
 * **How.** `gnui doctor -setup-dev-cert` generates an RSA-2048 key and a
   10-year certificate (`CN=gnui-dev`, key usage digitalSignature, extended key
   usage codeSigning, not a CA) in Go (`crypto/x509`), imports them with

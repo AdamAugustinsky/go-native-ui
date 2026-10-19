@@ -247,6 +247,80 @@ func trustCommand() string {
 	return fmt.Sprintf("security add-trusted-cert -p codeSign -r trustRoot -k %q %q", devKeychainPath(), devCertPath())
 }
 
+// userSearchList returns the user's keychain search list.
+func userSearchList() ([]string, error) {
+	out, err := runOut("security", "list-keychains", "-d", "user")
+	if err != nil {
+		return nil, err
+	}
+	var l []string
+	for _, line := range strings.Split(out, "\n") {
+		if p := strings.Trim(strings.TrimSpace(line), `"`); p != "" {
+			l = append(l, p)
+		}
+	}
+	return l, nil
+}
+
+// inSearchList reports whether the dedicated keychain is in the user's search
+// list. The check compares resolved paths.
+func inSearchList(list []string) bool {
+	want, _ := filepath.EvalSymlinks(devKeychainPath())
+	for _, p := range list {
+		if got, _ := filepath.EvalSymlinks(p); got != "" && got == want {
+			return true
+		}
+	}
+	return false
+}
+
+// addToSearchList puts the dedicated keychain first in the user's keychain
+// search list. macOS 15's codesign does not find a signing key in a keychain
+// that is only named with --keychain; later releases do. It is the one
+// change gnui makes to a user preference, so it only happens when asked for
+// (`gnui doctor -search-list`).
+func addToSearchList() error {
+	list, err := userSearchList()
+	if err != nil {
+		return err
+	}
+	if inSearchList(list) {
+		return nil
+	}
+	_, err = runOut("security", append([]string{"list-keychains", "-d", "user", "-s", devKeychainPath()}, list...)...)
+	return err
+}
+
+// removeFromSearchList undoes addToSearchList.
+func removeFromSearchList() error {
+	list, err := userSearchList()
+	if err != nil {
+		return err
+	}
+	want, _ := filepath.EvalSymlinks(devKeychainPath())
+	var keep []string
+	for _, p := range list {
+		if got, _ := filepath.EvalSymlinks(p); got == want && want != "" {
+			continue
+		}
+		keep = append(keep, p)
+	}
+	if len(keep) == len(list) {
+		return nil
+	}
+	_, err = runOut("security", append([]string{"list-keychains", "-d", "user", "-s"}, keep...)...)
+	return err
+}
+
+// searchListHint turns codesign's "item could not be found in the keychain"
+// into the fix, for a signing identity that lives in the dedicated keychain.
+func searchListHint(err error, spec signSpec) error {
+	if err != nil && spec.Keychain != "" && strings.Contains(err.Error(), "could not be found in the keychain") {
+		return fmt.Errorf("%w\nthis macOS looks for the signing key only in keychains on the search list: run `gnui doctor -search-list` once (it adds %s to your user keychain search list; undo with `security list-keychains -d user -s <the others>`)", err, filepath.Base(spec.Keychain))
+	}
+	return err
+}
+
 // signSpec says how to sign: with which identity, from which keychain.
 type signSpec struct {
 	Identity string // name or SHA-1, or "-" for ad-hoc
