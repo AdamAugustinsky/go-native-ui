@@ -56,6 +56,12 @@ var (
 	stackBlockISA, globalBlockISA uintptr
 )
 
+// Malloc and Free are libc's malloc and free, resolved when the package
+// initialises (before any goroutine of the program runs), for packages that
+// keep C memory and must not look symbols up later: a dlsym waits for dyld's
+// lock, which a thread loading a framework holds.
+var Malloc, Free uintptr
+
 func initBlocks() {
 	h, err := purego.Dlopen("/usr/lib/libSystem.B.dylib", purego.RTLD_NOW|purego.RTLD_GLOBAL)
 	if err != nil {
@@ -70,6 +76,7 @@ func initBlocks() {
 	}
 	blockCopy, blockRelease = sym("_Block_copy"), sym("_Block_release")
 	stackBlockISA, globalBlockISA = sym("_NSConcreteStackBlock"), sym("_NSConcreteGlobalBlock")
+	Malloc, Free = sym("malloc"), sym("free")
 	for i := MaxBlocks - 1; i >= 0; i-- {
 		slots[i].word.Store(1<<genShift | retiring) // free; the first request gets generation 1
 		push(uint32(i))
