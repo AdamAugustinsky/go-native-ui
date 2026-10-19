@@ -154,8 +154,9 @@ const (
 	// GlassTint is the translucent fill of an unfocused Rex pane over the
 	// field.
 	GlassTint
-	// Shadow is the colour drop shadows are cast in; its alpha is the
-	// standard strength.
+	// Shadow is the colour drop shadows are cast in: elevations use its RGB
+	// at their layers' own opacity (ShadowLayer.Color). Its alpha is the
+	// phase-5 Palette.Shadow strength, which elevations do not multiply in.
 	Shadow
 	// Scrim dims what lies under a modal dialog on systems without sheets.
 	Scrim

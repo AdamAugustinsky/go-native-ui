@@ -1,5 +1,7 @@
 package ui
 
+import "gonativeui/platform"
+
 // Appearance is the system's light or dark mode and accent colour, as the app
 // hands them to the UI before each frame (platform.SystemAppearance; D32).
 type Appearance struct {
@@ -16,6 +18,10 @@ type appearance struct {
 	sys            Appearance
 	chromeDark     bool // the mode the app shows (SetChromeDark)
 	chromeDeclared bool // SetChromeDark was called
+
+	sv       platform.SystemValues // SetSystemValues
+	svSerial uint32                // the platform serial they were read at
+	svGen    uint32                // counts SetSystemValues calls
 }
 
 // SetSystemAppearance gives the UI the system appearance for the next frame.
@@ -42,3 +48,28 @@ func (c *Context) SetChromeDark(dark bool) {
 // ChromeDark reports the mode last declared with SetChromeDark; ok is false
 // when none was. The app forwards it to the window after the frame.
 func (c *Context) ChromeDark() (dark, ok bool) { return c.ap.chromeDark, c.ap.chromeDeclared }
+
+// SetSystemValues gives the UI the system's colours and settings (D39),
+// which the app of a live window reads on the main thread with
+// platform.ReadSystemValues when platform.AppearanceSerial changes (app.Run
+// does, before the frame), passing that serial. theme.Follower applies them.
+// A context nobody gives them to, such as an offscreen one, has none: its
+// themes keep their own values, so an offscreen render never depends on the
+// machine and never reads AppKit from its thread. Tests and tools may give
+// one any values.
+func (c *Context) SetSystemValues(serial uint32, v *platform.SystemValues) {
+	c.ap.sv, c.ap.svSerial = *v, serial
+	c.ap.svGen++
+}
+
+// SystemValuesSerial is the platform serial SetSystemValues was last given;
+// ok is false before the first call. The app compares it with
+// platform.AppearanceSerial to read only after a change.
+func (c *Context) SystemValuesSerial() (serial uint32, ok bool) {
+	return c.ap.svSerial, c.ap.svGen != 0
+}
+
+// SystemValues are what SetSystemValues last gave (zero, Known false, before
+// any call), and a generation that changes with every call. The pointer is to
+// the context's own copy: read it, do not keep it.
+func (c *Context) SystemValues() (v *platform.SystemValues, gen uint32) { return &c.ap.sv, c.ap.svGen }

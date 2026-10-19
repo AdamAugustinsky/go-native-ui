@@ -35,9 +35,13 @@ type ToolbarSpec struct {
 	// Title is the title's text style; TitleY the top of its line box.
 	Title  TextStyle
 	TitleY float32
-	// TitleGap is the space between the title and the capsule before it (or
-	// the content pane's edge when nothing is before it).
+	// TitleGap is the space between the title and the toolbar capsule
+	// before it.
 	TitleGap float32
+	// TitleInset is the space between the title and the content pane's
+	// leading edge when no capsule precedes it in the pane (unified 18,
+	// compact 10). TitleX applies both.
+	TitleInset float32
 	// CapsuleH is the height of a toolbar item's capsule (0: none) and
 	// CapsuleY its top; the radius is CapsuleH/2.
 	CapsuleH, CapsuleY float32
@@ -134,16 +138,24 @@ type WindowSpec struct {
 var MacWindow = WindowSpec{
 	Radius: 16, TrafficD: TrafficDiameterPt, TrafficSpacing: TrafficSpacingPt,
 	Toolbars: [NumToolbarStyles]ToolbarSpec{
-		ToolbarPlain:   {Height: 32, Traffic: [2]float32{16, 16}, Title: StyleWindowTitle, TitleY: 8, TitleGap: 10},
-		ToolbarCompact: {Height: 40, Traffic: [2]float32{19, 20}, Title: StyleWindowTitle, TitleY: 12, TitleGap: 10, CapsuleH: 24, CapsuleY: 8, ItemW: 28, FirstGap: 19.5},
-		ToolbarUnified: {Height: 52, Traffic: [2]float32{26, 26}, Title: StyleToolbarTitle, TitleY: 16.5, TitleGap: 10, CapsuleH: 36, CapsuleY: 8, ItemW: 36, FirstGap: 17},
-		ToolbarRex:     {Height: 46, Traffic: [2]float32{23, 23}, Title: StyleWindowTitle, TitleY: 15, TitleGap: 10},
+		ToolbarPlain:   {Height: 32, Traffic: [2]float32{16, 16}, Title: StyleWindowTitle, TitleY: 8, TitleGap: 10, TitleInset: 10},
+		ToolbarCompact: {Height: 40, Traffic: [2]float32{19, 20}, Title: StyleWindowTitle, TitleY: 12, TitleGap: 10, TitleInset: 10, CapsuleH: 24, CapsuleY: 8, ItemW: 28, FirstGap: 19.5},
+		ToolbarUnified: {Height: 52, Traffic: [2]float32{26, 26}, Title: StyleToolbarTitle, TitleY: 16.5, TitleGap: 10, TitleInset: 18, CapsuleH: 36, CapsuleY: 8, ItemW: 36, FirstGap: 17},
+		ToolbarRex:     {Height: 46, Traffic: [2]float32{23, 23}, Title: StyleWindowTitle, TitleY: 15, TitleGap: 10, TitleInset: 10},
 	},
 	Capsule:     CapsuleSpec{GroupGap: 8, Gap: 4, WideGap: 8, NavW: 86, MenuW: 46, PickerW: 46, Glyph: 16},
 	Sidebar:     SidebarSpec{RowH: 32, HeaderH: 19, GroupGap: 13, IconX: 19, Icon: 20, TextX: 43, HeaderX: 14, Indent: 13, SearchH: 24, SearchInset: 10},
 	Selection:   SelectionSpec{Inset: 10, Radius: 8, Divider: 1},
 	GroupRadius: 12,
 	ScrollEdge:  ScrollEdgeSpec{Line: 0.5, AccessoryPad: 9},
+}
+
+// TitleX is where the title starts: TitleGap after the right edge of the
+// last capsule before it (prevRight), but at least TitleInset into the
+// content pane that starts at paneX. Pass a prevRight of 0 or less when no
+// capsule precedes the title. Points or pixels, as t is.
+func (t *ToolbarSpec) TitleX(paneX, prevRight float32) float32 {
+	return max(paneX+t.TitleInset, prevRight+t.TitleGap)
 }
 
 // TrafficCentre is the close button's centre of style s in points from the
@@ -166,7 +178,7 @@ func (w WindowSpec) scaled(k float32) WindowSpec {
 	w.TrafficSpacing *= k
 	for i := range w.Toolbars {
 		t := &w.Toolbars[i]
-		for _, p := range [...]*float32{&t.Height, &t.Traffic[0], &t.Traffic[1], &t.TitleY, &t.TitleGap, &t.CapsuleH, &t.CapsuleY, &t.ItemW, &t.FirstGap} {
+		for _, p := range [...]*float32{&t.Height, &t.Traffic[0], &t.Traffic[1], &t.TitleY, &t.TitleGap, &t.TitleInset, &t.CapsuleH, &t.CapsuleY, &t.ItemW, &t.FirstGap} {
 			*p *= k
 		}
 	}

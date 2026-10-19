@@ -7,8 +7,11 @@ import (
 	"runtime"
 	"testing"
 
+	"gonativeui/internal/fakeui"
+	"gonativeui/internal/objc"
 	"gonativeui/platform"
 	"gonativeui/theme"
+	"gonativeui/theme/rex"
 	"gonativeui/ui"
 )
 
@@ -38,8 +41,9 @@ func onMain(f func()) {
 	<-d
 }
 
-// End to end on macOS: once the app follows the system (as app.Run makes it),
-// the Follower puts the system's own colours in the System roles, both
+// End to end on macOS: given the system's values on the main thread as
+// app.Run gives them to a live window's context, the Follower puts the
+// system's own colours in the System roles, both
 // modes, alpha included, and the settings in the Resolved; the frames after
 // that read nothing and allocate nothing.
 func TestFollowerReadsTheLiveSystem(t *testing.T) {
@@ -51,6 +55,7 @@ func TestFollowerReadsTheLiveSystem(t *testing.T) {
 	onMain(func() {
 		a := platform.SystemAppearance() // what app.Run does before each frame
 		platform.ReadSystemValues(&sv)
+		g.c.SetSystemValues(platform.AppearanceSerial(), &sv)
 		g.sys = ui.Appearance{Dark: false, Accent: a.Accent, Known: a.Known}
 		g.f.SetPreference(theme.ForceLight)
 		g.frame()
@@ -76,4 +81,50 @@ func TestFollowerReadsTheLiveSystem(t *testing.T) {
 		t.Errorf("%v allocations per frame while following the live system", allocs)
 	}
 	t.Logf("accent %08X, selection %08X, text selection %08X, focus ring %08X", light[theme.Accent], light[theme.Selection], light[theme.TextSelection], light[theme.FocusRing])
+}
+
+// An offscreen render on a worker thread, while a live window follows the
+// system and after a change notification has made the platform's values
+// stale, reads nothing from AppKit and draws with the theme's own values:
+// the same as in a process with no live window.
+func TestOffscreenOnAWorkerStaysIsolated(t *testing.T) {
+	live := newRig(t)
+	var known bool
+	onMain(func() {
+		platform.SystemAppearance()
+		var sv platform.SystemValues
+		platform.ReadSystemValues(&sv)
+		live.c.SetSystemValues(platform.AppearanceSerial(), &sv)
+		live.sys = ui.Appearance{Known: true}
+		live.frames(2)
+		known = sv.Known
+		c := objc.Send(objc.Cls("NSNotificationCenter"), objc.Sel("defaultCenter"))
+		objc.Send2(c, objc.Sel("postNotificationName:object:"), uintptr(objc.Str("NSPreferredScrollerStyleDidChangeNotification")), 0)
+	})
+	if !known {
+		t.Skip("the system's values cannot be read here")
+	}
+	reads := platform.SystemValuesReads()
+	want := rex.Theme().Resolve(fakeui.New(), 2, theme.Light).Colors // nothing from the system
+	type result struct {
+		c        theme.Colors
+		settings theme.Settings
+	}
+	got := make(chan result, 1)
+	go func() {
+		runtime.LockOSThread() // a worker thread, as app.NewOffscreen locks one
+		defer runtime.UnlockOSThread()
+		g := newRig(t)
+		g.sys = ui.Appearance{Known: true}
+		g.frames(3)
+		got <- result{g.r.Colors, g.r.Settings}
+	}()
+	r := <-got
+	if n := platform.SystemValuesReads() - reads; n != 0 {
+		t.Errorf("the offscreen frames read the system's values from AppKit %d times", n)
+	}
+	if r.c != want || r.settings != (theme.Settings{}) {
+		t.Errorf("the offscreen render took the system's values: accent %08X (Rex's %08X), settings %+v",
+			r.c[theme.Accent], want[theme.Accent], r.settings)
+	}
 }

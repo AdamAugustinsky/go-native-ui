@@ -509,6 +509,33 @@
    "dark-active-top": "#2A2A2BFF",
    "light-inactive-top": "#F2F2F2FF",
    "dark-inactive-top": "#252525FF"
+  },
+  "titles": {
+   "note": "the toolbar title's x (_NSToolbarTitleField), the right edge of the last toolbar capsule before it, and the content pane's left edge (light, active, top)",
+   "finder": {
+    "style": "unified",
+    "titleX": 284,
+    "prevCapsuleRight": 274,
+    "paneX": 180
+   },
+   "settings": {
+    "style": "unified",
+    "titleX": 319,
+    "prevCapsuleRight": 309,
+    "paneX": 215
+   },
+   "chat": {
+    "style": "unified",
+    "titleX": 298,
+    "prevCapsuleRight": 272,
+    "paneX": 280
+   },
+   "notes": {
+    "style": "compact",
+    "titleX": 250,
+    "prevCapsuleRight": 164.5,
+    "paneX": 240
+   }
   }
  },
  "chrome": {

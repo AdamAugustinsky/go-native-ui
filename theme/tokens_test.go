@@ -67,6 +67,7 @@ type appkitRef struct {
 			Inset, Radius float64
 		} `json:"selections"`
 		SidebarFill map[string]string `json:"sidebarFill"`
+		Titles      map[string]any    `json:"titles"`
 	} `json:"scenes"`
 	Chrome struct {
 		Light, Dark    map[string]string
@@ -521,4 +522,38 @@ func TestMixColors(t *testing.T) {
 		t.Errorf("applying the system allocates %v times", n)
 	}
 	_ = sink
+}
+
+// The title follows the capsule before it by TitleGap, or the content
+// pane's edge by TitleInset when no capsule precedes it in the pane: finder
+// and settings (after a capsule), chat (unified, an empty pane: 18), notes
+// (compact: 10).
+func TestToolbarTitleX(t *testing.T) {
+	ref := loadRef(t)
+	r := (&Theme{}).Resolve(&fakeText{}, 2, Light)
+	n := 0
+	for scene, v := range ref.Scenes.Titles {
+		m, ok := v.(map[string]any)
+		if !ok {
+			continue
+		}
+		style := map[string]ToolbarStyle{"unified": ToolbarUnified, "compact": ToolbarCompact}[m["style"].(string)]
+		x, prev, pane := m["titleX"].(float64), m["prevCapsuleRight"].(float64), m["paneX"].(float64)
+		tb := MacWindow.Toolbars[style]
+		if got := tb.TitleX(float32(pane), float32(prev)); !near(got, x, 0.5) {
+			t.Errorf("%s: title at %v, AppKit %v", scene, got, x)
+		}
+		px := r.Window.Toolbars[style]
+		if got := px.TitleX(float32(2*pane), float32(2*prev)); !near(got, 2*x, 1) {
+			t.Errorf("%s at 2×: title at %v px, AppKit %v", scene, got, 2*x)
+		}
+		n++
+	}
+	if n != 4 {
+		t.Errorf("%d title layouts in the reference, want 4", n)
+	}
+	u := MacWindow.Toolbars[ToolbarUnified]
+	if u.TitleX(280, 0) != 298 || u.TitleX(180, 274) != 284 {
+		t.Errorf("unified: empty pane %v, after a capsule %v", u.TitleX(280, 0), u.TitleX(180, 274))
+	}
 }

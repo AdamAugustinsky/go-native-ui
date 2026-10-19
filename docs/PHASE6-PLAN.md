@@ -283,7 +283,7 @@ w, err := a.OpenWindow(app.WindowConfig{Title: "Settings", Chrome: rexui.ChromeC
   - **The contrast check composites first.** Today `theme.Contrast` (`theme/color.go:81`) compares two colours' luminance and ignores alpha. It gains `theme.ContrastOn(fg, bg, under)`: the foreground composited over its real background, which is itself composited over what is under it (a pane over the Rex field, a fill over the window).
   - **The floors:**
     - primary text (`Label`) ≥ 4.5:1 on every background it is used on;
-    - secondary, tertiary and quaternary text and placeholders ≥ AppKit's own composited contrast for the same role on `windowBackgroundColor` in the same appearance (light `Label2` ≈ 3.95:1), computed in the test from the live system values. This floor is AppKit's, and the documentation says so;
+    - secondary, tertiary and quaternary text and placeholders ≥ AppKit's weakest own composited contrast for the same role in the same appearance: on the window, group box, stripe, sidebar, toolbar capsule and text field (light `Label2`: 3.95:1 on the window, 3.84:1 at its weakest), computed in the test only from colours measured from AppKit (the live or measured system values and D0's chrome), never from Rex-only roles. This floor is AppKit's, and the documentation says so (D39, amended);
     - checked in light, dark and both high-contrast appearances, on every background a recipe pairs the role with, Rex's field and glass included.
   - So the check bites where it matters: Rex's own backgrounds must not make secondary text weaker than AppKit makes it.
 

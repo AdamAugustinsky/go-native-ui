@@ -1,9 +1,6 @@
 package theme
 
-import (
-	"gonativeui/platform"
-	"gonativeui/ui"
-)
+import "gonativeui/ui"
 
 // Preference is which mode an app shows: the system's, or one it forces.
 type Preference uint8
@@ -40,15 +37,15 @@ var followKey = ui.HashString(0, "theme/follow")
 // Make one Follower per window, as a field, and call Update once per frame
 // after the Context's Begin and before anything is drawn from the Resolved.
 // The zero value follows the system. It is pointer-free, and Update allocates
-// nothing: the crossfade is a value the Context animates, and the system's
-// values are read from the platform only when platform.AppearanceSerial
-// changes (one atomic load per frame).
+// nothing: the crossfade is a value the Context animates.
 //
-// The system's values come from the platform once the app follows the
-// system appearance (app.Run calls platform.SystemAppearance before the first
-// frame); an offscreen render that pins a mode and never asks the platform
-// gets the theme's own values, whatever the machine. PinSystem fixes them for
-// tests and renders that want particular ones.
+// The system's colours and settings come from the follower's own Context
+// (ui.Context.SystemValues), which the app of a live window fills on the main
+// thread (app.Run, when the platform reports a change). The Follower never
+// asks the platform itself: a context nobody gives values to, an offscreen
+// one on any thread, keeps the theme's own values whatever live windows the
+// process has. PinSystem fixes the values for tests and renders that want
+// particular ones.
 type Follower struct {
 	pref  Preference
 	over  uint32 // an accent colour the app chose; it takes the place of the system's
@@ -57,9 +54,9 @@ type Follower struct {
 	seen  bool   // Update has run: the first frame snaps, later changes fade
 	dark  bool   // the target of the last frame
 
-	pinned  bool         // sys was given by PinSystem: the platform is not asked
-	sysRead bool         // the platform has been asked once
-	serial  uint32       // platform.AppearanceSerial when it was last asked
+	pinned  bool         // sys was given by PinSystem: the context is not asked
+	sysRead bool         // the context's values have been taken once
+	gen     uint32       // the context's SystemValues generation last taken
 	sys     SystemValues // the values last applied
 }
 
@@ -82,9 +79,8 @@ func (f *Follower) SetAccent(rgba uint32) { f.over = rgba }
 func (f *Follower) Invalidate() { f.fresh = true }
 
 // PinSystem fixes the system's values the Follower applies to s, instead of
-// what the platform says: tests, and offscreen renders that must not depend
-// on the machine. A nil s returns to following the platform. The next Update
-// applies it.
+// what the window's context says: tests, and renders that want particular
+// values. A nil s returns to the context's. The next Update applies it.
 func (f *Follower) PinSystem(s *SystemValues) {
 	f.pinned, f.sysRead, f.fresh = s != nil, false, true
 	f.sys = SystemValues{}
@@ -121,8 +117,8 @@ func (f *Follower) Target(c *ui.Context) Mode {
 //   - The accent is the app's (SetAccent) or else the system's, when the system
 //     knows one; r.SetAccent is called only when it changed, and again after
 //     Invalidate. A theme that does not take the system accent ignores it.
-//   - The system's colours and settings (SystemValues) are read when the
-//     platform's appearance serial changed, and r.SetSystem is called only
+//   - The system's colours and settings (SystemValues) are taken from c when
+//     its values changed (their generation), and r.SetSystem is called only
 //     when they differ from the last ones, and again after Invalidate.
 //   - c.SetChromeDark gets the target mode (not the fade's middle), so the
 //     parts of the window the OS draws change at once and match what the UI is
@@ -137,11 +133,10 @@ func (f *Follower) Update(c *ui.Context, r *Resolved) Mode {
 	}
 	sysChanged := false
 	if !f.pinned {
-		if s := platform.AppearanceSerial(); !f.sysRead || s != f.serial {
-			f.sysRead, f.serial = true, s
-			var sv platform.SystemValues
+		if v, gen := c.SystemValues(); !f.sysRead || gen != f.gen {
+			f.sysRead, f.gen = true, gen
 			var next SystemValues
-			readSystem(&next, &sv)
+			next.fromPlatform(v)
 			if next != f.sys {
 				f.sys, sysChanged = next, true
 			}

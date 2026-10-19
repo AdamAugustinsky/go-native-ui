@@ -255,19 +255,23 @@ func TestSystemValuesThroughTheFollower(t *testing.T) {
 	g := newRig(t)
 	g.sys = ui.Appearance{Known: true}
 	g.frames(2)
-	// Unpinned, the label is the platform's when this process follows the
-	// system (a test on macOS may have asked it), else Rex's own.
-	label := func(m theme.Mode) uint32 {
-		var sv platform.SystemValues
-		platform.ReadSystemValues(&sv)
-		if sv.Known {
-			return sv.Colors[m][theme.Label]
-		}
-		return theme.Measured[m][theme.Label]
+	// Nobody gave this context the system's values: Rex's own, whatever the
+	// process (another test may have made it follow the system on macOS).
+	label := func(m theme.Mode) uint32 { return theme.Measured[m][theme.Label] }
+	if g.r.Colors[theme.Label] != label(theme.Light) || g.r.Settings != (theme.Settings{}) {
+		t.Fatalf("no values given: label %08X, settings %+v", g.r.Colors[theme.Label], g.r.Settings)
 	}
-	if g.r.Colors[theme.Label] != label(theme.Light) {
-		t.Fatalf("unpinned: label %08X", g.r.Colors[theme.Label])
+	// Values given to the context reach the roles; a pin wins over them.
+	var given platform.SystemValues
+	given.Known, given.ReduceTransparency = true, true
+	given.Colors[theme.Light][theme.Label] = 0x445566AA
+	g.c.SetSystemValues(1, &given)
+	g.frame()
+	if g.r.Colors[theme.Label] != 0x445566AA || !g.r.Settings.ReduceTransparency {
+		t.Errorf("given values: label %08X, settings %+v", g.r.Colors[theme.Label], g.r.Settings)
 	}
+	g.c.SetSystemValues(1, &platform.SystemValues{})
+	g.frame()
 	sys := theme.SystemValues{Known: true, Settings: theme.Settings{ReduceMotion: true, Scroller: theme.ScrollerLegacy}}
 	sys.Colors[theme.Light][theme.Label] = 0x112233CC
 	sys.Colors[theme.Dark][theme.Label] = 0xDDEEFFCC
