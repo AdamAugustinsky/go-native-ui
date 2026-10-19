@@ -29,10 +29,11 @@
 //     call of Current or Serial on. The notification is posted when the
 //     user changes Language & Region in System Settings, including the 24-hour
 //     clock switch.
-//   - Windows: no change is reported yet. Serial stays 0 and Current reads the
-//     settings afresh on every call (a few kernel calls and a small
-//     allocation), so it always sees the latest. WM_SETTINGCHANGE belongs to
-//     the window loop and will come with F3.
+//   - Windows: no change is reported by this package. Serial stays 0 and Current
+//     reads the settings afresh on every call (a few kernel calls and a small
+//     allocation), so it always sees the latest. The change itself is
+//     WM_SETTINGCHANGE ("intl"), which only the window loop sees: F3 will take it
+//     from there and deliver the event; this package needs no hook of its own.
 //   - Linux and other Unix systems: the settings come from the process's
 //     environment (LANGUAGE, LC_ALL, LC_MESSAGES, LC_TIME, LANG), which cannot
 //     change under a running program, so Serial stays 0 and the value is read

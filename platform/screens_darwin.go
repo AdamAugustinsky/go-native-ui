@@ -4,31 +4,52 @@ package platform
 
 import (
 	"strconv"
-	"sync"
 
 	"gonativeui/internal/objc"
 )
 
 var (
-	scrOnce                                                                                  sync.Once
-	scrCls                                                                                   objc.ID
-	scrKey                                                                                   objc.ID
-	scrSelScreens, scrSelCount, scrSelObjectAtIndex, scrSelFrame, scrSelVisible, scrSelScale objc.SEL
-	scrSelDeviceDescription, scrSelObjectForKey, scrSelUnsignedInt                           objc.SEL
+	scrReady                                                                    bool
+	scrCls                                                                      objc.ID
+	scrKey                                                                      objc.ID
+	scrSelScreens, scrSelCount, scrSelObjectAtIndex, scrSelFrame, scrSelVisible objc.SEL
+	scrSelScale, scrSelDeviceDescription, scrSelObjectForKey, scrSelUnsignedInt objc.SEL
 )
 
+// scrSetup loads AppKit and resolves NSScreen and the selectors. Looking a class
+// up before its framework is loaded gives nothing, and a program that asks for
+// the screens before opening a window (winstate does, to place the window) has
+// not loaded AppKit yet. Only a complete setup is remembered, so a failure is
+// tried again at the next call. Main thread only, like Screens.
+func scrSetup() bool {
+	if scrReady {
+		return true
+	}
+	if _, err := loadFramework("/System/Library/Frameworks/AppKit.framework/AppKit"); err != nil {
+		return false
+	}
+	cls := objc.Cls("NSScreen")
+	if cls == 0 {
+		return false
+	}
+	scrCls = cls
+	scrKey = objc.Retain(objc.Str("NSScreenNumber"))
+	scrSelScreens, scrSelCount, scrSelObjectAtIndex = objc.Sel("screens"), objc.Sel("count"), objc.Sel("objectAtIndex:")
+	scrSelFrame, scrSelVisible, scrSelScale = objc.Sel("frame"), objc.Sel("visibleFrame"), objc.Sel("backingScaleFactor")
+	scrSelDeviceDescription, scrSelObjectForKey, scrSelUnsignedInt = objc.Sel("deviceDescription"), objc.Sel("objectForKey:"), objc.Sel("unsignedIntValue")
+	scrReady = true
+	return true
+}
+
 // Screens returns the displays that are connected, the primary one (the one with
-// the menu bar) first. It reads AppKit and so must be called on the main
-// thread: from the loop's own goroutine, as with everything on the Window. It
-// returns nil when there are no displays (a session without a window server).
+// the menu bar) first. It reads AppKit, loading it if no window has yet, and so
+// must be called on the main thread: from the loop's own goroutine, as with
+// everything on the Window. It returns nil when there are no displays (a session
+// without a window server).
 func Screens() []ScreenInfo {
-	scrOnce.Do(func() {
-		scrCls = objc.Cls("NSScreen")
-		scrKey = objc.Retain(objc.Str("NSScreenNumber"))
-		scrSelScreens, scrSelCount, scrSelObjectAtIndex = objc.Sel("screens"), objc.Sel("count"), objc.Sel("objectAtIndex:")
-		scrSelFrame, scrSelVisible, scrSelScale = objc.Sel("frame"), objc.Sel("visibleFrame"), objc.Sel("backingScaleFactor")
-		scrSelDeviceDescription, scrSelObjectForKey, scrSelUnsignedInt = objc.Sel("deviceDescription"), objc.Sel("objectForKey:"), objc.Sel("unsignedIntValue")
-	})
+	if !scrSetup() {
+		return nil
+	}
 	pool := objc.F.Call0(objc.PoolPush)
 	defer objc.F.Call1(objc.PoolPop, pool)
 	arr := objc.Send(scrCls, scrSelScreens)

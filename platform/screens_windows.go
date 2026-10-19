@@ -34,6 +34,7 @@ var scr struct {
 // the virtual-screen coordinates that window frames use (physical pixels when the
 // process is DPI-aware). It may be called from any goroutine.
 func Screens() []ScreenInfo {
+	setDPIAwareness() // before any monitor is read: see there
 	scr.once.Do(func() {
 		u := win32.LoadSystem("user32.dll")
 		scr.enum, scr.info = win32.Proc(u, "EnumDisplayMonitors"), win32.Proc(u, "GetMonitorInfoW")

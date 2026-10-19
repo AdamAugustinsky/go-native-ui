@@ -1,6 +1,7 @@
 package platform
 
-// ScreenInfo describes one display, in the coordinates of the platform's window
+// ScreenInfo describes one display (F4, the multi-window and multi-screen work,
+// extends it), in the coordinates of the platform's window
 // frames: one space for all displays, the origin at the top-left of the primary
 // display, y growing downwards (points on macOS, physical pixels on Windows).
 type ScreenInfo struct {
