@@ -94,10 +94,11 @@ const (
 	// applies to this box only; set it on each box that should be inert.
 	Disabled
 
-	// WrapText breaks the box's display text into lines at the box's width,
-	// at the line break opportunities of UAX #14 (and at newline characters),
-	// and draws it line by line. A box whose height is TextSize is as high as
-	// the lines. A width left on auto is Pct(1). See Context.Label.
+	// WrapText breaks the box's display text into lines at the box's width
+	// (CoreText's typesetter on macOS, the line break opportunities of UAX #14
+	// elsewhere; always at newline characters) and draws it line by line. A
+	// box whose height is TextSize is as high as the lines. A width left on
+	// auto is Pct(1). See Context.Label, and RichText for styled text.
 	WrapText
 
 	// KeepFocus makes a press on the box (or on a descendant that takes none)
