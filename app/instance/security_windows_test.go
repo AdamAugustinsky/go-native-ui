@@ -33,24 +33,55 @@ func TestPipeDACLIsTheUsersOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The user may have a well-known alias in SDDL (a local administrator is "LA"):
+	// say the expected SID the same way, by round trip.
+	want := sddlSID(t, roundTrip(t, "D:P(A;;GA;;;"+sid+")"))
 	if !strings.HasPrefix(sddl, "D:") || strings.Count(sddl, "(") != 1 ||
-		!strings.HasPrefix(sddl[strings.Index(sddl, "("):], "(A;") || !strings.HasSuffix(sddl, ";;;"+sid+")") {
-		t.Errorf("the pipe's DACL is %q, want one allow entry for %s", sddl, sid)
+		!strings.HasPrefix(sddl[strings.Index(sddl, "("):], "(A;") || sddlSID(t, sddl) != want {
+		t.Errorf("the pipe's DACL is %q, want one allow entry for %s (%s)", sddl, sid, want)
 	}
+}
+
+// sddlSID is the trustee of the last entry of a DACL in SDDL.
+func sddlSID(t *testing.T, sddl string) string {
+	t.Helper()
+	i := strings.LastIndex(sddl, ";;;")
+	if i < 0 || !strings.HasSuffix(sddl, ")") {
+		t.Fatalf("not an entry: %q", sddl)
+	}
+	return sddl[i+3 : len(sddl)-1]
+}
+
+// roundTrip parses an SDDL string and prints its DACL again.
+func roundTrip(t *testing.T, sddl string) string {
+	t.Helper()
+	p, _ := syscall.UTF16PtrFromString(sddl)
+	var sd uintptr
+	if r, _, e := convertStringSD.Call(uintptr(unsafe.Pointer(p)), 1, uintptr(unsafe.Pointer(&sd)), 0); r == 0 {
+		t.Fatal(e)
+	}
+	defer localFree.Call(sd)
+	return sdString(t, sd)
 }
 
 func dacl(t *testing.T, h syscall.Handle) string {
 	t.Helper()
 	getSecurityInfo := advapi32.NewProc("GetSecurityInfo")
-	toString := advapi32.NewProc("ConvertSecurityDescriptorToStringSecurityDescriptorW")
 	var sd uintptr
 	const seKernelObject, daclInfo = 6, 4
 	if r, _, _ := getSecurityInfo.Call(uintptr(h), seKernelObject, daclInfo, 0, 0, 0, 0, uintptr(unsafe.Pointer(&sd))); r != 0 {
 		t.Fatalf("GetSecurityInfo: error %d", r)
 	}
 	defer localFree.Call(sd)
+	return sdString(t, sd)
+}
+
+// sdString prints the DACL of a security descriptor in SDDL.
+func sdString(t *testing.T, sd uintptr) string {
+	t.Helper()
+	toString := advapi32.NewProc("ConvertSecurityDescriptorToStringSecurityDescriptorW")
 	var str *uint16
-	if r, _, e := toString.Call(sd, 1, daclInfo, uintptr(unsafe.Pointer(&str)), 0); r == 0 {
+	if r, _, e := toString.Call(sd, 1, 4, uintptr(unsafe.Pointer(&str)), 0); r == 0 {
 		t.Fatalf("ConvertSecurityDescriptorToStringSecurityDescriptor: %v", e)
 	}
 	defer localFree.Call(uintptr(unsafe.Pointer(str)))
