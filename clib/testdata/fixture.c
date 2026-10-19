@@ -33,19 +33,21 @@ static void set_err(fx_err *e, int32_t code, const char *fmt, ...) {
 
 uint64_t fx_thread(void) { return (uint64_t)(uintptr_t)pthread_self(); }
 
+// A thread-local "last error", the pattern clib cannot serve without pinning.
+static __thread int32_t tls_err;
+
 // fx_try fails unless tag is a multiple of 3, naming the tag and the thread
-// in the error. *tid gets the thread either way. The error is left
-// untouched on success.
+// in the error, which it also leaves as the thread's last error (fx_tls_last).
+// *tid gets the thread either way. The error is left untouched on success.
 int32_t fx_try(int64_t tag, fx_err *err, uint64_t *tid) {
 	*tid = fx_thread();
 	if (tag % 3 == 0) return 0;
+	tls_err = (int32_t)(tag % 1000) + 1;
 	set_err(err, (int32_t)(tag % 1000) + 1, "tag %lld failed on thread %llu", (long long)tag,
 	        (unsigned long long)*tid);
 	return -1;
 }
 
-// A thread-local "last error", the pattern clib cannot serve without pinning.
-static __thread int32_t tls_err;
 int32_t fx_tls_fail(int32_t code) { tls_err = code; return -1; }
 int32_t fx_tls_last(void) { return tls_err; }
 
