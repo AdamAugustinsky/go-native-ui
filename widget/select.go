@@ -63,8 +63,12 @@ func (k *Kit) Select(label string, sel *int, options []string) Signal {
 			if s.Clicked || s.Activated || s.Action&(ui.ActExpand|ui.ActShowMenu) != 0 || (c.Focused(id) && c.TakeKey(ui.KeyDown, 0)) {
 				c.RequestMenu(ui.MenuRequest{Kind: ui.MenuList, Owner: key, Options: options, Selected: *sel, Rect: r})
 			}
-			if i, ok := c.MenuChoice(key); ok && i >= 0 && i < len(options) && i != *sel {
+			if i, ok := c.MenuChoice(id, options); ok && i != *sel {
+				// The box above was built with the old value: show the new one
+				// in a frame of its own, which nothing else may ask for (a
+				// choice made with the keyboard leaves no events behind).
 				*sel, changed = i, true
+				c.RequestFrame()
 			}
 		}
 		sig := k.SignalOf(id)

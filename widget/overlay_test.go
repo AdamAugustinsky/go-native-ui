@@ -359,7 +359,7 @@ func TestNativeMenusAreRequested(t *testing.T) {
 	if _, open := g.find(ui.RoleList, "Options"); open || g.k.MenuOpen() {
 		t.Fatal("the select drew its options")
 	}
-	g.in.SetMenuChoice(r.Owner, 2)
+	g.in.SetMenuChoice(r.Owner, 2, r.Rev)
 	g.frame()
 	if v.sel != 2 {
 		t.Fatalf("the choice gave sel %d, want 2", v.sel)

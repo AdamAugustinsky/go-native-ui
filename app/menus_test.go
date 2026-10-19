@@ -3,6 +3,8 @@ package app
 import (
 	"testing"
 
+	"gonativeui/gpu"
+	"gonativeui/internal/fakeui"
 	"gonativeui/menu"
 	"gonativeui/platform"
 	"gonativeui/ui"
@@ -83,13 +85,22 @@ func TestNativeMenuSpec(t *testing.T) {
 		t.Errorf("the first menu has role %d", app.Role)
 	}
 	var acts []platform.MenuAction
-	var settings platform.MenuItem
+	var settings, quit, about, hide platform.MenuItem
 	for _, it := range app.Items {
 		switch it.Kind {
 		case platform.MenuItemAction:
 			acts = append(acts, it.Action)
-			if it.ID == uint16(mcSettings) {
-				settings = it
+			switch it.Action {
+			case platform.MenuNone:
+				if it.ID == uint16(mcSettings) {
+					settings = it
+				}
+			case platform.MenuQuit:
+				quit = it
+			case platform.MenuAbout:
+				about = it
+			case platform.MenuHide:
+				hide = it
 			}
 		case platform.MenuItemSubmenu:
 			if s.Menus[it.Submenu].Role != platform.MenuRoleServices {
@@ -109,13 +120,18 @@ func TestNativeMenuSpec(t *testing.T) {
 	if settings.Title != "Settings…" || settings.Key != ',' || settings.Mods != platform.ModSuper || settings.Action != platform.MenuNone {
 		t.Errorf("Settings %+v", settings)
 	}
+	// The system's items keep the model's command of their role, so that the
+	// model decides them; their title and key equivalent are macOS's.
+	if quit.ID != uint16(mcQuit) || quit.Title != "" || quit.Key != 0 || about.ID != uint16(mcAbout) || hide.ID != 0 {
+		t.Errorf("Quit %+v, About %+v, Hide (no command) %+v", quit, about, hide)
+	}
 	file := s.Menus[0]
 	if len(file.Items) != 1 || file.Items[0].ID != uint16(mcOpen) || file.Items[0].Key != 'o' || file.Items[0].Mods != platform.ModSuper || file.Items[0].Symbol != "folder" {
 		t.Errorf("File %+v: want Open… alone (Settings and Quit moved, their separators gone)", file.Items)
 	}
 	view := s.Menus[1]
 	if len(view.Items) != 2 || view.Items[0].Key != platform.MenuKeyBackspace || view.Items[0].Mods != platform.ModSuper|platform.ModShift ||
-		view.Items[1].Action != platform.MenuZoom || view.Items[1].ID != 0 {
+		view.Items[1].Action != platform.MenuZoom || view.Items[1].ID != uint16(mcZoom) {
 		t.Errorf("View %+v", view.Items)
 	}
 	if help := s.Menus[2]; help.Role != platform.MenuRoleHelp || len(help.Items) != 0 {
@@ -178,6 +194,61 @@ func TestMenuState(t *testing.T) {
 	}
 	if n := testing.AllocsPerRun(100, func() { a.menuState(uint16(mcToggle), platform.MenuNone) }); n != 0 {
 		t.Errorf("menuState allocates %.1f times", n)
+	}
+}
+
+// The system's items are the model's to decide too: a disabled RoleZoom is
+// disabled; while a drawn modal is open Quit is held back unless its command
+// is InModal, and so are the standard system items without a command (Hide,
+// Minimize …), like any command that is not.
+func TestMenuStateOfSystemItems(t *testing.T) {
+	m := testMenuModel(t, true)
+	a := &App{UI: ui.New(fakeui.New()), menu: m}
+	var list gpu.DrawList
+	frame := func(modal bool) {
+		in := ui.Input{Focused: true}
+		a.UI.Begin(&in, 400, 300, 1, 1.0/60)
+		if modal {
+			a.UI.BeginOverlay(1, ui.OverlayModal, [4]float32{0, 0, 400, 300}, ui.PlaceCenter)
+			a.UI.EndOverlay()
+		}
+		a.UI.End(&list)
+	}
+	frame(false)
+	m.SetEnabled(mcZoom, false)
+	if on, _ := a.menuState(uint16(mcZoom), platform.MenuZoom); on {
+		t.Error("a disabled RoleZoom is enabled")
+	}
+	for _, act := range []platform.MenuAction{platform.MenuHide, platform.MenuMinimize, platform.MenuClose, platform.MenuQuit} {
+		if on, _ := a.menuState(0, act); !on {
+			t.Errorf("standard item %d disabled without a modal", act)
+		}
+	}
+	if on, _ := a.menuState(uint16(mcQuit), platform.MenuQuit); !on {
+		t.Error("Quit disabled without a modal")
+	}
+	frame(true)
+	frame(true)
+	if on, _ := a.menuState(uint16(mcQuit), platform.MenuQuit); on {
+		t.Error("an unmarked RoleQuit is enabled in a modal")
+	}
+	for _, act := range []platform.MenuAction{platform.MenuHide, platform.MenuMinimize, platform.MenuClose, platform.MenuQuit} {
+		if on, _ := a.menuState(0, act); on {
+			t.Errorf("standard item %d enabled in a modal", act)
+		}
+	}
+	m2, err := menu.NewModel([]menu.Command{{ID: 1, Role: menu.RoleQuit, InModal: true}}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.menu = m2
+	if on, _ := a.menuState(1, platform.MenuQuit); !on {
+		t.Error("a RoleQuit marked InModal is disabled in a modal")
+	}
+	// The field's claim is asked for every key-down: it allocates nothing.
+	ev := platform.Event{Kind: platform.EvKey, Key: platform.KeyA + 'Z' - 'A', Mods: platform.ModSuper, Flags: platform.FlagDown}
+	if n := testing.AllocsPerRun(100, func() { a.fieldTakesKey(&ev) }); n != 0 {
+		t.Errorf("fieldTakesKey allocates %.1f times", n)
 	}
 }
 

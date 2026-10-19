@@ -46,22 +46,37 @@ func (a *App) syncMenuBar() {
 	a.menuDirty = false
 	a.menuSpec = nativeMenuSpec(a.menu)
 	if a.menuStateFn == nil {
-		a.menuStateFn = a.menuState
+		a.menuStateFn, a.fieldKeysFn = a.menuState, a.fieldTakesKey
 	}
 	a.Win.SetMenuBar(&a.menuSpec, a.menuStateFn)
+	a.Win.SetFieldKeys(a.fieldKeysFn)
 }
 
 // menuState is the platform's MenuState: a command's item is enabled as the
-// model's State says, given the last frame's modal and focus; an edit item of
-// the standard Edit menu (id 0) when a text field has the focus.
+// model's State says, given the last frame's modal and focus, the system's
+// actions included (a disabled RoleZoom does not zoom; Quit waits for the
+// modal unless its command is InModal). A standard item without a command
+// (id 0): an edit item when a text field has the focus; a system item (Hide,
+// Quit, Minimize …) unless a modal is open, as a command not marked InModal.
 func (a *App) menuState(id uint16, act platform.MenuAction) (enabled, checked bool) {
 	if id == 0 {
-		return act.IsEdit() && a.UI.TextFieldFocused(), false
+		if act.IsEdit() {
+			return a.UI.TextFieldFocused(), false
+		}
+		return act != platform.MenuNone && !a.UI.ModalOpen(), false
 	}
 	if a.menu == nil {
 		return false, false
 	}
 	return a.menu.State(a.UI, menu.ID(id))
+}
+
+// fieldTakesKey is the platform's FieldKeys: whether the focused text field
+// takes key-down e itself, as the next frame will decide it (DECISIONS D28),
+// so that no native menu item's key equivalent acts on it.
+func (a *App) fieldTakesKey(e *platform.Event) bool {
+	code := keyCode(e.Key)
+	return code != 0 && a.UI.FieldClaims(ui.KeyEvent{Code: code, Mods: mods(e.Mods), Down: true})
 }
 
 // popUpMenus opens the native menu the last frame requested, if any. It is
@@ -103,7 +118,7 @@ func (a *App) popUpMenus() {
 	}
 	i := a.Win.PopUpMenu(&p)
 	if r.Kind == ui.MenuList && i >= 0 {
-		a.tr.in.SetMenuChoice(r.Owner, i)
+		a.tr.in.SetMenuChoice(r.Owner, i, r.Rev)
 		a.tr.dirty = true
 		a.p.invalidate()
 	}
@@ -120,6 +135,7 @@ func nativeMenuSpec(m *menu.Model) platform.MenuSpec {
 		menus, bar = m.Menus(), m.Bar()
 	}
 	var settings *menu.Command
+	var appCmds [platform.MenuQuit + 1]*menu.Command // the model's commands of the application menu's standard items
 	hasEdit, hasWindow, hasHelp := false, false, false
 	for i := range menus {
 		s.Menus = append(s.Menus, platform.Menu{Title: menus[i].Title, Items: nativeItems(m, menus[i].Items)})
@@ -133,8 +149,11 @@ func nativeMenuSpec(m *menu.Model) platform.MenuSpec {
 	if m != nil {
 		cmds := m.Commands()
 		for i := range cmds {
-			if cmds[i].Role == menu.RoleSettings {
+			switch cmds[i].Role {
+			case menu.RoleSettings:
 				settings = &cmds[i]
+			case menu.RoleAbout, menu.RoleHide, menu.RoleHideOthers, menu.RoleShowAll, menu.RoleQuit:
+				appCmds[commandItem(&cmds[i]).Action] = &cmds[i]
 			}
 		}
 	}
@@ -149,9 +168,19 @@ func nativeMenuSpec(m *menu.Model) platform.MenuSpec {
 	}
 	act := func(a platform.MenuAction) platform.MenuItem { return platform.MenuItem{Action: a} }
 	sep := platform.MenuItem{Kind: platform.MenuItemSeparator}
+	// An application menu item is the system's standard one (title and key
+	// equivalent as macOS has them), deciding with the model's command of its
+	// role, if there is one (enabled, InModal).
+	appAct := func(a platform.MenuAction) platform.MenuItem {
+		it := act(a)
+		if c := appCmds[a]; c != nil {
+			it.ID = uint16(c.ID)
+		}
+		return it
+	}
 
 	services := add(platform.Menu{Title: "Services", Role: platform.MenuRoleServices})
-	appItems := []platform.MenuItem{act(platform.MenuAbout), sep}
+	appItems := []platform.MenuItem{appAct(platform.MenuAbout), sep}
 	if settings != nil {
 		it := commandItem(settings)
 		if it.Title == "" {
@@ -163,7 +192,7 @@ func nativeMenuSpec(m *menu.Model) platform.MenuSpec {
 		appItems = append(appItems, it, sep)
 	}
 	appItems = append(appItems, platform.MenuItem{Kind: platform.MenuItemSubmenu, Submenu: services}, sep,
-		act(platform.MenuHide), act(platform.MenuHideOthers), act(platform.MenuShowAll), sep, act(platform.MenuQuit))
+		appAct(platform.MenuHide), appAct(platform.MenuHideOthers), appAct(platform.MenuShowAll), sep, appAct(platform.MenuQuit))
 	s.Bar = append(s.Bar, add(platform.Menu{Title: "Application", Role: platform.MenuRoleApp, Items: appItems}))
 
 	edit := -1
@@ -237,29 +266,30 @@ func appMenuRole(r menu.Role) bool {
 }
 
 // commandItem is the native item of a command. A role with system behaviour
-// becomes its standard action; an edit role keeps its id too, so that the
-// command still reaches Match (the focused field's edit, or the app's own
+// becomes its standard action and keeps its id, so that the model decides
+// the item (enabled, the modal rule); an edit role keeps its id too, so that
+// the command still reaches Match (the focused field's edit, or the app's own
 // copy of a list selection).
 func commandItem(cmd *menu.Command) platform.MenuItem {
 	it := platform.MenuItem{ID: uint16(cmd.ID), Title: cmd.Title, Symbol: cmd.Symbol}
 	it.Key, it.Mods = keyEquivalent(cmd.Shortcut)
 	switch cmd.Role {
 	case menu.RoleAbout:
-		it.Action, it.ID = platform.MenuAbout, 0
+		it.Action = platform.MenuAbout
 	case menu.RoleQuit:
-		it.Action, it.ID = platform.MenuQuit, 0
+		it.Action = platform.MenuQuit
 	case menu.RoleHide:
-		it.Action, it.ID = platform.MenuHide, 0
+		it.Action = platform.MenuHide
 	case menu.RoleHideOthers:
-		it.Action, it.ID = platform.MenuHideOthers, 0
+		it.Action = platform.MenuHideOthers
 	case menu.RoleShowAll:
-		it.Action, it.ID = platform.MenuShowAll, 0
+		it.Action = platform.MenuShowAll
 	case menu.RoleMinimize:
-		it.Action, it.ID = platform.MenuMinimize, 0
+		it.Action = platform.MenuMinimize
 	case menu.RoleZoom:
-		it.Action, it.ID = platform.MenuZoom, 0
+		it.Action = platform.MenuZoom
 	case menu.RoleCloseWindow:
-		it.Action, it.ID = platform.MenuClose, 0
+		it.Action = platform.MenuClose
 	case menu.RoleUndo:
 		it.Action = platform.MenuUndo
 	case menu.RoleRedo:

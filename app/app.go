@@ -158,6 +158,7 @@ type App struct {
 	menuDirty   bool // the bar is to be (re)built at the next safe point
 	menuSpec    platform.MenuSpec
 	menuStateFn platform.MenuState
+	fieldKeysFn platform.FieldKeys
 	listSpec    platform.MenuSpec // the options of a select, reused
 	listItems   []platform.MenuItem
 	demo        *menuDemo // GNUI_MENU_DEMO (menudemo.go)

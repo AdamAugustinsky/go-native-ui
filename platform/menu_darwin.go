@@ -17,10 +17,15 @@ import (
 // App commands target GNUIMenuTarget's gnuiCommand:, with the command id in
 // the item's tag. The edit actions are nil-targeted standard selectors
 // (copy:, paste: …) that GNUIView implements, so they travel the responder
-// chain; the other standard actions are AppKit's own (hide:,
-// performMiniaturize: …). validateMenuItem: (on GNUIMenuTarget for commands,
-// on GNUIView for the edit actions) asks the app's MenuState and sets the
-// check mark. Every menu has GNUIMenuTarget as its delegate: while one is
+// chain. The other standard actions keep AppKit's selectors (hide:,
+// performMiniaturize: …), so that AppKit knows the items for what they are,
+// but target GNUIMenuTarget, which validates them with the app's MenuState
+// and AppKit's own target for the action (the window, the application) and
+// then sends the action on to that target. validateMenuItem: (on
+// GNUIMenuTarget, and on GNUIView for the edit actions) asks the app's
+// MenuState and sets the check mark; while a key-down the app's focused text
+// field takes is being sent, it disables every item (FieldKeys). Every menu
+// has GNUIMenuTarget as its delegate: while one is
 // open (menuWillOpen: … menuDidClose:) the display link runs the frame
 // handler, as in a live resize, so the content keeps drawing during AppKit's
 // tracking loop.
@@ -61,6 +66,9 @@ var (
 	selGnuiChoose      = objc.Sel("gnuiChoose:")
 	selGnuiQuit        = objc.Sel("gnuiQuit:")
 	selGnuiWillSend    = objc.Sel("gnuiMenuWillSend:")
+	selTargetForAction = objc.Sel("targetForAction:to:from:")
+	selSendActionTo    = objc.Sel("sendAction:to:from:")
+	selValidateUIItem  = objc.Sel("validateUserInterfaceItem:")
 
 	// the selectors of the standard actions, by MenuAction
 	actionSel = [...]objc.SEL{
@@ -95,18 +103,19 @@ var nativeMenus struct {
 	state   MenuState // the app's validation
 	bar     objc.ID   // the main menu we installed (retained)
 	appName string
-	depth   int // menus open now (menuWillOpen: minus menuDidClose:)
-	chosen  int // the index of the item the last action came from, -1 none
+	depth   int     // menus open now (menuWillOpen: minus menuDidClose:)
+	chosen  int     // the index of the item the last action came from, -1 none
+	root    objc.ID // the menu PopUpMenu shows, while it does
 	popups  []popupMenu
 }
 
 // popupMenu is a cached menu tree for PopUpMenu: the tree built for menu idx
-// of spec, and a copy of the items it was built from, menu by menu in the
-// order the build visited them.
+// of spec, and a copy of the menus it was built from (title, role, items),
+// in the order the build visited them.
 type popupMenu struct {
 	spec  *MenuSpec
 	idx   int
-	items [][]MenuItem
+	menus []Menu
 	menu  objc.ID // retained
 	font  bool    // set to the control font (PopupList)
 }
@@ -128,6 +137,11 @@ func registerMenuTarget() {
 	t.Method(selMenuWillOpen, "v@:@", menuWillOpen)
 	t.Method(selMenuDidClose, "v@:@", menuDidClose)
 	t.Method(selGnuiWillSend, "v@:@", menuWillSend)
+	for a := MenuAbout; int(a) < len(actionSel); a++ {
+		if !a.IsEdit() && a != MenuQuit {
+			t.Method(actionSel[a], "v@:@", menuSystem)
+		}
+	}
 	menuTargetClass = t.Register()
 }
 
@@ -200,10 +214,17 @@ func (w *Window) SetMenuBar(spec *MenuSpec, state MenuState) {
 	nativeMenus.bar = bar
 }
 
+// SetFieldKeys sets the function that says which key-downs the app's focused
+// text field takes itself: while such a key is sent, every menu item
+// validates as disabled, so no key equivalent acts on it and it reaches the
+// app as EvKey (DECISIONS D28: the focused field first). nil: none.
+func (w *Window) SetFieldKeys(f FieldKeys) { w.fieldKeys = f }
+
 // PopUpMenu shows menu p.Menu of p.Spec over the window, placed as p.Kind
 // says, and returns when the user has chosen an item or dismissed it: the
-// index of the chosen item in that menu (an item of a submenu counts as -1),
-// -1 for none. A chosen command also arrives as EvCommand. AppKit runs its
+// index of the chosen item in that menu, -1 for none and for an item of a
+// submenu (whose command arrives all the same). A chosen command also
+// arrives as EvCommand. AppKit runs its
 // tracking loop meanwhile, during which the frame handler draws. Main thread,
 // at a safe point (not inside the frame handler). The tree is cached: it is
 // built again only when the spec's items change.
@@ -245,8 +266,9 @@ func (w *Window) PopUpMenu(p *Popup) int {
 		objc.F.Reset().Arg(uintptr(m)).Arg(uintptr(selSetMinWidth)).ArgF64(x1 - x0 + listInsetX).Call(objc.MsgSend)
 		x, y = x0-listInsetX+listTextX, w.hPt-(y0+y1)/2+listItemH/2
 	}
-	nativeMenus.chosen = -1
+	nativeMenus.chosen, nativeMenus.root = -1, m
 	objc.F.Reset().Arg(uintptr(m)).Arg(uintptr(selPopUpMenu)).Arg(uintptr(item)).ArgPoint(x, y).Arg(uintptr(w.view)).Call(objc.MsgSend)
+	nativeMenus.root = 0
 	return nativeMenus.chosen
 }
 
@@ -275,12 +297,12 @@ func popupFor(spec *MenuSpec, idx int) *popupMenu {
 		if pm.spec != spec || pm.idx != idx {
 			continue
 		}
-		if k := 0; sameTree(spec, idx, pm.items, &k, 0) {
+		if k := 0; sameTree(spec, idx, pm.menus, &k, 0) {
 			return pm
 		}
 		objc.Release(pm.menu)
-		pm.items = pm.items[:0]
-		pm.menu, pm.font = buildMenu(spec, idx, 0, &pm.items), false
+		pm.menus = pm.menus[:0]
+		pm.menu, pm.font = buildMenu(spec, idx, 0, &pm.menus), false
 		return pm
 	}
 	if len(nativeMenus.popups) == maxPopups {
@@ -289,26 +311,29 @@ func popupFor(spec *MenuSpec, idx int) *popupMenu {
 	}
 	nativeMenus.popups = append(nativeMenus.popups, popupMenu{spec: spec, idx: idx})
 	pm := &nativeMenus.popups[len(nativeMenus.popups)-1]
-	pm.menu = buildMenu(spec, idx, 0, &pm.items)
+	pm.menu = buildMenu(spec, idx, 0, &pm.menus)
 	return pm
 }
 
-// sameTree reports whether menu idx of spec and its submenus have the items
-// recorded in items, from position *k on, in the order buildMenu visits them.
-func sameTree(spec *MenuSpec, idx int, items [][]MenuItem, k *int, depth int) bool {
-	if *k >= len(items) || depth > maxMenuDepth {
+// sameTree reports whether menu idx of spec and its submenus are the menus
+// recorded in menus, from position *k on, in the order buildMenu visits
+// them: the same titles (a submenu item without a title of its own shows its
+// menu's), roles and items.
+func sameTree(spec *MenuSpec, idx int, menus []Menu, k *int, depth int) bool {
+	if *k >= len(menus) || depth > maxMenuDepth {
 		return false
 	}
-	have, want := items[*k], spec.Menus[idx].Items
+	have, want := &menus[*k], &spec.Menus[idx]
 	*k++
-	if len(have) != len(want) {
+	if have.Title != want.Title || have.Role != want.Role || len(have.Items) != len(want.Items) {
 		return false
 	}
-	for i := range want {
-		if have[i] != want[i] {
+	for i := range want.Items {
+		it := &want.Items[i]
+		if have.Items[i] != *it {
 			return false
 		}
-		if s := want[i].Submenu; want[i].Kind == MenuItemSubmenu && s >= 0 && s < len(spec.Menus) && !sameTree(spec, s, items, k, depth+1) {
+		if s := it.Submenu; it.Kind == MenuItemSubmenu && s >= 0 && s < len(spec.Menus) && !sameTree(spec, s, menus, k, depth+1) {
 			return false
 		}
 	}
@@ -320,8 +345,8 @@ func sameTree(spec *MenuSpec, idx int, items [][]MenuItem, k *int, depth int) bo
 const maxMenuDepth = 8
 
 // buildMenu builds menu idx of spec and its submenus, retained; record, if
-// not nil, gets a copy of each menu's items in the order they are visited.
-func buildMenu(spec *MenuSpec, idx, depth int, record *[][]MenuItem) objc.ID {
+// not nil, gets a copy of each menu in the order they are visited.
+func buildMenu(spec *MenuSpec, idx, depth int, record *[]Menu) objc.ID {
 	m := &spec.Menus[idx]
 	menu := objc.Send(clsMenu, selAlloc)
 	t := newNSString(m.Title)
@@ -329,7 +354,7 @@ func buildMenu(spec *MenuSpec, idx, depth int, record *[][]MenuItem) objc.ID {
 	objc.Release(t)
 	objc.Send1(menu, selSetDelegate, uintptr(nativeMenus.target))
 	if record != nil {
-		*record = append(*record, append([]MenuItem(nil), m.Items...))
+		*record = append(*record, Menu{Title: m.Title, Role: m.Role, Items: append([]MenuItem(nil), m.Items...)})
 	}
 	if m.Role == MenuRoleServices {
 		objc.Send1(nsApp, selSetServicesMenu, uintptr(menu))
@@ -384,7 +409,7 @@ func actionItem(it *MenuItem) objc.ID {
 		sel, target = selGnuiChoose, nativeMenus.target
 	case int(it.Action) < len(actionSel):
 		sel = actionSel[it.Action]
-		if it.Action == MenuQuit {
+		if !it.Action.IsEdit() { // validated by the app, then sent on (menuSystem)
 			target = nativeMenus.target
 		}
 	}
@@ -555,13 +580,14 @@ func setItemState(item objc.ID, on bool) {
 	}
 }
 
-// chose records the item an action came from (PopUpMenu's result) and that
-// a menu acted during this event (handle drops the key-down that chose it;
-// menuWillSend does that for every item).
+// chose records the item an action came from (PopUpMenu's result: its index
+// in the menu popped up, -1 for an item of a submenu) and that a menu acted
+// during this event (handle drops the key-down that chose it; menuWillSend
+// does that for every item).
 func chose(item objc.ID) {
 	nativeMenus.chosen = -1
-	if item != 0 && objc.SendBool1(item, selRespondsTo, uintptr(selMenuOfItem)) {
-		if m := objc.Send(item, selMenuOfItem); m != 0 {
+	if item != 0 && nativeMenus.root != 0 && objc.SendBool1(item, selRespondsTo, uintptr(selMenuOfItem)) {
+		if m := objc.Send(item, selMenuOfItem); m == nativeMenus.root {
 			nativeMenus.chosen = int(objc.Send1(m, selIndexOfItem, uintptr(item)))
 		}
 	}
@@ -603,6 +629,42 @@ func menuQuit(c *ffi.CB) {
 	}
 }
 
+// menuSystem is GNUIMenuTarget's hide:, performZoom: … (the standard actions
+// other than Quit and the edit ones): the item was validated by the app, so
+// the action goes on to AppKit's own target for it, through the responder
+// chain, as the item would have sent it.
+func menuSystem(c *ffi.CB) {
+	sender := objc.ID(c.Int(2))
+	chose(sender)
+	objc.Send3(nsApp, selSendActionTo, uintptr(c.Int(1)), 0, uintptr(sender))
+}
+
+// actionOf is the standard action whose selector is sel, MenuNone if none.
+func actionOf(sel objc.SEL) MenuAction {
+	for a := MenuAbout; int(a) < len(actionSel); a++ {
+		if actionSel[a] == sel {
+			return a
+		}
+	}
+	return MenuNone
+}
+
+// systemValid is AppKit's own validation of a standard action's item: the
+// object the action would go to (the key window, the application …) must
+// exist and enable it.
+func systemValid(item objc.ID, sel objc.SEL) bool {
+	t := objc.Send3(nsApp, selTargetForAction, uintptr(sel), 0, uintptr(item))
+	switch {
+	case t == 0:
+		return false
+	case objc.SendBool1(t, selRespondsTo, uintptr(selValidateItem)):
+		return objc.SendBool1(t, selValidateItem, uintptr(item))
+	case objc.SendBool1(t, selRespondsTo, uintptr(selValidateUIItem)):
+		return objc.SendBool1(t, selValidateUIItem, uintptr(item))
+	}
+	return true
+}
+
 // viewEditAction is GNUIView's undo:, redo:, cut:, copy:, paste:, delete:
 // and selectAll:: EvCommand with the item's command, or with FlagStandard and
 // the action for an item without one.
@@ -621,14 +683,24 @@ func viewEditAction(c *ffi.CB) {
 	}
 }
 
-// menuValidate is GNUIMenuTarget's validateMenuItem:.
+// menuValidate is GNUIMenuTarget's validateMenuItem:: an app command, Quit
+// and the system's actions ask the app (and the system's actions AppKit's
+// target as well); a list option is enabled.
 func menuValidate(c *ffi.CB) {
 	item := objc.ID(c.Int(2))
-	if objc.SEL(objc.Send(item, selAction)) != selGnuiCommand {
-		c.RetBool(true) // a list option, Quit
-		return
+	sel := objc.SEL(objc.Send(item, selAction))
+	id := uint16(objc.Send(item, selTag))
+	switch sel {
+	case selGnuiChoose:
+		c.RetBool(true)
+	case selGnuiCommand:
+		c.RetBool(validate(item, id, MenuNone))
+	case selGnuiQuit:
+		c.RetBool(validate(item, id, MenuQuit))
+	default:
+		act := actionOf(sel)
+		c.RetBool(act != MenuNone && validate(item, id, act) && systemValid(item, sel))
 	}
-	c.RetBool(validate(item, uint16(objc.Send(item, selTag)), MenuNone))
 }
 
 // viewValidate is GNUIView's validateMenuItem:: the edit actions ask the
@@ -644,10 +716,15 @@ func viewValidate(c *ffi.CB) {
 }
 
 // validate asks the app's MenuState about an item and sets its check mark.
+// While the key-down being sent is the focused text field's, every item is
+// disabled: no key equivalent may take it from the field.
 func validate(item objc.ID, id uint16, act MenuAction) bool {
+	if w := theWindow.Load(); w != nil && w.fieldKey {
+		return false
+	}
 	fn := nativeMenus.state
 	if fn == nil {
-		return id != 0
+		return id != 0 || (act != MenuNone && !act.IsEdit())
 	}
 	on, checked := fn(id, act)
 	setItemState(item, checked)

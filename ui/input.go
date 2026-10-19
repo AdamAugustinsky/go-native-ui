@@ -227,9 +227,11 @@ type Input struct {
 
 	// MenuIndex is the option the user chose in the native list menu that
 	// the box MenuOwner requested (Context.RequestMenu), for the frame
-	// HasMenuChoice is set in. Set it with SetMenuChoice.
+	// HasMenuChoice is set in, among the options identified by MenuRev
+	// (MenuRequest.Rev). Set it with SetMenuChoice.
 	MenuOwner     Key
 	MenuIndex     int32
+	MenuRev       uint64
 	HasMenuChoice bool
 }
 

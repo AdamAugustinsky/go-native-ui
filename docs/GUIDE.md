@@ -422,7 +422,11 @@ Quit) and the Window and Help menus, with a standard Edit menu that acts on the
 focused field because the model has none. `Kit.MenuBar` then draws nothing, and
 context menus, `MenuButton` and `Select` open native menus. A native item's
 command reaches `Kit.Command` like a shortcut; AppKit matches the key
-equivalents, so a key fires its command once. On Windows and Linux `Kit.MenuBar`
+equivalents, so a key fires its command once, and still after the focused field:
+a chord the field takes (⌘Z in it) never fires a menu item. The system's items
+(Quit, Hide, Minimize, Zoom, Close) follow the model and the modal rule too:
+a command with their role decides them, and a dialog holds them back unless the
+command is `InModal`. On Windows and Linux `Kit.MenuBar`
 draws the bar inside the window. Commands with edit roles (`menu.RoleCopy` and
 the like) go in an app's own Edit menu, where it wants one; they act on the
 focused field, or reach the app when no field has the focus.

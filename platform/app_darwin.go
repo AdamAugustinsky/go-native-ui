@@ -84,7 +84,11 @@ func (w *Window) handle(ev objc.ID) {
 	// (an arrow or Enter with nothing composing, doCommandBySelector:) is.
 	markedBefore := len(w.marked) > 0
 	w.imeUsed, w.cmdCalled, w.menuActed = false, false, false
+	// A key the focused text field takes is not a key equivalent: the menu
+	// items validate as disabled while AppKit matches it (validate).
+	w.fieldKey = keyIdx >= 0 && w.fieldKeys != nil && w.fieldKeys(&w.q.ev[keyIdx])
 	objc.Send1(w.app, selSendEvent, uintptr(ev))
+	w.fieldKey = false
 	if w.menuActed && keyIdx >= 0 && keyIdx < len(w.q.ev) && w.q.ev[keyIdx].Kind == EvKey && w.q.ev[keyIdx].Time == t {
 		// The key was a menu item's key equivalent (performKeyEquivalent:): the
 		// item delivered its command, so the key is not the app's as well. (A

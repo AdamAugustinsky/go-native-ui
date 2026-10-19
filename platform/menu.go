@@ -15,7 +15,8 @@ package platform
 // them itself; an edit item without an ID arrives with FlagStandard and the
 // MenuAction in Tag. The other standard actions are the system's (Hide,
 // Minimize, the About panel …) and arrive as nothing, or as the event the
-// system's action causes: Close and Quit as EvClose.
+// system's action causes: Close and Quit as EvClose. Their items keep their
+// ID all the same, so that MenuState decides them like any command.
 //
 // AppKit handles the key equivalents (performKeyEquivalent:): a key-down
 // that chose an item is not queued as EvKey, so a shortcut fires exactly
@@ -24,6 +25,14 @@ package platform
 // Whether an item is enabled and checked is asked when a menu opens and
 // before a key equivalent acts (validateMenuItem:), through the MenuState
 // function given to SetMenuBar, on the main thread; it must not allocate.
+// Every item is asked, the system's actions included (AppKit's own
+// validation of those must agree as well); the window's own buttons (close,
+// minimise, zoom) are not menu items and stay the system's.
+//
+// The app's focused text field comes first (DECISIONS D28): a key-down that
+// the FieldKeys function given to SetFieldKeys claims for it disables every
+// item while AppKit matches the key equivalents, so that no item acts on it
+// and it reaches the app as a key.
 
 // MenuSpec describes native menus: Menus are all of them, Bar the indices of
 // those in the menu bar, in order. A menu is shown in the bar, as the submenu
@@ -159,9 +168,15 @@ const (
 )
 
 // MenuState says whether the item with command id (and standard action act)
-// is enabled and checked now. id is 0 for an edit item of the platform's own
-// (no app command). It runs on the main thread and must not allocate.
+// is enabled and checked now. id is 0 for a standard item without an app
+// command (an edit action, Hide, Quit …). It runs on the main thread and
+// must not allocate.
 type MenuState func(id uint16, act MenuAction) (enabled, checked bool)
+
+// FieldKeys reports whether the app's focused text field takes key-down e
+// (an EvKey) itself, so that no menu item may act on it (SetFieldKeys). It
+// runs on the main thread, between frames, and must not allocate.
+type FieldKeys func(e *Event) bool
 
 // PopupKind is how PopUpMenu places a menu.
 type PopupKind uint8

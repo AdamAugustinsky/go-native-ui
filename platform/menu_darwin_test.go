@@ -35,7 +35,8 @@ func testMenuSpec() *MenuSpec {
 			4: {Title: "Help", Role: MenuRoleHelp},
 			5: {Title: "Services", Role: MenuRoleServices},
 			6: {Title: "Recent", Items: []MenuItem{{ID: tcRecent, Title: "notes.txt"}}},
-			7: {Title: "Row", Items: []MenuItem{{ID: tcRow, Title: "Open"}, sep, {ID: tcRow + 1, Title: "Show Info", Symbol: "info.circle"}}},
+			7: {Title: "Row", Items: []MenuItem{{ID: tcRow, Title: "Open"}, sep, {ID: tcRow + 1, Title: "Show Info", Symbol: "info.circle"},
+				{Kind: MenuItemSubmenu, Submenu: 6}}},
 		},
 		Bar: []int{0, 1, 2, 3, 4},
 	}
@@ -49,7 +50,9 @@ type menuRig struct {
 	checked  map[uint16]bool
 	asked    []uint16
 	stdField bool // whether a standard edit item (id 0) is enabled
+	modal    bool // a standard system item (id 0) is disabled
 	record   bool
+	field    func(e *Event) bool // FieldKeys, if set
 }
 
 func (r *menuRig) state(id uint16, act MenuAction) (bool, bool) {
@@ -57,7 +60,10 @@ func (r *menuRig) state(id uint16, act MenuAction) (bool, bool) {
 		r.asked = append(r.asked, id)
 	}
 	if id == 0 {
-		return act.IsEdit() && r.stdField, false
+		if act.IsEdit() {
+			return r.stdField, false
+		}
+		return !r.modal, false
 	}
 	return !r.off[id], r.checked[id]
 }
@@ -100,6 +106,7 @@ func TestMenuBarStructure(t *testing.T) {
 		editTitles                  []string
 		emoji                       bool
 		appTitles                   []string
+		windowTitles                []string
 	}
 	onMain(func() {
 		rig, why := openMenuRig(testMenuSpec(), true)
@@ -148,6 +155,11 @@ func TestMenuBarStructure(t *testing.T) {
 				r.emoji = true
 			}
 		}
+		for i := 0; i < int(objc.Send(sub(3), selNumberOfItems)); i++ {
+			if it := itemAt(sub(3), i); !objc.SendBool(it, objc.Sel("isHidden")) {
+				r.windowTitles = append(r.windowTitles, titleOf(it))
+			}
+		}
 		r.windows = objc.Send(rig.w.app, objc.Sel("windowsMenu")) == sub(3)
 		r.help = objc.Send(rig.w.app, objc.Sel("helpMenu")) == sub(4)
 		r.services = objc.Send(rig.w.app, objc.Sel("servicesMenu")) == objc.Send(itemAt(app, 4), objc.Sel("submenu"))
@@ -171,7 +183,7 @@ func TestMenuBarStructure(t *testing.T) {
 	if s := r.selectAll; s.action != "selectAll:" || !s.nilTgt || s.tag != 0 || s.title != "Select All" || s.key != "a" || s.mask != cmdMask {
 		t.Errorf("Select All (standard, no command): %+v", s)
 	}
-	if s := r.about; s.action != "orderFrontStandardAboutPanel:" || !s.nilTgt || s.title != "About "+nativeMenus.appName {
+	if s := r.about; s.action != "orderFrontStandardAboutPanel:" || !s.ourTarget || s.title != "About "+nativeMenus.appName {
 		t.Errorf("About: %+v", s)
 	}
 	if s := r.settings; s.title != "Settings…" || s.key != "," || s.action != "gnuiCommand:" || s.tag != tcSettings {
@@ -186,7 +198,7 @@ func TestMenuBarStructure(t *testing.T) {
 	if !r.emoji {
 		t.Error("AppKit added no Emoji & Symbols item to the Edit menu")
 	}
-	t.Logf("application menu %q; Edit menu with AppKit's items %q", r.appTitles, r.editTitles)
+	t.Logf("application menu %q; Edit menu with AppKit's items %q; Window menu %q", r.appTitles, r.editTitles, r.windowTitles)
 }
 
 func equalStrings(a, b []string) bool {
@@ -365,6 +377,169 @@ func TestKeyEquivalentFiresOnce(t *testing.T) {
 	}
 }
 
+// A key-down the focused field takes (FieldKeys) is not a key equivalent: the
+// item bound to it does not act, and the key is the app's.
+func TestFieldKeyIsNoKeyEquivalent(t *testing.T) {
+	var r struct {
+		why        string
+		keys       int
+		cmds       []uint64
+		freeKeys   int
+		freeCmds   []uint64
+		afterField bool
+	}
+	onMain(func() {
+		rig, why := openMenuRig(testMenuSpec(), false)
+		if why != "" {
+			r.why = why
+			return
+		}
+		defer rig.w.Close()
+		w := rig.w
+		pool := objc.F.Call0(objc.PoolPush)
+		defer objc.F.Call1(objc.PoolPop, pool)
+		w.SetFieldKeys(func(e *Event) bool { return e.Key == KeyA+'S'-'A' && e.Mods == ModSuper })
+		defer w.SetFieldKeys(nil)
+		w.q.reset()
+		w.handle(keyDown(w, "s", 1<<20, 0x01))
+		r.keys, r.cmds, _ = countEvents(w.q.ev)
+		r.afterField = w.fieldKey
+		w.SetFieldKeys(func(*Event) bool { return false })
+		w.q.reset()
+		w.handle(keyDown(w, "s", 1<<20, 0x01))
+		r.freeKeys, r.freeCmds, _ = countEvents(w.q.ev)
+		w.q.reset()
+	})
+	if r.why != "" {
+		t.Skipf("cannot open a window here: %s", r.why)
+	}
+	if r.keys != 1 || len(r.cmds) != 0 {
+		t.Errorf("⌘S the field takes: %d key-downs and commands %v, want the key and no command", r.keys, r.cmds)
+	}
+	if r.afterField {
+		t.Error("the field's claim outlived its key")
+	}
+	if r.freeKeys != 0 || len(r.freeCmds) != 1 || r.freeCmds[0] != tcSave {
+		t.Errorf("⌘S the field leaves: %d key-downs and commands %v, want none and [%d]", r.freeKeys, r.freeCmds, tcSave)
+	}
+}
+
+// The system's items (Zoom, Close, Minimize, Quit) are the app's to decide,
+// command identity and all, and AppKit's action follows only when the app
+// enables them: a disabled Zoom does not zoom and leaves its key; a modal
+// holds back the standard Minimize; a disabled Quit asks nothing.
+func TestSystemItemsFollowTheApp(t *testing.T) {
+	const tcQuit, tcZoom, tcClose = 33, 31, 32
+	spec := &MenuSpec{
+		Menus: []Menu{
+			{Title: "App", Role: MenuRoleApp, Items: []MenuItem{{Action: MenuQuit, ID: tcQuit}}},
+			{Title: "Window", Role: MenuRoleWindow, Items: []MenuItem{{Action: MenuZoom, ID: tcZoom, Key: 'z', Mods: ModCtrl | ModSuper},
+				{Action: MenuClose, ID: tcClose}, {Action: MenuMinimize}}},
+		},
+		Bar: []int{0, 1},
+	}
+	type step struct {
+		keys, closes int
+		frame        [4]float64
+		mini         bool
+		visible      bool
+	}
+	var r struct {
+		why                        string
+		before, off, on, back      step
+		quit, minimize, closeOff   step
+		asked                      []uint16
+		zoomOn, zoomOff, zoomValid bool
+		target                     bool
+	}
+	onMain(func() {
+		rig, why := openMenuRig(spec, false)
+		if why != "" {
+			r.why = why
+			return
+		}
+		defer rig.w.Close()
+		w := rig.w
+		pool := objc.F.Call0(objc.PoolPush)
+		defer objc.F.Call1(objc.PoolPop, pool)
+		cmd, ctrl := uintptr(1<<20), uintptr(1<<18)
+		snap := func() step {
+			var s step
+			s.keys, _, s.closes = countEvents(w.q.ev)
+			f := objc.SendRect(w.win, selFrame)
+			s.frame = [4]float64{f.X, f.Y, f.W, f.H}
+			s.mini = objc.SendBool(w.win, objc.Sel("isMiniaturized"))
+			s.visible = objc.SendBool(w.win, objc.Sel("isVisible"))
+			w.q.reset()
+			return s
+		}
+		w.q.reset()
+		r.before = snap()
+		zoom := itemAt(objc.Send(itemAt(objc.Send(w.app, objc.Sel("mainMenu")), 1), objc.Sel("submenu")), 0)
+		r.target = objc.Send(zoom, objc.Sel("target")) == nativeMenus.target
+		rig.record = true
+		rig.off[tcZoom] = true
+		r.zoomOff = objc.SendBool1(nativeMenus.target, selValidateItem, uintptr(zoom))
+		w.handle(keyDown(w, "z", cmd|ctrl, 0x06))
+		r.off = snap()
+		rig.off[tcZoom] = false
+		r.zoomOn = objc.SendBool1(nativeMenus.target, selValidateItem, uintptr(zoom))
+		r.zoomValid = systemValid(zoom, actionSel[MenuZoom])
+		w.handle(keyDown(w, "z", cmd|ctrl, 0x06))
+		r.on = snap()
+		w.handle(keyDown(w, "z", cmd|ctrl, 0x06)) // zoom back
+		r.back = snap()
+		rig.off[tcQuit] = true
+		w.handle(keyDown(w, "q", cmd, 0x0C))
+		r.quit = snap()
+		rig.modal = true
+		w.handle(keyDown(w, "m", cmd, 0x2E))
+		r.minimize = snap()
+		rig.modal = false
+		rig.off[tcClose] = true
+		w.handle(keyDown(w, "w", cmd, 0x0D))
+		r.closeOff = snap()
+		r.asked = rig.asked
+		rig.record = false
+	})
+	if r.why != "" {
+		t.Skipf("cannot open a window here: %s", r.why)
+	}
+	if !r.target {
+		t.Error("Zoom does not target GNUIMenuTarget")
+	}
+	// AppKit's own target for performZoom: is the key (or main) window: where
+	// the window cannot become key (a locked screen) AppKit disables Zoom
+	// whatever the app says.
+	if r.zoomOff || r.zoomOn != r.zoomValid {
+		t.Errorf("Zoom validates %v disabled, %v enabled; want false, and AppKit's own verdict %v", r.zoomOff, r.zoomOn, r.zoomValid)
+	}
+	if r.off.keys != 1 || r.off.frame != r.before.frame {
+		t.Errorf("⌃⌘Z with Zoom disabled: %d key-downs, frame %v → %v; want the key and no zoom", r.off.keys, r.before.frame, r.off.frame)
+	}
+	if !r.zoomValid {
+		t.Log("the window is not key here: AppKit has no target for Zoom, so the zoom itself is not checked")
+	} else if r.on.keys != 0 || r.on.frame == r.before.frame || r.back.frame != r.before.frame {
+		t.Errorf("⌃⌘Z with Zoom enabled: %d key-downs, frame %v → %v → %v; want no key, a zoom and back", r.on.keys, r.before.frame, r.on.frame, r.back.frame)
+	}
+	if r.quit.keys != 1 || r.quit.closes != 0 {
+		t.Errorf("⌘Q with Quit disabled: %d key-downs, %d close requests; want the key and none", r.quit.keys, r.quit.closes)
+	}
+	if r.minimize.keys != 1 || r.minimize.mini {
+		t.Errorf("⌘M in a modal: %d key-downs, minimised %v; want the key and no minimise", r.minimize.keys, r.minimize.mini)
+	}
+	if r.closeOff.keys != 1 || r.closeOff.closes != 0 || !r.closeOff.visible {
+		t.Errorf("⌘W with Close disabled: %+v; want the key, no close and the window shown", r.closeOff)
+	}
+	var sawZoom, sawQuit, sawClose bool
+	for _, id := range r.asked {
+		sawZoom, sawQuit, sawClose = sawZoom || id == tcZoom, sawQuit || id == tcQuit, sawClose || id == tcClose
+	}
+	if !sawZoom || !sawQuit || !sawClose {
+		t.Errorf("the app was asked about %v, want Zoom, Quit and Close by their commands", r.asked)
+	}
+}
+
 // Popped-up menus: the context menu of a model menu delivers its command,
 // a list delivers the chosen index (PopUpMenu really tracks; the item is
 // chosen from inside the tracking loop), the tree is cached until its items
@@ -375,6 +550,9 @@ func TestPopUpMenus(t *testing.T) {
 		why               string
 		ctxIdx, listIdx   int
 		ctxCmds, listCmds []uint64
+		subIdx            int
+		subCmds           []uint64
+		subTitles         []string
 		sameTree, newTree bool
 		listChecked       []uintptr
 		performCmds       []uint64
@@ -392,11 +570,15 @@ func TestPopUpMenus(t *testing.T) {
 		w := rig.w
 		pool := objc.F.Call0(objc.PoolPush)
 		defer objc.F.Call1(objc.PoolPop, pool)
-		choose := -1
+		choose, chooseSub := -1, -1
 		menuOpenHook = func(m objc.ID) {
 			r.tracked = true
 			if choose >= 0 {
 				objc.Send1(m, objc.Sel("performActionForItemAtIndex:"), uintptr(choose))
+			}
+			if chooseSub >= 0 { // an item of the submenu of item chooseSub
+				sub := objc.Send(itemAt(m, chooseSub), objc.Sel("submenu"))
+				objc.Send1(sub, objc.Sel("performActionForItemAtIndex:"), 0)
 			}
 			objc.Send(m, objc.Sel("cancelTracking"))
 		}
@@ -406,6 +588,18 @@ func TestPopUpMenus(t *testing.T) {
 		choose = 2
 		r.ctxIdx = w.PopUpMenu(&Popup{Spec: spec, Menu: 7, Kind: PopupContext, X0: 40, Y0: 40, X1: 40, Y1: 40})
 		_, r.ctxCmds, _ = countEvents(w.q.ev)
+
+		// an item of a submenu: its command, and no index of the menu popped up
+		w.q.reset()
+		choose, chooseSub = -1, 3
+		r.subIdx = w.PopUpMenu(&Popup{Spec: spec, Menu: 7, Kind: PopupContext, X0: 40, Y0: 40, X1: 40, Y1: 40})
+		_, r.subCmds, _ = countEvents(w.q.ev)
+		chooseSub = -1
+		// the submenu item shows its menu's title: a new title is a new tree
+		r.subTitles = append(r.subTitles, titleOf(itemAt(popupFor(spec, 7).menu, 3)))
+		spec.Menus[6].Title = "Recent Files"
+		r.subTitles = append(r.subTitles, titleOf(itemAt(popupFor(spec, 7).menu, 3)))
+		spec.Menus[6].Title = "Recent"
 
 		list := &MenuSpec{Menus: []Menu{{Items: []MenuItem{{Title: "Plain text"}, {Title: "Markdown"}, {Title: "HTML"}}}}}
 		w.q.reset()
@@ -441,6 +635,12 @@ func TestPopUpMenus(t *testing.T) {
 	}
 	if r.ctxIdx != 2 || len(r.ctxCmds) != 1 || r.ctxCmds[0] != tcRow+1 {
 		t.Errorf("context menu: chose %d, commands %v; want 2 and [%d]", r.ctxIdx, r.ctxCmds, tcRow+1)
+	}
+	if r.subIdx != -1 || len(r.subCmds) != 1 || r.subCmds[0] != tcRecent {
+		t.Errorf("a submenu's item: chose %d, commands %v; want -1 and [%d]", r.subIdx, r.subCmds, tcRecent)
+	}
+	if !equalStrings(r.subTitles, []string{"Recent", "Recent Files"}) {
+		t.Errorf("a submenu item's title %q: the cache missed its menu's new title", r.subTitles)
 	}
 	if r.listIdx != 1 || len(r.listCmds) != 0 {
 		t.Errorf("list: chose %d, commands %v; want 1 and none", r.listIdx, r.listCmds)
