@@ -152,9 +152,12 @@ the zero-allocation frame rule. Our own trampolines on top of purego's
 
 - `internal/ffi.Frame` holds 8 integer and 8 float register slots, stack
   slots, the `x8` indirect-result pointer, and return slots (`x0`/`x1`,
-  `d0`–`d3`). Frames live in long-lived memory (one per OS thread), never
-  on a goroutine stack: a callback could grow and move the stack while C
-  holds the pointer.
+  `d0`–`d3`). Frames live in memory that does not move, never on a
+  goroutine stack (a callback could grow and move the stack while C holds
+  the pointer): a global or heap frame used by one thread at a time (the
+  main thread's `objc.F`), or, inside a callback, the invocation's own frame
+  on the C stack (`CB.Frame()`, D36), which any thread and any nesting depth
+  can use. The callback table has 1024 entries.
 - The call path is `runtime.cgocall(trampoline, frame)`, so blocking calls
   (`nextEventMatchingMask`, `poll`) release the P and the GC is not
   stalled.

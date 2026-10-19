@@ -1,14 +1,14 @@
 package widget
 
 import (
-	"gonativeui/icon"
 	"gonativeui/ui"
+	"gonativeui/widget/base"
 )
 
 // labelSlack is the pixel a label's box is wider than its text: layout snaps
 // the box's edges to whole pixels, which can leave it a fraction narrower than
 // the text, and a label that is narrower than its text fades out at the edge.
-const labelSlack = 1
+const labelSlack = base.LabelSlack
 
 // TextStyle selects the font and colour of a label.
 type TextStyle uint8
@@ -87,35 +87,13 @@ func (k *Kit) styleNext(st TextStyle) {
 	c.NextAlign(k.align(ui.AlignLeft))
 }
 
-// Icon builds the icon id of the kit's atlas in colour (RGBA; 0 takes the text
-// colour) in the box the icon needs (NextHeight makes the box taller, with the
-// glyph centred in it). An icon that cannot be drawn on this
-// system builds an empty box.
-func (k *Kit) Icon(id icon.ID, color uint32) ui.ID {
-	if color == 0 {
-		color = k.r.Pal.Text
-	}
-	c := k.c
-	flags, disp := k.icons.Prepare(c, id, color)
-	if k.hasH && flags != 0 { // a height set with NextHeight: the glyph stays centred in it
-		w, _ := k.icons.Size(id)
-		c.NextSize(ui.Px(w), k.nh)
-	}
-	k.hasH = false
-	c.NextRole(ui.RoleImage)
-	return c.BoxKeyed(flags, ui.KeyN(c.ParentKey(), 7000+uint64(id)), disp)
-}
-
-// IconSize is the size in pixels of the box Icon builds for id.
-func (k *Kit) IconSize(id icon.ID) (w, h float32) { return k.icons.Size(id) }
-
 // Separator builds a hairline across the parent: horizontal in a column,
 // vertical in a row.
 func (k *Kit) Separator() ui.ID {
 	c := k.c
 	horizontal := true
 	if c.Parent() != 0 {
-		horizontal = !k.rowParent()
+		horizontal = !k.InRow()
 	}
 	lw := k.r.Px.BorderW
 	if horizontal {

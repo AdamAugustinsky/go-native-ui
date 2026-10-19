@@ -120,6 +120,9 @@ func (g *rig) must(role ui.Role, name string) ui.SemNode {
 	return n
 }
 
+// items lists the selected items of s.
+func items(s *Selection) []uint32 { return s.Items(nil) }
+
 // centre of a node's bounds.
 func centre(n ui.SemNode) (x, y float32) {
 	return (n.Bounds[0] + n.Bounds[2]) / 2, (n.Bounds[1] + n.Bounds[3]) / 2

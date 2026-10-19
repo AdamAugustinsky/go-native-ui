@@ -47,6 +47,11 @@ type TextFieldSignal struct {
 // next caret blink. 0 means none. The app draws again no later than that.
 func (c *Context) WakeAfter() int64 { return c.wakeNs }
 
+// NextFieldNoHover makes the next TextField ignore the pointer resting over
+// it: its box does not animate hover (HotT stays 0), so moving across it asks
+// for no frames. A field whose look does not react to hover (AppKit's) uses it.
+func (c *Context) NextFieldNoHover() { c.nextStill = true }
+
 func (c *Context) wakeAfter(ns int64) {
 	if ns < 1 {
 		ns = 1
@@ -170,8 +175,8 @@ func (c *Context) IMECancel() bool { return c.imeCancel }
 // 1 s (a 2 s blink period) or BlinkTimeoutNs to 0 (a solid caret).
 func (c *Context) TextField(label string, buf *TextBuffer) TextFieldSignal {
 	font, pad, textColor := c.sFont.peek(), c.sPad.peek(), c.sText.peek()
-	escClears := c.nextEscClr // (a box resets the styles)
-	c.nextEscClr = false
+	escClears, still := c.nextEscClr, c.nextStill // (a box resets the styles)
+	c.nextEscClr, c.nextStill = false, false
 	fi := c.fontInfo(font)
 	lh := fi.ascent + fi.descent
 	if c.sH.peek().Kind == SizeAuto {
@@ -184,7 +189,11 @@ func (c *Context) TextField(label string, buf *TextBuffer) TextFieldSignal {
 	if c.semNext.role == RoleNone {
 		c.NextRole(RoleTextField)
 	}
-	id := c.Box(Clickable|Focusable|Clip|DrawBackground|DrawBorder|HotAnimation|FocusAnimation, label)
+	flags := Clickable | Focusable | Clip | DrawBackground | DrawBorder | HotAnimation | FocusAnimation
+	if still {
+		flags &^= HotAnimation
+	}
+	id := c.Box(flags, label)
 	b := &c.boxes[id]
 	b.field = true
 	key := b.key

@@ -5,39 +5,11 @@ import (
 	"gonativeui/text"
 	"gonativeui/theme"
 	"gonativeui/ui"
+	"gonativeui/widget/base"
 )
 
-// Signal is what a widget reports about the frame, by value.
-type Signal struct {
-	// ID is the widget's root box (for ui.Context.Rect, Tooltip and the like).
-	ID ui.ID
-	// Hovering: the pointer is over the widget.
-	Hovering bool
-	// Held: the left button went down on the widget and is still down.
-	Held bool
-	// Focused: the widget has the keyboard focus.
-	Focused bool
-	// Clicked: the widget was clicked, or activated with Enter or Space, or by
-	// an assistive technology's press request. For a choice widget the value
-	// changed with it (Changed).
-	Clicked bool
-	// Changed: the value the widget edits changed (a checkbox, a slider, a
-	// selection, a text field).
-	Changed bool
-	// RightClicked: the right button was clicked on the widget.
-	RightClicked bool
-	// DoubleClicked: the widget was clicked twice quickly.
-	DoubleClicked bool
-}
-
-// signal reads the pointer and keyboard signal of box id.
-func (k *Kit) signal(id ui.ID) Signal {
-	s := k.c.Signal(id)
-	return Signal{
-		ID: id, Hovering: s.Hovering, Held: s.Dragging, Focused: k.c.Focused(id) && !k.off(),
-		Clicked: s.Clicked || s.Activated, RightClicked: s.RightClicked, DoubleClicked: s.DoubleClicked,
-	}
-}
+// Signal is what a widget reports about the frame, by value (base.Signal).
+type Signal = base.Signal
 
 // ButtonKind selects how a button looks.
 type ButtonKind uint8
@@ -80,15 +52,14 @@ func (k *Kit) IconButton(ic icon.ID, name string, kind ButtonKind) Signal {
 	return k.button(name, ic, btnIconOnly, kind)
 }
 
+// button is the classic look over base's Press primitive.
 func (k *Kit) button(label string, ic icon.ID, show int, kind ButtonKind) Signal {
 	c := k.c
 	p := &k.r.Pal
 	px := &k.r.Px
-	display, ident := ui.SplitLabel(label)
 
 	dim := k.dim()
-	key := ui.HashString(c.ParentKey(), ident)
-	v := k.vis(key)
+	b := k.PressState(label, hoverOn)
 
 	h := theme.Snap(px.ControlH)
 	var bg, fg, border uint32
@@ -106,44 +77,40 @@ func (k *Kit) button(label string, ic icon.ID, show int, kind ButtonKind) Signal
 	if kind == ButtonPrimary {
 		font = k.r.Font.UISemi
 	}
-	flags := k.flags()
+	var flags ui.Flags
 	if bg != 0 || border != 0 {
 		flags |= ui.DrawBackground | ui.DrawBorder
 	}
 	c.NextBG(bg)
 	c.NextBorder(border, px.BorderW)
 	c.NextRadius(px.RadiusMedium)
-	c.NextRole(ui.RoleButton)
-	c.NextSemName(display)
 
 	var disp []byte
+	w, hs := ui.TextSize(2*px.Pad), ui.Px(h)
 	switch show {
 	case btnIconOnly:
 		var f ui.Flags
 		f, disp = k.icons.Prepare(c, ic, fg)
 		flags |= f
-		k.size(ui.Px(h), ui.Px(h))
+		w = ui.Px(h)
 	case btnIconText:
-		k.size(ui.Children(1), ui.Px(h))
+		w = ui.Children(1)
 		c.NextAxis(ui.AxisX)
 		c.NextGap(px.GapSmall)
 		c.NextPadding(px.Pad, 0, px.Pad, 0)
 	default:
-		k.size(ui.TextSize(2*px.Pad), ui.Px(h))
 		c.NextFont(font)
 		c.NextTextColor(fg)
 		c.NextAlign(k.align(ui.AlignCenter))
 		flags |= ui.DrawText
-		disp = strBytes(display)
+		disp = strBytes(b.Name)
 	}
-	id := c.BoxKeyed(flags, key, disp)
-	c.Push(id)
+	id := k.BeginPress(&b, ui.RoleButton, w, hs, flags, disp)
 	if show == btnIconText {
-		k.iconLabel(key, ic, display, font, fg, h)
+		k.iconLabel(b.Key, ic, b.Name, font, fg, h)
 	}
-	k.decorate(id, v, px.RadiusMedium)
-	c.Pop()
-	sig := k.signal(id)
+	k.decorate(id, b.Visual, px.RadiusMedium)
+	sig := k.EndPress(&b)
 	k.undim(dim)
 	return sig
 }

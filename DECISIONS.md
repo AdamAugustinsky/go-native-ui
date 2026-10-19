@@ -67,8 +67,8 @@ later, the file gets a header and NOTICE gets an entry.
 **Decision.** Calls on the frame path (Objective-C messages, Wayland/EGL/GL
 calls, callbacks) go through `internal/ffi`:
 - an assembly trampoline called with `runtime.cgocall`;
-- a fixed `Frame` holding integer, float and stack slots, kept per OS thread in long-lived memory;
-- a small table of callback entry points that reaches a non-reflective Go dispatcher through `crosscall2`.
+- a fixed `Frame` holding integer, float and stack slots, in memory that does not move: a global or heap frame used by one thread at a time, or, inside a callback, the invocation's own frame on the C stack (D36);
+- a table of callback entry points (1024 since phase 6, D36) that reaches a non-reflective Go dispatcher through `crosscall2`.
 
 purego's convenience APIs (`RegisterFunc`, `objc.Send`, `NewCallback`)
 are used only at setup.
@@ -727,34 +727,33 @@ The whole UI is rewritten in Go on the framework with the Rex design system, mac
 - **Errors come back in the same call.** Consecutive calls may run on different OS threads, so thread-local error state (`errno`, `dlerror`, a library's "last error") cannot be read after a call. Libraries designed for `clib` return errors through caller-owned storage in the call itself (ZapFast's `zf_err`, D49). `Open` and `Func` read `dlerror` with the thread pinned for that one call; a caller that must read a thread-local error from an existing library pins the thread around the call and the read.
 - A library's own threads must coexist with Go's signal handling under fakecgo: tested with a fixture library whose threads spin and block while Go runs under `SIGPROF` and async preemption.
 
-## D36. The Objective-C runtime grows (phase 6, 2026-10-18)
+## D36. The Objective-C runtime grows (phase 6, 2026-10-18; revised by F1, 2026-10-19)
 
 **Decision.**
-- **Classes across files:** `objc.Define` collects methods and ivars from several files; `platform/platform_darwin.go` is split by concern onto it in wave 0. One `uintptr` ivar per instance indexes a Go-side table, replacing the global window. `objc_msgSendSuper` for overrides.
-- **Per-request blocks** (completion handlers) are stack-class literals: `_NSConcreteStackBlock`, `BLOCK_HAS_SIGNATURE`, an ffi callback as invoke, and two captured integers, the slot and its generation. An API that keeps the block copies it, and `_Block_copy` makes a heap copy with its own captures, freed by `Block_release`. No copy or dispose helpers are needed. Slots come from a fixed table of 256; a full table fails the request.
-- **Claims, not just generations.** Each slot has one atomic word: generation, a `retiring` bit and an active-claim count. A callback claims with a compare-and-swap that succeeds only on a matching generation with `retiring` clear, and releases its claim on return. Cancelling (or completing) bumps the generation and sets `retiring` in one step and never waits; the slot is reused only when its claim count reaches 0, freed by whoever brings it there. A failed claim is a stale call: it makes only the native acknowledgement the API requires, from its own arguments and captures, never touching the slot's context.
-- **Process-lifetime blocks** that carry no per-request state may be global, with both `_NSConcreteGlobalBlock` and the `BLOCK_IS_GLOBAL` flag (`_Block_copy` tests the flag, not the isa), as `gpu/metal_darwin.go`'s presented handler already does.
-- **Multi-shot callbacks** use selector-based observers where the API has them; the AVAudioEngine tap is a per-request block whose generation is bumped when it is removed.
-- **Blocks given to us** are valid only during the call that passed them. Any we keep (the file promise's completion handler; a notification handler if it were kept past the delegate's return) goes through `objc.KeepBlock`, which `_Block_copy`s it before storing, and `objc.CallKeptBlock`, which calls it once and `Block_release`s it.
-- **Cancellation is specified per API** (the phase-6 plan's table): which blocks are called exactly once, how each request is cancelled, and which acknowledgement a stale call still makes.
-- **Foreign-thread callbacks:**
-  - main-thread callbacks keep the main-thread frame and never take a lease;
-  - other threads take an `ffi.Frame` from a lock-free pool for the duration of the call (64 frames, growing in chunks of 64 up to 1024: an engineering choice, not a system limit), so nothing is keyed to a thread's lifetime;
-  - a callback whose thread already holds a lease (nesting) takes from a separate nested reserve of 16 frames;
-  - **no callback ever waits for a frame.** At exhaustion it takes its registered fallback: an observation is dropped and counted; a mandatory completion writes the record it reserved with its request, marks it ready and wakes the main thread through a frame-free path (one byte written with Go's `syscall.Write` to a non-blocking pipe watched by a common-modes `CFFileDescriptor` source); callbacks that must acknowledge natively use a dedicated reserve with one frame per response slot;
-  - handlers only copy into the app's event records, signal and wake.
+- **Classes across files:** `objc.Define` collects methods and ivars from several files; `platform/platform_darwin.go` is split by concern onto it in wave 0. Every class gets one `uintptr` index ivar (`ClassDef.Index()`) into a Go-side table, replacing the global window; `Ivar` adds more. `SendSuper`/`SuperFrame` call `objc_msgSendSuper`, with the `objc_super` in the frame's scratch words.
+- **Callback frames live on the C stack.** Every ffi callback reserves an `ffi.Frame` in its own trampoline frame on the calling thread's native stack (`CB.Frame()`), valid until the handler returns. Main-thread, foreign-thread and nested callbacks all use it, so there is no frame pool, no nested reserve, no exhaustion and no fallback: no callback waits for a frame. Nesting depth is bounded by the native stack (about 0.5 KiB of trampoline per level plus the callees' frames), not by ffi. The global `objc.F` stays main-thread only (checked in `gnuidebug` builds).
+- **1024 callbacks** per process (`ffi.MaxCallbacks`, up from 32). A class takes one for all its methods (plus one per `MethodIMP`), a block kind one for all its requests.
+- **Per-request blocks** (completion handlers) are stack-class literals: `_NSConcreteStackBlock`, `BLOCK_HAS_SIGNATURE`, the kind's ffi callback as invoke, and two captured integers, the slot and its generation. The literal lives in its slot of a fixed table of 256 (a full table fails the request with `ErrBlocksFull`). The issuing call holds a claim on the slot until `Request.Sent()`, which then poisons the literal, so an API that kept it uncopied gets a stale call, never another request's handler. An API that keeps the block copies it: `_Block_copy` makes a heap copy with its own captures, freed by `Block_release`; no copy or dispose helpers are needed.
+- **Claims, not just generations.** Each slot has one atomic word: generation, a `retiring` bit and an active-claim count. A callback claims with a compare-and-swap that succeeds only on a matching generation with `retiring` clear (a one-shot kind completes in the same step); it releases its claim on return. Cancelling (or completing) moves the generation on and sets `retiring` in one step and never waits; whoever brings the claim count to 0 frees the slot. A failed claim is a stale call: it makes only the native acknowledgement the API requires, from its own arguments, never touching a request's context.
+- **The generation rule:** a slot never issues a generation twice. Generations start at 1; 0 is never issued; a slot whose generation would wrap past 2^32−1 is retired for good when freed (`Leaks().RetiredSlots`).
+- **Process-lifetime blocks** that carry no per-request state may be global (`objc.NewGlobalBlock`), with both `_NSConcreteGlobalBlock` and the `BLOCK_IS_GLOBAL` flag (`_Block_copy` tests the flag, not the isa).
+- **Multi-shot callbacks** use selector-based observers where the API has them; the AVAudioEngine tap is a per-request block cancelled when it is removed.
+- **Blocks given to us** are valid only during the call that passed them (`objc.CallBlock`). Any we keep goes through `objc.KeepBlock`, which `_Block_copy`s it before storing, and `objc.CallKeptBlock`, which calls it once and `Block_release`s it.
+- **Cancellation is specified per API** (the phase-6 plan's table). **A window closing under a sheet calls the sheet's completion 0 times**, so the framework ends an attached sheet with `NSModalResponseAbort` before closing its window, which calls it exactly once.
+- **Foreign-thread handlers** only copy into the app's event records, signal and wake. Leak counters (`objc.Leaks`): live, kept and global blocks, delegates, observers, stale calls, refusals, retired slots.
 
 **Reasoning:**
 - Every report found blocks the blocking prerequisite (`egui.md` §3, `electron-tauri.md` §1, `gpui-ghostty.md` §3.2).
 - A recycled global block is unsafe: `_Block_copy` returns a global block unchanged, so AppKit keeps our literal's address, and a late callback would run whichever request reused the slot. A generation check alone is not enough either: a callback that passed the check could still be running when the slot is reused, so a claim count keeps the slot until it leaves.
-- GCD promises nothing about how many threads it uses, so frames keyed to threads would leak or run out; invocation-scoped leases are bounded by concurrency. An unconditional wait at exhaustion could deadlock on nesting, so exhaustion degrades per API instead.
+- The literal lives in its slot, not in the caller's frame, because a nested request made during the passing call (on the same frame) would overwrite a literal the API had not yet copied.
+- GCD promises nothing about how many threads it uses, so nothing may be keyed to a thread. The frame in the callback's own C frame is invocation-scoped by construction and never runs out, which the planned lease pool, nested reserve and per-API fallbacks only approximated.
 
-**Assumptions, each checked by a named F1 feasibility test before anything builds on it:**
-- that each API in the cancellation table copies the block it keeps and calls it as the table says, and which thread the notification delegate is called on ("block copy per API");
-- that the pool, the nested reserve and the fallbacks always make progress, with the pool forced to 2 frames and the reserve to 1, under recursive and concurrent callbacks ("callback-pool progress");
-- that a slot is never reused under a running callback ("a callback in flight during cancellation");
-- that a callback on a thread Go has never seen allocates only when concurrency reaches a new high (`needm`), and the steady state allocates nothing ("Go allocations measured");
-- that Go's darwin `syscall.Write` needs no `ffi.Frame` and allocates nothing (checked with the progress test).
+**Evidence (F1 feasibility tests, MacBook arm64, Rosetta amd64, CI on darwin and Linux):**
+- A foreign thread enters Go through fakecgo (`needm`, no M bound to the thread). A cold pthread's first callback allocates 9 objects / 6 KB; later fresh threads 0. Each new concurrency high costs about 8 objects / 6 KB (64 fresh threads at once); repeats, `dispatch_apply` 64-wide, 10,000 callbacks from 21 queues and queue and thread churn allocate 0 (exact `ReadMemStats` windows).
+- Cost: about 60 ns per main-thread callback (unchanged), about 1.1 µs per GCD-thread callback including dispatch (attach and detach every time).
+- A late call through an old heap copy after the slot's reuse is stale; a callback blocked in its handler keeps its slot through `Cancel` (which returns at once) until it returns; the generation-wrap test retires the slot.
+- 32 nesting levels on a Go thread, a fresh pthread and a GCD thread; nested chains keep their frames intact while goroutine stacks grow and move, handlers are preempted and GCs run, under the CPU profiler.
+- Block copy per API: NSAlert, NSSavePanel and NSOpenPanel copy the block and call it once on the main thread when the sheet ends, and 0 times when the window closes under it. AVAudioPlayerNode `scheduleBuffer:` copies and calls each completion once on AVFoundation's threads, and synchronously on the caller's thread for a buffer still pending at `stop`; the tap's block is copied, and no handler starts after `removeTapOnBus:` and `Cancel`. UserNotifications, AVCaptureDevice and the notification delegate's thread cannot be tested from an unbundled binary and remain assumptions until a bundled fixture checks them.
 
 **Alternative rejected:** dispatching everything to the main queue. AVFoundation and UserNotifications still call us on their queues, and their completion handlers must be called.
 
@@ -765,7 +764,7 @@ The whole UI is rewritten in Go on the framework with the Rex design system, mac
 - **Safe-point work runs from that dispatcher too.** While the outer pump is suspended in a native loop, the source's callback runs the deferred safe-point queue after delivering events (windows opened and closed, sheets and alerts begun, hosts, menu rebuilds), so a "Save changes?" sheet can open while a quit is pending.
 - **Four delivery classes. Nothing the framework has accepted is lost:**
   1. main-thread native events (reopen, quit requests, opens, activation, sleep and wake, screens, menu commands) are delivered synchronously from the delegate method, with a startup list for events before `Start` returns;
-  2. request completions and notification responses use records reserved before the action that produces them: a ticket per request (64 per service), and a response slot per actionable notification reserved when it is posted (256). A reply is stored in its slot before the system's completion handler is called. A full table fails the request with `ErrBusy`, or posts the notification without actions and reports `PostedWithoutActions` (or, if the app chose `EvictOldest`, removes the oldest delivered notification to free a slot);
+  2. request completions and notification responses use records reserved before the action that produces them: a ticket per request (64 per service), and a response slot per actionable notification reserved when it is posted (256). A reply is stored in its slot before the system's completion handler is called. A completion arriving on a foreign thread writes its record and signals the source using its callback's own frame (D36), so no frame-free fallback path exists. A full table fails the request with `ErrBusy`, or posts the notification without actions and reports `PostedWithoutActions` (or, if the app chose `EvictOldest`, removes the oldest delivered notification to free a slot);
   3. requests from outside the process (a second instance's arguments) are accepted into a reserved ring only if they fit; otherwise the primary answers `busy`, and the secondary retries for 2 s and then reports the failure;
   4. observations (levels, positions, thermal state) are one coalesced latest value per source: the only class where a value is replaced unseen.
   - `app.Post` is the app's own path from its goroutines, allocation-free and non-blocking; it returns false when full, and the caller keeps the event. Native acknowledgements and resource release never depend on delivery.
@@ -818,7 +817,7 @@ The whole UI is rewritten in Go on the framework with the Rex design system, mac
 
 **Amends D28's layering line:** `… → theme/rex, icon → widget/base → rexui → widget → task → app`.
 
-## D41. Native AppKit where the OS adds behaviour (phase 6, 2026-10-18)
+## D41. Native AppKit where the OS adds behaviour (phase 6, 2026-10-18; refined by D52)
 
 **Decision.** On macOS these are native: the menu bar, context and popup menus, NSAlert, the open and save panels, tooltips, materials (`NSVisualEffectView`), the chat composer (`NSTextView`) and accessibility. Everything else is drawn.
 
@@ -832,6 +831,21 @@ The whole UI is rewritten in Go on the framework with the Rex design system, mac
 **Alternative rejected:** hosting standard controls (option D: AppKit's heap per control, no gain in behaviour).
 
 **Cost:** two text renderers side by side (D38 mitigates), synchronous presents on frames that move hosts (measured), and a z-order rule designers must follow.
+
+## D52. Native shell, custom content; rexlook's language on measured macOS 27 windows (phase 6, 2026-10-19)
+
+**The user's verdicts (2026-10-19):** "the macos-native feel of our programs is still miles behind the superlogical Rex program/demo"; after using the apps: "all the apps that we did very much don't have a macos native-feel to them … they look linux-like, or old versions of macos (much before liquid glass). the only actually good looking and good feeling to use app that we have is RexLook, the rest is quite mediocre"; and "we should not use the macos native component for tabs, we should instead build a custom component fast and native feeling, based on the original rex tabs."
+
+**Decision.** This refines D41 from "native where the OS adds behaviour" to a native *shell*:
+- **Native on macOS:** the window and its traffic lights; live materials (the window backdrop, and glass wherever the measured macOS 27 pattern uses it: sidebar, inspector, toolbar capsules, the composer); the menu bar, context and popup menus; alerts, sheets and panels; tooltips; overlay scrollers; a native button only where it matches better than a drawn one (rexlook's ⌘ and +).
+- **Ours, drawn:** tabs (Rex's, made fast and native-feeling: select on press, instant switch, system tab shortcuts, key-window dimming) and every content control, in the Rex language.
+- **rexlook is the source of truth for the look.** The Rex identity (panes, glass, typography, restraint) sits on the window-level metrics measured from macOS 27.2 (`docs/design/liquid-glass-reference.md`, tool `tools/appkitscenes`): unified toolbar 52 pt with a 15 pt bold title, compact 40 pt with 13 pt; toolbar items in 36 pt glass capsules; a flush, full-height glass sidebar (27.2 has no floating inset sidebar); selection inset 10 pt, radius 8; the toolbar's scroll-edge bar only once content is under it (always when the window is inactive); window radius 16. The gallery, notes, Pilot and ZapFast are rebuilt on it.
+
+**Acceptance.** Live GnuiShot captures next to the `appkitscenes` and `appkitref` references, light and dark, active and inactive, top and scrolled; then the user's eye at checkpoint 1.
+
+**Evidence:** the spike (`docs/design/native-shell-spike.md`, branch `p6-nativeshell`): glass backdrop under a non-opaque Metal layer, startup +7 ms, 0 allocations, idle 0 frames; `gpui-ghostty.md` §1; D0's finding that everything except the window, the traffic lights and live glass can be drawn to within about 2 %.
+
+**Alternatives rejected:** native tabs (`NSToolbar` segmented or window tabbing: the user's call, and a toolbar's title area swallows clicks on drawn tabs); drawing the glass (it cannot follow the desktop or the user's Liquid Glass setting).
 
 ## D42. Rich text and selection (phase 6, 2026-10-18)
 
@@ -880,7 +894,7 @@ The whole UI is rewritten in Go on the framework with the Rex design system, mac
 
 **Evidence:** `zapfast.md` §2 ("Media"), `gpui-ghostty.md` §2 ("Inline video").
 
-**Risk:** Go code on AVAudio's queues. Handlers only copy into preallocated rings, on D36's frame leases.
+**Risk:** Go code on AVAudio's queues. Handlers only copy into preallocated rings, using their callback's own frame (D36). A buffer still pending at `stop` has its completion called synchronously on the thread calling `stop`.
 
 ## D47. Tooling and the native-feel instruments (phase 6, 2026-10-18)
 

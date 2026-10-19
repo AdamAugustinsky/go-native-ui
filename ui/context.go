@@ -184,9 +184,11 @@ type Context struct {
 	// text fields (textfield.go): the earliest time a field wants a frame
 	// again (ns from the frame start, 0 = none), and the input-method
 	// rectangle of the focused field.
-	wakeNs  int64
-	imeRect [4]float32
-	imeOK   bool
+	wakeNs int64
+	// deadlines (deadline.go) are the named one-shot deadlines in force.
+	deadlines []deadline
+	imeRect   [4]float32
+	imeOK     bool
 	// imeOwner is the field the input method's composition (Input.Preedit)
 	// belongs to, imeCancel whether this frame found the composition
 	// orphaned (its field lost the focus or is gone).
@@ -220,6 +222,7 @@ type Context struct {
 	claimed    uint16              // bit i: key event i is handled
 	fieldKeys  uint16              // bit i: key event i was claimed for the focused text field
 	nextEscClr bool                // the next TextField clears itself on Escape (NextEscapeClears)
+	nextStill  bool                // the next TextField does not animate hover (NextFieldNoHover)
 	fieldPeek  uint16              // bit i: key event i (Escape) is seen by the focused field in an overlay but not claimed
 	fieldFocus bool                // the focused box is a text field that takes keys
 	fieldBuilt bool                // the focused field applied this frame's edit actions already
@@ -342,6 +345,7 @@ var rootKey = HashString(0, "ui:root")
 func (c *Context) Begin(in *Input, widthPx, heightPx int, scale, dt float32) {
 	c.frame++
 	c.in = *in
+	c.pruneDeadlines()
 	c.w, c.h, c.scale, c.dt = widthPx, heightPx, scale, dt
 	c.fr.Swap()
 	c.fmtA.Reset()
@@ -438,6 +442,7 @@ func (c *Context) resetStyles() {
 	c.hasNextPos = false
 	c.nextFlags = 0
 	c.nextEscClr = false
+	c.nextStill = false
 	c.semNext = semNext{}
 }
 
