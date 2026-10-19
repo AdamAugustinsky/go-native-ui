@@ -92,7 +92,7 @@ const (
 	EvPointerMove             // X, Y
 	EvPointerButton           // Button, FlagDown, X, Y
 	EvPointerLeave            // pointer left the content area
-	EvScroll                  // DX, DY in physical pixels; FlagPrecise for trackpads
+	EvScroll                  // DX, DY in physical pixels; FlagPrecise for trackpads; Phase, Momentum; FlagInverted
 	EvKey                     // Key, Code, Mods, FlagDown, FlagRepeat
 	EvText                    // Text: committed UTF-8 text input
 	EvPreedit                 // Text: input-method composition (marked text), empty when it ended; SelStart, SelLen: caret/selection inside it
@@ -106,10 +106,39 @@ const (
 type Flags uint16
 
 const (
-	FlagDown    Flags = 1 << iota // key/button pressed, focus gained, became visible
-	FlagRepeat                    // key auto-repeat
-	FlagPrecise                   // scroll deltas are precise pixels (trackpad)
-	FlagFailed                    // EvPaste: no text (empty, not text, over MaxPaste, or the transfer failed)
+	FlagDown     Flags = 1 << iota // key/button pressed, focus gained, became visible
+	FlagRepeat                     // key auto-repeat
+	FlagPrecise                    // scroll deltas are precise pixels (trackpad)
+	FlagFailed                     // EvPaste: no text (empty, not text, over MaxPaste, or the transfer failed)
+	FlagInverted                   // EvScroll: the device's direction is inverted ("natural" scrolling); DX, DY already move the content
+)
+
+// ScrollPhase is the phase of a trackpad scroll gesture (Event.Phase) or of
+// the momentum after it (Event.Momentum), as AppKit reports them.
+//
+// What each system gives: macOS has both phases on trackpads and the Magic
+// Mouse (and precise deltas), none on wheels. Wayland gives a finger gesture's
+// start and end (wl_pointer axis_source finger, axis_stop): Began, Changed and
+// Ended, no momentum (kinetic scrolling is the client's there, and ui does
+// none). Windows gives precise touchpad deltas (WM_MOUSEWHEEL deltas that are
+// not whole notches, FlagPrecise) without phases; X11 only wheel buttons.
+type ScrollPhase uint8
+
+const (
+	// PhaseNone: not part of a gesture.
+	PhaseNone ScrollPhase = iota
+	// PhaseMayBegin: fingers came to rest on the trackpad.
+	PhaseMayBegin
+	// PhaseBegan: the gesture (or the momentum) started.
+	PhaseBegan
+	// PhaseChanged: the gesture (or the momentum) moved.
+	PhaseChanged
+	// PhaseEnded: the fingers lifted (or the momentum ran out).
+	PhaseEnded
+	// PhaseCancelled: the gesture was cancelled.
+	PhaseCancelled
+	// PhaseStationary: the fingers are down and still.
+	PhaseStationary
 )
 
 // Mods are the modifier keys held during an event.
@@ -230,6 +259,11 @@ type Event struct {
 	SelStart, SelLen int32
 	Time             int64  // OS event time in Now() nanoseconds; 0 if unknown
 	Tag              uint64 // EvPaste: the tag given to RequestPaste
+	// Phase and Momentum are an EvScroll's gesture phase and momentum phase
+	// (at most one is not PhaseNone); see ScrollPhase for what each system
+	// reports. Without FlagPrecise, DX and DY are wheel lines converted to
+	// pixels (on macOS 10 points a line, NSScrollView's line scroll).
+	Phase, Momentum ScrollPhase
 }
 
 // Options configure Open.

@@ -163,6 +163,42 @@ func TestPreciseAndWheelScroll(t *testing.T) {
 	}
 }
 
+// TestScrollPhasesReachUI: every scroll event goes to ui.Input.Scrolls with
+// its phases, those without a delta (fingers resting, lifting) too, and a
+// wheel's as notches.
+func TestScrollPhasesReachUI(t *testing.T) {
+	for p := platform.PhaseNone; p <= platform.PhaseStationary; p++ {
+		if want := [...]ui.ScrollPhase{ui.PhaseNone, ui.PhaseMayBegin, ui.PhaseBegan, ui.PhaseChanged, ui.PhaseEnded,
+			ui.PhaseCancelled, ui.PhaseStationary}[p]; ui.ScrollPhase(p) != want {
+			t.Fatalf("platform phase %d is ui phase %d, want %d", p, ui.ScrollPhase(p), want)
+		}
+	}
+	tr := newTranslator()
+	tr.wheelStep = 48
+	add := func(e platform.Event) bool { e.Kind = platform.EvScroll; return tr.event(&e, nil) }
+	if !add(platform.Event{Flags: platform.FlagPrecise, Phase: platform.PhaseMayBegin, Time: 1}) {
+		t.Fatal("fingers resting on the trackpad are not input")
+	}
+	add(platform.Event{Flags: platform.FlagPrecise | platform.FlagInverted, Phase: platform.PhaseBegan, DY: 4, Time: 2})
+	add(platform.Event{Flags: platform.FlagPrecise, Momentum: platform.PhaseChanged, DY: 6, Time: 3})
+	add(platform.Event{DY: 96, Time: 4})
+	in := &tr.in
+	want := []ui.ScrollEvent{
+		{Phase: ui.PhaseMayBegin, Precise: true, Time: 1},
+		{Phase: ui.PhaseBegan, DY: 4, Precise: true, Inverted: true, Time: 2},
+		{Momentum: ui.PhaseChanged, DY: 6, Precise: true, Time: 3},
+		{DY: 2, Time: 4},
+	}
+	if in.NScrolls != len(want) {
+		t.Fatalf("%d records, want %d: %+v", in.NScrolls, len(want), in.Scrolls[:in.NScrolls])
+	}
+	for i, w := range want {
+		if in.Scrolls[i] != w {
+			t.Errorf("record %d: %+v, want %+v", i, in.Scrolls[i], w)
+		}
+	}
+}
+
 func TestKeysAndText(t *testing.T) {
 	tr := newTranslator()
 	key := func(k platform.Key, flags platform.Flags, m platform.Mods) *platform.Event {

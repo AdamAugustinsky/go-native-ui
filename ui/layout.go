@@ -75,7 +75,13 @@ func (c *Context) layout() {
 		if p.first == 0 {
 			continue
 		}
-		cur := p.pad[la] + float32(lead-p.scroll[la])
+		// A trackpad's rubber band shows the content past its edges.
+		off := p.scroll
+		if c.sp.n > 0 && p.flags&scrollMask != 0 {
+			off[0] += c.stretchOf(p, 0)
+			off[1] += c.stretchOf(p, 1)
+		}
+		cur := p.pad[la] + float32(lead-off[la])
 		flow := false
 		for ch := p.first; ch != 0; ch = boxes[ch].next {
 			cb := &boxes[ch]
@@ -92,7 +98,7 @@ func (c *Context) layout() {
 					cur += cb.size[a]
 					flow = true
 				default:
-					rel = p.pad[a] - float32(p.scroll[a])
+					rel = p.pad[a] - float32(off[a])
 					if room := p.size[a] - p.padSum(a) - cb.size[a]; p.cross != CrossStart && room > 0 {
 						if p.cross == CrossCenter {
 							room = snap(room / 2)

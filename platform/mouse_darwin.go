@@ -17,6 +17,9 @@ var (
 	selScrollDX               = objc.Sel("scrollingDeltaX")
 	selScrollDY               = objc.Sel("scrollingDeltaY")
 	selPrecise                = objc.Sel("hasPreciseScrollingDeltas")
+	selPhase                  = objc.Sel("phase")
+	selMomentumPhase          = objc.Sel("momentumPhase")
+	selInverted               = objc.Sel("isDirectionInvertedFromDevice")
 	selResetCursorRects       = objc.Sel("resetCursorRects")
 	selDiscardCursorRects     = objc.Sel("discardCursorRects")
 	selAddCursorRect          = objc.Sel("addCursorRect:cursor:")
@@ -107,16 +110,53 @@ func (w *Window) pointerEvent(ev objc.ID, typ uintptr, t int64) (consumed bool) 
 
 // scrollEvent queues a scroll-wheel event.
 func (w *Window) scrollEvent(ev objc.ID, t int64) {
+	w.q.push(scrollEventOf(ev, w.scale, t))
+}
+
+// lineScroll is how many points a wheel line scrolls: NSScrollView's
+// verticalLineScroll and horizontalLineScroll (measured with
+// tools/appkitref/scroll.m: a 3-line event scrolls 30 points).
+const lineScroll = 10
+
+// scrollEventOf is the Event of an NSEvent of type scrollWheel in a window
+// of the given scale: precise deltas in pixels or lines converted to pixels,
+// the gesture and momentum phases, and whether the device is inverted.
+func scrollEventOf(ev objc.ID, scale float32, t int64) Event {
 	dx, dy := objc.SendF64(ev, selScrollDX), objc.SendF64(ev, selScrollDY)
 	e := Event{Kind: EvScroll, Mods: mods(uintptr(objc.Send(ev, selModifierFlags))), Time: t}
-	unit := float64(w.scale)
+	unit := float64(scale)
 	if objc.SendBool(ev, selPrecise) {
 		e.Flags = FlagPrecise
 	} else {
-		unit *= 16 // lines → logical pixels
+		unit *= lineScroll
 	}
+	if objc.SendBool(ev, selInverted) {
+		e.Flags |= FlagInverted
+	}
+	e.Phase = phaseOf(uintptr(objc.Send(ev, selPhase)))
+	e.Momentum = phaseOf(uintptr(objc.Send(ev, selMomentumPhase)))
 	e.DX, e.DY = float32(dx*unit), float32(dy*unit)
-	w.q.push(e)
+	return e
+}
+
+// phaseOf maps an NSEventPhase (a bit set, one bit at a time in practice) to
+// a ScrollPhase.
+func phaseOf(p uintptr) ScrollPhase {
+	switch {
+	case p&32 != 0: // NSEventPhaseMayBegin
+		return PhaseMayBegin
+	case p&1 != 0: // Began
+		return PhaseBegan
+	case p&8 != 0: // Ended
+		return PhaseEnded
+	case p&16 != 0: // Cancelled
+		return PhaseCancelled
+	case p&4 != 0: // Changed
+		return PhaseChanged
+	case p&2 != 0: // Stationary
+		return PhaseStationary
+	}
+	return PhaseNone
 }
 
 // cursorObjs caches the NSCursor singletons, loaded by loadCursors.

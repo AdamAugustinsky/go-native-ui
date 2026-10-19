@@ -173,6 +173,8 @@ type Context struct {
 	scrollApplied     [2]float32
 	scrollSet         bool // ScrollTo was called this frame (End decides whether the scroll is still moving)
 
+	sp scrollPhys // trackpad gestures, latching and rubber bands (scrollphys.go)
+
 	// animation (see anim.go)
 	animating             bool
 	rHot, rActive, rFocus float32

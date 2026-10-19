@@ -150,10 +150,16 @@ type Input struct {
 	// ScrollX, ScrollY: wheel/trackpad deltas this frame. Positive Y scrolls
 	// toward the start of the content (the view moves up), like AppKit and
 	// WM_MOUSEWHEEL. With Precise (trackpads) the deltas are pixels and are
-	// applied directly; otherwise they count wheel notches.
+	// applied directly; otherwise they count wheel notches. They are the sum
+	// of the frame's Scrolls, which ui reads.
 	ScrollX, ScrollY float32
 	Precise          bool
-	Mods             Mods
+	// Scrolls[:NScrolls] are the frame's scroll events in order, with their
+	// gesture phases (AddScroll, AddScrollEvent): ui latches, axis-locks and
+	// rubber-bands trackpad gestures from them.
+	Scrolls  [MaxScrolls]ScrollEvent
+	NScrolls int
+	Mods     Mods
 	// Keys[:NKeys] are this frame's key events; Text[:NText] is the UTF-8
 	// text typed this frame.
 	Keys  [MaxKeys]KeyEvent
@@ -297,11 +303,45 @@ func (in *Input) Cancel(b int) {
 	in.Cancelled[b] = true
 }
 
-// AddScroll accumulates a scroll event.
+// AddScroll accumulates a scroll event without a phase (a wheel, or precise
+// deltas from a device that reports no gesture): ScrollX, ScrollY and a
+// record in Scrolls.
 func (in *Input) AddScroll(dx, dy float32, precise bool) {
 	in.ScrollX += dx
 	in.ScrollY += dy
 	in.Precise = precise
+	in.AddScrollEvent(ScrollEvent{DX: dx, DY: dy, Precise: precise})
+}
+
+// AddScrollEvent appends e to Scrolls; it leaves ScrollX and ScrollY alone
+// (the caller keeps them). Consecutive events of the same kind in the middle
+// of a gesture are merged (their deltas add up, the later time stays), so a
+// frame's records fit; when Scrolls is full the event is merged into the
+// last record, which takes the event's phases unless they are Changed.
+func (in *Input) AddScrollEvent(e ScrollEvent) {
+	if in.NScrolls > 0 {
+		l := &in.Scrolls[in.NScrolls-1]
+		same := l.Phase == e.Phase && l.Momentum == e.Momentum && l.Precise == e.Precise && l.Inverted == e.Inverted &&
+			(e.Phase == PhaseNone || e.Phase == PhaseChanged) && (e.Momentum == PhaseNone || e.Momentum == PhaseChanged)
+		if same || in.NScrolls == MaxScrolls {
+			l.DX += e.DX
+			l.DY += e.DY
+			if e.Time != 0 {
+				l.Time = e.Time
+			}
+			if !same {
+				if e.Phase != PhaseChanged {
+					l.Phase = e.Phase
+				}
+				if e.Momentum != PhaseChanged {
+					l.Momentum = e.Momentum
+				}
+			}
+			return
+		}
+	}
+	in.Scrolls[in.NScrolls] = e
+	in.NScrolls++
 }
 
 // PushKey queues a key event; it reports false if the frame's queue is full.
@@ -366,7 +406,7 @@ func (in *Input) ClearFrame() {
 	in.Released = [numButtons]bool{}
 	in.Cancelled = [numButtons]bool{}
 	in.Clicks = [numButtons]uint8{}
-	in.ScrollX, in.ScrollY = 0, 0
+	in.ScrollX, in.ScrollY, in.NScrolls = 0, 0, 0
 	in.NKeys, in.NText = 0, 0
 	in.CommitOff, in.CommitLen = 0, 0
 	in.FocusGained = false

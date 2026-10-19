@@ -13,7 +13,7 @@ import "math"
 // Overlays are hit-tested after the main tree, in order, so the topmost wins;
 // everything beneath a modal is skipped, and tooltips are never hit.
 func (c *Context) hitTest() {
-	c.hotID, c.hotKey, c.scrollKey = 0, 0, 0
+	c.hotID, c.hotKey, c.scrollKey, c.sp.hit = 0, 0, 0, 0
 	if c.root == 0 || !c.in.Inside {
 		return
 	}
@@ -38,7 +38,7 @@ func (c *Context) hitWalk(id ID, x, y float32) {
 			c.hotID = id
 		}
 		if b.flags&scrollMask != 0 {
-			c.scrollKey = b.key
+			c.scrollKey, c.sp.hit = b.key, id
 		}
 	} else if b.flags&Clip != 0 {
 		return
@@ -94,30 +94,7 @@ func (c *Context) mouse() {
 		}
 	}
 
-	c.scrollApplied = [2]float32{}
-	if c.scrollKey != 0 && (in.ScrollX != 0 || in.ScrollY != 0) {
-		if v, ok := c.table.Get(uint64(c.scrollKey)); ok {
-			b := &c.boxes[v]
-			mul := float64(1)
-			if !in.Precise {
-				mul = float64(c.WheelStep)
-			}
-			delta := [2]float64{-float64(in.ScrollX) * mul, -float64(in.ScrollY) * mul}
-			for a := 0; a < 2; a++ {
-				if delta[a] == 0 || !b.scrollOn(a) {
-					continue
-				}
-				hi := math.Max(0, b.content[a]-float64(b.size[a]))
-				old := b.scrollTgt[a]
-				b.scrollTgt[a] = math.Min(math.Max(old+delta[a], 0), hi)
-				if in.Precise {
-					b.scroll[a] = math.Min(math.Max(b.scroll[a]+delta[a], 0), hi)
-					b.scrollTgt[a] = b.scroll[a]
-				}
-				c.scrollApplied[a] = float32(b.scrollTgt[a] - old)
-			}
-		}
-	}
+	c.scrollInput()
 }
 
 // focusOnPress moves focus to the nearest focusable box at or above the box
@@ -137,8 +114,10 @@ func (c *Context) focusOnPress() {
 	}
 }
 
-// stepScroll moves every scroll offset toward its target.
+// stepScroll moves every scroll offset toward its target, and the springs of
+// the rubber bands.
 func (c *Context) stepScroll() {
+	c.stepRubber()
 	for _, id := range c.prevOrder {
 		b := &c.boxes[id]
 		if b.flags&scrollMask == 0 {
@@ -210,7 +189,7 @@ func (c *Context) Signal(id ID) Signal {
 			s.DragDelta = [2]float32{c.in.MouseX - c.pressPos[0][0], c.in.MouseY - c.pressPos[0][1]}
 		}
 	}
-	if b.flags&scrollMask != 0 && c.scrollKey == k {
+	if b.flags&scrollMask != 0 && c.sp.scrolled == k {
 		s.Scroll = c.scrollApplied
 	}
 	if c.focusKey == k && b.flags&Focusable != 0 {

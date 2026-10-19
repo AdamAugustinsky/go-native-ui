@@ -129,6 +129,7 @@ type wayland struct {
 	enterSerial       uint32 // serial of the latest wl_pointer.enter, for set_cursor
 	btnSerial         uint32
 	axisSource        uint32
+	fingerScroll      bool // a finger scroll is in progress (until axis_stop)
 	xkbCtx            uintptr
 	keymap, xkbState  uintptr
 	modIdx            [4]uint32
@@ -884,6 +885,12 @@ func (w *Window) onPointer(op uint32, a unsafe.Pointer) {
 		if y.axisSource == 1 || y.axisSource == 2 { // finger, continuous
 			ev.Flags = FlagPrecise
 		}
+		if y.axisSource == 1 { // fingers: a gesture, which axis_stop ends
+			ev.Phase = PhaseChanged
+			if !y.fingerScroll {
+				ev.Phase, y.fingerScroll = PhaseBegan, true
+			}
+		}
 		if argU(a, 1) == 0 { // vertical_scroll
 			ev.DY = v
 		} else {
@@ -894,6 +901,11 @@ func (w *Window) onPointer(op uint32, a unsafe.Pointer) {
 		y.axisSource = 0
 	case 6: // axis_source(source)
 		y.axisSource = argU(a, 0)
+	case 7: // axis_stop(time, axis): the fingers lifted
+		if y.fingerScroll {
+			y.fingerScroll = false
+			w.q.push(Event{Kind: EvScroll, Flags: FlagPrecise, Phase: PhaseEnded, Mods: w.mods, Time: now})
+		}
 	}
 }
 
