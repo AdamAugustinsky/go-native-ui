@@ -356,6 +356,7 @@ func openWindowed(cfg Config, b Builder, st *StartupReport, nativeMenus bool) (*
 // initUI creates the ui context and runs the Initer.
 func (a *App) initUI() error {
 	a.UI = ui.New(a.Text)
+	uiDefaults(a.UI)
 	a.UI.ClipboardSet = platform.SetClipboardText
 	a.UI.AtlasSync(a.R)
 	if a.Win != nil { // a window shows tooltips for the regions it is given; offscreen renders draw them
@@ -371,6 +372,10 @@ func (a *App) initUI() error {
 }
 
 func ms(ns int64) float64 { return float64(ns) / 1e6 }
+
+// uiDefaults sets what the platform decides in a new ui context: on macOS a
+// wheel jumps to where it scrolls, as AppKit's does; elsewhere it glides.
+func uiDefaults(c *ui.Context) { c.WheelJumps = runtime.GOOS == "darwin" }
 
 // close releases everything in reverse order of creation. It is safe on a
 // partially built App.

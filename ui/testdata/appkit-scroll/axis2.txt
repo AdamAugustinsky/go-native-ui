@@ -1,0 +1,27 @@
+# slightly horizontal first, then vertical
+view 400 400
+doc 2000 2000
+start 500 500
+ev 0 p maybegin none 0 0
+ev 8 p began none -6 -5
+ev 16 p changed none -6 -5
+ev 24 p changed none -6 -5
+ev 32 p changed none -6 -5
+ev 40 p changed none -6 -5
+ev 48 p changed none -6 -5
+ev 56 p changed none -6 -5
+ev 64 p changed none -6 -5
+ev 72 p changed none -6 -5
+ev 80 p changed none -6 -5
+ev 88 p changed none -1 -10
+ev 96 p changed none -1 -10
+ev 104 p changed none -1 -10
+ev 112 p changed none -1 -10
+ev 120 p changed none -1 -10
+ev 128 p changed none -1 -10
+ev 136 p changed none -1 -10
+ev 144 p changed none -1 -10
+ev 152 p changed none -1 -10
+ev 160 p changed none -1 -10
+ev 168 p ended none 0 0
+end 476
