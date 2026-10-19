@@ -8,17 +8,24 @@
 // C calls release the P. The trampolines are our own; the technique follows
 // github.com/ebitengine/purego (Apache-2.0).
 //
-// A Frame must live in long-lived memory (a global or a heap object), never
-// on a goroutine stack: a callback can grow and move the stack while C still
-// holds the frame pointer. Use one Frame per OS thread. Nested use on the
-// same thread (a callback making calls with the frame its caller used) is
-// safe because a call consumes its arguments on entry and writes its results
-// on exit.
+// A Frame must live in memory that does not move: a global, a heap object,
+// or C memory, never a goroutine stack (a callback can grow and move the
+// stack while C still holds the frame pointer). A Frame is used by one
+// thread at a time. Nested use on the same thread (a callback making calls
+// with the frame its caller used) is safe because a call consumes its
+// arguments on entry and writes its results on exit.
+//
+// Every callback invocation brings its own Frame (CB.Frame), which lives in
+// the callback's frame on the calling thread's C stack. It is valid until
+// the handler returns, so a callback on any thread, including one Go has never
+// seen and any depth of nesting, can make C calls without a shared frame, a
+// pool or a wait.
 package ffi
 
 import (
 	"math"
 	"runtime"
+	"sync"
 	"unsafe"
 
 	_ "github.com/ebitengine/purego" // fakecgo runtime bootstrap when CGO_ENABLED=0
@@ -43,6 +50,13 @@ type Frame struct {
 
 	ni, nf, nsb int // builder cursors: int regs, float regs, stack bytes
 }
+
+// The callback trampolines reserve a cbArgs and a Frame in the callback's C
+// stack frame; both sizes must be multiples of 16 to keep it aligned.
+var (
+	_ = [1]struct{}{}[unsafe.Sizeof(Frame{})%16]
+	_ = [1]struct{}{}[unsafe.Sizeof(cbArgs{})%16]
+)
 
 //go:linkname runtime_cgocall runtime.cgocall
 //go:noescape
@@ -287,13 +301,18 @@ func (f *Frame) Call6(fn, a, b, c, d, e, g uintptr) uintptr {
 
 // ---- Callbacks ----
 
-// MaxCallbacks is the size of the assembly entry table.
-const MaxCallbacks = 32
+// MaxCallbacks is the size of the assembly entry table: the number of
+// callbacks NewCallback can create in the process. An Objective-C class
+// takes one for all its methods and a block kind takes one for all its
+// requests (internal/objc), so this is far above what the framework uses.
+const MaxCallbacks = 1024
 
 type cbArgs struct {
 	index  uintptr
 	args   unsafe.Pointer // float regs, int regs, then caller stack args
-	result [4]uintptr     // in: result[0] = indirect result pointer (x8 / rdi)
+	frame  unsafe.Pointer // the invocation's own Frame, on the C stack
+	_      uintptr
+	result [4]uintptr // in: result[0] = indirect result pointer (x8 / rdi)
 }
 
 // CB is one callback invocation as seen by a handler.
@@ -337,6 +356,13 @@ func (c *CB) RetF64(i int, v float64) {
 	c.result[floatResultBase+i] = uintptr(math.Float64bits(v))
 }
 
+// Frame returns this invocation's own call frame, reset. It lives in the
+// callback's frame on the calling thread's C stack, so the handler can make C
+// calls with it on any thread, at any nesting depth, without sharing a frame
+// with another thread. It is valid until the handler returns and must not be
+// kept.
+func (c *CB) Frame() *Frame { return (*Frame)(c.frame).Reset() }
+
 // IndirectResult is the hidden pointer for large struct returns.
 func (c *CB) IndirectResult() unsafe.Pointer { return PtrFromC(c.result[0]) }
 
@@ -349,20 +375,32 @@ func PtrFromC(p uintptr) unsafe.Pointer { return *(*unsafe.Pointer)(unsafe.Point
 var (
 	handlers       [MaxCallbacks]func(*CB)
 	nHandlers      int
+	handlersMu     sync.Mutex
 	cbDispatchCall = cbDispatch
 	cbTableABI0    uintptr // set in assembly
 )
 
 func cbDispatch(a *cbArgs) { handlers[a.index]((*CB)(a)) }
 
-// NewCallback returns a C function pointer that runs h on the calling thread.
-// Callbacks are never freed; register them once at startup. Not safe for
-// concurrent use with itself.
+// NewCallback returns a C function pointer that runs h on the calling
+// thread, whichever thread C calls it on. Callbacks are never freed; register
+// them at setup. It panics when all MaxCallbacks entries are taken. Safe for
+// concurrent use; the pointer must reach C after NewCallback returns (as it
+// does when C gets it through a call).
 func NewCallback(h func(*CB)) uintptr {
+	handlersMu.Lock()
+	defer handlersMu.Unlock()
 	if nHandlers == MaxCallbacks {
 		panic("ffi: out of callback slots")
 	}
 	handlers[nHandlers] = h
 	nHandlers++
 	return cbTableABI0 + uintptr(nHandlers-1)*cbEntrySize
+}
+
+// Callbacks reports how many of the MaxCallbacks entries are taken.
+func Callbacks() int {
+	handlersMu.Lock()
+	defer handlersMu.Unlock()
+	return nHandlers
 }
