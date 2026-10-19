@@ -310,8 +310,8 @@ func TestHoverTab(t *testing.T) {
 	if !hasFill() {
 		t.Error("a hovered inactive tab shows no hover fill")
 	}
-	if got := h.cursor(); got != ui.CursorPointer {
-		t.Errorf("cursor over a tab = %v, want the pointer", got)
+	if got := h.cursor(); got != ui.CursorArrow {
+		t.Errorf("cursor over a tab = %v, want the arrow (as over AppKit's tabs)", got)
 	}
 	h.settle()
 	if !hasFill() || h.list.Quads == nil {
@@ -703,7 +703,7 @@ func TestCursorHints(t *testing.T) {
 	bx, by := h.blank(agent)
 	check("pane body", bx, by, ui.CursorArrow)
 	tx, ty := centre(h.tabRect(1))
-	check("tab", tx, ty, ui.CursorPointer)
+	check("tab", tx, ty, ui.CursorArrow)
 	check("+", W-46.5*k, 45*k, ui.CursorPointer)
 	check("command", W-115.5*k, 45*k, ui.CursorPointer)
 	mx, my := h.btn(agent, btnMax)

@@ -95,10 +95,19 @@ type Rex struct {
 	lastW, lastH int
 	disp         [maxPanes][4]float32 // rectangles the panes were drawn at
 
+	// The window's native shell (native.go): a backdrop instead of the
+	// painted field, native ⌘ and + buttons instead of drawn ones.
+	backdrop bool
+	btns     nativeButtons
+	// shellShot: an offscreen picture of the native shell's content (the
+	// window's parts left out; ShotOptions.Native).
+	shellShot bool
+
 	// geometry of the latest frame
 	capsule  [4]float32
 	tabRects [maxTabs][4]float32
 	pill     [4]float32
+	keyW     float32 // the window's key state, animated (1: key)
 }
 
 // New creates the scene for a window at scale pixels per point. ts must stay
@@ -155,7 +164,15 @@ var (
 	keyAnyT  = ui.HashString(keyAnim, "maxany")
 	keyTabT  = ui.HashString(keyAnim, "tab")
 	keyGlide = ui.HashString(keyAnim, "glide")
+	keyKeyW  = ui.HashString(keyAnim, "keywindow")
 )
+
+// TabRectPt is where tab i was drawn in the latest frame, in points from the
+// window's top left (x0, y0, x1, y1).
+func (r *Rex) TabRectPt(i int) [4]float32 {
+	t := r.tabRects[i]
+	return [4]float32{t[0] / r.Scale, t[1] / r.Scale, t[2] / r.Scale, t[3] / r.Scale}
+}
 
 func tabKey(uid uint32) ui.Key  { return ui.KeyN(keyTab, uint64(uid)) }
 func paneKey(uid uint32) ui.Key { return ui.KeyN(keyPane, uint64(uid)) }
@@ -183,6 +200,7 @@ func (r *Rex) Build(c *ui.Context) {
 		r.SetScale(s)
 	}
 	r.fol.Update(c, &r.th)
+	r.th.Backdrop = r.backdrop
 	if w != r.lastW || h != r.lastH {
 		r.glide = false // a resize follows the window exactly
 		r.lastW, r.lastH = w, h
