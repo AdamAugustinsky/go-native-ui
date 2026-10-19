@@ -253,7 +253,11 @@ func TestRequestPasteFailsWhenTheClipboardStaysBusy(t *testing.T) {
 	if w.clipPending() {
 		t.Error("still waiting after the failure")
 	}
-	if w.clip.stuck() {
+	// The worker gives up on the busy clipboard at the request's limit; the UI
+	// thread fails the paste clipGraceNs later, and judges a worker that is only
+	// late to return then (a loaded runner) as stuck until it returns. It must
+	// return, though the clipboard is still busy.
+	if ok, _, _ := pumpUntil(w, time.Second, func() bool { return !w.clip.stuck() }); !ok {
 		t.Error("the worker is stuck after a clipboard that was only busy")
 	}
 }
