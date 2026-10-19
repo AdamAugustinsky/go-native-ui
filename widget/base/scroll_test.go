@@ -99,3 +99,89 @@ func TestThumbShrinksWhenStretched(t *testing.T) {
 		t.Fatalf("after the spring the thumb is %v, want %v", b.ThumbLen, full)
 	}
 }
+
+// listRig builds a 200-row list filling a 400×300 window, with its bar (a
+// track and a thumb, as widget's recipe builds them).
+func listRig(t *testing.T) (*rig, *ListState, *[200]RowState, *[2]ScrollBar, *ui.ID) {
+	var st ListState
+	var rs [200]RowState
+	var bars [2]ScrollBar
+	var list ui.ID
+	g := newRig(t, 400, 300, 1, func(k *Kit) {
+		c := k.Context()
+		l := k.BeginList("rows", &st, 200, ListOpts{})
+		list = l.s
+		for r := l.First; r < l.Last; r++ {
+			rs[r] = l.RowState(r, uint32(r))
+			l.BeginRow(&rs[r], nil, 0)
+		}
+		l.CloseRows()
+		v := l.ScrollView()
+		bars = k.ScrollBars(&v)
+		for _, b := range bars {
+			if b.On {
+				k.BeginScrollBar(&b)
+				theme.At(c, 0, b.ThumbOff, b.W, b.ThumbLen)
+				c.BoxKeyed(ui.DrawBackground|Floating, ui.KeyN(b.Key, 1), nil)
+				c.Pop()
+			}
+		}
+		k.CloseList(&l)
+	})
+	return g, &st, &rs, &bars, &list
+}
+
+// TestLegacyListBarCanBeDragged: a list leaves room for a legacy bar inside
+// its clip, where the pointer can take it and drag the thumb.
+func TestLegacyListBarCanBeDragged(t *testing.T) {
+	g, _, _, bars, list := listRig(t)
+	g.k.fol.PinSystem(&theme.SystemValues{Known: true, Settings: theme.Settings{Scroller: theme.ScrollerLegacy}})
+	g.frames(4)
+	b := &bars[1]
+	if !b.On || !b.Legacy || b.X+b.W > 400 {
+		t.Fatalf("the legacy bar: %+v (the list is 400 wide)", *b)
+	}
+	x, y := b.X+b.W/2, b.Y+b.ThumbOff+b.ThumbLen/2
+	g.move(x, y)
+	g.in.SetButton(ui.ButtonLeft, true, 1)
+	g.frame()
+	g.move(x, y+100)
+	g.frames(2)
+	g.in.SetButton(ui.ButtonLeft, false, 0)
+	g.frame()
+	if _, sy := g.c.Scroll(*list); sy <= 0 {
+		t.Fatalf("dragging the thumb scrolled to %v", sy)
+	}
+}
+
+// TestStretchedListPicksTheRowShown: while a trackpad stretches a list past
+// its top, hover and a click find the row shown under the pointer.
+func TestStretchedListPicksTheRowShown(t *testing.T) {
+	g, st, rs, _, list := listRig(t)
+	g.move(200, 150)
+	g.in.AddScrollEvent(ui.ScrollEvent{Phase: ui.PhaseMayBegin, Precise: true})
+	g.frame()
+	for i := 0; i < 30; i++ {
+		p := ui.PhaseChanged
+		if i == 0 {
+			p = ui.PhaseBegan
+		}
+		g.in.AddScrollEvent(ui.ScrollEvent{DY: 40, Phase: p, Precise: true})
+		g.frame()
+	}
+	_, s := g.c.ScrollStretch(*list)
+	if -s < 2*float64(st.RowPx()) {
+		t.Fatalf("stretch %v: not past two rows", s)
+	}
+	r := g.c.Rect(*list)
+	y := r[1] + st.PadPx() + 5*st.RowPx() + st.RowPx()/2 - float32(s) // row 5 as shown
+	g.click(200, y)
+	if !rs[5].Selected {
+		for i := 0; i < 10; i++ {
+			if rs[i].Selected {
+				t.Fatalf("clicked row 5 as shown, selected row %d", i)
+			}
+		}
+		t.Fatal("clicked row 5 as shown, nothing selected")
+	}
+}

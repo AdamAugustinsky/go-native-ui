@@ -376,7 +376,8 @@ func (t *translator) scroll(e *platform.Event) {
 		in.Precise = false
 	}
 	r := ui.ScrollEvent{DX: e.DX, DY: e.DY, Precise: precise, Inverted: e.Flags&platform.FlagInverted != 0,
-		Phase: ui.ScrollPhase(e.Phase), Momentum: ui.ScrollPhase(e.Momentum), Time: e.Time}
+		Phase: ui.ScrollPhase(e.Phase), Momentum: ui.ScrollPhase(e.Momentum), Time: e.Time,
+		X: in.MouseX, Y: in.MouseY, Pos: in.Inside} // where the pointer is now: a later move must not redirect it
 	if !precise {
 		r.DX, r.DY = e.DX/step, e.DY/step
 	}

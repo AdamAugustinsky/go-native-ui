@@ -1,6 +1,7 @@
 package app
 
 import (
+	"runtime"
 	"testing"
 
 	"gonativeui/platform"
@@ -367,5 +368,29 @@ func TestTabCharacterIsNotText(t *testing.T) {
 	text(&tr, "\t")
 	if got(&tr) != "\t\t" {
 		t.Fatalf("tabs after a release and after another key: %q", got(&tr))
+	}
+}
+
+// TestScrollKeepsItsPointerPosition: a scroll event records where the pointer
+// was when it came, so a pointer move later in the same frame does not choose
+// the box it scrolls.
+func TestScrollKeepsItsPointerPosition(t *testing.T) {
+	tr := newTranslator()
+	tr.event(ev(platform.EvPointerMove, func(e *platform.Event) { e.X, e.Y = 10, 20 }), nil)
+	tr.event(ev(platform.EvScroll, func(e *platform.Event) { e.DY, e.Flags, e.Phase = 3, platform.FlagPrecise, platform.PhaseBegan }), nil)
+	tr.event(ev(platform.EvPointerMove, func(e *platform.Event) { e.X, e.Y = 300, 40 }), nil)
+	in := &tr.in
+	if r := in.Scrolls[0]; !r.Pos || r.X != 10 || r.Y != 20 || in.MouseX != 300 {
+		t.Fatalf("record at %v,%v (pos %v), pointer at %v", r.X, r.Y, r.Pos, in.MouseX)
+	}
+}
+
+// TestWheelJumpsOnMacOS: a wheel jumps on macOS, as AppKit's does, and
+// glides elsewhere.
+func TestWheelJumpsOnMacOS(t *testing.T) {
+	c := ui.New(nil)
+	uiDefaults(c)
+	if c.WheelJumps != (runtime.GOOS == "darwin") {
+		t.Fatalf("WheelJumps %v on %s", c.WheelJumps, runtime.GOOS)
 	}
 }

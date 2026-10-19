@@ -30,7 +30,10 @@ type ListState struct {
 	Scroll ScrollState
 
 	curRow, ancRow int     // where the cursor and anchor were last seen (hints)
-	shown          float64 // the scroll offset the last frame laid out
+	shown          float64 // the scroll offset the last frame laid out (the position)
+	// disp is where the last frame showed the rows: the offset plus a
+	// trackpad's stretch past an edge, for finding the row under the pointer.
+	disp float64
 	rowPx, padPx   float32 // the row pitch and the padding above the first row, in the last frame
 	goRow          int
 	goPending      bool
@@ -106,9 +109,9 @@ func (st *ListState) SetTopRow(r int, frac float32) {
 }
 
 // RowTop is the distance in pixels from the top of the list's box to the top of
-// display row r as of the last frame (negative above the view).
+// display row r as shown in the last frame (negative above the view).
 func (st *ListState) RowTop(r int) float32 {
-	return st.padPx + float32(r)*st.rowPx - float32(st.shown)
+	return st.padPx + float32(r)*st.rowPx - float32(st.disp)
 }
 
 // PadPx is the room in pixels above the first row inside the list's box, as of
@@ -217,9 +220,12 @@ func (k *Kit) beginList(label string, st *ListState, rows int, table bool, o Lis
 		hoverOn: o.Hover == HoverOn}
 
 	k.ApplySize(ui.Pct(1), ui.Pct(1))
+	skey := ui.KeyN(okey, 1)
+	if pad := k.legacyReserve(skey, ScrollVertical); pad != [2]float32{} {
+		c.NextPadding(0, 0, pad[0], pad[1]) // room for a legacy scroll bar
+	}
 	l.o = c.BoxKeyed(ui.Clip, okey, nil)
 	c.Push(l.o)
-	skey := ui.KeyN(okey, 1)
 	k.ScrollInput(okey, skey, &st.Scroll, ScrollVertical)
 
 	l.padT = theme.Snap(px.GapSmall)
@@ -253,6 +259,8 @@ func (k *Kit) beginList(label string, st *ListState, rows int, table bool, o Lis
 	}
 	l.hoverFrom(ps)
 	st.shown = sy
+	_, stretch := c.ScrollStretch(l.s)
+	st.disp = sy + stretch
 	if it, ok := st.Sel.Cursor(); ok {
 		l.cursor, l.hasCur = it, true
 	}
@@ -311,7 +319,7 @@ func (l *List) hoverFrom(ps ui.Signal) {
 // rowAt is the display row at y pixels from the top of the list box, -1 if
 // none.
 func (l *List) rowAt(y float32) int {
-	f := math.Floor((float64(y-l.padT) + l.st.shown) / float64(l.rowH))
+	f := math.Floor((float64(y-l.padT) + l.st.disp) / float64(l.rowH))
 	if f < 0 || f >= float64(l.Rows) {
 		return -1
 	}
