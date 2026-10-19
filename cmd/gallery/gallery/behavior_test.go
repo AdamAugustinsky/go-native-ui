@@ -290,3 +290,32 @@ func TestSteadyFramesAllocateNothing(t *testing.T) {
 	r.Play(click(roleButton, "Delete…"), waitFor(ui.RoleDialog, ""), settle(), idle(2))
 	check("dialog open")
 }
+
+// With native menus (macOS) the gallery draws no menu bar, and its frames
+// allocate nothing either, also in the frames that ask for a native menu
+// and that take its choice.
+func TestNativeMenuFramesAllocateNothing(t *testing.T) {
+	r := newRig(t, Options{Still: true})
+	r.Context().SetNativeMenus(true)
+	r.Frames(40)
+	if n := testing.AllocsPerRun(50, r.Frame); n != 0 {
+		t.Errorf("idle: %v allocations per frame, want 0", n)
+	}
+	var req ui.MenuRequest
+	ok := false
+	for i := 0; i < 3 && !ok; i++ { // the first request grows the options' copy
+		r.Play(click(ui.RoleComboBox, "Format"), idle(1))
+		req, ok = r.Context().TakeMenuRequest()
+	}
+	if !ok || req.Kind != ui.MenuList {
+		t.Fatalf("the select asked for %+v %v", req, ok)
+	}
+	steps := []step{click(ui.RoleComboBox, "Format"), idle(1)}
+	n := testing.AllocsPerRun(20, func() {
+		r.Play(steps...)
+		r.Context().TakeMenuRequest()
+	})
+	if n != 0 {
+		t.Errorf("a frame asking for the select's menu: %v allocations, want 0", n)
+	}
+}

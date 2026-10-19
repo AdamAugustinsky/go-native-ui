@@ -8,8 +8,9 @@
 // each frame. Each frame the Build calls Match first, which claims the
 // shortcut keys and gathers the commands the system delivered (a native menu
 // item), and then asks for them: Fired for one command, Next for all of them
-// in order. On macOS the model becomes the native menu bar (phase 5B); on
-// Windows and Linux the widget package draws it.
+// in order. On macOS the model becomes the native menu bar (app.App.SetMenu),
+// and the commands its items deliver reach Match like shortcuts; on Windows
+// and Linux the widget package draws it.
 //
 //	if m.Match(c); m.Fired(cmdSave) { save() }
 //
@@ -78,6 +79,11 @@ const (
 	RoleZoom
 	// RoleCloseWindow is the standard Close Window command.
 	RoleCloseWindow
+	// RoleSettings is the application's Settings command (⌘, on macOS, where
+	// it sits in the application menu). It is the app's to act on.
+	RoleSettings
+
+	roleEnd // one past the last role
 )
 
 // editAction is the ui edit action of an edit role, 0 for the others.
@@ -132,6 +138,9 @@ type Command struct {
 	Shortcut Shortcut // zero: none
 	Scope    Scope
 	Role     Role
+	// Symbol is the SF Symbol shown before the title in native menus
+	// ("doc.on.doc"; "" none). Drawn menus do not show it yet.
+	Symbol string
 	// InModal lets the command act while a modal overlay (a dialog) is open.
 	// Without it every command and shortcut is held back then, except the edit
 	// roles for a text field with the focus inside the modal (see Match). Mark
@@ -164,7 +173,24 @@ type Menu struct {
 	Title string
 	// Items are the menu's entries, in order.
 	Items []Item
+	// Role marks the bar's Window and Help menus, which the system extends
+	// on macOS (the list of windows, the Help search field).
+	Role MenuRole
 }
+
+// MenuRole marks a menu the operating system knows (Menu.Role).
+type MenuRole uint8
+
+const (
+	// MenuPlain is an ordinary menu.
+	MenuPlain MenuRole = iota
+	// MenuWindow is the Window menu. On macOS the system lists the windows in
+	// it; without one the bar gets a standard Window menu.
+	MenuWindow
+	// MenuHelp is the Help menu. On macOS the system adds its search field;
+	// without one the bar gets an empty Help menu that has it.
+	MenuHelp
+)
 
 // Model is the validated commands and menus plus the commands' mutable state.
 // It is not safe for concurrent use.
@@ -202,7 +228,8 @@ const queueSize = 16
 // NewModel validates the commands, menus and bar and returns the model. bar
 // lists the indices of the menus shown as the menu bar, in order. It copies its
 // arguments. The errors are: a zero or repeated command id, a command without a
-// title or role, an unknown scope or role, a role used twice, a shortcut with
+// title or role, an unknown scope or role, a role used twice (a command's or a
+// menu's), a shortcut with
 // modifiers but no key or one that two commands share, an item that names an
 // unknown command or submenu, a submenu that is its own ancestor, a submenu
 // used twice, and a bar entry out of range or repeated.
@@ -213,7 +240,7 @@ func NewModel(commands []Command, menus []Menu, bar []int) (*Model, error) {
 		bar:   append([]int(nil), bar...),
 	}
 	for i := range menus {
-		m.menus[i] = Menu{Title: menus[i].Title, Items: append([]Item(nil), menus[i].Items...)}
+		m.menus[i] = Menu{Title: menus[i].Title, Items: append([]Item(nil), menus[i].Items...), Role: menus[i].Role}
 	}
 	roles := make(map[Role]ID)
 	shortcuts := make(map[keyIndex]ID)
@@ -226,7 +253,7 @@ func NewModel(commands []Command, menus []Menu, bar []int) (*Model, error) {
 			return nil, fmt.Errorf("menu: command %d has neither a title nor a role", c.ID)
 		case c.Scope > ScopeApp:
 			return nil, fmt.Errorf("menu: command %d has an unknown scope %d", c.ID, c.Scope)
-		case c.Role > RoleCloseWindow:
+		case c.Role >= roleEnd:
 			return nil, fmt.Errorf("menu: command %d has an unknown role %d", c.ID, c.Role)
 		}
 		if c.Role != RoleNone {
@@ -259,7 +286,17 @@ func NewModel(commands []Command, menus []Menu, bar []int) (*Model, error) {
 	m.off, m.check = make([]uint64, words), make([]uint64, words)
 
 	parent := make([]int, len(m.menus)) // 1 + the index of the menu that holds it as a submenu
+	menuRoles := make(map[MenuRole]int)
 	for mi := range m.menus {
+		switch r := m.menus[mi].Role; {
+		case r > MenuHelp:
+			return nil, fmt.Errorf("menu: menu %d has an unknown role %d", mi, r)
+		case r != MenuPlain:
+			if other, dup := menuRoles[r]; dup {
+				return nil, fmt.Errorf("menu: menus %d and %d have the same role", other, mi)
+			}
+			menuRoles[r] = mi
+		}
 		for ii, it := range m.menus[mi].Items {
 			switch it.Kind {
 			case ItemCommand:
