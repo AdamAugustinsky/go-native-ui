@@ -105,6 +105,13 @@ type RunView struct {
 // ClusterRTL is set in RunView.Clusters entries of right-to-left glyphs.
 const ClusterRTL = 1 << 31
 
+// GlyphVariant is the sub argument of Glyph: a quarter-pixel x offset (0..3)
+// and the font-smoothing level of the text colour (SmoothLevel). Backends
+// without font smoothing ignore the level.
+func GlyphVariant(sub, smooth uint8) uint8 { return sub&3 | smooth<<smoothShift }
+
+const smoothShift = 2
+
 // GlyphEntry locates a rasterized glyph in an atlas page.
 type GlyphEntry struct {
 	Page  uint8 // index for PageInfo/Dirty

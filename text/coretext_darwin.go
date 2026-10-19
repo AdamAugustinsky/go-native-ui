@@ -26,6 +26,9 @@ var sy struct {
 	cfAttributedStringCreate                    uintptr
 	cfArrayGetCount, cfArrayGetValueAtIndex     uintptr
 	cfNumberCreate                              uintptr
+	cfNumberGetValue, cfNumberGetTypeID         uintptr
+	cfGetTypeID, cfPreferencesCopyAppValue      uintptr
+	kCurrentApplication                         uintptr // kCFPreferencesCurrentApplication
 	keyCallBacks, valueCallBacks                uintptr // addresses of the callback structs
 	// CoreText
 	ctFontCreateUIFontForLanguage, ctFontCreateWithName  uintptr
@@ -64,14 +67,12 @@ var ctxFlags = [...]struct {
 	{"CGContextSetShouldSubpixelPositionFonts", true},
 	{"CGContextSetAllowsFontSubpixelQuantization", false},
 	{"CGContextSetShouldSubpixelQuantizeFonts", false},
-	{"CGContextSetAllowsFontSmoothing", smoothFonts},
-	{"CGContextSetShouldSmoothFonts", smoothFonts},
+	{"CGContextSetAllowsFontSmoothing", true},
+	{"CGContextSetShouldSmoothFonts", false}, // per glyph, see rasterize
 }
 
-// smoothFonts enables CoreGraphics font smoothing (stem darkening) in the
-// glyph bitmaps. Off: the bitmap is neutral coverage, independent of the text
-// colour the renderer later applies.
-const smoothFonts = false
+// shouldSmooth is the index of CGContextSetShouldSmoothFonts in ctxFlags.
+const shouldSmooth = 7
 
 var (
 	loadOnce sync.Once
@@ -81,9 +82,11 @@ var (
 const (
 	encUTF8        = 0x08000100
 	numFloat64     = 6 // kCFNumberFloat64Type
+	numSInt64      = 4 // kCFNumberSInt64Type
 	uiFontSystem   = 2 // kCTFontUIFontSystem
 	traitColorGlph = 1 << 13
 	bitmapAlphaPre = 1 // kCGImageAlphaPremultipliedLast
+	bitmapAlpha    = 7 // kCGImageAlphaOnly
 )
 
 func loadSyms() error {
@@ -122,6 +125,9 @@ func loadSyms() error {
 		sy.cfAttributedStringCreate = sym(cf, "CFAttributedStringCreate")
 		sy.cfArrayGetCount, sy.cfArrayGetValueAtIndex = sym(cf, "CFArrayGetCount"), sym(cf, "CFArrayGetValueAtIndex")
 		sy.cfNumberCreate = sym(cf, "CFNumberCreate")
+		sy.cfNumberGetValue, sy.cfNumberGetTypeID = sym(cf, "CFNumberGetValue"), sym(cf, "CFNumberGetTypeID")
+		sy.cfGetTypeID, sy.cfPreferencesCopyAppValue = sym(cf, "CFGetTypeID"), sym(cf, "CFPreferencesCopyAppValue")
+		sy.kCurrentApplication = global(cf, "kCFPreferencesCurrentApplication")
 		sy.keyCallBacks, sy.valueCallBacks = sym(cf, "kCFTypeDictionaryKeyCallBacks"), sym(cf, "kCFTypeDictionaryValueCallBacks")
 
 		sy.ctFontCreateUIFontForLanguage, sy.ctFontCreateWithName = sym(ct, "CTFontCreateUIFontForLanguage"), sym(ct, "CTFontCreateWithName")
@@ -628,32 +634,114 @@ func (s *System) ReserveRuns(runs, glyphs, textBytes int) { s.runs.reserve(runs,
 // ---- Rasterization ----
 
 // Glyph returns the atlas entry for a glyph, rasterizing it with CoreText on
-// a miss. sub (0..3) is the x offset in quarter pixels; colour faces ignore
-// it (their entry is the sub 0 bitmap). A hit allocates nothing.
+// a miss. sub is a GlyphVariant: the x offset in quarter pixels and the
+// font-smoothing level of the text colour (SmoothLevel); colour faces ignore
+// both (their entry is the plain sub 0 bitmap). A hit allocates nothing.
 //
 // Entries are valid until AtlasGeneration changes.
 func (s *System) Glyph(face FaceID, gid uint16, sub uint8) GlyphEntry {
 	if int(face) >= len(s.faces) {
 		return GlyphEntry{}
 	}
-	if s.faces[face].color {
-		sub = 0
-	}
+	smooth := min(sub>>smoothShift, smoothLevels)
 	sub &= 3
-	key := glyphKey(face, gid, sub)
+	if s.faces[face].color {
+		sub, smooth = 0, 0
+	}
+	key := glyphKey(face, gid, sub|smooth<<smoothShift)
 	if e, ok := s.atlas.glyphs.lookup(key); ok {
 		return e
 	}
-	e := s.rasterize(face, gid, sub)
+	e := s.rasterize(face, gid, sub, smooth)
 	s.atlas.glyphs.insert(key, e)
 	return e
 }
+
+// smoothLevels is the number of CoreGraphics font-smoothing levels.
+const smoothLevels = 4
+
+// smoothGray is the grey fill each SmoothLevel draws with (1..4): the
+// middle of the luminance band CoreGraphics maps to that level, so
+// CoreGraphics picks the same stem dilation as for the real text colour.
+var smoothGray = [smoothLevels + 1]float64{1, 0, 0.5371, 0.7354, 0.8808}
+
+// SmoothLevel returns the font-smoothing level AppKit draws text of colour
+// rgba (0xRRGGBBAA) with, for GlyphVariant: 0 when the user turned font
+// smoothing off (AppleFontSmoothing = 0), otherwise 1 to 4.
+//
+// With font smoothing (on unless the user turns it off), CoreGraphics
+// thickens glyph stems by an amount picked from the luminance of the fill
+// colour, in four bands of the linear luminance Y: below 1/8, below 3/8,
+// below 5/8, and above (measured on macOS 27.2: 13 pt SF stems at 2x are
+// 2.23 px wide without smoothing, 2.58 with black text, 2.91 with white).
+// AppKit labels are drawn that way, so ours are too.
+func SmoothLevel(rgba uint32) uint8 {
+	smoothPref.Do(readSmoothPref)
+	if !smoothOn {
+		return 0
+	}
+	y := 0.2126*srgbLinear[uint8(rgba>>24)] + 0.7152*srgbLinear[uint8(rgba>>16)] + 0.0722*srgbLinear[uint8(rgba>>8)]
+	switch {
+	case y < 0.125:
+		return 1
+	case y < 0.375:
+		return 2
+	case y < 0.625:
+		return 3
+	}
+	return 4
+}
+
+var (
+	smoothPref sync.Once
+	smoothOn   bool
+	srgbLinear [256]float64 // sRGB component to linear light
+)
+
+// readSmoothPref reads AppleFontSmoothing as AppKit does (the application's
+// domain, then the global one): only an explicit 0 turns smoothing off.
+func readSmoothPref() {
+	for i := range srgbLinear {
+		v := float64(i) / 255
+		if v <= 0.04045 {
+			srgbLinear[i] = v / 12.92
+		} else {
+			srgbLinear[i] = math.Pow((v+0.055)/1.055, 2.4)
+		}
+	}
+	smoothOn = true
+	if loadSyms() != nil || sy.cfPreferencesCopyAppValue == 0 {
+		return
+	}
+	fr := new(ffi.Frame)
+	key := fr.Reset().Arg(0).ArgPtr(unsafe.Pointer(unsafe.StringData(prefKey))).Arg(uintptr(len(prefKey))).
+		Arg32(encUTF8).ArgBool(false).Call(sy.cfStringCreateWithBytes).R0()
+	if key == 0 {
+		return
+	}
+	v := fr.Call2(sy.cfPreferencesCopyAppValue, key, sy.kCurrentApplication)
+	fr.Call1(sy.cfRelease, key)
+	if v == 0 {
+		return
+	}
+	if fr.Call1(sy.cfGetTypeID, v) == fr.Call0(sy.cfNumberGetTypeID) {
+		n := new(int64)
+		if fr.Reset().Arg(v).Arg(numSInt64).ArgPtr(unsafe.Pointer(n)).Call(sy.cfNumberGetValue).Bool() && *n == 0 {
+			smoothOn = false
+		}
+	}
+	fr.Call1(sy.cfRelease, v)
+}
+
+const prefKey = "AppleFontSmoothing"
 
 // AtlasGeneration changes when the atlas is reset because it is full: every
 // page is then cleared and all GlyphEntries are stale.
 func (s *System) AtlasGeneration() uint32 { return s.atlas.gen }
 
-func (s *System) rasterize(face FaceID, gid uint16, sub uint8) GlyphEntry {
+// rasterize draws one glyph at quarter-pixel offset sub and, for outline
+// glyphs, with font-smoothing level smooth (SmoothLevel; 0 is none).
+func (s *System) rasterize(face FaceID, gid uint16, sub, smooth uint8) GlyphEntry {
 	pool := s.poolPush()
 	defer s.poolPop(pool)
 	fc := &s.faces[face]
@@ -692,6 +780,12 @@ func (s *System) rasterize(face FaceID, gid uint16, sub uint8) GlyphEntry {
 	// that region's bottom edge. The pen is given in the scaled user space.
 	s.pt[0] = (sx - float64(x0)) / sc
 	s.pt[1] = (float64(bm.h-h) - float64(y0)) / sc
+	if !fc.color {
+		// An alpha-only context: the bitmap is the coverage whatever the fill,
+		// and the fill's grey selects the smoothing level's stem dilation.
+		s.fr.Reset().Arg(bm.ctx).ArgBool(smooth > 0).Call(sy.cgSetBool[shouldSmooth])
+		s.fr.Reset().Arg(bm.ctx).ArgF64(smoothGray[smooth]).ArgF64(1).Call(sy.cgContextSetGrayFillColor)
+	}
 	s.fr.Call1(sy.cgContextSaveGState, bm.ctx)
 	s.fr.Reset().Arg(bm.ctx).ArgF64(sc).ArgF64(sc).Call(sy.cgContextScaleCTM)
 	s.fr.Reset().Arg(fc.font).ArgPtr(unsafe.Pointer(&s.gid[0])).ArgPtr(unsafe.Pointer(&s.pt[0])).
@@ -726,7 +820,7 @@ func (s *System) bitmapFor(color bool, w, h int) *bitmap {
 	for ch < h {
 		ch *= 2
 	}
-	bpp, info, csFn := 1, uint32(0), sy.cgColorSpaceCreateDeviceGray
+	bpp, info, csFn := 1, uint32(bitmapAlpha), sy.cgColorSpaceCreateDeviceGray
 	if color {
 		bpp, info, csFn = 4, bitmapAlphaPre, sy.cgColorSpaceCreateDeviceRGB
 	}
@@ -741,9 +835,6 @@ func (s *System) bitmapFor(color bool, w, h int) *bitmap {
 	}
 	for i := range ctxFlags {
 		s.fr.Reset().Arg(bm.ctx).ArgBool(ctxFlags[i].on).Call(sy.cgSetBool[i])
-	}
-	if !color {
-		s.fr.Reset().Arg(bm.ctx).ArgF64(1).ArgF64(1).Call(sy.cgContextSetGrayFillColor)
 	}
 	return bm
 }

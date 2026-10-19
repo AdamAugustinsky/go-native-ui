@@ -400,6 +400,7 @@ func (c *Context) emitText(l *gpu.DrawList, b *box, clip [4]float32) {
 // Every glyph is looked up: how far its ink reaches past its advance box is
 // only known from the entry. Quads outside the clip are dropped.
 func (c *Context) emitGlyphs(l *gpu.DrawList, b *box, v text.RunView, x, baseline float32, tclip [4]float32, fade [2]float32, col uint32) {
+	smooth := text.SmoothLevel(col)
 	for i, gid := range v.Glyphs {
 		pen := x + v.X[i]
 		ix := float32(math.Floor(float64(pen)))
@@ -407,7 +408,7 @@ func (c *Context) emitGlyphs(l *gpu.DrawList, b *box, v text.RunView, x, baselin
 		if sub == 4 {
 			sub, ix = 0, ix+1
 		}
-		e := c.sh.Glyph(v.Faces[i], gid, uint8(sub))
+		e := c.sh.Glyph(v.Faces[i], gid, text.GlyphVariant(uint8(sub), smooth))
 		if c.finalPass {
 			if g := c.sh.AtlasGeneration(); g != c.passGen {
 				c.passGen = g

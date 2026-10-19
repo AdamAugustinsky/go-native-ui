@@ -241,89 +241,122 @@ func inkVsOutline(s *System, face FaceID, gid uint16, e GlyphEntry) (past, short
 
 // TestRasterMatchesAppKitLine composites the System's glyphs for a 13 pt
 // label at 2x and compares them with CoreText drawing the same string in
-// AppKit's NSFont through a 2x context, as a Retina NSTextField does: the
-// ink extent and the amount of ink must agree.
+// AppKit's NSFont through a 2x context with font smoothing, as a Retina
+// NSTextField does, in text colours on both sides of every smoothing band:
+// the ink extent and the amount of ink must agree.
 func TestRasterMatchesAppKitLine(t *testing.T) {
 	s := newSys(t)
 	const W, H, ox, base, sc = 512, 128, 10, 80, 2
 	d := FontDesc{SizePt: 13, Scale: sc}
-
-	// AppKit: CTLineDraw of the NSFont line, in the System's own scratch
-	// context (same antialiasing and smoothing flags), before any glyph
-	// is rasterised into it.
-	setPos := ctSym(t, cgLib, "CGContextSetTextPosition")
-	lineDraw := ctSym(t, ctLib, "CTLineDraw")
-	ref := make([]byte, W*H)
-	func() {
-		pool := s.poolPush()
-		defer s.poolPop(pool)
-		bm := s.bitmapFor(false, W, H)
-		if bm == nil || bm.w != W || bm.h != H {
-			t.Fatalf("scratch bitmap %+v", bm)
-		}
-		clear(bm.buf)
-		line := lineOf(t, s, nsFont(s, d), emProbe)
-		s.fr.Call1(sy.cgContextSaveGState, bm.ctx)
-		s.fr.Reset().Arg(bm.ctx).ArgF64(sc).ArgF64(sc).Call(sy.cgContextScaleCTM)
-		s.fr.Reset().Arg(bm.ctx).ArgF64(ox / sc).ArgF64((H - base) / sc).Call(setPos)
-		s.fr.Reset().Arg(line).Arg(bm.ctx).Call(lineDraw)
-		// The text position is not graphics state: reset it for rasterize.
-		s.fr.Reset().Arg(bm.ctx).ArgF64(0).ArgF64(0).Call(setPos)
-		s.fr.Call1(sy.cgContextRestoreGState, bm.ctx)
-		s.release(line)
-		copy(ref, bm.buf[:W*H])
-	}()
-
-	ours := make([]byte, W*H)
-	v := s.Run(s.Shape(s.Font(d), []byte(emProbe)))
-	for i, g := range v.Glyphs {
-		pen := ox + v.X[i]
-		ix := float32(math.Floor(float64(pen)))
-		sub := int((pen-ix)*4 + 0.5)
-		if sub == 4 {
-			sub, ix = 0, ix+1
-		}
-		e := s.Glyph(v.Faces[i], g, uint8(sub))
-		if e.W == 0 {
-			continue
-		}
-		pg := s.atlas.pages[e.Page]
-		gx, gy := int(ix+e.BearingX), int(base-e.BearingY)
-		for r := 0; r < int(e.H); r++ {
-			for c := 0; c < int(e.W); c++ {
-				o := &ours[(gy+r)*W+gx+c]
-				*o = byte(min(255, int(*o)+int(pg.pix[(int(e.Y)+r)*PageSize+int(e.X)+c])))
+	smoothPref.Do(readSmoothPref)
+	t.Logf("font smoothing on: %v", smoothOn)
+	for _, col := range []uint32{
+		0x000000D8,             // labelColor
+		0xFFFFFFD8,             // dark labelColor
+		0x606060FF, 0x666666FF, // Y below and above 1/8
+		0xA2A2A2FF, 0xAAAAAAFF, // 3/8
+		0xCCCCCCFF, 0xD4D4D4FF, // 5/8
+		0x007AFFFF, 0xFF3B30FF, 0x34C759FF, // blue, red, green
+	} {
+		ref := appKitLine(t, s, d, emProbe, col, W, H, ox, base)
+		ours := make([]byte, W*H)
+		v := s.Run(s.Shape(s.Font(d), []byte(emProbe)))
+		smooth := SmoothLevel(col)
+		for i, g := range v.Glyphs {
+			pen := ox + v.X[i]
+			ix := float32(math.Floor(float64(pen)))
+			sub := int((pen-ix)*4 + 0.5)
+			if sub == 4 {
+				sub, ix = 0, ix+1
 			}
-		}
-	}
-
-	ink := func(b []byte) (total float64, x0, x1 int) {
-		x0, x1 = W, -1
-		for y := 0; y < H; y++ {
-			for x := 0; x < W; x++ {
-				if p := b[y*W+x]; p > 0 {
-					total += float64(p)
-					if p >= 128 {
-						x0, x1 = min(x0, x), max(x1, x)
-					}
+			e := s.Glyph(v.Faces[i], g, GlyphVariant(uint8(sub), smooth))
+			if e.W == 0 {
+				continue
+			}
+			pg := s.atlas.pages[e.Page]
+			gx, gy := int(ix+e.BearingX), int(base-e.BearingY)
+			for r := 0; r < int(e.H); r++ {
+				for c := 0; c < int(e.W); c++ {
+					o := &ours[(gy+r)*W+gx+c]
+					*o = byte(min(255, int(*o)+int(pg.pix[(int(e.Y)+r)*PageSize+int(e.X)+c])))
 				}
 			}
 		}
-		return
+		rt, rx0, rx1 := lineInk(ref, W, H)
+		ot, ox0, ox1 := lineInk(ours, W, H)
+		t.Logf("#%08X (level %d): AppKit ink %.0f, columns %d-%d; ours %.0f (%+.2f %%), columns %d-%d", col, smooth, rt, rx0, rx1, ot, 100*(ot/rt-1), ox0, ox1)
+		if rt == 0 {
+			t.Fatal("the AppKit line has no ink")
+		}
+		if abs(ox0-rx0) > 1 || abs(ox1-rx1) > 1 {
+			t.Errorf("#%08X: ink spans columns %d-%d, AppKit's %d-%d", col, ox0, ox1, rx0, rx1)
+		}
+		// Quarter-pixel pen quantisation moves ink but does not change its
+		// amount; one smoothing level changes it by 6 % or more.
+		if math.Abs(ot/rt-1) > 0.01 {
+			t.Errorf("#%08X: ink %.0f, AppKit's %.0f (%+.2f %%)", col, ot, rt, 100*(ot/rt-1))
+		}
 	}
-	rt, rx0, rx1 := ink(ref)
-	ot, ox0, ox1 := ink(ours)
-	t.Logf("AppKit: ink %.0f, columns %d-%d; ours: ink %.0f (%+.2f %%), columns %d-%d", rt, rx0, rx1, ot, 100*(ot/rt-1), ox0, ox1)
-	if rt == 0 {
-		t.Fatal("the AppKit line has no ink")
+}
+
+// appKitLine draws str in AppKit's NSFont for d with CTLineDraw, in colour
+// rgba (its alpha ignored: the coverage is what is compared), into a
+// transparent RGBA context with a d.Scale CTM and font smoothing as the
+// user's setting has it, and returns the alpha: the pen starts at (ox, base)
+// pixels, y down.
+func appKitLine(t *testing.T, s *System, d FontDesc, str string, rgba uint32, W, H int, ox, base float64) []byte {
+	t.Helper()
+	setRGB := ctSym(t, cgLib, "CGContextSetRGBFillColor")
+	setPos := ctSym(t, cgLib, "CGContextSetTextPosition")
+	lineDraw := ctSym(t, ctLib, "CTLineDraw")
+	pool := s.poolPush()
+	defer s.poolPop(pool)
+	buf := make([]byte, W*H*4)
+	cs := s.fr.Call0(sy.cgColorSpaceCreateDeviceRGB)
+	defer s.release(cs)
+	ctx := s.fr.Reset().ArgPtr(unsafe.Pointer(&buf[0])).Arg(uintptr(W)).Arg(uintptr(H)).Arg(8).Arg(uintptr(W * 4)).
+		Arg(cs).Arg32(bitmapAlphaPre).Call(sy.cgBitmapContextCreate).R0()
+	if ctx == 0 {
+		t.Fatal("no bitmap context")
 	}
-	if abs(ox0-rx0) > 1 || abs(ox1-rx1) > 1 {
-		t.Errorf("ink spans columns %d-%d, AppKit's %d-%d", ox0, ox1, rx0, rx1)
+	defer s.release(ctx)
+	for i := range ctxFlags {
+		on := ctxFlags[i].on
+		if i == shouldSmooth {
+			on = smoothOn
+		}
+		s.fr.Reset().Arg(ctx).ArgBool(on).Call(sy.cgSetBool[i])
 	}
-	// Quarter-pixel pen quantisation moves ink but does not change its amount.
-	if math.Abs(ot/rt-1) > 0.01 {
-		t.Errorf("ink %.0f, AppKit's %.0f (%+.2f %%)", ot, rt, 100*(ot/rt-1))
+	c := func(sh uint) float64 { return float64(uint8(rgba>>sh)) / 255 }
+	s.fr.Reset().Arg(ctx).ArgF64(c(24)).ArgF64(c(16)).ArgF64(c(8)).ArgF64(1).Call(setRGB)
+	line := lineOf(t, s, nsFont(s, d), str)
+	defer s.release(line)
+	sc := float64(d.Scale)
+	s.fr.Reset().Arg(ctx).ArgF64(sc).ArgF64(sc).Call(sy.cgContextScaleCTM)
+	s.fr.Reset().Arg(ctx).ArgF64(ox / sc).ArgF64((float64(H) - base) / sc).Call(setPos)
+	s.fr.Reset().Arg(line).Arg(ctx).Call(lineDraw)
+	a := make([]byte, W*H)
+	for i := range a {
+		a[i] = buf[4*i+3]
 	}
+	return a
+}
+
+// lineInk is the total coverage of an R8 image and the first and last
+// columns with a pixel of at least 50 %.
+func lineInk(b []byte, W, H int) (total float64, x0, x1 int) {
+	x0, x1 = W, -1
+	for y := 0; y < H; y++ {
+		for x := 0; x < W; x++ {
+			if p := b[y*W+x]; p > 0 {
+				total += float64(p)
+				if p >= 128 {
+					x0, x1 = min(x0, x), max(x1, x)
+				}
+			}
+		}
+	}
+	return
 }
 
 func abs(v int) int {

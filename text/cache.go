@@ -254,7 +254,7 @@ type glyphTable struct {
 }
 
 func glyphKey(face FaceID, gid uint16, sub uint8) uint64 {
-	return 1<<40 | uint64(face)<<24 | uint64(gid)<<8 | uint64(sub&3)
+	return 1<<40 | uint64(face)<<24 | uint64(gid)<<8 | uint64(sub)
 }
 
 func glyphHash(k uint64) uint64 {
