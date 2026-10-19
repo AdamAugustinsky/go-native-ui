@@ -145,6 +145,36 @@ func fieldWants(e *KeyEvent) bool {
 	return false
 }
 
+// FieldClaims reports whether the focused text field will claim key event e
+// when it arrives in the next frame, as that frame's Begin decides it (see
+// the file comment), from the frame built last. The app asks between frames,
+// before the system acts on a key on its own: a native menu's key equivalent
+// gives way to the field (DECISIONS D28). It allocates nothing.
+func (c *Context) FieldClaims(e KeyEvent) bool {
+	if c.focusKey == 0 || !c.in.Focused || !fieldWants(&e) {
+		return false
+	}
+	v, ok := c.table.Get(uint64(c.focusKey))
+	if !ok {
+		return false
+	}
+	b := &c.boxes[v]
+	if !b.field || b.lastFrame != c.frame || b.flags&Disabled != 0 {
+		return false
+	}
+	// The next frame's modal is the topmost one built in this one.
+	for i := c.nOvs - 1; i >= 0; i-- {
+		if c.ovs[i].kind == OverlayModal {
+			if int(b.ovl)-1 < i {
+				return false
+			}
+			break
+		}
+	}
+	composing := c.in.NPreedit > 0 && (c.imeOwner == 0 || c.imeOwner == c.focusKey)
+	return e.Code != KeyEscape || b.ovl == 0 || composing || b.escClears
+}
+
 // claimFieldKeys is the first step of key distribution (Begin): the focused
 // text field claims the keys it handles.
 func (c *Context) claimFieldKeys() {
