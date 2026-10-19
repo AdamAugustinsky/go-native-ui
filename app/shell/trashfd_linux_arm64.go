@@ -2,8 +2,5 @@
 
 package shell
 
-// The system call numbers of renameat2 and linkat.
-const (
-	sysRenameat2 = 276
-	sysLinkat    = 37
-)
+// sysRenameat2 is the system call number of renameat2.
+const sysRenameat2 = 276

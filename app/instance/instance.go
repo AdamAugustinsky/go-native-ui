@@ -96,9 +96,12 @@
 // is created with FILE_FLAG_FIRST_PIPE_INSTANCE, so a process that made a pipe of
 // that name first makes Acquire fail instead of receiving the requests, with
 // PIPE_REJECT_REMOTE_CLIENTS, and with a security descriptor that grants access to
-// the current user's SID only. The primary looks up the user of every client
-// (GetNamedPipeClientProcessId, then the process token) and serves only the same
-// SID; a secondary does the same for the server before it sends anything. No
+// the current user's SID only. The listener always keeps an idle instance, so the
+// name is never free while it runs. The primary finds the user of every client by
+// impersonating it at the identification level (no process id, so none that can
+// be reused) and serves only the same SID; a secondary finds the server's user
+// from the server's process before it sends anything. Every call on the pipe is
+// overlapped and cancelled, and waited for, when its deadline passes. No
 // directory is used on Windows: Options.Dir is not read as a path and only
 // separates one instance from another (tests use it), so its permissions do not
 // matter.
@@ -331,10 +334,10 @@ func (p *Primary) handle(c conn) {
 	// Only this user's processes are served. Where the system cannot say who is
 	// on the other end, the private directory is what keeps others out; where it
 	// can say and fails to, the connection is refused.
+	c.SetDeadline(time.Now().Add(ioTimeout))
 	if peerOf(c) != nil {
 		return
 	}
-	c.SetDeadline(time.Now().Add(ioTimeout))
 	reply := byte(replyRejected)
 	if id, req, ok := readRequest(c); ok {
 		reply = p.offer(id, req)

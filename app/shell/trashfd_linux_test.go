@@ -6,14 +6,16 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 )
 
-func noRenameat2(t *testing.T) {
+// failRenameat2 makes the call to renameat2 fail with e.
+func failRenameat2(t *testing.T, e syscall.Errno) {
 	t.Helper()
-	useRenameat2 = false
-	t.Cleanup(func() { useRenameat2 = true })
+	renameat2Errno = e
+	t.Cleanup(func() { renameat2Errno = 0 })
 }
 
 func openForTest(t *testing.T, p string) *tdir {
@@ -26,102 +28,87 @@ func openForTest(t *testing.T, p string) *tdir {
 	return d
 }
 
-// Whether or not renameat2 is there, a move never replaces what is at the
-// destination.
+// A move never replaces what is at the destination.
 func TestRenameIntoNeverReplaces(t *testing.T) {
-	for _, name := range []string{"renameat2", "link"} {
-		t.Run(name, func(t *testing.T) {
-			if name == "link" {
-				noRenameat2(t)
-			}
+	a, b := t.TempDir(), t.TempDir()
+	write(t, filepath.Join(a, "f"), "new")
+	write(t, filepath.Join(b, "f"), "old")
+	if err := openForTest(t, b).renameInto(openForTest(t, a), "f", "f"); !errors.Is(err, os.ErrExist) {
+		t.Fatalf("err = %v, want EEXIST", err)
+	}
+	if read(t, filepath.Join(b, "f")) != "old" || read(t, filepath.Join(a, "f")) != "new" {
+		t.Error("a file was replaced or lost")
+	}
+	// A dangling symbolic link at the destination counts as existing.
+	os.Symlink(filepath.Join(b, "nowhere"), filepath.Join(b, "g"))
+	write(t, filepath.Join(a, "g"), "new")
+	if err := openForTest(t, b).renameInto(openForTest(t, a), "g", "g"); !errors.Is(err, os.ErrExist) {
+		t.Fatalf("over a dangling link: %v, want EEXIST", err)
+	}
+	if err := openForTest(t, b).renameInto(openForTest(t, a), "f", "h"); err != nil {
+		t.Fatal(err)
+	}
+	if read(t, filepath.Join(b, "h")) != "new" {
+		t.Error("not moved")
+	}
+}
+
+// Without renameat2 (ENOSYS), or on a file system that does not support the flag
+// (EINVAL), nothing is moved, whatever the file is: no hard link and unlink that
+// could delete a file that replaced the source, no rename that could replace one.
+func TestWithoutRenameat2NothingIsMoved(t *testing.T) {
+	for _, e := range []syscall.Errno{syscall.ENOSYS, syscall.EINVAL} {
+		t.Run(e.Error(), func(t *testing.T) {
+			failRenameat2(t, e)
 			a, b := t.TempDir(), t.TempDir()
-			write(t, filepath.Join(a, "f"), "new")
-			write(t, filepath.Join(b, "f"), "old")
-			if err := openForTest(t, b).renameInto(openForTest(t, a), "f", "f"); !errors.Is(err, os.ErrExist) {
-				t.Fatalf("err = %v, want EEXIST", err)
+			write(t, filepath.Join(a, "f"), "mine")
+			write(t, filepath.Join(a, "d", "inside"), "x")
+			os.Symlink("/etc/hostname", filepath.Join(a, "l"))
+			write(t, filepath.Join(b, "taken"), "old")
+			write(t, filepath.Join(a, "taken"), "new")
+			for _, name := range []string{"f", "d", "l", "taken"} {
+				err := openForTest(t, b).renameInto(openForTest(t, a), name, name)
+				if !errors.Is(err, errors.ErrUnsupported) {
+					t.Errorf("%s: err = %v, want ErrUnsupported", name, err)
+				}
+				if err != nil && !strings.Contains(err.Error(), "cannot move this file safely") {
+					t.Errorf("%s: the error does not say why: %v", name, err)
+				}
 			}
-			if read(t, filepath.Join(b, "f")) != "old" || read(t, filepath.Join(a, "f")) != "new" {
-				t.Error("a file was replaced or lost")
+			if read(t, filepath.Join(a, "f")) != "mine" || read(t, filepath.Join(a, "d", "inside")) != "x" || read(t, filepath.Join(a, "taken")) != "new" {
+				t.Error("a source was changed")
 			}
-			// A dangling symbolic link at the destination counts as existing.
-			os.Symlink(filepath.Join(b, "nowhere"), filepath.Join(b, "g"))
-			write(t, filepath.Join(a, "g"), "new")
-			if err := openForTest(t, b).renameInto(openForTest(t, a), "g", "g"); !errors.Is(err, os.ErrExist) {
-				t.Fatalf("over a dangling link: %v, want EEXIST", err)
+			if _, err := os.Lstat(filepath.Join(a, "l")); err != nil {
+				t.Error("the link was moved")
 			}
-			if _, err := os.Lstat(filepath.Join(b, "nowhere")); err == nil {
-				t.Error("the link's target was created")
+			if read(t, filepath.Join(b, "taken")) != "old" {
+				t.Error("a file at the destination was replaced")
 			}
-			// And a free name works.
-			if err := openForTest(t, b).renameInto(openForTest(t, a), "f", "h"); err != nil {
-				t.Fatal(err)
-			}
-			if read(t, filepath.Join(b, "h")) != "new" {
-				t.Error("not moved")
-			}
-			if _, err := os.Lstat(filepath.Join(a, "f")); !errors.Is(err, os.ErrNotExist) {
-				t.Error("the old name is still there")
+			if ents, _ := os.ReadDir(b); len(ents) != 1 {
+				t.Errorf("something was put in the destination: %v", ents)
 			}
 		})
 	}
 }
 
-// Without renameat2 a directory is refused, not renamed: the old fallback used
-// renameat, which replaces an empty directory that appeared after the check.
-func TestRenameFallbackRefusesADirectory(t *testing.T) {
-	noRenameat2(t)
-	a, b := t.TempDir(), t.TempDir()
-	write(t, filepath.Join(a, "d", "inside"), "x")
-	if err := openForTest(t, b).renameInto(openForTest(t, a), "d", "d"); !errors.Is(err, errors.ErrUnsupported) {
-		t.Fatalf("err = %v, want ErrUnsupported", err)
-	}
-	if read(t, filepath.Join(a, "d", "inside")) != "x" {
-		t.Error("the directory was moved")
-	}
-	if _, err := os.Lstat(filepath.Join(b, "d")); err == nil {
-		t.Error("something appeared at the destination")
-	}
-	// An empty directory that is already at the destination is left alone as well.
-	os.Mkdir(filepath.Join(b, "e"), 0o700)
-	os.Mkdir(filepath.Join(a, "e"), 0o700)
-	if err := openForTest(t, b).renameInto(openForTest(t, a), "e", "e"); err == nil {
-		t.Error("an empty directory replaced another")
-	}
-}
-
-// A symbolic link is moved as itself.
-func TestRenameFallbackMovesASymlinkItself(t *testing.T) {
-	noRenameat2(t)
-	a, b := t.TempDir(), t.TempDir()
-	os.Symlink("/etc/hostname", filepath.Join(a, "l"))
-	if err := openForTest(t, b).renameInto(openForTest(t, a), "l", "l"); err != nil {
-		t.Fatal(err)
-	}
-	if got, err := os.Readlink(filepath.Join(b, "l")); err != nil || got != "/etc/hostname" {
-		t.Errorf("moved link: %q %v", got, err)
-	}
-	if _, err := os.Lstat(filepath.Join(a, "l")); err == nil {
-		t.Error("the old name is still there")
-	}
-}
-
-// A real trash works through the fallback, and a name that is taken moves on to
-// the next one.
-func TestTrashThroughTheFallback(t *testing.T) {
-	noRenameat2(t)
+// Trash refuses, leaves the file and the trash as they were, and says why.
+func TestTrashRefusesWithoutRenameat2(t *testing.T) {
+	failRenameat2(t, syscall.ENOSYS)
 	root := t.TempDir()
 	data := filepath.Join(root, "data")
-	write(t, filepath.Join(data, "Trash", "files", "f"), "already there") // no info file for it
 	f := filepath.Join(root, "work", "f")
 	write(t, f, "mine")
-	if err := trashXDG(f, data, 1000, stamp); err != nil {
-		t.Fatal(err)
+	err := trashXDG(f, data, 1000, stamp)
+	if !errors.Is(err, errors.ErrUnsupported) {
+		t.Fatalf("err = %v, want ErrUnsupported", err)
 	}
-	if read(t, filepath.Join(data, "Trash", "files", "f")) != "already there" {
-		t.Error("an existing file in the trash was replaced")
+	if read(t, f) != "mine" {
+		t.Error("the file was moved")
 	}
-	if read(t, filepath.Join(data, "Trash", "files", "f.2")) != "mine" {
-		t.Error("the file was not trashed under the next name")
+	for _, d := range []string{"files", "info"} {
+		if ents, _ := os.ReadDir(filepath.Join(data, "Trash", d)); len(ents) != 0 {
+			t.Errorf("%s holds %v", d, ents)
+		}
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -23,32 +24,45 @@ import (
 //     session, so users and sessions never share one.
 //   - The first instance is created with FILE_FLAG_FIRST_PIPE_INSTANCE, so a
 //     process that made a pipe of that name earlier makes Acquire fail instead of
-//     receiving the requests.
+//     receiving the requests. The listener always keeps an idle instance until it
+//     is closed, so the name never goes free in between.
 //   - It is created with PIPE_REJECT_REMOTE_CLIENTS and with a DACL that grants
 //     access to the user's SID only (and so to no other user, administrators
 //     included).
-//   - The server checks the user of every client process, and the client the user
-//     of the server process, against the user's own SID.
+//   - The server finds the user of every client by impersonating it at the
+//     identification level (no process id is involved), the client finds the user
+//     of the server from its process, and both compare it with the user's own SID.
+//   - Every handle is overlapped. Each call has its own event and OVERLAPPED, is
+//     waited for up to its deadline, and when the deadline passes (or the
+//     connection or listener is closed) it is cancelled with CancelIoEx and
+//     waited for until it has completed, so nothing touches a buffer, an
+//     OVERLAPPED or a handle after the call has returned.
 
 var (
 	advapi32 = syscall.NewLazyDLL("advapi32.dll")
 
-	createNamedPipeW   = kernel32.NewProc("CreateNamedPipeW")
-	connectNamedPipe   = kernel32.NewProc("ConnectNamedPipe")
-	waitNamedPipeW     = kernel32.NewProc("WaitNamedPipeW")
-	cancelIoEx         = kernel32.NewProc("CancelIoEx")
-	flushFileBuffers   = kernel32.NewProc("FlushFileBuffers")
-	pipeClientPID      = kernel32.NewProc("GetNamedPipeClientProcessId")
-	pipeServerPID      = kernel32.NewProc("GetNamedPipeServerProcessId")
-	processIDToSession = kernel32.NewProc("ProcessIdToSessionId")
-	localFree          = kernel32.NewProc("LocalFree")
+	createNamedPipeW    = kernel32.NewProc("CreateNamedPipeW")
+	connectNamedPipe    = kernel32.NewProc("ConnectNamedPipe")
+	waitNamedPipeW      = kernel32.NewProc("WaitNamedPipeW")
+	cancelIoEx          = kernel32.NewProc("CancelIoEx")
+	getOverlappedResult = kernel32.NewProc("GetOverlappedResult")
+	createEventW        = kernel32.NewProc("CreateEventW")
+	setEvent            = kernel32.NewProc("SetEvent")
+	waitForMultiple     = kernel32.NewProc("WaitForMultipleObjects")
+	pipeServerPID       = kernel32.NewProc("GetNamedPipeServerProcessId")
+	processIDToSession  = kernel32.NewProc("ProcessIdToSessionId")
+	localFree           = kernel32.NewProc("LocalFree")
 
-	convertStringSD = advapi32.NewProc("ConvertStringSecurityDescriptorToSecurityDescriptorW")
+	convertStringSD       = advapi32.NewProc("ConvertStringSecurityDescriptorToSecurityDescriptorW")
+	impersonatePipeClient = advapi32.NewProc("ImpersonateNamedPipeClient")
+	revertToSelf          = advapi32.NewProc("RevertToSelf")
+	openThreadToken       = advapi32.NewProc("OpenThreadToken")
 )
 
 const (
 	pipeAccessDuplex        = 0x00000003
 	fileFlagFirstInstance   = 0x00080000
+	fileFlagOverlapped      = 0x40000000
 	pipeTypeByte            = 0x0
 	pipeWait                = 0x0
 	pipeRejectRemoteClients = 0x8
@@ -58,13 +72,40 @@ const (
 	processQueryLimited     = 0x1000
 	tokenQuery              = 0x8
 
+	waitObject0 = 0
+	waitTimeout = 0x102
+	infinite    = 0xFFFFFFFF
+
+	errIOPending     = syscall.Errno(997)
 	errPipeBusy      = syscall.Errno(231)
 	errPipeConnected = syscall.Errno(535)
 	errNoData        = syscall.Errno(232)
+	errNotConnected  = syscall.Errno(233)
 	errBrokenPipe    = syscall.Errno(109)
 	errAborted       = syscall.Errno(995)
-	errFileNotFound  = syscall.Errno(2)
+	errNoSysRes      = syscall.Errno(1450)
 )
+
+// Hooks for the tests, which force interleavings that are otherwise a matter of
+// luck. All are nil or false in production.
+var (
+	// ioBeforeSubmit runs after a call is registered with its connection and
+	// before it is submitted; ioBeforeWait after it is submitted and before it
+	// is waited for.
+	ioBeforeSubmit atomic.Pointer[func()]
+	ioBeforeWait   atomic.Pointer[func()]
+	// beforeCreateNext runs in Accept before it creates the replacement
+	// instance.
+	beforeCreateNext atomic.Pointer[func()]
+	// failCreate makes the creation of every instance but the first fail.
+	failCreate atomic.Bool
+)
+
+func runHook(h *atomic.Pointer[func()]) {
+	if f := h.Load(); f != nil {
+		(*f)()
+	}
+}
 
 // sidOverride replaces the user's SID for the checks: tests set it, to be taken
 // for another user.
@@ -126,18 +167,83 @@ func setup(id string, o Options) (lockKey, addr string, err error) {
 
 func removeEndpoint(string) {}
 
+// ---- overlapped calls ------------------------------------------------------------
+
+var (
+	errClosed         = errors.New("instance: use of a closed connection")
+	errListenerClosed = errors.New("instance: listener closed")
+)
+
+func newEvent() (syscall.Handle, error) {
+	h, _, e := createEventW.Call(0, 1, 0, 0) // manual reset, not signalled
+	if h == 0 {
+		return 0, e
+	}
+	return syscall.Handle(h), nil
+}
+
+// cancel asks for the call ov on h to be cancelled; it may already be done.
+func cancel(h syscall.Handle, ov *syscall.Overlapped) {
+	cancelIoEx.Call(uintptr(h), uintptr(unsafe.Pointer(ov)))
+}
+
+// await waits for the overlapped call ov, which has been submitted on h, until
+// the deadline (none if zero) or until the event abort (if not 0) is signalled.
+// In either case the call is cancelled, and await returns only when it has
+// completed, so the caller may reuse its buffer and ov: os.ErrDeadlineExceeded
+// for the deadline, errClosed for abort. If the call completed regardless, its
+// result is returned.
+func await(h syscall.Handle, ov *syscall.Overlapped, deadline time.Time, abort syscall.Handle) (uint32, error) {
+	runHook(&ioBeforeWait)
+	handles := [2]syscall.Handle{ov.HEvent, abort}
+	count := uintptr(1)
+	if abort != 0 {
+		count = 2
+	}
+	ms := uintptr(infinite)
+	if !deadline.IsZero() {
+		ms = uintptr(max(0, min(time.Until(deadline)/time.Millisecond, time.Duration(infinite-1))))
+	}
+	r, _, _ := waitForMultiple.Call(count, uintptr(unsafe.Pointer(&handles[0])), 0, ms)
+	timedOut, aborted := false, false
+	switch r {
+	case waitObject0:
+	case waitObject0 + 1:
+		aborted = true
+	case waitTimeout:
+		timedOut = true
+	default: // WAIT_FAILED: give up on the call
+		aborted = true
+	}
+	if timedOut || aborted {
+		cancel(h, ov)
+	}
+	var n uint32
+	if r, _, e := getOverlappedResult.Call(uintptr(h), uintptr(unsafe.Pointer(ov)), uintptr(unsafe.Pointer(&n)), 1); r == 0 {
+		switch {
+		case e == errAborted && timedOut:
+			return n, os.ErrDeadlineExceeded
+		case e == errAborted && aborted:
+			return n, errClosed
+		}
+		return n, e
+	}
+	return n, nil
+}
+
 // ---- the server ------------------------------------------------------------------
 
 type pipeListener struct {
 	addr string
 	name *uint16
-	sd   uintptr // the security descriptor, from LocalAlloc
-	sa   syscall.SecurityAttributes
 
-	mu        sync.Mutex
-	next      syscall.Handle // the instance that waits for the next client
-	accepting bool
-	closed    bool
+	mu      sync.Mutex
+	sd      uintptr // the security descriptor, from LocalAlloc; freed by Close
+	sa      syscall.SecurityAttributes
+	next    syscall.Handle // an idle instance: it keeps the name until Close
+	closed  bool
+	wg      sync.WaitGroup // the Accept calls, which create instances with sd
+	closeEv syscall.Handle // signalled by Close
 }
 
 // listen creates the first instance, which fails if the name is taken, with the
@@ -160,8 +266,13 @@ func listen(addr string) (listener, error) {
 		return nil, fmt.Errorf("building the security descriptor: %w", e)
 	}
 	l.sa = syscall.SecurityAttributes{Length: uint32(unsafe.Sizeof(syscall.SecurityAttributes{})), SecurityDescriptor: l.sd}
+	if l.closeEv, err = newEvent(); err != nil {
+		localFree.Call(l.sd)
+		return nil, err
+	}
 	h, err := l.create(true)
 	if err != nil {
+		syscall.CloseHandle(l.closeEv)
 		localFree.Call(l.sd)
 		return nil, fmt.Errorf("creating the pipe (is the name taken?): %w", err)
 	}
@@ -169,10 +280,15 @@ func listen(addr string) (listener, error) {
 	return l, nil
 }
 
+// create makes an instance. Only the first has FILE_FLAG_FIRST_PIPE_INSTANCE: the
+// others are made while an instance still holds the name (see Accept). The caller
+// holds l.mu, or is listen, and l.sd is still allocated.
 func (l *pipeListener) create(first bool) (syscall.Handle, error) {
-	mode := uintptr(pipeAccessDuplex)
+	mode := uintptr(pipeAccessDuplex | fileFlagOverlapped)
 	if first {
 		mode |= fileFlagFirstInstance
+	} else if failCreate.Load() {
+		return 0, errNoSysRes
 	}
 	h, _, e := createNamedPipeW.Call(uintptr(unsafe.Pointer(l.name)), mode,
 		pipeTypeByte|pipeWait|pipeRejectRemoteClients, pipeUnlimitedInstances, 4096, 4096, 0,
@@ -183,52 +299,70 @@ func (l *pipeListener) create(first bool) (syscall.Handle, error) {
 	return syscall.Handle(h), nil
 }
 
+// Accept waits for a client. The idle instance l.next is what the client will
+// find; before it is used, another is created to take its place, so that an
+// instance (and with it the name) exists at every moment. If that cannot be
+// created, the idle one stays where it is, nothing is accepted, and creation is
+// tried again until it works or the listener is closed.
 func (l *pipeListener) Accept() (conn, error) {
 	l.mu.Lock()
 	if l.closed {
 		l.mu.Unlock()
-		return nil, net_ErrClosed
+		return nil, errListenerClosed
 	}
-	h := l.next
-	l.next = 0
-	if h == 0 {
-		var err error
-		if h, err = l.create(false); err != nil {
+	l.wg.Add(1) // Close waits for this call before it frees the descriptor
+	l.mu.Unlock()
+	defer l.wg.Done()
+
+	var h syscall.Handle
+	for {
+		runHook(&beforeCreateNext)
+		l.mu.Lock()
+		if l.closed {
 			l.mu.Unlock()
-			return nil, err
+			return nil, errListenerClosed
+		}
+		nh, err := l.create(false)
+		if err == nil {
+			h, l.next = l.next, nh
+		}
+		l.mu.Unlock()
+		if err == nil {
+			break
+		}
+		if r, _, _ := waitForMultiple.Call(1, uintptr(unsafe.Pointer(&l.closeEv)), 0, 20); r == waitObject0 {
+			return nil, errListenerClosed
 		}
 	}
-	l.accepting = true
-	l.mu.Unlock()
 
-	r, _, e := connectNamedPipe.Call(uintptr(h), 0)
-	l.mu.Lock()
-	l.accepting = false
-	closed := l.closed
-	l.mu.Unlock()
-	if closed {
+	ev, err := newEvent()
+	if err != nil {
 		syscall.CloseHandle(h)
-		return nil, net_ErrClosed
+		return nil, err
 	}
-	if r == 0 && e != errPipeConnected && e != errNoData {
+	defer syscall.CloseHandle(ev)
+	ov := &syscall.Overlapped{HEvent: ev}
+	r, _, e := connectNamedPipe.Call(uintptr(h), uintptr(unsafe.Pointer(ov)))
+	switch {
+	case r != 0, e == errPipeConnected, e == errNoData:
+		// Connected (a client that has gone again is seen as an end of file).
+	case e == errIOPending:
+		if _, err := await(h, ov, time.Time{}, l.closeEv); err != nil && err != errNoData {
+			syscall.CloseHandle(h)
+			if err == errClosed {
+				return nil, errListenerClosed
+			}
+			return nil, err
+		}
+	default:
 		syscall.CloseHandle(h)
 		return nil, e
 	}
-	// Another instance waits for the next client before this one is served.
-	nh, err := l.create(false)
-	l.mu.Lock()
-	switch {
-	case l.closed && err == nil:
-		syscall.CloseHandle(nh)
-	case err == nil:
-		l.next = nh
-	}
-	l.mu.Unlock()
-	return &pipeConn{h: h, server: true}, nil
+	return newPipeConn(h, true), nil
 }
 
-var net_ErrClosed = errors.New("instance: listener closed")
-
+// Close stops the listener. It returns when no Accept is still using it; only
+// then are the idle instance and the security descriptor released.
 func (l *pipeListener) Close() error {
 	l.mu.Lock()
 	if l.closed {
@@ -236,26 +370,20 @@ func (l *pipeListener) Close() error {
 		return nil
 	}
 	l.closed = true
-	h, accepting := l.next, l.accepting
-	l.next = 0
+	l.mu.Unlock()
+	setEvent.Call(uintptr(l.closeEv))
+	l.wg.Wait()
+	l.mu.Lock()
+	h, sd := l.next, l.sd
+	l.next, l.sd = 0, 0
 	l.mu.Unlock()
 	if h != 0 {
 		syscall.CloseHandle(h)
 	}
-	// An Accept blocked in ConnectNamedPipe is woken by a client of our own: the
-	// instance is listening whether or not Accept has reached the call yet.
-	for i := 0; accepting && i < 50; i++ {
-		if c, err := dialRaw(l.addr, 100*time.Millisecond); err == nil {
-			c.Close()
-		}
-		l.mu.Lock()
-		accepting = l.accepting
-		l.mu.Unlock()
-		if accepting {
-			time.Sleep(10 * time.Millisecond)
-		}
+	if sd != 0 {
+		localFree.Call(sd)
 	}
-	localFree.Call(l.sd)
+	syscall.CloseHandle(l.closeEv)
 	return nil
 }
 
@@ -264,9 +392,18 @@ func (l *pipeListener) Close() error {
 type pipeConn struct {
 	h      syscall.Handle
 	server bool
+	wrote  bool   // a server that has answered waits for the client to go before it closes
+	pre    []byte // read ahead by peerCheck, returned first by Read
 
 	mu       sync.Mutex
 	deadline time.Time
+	closed   bool
+	pending  map[*syscall.Overlapped]struct{} // the calls in progress, for Close to cancel
+	ops      sync.WaitGroup                   // the calls in progress, for Close to wait for
+}
+
+func newPipeConn(h syscall.Handle, server bool) *pipeConn {
+	return &pipeConn{h: h, server: server, pending: map[*syscall.Overlapped]struct{}{}}
 }
 
 func (c *pipeConn) SetDeadline(t time.Time) error {
@@ -276,35 +413,50 @@ func (c *pipeConn) SetDeadline(t time.Time) error {
 	return nil
 }
 
-// do runs one blocking call on the handle, cancelled when the deadline passes.
-func (c *pipeConn) do(f func() error) error {
+// do runs one overlapped call, with the connection's deadline. A Close that
+// arrives at any point cancels it.
+func (c *pipeConn) do(start func(ov *syscall.Overlapped) error) (uint32, error) {
 	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return 0, errClosed
+	}
+	ev, err := newEvent()
+	if err != nil {
+		c.mu.Unlock()
+		return 0, err
+	}
+	ov := &syscall.Overlapped{HEvent: ev}
+	c.pending[ov] = struct{}{}
+	c.ops.Add(1)
 	d := c.deadline
 	c.mu.Unlock()
-	var fired atomic.Bool
-	if !d.IsZero() {
-		dur := time.Until(d)
-		if dur <= 0 {
-			return os.ErrDeadlineExceeded
-		}
-		t := time.AfterFunc(dur, func() { fired.Store(true); cancelIoEx.Call(uintptr(c.h), 0) })
-		defer t.Stop()
+	defer func() {
+		c.mu.Lock()
+		delete(c.pending, ov)
+		c.mu.Unlock()
+		syscall.CloseHandle(ev)
+		c.ops.Done()
+	}()
+
+	runHook(&ioBeforeSubmit)
+	if err := start(ov); err != nil && err != errIOPending {
+		return 0, err
 	}
-	err := f()
-	if err != nil && (fired.Load() || err == errAborted) {
-		return os.ErrDeadlineExceeded
+	// A Close that came before the call was submitted found nothing to cancel.
+	c.mu.Lock()
+	if c.closed {
+		cancel(c.h, ov)
 	}
-	return err
+	c.mu.Unlock()
+	return await(c.h, ov, d, 0)
 }
 
-func (c *pipeConn) Read(p []byte) (int, error) {
-	if len(p) == 0 {
-		return 0, nil
-	}
-	var n uint32
-	err := c.do(func() error { return syscall.ReadFile(c.h, p, &n, nil) })
+func (c *pipeConn) readRaw(p []byte) (int, error) {
+	var done uint32
+	n, err := c.do(func(ov *syscall.Overlapped) error { return syscall.ReadFile(c.h, p, &done, ov) })
 	switch {
-	case err == errBrokenPipe:
+	case err == errBrokenPipe || err == errNotConnected:
 		return int(n), io.EOF
 	case err != nil:
 		return int(n), err
@@ -314,31 +466,110 @@ func (c *pipeConn) Read(p []byte) (int, error) {
 	return int(n), nil
 }
 
+func (c *pipeConn) Read(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	if len(c.pre) > 0 {
+		n := copy(p, c.pre)
+		c.pre = c.pre[n:]
+		return n, nil
+	}
+	return c.readRaw(p)
+}
+
 func (c *pipeConn) Write(p []byte) (int, error) {
 	done := 0
 	for done < len(p) {
-		var n uint32
-		if err := c.do(func() error { return syscall.WriteFile(c.h, p[done:], &n, nil) }); err != nil {
+		var w uint32
+		n, err := c.do(func(ov *syscall.Overlapped) error { return syscall.WriteFile(c.h, p[done:], &w, ov) })
+		if err != nil {
 			return done, err
 		}
 		done += int(n)
 	}
+	c.wrote = true
 	return done, nil
 }
 
-// Close ends the connection. A server first waits (a little) until the client has
-// read what was written to it.
+// Close ends the connection: the calls in progress are cancelled and waited for,
+// and only then is the handle closed. A server that has answered first waits (for
+// a second at most) until the client has read the answer and gone, which is how
+// it knows the answer was not lost with the pipe.
 func (c *pipeConn) Close() error {
-	if c.server {
-		done := make(chan struct{})
-		go func() { flushFileBuffers.Call(uintptr(c.h)); close(done) }()
-		select {
-		case <-done:
-		case <-time.After(time.Second):
-			cancelIoEx.Call(uintptr(c.h), 0)
-		}
+	if c.server && c.wrote {
+		c.SetDeadline(time.Now().Add(time.Second))
+		var b [1]byte
+		c.readRaw(b[:])
 	}
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return nil
+	}
+	c.closed = true
+	for ov := range c.pending {
+		cancel(c.h, ov)
+	}
+	c.mu.Unlock()
+	c.ops.Wait()
 	return syscall.CloseHandle(c.h)
+}
+
+// ---- who is on the other end -----------------------------------------------------
+
+// clientSID is the SID of the user of the client, found by impersonating the
+// client at the identification level and reading the user of the thread's token.
+// No process id is used, so a process id that is reused cannot give another
+// answer. The system lets a server do this only after it has read from the pipe.
+// The thread is locked to the goroutine while it impersonates, and always reverts:
+// if that fails, the thread is never given back and ends with the goroutine.
+func (c *pipeConn) clientSID() (string, error) {
+	runtime.LockOSThread()
+	if r, _, e := impersonatePipeClient.Call(uintptr(c.h)); r == 0 {
+		runtime.UnlockOSThread()
+		return "", fmt.Errorf("instance: cannot identify the client: %w", e)
+	}
+	defer func() {
+		if r, _, _ := revertToSelf.Call(); r != 0 {
+			runtime.UnlockOSThread()
+		}
+	}()
+	var tok syscall.Token
+	const currentThread = ^uintptr(1) // the pseudo handle -2
+	if r, _, e := openThreadToken.Call(currentThread, tokenQuery, 1, uintptr(unsafe.Pointer(&tok))); r == 0 {
+		return "", fmt.Errorf("instance: cannot read the client's token: %w", e)
+	}
+	defer tok.Close()
+	return tokenSID(tok)
+}
+
+// peerCheck refuses a client that is not a process of this user. It first reads
+// what the client has sent (Read returns it afterwards), because the system does
+// not allow the client to be impersonated before that.
+func peerCheck(c conn) error {
+	pc, ok := c.(*pipeConn)
+	if !ok {
+		return nil
+	}
+	buf := make([]byte, 4096)
+	n, err := pc.readRaw(buf)
+	if err != nil {
+		return err
+	}
+	pc.pre = buf[:n]
+	theirs, err := pc.clientSID()
+	if err != nil {
+		return err
+	}
+	mine, err := userSID()
+	if err != nil {
+		return err
+	}
+	if theirs != mine {
+		return fmt.Errorf("instance: the client belongs to %s", theirs)
+	}
+	return nil
 }
 
 // ---- the client ------------------------------------------------------------------
@@ -353,9 +584,9 @@ func dialRaw(addr string, timeout time.Duration) (conn, error) {
 	deadline := time.Now().Add(timeout)
 	for {
 		h, err := syscall.CreateFile(name, syscall.GENERIC_READ|syscall.GENERIC_WRITE, 0, nil,
-			syscall.OPEN_EXISTING, securitySQOSPresent|securityIdentification, 0)
+			syscall.OPEN_EXISTING, securitySQOSPresent|securityIdentification|fileFlagOverlapped, 0)
 		if err == nil {
-			return &pipeConn{h: h}, nil
+			return newPipeConn(h, false), nil
 		}
 		left := time.Until(deadline)
 		if err != errPipeBusy || left <= 0 {
@@ -365,47 +596,36 @@ func dialRaw(addr string, timeout time.Duration) (conn, error) {
 	}
 }
 
-// dial connects and checks that the server is a process of this user.
+// dial connects and checks that the server is a process of this user: its process
+// is found from the pipe and its token read. A process id that is reused can only
+// lead here to a refusal or to another process of the same user.
 func dial(addr string, timeout time.Duration) (conn, error) {
 	c, err := dialRaw(addr, timeout)
 	if err != nil {
 		return nil, err
 	}
-	pc := c.(*pipeConn)
-	if err := checkPeer(pc, pipeServerPID); err != nil {
+	if err := checkServer(c.(*pipeConn)); err != nil {
 		c.Close()
 		return nil, err
 	}
 	return c, nil
 }
 
-// peerCheck refuses a client that is not a process of this user.
-func peerCheck(c conn) error {
-	pc, ok := c.(*pipeConn)
-	if !ok {
-		return nil
-	}
-	return checkPeer(pc, pipeClientPID)
-}
-
-// checkPeer finds the process at the other end (with GetNamedPipeClientProcessId
-// or GetNamedPipeServerProcessId) and compares its user with ours. Not being
-// able to find out is a refusal.
-func checkPeer(c *pipeConn, pidProc *syscall.LazyProc) error {
+func checkServer(c *pipeConn) error {
 	var pid uint32
-	if r, _, e := pidProc.Call(uintptr(c.h), uintptr(unsafe.Pointer(&pid))); r == 0 {
-		return fmt.Errorf("instance: cannot find the process at the other end: %w", e)
+	if r, _, e := pipeServerPID.Call(uintptr(c.h), uintptr(unsafe.Pointer(&pid))); r == 0 {
+		return fmt.Errorf("instance: cannot find the server process: %w", e)
 	}
 	theirs, err := processSID(pid)
 	if err != nil {
-		return fmt.Errorf("instance: cannot identify the process %d at the other end: %w", pid, err)
+		return fmt.Errorf("instance: cannot identify the server process %d: %w", pid, err)
 	}
 	mine, err := userSID()
 	if err != nil {
 		return err
 	}
 	if theirs != mine {
-		return fmt.Errorf("instance: the process %d at the other end belongs to %s", pid, theirs)
+		return fmt.Errorf("instance: the server process %d belongs to %s", pid, theirs)
 	}
 	return nil
 }

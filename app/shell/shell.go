@@ -181,7 +181,12 @@ func Reveal(paths []string) error {
 // On Linux the check is made on the folder that holds the file, opened once: the
 // entry is compared with the root and the home folder by device and inode on that
 // descriptor, and the same descriptor is used to move it, so a link in the path
-// that is replaced meanwhile changes nothing. On macOS and Windows the system
+// that is replaced meanwhile changes nothing.
+// The move uses renameat2 with RENAME_NOREPLACE, which cannot replace anything.
+// On a file system or a kernel without it Trash fails with an error that is errors.ErrUnsupported and
+// leaves the file where it is: the trash cannot move that file safely there. There
+// is no fallback, because every one (a check and a rename, a hard link and an
+// unlink) can replace or delete a file that someone else put in the way. On macOS and Windows the system
 // moves a file given by its path (NSFileManager, SHFileOperation), so the check
 // before the call is by identity but cannot be tied to the call: a folder on the
 // path swapped by someone who can write to it in that instant is not caught.

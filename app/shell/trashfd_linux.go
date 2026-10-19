@@ -49,16 +49,19 @@ func (d *tdir) createExcl(name string, mode uint32) (*os.File, error) {
 
 func (d *tdir) remove(name string) error { return syscall.Unlinkat(d.fd, name) }
 
-// useRenameat2 is false in tests that exercise the fallback.
-var useRenameat2 = true
+// renameat2Errno, when not 0, is returned in place of the call to renameat2:
+// tests use it to make the call fail with ENOSYS or EINVAL.
+var renameat2Errno syscall.Errno
 
 // renameInto moves src/srcName to d/dstName, failing with EEXIST rather than
 // replacing something there. renameat2 with RENAME_NOREPLACE does the check and
-// the move in one step. Where the kernel or the file system lacks it (ENOSYS, or
-// EINVAL from the file system), the move is a hard link followed by removing the
-// old name: linkat never replaces anything and is atomic. A directory cannot be
-// moved that way and is refused. There is no fallback to renameat, which
-// replaces a file that appeared after any check.
+// the move in one step, and it is the only way to do it: there is no fallback.
+// A check followed by renameat would replace a file that appeared in between,
+// and a hard link followed by unlink would delete a file that replaced the
+// source in between (an editor saving). Where renameat2 is missing (ENOSYS) or
+// the file system does not support the flag (EINVAL), the move is refused with
+// ErrUnsupported and nothing is changed. EXDEV and the other errors are returned
+// as they are.
 func (d *tdir) renameInto(src *tdir, srcName, dstName string) error {
 	from, err := syscall.BytePtrFromString(srcName)
 	if err != nil {
@@ -68,35 +71,21 @@ func (d *tdir) renameInto(src *tdir, srcName, dstName string) error {
 	if err != nil {
 		return err
 	}
-	if sysRenameat2 != 0 && useRenameat2 {
-		_, _, e := syscall.Syscall6(sysRenameat2, uintptr(src.fd), uintptr(unsafe.Pointer(from)), uintptr(d.fd), uintptr(unsafe.Pointer(to)), renameNoReplace, 0)
-		switch e {
-		case 0:
-			return nil
-		case syscall.ENOSYS, syscall.EINVAL:
-		default:
-			return e
-		}
+	e := renameat2Errno
+	switch {
+	case e != 0:
+	case sysRenameat2 == 0:
+		e = syscall.ENOSYS
+	default:
+		_, _, e = syscall.Syscall6(sysRenameat2, uintptr(src.fd), uintptr(unsafe.Pointer(from)), uintptr(d.fd), uintptr(unsafe.Pointer(to)), renameNoReplace, 0)
 	}
-	if sysLinkat == 0 {
-		return fmt.Errorf("%w: no way to move a file without risking to replace one on this architecture", errors.ErrUnsupported)
-	}
-	// No AT_SYMLINK_FOLLOW: a symbolic link is linked itself, not what it names.
-	_, _, e := syscall.Syscall6(sysLinkat, uintptr(src.fd), uintptr(unsafe.Pointer(from)), uintptr(d.fd), uintptr(unsafe.Pointer(to)), 0, 0)
 	switch e {
 	case 0:
-	case syscall.EPERM, syscall.EMLINK:
-		// A directory, or a file system or a protection (fs.protected_hardlinks)
-		// that does not allow a second name.
-		return fmt.Errorf("%w: renameat2 is not available here and %s cannot be linked: %v", errors.ErrUnsupported, srcName, e)
-	default:
-		return e // EEXIST: the name is taken; EXDEV: another file system
+		return nil
+	case syscall.ENOSYS, syscall.EINVAL:
+		return fmt.Errorf("%w: the trash cannot move this file safely on this file system (renameat2 with RENAME_NOREPLACE is not available: %v)", errors.ErrUnsupported, e)
 	}
-	if err := syscall.Unlinkat(src.fd, srcName); err != nil {
-		syscall.Unlinkat(d.fd, dstName) // back out: the file keeps its old name only
-		return err
-	}
-	return nil
+	return e
 }
 
 // statat is fstatat(AT_SYMLINK_NOFOLLOW): what the entry name of d is, not what it
