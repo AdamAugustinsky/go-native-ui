@@ -32,6 +32,16 @@
 //     bus or a service the calls return ErrUnavailable. A locked collection is
 //     reported as ErrLocked; the package never opens the unlock prompt.
 //
+// # Memory
+//
+// The package does not wipe memory. A secret passed to Set and a secret returned
+// by Get pass through copies the package, the runtime and the operating system's
+// libraries make (buffers, Core Foundation objects, D-Bus messages, the garbage
+// collector's moves), and none of those is overwritten when it is no longer
+// needed. The bytes Get returns belong to the caller, who may overwrite them. No
+// stronger promise is made: this package keeps secrets at rest in the OS store,
+// it does not defend a running process against someone reading its memory.
+//
 // # Errors
 //
 // The errors below are matched with errors.Is. The returned error also carries
@@ -39,8 +49,10 @@
 package secret
 
 import (
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"unicode/utf8"
 )
 
 var (
@@ -60,8 +72,8 @@ var (
 	// a Windows session without Credential Manager.
 	ErrUnavailable = errors.New("secret: no credential store available")
 	// ErrInvalid means the service, the account or the secret cannot be
-	// stored: an empty or too-long name, a NUL byte in a name, a secret the OS
-	// would refuse for its size.
+	// stored: an empty or too-long name, a name that is not valid UTF-8 or has
+	// a NUL byte, a secret the OS would refuse for its size.
 	ErrInvalid = errors.New("secret: invalid service, account or secret")
 )
 
@@ -122,6 +134,9 @@ func (s *Store) check(account string) error {
 		if n.v == "" || len(n.v) > maxName {
 			return fmt.Errorf("%w: %s must be 1 to %d bytes", ErrInvalid, n.what, maxName)
 		}
+		if !utf8.ValidString(n.v) { // the OS stores names as text: Core Foundation would make nothing of these bytes
+			return fmt.Errorf("%w: %s is not valid UTF-8", ErrInvalid, n.what)
+		}
 		for i := 0; i < len(n.v); i++ {
 			if n.v[i] == 0 {
 				return fmt.Errorf("%w: %s contains a NUL byte", ErrInvalid, n.what)
@@ -129,4 +144,26 @@ func (s *Store) check(account string) error {
 		}
 	}
 	return nil
+}
+
+// credentialTarget names an item for stores that look names up without regard
+// to case (Windows Credential Manager compares target names that way, so
+// "Alice" and "alice" would be one item). The service and the account are
+// encoded as lower-case hex of their UTF-8 bytes under a fixed prefix; hex has
+// no letters that case folding can merge, and no separator can appear inside
+// either part, so the pair is unambiguous.
+func credentialTarget(service, account string) string {
+	return "gonativeui:v1:" + hex.EncodeToString([]byte(service)) + ":" + hex.EncodeToString([]byte(account))
+}
+
+// shortText cuts s to at most n bytes at a character boundary, for the readable
+// fields of a stored item.
+func shortText(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
 }

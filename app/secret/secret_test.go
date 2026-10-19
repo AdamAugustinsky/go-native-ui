@@ -82,6 +82,40 @@ func roundTrip(t *testing.T, s *Store) {
 	if _, err := other.Get(acct); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("other service: %v", err)
 	}
+	// Names that differ only in case are different items (Windows compares
+	// target names without regard to case, and the package must not let it).
+	for _, pair := range [][2]string{{"Alice", "alice"}, {"\u00c9mile", "\u00e9mile"}} {
+		up, low := pair[0], pair[1]
+		t.Cleanup(func() { s.Delete(up); s.Delete(low) })
+		if err := s.Set(up, []byte("upper")); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.Get(low); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("Get(%q) after Set(%q) = %v, want ErrNotFound", low, up, err)
+		}
+		if err := s.Set(low, []byte("lower")); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := s.Get(up); err != nil || string(got) != "upper" {
+			t.Fatalf("Get(%q) = %q, %v: setting %q overwrote it", up, got, err, low)
+		}
+		if got, err := s.Get(low); err != nil || string(got) != "lower" {
+			t.Fatalf("Get(%q) = %q, %v", low, got, err)
+		}
+		if err := s.Delete(up); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := s.Get(low); err != nil || string(got) != "lower" {
+			t.Fatalf("deleting %q removed %q: %q, %v", up, low, got, err)
+		}
+		if err := s.Delete(low); err != nil {
+			t.Fatal(err)
+		}
+	}
+	upperService := &Store{service: strings.ToUpper(s.Service()), b: s.b}
+	if _, err := upperService.Get(acct); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("a service name in another case: %v", err)
+	}
 	// A secret of a few hundred bytes, all byte values.
 	all := make([]byte, 256)
 	for i := range all {
@@ -148,6 +182,7 @@ func TestInvalidArguments(t *testing.T) {
 	long := strings.Repeat("x", maxName+1)
 	for _, c := range []struct{ service, account string }{
 		{"", "a"}, {"s", ""}, {"s\x00t", "a"}, {"s", "a\x00b"}, {long, "a"}, {"s", long},
+		{"bad\xff", "a"}, {"s", "bad\xc3"}, {"s", "\xed\xa0\x80"}, {"\xf0\x28\x8c\x28", "a"}, // not UTF-8, a surrogate
 	} {
 		f := &fake{}
 		s := &Store{service: c.service, b: f}
@@ -168,5 +203,24 @@ func TestInvalidArguments(t *testing.T) {
 	s := &Store{service: "s", b: f}
 	if err := s.Set("a", nil); err != nil || f.calls != 1 {
 		t.Errorf("an empty secret is allowed: %v, calls %d", err, f.calls)
+	}
+}
+
+func TestCredentialTargetIsCaseSafeAndUnambiguous(t *testing.T) {
+	pairs := [][2]string{{"svc", "Alice"}, {"svc", "alice"}, {"Svc", "alice"}, {"svc", "\u00c9"}, {"svc", "\u00e9"},
+		{"a:b", "c"}, {"a", "b:c"}, {"a", "bc"}, {"ab", "c"}, {"a/b", "c"}, {"a", "b/c"}, {"a", "A"}, {"\u1e9e", "ss"}, {"\u1e9e", "SS"}}
+	seen := map[string][2]string{}
+	for _, p := range pairs {
+		tg := credentialTarget(p[0], p[1])
+		if tg != strings.ToLower(tg) {
+			t.Errorf("%q has capital letters: case folding could merge it with another", tg)
+		}
+		if prev, dup := seen[strings.ToLower(tg)]; dup {
+			t.Errorf("%q and %q both name %q (ignoring case)", prev, p, tg)
+		}
+		seen[strings.ToLower(tg)] = p
+	}
+	if got := shortText("\u00e9\u00e9\u00e9", 5); got != "\u00e9\u00e9" {
+		t.Errorf("shortText cut inside a character: %q", got)
 	}
 }

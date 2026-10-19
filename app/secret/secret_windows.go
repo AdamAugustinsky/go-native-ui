@@ -5,7 +5,6 @@ package secret
 import (
 	"fmt"
 	"runtime"
-	"strings"
 	"sync"
 	"syscall"
 	"unsafe"
@@ -13,9 +12,11 @@ import (
 	"gonativeui/internal/win32"
 )
 
-// Credential Manager (advapi32): one generic credential per item, named
-// "service/account" with the two escaped so that the name is unambiguous,
-// persisted for this machine (not roamed).
+// Credential Manager (advapi32): one generic credential per item, persisted for
+// this machine (not roamed). Credential Manager compares target names without
+// regard to case, so the target is a case-safe encoding of the service and the
+// account (credentialTarget); the account is kept readable in the user name field
+// and the service in the comment, for someone browsing Credential Manager.
 
 const (
 	credTypeGeneric       = 1
@@ -77,18 +78,11 @@ func (credMan) ready() error {
 	return nil
 }
 
-// target is the credential's name. '/' and '%' in the service are escaped, so
-// two (service, account) pairs never share a name.
-func target(service, account string) string {
-	r := strings.NewReplacer("%", "%25", "/", "%2F")
-	return r.Replace(service) + "/" + account
-}
-
 func (c credMan) get(service, account string) ([]byte, error) {
 	if err := c.ready(); err != nil {
 		return nil, err
 	}
-	name, err := syscall.UTF16PtrFromString(target(service, account))
+	name, err := syscall.UTF16PtrFromString(credentialTarget(service, account))
 	if err != nil {
 		return nil, ErrInvalid
 	}
@@ -115,11 +109,15 @@ func (c credMan) set(service, account string, secret []byte) error {
 	if len(secret) > credMaxBlob {
 		return fmt.Errorf("%w: Credential Manager keeps at most %d bytes", ErrInvalid, credMaxBlob)
 	}
-	name, err := syscall.UTF16PtrFromString(target(service, account))
+	name, err := syscall.UTF16PtrFromString(credentialTarget(service, account))
 	if err != nil {
 		return ErrInvalid
 	}
-	user, err := syscall.UTF16PtrFromString(account)
+	user, err := syscall.UTF16PtrFromString(shortText(account, 256)) // CRED_MAX_USERNAME_LENGTH is 513
+	if err != nil {
+		return ErrInvalid
+	}
+	comment, err := syscall.UTF16PtrFromString(shortText(service, 200)) // CRED_MAX_STRING_LENGTH is 256
 	if err != nil {
 		return ErrInvalid
 	}
@@ -128,6 +126,7 @@ func (c credMan) set(service, account string, secret []byte) error {
 	cred := &credential{
 		Type:               credTypeGeneric,
 		TargetName:         name,
+		Comment:            comment,
 		CredentialBlobSize: uint32(len(secret)),
 		CredentialBlob:     &blob[0],
 		Persist:            credPersistLocal,
@@ -148,7 +147,7 @@ func (c credMan) del(service, account string) error {
 	if err := c.ready(); err != nil {
 		return err
 	}
-	name, err := syscall.UTF16PtrFromString(target(service, account))
+	name, err := syscall.UTF16PtrFromString(credentialTarget(service, account))
 	if err != nil {
 		return ErrInvalid
 	}

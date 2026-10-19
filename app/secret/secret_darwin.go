@@ -79,24 +79,37 @@ func osBackend() backend { return keychain{} }
 // temporary keychain, so they never touch the user's items.
 type keychain struct{ ref uintptr }
 
-// query builds the dictionary that names one item. The caller releases it.
-func (k keychain) query(fr *ffi.Frame, service, account string) uintptr {
+// query builds the dictionary that names one item. The caller releases it. Every
+// Core Foundation object made on the way is checked: a null string or dictionary
+// (out of memory, bytes that are not text) is an error, never a half-built query.
+func (k keychain) query(fr *ffi.Frame, service, account string) (uintptr, error) {
 	d := cf.Dict(fr)
+	if d == 0 {
+		return 0, fmt.Errorf("%w: cannot make a query", ErrUnavailable)
+	}
 	cf.DictSet(fr, d, sec.class, sec.classGeneric)
 	for _, kv := range [...]struct {
 		k uintptr
 		v string
 	}{{sec.service, service}, {sec.account, account}} {
 		s := cf.String(fr, kv.v)
+		if s == 0 {
+			cf.CFRelease(fr, d)
+			return 0, fmt.Errorf("%w: cannot make a Core Foundation string of the name", ErrInvalid)
+		}
 		cf.DictSet(fr, d, kv.k, s)
 		cf.CFRelease(fr, s) // the dictionary holds its own reference
 	}
 	if k.ref != 0 {
 		list := cf.Array(fr, k.ref)
+		if list == 0 {
+			cf.CFRelease(fr, d)
+			return 0, fmt.Errorf("%w: cannot make a query", ErrUnavailable)
+		}
 		cf.DictSet(fr, d, sec.searchList, list)
 		cf.CFRelease(fr, list)
 	}
-	return d
+	return d, nil
 }
 
 func (k keychain) begin() (*ffi.Frame, error) {
@@ -113,7 +126,10 @@ func (k keychain) get(service, account string) ([]byte, error) {
 		return nil, err
 	}
 	defer cf.Release(fr)
-	q := k.query(fr, service, account)
+	q, err := k.query(fr, service, account)
+	if err != nil {
+		return nil, err
+	}
 	defer cf.CFRelease(fr, q)
 	cf.DictSet(fr, q, sec.returnData, sec.boolTrue)
 	cf.DictSet(fr, q, sec.matchLimit, sec.matchLimitOne)
@@ -134,12 +150,21 @@ func (k keychain) set(service, account string, secret []byte) error {
 		return err
 	}
 	defer cf.Release(fr)
-	q := k.query(fr, service, account)
+	q, err := k.query(fr, service, account)
+	if err != nil {
+		return err
+	}
 	defer cf.CFRelease(fr, q)
 	data := cf.Data(fr, secret)
+	if data == 0 {
+		return fmt.Errorf("%w: cannot make a Core Foundation object of the secret", ErrUnavailable)
+	}
 	defer cf.CFRelease(fr, data)
 
-	add := k.query(fr, service, account)
+	add, err := k.query(fr, service, account)
+	if err != nil {
+		return err
+	}
 	defer cf.CFRelease(fr, add)
 	cf.DictSet(fr, add, sec.valueData, data)
 	if k.ref != 0 {
@@ -148,6 +173,9 @@ func (k keychain) set(service, account string, secret []byte) error {
 	st := int32(fr.Reset().Arg(add).Arg(0).Call(sec.add).R0())
 	if st == errSecDuplicateItem {
 		upd := cf.Dict(fr)
+		if upd == 0 {
+			return fmt.Errorf("%w: cannot make a query", ErrUnavailable)
+		}
 		defer cf.CFRelease(fr, upd)
 		cf.DictSet(fr, upd, sec.valueData, data)
 		st = int32(fr.Reset().Arg(q).Arg(upd).Call(sec.update).R0())
@@ -164,7 +192,10 @@ func (k keychain) del(service, account string) error {
 		return err
 	}
 	defer cf.Release(fr)
-	q := k.query(fr, service, account)
+	q, err := k.query(fr, service, account)
+	if err != nil {
+		return err
+	}
 	defer cf.CFRelease(fr, q)
 	if st := int32(fr.Reset().Arg(q).Call(sec.del).R0()); st != errSecSuccess {
 		return statusErr(st)
