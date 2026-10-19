@@ -91,6 +91,7 @@ func Open(o Options) (*Window, error) {
 		return nil, errors.New("platform: NSWindow init failed")
 	}
 	objc.Send1(w.win, selSetReleased, 0)
+	w.publicOnly = o.PublicAPIOnly
 	if o.Titlebar > 0 {
 		w.titlebar, w.lights = float64(o.Titlebar), o.TrafficLights
 		objc.Send1(w.win, selSetTitlebarClear, 1)

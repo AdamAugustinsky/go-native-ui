@@ -15,6 +15,11 @@ func (c *Context) Uploader() Uploader { return c.up }
 // an idle window costs nothing. A request below 1 ns is rounded up.
 func (c *Context) WakeIn(ns int64) { c.wakeAfter(ns) }
 
+// DT is the time in seconds the frame being built follows the previous one by,
+// as given to Begin. A widget that repeats an action while a button is held
+// (a stepper) counts the repeats due in the frame with it.
+func (c *Context) DT() float32 { return c.dt }
+
 // RectOf is the rectangle (x0, y0, x1, y1) the box with key k had after the
 // last layout, zero for a key no box had. A widget that needs the geometry of a
 // box it is about to build (a slider mapping the pointer to a value) reads it
