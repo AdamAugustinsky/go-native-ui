@@ -235,7 +235,7 @@ func lightsNativeHere(w *Window) bool {
 func TestWindowButtonsHoldTheirPlace(t *testing.T) {
 	want := [2]float64{21, 22}
 	var opened, native bool
-	var fails []string
+	var fails, steps []string
 	var allocs float64
 	onMain(func() {
 		w, err := Open(Options{Title: "lights", Width: 500, Height: 300, Titlebar: 46, TrafficLights: [2]float32{21, 22}})
@@ -248,6 +248,7 @@ func TestWindowButtonsHoldTheirPlace(t *testing.T) {
 		w.SetDragRegions([]DragRegion{{Rect: [4]float32{0, 0, 500 * w.scale, 46 * w.scale}}}) // the whole band drags
 		space := 0.0
 		lightsEvents(w, func(step string) {
+			steps = append(steps, step)
 			s := seeLights(w)
 			if space == 0 {
 				space = s.centre[1][0] - s.centre[0][0]
@@ -272,6 +273,7 @@ func TestWindowButtonsHoldTheirPlace(t *testing.T) {
 	if !opened {
 		t.Skip("cannot open a window here")
 	}
+	t.Logf("checked after %q", steps)
 	if !native {
 		t.Logf("AppKit has no titlebar metrics here: the buttons stay at its default %v", want)
 	}
