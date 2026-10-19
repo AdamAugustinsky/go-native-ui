@@ -35,6 +35,20 @@ func TestQuitRoutes(t *testing.T) {
 	}
 }
 
+// ⌘Q is the native menu's Quit item, decided by the app's model like every
+// system item: disabled, it asks nothing; enabled, it is a quit request.
+func TestQuitItemFollowsTheModel(t *testing.T) {
+	for n := 0; n <= 1; n++ {
+		t.Run(fmt.Sprintf("%dwindows", n), func(t *testing.T) {
+			t.Parallel()
+			r := child(t, "quitmodel", 60*time.Second, fmt.Sprintf("WINDOWS=%d", n))
+			if r.code != 0 || r.get("requests_disabled") != "0" || r.get("reason") != "1" || r.get("terminated") != "1" {
+				t.Fatalf("exit %d, results %v\n%s", r.code, r.kv, r.out)
+			}
+		})
+	}
+}
+
 // Answers given inside applicationShouldTerminate: are latched: a
 // synchronous allow returns NSTerminateNow, a refusal NSTerminateCancel, and
 // a reply from a native call nested in the event is latched too.

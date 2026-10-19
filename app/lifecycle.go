@@ -378,12 +378,16 @@ func (a *App) syncAppMenuBar() {
 }
 
 // appMenuState is the menu state with no window: there is no focus or modal,
-// so the system items and the commands are enabled, the edit items not.
+// so a command is as the model sets it (SetEnabled, SetChecked), a system
+// item without one is enabled, and an edit item without one is not.
 func (a *App) appMenuState(id uint16, act platform.MenuAction) (enabled, checked bool) {
 	if id == 0 {
 		return act != platform.MenuNone && !act.IsEdit(), false
 	}
-	return a.menu != nil, false
+	if a.menu == nil {
+		return false, false
+	}
+	return a.menu.Enabled(menu.ID(id)), a.menu.Checked(menu.ID(id))
 }
 
 // SetDockMenu makes menu idx of model m the Dock menu (macOS), from the next

@@ -153,6 +153,53 @@ func init() {
 		say("main=returned")
 	}
 
+	// quitmodel: ⌘Q is the native menu's Quit item, which the model decides:
+	// while the model's Quit command is disabled ⌘Q asks nothing; enabled, it
+	// asks (WINDOWS 0 or 1).
+	scenarios["quitmodel"] = func() {
+		n := envInt("WINDOWS")
+		m, err := menu.NewModel([]menu.Command{{ID: 9, Role: menu.RoleQuit, Scope: menu.ScopeApp, Shortcut: menu.Shortcut{Key: 'Q', Primary: true}}},
+			[]menu.Menu{{Title: "File", Items: []menu.Item{{Kind: menu.ItemCommand, Command: 9}}}}, []int{0})
+		if err != nil {
+			fail("model: %v", err)
+		}
+		m.SetEnabled(9, false)
+		h := &handler{}
+		cmdQ := func(a *app.App) {
+			var num uintptr
+			if a.Win != nil {
+				num = windowNumber(ourWindow(a))
+			}
+			postCmdQ(num)
+		}
+		h.start = func(a *app.App) error {
+			if _, ok := openWindows(a, n, &view{}); !ok {
+				os.Exit(0)
+			}
+			a.SetMenu(m)
+			after(500*time.Millisecond, 1)
+			return nil
+		}
+		h.event = func(a *app.App, e *app.Event) bool {
+			switch {
+			case e.Kind == app.EvPost && e.ID == 1:
+				cmdQ(a)
+				after(800*time.Millisecond, 2)
+			case e.Kind == app.EvPost && e.ID == 2:
+				say("requests_disabled=%d", h.requests)
+				m.SetEnabled(9, true)
+				cmdQ(a)
+			case e.Kind == app.EvQuitRequested:
+				say("reason=%d", e.A)
+				return false // the default allows it
+			default:
+				return false
+			}
+			return true
+		}
+		app.Main(app.AppConfig{KeepRunning: true}, h)
+		say("main=returned")
+	}
 	scenarios["delayed"] = delayedScenario
 	scenarios["noreply"] = noReplyScenario
 	scenarios["saturation"] = saturationScenario
