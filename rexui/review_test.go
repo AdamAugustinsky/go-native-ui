@@ -52,18 +52,25 @@ func TestChoiceGroupsReportFocus(t *testing.T) {
 }
 
 // An icon button keeps its glyph centred in the size the app gives it, larger
-// or smaller than its own.
+// or smaller than its own: it sits as it does in a button of its own size
+// (the symbol's own offset, which differs between platforms' rasterisers).
 func TestIconButtonCentresIconInOverride(t *testing.T) {
-	for _, sz := range [][2]float32{{60, 40}, {20, 16}} {
+	// offset is the glyph's centre less the button's, in the given size
+	// (none: the button's own)
+	offset := func(sz *[2]float32) (dx, dy float32) {
 		var id ui.ID
 		g := newRig(t, theme.Light, nil, column(func(g *rig) {
-			g.k.NextSize(g.k.Fixed(sz[0]), g.k.Fixed(sz[1]))
+			if sz != nil {
+				g.k.NextSize(g.k.Fixed(sz[0]), g.k.Fixed(sz[1]))
+			}
 			id = rexui.IconButton(g.k, icon.Plus, "Add", rexui.IconButtonOpts{}).ID
 		}))
 		g.settle()
 		rr := g.c.Rect(id)
-		if w, h := rr[2]-rr[0], rr[3]-rr[1]; w != g.k.Pt(sz[0]) || h != g.k.Pt(sz[1]) {
-			t.Fatalf("%v pt: the button is %v × %v px", sz, w, h)
+		if sz != nil {
+			if w, h := rr[2]-rr[0], rr[3]-rr[1]; w != g.k.Pt(sz[0]) || h != g.k.Pt(sz[1]) {
+				t.Fatalf("%v pt: the button is %v × %v px", *sz, w, h)
+			}
 		}
 		var glyph *gpu.Quad
 		for i := range g.list.Quads {
@@ -74,10 +81,13 @@ func TestIconButtonCentresIconInOverride(t *testing.T) {
 		if glyph == nil {
 			t.Fatalf("%v pt: no glyph drawn", sz)
 		}
-		gx, gy := (glyph.Rect[0]+glyph.Rect[2])/2, (glyph.Rect[1]+glyph.Rect[3])/2
-		bx, by := (rr[0]+rr[2])/2, (rr[1]+rr[3])/2
-		if math.Abs(float64(gx-bx)) > 1 || math.Abs(float64(gy-by)) > 1 {
-			t.Fatalf("%v pt: the glyph's centre (%v, %v) is not the button's (%v, %v)", sz, gx, gy, bx, by)
+		return (glyph.Rect[0]+glyph.Rect[2])/2 - (rr[0]+rr[2])/2, (glyph.Rect[1]+glyph.Rect[3])/2 - (rr[1]+rr[3])/2
+	}
+	nx, ny := offset(nil)
+	for _, sz := range [][2]float32{{60, 40}, {20, 16}} {
+		dx, dy := offset(&sz)
+		if math.Abs(float64(dx-nx)) > 1 || math.Abs(float64(dy-ny)) > 1 {
+			t.Fatalf("%v pt: the glyph is off the button's centre by (%v, %v) px, at its own size (%v, %v)", sz, dx, dy, nx, ny)
 		}
 	}
 }

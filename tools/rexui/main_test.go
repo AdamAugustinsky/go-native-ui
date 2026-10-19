@@ -112,8 +112,10 @@ func TestAddIntoPackageRexui(t *testing.T) {
 	for _, f := range res.files {
 		got, _ := os.ReadFile(f)
 		want, _ := os.ReadFile(filepath.Join(sourceDir(), filepath.Base(f)))
-		// past the header that says where the copy came from
-		if _, body, _ := strings.Cut(string(got), "\n\n"); body != string(want) {
+		// the source after the header that says where the copy came from
+		// (whatever line endings the checkout has)
+		if !strings.HasPrefix(string(got), "// Copied from") || !strings.HasSuffix(string(got), string(want)) ||
+			len(got)-len(want) > 200 {
 			t.Fatalf("%s differs from its source in package rexui", f)
 		}
 	}
