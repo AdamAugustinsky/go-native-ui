@@ -16,7 +16,7 @@ func TestIvarsArePerInstance(t *testing.T) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	d := Define("GNUITestIvars", Cls("NSObject"), nil)
+	d := Define(className("GNUITestIvars"), Cls("NSObject"), nil)
 	other := d.Ivar("gnuiOther")
 	selIdx := Sel("gnuiMyIndex")
 	d.Method(selIdx, "Q@:", func(c *ffi.CB) { c.Ret(d.Index().Get(ID(c.Int(0))) + 1000*other.Get(ID(c.Int(0)))) })
@@ -46,7 +46,7 @@ func TestIvarErrorsPanic(t *testing.T) {
 		f()
 		return
 	}
-	d := Define("GNUITestIvarErrors", Cls("NSObject"), nil)
+	d := Define(className("GNUITestIvarErrors"), Cls("NSObject"), nil)
 	v := d.Ivar("gnuiX")
 	if !panics(func() { d.Ivar("gnuiX") }) {
 		t.Error("an ivar defined twice did not panic")
@@ -101,6 +101,7 @@ func TestSendSuper(t *testing.T) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	superClasses()
+	superKindAsked = 0
 
 	if got := Send1(superObj, selSuperValue, 1); got != 22 {
 		t.Errorf("the override through super = %d, want 2*(10+1)", got)
@@ -130,7 +131,7 @@ func TestObserverAndDelegateCounts(t *testing.T) {
 	defer runtime.UnlockOSThread()
 
 	var got int
-	d := Define("GNUITestObserver", Cls("NSObject"), nil)
+	d := Define(className("GNUITestObserver"), Cls("NSObject"), nil)
 	sel := Sel("gnuiNoted:")
 	d.Method(sel, "v@:@", func(*ffi.CB) { got++ })
 	obs := newObject(d.Register())

@@ -14,7 +14,7 @@ import (
 var (
 	fnApplyF, fnGlobalQueue, fnQueueCreate, fnRelease uintptr
 	fnGroupCreate, fnGroupAsyncF, fnGroupWait         uintptr
-	gcdWorkCB, gcdApplyCB                             uintptr
+	gcdWorkCB, gcdApplyCB, gcdNestCB                  uintptr
 	gcdRan, gcdBad                                    atomic.Int64
 	gcdIDs                                            = new([1 << 15]uint64)
 	gcdIDn                                            atomic.Int64
@@ -28,6 +28,7 @@ func init() {
 		fnGroupCreate, fnGroupAsyncF, fnGroupWait = sym("dispatch_group_create"), sym("dispatch_group_async_f"), sym("dispatch_group_wait")
 		gcdWorkCB = NewCallback(func(c *CB) { gcdWork(c) })  // void (*)(void *ctx)
 		gcdApplyCB = NewCallback(func(c *CB) { gcdWork(c) }) // void (*)(void *ctx, size_t i)
+		gcdNestCB = NewCallback(func(c *CB) { runNest(c.Frame()) })
 	}
 }
 
@@ -196,4 +197,13 @@ func BenchmarkGCDCallback(b *testing.B) {
 		fr.Call4(fnGroupAsyncF, g, q, uintptr(i), gcdWorkCB)
 	}
 	fr.Call2(fnGroupWait, g, ^uintptr(0))
+}
+
+func TestNestedCallbacksOnAGCDThread(t *testing.T) {
+	threadLib(t)
+	g := fr.Call0(fnGroupCreate)
+	fr.Call4(fnGroupAsyncF, g, globalQueue(1), 0, gcdNestCB)
+	fr.Call2(fnGroupWait, g, ^uintptr(0))
+	fr.Call1(fnRelease, g)
+	checkNest(t, "GCD thread")
 }

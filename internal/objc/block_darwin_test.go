@@ -205,8 +205,8 @@ func TestCallbackInFlightDuringCancel(t *testing.T) {
 		}
 		taken = append(taken, n)
 	}
-	if len(taken) != MaxBlocks-1-int(base.Blocks) {
-		t.Errorf("took %d slots, want %d", len(taken), MaxBlocks-1-int(base.Blocks))
+	if len(taken) != capacity(base)-1 {
+		t.Errorf("took %d slots, want %d", len(taken), capacity(base)-1)
 	}
 	CallBlock(F, c, 50) // stale: retiring
 	if staleArgs.Load() != 50 || ranBy[10].Load() != 0 {
@@ -236,12 +236,89 @@ func TestCallbackInFlightDuringCancel(t *testing.T) {
 	blockReleaseOf(c)
 }
 
+// capacity is the number of slots free at base.
+func capacity(base Counts) int { return MaxBlocks - int(base.Blocks) - int(base.RetiredSlots) }
+
+// setNextGeneration is the test hook for the generation rule: it sets the
+// generation of the slot New hands out next (the head of the free list) and
+// returns the slot.
+func setNextGeneration(gen uint32) uint32 {
+	i := uint32(freeHead.Load()) - 1
+	slots[i].word.Store(uint64(gen)<<genShift | retiring)
+	return i
+}
+
+// unretire is the test hook that puts a slot retired by a wrap back into the
+// table, with generation 1.
+func unretire(i uint32) {
+	slots[i].word.Store(1<<genShift | retiring)
+	retiredSlots.Add(-1)
+	push(i)
+}
+
+// The generation never repeats: near the limit a slot issues 2^32-2 and
+// 2^32-1, then is retired for good instead of issuing 0 or wrapping to 1,
+// so old copies stay stale; a zero Request touches nothing.
+func TestGenerationWrapRetiresTheSlot(t *testing.T) {
+	testKinds()
+	resetRan()
+	base := Leaks()
+	slot := setNextGeneration(0xfffffffe)
+	defer unretire(slot) // the other tests need the whole table
+
+	a, _ := onceKind.New(20)
+	ca := blockCopyOf(a.Block())
+	a.Sent()
+	a.Cancel() // generation 2^32-1
+	b, _ := onceKind.New(21)
+	cb := blockCopyOf(b.Block())
+	b.Sent()
+	if a.slot != slot || b.slot != slot || a.gen != 0xfffffffe || b.gen != 0xffffffff {
+		t.Fatalf("requests got slot %d gen %#x and slot %d gen %#x, want slot %d with the last two generations", a.slot, a.gen, b.slot, b.gen, slot)
+	}
+	CallBlock(F, cb, 1) // completes b: the generation wraps
+	if ranBy[21].Load() != 1 {
+		t.Fatalf("the last generation's request did not run")
+	}
+	if got := Leaks(); got.RetiredSlots != base.RetiredSlots+1 || got.Blocks != base.Blocks {
+		t.Fatalf("after the wrap: %+v, want one more retired slot and %d live", got, base.Blocks)
+	}
+	var later []Request
+	for range 4 {
+		r, _ := onceKind.New(22)
+		if r.slot == slot || r.gen == 0 {
+			t.Fatalf("a retired slot was handed out again (slot %d gen %d)", r.slot, r.gen)
+		}
+		later = append(later, r)
+	}
+	staleBefore := staleArgs.Load()
+	CallBlock(F, ca, 100)
+	CallBlock(F, cb, 100)
+	if staleArgs.Load()-staleBefore != 200 || ranBy[22].Load() != 0 {
+		t.Errorf("old copies after the wrap: stale saw %d (want 200), a later request ran %d", staleArgs.Load()-staleBefore, ranBy[22].Load())
+	}
+	var zero Request
+	if zero.Live() || zero.Cancel() || zero.Block() != 0 {
+		t.Error("the zero Request acts on a slot")
+	}
+	zero.Sent()
+	for _, r := range later {
+		if !r.Live() {
+			t.Error("a zero Request's methods ended a live request")
+		}
+		r.Sent()
+		r.Cancel()
+	}
+	blockReleaseOf(ca)
+	blockReleaseOf(cb)
+}
+
 // A full table refuses at once and counts the refusal.
 func TestFullTableRefuses(t *testing.T) {
 	testKinds()
 	base := Leaks()
 	var taken []Request
-	for i := int(base.Blocks); i < MaxBlocks; i++ {
+	for i := 0; i < capacity(base); i++ {
 		r, err := onceKind.New(0)
 		if err != nil {
 			t.Fatalf("request %d refused: %v", i, err)
@@ -361,6 +438,11 @@ func TestCallbackProgress(t *testing.T) {
 	})
 	base := Leaks()
 	var reqs []Request
+	defer func() {
+		for _, r := range reqs {
+			r.Cancel()
+		}
+	}()
 	for chain := range progressChain {
 		for level := range progressChain[chain] {
 			r, err := progressKinds[(chain+level)%2].New(uintptr(chain<<2 | level))
@@ -401,6 +483,7 @@ func TestCallbackProgress(t *testing.T) {
 	for _, r := range reqs {
 		r.Cancel()
 	}
+	reqs = nil
 	if got := Leaks(); got.Blocks != base.Blocks {
 		t.Errorf("%d blocks live after the run, want %d", got.Blocks, base.Blocks)
 	}

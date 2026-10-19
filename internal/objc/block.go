@@ -80,7 +80,8 @@ func initBlocks() {
 
 // MaxBlocks is the number of per-request blocks that can be outstanding at
 // once, process-wide. When all are taken, BlockKind.New fails at once; the
-// table never grows.
+// table never grows (it loses a slot only when a slot's generation wraps,
+// after 2^32 requests on it).
 const MaxBlocks = 256
 
 // ErrBlocksFull is returned by BlockKind.New when every slot is taken.
@@ -89,6 +90,13 @@ var ErrBlocksFull = errors.New("objc: all per-request block slots are in use")
 // A slot's word: the generation (high 32 bits), a retiring bit and the
 // number of active claims (low 16 bits). The request that made the slot
 // holds one claim until Sent; each callback running on it holds one.
+//
+// The generation rule: a generation is never issued twice by one slot, so
+// a heap copy of an old literal can never match a later request. A slot's
+// generation starts at 1 and moves on by one when its request completes or
+// is cancelled. 0 is never issued: the step after 2^32-1 wraps to 0, and a
+// slot at generation 0 is retired for good when freed (Counts.RetiredSlots)
+// instead of going back to the free list.
 const (
 	claimMask = 1<<16 - 1
 	retiring  = 1 << 16
@@ -162,6 +170,10 @@ func release(i uint32) {
 
 func free(i uint32) {
 	liveBlocks.Add(-1)
+	if slots[i].word.Load()>>genShift == 0 { // the generation wrapped
+		retiredSlots.Add(1)
+		return
+	}
 	push(i)
 }
 
@@ -213,7 +225,8 @@ func (k *BlockKind) invoked(c *ffi.CB) {
 	}
 }
 
-// A Request is one per-request block. The zero Request is not a request.
+// A Request is one per-request block. The zero Request is not a request:
+// its methods do nothing.
 type Request struct{ slot, gen uint32 }
 
 // New makes a request of kind k with context ctx (a ticket, an index into the
@@ -247,13 +260,21 @@ func (k *BlockKind) New(ctx uintptr) (Request, error) {
 
 // Block returns the request's block literal, to pass in the call that hands
 // it to the API.
-func (r Request) Block() ID { return ID(unsafe.Pointer(&slots[r.slot].lit)) }
+func (r Request) Block() ID {
+	if r.gen == 0 {
+		return 0
+	}
+	return ID(unsafe.Pointer(&slots[r.slot].lit))
+}
 
 // Sent ends the life of the literal after the call that passed it returned:
 // the literal is poisoned (a call through it, rather than through the copy
 // an API should have made, is stale) and the issuer's claim is dropped.
 // Call it exactly once per New.
 func (r Request) Sent() {
+	if r.gen == 0 {
+		return
+	}
 	s := &slots[r.slot]
 	s.lit.slot, s.lit.gen = ^uintptr(0), 0
 	release(r.slot)
@@ -264,6 +285,9 @@ func (r Request) Sent() {
 // slot is freed when the last callback still running on it returns. It
 // reports whether the request was live (not yet completed or cancelled).
 func (r Request) Cancel() bool {
+	if r.gen == 0 {
+		return false
+	}
 	s := &slots[r.slot]
 	for {
 		w := s.word.Load()
@@ -373,8 +397,8 @@ func (k *KeptBlock) Held() bool { return k.b.Load() != 0 }
 // ---- Leak counters ----
 
 var (
-	liveBlocks, keptBlocks, delegates, observers atomic.Int64
-	staleCalls, refused                          atomic.Uint64
+	liveBlocks, keptBlocks, delegates, observers, retiredSlots atomic.Int64
+	staleCalls, refused                                        atomic.Uint64
 )
 
 // Counts is a snapshot of the leak counters, for the open/close leak gate:
@@ -388,6 +412,7 @@ type Counts struct {
 	Observers    int64  // notification observers added and not removed
 	StaleCalls   uint64 // calls of per-request blocks that could not claim their slot
 	Refused      uint64 // requests refused because the block table was full
+	RetiredSlots int64  // slots retired for good because their generation wrapped
 }
 
 // Leaks returns the current counts.
@@ -400,6 +425,7 @@ func Leaks() Counts {
 		Observers:    observers.Load(),
 		StaleCalls:   staleCalls.Load(),
 		Refused:      refused.Load(),
+		RetiredSlots: retiredSlots.Load(),
 	}
 }
 

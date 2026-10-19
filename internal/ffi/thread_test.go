@@ -129,6 +129,7 @@ func threadLib(t testing.TB) {
 		}
 		threadStartCB = NewCallback(threadStart)
 		nestCB = NewCallback(nest)
+		nestThreadCB = NewCallback(func(c *CB) { runNest(c.Frame()); c.Ret(0) })
 		if moreSetup != nil {
 			moreSetup(sym)
 		}
@@ -270,39 +271,70 @@ func TestConcurrentColdThreads(t *testing.T) {
 }
 
 // Each invocation's frame is its own: nested callbacks on one thread get
-// different frames, and the outer frame's in-progress call is undisturbed.
+// different frames, and every outer frame's call in progress and its scratch
+// words survive the nested ones. Nesting is bounded by the thread's native
+// stack (each level takes the callback's C frame, about 0.5 KiB, plus
+// qsort's and the runtime's frames), not by ffi; 32 levels run on a Go
+// thread, a fresh pthread and a GCD thread.
+const nestLevels = 32
+
 var (
-	nestCB    uintptr
-	nestSeen  [8]uintptr
-	nestDepth int
+	nestCB, nestThreadCB uintptr
+	nestSeen             [nestLevels]uintptr
+	nestArrs             [nestLevels][2]int64 // qsort's arrays, in static memory
+	nestDepth            int
+	nestBad              atomic.Int64
 )
 
-// nest is a qsort comparator that sorts again from inside, three levels deep.
+// nest is a qsort comparator that sorts again from inside, nestLevels deep.
 func nest(c *CB) {
 	f := c.Frame()
-	nestSeen[nestDepth] = uintptr(unsafe.Pointer(f))
-	if nestDepth < 3 {
+	level := nestDepth
+	nestSeen[level] = uintptr(unsafe.Pointer(f))
+	f.Scratch()[0] = 0x5eed0000 + uintptr(level)
+	if level < nestLevels-1 {
 		nestDepth++
-		arr := new([2]int64) // heap memory for qsort
+		arr := &nestArrs[level] // not new: an array only C sees stays on the stack, which moves as it grows
 		arr[0], arr[1] = 2, 1
 		f.Call4(fnQs, uintptr(unsafe.Pointer(arr)), 2, 8, nestCB)
 		nestDepth--
+		if arr[0] != 1 || f.Scratch()[0] != 0x5eed0000+uintptr(level) {
+			nestBad.Add(1)
+		}
 	}
-	c.Ret(0)
+	c.Ret(1) // the pair is out of order: qsort swaps it
+}
+
+// runNest sorts through nest from frame f and checks every level's frame.
+func runNest(f *Frame) {
+	nestDepth = 0
+	clear(nestSeen[:])
+	f.Call4(fnQs, uintptr(unsafe.Pointer(&nestArrs[nestLevels-1])), 2, 8, nestCB)
+	seen := map[uintptr]bool{}
+	for _, p := range nestSeen {
+		if p == 0 || seen[p] {
+			nestBad.Add(1)
+		}
+		seen[p] = true
+	}
+}
+
+func checkNest(t *testing.T, where string) {
+	t.Helper()
+	if n := nestBad.Swap(0); n != 0 {
+		t.Errorf("%s: %d levels of %d shared a frame or lost an outer call's state", where, n, nestLevels)
+	}
 }
 
 func TestNestedCallbacksHaveTheirOwnFrames(t *testing.T) {
 	threadLib(t)
-	nestDepth = 0
-	arr := new([2]int64)
-	fr.Call4(fnQs, uintptr(unsafe.Pointer(arr)), 2, 8, nestCB)
-	for i := 0; i < 4; i++ {
-		for j := 0; j < i; j++ {
-			if nestSeen[i] == nestSeen[j] || nestSeen[i] == 0 {
-				t.Fatalf("nesting levels %d and %d share frame %#x", j, i, nestSeen[i])
-			}
-		}
+	runNest(fr)
+	checkNest(t, "Go thread")
+	if e := fr.Call4(fnPthreadCreate, uintptr(unsafe.Pointer(&pthreads[0])), 0, nestThreadCB, 0); e != 0 {
+		t.Fatalf("pthread_create: %d", e)
 	}
+	fr.Call2(fnPthreadJoin, pthreads[0], 0)
+	checkNest(t, "fresh pthread")
 }
 
 // Every entry of the callback table reaches its own handler, the last one

@@ -23,6 +23,10 @@ import (
 // unbundled test binary (no bundle proxy; no usage description), so they
 // are not covered here.
 
+// Each test owns its records of apiResults: the sheets 1-9, the audio
+// buffers 12-14.
+const sheetFirst, audioFirst = 1, 12
+
 // apiResult is what one request's completion saw.
 type apiResult struct {
 	calls  atomic.Int32
@@ -117,11 +121,12 @@ func TestBlockCopyPerAPISheets(t *testing.T) {
 	if appKitErr != nil {
 		t.Skip("AppKit:", appKitErr)
 	}
-	ctx := uintptr(0)
+	ctx := uintptr(sheetFirst - 1)
 	for _, sh := range sheets {
 		for _, end := range []string{"endSheet", "abort, then close", "close"} {
 			ctx++
 			res := &apiResults[ctx]
+			*res = apiResult{}
 			stale0 := apiStale.Load()
 			var began bool
 			onMain(func() {
@@ -203,10 +208,13 @@ func TestBlockCopyPerAPIAudio(t *testing.T) {
 		t.Skip("AVFoundation:", avErr)
 	}
 	base := Leaks()
-	const nbuf, first = 3, 8 // contexts first..first+nbuf-1 of apiResults
+	const nbuf, first = 3, audioFirst // contexts first..first+nbuf-1 of apiResults
 	for i := 0; i < nbuf; i++ {
 		apiResults[first+i] = apiResult{}
 	}
+	tapCalls.Store(0)
+	tapOnMain.Store(0)
+	tapStale.Store(0)
 	stale0 := apiStale.Load()
 	var failed string
 	var rendered, tapsBeforeRemove, tapsAfterRemove int32
