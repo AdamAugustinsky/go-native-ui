@@ -59,18 +59,16 @@ func (r *rotator) rotate() error {
 			os.Rename(r.path(i), r.path(i+1))
 		}
 	}
-	if err := r.open(); err != nil {
-		return err
-	}
-	if r.size > 0 { // still the old, full file
-		if err := r.f.Truncate(0); err != nil {
-			r.f.Close()
-			r.f = nil
+	if fi, err := os.Stat(r.path(0)); err == nil && fi.Size() > 0 { // still the old, full file
+		// Truncate through a handle opened for it: the append handle of open
+		// has no right to (Windows refuses SetEndOfFile on it).
+		t, err := os.OpenFile(r.path(0), os.O_WRONLY|os.O_TRUNC, 0o600)
+		if err != nil {
 			return err
 		}
-		r.size = 0
+		t.Close()
 	}
-	return nil
+	return r.open()
 }
 
 // Write appends p, rotating between lines when the file would pass max. A line
