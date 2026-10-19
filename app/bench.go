@@ -242,10 +242,10 @@ type benchRun struct {
 	s0, s1   allocsite.Snapshot
 	s0Allocs uint64 // Mallocs when s0 was taken
 	restore  func()
-	best    BenchReport
-	bestIdx int
-	report  BenchReport
-	_       [0]func() // not comparable
+	best     BenchReport
+	bestIdx  int
+	report   BenchReport
+	_        [0]func() // not comparable
 }
 
 func (b *benchRun) measured() int { return b.measuredN }
