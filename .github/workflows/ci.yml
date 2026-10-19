@@ -174,6 +174,12 @@ jobs:
           go build -trimpath -ldflags="-s -w" -o bin/notes ./examples/notes
           ./bin/notes -bench -gate -allow-unpaced -timeout 150s | tee notes-macos.json
           { echo '```json'; cat notes-macos.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: imgbench (windowed image-grid bench with the allocation gate)
+        if: ${{ !cancelled() }}
+        run: |
+          go build -trimpath -ldflags="-s -w" -o bin/imgbench ./cmd/imgbench
+          ./bin/imgbench -bench -gate -allow-unpaced -timeout 150s | tee imgbench-macos.json
+          { echo '```json'; cat imgbench-macos.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - name: live resize (two draws per transaction must not starve the drawable pool)
         run: |
           go build -trimpath -ldflags="-s -w" -o bin/rexlook ./cmd/rexlook

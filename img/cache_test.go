@@ -1,0 +1,239 @@
+package img
+
+import (
+	"runtime"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+// thumbs makes n distinct w×h PNGs (inline sources) and their keys at that
+// size.
+func thumbs(t testing.TB, n, w, h int) ([]Key, [][]byte) {
+	keys := make([]Key, n)
+	data := make([][]byte, n)
+	base := gradient(w, h)
+	for i := range keys {
+		base.Pix[0] = byte(i) // distinct content
+		base.Pix[1] = byte(i >> 8)
+		data[i] = encPNG(t, base)
+		keys[i] = Key{Hash: HashBytes(data[i]), W: int32(w), H: int32(h)}
+	}
+	return keys, data
+}
+
+// TestCacheHitsAndGenerations: the same key gives the same handle; another
+// size is another image; an evicted image's handle stops resolving and the
+// key gets a new handle.
+func TestCacheHitsAndGenerations(t *testing.T) {
+	c, _ := newTestCache(t, Options{CPUBytes: 1})
+	keys, data := thumbs(t, 2, 32, 32)
+	h0, _ := c.Request(keys[0], Bytes(data[0]))
+	if again, _ := c.Request(keys[0], Bytes(data[0])); again != h0 {
+		t.Fatalf("same key: %#x then %#x", h0, again)
+	}
+	small := keys[0]
+	small.W, small.H = 16, 16
+	h0s, _ := c.Request(small, Bytes(data[0]))
+	if h0s == h0 {
+		t.Fatal("another decode size shares the handle")
+	}
+	settle(t, c, func() { c.Request(keys[0], Bytes(data[0])); c.Request(small, Bytes(data[0])) })
+	if c.State(h0) != Ready || c.State(h0s) != Ready {
+		t.Fatalf("states %v %v", c.State(h0), c.State(h0s))
+	}
+	if info, _ := c.Info(h0s); info.W != 16 {
+		t.Fatalf("16 px decode is %d wide", info.W)
+	}
+
+	// Two frames without use, then the image's GPU memory is wanted: it goes
+	// (CPUBytes 1 keeps no pixels, so the entry goes with it).
+	c.Poll()
+	c.Poll()
+	c.evictGPU(h0.index())
+	if c.State(h0) != Pending {
+		t.Fatal("an evicted handle still resolves")
+	}
+	if _, _, st := c.Use(h0); st != Pending {
+		t.Fatal("Use of an evicted handle")
+	}
+	h0b, _ := c.Request(keys[0], Bytes(data[0]))
+	if h0b == h0 || h0b == 0 {
+		t.Fatalf("re-request after eviction: %#x (was %#x)", h0b, h0)
+	}
+	if h0b.index() == h0.index() && h0b.gen() == h0.gen() {
+		t.Fatal("same generation reused")
+	}
+}
+
+// TestEvictionUnderBudget: images not in view are evicted, least recently
+// used first, to keep the GPU within its budget.
+func TestEvictionUnderBudget(t *testing.T) {
+	// Own textures (300×300 > AtlasMax): 360,000 bytes each; room for 4.
+	const each = 300 * 300 * 4
+	c, g := newTestCache(t, Options{GPUBytes: 4*each + 1000, CPUBytes: 1})
+	keys, data := thumbs(t, 10, 300, 300)
+	var hs [10]Handle
+	for i := range keys { // one image in view per frame, the earlier ones scrolled away
+		for {
+			c.Poll()
+			hs[i], _ = c.Request(keys[i], Bytes(data[i]))
+			if c.State(hs[i]) == Ready {
+				break
+			}
+			time.Sleep(time.Millisecond)
+		}
+		if _, used := g.live(); used > 4*each+1000 {
+			t.Fatalf("after image %d: %d bytes of textures, budget %d", i, used, 4*each+1000)
+		}
+	}
+	for i := range hs {
+		want := i >= 6 // the four most recent stay
+		if got := c.State(hs[i]) == Ready; got != want {
+			t.Errorf("image %d resident %v, want %v", i, got, want)
+		}
+	}
+	if s := c.Stats(); s.EvictedGPU != 6 || s.OverBudget != 0 {
+		t.Errorf("stats %+v: want 6 GPU evictions, none over budget", s)
+	}
+}
+
+// TestInViewNeverEvicted: images requested every frame stay even when they
+// overflow the budget (the budget gives, and says so).
+func TestInViewNeverEvicted(t *testing.T) {
+	const each = 300 * 300 * 4
+	c, g := newTestCache(t, Options{GPUBytes: 2 * each})
+	keys, data := thumbs(t, 5, 300, 300)
+	var hs [5]Handle
+	view := func() {
+		for i := range keys {
+			hs[i], _ = c.Request(keys[i], Bytes(data[i]))
+		}
+	}
+	settle(t, c, view)
+	for i, h := range hs {
+		if c.State(h) != Ready {
+			t.Errorf("image %d in view is %v", i, c.State(h))
+		}
+	}
+	if n, _ := g.live(); n != 5 || g.frees != 0 {
+		t.Errorf("%d live textures, %d freed; want 5, 0", n, g.frees)
+	}
+	if c.Stats().OverBudget == 0 {
+		t.Error("over budget not reported")
+	}
+	// Out of view for two frames: the next upload reclaims the budget.
+	c.Poll()
+	c.Poll()
+	more, _ := thumbs(t, 6, 300, 300)
+	extra := more[5]
+	extra.Hash ^= 1
+	settle(t, c, func() { c.Request(extra, Bytes(data[0])) })
+	if _, used := g.live(); used > 2*each {
+		t.Errorf("%d bytes resident after the view moved on, budget %d", used, 2*each)
+	}
+}
+
+// TestUploadBudgetPerFrame: a burst of finished decodes is uploaded a few
+// per frame.
+func TestUploadBudgetPerFrame(t *testing.T) {
+	const each = 66 * 66 * 4 // 64×64 plus the atlas padding
+	var decoded atomic.Int32
+	c, g := newTestCache(t, Options{UploadBytes: 3 * each, Wake: func() { decoded.Add(1) }})
+	keys, data := thumbs(t, 10, 64, 64)
+	view := func() {
+		for i := range keys {
+			c.Request(keys[i], Bytes(data[i]))
+		}
+	}
+	view()
+	deadline := time.Now().Add(10 * time.Second)
+	for decoded.Load() < 10 && time.Now().Before(deadline) { // let every decode finish first
+		time.Sleep(time.Millisecond)
+	}
+	var perFrame []int
+	for f := 0; f < 10 && g.uploads < 10; f++ {
+		before := g.uploads
+		more := c.Poll()
+		view()
+		perFrame = append(perFrame, g.uploads-before)
+		if want := g.uploads < 10; more != want {
+			t.Errorf("frame %d: Poll reported more=%v with %d of 10 uploaded", f, more, g.uploads)
+		}
+	}
+	if len(perFrame) != 4 || perFrame[0] != 3 || perFrame[3] != 1 {
+		t.Errorf("uploads per frame %v, want [3 3 3 1]", perFrame)
+	}
+	if g.news != 1 {
+		t.Errorf("%d textures created, want 1 atlas page", g.news)
+	}
+}
+
+// TestAtlasReuse: atlas regions freed by evictions are reused and an empty
+// page is freed.
+func TestAtlasReuse(t *testing.T) {
+	c, g := newTestCache(t, Options{GPUBytes: pageBytes, CPUBytes: 1})
+	keys, data := thumbs(t, 300, 100, 100) // 102×102 regions: 90 to a page
+	for i := range keys {
+		for {
+			c.Poll()
+			h, _ := c.Request(keys[i], Bytes(data[i]))
+			if c.State(h) == Ready {
+				break
+			}
+			time.Sleep(100 * time.Microsecond)
+		}
+	}
+	if s := c.Stats(); s.Pages != 1 || s.EvictedGPU < 200 || s.OverBudget != 0 {
+		t.Errorf("stats %+v: want one page reused, over 200 evictions", s)
+	}
+	if g.news != 1 {
+		t.Errorf("%d textures created, want the one page", g.news)
+	}
+}
+
+// TestRequestPollUseZeroAlloc: a frame of 200 cached images (Poll, then
+// Request and Use of each) allocates nothing.
+func TestRequestPollUseZeroAlloc(t *testing.T) {
+	c, _ := newTestCache(t, Options{})
+	keys, data := thumbs(t, 200, 48, 48)
+	srcs := make([]Source, len(keys))
+	for i := range srcs {
+		srcs[i] = Bytes(data[i])
+	}
+	var sink float32
+	frame := func() {
+		c.Poll()
+		for i := range keys {
+			h, _ := c.Request(keys[i], srcs[i])
+			_, uv, _ := c.Use(h)
+			sink += uv[2]
+		}
+	}
+	settle(t, c, func() {
+		for i := range keys {
+			c.Request(keys[i], srcs[i])
+		}
+	})
+	for i := 0; i < 10; i++ {
+		frame()
+	}
+	if s := c.Stats(); s.Ready != 200 {
+		t.Fatalf("%d ready", s.Ready)
+	}
+	var mallocs, bytes uint64
+	for a := 0; a < 5; a++ {
+		runtime.GC()
+		var m0, m1 runtime.MemStats
+		runtime.ReadMemStats(&m0)
+		for i := 0; i < 500; i++ {
+			frame()
+		}
+		runtime.ReadMemStats(&m1)
+		mallocs, bytes = m1.Mallocs-m0.Mallocs, m1.TotalAlloc-m0.TotalAlloc
+		if mallocs == 0 && bytes == 0 {
+			return
+		}
+	}
+	t.Errorf("500 frames of 200 cached images: %d mallocs, %d bytes (sink %v)", mallocs, bytes, sink)
+}
