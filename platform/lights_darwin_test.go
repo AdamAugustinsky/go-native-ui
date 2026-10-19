@@ -35,6 +35,13 @@ var (
 	selTestObjectAt  = objc.Sel("objectAtIndex:")
 	selCell          = objc.Sel("cell")
 	selInGroup       = objc.Sel("_isWindowPointInStandardWindowButtonGroup:") // private, checked
+
+	// AppKit's titlebar metrics, read (never set) by the tests in either
+	// build; the framework's own are in lights_private_darwin.go.
+	tSelSetTitlebarHeight    = objc.Sel("setTitlebarHeight:")
+	tSelTitlebarHeight       = objc.Sel("titlebarHeight")
+	tSelSetButtonGroupOffset = objc.Sel("setStandardWindowButtonGroupOffset:")
+	tSelButtonGroupOffset    = objc.Sel("standardWindowButtonGroupOffset")
 )
 
 func seeLights(w *Window) (s lightsSeen) {
@@ -229,7 +236,10 @@ func lightsEvents(w *Window, check func(step string)) {
 // lightsNativeHere reports whether AppKit has the titlebar metrics the
 // buttons are placed with.
 func lightsNativeHere(w *Window) bool {
-	for _, s := range []objc.SEL{selSetTitlebarHeight, selTitlebarHeight, selSetButtonGroupOffset, selButtonGroupOffset} {
+	if !privateAPIBuild {
+		return false
+	}
+	for _, s := range []objc.SEL{tSelSetTitlebarHeight, tSelTitlebarHeight, tSelSetButtonGroupOffset, tSelButtonGroupOffset} {
 		if !objc.SendBool1(w.win, selRespondsTo, uintptr(s)) {
 			return false
 		}
@@ -286,7 +296,7 @@ func TestWindowButtonsHoldTheirPlace(t *testing.T) {
 	}
 	t.Logf("checked after %q", steps)
 	if !native {
-		t.Logf("AppKit has no titlebar metrics here: the buttons stay at its default %v", want)
+		t.Logf("AppKit's titlebar metrics are missing or not used here (gnui_publicapi): the buttons stay at its default %v", want)
 	}
 	for _, f := range fails {
 		t.Error(f)
@@ -333,6 +343,97 @@ func TestWindowButtonsDefaultWhereNoMetrics(t *testing.T) {
 	}
 	if near(at[0], 21) && near(at[1], 22) {
 		t.Errorf("without the metrics the close button is still at (21, 22): the fallback moved it")
+	}
+	for _, f := range fails {
+		t.Error(f)
+	}
+}
+
+// defaultLights opens a window whose buttons stay where AppKit puts them and
+// returns what AppKit says about them, and its own titlebar height.
+func defaultLights(o Options) (s lightsSeen, height float64, ok bool) {
+	lightsForceDefault = true
+	defer func() { lightsForceDefault = false }()
+	w, err := Open(o)
+	if err != nil {
+		return s, 0, false
+	}
+	defer w.Close()
+	pumpFor(w, 100*time.Millisecond)
+	return seeLights(w), appKitTitlebarHeight(w), true
+}
+
+// appKitTitlebarHeight is AppKit's own titlebar height (the private getter,
+// read-only here), -1 where it has none.
+func appKitTitlebarHeight(w *Window) float64 {
+	if !objc.SendBool1(w.win, selRespondsTo, uintptr(tSelTitlebarHeight)) {
+		return -1
+	}
+	return objc.F.Reset().Arg(uintptr(w.win)).Arg(uintptr(tSelTitlebarHeight)).Call(objc.MsgSend).F64(0)
+}
+
+// checkDefault reports how a window's buttons differ from AppKit's default
+// (def, seen in a window that never touched them), after a title change and a
+// resize too.
+func checkDefault(w *Window, def lightsSeen, defHeight float64) []string {
+	var fails []string
+	space := def.centre[1][0] - def.centre[0][0]
+	check := func(step string) {
+		s := seeLights(w)
+		if msg := checkLights(s, def.centre[0], space); msg != "" {
+			fails = append(fails, step+": "+msg)
+		}
+		if len(s.hover) != len(def.hover) {
+			fails = append(fails, fmt.Sprintf("%s: hover areas %v, AppKit's default has %v", step, s.hover, def.hover))
+		}
+		if h := appKitTitlebarHeight(w); h != defHeight {
+			fails = append(fails, fmt.Sprintf("%s: AppKit's titlebar height is %v, its default %v", step, h, defHeight))
+		}
+		if objc.SendBool1(w.win, selRespondsTo, uintptr(tSelButtonGroupOffset)) {
+			if x, y := objc.SendPoint(w.win, tSelButtonGroupOffset); x != 0 || y != 0 {
+				fails = append(fails, fmt.Sprintf("%s: AppKit's button-group offset is (%v, %v), not 0", step, x, y))
+			}
+		}
+	}
+	pumpFor(w, 100*time.Millisecond)
+	check("open")
+	objc.Send1(w.win, selSetTitle, uintptr(objc.Str("another title")))
+	pumpFor(w, 50*time.Millisecond)
+	check("setTitle:")
+	objc.F.Reset().Arg(uintptr(w.win)).Arg(uintptr(selSetContentSize)).ArgPoint(520, 300).Call(objc.MsgSend)
+	pumpFor(w, 50*time.Millisecond)
+	check("setContentSize:")
+	return fails
+}
+
+var lightsTestOptions = Options{Title: "lights", Width: 400, Height: 260, Titlebar: 46, TrafficLights: [2]float32{21, 22}}
+
+// Options.PublicAPIOnly (the public path, without rebuilding) never calls
+// the private titlebar metrics: the buttons, their hover areas, hit test and SystemButtons are
+// AppKit's default, and AppKit's own titlebar height and offset untouched.
+func TestWindowButtonsPublicAPIOnly(t *testing.T) {
+	var opened bool
+	var fails []string
+	onMain(func() {
+		def, defHeight, ok := defaultLights(lightsTestOptions)
+		if !ok {
+			return
+		}
+		o := lightsTestOptions
+		o.PublicAPIOnly = true
+		w, err := Open(o)
+		if err != nil {
+			return
+		}
+		defer w.Close()
+		opened = true
+		if w.tb.native {
+			fails = append(fails, "the window places the buttons with AppKit's private metrics")
+		}
+		fails = append(fails, checkDefault(w, def, defHeight)...)
+	})
+	if !opened {
+		t.Skip("cannot open a window here")
 	}
 	for _, f := range fails {
 		t.Error(f)

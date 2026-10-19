@@ -960,3 +960,18 @@ The whole UI is rewritten in Go on the framework with the Rex design system, mac
   - no plaintext chat-list snapshot: names and previews never leave SQLCipher for startup.
 
 **Reasoning:** a separate identity means this app can never open the real ZapFast's archive while it runs; the budgets are the framework's, applied to a real app.
+
+## D53. Private AppKit API: a build tag and a runtime switch, both required (phase 6, 2026-10-19)
+
+**Decision.**
+- **Every use of a private system interface in the framework sits behind both switches:**
+  - **the build tag `gnui_publicapi`.** The private selector names and their calls live in files tagged `//go:build !gnui_publicapi`; the tagged-in counterpart takes the public fallback. A Mac App Store build (guideline 2.5.1) uses the tag, and its binary does not contain the names (`TestPublicAPIBuildHasNoPrivateSelectors` builds rexlook both ways and scans it).
+  - **the runtime option** `platform.Options.PublicAPIOnly` / `app.Config.PublicAPIOnly`, to run the public path without rebuilding. The platform's accessor `Window.privateAPI()` is false under either switch; each use checks it.
+- **Current uses:**
+  - **lights** (`platform/lights_private_darwin.go`): `NSWindow`'s `setTitlebarHeight:`, `titlebarHeight`, `setStandardWindowButtonGroupOffset:` and `standardWindowButtonGroupOffset`. AppKit places the window buttons of a custom titlebar at `TrafficLights`, the offset calibrated against where the close button lands. They are also used only when all four respond, their type encodings are the expected double and two-double `NSSize` forms (checked once per process), and calibration lands; a failed calibration puts AppKit's height and offset back.
+  - **N3's glass variants and `_cornerRadius`** (the native shell's backdrop), landing separately under the same two switches.
+- **The public fallback, for lights:** the buttons stay at AppKit's default place (centre about (16, 16) on macOS 27), not at `TrafficLights`. `Window.SystemButtons` reports where they are, so ui keeps content clear of them.
+
+**Reasoning:** moving the buttons from outside (Electron's `trafficLightPosition`) lasts only until AppKit's next titlebar layout (a title, key or appearance change, full screen), and the group's hover area follows AppKit's model, not the moved frames; holding it from outside needs the private `_mouseInGroup:` anyway (Electron, Godot, iTerm2). With AppKit's own metrics every layout pass places the buttons, their hover areas and the zoom button's tiling menu. The selectors exist on macOS 15 and 27, the systems tested. The tag keeps the names out of a store binary; the runtime switch lets tests and apps exercise the public path in an ordinary build.
+
+**Alternatives:** an `NSToolbar` (fixed centres only: (26, 26) unified, (19, 20) unifiedCompact, and its title area takes the presses meant for tabs drawn in the band); a titlebar accessory (the buttons stay at (16, 16)); re-applied frames (hover areas stay at AppKit's default place); a runtime switch alone (the names stay in the binary).
