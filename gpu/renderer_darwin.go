@@ -332,6 +332,9 @@ func (r *Renderer) newMTLTexture(kind TextureKind, w, h int) objc.ID {
 // texture is released when the frames encoded so far have finished on the
 // GPU (see textures.go); FreeTexture itself never waits. Freeing texture 0,
 // an unknown id or an id already freed does nothing.
+// An index is reused under 4096 generations and then retired for good, so a
+// renderer can create about 4.29 billion textures (2^20 indices × 4096) in its
+// life; C7's external textures should revisit the id's width if they churn.
 func (r *Renderer) FreeTexture(t TextureID) {
 	i, ok := r.ids.lookup(t)
 	if !ok || i == 0 {
