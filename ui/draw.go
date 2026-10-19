@@ -190,6 +190,9 @@ func scaleAlpha(c uint32, f float32) uint32 {
 // floating ones after their siblings.
 func (c *Context) emit(l *gpu.DrawList, id ID, clip [4]float32) {
 	b := &c.boxes[id]
+	if b.hid {
+		return
+	}
 	r := b.rect
 	sized := r[2] > r[0] && r[3] > r[1]
 

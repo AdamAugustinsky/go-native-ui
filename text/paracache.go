@@ -69,8 +69,8 @@ type ParaBudget struct {
 }
 
 // The paragraph cache holds at most this many layouts, glyphs, bytes of text,
-// lines, spans and fonts; beyond that it evicts. They are its budget until
-// ReserveParas sets one, and the clamps of ReserveParas.
+// lines, spans and fonts, whatever budget ReserveParas declares: they are its
+// clamps.
 const (
 	MaxCachedParas      = 1 << 14
 	MaxCachedParaGlyphs = 1 << 20
@@ -83,6 +83,15 @@ const (
 // maxParaBudget is the budget of the constants above.
 var maxParaBudget = ParaBudget{MaxCachedParas, MaxCachedParaGlyphs, MaxCachedParaText, MaxCachedParaLines, MaxCachedParaSpans, MaxCachedParaFonts}
 
+// DefaultParaBudget returns the budget of a paragraph cache until the app
+// declares one with ReserveParas: 1024 layouts, 64 Ki glyphs and 64 KiB of
+// text (8 Ki lines, 16 Ki spans, 8 Ki fonts), a few screens of wrapped labels
+// and messages in 1.7 MiB, with scratch for paragraphs of up to 16 KiB.
+// ReserveRuns reserves it when no budget was declared. A chat or document
+// app that keeps more text in view, or scrolls through more of it, declares
+// a larger one.
+func DefaultParaBudget() ParaBudget { return ParaBudget{Paras: 1024, Glyphs: 1 << 16, Text: 1 << 16} }
+
 // maxParaScratch caps the size of the one paragraph ReserveParas sizes the
 // layout scratch for, in bytes; longer paragraphs grow it (once).
 const maxParaScratch = 16 << 10
@@ -93,12 +102,16 @@ const maxParaScratch = 16 << 10
 // vowels, and those are three bytes) plus an ellipsis; a line per newline; a
 // style run per span and per stretch before one. A paragraph over the budget
 // is laid out anyway, kept outside the cache, and may allocate.
-type paraScratch struct{ bytes, glyphs, lines, runs int }
+// The output (glyphs, lines) is sized by the budget, since a layout over it is
+// not cached anyway; what is shaped from the input (inGlyphs: the basic
+// layout's copies of its shaped style runs) by the paragraph size alone, since
+// a truncated paragraph shapes all of its text to output only a few lines.
+type paraScratch struct{ bytes, glyphs, inGlyphs, lines, runs int }
 
 func scratchFor(b ParaBudget) paraScratch {
 	b = b.clamp()
 	n := min(b.Text, maxParaScratch)
-	return paraScratch{bytes: n, glyphs: min(n, b.Glyphs) + 8, lines: min(n, b.Lines) + 1, runs: 2*min(n, b.Spans) + 1}
+	return paraScratch{bytes: n, glyphs: min(n, b.Glyphs) + 8, inGlyphs: n + 8, lines: min(n, b.Lines) + 1, runs: 2*min(n, b.Spans) + 1}
 }
 
 // clamp fills the fields left at 0 (Lines: Glyphs/8, at least Paras; Spans:
@@ -219,17 +232,23 @@ func (s *paraSlabs) view(e *paraEnt) ParaView {
 // generation; the cache never holds more than its budget.
 //
 // A layout bigger than the whole budget is kept outside it, alone, in the
-// over slabs (which grow to fit it), until the next such layout replaces it.
+// over slabs, allocated to fit it. They are released once the layout leaves
+// use: when the cache has evicted, or taken in as many new layouts as its
+// budget holds, since the layout was last looked up (when it would have been
+// evicted had it been in the cache), or when a layout less than half its size
+// replaces it.
 type paraCache struct {
-	table []int32 // 0 = empty, else index into ents + 1
-	ents  []paraEnt
-	slabs paraSlabs
-	gen   uint32
-	lim   ParaBudget
+	table    []int32 // 0 = empty, else index into ents + 1
+	ents     []paraEnt
+	slabs    paraSlabs
+	gen      uint32
+	lim      ParaBudget
+	declared bool // the budget came from ReserveParas
 
-	over   paraSlabs
-	overE  paraEnt
-	overOK bool
+	over    paraSlabs
+	overE   paraEnt
+	overOK  bool
+	overAge int // layouts inserted since the over layout was last used
 
 	hits, misses uint64
 }
@@ -238,13 +257,19 @@ type paraCache struct {
 const overRef = ParaRef(math.MaxUint32)
 
 func newParaCache() *paraCache {
-	return &paraCache{table: make([]int32, 256), lim: maxParaBudget}
+	return &paraCache{table: make([]int32, 256), lim: DefaultParaBudget().clamp()}
 }
 
 // reserve sets the budget to b (clamped, see ParaBudget.clamp) and sizes the
 // storage for it, so that filling the cache and every eviction allocate
-// nothing. Entries over the new budget are dropped.
-func (c *paraCache) reserve(b ParaBudget) {
+// nothing. Entries over the new budget are dropped. declare is ReserveParas
+// (the app's budget); without it (ReserveRuns' default) a declared budget is
+// kept, and reserve reports false.
+func (c *paraCache) reserve(b ParaBudget, declare bool) bool {
+	if !declare && c.declared {
+		return false
+	}
+	c.declared = c.declared || declare
 	b = b.clamp()
 	c.lim = b
 	if len(c.ents) > 0 && !c.within(0, 0, 0, 0, 0, 0) {
@@ -260,12 +285,14 @@ func (c *paraCache) reserve(b ParaBudget) {
 	if size != len(c.table) {
 		c.rehash(size)
 	}
+	return true
 }
 
 // lookup returns the cached layout of p (hash h). It does not allocate.
 func (c *paraCache) lookup(p *Para, h uint64) (ParaRef, bool) {
 	if c.overOK && c.over.matches(&c.overE, p, h) {
 		c.hits++
+		c.overE.ref, c.overAge = true, 0
 		return overRef, true
 	}
 	mask := uint64(len(c.table) - 1)
@@ -298,9 +325,17 @@ func (c *paraCache) insert(p *Para, h uint64, b *paraBuild) ParaRef {
 		// Bigger than the whole cache: kept outside it, alone. The layout it
 		// replaces is gone, so the generation changes.
 		c.gen++
+		if cap(c.over.text) > 2*nt || cap(c.over.glyphs) > 2*ng || cap(c.over.lines) > 2*nl {
+			c.over = paraSlabs{} // no high-water mark: storage to fit this one
+		}
 		c.over.truncate()
-		c.overE, c.overOK = c.over.add(p, h, b), true
+		c.overE, c.overOK, c.overAge = c.over.add(p, h, b), true, 0
 		return overRef
+	}
+	if c.overOK {
+		if c.overAge++; c.overAge > c.lim.Paras {
+			c.releaseOver()
+		}
 	}
 	if !c.within(nt, ng, nl, ns, nf, 1) {
 		c.evict()
@@ -345,7 +380,20 @@ func (c *paraCache) drop() {
 	clear(c.table)
 }
 
+// releaseOver frees the over layout's storage.
+func (c *paraCache) releaseOver() {
+	c.gen++
+	c.over, c.overE, c.overOK, c.overAge = paraSlabs{}, paraEnt{}, false, 0
+}
+
 func (c *paraCache) evict() {
+	if c.overOK {
+		if !c.overE.ref {
+			c.releaseOver()
+		} else {
+			c.overE.ref = false
+		}
+	}
 	var keep, kg, kt, kl, ks, kf int
 	for i := range c.ents {
 		if e := &c.ents[i]; e.ref {

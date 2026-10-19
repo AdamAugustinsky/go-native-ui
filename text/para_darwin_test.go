@@ -623,6 +623,28 @@ func TestParagraphReservedMissesCoreText(t *testing.T) {
 	})
 }
 
+// ReserveRuns at its limits, as the apps call it, reserves the paragraph
+// cache for the default budget only (about 2 MiB, not the 30 MiB of the
+// limits); a declared budget is kept.
+func TestReserveRunsKeepsTheDefaultParagraphBudget(t *testing.T) {
+	s := newSys(t)
+	s.ReserveRuns(MaxCachedRuns, MaxCachedGlyphs, MaxCachedTextBytes)
+	if got := s.ParaStats().Budget; got != DefaultParaBudget().clamp() {
+		t.Errorf("budget %+v after ReserveRuns", got)
+	}
+	n := s.paras.reservedBytes()
+	if n > 3<<20 {
+		t.Errorf("ReserveRuns reserved %.1f MiB for paragraphs", float64(n)/(1<<20))
+	}
+	t.Logf("paragraph cache reserved by ReserveRuns: %.2f MiB", float64(n)/(1<<20))
+	big := ParaBudget{Paras: 4096, Glyphs: 1 << 18, Text: 1 << 18}
+	s.ReserveParas(big)
+	s.ReserveRuns(MaxCachedRuns, MaxCachedGlyphs, MaxCachedTextBytes)
+	if got := s.ParaStats().Budget; got != big.clamp() {
+		t.Errorf("budget %+v after a declared one and ReserveRuns", got)
+	}
+}
+
 func TestParagraphLayoutAllocationsCoreText(t *testing.T) {
 	s := newSys(t)
 	s.ReserveParas(ParaBudget{Paras: 4096, Glyphs: 1 << 18, Text: 1 << 18})

@@ -95,7 +95,7 @@ func (c *Context) MenuChoice(id ID, options []string) (index int, ok bool) {
 		return 0, false
 	}
 	b := &c.boxes[id]
-	if c.in.MenuOwner != b.key || b.flags&Disabled != 0 || c.blocked(b) {
+	if c.in.MenuOwner != b.key || b.flags&Disabled != 0 || c.blocked(b) || c.wasHidden(b) {
 		return 0, false
 	}
 	i := int(c.in.MenuIndex)

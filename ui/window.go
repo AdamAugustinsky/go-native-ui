@@ -111,7 +111,7 @@ type ContentBox struct {
 func (c *Context) ContentIn(r [4]float32, dst []ContentBox) []ContentBox {
 	for _, id := range c.order {
 		b := &c.boxes[id]
-		if b.flags&WindowDrag != 0 || id == c.root {
+		if b.flags&WindowDrag != 0 || id == c.root || b.hid {
 			continue
 		}
 		var role Role
