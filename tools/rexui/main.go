@@ -97,7 +97,7 @@ func sourceDir() string {
 }
 
 var (
-	packageClause = regexp.MustCompile(`(?m)^package rexui$`)
+	packageClause = regexp.MustCompile(`(?m)^package rexui(\r?)$`) // a Windows checkout ends lines in CRLF
 	exampleName   = regexp.MustCompile(`(?m)^(//\t.*)\brexui\.`)
 )
 
@@ -138,12 +138,16 @@ func Add(src, dir, pkg string, force bool, comps ...string) ([]string, error) {
 		if !packageClause.Match(b) {
 			return wrote, fmt.Errorf("%s: no package clause to rewrite", f)
 		}
-		b = packageClause.ReplaceAll(b, []byte("package "+pkg))
+		b = packageClause.ReplaceAll(b, []byte("package "+pkg+"${1}"))
 		// the examples in comments call the copies by their new package
 		for exampleName.Match(b) {
 			b = exampleName.ReplaceAll(b, []byte("${1}"+pkg+"."))
 		}
-		b = append([]byte("// Copied from gonativeui/rexui ("+f+") by tools/rexui: this code is the app's own.\n\n"), b...)
+		nl := "\n"
+		if bytes.Contains(b, []byte("\r\n")) {
+			nl = "\r\n"
+		}
+		b = append([]byte("// Copied from gonativeui/rexui ("+f+") by tools/rexui: this code is the app's own."+nl+nl), b...)
 		out := filepath.Join(dir, f)
 		if _, err := os.Stat(out); err == nil && !force {
 			fmt.Fprintf(os.Stderr, "rexui: %s exists, left alone (-f overwrites)\n", out)

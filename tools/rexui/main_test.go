@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -11,7 +12,11 @@ import (
 
 // Each component, copied alone into an app's package, builds there.
 func TestAddedComponentsBuild(t *testing.T) {
-	gobin := filepath.Join(runtime.GOROOT(), "bin", "go")
+	exe := "go"
+	if runtime.GOOS == "windows" {
+		exe = "go.exe"
+	}
+	gobin := filepath.Join(runtime.GOROOT(), "bin", exe)
 	if _, err := os.Stat(gobin); err != nil {
 		t.Skip("no go command at", gobin)
 	}
@@ -26,7 +31,7 @@ func TestAddedComponentsBuild(t *testing.T) {
 		}
 		for _, f := range files {
 			b, _ := os.ReadFile(f)
-			if !strings.Contains(string(b), "\npackage appui\n") || strings.Contains(string(b), "package rexui") {
+			if !regexp.MustCompile(`(?m)^package appui\r?$`).Match(b) || strings.Contains(string(b), "package rexui") {
 				t.Fatalf("%s: the package clause of %s was not rewritten", name, f)
 			}
 		}
@@ -55,5 +60,28 @@ func TestAddLeavesExistingFiles(t *testing.T) {
 	}
 	if _, err := Add(sourceDir(), dir, "x", false, "nosuch"); err == nil {
 		t.Fatal("an unknown component was accepted")
+	}
+}
+
+// A Windows checkout's CRLF line endings are kept, and the package clause is
+// still rewritten.
+func TestAddCRLF(t *testing.T) {
+	src, dir := t.TempDir(), t.TempDir()
+	for _, f := range []string{"button.go", shared} {
+		b, err := os.ReadFile(filepath.Join(sourceDir(), f))
+		if err != nil {
+			t.Fatal(err)
+		}
+		crlf := strings.ReplaceAll(strings.ReplaceAll(string(b), "\r\n", "\n"), "\n", "\r\n")
+		if err := os.WriteFile(filepath.Join(src, f), []byte(crlf), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := Add(src, dir, "x", false, "button"); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(filepath.Join(dir, "button.go"))
+	if !strings.Contains(string(b), "\r\npackage x\r\n") {
+		t.Fatal("the package clause of a CRLF file was not rewritten in place")
 	}
 }
