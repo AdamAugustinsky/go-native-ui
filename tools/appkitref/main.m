@@ -1582,7 +1582,7 @@ static int pairSheet(NSString *manifest, NSString *outPath) {
 		NSDictionary *la = @{NSFontAttributeName : [NSFont systemFontOfSize:11], NSForegroundColorAttributeName : fg};
 		[m[@"title"] drawAtPoint:NSMakePoint(margin, H - margin - 18) withAttributes:ta];
 		[@"AppKit (real controls)" drawAtPoint:NSMakePoint(margin + labelW, H - margin - head + 8) withAttributes:ha];
-		[@"Ours (widget kit, Rex theme)" drawAtPoint:NSMakePoint(margin + labelW + lw + gap, H - margin - head + 8) withAttributes:ha];
+		[@"Ours (rexui, Rex theme)" drawAtPoint:NSMakePoint(margin + labelW + lw + gap, H - margin - head + 8) withAttributes:ha];
 		CGFloat y = H - margin - head;
 		for (NSUInteger i = 0; i < rows.count; i++) {
 			NSArray *pair = imgs[i];
