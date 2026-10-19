@@ -4,6 +4,7 @@ package objc
 
 import (
 	"slices"
+	"sync/atomic"
 	"unsafe"
 
 	"gonativeui/internal/ffi"
@@ -36,14 +37,44 @@ var Trace bool
 // closure, and costs a handful of comparisons. The ffi callback table has
 // ffi.MaxCallbacks entries for the whole process; a class takes one, and each
 // MethodIMP takes one more.
+//
+// Instance state. Every class gets one uintptr instance variable, Index,
+// meant to hold an index into a Go-side table (windows, hosts, delegates),
+// so a handler finds its Go state from self without a global and without
+// allocating. Ivar adds more uintptr instance variables.
 type ClassDef struct {
 	name       string
 	super      ID
 	protocols  []string
 	methods    []method
+	ivars      []*Ivar
 	cls        ID
 	registered bool
 }
+
+// An Ivar is a uintptr instance variable of a class made with Define. Get
+// and Set are plain memory accesses (atomic, so any thread may read), valid
+// after Register on instances of the class and its subclasses.
+type Ivar struct {
+	name string
+	off  uintptr
+}
+
+// Get reads the variable of obj.
+func (v *Ivar) Get(obj ID) uintptr { return atomic.LoadUintptr((*uintptr)(v.at(obj))) }
+
+// Set writes the variable of obj.
+func (v *Ivar) Set(obj ID, x uintptr) { atomic.StoreUintptr((*uintptr)(v.at(obj)), x) }
+
+func (v *Ivar) at(obj ID) unsafe.Pointer {
+	if v.off == 0 || obj == 0 {
+		panic("objc: ivar " + v.name + " used before Register or on nil")
+	}
+	return ffi.PtrFromC(uintptr(obj) + v.off)
+}
+
+// indexIvar is the name of the instance variable every class gets.
+const indexIvar = "gnuiIndex"
 
 type method struct {
 	sel    SEL
@@ -56,8 +87,34 @@ type method struct {
 // and adopts the named protocols (a protocol the runtime does not know is
 // skipped). Nothing is created until Register.
 func Define(name string, super ID, protocols []string) *ClassDef {
-	return &ClassDef{name: name, super: super, protocols: protocols}
+	return &ClassDef{name: name, super: super, protocols: protocols, ivars: []*Ivar{{name: indexIvar}}}
 }
+
+// Index is the class's index instance variable: a uintptr, 0 in a new
+// instance, that the code owning the instances sets to the index of its Go
+// state (view.Index().Set(obj, i) after init, view.Index().Get(self) in a
+// handler).
+func (d *ClassDef) Index() *Ivar { return d.ivars[0] }
+
+// Ivar adds a uintptr instance variable named name (unique in the class)
+// and returns it; it can be used after Register.
+func (d *ClassDef) Ivar(name string) *Ivar {
+	if d.registered {
+		panic("objc: ivar added to " + d.name + " after Register")
+	}
+	for _, v := range d.ivars {
+		if v.name == name {
+			panic("objc: " + d.name + " defines ivar " + name + " twice")
+		}
+	}
+	v := &Ivar{name: name}
+	d.ivars = append(d.ivars, v)
+	return v
+}
+
+// Superclass returns the class given to Define, for SendSuper and
+// SuperFrame from the class's overriding methods.
+func (d *ClassDef) Superclass() ID { return d.super }
 
 // Method adds the instance method sel to the class. types is its Objective-C
 // type encoding ("v@:@": void, self, _cmd, an object). h receives the call
@@ -105,6 +162,14 @@ func (d *ClassDef) Register() ID {
 			F.Call2(addProtocol, uintptr(cls), proto)
 		}
 	}
+	types := CString("Q")
+	for _, v := range d.ivars {
+		// class_addIvar(cls, name, size, log2(alignment), types)
+		if F.Reset().Arg(uintptr(cls)).Arg(uintptr(unsafe.Pointer(CString(v.name)))).Arg(8).Arg(3).
+			Arg(uintptr(unsafe.Pointer(types))).Call(addIvar).Bool() == false {
+			panic("objc: " + d.name + ": cannot add ivar " + v.name)
+		}
+	}
 	var table []entry
 	for _, m := range d.methods {
 		if !m.direct {
@@ -129,6 +194,10 @@ func (d *ClassDef) Register() ID {
 		F.Call4(addMethod, uintptr(cls), uintptr(m.sel), imp, uintptr(unsafe.Pointer(CString(m.types))))
 	}
 	F.Call1(registerPair, uintptr(cls))
+	for _, v := range d.ivars {
+		iv := F.Call2(getIvar, uintptr(cls), uintptr(unsafe.Pointer(CString(v.name))))
+		v.off = F.Call1(ivarOffset, iv)
+	}
 	return cls
 }
 

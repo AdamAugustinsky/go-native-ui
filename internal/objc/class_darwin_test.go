@@ -7,10 +7,17 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"gonativeui/internal/ffi"
 )
+
+var classRun atomic.Int32
+
+// className makes a class name unique to this test run: a class cannot be
+// registered twice in a process, and -count reruns the tests.
+func className(base string) string { return fmt.Sprintf("%s%d", base, classRun.Add(1)) }
 
 // newObject sends +alloc and -init to cls.
 func newObject(cls ID) ID { return Send(Send(cls, Sel("alloc")), Sel("init")) }
@@ -45,7 +52,7 @@ func TestMethodsFromSeveralFilesReachTheirHandlers(t *testing.T) {
 	t.Cleanup(runtime.UnlockOSThread)
 
 	var log []string
-	d := Define("GNUITestTwoFiles", Cls("NSObject"), nil)
+	d := Define(className("GNUITestTwoFiles"), Cls("NSObject"), nil)
 	registerFileA(d, &log)
 	registerFileB(d, &log)
 	if d.Class() != 0 {
@@ -86,7 +93,7 @@ func TestManySelectorsEachFindTheirOwnHandler(t *testing.T) {
 	t.Cleanup(runtime.UnlockOSThread)
 
 	const n = 61
-	d := Define("GNUITestMany", Cls("NSObject"), nil)
+	d := Define(className("GNUITestMany"), Cls("NSObject"), nil)
 	sels := make([]SEL, n)
 	for k := 0; k < n; k++ {
 		i := (k * 17) % n // a permutation of 0..n-1
@@ -111,10 +118,10 @@ func TestClassesKeepTheirOwnTables(t *testing.T) {
 
 	shared := Sel("gnuiWho")
 	only := Sel("gnuiOnlyInFirst")
-	first := Define("GNUITestFirst", Cls("NSObject"), nil)
+	first := Define(className("GNUITestFirst"), Cls("NSObject"), nil)
 	first.Method(shared, "Q@:", func(c *ffi.CB) { c.Ret(1) })
 	first.Method(only, "Q@:", func(c *ffi.CB) { c.Ret(7) })
-	second := Define("GNUITestSecond", Cls("NSObject"), nil)
+	second := Define(className("GNUITestSecond"), Cls("NSObject"), nil)
 	second.Method(shared, "Q@:", func(c *ffi.CB) { c.Ret(2) })
 	a, b := newObject(first.Register()), newObject(second.Register())
 	if x, y := Send(a, shared), Send(b, shared); x != 1 || y != 2 {
@@ -134,7 +141,7 @@ func TestMethodIMPHasItsOwnCallback(t *testing.T) {
 	runtime.LockOSThread()
 	t.Cleanup(runtime.UnlockOSThread)
 
-	d := Define("GNUITestDirect", Cls("NSObject"), nil)
+	d := Define(className("GNUITestDirect"), Cls("NSObject"), nil)
 	d.MethodIMP(Sel("gnuiDirect:"), "Q@:Q", func(c *ffi.CB) { c.Ret(c.Int(2) + 100) })
 	d.Method(Sel("gnuiShared:"), "Q@:Q", func(c *ffi.CB) { c.Ret(c.Int(2) + 200) })
 	o := newObject(d.Register())
@@ -156,7 +163,8 @@ func TestDefinitionErrorsPanic(t *testing.T) {
 		return
 	}
 	h := func(*ffi.CB) {}
-	d := Define("GNUITestErrors", Cls("NSObject"), nil)
+	name := className("GNUITestErrors")
+	d := Define(name, Cls("NSObject"), nil)
 	d.Method(Sel("gnuiTwice"), "v@:", h)
 	if !panics(func() { d.Method(Sel("gnuiTwice"), "v@:", h) }) {
 		t.Error("a selector defined twice did not panic")
@@ -174,7 +182,7 @@ func TestDefinitionErrorsPanic(t *testing.T) {
 	if !panics(func() { d.Register() }) {
 		t.Error("registering twice did not panic")
 	}
-	if !panics(func() { Define("GNUITestErrors", Cls("NSObject"), nil).Register() }) {
+	if !panics(func() { Define(name, Cls("NSObject"), nil).Register() }) {
 		t.Error("a second class with the same name did not panic")
 	}
 }
@@ -186,7 +194,7 @@ func TestDispatchAllocatesNothing(t *testing.T) {
 	t.Cleanup(runtime.UnlockOSThread)
 
 	var n uintptr
-	d := Define("GNUITestAllocs", Cls("NSObject"), nil)
+	d := Define(className("GNUITestAllocs"), Cls("NSObject"), nil)
 	sel := Sel("gnuiCount:")
 	d.Method(sel, "Q@:Q", func(c *ffi.CB) { n += c.Int(2); c.Ret(n) })
 	for i := 0; i < 20; i++ {
