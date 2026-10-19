@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"gonativeui/ui"
+	"gonativeui/widget/base"
 )
 
 // bigTable is a table over n items, for the tests: a name column, a size
@@ -276,12 +277,12 @@ func TestTableResizeColumnHonoursMinimum(t *testing.T) {
 	}
 	g.in.MouseX = edge - 400
 	g.frames(2)
-	if w := v.cols[0].Width; w != defaultMinColumnPt {
-		t.Fatalf("dragging far left gave width %v, want the minimum %d", w, defaultMinColumnPt)
+	if w := v.cols[0].Width; w != base.DefaultMinColumnPt {
+		t.Fatalf("dragging far left gave width %v, want the minimum %d", w, base.DefaultMinColumnPt)
 	}
 	g.in.SetButton(ui.ButtonLeft, false, 0)
 	g.frames(2)
-	if g.must(ui.RoleColumnHeader, "Name").Bounds[2]-g.must(ui.RoleColumnHeader, "Name").Bounds[0] < defaultMinColumnPt-1 {
+	if g.must(ui.RoleColumnHeader, "Name").Bounds[2]-g.must(ui.RoleColumnHeader, "Name").Bounds[0] < base.DefaultMinColumnPt-1 {
 		t.Fatal("the header cell is narrower than the minimum")
 	}
 }
@@ -442,8 +443,8 @@ func TestTableHeadersAreKeyboardOperable(t *testing.T) {
 		t.Fatalf("Alt+Shift+Left: width %v, want 56", w)
 	}
 	g.key(ui.KeyLeft, ui.ModAlt|ui.ModShift)
-	if w := v.cols[1].Width; w != defaultMinColumnPt {
-		t.Fatalf("Alt+Shift+Left past the minimum: width %v, want %d", w, defaultMinColumnPt)
+	if w := v.cols[1].Width; w != base.DefaultMinColumnPt {
+		t.Fatalf("Alt+Shift+Left past the minimum: width %v, want %d", w, base.DefaultMinColumnPt)
 	}
 	// a column that cannot sort is still resizable, and does not sort
 	g.key(ui.KeyTab, 0)

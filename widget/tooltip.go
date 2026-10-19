@@ -3,21 +3,12 @@ package widget
 import (
 	"gonativeui/theme"
 	"gonativeui/ui"
+	"gonativeui/widget/base"
 )
 
 // DefaultTooltipDelayNs is how long the pointer rests on a widget before its
 // tooltip shows.
-const DefaultTooltipDelayNs = 500e6
-
-// tipState is the hover timer of the tooltip: the widget the pointer rests on
-// and since when.
-type tipState struct {
-	key   ui.Key
-	since int64
-}
-
-// tipKeyBase keys the tooltip overlays.
-var tipKeyBase = ui.HashString(keyRoot, "tooltip")
+const DefaultTooltipDelayNs = base.DefaultTooltipDelayNs
 
 // Tooltip shows text beside the widget id, which must have been built in this
 // frame and take pointer input (a button, a field, a list; a plain label does
@@ -27,36 +18,15 @@ var tipKeyBase = ui.HashString(keyRoot, "tooltip")
 // never takes the focus. Call it right after the widget.
 func (k *Kit) Tooltip(id ui.ID, text string) {
 	c := k.c
-	if id == 0 || text == "" || k.off() {
+	if text == "" {
 		return
 	}
-	key := c.KeyOf(id)
-	now := c.Input().Time
-	if !c.Hot(id) {
-		if k.tip.key == key {
-			k.tip.key = 0
-		}
-		return
-	}
-	if c.ActiveKey() != 0 || k.pop.open() { // pressed, or a menu is open: start over
-		k.tip.key, k.tip.since = key, now
-		return
-	}
-	if k.tip.key != key {
-		k.tip.key, k.tip.since = key, now
-	}
-	delay := k.TooltipDelayNs
-	if delay == 0 {
-		delay = DefaultTooltipDelayNs
-	}
-	if now == 0 {
-		return // without a clock a delay cannot pass
-	}
-	if el := now - k.tip.since; el < delay {
-		c.WakeIn(delay - el)
+	key, due := k.TooltipDue(id)
+	if !due {
 		return
 	}
 	p, px := &k.r.Pal, &k.r.Px
+	tipKeyBase := base.TooltipKeyBase
 	r := c.Rect(id)
 	anchor := [4]float32{r[0], r[1], r[2], r[3] + px.GapSmall}
 	t := c.AnimateValueFrom(ui.KeyN(tipKeyBase, uint64(key)), 0, 1, k.r.Motion.Fade)

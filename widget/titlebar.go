@@ -47,7 +47,7 @@ func (g *glyphs) Glyph(c *ui.Context, key ui.Key, gl theme.Glyph, cx, cy, size f
 func (k *Kit) Titlebar(title string, buttons theme.ButtonStyle, maximised bool) theme.TitlebarResult {
 	c := k.c
 	w, _ := c.Size()
-	return k.r.Chrome.Titlebar(c, &k.r, theme.Titlebar{
+	return k.r.Chrome.Titlebar(c, k.r, theme.Titlebar{
 		Width: float32(w), Title: title, Buttons: buttons, Maximised: maximised,
 		Active: c.Input().Focused, Glyphs: &k.gl,
 	})
@@ -55,4 +55,4 @@ func (k *Kit) Titlebar(title string, buttons theme.ButtonStyle, maximised bool) 
 
 // Background builds the window background of the theme (behind everything
 // else).
-func (k *Kit) Background() { k.r.Chrome.Background(k.c, &k.r) }
+func (k *Kit) Background() { k.r.Chrome.Background(k.c, k.r) }

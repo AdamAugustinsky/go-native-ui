@@ -40,7 +40,7 @@ func (k *Kit) ProgressBar(label string, frac float32) ui.ID {
 	if indeterminate {
 		t := float32(0.3) // where the segment stands with ReduceMotion
 		if !k.ReduceMotion {
-			if k.visible(r) {
+			if k.Visible(r) {
 				c.RequestFrame()
 			}
 			t = float32(c.Input().Time%int64(indeterminateNs)) / indeterminateNs
