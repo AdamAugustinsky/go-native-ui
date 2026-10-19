@@ -31,12 +31,13 @@ import (
 //
 // So AppKit places the buttons itself. NSWindow keeps a titlebar height and a
 // button-group offset of its own (setTitlebarHeight: and
-// setStandardWindowButtonGroupOffset:, private), which every layout pass of
-// the titlebar honours. The buttons, the group's hover area, the zoom button's
+// setStandardWindowButtonGroupOffset:, private; present on macOS 15 and 27,
+// the systems tested), which every layout pass of the titlebar honours. The buttons, the group's hover area, the zoom button's
 // tiling menu, key and appearance changes all follow from AppKit's own
 // layout, so nothing undoes them. The offset is calibrated against where
 // AppKit actually puts the close button, so its centre lands on
-// Options.TrafficLights whatever AppKit's default inset is.
+// Options.TrafficLights whatever AppKit's default inset is; the spacing stays
+// AppKit's (20 pt on macOS 15, 23 on 27).
 //
 // Two things AppKit does not restore: full screen drops the custom height when
 // it starts (customTitlebarHeightPriorToFSMode keeps it), and a failed entry
@@ -110,6 +111,7 @@ func lightsSetup() {
 	def.Method(selLayoutChromeLater, "v@:@", func(*ffi.CB) {
 		if w := theWindow.Load(); w != nil {
 			w.layoutChrome()
+			w.refreshButtonTracking()
 		}
 	})
 	lightsObserverClass = def.Register()
@@ -220,9 +222,21 @@ func (w *Window) placeNative(btn [3]objc.ID) {
 		w.tb.offset[1] -= dy
 		w.setGroupOffset()
 	}
-	// The group's hover area follows a new offset only at the theme frame's
-	// next tracking update.
-	objc.Send(frame, selUpdateTrackingAreas)
+	w.refreshButtonTracking()
+}
+
+// refreshButtonTracking has the theme frame and the titlebar view compute
+// the button group's hover areas again (theirs on macOS 15 and after full
+// screen): they follow a new offset only at their next tracking update.
+func (w *Window) refreshButtonTracking() {
+	if w.titlebar == 0 || !w.tb.native || w.tb.closed || w.fullScreen || objc.Send(w.win, selStyleMask)&(1<<14) != 0 {
+		return
+	}
+	if b := objc.Send1(w.win, selStdButton, 0); b != 0 {
+		tv := objc.Send(b, selSuperview)
+		objc.Send(objc.Send(objc.Send(tv, selSuperview), selSuperview), selUpdateTrackingAreas)
+		objc.Send(tv, selUpdateTrackingAreas)
+	}
 }
 
 func (w *Window) setGroupOffset() {
@@ -260,10 +274,13 @@ func (w *Window) unwatchTitlebar() {
 }
 
 // layoutChromeSoon runs layoutChrome now and again on the run loop's next
-// turn, after AppKit has finished what it was doing (the end of full screen).
+// turn, after AppKit has finished what it was doing (the end of full screen),
+// and has the group's hover areas computed again: full screen leaves one of
+// its own on the titlebar view.
 func (w *Window) layoutChromeSoon() {
 	w.layoutChrome()
-	if w.tb.observer != 0 {
+	w.refreshButtonTracking()
+	if w.tb.observer != 0 && !w.tb.closed {
 		objc.F.Reset().Arg(uintptr(w.tb.observer)).Arg(uintptr(selPerformAfterDelay)).Arg(uintptr(selLayoutChromeLater)).Arg(0).ArgF64(0).Call(objc.MsgSend)
 	}
 }

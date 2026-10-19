@@ -15,14 +15,14 @@ import (
 // window coordinates from the top left.
 type lightsSeen struct {
 	centre   [3][2]float64
-	union    [4]float64 // the three buttons' frames: x0, y0, x1, y1
-	sys      [4]float32 // SystemButtons
-	hover    [4]float64 // the theme frame's hover area for the button group
-	hoverOK  bool       // found, and active whether or not the window is key
-	zoomArea [2]float64 // centre of the zoom button's own tracking area (its tiling menu)
-	hit      [3]bool    // AppKit's hit test at each centre finds the button
-	drag     [3]bool    // a press at each centre would drag the window (our drag map)
-	inGroup  [2]int     // _isWindowPointInStandardWindowButtonGroup: at the close button / at AppKit's default place, -1 unknown
+	union    [4]float64   // the three buttons' frames: x0, y0, x1, y1
+	sys      [4]float32   // SystemButtons
+	hover    [][4]float64 // the button group's hover areas (the theme frame's; macOS 15 also the titlebar view's)
+	hoverOK  bool         // all active whether or not the window is key
+	zoomArea [2]float64   // centre of the zoom button's own tracking area (its tiling menu)
+	hit      [3]bool      // AppKit's hit test at each centre finds the button
+	drag     [3]bool      // a press at each centre would drag the window (our drag map)
+	inGroup  [2]int       // _isWindowPointInStandardWindowButtonGroup: at the close button / at AppKit's default place, -1 unknown
 	fs       bool
 }
 
@@ -51,17 +51,26 @@ func seeLights(w *Window) (s lightsSeen) {
 		s.union = [4]float64{min(s.union[0], x0), min(s.union[1], y0), max(s.union[2], x0+f.W), max(s.union[3], y0+f.H)}
 	}
 	frame := objc.Send(w.content, selSuperview)
-	areas := objc.Send(frame, selTrackingAreas)
-	for i := 0; i < int(objc.Send(areas, selTestCount)); i++ {
-		a := objc.Send1(areas, selTestObjectAt, uintptr(i))
-		r := objc.SendRect(a, selTrackRect)
-		opts, owner := uintptr(objc.Send(a, selTrackOptions)), objc.Send(a, selTrackOwner)
-		switch {
-		case owner == frame && opts&0x01 != 0: // NSTrackingMouseEnteredAndExited: the group's hover
-			s.hover = [4]float64{r.X, wf.H - r.Y - r.H, r.X + r.W, wf.H - r.Y}
-			s.hoverOK = opts&0x80 != 0 // NSTrackingActiveAlways: inactive windows show the glyphs too
-		case owner == objc.Send(btn[2], selCell):
-			s.zoomArea = [2]float64{r.X + r.W/2, wf.H - r.Y - r.H/2}
+	s.hoverOK = true
+	for _, v := range [2]objc.ID{frame, objc.Send(btn[0], selSuperview)} {
+		areas := objc.Send(v, selTrackingAreas)
+		for i := 0; i < int(objc.Send(areas, selTestCount)); i++ {
+			a := objc.Send1(areas, selTestObjectAt, uintptr(i))
+			r := objc.SendRect(a, selTrackRect)
+			// in window coordinates, from the top left
+			objc.F.Reset().Arg(uintptr(v)).Arg(uintptr(selConvertPointToView)).ArgPoint(r.X, r.Y).Arg(0).Call(objc.MsgSend)
+			x0, y0 := objc.F.F64(0), objc.F.F64(1)
+			objc.F.Reset().Arg(uintptr(v)).Arg(uintptr(selConvertPointToView)).ArgPoint(r.X+r.W, r.Y+r.H).Arg(0).Call(objc.MsgSend)
+			x1, y1 := objc.F.F64(0), objc.F.F64(1)
+			rect := [4]float64{min(x0, x1), wf.H - max(y0, y1), max(x0, x1), wf.H - min(y0, y1)}
+			opts, owner := uintptr(objc.Send(a, selTrackOptions)), objc.Send(a, selTrackOwner)
+			switch {
+			case owner == v && opts&0x01 != 0 && opts&0x4000 == 0: // EnteredAndExited, not an edge-resize area: the group's hover
+				s.hover = append(s.hover, rect)
+				s.hoverOK = s.hoverOK && opts&0x80 != 0 // NSTrackingActiveAlways: inactive windows show the glyphs too
+			case owner == objc.Send(btn[2], selCell):
+				s.zoomArea = [2]float64{(rect[0] + rect[2]) / 2, (rect[1] + rect[3]) / 2}
+			}
 		}
 	}
 	for i := range btn {
@@ -108,13 +117,15 @@ func checkLights(s lightsSeen, want [2]float64, space float64) string {
 			return fmt.Sprintf("SystemButtons %v, the buttons are at %v", s.sys, s.union)
 		}
 	}
-	for i := range s.hover {
-		if !near(s.hover[i], s.union[i]) {
-			return fmt.Sprintf("the group's hover area is %v, the buttons are at %v: the glyphs would show elsewhere", s.hover, s.union)
+	for _, h := range s.hover {
+		for i := range h {
+			if !near(h[i], s.union[i]) {
+				return fmt.Sprintf("the group's hover areas are %v, the buttons are at %v: the glyphs would show elsewhere", s.hover, s.union)
+			}
 		}
 	}
-	if !s.hoverOK {
-		return "the group's hover area is missing or works only in the key window"
+	if len(s.hover) == 0 || !s.hoverOK {
+		return fmt.Sprintf("the group's hover areas %v are missing or work only in the key window", s.hover)
 	}
 	if !near(s.zoomArea[0], s.centre[2][0]) || !near(s.zoomArea[1], s.centre[2][1]) {
 		return fmt.Sprintf("the zoom button's tracking area is centred at %v, the button at %v", s.zoomArea, s.centre[2])
