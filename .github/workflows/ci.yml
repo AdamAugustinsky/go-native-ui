@@ -115,7 +115,7 @@ jobs:
   macos:
     name: macOS arm64 (Metal)
     runs-on: macos-15
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
@@ -177,6 +177,25 @@ jobs:
           go build -trimpath -ldflags="-s -w" -o bin/notes ./examples/notes
           ./bin/notes -bench -gate -allow-unpaced -timeout 150s | tee notes-macos.json
           { echo '```json'; cat notes-macos.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: rexlook (windowed bench with the allocation gate; native shell, then drawn)
+        if: ${{ !cancelled() }}
+        # The CPU budget (1000 µs/frame) is not gated on the shared runner:
+        # -drawn takes ~970 µs/frame even on an idle M-series Mac. The JSON
+        # records MainThreadCPUus.
+        run: |
+          go build -trimpath -ldflags="-s -w" -o bin/rexlook ./cmd/rexlook
+          ./bin/rexlook -bench -gate -allow-unpaced -max-cpu-us 0 -allocsites -timeout 240s | tee rexlook-macos.json
+          ./bin/rexlook -bench -gate -allow-unpaced -max-cpu-us 0 -allocsites -drawn -timeout 240s | tee rexlook-drawn-macos.json
+          { echo '```json'; cat rexlook-macos.json rexlook-drawn-macos.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: vlistbench (windowed bench with the allocation gate; the offscreen session runs in go test)
+        if: ${{ !cancelled() }}
+        # The list and edit time budgets are not gated on the shared runner
+        # (the edit budget is missed now and then even on an idle Mac); the
+        # JSON records ListWorkUs and EditFrameMaxUs.
+        run: |
+          go build -trimpath -ldflags="-s -w" -o bin/vlistbench ./cmd/vlistbench
+          ./bin/vlistbench -bench -gate -allow-unpaced -max-list-us 0 -max-edit-us 0 -allocsites -timeout 240s | tee vlistbench-macos.json
+          { echo '```json'; cat vlistbench-macos.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - name: live resize (two draws per transaction must not starve the drawable pool)
         run: |
           go build -trimpath -ldflags="-s -w" -o bin/rexlook ./cmd/rexlook
@@ -199,6 +218,9 @@ jobs:
             gallery-macos.png
             gallery-macos-dark.png
             notes-macos.json
+            rexlook-macos.json
+            rexlook-drawn-macos.json
+            vlistbench-macos.json
           if-no-files-found: ignore
 
   windows:
