@@ -148,6 +148,8 @@ type App struct {
 	scriptDone  bool
 
 	frames      int   // frames presented
+	inFrame     bool  // between BeginFrame and EndFrame (drawFrame)
+	reentries   int   // frame handler calls refused because a frame was in progress
 	frameEvents int   // EvFrame events received (frame-source ticks)
 	lastStart   int64 // platform.Now of the last frame's start; 0 before the first
 	fm          frameMeasure
@@ -530,7 +532,20 @@ func (a *App) onEvent(e *platform.Event) {
 // frameHandler runs inside OS modal loops (live resize), where Wait does not
 // return: it handles what is pending and draws at once, in step with the
 // window.
+//
+// It does nothing while a frame is being drawn. AppKit calls it
+// synchronously from inside calls the app makes during a frame: anything
+// that animates the window as a live resize (toggleFullScreen:, an animated
+// zoom:), directly or in a nested run loop (a modal session, menu
+// tracking). A frame drawn there would run Build inside Build and draw into
+// the frame in progress (once a crash: the outer EndFrame found the frame
+// cleared by the inner one). What it would have handled stays queued, and
+// the next Wait delivers it.
 func (a *App) frameHandler() {
+	if a.inFrame {
+		a.reentries++
+		return
+	}
 	a.tr.wheelStep = a.UI.WheelStep
 	evs := a.Win.Pending()
 	for i := range evs {
