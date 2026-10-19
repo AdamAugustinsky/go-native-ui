@@ -18,5 +18,6 @@ var fonts = theme.Fonts{
 }
 
 // The Rex motion: the box animations at ui's own rates, focus dimming at 20
-// per second, fades at 18, and a light/dark crossfade of about 0.3 s.
-var motion = theme.Motion{Hot: 50, Active: 50, Focus: 50, Scroll: 40, Dim: 20, Fade: 18, Mode: 10}
+// per second, fades at 18, and a light/dark crossfade of about 0.3 s; state
+// changes take AppKit's 0.25 s, dismissals 0.2 s and sheets 0.3 s.
+var motion = theme.Motion{Hot: 50, Active: 50, Focus: 50, Scroll: 40, Dim: 20, Fade: 18, Mode: 10, Standard: 0.25, Dismiss: 0.2, Sheet: 0.3}

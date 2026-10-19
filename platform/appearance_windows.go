@@ -332,3 +332,7 @@ func setImmersiveDark(hwnd uintptr, dark bool) int32 {
 	}
 	return win32.HR(win32.Call(pDwmSetWindowAttr, hwnd, uintptr(chromeAttr), uintptr(unsafe.Pointer(&darkBool)), 4))
 }
+
+// ReadSystemValues reports nothing on Windows (see appearance.go): the
+// theme's own values apply (D34).
+func ReadSystemValues(dst *SystemValues) { *dst = SystemValues{} }

@@ -1,0 +1,588 @@
+{
+ "source": "~/Projects/research/appkit-ref/macbook-blue/metrics.json (tools/appkitref) and ~/Projects/research/appkit-ref/scenes (tools/appkitscenes, docs/design/liquid-glass-reference.md); Apple's numbers, not its pixels",
+ "system": {
+  "keyWindowSimulated": "ARWindow/ARApp report key, main and active; samples marked 'inactive' report not",
+  "mainScreenScale": 2,
+  "os": "27.2.0",
+  "osBuild": "Version 27.2 (Build 26B5091g)",
+  "renderScale": 2
+ },
+ "notes": "blue accent forced in the tool; the highlight colour is the MacBook user's graphite (selectedTextBackgroundColor)",
+ "colors": {
+  "light": {
+   "windowBackgroundColor": "#FFFFFFFF",
+   "underPageBackgroundColor": "#F6F6F6FF",
+   "controlBackgroundColor": "#FFFFFFFF",
+   "textBackgroundColor": "#FFFFFFFF",
+   "labelColor": "#000000D8",
+   "secondaryLabelColor": "#0000007F",
+   "tertiaryLabelColor": "#00000042",
+   "quaternaryLabelColor": "#00000019",
+   "quinaryLabelColor": "#0000000C",
+   "textColor": "#000000FF",
+   "placeholderTextColor": "#0000007F",
+   "disabledControlTextColor": "#0000003F",
+   "headerTextColor": "#000000D8",
+   "systemFillColor": "#00000019",
+   "secondarySystemFillColor": "#00000014",
+   "tertiarySystemFillColor": "#0000000C",
+   "quaternarySystemFillColor": "#00000007",
+   "quinarySystemFillColor": "#00000002",
+   "separatorColor": "#00000019",
+   "gridColor": "#E6E6E6FF",
+   "controlAccentColor": "#007AFFFF",
+   "selectedContentBackgroundColor": "#0064E1FF",
+   "unemphasizedSelectedContentBackgroundColor": "#DCDCDCFF",
+   "alternateSelectedControlTextColor": "#FFFFFFFF",
+   "selectedTextBackgroundColor": "#E0E0E0FF",
+   "unemphasizedSelectedTextBackgroundColor": "#DCDCDCFF",
+   "selectedTextColor": "#000000FF",
+   "keyboardFocusIndicatorColor": "#0067F47F",
+   "alternatingContentBackgroundColors": "#F4F5F5FF",
+   "linkColor": "#0068DAFF",
+   "textInsertionPointColor": "#989898FF",
+   "findHighlightColor": "#FFFF00FF",
+   "systemRedColor": "#FF383CFF",
+   "systemOrangeColor": "#FF8D28FF",
+   "systemYellowColor": "#FFCC00FF",
+   "systemGreenColor": "#34C759FF",
+   "systemMintColor": "#00C8B3FF",
+   "systemTealColor": "#00C3D0FF",
+   "systemCyanColor": "#00C0E8FF",
+   "systemBlueColor": "#0088FFFF",
+   "systemIndigoColor": "#6155F5FF",
+   "systemPurpleColor": "#CB30E0FF",
+   "systemPinkColor": "#FF2D55FF",
+   "systemBrownColor": "#AC7F5EFF",
+   "systemGrayColor": "#8E8E93FF"
+  },
+  "dark": {
+   "windowBackgroundColor": "#1E1E1EFF",
+   "underPageBackgroundColor": "#282828FF",
+   "controlBackgroundColor": "#1E1E1EFF",
+   "textBackgroundColor": "#1E1E1EFF",
+   "labelColor": "#FFFFFFD8",
+   "secondaryLabelColor": "#FFFFFF8C",
+   "tertiaryLabelColor": "#FFFFFF3F",
+   "quaternaryLabelColor": "#FFFFFF19",
+   "quinaryLabelColor": "#FFFFFF0C",
+   "textColor": "#FFFFFFFF",
+   "placeholderTextColor": "#FFFFFF8C",
+   "disabledControlTextColor": "#FFFFFF3F",
+   "headerTextColor": "#FFFFFFFF",
+   "systemFillColor": "#FFFFFF19",
+   "secondarySystemFillColor": "#FFFFFF14",
+   "tertiarySystemFillColor": "#FFFFFF0C",
+   "quaternarySystemFillColor": "#FFFFFF07",
+   "quinarySystemFillColor": "#FFFFFF02",
+   "separatorColor": "#FFFFFF19",
+   "gridColor": "#1A1A1AFF",
+   "controlAccentColor": "#007AFFFF",
+   "selectedContentBackgroundColor": "#0059D1FF",
+   "unemphasizedSelectedContentBackgroundColor": "#464646FF",
+   "alternateSelectedControlTextColor": "#FFFFFFFF",
+   "selectedTextBackgroundColor": "#FFFFFF3F",
+   "unemphasizedSelectedTextBackgroundColor": "#464646FF",
+   "selectedTextColor": "#FFFFFFFF",
+   "keyboardFocusIndicatorColor": "#1AA9FF7F",
+   "alternatingContentBackgroundColors": "#FFFFFF0C",
+   "linkColor": "#419CFFFF",
+   "textInsertionPointColor": "#8C8C8CFF",
+   "findHighlightColor": "#FFFF00FF",
+   "systemRedColor": "#FF4245FF",
+   "systemOrangeColor": "#FF9230FF",
+   "systemYellowColor": "#FFD600FF",
+   "systemGreenColor": "#30D158FF",
+   "systemMintColor": "#00DAC3FF",
+   "systemTealColor": "#00D2E0FF",
+   "systemCyanColor": "#3CD3FEFF",
+   "systemBlueColor": "#0091FFFF",
+   "systemIndigoColor": "#6D7CFFFF",
+   "systemPurpleColor": "#DB34F2FF",
+   "systemPinkColor": "#FF375FFF",
+   "systemBrownColor": "#B78A66FF",
+   "systemGrayColor": "#98989DFF"
+  }
+ },
+ "textStyles": {
+  "body": {
+   "size": 13,
+   "line": 16,
+   "weight": 400
+  },
+  "callout": {
+   "size": 12,
+   "line": 15,
+   "weight": 400
+  },
+  "caption1": {
+   "size": 10,
+   "line": 13,
+   "weight": 400
+  },
+  "caption2": {
+   "size": 10,
+   "line": 13,
+   "weight": 510
+  },
+  "footnote": {
+   "size": 10,
+   "line": 13,
+   "weight": 400
+  },
+  "headline": {
+   "size": 13,
+   "line": 16,
+   "weight": 700
+  },
+  "largeTitle": {
+   "size": 26,
+   "line": 32,
+   "weight": 400
+  },
+  "subheadline": {
+   "size": 11,
+   "line": 14,
+   "weight": 400
+  },
+  "title1": {
+   "size": 22,
+   "line": 26,
+   "weight": 400
+  },
+  "title2": {
+   "size": 17,
+   "line": 22,
+   "weight": 400
+  },
+  "title3": {
+   "size": 15,
+   "line": 20,
+   "weight": 400
+  }
+ },
+ "fonts": {
+  "titleBar": 13,
+  "menu": 14,
+  "toolTips": 11,
+  "controlSizes": {
+   "large": 13,
+   "mini": 9,
+   "regular": 13,
+   "small": 11,
+   "xlarge": 13
+  }
+ },
+ "controls": {
+  "push": {
+   "mini": {
+    "h": 16,
+    "radius": 3.94,
+    "font": 9,
+    "w": 45.5
+   },
+   "small": {
+    "h": 20,
+    "radius": 5.08,
+    "font": 11,
+    "w": 55
+   },
+   "regular": {
+    "h": 24,
+    "radius": 5.97,
+    "font": 13,
+    "w": 64.5
+   },
+   "large": {
+    "h": 28,
+    "radius": 13.86,
+    "font": 13,
+    "w": 68.5
+   },
+   "xlarge": {
+    "h": 36,
+    "radius": 17.87,
+    "font": 13,
+    "w": 76.5
+   }
+  },
+  "field": {
+   "small": {
+    "h": 22,
+    "radius": 4.95
+   },
+   "regular": {
+    "h": 24,
+    "radius": 5.78
+   },
+   "large": {
+    "h": 24,
+    "radius": 6.89
+   }
+  },
+  "search": {
+   "h": 24,
+   "radius": 11.86
+  },
+  "switch": {
+   "mini": {
+    "h": 16,
+    "w": 36
+   },
+   "small": {
+    "h": 20,
+    "w": 44
+   },
+   "regular": {
+    "h": 24,
+    "w": 54
+   },
+   "large": {
+    "h": 28,
+    "w": 64
+   }
+  },
+  "focusRing": {
+   "outsetFromBody": 2.99,
+   "width": 3.49,
+   "peakAlpha": 0.5
+  },
+  "pushFill": "#00000014"
+ },
+ "windows": {
+  "fullSizeTransparent": {
+   "titlebar": 32,
+   "cornerRadius": 16,
+   "close": {
+    "centerYFromTop": 16,
+    "h": 14,
+    "w": 14,
+    "x": 9,
+    "yFromTop": 9
+   },
+   "miniaturize": {
+    "centerYFromTop": 16,
+    "h": 14,
+    "w": 14,
+    "x": 32,
+    "yFromTop": 9
+   },
+   "zoom": {
+    "centerYFromTop": 16,
+    "h": 14,
+    "w": 14,
+    "x": 55,
+    "yFromTop": 9
+   }
+  },
+  "titled": {
+   "titlebar": 32,
+   "cornerRadius": 16,
+   "close": {
+    "centerYFromTop": 16,
+    "h": 14,
+    "w": 14,
+    "x": 9,
+    "yFromTop": 9
+   },
+   "miniaturize": {
+    "centerYFromTop": 16,
+    "h": 14,
+    "w": 14,
+    "x": 32,
+    "yFromTop": 9
+   },
+   "zoom": {
+    "centerYFromTop": 16,
+    "h": 14,
+    "w": 14,
+    "x": 55,
+    "yFromTop": 9
+   }
+  },
+  "toolbarExpanded": {
+   "titlebar": 68,
+   "cornerRadius": 16,
+   "close": {
+    "centerYFromTop": 16,
+    "h": 14,
+    "w": 14,
+    "x": 9,
+    "yFromTop": 9
+   },
+   "miniaturize": {
+    "centerYFromTop": 16,
+    "h": 14,
+    "w": 14,
+    "x": 32,
+    "yFromTop": 9
+   },
+   "zoom": {
+    "centerYFromTop": 16,
+    "h": 14,
+    "w": 14,
+    "x": 55,
+    "yFromTop": 9
+   }
+  },
+  "toolbarUnified": {
+   "titlebar": 52,
+   "cornerRadius": 16,
+   "close": {
+    "centerYFromTop": 26,
+    "h": 14,
+    "w": 14,
+    "x": 19,
+    "yFromTop": 19
+   },
+   "miniaturize": {
+    "centerYFromTop": 26,
+    "h": 14,
+    "w": 14,
+    "x": 42,
+    "yFromTop": 19
+   },
+   "zoom": {
+    "centerYFromTop": 26,
+    "h": 14,
+    "w": 14,
+    "x": 65,
+    "yFromTop": 19
+   }
+  },
+  "toolbarUnifiedCompact": {
+   "titlebar": 40,
+   "cornerRadius": 16,
+   "close": {
+    "centerYFromTop": 20,
+    "h": 14,
+    "w": 14,
+    "x": 12,
+    "yFromTop": 13
+   },
+   "miniaturize": {
+    "centerYFromTop": 20,
+    "h": 14,
+    "w": 14,
+    "x": 35,
+    "yFromTop": 13
+   },
+   "zoom": {
+    "centerYFromTop": 20,
+    "h": 14,
+    "w": 14,
+    "x": 58,
+    "yFromTop": 13
+   }
+  }
+ },
+ "scrollers": {
+  "mini-legacy": 13,
+  "mini-overlay": 15,
+  "preferredScrollerStyle": "overlay",
+  "regular-legacy": 17,
+  "regular-overlay": 17,
+  "small-legacy": 13,
+  "small-overlay": 15
+ },
+ "menus": {
+  "itemHeight": 24,
+  "separatorHeight": 11,
+  "verticalPadding": 5
+ },
+ "behaviour": {
+  "defaultAnimationDuration": 0.25
+ },
+ "scenes": {
+  "source": "~/Projects/research/appkit-ref/scenes (tools/appkitscenes, MacBook, macOS 27.2 26B5091g, 2026-10-19): dumps and captures/measured.json",
+  "styles": {
+   "unified": {
+    "titlebar": 52,
+    "cornerRadius": 16,
+    "close": {
+     "h": 14,
+     "w": 14,
+     "x": 19,
+     "y": 19
+    },
+    "title": {
+     "size": 15,
+     "weight": 0.4,
+     "y": 16.5,
+     "h": 19
+    },
+    "capsule": {
+     "h": 36,
+     "y": 8,
+     "radius": 18,
+     "firstX": 96
+    }
+   },
+   "compact": {
+    "titlebar": 40,
+    "cornerRadius": 16,
+    "close": {
+     "h": 14,
+     "w": 14,
+     "x": 12,
+     "y": 13
+    },
+    "title": {
+     "size": 13,
+     "weight": 0.4,
+     "y": 12,
+     "h": 16
+    },
+    "capsule": {
+     "h": 24,
+     "y": 8,
+     "radius": 12,
+     "firstX": 91.5
+    }
+   }
+  },
+  "sidebar": {
+   "rowHeight": 32,
+   "headerH": 19,
+   "indent": 13,
+   "headerTextX": 14,
+   "headerFont": 11,
+   "iconX": 19,
+   "icon": 20,
+   "textX": 43,
+   "groupGap": 13
+  },
+  "selections": {
+   "sidebarEmph.light": {
+    "fill": "#0070F5FF",
+    "inset": 10,
+    "radius": 8.06
+   },
+   "sidebarEmph.dark": {
+    "fill": "#007AFFFF",
+    "inset": 10,
+    "radius": 8.06
+   },
+   "table.light": {
+    "fill": "#0064E1FF",
+    "inset": 10,
+    "radius": 8.05
+   },
+   "table.dark": {
+    "fill": "#0059D1FF",
+    "inset": 10,
+    "radius": 8.04
+   },
+   "tableInactive.light": {
+    "fill": "#DCDCDCFF",
+    "inset": 10,
+    "radius": 7.94
+   },
+   "tableInactive.dark": {
+    "fill": "#464646FF",
+    "inset": 10,
+    "radius": 7.98
+   },
+   "sidebarInactive.light": {
+    "fill": "#E7E7E7FF",
+    "inset": 10,
+    "radius": 8.05
+   },
+   "sidebarInactive.dark": {
+    "fill": "#333333FF",
+    "inset": 10,
+    "radius": 8.06
+   },
+   "sidebarUnemph.light": {
+    "fill": "#D7D7D7FF",
+    "inset": 10,
+    "radius": 8.04
+   },
+   "sidebarUnemph.dark": {
+    "fill": "#434343FF",
+    "inset": 10,
+    "radius": 8.07
+   }
+  },
+  "sidebarFill": {
+   "light-active-top": "#EAECEDFF",
+   "dark-active-top": "#2A2A2BFF",
+   "light-inactive-top": "#F2F2F2FF",
+   "dark-inactive-top": "#252525FF"
+  },
+  "titles": {
+   "note": "the toolbar title's x (_NSToolbarTitleField), the right edge of the last toolbar capsule before it, and the content pane's left edge (light, active, top)",
+   "finder": {
+    "style": "unified",
+    "titleX": 284,
+    "prevCapsuleRight": 274,
+    "paneX": 180
+   },
+   "settings": {
+    "style": "unified",
+    "titleX": 319,
+    "prevCapsuleRight": 309,
+    "paneX": 215
+   },
+   "chat": {
+    "style": "unified",
+    "titleX": 298,
+    "prevCapsuleRight": 272,
+    "paneX": 280
+   },
+   "notes": {
+    "style": "compact",
+    "titleX": 250,
+    "prevCapsuleRight": 164.5,
+    "paneX": 240
+   }
+  }
+ },
+ "chrome": {
+  "source": "docs/design/liquid-glass-reference.md \u00a71-\u00a77 (the pixels of tools/appkitscenes captures; sidebar text by probing cap: settings-*-top at the header and row text frames)",
+  "light": {
+   "SidebarFillInactive": "#F2F2F2",
+   "SidebarLabelInactive": "#727272",
+   "SidebarHeader": "#878787",
+   "SidebarHeaderInactive": "#A6A6A6",
+   "SidebarSelUnemph": "#D7D7D7",
+   "SidebarSelInactive": "#E7E7E7",
+   "TitleTextOnWindow": "#4D4D4D",
+   "TitleTextInactive": "#B8B8B8",
+   "CapsuleFill": "#F9F9F9",
+   "CapsuleFillInactive": "#F2F2F2",
+   "CapsuleRimOnWindow": "#BFBFBF",
+   "CapsuleRimInactive": "#C1C1C1",
+   "ScrollEdgeBar": "#FFFFFF",
+   "ScrollEdgeLineOnWindow": "#E5E5E5",
+   "GroupBox": "#F7F7F7",
+   "SelectionDivider": "#1973E4",
+   "FillPressed": "#0000002B",
+   "FillDisabled": "#0000000A",
+   "AccentPressed": "#006FE6"
+  },
+  "dark": {
+   "SidebarFillInactive": "#252525",
+   "SidebarLabelInactive": "#929292",
+   "SidebarHeader": "#737373",
+   "SidebarHeaderInactive": "#585858",
+   "SidebarSelUnemph": "#434343",
+   "SidebarSelInactive": "#333333",
+   "TitleTextOnWindow": "#E9E9E9",
+   "TitleTextInactive": "#5C5C5C",
+   "CapsuleFill": "#3A3A3A",
+   "CapsuleFillInactive": "#333333",
+   "CapsuleRimOnWindow": "#0D0D0D",
+   "CapsuleRimInactive": "#131313",
+   "ScrollEdgeBar": "#292929",
+   "ScrollEdgeBarInactive": "#262626",
+   "ScrollEdgeLineOnWindow": "#2E2E2E",
+   "GroupBox": "#252525",
+   "SelectionDivider": "#196AD6",
+   "FillPressed": "#FFFFFF2B",
+   "FillDisabled": "#FFFFFF0A",
+   "AccentPressed": "#1988FF"
+  },
+  "groupBoxRadius": 12.2
+ }
+}
