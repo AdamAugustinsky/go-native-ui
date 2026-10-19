@@ -488,3 +488,68 @@ func TestVListSmallResetOfLargeList(t *testing.T) {
 		t.Fatal("a Reset of a small list was not applied at once")
 	}
 }
+
+// Items a deletion removes and inserts again survive it: an anchor or a mark
+// on a removed item moves to the next item that is still there, whether the
+// edit is applied in place, rebuilt, or queued.
+func TestVListReinsertedSurvivors(t *testing.T) {
+	without := func(from, n int, id uint64) []uint64 {
+		ids := seq(uint64(from), n)
+		return slices.DeleteFunc(ids, func(x uint64) bool { return x == id })
+	}
+	var frame uint32
+
+	// in place: ids 500 to 519 replaced by themselves but 510
+	var st VListState
+	st.Append(seq(0, 1000))
+	st.SetAnchor(510, 4)
+	st.SetMark(0, 510)
+	st.SetMark(1, 505)
+	st.Splice(500, 20, without(500, 20, 510))
+	if st.Pending() {
+		t.Fatal("the short replacement was rebuilt")
+	}
+	if a, _ := st.Anchor(); a != 511 {
+		t.Fatalf("in place: the anchor is %d, want 511", a)
+	}
+	if m := st.Mark(0); !m.Removed || m.Next != 511 || m.Prev != 509 {
+		t.Fatalf("in place: the mark on the removed item is %+v", m)
+	}
+	if m := st.Mark(1); m.Removed {
+		t.Fatalf("in place: the mark on a reinserted item is %+v", m)
+	}
+
+	// rebuilt: ids 100000 to 169999 replaced by themselves but 100010
+	st = VListState{}
+	st.Reserve(200_000)
+	st.Append(seq(0, 200_000))
+	st.SetAnchor(100_010, 0)
+	st.SetMark(0, 100_010)
+	st.SetMark(1, 100_005)
+	st.Splice(100_000, 70_000, without(100_000, 70_000, 100_010))
+	if !st.Pending() {
+		t.Fatal("the long replacement was applied in place")
+	}
+	drain(t, &st, &frame)
+	if a, _ := st.Anchor(); a != 100_011 {
+		t.Fatalf("rebuilt: the anchor is %d, want 100011", a)
+	}
+	if m := st.Mark(0); !m.Removed || m.Next != 100_011 || m.Prev != 100_009 {
+		t.Fatalf("rebuilt: the mark on the removed item is %+v", m)
+	}
+	if m := st.Mark(1); m.Removed {
+		t.Fatalf("rebuilt: the mark on a reinserted item is %+v", m)
+	}
+
+	// queued during a rebuild: 1018 to 1022 deleted, then 1021 inserted again
+	st.SetAnchor(1020, 0)
+	st.Move(10, 1, 120_000) // long: rebuilt
+	i, _ := st.IndexOf(1018)
+	i-- // the move takes item 10 from above
+	st.Splice(i, 5, nil)
+	st.Splice(i, 0, []uint64{1021})
+	drain(t, &st, &frame)
+	if a, _ := st.Anchor(); a != 1021 {
+		t.Fatalf("queued: the anchor is %d, want the reinserted 1021", a)
+	}
+}

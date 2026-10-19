@@ -1,5 +1,7 @@
 package base
 
+import "gonativeui/ui"
+
 // NoID is the one id value an item cannot have: it marks "no item".
 const NoID = ^uint64(0)
 
@@ -116,9 +118,15 @@ type VListState struct {
 	reqID    uint64
 	reqAlign Align
 	req      bool
-	reqLeft  int     // the frames a ScrollTo may still take to settle
-	settling bool    // the ScrollTo was applied once and is settling
-	by       float64 // ScrollBy, in pixels
+	reqLeft  int  // the frames a ScrollTo may still take to settle
+	settling bool // the ScrollTo was applied once and is settling
+	// reqSub: the request shows the part of its item reqOff points from its
+	// top and reqH high (a box in it), not the whole item
+	reqSub       bool
+	reqOff, reqH float64
+	cand         [4]vlCand // accessibility requests that may be the pile's
+	ncand        int
+	by           float64 // ScrollBy, in pixels
 
 	// what the scroll box held and the content it had at the last frame
 	lastS, lastContent float64
@@ -145,6 +153,12 @@ type VListState struct {
 	modelN int      // Len after the queued edits
 	frame  uint32
 	synced bool
+}
+
+// vlCand is an accessibility request to show the box key, in item row.
+type vlCand struct {
+	key ui.Key
+	row uint64
 }
 
 const (
@@ -313,9 +327,11 @@ func (st *VListState) Total() float64 {
 func (st *VListState) ScrollTo(i int, a Align) { st.ScrollToID(st.ID(i), a) }
 
 // ScrollToID is ScrollTo by id. It waits for an id that a pending rebuild is
-// adding.
+// adding, and is dropped when the list does not have the id and no rebuild
+// is pending (an empty list included).
 func (st *VListState) ScrollToID(id uint64, a Align) {
 	st.reqID, st.reqAlign, st.req, st.reqLeft, st.settling = id, a, true, vlSettleFrames, false
+	st.reqSub = false
 }
 
 // ScrollBy scrolls the view by dy pixels in the next frame (down when
@@ -400,9 +416,7 @@ func (st *VListState) Splice(at, removed int, ids []uint64) {
 	}
 	cost, fits := st.f.spliceCost(at, removed, len(ids))
 	if st.f.n == 0 || (cost <= vlDirect && (fits || st.f.n <= vlDirect)) {
-		st.removing(&st.f, at, removed, ids)
-		st.f.splice(at, removed, ids)
-		st.rev++
+		st.spliceInPlace(at, removed, ids)
 		return
 	}
 	st.startJob(op, ids)
@@ -461,27 +475,69 @@ func (st *VListState) Reset(ids []uint64) {
 	}
 }
 
-// removing updates the anchor and the marks for the removal of the run of
-// removed items at at in b, before it happens.
-func (st *VListState) removing(b *vlBuf, at, removed int, ins []uint64) {
-	if removed == 0 {
+// spliceInPlace applies a short Splice to the front buffer. The anchor and
+// the marks on items it removes (and does not insert again) move to the
+// nearest survivors around them: items of the removed run that it inserts
+// again, or the items around the run.
+func (st *VListState) spliceInPlace(at, removed int, ids []uint64) {
+	f := &st.f
+	// where the followed items are in the run, -1 if they are not in it
+	ar := -1
+	var mr [VListMarks]int
+	tracked := false
+	if removed > 0 && st.started {
+		ar = runIndex(f, st.anchorID, at, removed)
+		tracked = ar >= 0
+	}
+	for i := range st.marks {
+		mr[i] = -1
+		if removed > 0 && st.markOn[i] && !st.marks[i].Removed {
+			mr[i] = runIndex(f, st.marks[i].ID, at, removed)
+			tracked = tracked || mr[i] >= 0
+		}
+	}
+	if !tracked {
+		f.splice(at, removed, ids)
+		st.rev++
 		return
 	}
-	next, prev := NoID, NoID
-	if at+removed < b.n {
-		next = b.id(at + removed)
-	}
+	before, after := NoID, NoID
 	if at > 0 {
-		prev = b.id(at - 1)
+		before = f.id(at - 1)
 	}
-	if st.started && inRun(b, st.anchorID, at, removed) {
+	if at+removed < f.n {
+		after = f.id(at + removed)
+	}
+	st.scratch(removed)
+	run := st.tmpIDs[:removed]
+	copy(run, f.ids[f.lo+at:f.lo+at+removed])
+	f.splice(at, removed, ids)
+	st.rev++
+	survivors := func(r int) (next, prev uint64) {
+		next, prev = after, before
+		for _, id := range run[r+1:] {
+			if _, ok := f.index(id); ok {
+				next = id
+				break
+			}
+		}
+		for k := r - 1; k >= 0; k-- {
+			if _, ok := f.index(run[k]); ok {
+				prev = run[k]
+				break
+			}
+		}
+		return next, prev
+	}
+	if _, ok := f.index(st.anchorID); ar >= 0 && !ok {
+		next, prev := survivors(ar)
 		switch {
 		case next != NoID:
 			st.anchorID = next
 		case prev != NoID:
 			st.anchorID = prev
-		case len(ins) > 0:
-			st.anchorID = ins[0]
+		case len(ids) > 0:
+			st.anchorID = ids[0]
 		default:
 			st.anchorID = NoID
 		}
@@ -489,14 +545,17 @@ func (st *VListState) removing(b *vlBuf, at, removed int, ins []uint64) {
 	}
 	for i := range st.marks {
 		m := &st.marks[i]
-		if st.markOn[i] && !m.Removed && inRun(b, m.ID, at, removed) {
-			m.Removed, m.Next, m.Prev = true, next, prev
+		if _, ok := f.index(m.ID); mr[i] >= 0 && !ok {
+			m.Removed = true
+			m.Next, m.Prev = survivors(mr[i])
 		}
 	}
 }
 
-// inRun reports whether id is one of the n items from at in b.
-func inRun(b *vlBuf, id uint64, at, n int) bool {
-	i, ok := b.index(id)
-	return ok && i >= at && i < at+n
+// runIndex is the place of id in the run of n items from at in b, or -1.
+func runIndex(b *vlBuf, id uint64, at, n int) int {
+	if i, ok := b.index(id); ok && i >= at && i < at+n {
+		return i - at
+	}
+	return -1
 }
