@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -43,6 +45,12 @@ type Config struct {
 	URLSchemes []string `json:"urlSchemes"`
 	// DocumentTypes are the file types the application opens.
 	DocumentTypes []DocumentType `json:"documentTypes"`
+	// ExportedTypes declares uniform type identifiers this application owns
+	// (UTExportedTypeDeclarations), for the file types DocumentTypes name.
+	ExportedTypes []TypeDeclaration `json:"exportedTypes"`
+	// ImportedTypes declares identifiers that belong to someone else but
+	// that this application relies on being known (UTImportedTypeDeclarations).
+	ImportedTypes []TypeDeclaration `json:"importedTypes"`
 	// Usage maps NS…UsageDescription Info.plist keys to the text macOS shows
 	// in a permission prompt.
 	Usage map[string]string `json:"usage"`
@@ -79,6 +87,22 @@ type DocumentType struct {
 	Rank string `json:"rank"`
 }
 
+// TypeDeclaration is one entry of Config.ExportedTypes or Config.ImportedTypes:
+// a uniform type identifier and the file name extensions and MIME types that
+// map to it.
+type TypeDeclaration struct {
+	// Identifier is the UTI, reverse-DNS ("dev.example.note").
+	Identifier string `json:"identifier"`
+	// Description is the human-readable kind ("Note document").
+	Description string `json:"description"`
+	// ConformsTo lists the UTIs this one belongs to (default ["public.data"]).
+	ConformsTo []string `json:"conformsTo"`
+	// Extensions are file name extensions without the dot.
+	Extensions []string `json:"extensions"`
+	// MimeTypes are MIME types that map to the identifier.
+	MimeTypes []string `json:"mimeTypes"`
+}
+
 // LoginAgent is one entry of Config.LoginAgents: a launch agent plist for
 // SMAppService. Its label is "<bundle id>.<name>" and its program is the
 // bundle's own executable, so a ".dev" bundle gets a ".dev" label.
@@ -95,15 +119,17 @@ var (
 	reScheme  = regexp.MustCompile(`^[a-z][a-z0-9+.-]*$`)
 	reAgent   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]*$`)
 	reEntKey  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.-]*$`)
+	reUTI     = regexp.MustCompile(`^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$`)
+	reExt     = regexp.MustCompile(`^[A-Za-z0-9_+-]+$`)
 )
 
 // LoadConfig reads and validates the gnui.json at path and fills the defaults.
-func LoadConfig(path string) (*Config, error) {
-	data, err := os.ReadFile(path)
+func LoadConfig(cfgFile string) (*Config, error) {
+	data, err := os.ReadFile(cfgFile)
 	if err != nil {
 		return nil, err
 	}
-	abs, err := filepath.Abs(path)
+	abs, err := filepath.Abs(cfgFile)
 	if err != nil {
 		return nil, err
 	}
@@ -111,15 +137,16 @@ func LoadConfig(path string) (*Config, error) {
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&c); err != nil {
-		return nil, fmt.Errorf("%s: %w", path, err)
+		return nil, fmt.Errorf("%s: %w", cfgFile, err)
 	}
-	if dec.More() {
-		return nil, fmt.Errorf("%s: trailing data after the JSON object", path)
+	// Exactly one value: anything after it, even a stray "}" or "]", is an error.
+	if err := dec.Decode(new(json.RawMessage)); err != io.EOF {
+		return nil, fmt.Errorf("%s: unexpected data after the JSON object", cfgFile)
 	}
 	c.dir = filepath.Dir(abs)
 	c.applyDefaults()
 	if err := c.Validate(); err != nil {
-		return nil, fmt.Errorf("%s: %w", path, err)
+		return nil, fmt.Errorf("%s: %w", cfgFile, err)
 	}
 	return &c, nil
 }
@@ -140,6 +167,64 @@ func (c *Config) applyDefaults() {
 	if c.MinimumSystem == "" {
 		c.MinimumSystem = "14.0"
 	}
+	for _, list := range [][]TypeDeclaration{c.ExportedTypes, c.ImportedTypes} {
+		for i := range list {
+			if len(list[i].ConformsTo) == 0 {
+				list[i].ConformsTo = []string{"public.data"}
+			}
+		}
+	}
+}
+
+// ResourceDest returns where resource r goes under Contents/Resources: its
+// To, or the base name of its From.
+func (r Resource) ResourceDest() string {
+	if r.To != "" {
+		return r.To
+	}
+	return filepath.Base(filepath.Clean(r.From))
+}
+
+// checkRelPath reports why p is not a safe relative path inside a bundle
+// directory: empty, absolute, "." or ".." components, or backslashes.
+func checkRelPath(p string) error {
+	if p == "" || p == "." || p == ".." {
+		return fmt.Errorf("%q is not a usable path", p)
+	}
+	if filepath.IsAbs(p) || strings.HasPrefix(p, "/") || strings.Contains(p, `\`) || strings.ContainsRune(p, 0) {
+		return fmt.Errorf("%q must be a relative path inside the bundle", p)
+	}
+	for _, part := range strings.Split(path.Clean(p), "/") {
+		if part == "" || part == "." || part == ".." {
+			return fmt.Errorf("%q must not contain . or .. components", p)
+		}
+	}
+	for _, part := range strings.Split(p, "/") {
+		if part == ".." {
+			return fmt.Errorf("%q must not contain .. components", p)
+		}
+	}
+	return nil
+}
+
+// Warnings lists things that are legal but probably wrong.
+func (c *Config) Warnings() []string {
+	declared := map[string]bool{}
+	for _, t := range c.ExportedTypes {
+		declared[t.Identifier] = true
+	}
+	for _, t := range c.ImportedTypes {
+		declared[t.Identifier] = true
+	}
+	var w []string
+	for _, d := range c.DocumentTypes {
+		for _, u := range d.UTIs {
+			if !declared[u] && !strings.HasPrefix(u, "public.") && !strings.HasPrefix(u, "com.apple.") {
+				w = append(w, fmt.Sprintf("document type %q uses %s, which gnui.json does not declare in exportedTypes or importedTypes: macOS will not know the identifier unless another application declares it", d.Name, u))
+			}
+		}
+	}
+	return w
 }
 
 // Validate reports the first problem in c.
@@ -168,13 +253,20 @@ func (c *Config) Validate() error {
 		if r.From == "" {
 			return fmt.Errorf("resources[%d]: from is empty", i)
 		}
-		if r.To != "" && (filepath.IsAbs(r.To) || strings.Contains(r.To, "..")) {
-			return fmt.Errorf("resources[%d]: to %q must be a relative path inside Resources", i, r.To)
+		if r.To != "" {
+			if err := checkRelPath(r.To); err != nil {
+				return fmt.Errorf("resources[%d]: to: %w", i, err)
+			}
+		} else if err := checkRelPath(r.ResourceDest()); err != nil {
+			return fmt.Errorf("resources[%d]: from %q has no usable file name (%v): give a to", i, r.From, err)
 		}
 	}
 	for i, f := range c.Frameworks {
 		if !strings.HasSuffix(f, ".framework") && !strings.HasSuffix(f, ".dylib") {
 			return fmt.Errorf("frameworks[%d]: %q must be a .framework directory or a .dylib file", i, f)
+		}
+		if err := checkRelPath(filepath.Base(filepath.Clean(f))); err != nil {
+			return fmt.Errorf("frameworks[%d]: %w", i, err)
 		}
 	}
 	for _, s := range c.URLSchemes {
@@ -198,6 +290,39 @@ func (c *Config) Validate() error {
 		case "", "Owner", "Default", "Alternate", "None":
 		default:
 			return fmt.Errorf("documentTypes[%d] (%s): rank %q must be Owner, Default, Alternate or None", i, d.Name, d.Rank)
+		}
+	}
+	for kind, list := range map[string][]TypeDeclaration{"exportedTypes": c.ExportedTypes, "importedTypes": c.ImportedTypes} {
+		seenUTI := map[string]bool{}
+		for i, t := range list {
+			if !reUTI.MatchString(t.Identifier) {
+				return fmt.Errorf("%s[%d]: identifier %q must be a reverse-DNS type identifier", kind, i, t.Identifier)
+			}
+			if kind == "exportedTypes" && (strings.HasPrefix(t.Identifier, "public.") || strings.HasPrefix(t.Identifier, "com.apple.")) {
+				return fmt.Errorf("exportedTypes[%d]: %s belongs to Apple; export an identifier of your own", i, t.Identifier)
+			}
+			if seenUTI[t.Identifier] {
+				return fmt.Errorf("%s: duplicate identifier %q", kind, t.Identifier)
+			}
+			seenUTI[t.Identifier] = true
+			if len(t.Extensions) == 0 && len(t.MimeTypes) == 0 {
+				return fmt.Errorf("%s[%d] (%s): give extensions or mimeTypes", kind, i, t.Identifier)
+			}
+			for _, e := range t.Extensions {
+				if !reExt.MatchString(e) {
+					return fmt.Errorf("%s[%d] (%s): extension %q must be letters and digits without the dot", kind, i, t.Identifier, e)
+				}
+			}
+			for _, m := range t.MimeTypes {
+				if !strings.Contains(m, "/") || strings.ContainsAny(m, " \t") {
+					return fmt.Errorf("%s[%d] (%s): %q is not a MIME type", kind, i, t.Identifier, m)
+				}
+			}
+			for _, u := range t.ConformsTo {
+				if !reUTI.MatchString(u) {
+					return fmt.Errorf("%s[%d] (%s): conformsTo %q is not a type identifier", kind, i, t.Identifier, u)
+				}
+			}
 		}
 	}
 	for k, v := range c.Usage {

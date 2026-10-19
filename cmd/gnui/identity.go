@@ -26,10 +26,17 @@ import (
 // requirement; an ad-hoc signature's requirement is the code hash, which
 // changes with every build.
 //
-// The keychain has an empty password and is not added to the user's keychain
-// search list: gnui passes it to codesign explicitly. It holds one key that
-// signs development builds on this machine and nothing else; the login
-// keychain and the system trust settings are never touched.
+// The keychain has an empty password, so build automation can sign without a
+// prompt, and is not added to the user's keychain search list: gnui passes it
+// to codesign explicitly. The key's access list names /usr/bin/codesign alone,
+// so other programs (security export, for one) cannot use it without a prompt.
+// (The partition list is the one codesign needs: measured on macOS 27.2,
+// codesign cannot use a key in ~/Library/Keychains unless apple: is on it, so
+// the access list is the restriction that counts.) Even so, any
+// process of the same user can ask codesign to sign with it: the key belongs
+// on the build machine only, never on a machine where privacy grants are
+// given (cmd/gnui/README.md, "The development identity"). The login keychain
+// and the system trust settings are never touched.
 const devIdentityName = "gnui-dev"
 
 // devKeychainPath returns the dedicated keychain: $GNUI_DEV_KEYCHAIN, or
@@ -126,6 +133,9 @@ func unlockDevKeychain() error {
 	return err
 }
 
+// devKeyPartitions is the partition list of the development key: what codesign needs on every macOS version tried, including apple: for a keychain in ~/Library/Keychains.
+const devKeyPartitions = "apple-tool:,apple:,codesign:"
+
 // setupDevIdentity creates the dedicated keychain and the gnui-dev identity
 // when they do not exist. It reports whether it created anything. Nothing here
 // needs a password or a dialog.
@@ -136,64 +146,121 @@ func setupDevIdentity(logf func(string, ...any)) (created bool, err error) {
 	} else if id != nil {
 		return false, unlockDevKeychain()
 	}
-	if err := os.MkdirAll(filepath.Dir(kc), 0o755); err != nil {
+	if err := createIdentity(kc, devIdentityName, logf); err != nil {
 		return false, err
+	}
+	certPEM, err := runOut("security", "find-certificate", "-c", devIdentityName, "-p", kc)
+	if err != nil {
+		return false, err
+	}
+	if err := os.WriteFile(devCertPath(), []byte(certPEM), 0o644); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// createIdentity creates keychain kc if needed and puts a new self-signed
+// code-signing identity with common name cn into it, usable by codesign only.
+func createIdentity(kc, cn string, logf func(string, ...any)) error {
+	if err := os.MkdirAll(filepath.Dir(kc), 0o755); err != nil {
+		return err
 	}
 	if _, err := os.Stat(kc); err != nil {
 		logf("creating keychain %s", kc)
 		if _, err := runOut("security", "create-keychain", "-p", "", kc); err != nil {
-			return false, err
+			return err
 		}
+	}
+	if err := os.Chmod(kc, 0o600); err != nil {
+		return err
 	}
 	// No auto-lock timeout and no lock on sleep.
 	if _, err := runOut("security", "set-keychain-settings", kc); err != nil {
-		return false, err
+		return err
 	}
-	if err := unlockDevKeychain(); err != nil {
-		return false, err
+	if _, err := runOut("security", "unlock-keychain", "-p", "", kc); err != nil {
+		return err
 	}
 
-	logf("generating a self-signed RSA-2048 code-signing certificate %q (valid 10 years)", devIdentityName)
-	keyPEM, certPEM, err := newDevCertificate()
+	logf("generating a self-signed RSA-2048 code-signing certificate %q (valid 10 years)", cn)
+	keyPEM, certPEM, err := newCertificate(cn)
 	if err != nil {
-		return false, err
+		return err
 	}
-	tmp, err := os.MkdirTemp("", "gnui-dev-*")
+	tmp, err := os.MkdirTemp("", "gnui-dev-*") // mode 0700
 	if err != nil {
-		return false, err
+		return err
 	}
 	defer os.RemoveAll(tmp)
 	keyFile := filepath.Join(tmp, "key.pem")
 	certFile := filepath.Join(tmp, "cert.pem")
 	if err := os.WriteFile(keyFile, keyPEM, 0o600); err != nil {
-		return false, err
+		return err
 	}
 	if err := os.WriteFile(certFile, certPEM, 0o600); err != nil {
-		return false, err
+		return err
 	}
 	logf("importing the key and certificate into the dedicated keychain")
-	if _, err := runOut("security", "import", keyFile, "-k", kc, "-f", "openssl", "-t", "priv", "-T", "/usr/bin/codesign", "-T", "/usr/bin/security"); err != nil {
-		return false, err
+	// -T names the only program allowed to use the key without asking: codesign.
+	// (Not /usr/bin/security: that would let `security export` read the key.)
+	if _, err := runOut("security", "import", keyFile, "-k", kc, "-f", "openssl", "-t", "priv", "-T", "/usr/bin/codesign"); err != nil {
+		return err
 	}
 	if _, err := runOut("security", "import", certFile, "-k", kc, "-f", "pemseq", "-t", "cert"); err != nil {
-		return false, err
+		return err
 	}
-	// Let Apple's tools use the key without a prompt.
-	if _, err := runOut("security", "set-key-partition-list", "-S", "apple-tool:,apple:,codesign:", "-s", "-k", "", kc); err != nil {
-		return false, err
+	if _, err := runOut("security", "set-key-partition-list", "-S", devKeyPartitions, "-s", "-k", "", kc); err != nil {
+		return err
 	}
-	if err := os.WriteFile(devCertPath(), certPEM, 0o644); err != nil {
-		return false, err
+	ids, err := listIdentities(kc)
+	if err != nil {
+		return err
 	}
-	if id, err := findDevIdentity(); err != nil || id == nil {
-		return false, fmt.Errorf("the identity was imported but security does not list it (%v)", err)
+	for _, i := range ids {
+		if i.Name == cn {
+			return nil
+		}
 	}
-	return true, nil
+	return fmt.Errorf("the identity was imported but security does not list it")
 }
 
-// newDevCertificate returns a PEM PKCS#1 private key (the form `security import -f openssl` reads) and its self-signed
+// secureDevKeychain makes the keychain file readable by its owner only.
+func secureDevKeychain() error {
+	st, err := os.Stat(devKeychainPath())
+	if err != nil {
+		return err
+	}
+	if st.Mode().Perm() != 0o600 {
+		return os.Chmod(devKeychainPath(), 0o600)
+	}
+	return nil
+}
+
+// reKeyApp matches an "applications" entry of `security dump-keychain -a`.
+var reKeyApp = regexp.MustCompile(`^\s+\d+:\s+(/\S.*?)\s+\(`)
+
+// devKeyApps returns the programs the private keys of the dedicated keychain
+// trust without a prompt, from `security dump-keychain -a` (which lists
+// access control without reading key material).
+func devKeyApps() ([]string, error) {
+	out, err := runOut("security", "dump-keychain", "-a", devKeychainPath())
+	if err != nil {
+		return nil, err
+	}
+	var apps []string
+	seen := map[string]bool{}
+	for _, l := range strings.Split(out, "\n") {
+		if m := reKeyApp.FindStringSubmatch(l); m != nil && !seen[m[1]] {
+			seen[m[1]] = true
+			apps = append(apps, m[1])
+		}
+	}
+	return apps, nil
+}
+
+// newCertificate returns a PEM PKCS#1 private key (the form `security import -f openssl` reads) and its self-signed
 // code-signing certificate.
-func newDevCertificate() (keyPEM, certPEM []byte, err error) {
+func newCertificate(cn string) (keyPEM, certPEM []byte, err error) {
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		return nil, nil, err
@@ -205,7 +272,7 @@ func newDevCertificate() (keyPEM, certPEM []byte, err error) {
 	now := time.Now()
 	tpl := &x509.Certificate{
 		SerialNumber:          serial,
-		Subject:               pkix.Name{CommonName: devIdentityName, Organization: []string{"Go Native UI development"}},
+		Subject:               pkix.Name{CommonName: cn, Organization: []string{"Go Native UI development"}},
 		NotBefore:             now.Add(-time.Hour),
 		NotAfter:              now.AddDate(10, 0, 0),
 		KeyUsage:              x509.KeyUsageDigitalSignature,
@@ -339,6 +406,9 @@ func devSignSpec() (signSpec, error) {
 	}
 	if id == nil {
 		return signSpec{}, fmt.Errorf("the %s signing identity does not exist yet: run `gnui doctor -setup-dev-cert`", devIdentityName)
+	}
+	if err := secureDevKeychain(); err != nil {
+		return signSpec{}, err
 	}
 	if err := unlockDevKeychain(); err != nil {
 		return signSpec{}, err

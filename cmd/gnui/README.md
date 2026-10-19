@@ -30,7 +30,11 @@ the user's Apple identity (Developer ID certificate, notarytool credentials).
 -o dir                output directory (default dist) -> dist/<Name>.app, dist/<Name>-<version>.dmg
 -arch universal|arm64|amd64   default universal: darwin/arm64 and darwin/amd64 built with
                       -trimpath -ldflags "-s -w", merged into one Mach-O in Go
--identity id          signing identity (name or SHA-1) or "-" for ad-hoc.
+-identity id          signing identity or "-" for ad-hoc. A name, a part of one that matches
+                      exactly one identity, or a SHA-1, resolved against
+                      `security find-identity -v -p codesigning`; whether it can be notarized
+                      is decided from the resolved certificate's common name ("Developer ID
+                      Application: …"), however it was selected.
                       Default: $GNUI_SIGN_IDENTITY, else a valid "Developer ID Application"
                       identity from the keychains, else ad-hoc (and the report says so)
 -dev-cert             sign with gnui-dev instead
@@ -96,6 +100,7 @@ are required.
 	"frameworks": ["vendor/libfoo.dylib", "vendor/Bar.framework"],
 	"urlSchemes": ["notes"],
 	"documentTypes": [{"name": "Note", "role": "Editor", "extensions": ["note"], "utis": ["dev.example.note"], "rank": "Owner"}],
+	"exportedTypes": [{"identifier": "dev.example.note", "description": "Note document", "conformsTo": ["public.data"], "extensions": ["note"]}],
 	"usage": {"NSMicrophoneUsageDescription": "Notes records voice memos."},
 	"entitlements": {"com.apple.security.cs.disable-library-validation": true},
 	"loginAgents": [{"name": "helper", "arguments": ["--start-hidden"]}],
@@ -113,10 +118,12 @@ are required.
 | `category` | `LSApplicationCategoryType` (`public.app-category.…`) | none |
 | `minimumSystem` | `LSMinimumSystemVersion` | `14.0` |
 | `icon` | square PNG (1024 px recommended) → `AppIcon.icns` with 16…512@2x entries; sizes above the source are left out | none |
-| `resources` | files/directories copied to `Contents/Resources` (`to` is relative to it) | none |
-| `frameworks` | `.framework` directories and `.dylib` files copied to `Contents/Frameworks` and signed, nested items first | none |
+| `resources` | files/directories copied to `Contents/Resources`; `to` is a relative path inside it with no `.` or `..` components (default: the base name of `from`, so `from: "."` needs a `to`). Symbolic links in a copied directory are kept only if they are relative and stay inside it (`Versions/Current -> A` does, `/etc` or `../x` is an error), and a destination is refused if any existing component of it is a link | none |
+| `frameworks` | `.framework` directories and `.dylib` files copied to `Contents/Frameworks` (same link rules) and signed, nested items first. Each nested item keeps the entitlements and identifier it already has (`--preserve-metadata=entitlements,identifier`); `entitlements` below are written to the main bundle only | none |
 | `urlSchemes` | `CFBundleURLTypes` | none |
-| `documentTypes` | `CFBundleDocumentTypes`; role Editor/Viewer/Shell/None, rank Owner/Default/Alternate/None | none |
+| `documentTypes` | `CFBundleDocumentTypes`; role Editor/Viewer/Shell/None, rank Owner/Default/Alternate/None. A `utis` entry that is not `public.…` or `com.apple.…` must be declared below, or macOS does not know it (`gnui doctor` warns) | none |
+| `exportedTypes` | `UTExportedTypeDeclarations`: type identifiers this app owns, each with `identifier`, `description`, `conformsTo` (default `["public.data"]`) and the `extensions` and `mimeTypes` that map to it. Identifiers under `public.` and `com.apple.` cannot be exported. LaunchServices learns a new type when the app is launched | none |
+| `importedTypes` | `UTImportedTypeDeclarations`: same fields, for types owned by someone else that you rely on | none |
 | `usage` | `NS…UsageDescription` keys and their text | none |
 | `entitlements` | written to a generated entitlements plist and applied to the main bundle | none |
 | `loginAgents` | bundled launch agents (below) | none |
@@ -143,8 +150,8 @@ requirement `identifier "<bundle id>" and certificate root = H"<certificate
 SHA-1>"`, which does not change when the code does.
 
 * **Where.** A dedicated keychain, `~/Library/Keychains/gnui-dev.keychain-db`
-  (`$GNUI_DEV_KEYCHAIN` overrides it; the tests use a temporary one). It has
-  an empty password, no auto-lock, and is **not** added to the keychain search
+  (mode 600; `$GNUI_DEV_KEYCHAIN` overrides the path, and the tests use a
+  temporary one). It has an empty password, no auto-lock, and is **not** added to the keychain search
   list: gnui passes `--keychain` to `codesign`. The login keychain and the
   system trust settings are never touched. (macOS 15.7, checked on a GitHub
   runner, still wants the keychain on the search list before `codesign`
@@ -155,8 +162,14 @@ SHA-1>"`, which does not change when the code does.
 * **How.** `gnui doctor -setup-dev-cert` generates an RSA-2048 key and a
   10-year certificate (`CN=gnui-dev`, key usage digitalSignature, extended key
   usage codeSigning, not a CA) in Go (`crypto/x509`), imports them with
-  `security import` and `set-key-partition-list` (so `codesign` never prompts),
-  and writes the public certificate to `~/Library/Keychains/gnui-dev.pem`. It
+  `security import -T /usr/bin/codesign` and `set-key-partition-list -S
+  apple-tool:,apple:,codesign:`. The access list (`-T`) is what restricts the
+  key: `codesign` is the only program that uses it without a prompt, and
+  `security export` is not (a `-T /usr/bin/security` would allow it; an older
+  gnui had that). The partition list is what `codesign` needs to work: measured
+  on macOS 27.2, `apple-tool:,codesign:` alone works for a keychain in `/tmp`
+  but fails with `errSecInternalComponent` in `~/Library/Keychains`, which needs
+  `apple:` as well, and writes the public certificate to `~/Library/Keychains/gnui-dev.pem`. It
   does nothing if the identity exists. No secret is in the repository; the key
   exists only in that keychain.
 * **Trust.** The certificate does not have to be trusted. `security
@@ -167,12 +180,29 @@ SHA-1>"`, which does not change when the code does.
   round trip. Trusting it changes nothing for those, and costs an account
   password at the keyboard: `security add-trusted-cert -p codeSign -r trustRoot
   -k ~/Library/Keychains/gnui-dev.keychain-db ~/Library/Keychains/gnui-dev.pem`.
-* **Moving it.** A grant belongs to a certificate hash. To sign for another Mac
-  with the same grants, sign here and copy the bundle; do not create a second
-  identity there. To back the identity up, copy `gnui-dev.keychain-db` (its
-  password is empty); to reset it, delete the keychain (`security
-  delete-keychain`) and run setup again, after which every grant is asked for
-  once more.
+* **Security: read this.** The key signs without a password, because build
+  automation needs that, so **any process of the same user on the build machine
+  can sign code with it** by running `codesign`. Code signed that way satisfies
+  the designated requirement of your `.dev` bundles (same identifier, same
+  certificate), so it inherits whatever privacy grants those bundles have been
+  given on a machine that trusts the certificate. Consequences:
+  * The key lives **only on the build machine**. Never copy the keychain, the
+    key or a PKCS#12 export to the test Mac (or any Mac where grants are
+    given): sign there with a bundle you copy, never with the key.
+  * Grant `.dev` builds only what development needs (not Full Disk Access, not
+    Accessibility, not Screen Recording unless you are testing exactly that).
+  * Anyone who gets the keychain file can use the key too (empty password), so
+    it is kept at mode 600 and never put in a repository, backup you share or
+    synced folder. `gnui doctor` checks the access list (`/usr/bin/codesign`
+    only) and says this again.
+  * Recreate the identity (delete the keychain, run setup) if it may have leaked;
+    grants given to the old certificate then no longer apply, which is the point.
+  An older gnui also trusted `/usr/bin/security`; `gnui doctor` fails on such a
+  key and prints the two commands that replace it.
+* **Moving it.** A grant belongs to a certificate hash. To get the same grants
+  on another Mac, sign here and copy the **bundle**; do not create a second
+  identity there. To reset, delete the keychain (`security delete-keychain`)
+  and run setup again, after which every grant is asked for once more.
 * **Expiry.** `gnui doctor` warns 30 days before the certificate expires.
 
 Grants for a bundle signed with it are keyed on the bundle id, so a `.dev`

@@ -94,6 +94,9 @@ func cmdDoctor(args []string, stdout, stderr io.Writer) error {
 					d.fail("framework %s: %v", f, err)
 				}
 			}
+			for _, w := range c.Warnings() {
+				d.warn("%s", w)
+			}
 			if len(c.Usage) == 0 {
 				d.info("no usage strings in gnui.json: an app that asks for the camera, microphone, location… needs them")
 			}
@@ -206,6 +209,18 @@ func (d *doctor) checkDevIdentity() {
 	} else {
 		d.ok("codesign signs and verifies with %s without a prompt", devIdentityName)
 	}
+
+	if apps, err := devKeyApps(); err != nil {
+		d.fail("reading the key's access list: %v", err)
+	} else if len(apps) != 1 || apps[0] != "/usr/bin/codesign" {
+		d.fail("the %s key trusts %v without a prompt; it must trust /usr/bin/codesign only (an older gnui also trusted /usr/bin/security, which can export the key). "+
+			"Recreate it: `security delete-keychain %q`, then `gnui doctor -setup-dev-cert`; privacy grants given to bundles signed with the old certificate are then asked for again", devIdentityName, apps, kc)
+	} else {
+		d.ok("the %s key trusts /usr/bin/codesign only (partitions %s)", devIdentityName, devKeyPartitions)
+	}
+	d.info("security: the %s key signs without a prompt. Any process of this user on this Mac can sign code with it, and that code satisfies the "+
+		"designated requirement of your .dev bundles, so it inherits whatever privacy grants those bundles have received. "+
+		"Keep the keychain on the build machine only (never copy it to a machine where grants are given), and grant .dev builds only what development needs.", devIdentityName)
 }
 
 // signRoundTrip signs a throw-away copy of a system executable with the
@@ -225,7 +240,7 @@ func signRoundTrip() error {
 		return err
 	}
 	o := signOptions{Spec: spec}
-	if _, err := runOut("codesign", o.codesignArgs(p, "")...); err != nil {
+	if _, err := runOut("codesign", o.codesignArgs(p, "", false)...); err != nil {
 		return searchListHint(err, spec)
 	}
 	_, err = runOut("codesign", "--verify", "--strict", p)

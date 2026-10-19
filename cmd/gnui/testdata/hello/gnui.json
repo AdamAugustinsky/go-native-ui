@@ -9,6 +9,7 @@
 	"resources": [{"from": "res/data.txt", "to": "data/data.txt"}],
 	"urlSchemes": ["gnui-hello"],
 	"documentTypes": [{"name": "Hello file", "role": "Editor", "extensions": ["hello"], "utis": ["dev.gonativeui.hello"]}],
+	"exportedTypes": [{"identifier": "dev.gonativeui.hello", "description": "Hello file", "conformsTo": ["public.data"], "extensions": ["hello"]}],
 	"usage": {"NSMicrophoneUsageDescription": "Hello listens for a test."},
 	"entitlements": {"com.apple.security.cs.disable-library-validation": true},
 	"loginAgents": [{"name": "agent", "arguments": ["--start-hidden"]}],

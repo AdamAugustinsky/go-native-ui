@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -146,11 +147,7 @@ func buildBundle(c *Config, o buildOptions) (entitlements string, cleanup func()
 
 	// 4. resources and frameworks
 	for _, r := range c.Resources {
-		to := r.To
-		if to == "" {
-			to = filepath.Base(r.From)
-		}
-		if err := copyTree(c.Path(r.From), filepath.Join(resources, to)); err != nil {
+		if err := copyInto(resources, r.ResourceDest(), c.Path(r.From)); err != nil {
 			return "", cleanup, fmt.Errorf("resource %s: %w", r.From, err)
 		}
 	}
@@ -160,7 +157,7 @@ func buildBundle(c *Config, o buildOptions) (entitlements string, cleanup func()
 			return "", cleanup, err
 		}
 		for _, f := range c.Frameworks {
-			if err := copyTree(c.Path(f), filepath.Join(fw, filepath.Base(f))); err != nil {
+			if err := copyInto(fw, filepath.Base(filepath.Clean(f)), c.Path(f)); err != nil {
 				return "", cleanup, fmt.Errorf("framework %s: %w", f, err)
 			}
 		}
@@ -215,11 +212,97 @@ func lintPlist(path string) error {
 	return nil
 }
 
-// copyTree copies a file or a directory tree, keeping modes and symbolic links.
+// containedPath returns root/rel for a destination inside a bundle
+// directory, or an error if that path could reach outside it. rel must be a
+// clean relative path (no "." or ".." components), and no component of it
+// that already exists under root may be a symbolic link, so a delete or a
+// write at the result cannot be redirected by a link that an earlier copy put
+// there. root itself is trusted: it is a directory this run created.
+func containedPath(root, rel string) (string, error) {
+	if err := checkRelPath(rel); err != nil {
+		return "", err
+	}
+	cur := root
+	parts := strings.Split(filepath.ToSlash(filepath.Clean(rel)), "/")
+	for i, part := range parts {
+		cur = filepath.Join(cur, part)
+		st, err := os.Lstat(cur)
+		if errors.Is(err, fs.ErrNotExist) {
+			break // nothing below exists yet; MkdirAll will create plain directories
+		}
+		if err != nil {
+			return "", err
+		}
+		if st.Mode()&fs.ModeSymlink != 0 {
+			return "", fmt.Errorf("%q passes through a symbolic link at %q; refusing to write through it", rel, strings.Join(parts[:i+1], "/"))
+		}
+		if i < len(parts)-1 && !st.IsDir() {
+			return "", fmt.Errorf("%q: %q is a file, not a directory", rel, strings.Join(parts[:i+1], "/"))
+		}
+	}
+	return filepath.Join(root, filepath.Clean(rel)), nil
+}
+
+// copyInto copies src to root/rel after containedPath has approved the destination.
+func copyInto(root, rel, src string) error {
+	dst, err := containedPath(root, rel)
+	if err != nil {
+		return err
+	}
+	return copyTree(src, dst)
+}
+
+// inside reports whether p is root or below it (both absolute and clean).
+func inside(root, p string) bool {
+	rel, err := filepath.Rel(root, p)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// checkLink approves a symbolic link met while copying a tree whose real root
+// is realRoot: the target must be relative and must stay inside the tree
+// (links like Versions/Current -> A do; "/etc" or "../../x" do not). A link
+// that resolves is judged by where it ends up, so a chain of links cannot
+// leave the tree either; a dangling one by its lexical target.
+func checkLink(realRoot, p, target string) error {
+	if filepath.IsAbs(target) {
+		return fmt.Errorf("symbolic link %s -> %s is absolute", p, target)
+	}
+	if resolved, err := filepath.EvalSymlinks(p); err == nil {
+		if !inside(realRoot, resolved) {
+			return fmt.Errorf("symbolic link %s -> %s leaves the copied tree (resolves to %s)", p, target, resolved)
+		}
+		return nil
+	}
+	dir, err := filepath.EvalSymlinks(filepath.Dir(p))
+	if err != nil {
+		return err
+	}
+	if !inside(realRoot, filepath.Join(dir, target)) {
+		return fmt.Errorf("symbolic link %s -> %s leaves the copied tree", p, target)
+	}
+	return nil
+}
+
+// copyTree copies a file or a directory tree to dst, keeping modes and the
+// symbolic links that stay inside the tree; any other link is an error.
 func copyTree(src, dst string) error {
 	st, err := os.Lstat(src)
 	if err != nil {
 		return err
+	}
+	if st.Mode()&fs.ModeSymlink != 0 {
+		// a link given directly: copy what it points to, judged as its own tree
+		real, err := filepath.EvalSymlinks(src)
+		if err != nil {
+			return err
+		}
+		return copyTree(real, dst)
+	}
+	var realRoot string
+	if st.IsDir() {
+		if realRoot, err = filepath.EvalSymlinks(src); err != nil {
+			return err
+		}
 	}
 	if err := os.RemoveAll(dst); err != nil {
 		return err
@@ -227,16 +310,8 @@ func copyTree(src, dst string) error {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err
 	}
-	if !st.IsDir() && st.Mode()&fs.ModeSymlink == 0 {
+	if !st.IsDir() {
 		return copyFile(src, dst, st.Mode().Perm())
-	}
-	if st.Mode()&fs.ModeSymlink != 0 {
-		// a link given directly: copy what it points to
-		real, err := filepath.EvalSymlinks(src)
-		if err != nil {
-			return err
-		}
-		return copyTree(real, dst)
 	}
 	return filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -254,6 +329,9 @@ func copyTree(src, dst string) error {
 		case info.Mode()&fs.ModeSymlink != 0:
 			l, err := os.Readlink(p)
 			if err != nil {
+				return err
+			}
+			if err := checkLink(realRoot, p, l); err != nil {
 				return err
 			}
 			return os.Symlink(l, target)

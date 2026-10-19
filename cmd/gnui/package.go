@@ -159,6 +159,13 @@ func runtimeNote(o signOptions) string {
 
 // planSigning picks the identity for a release package.
 func planSigning(flagIdentity string, devCert bool) (signingPlan, error) {
+	return planSigningIn(flagIdentity, devCert, "", true)
+}
+
+// planSigningIn is planSigning against one keychain (the search list when
+// empty); validOnly limits the choice to identities macOS trusts, which is
+// what a release needs.
+func planSigningIn(flagIdentity string, devCert bool, keychain string, validOnly bool) (signingPlan, error) {
 	if devCert {
 		spec, err := devSignSpec()
 		if err != nil {
@@ -170,25 +177,78 @@ func planSigning(flagIdentity string, devCert bool) (signingPlan, error) {
 	if id == "" {
 		id = os.Getenv("GNUI_SIGN_IDENTITY")
 	}
-	switch id {
-	case "-":
+	if id == "-" {
 		return signingPlan{Spec: signSpec{Identity: "-", Label: "an ad-hoc signature"}}, nil
-	case "":
-		ids, err := listIdentities("")
-		if err == nil {
-			for _, i := range ids {
-				if i.Valid && strings.HasPrefix(i.Name, developerIDPrefix) {
-					return signingPlan{Spec: signSpec{Identity: i.Hash, Label: i.Name}, Real: true, Developer: true}, nil
-				}
+	}
+	ids, err := listIdentities(keychain)
+	if err != nil {
+		return signingPlan{}, err
+	}
+	if validOnly {
+		valid := ids[:0:0]
+		for _, i := range ids {
+			if i.Valid {
+				valid = append(valid, i)
+			}
+		}
+		ids = valid
+	}
+	if id == "" {
+		for _, i := range ids {
+			if strings.HasPrefix(i.Name, developerIDPrefix) {
+				return planFor(i, keychain), nil
 			}
 		}
 		return signingPlan{Spec: signSpec{Identity: "-", Label: "an ad-hoc signature (no Developer ID Application identity found)"}}, nil
 	}
+	got, err := resolveIdentity(id, ids)
+	if err != nil {
+		return signingPlan{}, err
+	}
+	return planFor(got, keychain), nil
+}
+
+// planFor classifies a resolved identity by its certificate's common name:
+// only a Developer ID Application certificate can be notarized.
+func planFor(i identityInfo, keychain string) signingPlan {
 	return signingPlan{
-		Spec:      signSpec{Identity: id, Label: id},
+		Spec:      signSpec{Identity: i.Hash, Keychain: keychain, Label: i.Name},
 		Real:      true,
-		Developer: strings.HasPrefix(id, developerIDPrefix),
-	}, nil
+		Developer: strings.HasPrefix(i.Name, developerIDPrefix),
+	}
+}
+
+// resolveIdentity finds the identity a -identity value names among ids, by
+// SHA-1, by exact common name, or by a part of the name that matches exactly
+// one identity (as codesign accepts).
+func resolveIdentity(spec string, ids []identityInfo) (identityInfo, error) {
+	for _, i := range ids {
+		if strings.EqualFold(i.Hash, spec) {
+			return i, nil
+		}
+	}
+	for _, i := range ids {
+		if i.Name == spec {
+			return i, nil
+		}
+	}
+	var part []identityInfo
+	for _, i := range ids {
+		if strings.Contains(i.Name, spec) {
+			part = append(part, i)
+		}
+	}
+	switch len(part) {
+	case 1:
+		return part[0], nil
+	case 0:
+		return identityInfo{}, fmt.Errorf("no valid code-signing identity matches %q (see `security find-identity -v -p codesigning`; for the development identity use -dev-cert)", spec)
+	}
+	names := make([]string, len(part))
+	for i, p := range part {
+		names[i] = fmt.Sprintf("%s %s", p.Hash, p.Name)
+	}
+	return identityInfo{}, fmt.Errorf("%q matches %d identities; use the SHA-1 of one:\n  %s", spec, len(part), strings.Join(names, "\n  "))
 }
 
 // notarizeAndStaple submits path (an .app, zipped first, or a .dmg) to Apple's
@@ -291,7 +351,7 @@ func cmdSign(args []string, stdout, stderr io.Writer) error {
 			return err
 		}
 	}
-	if _, err := signBundle(app, signOptions{Spec: spec, Hardened: *hardened, Entitlements: *ent}); err != nil {
+	if _, err := signBundle(app, signOptions{Spec: spec, Hardened: *hardened, Entitlements: *ent, KeepMain: true}); err != nil {
 		return err
 	}
 	if err := verifyBundle(app); err != nil {

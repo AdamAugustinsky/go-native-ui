@@ -70,6 +70,21 @@ func TestConfigRejects(t *testing.T) {
 		"agent duplicate":    `{"id":"dev.a.b","name":"A","loginAgents":[{"name":"a"},{"name":"a"}]}`,
 		"resource escapes":   `{"id":"dev.a.b","name":"A","resources":[{"from":"x","to":"../y"}]}`,
 		"trailing json":      `{"id":"dev.a.b","name":"A"} {}`,
+		"trailing brace":     `{"id":"dev.a.b","name":"A"}}`,
+		"trailing bracket":   `{"id":"dev.a.b","name":"A"}]`,
+		"trailing garbage":   `{"id":"dev.a.b","name":"A"} x`,
+		"trailing comma":     `{"id":"dev.a.b","name":"A"},`,
+		"resource dot":       `{"id":"dev.a.b","name":"A","resources":[{"from":"."}]}`,
+		"resource dotdot":    `{"id":"dev.a.b","name":"A","resources":[{"from":"res/.."}]}`,
+		"resource root":      `{"id":"dev.a.b","name":"A","resources":[{"from":"/"}]}`,
+		"resource to up":     `{"id":"dev.a.b","name":"A","resources":[{"from":"x","to":"a/../../b"}]}`,
+		"resource to dot":    `{"id":"dev.a.b","name":"A","resources":[{"from":"x","to":"."}]}`,
+		"resource to abs":    `{"id":"dev.a.b","name":"A","resources":[{"from":"x","to":"/etc"}]}`,
+		"uti public export":  `{"id":"dev.a.b","name":"A","exportedTypes":[{"identifier":"public.foo","extensions":["foo"]}]}`,
+		"uti no tags":        `{"id":"dev.a.b","name":"A","exportedTypes":[{"identifier":"dev.a.foo"}]}`,
+		"uti bad id":         `{"id":"dev.a.b","name":"A","exportedTypes":[{"identifier":"foo","extensions":["foo"]}]}`,
+		"uti dot extension":  `{"id":"dev.a.b","name":"A","importedTypes":[{"identifier":"dev.a.foo","extensions":[".foo"]}]}`,
+		"uti duplicate":      `{"id":"dev.a.b","name":"A","exportedTypes":[{"identifier":"dev.a.foo","extensions":["a"]},{"identifier":"dev.a.foo","extensions":["b"]}]}`,
 		"executable is path": `{"id":"dev.a.b","name":"A","executable":"a/b"}`,
 	}
 	for name, body := range cases {
@@ -78,6 +93,33 @@ func TestConfigRejects(t *testing.T) {
 		if _, err := LoadConfig(p); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
+	}
+}
+
+func TestConfigAcceptsTrailingWhitespaceOnly(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "gnui.json")
+	os.WriteFile(p, []byte("{\"id\":\"dev.a.b\",\"name\":\"A\"}\n\n  \t\n"), 0o644)
+	if _, err := LoadConfig(p); err != nil {
+		t.Error(err)
+	}
+}
+
+func TestConfigWarnsOfUndeclaredType(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "gnui.json")
+	os.WriteFile(p, []byte(`{"id":"dev.a.b","name":"A","documentTypes":[{"name":"x","extensions":["x"],"utis":["dev.a.x","public.plain-text"]}]}`), 0o644)
+	c, err := LoadConfig(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := c.Warnings(); len(w) != 1 || !strings.Contains(w[0], "dev.a.x") {
+		t.Errorf("warnings: %v", w)
+	}
+	c.ExportedTypes = []TypeDeclaration{{Identifier: "dev.a.x", Extensions: []string{"x"}}}
+	if w := c.Warnings(); len(w) != 0 {
+		t.Errorf("declared type still warned: %v", w)
+	}
+	if h := loadHello(t); len(h.Warnings()) != 0 {
+		t.Errorf("the hello example warns: %v", h.Warnings())
 	}
 }
 
@@ -131,6 +173,12 @@ func TestInfoPlistContent(t *testing.T) {
 		urls := m["CFBundleURLTypes"].([]any)[0].(map[string]any)
 		if urls["CFBundleURLSchemes"].([]any)[0] != "gnui-hello" {
 			t.Errorf("URL types: %v", urls)
+		}
+		ut := m["UTExportedTypeDeclarations"].([]any)[0].(map[string]any)
+		tags := ut["UTTypeTagSpecification"].(map[string]any)
+		if ut["UTTypeIdentifier"] != "dev.gonativeui.hello" || ut["UTTypeConformsTo"].([]any)[0] != "public.data" ||
+			ut["UTTypeDescription"] != "Hello file" || tags["public.filename-extension"].([]any)[0] != "hello" {
+			t.Errorf("exported type declaration: %v", ut)
 		}
 		doc := m["CFBundleDocumentTypes"].([]any)[0].(map[string]any)
 		if doc["CFBundleTypeRole"] != "Editor" || doc["CFBundleTypeExtensions"].([]any)[0] != "hello" || doc["LSItemContentTypes"].([]any)[0] != "dev.gonativeui.hello" {
@@ -302,18 +350,129 @@ func TestNestedCodeOrder(t *testing.T) {
 	}
 }
 
-func TestPlanSigningExplicitIdentity(t *testing.T) {
-	p, err := planSigning("-", false)
-	if err != nil || !p.Spec.adhoc() || p.Real || p.Developer {
+func TestResolveIdentity(t *testing.T) {
+	ids := []identityInfo{
+		{Hash: "AAAA000000000000000000000000000000000001", Name: "Developer ID Application: Someone (ABCDE12345)", Valid: true},
+		{Hash: "BBBB000000000000000000000000000000000002", Name: "Apple Development: Someone (ABCDE12345)", Valid: true},
+		{Hash: "CCCC000000000000000000000000000000000003", Name: "Apple Development: Other (ZZZZZ99999)", Valid: true},
+	}
+	// by SHA-1, in any case: classified from the certificate's name, not from the spelling of the argument
+	got, err := resolveIdentity("aaaa000000000000000000000000000000000001", ids)
+	if err != nil || got.Name != ids[0].Name {
+		t.Fatalf("by hash: %v %v", got, err)
+	}
+	if p := planFor(got, ""); !p.Developer || !p.Real || p.Spec.Identity != got.Hash {
+		t.Errorf("a Developer ID chosen by SHA-1 is not classified as one: %+v", p)
+	}
+	got, _ = resolveIdentity(ids[1].Hash, ids)
+	if p := planFor(got, ""); p.Developer || !p.Real {
+		t.Errorf("an Apple Development identity must not allow notarization: %+v", p)
+	}
+	// by exact name and by a unique part of it
+	if got, err = resolveIdentity("Developer ID Application: Someone (ABCDE12345)", ids); err != nil || got.Hash != ids[0].Hash {
+		t.Errorf("by name: %v %v", got, err)
+	}
+	if got, err = resolveIdentity("Developer ID", ids); err != nil || got.Hash != ids[0].Hash {
+		t.Errorf("by part: %v %v", got, err)
+	}
+	if _, err = resolveIdentity("Apple Development", ids); err == nil || !strings.Contains(err.Error(), ids[1].Hash) {
+		t.Errorf("ambiguous name: %v", err)
+	}
+	if _, err = resolveIdentity("Nobody", ids); err == nil {
+		t.Error("unknown identity accepted")
+	}
+	if p, err := planSigning("-", false); err != nil || !p.Spec.adhoc() || p.Real || p.Developer {
 		t.Errorf("ad-hoc plan: %+v %v", p, err)
 	}
-	p, _ = planSigning("Developer ID Application: Someone (ABCDE12345)", false)
-	if !p.Real || !p.Developer {
-		t.Errorf("Developer ID plan: %+v", p)
+}
+
+func TestResourceDestinationCannotEscapeThroughCopiedLinks(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symbolic links")
 	}
-	p, _ = planSigning("Apple Development: Someone (ABCDE12345)", false)
-	if !p.Real || p.Developer {
-		t.Errorf("non-distribution identity must not allow notarization: %+v", p)
+	tmp := t.TempDir()
+	outside := filepath.Join(tmp, "outside")
+	os.MkdirAll(outside, 0o755)
+	victim := filepath.Join(outside, "victim")
+	os.WriteFile(victim, []byte("keep"), 0o644)
+	root := filepath.Join(tmp, "Resources")
+	os.MkdirAll(root, 0o755)
+
+	// a resource directory with a link to somewhere else on disk is refused
+	evil := filepath.Join(tmp, "evil")
+	os.MkdirAll(evil, 0o755)
+	os.Symlink(outside, filepath.Join(evil, "link"))
+	if err := copyInto(root, "assets", evil); err == nil {
+		t.Fatal("an absolute symbolic link out of the tree was copied")
+	}
+	// so is a relative one that climbs out, and a chain that ends outside
+	os.Remove(filepath.Join(evil, "link"))
+	os.Symlink("../outside", filepath.Join(evil, "up"))
+	if err := copyInto(root, "assets", evil); err == nil {
+		t.Fatal("a symbolic link climbing out of the tree was copied")
+	}
+	os.Remove(filepath.Join(evil, "up"))
+	os.Symlink("../outside", filepath.Join(evil, "hop"))
+	os.Symlink("hop", filepath.Join(evil, "hop2"))
+	os.Remove(filepath.Join(evil, "hop"))
+	os.Symlink("../outside", filepath.Join(evil, "hop"))
+	if err := copyInto(root, "assets", evil); err == nil {
+		t.Fatal("a chain of links ending outside the tree was copied")
+	}
+
+	// a link that stays inside is kept, but no later copy may go through it
+	good := filepath.Join(tmp, "good")
+	os.MkdirAll(filepath.Join(good, "real"), 0o755)
+	os.WriteFile(filepath.Join(good, "real", "victim"), []byte("keep"), 0o644)
+	os.Symlink("real", filepath.Join(good, "link"))
+	if err := copyInto(root, "assets", good); err != nil {
+		t.Fatal(err)
+	}
+	if l, err := os.Readlink(filepath.Join(root, "assets", "link")); err != nil || l != "real" {
+		t.Fatalf("the internal link was not kept: %q %v", l, err)
+	}
+	other := filepath.Join(tmp, "other.txt")
+	os.WriteFile(other, []byte("new"), 0o644)
+	if err := copyInto(root, "assets/link/victim", other); err == nil {
+		t.Fatal("a destination through a symbolic link was accepted")
+	}
+	if b, _ := os.ReadFile(filepath.Join(root, "assets", "real", "victim")); string(b) != "keep" {
+		t.Errorf("the file behind the link was changed or deleted: %q", b)
+	}
+	if b, _ := os.ReadFile(victim); string(b) != "keep" {
+		t.Errorf("a file outside the bundle was changed: %q", b)
+	}
+	// destinations that are not clean relative paths
+	for _, rel := range []string{"", ".", "..", "../x", "a/../../x", "/abs"} {
+		if err := copyInto(root, rel, other); err == nil {
+			t.Errorf("destination %q accepted", rel)
+		}
+	}
+	if _, err := os.Stat(root); err != nil {
+		t.Errorf("the Resources directory itself is gone: %v", err)
+	}
+}
+
+func TestFrameworkLinksAreKept(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symbolic links")
+	}
+	tmp := t.TempDir()
+	fw := filepath.Join(tmp, "F.framework")
+	os.MkdirAll(filepath.Join(fw, "Versions", "A", "Resources"), 0o755)
+	os.WriteFile(filepath.Join(fw, "Versions", "A", "F"), []byte("x"), 0o755)
+	os.Symlink("A", filepath.Join(fw, "Versions", "Current"))
+	os.Symlink("Versions/Current/F", filepath.Join(fw, "F"))
+	os.Symlink("Versions/Current/Resources", filepath.Join(fw, "Resources"))
+	root := filepath.Join(tmp, "Frameworks")
+	os.MkdirAll(root, 0o755)
+	if err := copyInto(root, "F.framework", fw); err != nil {
+		t.Fatal(err)
+	}
+	for link, want := range map[string]string{"Versions/Current": "A", "F": "Versions/Current/F", "Resources": "Versions/Current/Resources"} {
+		if got, err := os.Readlink(filepath.Join(root, "F.framework", link)); err != nil || got != want {
+			t.Errorf("%s -> %q (%v), want %q", link, got, err, want)
+		}
 	}
 }
 

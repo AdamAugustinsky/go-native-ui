@@ -170,6 +170,12 @@ func infoPlist(c *Config, dev bool) map[string]any {
 		}
 		d["CFBundleDocumentTypes"] = types
 	}
+	if len(c.ExportedTypes) > 0 {
+		d["UTExportedTypeDeclarations"] = typeDeclarations(c.ExportedTypes)
+	}
+	if len(c.ImportedTypes) > 0 {
+		d["UTImportedTypeDeclarations"] = typeDeclarations(c.ImportedTypes)
+	}
 	for k, v := range c.Usage {
 		d[k] = v
 	}
@@ -177,6 +183,34 @@ func infoPlist(c *Config, dev bool) map[string]any {
 		d[k] = v
 	}
 	return d
+}
+
+// typeDeclarations builds UTExportedTypeDeclarations / UTImportedTypeDeclarations.
+func typeDeclarations(list []TypeDeclaration) []any {
+	var out []any
+	for _, t := range list {
+		conforms := t.ConformsTo
+		if len(conforms) == 0 {
+			conforms = []string{"public.data"}
+		}
+		tags := map[string]any{}
+		if len(t.Extensions) > 0 {
+			tags["public.filename-extension"] = t.Extensions
+		}
+		if len(t.MimeTypes) > 0 {
+			tags["public.mime-type"] = t.MimeTypes
+		}
+		e := map[string]any{
+			"UTTypeIdentifier":       t.Identifier,
+			"UTTypeConformsTo":       conforms,
+			"UTTypeTagSpecification": tags,
+		}
+		if t.Description != "" {
+			e["UTTypeDescription"] = t.Description
+		}
+		out = append(out, e)
+	}
+	return out
 }
 
 // entitlementsPlist returns the generated entitlements, or nil for none.

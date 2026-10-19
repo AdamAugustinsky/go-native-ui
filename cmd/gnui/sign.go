@@ -16,12 +16,19 @@ type signOptions struct {
 	Hardened     bool   // --options runtime
 	Timestamp    bool   // secure timestamp from Apple's server (needs a real identity and the network)
 	Entitlements string // entitlements plist for the outermost bundle ("" for none)
+	KeepMain     bool   // with no Entitlements, keep the bundle's own (re-signing someone's bundle)
 	Log          io.Writer
 }
 
-// codesignArgs builds the codesign arguments to sign path.
-func (o signOptions) codesignArgs(path string, entitlements string) []string {
+// codesignArgs builds the codesign arguments to sign path. entitlements
+// are the entitlements to write; nested says path is code that already
+// exists inside the bundle, which keeps its own entitlements and identifier
+// (the main app's entitlements are never applied to it).
+func (o signOptions) codesignArgs(path string, entitlements string, nested bool) []string {
 	args := []string{"--force", "--sign", o.Spec.Identity}
+	if nested || (o.KeepMain && entitlements == "") {
+		args = append(args, "--preserve-metadata=entitlements,identifier")
+	}
 	if o.Spec.Keychain != "" {
 		args = append(args, "--keychain", o.Spec.Keychain)
 	}
@@ -88,8 +95,9 @@ func nestedCode(app, mainExe string) ([]string, error) {
 	return found, nil
 }
 
-// signBundle signs app inside out: nested code first, then the bundle, which
-// is the only signature that carries the entitlements. It returns the signed
+// signBundle signs app inside out: nested code first, each piece keeping the
+// entitlements it already has, then the bundle, which gets the entitlements
+// in o.Entitlements. It returns the signed
 // nested paths.
 func signBundle(app string, o signOptions) ([]string, error) {
 	app = filepath.Clean(app)
@@ -102,13 +110,13 @@ func signBundle(app string, o signOptions) ([]string, error) {
 		return nil, err
 	}
 	for _, p := range nested {
-		if out, err := runOut("codesign", o.codesignArgs(p, "")...); err != nil {
+		if out, err := runOut("codesign", o.codesignArgs(p, "", true)...); err != nil {
 			return nil, fmt.Errorf("signing %s: %w", p, searchListHint(err, o.Spec))
 		} else if o.Log != nil && strings.TrimSpace(out) != "" {
 			fmt.Fprint(o.Log, out)
 		}
 	}
-	if _, err := runOut("codesign", o.codesignArgs(app, o.Entitlements)...); err != nil {
+	if _, err := runOut("codesign", o.codesignArgs(app, o.Entitlements, false)...); err != nil {
 		return nil, fmt.Errorf("signing %s: %w", app, searchListHint(err, o.Spec))
 	}
 	return nested, nil
