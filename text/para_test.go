@@ -414,6 +414,29 @@ func TestParaRangeRectsSplitLigatures(t *testing.T) {
 // A right-to-left line broken after spaces has them hanging left of its
 // origin, at negative X: they are hit, covered and caret-placed there, and the
 // rightmost cell ends at the line's Width, not at its Advance.
+// A combining mark placed left of its pen position (CoreText's e + U+0301:
+// the mark at -4) is not hanging white space: the line still runs from 0 to
+// its Advance, so the last caret, ranges and hit testing reach its end.
+func TestParaMarkLeftOfTheOriginKeepsTheExtent(t *testing.T) {
+	v := oneLine("e\u0301x", []float32{0, -4, 10}, []uint32{0, 1, 3}, 20, 20, 0)
+	const w = 100
+	if x0, x1 := v.LineExtent(0); x0 != 0 || x1 != 20 {
+		t.Errorf("extent %v..%v, want 0..20", x0, x1)
+	}
+	if _, x := v.Caret(4, w); x != 20 {
+		t.Errorf("the caret at the end at %v, want 20", x)
+	}
+	if got := fmt.Sprint(v.RangeRects(0, 4, w, nil)); got != "[[0 0 20 14]]" {
+		t.Errorf("the whole line covered by %s", got)
+	}
+	if g := v.GlyphAt(17, 5, w); g != 2 {
+		t.Errorf("glyph at 17: %d, want 2", g)
+	}
+	if off := v.HitTest(19, 5, w); off != 4 {
+		t.Errorf("hit at 19: %d, want 4", off)
+	}
+}
+
 func TestParaHangingWhiteSpaceLeftOfTheOrigin(t *testing.T) {
 	const r = ClusterRTL
 	// "אב גד  ": two spaces hang left; visually "  דג בא".

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"unicode"
 
 	"gonativeui/gpu"
 	"gonativeui/text"
@@ -350,6 +351,72 @@ func TestRichTextLinkAcrossLinesHasARegionPerLine(t *testing.T) {
 	r.step()
 	if r.sig.Hovered != 9 {
 		t.Fatalf("hover on the second line: %d", r.sig.Hovered)
+	}
+}
+
+// markShaper places a combining mark 4 px left of the glyph before it, as
+// CoreText reports e + U+0301: at a line's start, left of its origin.
+type markShaper struct{ *editShaper }
+
+func (m markShaper) Shape(k text.FontKey, b []byte) text.RunRef {
+	r := m.editShaper.Shape(k, b)
+	if r != 0 {
+		s := &m.slots[r-1]
+		for i := 1; i < s.n; i++ {
+			if unicode.Is(unicode.Mn, rune(s.g[i])) {
+				s.x[i] = s.x[i-1] - 4
+			}
+		}
+	}
+	return r
+}
+
+// A line starting with a mark left of its origin keeps its whole width for
+// the link region, the caret, the selection, the background and the
+// underline.
+func TestRichTextMarkLeftOfTheOrigin(t *testing.T) {
+	es := newEditShaper()
+	h := &harness{t: t, c: New(markShaper{es}), sh: es.fakeShaper, w: 900, h: 600}
+	h.in.Inside, h.in.Focused = true, true
+	h.in.MouseX, h.in.MouseY = -100, -100
+	body := "e\u0301x"
+	var st RichStyles
+	st.Set(0, RichStyle{Font: 0})
+	st.Set(1, RichStyle{Font: 0, Color: colLink, BG: colPill, Deco: DecoUnderline})
+	r := &richHarness{harness: h, body: body, spans: []Span{{Off: 0, Len: uint32(len(body)), Style: 1, Flags: SpanLink, Tag: 9}},
+		st: &st, o: RichOpts{MaxW: 800}}
+	r.step()
+	r.step()
+	if pv, _, _, _, _ := r.c.RichLayout(r.sig.ID); len(pv.X) != 3 || pv.X[1] >= 0 {
+		t.Fatalf("no mark left of the origin: %v", pv.X)
+	}
+	const right = 16 // "e" and "x", 8 px each
+	if cr := r.c.CursorRegions(nil); len(cr) != 1 || cr[0].Rect[2] != right {
+		t.Errorf("link region %v, want it to end at %v", cr, right)
+	}
+	if c, ok := r.c.RichCaret(r.sig.ID, len(body)); !ok || c[0] != right {
+		t.Errorf("caret at the end %v, want x %v", c, right)
+	}
+	if rr := r.c.RichRangeRects(r.sig.ID, 0, len(body), nil); len(rr) != 1 || rr[0][2] != right {
+		t.Errorf("selection %v, want it to end at %v", rr, right)
+	}
+	var bg, under bool
+	for _, q := range r.list.Quads {
+		switch {
+		case q.Color[0] == colPill:
+			bg = true
+			if q.Rect[2] != right {
+				t.Errorf("background %v, want it to end at %v", q.Rect, right)
+			}
+		case q.Color[0] == colLink && q.UV == [4]float32{}:
+			under = true
+			if q.Rect[2] != right {
+				t.Errorf("underline %v, want it to end at %v", q.Rect, right)
+			}
+		}
+	}
+	if !bg || !under {
+		t.Errorf("background %v, underline %v", bg, under)
 	}
 }
 
