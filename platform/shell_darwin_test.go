@@ -354,6 +354,92 @@ func TestButtonsRefuseFocus(t *testing.T) {
 	}
 }
 
+// The titlebar buttons refuse first responder but stay what VoiceOver
+// needs: accessibility elements with the role of a button, their labels and
+// a press action that clicks them, reachable from the window's accessibility
+// children. An NSButton's element is its cell (the NSButton itself is
+// ignored, AXUnknown, as any NSButton is on 27.2).
+func TestButtonsAccessible(t *testing.T) {
+	type button struct {
+		element, inTree bool
+		role, label     string
+		actions         []string
+	}
+	var opened bool
+	var got [2]button
+	var cmds []uint64
+	onMain(func() {
+		w, err := Open(Options{
+			Title: "button accessibility", Width: 300, Height: 200, Hidden: true,
+			Titlebar: 46, TrafficLights: [2]float32{21, 22}, Backdrop: BackdropGlass,
+			Buttons: []NativeButton{{ID: 2, Symbol: "command", Label: "Commands", X: -57, Y: 23}, {ID: 7, Symbol: "plus", Label: "New Tab", X: -23, Y: 23, Style: ButtonGlass}},
+		})
+		if err != nil {
+			return
+		}
+		defer w.Close()
+		opened = true
+		pool := objc.F.Call0(objc.PoolPush)
+		defer objc.F.Call1(objc.PoolPop, pool)
+		str := func(id objc.ID) string {
+			if id == 0 {
+				return ""
+			}
+			return string(objc.AppendUTF8(nil, id))
+		}
+		selChildren, selCount, selAt := objc.Sel("accessibilityChildren"), objc.Sel("count"), objc.Sel("objectAtIndex:")
+		var tree []objc.ID
+		var walk func(e objc.ID, depth int)
+		walk = func(e objc.ID, depth int) {
+			kids := objc.Send(e, selChildren)
+			for i := 0; kids != 0 && depth < 8 && i < int(objc.Send(kids, selCount)); i++ {
+				k := objc.Send1(kids, selAt, uintptr(i))
+				tree = append(tree, k)
+				walk(k, depth+1)
+			}
+		}
+		walk(w.win, 0)
+		w.q.reset()
+		for i, b := range w.buttons {
+			g := &got[i]
+			el := objc.Send(b.obj, objc.Sel("cell"))
+			g.element = objc.SendBool(el, objc.Sel("isAccessibilityElement"))
+			g.role = str(objc.Send(el, objc.Sel("accessibilityRole")))
+			g.label = str(objc.Send(el, objc.Sel("accessibilityLabel")))
+			names := objc.Send(el, objc.Sel("accessibilityActionNames"))
+			for j := 0; names != 0 && j < int(objc.Send(names, selCount)); j++ {
+				g.actions = append(g.actions, str(objc.Send1(names, selAt, uintptr(j))))
+			}
+			for _, e := range tree {
+				g.inTree = g.inTree || e == el
+			}
+			objc.SendBool(el, objc.Sel("accessibilityPerformPress"))
+		}
+		for _, e := range w.q.ev {
+			if e.Kind == EvCommand {
+				cmds = append(cmds, e.Tag)
+			}
+		}
+	})
+	if !opened {
+		t.Skip("cannot open a window here")
+	}
+	for i, want := range []string{"Commands", "New Tab"} {
+		g := got[i]
+		press := false
+		for _, a := range g.actions {
+			press = press || a == "AXPress"
+		}
+		if !g.element || g.role != "AXButton" || g.label != want || !press || !g.inTree {
+			t.Errorf("%s: element %v, role %q, label %q, actions %v, in the window's accessibility children %v: want an AXButton labelled %q with AXPress, in the tree",
+				want, g.element, g.role, g.label, g.actions, g.inTree, want)
+		}
+	}
+	if len(cmds) != 2 || cmds[0] != 2 || cmds[1] != 7 {
+		t.Errorf("AXPress on ⌘ and + delivered %v, want [2 7]", cmds)
+	}
+}
+
 // The spike's pinned buttons stay where they belong as the window resizes:
 // + at the right edge, ⌘ at the left, in the flipped container.
 func TestPinnedButtonsFollowResize(t *testing.T) {

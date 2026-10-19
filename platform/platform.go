@@ -26,6 +26,9 @@
 //	(*Window).Backdrop() Backdrop         the system material behind the content (Options.Backdrop), BackdropNone without; experimental
 //	(*Window).HasButtons() bool           whether native buttons are over the content (Options.Buttons); experimental
 //	(*Window).SetButtonEnabled(id, on)    enable or disable one; cheap when unchanged (macOS; no-op elsewhere); experimental
+//	(*Window).SetMenuBar(spec, state)     the application's native menu bar (menu.go; macOS; no-op elsewhere)
+//	(*Window).PopUpMenu(*Popup) int       a native context, pull-down or list menu; returns the chosen item (macOS; -1 elsewhere)
+//	HasNativeMenus() bool                 whether the OS has native menus (macOS)
 //	(*Window).Close()
 //	Clipboard() string                    plain UTF-8 text of the system clipboard; main thread
 //	SetClipboard(text string)             replace the clipboard with plain text; main thread
@@ -99,7 +102,7 @@ const (
 	EvWake                    // a goroutine called Wake
 	EvFrame                   // the frame slot armed by RequestFrame is available
 	EvPaste                   // the answer to RequestPaste: Text (plain text), Tag; FlagFailed when there is none
-	EvCommand                 // a native button was clicked: Tag is its command id (NativeButton.ID, HostOptions.Command)
+	EvCommand                 // a native button or menu item was chosen: Tag is its command id (NativeButton.ID, HostOptions.Command, MenuItem.ID); with FlagStandard, a MenuAction
 	EvHostFocus               // the keyboard focus moved to a host (Tag: its HostID) or back to the app's own view (Tag 0)
 	EvHostCommand             // a focused host handed back Tab, Shift+Tab, Escape or Enter: Tag is the HostID, Key and Mods the key
 )
@@ -108,10 +111,11 @@ const (
 type Flags uint16
 
 const (
-	FlagDown    Flags = 1 << iota // key/button pressed, focus gained, became visible
-	FlagRepeat                    // key auto-repeat
-	FlagPrecise                   // scroll deltas are precise pixels (trackpad)
-	FlagFailed                    // EvPaste: no text (empty, not text, over MaxPaste, or the transfer failed)
+	FlagDown     Flags = 1 << iota // key/button pressed, focus gained, became visible
+	FlagRepeat                     // key auto-repeat
+	FlagPrecise                    // scroll deltas are precise pixels (trackpad)
+	FlagFailed                     // EvPaste: no text (empty, not text, over MaxPaste, or the transfer failed)
+	FlagStandard                   // EvCommand: Tag is the MenuAction of a standard edit item without a command (menu.go)
 )
 
 // Mods are the modifier keys held during an event.

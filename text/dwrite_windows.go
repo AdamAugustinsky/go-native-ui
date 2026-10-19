@@ -101,6 +101,7 @@ const (
 	dwFactoryShared    = 0 // DWRITE_FACTORY_TYPE_SHARED (dwrite.h:302)
 	dwStretchNormal    = 5 // DWRITE_FONT_STRETCH_NORMAL (dwrite.h:352)
 	dwStyleNormal      = 0 // DWRITE_FONT_STYLE_NORMAL (dwrite.h:360)
+	dwStyleItalic      = 2 // DWRITE_FONT_STYLE_ITALIC
 	dwMeasureNatural   = 0 // DWRITE_MEASURING_MODE_NATURAL (dcommon.h:43)
 	dwRenderNaturalSym = 5 // DWRITE_RENDERING_MODE_NATURAL_SYMMETRIC (dwrite.h:408)
 	dwTextureAliased   = 0 // DWRITE_TEXTURE_ALIASED_1x1 (dwrite.h:563)
@@ -217,6 +218,7 @@ type fontEnt struct {
 	desc    FontDesc
 	family  []uint16 // NUL-terminated family name, the base for font fallback
 	weight  uint32
+	style   uintptr // DWRITE_FONT_STYLE
 	face    FaceID
 	metrics Metrics
 	lookup  string // which families were tried and what came of it, for diagnostics
@@ -251,6 +253,7 @@ type System struct {
 	defFamily string
 	runs      *runCache
 	atlas     *atlas
+	plays     *BasicLayouter // paragraphs (para_basic.go), over this System
 	closed    bool
 
 	// Shaping state, filled by callbacks and read by shapeText.
@@ -359,7 +362,7 @@ func New() (*System, error) {
 	}
 	s.collection, s.out1 = s.out1, 0
 
-	font, fam := s.findFont(uiFamilies, 400)
+	font, fam := s.findFont(uiFamilies, 400, dwStyleNormal)
 	if font == 0 {
 		s.Close()
 		return nil, errors.New("text: no system UI font (Segoe UI) found")
@@ -393,7 +396,7 @@ func (s *System) utf16z(str string) []uint16 {
 
 // findFont returns the IDWriteFont (+1) of the first installed family in
 // names, matched to the CSS weight, and the family's name; 0 if none exists.
-func (s *System) findFont(names []string, weight int) (font uintptr, family string) {
+func (s *System) findFont(names []string, weight int, style uintptr) (font uintptr, family string) {
 	for _, n := range names {
 		p := &s.utf16z(n)[0]
 		s.b1 = 0
@@ -409,7 +412,7 @@ func (s *System) findFont(names []string, weight int) (font uintptr, family stri
 		}
 		fam := s.out1
 		s.out1 = 0
-		hr = win32.HR(com.Call(fam, vtFamilyGetFirstMatching, uintptr(weight), dwStretchNormal, dwStyleNormal, uintptr(unsafe.Pointer(&s.out1))))
+		hr = win32.HR(com.Call(fam, vtFamilyGetFirstMatching, uintptr(weight), dwStretchNormal, style, uintptr(unsafe.Pointer(&s.out1))))
 		com.Release(fam)
 		if hr < 0 || s.out1 == 0 {
 			s.tried = append(s.tried, fmt.Sprintf("%q: GetFirstMatchingFont(%d) failed (hr %#08x)", n, weight, uint32(hr)))
@@ -435,26 +438,30 @@ func (s *System) Font(d FontDesc) FontKey {
 		return 0
 	}
 	weight := min(max(d.Weight, 1), 999)
+	style := uintptr(dwStyleNormal)
+	if d.Italic {
+		style = dwStyleItalic
+	}
 	s.tried = s.tried[:0]
 	var font uintptr
 	var fam string
 	switch {
 	case d.Family != "":
-		font, fam = s.findFont([]string{d.Family}, weight)
+		font, fam = s.findFont([]string{d.Family}, weight, style)
 	case d.Mono:
-		font, fam = s.findFont(monoFamilies, weight)
+		font, fam = s.findFont(monoFamilies, weight, style)
 	default:
-		font, fam = s.findFont(uiFamilies, weight)
+		font, fam = s.findFont(uiFamilies, weight, style)
 	}
 	if font == 0 {
 		s.tried = append(s.tried, "falling back to the default UI family")
-		font, fam = s.findFont([]string{s.defFamily}, weight)
+		font, fam = s.findFont([]string{s.defFamily}, weight, style)
 	}
 	if font == 0 {
 		return 0
 	}
 	px := d.SizePt * d.Scale
-	fe := fontEnt{desc: d, weight: uint32(weight), lookup: strings.Join(s.tried, "; ")}
+	fe := fontEnt{desc: d, weight: uint32(weight), style: style, lookup: strings.Join(s.tried, "; ")}
 	fe.family = append([]uint16(nil), s.utf16z(fam)...)
 	face, ok := s.faceFromFont(font, px)
 	com.Release(font)

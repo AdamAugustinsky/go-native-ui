@@ -100,6 +100,7 @@ func newModel() (*menu.Model, error) {
 func (n *Notes) Init(a *app.App) error {
 	n.k = widget.NewKit(a.UI, a.Text, rex.Theme())
 	n.k.SetMenu(n.model)
+	a.SetMenu(n.model) // the native menu bar on macOS
 	a.UI.Reserve(1024)
 	a.Text.ReserveRuns(text.MaxCachedRuns, text.MaxCachedGlyphs, text.MaxCachedTextBytes)
 	return nil

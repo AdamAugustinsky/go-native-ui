@@ -60,9 +60,6 @@ func (w *Window) keyEvent(ev objc.ID, typ uintptr, t int64) (keyIdx int) {
 			keyIdx = len(w.q.ev) - 1
 		}
 	}
-	if typ == 10 && m == ModSuper && code == 0x0C { // Cmd+Q (there is no menu yet)
-		w.q.push(Event{Kind: EvClose, Time: t})
-	}
 	return keyIdx
 }
 

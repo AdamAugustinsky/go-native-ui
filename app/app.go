@@ -47,6 +47,7 @@ import (
 
 	"gonativeui/gpu"
 	"gonativeui/internal/sysinfo"
+	"gonativeui/menu"
 	"gonativeui/platform"
 	"gonativeui/text"
 	"gonativeui/ui"
@@ -162,6 +163,16 @@ type App struct {
 
 	req frameRequester // where drawFrame asks for the next frame (the Win)
 
+	// Native menus (menus.go).
+	menu        *menu.Model
+	menuDirty   bool // the bar is to be (re)built at the next safe point
+	menuSpec    platform.MenuSpec
+	menuStateFn platform.MenuState
+	fieldKeysFn platform.FieldKeys
+	listSpec    platform.MenuSpec // the options of a select, reused
+	listItems   []platform.MenuItem
+	demo        *menuDemo // GNUI_MENU_DEMO (menudemo.go)
+
 	// Diagnostics (diag.go).
 	owedWhy     owedMask // why the last frame left another owed
 	beginFails  int      // draw attempts that found no frame to draw into
@@ -238,7 +249,7 @@ func Run(cfg Config, b Builder) error {
 // RunWith is Run with options and a result.
 func RunWith(cfg Config, b Builder, o RunOptions) (RunResult, error) {
 	var res RunResult
-	a, err := openWindowed(cfg, b, &res.Startup)
+	a, err := openWindowed(cfg, b, &res.Startup, true)
 	if err != nil {
 		return res, err
 	}
@@ -246,6 +257,7 @@ func RunWith(cfg Config, b Builder, o RunOptions) (RunResult, error) {
 	a.verbose = o.Verbose
 	if !o.ExitFirst {
 		a.Win.SetFrameHandler(a.frameHandler)
+		a.demo = newMenuDemo()
 	}
 	if o.ExitFirst {
 		a.waitOnGlass(&res.Startup)
@@ -257,8 +269,11 @@ func RunWith(cfg Config, b Builder, o RunOptions) (RunResult, error) {
 	return res, nil
 }
 
-// openWindowed creates everything and draws the first frame.
-func openWindowed(cfg Config, b Builder, st *StartupReport) (*App, error) {
+// openWindowed creates everything and draws the first frame. nativeMenus
+// lets the widgets use the native menus where the OS has them (Run); scripted
+// runs keep the drawn ones, which their scripts drive. Every windowed run gets
+// the native menu bar.
+func openWindowed(cfg Config, b Builder, st *StartupReport, nativeMenus bool) (*App, error) {
 	tEntry := platform.Now()
 	age := sysinfo.ProcessAgeNs()
 	execNs := int64(-1)
@@ -268,7 +283,7 @@ func openWindowed(cfg Config, b Builder, st *StartupReport) (*App, error) {
 		st.ExecToMainMs = ms(age)
 	}
 
-	a := &App{cfg: cfg, b: b, tr: newTranslator(), p: newPacer(), lat: newSampler(8192), diagBuf: make([]byte, 0, 2048)}
+	a := &App{cfg: cfg, b: b, tr: newTranslator(), p: newPacer(), lat: newSampler(8192), diagBuf: make([]byte, 0, 2048), menuDirty: true}
 	a.lastDrawT = tEntry
 	if cfg.Width <= 0 || cfg.Height <= 0 {
 		return nil, errors.New("app: Config.Width and Height must be positive")
@@ -321,6 +336,7 @@ func openWindowed(cfg Config, b Builder, st *StartupReport) (*App, error) {
 		a.close()
 		return nil, err
 	}
+	a.UI.SetNativeMenus(nativeMenus && platform.HasNativeMenus())
 	t4 := platform.Now()
 	st.InitMs = ms(t4 - t3)
 
@@ -374,6 +390,7 @@ func (a *App) close() {
 // loop is the event loop. See pacer for the frame rules.
 func (a *App) loop() error {
 	for !a.done {
+		a.syncMenuBar()
 		now := platform.Now()
 		if a.bench != nil && now > a.bench.deadline {
 			return a.benchTimeout(now)
@@ -401,6 +418,10 @@ func (a *App) loop() error {
 		}
 		if draw {
 			a.present(false, 1)
+		}
+		a.popUpMenus()
+		if a.demo != nil {
+			a.demo.run(a)
 		}
 		if a.hook != nil {
 			a.hook()

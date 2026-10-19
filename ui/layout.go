@@ -120,8 +120,18 @@ func (c *Context) sizeAxis(a int) {
 			b.size[a] = b.pref[a].Value
 		case SizeText:
 			var ext float32
-			if b.txt.Len > 0 {
+			if r := c.recOf(b); r != nil {
+				if b.txt.Len > 0 {
+					if a == 0 {
+						ext = c.richNatural(b, r)
+					} else {
+						ext = c.richView(b, r).Height
+					}
+				}
+			} else if b.txt.Len > 0 {
 				switch {
+				case a == 0 && b.flags&WrapText != 0:
+					ext = c.wrapNatural(b)
 				case a == 0:
 					ext = b.textW
 				case b.flags&WrapText != 0:

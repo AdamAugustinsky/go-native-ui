@@ -23,18 +23,6 @@ func subviewClasses(v objc.ID) []string {
 	return out
 }
 
-func equalStrings(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
 // The sidebar's and the inspector's glass configurations listed for this
 // macOS are the ones AppKit's NSSplitViewController gives its own glass.
 func TestSplitGlassMatchesAppKit(t *testing.T) {

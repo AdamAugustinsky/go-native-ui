@@ -29,6 +29,10 @@ type persist struct {
 	savedFocus Key
 	// wrap is what the line breaking of a WrapText box was computed for.
 	wrap wrapCache
+	// rp is the last layout of a RichText box (hit testing), pressSpan 1 +
+	// the span its press began on.
+	rp        richPrev
+	pressSpan int32
 }
 
 // box is one record of the pointer-free box pool. Everything after persist
@@ -74,9 +78,13 @@ type box struct {
 
 	sem int32 // 1 + the index of its record in Context.sems, 0 without a role
 
-	// the lines of a WrapText box: lnN of them, their ends at lnOff in this
-	// frame's line buffer
-	lnOff, lnN int32
+	// the paragraph of a WrapText or RichText box: lnN lines, laid out at
+	// width paraW (-1: not yet this frame) in the cache generation paraGen
+	lnN     int32
+	para    text.ParaRef
+	paraGen uint32
+	paraW   float32
+	rich    int32 // 1 + the index of its record in Context.rich, 0 for other boxes
 }
 
 type fontInfo struct {
@@ -144,13 +152,17 @@ type Context struct {
 	hasNextPos bool
 	nextFlags  Flags
 
-	// wrapped text (wrap.go): the line ends of this frame's wrapped boxes and
-	// of the previous frame's (the cache), the line breaker and its scratch
-	lineBuf  [2][]int32
-	lineCur  int
-	lb       text.LineBreaker
-	brk      []uint32
-	wrapRuns uint64 // how often the lines of a box were broken (not taken from the cache)
+	// paragraphs (wrap.go, richtext.go): the layouter, how often a wrapped
+	// box was laid out (not taken from the cache), and this frame's RichText
+	// records with their spans and styles
+	lay        Layouter
+	wrapRuns   uint64
+	oneFont    [1]text.FontKey
+	para       text.Para // the input of the layout in progress
+	rects      [][4]float32
+	rich       []richRec
+	richSpans  []Span
+	richStyles []RichStyle
 
 	// semantics (semantics.go): the setters for the next box, and the records
 	// of this frame's boxes that have a role
@@ -236,6 +248,12 @@ type Context struct {
 	pasteTag Key
 	pasteReq bool
 
+	// native menus (nativemenu.go)
+	nativeMenus bool
+	menuReq     MenuRequest
+	menuReqSet  bool
+	menuOpts    []string // the copy of menuReq.Options
+
 	// boxes built this frame with a cursor or the WindowDrag flag (cursor.go)
 	nCursorBoxes, nDragBoxes int
 
@@ -272,6 +290,12 @@ func New(sh Shaper) *Context {
 		boxes:     make([]box, 1, 256),
 		order:     make([]ID, 0, 256),
 		prevOrder: make([]ID, 0, 256),
+		modalIdx:  -1, // no modal before the first frame
+	}
+	if l, ok := sh.(Layouter); ok {
+		c.lay = l
+	} else {
+		c.lay = text.NewBasicLayouter(sh)
 	}
 	c.pool.Alloc() // slot 0 is the nil ID
 	c.avPool.Alloc()
@@ -356,8 +380,7 @@ func (c *Context) Begin(in *Input, widthPx, heightPx int, scale, dt float32) {
 	c.animating, c.scrollSet = false, false
 	c.wakeNs, c.imeOK, c.imeCancel = 0, false, false
 	c.takeCommit()
-	c.lineCur ^= 1
-	c.lineBuf[c.lineCur] = c.lineBuf[c.lineCur][:0]
+	c.rich, c.richSpans, c.richStyles = c.rich[:0], c.richSpans[:0], c.richStyles[:0]
 	c.ovPrev, c.nOvPrev = c.ovs, c.nOvs
 	c.nOvs, c.nOvOpen, c.parentless = 0, 0, false
 	c.modalIdx = c.topModal()
@@ -607,10 +630,15 @@ func (c *Context) newBox(flags Flags, key Key) ID {
 	return id
 }
 
-// setText stores the display span and shapes it.
+// setText stores the display span and shapes it (a WrapText box is laid out
+// as a paragraph instead, in End).
 func (c *Context) setText(id ID, sp core.Span) {
 	b := &c.boxes[id]
 	b.txt = sp
+	b.paraW = -1
+	if b.flags&WrapText != 0 {
+		return
+	}
 	ref := c.sh.Shape(b.font, c.fr.Cur().Bytes(sp))
 	b.run = ref
 	b.textW = c.sh.Run(ref).Advance

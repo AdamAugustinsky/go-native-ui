@@ -45,7 +45,6 @@ var (
 	selFirstResponder   = objc.Sel("firstResponder")
 	selSubviews         = objc.Sel("subviews")
 	selFirstObject      = objc.Sel("firstObject")
-	selInitPlain        = objc.Sel("init")
 
 	containerClass, hostClipClass, windowClass objc.ID
 	hostClipDef, windowDef                     *objc.ClassDef

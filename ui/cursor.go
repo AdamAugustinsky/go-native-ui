@@ -148,6 +148,9 @@ func (c *Context) walkRegions(id ID, clip [4]float32, w *regionWalk) {
 		if w.wantCursor && b.cursor != CursorArrow {
 			w.cursors = append(w.cursors, CursorRegion{Rect: r, Cursor: b.cursor})
 		}
+		if w.wantCursor && b.rich != 0 {
+			w.cursors = c.richCursors(w.cursors, b, intersect(clip, b.rect))
+		}
 		if w.wantDrag {
 			switch {
 			case b.flags&WindowDrag != 0:
