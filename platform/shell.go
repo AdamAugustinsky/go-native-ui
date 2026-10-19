@@ -1,11 +1,15 @@
 package platform
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+	"runtime"
+)
 
 // The native shell (D41, D52): live system materials below the GPU surface
 // (material regions, N3a) and native views above it (hosts, N3b), around the
 // app's own pixels. macOS only so far; elsewhere SetMaterials and SetHosts do
-// nothing and NewHost returns ErrUnsupported (shell_other.go).
+// nothing and NewHost returns ErrNoHosts (shell_other.go).
 //
 // The view hierarchy (macOS): the window's content view is a flipped,
 // layer-backed container. From bottom to top it holds the material views (in
@@ -26,9 +30,9 @@ const MaxHosts = 32
 // ignored.
 const MaxMaterials = 32
 
-// ErrUnsupported is returned by the native-shell calls on systems that do
-// not have them yet.
-var ErrUnsupported = errors.New("platform: not supported on this system")
+// ErrNoHosts is NewHost's error on systems that cannot host native views
+// yet; errors.Is(err, errors.ErrUnsupported) holds.
+var ErrNoHosts = fmt.Errorf("platform: hosted native views on %s: %w", runtime.GOOS, errors.ErrUnsupported)
 
 // ErrTooManyHosts is NewHost's error when the window has MaxHosts hosts.
 var ErrTooManyHosts = errors.New("platform: too many hosts (32 per window)")

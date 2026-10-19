@@ -33,7 +33,6 @@ import (
 // EvHostCommand, so the app's own focus traversal continues.
 
 var (
-	selIsFlipped        = objc.Sel("isFlipped")
 	selScrollWheel      = objc.Sel("scrollWheel:")
 	selInsertTab        = objc.Sel("insertTab:")
 	selInsertBacktab    = objc.Sel("insertBacktab:")

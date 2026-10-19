@@ -25,8 +25,8 @@ func (w *Window) HasMaterials() bool { return false }
 // SetMaterials sets the window's material regions: a no-op here.
 func (w *Window) SetMaterials(r []MaterialRegion) {}
 
-// NewHost creates a hosted native view: ErrUnsupported here.
-func (w *Window) NewHost(kind HostKind, o HostOptions) (HostID, error) { return 0, ErrUnsupported }
+// NewHost creates a hosted native view: ErrNoHosts here.
+func (w *Window) NewHost(kind HostKind, o HostOptions) (HostID, error) { return 0, ErrNoHosts }
 
 // ReleaseHost releases a host: a no-op here.
 func (w *Window) ReleaseHost(id HostID) {}

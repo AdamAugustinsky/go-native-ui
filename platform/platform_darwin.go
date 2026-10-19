@@ -94,8 +94,10 @@ type Window struct {
 	textInput   bool
 	imeUsed     bool
 	cmdCalled   bool
-	menuActed   bool // a native menu item acted during this event's sendEvent (menu_darwin.go)
-	fieldKey    bool // the key-down being sent is the focused field's: no menu item acts on it
+
+	aux         nativeAux // native dialogs and tooltips (dialog_darwin.go, tooltip_darwin.go)
+	menuActed   bool      // a native menu item acted during this event's sendEvent (menu_darwin.go)
+	fieldKey    bool      // the key-down being sent is the focused field's: no menu item acts on it
 	fieldKeys   FieldKeys
 	handlerRuns int // calls of the frame handler (DebugMenu.Frame)
 }

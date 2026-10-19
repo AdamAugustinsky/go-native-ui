@@ -12,6 +12,10 @@ import (
 // a change reaches the OS; the buffers here are reused, and a frame without
 // cursor or WindowDrag boxes visits no box.
 //
+// With native tooltips (platform.NativeTooltips) the tooltip regions the
+// widgets declared go to the window the same way; the system asks for their
+// text through the function set in initUI.
+//
 // This is the only cursor mechanism: an app marks boxes with
 // ui.Context.NextCursor / PushCursor and ui.WindowDrag.
 func (a *App) syncRegions() {
@@ -28,6 +32,28 @@ func (a *App) syncRegions() {
 		a.dragPl = append(a.dragPl, platform.DragRegion{Rect: a.dragUI[i].Rect, Block: a.dragUI[i].Block})
 	}
 	a.Win.SetDragRegions(a.dragPl)
+
+	a.syncTooltips(a.Win)
+}
+
+// tooltipTarget is the part of platform.Window that syncTooltips drives.
+type tooltipTarget interface {
+	SetTooltipRegions([]platform.TooltipRegion)
+}
+
+// syncTooltips hands the tooltips the widgets declared in the finished frame to
+// the window, when tooltips are native. The platform compares, so only a change
+// reaches the OS; the buffers are reused.
+func (a *App) syncTooltips(win tooltipTarget) {
+	if !a.UI.NativeTooltips() {
+		return
+	}
+	a.tipUI = a.UI.TooltipRegions(a.tipUI)
+	a.tipPl = a.tipPl[:0]
+	for i := range a.tipUI {
+		a.tipPl = append(a.tipPl, platform.TooltipRegion{Rect: a.tipUI[i].Rect, Key: a.tipUI[i].Key})
+	}
+	win.SetTooltipRegions(a.tipPl)
 }
 
 // platformCursor maps a ui cursor to the platform's; the values are the same

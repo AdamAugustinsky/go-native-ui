@@ -589,7 +589,7 @@ go run ./examples/notes -exit-first -v                 # startup: exec → first
   while a drawn popup or tooltip overlaps it and while any modal is open: place popups
   that belong to a host beside it, not over it. Materials lie below the app's pixels and
   cannot blur them. Offscreen renders show hosts as grey placeholders. Elsewhere these
-  calls do nothing and `NewHost` returns `platform.ErrUnsupported`.
+  calls do nothing and `NewHost` returns `platform.ErrNoHosts`.
 
 ## 13. Where next
 
