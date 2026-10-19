@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Each component, copied alone into an app's package, builds there.
@@ -83,5 +84,56 @@ func TestAddCRLF(t *testing.T) {
 	b, _ := os.ReadFile(filepath.Join(dir, "button.go"))
 	if !strings.Contains(string(b), "\r\npackage x\r\n") {
 		t.Fatal("the package clause of a CRLF file was not rewritten in place")
+	}
+}
+
+// A destination package named rexui keeps its examples' calls as they are,
+// and the rewrite finishes (it once replaced rexui. with itself forever).
+func TestAddIntoPackageRexui(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "internal", "rexui")
+	type result struct {
+		files []string
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		files, err := Add(sourceDir(), dir, "", false, "button")
+		done <- result{files, err}
+	}()
+	var res result
+	select {
+	case res = <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("add into ./internal/rexui does not finish")
+	}
+	if res.err != nil {
+		t.Fatal(res.err)
+	}
+	for _, f := range res.files {
+		got, _ := os.ReadFile(f)
+		want, _ := os.ReadFile(filepath.Join(sourceDir(), filepath.Base(f)))
+		// past the header that says where the copy came from
+		if _, body, _ := strings.Cut(string(got), "\n\n"); body != string(want) {
+			t.Fatalf("%s differs from its source in package rexui", f)
+		}
+	}
+}
+
+// A package named after a Go keyword is refused, pointing at -pkg.
+func TestAddRejectsKeywordPackage(t *testing.T) {
+	for _, name := range []string{"switch", "func", "type"} {
+		dir := filepath.Join(t.TempDir(), "internal", name)
+		_, err := Add(sourceDir(), dir, "", false, "switch")
+		if err == nil || !strings.Contains(err.Error(), "-pkg") {
+			t.Fatalf("package %s: %v", name, err)
+		}
+		if _, err := os.Stat(dir); err == nil {
+			if ents, _ := os.ReadDir(dir); len(ents) > 0 {
+				t.Fatalf("package %s: wrote %d files", name, len(ents))
+			}
+		}
+	}
+	if _, err := Add(sourceDir(), filepath.Join(t.TempDir(), "switch"), "toggles", false, "switch"); err != nil {
+		t.Fatalf("-pkg toggles: %v", err)
 	}
 }

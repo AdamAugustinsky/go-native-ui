@@ -16,6 +16,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"go/token"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -98,7 +99,8 @@ func sourceDir() string {
 
 var (
 	packageClause = regexp.MustCompile(`(?m)^package rexui(\r?)$`) // a Windows checkout ends lines in CRLF
-	exampleName   = regexp.MustCompile(`(?m)^(//\t.*)\brexui\.`)
+	exampleLine   = regexp.MustCompile(`(?m)^//\t.*$`)
+	rexuiRef      = regexp.MustCompile(`\brexui\.`)
 )
 
 // Add copies the components named into dir as package pkg (dir's base name
@@ -110,6 +112,9 @@ func Add(src, dir, pkg string, force bool, comps ...string) ([]string, error) {
 	}
 	if !regexp.MustCompile(`^[a-z][a-z0-9_]*$`).MatchString(pkg) {
 		return nil, fmt.Errorf("package name %q: want a lower-case Go identifier (use -pkg)", pkg)
+	}
+	if token.IsKeyword(pkg) {
+		return nil, fmt.Errorf("package name %q is a Go keyword: name the package with -pkg", pkg)
 	}
 	want := map[string]bool{shared: true}
 	for _, c := range comps {
@@ -139,10 +144,11 @@ func Add(src, dir, pkg string, force bool, comps ...string) ([]string, error) {
 			return wrote, fmt.Errorf("%s: no package clause to rewrite", f)
 		}
 		b = packageClause.ReplaceAll(b, []byte("package "+pkg+"${1}"))
-		// the examples in comments call the copies by their new package
-		for exampleName.Match(b) {
-			b = exampleName.ReplaceAll(b, []byte("${1}"+pkg+"."))
-		}
+		// the examples in comments call the copies by their new package: one
+		// pass over each example line (the new name may be rexui itself)
+		b = exampleLine.ReplaceAllFunc(b, func(line []byte) []byte {
+			return rexuiRef.ReplaceAll(line, []byte(pkg+"."))
+		})
 		nl := "\n"
 		if bytes.Contains(b, []byte("\r\n")) {
 			nl = "\r\n"
