@@ -106,7 +106,7 @@ func (c *Context) ActiveCursor() Cursor {
 		return CursorArrow
 	}
 	v, ok := c.table.Get(uint64(k))
-	if !ok || c.boxes[v].lastFrame != c.frame {
+	if !ok || c.boxes[v].lastFrame != c.frame || c.boxes[v].hid {
 		return CursorArrow
 	}
 	return c.boxes[v].cursor
@@ -143,6 +143,9 @@ func trimBlocks(d []DragRegion) []DragRegion {
 // floating ones after the others, as emit does) with the clip rectangle.
 func (c *Context) walkRegions(id ID, clip [4]float32, w *regionWalk) {
 	b := &c.boxes[id]
+	if b.hid { // hidden by a flow: no regions for it or its descendants
+		return
+	}
 	r := intersect(b.rect, clip)
 	if !empty(r) {
 		if w.wantCursor && b.cursor != CursorArrow {
