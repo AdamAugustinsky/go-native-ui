@@ -3,6 +3,7 @@
 package platform
 
 import (
+	"math"
 	"os"
 	"strconv"
 	"sync/atomic"
@@ -289,28 +290,50 @@ func (w *Window) makeContainer(width, height float64) {
 func (w *Window) makeButtons(bs []NativeButton, width, height float64) {
 	w.makeContainer(width, height)
 	for _, b := range bs {
-		size := float64(b.Size)
-		if size <= 0 {
-			size = 28
-		}
-		cx := float64(b.X)
 		mask := uintptr(4 | 32) // NSViewMaxXMargin | NSViewMaxYMargin (the container is flipped): stays at the top left
-		if cx < 0 {
-			cx, mask = width+cx, 1|32 // NSViewMinXMargin: stays at the right edge
+		if b.X < 0 {
+			mask = 1 | 32 // NSViewMinXMargin: stays at the right edge
 		}
-		x, y := cx-size/2, float64(b.Y)-size/2
-		id, err := w.NewHost(HostButton, HostOptions{Symbol: b.Symbol, Label: b.Label, Style: b.Style, Command: b.ID, Disabled: b.Disabled})
+		id, err := w.newHost(HostButton, HostOptions{Symbol: b.Symbol, Label: b.Label, Style: b.Style, Command: b.ID, Disabled: b.Disabled}, true)
 		if err != nil {
 			continue
 		}
 		s := w.hosts.slot(id)
 		s.pinned = true
-		objc.F.Reset().Arg(uintptr(s.clip)).Arg(uintptr(selSetFrame)).ArgRect(x, y, size, size).Call(objc.MsgSend)
-		objc.F.Reset().Arg(uintptr(s.view)).Arg(uintptr(selSetFrame)).ArgRect(0, 0, size, size).Call(objc.MsgSend)
 		objc.Send1(s.clip, selSetAutoresizing, mask)
 		objc.Send1(s.clip, selSetHidden, 0)
 		s.shown = true
 		w.buttons = append(w.buttons, nativeButton{NativeButton: b, host: id, obj: s.view})
+	}
+	w.fitButtons()
+}
+
+// fitButtons places the pinned buttons at their exact, possibly fractional
+// frames (rexlook's are), directly in the container as the spike's buttons
+// were in its unflipped one, so AppKit draws them and Core Animation aligns
+// them to the same pixels at any scale. (Inside a clip view they are not
+// aligned and blur at 1x.) A top edge exactly between two pixels rounds
+// downward in the flipped container and upward in an unflipped one, so the
+// top is nudged by one ulp toward the spike's rounding. It runs at Open;
+// autoresizing keeps the buttons in place after that.
+func (w *Window) fitButtons() {
+	bounds := objc.SendRect(w.content, selBounds)
+	for i := range w.buttons {
+		b := &w.buttons[i]
+		s := w.hosts.slot(b.host)
+		if s == nil {
+			continue
+		}
+		size := float64(b.Size)
+		if size <= 0 {
+			size = 28
+		}
+		cx := float64(b.X)
+		if cx < 0 {
+			cx += bounds.W
+		}
+		top := math.Nextafter(float64(b.Y)-size/2, math.Inf(-1))
+		objc.F.Reset().Arg(uintptr(s.clip)).Arg(uintptr(selSetFrame)).ArgRect(cx-size/2, top, size, size).Call(objc.MsgSend)
 	}
 }
 

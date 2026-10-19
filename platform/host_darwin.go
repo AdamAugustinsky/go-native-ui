@@ -124,6 +124,13 @@ func (h *hostState) slot(id HostID) *hostSlot {
 // SetHosts places it. At a safe point (not inside a build), main thread; it
 // may allocate. At most MaxHosts per window (ErrTooManyHosts).
 func (w *Window) NewHost(kind HostKind, o HostOptions) (HostID, error) {
+	return w.newHost(kind, o, false)
+}
+
+// newHost is NewHost; pinned makes a pinned button (makeButtons), which has
+// no clip view: it is the container's own subview, as the spike's buttons
+// were (fitButtons), and its clip field is the button itself.
+func (w *Window) newHost(kind HostKind, o HostOptions, pinned bool) (HostID, error) {
 	h := &w.hosts
 	i := -1
 	for j := range h.slots {
@@ -136,13 +143,16 @@ func (w *Window) NewHost(kind HostKind, o HostOptions) (HostID, error) {
 		return 0, ErrTooManyHosts
 	}
 	w.makeContainer(w.wPt, w.hPt)
-	clip := newViewOf(hostClipClass, 0, 0, 0, 0)
-	hostClipDef.Index().Set(clip, uintptr(i))
-	objc.Send1(clip, selSetWantsLayerV, 1)
-	if objc.SendBool1(clip, selRespondsTo, uintptr(selSetClipsToBounds)) {
-		objc.Send1(clip, selSetClipsToBounds, 1) // macOS 14: views no longer clip by default
+	var clip objc.ID
+	if !pinned {
+		clip = newViewOf(hostClipClass, 0, 0, 0, 0)
+		hostClipDef.Index().Set(clip, uintptr(i))
+		objc.Send1(clip, selSetWantsLayerV, 1)
+		if objc.SendBool1(clip, selRespondsTo, uintptr(selSetClipsToBounds)) {
+			objc.Send1(clip, selSetClipsToBounds, 1) // macOS 14: views no longer clip by default
+		}
+		objc.Send1(clip, selSetHidden, 1)
 	}
-	objc.Send1(clip, selSetHidden, 1)
 	s := &h.slots[i]
 	gen := s.gen + 1
 	if gen >= 1<<24 {
@@ -188,10 +198,17 @@ func (w *Window) NewHost(kind HostKind, o HostOptions) (HostID, error) {
 	}
 	s.view = v
 	objc.Send1(v, selSetAutoresizing, 0)
-	objc.Send1(clip, selAddSubview, uintptr(v))
-	objc.Send(v, selReleaseObj) // the clip owns it
-	objc.Send1(w.content, selAddSubview, uintptr(clip))
-	objc.Send(clip, selReleaseObj) // the container owns it
+	if pinned {
+		s.clip = v
+		objc.Send1(v, selSetHidden, 1)
+		objc.Send1(w.content, selAddSubview, uintptr(v))
+		objc.Send(v, selReleaseObj) // the container owns it
+	} else {
+		objc.Send1(clip, selAddSubview, uintptr(v))
+		objc.Send(v, selReleaseObj) // the clip owns it
+		objc.Send1(w.content, selAddSubview, uintptr(clip))
+		objc.Send(clip, selReleaseObj) // the container owns it
+	}
 	liveHosts.Add(1)
 	return h.id(i), nil
 }

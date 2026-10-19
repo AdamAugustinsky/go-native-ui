@@ -3,6 +3,7 @@
 package platform
 
 import (
+	"math"
 	"testing"
 	"unsafe"
 
@@ -79,8 +80,8 @@ func TestNativeShell(t *testing.T) {
 	if r.backdrop == BackdropNone || !r.transparent || r.opaqueWindow {
 		t.Errorf("backdrop %d, surface transparent %v, window opaque %v: want a backdrop, a transparent surface, a non-opaque window", r.backdrop, r.transparent, r.opaqueWindow)
 	}
-	if len(r.order) != 4 || r.viewIndex != 1 || !r.hasButtons || r.order[2] != "GNUIHostClip" || r.order[3] != "GNUIHostClip" {
-		t.Errorf("container holds %v with our view at %d: want the effect view, ours, then the two buttons' hosts", r.order, r.viewIndex)
+	if len(r.order) != 4 || r.viewIndex != 1 || !r.hasButtons || r.order[2] != "NSButton" || r.order[3] != "NSButton" {
+		t.Errorf("container holds %v with our view at %d: want the effect view, ours, then the two buttons", r.order, r.viewIndex)
 	}
 	if r.plusX != 400-23-14 {
 		t.Errorf("+ at x %v, want %v (23 pt from the right edge to its centre)", r.plusX, 400-23-14)
@@ -462,7 +463,15 @@ func TestPinnedButtonsFollowResize(t *testing.T) {
 	if !opened {
 		t.Skip("cannot open a window here")
 	}
-	if cmd != [4]float64{26, 9, 28, 28} || plus != [4]float64{600 - 23 - 14, 9, 28, 28} {
+	near := func(a, b [4]float64) bool {
+		for i := range a {
+			if math.Abs(a[i]-b[i]) > 1e-9 {
+				return false
+			}
+		}
+		return true
+	}
+	if !near(cmd, [4]float64{26, 9, 28, 28}) || !near(plus, [4]float64{600 - 23 - 14, 9, 28, 28}) {
 		t.Errorf("after a resize to 600×500 ⌘ is at %v and + at %v: want 26,9 and %d,9 (28×28)", cmd, plus, 600-23-14)
 	}
 }
