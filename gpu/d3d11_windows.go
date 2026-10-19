@@ -134,6 +134,10 @@ type swapChainDesc1 struct {
 var (
 	d3d11DLL           uintptr
 	pD3D11CreateDevice uintptr
+
+	// DwmFlush waits for the desktop compositor's next composition pass that
+	// takes in the DirectX presents made before the call (the reveal).
+	pDwmFlush = win32.Proc(win32.LoadSystem("dwmapi.dll"), "DwmFlush")
 )
 
 // Surface is a flip-model swap chain on a window.
@@ -380,6 +384,15 @@ func (s *Surface) EndFrame(f *Frame) {
 	} // other success codes (e.g. DXGI_STATUS_MODE_CHANGED) count as shown
 	s.presented++
 	if first {
+		if s.reveal != nil && s.lastShown && pDwmFlush != 0 {
+			// Present only queues the frame for the compositor. Uncloaked now,
+			// the window can be composed once before DWM has taken the frame
+			// in, and that pass shows an empty (white) client area: seen by
+			// TestFirstFrameIsContent on the runners, whose WARP device
+			// renders on the CPU. DwmFlush returns after the composition pass
+			// that has taken in this present, so the reveal shows the frame.
+			win32.Call(pDwmFlush)
+		}
 		s.Trace.Done = platform.Now()
 		if s.reveal != nil {
 			reveal := s.reveal
@@ -405,9 +418,9 @@ func (s *Surface) Present(r, g, b, a float32) bool {
 }
 
 // RevealOnFirstFrame makes the first EndFrame call show (typically the
-// platform Window's Show, for a window opened with Options.Hidden) right
-// after it presented: the window is shown but cloaked until then (DWM), so
-// no empty frame reaches the screen.
+// platform Window's Show, for a window opened with Options.Hidden) once the
+// desktop compositor has taken in its present: the window is shown but
+// cloaked until then (DWM), so no empty frame reaches the screen.
 func (s *Surface) RevealOnFirstFrame(show func()) { s.reveal = show }
 
 // FrameSource returns the DXGI frame-latency waitable handle, or 0.
