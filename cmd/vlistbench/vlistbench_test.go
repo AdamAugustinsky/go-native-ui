@@ -61,6 +61,9 @@ func TestTimelineSession(t *testing.T) {
 		t.Logf("session %d: %d mallocs, %d bytes; %d rebuilds, %d history loads, %d arrivals; %.1f items built per frame, list frame max %.0f µs",
 			a+2, mallocs, bytes, ch.rebuilds-r0, ch.histLoads-h0, ch.arrivals-a0,
 			float64(ch.built)/float64(max(ch.buildCalls, 1)), float64(ch.editMax.Microseconds()))
+		if len(ch.listUs) == 0 {
+			t.Fatal("no list work was sampled")
+		}
 		if ch.jumps != 0 || ch.unpinned != 0 {
 			t.Fatalf("%d edits above the view moved it, %d pinned frames did not end at the bottom", ch.jumps, ch.unpinned)
 		}
@@ -83,5 +86,29 @@ func TestFirstFrameEndsAtTheBottom(t *testing.T) {
 	o.Frame() // its check reads the first frame's layout
 	if ch.unpinned != 0 || !ch.st.AtEnd() {
 		t.Fatalf("the first frame did not end at the bottom (AtEnd %v)", ch.st.AtEnd())
+	}
+}
+
+// The gate is per frame: a list whose mean is far under the budget but whose
+// P99 or slowest frame is over it fails.
+func TestGateIsPerFrame(t *testing.T) {
+	ok := report{BenchReport: app.BenchReport{Frames: measFrames, Paced: true, MainThreadCPUus: 500},
+		Rebuilds: 1, HistoryLoads: 1, Arrivals: 1,
+		ListWorkUs: app.Stats{P50: 300, P99: 900, Max: 1500, Mean: 350}}
+	if f := gateFailures(ok, false, defaultMaxListUs, defaultMaxEditUs); len(f) != 0 {
+		t.Fatalf("a run within the budgets failed: %v", f)
+	}
+	for _, tc := range []struct {
+		name string
+		s    app.Stats
+	}{
+		{"P99 over", app.Stats{P50: 300, P99: 4500, Max: 4600, Mean: 350}},
+		{"max over", app.Stats{P50: 300, P99: 900, Max: 6000, Mean: 350}},
+	} {
+		r := ok
+		r.ListWorkUs = tc.s
+		if f := gateFailures(r, false, defaultMaxListUs, defaultMaxEditUs); len(f) == 0 {
+			t.Fatalf("%s: a mean of %.0f µs passed the gate with %.0f µs at the P99 and %.0f µs at the max", tc.name, tc.s.Mean, tc.s.P99, tc.s.Max)
+		}
 	}
 }

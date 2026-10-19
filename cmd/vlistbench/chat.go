@@ -23,6 +23,8 @@ const (
 	historyAt = 40 // load history when the first built item is this close to the top
 	imageN    = 8  // one message in imageN has an image
 	loadAfter = 24 // frames an image takes to "load"
+
+	maxListSamples = 8192 // frames whose list work is kept
 )
 
 // Colours (0xRRGGBBAA).
@@ -140,13 +142,17 @@ type chat struct {
 	builtMax   int
 	editMax    time.Duration // the most a frame spent in edits and BeginVList
 	editSum    time.Duration
+	// listUs holds, per counted frame, the list's own work in µs: the edits,
+	// BeginVList (with a rebuild's slice), the Item calls and EndVList; the
+	// items' contents, layout and drawing are the frame's (BenchReport).
+	listUs []float64
 
 	script func(frame int, in *ui.Input) bool
 	pre    func(c *chat) // the script's edits, run in Build before the list
 }
 
 func newChat(n int) *chat {
-	ch := &chat{n: n, jumpTo: -1}
+	ch := &chat{n: n, jumpTo: -1, listUs: make([]float64, 0, maxListSamples)}
 	ch.o = base.VListOpts{Estimate: estPt, StickToBottom: true}
 	ch.st.Reserve(n + n/2)
 	ids := make([]uint64, n)
@@ -283,8 +289,11 @@ func (ch *chat) Build(c *ui.Context) {
 	}
 	ch.listBox = v.Outer
 	ch.nb = 0
+	var itemNs time.Duration // wall time: the calls are far shorter than a thread-clock tick
 	for i := v.First; i < v.Last; i++ {
+		t := time.Now()
 		id := v.Item(i)
+		itemNs += time.Since(t)
 		ch.message(c, id)
 		if ch.nb < len(ch.ids) {
 			ch.ids[ch.nb], ch.boxes[ch.nb] = id, c.Parent()
@@ -295,7 +304,12 @@ func (ch *chat) Build(c *ui.Context) {
 		}
 	}
 	ch.pinned = ch.st.AtEnd() && v.Last == v.Len && v.Len > 0
+	t := time.Now()
 	base.EndVList(&v)
+	itemNs += time.Since(t)
+	if ch.counting && len(ch.listUs) < cap(ch.listUs) {
+		ch.listUs = append(ch.listUs, float64((el+itemNs).Nanoseconds())/1e3)
+	}
 	ch.v = v
 	ch.scrollbar(c, v)
 	if ch.counting {
