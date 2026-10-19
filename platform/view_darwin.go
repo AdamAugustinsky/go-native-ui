@@ -91,8 +91,8 @@ func (w *Window) linkTick(c *ffi.CB, metal bool) {
 		w.ticksSinceFrame, w.lastFrameT = 0, now
 		w.q.push(Event{Kind: EvFrame, Time: now})
 		objc.Send2(w.app, selPostEvent, uintptr(w.wakeEv), 0) // unblock nextEventMatchingMask
-		if w.live || menuTracking() {
-			w.runHandlerFrom(true) // a requested frame (animation) while AppKit's resize or menu tracking loop runs
+		if w.live || menuTracking() || QuitPending() {
+			w.runHandlerFrom(true) // a requested frame (animation) while AppKit's resize or menu tracking loop, or its wait for a quit answer, runs
 		}
 		return
 	}

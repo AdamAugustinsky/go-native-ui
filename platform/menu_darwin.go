@@ -612,6 +612,8 @@ func menuCommand(c *ffi.CB) {
 	if id := itemTag(sender); id != 0 {
 		if w := theWindow.Load(); w != nil {
 			w.q.push(Event{Kind: EvCommand, Tag: uint64(id), Time: Now()})
+		} else {
+			appCommand(id) // no window: the application's (F3)
 		}
 	}
 }
@@ -620,13 +622,12 @@ func menuCommand(c *ffi.CB) {
 // popup's option): PopUpMenu returns its index.
 func menuChoose(c *ffi.CB) { chose(objc.ID(c.Int(2))) }
 
-// menuQuit is gnuiQuit: (MenuQuit): EvClose, until the application object
-// has a quit request of its own.
+// menuQuit is gnuiQuit: (MenuQuit): the application object's quit request
+// (QuitMenu), as AppKit's own terminate: would be (appobj_darwin.go).
 func menuQuit(c *ffi.CB) {
-	chose(objc.ID(c.Int(2)))
-	if w := theWindow.Load(); w != nil {
-		w.q.push(Event{Kind: EvClose, Time: Now()})
-	}
+	sender := objc.ID(c.Int(2))
+	chose(sender)
+	requestTerminate(sender)
 }
 
 // menuSystem is GNUIMenuTarget's hide:, performZoom: … (the standard actions

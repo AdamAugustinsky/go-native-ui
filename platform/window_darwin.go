@@ -52,28 +52,17 @@ func Open(o Options) (*Window, error) {
 	}
 	nOpenStages = 0
 	markOpen("start")
-	appKit, err := loadFramework("/System/Library/Frameworks/AppKit.framework/AppKit")
-	if err != nil {
+	if err := ensureApp(); err != nil { // frameworks, classes, NSApp and its delegate (appobj_darwin.go)
 		return nil, err
 	}
-	if _, err := loadFramework("/System/Library/Frameworks/QuartzCore.framework/QuartzCore"); err != nil {
-		return nil, err
-	}
-	foundation, _ := loadFramework("/System/Library/Frameworks/Foundation.framework/Foundation")
-	defaultMode = stringConstant(foundation, "NSDefaultRunLoopMode")
-	commonModes = stringConstant(foundation, "NSRunLoopCommonModes")
-	_ = appKit
-	markOpen("frameworks")
-	classesOnce.Do(registerClasses)
-	markOpen("classes")
+	markOpen("app")
 
 	F := objc.F
 	pool := F.Call0(objc.PoolPush)
 	defer F.Call1(objc.PoolPop, pool)
 
 	w := &Window{q: newEventQueue(), scale: 1, linkPaused: true, visible: -1, marked: make([]byte, 0, 256), tmp: make([]byte, 0, 256)}
-	w.app = objc.Send(objc.Cls("NSApplication"), selSharedApplication)
-	objc.Send1(w.app, selSetActivation, 0) // NSApplicationActivationPolicyRegular
+	w.app = appObj.app
 	loadCursors()
 	markOpen("NSApplication")
 
@@ -133,18 +122,10 @@ func Open(o Options) (*Window, error) {
 		Arg(uintptr(w.view)).Arg(0).Call(objc.MsgSend).R0())
 	objc.Send1(w.view, selAddTracking, uintptr(ta))
 
-	// One reusable application-defined event for wakeups.
-	w.wakeEv = objc.Retain(objc.ID(F.Reset().Arg(uintptr(objc.Cls("NSEvent"))).Arg(uintptr(selOtherEvent)).
-		Arg(15 /* NSEventTypeApplicationDefined */).ArgPoint(0, 0).Arg(0).ArgF64(0).Arg(0).Arg(0).
-		Arg(wakeSubtype).Arg(0).Arg(0).Call(objc.MsgSend).R0()))
-	clsNSDate = objc.Cls("NSDate")
-	w.distantPast = objc.Retain(objc.Send(clsNSDate, selDistantPast))
-	w.distantFuture = objc.Retain(objc.Send(clsNSDate, selDistantFuture))
+	w.wakeEv, w.distantPast, w.distantFuture = appObj.wakeEv, appObj.distantPast, appObj.distantFuture
 
 	theWindow.Store(w)
 	markOpen("view+setup")
-	objc.Send(w.app, selFinishLaunching)
-	markOpen("finishLaunching")
 	if !o.Hidden {
 		w.Show()
 		markOpen("orderFront+activate")

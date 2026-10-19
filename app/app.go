@@ -163,6 +163,8 @@ type App struct {
 	listItems   []platform.MenuItem
 	demo        *menuDemo // GNUI_MENU_DEMO (menudemo.go)
 
+	appObject // the application object: Main's handler, app events, the quit policy (lifecycle.go)
+
 	// Diagnostics (diag.go).
 	owedWhy     owedMask // why the last frame left another owed
 	beginFails  int      // draw attempts that found no frame to draw into
@@ -264,8 +266,25 @@ func RunWith(cfg Config, b Builder, o RunOptions) (RunResult, error) {
 // runs keep the drawn ones, which their scripts drive. Every windowed run gets
 // the native menu bar.
 func openWindowed(cfg Config, b Builder, st *StartupReport, nativeMenus bool) (*App, error) {
-	tEntry := platform.Now()
-	age := sysinfo.ProcessAgeNs()
+	tEntry, age := platform.Now(), sysinfo.ProcessAgeNs()
+	a := newApp()
+	a.handler = DefaultHandler{}
+	if err := a.bindApp(false); err != nil {
+		return nil, err
+	}
+	if err := a.openWin(cfg, b, st, nativeMenus, tEntry, age); err != nil {
+		a.unbindApp()
+		return nil, err
+	}
+	a.started = true
+	a.flushStartup()
+	return a, nil
+}
+
+// openWin opens the window with builder b into a, and draws its first frame;
+// tEntry is when the opening started (the startup report's origin) and age
+// the process's age then (-1 unknown).
+func (a *App) openWin(cfg Config, b Builder, st *StartupReport, nativeMenus bool, tEntry, age int64) error {
 	execNs := int64(-1)
 	st.ExecToMainMs, st.ExecToOnGlassMs, st.ExecToFirstPresentMs = -1, -1, -1
 	if age >= 0 {
@@ -273,10 +292,13 @@ func openWindowed(cfg Config, b Builder, st *StartupReport, nativeMenus bool) (*
 		st.ExecToMainMs = ms(age)
 	}
 
-	a := &App{cfg: cfg, b: b, tr: newTranslator(), p: newPacer(), lat: newSampler(8192), diagBuf: make([]byte, 0, 2048), menuDirty: true}
+	a.cfg, a.b = cfg, b
+	if a.started { // a window again, after the last one closed (KeepRunning)
+		a.tr, a.p, a.frames, a.menuDirty = newTranslator(), newPacer(), 0, true
+	}
 	a.lastDrawT = tEntry
 	if cfg.Width <= 0 || cfg.Height <= 0 {
-		return nil, errors.New("app: Config.Width and Height must be positive")
+		return errors.New("app: Config.Width and Height must be positive")
 	}
 	win, err := platform.Open(platform.Options{
 		Title: cfg.Title, Width: int(cfg.Width + 0.5), Height: int(cfg.Height + 0.5), Hidden: true,
@@ -285,7 +307,7 @@ func openWindowed(cfg Config, b Builder, st *StartupReport, nativeMenus bool) (*
 		Backdrop: cfg.Backdrop, Buttons: cfg.Buttons,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("app: open window: %w", err)
+		return fmt.Errorf("app: open window: %w", err)
 	}
 	if win.Backdrop() != platform.BackdropNone {
 		a.cfg.Clear = [4]float32{} // premultiplied transparent: the backdrop shows
@@ -300,31 +322,34 @@ func openWindowed(cfg Config, b Builder, st *StartupReport, nativeMenus bool) (*
 	surf, err := gpu.NewSurface(win.Native(), w, h, scale)
 	if err != nil {
 		win.Close()
-		return nil, fmt.Errorf("app: surface: %w", err)
+		a.Win, a.req = nil, nil
+		return fmt.Errorf("app: surface: %w", err)
 	}
 	a.Surf = surf
 	win.SetFrameSource(surf.FrameSource())
-	surf.RevealOnFirstFrame(win.Show) // content-first: the window appears with its first frame
+	if !a.startHidden || a.started {
+		surf.RevealOnFirstFrame(win.Show) // content-first: the window appears with its first frame
+	}
 	t1 := platform.Now()
 	st.SurfaceMs = ms(t1 - t0)
 
 	if a.R, err = gpu.NewRenderer(surf.Device(), surf.Queue()); err != nil {
-		a.close()
-		return nil, fmt.Errorf("app: renderer: %w", err)
+		a.closeWin()
+		return fmt.Errorf("app: renderer: %w", err)
 	}
 	t2 := platform.Now()
 	st.RendererMs = ms(t2 - t1)
 
 	if a.Text, err = text.New(); err != nil {
-		a.close()
-		return nil, fmt.Errorf("app: text: %w", err)
+		a.closeWin()
+		return fmt.Errorf("app: text: %w", err)
 	}
 	t3 := platform.Now()
 	st.TextMs = ms(t3 - t2)
 
 	if err := a.initUI(); err != nil {
-		a.close()
-		return nil, err
+		a.closeWin()
+		return err
 	}
 	a.UI.SetNativeMenus(nativeMenus && platform.HasNativeMenus())
 	t4 := platform.Now()
@@ -332,8 +357,8 @@ func openWindowed(cfg Config, b Builder, st *StartupReport, nativeMenus bool) (*
 
 	// Draw-first: before the first Wait, which runs AppKit's deferred launch work.
 	if !a.present(false, 2) {
-		a.close()
-		return nil, errors.New("app: no frame available for the first frame")
+		a.closeWin()
+		return errors.New("app: no frame available for the first frame")
 	}
 	t5 := platform.Now()
 	st.FirstFrameMs = ms(t5 - t0)
@@ -341,7 +366,7 @@ func openWindowed(cfg Config, b Builder, st *StartupReport, nativeMenus bool) (*
 		st.ExecToFirstPresentMs = ms(t5 - execNs)
 	}
 	a.execNs = execNs
-	return a, nil
+	return nil
 }
 
 // initUI creates the ui context and runs the Initer.
@@ -359,9 +384,18 @@ func (a *App) initUI() error {
 
 func ms(ns int64) float64 { return float64(ns) / 1e6 }
 
-// close releases everything in reverse order of creation. It is safe on a
-// partially built App.
+// close releases everything in reverse order of creation and, for a Run, the
+// application object. It is safe on a partially built App and when called
+// again.
 func (a *App) close() {
+	a.closeWin()
+	if !a.mainApp {
+		a.unbindApp()
+	}
+}
+
+// closeWin releases the window and its GPU and text objects.
+func (a *App) closeWin() {
 	if a.R != nil {
 		a.R.Destroy()
 	}
@@ -377,9 +411,14 @@ func (a *App) close() {
 	a.R, a.Surf, a.Win, a.Text = nil, nil, nil, nil
 }
 
-// loop is the event loop. See pacer for the frame rules.
+// loop is the event loop. See pacer for the frame rules. With no window open
+// it is the application object's pump (idleTurn).
 func (a *App) loop() error {
 	for !a.done {
+		if a.Win == nil {
+			a.idleTurn()
+			continue
+		}
 		a.syncMenuBar()
 		now := platform.Now()
 		if a.bench != nil && now > a.bench.deadline {
@@ -416,6 +455,7 @@ func (a *App) loop() error {
 		if a.hook != nil {
 			a.hook()
 		}
+		a.appTurn()
 	}
 	return nil
 }
@@ -440,7 +480,7 @@ func (a *App) timeout(now int64) int64 {
 func (a *App) onEvent(e *platform.Event) {
 	switch e.Kind {
 	case platform.EvClose:
-		a.done = true
+		a.closeRequested()
 	case platform.EvResize:
 		if e.W > 0 && e.H > 0 {
 			a.w, a.h, a.scale = int(e.W), int(e.H), e.Scale
