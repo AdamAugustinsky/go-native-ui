@@ -66,6 +66,7 @@ type tab struct {
 	used       bool
 	uid        uint32
 	name, path string // the title; path is drawn lighter on an inactive tab
+	label      string // name and path in one string, for a native tab
 	style      tabStyle
 
 	root  int8

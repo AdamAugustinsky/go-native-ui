@@ -102,10 +102,20 @@ func Open(o Options) (*Window, error) {
 	w.view = objc.Send(viewClass, selAlloc)
 	w.view = objc.ID(F.Reset().Arg(uintptr(w.view)).Arg(uintptr(selInitWithFrame)).
 		ArgRect(0, 0, width, height).Call(objc.MsgSend).R0())
-	objc.Send1(w.win, selSetContentView, uintptr(w.view))
-	objc.Send1(w.win, selMakeFirstResp, uintptr(w.view))
 	delegate := objc.Send(objc.Send(delegateClass, selAlloc), objc.Sel("init"))
+	w.content = w.view
+	if o.Backdrop != BackdropNone {
+		w.makeBackdrop(o.Backdrop, width, height)
+		markOpen("backdrop")
+	}
+	if len(o.Buttons) > 0 {
+		w.makeButtons(o.Buttons, delegate, width, height)
+		markOpen("buttons")
+	}
+	objc.Send1(w.win, selSetContentView, uintptr(w.content))
+	objc.Send1(w.win, selMakeFirstResp, uintptr(w.view))
 	objc.Send1(w.win, selSetDelegate, uintptr(delegate))
+	w.fitBackdrop()
 	objc.Send1(w.win, selSetMouseMoved, 1)
 	if o.MinWidth > 0 || o.MinHeight > 0 {
 		F.Reset().Arg(uintptr(w.win)).Arg(uintptr(selSetContentMinSize)).ArgPoint(float64(o.MinWidth), float64(o.MinHeight)).Call(objc.MsgSend)
@@ -252,7 +262,9 @@ func (w *Window) pushResize() bool {
 func (w *Window) Size() (int32, int32, float32) { return w.wPx, w.hPx, w.scale }
 
 // Native returns the AppKit handles.
-func (w *Window) Native() Native { return Native{NSWindow: uintptr(w.win), NSView: uintptr(w.view)} }
+func (w *Window) Native() Native {
+	return Native{NSWindow: uintptr(w.win), NSView: uintptr(w.view), Transparent: w.backdrop != BackdropNone}
+}
 
 // Close closes the window.
 func (w *Window) Close() {

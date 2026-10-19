@@ -26,6 +26,10 @@ type Native struct {
 	NSWindow uintptr
 	// NSView is the window's content NSView*, which the Metal layer is attached to.
 	NSView uintptr
+	// Transparent is set when the window has a backdrop (Options.Backdrop):
+	// the Metal layer must be non-opaque, its pixels premultiplied.
+	// Experimental.
+	Transparent bool
 }
 
 // Window is an AppKit window driven by our own event loop
@@ -36,6 +40,10 @@ type Window struct {
 	nOut     int  // how many events that Wait handed out
 
 	app, win, view, link, wakeEv objc.ID
+	content                      objc.ID // the content view: view, or the container that holds the backdrop, view and the buttons (shell_darwin.go)
+	effect                       objc.ID // the backdrop's effect view, 0 without one
+	backdrop                     Backdrop
+	buttons                      []nativeButton
 	distantPast, distantFuture   objc.ID
 
 	wPt, hPt   float64
