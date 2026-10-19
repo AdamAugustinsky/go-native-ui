@@ -479,3 +479,22 @@ func TestEncodeZeroAlloc(t *testing.T) {
 	}
 	t.Errorf("frame path allocated in all %d windows (last: %d mallocs, %d bytes over %d frames)", attempts, mallocs, bytes, frames)
 }
+
+// TestFreeTextureAfterFence: a texture freed after a frame that samples it is
+// released only through that frame's fence, which a later readback (a wait
+// for the GPU) lets signal.
+func TestFreeTextureAfterFence(t *testing.T) {
+	r := newTestRenderer(t)
+	r.newTarget(1, 1)
+	tex := texel(r, 255, 0, 0, 255)
+	r.Encode(r.ctx, r.offRTV, 1, 1, black, &DrawList{Quads: []Quad{rgbaQuad(0, tex)}})
+	r.FreeTexture(tex)
+	if _, retiring := r.TextureCounts(); retiring == 0 && r.done < r.serial {
+		t.Fatalf("released with done %d < serial %d", r.done, r.serial)
+	}
+	render(r, 1, 1, black)
+	r.collect()
+	if live, retiring := r.TextureCounts(); live != 1 || retiring != 0 {
+		t.Fatalf("%d live, %d retiring after the frames finished; want 1, 0 (done %d, serial %d)", live, retiring, r.done, r.serial)
+	}
+}
