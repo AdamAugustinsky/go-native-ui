@@ -52,7 +52,7 @@ func (g *grid) cell(row, colN int, str string, f text.FontKey, color uint32) {
 	}
 	baseline := theme.Snap(g.y0 + float32(row)*r.cells.RowPitch)
 	put := func(s string, c int) {
-		r.Put(g.c, &g.kg, f, s, g.x0+float32(c)*r.cells.Adv, baseline, color, 0, 0)
+		r.Put(g.c, &g.kg, f, s, g.x0+float32(c)*r.cells.Adv, baseline, color, 0, ui.NoFontSmoothing)
 	}
 	start, startCol, c := 0, colN, colN
 	for i := 0; i < len(str); {

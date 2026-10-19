@@ -465,7 +465,7 @@ func TestZeroAllocHits(t *testing.T) {
 			r := s.Shape(it.f, it.b)
 			v := s.Run(r)
 			for i, g := range v.Glyphs {
-				e := s.Glyph(v.Faces[i], g, uint8(n+i))
+				e := s.Glyph(v.Faces[i], g, uint8(n+i)&3)
 				sink += int(e.W)
 			}
 			sink += int(s.Font(FontDesc{SizePt: 13, Scale: 2, Weight: 400}))

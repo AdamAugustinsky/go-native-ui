@@ -26,6 +26,9 @@ var sy struct {
 	cfAttributedStringCreate                    uintptr
 	cfArrayGetCount, cfArrayGetValueAtIndex     uintptr
 	cfNumberCreate                              uintptr
+	cfNumberGetValue, cfNumberGetTypeID         uintptr
+	cfGetTypeID, cfPreferencesCopyAppValue      uintptr
+	kCurrentApplication                         uintptr // kCFPreferencesCurrentApplication
 	keyCallBacks, valueCallBacks                uintptr // addresses of the callback structs
 	// CoreText
 	ctFontCreateUIFontForLanguage, ctFontCreateWithName  uintptr
@@ -46,6 +49,8 @@ var sy struct {
 	cgColorSpaceCreateDeviceGray, cgColorSpaceCreateDeviceRGB uintptr
 	cgBitmapContextCreate                                     uintptr
 	cgContextSetGrayFillColor                                 uintptr
+	cgContextSaveGState, cgContextRestoreGState               uintptr
+	cgContextScaleCTM                                         uintptr
 	cgSetBool                                                 [8]uintptr // (ctx, bool) setters, see ctxFlags
 	// constant CFStringRefs (values of the exported globals)
 	kFontAttribute, kTraitsAttribute, kWeightTrait, kFamilyAttribute uintptr
@@ -62,14 +67,12 @@ var ctxFlags = [...]struct {
 	{"CGContextSetShouldSubpixelPositionFonts", true},
 	{"CGContextSetAllowsFontSubpixelQuantization", false},
 	{"CGContextSetShouldSubpixelQuantizeFonts", false},
-	{"CGContextSetAllowsFontSmoothing", smoothFonts},
-	{"CGContextSetShouldSmoothFonts", smoothFonts},
+	{"CGContextSetAllowsFontSmoothing", true},
+	{"CGContextSetShouldSmoothFonts", false}, // per glyph, see rasterize
 }
 
-// smoothFonts enables CoreGraphics font smoothing (stem darkening) in the
-// glyph bitmaps. Off: the bitmap is neutral coverage, independent of the text
-// colour the renderer later applies.
-const smoothFonts = false
+// shouldSmooth is the index of CGContextSetShouldSmoothFonts in ctxFlags.
+const shouldSmooth = 7
 
 var (
 	loadOnce sync.Once
@@ -79,9 +82,11 @@ var (
 const (
 	encUTF8        = 0x08000100
 	numFloat64     = 6 // kCFNumberFloat64Type
+	numSInt64      = 4 // kCFNumberSInt64Type
 	uiFontSystem   = 2 // kCTFontUIFontSystem
 	traitColorGlph = 1 << 13
 	bitmapAlphaPre = 1 // kCGImageAlphaPremultipliedLast
+	bitmapAlpha    = 7 // kCGImageAlphaOnly
 )
 
 func loadSyms() error {
@@ -120,6 +125,9 @@ func loadSyms() error {
 		sy.cfAttributedStringCreate = sym(cf, "CFAttributedStringCreate")
 		sy.cfArrayGetCount, sy.cfArrayGetValueAtIndex = sym(cf, "CFArrayGetCount"), sym(cf, "CFArrayGetValueAtIndex")
 		sy.cfNumberCreate = sym(cf, "CFNumberCreate")
+		sy.cfNumberGetValue, sy.cfNumberGetTypeID = sym(cf, "CFNumberGetValue"), sym(cf, "CFNumberGetTypeID")
+		sy.cfGetTypeID, sy.cfPreferencesCopyAppValue = sym(cf, "CFGetTypeID"), sym(cf, "CFPreferencesCopyAppValue")
+		sy.kCurrentApplication = global(cf, "kCFPreferencesCurrentApplication")
 		sy.keyCallBacks, sy.valueCallBacks = sym(cf, "kCFTypeDictionaryKeyCallBacks"), sym(cf, "kCFTypeDictionaryValueCallBacks")
 
 		sy.ctFontCreateUIFontForLanguage, sy.ctFontCreateWithName = sym(ct, "CTFontCreateUIFontForLanguage"), sym(ct, "CTFontCreateWithName")
@@ -140,6 +148,8 @@ func loadSyms() error {
 		sy.cgColorSpaceCreateDeviceGray, sy.cgColorSpaceCreateDeviceRGB = sym(cg, "CGColorSpaceCreateDeviceGray"), sym(cg, "CGColorSpaceCreateDeviceRGB")
 		sy.cgBitmapContextCreate = sym(cg, "CGBitmapContextCreate")
 		sy.cgContextSetGrayFillColor = sym(cg, "CGContextSetGrayFillColor")
+		sy.cgContextSaveGState, sy.cgContextRestoreGState = sym(cg, "CGContextSaveGState"), sym(cg, "CGContextRestoreGState")
+		sy.cgContextScaleCTM = sym(cg, "CGContextScaleCTM")
 		for i, f := range ctxFlags {
 			sy.cgSetBool[i] = sym(cg, f.name)
 		}
@@ -151,20 +161,31 @@ func loadSyms() error {
 }
 
 // fontEnt is a created font.
+//
+// The CTFont is created at the point size, not at SizePt*Scale pixels:
+// CoreText picks the optical size (the opsz axis of SF) and the tracking
+// from the font size, so a 13 pt font made at 26 px on a 2x display would be
+// set in SF's 26 pt design and spacing, tighter and thinner than every
+// AppKit label. AppKit itself shapes in points and rasterises through a
+// scaled context; so do we: CoreText's points are multiplied by Scale for the
+// pixel outputs (metrics, pen positions, advances) and glyphs are drawn
+// through a Scale CTM (rasterize). The fallback fonts CoreText picks in the
+// cascade are then point-sized too.
 type fontEnt struct {
 	desc    FontDesc
-	font    uintptr // CTFontRef (+1)
+	font    uintptr // CTFontRef at desc.SizePt (+1)
 	attrs   uintptr // CFDictionary {kCTFontAttributeName: font} (+1), for attributed strings
 	face    FaceID
 	metrics Metrics
 }
 
-// faceEnt is a concrete face: the primary font of a FontKey or a fallback.
+// faceEnt is a concrete face: the primary font of a FontKey or a fallback,
+// at one pixel scale.
 type faceEnt struct {
-	font   uintptr // CTFontRef (+1)
-	color  bool
-	name   string // PostScript name
-	sizePx float32
+	font  uintptr // CTFontRef (+1), point-sized
+	color bool
+	name  string  // PostScript name
+	scale float32 // pixels per point the face is rasterised at
 }
 
 // bitmap is a reusable CGBitmapContext with its backing memory (Go-owned,
@@ -338,19 +359,20 @@ func (s *System) Font(d FontDesc) FontKey {
 	}
 	pool := s.poolPush()
 	defer s.poolPop(pool)
-	px := float64(d.SizePt * d.Scale)
-	font := s.createFont(d, px)
+	pt := float64(d.SizePt)
+	font := s.createFont(d, pt)
 	if font == 0 {
-		font = s.fr.Reset().Arg32(uiFontSystem).ArgF64(px).Arg(0).Call(sy.ctFontCreateUIFontForLanguage).R0()
+		font = s.fr.Reset().Arg32(uiFontSystem).ArgF64(pt).Arg(0).Call(sy.ctFontCreateUIFontForLanguage).R0()
 	}
 	fe := fontEnt{desc: d, font: font, attrs: s.dict1(sy.kFontAttribute, font)}
-	fe.face = s.faceFor(font)
+	fe.face = s.faceFor(font, d.Scale)
+	sc := float64(d.Scale)
 	fe.metrics = Metrics{
-		Ascent:    float32(s.f64(sy.ctFontGetAscent, font)),
-		Descent:   float32(s.f64(sy.ctFontGetDescent, font)),
-		LineGap:   float32(s.f64(sy.ctFontGetLeading, font)),
-		CapHeight: float32(s.f64(sy.ctFontGetCapHeight, font)),
-		XHeight:   float32(s.f64(sy.ctFontGetXHeight, font)),
+		Ascent:    float32(s.f64(sy.ctFontGetAscent, font) * sc),
+		Descent:   float32(s.f64(sy.ctFontGetDescent, font) * sc),
+		LineGap:   float32(s.f64(sy.ctFontGetLeading, font) * sc),
+		CapHeight: float32(s.f64(sy.ctFontGetCapHeight, font) * sc),
+		XHeight:   float32(s.f64(sy.ctFontGetXHeight, font) * sc),
 	}
 	fe.metrics.LineHeight = fe.metrics.Ascent + fe.metrics.Descent + fe.metrics.LineGap
 	s.fonts = append(s.fonts, fe)
@@ -359,7 +381,8 @@ func (s *System) Font(d FontDesc) FontKey {
 	return key
 }
 
-func (s *System) createFont(d FontDesc, px float64) uintptr {
+// createFont creates the CTFont for d at size pt (points; see fontEnt).
+func (s *System) createFont(d FontDesc, pt float64) uintptr {
 	if d.Family != "" {
 		fam := s.cfString([]byte(d.Family))
 		if fam == 0 {
@@ -379,11 +402,11 @@ func (s *System) createFont(d FontDesc, px float64) uintptr {
 		if desc == 0 {
 			return 0
 		}
-		f := s.fr.Reset().Arg(desc).ArgF64(px).Arg(0).Call(sy.ctFontCreateWithFontDescriptor).R0()
+		f := s.fr.Reset().Arg(desc).ArgF64(pt).Arg(0).Call(sy.ctFontCreateWithFontDescriptor).R0()
 		s.release(desc)
 		return f
 	}
-	base := s.fr.Reset().Arg32(uiFontSystem).ArgF64(px).Arg(0).Call(sy.ctFontCreateUIFontForLanguage).R0()
+	base := s.fr.Reset().Arg32(uiFontSystem).ArgF64(pt).Arg(0).Call(sy.ctFontCreateUIFontForLanguage).R0()
 	if base == 0 || (d.Weight == 400 && !d.Mono) {
 		return base
 	}
@@ -396,7 +419,7 @@ func (s *System) createFont(d FontDesc, px float64) uintptr {
 	if desc == 0 {
 		return base
 	}
-	f := s.fr.Reset().Arg(desc).ArgF64(px).Arg(0).Call(sy.ctFontCreateWithFontDescriptor).R0()
+	f := s.fr.Reset().Arg(desc).ArgF64(pt).Arg(0).Call(sy.ctFontCreateWithFontDescriptor).R0()
 	s.release(desc)
 	if f == 0 {
 		return base
@@ -415,12 +438,12 @@ func (s *System) Metrics(f FontKey) Metrics {
 
 // ---- Faces ----
 
-// faceFor maps a CTFont to a FaceID, retaining new fonts. Identity is the
-// CTFontRef pointer (cheap, exact while the font is retained) and otherwise
-// PostScript name + size.
-func (s *System) faceFor(font uintptr) FaceID {
+// faceFor maps a CTFont rasterised at scale to a FaceID, retaining new
+// fonts. Identity is the CTFontRef pointer (cheap, exact while the font is
+// retained) and otherwise PostScript name + size, with the scale.
+func (s *System) faceFor(font uintptr, scale float32) FaceID {
 	for i := range s.faces {
-		if s.faces[i].font == font {
+		if s.faces[i].font == font && s.faces[i].scale == scale {
 			return FaceID(i)
 		}
 	}
@@ -438,8 +461,10 @@ func (s *System) faceFor(font uintptr) FaceID {
 	}
 	size := float32(s.f64(sy.ctFontGetSize, font))
 	nameLen := len(s.name)
-	bits := math.Float32bits(size)
-	s.name = append(s.name, byte(bits), byte(bits>>8), byte(bits>>16), byte(bits>>24))
+	for _, v := range [2]float32{size, scale} {
+		bits := math.Float32bits(v)
+		s.name = append(s.name, byte(bits), byte(bits>>8), byte(bits>>16), byte(bits>>24))
+	}
 	if id, ok := s.faceByName[string(s.name)]; ok {
 		return id
 	}
@@ -450,7 +475,7 @@ func (s *System) faceFor(font uintptr) FaceID {
 	s.retain(font)
 	s.faces = append(s.faces, faceEnt{
 		font: font, color: traits&traitColorGlph != 0,
-		name: string(s.name[:nameLen]), sizePx: size,
+		name: string(s.name[:nameLen]), scale: scale,
 	})
 	id := FaceID(len(s.faces) - 1)
 	s.faceByName[string(s.name)] = id
@@ -499,11 +524,11 @@ func (s *System) shapeMiss(f FontKey, b []byte) RunRef {
 			nruns := int(s.fr.Call1(sy.cfArrayGetCount, runs))
 			for i := 0; i < nruns; i++ {
 				run := s.fr.Call2(sy.cfArrayGetValueAtIndex, runs, uintptr(i))
-				s.appendRun(run, fe.face)
+				s.appendRun(run, fe.face, fe.desc.Scale)
 			}
 			advance = float32(s.fr.Reset().Arg(line).ArgPtr(unsafe.Pointer(&s.three[0])).
 				ArgPtr(unsafe.Pointer(&s.three[1])).ArgPtr(unsafe.Pointer(&s.three[2])).
-				Call(sy.ctLineGetTypographicBounds).F64(0))
+				Call(sy.ctLineGetTypographicBounds).F64(0) * float64(fe.desc.Scale))
 			s.release(line)
 			s.release(as)
 			s.release(str)
@@ -545,8 +570,9 @@ func (s *System) sanitized(b []byte) []byte {
 	return s.san
 }
 
-// appendRun appends one CTRun's glyphs, pen positions, face and clusters.
-func (s *System) appendRun(run uintptr, primary FaceID) {
+// appendRun appends one CTRun's glyphs, pen positions (CoreText's points
+// times scale), face and clusters.
+func (s *System) appendRun(run uintptr, primary FaceID, scale float32) {
 	n := int(s.fr.Call1(sy.ctRunGetGlyphCount, run))
 	if n == 0 {
 		return
@@ -555,7 +581,7 @@ func (s *System) appendRun(run uintptr, primary FaceID) {
 	attrs := s.fr.Call1(sy.ctRunGetAttributes, run)
 	if attrs != 0 {
 		if font := s.fr.Call2(sy.cfDictionaryGetValue, attrs, sy.kFontAttribute); font != 0 {
-			face = s.faceFor(font)
+			face = s.faceFor(font, scale)
 		}
 	}
 	g0 := len(s.gbuf)
@@ -578,7 +604,7 @@ func (s *System) appendRun(run uintptr, primary FaceID) {
 	}
 	last := len(s.u16b) - 1
 	for i := 0; i < n; i++ {
-		s.xbuf = append(s.xbuf, float32(s.pos[2*i]))
+		s.xbuf = append(s.xbuf, float32(s.pos[2*i]*float64(scale)))
 		s.fbuf = append(s.fbuf, face)
 		u := int(s.idx[i])
 		if u < 0 || u > last {
@@ -608,32 +634,114 @@ func (s *System) ReserveRuns(runs, glyphs, textBytes int) { s.runs.reserve(runs,
 // ---- Rasterization ----
 
 // Glyph returns the atlas entry for a glyph, rasterizing it with CoreText on
-// a miss. sub (0..3) is the x offset in quarter pixels; colour faces ignore
-// it (their entry is the sub 0 bitmap). A hit allocates nothing.
+// a miss. sub is a GlyphVariant: the x offset in quarter pixels and the
+// font-smoothing level of the text colour (SmoothLevel); colour faces ignore
+// both (their entry is the plain sub 0 bitmap). A hit allocates nothing.
 //
 // Entries are valid until AtlasGeneration changes.
 func (s *System) Glyph(face FaceID, gid uint16, sub uint8) GlyphEntry {
 	if int(face) >= len(s.faces) {
 		return GlyphEntry{}
 	}
-	if s.faces[face].color {
-		sub = 0
-	}
+	smooth := min(sub>>smoothShift, smoothLevels)
 	sub &= 3
-	key := glyphKey(face, gid, sub)
+	if s.faces[face].color {
+		sub, smooth = 0, 0
+	}
+	key := glyphKey(face, gid, sub|smooth<<smoothShift)
 	if e, ok := s.atlas.glyphs.lookup(key); ok {
 		return e
 	}
-	e := s.rasterize(face, gid, sub)
+	e := s.rasterize(face, gid, sub, smooth)
 	s.atlas.glyphs.insert(key, e)
 	return e
 }
+
+// smoothLevels is the number of CoreGraphics font-smoothing levels.
+const smoothLevels = 4
+
+// smoothGray is the grey fill each SmoothLevel draws with (1..4): the
+// middle of the luminance band CoreGraphics maps to that level, so
+// CoreGraphics picks the same stem dilation as for the real text colour.
+var smoothGray = [smoothLevels + 1]float64{1, 0, 0.5371, 0.7354, 0.8808}
+
+// SmoothLevel returns the font-smoothing level AppKit draws text of colour
+// rgba (0xRRGGBBAA) with, for GlyphVariant: 0 when the user turned font
+// smoothing off (AppleFontSmoothing = 0), otherwise 1 to 4.
+//
+// With font smoothing (on unless the user turns it off), CoreGraphics
+// thickens glyph stems by an amount picked from the luminance of the fill
+// colour, in four bands of the linear luminance Y: below 1/8, below 3/8,
+// below 5/8, and above (measured on macOS 27.2: 13 pt SF stems at 2x are
+// 2.23 px wide without smoothing, 2.58 with black text, 2.91 with white).
+// AppKit labels are drawn that way, so ours are too.
+func SmoothLevel(rgba uint32) uint8 {
+	smoothPref.Do(readSmoothPref)
+	if !smoothOn {
+		return 0
+	}
+	y := 0.2126*srgbLinear[uint8(rgba>>24)] + 0.7152*srgbLinear[uint8(rgba>>16)] + 0.0722*srgbLinear[uint8(rgba>>8)]
+	switch {
+	case y < 0.125:
+		return 1
+	case y < 0.375:
+		return 2
+	case y < 0.625:
+		return 3
+	}
+	return 4
+}
+
+var (
+	smoothPref sync.Once
+	smoothOn   bool
+	srgbLinear [256]float64 // sRGB component to linear light
+)
+
+// readSmoothPref reads AppleFontSmoothing as AppKit does (the application's
+// domain, then the global one): only an explicit 0 turns smoothing off.
+func readSmoothPref() {
+	for i := range srgbLinear {
+		v := float64(i) / 255
+		if v <= 0.04045 {
+			srgbLinear[i] = v / 12.92
+		} else {
+			srgbLinear[i] = math.Pow((v+0.055)/1.055, 2.4)
+		}
+	}
+	smoothOn = true
+	if loadSyms() != nil || sy.cfPreferencesCopyAppValue == 0 {
+		return
+	}
+	fr := new(ffi.Frame)
+	key := fr.Reset().Arg(0).ArgPtr(unsafe.Pointer(unsafe.StringData(prefKey))).Arg(uintptr(len(prefKey))).
+		Arg32(encUTF8).ArgBool(false).Call(sy.cfStringCreateWithBytes).R0()
+	if key == 0 {
+		return
+	}
+	v := fr.Call2(sy.cfPreferencesCopyAppValue, key, sy.kCurrentApplication)
+	fr.Call1(sy.cfRelease, key)
+	if v == 0 {
+		return
+	}
+	if fr.Call1(sy.cfGetTypeID, v) == fr.Call0(sy.cfNumberGetTypeID) {
+		n := new(int64)
+		if fr.Reset().Arg(v).Arg(numSInt64).ArgPtr(unsafe.Pointer(n)).Call(sy.cfNumberGetValue).Bool() && *n == 0 {
+			smoothOn = false
+		}
+	}
+	fr.Call1(sy.cfRelease, v)
+}
+
+const prefKey = "AppleFontSmoothing"
 
 // AtlasGeneration changes when the atlas is reset because it is full: every
 // page is then cleared and all GlyphEntries are stale.
 func (s *System) AtlasGeneration() uint32 { return s.atlas.gen }
 
-func (s *System) rasterize(face FaceID, gid uint16, sub uint8) GlyphEntry {
+// rasterize draws one glyph at quarter-pixel offset sub and, for outline
+// glyphs, with font-smoothing level smooth (SmoothLevel; 0 is none).
+func (s *System) rasterize(face FaceID, gid uint16, sub, smooth uint8) GlyphEntry {
 	pool := s.poolPush()
 	defer s.poolPop(pool)
 	fc := &s.faces[face]
@@ -644,7 +752,10 @@ func (s *System) rasterize(face FaceID, gid uint16, sub uint8) GlyphEntry {
 	s.fr.Reset().SetIndirectResult(unsafe.Pointer(&s.ret[0])).Arg(fc.font).Arg32(0).
 		ArgPtr(unsafe.Pointer(&s.gid[0])).ArgPtr(unsafe.Pointer(&s.rect[0])).Arg(1).
 		Call(sy.ctFontGetBoundingRectsForGlyphs)
-	bx, by, bw, bh := s.rect[0], s.rect[1], s.rect[2], s.rect[3]
+	// The face is point-sized and drawn through a scale CTM: the bounds in
+	// pixels are the point bounds times the scale.
+	sc := float64(fc.scale)
+	bx, by, bw, bh := s.rect[0]*sc, s.rect[1]*sc, s.rect[2]*sc, s.rect[3]*sc
 	if !(bw > 0 && bh > 0) || bw > PageSize || bh > PageSize || math.IsNaN(bx+by) {
 		return GlyphEntry{}
 	}
@@ -666,11 +777,20 @@ func (s *System) rasterize(face FaceID, gid uint16, sub uint8) GlyphEntry {
 	clear(bm.buf[:h*bm.stride])
 	// Bitmap row 0 is the top of the context. The region of interest is the
 	// top h rows, i.e. CG y in [bm.h-h, bm.h]; the baseline sits -y0 above
-	// that region's bottom edge.
-	s.pt[0] = sx - float64(x0)
-	s.pt[1] = float64(bm.h-h) - float64(y0)
+	// that region's bottom edge. The pen is given in the scaled user space.
+	s.pt[0] = (sx - float64(x0)) / sc
+	s.pt[1] = (float64(bm.h-h) - float64(y0)) / sc
+	if !fc.color {
+		// An alpha-only context: the bitmap is the coverage whatever the fill,
+		// and the fill's grey selects the smoothing level's stem dilation.
+		s.fr.Reset().Arg(bm.ctx).ArgBool(smooth > 0).Call(sy.cgSetBool[shouldSmooth])
+		s.fr.Reset().Arg(bm.ctx).ArgF64(smoothGray[smooth]).ArgF64(1).Call(sy.cgContextSetGrayFillColor)
+	}
+	s.fr.Call1(sy.cgContextSaveGState, bm.ctx)
+	s.fr.Reset().Arg(bm.ctx).ArgF64(sc).ArgF64(sc).Call(sy.cgContextScaleCTM)
 	s.fr.Reset().Arg(fc.font).ArgPtr(unsafe.Pointer(&s.gid[0])).ArgPtr(unsafe.Pointer(&s.pt[0])).
 		Arg(1).Arg(bm.ctx).Call(sy.ctFontDrawGlyphs)
+	s.fr.Call1(sy.cgContextRestoreGState, bm.ctx)
 	pg, ax, ay, ok := s.atlas.alloc(fc.color, w, h)
 	if !ok {
 		return GlyphEntry{}
@@ -700,7 +820,7 @@ func (s *System) bitmapFor(color bool, w, h int) *bitmap {
 	for ch < h {
 		ch *= 2
 	}
-	bpp, info, csFn := 1, uint32(0), sy.cgColorSpaceCreateDeviceGray
+	bpp, info, csFn := 1, uint32(bitmapAlpha), sy.cgColorSpaceCreateDeviceGray
 	if color {
 		bpp, info, csFn = 4, bitmapAlphaPre, sy.cgColorSpaceCreateDeviceRGB
 	}
@@ -715,9 +835,6 @@ func (s *System) bitmapFor(color bool, w, h int) *bitmap {
 	}
 	for i := range ctxFlags {
 		s.fr.Reset().Arg(bm.ctx).ArgBool(ctxFlags[i].on).Call(sy.cgSetBool[i])
-	}
-	if !color {
-		s.fr.Reset().Arg(bm.ctx).ArgF64(1).ArgF64(1).Call(sy.cgContextSetGrayFillColor)
 	}
 	return bm
 }

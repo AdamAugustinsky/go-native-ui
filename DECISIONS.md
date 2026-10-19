@@ -785,11 +785,17 @@ The whole UI is rewritten in Go on the framework with the Rex design system, mac
 
 ## D38. Text at the point size (phase 6, 2026-10-18)
 
-**Decision.** Fonts are created at the point size and rasterised with a context scaled by the backing scale; the glyph-cache key changes accordingly, and rexlook's text metrics are refit with rexcompare as the gate.
+**Decision.** Fonts are created at the point size, shaped and laid out there, and rasterised through a context scaled by the backing scale; metrics, pen positions and advances are CoreText's points times the scale. Faces carry their scale, so the glyph-cache key is a face at one scale, a glyph and a variant. Glyphs are rasterised with AppKit's font smoothing, which text can opt out of. rexlook's text metrics needed no refit: rexcompare stays 40/40 (its terminal text is monospace, whose advance does not change).
 
-**Evidence:** the advance per em at 13 pt is 14.28 in AppKit and 13.49 for us at 2× (`docs/design/native-audit.md`, problem 1). GPUI does it this way (`gpui_apple/src/text_system.rs:489-526`).
+**Evidence:**
+- **Point size.** The advance per em at 13 pt is 14.28 in AppKit and was 13.49 for us at 2× (`docs/design/native-audit.md`, problem 1): SF's 26 pt optical size and tracking. Now it equals `NSFont`'s within 0.05 % at 9–26 pt, at 1× and 2× (`text/opsz_darwin_test.go`). GPUI does it this way (`gpui_apple/src/text_system.rs:489-526`).
+- **The cascade.** Pinning `opsz` (`kCTFontOpticalSizeAttribute`) on a pixel-sized font fixes SF but not the fallback fonts CoreText picks: at 13 pt and 2×, Arabic, Hebrew, CJK and emoji runs stayed 1.8–14 % narrower than AppKit's. Point-sized fonts get the point-sized fallbacks.
+- **Smoothing.** The condition this entry set, a GnuiShot capture of AppKit text beside ours showing a weight difference, was met with an AppKit `NSTextField` label (the hosted `NSTextView` of N4 does not exist yet) on the MacBook, macOS 27.2: 13 pt SF at 2× has stems of 2.58 px for dark text and 2.91 px for light text in AppKit, and had 2.23 px for both in ours. They are now 2.57 and 2.91. This revisits D21's "slightly bolder text is not needed" on that evidence; rexlook's terminal panes keep their weight (the opt-out).
 
-**Constraints:** AppKit's font-smoothing dilation stays off unless a GnuiShot capture of the hosted `NSTextView` (N4) beside our text shows a weight difference. This revisits D21's "slightly bolder text is not needed" only on that evidence. (Another branch, `p6-textopsz`, works on this subject; the user reconciles the entries at merge.)
+**How:**
+- **Smoothing bands.** CoreGraphics picks one of four dilations from the fill colour's linear luminance Y: below 1/8, below 3/8, below 5/8, and above (found by scanning grey and RGB fills). `text.SmoothLevel(rgba)` returns the band as 1–4, or 0 when the user set `AppleFontSmoothing` to 0. A glyph is drawn into an alpha-only context in the grey at the middle of its band, so the bitmap is still coverage and the renderer still applies the colour.
+- **`GlyphVariant` bits.** `Glyph`'s `sub` argument holds the quarter-pixel offset in bits 0–1 and the smoothing level in bits 2–4 (`text.GlyphVariant`). A glyph has at most four smoothed bitmaps, one or two per theme in practice. Colour glyphs ignore the level; the Windows and Linux backends mask it off.
+- **The opt-out.** `ui.NoFontSmoothing` on a text box draws its glyphs at level 0. It is a box flag because `ui` is where the run's colour, and so its level, is known; a font role would split the shared faces and the glyph key for one rasterisation choice. `widget` and `rexui` pass it like any other `ui` flag. rexlook's terminal panes use it, as Ghostty draws without thickening by default (`font-thicken`); their pixels are those of d32d248.
 
 ## D39. Design tokens v2 (phase 6, 2026-10-18)
 

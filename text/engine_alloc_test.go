@@ -69,11 +69,26 @@ func warmEngine(s *goSystem, fonts []FontKey) {
 }
 
 // measure runs fn in several windows and returns the smallest Mallocs and
-// TotalAlloc deltas.
+// TotalAlloc deltas. The counters are process-wide and the runtime sometimes
+// allocates on another P during a window (a one-off of its own: the stray
+// count vanishes with GOMAXPROCS=1), while an allocation of fn's recurs in
+// every window; so the smallest delta is fn's, the rule of the bench gate
+// (D27).
 func measure(t *testing.T, windows int, fn func()) (mallocs, bytes uint64) {
+	t.Helper()
+	return measurePrepared(t, windows, nil, fn)
+}
+
+// measurePrepared is measure with prepare run, unmeasured, before each
+// window: for work that changes the state it measures (a glyph miss is a hit
+// the second time), prepare rebuilds the state fn starts from.
+func measurePrepared(t *testing.T, windows int, prepare, fn func()) (mallocs, bytes uint64) {
 	t.Helper()
 	mallocs, bytes = ^uint64(0), ^uint64(0)
 	for w := 0; w < windows; w++ {
+		if prepare != nil {
+			prepare()
+		}
 		runtime.GC()
 		var m0, m1 runtime.MemStats
 		runtime.ReadMemStats(&m0)
