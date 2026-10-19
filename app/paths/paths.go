@@ -85,9 +85,11 @@ func ValidID(id string) bool {
 	if i := strings.IndexByte(base, '.'); i >= 0 {
 		base = base[:i]
 	}
+	base = strings.TrimRight(base, " ") // "CON .txt" is the device too
 	switch base {
 	case "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
-		"LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9":
+		"LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+		"COM\u00b9", "COM\u00b2", "COM\u00b3", "LPT\u00b9", "LPT\u00b2", "LPT\u00b3": // superscript digits are device names too
 		return false
 	}
 	return true
@@ -114,27 +116,27 @@ func resolve(goos string, env func(string) string, k kind, id string) (string, e
 		}
 		return path.Join(lib, "Application Support", id), nil
 	case "windows":
-		roaming, local := env("APPDATA"), env("LOCALAPPDATA")
-		if home := env("USERPROFILE"); home != "" {
-			if roaming == "" {
-				roaming = home + `\AppData\Roaming`
-			}
-			if local == "" {
-				local = home + `\AppData\Local`
-			}
+		// Each kind needs one base directory; only that one is looked up, and
+		// USERPROFILE is read only when the variable for it is missing.
+		name, rel := "LOCALAPPDATA", `\AppData\Local`
+		if k == kindConfig {
+			name, rel = "APPDATA", `\AppData\Roaming`
 		}
-		if roaming == "" || local == "" {
-			return "", ErrNoHome
+		base := env(name)
+		if base == "" {
+			home := env("USERPROFILE")
+			if home == "" {
+				return "", ErrNoHome
+			}
+			base = strings.TrimRight(home, `\/`) + rel
 		}
 		switch k {
-		case kindConfig:
-			return winJoin(roaming, id), nil
-		case kindData:
-			return winJoin(local, id), nil
+		case kindConfig, kindData:
+			return winJoin(base, id), nil
 		case kindCache:
-			return winJoin(local, id, "Cache"), nil
+			return winJoin(base, id, "Cache"), nil
 		}
-		return winJoin(local, id, "Logs"), nil
+		return winJoin(base, id, "Logs"), nil
 	default: // linux, the BSDs: XDG
 		base := func(xdg, rel string) (string, error) {
 			if d := env(xdg); strings.HasPrefix(d, "/") {

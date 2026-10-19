@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -65,7 +66,7 @@ func TestNoHome(t *testing.T) {
 func TestValidID(t *testing.T) {
 	good := []string{"dev.gonativeui.zapfast", "a", "My App", "app-1_x", "com.example.app.dev", "console.app"}
 	bad := []string{"", ".", "..", ".hidden", "a/b", `a\b`, "a:b", "a*", "a?", `a"b`, "a<b", "a|b", "a\x00b", "a\nb", "trailing.", "trailing ",
-		" leading", "CON", "nul", "Com1", "lpt9.txt", "../x", string(make([]byte, 129))}
+		" leading", "CON", "nul", "Com1", "lpt9.txt", "COM\u00b9", "com\u00b2.log", "LPT\u00b3", "lpt\u00b9.txt", "CON .txt", "../x", string(make([]byte, 129))}
 	for _, id := range good {
 		if !ValidID(id) {
 			t.Errorf("%q rejected", id)
@@ -117,5 +118,36 @@ func TestHostFunctionsAndEnsure(t *testing.T) {
 		if _, err := Ensure(dir); err != nil {
 			t.Errorf("Ensure twice: %v", err)
 		}
+	}
+}
+
+// Windows needs only the base directory of the kind asked for: Config wants
+// APPDATA, the rest LOCALAPPDATA, with USERPROFILE as the fallback for the one
+// that is missing. An unrelated variable being absent is no reason to fail.
+func TestWindowsAsksOnlyForWhatItNeeds(t *testing.T) {
+	const id = "a.b"
+	roamingOnly := envOf(map[string]string{"APPDATA": `C:\R`})
+	localOnly := envOf(map[string]string{"LOCALAPPDATA": `C:\L`})
+	if got, err := resolve("windows", roamingOnly, kindConfig, id); err != nil || got != `C:\R\a.b` {
+		t.Errorf("Config with only APPDATA: %q %v", got, err)
+	}
+	for _, k := range []kind{kindData, kindCache, kindLogs} {
+		if _, err := resolve("windows", roamingOnly, k, id); !errors.Is(err, ErrNoHome) {
+			t.Errorf("kind %d with only APPDATA: %v, want ErrNoHome", k, err)
+		}
+		if got, err := resolve("windows", localOnly, k, id); err != nil || !strings.HasPrefix(got, `C:\L\a.b`) {
+			t.Errorf("kind %d with only LOCALAPPDATA: %q %v", k, got, err)
+		}
+	}
+	if _, err := resolve("windows", localOnly, kindConfig, id); !errors.Is(err, ErrNoHome) {
+		t.Errorf("Config with only LOCALAPPDATA: %v, want ErrNoHome", err)
+	}
+	// USERPROFILE fills in only the missing one.
+	mixed := envOf(map[string]string{"APPDATA": `D:\Roam`, "USERPROFILE": `C:\Users\z`})
+	if got, _ := resolve("windows", mixed, kindConfig, id); got != `D:\Roam\a.b` {
+		t.Errorf("Config: %q", got)
+	}
+	if got, _ := resolve("windows", mixed, kindData, id); got != `C:\Users\z\AppData\Local\a.b` {
+		t.Errorf("Data: %q", got)
 	}
 }
