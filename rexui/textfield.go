@@ -43,7 +43,9 @@ type FieldRecipe struct {
 	// #D9D9D9 over white and #323232 over #1E1E1E measured; no role names it).
 	Border  Tint
 	BorderW float32
-	// Text, Placeholder and TextDisabled colour the text.
+	// Text, Placeholder and TextDisabled colour the text. An editable
+	// field's text is controlTextColor, which is labelColor (#212121 over
+	// white and #E1E1E1 over the dark field measured live), not textColor.
 	Text, Placeholder, TextDisabled Tint
 	// InsetX is the distance from the frame's edges to the text, in points.
 	InsetX float32
@@ -53,7 +55,7 @@ type FieldRecipe struct {
 var FieldLook = FieldRecipe{
 	Fill:   Of(theme.InputFill),
 	Border: OfAlpha(theme.Label, 0.15, 0.09), BorderW: 1,
-	Text: Of(theme.Text), Placeholder: Of(theme.Placeholder), TextDisabled: Of(theme.TextDisabled),
+	Text: Of(theme.Label), Placeholder: Of(theme.Placeholder), TextDisabled: Of(theme.TextDisabled),
 	InsetX: 6,
 }
 
