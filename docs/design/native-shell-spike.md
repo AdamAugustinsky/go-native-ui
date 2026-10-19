@@ -188,6 +188,14 @@ loop from Build does the same; an animated `zoom:` inside a nested
   explicit retains, so no pool token outlives either call.
 - `drawFrame` drains the app code's autoreleases in a pool whose token is a
   local variable.
+- `Surface.Present` and `Resize` drain pools of their own, since their
+  callers may hold none (`cmd/spike` presents outside `Wait`'s pool).
+  Without this, `Present`'s autoreleased render encoder was never released.
+- A panic in Build no longer leaves the frame half done. A `defer` in
+  `drawFrame` calls `Surface.AbandonFrame`, which releases the drawable and
+  the uncommitted command buffer. It also drains the frame's pool and clears
+  `inFrame`, so after a recovered panic the frame handler is not refused
+  and the loop draws on.
 
 **The tests** run in a child process, so a crash fails the test:
 
@@ -195,10 +203,26 @@ loop from Build does the same; an animated `zoom:` inside a nested
   `zoom:` in a nested run loop, both from Build. Without the fix, both
   crash.
 - `TestGreenButtonFullScreen` clicks the green button from the run loop,
-  into full screen and back, with frames drawn during both animations.
+  into full screen and back. It follows the window's four full-screen
+  notifications, and checks that no full-screen style bit is left after
+  the exit. It also counts the frames that the frame handler presents
+  between each will/did pair.
+  - On the MacBook, the handler presents 1 of the 4 frames drawn during
+    each animation: the frame at the new size, in the resize's
+    transaction.
+  - With the platform's handler calls disabled, both counts are 0 and the
+    test fails.
+  - The test skips when the window is not visible. Under a locked screen,
+    AppKit never posts `windowDidEnterFullScreen`.
 - `TestFrameDrawablesBounded` checks over 600 frames that drawables are
   released, a frame makes no Go allocations, and the leak counters stay
-  level.
+  level. It also checks that `Present`, called with no pool of the
+  caller's, releases its render encoders: none of 100 is left alive, where
+  without `Present`'s pool all of them were.
+- `TestBuildPanicRecovered` recovers a panic raised in Build. It then
+  checks that the frame was abandoned, that the frame handler is not
+  refused, and that the loop draws 10 more frames. It fails without the
+  `defer`.
 
 The spike's first report called it an "out-of-order pop", which was wrong.
 The deferred `DebugToggleFullScreen` hook is no longer needed, but it is

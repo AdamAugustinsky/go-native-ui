@@ -128,6 +128,7 @@ func (a *App) drawFrame(inHandler bool, passes int) bool {
 	// (macOS). The token lives on this stack, not in shared state: a nested
 	// run loop that the app's code runs nests its own pools inside this one.
 	pool := framePoolPush()
+	defer a.abandonFrame(pool) // a panic before EndFrame: nothing stays held
 	m.start = platform.Now()
 	if metered {
 		m.cpu1 = sysinfo.ThreadCPUNs()
@@ -180,4 +181,17 @@ func (a *App) drawFrame(inHandler bool, passes int) bool {
 		}
 	}
 	return true
+}
+
+// abandonFrame is drawFrame's cleanup when the frame did not reach EndFrame
+// (a panic in Build, recovered further up): it releases the frame's drawable
+// and command buffer, drains its pool and ends the frame, so the loop and
+// the frame handler can draw again. After a presented frame it does nothing.
+func (a *App) abandonFrame(pool uintptr) {
+	if !a.inFrame {
+		return
+	}
+	a.inFrame = false
+	abandonSurfaceFrame(a.Surf, &a.fr)
+	framePoolPop(pool)
 }

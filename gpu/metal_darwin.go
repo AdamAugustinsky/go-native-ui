@@ -133,6 +133,8 @@ func (s *Surface) Resize(w, h int32, scale float32) {
 	if w <= 0 || h <= 0 {
 		return
 	}
+	pool := objc.F.Call0(objc.PoolPush) // the caller may hold no pool
+	defer objc.F.Call1(objc.PoolPop, pool)
 	objc.F.Reset().Arg(uintptr(s.layer)).Arg(uintptr(selSetScale)).ArgF64(float64(scale)).Call(objc.MsgSend)
 	objc.F.Reset().Arg(uintptr(s.layer)).Arg(uintptr(selSetDrawableSize)).ArgPoint(float64(w), float64(h)).Call(objc.MsgSend)
 	s.w, s.h = int(w), int(h)
@@ -276,9 +278,29 @@ func (s *Surface) EndFrame(f *Frame) {
 	*f = Frame{}
 }
 
+// AbandonFrame gives up a frame that BeginFrame began, without presenting
+// it (a panic in the middle of the frame): it releases the drawable and the
+// uncommitted command buffer, and resets the Frame. A reset Frame is left
+// alone.
+func (s *Surface) AbandonFrame(f *Frame) {
+	if f.CmdBuf != 0 {
+		objc.Send(objc.ID(f.CmdBuf), selRelease)
+	}
+	if f.drawable != 0 {
+		objc.Send(f.drawable, selRelease)
+	}
+	*f = Frame{}
+}
+
+// testPresentEncoder, set by tests, sees the render encoder of each Present.
+var testPresentEncoder func(objc.ID)
+
 // Present clears the next drawable to the colour and presents it. It
-// returns false if no drawable was available (see BeginFrame).
+// returns false if no drawable was available (see BeginFrame). It drains
+// what it autoreleases: the caller may hold no pool.
 func (s *Surface) Present(r, g, b, a float32) bool {
+	pool := objc.F.Call0(objc.PoolPush)
+	defer objc.F.Call1(objc.PoolPop, pool)
 	f := &s.frame
 	if !s.BeginFrame(f) {
 		return false
@@ -287,7 +309,11 @@ func (s *Surface) Present(r, g, b, a float32) bool {
 	// MTLClearColor is 4 doubles: an HFA on arm64, MEMORY class on amd64 (ArgRect handles both).
 	objc.F.Reset().Arg(uintptr(s.color0)).Arg(uintptr(selSetClearColor)).
 		ArgRect(float64(r), float64(g), float64(b), float64(a)).Call(objc.MsgSend)
-	objc.Send(objc.Send1(objc.ID(f.CmdBuf), selRenderEncoder, uintptr(s.rpd)), selEndEncoding)
+	enc := objc.Send1(objc.ID(f.CmdBuf), selRenderEncoder, uintptr(s.rpd)) // autoreleased
+	objc.Send(enc, selEndEncoding)
+	if testPresentEncoder != nil {
+		testPresentEncoder(enc)
+	}
 	objc.Send1(s.color0, selSetTexture, 0)
 	s.EndFrame(f)
 	return true
