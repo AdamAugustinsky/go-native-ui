@@ -307,3 +307,7 @@ func (f *portalFollower) publish(c uint64) {
 		Wake()
 	}
 }
+
+// ReadSystemValues reports nothing on Linux (see appearance.go): the theme's
+// own values apply (D34).
+func ReadSystemValues(dst *SystemValues) { *dst = SystemValues{} }
