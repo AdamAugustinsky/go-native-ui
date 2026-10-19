@@ -43,7 +43,7 @@ var (
 	fnDataCreate, fnDataLen, fnDataBytes                                      uintptr
 	fnDictCreate, fnDictSet                                                   uintptr
 	fnArrayCreate, fnArrayLen, fnArrayAt                                      uintptr
-	fnURLFromFS                                                               uintptr
+	fnURLFromFS, fnURLFromString                                              uintptr
 	fnGetClass, fnSelReg, fnMsgSend, fnPoolPush, fnPoolPop                    uintptr
 	keyCallbacks, valueCallbacks                                              uintptr
 	cfLib                                                                     uintptr
@@ -88,7 +88,7 @@ func Init() error {
 		fnDataCreate, fnDataLen, fnDataBytes = sym(cfLib, "CFDataCreate"), sym(cfLib, "CFDataGetLength"), sym(cfLib, "CFDataGetBytePtr")
 		fnDictCreate, fnDictSet = sym(cfLib, "CFDictionaryCreateMutable"), sym(cfLib, "CFDictionarySetValue")
 		fnArrayCreate, fnArrayLen, fnArrayAt = sym(cfLib, "CFArrayCreate"), sym(cfLib, "CFArrayGetCount"), sym(cfLib, "CFArrayGetValueAtIndex")
-		fnURLFromFS = sym(cfLib, "CFURLCreateFromFileSystemRepresentation")
+		fnURLFromFS, fnURLFromString = sym(cfLib, "CFURLCreateFromFileSystemRepresentation"), sym(cfLib, "CFURLCreateWithString")
 		keyCallbacks, valueCallbacks = sym(cfLib, "kCFTypeDictionaryKeyCallBacks"), sym(cfLib, "kCFTypeDictionaryValueCallBacks")
 		fnGetClass, fnSelReg = sym(objc, "objc_getClass"), sym(objc, "sel_registerName")
 		fnMsgSend = sym(objc, "objc_msgSend")
@@ -250,6 +250,18 @@ func FileURL(fr *ffi.Frame, path string, dir bool) uintptr {
 	b := heapBytes(path)
 	r := fr.Reset().Arg(0).ArgPtr(unsafe.Pointer(&b[0])).Arg(uintptr(len(path))).ArgBool(dir).Call(fnURLFromFS).R0()
 	runtime.KeepAlive(b)
+	return r
+}
+
+// URL makes a CFURL (owned) from the text of a URL; 0 when it is not a valid
+// URL.
+func URL(fr *ffi.Frame, s string) uintptr {
+	cs := String(fr, s)
+	if cs == 0 {
+		return 0
+	}
+	r := fr.Reset().Arg(0).Arg(cs).Arg(0).Call(fnURLFromString).R0()
+	CFRelease(fr, cs)
 	return r
 }
 
