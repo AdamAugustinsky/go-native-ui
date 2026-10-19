@@ -313,11 +313,21 @@ func (r *Resolved) applyRoles() {
 }
 
 // Material is how material m shows: Native is false under Reduce
-// Transparency and on systems without the material.
+// Transparency and on systems without the material, and under Reduce
+// Transparency a fill whose colour is translucent (Rex's drawn glass) is the
+// material's opaque Solid role instead.
 func (r *Resolved) Material(m Material) MaterialSpec {
 	s := r.materials[m]
 	if s.Native && (r.Settings.ReduceTransparency || !nativeMaterials) {
 		s.Native = false
+	}
+	if r.Settings.ReduceTransparency {
+		if r.Colors[s.Fill]&0xFF != 0xFF {
+			s.Fill = s.Solid
+		}
+		if r.Colors[s.FillInactive]&0xFF != 0xFF {
+			s.FillInactive = s.Solid
+		}
 	}
 	return s
 }

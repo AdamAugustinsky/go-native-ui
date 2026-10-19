@@ -20,13 +20,20 @@ const (
 )
 
 // ShadowLayer is one drop shadow: offset down and Gaussian sigma in points
-// (pixels once resolved), and its alpha in light and dark, which multiplies
-// the Shadow role's colour.
+// (pixels once resolved), and its final opacity in light and dark. The
+// shadow is cast in the Shadow role's RGB at that opacity; the role's own
+// alpha is not applied on top (Color).
 type ShadowLayer struct {
 	// Y is the downward offset and Blur the sigma.
 	Y, Blur float32
-	// Alpha is the shadow's opacity in light (0) and dark (1).
+	// Alpha is the shadow's final opacity in light (0) and dark (1).
 	Alpha [2]float32
+}
+
+// Color is the layer's colour at the light/dark mix t: the RGB of shadow
+// (Resolved.Colors[Shadow]) at the layer's opacity mixed by t.
+func (l ShadowLayer) Color(shadow uint32, t float32) uint32 {
+	return ColA(shadow>>8, Lerp(l.Alpha[0], l.Alpha[1], Clamp01(t)))
 }
 
 // ElevationSpec is one elevation.
@@ -103,9 +110,14 @@ type MaterialSpec struct {
 	// False on other systems, for drawn materials, and under Reduce
 	// Transparency.
 	Native bool
-	// Fill and FillInactive are the roles of the opaque fallback, in an
-	// active and an inactive window: what the app draws when Native is false.
+	// Fill and FillInactive are the roles of the fallback, in an active and
+	// an inactive window: what the app draws when Native is false. A drawn
+	// material may be translucent (Rex's glass); under Reduce Transparency
+	// Resolved.Material gives Solid instead of a translucent fill.
 	Fill, FillInactive Role
+	// Solid is the opaque fill that replaces a translucent Fill or
+	// FillInactive under Reduce Transparency.
+	Solid Role
 }
 
 // MacMaterials are the materials as macOS 27.2 shows them, with the measured
@@ -113,7 +125,7 @@ type MaterialSpec struct {
 var MacMaterials = [NumMaterials]MaterialSpec{
 	MatWindow:     {Fill: Window, FillInactive: Window},
 	MatField:      {Fill: Field, FillInactive: Field},
-	MatGlass:      {Fill: GlassTint, FillInactive: GlassTint},
+	MatGlass:      {Fill: GlassTint, FillInactive: GlassTint, Solid: Pane},
 	MatSidebar:    {Native: true, Fill: SidebarFill, FillInactive: SidebarFillInactive},
 	MatToolbar:    {Native: true, Fill: CapsuleFill, FillInactive: CapsuleFillInactive},
 	MatMenu:       {Native: true, Fill: Raised, FillInactive: Raised},

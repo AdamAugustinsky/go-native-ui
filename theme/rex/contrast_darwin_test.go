@@ -61,7 +61,7 @@ func readLiveAppearances(t *testing.T) []appearance {
 		t.Log("Increase Contrast is off here: the high-contrast appearances are not checked (AppKit makes them only from the setting)")
 	}
 	return []appearance{
-		{"light (" + kind + ")", rexRoles(theme.Light, &sys), &lightModel, sv.IncreaseContrast},
-		{"dark (" + kind + ")", rexRoles(theme.Dark, &sys), &darkModel, sv.IncreaseContrast},
+		{"light (" + kind + ")", rexRoles(theme.Light, &sys), appkitColors(theme.Light, &sys), &lightModel, sv.IncreaseContrast},
+		{"dark (" + kind + ")", rexRoles(theme.Dark, &sys), appkitColors(theme.Dark, &sys), &darkModel, sv.IncreaseContrast},
 	}
 }

@@ -16,14 +16,15 @@ import (
 //     background it is used on, Rex's field and glass included.
 //   - Secondary, tertiary and quaternary text and placeholders are at least
 //     AppKit's own composited contrast for the role in the same appearance.
-//     The plan names AppKit's contrast on windowBackgroundColor; AppKit itself
-//     sets these roles on surfaces darker than its window (light Label2 is
-//     3.95:1 on the window, 3.84:1 on the sidebar, 3.89:1 on a stripe), so
-//     the floor is the weakest of AppKit's own pairs: the window, the group
-//     box, the stripe, the sidebar, the toolbar capsule and the text field.
-//     This floor is AppKit's, not a ratio of ours. Rex's own backgrounds
-//     (the pane, the raised surface and the unfocused glass) are held to it,
-//     less one 8-bit step (quantum).
+//     AppKit itself sets these roles on surfaces darker than its window
+//     (light Label2 is 3.95:1 on the window, 3.84:1 on the sidebar, 3.89:1
+//     on a stripe), so the floor is the weakest of AppKit's own pairs (D39):
+//     the window, the group box, the stripe, the sidebar, the toolbar capsule
+//     and the text field. It is computed only from colours measured from
+//     AppKit (the system's, live or measured, and theme.Measured's chrome
+//     colours from D0), never from Rex's roles (appkitColors, floorSurfaces).
+//     Rex's own backgrounds (the pane, the raised surface and the unfocused
+//     glass) are held to it, less one 8-bit step (quantum).
 //   - White on the accent and on accent selections is AppKit's rule (D39)
 //     and is reported, not held to 4.5:1: the user picks the accent.
 //   - Secondary roles are not paired with the bare field: light Label2 on it
@@ -38,13 +39,57 @@ import (
 // in a background moves a contrast by up to about 0.5 %.
 const quantum = 0.005
 
-// appearance is one appearance's resolved Rex roles and the field it is drawn
-// over.
+// appearance is one appearance: Rex's resolved roles, AppKit's colours, and
+// the field Rex draws over.
 type appearance struct {
 	name  string
-	c     theme.Colors
+	c     theme.Colors // Rex's roles
+	ak    theme.Colors // AppKit's: the floor is computed from these only
 	model *model
 	hc    bool
+}
+
+// appkitColors are AppKit's colours in mode m: theme.Measured (the system
+// colours and the window-chrome colours measured from live AppKit windows,
+// D0), with the system's own colours sys in the System roles when given. No
+// Rex role enters.
+func appkitColors(m theme.Mode, sys *theme.SystemValues) theme.Colors {
+	c := theme.Measured[m]
+	if sys != nil && sys.Known {
+		for i, v := range sys.Colors[m] {
+			if v != 0 {
+				c[i] = v
+			}
+		}
+	}
+	return c
+}
+
+// rexIdentity are the roles Rex defines itself (rex.go, roles.go): none of
+// them may enter the floor.
+var rexIdentity = map[theme.Role]bool{
+	theme.Field: true, theme.Pane: true, theme.Raised: true, theme.PaneHairline: true,
+	theme.PaneHighlight: true, theme.GlassTint: true, theme.Shadow: true, theme.Scrim: true,
+}
+
+// floorSurfaces are AppKit's own surfaces that it sets the secondary roles
+// on, each with what it lies on: System roles and D0-measured chrome only.
+var floorSurfaces = [][2]theme.Role{
+	{theme.Window, theme.Window}, {theme.GroupBox, theme.GroupBox}, {theme.AltRow, theme.Window},
+	{theme.SidebarFill, theme.SidebarFill}, {theme.CapsuleFill, theme.CapsuleFill}, {theme.InputFill, theme.Window},
+	{theme.ControlBackground, theme.ControlBackground}, {theme.TextBackground, theme.TextBackground},
+}
+
+// floor is the floor of role in a: AppKit's, from a.ak only.
+func (a *appearance) floor(role theme.Role) float64 { return appkitFloor(role, &a.ak) }
+
+// appkitFloor is AppKit's weakest own contrast for role in the colours ak.
+func appkitFloor(role theme.Role, ak *theme.Colors) float64 {
+	floor := 99.0
+	for _, g := range floorSurfaces {
+		floor = min(floor, theme.ContrastOn(ak[role], ak[g[0]], ak[g[1]]))
+	}
+	return floor
 }
 
 // liveAppearances returns the appearances read from the system; set on
@@ -64,8 +109,8 @@ func rexRoles(m theme.Mode, sys *theme.SystemValues) theme.Colors {
 
 func appearances(t *testing.T) []appearance {
 	out := []appearance{
-		{"light (measured)", rexRoles(theme.Light, nil), &lightModel, false},
-		{"dark (measured)", rexRoles(theme.Dark, nil), &darkModel, false},
+		{"light (measured)", rexRoles(theme.Light, nil), appkitColors(theme.Light, nil), &lightModel, false},
+		{"dark (measured)", rexRoles(theme.Dark, nil), appkitColors(theme.Dark, nil), &darkModel, false},
 	}
 	if liveAppearances != nil {
 		out = append(out, liveAppearances(t)...)
@@ -94,16 +139,10 @@ func samples(m *model) (field, glass []ground) {
 func TestContrastFloors(t *testing.T) {
 	for _, a := range appearances(t) {
 		t.Run(a.name, func(t *testing.T) {
-			c := &a.c
-			appkit := []ground{
-				{"Window", c[theme.Window], c[theme.Window]},
-				{"GroupBox", c[theme.GroupBox], c[theme.GroupBox]},
-				{"AltRow", c[theme.AltRow], c[theme.Window]},
-				{"SidebarFill", c[theme.SidebarFill], c[theme.SidebarFill]},
-				{"CapsuleFill", c[theme.CapsuleFill], c[theme.CapsuleFill]},
-				{"InputFill", c[theme.InputFill], c[theme.Window]},
-				{"ControlBackground", c[theme.ControlBackground], c[theme.ControlBackground]},
-				{"TextBackground", c[theme.TextBackground], c[theme.TextBackground]},
+			c, ak := &a.c, &a.ak
+			var appkit []ground
+			for _, g := range floorSurfaces {
+				appkit = append(appkit, ground{g[0].String(), ak[g[0]], ak[g[1]]})
 			}
 			field, glass := samples(a.model)
 			rex := append([]ground{
@@ -151,11 +190,8 @@ func TestContrastFloors(t *testing.T) {
 
 			// Secondary roles: AppKit's own floor, Rex's backgrounds held to it.
 			for _, role := range []theme.Role{theme.Label2, theme.Label3, theme.Label4, theme.Placeholder, theme.TextDisabled} {
-				onWindow := theme.ContrastOn(c[role], c[theme.Window], c[theme.Window])
-				floor := onWindow
-				for _, g := range appkit {
-					floor = min(floor, theme.ContrastOn(c[role], g.bg, g.under))
-				}
+				onWindow := theme.ContrastOn(ak[role], ak[theme.Window], ak[theme.Window])
+				floor := a.floor(role)
 				worst, at := 99.0, ""
 				for _, g := range rex {
 					if v := theme.ContrastOn(c[role], g.bg, g.under); v < worst {
@@ -173,5 +209,34 @@ func TestContrastFloors(t *testing.T) {
 					role, onWindow, floor, worst, at, fw)
 			}
 		})
+	}
+}
+
+// The floor comes from AppKit's colours alone: its surfaces are System roles
+// or D0-measured chrome, and Rex changing its own roles (here every surface
+// at once) does not move it.
+func TestContrastFloorIsAppKitsOnly(t *testing.T) {
+	for _, g := range floorSurfaces {
+		for _, r := range g {
+			if rexIdentity[r] {
+				t.Errorf("the floor uses Rex's own role %v", r)
+			}
+		}
+	}
+	for _, a := range appearances(t) {
+		rexDark := a
+		for i := range rexDark.c {
+			rexDark.c[i] = 0x000000FF
+		}
+		for _, role := range []theme.Role{theme.Label2, theme.Label3, theme.Placeholder} {
+			if f, g := a.floor(role), rexDark.floor(role); f != g {
+				t.Errorf("%s %v: the floor moved with Rex's roles (%.3f → %.3f)", a.name, role, f, g)
+			}
+			// The live or measured system colours are AppKit's: the roles
+			// Rex leaves to the system are the same in both arrays.
+			if a.c[role] != a.ak[role] {
+				t.Errorf("%s %v: Rex %08X, AppKit %08X", a.name, role, a.c[role], a.ak[role])
+			}
+		}
 	}
 }

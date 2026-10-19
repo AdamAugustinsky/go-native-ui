@@ -38,10 +38,12 @@ package platform
 // the light and the dark appearance (the high-contrast ones when Increase
 // Contrast is on), and the settings from NSWorkspace and NSScroller. It
 // reads only once the app follows the system appearance (SystemAppearance
-// has been called, which app.Run does before the first frame); before that,
-// and on Windows and Linux, dst.Known is false and the theme uses its own
-// values, so an offscreen render that pins a mode never depends on the
-// machine. The values are cached and read again after a change, which
+// has been called); before that, and on Windows and Linux, dst.Known is false
+// and the theme uses its own values. The app of a live window calls it on the
+// main thread and hands the values to its ui.Context (app.Run does when
+// AppearanceSerial changes); themes take them from there, never from here,
+// so an offscreen context on any thread keeps its own values. The values are
+// cached and read again after a change, which
 // bumps AppearanceSerial and calls Wake like any appearance change: the
 // colour, highlight, appearance, accessibility-display and scroller-style
 // notifications. The startup read is about 90 colours and well under a

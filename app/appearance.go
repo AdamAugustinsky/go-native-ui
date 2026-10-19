@@ -10,9 +10,20 @@ import (
 // every frame; a change wakes the loop (the platform calls Wake), and the
 // frame that follows reads it. The first frame reads it too, so it is drawn
 // in the system's mode.
+//
+// The system's colours and settings (D39) are read here too, on the main
+// thread, and only when the platform's serial changed since the last read;
+// the theme's Follower takes them from the context. An Offscreen app never
+// calls this, so its themes keep their own values.
 func (a *App) syncAppearance() {
 	s := platform.SystemAppearance()
 	a.UI.SetSystemAppearance(ui.Appearance{Dark: s.Dark, Accent: s.Accent, Known: s.Known})
+	serial := platform.AppearanceSerial() // before the read: a change during it is read next frame
+	if last, ok := a.UI.SystemValuesSerial(); !ok || last != serial {
+		var v platform.SystemValues
+		platform.ReadSystemValues(&v)
+		a.UI.SetSystemValues(serial, &v)
+	}
 }
 
 // chromeTarget is the part of platform.Window that syncChrome drives.

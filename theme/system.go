@@ -3,9 +3,11 @@ package theme
 import "gonativeui/platform"
 
 // SystemValues are what the system says about colours and accessibility: the
-// System roles' values in both modes and the Settings. The Follower reads it
-// from the platform (macOS) and hands it to the Resolved; tests and
-// offscreen renders pin one (Follower.PinSystem). It is pointer-free.
+// System roles' values in both modes and the Settings. The Follower takes
+// them from its window's context (ui.Context.SystemValues, which a live
+// window's app fills from the platform on macOS) and hands them to the
+// Resolved; tests and renders may pin them (Follower.PinSystem). It is
+// pointer-free.
 type SystemValues struct {
 	// Known is false when the system said nothing (not macOS, or the app
 	// does not follow the system appearance); the theme's values apply.
@@ -46,17 +48,16 @@ const (
 	ScrollerLegacy
 )
 
-// readSystem fills s from the platform: what platform.ReadSystemValues says.
-func readSystem(s *SystemValues, scratch *platform.SystemValues) {
-	platform.ReadSystemValues(scratch)
-	s.Known = scratch.Known
-	s.Colors[0] = scratch.Colors[0]
-	s.Colors[1] = scratch.Colors[1]
+// fromPlatform sets s to what the platform read (ui.Context.SystemValues).
+func (s *SystemValues) fromPlatform(v *platform.SystemValues) {
+	s.Known = v.Known
+	s.Colors[0] = v.Colors[0]
+	s.Colors[1] = v.Colors[1]
 	s.Settings = Settings{
-		ReduceMotion: scratch.ReduceMotion, ReduceTransparency: scratch.ReduceTransparency,
-		IncreaseContrast: scratch.IncreaseContrast,
+		ReduceMotion: v.ReduceMotion, ReduceTransparency: v.ReduceTransparency,
+		IncreaseContrast: v.IncreaseContrast,
 	}
-	if scratch.LegacyScrollers {
+	if v.LegacyScrollers {
 		s.Settings.Scroller = ScrollerLegacy
 	}
 }

@@ -92,11 +92,20 @@ func svSetup() {
 	svClsScroller = objc.Cls("NSScroller")
 }
 
+// svReads counts the reads from AppKit (SystemValuesReads).
+var svReads atomic.Uint32
+
+// SystemValuesReads counts the times ReadSystemValues has read the system's
+// values from AppKit (not from its cache), for tests that check who reads
+// them and on which thread.
+func SystemValuesReads() uint32 { return svReads.Load() }
+
 // refreshSystemValues re-reads the system values into svCur. The stale flag
 // is cleared first, so a change that lands while reading is not lost.
 func refreshSystemValues() {
 	svOnce.Do(svSetup)
 	svStale.Store(false)
+	svReads.Add(1)
 	var v SystemValues
 	pool := objc.F.Call0(objc.PoolPush)
 	if svWorkspace != 0 {
