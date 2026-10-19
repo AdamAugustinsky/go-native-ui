@@ -274,6 +274,10 @@ type Window struct {
 	compForm  compositionForm
 	candForm  candidateForm
 
+	// preciseUntil: wheel messages until then are a precision touchpad's
+	// (one of its deltas was not whole notches lately).
+	preciseUntil int64
+
 	// Syscall argument and result storage; kept in the heap-allocated Window
 	// so no pointer to a stack local ever reaches the OS.
 	msg msg
@@ -834,8 +838,20 @@ func wndProc(hwnd, m, wp, lp uintptr) uintptr {
 	case wmMouseWheel, wmMouseHWheel:
 		w.pt = point{loword(lp), hiword(lp)} // screen coordinates
 		win32.Call(pScreenToClient, hwnd, uintptr(unsafe.Pointer(&w.pt)))
-		delta := float32(hiword(wp)) / wheelDelta * wheelLinesPerNotch * wheelLogicalPerLine * w.scale
+		raw := hiword(wp)
+		delta := float32(raw) / wheelDelta * wheelLinesPerNotch * wheelLogicalPerLine * w.scale
 		e := Event{Kind: EvScroll, X: float32(w.pt.x), Y: float32(w.pt.y), Mods: currentMods(), Time: Now()}
+		// A precision touchpad sends pixel-sized deltas (not whole notches)
+		// and no gesture phases: its scrolling is precise but not elastic.
+		// A high-resolution (free-spinning) wheel sends fractions of a notch
+		// too and is treated the same: precise, applied at once, no glide.
+		if raw%wheelDelta != 0 {
+			w.preciseUntil = e.Time + 300e6
+		}
+		if e.Time < w.preciseUntil {
+			e.Flags = FlagPrecise
+		}
+		e.Flags |= FlagPos
 		if m == wmMouseWheel {
 			e.DY = delta // wheel forward = scroll up = content moves down
 		} else {

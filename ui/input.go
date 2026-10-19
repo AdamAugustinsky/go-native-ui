@@ -150,10 +150,16 @@ type Input struct {
 	// ScrollX, ScrollY: wheel/trackpad deltas this frame. Positive Y scrolls
 	// toward the start of the content (the view moves up), like AppKit and
 	// WM_MOUSEWHEEL. With Precise (trackpads) the deltas are pixels and are
-	// applied directly; otherwise they count wheel notches.
+	// applied directly; otherwise they count wheel notches. They are the sum
+	// of the frame's Scrolls, which ui reads.
 	ScrollX, ScrollY float32
 	Precise          bool
-	Mods             Mods
+	// Scrolls[:NScrolls] are the frame's scroll events in order, with their
+	// gesture phases (AddScroll, AddScrollEvent): ui latches, axis-locks and
+	// rubber-bands trackpad gestures from them.
+	Scrolls  [MaxScrolls]ScrollEvent
+	NScrolls int
+	Mods     Mods
 	// Keys[:NKeys] are this frame's key events; Text[:NText] is the UTF-8
 	// text typed this frame.
 	Keys  [MaxKeys]KeyEvent
@@ -306,11 +312,76 @@ func (in *Input) Cancel(b int) {
 	in.Cancelled[b] = true
 }
 
-// AddScroll accumulates a scroll event.
+// AddScroll accumulates a scroll event without a phase (a wheel, or precise
+// deltas from a device that reports no gesture): ScrollX, ScrollY and a
+// record in Scrolls.
 func (in *Input) AddScroll(dx, dy float32, precise bool) {
 	in.ScrollX += dx
 	in.ScrollY += dy
 	in.Precise = precise
+	in.AddScrollEvent(ScrollEvent{DX: dx, DY: dy, Precise: precise})
+}
+
+// AddScrollEvent appends e to Scrolls; it leaves ScrollX and ScrollY alone
+// (the caller keeps them). Events are kept one by one, so that how a stream
+// of them is split into frames does not change what they do (the axis a
+// gesture locks to, the momentum's velocity, the box each goes to). When
+// Scrolls is full, the earliest two consecutive events that can be merged
+// without changing what they do are (scrollMergeable), to make room; when no
+// two can, e is not kept and AddScrollEvent reports false (app keeps it for
+// the next frame instead).
+func (in *Input) AddScrollEvent(e ScrollEvent) bool {
+	if in.NScrolls == MaxScrolls {
+		i := 0
+		for i < in.NScrolls-1 && !scrollMergeable(&in.Scrolls[i], &in.Scrolls[i+1]) {
+			i++
+		}
+		if i == in.NScrolls-1 {
+			if !scrollMergeable(&in.Scrolls[i], &e) {
+				return false
+			}
+			mergeScroll(&in.Scrolls[i], &e)
+			return true
+		}
+		mergeScroll(&in.Scrolls[i], &in.Scrolls[i+1])
+		copy(in.Scrolls[i+1:in.NScrolls], in.Scrolls[i+2:in.NScrolls])
+		in.NScrolls--
+	}
+	in.Scrolls[in.NScrolls] = e
+	in.NScrolls++
+	return true
+}
+
+// scrollMergeable reports whether consecutive events a and b do as one event
+// what they do one after the other: the same stage of one gesture (the
+// fingers moving, the momentum moving) or both plain scrolling at the same
+// point (so to the same box), from the same kind of device, in the same
+// direction on each axis (so that the axis lock and the clamping at the
+// edges see the same thing). Only the velocity of a merged momentum is an
+// average.
+func scrollMergeable(a, b *ScrollEvent) bool {
+	if a.Phase != b.Phase || a.Momentum != b.Momentum || a.Precise != b.Precise || a.Inverted != b.Inverted ||
+		a.DX*b.DX < 0 || a.DY*b.DY < 0 {
+		return false
+	}
+	switch {
+	case a.Phase == PhaseChanged || a.Phase == PhaseStationary:
+		return a.Momentum == PhaseNone
+	case a.Phase == PhaseNone && a.Momentum == PhaseChanged:
+		return true
+	case a.Phase == PhaseNone && a.Momentum == PhaseNone:
+		return a.Pos == b.Pos && a.X == b.X && a.Y == b.Y
+	}
+	return false
+}
+
+// mergeScroll adds b, the event after a, to a.
+func mergeScroll(a, b *ScrollEvent) {
+	a.DX += b.DX
+	a.DY += b.DY
+	if b.Time != 0 {
+		a.Time = b.Time
+	}
 }
 
 // PushKey queues a key event; it reports false if the frame's queue is full.
@@ -375,7 +446,7 @@ func (in *Input) ClearFrame() {
 	in.Released = [numButtons]bool{}
 	in.Cancelled = [numButtons]bool{}
 	in.Clicks = [numButtons]uint8{}
-	in.ScrollX, in.ScrollY = 0, 0
+	in.ScrollX, in.ScrollY, in.NScrolls = 0, 0, 0
 	in.NKeys, in.NText = 0, 0
 	in.CommitOff, in.CommitLen = 0, 0
 	in.FocusGained = false

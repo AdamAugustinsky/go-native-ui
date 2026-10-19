@@ -458,10 +458,13 @@ func (c *Context) semScroll() {
 			if sc.flags&scrollMask == 0 {
 				continue
 			}
-			x, y := float32(sc.scroll[0])-sc.rect[0], float32(sc.scroll[1])-sc.rect[1]
+			// The rectangles are as shown: at the offset plus a trackpad's
+			// stretch (layout), which the content coordinates take back.
+			ox, oy := sc.scroll[0]+c.stretchOf(sc, 0), sc.scroll[1]+c.stretchOf(sc, 1)
+			x, y := float32(ox)-sc.rect[0], float32(oy)-sc.rect[1]
 			r := [4]float32{b.rect[0] + x, b.rect[1] + y, b.rect[2] + x, b.rect[3] + y}
 			if sc.axis == AxisFlow && sc.flow.rtl { // an RTL flow's x counts from its right edge (flow.go)
-				s := float32(sc.scroll[0])
+				s := float32(ox)
 				r[0], r[2] = sc.rect[2]-b.rect[2]+s, sc.rect[2]-b.rect[0]+s
 			}
 			c.ScrollIntoView(p, r)

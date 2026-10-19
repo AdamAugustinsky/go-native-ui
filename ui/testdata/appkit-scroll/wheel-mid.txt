@@ -1,0 +1,10 @@
+# wheel 3 lines × 5 down mid-document
+view 400 400
+doc 400 2000
+start 0 500
+ev 0 l none none 0 -3
+ev 30 l none none 0 -3
+ev 60 l none none 0 -3
+ev 90 l none none 0 -3
+ev 120 l none none 0 -3
+end 750

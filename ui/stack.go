@@ -136,12 +136,19 @@ func (c *Context) PopCursor() { c.sCursor.pop() }
 
 // NextImage sets the image DrawImage draws on the next box only.
 func (c *Context) NextImage(t gpu.TextureID, uv [4]float32, mode gpu.Mode) {
-	c.sImage.set(Image{t, uv, mode})
+	c.sImage.set(Image{Tex: t, UV: uv, Mode: mode})
 }
 
 // PushImage pushes the image DrawImage draws until PopImage.
 func (c *Context) PushImage(t gpu.TextureID, uv [4]float32, mode gpu.Mode) {
-	c.sImage.push(Image{t, uv, mode})
+	c.sImage.push(Image{Tex: t, UV: uv, Mode: mode})
+}
+
+// NextImageFit sets the premultiplied colour image DrawImage draws on the
+// next box only, placed in the box by fit with the box's corner radii (a
+// photo, an avatar; see ImageFit).
+func (c *Context) NextImageFit(t gpu.TextureID, uv [4]float32, fit ImageFit) {
+	c.sImage.set(Image{Tex: t, UV: uv, Mode: gpu.ModeRGBA, Fit: fit})
 }
 
 // PopImage pops the image pushed by PushImage.

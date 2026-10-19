@@ -131,6 +131,10 @@ jobs:
         run: |
           GNUI_FS_REPORT=$RUNNER_TEMP/fs-report.txt go test -count=1 $(go list $PKGS | grep -v -E "$PKGS_EXCLUDE")
           { echo '```'; cat $RUNNER_TEMP/fs-report.txt || true; echo '```'; } | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: public-API build (gnui_publicapi, DECISIONS.md D53)
+        run: |
+          go vet -tags gnui_publicapi $(go list ./... | grep -v -E "$PKGS_EXCLUDE")
+          go test -tags gnui_publicapi -count=1 ./platform ./app
       - name: test internal/ffi and clib (amd64 under Rosetta)
         run: |
           softwareupdate --install-rosetta --agree-to-license >/dev/null 2>&1 || true
@@ -174,6 +178,12 @@ jobs:
           go build -trimpath -ldflags="-s -w" -o bin/notes ./examples/notes
           ./bin/notes -bench -gate -allow-unpaced -timeout 150s | tee notes-macos.json
           { echo '```json'; cat notes-macos.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: imgbench (windowed image-grid bench with the allocation gate)
+        if: ${{ !cancelled() }}
+        run: |
+          go build -trimpath -ldflags="-s -w" -o bin/imgbench ./cmd/imgbench
+          ./bin/imgbench -bench -gate -allow-unpaced -timeout 150s | tee imgbench-macos.json
+          { echo '```json'; cat imgbench-macos.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - name: live resize (two draws per transaction must not starve the drawable pool)
         run: |
           go build -trimpath -ldflags="-s -w" -o bin/rexlook ./cmd/rexlook
