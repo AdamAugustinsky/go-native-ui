@@ -11,3 +11,6 @@
 /tools/appkitref/bin/
 /tools/gnuishot/bin/
 /tools/appkitscenes/bin/
+
+# gnui run: development bundles, logs
+.gnui/
