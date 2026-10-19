@@ -98,7 +98,14 @@ func NewSurface(n platform.Native, w, h int32, scale float32) (*Surface, error) 
 	objc.Send1(s.layer, selSetFBOnly, 1)
 	objc.Send1(s.layer, selSetMaxDrawables, 2)
 	objc.Send1(s.layer, selSetDisplaySync, 1)
-	objc.Send1(s.layer, selSetOpaque, 1)
+	// A window with a backdrop shows it through the layer wherever the app
+	// clears to alpha 0; the pipeline blends premultiplied, as Core
+	// Animation composites a non-opaque layer.
+	var opaque uintptr = 1
+	if n.Transparent {
+		opaque = 0
+	}
+	objc.Send1(s.layer, selSetOpaque, opaque)
 	// A frame that is not redrawn yet while the layer grows (live resize) must
 	// stay anchored at the top-left at its own size, never stretched.
 	objc.Send1(s.layer, selSetGravity, uintptr(objc.Str("topLeft")))

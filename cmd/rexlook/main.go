@@ -8,6 +8,7 @@
 //	                           follows while it runs (-mode system, the default; -mode light or dark forces
 //	                           one; a change crossfades); Esc or the close button quits
 //	rexlook -exit-first        print the startup timeline as JSON and exit once the first frame is on glass
+//	                           (with -v, also platform.Open's stages on stderr)
 //	rexlook -bench             scripted pointer run (hover across the tabs, focus switching, both dividers
 //	                           dragged back and forth): 1000 warm-up + 900 measured frames; print allocation,
 //	                           CPU split, pacing and latency as JSON
@@ -17,6 +18,11 @@
 //	                           allocating call stacks
 //	rexlook -live-resize-test  drag the window size through the frame handler (macOS) and print
 //	                           frame counts and allocations as JSON
+//	rexlook -idle 3s           show the window, let it settle for a second, then count the frames drawn while
+//	                           nothing happens for 3 s (an idle window presents nothing) and print them as JSON
+//	rexlook -pose press -pose-tab 1
+//	                           macOS: once settled, hover (or press and hold) a tab through the window's own
+//	                           event queue, for captures of those states
 //	rexlook -probe-titlebar    macOS: print which view AppKit's hit test finds in the titlebar band and
 //	                           how the drag map decides there, and exit
 //	rexlook -o out.png         render the initial state offscreen at 2114×1278 px (the reference
@@ -25,6 +31,13 @@
 //	                           given (-mode system renders what this machine says)
 //	rexlook -o out.png -o-dark dark.png
 //	                           render the light and the dark picture
+//	rexlook -o out.png -native render what the scene draws in the native shell (no field, no ⌘ and +)
+//
+// On macOS the window modes use the native shell (rex.NativeConfig,
+// experimental): a Liquid Glass backdrop where the field was and native ⌘ and
+// + buttons (borderless; -glass-buttons: Liquid Glass circles), with the
+// scene's own tabs in the titlebar band; -drawn uses the drawn field and
+// buttons instead. Other systems have no native shell and always draw them.
 package main
 
 import (
@@ -35,6 +48,7 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"gonativeui/app"
@@ -78,9 +92,20 @@ func main() {
 	resizeTest := flag.Bool("live-resize-test", false, "macOS: drag the window size through the frame handler and print the result as JSON")
 	probe := flag.Bool("probe-titlebar", false, "macOS: print the titlebar hit-test and drag-map probe as JSON and exit")
 	sites := flag.Bool("allocsites", false, "with -bench: profile every allocation and print the call stacks of those inside the measured frames")
+	drawn := flag.Bool("drawn", false, "macOS: draw the field and the ⌘ and + buttons instead of the native shell (backdrop and native buttons)")
+	glassButtons := flag.Bool("glass-buttons", false, "macOS: native ⌘ and + as Liquid Glass circles instead of borderless symbols")
+	native := flag.Bool("native", false, "with -o: render the native shell's content (no field, no ⌘ and +)")
+	pose := flag.String("pose", "", "macOS: hover or press: once settled, hover or press and hold tab -pose-tab through the window's own event queue; fullscreen: enter full screen, leave it 6 s later, quit 6 s after (for captures)")
+	poseTab := flag.Int("pose-tab", 1, "with -pose: the tab, from 0")
+	idle := flag.Duration("idle", 0, "show the window, wait a second, count the frames drawn over this long while nothing happens, print them as JSON and exit")
 	verbose := flag.Bool("v", false, "print the startup timeline to stderr; with -bench or in a window, also a state line every second while frames stop coming")
 	flag.Parse()
 
+	if *drawn {
+		config = rex.Config
+	} else if *glassButtons && runtime.GOOS == "darwin" {
+		config = func() app.Config { return rex.NativeConfig(true) }
+	}
 	pref, err := parseMode(*mode)
 	explicit := false
 	flag.Visit(func(f *flag.Flag) { explicit = explicit || f.Name == "mode" })
@@ -90,13 +115,17 @@ func main() {
 			if !explicit {
 				pref = theme.ForceLight // a picture is the same on every machine unless it is asked to follow this one
 			}
-			err = renderPNG(*out, *outDark, pref)
+			err = renderPNG(*out, *outDark, pref, *native)
 		case *bench:
 			err = runBench(pref, *gate, *allowUnpaced, *sites, *maxCPU, *timeout, *verbose)
 		case *resizeTest:
 			err = runResizeTest(pref)
 		case *probe:
 			err = runProbe()
+		case *pose != "":
+			err = runPose(pref, *pose, *poseTab)
+		case *idle > 0:
+			err = runIdle(pref, *idle)
 		default:
 			err = runWindow(pref, *exitFirst, *verbose)
 		}
@@ -147,8 +176,18 @@ func (b *builder) Build(c *ui.Context) {
 	b.Rex.Build(c)
 }
 
+// config is the window of the window modes: the native shell on macOS
+// (-drawn: the drawn one), the drawn one elsewhere.
+var config = rex.Config
+
+func init() {
+	if runtime.GOOS == "darwin" {
+		config = func() app.Config { return rex.NativeConfig(false) }
+	}
+}
+
 func runWindow(pref theme.Preference, exitFirst, verbose bool) error {
-	res, err := app.RunWith(rex.Config(), newBuilder(pref), app.RunOptions{ExitFirst: exitFirst, Verbose: verbose})
+	res, err := app.RunWith(config(), newBuilder(pref), app.RunOptions{ExitFirst: exitFirst, Verbose: verbose})
 	if err != nil {
 		return err
 	}
@@ -158,14 +197,65 @@ func runWindow(pref theme.Preference, exitFirst, verbose bool) error {
 		b, _ := json.MarshalIndent(res.Startup, "", "  ")
 		fmt.Fprintln(os.Stderr, string(b))
 	}
+	if verbose { // platform.Open's stages, as ms since its start and since the stage before
+		st := platform.OpenTimeline()
+		for i, s := range st {
+			prev := st[max(i-1, 0)].T
+			fmt.Fprintf(os.Stderr, "open %-20s %7.2f ms  +%.2f\n", s.Name, float64(s.T-st[0].T)/1e6, float64(s.T-prev)/1e6)
+		}
+	}
+	return nil
+}
+
+// idler counts the frames built during the idle window of -idle; a wake
+// after it ends the run.
+type idler struct {
+	*builder
+	start, end atomic.Int64 // platform.Now bounds of the idle window, set by the first frame
+	frames     int
+	done       bool
+}
+
+func (x *idler) Build(c *ui.Context) {
+	now := platform.Now()
+	switch {
+	case x.start.Load() == 0:
+		x.start.Store(now + int64(time.Second))
+	case x.end.Load() != 0 && now >= x.end.Load() && !x.done:
+		x.done = true
+		x.a.Quit()
+	case now >= x.start.Load() && x.end.Load() == 0:
+	case now >= x.start.Load() && !x.done:
+		x.frames++
+	}
+	x.builder.Build(c)
+}
+
+func runIdle(pref theme.Preference, d time.Duration) error {
+	x := &idler{builder: newBuilder(pref)}
+	go func() {
+		for x.start.Load() == 0 {
+			time.Sleep(10 * time.Millisecond)
+		}
+		x.end.Store(x.start.Load() + int64(d))
+		time.Sleep(time.Duration(x.end.Load() - platform.Now()))
+		platform.Wake()
+	}()
+	if _, err := app.RunWith(config(), x, app.RunOptions{}); err != nil {
+		return err
+	}
+	printJSON(struct {
+		IdleSeconds float64
+		IdleFrames  int
+	}{d.Seconds(), x.frames})
 	return nil
 }
 
 // renderPNG draws the initial state offscreen at the reference size and
 // writes it, with the layout metrics the compare tool checks; with dark, also
 // the dark mode into that file.
-func renderPNG(path, dark string, pref theme.Preference) error {
-	o := rex.ShotOptions{Width: refW, Height: refH, Scale: 2, Corners: true, Preference: pref}
+func renderPNG(path, dark string, pref theme.Preference, native bool) error {
+	o := rex.ShotOptions{Width: refW, Height: refH, Scale: 2, Corners: true, Preference: pref, Native: native}
 	if pref == theme.System { // an offscreen window has no system: ask this machine
 		a := platform.SystemAppearance()
 		o.System = ui.Appearance{Dark: a.Dark, Accent: a.Accent, Known: a.Known}
@@ -203,7 +293,7 @@ func runBench(pref theme.Preference, gate, allowUnpaced, sites bool, maxCPU floa
 	if sites {
 		opt.WindowStart, opt.WindowEnd = as.start, as.end
 	}
-	br, err := app.RunBench(rex.Config(), rex.NewBench(x), opt)
+	br, err := app.RunBench(config(), rex.NewBench(x), opt)
 	if err != nil {
 		return err
 	}
@@ -239,7 +329,7 @@ func gateFailures(r report, allowUnpaced bool, maxCPU float64) []string {
 
 // runResizeTest drags the window through 150 sizes, like a user dragging an edge.
 func runResizeTest(pref theme.Preference) error {
-	cfg := rex.Config()
+	cfg := config()
 	var sizes [][2]float64
 	for i := 0; i < 150; i++ {
 		f := float64(i) / 149

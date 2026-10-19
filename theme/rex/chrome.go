@@ -32,15 +32,35 @@ func (ch *chrome) ensure(c *ui.Context, r *theme.Resolved) {
 	ch.fld.Build(w, h, r.Scale/2, r.T)
 }
 
+// The scrim over a backdrop (Background): the light field's pastel and the
+// dark window's grey, and how much of them covers the material.
+const (
+	scrimLight, scrimDark           = 0xF5EEF5, 0x1E1F2A
+	scrimAlphaLight, scrimAlphaDark = 0.30, 0.45
+)
+
 // tone is a colour with alpha: the RGB is the light or dark one mixed by the
 // theme's mix t, the alpha the light or dark one (mixed likewise) times scale.
 func tone(r *theme.Resolved, lightRGB, darkRGB uint32, lightA, darkA, scale float32) uint32 {
 	return theme.ColA(theme.MixRGB(lightRGB, darkRGB, r.T), theme.Lerp(lightA, darkA, r.T)*scale)
 }
 
-// Background builds the mesh of four-corner quads of the field.
+// Background builds the mesh of four-corner quads of the field. Over a
+// backdrop the material is the field, under one scrim of the field's tone:
+// the glass shows what is behind the window (measured on 27.2: light glass
+// spans #9E9E9E over a dark window to #FCFCFC over a light one, dark glass
+// #2C2C2C to #6D6D6D), and the scrim narrows that range, so that text over
+// it keeps AppKit's contrast floors (cmd/rexlook's titlebar,
+// docs/design/native-shell-spike.md).
 func (ch *chrome) Background(c *ui.Context, r *theme.Resolved) {
 	ch.ensure(c, r)
+	if r.Backdrop {
+		w, h := c.Size()
+		theme.At(c, 0, 0, float32(w), float32(h))
+		c.NextBG(tone(r, scrimLight, scrimDark, scrimAlphaLight, scrimAlphaDark, 1))
+		c.BoxKeyed(ui.DrawBackground|fl, ui.KeyN(keyBG, 1<<20), nil)
+		return
+	}
 	kg := theme.KeyGen{Base: keyBG}
 	f := &ch.fld
 	for i := 0; i < f.ncells; i++ {
@@ -107,8 +127,11 @@ func (ch *chrome) BeginSurface(c *ui.Context, r *theme.Resolved, s theme.Surface
 
 	c.PushOpacity(s.Opacity)
 	flags := ui.Clickable | ui.Clip | fl
-	// A pane too small to carry the fill mesh (a tiny window) gets a flat fill.
-	flat := w < 4*rad+2 || h < 4*rad+2
+	// A pane too small to carry the fill mesh (a tiny window) gets a flat fill,
+	// and so does every pane over a backdrop: the fill is then really
+	// translucent, over the material, where the mesh mixes it with the field.
+	tiny := w < 4*rad+2 || h < 4*rad+2
+	flat := tiny || r.Backdrop
 	surf := r.Pal.Surface
 	if ft >= 1 {
 		flags |= ui.DrawBackground
@@ -124,8 +147,10 @@ func (ch *chrome) BeginSurface(c *ui.Context, r *theme.Resolved, s theme.Surface
 	c.Push(pb)
 	kg := theme.KeyGen{Base: ui.KeyN(s.Key, 500)}
 
-	if ft < 1 && !flat {
-		ch.drawFill(c, r, s, &kg)
+	if ft < 1 && !tiny {
+		if !flat {
+			ch.drawFill(c, r, s, &kg)
+		}
 		// Top highlight and bottom glow, straight parts of the edges only.
 		x0, x1 := rad, w-rad
 		theme.At(c, x0, 0, x1-x0, 11*kk)

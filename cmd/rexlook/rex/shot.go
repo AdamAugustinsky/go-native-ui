@@ -23,6 +23,9 @@ type ShotOptions struct {
 	// system of its own.
 	Preference theme.Preference
 	System     ui.Appearance
+	// Native renders what the scene draws in the native shell (NativeConfig):
+	// no field (transparent) and no ⌘ and +, which are the window's.
+	Native bool
 }
 
 // shotRex is the scene with the system appearance an offscreen window lacks.
@@ -46,8 +49,13 @@ func RenderShot(path string, o ShotOptions) (quads, drawCalls int, err error) {
 	x := NewApp()
 	x.Traffic = true
 	x.SetPreference(o.Preference)
+	cfg := Config()
+	if o.Native {
+		x.backdrop, x.shellShot = true, true
+		cfg.Clear = [4]float32{}
+	}
 	w, h := o.Width, o.Height
-	off, err := app.NewOffscreen(Config(), w, h, o.Scale, &shotRex{Rex: x, sys: o.System})
+	off, err := app.NewOffscreen(cfg, w, h, o.Scale, &shotRex{Rex: x, sys: o.System})
 	if err != nil {
 		return 0, 0, err
 	}
