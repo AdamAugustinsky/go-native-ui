@@ -94,6 +94,8 @@ func TestNewModelValidates(t *testing.T) {
 		{"bar out of range", testCommands, []Menu{{}}, []int{1}, "bar"},
 		{"bar twice", testCommands, []Menu{{}}, []int{0, 0}, "twice"},
 		{"bar and submenu", testCommands, []Menu{{Items: []Item{{Kind: ItemSubmenu, Submenu: 1}}}, {}}, []int{0, 1}, "submenu"},
+		{"menu role twice", testCommands, []Menu{{Role: MenuHelp}, {Role: MenuHelp}}, nil, "same role"},
+		{"bad menu role", testCommands, []Menu{{Role: 9}}, nil, "unknown role"},
 	}
 	for _, b := range bad {
 		_, err := NewModel(b.cmds(), b.mens, b.bar)
@@ -661,4 +663,35 @@ func TestCommandsWhileAModalIsOpen(t *testing.T) {
 			t.Fatalf("fired %v", got)
 		}
 	})
+}
+
+// State is what a native menu shows: the enabled flag under the modal rule
+// of Match, and the check mark; it allocates nothing.
+func TestStateFollowsTheModalRule(t *testing.T) {
+	cmds := append(testCommands(), Command{ID: 20, Title: "Help", InModal: true}, Command{ID: 21, Title: "Settings", Role: RoleSettings})
+	r := newModalRig(t, cmds)
+	r.m.SetChecked(cmdNew, true)
+	r.m.SetEnabled(cmdOff, false)
+	type want struct {
+		id               ID
+		enabled, checked bool
+	}
+	check := func(name string, ws []want) {
+		t.Helper()
+		for _, w := range ws {
+			if on, ch := r.m.State(r.c, w.id); on != w.enabled || ch != w.checked {
+				t.Errorf("%s: command %d enabled %v checked %v, want %v %v", name, w.id, on, ch, w.enabled, w.checked)
+			}
+		}
+	}
+	check("modal open, its field focused", []want{
+		{cmdSave, false, false}, {cmdNew, false, true}, {20, true, false}, {cmdCopy, true, false}, {cmdOff, false, false}, {99, false, false},
+	})
+	if a := testing.AllocsPerRun(100, func() { r.m.State(r.c, cmdCopy) }); a != 0 {
+		t.Errorf("State allocates %.1f times", a)
+	}
+	r.withModal = false
+	r.step()
+	r.step()
+	check("no modal", []want{{cmdSave, true, false}, {cmdNew, true, true}, {cmdCopy, true, false}, {cmdOff, false, false}, {21, true, false}})
 }

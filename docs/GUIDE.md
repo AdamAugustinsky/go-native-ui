@@ -98,6 +98,7 @@ what keeps the frames allocation-free (section 10).
 func (n *Notes) Init(a *app.App) error {
 	n.k = widget.NewKit(a.UI, a.Text, rex.Theme())
 	n.k.SetMenu(n.model)
+	a.SetMenu(n.model) // the native menu bar on macOS
 	a.UI.Reserve(1024)
 	a.Text.ReserveRuns(text.MaxCachedRuns, text.MaxCachedGlyphs, text.MaxCachedTextBytes)
 	return nil
@@ -381,7 +382,7 @@ func newModel() (*menu.Model, error) {
 }
 ```
 
-`Init` gave the model to the kit (`SetMenu`). `Kit.Begin` then matches the
+`Init` gave the model to the kit and to the app (`SetMenu`). `Kit.Begin` then matches the
 shortcuts against the frame's keys, and `Kit.MenuBar` (in `Build`) draws the bar. A
 command fires once, whether it came from a shortcut or a menu item, and
 `Kit.Command(id)` reports it. A command's enabled and checked state is set each
@@ -415,11 +416,20 @@ the focus is elsewhere. A modal dialog holds back every command and shortcut
 except the edit commands for a text field in it and the commands marked
 `menu.Command.InModal`; its own keys are taken by its widgets.
 
-**Where the menu shows.** `Kit.MenuBar` draws the bar inside the window on every
-OS today. D29 plans a native menu bar on macOS built from the same model, with
-the Edit menu acting on the focused field; the model above does not change for
-it. Commands with edit roles (`menu.RoleCopy` and the like) belong in that Edit
-menu and are not needed here, because the field handles its own chords.
+**Where the menu shows.** On macOS the menu bar is the system's (D29): `app.SetMenu`
+builds it from the model, between the application menu (About, Services, Hide,
+Quit) and the Window and Help menus, with a standard Edit menu that acts on the
+focused field because the model has none. `Kit.MenuBar` then draws nothing, and
+context menus, `MenuButton` and `Select` open native menus. A native item's
+command reaches `Kit.Command` like a shortcut; AppKit matches the key
+equivalents, so a key fires its command once, and still after the focused field:
+a chord the field takes (⌘Z in it) never fires a menu item. The system's items
+(Quit, Hide, Minimize, Zoom, Close) follow the model and the modal rule too:
+a command with their role decides them, and a dialog holds them back unless the
+command is `InModal`. On Windows and Linux `Kit.MenuBar`
+draws the bar inside the window. Commands with edit roles (`menu.RoleCopy` and
+the like) go in an app's own Edit menu, where it wants one; they act on the
+focused field, or reach the app when no field has the focus.
 
 ## 9. Light and dark
 
@@ -582,4 +592,4 @@ go run ./examples/notes -exit-first -v                 # startup: exec → first
 - [DECISIONS.md](../DECISIONS.md) has the reasons: D10 (the UI core), D21 (startup), D22 (the
   `app` package), D28 (widgets and packages), D29 (menus), D32 (system appearance).
 - [docs/PHASE5-PLAN.md](PHASE5-PLAN.md) has the contracts of the widget layer and what is still to come:
-  more than one window, native menus on macOS, file dialogs, drag and drop, and background work.
+  more than one window, file dialogs, drag and drop, and background work.

@@ -97,9 +97,14 @@ func (k *Kit) OpenPopup(kind PopupKind, owner ui.Key, menu int, at [4]float32) {
 // as a context menu at the window position (x, y) in pixels, usually the
 // ContextAt of a list that was right-clicked. A styled kit builds it at the end
 // of the frame and in the frames after, until a choice or a click elsewhere
-// closes it.
+// closes it. With native menus (ui.Context.NativeMenus) the app opens the
+// system's context menu after the frame instead.
 func (k *Kit) OpenContextMenu(menuIdx int, x, y float32) {
 	if k.menu == nil || menuIdx < 0 || menuIdx >= len(k.menu.Menus()) {
+		return
+	}
+	if k.c.NativeMenus() {
+		k.c.RequestMenu(ui.MenuRequest{Kind: ui.MenuContext, Menu: menuIdx, Rect: [4]float32{x, y, x, y}})
 		return
 	}
 	k.OpenPopup(PopupContext, 0, menuIdx, [4]float32{x, y, x, y})

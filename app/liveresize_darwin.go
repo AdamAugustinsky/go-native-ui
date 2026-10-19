@@ -18,7 +18,7 @@ import (
 // handler drew and what they allocated. sizes are content sizes in points.
 func RunLiveResizeTest(cfg Config, b Builder, sizes [][2]float64) (LiveResizeReport, error) {
 	var st StartupReport
-	a, err := openWindowed(cfg, b, &st)
+	a, err := openWindowed(cfg, b, &st, false)
 	if err != nil {
 		return LiveResizeReport{}, err
 	}
