@@ -50,6 +50,7 @@ gpu                   Renderer interface; backends: metal (darwin), d3d11 (windo
 platform              Window, events, DPI, keyboard/IME, clipboard, cursors, timers, wake
 fs                    directory listing, watching, icons/thumbnails (per OS)
 core                  arenas, frame scratch, pointer-free tables, handle pools, MPSC queue
+clib                  public: an app's own native library, dlopen + zero-alloc plain C calls on internal/ffi, no callbacks (D35; darwin, linux)
 internal/ffi          zero-alloc C call + callback trampolines (darwin, linux; arm64, amd64)
 internal/objc         Objective-C messaging on ffi (darwin)
 internal/com          COM vtable call helpers (windows)

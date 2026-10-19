@@ -131,10 +131,10 @@ jobs:
         run: |
           GNUI_FS_REPORT=$RUNNER_TEMP/fs-report.txt go test -count=1 $(go list $PKGS | grep -v -E "$PKGS_EXCLUDE")
           { echo '```'; cat $RUNNER_TEMP/fs-report.txt || true; echo '```'; } | tee -a "$GITHUB_STEP_SUMMARY"
-      - name: test internal/ffi (amd64 under Rosetta)
+      - name: test internal/ffi and clib (amd64 under Rosetta)
         run: |
           softwareupdate --install-rosetta --agree-to-license >/dev/null 2>&1 || true
-          GOARCH=amd64 go test -count=1 ./internal/ffi
+          GOARCH=amd64 go test -count=1 ./internal/ffi ./clib
       - name: ffi benchmarks
         run: go test -run '^$' -bench . -benchmem ./internal/ffi
       - name: build spike
