@@ -35,6 +35,11 @@ type BenchOptions struct {
 	// that miss most windows.
 	Windows int
 
+	// MinWindows is how many windows run at least, clean or not (default
+	// 1), for a caller that compares their timings: a slow frame of every
+	// window is the program's, one of a single window may be the host's.
+	MinWindows int
+
 	// WindowStart runs just before a measured window's baselines are taken
 	// and WindowEnd just after its end values are read, so a caller can
 	// snapshot an allocation profile around exactly the measured frames.
@@ -385,7 +390,8 @@ func (b *benchRun) endWindow(a *App) {
 		(w.Mallocs == b.windows[b.bestIdx].Mallocs && w.TotalAlloc < b.windows[b.bestIdx].TotalAlloc) {
 		b.best, b.bestIdx = rep, len(b.windows)-1
 	}
-	if (w.Mallocs == 0 && w.TotalAlloc == 0) || len(b.windows) >= b.o.Windows || a.scriptDone {
+	clean := w.Mallocs == 0 && w.TotalAlloc == 0
+	if (clean && len(b.windows) >= b.o.MinWindows) || len(b.windows) >= b.o.Windows || a.scriptDone {
 		b.finished = true
 		b.report = b.best
 		b.report.Windows = b.windows

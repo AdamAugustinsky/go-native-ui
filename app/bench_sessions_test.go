@@ -168,3 +168,17 @@ func TestBenchDeadlineOverDisplayStalls(t *testing.T) {
 		t.Errorf("extension %d ms, want the cap %d", got/ms, maxStallExtension/ms)
 	}
 }
+
+// MinWindows runs that many windows although the first is clean, and the
+// report is still the first clean one.
+func TestBenchMinWindows(t *testing.T) {
+	cy := &cycler{n: 10}
+	bn, a := newBenchRig(t, BenchOptions{Warm: 5, PostGCWarm: 5, Windows: 6, MinWindows: 3}, cy)
+	driveBench(t, bn, a, cy, func(w, f int) bool { return false })
+	if n := len(bn.report.Windows); n != 3 {
+		t.Fatalf("%d windows, want 3", n)
+	}
+	if bn.bestIdx != 0 {
+		t.Errorf("the report is of window %d, want the first clean one", bn.bestIdx)
+	}
+}

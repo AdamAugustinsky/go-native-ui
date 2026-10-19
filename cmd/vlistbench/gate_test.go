@@ -37,3 +37,22 @@ func TestGateCatastrophicTimes(t *testing.T) {
 		}
 	}
 }
+
+// A slow frame in one session only (the host took the processor: CI's 7.8
+// and 14.9 ms single frames) passes; one in every session fails.
+func TestGateMaximaAcrossSessions(t *testing.T) {
+	const s = 3
+	maxList, maxEdit := float64(s*defaultMaxListUs), float64(s*defaultMaxEditUs)
+	r := gateReport(1400, 14942, 1368, 14937)
+	r.ListWorkMaxUs = []float64{14942, 1900, 2100}
+	r.EditFrameMaxUsByWindow = []float64{14937, 1800, 1700}
+	if f := gateFailures(r, false, maxList, maxEdit); len(f) != 0 {
+		t.Errorf("one slow frame in three sessions failed: %v", f)
+	}
+	r.ListWorkMaxUs = []float64{14942, 13000, 12500}
+	r.EditFrameMaxUsByWindow = []float64{14937, 12900, 12400}
+	f := gateFailures(r, false, maxList, maxEdit)
+	if j := strings.Join(f, "; "); !strings.Contains(j, "list's work in each of 3 sessions") || !strings.Contains(j, "edits and BeginVList in each of 3 sessions") {
+		t.Errorf("a slow frame in every session: %v", f)
+	}
+}
