@@ -389,6 +389,20 @@ func TestFirstStrongRTL(t *testing.T) {
 	}{
 		{"hello", false}, {"שלום", true}, {"مرحبا", true}, {"123 שלום", true}, {"(hi) שלום", false},
 		{"  ", false}, {"\u200Fabc", true}, {"\u200Eשלום", false}, {"abc\nשלום", false}, {"日本", false},
+		// Bidi classes, not general categories: Devanagari digits are L,
+		// Arabic-Indic digits AN (weak), Syriac, Thaana and N'Ko letters AL or
+		// R, an unassigned code point of the Hebrew block R, combining marks
+		// NSM.
+		{"१२३ שלום", false}, {"٣٤ שלום", true}, {"ܫܠܡܐ", true}, {"ދިވެހި", true}, {"ߒߞߏ", true},
+		{"\u05FF abc", true}, {"\u0301abc", false}, {"\u05B0\u05D0", true}, {"\u061Cabc", true},
+		{"© ® ™ abc", false}, {"𞤀𞤣𞤤𞤢𞤥", true}, {"€5 שלום", true},
+		// Rule P2 skips isolates up to their matching PDI, or the end of the
+		// paragraph; an unmatched PDI is ignored.
+		{"\u2067abc\u2069 שלום", true}, {"\u2066שלום\u2069 abc", false}, {"\u2068שלום\u2069", false},
+		{"\u2067abc", false}, {"\u2067\u2066abc\u2069 def\u2069 שלום", true}, {"\u2069שלום", true},
+		{"\u2067abc\nשלום", false},
+		// Embeddings and overrides are not isolates: their content counts.
+		{"\u202Babc\u202C שלום", false}, {"\u202Eשלום\u202C abc", true},
 	} {
 		if got := FirstStrongRTL([]byte(c.s)); got != c.rtl {
 			t.Errorf("FirstStrongRTL(%q) = %v", c.s, got)

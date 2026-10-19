@@ -77,9 +77,10 @@ func appKitLayout(t *testing.T, s *System, str string, base FontDesc, spans []ak
 		addFont(sp.desc, u16Of(sp.off), u16Of(sp.off+sp.n))
 	}
 	// Each paragraph's base writing direction, explicit, as Layout sets it
-	// (DirAuto: the first strong character); natural alignment then puts a
-	// right-to-left paragraph at the right. Without it AppKit takes the
-	// alignment from the UI language and sets Hebrew flush left.
+	// for DirAuto, but resolved by CoreText's own bidi algorithm
+	// (ctNaturalRTL), not by ours; natural alignment then puts a right-to-left
+	// paragraph at the right. Without it AppKit takes the alignment from the
+	// UI language and sets Hebrew flush left.
 	psName := uintptr(objc.Str("NSParagraphStyle"))
 	for ps := 0; ps < len(str); {
 		pe := paraEnd([]byte(str), ps)
@@ -88,7 +89,7 @@ func appKitLayout(t *testing.T, s *System, str string, base FontDesc, spans []ak
 		}
 		st := fr.Reset().Arg(alloc("NSMutableParagraphStyle")).Arg(uintptr(objc.Sel("init"))).Call(objc.MsgSend).R0()
 		dir := uintptr(0)
-		if paraStrongRTL([]byte(str[ps:])) {
+		if ctNaturalRTL(t, s, s.Font(base), str[ps:pe]) {
 			dir = 1
 		}
 		fr.Reset().Arg(st).Arg(uintptr(objc.Sel("setBaseWritingDirection:"))).Arg(dir).Call(objc.MsgSend)
@@ -139,6 +140,71 @@ func appKitLayout(t *testing.T, s *System, str string, base FontDesc, spans []ak
 	}
 	runtime.KeepAlive(rng)
 	return out
+}
+
+// ctNaturalRTL reports whether CoreText resolves the paragraph str (up to its
+// first newline) right to left when it is given no direction, from its own
+// implementation of the bidi algorithm: a neutral character put before the
+// text takes the paragraph's direction, so it is the leftmost glyph of a
+// left-to-right paragraph and the rightmost of a right-to-left one.
+func ctNaturalRTL(t *testing.T, s *System, f FontKey, str string) bool {
+	t.Helper()
+	str = str[:paraEnd([]byte(str), 0)]
+	b := []byte("!" + str)
+	v := s.Run(s.Shape(f, b))
+	// The probe's grapheme (with the marks that a text starting with one
+	// gives it).
+	pe := NextGrapheme(b, 0)
+	probe, others := -1, 0
+	for g := range v.Glyphs {
+		if int(v.Clusters[g]&^ClusterRTL) < pe {
+			if probe < 0 {
+				probe = g
+			}
+		} else {
+			others++
+		}
+	}
+	if probe < 0 {
+		t.Fatalf("%q: no glyph for the probe", str)
+	}
+	if others == 0 {
+		return false // nothing to resolve: left to right (rule P3)
+	}
+	left, right := true, true
+	for g := range v.Glyphs {
+		if int(v.Clusters[g]&^ClusterRTL) < pe {
+			continue
+		}
+		left = left && v.X[g] > v.X[probe]
+		right = right && v.X[g] < v.X[probe]
+	}
+	if left == right {
+		t.Fatalf("%q: the probe is neither leftmost nor rightmost", str)
+	}
+	return right
+}
+
+// FirstStrongRTL against CoreText's own resolution of the paragraph
+// direction.
+func TestFirstStrongMatchesCoreText(t *testing.T) {
+	s := newSys(t)
+	f := s.Font(FontDesc{SizePt: 13, Scale: 2})
+	strs := []string{
+		"hello", "שלום", "مرحبا", "123 שלום", "(hi) שלום", "\u200Fabc", "\u200Eשלום", "日本 שלום",
+		"१२३ שלום", "٣٤ שלום", "ܫܠܡܐ abc", "ދިވެހި abc", "ߒߞߏ abc", "\u0301abc", "\u05B0\u05D0 abc",
+		"\u061Cabc", "© ® ™ abc", "€5 שלום", "- • שלום abc", "𞤀𞤣𞤤𞤢𞤥 abc", "ꯃꯤꯇꯩ שלום", "𐤀𐤁 abc",
+		"\u2067abc\u2069 שלום", "\u2066שלום\u2069 abc", "\u2068שלום\u2069 123", "\u2067abc def",
+		"\u2067\u2066abc\u2069 def\u2069 שלום", "\u2069שלום abc", "\u202Babc\u202C שלום", "\u202Eשלום\u202C abc",
+	}
+	for _, pc := range paraCases() {
+		strs = append(strs, pc.text)
+	}
+	for _, str := range strs {
+		if got, want := FirstStrongRTL([]byte(str)), ctNaturalRTL(t, s, f, str); got != want {
+			t.Errorf("FirstStrongRTL(%q) = %v, CoreText resolves it %v", str, got, want)
+		}
+	}
 }
 
 // paraCase is one sample of the comparison.
