@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -133,6 +134,7 @@ func TestFailedDecodeDoesNotTouchDefaults(t *testing.T) {
 	if !errors.Is(err, ErrCorrupt) {
 		t.Fatalf("err %v, want ErrCorrupt", err)
 	}
+	defer s.Close() // its Update below schedules a save: not after this test
 	if len(defaults.M) != 1 || defaults.M["a"] != 1 || defaults.S[0] != "x" || defaults.P.A != 1 || defaults.Deep["k"][0] != 1 || len(defaults.Deep["k"]) != 1 {
 		t.Errorf("the caller's defaults were modified: %+v", defaults)
 	}
@@ -313,9 +315,20 @@ func TestSyncDirReportsErrors(t *testing.T) {
 // 12. A directory WriteAtomic creates is made durable in its parent.
 func TestNewParentDirectoriesAreSynced(t *testing.T) {
 	root := t.TempDir()
+	// Only this test's directories: a store an earlier test left open may
+	// still save in the background, and its directory is synced through
+	// the same hook (CI saw TestFailedDecodeDoesNotTouchDefaults's here).
+	var mu sync.Mutex
 	var synced []string
 	old := syncDirFn
-	syncDirFn = func(d string) error { synced = append(synced, d); return nil }
+	syncDirFn = func(d string) error {
+		if d == root || strings.HasPrefix(d, root+string(filepath.Separator)) {
+			mu.Lock()
+			synced = append(synced, d)
+			mu.Unlock()
+		}
+		return nil
+	}
 	defer func() { syncDirFn = old }()
 	if err := WriteAtomic(filepath.Join(root, "a", "b", "c", "f.json"), []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
@@ -330,8 +343,12 @@ func TestNewParentDirectoriesAreSynced(t *testing.T) {
 		}
 	}
 	// An existing directory costs one flush, not a walk up the tree.
+	mu.Lock()
 	synced = nil
+	mu.Unlock()
 	WriteAtomic(filepath.Join(root, "a", "b", "c", "f.json"), []byte("y"), 0o600)
+	mu.Lock()
+	defer mu.Unlock()
 	if len(synced) != 1 {
 		t.Errorf("rewriting in an existing directory synced %v", synced)
 	}
