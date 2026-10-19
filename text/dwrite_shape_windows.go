@@ -5,7 +5,6 @@ package text
 import (
 	"math"
 	"syscall"
-	"unicode"
 	"unicode/utf8"
 	"unsafe"
 
@@ -218,7 +217,7 @@ func (s *System) shapeMiss(f FontKey, b []byte) RunRef {
 	s.toUTF16(b)
 	var advance float32
 	if len(s.u16) > 0 {
-		s.paraRTL = firstStrongRTL(b)
+		s.paraRTL = paraStrongRTL(b) // UAX #9 P2/P3 over Bidi_Class (bidi.go)
 		advance = s.shapeLine(fe)
 	}
 	return s.runs.insert(f, b, s.gbuf, s.xbuf, s.fbuf, s.cbuf, advance)
@@ -245,20 +244,6 @@ func (s *System) toUTF16(b []byte) {
 		i += n
 	}
 	s.u16, s.u16b = u, ub
-}
-
-// firstStrongRTL reports whether the first letter of b belongs to a
-// right-to-left script, which makes the paragraph direction right-to-left.
-func firstStrongRTL(b []byte) bool {
-	for i := 0; i < len(b); {
-		r, n := utf8.DecodeRune(b[i:])
-		i += n
-		if r != utf8.RuneError && unicode.IsLetter(r) {
-			return unicode.In(r, unicode.Arabic, unicode.Hebrew, unicode.Syriac, unicode.Thaana,
-				unicode.Nko, unicode.Mandaic, unicode.Samaritan, unicode.Adlam)
-		}
-	}
-	return false
 }
 
 func b2u(b bool) uintptr {

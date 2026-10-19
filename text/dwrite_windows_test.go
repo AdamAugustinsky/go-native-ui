@@ -260,6 +260,49 @@ func TestBidiVisualOrder(t *testing.T) {
 	}
 }
 
+// The paragraph direction of a shaped run comes from UAX #9 rules P2 and P3
+// over Bidi_Class (FirstStrongRTL), not from the first letter's script:
+// Devanagari digits are strong left to right, isolates are skipped. A
+// neutral put first takes the paragraph's direction, so it is the leftmost
+// glyph of a left-to-right run and the rightmost of a right-to-left one.
+func TestShapeParagraphDirectionFromBidiClasses(t *testing.T) {
+	s := newSys(t)
+	f := uiFont(s)
+	for _, c := range []struct {
+		s   string
+		rtl bool
+	}{
+		{"abc שלום", false}, {"שלום abc", true}, {"123 שלום", true},
+		{"१२३ שלום", false}, {"\u2067abc\u2069 שלום", true}, {"\u2066שלום\u2069 abc", false},
+		{"ܫܠܡܐ abc", true}, {"\u200Fabc", true},
+	} {
+		if got := FirstStrongRTL([]byte(c.s)); got != c.rtl {
+			t.Fatalf("FirstStrongRTL(%q) = %v", c.s, got)
+		}
+		v := shapeStr(s, f, "!"+c.s)
+		probe := -1
+		for g := range v.Glyphs {
+			if v.Clusters[g]&^ClusterRTL == 0 {
+				probe = g
+			}
+		}
+		if probe < 0 {
+			t.Fatalf("%q: no glyph for the probe", c.s)
+		}
+		left, right := true, true
+		for g := range v.Glyphs {
+			if g == probe {
+				continue
+			}
+			left = left && v.X[g] >= v.X[probe] // (zero-width format characters sit beside it)
+			right = right && v.X[g] <= v.X[probe]
+		}
+		if right != c.rtl || left == right {
+			t.Errorf("%q: the probe at %v of %v: leftmost %v, rightmost %v; want right to left %v", c.s, v.X[probe], v.X, left, right, c.rtl)
+		}
+	}
+}
+
 func TestInvalidUTF8AndEmpty(t *testing.T) {
 	s := newSys(t)
 	f := uiFont(s)
