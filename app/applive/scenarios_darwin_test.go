@@ -429,7 +429,8 @@ func saturationScenario() {
 	}
 	check := func(a *app.App) {
 		if answered || !floodsDone.Load() || gotPosts != postsOK.Load() || gotDialogs != nDialogs ||
-			gotResponses != nResponses || gotInstance != nInstance || retriesDone.Load() != busy.Load() || acks.Load() != nResponses {
+			gotResponses != nResponses || gotInstance != nInstance || retriesDone.Load() != busy.Load() || acks.Load() != nResponses ||
+			gotObs != int64(obs.Sets()-obs.Coalesced()) { // the last value set may still be on its way
 			return
 		}
 		answered = true
