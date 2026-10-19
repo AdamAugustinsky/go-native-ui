@@ -235,8 +235,6 @@ func TestVListEditFrameBudget(t *testing.T) {
 	if testing.Short() {
 		t.Skip("a million items")
 	}
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
 	now, gated := cpuClock()
 	const budget = 2 * time.Millisecond
 	for _, tc := range []struct {
@@ -250,6 +248,10 @@ func TestVListEditFrameBudget(t *testing.T) {
 		{"the longest in-place splice", func(st *VListState) { st.Splice(vlDirectMax-12, 5, seq(5_000_000, 3)) }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			// A subtest runs on its own goroutine: lock it to its thread, or
+			// the thread clock is read on two threads.
+			runtime.LockOSThread()
+			defer runtime.UnlockOSThread()
 			// The best of three: a frame that a GC took the CPU from is not the
 			// edit's.
 			var worst time.Duration
