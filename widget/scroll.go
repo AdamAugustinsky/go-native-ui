@@ -25,9 +25,10 @@ type ScrollState = base.ScrollState
 
 // ScrollView is an open scroll view (base.ScrollView), from BeginScroll, which
 // is base's: a clipping box whose content scrolls with the wheel, the trackpad,
-// the keyboard and overlay scroll bars. The bars show while the pointer is over
-// the view or it has scrolled in the last moment, and can be dragged. Build the
-// content, then EndScroll. The content lays out like a Column's.
+// the keyboard and scroll bars of the system's style: overlay bars show while
+// the view scrolls, legacy ones always, beside the content. They can be
+// dragged. Build the content, then EndScroll. The content lays out like a
+// Column's.
 type ScrollView = base.ScrollView
 
 // EndScroll ends the scroll view and builds its bars.
