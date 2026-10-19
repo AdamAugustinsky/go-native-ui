@@ -54,13 +54,21 @@ func (k *Kit) ButtonIcon(ic icon.ID, label string, kind ButtonKind) Signal {
 	return rexui.ButtonIcon(k.Kit, ic, label, rexui.ButtonOpts{Variant: kind.variant()})
 }
 
+// iconVariants are the rexui icon-button variants of the kinds.
+var iconVariants = [...]rexui.IconButtonVariant{
+	ButtonDefault: rexui.IconBordered,
+	ButtonPrimary: rexui.IconPrimary,
+	ButtonPlain:   rexui.IconBorderless,
+	ButtonDanger:  rexui.IconDestructive,
+}
+
 // IconButton builds a button that shows only the icon (rexui.IconButton:
-// bordered, or borderless for ButtonPlain). name is its accessible name (and
-// what a tooltip should say).
+// bordered in the kind's colours, or borderless for ButtonPlain). name is its
+// accessible name (and what a tooltip should say).
 func (k *Kit) IconButton(ic icon.ID, name string, kind ButtonKind) Signal {
 	v := rexui.IconBordered
-	if kind == ButtonPlain {
-		v = rexui.IconBorderless
+	if int(kind) < len(iconVariants) {
+		v = iconVariants[kind]
 	}
 	return rexui.IconButton(k.Kit, ic, name, rexui.IconButtonOpts{Variant: v})
 }

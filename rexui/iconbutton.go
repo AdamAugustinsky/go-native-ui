@@ -21,6 +21,11 @@ const (
 	// size (36 × 36 in a unified toolbar at the extra-large size, 28 × 24 in a
 	// compact one otherwise), reacting to hover.
 	IconToolbar
+	// IconPrimary is IconBordered in ButtonPrimary's colours: the accent in a
+	// key window.
+	IconPrimary
+	// IconDestructive is IconBordered in ButtonDestructive's colours.
+	IconDestructive
 
 	// NumIconButtonVariants is the number of variants.
 	NumIconButtonVariants
@@ -45,7 +50,9 @@ var IconButtonRecipes = [NumIconButtonVariants]ButtonRecipe{
 		Rim: None, RimInactive: None, Highlight: None,
 		Hover: base.HoverOn,
 	},
-	IconToolbar: ButtonRecipes[ButtonToolbar],
+	IconToolbar:     ButtonRecipes[ButtonToolbar],
+	IconPrimary:     ButtonRecipes[ButtonPrimary],
+	IconDestructive: ButtonRecipes[ButtonDestructive],
 }
 
 // IconButtonHoverLabel is the icon colour of a hovered borderless icon
@@ -96,10 +103,10 @@ func IconButton(k *base.Kit, ic icon.ID, name string, o IconButtonOpts) base.Sig
 	c.NextBG(fill)
 	c.NextRadius(radius)
 	k.BeginPress(&p, ui.RoleButton, ui.Px(w), ui.Px(h), flags, nil)
-	// DrawImage centres the symbol in its box: a box the button's size
-	// centres it in the button.
+	// DrawImage centres the symbol in its box: a box as large as the root,
+	// whatever size it took (NextWidth, NextHeight), centres it in the button
 	if f, disp := k.Icons().Prepare(c, ic, fg); f != 0 {
-		c.NextSize(ui.Px(w), ui.Px(h))
+		c.NextSize(ui.Pct(1), ui.Pct(1))
 		c.BoxKeyed(f, ui.KeyN(p.Key, 1), disp)
 	}
 	if hl := rc.Highlight.RGBA(r); hl&0xFF != 0 && !p.Inactive && !p.Disabled {

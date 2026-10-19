@@ -15,7 +15,7 @@ directly with `k.Kit`, or copies a component and owns it.
 | Component | Variants | Sizes | Notes |
 |---|---|---|---|
 | `Button`, `ButtonIcon` | Default, Primary, Destructive, Plain, Toolbar, Glass | mini … extra large | Primary is the accent in a key window and Default's look in an inactive one. Destructive is the alert style (red on red at 25 %). Toolbar is the window tokens' capsule. Glass is a live window's Liquid Glass button. |
-| `IconButton` | Bordered, Borderless, Toolbar | mini … extra large | Toolbar is 28 × 24 (36 × 36 at extra large, the unified toolbar's item). |
+| `IconButton` | Bordered, Borderless, Toolbar, Primary, Destructive | mini … extra large | Toolbar is 28 × 24 (36 × 36 at extra large, the unified toolbar's item). Primary and Destructive are Bordered in those buttons' colours. |
 | `Checkbox`, `CheckboxTri` | — | mini … large | Box 16/14/18 pt with continuous-corner-equivalent radii. |
 | `RadioGroup` | vertical, horizontal | mini … large | Arrow keys move the choice and the focus together. |
 | `Switch` | — | mini … large | The knob slides over the Standard duration and floats on a two-layer shadow in light. |
@@ -23,7 +23,7 @@ directly with `k.Kit`, or copies a component and owns it.
 | `SegmentedControl` | radio group or tab list role | regular, small | Accent pill, Label3 dividers between unselected segments. |
 | `TextField` | Default, Mono, Borderless | small … large | 1 pt outline outside the frame. The ring shows whenever focused. |
 | `SearchField` | — | small … large | Capsule outline, magnifier, filled-circle clear button, Escape clears. |
-| `Select` | pop-up, borderless, pull-down | regular, small | The closed look. `widget.Kit.Select` draws the open list until native menus (N1). |
+| `Select` | pop-up, borderless, pull-down | regular, small | With native menus (macOS) the options are the system's pop-up menu (`RequestMenu`, `MenuChoice`); otherwise `widget.Kit.Select` draws the open list. |
 | `Separator` | 1 pt, or a hairline | — | Horizontal in a column, vertical in a row. |
 | `BeginCard` / `EndCard` | Box, Inset (form rows), Rex pane | — | Box: radius 12, no border, optional title. |
 | `Label`, `LabelBytes`, `Caption` | the macOS text styles × colour roles | — | Zero value: body text in labelColor. |

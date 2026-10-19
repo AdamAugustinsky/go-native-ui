@@ -59,6 +59,7 @@ func RadioGroup(k *base.Kit, label string, sel *int, options []string, o RadioOp
 	k.ApplySize(ui.Children(1), ui.Children(1))
 	gid := c.BoxKeyed(0, ch.Key, nil)
 	c.Push(gid)
+	focused := false
 	for i, opt := range options {
 		it := k.ChoiceItem(&ch, i, opt, base.HoverOff)
 		fill, mark, lc := cb.Off.RGBA(r), cb.Mark.RGBA(r), cb.Label.RGBA(r)
@@ -90,8 +91,10 @@ func RadioGroup(k *base.Kit, label string, sel *int, options []string, o RadioOp
 		}
 		k.Text(3, opt, s.Font.Font, lc, ui.AlignLeft, box)
 		k.FocusRing(cid, it.Visual, box/2)
+		focused = focused || c.Focused(it.ID)
 		k.EndPress(&it.Press)
 	}
 	c.Pop()
-	return base.Signal{ID: gid, Changed: ch.Changed, Focused: n > 0 && c.Focused(gid)}
+	// the focus is on a button, never on the group
+	return base.Signal{ID: gid, Changed: ch.Changed, Focused: focused}
 }

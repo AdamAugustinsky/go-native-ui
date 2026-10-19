@@ -87,6 +87,7 @@ func SegmentedControl(k *base.Kit, label string, sel *int, options []string, o S
 	gid := c.BoxKeyed(ui.DrawBackground, ch.Key, nil)
 	c.Push(gid)
 	var ring base.Visual
+	focused := false
 	dw, dh := pt(k.Scale(), rc.DividerW), pt(k.Scale(), rc.DividerH[size])
 	for i, opt := range options {
 		it := k.ChoiceItem(&ch, i, opt, base.HoverOff)
@@ -125,9 +126,12 @@ func SegmentedControl(k *base.Kit, label string, sel *int, options []string, o S
 				c.BoxKeyed(ui.DrawBackground|base.Floating, ui.KeyN(it.Key, 1), nil)
 			}
 		}
+		focused = focused || c.Focused(it.ID)
 		k.EndPress(&it.Press)
 	}
 	c.Pop()
 	k.FocusRing(gid, ring, s.Radius)
-	return base.Signal{ID: gid, Changed: ch.Changed, Focused: ring.Focus > 0}
+	// a segment has the focus now, however it got it (not the ring's
+	// animation, which shows only keyboard focus and fades after it left)
+	return base.Signal{ID: gid, Changed: ch.Changed, Focused: focused}
 }

@@ -55,6 +55,11 @@ type ButtonRecipe struct {
 	// FillHover and FillPressed are the hovered and pressed fills;
 	// LabelPressed the pressed label.
 	FillHover, FillPressed, LabelPressed Tint
+	// FillPressedInactive and LabelPressedInactive replace FillPressed and
+	// LabelPressed in an inactive window (the zero Tint: the same): a
+	// default button that is not emphasised presses as a push button does,
+	// not toward the accent, even when the window loses key mid-press.
+	FillPressedInactive, LabelPressedInactive Tint
 	// FillDisabled and LabelDisabled are the disabled look: colours, not an
 	// opacity.
 	FillDisabled, LabelDisabled Tint
@@ -99,6 +104,7 @@ var ButtonRecipes = [NumButtonVariants]ButtonRecipe{
 	ButtonPrimary: {
 		Fill: Of(theme.Accent), Label: Of(theme.OnAccent), FillInactive: Of(theme.Fill2), LabelInactive: Of(theme.Label),
 		FillHover: None, FillPressed: Of(theme.AccentPressed), LabelPressed: Of(theme.OnAccent),
+		FillPressedInactive: Of(theme.FillPressed), LabelPressedInactive: Of(theme.Label),
 		FillDisabled: Of(theme.FillDisabled), LabelDisabled: Of(theme.TextDisabled),
 		Rim: None, RimInactive: None, Highlight: None,
 	},
@@ -234,16 +240,25 @@ func (rc *ButtonRecipe) Colors(r *theme.Resolved, v base.Visual) (fill, label, r
 			fill = r.Colors[m.Fill]
 		}
 	}
+	fp, lp := rc.FillPressed, rc.LabelPressed
+	if v.Inactive {
+		if rc.FillPressedInactive != (Tint{}) {
+			fp = rc.FillPressedInactive
+		}
+		if rc.LabelPressedInactive != (Tint{}) {
+			lp = rc.LabelPressedInactive
+		}
+	}
 	if rc.Overlay {
 		fill = over(fill, rc.FillHover.RGBA(r), v.Hot)
-		fill = over(fill, rc.FillPressed.RGBA(r), v.Down)
+		fill = over(fill, fp.RGBA(r), v.Down)
 	} else {
 		if h := rc.FillHover.RGBA(r); h != 0 {
 			fill = mix(fill, h, v.Hot)
 		}
-		fill = mix(fill, rc.FillPressed.RGBA(r), v.Down)
+		fill = mix(fill, fp.RGBA(r), v.Down)
 	}
-	label = mix(label, rc.LabelPressed.RGBA(r), v.Down)
+	label = mix(label, lp.RGBA(r), v.Down)
 	return fill, label, rim
 }
 
