@@ -684,3 +684,24 @@ A relist when the window becomes active would cover all of these cheaply.
 - **Chrome:** Windows sets `DWMWA_USE_IMMERSIVE_DARK_MODE` (20 on Windows 11 build 22000+, 19 on Windows 10 builds that have it, nothing otherwise; Windows 10 stays supported). macOS sets the window's `NSAppearance`, which covers the traffic lights and menus. Linux has nothing to set: client-side decorations are drawn by the theme.
 
 **Reasoning:** content-first startup (D21) means the first frame must already be in the right mode; following the system with notifications keeps the idle budget (0 wakeups) intact.
+
+## D33. ZapFast on the framework: its Rust core, a Go UI (phase 6, 2026-10-18)
+
+**Decision (user, 2026-10-18).** The first real app on the framework is a migration of ZapFast (crmne/zapfast, MIT), a WhatsApp client in Rust and egui. Its backend stays Rust:
+- the `whatsapp-rust` protocol (MIT), the calls stack, the SQLCipher archive and the keyring;
+- built as a library inside the app bundle, behind a small C ABI;
+- driven from Go through the framework's cgo-free FFI.
+
+The whole UI is rewritten in Go on the framework with the Rex design system, macOS first. Other OSes follow.
+
+**Scope (user):** full parity with ZapFast before the user's first review of it.
+
+**Where:** a private GitHub repo, `AdamAugustinsky/zapfast-gnui`. Upstream is kept as a remote so backend fixes can be merged.
+
+**Alternatives:**
+- **A full Go port on whatsmeow (MPL-2.0):** pure Go and no bundled library, but no voice or video calls, no SQLCipher without cgo, and about 150k lines of Rust to rewrite.
+
+**Constraints:**
+- **The exception is the app's, not the framework's.** It bundles a non-system native library. The framework's own rule is unchanged: OS system libraries only, no cgo, no third-party code.
+- **The ABI.** Plain C calls, with no callbacks into Go where avoidable: commands in, events out, through a pollable fd plus a drain call. Memory ownership is explicit at the boundary. The Rust threads (tokio) never touch the UI.
+- **Budgets.** The app keeps them: zero allocations per steady-state frame on the UI side, an idle loop with no wakeups, and content-first startup. Loading the library must not block the first frame.
