@@ -49,7 +49,15 @@ type Frame struct {
 	f      [4]uint64
 
 	ni, nf, nsb int // builder cursors: int regs, float regs, stack bytes
+
+	scratch [2]uintptr
 }
+
+// Scratch is two words of memory that live with the frame, for a small
+// argument passed by reference that the callee reads only on entry (an
+// objc_super). Like the arguments, it is safe under nesting on one thread
+// and belongs to the frame's thread; it holds no Go pointers.
+func (f *Frame) Scratch() *[2]uintptr { return &f.scratch }
 
 // The callback trampolines reserve a cbArgs and a Frame in the callback's C
 // stack frame; both sizes must be multiples of 16 to keep it aligned.
