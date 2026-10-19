@@ -85,7 +85,7 @@ func Open(o Options) (*Window, error) {
 	if o.Titlebar > 0 {
 		style |= 1 << 15 // NSWindowStyleMaskFullSizeContentView
 	}
-	w.win = objc.Send(objc.Cls("NSWindow"), selAlloc)
+	w.win = objc.Send(windowClass, selAlloc) // GNUIWindow: NSWindow with the host focus hand-off (host_darwin.go)
 	w.win = objc.ID(F.Reset().Arg(uintptr(w.win)).Arg(uintptr(selInitWindow)).
 		ArgRect(0, 0, width, height).Arg(style).Arg(2 /* buffered */).ArgBool(false).Call(objc.MsgSend).R0())
 	if w.win == 0 {

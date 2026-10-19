@@ -59,11 +59,13 @@ type MaterialRegion struct {
 // (platform.MaxMaterials).
 const maxMaterials = 32
 
-// shellRegs are the material boxes marked in a frame.
+// shellRegs are the material and host boxes marked in a frame.
 type shellRegs struct {
-	frame uint32 // the frame the records belong to
-	mats  [maxMaterials]matRec
-	nMats int
+	frame  uint32 // the frame the records belong to
+	mats   [maxMaterials]matRec
+	nMats  int
+	hosts  [maxHosts]hostRec
+	nHosts int
 }
 
 type matRec struct {
@@ -76,7 +78,7 @@ type matRec struct {
 // shellFrame drops the previous frame's records.
 func (c *Context) shellFrame() {
 	if c.shell.frame != c.frame {
-		c.shell.frame, c.shell.nMats = c.frame, 0
+		c.shell.frame, c.shell.nMats, c.shell.nHosts = c.frame, 0, 0
 	}
 }
 

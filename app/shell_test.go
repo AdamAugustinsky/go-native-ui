@@ -3,6 +3,7 @@ package app
 import (
 	"testing"
 
+	"gonativeui/gpu"
 	"gonativeui/platform"
 	"gonativeui/ui"
 )
@@ -30,8 +31,10 @@ func TestMaterialAreasAgree(t *testing.T) {
 
 // fakeShell records what the glue hands the window.
 type fakeShell struct {
-	mats    int
-	lastMat []platform.MaterialRegion
+	mats, hosts int
+	lastMat     []platform.MaterialRegion
+	lastHost    []platform.HostRegion
+	focus       []platform.HostID
 }
 
 func (f *fakeShell) SetMaterials(r []platform.MaterialRegion) {
@@ -39,11 +42,19 @@ func (f *fakeShell) SetMaterials(r []platform.MaterialRegion) {
 	f.lastMat = append(f.lastMat[:0], r...)
 }
 
-// shellApp is an App whose builder marks a sidebar material.
+func (f *fakeShell) SetHosts(r []platform.HostRegion) {
+	f.hosts++
+	f.lastHost = append(f.lastHost[:0], r...)
+}
+
+func (f *fakeShell) FocusHost(id platform.HostID) { f.focus = append(f.focus, id) }
+
+// shellApp is an App whose builder marks a sidebar material and a host.
 type shellApp struct {
-	a     *App
-	in    ui.Input
-	sideW float32
+	a        *App
+	in       ui.Input
+	hostX    float32
+	focusBox bool
 }
 
 // noText is a shaper for frames without text.
@@ -54,46 +65,101 @@ func (noText) RunGeneration() uint32   { return 0 }
 func (noText) Pages() int              { return 0 }
 
 func newShellApp() *shellApp {
-	return &shellApp{a: &App{UI: ui.New(noText{}), scale: 2}, sideW: 200}
+	return &shellApp{a: &App{UI: ui.New(noText{}), scale: 2}, hostX: 300}
 }
 
 func (s *shellApp) frame() {
 	c := s.a.UI
 	c.Begin(&s.in, 800, 600, 2, 1.0/60)
-	c.NextSize(ui.Px(s.sideW), ui.Px(600))
+	c.NextSize(ui.Px(200), ui.Px(600))
 	c.NextPos(0, 0)
 	c.Material(c.Box(ui.FloatingX|ui.FloatingY, "side"), ui.AreaSidebar, 4, 0)
+	c.NextSize(ui.Px(100), ui.Px(40))
+	c.NextPos(s.hostX, 100)
+	c.NextPad(0)
+	c.Push(c.Box(ui.FloatingX|ui.FloatingY, "slot"))
+	c.NextSize(ui.Px(100), ui.Px(40))
+	c.Host(5, 1, ui.HostFocusable)
+	c.Pop()
 	c.End(&s.a.list)
 	s.in.ClearFrame()
 }
 
-// The glue sends the regions once and again only when they change, or when
-// the appearance serial moves (Reduce Transparency may have changed).
+// The glue sends the regions once and again only when they change (or when
+// the appearance serial moves: Reduce Transparency may have changed), and
+// gives the keyboard to a host ui focused unless the window says it has it.
 func TestShellSync(t *testing.T) {
 	s := newShellApp()
 	f := &fakeShell{}
 	s.frame()
 	s.a.syncShellTo(f, 1)
-	if f.mats != 1 || len(f.lastMat) != 1 || f.lastMat[0].Area != platform.AreaSidebar || f.lastMat[0].Rect != [4]float32{0, 0, 200, 600} {
-		t.Fatalf("first frame: %d material sends, materials %+v", f.mats, f.lastMat)
+	if f.mats != 1 || f.hosts != 1 || len(f.lastMat) != 1 || f.lastMat[0].Area != platform.AreaSidebar || f.lastMat[0].Rect != [4]float32{0, 0, 200, 600} {
+		t.Fatalf("first frame: %d material and %d host sends, materials %+v", f.mats, f.hosts, f.lastMat)
+	}
+	if len(f.lastHost) != 1 || f.lastHost[0].ID != 5 || f.lastHost[0].Rect != [4]float32{300, 100, 400, 140} || f.lastHost[0].Hidden {
+		t.Fatalf("hosts %+v: want host 5 at 300,100–400,140", f.lastHost)
 	}
 	s.frame()
 	s.a.syncShellTo(f, 1)
-	if f.mats != 1 {
-		t.Errorf("an unchanged frame sent %d materials lists, want none", f.mats-1)
+	if f.mats != 1 || f.hosts != 1 {
+		t.Errorf("an unchanged frame sent %d materials and %d hosts lists, want none", f.mats-1, f.hosts-1)
 	}
 	allocs := testing.AllocsPerRun(20, func() { s.a.syncShellTo(f, 1) })
 	if allocs != 0 {
 		t.Errorf("an unchanged sync allocates %.1f times", allocs)
 	}
 	s.a.syncShellTo(f, 2)
-	if f.mats != 2 {
-		t.Errorf("after an appearance change: %d material sends, want 2", f.mats)
+	if f.mats != 2 || f.hosts != 1 {
+		t.Errorf("after an appearance change: %d material sends (want 2), %d host sends (want 1)", f.mats, f.hosts)
 	}
-	s.sideW = 240
+	s.hostX = 320
 	s.frame()
 	s.a.syncShellTo(f, 2)
-	if f.mats != 3 || f.lastMat[0].Rect[2] != 240 {
-		t.Errorf("a wider sidebar: %d material sends, right edge %v", f.mats, f.lastMat[0].Rect[2])
+	if f.hosts != 2 || f.mats != 2 || f.lastHost[0].Rect[0] != 320 {
+		t.Errorf("a moved host: %d host sends at x %v, %d material sends", f.hosts, f.lastHost[0].Rect[0], f.mats)
+	}
+
+	// ui focuses the host's box: the window gives the native view the
+	// keyboard, once.
+	s.a.UI.FocusHostBox(5)
+	s.frame()
+	s.a.syncShellTo(f, 2)
+	s.frame()
+	s.a.syncShellTo(f, 2)
+	if len(f.focus) != 1 || f.focus[0] != 5 {
+		t.Errorf("FocusHost calls %v, want [5]", f.focus)
+	}
+	// The native view gives the keyboard back to the app's view
+	// (EvHostFocus 0): ui's focus leaves the box, and the window is not
+	// asked again.
+	s.a.hostFocus(0)
+	s.frame()
+	s.a.syncShellTo(f, 2)
+	if len(f.focus) != 1 || s.a.UI.FocusedHost() != 0 {
+		t.Errorf("after EvHostFocus 0: FocusHost calls %v, ui focus on host %d", f.focus, s.a.UI.FocusedHost())
+	}
+	// The user clicks into the native view (EvHostFocus 5): ui follows,
+	// and the window, which did it, is not asked to.
+	s.a.hostFocus(5)
+	s.frame()
+	s.a.syncShellTo(f, 2)
+	if len(f.focus) != 1 || s.a.UI.FocusedHost() != 5 {
+		t.Errorf("after EvHostFocus 5: FocusHost calls %v, ui focus on host %d", f.focus, s.a.UI.FocusedHost())
+	}
+}
+
+// Offscreen, where no native view exists, each visible host is a grey
+// placeholder in the draw list.
+func TestOffscreenHostPlaceholder(t *testing.T) {
+	s := newShellApp()
+	s.frame()
+	n := len(s.a.list.Quads)
+	s.a.drawPlaceholders()
+	if len(s.a.list.Quads) != n+1 {
+		t.Fatalf("%d quads added, want one placeholder", len(s.a.list.Quads)-n)
+	}
+	q := s.a.list.Quads[n]
+	if q.Rect != [4]float32{300, 100, 400, 140} || q.Color[0] != placeholderFill || q.Mode != gpu.ModeShape {
+		t.Errorf("placeholder %+v: want the host's rectangle in the placeholder grey", q)
 	}
 }

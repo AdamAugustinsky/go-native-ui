@@ -100,6 +100,8 @@ const (
 	EvFrame                   // the frame slot armed by RequestFrame is available
 	EvPaste                   // the answer to RequestPaste: Text (plain text), Tag; FlagFailed when there is none
 	EvCommand                 // a native button was clicked: Tag is its command id (NativeButton.ID, HostOptions.Command)
+	EvHostFocus               // the keyboard focus moved to a host (Tag: its HostID) or back to the app's own view (Tag 0)
+	EvHostCommand             // a focused host handed back Tab, Shift+Tab, Escape or Enter: Tag is the HostID, Key and Mods the key
 )
 
 // Flags qualify an Event.

@@ -104,7 +104,8 @@ type Config struct {
 	// builder marks boxes with ui.Context.Material and paints nothing in
 	// them, and the frame clears to transparent instead of Clear, so the
 	// system's window background shows wherever the builder paints nothing
-	// and the materials show in their regions.
+	// and the materials show in their regions. Hosted native views
+	// (App.Win.NewHost, ui.Context.Host) need nothing here.
 	Materials bool
 }
 
@@ -136,7 +137,7 @@ type App struct {
 	dragUI  []ui.DragRegion
 	dragPl  []platform.DragRegion
 
-	sh shellSync // material regions handed to the window (shell.go)
+	sh shellSync // material and host regions handed to the window (shell.go)
 
 	wakeAt      int64 // platform.Now at which the UI wants a frame although nothing animates (ui.Context.WakeAfter); 0 = none
 	chromeDark  bool  // the mode last given to Win.SetDarkChrome
@@ -450,6 +451,13 @@ func (a *App) onEvent(e *platform.Event) {
 		a.frameEvents++
 		a.lastFrameEv = platform.Now()
 		a.p.frameEvent()
+	case platform.EvHostFocus:
+		a.hostFocus(uint32(e.Tag))
+		a.p.invalidate()
+	case platform.EvHostCommand:
+		if a.hostCommand(e) {
+			a.p.invalidate()
+		}
 	default:
 		var txt []byte
 		if e.Kind == platform.EvText || e.Kind == platform.EvPreedit || e.Kind == platform.EvPaste {

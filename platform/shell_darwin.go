@@ -363,14 +363,15 @@ func (w *Window) SetButtonEnabled(id uint16, enabled bool) {
 	}
 }
 
-// ShellPending reports whether the window has staged material changes for the next present (gpu.Surface then presents in step with
+// ShellPending reports whether the window has staged material or host
+// changes for the next present (gpu.Surface then presents in step with
 // them). Main thread.
 func ShellPending() bool {
 	w := theWindow.Load()
-	return w != nil && w.mat.dirty
+	return w != nil && (w.mat.dirty || w.hosts.dirty)
 }
 
-// ApplyShell applies the staged material changes. gpu.Surface
+// ApplyShell applies the staged material and host changes. gpu.Surface
 // calls it inside the Core Animation transaction that presents the frame
 // (with actions disabled and presentsWithTransaction on), so the native
 // views move together with the pixels drawn for them. Main thread.
@@ -383,7 +384,7 @@ func ApplyShell() {
 // FlushShell applies whatever is still staged (a frame that was not
 // presented through the GPU surface); nothing when nothing is. Main thread.
 func (w *Window) FlushShell() {
-	if w.mat.dirty {
+	if w.mat.dirty || w.hosts.dirty {
 		objc.Send(clsCATransaction(), selBegin)
 		objc.Send1(clsCATransaction(), selSetDisableActions, 1)
 		w.applyShell()
@@ -398,6 +399,9 @@ func (w *Window) applyShell() {
 	}
 	if w.mat.dirty {
 		w.applyMaterials()
+	}
+	if w.hosts.dirty {
+		w.applyHosts()
 	}
 }
 

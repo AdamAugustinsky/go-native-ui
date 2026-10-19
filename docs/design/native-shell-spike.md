@@ -108,6 +108,54 @@ The shell's lifecycle:
   with full keyboard access on, Tab never reaches them, and a click leaves
   the focus and an input method's composition in the content.
 
+## Generalised: materials per area (N3a) and hosted views (N3b)
+
+The spike's backdrop and buttons are now two cases of a general shell
+(`platform/shell.go`, `material_darwin.go`, `host_darwin.go`; `ui/material.go`,
+`ui/host.go`; `app/shell.go`; demo `cmd/shelldemo`, D0's Finder scene). The
+spike API above keeps working unchanged: `Backdrop` is a pinned bottom view,
+`Buttons` are pinned `HostButton` hosts.
+
+```go
+cfg.Materials = true // app.Config: transparent surface over the opaque window background
+// in Build, after building a box:
+c.Material(side, ui.AreaSidebar, uint8(theme.MatSidebar), 0xECECECFF) // Solid: Reduce Transparency
+c.Material(cap, ui.AreaToolbarCapsule, uint8(theme.MatToolbar), 0xF2F2F2FF)
+// once, in Init: id, _ := a.Win.NewHost(platform.HostView, platform.HostOptions{View: field, Focusable: true})
+c.Host(uint32(id), key, ui.HostFocusable) // sized and placed like any box
+```
+
+What each area gets (macOS 27.2, read from AppKit's own views):
+
+| Area | View | Why |
+|---|---|---|
+| Sidebar, inspector | `NSGlassEffectView` regular with the private variant AppKit's `NSSplitViewController` sets (18 / 19, adaptive 1 on macOS 27; other versions read once from a throwaway split view controller) | a plain glass view stays near-white when inactive (`#FEFEFE` instead of `#ECECEC` → `#F2F2F2`); with the variant it flattens as AppKit's does |
+| Toolbar capsules | `NSGlassEffectView` regular, interactive, radius half the height, all in one `NSGlassEffectContainerView` (spacing 4) above the other materials | AppKit's toolbar platters |
+| Toolbar band (`AreaTitlebar`) | opaque `NSBox` of the region's Solid | no effect material within the window matched AppKit's pocket bar (titlebar, headerView, sheet, windowBackground, contentBackground, underPageBackground measured) |
+| Composer | `NSGlassEffectView` regular, interactive | AppKit's composer glass |
+| Menu, popover, HUD | `NSVisualEffectView` materials 5, 6, 13, within the window | the standard materials |
+| Window (`Backdrop`) | the spike's view | unchanged |
+| Any, under Reduce Transparency | opaque `NSBox` of Solid (0: `windowBackgroundColor`) | AppKit's own fallback is opaque; `GNUI_REDUCE_TRANSPARENCY=1` forces it per process for captures |
+
+Rules that differ from the spike:
+
+- **Materials sit below the app's pixels.** The window stays opaque with
+  `windowBackgroundColor` behind them, as an AppKit window's content is, so
+  the glass samples what AppKit's samples; the app clears to transparent and
+  paints nothing in material boxes. The renderer cannot punch holes, so a
+  capsule over painted content is impossible: the toolbar band is clear (the
+  window background) or an `AreaTitlebar` bar.
+- **Materials cannot blur the app's own pixels.** Menu, popover and HUD
+  materials work only over clear areas, and the scroll edge's blur of content
+  under the toolbar is a renderer feature still to come (reference §4).
+- **In step with the present.** `SetMaterials` and `SetHosts` compare and
+  stage; a frame with staged changes is presented with
+  `presentsWithTransaction` inside the transaction that applies them, actions
+  off (`gpu.Surface.SyncedPresents`, `platform.ShellObjects().Synced`). Other
+  frames present asynchronously.
+- **Inactive windows and Increase Contrast** are AppKit's: the configured
+  glass and effect views draw them.
+
 ## Numbers (MacBook, macOS 27.2, under the user's load)
 
 - **ffi callbacks:** 5 of 32 in a rexlook process, unchanged. The buttons' action shares `GNUIWindowDelegate`'s dispatcher.

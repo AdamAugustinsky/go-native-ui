@@ -7,23 +7,52 @@ import (
 	"gonativeui/internal/objc"
 )
 
-// Hosted native views: the registry. Each host sits above the app's view in
-// a clip view (GNUIHostClip) in the container; hosts are made and released at
-// safe points (NewHost, ReleaseHost). Options.Buttons are hosts pinned by
-// autoresizing (shell_darwin.go).
+// Hosted native views (N3b; the contract is docs/PHASE6-PLAN.md, "Hosting
+// native views"). Each host sits above the app's view in a clip view
+// (GNUIHostClip), whose frame is the host box's rectangle clipped by its
+// ancestors, so a native view in a scrolled list is cut by the list. Hosts
+// are made and released at safe points (NewHost, ReleaseHost); their
+// geometry comes from ui after layout (SetHosts) and is applied in step with
+// the present (ApplyShell).
+//
+// Routing:
+//   - a press on a host is AppKit's (pointerEvent queues nothing for ui), and
+//     moves over a visible host are not queued either: ui gets one
+//     EvPointerLeave when the pointer goes onto a host;
+//   - a scroll over a host goes to the host; one it does not use travels up
+//     the responder chain to its clip view, which queues it for ui;
+//   - keys and the input method go to the first responder: while a host
+//     holds it, keys are not queued for ui;
+//   - the cursor regions leave the hosts' rectangles to the hosts.
+//
+// Focus hand-off: GNUIWindow overrides makeFirstResponder: (calling NSWindow's
+// through objc_msgSendSuper) and queues EvHostFocus when the first responder
+// moves into a host or back to the app's view. Tab and Shift+Tab out of a host
+// (the window's key-view loop, or a view that hands insertTab: up the
+// responder chain), and Escape and Enter a host does not use, come back as
+// EvHostCommand, so the app's own focus traversal continues.
 
 var (
 	selIsFlipped        = objc.Sel("isFlipped")
+	selScrollWheel      = objc.Sel("scrollWheel:")
+	selInsertTab        = objc.Sel("insertTab:")
+	selInsertBacktab    = objc.Sel("insertBacktab:")
+	selCancelOperation  = objc.Sel("cancelOperation:")
+	selInsertNewline    = objc.Sel("insertNewline:")
+	selSelectFollowing  = objc.Sel("selectKeyViewFollowingView:")
+	selSelectPreceding  = objc.Sel("selectKeyViewPrecedingView:")
 	selSetClipsToBounds = objc.Sel("setClipsToBounds:")
+	selFirstResponder   = objc.Sel("firstResponder")
 	selSubviews         = objc.Sel("subviews")
+	selFirstObject      = objc.Sel("firstObject")
 	selInitPlain        = objc.Sel("init")
 
-	containerClass, hostClipClass objc.ID
-	hostClipDef                   *objc.ClassDef
+	containerClass, hostClipClass, windowClass objc.ID
+	hostClipDef, windowDef                     *objc.ClassDef
 )
 
-// registerShellClasses defines GNUIContainer (the flipped content view) and
-// GNUIHostClip (a host's clip view).
+// registerShellClasses defines GNUIContainer (the flipped content view),
+// GNUIHostClip (a host's clip view) and GNUIWindow (the window).
 func registerShellClasses() {
 	c := objc.Define("GNUIContainer", objc.Cls("NSView"), nil)
 	c.Method(selIsFlipped, "c@:", retYes)
@@ -31,7 +60,19 @@ func registerShellClasses() {
 
 	h := objc.Define("GNUIHostClip", objc.Cls("NSView"), nil)
 	h.Method(selIsFlipped, "c@:", retYes)
+	h.Method(selScrollWheel, "v@:@", hostScrollWheel)
+	h.Method(selKeyDown, "v@:@", hostKeyDown)
+	h.Method(selInsertTab, "v@:@", hostInsertTab)
+	h.Method(selInsertBacktab, "v@:@", hostInsertBacktab)
+	h.Method(selCancelOperation, "v@:@", hostCancel)
+	h.Method(selInsertNewline, "v@:@", hostNewline)
 	hostClipClass, hostClipDef = h.Register(), h
+
+	wd := objc.Define("GNUIWindow", objc.Cls("NSWindow"), nil)
+	wd.Method(selMakeFirstResp, "c@:@", windowMakeFirstResponder)
+	wd.Method(selSelectFollowing, "v@:@", windowSelectFollowing)
+	wd.Method(selSelectPreceding, "v@:@", windowSelectPreceding)
+	windowClass, windowDef = wd.Register(), wd
 }
 
 func retYes(c *ffi.CB) { c.RetBool(true) }
@@ -45,12 +86,24 @@ type hostSlot struct {
 	enabled      bool
 	clip, view   objc.ID // GNUIHostClip in the container, the host's view in it (each owned by its superview)
 	content      objc.ID // a HostGlass's content view
-	shown        bool    // on screen (not hidden)
+	rect, clipR  [4]float32
+	shown        bool // on screen (not hidden)
 }
 
 // hostState is the window's hosts.
 type hostState struct {
 	slots [MaxHosts]hostSlot
+	want  [MaxHosts]HostRegion
+	nWant int
+	dirty bool
+	focus int // 1 + the slot holding the first responder, 0: the app's view (or nothing)
+	// vis are the rectangles (pixels) of the hosts on screen, for routing.
+	vis       [MaxHosts][4]float32
+	nVis      int
+	pointerIn bool // the last move was over a host (an EvPointerLeave was queued)
+	bubbling  bool // a scroll is travelling up from a host (hostScrollWheel)
+	holes     [MaxHosts][4]float32
+	applied   int // applyHosts calls (tests)
 }
 
 func (h *hostState) id(i int) HostID { return HostID(h.slots[i].gen<<8 | uint32(i+1)) }
@@ -68,8 +121,8 @@ func (h *hostState) slot(id HostID) *hostSlot {
 	return s
 }
 
-// NewHost creates a hosted native view of the given kind, hidden (the
-// window's pinned buttons place theirs). At a safe point (not inside a build), main thread; it
+// NewHost creates a hosted native view of the given kind, hidden until
+// SetHosts places it. At a safe point (not inside a build), main thread; it
 // may allocate. At most MaxHosts per window (ErrTooManyHosts).
 func (w *Window) NewHost(kind HostKind, o HostOptions) (HostID, error) {
 	h := &w.hosts
@@ -182,6 +235,11 @@ func (w *Window) ReleaseHost(id HostID) {
 	if s == nil {
 		return
 	}
+	i := int(id&0xFF) - 1
+	if w.hosts.focus == i+1 {
+		objc.Send1(w.win, selMakeFirstResp, uintptr(w.view))
+		w.hosts.focus = 0
+	}
 	if s.kind == HostButton {
 		objc.Send1(s.view, selSetTarget, 0)
 	}
@@ -189,6 +247,7 @@ func (w *Window) ReleaseHost(id HostID) {
 	gen := s.gen
 	*s = hostSlot{gen: gen}
 	liveHosts.Add(-1)
+	w.hosts.dirty = true // the routing rectangles change
 }
 
 // releaseAllHosts releases every host (closeShell).
@@ -215,6 +274,156 @@ func (w *Window) HostView(id HostID) uintptr {
 	return uintptr(s.view)
 }
 
+// SetHosts sets where the hosts are this frame (ui's host regions). It is
+// copied and compared with the last list: unchanged, nothing happens;
+// changed, the geometry is staged and applied in step with the next present
+// (ApplyShell) or by FlushShell. Hosts not in the list are hidden; ids that
+// are stale are ignored. Main thread; allocation-free.
+func (w *Window) SetHosts(r []HostRegion) {
+	h := &w.hosts
+	if len(r) > MaxHosts {
+		r = r[:MaxHosts]
+	}
+	if h.nWant == len(r) && [MaxHosts]HostRegion(h.want) == hostArray(r) {
+		return
+	}
+	copy(h.want[:], r)
+	clear(h.want[len(r):])
+	h.nWant = len(r)
+	h.dirty = true
+}
+
+func hostArray(r []HostRegion) (a [MaxHosts]HostRegion) {
+	copy(a[:], r)
+	return a
+}
+
+// applyHosts places, shows and hides the hosts as want says (ApplyShell).
+func (w *Window) applyHosts() {
+	h := &w.hosts
+	h.dirty = false
+	h.applied++
+	scale := float64(w.scale)
+	if scale <= 0 {
+		scale = 1
+	}
+	h.nVis = 0
+	for i := range h.slots {
+		s := &h.slots[i]
+		if !s.live || s.pinned {
+			continue
+		}
+		var r *HostRegion
+		id := h.id(i)
+		for j := 0; j < h.nWant; j++ {
+			if h.want[j].ID == id {
+				r = &h.want[j]
+				break
+			}
+		}
+		show := r != nil && !r.Hidden && r.Clip[2] > r.Clip[0] && r.Clip[3] > r.Clip[1]
+		if show {
+			if !s.shown || r.Clip != s.clipR {
+				x, y := float64(r.Clip[0])/scale, float64(r.Clip[1])/scale
+				objc.F.Reset().Arg(uintptr(s.clip)).Arg(uintptr(selSetFrame)).
+					ArgRect(x, y, float64(r.Clip[2])/scale-x, float64(r.Clip[3])/scale-y).Call(objc.MsgSend)
+			}
+			if !s.shown || r.Clip != s.clipR || r.Rect != s.rect {
+				x, y := float64(r.Rect[0]-r.Clip[0])/scale, float64(r.Rect[1]-r.Clip[1])/scale
+				objc.F.Reset().Arg(uintptr(s.view)).Arg(uintptr(selSetFrame)).
+					ArgRect(x, y, float64(r.Rect[2]-r.Rect[0])/scale, float64(r.Rect[3]-r.Rect[1])/scale).Call(objc.MsgSend)
+			}
+			s.rect, s.clipR = r.Rect, r.Clip
+			h.vis[h.nVis] = r.Clip
+			h.nVis++
+		}
+		if show != s.shown {
+			objc.Send1(s.clip, selSetHidden, uintptr(boolU(!show)))
+			s.shown = show
+		}
+	}
+	if w.curs.setHoles(h.vis[:h.nVis]) && w.curs.override == CursorArrow {
+		w.rebuildCursorRects()
+	}
+}
+
+// overHost reports whether pixel (x, y) is over a host on screen (not the
+// pinned buttons of Options.Buttons, which keep the spike's routing).
+func (w *Window) overHost(x, y float32) bool {
+	for i := 0; i < w.hosts.nVis; i++ {
+		if inRect(w.hosts.vis[i], x, y) {
+			return true
+		}
+	}
+	return false
+}
+
+// hostMove is pointerEvent's routing of a mouse move: true if the move is
+// over a host and must not reach ui (the first one queues EvPointerLeave).
+func (w *Window) hostMove(x, y float32, t int64) bool {
+	if w.hosts.nVis == 0 || !w.overHost(x, y) {
+		w.hosts.pointerIn = false
+		return false
+	}
+	if !w.hosts.pointerIn {
+		w.hosts.pointerIn = true
+		w.q.push(Event{Kind: EvPointerLeave, Time: t})
+	}
+	return true
+}
+
+// scrollToHost reports whether scroll event ev goes to a host (the pointer
+// is over one, and the scroll is not one a host handed back up).
+func (w *Window) scrollToHost(ev objc.ID) bool {
+	if w.hosts.nVis == 0 || w.hosts.bubbling {
+		return false
+	}
+	lx, ly := objc.SendPoint(ev, selLocation)
+	s := float64(w.scale)
+	return w.overHost(float32(lx*s), float32((w.hPt-ly)*s))
+}
+
+// hostFocused reports whether a host holds the first responder: keys then
+// go to it, not to ui.
+func (w *Window) hostFocused() bool { return w.hosts.focus != 0 }
+
+// FocusHost makes host id the first responder (a HostGlass: the first view
+// in its content), or with id 0 the app's own view. EvHostFocus follows.
+// Main thread, at a safe point.
+func (w *Window) FocusHost(id HostID) {
+	target := w.view
+	if id != 0 {
+		s := w.hosts.slot(id)
+		if s == nil {
+			return
+		}
+		target = s.view
+		if s.kind == HostGlass {
+			if f := objc.Send(objc.Send(s.content, selSubviews), selFirstObject); f != 0 {
+				target = f
+			}
+		}
+	}
+	objc.Send1(w.win, selMakeFirstResp, uintptr(target))
+}
+
+// hostOf is 1 + the slot of the host view v is in, 0 if none.
+func (w *Window) hostOf(v objc.ID) int {
+	if v == 0 || !objc.SendBool1(v, selIsKindOfClass, uintptr(nsViewClass())) {
+		return 0
+	}
+	for ; v != 0 && v != w.content; v = objc.Send(v, selSuperview) {
+		if objc.SendBool1(v, selIsKindOfClass, uintptr(hostClipClass)) {
+			i := int(hostClipDef.Index().Get(v))
+			if i >= 0 && i < MaxHosts && w.hosts.slots[i].live && w.hosts.slots[i].clip == v {
+				return i + 1
+			}
+			return 0
+		}
+	}
+	return 0
+}
+
 var nsViewCls objc.ID
 
 func nsViewClass() objc.ID {
@@ -222,4 +431,108 @@ func nsViewClass() objc.ID {
 		nsViewCls = objc.Cls("NSView")
 	}
 	return nsViewCls
+}
+
+// windowMakeFirstResponder is GNUIWindow's makeFirstResponder:: NSWindow's,
+// then EvHostFocus when the first responder moved into a host or out of one.
+func windowMakeFirstResponder(c *ffi.CB) {
+	self, resp := objc.ID(c.Int(0)), c.Int(2)
+	ok := objc.SuperFrame(c.Frame(), windowDef.Superclass(), self, selMakeFirstResp).Arg(resp).Call(objc.MsgSendSuper).Bool()
+	if w := theWindow.Load(); ok && w != nil && w.win == self {
+		w.firstResponderChanged()
+	}
+	c.RetBool(ok)
+}
+
+// firstResponderChanged queues EvHostFocus if the host holding the first
+// responder changed.
+func (w *Window) firstResponderChanged() {
+	f := w.hostOf(objc.Send(w.win, selFirstResponder))
+	if f == w.hosts.focus {
+		return
+	}
+	w.hosts.focus = f
+	e := Event{Kind: EvHostFocus, Time: Now()}
+	if f != 0 {
+		e.Tag = uint64(w.hosts.id(f - 1))
+	}
+	w.q.push(e)
+}
+
+// windowSelectFollowing and windowSelectPreceding are GNUIWindow's
+// selectKeyViewFollowingView: and selectKeyViewPrecedingView:: from inside a
+// host, Tab and Shift+Tab go back to the app as host commands instead of
+// through AppKit's key-view loop.
+func windowSelectFollowing(c *ffi.CB) { windowSelectKeyView(c, selSelectFollowing, 0) }
+func windowSelectPreceding(c *ffi.CB) { windowSelectKeyView(c, selSelectPreceding, ModShift) }
+
+func windowSelectKeyView(c *ffi.CB, sel objc.SEL, m Mods) {
+	self, v := objc.ID(c.Int(0)), objc.ID(c.Int(2))
+	if w := theWindow.Load(); w != nil && w.win == self {
+		if f := w.hostOf(v); f != 0 {
+			w.hostCommand(f-1, KeyTab, m)
+			return
+		}
+	}
+	objc.SuperFrame(c.Frame(), windowDef.Superclass(), self, sel).Arg(uintptr(v)).Call(objc.MsgSendSuper)
+}
+
+// hostCommand queues EvHostCommand for slot i.
+func (w *Window) hostCommand(i int, k Key, m Mods) {
+	w.q.push(Event{Kind: EvHostCommand, Tag: uint64(w.hosts.id(i)), Key: k, Mods: m, Time: Now()})
+}
+
+// clipHost is the window and slot of the GNUIHostClip self, or nil.
+func clipHost(self objc.ID) (*Window, int) {
+	w := theWindow.Load()
+	if w == nil {
+		return nil, 0
+	}
+	i := int(hostClipDef.Index().Get(self))
+	if i < 0 || i >= MaxHosts || w.hosts.slots[i].clip != self {
+		return nil, 0
+	}
+	return w, i
+}
+
+// hostScrollWheel is GNUIHostClip's scrollWheel:: a scroll the host did not
+// use, handed up the responder chain, goes to ui.
+func hostScrollWheel(c *ffi.CB) {
+	w, _ := clipHost(objc.ID(c.Int(0)))
+	if w == nil {
+		return
+	}
+	ev := objc.ID(c.Int(2))
+	w.hosts.bubbling = true
+	w.scrollEvent(ev, int64(objc.SendF64(ev, selTimestamp)*1e9))
+	w.hosts.bubbling = false
+}
+
+// hostKeyDown is GNUIHostClip's keyDown:: a key the host's view did not
+// handle. Tab, Escape and Enter go back to the app as host commands; any
+// other key goes on up the responder chain.
+func hostKeyDown(c *ffi.CB) {
+	self, ev := objc.ID(c.Int(0)), objc.ID(c.Int(2))
+	if w, i := clipHost(self); w != nil {
+		code := uint32(objc.Send(ev, selKeyCode)) & 0xFFFF
+		switch k := macKey(code); k {
+		case KeyTab, KeyEscape, KeyEnter:
+			w.hostCommand(i, k, mods(uintptr(objc.Send(ev, selModifierFlags)))&ModShift)
+			return
+		}
+	}
+	objc.SuperFrame(c.Frame(), hostClipDef.Superclass(), self, selKeyDown).Arg(uintptr(ev)).Call(objc.MsgSendSuper)
+}
+
+func hostInsertTab(c *ffi.CB)     { hostCmd(c, KeyTab, 0) }
+func hostInsertBacktab(c *ffi.CB) { hostCmd(c, KeyTab, ModShift) }
+func hostCancel(c *ffi.CB)        { hostCmd(c, KeyEscape, 0) }
+func hostNewline(c *ffi.CB)       { hostCmd(c, KeyEnter, 0) }
+
+// hostCmd is a standard command a host's view handed up the responder chain
+// (insertTab:, insertBacktab:, cancelOperation:, insertNewline:).
+func hostCmd(c *ffi.CB, k Key, m Mods) {
+	if w, i := clipHost(objc.ID(c.Int(0))); w != nil {
+		w.hostCommand(i, k, m)
+	}
 }

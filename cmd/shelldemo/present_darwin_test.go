@@ -38,7 +38,8 @@ func onMain(f func()) {
 	<-d
 }
 
-// A frame whose material regions changed is presented in step with them: the GPU surface presents it with the transaction that applies the
+// A frame whose material regions or hosts changed is presented in step with
+// them: the GPU surface presents it with the transaction that applies the
 // staged changes, with implicit animations off; frames that change nothing
 // present as usual.
 func TestShellPresentsInStep(t *testing.T) {
@@ -76,7 +77,10 @@ func TestShellPresentsInStep(t *testing.T) {
 		r.pendingAfter = platform.ShellPending()
 		present() // nothing changed
 		r.synced[1], r.counts[2] = surf.SyncedPresents, platform.ShellObjects()
-		w.SetMaterials([]platform.MaterialRegion{{Area: platform.AreaSidebar, Rect: [4]float32{0, 0, 240 * s, 300 * s}}})
+		id, err := w.NewHost(platform.HostView, platform.HostOptions{})
+		if err == nil {
+			w.SetHosts([]platform.HostRegion{{ID: id, Rect: [4]float32{10, 10, 50, 30}, Clip: [4]float32{10, 10, 50, 30}}})
+		}
 		present()
 		r.synced[2], r.counts[3] = surf.SyncedPresents, platform.ShellObjects()
 		r.layerOff = !layerPresentsWithTransaction(surf)
@@ -95,7 +99,7 @@ func TestShellPresentsInStep(t *testing.T) {
 		t.Errorf("unchanged frame: %d synced presents, applies %d → %d: want no synced present and no apply", r.synced[1], r.counts[1].Applies, r.counts[2].Applies)
 	}
 	if r.synced[2] != 2 || r.counts[3].Synced-r.counts[2].Synced != 1 {
-		t.Errorf("frame with a wider sidebar: %d synced presents, %d applies in step: want 2, 1", r.synced[2], r.counts[3].Synced-r.counts[2].Synced)
+		t.Errorf("frame with a placed host: %d synced presents, %d applies in step: want 2, 1", r.synced[2], r.counts[3].Synced-r.counts[2].Synced)
 	}
 	if !r.layerOff {
 		t.Error("the layer still presents with the transaction after a synced frame")

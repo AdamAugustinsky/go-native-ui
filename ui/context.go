@@ -239,7 +239,7 @@ type Context struct {
 	// boxes built this frame with a cursor or the WindowDrag flag (cursor.go)
 	nCursorBoxes, nDragBoxes int
 
-	// material boxes marked this frame (material.go)
+	// material and host boxes marked this frame (material.go, host.go)
 	shell shellRegs
 
 	// the final emit attempt of End (draw.go)

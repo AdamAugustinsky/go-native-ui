@@ -3,9 +3,9 @@ package platform
 import "errors"
 
 // The native shell (D41, D52): live system materials below the GPU surface
-// (material regions, N3a) and native views above it (hosts), around the app's
-// own pixels. macOS only so far; elsewhere SetMaterials does nothing and
-// NewHost returns ErrUnsupported (shell_other.go).
+// (material regions, N3a) and native views above it (hosts, N3b), around the
+// app's own pixels. macOS only so far; elsewhere SetMaterials and SetHosts do
+// nothing and NewHost returns ErrUnsupported (shell_other.go).
 //
 // The view hierarchy (macOS): the window's content view is a flipped,
 // layer-backed container. From bottom to top it holds the material views (in
@@ -14,8 +14,8 @@ import "errors"
 // clip view per host with the host's own view inside. Native views are wholly
 // below or wholly above the app's pixels, never interleaved.
 //
-// Geometry is applied in step with the present: SetMaterials stages what
-// changed, and the GPU surface applies it inside the Core
+// Geometry is applied in step with the present: SetMaterials and SetHosts
+// stage what changed, and the GPU surface applies it inside the Core
 // Animation transaction that presents the frame drawn for it (ShellPending,
 // ApplyShell), with implicit animations off. Unchanged lists touch nothing.
 
@@ -134,6 +134,26 @@ type HostOptions struct {
 	View uintptr
 }
 
+// HostRegion is where a host is this frame, in physical pixels from the
+// content's top left.
+type HostRegion struct {
+	// ID is the host.
+	ID HostID
+	// Rect is the host view's frame (x0, y0, x1, y1), before clipping.
+	Rect [4]float32
+	// Clip is the part of Rect that shows: Rect clipped by the boxes around
+	// it (a scrolled list) and the window.
+	Clip [4]float32
+	// Hidden hides the host: a drawn popup or modal covers it, or it is
+	// clipped away.
+	Hidden bool
+}
+
+// Host commands (EvHostCommand's Key and Mods): the keys a hosted view hands
+// back so that the app's own focus traversal and default actions continue.
+// Tab is KeyTab, Shift+Tab KeyTab with ModShift, Escape KeyEscape and Enter
+// KeyEnter.
+
 // ShellCounts are the native shell objects alive in the process, for the
 // leak gate.
 type ShellCounts struct {
@@ -141,7 +161,8 @@ type ShellCounts struct {
 	Hosts int64
 	// Materials are material views alive (effect, glass and solid views).
 	Materials int64
-	// Applies counts the times staged changes were applied, and Synced those of them applied in step with a present:
+	// Applies counts the times staged material or host changes were
+	// applied, and Synced those of them applied in step with a present:
 	// inside a transaction with implicit animations off while the GPU layer
 	// presents with the transaction (FlushShell's applies are not).
 	Applies, Synced int64

@@ -54,9 +54,11 @@ func (w *Window) keyEvent(ev objc.ID, typ uintptr, t int64) (keyIdx int) {
 			e.Flags |= FlagRepeat
 		}
 	}
-	w.q.push(e)
-	if typ == 10 {
-		keyIdx = len(w.q.ev) - 1
+	if !w.hostFocused() { // while a host holds the first responder, the key is its own (host_darwin.go)
+		w.q.push(e)
+		if typ == 10 {
+			keyIdx = len(w.q.ev) - 1
+		}
 	}
 	if typ == 10 && m == ModSuper && code == 0x0C { // Cmd+Q (there is no menu yet)
 		w.q.push(Event{Kind: EvClose, Time: t})

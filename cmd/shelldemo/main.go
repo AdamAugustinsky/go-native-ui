@@ -1,4 +1,4 @@
-// Command shelldemo is the native shell's demo (phase 6, N3a): a
+// Command shelldemo is the native shell's demo (phase 6, N3a and N3b): a
 // window laid out like D0's Finder scene (tools/appkitscenes finder,
 // docs/design/liquid-glass-reference.md), with the live materials AppKit uses
 // there and the app's own pixels around them:
@@ -11,10 +11,13 @@
 //   - a scrolled table under the toolbar, whose scroll edge is a bar and a
 //     hairline once rows are under it, or while the window is inactive;
 //
-//   - the search capsule opens a drawn popover over the inspector.
+//   - hosted native views: an NSTextField and a native button in the
+//     inspector, and a native button in a table row that scrolls and clips
+//     with the table. The search capsule opens a drawn popover over the
+//     inspector, which hides the native views it covers (the z-order rule).
 //
 //     shelldemo [-mode system|light|dark] [-scroll pt] [-popover] [-quit-after d]
-//     shelldemo -o out.png [-mode light|dark]   offscreen, without the materials
+//     shelldemo -o out.png [-mode light|dark]   offscreen, hosts as placeholders
 package main
 
 import (
@@ -23,11 +26,13 @@ import (
 	"fmt"
 	"image/png"
 	"os"
+	"strconv"
 	"sync/atomic"
 	"time"
 
 	"gonativeui/app"
 	"gonativeui/icon"
+	"gonativeui/platform"
 	"gonativeui/text"
 	"gonativeui/theme"
 	"gonativeui/ui"
@@ -42,6 +47,9 @@ const (
 	headerH     = 28
 	rowH        = 24
 	rows        = 60
+	hostRow     = 3 // the table row with a native button
+	cmdHostRow  = 11
+	cmdInfo     = 12
 	capsuleH    = 36
 	capsuleY    = 8
 	titleX      = 284
@@ -134,8 +142,13 @@ type demo struct {
 	force    int // 0 system, 1 light, 2 dark
 	popover  bool
 	scrollTo float32
+	field    platform.HostID // inspector NSTextField
+	button   platform.HostID // inspector native button
+	rowBtn   platform.HostID // the table row's native button
 	table    ui.ID
 	names    [rows][]byte
+	clicks   int
+	clickBuf [32]byte
 	builds   atomic.Int64 // frames built (-idle)
 }
 
@@ -143,9 +156,9 @@ func main() {
 	out := flag.String("o", "", "render offscreen at 2240×1280 px into this PNG and exit")
 	mode := flag.String("mode", "system", "system, light or dark")
 	scroll := flag.Float64("scroll", 0, "scroll the table this many points at start (content under the toolbar)")
-	pop := flag.Bool("popover", false, "open the search popover at start")
+	pop := flag.Bool("popover", false, "open the search popover at start (it hides the native views it covers)")
 	quit := flag.Duration("quit-after", 0, "quit after this long")
-	bench := flag.Bool("bench", false, "scroll the table and toggle the popover every frame; print the bench report as JSON")
+	bench := flag.Bool("bench", false, "scroll the table and toggle the popover every frame (the hosts move, hide and show); print the bench report as JSON")
 	gate := flag.Bool("gate", false, "with -bench: exit with status 3 unless the measured frames allocated nothing")
 	idle := flag.Duration("idle", 0, "show the window, wait 1.5 s, then print how many frames were built over this long while nothing happens, and exit")
 	flag.Parse()
@@ -214,7 +227,9 @@ func (d *demo) render(path string) error {
 }
 
 // benchDemo is the demo under -bench: its script scrolls the table back and
-// forth (the scroll edge changes) and opens and closes the popover.
+// forth (the row's native button moves, clips and hides with it, and the
+// scroll edge changes) and opens and closes the popover (the inspector's
+// native views hide and show), so the shell's views change in most frames.
 type benchDemo struct{ *demo }
 
 func (b benchDemo) Script(frame int, in *ui.Input) bool {
@@ -243,13 +258,27 @@ func runBench(d *demo, gate bool) error {
 	return nil
 }
 
-// Init implements app.Initer: fonts and icons.
+// Init implements app.Initer: fonts, icons and the hosts.
 func (d *demo) Init(a *app.App) error {
 	d.a, d.ts = a, a.Text
 	d.icons = icon.New(a.Text, extraIcons...)
 	d.icons.Attach(a.R)
 	a.UI.Reserve(1024)
+	if a.Win != nil {
+		d.makeHosts(a.Win)
+	} else { // offscreen: placeholders where the native views would be
+		d.field, d.button, d.rowBtn = 1, 2, 3
+	}
 	return nil
+}
+
+func (d *demo) makeHosts(w *platform.Window) {
+	var err error
+	if d.field, err = w.NewHost(platform.HostView, platform.HostOptions{View: newTextField("Documents"), Focusable: true}); err != nil {
+		fmt.Fprintln(os.Stderr, "shelldemo: text field host:", err)
+	}
+	d.button, _ = w.NewHost(platform.HostButton, platform.HostOptions{Symbol: "info.circle", Label: "Get Info", Style: platform.ButtonGlass, Command: cmdInfo})
+	d.rowBtn, _ = w.NewHost(platform.HostButton, platform.HostOptions{Symbol: "ellipsis.circle", Label: "More", Command: cmdHostRow})
 }
 
 func (d *demo) setScale(s float32) {
@@ -301,6 +330,15 @@ func (d *demo) Build(c *ui.Context) {
 	p := d.colours(dark, active)
 	if _, y := c.Scroll(d.table); dark && d.table != 0 && y > 0 {
 		p.bar = 0x292929FF // the dark pocket over content (D0 §4)
+	}
+	for {
+		id, ok := c.TakeCommand()
+		if !ok {
+			break
+		}
+		if id == cmdHostRow || id == cmdInfo {
+			d.clicks++
+		}
 	}
 	pt := c.Pt
 	W, H := c.Size()
@@ -495,6 +533,10 @@ func (d *demo) tableView(c *ui.Context, p palette, x, wd, h float32) {
 		c.NextTextColor(p.label)
 		c.NextWidth(ui.Px(wd - pt(260)))
 		c.BoxKeyed(ui.DrawText, ui.KeyN(key, 3), d.names[r])
+		if r == hostRow {
+			c.NextSize(ui.Px(pt(22)), ui.Px(pt(22)))
+			c.Host(uint32(d.rowBtn), ui.KeyN(key, 4), 0)
+		}
 		c.NextFont(d.body)
 		c.NextTextColor(p.label2)
 		c.Box(ui.DrawText, "  Today at 09:41")
@@ -518,10 +560,19 @@ func (d *demo) inspectorView(c *ui.Context, p palette, w float32) {
 	c.NextTextColor(p.label2)
 	c.Box(ui.DrawText, "Name##nm")
 	c.NextFlags(theme.Floating)
-	c.NextPos(x, pt(toolbarH+60))
-	c.NextFont(d.body)
-	c.NextTextColor(p.label)
-	c.Box(ui.DrawText, "Documents##nmv")
+	c.NextPos(x, pt(toolbarH+58))
+	c.NextSize(ui.Px(pt(inspectorW-32)), ui.Px(pt(22)))
+	c.Host(uint32(d.field), ui.HashString(0, "field"), ui.HostFocusable)
+	c.NextFlags(theme.Floating)
+	c.NextPos(x, pt(toolbarH+96))
+	c.NextSize(ui.Px(pt(28)), ui.Px(pt(28)))
+	c.Host(uint32(d.button), ui.HashString(0, "infobtn"), 0)
+	c.NextFlags(theme.Floating)
+	c.NextPos(x+pt(40), pt(toolbarH+102))
+	c.NextFont(d.small)
+	c.NextTextColor(p.label2)
+	b := append(strconv.AppendInt(d.clickBuf[:0], int64(d.clicks), 10), " clicks"...)
+	c.BoxKeyed(ui.DrawText, ui.HashString(0, "clicks"), b)
 }
 
 func (d *demo) popoverView(c *ui.Context, p palette, w float32) {
@@ -541,7 +592,7 @@ func (d *demo) popoverView(c *ui.Context, p palette, w float32) {
 	c.Box(ui.DrawText, "Search##pop")
 	c.NextFont(d.small)
 	c.NextTextColor(p.label2)
-	c.Box(ui.DrawText, "A drawn popover.##pop2")
+	c.Box(ui.DrawText, "Drawn: the native views under it hide.##pop2")
 	c.EndOverlay()
 	if sig.Dismissed {
 		d.popover = false

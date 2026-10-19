@@ -34,6 +34,12 @@ func (w *Window) ReleaseHost(id HostID) {}
 // HostView is the NSView of a host: 0 here.
 func (w *Window) HostView(id HostID) uintptr { return 0 }
 
+// SetHosts sets where the hosts are: a no-op here.
+func (w *Window) SetHosts(r []HostRegion) {}
+
+// FocusHost gives the keyboard focus to a host: a no-op here.
+func (w *Window) FocusHost(id HostID) {}
+
 // FlushShell applies staged shell changes: a no-op here.
 func (w *Window) FlushShell() {}
 
