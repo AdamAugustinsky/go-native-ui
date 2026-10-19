@@ -23,6 +23,9 @@
 //	(*Window).SetIMERect(x, y, w, h)      where the text caret or composition is (window pixels), for input-method candidate windows; copied, cheap to call every frame
 //	(*Window).SetTextInput(active)        whether a text field has focus; losing it cancels a composition in progress
 //	(*Window).DiscardComposition()        cancel a composition in progress without committing it (EvPreedit with no text follows)
+//	(*Window).Backdrop() Backdrop         the system material behind the content (Options.Backdrop), BackdropNone without; experimental
+//	(*Window).HasButtons() bool           whether native buttons are over the content (Options.Buttons); experimental
+//	(*Window).SetButtonEnabled(id, on)    enable or disable one; cheap when unchanged (macOS; no-op elsewhere); experimental
 //	(*Window).Close()
 //	Clipboard() string                    plain UTF-8 text of the system clipboard; main thread
 //	SetClipboard(text string)             replace the clipboard with plain text; main thread
@@ -96,6 +99,7 @@ const (
 	EvWake                    // a goroutine called Wake
 	EvFrame                   // the frame slot armed by RequestFrame is available
 	EvPaste                   // the answer to RequestPaste: Text (plain text), Tag; FlagFailed when there is none
+	EvCommand                 // a native button was clicked: Tag is its command id (NativeButton.ID); experimental
 )
 
 // Flags qualify an Event.
@@ -250,7 +254,74 @@ type Options struct {
 	// top-left), keeping the native button spacing. macOS only so far.
 	Titlebar      float32
 	TrafficLights [2]float32
+
+	// Backdrop puts a system material behind the content, which shows
+	// wherever the app paints nothing: the GPU surface is transparent
+	// (Native.Transparent) and the app clears to alpha 0. Window.Backdrop
+	// says which one the window got; it is BackdropNone where the OS has
+	// none (Windows and Linux so far), and the app then draws its own
+	// background. Experimental (the phase 6 native-shell spike): D41's
+	// material regions are meant to replace it.
+	Backdrop Backdrop
+	// Buttons are native buttons over the content, above the GPU surface
+	// (macOS; ignored elsewhere, see Window.HasButtons): AppKit draws them,
+	// tracks their hover and press and gives them their clicks, which arrive
+	// as EvCommand with the button's ID. The app keeps its own content out of
+	// their rectangles. Experimental: D41's hosted native views are meant to
+	// replace them.
+	Buttons []NativeButton
 }
+
+// Backdrop is a system material behind a window's content (Options.Backdrop).
+// Experimental.
+type Backdrop uint8
+
+const (
+	// BackdropNone is no material: the content is opaque (the default).
+	BackdropNone Backdrop = iota
+	// BackdropWindow is the window-background material blurred from behind
+	// the window (macOS: NSVisualEffectView, under-window background,
+	// behind-window blending).
+	BackdropWindow
+	// BackdropGlass is Liquid Glass (macOS 26 and later: NSGlassEffectView,
+	// regular style); BackdropWindow on earlier systems.
+	BackdropGlass
+	// BackdropGlassClear is the clear Liquid Glass style (more of the desktop
+	// shows); BackdropWindow before macOS 26.
+	BackdropGlassClear
+)
+
+// NativeButton is a native symbol button over the window's content
+// (Options.Buttons). Experimental.
+type NativeButton struct {
+	// ID is the command id a click delivers (EvCommand's Tag) and names the
+	// button for SetButtonEnabled.
+	ID uint16
+	// Symbol is the SF Symbol shown ("plus", "command"); Label the
+	// accessibility description and tooltip.
+	Symbol, Label string
+	// X, Y are the button's centre in logical units from the content's top
+	// left; a negative X counts from the right edge, and the button keeps
+	// that distance when the window is resized. Size is its width and height
+	// (0: 28).
+	X, Y, Size float32
+	// Style is the look.
+	Style ButtonStyle
+	// Disabled opens the button disabled.
+	Disabled bool
+}
+
+// ButtonStyle is the look of a NativeButton. Experimental.
+type ButtonStyle uint8
+
+const (
+	// ButtonPlain is a borderless symbol that AppKit highlights on hover and
+	// press (a titlebar accessory button).
+	ButtonPlain ButtonStyle = iota
+	// ButtonGlass is a Liquid Glass circle (macOS 26 and later; ButtonPlain
+	// before).
+	ButtonGlass
+)
 
 // eventQueue is the reusable per-Window event and text storage.
 type eventQueue struct {

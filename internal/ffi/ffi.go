@@ -103,13 +103,14 @@ func (f *Frame) Arg32(v uint32) *Frame {
 	return f
 }
 
-// ArgBool appends a C BOOL/bool argument.
+// ArgBool appends a C BOOL/bool argument: one byte, so on the Apple arm64
+// stack it is packed like any 1-byte integer (see ArgNarrow).
 func (f *Frame) ArgBool(v bool) *Frame {
-	var b uintptr
+	var b uint32
 	if v {
 		b = 1
 	}
-	return f.Arg(b)
+	return f.ArgNarrow(b, 1)
 }
 
 // VarArg appends an integer argument in the variadic part of a C variadic

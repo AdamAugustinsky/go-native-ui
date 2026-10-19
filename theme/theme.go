@@ -141,6 +141,12 @@ type Resolved struct {
 	Motion Motion
 	// Chrome draws the window-level elements of this window.
 	Chrome Chrome
+	// Backdrop is set by the app when a system material shows behind the
+	// window's content (app.Config.Backdrop, the window got it): Chrome then
+	// leaves the background unpainted, and surfaces that blend with the
+	// background are translucent over the material instead of mixed with a
+	// painted one. Experimental.
+	Backdrop bool
 
 	pal          [2]Palette // light and dark, with the accent applied
 	base         [2]Palette // as the theme defines them

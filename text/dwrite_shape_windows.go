@@ -432,7 +432,7 @@ func (s *System) shapeCovered(fe *fontEnt, src uintptr, a, b int, covered bool) 
 		s.mapLen, s.out1, s.scale = 0, 0, 1
 		hr := win32.HR(com.Call(s.fallback, vtFallbackMapCharacters,
 			src, uintptr(pos), uintptr(b-pos), 0, uintptr(unsafe.Pointer(&fe.family[0])),
-			uintptr(fe.weight), dwStyleNormal, dwStretchNormal,
+			uintptr(fe.weight), fe.style, dwStretchNormal,
 			uintptr(unsafe.Pointer(&s.mapLen)), uintptr(unsafe.Pointer(&s.out1)), uintptr(unsafe.Pointer(&s.scale))))
 		length := int(s.mapLen)
 		if hr < 0 || length <= 0 || length > b-pos {
@@ -590,5 +590,11 @@ func (s *System) RunGeneration() uint32 { return s.runs.gen }
 // glyphs and textBytes bytes of source text (clamped to MaxCachedRuns,
 // MaxCachedGlyphs and MaxCachedTextBytes), so that shaping new strings until
 // the cache holds that much, and every eviction after that, allocates no Go
-// memory. Call it once at setup. Without it the cache grows by doubling.
-func (s *System) ReserveRuns(runs, glyphs, textBytes int) { s.runs.reserve(runs, glyphs, textBytes) }
+// memory. It reserves the paragraph cache (Layout) too, with the budget
+// ParaBudget{Paras: runs, Glyphs: glyphs, Text: textBytes} (see
+// ReserveParas), since wrapped text is laid out there. Call it once at
+// setup. Without it the caches grow by doubling.
+func (s *System) ReserveRuns(runs, glyphs, textBytes int) {
+	s.runs.reserve(runs, glyphs, textBytes)
+	s.ReserveParas(ParaBudget{Paras: runs, Glyphs: glyphs, Text: textBytes})
+}

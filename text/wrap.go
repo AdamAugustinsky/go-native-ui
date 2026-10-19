@@ -57,6 +57,16 @@ func (b *LineBreaker) Breaks(dst []uint32, s []byte) []uint32 {
 	return dst
 }
 
+// reserve sizes the breaker's buffers, its segmenter's included, for text of
+// up to n characters.
+func (b *LineBreaker) reserve(n int) {
+	if cap(b.runes) < n {
+		b.runes = make([]rune, n)
+		b.seg.Init(b.runes)
+		b.runes = b.runes[:0]
+	}
+}
+
 func fallbackBreaks(dst []uint32, s []byte) []uint32 {
 	for i, c := range s {
 		switch {
