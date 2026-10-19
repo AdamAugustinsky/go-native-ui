@@ -130,7 +130,7 @@ func RunBench(cfg Config, b Builder, o BenchOptions) (BenchReport, error) {
 		o.Windows = 1
 	}
 	var st StartupReport
-	a, err := openWindowed(cfg, b, &st)
+	a, err := openWindowed(cfg, b, &st, false)
 	if err != nil {
 		return BenchReport{}, err
 	}

@@ -107,6 +107,7 @@ type fcSetKey struct {
 	family string
 	mono   bool
 	weight int
+	italic bool
 }
 
 // fcSet is an FcFontSort result with its entries extracted.
@@ -161,14 +162,18 @@ func (f *fcFinder) addInt(pat uintptr, obj *byte, v int) {
 }
 
 // pattern builds a substituted pattern (+1; the caller destroys it).
-func (f *fcFinder) pattern(cfg uintptr, family string, weight int, px float32, color bool) uintptr {
+func (f *fcFinder) pattern(cfg uintptr, family string, weight int, italic bool, px float32, color bool) uintptr {
 	pat := f.fr.Call0(fc.patternCreate)
 	if pat == 0 {
 		return 0
 	}
 	f.addString(pat, fc.oFamily, family)
 	f.addInt(pat, fc.oWeight, fcWeight(weight))
-	f.addInt(pat, fc.oSlant, 0) // FC_SLANT_ROMAN
+	slant := 0 // FC_SLANT_ROMAN
+	if italic {
+		slant = 100 // FC_SLANT_ITALIC
+	}
+	f.addInt(pat, fc.oSlant, slant)
 	if px > 0 {
 		f.fr.Reset().Arg(pat).ArgPtr(unsafe.Pointer(fc.oPixelSize)).ArgF64(float64(px)).Call(fc.patternAddDouble)
 	}
@@ -254,7 +259,7 @@ func (f *fcFinder) primary(d FontDesc, px float32) (fontRef, bool) {
 	if err != nil {
 		return fontRef{}, false
 	}
-	pat := f.pattern(cfg, familyOf(d), d.Weight, px, false)
+	pat := f.pattern(cfg, familyOf(d), d.Weight, d.Italic, px, false)
 	if pat == 0 {
 		return fontRef{}, false
 	}
@@ -275,7 +280,7 @@ func (f *fcFinder) emoji(d FontDesc, px float32) (fontRef, bool) {
 	if err != nil {
 		return fontRef{}, false
 	}
-	pat := f.pattern(cfg, "emoji", 400, px, true)
+	pat := f.pattern(cfg, "emoji", 400, false, px, true)
 	if pat == 0 {
 		return fontRef{}, false
 	}
@@ -288,7 +293,7 @@ func (f *fcFinder) emoji(d FontDesc, px float32) (fontRef, bool) {
 
 // sorted returns the trimmed FcFontSort list for d, computed on first use.
 func (f *fcFinder) sorted(d FontDesc) *fcSet {
-	key := fcSetKey{d.Family, d.Mono, d.Weight}
+	key := fcSetKey{d.Family, d.Mono, d.Weight, d.Italic}
 	if s, ok := f.sets[key]; ok {
 		return s
 	}
@@ -297,7 +302,7 @@ func (f *fcFinder) sorted(d FontDesc) *fcSet {
 	if err != nil {
 		return nil
 	}
-	pat := f.pattern(cfg, familyOf(d), d.Weight, 0, false)
+	pat := f.pattern(cfg, familyOf(d), d.Weight, d.Italic, 0, false)
 	if pat == 0 {
 		return nil
 	}

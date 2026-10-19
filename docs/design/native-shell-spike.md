@@ -58,12 +58,27 @@ How:
   one when it is not, and the key state animates between them by colour, not
   by opacity.
 
-`TestBandTextContrastOverGlass` checks every glyph against its floor. It
-composes the frame's fills over both ends of the measured glass range.
+`TestBandTextContrastOverGlass` (`cmd/rexlook/rex/contrast_test.go`)
+checks every glyph against its floor, at both ends of the measured glass
+range. It samples three rows of each glyph (top, middle, bottom) and builds
+the background from the frame's own quads as the Metal shader shades them:
+
+- four-corner colours interpolated premultiplied;
+- rounded-rect coverage, borders and shadows;
+- clips and fades.
+
+It covers these states, light and dark: rest, an unchosen tab hovered, a
+tab held down, the window not key, and not key with the pointer over a
+tab. `TestBandContrastSeesGradients` shows the check reads the gradients:
+darkening only the bottom colours of the capsule and the pill breaks the
+floors. The same holds when the pill's bottom colour alone is darkened in
+`draw.go`. The first version of the test read each fill's top-left colour
+only and passed both.
 
 The live check is screen captures inside the window's frame: a light and a
-dark window behind it, light and dark looks, key and not
-(`/tmp/gnui-br/contrast/after-*`, measured as the D0 titles were). The worst
+dark window behind it, light and dark looks, key and not, all at rest
+(`/tmp/gnui-br/contrast/after-*`, measured as the D0 titles were). Hover and
+press were not captured for contrast; only the test covers them. The worst
 cases are 5.16, 2.84, 6.91 and 3.32:1 against floors of 3.95, 1.98, 5.84 and
 2.25. Before this, they were 3.17, 1.72, 2.60 and 1.68.
 
@@ -107,6 +122,51 @@ The shell's lifecycle:
 - **Focus:** the buttons refuse first responder, as titlebar controls do. Even
   with full keyboard access on, Tab never reaches them, and a click leaves
   the focus and an input method's composition in the content.
+- **Accessibility:** refusing first responder does not hide the buttons from
+  VoiceOver. `TestButtonsAccessible` checks this in-process. Each button's
+  element is its cell: an NSButton itself is ignored (`AXUnknown`) and its
+  `NSButtonCell` is the `AXButton`, on 27.2. The test checks that:
+  - each cell is an `AXButton` labelled "Commands" or "New Tab";
+  - it offers `AXPress`, and an `AXPress` delivers the button's command;
+  - it is among the window's accessibility children, next to the traffic
+    lights' cells.
+
+### Full screen from inside a frame
+
+Calling `toggleFullScreen:` inside a frame, with the frame's autorelease
+pool pushed (`gpu.Surface.BeginFrame`), crashes about a second later. That
+is when the zoom into full screen finishes. The crash is a SIGSEGV at
+address 0 in `objc_autoreleasePoolPop`, at the frame's pool pop in
+`EndFrame`.
+
+It reproduced on the local Mac mini (Mac16,10, macOS 27.2 26B5101f) on
+2026-10-19. The build was rexlook with `DebugToggleFullScreen` sending
+`toggleFullScreen:` directly; that change was not committed. The command
+was `rexlook -pose fullscreen`:
+
+```
+  0.00s glass radius 16, full screen false
+  1.11s glass radius 0, full screen true
+SIGSEGV: segmentation violation
+PC=0x18f0f27d0 m=0 sigcode=2 addr=0x0
+signal arrived during cgo execution
+gonativeui/internal/ffi.(*Frame).Call1(0xb93a1f3e008?, 0x18f0f278c, ...)   0x18f0f278c = objc_autoreleasePoolPop (dladdr); the PC is +68
+gonativeui/gpu.(*Surface).EndFrame(...)  gpu/metal_darwin.go:271           objc.F.Call1(objc.PoolPop, f.pool)
+gonativeui/app.(*App).drawFrame → present → loop → RunWith
+```
+
+The same run with the call deferred to the run loop's next turn
+(`performSelector:withObject:afterDelay:0`, the committed hook) entered and
+left full screen without a crash on the MacBook. Two things are not known:
+
+- whether the pool token goes stale because AppKit drains or replaces the
+  frame's pool during the transition;
+- why the crash comes when the zoom finishes rather than in the frame of the
+  call.
+
+The spike's first report called it an "out-of-order pop". That was a guess; what is
+established is the crash site above. Until the cause is known, a full-screen
+API should call AppKit from outside the frame.
 
 ## Numbers (MacBook, macOS 27.2, under the user's load)
 
