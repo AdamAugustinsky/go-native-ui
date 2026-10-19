@@ -35,9 +35,24 @@ type BasicLayouter struct {
 	lb    LineBreaker
 	brk   []uint32
 	runs  []styleRun
-	refs  []RunRef
 	ends  []int32
 	ell   [len(ellipsis)]byte
+	txt   []byte // the text being laid out
+
+	// The shaped style runs, copied out of the shaper's run cache (whose
+	// views a later Shape may evict or reuse): the measurements of line
+	// breaking and of the ellipsis cut read only these.
+	meas []measRun
+	mg   []uint16
+	mx   []float32
+	mc   []uint32
+}
+
+// measRun is one shaped style run in BasicLayouter's copies: its glyphs
+// [off, off+n), its advance, and how many bytes of the run the shaper took.
+type measRun struct {
+	off, n, textLen int
+	adv             float32
 }
 
 // ellipsis is the text that ends a line cut short (Para.Ellipsis).
@@ -88,19 +103,35 @@ func (l *BasicLayouter) ReserveParas(paras, glyphs, textBytes int) {
 // paragraph, in bytes; longer ones grow it (once).
 const maxScratch = 64 << 10
 
-// shapeRuns shapes every style run whole, again until no eviction of the run
-// cache happened in between (the refs must all be valid together).
+// shapeRuns shapes every style run whole and copies each one's glyphs,
+// positions and clusters out of the run cache right away.
 func (l *BasicLayouter) shapeRuns(p *Para) {
-	for try := 0; try < 4; try++ {
-		gen := l.sh.RunGeneration()
-		l.refs = l.refs[:0]
-		for _, r := range l.runs {
-			l.refs = append(l.refs, l.sh.Shape(paraFont(p, r.style), p.Text[r.start:r.end]))
+	l.meas, l.mg, l.mx, l.mc = l.meas[:0], l.mg[:0], l.mx[:0], l.mc[:0]
+	for _, r := range l.runs {
+		v := l.sh.Run(l.sh.Shape(paraFont(p, r.style), p.Text[r.start:r.end]))
+		m := measRun{off: len(l.mg), n: len(v.Glyphs), textLen: min(len(v.Text), r.end-r.start), adv: v.Advance}
+		l.mg = append(l.mg, v.Glyphs...)
+		l.mx = append(l.mx, v.X...)
+		if len(v.Clusters) == len(v.Glyphs) && len(v.X) == len(v.Glyphs) {
+			l.mc = append(l.mc, v.Clusters...)
+		} else {
+			// No cluster information: nothing to measure with, so no
+			// wrapping (see layout).
+			m.n, m.textLen = 0, -1
+			l.mg = l.mg[:m.off]
+			l.mx = l.mx[:m.off]
 		}
-		if l.sh.RunGeneration() == gen {
-			return
-		}
+		l.meas = append(l.meas, m)
 	}
+}
+
+// measView is style run k as shaped, from the copies.
+func (l *BasicLayouter) measView(k int) RunView {
+	m := &l.meas[k]
+	r := &l.runs[k]
+	e := m.off + m.n
+	return RunView{Glyphs: l.mg[m.off:e:e], X: l.mx[m.off:e:e], Clusters: l.mc[m.off:e:e],
+		Text: l.txt[r.start : r.start+max(m.textLen, 0)], Advance: m.adv}
 }
 
 // measure is the advance of the bytes [a, b) of the text, from the whole
@@ -113,7 +144,7 @@ func (l *BasicLayouter) measure(a, b int) float32 {
 	var w float32
 	for k := runAt(l.runs, a); k < len(l.runs) && l.runs[k].start < b; k++ {
 		r := &l.runs[k]
-		v := l.sh.Run(l.refs[k])
+		v := l.measView(k)
 		d := v.CaretX(min(b, r.end)-r.start) - v.CaretX(max(a, r.start)-r.start)
 		w += max(d, -d)
 	}
@@ -122,13 +153,15 @@ func (l *BasicLayouter) measure(a, b int) float32 {
 
 func (l *BasicLayouter) layout(p *Para) {
 	txt := p.Text
+	l.txt = txt
+	defer func() { l.txt = nil }()
 	l.runs = styleRuns(l.runs[:0], p)
 	l.shapeRuns(p)
 	// Without cluster information (or room to wrap in) the text is one line
 	// per newline.
 	wrapping := p.Width >= 1
 	for k := range l.runs {
-		if len(l.sh.Run(l.refs[k]).Text) != l.runs[k].end-l.runs[k].start {
+		if l.meas[k].textLen != l.runs[k].end-l.runs[k].start {
 			wrapping = false
 		}
 	}
@@ -153,15 +186,17 @@ func (l *BasicLayouter) layout(p *Para) {
 			ln.Flags |= LineHard
 		}
 		to := trimEnd(txt, start, end)
+		ell := -1 // the style run whose font the ellipsis takes
 		if i == n-1 && l.b.truncated && p.Ellipsis {
-			to = l.cutForEllipsis(p, start, paraEnd(txt, start), wrapping)
-			ln.End = uint32(to)
+			var cut int
+			cut, ell = l.cutForEllipsis(p, start, paraEnd(txt, start), wrapping)
+			ln.End = uint32(cut)
 			ln.Flags = ln.Flags&^LineHard | LineEllipsis
-			to = trimEnd(txt, start, to)
+			to = trimEnd(txt, start, cut)
 		}
 		x := l.place(p, start, to, 0)
-		if ln.Flags&LineEllipsis != 0 {
-			x = l.placeEllipsis(p, to, x, rtl, int(ln.G0))
+		if ell >= 0 {
+			x = l.placeEllipsis(p, to, x, rtl, int(ln.G0), ell)
 		}
 		ln.G1 = uint32(len(l.b.glyphs))
 		ln.Width, ln.Advance = x, x
@@ -272,14 +307,38 @@ func trimEnd(txt []byte, start, end int) int {
 }
 
 // cutForEllipsis is where the last line is cut so that it and the ellipsis
-// fit the width: the last grapheme boundary in [start, limit] whose text,
-// without trailing white space, leaves room for it.
-func (l *BasicLayouter) cutForEllipsis(p *Para, start, limit int, wrapping bool) int {
+// fit the width, and the style run whose font the ellipsis is drawn in: the
+// one of the last character kept (ellipsisRun). The cut is the last grapheme
+// boundary in [start, limit] whose text, without trailing white space, leaves
+// room for the ellipsis; when the font that cut gives the ellipsis is wider
+// than the one the room was left for, the cut is made again for the wider
+// one, until the ellipsis fits.
+func (l *BasicLayouter) cutForEllipsis(p *Para, start, limit int, wrapping bool) (cut, run int) {
+	run = l.ellipsisRun(start, trimEnd(p.Text, start, limit))
 	if !wrapping || p.Width < 1 {
-		return limit
+		return limit, run
 	}
-	ew := l.sh.Run(l.sh.Shape(paraFont(p, l.styleAt(max(limit-1, start))), l.ellipsisText())).Advance
-	room := p.Width - ew
+	var room float32 // the widest ellipsis the cut left room for
+	for {
+		room = max(room, l.ellipsisWidth(p, run))
+		cut = l.fitCut(p, start, limit, p.Width-room)
+		run = l.ellipsisRun(start, trimEnd(p.Text, start, cut))
+		if ew := l.ellipsisWidth(p, run); ew <= room {
+			if ew < room { // a narrower ellipsis than room was left for: keep more if that still fits
+				if c := l.fitCut(p, start, limit, p.Width-ew); c > cut {
+					if r := l.ellipsisRun(start, trimEnd(p.Text, start, c)); l.ellipsisWidth(p, r) <= ew {
+						cut, run = c, r
+					}
+				}
+			}
+			return cut, run
+		}
+	}
+}
+
+// fitCut is the last grapheme boundary in [start, limit] whose text, without
+// trailing white space, is at most room wide.
+func (l *BasicLayouter) fitCut(p *Para, start, limit int, room float32) int {
 	cut := start
 	for g := start; g < limit; {
 		n := NextGrapheme(p.Text, g)
@@ -292,17 +351,31 @@ func (l *BasicLayouter) cutForEllipsis(p *Para, start, limit int, wrapping bool)
 	return cut
 }
 
-func (l *BasicLayouter) ellipsisText() []byte {
-	copy(l.ell[:], ellipsis)
-	return l.ell[:]
-}
-
-// styleAt is the style of byte off.
-func (l *BasicLayouter) styleAt(off int) uint16 {
+// ellipsisRun is the style run of the last character of [start, to), the
+// first one's when it is empty.
+func (l *BasicLayouter) ellipsisRun(start, to int) int {
 	if len(l.runs) == 0 {
 		return 0
 	}
-	return l.runs[runAt(l.runs, off)].style
+	return runAt(l.runs, max(to-1, start))
+}
+
+// ellipsisWidth is the advance of the ellipsis in the font of style run k.
+func (l *BasicLayouter) ellipsisWidth(p *Para, k int) float32 {
+	return l.sh.Run(l.sh.Shape(l.runFont(p, k), l.ellipsisText())).Advance
+}
+
+// runFont is the font of style run k (Fonts[0] when there are none).
+func (l *BasicLayouter) runFont(p *Para, k int) FontKey {
+	if k < len(l.runs) {
+		return paraFont(p, l.runs[k].style)
+	}
+	return p.Fonts[0]
+}
+
+func (l *BasicLayouter) ellipsisText() []byte {
+	copy(l.ell[:], ellipsis)
+	return l.ell[:]
 }
 
 // place shapes and appends the glyphs of the bytes [from, to) of the text,
@@ -349,16 +422,16 @@ func (l *BasicLayouter) appendView(v RunView, src []byte, base int, x float32, s
 	return x + v.Advance
 }
 
-// placeEllipsis appends the ellipsis after the line's glyphs (which start at
-// glyph g0), before them in a right-to-left line, whose glyphs it shifts
-// right, and returns the line's new advance.
-func (l *BasicLayouter) placeEllipsis(p *Para, cut int, x float32, rtl bool, g0 int) float32 {
-	var st, span uint16
-	if len(l.runs) > 0 {
-		r := l.runs[runAt(l.runs, max(cut-1, 0))]
-		st, span = r.style, r.span
+// placeEllipsis appends the ellipsis, in the font and span of style run k,
+// after the line's glyphs (which start at glyph g0), before them in a
+// right-to-left line, whose glyphs it shifts right, and returns the line's new
+// advance.
+func (l *BasicLayouter) placeEllipsis(p *Para, cut int, x float32, rtl bool, g0, k int) float32 {
+	var span uint16
+	if k < len(l.runs) {
+		span = l.runs[k].span
 	}
-	v := l.sh.Run(l.sh.Shape(paraFont(p, st), l.ellipsisText()))
+	v := l.sh.Run(l.sh.Shape(l.runFont(p, k), l.ellipsisText()))
 	start := len(l.b.glyphs)
 	end := l.appendView(v, l.ellipsisText(), 0, x, span)
 	for i := start; i < len(l.b.clus); i++ {
@@ -376,12 +449,12 @@ func (l *BasicLayouter) placeEllipsis(p *Para, cut int, x float32, rtl bool, g0 
 	for i := start; i < len(l.b.xs); i++ {
 		l.b.xs[i] -= x
 	}
-	k := start - g0
-	rotate(l.b.glyphs[g0:], k)
-	rotate(l.b.xs[g0:], k)
-	rotate(l.b.faces[g0:], k)
-	rotate(l.b.clus[g0:], k)
-	rotate(l.b.spanOf[g0:], k)
+	n := start - g0
+	rotate(l.b.glyphs[g0:], n)
+	rotate(l.b.xs[g0:], n)
+	rotate(l.b.faces[g0:], n)
+	rotate(l.b.clus[g0:], n)
+	rotate(l.b.spanOf[g0:], n)
 	return end
 }
 

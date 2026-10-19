@@ -438,6 +438,57 @@ func TestParagraphEllipsisCoreText(t *testing.T) {
 	}
 }
 
+// The ellipsis takes the font of the last character kept: the cut leaves room
+// for it, it is drawn in it, and the line is as high as it makes it.
+func TestParagraphEllipsisFontCoreText(t *testing.T) {
+	s := newSys(t)
+	small := s.Font(FontDesc{SizePt: 13, Scale: 2})
+	big := s.Font(FontDesc{SizePt: 30, Scale: 2})
+	faceOf := func(f FontKey) FaceID {
+		v := s.Run(s.Shape(f, []byte("A")))
+		return v.Faces[0]
+	}
+	lh := func(f FontKey) float32 { // AppKit's line height for the font alone
+		v := s.Paragraph(s.Layout(&Para{Text: []byte("A"), Fonts: []FontKey{f}}))
+		return v.Lines[0].Height
+	}
+	txt := "ABCDEFG more words"
+	for _, c := range []struct {
+		name  string
+		span  Span
+		width float32
+		face  FaceID
+		inBig bool
+	}{
+		{"cut in the big font", Span{Off: 0, Len: 7, Style: 1}, 180, faceOf(big), true},
+		{"big font left out", Span{Off: 8, Len: 10, Style: 1}, 120, faceOf(small), false},
+		{"nothing kept", Span{Off: 0, Len: 1, Style: 1}, 20, faceOf(big), true},
+	} {
+		p := Para{Text: []byte(txt), Spans: []Span{c.span}, Fonts: []FontKey{small, big}, Width: c.width, MaxLines: 1, Ellipsis: true}
+		v := s.Paragraph(s.Layout(&p))
+		ln := v.Lines[0]
+		ell := -1
+		for g := ln.G0; g < ln.G1; g++ {
+			if v.Glyphs[g] != 0 && v.Clusters[g]&^ClusterRTL == ln.End {
+				ell = int(g)
+			}
+		}
+		if ell < 0 {
+			t.Fatalf("%s: no ellipsis", c.name)
+		}
+		if v.Faces[ell] != c.face || (v.SpanOf[ell] == 1) != c.inBig {
+			t.Errorf("%s: the ellipsis is in face %d span %d, want face %d", c.name, v.Faces[ell], v.SpanOf[ell], c.face)
+		}
+		if ln.Width > c.width+0.01 && ln.End > ln.Start {
+			t.Errorf("%s: %q… is %v wide, over %v", c.name, txt[ln.Start:ln.End], ln.Width, c.width)
+		}
+		if want := lh(big); c.inBig && ln.Height < want-0.01 {
+			t.Errorf("%s: line height %v, under the ellipsis font's %v", c.name, ln.Height, want)
+		}
+		t.Logf("%s: %q… width %v height %v", c.name, txt[ln.Start:ln.End], ln.Width, ln.Height)
+	}
+}
+
 // Every caret position of a line hit-tests back to itself, on left-to-right
 // and right-to-left lines.
 func TestParagraphCaretRoundTripCoreText(t *testing.T) {

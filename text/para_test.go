@@ -15,6 +15,7 @@ import (
 // direct-mapped table of fixed slots.
 type gridShaper struct {
 	slots  [512]gridRun
+	nslots int // when positive, only the first nslots slots are used
 	gen    uint32
 	shapes int
 }
@@ -44,7 +45,11 @@ func (s *gridShaper) RunGeneration() uint32 { return s.gen }
 
 func (s *gridShaper) Shape(f FontKey, b []byte) RunRef {
 	h := hashBytes(b, uint64(f))
-	i := int(h % uint64(len(s.slots)))
+	n := len(s.slots)
+	if s.nslots > 0 {
+		n = s.nslots
+	}
+	i := int(h % uint64(n))
 	r := &s.slots[i]
 	if r.used && r.font == f && string(r.txt[:r.tn]) == string(b) {
 		return RunRef(i + 1)
@@ -238,6 +243,71 @@ func TestBasicLayoutMaxLinesAndEllipsis(t *testing.T) {
 	ln := v.Lines[0]
 	if v.Glyphs[ln.G0] != '…' || v.X[ln.G0] != 0 || ln.Width > 80 {
 		t.Fatalf("rtl ellipsis: first glyph %q at %v, width %v", rune(v.Glyphs[ln.G0]), v.X[ln.G0], ln.Width)
+	}
+}
+
+// The ellipsis cut measures with copies of the shaped runs: shaping the
+// line's pieces and the ellipsis evicts the runs it shaped first (a run cache
+// of one slot), which must not let it keep text beyond the width.
+func TestBasicLayoutEllipsisAfterRunCacheMisses(t *testing.T) {
+	sh := &gridShaper{nslots: 1}
+	l := NewBasicLayouter(sh)
+	for _, c := range []struct {
+		maxLines int
+		want     string
+	}{
+		{1, `["one two "]`},
+		{2, `["one two " "three f"]`},
+	} {
+		p := Para{Text: []byte("one two three four five six"), Fonts: []FontKey{0}, Width: 80, MaxLines: c.maxLines, Ellipsis: true}
+		g := sh.gen
+		v := l.Paragraph(l.Layout(&p))
+		if sh.gen == g {
+			t.Fatal("no run cache eviction")
+		}
+		if got := fmt.Sprintf("%q", lines(v)); got != c.want {
+			t.Errorf("%d lines: %s, want %s", c.maxLines, got, c.want)
+		}
+		for _, ln := range v.Lines {
+			if ln.Width > 80 {
+				t.Errorf("%d lines: line %q is %v wide, over 80", c.maxLines, v.Text[ln.Start:ln.End], ln.Width)
+			}
+		}
+	}
+}
+
+// The ellipsis takes the font of the last character kept, and the cut leaves
+// room for that font's ellipsis, not for the one of the text left out.
+func TestBasicLayoutEllipsisFontFromTheCut(t *testing.T) {
+	l := NewBasicLayouter(new(gridShaper))
+	for _, c := range []struct {
+		text  string
+		span  Span
+		width float32
+		want  string
+		face  FaceID
+		w     float32
+	}{
+		// Font 1 (12 px) up to the cut, font 0 (10 px) after it: the ellipsis
+		// is 12 px, so "ABCDE" (60) and not "ABCDEF" (72), which would make
+		// the line 84 px.
+		{"ABCDEFG more words", Span{Off: 0, Len: 7, Style: 1}, 82, "ABCDE", 1, 72},
+		// Font 1 only in the text left out: the ellipsis is 10 px, and the cut
+		// keeps as much as that leaves room for.
+		{"abcdefgh ABCD", Span{Off: 9, Len: 4, Style: 1}, 80, "abcdefg", 0, 80},
+	} {
+		p := Para{Text: []byte(c.text), Spans: []Span{c.span}, Fonts: []FontKey{0, 1}, Width: c.width, MaxLines: 1, Ellipsis: true}
+		v := l.Paragraph(l.Layout(&p))
+		ln := v.Lines[0]
+		last := ln.G1 - 1
+		if got := string(v.Text[ln.Start:ln.End]); got != c.want || v.Glyphs[last] != '…' || v.Faces[last] != c.face ||
+			ln.Width != c.w || ln.Width > c.width {
+			t.Errorf("%q at %v: %q width %v, ellipsis %q in face %d; want %q width %v face %d",
+				c.text, c.width, got, ln.Width, rune(v.Glyphs[last]), v.Faces[last], c.want, c.w, c.face)
+		}
+		if want := uint16(0); c.face == 1 && v.SpanOf[last] != 1 || c.face == 0 && v.SpanOf[last] != want {
+			t.Errorf("%q: the ellipsis is in span %d", c.text, v.SpanOf[last])
+		}
 	}
 }
 

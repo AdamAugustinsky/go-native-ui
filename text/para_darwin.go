@@ -255,36 +255,55 @@ func (s *System) ctLine(p *Para, ts uintptr, u0, cnt int, scale float32, rtl boo
 // rest of its paragraph as fits the width with an ellipsis after it (before
 // it, on the left, in a right-to-left paragraph), cut between grapheme
 // clusters (CTTypesetterSuggestClusterBreak) with the white space before the
-// cut left out.
+// cut left out. The ellipsis takes the font and span of the last character
+// kept; the cut leaves room for that font's ellipsis (see
+// BasicLayouter.cutForEllipsis), and the line's metrics include it.
 func (s *System) ellipsisLine(p *Para, ts uintptr, u0 int, wpt float64, scale float32, rtl bool) Line {
 	pl := &s.pl
 	b := p.Text
 	start := int(pl.u16b[u0])
 	limit := paraEnd(b, start)
-	stAt := func(off int) styleRun { return pl.runs[runAt(pl.runs, max(off, 0))] }
-	font := s.paraFontKey(p, stAt(limit-1).style)
 	copy(pl.ell[:], ellipsis)
-	ev := s.Run(s.Shape(font, pl.ell[:]))
-	ew := ev.Advance
-	cut := limit
-	if p.Width >= 1 {
-		room := wpt - float64(ew/scale)
+	runOf := func(cut int) int { return runAt(pl.runs, max(trimEnd(b, start, cut)-1, start)) }
+	fontOf := func(k int) FontKey { return s.paraFontKey(p, pl.runs[k].style) }
+	ewOf := func(k int) float32 { return s.Run(s.Shape(fontOf(k), pl.ell[:])).Advance }
+	fit := func(room float32) int {
 		cnt := 0
 		if room > 0 {
-			cnt = int(s.fr.Reset().Arg(ts).Arg(uintptr(u0)).ArgF64(room).Call(sy.ctTypesetterSuggestClusterBreak).R0())
+			cnt = int(s.fr.Reset().Arg(ts).Arg(uintptr(u0)).ArgF64(float64(room/scale)).Call(sy.ctTypesetterSuggestClusterBreak).R0())
 		}
-		cut = min(int(pl.u16b[min(u0+max(cnt, 0), len(pl.u16b)-1)]), limit)
+		return min(int(pl.u16b[min(u0+max(cnt, 0), len(pl.u16b)-1)]), limit)
 	}
+	k := runOf(limit)
+	cut := limit
+	if p.Width >= 1 {
+		var room float32 // the widest ellipsis the cut left room for
+		for {
+			room = max(room, ewOf(k))
+			cut = fit(p.Width - room)
+			k = runOf(cut)
+			if ew := ewOf(k); ew <= room {
+				if ew < room { // keep more if a narrower ellipsis still fits
+					if c := fit(p.Width - ew); c > cut {
+						if r := runOf(c); ewOf(r) <= ew {
+							cut, k = c, r
+						}
+					}
+				}
+				break
+			}
+		}
+	}
+	font, span := fontOf(k), pl.runs[k].span
 	to := trimEnd(b, start, cut)
 	ln := s.ctLine(p, ts, u0, pl.u16Of(to)-u0, scale, rtl)
 	ln.End = uint32(cut)
 	ln.Flags = ln.Flags&^LineHard | LineEllipsis
 	three := pl.three
-	// The ellipsis, re-read: shaping it may have been a miss that reused the
-	// run scratch, but the view stays valid until the next Shape.
-	ev = s.Run(s.Shape(font, pl.ell[:]))
+	// The ellipsis, shaped last: the view stays valid until the next Shape.
+	ev := s.Run(s.Shape(font, pl.ell[:]))
+	ew := ev.Advance
 	g0, start1 := int(ln.G0), len(pl.b.glyphs)
-	span := stAt(cut - 1).span
 	var rbit uint32
 	if rtl {
 		rbit = ClusterRTL
@@ -305,21 +324,25 @@ func (s *System) ellipsisLine(p *Para, ts uintptr, u0 int, wpt float64, scale fl
 		for i := start1; i < len(pl.b.xs); i++ {
 			pl.b.xs[i] -= ln.Width
 		}
-		k := start1 - g0
-		rotate(pl.b.glyphs[g0:], k)
-		rotate(pl.b.xs[g0:], k)
-		rotate(pl.b.faces[g0:], k)
-		rotate(pl.b.clus[g0:], k)
-		rotate(pl.b.spanOf[g0:], k)
+		n := start1 - g0
+		rotate(pl.b.glyphs[g0:], n)
+		rotate(pl.b.xs[g0:], n)
+		rotate(pl.b.faces[g0:], n)
+		rotate(pl.b.clus[g0:], n)
+		rotate(pl.b.spanOf[g0:], n)
 	}
 	ln.G1 = uint32(len(pl.b.glyphs))
 	ln.Width += ew
 	ln.Advance = ln.Width
-	pl.three = three
-	if ln.G1 > ln.G0 && three == [3]float64{} {
-		m := s.fonts[font].metrics
-		pl.three = [3]float64{float64(m.Ascent / scale), float64(m.Descent / scale), float64(m.LineGap / scale)}
+	// The line's typographic bounds with the ellipsis font's (points).
+	m := s.fonts[font].metrics
+	em := [3]float64{float64(m.Ascent / scale), float64(m.Descent / scale), float64(m.LineGap / scale)}
+	for i := range three {
+		if em[i] > three[i]+1e-3 {
+			three[i] = em[i]
+		}
 	}
+	pl.three = three
 	return ln
 }
 
