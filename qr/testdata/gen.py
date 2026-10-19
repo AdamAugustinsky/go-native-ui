@@ -30,6 +30,16 @@ def _padding_bits(buff, version, length):
 
 encoder.write_padding_bits = _padding_bits
 
+# Mask selection (ISO/IEC 18004 7.8.3) leaves two points open and no reader
+# depends on them, since every mask decodes: whether the format and version
+# information are drawn when a mask is scored, and whether a 1:1:3:1:1 pattern
+# with light areas on both sides counts once or twice. We score the finished
+# symbol and count once per occurrence, as ZXing, Nayuki's QR Code generator
+# and python-qrcode do (see the package comment of qr). segno reads the standard
+# otherwise, so the reference below is made to follow our reading; what the
+# vectors then check is the encoding and the arithmetic of rules N1 to N4, not
+# which reading is normative.
+#
 # segno scores the masks before the format and version information are drawn
 # (the reserved areas count as light, and the dark module as light too). We,
 # like ZXing, Nayuki's generator and python-qrcode, score the finished symbol,

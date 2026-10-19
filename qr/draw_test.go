@@ -32,10 +32,21 @@ func newDrawRig(w, h int) *drawRig {
 	return r
 }
 
-// frame builds one frame with the code drawn into a size-pixel square.
-func (r *drawRig) frame(m *Code, size float32) {
-	r.c.Begin(&r.in, r.w, r.h, 1, 1.0/60)
+// frame builds one frame at scale 1 with the code drawn into a size-pixel
+// square.
+func (r *drawRig) frame(m *Code, size float32) { r.frameAt(m, size, 1, 0) }
+
+// frameAt builds one frame at a scale factor, with radius pushed around Draw
+// when it is not 0.
+func (r *drawRig) frameAt(m *Code, size, scale, radius float32) {
+	r.c.Begin(&r.in, r.w, r.h, scale, 1.0/60)
+	if radius != 0 {
+		r.c.PushRadius(radius)
+	}
 	Draw(r.c, ui.HashString(0, "qr"), m, size, testFG, testBG)
+	if radius != 0 {
+		r.c.PopRadii()
+	}
 	r.c.End(&r.list)
 	r.in.ClearFrame()
 }
@@ -200,6 +211,53 @@ func TestFit(t *testing.T) {
 		mod, off := fit(tc.n, tc.side)
 		if mod != tc.mod || off != tc.offs {
 			t.Errorf("fit(%d, %v) = %v, %v, want %v, %v", tc.n, tc.side, mod, off, tc.mod, tc.offs)
+		}
+	}
+}
+
+// Corners stay square under a radius the caller pushed: the draw list is the
+// same quads, with no corner radius, as under the default style.
+func TestDrawIgnoresPushedRadius(t *testing.T) {
+	m := encodeString(t, "https://example.com/pair/0123456789", LevelM)
+	side := (m.Size() + 2*QuietZone) * 2
+	plain := newDrawRig(side, side)
+	plain.frame(m, float32(side))
+	round := newDrawRig(side, side)
+	round.frameAt(m, float32(side), 1, 6)
+	if len(plain.list.Quads) != len(round.list.Quads) {
+		t.Fatalf("%d quads under a pushed radius, %d without", len(round.list.Quads), len(plain.list.Quads))
+	}
+	for i := range plain.list.Quads {
+		if round.list.Quads[i] != plain.list.Quads[i] {
+			t.Fatalf("quad %d differs under a pushed radius:\n got %+v\nwant %+v", i, round.list.Quads[i], plain.list.Quads[i])
+		}
+	}
+	a, _ := raster(t, &plain.list, side, side) // raster also rejects any radius
+	b, _ := raster(t, &round.list, side, side)
+	for i := range a {
+		if a[i] != b[i] {
+			t.Fatalf("pixel %d differs under a pushed radius", i)
+		}
+	}
+}
+
+// The same pixel-perfect picture at scale 2 (a Retina window): the box size is
+// in device pixels, so the scale factor changes nothing about the layout.
+func TestDrawAtScaleTwo(t *testing.T) {
+	m := encodeString(t, strings.Repeat("https://example.com/", 3), LevelM)
+	n := m.Size() + 2*QuietZone
+	for _, mod := range []int{2, 3} {
+		side := n * mod
+		r := newDrawRig(side+6, side+6)
+		r.frameAt(m, float32(side), 2, 0)
+		dark, bg := raster(t, &r.list, r.w, r.h)
+		for y := 0; y < side; y++ {
+			for x := 0; x < side; x++ {
+				want := m.Dark(x/mod-QuietZone, y/mod-QuietZone)
+				if dark[y*r.w+x] != want || bg[y*r.w+x] == want {
+					t.Fatalf("module %d px: pixel (%d,%d) dark=%v, module is dark=%v", mod, x, y, dark[y*r.w+x], want)
+				}
+			}
 		}
 	}
 }

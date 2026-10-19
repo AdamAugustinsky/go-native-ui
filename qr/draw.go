@@ -32,7 +32,8 @@ func fit(n int, side float32) (module, offset float32) {
 // the quiet zone is part of the square. Modules are a whole number of pixels
 // across, as many as fit (so the symbol is crisp at 1× and 2×; pick size as
 // a multiple of Size()+2·QuietZone to fill the square exactly), and the symbol
-// is centred in what is left. fg and bg are RGBA8 (0xRRGGBBAA); scanners want
+// is centred in what is left. Corners are square whatever radius the caller
+// has pushed (PushRadius); the other style stacks are the caller's to set. fg and bg are RGBA8 (0xRRGGBBAA); scanners want
 // dark on light, with plenty of contrast. key identifies the box among its
 // siblings. It returns the square's box, so that a caller who wants it
 // announced builds NextRole and NextSemName before the call (they apply to
@@ -47,6 +48,7 @@ func Draw(c *ui.Context, key ui.Key, m *Code, size float32, fg, bg uint32) ui.ID
 	side := float32(math.Floor(float64(size)))
 	c.NextSize(ui.Px(side), ui.Px(side))
 	c.NextBG(bg)
+	c.NextRadius(0) // square corners whatever radius the caller has pushed
 	id := c.BoxKeyed(ui.DrawBackground, key, nil)
 	n := m.Size()
 	if n == 0 {
@@ -69,6 +71,7 @@ func Draw(c *ui.Context, key ui.Key, m *Code, size float32, fg, bg uint32) ui.ID
 			c.NextPos(origin+float32(x0)*mod, origin+float32(y)*mod)
 			c.NextSize(ui.Px(float32(x-x0)*mod), ui.Px(mod))
 			c.NextBG(fg)
+			c.NextRadius(0)
 			c.BoxKeyed(ui.DrawBackground|ui.FloatingX|ui.FloatingY, ui.KeyN(key, k), nil)
 			k++
 		}

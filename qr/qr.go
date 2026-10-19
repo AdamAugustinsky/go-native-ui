@@ -11,6 +11,20 @@
 //	if err := qr.Encode(&m, []byte("https://wa.me/…"), qr.LevelM); err != nil { … }
 //	for y := 0; y < m.Size(); y++ { for x := 0; x < m.Size(); x++ { m.Dark(x, y) … } }
 //
+// # Mask selection
+//
+// ISO/IEC 18004 §7.8.3 scores each of the eight masks by the four penalty rules
+// and takes the lowest score, but leaves two points to the implementer, and no
+// reader depends on them (any mask decodes). We score the finished symbol, with
+// the format and version information drawn, and count a 1:1:3:1:1 pattern once
+// per occurrence when it has four light modules before or after it (the edge
+// of the symbol counts as light). That is the reading of ZXing, Nayuki's
+// QR Code generator and python-qrcode; the second edition of the standard can
+// be read as scoring before the function information is drawn, as segno does.
+// testdata/gen.py makes the reference follow ours on these two points, so the
+// reference vectors check the arithmetic of the rules and the encoding, not
+// which reading is normative.
+//
 // # Memory
 //
 // A Code holds all its storage (about 15 KB: the modules, the function-module
