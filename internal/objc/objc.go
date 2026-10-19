@@ -5,7 +5,7 @@
 // called on the main thread. Other threads use their own ffi.Frame with
 // MsgSend.
 //
-// Setup helpers (Cls, Sel, Str, NewClass) allocate and are meant for startup.
+// Setup helpers (Cls, Sel, Str, Define and its builder) allocate and are meant for startup.
 package objc
 
 import (
@@ -175,35 +175,4 @@ func AppendUTF8(dst []byte, str ID) []byte {
 		return dst
 	}
 	return append(dst, unsafe.Slice((*byte)(ffi.PtrFromC(p)), n)...)
-}
-
-// Method describes one method added to a runtime-created class.
-type Method struct {
-	Sel   SEL
-	Types string  // Objective-C type encoding, e.g. "v@:@"
-	IMP   uintptr // overrides the class's shared IMP when non-zero
-}
-
-// NewClass creates and registers a class whose methods share imp (an ffi
-// callback that dispatches on the selector in argument 1), unless a Method
-// sets its own IMP.
-func NewClass(name string, super ID, protocols []string, imp uintptr, methods []Method) ID {
-	cls := ID(F.Call3(allocPair, uintptr(super), uintptr(unsafe.Pointer(CString(name))), 0))
-	if cls == 0 {
-		panic("objc: class exists or cannot be created: " + name)
-	}
-	for _, p := range protocols {
-		if proto := F.Call1(getProtocol, uintptr(unsafe.Pointer(CString(p)))); proto != 0 {
-			F.Call2(addProtocol, uintptr(cls), proto)
-		}
-	}
-	for _, m := range methods {
-		f := imp
-		if m.IMP != 0 {
-			f = m.IMP
-		}
-		F.Call4(addMethod, uintptr(cls), uintptr(m.Sel), f, uintptr(unsafe.Pointer(CString(m.Types))))
-	}
-	F.Call1(registerPair, uintptr(cls))
-	return cls
 }

@@ -101,11 +101,11 @@ func apSetup() {
 	}
 	apApp = objc.Send(objc.Cls("NSApplication"), selSharedApplication)
 
-	imp := ffi.NewCallback(func(*ffi.CB) { apChanged() })
-	apObserver = objc.Send(objc.Send(objc.NewClass("GNUIAppearanceObserver", objc.Cls("NSObject"), nil, imp, []objc.Method{
-		{Sel: selAppearanceChanged, Types: "v@:@"},
-		{Sel: selObserveValue, Types: "v@:@@@^v"},
-	}), selAlloc), objc.Sel("init"))
+	observer := objc.Define("GNUIAppearanceObserver", objc.Cls("NSObject"), nil)
+	changed := func(*ffi.CB) { apChanged() }
+	observer.Method(selAppearanceChanged, "v@:@", changed)
+	observer.Method(selObserveValue, "v@:@@@^v", changed)
+	apObserver = objc.Send(objc.Send(observer.Register(), selAlloc), objc.Sel("init"))
 	if apApp != 0 {
 		objc.Send4(apApp, objc.Sel("addObserver:forKeyPath:options:context:"), uintptr(apObserver), uintptr(objc.Str("effectiveAppearance")), 0, 0)
 	}

@@ -11,7 +11,7 @@ import (
 
 // imeRig is a GNUIView without a window, registered as the Window's view, so
 // that the NSTextInputClient methods can be sent real messages: they run
-// through objc_msgSend, the ffi callback and impHandler like AppKit's calls.
+// through objc_msgSend, the ffi callback and the registry dispatch like AppKit's calls.
 type imeRig struct {
 	t    *testing.T
 	w    *Window
