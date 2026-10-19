@@ -116,6 +116,10 @@ type BenchReport struct {
 	// of the one with the fewest allocations (the first of equals).
 	Windows []BenchWindow
 
+	// DisplayStallMs is how long frames stopped coming while the main loop
+	// kept running (it does not count against Timeout; see benchRun.loopTurn).
+	DisplayStallMs float64
+
 	// AllocSites attributes the allocations of the run, from the collection
 	// before the first window to the end of the last, when any window
 	// allocated (DECISIONS D27). OwnAllocObjects is how many were made by
@@ -205,6 +209,10 @@ type benchRun struct {
 	o        BenchOptions
 	cyc      CycleAligned
 	deadline int64
+	// stalled is how long frames stopped while the loop kept running (the
+	// display refused them), lastLoop when the loop last came round: see
+	// loopTurn.
+	stalled, lastLoop int64
 
 	presented int // frames drawn since the bench started
 	gcDone    bool
@@ -381,6 +389,7 @@ func (b *benchRun) endWindow(a *App) {
 		b.finished = true
 		b.report = b.best
 		b.report.Windows = b.windows
+		b.report.DisplayStallMs = float64(b.stalled) / 1e6
 		a.done = true
 		b.endProfiling(true)
 		return
@@ -421,4 +430,36 @@ func (b *benchRun) endProfiling(measured bool) {
 func (b *benchRun) summarize(xs []float64) Stats {
 	b.scratch = append(b.scratch[:0], xs...)
 	return summarizeIn(b.scratch)
+}
+
+// A frame source can stop for tens of seconds on a hosted Mac runner while
+// the window is visible: the display link stops ticking and the layer
+// refuses drawables (CI: 17 s of beginfail with drawable=0, after 1,599
+// refusals earlier in a 1M-row Pilot run, and it timed out). Time like that
+// is the display's, not the bench's, so it extends the deadline, up to
+// maxStallExtension. Only while the main loop keeps coming round (each turn
+// at most heartbeatGap after the previous one): a main thread blocked in a
+// frame gets no time. Extending only gives the frames time to come; it
+// excuses nothing they measure.
+const (
+	heartbeatGap      = int64(250 * time.Millisecond)
+	stallAfter        = int64(time.Second) // no frame drawn for this long
+	maxStallExtension = int64(90 * time.Second)
+)
+
+// loopTurn is called each time the event loop comes round, with the time of
+// the last frame drawn; it extends the deadline over a display stall.
+func (b *benchRun) loopTurn(now, lastDraw int64) {
+	prev := b.lastLoop
+	b.lastLoop = now
+	if prev == 0 || b.finished {
+		return
+	}
+	dt := now - prev
+	if dt > heartbeatGap || now-lastDraw < stallAfter || b.stalled >= maxStallExtension {
+		return
+	}
+	dt = min(dt, maxStallExtension-b.stalled)
+	b.stalled += dt
+	b.deadline += dt
 }

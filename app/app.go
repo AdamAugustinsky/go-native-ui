@@ -395,8 +395,11 @@ func (a *App) loop() error {
 	for !a.done {
 		a.syncMenuBar()
 		now := platform.Now()
-		if a.bench != nil && now > a.bench.deadline {
-			return a.benchTimeout(now)
+		if a.bench != nil {
+			a.bench.loopTurn(now, a.lastDrawT)
+			if now > a.bench.deadline {
+				return a.benchTimeout(now)
+			}
 		}
 		evs := a.Win.Wait(a.timeout(now))
 		a.tr.wheelStep = a.UI.WheelStep

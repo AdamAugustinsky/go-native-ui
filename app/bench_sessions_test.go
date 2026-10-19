@@ -134,3 +134,37 @@ func TestBenchSparseAllocationOfOursFails(t *testing.T) {
 	}
 	t.Log(msg)
 }
+
+// A display stall (no frames while the loop keeps coming round) extends the
+// deadline, up to maxStallExtension; a main thread that blocks gets nothing,
+// nor does a loop that draws.
+func TestBenchDeadlineOverDisplayStalls(t *testing.T) {
+	const ms = int64(1e6)
+	turns := func(b *benchRun, from, to, step, lastDraw int64) {
+		for now := from; now <= to; now += step {
+			b.loopTurn(now, lastDraw)
+		}
+	}
+	b := &benchRun{deadline: 60_000 * ms}
+	turns(b, 1000*ms, 21_000*ms, 50*ms, 0) // 20 s without a frame, the loop turning every 50 ms
+	if got := b.deadline - 60_000*ms; got < 18_900*ms || got > 20_000*ms {
+		t.Errorf("a 20 s display stall extended the deadline by %d ms", got/ms)
+	}
+	b = &benchRun{deadline: 60_000 * ms}
+	turns(b, 1000*ms, 21_000*ms, 1500*ms, 0) // the main thread out for 1.5 s at a time
+	if b.deadline != 60_000*ms {
+		t.Errorf("a blocked main thread extended the deadline by %d ms", (b.deadline-60_000*ms)/ms)
+	}
+	b = &benchRun{deadline: 60_000 * ms}
+	for now := int64(1000 * ms); now <= 21_000*ms; now += 16 * ms {
+		b.loopTurn(now, now) // drawing
+	}
+	if b.deadline != 60_000*ms {
+		t.Errorf("a loop that draws extended the deadline")
+	}
+	b = &benchRun{deadline: 60_000 * ms}
+	turns(b, 1000*ms, 400_000*ms, 100*ms, 0)
+	if got := b.deadline - 60_000*ms; got != maxStallExtension {
+		t.Errorf("extension %d ms, want the cap %d", got/ms, maxStallExtension/ms)
+	}
+}

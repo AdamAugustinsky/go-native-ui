@@ -130,8 +130,8 @@ func (a *App) benchTimeout(now int64) error {
 	a.diagBuf = append(a.diagBuf, '\n')
 	os.Stderr.Write(a.diagBuf)
 	bn := a.bench
-	return fmt.Errorf("app: bench timed out after %v with %d of %d measured frames (%d drawn; last %.1f s ago); %s",
-		bn.o.Timeout, bn.measuredN, bn.o.Frames, a.frames, float64(now-a.lastDrawT)/1e9, a.occlusionNote())
+	return fmt.Errorf("app: bench timed out after %v (+%.1f s of display stalls) with %d of %d measured frames (%d drawn; last %.1f s ago); %s",
+		bn.o.Timeout, float64(bn.stalled)/1e9, bn.measuredN, bn.o.Frames, a.frames, float64(now-a.lastDrawT)/1e9, a.occlusionNote())
 }
 
 // occlusionNote says in words what the window state is, for the timeout error.
