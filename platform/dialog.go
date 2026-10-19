@@ -33,6 +33,11 @@ import (
 // While a dialog is open on a window, the window's key, pointer and scroll
 // events belong to the sheet: they are not queued for the app.
 //
+// Not covered: the App Sandbox. A panel result is turned into a path at once;
+// the security-scoped URL that gives a sandboxed app access to the chosen file
+// is neither kept nor started, so a sandboxed app would lose access after the
+// sheet. The framework's apps are not sandboxed.
+//
 // Hand-over to F3 (the application object): EvDialog is the stand-in for the
 // plan's EvService alert and panel results. F3 keeps the same shape: a
 // ticket, an outcome, the button index and suppression flag, and the paths
@@ -160,7 +165,9 @@ type DialogResult struct {
 	// Suppressed is the state of the alert's suppression checkbox.
 	Suppressed bool
 	// Paths are the chosen files or folders, as absolute paths; empty unless
-	// a panel was answered. They are owned by the caller.
+	// a panel was answered. They are owned by the caller. They are the file
+	// system's bytes (fileSystemRepresentation), so a name that is not valid
+	// UTF-8 comes back unchanged; use them with os.Open as they are.
 	Paths []string
 	// Err is set by the application layer (package app) when a dialog it had
 	// queued could not be shown; the outcome is then DialogCancelled. Results

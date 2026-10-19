@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unsafe"
 
 	"gonativeui/internal/ffi"
 	"gonativeui/internal/objc"
@@ -330,10 +331,34 @@ func TestPanelCancelled(t *testing.T) {
 	})
 }
 
+// finishFake runs finishDialog for an open panel record whose URLs are urls, as
+// the real completion would, and returns the results the window queued.
+func finishFake(r *dlgRig, urls objc.ID) []DialogResult {
+	dialogInit()
+	fake := fakePanel(urls)
+	for i := range dialogs { // a record as beginDialog makes it, with no sheet
+		if dialogs[i].ticket == 0 {
+			req, err := dialogBlock.New(uintptr(i))
+			if err != nil {
+				r.failf("block: %v", err)
+				return nil
+			}
+			req.Sent()
+			lastTicket++
+			dialogs[i] = dialogRec{ticket: lastTicket, kind: DialogOpen, w: r.w, obj: fake, req: req}
+			finishDialog(i, 1)
+			req.Cancel() // the real completion would have freed the slot
+			break
+		}
+	}
+	r.results = nil
+	r.drain()
+	return r.results
+}
+
 // A panel's paths are copied out as owned strings, whatever they hold.
 func TestPanelPathsMarshal(t *testing.T) {
 	runScenario(t, func(r *dlgRig) {
-		w := r.w
 		dialogInit()
 		paths := []string{"/tmp/a.txt", "/tmp/\u65e5\u672c\u8a9e \U0001F600.png", "/tmp/with\nnewline", "/"}
 		urls := objc.Send(clsNSMutableArray, selArray)
@@ -342,29 +367,42 @@ func TestPanelPathsMarshal(t *testing.T) {
 			f := objc.F.Reset().Arg(uintptr(clsNSURL)).Arg(uintptr(selFileURLWithPath)).Arg(uintptr(str)).ArgBool(false)
 			objc.Send1(urls, selAddObject, f.Call(objc.MsgSend).R0())
 		}
-		fake := fakePanel(urls)
-		for i := range dialogs { // a record as beginDialog makes it, with no sheet
-			if dialogs[i].ticket == 0 {
-				req, err := dialogBlock.New(uintptr(i))
-				if err != nil {
-					r.failf("block: %v", err)
-					return
-				}
-				req.Sent()
-				lastTicket++
-				dialogs[i] = dialogRec{ticket: lastTicket, kind: DialogOpen, w: w, obj: fake, req: req}
-				finishDialog(i, 1)
-				req.Cancel() // the real completion would have freed the slot
-				break
-			}
-		}
-		r.drain()
-		if len(r.results) != 1 {
-			r.failf("%d results", len(r.results))
+		res := finishFake(r, urls)
+		if len(res) != 1 {
+			r.failf("%d results", len(res))
 			return
 		}
-		if got := r.results[0]; got.Outcome != DialogAnswered || !slices.Equal(got.Paths, paths) {
+		if got := res[0]; got.Outcome != DialogAnswered || !slices.Equal(got.Paths, paths) {
 			r.failf("paths %q, want %q (%+v)", got.Paths, paths, got)
+		}
+	})
+}
+
+// A path that is not valid UTF-8 comes back byte for byte: the paths are the
+// file system's representation, not an NSString's UTF-8 view of them. APFS on
+// current macOS refuses to create such a file (EILSEQ), so the test builds the
+// URL from the raw bytes of a path that does not exist and checks the bytes
+// that come back; it skips where AppKit refuses even that.
+func TestPanelPathNotUTF8(t *testing.T) {
+	name := "/tmp/gnui-bad\xff\xfename.txt"
+	runScenario(t, func(r *dlgRig) {
+		dialogInit()
+		raw := append([]byte(name), 0) // heap memory, NUL-terminated
+		sel := objc.Sel("fileURLWithFileSystemRepresentation:isDirectory:relativeToURL:")
+		url := objc.ID(objc.F.Reset().Arg(uintptr(clsNSURL)).Arg(uintptr(sel)).ArgPtr(unsafe.Pointer(&raw[0])).ArgBool(false).Arg(0).Call(objc.MsgSend).R0())
+		if url == 0 {
+			r.failf("AppKit made no NSURL for raw bytes that are not UTF-8")
+			return
+		}
+		urls := objc.Send(clsNSMutableArray, selArray)
+		objc.Send1(urls, selAddObject, uintptr(url))
+		res := finishFake(r, urls)
+		if len(res) != 1 || len(res[0].Paths) != 1 {
+			r.failf("results %+v", res)
+			return
+		}
+		if got := res[0].Paths[0]; got != name {
+			r.failf("path %q (% x), want %q (% x)", got, got, name, name)
 		}
 	})
 }

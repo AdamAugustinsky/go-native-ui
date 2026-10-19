@@ -47,7 +47,8 @@ func (m *tooltipMap) set(r []TooltipRegion) bool {
 
 // flatten returns the regions as rectangles with no overlap and the same key
 // at every point: each region keeps only what no later (higher) region covers.
-// Empty pieces and keyless regions are dropped. The result is owned by the map
+// Empty pieces and keyless regions are dropped, and a keyless region cuts
+// nothing out of the ones beneath it. The result is owned by the map
 // and valid until the next call.
 func (m *tooltipMap) flatten() []TooltipRegion {
 	m.flat = m.flat[:0]
@@ -57,8 +58,8 @@ func (m *tooltipMap) flatten() []TooltipRegion {
 		}
 		m.cur = append(m.cur[:0], r.Rect)
 		for _, hi := range m.regs[i+1:] {
-			if hi.Rect[0] >= hi.Rect[2] || hi.Rect[1] >= hi.Rect[3] {
-				continue
+			if hi.Key == 0 || hi.Rect[0] >= hi.Rect[2] || hi.Rect[1] >= hi.Rect[3] {
+				continue // empty or keyless: it shows no tooltip, so it hides none
 			}
 			m.nxt = m.nxt[:0]
 			for _, p := range m.cur {

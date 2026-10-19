@@ -83,7 +83,7 @@ var (
 	selAddObject        = objc.Sel("addObject:")
 	selURLs             = objc.Sel("URLs")
 	selURL              = objc.Sel("URL")
-	selPath             = objc.Sel("path")
+	selFSRep            = objc.Sel("fileSystemRepresentation")
 	selFileURLWithPath  = objc.Sel("fileURLWithPath:isDirectory:")
 	modalResponseAbort  = ^uintptr(1000) // NSModalResponseAbort, -1001
 	modalResponseOK     = int64(1)
@@ -348,8 +348,10 @@ func finishDialog(i int, resp int64) {
 func (w *Window) appendPanelPaths(r *dialogRec) int {
 	n := 0
 	add := func(u objc.ID) {
-		if p := objc.Send(u, selPath); p != 0 {
-			w.q.text = append(objc.AppendUTF8(w.q.text, p), 0)
+		// The file system representation, bytes as the file system has them,
+		// not the NSString path: a name that is not valid UTF-8 survives.
+		if p := uintptr(objc.Send(u, selFSRep)); p != 0 {
+			w.q.text = append(appendCString(w.q.text, p), 0)
 			n++
 		}
 	}
@@ -364,6 +366,15 @@ func (w *Window) appendPanelPaths(r *dialogRec) int {
 		add(objc.Send1(urls, selURLAt, uintptr(j)))
 	}
 	return n
+}
+
+// appendCString appends the bytes of the NUL-terminated C string at p.
+func appendCString(dst []byte, p uintptr) []byte {
+	n := 0
+	for *(*byte)(unsafe.Add(ffi.PtrFromC(p), n)) != 0 {
+		n++
+	}
+	return append(dst, unsafe.Slice((*byte)(ffi.PtrFromC(p)), n)...)
 }
 
 // release lets the sheet object go (autoreleased: the completion may still be
