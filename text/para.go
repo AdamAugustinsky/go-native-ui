@@ -232,16 +232,18 @@ func (p *ParaView) LineRun(i int) RunView {
 }
 
 // LineExtent returns the x interval of line i's glyphs from its origin, the
-// line's Advance wide: from 0 to Advance, or, when white space hangs left of
-// the origin (a right-to-left line broken after spaces: CoreText gives them
-// negative X), from the leftmost glyph to Width. The last glyph's cell (see
-// GlyphAt) ends at its right end.
+// line's Advance wide. A left-to-right line's white space hangs right of its
+// Width: the extent is 0 to Advance. A right-to-left line's hangs left of its
+// origin (CoreText gives those spaces negative X): the extent is Width -
+// Advance to Width. Glyph positions do not move it: a combining mark may sit
+// left of its pen position, even left of the origin. The last glyph's cell
+// (see GlyphAt) ends at its right end.
 func (p *ParaView) LineExtent(i int) (x0, x1 float32) {
 	l := &p.Lines[i]
-	for g := l.G0; g < l.G1; g++ {
-		x0 = min(x0, p.X[g])
+	if l.Flags&LineRTL != 0 {
+		return min(l.Width-l.Advance, 0), l.Width
 	}
-	return x0, x0 + l.Advance
+	return 0, l.Advance
 }
 
 // lineEndCaret is the last caret offset of line i: its end, before the

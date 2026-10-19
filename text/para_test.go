@@ -3,8 +3,10 @@ package text
 import (
 	"fmt"
 	"strconv"
+	"strings"
 	"testing"
 	"unicode/utf8"
+	"unsafe"
 )
 
 // gridShaper is a deterministic BasicShaper without allocation: one glyph per
@@ -276,6 +278,25 @@ func TestBasicLayoutEllipsisAfterRunCacheMisses(t *testing.T) {
 	}
 }
 
+// The copies of the shaped input are reserved for the whole paragraph, not
+// for the glyph budget of the output: a truncated paragraph shapes all of its
+// text and outputs a few glyphs.
+func TestParaReservedTruncatedInputOverTheGlyphBudget(t *testing.T) {
+	txt := []byte(strings.Repeat("abcd ", 20)) // 100 characters
+	for _, ell := range []bool{false, true} {
+		p := Para{Text: txt, Fonts: []FontKey{0}, Width: 60, MaxLines: 1, Ellipsis: ell}
+		allocFree(t, "a truncated paragraph", func() func() {
+			l := NewBasicLayouter(new(gridShaper))
+			l.ReserveParas(ParaBudget{Paras: 4, Glyphs: 16, Text: 256})
+			return func() {
+				if v := l.Paragraph(l.Layout(&p)); len(v.Lines) != 1 || !v.Truncated || len(v.Glyphs) > 16 {
+					t.Fatalf("%d lines, truncated %v, %d glyphs", len(v.Lines), v.Truncated, len(v.Glyphs))
+				}
+			}
+		})
+	}
+}
+
 // The ellipsis takes the font of the last character kept, and the cut leaves
 // room for that font's ellipsis, not for the one of the text left out.
 func TestBasicLayoutEllipsisFontFromTheCut(t *testing.T) {
@@ -414,6 +435,29 @@ func TestParaRangeRectsSplitLigatures(t *testing.T) {
 // A right-to-left line broken after spaces has them hanging left of its
 // origin, at negative X: they are hit, covered and caret-placed there, and the
 // rightmost cell ends at the line's Width, not at its Advance.
+// A combining mark placed left of its pen position (CoreText's e + U+0301:
+// the mark at -4) is not hanging white space: the line still runs from 0 to
+// its Advance, so the last caret, ranges and hit testing reach its end.
+func TestParaMarkLeftOfTheOriginKeepsTheExtent(t *testing.T) {
+	v := oneLine("e\u0301x", []float32{0, -4, 10}, []uint32{0, 1, 3}, 20, 20, 0)
+	const w = 100
+	if x0, x1 := v.LineExtent(0); x0 != 0 || x1 != 20 {
+		t.Errorf("extent %v..%v, want 0..20", x0, x1)
+	}
+	if _, x := v.Caret(4, w); x != 20 {
+		t.Errorf("the caret at the end at %v, want 20", x)
+	}
+	if got := fmt.Sprint(v.RangeRects(0, 4, w, nil)); got != "[[0 0 20 14]]" {
+		t.Errorf("the whole line covered by %s", got)
+	}
+	if g := v.GlyphAt(17, 5, w); g != 2 {
+		t.Errorf("glyph at 17: %d, want 2", g)
+	}
+	if off := v.HitTest(19, 5, w); off != 4 {
+		t.Errorf("hit at 19: %d, want 4", off)
+	}
+}
+
 func TestParaHangingWhiteSpaceLeftOfTheOrigin(t *testing.T) {
 	const r = ClusterRTL
 	// "אב גד  ": two spaces hang left; visually "  דג בא".
@@ -651,6 +695,93 @@ func TestParaLayoutReservedMissesAllocateNothing(t *testing.T) {
 			}
 		}
 	})
+}
+
+// reservedBytes is the memory a paragraph cache has reserved: the capacity
+// of its entries, table and slabs.
+func (c *paraCache) reservedBytes() int {
+	s := &c.slabs
+	return cap(c.ents)*int(unsafe.Sizeof(paraEnt{})) + cap(c.table)*4 + cap(s.text) + cap(s.spans)*int(unsafe.Sizeof(Span{})) +
+		cap(s.fonts)*int(unsafe.Sizeof(FontKey(0))) + cap(s.lines)*int(unsafe.Sizeof(Line{})) +
+		cap(s.glyphs)*2 + cap(s.xs)*4 + cap(s.faces)*int(unsafe.Sizeof(FaceID(0))) + cap(s.clus)*4 + cap(s.spanOf)*2
+}
+
+// Without a declared budget the cache keeps to the default one, small enough
+// for an empty app; a declared budget replaces it, and the default
+// reservation (ReserveRuns) does not shrink a declared one.
+func TestParaCacheDefaultBudget(t *testing.T) {
+	l := NewBasicLayouter(new(gridShaper))
+	if got, want := l.ParaStats().Budget, DefaultParaBudget().clamp(); got != want {
+		t.Fatalf("budget %+v, want the default %+v", got, want)
+	}
+	l.reserveDefault()
+	if n := l.cache.reservedBytes(); n > 3<<20 {
+		t.Errorf("the default reservation is %.1f MiB", float64(n)/(1<<20))
+	}
+	big := ParaBudget{Paras: 8192, Glyphs: 1 << 19, Text: 1 << 19}
+	l.ReserveParas(big)
+	l.reserveDefault()
+	if got := l.ParaStats().Budget; got != big.clamp() {
+		t.Errorf("after a declared budget and the default: %+v", got)
+	}
+	// Filling past the default budget evicts rather than grows.
+	l = NewBasicLayouter(new(gridShaper))
+	l.reserveDefault()
+	n := l.cache.reservedBytes()
+	txt := make([]byte, 0, 64)
+	for i := 0; i < 5000; i++ {
+		p := Para{Text: strconv.AppendInt(append(txt[:0], "a message number "...), int64(i), 10), Fonts: []FontKey{0}, Width: 80}
+		l.Layout(&p)
+	}
+	if m := l.cache.reservedBytes(); m != n || l.ParaStats().Paras > DefaultParaBudget().Paras {
+		t.Errorf("the cache grew from %d to %d bytes, %d layouts", n, m, l.ParaStats().Paras)
+	}
+}
+
+// The storage of a layout bigger than the budget is released once it leaves
+// use, and does not keep the size of a bigger one before it.
+func TestParaCacheReleasesOversizeStorage(t *testing.T) {
+	l := NewBasicLayouter(new(gridShaper))
+	l.ReserveParas(ParaBudget{Paras: 8, Glyphs: 200, Text: 200})
+	c := l.cache
+	text := func(n int) []byte { return []byte(strings.Repeat("abcdefg h", n/9+1)[:n]) }
+	huge := Para{Text: text(5000), Fonts: []FontKey{0}, Width: 1000}
+	if l.Layout(&huge) != overRef || cap(c.over.text) < 5000 {
+		t.Fatal("not laid out outside the cache")
+	}
+	// A smaller oversize layout replaces it in storage of its own size.
+	big := Para{Text: text(300), Fonts: []FontKey{0}, Width: 1000}
+	if l.Layout(&big) != overRef || cap(c.over.text) > 2*300 {
+		t.Fatalf("the replacement keeps %d bytes of text storage", cap(c.over.text))
+	}
+	small := func(i int) Para {
+		return Para{Text: []byte(fmt.Sprintf("small %d", i)), Fonts: []FontKey{0}, Width: 1000}
+	}
+	// In use (looked up between the others): kept, through evictions.
+	for i := 0; i < 40; i++ {
+		p := small(i)
+		l.Layout(&p)
+		l.Layout(&big)
+	}
+	if !c.overOK || c.over.text == nil {
+		t.Fatal("released while in use")
+	}
+	// Out of use: released, with a new generation.
+	gen := l.ParaGeneration()
+	for i := 100; i < 120; i++ {
+		p := small(i)
+		l.Layout(&p)
+	}
+	if c.overOK || c.over.text != nil || l.ParaGeneration() == gen {
+		t.Fatalf("not released: ok %v, %d bytes of text storage", c.overOK, cap(c.over.text))
+	}
+	if v := l.Paragraph(overRef); len(v.Lines) != 0 {
+		t.Fatal("the released layout is still viewable")
+	}
+	// Laid out again on its next use.
+	if r := l.Layout(&big); r != overRef || len(l.Paragraph(r).Lines) == 0 {
+		t.Fatal("not laid out again")
+	}
 }
 
 func TestEmojiOnly(t *testing.T) {
