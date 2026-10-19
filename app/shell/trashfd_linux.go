@@ -56,13 +56,15 @@ func (d *tdir) renameInto(src *tdir, srcName, dstName string) error {
 	if err != nil {
 		return err
 	}
-	_, _, e := syscall.Syscall6(syscall.SYS_RENAMEAT2, uintptr(src.fd), uintptr(unsafe.Pointer(from)), uintptr(d.fd), uintptr(unsafe.Pointer(to)), renameNoReplace, 0)
-	switch e {
-	case 0:
-		return nil
-	case syscall.ENOSYS, syscall.EINVAL:
-	default:
-		return e
+	if sysRenameat2 != 0 {
+		_, _, e := syscall.Syscall6(sysRenameat2, uintptr(src.fd), uintptr(unsafe.Pointer(from)), uintptr(d.fd), uintptr(unsafe.Pointer(to)), renameNoReplace, 0)
+		switch e {
+		case 0:
+			return nil
+		case syscall.ENOSYS, syscall.EINVAL:
+		default:
+			return e
+		}
 	}
 	// A name that is a symbolic link, or a file we cannot open, still exists.
 	fd, err := syscall.Openat(d.fd, dstName, syscall.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK|syscall.O_CLOEXEC, 0)
