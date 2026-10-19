@@ -21,17 +21,26 @@
 // # Crashes
 //
 // Setup points the Go runtime's crash output (runtime/debug.SetCrashOutput) at
-// crash.log in the log directory. An unrecovered panic or a fatal runtime error
-// writes its goroutine dump there (as well as to standard error), after the
-// process can no longer do anything else. For a fatal runtime error (concurrent
-// map writes, out of memory) the Go runtime puts the "fatal error:" line on
-// standard error only; the file has the stacks. The next Setup finds the non-empty
-// file, moves it to crash-<time>.log (the newest 5 are kept) and reports it
-// through PreviousCrash. A clean run leaves crash.log empty. Crashes that never
-// reach the Go runtime (a signal in native code, being killed) leave nothing.
+// this instance's own file in the log directory, crash.<pid>-<nonce>.log.
+// Instances that share the directory each have one and never touch another
+// running instance's. An unrecovered panic or a fatal runtime error writes its
+// goroutine dump there (as well as to standard error), after the process can no
+// longer do anything else. For a fatal runtime error (concurrent map writes,
+// out of memory) the Go runtime puts the "fatal error:" line on standard error
+// only; the file has the stacks.
+//
+// The next Setup looks at the files of instances that are no longer running (by
+// pid; a pid that has been reused by another process keeps its file until that
+// process exits). An empty one is removed. A non-empty one is read and moved to
+// crash-<time>-<pid>-<nonce>.log (the newest 5 are kept) and the newest is
+// reported through PreviousCrash. If the move fails, the file stays where it is,
+// is still reported, and Setup returns the error; nothing is overwritten. A
+// clean run leaves its file empty and Close removes it. Crashes that never reach
+// the Go runtime (a signal in native code, being killed) leave nothing.
 package log
 
 import (
+	"crypto/rand"
 	"fmt"
 	"io"
 	"log/slog"
@@ -39,6 +48,7 @@ import (
 	"path/filepath"
 	"runtime/debug"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -100,7 +110,6 @@ type Crash struct {
 const (
 	maxCrashText = 64 << 10
 	keepCrashes  = 5
-	crashFile    = "crash.log"
 )
 
 var state struct {
@@ -166,10 +175,9 @@ func Setup(opt Options) (*slog.Logger, error) {
 				sinks, closer = append(sinks, rot), rot
 			}
 			if !opt.NoCrashCapture {
-				var err error
-				if crash, owns, err = captureCrashes(dir); err != nil {
-					errs = append(errs, err.Error())
-				}
+				var cerrs []string
+				crash, owns, cerrs = captureCrashes(dir)
+				errs = append(errs, cerrs...)
 			}
 		}
 	}
@@ -203,34 +211,106 @@ func Setup(opt Options) (*slog.Logger, error) {
 	return logger, nil
 }
 
-// captureCrashes archives a crash left by the previous run and points the
-// runtime's crash output at a fresh crash.log.
-func captureCrashes(dir string) (prev *Crash, owns string, err error) {
-	path := filepath.Join(dir, crashFile)
-	if fi, serr := os.Stat(path); serr == nil && fi.Size() > 0 {
-		dst := filepath.Join(dir, "crash-"+fi.ModTime().UTC().Format("20060102-150405")+".log")
-		os.Remove(dst)
-		if rerr := os.Rename(path, dst); rerr == nil {
-			c := &Crash{Time: fi.ModTime(), Path: dst}
-			if f, oerr := os.Open(dst); oerr == nil {
-				b := make([]byte, maxCrashText+1)
-				n, _ := io.ReadFull(f, b)
-				f.Close()
-				c.Text, c.Truncated = string(b[:min(n, maxCrashText)]), n > maxCrashText
-			}
+// renameFile moves a crash file into the archive; a variable so a test can make
+// it fail.
+var renameFile = os.Rename
+
+// activeCrash names the crash file of one running instance: crash.<pid>-<nonce>.log.
+// Each instance has its own, so instances sharing a log directory neither
+// truncate nor remove each other's. The nonce keeps a reused pid apart.
+func activeCrash(dir string) string {
+	var n [6]byte
+	rand.Read(n[:])
+	return filepath.Join(dir, fmt.Sprintf("crash.%d-%x.log", os.Getpid(), n))
+}
+
+// activePID extracts the pid from a crash.<pid>-<nonce>.log name.
+func activePID(name string) (int, bool) {
+	rest, ok := strings.CutPrefix(name, "crash.")
+	if !ok {
+		return 0, false
+	}
+	rest, ok = strings.CutSuffix(rest, ".log")
+	if !ok {
+		return 0, false
+	}
+	pidStr, _, ok := strings.Cut(rest, "-")
+	pid, err := strconv.Atoi(pidStr)
+	return pid, ok && err == nil && pid > 0
+}
+
+// captureCrashes archives the crash files that earlier instances left, then
+// creates this instance's own and points the runtime's crash output at it.
+//
+// A file belongs to a running instance if its pid is alive (and is not ours: a
+// file with our pid that is not the one we are about to create is from an
+// earlier run that had the same pid). Only files of dead instances are touched:
+// an empty one is removed, a non-empty one is read and moved to
+// crash-<time>-<pid>-<nonce>.log, a name no other file has. If the move fails
+// the original stays where it is, still reported, and the next Setup tries
+// again; nothing is truncated or overwritten.
+func captureCrashes(dir string) (prev *Crash, owns string, errs []string) {
+	files, _ := filepath.Glob(filepath.Join(dir, "crash.*.log"))
+	sort.Strings(files)
+	for _, path := range files {
+		pid, ok := activePID(filepath.Base(path))
+		if !ok || (pid != os.Getpid() && processAlive(pid)) {
+			continue
+		}
+		fi, err := os.Stat(path)
+		if err != nil {
+			continue
+		}
+		if fi.Size() == 0 {
+			os.Remove(path)
+			continue
+		}
+		c := &Crash{Time: fi.ModTime(), Path: path}
+		if f, err := os.Open(path); err == nil {
+			b := make([]byte, maxCrashText+1)
+			n, _ := io.ReadFull(f, b)
+			f.Close()
+			c.Text, c.Truncated = string(b[:min(n, maxCrashText)]), n > maxCrashText
+		}
+		if dst, err := archiveCrash(dir, path, fi.ModTime()); err != nil {
+			errs = append(errs, fmt.Sprintf("could not archive %s: %v", path, err))
+		} else {
+			c.Path = dst
+		}
+		if prev == nil || c.Time.After(prev.Time) {
 			prev = c
 		}
-		pruneCrashes(dir)
 	}
-	f, ferr := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
-	if ferr != nil {
-		return prev, "", ferr
+	pruneCrashes(dir)
+	path := activeCrash(dir)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		return prev, "", append(errs, err.Error())
 	}
 	defer f.Close() // SetCrashOutput duplicates the descriptor
-	if serr := debug.SetCrashOutput(f, debug.CrashOptions{}); serr != nil {
-		return prev, "", serr
+	if err := debug.SetCrashOutput(f, debug.CrashOptions{}); err != nil {
+		os.Remove(path)
+		return prev, "", append(errs, err.Error())
 	}
-	return prev, path, nil
+	return prev, path, errs
+}
+
+// archiveCrash moves src to a crash-<time>-<pid>-<nonce>.log that does not
+// exist yet.
+func archiveCrash(dir, src string, mod time.Time) (string, error) {
+	id := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(src), "crash."), ".log")
+	stem := "crash-" + mod.UTC().Format("20060102-150405") + "-" + id
+	dst := filepath.Join(dir, stem+".log")
+	for n := 2; ; n++ {
+		if _, err := os.Lstat(dst); err != nil {
+			break
+		}
+		dst = filepath.Join(dir, fmt.Sprintf("%s-%d.log", stem, n))
+	}
+	if err := renameFile(src, dst); err != nil {
+		return "", err
+	}
+	return dst, nil
 }
 
 // pruneCrashes deletes all but the newest keepCrashes archived crash files.

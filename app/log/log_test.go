@@ -1,8 +1,10 @@
 package log
 
 import (
+	"bufio"
 	"bytes"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -218,8 +220,8 @@ func TestCloseFlushesAndLaterRecordsAreDropped(t *testing.T) {
 	if !strings.Contains(f, "msg=before") || strings.Contains(f, "msg=after") {
 		t.Errorf("file:\n%s", f)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "crash.log")); err == nil {
-		t.Error("a clean exit left crash.log behind")
+	if fs := activeFiles(t, dir); len(fs) != 0 {
+		t.Errorf("a clean exit left %v behind", fs)
 	}
 }
 
@@ -259,6 +261,10 @@ func TestCrashHelper(t *testing.T) {
 	case "goroutine":
 		go func() { panic("boom from a goroutine") }()
 		select {}
+	case "hold": // stay alive, with an empty crash file, until stdin closes; then crash
+		fmt.Println("READY")
+		io.Copy(io.Discard, os.Stdin)
+		panic("boom after being held")
 	case "fatal":
 		m := map[int]int{}
 		var wg sync.WaitGroup
@@ -299,8 +305,8 @@ func TestCrashIsCapturedAndReportedNextRun(t *testing.T) {
 		t.Run(tc.kind, func(t *testing.T) {
 			dir := t.TempDir()
 			crashChild(t, dir, tc.kind)
-			if fi, err := os.Stat(filepath.Join(dir, "crash.log")); err != nil || fi.Size() == 0 {
-				t.Fatalf("crash.log after the crash: %v %v", fi, err)
+			if fs := activeFiles(t, dir); len(fs) != 1 || fileSize(t, fs[0]) == 0 {
+				t.Fatalf("crash files after the crash: %v", fs)
 			}
 			l, err := Setup(Options{Dir: dir, NoStderr: true})
 			if err != nil {
@@ -320,8 +326,8 @@ func TestCrashIsCapturedAndReportedNextRun(t *testing.T) {
 			if _, err := os.Stat(c.Path); err != nil || !strings.HasPrefix(filepath.Base(c.Path), "crash-") {
 				t.Errorf("archived at %q: %v", c.Path, err)
 			}
-			if fi, _ := os.Stat(filepath.Join(dir, "crash.log")); fi == nil || fi.Size() != 0 {
-				t.Errorf("fresh crash.log is not empty: %v", fi)
+			if fs := activeFiles(t, dir); len(fs) != 1 || fileSize(t, fs[0]) != 0 {
+				t.Errorf("want this run's own empty crash file, have %v", fs)
 			}
 			Flush()
 			f := read(t, filepath.Join(dir, "app.log"))
@@ -346,7 +352,7 @@ func TestOldCrashFilesArePruned(t *testing.T) {
 	for i := 1; i <= 8; i++ {
 		os.WriteFile(filepath.Join(dir, fmt.Sprintf("crash-2026010%d-000000.log", i)), []byte("old"), 0o600)
 	}
-	os.WriteFile(filepath.Join(dir, "crash.log"), []byte("panic: newest\n\ngoroutine 1"), 0o600)
+	os.WriteFile(deadCrashFile(t, dir, "aa"), []byte("panic: newest\n\ngoroutine 1"), 0o600)
 	if _, err := Setup(Options{Dir: dir, NoStderr: true}); err != nil {
 		t.Fatal(err)
 	}
@@ -362,7 +368,7 @@ func TestOldCrashFilesArePruned(t *testing.T) {
 
 func TestHugeCrashTextIsTruncated(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "crash.log"), bytes.Repeat([]byte("g"), maxCrashText+500), 0o600)
+	os.WriteFile(deadCrashFile(t, dir, "bb"), bytes.Repeat([]byte("g"), maxCrashText+500), 0o600)
 	Setup(Options{Dir: dir, NoStderr: true})
 	defer Close()
 	c, ok := PreviousCrash()
@@ -422,5 +428,166 @@ func TestFlushReturnsWhenRotationCannotMoveTheFile(t *testing.T) {
 	}
 	if strings.Count(errOut.String(), "msg=x") != 40 {
 		t.Errorf("stderr got %d of 40 lines", strings.Count(errOut.String(), "msg=x"))
+	}
+}
+
+// deadPID returns the pid of a process that has exited.
+func deadPID(t *testing.T) int {
+	t.Helper()
+	cmd := exec.Command(os.Args[0], "-test.run=^$")
+	if err := cmd.Run(); err != nil {
+		t.Fatal(err)
+	}
+	return cmd.Process.Pid
+}
+
+// deadCrashFile is the path of a crash file of an instance that is gone.
+func deadCrashFile(t *testing.T, dir, nonce string) string {
+	t.Helper()
+	return filepath.Join(dir, fmt.Sprintf("crash.%d-%s.log", deadPID(t), nonce))
+}
+
+func activeFiles(t *testing.T, dir string) []string {
+	t.Helper()
+	m, _ := filepath.Glob(filepath.Join(dir, "crash.*.log"))
+	return m
+}
+
+func fileSize(t *testing.T, p string) int64 {
+	t.Helper()
+	fi, err := os.Stat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fi.Size()
+}
+
+// Two instances share a log directory. The second one's Setup and Close must
+// leave the first one's crash file alone, and the first one's later crash must
+// still be captured (with one shared crash.log, the second's start truncated or
+// its exit unlinked the file the first was about to write).
+func TestConcurrentInstancesKeepTheirOwnCrashOutput(t *testing.T) {
+	dir := t.TempDir()
+	cmd := exec.Command(os.Args[0], "-test.run=^TestCrashHelper$")
+	cmd.Env = append(os.Environ(), crashEnv+"="+dir, "GNUI_LOG_CRASH_KIND=hold")
+	stdin, _ := cmd.StdinPipe()
+	stdout, _ := cmd.StdoutPipe()
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waited := false
+	defer func() {
+		if !waited {
+			stdin.Close()
+			cmd.Wait()
+		}
+	}()
+	rd := bufio.NewReader(stdout)
+	for {
+		line, err := rd.ReadString('\n')
+		if err != nil {
+			t.Fatalf("helper died before it was ready: %v", err)
+		}
+		if strings.TrimSpace(line) == "READY" {
+			break
+		}
+	}
+	childFile := activeFiles(t, dir)
+	if len(childFile) != 1 {
+		t.Fatalf("the holder's crash file: %v", childFile)
+	}
+
+	// The second instance starts and exits cleanly in the same directory.
+	if _, err := Setup(Options{Dir: dir, NoStderr: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := PreviousCrash(); ok {
+		t.Error("the second instance reported a crash of a running instance")
+	}
+	if fs := activeFiles(t, dir); len(fs) != 2 {
+		t.Errorf("crash files while both run: %v", fs)
+	}
+	Close()
+	if fs := activeFiles(t, dir); len(fs) != 1 || fs[0] != childFile[0] {
+		t.Fatalf("after the second exited, crash files %v, want only the holder's %v", fs, childFile)
+	}
+
+	stdin.Close() // the holder now panics
+	io.Copy(io.Discard, rd)
+	waited = true
+	if err := cmd.Wait(); err == nil {
+		t.Fatal("the holder exited cleanly")
+	}
+	if _, err := Setup(Options{Dir: dir, NoStderr: true}); err != nil {
+		t.Fatal(err)
+	}
+	defer Close()
+	c, ok := PreviousCrash()
+	if !ok || !strings.Contains(c.Text, "boom after being held") {
+		t.Fatalf("the holder's crash was lost: %v %q", ok, c.Text)
+	}
+}
+
+// A failed move must not cost the crash: the file stays, is reported, and the
+// next Setup archives it.
+func TestFailedArchiveKeepsTheCrash(t *testing.T) {
+	dir := t.TempDir()
+	src := deadCrashFile(t, dir, "cc")
+	os.WriteFile(src, []byte("panic: precious\n\ngoroutine 1 [running]:"), 0o600)
+	renameFile = func(string, string) error { return fmt.Errorf("disk says no") }
+	_, err := Setup(Options{Dir: dir, NoStderr: true})
+	renameFile = os.Rename
+	if err == nil || !strings.Contains(err.Error(), "disk says no") {
+		t.Fatalf("Setup error %v, want the archive failure", err)
+	}
+	c, ok := PreviousCrash()
+	if !ok || !strings.Contains(c.Text, "precious") || c.Path != src {
+		t.Errorf("crash %+v ok %v, want the original reported in place", c, ok)
+	}
+	Close()
+	if b, e := os.ReadFile(src); e != nil || !strings.Contains(string(b), "precious") {
+		t.Fatalf("the crash file was destroyed: %q %v", b, e)
+	}
+	if _, err := Setup(Options{Dir: dir, NoStderr: true}); err != nil {
+		t.Fatal(err)
+	}
+	defer Close()
+	if _, e := os.Stat(src); e == nil {
+		t.Error("the retry did not archive it")
+	}
+	m, _ := filepath.Glob(filepath.Join(dir, "crash-*.log"))
+	if len(m) != 1 || !strings.Contains(read(t, m[0]), "precious") {
+		t.Errorf("archive %v", m)
+	}
+}
+
+// Archive names never collide: a file already sitting under the name a crash
+// would get is left alone.
+func TestArchiveNamesDoNotOverwrite(t *testing.T) {
+	dir := t.TempDir()
+	src := deadCrashFile(t, dir, "dd")
+	os.WriteFile(src, []byte("panic: second"), 0o600)
+	when := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	os.Chtimes(src, when, when)
+	taken := filepath.Join(dir, "crash-20260102-030405-"+strings.TrimSuffix(strings.TrimPrefix(filepath.Base(src), "crash."), ".log")+".log")
+	os.WriteFile(taken, []byte("panic: first"), 0o600)
+	// A second crash of the same second from another instance.
+	other := deadCrashFile(t, dir, "ee")
+	os.WriteFile(other, []byte("panic: third"), 0o600)
+	os.Chtimes(other, when, when)
+	if _, err := Setup(Options{Dir: dir, NoStderr: true}); err != nil {
+		t.Fatal(err)
+	}
+	defer Close()
+	if b := read(t, taken); b != "panic: first" {
+		t.Errorf("an existing archive was overwritten: %q", b)
+	}
+	m, _ := filepath.Glob(filepath.Join(dir, "crash-*.log"))
+	var all string
+	for _, p := range m {
+		all += read(t, p) + "|"
+	}
+	if len(m) != 3 || !strings.Contains(all, "second") || !strings.Contains(all, "third") || !strings.Contains(all, "first") {
+		t.Errorf("archives %v: %s", m, all)
 	}
 }
