@@ -3,6 +3,7 @@ package platform
 import (
 	"os"
 	"runtime"
+	"syscall"
 	"testing"
 	"time"
 	"unsafe"
@@ -29,34 +30,29 @@ var (
 // regKey opens (creating it when missing) HKCU\sub for writing.
 func regKey(t *testing.T, sub string) uintptr {
 	t.Helper()
-	k := new(uintptr)
+	var k uintptr
 	const keyWrite, keyRead = 0x20006, 0x20019
-	s := mustUTF16(sub)
-	r := win32.Call(tRegCreateKeyEx, hkeyCurrentUser, uintptr(unsafe.Pointer(s)), 0, 0, 0, keyWrite|keyRead, 0, uintptr(unsafe.Pointer(k)), 0)
-	runtime.KeepAlive(s) // win32.Call does not keep it alive
+	// syscall.SyscallN, not win32.Call: it keeps what the pointers converted in
+	// its argument list point to alive for the call.
+	r, _, _ := syscall.SyscallN(tRegCreateKeyEx, hkeyCurrentUser, uintptr(unsafe.Pointer(mustUTF16(sub))), 0, 0, 0, keyWrite|keyRead, 0, uintptr(unsafe.Pointer(&k)), 0)
 	if uint32(r) != 0 {
 		t.Fatalf("RegCreateKeyEx %s: %#x", sub, r)
 	}
-	t.Cleanup(func() { win32.Call(pRegCloseKey, *k) })
-	return *k
+	t.Cleanup(func() { win32.Call(pRegCloseKey, k) })
+	return k
 }
 
 func regGet(key uintptr, name string) (uint32, bool) {
-	typ, v, n := new(uint32), new(uint32), new(uint32)
-	*n = 4
-	s := mustUTF16(name)
-	r := win32.Call(pRegQueryValueExW, key, uintptr(unsafe.Pointer(s)), 0, uintptr(unsafe.Pointer(typ)), uintptr(unsafe.Pointer(v)), uintptr(unsafe.Pointer(n)))
-	runtime.KeepAlive(s)
-	return *v, uint32(r) == 0 && *typ == regDWORD
+	var typ, v uint32
+	n := uint32(4)
+	r, _, _ := syscall.SyscallN(pRegQueryValueExW, key, uintptr(unsafe.Pointer(mustUTF16(name))), 0,
+		uintptr(unsafe.Pointer(&typ)), uintptr(unsafe.Pointer(&v)), uintptr(unsafe.Pointer(&n)))
+	return v, uint32(r) == 0 && typ == regDWORD
 }
 
 func regSet(t *testing.T, key uintptr, name string, v uint32) {
 	t.Helper()
-	p := new(uint32)
-	*p = v
-	s := mustUTF16(name)
-	r := win32.Call(tRegSetValueEx, key, uintptr(unsafe.Pointer(s)), 0, regDWORD, uintptr(unsafe.Pointer(p)), 4)
-	runtime.KeepAlive(s)
+	r, _, _ := syscall.SyscallN(tRegSetValueEx, key, uintptr(unsafe.Pointer(mustUTF16(name))), 0, regDWORD, uintptr(unsafe.Pointer(&v)), 4)
 	if uint32(r) != 0 {
 		t.Fatalf("RegSetValueEx %s: %#x", name, r)
 	}
@@ -70,9 +66,7 @@ func regRestore(t *testing.T, key uintptr, name string) {
 		if had {
 			regSet(t, key, name, orig)
 		} else {
-			s := mustUTF16(name)
-			win32.Call(tRegDeleteValue, key, uintptr(unsafe.Pointer(s)))
-			runtime.KeepAlive(s)
+			syscall.SyscallN(tRegDeleteValue, key, uintptr(unsafe.Pointer(mustUTF16(name))))
 		}
 	})
 }
@@ -198,13 +192,12 @@ func TestSetDarkChromeReadBack(t *testing.T) {
 	}
 	defer win32.Call(pDestroyWindow, hwnd)
 	w := &Window{hwnd: hwnd}
-	got := new(int32)
 	read := func() int32 {
-		*got = -1
-		if hr := win32.HR(win32.Call(pDwmGetWindowAttr, hwnd, uintptr(chromeAttr), uintptr(unsafe.Pointer(got)), 4)); hr < 0 {
-			t.Fatalf("DwmGetWindowAttribute(%d): %#x", chromeAttr, uint32(hr))
+		got := int32(-1)
+		if r, _, _ := syscall.SyscallN(pDwmGetWindowAttr, hwnd, uintptr(chromeAttr), uintptr(unsafe.Pointer(&got)), 4); win32.HR(r) < 0 {
+			t.Fatalf("DwmGetWindowAttribute(%d): %#x", chromeAttr, uint32(r))
 		}
-		return *got
+		return got
 	}
 	if hr := setImmersiveDark(hwnd, true); hr < 0 {
 		t.Fatalf("DwmSetWindowAttribute(%d): %#x", chromeAttr, uint32(hr))

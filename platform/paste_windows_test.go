@@ -3,12 +3,15 @@
 package platform
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 	"unsafe"
@@ -342,10 +345,14 @@ func hungOwner(t *testing.T, w *Window) (release func()) {
 		}
 		ready <- ok
 		<-stop
-		msg := new(msg)
+		var m msg
+		peek := func() bool {
+			r, _, _ := syscall.SyscallN(pPeekMessageW, uintptr(unsafe.Pointer(&m)), 0, 0, 0, pmRemove) // keeps m alive, unlike win32.Call
+			return win32.Bool(r)
+		}
 		for end := time.Now().Add(500 * time.Millisecond); time.Now().Before(end); time.Sleep(5 * time.Millisecond) {
-			for win32.Bool(win32.Call(pPeekMessageW, uintptr(unsafe.Pointer(msg)), 0, 0, 0, pmRemove)) { // sent messages are answered here
-				win32.Call(pDispatchMessageW, uintptr(unsafe.Pointer(msg)))
+			for peek() { // sent messages are answered here
+				syscall.SyscallN(pDispatchMessageW, uintptr(unsafe.Pointer(&m)))
 			}
 		}
 		win32.Call(pDestroyWindow, hwnd)
@@ -654,20 +661,15 @@ func waitIdle(t *testing.T, c *clipWorker) {
 	t.Fatal("the worker did not finish")
 }
 
-// emptyClipboardOwnerless empties the clipboard with no window as its owner, so
-// that a later EmptyClipboard has no previous owner to wait for (and no
+// emptyClipboardOwnerless has another program empty the clipboard (see
+// otherProgram), which then ends: the clipboard is empty and has no owner, so
+// a later EmptyClipboard has no previous owner to wait for (and no
 // WM_DESTROYCLIPBOARD for a test that does not pump).
 func emptyClipboardOwnerless(t *testing.T) {
 	t.Helper()
-	for i := 0; i < 200; i++ {
-		if win32.Bool(win32.Call(pOpenClipboard, 0)) {
-			win32.Call(pEmptyClipboard)
-			win32.Call(pCloseClipboard)
-			return
-		}
-		time.Sleep(5 * time.Millisecond)
+	if err := <-otherProgram(0, "empty", ""); err != nil {
+		t.Fatal(err)
 	}
-	t.Fatal("could not open the clipboard")
 }
 
 // A native step that returns after the request's limit, with no expire in
@@ -773,29 +775,14 @@ func TestClipboardIsOwnedOnTheWorkersThread(t *testing.T) {
 	if ui := uint32(win32.Call(pGetCurrentThreadId)); uint32(win32.Call(pGetWindowThreadProcessW, owner, 0)) == ui {
 		t.Fatal("the clipboard owner belongs to the UI thread")
 	}
-	// Another "program" (a thread of its own, with no window) empties the
-	// clipboard while the UI thread does not pump: the owner must answer.
-	done := make(chan bool)
-	go func() {
-		runtime.LockOSThread()
-		ok := false
-		for i := 0; i < 200 && !ok; i++ {
-			if ok = win32.Bool(win32.Call(pOpenClipboard, 0)); !ok {
-				time.Sleep(5 * time.Millisecond)
-			}
-		}
-		if ok {
-			ok = win32.Bool(win32.Call(pEmptyClipboard))
-			win32.Call(pCloseClipboard)
-		}
-		done <- ok
-	}()
+	// Another program empties the clipboard while the UI thread does not pump:
+	// the owner must answer.
 	select {
-	case ok := <-done:
-		if !ok {
-			t.Skip("could not take the clipboard from another thread")
+	case err := <-otherProgram(0, "empty", ""):
+		if err != nil {
+			t.Fatal(err)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(20 * time.Second):
 		t.Fatal("another program's EmptyClipboard waited for the UI thread to pump")
 	}
 	if got := Clipboard(); got != "" {
@@ -838,6 +825,103 @@ func TestClipboardWhileTheWorkerHasItOpen(t *testing.T) {
 	}
 }
 
+// waitExited waits until the worker c has ended.
+func waitExited(t *testing.T, c *clipWorker, d time.Duration) {
+	t.Helper()
+	for end := time.Now().Add(d); !c.exited.Load(); time.Sleep(time.Millisecond) {
+		if time.Now().After(end) {
+			t.Fatalf("the clipboard worker did not end within %v", d)
+		}
+	}
+}
+
+// Close does not wait for the worker to end, so the next window's worker can
+// start while the closed one still has its window, which may own what is on
+// the clipboard. The new worker must not take a session meanwhile: its
+// EmptyClipboard would wait for the retiring owner's WM_DESTROYCLIPBOARD while
+// holding clipSession, which the retiring worker needs to take its messages and
+// destroy its window (a deadlock of both workers). The clipboard is busy until
+// the old window is gone, without blocking the UI thread, and the copy is made
+// then.
+func TestANewWorkerWaitsForTheRetiringOwner(t *testing.T) {
+	w := openTestWindow(t)
+	SetClipboardText([]byte("owned by the first worker"))
+	settleCopy(w)
+	held, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	setClipHook(t, func(s int) {
+		if s == clipStageRetiring {
+			once.Do(func() { close(held); <-release })
+		}
+	})
+	var releaseOnce sync.Once
+	letGo := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(letGo)
+	first := w.clip
+	w.Close()
+	select {
+	case <-held:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the closed worker did not retire")
+	}
+
+	w2, err := Open(Options{Title: "gnui platform test 2", Width: 320, Height: 200, Hidden: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w2.Close()
+	SetClipboardText([]byte("from the second window"))
+	pumpUntil(w2, 200*time.Millisecond, func() bool { return false }) // the new worker tries meanwhile
+	start := time.Now()
+	if got := Clipboard(); got != "" {
+		t.Errorf("Clipboard read %q while a retiring worker's window still existed", got)
+	}
+	if d := time.Since(start); d > 500*time.Millisecond {
+		t.Errorf("Clipboard took %v while a worker was retiring", d)
+	}
+	letGo()
+	waitExited(t, first, 5*time.Second)
+	if e, got := pasteOf(t, w2, 1, 3*time.Second); e.Flags != 0 || got != "from the second window" {
+		t.Errorf("after the old window went: pasted %q (flags %v), want the second window's copy", got, e.Flags)
+	}
+}
+
+// A worker that cannot make its own window does not fall back to the app's
+// window as the owner (that puts the clipboard's memory on the UI thread, the
+// heap corruption above): its copies do not happen and its pastes fail, at
+// once.
+func TestAWorkerWithoutAWindowLeavesTheClipboardAlone(t *testing.T) {
+	w := openTestWindow(t)
+	SetClipboardText([]byte("kept"))
+	settleCopy(w)
+	first := w.clip
+	w.Close()
+	waitExited(t, first, 5*time.Second)
+
+	old := clipMakeWindow
+	clipMakeWindow = func() uintptr { return 0 }
+	t.Cleanup(func() { clipMakeWindow = old })
+	w2, err := Open(Options{Title: "gnui platform test 2", Width: 320, Height: 200, Hidden: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w2.Close()
+	SetClipboardText([]byte("must not be published"))
+	start := time.Now()
+	if e, got := pasteOf(t, w2, 1, 3*time.Second); e.Flags&FlagFailed == 0 || got != "" {
+		t.Errorf("a paste without a worker window answered %q (flags %v), want a failure", got, e.Flags)
+	}
+	if d := time.Since(start); d > time.Second {
+		t.Errorf("the paste failed after %v, want at once", d)
+	}
+	if got := Clipboard(); got != "kept" {
+		t.Errorf("the clipboard holds %q, want what it held before", got)
+	}
+	if owner := win32.Call(pGetClipboardOwner); owner != 0 && owner == w2.hwnd {
+		t.Error("the app's window became the clipboard owner")
+	}
+}
+
 // waitIdleOrExit pumps until the worker has finished the request (or ended
 // because it was closed).
 func waitIdleOrExit(t *testing.T, w *Window) {
@@ -854,31 +938,89 @@ func waitIdleOrExit(t *testing.T, w *Window) {
 	t.Fatal("the worker did not finish")
 }
 
-// replaceClipboardAfter has another thread replace the clipboard after d with the
-// bytes of a private format, or with the text when text is not empty, or leave
-// it empty when neither; it returns when that is done.
-func replaceClipboardAfter(t *testing.T, d time.Duration, text string, private bool) (done chan struct{}) {
-	done = make(chan struct{})
+// otherProgram has another process (this test binary, run as
+// TestClipboardOtherProgram) take the clipboard after d with a window of its
+// own and, by what: "text" put text there, "other" put the bytes of a
+// registered format there (no text), "empty" leave it empty. The process ends
+// when it is done, so its window no longer owns the clipboard. The channel
+// gets nil then, or what went wrong.
+func otherProgram(d time.Duration, what, text string) <-chan error {
+	done := make(chan error, 1)
+	cmd := exec.Command(os.Args[0], "-test.run=^TestClipboardOtherProgram$", "-test.count=1")
+	cmd.Env = append(os.Environ(), "GNUI_CLIP_OTHER="+what, "GNUI_CLIP_TEXT="+text, "GNUI_CLIP_DELAY="+d.String())
 	go func() {
-		defer close(done)
-		runtime.LockOSThread()
-		time.Sleep(d)
-		for i := 0; i < 200; i++ {
-			if win32.Bool(win32.Call(pOpenClipboard, 0)) {
-				break
-			}
-			time.Sleep(time.Millisecond)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			done <- fmt.Errorf("the other program (%s): %v\n%s", what, err, out)
+			return
 		}
-		win32.Call(pEmptyClipboard)
-		switch {
-		case text != "":
-			win32.Call(pSetClipboardData, cfUnicodeText, allocClipboardText([]byte(text)))
-		case private:
-			win32.Call(pSetClipboardData, 0x200, win32.Call(pGlobalAlloc, gmemMoveable, 8))
-		}
-		win32.Call(pCloseClipboard)
+		done <- nil
 	}()
 	return done
+}
+
+// TestClipboardOtherProgram is not a test: it is the other program of
+// otherProgram, in a child process of the test binary.
+func TestClipboardOtherProgram(t *testing.T) {
+	what := os.Getenv("GNUI_CLIP_OTHER")
+	if what == "" {
+		t.Skip("the other program of the clipboard tests, run by otherProgram")
+	}
+	runtime.LockOSThread()
+	d, _ := time.ParseDuration(os.Getenv("GNUI_CLIP_DELAY"))
+	time.Sleep(d)
+	if err := takeClipboard(what, os.Getenv("GNUI_CLIP_TEXT")); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(3)
+	}
+	os.Exit(0)
+}
+
+var pRegisterClipboardFormatW = win32.Proc(user32, "RegisterClipboardFormatW")
+
+// takeClipboard is what the other program does: OpenClipboard with a window
+// of its own (with no window EmptyClipboard leaves no owner, and
+// SetClipboardData then fails), EmptyClipboard, SetClipboardData, each
+// checked.
+func takeClipboard(what, text string) error {
+	hwnd, _, _ := syscall.SyscallN(pCreateWindowExW, 0, uintptr(unsafe.Pointer(mustUTF16("STATIC"))), 0, 0, 0, 0, 0, 0, hwndMessage, 0, 0, 0)
+	if hwnd == 0 {
+		return errors.New("CreateWindowExW failed")
+	}
+	defer win32.Call(pDestroyWindow, hwnd)
+	opened := false
+	for end := time.Now().Add(5 * time.Second); !opened && time.Now().Before(end); {
+		if opened = win32.Bool(win32.Call(pOpenClipboard, hwnd)); !opened {
+			time.Sleep(2 * time.Millisecond)
+		}
+	}
+	if !opened {
+		return errors.New("OpenClipboard failed for 5 s")
+	}
+	defer win32.Call(pCloseClipboard)
+	if !win32.Bool(win32.Call(pEmptyClipboard)) {
+		return errors.New("EmptyClipboard failed")
+	}
+	var format, mem uintptr
+	switch what {
+	case "empty":
+		return nil
+	case "text":
+		format, mem = cfUnicodeText, allocClipboardText([]byte(text))
+	case "other":
+		format, _, _ = syscall.SyscallN(pRegisterClipboardFormatW, uintptr(unsafe.Pointer(mustUTF16("gonativeui test format"))))
+		format = uintptr(uint32(format))
+		mem = win32.Call(pGlobalAlloc, gmemMoveable, 8)
+	default:
+		return fmt.Errorf("what %q", what)
+	}
+	if format == 0 || mem == 0 {
+		return errors.New("RegisterClipboardFormatW or GlobalAlloc failed")
+	}
+	if win32.Call(pSetClipboardData, format, mem) == 0 {
+		win32.Call(pGlobalFree, mem)
+		return errors.New("SetClipboardData failed")
+	}
+	return nil
 }
 
 // A clipboard that is momentarily empty, or holds an empty text (another
@@ -891,22 +1033,29 @@ func TestRequestPasteLooksAgainAtAClipboardWithoutText(t *testing.T) {
 	old := clipSettleNs
 	defer func() { clipSettleNs = old }()
 
-	clipSettleNs = int64(3 * time.Second) // the text arrives 100 ms in, however slow the runner
+	// The text arrives 100 ms after the other program has started, however
+	// slow the runner is to start it.
+	shortPasteTimeout(t, 8*time.Second)
+	clipSettleNs = int64(8 * time.Second)
 	emptyClipboardOwnerless(t)
-	done := replaceClipboardAfter(t, 100*time.Millisecond, "arrives late", false)
+	done := otherProgram(100*time.Millisecond, "text", "arrives late")
 	start := time.Now()
-	e, got := pasteOf(t, w, 1, 4*time.Second)
-	<-done
+	e, got := pasteOf(t, w, 1, 10*time.Second)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
 	if e.Flags != 0 || got != "arrives late" {
 		t.Errorf("empty clipboard: answered %q (flags %v) after %v, want the text that arrived 100 ms later", got, e.Flags, time.Since(start))
 	}
 
 	SetClipboardText(nil) // an empty text, as the clipboard of a program that is still filling it
 	settleCopy(w)
-	done = replaceClipboardAfter(t, 100*time.Millisecond, "arrives later", false)
+	done = otherProgram(100*time.Millisecond, "text", "arrives later")
 	start = time.Now()
-	e, got = pasteOf(t, w, 2, 4*time.Second)
-	<-done
+	e, got = pasteOf(t, w, 2, 10*time.Second)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
 	if e.Flags != 0 || got != "arrives later" {
 		t.Errorf("empty text: answered %q (flags %v) after %v, want the text that replaced it 100 ms later", got, e.Flags, time.Since(start))
 	}
@@ -921,7 +1070,9 @@ func TestRequestPasteLooksAgainAtAClipboardWithoutText(t *testing.T) {
 	}
 
 	// Other formats only: no text will come, so it fails at once.
-	<-replaceClipboardAfter(t, 0, "", true)
+	if err := <-otherProgram(0, "other", ""); err != nil {
+		t.Fatal(err)
+	}
 	start = time.Now()
 	e, got = pasteOf(t, w, 4, 2*time.Second)
 	if d := time.Since(start); e.Flags&FlagFailed == 0 || d > 100*time.Millisecond {

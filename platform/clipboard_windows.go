@@ -51,10 +51,15 @@ const hwndMessage = ^uintptr(2) // HWND_MESSAGE (-3): the parent of a message-on
 var clipSession atomic.Bool
 
 // tryOpenClipboard opens the clipboard for owner unless it is busy (open in
-// another process, or in another thread of this one). After a true result the
+// another process, or in another thread of this one, or a closed worker's
+// window is not destroyed yet: clipRetiring). After a true result the
 // caller must call closeClipboard.
 func tryOpenClipboard(owner uintptr) bool {
-	if !clipSession.CompareAndSwap(false, true) {
+	if clipRetiring.Load() != 0 || !clipSession.CompareAndSwap(false, true) {
+		return false
+	}
+	if clipRetiring.Load() != 0 { // a worker began retiring meanwhile: its window must go first
+		clipSession.Store(false)
 		return false
 	}
 	if win32.Bool(win32.Call(pOpenClipboard, owner)) {

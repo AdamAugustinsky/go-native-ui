@@ -70,11 +70,27 @@ var clipHook atomic.Pointer[func(stage int)]
 
 // The stages clipHook is called at.
 const (
-	clipStageEncoded = iota // a copy has been encoded, the clipboard not yet opened
-	clipStageOpened         // a copy has the clipboard open, before it empties it
-	clipStageEmptied        // a copy has emptied the clipboard, before it publishes
-	clipStageDone           // a request has finished, before its result is published
+	clipStageEncoded  = iota // a copy has been encoded, the clipboard not yet opened
+	clipStageOpened          // a copy has the clipboard open, before it empties it
+	clipStageEmptied         // a copy has emptied the clipboard, before it publishes
+	clipStageDone            // a request has finished, before its result is published
+	clipStageRetiring        // a closed worker is about to destroy its window
 )
+
+// clipMakeWindow makes the worker's message-only window on the calling
+// thread; 0 if it cannot. A variable so that tests can make it fail.
+var clipMakeWindow = func() uintptr {
+	return win32.Call(pCreateWindowExW, 0, uintptr(unsafe.Pointer(clipClassName)), 0, 0, 0, 0, 0, 0, hwndMessage, 0, 0, 0)
+}
+
+// clipRetiring counts the closed workers whose window (which may own what is
+// on the clipboard) is not destroyed yet. While it is not 0, no clipboard
+// session begins (tryOpenClipboard reports a busy clipboard): a new worker's
+// EmptyClipboard would send the retiring owner WM_DESTROYCLIPBOARD and wait
+// for it, holding clipSession, which the retiring worker needs to take its
+// messages and destroy its window. Close returns before the worker has ended,
+// so the next window's worker can start meanwhile.
+var clipRetiring atomic.Int32
 
 func clipStage(stage int) {
 	if h := clipHook.Load(); h != nil {
@@ -125,6 +141,9 @@ type clipWorker struct {
 	}
 	buf    []byte // the answer's text
 	closed bool   // Close was called: end, publishing nothing
+
+	retiring bool // counted in clipRetiring (by close) until the worker has destroyed its window
+	gone     bool // the worker has destroyed its window (or had none): close counts nothing
 
 	own uintptr // the worker's own message-only window, which opens the clipboard; the worker's alone
 	msg msg     // PeekMessage's storage; the worker's alone
@@ -227,6 +246,10 @@ func (c *clipWorker) due() (d int64) {
 func (c *clipWorker) close() {
 	c.mu.Lock()
 	c.closed = true
+	if !c.retiring && !c.gone {
+		c.retiring = true
+		clipRetiring.Add(1)
+	}
 	c.hwnd = 0
 	c.copyReq, c.paste = clipReq{}, clipReq{}
 	c.mu.Unlock()
@@ -272,13 +295,11 @@ func (c *clipWorker) loop() {
 	runtime.LockOSThread() // the thread ends with the goroutine, stuck or not
 	defer c.exited.Store(true)
 	defer c.park.Close()
-	c.own = win32.Call(pCreateWindowExW, 0, uintptr(unsafe.Pointer(clipClassName)), 0, 0, 0, 0, 0, 0, hwndMessage, 0, 0, 0)
-	if c.own != 0 {
-		defer c.destroyWindow()
-	}
+	defer c.retire()
+	c.own = clipMakeWindow()
 	for c.park.ParkMsg(c.pump) {
 		for {
-			r, appWindow, st := c.take()
+			r, _, st := c.take()
 			if st == clipExit {
 				return
 			}
@@ -287,14 +308,15 @@ func (c *clipWorker) loop() {
 			}
 			var n int
 			var ok bool
-			owner := c.own
-			if owner == 0 { // no window of its own could be made: the app's, as a fallback
-				owner = appWindow
-			}
-			if r.kind == clipCopy {
-				c.write(owner, r)
-			} else {
-				n, ok = c.read(owner, r)
+			switch {
+			case c.own == 0:
+				// Without a window of its own there is no safe owner: the app's
+				// window would put the clipboard's memory on the UI thread (see
+				// above). A copy does not happen and a paste fails.
+			case r.kind == clipCopy:
+				c.write(c.own, r)
+			default:
+				n, ok = c.read(c.own, r)
 			}
 			if !c.finish(r, n, ok) {
 				return
@@ -398,18 +420,29 @@ func (c *clipWorker) open(owner uintptr, r clipReq) bool {
 	}
 }
 
-// destroyWindow destroys the worker's window inside clipSession: the window
-// may own what is on the clipboard, and the system frees the process's
-// clipboard memory on the owner's thread.
-func (c *clipWorker) destroyWindow() {
-	for !clipSession.CompareAndSwap(false, true) {
-		time.Sleep(time.Millisecond)
+// retire ends the worker: it destroys the worker's window inside clipSession
+// (the window may own what is on the clipboard, and the system frees the
+// process's clipboard memory on the owner's thread), and then lets sessions
+// begin again (clipRetiring).
+func (c *clipWorker) retire() {
+	clipStage(clipStageRetiring)
+	if c.own != 0 {
+		for !clipSession.CompareAndSwap(false, true) {
+			time.Sleep(time.Millisecond)
+		}
+		win32.Call(pDestroyWindow, c.own)
+		for win32.Bool(win32.Call(pPeekMessageW, uintptr(unsafe.Pointer(&c.msg)), 0, 0, 0, pmRemove)) {
+			win32.Call(pDispatchMessageW, uintptr(unsafe.Pointer(&c.msg)))
+		}
+		clipSession.Store(false)
 	}
-	win32.Call(pDestroyWindow, c.own)
-	for win32.Bool(win32.Call(pPeekMessageW, uintptr(unsafe.Pointer(&c.msg)), 0, 0, 0, pmRemove)) {
-		win32.Call(pDispatchMessageW, uintptr(unsafe.Pointer(&c.msg)))
+	c.mu.Lock()
+	c.gone = true
+	if c.retiring {
+		c.retiring = false
+		clipRetiring.Add(-1)
 	}
-	clipSession.Store(false)
+	c.mu.Unlock()
 }
 
 // pump takes the messages of the worker's thread (its window's), inside
