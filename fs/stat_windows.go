@@ -22,7 +22,7 @@ func dirMTime(path string) (int64, bool) {
 	const getFileExInfoStandard = 0
 	r, _, _ := syscall.SyscallN(pGetFileAttributesExW, uintptr(unsafe.Pointer(&p[0])),
 		getFileExInfoStandard, uintptr(unsafe.Pointer(&s.fd)))
-	if r == 0 {
+	if uint32(r) == 0 { // a BOOL: only the low 32 bits of the register
 		return 0, false
 	}
 	return winUnixNanos(uint64(s.fd.Write[1])<<32 | uint64(s.fd.Write[0])), true

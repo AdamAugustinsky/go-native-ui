@@ -31,8 +31,10 @@ func regKey(t *testing.T, sub string) uintptr {
 	t.Helper()
 	k := new(uintptr)
 	const keyWrite, keyRead = 0x20006, 0x20019
-	r := win32.Call(tRegCreateKeyEx, hkeyCurrentUser, uintptr(unsafe.Pointer(mustUTF16(sub))), 0, 0, 0, keyWrite|keyRead, 0, uintptr(unsafe.Pointer(k)), 0)
-	if r != 0 {
+	s := mustUTF16(sub)
+	r := win32.Call(tRegCreateKeyEx, hkeyCurrentUser, uintptr(unsafe.Pointer(s)), 0, 0, 0, keyWrite|keyRead, 0, uintptr(unsafe.Pointer(k)), 0)
+	runtime.KeepAlive(s) // win32.Call does not keep it alive
+	if uint32(r) != 0 {
 		t.Fatalf("RegCreateKeyEx %s: %#x", sub, r)
 	}
 	t.Cleanup(func() { win32.Call(pRegCloseKey, *k) })
@@ -42,15 +44,20 @@ func regKey(t *testing.T, sub string) uintptr {
 func regGet(key uintptr, name string) (uint32, bool) {
 	typ, v, n := new(uint32), new(uint32), new(uint32)
 	*n = 4
-	r := win32.Call(pRegQueryValueExW, key, uintptr(unsafe.Pointer(mustUTF16(name))), 0, uintptr(unsafe.Pointer(typ)), uintptr(unsafe.Pointer(v)), uintptr(unsafe.Pointer(n)))
-	return *v, r == 0 && *typ == regDWORD
+	s := mustUTF16(name)
+	r := win32.Call(pRegQueryValueExW, key, uintptr(unsafe.Pointer(s)), 0, uintptr(unsafe.Pointer(typ)), uintptr(unsafe.Pointer(v)), uintptr(unsafe.Pointer(n)))
+	runtime.KeepAlive(s)
+	return *v, uint32(r) == 0 && *typ == regDWORD
 }
 
 func regSet(t *testing.T, key uintptr, name string, v uint32) {
 	t.Helper()
 	p := new(uint32)
 	*p = v
-	if r := win32.Call(tRegSetValueEx, key, uintptr(unsafe.Pointer(mustUTF16(name))), 0, regDWORD, uintptr(unsafe.Pointer(p)), 4); r != 0 {
+	s := mustUTF16(name)
+	r := win32.Call(tRegSetValueEx, key, uintptr(unsafe.Pointer(s)), 0, regDWORD, uintptr(unsafe.Pointer(p)), 4)
+	runtime.KeepAlive(s)
+	if uint32(r) != 0 {
 		t.Fatalf("RegSetValueEx %s: %#x", name, r)
 	}
 }
@@ -63,7 +70,9 @@ func regRestore(t *testing.T, key uintptr, name string) {
 		if had {
 			regSet(t, key, name, orig)
 		} else {
-			win32.Call(tRegDeleteValue, key, uintptr(unsafe.Pointer(mustUTF16(name))))
+			s := mustUTF16(name)
+			win32.Call(tRegDeleteValue, key, uintptr(unsafe.Pointer(s)))
+			runtime.KeepAlive(s)
 		}
 	})
 }
@@ -182,6 +191,8 @@ func TestSetDarkChromeReadBack(t *testing.T) {
 	const wsOverlapped = 0x00CF0000
 	class, title := mustUTF16("STATIC"), mustUTF16("appearance test")
 	hwnd := win32.Call(pCreateWindowExW, 0, uintptr(unsafe.Pointer(class)), uintptr(unsafe.Pointer(title)), wsOverlapped, 0, 0, 200, 100, 0, 0, 0, 0)
+	runtime.KeepAlive(class)
+	runtime.KeepAlive(title)
 	if hwnd == 0 {
 		t.Skip("cannot create a window here")
 	}
