@@ -267,3 +267,24 @@ uint64_t fx_threads_stop(void) {
 	fx_nthreads = 0;
 	return __atomic_load_n(&fx_iters, __ATOMIC_SEQ_CST);
 }
+
+// ---- Pointer retention and internal/ffi's ArgBool ----
+
+// fx_hold blocks for ns after setting *started, then hashes p[0..n) (FNV-1a):
+// the Go memory behind p must survive the garbage collections that run
+// meanwhile.
+uint64_t fx_hold(const uint8_t *p, size_t n, int64_t ns, int32_t *started) {
+	fx_sleep(ns, NULL, started);
+	uint64_t h = 1469598103934665603ull;
+	for (size_t i = 0; i < n; i++) h = (h ^ p[i]) * 1099511628211ull;
+	return h;
+}
+
+// fx_bools takes four bools and an int after eight integers, so on arm64
+// they all go on the stack, where Apple packs them into bytes 0-3 and 4-7.
+uint32_t fx_bools(int64_t r0, int64_t r1, int64_t r2, int64_t r3, int64_t r4, int64_t r5, int64_t r6,
+                  int64_t r7, bool b0, bool b1, bool b2, bool b3, int32_t tail) {
+	int64_t s = r0 + r1 + r2 + r3 + r4 + r5 + r6 + r7;
+	return (uint32_t)b0 | (uint32_t)b1 << 1 | (uint32_t)b2 << 2 | (uint32_t)b3 << 3 |
+	       (uint32_t)tail << 4 | (uint32_t)(s == 36) << 31;
+}

@@ -23,6 +23,9 @@ func TestOpenRejects(t *testing.T) {
 	if !strings.Contains(err.Error(), "not an absolute path") {
 		t.Fatalf("Open(relative) = %v", err)
 	}
+	if _, err := Open("/usr/lib/libc.so\x00.missing"); err == nil || !strings.Contains(err.Error(), "NUL") {
+		t.Fatalf("Open(path with NUL) = %v, want the NUL error", err)
+	}
 	missing := filepath.Join(t.TempDir(), "libmissing.so")
 	if _, err := Open(missing); err == nil || !strings.Contains(err.Error(), missing) {
 		t.Fatalf("Open(missing) = %v, want an error naming the path", err)
@@ -95,5 +98,10 @@ func TestBundleFramework(t *testing.T) {
 	}
 	if got := BundleFramework("libx"); got != want || !filepath.IsAbs(got) {
 		t.Fatalf("BundleFramework = %q, want %q", got, want)
+	}
+	// A NUL in the name comes back unchanged, for Open to reject, rather
+	// than as a bundle path that C would truncate.
+	if got := BundleFramework("libx\x00/../../evil"); got != "libx\x00/../../evil" {
+		t.Fatalf("BundleFramework(name with NUL) = %q", got)
 	}
 }

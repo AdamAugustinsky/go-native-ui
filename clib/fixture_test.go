@@ -18,6 +18,8 @@ import (
 	"testing"
 	"time"
 	"unsafe"
+
+	"gonativeui/internal/ffi"
 )
 
 // The fixture library (testdata/fixture.c) is built once per test binary
@@ -104,6 +106,14 @@ func TestLookupAndClose(t *testing.T) {
 	lib := fixture(t)
 	if _, err := lib.Func("fx_no_such_function"); err == nil || !strings.Contains(err.Error(), "fx_no_such_function") {
 		t.Fatalf("missing symbol: %v", err)
+	}
+	// C strings end at the first NUL: without the check these would open
+	// the fixture and resolve fx_add.
+	if l, err := Open(lib.path + "\x00missing"); err == nil || !strings.Contains(err.Error(), "NUL") {
+		t.Fatalf("Open(fixture path + NUL suffix) = %v, %v; want the NUL error", l, err)
+	}
+	if f, err := lib.Func("fx_add\x00missing"); err == nil || !strings.Contains(err.Error(), "NUL") {
+		t.Fatalf("Func(\"fx_add\\x00missing\") = %v, %v; want the NUL error", f, err)
 	}
 	// A second handle on the same image closes independently of the first.
 	again, err := Open(lib.path)
@@ -715,5 +725,83 @@ func BenchmarkMix(b *testing.B) {
 	for b.Loop() {
 		c.Ptr(unsafe.Pointer(rec)).Int32(1).Float64(2).Int(3).Float32(4).Uint8(5).Float64(6).Bool(true).
 			Ptr(nil).Float32(7).Int16(8).Do(mix)
+	}
+}
+
+const holdSize = 512
+
+// addHeldBuffer adds a fresh heap buffer as a pointer argument and returns
+// its hash. Once it returns, the Call's keep table is the only Go reference
+// to the buffer.
+//
+//go:noinline
+func addHeldBuffer(c *Call) uint64 {
+	b := new([holdSize]byte)
+	for i := range b {
+		b[i] = byte(i*7 + 1)
+	}
+	c.Ptr(unsafe.Pointer(b)).Uint(holdSize)
+	return fnv1a(b[:])
+}
+
+func fnv1a(b []byte) uint64 {
+	h := uint64(1469598103934665603)
+	for _, c := range b {
+		h = (h ^ uint64(c)) * 1099511628211
+	}
+	return h
+}
+
+// TestPointerRetention checks that a pointer argument stays alive while C
+// holds it, though nothing but the Call refers to it: collections run and
+// same-sized objects are allocated and overwritten while C blocks, and C
+// then reads the buffer.
+func TestPointerRetention(t *testing.T) {
+	hold := fn(t, "fx_hold")
+	c, started := NewCall(), new(int32)
+	want := addHeldBuffer(c)
+	var stop atomic.Bool
+	var gcs atomic.Int64
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for atomic.LoadInt32(started) == 0 {
+			runtime.Gosched()
+		}
+		ring := make([]*[holdSize]byte, 256)
+		for !stop.Load() {
+			runtime.GC()
+			gcs.Add(1)
+			for j := range 4096 {
+				p := new([holdSize]byte)
+				for k := range p {
+					p[k] = 0xee
+				}
+				ring[j%len(ring)] = p
+			}
+		}
+	}()
+	got := c.Int(int64(300 * time.Millisecond)).Ptr(unsafe.Pointer(started)).Do(hold).Uint()
+	stop.Store(true)
+	<-done
+	if gcs.Load() < 2 {
+		t.Fatalf("only %d collections ran while C held the buffer; the test proved nothing", gcs.Load())
+	}
+	if got != want {
+		t.Fatalf("C read a different buffer after %d collections (hash %#x, want %#x): the pointee was freed and reused", gcs.Load(), got, want)
+	}
+}
+
+// TestFFIArgBoolStack calls through internal/ffi directly: bools past the
+// integer registers are packed into single bytes on Apple arm64.
+func TestFFIArgBoolStack(t *testing.T) {
+	bools := fn(t, "fx_bools")
+	fr := new(ffi.Frame)
+	for i := range 8 {
+		fr.Arg(uintptr(i + 1))
+	}
+	got := uint32(fr.ArgBool(true).ArgBool(false).ArgBool(true).ArgBool(true).Arg32(5).Call(bools.addr).R0())
+	if want := uint32(1 | 4 | 8 | 5<<4 | 1<<31); got != want {
+		t.Fatalf("fx_bools = %#x, want %#x", got, want)
 	}
 }

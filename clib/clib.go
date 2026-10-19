@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync/atomic"
 	"unsafe"
 )
@@ -27,11 +28,15 @@ type Lib struct {
 // RTLD_NOW|RTLD_LOCAL: every symbol is bound now, so a missing dependency
 // fails here rather than at a later call, and the library's symbols do not
 // leak into the process's global namespace. Opening the same path again
-// returns another Lib for the same loaded image. The error carries the
-// loader's message (dlerror, read on the same thread).
+// returns another Lib for the same loaded image. A path containing a NUL
+// byte is rejected (C would see only the part before it). The error carries
+// the loader's message (dlerror, read on the same thread).
 func Open(path string) (*Lib, error) {
 	if !supported {
 		return nil, ErrUnsupported
+	}
+	if strings.IndexByte(path, 0) >= 0 {
+		return nil, fmt.Errorf("clib: open %q: path contains a NUL byte", path)
 	}
 	if !filepath.IsAbs(path) {
 		return nil, fmt.Errorf("clib: open %q: not an absolute path", path)
@@ -44,7 +49,11 @@ func Open(path string) (*Lib, error) {
 }
 
 // Func looks up the C function name in l. Look functions up once, at setup.
+// A name containing a NUL byte is rejected.
 func (l *Lib) Func(name string) (Func, error) {
+	if strings.IndexByte(name, 0) >= 0 {
+		return Func{}, fmt.Errorf("clib: %q in %s: name contains a NUL byte", name, l.path)
+	}
 	if l.closed.Load() {
 		return Func{}, fmt.Errorf("clib: %s in %s: library closed", name, l.path)
 	}
@@ -73,9 +82,12 @@ func (l *Lib) Close() error {
 // Contents/Frameworks/name (the executable is in Contents/MacOS); on Linux
 // ../lib/name, as in an AppDir's usr/bin and usr/lib; on Windows the
 // executable's directory. Symlinks to the executable are resolved first. If
-// the executable cannot be found, it returns name unchanged, which [Open]
-// rejects as not absolute.
+// name contains a NUL byte or the executable cannot be found, it returns
+// name unchanged, which [Open] rejects.
 func BundleFramework(name string) string {
+	if strings.IndexByte(name, 0) >= 0 {
+		return name
+	}
 	exe, err := os.Executable()
 	if err != nil {
 		return name
