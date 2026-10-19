@@ -46,10 +46,14 @@
 //
 // A Call is used by one goroutine at a time; any goroutine may use it, and
 // different Calls may run concurrently. A [Lib] and its [Func] values are
-// safe for concurrent use. A call releases its P (as runtime.cgocall does
-// for cgo), so a C function that blocks for seconds does not stall other
-// goroutines or the garbage collector. A blocking function still occupies
-// an OS thread for as long as it blocks.
+// safe for concurrent use: lookups and Close are serialised, so a lookup
+// never reaches a closed handle; calling a Func obtained before Close
+// remains the caller's responsibility (see Lifetime).
+//
+// A call releases its P (as runtime.cgocall does for cgo), so a C function
+// that blocks for seconds does not stall other goroutines or the garbage
+// collector. A blocking function still occupies an OS thread for as long as
+// it blocks.
 //
 // # Errors come back in the same call
 //

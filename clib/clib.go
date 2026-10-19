@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"sync/atomic"
+	"sync"
 	"unsafe"
 )
 
@@ -19,10 +19,16 @@ var ErrUnsupported = fmt.Errorf("clib: native libraries on %s/%s: %w", runtime.G
 
 // Lib is a loaded native library.
 type Lib struct {
-	h      uintptr
-	path   string
-	closed atomic.Bool
+	h    uintptr
+	path string
+
+	mu     sync.Mutex // orders lookups against Close
+	closed bool
 }
+
+// lookupHook, when set by a test, runs in Func between the closed check and
+// dlsym.
+var lookupHook func()
 
 // Open loads the library at path, which must be absolute, with
 // RTLD_NOW|RTLD_LOCAL: every symbol is bound now, so a missing dependency
@@ -49,13 +55,21 @@ func Open(path string) (*Lib, error) {
 }
 
 // Func looks up the C function name in l. Look functions up once, at setup.
-// A name containing a NUL byte is rejected.
+// A name containing a NUL byte is rejected. Func is safe to call
+// concurrently with itself and with [Lib.Close]: after Close it returns an
+// error.
 func (l *Lib) Func(name string) (Func, error) {
 	if strings.IndexByte(name, 0) >= 0 {
 		return Func{}, fmt.Errorf("clib: %q in %s: name contains a NUL byte", name, l.path)
 	}
-	if l.closed.Load() {
+	// Held across dlsym, so the handle cannot be closed under the lookup.
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.closed {
 		return Func{}, fmt.Errorf("clib: %s in %s: library closed", name, l.path)
+	}
+	if lookupHook != nil {
+		lookupHook()
 	}
 	p, err := dlsym(l.h, name)
 	if err != nil {
@@ -66,11 +80,14 @@ func (l *Lib) Func(name string) (Func, error) {
 
 // Close releases l. Only close a library when nothing can still call into
 // it: its Funcs become dangling, and calling one may crash the process.
-// Closing twice does nothing.
+// Closing twice does nothing. Close waits for lookups in progress.
 func (l *Lib) Close() error {
-	if l.closed.Swap(true) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.closed {
 		return nil
 	}
+	l.closed = true
 	if err := dlclose(l.h); err != nil {
 		return fmt.Errorf("clib: close %s: %w", l.path, err)
 	}

@@ -805,3 +805,48 @@ func TestFFIArgBoolStack(t *testing.T) {
 		t.Fatalf("fx_bools = %#x, want %#x", got, want)
 	}
 }
+
+// TestLookupCloseRace pauses a lookup between its closed check and dlsym
+// and closes the Lib meanwhile: Close must wait for the lookup, or dlsym
+// would get a handle that may already be unloaded. (The fixture stays
+// loaded through its first handle, so a regression fails here rather than
+// crashing.)
+func TestLookupCloseRace(t *testing.T) {
+	lib := fixture(t)
+	again, err := Open(lib.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	paused, resume := make(chan struct{}), make(chan struct{})
+	lookupHook = func() {
+		close(paused)
+		<-resume
+	}
+	defer func() { lookupHook = nil }()
+
+	looked := make(chan error, 1)
+	go func() {
+		_, err := again.Func("fx_add")
+		looked <- err
+	}()
+	<-paused
+	closed := make(chan error, 1)
+	go func() { closed <- again.Close() }()
+	select {
+	case <-closed:
+		close(resume)
+		t.Fatal("Close finished while a lookup was between its closed check and dlsym")
+	case <-time.After(200 * time.Millisecond):
+	}
+	lookupHook = nil
+	close(resume)
+	if err := <-looked; err != nil {
+		t.Fatalf("lookup that began before Close: %v", err)
+	}
+	if err := <-closed; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := again.Func("fx_add"); err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("lookup after Close = %v, want the closed error", err)
+	}
+}
