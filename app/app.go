@@ -473,6 +473,7 @@ func (a *App) onEvent(e *platform.Event) {
 			a.p.invalidate()
 		}
 	case platform.EvVisible:
+		a.tr.in.Hidden = e.Flags&platform.FlagDown == 0
 		if e.Flags&platform.FlagDown != 0 {
 			a.p.invalidate() // shown again: what was skipped while hidden is owed
 		}
