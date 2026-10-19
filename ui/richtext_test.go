@@ -263,6 +263,80 @@ func TestRichTextLinkCursorAndSemantics(t *testing.T) {
 	}
 }
 
+// linkNode is the first RoleLink node of the last export.
+func linkNode(c *Context) (SemNode, bool) {
+	var tree SemTree
+	c.Semantics(&tree)
+	for _, n := range tree.Nodes {
+		if n.Role == RoleLink {
+			return n, true
+		}
+	}
+	return SemNode{}, false
+}
+
+func TestRichTextDisabledOrBlockedLinksAreInert(t *testing.T) {
+	r := linkHarness(t)
+	ln, ok := linkNode(r.c)
+	if !ok {
+		t.Fatal("no link node")
+	}
+	disabled, modal := false, false
+	build := func(c *Context) {
+		if disabled {
+			c.NextFlags(Disabled)
+		}
+		r.build(c)
+		if modal {
+			c.BeginOverlay(1, OverlayModal, [4]float32{0, 0, 900, 600}, PlaceCenter)
+			c.NextSize(Px(100), Px(50))
+			c.Box(Clickable, "ok")
+			c.EndOverlay()
+		}
+	}
+	press := func() uint32 {
+		r.in.PushAction(SemRequest{Key: ln.Key, Action: ActPress})
+		r.frame(build)
+		return r.sig.Clicked
+	}
+
+	// Disabled: the press does nothing, the link node is disabled with no
+	// actions, and there is no hand cursor.
+	disabled = true
+	r.frame(build)
+	r.frame(build)
+	if got := press(); got != 0 {
+		t.Errorf("an accessibility press clicked the disabled link %d", got)
+	}
+	if n, ok := linkNode(r.c); !ok || n.State&SemDisabled == 0 || n.Actions != 0 {
+		t.Errorf("disabled link node %+v", n)
+	}
+	r.move(60, 7)
+	r.frame(build)
+	if cr := r.c.CursorRegions(nil); len(cr) != 0 {
+		t.Errorf("cursor regions over a disabled link: %v", cr)
+	}
+
+	// Beneath a modal: the press does nothing.
+	disabled, modal = false, true
+	r.frame(build)
+	r.frame(build)
+	if got := press(); got != 0 {
+		t.Errorf("an accessibility press clicked a link beneath a modal %d", got)
+	}
+
+	// Enabled again, nothing above it: the press clicks.
+	modal = false
+	r.frame(build)
+	r.frame(build)
+	if n, ok := linkNode(r.c); !ok || n.State&SemDisabled != 0 || n.Actions != ActPress {
+		t.Errorf("enabled link node %+v", n)
+	}
+	if got := press(); got != 42 {
+		t.Errorf("an accessibility press clicked %d, want 42", got)
+	}
+}
+
 func TestRichTextLinkAcrossLinesHasARegionPerLine(t *testing.T) {
 	body := "a long link that wraps"
 	r := newRich(t, body, []Span{spanOf(body, "long link that", 1, SpanLink, 9)}, RichOpts{MaxW: 100})

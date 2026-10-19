@@ -306,7 +306,11 @@ func (c *Context) RichText(key Key, body []byte, spans []Span, st *RichStyles, o
 	if bs.Released {
 		b.pressSpan = 0
 	}
-	// An assistive technology pressing a link node.
+	// An assistive technology pressing a link node, with Signal's guards: a
+	// disabled box, or one beneath a modal, is inert.
+	if b.flags&Disabled != 0 || c.blocked(b) {
+		return sig
+	}
 	for i := 0; i < c.in.NActions; i++ {
 		a := &c.in.Actions[i]
 		if a.Action&ActPress == 0 {
@@ -664,7 +668,7 @@ func (c *Context) linkRects(b *box, pv *text.ParaView, i int) {
 // of the RichText box b, clipped by clip.
 func (c *Context) richCursors(dst []CursorRegion, b *box, clip [4]float32) []CursorRegion {
 	r := c.recOf(b)
-	if r == nil || !r.links || empty(clip) {
+	if r == nil || !r.links || b.flags&Disabled != 0 || empty(clip) {
 		return dst
 	}
 	pv, ok := c.prevRich(b)
@@ -687,7 +691,8 @@ func (c *Context) richCursors(dst []CursorRegion, b *box, clip [4]float32) []Cur
 
 // semLinks appends a RoleLink child of the node of the RichText box b (record
 // rec, just appended) for each of its link and mention spans: named by the
-// span's text, bounded by the union of its rectangles, pressable.
+// span's text, bounded by the union of its rectangles, pressable unless the
+// box is disabled (then the links are disabled too, as the box's node is).
 func (c *Context) semLinks(dst *SemTree, b *box, rec *semRec) {
 	r := c.recOf(b)
 	if r == nil || !r.links {
@@ -713,6 +718,9 @@ func (c *Context) semLinks(dst *SemTree, b *box, rec *semRec) {
 		}
 		n := SemNode{Key: richLinkKey(b.key, i), Role: RoleLink, Actions: ActPress, Bounds: bounds,
 			Parent: rec.node, FirstChild: -1, NextSibling: -1}
+		if b.flags&Disabled != 0 {
+			n.State, n.Actions = SemDisabled, 0
+		}
 		if e := min(int(sp.Off+sp.Len), len(pv.Text)); int(sp.Off) < e && len(dst.Bytes)+e-int(sp.Off) <= MaxSemBytes {
 			n.Name = [2]uint32{uint32(len(dst.Bytes)), uint32(e - int(sp.Off))}
 			dst.Bytes = append(dst.Bytes, pv.Text[sp.Off:e]...)
