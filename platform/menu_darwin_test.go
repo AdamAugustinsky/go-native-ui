@@ -30,7 +30,8 @@ func testMenuSpec() *MenuSpec {
 			1: {Title: "File", Items: []MenuItem{{ID: tcSave, Title: "Save", Key: 's', Mods: ModSuper, Symbol: "square.and.arrow.down"},
 				{Kind: MenuItemSubmenu, Submenu: 6, Title: "Open Recent"}}},
 			2: {Title: "Edit", Items: []MenuItem{{ID: tcCopy, Action: MenuCopy, Key: 'c', Mods: ModSuper}, {Action: MenuSelectAll}}},
-			3: {Title: "Window", Role: MenuRoleWindow, Items: []MenuItem{{Action: MenuMinimize}, {Action: MenuZoom}}},
+			3: {Title: "Window", Role: MenuRoleWindow, Items: []MenuItem{{Action: MenuMinimize}, {Action: MenuZoom},
+				{Action: MenuBringAllToFront, Key: 'b', Mods: ModSuper | ModAlt}}},
 			4: {Title: "Help", Role: MenuRoleHelp},
 			5: {Title: "Services", Role: MenuRoleServices},
 			6: {Title: "Recent", Items: []MenuItem{{ID: tcRecent, Title: "notes.txt"}}},
@@ -296,12 +297,14 @@ func countEvents(q []Event) (keys int, cmds []uint64, closes int) {
 
 // A key equivalent goes through AppKit's menu: the command arrives once as
 // EvCommand and the key-down is not queued as well; a disabled item leaves
-// the key to the app; ⌘Q asks to close; an edit key equivalent reaches our
+// the key to the app; ⌘Q asks to close; an item whose action is AppKit's
+// takes its key all the same; an edit key equivalent reaches our
 // view through the responder chain when the window is key.
 func TestKeyEquivalentFiresOnce(t *testing.T) {
 	var r struct {
 		why                     string
 		keys, offKeys, quitKeys int
+		frontKeys               int
 		cmds, offCmds           []uint64
 		closes                  int
 		key                     bool
@@ -329,6 +332,9 @@ func TestKeyEquivalentFiresOnce(t *testing.T) {
 		w.q.reset()
 		w.handle(keyDown(w, "q", cmd, 0x0C))
 		r.quitKeys, _, r.closes = countEvents(w.q.ev)
+		w.q.reset()
+		w.handle(keyDown(w, "b", cmd|1<<19, 0x0B)) // ⌥⌘B: Bring All to Front, an action of AppKit's own
+		r.frontKeys, _, _ = countEvents(w.q.ev)
 		r.key = objc.SendBool(w.win, objc.Sel("isKeyWindow"))
 		if r.key {
 			w.q.reset()
@@ -348,6 +354,9 @@ func TestKeyEquivalentFiresOnce(t *testing.T) {
 	}
 	if r.quitKeys != 0 || r.closes != 1 {
 		t.Errorf("⌘Q: %d key-downs and %d close requests, want none and one", r.quitKeys, r.closes)
+	}
+	if r.frontKeys != 0 {
+		t.Errorf("⌥⌘B (AppKit's arrangeInFront:): %d key-downs, want none", r.frontKeys)
 	}
 	if !r.key {
 		t.Log("the window is not key here: the responder-chain case is not checked")

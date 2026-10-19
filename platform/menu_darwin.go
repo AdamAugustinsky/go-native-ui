@@ -60,6 +60,7 @@ var (
 	selGnuiCommand     = objc.Sel("gnuiCommand:")
 	selGnuiChoose      = objc.Sel("gnuiChoose:")
 	selGnuiQuit        = objc.Sel("gnuiQuit:")
+	selGnuiWillSend    = objc.Sel("gnuiMenuWillSend:")
 
 	// the selectors of the standard actions, by MenuAction
 	actionSel = [...]objc.SEL{
@@ -126,6 +127,7 @@ func registerMenuTarget() {
 	t.Method(selValidateItem, "c@:@", menuValidate)
 	t.Method(selMenuWillOpen, "v@:@", menuWillOpen)
 	t.Method(selMenuDidClose, "v@:@", menuDidClose)
+	t.Method(selGnuiWillSend, "v@:@", menuWillSend)
 	menuTargetClass = t.Register()
 }
 
@@ -145,6 +147,12 @@ func ensureMenuTarget() {
 		nsApp = objc.Send(objc.Cls("NSApplication"), selSharedApplication)
 		nativeMenus.target = objc.Send(objc.Send(menuTargetClass, selAlloc), selInitPlain)
 		nativeMenus.chosen = -1
+		// Every item's action, ours or AppKit's (hide:, performClose: …),
+		// tells us it is sent, so that the key-down of its key equivalent is
+		// not delivered as well (handle).
+		nc := objc.Send(objc.Cls("NSNotificationCenter"), objc.Sel("defaultCenter"))
+		name := objc.Str("NSMenuWillSendActionNotification")
+		objc.Send4(nc, objc.Sel("addObserver:selector:name:object:"), uintptr(nativeMenus.target), uintptr(selGnuiWillSend), uintptr(name), 0)
 		pi := objc.Send(objc.Cls("NSProcessInfo"), selProcessInfo)
 		nativeMenus.appName = string(objc.AppendUTF8(nil, objc.Send(pi, selProcessName)))
 	}
@@ -548,7 +556,8 @@ func setItemState(item objc.ID, on bool) {
 }
 
 // chose records the item an action came from (PopUpMenu's result) and that
-// a menu acted during this event (handle drops the key-down that chose it).
+// a menu acted during this event (handle drops the key-down that chose it;
+// menuWillSend does that for every item).
 func chose(item objc.ID) {
 	nativeMenus.chosen = -1
 	if item != 0 && objc.SendBool1(item, selRespondsTo, uintptr(selMenuOfItem)) {
@@ -643,6 +652,14 @@ func validate(item objc.ID, id uint16, act MenuAction) bool {
 	on, checked := fn(id, act)
 	setItemState(item, checked)
 	return on
+}
+
+// menuWillSend observes NSMenuWillSendActionNotification: a menu item is
+// about to send its action, whoever its target is.
+func menuWillSend(*ffi.CB) {
+	if w := theWindow.Load(); w != nil {
+		w.menuActed = true
+	}
 }
 
 func menuWillOpen(c *ffi.CB) {
