@@ -25,7 +25,7 @@ func registerClasses() {
 	viewClass = view.Register()
 	delegate := objc.Define("GNUIWindowDelegate", objc.Cls("NSObject"), []string{"NSWindowDelegate"})
 	registerWindowDelegate(delegate)
-	registerButtons(delegate)
+	registerShell(delegate)
 	delegateClass = delegate.Register()
 	registerMenuTarget()
 	clsNSArray, clsNSAttributedString = objc.Cls("NSArray"), objc.Cls("NSAttributedString")

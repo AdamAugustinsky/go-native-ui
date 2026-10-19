@@ -42,6 +42,7 @@ func windowShouldClose(c *ffi.CB) {
 func windowDidResize(*ffi.CB) {
 	if w := theWindow.Load(); w != nil {
 		w.layoutChrome() // AppKit re-lays out the titlebar on resize
+		w.fitBackdrop()
 		if !w.live && w.handler != nil && objc.SendBool(w.win, selInLiveResize) {
 			w.enterLiveResize() // the will-start notification was missed
 		}

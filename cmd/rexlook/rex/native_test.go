@@ -1,8 +1,10 @@
 package rex
 
 import (
+	"math"
 	"testing"
 
+	"gonativeui/gpu"
 	"gonativeui/ui"
 )
 
@@ -132,4 +134,104 @@ func TestZeroAllocNativeShell(t *testing.T) {
 		s.step()
 	}
 	zeroAlloc(t, "native shell: pointer script, tab keys, key state", run, h.c.Animating, h.c.Boxes, 1800, 900)
+}
+
+// The glass behind the titlebar, measured from screen captures on the
+// MacBook (27.2, docs/design/native-shell-spike.md): the band's grey with a
+// light (#FFFFFF) and a dark (#1E1E1E) window behind, key or not, widened a
+// little.
+var glassGrey = [2][2]float64{{150, 255}, {38, 115}} // light, dark: min, max
+
+// AppKit's contrast floors (labelAlphas' comment): active text, and the rest
+// or anything in a window that is not key; light, dark.
+var floorActive, floorInactive = [2]float64{3.95, 5.84}, [2]float64{1.98, 2.25}
+
+func srgbLum(c [3]float64) float64 {
+	var l float64
+	for i, w := range [3]float64{0.2126, 0.7152, 0.0722} {
+		v := c[i] / 255
+		if v <= 0.04045 {
+			v /= 12.92
+		} else {
+			v = math.Pow((v+0.055)/1.055, 2.4)
+		}
+		l += w * v
+	}
+	return l
+}
+
+func contrast(a, b [3]float64) float64 {
+	la, lb := srgbLum(a), srgbLum(b)
+	return (max(la, lb) + 0.05) / (min(la, lb) + 0.05)
+}
+
+// over is colour c (RGBA8) blended over bg, in sRGB as the layer blends.
+func over(c uint32, bg [3]float64) [3]float64 {
+	a := float64(c&255) / 255
+	return [3]float64{
+		a*float64(c>>24) + (1-a)*bg[0],
+		a*float64(c>>16&255) + (1-a)*bg[1],
+		a*float64(c>>8&255) + (1-a)*bg[2],
+	}
+}
+
+func inRect(r [4]float32, x, y float32) bool { return x >= r[0] && x < r[2] && y >= r[1] && y < r[3] }
+
+// Every glyph of the titlebar's text over the glass keeps AppKit's floors,
+// light and dark, in a key window and in one that is not, at both ends of
+// the glass's measured range. The background of a glyph is composed from the
+// frame's own fills under its centre (the scrim, the capsule, the pill, the
+// hover fills), in draw order, over the glass.
+func TestBandTextContrastOverGlass(t *testing.T) {
+	for _, dark := range []bool{false, true} {
+		for _, key := range []bool{true, false} {
+			h := newHarnessRaw(t, WindowWidthPt, WindowHeightPt, 2, ui.Appearance{Dark: dark, Known: true})
+			h.x.backdrop, h.x.btns = true, &fakeButtons{}
+			h.in.Focused = key
+			h.settle()
+			look := 0
+			if dark {
+				look = 1
+			}
+			band, textX := float32(45*2), float32(240) // the band's height; the host name's left (after the device glyph)
+			pill := h.x.pill
+			glyphs, worst := 0, math.Inf(1)
+			for i, q := range h.list.Quads {
+				w := q.Rect[2] - q.Rect[0]
+				rgb := q.Color[0] >> 8
+				if q.Mode != gpu.ModeMaskR8 || q.Rect[3] > band || q.Rect[0] < textX || w > 12 || (rgb != 0 && rgb != 0xFFFFFF) {
+					continue // not a glyph of the band's text (the fake glyphs are 6 px wide; icons are wider or coloured)
+				}
+				x, y := (q.Rect[0]+q.Rect[2])/2, (q.Rect[1]+q.Rect[3])/2
+				if q.FadeX != [2]float32{} && x > q.FadeX[0] {
+					continue // fading out where the title does not fit
+				}
+				floor := floorInactive[look]
+				if key && (x < h.x.capsule[0] || inRect(pill, x, y)) {
+					floor = floorActive[look]
+				}
+				for _, g := range glassGrey[look] {
+					bg := [3]float64{g, g, g}
+					for _, f := range h.list.Quads[:i] {
+						if f.Mode != gpu.ModeShape || f.Soft != 0 || f.Border != 0 || !inRect(f.Rect, x, y) ||
+							(f.Clip != [4]float32{} && !inRect(f.Clip, x, y)) {
+							continue
+						}
+						bg = over(f.Color[0], bg)
+					}
+					c := contrast(bg, over(q.Color[0], bg))
+					worst = min(worst, c/floor)
+					if c < floor {
+						t.Errorf("dark %v, key %v, glass %v: glyph at %.0f,%.0f (colour %08X) has %.2f:1 over %.0f, floor %.2f", dark, key, g, x, y, q.Color[0], c, bg[0], floor)
+						break
+					}
+				}
+				glyphs++
+			}
+			if glyphs < 40 {
+				t.Errorf("dark %v, key %v: only %d glyphs of titlebar text found", dark, key, glyphs)
+			}
+			t.Logf("dark %v, key %v: %d glyphs, worst contrast %.2f× its floor", dark, key, glyphs, worst)
+		}
+	}
 }

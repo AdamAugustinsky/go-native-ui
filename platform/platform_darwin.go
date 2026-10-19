@@ -44,6 +44,8 @@ type Window struct {
 	effect                       objc.ID // the backdrop's effect view, 0 without one
 	backdrop                     Backdrop
 	buttons                      []nativeButton
+	glassRadius                  float64 // the glass's corner radius as last set (fitBackdrop)
+	fullScreen                   bool    // between windowWillEnterFullScreen: and its exit
 	distantPast, distantFuture   objc.ID
 
 	wPt, hPt   float64

@@ -1,0 +1,17 @@
+{
+	"id": "dev.gonativeui.test.hello",
+	"name": "Hello App",
+	"version": "2.3.4",
+	"build": "42",
+	"category": "public.app-category.utilities",
+	"minimumSystem": "13.0",
+	"icon": "icon.png",
+	"resources": [{"from": "res/data.txt", "to": "data/data.txt"}],
+	"urlSchemes": ["gnui-hello"],
+	"documentTypes": [{"name": "Hello file", "role": "Editor", "extensions": ["hello"], "utis": ["dev.gonativeui.hello"]}],
+	"exportedTypes": [{"identifier": "dev.gonativeui.hello", "description": "Hello file", "conformsTo": ["public.data"], "extensions": ["hello"]}],
+	"usage": {"NSMicrophoneUsageDescription": "Hello listens for a test."},
+	"entitlements": {"com.apple.security.cs.disable-library-validation": true},
+	"loginAgents": [{"name": "agent", "arguments": ["--start-hidden"]}],
+	"extraPlist": {"LSUIElement": true, "GnuiTestNumber": 7}
+}

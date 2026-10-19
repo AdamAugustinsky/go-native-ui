@@ -65,6 +65,16 @@ changes it. Update the line above whenever the app is deliberately rebuilt.
 For a grant that survives rebuilds sign with a real identity:
 `SIGN_IDENTITY="Apple Development: Name (TEAMID)" bash tools/gnuishot/build.sh`.
 
+Without an Apple identity, `tools/resign-tools.sh gnuishot` builds the app and
+signs it with the stable self-signed `gnui-dev` identity (`cmd/gnui/README.md`,
+"The development identity"). Its designated requirement is
+`identifier "dev.gonativeui.gnuishot" and certificate root = H"<gnui-dev SHA-1>"`
+and does not change when the code does, so after the one switch from the
+ad-hoc build, the Screen Recording grant should survive rebuilds signed by the
+same certificate. (Confirm on the test Mac once: grant, rebuild a changed
+GnuiShot, `shot.sh permission` still says granted.) The CDHash recorded above
+stays the identity of the ad-hoc build only.
+
 ## Run (over SSH)
 
 GnuiShot must be launched through LaunchServices so macOS treats *it* as the

@@ -83,7 +83,7 @@ func main() {
 	drawn := flag.Bool("drawn", false, "macOS: draw the field and the ⌘ and + buttons instead of the native shell (backdrop and native buttons)")
 	glassButtons := flag.Bool("glass-buttons", false, "macOS: native ⌘ and + as Liquid Glass circles instead of borderless symbols")
 	native := flag.Bool("native", false, "with -o: render the native shell's content (no field, no ⌘ and +)")
-	pose := flag.String("pose", "", "macOS: hover or press: once settled, hover or press and hold tab -pose-tab through the window's own event queue (for captures)")
+	pose := flag.String("pose", "", "macOS: hover or press: once settled, hover or press and hold tab -pose-tab through the window's own event queue; fullscreen: enter full screen, leave it 6 s later, quit 6 s after (for captures)")
 	poseTab := flag.Int("pose-tab", 1, "with -pose: the tab, from 0")
 	idle := flag.Duration("idle", 0, "show the window, wait a second, count the frames drawn over this long while nothing happens, print them as JSON and exit")
 	verbose := flag.Bool("v", false, "print the startup timeline to stderr; with -bench or in a window, also a state line every second while frames stop coming")

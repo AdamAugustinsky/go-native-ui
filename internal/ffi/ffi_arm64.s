@@ -67,55 +67,37 @@ TEXT gonativeui_ffi_call(SB), NOSPLIT, $0
 	FMOVD F3, (Frame_f+24)(R2)
 	RET
 
-#define CBENTRY(i) \
-	MOVD $i, R12 \
-	B    gonativeui_ffi_cbcommon(SB)
+// One table entry: 8 bytes (a single-instruction MOVD and a B), so entry i
+// is at cbtable + 8*i. The macros expand to MaxCallbacks entries.
+#define CBENTRY(i) MOVD $(i), R12; B gonativeui_ffi_cbcommon(SB)
+#define CB4(i) CBENTRY(i); CBENTRY((i)+1); CBENTRY((i)+2); CBENTRY((i)+3)
+#define CB16(i) CB4(i); CB4((i)+4); CB4((i)+8); CB4((i)+12)
+#define CB64(i) CB16(i); CB16((i)+16); CB16((i)+32); CB16((i)+48)
+#define CB256(i) CB64(i); CB64((i)+64); CB64((i)+128); CB64((i)+192)
 
 GLOBL ·cbTableABI0(SB), NOPTR|RODATA, $8
 DATA ·cbTableABI0(SB)/8, $gonativeui_ffi_cbtable(SB)
 
 TEXT gonativeui_ffi_cbtable(SB), NOSPLIT|NOFRAME, $0
-	CBENTRY(0)
-	CBENTRY(1)
-	CBENTRY(2)
-	CBENTRY(3)
-	CBENTRY(4)
-	CBENTRY(5)
-	CBENTRY(6)
-	CBENTRY(7)
-	CBENTRY(8)
-	CBENTRY(9)
-	CBENTRY(10)
-	CBENTRY(11)
-	CBENTRY(12)
-	CBENTRY(13)
-	CBENTRY(14)
-	CBENTRY(15)
-	CBENTRY(16)
-	CBENTRY(17)
-	CBENTRY(18)
-	CBENTRY(19)
-	CBENTRY(20)
-	CBENTRY(21)
-	CBENTRY(22)
-	CBENTRY(23)
-	CBENTRY(24)
-	CBENTRY(25)
-	CBENTRY(26)
-	CBENTRY(27)
-	CBENTRY(28)
-	CBENTRY(29)
-	CBENTRY(30)
-	CBENTRY(31)
+	CB256(0)
+	CB256(256)
+	CB256(512)
+	CB256(768)
 
-// Frame (192 bytes, 16-byte aligned):
-//    0..16   saved R27, R30
-//   16..64   cbArgs
-//   64..192  saved F0-F7, R0-R7; contiguous with the caller's stack args at 192
+// Callback frame (CBSTACK bytes; cbArgs and Frame sizes are multiples of 16):
+//   0..16              saved R27, R30
+//   CBARGS..           cbArgs
+//   CBFRAME..          the invocation's own Frame (cbArgs.frame)
+//   CBREGS..CBSTACK    saved F0-F7, R0-R7; contiguous with the caller's stack args
+#define CBARGS 16
+#define CBFRAME (CBARGS+cbArgs__size)
+#define CBREGS (CBFRAME+Frame__size)
+#define CBSTACK (CBREGS+16*8)
+
 TEXT gonativeui_ffi_cbcommon(SB), NOSPLIT|NOFRAME, $0
 	NO_LOCAL_POINTERS
-	SUB   $(24*8), RSP
-	ADD   $(8*8), RSP, R14
+	SUB   $CBSTACK, RSP
+	ADD   $CBREGS, RSP, R14
 	FSTPD (F0, F1), (0*8)(R14)
 	FSTPD (F2, F3), (2*8)(R14)
 	FSTPD (F4, F5), (4*8)(R14)
@@ -126,9 +108,11 @@ TEXT gonativeui_ffi_cbcommon(SB), NOSPLIT|NOFRAME, $0
 	STP   (R6, R7), (14*8)(R14)
 	STP   (R27, R30), 0(RSP)
 
-	ADD  $16, RSP, R13
+	ADD  $CBARGS, RSP, R13
+	ADD  $CBFRAME, RSP, R15
 	MOVD R12, cbArgs_index(R13)
 	MOVD R14, cbArgs_args(R13)
+	MOVD R15, cbArgs_frame(R13)
 	MOVD R8, cbArgs_result(R13)
 	MOVD ZR, (cbArgs_result+8)(R13)
 	MOVD ZR, (cbArgs_result+16)(R13)
@@ -141,7 +125,7 @@ TEXT gonativeui_ffi_cbcommon(SB), NOSPLIT|NOFRAME, $0
 	MOVD $0, R3
 	BL   crosscall2(SB)
 
-	ADD   $16, RSP, R13
+	ADD   $CBARGS, RSP, R13
 	MOVD  (cbArgs_result+0)(R13), R0
 	MOVD  (cbArgs_result+8)(R13), R1
 	FMOVD (cbArgs_result+0)(R13), F0
@@ -150,5 +134,5 @@ TEXT gonativeui_ffi_cbcommon(SB), NOSPLIT|NOFRAME, $0
 	FMOVD (cbArgs_result+24)(R13), F3
 
 	LDP 0(RSP), (R27, R30)
-	ADD $(24*8), RSP
+	ADD $CBSTACK, RSP
 	RET

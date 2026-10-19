@@ -3,6 +3,10 @@
 package main
 
 import (
+	"fmt"
+	"os"
+	"time"
+
 	"gonativeui/app"
 	"gonativeui/cmd/rexlook/rex"
 	"gonativeui/theme"
@@ -81,10 +85,19 @@ type poser struct {
 	pose string
 	tab  int
 	n    int
+	// fullscreen: when it started, the steps taken, the radius last logged
+	t0     time.Time
+	step   int
+	lastR  float64
+	lastFS bool
 }
 
 func (p *poser) Build(c *ui.Context) {
 	p.builder.Build(c)
+	if p.pose == "fullscreen" {
+		p.fullScreen(c)
+		return
+	}
 	if p.n++; p.n == 30 {
 		r := p.Rex.TabRectPt(p.tab)
 		x, y := float64(r[0]+r[2])/2, float64(r[1]+r[3])/2
@@ -101,4 +114,34 @@ func (p *poser) Build(c *ui.Context) {
 func runPose(pref theme.Preference, pose string, tab int) error {
 	_, err := app.RunWith(config(), &poser{builder: newBuilder(pref), pose: pose, tab: tab}, app.RunOptions{})
 	return err
+}
+
+// fullScreen (-pose fullscreen) enters full screen once settled, leaves it 6 s
+// later and quits 6 s after that, logging the glass's corner radius to stderr
+// whenever it or the window's full-screen state changes.
+func (p *poser) fullScreen(c *ui.Context) {
+	c.RequestFrame()
+	p.n++
+	r, fs := p.a.Win.DebugGlassRadius()
+	if p.n == 30 {
+		p.t0, p.lastR = time.Now(), -1
+	}
+	if p.n < 30 {
+		return
+	}
+	since := time.Since(p.t0)
+	if r != p.lastR || fs != p.lastFS {
+		fmt.Fprintf(os.Stderr, "%6.2fs glass radius %g, full screen %v\n", since.Seconds(), r, fs)
+		p.lastR, p.lastFS = r, fs
+	}
+	switch {
+	case p.step == 0:
+		p.a.Win.DebugToggleFullScreen()
+		p.step = 1
+	case p.step == 1 && since > 6*time.Second:
+		p.a.Win.DebugToggleFullScreen()
+		p.step = 2
+	case p.step == 2 && since > 12*time.Second:
+		p.a.Quit()
+	}
 }

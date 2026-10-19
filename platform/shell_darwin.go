@@ -60,14 +60,42 @@ var (
 	selSetEnabled            = objc.Sel("setEnabled:")
 	selSymbolImage           = objc.Sel("imageWithSystemSymbolName:accessibilityDescription:")
 	selButtonAction          = objc.Sel("gnuiButtonAction:")
+	selSetRefusesFirstResp   = objc.Sel("setRefusesFirstResponder:")
+	selRemoveFromSuper       = objc.Sel("removeFromSuperview")
+	selContentView           = objc.Sel("contentView")
+	selWillEnterFull         = objc.Sel("windowWillEnterFullScreen:")
+	selDidFailFull           = objc.Sel("windowDidFailToEnterFullScreen:")
+	selDidExitFull           = objc.Sel("windowDidExitFullScreen:")
 
 	nsImageClass  objc.ID
 	glassMaterial = map[Backdrop]uintptr{BackdropGlass: 0, BackdropGlassClear: 1}
 )
 
-// registerButtons adds the native buttons' action to GNUIWindowDelegate.
-func registerButtons(d *objc.ClassDef) {
+// registerShell adds the native buttons' action and the full-screen
+// notifications (the glass's corners) to GNUIWindowDelegate.
+func registerShell(d *objc.ClassDef) {
 	d.Method(selButtonAction, "v@:@", buttonAction)
+	d.Method(selWillEnterFull, "v@:@", windowWillEnterFullScreen)
+	d.Method(selDidFailFull, "v@:@", windowDidLeaveFullScreen)
+	d.Method(selDidExitFull, "v@:@", windowDidLeaveFullScreen)
+}
+
+// windowWillEnterFullScreen: squares the glass's corners before the zoom
+// starts: a full-screen window has none.
+func windowWillEnterFullScreen(*ffi.CB) {
+	if w := theWindow.Load(); w != nil {
+		w.fullScreen = true
+		w.fitBackdrop()
+	}
+}
+
+// windowDidLeaveFullScreen is windowDidExitFullScreen: and
+// windowDidFailToEnterFullScreen:: the window's corners are back.
+func windowDidLeaveFullScreen(*ffi.CB) {
+	if w := theWindow.Load(); w != nil {
+		w.fullScreen = false
+		w.fitBackdrop()
+	}
 }
 
 // nativeButton is one button of Options.Buttons and its NSButton.
@@ -119,6 +147,7 @@ func (w *Window) makeBackdrop(kind Backdrop, width, height float64) {
 	w.makeContainer(width, height)
 	objc.Send1(effect, selSetAutoresizing, 2|16) // NSViewWidthSizable | NSViewHeightSizable
 	F.Reset().Arg(uintptr(w.content)).Arg(uintptr(selAddSubviewPos)).Arg(uintptr(effect)).Arg(^uintptr(0) /* NSWindowBelow */).Arg(uintptr(w.view)).Call(objc.MsgSend)
+	objc.Send(effect, selReleaseObj) // the container owns it now; w.effect does not
 	objc.Send1(w.win, selSetOpaqueWin, 0)
 	clear := F.Reset().Arg(uintptr(objc.Cls("NSColor"))).Arg(uintptr(selColorWhiteAlpha)).ArgF64(1).ArgF64(0.001).Call(objc.MsgSend).R0()
 	objc.Send1(w.win, selSetBGColor, clear)
@@ -126,16 +155,48 @@ func (w *Window) makeBackdrop(kind Backdrop, width, height float64) {
 }
 
 // fitBackdrop gives Liquid Glass the window's corner radius, so that its rim
-// follows the window's edge. _cornerRadius is private (Ghostty reads it the
-// same way); without it the glass keeps square corners, which the window's
-// own mask rounds.
+// follows the window's edge: 0 in full screen, which has no corners.
+// _cornerRadius is private (Ghostty reads it the same way); without it the
+// glass keeps square corners, which the window's own mask rounds. It runs at
+// Open, on every resize and around full screen, and sends nothing while the
+// radius is unchanged.
 func (w *Window) fitBackdrop() {
-	if w.effect == 0 || w.backdrop == BackdropWindow || !objc.SendBool1(w.win, selRespondsTo, uintptr(selWinCornerRadius)) {
+	if w.effect == 0 || w.backdrop == BackdropWindow {
 		return
 	}
-	r := objc.SendF64(w.win, selWinCornerRadius)
-	if r > 0 {
-		objc.F.Reset().Arg(uintptr(w.effect)).Arg(uintptr(selSetCornerRadius)).ArgF64(r).Call(objc.MsgSend)
+	r := 0.0
+	if !w.fullScreen && objc.Send(w.win, selStyleMask)&(1<<14) == 0 && // NSWindowStyleMaskFullScreen
+		objc.SendBool1(w.win, selRespondsTo, uintptr(selWinCornerRadius)) {
+		r = max(objc.SendF64(w.win, selWinCornerRadius), 0)
+	}
+	if r == w.glassRadius {
+		return
+	}
+	w.glassRadius = r
+	objc.F.Reset().Arg(uintptr(w.effect)).Arg(uintptr(selSetCornerRadius)).ArgF64(r).Call(objc.MsgSend)
+}
+
+// closeShell takes the shell apart (Close, and Open's failure path): the
+// buttons drop their target, the delegate, and leave the container with the
+// effect view, which frees both; the container leaves the window and goes
+// with its creation reference, so it frees our view's hold too. GNUIView
+// itself stays w.view's (Close does not free it).
+func (w *Window) closeShell() {
+	for i := range w.buttons {
+		objc.Send1(w.buttons[i].obj, selSetTarget, 0)
+		objc.Send(w.buttons[i].obj, selRemoveFromSuper)
+	}
+	w.buttons = nil
+	if w.effect != 0 {
+		objc.Send(w.effect, selRemoveFromSuper)
+		w.effect = 0
+	}
+	if w.content != w.view {
+		if objc.Send(w.win, selContentView) == w.content {
+			objc.Send1(w.win, selSetContentView, 0)
+		}
+		objc.Send(w.content, selReleaseObj) // makeContainer's
+		w.content = w.view
 	}
 }
 
@@ -198,7 +259,12 @@ func (w *Window) makeButtons(bs []NativeButton, delegate objc.ID, width, height 
 		if b.Disabled {
 			objc.Send1(o, selSetEnabled, 0)
 		}
+		// Titlebar controls never take the keyboard, even with full keyboard
+		// access on: Tab stays with the content, and a click does not move
+		// the first responder (nor end an input method's composition).
+		objc.Send1(o, selSetRefusesFirstResp, 1)
 		objc.Send1(w.content, selAddSubview, uintptr(o)) // above view
+		objc.Send(o, selReleaseObj)                      // the container owns it now; w.buttons does not
 		w.buttons = append(w.buttons, nativeButton{NativeButton: b, obj: o, enabled: !b.Disabled})
 	}
 }

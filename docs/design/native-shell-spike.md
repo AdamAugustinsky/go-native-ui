@@ -31,11 +31,53 @@ Rex's tabs now behave like AppKit's:
 - **A press darkening** on the held tab.
 - **The arrow cursor**, not the pointing hand.
 - **Shortcuts:** ⌘1–⌘8 and ⌘9; ⌃Tab and ⌃⇧Tab; ⌘⇧] and ⌘⇧[; ⌘T.
-- **Key state:** the band dims (opacity 0.55, flatter pill shadow) while the window is not key.
+- **Key state:** the band dims while the window is not key: a flatter pill shadow, the icons at opacity 0.55, and the text by its colour, down to the floors below.
 
-Over a backdrop, the capsule becomes a translucent film, and the band's text
-uses label roles (black or white at alpha) so it stays legible over whatever
-shows through.
+## Text over the glass
+
+Black or white text at a fixed alpha is not legible over whatever shows
+through. The glass shows the windows behind it, and the first cut fell to
+1.68:1 (an inactive tab's path, dark, a white window behind, window not
+key). The band now keeps AppKit's own floors, measured on 27.2:
+
+- **In the key window,** the title block and the chosen tab keep at least
+  `secondaryLabelColor`'s contrast on the window background: 3.95:1 light
+  (black at 0.498 over white), 5.84:1 dark (white at 0.549 over `#1E1E1E`).
+- **Elsewhere** (the other tabs, and everything while the window is not key),
+  the text keeps at least AppKit's own inactive window title:
+  1.98:1 light (`#B8B8B8` on white) and 2.25:1 dark (`#5C5C5C` on `#262626`;
+  the D0 captures, finder and chat).
+
+How:
+
+- **A scrim:** Rex's theme lays one scrim of its field's tone over the
+  material (light `#F5EEF5` at 0.30, dark `#1E1F2A` at 0.45). It narrows the
+  range of what shows.
+- **A backing:** the tab capsule is its own tint at 0.5 and 0.55.
+- **Alpha floors:** each text role has a label alpha in the key window and
+  one when it is not, and the key state animates between them by colour, not
+  by opacity.
+
+`TestBandTextContrastOverGlass` checks every glyph against its floor. It
+composes the frame's fills over both ends of the measured glass range.
+
+The live check is screen captures inside the window's frame: a light and a
+dark window behind it, light and dark looks, key and not
+(`/tmp/gnui-br/contrast/after-*`, measured as the D0 titles were). The worst
+cases are 5.16, 2.84, 6.91 and 3.32:1 against floors of 3.95, 1.98, 5.84 and
+2.25. Before this, they were 3.17, 1.72, 2.60 and 1.68.
+
+These are claims about the measured range, not a guarantee:
+
+- a saturated or patterned window behind can show through differently;
+- Reduce Transparency and Increase Contrast were not measured.
+
+**Window-only captures misstate the glass.** A GnuiShot window capture
+composites the glass with nothing behind it. It reads `#969696` where the
+screen shows `#FCFCFC` over a white window. The earlier "light mode looks
+grey" finding came from such captures and was wrong: over a light window,
+the light glass is near white. Measure the glass from a display capture of
+the window's frame.
 
 ## Provisional API (experimental)
 
@@ -52,6 +94,19 @@ shows through.
 The content view becomes a layer-backed container: the effect view, then
 `GNUIView`, then the buttons. This is the plan's GNUIContainer, from
 `gpui-ghostty.md` §3.1.
+
+The shell's lifecycle:
+
+- **Ownership:** each view goes to its superview once inserted, and
+  `Window.Close` takes the shell apart. The buttons lose their target and
+  every view is freed; `TestShellFreedOnClose` checks this over open and
+  close cycles with zeroing weak references.
+- **Full screen:** the glass's corner radius follows the window's, 0 in full
+  screen, through `windowWillEnterFullScreen:` and `windowDidExitFullScreen:`
+  (or `windowDidFailToEnterFullScreen:`) and every resize.
+- **Focus:** the buttons refuse first responder, as titlebar controls do. Even
+  with full keyboard access on, Tab never reaches them, and a click leaves
+  the focus and an input method's composition in the content.
 
 ## Numbers (MacBook, macOS 27.2, under the user's load)
 

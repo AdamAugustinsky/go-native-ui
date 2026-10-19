@@ -153,6 +153,9 @@ func Open(o Options) (*Window, error) {
 	// Display link (macOS 14+), created once the view is on a screen; paused
 	// until RequestFrame.
 	if w.link = w.makeViewLink(); w.link == 0 {
+		objc.Send(w.win, selClose)
+		w.closeShell()
+		theWindow.Store(nil)
 		return nil, errors.New("platform: displayLinkWithTarget:selector: failed (macOS 14+ required)")
 	}
 	w.updateSize()
@@ -276,5 +279,6 @@ func (w *Window) Close() {
 		w.drawable = 0
 	}
 	objc.Send(w.win, selClose)
+	w.closeShell() // after close: nothing on screen changes
 	theWindow.Store(nil)
 }
