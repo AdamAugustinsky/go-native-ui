@@ -95,6 +95,7 @@ func windowDidLeaveFullScreen(*ffi.CB) {
 	if w := theWindow.Load(); w != nil {
 		w.fullScreen = false
 		w.fitBackdrop()
+		w.layoutChromeSoon() // AppKit dropped the titlebar's height for full screen
 	}
 }
 

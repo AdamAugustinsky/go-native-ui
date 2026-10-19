@@ -34,6 +34,15 @@ const (
 	Info
 	Warning
 	Error
+	// CheckMark is the bold check of a checked checkbox, sized for its box.
+	CheckMark
+	// ChevronUpDown is the double chevron of a pop-up button.
+	ChevronUpDown
+	// ClearField is a filled circle with a cross knocked out: a search
+	// field's clear button.
+	ClearField
+	// PullDown is the small down chevron of a pull-down button.
+	PullDown
 	// NumStandard is the number of standard icons.
 	NumStandard
 )
@@ -69,4 +78,11 @@ var standard = [NumStandard]Spec{
 	Info:         {Symbol: "info.circle", Segoe: 0xE946, Fallback: 'ⓘ', Pt: 12.5, Weight: 0},
 	Warning:      {Symbol: "exclamationmark.triangle", Segoe: 0xE7BA, Fallback: '⚠', Pt: 12.5, Weight: 0},
 	Error:        {Symbol: "xmark.octagon", Segoe: 0xE783, Fallback: '✖', Pt: 12.5, Weight: 0},
+	// The controls' glyphs, sized to macOS 27.2's (tools/appkitref): the
+	// check of a 16 pt checkbox, the chevrons of a 24 pt pop-up button, the
+	// clear button of a 24 pt search field, the chevron of a pull-down button.
+	CheckMark:     {Symbol: "checkmark", Segoe: 0xE73E, Fallback: '✓', Pt: 10, Weight: 0.56},
+	ChevronUpDown: {Symbol: "chevron.up.chevron.down", Segoe: 0xE8CB, Fallback: '⇕', Pt: 10, Weight: 0.4},
+	ClearField:    {Symbol: "xmark.circle.fill", Segoe: 0xE894, Fallback: '⊗', Pt: 13, Weight: 0},
+	PullDown:      {Symbol: "chevron.down", Segoe: 0xE70D, Fallback: '▾', Pt: 8.5, Weight: 0.4},
 }

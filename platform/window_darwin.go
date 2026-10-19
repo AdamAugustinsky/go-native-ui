@@ -37,7 +37,6 @@ var (
 	selAddTracking          = objc.Sel("addTrackingArea:")
 	selStdButton            = objc.Sel("standardWindowButton:")
 	selFrame                = objc.Sel("frame")
-	selSetFrame             = objc.Sel("setFrame:")
 	selSetFrameOrigin       = objc.Sel("setFrameOrigin:")
 	selStyleMask            = objc.Sel("styleMask")
 	selSetTitlebarClear     = objc.Sel("setTitlebarAppearsTransparent:")
@@ -134,6 +133,7 @@ func Open(o Options) (*Window, error) {
 	// Display link (macOS 14+), created once the view is on a screen; paused
 	// until RequestFrame.
 	if w.link = w.makeViewLink(); w.link == 0 {
+		w.closeLights()
 		objc.Send(w.win, selClose)
 		w.closeShell()
 		theWindow.Store(nil)
@@ -159,62 +159,6 @@ func (w *Window) Show() {
 		w.setRateRange(w.link) // the screen is known for certain once shown
 	}
 	w.layoutChrome()
-}
-
-// SystemButtons is where the OS draws the window buttons (close, minimise,
-// zoom) over the content: the union of the three buttons' frames in the
-// content's coordinates, in logical units from its top left. It is the
-// rectangle the app keeps its own content out of (ui.Context.SetSystemButtons).
-// It is empty when the window has no custom titlebar (Options.Titlebar 0: the
-// system's title bar sits above the content and holds the buttons) and in full
-// screen, where the buttons are not over the content. It is updated whenever
-// the window lays out its chrome: when it opens and is shown, and on resize,
-// full screen and appearance changes. Main thread only.
-func (w *Window) SystemButtons() [4]float32 { return w.sysButtons }
-
-// layoutChrome sizes the titlebar container to the custom titlebar height
-// and moves the window buttons (the approach Electron's trafficLightPosition
-// uses). The container's superview, the theme frame, is not flipped. It then
-// records where the buttons are (SystemButtons).
-func (w *Window) layoutChrome() {
-	w.sysButtons = [4]float32{}
-	if w.titlebar == 0 {
-		return
-	}
-	var btn [3]objc.ID
-	for i := range btn {
-		if btn[i] = objc.Send1(w.win, selStdButton, uintptr(i)); btn[i] == 0 {
-			return
-		}
-	}
-	container := objc.Send(objc.Send(btn[0], selSuperview), selSuperview)
-	wf, cf := objc.SendRect(w.win, selFrame), objc.SendRect(container, selFrame)
-	objc.F.Reset().Arg(uintptr(container)).Arg(uintptr(selSetFrame)).ArgRect(cf.X, wf.H-w.titlebar, cf.W, w.titlebar).Call(objc.MsgSend)
-	f0, f1 := objc.SendRect(btn[0], selFrame), objc.SendRect(btn[1], selFrame)
-	space := f1.X - f0.X
-	x0 := float64(w.lights[0]) - f0.W/2
-	y := w.titlebar - float64(w.lights[1]) - f0.H/2
-	for i, b := range btn {
-		objc.F.Reset().Arg(uintptr(b)).Arg(uintptr(selSetFrameOrigin)).ArgPoint(x0+float64(i)*space, y).Call(objc.MsgSend)
-	}
-	if objc.Send(w.win, selStyleMask)&(1<<14) != 0 { // NSWindowStyleMaskFullScreen: the buttons are not over the content
-		return
-	}
-	// The union of the buttons, in window coordinates (origin bottom left), then
-	// turned to the content's (origin top left; the content fills the window).
-	u := [4]float64{math.MaxFloat64, math.MaxFloat64, -math.MaxFloat64, -math.MaxFloat64}
-	for _, b := range btn {
-		bounds := objc.SendRect(b, selBounds)
-		// both corners: a flipped view's origin is its top left
-		for _, p := range [2][2]float64{{0, 0}, {bounds.W, bounds.H}} {
-			objc.F.Reset().Arg(uintptr(b)).Arg(uintptr(selConvertPointToView)).ArgPoint(p[0], p[1]).Arg(0).Call(objc.MsgSend)
-			x, y := objc.F.F64(0), objc.F.F64(1)
-			u[0], u[1] = math.Min(u[0], x), math.Min(u[1], y)
-			u[2], u[3] = math.Max(u[2], x), math.Max(u[3], y)
-		}
-	}
-	wf = objc.SendRect(w.win, selFrame)
-	w.sysButtons = [4]float32{float32(u[0]), float32(wf.H - u[3]), float32(u[2]), float32(wf.H - u[1])}
 }
 
 func (w *Window) updateSize() bool {
@@ -260,6 +204,7 @@ func (w *Window) Close() {
 		objc.Send(w.drawable, selReleaseObj)
 		w.drawable = 0
 	}
+	w.closeLights()
 	objc.Send(w.win, selClose)
 	w.closeShell() // after close: nothing on screen changes
 	theWindow.Store(nil)

@@ -42,45 +42,6 @@ func (k *Kit) undim(on bool) {
 	}
 }
 
-// decorate builds the hover and press tints and the focus ring over the widget
-// root id, which must be the current parent. They are sized by the root's
-// rectangle of the previous frame, so a widget whose size just changed
-// decorates the old size for one frame.
-func (k *Kit) decorate(id ui.ID, v base.Visual, radius float32) {
-	if v.Hot <= 0.004 && v.Down <= 0.004 && v.Ring <= 0.004 {
-		return
-	}
-	c := k.c
-	r := c.Rect(id)
-	w, h := r[2]-r[0], r[3]-r[1]
-	if w <= 0 || h <= 0 {
-		return
-	}
-	k.decorateBox(c.KeyOf(id), w, h, v, radius)
-}
-
-// decorateBox builds the hover and press tints and the focus ring of a control
-// whose visible box is the current parent, w×h pixels. The classic look draws
-// the ring inside the box.
-func (k *Kit) decorateBox(key ui.Key, w, h float32, v base.Visual, radius float32) {
-	c := k.c
-	if v.Hot > 0.004 {
-		theme.At(c, 0, 0, w, h)
-		c.NextBG(theme.WithAlpha(k.r.Pal.HoverOverlay, v.Hot))
-		c.NextRadius(radius)
-		c.BoxKeyed(ui.DrawBackground|fl, ui.KeyN(key, 9001), nil)
-	}
-	if v.Down > 0.004 {
-		theme.At(c, 0, 0, w, h)
-		c.NextBG(theme.WithAlpha(k.r.Pal.PressOverlay, v.Down))
-		c.NextRadius(radius)
-		c.BoxKeyed(ui.DrawBackground|fl, ui.KeyN(key, 9002), nil)
-	}
-	if v.Ring > 0.004 {
-		k.ringBox(key, w, h, radius, v.Ring)
-	}
-}
-
 // ringBox builds a focus ring of w×h pixels at the origin of the current
 // parent.
 func (k *Kit) ringBox(key ui.Key, w, h, radius, t float32) {
@@ -90,12 +51,6 @@ func (k *Kit) ringBox(key ui.Key, w, h, radius, t float32) {
 	c.NextRadius(radius)
 	c.BoxKeyed(ui.DrawBorder|fl, ui.KeyN(key, 9003), nil)
 }
-
-// font is the font of a text style.
-func (k *Kit) font(s TextStyle) text.FontKey { return fontOf(k.r, s) }
-
-// color is the text colour of a text style.
-func (k *Kit) color(s TextStyle) uint32 { return colorOf(k.r, s) }
 
 // fontOf is the font of a text style in the resolved theme r.
 func fontOf(r *theme.Resolved, s TextStyle) text.FontKey {
