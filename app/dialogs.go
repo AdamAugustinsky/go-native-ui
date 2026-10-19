@@ -76,6 +76,7 @@ func (a *App) enqueueDialog(d pendingDialog) (platform.DialogTicket, error) {
 	a.dlgSeq++
 	d.ticket = a.dlgSeq
 	a.dlgQ = append(a.dlgQ, d)
+	platform.Wake() // a safe point follows: also during AppKit's wait for a quit answer, where only the dispatcher runs
 	return d.ticket, nil
 }
 

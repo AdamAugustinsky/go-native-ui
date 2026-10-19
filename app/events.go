@@ -29,8 +29,10 @@ const (
 	EvActivated = EventKind(platform.AppEvActivated)
 	// EvDeactivated: another application became active.
 	EvDeactivated = EventKind(platform.AppEvDeactivated)
-	// EvQuitRequested asks the app to quit: e.QuitReason says who asks. Answer
-	// with App.ReplyQuit, now or later (see App.ReplyQuit).
+	// EvQuitRequested asks the app to quit: e.QuitReason says who asks, and
+	// ID identifies the request. Answer with App.ReplyQuit(e.ID, allow), now
+	// or later (see App.ReplyQuit); a request asked while a frame is drawn
+	// (a native loop inside Build) arrives after the frame.
 	EvQuitRequested = EventKind(platform.AppEvQuitRequested)
 	// EvQuitDeadline: a quit request stayed unanswered past
 	// AppConfig.QuitDeadline; A is the QuitAction that was applied. An error

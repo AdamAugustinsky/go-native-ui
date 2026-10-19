@@ -227,6 +227,47 @@ var (
 	laterFns []func()
 )
 
+// laterAfter runs f on the main thread from a run-loop timer d from now, in
+// the default mode (so also inside a nested run loop of that mode).
+func laterAfter(d time.Duration, f func()) {
+	if afterObj == 0 {
+		def := objc.Define("GNUITestAfter", objc.Cls("NSObject"), nil)
+		def.Method(objc.Sel("gnuiAfter:"), "v@:@", func(c *ffi.CB) {
+			id := int64(objc.Send(objc.ID(c.Int(2)), objc.Sel("longLongValue")))
+			f := afterFns[id]
+			delete(afterFns, id)
+			f()
+		})
+		afterObj = objc.Send(objc.Send(def.Register(), objc.Sel("alloc")), objc.Sel("init"))
+		afterFns = map[int64]func(){}
+	}
+	afterSeq++
+	afterFns[afterSeq] = f
+	num := objc.Send1(objc.Cls("NSNumber"), objc.Sel("numberWithLongLong:"), uintptr(afterSeq))
+	sel, arg := objc.Sel("performSelector:withObject:afterDelay:"), objc.Sel("gnuiAfter:") // not inside the frame's chain
+	objc.F.Reset().Arg(uintptr(afterObj)).Arg(uintptr(sel)).Arg(uintptr(arg)).Arg(uintptr(num)).ArgF64(d.Seconds()).Call(objc.MsgSend)
+}
+
+var (
+	afterObj objc.ID
+	afterFns map[int64]func()
+	afterSeq int64
+)
+
+// runNested runs a nested run loop in the default mode for d, as AppKit's
+// own loops do inside a call the app makes (an animated zoom, a modal
+// session).
+func runNested(d time.Duration) {
+	rl := objc.Send(objc.Cls("NSRunLoop"), objc.Sel("currentRunLoop"))
+	mode := objc.Str("kCFRunLoopDefaultMode")
+	cls, sel, run := objc.Cls("NSDate"), objc.Sel("dateWithTimeIntervalSinceNow:"), objc.Sel("runMode:beforeDate:")
+	end := time.Now().Add(d)
+	for time.Now().Before(end) {
+		date := objc.ID(objc.F.Reset().Arg(uintptr(cls)).Arg(uintptr(sel)).ArgF64(0.02).Call(objc.MsgSend).R0())
+		objc.Send2(rl, run, uintptr(mode), uintptr(date))
+	}
+}
+
 // quitLater sends the Dock's Quit from the pump (later) and reports how.
 func quitLater() { later(func() { say("via=%s", sendQuitEvent()) }) }
 

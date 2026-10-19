@@ -192,8 +192,12 @@ type App struct {
 // frameRequester is the part of platform.Window that arms the next frame.
 type frameRequester interface{ RequestFrame() }
 
-// Quit ends the run after the current iteration.
-func (a *App) Quit() { a.done = true }
+// Quit ends the run after the current iteration. It wakes the loop, which
+// may be waiting with no window open.
+func (a *App) Quit() {
+	a.done = true
+	platform.Wake()
+}
 
 // Size is the surface size in pixels and the pixels per point.
 func (a *App) Size() (w, h int, scale float32) { return a.w, a.h, a.scale }

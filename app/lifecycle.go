@@ -23,13 +23,15 @@ import (
 // # The quit policy
 //
 // Every route arrives as EvQuitRequested (QuitMenu, QuitDock, QuitLogout,
-// QuitSignal, QuitApp …) and is answered with App.ReplyQuit. An answer given
+// QuitSignal, QuitApp …) and is answered with App.ReplyQuit, by the request's
+// ID (a late answer to an older request settles nothing). An answer given
 // during the event, or from a call nested in it, is latched and returned to
 // the system directly. Without one the answer is deferred: the system waits
 // (on macOS, AppKit runs its own loop, during which app events, safe-point
 // work, sheets and frames go on) until ReplyQuit, however long that takes,
-// unless AppConfig.QuitDeadline is set. An allowed quit ends with
-// EvWillTerminate; on macOS the process then exits and Main does not return.
+// unless AppConfig.QuitDeadline is set. Save before allowing: an allowed quit
+// ends with EvWillTerminate, after which on macOS the process exits and Main
+// does not return.
 //
 // App.Quit is not a quit request: it ends the loop at once, without asking,
 // and Main (or Run) returns. The last window closing does the same unless
