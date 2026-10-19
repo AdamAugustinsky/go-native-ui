@@ -8,34 +8,32 @@ import (
 	"gonativeui/internal/objc"
 )
 
-// A window with the native shell: the backdrop sits under our view in a
-// container, the surface is told to be transparent, and the toolbar's tab
-// group and buttons deliver their ids as EvCommand. Updating the toolbar
-// with what it already shows allocates nothing.
+// A window with the native shell: the backdrop sits under our view and the
+// buttons above it in a container, the surface is told to be transparent, a
+// button click arrives as EvCommand, and keeping a button's state allocates
+// nothing.
 func TestNativeShell(t *testing.T) {
 	type result struct {
 		opened                  bool
 		err                     error
 		backdrop                Backdrop
-		transparent, toolbar    bool
-		subviews                int
-		viewOnTop, opaqueWindow bool
+		transparent             bool
+		order                   []string // the container's subviews, bottom to top
+		viewIndex               int
+		opaqueWindow            bool
 		cmds                    []uint64
-		selected                int
 		allocs                  float64
-		plusEnabled             bool
-		appKitItems             int
+		plusEnabled, hasButtons bool
+		plusX                   float64
 	}
 	var r result
-	tabs := []ToolbarTab{{ID: 20, Symbol: "terminal", Label: "one"}, {ID: 21, Label: "two"}}
 	onMain(func() {
 		w, err := Open(Options{
 			Title: "shell test", Width: 400, Height: 300, Hidden: true,
-			Backdrop: BackdropGlass, Subtitle: "sub", ToolbarCompact: true,
-			Toolbar: []ToolbarItem{
-				{Kind: ToolbarTabs, ID: 3, Tabs: tabs, Selected: 0},
-				{Kind: ToolbarFlexibleSpace},
-				{Kind: ToolbarButton, ID: 7, Symbol: "plus", Label: "New"},
+			Titlebar: 46, TrafficLights: [2]float32{21, 22}, Backdrop: BackdropGlass,
+			Buttons: []NativeButton{
+				{ID: 2, Symbol: "command", Label: "Commands", X: -57, Y: 23},
+				{ID: 7, Symbol: "plus", Label: "New", X: -23, Y: 23, Style: ButtonGlass},
 			},
 		})
 		if err != nil {
@@ -46,31 +44,31 @@ func TestNativeShell(t *testing.T) {
 		r.opened = true
 		pool := objc.F.Call0(objc.PoolPush)
 		defer objc.F.Call1(objc.PoolPop, pool)
-		r.backdrop, r.transparent, r.toolbar = w.Backdrop(), w.Native().Transparent, w.HasToolbar()
+		r.backdrop, r.transparent, r.hasButtons = w.Backdrop(), w.Native().Transparent, w.HasButtons()
 		subs := objc.Send(w.content, objc.Sel("subviews"))
-		r.subviews = int(objc.Send(subs, objc.Sel("count")))
-		r.viewOnTop = objc.Send(subs, objc.Sel("lastObject")) == w.view
+		for i := 0; i < int(objc.Send(subs, objc.Sel("count"))); i++ {
+			v := objc.Send1(subs, objc.Sel("objectAtIndex:"), uintptr(i))
+			if v == w.view {
+				r.viewIndex = i
+			}
+			r.order = append(r.order, string(objc.AppendUTF8(nil, objc.Send(v, objc.Sel("className")))))
+		}
 		r.opaqueWindow = objc.SendBool(w.win, objc.Sel("isOpaque"))
-		r.appKitItems = int(objc.Send(objc.Send(objc.Send(w.win, objc.Sel("toolbar")), objc.Sel("items")), objc.Sel("count")))
+		plus := w.buttons[1].obj
+		r.plusX = objc.SendRect(plus, selFrame).X
 
 		w.q.reset()
 		delegate := objc.Send(w.win, objc.Sel("delegate"))
-		tabsItem, plus := w.tb.find(3), w.tb.find(7)
-		objc.Send1(tabsItem.seg, selSetSelectedSeg, 1) // the user picks the second tab
-		objc.Send1(delegate, selTBAction, uintptr(tabsItem.seg))
-		objc.Send1(delegate, selTBAction, uintptr(plus.obj)) // and clicks +
+		objc.Send1(delegate, selButtonAction, uintptr(w.buttons[1].obj)) // a click on +
+		objc.Send1(delegate, selButtonAction, uintptr(w.buttons[0].obj)) // and on ⌘
 		for _, e := range w.q.ev {
 			if e.Kind == EvCommand {
 				r.cmds = append(r.cmds, e.Tag)
 			}
 		}
-		w.SetToolbarTabs(3, tabs, 0) // the app selects the first one again
-		r.selected = int(objc.Send(tabsItem.seg, selSelectedSeg))
-		r.allocs = testing.AllocsPerRun(100, func() {
-			w.SetToolbarTabs(3, tabs, 0)
-			w.SetToolbarEnabled(7, false)
-		})
-		r.plusEnabled = objc.SendBool(plus.obj, objc.Sel("isEnabled"))
+		w.SetButtonEnabled(7, false)
+		r.allocs = testing.AllocsPerRun(100, func() { w.SetButtonEnabled(7, false) })
+		r.plusEnabled = objc.SendBool(plus, objc.Sel("isEnabled"))
 	})
 	if r.err != nil || !r.opened {
 		t.Skipf("cannot open a window here: %v", r.err)
@@ -78,22 +76,19 @@ func TestNativeShell(t *testing.T) {
 	if r.backdrop == BackdropNone || !r.transparent || r.opaqueWindow {
 		t.Errorf("backdrop %d, surface transparent %v, window opaque %v: want a backdrop, a transparent surface, a non-opaque window", r.backdrop, r.transparent, r.opaqueWindow)
 	}
-	if r.subviews != 2 || !r.viewOnTop {
-		t.Errorf("content view has %d subviews, our view on top: %v; want the effect view under ours", r.subviews, r.viewOnTop)
+	if len(r.order) != 4 || r.viewIndex != 1 || !r.hasButtons {
+		t.Errorf("container holds %v with our view at %d: want the effect view, ours, then the two buttons", r.order, r.viewIndex)
 	}
-	if !r.toolbar || r.appKitItems != 3 {
-		t.Errorf("toolbar %v with %d items, want the 3 items", r.toolbar, r.appKitItems)
+	if r.plusX != 400-23-14 {
+		t.Errorf("+ at x %v, want %v (23 pt from the right edge to its centre)", r.plusX, 400-23-14)
 	}
-	if len(r.cmds) != 2 || r.cmds[0] != 21 || r.cmds[1] != 7 {
-		t.Errorf("commands %v, want [21 7] (second tab, then +)", r.cmds)
-	}
-	if r.selected != 0 {
-		t.Errorf("SetToolbarTabs selected segment %d, want 0", r.selected)
+	if len(r.cmds) != 2 || r.cmds[0] != 7 || r.cmds[1] != 2 {
+		t.Errorf("commands %v, want [7 2]", r.cmds)
 	}
 	if r.allocs != 0 {
-		t.Errorf("unchanged toolbar updates allocate %.1f times", r.allocs)
+		t.Errorf("an unchanged SetButtonEnabled allocates %.1f times", r.allocs)
 	}
 	if r.plusEnabled {
-		t.Error("SetToolbarEnabled(false) left + enabled")
+		t.Error("SetButtonEnabled(false) left + enabled")
 	}
 }

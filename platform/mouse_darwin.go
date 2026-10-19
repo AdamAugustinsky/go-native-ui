@@ -84,10 +84,10 @@ func (w *Window) pointerEvent(ev objc.ID, typ uintptr, t int64) (consumed bool) 
 		}
 	}
 	w.pointerIn = true
-	if w.tb != nil && (typ == 1 || typ == 3 || typ == 25) && !w.hitsView(lx, ly) {
-		// A press on the toolbar (or a window button) is AppKit's: its
-		// controls track the release themselves, so ui would see a press
-		// that never ends.
+	if w.content != w.view && (typ == 1 || typ == 3 || typ == 25) && !w.hitsView(lx, ly) {
+		// A press on a native view (a button of Options.Buttons, a window
+		// button) is AppKit's: its controls track the release themselves, so
+		// ui would see a press that never ends.
 		return false
 	}
 	if typ == 1 && w.drags.at(e.X, e.Y) && w.hitsView(lx, ly) {

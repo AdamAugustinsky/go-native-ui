@@ -40,10 +40,10 @@ type Window struct {
 	nOut     int  // how many events that Wait handed out
 
 	app, win, view, link, wakeEv objc.ID
-	content                      objc.ID // the content view: view, or the container that holds the backdrop and view (shell_darwin.go)
+	content                      objc.ID // the content view: view, or the container that holds the backdrop, view and the buttons (shell_darwin.go)
 	effect                       objc.ID // the backdrop's effect view, 0 without one
 	backdrop                     Backdrop
-	tb                           *toolbar // the native toolbar, nil without one
+	buttons                      []nativeButton
 	distantPast, distantFuture   objc.ID
 
 	wPt, hPt   float64

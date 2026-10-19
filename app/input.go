@@ -287,7 +287,7 @@ func (t *translator) apply(e *platform.Event, txt []byte) bool {
 		// (ui drops it unless that field has the focus). A failed paste still
 		// counts as input: the frame that follows may be the one that learns it.
 		in.SetPaste(ui.Key(e.Tag), txt, e.Flags&platform.FlagFailed == 0)
-	case platform.EvCommand: // a native control (toolbar item)
+	case platform.EvCommand: // a native button (platform.Options.Buttons)
 		if !in.PushCommand(uint16(e.Tag)) {
 			return false
 		}

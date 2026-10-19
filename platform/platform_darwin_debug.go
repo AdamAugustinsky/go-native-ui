@@ -105,3 +105,26 @@ func (w *Window) DebugState() DebugState {
 	}
 	return s
 }
+
+// DebugPostMouse is a test hook (macOS only): it posts a mouse event of the
+// given NSEventType (5 moved, 1 left down, 2 left up) at a point of the
+// content in logical units from its top left to the window's own event
+// queue, so it takes the path a real one takes (the pump, sendEvent,
+// AppKit's hit test) without moving the system's pointer. Main thread.
+func (w *Window) DebugPostMouse(typ uintptr, xPt, yPt float64) {
+	pool := objc.F.Call0(objc.PoolPush)
+	defer objc.F.Call1(objc.PoolPop, pool)
+	uptime := objc.SendF64(objc.Send(objc.Cls("NSProcessInfo"), objc.Sel("processInfo")), objc.Sel("systemUptime"))
+	num := objc.Send(w.win, objc.Sel("windowNumber"))
+	sel := objc.Sel("mouseEventWithType:location:modifierFlags:timestamp:windowNumber:context:eventNumber:clickCount:pressure:")
+	cls := objc.Cls("NSEvent")
+	var clicks uintptr
+	if typ == 1 || typ == 2 {
+		clicks = 1
+	}
+	ev := objc.ID(objc.F.Reset().Arg(uintptr(cls)).Arg(uintptr(sel)).Arg(typ).ArgPoint(xPt, w.hPt-yPt).Arg(0).ArgF64(uptime).
+		Arg(uintptr(num)).Arg(0).Arg(0).Arg(clicks).ArgF32(1).Call(objc.MsgSend).R0())
+	if ev != 0 {
+		objc.Send2(w.app, selPostEvent, uintptr(ev), 0)
+	}
+}

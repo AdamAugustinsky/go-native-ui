@@ -24,7 +24,7 @@ type ShotOptions struct {
 	Preference theme.Preference
 	System     ui.Appearance
 	// Native renders what the scene draws in the native shell (NativeConfig):
-	// no field (transparent) and no titlebar, whose parts are the window's.
+	// no field (transparent) and no ⌘ and +, which are the window's.
 	Native bool
 }
 

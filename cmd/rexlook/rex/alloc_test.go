@@ -5,8 +5,6 @@ import (
 	"runtime"
 	"testing"
 	"time"
-
-	"gonativeui/ui"
 )
 
 // The exact allocation gate: a warmed-up, scripted frame sequence allocates
@@ -112,8 +110,11 @@ func TestScriptsExercise(t *testing.T) {
 		if h.c.Animating() {
 			animating++
 		}
-		if h.cursor() == ui.CursorPointer {
-			hovered++
+		for i := 0; i < x.nTabs; i++ {
+			if h.c.HotTOf(tabKey(x.tabs[i].uid)) > 0 {
+				hovered++
+				break
+			}
 		}
 		switch tt := x.th.T; {
 		case tt == 1:

@@ -22,9 +22,9 @@ func registerClasses() {
 	registerViewDraw(view)
 	registerViewMouse(view)
 	viewClass = view.Register()
-	delegate := objc.Define("GNUIWindowDelegate", objc.Cls("NSObject"), []string{"NSWindowDelegate", "NSToolbarDelegate"})
+	delegate := objc.Define("GNUIWindowDelegate", objc.Cls("NSObject"), []string{"NSWindowDelegate"})
 	registerWindowDelegate(delegate)
-	registerToolbarDelegate(delegate)
+	registerButtons(delegate)
 	delegateClass = delegate.Register()
 	clsNSArray, clsNSAttributedString = objc.Cls("NSArray"), objc.Cls("NSAttributedString")
 	clsMetalLink = objc.Cls("CAMetalDisplayLink") // macOS 14+

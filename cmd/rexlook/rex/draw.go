@@ -9,21 +9,18 @@ import (
 
 // draw builds the whole frame in tree order: background, panes, titlebar (with
 // the traffic lights, if the scene draws them). Every box is a floating child
-// of its container with a whole-pixel position and size. With a native
-// toolbar the titlebar is the window's: the scene only keeps it in step.
+// of its container with a whole-pixel position and size.
 func (r *Rex) draw(c *ui.Context) {
 	r.th.Chrome.Background(c, &r.th)
 	r.drawPanes(c)
-	if r.bar != nil {
-		r.syncBar()
-	}
-	if r.bar != nil || r.shellShot {
-		return
-	}
 	r.drawTitlebar(c)
 }
 
 // ---- titlebar ----
+
+// inactiveOpacity is how much of the titlebar's content shows while the
+// window is not key.
+const inactiveOpacity = 0.55
 
 const (
 	capsuleL   = 402 // reference px
@@ -57,6 +54,16 @@ func (r *Rex) drawTitlebar(c *ui.Context) {
 		r.tabRects[i] = [4]float32{theme.Snap(tabX(i)), y0, theme.Snap(tabX(i + 1)), y1}
 	}
 
+	// The window's key state (animated) dims the band while another window
+	// has the keyboard, as AppKit's titlebar content does: quieter titles and
+	// icons, a flatter pill.
+	keyTgt := float32(0)
+	if c.Input().Focused {
+		keyTgt = 1
+	}
+	kw := c.AnimateValue(keyKeyW, keyTgt, 12)
+	r.keyW = kw
+
 	// Activeness of each tab (0..1) drives the pill, the title colours and
 	// the separators.
 	var act [maxTabs]float32
@@ -81,6 +88,12 @@ func (r *Rex) drawTitlebar(c *ui.Context) {
 	// shadows stay within).
 	theme.At(c, capsule[0], capsule[1], capsule[2]-capsule[0], capsule[3]-capsule[1])
 	capTop, capBot := r.col(0xE8DCE9, 0x2B2C3B), r.col(0xE2DCE2, 0x282937)
+	if r.backdrop {
+		// Over the material the group is a film, as the reference's capsule
+		// is over its blurred wallpaper: a little darker in the light look,
+		// a little lighter in the dark one.
+		capTop, capBot = r.colA(0x3A2A4A, 0xFFFFFF, 0.055, 0.075), r.colA(0x3A2A4A, 0xFFFFFF, 0.07, 0.06)
+	}
 	c.NextBG4(capTop, capTop, capBot, capBot)
 	c.NextRadius(34 * k)
 	cap := c.BoxKeyed(ui.DrawBackground|ui.Clip|fl, ui.KeyN(keyBar, 1), nil)
@@ -92,8 +105,9 @@ func (r *Rex) drawTitlebar(c *ui.Context) {
 	pillTop, pillBot := r.col(0xFFFAFF, 0x4A4D66), r.col(0xFCF8FC, 0x434559)
 	c.NextBG4(pillTop, pillTop, pillBot, pillBot)
 	c.NextRadius(30 * k)
-	c.NextShadows(ui.Shadow{OffY: 2 * k, Sigma: 2.5 * k, Color: r.colA(0x3A2A4A, 0x000000, 0.13, 0.40)},
-		ui.Shadow{OffY: 0, Sigma: 1.5 * k, Color: r.colA(0x3A2A4A, 0x000000, 0.14, 0.45)})
+	sh := theme.Lerp(0.45, 1, kw)
+	c.NextShadows(ui.Shadow{OffY: 2 * k, Sigma: 2.5 * k, Color: r.colA(0x3A2A4A, 0x000000, 0.13*sh, 0.40*sh)},
+		ui.Shadow{OffY: 0, Sigma: 1.5 * k, Color: r.colA(0x3A2A4A, 0x000000, 0.14*sh, 0.45*sh)})
 	c.NextBorder(r.col(0xBEB9C0, 0x5C5F7A), max(1, k))
 	c.NextBorderSides(ui.SideLeft | ui.SideRight)
 	c.BoxKeyed(ui.DrawBackground|ui.DrawShadow|ui.DrawBorder|fl, ui.KeyN(keyBar, 2), nil)
@@ -117,11 +131,23 @@ func (r *Rex) drawTitlebar(c *ui.Context) {
 
 	// Host block: device glyph, host name over machine name.
 	kg := keyGen{Base: ui.KeyN(keyBar, 3)}
-	r.IconAt(c, &kg, icDevice, 209*k, 43*k, r.col(0x5F5E63, 0xA3A7B8))
-	r.Put(c, &kg, r.th.Font.UISemi, "rex-snake", 245*k, 42*k, r.col(0x5F5D64, 0xB8BBCB), 0, 0)
-	r.Put(c, &kg, r.th.Font.Small, "Mac Studio", 245*k, 66*k, r.col(0x87848B, 0x8D91A3), 0, 0)
+	c.PushOpacity(theme.Lerp(inactiveOpacity, 1, kw))
+	devCol, hostCol, machCol := r.col(0x5F5E63, 0xA3A7B8), r.col(0x5F5D64, 0xB8BBCB), r.col(0x87848B, 0x8D91A3)
+	if r.backdrop {
+		devCol, hostCol, machCol = r.label(0.62), r.label(0.80), r.label(0.50)
+	}
+	r.IconAt(c, &kg, icDevice, 209*k, 43*k, devCol)
+	r.Put(c, &kg, r.th.Font.UISemi, "rex-snake", 245*k, 42*k, hostCol, 0, 0)
+	r.Put(c, &kg, r.th.Font.Small, "Mac Studio", 245*k, 66*k, machCol, 0, 0)
+	c.PopOpacity()
 
-	// Right edge: ⌘ and +.
+	// Right edge: ⌘ and +, the window's own when it has native buttons.
+	if r.btns != nil || r.shellShot {
+		if r.btns != nil {
+			r.btns.SetButtonEnabled(cmdPlus, r.nTabs < maxTabs)
+		}
+		return
+	}
 	hit := 28 * k
 	r.IconButton(c, keyCmd, icCommand, W-115.5*k, 45*k, hit, r.tone(0x5F5D62, 0xA3A7B8), r.tone(0x1E2227, 0xECEDF3), true)
 	r.IconButton(c, keyPlus, icPlus, W-46.5*k, 45*k, hit, r.tone(0x5F5D62, 0xA3A7B8), r.tone(0x1E2227, 0xECEDF3), r.nTabs < maxTabs)
@@ -139,11 +165,22 @@ func (r *Rex) drawTab(c *ui.Context, i int, act, absX, tabW float32) {
 	theme.At(c, rc[0]-ox, rc[1]-oy, rc[2]-rc[0], rc[3]-rc[1])
 	c.NextBG(theme.ColA(0xFFFFFF, theme.Lerp(0.55, 0.10, r.th.T)*hot*(1-act)))
 	c.NextRadius(30 * k)
-	c.NextCursor(ui.CursorPointer)
+	// The arrow, as over AppKit's tabs and segments: no pointing hand.
 	tb := c.BoxKeyed(ui.DrawBackground|ui.Clip|ui.Clickable|ui.HotAnimation|ui.ActiveAnimation|fl, key, nil)
 	c.Push(tb)
 	defer c.Pop()
 	tx, ty := rc[0], rc[1]
+
+	// Held down: the tab darkens under the pointer (a segment's press), on
+	// the pill as on an inactive tab. It selects on the press already.
+	if p := c.ActiveTOf(key); p > 0.004 {
+		theme.At(c, 0, 0, rc[2]-rc[0], rc[3]-rc[1])
+		c.NextBG(r.colA(0x3A2A4A, 0xFFFFFF, 0.09*p, 0.08*p))
+		c.NextRadius(30 * k)
+		c.BoxKeyed(ui.DrawBackground|fl, ui.KeyN(key, 6), nil)
+	}
+	c.PushOpacity(theme.Lerp(inactiveOpacity, 1, r.keyW))
+	defer c.PopOpacity()
 
 	// Stacked cards: coloured cards peek out behind the front card.
 	st := &t.style
@@ -172,6 +209,9 @@ func (r *Rex) drawTab(c *ui.Context, i int, act, absX, tabW float32) {
 	// Title: the name, then the lighter path; text that does not fit fades out.
 	nameCol := r.col(theme.MixRGB(0x5A5A60, 0x1E2227, act), theme.MixRGB(0xA9ACBB, 0xF1F2F8, act))
 	pathCol := r.col(theme.MixRGB(0x928F95, 0x1E2227, act), theme.MixRGB(0x8D91A8, 0xF1F2F8, act))
+	if r.backdrop { // over the material: the system's label roles, legible over whatever shows through
+		nameCol, pathCol = r.label(theme.Lerp(0.72, 0.88, act)), r.label(theme.Lerp(0.48, 0.88, act))
+	}
 	x := absX + st.textX*k
 	end := rc[2] - 10*r.Scale // right limit of the title
 	base := 55 * k
@@ -196,4 +236,11 @@ func (r *Rex) titleRun(c *ui.Context, kg *keyGen, s string, x, baseline float32,
 		w, fx = room, ui.FadeOverflowX
 	}
 	r.Put(c, kg, r.th.Font.UI, s, x, baseline, color, w, fx)
+}
+
+// label is the text colour of the titlebar over a backdrop: black (light) or
+// white (dark) at alpha a, as the system's label colours are, so the text
+// keeps its contrast over whatever the material shows.
+func (r *Rex) label(a float32) uint32 {
+	return theme.ColA(r.tone(0x000000, 0xFFFFFF), a)
 }

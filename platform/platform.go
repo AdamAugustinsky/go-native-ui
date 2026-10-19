@@ -23,6 +23,9 @@
 //	(*Window).SetIMERect(x, y, w, h)      where the text caret or composition is (window pixels), for input-method candidate windows; copied, cheap to call every frame
 //	(*Window).SetTextInput(active)        whether a text field has focus; losing it cancels a composition in progress
 //	(*Window).DiscardComposition()        cancel a composition in progress without committing it (EvPreedit with no text follows)
+//	(*Window).Backdrop() Backdrop         the system material behind the content (Options.Backdrop), BackdropNone without; experimental
+//	(*Window).HasButtons() bool           whether native buttons are over the content (Options.Buttons); experimental
+//	(*Window).SetButtonEnabled(id, on)    enable or disable one; cheap when unchanged (macOS; no-op elsewhere); experimental
 //	(*Window).Close()
 //	Clipboard() string                    plain UTF-8 text of the system clipboard; main thread
 //	SetClipboard(text string)             replace the clipboard with plain text; main thread
@@ -96,7 +99,7 @@ const (
 	EvWake                    // a goroutine called Wake
 	EvFrame                   // the frame slot armed by RequestFrame is available
 	EvPaste                   // the answer to RequestPaste: Text (plain text), Tag; FlagFailed when there is none
-	EvCommand                 // a native control was chosen: Tag is its command id (ToolbarItem.ID, ToolbarTab.ID); experimental
+	EvCommand                 // a native button was clicked: Tag is its command id (NativeButton.ID); experimental
 )
 
 // Flags qualify an Event.
@@ -260,19 +263,13 @@ type Options struct {
 	// background. Experimental (the phase 6 native-shell spike): D41's
 	// material regions are meant to replace it.
 	Backdrop Backdrop
-	// Toolbar, when not empty, gives the window a native toolbar in a unified
-	// titlebar (macOS; ignored elsewhere, see Window.HasToolbar): the window
-	// buttons, the title and Subtitle at the leading edge, then the items.
-	// The content extends under the band, as with Titlebar, but the band is
-	// the system's: its empty parts move the window and the app gets no
-	// presses there. Titlebar and TrafficLights are ignored. Experimental.
-	Toolbar []ToolbarItem
-	// ToolbarCompact picks the compact toolbar style (a lower band) over the
-	// regular unified one. Experimental.
-	ToolbarCompact bool
-	// Subtitle is a second, quieter line under the title in a toolbar window
-	// (macOS). Experimental.
-	Subtitle string
+	// Buttons are native buttons over the content, above the GPU surface
+	// (macOS; ignored elsewhere, see Window.HasButtons): AppKit draws them,
+	// tracks their hover and press and gives them their clicks, which arrive
+	// as EvCommand with the button's ID. The app keeps its own content out of
+	// their rectangles. Experimental: D41's hosted native views are meant to
+	// replace them.
+	Buttons []NativeButton
 }
 
 // Backdrop is a system material behind a window's content (Options.Backdrop).
@@ -294,49 +291,37 @@ const (
 	BackdropGlassClear
 )
 
-// ToolbarItemKind is the kind of a ToolbarItem. Experimental.
-type ToolbarItemKind uint8
-
-const (
-	// ToolbarButton is a button showing an SF Symbol; a click delivers
-	// EvCommand with the item's ID.
-	ToolbarButton ToolbarItemKind = iota
-	// ToolbarTabs is a group of tabs of which one is selected (a segmented
-	// control); choosing tab i delivers EvCommand with Tabs[i].ID.
-	ToolbarTabs
-	// ToolbarFlexibleSpace takes the room the other items leave.
-	ToolbarFlexibleSpace
-	// ToolbarSpace is a fixed gap.
-	ToolbarSpace
-)
-
-// ToolbarItem is one item of a native toolbar (Options.Toolbar). Experimental.
-type ToolbarItem struct {
-	// Kind is the kind of item.
-	Kind ToolbarItemKind
-	// ID identifies the item for SetToolbarTabs and SetToolbarEnabled, and is
-	// a button's command id (EvCommand's Tag).
+// NativeButton is a native symbol button over the window's content
+// (Options.Buttons). Experimental.
+type NativeButton struct {
+	// ID is the command id a click delivers (EvCommand's Tag) and names the
+	// button for SetButtonEnabled.
 	ID uint16
-	// Symbol is a button's SF Symbol name ("plus", "command").
-	Symbol string
-	// Label is the accessibility description and tooltip.
-	Label string
-	// Tabs are the tabs of a ToolbarTabs item, Selected the index of the
-	// selected one, and TabWidth the width of each in points (0: 180).
-	Tabs     []ToolbarTab
-	Selected int
-	TabWidth float32
-	// Disabled opens the item disabled (SetToolbarEnabled changes it).
+	// Symbol is the SF Symbol shown ("plus", "command"); Label the
+	// accessibility description and tooltip.
+	Symbol, Label string
+	// X, Y are the button's centre in logical units from the content's top
+	// left; a negative X counts from the right edge, and the button keeps
+	// that distance when the window is resized. Size is its width and height
+	// (0: 28).
+	X, Y, Size float32
+	// Style is the look.
+	Style ButtonStyle
+	// Disabled opens the button disabled.
 	Disabled bool
 }
 
-// ToolbarTab is one tab of a ToolbarTabs item. Experimental.
-type ToolbarTab struct {
-	// ID is the command id delivered when the user picks the tab.
-	ID uint16
-	// Symbol is an SF Symbol shown before Label ("" for none).
-	Symbol, Label string
-}
+// ButtonStyle is the look of a NativeButton. Experimental.
+type ButtonStyle uint8
+
+const (
+	// ButtonPlain is a borderless symbol that AppKit highlights on hover and
+	// press (a titlebar accessory button).
+	ButtonPlain ButtonStyle = iota
+	// ButtonGlass is a Liquid Glass circle (macOS 26 and later; ButtonPlain
+	// before).
+	ButtonGlass
+)
 
 // eventQueue is the reusable per-Window event and text storage.
 type eventQueue struct {

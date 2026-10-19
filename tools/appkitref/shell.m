@@ -2,15 +2,22 @@
 // (rex.NativeConfig), for side-by-side captures with GnuiShot. It opens one
 // real window of the same size with the same chrome: a Liquid Glass backdrop
 // (NSGlassEffectView on macOS 26+, else a behind-window NSVisualEffectView),
-// a compact unified NSToolbar with the same tabs, ⌘ and +, the same title
-// and subtitle, and rexlook's three panes of its first tab as plain rounded
-// layers (the focused one white, the others translucent), without content.
+// a transparent full-size titlebar with the traffic lights, native ⌘ and +
+// buttons where rexlook puts them, and rexlook's three panes of its first tab
+// as plain rounded layers (the focused one white, the others translucent),
+// without content. rexlook draws its own tabs; -tabs shows what AppKit would
+// do instead, the macOS feel to compare them with: a compact unified
+// NSToolbar holding the same tabs as a segmented control, with ⌘ and +.
 //
-//	AppKitShell [-light | -dark] [-backdrop glass|clear|window|none] [-unified] [-quit-after S]
+//	AppKitShell [-light | -dark] [-backdrop glass|clear|window|none] [-glass-buttons] [-tabs [-unified]]
+//	            [-pose hover|press] [-quit-after S]
 //
 // -light and -dark set this app's own appearance (NSApp.appearance); nothing
-// on the system changes. Without them it follows the system. It quits after
-// -quit-after seconds (default 20) or when the window is closed.
+// on the system changes. Without them it follows the system. -pose (with
+// -tabs) posts a mouse move over the second tab to the app's own event queue,
+// and with press a press held for 10 s, for captures of those states; the
+// system's pointer does not move. It quits after -quit-after seconds
+// (default 20) or when the window is closed.
 #import <AppKit/AppKit.h>
 
 static NSString *const kTabs = @"tabs", *const kCmd = @"cmd", *const kPlus = @"plus";
@@ -18,7 +25,9 @@ static NSString *const kTabs = @"tabs", *const kCmd = @"cmd", *const kPlus = @"p
 @interface Shell : NSObject <NSToolbarDelegate, NSWindowDelegate, NSApplicationDelegate>
 @property NSWindow *window;
 @property NSString *backdrop;
-@property BOOL unified;
+@property BOOL unified, tabs, glassButtons;
+@property NSString *pose;
+@property NSSegmentedControl *seg;
 @property NSTimeInterval quitAfter;
 @property NSMutableArray<NSView *> *panes;
 @end
@@ -46,6 +55,7 @@ static NSString *const kTabs = @"tabs", *const kCmd = @"cmd", *const kPlus = @"p
 		}
 		seg.selectedSegment = 0;
 		[seg sizeToFit];
+		self.seg = seg;
 		item.view = seg;
 		item.label = @"Tabs";
 	} else {
@@ -70,13 +80,16 @@ static NSString *const kTabs = @"tabs", *const kCmd = @"cmd", *const kPlus = @"p
 	w.releasedWhenClosed = NO;
 	w.delegate = self;
 	w.title = @"rex-snake";
-	w.subtitle = @"Mac Studio";
 	w.titlebarAppearsTransparent = YES;
-	NSToolbar *tb = [[NSToolbar alloc] initWithIdentifier:@"AppKitShell"];
-	tb.delegate = self;
-	tb.displayMode = NSToolbarDisplayModeIconOnly;
-	w.toolbarStyle = self.unified ? NSWindowToolbarStyleUnified : NSWindowToolbarStyleUnifiedCompact;
-	w.toolbar = tb;
+	if (self.tabs) {
+		w.subtitle = @"Mac Studio";
+		NSToolbar *tb = [[NSToolbar alloc] initWithIdentifier:@"AppKitShell"];
+		tb.delegate = self;
+		tb.displayMode = NSToolbarDisplayModeIconOnly;
+		w.toolbarStyle = self.unified ? NSWindowToolbarStyleUnified : NSWindowToolbarStyleUnifiedCompact;
+		w.toolbar = tb;
+	} else
+		w.titleVisibility = NSWindowTitleHidden;
 
 	NSView *container = [[NSView alloc] initWithFrame:r];
 	container.wantsLayer = YES;
@@ -124,12 +137,59 @@ static NSString *const kTabs = @"tabs", *const kCmd = @"cmd", *const kPlus = @"p
 		[container addSubview:v];
 		[self.panes addObject:v];
 	}
+	if (!self.tabs) {
+		// rexlook's native ⌘ and + (rex.NativeConfig): 28 pt, centred 57.75 and
+		// 23.25 pt from the right edge and 22.5 pt from the top.
+		NSArray *syms = @[ @"command", @"plus" ];
+		CGFloat xs[2] = {57.75, 23.25};
+		for (int i = 0; i < 2; i++) {
+			NSButton *b = [[NSButton alloc] initWithFrame:NSMakeRect(r.size.width - xs[i] - 14, H - 22.5 - 14, 28, 28)];
+			b.title = @"";
+			b.image = [NSImage imageWithSystemSymbolName:syms[i] accessibilityDescription:nil];
+			b.imagePosition = NSImageOnly;
+			BOOL glassy = NO;
+			if (@available(macOS 26.0, *)) {
+				if (self.glassButtons) {
+					b.bezelStyle = NSBezelStyleGlass;
+					b.borderShape = NSControlBorderShapeCircle;
+					glassy = YES;
+				}
+			}
+			if (!glassy) {
+				b.bordered = NO;
+				b.showsBorderOnlyWhileMouseInside = YES;
+			}
+			b.autoresizingMask = NSViewMinXMargin | NSViewMinYMargin;
+			[container addSubview:b];
+		}
+	}
 	[self restyle];
 	[w center];
 	[w makeKeyAndOrderFront:nil];
 	[NSApp activate];
 	[NSApp addObserver:self forKeyPath:@"effectiveAppearance" options:0 context:nil];
 	[NSTimer scheduledTimerWithTimeInterval:self.quitAfter repeats:NO block:^(NSTimer *t) { [NSApp terminate:nil]; }];
+	if (self.pose && self.seg)
+		[NSTimer scheduledTimerWithTimeInterval:1.5 repeats:NO block:^(NSTimer *t) { [self posePointer]; }];
+}
+
+// posePointer moves the app's own pointer over the second tab and, for press,
+// presses there (the segmented control tracks until the release, posted from
+// another thread 10 s later).
+- (void)posePointer {
+	NSRect f = [self.seg convertRect:self.seg.bounds toView:nil];
+	NSPoint p = NSMakePoint(NSMinX(f) + f.size.width * 1.5 / 3, NSMidY(f));
+	NSWindow *w = self.window;
+	NSEvent * (^ev)(NSEventType) = ^(NSEventType t) {
+		return [NSEvent mouseEventWithType:t location:p modifierFlags:0 timestamp:NSProcessInfo.processInfo.systemUptime
+		                      windowNumber:w.windowNumber context:nil eventNumber:0 clickCount:t == NSEventTypeMouseMoved ? 0 : 1 pressure:1];
+	};
+	[NSApp postEvent:ev(NSEventTypeMouseMoved) atStart:NO];
+	if ([self.pose isEqual:@"press"]) {
+		NSEvent *up = ev(NSEventTypeLeftMouseUp);
+		[NSApp postEvent:ev(NSEventTypeLeftMouseDown) atStart:NO];
+		dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC), dispatch_get_global_queue(0, 0), ^{ [NSApp postEvent:up atStart:NO]; });
+	}
 }
 
 // restyle colours the panes for the window's appearance: rexlook's Surface,
@@ -163,11 +223,14 @@ int main(int argc, const char **argv) {
 			if (!strcmp(argv[i], "-light")) app.appearance = [NSAppearance appearanceNamed:NSAppearanceNameAqua];
 			else if (!strcmp(argv[i], "-dark")) app.appearance = [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
 			else if (!strcmp(argv[i], "-unified")) s.unified = YES;
+			else if (!strcmp(argv[i], "-tabs")) s.tabs = YES;
+			else if (!strcmp(argv[i], "-glass-buttons")) s.glassButtons = YES;
+			else if (!strcmp(argv[i], "-pose") && i + 1 < argc) s.pose = [NSString stringWithUTF8String:argv[++i]];
 			else if (!strcmp(argv[i], "-backdrop") && i + 1 < argc) s.backdrop = [NSString stringWithUTF8String:argv[++i]];
 			else if (!strcmp(argv[i], "-quit-after") && i + 1 < argc) s.quitAfter = atof(argv[++i]);
 			else if (!strncmp(argv[i], "-psn", 4)) continue; // LaunchServices' process serial number
 			else {
-				fprintf(stderr, "usage: AppKitShell [-light | -dark] [-backdrop glass|clear|window|none] [-unified] [-quit-after S]\n");
+				fprintf(stderr, "usage: AppKitShell [-light | -dark] [-backdrop glass|clear|window|none] [-glass-buttons] [-tabs [-unified]] [-pose hover|press] [-quit-after S]\n");
 				return 64;
 			}
 		}

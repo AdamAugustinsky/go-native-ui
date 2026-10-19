@@ -62,7 +62,7 @@ func Open(o Options) (*Window, error) {
 	foundation, _ := loadFramework("/System/Library/Frameworks/Foundation.framework/Foundation")
 	defaultMode = stringConstant(foundation, "NSDefaultRunLoopMode")
 	commonModes = stringConstant(foundation, "NSRunLoopCommonModes")
-	appKitLib = appKit
+	_ = appKit
 	markOpen("frameworks")
 	classesOnce.Do(registerClasses)
 	markOpen("classes")
@@ -82,10 +82,7 @@ func Open(o Options) (*Window, error) {
 		width, height = 960, 600
 	}
 	style := uintptr(1 | 2 | 4 | 8) // titled | closable | miniaturizable | resizable
-	if len(o.Toolbar) > 0 {
-		o.Titlebar = 0 // the toolbar's band is the system's
-	}
-	if o.Titlebar > 0 || len(o.Toolbar) > 0 {
+	if o.Titlebar > 0 {
 		style |= 1 << 15 // NSWindowStyleMaskFullSizeContentView
 	}
 	w.win = objc.Send(objc.Cls("NSWindow"), selAlloc)
@@ -105,19 +102,19 @@ func Open(o Options) (*Window, error) {
 	w.view = objc.Send(viewClass, selAlloc)
 	w.view = objc.ID(F.Reset().Arg(uintptr(w.view)).Arg(uintptr(selInitWithFrame)).
 		ArgRect(0, 0, width, height).Call(objc.MsgSend).R0())
+	delegate := objc.Send(objc.Send(delegateClass, selAlloc), objc.Sel("init"))
 	w.content = w.view
 	if o.Backdrop != BackdropNone {
-		w.content = w.makeBackdrop(o.Backdrop, width, height)
+		w.makeBackdrop(o.Backdrop, width, height)
 		markOpen("backdrop")
+	}
+	if len(o.Buttons) > 0 {
+		w.makeButtons(o.Buttons, delegate, width, height)
+		markOpen("buttons")
 	}
 	objc.Send1(w.win, selSetContentView, uintptr(w.content))
 	objc.Send1(w.win, selMakeFirstResp, uintptr(w.view))
-	delegate := objc.Send(objc.Send(delegateClass, selAlloc), objc.Sel("init"))
 	objc.Send1(w.win, selSetDelegate, uintptr(delegate))
-	if len(o.Toolbar) > 0 {
-		w.makeToolbar(o, delegate)
-		markOpen("toolbar")
-	}
 	w.fitBackdrop()
 	objc.Send1(w.win, selSetMouseMoved, 1)
 	if o.MinWidth > 0 || o.MinHeight > 0 {
@@ -279,8 +276,5 @@ func (w *Window) Close() {
 		w.drawable = 0
 	}
 	objc.Send(w.win, selClose)
-	if tbWindow == w {
-		tbWindow = nil
-	}
 	theWindow.Store(nil)
 }

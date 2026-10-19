@@ -91,17 +91,14 @@ type Config struct {
 	TrafficLights [2]float32 // macOS close-button centre (pt); ignored elsewhere
 	Clear         [4]float32 // clear colour, with the semantics of gpu.Renderer.Encode's clear
 
-	// Backdrop, Toolbar, ToolbarCompact and Subtitle are the native shell of
-	// platform.Options (macOS; experimental). When the window gets the
-	// backdrop (platform.Window.Backdrop), frames clear to transparent instead
-	// of Clear, so the material shows wherever the builder paints nothing.
-	// Toolbar clicks arrive as ui commands (ui.Context.TakeCommand) with the
-	// items' ids; App.Win drives the toolbar's state (SetToolbarTabs,
-	// SetToolbarEnabled).
-	Backdrop       platform.Backdrop
-	Toolbar        []platform.ToolbarItem
-	ToolbarCompact bool
-	Subtitle       string
+	// Backdrop and Buttons are the native shell of platform.Options (macOS;
+	// experimental). When the window gets the backdrop
+	// (platform.Window.Backdrop), frames clear to transparent instead of
+	// Clear, so the material shows wherever the builder paints nothing.
+	// Button clicks arrive as ui commands (ui.Context.TakeCommand) with the
+	// buttons' ids; App.Win.SetButtonEnabled enables and disables them.
+	Backdrop platform.Backdrop
+	Buttons  []platform.NativeButton
 }
 
 // App is the running application: the window, the GPU objects and the ui
@@ -270,7 +267,7 @@ func openWindowed(cfg Config, b Builder, st *StartupReport) (*App, error) {
 		Title: cfg.Title, Width: int(cfg.Width + 0.5), Height: int(cfg.Height + 0.5), Hidden: true,
 		MinWidth: int(cfg.MinWidth + 0.5), MinHeight: int(cfg.MinHeight + 0.5),
 		Titlebar: cfg.Titlebar, TrafficLights: cfg.TrafficLights,
-		Backdrop: cfg.Backdrop, Toolbar: cfg.Toolbar, ToolbarCompact: cfg.ToolbarCompact, Subtitle: cfg.Subtitle,
+		Backdrop: cfg.Backdrop, Buttons: cfg.Buttons,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("app: open window: %w", err)
