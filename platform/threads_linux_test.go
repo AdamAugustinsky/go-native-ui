@@ -7,11 +7,13 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"runtime/debug"
 	"runtime/pprof"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func threadsMade() int { return pprof.Lookup("threadcreate").Count() }
@@ -21,7 +23,21 @@ func threadsMade() int { return pprof.Lookup("threadcreate").Count() }
 // threads (unless GNUI_NO_PRIME_THREADS), then makes burst goroutines each hold
 // an OS thread at the same moment, as a frame spent in C calls while other
 // goroutines wake does, and prints the thread counts before and after.
+//
+// Nothing else of the process may run meanwhile: the appearance follower,
+// which package init starts, connects to the session bus and reads the
+// portal, and its goroutines finishing during the burst once took a thread
+// the burst then lacked (CI: "created 1 more"). The child waits for its first
+// answer (or failure) first, and a collection, whose mark workers want a
+// thread per processor, is off.
 func threadsChild() {
+	debug.SetGCPercent(-1)
+	select {
+	case <-portal.ready:
+	case <-time.After(portalTimeout + time.Second):
+		fmt.Println("the appearance follower did not finish")
+		os.Exit(1)
+	}
 	c0 := threadsMade()
 	primeThreads()
 	c1 := threadsMade()
