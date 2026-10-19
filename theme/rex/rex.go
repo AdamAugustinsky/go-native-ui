@@ -27,6 +27,8 @@ func Theme() *theme.Theme {
 		Fonts:        fonts,
 		Motion:       motion,
 		SystemAccent: true,
+		Roles:        roles,
+		SystemColors: true,
 		NewChrome:    func() theme.Chrome { return &chrome{} },
 	}
 }
