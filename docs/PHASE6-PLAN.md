@@ -248,7 +248,7 @@ w, err := a.OpenWindow(app.WindowConfig{Title: "Settings", Chrome: rexui.ChromeC
   - momentum into an edge overshoots slightly, then springs back;
   - Ended without momentum springs back, critically damped, on `ui`'s animation clock;
   - MayBegin (fingers resting) stops any spring and any smooth scroll;
-  - wheels stay hard-clamped;
+  - wheels stay hard-clamped; on macOS they jump, as AppKit's do, and elsewhere they glide (review decision); Windows treats high-resolution wheels (fractions of a notch) as precise, like its touchpads;
   - the constants are tuned by hand on the MacBook against an `NSScrollView` in AppKitRef's live window (work item D5).
 - **Scrollers.** The scroller style (`NSScroller.preferredScrollerStyle` and its change notification) reaches `ui.Appearance`: overlay scrollers show only while scrolling; legacy ones reserve their width.
 - **Tests and gates.** Scripted phase sequences give the expected offsets and spring curves, with 0 allocations.

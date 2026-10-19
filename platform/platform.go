@@ -125,7 +125,9 @@ const (
 // start and end (wl_pointer axis_source finger, axis_stop): Began, Changed and
 // Ended, no momentum (kinetic scrolling is the client's there, and ui does
 // none). Windows gives precise touchpad deltas (WM_MOUSEWHEEL deltas that are
-// not whole notches, FlagPrecise) without phases; X11 only wheel buttons.
+// not whole notches, FlagPrecise) without phases; a high-resolution wheel,
+// which sends fractions of a notch too, is told apart from a touchpad by
+// nothing and is treated as precise as well. X11 gives only wheel buttons.
 type ScrollPhase uint8
 
 const (

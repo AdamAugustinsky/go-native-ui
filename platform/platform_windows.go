@@ -847,6 +847,8 @@ func wndProc(hwnd, m, wp, lp uintptr) uintptr {
 		e := Event{Kind: EvScroll, X: float32(w.pt.x), Y: float32(w.pt.y), Mods: currentMods(), Time: Now()}
 		// A precision touchpad sends pixel-sized deltas (not whole notches)
 		// and no gesture phases: its scrolling is precise but not elastic.
+		// A high-resolution (free-spinning) wheel sends fractions of a notch
+		// too and is treated the same: precise, applied at once, no glide.
 		if raw%wheelDelta != 0 {
 			w.preciseUntil = e.Time + 300e6
 		}

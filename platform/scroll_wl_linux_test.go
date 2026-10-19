@@ -11,6 +11,7 @@ import (
 // gesture (Began, then Changed) that axis_stop ends; a wheel's carry no phase.
 func TestWaylandFingerScrollPhases(t *testing.T) {
 	w := &Window{s120: 120}
+	w.wy.seatV = 8
 	var args [4]uint64
 	a := unsafe.Pointer(&args)
 	send := func(op uint32, v ...uint32) {
@@ -44,4 +45,60 @@ func TestWaylandFingerScrollPhases(t *testing.T) {
 			t.Errorf("event %d: %+v, want phase %v dy %v flags %v", i, e, want[i].phase, want[i].dy, want[i].flags)
 		}
 	}
+}
+
+// TestWaylandScrollFrameHasBothAxes: the axis events of one wl_pointer frame
+// make one scroll with both axes, whatever order the compositor sends them
+// in, and a finger scroll ends only when every axis it moved has stopped. A
+// seat older than version 5 (no frames) sends each axis event at once.
+func TestWaylandScrollFrameHasBothAxes(t *testing.T) {
+	w := &Window{s120: 120}
+	w.wy.seatV = 8
+	var args [4]uint64
+	a := unsafe.Pointer(&args)
+	send := func(op uint32, v ...uint32) {
+		args = [4]uint64{}
+		for i, x := range v {
+			args[i] = uint64(x)
+		}
+		w.onPointer(op, a)
+	}
+	fixed := func(v float32) uint32 { return uint32(int32(v * 256)) }
+	send(6, 1)              // axis_source: finger
+	send(4, 0, 1, fixed(2)) // horizontal first
+	send(4, 0, 0, fixed(1)) // then vertical
+	send(5)
+	send(6, 1)
+	send(7, 0, 1) // the horizontal axis stops: the vertical one goes on
+	send(5)
+	send(6, 1)
+	send(4, 0, 0, fixed(3))
+	send(5)
+	send(6, 1)
+	send(7, 0, 0) // the vertical axis stops too
+	send(5)
+	want := []Event{
+		{Kind: EvScroll, DX: -2, DY: -1, Flags: FlagPrecise, Phase: PhaseBegan},
+		{Kind: EvScroll, DY: -3, Flags: FlagPrecise, Phase: PhaseChanged},
+		{Kind: EvScroll, Flags: FlagPrecise, Phase: PhaseEnded},
+	}
+	check := func(what string, want []Event) {
+		t.Helper()
+		if len(w.q.ev) != len(want) {
+			t.Fatalf("%s: %d events, want %d: %+v", what, len(w.q.ev), len(want), w.q.ev)
+		}
+		for i, e := range w.q.ev {
+			g := Event{Kind: e.Kind, DX: e.DX, DY: e.DY, Flags: e.Flags, Phase: e.Phase}
+			if g != want[i] {
+				t.Errorf("%s: event %d: %+v, want %+v", what, i, g, want[i])
+			}
+		}
+	}
+	check("seat v8", want)
+
+	w = &Window{s120: 120}
+	w.wy.seatV = 4
+	send(4, 0, 1, fixed(2))
+	send(4, 0, 0, fixed(1))
+	check("seat v4", []Event{{Kind: EvScroll, DX: -2}, {Kind: EvScroll, DY: -1}})
 }

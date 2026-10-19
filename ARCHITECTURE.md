@@ -305,8 +305,11 @@ On top, shared by every backend:
   widget learns it was clicked while it is being built (signals: hovering,
   pressed, released, clicked, double-clicked, dragging, scrolled,
   keyboard-activated). Hot/active/focus are keys in UI state.
-- **Scrolling:** smooth scroll offset with target + exponential approach
-  for wheels, hard-clamped. Precise trackpad deltas are used as-is, momentum
+- **Scrolling:** wheels are hard-clamped and jump on macOS, as AppKit's
+  do (`ui.Context.WheelJumps`); elsewhere the offset glides to its target
+  (exponential approach). Windows cannot tell a high-resolution wheel from
+  a precision touchpad (both send fractions of a notch): both are treated
+  as precise. Precise trackpad deltas are used as-is, momentum
   comes from the OS. A gesture with phases (macOS, Wayland fingers) latches
   to the scroll box under the pointer until its momentum ends, locks the
   predominant axis, and rubber-bands past the edges as NSScrollView does
