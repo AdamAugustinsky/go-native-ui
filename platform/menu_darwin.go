@@ -188,7 +188,20 @@ func ensureMenuTarget() {
 // and state the function that enables and checks the items. Main thread;
 // building the menus allocates, so call it at a safe point, not every frame.
 // The spec is read during the call only.
-func (w *Window) SetMenuBar(spec *MenuSpec, state MenuState) {
+func (w *Window) SetMenuBar(spec *MenuSpec, state MenuState) { setMenuBar(w.app, spec, state) }
+
+// SetAppMenuBar installs the menu bar of the application with no window open
+// (the app object's menus), as Window.SetMenuBar does with one: the bar is
+// the application's either way. Main thread, at a safe point.
+func SetAppMenuBar(spec *MenuSpec, state MenuState) {
+	if appObj.started {
+		setMenuBar(appObj.app, spec, state)
+	}
+}
+
+// setMenuBar builds spec's bar and makes it NSApp's main menu, with the
+// windows and help menus registered.
+func setMenuBar(app objc.ID, spec *MenuSpec, state MenuState) {
 	ensureMenuTarget()
 	nativeMenus.state = state
 	pool := objc.F.Call0(objc.PoolPush)
@@ -213,13 +226,13 @@ func (w *Window) SetMenuBar(spec *MenuSpec, state MenuState) {
 		}
 		objc.Release(sub)
 	}
-	objc.Send1(w.app, selSetMainMenu, uintptr(bar))
+	objc.Send1(app, selSetMainMenu, uintptr(bar))
 	if windows != 0 {
-		objc.Send1(w.app, selSetWindowsMenu, uintptr(windows))
-		listWindows(w.app)
+		objc.Send1(app, selSetWindowsMenu, uintptr(windows))
+		listWindows(app)
 	}
 	if help != 0 {
-		objc.Send1(w.app, selSetHelpMenu, uintptr(help))
+		objc.Send1(app, selSetHelpMenu, uintptr(help))
 	}
 	if nativeMenus.bar != 0 {
 		objc.Release(nativeMenus.bar)

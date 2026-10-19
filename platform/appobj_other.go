@@ -42,7 +42,7 @@ func osReplyQuit(allow bool) {
 }
 
 // SetDockMenu does nothing here (no Dock).
-func SetDockMenu(spec *MenuSpec, idx int) {}
+func SetDockMenu(spec *MenuSpec, idx int, state MenuState) {}
 
 // SetAppMenuBar does nothing here (no native menus).
 func SetAppMenuBar(spec *MenuSpec, state MenuState) {}

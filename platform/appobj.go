@@ -21,8 +21,9 @@ import (
 //
 //  1. Main-thread native events (reopen, quit requests, opens, activation,
 //     sleep and wake, screens, will-terminate, app-wide menu commands) are
-//     delivered synchronously from the delegate method that receives them,
-//     with no queue (appobj_darwin.go).
+//     delivered synchronously from the delegate method that receives them
+//     (appobj_darwin.go), except while the app draws a frame (HoldApp): then
+//     they wait, in order, for the frame to end.
 //  2. Request completions and responses go through Tickets: a record is
 //     reserved when the request is made (Tickets.Reserve, ErrBusy when the
 //     table is full), and the completion, on any thread, only fills it in
@@ -252,6 +253,7 @@ type record struct {
 	ev   AppEvent
 	data []byte
 	cost int64 // ring: the bytes it holds of the budget
+	kept int   // ring: the capacity of data counted in recTable.kept (main thread)
 }
 
 type tableKind uint8
@@ -272,15 +274,18 @@ type recTable struct {
 	maxData int             // data a record may hold without growing (Post: a hard limit)
 	budget  int64           // ring: bytes of data at once
 	used    atomic.Int64
+	kept    int           // ring: data capacity the records keep between uses, at most budget (main thread)
 	fifo    atomic.Uint64 // ring: the next sequence number
 
 	// observation
 	queued    atomic.Bool
-	seq       atomic.Uint64 // seqlock: odd while a writer writes a, b
+	seq       atomic.Uint64 // seqlock: odd while a writer writes a, b; seq/2 is the values set
 	oa, ob    atomic.Int64
+	lastVer   uint64 // the version last delivered (main thread)
 	coalesced atomic.Uint64
 	refused   atomic.Uint64
 	accepted  atomic.Uint64
+	retired   atomic.Uint64 // tickets: records retired at lastGen
 }
 
 var tables struct {
@@ -349,6 +354,21 @@ func nextGen(w uint64) uint32 {
 	return g
 }
 
+// lastGen is a ticket record's last generation: a record that reaches it is
+// retired instead of freed, so a Ticket (which carries the generation) never
+// repeats; the table has one record fewer from then on.
+const lastGen = ^uint32(0)
+
+// freeOrRetire frees record i after its use with generation gen; a ticket
+// record at lastGen is retired.
+func (t *recTable) freeOrRetire(i int, gen uint32) {
+	if t.kind == kindTickets && gen == lastGen {
+		t.retired.Add(1)
+		return
+	}
+	t.release(i)
+}
+
 // ---- Class 2: tickets ----
 
 // Tickets is a service's table of completion records (class 2): every
@@ -358,7 +378,8 @@ type Tickets struct{ t *recTable }
 
 // Ticket identifies one reservation; it is the ID of the AppEvService that
 // completes it. The zero Ticket is not a reservation. A ticket never repeats
-// for the life of the process (a record's generation advances on every use).
+// for the life of the process: a record's generation advances on every use,
+// and a record whose generations are spent is retired, not reused.
 type Ticket uint64
 
 // NewTickets makes a table of n records for src whose completions carry up to
@@ -417,7 +438,7 @@ func (k *Tickets) Cancel(tk Ticket) bool {
 		return false
 	}
 	if r.word.CompareAndSwap(uint64(gen)<<32|stReserved, uint64(gen)<<32|stFree) {
-		k.t.release(i)
+		k.t.freeOrRetire(i, gen)
 		return true
 	}
 	return r.word.CompareAndSwap(uint64(gen)<<32|stReady, uint64(gen)<<32|stDropped)
@@ -434,6 +455,10 @@ func (k *Tickets) Outstanding() int {
 
 // Refused is how many Reserve calls failed with ErrBusy.
 func (k *Tickets) Refused() uint64 { return k.t.refused.Load() }
+
+// Retired is how many records were retired because their generations were
+// spent (about 4·10⁹ uses each).
+func (k *Tickets) Retired() uint64 { return k.t.retired.Load() }
 
 // ---- Class 3: outside requests ----
 
@@ -453,7 +478,8 @@ func NewRing(src Source, n, budget int) *Ring {
 // Offer accepts a request (a, b and a copy of data) and queues its delivery
 // as an AppEvService whose ID is a sequence number, or refuses it (false)
 // when the ring is full. Any goroutine. Accepted data allocates the first
-// time a record holds that much.
+// time a record holds that much; the records keep their buffers between uses
+// up to the ring's byte budget in all, so a steady flow does not allocate.
 func (r *Ring) Offer(a, b int64, data []byte) bool {
 	t := r.t
 	n := int64(len(data))
@@ -515,21 +541,31 @@ func (o *Observation) Set(a, b int64) {
 	t.ob.Store(b)
 	t.seq.Add(1)
 	t.accepted.Add(1)
-	if !t.queued.CompareAndSwap(false, true) {
-		t.coalesced.Add(1)
-		return
+	if testHookObservationSet != nil {
+		testHookObservationSet()
 	}
-	ready.push(uint32(t.id) << 16)
-	signalApp()
+	// Queued already: the dispatcher reads the latest value when it gets to
+	// it. A value is delivered once, by version, however many queue entries
+	// find it, and the values it never saw are counted there (deliverRef).
+	if t.queued.CompareAndSwap(false, true) {
+		ready.push(uint32(t.id) << 16)
+		signalApp()
+	}
 }
 
-// Coalesced counts the values replaced before they were delivered.
+// testHookObservationSet runs inside Set between publishing the value and
+// queueing it (tests: a controlled interleaving with the dispatcher).
+var testHookObservationSet func()
+
+// Coalesced counts the values replaced before they were delivered, as the
+// dispatcher found them (a value not delivered yet is not counted yet).
 func (o *Observation) Coalesced() uint64 { return o.t.coalesced.Load() }
 
 // Sets counts the values set.
 func (o *Observation) Sets() uint64 { return o.t.accepted.Load() }
 
-func (t *recTable) observed() (a, b int64) {
+// observed reads the latest value and its version (the values set so far).
+func (t *recTable) observed() (a, b int64, ver uint64) {
 	for {
 		s := t.seq.Load()
 		if s&1 != 0 {
@@ -538,7 +574,7 @@ func (t *recTable) observed() (a, b int64) {
 		}
 		a, b = t.oa.Load(), t.ob.Load()
 		if t.seq.Load() == s {
-			return a, b
+			return a, b, s / 2
 		}
 	}
 }
@@ -554,6 +590,10 @@ func postTable() *recTable {
 	posts.once.Do(func() { posts.t = newTable(kindPost, SourcePost, MaxPosted, MaxPostData) })
 	return posts.t
 }
+
+// PreparePosts makes PostApp's storage, so that no post allocates or waits
+// for it to be made. The app package calls it before posting is possible.
+func PreparePosts() { postTable() }
 
 // PostApp queues e (its Kind becomes AppEvPost) with a copy of data for
 // delivery to the app, from any goroutine. It never waits and allocates
@@ -615,6 +655,9 @@ func (q *readyQueue) push(ref uint32) {
 		switch seq := c.seq.Load(); {
 		case seq == pos:
 			if q.enq.CompareAndSwap(pos, pos+1) {
+				if testHookReadyClaimed != nil {
+					testHookReadyClaimed()
+				}
 				c.ref.Store(ref)
 				c.seq.Store(pos + 1)
 				return
@@ -640,14 +683,25 @@ func (q *readyQueue) pop() (uint32, bool) {
 
 func (q *readyQueue) pending() uint64 { return q.enq.Load() - q.deq }
 
+// headReady reports whether the oldest reference is published: a producer
+// that has claimed its cell but not written it yet signals when it has.
+func (q *readyQueue) headReady() bool {
+	return q.cells[q.deq%readyCells].seq.Load() == q.deq+1
+}
+
+// testHookReadyClaimed runs inside push between claiming a cell and
+// publishing it (tests: a producer paused there).
+var testHookReadyClaimed func()
+
 // ---- The dispatcher ----
 
 var dispatch struct {
 	sink      AppSink
 	signalled atomic.Bool
-	running   bool // DispatchApp is on the stack (main thread)
-	held      bool // HoldApp: the app is drawing a frame (main thread)
-	missed    bool // a nested or held DispatchApp returned early
+	running   bool   // DispatchApp is on the stack (main thread)
+	held      bool   // HoldApp: the app is drawing a frame (main thread)
+	missed    bool   // a nested or held DispatchApp returned early
+	turns     uint64 // DispatchApp calls that got past the guards (tests)
 	delivered uint64
 	quitDue   atomic.Uint64 // a quit deadline fired for this request serial
 	quitAsked atomic.Int64  // a QuitReason requested from a goroutine (RequestQuit, signals)
@@ -687,26 +741,70 @@ func DispatchApp() {
 	if s == nil {
 		return
 	}
+	dispatch.turns++
 	dispatch.running = true
-	n := ready.pending() // what is ready now; later arrivals get the next turn
-	got := false
-	for ; n > 0; n-- {
-		ref, ok := ready.pop()
-		if !ok {
-			break
-		}
-		got = deliverRef(s, ref) || got
-	}
+	got := deliverReady(s)
 	dispatchQuitWork()
 	s.AppSafePoint()
 	dispatch.running = false
-	if dispatch.missed || ready.pending() > 0 {
+	// Signalled again only for work this call can do: an unpublished head is
+	// its producer's, which signals once it has written it (a signal now
+	// would only spin on it).
+	if dispatch.missed || len(natives.evs) > 0 || ready.headReady() {
 		dispatch.missed = false
 		signalApp()
 	}
 	if got {
 		Wake() // the app's loop runs a turn: what the events changed may want a frame
 	}
+}
+
+// deliverReady delivers the native events held during a frame, then the
+// records ready now (later arrivals get the next turn). It reports whether
+// it delivered anything.
+func deliverReady(s AppSink) bool {
+	got := len(natives.evs) > 0
+	for i := 0; i < len(natives.evs); i++ {
+		ne := natives.evs[i]
+		deliverApp(s, &ne.ev, natives.data[ne.off:ne.off+ne.n])
+	}
+	natives.evs, natives.data = natives.evs[:0], natives.data[:0]
+	for n := ready.pending(); n > 0; n-- {
+		ref, ok := ready.pop()
+		if !ok {
+			break
+		}
+		got = deliverRef(s, ref) || got
+	}
+	return got
+}
+
+// natives are the main-thread native events that arrived while a frame held
+// dispatch (HoldApp), in order, with their data. Main thread.
+var natives struct {
+	evs  []nativeEv
+	data []byte
+}
+
+type nativeEv struct {
+	ev     AppEvent
+	off, n int
+}
+
+// FlushApp delivers everything that is ready now, also while a frame holds
+// dispatch, without the safe-point work: the last delivery before the
+// process ends. It does nothing inside a delivery (what is queued could not
+// be delivered in order). Main thread.
+func FlushApp() {
+	s := dispatch.sink
+	if dispatch.running || s == nil {
+		return
+	}
+	dispatch.running = true
+	for i := 0; i < 8 && (len(natives.evs) > 0 || ready.headReady()); i++ {
+		deliverReady(s)
+	}
+	dispatch.running = false
 }
 
 // HoldApp holds app-wide dispatch while on: the app is drawing a frame.
@@ -716,11 +814,14 @@ func DispatchApp() {
 // release dispatches what arrived meanwhile. Main thread.
 func HoldApp(on bool) {
 	dispatch.held = on
-	if !on && dispatch.missed {
+	if !on && (dispatch.missed || len(natives.evs) > 0) {
 		dispatch.missed = false
 		signalApp()
 	}
 }
+
+// AppHeld reports whether a frame holds app-wide dispatch now. Main thread.
+func AppHeld() bool { return dispatch.held }
 
 // deliverRef delivers the record behind ref and frees it.
 func deliverRef(s AppSink, ref uint32) bool {
@@ -728,7 +829,16 @@ func deliverRef(s AppSink, ref uint32) bool {
 	i := int(ref & 0xFFFF)
 	if t.kind == kindObservation {
 		t.queued.Store(false) // before reading: a later Set queues again
-		a, b := t.observed()
+		a, b, ver := t.observed()
+		if ver == t.lastVer {
+			// Delivered already: a Set that published this value before the
+			// last delivery read it, and queued it after.
+			return false
+		}
+		if ver > t.lastVer+1 {
+			t.coalesced.Add(ver - t.lastVer - 1)
+		}
+		t.lastVer = ver
 		e := AppEvent{Kind: AppEvService, Source: t.source, A: a, B: b}
 		deliverApp(s, &e, nil)
 		return true
@@ -745,15 +855,25 @@ func deliverRef(s AppSink, ref uint32) bool {
 	if t.kind == kindRing {
 		t.used.Add(-r.cost)
 		r.cost = 0
-	}
-	if len(r.data) > 0 && cap(r.data) > 4*max(t.maxData, 256) {
+		// The buffer is kept while the ring's records keep no more than its
+		// budget in all: a steady flow of large requests reuses them.
+		if c := cap(r.data); c != r.kept {
+			t.kept += c - r.kept
+			r.kept = c
+			if t.kept > int(t.budget) {
+				t.kept -= c
+				r.kept = 0
+				r.data = nil
+			}
+		}
+	} else if len(r.data) > 0 && cap(r.data) > 4*max(t.maxData, 256) {
 		r.data = r.data[:0:0] // a rare large payload: do not keep it
 		if t.maxData > 0 {
 			r.data = make([]byte, 0, t.maxData)
 		}
 	}
 	r.word.Store(uint64(gen)<<32 | stFree)
-	t.release(i)
+	t.freeOrRetire(i, gen)
 	return delivered
 }
 
@@ -775,9 +895,18 @@ func deliverApp(s AppSink, e *AppEvent, data []byte) {
 	dispatch.depth--
 }
 
-// deliverNow delivers a main-thread native event synchronously (class 1).
+// deliverNow delivers a main-thread native event synchronously (class 1),
+// or, while a frame holds dispatch, keeps it for the frame's end: a native
+// loop the frame's own code runs must not run the app's handler inside
+// Build. EvWillTerminate is never held (the process ends after it).
 func deliverNow(kind AppEventKind, id uint64, a, b int64, data []byte) {
 	e := AppEvent{Kind: kind, ID: id, A: a, B: b}
+	if dispatch.held && kind != AppEvWillTerminate {
+		natives.evs = append(natives.evs, nativeEv{ev: e, off: len(natives.data), n: len(data)})
+		natives.data = append(natives.data, data...)
+		dispatch.missed = true
+		return
+	}
 	deliverApp(dispatch.sink, &e, data)
 }
 
@@ -818,12 +947,17 @@ func QuitPending() bool { return quitState.phase == quitLater }
 // given now is latched). Main thread.
 func QuitAsking() bool { return quitState.phase == quitAsking }
 
-// ReplyQuit answers the quit request being delivered or waiting: allow lets
-// the app quit, false cancels. An answer given while the request is being
-// delivered (synchronously, or from a nested call) is latched and returned
-// by the delegate method itself; a later one is sent to the system. It
-// reports false when no quit request was waiting. Main thread.
-func ReplyQuit(allow bool) bool {
+// ReplyQuit answers quit request serial (AppEvQuitRequested's ID), being
+// delivered or waiting: allow lets the app quit, false cancels. An answer
+// given while the request is being delivered (synchronously, or from a
+// nested call) is latched and returned by the delegate method itself; a
+// later one is sent to the system. It reports false, doing nothing, when
+// that request is not waiting: answered already, or older than the one
+// waiting now. Main thread.
+func ReplyQuit(serial uint64, allow bool) bool {
+	if serial == 0 || serial != quitState.serial {
+		return false
+	}
 	switch quitState.phase {
 	case quitAsking:
 		if quitState.answer == 0 {
@@ -869,6 +1003,14 @@ func RequestQuit(reason QuitReason) {
 	Wake()
 }
 
+// deferQuit leaves a quit request that arrived while a frame held dispatch
+// to the app's loop (TakeQuitRequest), which asks it after the frame. A
+// request already left there stays.
+func deferQuit(reason QuitReason) {
+	dispatch.quitAsked.CompareAndSwap(0, int64(reason))
+	Wake()
+}
+
 // TakeQuitRequest returns a quit reason RequestQuit left for the app's loop,
 // 0 for none. Main thread.
 func TakeQuitRequest() QuitReason { return QuitReason(dispatch.quitAsked.Swap(0)) }
@@ -905,7 +1047,7 @@ func dispatchQuitWork() {
 		return
 	}
 	act := quitState.opts.QuitDeadlineAction
-	ReplyQuit(act == QuitAllow)
+	ReplyQuit(s, act == QuitAllow)
 	deliverNow(AppEvQuitDeadline, s, int64(act), 0, nil)
 }
 

@@ -15,11 +15,16 @@ import (
 // starve the event loop). Everywhere else these calls return ErrUnsupported
 // and the app falls back to its drawn dialog (widget.Dialog).
 //
-// The three calls return a DialogTicket at once. The answer arrives later, as
-// one EvDialog event on the window's queue with Tag set to the ticket;
-// Window.DialogResult decodes it. The calls run on the main thread at a safe
-// point: between frames, from the app's own code, never from inside an AppKit
-// callback. One dialog can be open per window at a time (ErrDialogBusy).
+// The three calls return a DialogTicket at once. The answer arrives later
+// through the application object (appobj.go), not the window: the ticket is a
+// completion record reserved when the sheet begins (class 2, Tickets), and
+// the sheet's completion fills it in, so the result is delivered as one
+// AppEvService with Source SourceDialog and ID the ticket by the app-wide
+// dispatcher, which also runs while the app's loop is suspended (a pending
+// quit) and with no frame drawn. DialogResultOf decodes it. The calls run on
+// the main thread at a safe point: between frames, from the app's own code,
+// never from inside an AppKit callback. One dialog can be open per window at
+// a time (ErrDialogBusy).
 //
 // Exactly one result per ticket. The sheet ends in one of four ways:
 //
@@ -38,15 +43,6 @@ import (
 // is neither kept nor started, so a sandboxed app would lose access after the
 // sheet. The framework's apps are not sandboxed.
 //
-// Hand-over to F3 (the application object): EvDialog is the stand-in for the
-// plan's EvService alert and panel results. F3 keeps the same shape: a
-// ticket, an outcome, the button index and suppression flag, and the paths
-// as owned strings, delivered on the app's own queue with the window's id.
-// The three calls and DialogResult keep their meaning; only the receiver
-// (the application, with a window argument) and the event class change. A
-// result for a window that closed arrives through the application, not the
-// closed window's queue.
-
 // ErrUnsupported is returned by the native dialog calls on systems that do
 // not have them yet; errors.Is(err, errors.ErrUnsupported) also holds. The
 // app then shows its drawn dialog.
@@ -60,8 +56,8 @@ var ErrDialogBusy = errors.New("platform: a dialog is already open")
 // buttons, no known content type, a window that is closed).
 var ErrDialogSpec = errors.New("platform: invalid dialog spec")
 
-// DialogTicket identifies one open dialog; it is the Tag of its EvDialog.
-// Tickets are never 0 and never repeat in a process.
+// DialogTicket identifies one open dialog; it is the ID of the AppEvService
+// that answers it. Tickets are never 0 and never repeat in a process.
 type DialogTicket uint64
 
 // DialogKind says which call a result answers.
@@ -171,46 +167,45 @@ type DialogResult struct {
 	Paths []string
 	// Err is set by the application layer (package app) when a dialog it had
 	// queued could not be shown; the outcome is then DialogCancelled. Results
-	// decoded from an EvDialog never have one.
+	// decoded by DialogResultOf never have one.
 	Err error
 }
 
-// The layout of an EvDialog: Tag is the ticket; Code the button index of an
-// alert or the number of paths of a panel; SelStart holds the kind (bits 0-7),
-// the outcome (bits 8-15) and the suppression checkbox (bit 16); Text the
-// paths, each ended by a NUL byte. The fields are the ones EvPaste and EvText
-// leave free, so the event stays pointer-free and fixed-size.
+// The layout of a dialog's AppEvService: ID is the ticket; A holds the kind
+// (bits 0-7), the outcome (bits 8-15) and the suppression checkbox (bit 16);
+// B is the button index of an alert or the number of paths of a panel; the
+// data are the paths, each ended by a NUL byte.
 
 const dialogSuppressed = 1 << 16
 
-// dialogEvent builds an EvDialog; the paths (already NUL-ended) are in the
-// queue's text buffer at off, n long.
-func dialogEvent(t DialogTicket, kind DialogKind, out DialogOutcome, code uint32, suppressed bool, off, n int, at int64) Event {
-	w := int32(kind) | int32(out)<<8
+// dialogA packs a result's kind, outcome and suppression flag (AppEvent.A).
+func dialogA(kind DialogKind, out DialogOutcome, suppressed bool) int64 {
+	a := int64(kind) | int64(out)<<8
 	if suppressed {
-		w |= dialogSuppressed
+		a |= dialogSuppressed
 	}
-	return Event{Kind: EvDialog, Tag: uint64(t), Code: code, SelStart: w, Text: TextRef{uint32(off), uint32(n)}, Time: at}
+	return a
 }
 
-// DialogResult decodes an EvDialog event of this window. It allocates the
-// path strings; a dialog result is rare.
-func (w *Window) DialogResult(e Event) DialogResult {
+// DialogResultOf decodes a dialog's answer: an AppEvService with Source
+// SourceDialog, and its data. It allocates the path strings; a dialog result
+// is rare.
+func DialogResultOf(e *AppEvent, data []byte) DialogResult {
 	r := DialogResult{
-		Ticket:     DialogTicket(e.Tag),
-		Kind:       DialogKind(e.SelStart & 0xff),
-		Outcome:    DialogOutcome(e.SelStart >> 8 & 0xff),
-		Suppressed: e.SelStart&dialogSuppressed != 0,
+		Ticket:     DialogTicket(e.ID),
+		Kind:       DialogKind(e.A & 0xff),
+		Outcome:    DialogOutcome(e.A >> 8 & 0xff),
+		Suppressed: e.A&dialogSuppressed != 0,
 		Button:     -1,
 	}
 	if r.Kind == DialogAlert {
 		if r.Outcome == DialogAnswered {
-			r.Button = int(e.Code)
+			r.Button = int(e.B)
 		}
 		return r
 	}
-	if e.Text.Len > 0 {
-		r.Paths = strings.Split(strings.TrimSuffix(string(w.Text(e.Text)), "\x00"), "\x00")
+	if len(data) > 0 {
+		r.Paths = strings.Split(strings.TrimSuffix(string(data), "\x00"), "\x00")
 	}
 	return r
 }

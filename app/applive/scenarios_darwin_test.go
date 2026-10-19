@@ -42,6 +42,7 @@ func (h *handler) Event(a *app.App, e *app.Event) {
 	case app.EvQuitRequested:
 		h.requests++
 		quitAsked++
+		quitID = e.ID
 	case app.EvWillTerminate:
 		say("terminated=1 replies=%d early=%d ours=%d last=%s requests=%d", replies.Load(), earlyReplies.Load(), platform.RepliesSent(), lastTerminate(), h.requests)
 	}
@@ -99,16 +100,16 @@ func init() {
 		h.start = func(a *app.App) error {
 			theApp = a
 			d := objc.Define("GNUITestNested", objc.Cls("NSObject"), nil)
-			d.Method(objc.Sel("gnuiNested"), "v@:", func(*ffi.CB) { theApp.ReplyQuit(true) })
+			d.Method(objc.Sel("gnuiNested"), "v@:", func(*ffi.CB) { theApp.ReplyQuit(quitID, true) })
 			nested := objc.Send(objc.Send(d.Register(), objc.Sel("alloc")), objc.Sel("init"))
 			h.event = func(a *app.App, e *app.Event) bool {
 				switch {
 				case e.Kind == app.EvPost && e.ID == 1:
 					quitLater()
 				case e.Kind == app.EvQuitRequested && mode == "allow":
-					a.ReplyQuit(true)
+					a.ReplyQuit(quitID, true)
 				case e.Kind == app.EvQuitRequested && mode == "refuse":
-					a.ReplyQuit(false)
+					a.ReplyQuit(quitID, false)
 					after(300*time.Millisecond, 2)
 				case e.Kind == app.EvQuitRequested && mode == "nested":
 					objc.Send(nested, objc.Sel("gnuiNested")) // a native callback that answers, nested in the event
@@ -137,11 +138,11 @@ func init() {
 				quitLater()
 			case e.Kind == app.EvQuitRequested && h.requests == 1:
 				say("first=refused")
-				a.ReplyQuit(false)
+				a.ReplyQuit(quitID, false)
 				after(300*time.Millisecond, 2)
 			case e.Kind == app.EvQuitRequested:
 				say("second=allowed")
-				a.ReplyQuit(true)
+				a.ReplyQuit(quitID, true)
 			case e.Kind == app.EvPost && e.ID == 2:
 				postCmdQ(0)
 			default:
@@ -223,7 +224,7 @@ func init() {
 				postCmdQ(windowNumber(ourWindow(a)))
 			case e.Kind == app.EvQuitRequested && h.requests == 1:
 				say("reason1=%d", e.A)
-				a.ReplyQuit(false)
+				a.ReplyQuit(quitID, false)
 				after(500*time.Millisecond, 2)
 			case e.Kind == app.EvPost && e.ID == 2:
 				say("sheet_after_refuse=%v", objc.Send(ourWindow(a), objc.Sel("attachedSheet")) != 0)
@@ -232,11 +233,11 @@ func init() {
 				if mode == "later" {
 					after(300*time.Millisecond, 3)
 				} else {
-					a.ReplyQuit(true)
+					a.ReplyQuit(quitID, true)
 				}
 			case e.Kind == app.EvPost && e.ID == 3:
 				say("pending=%v", a.QuitPending())
-				a.ReplyQuit(true)
+				a.ReplyQuit(quitID, true)
 			case e.Kind == app.EvWillTerminate:
 				say("sheet_at_exit=%v", objc.Send(ourWindow(a), objc.Sel("attachedSheet")) != 0)
 				return false
@@ -360,7 +361,7 @@ func delayedScenario() {
 		case e.Kind == app.EvService && e.ID == uint64(saveTk):
 			say("worker=%d/%d report_during=%v save_open=%v save_answer=%d pending=%v waited_ms=%d builds_during=%d",
 				workerDuring, workerAll, reportDuring, saveOpen, e.A, a.QuitPending(), time.Since(quitT0).Milliseconds(), v.builds.Load()-buildsAtQuit)
-			a.ReplyQuit(e.A == 1000)
+			a.ReplyQuit(quitID, e.A == 1000)
 		default:
 			return false
 		}
@@ -396,7 +397,7 @@ func noReplyScenario() {
 			}
 		case e.Kind == app.EvPost && e.ID == 2:
 			say("alive=1 pending=%v waited_s=%.1f", a.QuitPending(), time.Since(t0).Seconds())
-			a.ReplyQuit(false)
+			a.ReplyQuit(quitID, false)
 			after(100*time.Millisecond, 3)
 		case e.Kind == app.EvQuitDeadline:
 			say("deadline=1 action=%d after_ms=%d pending=%v", e.A, time.Since(t0).Milliseconds(), a.QuitPending())
@@ -412,6 +413,9 @@ func noReplyScenario() {
 	app.Main(app.AppConfig{KeepRunning: true, QuitDeadline: time.Duration(deadline) * time.Millisecond, QuitDeadlineAction: act}, h)
 	say("main=returned")
 }
+
+// sourceCompletions is the saturation scenario's table of completions.
+const sourceCompletions = platform.SourceApp + 10
 
 // saturation: app.Post and an observation flooded from 8 goroutines while 64
 // completions (a full table: the 65th request is refused), responses to 32
@@ -450,7 +454,7 @@ func saturationScenario() {
 		if _, ok := openWindows(a, 1, &view{}); !ok {
 			os.Exit(0)
 		}
-		dialogs = platform.NewTickets(platform.SourceDialog, platform.MaxTickets, 32)
+		dialogs = platform.NewTickets(sourceCompletions, platform.MaxTickets, 32) // completions as a service's (not the real dialogs')
 		responses = platform.NewTickets(platform.SourceNotifyResponse, platform.MaxNotifyResponses, platform.MaxNotifyReply)
 		ring = platform.NewRing(platform.SourceInstance, platform.RingRecords, platform.RingBytes)
 		obs = platform.NewObservation(platform.SourceMedia)
@@ -482,7 +486,7 @@ func saturationScenario() {
 			return
 		}
 		answered = true
-		a.ReplyQuit(true)
+		a.ReplyQuit(quitID, true)
 	}
 	h.event = func(a *app.App, e *app.Event) bool {
 		switch {
@@ -565,7 +569,7 @@ func saturationScenario() {
 		case e.Kind == app.EvPost && e.ID == 2:
 		case e.Kind == app.EvService && e.Source == platform.SourceMedia:
 			gotObs++
-		case e.Kind == app.EvService && e.Source == platform.SourceDialog:
+		case e.Kind == app.EvService && e.Source == sourceCompletions:
 			gotDialogs++
 		case e.Kind == app.EvService && e.Source == platform.SourceNotifyResponse:
 			gotResponses++

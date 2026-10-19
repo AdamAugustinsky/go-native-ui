@@ -26,7 +26,7 @@ func (s *recSink) AppEvent(e *AppEvent, data []byte) {
 	s.evs = append(s.evs, *e)
 	s.data = append(s.data, append([]byte(nil), data...))
 	if e.Kind == AppEvQuitRequested && s.reply != 0 {
-		ReplyQuit(s.reply == 1)
+		ReplyQuit(e.ID, s.reply == 1)
 	}
 	if s.onEv != nil {
 		s.onEv(e)
@@ -39,6 +39,10 @@ func withSink(t *testing.T, s AppSink) {
 	t.Helper()
 	prev := dispatch.sink
 	SetAppSink(s)
+	drain() // what earlier tests left undelivered (a dialog's result) is not this one's
+	if r, ok := s.(*recSink); ok {
+		r.evs, r.data, r.safe = nil, nil, 0
+	}
 	t.Cleanup(func() { SetAppSink(prev) })
 }
 
@@ -317,7 +321,7 @@ func TestQuitLatch(t *testing.T) {
 	s.reply = 0
 	s.onEv = func(e *AppEvent) { // a reply from a nested call is latched as well
 		if e.Kind == AppEvQuitRequested {
-			func() { ReplyQuit(true) }()
+			func() { ReplyQuit(e.ID, true) }()
 		}
 	}
 	if got := beginQuit(QuitApp); got != 1 {
@@ -330,7 +334,7 @@ func TestQuitLatch(t *testing.T) {
 	if len(sent) != 0 {
 		t.Fatalf("answers sent to the system for latched replies: %v", sent)
 	}
-	if !ReplyQuit(false) || QuitPending() || ReplyQuit(true) || len(sent) != 1 || sent[0] {
+	if !ReplyQuit(quitState.serial, false) || QuitPending() || ReplyQuit(quitState.serial, true) || len(sent) != 1 || sent[0] {
 		t.Fatalf("a deferred reply: sent %v", sent)
 	}
 
@@ -391,5 +395,192 @@ func TestHeldAndNestedDispatchOweTheirSignal(t *testing.T) {
 	drain()
 	if len(s.evs) != 2 || s.evs[0].ID != 2 || s.evs[1].ID != 3 {
 		t.Fatalf("nested: %+v", s.evs)
+	}
+}
+
+// A writer that has published its value but not queued it yet when the
+// dispatcher delivers that value must not get it delivered a second time:
+// the interleaving is forced with the hook between publishing and queueing.
+func TestObservationDeliveredOnceAcrossARequeue(t *testing.T) {
+	s := &recSink{}
+	withSink(t, s)
+	o := NewObservation(SourceApp + 3)
+	o.Set(1, 0) // queued, not delivered yet
+	testHookObservationSet = func() {
+		testHookObservationSet = nil
+		drain() // the dispatcher runs between this Set's publish and its queueing
+	}
+	t.Cleanup(func() { testHookObservationSet = nil })
+	o.Set(2, 0)
+	drain()
+	var got []int64
+	for _, e := range s.evs {
+		if e.Source == SourceApp+3 {
+			got = append(got, e.A)
+		}
+	}
+	if len(got) != 1 || got[0] != 2 {
+		t.Fatalf("delivered %v, want [2]", got)
+	}
+	if o.Sets() != 2 || o.Coalesced() != 1 {
+		t.Fatalf("sets %d, coalesced %d: want 2 and 1 (delivered = sets - coalesced)", o.Sets(), o.Coalesced())
+	}
+}
+
+// A producer that has claimed the head of the ready queue but not published
+// it yet leaves the dispatcher nothing to do: it must not signal itself (the
+// run-loop source would fire again at once, a busy spin); the producer's own
+// signal, once it has published, brings the event.
+func TestUnpublishedHeadDoesNotSpin(t *testing.T) {
+	s := &recSink{}
+	withSink(t, s)
+	paused, release, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	testHookReadyClaimed = func() {
+		once.Do(func() {
+			close(paused)
+			<-release
+		})
+	}
+	t.Cleanup(func() { testHookReadyClaimed = nil })
+	go func() {
+		PostApp(AppEvent{ID: 7}, nil)
+		close(done)
+	}()
+	<-paused
+	testHookReadyClaimed = nil
+	// The run loop fires the source while it is signalled; count its turns.
+	dispatch.signalled.Store(true)
+	turns0 := dispatch.turns
+	for i := 0; i < 100 && dispatch.signalled.Load(); i++ {
+		DispatchApp()
+	}
+	if n := dispatch.turns - turns0; n != 1 || dispatch.signalled.Load() {
+		t.Fatalf("%d dispatcher turns on an unpublished head (signalled %v), want 1 and no signal of its own", n, dispatch.signalled.Load())
+	}
+	close(release)
+	<-done
+	if !dispatch.signalled.Load() {
+		t.Fatal("the producer did not signal once it had published")
+	}
+	drain()
+	if len(s.evs) != 1 || s.evs[0].ID != 7 {
+		t.Fatalf("delivered %+v", s.evs)
+	}
+}
+
+// A ticket record whose generations are spent is retired, not reused: a
+// Ticket never repeats.
+func TestTicketsRetireSpentRecords(t *testing.T) {
+	s := &recSink{}
+	withSink(t, s)
+	for _, cancel := range []bool{false, true} {
+		k := NewTickets(SourceApp+4, 1, 0)
+		k.t.recs[0].word.Store(uint64(lastGen-1) << 32) // used 2³²-2 times already
+		tk, err := k.Reserve(0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cancel {
+			k.Cancel(tk)
+		} else {
+			k.Complete(tk, 1, 0, nil)
+			drain()
+		}
+		if tk2, err := k.Reserve(0); !errors.Is(err, ErrBusy) {
+			t.Fatalf("cancel %v: the spent record was reused (ticket %#x after %#x)", cancel, tk2, tk)
+		}
+		if k.Retired() != 1 || k.Outstanding() != 1 {
+			t.Fatalf("cancel %v: retired %d, outstanding %d", cancel, k.Retired(), k.Outstanding())
+		}
+	}
+}
+
+// countSink counts what it is given and allocates nothing.
+type countSink struct{ n int }
+
+func (s *countSink) AppEvent(*AppEvent, []byte) { s.n++ }
+func (s *countSink) AppSafePoint()              {}
+
+// A steady flow of large outside requests (over 1 KiB) reuses the records'
+// buffers: no allocation per request once they are grown.
+func TestRingKeepsLargeBuffers(t *testing.T) {
+	s := &countSink{}
+	withSink(t, s)
+	r := NewRing(SourceApp+5, 4, RingBytes)
+	payload := bytes.Repeat([]byte("x"), 4<<10)
+	for i := 0; i < 4; i++ { // the buffers grow once
+		r.Offer(0, 0, payload)
+		drain()
+	}
+	if n := testing.AllocsPerRun(50, func() {
+		if !r.Offer(0, 0, payload) {
+			t.Fatal("refused")
+		}
+		drain()
+	}); n != 0 {
+		t.Fatalf("%v allocations per 4 KiB request", n)
+	}
+	if s.n < 54 {
+		t.Fatalf("%d delivered", s.n)
+	}
+}
+
+// A late answer to an older quit request (a worker that took its time) does
+// not settle the request waiting now.
+func TestStaleQuitReplyIsIgnored(t *testing.T) {
+	s := &recSink{}
+	withSink(t, s)
+	var sent []bool
+	prevReply := replyQuitFn
+	replyQuitFn = func(allow bool) { sent = append(sent, allow) }
+	t.Cleanup(func() {
+		replyQuitFn = prevReply
+		quitState.phase = quitIdle
+	})
+	if beginQuit(QuitDock) != 0 {
+		t.Fatal("answered")
+	}
+	first := s.evs[len(s.evs)-1].ID
+	if !ReplyQuit(first, false) {
+		t.Fatal("the first request was not waiting")
+	}
+	if beginQuit(QuitMenu) != 0 {
+		t.Fatal("answered")
+	}
+	second := s.evs[len(s.evs)-1].ID
+	if first == second || ReplyQuit(first, true) || len(sent) != 1 {
+		t.Fatalf("a reply to request %d settled request %d: sent %v", first, second, sent)
+	}
+	if !ReplyQuit(second, true) || len(sent) != 2 || !sent[1] || ReplyQuit(second, false) {
+		t.Fatalf("the second request's own reply: sent %v", sent)
+	}
+}
+
+// While a frame holds dispatch, native events wait, in order and with their
+// data, and are delivered once it ends; EvWillTerminate is never held.
+func TestNativeEventsWaitForTheFrame(t *testing.T) {
+	s := &recSink{}
+	withSink(t, s)
+	HoldApp(true)
+	t.Cleanup(func() { HoldApp(false) })
+	deliverNow(AppEvReopen, 0, 1, 0, nil)
+	deliverNow(AppEvOpenURLs, 0, 1, 0, []byte("gnui-test://held"))
+	deliverNow(AppEvActivated, 0, 0, 0, nil)
+	if len(s.evs) != 0 {
+		t.Fatalf("delivered inside the frame: %+v", s.evs)
+	}
+	deliverNow(AppEvWillTerminate, 0, 0, 0, nil)
+	if len(s.evs) != 1 || s.evs[0].Kind != AppEvWillTerminate {
+		t.Fatalf("will-terminate held: %+v", s.evs)
+	}
+	s.evs, s.data = nil, nil
+	HoldApp(false)
+	if !dispatch.signalled.Load() {
+		t.Fatal("the frame's end did not signal")
+	}
+	DispatchApp()
+	if len(s.evs) != 3 || s.evs[0].Kind != AppEvReopen || s.evs[1].Kind != AppEvOpenURLs || string(s.data[1]) != "gnui-test://held" || s.evs[2].Kind != AppEvActivated {
+		t.Fatalf("after the frame: %+v %q", s.evs, s.data)
 	}
 }

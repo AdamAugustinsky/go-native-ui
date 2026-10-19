@@ -30,7 +30,7 @@
 //	(*Window).PopUpMenu(*Popup) int       a native context, pull-down or list menu; returns the chosen item (macOS; -1 elsewhere)
 //	HasNativeMenus() bool                 whether the OS has native menus (macOS)
 //	(*Window).Alert(AlertSpec), OpenPanel(OpenSpec), SavePanel(SaveSpec)
-//	                                      native alert and file panel sheets (macOS; ErrUnsupported elsewhere); the answer is an EvDialog, see dialog.go
+//	                                      native alert and file panel sheets (macOS; ErrUnsupported elsewhere); the answer is an AppEvService from SourceDialog, see dialog.go
 //	(*Window).SetTooltipRegions(r)        native tooltips by content rectangle (macOS; no-op elsewhere); diffed, cheap to call every frame
 //	(*Window).SetTooltipText(f)           where the tooltip text comes from, asked for on demand when the system shows one
 //	(*Window).Close()
@@ -107,7 +107,6 @@ const (
 	EvFrame                   // the frame slot armed by RequestFrame is available
 	EvPaste                   // the answer to RequestPaste: Text (plain text), Tag; FlagFailed when there is none
 	EvCommand                 // a native button or menu item was chosen: Tag is its command id (NativeButton.ID, MenuItem.ID); with FlagStandard, a MenuAction
-	EvDialog                  // an alert or file panel ended: Tag is its DialogTicket; decode with Window.DialogResult (dialog.go)
 )
 
 // Flags qualify an Event.

@@ -71,7 +71,7 @@ type CloseRequester interface {
 func (a *App) DefaultEvent(e *Event) {
 	switch e.Kind {
 	case EvQuitRequested:
-		a.ReplyQuit(a.windowsAgreeToClose())
+		a.ReplyQuit(e.ID, a.windowsAgreeToClose())
 	case EvReopen:
 		if e.A == 0 && a.Win != nil {
 			a.Win.Show()
@@ -148,24 +148,30 @@ func Main(cfg AppConfig, h Handler) error {
 	return err
 }
 
-// newApp makes an App with no window yet.
+// newApp makes an App with no window yet. Post's storage is made here, so
+// that no Post allocates or waits for it.
 func newApp() *App {
+	platform.PreparePosts()
 	return &App{tr: newTranslator(), p: newPacer(), lat: newSampler(8192), diagBuf: make([]byte, 0, 2048), menuDirty: true}
 }
 
-// bindApp starts the platform's application object (once per process) and
-// makes a its receiver.
+// bindApp makes a the receiver of the application object's events, then
+// starts the platform's application object (once per process). The receiver
+// comes first: launching delivers events (a launch by URL or document arrives
+// during finishLaunching), which wait in the startup list until Start has
+// returned. If the start fails, a is no receiver any more.
 func (a *App) bindApp(signals bool) error {
+	a.appStateFn = a.appMenuState
+	platform.SetAppSink(a)
 	err := platform.StartApp(platform.AppOptions{
 		Policy:       a.appCfg.Policy,
 		QuitDeadline: a.appCfg.QuitDeadline, QuitDeadlineAction: a.appCfg.QuitDeadlineAction,
 		Signals: signals,
 	})
 	if err != nil {
+		platform.SetAppSink(nil)
 		return fmt.Errorf("app: application object: %w", err)
 	}
-	a.appStateFn = a.appMenuState
-	platform.SetAppSink(a)
 	return nil
 }
 
@@ -193,12 +199,14 @@ func (a *App) ID() string {
 // (AppConfig.StartHidden or --start-hidden).
 func (a *App) StartHidden() bool { return a.startHidden }
 
-// ReplyQuit answers the quit request being delivered or waiting: true lets
-// the app quit, false cancels the quit. Called during EvQuitRequested (or a
-// call nested in it), the answer is latched and given to the system when the
-// event returns; called later, it is sent at once. It reports false when no
-// quit request was waiting. Main thread.
-func (a *App) ReplyQuit(allow bool) bool { return platform.ReplyQuit(allow) }
+// ReplyQuit answers quit request id (the EvQuitRequested's ID): true lets the
+// app quit, false cancels the quit. Called during EvQuitRequested (or a call
+// nested in it), the answer is latched and given to the system when the
+// event returns; called later, it is sent at once. An answer for a request
+// that is not waiting (answered already, or older than the one waiting now:
+// a worker's late reply) is ignored, and ReplyQuit reports false. Main
+// thread.
+func (a *App) ReplyQuit(id uint64, allow bool) bool { return platform.ReplyQuit(id, allow) }
 
 // QuitPending reports whether a quit request waits for the app's answer.
 func (a *App) QuitPending() bool { return platform.QuitPending() }
@@ -240,7 +248,8 @@ func (w *Win) Show() {
 }
 
 // Close closes the window at the next safe point, without asking its
-// CloseRequester.
+// CloseRequester: between frames, at the loop's turn or the application
+// object's dispatch (which also runs while a quit answer is pending).
 func (w *Win) Close() {
 	if w.Open() {
 		w.a.closing = true
@@ -334,22 +343,40 @@ func (a *App) closeWindow() {
 	}
 }
 
-// appTurn is the app object's part of every turn of the loop: dispatch what
-// the source did not (other OSes), the safe point, a quit request from a
-// goroutine, an approved quit, a window to close.
-func (a *App) appTurn() {
+// launch finishes the application object's setup (the system's sleep, wake
+// and session notifications) once Start has returned and before the loop
+// first waits: the first frame is on screen by then, and an app with no
+// window and nothing to do still gets them.
+func (a *App) launch() {
 	if !a.launched {
 		a.launched = true
-		platform.AppLaunched() // the setup that waits for the first frame
+		platform.AppLaunched()
 	}
+}
+
+// appTurn is the app object's part of every turn of the loop: dispatch what
+// the source did not (other OSes), the safe point (with a window to close), a
+// quit request from a goroutine, an approved quit.
+func (a *App) appTurn() {
 	platform.DispatchApp()
-	a.runSafePoints()
+	a.safePoint()
 	if r := platform.TakeQuitRequest(); r != 0 {
 		platform.Terminate(r)
 	}
 	if platform.QuitApproved() {
 		a.done = true
 	}
+}
+
+// safePoint is the work that waits for a safe point, from the loop's turn and
+// from the application object's dispatch alike: the queued functions, the
+// dialogs asked for, a window to close. Not inside a frame or an event.
+func (a *App) safePoint() {
+	if a.inFrame || a.evDepth > 0 {
+		return
+	}
+	a.runSafePoints()
+	a.flushDialogs()
 	if a.closing {
 		a.closeWindow()
 	}
@@ -392,11 +419,12 @@ func (a *App) appMenuState(id uint16, act platform.MenuAction) (enabled, checked
 
 // SetDockMenu makes menu idx of model m the Dock menu (macOS), from the next
 // safe point; nil m removes it. Its commands arrive as EvCommand, with or
-// without a window.
+// without a window; the model enables and checks them (SetEnabled,
+// SetChecked) whenever the Dock shows the menu.
 func (a *App) SetDockMenu(m *menu.Model, idx int) {
 	a.AtSafePoint(func() {
 		if m == nil {
-			platform.SetDockMenu(nil, 0)
+			platform.SetDockMenu(nil, 0, nil)
 			return
 		}
 		ms := m.Menus()
@@ -405,6 +433,8 @@ func (a *App) SetDockMenu(m *menu.Model, idx int) {
 			spec.Menus = append(spec.Menus, platform.Menu{Title: ms[i].Title, Items: nativeItems(m, ms[i].Items)})
 		}
 		a.dockSpec = spec
-		platform.SetDockMenu(&a.dockSpec, idx)
+		platform.SetDockMenu(&a.dockSpec, idx, func(id uint16, _ platform.MenuAction) (enabled, checked bool) {
+			return m.Enabled(menu.ID(id)), m.Checked(menu.ID(id))
+		})
 	})
 }

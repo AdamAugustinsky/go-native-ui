@@ -51,15 +51,23 @@ const (
 	// EvSessionActive: the user session became active (A 1) or inactive (A 0,
 	// fast user switching).
 	EvSessionActive = EventKind(platform.AppEvSessionActive)
-	// EvWillTerminate is the last event: the app is about to end. Save what
-	// must be saved here: after an allowed quit request macOS ends the
-	// process when this returns, and Main does not return.
+	// EvWillTerminate is the last event: the app is about to end, and on
+	// macOS the process exits when it returns (Main does not return). It is
+	// for final, quick, synchronous cleanup that does no I/O worth waiting
+	// for. Durable work, saving above all, must be finished before the quit
+	// is allowed: answer EvQuitRequested with ReplyQuit(id, true) only once
+	// the save is done (defer the answer while it runs). Before this event
+	// every sheet has ended and every result and event already accepted has
+	// been delivered.
 	EvWillTerminate = EventKind(platform.AppEvWillTerminate)
 	// EvCommand is an app-wide menu command (ID): a command chosen while no
 	// window is open, or from the Dock menu.
 	EvCommand = EventKind(platform.AppEvCommand)
 	// EvService is a result, response, outside request or change from a
-	// service, tagged by Source; ID is its ticket or sequence number.
+	// service, tagged by Source; ID is its ticket or sequence number. A
+	// native dialog's answer (Alert, OpenPanel, SavePanel) is an EvService
+	// from platform.SourceDialog with the call's ticket as ID; TakeDialog
+	// returns its result, with the paths.
 	EvService = EventKind(platform.AppEvService)
 	// EvPost is an event the app posted with Post.
 	EvPost = EventKind(platform.AppEvPost)
@@ -186,11 +194,17 @@ func (a *App) AppEvent(pe *platform.AppEvent, data []byte) {
 		a.startup = append(a.startup, startupEvent{*pe, append([]byte(nil), data...)})
 		return
 	}
+	if pe.Kind == platform.AppEvService && pe.Source == platform.SourceDialog {
+		a.onDialog(pe, data)
+		return
+	}
 	a.deliver(pe, data)
 }
 
-// AppSafePoint runs the deferred safe-point work (platform.AppSink).
-func (a *App) AppSafePoint() { a.runSafePoints() }
+// AppSafePoint runs the deferred safe-point work (platform.AppSink): also
+// while the app's own loop is suspended in a native loop (a pending quit),
+// so a dialog asked for then is shown and a window closed.
+func (a *App) AppSafePoint() { a.safePoint() }
 
 // deliver hands one event to the Handler, in the record of its nesting depth.
 func (a *App) deliver(pe *platform.AppEvent, data []byte) {

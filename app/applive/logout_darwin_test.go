@@ -109,7 +109,7 @@ func init() {
 				t0 = time.Now()
 				logf("request reason=%d", e.A)
 				if mode == "cancel" {
-					a.ReplyQuit(false)
+					a.ReplyQuit(quitID, false)
 					logf("answer=cancel")
 					after(10*time.Second, 1)
 				} else {
@@ -117,13 +117,13 @@ func init() {
 				}
 			case e.Kind == app.EvQuitRequested:
 				logf("request reason=%d", e.A)
-				a.ReplyQuit(true)
+				a.ReplyQuit(quitID, true)
 			case e.Kind == app.EvPost && e.ID == 1:
 				logf("terminate: again")
 				a.RequestQuit()
 			case e.Kind == app.EvPost && e.ID == 2:
 				logf("last=%s allowed after_s=%.0f", lastTerminate(), time.Since(t0).Seconds())
-				a.ReplyQuit(true)
+				a.ReplyQuit(quitID, true)
 			case e.Kind == app.EvWillTerminate:
 				logf("terminated")
 			default:

@@ -115,9 +115,6 @@ func (f *fakeDialogs) CancelDialog(t platform.DialogTicket) bool {
 	f.cancels = append(f.cancels, t)
 	return true
 }
-func (f *fakeDialogs) DialogResult(e platform.Event) platform.DialogResult {
-	return platform.DialogResult{Ticket: platform.DialogTicket(e.Tag), Button: int(e.Code)}
-}
 
 // A dialog asked for in Build is only queued: the sheet is shown by the flush
 // that follows the frame. The ticket is reserved at once, the specs are
@@ -156,7 +153,7 @@ func TestDialogsPresentAfterTheFrame(t *testing.T) {
 		t.Error("two dialogs got the same ticket")
 	}
 	// The sheet ends: the result comes back under the app's ticket.
-	a.onDialog(&platform.Event{Kind: platform.EvDialog, Tag: 200, Code: 1}) // the open panel's platform ticket
+	a.onDialog(&platform.AppEvent{Kind: platform.AppEvService, Source: platform.SourceDialog, ID: 200, A: int64(platform.DialogOpen)}, nil) // the open panel's platform ticket
 	r, ok := a.TakeDialog()
 	if !ok || r.Ticket != tk2 {
 		t.Errorf("result %+v (ok %v), want ticket %d", r, ok, tk2)

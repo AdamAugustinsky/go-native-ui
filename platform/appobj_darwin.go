@@ -56,6 +56,7 @@ var (
 	selDockItems          = objc.Sel("numberOfItems")
 	selDockItemAt         = objc.Sel("itemAtIndex:")
 	selDockAction         = objc.Sel("action")
+	selDockSetState       = objc.Sel("setState:")
 	selNotificationCenter = objc.Sel("notificationCenter")
 	selSharedWorkspace    = objc.Sel("sharedWorkspace")
 
@@ -96,11 +97,12 @@ const (
 )
 
 var appObj struct {
-	started  bool
-	launched bool // AppLaunched ran: the late setup is done
-	app      objc.ID
-	delegate objc.ID
-	dockMenu objc.ID // retained, 0 for none
+	started   bool
+	launched  bool // AppLaunched ran: the late setup is done
+	app       objc.ID
+	delegate  objc.ID
+	dockMenu  objc.ID   // retained, 0 for none
+	dockState MenuState // the Dock menu's commands' state, nil for none
 
 	wakeEv, distantPast, distantFuture objc.ID
 
@@ -262,7 +264,7 @@ func registerAppDelegate() {
 			}
 		}
 	})
-	d.Method(objc.Sel("validateMenuItem:"), "c@:@", func(c *ffi.CB) { c.RetBool(true) })
+	d.Method(objc.Sel("validateMenuItem:"), "c@:@", dockValidate)
 	appDelegateDef = d
 	appDelegateClass = d.Register()
 }
@@ -306,6 +308,14 @@ func shouldTerminate() int {
 	if reason == 0 {
 		reason = appleEventQuitReason()
 	}
+	if dispatch.held {
+		// A native loop entered from Build: the request is asked after the
+		// frame (deferQuit). Not NSTerminateLater: AppKit would wait for the
+		// answer inside this terminate:, so inside the frame, which could
+		// then never end and deliver the request.
+		deferQuit(reason)
+		return terminateCancel
+	}
 	if dispatch.sink == nil {
 		// No application object receives the request (a window opened with
 		// Open alone): the window's owner decides, as with its close button.
@@ -338,7 +348,20 @@ func appleEventQuitReason() QuitReason {
 	return QuitDock
 }
 
-func appWillTerminate(*ffi.CB) { deliverNow(AppEvWillTerminate, 0, 0, 0, nil) }
+// appWillTerminate is the last event. Before it, every sheet is ended (each
+// completion runs once: a dialog of ours delivers its cancelled result if the
+// user did not answer it) and every result and event already accepted is
+// delivered, so EvWillTerminate is the last thing the app sees.
+func appWillTerminate(*ffi.CB) {
+	pool := objc.F.Call0(objc.PoolPush)
+	if w := theWindow.Load(); w != nil {
+		w.abortDialogs()
+	}
+	endSheets()
+	objc.F.Call1(objc.PoolPop, pool)
+	FlushApp()
+	deliverNow(AppEvWillTerminate, 0, 0, 0, nil)
+}
 
 // appReopen is applicationShouldHandleReopen:hasVisibleWindows:: EvReopen,
 // and NO, so that AppKit does nothing of its own.
@@ -528,6 +551,10 @@ func sendTerminate(reason QuitReason, sender objc.ID) {
 	if quitState.phase != quitIdle || !appObj.started {
 		return
 	}
+	if dispatch.held { // ⌘Q in a native loop entered from Build: asked after the frame
+		deferQuit(reason)
+		return
+	}
 	pool := objc.F.Call0(objc.PoolPush)
 	defer objc.F.Call1(objc.PoolPop, pool)
 	if appObj.quitAllowed {
@@ -610,8 +637,11 @@ func AppActivationPolicy() Policy {
 
 // SetDockMenu makes menu idx of spec the Dock menu (applicationDockMenu:);
 // nil spec removes it. Its commands arrive as AppEvCommand whether or not a
-// window is open. Main thread, at a safe point; building it allocates.
-func SetDockMenu(spec *MenuSpec, idx int) {
+// window is open. state gives each command's enabled and checked state when
+// AppKit shows the menu (nil: enabled, unchecked). Main thread, at a safe
+// point; building it allocates.
+func SetDockMenu(spec *MenuSpec, idx int, state MenuState) {
+	appObj.dockState = state
 	if appObj.dockMenu != 0 {
 		objc.Release(appObj.dockMenu)
 		appObj.dockMenu = 0
@@ -646,19 +676,28 @@ func retargetDock(m objc.ID, depth int) {
 	}
 }
 
+// dockValidate is the delegate's validateMenuItem: for the Dock menu's
+// commands (the delegate is their target): the state SetDockMenu was given
+// enables and checks them.
+func dockValidate(c *ffi.CB) {
+	item := objc.ID(c.Int(2))
+	if appObj.dockState == nil || item == 0 {
+		c.RetBool(true)
+		return
+	}
+	en, ck := appObj.dockState(uint16(objc.Send(item, selDockTag)), MenuNone)
+	var st uintptr
+	if ck {
+		st = 1 // NSControlStateValueOn
+	}
+	objc.Send1(item, selDockSetState, st)
+	c.RetBool(en)
+}
+
 // DockMenu is the Dock menu as AppKit asks for it (applicationDockMenu:), 0
 // for none (tests).
 func DockMenu() uintptr {
 	return uintptr(objc.Send1(appObj.delegate, selAppDockMenu, uintptr(appObj.app)))
-}
-
-// SetAppMenuBar installs the menu bar with no window open (the app object's
-// menus); with a window, Window.SetMenuBar does. Main thread, at a safe point.
-func SetAppMenuBar(spec *MenuSpec, state MenuState) {
-	if !appObj.started {
-		return
-	}
-	(&Window{app: appObj.app}).SetMenuBar(spec, state) // the bar is the application's: SetMenuBar reads only app
 }
 
 // appCommand delivers a menu command that no window can take (none is open)

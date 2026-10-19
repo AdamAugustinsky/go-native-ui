@@ -7,14 +7,18 @@ import (
 )
 
 // Native alerts and file panels (phase 6, N2; platform/dialog.go has the
-// contract). Until the application object (F3) delivers service results, the
-// answer of a dialog is queued here, in the order the sheets ended, and read
-// with TakeDialog from a frame, like ui.Context.TakeCommand.
+// contract). The application object delivers each dialog's answer (platform
+// fills in a completion record reserved with the sheet): the Handler gets an
+// EvService from platform.SourceDialog with the ticket as ID, and the result
+// is queued here, in the order the sheets ended, for TakeDialog, from the
+// Handler or from a frame, like ui.Context.TakeCommand. Both work with the
+// app's loop suspended (an answer to a pending quit request) and with no
+// frame drawn.
 //
 // A call returns its ticket at once but only queues the request: the sheet is
-// shown after the frame in which the call was made has ended (after ui.End and
-// the present), at a safe point, never from inside Build. The specs are copied
-// at the call, so the caller may reuse its slices. The ticket is the app's own;
+// shown at the next safe point (after the frame in which the call was made
+// has ended, or after the event that made it), never from inside Build. The
+// specs are copied at the call, so the caller may reuse its slices. The ticket is the app's own;
 // the results carry it. Where the OS has no native dialogs (Windows and Linux
 // so far) the calls fail at once with an error that satisfies
 // errors.Is(err, errors.ErrUnsupported), and the app shows its drawn dialog
@@ -35,7 +39,6 @@ type dialogTarget interface {
 	OpenPanel(platform.OpenSpec) (platform.DialogTicket, error)
 	SavePanel(platform.SaveSpec) (platform.DialogTicket, error)
 	CancelDialog(platform.DialogTicket) bool
-	DialogResult(platform.Event) platform.DialogResult
 }
 
 // pendingDialog is a dialog queued for the end of the frame, with its own
@@ -77,7 +80,8 @@ func (a *App) enqueueDialog(d pendingDialog) (platform.DialogTicket, error) {
 }
 
 // Alert queues an alert sheet for the window and returns its ticket; the
-// answer is read with TakeDialog. The sheet is shown after the current frame.
+// answer arrives as an EvService (platform.SourceDialog, ID the ticket) and is
+// read with TakeDialog. The sheet is shown at the next safe point.
 func (a *App) Alert(s platform.AlertSpec) (platform.DialogTicket, error) {
 	if err := s.Validate(); err != nil {
 		return 0, err
@@ -122,8 +126,8 @@ func (a *App) CancelDialog(t platform.DialogTicket) bool {
 }
 
 // flushDialogs shows the queued dialogs. It runs where no frame is being
-// built: after a frame has been presented, and at the end of each turn of the
-// loop.
+// built: after a frame has been presented, at the end of each turn of the
+// loop, and at the application object's safe points.
 func (a *App) flushDialogs() {
 	if len(a.dlgQ) == 0 {
 		return
@@ -171,15 +175,20 @@ func (a *App) pushDialog(r platform.DialogResult) {
 	a.p.invalidate()
 }
 
-// onDialog turns the EvDialog of a sheet that ended into the result under the
-// app's ticket. A dialog the app withdrew has none to deliver.
-func (a *App) onDialog(e *platform.Event) {
-	r := a.dialogWin().DialogResult(*e)
+// onDialog turns the answer of a sheet that ended (a SourceDialog
+// AppEvService) into the result under the app's ticket, for TakeDialog, and
+// hands it to the Handler as an EvService with that ticket. A dialog the app
+// withdrew has none to deliver.
+func (a *App) onDialog(pe *platform.AppEvent, data []byte) {
+	r := platform.DialogResultOf(pe, data)
 	for i, s := range a.dlgShown {
 		if s.plat == r.Ticket {
 			r.Ticket = s.app
 			a.dlgShown = slices.Delete(a.dlgShown, i, i+1)
 			a.pushDialog(r)
+			e := *pe
+			e.ID = uint64(s.app)
+			a.deliver(&e, data)
 			return
 		}
 	}

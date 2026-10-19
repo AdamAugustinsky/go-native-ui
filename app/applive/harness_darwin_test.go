@@ -166,8 +166,12 @@ func sendQuitEvent() string {
 	return sendAppleEvent(0x61657674, 0x71756974, nil, func() bool { return quitAsked == n }) // 'aevt' 'quit'
 }
 
-// quitAsked counts the quit requests the scenario's handler saw.
-var quitAsked int
+// quitAsked counts the quit requests the scenario's handler saw, and quitID
+// is the last one's id (what ReplyQuit answers).
+var (
+	quitAsked int
+	quitID    uint64
+)
 
 // sendAppleEvent sends an Apple event of class and id to this process, with
 // fill adding its parameters; it reports how it was delivered. When the send

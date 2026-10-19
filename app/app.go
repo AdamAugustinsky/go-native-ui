@@ -433,6 +433,7 @@ func (a *App) closeWin() {
 // loop is the event loop. See pacer for the frame rules. With no window open
 // it is the application object's pump (idleTurn).
 func (a *App) loop() error {
+	a.launch()
 	for !a.done {
 		if a.Win == nil {
 			a.idleTurn()
@@ -522,8 +523,6 @@ func (a *App) onEvent(e *platform.Event) {
 		a.frameEvents++
 		a.lastFrameEv = platform.Now()
 		a.p.frameEvent()
-	case platform.EvDialog:
-		a.onDialog(e)
 	default:
 		var txt []byte
 		if e.Kind == platform.EvText || e.Kind == platform.EvPreedit || e.Kind == platform.EvPaste {
