@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"errors"
 	"image"
+	"image/color"
 	"image/draw"
 	_ "image/gif"  // registers the GIF decoder
 	_ "image/jpeg" // registers the JPEG decoder
@@ -60,7 +61,7 @@ func (w *worker) decode(c *Cache, j *job, data []byte) result {
 		orient = exifOrientation(data)
 	case "gif":
 		frames, delay = gifFrames(data)
-		m = onCanvas(m, cfg.Width, cfg.Height)
+		m = onCanvas(m, cfg.Width, cfg.Height, data)
 	}
 	sw, sh := int32(m.Bounds().Dx()), int32(m.Bounds().Dy())
 	ow, oh := sw, sh
@@ -86,14 +87,19 @@ func (w *worker) decode(c *Cache, j *job, data []byte) result {
 }
 
 // onCanvas places a GIF's first frame, decoded with the frame's own bounds,
-// on the image's w×h logical screen at its offset, the rest transparent.
-func onCanvas(m image.Image, w, h int) image.Image {
+// on the image's w×h logical screen at its offset: over the global palette's
+// background colour, or a transparent screen when the frame has a
+// transparent colour (gifBackground).
+func onCanvas(m image.Image, w, h int, gif []byte) image.Image {
 	canvas := image.Rect(0, 0, w, h)
 	if m.Bounds() == canvas {
 		return m
 	}
 	out := image.NewRGBA(canvas)
+	if bg, ok := gifBackground(gif); ok {
+		draw.Draw(out, canvas, &image.Uniform{color.RGBA{bg[0], bg[1], bg[2], 255}}, image.Point{}, draw.Src)
+	}
 	r := m.Bounds().Intersect(canvas)
-	draw.Draw(out, r, m, r.Min, draw.Src)
+	draw.Draw(out, r, m, r.Min, draw.Over)
 	return out
 }

@@ -63,3 +63,63 @@ func gifFrames(b []byte) (frames, delayMs int32) {
 	}
 	return max(frames, 1), max(delay, 0)
 }
+
+// gifBackground returns the colour a GIF's logical screen shows where its
+// first frame does not cover it: the global palette's background colour. ok
+// is false (the screen is transparent) when the first frame has a
+// transparent colour, without a global palette, or when b ends before the
+// first frame's descriptor. Disposal does not matter: it applies only after
+// the first frame has been shown.
+func gifBackground(b []byte) (rgb [3]byte, ok bool) {
+	if len(b) < 13 || b[10]&0x80 == 0 {
+		return rgb, false
+	}
+	n := 2 << (b[10] & 7) // global palette entries
+	i := 13 + 3*n
+	if int(b[11]) >= n || i > len(b) {
+		return rgb, false
+	}
+	copy(rgb[:], b[13+3*int(b[11]):])
+	for i < len(b) {
+		switch b[i] {
+		case 0x21: // extension
+			if i+2 > len(b) {
+				return rgb, false
+			}
+			if b[i+1] == 0xF9 && i+4 <= len(b) && b[i+2] == 4 && b[i+3]&1 != 0 { // graphic control with a transparent colour
+				return rgb, false
+			}
+			i += 2
+			for {
+				if i >= len(b) {
+					return rgb, false
+				}
+				k := int(b[i])
+				i += 1 + k
+				if k == 0 {
+					break
+				}
+			}
+		case 0x2C: // the first frame
+			return rgb, true
+		default:
+			return rgb, false
+		}
+	}
+	return rgb, false
+}
+
+// overBackground composites the premultiplied w×h image at (x0, y0) of pix
+// (stride bytes per row) over the opaque colour rgb.
+func overBackground(pix []byte, stride, x0, y0, w, h int, rgb [3]byte) {
+	for y := y0; y < y0+h; y++ {
+		row := pix[y*stride+x0*4 : y*stride+(x0+w)*4]
+		for x := 0; x < len(row); x += 4 {
+			t := 255 - uint32(row[x+3])
+			for k := 0; k < 3; k++ {
+				row[x+k] = byte(uint32(row[x+k]) + (uint32(rgb[k])*t+127)/255)
+			}
+			row[x+3] = 255
+		}
+	}
+}

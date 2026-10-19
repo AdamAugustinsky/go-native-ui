@@ -10,6 +10,8 @@ import (
 	"image"
 	"image/color"
 	"image/gif"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -162,6 +164,37 @@ func TestGIFFrameOnCanvas(t *testing.T) {
 	near(t, "the screen outside it", d.at(0.1, 0.1), [4]int{0, 0, 0, 0}, 0)
 	near(t, "left of it", d.at(0.35, 0.4), [4]int{0, 0, 0, 0}, 0)
 	near(t, "below it", d.at(0.5, 0.55), [4]int{0, 0, 0, 0}, 0)
+}
+
+// TestGIFOpaqueBackground: an opaque GIF (no transparent colour) whose
+// first frame, red, covers only part of its screen shows the global
+// palette's background colour, blue, around the frame.
+func TestGIFOpaqueBackground(t *testing.T) {
+	c, _ := newTestCache(t, Options{})
+	pal := color.Palette{color.RGBA{0, 0, 255, 255}, color.RGBA{255, 0, 0, 255}}
+	f := image.NewPaletted(image.Rect(40, 30, 60, 50), pal)
+	for i := range f.Pix {
+		f.Pix[i] = 1
+	}
+	var buf bytes.Buffer
+	g := &gif.GIF{Image: []*image.Paletted{f}, Delay: []int{0}, BackgroundIndex: 0,
+		Config: image.Config{ColorModel: pal, Width: 100, Height: 100}}
+	if err := gif.EncodeAll(&buf, g); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "bg.gif")
+	if err := os.WriteFile(path, buf.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, src := range []Source{Bytes(buf.Bytes()), File(path)} {
+		d := decodeNow(t, c, src, 100, 100, 0)
+		if d.r.err != errNone || d.w != 100 || d.h != 100 {
+			t.Fatalf("source %d: decoded %d×%d (err %d), want the 100×100 screen", src.kind, d.w, d.h, d.r.err)
+		}
+		near(t, "inside the frame", d.at(0.5, 0.4), [4]int{255, 0, 0, 255}, 2)
+		near(t, "the background around it", d.at(0.1, 0.1), [4]int{0, 0, 255, 255}, 2)
+		near(t, "below it", d.at(0.5, 0.55), [4]int{0, 0, 255, 255}, 2)
+	}
 }
 
 // TestResampleFractionalArea: three pixels, black, white, black, down to two:

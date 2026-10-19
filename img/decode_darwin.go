@@ -4,6 +4,7 @@ package img
 
 import (
 	"errors"
+	"io"
 	"math"
 	"os"
 	"runtime"
@@ -25,6 +26,7 @@ type osDecoder struct {
 	keys, vals [4]uintptr
 	i32        int32
 	f64        float64
+	head       [4096]byte
 }
 
 var iio struct {
@@ -331,6 +333,13 @@ func (w *worker) decode(c *Cache, j *job, data []byte) result {
 			return fail(errDecode)
 		}
 	}
+	// ImageIO leaves the screen around a partial first frame of a GIF
+	// transparent, whatever its background colour.
+	if head := w.header(j, data); sniff(head) == "gif" {
+		if bg, ok := gifBackground(head); ok {
+			overBackground(pix, bw*4, int(pad), int(pad), int(iw), int(ih), bg)
+		}
+	}
 	if pad > 0 {
 		padEdges(pix, int(iw), int(ih))
 	}
@@ -401,3 +410,18 @@ func (w *worker) delayMs(fr *ffi.Frame, props uintptr) int32 {
 
 // cframe is a C call frame: each worker and the cache's owner have one.
 type cframe = ffi.Frame
+
+// header is the start of the encoded image: the bytes, or the first 4 KiB of
+// the file (enough for gifBackground), read into the worker's scratch.
+func (w *worker) header(j *job, data []byte) []byte {
+	if j.src.kind != srcFile {
+		return data
+	}
+	f, err := os.Open(j.src.path)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	n, _ := io.ReadFull(f, w.head[:])
+	return w.head[:n]
+}
