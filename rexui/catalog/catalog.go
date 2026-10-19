@@ -99,8 +99,8 @@ type State struct {
 	tri  base.CheckState
 	sel  int
 	v    float32
-	bufs [8]ui.TextBuffer
-	set  [8]bool
+	bufs [10]ui.TextBuffer
+	set  [10]bool
 
 	icons [numIcons]icon.ID
 }
@@ -353,7 +353,53 @@ var Samples = []Sample{
 		rexui.EndCard(s.k, &cd)
 		return cd.ID()
 	}, Spec{Probe: [2]float32{4, 50}, What: MeasureW | MeasureH | MeasureFill, Note: "radius by eye: the title crosses the top-left corner"}},
+	{"form-group", 360, 122, formGroup, Spec{Probe: [2]float32{4, 60}, What: shapeW}},
+	{"form-grid", 294, 76, formGrid, skip("no shape: the layout is compared with AppKit's frames (rexui's form test)")},
 	{"label-styles", 375, 337, labelStyles, skip("text rendering: AppKitRef's cacheDisplay draws labels darker than a live window does")},
+}
+
+// The form samples (D3b). formGroup is AppKitRef's form-group: three rows of
+// a grouped section, 360 pt wide; formGrid its NSGridView form-grid.
+var formChoices = [...]string{"Auto", "Light", "Dark"}
+
+func formGroup(s *State) ui.ID {
+	k := s.k
+	s.sel, s.b, s.v = 0, true, 40
+	k.NextWidth(k.Fixed(360))
+	f := rexui.BeginForm(k, "form", rexui.FormOpts{})
+	f.Section(k, "")
+	f.Row(k, "Appearance", rexui.RowOpts{})
+	k.NextWidth(k.Fixed(79))
+	rexui.Select(k, "Appearance", &s.sel, formChoices[:], rexui.SelectOpts{})
+	f.EndRow(k)
+	f.Row(k, "Wi-Fi", rexui.RowOpts{})
+	rexui.Switch(k, "", &s.b, rexui.SwitchOpts{})
+	f.EndRow(k)
+	f.Row(k, "Brightness", rexui.RowOpts{})
+	k.NextWidth(k.Fixed(120))
+	rexui.Slider(k, "Brightness", &s.v, 0, 100, 0, rexui.SliderOpts{})
+	f.EndRow(k)
+	rexui.EndForm(k, &f)
+	return f.ID()
+}
+
+var gridLabels = [...]string{"Name:", "Email address:", "Notifications:"}
+
+func formGrid(s *State) ui.ID {
+	k := s.k
+	f := rexui.BeginForm(k, "form", rexui.FormOpts{Variant: rexui.FormAligned, Labels: gridLabels[:]})
+	for i, l := range gridLabels[:2] {
+		f.Row(k, l, rexui.RowOpts{})
+		k.NextWidth(k.Fixed(200))
+		rexui.TextField(k, l, s.text(8+i, ""), "", rexui.FieldOpts{}) // buffers 8 and 9 are the form's
+		f.EndRow(k)
+	}
+	f.Row(k, gridLabels[2], rexui.RowOpts{})
+	s.b = false
+	rexui.Checkbox(k, "Send me updates", &s.b, rexui.CheckboxOpts{})
+	f.EndRow(k)
+	rexui.EndForm(k, &f)
+	return f.ID()
 }
 
 var styleNames = [...]struct {

@@ -48,19 +48,27 @@ type CardRecipe struct {
 	// the band above the box the title takes, in points (TitleX 10 and
 	// TitleH 12 measured: the title's line, 14 pt, reaches into the box).
 	Pad, RowPadX, RowPadY, TitleX, TitleH float32
+	// RowH is a form row's height in points: 40, with the label 10 pt from
+	// the leading edge and the control 10 pt from the trailing one, as
+	// tools/appkitscenes' Settings form lays it out and AppKitRef's form-group
+	// sample measures.
+	RowH float32
 	// Title colours a box's title, set in TitleStyle.
 	Title      Tint
 	TitleStyle theme.TextStyle
-	// Divider colours the hairlines between form rows.
-	Divider Tint
+	// Divider colours the lines between form rows, DividerW thick in points:
+	// a full-width NSBox separator in the 1 pt between two rows (a row's pitch
+	// is 41).
+	Divider  Tint
+	DividerW float32
 }
 
 // CardLook is the cards' recipe.
 var CardLook = CardRecipe{
 	Fill: Of(theme.GroupBox),
-	Pad:  12, RowPadX: 12, RowPadY: 8, TitleX: 10, TitleH: 12,
+	Pad:  12, RowPadX: 10, RowPadY: 0, TitleX: 10, TitleH: 12, RowH: 40,
 	Title: Of(theme.Label), TitleStyle: theme.StyleSubheadline,
-	Divider: Of(theme.Separator),
+	Divider: Of(theme.Separator), DividerW: 1,
 }
 
 // Card is a card being built: BeginCard returns it, Row adds a form row to a
@@ -79,7 +87,7 @@ type Card struct {
 // with the theme's gap. Close it with EndCard.
 //
 //	cd := rexui.BeginCard(k, "network", rexui.CardOpts{Variant: rexui.CardInset})
-//	cd.Row(k, "wifi")
+//	cd.Row(k, "wifi") // 40 pt high; Form builds the label and the control's place
 //	rexui.Label(k, "Wi-Fi", rexui.LabelOpts{})
 //	k.Spacer()
 //	rexui.Switch(k, "Wi-Fi", &v.wifi, rexui.SwitchOpts{})
@@ -145,25 +153,29 @@ func BeginCard(k *base.Kit, label string, o CardOpts) Card {
 	return cd
 }
 
-// Row starts a row of a CardInset (a hairline separates it from the row
-// before): a row of the controls built until EndRow, padded, its children
-// centred vertically. label identifies the row among the card's rows.
-func (cd *Card) Row(k *base.Kit, label string) {
+// Row starts a row of a CardInset (a line separates it from the row before):
+// a row of the controls built until EndRow, RowH high, padded at the sides,
+// its children centred vertically. label identifies the row among the card's
+// rows. It returns the row's box.
+func (cd *Card) Row(k *base.Kit, label string) ui.ID { return cd.RowHeight(k, label, 0) }
+
+// RowHeight is Row for a row of height pt points (0: the recipe's RowH), for a
+// row whose control is taller than a row.
+func (cd *Card) RowHeight(k *base.Kit, label string, pt float32) ui.ID {
 	c, r := k.Context(), k.Theme()
 	rc := &CardLook
 	if cd.rows > 0 {
-		px := k.Pt(rc.RowPadX)
-		c.NextPadding(px, 0, px, 0)
-		c.NextSize(ui.Pct(1), ui.Px(r.Lines.Hairline))
-		c.Push(c.BoxKeyed(0, ui.KeyN(cd.key, 100+uint64(cd.rows)), nil))
+		c.NextSize(ui.Pct(1), ui.Px(theme.Snap(k.Pt(rc.DividerW))))
 		c.NextBG(rc.Divider.RGBA(r))
-		c.NextSize(ui.Pct(1), ui.Pct(1))
-		c.Box(ui.DrawBackground, "divider")
-		c.Pop()
+		c.BoxKeyed(ui.DrawBackground, ui.KeyN(cd.key, 100+uint64(cd.rows)), nil)
 	}
 	cd.rows++
+	if pt <= 0 {
+		pt = rc.RowH
+	}
 	k.NextPadding(rc.RowPadX, rc.RowPadY, rc.RowPadX, rc.RowPadY)
-	k.Row(label)
+	k.NextHeight(k.Fixed(pt))
+	return k.Row(label)
 }
 
 // ID is the card's outermost box.

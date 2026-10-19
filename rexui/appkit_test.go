@@ -22,6 +22,11 @@ import (
 type appkitRef struct {
 	System  map[string]map[string]string            `json:"system"`
 	Samples map[string]map[string]appkitMeasurement `json:"samples"`
+	// Layouts are the frames of the form samples' subviews, in points from
+	// the sample's top left (AppKitRef's "layouts"); Sheets what it read of
+	// sheets.
+	Layouts map[string]map[string]json.RawMessage `json:"layouts"`
+	Sheets  map[string]any                        `json:"sheets"`
 }
 
 type appkitMeasurement struct {

@@ -132,6 +132,10 @@ type Radii struct {
 	Pane float32
 	// Popover is a drawn popover's or menu's radius (designed).
 	Popover float32
+	// Sheet is the corner radius of a sheet: 26, the radius of the glass
+	// content frame an NSAlert's panel has on macOS 27.2 (AppKitRef reads
+	// its _cornerRadius; a plain titled window reads 16).
+	Sheet float32
 	// Checkbox is a checkbox's radius at the regular size (5.5, the circular
 	// radius matching macOS 27.2's continuous corner; macOS 15's was 3.5).
 	// SizeSpec.CheckRadius holds the radius of every size.
@@ -139,7 +143,7 @@ type Radii struct {
 }
 
 // MacRadii are the radii measured on macOS 27.2, and Rex's pane.
-var MacRadii = Radii{Window: 16, Group: 12, Selection: 8, Pane: 10.5, Popover: 10, Checkbox: 5.5}
+var MacRadii = Radii{Window: 16, Group: 12, Selection: 8, Pane: 10.5, Popover: 10, Sheet: 26, Checkbox: 5.5}
 
 func (r Radii) scaled(k float32) Radii {
 	r.Window *= k
@@ -147,6 +151,7 @@ func (r Radii) scaled(k float32) Radii {
 	r.Selection *= k
 	r.Pane *= k
 	r.Popover *= k
+	r.Sheet *= k
 	r.Checkbox *= k
 	return r
 }
