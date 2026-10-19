@@ -84,13 +84,13 @@ Live AppKit cannot show focus rings or inactive samples in one key window, so
 `-live` leaves those to the offscreen comparison.
 
 The lists' samples (page 2, `appkit-lists`; tables, outlines) on 2026-10-19:
-86 of 86 offscreen in blue and in pink; 62 of 66 live. AppKitRef `-live`
-ran with `-AppleShowScrollBars WhenScrolling`, as the test Mac shows legacy
-scroll bars and the lists draw overlay ones. The live misses: white label
-ink on the dark emphasised selection reads ΔE 4.8–6.7 lighter in AppKit's
-1× text, and the full-width unemphasised block's antialiased edge reads as
-a 0.7 pt radius. The unemphasised labels, left out offscreen (below), are
-within ΔE 2.3 live.
+86 of 86 offscreen in blue and in pink; 66 of 66 live with the Mac's
+scroller style (overlay). The lists follow the system's scroller style as
+AppKit does; with legacy scroll bars (both apps run with
+`-AppleShowScrollBars Always`, for those processes only) 54 of 66: every
+miss is a selection 5 pt wider than AppKit's, as base reserves 12 pt
+(`Px.ScrollbarW`) for a legacy bar where AppKit's scroller takes 17. The
+unemphasised labels, left out offscreen (below), are within ΔE 1.2 live.
 
 ### Left to the eye, and why
 

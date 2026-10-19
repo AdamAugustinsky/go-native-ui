@@ -30,13 +30,16 @@ type ListState struct {
 	Scroll ScrollState
 
 	curRow, ancRow int     // where the cursor and anchor were last seen (hints)
-	shown          float64 // the scroll offset the last frame laid out
-	rowPx, padPx   float32 // the row pitch and the padding above the first row, in the last frame
-	goRow          int
-	goPending      bool
-	find           [findMax]byte
-	nFind          int
-	findT          int64
+	shown          float64 // the scroll offset the last frame laid out (the position)
+	// disp is where the last frame showed the rows: the offset plus a
+	// trackpad's stretch past an edge, for finding the row under the pointer.
+	disp         float64
+	rowPx, padPx float32 // the row pitch and the padding above the first row, in the last frame
+	goRow        int
+	goPending    bool
+	find         [findMax]byte
+	nFind        int
+	findT        int64
 
 	mv      moveReq // a cursor move the app asked for
 	revRow  int
@@ -106,9 +109,9 @@ func (st *ListState) SetTopRow(r int, frac float32) {
 }
 
 // RowTop is the distance in pixels from the top of the list's box to the top of
-// display row r as of the last frame (negative above the view).
+// display row r as shown in the last frame (negative above the view).
 func (st *ListState) RowTop(r int) float32 {
-	return st.padPx + float32(r)*st.rowPx - float32(st.shown)
+	return st.padPx + float32(r)*st.rowPx - float32(st.disp)
 }
 
 // PadPx is the room in pixels above the first row inside the list's box, as of
@@ -232,9 +235,12 @@ func (k *Kit) beginList(label string, st *ListState, rows int, table bool, o Lis
 		hoverOn: o.Hover == HoverOn}
 
 	k.ApplySize(ui.Pct(1), ui.Pct(1))
+	skey := ui.KeyN(okey, 1)
+	if pad := k.legacyReserve(skey, ScrollVertical); pad != [2]float32{} {
+		c.NextPadding(0, 0, pad[0], pad[1]) // room for a legacy scroll bar
+	}
 	l.o = c.BoxKeyed(ui.Clip|o.Flags, okey, nil)
 	c.Push(l.o)
-	skey := ui.KeyN(okey, 1)
 	k.ScrollInput(okey, skey, &st.Scroll, ScrollVertical)
 
 	l.padT = theme.Snap(px.GapSmall)
@@ -276,6 +282,8 @@ func (k *Kit) beginList(label string, st *ListState, rows int, table bool, o Lis
 	}
 	l.hoverFrom(ps)
 	st.shown = sy
+	_, stretch := c.ScrollStretch(l.s)
+	st.disp = sy + stretch
 	if it, ok := st.Sel.Cursor(); ok {
 		l.cursor, l.hasCur = it, true
 	}
@@ -306,11 +314,13 @@ func (l *List) scrollRequests() {
 		top := float64(l.padT) + float64(r)*float64(l.rowH)
 		bottom := top + float64(l.rowH)
 		_, sy := c.Scroll(l.s)
+		_, stretch := c.ScrollStretch(l.s)
+		shown := sy + stretch // a trackpad's stretch moves the rows too
 		var target float64
 		switch {
-		case top < sy:
+		case top < shown:
 			target = top
-		case bottom > sy+view:
+		case bottom > shown+view:
 			target = bottom - view
 		default:
 			return
@@ -334,7 +344,7 @@ func (l *List) hoverFrom(ps ui.Signal) {
 // rowAt is the display row at y pixels from the top of the list box, -1 if
 // none.
 func (l *List) rowAt(y float32) int {
-	f := math.Floor((float64(y-l.padT) + l.st.shown) / float64(l.rowH))
+	f := math.Floor((float64(y-l.padT) + l.st.disp) / float64(l.rowH))
 	if f < 0 || f >= float64(l.Rows) {
 		return -1
 	}
@@ -693,17 +703,18 @@ func (l *List) PadX() float32 { return l.padX }
 // PadY is the room in pixels above the first row and below the last.
 func (l *List) PadY() float32 { return l.padT }
 
-// FillerRows is how many rows' worth of room the view has below the last
+// FillerRows is how many rows' worth of room the view shows below the last
 // row, as of the last frame: none unless the last row is built in this
 // frame. A recipe that stripes its rows, as AppKit's alternating rows do,
 // stripes this room too, building as many row-high boxes after the last row.
+// A trackpad's stretch past the bottom shows more of it.
 func (l *List) FillerRows() int {
 	if l.Last < l.Rows || l.rowH <= 0 {
 		return 0
 	}
 	r := l.k.c.Rect(l.s)
 	view := r[3] - r[1] - l.padT
-	used := float32(l.Rows)*l.rowH - float32(l.st.shown)
+	used := float32(l.Rows)*l.rowH - float32(l.st.disp)
 	if view <= used {
 		return 0
 	}

@@ -411,6 +411,11 @@ static NSImage *sym(NSString *n) { return [NSImage imageWithSystemSymbolName:n a
 }
 @end
 
+// listScrollers is the scroller style of the lists' scroll views: overlay in
+// the offscreen renders (AppKit's at rest, hidden), the system's in -live.
+static BOOL gLiveLists;
+static NSScrollerStyle listScrollers(void) { return gLiveLists ? NSScroller.preferredScrollerStyle : NSScrollerStyleOverlay; }
+
 static NSScrollView *tableIn(NSTableViewStyle style, BOOL alternating, NSSize size, BOOL emph, BOOL fit) {
 	NSScrollView *sv = [[NSScrollView alloc] initWithFrame:(NSRect){NSZeroPoint, size}];
 	NSTableView *tv = [[NSTableView alloc] initWithFrame:sv.bounds];
@@ -438,7 +443,7 @@ static NSScrollView *tableIn(NSTableViewStyle style, BOOL alternating, NSSize si
 	tv.delegate = td;
 	sv.documentView = tv;
 	sv.hasVerticalScroller = YES;
-	sv.scrollerStyle = NSScrollerStyleOverlay; // the system's preferred style, which reserves no room
+	sv.scrollerStyle = listScrollers();
 	sv.borderType = NSBezelBorder;
 	[tv reloadData];
 	[tv selectRowIndexes:[NSIndexSet indexSetWithIndexesInRange:NSMakeRange(2, 2)] byExtendingSelection:NO];
@@ -493,7 +498,7 @@ static NSScrollView *outlineIn(NSTableViewStyle style, BOOL alternating, NSSize 
 	ov.delegate = td;
 	sv.documentView = ov;
 	sv.hasVerticalScroller = YES;
-	sv.scrollerStyle = NSScrollerStyleOverlay;
+	sv.scrollerStyle = listScrollers();
 	sv.borderType = NSBezelBorder;
 	[ov reloadData];
 	[ov sizeLastColumnToFit];
@@ -1915,7 +1920,7 @@ int main(int argc, const char **argv) {
 			if (!strcmp(argv[i], "-o") && i + 1 < argc) outDir = [NSString stringWithUTF8String:argv[++i]];
 			else if (!strcmp(argv[i], "-sheet") && i + 2 < argc)
 				return pairSheet([NSString stringWithUTF8String:argv[i + 1]], [NSString stringWithUTF8String:argv[i + 2]]);
-			else if (!strcmp(argv[i], "-live") && i + 1 < argc) live = [NSString stringWithUTF8String:argv[++i]];
+			else if (!strcmp(argv[i], "-live") && i + 1 < argc) live = [NSString stringWithUTF8String:argv[++i]], gLiveLists = YES;
 			else if (!strcmp(argv[i], "-mode") && i + 1 < argc) liveAp = strcmp(argv[++i], "dark") ? NSAppearanceNameAqua : NSAppearanceNameDarkAqua;
 			else if (!strcmp(argv[i], "-seconds") && i + 1 < argc) seconds = atof(argv[++i]);
 			else if (!strcmp(argv[i], "-width") && i + 1 < argc) maxW = atof(argv[++i]);

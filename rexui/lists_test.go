@@ -118,12 +118,93 @@ func TestOutlineExpandsAndCollapses(t *testing.T) {
 	}
 }
 
+// stretchTop pulls the view past its top with a trackpad, the fingers still
+// down, by more than a row; it returns the stretch.
+func stretchTop(t *testing.T, g *rig, list ui.Key, rowPx float32) float64 {
+	t.Helper()
+	g.in.MouseX, g.in.MouseY = 200, 150
+	g.in.AddScrollEvent(ui.ScrollEvent{Phase: ui.PhaseMayBegin, Precise: true})
+	g.frame()
+	for i := 0; i < 30; i++ {
+		p := ui.PhaseChanged
+		if i == 0 {
+			p = ui.PhaseBegan
+		}
+		g.in.AddScrollEvent(ui.ScrollEvent{DY: 40, Phase: p, Precise: true})
+		g.frame()
+	}
+	id, _ := g.c.BoxOf(list)
+	_, s := g.c.ScrollStretch(id)
+	if -s < float64(rowPx) {
+		t.Fatalf("stretch %v: not past a row", s)
+	}
+	return s
+}
+
+// groups is a tree of n collapsed groups of two leaves each: display row r
+// shows group node 3r.
+func groups(n int) (size []uint32, depth []uint16) {
+	for range n {
+		size = append(size, 3, 1, 1)
+		depth = append(depth, 0, 1, 1)
+	}
+	return
+}
+
+// While a trackpad stretches an outline past its top, a click on a
+// disclosure as shown expands that row's node, and the keys reveal the
+// cursor's row where the stretch shows it.
+func TestStretchedOutline(t *testing.T) {
+	v := newOutlineView(groups(30))
+	v.st.Sel.Only(0)
+	g := newRig(t, theme.Light, nil, v.build)
+	g.c.SetFocus(v.ol.Key())
+	g.settle()
+	rowPx := v.st.RowPx()
+	stretchTop(t, g, v.ol.Key(), rowPx)
+	top := g.c.RectOf(v.ol.Key())[1]
+	if v.st.RowTop(3) < v.st.PadPx()+4*rowPx {
+		t.Fatalf("row 3 shows at %v: the stretch does not move it a row down", v.st.RowTop(3))
+	}
+	g.click(17, top+v.st.RowTop(3)+rowPx/2) // row 3's disclosure, as shown
+	if !v.st.Expanded(9) {
+		for n := uint32(0); n < 90; n += 3 {
+			if v.st.Expanded(n) {
+				t.Fatalf("clicked row 3's disclosure as shown, expanded node %d", n)
+			}
+		}
+		t.Fatal("clicked row 3's disclosure as shown, nothing expanded")
+	}
+	if got := v.selected(); !slices.Equal(got, []uint32{0}) {
+		t.Fatalf("the disclosure click changed the selection to %v", got)
+	}
+
+	// the last row the offset shows whole, which the stretch pushes out
+	r := g.c.RectOf(v.ol.Key())
+	view := r[3] - r[1]
+	row := int((view-v.st.PadPx())/rowPx) - 1
+	if b := v.st.RowTop(row) + rowPx; b <= view {
+		t.Fatalf("row %d ends at %v in a %v view: the stretch does not hide it", row, b, view)
+	}
+	v.st.Sel.Only(v.st.Rows()[row-1])
+	v.st.Sel.SetCursor(v.st.Rows()[row-1])
+	g.key(ui.KeyDown, 0)
+	g.frames(30) // the fingers stay down
+	if got := v.selected(); !slices.Equal(got, []uint32{v.st.Rows()[row]}) {
+		t.Fatalf("Down selected %v, want row %d's node %d", got, row, v.st.Rows()[row])
+	}
+	if top := v.st.RowTop(row); top < 0 || top+rowPx > view+0.5 {
+		t.Fatalf("row %d shows at %v–%v in a %v view", row, top, top+rowPx, view)
+	}
+}
+
 // listView is a list of n rows with rows 1 and 2 selected, in style s, in a
 // 300 × 240 pt box at the window's top left.
 type listView struct {
 	st    base.ListState
 	style rexui.ListStyle
 	n     int
+	key   ui.Key // the list's, as of the last frame
 }
 
 func (v *listView) build(g *rig) {
@@ -136,6 +217,7 @@ func (v *listView) build(g *rig) {
 		l.Row(r, v.st.Item(r), nil)
 		rexui.LabelBytes(k, []byte("note"), rexui.LabelOpts{Color: l.Text()})
 	}
+	v.key = l.Key()
 	rexui.EndList(k, &l)
 	c.Pop()
 }
@@ -290,4 +372,43 @@ func TestBigOutline(t *testing.T) {
 	t0 := time.Now()
 	g.frame()
 	t.Logf("a frame that reorders a million rows: %v", time.Since(t0))
+}
+
+// With the system's legacy scrollers ("Show scroll bars: Always") a list
+// that overflows shows its bar at rest, in room beside its rows; with
+// overlay scrollers the bar is hidden at rest and the rows take the width.
+func TestListFollowsScrollerStyle(t *testing.T) {
+	v := &listView{n: 40, style: rexui.ListFullWidth}
+	v.st.Sel.Reserve(v.n)
+	legacy := theme.SystemValues{Known: true, Settings: theme.Settings{Scroller: theme.ScrollerLegacy}}
+	g := newRig(t, theme.Light, &legacy, v.build)
+	rowWidth := func() (w float32, bar bool) {
+		r := g.k.Theme()
+		for _, q := range g.list.Quads {
+			if q.Mode != gpu.ModeShape || q.Color[0]&0xFF == 0 {
+				continue
+			}
+			if c := q.Color[0] >> 8; c == r.Pal.ScrollThumb>>8 || c == rexui.ListLook.LegacyKnob.RGBA(r)>>8 {
+				bar = true
+			}
+		}
+		rect := g.c.RectOf(v.key)
+		return rect[2] - rect[0], bar
+	}
+	g.frames(90)
+	g.settle()
+	wl, bar := rowWidth()
+	if !bar {
+		t.Fatal("legacy scrollers: no bar at rest")
+	}
+	g.k.PinSystem(&theme.SystemValues{Known: true})
+	g.frames(90)
+	g.settle()
+	wo, bar := rowWidth()
+	if bar {
+		t.Fatal("overlay scrollers: a bar at rest")
+	}
+	if bw := theme.Snap(g.k.Theme().Px.ScrollbarW); wo-wl != bw {
+		t.Fatalf("the rows are %v wide beside a legacy bar and %v without, want %v less", wl, wo, bw)
+	}
 }

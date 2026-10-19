@@ -109,6 +109,12 @@ type ListRecipe struct {
 	// Rounded says the selection and the stripes have the theme's selection
 	// radius (Radii.Selection, 8), per style.
 	Rounded [NumListStyles]bool
+	// LegacyKnob colours a legacy scroll bar's knob, an opaque grey on the
+	// list's background (measured #7A7A7A on white, #9F9F9F on #1E1E1E), and
+	// LegacyKnobInset is the room between it and the track's sides, in
+	// points (3 of AppKit's 17-pt scroller).
+	LegacyKnob      Tint
+	LegacyKnobInset float32
 }
 
 // ListLook is the recipe of lists, tables and outlines.
@@ -122,6 +128,7 @@ var ListLook = ListRecipe{
 	PadY:       [NumListStyles]float32{ListFullWidth: 0, ListInset: 10},
 	HeaderPadY: [NumListStyles]float32{ListFullWidth: 0, ListInset: 5},
 	Rounded:    [NumListStyles]bool{ListInset: true},
+	LegacyKnob: OfAlpha(theme.Text, 0.52, 0.58), LegacyKnobInset: 3,
 }
 
 // List is an open list: base's List and the look of its rows.
@@ -312,19 +319,21 @@ func (l *List) Empty(msg []byte) {
 }
 
 // EndList ends the list: the stripes below the last row, the rows, the
-// overlay scroll bar, and the list.
+// scroll bar, and the list.
 func EndList(k *base.Kit, l *List) {
 	l.Filler()
 	l.CloseRows()
 	v := l.ScrollView()
-	OverlayBars(k, &v)
+	ScrollBars(k, &v)
 	k.CloseList(&l.List)
 }
 
-// OverlayBars builds the overlay scroll bars of the view whose outer box is the
-// current parent (after its content is closed): a thin knob that thickens
-// under the pointer and fades when the view rests.
-func OverlayBars(k *base.Kit, v *base.ScrollView) {
+// ScrollBars builds the scroll bars of the view whose outer box is the
+// current parent (after its content is closed), of the system's style: a thin
+// knob that thickens under the pointer, over the content and fading when the
+// view rests (overlay), or always shown in the room the view left beside its
+// content (legacy, "Show scroll bars: Always").
+func ScrollBars(k *base.Kit, v *base.ScrollView) {
 	c, r := k.Context(), k.Theme()
 	px := &r.Px
 	bars := k.ScrollBars(v)
@@ -337,20 +346,30 @@ func OverlayBars(k *base.Kit, v *base.ScrollView) {
 		if a == 0 {
 			bw = b.H
 		}
-		if c.Input().Time == 0 {
+		if !b.Legacy && c.Input().Time == 0 {
 			// a frame without a clock (an offscreen render, a test) shows the
 			// view at rest, where AppKit's overlay scrollers are hidden
 			continue
 		}
 		k.BeginScrollBar(b)
+		// overlay: a thin translucent knob near the edge that thickens under
+		// the pointer; legacy: an opaque one filling the track but for an
+		// inset each side
 		tw := theme.Snap(px.ScrollThumbW * (1 + b.Hot))
 		in := theme.Snap(px.BorderW * 2)
+		col := theme.WithAlpha(r.Pal.ScrollThumb, b.Show)
+		if b.Legacy {
+			in = theme.Snap(k.Pt(ListLook.LegacyKnobInset))
+			tw = max(bw-2*in, theme.Snap(px.ScrollThumbW))
+			in = (bw - tw) / 2
+			col = ListLook.LegacyKnob.RGBA(r)
+		}
 		if a == 1 {
 			theme.At(c, bw-tw-in, b.ThumbOff, tw, b.ThumbLen)
 		} else {
 			theme.At(c, b.ThumbOff, bw-tw-in, b.ThumbLen, tw)
 		}
-		c.NextBG(theme.WithAlpha(r.Pal.ScrollThumb, b.Show))
+		c.NextBG(col)
 		c.NextRadius(tw / 2)
 		c.BoxKeyed(ui.DrawBackground|base.Floating, ui.KeyN(b.Key, 1), nil)
 		c.Pop()
