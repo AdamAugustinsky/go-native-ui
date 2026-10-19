@@ -70,3 +70,43 @@ func TestFreeTextureReuse(t *testing.T) {
 		t.Errorf("after the frames finished: %d live, %d retiring; want %d live, 0 retiring", live, retiring, live0+len(held)-1)
 	}
 }
+
+// TestFreeTextureAfterDestroy: an owner that outlives the renderer (an image
+// cache closed after its window) may still free its ids.
+func TestFreeTextureAfterDestroy(t *testing.T) {
+	r := newTestRenderer(t)
+	a := texel(r, 1, 2, 3, 255)
+	r.Destroy()
+	r.FreeTexture(a)
+	r.Upload(a, 0, 0, 1, 1, []byte{1, 2, 3, 4}, 4)
+	if live, retiring := r.TextureCounts(); live != 0 || retiring != 0 {
+		t.Fatalf("%d live, %d retiring after Destroy", live, retiring)
+	}
+}
+
+// TestStage: a staged copy shows from the next frame on; the caller's pixels
+// may change as soon as Stage returns; a copy into a texture freed before
+// that frame is dropped; copies into one texture land in order.
+func TestStage(t *testing.T) {
+	r := newTestRenderer(t)
+	page := r.NewTexture(TexRGBA8, 4, 1)
+	r.Upload(page, 0, 0, 4, 1, make([]byte, 16), 16)
+	quad := func(x float32, u float32) Quad {
+		q := rgbaQuad(x, page)
+		q.UV = [4]float32{u, 0, u + 1, 1}
+		return q
+	}
+	render(r, 4, 1, black, quad(0, 0)) // a frame samples the page
+	px := []byte{255, 0, 0, 255, 0, 255, 0, 255}
+	r.Stage(page, 1, 0, 2, 1, px, 8)
+	px[0], px[4] = 0, 0 // changed after Stage: not seen
+	r.Stage(page, 2, 0, 1, 1, []byte{0, 0, 255, 255}, 4)
+	gone := texel(r, 9, 9, 9, 255)
+	r.Stage(gone, 0, 0, 1, 1, []byte{1, 1, 1, 255}, 4)
+	r.FreeTexture(gone)
+	m := render(r, 4, 1, black, quad(0, 0), quad(1, 1), quad(2, 2), quad(3, 3))
+	near(t, "untouched", m.at(0, 0), [4]int{0, 0, 0, 255}, 0)
+	near(t, "staged", m.at(1, 0), [4]int{255, 0, 0, 255}, 1)
+	near(t, "staged later over it", m.at(2, 0), [4]int{0, 0, 255, 255}, 1)
+	near(t, "untouched", m.at(3, 0), [4]int{0, 0, 0, 255}, 0)
+}

@@ -73,10 +73,13 @@ import (
 )
 
 // Renderer is the part of gpu.Renderer the cache draws with; every OS
-// backend's *gpu.Renderer satisfies it.
+// backend's *gpu.Renderer satisfies it. Images go into atlas pages that
+// frames in flight sample with Stage (GPU-ordered, no wait), and into new
+// textures of their own with Upload.
 type Renderer interface {
 	NewTexture(kind gpu.TextureKind, w, h int) gpu.TextureID
 	Upload(t gpu.TextureID, x, y, w, h int, pixels []byte, stride int)
+	Stage(t gpu.TextureID, x, y, w, h int, pixels []byte, stride int)
 	FreeTexture(t gpu.TextureID)
 }
 

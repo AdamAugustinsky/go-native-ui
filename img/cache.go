@@ -380,7 +380,7 @@ func (c *Cache) upload(i int32) bool {
 			return false
 		}
 		e.page, e.shelf, e.ax, e.ay, e.tex = int32(p), int32(sh), x, y, c.pages[p].tex
-		c.r.Upload(e.tex, int(x), int(y), int(bw), int(bh), pix, int(bw*4))
+		c.r.Stage(e.tex, int(x), int(y), int(bw), int(bh), pix, int(bw*4))
 	} else {
 		need := int64(bw) * int64(bh) * 4
 		c.makeRoom(i, need)

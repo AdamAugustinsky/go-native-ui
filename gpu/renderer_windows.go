@@ -682,6 +682,13 @@ func (r *Renderer) Upload(t TextureID, x, y, w, h int, pixels []byte, stride int
 	runtime.KeepAlive(pixels)
 }
 
+// Stage is Upload: UpdateSubresource is already ordered with the frames in flight,
+// which keep reading the old contents, and does not wait for them. (On Metal
+// Stage defers the copy to the next Encode to get the same ordering.)
+func (r *Renderer) Stage(t TextureID, x, y, w, h int, pixels []byte, stride int) {
+	r.Upload(t, x, y, w, h, pixels, stride)
+}
+
 // Encode records one render pass on cmdBuf (the ID3D11DeviceContext): it
 // binds target (an ID3D11RenderTargetView of a BGRA8 UNORM texture), clears
 // it to clear and draws list. The caller presents afterwards. cmdBuf must be
@@ -884,6 +891,7 @@ func (r *Renderer) Destroy() {
 		r.fences[i].query = 0
 	}
 	r.textures, r.srvs, r.kinds, r.texW, r.texH, r.retiring = nil, nil, nil, nil, nil, nil
+	r.ids = texTable{} // ids freed after Destroy resolve to nothing
 	for _, p := range [...]*uintptr{&r.offRTV, &r.offTex, &r.staging, &r.vb, &r.cbuf, &r.sampler, &r.rast, &r.blend, &r.layout, &r.ps, &r.vs, &r.emptySRV, &r.emptyTex} {
 		win32.Release(*p)
 		*p = 0

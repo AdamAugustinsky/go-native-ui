@@ -83,6 +83,8 @@ var (
 	rsGetBytes     = objc.Sel("getBytes:bytesPerRow:fromRegion:mipmapLevel:")
 	rsLocalizedErr = objc.Sel("localizedDescription")
 	rsNewQueue     = objc.Sel("newCommandQueue")
+	rsBlitEncoder  = objc.Sel("blitCommandEncoder")
+	rsCopyBufTex   = objc.Sel("copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:")
 
 	metalOnce       sync.Once
 	metalErr        error
@@ -97,6 +99,8 @@ var (
 	regionWords [6]uintptr // MTLRegion for arm64 (passed by reference)
 	viewportArg [2]float32 // vertex buffer 1
 	pinnedBytes *byte      // keeps an Upload source on the heap for the duration of the call
+	copySize    [3]uintptr // MTLSize and MTLOrigin of a staged copy, for arm64 (passed by reference)
+	copyOrigin  [3]uintptr
 )
 
 func loadMetal() error {
@@ -124,6 +128,23 @@ type ringSlot struct {
 	quads  int            // capacity in quads
 	cb     objc.ID        // retained command buffer that last read buf
 	serial uint64         // the frame encoded into the slot (Renderer.serial)
+
+	// Stage's copies for the slot's next frame: their pixels in the staging
+	// buffer, written by a blit in ucb, which Encode commits ahead of the
+	// frame. The staging buffer is reused once ucb has completed.
+	stage    objc.ID
+	stageMem unsafe.Pointer
+	stageCap int
+	stageLen int
+	copies   []stagedCopy
+	ucb      objc.ID
+}
+
+// stagedCopy is one Stage call waiting for the next Encode.
+type stagedCopy struct {
+	tex             TextureID
+	off, bpr        int
+	x, y, w, h, bpp int
 }
 
 // retiredTex is a freed texture waiting for the frames that may sample it.
@@ -332,15 +353,18 @@ func (r *Renderer) collect() {
 	pending := r.serial + 1 // the oldest frame still to finish
 	for i := range r.slots {
 		s := &r.slots[i]
-		if s.cb == 0 {
-			continue
+		if s.ucb != 0 && objc.Send(s.ucb, rsStatus) >= 4 { // Completed, Error
+			objc.Release(s.ucb)
+			s.ucb = 0
+			s.stageLen = 0
 		}
-		if st := objc.Send(s.cb, rsStatus); st >= 4 { // Completed, Error
+		if s.cb != 0 && objc.Send(s.cb, rsStatus) >= 4 {
 			objc.Release(s.cb)
 			s.cb = 0
-			continue
 		}
-		pending = min(pending, s.serial)
+		if s.cb != 0 || s.ucb != 0 {
+			pending = min(pending, s.serial)
+		}
 	}
 	n := 0
 	for _, x := range r.retiring {
@@ -405,6 +429,100 @@ func (r *Renderer) Upload(t TextureID, x, y, w, h int, pixels []byte, stride int
 	runtime.KeepAlive(pixels)
 }
 
+// Stage copies a w×h block of pixels into texture t at (x, y), like Upload,
+// in GPU order and without waiting for the GPU: the pixels are copied now
+// into a staging buffer of the next ring slot (pixels may change as soon as
+// Stage returns), and the next Encode commits a blit of them into the
+// texture ahead of its frame, so the frames already submitted keep sampling
+// the old contents and that frame and every later one see the new. Use it to
+// fill part of a texture that frames in flight sample (an atlas page);
+// Upload, which waits for those frames, suits a texture no frame has used.
+// An id freed before the next Encode is skipped. The staging buffer grows to
+// the most bytes staged for one frame (one per ring slot); it is Metal
+// memory, not Go heap.
+func (r *Renderer) Stage(t TextureID, x, y, w, h int, pixels []byte, stride int) {
+	if w <= 0 || h <= 0 {
+		return
+	}
+	i, ok := r.ids.lookup(t)
+	if !ok {
+		return
+	}
+	bpp := 1
+	if r.kinds[i] == TexRGBA8 {
+		bpp = 4
+	}
+	if stride < w*bpp || len(pixels) < (h-1)*stride+w*bpp {
+		panic("gpu: Stage: pixels too short for region")
+	}
+	s := &r.slots[r.next]
+	r.retire(s) // the slot's last frame and upload are done with its staging buffer (Encode waits for the same)
+	row := w * bpp
+	off := (s.stageLen + 15) &^ 15
+	if off+row*h > s.stageCap {
+		r.growStage(s, off+row*h)
+	}
+	dst := unsafe.Slice((*byte)(unsafe.Add(s.stageMem, off)), row*h)
+	for y := 0; y < h; y++ {
+		copy(dst[y*row:(y+1)*row], pixels[y*stride:])
+	}
+	s.stageLen = off + row*h
+	s.copies = append(s.copies, stagedCopy{t, off, row, x, y, w, h, bpp})
+}
+
+// growStage gives slot s a staging buffer of at least n bytes, keeping what
+// is staged in it. The slot is retired: no GPU work reads the old one.
+func (r *Renderer) growStage(s *ringSlot, n int) {
+	size := max(n, 2*s.stageCap, 1<<20)
+	buf := objc.Send2(r.device, rsNewBuffer, uintptr(size), 0) // MTLResourceStorageModeShared
+	if buf == 0 {
+		panic("gpu: staging buffer allocation failed")
+	}
+	mem := ffi.PtrFromC(uintptr(objc.Send(buf, rsContents)))
+	if s.stage != 0 {
+		copy(unsafe.Slice((*byte)(mem), s.stageLen), unsafe.Slice((*byte)(s.stageMem), s.stageLen))
+		objc.Release(s.stage)
+	}
+	s.stage, s.stageMem, s.stageCap = buf, mem, size
+}
+
+// flushStaged commits slot s's staged copies in a command buffer of their
+// own, ahead of the frame being encoded (the queue runs command buffers in
+// commit order, and Metal orders the blit's writes after the reads of the
+// frames committed before it).
+func (r *Renderer) flushStaged(s *ringSlot) {
+	if len(s.copies) == 0 {
+		return
+	}
+	F := objc.F
+	pool := F.Call0(objc.PoolPush)
+	ucb := objc.Retain(objc.Send(r.queue, rsCommandBuf))
+	blit := objc.Send(ucb, rsBlitEncoder)
+	for _, c := range s.copies {
+		k, ok := r.ids.lookup(c.tex)
+		if !ok {
+			continue // freed since it was staged
+		}
+		r.lastUse[k] = r.serial // an Upload into it waits for this blit
+		F.Reset().Arg(uintptr(blit)).Arg(uintptr(rsCopyBufTex)).Arg(uintptr(s.stage)).Arg(uintptr(c.off)).
+			Arg(uintptr(c.bpr)).Arg(uintptr(c.bpr * c.h))
+		if runtime.GOARCH == "arm64" { // MTLSize and MTLOrigin (24 bytes) by reference
+			copySize, copyOrigin = [3]uintptr{uintptr(c.w), uintptr(c.h), 1}, [3]uintptr{uintptr(c.x), uintptr(c.y), 0}
+			F.Arg(uintptr(unsafe.Pointer(&copySize))).Arg(uintptr(r.textures[k])).Arg(0).Arg(0).
+				Arg(uintptr(unsafe.Pointer(&copyOrigin)))
+		} else { // amd64: the integer registers are used up, so every word goes to the stack in order
+			F.Arg(uintptr(c.w)).Arg(uintptr(c.h)).Arg(1).Arg(uintptr(r.textures[k])).Arg(0).Arg(0).
+				Arg(uintptr(c.x)).Arg(uintptr(c.y)).Arg(0)
+		}
+		F.Call(objc.MsgSend)
+	}
+	objc.Send(blit, rsEndEncoding)
+	objc.Send(ucb, rsCommit)
+	F.Call1(objc.PoolPop, pool)
+	s.ucb = ucb
+	s.copies = s.copies[:0]
+}
+
 // waitSubmitted waits for the committed command buffers of frames from
 // serial since on, which may still read a texture that frame since last
 // bound; since 0 (never bound) waits for nothing, so filling a new texture
@@ -416,9 +534,14 @@ func (r *Renderer) waitSubmitted(since uint64) {
 	}
 	for i := range r.slots {
 		s := &r.slots[i]
-		if s.cb != 0 && s.serial >= since {
-			if st := objc.Send(s.cb, rsStatus); st >= 2 && st < 4 { // Committed, Scheduled
-				objc.Send(s.cb, rsWait)
+		if s.serial < since {
+			continue
+		}
+		for _, cb := range [2]objc.ID{s.ucb, s.cb} {
+			if cb != 0 {
+				if st := objc.Send(cb, rsStatus); st >= 2 && st < 4 { // Committed, Scheduled
+					objc.Send(cb, rsWait)
+				}
 			}
 		}
 	}
@@ -446,12 +569,20 @@ func (r *Renderer) growSlot(s *ringSlot, quads int) error {
 	return nil
 }
 
-// retire waits until the GPU has finished reading slot s (if its command
-// buffer was committed) and drops the reference. Waiting on the command
-// buffer's status needs no completion handler, so no callbacks and no Go
-// allocation. A command buffer that was never committed is dropped without
-// waiting.
-func (s *ringSlot) retire() {
+// retire waits until the GPU has finished reading slot s (its frame's
+// command buffer if it was committed, and its staged upload) and drops the
+// references. Waiting on a command buffer's status needs no completion
+// handler, so no callbacks and no Go allocation. A command buffer that was
+// never committed is dropped without waiting.
+func (r *Renderer) retire(s *ringSlot) {
+	if s.ucb != 0 { // committed by flushStaged
+		if st := objc.Send(s.ucb, rsStatus); st >= 2 && st < 4 {
+			objc.Send(s.ucb, rsWait)
+		}
+		objc.Release(s.ucb)
+		s.ucb = 0
+		s.stageLen = 0
+	}
 	if s.cb == 0 {
 		return
 	}
@@ -486,12 +617,13 @@ func (r *Renderer) Encode(cmdBuf, target uintptr, width, height int, clear [4]fl
 	if r.next++; r.next == ringSlots {
 		r.next = 0
 	}
-	s.retire()
+	r.retire(s)
 	r.serial++
 	s.serial = r.serial
 	if len(r.retiring) > 0 {
 		r.collect()
 	}
+	r.flushStaged(s)
 	var quads []Quad
 	if list != nil {
 		quads = list.Quads
@@ -628,11 +760,16 @@ func (r *Renderer) Destroy() {
 	r.destroyed = true
 	for i := range r.slots {
 		s := &r.slots[i]
-		s.retire()
+		r.retire(s)
 		if s.buf != 0 {
 			objc.Release(s.buf)
 			s.buf = 0
 		}
+		if s.stage != 0 {
+			objc.Release(s.stage)
+			s.stage, s.stageMem, s.stageCap, s.stageLen = 0, nil, 0, 0
+		}
+		s.copies = nil
 	}
 	for _, t := range r.textures {
 		if t != 0 {
@@ -642,7 +779,7 @@ func (r *Renderer) Destroy() {
 	for _, x := range r.retiring {
 		objc.Release(x.tex)
 	}
-	r.textures, r.retiring = nil, nil
+	r.textures, r.retiring, r.ids = nil, nil, texTable{} // ids freed after Destroy resolve to nothing
 	for _, o := range []objc.ID{r.offscreen, r.pipeline, r.sampler, r.rpd, r.empty} {
 		if o != 0 {
 			objc.Release(o)

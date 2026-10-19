@@ -524,3 +524,20 @@ func TestUploadToFreshTextureDoesNotWait(t *testing.T) {
 		t.Fatalf("command buffer status %d after an upload into a texture it samples, want completed", st)
 	}
 }
+
+// TestStageSurvivesUncommittedFrame: staged copies go in a command buffer of
+// their own, committed by Encode, so a frame that is never committed does not
+// lose them.
+func TestStageSurvivesUncommittedFrame(t *testing.T) {
+	r := newTestRenderer(t)
+	r.newTarget(1, 1)
+	tex := texel(r, 0, 0, 0, 255)
+	render(r, 1, 1, black, rgbaQuad(0, tex))
+	r.Stage(tex, 0, 0, 1, 1, []byte{0, 200, 0, 255}, 4)
+	F := objc.F
+	pool := F.Call0(objc.PoolPush)
+	cb := objc.Send(r.queue, rsCommandBuf)
+	r.Encode(uintptr(cb), uintptr(r.offscreen), 1, 1, black, &DrawList{Quads: []Quad{rgbaQuad(0, tex)}})
+	F.Call1(objc.PoolPop, pool) // never committed
+	near(t, "after an uncommitted frame", render(r, 1, 1, black, rgbaQuad(0, tex)).at(0, 0), [4]int{0, 200, 0, 255}, 1)
+}

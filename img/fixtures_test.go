@@ -164,6 +164,10 @@ func (g *fakeGPU) Upload(t gpu.TextureID, x, y, w, h int, pixels []byte, stride 
 	g.upBytes += int64(w * h * 4)
 }
 
+func (g *fakeGPU) Stage(t gpu.TextureID, x, y, w, h int, pixels []byte, stride int) {
+	g.Upload(t, x, y, w, h, pixels, stride)
+}
+
 func (g *fakeGPU) FreeTexture(t gpu.TextureID) {
 	if !g.tex[t].live {
 		panic("double free")

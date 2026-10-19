@@ -633,6 +633,13 @@ func (r *Renderer) uploadInstances(s *ringSlot, quads []Quad) {
 	fr.Reset().Arg32(glArrayBuffer).Arg(0).Arg(uintptr(n)).ArgPtr(unsafe.Pointer(&r.stage[0])).Call(glx.bufferSubData)
 }
 
+// Stage is Upload: glTexSubImage2D is already ordered with the frames in flight,
+// which keep reading the old contents, and does not wait for them. (On Metal
+// Stage defers the copy to the next Encode to get the same ordering.)
+func (r *Renderer) Stage(t TextureID, x, y, w, h int, pixels []byte, stride int) {
+	r.Upload(t, x, y, w, h, pixels, stride)
+}
+
 // Encode records one render pass: it clears target (a framebuffer object
 // name; 0 is the default framebuffer, which Surface.BeginFrame provides) to
 // clear, then draws list. cmdBuf is unused (OpenGL has no command buffers;
@@ -836,7 +843,7 @@ func (r *Renderer) Destroy() {
 			fr.Call1(glx.deleteProgram, uintptr(r.prog))
 		}
 	}
-	r.tex, r.kinds, r.retiring = nil, nil, nil
+	r.tex, r.kinds, r.retiring, r.ids = nil, nil, nil, texTable{} // ids freed after Destroy resolve to nothing
 	if r.ownsCtx {
 		r.releaseOffscreen()
 	}

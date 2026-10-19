@@ -5,9 +5,8 @@ import "gonativeui/gpu"
 // An atlas page is a square RGBA texture packed in shelves: rows of one height
 // class, allocated in columns of colW pixels tracked by a bitmap. A freed
 // region clears its bits at once and the next image of that height class
-// reuses them. Metal's Upload waits for the frames in flight that sample the
-// page, and Direct3D 11 and OpenGL order uploads with draws, so reusing a
-// region never changes what a submitted frame shows. An empty shelf at the
+// reuses them: images go in with gpu.Renderer.Stage, ordered after the frames
+// in flight, so reusing a region never changes what a submitted frame shows. An empty shelf at the
 // top of the page gives its height back; an empty page is freed.
 const (
 	pageSize  = 1024

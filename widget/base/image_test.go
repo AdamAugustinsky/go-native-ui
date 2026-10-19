@@ -21,6 +21,7 @@ func (r *texRenderer) NewTexture(gpu.TextureKind, int, int) gpu.TextureID {
 	return r.n + 100
 }
 func (r *texRenderer) Upload(gpu.TextureID, int, int, int, int, []byte, int) {}
+func (r *texRenderer) Stage(gpu.TextureID, int, int, int, int, []byte, int)  {}
 func (r *texRenderer) FreeTexture(gpu.TextureID)                             {}
 
 // TestImageFillAndSkeleton: a pending image shows a skeleton in the box; once
