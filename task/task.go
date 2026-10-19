@@ -184,6 +184,8 @@ type Pool[In, Out any] struct {
 	idle        []bool
 	parks       []*core.Parker
 	doneN       atomic.Int32 // len(done), readable without mu
+	refused     atomic.Bool  // a Keep was refused with ErrFull and no wake has been owed since
+	shut        atomic.Bool  // closed, readable without mu
 
 	wg sync.WaitGroup
 
@@ -395,15 +397,29 @@ func (p *Pool[In, Out]) Cancel(t Ticket) bool {
 		return false
 	}
 	p.mu.Lock()
-	defer p.mu.Unlock()
+	found := false
 	for i := range p.jobs {
 		j := &p.jobs[i]
 		if j.ticket == t && (j.state == stQueued || j.state == stRunning || j.state == stDone) {
 			p.drop(int32(i))
-			return true
+			found = true
+			break
 		}
 	}
-	return false
+	p.mu.Unlock()
+	if found {
+		p.capacityFreed()
+	}
+	return found
+}
+
+// capacityFreed wakes the loop once if a Keep was refused for want of room: the
+// declaration is retried only when a frame is built, and a cancelled job's
+// discarded completion wakes nobody. Called without p.mu held.
+func (p *Pool[In, Out]) capacityFreed() {
+	if p.refused.Load() && p.refused.CompareAndSwap(true, false) {
+		p.wake()
+	}
 }
 
 // CancelKey discards the job submitted with key, like Cancel. It reports
@@ -413,12 +429,15 @@ func (p *Pool[In, Out]) CancelKey(key uint64) bool {
 		return false
 	}
 	p.mu.Lock()
-	defer p.mu.Unlock()
-	if i := p.find(key); i != none {
+	i := p.find(key)
+	if i != none {
 		p.drop(i)
-		return true
 	}
-	return false
+	p.mu.Unlock()
+	if i != none {
+		p.capacityFreed()
+	}
+	return i != none
 }
 
 // Poll appends the finished jobs to dst, oldest first, and returns it; their
@@ -440,6 +459,7 @@ func (p *Pool[In, Out]) Poll(dst []Result[Out]) []Result[Out] {
 	p.done = list{none, none}
 	p.doneN.Store(0)
 	p.mu.Unlock()
+	p.capacityFreed()
 	return dst
 }
 
@@ -458,7 +478,9 @@ func (p *Pool[In, Out]) Pending() int {
 // lasts, do nothing, whether the work has finished or not, so one declaration
 // delivers one result. The input of a later call is ignored: give different
 // inputs different keys. It returns the work's ticket, or ErrFull (nothing is
-// recorded, so the next frame tries again), or ErrKey for key 0, or ErrClosed.
+// recorded, so a later frame tries again; the pool calls Options.Wake once when
+// room appears, by a Poll, Cancel or Sweep, so an app that builds frames only on
+// events does get that frame), or ErrKey for key 0, or ErrClosed.
 //
 // A key that is declared in one frame and not in the next is cancelled by the
 // Sweep at the end of that next frame; Keep and Sweep must be called from the
@@ -466,6 +488,9 @@ func (p *Pool[In, Out]) Pending() int {
 func (p *Pool[In, Out]) Keep(key uint64, in In) (Ticket, error) {
 	if key == 0 {
 		return 0, ErrKey
+	}
+	if p.shut.Load() {
+		return 0, ErrClosed
 	}
 	for i := range p.kept {
 		if k := &p.kept[i]; k.key == key {
@@ -475,6 +500,9 @@ func (p *Pool[In, Out]) Keep(key uint64, in In) (Ticket, error) {
 	}
 	t, err := p.Submit(in, key)
 	if err != nil {
+		if err == ErrFull {
+			p.refused.Store(true) // capacityFreed wakes the loop when room appears
+		}
 		return 0, err
 	}
 	p.kept = append(p.kept, kept{key: key, ticket: t, seen: true})
@@ -509,6 +537,7 @@ func (p *Pool[In, Out]) Close(wait time.Duration) bool {
 	p.mu.Lock()
 	if !p.closed {
 		p.closed = true
+		p.shut.Store(true)
 		for i := range p.jobs {
 			p.drop(int32(i))
 		}

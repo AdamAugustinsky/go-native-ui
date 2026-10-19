@@ -569,3 +569,62 @@ func TestOwnerZeroAlloc(t *testing.T) {
 		t.Errorf("mallocs per %d Submit/Poll cycles: %v, want a window after the first with 0", reps, deltas)
 	}
 }
+
+// A declaration refused for want of room must not wait for a frame nobody asks
+// for: freeing the room (here, Sweep cancelling the job that held it, whose
+// discarded completion wakes nobody) wakes the loop once, and the retry works.
+func TestRefusedKeepIsRetriedByAWakeWhenSweepFreesRoom(t *testing.T) {
+	var wakes atomic.Int32
+	g := newGated()
+	p := NewPool(Options{Workers: 1, Queue: 1, Wake: func() { wakes.Add(1) }}, g.fn)
+	defer p.Close(time.Second)
+	hold := make(chan struct{})
+	if _, err := p.Keep(1, req{N: 1, Hold: hold}); err != nil { // frame A
+		t.Fatal(err)
+	}
+	p.Sweep()
+	awaitStart(t, g, 1)
+	if _, err := p.Keep(2, req{N: 2}); !errors.Is(err, ErrFull) { // frame B declares B, not A
+		t.Fatalf("Keep(B): %v, want ErrFull", err)
+	}
+	if wakes.Load() != 0 {
+		t.Fatal("woken before any room appeared")
+	}
+	p.Sweep() // cancels A
+	waitFor(t, "the retry wake", func() bool { return wakes.Load() >= 1 })
+	time.Sleep(20 * time.Millisecond) // the cancelled job's worker returning adds none
+	if w := wakes.Load(); w != 1 {
+		t.Errorf("%d wakes, want exactly 1", w)
+	}
+	// The woken frame declares B again and it is accepted.
+	if _, err := p.Keep(2, req{N: 2}); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	p.Sweep()
+	awaitStart(t, g, 2)
+	pollAll(t, p, 1)
+	// No refusal pending: freeing room again owes no wake.
+	before := wakes.Load()
+	p.Keep(2, req{N: 2})
+	p.Sweep() // key 2 declared: stays
+	p.Sweep() // not declared this frame: cancelled
+	time.Sleep(10 * time.Millisecond)
+	if wakes.Load() != before {
+		t.Error("a wake without a refused declaration")
+	}
+}
+
+func TestKeepAfterCloseIsRefused(t *testing.T) {
+	p := NewPool(Options{Workers: 1}, func(Token, int) int { return 0 })
+	if _, err := p.Keep(1, 0); err != nil {
+		t.Fatal(err)
+	}
+	p.Sweep()
+	p.Close(time.Second)
+	if _, err := p.Keep(1, 0); !errors.Is(err, ErrClosed) { // the declaration is on record
+		t.Errorf("Keep of a recorded key after Close: %v", err)
+	}
+	if _, err := p.Keep(2, 0); !errors.Is(err, ErrClosed) {
+		t.Errorf("Keep of a new key after Close: %v", err)
+	}
+}
