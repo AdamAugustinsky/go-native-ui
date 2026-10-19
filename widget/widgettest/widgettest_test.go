@@ -199,3 +199,44 @@ func TestWaitChangeWaitsForThePaste(t *testing.T) {
 		t.Fatalf("a wait for a change that never comes gave %v", err)
 	}
 }
+
+// Where the system draws tooltips, a wait for one holds only for the tooltip
+// that wins under the pointer: its text is the name asked for. An empty name
+// takes any.
+func TestWaitForNativeTooltipChecksTheText(t *testing.T) {
+	r := widgettest.NewRig(t, widgettest.FakeOptions{Width: 300, Height: 200})
+	k := widget.NewKit(r.Context(), r.Text(), themeRex())
+	r.Run(builderFunc(func(c *ui.Context) {
+		k.Begin(c)
+		k.BeginWindow()
+		k.Row("r")
+		k.Tooltip(k.Button("One").ID, "first tip")
+		k.Tooltip(k.Button("Two").ID, "second tip")
+		k.EndRow()
+		k.EndWindow()
+		k.End()
+	}))
+	r.Context().SetNativeTooltips(true)
+	r.Frames(2)
+	p := r.Player()
+	run := func(steps ...widgettest.Step) error {
+		p.Load(steps...)
+		for i := 0; i < 80 && p.Err() == nil && !p.Done(); i++ {
+			r.Frame()
+		}
+		return p.Err()
+	}
+	if err := run(widgettest.Move(ui.RoleButton, "One"), widgettest.WaitFor(ui.RoleTooltip, "first tip").Within(100)); err != nil {
+		t.Errorf("the tooltip of the button under the pointer: %v", err)
+	}
+	if run(widgettest.Move(ui.RoleButton, "One"), widgettest.WaitFor(ui.RoleTooltip, "second tip").Within(100)) == nil {
+		t.Error("a wait for another button's tooltip text held")
+	}
+	if err := run(widgettest.Move(ui.RoleButton, "Two"), widgettest.WaitFor(ui.RoleTooltip, "").Within(100)); err != nil {
+		t.Errorf("a wait for any tooltip: %v", err)
+	}
+}
+
+type builderFunc func(*ui.Context)
+
+func (f builderFunc) Build(c *ui.Context) { f(c) }

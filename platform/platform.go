@@ -29,6 +29,10 @@
 //	(*Window).SetMenuBar(spec, state)     the application's native menu bar (menu.go; macOS; no-op elsewhere)
 //	(*Window).PopUpMenu(*Popup) int       a native context, pull-down or list menu; returns the chosen item (macOS; -1 elsewhere)
 //	HasNativeMenus() bool                 whether the OS has native menus (macOS)
+//	(*Window).Alert(AlertSpec), OpenPanel(OpenSpec), SavePanel(SaveSpec)
+//	                                      native alert and file panel sheets (macOS; ErrUnsupported elsewhere); the answer is an EvDialog, see dialog.go
+//	(*Window).SetTooltipRegions(r)        native tooltips by content rectangle (macOS; no-op elsewhere); diffed, cheap to call every frame
+//	(*Window).SetTooltipText(f)           where the tooltip text comes from, asked for on demand when the system shows one
 //	(*Window).Close()
 //	Clipboard() string                    plain UTF-8 text of the system clipboard; main thread
 //	SetClipboard(text string)             replace the clipboard with plain text; main thread
@@ -103,6 +107,7 @@ const (
 	EvFrame                   // the frame slot armed by RequestFrame is available
 	EvPaste                   // the answer to RequestPaste: Text (plain text), Tag; FlagFailed when there is none
 	EvCommand                 // a native button or menu item was chosen: Tag is its command id (NativeButton.ID, MenuItem.ID); with FlagStandard, a MenuAction
+	EvDialog                  // an alert or file panel ended: Tag is its DialogTicket; decode with Window.DialogResult (dialog.go)
 )
 
 // Flags qualify an Event.
@@ -255,7 +260,10 @@ type Options struct {
 	// Titlebar > 0 extends the content under a transparent titlebar band of
 	// that height in logical units; the app draws the band. The close
 	// button's centre goes to TrafficLights (logical units from the window's
-	// top-left), keeping the native button spacing. macOS only so far.
+	// top-left), keeping the native button spacing. macOS only so far, and
+	// where AppKit has the titlebar metrics for it (platform/lights_darwin.go);
+	// elsewhere the buttons stay at AppKit's default place, which
+	// Window.SystemButtons reports.
 	Titlebar      float32
 	TrafficLights [2]float32
 
