@@ -47,7 +47,6 @@ import (
 	"context"
 	"errors"
 	"runtime"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -187,7 +186,8 @@ type Pool[In, Out any] struct {
 	refused     atomic.Bool  // a Keep was refused with ErrFull and no wake has been owed since
 	shut        atomic.Bool  // closed, readable without mu
 
-	wg sync.WaitGroup
+	running atomic.Int32  // workers that have not returned
+	exited  chan struct{} // closed by the last worker to return
 
 	// Owner-only state of Keep and Sweep.
 	kept []kept
@@ -225,6 +225,8 @@ func NewPool[In, Out any](opt Options, fn func(Token, In) Out) *Pool[In, Out] {
 		idle:  make([]bool, opt.Workers),
 		parks: make([]*core.Parker, opt.Workers),
 		kept:  make([]kept, 0, 16),
+
+		exited: make(chan struct{}),
 	}
 	if p.wake == nil {
 		p.wake = func() {}
@@ -237,8 +239,8 @@ func NewPool[In, Out any](opt Options, fn func(Token, In) Out) *Pool[In, Out] {
 	for i := range p.parks {
 		p.parks[i] = core.NewParker()
 	}
+	p.running.Store(int32(opt.Workers))
 	for i := 0; i < opt.Workers; i++ {
-		p.wg.Add(1)
 		go p.worker(i)
 	}
 	return p
@@ -546,15 +548,20 @@ func (p *Pool[In, Out]) Close(wait time.Duration) bool {
 	for _, k := range p.parks {
 		k.Unpark()
 	}
-	finished := make(chan struct{})
-	go func() { p.wg.Wait(); close(finished) }()
-	t := time.NewTimer(wait)
-	defer t.Stop()
+	// Workers that have all returned are reported at once, however short
+	// the wait: a timer must not race them.
 	ok := false
 	select {
-	case <-finished:
+	case <-p.exited:
 		ok = true
-	case <-t.C:
+	default:
+		t := time.NewTimer(wait)
+		select {
+		case <-p.exited:
+			ok = true
+		case <-t.C:
+		}
+		t.Stop()
 	}
 	for _, k := range p.parks {
 		k.Close()
@@ -563,7 +570,11 @@ func (p *Pool[In, Out]) Close(wait time.Duration) bool {
 }
 
 func (p *Pool[In, Out]) worker(w int) {
-	defer p.wg.Done()
+	defer func() {
+		if p.running.Add(-1) == 0 {
+			close(p.exited)
+		}
+	}()
 	for {
 		p.mu.Lock()
 		if p.closed {
