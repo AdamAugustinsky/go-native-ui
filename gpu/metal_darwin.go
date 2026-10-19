@@ -158,9 +158,7 @@ type Frame struct {
 	Target uintptr // id<MTLTexture>: the drawable's texture, BGRA8Unorm
 	W, H   int     // target size in pixels
 
-	drawable objc.ID
-	taken    bool
-	pool     uintptr
+	drawable objc.ID // retained until EndFrame
 }
 
 // BeginFrame acquires the frame's drawable and a command buffer. It returns
@@ -168,13 +166,20 @@ type Frame struct {
 // layer (after the first frame) a drawable comes only with a frame tick, so
 // draw on EvFrame. Every successful BeginFrame must be followed by EndFrame
 // on the same thread.
+//
+// No autorelease pool stays open between BeginFrame and EndFrame: each
+// drains its own before it returns, and the frame keeps the drawable and the
+// command buffer by explicit retains. The app's code runs in between, and
+// whatever it does to the run loop and its pools (a nested run loop, a frame
+// drawn from inside it) cannot leave the frame holding a stale pool token.
 func (s *Surface) BeginFrame(f *Frame) bool {
 	F := objc.F
 	first := s.presented == 0
 	if first {
 		s.Trace.Start = platform.Now()
 	}
-	f.pool = F.Call0(objc.PoolPush)
+	pool := F.Call0(objc.PoolPush)
+	defer F.Call1(objc.PoolPop, pool)
 	// During a live resize the platform has no CAMetalDisplayLink (the layer
 	// would throw on nextDrawable) and the frame is presented inside the
 	// window's Core Animation transaction (see EndFrame).
@@ -188,17 +193,16 @@ func (s *Surface) BeginFrame(f *Frame) bool {
 	}
 	// A paced frame comes with its drawable (CAMetalDisplayLink); otherwise
 	// (first frame, unpaced) ask the layer, which may block.
-	d, linked := platform.TakeMetalDrawable()
-	f.drawable, f.taken = objc.ID(d), d != 0
-	if !f.taken && !linked {
+	d, linked := platform.TakeMetalDrawable() // retained
+	f.drawable = objc.ID(d)
+	if d == 0 && !linked {
 		t0 := platform.Now()
-		f.drawable = objc.Send(s.layer, selNextDrawable)
+		f.drawable = objc.Retain(objc.Send(s.layer, selNextDrawable))
 		if d := platform.Now() - t0; s.live && d > 20e6 && platform.TraceLive() {
 			println("gnui live: nextDrawable blocked", d/1e6, "ms; got a drawable:", f.drawable != 0)
 		}
 	}
 	if f.drawable == 0 {
-		F.Call1(objc.PoolPop, f.pool)
 		return false
 	}
 	if first {
@@ -209,13 +213,14 @@ func (s *Surface) BeginFrame(f *Frame) bool {
 		}
 	}
 	f.Target = uintptr(objc.Send(f.drawable, selTexture))
-	f.CmdBuf = uintptr(objc.Send(s.queue, selCommandBuffer))
+	f.CmdBuf = uintptr(objc.Retain(objc.Send(s.queue, selCommandBuffer)))
 	f.W, f.H = s.w, s.h
 	return true
 }
 
 // EndFrame commits the frame's commands and presents its drawable.
 func (s *Surface) EndFrame(f *Frame) {
+	pool := objc.F.Call0(objc.PoolPush)
 	cb := objc.ID(f.CmdBuf)
 	if s.presented == 0 {
 		if s.reveal != nil {
@@ -265,10 +270,9 @@ func (s *Surface) EndFrame(f *Frame) {
 		objc.Send(cb, selCommit)
 	}
 	s.presented++
-	if f.taken {
-		objc.Send(f.drawable, selRelease) // TakeMetalDrawable returned it retained
-	}
-	objc.F.Call1(objc.PoolPop, f.pool)
+	objc.Send(cb, selRelease)
+	objc.Send(f.drawable, selRelease)
+	objc.F.Call1(objc.PoolPop, pool)
 	*f = Frame{}
 }
 

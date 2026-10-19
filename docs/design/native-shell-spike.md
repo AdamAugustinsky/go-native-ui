@@ -155,18 +155,53 @@ gonativeui/gpu.(*Surface).EndFrame(...)  gpu/metal_darwin.go:271           objc.
 gonativeui/app.(*App).drawFrame → present → loop → RunWith
 ```
 
-The same run with the call deferred to the run loop's next turn
-(`performSelector:withObject:afterDelay:0`, the committed hook) entered and
-left full screen without a crash on the MacBook. Two things are not known:
+**The cause** (`p6-framepool`, found on the same Mac mini). The cause was
+a frame drawn inside a frame, not a pool that AppKit popped.
 
-- whether the pool token goes stale because AppKit drains or replaces the
-  frame's pool during the transition;
-- why the crash comes when the zoom finishes rather than in the frame of the
-  call.
+The evidence is the frame's pool token at every `BeginFrame` and `EndFrame`,
+and `_objc_autoreleasePoolPrint` before and after the toggle:
 
-The spike's first report called it an "out-of-order pop". That was a guess; what is
-established is the crash site above. Until the cause is known, a full-screen
-API should call AppKit from outside the frame.
+1. The frame pushes its pool (token `0x78b5014038`) and calls Build, and
+   Build calls `toggleFullScreen:`.
+2. Inside that call, AppKit resizes the window synchronously, and
+   `windowDidResize:` calls the app's frame handler. The handler draws a
+   second frame into the same `gpu.Frame`. It pushes a pool above the first
+   (`0x78b56e85c8`) and runs Build inside Build. Its `EndFrame` pops its own
+   pool and clears the shared `Frame`, token included.
+3. `toggleFullScreen:` returns after 76 ms. The pool print then still shows
+   the first pool, intact, at the bottom of the stack: AppKit had popped
+   nothing.
+4. The outer `EndFrame` pops token 0: SIGSEGV at address 0 in
+   `objc_autoreleasePoolPop`.
+
+The outer frame had also lost its drawable (a leaked retain) and its
+command buffer. Any AppKit call that resizes the window or runs a nested
+loop from Build does the same; `runModalForWindow:` with an animated
+`zoom:` crashed alike.
+
+**The fix:**
+
+- `app.App.frameHandler` does nothing while a frame is in progress
+  (`inFrame`). What it would have handled stays queued for the next `Wait`.
+- `gpu.Surface.BeginFrame` and `EndFrame` each drain a pool of their own
+  before returning. The frame holds its drawable and command buffer by
+  explicit retains, so no pool token outlives either call.
+- `drawFrame` drains the app code's autoreleases in a pool whose token is a
+  local variable.
+
+**The tests** run in a child process, so a crash fails the test:
+
+- `TestNestedRunLoopInFrame` covers `toggleFullScreen:` and a modal zoom,
+  both from Build. Without the fix, both crash.
+- `TestGreenButtonFullScreen` clicks the green button from the run loop,
+  into full screen and back, with frames drawn during both animations.
+- `TestFrameDrawablesBounded` checks over 600 frames that drawables are
+  released, a frame makes no Go allocations, and the leak counters stay
+  level.
+
+The spike's first report called it an "out-of-order pop", which was wrong.
+The deferred `DebugToggleFullScreen` hook is no longer needed, but it is
+harmless.
 
 ## Numbers (MacBook, macOS 27.2, under the user's load)
 
