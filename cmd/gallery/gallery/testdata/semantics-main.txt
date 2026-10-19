@@ -47,11 +47,11 @@ Window
     Checkbox "Mixed" [mixed]
     Checkbox "Mixed" [mixed disabled]
     Label "Switch"
-    Switch "Wi-Fi" [checked]
-    Switch "Wi-Fi" [checked]
-    Switch "Wi-Fi" [checked]
-    Switch "Wi-Fi" [checked]
-    Switch "Wi-Fi" [checked disabled]
+    Switch "On" [checked]
+    Switch "On" [checked]
+    Switch "On" [checked]
+    Switch "On" [checked]
+    Switch "On" [checked disabled]
     Label "Radio"
     RadioGroup "Radio"
       Radio "Radio" [checked] pos=0/1

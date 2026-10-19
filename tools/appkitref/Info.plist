@@ -26,8 +26,7 @@
 	<string>ARApp</string>
 	<key>LSUIElement</key>
 	<true/>
-	<!-- Never active, never a window on screen: it only renders offscreen. -->
-	<key>LSBackgroundOnly</key>
-	<true/>
+	<!-- An agent: no Dock icon. It renders offscreen with the Prohibited
+	     activation policy; only -live shows a window, for a few seconds. -->
 </dict>
 </plist>

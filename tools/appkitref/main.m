@@ -7,9 +7,11 @@
 //
 //	AppKitRef -o DIR [-AppleAccentColor 4]   render + measure into DIR
 //	AppKitRef -sheet MANIFEST.json OUT.png   compose a side-by-side sheet
+//	AppKitRef -live NAMES.txt [-mode dark]   show samples in a window briefly
 //
-// It never shows a window: the activation policy is Prohibited, and every
-// window it makes is created deferred and never ordered on screen. Key-window
+// Except with -live it never shows a window: the activation policy is
+// Prohibited, and every window it makes is created deferred and never ordered
+// on screen. Key-window
 // state is simulated (see ARWindow) because an app that is never active has no
 // key window; each sample says which state it was drawn in.
 #import <AppKit/AppKit.h>
@@ -1582,7 +1584,7 @@ static int pairSheet(NSString *manifest, NSString *outPath) {
 		NSDictionary *la = @{NSFontAttributeName : [NSFont systemFontOfSize:11], NSForegroundColorAttributeName : fg};
 		[m[@"title"] drawAtPoint:NSMakePoint(margin, H - margin - 18) withAttributes:ta];
 		[@"AppKit (real controls)" drawAtPoint:NSMakePoint(margin + labelW, H - margin - head + 8) withAttributes:ha];
-		[@"Ours (widget kit, Rex theme)" drawAtPoint:NSMakePoint(margin + labelW + lw + gap, H - margin - head + 8) withAttributes:ha];
+		[@"Ours (rexui, Rex theme)" drawAtPoint:NSMakePoint(margin + labelW + lw + gap, H - margin - head + 8) withAttributes:ha];
 		CGFloat y = H - margin - head;
 		for (NSUInteger i = 0; i < rows.count; i++) {
 			NSArray *pair = imgs[i];
@@ -1599,6 +1601,151 @@ static int pairSheet(NSString *manifest, NSString *outPath) {
 	return 0;
 }
 
+#pragma mark - Live window
+
+// FlippedView is a top-left-origin view that fills itself with a colour.
+@interface FlippedView : NSView
+@property(strong) NSColor *fill;
+@end
+@implementation FlippedView
+- (BOOL)isFlipped { return YES; }
+- (void)drawRect:(NSRect)r {
+	if (self.fill) { // the dirty rectangle can reach outside the bounds (clipsToBounds is NO)
+		[self.fill setFill];
+		NSRectFill(NSIntersectionRect(r, self.bounds));
+	}
+}
+@end
+
+// runLive shows the samples named in namesPath (one per line) in a window, in
+// the grid of the contact sheets (flowSheet) wrapped at maxW points, with
+// each cell exactly its sample's frame plus 14 pt all round, as package
+// rexui/catalog lays out the same names (catalog.Grid), so that captures of
+// this window and of the gallery's appkit scene cut into the same cells. The
+// window shows for seconds seconds in the appearance named apName, then the
+// app quits. Pressed samples are highlighted; focus and inactive samples
+// cannot be shown in one key window and draw their normal look.
+static int runLive(NSString *namesPath, NSString *apName, double seconds, CGFloat maxW, NSString *dump) {
+	NSString *list = [NSString stringWithContentsOfFile:namesPath encoding:NSUTF8StringEncoding error:nil];
+	if (!list) {
+		fprintf(stderr, "no names file %s\n", namesPath.UTF8String);
+		return 1;
+	}
+	defineSamples();
+	NSMutableDictionary<NSString *, Sample *> *byName = [NSMutableDictionary dictionary];
+	for (Sample *s in samples) byName[s.name] = s;
+	NSAppearance *ap = [NSAppearance appearanceNamed:apName];
+	gKey = YES;
+	[NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
+
+	const CGFloat gap = 16, capH = 16, margin = 20, titleH = 30, pad = 14;
+	NSMutableArray *views = [NSMutableArray array];
+	NSMutableArray *names = [NSMutableArray array];
+	for (NSString *raw in [list componentsSeparatedByString:@"\n"]) {
+		NSString *n = [raw stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
+		Sample *s = n.length ? byName[n] : nil;
+		if (!s) {
+			if (n.length) fprintf(stderr, "no sample %s\n", n.UTF8String);
+			continue;
+		}
+		NSView *v = s.build();
+		v.appearance = ap;
+		if (s.size.width > 0 || s.size.height > 0) {
+			NSSize fit = v.fittingSize;
+			[v setFrameSize:NSMakeSize(s.size.width > 0 ? s.size.width : fit.width, s.size.height > 0 ? s.size.height : fit.height)];
+		} else if ([v respondsToSelector:@selector(sizeToFit)]) {
+			[(id)v sizeToFit];
+			if (v.frame.size.width <= 0) [v setFrameSize:v.fittingSize];
+		} else {
+			[v setFrameSize:v.fittingSize];
+		}
+		[views addObject:v];
+		[names addObject:s];
+	}
+	// lay out as catalog.Grid does
+	NSMutableArray *pos = [NSMutableArray array];
+	CGFloat x = margin, y = margin + titleH, rowH = 0, W = 0;
+	for (NSView *v in views) {
+		NSSize c = NSMakeSize(v.frame.size.width + 2 * pad, v.frame.size.height + 2 * pad);
+		if (x > margin && x + c.width > maxW - margin) {
+			x = margin;
+			y += rowH + gap;
+			rowH = 0;
+		}
+		[pos addObject:[NSValue valueWithPoint:NSMakePoint(x, y)]];
+		x += c.width + gap;
+		rowH = fmax(rowH, c.height + capH);
+		W = fmax(W, x);
+	}
+	CGFloat H = y + rowH + margin;
+	W = fmax(W + margin - gap, 400);
+
+	ARWindow *w = [[ARWindow alloc] initWithContentRect:NSMakeRect(0, 0, W, H)
+	                                          styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable
+	                                            backing:NSBackingStoreBuffered
+	                                              defer:NO];
+	w.releasedWhenClosed = NO;
+	w.appearance = ap;
+	w.title = @"AppKitRef — live samples";
+	__block NSColor *under, *winBG, *fg2, *fg;
+	[ap performAsCurrentDrawingAppearance:^{
+		under = NSColor.underPageBackgroundColor;
+		winBG = NSColor.windowBackgroundColor;
+		fg = NSColor.labelColor;
+		fg2 = NSColor.secondaryLabelColor;
+	}];
+	FlippedView *root = [[FlippedView alloc] initWithFrame:NSMakeRect(0, 0, W, H)];
+	root.fill = under;
+	w.contentView = root;
+	NSTextField *title = [NSTextField labelWithString:@"AppKit — macOS 27.2 samples (tools/appkitref -live)"];
+	title.font = [NSFont boldSystemFontOfSize:13];
+	title.textColor = fg;
+	[title sizeToFit];
+	[title setFrameOrigin:NSMakePoint(margin - 2, margin)];
+	[root addSubview:title];
+	for (NSUInteger i = 0; i < views.count; i++) {
+		NSView *v = views[i];
+		Sample *s = names[i];
+		NSPoint p = [pos[i] pointValue];
+		NSSize vs = v.frame.size;
+		FlippedView *cell = [[FlippedView alloc] initWithFrame:NSMakeRect(p.x, p.y, vs.width + 2 * pad, vs.height + 2 * pad)];
+		cell.fill = winBG;
+		[root addSubview:cell];
+		[v setFrameOrigin:NSMakePoint(pad, pad)];
+		[cell addSubview:v];
+		if (s.after) s.after(v, w);
+		if (s.pressed && [v isKindOfClass:NSButton.class]) [(NSButton *)v highlight:YES];
+		NSTextField *cap = [NSTextField labelWithString:s.name];
+		cap.font = [NSFont systemFontOfSize:10];
+		cap.textColor = fg2;
+		[cap sizeToFit];
+		[cap setFrameOrigin:NSMakePoint(p.x - 2, p.y + cell.frame.size.height + 1)]; // a label's text sits 2 pt in
+		[root addSubview:cap];
+	}
+	[w center];
+	[w makeKeyAndOrderFront:nil];
+	[w makeFirstResponder:nil];
+	[NSApp activateIgnoringOtherApps:YES];
+	if (dump) { // what the views draw, for checking the window without a screen capture
+		[NSTimer scheduledTimerWithTimeInterval:0.5
+		                                repeats:NO
+		                                  block:^(NSTimer *t) {
+			                                  NSBitmapImageRep *rep = newRep(root.bounds.size);
+			                                  [root cacheDisplayInRect:root.bounds toBitmapImageRep:rep];
+			                                  savePNG(rep, dump);
+		                                  }];
+	}
+	[NSTimer scheduledTimerWithTimeInterval:seconds
+	                                repeats:NO
+	                                  block:^(NSTimer *t) {
+		                                  [NSApp terminate:nil];
+	                                  }];
+	printf("live: %lu samples, %.0f x %.0f pt, %s, %.0f s\n", (unsigned long)views.count, W, H, apName.UTF8String, seconds);
+	fflush(stdout);
+	[NSApp run];
+	return 0;
+}
+
 #pragma mark - main
 
 int main(int argc, const char **argv) {
@@ -1606,14 +1753,22 @@ int main(int argc, const char **argv) {
 		[ARApp sharedApplication];
 		[NSApp setActivationPolicy:NSApplicationActivationPolicyProhibited];
 		keep = [NSMutableArray array];
-		NSString *outDir = nil;
+		NSString *outDir = nil, *live = nil, *liveAp = NSAppearanceNameAqua, *dump = nil;
+		double seconds = 8, maxW = 1440;
 		for (int i = 1; i < argc; i++) {
 			if (!strcmp(argv[i], "-o") && i + 1 < argc) outDir = [NSString stringWithUTF8String:argv[++i]];
 			else if (!strcmp(argv[i], "-sheet") && i + 2 < argc)
 				return pairSheet([NSString stringWithUTF8String:argv[i + 1]], [NSString stringWithUTF8String:argv[i + 2]]);
+			else if (!strcmp(argv[i], "-live") && i + 1 < argc) live = [NSString stringWithUTF8String:argv[++i]];
+			else if (!strcmp(argv[i], "-mode") && i + 1 < argc) liveAp = strcmp(argv[++i], "dark") ? NSAppearanceNameAqua : NSAppearanceNameDarkAqua;
+			else if (!strcmp(argv[i], "-seconds") && i + 1 < argc) seconds = atof(argv[++i]);
+			else if (!strcmp(argv[i], "-width") && i + 1 < argc) maxW = atof(argv[++i]);
+			else if (!strcmp(argv[i], "-dump") && i + 1 < argc) dump = [NSString stringWithUTF8String:argv[++i]];
 		}
+		if (live) return runLive(live, liveAp, seconds, maxW, dump);
 		if (!outDir) {
-			fprintf(stderr, "usage: AppKitRef -o DIR [-AppleAccentColor N]\n       AppKitRef -sheet MANIFEST.json OUT.png\n");
+			fprintf(stderr, "usage: AppKitRef -o DIR [-AppleAccentColor N]\n       AppKitRef -sheet MANIFEST.json OUT.png\n"
+			                "       AppKitRef -live NAMES.txt [-mode light|dark] [-seconds 8] [-width 1440]\n");
 			return 2;
 		}
 		outDir = outDir.stringByStandardizingPath;

@@ -125,10 +125,17 @@ type App struct {
 
 	// Cursor regions and the titlebar drag map handed to the window after
 	// every frame (regions.go); the buffers are reused.
-	curUI   []ui.CursorRegion
-	curPlat []platform.CursorRegion
-	dragUI  []ui.DragRegion
-	dragPl  []platform.DragRegion
+	curUI    []ui.CursorRegion
+	curPlat  []platform.CursorRegion
+	dragUI   []ui.DragRegion
+	dragPl   []platform.DragRegion
+	tipUI    []ui.TooltipRegion // native tooltip regions (regions.go), reused
+	tipPl    []platform.TooltipRegion
+	dlg      []platform.DialogResult // dialog results not taken yet (dialogs.go)
+	dlgQ     []pendingDialog         // dialogs queued for the end of the frame
+	dlgShown []shownDialog           // dialogs on screen
+	dlgSeq   platform.DialogTicket   // the last ticket given
+	dlgT     dialogTarget            // the window's dialogs; tests set a fake
 
 	wakeAt      int64 // platform.Now at which the UI wants a frame although nothing animates (ui.Context.WakeAfter); 0 = none
 	chromeDark  bool  // the mode last given to Win.SetDarkChrome
@@ -141,6 +148,8 @@ type App struct {
 	scriptDone  bool
 
 	frames      int   // frames presented
+	inFrame     bool  // between BeginFrame and EndFrame (drawFrame)
+	reentries   int   // frame handler calls refused because a frame was in progress
 	frameEvents int   // EvFrame events received (frame-source ticks)
 	lastStart   int64 // platform.Now of the last frame's start; 0 before the first
 	fm          frameMeasure
@@ -349,6 +358,10 @@ func (a *App) initUI() error {
 	a.UI = ui.New(a.Text)
 	a.UI.ClipboardSet = platform.SetClipboardText
 	a.UI.AtlasSync(a.R)
+	if a.Win != nil { // a window shows tooltips for the regions it is given; offscreen renders draw them
+		a.UI.SetNativeTooltips(platform.NativeTooltips)
+		a.Win.SetTooltipText(a.UI.TooltipText)
+	}
 	if in, ok := a.b.(Initer); ok {
 		if err := in.Init(a); err != nil {
 			return fmt.Errorf("app: init: %w", err)
@@ -413,6 +426,7 @@ func (a *App) loop() error {
 		if a.demo != nil {
 			a.demo.run(a)
 		}
+		a.flushDialogs() // dialogs asked for outside a frame (an event handler, a hook)
 		if a.hook != nil {
 			a.hook()
 		}
@@ -462,6 +476,8 @@ func (a *App) onEvent(e *platform.Event) {
 		a.frameEvents++
 		a.lastFrameEv = platform.Now()
 		a.p.frameEvent()
+	case platform.EvDialog:
+		a.onDialog(e)
 	default:
 		var txt []byte
 		if e.Kind == platform.EvText || e.Kind == platform.EvPreedit || e.Kind == platform.EvPaste {
@@ -476,7 +492,20 @@ func (a *App) onEvent(e *platform.Event) {
 // frameHandler runs inside OS modal loops (live resize), where Wait does not
 // return: it handles what is pending and draws at once, in step with the
 // window.
+//
+// It does nothing while a frame is being drawn. AppKit calls it
+// synchronously from inside calls the app makes during a frame: anything
+// that animates the window as a live resize (toggleFullScreen:, an animated
+// zoom:), directly or in a nested run loop (a modal session, menu
+// tracking). A frame drawn there would run Build inside Build and draw into
+// the frame in progress (once a crash: the outer EndFrame found the frame
+// cleared by the inner one). What it would have handled stays queued, and
+// the next Wait delivers it.
 func (a *App) frameHandler() {
+	if a.inFrame {
+		a.reentries++
+		return
+	}
 	a.tr.wheelStep = a.UI.WheelStep
 	evs := a.Win.Pending()
 	for i := range evs {
@@ -495,6 +524,7 @@ func (a *App) present(inHandler bool, passes int) bool {
 		bn.before(a)
 	}
 	ok := a.drawFrame(inHandler, passes)
+	a.flushDialogs() // dialogs asked for in Build: shown now that the frame is over
 	now := platform.Now()
 	if ok {
 		a.consecFails, a.lastDrawT = 0, now

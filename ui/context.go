@@ -258,6 +258,7 @@ type Context struct {
 	pasteTag Key
 	pasteReq bool
 
+	nt nativeTips // native tooltips declared this frame (regions_native.go)
 	// native menus (nativemenu.go)
 	nativeMenus bool
 	menuReq     MenuRequest

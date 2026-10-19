@@ -670,15 +670,14 @@ func (s *System) RunGeneration() uint32 { return s.runs.gen }
 // the cache holds that much, and every eviction after that, allocates no Go
 // memory. It also sizes the shaping scratch for one string of up to
 // min(textBytes, 64 KiB) bytes, so that shaping a string longer than any
-// before (up to that size) allocates nothing either. It reserves the
-// paragraph cache (Layout) too, with the budget ParaBudget{Paras: runs,
-// Glyphs: glyphs, Text: textBytes} (see ReserveParas), since wrapped text is
-// laid out there. Call it once at setup. Without it the caches
-// grow by doubling.
+// before (up to that size) allocates nothing either. It also reserves the
+// paragraph cache (Layout), where wrapped text is laid out, for
+// DefaultParaBudget unless ReserveParas declared a budget. Call it once at
+// setup. Without it the caches grow by doubling.
 func (s *System) ReserveRuns(runs, glyphs, textBytes int) {
 	s.runs.reserve(runs, glyphs, textBytes)
 	s.reserveScratch(min(textBytes, maxScratch))
-	s.ReserveParas(ParaBudget{Paras: runs, Glyphs: glyphs, Text: textBytes})
+	s.reserveParas(DefaultParaBudget(), false)
 }
 
 // reserveScratch sizes the shaping scratch for a string of n bytes: its copy,

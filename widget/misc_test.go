@@ -43,6 +43,51 @@ func TestTooltipAppearsAfterTheDelay(t *testing.T) {
 	}
 }
 
+// Where the system shows tooltips, the widget draws none: it declares the text
+// and the region, whether or not the pointer is there, and a disabled widget
+// declares nothing.
+func TestTooltipNativeDeclaresInsteadOfDrawing(t *testing.T) {
+	disabled := false
+	g := newRig(t, 300, 200, func(k *Kit) {
+		k.NextSize(Fill, Fill)
+		k.Column("root")
+		k.Tooltip(k.Button("Open").ID, "Open a file")
+		if disabled {
+			k.BeginDisabled(true)
+		}
+		k.Tooltip(k.Button("Save").ID, "Save it")
+		if disabled {
+			k.EndDisabled()
+		}
+		k.EndColumn()
+	})
+	g.c.SetNativeTooltips(true)
+	x, y := centre(g.must(ui.RoleButton, "Open"))
+	g.move(x, y)
+	g.frames(40) // far past the delay
+	if _, ok := g.find(ui.RoleTooltip, "Open a file"); ok {
+		t.Fatal("a tooltip is drawn although the system shows them")
+	}
+	regs := g.c.TooltipRegions(nil)
+	if len(regs) != 2 {
+		t.Fatalf("%d tooltip regions %+v, want 2", len(regs), regs)
+	}
+	if s := string(g.c.TooltipText(regs[0].Key, nil)); s != "Open a file" {
+		t.Errorf("text of the first region %q", s)
+	}
+	if s := string(g.c.TooltipText(regs[1].Key, nil)); s != "Save it" {
+		t.Errorf("text of the second region %q", s)
+	}
+	if regs[0].Rect[0] > x || regs[0].Rect[2] < x || regs[0].Rect[1] > y || regs[0].Rect[3] < y {
+		t.Errorf("the first region %v does not cover the button's centre (%v, %v)", regs[0].Rect, x, y)
+	}
+	disabled = true
+	g.frames(2)
+	if regs = g.c.TooltipRegions(regs[:0]); len(regs) != 1 {
+		t.Errorf("%d regions with the second button disabled, want 1", len(regs))
+	}
+}
+
 // The divider lies over the gutter between the panes, centred on it: that is
 // where the pointer finds it.
 func TestSplitterDividerIsOverTheGutter(t *testing.T) {
