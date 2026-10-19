@@ -93,9 +93,9 @@ func (k *Kit) BeginDialog(label, title string, open *bool) Dialog {
 	c.NextRadius(px.RadiusLarge)
 	c.NextPad(px.Pad * 2)
 	c.NextGap(px.Gap)
-	if k.hasW && k.nw.Kind != ui.SizeAuto {
-		c.NextSize(k.nw, ui.Children(1))
-		k.hasW, k.hasH = false, false
+	if nw, ok := k.PendingWidth(); ok && nw.Kind != ui.SizeAuto {
+		c.NextSize(nw, ui.Children(1))
+		k.ClearSize()
 	} else {
 		c.NextSize(k.Fixed(dialogWidthPt), ui.Children(1))
 	}
@@ -115,7 +115,7 @@ func (k *Kit) BeginDialog(label, title string, open *bool) Dialog {
 func (d *Dialog) BeginActions() {
 	k := d.k
 	k.NextGap(k.r.Px.GapSmall / k.scale)
-	k.container(ui.AxisX, ui.CrossCenter, "actions", ui.Pct(1), ui.Children(1), 0)
+	k.BeginContainer(ui.AxisX, ui.CrossCenter, "actions", ui.Pct(1), ui.Children(1), 0)
 	k.Spacer()
 	d.rowOpen = true
 }
@@ -123,7 +123,7 @@ func (d *Dialog) BeginActions() {
 // EndActions ends the row BeginActions started.
 func (d *Dialog) EndActions() {
 	if d.rowOpen {
-		d.k.closeContainer()
+		d.k.EndContainer()
 		d.rowOpen = false
 	}
 }

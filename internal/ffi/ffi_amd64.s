@@ -63,40 +63,26 @@ TEXT gonativeui_ffi_call(SB), NOSPLIT, $STACK_SIZE
 GLOBL ·cbTableABI0(SB), NOPTR|RODATA, $8
 DATA ·cbTableABI0(SB)/8, $gonativeui_ffi_cbtable(SB)
 
-// Each entry is a 5-byte CALL; the return address identifies the slot.
+// Each entry is a 5-byte CALL; the return address identifies the slot. The
+// macros expand to MaxCallbacks entries.
+#define CBENTRY CALL gonativeui_ffi_cbcommon(SB)
+#define CB4 CBENTRY; CBENTRY; CBENTRY; CBENTRY
+#define CB16 CB4; CB4; CB4; CB4
+#define CB64 CB16; CB16; CB16; CB16
+#define CB256 CB64; CB64; CB64; CB64
+
 TEXT gonativeui_ffi_cbtable(SB), NOSPLIT|NOFRAME, $0
-	CALL gonativeui_ffi_cbcommon(SB)
-	CALL gonativeui_ffi_cbcommon(SB)
-	CALL gonativeui_ffi_cbcommon(SB)
-	CALL gonativeui_ffi_cbcommon(SB)
-	CALL gonativeui_ffi_cbcommon(SB)
-	CALL gonativeui_ffi_cbcommon(SB)
-	CALL gonativeui_ffi_cbcommon(SB)
-	CALL gonativeui_ffi_cbcommon(SB)
-	CALL gonativeui_ffi_cbcommon(SB)
-	CALL gonativeui_ffi_cbcommon(SB)
-	CALL gonativeui_ffi_cbcommon(SB)
-	CALL gonativeui_ffi_cbcommon(SB)
-	CALL gonativeui_ffi_cbcommon(SB)
-	CALL gonativeui_ffi_cbcommon(SB)
-	CALL gonativeui_ffi_cbcommon(SB)
-	CALL gonativeui_ffi_cbcommon(SB)
-	CALL gonativeui_ffi_cbcommon(SB)
-	CALL gonativeui_ffi_cbcommon(SB)
-	CALL gonativeui_ffi_cbcommon(SB)
-	CALL gonativeui_ffi_cbcommon(SB)
-	CALL gonativeui_ffi_cbcommon(SB)
-	CALL gonativeui_ffi_cbcommon(SB)
-	CALL gonativeui_ffi_cbcommon(SB)
-	CALL gonativeui_ffi_cbcommon(SB)
-	CALL gonativeui_ffi_cbcommon(SB)
-	CALL gonativeui_ffi_cbcommon(SB)
-	CALL gonativeui_ffi_cbcommon(SB)
-	CALL gonativeui_ffi_cbcommon(SB)
-	CALL gonativeui_ffi_cbcommon(SB)
-	CALL gonativeui_ffi_cbcommon(SB)
-	CALL gonativeui_ffi_cbcommon(SB)
-	CALL gonativeui_ffi_cbcommon(SB)
+	CB256
+	CB256
+	CB256
+	CB256
+
+// Below the saved registers: 24 bytes, cbArgs at CBARGS, and the
+// invocation's own Frame at CBFRAME (cbArgs.frame). Both sizes are multiples
+// of 16, so the stack keeps its alignment.
+#define CBARGS 24
+#define CBFRAME (CBARGS+cbArgs__size)
+#define CBLOCALS (CBFRAME+Frame__size)
 
 // On entry: 0(SP) = return address into the table, 8(SP) = return address
 // to the C caller, 16(SP)... = the caller's stack arguments.
@@ -135,14 +121,16 @@ TEXT gonativeui_ffi_cbcommon(SB), NOSPLIT|NOFRAME, $0
 	DIVL CX
 	SUBQ $1, AX
 
-	SUBQ $(24+cbArgs__size), SP
-	MOVQ AX, (24+cbArgs_index)(SP)
-	MOVQ R8, (24+cbArgs_args)(SP)
-	MOVQ DI, (24+cbArgs_result)(SP) // hidden struct-return pointer, if any
-	MOVQ $0, (24+cbArgs_result+8)(SP)
-	MOVQ $0, (24+cbArgs_result+16)(SP)
-	MOVQ $0, (24+cbArgs_result+24)(SP)
-	LEAQ 24(SP), AX
+	SUBQ $CBLOCALS, SP
+	MOVQ AX, (CBARGS+cbArgs_index)(SP)
+	MOVQ R8, (CBARGS+cbArgs_args)(SP)
+	LEAQ CBFRAME(SP), R11
+	MOVQ R11, (CBARGS+cbArgs_frame)(SP)
+	MOVQ DI, (CBARGS+cbArgs_result)(SP) // hidden struct-return pointer, if any
+	MOVQ $0, (CBARGS+cbArgs_result+8)(SP)
+	MOVQ $0, (CBARGS+cbArgs_result+16)(SP)
+	MOVQ $0, (CBARGS+cbArgs_result+24)(SP)
+	LEAQ CBARGS(SP), AX
 
 	// crosscall2(fn, frame, 0, ctxt) -> runtime.cgocallback -> cbDispatch(frame)
 	MOVQ ·cbDispatchCall(SB), DI
@@ -151,11 +139,11 @@ TEXT gonativeui_ffi_cbcommon(SB), NOSPLIT|NOFRAME, $0
 	MOVQ $0, CX
 	CALL crosscall2(SB)
 
-	MOVQ (24+cbArgs_result)(SP), AX
-	MOVQ (24+cbArgs_result+8)(SP), DX
-	MOVQ (24+cbArgs_result+16)(SP), X0
-	MOVQ (24+cbArgs_result+24)(SP), X1
-	ADDQ $(24+cbArgs__size), SP
+	MOVQ (CBARGS+cbArgs_result)(SP), AX
+	MOVQ (CBARGS+cbArgs_result+8)(SP), DX
+	MOVQ (CBARGS+cbArgs_result+16)(SP), X0
+	MOVQ (CBARGS+cbArgs_result+24)(SP), X1
+	ADDQ $CBLOCALS, SP
 
 	POPQ  R10
 	ADJSP $-14*8, SP

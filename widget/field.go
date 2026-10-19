@@ -4,32 +4,17 @@ import (
 	"gonativeui/icon"
 	"gonativeui/theme"
 	"gonativeui/ui"
+	"gonativeui/widget/base"
 )
 
-// FieldSignal is what a text field reports.
-type FieldSignal struct {
-	Signal
-	// Submitted: Enter went down in the field.
-	Submitted bool
-	// Cancelled: Escape went down in the field (a search field clears itself
-	// then).
-	Cancelled bool
-	// Pressed: the left button went down on the field in this frame.
-	Pressed bool
-	// Key is the key of the box that takes the keyboard focus, which lasts
-	// across frames where Signal.ID does not: an app that wants to move the
-	// focus into the field (Kit.Focus) keeps it.
-	Key ui.Key
-}
+// FieldSignal is what a text field reports (base.FieldSignal).
+type FieldSignal = base.FieldSignal
 
 // FieldKey is the key of the box that takes the keyboard focus in the field
 // that TextField or SearchField builds with label inside the box whose key is
 // parent. An app moves the focus there with ui.Context.SetFocus before the
 // field has been built.
-func FieldKey(parent ui.Key, label string) ui.Key {
-	_, ident := ui.SplitLabel(label)
-	return ui.HashString(ui.HashString(parent, ident), ident)
-}
+func FieldKey(parent ui.Key, label string) ui.Key { return base.FieldKey(parent, label) }
 
 // TextField builds a single-line text field editing buf, styled by the theme,
 // with the placeholder shown while it is empty. It is ui.Context.TextField
@@ -48,38 +33,19 @@ func (k *Kit) SearchField(label string, buf *ui.TextBuffer, placeholder string) 
 	return k.field(label, buf, placeholder, true)
 }
 
+// field is the classic look over base's TextInput primitive.
 func (k *Kit) field(label string, buf *ui.TextBuffer, placeholder string, search bool) FieldSignal {
 	c := k.c
 	p, px := &k.r.Pal, &k.r.Px
-	display, ident := ui.SplitLabel(label)
 	dim := k.dim()
-	h := theme.Snap(px.ControlH)
-	if k.hasH && k.nh.Kind == ui.SizePixels { // NextHeight with a fixed height
-		h = k.nh.Value
-	}
+	ti := k.BeginTextInput(label, theme.Snap(px.ControlH), hoverOn)
+	h := ti.H
 	font := k.r.Font.UI
-	if k.nextMono {
-		font, k.nextMono = k.r.Font.Mono, false
+	if ti.Mono {
+		font = k.r.Font.Mono
 	}
-	wkey := ui.HashString(c.ParentKey(), ident)
-	fkey := ui.HashString(wkey, ident)
 
-	k.size(ui.Pct(1), ui.Px(h))
-	wrap := c.BoxKeyed(0, wkey, nil)
-	c.Push(wrap)
-
-	focusT := c.FocusTOf(fkey)
-	if k.off() {
-		focusT = 0
-	}
-	if k.force&LookFocused != 0 {
-		focusT = 1
-	}
-	hot := c.HotTOf(fkey)
-	if k.force&LookHover != 0 {
-		hot = 1
-	}
-	k.force = 0
+	focusT, hot := ti.Focus, ti.Hot
 	border := theme.MixRGBA(p.ControlBorder, p.Accent, focusT)
 	bw := theme.Lerp(px.BorderW, px.FocusRingW, focusT)
 	bg := p.ControlFill
@@ -106,65 +72,48 @@ func (k *Kit) field(label string, buf *ui.TextBuffer, placeholder string, search
 	c.NextPadding(padL, 0, padR, 0)
 	c.NextFont(font)
 	c.NextTextColor(p.Text)
-	if k.off() {
-		c.NextFlags(ui.Disabled)
-	}
 	role := ui.RoleTextField
 	if search {
 		role = ui.RoleSearchField
 	}
-	c.NextRole(role)
-	c.NextSemName(display)
-	if search {
-		c.NextEscapeClears() // Escape clears it, and is not also the popup's or dialog's
-	}
-	fs := c.TextField(ident, buf)
-	res := FieldSignal{
-		Signal:    Signal{ID: fs.ID, Hovering: fs.Hovering, Focused: fs.Focused, Changed: fs.Changed, Clicked: fs.Clicked},
-		Submitted: fs.Submitted, Cancelled: fs.Cancelled, Pressed: fs.Pressed, Key: fkey,
-	}
+	// a search field's Escape clears it, and is not also the popup's or dialog's
+	res := k.TextInput(&ti, buf, role, search)
 
 	if search {
-		k.searchDecor(wkey, fkey, buf, h, padL-px.GapSmall, clearW, &res)
+		k.searchDecor(&ti, buf, h, padL-px.GapSmall, clearW, &res)
 	}
-	if buf.Len() == 0 && placeholder != "" && !k.composing(fs) {
+	if buf.Len() == 0 && placeholder != "" && !k.Composing(res) {
 		theme.At(c, padL, 0, 0, h)
 		c.NextSize(ui.TextSize(0), ui.Px(h))
 		c.NextFont(font)
 		c.NextTextColor(p.TextMuted)
-		c.BoxKeyed(ui.DrawText|fl, ui.KeyN(wkey, 2), strBytes(placeholder))
+		c.BoxKeyed(ui.DrawText|fl, ui.KeyN(ti.WrapKey, 2), strBytes(placeholder))
 	}
-	c.Pop()
+	k.EndTextInput(&ti)
 	k.undim(dim)
 	return res
 }
 
-// composing reports whether the field shows an input-method composition, which
-// takes the place of the placeholder.
-func (k *Kit) composing(fs ui.TextFieldSignal) bool {
-	return fs.Focused && k.c.Input().NPreedit > 0
-}
-
 // searchDecor builds the magnifying glass and the clear button of a search
 // field, and applies Escape and the clear click.
-func (k *Kit) searchDecor(wkey, fkey ui.Key, buf *ui.TextBuffer, h, iconX, clearW float32, res *FieldSignal) {
+func (k *Kit) searchDecor(ti *base.TextInput, buf *ui.TextBuffer, h, iconX, clearW float32, res *FieldSignal) {
 	c := k.c
 	p, px := &k.r.Pal, &k.r.Px
+	wkey := ti.WrapKey
 	f, disp := k.icons.Prepare(c, icon.Search, p.TextMuted)
 	_, ih := k.icons.Size(icon.Search)
 	c.NextPos(px.Pad, theme.Snap((h-ih)/2))
 	c.BoxKeyed(f|fl, ui.KeyN(wkey, 3), disp)
 
 	if res.Cancelled && buf.Len() > 0 {
-		buf.Reset()
-		c.FieldEmptied(res.ID)
-		res.Changed, res.Cancelled = true, false
+		k.ClearField(buf, res)
+		res.Cancelled = false
 	}
 	if buf.Len() == 0 {
 		return
 	}
 	w := theme.Snap(px.IconSize)
-	x := k.fieldWidth(wkey) - clearW + (clearW-w)/2 - px.GapSmall/2
+	x := k.FieldWidth(ti) - clearW + (clearW-w)/2 - px.GapSmall/2
 	theme.At(c, x, theme.Snap((h-w)/2), w, w)
 	flags := ui.Clickable | ui.HotAnimation | fl
 	if k.off() {
@@ -184,16 +133,8 @@ func (k *Kit) searchDecor(wkey, fkey ui.Key, buf *ui.TextBuffer, h, iconX, clear
 	c.BoxKeyed(cf|fl, ui.KeyN(key, 1), cd)
 	c.Pop()
 	if c.Signal(cb).Clicked {
-		buf.Reset()
-		c.FieldEmptied(res.ID)
-		res.Changed = true
-		c.SetFocus(fkey)
+		k.ClearField(buf, res)
+		c.SetFocus(ti.Key)
 		c.SetFocusVisible(false)
 	}
-}
-
-// fieldWidth is the width in pixels the field had in the previous frame.
-func (k *Kit) fieldWidth(wkey ui.Key) float32 {
-	r := k.c.RectOf(wkey)
-	return r[2] - r[0]
 }

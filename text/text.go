@@ -49,8 +49,9 @@ type FontKey uint16
 // for a script the primary font lacks get their own IDs.
 type FaceID uint16
 
-// FontDesc describes a font to create. Sizes are in points; the font is
-// instantiated at SizePt*Scale pixels and every output is in pixels.
+// FontDesc describes a font to create. Sizes are in points and every output
+// is in pixels, at SizePt*Scale pixels per em. On macOS the optical size and
+// the tracking are those of SizePt, as in AppKit, whatever the Scale.
 type FontDesc struct {
 	Family string  // "" = system UI font (SF Pro on macOS)
 	Mono   bool    // system monospace font when Family == ""
@@ -103,6 +104,13 @@ type RunView struct {
 
 // ClusterRTL is set in RunView.Clusters entries of right-to-left glyphs.
 const ClusterRTL = 1 << 31
+
+// GlyphVariant is the sub argument of Glyph: a quarter-pixel x offset (0..3)
+// and the font-smoothing level of the text colour (SmoothLevel). Backends
+// without font smoothing ignore the level.
+func GlyphVariant(sub, smooth uint8) uint8 { return sub&3 | smooth<<smoothShift }
+
+const smoothShift = 2
 
 // GlyphEntry locates a rasterized glyph in an atlas page.
 type GlyphEntry struct {
