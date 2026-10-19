@@ -15,7 +15,14 @@ func Summarize(xs []float64) Stats {
 	if len(xs) == 0 {
 		return Stats{}
 	}
-	s := slices.Clone(xs)
+	return summarizeIn(slices.Clone(xs))
+}
+
+// summarizeIn is Summarize of s, which it sorts.
+func summarizeIn(s []float64) Stats {
+	if len(s) == 0 {
+		return Stats{}
+	}
 	slices.Sort(s)
 	var sum float64
 	for _, x := range s {

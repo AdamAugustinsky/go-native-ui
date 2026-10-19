@@ -91,7 +91,8 @@ func main() {
 	timeout := flag.Duration("timeout", 120*time.Second, "with -bench: give up after this long")
 	resizeTest := flag.Bool("live-resize-test", false, "macOS: drag the window size through the frame handler and print the result as JSON")
 	probe := flag.Bool("probe-titlebar", false, "macOS: print the titlebar hit-test and drag-map probe as JSON and exit")
-	sites := flag.Bool("allocsites", false, "with -bench: profile every allocation and print the call stacks of those inside the measured frames")
+	sites := flag.Bool("allocsites", false, "with -bench: print the call stacks of the allocations attributed over the measured windows")
+	testAlloc := flag.Int("test-alloc-every", 0, "with -bench: a test of the allocation gate: the bench allocates every this many frames, and the gate must fail")
 	drawn := flag.Bool("drawn", false, "macOS: draw the field and the ⌘ and + buttons instead of the native shell (backdrop and native buttons)")
 	glassButtons := flag.Bool("glass-buttons", false, "macOS: native ⌘ and + as Liquid Glass circles instead of borderless symbols")
 	native := flag.Bool("native", false, "with -o: render the native shell's content (no field, no ⌘ and +)")
@@ -117,7 +118,7 @@ func main() {
 			}
 			err = renderPNG(*out, *outDark, pref, *native)
 		case *bench:
-			err = runBench(pref, *gate, *allowUnpaced, *sites, *maxCPU, *timeout, *verbose)
+			err = runBench(pref, *gate, *allowUnpaced, *sites, *maxCPU, *timeout, *verbose, *testAlloc)
 		case *resizeTest:
 			err = runResizeTest(pref)
 		case *probe:
@@ -285,14 +286,11 @@ type report struct {
 	GateFailures  []string `json:",omitempty"`
 }
 
-func runBench(pref theme.Preference, gate, allowUnpaced, sites bool, maxCPU float64, timeout time.Duration, verbose bool) error {
+func runBench(pref theme.Preference, gate, allowUnpaced, sites bool, maxCPU float64, timeout time.Duration, verbose bool, testAlloc int) error {
 	x := newScene(pref)
 	opt := app.BenchOptions{Warm: warmFrames, Frames: measFrames, Timeout: timeout, Verbose: verbose,
 		PostGCWarm: postGCWarm, Windows: maxWindows}
-	var as allocSites
-	if sites {
-		opt.WindowStart, opt.WindowEnd = as.start, as.end
-	}
+	opt.PrintAllocSites, opt.TestAllocEvery = sites, testAlloc
 	br, err := app.RunBench(config(), rex.NewBench(x), opt)
 	if err != nil {
 		return err
@@ -317,6 +315,9 @@ func gateFailures(r report, allowUnpaced bool, maxCPU float64) []string {
 	}
 	if r.Mallocs != 0 || r.TotalAlloc != 0 {
 		f = append(f, fmt.Sprintf("every one of %d measured windows allocated (fewest: %d mallocs / %d bytes)", len(r.Windows), r.Mallocs, r.TotalAlloc))
+	}
+	if msg := r.OwnAllocFailure(); msg != "" {
+		f = append(f, msg)
 	}
 	if maxCPU > 0 && r.MainThreadCPUus > maxCPU {
 		f = append(f, fmt.Sprintf("main-thread CPU %.0f µs/frame, budget %.0f", r.MainThreadCPUus, maxCPU))

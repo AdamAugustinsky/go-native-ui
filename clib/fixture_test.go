@@ -19,6 +19,7 @@ import (
 	"time"
 	"unsafe"
 
+	"gonativeui/internal/allocsite"
 	"gonativeui/internal/ffi"
 )
 
@@ -674,14 +675,14 @@ type sender struct {
 
 // TestZeroAlloc asserts exact heap-allocation deltas over thousands of calls
 // of every kind once the Calls exist. The counters are process-wide, so the
-// first clean round of up to zeroAllocRounds passes (D27); an allocation per
+// first clean round of up to maxZeroAllocRounds passes (D27); an allocation per
 // call shows up thousands of times in every round. The runtime's own
 // one-offs miss most rounds: the GC before each round wakes the background
 // scavenger, whose timer then goes on the heap of whichever P it runs on,
 // and that heap's slice grows (16 bytes) the first times a P holds a timer.
 // That is bounded by the number of Ps, and it hit up to three rounds in a
 // row on a 10-core Mac (2 of 30 runs failed with three rounds).
-const zeroAllocRounds = 10
+const maxZeroAllocRounds = 10
 
 func TestZeroAlloc(t *testing.T) {
 	s := &sender{NewCall(), new(fxErr), fn(t, "fx_send")}
@@ -710,18 +711,57 @@ func TestZeroAlloc(t *testing.T) {
 		}
 	}
 	run()
+	if err := zeroAllocRounds(run, t.Logf); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// zeroAllocRounds runs run in rounds, after a collection each, and passes on
+// the first that allocated nothing, unless a round's allocations were made
+// by our code (DECISIONS D27: only the runtime's own one-offs may pass on a
+// later round). It fails after maxZeroAllocRounds.
+func zeroAllocRounds(run func(), logf func(string, ...any)) error {
+	defer allocsite.Enable()()
+	var s0, s1 allocsite.Snapshot
+	s0.Take() // the storage, before the measured rounds
+	s1.Take()
 	for round := 1; ; round++ {
 		runtime.GC()
+		s0.Take()
 		o0, b0 := allocs()
 		run()
 		o1, b1 := allocs()
 		if o1 == o0 && b1 == b0 {
-			return
+			return nil
 		}
-		if round == zeroAllocRounds {
-			t.Fatalf("allocated %d objects / %d bytes over 8000 calls (in each of %d rounds)", o1-o0, b1-b0, round)
+		runtime.GC()
+		s1.Take()
+		sites := allocsite.Diff(&s0, &s1)
+		if n := allocsite.Objects(sites, allocsite.Ours); n > 0 {
+			var b strings.Builder
+			allocsite.Write(&b, sites)
+			return fmt.Errorf("round %d: %d of its %d objects were allocated by our code:\n%s", round, n, o1-o0, b.String())
 		}
-		t.Logf("round %d: %d objects / %d bytes (retrying)", round, o1-o0, b1-b0)
+		if round == maxZeroAllocRounds {
+			return fmt.Errorf("allocated %d objects / %d bytes over a round (in each of %d rounds)", o1-o0, b1-b0, round)
+		}
+		logf("round %d: %d objects / %d bytes of the runtime (retrying)", round, o1-o0, b1-b0)
+	}
+}
+
+var zeroAllocSink []byte
+
+// The rounds do not pass over an allocation of ours that only one of them
+// made.
+func TestZeroAllocCatchesAOneOffOfOurs(t *testing.T) {
+	first := true
+	err := zeroAllocRounds(func() {
+		if first {
+			first, zeroAllocSink = false, make([]byte, 64)
+		}
+	}, t.Logf)
+	if err == nil || !strings.Contains(err.Error(), "gonativeui/clib.TestZeroAllocCatchesAOneOffOfOurs") {
+		t.Fatalf("a one-off allocation of ours passed: %v", err)
 	}
 }
 

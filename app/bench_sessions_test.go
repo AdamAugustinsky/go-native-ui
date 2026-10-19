@@ -1,6 +1,9 @@
 package app
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // cycler is a CycleAligned session of n frames.
 type cycler struct{ n, frame int }
@@ -39,6 +42,7 @@ func newBenchRig(t *testing.T, o BenchOptions, cy *cycler) (*benchRun, *App) {
 	a.p = newPacer()
 	bn := &benchRun{o: o, cyc: cy}
 	bn.frameCPU, bn.intervals, bn.lat = make([]float64, 0, 64), make([]float64, 0, 64), make([]float64, 0, 64)
+	bn.scratch = make([]float64, 0, 64)
 	bn.windows = make([]BenchWindow, 0, o.Windows)
 	a.bench = bn
 	return bn, a
@@ -74,6 +78,10 @@ func TestBenchWindowsAreWholeSessions(t *testing.T) {
 		if bn.report.Mallocs != 0 || bn.report.TotalAlloc != 0 || bn.report.Frames != 10 {
 			t.Errorf("report is of the clean window: %+v", bn.report)
 		}
+		// The clean window does not excuse it: the allocation was ours.
+		if bn.report.OwnAllocObjects == 0 || bn.report.OwnAllocFailure() == "" {
+			t.Errorf("the allocation of ours in window 1 was not attributed: %d objects, sites %+v", bn.report.OwnAllocObjects, bn.report.AllocSites)
+		}
 	})
 	t.Run("every session", func(t *testing.T) {
 		cy := &cycler{n: 10}
@@ -107,4 +115,22 @@ func TestBenchWindowsAreWholeSessions(t *testing.T) {
 			t.Errorf("the window began at frame %d, want the next boundary (10)", starts)
 		}
 	})
+}
+
+// D27's amendment: an allocation of ours that misses some windows (here every
+// other one, as rexlook's 900-frame cycles against TestAllocEvery 1800) fails
+// the gate although a window is clean.
+func TestBenchSparseAllocationOfOursFails(t *testing.T) {
+	cy := &cycler{n: 10}
+	bn, a := newBenchRig(t, BenchOptions{Warm: 5, PostGCWarm: 5, Windows: 6, TestAllocEvery: 20}, cy)
+	driveBench(t, bn, a, cy, func(w, f int) bool { return false })
+	r := bn.report
+	if len(r.Windows) < 2 || r.Mallocs != 0 {
+		t.Fatalf("want a dirty window, then a clean one: %+v", r.Windows)
+	}
+	msg := r.OwnAllocFailure()
+	if msg == "" || !strings.Contains(msg, "gonativeui/app.(*benchRun).after") {
+		t.Fatalf("gate message %q; sites %+v", msg, r.AllocSites)
+	}
+	t.Log(msg)
 }

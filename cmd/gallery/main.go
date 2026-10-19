@@ -179,10 +179,7 @@ func runBench(rows int, m theme.Preference, gate, allowUnpaced, sites bool, maxC
 	}
 	rep := report{OS: runtime.GOOS, Arch: runtime.GOARCH, Rows: rows}
 	opt := app.BenchOptions{Warm: warmFrames, PostGCWarm: postGCWarm, Windows: maxWindows, Timeout: timeout, Verbose: verbose}
-	var as allocSites
-	if sites {
-		opt.WindowStart, opt.WindowEnd = as.start, as.end
-	}
+	opt.PrintAllocSites = sites
 	br, err := app.RunBench(gallery.Config(), b, opt)
 	if serr := b.Err(); serr != nil { // a step that failed ends the run: say which
 		w, h, sc := b.WindowPx()
@@ -213,6 +210,9 @@ func gateFailures(r report, allowUnpaced bool, maxCPU float64) []string {
 	}
 	if r.Mallocs != 0 || r.TotalAlloc != 0 {
 		f = append(f, fmt.Sprintf("every one of %d whole sessions allocated (fewest: %d mallocs / %d bytes)", len(r.Windows), r.Mallocs, r.TotalAlloc))
+	}
+	if msg := r.OwnAllocFailure(); msg != "" {
+		f = append(f, msg)
 	}
 	if maxCPU > 0 && r.MainThreadCPUus > maxCPU {
 		f = append(f, fmt.Sprintf("main-thread CPU %.0f µs/frame, budget %.0f", r.MainThreadCPUus, maxCPU))

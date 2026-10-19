@@ -121,10 +121,7 @@ func runBench(l *listApp, gate, allowUnpaced, sites bool, maxCPU float64, timeou
 	// own recurs in every window, as the script repeats its events in each.
 	l.script = l.benchScript(warmFrames, measFrames, warmFrames+maxWindows*measFrames+30)
 	o := app.BenchOptions{Warm: warmFrames, Frames: measFrames, Windows: maxWindows, Timeout: timeout}
-	var as allocSites
-	if sites {
-		o.WindowStart, o.WindowEnd = as.start, as.end
-	}
+	o.PrintAllocSites = sites
 	br, err := app.RunBench(config, l, o)
 	if err != nil {
 		return err
@@ -151,6 +148,9 @@ func gateFailures(r report, allowUnpaced bool, maxCPU float64) []string {
 	}
 	if r.Mallocs != 0 || r.TotalAlloc != 0 {
 		f = append(f, fmt.Sprintf("%d mallocs / %d bytes allocated over the measured frames", r.Mallocs, r.TotalAlloc))
+	}
+	if msg := r.OwnAllocFailure(); msg != "" {
+		f = append(f, msg)
 	}
 	if maxCPU > 0 && r.MainThreadCPUus > maxCPU {
 		f = append(f, fmt.Sprintf("main-thread CPU %.0f µs/frame, budget %.0f", r.MainThreadCPUus, maxCPU))

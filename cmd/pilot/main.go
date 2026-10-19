@@ -299,10 +299,7 @@ func runBench(rows int, dir string, gate, allowUnpaced, sites bool, maxCPU float
 	b.UsePlatformClipboard()
 	b.StartCounting()
 	opt := app.BenchOptions{Warm: warmFrames, PostGCWarm: postGCWarm, Windows: maxWindows, Timeout: timeout, Verbose: verbose}
-	var as allocSites
-	if sites {
-		opt.WindowStart, opt.WindowEnd = as.start, as.end
-	}
+	opt.PrintAllocSites = sites
 	br, err := app.RunBench(pilot.Config(), b, opt)
 	if err != nil {
 		return err
@@ -334,6 +331,9 @@ func gateFailures(r report, allowUnpaced bool, maxCPU float64) []string {
 	}
 	if r.Mallocs != 0 || r.TotalAlloc != 0 {
 		f = append(f, fmt.Sprintf("every one of %d whole sessions allocated (fewest: %d mallocs / %d bytes)", len(r.Windows), r.Mallocs, r.TotalAlloc))
+	}
+	if msg := r.OwnAllocFailure(); msg != "" {
+		f = append(f, msg)
 	}
 	if maxCPU > 0 && r.MainThreadCPUus > maxCPU {
 		f = append(f, fmt.Sprintf("main-thread CPU %.0f µs/frame, budget %.0f", r.MainThreadCPUus, maxCPU))

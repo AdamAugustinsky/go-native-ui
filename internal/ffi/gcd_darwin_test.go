@@ -3,10 +3,15 @@
 package ffi
 
 import (
+	"errors"
+	"fmt"
 	"runtime"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"unsafe"
+
+	"gonativeui/internal/allocsite"
 )
 
 // Callbacks from libdispatch's worker threads, which GCD creates, reuses and
@@ -73,30 +78,73 @@ func distinctGCDThreads() int {
 // callback is in every steady window; the runtime's own one-offs (its
 // scavenger's timer heap growing on a P it had not used, 16 bytes) miss most.
 // It fails if no window of 16 was steady.
+//
+// Every window that allocated, steady or not, is attributed: an allocation
+// made by our code fails at once, even if a later window is clean (D27);
+// only the runtime's own (new Ms, its timers) may pass.
 func steady(t *testing.T, f func()) (objects, bytes uint64) {
+	objects, bytes, err := steadyRounds(f, t.Logf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return objects, bytes
+}
+
+func steadyRounds(f func(), logf func(string, ...any)) (objects, bytes uint64, err error) {
+	defer allocsite.Enable()()
+	var s0, s1 allocsite.Snapshot
+	s0.Take() // the storage, before the windows
+	s1.Take()
 	steadyN := 0
 	for round := 1; round <= 16 && steadyN < 6; round++ {
 		runtime.GC()
+		s0.Take()
 		h0, m0 := highWater.Load(), mCount()
 		o0, b0 := allocs()
 		f()
 		o1, b1 := allocs()
 		h1, m1 := highWater.Load(), mCount()
 		objects, bytes = o1-o0, b1-b0
+		if objects != 0 || bytes != 0 {
+			runtime.GC()
+			s1.Take()
+			sites := allocsite.Diff(&s0, &s1)
+			if n := allocsite.Objects(sites, allocsite.Ours); n > 0 {
+				var b strings.Builder
+				allocsite.Write(&b, sites)
+				return objects, bytes, fmt.Errorf("window %d: %d of its %d objects were allocated by our code:\n%s", round, n, objects, b.String())
+			}
+		}
 		if h1 > h0 || m1 > m0 {
-			t.Logf("window %d is not steady (Ms %d -> %d, high water %d -> %d): %d objects / %d bytes", round, m0, m1, h0, h1, objects, bytes)
+			logf("window %d is not steady (Ms %d -> %d, high water %d -> %d): %d objects / %d bytes", round, m0, m1, h0, h1, objects, bytes)
 			continue
 		}
 		steadyN++
 		if objects == 0 && bytes == 0 {
-			return
+			return 0, 0, nil
 		}
-		t.Logf("steady window %d: %d objects / %d bytes", round, objects, bytes)
+		logf("steady window %d: %d objects / %d bytes", round, objects, bytes)
 	}
 	if steadyN == 0 {
-		t.Fatal("the runtime kept making Ms: no steady window in 16")
+		return objects, bytes, errors.New("the runtime kept making Ms: no steady window in 16")
 	}
-	return
+	return objects, bytes, nil
+}
+
+var steadySink []byte
+
+// The windows do not pass over an allocation of ours that only one of them
+// made.
+func TestSteadyCatchesAOneOffOfOurs(t *testing.T) {
+	first := true
+	_, _, err := steadyRounds(func() {
+		if first {
+			first, steadySink = false, make([]byte, 64)
+		}
+	}, t.Logf)
+	if err == nil || !strings.Contains(err.Error(), "gonativeui/internal/ffi.TestSteadyCatchesAOneOffOfOurs") {
+		t.Fatalf("a one-off allocation of ours passed: %v", err)
+	}
 }
 
 // mCount is the number of Ms the runtime has made. It does not allocate.

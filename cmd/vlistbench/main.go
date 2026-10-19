@@ -38,10 +38,8 @@ const (
 	warmFrames = 120
 	measFrames = 600 // one session of the script
 	// maxWindows: the allocation gate passes on the first clean window
-	// (D27). The first is the script's first whole session, so its peak
-	// frame grows the draw list once (144 KiB); the runtime's type-assertion
-	// cache fills on a random call (48 B). Five windows, as the offscreen
-	// TestTimelineSession, leave room for both.
+	// (D27); the runtime's type-assertion cache fills on a random call
+	// (48 B). Five windows, as the offscreen TestTimelineSession.
 	maxWindows = 5
 
 	defaultMaxListUs = 4000 // ARCHITECTURE §11: the list's work in any frame
@@ -128,13 +126,14 @@ func renderPNG(ch *chat, path string) error {
 }
 
 func runBench(ch *chat, gate, allowUnpaced, sites bool, maxList, maxEdit float64, timeout time.Duration) error {
-	ch.script = ch.benchScript(warmFrames, measFrames, warmFrames+maxWindows*measFrames+30)
+	// The warm-up plays one whole session first: its peak frame grows the
+	// draw list once (147456 bytes), which is a warm-up and not the
+	// session's allocation; a measured window must not see it (D27).
+	warm := warmFrames + measFrames
+	ch.script = ch.benchScript(warmFrames, measFrames, warm+maxWindows*measFrames+30)
 	ch.warmRebuild()
-	o := app.BenchOptions{Warm: warmFrames, Frames: measFrames, Windows: maxWindows, Timeout: timeout}
-	var as allocSites
-	if sites {
-		o.WindowStart, o.WindowEnd = as.start, as.end
-	}
+	o := app.BenchOptions{Warm: warm, Frames: measFrames, Windows: maxWindows, Timeout: timeout}
+	o.PrintAllocSites = sites
 	br, err := app.RunBench(config, ch, o)
 	if err != nil {
 		return err
@@ -173,6 +172,9 @@ func gateFailures(r report, allowUnpaced bool, maxList, maxEdit float64) []strin
 	}
 	if r.Mallocs != 0 || r.TotalAlloc != 0 {
 		f = append(f, fmt.Sprintf("%d mallocs / %d bytes allocated over the measured frames", r.Mallocs, r.TotalAlloc))
+	}
+	if msg := r.OwnAllocFailure(); msg != "" {
+		f = append(f, msg)
 	}
 	if maxList > 0 && r.ListWorkUs.P99 > maxList {
 		f = append(f, fmt.Sprintf("the list's work per frame has a P99 of %.0f µs, budget %.0f", r.ListWorkUs.P99, maxList))
