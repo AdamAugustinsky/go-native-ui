@@ -249,6 +249,9 @@ type Image struct {
 	UV [4]float32
 	// Mode is how the texture is read (gpu.ModeMaskR8 or gpu.ModeRGBA).
 	Mode gpu.Mode
+	// Fit places the image in the box (see ImageFit); FitNatural draws it at
+	// its own size.
+	Fit ImageFit
 }
 
 // Tint is the palette transform: every colour of a box (background, border,

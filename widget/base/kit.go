@@ -4,6 +4,7 @@ import (
 	"unsafe"
 
 	"gonativeui/icon"
+	"gonativeui/img"
 	"gonativeui/menu"
 	"gonativeui/text"
 	"gonativeui/theme"
@@ -54,6 +55,7 @@ type Kit struct {
 	target theme.Mode // what the follower aimed for in the last Begin
 
 	menu  *menu.Model
+	imgs  *img.Cache
 	pend  [pendingCommands]menu.ID // commands drawn menus chose, delivered at the next Begin
 	npend int
 	force Look
