@@ -5,6 +5,7 @@ import (
 
 	"gonativeui/gpu"
 	"gonativeui/internal/fakeui"
+	"gonativeui/platform"
 	"gonativeui/theme"
 	"gonativeui/theme/rex"
 	"gonativeui/ui"
@@ -244,5 +245,62 @@ func TestSystemAccentAppliedAndReverted(t *testing.T) {
 	g.frame()
 	if g.r.Pal.Accent != accentRed {
 		t.Error("a new Resolved did not get the accent after Invalidate")
+	}
+}
+
+// The system's colours and settings reach the Resolved through the Follower:
+// pinned ones at once, a change of them once, and a new Resolved again after
+// Invalidate; following them costs nothing per frame.
+func TestSystemValuesThroughTheFollower(t *testing.T) {
+	g := newRig(t)
+	g.sys = ui.Appearance{Known: true}
+	g.frames(2)
+	// Nobody gave this context the system's values: Rex's own, whatever the
+	// process (another test may have made it follow the system on macOS).
+	label := func(m theme.Mode) uint32 { return theme.Measured[m][theme.Label] }
+	if g.r.Colors[theme.Label] != label(theme.Light) || g.r.Settings != (theme.Settings{}) {
+		t.Fatalf("no values given: label %08X, settings %+v", g.r.Colors[theme.Label], g.r.Settings)
+	}
+	// Values given to the context reach the roles; a pin wins over them.
+	var given platform.SystemValues
+	given.Known, given.ReduceTransparency = true, true
+	given.Colors[theme.Light][theme.Label] = 0x445566AA
+	g.c.SetSystemValues(1, &given)
+	g.frame()
+	if g.r.Colors[theme.Label] != 0x445566AA || !g.r.Settings.ReduceTransparency {
+		t.Errorf("given values: label %08X, settings %+v", g.r.Colors[theme.Label], g.r.Settings)
+	}
+	g.c.SetSystemValues(1, &platform.SystemValues{})
+	g.frame()
+	sys := theme.SystemValues{Known: true, Settings: theme.Settings{ReduceMotion: true, Scroller: theme.ScrollerLegacy}}
+	sys.Colors[theme.Light][theme.Label] = 0x112233CC
+	sys.Colors[theme.Dark][theme.Label] = 0xDDEEFFCC
+	g.f.PinSystem(&sys)
+	g.frame()
+	if g.r.Colors[theme.Label] != 0x112233CC || g.r.Settings != sys.Settings || g.r.Motion.Hot != theme.Instant || g.r.Motion.Mode == theme.Instant {
+		t.Errorf("pinned: label %08X, settings %+v, motion %+v", g.r.Colors[theme.Label], g.r.Settings, g.r.Motion)
+	}
+	if *g.f.SystemValues() != sys {
+		t.Error("the Follower does not report what it applied")
+	}
+	// The dark roles have them too, through the crossfade.
+	g.sys.Dark = true
+	g.frames(120)
+	if g.r.Colors[theme.Label] != 0xDDEEFFCC {
+		t.Errorf("dark label %08X", g.r.Colors[theme.Label])
+	}
+	if n := testing.AllocsPerRun(20, g.frame); n != 0 {
+		t.Errorf("%v allocations per frame while following the system's values", n)
+	}
+	g.r = rex.Theme().Resolve(fakeui.New(), 2, theme.Dark)
+	g.f.Invalidate()
+	g.frame()
+	if g.r.Colors[theme.Label] != 0xDDEEFFCC || !g.r.Settings.ReduceMotion {
+		t.Error("a new Resolved did not get the system's values after Invalidate")
+	}
+	g.f.PinSystem(nil)
+	g.frame()
+	if g.r.Colors[theme.Label] != label(theme.Dark) || g.r.Colors[theme.Label] == 0xDDEEFFCC {
+		t.Errorf("unpinned again: label %08X", g.r.Colors[theme.Label])
 	}
 }

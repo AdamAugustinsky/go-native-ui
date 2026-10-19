@@ -112,9 +112,21 @@ func apSetup() {
 	// Arguments are evaluated before the call is assembled: they share objc.F.
 	selAddObserver := objc.Sel("addObserver:selector:name:object:")
 	center := objc.Send(objc.Cls("NSNotificationCenter"), objc.Sel("defaultCenter"))
-	colors := stringConstant(appKit, "NSSystemColorsDidChangeNotification")
-	objc.F.Reset().Arg(uintptr(center)).Arg(uintptr(selAddObserver)).
-		Arg(uintptr(apObserver)).Arg(uintptr(selAppearanceChanged)).Arg(uintptr(colors)).Arg(0).Call(objc.MsgSend)
+	observe := func(center, name objc.ID) {
+		if center == 0 || name == 0 {
+			return
+		}
+		objc.F.Reset().Arg(uintptr(center)).Arg(uintptr(selAddObserver)).
+			Arg(uintptr(apObserver)).Arg(uintptr(selAppearanceChanged)).Arg(uintptr(name)).Arg(0).Call(objc.MsgSend)
+	}
+	observe(center, stringConstant(appKit, "NSSystemColorsDidChangeNotification"))
+	// The system values (ReadSystemValues) also follow the scroller style and
+	// the accessibility display options; the latter are posted on the
+	// workspace's own centre.
+	observe(center, stringConstant(appKit, "NSPreferredScrollerStyleDidChangeNotification"))
+	if ws := objc.Send(objc.Cls("NSWorkspace"), objc.Sel("sharedWorkspace")); ws != 0 {
+		observe(objc.Send(ws, objc.Sel("notificationCenter")), stringConstant(appKit, "NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification"))
+	}
 	// The distributed center delivers while the app is in the background too
 	// (NSNotificationSuspensionBehaviorDeliverImmediately).
 	dist := objc.Send(objc.Cls("NSDistributedNotificationCenter"), objc.Sel("defaultCenter"))
@@ -124,11 +136,16 @@ func apSetup() {
 		objc.F.Reset().Arg(uintptr(dist)).Arg(uintptr(selAddDist)).
 			Arg(uintptr(apObserver)).Arg(uintptr(selAppearanceChanged)).Arg(uintptr(name)).Arg(0).Arg(4).Call(objc.MsgSend)
 	}
+	// From here on ReadSystemValues reads: the serial tells those who asked
+	// before (and got nothing) to ask again.
+	apFollowing.Store(true)
+	apSerial.Add(1)
 }
 
 // apChanged records a change the system reported: main thread (or any thread).
 func apChanged() {
 	apStale.Store(true)
+	svStale.Store(true)
 	apSerial.Add(1)
 	Wake()
 }

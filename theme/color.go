@@ -76,8 +76,20 @@ func Luminance(c uint32) float64 {
 	return 0.2126*lin(24) + 0.7152*lin(16) + 0.0722*lin(8)
 }
 
-// Contrast is the WCAG contrast ratio (1..21) between the RGB of a and b.
-// Composite translucent colours with Over first.
+// ContrastOn is the WCAG contrast ratio of the colour fg drawn on bg, where bg
+// is itself drawn on under: bg is composited over under, fg over that, and
+// the two results compared. Translucent system colours (labelColor is
+// #000000D8) are judged as they are seen: secondaryLabelColor (#0000007F) on
+// white is about 3.95:1. under must be opaque (its alpha is ignored); pass
+// the window or field colour a translucent bg sits on, or an opaque bg twice.
+func ContrastOn(fg, bg, under uint32) float64 {
+	b := Over(bg, under|0xFF)
+	return Contrast(Over(fg, b), b)
+}
+
+// Contrast is the WCAG contrast ratio (1..21) between the RGB of a and b,
+// ignoring alpha. Composite translucent colours with Over first, or use
+// ContrastOn.
 func Contrast(a, b uint32) float64 {
 	la, lb := Luminance(a), Luminance(b)
 	if la < lb {

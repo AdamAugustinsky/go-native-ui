@@ -50,6 +50,7 @@ gpu                   Renderer interface; backends: metal (darwin), d3d11 (windo
 platform              Window, events, DPI, keyboard/IME, clipboard, cursors, timers, wake
 fs                    directory listing, watching, icons/thumbnails (per OS)
 core                  arenas, frame scratch, pointer-free tables, handle pools, MPSC queue
+clib                  public: an app's own native library, dlopen + zero-alloc plain C calls on internal/ffi, no callbacks (D35; darwin, linux)
 internal/ffi          zero-alloc C call + callback trampolines (darwin, linux; arm64, amd64)
 internal/objc         Objective-C messaging on ffi (darwin)
 internal/com          COM vtable call helpers (windows)
@@ -152,9 +153,12 @@ the zero-allocation frame rule. Our own trampolines on top of purego's
 
 - `internal/ffi.Frame` holds 8 integer and 8 float register slots, stack
   slots, the `x8` indirect-result pointer, and return slots (`x0`/`x1`,
-  `d0`–`d3`). Frames live in long-lived memory (one per OS thread), never
-  on a goroutine stack: a callback could grow and move the stack while C
-  holds the pointer.
+  `d0`–`d3`). Frames live in memory that does not move, never on a
+  goroutine stack (a callback could grow and move the stack while C holds
+  the pointer): a global or heap frame used by one thread at a time (the
+  main thread's `objc.F`), or, inside a callback, the invocation's own frame
+  on the C stack (`CB.Frame()`, D36), which any thread and any nesting depth
+  can use. The callback table has 1024 entries.
 - The call path is `runtime.cgocall(trampoline, frame)`, so blocking calls
   (`nextEventMatchingMask`, `poll`) release the P and the GC is not
   stalled.
