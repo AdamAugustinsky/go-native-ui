@@ -417,3 +417,22 @@ func TestScrollOverflowWaitsForTheNextFrame(t *testing.T) {
 		t.Fatalf("second frame: %+v", in.Scrolls[:in.NScrolls])
 	}
 }
+
+// TestScrollUsesTheEventsPosition: a scroll that says where it happened
+// (FlagPos: a scroll bubbled up from a native host, say) is recorded there,
+// not where the pointer is; one that does not is recorded at the pointer.
+func TestScrollUsesTheEventsPosition(t *testing.T) {
+	tr := newTranslator()
+	tr.event(ev(platform.EvPointerMove, func(e *platform.Event) { e.X, e.Y = 10, 20 }), nil)
+	tr.event(ev(platform.EvScroll, func(e *platform.Event) {
+		e.DY, e.X, e.Y, e.Flags = 3, 300, 40, platform.FlagPrecise|platform.FlagPos
+	}), nil)
+	tr.event(ev(platform.EvScroll, func(e *platform.Event) { e.DY, e.Flags = 2, platform.FlagPrecise }), nil)
+	in := &tr.in
+	if r := in.Scrolls[0]; !r.Pos || r.X != 300 || r.Y != 40 {
+		t.Fatalf("the positioned scroll is recorded at %v,%v (pos %v)", r.X, r.Y, r.Pos)
+	}
+	if r := in.Scrolls[1]; !r.Pos || r.X != 10 || r.Y != 20 {
+		t.Fatalf("the other is recorded at %v,%v (pos %v)", r.X, r.Y, r.Pos)
+	}
+}

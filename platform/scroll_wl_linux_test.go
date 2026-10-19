@@ -143,3 +143,19 @@ func TestWaylandWheelNotches(t *testing.T) {
 		}
 	}
 }
+
+// TestWaylandScrollCarriesThePointer: a scroll while the pointer is in the
+// window says where it is (FlagPos).
+func TestWaylandScrollCarriesThePointer(t *testing.T) {
+	w := &Window{s120: 120}
+	w.wy.seatV = 8
+	w.ptrIn, w.ptrX, w.ptrY = true, 30, 70
+	var args [4]uint64
+	args[1], args[2] = 0, uint64(uint32(int32(4*256)))
+	w.onPointer(4, unsafe.Pointer(&args))
+	args = [4]uint64{}
+	w.onPointer(5, unsafe.Pointer(&args))
+	if len(w.q.ev) != 1 || w.q.ev[0].Flags&FlagPos == 0 || w.q.ev[0].X != 30 || w.q.ev[0].Y != 70 {
+		t.Fatalf("%+v", w.q.ev)
+	}
+}

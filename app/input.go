@@ -381,6 +381,9 @@ func (t *translator) scroll(e *platform.Event) {
 	r := ui.ScrollEvent{DX: e.DX, DY: e.DY, Precise: precise, Inverted: e.Flags&platform.FlagInverted != 0,
 		Phase: ui.ScrollPhase(e.Phase), Momentum: ui.ScrollPhase(e.Momentum), Time: e.Time,
 		X: in.MouseX, Y: in.MouseY, Pos: in.Inside} // where the pointer is now: a later move must not redirect it
+	if e.Flags&platform.FlagPos != 0 { // where the event says it happened (a scroll bubbled from a native host, say)
+		r.X, r.Y, r.Pos = e.X, e.Y, true
+	}
 	if !precise {
 		r.DX, r.DY = e.DX/step, e.DY/step
 	}

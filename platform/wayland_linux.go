@@ -899,7 +899,7 @@ func (w *Window) onPointer(op uint32, a unsafe.Pointer) {
 			ax = 1
 		}
 		if y.seatV < 5 { // no frame events: each axis event is a scroll of its own
-			ev := Event{Kind: EvScroll, Mods: w.mods, Time: now}
+			ev := w.scrollAt(Event{Kind: EvScroll, Mods: w.mods, Time: now})
 			if ax == 1 {
 				ev.DY = v
 			} else {
@@ -934,6 +934,16 @@ func (w *Window) onPointer(op uint32, a unsafe.Pointer) {
 	}
 }
 
+// scrollAt gives scroll event e the pointer's position, while the pointer is
+// in the window.
+func (w *Window) scrollAt(e Event) Event {
+	if w.ptrIn {
+		e.X, e.Y = w.ptrX, w.ptrY
+		e.Flags |= FlagPos
+	}
+	return e
+}
+
 // scrollFrame sends the scrolling of a wl_pointer frame as one EvScroll with
 // both axes. Fingers make it a gesture (Began, then Changed) over the axes
 // they moved, which ends when every one of them stopped (axis_stop), not
@@ -951,9 +961,9 @@ func (w *Window) scrollFrame(now int64) {
 		}
 	}
 	if y.axisMoved != 0 {
-		ev := Event{Kind: EvScroll, DX: y.axisAcc[0], DY: y.axisAcc[1], Mods: w.mods, Time: now}
+		ev := w.scrollAt(Event{Kind: EvScroll, DX: y.axisAcc[0], DY: y.axisAcc[1], Mods: w.mods, Time: now})
 		if y.axisSource == 1 || y.axisSource == 2 { // finger, continuous
-			ev.Flags = FlagPrecise
+			ev.Flags |= FlagPrecise
 		}
 		if finger {
 			ev.Phase = PhaseChanged

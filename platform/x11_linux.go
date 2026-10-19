@@ -447,7 +447,7 @@ func (w *Window) x11Event() {
 			b = ButtonForward
 		case 4, 5, 6, 7: // wheel: up, down, left, right
 			if down {
-				ev := Event{Kind: EvScroll, Mods: w.mods, Time: now}
+				ev := Event{Kind: EvScroll, X: px, Y: py, Flags: FlagPos, Mods: w.mods, Time: now}
 				d := scrollStep * scale
 				switch x.u32(xoButton) {
 				case 4:

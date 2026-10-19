@@ -855,6 +855,7 @@ func wndProc(hwnd, m, wp, lp uintptr) uintptr {
 		if e.Time < w.preciseUntil {
 			e.Flags = FlagPrecise
 		}
+		e.Flags |= FlagPos
 		if m == wmMouseWheel {
 			e.DY = delta // wheel forward = scroll up = content moves down
 		} else {

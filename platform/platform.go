@@ -99,7 +99,7 @@ const (
 	EvPointerMove             // X, Y
 	EvPointerButton           // Button, FlagDown, X, Y
 	EvPointerLeave            // pointer left the content area
-	EvScroll                  // DX, DY in physical pixels; FlagPrecise for trackpads; Phase, Momentum; FlagInverted
+	EvScroll                  // DX, DY in physical pixels; FlagPrecise for trackpads; Phase, Momentum; FlagInverted; X, Y with FlagPos
 	EvKey                     // Key, Code, Mods, FlagDown, FlagRepeat
 	EvText                    // Text: committed UTF-8 text input
 	EvPreedit                 // Text: input-method composition (marked text), empty when it ended; SelStart, SelLen: caret/selection inside it
@@ -120,6 +120,7 @@ const (
 	FlagFailed                     // EvPaste: no text (empty, not text, over MaxPaste, or the transfer failed)
 	FlagStandard                   // EvCommand: Tag is the MenuAction of a standard edit item without a command (menu.go)
 	FlagInverted                   // EvScroll: the device's direction is inverted ("natural" scrolling); DX, DY already move the content
+	FlagPos                        // EvScroll: X, Y are where the pointer was at the event (a scroll goes to the box under it, not under a later move)
 )
 
 // ScrollPhase is the phase of a trackpad scroll gesture (Event.Phase) or of

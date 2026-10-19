@@ -109,8 +109,21 @@ func (w *Window) pointerEvent(ev objc.ID, typ uintptr, t int64) (consumed bool) 
 }
 
 // scrollEvent queues a scroll-wheel event.
+// The event carries where it happened (FlagPos), also when it bubbled up
+// from a native host the pointer is over.
 func (w *Window) scrollEvent(ev objc.ID, t int64) {
-	w.q.push(scrollEventOf(ev, w.scale, t))
+	e := scrollEventOf(ev, w.scale, t)
+	e.X, e.Y = w.locate(ev)
+	e.Flags |= FlagPos
+	w.q.push(e)
+}
+
+// locate is where mouse event ev happened in the window's content, in
+// pixels from its top-left.
+func (w *Window) locate(ev objc.ID) (x, y float32) {
+	lx, ly := objc.SendPoint(ev, selLocation)
+	s := float64(w.scale)
+	return float32(lx * s), float32((w.hPt - ly) * s)
 }
 
 // lineScroll is how many points a wheel line scrolls: NSScrollView's
