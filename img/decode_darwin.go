@@ -15,6 +15,7 @@ import (
 	"github.com/ebitengine/purego"
 
 	"gonativeui/internal/ffi"
+	"gonativeui/internal/objc"
 )
 
 // ImageIO, Core Graphics and Core Foundation are plain C APIs, thread-safe
@@ -50,9 +51,20 @@ var iio struct {
 	cgColorSpaceCreate                                   uintptr
 }
 
-// imageIOLoads counts calls to loadImageIO: tests check that the owner's
-// goroutine never makes one (the first loads three frameworks).
-var imageIOLoads atomic.Int32
+// imageIOLoads counts calls to loadImageIO, and dlCalls this package's
+// dlopen and dlsym calls: tests check that the owner's goroutine makes none
+// (the first load opens three frameworks).
+var imageIOLoads, dlCalls atomic.Int32
+
+func dlopen(path string) (uintptr, error) {
+	dlCalls.Add(1)
+	return purego.Dlopen(path, purego.RTLD_NOW|purego.RTLD_GLOBAL)
+}
+
+func dlsym(h uintptr, name string) (uintptr, error) {
+	dlCalls.Add(1)
+	return purego.Dlsym(h, name)
+}
 
 // loadImageIO loads ImageIO, Core Graphics and Core Foundation, on first use:
 // on a worker, the first time one decodes.
@@ -60,7 +72,7 @@ func loadImageIO() error {
 	imageIOLoads.Add(1)
 	iio.once.Do(func() {
 		open := func(path string) uintptr {
-			h, err := purego.Dlopen(path, purego.RTLD_NOW|purego.RTLD_GLOBAL)
+			h, err := dlopen(path)
 			if err != nil && iio.err == nil {
 				iio.err = err
 			}
@@ -73,7 +85,7 @@ func loadImageIO() error {
 			return
 		}
 		fn := func(h uintptr, name string) uintptr {
-			p, err := purego.Dlsym(h, name)
+			p, err := dlsym(h, name)
 			if err != nil && iio.err == nil {
 				iio.err = err
 			}
@@ -82,7 +94,7 @@ func loadImageIO() error {
 		// val reads a data symbol that holds a pointer (a CFStringRef key, a
 		// CFBooleanRef, an allocator); optional ones may be missing.
 		val := func(h uintptr, name string, optional bool) uintptr {
-			p, err := purego.Dlsym(h, name)
+			p, err := dlsym(h, name)
 			if err != nil || p == 0 {
 				if !optional && iio.err == nil {
 					iio.err = errors.New("img: missing " + name)
@@ -146,43 +158,21 @@ func loadImageIO() error {
 	return iio.err
 }
 
-// libc's malloc and free, looked up among the libraries already loaded
-// (libSystem always is): the owner copies inline bytes into C memory, and
-// must not load the decoding frameworks to do it.
-var cmem struct {
-	once         sync.Once
-	malloc, free uintptr
-}
-
-func loadMem() {
-	cmem.once.Do(func() {
-		m, err1 := purego.Dlsym(purego.RTLD_DEFAULT, "malloc")
-		f, err2 := purego.Dlsym(purego.RTLD_DEFAULT, "free")
-		if err1 == nil && err2 == nil && m != 0 && f != 0 {
-			cmem.malloc, cmem.free = m, f
-		}
-	})
-}
-
-// allocMem allocates n bytes of C memory (Go memory if libc's malloc could
-// not be found).
+// allocMem allocates n bytes of C memory. libc's malloc was resolved when
+// the process started (objc.Malloc): the owner copies inline bytes here, and
+// a symbol lookup could wait for a worker loading the decoding frameworks.
 func allocMem(n int, fr *ffi.Frame) (unsafe.Pointer, []byte) {
-	loadMem()
-	if cmem.malloc == 0 {
-		b := make([]byte, n)
-		return unsafe.Pointer(&b[0]), b
-	}
-	p := fr.Call1(cmem.malloc, uintptr(n))
+	p := fr.Call1(objc.Malloc, uintptr(n))
 	if p == 0 {
 		panic("img: out of memory")
 	}
 	return ffi.PtrFromC(p), nil
 }
 
-// freeMem frees memory from allocMem (Go memory: nothing to do).
+// freeMem frees memory from allocMem.
 func freeMem(p unsafe.Pointer, fr *ffi.Frame) {
-	if p != nil && cmem.free != 0 {
-		fr.Call1(cmem.free, uintptr(p))
+	if p != nil {
+		fr.Call1(objc.Free, uintptr(p))
 	}
 }
 

@@ -10,6 +10,9 @@ import (
 	_ "image/gif"
 	_ "image/jpeg"
 	_ "image/png"
+	"os"
+	"os/exec"
+	"strings"
 	"testing"
 )
 
@@ -113,22 +116,34 @@ func BenchmarkDecode(b *testing.B) {
 	}
 }
 
-// TestRequestLoadsNoFramework: copying a new image's inline bytes on the
-// owner's goroutine (C memory) does not load ImageIO and the frameworks
-// under it; only a worker does, when it decodes. The only worker is held in
-// a lease's Bytes, so nothing decodes while the owner requests.
-func TestRequestLoadsNoFramework(t *testing.T) {
-	c, _ := newTestCache(t, Options{Workers: 1})
+// TestRequestLooksUpNoSymbols: once NewCache has returned, Request (copying
+// inline bytes into C memory) makes no dlopen or dlsym call and does not
+// load the decoding frameworks; only a worker does, when it decodes. A
+// lookup on the owner's goroutine could wait for dyld's lock while a worker
+// loads ImageIO. It runs in a fresh process, where nothing of the package
+// has run yet; the only worker is held in a lease's Bytes, so nothing
+// decodes meanwhile.
+func TestRequestLooksUpNoSymbols(t *testing.T) {
+	if os.Getenv("GNUI_IMG_FRESH") == "" {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestRequestLooksUpNoSymbols$", "-test.v", "-test.count=1")
+		cmd.Env = append(os.Environ(), "GNUI_IMG_FRESH=1")
+		out, err := cmd.CombinedOutput()
+		if err != nil || !strings.Contains(string(out), "--- PASS: TestRequestLooksUpNoSymbols") {
+			t.Fatalf("in a fresh process: %v\n%s", err, out)
+		}
+		return
+	}
 	png := encPNG(t, gradient(16, 16))
+	c, _ := newTestCache(t, Options{Workers: 1})
+	dl, loads := dlCalls.Load(), imageIOLoads.Load()
 	l := newBlockingLease(png)
 	c.Request(Key{Hash: 1, W: 16, H: 16}, Leased(l))
 	<-l.started
 	defer close(l.open)
-	n := imageIOLoads.Load()
 	for k := 0; k < 8; k++ {
 		c.Request(Key{Hash: uint64(2 + k), W: 16, H: 16}, Bytes(png))
 	}
-	if d := imageIOLoads.Load() - n; d != 0 {
-		t.Fatalf("Request loaded the decoding frameworks %d times on the owner's goroutine", d)
+	if d, n := dlCalls.Load()-dl, imageIOLoads.Load()-loads; d != 0 || n != 0 {
+		t.Fatalf("Request made %d dlopen/dlsym calls and %d framework loads on the owner's goroutine", d, n)
 	}
 }
