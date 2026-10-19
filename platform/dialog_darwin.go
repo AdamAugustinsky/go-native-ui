@@ -30,6 +30,12 @@ type dialogRec struct {
 	w      *Window
 	obj    objc.ID // the NSAlert, NSOpenPanel or NSSavePanel; retained until the sheet ends
 	req    objc.Request
+	// withdrawn: the app cancelled the dialog (CancelDialog) while its sheet
+	// was not attached to the window, so it could not be ended then. The
+	// record stays, with its request cancelled, until the sheet has been seen
+	// and ended or the window closes (reapDialogs, abortDialogs): a queued
+	// sheet must not appear later with nobody to answer for it.
+	withdrawn bool
 }
 
 var (
@@ -50,7 +56,7 @@ var (
 	selSetShowsSupp     = objc.Sel("setShowsSuppressionButton:")
 	selShowsSupp        = objc.Sel("showsSuppressionButton")
 	selSuppressionBtn   = objc.Sel("suppressionButton")
-	selControlState            = objc.Sel("state")
+	selControlState     = objc.Sel("state")
 	selSetInitialFR     = objc.Sel("setInitialFirstResponder:")
 	selBeginSheet       = objc.Sel("beginSheetModalForWindow:completionHandler:")
 	selEndSheet         = objc.Sel("endSheet:returnCode:")
@@ -124,7 +130,7 @@ func (w *Window) dialogSlot() (int, error) {
 				free = i
 			}
 		case dialogs[i].w == w:
-			return 0, ErrDialogBusy
+			return 0, ErrDialogBusy // also a withdrawn one still waiting to be dismissed
 		}
 	}
 	if free < 0 {
@@ -386,7 +392,7 @@ func (r *dialogRec) endSheet() bool {
 // input then.
 func (w *Window) dialogOpen() bool {
 	for i := range dialogs {
-		if dialogs[i].ticket != 0 && dialogs[i].w == w {
+		if dialogs[i].ticket != 0 && dialogs[i].w == w && !dialogs[i].withdrawn {
 			return true
 		}
 	}
@@ -395,21 +401,37 @@ func (w *Window) dialogOpen() bool {
 
 // CancelDialog withdraws a dialog the app no longer wants: the sheet closes
 // and no result is delivered. It reports whether the ticket was open (not
-// yet answered or cancelled). Main thread.
+// yet answered or cancelled). A sheet that is not attached yet (queued behind
+// another) cannot be closed at once: it is dismissed the moment it attaches,
+// and meanwhile the window counts as having a dialog (ErrDialogBusy). Main
+// thread.
 func (w *Window) CancelDialog(t DialogTicket) bool {
 	for i := range dialogs {
 		r := &dialogs[i]
-		if r.ticket != t || r.w != w || t == 0 {
+		if r.ticket != t || r.w != w || t == 0 || r.withdrawn {
 			continue
 		}
 		pool := objc.F.Call0(objc.PoolPush)
 		r.req.Cancel() // the completion that follows is stale and dropped
-		r.endSheet()
-		r.release()
+		if r.endSheet() {
+			r.release()
+		} else {
+			r.withdrawn = true
+		}
 		objc.F.Call1(objc.PoolPop, pool)
 		return true
 	}
 	return false
+}
+
+// reapDialogs ends the withdrawn dialogs of w whose sheets have attached since
+// (Wait calls it after each pump of the event loop).
+func (w *Window) reapDialogs() {
+	for i := range dialogs {
+		if r := &dialogs[i]; r.ticket != 0 && r.withdrawn && r.w == w && r.endSheet() {
+			r.release()
+		}
+	}
 }
 
 // abortDialogs ends the sheets of w before its window closes. AppKit calls a
@@ -425,8 +447,10 @@ func (w *Window) abortDialogs() {
 		if r.ticket == 0 || r.w != w {
 			continue
 		}
-		r.endSheet() // the completion may run inside this call (finishDialog)
-		if r.ticket != 0 {
+		r.endSheet()                      // the completion may run inside this call (finishDialog)
+		if r.ticket != 0 && r.withdrawn { // the app withdrew it: no result
+			r.release()
+		} else if r.ticket != 0 {
 			r.req.Cancel() // a late completion is stale
 			w.q.push(dialogEvent(r.ticket, r.kind, DialogCancelled, 0, false, 0, 0, Now()))
 			r.release()

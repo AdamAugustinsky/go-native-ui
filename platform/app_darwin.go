@@ -44,6 +44,7 @@ func (w *Window) Wait(timeoutNs int64) []Event {
 	for ev := w.nextEvent(until); ev != 0; ev = w.nextEvent(w.distantPast) {
 		w.handle(ev)
 	}
+	w.reapDialogs()
 	F.Call1(objc.PoolPop, pool)
 	w.returned, w.nOut = true, len(w.q.ev)
 	return w.q.ev
