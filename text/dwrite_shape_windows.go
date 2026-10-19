@@ -5,7 +5,6 @@ package text
 import (
 	"math"
 	"syscall"
-	"unicode"
 	"unicode/utf8"
 	"unsafe"
 
@@ -218,7 +217,7 @@ func (s *System) shapeMiss(f FontKey, b []byte) RunRef {
 	s.toUTF16(b)
 	var advance float32
 	if len(s.u16) > 0 {
-		s.paraRTL = firstStrongRTL(b)
+		s.paraRTL = paraStrongRTL(b) // UAX #9 P2/P3 over Bidi_Class (bidi.go)
 		advance = s.shapeLine(fe)
 	}
 	return s.runs.insert(f, b, s.gbuf, s.xbuf, s.fbuf, s.cbuf, advance)
@@ -245,20 +244,6 @@ func (s *System) toUTF16(b []byte) {
 		i += n
 	}
 	s.u16, s.u16b = u, ub
-}
-
-// firstStrongRTL reports whether the first letter of b belongs to a
-// right-to-left script, which makes the paragraph direction right-to-left.
-func firstStrongRTL(b []byte) bool {
-	for i := 0; i < len(b); {
-		r, n := utf8.DecodeRune(b[i:])
-		i += n
-		if r != utf8.RuneError && unicode.IsLetter(r) {
-			return unicode.In(r, unicode.Arabic, unicode.Hebrew, unicode.Syriac, unicode.Thaana,
-				unicode.Nko, unicode.Mandaic, unicode.Samaritan, unicode.Adlam)
-		}
-	}
-	return false
 }
 
 func b2u(b bool) uintptr {
@@ -432,7 +417,7 @@ func (s *System) shapeCovered(fe *fontEnt, src uintptr, a, b int, covered bool) 
 		s.mapLen, s.out1, s.scale = 0, 0, 1
 		hr := win32.HR(com.Call(s.fallback, vtFallbackMapCharacters,
 			src, uintptr(pos), uintptr(b-pos), 0, uintptr(unsafe.Pointer(&fe.family[0])),
-			uintptr(fe.weight), dwStyleNormal, dwStretchNormal,
+			uintptr(fe.weight), fe.style, dwStretchNormal,
 			uintptr(unsafe.Pointer(&s.mapLen)), uintptr(unsafe.Pointer(&s.out1)), uintptr(unsafe.Pointer(&s.scale))))
 		length := int(s.mapLen)
 		if hr < 0 || length <= 0 || length > b-pos {
@@ -590,5 +575,10 @@ func (s *System) RunGeneration() uint32 { return s.runs.gen }
 // glyphs and textBytes bytes of source text (clamped to MaxCachedRuns,
 // MaxCachedGlyphs and MaxCachedTextBytes), so that shaping new strings until
 // the cache holds that much, and every eviction after that, allocates no Go
-// memory. Call it once at setup. Without it the cache grows by doubling.
-func (s *System) ReserveRuns(runs, glyphs, textBytes int) { s.runs.reserve(runs, glyphs, textBytes) }
+// memory. It also reserves the paragraph cache (Layout), where wrapped text is
+// laid out, for DefaultParaBudget unless ReserveParas declared a budget. Call
+// it once at setup. Without it the caches grow by doubling.
+func (s *System) ReserveRuns(runs, glyphs, textBytes int) {
+	s.runs.reserve(runs, glyphs, textBytes)
+	s.layouter().reserveDefault()
+}

@@ -16,9 +16,19 @@ const DefaultTooltipDelayNs = base.DefaultTooltipDelayNs
 // TooltipDelayNs, fades in, and goes when the pointer leaves it or a button is
 // pressed. It is an overlay: it is drawn above everything, takes no input and
 // never takes the focus. Call it right after the widget.
+//
+// Where the window system shows tooltips itself (macOS: ui.Context.NativeTooltips)
+// nothing is drawn: the text is declared for the frame, and the system owns the
+// delay, the look and the placement. A disabled widget has none either way.
 func (k *Kit) Tooltip(id ui.ID, text string) {
 	c := k.c
 	if text == "" {
+		return
+	}
+	if c.NativeTooltips() {
+		if id != 0 && !k.Disabled() {
+			c.NativeTooltip(id, text)
+		}
 		return
 	}
 	key, due := k.TooltipDue(id)

@@ -167,10 +167,12 @@ func newChat(n int) *chat {
 
 // Init creates the fonts and sizes the caches for scrolling through endless
 // new strings: the run cache is reserved to its limits so that, once warm,
-// shaping a new message allocates nothing.
+// shaping a new message allocates nothing, and the paragraph cache, as a chat
+// app declares it, for many screens of messages (about 7 MiB).
 func (ch *chat) Init(a *app.App) error {
 	ch.a = a
 	a.UI.Reserve(4096)
+	a.Text.ReserveParas(text.ParaBudget{Paras: 4096, Glyphs: 1 << 18, Text: 1 << 18})
 	a.Text.ReserveRuns(text.MaxCachedRuns, text.MaxCachedGlyphs, text.MaxCachedTextBytes)
 	return nil
 }
