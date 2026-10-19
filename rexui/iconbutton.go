@@ -100,7 +100,6 @@ func IconButton(k *base.Kit, ic icon.ID, name string, o IconButtonOpts) base.Sig
 	// centres it in the button.
 	if f, disp := k.Icons().Prepare(c, ic, fg); f != 0 {
 		c.NextSize(ui.Px(w), ui.Px(h))
-		c.NextRole(ui.RoleImage)
 		c.BoxKeyed(f, ui.KeyN(p.Key, 1), disp)
 	}
 	if hl := rc.Highlight.RGBA(r); hl&0xFF != 0 && !p.Inactive && !p.Disabled {

@@ -83,7 +83,7 @@ func (g *Gallery) stateWidget(kind, i int) {
 	case rowMixed:
 		k.CheckboxTri("Mixed", &m.tri[i])
 	case rowSwitch:
-		k.Switch("Wi-Fi", &m.sw[i])
+		k.Switch("On", &m.sw[i])
 	case rowRadio:
 		k.RadioGroup("Radio", &m.radio[i], radioOptions)
 	case rowSlider:

@@ -181,8 +181,10 @@ func button(k *base.Kit, label string, ic icon.ID, withIcon bool, o ButtonOpts) 
 		disp = base.StrBytes(p.Name)
 	}
 	k.BeginPress(&p, ui.RoleButton, w, ui.Px(h), flags, disp)
-	if withIcon {
-		k.Icon(ic, fg)
+	if withIcon { // the glyph is part of the button, not an image of its own
+		if f, disp := k.Icons().Prepare(c, ic, fg); f != 0 {
+			c.BoxKeyed(f, ui.KeyN(p.Key, 3), disp)
+		}
 		k.Text(1, p.Name, s.Font.Font, fg, ui.AlignLeft, h)
 	}
 	if hl := rc.Highlight.RGBA(r); hl&0xFF != 0 && !p.Inactive && !p.Disabled {
