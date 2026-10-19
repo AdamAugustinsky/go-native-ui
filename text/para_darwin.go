@@ -68,16 +68,25 @@ func (s *System) ParaGeneration() uint32 { return s.paras.gen }
 // ParaStats returns the paragraph cache's counters.
 func (s *System) ParaStats() ParaStats { return s.paras.stats() }
 
-// ReserveParas sets the budget of the paragraph cache to b, clamped to the
+// ReserveParas declares the budget of the paragraph cache, b, clamped to the
 // MaxCachedPara constants (a field left 0 of Lines, Spans and Fonts takes
-// Glyphs/8 lines, Glyphs/4 spans and 8 fonts per layout), and sizes its
-// storage and the layout's scratch: the cache then evicts rather than grow
-// beyond the budget, and laying out paragraphs of up to min(b.Text, 16 KiB)
-// bytes allocates no Go memory, misses and evictions included. A paragraph
-// bigger than the whole budget is kept outside the cache, alone, in storage
-// that grows to fit it. Call it once at setup.
-func (s *System) ReserveParas(b ParaBudget) {
-	s.paras.reserve(b)
+// Glyphs/8 lines, Glyphs/4 spans and 8 fonts per layout), and reserves its
+// storage and the layout's scratch up front: the cache then evicts rather
+// than grow beyond the budget, and laying out paragraphs of up to
+// min(b.Text, 16 KiB) bytes allocates no Go memory, misses and evictions
+// included. Memory is the trade-off: the cache's reservation is about 27
+// bytes per glyph of the budget (1.7 MiB for DefaultParaBudget, which
+// ReserveRuns reserves when no budget is declared; 27.5 MiB at the limits),
+// and the scratch up to about 2 MiB more. Beyond the declared budget a miss
+// may allocate: a paragraph longer than the scratch grows it once, and one
+// bigger than the whole budget is laid out in storage of its own, outside the
+// cache, released when it leaves use. Call it once at setup.
+func (s *System) ReserveParas(b ParaBudget) { s.reserveParas(b, true) }
+
+func (s *System) reserveParas(b ParaBudget, declare bool) {
+	if !s.paras.reserve(b, declare) {
+		return
+	}
 	sc := scratchFor(b)
 	s.pl.b.reserve(sc.glyphs, sc.lines)
 	grow(&s.pl.u16b, sc.bytes+1)

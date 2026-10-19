@@ -590,11 +590,10 @@ func (s *System) RunGeneration() uint32 { return s.runs.gen }
 // glyphs and textBytes bytes of source text (clamped to MaxCachedRuns,
 // MaxCachedGlyphs and MaxCachedTextBytes), so that shaping new strings until
 // the cache holds that much, and every eviction after that, allocates no Go
-// memory. It reserves the paragraph cache (Layout) too, with the budget
-// ParaBudget{Paras: runs, Glyphs: glyphs, Text: textBytes} (see
-// ReserveParas), since wrapped text is laid out there. Call it once at
-// setup. Without it the caches grow by doubling.
+// memory. It also reserves the paragraph cache (Layout), where wrapped text is
+// laid out, for DefaultParaBudget unless ReserveParas declared a budget. Call
+// it once at setup. Without it the caches grow by doubling.
 func (s *System) ReserveRuns(runs, glyphs, textBytes int) {
 	s.runs.reserve(runs, glyphs, textBytes)
-	s.ReserveParas(ParaBudget{Paras: runs, Glyphs: glyphs, Text: textBytes})
+	s.layouter().reserveDefault()
 }

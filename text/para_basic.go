@@ -89,8 +89,16 @@ func (l *BasicLayouter) ParaStats() ParaStats { return l.cache.stats() }
 // ReserveParas sets the cache's budget and sizes it and the layout's scratch;
 // see System.ReserveParas. The shaper's own scratch and run cache are its
 // own to reserve (System.ReserveRuns).
-func (l *BasicLayouter) ReserveParas(b ParaBudget) {
-	l.cache.reserve(b)
+func (l *BasicLayouter) ReserveParas(b ParaBudget) { l.reserve(b, true) }
+
+// reserveDefault reserves DefaultParaBudget unless a budget was declared
+// (System.ReserveRuns).
+func (l *BasicLayouter) reserveDefault() { l.reserve(DefaultParaBudget(), false) }
+
+func (l *BasicLayouter) reserve(b ParaBudget, declare bool) {
+	if !l.cache.reserve(b, declare) {
+		return
+	}
 	sc := scratchFor(b)
 	l.b.reserve(sc.glyphs, sc.lines)
 	grow(&l.brk, sc.bytes+1)
