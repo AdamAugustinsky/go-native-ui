@@ -29,7 +29,10 @@ const (
 // indicators at AppKit's sizes, which the standard chevrons are larger than
 // (AddListGlyphs). The zero value uses the standard chevrons.
 type ListGlyphs struct {
-	Collapsed, Expanded, SortUp, SortDown icon.ID
+	// Collapsed and Expanded are an outline's disclosures.
+	Collapsed, Expanded icon.ID
+	// SortUp and SortDown are a table header's sort indicators.
+	SortUp, SortDown icon.ID
 }
 
 // ListGlyphSpecs are the glyphs AddListGlyphs adds: SF Symbols chevrons whose

@@ -13,7 +13,9 @@ import (
 // an app that edits its tree remaps them (Selection.Remap) and calls
 // OutlineState.TreeChanged.
 type Tree struct {
-	Size  []uint32
+	// Size is each node's subtree size, itself included.
+	Size []uint32
+	// Depth is each node's level, 0 for a root.
 	Depth []uint16
 }
 
