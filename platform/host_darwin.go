@@ -167,7 +167,11 @@ func (w *Window) NewHost(kind HostKind, o HostOptions) (HostID, error) {
 			v = newViewOf(effectCls, 0, 0, 0, 0)
 			objc.Send1(v, selSetWantsLayerV, 1)
 		}
-		objc.F.Reset().Arg(uintptr(v)).Arg(uintptr(selSetCornerRadius)).ArgF64(float64(o.Radius)).Call(objc.MsgSend)
+		r := v
+		if !objc.SendBool1(v, selRespondsTo, uintptr(selSetCornerRadius)) { // an effect view: its layer's
+			r = objc.Send(v, selLayerOf)
+		}
+		objc.F.Reset().Arg(uintptr(r)).Arg(uintptr(selSetCornerRadius)).ArgF64(float64(o.Radius)).Call(objc.MsgSend)
 		s.content = newViewOf(containerClass, 0, 0, 0, 0)
 		objc.Send1(s.content, selSetAutoresizing, 2|16)
 		if objc.SendBool1(v, selRespondsTo, uintptr(selSetContentViewV)) && clsGlass() != 0 {

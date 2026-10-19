@@ -136,6 +136,7 @@ func TestMaterialsApply(t *testing.T) {
 		pool := objc.F.Call0(objc.PoolPush)
 		r.glass, r.base = rig.glass, rig.base
 		r.before = subviewClasses(w.content)
+		w.mat.rtTest = -1 // the materials, whatever the system's Reduce Transparency (CI runners have it on)
 		w.SetMaterials(rig.regs)
 		r.pendingBefore = ShellPending()
 		w.FlushShell()
@@ -145,7 +146,11 @@ func TestMaterialsApply(t *testing.T) {
 		m := &w.mat
 		r.sideFrame = frameOf(m.slots[0].view)
 		r.capFrame = frameOf(m.slots[2].view)
-		r.capRadius = objc.SendF64(m.slots[2].view, objc.Sel("cornerRadius"))
+		if m.slots[2].kind == mvEffect { // before macOS 26: the radius is the layer's
+			r.capRadius = objc.SendF64(objc.Send(m.slots[2].view, selLayerOf), objc.Sel("cornerRadius"))
+		} else {
+			r.capRadius = objc.SendF64(m.slots[2].view, objc.Sel("cornerRadius"))
+		}
 		if m.glass != 0 {
 			r.inGlass = subviewClasses(m.glassContent)
 		}
