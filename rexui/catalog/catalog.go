@@ -115,9 +115,9 @@ const (
 )
 
 var iconSpecs = [numIcons]icon.Spec{
-	iconPlus:    {Symbol: "plus", Segoe: 0xE710, Fallback: '+', Pt: 13},
-	iconSidebar: {Symbol: "sidebar.left", Segoe: 0xE700, Fallback: '▤', Pt: 13},
-	iconGear:    {Symbol: "gearshape", Segoe: 0xE713, Fallback: '⚙', Pt: 13},
+	iconPlus:    icon.Spec{Symbol: "plus", Segoe: 0xE710, Fallback: '+'}.In(icon.StyleBody, icon.ScaleMedium),
+	iconSidebar: icon.Spec{Symbol: "sidebar.left", Segoe: 0xE700, Fallback: '▤'}.In(icon.StyleBody, icon.ScaleMedium),
+	iconGear:    icon.Spec{Symbol: "gearshape", Segoe: 0xE713, Fallback: '⚙'}.In(icon.StyleBody, icon.ScaleMedium),
 }
 
 // NewState makes the samples' state, adding the samples' icons to k (call
