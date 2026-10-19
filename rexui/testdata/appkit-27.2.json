@@ -254,6 +254,22 @@
 				"label": "#272727"
 			}
 		},
+		"disclosure-closed": {
+			"dark": {
+				"fill": "#797979"
+			},
+			"light": {
+				"fill": "#C3C3C3"
+			}
+		},
+		"disclosure-open": {
+			"dark": {
+				"fill": "#797979"
+			},
+			"light": {
+				"fill": "#C3C3C3"
+			}
+		},
 		"field-disabled": {
 			"dark": {
 				"w": 202,
@@ -344,6 +360,20 @@
 				"fill": "#FFFFFF"
 			}
 		},
+		"help": {
+			"dark": {
+				"w": 24,
+				"h": 24,
+				"radius": 11.84,
+				"fill": "#303030"
+			},
+			"light": {
+				"w": 24,
+				"h": 24,
+				"radius": 11.86,
+				"fill": "#EBEBEB"
+			}
+		},
 		"icon-borderless": {
 			"dark": {
 				"label": "#9A9A9A"
@@ -364,6 +394,26 @@
 				"radius": 5.88,
 				"fill": "#EBEBEB",
 				"label": "#242424"
+			}
+		},
+		"level": {
+			"dark": {
+				"w": 160,
+				"h": 16.07,
+				"fill": "#30D158"
+			},
+			"light": {
+				"w": 160,
+				"h": 16.07,
+				"fill": "#34C759"
+			}
+		},
+		"link": {
+			"dark": {
+				"label": "#419CFF"
+			},
+			"light": {
+				"label": "#0068DA"
 			}
 		},
 		"outline-emphasized": {
@@ -478,6 +528,32 @@
 				"label": "#242424"
 			}
 		},
+		"progress-bar": {
+			"dark": {
+				"w": 200,
+				"h": 8,
+				"radius": 3.72,
+				"fill": "#303030"
+			},
+			"light": {
+				"w": 200,
+				"h": 8,
+				"radius": 3.72,
+				"fill": "#F0F0F0"
+			}
+		},
+		"progress-indeterminate": {
+			"dark": {
+				"w": 200,
+				"h": 8,
+				"fill": "#007AFF"
+			},
+			"light": {
+				"w": 200,
+				"h": 8,
+				"fill": "#007AFF"
+			}
+		},
 		"pulldown": {
 			"dark": {
 				"w": 93,
@@ -586,6 +662,20 @@
 				"radius": 5.82,
 				"fill": "#F5F5F5",
 				"label": "#B6B6B6"
+			}
+		},
+		"push-disclosure": {
+			"dark": {
+				"w": 24,
+				"h": 24,
+				"radius": 5.85,
+				"fill": "#303030"
+			},
+			"light": {
+				"w": 24,
+				"h": 24,
+				"radius": 5.88,
+				"fill": "#EBEBEB"
 			}
 		},
 		"push-focused": {
@@ -892,6 +982,44 @@
 				"fill": "#0078F9"
 			}
 		},
+		"spinner": {
+			"dark": {
+				"w": 4.14,
+				"h": 32,
+				"fill": "#A1A1A1"
+			},
+			"light": {
+				"w": 4.14,
+				"h": 32,
+				"fill": "#6B6B6B"
+			}
+		},
+		"spinner-small": {
+			"dark": {
+				"w": 2.14,
+				"h": 16,
+				"fill": "#9F9F9F"
+			},
+			"light": {
+				"w": 2.14,
+				"h": 16,
+				"fill": "#6D6D6D"
+			}
+		},
+		"stepper": {
+			"dark": {
+				"w": 20,
+				"h": 24,
+				"radius": 5.8,
+				"fill": "#303030"
+			},
+			"light": {
+				"w": 20,
+				"h": 24,
+				"radius": 5.8,
+				"fill": "#EBEBEB"
+			}
+		},
 		"switch-off": {
 			"dark": {
 				"w": 54,
@@ -1068,6 +1196,70 @@
 				"radius": 7.96,
 				"fill": "#DCDCDC",
 				"fill2": "#F4F5F5"
+			}
+		},
+		"toggle-off": {
+			"dark": {
+				"w": 65,
+				"h": 24,
+				"radius": 5.85,
+				"fill": "#303030",
+				"label": "#DDDDDD"
+			},
+			"light": {
+				"w": 65,
+				"h": 24,
+				"radius": 5.88,
+				"fill": "#EBEBEB",
+				"label": "#2C2C2C"
+			}
+		},
+		"toggle-on": {
+			"dark": {
+				"w": 65,
+				"h": 24,
+				"radius": 5.66,
+				"fill": "#067EFF",
+				"label": "#FEFEFF"
+			},
+			"light": {
+				"w": 65,
+				"h": 24,
+				"radius": 5.66,
+				"fill": "#0078F9",
+				"label": "#FEFEFF"
+			}
+		},
+		"toggle-on-disabled": {
+			"dark": {
+				"w": 65,
+				"h": 24,
+				"radius": 5.75,
+				"fill": "#1163BD",
+				"label": "#193D64"
+			},
+			"light": {
+				"w": 65,
+				"h": 24,
+				"radius": 5.76,
+				"fill": "#4B9DF6",
+				"label": "#B0D4FB"
+			}
+		},
+		"toggle-on-inactive": {
+			"dark": {
+				"w": 65,
+				"h": 24,
+				"radius": 5.82,
+				"fill": "#3A3A3A",
+				"label": "#DFDFDF"
+			},
+			"light": {
+				"w": 65,
+				"h": 24,
+				"radius": 5.88,
+				"fill": "#DFDFDF",
+				"label": "#2A2A2A"
 			}
 		}
 	}

@@ -90,6 +90,7 @@ type Config struct {
 	MinHeight     float32
 	Titlebar      float32    // macOS custom titlebar height (pt); ignored elsewhere
 	TrafficLights [2]float32 // macOS close-button centre (pt); ignored elsewhere
+	PublicAPIOnly bool       // no private system interfaces at run time (a store build uses the gnui_publicapi tag); see platform.Options.PublicAPIOnly
 	Clear         [4]float32 // clear colour, with the semantics of gpu.Renderer.Encode's clear
 
 	// Backdrop and Buttons are the native shell of platform.Options (macOS;
@@ -290,7 +291,7 @@ func openWindowed(cfg Config, b Builder, st *StartupReport, nativeMenus bool) (*
 	win, err := platform.Open(platform.Options{
 		Title: cfg.Title, Width: int(cfg.Width + 0.5), Height: int(cfg.Height + 0.5), Hidden: true,
 		MinWidth: int(cfg.MinWidth + 0.5), MinHeight: int(cfg.MinHeight + 0.5),
-		Titlebar: cfg.Titlebar, TrafficLights: cfg.TrafficLights,
+		Titlebar: cfg.Titlebar, TrafficLights: cfg.TrafficLights, PublicAPIOnly: cfg.PublicAPIOnly,
 		Backdrop: cfg.Backdrop, Buttons: cfg.Buttons,
 	})
 	if err != nil {
@@ -472,6 +473,7 @@ func (a *App) onEvent(e *platform.Event) {
 			a.p.invalidate()
 		}
 	case platform.EvVisible:
+		a.tr.in.Hidden = e.Flags&platform.FlagDown == 0
 		if e.Flags&platform.FlagDown != 0 {
 			a.p.invalidate() // shown again: what was skipped while hidden is owed
 		}

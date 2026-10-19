@@ -24,6 +24,14 @@ directly with `k.Kit`, or copies a component and owns it.
 | `TextField` | Default, Mono, Borderless | small … large | 1 pt outline outside the frame. The ring shows whenever focused. |
 | `SearchField` | — | small … large | Capsule outline, magnifier, filled-circle clear button, Escape clears. |
 | `Select` | pop-up, borderless, pull-down | regular, small | With native menus (macOS) the options are the system's pop-up menu (`RequestMenu`, `MenuChoice`); otherwise `widget.Kit.Select` draws the open list. |
+| `Stepper`, `StepperField` | — | regular measured, others scaled | NSStepper: 20 × 24 body, two chevrons on a divider. Press and hold repeats at the system key-repeat timing; Up/Down arrows when focused. `StepperField` pairs it with a `TextField` over a `*float32`. |
+| `ProgressBar` | determinate, indeterminate (frac < 0) | — | 8 pt bar in a 20 pt frame. The indeterminate segment sweeps only while the bar is visible and the window shown; Reduce Motion parks it. `widget.Kit.ProgressBar` calls it. |
+| `LevelIndicator` | continuous capacity | — | 16 pt bar, radius 3, green / yellow / red bands (`LevelOpts{Warning, Critical, Invert}`). |
+| `Spinner` | regular (32), small (16) | — | Eight spokes, one step per frame request, stopped when hidden or occluded; Reduce Motion shows one still spoke. |
+| `Disclosure` | triangle, push | — | Chevron that turns 90° (push: 180°) over the Standard duration. |
+| `HelpButton` | — | regular measured, others scaled | 24 pt circle in a push button's fill holding a "?". |
+| `Link` | — | text styles | System link colour, pointing-hand cursor, focus ring, link semantics. Reports a click; never opens a URL. |
+| `ToggleButton` | — | mini … extra large | A push button that stays pressed: Default when off, accent when on. |
 | `Separator` | 1 pt, or a hairline | — | Horizontal in a column, vertical in a row. |
 | `BeginCard` / `EndCard` | Box, Inset (form rows), Rex pane | — | Box: radius 12, no border, optional title. |
 | `Label`, `LabelBytes`, `Caption` | the macOS text styles × colour roles | — | Zero value: body text in labelColor. |
@@ -91,6 +99,49 @@ AppKit does; with legacy scroll bars (both apps run with
 miss is a selection 5 pt wider than AppKit's, as base reserves 12 pt
 (`Px.ScrollbarW`) for a legacy bar where AppKit's scroller takes 17. The
 unemphasised labels, left out offscreen (below), are within ΔE 1.2 live.
+
+### Controls (D3b)
+
+Stepper, progress, level, spinner, disclosure, help button, link and toggle
+button are measured like the rest: `catalog` has 15 more samples (`help`,
+`disclosure-closed`, `disclosure-open`, `push-disclosure`, `toggle-off`,
+`toggle-on`, `toggle-on-inactive`, `toggle-on-disabled`, `link`, `stepper`,
+`progress-bar`, `progress-indeterminate`, `spinner`, `spinner-small`, `level`),
+`tools/appkitref` draws AppKit's toggle and link beside them, and
+`TestRecipesMatchAppKit` checks them. On 2026-10-19 (MacBook, macOS 27.2,
+default blue accent) all 92 measurements of the new samples are within
+tolerance. The same run read 550 of 568 overall: the 18 misses are all
+`label` ink readings of older samples (push, icon, checkbox, popup), where
+AppKitRef's `cacheDisplay` text pixels differ from run to run (the previous
+run had none); no geometry or fill measurement missed.
+
+Animation (indeterminate bar, spinner, disclosure) asks for frames only while
+the component is on screen and the window is neither hidden nor occluded
+(`ui.Input.Hidden`), honours Reduce Motion, and allocates nothing per frame.
+`SpinnerOpts{Still, Step}` and `ProgressOpts{Still, Phase}` pin the phase for
+screenshots and comparisons. A hold on a stepper keeps the press time in the
+box cache and counts repeats from `Context.DT`.
+
+Strokes (spokes, chevrons, the help mark) are drawn as chains of discs, since
+the renderer has no line or rotation primitive; their widths were tuned so
+the ink total matches AppKit's (ratio 0.94–0.98): stepper 1.45 pt, triangle
+1.3 pt, push disclosure 1.2 pt, help "?" 16.5 pt Regular.
+
+Recipe fields without a theme token, each documented where it is declared:
+`StepperRecipe` (body, divider, chevron geometry, `RepeatDelay` 0.25 s,
+`RepeatInterval` 0.02 s from metrics.json `keyRepeatDelay`/`keyRepeatInterval`),
+`ProgressRecipe` (frame, bar, segment width 35 %, period 1.4 s, `RestPhase`),
+`LevelRecipe` (bar, frame, radius, band colours), `SpinnerRecipe` (sizes,
+spoke length and width, the eight alphas, period 0.8 s), `DisclosureRecipe`,
+`HelpButtonRecipe`, `LinkRecipe` (underline offset and thickness),
+`ToggleOnLook`.
+
+Not measured, set by eye: the animation periods (indeterminate bar, spinner,
+disclosure turn), pressed, disabled and inactive looks of the stepper, help
+button and disclosure, the stepper at small and mini, the help button at other
+sizes, and a toolbar toggle. `progress-indeterminate`, `level` radius and
+toggle widths (the fake text system measures differently) are left out of the
+comparison.
 
 ### Left to the eye, and why
 
