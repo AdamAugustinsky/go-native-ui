@@ -903,6 +903,46 @@ static void defineSamples(void) {
 		return l;
 	}).size = NSMakeSize(160, 0);
 
+	// D3b controls: toggle push buttons (NSButtonTypePushOnPushOff) and a link
+	add(@"button", @"toggle-off", ^{
+		NSButton *b = pushButton(@"Toggle", NSControlSizeRegular);
+		b.buttonType = NSButtonTypePushOnPushOff;
+		b.state = NSControlStateValueOff;
+		return b;
+	});
+	add(@"button", @"toggle-on", ^{
+		NSButton *b = pushButton(@"Toggle", NSControlSizeRegular);
+		b.buttonType = NSButtonTypePushOnPushOff;
+		b.state = NSControlStateValueOn;
+		return b;
+	});
+	add(@"button", @"toggle-on-inactive", ^{
+		NSButton *b = pushButton(@"Toggle", NSControlSizeRegular);
+		b.buttonType = NSButtonTypePushOnPushOff;
+		b.state = NSControlStateValueOn;
+		return b;
+	}).inactive = YES;
+	add(@"button", @"toggle-on-disabled", ^{
+		NSButton *b = pushButton(@"Toggle", NSControlSizeRegular);
+		b.buttonType = NSButtonTypePushOnPushOff;
+		b.state = NSControlStateValueOn;
+		b.enabled = NO;
+		return b;
+	});
+	add(@"button", @"link", ^{
+		NSMutableAttributedString *a = [[NSMutableAttributedString alloc] initWithString:@"Learn more"];
+		[a addAttributes:@{
+			NSLinkAttributeName : [NSURL URLWithString:@"https://example.com"],
+			NSForegroundColorAttributeName : NSColor.linkColor,
+			NSUnderlineStyleAttributeName : @(NSUnderlineStyleSingle),
+			NSFontAttributeName : [NSFont systemFontOfSize:13],
+		} range:NSMakeRange(0, a.length)];
+		NSTextField *l = [NSTextField labelWithAttributedString:a];
+		l.allowsEditingTextAttributes = YES;
+		l.selectable = YES;
+		return l;
+	}).noShape = YES;
+
 	// containers
 	add(@"container", @"tabview", ^{
 		NSTabView *tv = [[NSTabView alloc] initWithFrame:NSMakeRect(0, 0, 320, 120)];
