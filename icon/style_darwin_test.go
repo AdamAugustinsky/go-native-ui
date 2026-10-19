@@ -85,7 +85,7 @@ func TestScaleFactors(t *testing.T) {
 	var sum [3]float64
 	n := 0
 	for _, name := range []string{"plus", "gearshape", "star.fill", "folder", "checkmark", "chevron.right"} {
-		for _, pt := range []float64{13, 22} {
+		for _, pt := range []float64{13, 26, 52, 104} { // the ink's pixel rounding averages out
 			var h [3]float64
 			for i, sc := range []Scale{ScaleMedium, ScaleSmall, ScaleLarge} {
 				_, _, hh, ok := rasterSymbol(name, pt, 0, sc)

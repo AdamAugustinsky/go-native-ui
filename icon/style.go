@@ -94,14 +94,14 @@ func (s Spec) In(st TextStyle, sc Scale) Spec {
 
 // scaleFactor is the size of a symbol at scale s relative to medium: what
 // AppKit's small and large scales do to a symbol's drawn size (the mean of the heights AppKit's
-// symbols take on macOS 27.2, TestScaleFactors), which the drawn
+// symbols take on macOS 27.2 over 13 to 104 px, TestScaleFactors), which the drawn
 // glyphs of Windows and Linux follow.
 func scaleFactor(s Scale) float32 {
 	switch s {
 	case ScaleSmall:
-		return 0.83
+		return 0.80
 	case ScaleLarge:
-		return 1.23
+		return 1.27
 	}
 	return 1
 }
