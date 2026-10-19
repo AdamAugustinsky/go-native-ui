@@ -1,23 +1,30 @@
 package base
 
-import "time"
+import (
+	"math/bits"
+	"time"
+)
 
 // The sliced rebuild. An edit too long for one frame (or a Reset) is built
 // into the back buffer from the front buffer and the edit, in phases that
 // each advance by a bounded amount of work, in slices of vlSliceNs per Sync:
 //
-//	clear  empty the back buffer's heights and id table
-//	copy   copy the ids and heights in their new order (from the front
-//	       buffer's ranges and the inserted ids)
-//	index  insert every id into the table (a Reset also takes the surviving
-//	       heights from the front buffer here)
-//	sum    the block sums, then the Fenwick tree
-//	finish apply the queued edits that are short, replay the heights measured
-//	       meanwhile, and mark the buffer ready
+//	clear   empty the back buffer's heights and id table
+//	copy    copy the ids and heights in their new order (from the front
+//	        buffer's ranges; the inserted ids were copied in at the start)
+//	index   insert every id into the table (a Reset also takes the surviving
+//	        heights from the front buffer here)
+//	sum     the block sums, then the Fenwick tree
+//	replay  bring the heights measured during the copy up to date
+//	recon   only after the log overflowed: take every surviving height from
+//	        the front buffer
+//	queue   apply the queued edits that are short, one at a time
 //
-// The front buffer does not change during a rebuild except for heights,
-// which are logged and replayed. Sync swaps the buffers once the back buffer
-// is ready; a long edit still queued then starts the next rebuild.
+// The front buffer does not change during a rebuild except for heights. A
+// height that changes before the back buffer is indexed is logged (by id,
+// once per change); from the replay on it is written to both buffers. Sync
+// swaps the buffers once the back buffer is ready; a long edit still queued
+// then starts the next rebuild.
 
 type vlOpKind uint8
 
@@ -28,22 +35,17 @@ const (
 )
 
 // vlOp is a queued edit: Splice(a, b, pool[off:off+n]), Move(a, b, c), or a
-// Reset to pool[off:off+n].
+// Reset to n ids.
 type vlOp struct {
 	kind    vlOpKind
 	a, b, c int
 	off, n  int
 }
 
-type vlLogEnt struct {
-	id uint64
-	h  float32
-}
-
 // vlSeg is a run of the new order: n items of the front buffer from logical
-// index off, or n inserted ids from pool[off:].
+// index off, or (ins) n inserted ids, already in place in the back buffer.
 type vlSeg struct {
-	pool   bool
+	ins    bool
 	off, n int
 }
 
@@ -52,24 +54,27 @@ const (
 	phCopy
 	phIndex
 	phSum
-	phFinish
+	phReplay
+	phRecon
+	phQueue
 )
 
 type vlJob struct {
 	on, ready bool
 	reset     bool
+	recon     bool // the log overflowed: reconcile every height
 	phase     uint8
 	segs      [4]vlSeg
 	nseg      int
 	si, so    int // the segment being copied and how much of it is done
 	dst       int // items copied
-	i         int // the cursor of the clear, index and sum phases
+	i         int // the cursor of the other phases
 	nNew      int
 }
 
-func (j *vlJob) add(pool bool, off, n int) {
+func (j *vlJob) add(ins bool, off, n int) {
 	if n > 0 {
-		j.segs[j.nseg] = vlSeg{pool, off, n}
+		j.segs[j.nseg] = vlSeg{ins, off, n}
 		j.nseg++
 	}
 }
@@ -84,6 +89,11 @@ const vlChunk = 4096
 // units of work (tests use it to make the number of frames exact).
 var vlSliceUnits int
 
+// vlSlotNs is what a slot of an in-place edit costs at most, cache-cold, in
+// nanoseconds (vlDirectMax): how a slice judges whether a queued edit still
+// fits in it.
+const vlSlotNs = 23
+
 // enqueue queues an edit made while a rebuild runs.
 func (st *VListState) enqueue(op vlOp) {
 	st.queue = append(st.queue, op)
@@ -95,18 +105,21 @@ func (st *VListState) enqueue(op vlOp) {
 	}
 }
 
-// startJob begins the rebuild of op from the front buffer.
-func (st *VListState) startJob(op vlOp) {
+// startJob begins the rebuild of op from the front buffer; ins are the ids
+// it inserts (a Splice's or a Reset's), copied into the back buffer now.
+func (st *VListState) startJob(op vlOp, ins []uint64) {
 	f := &st.f
 	j := &st.job
 	*j = vlJob{on: true}
+	insAt := 0
 	switch op.kind {
 	case opSplice:
 		at, rem := op.a, op.b
 		j.add(false, 0, at)
-		j.add(true, op.off, op.n)
+		j.add(true, 0, op.n)
 		j.add(false, at+rem, f.n-at-rem)
 		j.nNew = f.n - rem + op.n
+		insAt = at
 	case opMove:
 		from, k, to := op.a, op.b, op.c
 		if to < from {
@@ -123,16 +136,32 @@ func (st *VListState) startJob(op vlOp) {
 		j.nNew = f.n
 	case opReset:
 		j.reset = true
-		j.add(true, op.off, op.n)
+		j.add(true, 0, op.n)
 		j.nNew = op.n
 	}
 	if st.qhead >= len(st.queue) {
 		st.modelN = j.nNew
 	}
+	if cap(st.log) == 0 {
+		st.log = make([]uint64, 0, vlLogMax)
+	}
 	st.log = st.log[:0]
 
+	// the items of the front buffer the edit and the queued ones remove
+	// (survivors; a Reset's are not looked for)
+	w := (f.n + 63) / 64
+	if cap(st.gone) < w {
+		st.gone = make([]uint64, w)
+	}
+	st.gone = st.gone[:w]
+	clear(st.gone)
+	if op.kind == opSplice {
+		setBits(st.gone, op.a, op.a+op.b)
+	}
+
 	// the back buffer: as large as the front one, and large enough for the
-	// result with spare slots at both ends
+	// result with spare slots at both ends; its table holds what Reserve
+	// asked for, so that the reservation survives the swap
 	b := &st.bk
 	c := max(f.slots(), j.nNew+j.nNew/2+2*vlBlock)
 	c = (c + vlBlock - 1) &^ (vlBlock - 1)
@@ -146,7 +175,7 @@ func (st *VListState) startJob(op vlOp) {
 		b.fm, b.fu = make([]float64, nb+1), make([]int32, nb+1)
 	}
 	b.bm, b.bu, b.fm, b.fu = b.bm[:nb], b.bu[:nb], b.fm[:nb+1], b.fu[:nb+1]
-	if tc := vlTableCap(j.nNew); len(b.tab.keys) < tc {
+	if tc := vlTableCap(max(j.nNew, st.resN)); len(b.tab.keys) < tc {
 		if cap(b.tab.keys) >= tc {
 			b.tab.keys, b.tab.pos = b.tab.keys[:tc], b.tab.pos[:tc]
 		} else {
@@ -156,6 +185,17 @@ func (st *VListState) startJob(op vlOp) {
 	}
 	b.tab.n = 0
 	b.lo, b.n, b.vbase = (c-j.nNew)/2, 0, 0
+	copy(b.ids[b.lo+insAt:], ins)
+}
+
+// jobCost estimates the work of the job just started, in the units of
+// vlDirect (an item re-indexed): the clear and the sums cover the back
+// buffer's whole capacity, and touching a slot there costs about a
+// sixteenth of indexing an item.
+func (st *VListState) jobCost() int {
+	b := &st.bk
+	n := st.job.nNew
+	return n + (2*len(b.hs)+len(b.tab.keys)+n)/16
 }
 
 // step advances the rebuild by one slice.
@@ -164,10 +204,18 @@ func (st *VListState) step() {
 	units := 0
 	for st.job.on && !st.job.ready {
 		n := vlChunk
+		var room int // the units left in the slice
 		if vlSliceUnits > 0 {
-			n = min(n, vlSliceUnits-units)
+			room = vlSliceUnits - units
+			n = min(n, room)
+		} else {
+			room = int((vlSliceNs - int64(time.Since(start))) / vlSlotNs)
 		}
-		units += st.work(n)
+		did := st.work(n, room, units == 0)
+		if did == 0 {
+			return
+		}
+		units += did
 		if vlSliceUnits > 0 {
 			if units >= vlSliceUnits {
 				return
@@ -181,16 +229,18 @@ func (st *VListState) step() {
 // finishNow runs the rebuild to its end and publishes it.
 func (st *VListState) finishNow() {
 	for st.job.on && !st.job.ready {
-		st.work(1 << 30)
+		st.work(1<<30, 1<<30, true)
 	}
 	if st.job.ready {
 		st.publish()
 	}
 }
 
-// work does up to n units of the current phase and returns how many it did
-// (at least 1 while the job runs).
-func (st *VListState) work(n int) int {
+// work does about n units of the current phase and returns how many it did.
+// It returns 0, doing nothing, when the next step (a queued edit) is larger
+// than the room left in the slice and the slice has already done some work
+// (not fresh): it waits for the next slice.
+func (st *VListState) work(n, room int, fresh bool) int {
 	j := &st.job
 	b := &st.bk
 	f := &st.f
@@ -215,8 +265,7 @@ func (st *VListState) work(n int) int {
 			s := j.segs[j.si]
 			m := min(n-did, s.n-j.so)
 			d := b.lo + j.dst
-			if s.pool {
-				copy(b.ids[d:d+m], st.pool[s.off+j.so:])
+			if s.ins {
 				if !j.reset {
 					hs := b.hs[d : d+m]
 					for i := range hs {
@@ -271,46 +320,128 @@ func (st *VListState) work(n int) int {
 		if j.i >= nb {
 			b.fenBuild()
 			b.n = j.nNew
-			j.phase = phFinish
+			j.phase, j.i = phReplay, 0
 		}
 		return max(did, 1)
-	case phFinish:
-		for st.qhead < len(st.queue) && st.applyShort(b, st.queue[st.qhead]) {
-			st.qhead++
+	case phReplay:
+		// From here on heights are written to both buffers (heightChanged);
+		// the log holds the ids that changed before: the front buffer has
+		// their latest heights.
+		e := min(j.i+n, len(st.log))
+		for _, id := range st.log[j.i:e] {
+			st.copyHeight(id)
 		}
-		for _, e := range st.log {
-			if i, ok := b.index(e.id); ok {
-				b.setH(b.lo+i, e.h)
+		did := e - j.i
+		j.i = e
+		if j.i >= len(st.log) {
+			st.log = st.log[:0]
+			j.phase, j.i = phRecon, 0
+			if !j.recon {
+				j.phase = phQueue
 			}
 		}
-		st.log = st.log[:0]
-		j.ready = true
-		return 1
+		return max(did, 1)
+	case phRecon:
+		e := min(j.i+n, b.n)
+		for i := j.i; i < e; i++ {
+			if fi, ok := f.index(b.ids[b.lo+i]); ok {
+				if h := f.hs[f.lo+fi]; b.hs[b.lo+i] != h {
+					b.setH(b.lo+i, h)
+				}
+			}
+		}
+		did := e - j.i
+		j.i = e
+		if j.i >= b.n {
+			j.phase, j.i = phQueue, 0
+		}
+		return max(did, 1)
+	case phQueue:
+		if st.qhead >= len(st.queue) {
+			j.ready = true
+			return 1
+		}
+		op := st.queue[st.qhead]
+		cost, short := st.shortCost(b, op)
+		if !short {
+			j.ready = true // the swap starts its rebuild
+			return 1
+		}
+		if cost > room && !fresh {
+			return 0
+		}
+		st.applyShort(b, op)
+		st.qhead++
+		return max(cost, 1)
 	}
 	return 1
 }
 
-// applyShort applies a queued edit to b in place if it is short, and reports
-// whether it did.
-func (st *VListState) applyShort(b *vlBuf, op vlOp) bool {
+// heightChanged passes a height change of the front buffer on to the
+// rebuild: logged while the back buffer is not indexed yet, written to it
+// from then on.
+func (st *VListState) heightChanged(id uint64, h float32) {
+	j := &st.job
+	if j.phase >= phReplay {
+		if i, ok := st.bk.index(id); ok {
+			st.bk.setH(st.bk.lo+i, h)
+		}
+		return
+	}
+	if j.recon {
+		return
+	}
+	if len(st.log) < cap(st.log) {
+		st.log = append(st.log, id)
+	} else {
+		j.recon = true
+	}
+}
+
+// copyHeight sets the back buffer's height of id to the front buffer's.
+func (st *VListState) copyHeight(id uint64) {
+	b, f := &st.bk, &st.f
+	bi, ok := b.index(id)
+	if !ok {
+		return
+	}
+	if fi, ok := f.index(id); ok {
+		if h := f.hs[f.lo+fi]; b.hs[b.lo+bi] != h {
+			b.setH(b.lo+bi, h)
+		}
+	}
+}
+
+// shortCost is the slots a queued edit touches in b, and whether it is short
+// enough to apply in place.
+func (st *VListState) shortCost(b *vlBuf, op vlOp) (cost int, short bool) {
+	var fits bool
 	switch op.kind {
 	case opSplice:
-		cost, fits := b.spliceCost(op.a, op.b, op.n)
-		if cost > vlDirect || (!fits && b.n > vlDirect) {
-			return false
+		cost, fits = b.spliceCost(op.a, op.b, op.n)
+	case opMove:
+		cost, fits = b.moveCost(op.a, op.b, op.c)
+	default:
+		return 0, false
+	}
+	return cost, cost <= vlDirect && (fits || b.n <= vlDirect)
+}
+
+// applyShort applies a short queued edit to b in place. The items of the
+// front buffer it removes are marked gone.
+func (st *VListState) applyShort(b *vlBuf, op vlOp) {
+	switch op.kind {
+	case opSplice:
+		for _, id := range b.ids[b.lo+op.a : b.lo+op.a+op.b] {
+			if fi, ok := st.f.index(id); ok {
+				st.gone[fi>>6] |= 1 << (fi & 63)
+			}
 		}
 		b.splice(op.a, op.b, st.pool[op.off:op.off+op.n])
 	case opMove:
-		cost, fits := b.moveCost(op.a, op.b, op.c)
-		if cost > vlDirect || (!fits && b.n > vlDirect) {
-			return false
-		}
 		st.scratch(op.b)
 		b.move(op.a, op.b, op.c, st.tmpIDs, st.tmpHs)
-	default:
-		return false
 	}
-	return true
 }
 
 // Sync is the frame boundary of the state: the first call in a frame
@@ -339,7 +470,7 @@ func (st *VListState) publish() {
 	reset := st.job.reset
 	if st.started && st.anchorID != NoID {
 		if _, ok := nw.index(st.anchorID); !ok {
-			next, prev, near := st.survivors(st.anchorID)
+			next, prev, near := st.survivors(st.anchorID, reset)
 			switch {
 			case reset:
 				st.anchorID, st.place = NoID, placeStart
@@ -363,7 +494,7 @@ func (st *VListState) publish() {
 		}
 		if _, ok := nw.index(m.ID); !ok {
 			m.Removed = true
-			m.Next, m.Prev, _ = st.survivors(m.ID)
+			m.Next, m.Prev, _ = st.survivors(m.ID, reset)
 		}
 	}
 	st.f, st.bk = st.bk, st.f
@@ -372,7 +503,11 @@ func (st *VListState) publish() {
 	if st.qhead < len(st.queue) {
 		op := st.queue[st.qhead]
 		st.qhead++
-		st.startJob(op)
+		var ins []uint64
+		if op.kind == opSplice {
+			ins = st.pool[op.off : op.off+op.n]
+		}
+		st.startJob(op, ins)
 		return
 	}
 	st.queue, st.qhead = st.queue[:0], 0
@@ -381,29 +516,66 @@ func (st *VListState) publish() {
 }
 
 // survivors finds, for an item of the front buffer that the back buffer does
-// not have, the nearest items after and before it that it does have (NoID if
-// none within vlWalkMax), and an item at about its place.
-func (st *VListState) survivors(id uint64) (next, prev, near uint64) {
+// not have, the nearest items after and before it that the rebuild kept
+// (NoID if none), and an item of the back buffer at about its place.
+func (st *VListState) survivors(id uint64, reset bool) (next, prev, near uint64) {
 	f, nw := &st.f, &st.bk
 	next, prev, near = NoID, NoID, NoID
 	i, ok := f.index(id)
 	if !ok {
 		return
 	}
-	for j := i + 1; j < min(f.n, i+1+vlWalkMax); j++ {
-		if _, ok := nw.index(f.id(j)); ok {
+	if !reset {
+		if j := nextClear(st.gone, i+1, f.n); j >= 0 {
 			next = f.id(j)
-			break
 		}
-	}
-	for j := i - 1; j >= max(0, i-vlWalkMax); j-- {
-		if _, ok := nw.index(f.id(j)); ok {
+		if j := prevClear(st.gone, i-1); j >= 0 {
 			prev = f.id(j)
-			break
 		}
 	}
 	if nw.n > 0 {
 		near = nw.id(min(i, nw.n-1))
 	}
 	return
+}
+
+// setBits sets the bits [lo, hi) of g.
+func setBits(g []uint64, lo, hi int) {
+	for lo < hi && lo&63 != 0 {
+		g[lo>>6] |= 1 << (lo & 63)
+		lo++
+	}
+	for ; lo+64 <= hi; lo += 64 {
+		g[lo>>6] = ^uint64(0)
+	}
+	for ; lo < hi; lo++ {
+		g[lo>>6] |= 1 << (lo & 63)
+	}
+}
+
+// nextClear is the first index from i below n whose bit in g is clear, or -1.
+func nextClear(g []uint64, i, n int) int {
+	for i < n {
+		w := ^g[i>>6] >> (i & 63)
+		if w != 0 {
+			if j := i + bits.TrailingZeros64(w); j < n {
+				return j
+			}
+			return -1
+		}
+		i = (i | 63) + 1
+	}
+	return -1
+}
+
+// prevClear is the last index from i down to 0 whose bit in g is clear, or -1.
+func prevClear(g []uint64, i int) int {
+	for i >= 0 {
+		w := ^g[i>>6] << (63 - i&63)
+		if w != 0 {
+			return i - bits.LeadingZeros64(w)
+		}
+		i = i&^63 - 1
+	}
+	return -1
 }

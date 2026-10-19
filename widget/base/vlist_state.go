@@ -49,13 +49,14 @@ const vlDirectMax = 1 << 15
 // rebuild.
 var vlDirect = vlDirectMax
 
-// vlLogMax is the most height changes kept for the back buffer while it is
-// being built; more are dropped (the items are measured again when shown).
+// vlLogMax is the most height changes logged for the back buffer while it is
+// being built; past it the rebuild reconciles every height with the front
+// buffer instead (vlist_job.go).
 const vlLogMax = 4096
 
-// vlWalkMax bounds the search for a surviving neighbour when an item an anchor
-// or mark followed disappeared in a rebuild.
-const vlWalkMax = 1 << 16
+// vlSettleFrames bounds the frames a ScrollTo keeps its alignment while the
+// heights around its target are measured.
+const vlSettleFrames = 16
 
 // VListState is the state of a variable-height virtual list (BeginVList),
 // owned by the app next to its model: the item ids in order, their measured
@@ -86,12 +87,15 @@ const vlWalkMax = 1 << 16
 //   - an edit wholly above it shifts its index and leaves the view in place;
 //     one below changes nothing on screen;
 //   - deleting the anchor item moves the anchor to the first surviving item
-//     after the removed run (the last one before it at the end of the list),
-//     at offset 0;
+//     after it (the last one before it at the end of the list), at offset 0,
+//     however long the removed run;
 //   - a Move that carries the anchor keeps it on its item, wherever it goes;
 //     heights travel with their items;
 //   - Reset keeps the anchor if its id is in the new list, and otherwise
 //     starts at the top (at the bottom with VListOpts.StickToBottom).
+//
+// Heights and positions are kept in points, so a change of display scale
+// costs nothing: items are measured again at the new scale as they are built.
 //
 // A VListState holds no pointers but its slice headers, and it must not be
 // copied once in use. *VListState is the Enumerator a selection scope walks
@@ -99,12 +103,12 @@ const vlWalkMax = 1 << 16
 type VListState struct {
 	f, bk vlBuf // the front buffer and the back buffer (vlist_job.go)
 
-	est   float32 // the estimate for unmeasured items, in pixels
-	scale float32 // the display scale the heights were measured at
+	est   float32 // the estimate for unmeasured items, in points
+	scale float32 // the display scale of the last frame (0 before the first)
 
 	// the position
 	anchorID uint64
-	offset   float64 // pixels from the anchor's top down to the view's top
+	offset   float64 // points from the anchor's top down to the view's top
 	stuck    bool    // pinned to the bottom (StickToBottom)
 	atEnd    bool
 	started  bool  // the list has been laid out once
@@ -112,13 +116,16 @@ type VListState struct {
 	reqID    uint64
 	reqAlign Align
 	req      bool
-	by       float64 // ScrollBy
+	reqLeft  int     // the frames a ScrollTo may still take to settle
+	settling bool    // the ScrollTo was applied once and is settling
+	by       float64 // ScrollBy, in pixels
 
 	// what the scroll box held and the content it had at the last frame
 	lastS, lastContent float64
 	hasLast            bool
 
 	built [2][]uint64 // the ids built in the last frame and in this one
+	piled [2]int      // how many of them were in a pile
 	cur   int         // built[cur] is this frame's
 
 	marks  [VListMarks]VListMark
@@ -128,12 +135,14 @@ type VListState struct {
 	tmpIDs []uint64 // scratch for in-place moves
 	tmpHs  []float32
 
+	resN   int // the items Reserve made room for
 	job    vlJob
 	queue  []vlOp
 	qhead  int
-	pool   []uint64 // the inserted ids of the queued edits and the job
-	log    []vlLogEnt
-	modelN int // Len after the queued edits
+	pool   []uint64 // the inserted ids of the queued edits
+	log    []uint64 // the ids whose heights changed while the job copied them
+	gone   []uint64 // a bit per front-buffer item the job removes
+	modelN int      // Len after the queued edits
 	frame  uint32
 	synced bool
 }
@@ -144,9 +153,12 @@ const (
 )
 
 // Reserve makes room for n items: edits within it, prepends and appends
-// included, allocate nothing (the back buffer of a long edit is allocated
-// the first time one happens).
+// included, allocate nothing, in either buffer (the back buffer of a long
+// edit is allocated the first time one happens), nor do the edits queued
+// during a rebuild while they insert at most min(n, 32768) ids and number
+// at most 64.
 func (st *VListState) Reserve(n int) {
+	st.resN = max(st.resN, n)
 	c := n + n/2 + 2*vlBlock
 	if st.f.slots() < c {
 		if st.f.n == 0 {
@@ -158,15 +170,30 @@ func (st *VListState) Reserve(n int) {
 	if len(st.f.tab.keys) < vlTableCap(n) {
 		st.f.tab.grow(n)
 	}
-	if k := min(n, vlDirectMax); cap(st.tmpIDs) < k {
+	k := min(n, vlDirectMax)
+	if cap(st.tmpIDs) < k {
 		st.tmpIDs, st.tmpHs = make([]uint64, k), make([]float32, k)
 	}
+	if cap(st.pool) < k {
+		st.pool = append(make([]uint64, 0, k), st.pool...)
+	}
 	if cap(st.queue) < 64 {
-		st.queue = make([]vlOp, 0, 64)
+		st.queue = append(make([]vlOp, 0, 64), st.queue...)
 	}
 	if cap(st.log) < vlLogMax {
-		st.log = make([]vlLogEnt, 0, vlLogMax)
+		st.log = append(make([]uint64, 0, vlLogMax), st.log...)
 	}
+	if w := (n + 63) / 64; cap(st.gone) < w {
+		st.gone = append(make([]uint64, 0, w), st.gone...)
+	}
+}
+
+// sc is the display scale of the last frame, 1 before the first.
+func (st *VListState) sc() float64 {
+	if st.scale > 0 {
+		return float64(st.scale)
+	}
+	return 1
 }
 
 // Len is the number of items (of the front buffer: see Pending).
@@ -226,19 +253,20 @@ func (st *VListState) Rev() uint64 { return st.rev }
 func (st *VListState) Pending() bool { return st.job.on }
 
 // Anchor is the item at the top of the view as of the last frame and how far
-// down into it the view's top is, in pixels. An app that restores a scroll
-// position across runs saves these and calls SetAnchor.
+// down into it the view's top is, in points (so it holds across displays).
+// An app that restores a scroll position across runs saves these and calls
+// SetAnchor.
 func (st *VListState) Anchor() (id uint64, offset float64) { return st.anchorID, st.offset }
 
-// SetAnchor puts the top of the view offset pixels into item id from the next
-// frame, unpinning it from the bottom. An id the list does not have is
-// ignored.
+// SetAnchor puts the top of the view offset points into item id from the
+// next frame, unpinning it from the bottom and cancelling a ScrollTo. An id
+// the list does not have is ignored.
 func (st *VListState) SetAnchor(id uint64, offset float64) {
 	if _, ok := st.f.index(id); !ok {
 		return
 	}
 	st.anchorID, st.offset, st.stuck, st.place, st.started = id, offset, false, placeNone, true
-	st.by = 0
+	st.by, st.req = 0, false
 }
 
 // AtEnd reports that the view showed the end of the list in the last frame.
@@ -246,17 +274,17 @@ func (st *VListState) SetAnchor(id uint64, offset float64) {
 // arrive or grow.
 func (st *VListState) AtEnd() bool { return st.atEnd }
 
-// Height is the height of item i in pixels, and whether it was measured (an
-// unmeasured item counts as the list's estimate).
+// Height is the height of item i in pixels at the last frame's scale, and
+// whether it was measured (an unmeasured item counts as the list's estimate).
 func (st *VListState) Height(i int) (px float32, measured bool) {
 	if uint(i) >= uint(st.f.n) {
 		panic("base: VListState.Height: index out of range")
 	}
 	h := st.f.hs[st.f.lo+i]
 	if h < 0 {
-		return st.est, false
+		return float32(float64(st.est) * st.sc()), false
 	}
-	return h, true
+	return float32(float64(h) * st.sc()), true
 }
 
 // Top is the offset in pixels of the top of item i from the top of the list
@@ -265,7 +293,7 @@ func (st *VListState) Top(i int) float64 {
 	if st.f.n == 0 {
 		return 0
 	}
-	return st.f.top(i, st.est)
+	return st.f.top(i, st.est) * st.sc()
 }
 
 // Total is the height of the list in pixels, with estimates for unmeasured
@@ -274,17 +302,21 @@ func (st *VListState) Total() float64 {
 	if st.f.n == 0 {
 		return 0
 	}
-	return st.f.total(st.est)
+	return st.f.total(st.est) * st.sc()
 }
 
 // ScrollTo shows item i in the next frame, aligned by a: a jump, for replies
-// and search hits. It unpins the view from the bottom unless the item ends up
-// at the bottom.
+// and search hits. The alignment holds over the next frames while the item
+// and those between it and the view's top are measured (the jump lands on
+// estimates), until the user scrolls. It unpins the view from the bottom
+// unless the item ends up at the bottom.
 func (st *VListState) ScrollTo(i int, a Align) { st.ScrollToID(st.ID(i), a) }
 
 // ScrollToID is ScrollTo by id. It waits for an id that a pending rebuild is
 // adding.
-func (st *VListState) ScrollToID(id uint64, a Align) { st.reqID, st.reqAlign, st.req = id, a, true }
+func (st *VListState) ScrollToID(id uint64, a Align) {
+	st.reqID, st.reqAlign, st.req, st.reqLeft, st.settling = id, a, true, vlSettleFrames, false
+}
 
 // ScrollBy scrolls the view by dy pixels in the next frame (down when
 // positive), as a drag past the list's edge does.
@@ -298,12 +330,11 @@ func (st *VListState) Invalidate(i int) { st.InvalidateID(st.ID(i)) }
 // InvalidateID is Invalidate by id.
 func (st *VListState) InvalidateID(id uint64) { st.setHeight(id, vlUnmeasured) }
 
-// setHeight records a height for id in the front buffer, and in the log that
-// a rebuild replays onto the back buffer.
+// setHeight records a height in points for id in the front buffer and
+// reports whether it changed; a rebuild learns of the change (heightChanged).
+// Only items of the front buffer are measured: an item a queued edit adds is
+// unmeasured in the back buffer anyway.
 func (st *VListState) setHeight(id uint64, h float32) bool {
-	if st.job.on && len(st.log) < cap(st.log) {
-		st.log = append(st.log, vlLogEnt{id, h})
-	}
 	i, ok := st.f.index(id)
 	if !ok {
 		return false
@@ -313,6 +344,9 @@ func (st *VListState) setHeight(id uint64, h float32) bool {
 		return false
 	}
 	st.f.setH(p, h)
+	if st.job.on {
+		st.heightChanged(id, h)
+	}
 	return true
 }
 
@@ -371,9 +405,7 @@ func (st *VListState) Splice(at, removed int, ids []uint64) {
 		st.rev++
 		return
 	}
-	st.pool = append(st.pool[:0], ids...)
-	op.off = 0
-	st.startJob(op)
+	st.startJob(op, ids)
 }
 
 // Move moves the run of k items at index from so that it starts at index to
@@ -398,8 +430,7 @@ func (st *VListState) Move(from, k, to int) {
 		st.rev++
 		return
 	}
-	st.pool = st.pool[:0]
-	st.startJob(op)
+	st.startJob(op, nil)
 }
 
 func (st *VListState) scratch(k int) {
@@ -411,19 +442,21 @@ func (st *VListState) scratch(k int) {
 
 // Reset replaces the list with ids (copied). Items that stay keep their
 // measured heights; the anchor stays if its id does, and the marks report a
-// reset. Queued edits are dropped: the new list supersedes them.
+// reset. Queued edits are dropped: the new list supersedes them. It is
+// applied at once when the rebuild is short (its length and the buffers'
+// capacity are small) or the list was empty, and otherwise over the next
+// frames like a long edit.
 func (st *VListState) Reset(ids []uint64) {
 	st.job = vlJob{}
 	st.queue, st.qhead = st.queue[:0], 0
-	st.log = st.log[:0]
-	st.pool = append(st.pool[:0], ids...)
-	st.startJob(vlOp{kind: opReset, n: len(ids)})
+	st.pool = st.pool[:0]
+	st.startJob(vlOp{kind: opReset, n: len(ids)}, ids)
 	for i := range st.marks {
 		if st.markOn[i] {
 			st.marks[i] = VListMark{ID: st.marks[i].ID, Removed: true, Reset: true, Next: NoID, Prev: NoID}
 		}
 	}
-	if st.f.n == 0 || len(ids) <= vlDirect/2 {
+	if st.f.n == 0 || st.jobCost() <= vlDirect {
 		st.finishNow()
 	}
 }

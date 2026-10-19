@@ -1,7 +1,9 @@
 package base
 
 import (
+	"fmt"
 	"math/rand/v2"
+	"runtime"
 	"slices"
 	"testing"
 )
@@ -265,5 +267,224 @@ func TestVListTableDeletion(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// syncs runs n frames of Sync.
+func syncs(st *VListState, frame *uint32, n int) {
+	for i := 0; i < n; i++ {
+		*frame++
+		st.Sync(*frame)
+	}
+}
+
+// A rebuilt deletion far longer than any search window moves the anchor and
+// the marks to the exact survivors around the removed run.
+func TestVListLongDeletionSurvivors(t *testing.T) {
+	const n = 200_000
+	var st VListState
+	st.Reserve(n)
+	st.Append(seq(0, n))
+	st.SetAnchor(100_010, 3)
+	st.SetMark(0, 100_005)
+	st.SetMark(1, 169_999)
+	st.Splice(100_000, 70_000, nil)
+	if !st.Pending() {
+		t.Fatal("the deletion was applied in place: it should be rebuilt")
+	}
+	var frame uint32
+	drain(t, &st, &frame)
+	if a, off := st.Anchor(); a != 170_000 || off != 0 {
+		t.Fatalf("the anchor is %d at %v, want the first survivor 170000 at 0", a, off)
+	}
+	for i := 0; i < 2; i++ {
+		if m := st.Mark(i); !m.Removed || m.Next != 170_000 || m.Prev != 99_999 {
+			t.Fatalf("mark %d: %+v, want removed between 99999 and 170000", i, m)
+		}
+	}
+
+	// a queued deletion during a rebuild, its survivors as exact
+	st.SetAnchor(50_000, 0)
+	st.Move(10, 1, 120_000)        // long: rebuilt
+	st.Splice(40_000, 30_000, nil) // queued: ids 40001 to 70000
+	drain(t, &st, &frame)
+	if a, _ := st.Anchor(); a != 70_001 {
+		t.Fatalf("after a queued deletion the anchor is %d, want 70001", a)
+	}
+	// queued and short: applied to the back buffer in place
+	st.SetAnchor(1020, 0)
+	st.Move(10, 1, 90_000)
+	st.Splice(1000, 50, nil) // ids 1002 to 1051 (10 moved to the end before)
+	drain(t, &st, &frame)
+	if a, _ := st.Anchor(); a != 1052 {
+		t.Fatalf("after a short queued deletion the anchor is %d, want 1052", a)
+	}
+}
+
+// Queued edits are applied within the rebuild's slices, not all in the frame
+// of the swap.
+func TestVListQueuedEditsAreSliced(t *testing.T) {
+	defer func(d, s int) { vlDirect, vlSliceUnits = d, s }(vlDirect, vlSliceUnits)
+	vlDirect, vlSliceUnits = 1000, 2000
+	var st VListState
+	r := &refList{h: map[uint64]float32{}}
+	st.Append(seq(0, 5000))
+	r.splice(0, 0, seq(0, 5000))
+	st.Move(100, 1, 4000)
+	r.move(100, 1, 4000)
+	for k := 0; k < 20; k++ { // short: 900 slots each
+		st.Move(1000+k, 1, 1900+k)
+		r.move(1000+k, 1, 1900+k)
+	}
+	var frame uint32
+	for i := 0; st.Pending(); i++ {
+		if i > 10000 {
+			t.Fatal("the rebuild does not finish")
+		}
+		q, nq := st.qhead, len(st.queue)
+		syncs(&st, &frame, 1)
+		applied := st.qhead - q
+		if !st.job.on {
+			applied = nq - q // published: the rest of the queue landed
+		}
+		if applied > 2 {
+			t.Fatalf("one slice of 2000 units applied %d queued edits of 900 slots", applied)
+		}
+	}
+	check(t, &st, r, "queued moves")
+}
+
+// mallocs counts the heap allocations f makes.
+func mallocs(f func()) uint64 {
+	runtime.GC()
+	var m0, m1 runtime.MemStats
+	runtime.ReadMemStats(&m0)
+	f()
+	runtime.ReadMemStats(&m1)
+	return m1.Mallocs - m0.Mallocs
+}
+
+// Reserve covers both buffers: once the back buffer exists, a long edit with
+// an append queued meanwhile, and growth up to the reservation after the
+// swap, allocate nothing.
+func TestVListReserveCoversRebuilds(t *testing.T) {
+	const n = 100_000
+	var st VListState
+	st.Reserve(n)
+	st.Append(seq(0, n/2))
+	var frame uint32
+	// two long edits (the same ids again, unmeasured): the first allocates
+	// the back buffer, the second makes the reserved buffer the front one
+	// again
+	again := seq(5_000, 30_000)
+	for k := 0; k < 2; k++ {
+		st.Splice(5_000, 30_000, again)
+		if !st.Pending() {
+			t.Fatal("the splice was applied in place: it should be rebuilt")
+		}
+		drain(t, &st, &frame)
+	}
+	one := []uint64{0}
+	page := make([]uint64, 1000)
+	next := uint64(10_000_000)
+	got := mallocs(func() {
+		st.Splice(5_000, 30_000, again)
+		for k := 0; k < 5; k++ { // queued during the rebuild
+			one[0] = next
+			next++
+			st.Append(one)
+			st.Prepend(one[:0])
+		}
+		for st.Pending() {
+			frame++
+			st.Sync(frame)
+		}
+		for st.Len()+len(page) <= n { // up to the reservation
+			for i := range page {
+				page[i] = next
+				next++
+			}
+			st.Append(page)
+			for st.Pending() {
+				frame++
+				st.Sync(frame)
+			}
+		}
+	})
+	if got != 0 {
+		t.Fatalf("%d allocations within Reserve", got)
+	}
+	if st.Len() <= n-len(page) {
+		t.Fatalf("Len %d: the appends did not reach the reservation", st.Len())
+	}
+}
+
+// Heights measured during a long rebuild reach the back buffer: unchanged
+// measurements do not fill the log, and once more heights change than it
+// holds the rebuild reconciles them all.
+func TestVListHeightsDuringRebuild(t *testing.T) {
+	defer func(d, s int) { vlDirect, vlSliceUnits = d, s }(vlDirect, vlSliceUnits)
+	vlDirect, vlSliceUnits = 40, 50
+	const n = 20_000
+	for _, distinct := range []bool{false, true} {
+		var st VListState
+		st.Reserve(n)
+		st.Append(seq(0, n))
+		r := &refList{ids: seq(0, n), h: map[uint64]float32{}}
+		for i := 0; i < n; i++ {
+			st.setHeight(uint64(i), 30)
+			r.h[uint64(i)] = 30
+		}
+		st.Move(100, 1, 15_000)
+		r.move(100, 1, 15_000)
+		var frame uint32
+		for st.job.phase != phIndex {
+			syncs(&st, &frame, 1)
+		}
+		// the items built while the rebuild runs, measured every frame
+		for f := 0; f < 40; f++ {
+			for i := 0; i < 256; i++ {
+				id := uint64(f*256 + i)
+				h := float32(30)
+				if distinct {
+					h = float32(31 + f)
+				}
+				st.setHeight(id, h)
+				r.h[id] = h
+			}
+			syncs(&st, &frame, 1)
+		}
+		if !distinct && (len(st.log) != 0 || st.job.recon) {
+			t.Fatalf("unchanged heights were logged (%d, overflowed %v)", len(st.log), st.job.recon)
+		}
+		st.setHeight(7, 99) // a change after all that
+		r.h[7] = 99
+		drain(t, &st, &frame)
+		check(t, &st, r, fmt.Sprintf("heights during a rebuild (distinct %v)", distinct))
+	}
+}
+
+// A Reset to a few ids of a list with a large capacity is rebuilt in slices
+// (its clear covers the capacity); a small list's is applied at once.
+func TestVListSmallResetOfLargeList(t *testing.T) {
+	var st VListState
+	st.Reserve(200_000)
+	st.Append(seq(0, 200_000))
+	var frame uint32
+	st.Move(10, 1, 150_000)
+	drain(t, &st, &frame)
+	st.Reset(seq(5_000_000, 10))
+	if !st.Pending() {
+		t.Fatal("a Reset over a large capacity ran in one frame")
+	}
+	drain(t, &st, &frame)
+	check(t, &st, &refList{ids: seq(5_000_000, 10)}, "small reset")
+
+	var small VListState
+	small.Reserve(1000)
+	small.Append(seq(0, 1000))
+	small.Reset(seq(1, 300))
+	if small.Pending() {
+		t.Fatal("a Reset of a small list was not applied at once")
 	}
 }

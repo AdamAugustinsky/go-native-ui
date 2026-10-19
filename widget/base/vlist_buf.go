@@ -14,11 +14,11 @@ import "math/bits"
 // of the others as they are, so prepend and append cost O(k), and an edit in
 // the middle re-indexes only the side it shifts (the shorter one).
 //
-// Heights: hs[p] >= 0 is a measured height in pixels; vlUnmeasured marks an
+// Heights: hs[p] >= 0 is a measured height in points; vlUnmeasured marks an
 // item never measured, which counts as the list's estimate. Slots outside the
 // list hold 0, so the sums up to slot lo are 0 and the top of item i is the
 // sum over slots [0, lo+i). The sums are kept per block of vlBlock slots
-// (measured pixels and the number of unmeasured items), with a Fenwick tree
+// (measured points and the number of unmeasured items), with a Fenwick tree
 // over the blocks: a height change costs O(log blocks), the top of an item or
 // the item at an offset O(log blocks + vlBlock).
 type vlBuf struct {
@@ -440,14 +440,4 @@ func (b *vlBuf) move(from, k, to int, tmpIDs []uint64, tmpHs []float32) {
 		b.tab.put(tmpIDs[j], b.vbase+int32(to+j))
 	}
 	b.resum(p0, p0+k)
-}
-
-// rescale multiplies every measured height by f (a change of display scale).
-func (b *vlBuf) rescale(f float32) {
-	for p := b.lo; p < b.lo+b.n; p++ {
-		if h := b.hs[p]; h > 0 {
-			b.hs[p] = h * f
-		}
-	}
-	b.resumAll()
 }

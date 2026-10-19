@@ -246,6 +246,12 @@ func TestVListEditFrameBudget(t *testing.T) {
 		{"move a run of 100000", func(st *VListState) { st.Move(100_000, 100_000, 600_000) }},
 		{"splice in the middle", func(st *VListState) { st.Splice(500_000, 1000, seq(5_000_000, 1000)) }},
 		{"the longest in-place splice", func(st *VListState) { st.Splice(vlDirectMax-12, 5, seq(5_000_000, 3)) }},
+		{"150 edits queued during a rebuild", func(st *VListState) {
+			st.Move(250_000, 1, 750_000)
+			for k := 0; k < 150; k++ { // short: 20000 slots each, applied before the swap
+				st.Move(400_000+16*k, 1, 420_000+16*k)
+			}
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			// A subtest runs on its own goroutine: lock it to its thread, or

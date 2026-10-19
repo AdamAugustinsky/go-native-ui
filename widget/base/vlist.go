@@ -47,7 +47,12 @@ type VListOpts struct {
 	// arrive or grow (an image loading) keep the bottom in view. The list
 	// starts at the bottom, and a Reset that loses the anchor goes back there.
 	StickToBottom bool
-	// MaxItems bounds the items built in a frame (default 256).
+	// BottomAlign, with StickToBottom, puts the items of a list shorter than
+	// its view at the bottom of the view rather than the top: a conversation
+	// starts next to its composer, as messengers do.
+	BottomAlign bool
+	// MaxItems bounds the items built in a frame (default 256). Pinned to the
+	// bottom, the newest items are the ones built.
 	MaxItems int
 	// Line is how far in points Up and Down scroll (default 40).
 	Line float32
@@ -82,17 +87,16 @@ type VList struct {
 	open   bool
 	anchor int     // the anchor's index: the first item of the flow
 	bottom bool    // every item is in the pile, which ends at the view's bottom
+	short  bool    // bottom, and the list is shorter than the view (BottomAlign)
 	pileY  float32 // where the floating pile ends, from the top of Body
-	pileH  float32 // the height of the pile in the flow, when bottom
 	inPile bool
 	s      float64 // the scroll offset of Body this frame
 	cont   float64 // the content height declared this frame
 }
 
-// vlPileH is the height of a pile: the box that holds the items above the
-// anchor, bottom-aligned. It is far taller than what it holds, and small
-// enough that float32 positions in it stay exact to 1/128 pixel.
-const vlPileH = 1 << 16
+// vlPileScroll is the scroll offset a pile is given: past any content, so
+// that the layout clamps it to the content's end (vlist.go, openPile).
+const vlPileScroll = 1e18
 
 // vlRowH is the pitch of the virtual rows the body is declared with
 // (ui.Context.ListRange): positions to 1/256 pixel in float64.
@@ -102,7 +106,8 @@ const vlRowH = float32(1.0 / 256)
 // unless o says otherwise, scrolling vertically and taking the keyboard to
 // scroll. It syncs st (VListState.Sync), measures the items built in the last
 // frame, applies the frame's scrolling and ScrollTo, and chooses the items to
-// build.
+// build. While a rebuild is pending or the heights or a ScrollTo are
+// settling, it requests the next frame (ui.Context.RequestFrame).
 func BeginVList(c *ui.Context, label string, st *VListState, o VListOpts) VList {
 	st.Sync(c.Frame())
 	_, ident := ui.SplitLabel(label)
@@ -118,70 +123,58 @@ func BeginVList(c *ui.Context, label string, st *VListState, o VListOpts) VList 
 	if o.Line <= 0 {
 		o.Line = 40
 	}
-	rescaled := false
-	if sc := c.Scale(); st.scale != sc {
-		if st.scale > 0 {
-			rescaled = true
-			// A rare event (the window moved to another display): finish any
-			// rebuild now rather than rescale two buffers.
-			for st.job.on {
-				st.finishNow()
-			}
-			r := sc / st.scale
-			st.f.rescale(r)
-			st.offset *= float64(r)
-		}
-		st.scale = sc
-	}
-	est := c.Pt(o.Estimate)
+	// Heights and positions are in points; old is the scale the last frame
+	// was laid out at, sc this frame's.
+	old := st.sc()
+	sc := float64(c.Scale())
+	rescaled := st.scale > 0 && float64(st.scale) != sc
+	st.scale = c.Scale()
+	est := o.Estimate
 	st.est = est
 
 	// the heights of the items built in the last frame, from its layout
-	// (unless that was at another scale)
 	last := st.built[st.cur]
-	if rescaled {
-		last = last[:0]
-	}
 	changed := false
 	for _, id := range last {
 		if b, ok := c.BoxOf(ui.KeyN(ikey, id)); ok {
 			_, sz := c.ScrollExtent(b)
-			if st.setHeight(id, sz[1]) {
+			if st.setHeight(id, float32(float64(sz[1])/old)) {
 				changed = true
 			}
 		}
+	}
+	if in := c.Input(); in.NActions > 0 {
+		st.pileScrollIntoView(c, in, ikey, last[:st.piled[st.cur]])
 	}
 	st.cur ^= 1
 	if cap(st.built[st.cur]) < o.MaxItems {
 		st.built[st.cur] = make([]uint64, 0, o.MaxItems)
 	}
 	st.built[st.cur] = st.built[st.cur][:0]
-	if changed {
-		c.RequestFrame() // the next frame lays out with the heights it now knows
-	}
+	st.piled[st.cur] = 0
 
 	// the view and the scrolling since the last frame
 	_, wh := c.Size()
-	view := float64(wh)
+	view := float64(wh) / sc
 	var s0 float64
 	have := false
 	if b, ok := c.BoxOf(bkey); ok {
 		_, sz := c.ScrollExtent(b)
 		if sz[1] > 0 {
-			view, have = float64(sz[1]), true
+			view, have = float64(sz[1])/old, true
 			_, s0 = c.Scroll(b)
+			if st.hasLast && !rescaled {
+				st.by += s0 - min(max(st.lastS, 0), max(st.lastContent-float64(sz[1]), 0))
+			}
 		}
 	}
-	d := st.by
+	d := st.by / old // ui's offsets are in the last frame's pixels
 	st.by = 0
-	if have && st.hasLast && !rescaled {
-		d += s0 - min(max(st.lastS, 0), max(st.lastContent-view, 0))
-	}
 	have = have && !rescaled // ui's offset is in the old pixels: set it again
 	focused := c.FocusKey() == bkey
 	jump := 0 // -1 top, 1 end
 	if focused {
-		line := float64(c.Pt(o.Line))
+		line := float64(o.Line)
 		page := max(view-line, line)
 		prim := ui.PrimaryMod()
 		switch {
@@ -199,11 +192,17 @@ func BeginVList(c *ui.Context, label string, st *VListState, o VListOpts) VList 
 			jump = 1
 		}
 	}
+	if (d != 0 || jump != 0) && st.settling {
+		st.req = false // the user scrolled: a ScrollTo stops settling
+	}
 
-	// the position
+	// the position, in points
 	f := &st.f
 	n := f.n
-	total := st.Total()
+	total := 0.0
+	if n > 0 {
+		total = f.total(est)
+	}
 	maxY := max(total-view, 0)
 	var y float64
 	switch {
@@ -222,7 +221,7 @@ func BeginVList(c *ui.Context, label string, st *VListState, o VListOpts) VList 
 		st.stuck = false
 	case jump > 0:
 		y = maxY
-	case st.req && st.reqTarget(view, &y):
+	case st.req && st.reqTarget(view, changed, o.MaxItems, &y):
 	case st.stuck && o.StickToBottom:
 		y = maxY + d
 	default:
@@ -232,35 +231,41 @@ func BeginVList(c *ui.Context, label string, st *VListState, o VListOpts) VList 
 		}
 	}
 	y = min(max(y, 0), maxY)
-	st.stuck = o.StickToBottom && y >= maxY-0.5
-	st.atEnd = y >= maxY-0.5
+	st.stuck = o.StickToBottom && y >= maxY-0.5/sc
+	st.atEnd = y >= maxY-0.5/sc
 
 	v := VList{Len: n, Focused: focused, AtEnd: st.atEnd, c: c, st: st, okey: okey, key: ikey}
 	if n > 0 {
 		a, top := f.find(y, est)
 		st.anchorID, st.offset = f.id(a), y-top
-		ov := float64(c.Pt(o.Overscan))
+		ov := float64(o.Overscan)
 		if o.Overscan <= 0 {
 			ov = view / 4
 		}
 		first, _ := f.find(y-ov, est)
 		lastI, _ := f.find(y+view+ov, est)
 		lastI++
+		// Pinned to the bottom with more than a view of content (or with
+		// BottomAlign), the bottom edge is what must not move: every item
+		// goes in the pile, which ends at the view's bottom, and the newest
+		// items are the ones built. Otherwise the anchor's top must not move:
+		// the flow starts at it, and the items above it are in the pile,
+		// which ends at the anchor's top.
+		v.bottom = st.stuck && (maxY > 0 || o.BottomAlign)
+		v.short = v.bottom && maxY == 0
 		if lastI-first > o.MaxItems {
-			first = max(first, a-o.MaxItems/4)
-			lastI = min(lastI, first+o.MaxItems)
+			if v.bottom {
+				first = lastI - o.MaxItems
+			} else {
+				first = max(first, a-o.MaxItems/4)
+				lastI = min(lastI, first+o.MaxItems)
+			}
 		}
 		v.First, v.Last, v.anchor = first, lastI, a
-		// Pinned to the bottom with more than a view of content, the bottom
-		// edge is what must not move: every item goes in the pile, which
-		// ends at the view's bottom. Otherwise the anchor's top must not
-		// move: the flow starts at it, and the items above it are in the
-		// pile, which ends at the anchor's top.
-		v.bottom = st.stuck && maxY > 0
 		if v.bottom {
 			v.anchor = lastI
 		} else {
-			v.pileY = float32(-st.offset)
+			v.pileY = float32(-st.offset * sc)
 		}
 	} else {
 		st.anchorID, st.offset = NoID, 0
@@ -294,24 +299,30 @@ func BeginVList(c *ui.Context, label string, st *VListState, o VListOpts) VList 
 	// whatever the offset), unless it could not show the position.
 	//
 	// Pinned to the bottom, the pile of all the items is the flow's only
-	// child, ending at the content's end, and the offset is set past the end:
-	// the layout clamps it to the end with this frame's view height, so the
-	// bottom holds in the first frame and while the view is resized too.
-	rows := int(math.Ceil(total * 256))
+	// child, at the content's end, and the offset is set past the end: the
+	// layout clamps it to the end with this frame's view height, so the
+	// bottom holds in the first frame and while the view is resized too. A
+	// short list with BottomAlign does not scroll: its pile ends at the
+	// bottom of a box as high as the view.
+	rows := int(math.Ceil(total * sc * 256))
 	content := float64(rows) * float64(vlRowH)
 	s := s0
 	l := 0 // the flow's start, in virtual rows
-	if v.bottom {
-		v.pileH = float32(min(content, vlPileH))
-		l = rows - int(v.pileH*256)
+	switch {
+	case v.short:
+		s = 0
+		c.SetScroll(v.Body, 0, s)
+	case v.bottom:
+		l = rows
 		s = content
 		c.SetScroll(v.Body, 0, s)
-	} else {
-		if !have || (math.Abs(s-y) > 0.25 && !c.Animating()) || s-st.offset < -1e-9 || s > max(content-view, 0)+1e-9 {
-			c.SetScroll(v.Body, 0, y)
-			s = y
+	default:
+		yPx, offPx := y*sc, st.offset*sc
+		if !have || (math.Abs(s-yPx) > 0.25 && !c.Animating()) || s-offPx < -1e-9 || s > max(content-view*sc, 0)+1e-9 {
+			c.SetScroll(v.Body, 0, yPx)
+			s = yPx
 		}
-		l = int(math.Round((s - st.offset) * 256))
+		l = int(math.Round((s - offPx) * 256))
 	}
 	if rows > 0 {
 		r := c.Rect(v.Body)
@@ -319,18 +330,21 @@ func BeginVList(c *ui.Context, label string, st *VListState, o VListOpts) VList 
 		if vh <= 0 {
 			vh = float64(wh)
 		}
-		sc := s
-		if hi := float64(rows)*float64(vlRowH) - vh; sc > hi {
-			sc = hi
+		sv := s
+		if hi := float64(rows)*float64(vlRowH) - vh; sv > hi {
+			sv = hi
 		}
-		sc = math.Max(sc, 0)
-		vf := int(math.Floor(sc / float64(vlRowH)))
+		sv = math.Max(sv, 0)
+		vf := int(math.Floor(sv / float64(vlRowH)))
 		c.ListRange(v.Body, rows, vlRowH, vf-l)
 	} else {
 		c.ListRange(v.Body, 0, vlRowH, 0)
 	}
 	v.s, v.cont = s, content
 	c.Push(v.Body)
+	if changed || st.req || st.Pending() {
+		c.RequestFrame()
+	}
 	return v
 }
 
@@ -339,9 +353,12 @@ func BeginVList(c *ui.Context, label string, st *VListState, o VListOpts) VList 
 func (v *VList) Key() ui.Key { return v.c.KeyOf(v.Body) }
 
 // reqTarget resolves a pending ScrollTo into the offset y of the view's top,
-// and reports whether it did. A request for an id the list does not have is
-// dropped, unless a rebuild may be adding it.
-func (st *VListState) reqTarget(view float64, y *float64) bool {
+// and reports whether it did. The request stays until the target and the
+// items between it and the view's top are measured and no height changed in
+// the last frame (changed), so the alignment holds once the estimates are
+// replaced, or vlSettleFrames have passed. A request for an id the list does
+// not have is dropped, unless a rebuild may be adding it.
+func (st *VListState) reqTarget(view float64, changed bool, maxItems int, y *float64) bool {
 	f := &st.f
 	i, ok := f.index(st.reqID)
 	if !ok {
@@ -350,31 +367,87 @@ func (st *VListState) reqTarget(view float64, y *float64) bool {
 		}
 		return false
 	}
-	st.req = false
-	top := f.top(i, st.est)
-	h := f.top(i+1, st.est) - top
-	switch st.reqAlign {
+	est := st.est
+	top := f.top(i, est)
+	h := f.top(i+1, est) - top
+	a := st.reqAlign
+	if a == AlignNearest {
+		cur := 0.0
+		if ai, ok := f.index(st.anchorID); ok {
+			cur = f.top(ai, est) + st.offset
+		}
+		switch {
+		case top < cur || h > view:
+			a = AlignStart
+		case top+h > cur+view:
+			a = AlignEnd
+		default:
+			*y = cur
+			st.req = false
+			return true
+		}
+		st.reqAlign = a // the side it chose, while it settles
+	}
+	switch a {
 	case AlignStart:
 		*y = top
 	case AlignCenter:
 		*y = top + h/2 - view/2
-	case AlignEnd:
-		*y = top + h - view
 	default:
-		cur := 0.0
-		if a, ok := f.index(st.anchorID); ok {
-			cur = f.top(a, st.est) + st.offset
-		}
-		switch {
-		case top < cur || h > view:
-			*y = top
-		case top+h > cur+view:
-			*y = top + h - view
-		default:
-			*y = cur
+		*y = top + h - view
+	}
+	st.reqLeft--
+	st.settling = true
+	if st.reqLeft <= 0 || (!changed && st.measured(*y, i, maxItems)) {
+		st.req = false
+	}
+	return true
+}
+
+// measured reports whether the items from the one at offset y down to item
+// i, at most limit of them, were all measured.
+func (st *VListState) measured(y float64, i, limit int) bool {
+	f := &st.f
+	from, _ := f.find(y, st.est)
+	if from > i {
+		from = i
+	}
+	if i-from >= limit {
+		return false
+	}
+	for _, h := range f.hs[f.lo+from : f.lo+i+1] {
+		if h < 0 {
+			return false
 		}
 	}
 	return true
+}
+
+// pileScrollIntoView turns the accessibility requests to scroll a box built
+// in a pile in the last frame into view (ui.ActScrollIntoView), which ui
+// would apply to the pile, into a ScrollTo of its item.
+func (st *VListState) pileScrollIntoView(c *ui.Context, in *ui.Input, ikey ui.Key, piled []uint64) {
+	for k := 0; k < in.NActions; k++ {
+		r := &in.Actions[k]
+		if r.Action&ui.ActScrollIntoView == 0 {
+			continue
+		}
+		b, ok := c.BoxOf(r.Key)
+		if !ok {
+			continue
+		}
+		br := c.Rect(b)
+		for _, id := range piled {
+			ib, ok := c.BoxOf(ui.KeyN(ikey, id))
+			if !ok {
+				continue
+			}
+			if ir := c.Rect(ib); br[0] >= ir[0] && br[2] <= ir[2] && br[1] >= ir[1] && br[3] <= ir[3] {
+				st.ScrollToID(id, AlignNearest)
+				break
+			}
+		}
+	}
 }
 
 // Item starts item i, which the app builds as the children of the returned
@@ -394,8 +467,7 @@ func (v *VList) Item(i int) uint64 {
 	if i < v.anchor && !v.inPile {
 		v.openPile()
 	} else if i >= v.anchor && v.inPile {
-		c.Pop()
-		v.inPile = false
+		v.closePile()
 	}
 	id := st.f.id(i)
 	c.NextSize(ui.Pct(1), ui.Children(1))
@@ -406,34 +478,54 @@ func (v *VList) Item(i int) uint64 {
 	v.open = true
 	if bl := &st.built[st.cur]; len(*bl) < cap(*bl) {
 		*bl = append(*bl, id)
+		if v.inPile {
+			st.piled[st.cur]++
+		}
 	}
 	return id
 }
 
-// openPile opens the pile: a box taller than its items whose bottom is where
-// they must end, the anchor's top (floating at pileY) or, pinned to the
-// bottom, the content's end (the flow's only child). Its first child is a
-// spacer that gives way by the items' height (strictness 0), so the items end
-// exactly at the pile's bottom, whatever their heights turn out to be in this
-// frame's layout.
+// openPile opens the pile, a box of no height whose items end at its top:
+// floating at pileY, the anchor's top, or, pinned to the bottom, the flow's
+// only child at the content's end. It scrolls past its content, which the
+// layout clamps to the content's height, so its items end exactly at its
+// top whatever their heights turn out to be in this frame's layout, and
+// however tall they are. With BottomAlign and a short list it sits at the
+// bottom of a box as high as the view. Having no height, it is never under
+// the pointer, so the wheel scrolls the body.
 func (v *VList) openPile() {
 	c := v.c
-	var fl ui.Flags
-	if v.bottom {
-		c.NextSize(ui.Pct(1), ui.Px(v.pileH))
-	} else {
-		c.NextSize(ui.Pct(1), ui.Px(vlPileH))
-		c.NextPos(0, v.pileY-vlPileH)
-		fl = ui.FloatingX | ui.FloatingY
+	if v.short {
+		c.NextSize(ui.Pct(1), ui.Pct(1))
+		c.NextAxis(ui.AxisY)
+		c.NextGap(0)
+		c.NextPadding(0, 0, 0, 0)
+		c.Push(c.BoxKeyed(0, ui.KeyN(v.okey, 4), nil))
+		c.NextSize(ui.Px(0), ui.Pct(1))
+		c.BoxKeyed(0, ui.KeyN(v.okey, 5), nil)
 	}
+	fl := ui.ScrollY
+	if !v.bottom {
+		c.NextPos(0, v.pileY)
+		fl |= ui.FloatingX | ui.FloatingY
+	}
+	c.NextSize(ui.Pct(1), ui.Px(0))
 	c.NextAxis(ui.AxisY)
 	c.NextGap(0)
 	c.NextPadding(0, 0, 0, 0)
 	p := c.BoxKeyed(fl, ui.KeyN(v.okey, 3), nil)
+	c.SetScroll(p, 0, vlPileScroll)
 	c.Push(p)
-	c.NextSize(ui.Px(0), ui.Pct(1))
-	c.BoxKeyed(0, ui.KeyN(v.okey, 4), nil)
 	v.inPile = true
+}
+
+// closePile closes the pile.
+func (v *VList) closePile() {
+	v.c.Pop()
+	if v.short {
+		v.c.Pop()
+	}
+	v.inPile = false
 }
 
 // EndItem ends the item being built. Item and EndVList call it; an app calls
@@ -450,8 +542,7 @@ func (v *VList) EndItem() {
 func EndVList(v *VList) {
 	v.EndItem()
 	if v.inPile {
-		v.c.Pop()
-		v.inPile = false
+		v.closePile()
 	}
 	v.c.Pop()
 	v.c.Pop()

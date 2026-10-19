@@ -31,6 +31,7 @@ type vt struct {
 	in   ui.Input
 	dl   gpu.DrawList
 	w, h int
+	sc   float32 // the display scale (default 1)
 	st   VListState
 	o    VListOpts
 	v    VList
@@ -67,7 +68,11 @@ func (h *vt) height(id uint64) float32 {
 
 func (h *vt) frame() {
 	c := h.c
-	c.Begin(&h.in, h.w, h.h, 1, 1.0/60)
+	sc := h.sc
+	if sc == 0 {
+		sc = 1
+	}
+	c.Begin(&h.in, h.w, h.h, sc, 1.0/60)
 	if h.edit != nil {
 		h.edit()
 		h.edit = nil
@@ -369,13 +374,16 @@ func TestVListAtEndWithoutStick(t *testing.T) {
 func TestVListScrollTo(t *testing.T) {
 	h := newVT(t, 1000, VListOpts{})
 	h.frames(3)
+	// One request, landing on estimates (44) far from the heights (20 to 60):
+	// it keeps the item centred while the items around it are measured.
 	h.st.ScrollTo(700, AlignCenter)
-	h.frames(3) // the jump lands on estimates, then the heights settle around it
-	h.st.ScrollTo(700, AlignCenter)
-	h.frame()
+	h.frames(6)
 	id := h.st.ID(700)
 	if mid := h.y(id) + h.height(id)/2; mid != float32(h.h)/2 {
 		t.Fatalf("item 700 is centred at %v, want %v", mid, h.h/2)
+	}
+	if h.st.req {
+		t.Fatal("the request is still settling with every height measured")
 	}
 	h.st.ScrollTo(10, AlignStart)
 	h.frames(2)
@@ -442,25 +450,178 @@ func TestVListMarks(t *testing.T) {
 	}
 }
 
-// A change of display scale scales the measured heights and the position:
-// the same item stays at the top, at the scaled offset.
+// A change of display scale keeps the position in points: the same item
+// stays at the top, at the scaled offset, and the heights scale with it.
 func TestVListScaleChange(t *testing.T) {
 	h := newVT(t, 1000, VListOpts{})
 	h.frames(3)
 	h.scrollTo(400, 6)
 	id, _ := h.top()
 	hgt, _ := h.st.Height(400)
-	h.c.Begin(&h.in, h.w, h.h, 2, 1.0/60)
+	h.sc = 2
+	h.frame()
+	if a, off := h.st.Anchor(); a != id || off != 6 {
+		t.Fatalf("after the scale change the anchor is %d at %v pt, want %d at 6", a, off, id)
+	}
+	if got := h.y(id); got != -12 {
+		t.Fatalf("after the scale change the top item is at %v px, want -12", got)
+	}
+	if got, _ := h.st.Height(400); got != 2*hgt {
+		t.Fatalf("height %v after doubling the scale, want %v", got, 2*hgt)
+	}
+}
+
+// A change of display scale during a rebuild neither publishes it (a reader
+// that synced earlier in the frame has enumerated the old order) nor runs it
+// to its end in that frame.
+func TestVListScaleChangeKeepsTheFrameBoundary(t *testing.T) {
+	h := newVT(t, 1000, VListOpts{})
+	defer func(d, s int) { vlDirect, vlSliceUnits = d, s }(vlDirect, vlSliceUnits)
+	vlDirect, vlSliceUnits = 40, 97
+	h.frames(3)
+	h.edit = func() { h.st.Move(100, 1, 900) }
+	h.frame()
+	if !h.st.Pending() {
+		t.Fatal("the move was not rebuilt")
+	}
+	h.sc = 2
+	h.c.Begin(&h.in, h.w, h.h, h.sc, 1.0/60)
+	h.st.Sync(h.c.Frame()) // a reader at the start of the frame
+	rev, order := h.st.Rev(), orderHash(&h.st)
 	v := BeginVList(h.c, "list", &h.st, h.o)
 	for i := v.First; i < v.Last; i++ {
 		v.Item(i)
 	}
 	EndVList(&v)
 	h.c.End(&h.dl)
-	if a, off := h.st.Anchor(); a != id || off != 12 {
-		t.Fatalf("after the scale change the anchor is %d at %v, want %d at 12", a, off, id)
+	if h.st.Rev() != rev || orderHash(&h.st) != order {
+		t.Fatal("the scale change published the rebuild within the frame")
 	}
-	if got, _ := h.st.Height(400); got != 2*hgt {
-		t.Fatalf("height %v after doubling the scale, want %v", got, 2*hgt)
+	if !h.st.Pending() {
+		t.Fatal("the scale change ran the rebuild to its end in one frame")
 	}
+}
+
+// A rebuild finishes in an app that draws only while ui.Context.Animating:
+// the list asks for frames while it is pending.
+func TestVListRebuildFinishesWithoutInput(t *testing.T) {
+	h := newVT(t, 1000, VListOpts{})
+	defer func(d, s int) { vlDirect, vlSliceUnits = d, s }(vlDirect, vlSliceUnits)
+	vlDirect, vlSliceUnits = 40, 97
+	for i := 0; i < 3 || h.c.Animating(); i++ {
+		if i > 50 {
+			t.Fatal("the list does not come to rest")
+		}
+		h.frame()
+	}
+	h.edit = func() { h.st.Move(100, 1, 900) }
+	h.frame()
+	for i := 0; h.c.Animating(); i++ {
+		if i > 10000 {
+			t.Fatal("the rebuild does not finish")
+		}
+		h.frame()
+	}
+	if h.st.Pending() {
+		t.Fatal("the frames stopped with the rebuild pending")
+	}
+	if h.st.ID(900) != 1100 {
+		t.Fatalf("item 900 is %d after the move, want 1100", h.st.ID(900))
+	}
+}
+
+// Pinned to the bottom, MaxItems keeps the newest items: the last one is
+// built, at the bottom.
+func TestVListMaxItemsPinned(t *testing.T) {
+	h := newVT(t, 300, VListOpts{StickToBottom: true, MaxItems: 4})
+	for i := 0; i < 300; i++ {
+		h.hOf[h.st.ID(i)] = 40
+	}
+	h.frames(3)
+	if h.v.First != 296 || h.v.Last != 300 {
+		t.Fatalf("built [%d, %d), want [296, 300)", h.v.First, h.v.Last)
+	}
+	last := h.st.ID(299)
+	if got := h.y(last) + 40; got != float32(h.h) {
+		t.Fatalf("the last item ends at %v, want %d", got, h.h)
+	}
+}
+
+// Rows taller than any fixed box still end where they must: at the view's
+// bottom while pinned, and at the anchor's top above it.
+func TestVListTallRows(t *testing.T) {
+	h := newVT(t, 300, VListOpts{StickToBottom: true})
+	last := h.st.ID(299)
+	h.hOf[last] = 100_000
+	h.frames(3)
+	if got := h.y(last) + h.height(last); got != float32(h.h) || !h.v.AtEnd {
+		t.Fatalf("the tall last item ends at %v (AtEnd %v), want %d", got, h.v.AtEnd, h.h)
+	}
+
+	h = newVT(t, 300, VListOpts{})
+	tall := h.st.ID(99)
+	h.hOf[tall] = 100_000
+	h.frames(2)
+	h.scrollTo(100, 0)
+	h.mustTop("below a tall item", h.st.ID(100), 0)
+	if got := h.y(tall) + h.height(tall); got != 0 {
+		t.Fatalf("the tall item above the anchor ends at %v, want 0", got)
+	}
+}
+
+// BottomAlign: a conversation shorter than the view sits at its bottom, and
+// stays there as messages arrive and history loads; without it the items
+// start at the top.
+func TestVListBottomAlign(t *testing.T) {
+	for _, align := range []bool{false, true} {
+		h := newVT(t, 5, VListOpts{StickToBottom: true, BottomAlign: align})
+		for i := 0; i < 5; i++ {
+			h.hOf[h.st.ID(i)] = 40
+		}
+		h.frame() // the first frame, before any layout
+		first, last := h.st.ID(0), h.st.ID(4)
+		wantFirst := float32(0)
+		if align {
+			wantFirst = 400
+		}
+		if got := h.y(first); got != wantFirst {
+			t.Fatalf("BottomAlign %v: the first item is at %v, want %v", align, got, wantFirst)
+		}
+		if !align {
+			continue
+		}
+		if got := h.y(last) + 40; got != float32(h.h) {
+			t.Fatalf("the last item ends at %v, want %d", got, h.h)
+		}
+		h.edit = func() { h.st.Append(seq(5000, 2)) }
+		h.hOf[5000], h.hOf[5001] = 40, 70
+		h.frame()
+		if got := h.y(5001) + 70; got != float32(h.h) {
+			t.Fatalf("after an arrival the last item ends at %v, want %d", got, h.h)
+		}
+		if got := h.y(first); got != 290 {
+			t.Fatalf("after an arrival the first item is at %v, want 290", got)
+		}
+		// longer than the view: pinned to the bottom as without BottomAlign
+		h.edit = func() { h.st.Prepend(seq(1, 30)) }
+		h.frames(3)
+		if got := h.y(5001) + 70; got != float32(h.h) || !h.v.AtEnd {
+			t.Fatalf("a long list ends at %v (AtEnd %v), want %d", got, h.v.AtEnd, h.h)
+		}
+	}
+}
+
+// An accessibility request to scroll an item built above the anchor (in the
+// pile, which ui would scroll) into view scrolls the list to it.
+func TestVListScrollIntoViewFromPile(t *testing.T) {
+	h := newVT(t, 1000, VListOpts{})
+	h.frames(3)
+	h.scrollTo(500, 0)
+	id := h.st.ID(498)
+	if _, ok := h.box[id]; !ok {
+		t.Fatal("item 498 is not built above the view")
+	}
+	h.in.PushAction(ui.SemRequest{Key: h.c.KeyOf(h.box[id]), Action: ui.ActScrollIntoView})
+	h.frames(3)
+	h.mustTop("scrolled into view", id, 0)
 }
