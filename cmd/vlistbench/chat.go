@@ -65,13 +65,16 @@ func hasImage(id uint64) bool { return mix(id+7)%imageN == 0 }
 
 func imagePt(id uint64) float32 { return float32(80 + mix(id+11)%160) }
 
-// msgText builds the text of message id into the frame's scratch: 1 to 60
-// words, so from one line to about eight.
+// maxWords is the most words a message has.
+const maxWords = 60
+
+// msgText builds the text of message id into the frame's scratch: 1 to
+// maxWords words, so from one line to about eight.
 func msgText(c *ui.Context, id uint64) []byte {
 	h := mix(id + 3)
 	n := 1 + int(h%7)
 	if h>>8%5 == 0 {
-		n += int(h >> 16 % 54)
+		n += int(h >> 16 % (maxWords - 6))
 	}
 	f := c.Fmt()
 	for w := 0; w < n; w++ {
@@ -177,6 +180,14 @@ func (ch *chat) Script(frame int, in *ui.Input) bool {
 func (ch *chat) setFonts(scale float32) {
 	ch.font = ch.a.Text.Font(text.FontDesc{SizePt: 13, Weight: 400, Scale: scale})
 	ch.fontScale = scale
+	// The text system's shaping scratch grows to the longest run it has
+	// shaped: shape the longest message there can be once, now, rather than
+	// whenever scrolling first meets a longer one.
+	var long []byte
+	for w := 0; w < maxWords; w++ {
+		long = append(long, "everyone "...)
+	}
+	ch.a.Text.Shape(ch.font, long)
 }
 
 // arrive appends a new message, as the network delivers one.
