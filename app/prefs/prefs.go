@@ -25,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"sync"
 	"time"
 )
@@ -49,18 +50,21 @@ type Options struct {
 	// systems always use fsync.
 	FullSync bool
 	// OnError, when non-nil, is called from the saving goroutine with each
-	// failed save (a full disk, a read-only directory). The save is retried at
-	// the next change or Flush; Err keeps the latest error until a save works.
+	// failed save (a full disk, a read-only directory). No lock of the store is
+	// held, so it may call the store. The save is retried at the next change or
+	// Flush; Err keeps the latest error until a save works.
 	OnError func(error)
 }
 
 // Store is a typed preferences file. Get, Set, Update, Flush, Err and Close may
-// be called from any goroutine. Get, Set and Update never touch the disk.
+// be called from any goroutine. Get, Set and Update never touch the disk and
+// never wait for a save: a save works on a private copy of the value.
 type Store[T any] struct {
 	path string
 	opt  Options
+	flat bool // T holds no pointers, maps or slices: a plain copy is a snapshot
 
-	mu     sync.Mutex // guards v, dirty, closed, armed, err, last
+	mu     sync.Mutex // guards v, dirty, closed, armed, err, last; never held across encoding or I/O
 	v      T
 	dirty  bool
 	closed bool
@@ -72,14 +76,25 @@ type Store[T any] struct {
 	saveMu sync.Mutex // one save at a time, in the order they were asked for
 }
 
+// encode is the file's canonical form of v.
+func encode[T any](v *T) ([]byte, error) {
+	data, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return append(data, '\n'), nil
+}
+
 // Open reads the preferences file at path into a copy of defaults and returns a
-// Store on it. It does file I/O: call it at startup, before the first frame,
-// not from the UI loop.
+// Store on it. The store owns its copy: nothing Open or the store does changes
+// the maps, slices or pointers inside defaults. Open does file I/O: call it at
+// startup, before the first frame, not from the UI loop.
 //
 // A missing file is not an error; the store holds defaults and the file is
 // created by the first change. If the file cannot be read or is corrupt, Open
 // returns a working Store on the defaults together with the error (ErrCorrupt
-// for bad JSON): the caller may report it and carry on.
+// for bad JSON or a value of the wrong type): the caller may report it and carry
+// on.
 func Open[T any](path string, defaults T, opt Options) (*Store[T], error) {
 	if opt.Debounce <= 0 {
 		opt.Debounce = 500 * time.Millisecond
@@ -87,7 +102,7 @@ func Open[T any](path string, defaults T, opt Options) (*Store[T], error) {
 	if opt.Perm == 0 {
 		opt.Perm = 0o600
 	}
-	s := &Store[T]{path: path, opt: opt, v: defaults}
+	s := &Store[T]{path: path, opt: opt, v: clone(defaults), flat: !hasRefs(reflect.TypeFor[T]())}
 	s.timer = time.AfterFunc(time.Hour, s.fire)
 	s.timer.Stop()
 	data, err := os.ReadFile(path)
@@ -97,7 +112,7 @@ func Open[T any](path string, defaults T, opt Options) (*Store[T], error) {
 	case err != nil:
 		return s, fmt.Errorf("prefs: %w", err)
 	}
-	v := defaults
+	v := clone(defaults) // decoded into storage of its own; s.v stays untouched if this fails half way
 	if err := json.Unmarshal(data, &v); err != nil {
 		aside := path + ".corrupt"
 		os.Remove(aside)
@@ -107,7 +122,12 @@ func Open[T any](path string, defaults T, opt Options) (*Store[T], error) {
 		return s, fmt.Errorf("%w: %s: %v (kept as %s)", ErrCorrupt, path, err, aside)
 	}
 	s.v = v
-	s.last = data
+	// The baseline is what a save would write for this value, not the file's own
+	// bytes (which may be formatted by hand or by an older version): an unchanged
+	// value must not be rewritten after a reopen.
+	if enc, err := encode(&s.v); err == nil {
+		s.last = enc
+	}
 	return s, nil
 }
 
@@ -157,26 +177,43 @@ func (s *Store[T]) changedLocked() {
 func (s *Store[T]) fire() {
 	s.mu.Lock()
 	s.armed = false
+	closed := s.closed
 	s.mu.Unlock()
-	s.save()
+	if !closed {
+		s.save(false)
+	}
 }
 
-// save writes the current value if it changed since the last write.
-func (s *Store[T]) save() error {
+// save writes the current value if it changed since the last write. A closed
+// store writes only when force is set, which only Close does, once.
+func (s *Store[T]) save(force bool) error {
 	s.saveMu.Lock()
-	defer s.saveMu.Unlock()
+	err, report := s.saveLocked(force)
+	s.saveMu.Unlock()
+	if report && s.opt.OnError != nil { // after the unlock: the callback may call the store
+		s.opt.OnError(err)
+	}
+	return err
+}
+
+// saveLocked is save under saveMu. report says whether err is a new failure.
+func (s *Store[T]) saveLocked(force bool) (err error, report bool) {
 	s.mu.Lock()
-	if !s.dirty {
-		err := s.err
+	if (s.closed && !force) || !s.dirty {
+		err = s.err
 		s.mu.Unlock()
-		return err
+		return err, false
 	}
 	s.dirty = false
-	data, err := json.MarshalIndent(&s.v, "", "  ")
-	same := err == nil && bytes.Equal(data, s.last)
+	snap := s.v
+	if !s.flat {
+		snap = clone(s.v) // private from here on: the value may change while we encode
+	}
 	s.mu.Unlock()
-	if err == nil && !same {
-		err = writeAtomic(s.path, append(data, '\n'), s.opt.Perm, s.opt.FullSync)
+
+	data, err := encode(&snap) // may run the type's own MarshalJSON: no lock held
+	if err == nil && !bytes.Equal(data, s.lastBytes()) {
+		err = writeAtomic(s.path, data, s.opt.Perm, s.opt.FullSync)
 	}
 	s.mu.Lock()
 	if err != nil {
@@ -187,14 +224,19 @@ func (s *Store[T]) save() error {
 		s.last = data
 	}
 	s.mu.Unlock()
-	if err != nil && s.opt.OnError != nil {
-		s.opt.OnError(err)
-	}
-	return err
+	return err, err != nil
+}
+
+func (s *Store[T]) lastBytes() []byte {
+	s.mu.Lock()
+	b := s.last
+	s.mu.Unlock()
+	return b
 }
 
 // Flush writes any pending change now and returns the error of the write. It
-// blocks on the disk: call it at quit or from a worker, not from the UI loop.
+// blocks on the disk: call it at quit or from a worker, not from the UI loop. On
+// a closed store it writes nothing.
 func (s *Store[T]) Flush() error {
 	s.mu.Lock()
 	if s.armed {
@@ -202,7 +244,7 @@ func (s *Store[T]) Flush() error {
 		s.timer.Stop()
 	}
 	s.mu.Unlock()
-	return s.save()
+	return s.save(false)
 }
 
 // Err is the error of the latest save, nil if it succeeded (or none happened).
@@ -213,12 +255,23 @@ func (s *Store[T]) Err() error {
 	return err
 }
 
-// Close writes any pending change and stops saving. Later changes stay in
-// memory. It blocks on the disk, like Flush.
+// Close stops the store and writes any pending change: once it returns, no save
+// is running or will start, and later changes stay in memory. A save that was
+// already running finishes first. It blocks on the disk, like Flush. Calling it
+// again waits for the first and returns the same result.
 func (s *Store[T]) Close() error {
-	err := s.Flush()
 	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		s.saveMu.Lock() // the first Close's final save may still be running
+		s.saveMu.Unlock()
+		return s.Err()
+	}
 	s.closed = true
+	if s.armed {
+		s.armed = false
+		s.timer.Stop()
+	}
 	s.mu.Unlock()
-	return err
+	return s.save(true)
 }
