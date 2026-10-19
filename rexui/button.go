@@ -59,8 +59,10 @@ type ButtonRecipe struct {
 	// opacity.
 	FillDisabled, LabelDisabled Tint
 	// Rim is a one-pixel outline inside the edge (RimInactive in an inactive
-	// window); Highlight a one-pixel line inside the bottom edge. Glass.
+	// window); Highlight a one-pixel line inside the bottom edge, and the top
+	// one too with HighlightTop. Glass.
 	Rim, RimInactive, Highlight Tint
+	HighlightTop                bool
 	// Overlay lays the hover and press fills over Fill rather than replacing
 	// it (for an opaque glass fill).
 	Overlay bool
@@ -72,6 +74,11 @@ type ButtonRecipe struct {
 	// Capsule makes the button a capsule at every size; otherwise the size's
 	// radius applies (capsules from large up).
 	Capsule bool
+	// Shadow is a drop shadow ShadowY points below the button with
+	// ShadowBlur points of blur, while it is enabled (the zero Tint: none):
+	// a live window's Liquid Glass button floats on one in light mode.
+	Shadow              Tint
+	ShadowY, ShadowBlur float32
 	// Hover is the hover policy: AppKit's push buttons ignore the pointer.
 	Hover base.Hover
 }
@@ -117,11 +124,16 @@ var ButtonRecipes = [NumButtonVariants]ButtonRecipe{
 		Overlay: true, Glass: true, Capsule: true, Hover: base.HoverOn,
 	},
 	ButtonGlass: {
-		Fill: Of(theme.CapsuleFill), Label: Of(theme.Label), FillInactive: Of(theme.CapsuleFillInactive), LabelInactive: Of(theme.Label),
-		FillHover: None, FillPressed: Of(theme.Fill2), LabelPressed: Of(theme.Label),
+		// measured on GnuiShot captures of AppKitRef -live: a rounded
+		// rectangle of the size's radius, not a capsule; textColor; a rim
+		// lighter than a toolbar capsule's in light (black at 15 %); lit at
+		// the top and the bottom; a broad faint shadow in light
+		Fill: Of(theme.CapsuleFill), Label: Of(theme.Text), FillInactive: Of(theme.CapsuleFillInactive), LabelInactive: Of(theme.Text),
+		FillHover: None, FillPressed: Of(theme.Fill2), LabelPressed: Of(theme.Text),
 		FillDisabled: Of(theme.CapsuleFillInactive), LabelDisabled: Of(theme.TextDisabled),
-		Rim: Of(theme.CapsuleRim), RimInactive: Of(theme.CapsuleRimInactive), Highlight: Of(theme.CapsuleHighlight),
-		Overlay: true, Glass: true, Capsule: true,
+		Rim: OfAlpha(theme.CapsuleRim, 0.15, 1), RimInactive: Of(theme.CapsuleRimInactive), Highlight: Of(theme.CapsuleHighlight),
+		HighlightTop: true, Overlay: true, Glass: true,
+		Shadow: OfAlpha(theme.Shadow, 0.035, 0), ShadowY: 2, ShadowBlur: 6,
 	},
 }
 
@@ -163,6 +175,12 @@ func button(k *base.Kit, label string, ic icon.ID, withIcon bool, o ButtonOpts) 
 		c.NextBorder(rim, r.Lines.Hairline)
 		flags |= ui.DrawBorder
 	}
+	if rc.Shadow != (Tint{}) && !p.Disabled {
+		if sh := rc.Shadow.RGBA(r); sh&0xFF != 0 {
+			c.NextShadow(ui.Shadow{OffY: k.Pt(rc.ShadowY), Sigma: k.Pt(rc.ShadowBlur), Color: sh})
+			flags |= ui.DrawShadow
+		}
+	}
 	c.NextBG(fill)
 	c.NextRadius(radius)
 	w := ui.TextSize(2 * s.PadX)
@@ -188,7 +206,11 @@ func button(k *base.Kit, label string, ic icon.ID, withIcon bool, o ButtonOpts) 
 		k.Text(1, p.Name, s.Font.Font, fg, ui.AlignLeft, h)
 	}
 	if hl := rc.Highlight.RGBA(r); hl&0xFF != 0 && !p.Inactive && !p.Disabled {
-		bottomRim(k, p.ID, hl, radius)
+		sides := ui.SideBottom
+		if rc.HighlightTop {
+			sides |= ui.SideTop
+		}
+		innerRim(k, p.ID, hl, radius, sides)
 	}
 	k.FocusRing(p.ID, p.Visual, radius)
 	return k.EndPress(&p)
@@ -225,10 +247,10 @@ func (rc *ButtonRecipe) Colors(r *theme.Resolved, v base.Visual) (fill, label, r
 	return fill, label, rim
 }
 
-// bottomRim builds a one-pixel line of colour col inside the bottom edge of
+// innerRim builds a one-pixel line of colour col inside the given edges of
 // the root id (the current parent), following its corners: a glass capsule's
-// bright lower rim.
-func bottomRim(k *base.Kit, id ui.ID, col uint32, radius float32) {
+// bright rims.
+func innerRim(k *base.Kit, id ui.ID, col uint32, radius float32, sides ui.Sides) {
 	c := k.Context()
 	rc := c.Rect(id)
 	w, h := rc[2]-rc[0], rc[3]-rc[1]
@@ -238,7 +260,7 @@ func bottomRim(k *base.Kit, id ui.ID, col uint32, radius float32) {
 	lw := k.Theme().Lines.Hairline
 	theme.At(c, lw, lw, w-2*lw, h-2*lw)
 	c.NextBorder(col, lw)
-	c.NextBorderSides(ui.SideBottom)
+	c.NextBorderSides(sides)
 	c.NextRadius(max(radius-lw, 0))
 	c.BoxKeyed(ui.DrawBorder|base.Floating, ui.KeyN(c.KeyOf(id), 9030), nil)
 }

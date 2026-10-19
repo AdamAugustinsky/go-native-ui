@@ -13,15 +13,15 @@ const NoRole theme.Role = 255
 // its own in light and dark. Recipes hold Tints, not colours, so a light/dark
 // crossfade and the system's live colours cost nothing extra.
 //
-// Alpha replaces the role's alpha (0 keeps it). It is for the few colours
+// Alpha replaces the role's alpha (both 0 keep it). It is for the few colours
 // macOS 27.2 draws that no role names, such as a text field's outline (black
 // at 15 % in light, white at 9 % in dark); each such use is measured and
 // documented in its recipe.
 type Tint struct {
 	// Role is the colour role (NoRole: nothing).
 	Role theme.Role
-	// Alpha is the opacity in light (0) and dark (1), 0 to 1; zero keeps the
-	// role's own.
+	// Alpha is the opacity in light (0) and dark (1), 0 to 1; both zero keep
+	// the role's own, one zero is transparent in that mode.
 	Alpha [2]float32
 }
 

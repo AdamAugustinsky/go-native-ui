@@ -103,7 +103,7 @@ func IconButton(k *base.Kit, ic icon.ID, name string, o IconButtonOpts) base.Sig
 		c.BoxKeyed(f, ui.KeyN(p.Key, 1), disp)
 	}
 	if hl := rc.Highlight.RGBA(r); hl&0xFF != 0 && !p.Inactive && !p.Disabled {
-		bottomRim(k, p.ID, hl, radius)
+		innerRim(k, p.ID, hl, radius, ui.SideBottom)
 	}
 	ringR := radius
 	if v == IconBorderless { // AppKit rings the symbol; a rounded square of the size's radius stands in
