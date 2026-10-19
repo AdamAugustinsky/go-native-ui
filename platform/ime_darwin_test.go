@@ -150,8 +150,8 @@ func TestIMEMarkedTextFlow(t *testing.T) {
 // it into text, also when the input method answers with unmarkText.
 func TestIMEDiscardComposition(t *testing.T) {
 	r := newIMERig(t)
-	// The discard reaches the view's NSTextInputContext, which AppKit wants
-	// on the main thread (off it, it may trap once the application runs).
+	// The input context is the text input system's: it is used on the main
+	// thread only (it traps elsewhere), so the calls that reach it go there.
 	onMain(r.w.DiscardComposition) // nothing composing: nothing happens
 	if ev := r.events(); len(ev) != 0 {
 		t.Fatalf("events without a composition: %+v", ev)
