@@ -125,14 +125,50 @@ func TestPipeSquattedBeforehandIsRefused(t *testing.T) {
 	}
 }
 
-func TestProcessSIDIsTheUsers(t *testing.T) {
+// The client reads the owner of the pipe from its own handle: the user's SID,
+// whatever the account's default owner would be (an administrator's is a group).
+func TestPipeOwnerIsTheUser(t *testing.T) {
 	mine, err := userSID()
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := processSID(uint32(os.Getpid()))
-	if err != nil || got != mine {
-		t.Fatalf("processSID = %q, %v; want %q", got, err, mine)
+	srv, cli := pair(t)
+	for name, c := range map[string]*pipeConn{"client": cli, "server": srv} {
+		got, err := pipeOwnerSID(c.h)
+		if err != nil || got != mine {
+			t.Errorf("owner of the pipe seen from the %s = %q, %v; want %q", name, got, err, mine)
+		}
+	}
+	if err := checkServer(cli); err != nil {
+		t.Errorf("checkServer of this user's pipe: %v", err)
+	}
+}
+
+// A pipe that another user owns is refused by the client before it sends anything
+// (a hook says who the owner is), and nothing reaches the primary.
+func TestClientRefusesAPipeOfAnotherOwner(t *testing.T) {
+	dir := newDir(t)
+	p, _ := acquire(t, dir, Options{})
+	_, s := acquire(t, dir, Options{Timeout: 300 * time.Millisecond})
+	setPeer(t, func(conn) error { return nil }) // the server would serve anyone
+	other := func(syscall.Handle) (string, error) { return "S-1-5-21-1-2-3-1001", nil }
+	ownerHook.Store(&other)
+	t.Cleanup(func() { ownerHook.Store(nil) })
+	if err := s.Send([]string{"secret"}); !errors.Is(err, ErrNoAnswer) {
+		t.Errorf("Send = %v, want ErrNoAnswer", err)
+	}
+	if got := p.Poll(nil); len(got) != 0 {
+		t.Errorf("the primary stored %+v", got)
+	}
+	// Not being able to read the owner is a refusal too.
+	failing := func(syscall.Handle) (string, error) { return "", errors.New("no access") }
+	ownerHook.Store(&failing)
+	if err := s.Send([]string{"secret"}); !errors.Is(err, ErrNoAnswer) {
+		t.Errorf("Send with an unreadable owner = %v, want ErrNoAnswer", err)
+	}
+	ownerHook.Store(nil)
+	if err := s.Send([]string{"fine"}); err != nil {
+		t.Errorf("Send to this user's pipe: %v", err)
 	}
 }
 
@@ -505,5 +541,148 @@ func TestImpersonatedClientOfAnotherUserIsRefused(t *testing.T) {
 	asOtherUser(t)
 	if err := peerCheck(srv); err == nil {
 		t.Fatal("peerCheck accepted a client whose user differs")
+	}
+}
+
+// ---- the buffers of overlapped calls -------------------------------------------------
+
+type memoryInfo struct {
+	BaseAddress, AllocationBase uintptr
+	AllocationProtect           uint32
+	PartitionID                 uint16
+	RegionSize                  uintptr
+	State, Protect, Type        uint32
+}
+
+// The memory the kernel reads and writes is a VirtualAlloc'd allocation of the
+// connection's own (not the Go heap, not a stack), and every call in progress uses
+// a slice of it.
+func TestOverlappedBuffersAreTheConnectionsOwnMemory(t *testing.T) {
+	srv, cli := pair(t)
+	virtualQuery := kernel32.NewProc("VirtualQuery")
+	for name, c := range map[string]*pipeConn{"server": srv, "client": cli} {
+		var mbi memoryInfo
+		r, _, e := virtualQuery.Call(uintptr(unsafe.Pointer(&c.rbuf[0])), uintptr(unsafe.Pointer(&mbi)), unsafe.Sizeof(mbi))
+		if r == 0 {
+			t.Fatalf("VirtualQuery: %v", e)
+		}
+		const memCommit, memPrivate = 0x1000, 0x20000
+		base := uintptr(unsafe.Pointer(&c.rbuf[0]))
+		if mbi.AllocationBase != base || base != c.mem || mbi.State != memCommit || mbi.Type != memPrivate || mbi.RegionSize < 2*ioBufSize {
+			t.Errorf("%s: buffer at %#x is in %+v, want its own committed private allocation", name, base, mbi)
+		}
+		if uintptr(unsafe.Pointer(&c.wbuf[0])) != base+ioBufSize || len(c.rbuf) != ioBufSize || len(c.wbuf) != ioBufSize {
+			t.Errorf("%s: the read and write buffers are not two halves of the allocation", name)
+		}
+	}
+	var checked atomic.Int32
+	setHook(t, &ioBeforeSubmit, func() {
+		cli.mu.Lock()
+		defer cli.mu.Unlock()
+		for op := range cli.pending {
+			a := uintptr(unsafe.Pointer(&op.buf[0]))
+			if a < cli.mem || a+uintptr(len(op.buf)) > cli.mem+2*ioBufSize {
+				t.Errorf("a call is using a buffer at %#x outside the connection's memory", a)
+			}
+			checked.Add(1)
+		}
+	})
+	cli.SetDeadline(time.Now().Add(3 * time.Second))
+	srv.SetDeadline(time.Now().Add(3 * time.Second))
+	cli.Write([]byte("x"))
+	srv.Read(make([]byte, 1))
+	if checked.Load() == 0 {
+		t.Error("no call was seen")
+	}
+}
+
+// Pending calls, a cancelled one and one cancelled by Close all complete while the
+// garbage collector and the allocator run flat out: the data read is intact, no
+// crash, and nothing the kernel might still hold has been written over.
+func TestPendingCallsSurviveGCAndChurn(t *testing.T) {
+	canary := make([][]byte, 256)
+	for i := range canary {
+		canary[i] = make([]byte, 4096)
+		for j := range canary[i] {
+			canary[i][j] = 0xAB
+		}
+	}
+	srv, cli := pair(t)
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	for g := 0; g < 2; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			var keep [][]byte
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				runtime.GC()
+				b := make([]byte, 64<<10)
+				for i := range b {
+					b[i] = 0xCD
+				}
+				keep = append(keep[:min(len(keep), 8)], b)
+			}
+		}()
+	}
+	defer func() { close(stop); wg.Wait() }()
+
+	payload := make([]byte, 3000)
+	for i := range payload {
+		payload[i] = byte(i * 7)
+	}
+	// 1. A read pending while the churn runs, then the data arrives.
+	got := make(chan []byte, 1)
+	go func() {
+		buf := make([]byte, len(payload))
+		n, _ := io.ReadFull(srv, buf)
+		got <- buf[:n]
+	}()
+	time.Sleep(300 * time.Millisecond)
+	cli.SetDeadline(time.Now().Add(5 * time.Second))
+	if _, err := cli.Write(payload); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case b := <-got:
+		if string(b) != string(payload) {
+			t.Fatal("the data read is not the data written")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the read did not complete")
+	}
+	// 2. A read cancelled by its deadline, joined under the churn; the connection
+	// is intact afterwards.
+	srv.SetDeadline(time.Now().Add(200 * time.Millisecond))
+	if _, err := srv.Read(make([]byte, 10)); !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("Read = %v, want a deadline error", err)
+	}
+	srv.SetDeadline(time.Now().Add(5 * time.Second))
+	cli.Write([]byte("after"))
+	buf := make([]byte, 5)
+	if _, err := io.ReadFull(srv, buf); err != nil || string(buf) != "after" {
+		t.Fatalf("after the cancelled read: %q, %v", buf, err)
+	}
+	// 3. A read cancelled by Close, whose buffer is then freed.
+	read := make(chan error, 1)
+	cli.SetDeadline(time.Time{})
+	go func() { _, err := cli.Read(make([]byte, 100)); read <- err }()
+	time.Sleep(200 * time.Millisecond)
+	finishes(t, "Close", 5*time.Second, func() { cli.Close() })
+	if err := <-read; err == nil {
+		t.Error("the read cancelled by Close returned no error")
+	}
+	time.Sleep(300 * time.Millisecond) // the churn goes on over the freed memory
+	for i, c := range canary {
+		for _, b := range c {
+			if b != 0xAB {
+				t.Fatalf("canary %d was written over", i)
+			}
+		}
 	}
 }

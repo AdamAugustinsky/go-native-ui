@@ -30,13 +30,20 @@ import (
 //     access to the user's SID only (and so to no other user, administrators
 //     included).
 //   - The server finds the user of every client by impersonating it at the
-//     identification level (no process id is involved), the client finds the user
-//     of the server from its process, and both compare it with the user's own SID.
+//     identification level, and the client finds the owner of the pipe from its
+//     own handle (the pipe is created with the user as its owner). No process id
+//     is involved on either side, so one that is reused cannot give another
+//     answer. Both compare the SID with the user's own.
 //   - Every handle is overlapped. Each call has its own event and OVERLAPPED, is
 //     waited for up to its deadline, and when the deadline passes (or the
 //     connection or listener is closed) it is cancelled with CancelIoEx and
 //     waited for until it has completed, so nothing touches a buffer, an
-//     OVERLAPPED or a handle after the call has returned.
+//     OVERLAPPED or a handle after the call has returned. The buffers the
+//     kernel reads and writes are never the caller's: each connection owns two,
+//     in memory from VirtualAlloc (outside the Go heap and the goroutine stacks,
+//     so it neither moves nor is collected), and data is copied between them and
+//     the caller's slices while the call is still registered with the
+//     connection, which frees the memory only after every call has been joined.
 
 var (
 	advapi32 = syscall.NewLazyDLL("advapi32.dll")
@@ -49,7 +56,8 @@ var (
 	createEventW        = kernel32.NewProc("CreateEventW")
 	setEvent            = kernel32.NewProc("SetEvent")
 	waitForMultiple     = kernel32.NewProc("WaitForMultipleObjects")
-	pipeServerPID       = kernel32.NewProc("GetNamedPipeServerProcessId")
+	virtualAlloc        = kernel32.NewProc("VirtualAlloc")
+	virtualFree         = kernel32.NewProc("VirtualFree")
 	processIDToSession  = kernel32.NewProc("ProcessIdToSessionId")
 	localFree           = kernel32.NewProc("LocalFree")
 
@@ -57,6 +65,8 @@ var (
 	impersonatePipeClient = advapi32.NewProc("ImpersonateNamedPipeClient")
 	revertToSelf          = advapi32.NewProc("RevertToSelf")
 	openThreadToken       = advapi32.NewProc("OpenThreadToken")
+	getSecurityInfo       = advapi32.NewProc("GetSecurityInfo")
+	convertSidToStringSid = advapi32.NewProc("ConvertSidToStringSidW")
 )
 
 const (
@@ -69,8 +79,14 @@ const (
 	pipeUnlimitedInstances  = 255
 	securitySQOSPresent     = 0x00100000
 	securityIdentification  = 0x00010000
-	processQueryLimited     = 0x1000
 	tokenQuery              = 0x8
+	seKernelObject          = 6
+	ownerSecurityInfo       = 1
+
+	memCommitReserve = 0x3000 // MEM_COMMIT | MEM_RESERVE
+	memRelease       = 0x8000
+	pageReadWrite    = 0x04
+	ioBufSize        = 4096 // each of a connection's two buffers
 
 	waitObject0 = 0
 	waitTimeout = 0x102
@@ -99,6 +115,8 @@ var (
 	beforeCreateNext atomic.Pointer[func()]
 	// failCreate makes the creation of every instance but the first fail.
 	failCreate atomic.Bool
+	// ownerHook replaces the reading of the owner of a pipe by its client.
+	ownerHook atomic.Pointer[func(syscall.Handle) (string, error)]
 )
 
 func runHook(h *atomic.Pointer[func()]) {
@@ -130,21 +148,6 @@ func tokenSID(tok syscall.Token) (string, error) {
 		return "", err
 	}
 	return u.User.Sid.String()
-}
-
-// processSID is the SID of the user of process pid.
-func processSID(pid uint32) (string, error) {
-	h, err := syscall.OpenProcess(processQueryLimited, false, pid)
-	if err != nil {
-		return "", err
-	}
-	defer syscall.CloseHandle(h)
-	var tok syscall.Token
-	if err := syscall.OpenProcessToken(h, tokenQuery, &tok); err != nil {
-		return "", err
-	}
-	defer tok.Close()
-	return tokenSID(tok)
 }
 
 func sessionID() uint32 {
@@ -246,8 +249,9 @@ type pipeListener struct {
 	closeEv syscall.Handle // signalled by Close
 }
 
-// listen creates the first instance, which fails if the name is taken, with the
-// user-only DACL.
+// listen creates the first instance, which fails if the name is taken, owned by
+// the user (not by the administrators group, which an elevated process would
+// otherwise own it as) and with the user-only DACL.
 func listen(addr string) (listener, error) {
 	sid, err := userSID()
 	if err != nil {
@@ -257,7 +261,7 @@ func listen(addr string) (listener, error) {
 	if err != nil {
 		return nil, err
 	}
-	sddl, err := syscall.UTF16PtrFromString("D:P(A;;GA;;;" + sid + ")")
+	sddl, err := syscall.UTF16PtrFromString("O:" + sid + "D:P(A;;GA;;;" + sid + ")")
 	if err != nil {
 		return nil, err
 	}
@@ -342,6 +346,7 @@ func (l *pipeListener) Accept() (conn, error) {
 	}
 	defer syscall.CloseHandle(ev)
 	ov := &syscall.Overlapped{HEvent: ev}
+	defer runtime.KeepAlive(ov) // until the call has been joined, whichever way Accept returns
 	r, _, e := connectNamedPipe.Call(uintptr(h), uintptr(unsafe.Pointer(ov)))
 	switch {
 	case r != 0, e == errPipeConnected, e == errNoData:
@@ -358,7 +363,11 @@ func (l *pipeListener) Accept() (conn, error) {
 		syscall.CloseHandle(h)
 		return nil, e
 	}
-	return newPipeConn(h, true), nil
+	pc, err := newPipeConn(h, true)
+	if err != nil {
+		return nil, err
+	}
+	return pc, nil
 }
 
 // Close stops the listener. It returns when no Accept is still using it; only
@@ -389,21 +398,47 @@ func (l *pipeListener) Close() error {
 
 // ---- a connection ----------------------------------------------------------------
 
+// An ioOp is one overlapped call in progress: the OVERLAPPED and the buffer the
+// kernel is using, together, from the submission until the completion has been
+// joined (the record is on the heap and referenced from the connection until
+// then, and kept alive after the join). buf is a slice of the connection's
+// VirtualAlloc'd memory, never of the caller's slice.
+type ioOp struct {
+	ov  syscall.Overlapped
+	buf []byte
+}
+
 type pipeConn struct {
 	h      syscall.Handle
 	server bool
 	wrote  bool   // a server that has answered waits for the client to go before it closes
 	pre    []byte // read ahead by peerCheck, returned first by Read
 
+	// The memory the kernel reads and writes: rbuf for reads, wbuf for writes. It
+	// is freed by Close, after every call has been joined.
+	mem        uintptr
+	rbuf, wbuf []byte
+	rmu, wmu   sync.Mutex // one read and one write at a time, each with its own buffer
+
 	mu       sync.Mutex
 	deadline time.Time
 	closed   bool
-	pending  map[*syscall.Overlapped]struct{} // the calls in progress, for Close to cancel
-	ops      sync.WaitGroup                   // the calls in progress, for Close to wait for
+	pending  map[*ioOp]struct{} // the calls in progress, for Close to cancel
+	ops      sync.WaitGroup     // the calls in progress, for Close to wait for
 }
 
-func newPipeConn(h syscall.Handle, server bool) *pipeConn {
-	return &pipeConn{h: h, server: server, pending: map[*syscall.Overlapped]struct{}{}}
+// newPipeConn takes over the handle h (closing it if it fails).
+func newPipeConn(h syscall.Handle, server bool) (*pipeConn, error) {
+	r, _, e := virtualAlloc.Call(0, 2*ioBufSize, memCommitReserve, pageReadWrite)
+	if r == 0 {
+		syscall.CloseHandle(h)
+		return nil, fmt.Errorf("instance: allocating the pipe's buffers: %w", e)
+	}
+	// An address outside the Go heap, not a pointer the garbage collector knows.
+	p := *(*unsafe.Pointer)(unsafe.Pointer(&r))
+	mem := unsafe.Slice((*byte)(p), 2*ioBufSize)
+	return &pipeConn{h: h, server: server, mem: r, rbuf: mem[:ioBufSize:ioBufSize], wbuf: mem[ioBufSize:],
+		pending: map[*ioOp]struct{}{}}, nil
 }
 
 func (c *pipeConn) SetDeadline(t time.Time) error {
@@ -413,9 +448,11 @@ func (c *pipeConn) SetDeadline(t time.Time) error {
 	return nil
 }
 
-// do runs one overlapped call, with the connection's deadline. A Close that
-// arrives at any point cancels it.
-func (c *pipeConn) do(start func(ov *syscall.Overlapped) error) (uint32, error) {
+// do runs one overlapped call on buf (one of the connection's buffers), with the
+// connection's deadline. A Close that arrives at any point cancels it. after, if
+// not nil, runs on success while the call is still registered, so the buffer
+// cannot be freed under it.
+func (c *pipeConn) do(buf []byte, start func(op *ioOp) error, after func(n uint32)) (uint32, error) {
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
@@ -426,40 +463,51 @@ func (c *pipeConn) do(start func(ov *syscall.Overlapped) error) (uint32, error) 
 		c.mu.Unlock()
 		return 0, err
 	}
-	ov := &syscall.Overlapped{HEvent: ev}
-	c.pending[ov] = struct{}{}
+	op := &ioOp{buf: buf}
+	op.ov.HEvent = ev
+	c.pending[op] = struct{}{}
 	c.ops.Add(1)
 	d := c.deadline
 	c.mu.Unlock()
 	defer func() {
 		c.mu.Lock()
-		delete(c.pending, ov)
+		delete(c.pending, op)
 		c.mu.Unlock()
 		syscall.CloseHandle(ev)
 		c.ops.Done()
 	}()
 
 	runHook(&ioBeforeSubmit)
-	if err := start(ov); err != nil && err != errIOPending {
+	if err := start(op); err != nil && err != errIOPending {
 		return 0, err
 	}
 	// A Close that came before the call was submitted found nothing to cancel.
 	c.mu.Lock()
 	if c.closed {
-		cancel(c.h, ov)
+		cancel(c.h, &op.ov)
 	}
 	c.mu.Unlock()
-	return await(c.h, ov, d, 0)
+	n, err := await(c.h, &op.ov, d, 0)
+	runtime.KeepAlive(op) // the record, and with it the buffer's slice, until the call is joined
+	if err == nil && after != nil {
+		after(n)
+	}
+	return n, err
 }
 
 func (c *pipeConn) readRaw(p []byte) (int, error) {
-	var done uint32
-	n, err := c.do(func(ov *syscall.Overlapped) error { return syscall.ReadFile(c.h, p, &done, ov) })
+	c.rmu.Lock()
+	defer c.rmu.Unlock()
+	buf := c.rbuf[:min(len(p), len(c.rbuf))]
+	// The count of bytes is read from GetOverlappedResult: the call is given nil, so
+	// the kernel has no Go variable to write to later.
+	n, err := c.do(buf, func(op *ioOp) error { return syscall.ReadFile(c.h, op.buf, nil, &op.ov) },
+		func(n uint32) { copy(p, buf[:n]) })
 	switch {
 	case err == errBrokenPipe || err == errNotConnected:
-		return int(n), io.EOF
+		return 0, io.EOF
 	case err != nil:
-		return int(n), err
+		return 0, err
 	case n == 0:
 		return 0, io.EOF
 	}
@@ -479,10 +527,13 @@ func (c *pipeConn) Read(p []byte) (int, error) {
 }
 
 func (c *pipeConn) Write(p []byte) (int, error) {
+	c.wmu.Lock()
+	defer c.wmu.Unlock()
 	done := 0
 	for done < len(p) {
-		var w uint32
-		n, err := c.do(func(ov *syscall.Overlapped) error { return syscall.WriteFile(c.h, p[done:], &w, ov) })
+		buf := c.wbuf[:min(len(p)-done, len(c.wbuf))]
+		copy(buf, p[done:]) // into the connection's memory, before the call is made
+		n, err := c.do(buf, func(op *ioOp) error { return syscall.WriteFile(c.h, op.buf, nil, &op.ov) }, nil)
 		if err != nil {
 			return done, err
 		}
@@ -493,11 +544,12 @@ func (c *pipeConn) Write(p []byte) (int, error) {
 }
 
 // Close ends the connection: the calls in progress are cancelled and waited for,
-// and only then is the handle closed. A server that has answered first waits (for
-// a second at most) until the client has read the answer and gone, which is how
-// it knows the answer was not lost with the pipe.
+// and only then are the handle closed and the memory freed. A server that has
+// answered first waits (for a second at most) until the client has read the
+// answer and gone, which is how it knows the answer was not lost with the pipe.
 func (c *pipeConn) Close() error {
-	if c.server && c.wrote {
+	if c.server && c.wrote && c.rmu.TryLock() {
+		c.rmu.Unlock()
 		c.SetDeadline(time.Now().Add(time.Second))
 		var b [1]byte
 		c.readRaw(b[:])
@@ -508,12 +560,14 @@ func (c *pipeConn) Close() error {
 		return nil
 	}
 	c.closed = true
-	for ov := range c.pending {
-		cancel(c.h, ov)
+	for op := range c.pending {
+		cancel(c.h, &op.ov)
 	}
 	c.mu.Unlock()
 	c.ops.Wait()
-	return syscall.CloseHandle(c.h)
+	err := syscall.CloseHandle(c.h)
+	virtualFree.Call(c.mem, 0, memRelease)
+	return err
 }
 
 // ---- who is on the other end -----------------------------------------------------
@@ -586,7 +640,11 @@ func dialRaw(addr string, timeout time.Duration) (conn, error) {
 		h, err := syscall.CreateFile(name, syscall.GENERIC_READ|syscall.GENERIC_WRITE, 0, nil,
 			syscall.OPEN_EXISTING, securitySQOSPresent|securityIdentification|fileFlagOverlapped, 0)
 		if err == nil {
-			return newPipeConn(h, false), nil
+			pc, err := newPipeConn(h, false)
+			if err != nil {
+				return nil, err
+			}
+			return pc, nil
 		}
 		left := time.Until(deadline)
 		if err != errPipeBusy || left <= 0 {
@@ -596,9 +654,10 @@ func dialRaw(addr string, timeout time.Duration) (conn, error) {
 	}
 }
 
-// dial connects and checks that the server is a process of this user: its process
-// is found from the pipe and its token read. A process id that is reused can only
-// lead here to a refusal or to another process of the same user.
+// dial connects and checks that the server is this user's: the pipe is owned by
+// the user (listen sets that), and the owner is read from this connection's own
+// handle, so it is the owner of the very pipe that was connected, not of whatever
+// process a process id names later.
 func dial(addr string, timeout time.Duration) (conn, error) {
 	c, err := dialRaw(addr, timeout)
 	if err != nil {
@@ -612,20 +671,39 @@ func dial(addr string, timeout time.Duration) (conn, error) {
 }
 
 func checkServer(c *pipeConn) error {
-	var pid uint32
-	if r, _, e := pipeServerPID.Call(uintptr(c.h), uintptr(unsafe.Pointer(&pid))); r == 0 {
-		return fmt.Errorf("instance: cannot find the server process: %w", e)
-	}
-	theirs, err := processSID(pid)
+	owner, err := pipeOwnerSID(c.h)
 	if err != nil {
-		return fmt.Errorf("instance: cannot identify the server process %d: %w", pid, err)
+		return fmt.Errorf("instance: cannot find the owner of the pipe: %w", err)
 	}
 	mine, err := userSID()
 	if err != nil {
 		return err
 	}
-	if theirs != mine {
-		return fmt.Errorf("instance: the server process %d belongs to %s", pid, theirs)
+	if owner != mine {
+		return fmt.Errorf("instance: the pipe belongs to %s", owner)
 	}
 	return nil
+}
+
+// pipeOwnerSID is the owner of the pipe object behind the handle h.
+func pipeOwnerSID(h syscall.Handle) (string, error) {
+	if f := ownerHook.Load(); f != nil {
+		return (*f)(h)
+	}
+	var owner, sd uintptr
+	if r, _, _ := getSecurityInfo.Call(uintptr(h), seKernelObject, ownerSecurityInfo,
+		uintptr(unsafe.Pointer(&owner)), 0, 0, 0, uintptr(unsafe.Pointer(&sd))); r != 0 {
+		return "", syscall.Errno(r)
+	}
+	defer localFree.Call(sd) // the owner SID points into it
+	var str *uint16
+	if r, _, e := convertSidToStringSid.Call(owner, uintptr(unsafe.Pointer(&str))); r == 0 {
+		return "", e
+	}
+	defer localFree.Call(uintptr(unsafe.Pointer(str)))
+	n := 0
+	for *(*uint16)(unsafe.Add(unsafe.Pointer(str), 2*n)) != 0 {
+		n++
+	}
+	return syscall.UTF16ToString(unsafe.Slice(str, n)), nil
 }
