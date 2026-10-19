@@ -175,6 +175,7 @@ var _ app.Initer = (*Gallery)(nil)
 // scene.
 func (g *Gallery) Init(a *app.App) error {
 	g.Attach(a.UI, a.Text)
+	a.SetMenu(g.model) // the native menu bar on macOS
 	a.UI.Reserve(8192)
 	a.Text.ReserveRuns(text.MaxCachedRuns, text.MaxCachedGlyphs, text.MaxCachedTextBytes)
 	return nil

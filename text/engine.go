@@ -115,6 +115,7 @@ type goSystem struct {
 
 	runs  *runCache
 	atlas *atlas
+	plays *BasicLayouter // paragraphs (para_basic.go), over this System
 
 	// Shaping state (shape.go). seg and para are only used for text that
 	// needs several scripts or bidirectional reordering.
@@ -374,33 +375,6 @@ func (s *goSystem) resolve(f FontKey, r rune) FaceID {
 // ResolveFace implements shaping.Fontmap for the font being shaped.
 func (s *goSystem) ResolveFace(r rune) *font.Face { return s.faces[s.resolve(s.cur, r)].face }
 
-// isEmojiPresentation reports whether r is displayed as a colour emoji by
-// default (Unicode Emoji_Presentation=Yes, approximately: the supplementary
-// ranges are taken whole, the BMP ones listed). It decides when the colour
-// emoji font is preferred over a monochrome glyph of the primary font.
-func isEmojiPresentation(r rune) bool {
-	if r < 0x231A {
-		return false
-	}
-	switch {
-	case r >= 0x1F300 && r <= 0x1F64F, r >= 0x1F680 && r <= 0x1F6FF,
-		r >= 0x1F900 && r <= 0x1F9FF, r >= 0x1FA70 && r <= 0x1FAFF,
-		r >= 0x1F1E6 && r <= 0x1F1FF:
-		return true
-	case r > 0x2B55:
-		return false
-	}
-	switch r {
-	case 0x231A, 0x231B, 0x23E9, 0x23EA, 0x23EB, 0x23EC, 0x23F0, 0x23F3, 0x25FD, 0x25FE,
-		0x2614, 0x2615, 0x267F, 0x2693, 0x26A1, 0x26AA, 0x26AB, 0x26BD, 0x26BE, 0x26C4, 0x26C5,
-		0x26CE, 0x26D4, 0x26EA, 0x26F2, 0x26F3, 0x26F5, 0x26FA, 0x26FD, 0x2705, 0x270A, 0x270B,
-		0x2728, 0x274C, 0x274E, 0x2753, 0x2754, 0x2755, 0x2757, 0x2795, 0x2796, 0x2797, 0x27B0,
-		0x27BF, 0x2B1B, 0x2B1C, 0x2B50, 0x2B55:
-		return true
-	}
-	return r >= 0x2648 && r <= 0x2653
-}
-
 // ---- Shaping ----
 
 // Shape shapes utf8 with font f (go-text HarfBuzz port; bidi and script
@@ -462,9 +436,14 @@ func (s *goSystem) RunGeneration() uint32 { return s.runs.gen }
 // glyphs and textBytes bytes of source text (clamped to MaxCachedRuns,
 // MaxCachedGlyphs and MaxCachedTextBytes), so that shaping new strings until
 // the cache holds that much, and every eviction after that, allocates no Go
-// memory in the cache. Call it once at setup. Without it the cache grows by
-// doubling.
-func (s *goSystem) ReserveRuns(runs, glyphs, textBytes int) { s.runs.reserve(runs, glyphs, textBytes) }
+// memory. It reserves the paragraph cache (Layout) too, with the budget
+// ParaBudget{Paras: runs, Glyphs: glyphs, Text: textBytes} (see
+// ReserveParas), since wrapped text is laid out there. Call it once at
+// setup. Without it the caches grow by doubling.
+func (s *goSystem) ReserveRuns(runs, glyphs, textBytes int) {
+	s.runs.reserve(runs, glyphs, textBytes)
+	s.ReserveParas(ParaBudget{Paras: runs, Glyphs: glyphs, Text: textBytes})
+}
 
 // ---- Rasterization ----
 

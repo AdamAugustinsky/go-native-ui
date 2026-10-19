@@ -50,7 +50,7 @@ var (
 	selSetShowsSupp     = objc.Sel("setShowsSuppressionButton:")
 	selShowsSupp        = objc.Sel("showsSuppressionButton")
 	selSuppressionBtn   = objc.Sel("suppressionButton")
-	selState            = objc.Sel("state")
+	selControlState            = objc.Sel("state")
 	selSetInitialFR     = objc.Sel("setInitialFirstResponder:")
 	selBeginSheet       = objc.Sel("beginSheetModalForWindow:completionHandler:")
 	selEndSheet         = objc.Sel("endSheet:returnCode:")
@@ -313,7 +313,7 @@ func finishDialog(i int, resp int64) {
 	var e Event
 	switch r.kind {
 	case DialogAlert:
-		supp := objc.SendBool(r.obj, selShowsSupp) && objc.Send(objc.Send(r.obj, selSuppressionBtn), selState) == 1
+		supp := objc.SendBool(r.obj, selShowsSupp) && objc.Send(objc.Send(r.obj, selSuppressionBtn), selControlState) == 1
 		if idx := resp - alertFirstButtonRet; idx >= 0 && idx < MaxAlertButtons {
 			e = dialogEvent(r.ticket, r.kind, DialogAnswered, uint32(idx), supp, 0, 0, now)
 		} else {

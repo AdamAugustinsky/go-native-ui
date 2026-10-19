@@ -63,6 +63,19 @@ func (m *Model) Match(c *ui.Context) {
 	}
 }
 
+// State reports how a menu item of command id shows now (a native menu asks
+// when it opens): enabled when the command is enabled and may act under the
+// modal rule of Match, given what c's last frame had open and focused; and
+// checked. It allocates nothing.
+func (m *Model) State(c *ui.Context, id ID) (enabled, checked bool) {
+	i, ok := m.index(id)
+	if !ok {
+		return false, false
+	}
+	enabled = !hasBit(m.off, i) && (!c.ModalOpen() || m.inModal(c, i))
+	return enabled, hasBit(m.check, i)
+}
+
 // inModal reports whether command i may act while a modal overlay is open: it
 // is marked InModal, or it has an edit role and a text field has the focus.
 func (m *Model) inModal(c *ui.Context, i int) bool {

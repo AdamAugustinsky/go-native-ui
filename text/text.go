@@ -11,6 +11,15 @@
 //   - The glyph cache and atlas (cache.go, atlas.go) store rasterized glyphs
 //     in 1024×1024 pages (R8 coverage, RGBA premultiplied for colour glyphs)
 //     and track the region changed since the last upload.
+//   - Paragraph layout (para.go, D42) breaks styled text (Para: the text,
+//     pointer-free Spans and a font per style) into lines at a width. On
+//     macOS it is CoreText's typesetter (para_darwin.go), which gives AppKit's
+//     line breaks, bidirectional line order, font fallback and line heights;
+//     the other backends use the basic layout of para_basic.go. Layouts are
+//     cached pointer-free (paracache.go) by everything in Para, with
+//     second-chance eviction; ParaView has the hit-testing, caret and range
+//     geometry that selection needs, and EmojiOnly the rule for large
+//     emoji-only messages.
 //
 // # Carets
 //
@@ -57,6 +66,7 @@ type FontDesc struct {
 	Mono   bool    // system monospace font when Family == ""
 	SizePt float32 // points
 	Weight int     // CSS-like: 400 regular, 500 medium, 600 semibold, 700 bold
+	Italic bool    // the family's italic (oblique) face; upright when it has none
 	Scale  float32 // pixels per point (2 on Retina)
 }
 
@@ -71,6 +81,10 @@ type Metrics struct {
 	// MonoAdvance is the advance of "0". For a monospace font it is the
 	// advance of every glyph.
 	MonoAdvance float32
+	// UnderlinePos is the distance from the baseline down to the centre of
+	// an underline and UnderlineThickness its thickness, from the font; both
+	// 0 when the backend does not report them (a drawer then picks its own).
+	UnderlinePos, UnderlineThickness float32
 }
 
 // RunRef identifies a shaped run in the run cache. The zero RunRef is
