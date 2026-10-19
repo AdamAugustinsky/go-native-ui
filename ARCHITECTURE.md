@@ -305,8 +305,13 @@ On top, shared by every backend:
   widget learns it was clicked while it is being built (signals: hovering,
   pressed, released, clicked, double-clicked, dragging, scrolled,
   keyboard-activated). Hot/active/focus are keys in UI state.
-- **Scrolling:** smooth scroll offset with target + exponential approach.
-  Precise trackpad deltas are used as-is, momentum comes from the OS.
+- **Scrolling:** smooth scroll offset with target + exponential approach
+  for wheels, hard-clamped. Precise trackpad deltas are used as-is, momentum
+  comes from the OS. A gesture with phases (macOS, Wayland fingers) latches
+  to the scroll box under the pointer until its momentum ends, locks the
+  predominant axis, and rubber-bands past the edges as NSScrollView does
+  (`ui/scrollphys.go`; the constants are fitted to a live NSScrollView,
+  `ui/scrollfit_test.go`).
 - **Virtualized lists:** only rows in `[firstVisible-overscan,
   lastVisible+overscan]` are built. Row height is fixed per list, so the
   visible range is O(1) to compute; the cost per frame is independent of

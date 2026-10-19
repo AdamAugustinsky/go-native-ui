@@ -113,3 +113,60 @@ func TestScrollPhaseOfNSEventPhase(t *testing.T) {
 		}
 	}
 }
+
+// TestScrollEventsThroughTheQueue: a gesture's events posted to the app's own
+// queue (-[NSApplication postEvent:atStart:], the window's events, never the
+// system's stream) come out of Wait in order, as EvScroll with their phases
+// and the window's scale.
+func TestScrollEventsThroughTheQueue(t *testing.T) {
+	s := newCGScroll(t)
+	type got struct {
+		phase, momentum ScrollPhase
+		dy              float32
+	}
+	var evs []got
+	var scale float32
+	var openErr error
+	onMain(func() {
+		w, err := Open(Options{Title: "scroll test", Width: 200, Height: 200, Hidden: true})
+		if err != nil {
+			openErr = err
+			return
+		}
+		defer w.Close()
+		pool := objc.F.Call0(objc.PoolPush)
+		defer objc.F.Call1(objc.PoolPop, pool)
+		w.Wait(0)
+		scale = w.scale
+		post := func(phase, momentum int, dy float64) {
+			ev := s.event(false, phase, momentum, 0, dy, false)
+			objc.Send2(objc.Send(objc.Cls("NSApplication"), objc.Sel("sharedApplication")), objc.Sel("postEvent:atStart:"), uintptr(ev), 0)
+		}
+		post(128, 0, 0) // MayBegin
+		post(1, 0, 3)   // Began
+		post(2, 0, 4)   // Changed
+		post(4, 0, 0)   // Ended
+		post(0, 1, 9)   // momentum began
+		post(0, 3, 0)   // momentum ended
+		for i := 0; i < 20 && len(evs) < 6; i++ {
+			for _, e := range w.Wait(50e6) {
+				if e.Kind == EvScroll {
+					evs = append(evs, got{e.Phase, e.Momentum, e.DY})
+				}
+			}
+		}
+	})
+	if openErr != nil {
+		t.Skip("no window:", openErr)
+	}
+	want := []got{{PhaseMayBegin, PhaseNone, 0}, {PhaseBegan, PhaseNone, 3 * scale}, {PhaseChanged, PhaseNone, 4 * scale},
+		{PhaseEnded, PhaseNone, 0}, {PhaseNone, PhaseBegan, 9 * scale}, {PhaseNone, PhaseEnded, 0}}
+	if len(evs) != len(want) {
+		t.Fatalf("got %+v, want %+v", evs, want)
+	}
+	for i := range want {
+		if evs[i] != want[i] {
+			t.Errorf("event %d: %+v, want %+v", i, evs[i], want[i])
+		}
+	}
+}
