@@ -370,3 +370,57 @@ func TestHugeCrashTextIsTruncated(t *testing.T) {
 		t.Errorf("crash: ok %v truncated %v len %d", ok, c.Truncated, len(c.Text))
 	}
 }
+
+// If the current file cannot be moved aside (its backup name is taken by a
+// directory with something in it), the rotator must still make progress: the
+// old code reopened the same full file and looped forever.
+func TestRotationMakesProgressWhenRenameFails(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "app.1.log", "keep"), 0o700) // rename and remove both fail
+	r := &rotator{dir: dir, name: "app", max: 300, files: 2}
+	done := make(chan error, 1)
+	go func() {
+		var err error
+		for i := 0; i < 50 && err == nil; i++ {
+			_, err = r.Write([]byte(fmt.Sprintf("line %03d %s\n", i, strings.Repeat("z", 40))))
+		}
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Write never returned: rotation looped on a file it could not move")
+	}
+	r.Close()
+	fi, _ := os.Stat(filepath.Join(dir, "app.log"))
+	if fi == nil || fi.Size() == 0 || fi.Size() > 300 {
+		t.Errorf("current file %v, want 1..300 bytes", fi)
+	}
+	if b := read(t, filepath.Join(dir, "app.log")); !strings.Contains(b, "line 049") {
+		t.Errorf("the newest line is not in the file:\n%s", b)
+	}
+}
+
+// Through the whole pipeline: Flush and Close still return.
+func TestFlushReturnsWhenRotationCannotMoveTheFile(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "app.1.log", "keep"), 0o700)
+	var errOut syncBuf
+	l, _ := Setup(Options{Dir: dir, Stderr: &errOut, MaxSize: 400, MaxFiles: 2, NoCrashCapture: true})
+	for i := 0; i < 40; i++ {
+		l.Info("x", "pad", strings.Repeat("q", 60))
+	}
+	done := make(chan struct{})
+	go func() { Flush(); Close(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Flush/Close hung")
+	}
+	if strings.Count(errOut.String(), "msg=x") != 40 {
+		t.Errorf("stderr got %d of 40 lines", strings.Count(errOut.String(), "msg=x"))
+	}
+}

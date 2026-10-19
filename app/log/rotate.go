@@ -42,7 +42,10 @@ func (r *rotator) open() error {
 
 // rotate closes the current file, shifts the backups up (dropping the oldest)
 // and starts a new file. Renames that fail are skipped: losing a backup is
-// better than losing the log.
+// better than losing the log. If the current file could not be moved or removed
+// (a backup name taken by a directory, a file another process holds), it is
+// truncated instead: the log must make progress, and the oldest lines are the
+// ones to lose.
 func (r *rotator) rotate() error {
 	if r.f != nil {
 		r.f.Close()
@@ -56,7 +59,18 @@ func (r *rotator) rotate() error {
 			os.Rename(r.path(i), r.path(i+1))
 		}
 	}
-	return r.open()
+	if err := r.open(); err != nil {
+		return err
+	}
+	if r.size > 0 { // still the old, full file
+		if err := r.f.Truncate(0); err != nil {
+			r.f.Close()
+			r.f = nil
+			return err
+		}
+		r.size = 0
+	}
+	return nil
 }
 
 // Write appends p, rotating between lines when the file would pass max. A line
@@ -68,6 +82,7 @@ func (r *rotator) Write(p []byte) (int, error) {
 			return 0, err
 		}
 	}
+	rotated := false // rotated since the last write: whatever the file holds now, write one line
 	for len(p) > 0 {
 		room := r.max - r.size
 		n := 0 // bytes of whole lines that fit
@@ -82,10 +97,11 @@ func (r *rotator) Write(p []byte) (int, error) {
 			n = end
 		}
 		if n == 0 {
-			if r.size > 0 {
+			if r.size > 0 && !rotated {
 				if err := r.rotate(); err != nil {
 					return total - len(p), err
 				}
+				rotated = true
 				continue
 			}
 			n = len(p) // the first line alone is too long: it gets the file
@@ -99,6 +115,7 @@ func (r *rotator) Write(p []byte) (int, error) {
 			return total - len(p) + w, err
 		}
 		p = p[n:]
+		rotated = false
 	}
 	return total, nil
 }
