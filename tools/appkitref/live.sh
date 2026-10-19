@@ -22,7 +22,10 @@ out=${1:?usage: live.sh OUT_DIR [page]}
 page=${2:-0}
 scene=appkit
 [ "$page" = 1 ] && scene=appkit-type
-[ "$page" = 2 ] && scene=appkit-lists
+# the lists draw overlay scroll bars: AppKit's must be overlay too, whatever
+# the Mac's setting (an argument, for AppKitRef only)
+bars=""
+[ "$page" = 2 ] && scene=appkit-lists bars="-AppleShowScrollBars WhenScrolling"
 mkdir -p "$out"
 for mode in light dark; do
 	open -n "$here/RexuiAppKit.app" --args -scene $scene -mode $mode
@@ -31,7 +34,7 @@ for mode in light dark; do
 		echo "ours $mode: capture failed" >&2
 	pkill -f RexuiAppKit.app/Contents/MacOS/RexuiAppKit
 	# AppKitRef takes about two seconds to build its window
-	open -n "$here/AppKitRef.app" --args -live "$here/names$page.txt" -mode $mode -seconds 10
+	open -n "$here/AppKitRef.app" --args -live "$here/names$page.txt" -mode $mode -seconds 10 $bars
 	sleep 5
 	sh "$SHOT" window -app AppKitRef -scale 2 -no-prompt -out "$out/appkit-$page-$mode.png" >"$out/appkit-$page-$mode.json" ||
 		echo "appkit $mode: capture failed" >&2

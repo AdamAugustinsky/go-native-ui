@@ -83,6 +83,15 @@ The live misses, all under the eye's threshold at 1×:
 Live AppKit cannot show focus rings or inactive samples in one key window, so
 `-live` leaves those to the offscreen comparison.
 
+The lists' samples (page 2, `appkit-lists`; tables, outlines) on 2026-10-19:
+86 of 86 offscreen in blue and in pink; 62 of 66 live. AppKitRef `-live`
+ran with `-AppleShowScrollBars WhenScrolling`, as the test Mac shows legacy
+scroll bars and the lists draw overlay ones. The live misses: white label
+ink on the dark emphasised selection reads ΔE 4.8–6.7 lighter in AppKit's
+1× text, and the full-width unemphasised block's antialiased edge reads as
+a 0.7 pt radius. The unemphasised labels, left out offscreen (below), are
+within ΔE 2.3 live.
+
 ### Left to the eye, and why
 
 - `push-glass` offscreen: AppKitRef's `cacheDisplay` renders Liquid Glass as
@@ -92,6 +101,11 @@ Live AppKit cannot show focus rings or inactive samples in one key window, so
 - `popup-borderless`, `label-styles`: `cacheDisplay` draws labels twice
   (labelColor reads #060606); live captures match labelColor.
 - `box` radius: the title crosses the top-left corner.
+- Unemphasised list labels offscreen: `cacheDisplay`'s double draw again
+  (#050505 for labelColor's #222222 over the block); checked live.
+- `table-inset-emphasized`'s shape: AppKit's columns overflow the view and it
+  draws that selection full width; the inset shape is measured on
+  `table-inset-fit-*`, whose columns fit.
 
 ### Measured values the tokens lack or get wrong
 
@@ -118,6 +132,10 @@ are reported against `theme/` (D1), not changed there:
   - Search: magnifier centred at 13.75, text at 24, clear button centred 12 from the end.
   - Pop-up chevron: centred 14 from the end (borderless 10, pull-down 13.25); borderless label pad 8.
   - Box: title band 12, title x 10.
+  - Lists: inset 10, rows 10 pt below the top (5 below a header), block
+    divider inset 6; header 28 with 1 × 16 column separators; cell padding
+    10, 8 at the outer sides; disclosure x 2, width 13, content at 15 + 13
+    per level. No role for the unemphasised block divider (Text at 5 %).
 
 ## Owning a component
 
