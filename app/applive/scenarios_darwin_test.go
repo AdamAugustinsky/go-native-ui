@@ -595,6 +595,15 @@ func opensScenario() {
 // the CPU an idle app with no window uses.
 func servicesScenario() {
 	var got []string
+	var idleFrom, idleTries int
+	measureIdle := func() {
+		go func() { // idle with no window
+			time.Sleep(500 * time.Millisecond)
+			c0 := cpuNs()
+			time.Sleep(3 * time.Second)
+			postEvent(2, strconv.FormatInt(cpuNs()-c0, 10))
+		}()
+	}
 	h := &handler{}
 	h.start = func(a *app.App) error {
 		say("policy=%d", platform.AppActivationPolicy())
@@ -627,15 +636,20 @@ func servicesScenario() {
 				}
 				dc := objc.Send(objc.Cls("NSNotificationCenter"), objc.Sel("defaultCenter"))
 				objc.Send2(dc, objc.Sel("postNotificationName:object:"), uintptr(objc.Str("NSApplicationDidChangeScreenParametersNotification")), uintptr(nsApp()))
-				go func() { // idle with no window
-					time.Sleep(500 * time.Millisecond)
-					c0 := cpuNs()
-					time.Sleep(3 * time.Second)
-					postEvent(2, strconv.FormatInt(cpuNs()-c0, 10))
-				}()
+				idleFrom = len(got) // the notifications above are delivered synchronously
+				measureIdle()
 			case 2:
 				ns, _ := strconv.ParseInt(string(e.Data()), 10, 64)
-				say("events=%s idle_cpu_pct=%.3f", strings.Join(got, ","), float64(ns)/3e9*100)
+				// A measurement during which the system sent events (a CI
+				// runner's display reconfigures now and then) is not idle:
+				// it is taken again, up to three times.
+				if n := len(got); n != idleFrom && idleTries < 3 {
+					idleTries++
+					idleFrom = n
+					measureIdle()
+					return true
+				}
+				say("events=%s idle_cpu_pct=%.3f idle_tries=%d", strings.Join(got, ","), float64(ns)/3e9*100, idleTries+1)
 				a.Quit()
 			}
 		case app.EvCommand:
