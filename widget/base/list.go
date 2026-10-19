@@ -33,13 +33,13 @@ type ListState struct {
 	shown          float64 // the scroll offset the last frame laid out (the position)
 	// disp is where the last frame showed the rows: the offset plus a
 	// trackpad's stretch past an edge, for finding the row under the pointer.
-	disp float64
-	rowPx, padPx   float32 // the row pitch and the padding above the first row, in the last frame
-	goRow          int
-	goPending      bool
-	find           [findMax]byte
-	nFind          int
-	findT          int64
+	disp         float64
+	rowPx, padPx float32 // the row pitch and the padding above the first row, in the last frame
+	goRow        int
+	goPending    bool
+	find         [findMax]byte
+	nFind        int
+	findT        int64
 
 	mv      moveReq // a cursor move the app asked for
 	revRow  int
