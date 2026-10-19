@@ -93,12 +93,16 @@ const maxParaScratch = 16 << 10
 // vowels, and those are three bytes) plus an ellipsis; a line per newline; a
 // style run per span and per stretch before one. A paragraph over the budget
 // is laid out anyway, kept outside the cache, and may allocate.
-type paraScratch struct{ bytes, glyphs, lines, runs int }
+// The output (glyphs, lines) is sized by the budget, since a layout over it is
+// not cached anyway; what is shaped from the input (inGlyphs: the basic
+// layout's copies of its shaped style runs) by the paragraph size alone, since
+// a truncated paragraph shapes all of its text to output only a few lines.
+type paraScratch struct{ bytes, glyphs, inGlyphs, lines, runs int }
 
 func scratchFor(b ParaBudget) paraScratch {
 	b = b.clamp()
 	n := min(b.Text, maxParaScratch)
-	return paraScratch{bytes: n, glyphs: min(n, b.Glyphs) + 8, lines: min(n, b.Lines) + 1, runs: 2*min(n, b.Spans) + 1}
+	return paraScratch{bytes: n, glyphs: min(n, b.Glyphs) + 8, inGlyphs: n + 8, lines: min(n, b.Lines) + 1, runs: 2*min(n, b.Spans) + 1}
 }
 
 // clamp fills the fields left at 0 (Lines: Glyphs/8, at least Paras; Spans:

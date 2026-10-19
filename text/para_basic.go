@@ -98,9 +98,9 @@ func (l *BasicLayouter) ReserveParas(b ParaBudget) {
 	l.lb.reserve(sc.bytes)
 	grow(&l.runs, sc.runs)
 	grow(&l.meas, sc.runs)
-	grow(&l.mg, sc.glyphs)
-	grow(&l.mx, sc.glyphs)
-	grow(&l.mc, sc.glyphs)
+	grow(&l.mg, sc.inGlyphs)
+	grow(&l.mx, sc.inGlyphs)
+	grow(&l.mc, sc.inGlyphs)
 }
 
 // maxScratch caps the scratch a Reserve call sizes for one string, in bytes;

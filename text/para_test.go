@@ -3,6 +3,7 @@ package text
 import (
 	"fmt"
 	"strconv"
+	"strings"
 	"testing"
 	"unicode/utf8"
 )
@@ -273,6 +274,25 @@ func TestBasicLayoutEllipsisAfterRunCacheMisses(t *testing.T) {
 				t.Errorf("%d lines: line %q is %v wide, over 80", c.maxLines, v.Text[ln.Start:ln.End], ln.Width)
 			}
 		}
+	}
+}
+
+// The copies of the shaped input are reserved for the whole paragraph, not
+// for the glyph budget of the output: a truncated paragraph shapes all of its
+// text and outputs a few glyphs.
+func TestParaReservedTruncatedInputOverTheGlyphBudget(t *testing.T) {
+	txt := []byte(strings.Repeat("abcd ", 20)) // 100 characters
+	for _, ell := range []bool{false, true} {
+		p := Para{Text: txt, Fonts: []FontKey{0}, Width: 60, MaxLines: 1, Ellipsis: ell}
+		allocFree(t, "a truncated paragraph", func() func() {
+			l := NewBasicLayouter(new(gridShaper))
+			l.ReserveParas(ParaBudget{Paras: 4, Glyphs: 16, Text: 256})
+			return func() {
+				if v := l.Paragraph(l.Layout(&p)); len(v.Lines) != 1 || !v.Truncated || len(v.Glyphs) > 16 {
+					t.Fatalf("%d lines, truncated %v, %d glyphs", len(v.Lines), v.Truncated, len(v.Glyphs))
+				}
+			}
+		})
 	}
 }
 
