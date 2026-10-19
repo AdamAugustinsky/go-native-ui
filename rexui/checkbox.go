@@ -1,0 +1,120 @@
+package rexui
+
+import (
+	"gonativeui/icon"
+	"gonativeui/theme"
+	"gonativeui/ui"
+	"gonativeui/widget/base"
+)
+
+// CheckboxOpts are a checkbox's options, passed by value.
+type CheckboxOpts struct {
+	// Size is the control size.
+	Size theme.Size
+}
+
+// CheckboxRecipe is the look of checkboxes (and of radio buttons' circles).
+type CheckboxRecipe struct {
+	// Box is the side of the box per size, in points. macOS 27.2 draws 16 pt
+	// at regular size, 14 small and 18 large (tools/appkitref; theme's
+	// SizeSpec.Check says 14, 12 and 16, which is the box of macOS 15).
+	Box [theme.NumSizes]float32
+	// Radius is the box's corner radius per size, in points. AppKit draws a
+	// continuous (squircle) corner; a circular corner of the same uncovered
+	// area, measured 5.6, 4.3 and 6.3 pt at the three sizes
+	// (tools/appkitref/measure), matches it best. theme's Radii.Checkbox
+	// (3.5) is visibly squarer.
+	Radius [theme.NumSizes]float32
+	// Off, OffPressed and OffDisabled fill an unchecked box: systemFill,
+	// #00000030 measured pressed (FillPressed), tertiarySystemFill disabled.
+	Off, OffPressed, OffDisabled Tint
+	// On, OnPressed and OnDisabled fill a checked or mixed box: the accent,
+	// darker pressed, and secondarySystemFill disabled.
+	On, OnPressed, OnDisabled Tint
+	// Mark and MarkDisabled colour the check and the dash.
+	Mark, MarkDisabled Tint
+	// Label and LabelDisabled colour the label.
+	Label, LabelDisabled Tint
+	// DashW and DashH are the mixed state's dash at the regular size, in
+	// points (7 × 1.75 measured); other sizes scale it with the box.
+	DashW, DashH float32
+}
+
+// CheckboxLook is the checkboxes' recipe.
+var CheckboxLook = CheckboxRecipe{
+	Box:    [theme.NumSizes]float32{theme.SizeRegular: 16, theme.SizeMini: 12, theme.SizeSmall: 14, theme.SizeLarge: 18, theme.SizeXLarge: 18},
+	Radius: [theme.NumSizes]float32{theme.SizeRegular: 5.5, theme.SizeMini: 4, theme.SizeSmall: 4.5, theme.SizeLarge: 6.25, theme.SizeXLarge: 6.25},
+	Off:    Of(theme.Fill1), OffPressed: Of(theme.FillPressed), OffDisabled: Of(theme.Fill3),
+	On: Of(theme.Accent), OnPressed: Of(theme.AccentPressed), OnDisabled: Of(theme.Fill2),
+	Mark: Of(theme.OnAccent), MarkDisabled: Of(theme.Label3),
+	Label: Of(theme.Label), LabelDisabled: Of(theme.TextDisabled),
+	DashW: 7, DashH: 1.75,
+}
+
+// Checkbox builds a checkbox that edits *v: a box and its label, which both
+// toggle it; Space and Enter toggle it with the focus. Changed is set in the
+// frame *v changed.
+//
+//	rexui.Checkbox(k, "Show hidden files", &v.hidden, rexui.CheckboxOpts{})
+func Checkbox(k *base.Kit, label string, v *bool, o CheckboxOpts) base.Signal {
+	st := base.Unchecked
+	if *v {
+		st = base.Checked
+	}
+	s := CheckboxTri(k, label, &st, o)
+	*v = st == base.Checked
+	return s
+}
+
+// CheckboxTri builds a tri-state checkbox that edits *st; clicking a mixed
+// box checks it.
+func CheckboxTri(k *base.Kit, label string, st *base.CheckState, o CheckboxOpts) base.Signal {
+	c, r := k.Context(), k.Theme()
+	rc := &CheckboxLook
+	size := o.Size % theme.NumSizes
+	s := &r.Sizes[size]
+	t := k.ToggleState(label, st, base.HoverOff)
+	on := t.State != base.Unchecked
+	box := pt(k.Scale(), rc.Box[size])
+	radius := k.Pt(rc.Radius[size])
+
+	fill, mark, lc := rc.Off.RGBA(r), rc.Mark.RGBA(r), rc.Label.RGBA(r)
+	switch {
+	case t.Disabled && on:
+		fill, mark, lc = rc.OnDisabled.RGBA(r), rc.MarkDisabled.RGBA(r), rc.LabelDisabled.RGBA(r)
+	case t.Disabled:
+		fill, lc = rc.OffDisabled.RGBA(r), rc.LabelDisabled.RGBA(r)
+	case on:
+		fill = mix(rc.On.RGBA(r), rc.OnPressed.RGBA(r), t.Down)
+	default:
+		fill = mix(fill, rc.OffPressed.RGBA(r), t.Down)
+	}
+
+	c.NextAxis(ui.AxisX)
+	c.NextCross(ui.CrossCenter)
+	c.NextGap(s.Gap)
+	k.BeginToggle(&t, ui.RoleCheckbox, ui.Children(1), ui.Px(box), 0)
+	c.NextSize(ui.Px(box), ui.Px(box))
+	c.NextBG(fill)
+	c.NextRadius(radius)
+	bx := c.BoxKeyed(ui.DrawBackground, ui.KeyN(t.Key, 1), nil)
+	c.Push(bx)
+	switch t.State {
+	case base.Checked:
+		if f, disp := k.Icons().Prepare(c, icon.CheckMark, mark); f != 0 {
+			c.NextSize(ui.Px(box), ui.Px(box)) // DrawImage centres the check in the box
+			c.BoxKeyed(f, ui.KeyN(t.Key, 2), disp)
+		}
+	case base.Mixed:
+		f := box / pt(k.Scale(), rc.Box[theme.SizeRegular])
+		dw, dh := theme.Snap(k.Pt(rc.DashW)*f), theme.Snap(k.Pt(rc.DashH)*f)
+		theme.At(c, theme.Snap((box-dw)/2), theme.Snap((box-dh)/2), dw, dh)
+		c.NextBG(mark)
+		c.NextRadius(dh / 2)
+		c.BoxKeyed(ui.DrawBackground|base.Floating, ui.KeyN(t.Key, 3), nil)
+	}
+	c.Pop()
+	k.Text(4, t.Name, s.Font.Font, lc, ui.AlignLeft, box)
+	k.FocusRing(bx, t.Visual, radius)
+	return k.EndToggle(&t)
+}

@@ -34,41 +34,52 @@ import (
 // menu, cached and rebuilt only when its items change (PopUpMenu).
 
 var (
-	selInitWithTitle   = objc.Sel("initWithTitle:")
-	selInitItem        = objc.Sel("initWithTitle:action:keyEquivalent:")
-	selInitPlain       = objc.Sel("init")
-	selAddItem         = objc.Sel("addItem:")
-	selSeparatorItem   = objc.Sel("separatorItem")
-	selSetSubmenu      = objc.Sel("setSubmenu:")
-	selSetKeyMask      = objc.Sel("setKeyEquivalentModifierMask:")
-	selSetState        = objc.Sel("setState:")
-	selState           = objc.Sel("state")
-	selAction          = objc.Sel("action")
-	selMenuOfItem      = objc.Sel("menu")
-	selIndexOfItem     = objc.Sel("indexOfItem:")
-	selItemAtIndex     = objc.Sel("itemAtIndex:")
-	selNumberOfItems   = objc.Sel("numberOfItems")
-	selSetMainMenu     = objc.Sel("setMainMenu:")
-	selSetServicesMenu = objc.Sel("setServicesMenu:")
-	selSetWindowsMenu  = objc.Sel("setWindowsMenu:")
-	selSetHelpMenu     = objc.Sel("setHelpMenu:")
-	selSetMinWidth     = objc.Sel("setMinimumWidth:")
-	selSetMenuFont     = objc.Sel("setFont:")
-	selSystemFontSize  = objc.Sel("systemFontOfSize:")
-	selPopUpMenu       = objc.Sel("popUpMenuPositioningItem:atLocation:inView:")
-	selProcessInfo     = objc.Sel("processInfo")
-	selProcessName     = objc.Sel("processName")
-	selInitBytesStr    = objc.Sel("initWithBytes:length:encoding:")
-	selValidateItem    = objc.Sel("validateMenuItem:")
-	selMenuWillOpen    = objc.Sel("menuWillOpen:")
-	selMenuDidClose    = objc.Sel("menuDidClose:")
-	selGnuiCommand     = objc.Sel("gnuiCommand:")
-	selGnuiChoose      = objc.Sel("gnuiChoose:")
-	selGnuiQuit        = objc.Sel("gnuiQuit:")
-	selGnuiWillSend    = objc.Sel("gnuiMenuWillSend:")
-	selTargetForAction = objc.Sel("targetForAction:to:from:")
-	selSendActionTo    = objc.Sel("sendAction:to:from:")
-	selValidateUIItem  = objc.Sel("validateUserInterfaceItem:")
+	selInitWithTitle       = objc.Sel("initWithTitle:")
+	selInitItem            = objc.Sel("initWithTitle:action:keyEquivalent:")
+	selInitPlain           = objc.Sel("init")
+	selAddItem             = objc.Sel("addItem:")
+	selSeparatorItem       = objc.Sel("separatorItem")
+	selSetSubmenu          = objc.Sel("setSubmenu:")
+	selSetKeyMask          = objc.Sel("setKeyEquivalentModifierMask:")
+	selSetState            = objc.Sel("setState:")
+	selState               = objc.Sel("state")
+	selAction              = objc.Sel("action")
+	selMenuOfItem          = objc.Sel("menu")
+	selIndexOfItem         = objc.Sel("indexOfItem:")
+	selItemAtIndex         = objc.Sel("itemAtIndex:")
+	selNumberOfItems       = objc.Sel("numberOfItems")
+	selSetMainMenu         = objc.Sel("setMainMenu:")
+	selSetServicesMenu     = objc.Sel("setServicesMenu:")
+	selSetWindowsMenu      = objc.Sel("setWindowsMenu:")
+	selSetHelpMenu         = objc.Sel("setHelpMenu:")
+	selServicesMenu        = objc.Sel("servicesMenu")
+	selSupermenu           = objc.Sel("supermenu")
+	selIndexWithSubmenu    = objc.Sel("indexOfItemWithSubmenu:")
+	selWindows             = objc.Sel("windows")
+	selWinTitle            = objc.Sel("title")
+	selArrCount            = objc.Sel("count")
+	selArrAt               = objc.Sel("objectAtIndex:")
+	selExcludedFromWinMenu = objc.Sel("isExcludedFromWindowsMenu")
+	selIsVisible           = objc.Sel("isVisible")
+	selIsMiniaturized      = objc.Sel("isMiniaturized")
+	selAddWindowsItem      = objc.Sel("addWindowsItem:title:filename:")
+	selSetMinWidth         = objc.Sel("setMinimumWidth:")
+	selSetMenuFont         = objc.Sel("setFont:")
+	selSystemFontSize      = objc.Sel("systemFontOfSize:")
+	selPopUpMenu           = objc.Sel("popUpMenuPositioningItem:atLocation:inView:")
+	selProcessInfo         = objc.Sel("processInfo")
+	selProcessName         = objc.Sel("processName")
+	selInitBytesStr        = objc.Sel("initWithBytes:length:encoding:")
+	selValidateItem        = objc.Sel("validateMenuItem:")
+	selMenuWillOpen        = objc.Sel("menuWillOpen:")
+	selMenuDidClose        = objc.Sel("menuDidClose:")
+	selGnuiCommand         = objc.Sel("gnuiCommand:")
+	selGnuiChoose          = objc.Sel("gnuiChoose:")
+	selGnuiQuit            = objc.Sel("gnuiQuit:")
+	selGnuiWillSend        = objc.Sel("gnuiMenuWillSend:")
+	selTargetForAction     = objc.Sel("targetForAction:to:from:")
+	selSendActionTo        = objc.Sel("sendAction:to:from:")
+	selValidateUIItem      = objc.Sel("validateUserInterfaceItem:")
 
 	// the selectors of the standard actions, by MenuAction
 	actionSel = [...]objc.SEL{
@@ -99,14 +110,15 @@ var (
 // nativeMenus is the application's native menu state (one per process, like
 // the menu bar).
 var nativeMenus struct {
-	target  objc.ID   // the GNUIMenuTarget instance
-	state   MenuState // the app's validation
-	bar     objc.ID   // the main menu we installed (retained)
-	appName string
-	depth   int     // menus open now (menuWillOpen: minus menuDidClose:)
-	chosen  int     // the index of the item the last action came from, -1 none
-	root    objc.ID // the menu PopUpMenu shows, while it does
-	popups  []popupMenu
+	target   objc.ID   // the GNUIMenuTarget instance
+	state    MenuState // the app's validation
+	bar      objc.ID   // the main menu we installed (retained)
+	appName  string
+	depth    int     // menus open now (menuWillOpen: minus menuDidClose:)
+	chosen   int     // the index of the item the last action came from, -1 none
+	root     objc.ID // the menu PopUpMenu shows, while it does
+	services objc.ID // the Services menu every bar shares (servicesMenu), retained
+	popups   []popupMenu
 }
 
 // popupMenu is a cached menu tree for PopUpMenu: the tree built for menu idx
@@ -204,6 +216,7 @@ func (w *Window) SetMenuBar(spec *MenuSpec, state MenuState) {
 	objc.Send1(w.app, selSetMainMenu, uintptr(bar))
 	if windows != 0 {
 		objc.Send1(w.app, selSetWindowsMenu, uintptr(windows))
+		listWindows(w.app)
 	}
 	if help != 0 {
 		objc.Send1(w.app, selSetHelpMenu, uintptr(help))
@@ -340,14 +353,66 @@ func sameTree(spec *MenuSpec, idx int, menus []Menu, k *int, depth int) bool {
 	return true
 }
 
+// servicesMenu is the Services menu of the menu bar titled title, retained:
+// always the same NSMenu. AppKit keeps the first menu it is given
+// (setServicesMenu: with another one does nothing, even after nil) and fills
+// only that one, so a rebuilt bar takes it over from the bar before, where it
+// is a submenu still (a menu has one supermenu).
+func servicesMenu(title string) objc.ID {
+	m := nativeMenus.services
+	if m == 0 {
+		if m = objc.Send(nsApp, selServicesMenu); m != 0 { // given to AppKit before us
+			objc.Retain(m)
+		} else {
+			t := newNSString(title)
+			m = objc.Send1(objc.Send(clsMenu, selAlloc), selInitWithTitle, uintptr(t))
+			objc.Release(t)
+			objc.Send1(m, selSetDelegate, uintptr(nativeMenus.target))
+			objc.Send1(nsApp, selSetServicesMenu, uintptr(m))
+		}
+		nativeMenus.services = m
+	} else {
+		if sup := objc.Send(m, selSupermenu); sup != 0 {
+			if i := int(objc.Send1(sup, selIndexWithSubmenu, uintptr(m))); i >= 0 {
+				objc.Send1(objc.Send1(sup, selItemAtIndex, uintptr(i)), selSetSubmenu, 0)
+			}
+		}
+		t := newNSString(title)
+		objc.Send1(m, selSetTitle, uintptr(t))
+		objc.Release(t)
+	}
+	return objc.Retain(m)
+}
+
+// listWindows lists the application's windows in the Window menu just
+// installed: AppKit adds a window to it when the window is ordered in or
+// retitled, so the windows already on screen (the app's own, shown before
+// its first frame installs the bar) would be missing from it, and from every
+// rebuilt one, until they change.
+func listWindows(app objc.ID) {
+	wins := objc.Send(app, selWindows)
+	for i := 0; i < int(objc.Send(wins, selArrCount)); i++ {
+		win := objc.Send1(wins, selArrAt, uintptr(i))
+		if objc.SendBool(win, selExcludedFromWinMenu) || !(objc.SendBool(win, selIsVisible) || objc.SendBool(win, selIsMiniaturized)) {
+			continue
+		}
+		objc.Send3(app, selAddWindowsItem, uintptr(win), uintptr(objc.Send(win, selWinTitle)), 0)
+	}
+}
+
 // maxMenuDepth bounds the nesting of submenus (a spec whose menus contain
 // each other stops there).
 const maxMenuDepth = 8
 
 // buildMenu builds menu idx of spec and its submenus, retained; record, if
-// not nil, gets a copy of each menu in the order they are visited.
+// not nil, gets a copy of each menu in the order they are visited (a
+// popped-up menu). nil builds the menu bar, whose Services menu is the one
+// every bar shares (servicesMenu).
 func buildMenu(spec *MenuSpec, idx, depth int, record *[]Menu) objc.ID {
 	m := &spec.Menus[idx]
+	if m.Role == MenuRoleServices && record == nil {
+		return servicesMenu(m.Title)
+	}
 	menu := objc.Send(clsMenu, selAlloc)
 	t := newNSString(m.Title)
 	menu = objc.Send1(menu, selInitWithTitle, uintptr(t))
@@ -355,9 +420,6 @@ func buildMenu(spec *MenuSpec, idx, depth int, record *[]Menu) objc.ID {
 	objc.Send1(menu, selSetDelegate, uintptr(nativeMenus.target))
 	if record != nil {
 		*record = append(*record, Menu{Title: m.Title, Role: m.Role, Items: append([]MenuItem(nil), m.Items...)})
-	}
-	if m.Role == MenuRoleServices {
-		objc.Send1(nsApp, selSetServicesMenu, uintptr(menu))
 	}
 	for i := range m.Items {
 		it := &m.Items[i]

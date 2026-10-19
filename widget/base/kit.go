@@ -165,6 +165,12 @@ func (k *Kit) Mode() theme.Mode {
 // to the system, whose accent the kit applies when it knows one.
 func (k *Kit) SetAccent(rgba uint32) { k.fol.SetAccent(rgba) }
 
+// PinSystem fixes the system's colours and settings the window shows to s,
+// whatever the platform says (theme.Follower.PinSystem): for tests, and for
+// offscreen renders that reproduce a machine's appearance. nil returns to the
+// platform's.
+func (k *Kit) PinSystem(s *theme.SystemValues) { k.fol.PinSystem(s) }
+
 // SetMenu sets the command model: its shortcuts are matched in Begin, and
 // the drawn menus and Command use it.
 func (k *Kit) SetMenu(m *menu.Model) { k.menu = m }
@@ -188,8 +194,8 @@ func (k *Kit) Begin(c *ui.Context) {
 	k.ready = true
 	c.Theme = k.r.UITheme()
 	c.Rates = k.r.Motion.Rates()
-	c.TextEdit.Selection = k.r.Pal.Selection
-	c.TextEdit.Caret = k.r.Pal.Accent
+	c.TextEdit.Selection = k.r.Colors[theme.TextSelection]
+	c.TextEdit.Caret = k.r.Colors[theme.Caret]
 
 	in := c.Input()
 	k.mouseMove = in.MouseX != k.mouse[0] || in.MouseY != k.mouse[1]
