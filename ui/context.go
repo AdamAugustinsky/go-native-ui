@@ -220,6 +220,7 @@ type Context struct {
 	claimed    uint16              // bit i: key event i is handled
 	fieldKeys  uint16              // bit i: key event i was claimed for the focused text field
 	nextEscClr bool                // the next TextField clears itself on Escape (NextEscapeClears)
+	nextStill  bool                // the next TextField does not animate hover (NextFieldNoHover)
 	fieldPeek  uint16              // bit i: key event i (Escape) is seen by the focused field in an overlay but not claimed
 	fieldFocus bool                // the focused box is a text field that takes keys
 	fieldBuilt bool                // the focused field applied this frame's edit actions already
@@ -438,6 +439,7 @@ func (c *Context) resetStyles() {
 	c.hasNextPos = false
 	c.nextFlags = 0
 	c.nextEscClr = false
+	c.nextStill = false
 	c.semNext = semNext{}
 }
 

@@ -23,10 +23,12 @@ type SortState = base.SortState
 // (base.TableState).
 type TableState = base.TableState
 
-// Table is an open table. See BeginTable.
+// Table is an open table. See BeginTable. Its List is the table's rows: the
+// same List a list has, with its fields and methods (First, Last, Changed,
+// Row, TextColor …).
 type Table struct {
-	base.Table
-	textCol uint32
+	List
+	base.TableHead
 }
 
 // TableKey is the key of the list box of the table that BeginTable builds with
@@ -64,15 +66,15 @@ func TableKey(parent ui.Key, label string) ui.Key { return base.TableKey(parent,
 // (ui.SemSortAscending, ui.SemSortDescending) and the actions press (sortable
 // columns), increment and decrement (the width) and focus.
 func (k *Kit) BeginTable(label string, st *TableState, cols []Column, rows int) Table {
-	t := Table{Table: k.BeginTableHeader(label, st, cols)}
-	k.header(&t.Table)
-	k.BeginTableBody(&t.Table, rows, base.ListOpts{Hover: hoverOn})
+	t := Table{TableHead: k.BeginTableHeader(label, st, cols)}
+	k.header(&t.TableHead)
+	t.List.List = k.BeginTableBody(&t.TableHead, rows, base.ListOpts{Hover: hoverOn})
 	return t
 }
 
 // header builds the classic look of the header row: semibold muted titles, a
 // hairline below, a hover tint on sortable titles and the sort chevron.
-func (k *Kit) header(t *base.Table) {
+func (k *Kit) header(t *base.TableHead) {
 	c := k.c
 	px, p := &k.r.Px, &k.r.Pal
 	hh := t.HeaderHeight()
@@ -114,20 +116,10 @@ func (k *Kit) header(t *base.Table) {
 	t.EndHeaderRow()
 }
 
-// Row starts display row r, which shows item: a List row (List.Row).
-func (t *Table) Row(r int, item uint32) { rowNamed(&t.List, &t.textCol, r, item, nil) }
-
-// RowNamed is Row with the accessible name of the row (List.RowNamed).
-func (t *Table) RowNamed(r int, item uint32, name []byte) {
-	rowNamed(&t.List, &t.textCol, r, item, name)
-}
-
-// Empty shows msg in the body of a table that has no rows, in style st (List.Empty).
-func (t *Table) Empty(msg []byte, st TextStyle) { empty(&t.List, msg, st) }
-
-// TextColor is the text colour for the row being built: the theme's, or its
-// selection text colour on a selected row.
-func (t *Table) TextColor() uint32 { return t.textCol }
+// BeginCell starts cell col of the row being built: a box as wide as the
+// column, as high as the row, clipping its children, which flow left to right.
+// End it with EndCell.
+func (t *Table) BeginCell(col int) ui.ID { return t.TableHead.BeginCell(&t.List.List, col) }
 
 // CellBytes builds cell col of the row being built as one line of text, in the
 // column's alignment, fading out where it does not fit. The bytes are copied.
@@ -139,7 +131,7 @@ func (t *Table) CellBytes(col int, b []byte) {
 	c.NextFont(k.Theme().Font.UI)
 	c.NextTextColor(t.textCol)
 	c.NextAlign(t.Columns()[col].Align)
-	t.TextCell(col, b, ui.DrawText|ui.FadeOverflowX)
+	t.TextCell(&t.List.List, col, b, ui.DrawText|ui.FadeOverflowX)
 }
 
 // CellText is CellBytes for a string.
@@ -147,6 +139,6 @@ func (t *Table) CellText(col int, s string) { t.CellBytes(col, strBytes(s)) }
 
 // EndTable ends the table.
 func (k *Kit) EndTable(t *Table) {
-	k.endList(&t.List)
-	k.CloseTable(&t.Table)
+	k.endList(&t.List.List)
+	k.CloseTable(&t.TableHead)
 }

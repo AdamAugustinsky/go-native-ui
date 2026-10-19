@@ -46,6 +46,9 @@ type TextInput struct {
 	H float32
 	// Mono: NextMono asked for the monospace font.
 	Mono bool
+	// Hover is the hover policy BeginTextInput was given; with HoverOff the
+	// editing box does not animate hover.
+	Hover Hover
 	// Visual is the editing box's state: Focus follows the keyboard focus,
 	// Hot the pointer (with HoverOn).
 	Visual
@@ -56,42 +59,22 @@ type TextInput struct {
 // BeginTextInput starts the text field with the label in the current parent:
 // it builds the holder box (as wide as the parent and h pixels high unless
 // NextSize says otherwise; a fixed NextHeight also becomes H), pushes it, and
-// reads the visual state of the editing box. It consumes NextMono and Force.
+// reads the visual state of the editing box (as VisualOf does: nothing but
+// Disabled and Inactive in a disabled region). It consumes NextMono and Force.
 func (k *Kit) BeginTextInput(label string, h float32, hover Hover) TextInput {
 	c := k.c
 	display, ident := ui.SplitLabel(label)
 	if k.hasH && k.nh.Kind == ui.SizePixels { // NextHeight with a fixed height
 		h = k.nh.Value
 	}
-	ti := TextInput{Name: display, H: h, Mono: k.TakeMono(), ident: ident}
+	ti := TextInput{Name: display, H: h, Mono: k.TakeMono(), Hover: hover, ident: ident}
 	ti.WrapKey = ui.HashString(c.ParentKey(), ident)
 	ti.Key = ui.HashString(ti.WrapKey, ident)
 	k.ApplySize(ui.Pct(1), ui.Px(h))
 	ti.Wrap = c.BoxKeyed(0, ti.WrapKey, nil)
 	c.Push(ti.Wrap)
 
-	ti.Inactive = k.Inactive()
-	f := k.TakeForce()
-	if f&LookInactive != 0 {
-		ti.Inactive = true
-	}
-	if k.Disabled() {
-		ti.Disabled = true
-	} else {
-		ti.Focus = c.FocusTOf(ti.Key)
-		if c.FocusVisible() {
-			ti.Ring = ti.Focus
-		}
-	}
-	if f&LookFocused != 0 {
-		ti.Focus, ti.Ring = 1, 1
-	}
-	if hover == HoverOn {
-		ti.Hot = c.HotTOf(ti.Key)
-		if f&LookHover != 0 {
-			ti.Hot = 1
-		}
-	}
+	ti.Visual = k.VisualOf(ti.Key, hover)
 	return ti
 }
 
@@ -107,6 +90,9 @@ func (k *Kit) TextInput(ti *TextInput, buf *ui.TextBuffer, role ui.Role, escapeC
 	}
 	c.NextRole(role)
 	c.NextSemName(ti.Name)
+	if ti.Hover == HoverOff {
+		c.NextFieldNoHover()
+	}
 	if escapeClears {
 		c.NextEscapeClears()
 	}

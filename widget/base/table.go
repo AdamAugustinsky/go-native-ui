@@ -55,11 +55,18 @@ type TableState struct {
 	colPx    [MaxColumns]float32
 }
 
-// Table is an open table: a header row of column titles above a List of rows.
-// BeginTableHeader starts it and applies the header's input; the recipe builds
-// the header (BeginHeaderRow, HeaderCell, BeginHeaderCell, EndHeaderCell);
-// BeginTableBody starts the rows, which build like a list's, with cells
-// (BeginCell, TextCell); CloseTable ends it after the list.
+// TableHead is the head of an open table: its box, its columns and the header
+// row of column titles, above a List of rows. BeginTableHeader starts it and
+// applies the header's input; the recipe builds the header (BeginHeaderRow,
+// HeaderCell, BeginHeaderCell, EndHeaderCell); BeginTableBody starts the rows
+// as a List, which build like a list's, with cells (BeginCell, TextCell);
+// CloseTable ends it after the list. A styled table keeps the two side by
+// side:
+//
+//	type Table struct {
+//		base.List
+//		base.TableHead
+//	}
 //
 // Columns keep their IDs and widths, can be dragged wider and narrower down to
 // their minimum, and align their text. At most MaxColumns columns are shown.
@@ -72,8 +79,7 @@ type TableState struct {
 // minimum. A header is a ui.RoleColumnHeader that reports its sort direction
 // (ui.SemSortAscending, ui.SemSortDescending) and the actions press (sortable
 // columns), increment and decrement (the width) and focus.
-type Table struct {
-	List
+type TableHead struct {
 	// SortChanged: the user clicked a sortable header; Sort is the new state.
 	// The app sorts its data (on a task when large) and sets
 	// TableState.Order; the table does not reorder anything itself.
@@ -105,31 +111,31 @@ func TableKey(parent ui.Key, label string) ui.Key {
 }
 
 // HeaderKey is the key of the header row of the table, for ui.Context.RectOf.
-func (t *Table) HeaderKey() ui.Key { return t.hkey }
+func (t *TableHead) HeaderKey() ui.Key { return t.hkey }
 
 // HeaderHeight is the height in pixels of the header row.
-func (t *Table) HeaderHeight() float32 { return t.hh }
+func (t *TableHead) HeaderHeight() float32 { return t.hh }
 
 // CellPad is the padding in pixels at the sides of a cell.
-func (t *Table) CellPad() float32 { return t.pad }
+func (t *TableHead) CellPad() float32 { return t.pad }
 
 // Columns are the columns shown (at most MaxColumns).
-func (t *Table) Columns() []Column { return t.cols }
+func (t *TableHead) Columns() []Column { return t.cols }
 
 // ColumnWidth is the width in pixels of column col, for custom cells.
-func (t *Table) ColumnWidth(col int) float32 { return t.ts.colPx[col] }
+func (t *TableHead) ColumnWidth(col int) float32 { return t.ts.colPx[col] }
 
 // BeginTableHeader starts a table of the columns cols with the label (its
 // accessible name) and st: the table's box (the parent's size unless NextSize
 // says otherwise), the columns' widths, and the sorting and resizing the
 // header's input of the previous frame asks for.
-func (k *Kit) BeginTableHeader(label string, st *TableState, cols []Column) Table {
+func (k *Kit) BeginTableHeader(label string, st *TableState, cols []Column) TableHead {
 	c := k.c
 	px := &k.r.Px
 	if len(cols) > MaxColumns {
 		cols = cols[:MaxColumns]
 	}
-	t := Table{tk: k, ts: st, cols: cols, label: label}
+	t := TableHead{tk: k, ts: st, cols: cols, label: label}
 	_, ident := ui.SplitLabel(label)
 	t.tkey = ui.HashString(c.ParentKey(), ident)
 	t.hh, t.pad = theme.Snap(px.RowH), px.Pad
@@ -153,15 +159,15 @@ func (k *Kit) BeginTableHeader(label string, st *TableState, cols []Column) Tabl
 	return t
 }
 
-// BeginTableBody starts the rows of the table, after its header: rows rows,
-// built as a List's are (RowState, BeginRow), with cells.
-func (k *Kit) BeginTableBody(t *Table, rows int, o ListOpts) {
+// BeginTableBody starts the rows of the table, after its header: a List of
+// rows rows, built as a list's are (RowState, BeginRow), with cells.
+func (k *Kit) BeginTableBody(t *TableHead, rows int, o ListOpts) List {
 	t.layoutColumns(t.avail) // a resize in the header
-	t.List = k.beginList(t.label, &t.ts.ListState, rows, true, o)
+	return k.beginList(t.label, &t.ts.ListState, rows, true, o)
 }
 
 // CloseTable ends the table, after its list (CloseRows, the bar, CloseList).
-func (k *Kit) CloseTable(t *Table) { k.c.Pop() }
+func (k *Kit) CloseTable(t *TableHead) { k.c.Pop() }
 
 // columnStepPt is how far Alt+Left and Alt+Right (and an assistive technology's
 // increment) change the width of a column, in points; with Shift, four steps.
@@ -174,7 +180,7 @@ func headerKey(hkey ui.Key, id uint32) ui.Key { return ui.KeyN(hkey, uint64(id))
 func resizeKey(hkey ui.Key, id uint32) ui.Key { return ui.KeyN(hkey, 1<<32|uint64(id)) }
 
 // layoutColumns computes the pixel widths of the columns.
-func (t *Table) layoutColumns(avail float32) {
+func (t *TableHead) layoutColumns(avail float32) {
 	k := t.tk
 	var sum float32
 	fill := -1
@@ -191,7 +197,7 @@ func (t *Table) layoutColumns(avail float32) {
 	}
 }
 
-func (t *Table) minWidth(i int) float32 {
+func (t *TableHead) minWidth(i int) float32 {
 	if m := t.cols[i].MinWidth; m > 0 {
 		return m
 	}
@@ -201,7 +207,7 @@ func (t *Table) minWidth(i int) float32 {
 // headerInput applies sorting and resizing from the previous frame's header
 // boxes, which are keyed by the column's ID: reordering or hiding columns
 // moves a drag or the focus with the column, not with its place in the slice.
-func (t *Table) headerInput() {
+func (t *TableHead) headerInput() {
 	k := t.tk
 	c := k.c
 	st := t.ts
@@ -265,7 +271,7 @@ func (t *Table) headerInput() {
 // high, its cells flowing left to right) in the style the recipe set with ui's
 // Next calls and with its drawing flags, and pushes it. End it with
 // EndHeaderRow after the cells.
-func (t *Table) BeginHeaderRow(flags ui.Flags) ui.ID {
+func (t *TableHead) BeginHeaderRow(flags ui.Flags) ui.ID {
 	c := t.tk.c
 	inset := theme.Snap(t.tk.r.Px.GapSmall)
 	c.NextSize(ui.Pct(1), ui.Px(t.hh))
@@ -278,7 +284,7 @@ func (t *Table) BeginHeaderRow(flags ui.Flags) ui.ID {
 }
 
 // EndHeaderRow ends the header row.
-func (t *Table) EndHeaderRow() { t.tk.c.Pop() }
+func (t *TableHead) EndHeaderRow() { t.tk.c.Pop() }
 
 // HeaderCell is the state of the header cell of a column, as a recipe draws
 // it.
@@ -292,13 +298,13 @@ type HeaderCell struct {
 	W, H float32
 	// Sorted: the table is sorted by this column; Descending which way.
 	Sorted, Descending bool
-	// Visual is the cell's state: Hot for a sortable column, Ring while it has
-	// the keyboard focus visibly.
+	// Visual is the cell's state: Hot for a sortable column, Focus while it
+	// has the keyboard focus, Ring while that focus is visible.
 	Visual
 }
 
 // HeaderCell reads the header cell of column i.
-func (t *Table) HeaderCell(i int) HeaderCell {
+func (t *TableHead) HeaderCell(i int) HeaderCell {
 	k := t.tk
 	c := k.c
 	st := t.ts
@@ -309,8 +315,11 @@ func (t *Table) HeaderCell(i int) HeaderCell {
 	hc.Inactive = k.Inactive()
 	hc.Disabled = k.Disabled()
 	hc.Hot = c.HotTOf(hc.Key)
-	if ring := c.FocusTOf(hc.Key); c.FocusVisible() && !hc.Disabled {
-		hc.Ring = ring
+	if !hc.Disabled {
+		hc.Focus = c.FocusTOf(hc.Key)
+		if c.FocusVisible() {
+			hc.Ring = hc.Focus
+		}
 	}
 	return hc
 }
@@ -320,7 +329,7 @@ func (t *Table) HeaderCell(i int) HeaderCell {
 // in the style the recipe set with ui's Next calls and with its drawing flags,
 // and pushes it. Every header is a tab stop (a click leaves the focus where it
 // is, as in a file manager); a sortable one is clickable.
-func (t *Table) BeginHeaderCell(hc *HeaderCell, flags ui.Flags) ui.ID {
+func (t *TableHead) BeginHeaderCell(hc *HeaderCell, flags ui.Flags) ui.ID {
 	k := t.tk
 	c := k.c
 	var state ui.SemState
@@ -354,7 +363,7 @@ func (t *Table) BeginHeaderCell(hc *HeaderCell, flags ui.Flags) ui.ID {
 
 // EndHeaderCell ends the header cell and builds the edge after it, which the
 // pointer drags to resize the column.
-func (t *Table) EndHeaderCell(hc *HeaderCell) {
+func (t *TableHead) EndHeaderCell(hc *HeaderCell) {
 	k := t.tk
 	c := k.c
 	c.Pop()
@@ -370,37 +379,37 @@ func (t *Table) EndHeaderCell(hc *HeaderCell) {
 	c.BoxKeyed(rflags, resizeKey(t.hkey, hc.Col.ID), nil)
 }
 
-// BeginCell starts cell col of the row being built: a box as wide as the column,
-// as high as the row, clipping its children, which flow left to right. End it
-// with EndCell.
-func (t *Table) BeginCell(col int) ui.ID {
+// BeginCell starts cell col of the row of l being built: a box as wide as the
+// column, as high as the row, clipping its children, which flow left to right.
+// End it with EndCell.
+func (t *TableHead) BeginCell(l *List, col int) ui.ID {
 	c := t.tk.c
 	c.NextSize(ui.Px(t.ts.colPx[col]), ui.Pct(1))
 	c.NextAxis(ui.AxisX)
 	c.NextGap(t.tk.r.Px.GapSmall)
 	c.NextPadding(t.pad, 0, t.pad, 0)
 	c.NextRole(ui.RoleCell)
-	id := c.BoxKeyed(ui.Clip, ui.KeyN(t.rowKey, uint64(col)), nil)
+	id := c.BoxKeyed(ui.Clip, ui.KeyN(l.rowKey, uint64(col)), nil)
 	c.Push(id)
 	return id
 }
 
 // EndCell ends the cell BeginCell started.
-func (t *Table) EndCell() { t.tk.c.Pop() }
+func (t *TableHead) EndCell() { t.tk.c.Pop() }
 
-// TextCell builds cell col of the row being built as one line of text b, in the
+// TextCell builds cell col of the row of l being built as one line of text b, in the
 // style the recipe set with ui's Next calls (font, colour, alignment) and with
 // its drawing flags (ui.DrawText and an overflow treatment): as wide as the
 // column, clipped, with the cell padding. The bytes are copied. The text of
 // column 0 is the accessible name of the row, unless BeginRow gave it one.
-func (t *Table) TextCell(col int, b []byte, flags ui.Flags) {
+func (t *TableHead) TextCell(l *List, col int, b []byte, flags ui.Flags) {
 	c := t.tk.c
 	c.NextSize(ui.Px(t.ts.colPx[col]), ui.Pct(1))
 	c.NextPadding(t.pad, 0, t.pad, 0)
 	c.NextRole(ui.RoleCell)
 	c.NextSemNameBytes(b)
-	c.BoxKeyed(flags|ui.Clip, ui.KeyN(t.rowKey, uint64(col)), b)
+	c.BoxKeyed(flags|ui.Clip, ui.KeyN(l.rowKey, uint64(col)), b)
 	if col == 0 {
-		t.NameRow(b)
+		l.NameRow(b)
 	}
 }

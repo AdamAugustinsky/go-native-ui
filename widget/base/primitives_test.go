@@ -371,18 +371,18 @@ func TestPrimitivesAllocateNothing(t *testing.T) {
 			t.EndHeaderCell(&hc)
 		}
 		t.EndHeaderRow()
-		k.BeginTableBody(&t, 1000, ListOpts{})
-		for r := t.First; r < t.Last; r++ {
-			rs := t.RowState(r, uint32(r))
-			t.BeginRow(&rs, nil, 0)
-			t.TextCell(0, StrBytes("name"), ui.DrawText)
-			t.BeginCell(1)
+		l := k.BeginTableBody(&t, 1000, ListOpts{})
+		for r := l.First; r < l.Last; r++ {
+			rs := l.RowState(r, uint32(r))
+			l.BeginRow(&rs, nil, 0)
+			t.TextCell(&l, 0, StrBytes("name"), ui.DrawText)
+			t.BeginCell(&l, 1)
 			t.EndCell()
 		}
-		t.CloseRows()
-		v := t.ScrollView()
+		l.CloseRows()
+		v := l.ScrollView()
 		k.ScrollBars(&v)
-		k.CloseList(&t.List)
+		k.CloseList(&l)
 		k.CloseTable(&t)
 		s.EndPane()
 		for i := 0; i < s.Dividers(); i++ {
@@ -398,5 +398,124 @@ func TestPrimitivesAllocateNothing(t *testing.T) {
 	g.frames(30)
 	if n := testing.AllocsPerRun(50, g.frame); n != 0 {
 		t.Fatalf("a frame allocates %v times", n)
+	}
+}
+
+// textInput is a minimal recipe over TextInput.
+func textInput(k *Kit, label string, buf *ui.TextBuffer, hover Hover, out *TextInput) FieldSignal {
+	c := k.Context()
+	ti := k.BeginTextInput(label, k.Pt(24), hover)
+	c.NextSize(ui.Pct(1), ui.Px(ti.H))
+	c.NextBG(testFill)
+	fs := k.TextInput(&ti, buf, ui.RoleTextField, false)
+	k.EndTextInput(&ti)
+	*out = ti
+	return fs
+}
+
+// With HoverOff a text field's box does not animate hover either: moving the
+// pointer onto and across an unfocused field asks for no frames. With HoverOn
+// it does.
+func TestTextInputHoverOffAsksForNoFrames(t *testing.T) {
+	for _, h := range []Hover{HoverOff, HoverOn} {
+		var buf ui.TextBuffer
+		var ti TextInput
+		g := newRig(t, 400, 300, 1, func(k *Kit) {
+			k.NextPad(20)
+			k.Column("root")
+			textInput(k, "Name", &buf, h, &ti)
+			k.EndColumn()
+		})
+		g.frames(10)
+		if g.c.Animating() || g.c.WakeAfter() != 0 {
+			t.Fatalf("hover %v: not idle before the pointer moves", h)
+		}
+		b := g.must(ui.RoleTextField, "Name").Bounds
+		y := (b[1] + b[3]) / 2
+		busy := 0
+		for x := b[0] + 4; x < b[2]; x += 20 {
+			g.move(x, y)
+			if g.c.Animating() || g.c.WakeAfter() != 0 {
+				busy++
+			}
+		}
+		if g.c.Focused(ti.Wrap) || ti.Focus != 0 {
+			t.Fatalf("hover %v: the field took the focus", h)
+		}
+		if h == HoverOff && busy != 0 {
+			t.Errorf("HoverOff: %d frames asked for another while the pointer crossed the field", busy)
+		}
+		if h == HoverOn && busy == 0 {
+			t.Errorf("HoverOn: crossing the field animated nothing (the test sees no frames)")
+		}
+	}
+}
+
+// A disabled text input shows no focus, ring or hover, whether forced or
+// real.
+func TestTextInputDisabledIsInert(t *testing.T) {
+	var buf ui.TextBuffer
+	var ti TextInput
+	var force Look
+	g := newRig(t, 400, 300, 1, func(k *Kit) {
+		k.NextPad(20)
+		k.Column("root")
+		k.BeginDisabled(true)
+		k.Force(force)
+		textInput(k, "Name", &buf, HoverOn, &ti)
+		k.EndDisabled()
+		k.EndColumn()
+	})
+	for _, f := range []Look{LookFocused, LookHover, LookFocused | LookHover | LookPressed} {
+		force = f
+		g.frame()
+		if !ti.Disabled || ti.Focus != 0 || ti.Ring != 0 || ti.Hot != 0 || ti.Down != 0 {
+			t.Errorf("forced %b: disabled field shows %+v", f, ti.Visual)
+		}
+	}
+	force = 0
+	b := g.must(ui.RoleTextField, "Name").Bounds
+	g.move((b[0]+b[2])/2, (b[1]+b[3])/2)
+	g.frames(20)
+	if ti.Hot != 0 || ti.Focus != 0 {
+		t.Errorf("hovered disabled field shows %+v", ti.Visual)
+	}
+}
+
+// A column header focused from the keyboard reports Focus and Ring.
+func TestHeaderFocusByKeyboard(t *testing.T) {
+	var st TableState
+	var hc [2]HeaderCell
+	cols := []Column{{ID: 1, Title: "Name", Width: 120, Sortable: true}, {ID: 2, Title: "Size", Width: 60}}
+	g := newRig(t, 600, 400, 1, func(k *Kit) {
+		t := k.BeginTableHeader("files", &st, cols)
+		t.BeginHeaderRow(0)
+		for i := range t.Columns() {
+			hc[i] = t.HeaderCell(i)
+			t.BeginHeaderCell(&hc[i], 0)
+			t.EndHeaderCell(&hc[i])
+		}
+		t.EndHeaderRow()
+		l := k.BeginTableBody(&t, 5, ListOpts{})
+		for r := l.First; r < l.Last; r++ {
+			rs := l.RowState(r, uint32(r))
+			l.BeginRow(&rs, nil, 0)
+		}
+		l.CloseRows()
+		k.CloseList(&l)
+		k.CloseTable(&t)
+	})
+	g.key(ui.KeyTab, 0)
+	g.frames(30)
+	if hc[0].Focus < 0.99 || hc[0].Ring < 0.99 {
+		t.Fatalf("Tab: the first header has Focus %v Ring %v, want 1 and 1", hc[0].Focus, hc[0].Ring)
+	}
+	if hc[1].Focus != 0 || hc[1].Ring != 0 {
+		t.Fatalf("the second header shows focus %v ring %v", hc[1].Focus, hc[1].Ring)
+	}
+	g.key(ui.KeyTab, 0)
+	g.frames(30)
+	if hc[1].Focus < 0.99 || hc[1].Ring < 0.99 || hc[0].Focus > 0.01 {
+		t.Fatalf("second Tab: headers' focus %v, %v", hc[0].Focus, hc[1].Focus)
 	}
 }
