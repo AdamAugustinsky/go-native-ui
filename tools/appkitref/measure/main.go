@@ -15,6 +15,7 @@
 // recipes against that file (rexui/testdata/appkit-27.2.json).
 //
 //	go run ./tools/appkitref/measure -ref DIR [-ours DIR] [-write FILE]
+//	go run ./tools/appkitref/measure -names 0 > names.txt   # for AppKitRef -live
 //
 // Both renders are at 2× with AppKit's frame at 14 pt from the top left, as
 // AppKitRef and ours write them.
@@ -82,7 +83,14 @@ func main() {
 	ref := flag.String("ref", "", "AppKitRef output directory (light/, dark/, metrics.json)")
 	ours := flag.String("ours", "", "tools/appkitref/ours output directory to compare")
 	write := flag.String("write", "", "write AppKit's numbers as JSON to this file")
+	names := flag.Int("names", -1, "print the sample names of grid page N (catalog.Pages), one per line, for AppKitRef -live, and exit")
 	flag.Parse()
+	if *names >= 0 && *names < len(catalog.Pages) {
+		for _, i := range catalog.Page(*names) {
+			fmt.Println(catalog.Samples[i].Name)
+		}
+		return
+	}
 	if *ref == "" {
 		fmt.Fprintln(os.Stderr, "usage: measure -ref DIR [-ours DIR] [-write FILE]")
 		os.Exit(2)

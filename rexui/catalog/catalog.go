@@ -407,3 +407,79 @@ func Index(name string) int {
 	}
 	return -1
 }
+
+// The grid of AppKitRef's contact sheets (tools/appkitref, flowSheet), which
+// its live window and the gallery's appkit scenes share, in points: each cell
+// is the sample's frame with Margin all round on the window background, its
+// name below in a caption GridCaptionH tall, cells GridGap apart in rows that
+// wrap before GridMaxWidth (the contact sheets wrap at 1500).
+const (
+	GridMargin   = 20
+	GridTitleH   = 30
+	GridGap      = 16
+	GridCaptionH = 16
+	GridMaxWidth = 1440
+	Margin       = 14
+)
+
+// Cell is a sample's place in the grid, in points from the grid's top left:
+// the cell (the frame with Margin all round) and the caption under it.
+type Cell struct {
+	// Sample is the index in Samples.
+	Sample int
+	// X, Y, W and H are the cell's rectangle.
+	X, Y, W, H float32
+}
+
+// Grid lays out the samples whose indices are given, in that order, and
+// returns the cells and the grid's size. AppKitRef's live window lays out the
+// same names with the same rules, so a capture of each can be cut into the
+// same cells.
+func Grid(samples []int) (cells []Cell, w, h float32) {
+	x, y := float32(GridMargin), float32(GridMargin+GridTitleH)
+	var rowH float32
+	for _, i := range samples {
+		s := &Samples[i]
+		cw, ch := s.W+2*Margin, s.H+2*Margin
+		if x > GridMargin && x+cw > GridMaxWidth-GridMargin {
+			x, y, rowH = GridMargin, y+rowH+GridGap, 0
+		}
+		cells = append(cells, Cell{Sample: i, X: x, Y: y, W: cw, H: ch})
+		x += cw + GridGap
+		rowH = max(rowH, ch+GridCaptionH)
+		w = max(w, x)
+	}
+	return cells, max(w+GridMargin-GridGap, 400), y + rowH + GridMargin
+}
+
+// Pages are the grids the gallery's appkit scenes show: the controls, and
+// the text styles, which would not fit under them on a laptop's screen.
+var Pages = [...][]string{
+	{}, // every sample but those of the later pages
+	{"label-styles"},
+}
+
+// Page is the samples of page p (Pages) in catalogue order.
+func Page(p int) []int {
+	var out []int
+	if p > 0 {
+		for _, n := range Pages[p] {
+			if i := Index(n); i >= 0 {
+				out = append(out, i)
+			}
+		}
+		return out
+	}
+	later := map[string]bool{}
+	for _, pg := range Pages[1:] {
+		for _, n := range pg {
+			later[n] = true
+		}
+	}
+	for i := range Samples {
+		if !later[Samples[i].Name] {
+			out = append(out, i)
+		}
+	}
+	return out
+}

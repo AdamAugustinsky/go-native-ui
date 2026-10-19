@@ -14,18 +14,15 @@
 package main
 
 import (
-	"encoding/json"
 	"flag"
 	"fmt"
 	"image"
 	"image/png"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 
 	"gonativeui/app"
-	"gonativeui/platform"
 	"gonativeui/rexui/catalog"
 	"gonativeui/text"
 	"gonativeui/theme"
@@ -87,7 +84,7 @@ func main() {
 	}
 	var sys *theme.SystemValues
 	if *ref != "" {
-		s, err := loadSystem(*ref)
+		s, err := catalog.LoadSystem(*ref)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "ours:", err)
 			os.Exit(1)
@@ -154,46 +151,4 @@ func writePNG(path string, img image.Image) error {
 		return err
 	}
 	return f.Close()
-}
-
-// loadSystem reads the light and dark NSColors of an AppKitRef metrics.json
-// into SystemValues.
-func loadSystem(path string) (*theme.SystemValues, error) {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	var m struct {
-		Colors map[string]map[string]json.RawMessage `json:"colors"`
-	}
-	if err := json.Unmarshal(b, &m); err != nil {
-		return nil, err
-	}
-	s := &theme.SystemValues{Known: true}
-	for mode, ap := range [...]string{"NSAppearanceNameAqua", "NSAppearanceNameDarkAqua"} {
-		cs := m.Colors[ap]
-		if cs == nil {
-			return nil, fmt.Errorf("%s: no colours for %s", path, ap)
-		}
-		for i, name := range platform.SystemColorNames {
-			raw, ok := cs[name]
-			if !ok {
-				continue
-			}
-			var hex string
-			if json.Unmarshal(raw, &hex) != nil { // alternatingContentBackgroundColors: a list
-				var list []string
-				if json.Unmarshal(raw, &list) != nil || len(list) < 2 {
-					continue
-				}
-				hex = list[1]
-			}
-			v, err := strconv.ParseUint(strings.TrimPrefix(hex, "#"), 16, 32)
-			if err != nil {
-				return nil, fmt.Errorf("%s: %s = %q", path, name, hex)
-			}
-			s.Colors[mode][i] = uint32(v)
-		}
-	}
-	return s, nil
 }
