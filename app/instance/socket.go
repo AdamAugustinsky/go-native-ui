@@ -33,7 +33,7 @@ func socketPath(dir string) (string, error) {
 	if err := os.MkdirAll(short, 0o700); err != nil {
 		return "", err
 	}
-	if err := checkPrivateDir(short); err != nil {
+	if err := checkPrivate(short); err != nil {
 		return "", err
 	}
 	p = filepath.Join(short, "s")
