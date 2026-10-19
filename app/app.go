@@ -99,6 +99,13 @@ type Config struct {
 	// buttons' ids; App.Win.SetButtonEnabled enables and disables them.
 	Backdrop platform.Backdrop
 	Buttons  []platform.NativeButton
+
+	// Materials makes the window show material regions (macOS): the
+	// builder marks boxes with ui.Context.Material and paints nothing in
+	// them, and the frame clears to transparent instead of Clear, so the
+	// system's window background shows wherever the builder paints nothing
+	// and the materials show in their regions.
+	Materials bool
 }
 
 // App is the running application: the window, the GPU objects and the ui
@@ -128,6 +135,8 @@ type App struct {
 	curPlat []platform.CursorRegion
 	dragUI  []ui.DragRegion
 	dragPl  []platform.DragRegion
+
+	sh shellSync // material regions handed to the window (shell.go)
 
 	wakeAt      int64 // platform.Now at which the UI wants a frame although nothing animates (ui.Context.WakeAfter); 0 = none
 	chromeDark  bool  // the mode last given to Win.SetDarkChrome
@@ -267,13 +276,13 @@ func openWindowed(cfg Config, b Builder, st *StartupReport) (*App, error) {
 		Title: cfg.Title, Width: int(cfg.Width + 0.5), Height: int(cfg.Height + 0.5), Hidden: true,
 		MinWidth: int(cfg.MinWidth + 0.5), MinHeight: int(cfg.MinHeight + 0.5),
 		Titlebar: cfg.Titlebar, TrafficLights: cfg.TrafficLights,
-		Backdrop: cfg.Backdrop, Buttons: cfg.Buttons,
+		Backdrop: cfg.Backdrop, Buttons: cfg.Buttons, Materials: cfg.Materials,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("app: open window: %w", err)
 	}
-	if win.Backdrop() != platform.BackdropNone {
-		a.cfg.Clear = [4]float32{} // premultiplied transparent: the backdrop shows
+	if win.HasMaterials() {
+		a.cfg.Clear = [4]float32{} // premultiplied transparent: the backdrop or the materials show
 	}
 	a.Win, a.req = win, win
 	t0 := platform.Now()

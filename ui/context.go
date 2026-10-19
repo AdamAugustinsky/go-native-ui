@@ -239,6 +239,9 @@ type Context struct {
 	// boxes built this frame with a cursor or the WindowDrag flag (cursor.go)
 	nCursorBoxes, nDragBoxes int
 
+	// material boxes marked this frame (material.go)
+	shell shellRegs
+
 	// the final emit attempt of End (draw.go)
 	finalPass      bool
 	passGen        uint32  // atlas generation the glyph quads so far belong to

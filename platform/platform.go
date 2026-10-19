@@ -99,7 +99,7 @@ const (
 	EvWake                    // a goroutine called Wake
 	EvFrame                   // the frame slot armed by RequestFrame is available
 	EvPaste                   // the answer to RequestPaste: Text (plain text), Tag; FlagFailed when there is none
-	EvCommand                 // a native button was clicked: Tag is its command id (NativeButton.ID); experimental
+	EvCommand                 // a native button was clicked: Tag is its command id (NativeButton.ID, HostOptions.Command)
 )
 
 // Flags qualify an Event.
@@ -270,6 +270,12 @@ type Options struct {
 	// their rectangles. Experimental: D41's hosted native views are meant to
 	// replace them.
 	Buttons []NativeButton
+	// Materials makes the GPU surface transparent (Native.Transparent) so
+	// that the material regions (SetMaterials) show through wherever the
+	// app paints nothing; the window itself stays opaque, with the system's
+	// window background behind the app's pixels, as an AppKit window's
+	// content is. macOS; ignored elsewhere (Window.HasMaterials).
+	Materials bool
 }
 
 // Backdrop is a system material behind a window's content (Options.Backdrop).

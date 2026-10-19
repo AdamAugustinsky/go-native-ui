@@ -26,6 +26,7 @@ func registerClasses() {
 	registerWindowDelegate(delegate)
 	registerShell(delegate)
 	delegateClass = delegate.Register()
+	registerShellClasses() // GNUIContainer, GNUIHostClip (host_darwin.go)
 	clsNSArray, clsNSAttributedString = objc.Cls("NSArray"), objc.Cls("NSAttributedString")
 	clsMetalLink = objc.Cls("CAMetalDisplayLink") // macOS 14+
 	clsRunLoop = objc.Cls("NSRunLoop")
