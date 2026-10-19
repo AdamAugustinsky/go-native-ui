@@ -25,6 +25,18 @@ The fourth, ZapFast, is phase 7 (D33). It starts at the same time, because its R
 
 The plan is to be reviewed independently before any code, as phase 5's was. Revised 2026-10-18 after that review (GPT-6.1 Sol), whose findings you accepted, and again after its scoped re-review; the fixes are in the contracts, work items, tests and graph they concern, and the decisions are in `DECISIONS.md` as D34–D51. Behaviour not yet verified is marked as an assumption or tied to a named feasibility test.
 
+## Revision 2026-10-19: native shell first, rexlook's language everywhere
+
+The user used the apps on the MacBook: only rexlook looks and feels right; the gallery, notes and Pilot "look linux-like, or old versions of macos (much before liquid glass)" (D52). Two results changed the order of work:
+- **D0, the Liquid Glass reference (done, `p6-scenes`):** `tools/appkitscenes` measures real macOS 27.2 windows in the Finder, Notes, Settings and chat patterns; the spec is `docs/design/liquid-glass-reference.md`. It corrects D4: the unified title is 15 pt bold (13 only in compact); selection radius 8; the sidebar is flush and full-height glass, not inset.
+- **The native-shell spike (done, `p6-nativeshell`):** rexlook on a real glass backdrop with Rex's own tabs (`docs/design/native-shell-spike.md`).
+
+**New order.** Native feel goes first; the foundations continue alongside.
+1. **Now (running):** D2 `widget/base`; F1, C1, S1, T1, C8; F2 done.
+2. **Next, as soon as D2 and the spike merge:** D1 tokens with D0's numbers; N1 native menus (the gallery's drawn menu bar goes); N3a materials per area, generalising the spike's backdrop to `ui` regions (sidebar, inspector, toolbar capsules); D4 window chrome (the Toolbar and Sidebar to D0's spec; Rex tabs as the tab component); D3 core `rexui`.
+3. **Then:** D6, the gallery, notes and Pilot rebuilt in rexlook's language on D0's layouts, verified live against `appkitscenes` (Settings, Notes, Finder). **Checkpoint 1** follows directly.
+4. The rest of the waves below keep their order after that.
+
 ## Packages
 
 The D28 layering, extended (D40). Each package imports only the ones above it:

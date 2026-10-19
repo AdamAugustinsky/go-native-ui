@@ -818,7 +818,7 @@ The whole UI is rewritten in Go on the framework with the Rex design system, mac
 
 **Amends D28's layering line:** `… → theme/rex, icon → widget/base → rexui → widget → task → app`.
 
-## D41. Native AppKit where the OS adds behaviour (phase 6, 2026-10-18)
+## D41. Native AppKit where the OS adds behaviour (phase 6, 2026-10-18; refined by D52)
 
 **Decision.** On macOS these are native: the menu bar, context and popup menus, NSAlert, the open and save panels, tooltips, materials (`NSVisualEffectView`), the chat composer (`NSTextView`) and accessibility. Everything else is drawn.
 
@@ -832,6 +832,21 @@ The whole UI is rewritten in Go on the framework with the Rex design system, mac
 **Alternative rejected:** hosting standard controls (option D: AppKit's heap per control, no gain in behaviour).
 
 **Cost:** two text renderers side by side (D38 mitigates), synchronous presents on frames that move hosts (measured), and a z-order rule designers must follow.
+
+## D52. Native shell, custom content; rexlook's language on measured macOS 27 windows (phase 6, 2026-10-19)
+
+**The user's verdicts (2026-10-19):** "the macos-native feel of our programs is still miles behind the superlogical Rex program/demo"; after using the apps: "all the apps that we did very much don't have a macos native-feel to them … they look linux-like, or old versions of macos (much before liquid glass). the only actually good looking and good feeling to use app that we have is RexLook, the rest is quite mediocre"; and "we should not use the macos native component for tabs, we should instead build a custom component fast and native feeling, based on the original rex tabs."
+
+**Decision.** This refines D41 from "native where the OS adds behaviour" to a native *shell*:
+- **Native on macOS:** the window and its traffic lights; live materials (the window backdrop, and glass wherever the measured macOS 27 pattern uses it: sidebar, inspector, toolbar capsules, the composer); the menu bar, context and popup menus; alerts, sheets and panels; tooltips; overlay scrollers; a native button only where it matches better than a drawn one (rexlook's ⌘ and +).
+- **Ours, drawn:** tabs (Rex's, made fast and native-feeling: select on press, instant switch, system tab shortcuts, key-window dimming) and every content control, in the Rex language.
+- **rexlook is the source of truth for the look.** The Rex identity (panes, glass, typography, restraint) sits on the window-level metrics measured from macOS 27.2 (`docs/design/liquid-glass-reference.md`, tool `tools/appkitscenes`): unified toolbar 52 pt with a 15 pt bold title, compact 40 pt with 13 pt; toolbar items in 36 pt glass capsules; a flush, full-height glass sidebar (27.2 has no floating inset sidebar); selection inset 10 pt, radius 8; the toolbar's scroll-edge bar only once content is under it (always when the window is inactive); window radius 16. The gallery, notes, Pilot and ZapFast are rebuilt on it.
+
+**Acceptance.** Live GnuiShot captures next to the `appkitscenes` and `appkitref` references, light and dark, active and inactive, top and scrolled; then the user's eye at checkpoint 1.
+
+**Evidence:** the spike (`docs/design/native-shell-spike.md`, branch `p6-nativeshell`): glass backdrop under a non-opaque Metal layer, startup +7 ms, 0 allocations, idle 0 frames; `gpui-ghostty.md` §1; D0's finding that everything except the window, the traffic lights and live glass can be drawn to within about 2 %.
+
+**Alternatives rejected:** native tabs (`NSToolbar` segmented or window tabbing: the user's call, and a toolbar's title area swallows clicks on drawn tabs); drawing the glass (it cannot follow the desktop or the user's Liquid Glass setting).
 
 ## D42. Rich text and selection (phase 6, 2026-10-18)
 
