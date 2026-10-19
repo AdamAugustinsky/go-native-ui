@@ -292,6 +292,8 @@ Tab is trapped inside it. With modals stacked, only the topmost takes input.
 
 ### 5B: the app layer
 
+*Not built; absorbed into phase 6 (see Status).*
+
 7. **More than one window.**
    - First: app-owned GPU resources and surface-only destruction on all three backends; the shared atlas.
    - Then: the app-wide event pump and window registry, the safe points, and the frame handler for modal and tracking loops.
@@ -409,6 +411,14 @@ The protocol work starts at once, in platform files only. Its integration into `
 11. **Numbers:** Windows and Linux numbers come only from CI. Anything CI cannot exercise (a real Windows IME, Wayland drop from a real app) is listed as untested, not claimed.
 
 ## Status (2026-10-18)
+
+**Phase 5 is closed.**
+- **5A is done.** You looked at it on 2026-10-18. Your verdict: the widgets work, but the apps built on them fall short of rexlook's native feel on macOS. That is phase 6's design-system and native-host work ([PHASE6-PLAN.md](PHASE6-PLAN.md)).
+- **5B (steps 7–12) was never built,** and phase 6 absorbs it:
+  - more than one window goes to track F, for macOS;
+  - native menus, file dialogs and drop go to track N, for macOS; Windows and Linux keep the drawn menus and get native dialogs and drop in their later parity phase (D34);
+  - `task` goes to track S.
+- The items under "In progress" and "Known gaps" below carry over unchanged.
 
 **On `main`** (all merged branches were green on all 8 CI jobs):
 - **Step 1, contracts:** the asynchronous clipboard (`RequestPaste` → `EvPaste`), the appearance contract, and CI gating every package.
