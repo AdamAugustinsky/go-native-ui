@@ -308,7 +308,7 @@ func (c *Context) RichText(key Key, body []byte, spans []Span, st *RichStyles, o
 	}
 	// An assistive technology pressing a link node, with Signal's guards: a
 	// disabled box, or one beneath a modal, is inert.
-	if b.flags&Disabled != 0 || c.blocked(b) {
+	if b.flags&Disabled != 0 || c.blocked(b) || c.wasHidden(b) {
 		return sig
 	}
 	for i := 0; i < c.in.NActions; i++ {

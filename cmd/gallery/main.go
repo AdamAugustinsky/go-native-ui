@@ -31,6 +31,7 @@ import (
 	"gonativeui/app"
 	"gonativeui/cmd/gallery/gallery"
 	"gonativeui/platform"
+	"gonativeui/rexui/catalog"
 	"gonativeui/theme"
 	"gonativeui/ui"
 )
@@ -49,7 +50,9 @@ func main() {
 	w := flag.Int("w", 2560, "with -o: width in pixels")
 	h := flag.Int("h", 1600, "with -o: height in pixels")
 	scale := flag.Float64("scale", 2, "with -o: pixels per point")
-	scene := flag.String("scene", "main", "with -o: the state to render ("+strings.Join(gallery.SceneNames(), ", ")+")")
+	scene := flag.String("scene", "main", "with -o: the state to render ("+strings.Join(gallery.SceneNames(), ", ")+"); "+
+		strings.Join(gallery.AppKitPages[:], " and ")+" show rexui's AppKitRef samples, in a window or with -o")
+	ref := flag.String("ref", "", "with -o and an appkit scene: pin the system colours to an AppKitRef metrics.json")
 	mode := flag.String("mode", "system", "system (follow the system: the default), light or dark; with -o the default is light")
 	rows := flag.Int("rows", gallery.DefaultRows, "rows of the table")
 	bench := flag.Bool("bench", false, "scripted session; print allocation, CPU, pacing and latency as JSON")
@@ -66,6 +69,14 @@ func main() {
 	flag.Visit(func(f *flag.Flag) { explicit = explicit || f.Name == "mode" })
 	if err == nil {
 		switch {
+		case gallery.AppKitPage(*scene) >= 0 && *out != "":
+			if !explicit {
+				m = theme.ForceLight
+			}
+			err = renderAppKit(*out, *outDark, gallery.AppKitPage(*scene), m, float32(*scale), *ref)
+		case gallery.AppKitPage(*scene) >= 0:
+			s := gallery.NewAppKit(gallery.AppKitPage(*scene), m)
+			_, err = app.RunWith(s.Config(), s, app.RunOptions{})
 		case *out != "":
 			if !explicit {
 				m = theme.ForceLight // a picture is the same on every machine unless it is asked to follow this one
@@ -81,6 +92,30 @@ func main() {
 		fmt.Fprintln(os.Stderr, "gallery:", err)
 		os.Exit(1)
 	}
+}
+
+// renderAppKit renders page p of the appkit scenes, light into path and dark
+// into dark when it is set.
+func renderAppKit(path, dark string, p int, m theme.Preference, scale float32, ref string) error {
+	var sys *theme.SystemValues
+	if ref != "" {
+		s, err := catalog.LoadSystem(ref)
+		if err != nil {
+			return err
+		}
+		sys = s
+	}
+	if err := gallery.AppKitShot(path, p, m, scale, sys); err != nil {
+		return err
+	}
+	fmt.Println("appkit page ->", path)
+	if dark != "" {
+		if err := gallery.AppKitShot(dark, p, theme.ForceDark, scale, sys); err != nil {
+			return err
+		}
+		fmt.Println("appkit page ->", dark)
+	}
+	return nil
 }
 
 // parseMode maps the -mode flag to a preference.

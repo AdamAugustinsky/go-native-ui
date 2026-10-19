@@ -50,6 +50,9 @@ func (c *Context) hitAll(x, y float32) {
 
 func (c *Context) hitWalk(id ID, x, y float32) {
 	b := &c.boxes[id]
+	if b.hid {
+		return
+	}
 	inside := x >= b.rect[0] && x < b.rect[2] && y >= b.rect[1] && y < b.rect[3]
 	if inside {
 		if b.flags&hitMask != 0 && b.flags&Disabled == 0 {
@@ -174,7 +177,7 @@ func (c *Context) Signal(id ID) Signal {
 	}
 	b := &c.boxes[id]
 	k := b.key
-	if b.flags&Disabled != 0 || c.blocked(b) {
+	if b.flags&Disabled != 0 || c.blocked(b) || c.wasHidden(b) {
 		return s // inert: also an activation or press that was queued before
 	}
 	for i := 0; i < c.in.NActions; i++ {

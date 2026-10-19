@@ -55,8 +55,12 @@ func (c *Context) layout() {
 		}
 		la := p.layoutAxis()
 		// Content extent and scroll clamping first: they set the offsets.
-		for a := 0; a < 2; a++ {
-			p.content[a] = float64(c.childExtent(p, a) + p.padSum(a))
+		if p.axis == AxisFlow {
+			c.flowContent(p)
+		} else {
+			for a := 0; a < 2; a++ {
+				p.content[a] = float64(c.childExtent(p, a) + p.padSum(a))
+			}
 		}
 		var lead float64
 		if p.listRows > 0 && la == 1 {
@@ -71,6 +75,10 @@ func (c *Context) layout() {
 			hi := math.Max(0, p.content[a]-float64(p.size[a]))
 			p.scroll[a] = math.Min(math.Max(p.scroll[a], 0), hi)
 			p.scrollTgt[a] = math.Min(math.Max(p.scrollTgt[a], 0), hi)
+		}
+		if p.axis == AxisFlow { // also without children: its results are then 0
+			c.flowPlace(p)
+			continue
 		}
 		if p.first == 0 {
 			continue
@@ -111,6 +119,7 @@ func (c *Context) layout() {
 			setRect(cb)
 		}
 	}
+	c.propagateHidden()
 }
 
 // sizeAxis runs the size stages 1 to 4 of layout for axis a (0 = x, 1 = y).
@@ -190,6 +199,10 @@ func (c *Context) sizeAxis(a int) {
 				cb.size[a] = inner * cb.pref[a].Value
 			}
 		}
+		if p.axis == AxisFlow {
+			c.flowShrink(p, a, inner)
+			continue
+		}
 		if p.scrollOn(a) {
 			continue // overflow scrolls
 		}
@@ -245,6 +258,13 @@ func setRect(b *box) {
 // childExtent is the extent of b's flow children on axis a, without padding:
 // their sum plus gaps along the layout axis, the largest across it.
 func (c *Context) childExtent(b *box, a int) float32 {
+	if b.axis == AxisFlow { // one line along X, the wrapped lines along Y
+		if a == 0 {
+			return c.flowNatural(b)
+		}
+		h, _, _, _ := c.flowRun(b, false)
+		return h
+	}
 	var sum, mx float32
 	n := 0
 	for ch := b.first; ch != 0; ch = c.boxes[ch].next {

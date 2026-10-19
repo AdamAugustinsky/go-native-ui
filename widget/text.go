@@ -1,6 +1,8 @@
 package widget
 
 import (
+	"gonativeui/rexui"
+	"gonativeui/theme"
 	"gonativeui/ui"
 	"gonativeui/widget/base"
 )
@@ -14,37 +16,48 @@ const labelSlack = base.LabelSlack
 type TextStyle uint8
 
 const (
-	// TextBody is body text in the theme's text colour.
+	// TextBody is body text in labelColor.
 	TextBody TextStyle = iota
-	// TextMuted is secondary text.
+	// TextMuted is body text in secondaryLabelColor.
 	TextMuted
-	// TextSemi is the emphasised (semibold) variant, for titles and headers.
+	// TextSemi is the headline style (13 pt bold), for titles and headers.
 	TextSemi
-	// TextSmall is the caption size, muted.
+	// TextSmall is the subheadline style (11 pt) in secondaryLabelColor.
 	TextSmall
-	// TextMono is the monospace font.
+	// TextMono is the monospaced style.
 	TextMono
-	// TextAccent is semibold in the accent colour.
+	// TextAccent is semibold body text in the accent colour.
 	TextAccent
-	// TextDanger is body text in the danger colour.
+	// TextDanger is body text in systemRed.
 	TextDanger
 )
 
-// Label builds a line of text in the body style. The label follows ui's rules
-// for box labels: text before "##" is shown and the whole label identifies the
-// box, "Name###id" shows "Name" and is identified by "id". Text too wide for
-// its box fades out at the right edge.
+// labelOpts are the rexui label options of the styles.
+var labelOpts = [...]rexui.LabelOpts{
+	TextBody:   {},
+	TextMuted:  {Color: rexui.Of(theme.Label2)},
+	TextSemi:   {Style: rexui.TextHeadline},
+	TextSmall:  {Style: rexui.TextSubheadline, Color: rexui.Of(theme.Label2)},
+	TextMono:   {Style: rexui.TextMono},
+	TextAccent: {Style: rexui.TextSemibold, Color: rexui.Of(theme.Accent)},
+	TextDanger: {Color: rexui.Of(theme.Red)},
+}
+
+func (st TextStyle) opts() rexui.LabelOpts {
+	if int(st) < len(labelOpts) {
+		return labelOpts[st]
+	}
+	return rexui.LabelOpts{}
+}
+
+// Label builds a line of text in the body style (rexui.Label). The label
+// follows ui's rules for box labels: text before "##" is shown and the whole
+// label identifies the box, "Name###id" shows "Name" and is identified by
+// "id". Text too wide for its box fades out at the right edge.
 func (k *Kit) Label(s string) ui.ID { return k.LabelStyle(s, TextBody) }
 
 // LabelStyle is Label in a style.
-func (k *Kit) LabelStyle(s string, st TextStyle) ui.ID {
-	k.size(ui.TextSize(labelSlack), ui.TextSize(0))
-	k.styleNext(st)
-	k.c.NextRole(ui.RoleLabel)
-	display, _ := ui.SplitLabel(s)
-	k.c.NextSemName(display)
-	return k.c.Box(ui.DrawText|ui.FadeOverflowX, s)
-}
+func (k *Kit) LabelStyle(s string, st TextStyle) ui.ID { return rexui.Label(k.Kit, s, st.opts()) }
 
 // LabelBytes is Label for text built at run time (see ui.Context.Fmt); the
 // bytes are copied. The text is not part of the box's identity, so it may
@@ -57,11 +70,7 @@ func (k *Kit) LabelBytes(b []byte) ui.ID { return k.LabelBytesStyle(b, TextBody)
 
 // LabelBytesStyle is LabelBytes in a style.
 func (k *Kit) LabelBytesStyle(b []byte, st TextStyle) ui.ID {
-	k.size(ui.TextSize(labelSlack), ui.TextSize(0))
-	k.styleNext(st)
-	k.c.NextRole(ui.RoleLabel)
-	k.c.NextSemNameBytes(b)
-	return k.c.BoxKeyed(ui.DrawText|ui.FadeOverflowX, ui.HashString(k.c.ParentKey(), "label"), b)
+	return rexui.LabelBytes(k.Kit, b, st.opts())
 }
 
 // Paragraph builds text that wraps at the width it is given, breaking lines at
@@ -71,36 +80,11 @@ func (k *Kit) Paragraph(s string) ui.ID { return k.ParagraphStyle(s, TextBody) }
 
 // ParagraphStyle is Paragraph in a style.
 func (k *Kit) ParagraphStyle(s string, st TextStyle) ui.ID {
-	k.size(ui.Pct(1), ui.TextSize(0))
-	k.styleNext(st)
-	k.c.NextRole(ui.RoleLabel)
-	display, _ := ui.SplitLabel(s)
-	k.c.NextSemName(display)
-	return k.c.Box(ui.DrawText|ui.WrapText, s)
+	o := st.opts()
+	o.Wrap = true
+	return rexui.Label(k.Kit, s, o)
 }
 
-// styleNext sets the font, colour and alignment of the next text box.
-func (k *Kit) styleNext(st TextStyle) {
-	c := k.c
-	c.NextFont(k.font(st))
-	c.NextTextColor(k.color(st))
-	c.NextAlign(k.align(ui.AlignLeft))
-}
-
-// Separator builds a hairline across the parent: horizontal in a column,
-// vertical in a row.
-func (k *Kit) Separator() ui.ID {
-	c := k.c
-	horizontal := true
-	if c.Parent() != 0 {
-		horizontal = !k.InRow()
-	}
-	lw := k.r.Px.BorderW
-	if horizontal {
-		c.NextSize(ui.Pct(1), ui.Px(lw))
-	} else {
-		c.NextSize(ui.Px(lw), ui.Pct(1))
-	}
-	c.NextBG(k.r.Pal.Line)
-	return c.Box(ui.DrawBackground, "separator")
-}
+// Separator builds a line across the parent (rexui.Separator): horizontal in
+// a column, vertical in a row.
+func (k *Kit) Separator() ui.ID { return rexui.Separator(k.Kit, rexui.SeparatorOpts{}) }
