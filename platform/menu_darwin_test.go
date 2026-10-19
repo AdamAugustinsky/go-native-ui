@@ -201,6 +201,79 @@ func TestMenuBarStructure(t *testing.T) {
 	t.Logf("application menu %q; Edit menu with AppKit's items %q; Window menu %q", r.appTitles, r.editTitles, r.windowTitles)
 }
 
+// A rebuilt menu bar (a language or model change) keeps what AppKit attaches
+// to particular menus: the Services menu (AppKit fills only the first one it
+// was given), the Window menu with the window list (the window opened before
+// the bar, as an app's does) and the Help menu, which gets the search field.
+// Whatever bars earlier tests installed, every one is checked.
+func TestMenuBarRebuildKeepsSystemMenus(t *testing.T) {
+	type check struct {
+		services, servicesInBar bool
+		servicesMenu            objc.ID
+		windows, help           bool
+		windowItems             int
+		appTitle                string
+	}
+	var r struct {
+		why    string
+		rounds []check
+	}
+	onMain(func() {
+		spec := testMenuSpec()
+		rig, why := openMenuRig(spec, false)
+		if why != "" {
+			r.why = why
+			return
+		}
+		defer rig.w.Close()
+		w := rig.w
+		pool := objc.F.Call0(objc.PoolPush)
+		defer objc.F.Call1(objc.PoolPop, pool)
+		for round := 0; round < 3; round++ {
+			if round > 0 { // the same bar in another language
+				spec = testMenuSpec()
+				spec.Menus[1].Title, spec.Menus[5].Title, spec.Menus[3].Title = "Fichier", "Services FR", "Fenêtre"
+				w.SetMenuBar(spec, rig.state)
+			}
+			main := objc.Send(w.app, objc.Sel("mainMenu"))
+			sub := func(i int) objc.ID { return objc.Send(itemAt(main, i), objc.Sel("submenu")) }
+			appMenu, windows := sub(0), sub(3)
+			svc := objc.Send(itemAt(appMenu, 4), objc.Sel("submenu"))
+			var c check
+			c.services = svc != 0 && objc.Send(w.app, objc.Sel("servicesMenu")) == svc
+			c.servicesInBar = objc.Send(svc, objc.Sel("supermenu")) == appMenu
+			c.servicesMenu = svc
+			c.windows = objc.Send(w.app, objc.Sel("windowsMenu")) == windows
+			c.help = objc.Send(w.app, objc.Sel("helpMenu")) == sub(4)
+			for i := 0; i < int(objc.Send(windows, selNumberOfItems)); i++ {
+				it := itemAt(windows, i)
+				if objc.SEL(objc.Send(it, selAction)) == objc.Sel("makeKeyAndOrderFront:") && objc.Send(it, objc.Sel("target")) == w.win {
+					c.windowItems++
+				}
+			}
+			c.appTitle = titleOf(itemAt(appMenu, 0))
+			r.rounds = append(r.rounds, c)
+		}
+	})
+	if r.why != "" {
+		t.Skipf("cannot open a window here: %s", r.why)
+	}
+	for i, c := range r.rounds {
+		if !c.services || !c.servicesInBar || !c.windows || !c.help {
+			t.Errorf("bar %d: Services registered %v and in the application menu %v; Window menu %v; Help menu %v", i, c.services, c.servicesInBar, c.windows, c.help)
+		}
+		if c.windowItems != 1 {
+			t.Errorf("bar %d: the Window menu lists the window %d times, want once", i, c.windowItems)
+		}
+		if c.servicesMenu != r.rounds[0].servicesMenu {
+			t.Errorf("bar %d: a Services menu of its own (%#x, the first was %#x)", i, c.servicesMenu, r.rounds[0].servicesMenu)
+		}
+		if c.appTitle != "About "+nativeMenus.appName {
+			t.Errorf("bar %d: application menu starts with %q", i, c.appTitle)
+		}
+	}
+}
+
 func equalStrings(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
