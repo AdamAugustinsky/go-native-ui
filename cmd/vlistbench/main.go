@@ -37,7 +37,12 @@ const (
 	pngW, pngH = 420, 640 // points; the PNG is at 2×
 	warmFrames = 120
 	measFrames = 600 // one session of the script
-	maxWindows = 3
+	// maxWindows: the allocation gate passes on the first clean window
+	// (D27). The first is the script's first whole session, so its peak
+	// frame grows the draw list once (144 KiB); the runtime's type-assertion
+	// cache fills on a random call (48 B). Five windows, as the offscreen
+	// TestTimelineSession, leave room for both.
+	maxWindows = 5
 
 	defaultMaxListUs = 4000 // ARCHITECTURE §11: the list's work in any frame
 	defaultMaxEditUs = 2000 // D43: the most a frame spends applying edits
