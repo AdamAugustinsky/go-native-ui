@@ -17,16 +17,18 @@ const (
 )
 
 var (
-	pOpenClipboard    = win32.Proc(user32, "OpenClipboard")
-	pCloseClipboard   = win32.Proc(user32, "CloseClipboard")
-	pEmptyClipboard   = win32.Proc(user32, "EmptyClipboard")
-	pGetClipboardData = win32.Proc(user32, "GetClipboardData")
-	pSetClipboardData = win32.Proc(user32, "SetClipboardData")
-	pGlobalAlloc      = win32.Proc(kernel32, "GlobalAlloc")
-	pGlobalFree       = win32.Proc(kernel32, "GlobalFree")
-	pGlobalLock       = win32.Proc(kernel32, "GlobalLock")
-	pGlobalUnlock     = win32.Proc(kernel32, "GlobalUnlock")
-	pGlobalSize       = win32.Proc(kernel32, "GlobalSize")
+	pOpenClipboard              = win32.Proc(user32, "OpenClipboard")
+	pCloseClipboard             = win32.Proc(user32, "CloseClipboard")
+	pEmptyClipboard             = win32.Proc(user32, "EmptyClipboard")
+	pGetClipboardData           = win32.Proc(user32, "GetClipboardData")
+	pCountClipboardFormats      = win32.Proc(user32, "CountClipboardFormats")
+	pIsClipboardFormatAvailable = win32.Proc(user32, "IsClipboardFormatAvailable")
+	pSetClipboardData           = win32.Proc(user32, "SetClipboardData")
+	pGlobalAlloc                = win32.Proc(kernel32, "GlobalAlloc")
+	pGlobalFree                 = win32.Proc(kernel32, "GlobalFree")
+	pGlobalLock                 = win32.Proc(kernel32, "GlobalLock")
+	pGlobalUnlock               = win32.Proc(kernel32, "GlobalUnlock")
+	pGlobalSize                 = win32.Proc(kernel32, "GlobalSize")
 )
 
 // openClipboard opens the clipboard for the window, retrying briefly: another
