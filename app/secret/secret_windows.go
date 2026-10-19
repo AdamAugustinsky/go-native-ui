@@ -1,0 +1,169 @@
+//go:build windows
+
+package secret
+
+import (
+	"fmt"
+	"runtime"
+	"strings"
+	"sync"
+	"syscall"
+	"unsafe"
+
+	"gonativeui/internal/win32"
+)
+
+// Credential Manager (advapi32): one generic credential per item, named
+// "service/account" with the two escaped so that the name is unambiguous,
+// persisted for this machine (not roamed).
+
+const (
+	credTypeGeneric       = 1
+	credPersistLocal      = 2 // CRED_PERSIST_LOCAL_MACHINE
+	credMaxBlob           = 5 * 512
+	errNotFound           = syscall.Errno(1168) // ERROR_NOT_FOUND
+	errNoSuchLogonSession = syscall.Errno(1312) // ERROR_NO_SUCH_LOGON_SESSION
+	errAccessDenied       = syscall.Errno(5)
+	errBadUsername        = syscall.Errno(2202)
+	errInvalidParameter   = syscall.Errno(87)
+)
+
+// credential mirrors CREDENTIALW (wincred.h) on 64-bit Windows.
+type credential struct {
+	Flags              uint32
+	Type               uint32
+	TargetName         *uint16
+	Comment            *uint16
+	LastWritten        [2]uint32 // FILETIME
+	CredentialBlobSize uint32
+	CredentialBlob     *byte
+	Persist            uint32
+	AttributeCount     uint32
+	Attributes         uintptr
+	TargetAlias        *uint16
+	UserName           *uint16
+}
+
+var (
+	_ [unsafe.Sizeof(credential{}) - 80]struct{}
+	_ [80 - unsafe.Sizeof(credential{})]struct{}
+)
+
+var wincred struct {
+	once                   sync.Once
+	write, read, del, free uintptr
+}
+
+func loadWincred() {
+	adv := win32.LoadSystem("advapi32.dll")
+	wincred.write, wincred.read = win32.Proc(adv, "CredWriteW"), win32.Proc(adv, "CredReadW")
+	wincred.del, wincred.free = win32.Proc(adv, "CredDeleteW"), win32.Proc(adv, "CredFree")
+}
+
+func osBackend() backend { return credMan{} }
+
+type credMan struct{}
+
+func (credMan) ready() error {
+	wincred.once.Do(loadWincred)
+	if wincred.write == 0 || wincred.read == 0 || wincred.del == 0 || wincred.free == 0 {
+		return fmt.Errorf("%w: advapi32 has no Credential Manager", ErrUnavailable)
+	}
+	return nil
+}
+
+// target is the credential's name. '/' and '%' in the service are escaped, so
+// two (service, account) pairs never share a name.
+func target(service, account string) string {
+	r := strings.NewReplacer("%", "%25", "/", "%2F")
+	return r.Replace(service) + "/" + account
+}
+
+func (c credMan) get(service, account string) ([]byte, error) {
+	if err := c.ready(); err != nil {
+		return nil, err
+	}
+	name, err := syscall.UTF16PtrFromString(target(service, account))
+	if err != nil {
+		return nil, ErrInvalid
+	}
+	var cred *credential
+	r, _, e := syscall.SyscallN(wincred.read, uintptr(unsafe.Pointer(name)), credTypeGeneric, 0, uintptr(unsafe.Pointer(&cred)))
+	if r == 0 {
+		return nil, mapErr(e)
+	}
+	defer syscall.SyscallN(wincred.free, uintptr(unsafe.Pointer(cred)))
+	n := int(cred.CredentialBlobSize)
+	out := make([]byte, n)
+	if n > 0 {
+		copy(out, unsafe.Slice(cred.CredentialBlob, n))
+	}
+	return out, nil
+}
+
+func (c credMan) set(service, account string, secret []byte) error {
+	if err := c.ready(); err != nil {
+		return err
+	}
+	if len(secret) > credMaxBlob {
+		return fmt.Errorf("%w: Credential Manager keeps at most %d bytes", ErrInvalid, credMaxBlob)
+	}
+	name, err := syscall.UTF16PtrFromString(target(service, account))
+	if err != nil {
+		return ErrInvalid
+	}
+	user, err := syscall.UTF16PtrFromString(account)
+	if err != nil {
+		return ErrInvalid
+	}
+	blob := make([]byte, len(secret)+1) // never nil
+	copy(blob, secret)
+	cred := &credential{
+		Type:               credTypeGeneric,
+		TargetName:         name,
+		CredentialBlobSize: uint32(len(secret)),
+		CredentialBlob:     &blob[0],
+		Persist:            credPersistLocal,
+		UserName:           user,
+	}
+	r, _, e := syscall.SyscallN(wincred.write, uintptr(unsafe.Pointer(cred)), 0)
+	runtime.KeepAlive(cred)
+	runtime.KeepAlive(blob)
+	if r == 0 {
+		return mapErr(e)
+	}
+	return nil
+}
+
+func (c credMan) del(service, account string) error {
+	if err := c.ready(); err != nil {
+		return err
+	}
+	name, err := syscall.UTF16PtrFromString(target(service, account))
+	if err != nil {
+		return ErrInvalid
+	}
+	r, _, e := syscall.SyscallN(wincred.del, uintptr(unsafe.Pointer(name)), credTypeGeneric, 0)
+	if r == 0 {
+		return mapErr(e)
+	}
+	return nil
+}
+
+func mapErr(e error) error {
+	en, _ := e.(syscall.Errno)
+	var base error
+	switch en {
+	case errNotFound:
+		base = ErrNotFound
+	case errAccessDenied:
+		base = ErrDenied
+	case errNoSuchLogonSession:
+		base = ErrUnavailable
+	case errInvalidParameter, errBadUsername:
+		base = ErrInvalid
+	default:
+		return fmt.Errorf("secret: Credential Manager: %w", e)
+	}
+	return fmt.Errorf("%w (Windows error %d)", base, uint32(en))
+}
