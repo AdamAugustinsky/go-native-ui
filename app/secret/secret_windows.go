@@ -64,6 +64,11 @@ func osBackend() backend { return credMan{} }
 
 type credMan struct{}
 
+// callMu serialises the calls into Credential Manager: they go through the
+// local security authority, and calls from several threads at once have been
+// seen to fail where one at a time do not (see the concurrent test).
+var callMu sync.Mutex
+
 func (credMan) ready() error {
 	wincred.once.Do(loadWincred)
 	if wincred.write == 0 || wincred.read == 0 || wincred.del == 0 || wincred.free == 0 {
@@ -88,8 +93,10 @@ func (c credMan) get(service, account string) ([]byte, error) {
 		return nil, ErrInvalid
 	}
 	var cred *credential
+	callMu.Lock()
+	defer callMu.Unlock()
 	r, _, e := syscall.SyscallN(wincred.read, uintptr(unsafe.Pointer(name)), credTypeGeneric, 0, uintptr(unsafe.Pointer(&cred)))
-	if r == 0 {
+	if !win32.Bool(r) { // BOOL: only the low 32 bits are defined
 		return nil, mapErr(e)
 	}
 	defer syscall.SyscallN(wincred.free, uintptr(unsafe.Pointer(cred)))
@@ -126,10 +133,12 @@ func (c credMan) set(service, account string, secret []byte) error {
 		Persist:            credPersistLocal,
 		UserName:           user,
 	}
+	callMu.Lock()
+	defer callMu.Unlock()
 	r, _, e := syscall.SyscallN(wincred.write, uintptr(unsafe.Pointer(cred)), 0)
 	runtime.KeepAlive(cred)
 	runtime.KeepAlive(blob)
-	if r == 0 {
+	if !win32.Bool(r) { // BOOL: only the low 32 bits are defined
 		return mapErr(e)
 	}
 	return nil
@@ -143,8 +152,10 @@ func (c credMan) del(service, account string) error {
 	if err != nil {
 		return ErrInvalid
 	}
+	callMu.Lock()
+	defer callMu.Unlock()
 	r, _, e := syscall.SyscallN(wincred.del, uintptr(unsafe.Pointer(name)), credTypeGeneric, 0)
-	if r == 0 {
+	if !win32.Bool(r) { // BOOL: only the low 32 bits are defined
 		return mapErr(e)
 	}
 	return nil
