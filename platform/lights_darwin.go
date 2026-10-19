@@ -6,6 +6,8 @@ import (
 	"math"
 	"sync"
 
+	"github.com/ebitengine/purego"
+
 	"gonativeui/internal/ffi"
 	"gonativeui/internal/objc"
 )
@@ -50,10 +52,15 @@ import (
 // windowWillEnterFullScreen: until the exit or the failed entry
 // (shell_darwin.go), and runs then and on the next run-loop turn.
 //
-// The selectors are checked (respondsToSelector:) once per window. Where any
-// is missing, or AppKit does not put the close button where asked, the
-// buttons stay where AppKit puts them by default; SystemButtons still says
-// where that is, so the app keeps its content clear of them.
+// The selectors are checked once per window (respondsToSelector:) and their
+// signatures once per process (the type encodings: a double, and an NSSize of
+// two doubles), so a changed method is never called with the wrong
+// arguments. Where any is missing or differs, where the app asked for public
+// interfaces only (Options.PublicAPIOnly, a store build: DECISIONS.md D52),
+// or where AppKit does not put the close button where asked, the buttons stay
+// where AppKit puts them by default; SystemButtons still says where that is,
+// so the app keeps its content clear of them. The last case undoes what it
+// set: AppKit's own height and offset, and the hover areas.
 //
 // Measured and rejected: the NSToolbar styles give the buttons fixed centres,
 // (26, 26) unified and (19, 20) unifiedCompact on macOS 27, not a configurable
@@ -92,6 +99,14 @@ var (
 	lightsObserverClass, lightsNSObject  objc.ID
 	lightsCenter, lightsFrameChangedName objc.ID
 	lightsForceDefault                   bool // tests: new windows behave as where the selectors are missing
+
+	// The selectors' signatures, checked once per process (lightsABIOK):
+	// 0 not yet, 1 as expected, -1 not.
+	lightsABI                                            int8
+	fnClassGetMethod, fnMethodEncoding, fnObjectGetClass uintptr
+	lightsEncodingOf                                     = methodEncoding // tests replace it to simulate a changed method
+	lightsOffsetSkew                                     [2]float64       // tests: added, once more on every call, to the offset AppKit is given
+	lightsOffsetCalls                                    float64
 )
 
 func lightsSetup() {
@@ -114,6 +129,64 @@ func lightsSetup() {
 		}
 	})
 	lightsObserverClass = def.Register()
+	if lib, err := loadFramework("/usr/lib/libobjc.A.dylib"); err == nil {
+		fnClassGetMethod, _ = purego.Dlsym(lib, "class_getInstanceMethod")
+		fnMethodEncoding, _ = purego.Dlsym(lib, "method_getTypeEncoding")
+		fnObjectGetClass, _ = purego.Dlsym(lib, "object_getClass")
+	}
+}
+
+// methodEncoding is the type encoding of obj's instance method sel, without
+// the frame offsets ("v24@0:8d16" is "v@:d"); "" if there is none.
+func methodEncoding(obj objc.ID, sel objc.SEL) string {
+	if fnClassGetMethod == 0 || fnMethodEncoding == 0 || fnObjectGetClass == 0 {
+		return ""
+	}
+	m := objc.F.Call2(fnClassGetMethod, objc.F.Call1(fnObjectGetClass, uintptr(obj)), uintptr(sel))
+	if m == 0 {
+		return ""
+	}
+	p := objc.F.Call1(fnMethodEncoding, m)
+	if p == 0 {
+		return ""
+	}
+	var b []byte
+	for i := uintptr(0); i < 256; i++ {
+		c := *(*byte)(ffi.PtrFromC(p + i))
+		if c == 0 {
+			break
+		}
+		if c < '0' || c > '9' {
+			b = append(b, c)
+		}
+	}
+	return string(b)
+}
+
+// lightsABIOK reports whether AppKit's titlebar metrics have the signatures
+// they are called with: setTitlebarHeight: takes a double and titlebarHeight
+// returns one; the button-group offset is a struct of two doubles (NSSize,
+// passed and returned in two floating-point registers). Checked once per
+// process, on the first window.
+func lightsABIOK(win objc.ID) bool {
+	if lightsABI == 0 {
+		lightsABI = -1
+		pair := func(e string) bool {
+			for _, name := range [...]string{"CGSize", "NSSize", "CGPoint", "NSPoint"} {
+				if e == "{"+name+"=dd}" {
+					return true
+				}
+			}
+			return false
+		}
+		set, get := lightsEncodingOf(win, selSetButtonGroupOffset), lightsEncodingOf(win, selButtonGroupOffset)
+		if lightsEncodingOf(win, selSetTitlebarHeight) == "v@:d" && lightsEncodingOf(win, selTitlebarHeight) == "d@:" &&
+			len(set) > 3 && set[:3] == "v@:" && pair(set[3:]) &&
+			len(get) > 2 && get[len(get)-2:] == "@:" && pair(get[:len(get)-2]) {
+			lightsABI = 1
+		}
+	}
+	return lightsABI == 1
 }
 
 // SystemButtons is where the OS draws the window buttons (close, minimise,
@@ -171,11 +244,12 @@ func (w *Window) placeButtons() {
 func (w *Window) setUpLights() {
 	lightsOnce.Do(lightsSetup)
 	w.tb.setUp = true
-	w.tb.native = !lightsForceDefault &&
+	w.tb.native = !lightsForceDefault && !w.publicOnly &&
 		objc.SendBool1(w.win, selRespondsTo, uintptr(selSetTitlebarHeight)) &&
 		objc.SendBool1(w.win, selRespondsTo, uintptr(selTitlebarHeight)) &&
 		objc.SendBool1(w.win, selRespondsTo, uintptr(selSetButtonGroupOffset)) &&
-		objc.SendBool1(w.win, selRespondsTo, uintptr(selButtonGroupOffset))
+		objc.SendBool1(w.win, selRespondsTo, uintptr(selButtonGroupOffset)) &&
+		lightsABIOK(w.win)
 	w.tb.observer = objc.Send(objc.Send(lightsObserverClass, selAlloc), selInit)
 }
 
@@ -209,11 +283,11 @@ func (w *Window) placeNative(btn [3]objc.ID) {
 			w.tb.calibrated = true
 			break
 		}
-		if try == 2 { // AppKit does not put them where asked: leave its default
+		if try == 2 { // AppKit does not put them where asked: back to its default
 			w.tb.native = false
 			w.tb.offset = [2]float64{}
-			w.setGroupOffset()
-			objc.F.Reset().Arg(uintptr(w.win)).Arg(uintptr(selSetTitlebarHeight)).ArgF64(-1).Call(objc.MsgSend)
+			objc.F.Reset().Arg(uintptr(w.win)).Arg(uintptr(selSetButtonGroupOffset)).ArgPoint(0, 0).Call(objc.MsgSend)
+			objc.F.Reset().Arg(uintptr(w.win)).Arg(uintptr(selSetTitlebarHeight)).ArgF64(-1).Call(objc.MsgSend) // AppKit's "no custom height"
 			objc.Send(frame, selLayoutSubtree)
 			break
 		}
@@ -221,7 +295,11 @@ func (w *Window) placeNative(btn [3]objc.ID) {
 		w.tb.offset[1] -= dy
 		w.setGroupOffset()
 	}
-	w.refreshButtonTracking()
+	if !w.tb.native {
+		objc.Send(frame, selUpdateTrackingAreas)
+		return
+	}
+	w.updateButtonTracking()
 }
 
 // refreshButtonTracking has the theme frame and the titlebar view compute
@@ -231,6 +309,10 @@ func (w *Window) refreshButtonTracking() {
 	if w.titlebar == 0 || !w.tb.native || w.tb.closed || w.fullScreen || objc.Send(w.win, selStyleMask)&(1<<14) != 0 {
 		return
 	}
+	w.updateButtonTracking()
+}
+
+func (w *Window) updateButtonTracking() {
 	if b := objc.Send1(w.win, selStdButton, 0); b != 0 {
 		tv := objc.Send(b, selSuperview)
 		objc.Send(objc.Send(objc.Send(tv, selSuperview), selSuperview), selUpdateTrackingAreas)
@@ -239,7 +321,12 @@ func (w *Window) refreshButtonTracking() {
 }
 
 func (w *Window) setGroupOffset() {
-	objc.F.Reset().Arg(uintptr(w.win)).Arg(uintptr(selSetButtonGroupOffset)).ArgPoint(w.tb.offset[0], w.tb.offset[1]).Call(objc.MsgSend)
+	x, y := w.tb.offset[0], w.tb.offset[1]
+	if lightsOffsetSkew != [2]float64{} {
+		lightsOffsetCalls++
+		x, y = x+lightsOffsetSkew[0]*lightsOffsetCalls, y+lightsOffsetSkew[1]*lightsOffsetCalls
+	}
+	objc.F.Reset().Arg(uintptr(w.win)).Arg(uintptr(selSetButtonGroupOffset)).ArgPoint(x, y).Call(objc.MsgSend)
 }
 
 // watchTitlebar observes frame changes of the container, the titlebar view

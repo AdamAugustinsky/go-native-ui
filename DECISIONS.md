@@ -960,3 +960,14 @@ The whole UI is rewritten in Go on the framework with the Rex design system, mac
   - no plaintext chat-list snapshot: names and previews never leave SQLCipher for startup.
 
 **Reasoning:** a separate identity means this app can never open the real ZapFast's archive while it runs; the budgets are the framework's, applied to a real app.
+
+## D52. Window buttons placed through AppKit's private titlebar metrics, with a public-only opt-out (phase 6, 2026-10-19)
+
+**Decision.**
+- Under a custom titlebar (`platform.Options.Titlebar`), AppKit places the window buttons itself: `NSWindow`'s private `setTitlebarHeight:` and `setStandardWindowButtonGroupOffset:`, the offset calibrated against where the close button lands (`platform/lights_darwin.go`). A frame-change observer sets them again when AppKit drops them (full screen, a failed full-screen entry).
+- They are used only when all four selectors respond, their type encodings are the expected double and two-double `NSSize` forms (checked once per process), and calibration lands; otherwise the buttons stay at AppKit's default place, and a failed calibration puts AppKit's height and offset back.
+- **Opt-out:** `platform.Options.PublicAPIOnly` / `app.Config.PublicAPIOnly` turns every private AppKit selector off (these two, and the glass's `_cornerRadius`), for a Mac App Store build (guideline 2.5.1). The trade-off: the buttons stay at AppKit's default place (centre about (16, 16) on macOS 27), not at `TrafficLights`, and the band's own content must leave them room; `Window.SystemButtons` reports where they are, so ui keeps content clear of them. The glass keeps square corners under the window's mask.
+
+**Reasoning:** moving the buttons from outside (Electron's `trafficLightPosition`) lasts only until AppKit's next titlebar layout (a title, key or appearance change, full screen), and the group's hover area follows AppKit's model, not the moved frames; holding it from outside needs the private `_mouseInGroup:` anyway (Electron, Godot, iTerm2). With AppKit's own metrics every layout pass places the buttons, their hover areas and the zoom button's tiling menu, so nothing undoes them. The private selectors exist on macOS 15 and 27, the systems tested.
+
+**Alternatives:** an `NSToolbar` (fixed centres only: (26, 26) unified, (19, 20) unifiedCompact, and its title area takes the presses meant for tabs drawn in the band); a titlebar accessory (the buttons stay at (16, 16)); re-applied frames (hover areas stay at AppKit's default place).
