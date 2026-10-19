@@ -228,7 +228,7 @@ func (osSystem) trash(p string) error {
 	r, _, _ := syscall.SyscallN(pFileOperation, uintptr(unsafe.Pointer(op)))
 	runtime.KeepAlive(from)
 	switch {
-	case r != 0:
+	case uint32(r) != 0: // an int result: only the low 32 bits are defined
 		return &os.PathError{Op: "trash", Path: p, Err: fmt.Errorf("the shell refused (error %#x)", uint32(r))}
 	case op.AnyOperationsAborted != 0:
 		return &os.PathError{Op: "trash", Path: p, Err: errors.New("canceled")}

@@ -40,7 +40,7 @@ func Screens() []ScreenInfo {
 		scr.dpi = win32.Proc(win32.LoadSystem("shcore.dll"), "GetDpiForMonitor") // 0 before Windows 8.1
 		scr.cb = syscall.NewCallback(func(mon, hdc, rc, data uintptr) uintptr {
 			mi := monitorInfoEx{Size: uint32(unsafe.Sizeof(monitorInfoEx{}))}
-			if r, _, _ := syscall.SyscallN(scr.info, mon, uintptr(unsafe.Pointer(&mi))); r == 0 {
+			if r, _, _ := syscall.SyscallN(scr.info, mon, uintptr(unsafe.Pointer(&mi))); uint32(r) == 0 {
 				return 1
 			}
 			s := ScreenInfo{

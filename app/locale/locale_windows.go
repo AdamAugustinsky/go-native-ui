@@ -45,10 +45,10 @@ func read() Info {
 		var size uint32
 		// First call: how many UTF-16 units the multi-string needs.
 		r, _, _ := syscall.SyscallN(api.preferred, muiLanguageName, uintptr(unsafe.Pointer(&n)), 0, uintptr(unsafe.Pointer(&size)))
-		if r != 0 && size > 0 && size < 1<<16 {
+		if uint32(r) != 0 && size > 0 && size < 1<<16 {
 			buf := make([]uint16, size)
 			r, _, _ = syscall.SyscallN(api.preferred, muiLanguageName, uintptr(unsafe.Pointer(&n)), uintptr(unsafe.Pointer(&buf[0])), uintptr(unsafe.Pointer(&size)))
-			if r != 0 {
+			if uint32(r) != 0 {
 				info.Languages = splitMulti(buf[:min(int(size), len(buf))])
 			}
 		}
@@ -87,7 +87,7 @@ func localeString(lctype uintptr) string {
 	}
 	var buf [80]uint16
 	r, _, _ := syscall.SyscallN(api.localeInfoEx, 0, lctype, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
-	if r == 0 {
+	if uint32(r) == 0 {
 		return ""
 	}
 	return syscall.UTF16ToString(buf[:])
