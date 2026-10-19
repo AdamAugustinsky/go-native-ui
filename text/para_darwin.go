@@ -68,20 +68,21 @@ func (s *System) ParaGeneration() uint32 { return s.paras.gen }
 // ParaStats returns the paragraph cache's counters.
 func (s *System) ParaStats() ParaStats { return s.paras.stats() }
 
-// ReserveParas pre-sizes the paragraph cache for up to paras layouts, glyphs
-// glyphs and textBytes bytes of text (clamped to MaxCachedParas,
-// MaxCachedParaGlyphs and MaxCachedParaText), and the layout's scratch for
-// one paragraph of up to min(textBytes, 64 KiB) bytes, so that laying out new
-// paragraphs until the cache holds that much, and every eviction after that,
-// allocates no Go memory. Call it once at setup.
-func (s *System) ReserveParas(paras, glyphs, textBytes int) {
-	s.paras.reserve(paras, glyphs, textBytes)
-	n := min(textBytes, maxScratch)
-	s.pl.b.reserve(n, n/8+8)
-	if cap(s.pl.u16b) < n+1 {
-		s.pl.u16b = make([]uint32, 0, n+1)
-	}
-	s.reserveScratch(n)
+// ReserveParas sets the budget of the paragraph cache to b, clamped to the
+// MaxCachedPara constants (a field left 0 of Lines, Spans and Fonts takes
+// Glyphs/8 lines, Glyphs/4 spans and 8 fonts per layout), and sizes its
+// storage and the layout's scratch: the cache then evicts rather than grow
+// beyond the budget, and laying out paragraphs of up to min(b.Text, 16 KiB)
+// bytes allocates no Go memory, misses and evictions included. A paragraph
+// bigger than the whole budget is kept outside the cache, alone, in storage
+// that grows to fit it. Call it once at setup.
+func (s *System) ReserveParas(b ParaBudget) {
+	s.paras.reserve(b)
+	sc := scratchFor(b)
+	s.pl.b.reserve(sc.glyphs, sc.lines)
+	grow(&s.pl.u16b, sc.bytes+1)
+	grow(&s.pl.runs, sc.runs)
+	s.reserveScratch(sc.bytes)
 }
 
 // fontOK returns f, or Fonts[0] when f is not a font of this System.
@@ -270,7 +271,7 @@ func (s *System) ellipsisLine(p *Para, ts uintptr, u0 int, wpt float64, scale fl
 	fit := func(room float32) int {
 		cnt := 0
 		if room > 0 {
-			cnt = int(s.fr.Reset().Arg(ts).Arg(uintptr(u0)).ArgF64(float64(room/scale)).Call(sy.ctTypesetterSuggestClusterBreak).R0())
+			cnt = int(s.fr.Reset().Arg(ts).Arg(uintptr(u0)).ArgF64(float64(room / scale)).Call(sy.ctTypesetterSuggestClusterBreak).R0())
 		}
 		return min(int(pl.u16b[min(u0+max(cnt, 0), len(pl.u16b)-1)]), limit)
 	}

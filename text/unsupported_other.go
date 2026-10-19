@@ -66,4 +66,4 @@ func (s *System) ParaGeneration() uint32 { return 0 }
 func (s *System) ParaStats() ParaStats { return ParaStats{} }
 
 // ReserveParas does nothing on this OS.
-func (s *System) ReserveParas(paras, glyphs, textBytes int) {}
+func (s *System) ReserveParas(b ParaBudget) {}

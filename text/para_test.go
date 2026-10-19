@@ -489,7 +489,7 @@ func TestParaCacheHitsAndInvalidation(t *testing.T) {
 
 func TestParaCacheEvictionKeepsWhatIsInUse(t *testing.T) {
 	l := NewBasicLayouter(new(gridShaper))
-	l.cache.maxParas = 8
+	l.cache.lim.Paras = 8
 	para := func(i int) Para {
 		return Para{Text: []byte(fmt.Sprintf("paragraph number %d wraps", i)), Fonts: []FontKey{0}, Width: 120}
 	}
@@ -516,7 +516,7 @@ func TestParaCacheEvictionKeepsWhatIsInUse(t *testing.T) {
 func TestParaLayoutAllocatesNothingWhenReserved(t *testing.T) {
 	sh := new(gridShaper)
 	l := NewBasicLayouter(sh)
-	l.ReserveParas(4096, 1<<16, 1<<16)
+	l.ReserveParas(ParaBudget{Paras: 4096, Glyphs: 1 << 16, Text: 1 << 16})
 	txt := make([]byte, 0, 64)
 	p := &Para{Fonts: []FontKey{0}, Width: 90}
 	n := 0
@@ -526,6 +526,128 @@ func TestParaLayoutAllocatesNothingWhenReserved(t *testing.T) {
 				n++
 				p.Text = append(strconv.AppendInt(append(txt[:0], "message "...), int64(n%300), 10), " with some words"...)
 				l.Layout(p)
+			}
+		}
+	})
+}
+
+// The cache never holds more than its budget, of any kind: evicting what it
+// must, dropping everything when the survivors leave no room, and keeping a
+// layout bigger than the whole budget outside it.
+func TestParaCacheStaysWithinItsBudget(t *testing.T) {
+	sh := new(gridShaper)
+	l := NewBasicLayouter(sh)
+	l.ReserveParas(ParaBudget{Paras: 8, Glyphs: 150, Text: 200, Lines: 20, Spans: 10, Fonts: 16})
+	c := l.cache
+	check := func(what string) {
+		t.Helper()
+		s := &c.slabs
+		if len(c.ents) > 8 || len(s.text) > 200 || len(s.glyphs) > 150 || len(s.lines) > 20 || len(s.spans) > 10 || len(s.fonts) > 16 {
+			t.Fatalf("%s: the cache holds %d layouts, %d bytes, %d glyphs, %d lines, %d spans, %d fonts",
+				what, len(c.ents), len(s.text), len(s.glyphs), len(s.lines), len(s.spans), len(s.fonts))
+		}
+		for _, sl := range []int{cap(s.text), cap(s.glyphs), cap(s.xs), cap(s.lines), cap(s.spans), cap(s.fonts), cap(c.ents)} {
+			if sl > 200 {
+				t.Fatalf("%s: a slab grew to %d", what, sl)
+			}
+		}
+	}
+	text := func(n int) []byte {
+		b := make([]byte, n)
+		for i := range b {
+			b[i] = 'a' + byte(i%7)
+			if i%9 == 8 {
+				b[i] = ' '
+			}
+		}
+		return b
+	}
+	fonts := make([]FontKey, 12)
+	var spans []Span
+	for i := 0; i < 6; i++ {
+		spans = append(spans, Span{Off: uint32(i * 3), Len: 2, Style: uint16(i % 2)})
+	}
+	big := Para{Text: text(150), Fonts: []FontKey{0}, Width: 1000}
+	// Layouts more than half the budget each, all in use: every insert
+	// must make room.
+	for i := 0; i < 30; i++ {
+		p := Para{Text: text(60 + i%5), Fonts: fonts[:1+i%12], Spans: spans[:i%7], Width: 100}
+		l.Layout(&p)
+		l.Layout(&big)
+		check(fmt.Sprintf("round %d", i))
+	}
+	// Bigger than the whole budget, by each measure: laid out right, kept
+	// outside the cache, found again there.
+	many := make([]Span, 11)
+	for i := range many {
+		many[i] = Span{Off: uint32(i), Len: 1}
+	}
+	for name, p := range map[string]Para{
+		"text":   {Text: text(300), Fonts: []FontKey{0}, Width: 1000},
+		"glyphs": {Text: text(160), Fonts: []FontKey{0}, Width: 1000},
+		"lines":  {Text: text(100), Fonts: []FontKey{0}, Width: 30},
+		"spans":  {Text: text(20), Fonts: []FontKey{0}, Spans: many},
+		"fonts":  {Text: text(20), Fonts: make([]FontKey, 17)},
+	} {
+		gen := l.ParaGeneration()
+		r := l.Layout(&p)
+		v := l.Paragraph(r)
+		check(name)
+		if r != overRef || l.ParaGeneration() == gen || len(v.Lines) == 0 || string(v.Text) != string(p.Text) {
+			t.Fatalf("%s: ref %v, %d lines, generation %d -> %d", name, r, len(v.Lines), gen, l.ParaGeneration())
+		}
+		m := l.ParaStats().Misses
+		if r2 := l.Layout(&p); r2 != r || l.ParaStats().Misses != m || l.ParaGeneration() == gen {
+			t.Fatalf("%s: laid out again", name)
+		}
+		if name == "lines" && len(v.Lines) <= 20 {
+			t.Fatalf("lines: %d lines", len(v.Lines))
+		}
+	}
+	// What fits is cached as before.
+	p := Para{Text: text(30), Fonts: []FontKey{0}, Width: 100}
+	r := l.Layout(&p)
+	if r == overRef || r == 0 || l.Layout(&p) != r {
+		t.Fatalf("a small layout: ref %v", r)
+	}
+}
+
+// With ReserveParas a fresh layouter lays out new paragraphs, evictions
+// included, without allocating, for any paragraph within the budget: many
+// lines, many spans and fonts, ellipses, words split between characters.
+func TestParaLayoutReservedMissesAllocateNothing(t *testing.T) {
+	budget := ParaBudget{Paras: 64, Glyphs: 1 << 15, Text: 1 << 15, Lines: 1 << 13, Spans: 1 << 12, Fonts: 1 << 10}
+	var paras []Para
+	nl := make([]byte, 0, 6000)
+	for i := 0; i < 2500; i++ {
+		nl = append(nl, "a\n\n"[:1+i%3]...)
+		if i%2 == 0 {
+			nl = append(nl, '\n')
+		}
+	}
+	paras = append(paras, Para{Text: nl, Fonts: []FontKey{0}, Width: 200})
+	fonts := make([]FontKey, 32)
+	for i := range fonts {
+		fonts[i] = FontKey(i % 2)
+	}
+	var styled []byte
+	var spans []Span
+	for i := 0; i < 300; i++ {
+		spans = append(spans, Span{Off: uint32(len(styled)), Len: 4, Style: uint16(i % 32), Tag: uint32(i)})
+		styled = append(styled, "word "...)
+	}
+	paras = append(paras, Para{Text: styled, Spans: spans, Fonts: fonts, Width: 120})
+	paras = append(paras, Para{Text: styled, Spans: spans, Fonts: fonts, Width: 120, MaxLines: 3, Ellipsis: true})
+	paras = append(paras, Para{Text: []byte("averyveryverylongwordthatmustbesplitbetweencharacters and שלום עולם"), Fonts: []FontKey{0, 1}, Width: 50})
+	for i := 0; i < 200; i++ { // enough distinct layouts to evict, again and again
+		paras = append(paras, Para{Text: styled[:40+i], Spans: spans[:i%9], Fonts: fonts[:2+i%30], Width: float32(60 + i)})
+	}
+	allocFree(t, "fresh reserved layouts", func() func() {
+		l := NewBasicLayouter(new(gridShaper))
+		l.ReserveParas(budget)
+		return func() {
+			for i := range paras {
+				l.Layout(&paras[i])
 			}
 		}
 	})

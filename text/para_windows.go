@@ -28,8 +28,6 @@ func (s *System) ParaGeneration() uint32 { return s.layouter().ParaGeneration() 
 // ParaStats returns the paragraph cache's counters.
 func (s *System) ParaStats() ParaStats { return s.layouter().ParaStats() }
 
-// ReserveParas pre-sizes the paragraph cache and the layout scratch; see the
-// macOS System.ReserveParas.
-func (s *System) ReserveParas(paras, glyphs, textBytes int) {
-	s.layouter().ReserveParas(paras, glyphs, textBytes)
-}
+// ReserveParas sets the budget of the paragraph cache and sizes it and the
+// layout scratch; see the macOS System.ReserveParas.
+func (s *System) ReserveParas(b ParaBudget) { s.layouter().ReserveParas(b) }

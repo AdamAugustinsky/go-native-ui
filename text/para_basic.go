@@ -86,21 +86,25 @@ func (l *BasicLayouter) ParaGeneration() uint32 { return l.cache.gen }
 // ParaStats returns the cache's counters.
 func (l *BasicLayouter) ParaStats() ParaStats { return l.cache.stats() }
 
-// ReserveParas pre-sizes the cache and the layout's scratch; see
-// System.ReserveParas.
-func (l *BasicLayouter) ReserveParas(paras, glyphs, textBytes int) {
-	l.cache.reserve(paras, glyphs, textBytes)
-	n := min(textBytes, maxScratch)
-	l.b.reserve(n, n/8+8)
-	if cap(l.brk) < n {
-		l.brk = make([]uint32, 0, n)
-		l.ends = make([]int32, 0, n)
-		l.lb.runes = make([]rune, 0, n)
-	}
+// ReserveParas sets the cache's budget and sizes it and the layout's scratch;
+// see System.ReserveParas. The shaper's own scratch and run cache are its
+// own to reserve (System.ReserveRuns).
+func (l *BasicLayouter) ReserveParas(b ParaBudget) {
+	l.cache.reserve(b)
+	sc := scratchFor(b)
+	l.b.reserve(sc.glyphs, sc.lines)
+	grow(&l.brk, sc.bytes+1)
+	grow(&l.ends, sc.bytes+1)
+	l.lb.reserve(sc.bytes)
+	grow(&l.runs, sc.runs)
+	grow(&l.meas, sc.runs)
+	grow(&l.mg, sc.glyphs)
+	grow(&l.mx, sc.glyphs)
+	grow(&l.mc, sc.glyphs)
 }
 
-// maxScratch caps the scratch a Reserve call sizes for one string or
-// paragraph, in bytes; longer ones grow it (once).
+// maxScratch caps the scratch a Reserve call sizes for one string, in bytes;
+// longer ones grow it (once).
 const maxScratch = 64 << 10
 
 // shapeRuns shapes every style run whole and copies each one's glyphs,

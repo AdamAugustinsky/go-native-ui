@@ -573,9 +573,59 @@ func TestParagraphCaretRoundTripCoreText(t *testing.T) {
 	}
 }
 
+// A fresh System reserved with ReserveRuns lays out new paragraphs through
+// CoreText without allocating, its first layouts included: many lines, many
+// spans and fonts, ellipses, bidirectional text, evictions. (Only the faces
+// of the fallback fonts are found first, by shaping the same text: a face is
+// made once per font.)
+func TestParagraphReservedMissesCoreText(t *testing.T) {
+	var nl []byte
+	for i := 0; i < 5000; i++ { // 5000 lines
+		if i%5 == 0 {
+			nl = append(nl, "שלום ab"[:2+i%7]...)
+		}
+		nl = append(nl, '\n')
+	}
+	var styled []byte
+	var spans []Span
+	words := []string{"hello ", "שלום ", "مرحبا ", "👍🏽 ", "日本語 ", "link.com "}
+	for i := 0; i < 300; i++ {
+		w := words[i%len(words)]
+		spans = append(spans, Span{Off: uint32(len(styled)), Len: uint32(len(w) - 1), Style: uint16(i % 32), Tag: uint32(i)})
+		styled = append(styled, w...)
+	}
+	allocFree(t, "fresh reserved CoreText layouts", func() func() {
+		s := newSys(t)
+		s.ReserveRuns(1024, 1<<16, 1<<16)
+		fonts := make([]FontKey, 32)
+		for i := range fonts {
+			fonts[i] = s.Font(FontDesc{SizePt: float32(11 + i%3*2), Weight: 400 + 300*(i%2), Scale: 2})
+		}
+		paras := []Para{
+			{Text: nl, Fonts: fonts[:1], Width: 300},
+			{Text: styled, Spans: spans, Fonts: fonts, Width: 240},
+			{Text: styled, Spans: spans, Fonts: fonts, Width: 240, MaxLines: 4, Ellipsis: true},
+			{Text: nl, Fonts: fonts[:3], Width: 300, MaxLines: 7, Ellipsis: true},
+		}
+		for i := 0; i < 1100; i++ { // past the 1024 layouts of the budget
+			paras = append(paras, Para{Text: styled[:30+i%400], Spans: spans[:i%7], Fonts: fonts[:2+i%30], Width: float32(100 + i)})
+		}
+		for _, f := range fonts {
+			s.Shape(f, styled)
+			s.Shape(f, nl)
+			s.Shape(f, []byte(ellipsis))
+		}
+		return func() {
+			for i := range paras {
+				s.Layout(&paras[i])
+			}
+		}
+	})
+}
+
 func TestParagraphLayoutAllocationsCoreText(t *testing.T) {
 	s := newSys(t)
-	s.ReserveParas(4096, 1<<18, 1<<18)
+	s.ReserveParas(ParaBudget{Paras: 4096, Glyphs: 1 << 18, Text: 1 << 18})
 	f := s.Font(FontDesc{SizePt: 13, Scale: 2})
 	b := s.Font(FontDesc{SizePt: 13, Weight: 700, Scale: 2})
 	words := []string{"hello", "שלום", "مرحبا", "👍🏽", "日本語", "world", "link.com", "and"}
