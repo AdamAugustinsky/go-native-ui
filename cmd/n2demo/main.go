@@ -3,6 +3,12 @@
 //
 //	n2demo              open the window; the buttons start the dialogs, and the last result is shown
 //	n2demo -do alert    start a dialog as soon as the window is up: alert, destructive, suppress, open or save
+//	n2demo -start dir   where the panels open
+//	n2demo -mode dark   light, dark or system (the default): the window and its sheets follow it
+//	n2demo -hover Open… post mouse-moved events over that button into the demo's own window (the system pointer
+//	                    stays where it is), so the system shows the button's native tooltip; macOS
+//	n2demo -quit-after 30s
+//	                    exit by itself after this long, for capture runs
 //	n2demo -shot dir    macOS: with -do, draw the sheet into dir/<name>.png from inside the process (light only;
 //	                    no screen recording needed, so the panels' hosted content is missing), then exit
 //
@@ -16,9 +22,11 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"gonativeui/app"
 	"gonativeui/platform"
+	"gonativeui/theme"
 	"gonativeui/theme/rex"
 	"gonativeui/ui"
 	"gonativeui/widget"
@@ -34,15 +42,32 @@ type demo struct {
 	ticket   platform.DialogTicket
 	last     string
 	shotDone bool
+	mode     theme.Preference
+	hover    string     // the label of the button to hover
+	hoverBox [4]float32 // its rectangle in pixels, as of the last frame
+	quitAt   int64
+	quitIn   time.Duration
+	hovered  int
+	startDir string
 	shotAt   int64
 }
 
 func main() {
 	do := flag.String("do", "", "start a dialog once the window is up: alert, destructive, suppress, open or save")
 	shot := flag.String("shot", "", "with -do (macOS): draw the sheet into this directory (light) and exit")
+	mode := flag.String("mode", "system", "system, light or dark")
+	hover := flag.String("hover", "", "the label of a button to hover with posted mouse events (macOS), to show its tooltip")
+	start := flag.String("start", "", "the directory the open and save panels start in (default: the system's choice)")
+	quit := flag.Duration("quit-after", 0, "exit after this long (0: never)")
 	flag.Parse()
-	d := &demo{doName: *do, shotDir: *shot}
-	cfg := app.Config{Title: "Native dialogs", Width: 560, Height: 340}
+	d := &demo{doName: *do, shotDir: *shot, hover: *hover, quitIn: *quit, startDir: *start}
+	switch *mode {
+	case "light":
+		d.mode = theme.ForceLight
+	case "dark":
+		d.mode = theme.ForceDark
+	}
+	cfg := app.Config{Title: "Native dialogs", Width: 1000, Height: 600}
 	if err := app.Run(cfg, d); err != nil {
 		fmt.Fprintln(os.Stderr, "n2demo:", err)
 		os.Exit(1)
@@ -53,6 +78,7 @@ func main() {
 func (d *demo) Init(a *app.App) error {
 	d.a = a
 	d.k = widget.NewKit(a.UI, a.Text, rex.Theme())
+	d.k.SetPreference(d.mode)
 	return nil
 }
 
@@ -73,9 +99,9 @@ func (d *demo) start(name string) {
 			Info: "The download will stop.", Buttons: []string{"Quit", "Cancel"}, Suppression: "Do not ask again"})
 	case "open":
 		d.ticket, err = d.a.OpenPanel(platform.OpenSpec{Files: true, Dirs: true, Multiple: true, Types: []string{"public.image", ".md"},
-			Message: "Choose images or Markdown files"})
+			Message: "Choose images or Markdown files", Start: d.startDir})
 	case "save":
-		d.ticket, err = d.a.SavePanel(platform.SaveSpec{Name: "Untitled.txt", Types: []string{"public.plain-text"}, Prompt: "Save"})
+		d.ticket, err = d.a.SavePanel(platform.SaveSpec{Name: "Untitled.txt", Types: []string{"public.plain-text"}, Prompt: "Save", Start: d.startDir})
 	}
 	switch {
 	case errors.Is(err, errors.ErrUnsupported):
@@ -113,6 +139,7 @@ func (d *demo) Build(c *ui.Context) {
 		d.start(d.doName)
 	}
 	d.shoot(c)
+	d.pointAt(c)
 	k.Begin(c)
 	k.NextPad(10)
 	k.BeginWindow()
@@ -126,6 +153,7 @@ func (d *demo) Build(c *ui.Context) {
 		{"Quit…", "suppress", "An alert with a suppression checkbox"},
 	} {
 		s := k.Button(b.label)
+		d.track(b.label, s.ID)
 		k.Tooltip(s.ID, b.tip)
 		if s.Clicked {
 			d.start(b.name)
@@ -134,8 +162,10 @@ func (d *demo) Build(c *ui.Context) {
 	k.EndRow()
 	k.Row("panels")
 	open := k.Button("Open…")
+	d.track("Open…", open.ID)
 	k.Tooltip(open.ID, "Choose files or folders")
 	save := k.Button("Save…")
+	d.track("Save…", save.ID)
 	k.Tooltip(save.ID, "Choose where to save")
 	if open.Clicked {
 		d.start("open")
@@ -148,4 +178,39 @@ func (d *demo) Build(c *ui.Context) {
 	k.EndCard()
 	k.EndWindow()
 	k.End()
+}
+
+// track remembers where the hovered button is.
+func (d *demo) track(label string, id ui.ID) {
+	if label == d.hover {
+		d.hoverBox = d.k.Context().Rect(id)
+	}
+}
+
+// pointAt quits on time and, with -hover, posts mouse-moved events over the
+// button into the window's own queue (a small jiggle: the system's tooltip
+// timer starts on a move), every 100 ms, so the tooltip shows and stays.
+func (d *demo) pointAt(c *ui.Context) {
+	now := c.Input().Time
+	if d.quitIn > 0 {
+		if d.quitAt == 0 {
+			d.quitAt = now + int64(d.quitIn)
+		}
+		if now >= d.quitAt {
+			d.a.Quit()
+			return
+		}
+		c.WakeIn(100e6)
+	}
+	if d.hover == "" || d.hoverBox == [4]float32{} {
+		return
+	}
+	if d.hovered++; d.hovered == 1 { // when the pointer arrived, for timing the system's tooltip delay
+		_ = os.WriteFile(os.TempDir()+"/n2demo-hover.txt", []byte(time.Now().Format(time.RFC3339Nano)+"\n"), 0o644)
+	}
+	_, _, scale := d.a.Size()
+	x := float64(d.hoverBox[0]+d.hoverBox[2]) / 2 / float64(scale)
+	y := float64(d.hoverBox[1]+d.hoverBox[3]) / 2 / float64(scale)
+	d.postMouse(x+float64(d.hovered%2), y)
+	c.WakeIn(100e6)
 }

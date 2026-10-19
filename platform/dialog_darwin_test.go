@@ -148,6 +148,25 @@ func TestAlertButtons(t *testing.T) {
 			}
 			a := dialogs[0].obj
 			if want == 0 {
+				// What AppKit holds for the sheet: the texts, the style and the buttons in order.
+				str := func(o objc.ID, sel string) string { return string(objc.AppendUTF8(nil, objc.Send(o, objc.Sel(sel)))) }
+				if got := str(a, "messageText"); got != "Delete the file?" {
+					r.failf("message text %q", got)
+				}
+				if got := str(a, "informativeText"); got != "This cannot be undone." {
+					r.failf("informative text %q", got)
+				}
+				if got := objc.Send(a, objc.Sel("alertStyle")); got != 0 { // NSAlertStyleWarning
+					r.failf("alert style %d, want warning (0)", got)
+				}
+				if n := objc.Send(objc.Send(a, objc.Sel("buttons")), selURLCount); n != 3 {
+					r.failf("%d buttons, want 3", n)
+				}
+				for i, title := range []string{"Delete", "Keep", "Cancel"} {
+					if got := str(r.button(a, i), "title"); got != title {
+						r.failf("button %d titled %q, want %q", i, got, title)
+					}
+				}
 				if got := objc.Send(objc.Send(a, selWindow), objc.Sel("initialFirstResponder")); got != r.button(a, 0) {
 					r.failf("the initial first responder is not the default button")
 				}
