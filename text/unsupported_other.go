@@ -52,3 +52,18 @@ func (s *System) ReserveRuns(runs, glyphs, textBytes int) {}
 func (s *System) Dirty(int) (x, y, w, h int, pixels []byte, stride int, ok bool) {
 	return
 }
+
+// Layout returns the invalid ParaRef on this OS.
+func (s *System) Layout(*Para) ParaRef { return 0 }
+
+// Paragraph returns an empty ParaView on this OS.
+func (s *System) Paragraph(ParaRef) ParaView { return ParaView{} }
+
+// ParaGeneration is always 0 on this OS.
+func (s *System) ParaGeneration() uint32 { return 0 }
+
+// ParaStats returns zero counters on this OS.
+func (s *System) ParaStats() ParaStats { return ParaStats{} }
+
+// ReserveParas does nothing on this OS.
+func (s *System) ReserveParas(paras, glyphs, textBytes int) {}

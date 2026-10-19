@@ -24,6 +24,10 @@ var sy struct {
 	cfStringCreateWithBytes, cfStringGetCString uintptr
 	cfDictionaryCreate, cfDictionaryGetValue    uintptr
 	cfAttributedStringCreate                    uintptr
+	cfAttrCreateMutable, cfAttrReplaceString    uintptr
+	cfAttrSetAttributes, cfAttrSetAttribute     uintptr
+	cfAttrGetLength                             uintptr
+	cfAttrBeginEditing, cfAttrEndEditing        uintptr
 	cfArrayGetCount, cfArrayGetValueAtIndex     uintptr
 	cfNumberCreate                              uintptr
 	cfNumberGetValue, cfNumberGetTypeID         uintptr
@@ -45,6 +49,12 @@ var sy struct {
 	ctRunGetGlyphCount, ctRunGetGlyphs                   uintptr
 	ctRunGetPositions, ctRunGetAttributes                uintptr
 	ctRunGetStringIndices, ctRunGetStatus                uintptr
+	ctTypesetterCreate, ctTypesetterSuggestLineBreak     uintptr
+	ctTypesetterSuggestClusterBreak, ctTypesetterLine    uintptr
+	ctLineGetTrailingWhitespaceWidth                     uintptr
+	ctParagraphStyleCreate                               uintptr
+	ctFontGetUnderlinePosition, ctFontGetUnderlineThick  uintptr
+	ctFontCreateCopyWithSymbolicTraits                   uintptr
 	// CoreGraphics
 	cgColorSpaceCreateDeviceGray, cgColorSpaceCreateDeviceRGB uintptr
 	cgBitmapContextCreate                                     uintptr
@@ -55,6 +65,7 @@ var sy struct {
 	// constant CFStringRefs (values of the exported globals)
 	kFontAttribute, kTraitsAttribute, kWeightTrait, kFamilyAttribute uintptr
 	kDesignTrait, kDesignMonospaced                                  uintptr
+	kParagraphStyle                                                  uintptr
 }
 
 var ctxFlags = [...]struct {
@@ -85,8 +96,9 @@ const (
 	numSInt64      = 4 // kCFNumberSInt64Type
 	uiFontSystem   = 2 // kCTFontUIFontSystem
 	traitColorGlph = 1 << 13
-	bitmapAlphaPre = 1 // kCGImageAlphaPremultipliedLast
-	bitmapAlpha    = 7 // kCGImageAlphaOnly
+	traitItalic    = 1 << 0 // kCTFontItalicTrait
+	bitmapAlphaPre = 1      // kCGImageAlphaPremultipliedLast
+	bitmapAlpha    = 7      // kCGImageAlphaOnly
 )
 
 func loadSyms() error {
@@ -123,6 +135,10 @@ func loadSyms() error {
 		sy.cfStringCreateWithBytes, sy.cfStringGetCString = sym(cf, "CFStringCreateWithBytes"), sym(cf, "CFStringGetCString")
 		sy.cfDictionaryCreate, sy.cfDictionaryGetValue = sym(cf, "CFDictionaryCreate"), sym(cf, "CFDictionaryGetValue")
 		sy.cfAttributedStringCreate = sym(cf, "CFAttributedStringCreate")
+		sy.cfAttrCreateMutable, sy.cfAttrReplaceString = sym(cf, "CFAttributedStringCreateMutable"), sym(cf, "CFAttributedStringReplaceString")
+		sy.cfAttrSetAttributes, sy.cfAttrSetAttribute = sym(cf, "CFAttributedStringSetAttributes"), sym(cf, "CFAttributedStringSetAttribute")
+		sy.cfAttrGetLength = sym(cf, "CFAttributedStringGetLength")
+		sy.cfAttrBeginEditing, sy.cfAttrEndEditing = sym(cf, "CFAttributedStringBeginEditing"), sym(cf, "CFAttributedStringEndEditing")
 		sy.cfArrayGetCount, sy.cfArrayGetValueAtIndex = sym(cf, "CFArrayGetCount"), sym(cf, "CFArrayGetValueAtIndex")
 		sy.cfNumberCreate = sym(cf, "CFNumberCreate")
 		sy.cfNumberGetValue, sy.cfNumberGetTypeID = sym(cf, "CFNumberGetValue"), sym(cf, "CFNumberGetTypeID")
@@ -144,6 +160,14 @@ func loadSyms() error {
 		sy.ctRunGetGlyphCount, sy.ctRunGetGlyphs = sym(ct, "CTRunGetGlyphCount"), sym(ct, "CTRunGetGlyphs")
 		sy.ctRunGetPositions, sy.ctRunGetAttributes = sym(ct, "CTRunGetPositions"), sym(ct, "CTRunGetAttributes")
 		sy.ctRunGetStringIndices, sy.ctRunGetStatus = sym(ct, "CTRunGetStringIndices"), sym(ct, "CTRunGetStatus")
+		sy.ctTypesetterCreate = sym(ct, "CTTypesetterCreateWithAttributedString")
+		sy.ctTypesetterSuggestLineBreak = sym(ct, "CTTypesetterSuggestLineBreak")
+		sy.ctTypesetterSuggestClusterBreak = sym(ct, "CTTypesetterSuggestClusterBreak")
+		sy.ctTypesetterLine = sym(ct, "CTTypesetterCreateLine")
+		sy.ctLineGetTrailingWhitespaceWidth = sym(ct, "CTLineGetTrailingWhitespaceWidth")
+		sy.ctParagraphStyleCreate = sym(ct, "CTParagraphStyleCreate")
+		sy.ctFontGetUnderlinePosition, sy.ctFontGetUnderlineThick = sym(ct, "CTFontGetUnderlinePosition"), sym(ct, "CTFontGetUnderlineThickness")
+		sy.ctFontCreateCopyWithSymbolicTraits = sym(ct, "CTFontCreateCopyWithSymbolicTraits")
 
 		sy.cgColorSpaceCreateDeviceGray, sy.cgColorSpaceCreateDeviceRGB = sym(cg, "CGColorSpaceCreateDeviceGray"), sym(cg, "CGColorSpaceCreateDeviceRGB")
 		sy.cgBitmapContextCreate = sym(cg, "CGBitmapContextCreate")
@@ -156,6 +180,7 @@ func loadSyms() error {
 		sy.kFontAttribute, sy.kTraitsAttribute = global(ct, "kCTFontAttributeName"), global(ct, "kCTFontTraitsAttribute")
 		sy.kWeightTrait, sy.kFamilyAttribute = global(ct, "kCTFontWeightTrait"), global(ct, "kCTFontFamilyNameAttribute")
 		sy.kDesignTrait, sy.kDesignMonospaced = global(ct, "kCTFontUIFontDesignTrait"), global(ct, "kCTFontUIFontDesignMonospaced")
+		sy.kParagraphStyle = global(ct, "kCTParagraphStyleAttributeName")
 	})
 	return loadErr
 }
@@ -206,6 +231,8 @@ type System struct {
 
 	runs  *runCache
 	atlas *atlas
+	paras *paraCache
+	pl    ctPara // paragraph layout state (para_darwin.go)
 
 	gray, rgba bitmap
 
@@ -243,6 +270,7 @@ func New() (*System, error) {
 		faceByName: make(map[string]FaceID),
 		runs:       newRunCache(),
 		atlas:      newAtlas(),
+		paras:      newParaCache(),
 	}
 	s.tmp = make([]byte, 0, 256)
 	s.name = make([]byte, 0, 256)
@@ -364,6 +392,15 @@ func (s *System) Font(d FontDesc) FontKey {
 	if font == 0 {
 		font = s.fr.Reset().Arg32(uiFontSystem).ArgF64(pt).Arg(0).Call(sy.ctFontCreateUIFontForLanguage).R0()
 	}
+	if d.Italic && font != 0 {
+		// The italic of the same face (SF has true italics), as AppKit's
+		// NSFontManager converts a font to have the italic trait. A family
+		// without one keeps its upright face.
+		if it := s.fr.Reset().Arg(font).ArgF64(0).Arg(0).Arg32(traitItalic).Arg32(traitItalic).Call(sy.ctFontCreateCopyWithSymbolicTraits).R0(); it != 0 {
+			s.release(font)
+			font = it
+		}
+	}
 	fe := fontEnt{desc: d, font: font, attrs: s.dict1(sy.kFontAttribute, font)}
 	fe.face = s.faceFor(font, d.Scale)
 	sc := float64(d.Scale)
@@ -373,6 +410,9 @@ func (s *System) Font(d FontDesc) FontKey {
 		LineGap:   float32(s.f64(sy.ctFontGetLeading, font) * sc),
 		CapHeight: float32(s.f64(sy.ctFontGetCapHeight, font) * sc),
 		XHeight:   float32(s.f64(sy.ctFontGetXHeight, font) * sc),
+
+		UnderlinePos:       float32(-s.f64(sy.ctFontGetUnderlinePosition, font) * sc),
+		UnderlineThickness: float32(s.f64(sy.ctFontGetUnderlineThick, font) * sc),
 	}
 	fe.metrics.LineHeight = fe.metrics.Ascent + fe.metrics.Descent + fe.metrics.LineGap
 	s.fonts = append(s.fonts, fe)
@@ -628,8 +668,41 @@ func (s *System) RunGeneration() uint32 { return s.runs.gen }
 // glyphs and textBytes bytes of source text (clamped to MaxCachedRuns,
 // MaxCachedGlyphs and MaxCachedTextBytes), so that shaping new strings until
 // the cache holds that much, and every eviction after that, allocates no Go
-// memory. Call it once at setup. Without it the cache grows by doubling.
-func (s *System) ReserveRuns(runs, glyphs, textBytes int) { s.runs.reserve(runs, glyphs, textBytes) }
+// memory. It also sizes the shaping scratch for one string of up to
+// min(textBytes, 64 KiB) bytes, so that shaping a string longer than any
+// before (up to that size) allocates nothing either. Call it once at setup.
+// Without it the cache grows by doubling.
+func (s *System) ReserveRuns(runs, glyphs, textBytes int) {
+	s.runs.reserve(runs, glyphs, textBytes)
+	s.reserveScratch(min(textBytes, maxScratch))
+}
+
+// reserveScratch sizes the shaping scratch for a string of n bytes: its copy,
+// its UTF-16 index and sanitized form, and its glyphs (at most one per UTF-16
+// unit, so per byte).
+func (s *System) reserveScratch(n int) {
+	if cap(s.tmp) < n {
+		s.tmp = make([]byte, 0, n)
+	}
+	if cap(s.san) < 3*n {
+		s.san = make([]byte, 0, 3*n)
+	}
+	if cap(s.u16b) < n+1 {
+		s.u16b = make([]uint32, 0, n+1)
+	}
+	if cap(s.gbuf) < n {
+		s.gbuf = make([]uint16, 0, n)
+		s.xbuf = make([]float32, 0, n)
+		s.fbuf = make([]FaceID, 0, n)
+		s.cbuf = make([]uint32, 0, n)
+	}
+	if cap(s.pos) < 2*n {
+		s.pos = make([]float64, 2*n)
+	}
+	if cap(s.idx) < n {
+		s.idx = make([]int64, n)
+	}
+}
 
 // ---- Rasterization ----
 
@@ -878,6 +951,7 @@ func (s *System) Close() {
 	for _, f := range s.faces {
 		s.release(f.font)
 	}
+	s.closePara()
 	s.fonts, s.faces = nil, nil
 	s.freeBitmap(&s.gray)
 	s.freeBitmap(&s.rgba)

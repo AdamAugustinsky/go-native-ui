@@ -57,6 +57,7 @@ type FontDesc struct {
 	Mono   bool    // system monospace font when Family == ""
 	SizePt float32 // points
 	Weight int     // CSS-like: 400 regular, 500 medium, 600 semibold, 700 bold
+	Italic bool    // the family's italic (oblique) face; upright when it has none
 	Scale  float32 // pixels per point (2 on Retina)
 }
 
@@ -71,6 +72,10 @@ type Metrics struct {
 	// MonoAdvance is the advance of "0". For a monospace font it is the
 	// advance of every glyph.
 	MonoAdvance float32
+	// UnderlinePos is the distance from the baseline down to the centre of
+	// an underline and UnderlineThickness its thickness, from the font; both
+	// 0 when the backend does not report them (a drawer then picks its own).
+	UnderlinePos, UnderlineThickness float32
 }
 
 // RunRef identifies a shaped run in the run cache. The zero RunRef is

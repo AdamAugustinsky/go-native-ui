@@ -17,7 +17,7 @@ var roleNames = map[ui.Role]string{
 	ui.RoleSplitter: "Splitter", ui.RoleTabList: "TabList", ui.RoleTab: "Tab", ui.RoleTabPanel: "TabPanel",
 	ui.RoleMenuBar: "MenuBar", ui.RoleMenu: "Menu", ui.RoleMenuItem: "MenuItem",
 	ui.RoleMenuItemCheckbox: "MenuItemCheckbox", ui.RoleDialog: "Dialog", ui.RoleTooltip: "Tooltip",
-	ui.RoleProgressBar: "ProgressBar",
+	ui.RoleProgressBar: "ProgressBar", ui.RoleLink: "Link",
 }
 
 // RoleName is the name of a role as Dump writes it ("Button", "ListItem").

@@ -432,7 +432,7 @@ func (s *System) shapeCovered(fe *fontEnt, src uintptr, a, b int, covered bool) 
 		s.mapLen, s.out1, s.scale = 0, 0, 1
 		hr := win32.HR(com.Call(s.fallback, vtFallbackMapCharacters,
 			src, uintptr(pos), uintptr(b-pos), 0, uintptr(unsafe.Pointer(&fe.family[0])),
-			uintptr(fe.weight), dwStyleNormal, dwStretchNormal,
+			uintptr(fe.weight), fe.style, dwStretchNormal,
 			uintptr(unsafe.Pointer(&s.mapLen)), uintptr(unsafe.Pointer(&s.out1)), uintptr(unsafe.Pointer(&s.scale))))
 		length := int(s.mapLen)
 		if hr < 0 || length <= 0 || length > b-pos {
