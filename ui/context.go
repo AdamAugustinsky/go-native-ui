@@ -29,6 +29,11 @@ type persist struct {
 	savedFocus Key
 	// wrap is what the line breaking of a WrapText box was computed for.
 	wrap wrapCache
+	// flowOut is what the last layout of a flow box found (flow.go).
+	flowOut flowOut
+	// hid is whether the last layout hid the box (flow.go); newBox moves it to
+	// the box's prevHid and clears it for the frame being laid out.
+	hid bool
 	// rp is the last layout of a RichText box (hit testing), pressSpan 1 +
 	// the span its press began on.
 	rp        richPrev
@@ -77,6 +82,9 @@ type box struct {
 	listRowH  float32
 
 	sem int32 // 1 + the index of its record in Context.sems, 0 without a role
+
+	flow    flowSpec // the options of a flow box (AxisFlow, flow.go)
+	prevHid bool     // the previous layout's hid: what the input checks of the build see (wasHidden)
 
 	// the paragraph of a WrapText or RichText box: lnN lines, laid out at
 	// width paraW (-1: not yet this frame) in the cache generation paraGen
@@ -151,6 +159,8 @@ type Context struct {
 	nextPos    [2]float32
 	hasNextPos bool
 	nextFlags  Flags
+
+	flowHidden bool // a flow hid children this layout (flow.go)
 
 	// paragraphs (wrap.go, richtext.go): the layouter, how often a wrapped
 	// box was laid out (not taken from the cache), and this frame's RichText
@@ -248,6 +258,12 @@ type Context struct {
 	pasteTag Key
 	pasteReq bool
 
+	// native menus (nativemenu.go)
+	nativeMenus bool
+	menuReq     MenuRequest
+	menuReqSet  bool
+	menuOpts    []string // the copy of menuReq.Options
+
 	// boxes built this frame with a cursor or the WindowDrag flag (cursor.go)
 	nCursorBoxes, nDragBoxes int
 
@@ -281,6 +297,7 @@ func New(sh Shaper) *Context {
 		boxes:     make([]box, 1, 256),
 		order:     make([]ID, 0, 256),
 		prevOrder: make([]ID, 0, 256),
+		modalIdx:  -1, // no modal before the first frame
 	}
 	if l, ok := sh.(Layouter); ok {
 		c.lay = l
@@ -560,6 +577,7 @@ func (c *Context) newBox(flags Flags, key Key) ID {
 	b := &c.boxes[id]
 	p := b.persist
 	*b = box{persist: p}
+	b.prevHid, b.hid = p.hid, false
 	b.lastFrame = c.frame
 	b.flags = flags
 

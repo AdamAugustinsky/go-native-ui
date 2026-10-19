@@ -56,10 +56,9 @@ var SelectLook = SelectRecipe{
 // SelectSignal is what a pop-up button reports.
 type SelectSignal struct {
 	base.Signal
-	// Open: its options are showing. The list belongs to the platform's
-	// menu (macOS, N1) or, until then, to the drawn popup of package widget
-	// (widget.Kit.Select builds it; base.Popup records which component it
-	// belongs to).
+	// Open: the drawn popup of its options is showing (never with native
+	// menus, where the platform's menu shows them); widget.Kit.Select builds
+	// it, and base.Popup records which component it belongs to.
 	Open bool
 	// Key is the button's key, the popup's owner.
 	Key ui.Key
@@ -67,8 +66,12 @@ type SelectSignal struct {
 
 // Select builds a pop-up button showing options[*sel] (or, for a pull-down,
 // its label). A click, or Enter, Space or Down with the focus, opens its
-// options (base.PopupSelect) and a second click closes them; Open reports
-// it. The width is SelectLook.Width unless the kit's NextWidth says otherwise.
+// options. With native menus (ui.Context.NativeMenus) they are the system's
+// pop-up menu (ui.Context.RequestMenu); the choice comes back through
+// ui.Context.MenuChoice, sets *sel and reports Changed, and Open stays false.
+// Otherwise they are the drawn popup (base.PopupSelect), which a second click
+// closes; Open reports it and the caller builds it. The width is
+// SelectLook.Width unless the kit's NextWidth says otherwise.
 //
 //	s := rexui.Select(k, "Sort", &v.sort, sorts, rexui.SelectOpts{})
 //	if s.Open { … build the options below s.ID … }
@@ -133,6 +136,28 @@ func Select(k *base.Kit, label string, sel *int, options []string, o SelectOpts)
 	c.Pop()
 	k.FocusRing(id, p.Visual, s.Radius)
 
+	if c.NativeMenus() { // the platform's pop-up menu (N1), never the drawn popup
+		var changed bool
+		if !k.Disabled() {
+			sig := c.Signal(id)
+			if sig.Clicked || sig.Activated || sig.Action&(ui.ActExpand|ui.ActShowMenu) != 0 || (c.Focused(id) && c.TakeKey(ui.KeyDown, 0)) {
+				chosen := *sel
+				if v == SelectPullDown {
+					chosen = -1
+				}
+				c.RequestMenu(ui.MenuRequest{Kind: ui.MenuList, Owner: p.Key, Options: options, Selected: chosen, Rect: rr})
+			}
+			if i, ok := c.MenuChoice(id, options); ok && i != *sel {
+				// the box was built with the old value: show the new one in
+				// a frame of its own (a keyboard choice leaves no events)
+				*sel, changed = i, true
+				c.RequestFrame()
+			}
+		}
+		res := SelectSignal{Signal: k.SignalOf(id), Key: p.Key}
+		res.Changed = changed
+		return res
+	}
 	if !k.Disabled() {
 		sig := c.Signal(id)
 		switch {

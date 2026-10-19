@@ -12,8 +12,9 @@ import (
 // Enter, Space or Down with the focus on it, opens the options in a popup
 // below it, with the chosen one marked and focused; Up and Down move through
 // them, Enter, Space or a click choose, and Escape or a click elsewhere close
-// the popup. Changed is set in the frame the choice changed. Until the native
-// menus (N1), the open list is drawn here.
+// the popup. Changed is set in the frame the choice changed. With native
+// menus (ui.Context.NativeMenus) the options are the system's pop-up menu
+// (rexui.Select asks for it); otherwise the open list is drawn here.
 func (k *Kit) Select(label string, sel *int, options []string) Signal {
 	s := rexui.Select(k.Kit, label, sel, options, rexui.SelectOpts{})
 	if s.Open {

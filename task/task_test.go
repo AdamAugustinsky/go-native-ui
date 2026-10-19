@@ -64,6 +64,21 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 	}
 }
 
+// awaitWakes waits, up to 5 s, for the wake count to reach n. A worker publishes
+// a result under the pool's lock and calls Wake after it releases it, so the
+// owner can Poll the result before the wake has run: the guarantee is that a
+// wake follows every published result, not that it precedes the Poll.
+func awaitWakes(t *testing.T, c *atomic.Int32, n int32, p interface{ Pending() int }) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for c.Load() < n {
+		if time.Now().After(deadline) {
+			t.Fatalf("the loop was never woken: %d wakes after 5s, want at least %d (pending jobs %d)", c.Load(), n, p.Pending())
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 func awaitStart(t *testing.T, g *gated, n int) {
 	t.Helper()
 	select {
@@ -120,9 +135,7 @@ func TestRoundTripAndWake(t *testing.T) {
 	if len(rs) != 1 || rs[0].Ticket != tk || rs[0].Out.N != 7 || rs[0].Key != 0 {
 		t.Fatalf("results %+v, ticket %d", rs, tk)
 	}
-	if woke.Load() < 1 {
-		t.Error("the loop was never woken")
-	}
+	awaitWakes(t, &woke, 1, p) // the result can be polled before the worker's Wake call has run
 	if p.Pending() != 0 {
 		t.Errorf("Pending %d after the result was polled", p.Pending())
 	}
@@ -603,6 +616,7 @@ func TestRefusedKeepIsRetriedByAWakeWhenSweepFreesRoom(t *testing.T) {
 	p.Sweep()
 	awaitStart(t, g, 2)
 	pollAll(t, p, 1)
+	awaitWakes(t, &wakes, 2, p) // B's result wake can trail its Poll; settle it before taking the baseline
 	// No refusal pending: freeing room again owes no wake.
 	before := wakes.Load()
 	p.Keep(2, req{N: 2})

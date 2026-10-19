@@ -369,64 +369,88 @@ func TestThreads(t *testing.T) {
 }
 
 // TestErrorAcrossThreadHops is the reason caller-owned error storage is the
-// pattern: between two calls the goroutine moves to another OS thread, so
-// a thread-local error would be read on the wrong thread, while the error
-// written into the Call's own storage is always the one from that call.
+// pattern. One call site (a Call and its error storage) is handed around a
+// ring of goroutines, each locked to its own OS thread, so every call runs
+// on a different thread from the one before, and the code that reads a
+// call's error runs on the next thread, as it may whenever a goroutine
+// moves. The error written into the site's storage is always that call's;
+// the thread-local last error read there never is.
 func TestErrorAcrossThreadHops(t *testing.T) {
-	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(4))
-	try, thread := fn(t, "fx_try"), fn(t, "fx_thread")
-	type site struct {
+	try, thread, last := fn(t, "fx_try"), fn(t, "fx_thread"), fn(t, "fx_tls_last")
+	const threads, calls = 4, 3000
+	s := struct {
 		call *Call
 		err  *fxErr
 		tid  *uint64
+	}{NewCall(), new(fxErr), new(uint64)}
+
+	// State of the call in flight, handed on with the baton.
+	var (
+		tag     int64
+		st      int32
+		prevTid uint64
+	)
+	var hops, failures, tlsRight, bad atomic.Int64
+	var firstBad sync.Once
+	report := func(format string, a ...any) {
+		bad.Add(1)
+		firstBad.Do(func() { t.Errorf(format, a...) })
 	}
-	var hops, failures atomic.Int64
+	baton := make([]chan int, threads)
+	for k := range baton {
+		baton[k] = make(chan int, 1)
+	}
+	tids := make([]uint64, threads)
 	var wg sync.WaitGroup
-	errs := make(chan error, 8)
-	token := make(chan struct{}, 1)
-	token <- struct{}{}
-	for g := range 8 {
+	for k := range threads {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			s := site{NewCall(), new(fxErr), new(uint64)}
-			for i := range 1000 {
-				tag := int64(g)*1_000_000 + int64(i)
-				before := s.call.Do(thread).Uint()
-				// Hand a token around between the calls: blocking on it
-				// parks the goroutine, and it resumes on whichever thread
-				// the scheduler picks.
-				<-token
-				token <- struct{}{}
-				s.err.Code = -1
-				st := s.call.Reset().Int(tag).Ptr(unsafe.Pointer(s.err)).Ptr(unsafe.Pointer(s.tid)).Do(try).Int32()
-				if *s.tid != before {
-					hops.Add(1)
-				}
-				if tag%3 == 0 {
-					if st != 0 || s.err.Code != -1 {
-						errs <- fmt.Errorf("tag %d: status %d, error storage touched on success (%d)", tag, st, s.err.Code)
-						return
+			runtime.LockOSThread()
+			defer runtime.UnlockOSThread()
+			tids[k] = NewCall().Do(thread).Uint()
+			for i := range baton[k] {
+				if i > 0 && tag%3 != 0 {
+					// Read the previous call's error on this thread.
+					failures.Add(1)
+					want := fmt.Sprintf("tag %d failed on thread %d", tag, *s.tid)
+					if st != -1 || s.err.Code != int32(tag%1000)+1 || s.err.text() != want {
+						report("tag %d: status %d, error %d %q, want %d %q", tag, st, s.err.Code, s.err.text(), tag%1000+1, want)
 					}
-					continue
+					if s.call.Do(last).Int32() == int32(tag%1000)+1 {
+						tlsRight.Add(1)
+					}
+				} else if i > 0 && (st != 0 || s.err.Code != -1) {
+					report("tag %d: status %d, error storage touched on success (%d)", tag, st, s.err.Code)
 				}
-				failures.Add(1)
-				want := fmt.Sprintf("tag %d failed on thread %d", tag, *s.tid)
-				if st != -1 || s.err.Code != int32(tag%1000)+1 || s.err.text() != want {
-					errs <- fmt.Errorf("tag %d: status %d, error %d %q, want %d %q", tag, st, s.err.Code, s.err.text(), tag%1000+1, want)
+				if i == calls {
+					for _, b := range baton {
+						close(b)
+					}
 					return
 				}
+				tag = int64(i)
+				s.err.Code = -1
+				st = s.call.Reset().Int(tag).Ptr(unsafe.Pointer(s.err)).Ptr(unsafe.Pointer(s.tid)).Do(try).Int32()
+				if i > 0 && *s.tid != prevTid {
+					hops.Add(1)
+				}
+				prevTid = *s.tid
+				baton[(k+1)%threads] <- i + 1
 			}
 		}()
 	}
+	baton[0] <- 0
 	wg.Wait()
-	close(errs)
-	for err := range errs {
-		t.Error(err)
-	}
-	t.Logf("%d failing calls; %d calls ran on another thread than the call just before them", failures.Load(), hops.Load())
+	t.Logf("%d failing calls; %d of %d calls ran on another thread than the call before; %d bad errors", failures.Load(), hops.Load(), calls-1, bad.Load())
 	if hops.Load() == 0 {
-		t.Fatal("no goroutine changed threads between calls; the test proved nothing")
+		t.Fatal("no call changed threads; the test proved nothing")
+	}
+	if hops.Load() != calls-1 {
+		t.Errorf("only %d of %d calls changed threads; the ring's threads %v are not distinct", hops.Load(), calls-1, tids)
+	}
+	if n := tlsRight.Load(); n != 0 {
+		t.Errorf("the thread-local last error read on the next thread was the call's own %d times; the hops did not separate the threads", n)
 	}
 }
 
