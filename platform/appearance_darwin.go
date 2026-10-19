@@ -57,8 +57,7 @@ func AppearanceSerial() uint32 { return apSerial.Load() }
 
 // SetDarkChrome makes the OS-drawn parts of the window match the app's mode
 // (see appearance.go): the window's NSAppearance, which covers the traffic
-// lights and the menus the window shows, and the application's, which covers
-// the menus of the menu bar.
+// lights and the menus the window shows.
 func (w *Window) SetDarkChrome(dark bool) {
 	if w == nil || w.win == 0 {
 		return
@@ -71,7 +70,6 @@ func (w *Window) SetDarkChrome(dark bool) {
 	}
 	if a := objc.Send1(apClsAppearance, selAppearanceNamed, uintptr(name)); a != 0 {
 		objc.Send1(w.win, selSetAppearance, uintptr(a))
-		objc.Send1(w.app, selSetAppearance, uintptr(a))
 	}
 	objc.F.Call1(objc.PoolPop, pool)
 }
