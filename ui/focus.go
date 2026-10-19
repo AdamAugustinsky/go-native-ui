@@ -23,9 +23,10 @@ func (c *Context) traverseFocus() {
 	c.cancelBeneathModal()
 	if c.focusKey != 0 {
 		if v, ok := c.table.Get(uint64(c.focusKey)); ok {
-			if b := &c.boxes[v]; b.lastFrame == c.frame && b.flags&Disabled != 0 {
+			if b := &c.boxes[v]; b.lastFrame == c.frame && (b.flags&Disabled != 0 || b.hid) {
 				c.focusKey = 0
 				c.animating = true
+				c.dropFieldOutputs()
 			}
 		}
 	}
@@ -39,7 +40,7 @@ func (c *Context) traverseFocus() {
 	seenCur := false
 	for _, id := range c.order {
 		b := &c.boxes[id]
-		if b.flags&Focusable == 0 || b.flags&Disabled != 0 || b.ovl != scope || b.ovRoot {
+		if b.flags&Focusable == 0 || b.flags&Disabled != 0 || b.hid || b.ovl != scope || b.ovRoot {
 			continue
 		}
 		if first == 0 {
@@ -70,4 +71,18 @@ func (c *Context) traverseFocus() {
 	c.focusKey = c.boxes[to].key
 	c.focusVisible = true
 	c.animating = true // the focus ring animates in the frame that follows
+}
+
+// dropFieldOutputs withdraws what the focused text field gave the app this
+// frame, when layout takes the focus from it (it became disabled or hidden
+// after it was built): the input method's candidate rectangle, so that the
+// platform stops text input (IMERect), and the caret blink's wake-up. A
+// composition that is on screen is left for the next frame, whose field finds
+// itself orphaned and commits the composition as AppKit does when the first
+// responder changes, and asks the app to discard the platform's (IMECancel);
+// asking now would discard the text before it was committed.
+func (c *Context) dropFieldOutputs() {
+	if c.imeOK {
+		c.imeOK, c.imeRect, c.wakeNs = false, [4]float32{}, 0
+	}
 }

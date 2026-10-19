@@ -44,6 +44,7 @@ func (w *Window) Wait(timeoutNs int64) []Event {
 	for ev := w.nextEvent(until); ev != 0; ev = w.nextEvent(w.distantPast) {
 		w.handle(ev)
 	}
+	w.reapDialogs()
 	F.Call1(objc.PoolPop, pool)
 	w.returned, w.nOut = true, len(w.q.ev)
 	return w.q.ev
@@ -63,6 +64,15 @@ func (w *Window) handle(ev objc.ID) {
 		return // also used to unblock the loop after a display-link tick
 	}
 	t := int64(objc.SendF64(ev, selTimestamp) * 1e9)
+	if w.dialogOpen() {
+		// A sheet owns the window's input (dialog.go): its keys and clicks go
+		// to AppKit only, not to the app behind it.
+		switch typ {
+		case 1, 2, 3, 4, 5, 6, 7, 10, 11, 22, 25, 26, 27:
+			objc.Send1(w.app, selSendEvent, uintptr(ev))
+			return
+		}
+	}
 	switch typ {
 	case 1, 2, 3, 4, 5, 6, 7, 25, 26, 27: // mouse down/up/moved/dragged
 		if w.pointerEvent(ev, typ, t) {
@@ -83,8 +93,20 @@ func (w *Window) handle(ev objc.ID) {
 	// commits) is not a key press for the app; one it hands back as a command
 	// (an arrow or Enter with nothing composing, doCommandBySelector:) is.
 	markedBefore := len(w.marked) > 0
-	w.imeUsed, w.cmdCalled = false, false
+	w.imeUsed, w.cmdCalled, w.menuActed = false, false, false
+	// A key the focused text field takes is not a key equivalent: the menu
+	// items validate as disabled while AppKit matches it (validate).
+	w.fieldKey = keyIdx >= 0 && w.fieldKeys != nil && w.fieldKeys(&w.q.ev[keyIdx])
 	objc.Send1(w.app, selSendEvent, uintptr(ev))
+	w.fieldKey = false
+	if w.menuActed && keyIdx >= 0 && keyIdx < len(w.q.ev) && w.q.ev[keyIdx].Kind == EvKey && w.q.ev[keyIdx].Time == t {
+		// The key was a menu item's key equivalent (performKeyEquivalent:): the
+		// item delivered its command, so the key is not the app's as well. (A
+		// frame handler that ran inside sendEvent, during a menu's tracking,
+		// may have taken the queue: then the key is gone already.)
+		w.q.ev = append(w.q.ev[:keyIdx], w.q.ev[keyIdx+1:]...)
+		return
+	}
 	w.dropConsumedKey(keyIdx, markedBefore)
 }
 
