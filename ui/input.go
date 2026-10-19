@@ -172,6 +172,12 @@ type Input struct {
 	// focus (became the active window). A caller that shows the file system or
 	// the like can look again; it costs nothing while nothing happens.
 	FocusGained bool
+	// Hidden is true while the window is not showing: minimised, hidden, on
+	// another Space or covered (the platform's last visibility event). Nothing
+	// is on screen then, so an animation that loops should stop asking for
+	// frames; the app draws again when the window shows (rexui's spinner and
+	// indeterminate bar read it).
+	Hidden bool
 
 	// Time is the platform clock (monotonic nanoseconds, platform.Now) at the
 	// start of the frame. Text fields blink their caret by it; 0 means no
