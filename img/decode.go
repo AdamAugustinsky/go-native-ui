@@ -38,11 +38,12 @@ const maxPixels = 100 << 20
 // cache's jobs table holds one of these per entry, moved by compare-and-swap
 // so that exactly one side frees each resource.
 const (
-	jobIdle    uint32 = iota // no job, or its result was taken by Poll
-	jobQueued                // submitted: Close frees its copy and lease if it never starts
-	jobRunning               // a worker decodes it: the worker frees its copy; its lease and output go with the result
-	jobDone                  // finished: its output (jobOut) waits for Poll, or for Close to free it
-	jobClosed                // Close took the job; a worker still running it frees everything itself
+	jobIdle     uint32 = iota // no job, or its result was taken by Poll
+	jobQueued                 // submitted: Close frees its copy and lease if it never starts
+	jobRunning                // a worker decodes it: the worker frees its copy; its lease and output go with the result
+	jobDraining               // running when Close began: Close frees its output and lease if it finishes within the wait
+	jobDone                   // finished: its output (jobOut) waits for Poll, or for Close to free it
+	jobClosed                 // Close took the job; a worker still running it frees everything itself
 )
 
 // worker is a decoding goroutine's private state: its C call frame (a
@@ -53,8 +54,9 @@ type worker struct {
 }
 
 // decodeJob runs on a worker. A job Close took before it started is left
-// alone (Close freed its copy and lease); one Close took while it ran frees
-// its own copy, output and lease here, once nothing reads them any more.
+// alone (Close freed its copy and lease); one still running when Close
+// returned frees its own copy, output and lease here, once nothing reads them
+// any more.
 func (c *Cache) decodeJob(t task.Token, j job) result {
 	st := &c.jobs[j.ent]
 	if !st.CompareAndSwap(jobQueued, jobRunning) {
@@ -81,10 +83,10 @@ func (c *Cache) decodeJob(t task.Token, j job) result {
 	}
 	r.ns = platform.Now() - t0
 	c.jobOut[j.ent] = r.buf
-	if st.CompareAndSwap(jobRunning, jobDone) {
+	if st.CompareAndSwap(jobRunning, jobDone) || st.CompareAndSwap(jobDraining, jobDone) {
 		return r
 	}
-	// Closed while it ran: nobody takes the result.
+	// Still running when Close returned: nobody takes the result.
 	if r.buf >= 0 {
 		c.bufs.put(r.buf, &w.fr)
 	}

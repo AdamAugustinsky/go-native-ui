@@ -582,38 +582,47 @@ func (c *Cache) remove(i int32) {
 }
 
 // Close stops the workers (waiting up to wait for running decodes) and frees
-// every texture, buffer and lease. A decode still running past the wait
-// keeps its source (inline copy, lease) until its decoder returns, then frees
-// it and its output on the worker; the last of them returns the pooled
-// memory. The cache must not be used afterwards.
+// every texture, buffer and lease, on the caller's goroutine. A decode still
+// running when the wait ends keeps its source (inline copy, lease) until its
+// decoder returns, then frees it and its output on the worker; the last of
+// them returns the pooled memory. The cache must not be used afterwards.
 func (c *Cache) Close(wait time.Duration) {
 	if c.closed {
 		return
 	}
 	c.closed = true
 	c.refs.Store(1) // Close's own, dropped at the end
+	// Take every job that is not running; mark the running ones, to be
+	// settled after the wait.
 	for i := range c.jobs {
-		c.refs.Add(1) // before the swap: a running decode may drop it at once
-		switch c.jobs[i].Swap(jobClosed) {
-		case jobRunning: // its worker frees everything and drops the reference
-			c.leases[i] = nil
-			continue
-		case jobQueued: // never started (or never will)
-			if k := c.jobCopy[i]; k >= 0 {
-				c.bufs.put(k, c.fr)
+		st := &c.jobs[i]
+		for {
+			old := st.Load()
+			if old == jobRunning {
+				if st.CompareAndSwap(jobRunning, jobDraining) {
+					break
+				}
+				continue
 			}
-		case jobDone: // finished, not polled
-			if k := c.jobOut[i]; k >= 0 {
-				c.bufs.put(k, c.fr)
+			if st.CompareAndSwap(old, jobClosed) {
+				c.closeJob(i, old)
+				break
 			}
-		}
-		c.refs.Add(-1)
-		if l := c.leases[i]; l != nil {
-			c.leases[i] = nil
-			l.Release()
 		}
 	}
 	c.pool.Close(wait)
+	// A decode that finished within the wait is freed here; one still
+	// running is its worker's to free.
+	for i := range c.jobs {
+		c.refs.Add(1) // before the swap: the worker may drop it at once
+		old := c.jobs[i].Swap(jobClosed)
+		if old == jobDraining {
+			c.leases[i] = nil
+			continue
+		}
+		c.refs.Add(-1)
+		c.closeJob(i, old)
+	}
 	for i := range c.ents {
 		e := &c.ents[i]
 		if e.stage == stFree {
@@ -636,6 +645,27 @@ func (c *Cache) Close(wait time.Duration) {
 	}
 	c.gpuUsed, c.cpuUsed = 0, 0
 	c.unref(c.fr)
+}
+
+// closeJob frees what Close took of entry i's job, found in state old: a
+// queued job's copy, a finished one's output, and either's lease.
+func (c *Cache) closeJob(i int, old uint32) {
+	switch old {
+	case jobQueued:
+		if k := c.jobCopy[i]; k >= 0 {
+			c.bufs.put(k, c.fr)
+		}
+	case jobDone:
+		if k := c.jobOut[i]; k >= 0 {
+			c.bufs.put(k, c.fr)
+		}
+	case jobClosed:
+		return
+	}
+	if l := c.leases[i]; l != nil {
+		c.leases[i] = nil
+		l.Release()
+	}
 }
 
 // unref drops a reference to the pooled buffers after Close; the last one

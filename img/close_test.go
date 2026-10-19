@@ -1,7 +1,10 @@
 package img
 
 import (
+	"bytes"
 	"errors"
+	"runtime"
+	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -13,6 +16,7 @@ type blockingLease struct {
 	b             []byte
 	started, open chan struct{}
 	released      atomic.Int32
+	releasedOn    atomic.Int64 // the goroutine that released it
 }
 
 func newBlockingLease(b []byte) *blockingLease {
@@ -25,7 +29,20 @@ func (l *blockingLease) Bytes() []byte {
 	return l.b
 }
 
-func (l *blockingLease) Release() { l.released.Add(1) }
+func (l *blockingLease) Release() {
+	l.releasedOn.Store(goroutineID())
+	l.released.Add(1)
+}
+
+// goroutineID is the calling goroutine's number, from its stack header
+// ("goroutine 7 [running]:").
+func goroutineID() int64 {
+	var b [64]byte
+	s := b[:runtime.Stack(b[:], false)]
+	s = bytes.TrimPrefix(s, []byte("goroutine "))
+	n, _ := strconv.ParseInt(string(s[:bytes.IndexByte(s, ' ')]), 10, 64)
+	return n
+}
 
 // TestCloseReturnsEveryBuffer: Close finds decodes in all three states (one
 // finished and not polled, two running past the wait, four queued behind
@@ -102,5 +119,31 @@ func TestEmptyInlineBytesFail(t *testing.T) {
 		if st := c.State(h); st != Failed || !errors.Is(c.Err(h), ErrDecode) {
 			t.Errorf("source %d: %v, %v; want Failed, ErrDecode", k, st, c.Err(h))
 		}
+	}
+}
+
+// TestCloseReleasesOnItsGoroutine: a decode still running when Close begins
+// but finished within its wait is cleaned up by Close itself: its lease is
+// released on the goroutine that called Close, before Close returns, as the
+// Lease contract says; only decodes still running when the wait ends are
+// left to their workers.
+func TestCloseReleasesOnItsGoroutine(t *testing.T) {
+	c := NewCache(Options{Renderer: newFakeGPU(), Workers: 1, Wake: func() {}})
+	l := newBlockingLease(encPNG(t, gradient(16, 16)))
+	c.Request(Key{Hash: 1, W: 16, H: 16}, Leased(l))
+	<-l.started
+	go func() {
+		time.Sleep(50 * time.Millisecond) // Close is waiting by then
+		close(l.open)
+	}()
+	c.Close(10 * time.Second)
+	if n := l.released.Load(); n != 1 {
+		t.Fatalf("lease released %d times when Close returned, want 1", n)
+	}
+	if on, me := l.releasedOn.Load(), goroutineID(); on != me {
+		t.Fatalf("lease released on goroutine %d, not on Close's (%d)", on, me)
+	}
+	if n := c.bufs.held(); n != 0 {
+		t.Errorf("%d buffers hold memory after Close", n)
 	}
 }
