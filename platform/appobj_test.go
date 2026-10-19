@@ -348,3 +348,48 @@ func TestQuitLatch(t *testing.T) {
 		t.Fatalf("after the deadline: pending %v, events %+v", QuitPending(), s.evs)
 	}
 }
+
+// While a frame holds dispatch nothing is delivered into it, and nothing is
+// stranded: the signal a held or nested call consumed is sent again by the
+// release or the outer call, so producers keep signalling.
+func TestHeldAndNestedDispatchOweTheirSignal(t *testing.T) {
+	s := &recSink{}
+	withSink(t, s)
+	drain()
+	HoldApp(true)
+	t.Cleanup(func() { HoldApp(false) })
+	PostApp(AppEvent{ID: 1}, nil)
+	safe := s.safe
+	DispatchApp()
+	if len(s.evs) != 0 || s.safe != safe {
+		t.Fatalf("held: delivered %+v, %d safe points", s.evs, s.safe-safe)
+	}
+	if dispatch.signalled.Load() {
+		t.Fatal("a held dispatch left the signal set: no producer would signal again")
+	}
+	HoldApp(false)
+	if !dispatch.signalled.Load() {
+		t.Fatal("the release did not signal")
+	}
+	DispatchApp()
+	if len(s.evs) != 1 || s.evs[0].ID != 1 {
+		t.Fatalf("after the release: %+v", s.evs)
+	}
+
+	s.evs = s.evs[:0]
+	s.onEv = func(e *AppEvent) {
+		if e.ID == 2 {
+			PostApp(AppEvent{ID: 3}, nil)
+			DispatchApp() // a handler that spun a native loop
+		}
+	}
+	PostApp(AppEvent{ID: 2}, nil)
+	DispatchApp()
+	if !dispatch.signalled.Load() {
+		t.Fatal("the outer dispatch did not signal again after a nested one")
+	}
+	drain()
+	if len(s.evs) != 2 || s.evs[0].ID != 2 || s.evs[1].ID != 3 {
+		t.Fatalf("nested: %+v", s.evs)
+	}
+}

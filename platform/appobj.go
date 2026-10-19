@@ -646,7 +646,8 @@ var dispatch struct {
 	sink      AppSink
 	signalled atomic.Bool
 	running   bool // DispatchApp is on the stack (main thread)
-	missed    bool // a nested DispatchApp returned early
+	held      bool // HoldApp: the app is drawing a frame (main thread)
+	missed    bool // a nested or held DispatchApp returned early
 	delivered uint64
 	quitDue   atomic.Uint64 // a quit deadline fired for this request serial
 	quitAsked atomic.Int64  // a QuitReason requested from a goroutine (RequestQuit, signals)
@@ -671,9 +672,13 @@ func signalApp() {
 // runs the app's safe-point work. Main thread. The run-loop source calls it
 // on macOS; the app's loop calls it after every Wait on every OS. It is not
 // re-entered: a nested call (a handler that spun a native loop) returns at
-// once and the outer call signals again before it returns.
+// once and the outer call signals again before it returns. While HoldApp
+// holds it, it returns at once too, and the release signals again.
 func DispatchApp() {
-	if dispatch.running {
+	if dispatch.running || dispatch.held {
+		// The signal this call consumed is owed: cleared, so that the outer
+		// call's or the release's signalApp sends it again.
+		dispatch.signalled.Store(false)
 		dispatch.missed = true
 		return
 	}
@@ -701,6 +706,19 @@ func DispatchApp() {
 	}
 	if got {
 		Wake() // the app's loop runs a turn: what the events changed may want a frame
+	}
+}
+
+// HoldApp holds app-wide dispatch while on: the app is drawing a frame.
+// The run-loop source fires in common modes, so it fires in a native loop
+// the frame's own code runs (a modal session, an animated zoom), where a
+// handler would run inside Build; held, nothing is delivered there, and the
+// release dispatches what arrived meanwhile. Main thread.
+func HoldApp(on bool) {
+	dispatch.held = on
+	if !on && dispatch.missed {
+		dispatch.missed = false
+		signalApp()
 	}
 }
 

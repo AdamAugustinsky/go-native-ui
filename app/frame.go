@@ -124,6 +124,7 @@ func (a *App) drawFrame(inHandler bool, passes int) bool {
 		return false
 	}
 	a.inFrame = true
+	platform.HoldApp(true) // no app-wide event is delivered inside the frame
 	// What the app's code autoreleases during the frame is drained at its end
 	// (macOS). The token lives on this stack, not in shared state: a nested
 	// run loop that the app's code runs nests its own pools inside this one.
@@ -166,6 +167,7 @@ func (a *App) drawFrame(inHandler bool, passes int) bool {
 	a.Surf.EndFrame(&a.fr)
 	framePoolPop(pool)
 	a.inFrame = false
+	platform.HoldApp(false)
 	m.commit = platform.Now()
 	if metered {
 		m.cpu3 = sysinfo.ThreadCPUNs()
@@ -192,6 +194,7 @@ func (a *App) abandonFrame(pool uintptr) {
 		return
 	}
 	a.inFrame = false
+	platform.HoldApp(false)
 	abandonSurfaceFrame(a.Surf, &a.fr)
 	framePoolPop(pool)
 }

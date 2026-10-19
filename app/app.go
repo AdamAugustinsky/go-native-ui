@@ -161,6 +161,10 @@ type App struct {
 	hook  func() // runs after every iteration of the loop (RunLiveResizeTest)
 
 	req frameRequester // where drawFrame asks for the next frame (the Win)
+	// buttons is the Win's buttonsSource, nil where it has none: resolved
+	// once in initUI, because the first type assertion of a frame would fill
+	// the runtime's assertion cache (a 48 B allocation on a random frame).
+	buttons buttonsSource
 
 	// Native menus (menus.go).
 	menu        *menu.Model
@@ -386,6 +390,7 @@ func (a *App) initUI() error {
 	if a.Win != nil { // a window shows tooltips for the regions it is given; offscreen renders draw them
 		a.UI.SetNativeTooltips(platform.NativeTooltips)
 		a.Win.SetTooltipText(a.UI.TooltipText)
+		a.buttons, _ = windowSource(a.Win).(buttonsSource)
 	}
 	if in, ok := a.b.(Initer); ok {
 		if err := in.Init(a); err != nil {
@@ -422,6 +427,7 @@ func (a *App) closeWin() {
 		a.Text.Close()
 	}
 	a.R, a.Surf, a.Win, a.Text = nil, nil, nil, nil
+	a.buttons = nil
 }
 
 // loop is the event loop. See pacer for the frame rules. With no window open
