@@ -118,17 +118,7 @@ func TestSetClipboardTextAndRequestPaste(t *testing.T) {
 	old := clipSettleNs
 	clipSettleNs = int64(50 * time.Millisecond)
 	defer func() { clipSettleNs = old }()
-	opened := false
-	for i := 0; i < 200 && !opened; i++ { // another program (a clipboard manager) may have it open for a moment
-		if opened = win32.Bool(win32.Call(pOpenClipboard, w.hwnd)); !opened {
-			time.Sleep(5 * time.Millisecond)
-		}
-	}
-	if !opened {
-		t.Fatal("could not open the clipboard to empty it")
-	}
-	win32.Call(pEmptyClipboard)
-	win32.Call(pCloseClipboard)
+	emptyClipboardOwnerless(t)
 	if e, got := pasteOf(t, w, 2, time.Second); e.Flags&FlagFailed == 0 || got != "" {
 		t.Errorf("empty clipboard: flags %v text %q", e.Flags, got)
 	}
@@ -361,8 +351,9 @@ func hungOwner(t *testing.T, w *Window) (release func()) {
 		win32.Call(pDestroyWindow, hwnd)
 		runtime.KeepAlive(static)
 	}()
-	// Taking the clipboard over sends WM_DESTROYCLIPBOARD to its previous owner,
-	// the test window, so the test window must keep pumping meanwhile.
+	// Taking the clipboard over sends WM_DESTROYCLIPBOARD to its previous owner
+	// (the clipboard worker's window, which answers it itself); the test window
+	// keeps pumping meanwhile all the same.
 	var ok bool
 	for waiting := true; waiting; {
 		select {
@@ -752,6 +743,98 @@ func TestCancelledCopyLeavesTheClipboardAlone(t *testing.T) {
 				t.Errorf("the clipboard holds %q, want what it held before", got)
 			}
 		})
+	}
+}
+
+var (
+	pGetClipboardOwner       = win32.Proc(user32, "GetClipboardOwner")
+	pGetWindowThreadProcessW = win32.Proc(user32, "GetWindowThreadProcessId")
+	pGetCurrentThreadId      = win32.Proc(kernel32, "GetCurrentThreadId")
+)
+
+// What a copy puts on the clipboard is owned by a window of the worker's
+// thread, not by the app's window. The system frees the process's clipboard
+// memory on the owner window's thread, in a callback made while that thread
+// takes its messages, after another program has replaced the clipboard; with
+// the app's window as the owner that was the UI thread, inside PeekMessage, at
+// the same time as the worker's GetClipboardData on the same memory, and the
+// process died with STATUS_HEAP_CORRUPTION (TestClipboardWithPowerShell on
+// amd64, about one run in 20 to 130). And the owner answers WM_DESTROYCLIPBOARD
+// while the UI thread is not pumping: another program's EmptyClipboard does
+// not wait for the UI thread.
+func TestClipboardIsOwnedOnTheWorkersThread(t *testing.T) {
+	w := openTestWindow(t)
+	SetClipboardText([]byte("owned by the worker"))
+	settleCopy(w)
+	owner := win32.Call(pGetClipboardOwner)
+	if owner == 0 || owner == w.hwnd {
+		t.Fatalf("the clipboard owner is %#x (the app's window is %#x), want the worker's window", owner, w.hwnd)
+	}
+	if ui := uint32(win32.Call(pGetCurrentThreadId)); uint32(win32.Call(pGetWindowThreadProcessW, owner, 0)) == ui {
+		t.Fatal("the clipboard owner belongs to the UI thread")
+	}
+	// Another "program" (a thread of its own, with no window) empties the
+	// clipboard while the UI thread does not pump: the owner must answer.
+	done := make(chan bool)
+	go func() {
+		runtime.LockOSThread()
+		ok := false
+		for i := 0; i < 200 && !ok; i++ {
+			if ok = win32.Bool(win32.Call(pOpenClipboard, 0)); !ok {
+				time.Sleep(5 * time.Millisecond)
+			}
+		}
+		if ok {
+			ok = win32.Bool(win32.Call(pEmptyClipboard))
+			win32.Call(pCloseClipboard)
+		}
+		done <- ok
+	}()
+	select {
+	case ok := <-done:
+		if !ok {
+			t.Skip("could not take the clipboard from another thread")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("another program's EmptyClipboard waited for the UI thread to pump")
+	}
+	if got := Clipboard(); got != "" {
+		t.Errorf("the clipboard holds %q after it was emptied", got)
+	}
+}
+
+// A synchronous Clipboard on the UI thread while the worker has the clipboard
+// open must not open it (clipSession). When both opened it with the app's
+// window, it did: Windows lets a second thread open the clipboard with the
+// window that already has it open, and that open takes the session over, so
+// Clipboard read the clipboard in the middle of the worker's copy, closed it
+// under the worker, and the copy was lost (5 runs out of 5 on amd64 and arm64).
+func TestClipboardWhileTheWorkerHasItOpen(t *testing.T) {
+	w := openTestWindow(t)
+	SetClipboardText([]byte("before"))
+	settleCopy(w)
+	opened, resume := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	setClipHook(t, func(s int) {
+		if s == clipStageOpened {
+			once.Do(func() { close(opened); <-resume })
+		}
+	})
+	SetClipboardText([]byte("after"))
+	select {
+	case <-opened:
+	case <-time.After(5 * time.Second):
+		close(resume)
+		t.Fatal("the copy did not open the clipboard")
+	}
+	got := Clipboard() // the worker holds the clipboard open meanwhile
+	close(resume)
+	waitIdleOrExit(t, w)
+	if got != "" {
+		t.Errorf("Clipboard read %q while the worker had the clipboard open", got)
+	}
+	if now := Clipboard(); now != "after" {
+		t.Errorf("the clipboard holds %q, want the copy the worker made while Clipboard was called", now)
 	}
 }
 

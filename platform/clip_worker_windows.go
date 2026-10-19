@@ -22,10 +22,19 @@ import (
 // the UI thread left for it, and posts wmClip to the window when it has
 // finished one; the UI thread then collects a paste's text.
 //
-// The app's window opens the clipboard from the worker's thread and so owns
-// what a copy puts there: another program's EmptyClipboard (and ours) sends the
-// owner WM_DESTROYCLIPBOARD, which must be answered by a thread that pumps
-// messages, as the worker's thread, parked in its Parker, would not.
+// The worker opens the clipboard with a message-only window of its own, made on
+// its thread, so what a copy puts there is owned on the thread that does the
+// process's clipboard calls. The system frees a process's clipboard memory on
+// the thread of the owner window, in a callback made while that thread takes
+// its messages, after another program has replaced the clipboard. With the
+// app's window as the owner, that was the UI thread, inside PeekMessage, while
+// the worker was in GetClipboardData on the same memory: a heap corruption
+// (STATUS_HEAP_CORRUPTION, caught under cdb after a Set-Clipboard in another
+// process). The worker therefore takes its window's messages itself: while it
+// waits for a request (Parker.ParkMsg) and between the tries of a busy
+// clipboard, inside clipSession, so the callbacks never overlap a clipboard
+// call of another thread of the process. It also answers WM_DESTROYCLIPBOARD,
+// which another program's EmptyClipboard sends the owner.
 //
 // There is at most one request of each kind waiting: a newer paste replaces an
 // older one, and a newer copy replaces an older copy that has not started (the
@@ -41,7 +50,9 @@ import (
 // worker serves requests again. While it is stuck, the UI thread does not hand
 // it anything: a paste fails at once and a copy is dropped. Nothing queues
 // behind a stuck call, and no second worker is started, so the clipboard is
-// never operated on by two threads. Whether a request may publish its result is
+// never operated on by two threads (clipSession, in clipboard_windows.go, keeps
+// a worker whose window was closed, and Clipboard on the UI thread, out of
+// each other's sessions as well). Whether a request may publish its result is
 // decided under the lock, against the request itself, and a copy publishes
 // (SetClipboardData) with the lock held, so a request cannot be cancelled in
 // between.
@@ -114,6 +125,9 @@ type clipWorker struct {
 	}
 	buf    []byte // the answer's text
 	closed bool   // Close was called: end, publishing nothing
+
+	own uintptr // the worker's own message-only window, which opens the clipboard; the worker's alone
+	msg msg     // PeekMessage's storage; the worker's alone
 
 	exited atomic.Bool
 }
@@ -258,9 +272,13 @@ func (c *clipWorker) loop() {
 	runtime.LockOSThread() // the thread ends with the goroutine, stuck or not
 	defer c.exited.Store(true)
 	defer c.park.Close()
-	for c.park.Park() {
+	c.own = win32.Call(pCreateWindowExW, 0, uintptr(unsafe.Pointer(clipClassName)), 0, 0, 0, 0, 0, 0, hwndMessage, 0, 0, 0)
+	if c.own != 0 {
+		defer c.destroyWindow()
+	}
+	for c.park.ParkMsg(c.pump) {
 		for {
-			r, owner, st := c.take()
+			r, appWindow, st := c.take()
 			if st == clipExit {
 				return
 			}
@@ -269,6 +287,10 @@ func (c *clipWorker) loop() {
 			}
 			var n int
 			var ok bool
+			owner := c.own
+			if owner == 0 { // no window of its own could be made: the app's, as a fallback
+				owner = appWindow
+			}
 			if r.kind == clipCopy {
 				c.write(owner, r)
 			} else {
@@ -365,14 +387,45 @@ func (c *clipWorker) open(owner uintptr, r clipReq) bool {
 		if !c.alive(r) {
 			return false
 		}
-		if win32.Bool(win32.Call(pOpenClipboard, owner)) {
+		if tryOpenClipboard(owner) {
 			return true
 		}
 		if nanotime() >= r.give {
 			return false
 		}
+		c.pump() // the program that has the clipboard may be waiting for the owner (us) to answer
 		time.Sleep(clipOpenSleep)
 	}
+}
+
+// destroyWindow destroys the worker's window inside clipSession: the window
+// may own what is on the clipboard, and the system frees the process's
+// clipboard memory on the owner's thread.
+func (c *clipWorker) destroyWindow() {
+	for !clipSession.CompareAndSwap(false, true) {
+		time.Sleep(time.Millisecond)
+	}
+	win32.Call(pDestroyWindow, c.own)
+	for win32.Bool(win32.Call(pPeekMessageW, uintptr(unsafe.Pointer(&c.msg)), 0, 0, 0, pmRemove)) {
+		win32.Call(pDispatchMessageW, uintptr(unsafe.Pointer(&c.msg)))
+	}
+	clipSession.Store(false)
+}
+
+// pump takes the messages of the worker's thread (its window's), inside
+// clipSession: the system frees the process's clipboard memory in callbacks it
+// makes here, which must not overlap another thread's clipboard calls. While
+// another thread of the process has the clipboard open (Clipboard, which only
+// reads it and so sends the owner nothing), the messages wait.
+func (c *clipWorker) pump() {
+	if !clipSession.CompareAndSwap(false, true) {
+		time.Sleep(time.Millisecond) // ParkMsg calls again at once: do not spin
+		return
+	}
+	for win32.Bool(win32.Call(pPeekMessageW, uintptr(unsafe.Pointer(&c.msg)), 0, 0, 0, pmRemove)) {
+		win32.Call(pDispatchMessageW, uintptr(unsafe.Pointer(&c.msg)))
+	}
+	clipSession.Store(false)
 }
 
 // read decodes the clipboard's text into c.buf. It reports the length and
@@ -409,11 +462,12 @@ func (c *clipWorker) read(owner uintptr, r clipReq) (n int, ok bool) {
 			}
 			retry = ok && len(buf) == 0
 		} else {
-			retry = win32.Call(pCountClipboardFormats) == 0 || win32.Bool(win32.Call(pIsClipboardFormatAvailable, cfUnicodeText))
+			retry = uint32(win32.Call(pCountClipboardFormats)) == 0 || win32.Bool(win32.Call(pIsClipboardFormatAvailable, cfUnicodeText))
 		}
-		win32.Call(pCloseClipboard)
+		closeClipboard()
 		c.buf = buf // only this goroutine uses buf until it publishes the answer
 		if retry && nanotime() < settle && c.alive(r) {
+			c.pump()
 			time.Sleep(clipSettleStep)
 			continue
 		}
@@ -439,7 +493,7 @@ func (c *clipWorker) write(owner uintptr, r clipReq) {
 	}
 	clipStage(clipStageOpened)
 	if !c.alive(r) { // cancelled while the clipboard was being opened: leave it as it is
-		win32.Call(pCloseClipboard)
+		closeClipboard()
 		win32.Call(pGlobalFree, mem)
 		return
 	}
@@ -456,7 +510,7 @@ func (c *clipWorker) write(owner uintptr, r clipReq) {
 		}
 		c.mu.Unlock()
 	}
-	win32.Call(pCloseClipboard)
+	closeClipboard()
 }
 
 // allocClipboardText copies b (UTF-8) into a new moveable HGLOBAL as
