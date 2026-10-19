@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"gonativeui/internal/ffi"
 	"gonativeui/internal/objc"
 )
 
@@ -522,6 +523,44 @@ func TestUploadToFreshTextureDoesNotWait(t *testing.T) {
 	r.Upload(used, 0, 0, 1, 1, []byte{4, 5, 6, 255}, 4) // waits for the frame
 	if st := objc.Send(cb, rsStatus); st < 4 {
 		t.Fatalf("command buffer status %d after an upload into a texture it samples, want completed", st)
+	}
+}
+
+// TestUploadWaitsForOlderCommittedReader: frame A samples the texture and is
+// committed; frame B samples it too and is not committed yet. An Upload must
+// wait for A, though B is the latest reader. A waits on a shared event that
+// another thread signals 100 ms into the Upload, so A is still pending when
+// Upload starts and has run if (and only if) Upload waited for it.
+func TestUploadWaitsForOlderCommittedReader(t *testing.T) {
+	r := newTestRenderer(t)
+	r.newTarget(1, 1)
+	tex := texel(r, 1, 2, 3, 255)
+	F := objc.F
+	pool := F.Call0(objc.PoolPush)
+	defer F.Call1(objc.PoolPop, pool)
+	ev := objc.Send(r.device, objc.Sel("newSharedEvent"))
+	if ev == 0 {
+		t.Skip("no MTLSharedEvent")
+	}
+	defer objc.Release(ev)
+	a := objc.Retain(objc.Send(r.queue, rsCommandBuf))
+	defer objc.Release(a)
+	objc.Send2(a, objc.Sel("encodeWaitForEvent:value:"), uintptr(ev), 1)
+	r.Encode(uintptr(a), uintptr(r.offscreen), 1, 1, black, &DrawList{Quads: []Quad{rgbaQuad(0, tex)}})
+	objc.Send(a, rsCommit)
+	b := objc.Send(r.queue, rsCommandBuf) // never committed
+	r.Encode(uintptr(b), uintptr(r.offscreen), 1, 1, black, &DrawList{Quads: []Quad{rgbaQuad(0, tex)}})
+	if st := objc.Send(a, rsStatus); st >= 4 {
+		t.Fatalf("frame A finished (status %d) before its event was signalled", st)
+	}
+	setSignaled := objc.Sel("setSignaledValue:")
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		new(ffi.Frame).Call3(objc.MsgSend, uintptr(ev), uintptr(setSignaled), 1)
+	}()
+	r.Upload(tex, 0, 0, 1, 1, []byte{4, 5, 6, 255}, 4)
+	if st := objc.Send(a, rsStatus); st < 4 {
+		t.Fatalf("Upload returned while frame A, which samples the texture, was still pending (status %d)", st)
 	}
 }
 

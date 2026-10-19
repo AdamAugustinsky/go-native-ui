@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"runtime"
+	"slices"
 	"sync"
 	"unsafe"
 
@@ -128,6 +129,7 @@ type ringSlot struct {
 	quads  int            // capacity in quads
 	cb     objc.ID        // retained command buffer that last read buf
 	serial uint64         // the frame encoded into the slot (Renderer.serial)
+	uses   []int32        // texture indices its frame binds or its staged blit writes
 
 	// Stage's copies for the slot's next frame: their pixels in the staging
 	// buffer, written by a blit in ucb, which Encode commits ahead of the
@@ -414,7 +416,7 @@ func (r *Renderer) Upload(t TextureID, x, y, w, h int, pixels []byte, stride int
 	}
 	// replaceRegion doesn't synchronise with the GPU: wait until frames
 	// already submitted have stopped sampling the texture.
-	r.waitSubmitted(r.lastUse[i])
+	r.waitSubmitted(i)
 	pinnedBytes = &pixels[0] // force the backing array onto the heap while C reads it
 	if stride%bpp == 0 {
 		argRegion(objc.F.Reset().Arg(uintptr(r.textures[i])).Arg(uintptr(rsReplace)), x, y, w, h).
@@ -503,7 +505,7 @@ func (r *Renderer) flushStaged(s *ringSlot) {
 		if !ok {
 			continue // freed since it was staged
 		}
-		r.lastUse[k] = r.serial // an Upload into it waits for this blit
+		r.use(s, k) // an Upload into it waits for this blit
 		F.Reset().Arg(uintptr(blit)).Arg(uintptr(rsCopyBufTex)).Arg(uintptr(s.stage)).Arg(uintptr(c.off)).
 			Arg(uintptr(c.bpr)).Arg(uintptr(c.bpr * c.h))
 		if runtime.GOARCH == "arm64" { // MTLSize and MTLOrigin (24 bytes) by reference
@@ -523,18 +525,29 @@ func (r *Renderer) flushStaged(s *ringSlot) {
 	s.copies = s.copies[:0]
 }
 
-// waitSubmitted waits for the committed command buffers of frames from
-// serial since on, which may still read a texture that frame since last
-// bound; since 0 (never bound) waits for nothing, so filling a new texture
-// never stalls. A buffer that isn't committed yet (the frame being built) is
-// left alone: it reads the new contents.
-func (r *Renderer) waitSubmitted(since uint64) {
-	if since == 0 {
+// use records that slot s's frame (Renderer.serial) binds texture index k,
+// or that its staged blit writes it.
+func (r *Renderer) use(s *ringSlot, k int) {
+	if r.lastUse[k] != r.serial {
+		r.lastUse[k] = r.serial
+		s.uses = append(s.uses, int32(k))
+	}
+}
+
+// waitSubmitted waits for the committed command buffers of every ring slot
+// whose frame bound texture index i or whose staged blit wrote it: each may
+// still read it. A texture no frame has bound (lastUse 0) waits for nothing,
+// so filling a new texture never stalls. A buffer that isn't committed yet
+// (the frame being built) is left alone: it reads the new contents. Every
+// slot is checked, not only the latest reader: an older frame that is
+// committed still samples the texture while a newer one waits for its commit.
+func (r *Renderer) waitSubmitted(i int) {
+	if r.lastUse[i] == 0 {
 		return
 	}
-	for i := range r.slots {
-		s := &r.slots[i]
-		if s.serial < since {
+	for k := range r.slots {
+		s := &r.slots[k]
+		if !slices.Contains(s.uses, int32(i)) {
 			continue
 		}
 		for _, cb := range [2]objc.ID{s.ucb, s.cb} {
@@ -620,6 +633,7 @@ func (r *Renderer) Encode(cmdBuf, target uintptr, width, height int, clear [4]fl
 	r.retire(s)
 	r.serial++
 	s.serial = r.serial
+	s.uses = s.uses[:0]
 	if len(r.retiring) > 0 {
 		r.collect()
 	}
@@ -655,7 +669,7 @@ func (r *Renderer) Encode(cmdBuf, target uintptr, width, height int, clear [4]fl
 	// open; only a texture quad with a different texture ends it.
 	bound := TextureID(0)
 	objc.Send2(enc, rsSetFTexture, uintptr(r.textures[0]), 0)
-	r.lastUse[0] = r.serial
+	r.use(s, 0)
 	runStart := 0
 	for i := range quads {
 		q := &quads[i]
@@ -670,7 +684,7 @@ func (r *Renderer) Encode(cmdBuf, target uintptr, width, height int, clear [4]fl
 		tex := r.empty // a freed or unknown id draws nothing
 		if k, ok := r.ids.lookup(bound); ok {
 			tex = r.textures[k]
-			r.lastUse[k] = r.serial
+			r.use(s, k)
 		}
 		objc.Send2(enc, rsSetFTexture, uintptr(tex), 0)
 	}

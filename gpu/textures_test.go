@@ -43,6 +43,34 @@ func TestFreeTextureGenerations(t *testing.T) {
 	near(t, "unknown id draws nothing", render(r, 1, 1, black, rgbaQuad(0, 0xFFFF)).at(0, 0), [4]int{0, 0, 0, 255}, 0)
 }
 
+// TestFreeTextureGenerationsExhausted: an index freed under its last
+// generation is never reused, so no id comes back, and a stale id held all
+// along still draws, uploads and frees nothing.
+func TestFreeTextureGenerationsExhausted(t *testing.T) {
+	r := newTestRenderer(t)
+	a := texel(r, 255, 0, 0, 255)
+	cur := a
+	for n := 0; n <= texGenMask && cur.index() == a.index(); n++ {
+		r.FreeTexture(cur)
+		cur = texel(r, 0, 255, 0, 255)
+		if cur == a {
+			t.Fatalf("after %d frees index %d came back under the stale id %#x", n+1, a.index(), a)
+		}
+	}
+	if cur.index() == a.index() {
+		t.Fatalf("index %d still reused after %d frees", a.index(), texGenMask+1)
+	}
+	live0, _ := r.TextureCounts()
+	r.Upload(a, 0, 0, 1, 1, []byte{0, 0, 255, 255}, 4)
+	r.FreeTexture(a)
+	if live, _ := r.TextureCounts(); live != live0 {
+		t.Fatalf("freeing the stale id freed a live texture: %d live, want %d", live, live0)
+	}
+	m := render(r, 2, 1, black, rgbaQuad(0, a), rgbaQuad(1, cur))
+	near(t, "stale id draws nothing", m.at(0, 0), [4]int{0, 0, 0, 255}, 0)
+	near(t, "the live texture, untouched by the stale upload", m.at(1, 0), [4]int{0, 255, 0, 255}, 1)
+}
+
 // TestFreeTextureReuse: creating and freeing textures frame after frame keeps
 // the table at its high-water mark, and everything freed is released once
 // the frames that used it are done (render waits for its frame).

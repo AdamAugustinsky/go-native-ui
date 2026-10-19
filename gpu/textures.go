@@ -7,7 +7,9 @@ package gpu
 // FreeTexture bumps the generation and puts the index on a free list, so a
 // later NewTexture can reuse the index under a new id while every copy of
 // the old id stops resolving: Upload and FreeTexture ignore it and Encode
-// draws its quads with an empty (transparent) texture. Ids of a renderer
+// draws its quads with an empty (transparent) texture. An index freed under
+// its last generation is never reused, so no id repeats (a table index lasts
+// 4096 frees; the 2^20 indices, about 4×10^9). Ids of a renderer
 // that never frees are 0, 1, 2, ... as before generations existed.
 //
 // The GPU object of a freed texture is not released at once. It joins the
@@ -79,9 +81,14 @@ func (t *texTable) lookup(id TextureID) (int, bool) {
 }
 
 // remove frees index i: its id stops resolving and the index may be reused.
+// An index whose generations are used up is retired for good instead: a new
+// generation would repeat an old id, which might still be held.
 func (t *texTable) remove(i int) {
 	t.live[i] = false
-	t.gen[i] = (t.gen[i] + 1) & texGenMask
-	t.free = append(t.free, int32(i))
 	t.n--
+	if t.gen[i] == texGenMask {
+		return
+	}
+	t.gen[i]++
+	t.free = append(t.free, int32(i))
 }
