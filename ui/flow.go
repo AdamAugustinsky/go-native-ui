@@ -80,9 +80,9 @@ package ui
 //     asks for that frame, as FlowOverflow says).
 //
 // Only the flow's last child can be the indicator, and only a flow with
-// MaxLines above 0 has one; the mark on another box does nothing. It is
-// counted by FlowOverflow, and it is a child
-// like the others for Tab, accessibility and the line's height.
+// MaxLines above 0 has one; the mark on another box does nothing. It is not
+// counted by FlowOverflow, and it is a child like the others for Tab,
+// accessibility and the line's height.
 //
 // # Direction
 //
