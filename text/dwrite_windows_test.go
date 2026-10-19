@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 func newSys(t *testing.T) *System {
@@ -291,7 +293,9 @@ func TestShapeParagraphDirectionFromBidiClasses(t *testing.T) {
 		}
 		left, right := true, true
 		for g := range v.Glyphs {
-			if g == probe {
+			// (DirectWrite places the glyphs of invisible format characters,
+			// RLM and the isolates, where it likes.)
+			if r, _ := utf8.DecodeRuneInString(("!" + c.s)[v.Clusters[g]&^ClusterRTL:]); g == probe || unicode.Is(unicode.Cf, r) {
 				continue
 			}
 			left = left && v.X[g] >= v.X[probe] // (zero-width format characters sit beside it)
