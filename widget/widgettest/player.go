@@ -56,6 +56,7 @@ type Player struct {
 	x, y      float32 // the pointer
 	base      []byte  // the value a WaitChange step started from
 	tips      []ui.TooltipRegion
+	tipText   []byte
 }
 
 var _ app.Scripter = (*Player)(nil)
@@ -237,11 +238,14 @@ func (p *Player) exists(role ui.Role, name string) bool {
 	if c := p.h.Context(); role == ui.RoleTooltip && c.NativeTooltips() {
 		// The system draws the tooltip, outside the semantic tree: it is "up"
 		// when one is declared under the pointer (the system's own delay is not
-		// waited for).
+		// waited for). The topmost region under the pointer is the one the
+		// system shows; with a name, its text must be that name.
 		p.tips = c.TooltipRegions(p.tips)
-		for _, r := range p.tips {
+		for i := len(p.tips) - 1; i >= 0; i-- {
+			r := p.tips[i]
 			if p.x >= r.Rect[0] && p.x < r.Rect[2] && p.y >= r.Rect[1] && p.y < r.Rect[3] {
-				return true
+				p.tipText = c.TooltipText(r.Key, p.tipText[:0])
+				return name == "" || string(p.tipText) == name
 			}
 		}
 		return false

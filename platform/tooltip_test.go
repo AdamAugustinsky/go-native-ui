@@ -50,7 +50,7 @@ func TestTooltipFlatten(t *testing.T) {
 		{[4]float32{0, 0, 100, 100}, 1},
 		{[4]float32{20, 20, 60, 60}, 2},  // inside 1, above it
 		{[4]float32{50, 40, 140, 80}, 3}, // overlaps 1 and 2, above both
-		{[4]float32{200, 0, 210, 10}, 0}, // no key: ignored
+		{[4]float32{40, 30, 120, 70}, 0}, // no key: ignored, and it hides nothing beneath it
 		{[4]float32{300, 0, 300, 10}, 4}, // empty: ignored
 		{[4]float32{0, 90, 100, 110}, 5}, // overlaps the bottom of 1
 		{[4]float32{10, 10, 20, 20}, 6},  // inside 1, above it
