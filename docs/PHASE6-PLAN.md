@@ -23,7 +23,7 @@ The fourth, ZapFast, is phase 7 (D33). It starts at the same time, because its R
 - the other items under [Gaps](#gaps-what-the-research-found-and-this-phase-leaves-out), each with its reason;
 - the final name, the licence, and any promise that the API is stable.
 
-The plan is to be reviewed independently before any code, as phase 5's was. Revised 2026-10-18 after that review (GPT-6.1 Sol), whose findings you accepted; the fixes are in the contracts, work items, tests and graph they concern, and the decisions are in `DECISIONS.md` as D34–D51.
+The plan is to be reviewed independently before any code, as phase 5's was. Revised 2026-10-18 after that review (GPT-6.1 Sol), whose findings you accepted, and again after its scoped re-review; the fixes are in the contracts, work items, tests and graph they concern, and the decisions are in `DECISIONS.md` as D34–D51. Behaviour not yet verified is marked as an assumption or tied to a named feasibility test.
 
 ## Packages
 
@@ -64,11 +64,25 @@ The contracts are written in code first (wave 0, by me), with stub implementatio
 ### Calling C from an app (`clib`, D35)
 
 ```go
-lib, err := clib.Open(clib.BundleFramework("libzapfast_core.dylib")) // absolute path; RTLD_NOW|RTLD_LOCAL
-send, err := lib.Func("zf_send")                                       // look up once, at setup
-call := clib.NewCall()                                                 // keep it (a field), never on the stack
-st := call.Reset().Ptr(unsafe.Pointer(core)).Ptr(unsafe.Pointer(&buf[0])).Uint(uint64(n)).Do(send).Int32()
+// int32_t zf_send(zf_core *c, const uint8_t *cmd, size_t len, zf_err *err);  (ZapFast's core, D49)
+type zfErr struct{ Code int32; Len uint32; Msg [256]byte }            // the C zf_err, laid out the same
+
+type sender struct {                                                   // one per call site, used by one goroutine at a time
+	call *clib.Call
+	err  *zfErr                                                        // heap-resident, owned with the Call
+	fn   clib.Func
+}
+
+lib, err := clib.Open(clib.BundleFramework("libzapfast_core.dylib"))  // absolute path; RTLD_NOW|RTLD_LOCAL
+fn, err := lib.Func("zf_send")                                          // look up once, at setup
+s := &sender{call: clib.NewCall(), err: new(zfErr), fn: fn}            // allocated once, at setup
+
+st := s.call.Reset().Ptr(unsafe.Pointer(core)).Ptr(unsafe.Pointer(&buf[0])).Uint(uint64(n)).
+	Ptr(unsafe.Pointer(s.err)).Do(s.fn).Int32()                         // four arguments; the error comes back in s.err
 runtime.KeepAlive(buf)
+if st != 0 {
+	return s.err.toError()                                              // allocates only on failure
+}
 ```
 
 - **What it is.** dlopen/dlsym; integer, pointer, `float32`/`float64` and `bool` arguments; integer, pointer and float results; up to the register and stack limits of `internal/ffi.Frame`. It is built on the same trampolines (D3).
@@ -76,7 +90,7 @@ runtime.KeepAlive(buf)
   - no callbacks: a C function pointer is never accepted, and a library that calls back into Go is not supported;
   - no structs by value, and no variadic functions.
 - **Threading.** A `Call` is used by one goroutine at a time. Any goroutine may call. Blocking C calls release the P (`runtime.cgocall`).
-- **Errors come back in the same call.** Two consecutive `Do` calls may run on different OS threads, because the goroutine can move between them. So thread-local error state (`errno`, `dlerror`, a library's "last error") cannot be read reliably after a call. Libraries designed for `clib` return errors through caller-owned storage passed in the call itself, as ZapFast's core does (D49). `Open` and `Func` read `dlerror` themselves, with the thread pinned (`runtime.LockOSThread`) for that one call. A caller that must read a thread-local error from an existing library brackets the call and the read with `LockOSThread`/`UnlockOSThread`, and the documentation says so.
+- **Errors come back in the same call.** Two consecutive `Do` calls may run on different OS threads, because the goroutine can move between them. So thread-local error state (`errno`, `dlerror`, a library's "last error") cannot be read reliably after a call. Libraries designed for `clib` return errors through caller-owned storage passed in the call itself, as ZapFast's core does (D49). That storage lives on the Go heap (or in C memory) next to the `Call` that passes it, as in the example, so it has the `Call`'s rule: one caller at a time. `Open` and `Func` read `dlerror` themselves, with the thread pinned (`runtime.LockOSThread`) for that one call. A caller that must read a thread-local error from an existing library brackets the call and the read with `LockOSThread`/`UnlockOSThread`, and the documentation says so.
 - **Allocations.** 0 per call after `NewCall`, gated by a benchmark.
 - **Memory.** Pointer arguments point to Go heap memory or C memory, never to a goroutine stack (ARCHITECTURE §4). The pointee holds no Go pointers. C must not keep it after the call returns. `clib.CStr(dst, s)` makes NUL-terminated copies into a caller buffer.
 - **Foreign threads.** A library's own threads (tokio, in ZapFast's case) may run in the process, and Go's signal handling must tolerate them. We rely on fakecgo setting `iscgo` (D3). This is tested, not assumed: a test fixture library of our own, built with clang in the test as D19 allows for tools, starts threads that spin and block while the Go side runs under `SIGPROF` profiling and async preemption (`SIGURG`).
@@ -92,10 +106,12 @@ runtime.KeepAlive(buf)
   - **Why not global blocks for requests.** A global block is returned unchanged by `_Block_copy`, so AppKit keeps *our* literal's address. If its slot were reused after a cancellation, a late callback would run the next request's handler, and a generation number stored in the reused literal would already belong to the new request.
   - **So a per-request block is a stack-class literal.** It has the `_NSConcreteStackBlock` isa, `BLOCK_HAS_SIGNATURE`, an invoke pointer that is one of our ffi callback entries, and two captured scalars: the slot index and the slot's generation. The literal sits in a scratch area of C memory that stays valid for the duration of the call that passes it, exactly like a stack block. An API that keeps the block copies it, as the Blocks ABI requires. `_Block_copy` then makes a heap copy that carries its own captured slot and generation, and `Block_release` frees it.
   - **No copy or dispose helpers are needed.** The captures are plain integers; no object is retained. The block's lifetime is the runtime's business; our only state is the slot.
-  - **A late callback is dropped.** The handler compares the copy's captured generation with the slot's current one; on a mismatch it does nothing except the native acknowledgement the API requires (below). Cancelling a request bumps the slot's generation and frees the slot at once, so slots never leak waiting for a callback that may never come.
+  - **A callback claims its slot atomically.** Each slot has one 64-bit atomic word: the generation (32 bits), a `retiring` bit, and an active-claim count (16 bits). The callback entry claims with a compare-and-swap that succeeds only if the generation equals the copy's captured one and `retiring` is clear, and increments the claim count; on return it decrements the count.
+  - **A stale call does nothing to the slot.** A claim that fails (wrong generation, or retiring) is a stale call: it runs only the native acknowledgement the API requires (below), using nothing but the call's own arguments and the copy's captures, never the slot's context, which may already belong to another request.
+  - **Cancelling never waits.** Cancelling (or completing a one-shot request) bumps the generation and sets `retiring` in one compare-and-swap, so no new claim can succeed. The slot returns to the free list when its claim count reaches 0: at once if no callback is inside, otherwise by the last callback to leave, which sees `retiring` with a count of 0 and frees it. Cancelling never waits for callbacks that are running, nor for callbacks that have not entered (those will fail to claim). So a slot can never be reused while a callback still runs on it, and slots never leak waiting for a callback that may never come.
   - **Process-lifetime blocks** (a fixed dispatcher that carries no per-request state, like today's Metal block at `gpu/metal_darwin.go:295-340`) may be global. They then need both the `_NSConcreteGlobalBlock` isa **and** the `BLOCK_IS_GLOBAL` flag (`1 << 28`): `_Block_copy` tests the flag, not the isa, so a global isa without the flag would be copied anyway.
   - **Multi-shot callbacks** (observers) use selector-based APIs on our runtime classes (`addObserver:selector:name:object:`) rather than blocks, so their lifetime is the observer object's. The AVAudioEngine tap, which only takes a block, is a per-request block whose generation is bumped when the tap is removed.
-  - **Cancellation, per API used in this phase:**
+  - **Cancellation, per API used in this phase.** The "is called" column and the assumption that each API copies the block it keeps are **assumptions from Apple's documentation and the Blocks ABI, checked per API** by F1's feasibility test "block copy per API" (below) before any service relies on them:
 
     | API | The block is called | Cancel | Native acknowledgement on a stale call |
     |---|---|---|---|
@@ -104,12 +120,19 @@ runtime.KeepAlive(buf)
     | `AVCaptureDevice requestAccessForMediaType:` | exactly once | as above | none |
     | `AVAudioPlayerNode scheduleBuffer:completionHandler:` | once per buffer, also when the node stops | `stop` bumps the generation | the buffer's lease is released anyway |
     | `AVAudioNode installTapOnBus:…block:` | many times, until removed | `removeTapOnBus:` then a generation bump; calls already in flight are dropped | none |
-    | `NSFilePromiseProvider` `writePromiseToURL:completionHandler:` (the handler is given to *us*) | — | — | we must call its completion handler exactly once, with an error if the app never answers |
-    | `willPresentNotification:withCompletionHandler:` and `didReceiveNotificationResponse:withCompletionHandler:` (given to us) | — | — | called before the delegate method returns, whatever happens to the event (below) |
+    | `NSFilePromiseProvider` `writePromiseToURL:completionHandler:` (the handler is given to *us*) | — | — | we `_Block_copy` it before storing it, call it exactly once (with an error if the app never answers or the drag is abandoned), then `Block_release` it |
+    | `willPresentNotification:withCompletionHandler:` and `didReceiveNotificationResponse:withCompletionHandler:` (given to us) | — | — | called before the delegate method returns, after the response is stored in its reserved slot (D37 class 2); a handler kept past the return would be `_Block_copy`'d first |
   - **Bounds.** Slots live in a fixed table (256). When none is free, the request fails with an error at once; the table never grows.
-- **Blocks we are given.** `objc.CallBlock(b, args…)` reads the block's invoke pointer and calls it with the block first. A block given to us is called by the framework code that received it, never left to the app, so an acknowledgement cannot be forgotten.
+- **Blocks we are given.** `objc.CallBlock(b, args…)` reads the block's invoke pointer and calls it with the block first. A block given to us is called by the framework code that received it, never left to the app, so an acknowledgement cannot be forgotten. A block given to us is only valid for the duration of the call that passed it, so **any block we keep past that call is copied first** with `_Block_copy` (a stack block becomes a heap copy; a heap block is retained) and released with `Block_release` after its one call. Keeping a block goes through one helper, `objc.KeepBlock` (copy, store, and a matching `objc.CallKeptBlock` that calls and releases), so the copy cannot be skipped.
 - **Callbacks on foreign threads.** UserNotifications, AVFoundation and file promises call us on GCD threads. GCD makes no promise about how many threads it uses or for how long, so nothing is keyed by thread.
-  - **Invocation-scoped frame leases.** The callback entry takes an `ffi.Frame` from a lock-free pool of C-allocated frames when the callback starts, and returns it when the callback returns. A thread that exits, or one GCD reuses, holds nothing. The pool starts with 64 frames and grows in chunks of 64 from `mmap`, up to 1024. At the limit, a new callback waits (yielding with `sched_yield`) until a lease returns, and the wait is counted; a handler only copies and posts, so a lease is held for microseconds.
+  - **Main-thread callbacks keep their main-thread path.** A callback that arrives on the main thread (delegates, the run-loop source, completion handlers AppKit calls on the main queue) uses the main-thread frame as today and never takes a lease.
+  - **Invocation-scoped frame leases on other threads.** A foreign-thread callback takes an `ffi.Frame` from a lock-free pool of C-allocated frames when it starts and returns it when it returns. A thread that exits, or one GCD reuses, holds nothing. The pool starts with 64 frames and grows in chunks of 64 from `mmap`, up to 1024. **1024 is an engineering choice**, not a system limit: it is far above the concurrency we expect from the frameworks we use, and small (about 300 KiB of frames).
+  - **Nesting never waits.** The lease currently held by a thread is recorded in a thread-specific slot (`pthread_setspecific`, set on entry and restored on return, so a thread that exits holds nothing). A callback that finds its thread already holding a lease (a handler whose C call re-entered us) takes its frame from a separate **nested reserve** of 16 frames instead of the main pool, and never waits for either.
+  - **Exhaustion never waits; it takes the API's fallback.** When neither the pool (at its limit) nor, for a nested call, the reserve has a frame, the callback does not wait. It takes its documented per-API fallback, recorded per callback kind in the registry:
+    - an **observation** (levels, positions, thermal state) is dropped and counted;
+    - a **mandatory completion** writes its result into the completion record it reserved when the request was made (D37 class 2; plain memory, no C call needed), marks it ready, sets an `overflow` flag, and wakes the main thread through a frame-free path: one byte written with Go's `syscall.Write` to a non-blocking wake pipe whose read end is a `CFFileDescriptor` source in the common modes. Go's darwin syscalls go through the runtime's own libc trampolines and need no `ffi.Frame`; a full pipe means a wake is already pending. The main thread drains every ready record when the source fires;
+    - a callback that must make a **native acknowledgement** (the notification delegate's handlers) never takes the main pool. If it arrives on the main thread it uses the main-thread path. Which thread UserNotifications calls its delegate on is **not documented, so it is an assumption**, recorded by the "block copy per API" test. If it is another thread, these callbacks take frames from a dedicated acknowledgement reserve with one frame per response slot (D37: every notification that can produce a response holds a slot), so it cannot run out while the slot table bounds the callbacks; a debug assertion checks that bound.
+  - **This progress argument is an assumption until tested:** F1's feasibility test "callback-pool progress" (below) runs with an artificially tiny pool and reserve.
   - **Attaching to the Go runtime.** A callback on a thread Go has never seen goes through `crosscall2`'s `needm`, which takes an extra M and may create one. That is a Go allocation the first time the number of threads inside callbacks at once reaches a new high. The steady state (no new high) must allocate nothing.
   - A foreign-thread handler may only copy its arguments (strings as UTF-8 into fixed buffers) into the app's event records (below) and call `platform.Wake`. It never touches AppKit, except calls Apple documents as thread-safe and that we list per use, and it never touches `ui`.
 - **F1's feasibility tests (before anything builds on F1):**
@@ -118,7 +141,10 @@ runtime.KeepAlive(buf)
   - cold attachment: the first callback on a fresh `pthread`;
   - **Go allocations measured** with exact `ReadMemStats` deltas (D11), not inferred from the frames being C memory: 0 after the concurrency high-water mark is reached; the allowance before it is reported per new thread;
   - late callbacks: a request cancelled and its slot reused, then the old block called through a heap copy made by `_Block_copy`: the new request's handler is not run;
-  - the flags: a global block's `_Block_copy` returns the same pointer, and a per-request literal's returns a heap copy with the captures intact.
+  - **a callback in flight during cancellation:** a fixture callback claims its slot and blocks inside its handler; the request is cancelled from the main thread (which returns at once), a new request is issued, and the test checks that the new request did not get that slot until the blocked callback returned, that the stale acknowledgement touched no slot context, and that the slot is then reused with the new generation;
+  - the flags: a global block's `_Block_copy` returns the same pointer, and a per-request literal's returns a heap copy with the captures intact;
+  - **block copy per API:** for each API in the cancellation table, the test checks with instrumented literals that the API copies the block it keeps (the literal's scratch area is poisoned after the call) and how many times it calls it, including on window close, node stop and tap removal. An API that misbehaves gets a recorded workaround before its service is built;
+  - **callback-pool progress:** with the pool forced to 2 frames and the reserve to 1: recursive callbacks (a fixture whose handler calls a C function that calls back into Go, three levels deep) and 64 concurrent ones from many queues, mixing observations and mandatory completions. It passes when the run finishes within its timeout (no deadlock), every mandatory completion is delivered through a lease or the overflow path, dropped observations are counted, and no callback ever waited.
 - **Main-thread rule.** The global `objc.F` frame stays main-thread only, checked in debug builds. Class and selector lookups are resolved at init, so foreign threads never look anything up.
 - **Leak counters.** Live blocks, retained delegates and observers are counted, for the open/close leak gate.
 
@@ -138,11 +164,12 @@ w, err := a.OpenWindow(app.WindowConfig{Title: "Settings", Chrome: rexui.ChromeC
   - `ID`: reverse-DNS. It defaults to the bundle's `CFBundleIdentifier`, and services need it (D45).
   - `KeepRunning`: macOS stays running with no window.
   - `StartHidden`: launch without a window, for a login item.
+  - `QuitDeadline`: optional; zero (the default) means none. With a duration, a quit request still unanswered after it gets `QuitDeadlineAction`, which defaults to `Cancel`; `Allow` (force-quit) exists only as the app's explicit choice. Either way the app receives `EvQuitDeadline`, an error event.
   - `Policy`: Regular, or Accessory (no Dock icon).
   - `Mac`: grouped OS-only options (`go-and-others.md` §3.3).
 - **The NSApplication delegate** is a runtime class, set before `finishLaunching`. It handles:
   - `applicationShouldHandleReopen:hasVisibleWindows:` → `EvReopen`;
-  - `applicationShouldTerminate:` → `NSTerminateLater`, then `EvQuitRequested{Reason}`;
+  - `applicationShouldTerminate:` → `EvQuitRequested{Reason}`, then `NSTerminateNow`, `NSTerminateCancel` or `NSTerminateLater` (the quit policy, below);
   - become and resign active;
   - `application:openURLs:` and the `kAEGetURL` Apple event, registered in `applicationWillFinishLaunching:` so a launch by URL is not lost;
   - `applicationDockMenu:`, which `app/dock` supplies;
@@ -155,21 +182,26 @@ w, err := a.OpenWindow(app.WindowConfig{Title: "Settings", Chrome: rexui.ChromeC
   - So app events have their own dispatcher: a `CFRunLoopSource` (version 0) on the main run loop, added for `kCFRunLoopCommonModes`. AppKit puts the default, modal-panel and event-tracking modes in the common set, so the source fires in every one of those loops. Producers mark their record ready, call `CFRunLoopSourceSignal` and `CFRunLoopWakeUp` (both thread-safe), and the source's perform callback delivers ready events to `Handler.Event` on the main thread.
   - It is independent of frames: it fires with zero windows, while every window is occluded, and inside nested loops. The frame handler (D30) keeps windows drawing in those loops through the display links, which are also in the common modes.
   - **Never inside Build.** The run loop runs only in the pump and in native loops, and native loops start only at safe points (D30), so the source can never fire during Build or encoding. A `Handler.Event` that opens a window or a sheet has it queued to the next safe point, as today.
+  - **Safe-point work runs from the dispatcher too.** While the outer pump is suspended inside a native loop (`NSTerminateLater`'s modal-panel wait, menu tracking, a sheet), it never reaches its own safe point. So after delivering events, the source's perform callback runs the deferred safe-point queue itself: windows opened or closed, sheets and alerts begun, hosts created or released, menu rebuilds. The callback runs between events, never inside Build or encoding, so it is a safe point by the D30 definition. Without this, a "Save changes?" sheet asked for during a pending quit would never open.
 - **App events.**
   - `app.Event` is a fixed-size, pointer-free record: kind, source, window, id, two integers, and a data span.
   - `e.Data()` is valid during the `Event` call only.
   - Kinds: `EvReopen`, `EvActivated`, `EvDeactivated`, `EvQuitRequested`, `EvOpenURLs`, `EvOpenFiles`, `EvWillSleep`, `EvDidWake`, `EvScreensChanged`, `EvWillTerminate`, `EvCommand` (app-wide menu commands; D29's planned `CommandHandler` becomes this), and `EvService` (results and clicks from `app/*` services, tagged by source).
-- **Delivery has four classes, and only observations can be lost:**
+- **Delivery has four classes. Nothing the framework has accepted is lost: observations are coalesced by design, `app.Post` refuses (returns false) instead of dropping, and every other event is either reserved before the action that produces it or refused at its source, visibly:**
   1. **Main-thread native events** (reopen, quit requests, open URLs and files, activation, sleep and wake, screens, will-terminate, menu commands). AppKit calls the delegate on the main thread, from a run loop, at a safe point. They are delivered **synchronously** to `Handler.Event` from the delegate method, with no queue. Events that arrive before `Start` has returned (a launch by URL) are held in a startup list, the one place this path allocates.
-  2. **Request completions** (an alert's button, a panel's paths, a permission answer, a notification's post result, a promise to fill). Every request takes a **ticket** bound to a completion record reserved when the request is made, from a fixed table per service (64). A full table fails the *request*, synchronously, with `ErrBusy`; a completion never needs queue space, so it cannot be lost. The foreign thread writes its record, marks it ready and signals the source.
-  3. **Unsolicited events from other threads that must arrive** (a notification click or reply, a second instance's arguments). Each source has its own reserved ring (32 records, 16 KiB). When it is full, the producer keeps the record in its own bounded pending list (32 more) and retries after the next dispatch; beyond that, the oldest *pending* record is dropped, counted, and reported as `EvLost` with the source. The native acknowledgement (the notification delegate's completion handler, a socket reply) is done in the native callback before it returns, whether or not the record was queued.
-  4. **Observations** (recorder levels, playback position, thermal state, network changes): one latest-value slot per source, coalesced, never queued. Lossy by design.
-  - **`app.Post(e, data)`** is the app's own path from its goroutines (class 3 semantics): it is allocation-free, never blocks, and returns false when its ring is full, so the caller retries. Framework producers never use it for classes 1 and 2.
+  2. **Request completions and responses** (an alert's button, a panel's paths, a permission answer, a notification's post result, a promise to fill, **and a notification's click, action or reply**). Every request takes a **ticket** bound to a completion record reserved when the request is made, from a fixed table per service (64; 256 for notification responses). A full table fails the *request*, synchronously, with `ErrBusy`; a completion never needs queue space, so it cannot be lost. The foreign thread writes its record, marks it ready and signals the source.
+     - **Notifications reserve their response slot when they are posted.** `notify.Post` of a notification with a click payload, actions or a reply field reserves a response record (with room for the reply text, up to 4 KiB). When a response arrives, the delegate stores the action and the reply text in that record **before** it calls the system's completion handler, so an accepted reply cannot be lost after the system considers it delivered. The slot is freed when the response is delivered, or when the notification is removed (`Remove`, `RemoveThread`, or found gone from Notification Center at launch).
+     - **No reservation, no actions.** When the table is full, the notification is posted without its actions or reply field (a plain banner whose click only activates the app) and `Post` reports `PostedWithoutActions`; or, if the app set `notify.Options.EvictOldest`, the oldest delivered notification is removed from Notification Center to free its slot. Notifications delivered by an earlier run are re-reserved at launch (`getDeliveredNotificationsWithCompletionHandler:`); those that do not fit are reported to the app, which may remove them.
+  3. **Unsolicited requests from outside the process** (a second instance's arguments, over `app/instance`'s socket). Each source has its own reserved ring (32 records, 16 KiB). A request is accepted only if it fits; the primary then answers the secondary `accepted`. When the ring is full the primary answers `busy`, and the secondary retries with backoff for up to 2 s, then exits with an error message saying the running instance did not respond. Nothing is accepted and then dropped.
+  4. **Observations** (recorder levels, playback position, thermal state, network changes): one latest-value slot per source, coalesced, never queued. Lossy by design, and the only class where a value is replaced without being seen.
+  - **`app.Post(e, data)`** is the app's own path from its goroutines: a reserved ring of its own; it is allocation-free, never blocks, and returns false when the ring is full, so the caller keeps the event and retries. Framework producers never use it.
   - **Releasing native resources never depends on delivery:** block copies, buffer leases, pixel buffers and completion handlers are released or called by the native callback itself.
 - **The quit policy.** Every route arrives as `EvQuitRequested{Menu|Dock|Logout|Update|Signal}`: ⌘Q (the native menu, N1), Dock → Quit, logout and `a.Quit()`.
-  - `applicationShouldTerminate:` returns `NSTerminateLater` and delivers `EvQuitRequested` synchronously (class 1). The default handler (`app.DefaultHandler`, embeddable) asks each window's `CloseRequested`; one refusal cancels the quit. `a.ReplyQuit(allow)` answers, at once or later, and is what calls `replyToApplicationShouldTerminate:`. While the answer is pending, AppKit's modal-panel loop runs, our source keeps dispatching (a window's "Save changes?" sheet, a worker finishing), and windows keep drawing.
-  - **Why `NSTerminateLater` and not cancel-then-restart.** The other design returns `NSTerminateCancel`, runs the policy in our own loop, and calls `terminate:` again once approved. At logout or restart, cancelling makes macOS report that the app interrupted the logout and abandons it; calling `terminate:` again later does not resume the logout. `NSTerminateLater` is the documented way to defer the answer and keep the logout pending. The common-modes source is what makes it safe for us.
-  - At logout AppKit's deadline applies, and the documentation says so. A handler that never replies is answered "allow" by a 30 s watchdog at logout and power-off, and left waiting otherwise.
+  - `applicationShouldTerminate:` delivers `EvQuitRequested` synchronously (class 1). The default handler (`app.DefaultHandler`, embeddable) asks each window's `CloseRequested`; one refusal cancels the quit. `a.ReplyQuit(allow)` answers.
+  - **An answer given inside `applicationShouldTerminate:` is latched, not sent.** If the handler answers synchronously, or a `ReplyQuit` arrives before the delegate method returns, the answer is recorded and the method returns `NSTerminateNow` or `NSTerminateCancel` directly. Only when no answer exists at return does it return `NSTerminateLater`; from then on `ReplyQuit` calls `replyToApplicationShouldTerminate:`. The framework never calls `replyToApplicationShouldTerminate:` before `NSTerminateLater` has been returned.
+  - While a deferred answer is pending, AppKit's modal-panel loop runs, our source keeps dispatching events and safe-point work (a window's "Save changes?" sheet opens, a worker finishes), and windows keep drawing.
+  - **Why `NSTerminateLater` and not cancel-then-restart.** The other design returns `NSTerminateCancel`, runs the policy in our own loop, and calls `terminate:` again once approved. `NSTerminateLater` is the documented way to defer the answer. That cancelling during a logout or restart abandons it, and that a later `terminate:` does not resume it, is **an assumption** (Apple's documentation says a cancel stops the logout; the resume behaviour is not documented); F3's feasibility test "logout behaviour" checks both on the MacBook with a real logout of a test user. The common-modes source is what makes `NSTerminateLater` safe for us.
+  - **No automatic answer.** By default there is no watchdog: the app's quit policy owns the answer, however long it takes. An app may set `QuitDeadline` (above); its action defaults to cancelling the quit, with `EvQuitDeadline` reported, and force-quitting happens only if the app chose `Allow`. Whatever timeout the system applies at logout is the system's, not ours, and how long it is is not documented; the guide says to answer promptly when the reason is `Logout`.
   - The hard-coded ⌘Q (`platform/platform_darwin.go:649`) goes.
 - **The last window closing** quits the app, unless `KeepRunning`. `EvReopen` with no visible window shows or reopens the main window by default.
 - **More than one window (D30, built here for macOS).** The PHASE5 contract "More than one window" holds as written: app-owned GPU device and atlas, surface-only destruction, safe points, per-window pacing, a refused close, and the frame handler for modal and tracking loops (menus, sheets, live resize), which keeps drawing without re-entering Build. On Windows and Linux, `OpenWindow` for a second window returns `ErrUnsupported` in this phase, and the first window works exactly as now.
@@ -400,16 +432,29 @@ if sig.Clicked != 0 { … }                                                     
 - **Links and mentions** get hit regions, a hand cursor through the cursor regions, a Link role, and `Hovered`/`Clicked` tags.
 - **An emoji-only message** draws larger, by an app flag.
 - **Selection runs in document order, not over built boxes.** A transcript is virtualised (D43): most of a long selection has no boxes, so a selection anchored by box keys could not survive scrolling.
-  - **Endpoints.** A `ui.SelectionScope` holds two endpoints, anchor and focus, each `Pos{Item uint64; Part uint16; Off uint32}`: the app's stable item id, a text part within the item (body, quote, caption), and a byte offset into that part. Endpoints are app data; no box needs to exist for them.
-  - **Order.** The scope compares endpoints through the app's order: `ScopeOpts.Order` is an `Orderer` (`IndexOf(id uint64) (int, bool)`), from item id to its current index, which `*VListState` implements from its id table (below; a pointer in an interface does not allocate); then part, then offset. The order is persistent across rebuilds, prepends and scrolling.
+  - **Endpoints.** A `ui.SelectionScope` holds two endpoints, anchor and focus, each `Pos{Item uint64; Part uint16; Off uint32}`: the app's stable item id, a text part within the item (body, quote, caption), and a byte offset into that part. Two sentinels let an endpoint sit in an item that was never built, whose part lengths nobody has measured: `Part: ui.PartEnd` is the end of the whole item, and `Off: ui.OffEnd` the end of a part. Endpoints are app data; no box needs to exist for them.
+  - **Enumeration.** The scope orders and walks items through an `Enumerator`:
+
+    ```go
+    type Enumerator interface {
+    	IndexOf(id uint64) (int, bool) // current position, for ordering endpoints
+    	First() (uint64, bool)
+    	Last() (uint64, bool)
+    	Next(id uint64) (uint64, bool) // the item after id, in document order
+    }
+    ```
+
+    - **In a `VList`, the framework provides it:** `*VListState` implements `Enumerator` from its dense id array and id→index table (below): `First`, `Last` and `Next` are index lookups, O(1). So ⌘A (from `{First, 0, 0}` to `{Last, PartEnd, 0}`) and enumeration of the selected range need nothing from the app and build nothing. A pointer in an interface does not allocate.
+    - **Outside a `VList`** (a scope over the app's own layout, or several lists), the app implements `Enumerator` over its model and passes it in `ScopeOpts.Items`.
+    - The order is persistent across rebuilds, prepends and scrolling: endpoints compare by `IndexOf`, then part, then offset (`PartEnd` and `OffEnd` sort last).
   - **Building.** Each `RichText` inside the scope declares its `(Item, Part)`. When an item is built, the scope gives its text the clipped range it covers (all, none, a prefix, a suffix, or a middle), so the highlight is drawn only for built items, and rows in between are selected without being built.
   - **Dragging** moves the focus to the position under the pointer; past the list's edge it auto-scrolls (C1) and moves the focus to the first or last built item's edge, so a drag through three viewports selects everything it passed.
-  - Double-click selects a word and triple-click a paragraph (in one part). ⌘A in the scope selects from the first item's start to the last item's end, without building anything.
+  - Double-click selects a word and triple-click a paragraph (in one part). ⌘A in the scope selects from the first item's start to the last item's end through the `Enumerator`, without building anything.
   - **Edits to the list.** Prepending or appending items leaves both endpoints untouched (ids are stable). When the item holding an endpoint is removed (`VListState.Splice`, below), the endpoint moves to the start of the next surviving item (focus) or the end of the previous one (anchor), and the scope reports `SelectionChanged`. A reset clears the selection.
-  - **Copying the whole range.** `sc.Selected() (from, to Pos, ok bool)` gives the normalised range. ⌘C (the Edit role) and Services hand the app that range; the app walks its own items from `from.Item` to `to.Item` through its model, cutting the first and last parts at their offsets, and assembles the text: ZapFast formats `[time, date] Name:` (`zapfast.md` §2, "Text selection"). The framework never holds or copies the text of unbuilt rows. A helper, `ui.ForEachSelected(sc, order, fn)`, iterates the item ids in range with their part ranges, allocation-free.
+  - **Copying the whole range.** `sc.Selected() (from, to Pos, ok bool)` gives the normalised range. ⌘C (the Edit role) and Services hand the app that range. `ui.ForEachSelected(sc, fn)` walks it through the scope's `Enumerator`, calling `fn(id, fromPart, fromOff, toPart, toOff)` once per item: whole items in the middle get `(0, 0, PartEnd, 0)`, and the first and last get their cut points (with the sentinels where the endpoint is in an unbuilt part). It allocates nothing. The app fetches each item's text from its model and assembles the result: ZapFast formats `[time, date] Name:` (`zapfast.md` §2, "Text selection"). The framework never holds or copies the text of unbuilt rows.
   - The highlight is the `TextSelection` role, unemphasised when the window is inactive.
   - Services and Look Up read the same range (N6).
-  - **Tests:** a scripted drag across three viewports with auto-scroll; ⌘A then ⌘C over 10,000 rows of which 30 were ever built, compared byte for byte with the expected text; skipped rows (scrolled past without layout) inside the range; 100 rows prepended mid-selection, endpoints and copied output unchanged; the endpoint's item deleted; the copied output's first and last partial parts.
+  - **Tests:** a scripted drag across three viewports with auto-scroll; ⌘A then ⌘C over 10,000 `VList` rows of which 30 were ever built, enumerated by the framework and compared byte for byte with the expected text; the same through an app-provided `Enumerator` outside a `VList`; an endpoint left at `PartEnd` in an unbuilt item; skipped rows (scrolled past without layout) inside the range; 100 rows prepended mid-selection, endpoints and copied output unchanged; the endpoint's item deleted; the copied output's first and last partial parts.
 - **Allocations:** hover, click, select and copy allocate 0 once warm, under the gate.
 
 ### Variable-height virtual lists (`widget/base`; D43)
@@ -432,10 +477,13 @@ k.EndVList(&v)
   - an edit entirely above the anchor shifts its index and leaves the view in place (this is how prepending history works);
   - an edit entirely below changes nothing on screen;
   - deleting the anchor item moves the anchor to the first surviving item after the removed run (or the last before it, at the end), at offset 0, so the content under the top edge is the next message rather than a jump;
-  - a `Move` that carries the anchor keeps it on the same item, wherever it goes; heights move with their items in the Fenwick tree (O(k log n) for a run of k);
+  - a `Move` that carries the anchor keeps it on the same item, wherever it goes; heights move with their items;
   - `Reset` keeps the anchor if its id is present in the new list and otherwise starts at the top (or the bottom with `StickToBottom`).
   - These rules are fixed before C1's interface freezes, because ZapFast deletes messages for everyone, inserts in the middle when history backfills, and reorders the chat list (pins, new messages).
 - **Heights.** Items in view and in the overscan are measured after layout, and their heights are stored. Unmeasured items use estimates. Totals and offset-to-item lookups use a Fenwick tree: O(log n).
+- **The cost of edits, stated honestly.** Ids and heights live in arrays with spare capacity at both ends, and the id→index table stores positions relative to a base, so **prepend and append of k items are O(k)** (plus the Fenwick updates for those k), with an O(n) regrow when a reserve runs out. **`Splice` in the middle and `Move` are O(distance)**: the ids and heights between the two positions shift (a `memmove`), every shifted id is re-indexed in the table, and the Fenwick tree is rebuilt over the shifted range (O(distance)). Moving the bottom item of a 1M-item list to the top is O(n).
+  - **Benchmarked:** a distant `Move` (index 999,999 to 0) and a mid-list `Splice` on 1M items, CPU time reported, and gated at 2 ms when applied within one frame.
+  - **Sliced when it is too long.** An edit whose distance exceeds what fits in the 2 ms budget (measured, then fixed as a constant) is applied as a sliced rebuild: the new ids, heights, Fenwick tree and id table are built in a back buffer over successive frames, 1 ms per frame (D27's slicing), while every reader (layout, the anchor, selection, `Enumerator`, semantics) keeps using the front buffer. The buffers are swapped at a frame boundary, before Build, so **no reader ever sees a half-updated index**. Edits that arrive during a rebuild are queued and applied to the back buffer before the swap; the app's model is ahead of the list for those frames, so `v.Item(i)` keeps reporting the front buffer's ids and the app builds by id. The back buffer is allocated the first time a sliced rebuild happens (about 40 MB for 1M items) and kept; it does not exist for lists that never need it.
 - **Stability:**
   - when items above the anchor change height, the view keeps still;
   - prepending older history shifts `First` and leaves the view in place;
@@ -443,7 +491,7 @@ k.EndVList(&v)
   - `ScrollTo` jumps to an item with an alignment, for replies and search hits.
 - **The scroll bar** works from the estimated total, refined as items are measured.
 - **Rules:** keyboard navigation, semantics (index of total), 0 allocations (edits included, within `Reserve`), and under 4 ms of CPU per frame scrolling **1M items of mixed heights** on the MacBook and in CI.
-- **Tests:** deletion above the anchor and of the anchor item, with the first visible pixel row unchanged and on the next item respectively; insertion in the middle, above and below the anchor; a reorder that carries the anchor and one that does not; heights following moved items; `Reset` with and without the anchor's id; prepending while `StickToBottom` is off and on.
+- **Tests:** a distant move and a mid-list splice on 1M items taking the sliced path, with selection, the anchor and the `Enumerator` checked on every frame of the rebuild to see only the old or the new order, never a mix; deletion above the anchor and of the anchor item, with the first visible pixel row unchanged and on the next item respectively; insertion in the middle, above and below the anchor; a reorder that carries the anchor and one that does not; heights following moved items; `Reset` with and without the anchor's id; prepending while `StickToBottom` is off and on.
 - **The fixed-pitch `List` and `Table` stay** as the fast path.
 
 ### Images (`img`, `gpu`; D44)
@@ -461,9 +509,11 @@ k.EndVList(&v)
 - **Allocations.** `Request`, `Poll` and `Image` allocate 0 in steady state once warm. Decoding allocates C memory on workers only.
 - **External textures.** `gpu.ImportPixelBuffer` wraps a `CVPixelBuffer` through `CVMetalTextureCache` (Y and CbCr textures, no copy), and the quad shader gains a YUV sampling mode. It serves video (S8), and I420/NV12 uploads serve ZapFast's call frames.
   - **Leases until the GPU is done.** An import takes a lease that retains the `CVPixelBuffer` and both `CVMetalTexture`s (Y and CbCr). The lease is attached to the frame's command buffer and released only when that command buffer has completed, because the Metal textures alias the pixel buffer's memory and Core Video may recycle it as soon as it is released.
-  - **Retirement without blocks.** Each ring slot of the renderer (`ringSlots = 3` frames in flight, `gpu/renderer_darwin.go:30-32`) owns its leases. When `Encode` reuses a slot, after its existing wait for that slot's previous command buffer, the slot's leases are released on the main thread; no completion block is needed. `CVMetalTextureCacheFlush` runs after release.
-  - **Failure paths release too:** a frame that encodes but is never committed (no drawable, encode error, a window closing mid-frame) releases its leases at once, since the GPU never saw them; today's comment that an uncommitted command buffer does not protect its slot (`renderer_darwin.go:378`) becomes this rule. Closing a window waits for its in-flight command buffers (bounded, as `Close` does today) and releases every lease before the layer goes.
-  - **Bounded.** At most 16 imports per frame, so at most 48 live leases per window; the storage is a fixed array in the ring slot. A 17th import in one frame returns `ErrBusy` and the box draws its placeholder.
+  - **Retirement.** Each ring slot of the renderer (`ringSlots = 3` frames in flight, `gpu/renderer_darwin.go:30-32`) owns the leases of the frame encoded into it. When `Encode` reuses a slot, its existing `retire` waits for that slot's previous command buffer (`waitUntilCompleted`, with no timeout, `renderer_darwin.go:355-368`: that wait is today's frame pacing and is unchanged) and then releases the slot's leases on the main thread. `CVMetalTextureCacheFlush` runs after release.
+  - **When no frame comes to reuse the slot** (the video's window closed or went idle), retirement must not wait for one, and must not block either. A command buffer that carries leases, or that belongs to a closing window, gets the process-lifetime completion block (a global block with no per-request state, D36) through `addCompletedHandler:`. It runs on a Metal thread and only wakes the dispatcher (a foreign-thread callback whose fallback, with no lease free, is the frame-free wake pipe); the dispatcher then reads each pending slot's `status` without waiting and releases the leases of the completed ones.
+  - **Failure paths release too:** a frame that encodes but is never committed (no drawable, encode error, a window closing mid-frame) releases its leases at once, since the GPU never saw them; today's comment that an uncommitted command buffer does not protect its slot (`renderer_darwin.go:378`) becomes this rule.
+  - **Closing a window does not wait for the GPU.** The window is ordered out at once, its pending command buffers are marked, and its layer and textures go on a retiring list released by the dispatcher as above. There is no timeout and no bounded-latency promise: **nothing the GPU may still read is ever freed on a timer.** A GPU that never completes leaves the window's memory on the retiring list, which is counted and visible in the leak gate.
+  - **Bounded.** At most 16 imports per frame, so at most 48 live leases in the ring; the storage is a fixed array in the ring slot. A 17th import in one frame returns `ErrBusy` and the box draws its placeholder.
   - **Tests (live, MacBook and macOS CI):** a video playing while the window live-resizes, while its list scrolls it in and out of view, and while the window closes mid-playback; Core Video's live pixel-buffer count and our lease count return to their baseline, with no Metal validation errors.
 
 ### QR codes and app zoom
@@ -486,7 +536,7 @@ k.EndVList(&v)
 ### App services (`app/*`; D45)
 
 - **Common rules:**
-  - Requests go in; answers, clicks and changes come out as `EvService` events, by the delivery classes of F3: completions through reserved tickets (class 2), unsolicited events through each service's reserved ring (class 3), changes as observations (class 4). No framework service uses `app.Post`.
+  - Requests go in; answers, clicks and changes come out as `EvService` events, by the delivery classes of F3: completions and notification responses through slots reserved with the request or the post (class 2), outside requests accepted into a reserved ring or refused with `busy` (class 3), changes as observations (class 4). No framework service uses `app.Post`.
   - Nothing runs per frame. Payloads may allocate on delivery; they are rare.
   - System frameworks (UserNotifications, Security, ServiceManagement, AVFoundation) are loaded with `dlopen` on first use, after the first frame. The exception is the notification delegate, for apps that opt in.
   - The app ID drives the paths, preferences, Keychain service, instance lock and notifications (`go-and-others.md` §3.2).
@@ -495,14 +545,14 @@ k.EndVList(&v)
 
 | Package | API (shape) | macOS |
 |---|---|---|
-| `app/notify` | `Available`, `RequestPermission`, `Status`, `RegisterCategories` (actions, reply, destructive), `Post(Note{ID, Thread, Title, Subtitle, Body, Sound, Attachment, Category, UserData})`, `Remove(ids)`, `RemoveThread`, `Foreground(show)`; event: response (action, reply text, user data) | `UNUserNotificationCenter`. The delegate is set in `applicationWillFinishLaunching:` when the app opts in, so a click that launched the app is not lost (`electron-tauri.md` §2, "Notifications"). Categories are registered as a union. The tag is the request id (`gpui-ghostty.md` §2) |
+| `app/notify` | `Available`, `RequestPermission`, `Status`, `RegisterCategories` (actions, reply, destructive), `Post(Note{ID, Thread, Title, Subtitle, Body, Sound, Attachment, Category, UserData}) (PostResult, error)` (the result says whether the response slot was reserved or the note went out `PostedWithoutActions`), `Remove(ids)`, `RemoveThread`, `Foreground(show)`; event: response (action, reply text, user data) | `UNUserNotificationCenter`. The delegate is set in `applicationWillFinishLaunching:` when the app opts in, so a click that launched the app is not lost (`electron-tauri.md` §2, "Notifications"). Categories are registered as a union. The tag is the request id (`gpui-ghostty.md` §2) |
 | `app/dock` | `SetBadge`, `SetBadgeCount`, `Bounce(critical)`, `CancelBounce`, `SetMenu(model)` | `NSDockTile`, `requestUserAttention:`, `applicationDockMenu:` |
 | `app/tray` | `New(Options{Symbol or PNG, Template, Tooltip})`, `SetIcon`, `SetTitle`, `SetMenu(model)`, `Remove`; menu choices arrive as commands | `NSStatusItem` with an NSMenu from N1 |
 | `app/secret` | `Open(service).Get/Set/Delete(account)`; `ErrNotFound`, `ErrDenied`, `ErrLocked`, `ErrUnavailable`; blocking, so call it from a task | `SecItem*` C API with `kSecClassGenericPassword`; no data-protection keychain (no provisioning profile needed) |
 | `app/paths`, `app/prefs` | `Config/Data/Cache/Logs(id)`; `prefs.WriteAtomic` (temp file, fsync, rename; `F_FULLFSYNC` optional), `prefs.JSON[T]` with defaults, loaded synchronously at startup, saved debounced on a worker | `~/Library/Application Support/<id>`, `Caches/<id>`, `Logs/<id>` |
 | `app/log` | `Setup(Options) (*slog.Logger, error)`: stderr plus a rotating file; `debug.SetCrashOutput`; `PreviousCrash()`; never on the frame path | — |
 | `app/winstate` | `Load(id)` before the window opens, `Apply(cfg, state, screens)` clamped to a visible screen, `Save` debounced; the state includes frame, maximised, fullscreen, screen, and app-owned bytes | our own file, not `setFrameAutosaveName:`: one rule on every OS, app bytes alongside, and read before the window exists (`electron-tauri.md` §2, "Window state") |
-| `app/instance` | `Acquire(id)` → primary or secondary; `Secondary.Send(args)`; the primary gets an event | `flock` in Application Support plus a Unix socket only the user can open (`zapfast/src/single_instance.rs`) |
+| `app/instance` | `Acquire(id)` → primary or secondary; `Secondary.Send(args)` returns `Accepted`, or an error after the primary answered `busy` for 2 s or did not answer; the primary gets an event only for accepted requests | `flock` in Application Support plus a Unix socket only the user can open (`zapfast/src/single_instance.rs`) |
 | `app/shell` | `OpenURL`, `OpenPath` (`fs.Open` stays), `Reveal(paths)`, `Trash(path)` | `LSOpenCFURLRef` on a worker; `activateFileViewerSelectingURLs:`; `trashItemAtURL:` |
 | `app/login` | `Status`, `Enable`, `Disable`, `OpenSettings` for the app itself; `Agent(name)` with the same methods for a bundled launch agent | `SMAppService mainAppService` (macOS 13+) launches the app with no arguments, so it cannot start hidden. `SMAppService agentServiceWithPlistName:` registers a launch agent that `gnui package` generates into `Contents/Library/LaunchAgents/` from `gnui.json` (`loginAgents`): its `Label` is `<app id>.<name>` and its program is `/usr/bin/open -g -b <app id> --args <args>`, both from the real identity, never a fixed string. An app that starts hidden at login uses an agent with `--start-hidden` |
 | `app/power` | `Hold(kind, reason)` / `Release` (App Nap, display on during a call); events: screen locked and unlocked, thermal state | `NSProcessInfo beginActivityWithOptions:`; sleep and wake come from the app object (F3) |
@@ -592,15 +642,17 @@ Phase 7's Z0 (the Rust ABI) starts now, in the ZapFast repo.
 
 ### Track F: foundations (first; it unblocks the others)
 
-- **F1. The Objective-C runtime:** the class registry with ivars, `SendSuper`; per-request stack-class blocks with generation-checked slots and the per-API cancellation table; process-lifetime global blocks with `BLOCK_IS_GLOBAL`; calling blocks we are given; invocation-scoped frame leases for foreign-thread callbacks; the lookup rule; leak counters. **F1's feasibility tests (Contracts, "The Objective-C runtime") run first**, and nothing builds on F1 until they pass: concurrent callbacks, thread churn, cold attachment, measured Go allocations, late callbacks after a cancelled and reused slot, and the block flags. *Opus (high).* M.
+- **F1. The Objective-C runtime:** the class registry with ivars, `SendSuper`; per-request stack-class blocks with generation-checked slots and the per-API cancellation table; process-lifetime global blocks with `BLOCK_IS_GLOBAL`; calling blocks we are given; invocation-scoped frame leases for foreign-thread callbacks; the lookup rule; leak counters. **F1's feasibility tests (Contracts, "The Objective-C runtime") run first**, and nothing builds on F1 until they pass: concurrent callbacks, thread churn, cold attachment, measured Go allocations, late callbacks after a cancelled and reused slot, a callback in flight during cancellation, the block flags, block copy per API, and callback-pool progress. *Opus (high).* M.
 - **F2. `clib`**, with the fixture-library tests (threads, signals, float arguments and results, an error returned through caller-owned storage from a call that hopped threads) and its documentation, including the rule on thread-local errors. *Opus (high).* S–M.
-- **F3. The application object:** the delegate; the app-wide pump with zero windows; the common-modes run-loop source that dispatches app events; the four delivery classes, with tickets, reserved rings and pending lists; reopen; the quit policy on `NSTerminateLater` with the logout watchdog; open-URL and open-file events (with the startup list); sleep and wake, screens, activation policy; `app.Main`, `Handler` and `Post`. *Led by me, with an Opus (high) agent.* M.
+- **F3. The application object:** the delegate; the app-wide pump with zero windows; the common-modes run-loop source that dispatches app events; the safe-point queue run from the dispatcher while the pump is suspended; the four delivery classes, with tickets, reserved response slots for notifications and accept-or-busy rings; reopen; the quit policy (answers latched inside `applicationShouldTerminate:`, `NSTerminateLater` otherwise, the optional `QuitDeadline`); open-URL and open-file events (with the startup list); sleep and wake, screens, activation policy; `app.Main`, `Handler` and `Post`. *Led by me, with an Opus (high) agent.* M.
   - **Tests (macOS CI, through AppKit state; T2's harness):**
-    - Dock Quit (a `kAEQuitApplication` Apple event the test sends to its own process, which needs no Automation grant) and ⌘Q through the menu, each with zero windows open, one window, and two;
-    - a reply delayed by 2 s while a worker posts and an alert sheet completes, all delivered during the modal-panel loop;
+    - Dock Quit (a `kAEQuitApplication` Apple event the test sends to its own process; that a self-addressed Apple event needs no Automation grant is an assumption, checked the first time the test runs in CI, with a fallback of calling the handler `NSApp` installs for that event) and ⌘Q through the menu, each with zero windows open, one window, and two;
+    - a reply delayed by 2 s while a worker posts and an alert sheet completes, all delivered during the modal-panel loop; a "Save changes?" sheet requested by the handler during that wait opens (the safe-point queue runs from the dispatcher) and its answer then allows the quit;
+    - answers inside `applicationShouldTerminate:`: a synchronous allow returns `NSTerminateNow`, a synchronous refusal `NSTerminateCancel`, and a `ReplyQuit` posted from a nested call before the method returns is latched; in none of them is `replyToApplicationShouldTerminate:` called (the test swizzles it to count calls);
     - a refusal, then a second quit that is allowed;
-    - a handler that never replies, with the logout watchdog simulated;
-    - **saturation:** class-3 rings and `app.Post` flooded from 8 goroutines while 64 alert and panel completions (a full ticket table; a 65th request fails with `ErrBusy` at once) and a notification response arrive and a quit is requested: every completion and the quit are delivered, every native acknowledgement is made, the losses are counted only on the flooded observation and `Post` paths, and nothing deadlocks.
+    - a handler that never replies: with no `QuitDeadline` the app is still running and still answering 60 s later; with `QuitDeadline: 1s` the quit is cancelled and `EvQuitDeadline` arrives; with `QuitDeadlineAction: Allow` the app quits;
+    - **saturation:** `app.Post` and the observation slots flooded from 8 goroutines while 64 alert and panel completions (a full ticket table; a 65th request fails with `ErrBusy` at once), responses to 32 posted actionable notifications (each with a reserved slot; a 257th actionable post comes back `PostedWithoutActions`), 40 second-instance requests (32 accepted, 8 answered `busy` and accepted on retry once the ring drains) and a quit request arrive. It passes when every completion, every notification response with its reply text, every accepted second-instance request and the quit are delivered; every native acknowledgement is made; the only losses are coalesced observations and `app.Post` calls that returned false (both counted); and nothing deadlocks.
+  - **Feasibility test "logout behaviour"** (on the MacBook, by the F3 agent, with a dedicated test user so your session is never logged out): `NSTerminateLater` held for 10 s during a real logout of that user, then allowed, completes the logout; `NSTerminateCancel` during logout stops it; a later `terminate:` does not resume it. Until it runs, those statements are assumptions.
 - **F4. More than one window on macOS (D30):**
   - the shared device and atlas;
   - the window registry on ivars;
@@ -673,10 +725,10 @@ Phase 7's Z0 (the Rust ABI) starts now, in the ZapFast repo.
 
 ### Track C: content
 
-- **C1. `VList`**, variable height and anchored by item id: the id table, `Splice`, `Move` and `Reset` with the anchor rules, and the `Orderer` C4 uses. The edit rules and their tests come before the interface is frozen for Z3. *Opus (high).* M–L.
+- **C1. `VList`**, variable height and anchored by item id: the id table, `Splice`, `Move` and `Reset` with the anchor rules; O(k) prepend and append; O(distance) middle edits with the 1M-item benchmark and the double-buffered sliced rebuild; the `Enumerator` C4 uses. The edit rules and their tests come before the interface is frozen for Z3. *Opus (high).* M–L.
 - **C2. Rich text:** spans, the style table, CoreText's typesetter, cached paragraph layouts, link and mention hit regions, emoji-only messages drawn large. *Opus (high).* L.
 - **C3. A wrapping flow layout** for chips, reactions and button rows, which ZapFast wraps (`egui.md` §2.2). *Sonnet.* S.
-- **C4. Selectable text:** within a paragraph, then across a scope in document order, with endpoints on (item id, part, offset) independent of built boxes; drag with edge auto-scroll on C1; word and paragraph clicks; ⌘A without building; endpoints remapped on `Splice`; `Selected` and `ForEachSelected` so the app copies the whole range; the tests in Contracts ("Rich text and selection"). *Opus (high).* M–L.
+- **C4. Selectable text:** within a paragraph, then across a scope in document order, with endpoints on (item id, part, offset) independent of built boxes; drag with edge auto-scroll on C1; word and paragraph clicks; the `PartEnd`/`OffEnd` sentinels; ⌘A and enumeration through `VListState`'s `Enumerator`, or an app-provided one outside a `VList`; endpoints remapped on `Splice`; `Selected` and `ForEachSelected` so the app copies the whole range; the tests in Contracts ("Rich text and selection"). *Opus (high).* M–L.
 - **C5. `img`:**
   - ImageIO on workers, at display size;
   - the cache with byte budgets;
@@ -687,7 +739,7 @@ Phase 7's Z0 (the Rust ABI) starts now, in the ZapFast repo.
 
   *Sonnet; the `gpu` part Opus (high).* M.
 - **C6. Animated images,** lazy and visible-only. *Sonnet.* M.
-- **C7. External textures** (`CVPixelBuffer` through `CVMetalTextureCache`), the YUV mode, and I420/NV12 uploads; leases on the pixel buffer and both plane textures, retired per ring slot after its command buffer completes and released at once on uncommitted frames and window close, at most 48 per window; the resize, scroll and close tests with live-object counts (`gpu/renderer_darwin.go` is shared, so the slot hook goes through me). *Opus (high).* M.
+- **C7. External textures** (`CVPixelBuffer` through `CVMetalTextureCache`), the YUV mode, and I420/NV12 uploads; leases on the pixel buffer and both plane textures, retired per ring slot after its command buffer completes (at slot reuse, or through the global completion block when no frame comes), released at once on uncommitted frames, and never freed on a timer when a window closes; at most 48 in the ring; the resize, scroll and close tests with live-object counts (`gpu/renderer_darwin.go` is shared, so the slot hook goes through me). *Opus (high).* M.
 - **C8. QR:** the encoder, `rexui.QRCode`, the Vision decode test. *Sonnet.* S.
 - **C9. App zoom.** *Sonnet.* S.
 
@@ -695,8 +747,8 @@ Phase 7's Z0 (the Rust ABI) starts now, in the ZapFast repo.
 
 - **S1. Pure Go:** `task`, `app/paths`, `app/prefs` and `app/log`. *Sonnet.* M.
 - **S2. `app/secret`.** *Sonnet.* S.
-- **S3. `app/notify`.** *Opus (high).* M.
-- **S4. `app/dock`, `app/tray`, `app/login` and `app/power`.** `app/login` covers the main app and bundled agents (`agentServiceWithPlistName:`); T1 generates the agent plist from `gnui.json` and the real bundle id. **Test (MacBook, a `gnui run` bundle):** register an agent with `--start-hidden`, start it as login would (`launchctl kickstart gui/$UID/<label>`), and check through AppKit state that the app runs with no visible window, no Dock bounce and `StartHidden` reported; then unregister and check `Status`. Registration may need one approval in System Settings → Login Items, at your keyboard. *Sonnet.* M.
+- **S3. `app/notify`**, with response slots reserved at post time, replies stored before the system's completion handler is called, `PostedWithoutActions` and `EvictOldest`, and re-reservation at launch. Tests: a reply accepted while the event paths are saturated is delivered with its text; a post with the table full comes back without actions. *Opus (high).* M.
+- **S4. `app/dock`, `app/tray`, `app/login` and `app/power`.** `app/login` covers the main app and bundled agents (`agentServiceWithPlistName:`); T1 generates the agent plist from `gnui.json` and the real bundle id. **Test (MacBook, a `gnui run` bundle):** register an agent with `--start-hidden`, start it as login would (`launchctl kickstart gui/$UID/<label>`; that this matches a real login launch is an assumption, so the checkpoint-2 hand list includes one real login), and check through AppKit state that the app runs with no visible window, no Dock bounce and `StartHidden` reported; then unregister and check `Status`. Registration may need one approval in System Settings → Login Items, at your keyboard. *Sonnet.* M.
 - **S5. `app/winstate`** (with the screens from F4), `app/instance`, `app/shell` and `app/locale`. *Sonnet.* M.
 - **S6. Clipboard images and files.** *Sonnet.* S–M.
 - **S7. Audio:** `media.Player`, `media.Recorder` and `app/perm`. *Opus (high).* M–L.
@@ -767,11 +819,11 @@ wave 5  fixes from both checkpoints' findings                               ║ 
   | Z3b (the composer) | N4, **D7b**, N5, S6 |
   | Z4 | S3, S4, S5, C7, N7 |
 
-- **The critical path, derived from the sizes.** Each item's letter is converted to elapsed weeks for its lead (S 1, S–M 2, M 3, M–L 4, L 5; ZapFast's from its plan: Z0 6, Z1 3, Z2 5, Z3a 6, Z3b 3, Z4 5, Z5 2), wave 0 counts 1, and an item starts when all its inputs are done. The longest chain is then:
+- **The critical path in one scheduling scenario.** This is a scenario for ordering work, not an estimate. It assumes a duration in elapsed weeks for each item's lead: S 1, S–M 2, M 3, M–L 4, L 5 (the research bounds S at about a week and M at about three, and gives L no upper bound, so 5 is an assumption); ZapFast's items as its plan assumes (Z0 6, Z1 3, Z2 5, Z3a 6, Z3b 3, Z4 5, Z5 2); wave 0 counts 1; an item starts when all its inputs are done; and agents are never the bottleneck. Under those assumptions the longest chain is:
 
-  **wave 0 → F1 → F3 → F4 → N3b → N4 → D7b → Z3b → Z4 → Z5: about 32 weeks.**
+  **wave 0 → F1 → F3 → F4 → N3b → N4 → D7b → Z3b → Z4 → Z5: 32 weeks in this scenario.**
 
-  | Chain | Earliest finish (week) | Slack (weeks) |
+  | Chain (same scenario) | Earliest finish (week) | Slack (weeks) |
   |---|---|---|
   | F1 4, F3 7, F4 12, N3b 17, N4 21, D7b 22, Z3b 25, Z4 30, Z5 32 | — | 0 |
   | D1 → D2 → D3 (12) → Z2 (17) → Z3a (23) | 23 | 2 |
@@ -783,7 +835,7 @@ wave 5  fixes from both checkpoints' findings                               ║ 
   | C2 → C4 (selection) | 12 | 6 |
 
   - **So design is near-critical:** D3 and D4 gate Z2, and D7a gates Z3a with 2–4 weeks of slack. D runs as early as F, and D3's ZapFast-facing components (Input, SearchField, Table selection, Card) go first within D3.
-  - **The path is re-derived** at the end of wave 0, once each lead has sized their item against the contracts in code, and again after each checkpoint. The sizes above are the research's upper bounds; the table is a scheduling tool, not a promise.
+  - **The path is re-derived after wave 0 from measured agent throughput:** how long wave 0's and F1's first items actually took per size letter, applied to the remaining items, and again after each checkpoint. Which chain is critical may change; the ordering rule (zero-slack items first) does not.
   - With about eight agents at once, zero-slack items get an agent first.
 
 ### Checkpoints for you
@@ -803,7 +855,7 @@ wave 5  fixes from both checkpoints' findings                               ║ 
      - pinch and rotate on the trackpad over the gallery's image scene, if F5 could not test gestures on the live path.
 
    Your findings are fixed before wave 5 ends.
-2. **ZapFast at parity.** See the phase-7 plan. You see ZapFast for the first time there, at full parity (D33). Before it, you run N4's hand checklist (a real Japanese or Chinese input method, dictation, Writing Tools); everything else in the editor matrix is automated and run by the N4 agent.
+2. **ZapFast at parity.** See the phase-7 plan. You see ZapFast for the first time there, at full parity (D33). Before it, you run N4's hand checklist (a real Japanese or Chinese input method, dictation, Writing Tools) and one real login with "Open at login" on, to confirm the app starts hidden; everything else in the editor matrix is automated and run by the N4 agent.
 
 ### Who does what
 
@@ -839,16 +891,17 @@ wave 5  fixes from both checkpoints' findings                               ║ 
    - running with no window;
    - Dock reopen;
    - quit refused by a window and then allowed; ⌘Q and Dock → Quit with zero windows; a delayed reply, with app events still delivered during it;
-   - no completion lost when the event paths are saturated during a quit (F3's saturation test);
+   - nothing accepted is lost when the event paths are saturated during a quit (F3's saturation test); the logout feasibility test has run, or its assumptions are listed as untested;
    - a menu command with no window open;
    - an open-URL event from `open notes-dev://…` on a `gnui run` bundle;
    - sleep and wake events.
 4. **Windows:**
    - two windows get input routed correctly, are paced independently, and receive worker results correctly;
    - 20 open/close cycles of a second window, with a hosted text view, a shown menu and a shown sheet, leak nothing, counted by native objects: windows, surfaces, textures, hosts, blocks, observers;
-   - F1's feasibility tests pass: concurrent and churning foreign-thread callbacks, cold attachment, 0 Go allocations measured after the high-water mark, and no late callback reaching a reused slot's new handler.
+   - F1's feasibility tests pass: concurrent and churning foreign-thread callbacks, cold attachment, 0 Go allocations measured after the high-water mark, no late callback reaching a reused slot's new handler, no slot reused under a callback in flight, block copy per API recorded, and callback-pool progress with a 2-frame pool;
+   - closing a window with a video playing frees its GPU resources only after the GPU has finished, with no wait on the main thread.
 5. **Content:**
-   - **VList:** 1M mixed-height items under 4 ms CPU per frame and 0 allocations; prepend without a jump; stick-to-bottom while items grow; jump to an item; deletion above and at the anchor, insertion in the middle and reorder, each keeping the view (scripted, CI);
+   - **VList:** 1M mixed-height items under 4 ms CPU per frame and 0 allocations; prepend without a jump; stick-to-bottom while items grow; jump to an item; deletion above and at the anchor, insertion in the middle and reorder, each keeping the view; a distant move on 1M items within 2 ms or through the sliced rebuild, with no reader seeing a mixed order (scripted, CI);
    - **rich text:** bidi paragraphs reorder per line (Hebrew, Arabic and English mixed); one emoji cluster lays out one emoji wide; hover, click, select and copy allocate 0;
    - **selection** across three viewports, over skipped rows and through a prepend, copies exactly the expected text (CI);
    - **the composer:** N4's real-editor matrix passes on the MacBook (and in macOS CI where it can run), and your hand checklist is reported before checkpoint 2;
@@ -889,16 +942,16 @@ The entries are in `DECISIONS.md`, written on this branch on 2026-10-18 at your 
 |---|---|
 | D34 | Phase 6 is macOS-first; Windows and Linux compile, stay green and return `ErrUnsupported` for new APIs; their parity is a later phase |
 | D35 | A public `clib` package gives apps cgo-free C calls (no callbacks; errors returned in the same call); the framework itself still loads only system libraries |
-| D36 | `internal/objc` gains a cross-file class registry, ivars and `SendSuper`; per-request blocks are stack-class literals copied by the runtime and checked by generation, never recycled under a caller; foreign-thread callbacks run on invocation-scoped frame leases and only copy, post and wake |
-| D37 | An application object: NSApplication delegate, one app-wide pump, app events dispatched by a common-modes run-loop source, four delivery classes where only observations can be lost, a quit policy on `NSTerminateLater`, windowless running; D30 built for macOS now |
+| D36 | `internal/objc` gains a cross-file class registry, ivars and `SendSuper`; per-request blocks are stack-class literals copied by the runtime, with slots claimed atomically (generation plus active claims) and reused only when no callback is inside; blocks we keep are copied first; foreign-thread callbacks run on invocation-scoped frame leases with a nested reserve and per-API fallbacks, and never wait |
+| D37 | An application object: NSApplication delegate, one app-wide pump, app events dispatched by a common-modes run-loop source, four delivery classes where nothing accepted is lost (responses reserved at post time, outside requests refused with `busy`), a quit policy (answers latched inside `applicationShouldTerminate:`, `NSTerminateLater` otherwise, no automatic answer), windowless running; D30 built for macOS now |
 | D38 | Text is shaped and laid out at the point size and rasterised with a scaled context; dilation only if captures show it |
 | D39 | Design tokens v2: indexed roles with System or Rex sources read live through the D32 path, System roles exactly the system's colours; contrast checked composited, with AppKit's own contrast as the floor for secondary roles; traffic lights stored as the close button's centre |
 | D40 | Components in three layers: `widget/base` (headless and the Kit), `rexui` (styled, one file each, copyable), `widget` (wrappers); amends D28's layering |
 | D41 | Native on macOS where the OS adds behaviour (menus, popup lists, alerts, panels, tooltips, materials, the composer, accessibility); native views never interleave with GPU content; the composer exposes byte ranges, marked text, undoable replacement and a completion handoff |
-| D42 | Rich text as pointer-free spans laid out by CoreText's typesetter on macOS; selection in document order with endpoints on stable item ids, independent of built boxes; the app copies the whole range |
-| D43 | Variable-height lists are anchored by item id, with splice, move and reset that keep the view, and a Fenwick height cache; fixed-pitch lists stay the fast path |
-| D44 | Images through ImageIO on workers at display size, a byte-budgeted texture cache with freeing and atlas pages, lazy visible-only animation; imported pixel buffers leased until their command buffer completes |
-| D45 | App services are separate `app/*` packages: requests in, events out by the delivery classes, frameworks loaded after the first frame, keyed by the app ID; login agents generated from the real identity |
+| D42 | Rich text as pointer-free spans laid out by CoreText's typesetter on macOS; selection in document order with endpoints on stable item ids (and end-of-item sentinels), independent of built boxes; `VList` enumerates and selects all itself, other scopes take an app `Enumerator`; the app copies the text |
+| D43 | Variable-height lists are anchored by item id, with splice, move and reset that keep the view, and a Fenwick height cache; O(k) prepend and append, O(distance) middle edits, long edits rebuilt in a back buffer swapped at a frame boundary; fixed-pitch lists stay the fast path |
+| D44 | Images through ImageIO on workers at display size, a byte-budgeted texture cache with freeing and atlas pages, lazy visible-only animation; imported pixel buffers leased until their command buffer completes; a closing window's GPU resources are retired asynchronously, never freed on a timer |
+| D45 | App services are separate `app/*` packages: requests in, events out by the delivery classes, frameworks loaded after the first frame, keyed by the app ID; notification response slots reserved at post time; single-instance requests accepted or answered `busy`; login agents generated from the real identity |
 | D46 | Media through AVFoundation; video zero-copy into Metal; codecs the OS lacks stay with the app |
 | D47 | Tooling: `gnui` CLI on `gnui.json` and OS-shipped tools, a stable self-signed `gnui-dev` identity, GnuiShot and AppKitRef's live mode as the native-feel instruments, a live real-editor matrix, a zero-cost debug overlay and agent bridge |
 | D48 | Our own QR encoder rather than a dependency |
@@ -933,7 +986,7 @@ The entries are in `DECISIONS.md`, written on this branch on 2026-10-18 at your 
 
 ## Status (2026-10-18)
 
-Planned; not started. Revised after the independent review (GPT-6.1 Sol, 2026-10-18), all findings accepted by you and fixed in place. Wave 0 starts on your approval.
+Planned; not started. Revised after the independent review (GPT-6.1 Sol, 2026-10-18), all findings accepted by you and fixed in place, then revised again after the scoped re-review. Wave 0 starts on your approval.
 
 - **Inputs, on `main` at d32d248:** the research reports, the native audit, the design-system proposal and AppKitRef.
 - **GnuiShot:** on `p6-gnuishot` (a0ae73f), granted on the MacBook and not yet merged; wave 0 merges it.
