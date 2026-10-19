@@ -282,8 +282,8 @@ Rules that differ from the spike:
   `platform/material_private_darwin.go`, which the build tag
   `gnui_publicapi` leaves out (a Mac App Store binary then contains none of
   those selectors; `TestPublicAPIBuildHasNoPrivateSelectors` scans one). At
-  run time `Window.publicAPIOnly` turns the same calls off (to be wired to
-  `Options.PublicAPIOnly`). Without them: public regular glass, which stays
+  run time `Options.PublicAPIOnly` turns the same calls off: each is behind
+  `Window.privateAPI` (DECISIONS.md D53). Without them: public regular glass, which stays
   lighter when inactive, and square backdrop corners rounded by the window's
   mask.
 

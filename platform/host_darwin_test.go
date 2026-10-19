@@ -3,6 +3,7 @@
 package platform
 
 import (
+	"math"
 	"testing"
 
 	"github.com/ebitengine/purego"
@@ -267,7 +268,7 @@ func TestHostRouting(t *testing.T) {
 		scrollOn, bubbled      []EventKind
 		scrollOff              []EventKind
 		noScroll               bool
-		bubbledAt, offAt       bool // the scrolls carry FlagOverHost and a position over the host
+		bubbledAt, offAt       bool // the scrolls carry their own position (FlagPos): over the host, and not
 		keyFocused, keyApp     []EventKind
 		focusEv                []Event
 	}
@@ -300,11 +301,11 @@ func TestHostRouting(t *testing.T) {
 			objc.Send1(w.hosts.slot(rig.id).clip, selScrollWheel, uintptr(ev))
 			if len(w.q.ev) == 1 {
 				e := w.q.ev[0]
-				r.bubbledAt = e.Flags&FlagOverHost != 0 && w.overHost(e.X, e.Y)
+				r.bubbledAt = e.Flags&FlagPos != 0 && w.overHost(e.X, e.Y)
 			}
 			r.bubbled = take()
 			w.scrollEvent(rig.scroll(30, 30, -3), 5)
-			r.offAt = len(w.q.ev) == 1 && w.q.ev[0].Flags&FlagOverHost != 0
+			r.offAt = len(w.q.ev) == 1 && w.q.ev[0].Flags&FlagPos != 0 && !w.overHost(w.q.ev[0].X, w.q.ev[0].Y)
 			r.scrollOff = take()
 		} else {
 			r.noScroll = true
@@ -331,8 +332,8 @@ func TestHostRouting(t *testing.T) {
 		t.Log("no scroll events can be made here: scroll routing untested")
 	} else if len(r.scrollOn) != 0 || !equalKinds(r.bubbled, EvScroll) || !equalKinds(r.scrollOff, EvScroll) {
 		t.Errorf("scroll over the host %v, handed back %v, elsewhere %v: want [], [scroll], [scroll]", r.scrollOn, r.bubbled, r.scrollOff)
-	} else if !r.bubbledAt || r.offAt {
-		t.Errorf("the handed-back scroll is marked over the host at its position: %v; a scroll elsewhere is: %v", r.bubbledAt, r.offAt)
+	} else if !r.bubbledAt || !r.offAt {
+		t.Errorf("the handed-back scroll carries its position over the host: %v; a scroll elsewhere its own, off the host: %v", r.bubbledAt, r.offAt)
 	}
 	if len(r.focusEv) != 2 || r.focusEv[0].Kind != EvHostFocus || r.focusEv[0].Tag == 0 || r.focusEv[1].Kind != EvHostFocus || r.focusEv[1].Tag != 0 {
 		t.Errorf("focus events %+v: want EvHostFocus with the host, then with 0", r.focusEv)
@@ -497,5 +498,78 @@ func TestReleaseHostThatRefusesToResign(t *testing.T) {
 	}
 	if !toView || holds {
 		t.Errorf("after releasing the host: first responder is the app's view %v, still the field's editor or a host %v", toView, holds)
+	}
+}
+
+// Each scroll reaches ui once, at its own point, whichever view AppKit gives
+// it to: the view under its point (the host's field hands back what it does
+// not use), the host though the pointer has left it, or our view though the
+// pointer is over the host (AppKit latching a trackpad gesture to the view it
+// began in).
+func TestHostScrollReachesUIOnce(t *testing.T) {
+	type step struct {
+		name string
+		x, y float64
+		to   string // the view AppKit gives it to: "field" (the host's), "clip" (the host's, handed back), "view" (ours)
+	}
+	steps := []step{
+		{"over the host, to the host", 150, 110, "field"},
+		{"over ui, to our view", 30, 30, "view"},
+		{"over ui, latched to the host", 30, 30, "clip"},
+		{"over the host, latched to our view", 150, 110, "view"},
+		{"over the host, handed back", 150, 110, "clip"},
+	}
+	type got struct {
+		n    int
+		x, y float32
+	}
+	var err error
+	var noScroll bool
+	res := make([]got, len(steps))
+	onMain(func() {
+		rig, e := openHostRig()
+		if e != nil {
+			err = e
+			return
+		}
+		w := rig.w
+		defer w.Close()
+		pool := objc.F.Call0(objc.PoolPush)
+		defer objc.F.Call1(objc.PoolPop, pool)
+		clip := w.hosts.slot(rig.id).clip
+		for i, st := range steps {
+			ev := rig.scroll(st.x, st.y, -3)
+			if ev == 0 {
+				noScroll = true
+				return
+			}
+			w.q.reset()
+			w.scrollEvent(ev, 1) // the event loop (handle) sees it first
+			switch st.to {
+			case "field":
+				objc.Send1(rig.field, selScrollWheel, uintptr(ev))
+			case "clip":
+				objc.Send1(clip, selScrollWheel, uintptr(ev))
+			case "view":
+				objc.Send1(w.view, selScrollWheel, uintptr(ev))
+			}
+			for _, q := range w.q.ev {
+				if q.Kind == EvScroll {
+					res[i].n++
+					res[i].x, res[i].y = q.X/w.scale, q.Y/w.scale
+				}
+			}
+		}
+	})
+	switch {
+	case err != nil:
+		t.Skipf("cannot open a window here: %v", err)
+	case noScroll:
+		t.Skip("no scroll events can be made here")
+	}
+	for i, st := range steps {
+		if r := res[i]; r.n != 1 || math.Abs(float64(r.x)-st.x) > 1 || math.Abs(float64(r.y)-st.y) > 1 {
+			t.Errorf("%s: queued %d times, at (%v, %v); want once at (%v, %v)", st.name, r.n, r.x, r.y, st.x, st.y)
+		}
 	}
 }

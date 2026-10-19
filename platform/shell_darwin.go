@@ -85,10 +85,7 @@ type shell struct {
 	glassRadius float64        // the backdrop glass's corner radius as last set (fitBackdrop), -1 before
 	fullScreen  bool           // between windowWillEnterFullScreen: and its exit
 	materials   bool           // Options.Materials: the surface is transparent over an opaque window
-	// noPrivateAPI is publicAPIOnly's answer, set by tests until
-	// Options.PublicAPIOnly exists.
-	noPrivateAPI bool
-	delegate     objc.ID // the window delegate, the native buttons' target
+	delegate    objc.ID        // the window delegate, the native buttons' target
 
 	mat   matState  // material regions (material_darwin.go)
 	hosts hostState // hosted views (host_darwin.go)
@@ -207,14 +204,6 @@ func (w *Window) makeBackdrop(kind Backdrop, width, height float64) {
 	w.glassRadius = -1 // not set yet: the glass view's own default is not the window's
 }
 
-// publicAPIOnly reports whether the window keeps to public AppKit API at run
-// time (Options.PublicAPIOnly once it exists; false until then): no private
-// glass variants for the sidebar and the inspector, which use the public
-// regular NSGlassEffectView style, and no window corner radius for the
-// backdrop. A build with the gnui_publicapi tag has none of these calls in
-// any case (material_private_darwin.go).
-func (w *Window) publicAPIOnly() bool { return w.noPrivateAPI || !privateAPI }
-
 // newViewOf is [[cls alloc] initWithFrame:] (a +1 reference), 0 for a class
 // the system does not have.
 func newViewOf(cls objc.ID, x, y, width, height float64) objc.ID {
@@ -227,8 +216,8 @@ func newViewOf(cls objc.ID, x, y, width, height float64) objc.ID {
 
 // fitBackdrop gives Liquid Glass the window's corner radius, so that its rim
 // follows the window's edge: 0 in full screen, which has no corners.
-// The radius is private (windowCornerRadius); without it (publicAPIOnly, the
-// gnui_publicapi tag) the glass keeps square corners, which the window's own
+// The radius is private (windowCornerRadius); without it (Window.privateAPI
+// false) the glass keeps square corners, which the window's own
 // mask rounds. It runs at
 // Open, on every resize and around full screen, and sends nothing while the
 // radius is unchanged.
@@ -237,7 +226,7 @@ func (w *Window) fitBackdrop() {
 		return
 	}
 	r := 0.0
-	if !w.fullScreen && !w.publicAPIOnly() && objc.Send(w.win, selStyleMask)&(1<<14) == 0 { // NSWindowStyleMaskFullScreen
+	if !w.fullScreen && w.privateAPI() && objc.Send(w.win, selStyleMask)&(1<<14) == 0 { // NSWindowStyleMaskFullScreen
 		if v, ok := windowCornerRadius(w.win); ok {
 			r = max(v, 0)
 		}

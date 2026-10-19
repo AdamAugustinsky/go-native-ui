@@ -225,7 +225,18 @@ type Renderer interface {
   shelf/skyline packer handles allocation; eviction is generation-based
   (a page is reset when full and repopulated lazily).
 - **Images** (icons, thumbnails) go into RGBA atlas pages keyed by
-  (path-hash, size).
+  (path-hash, size). Package `img` (D44) decodes them at display size and
+  packs those up to 256 px into 1024² pages; larger ones get their own
+  textures.
+- **Texture lifetime.** Texture ids carry a generation: `FreeTexture` makes an
+  id stop resolving at once (quads still naming it draw nothing) and reuses
+  its index, while the GPU object waits on a retiring list until every frame
+  that may sample it has finished (ring-slot retirement: Metal command buffer
+  status, D3D11 event queries, OpenGL sync objects, all read without waiting;
+  a Metal frame not yet committed keeps what it samples). `Stage` fills part
+  of a texture that frames in flight sample without waiting for them (Metal:
+  a blit from a per-slot staging buffer, committed ahead of the next frame;
+  D3D11 and OpenGL order uploads with draws already). See `gpu/textures.go`.
 - **Batches** break only on texture or scissor changes; a typical frame is
   1–4 draw calls. Instance data goes into a persistently mapped ring buffer
   per frame in flight. Nothing allocates per frame.
@@ -305,8 +316,16 @@ On top, shared by every backend:
   widget learns it was clicked while it is being built (signals: hovering,
   pressed, released, clicked, double-clicked, dragging, scrolled,
   keyboard-activated). Hot/active/focus are keys in UI state.
-- **Scrolling:** smooth scroll offset with target + exponential approach.
-  Precise trackpad deltas are used as-is, momentum comes from the OS.
+- **Scrolling:** wheels are hard-clamped and jump on macOS, as AppKit's
+  do (`ui.Context.WheelJumps`); elsewhere the offset glides to its target
+  (exponential approach). Windows cannot tell a high-resolution wheel from
+  a precision touchpad (both send fractions of a notch): both are treated
+  as precise. Precise trackpad deltas are used as-is, momentum
+  comes from the OS. A gesture with phases (macOS, Wayland fingers) latches
+  to the scroll box under the pointer until its momentum ends, locks the
+  predominant axis, and rubber-bands past the edges as NSScrollView does
+  (`ui/scrollphys.go`; the constants are fitted to a live NSScrollView,
+  `ui/scrollfit_test.go`).
 - **Virtualized lists:** only rows in `[firstVisible-overscan,
   lastVisible+overscan]` are built. Row height is fixed per list, so the
   visible range is O(1) to compute; the cost per frame is independent of

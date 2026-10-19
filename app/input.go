@@ -171,6 +171,9 @@ func (t *translator) conflicts(e *platform.Event) bool {
 	if e.Kind == platform.EvText && replacing(e) && !t.in.CanReplace() {
 		return true
 	}
+	if e.Kind == platform.EvScroll && t.in.NScrolls == ui.MaxScrolls {
+		return true // the frame is full of scroll events: the rest go to the next frame as they are, not merged
+	}
 	if !t.transitioned() {
 		return false
 	}
@@ -248,13 +251,10 @@ func (t *translator) apply(e *platform.Event, txt []byte) bool {
 			in.SetButton(b, down, t.clicks(b, e, down))
 		}
 	case platform.EvScroll:
-		if e.DX == 0 && e.DY == 0 {
+		if e.DX == 0 && e.DY == 0 && e.Phase == platform.PhaseNone && e.Momentum == platform.PhaseNone {
 			return false
 		}
 		in.Mods = mods(e.Mods)
-		if e.Flags&platform.FlagOverHost != 0 {
-			in.ScrollAt, in.ScrollAtX, in.ScrollAtY = true, e.X, e.Y
-		}
 		t.scroll(e)
 	case platform.EvKey:
 		in.Mods = mods(e.Mods)
@@ -348,7 +348,9 @@ func (t *translator) clicks(b int, e *platform.Event, down bool) uint8 {
 
 // scroll accumulates a wheel or trackpad event. ui takes either pixels
 // (Precise) or wheel notches (scaled by ui.Context.WheelStep) for the whole
-// frame, so a frame that gets both kinds is converted to pixels.
+// frame in ScrollX and ScrollY, so a frame that gets both kinds is converted
+// to pixels there; each event also goes into Input.Scrolls as is, with its
+// phases, which is what ui reads.
 //
 // Platform deltas are always physical pixels: trackpads report them as is
 // and the backends convert wheel notches to pixels. For a wheel the pixels
@@ -364,14 +366,28 @@ func (t *translator) scroll(e *platform.Event) {
 	pending := in.ScrollX != 0 || in.ScrollY != 0
 	switch {
 	case precise && pending && !in.Precise: // notches so far: convert them
-		in.ScrollX *= step
-		in.ScrollY *= step
-		in.AddScroll(e.DX, e.DY, true)
+		in.ScrollX = in.ScrollX*step + e.DX
+		in.ScrollY = in.ScrollY*step + e.DY
+		in.Precise = true
 	case precise || (pending && in.Precise):
-		in.AddScroll(e.DX, e.DY, true)
+		in.ScrollX += e.DX
+		in.ScrollY += e.DY
+		in.Precise = true
 	default:
-		in.AddScroll(e.DX/step, e.DY/step, false)
+		in.ScrollX += e.DX / step
+		in.ScrollY += e.DY / step
+		in.Precise = false
 	}
+	r := ui.ScrollEvent{DX: e.DX, DY: e.DY, Precise: precise, Inverted: e.Flags&platform.FlagInverted != 0,
+		Phase: ui.ScrollPhase(e.Phase), Momentum: ui.ScrollPhase(e.Momentum), Time: e.Time,
+		X: in.MouseX, Y: in.MouseY, Pos: in.Inside} // where the pointer is now: a later move must not redirect it
+	if e.Flags&platform.FlagPos != 0 { // where the event says it happened (a scroll bubbled from a native host, say)
+		r.X, r.Y, r.Pos = e.X, e.Y, true
+	}
+	if !precise {
+		r.DX, r.DY = e.DX/step, e.DY/step
+	}
+	in.AddScrollEvent(r)
 }
 
 func abs(v float32) float32 {

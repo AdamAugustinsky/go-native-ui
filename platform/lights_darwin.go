@@ -30,11 +30,11 @@ import (
 // Electron, Godot and iTerm2 do).
 //
 // So AppKit places the buttons itself. NSWindow keeps a titlebar height and a
-// button-group offset of its own (setTitlebarHeight: and
-// setStandardWindowButtonGroupOffset:, private; present on macOS 15 and 27,
-// the systems tested), which every layout pass of the titlebar honours. The buttons, the group's hover area, the zoom button's
-// tiling menu, key and appearance changes all follow from AppKit's own
-// layout, so nothing undoes them. The offset is calibrated against where
+// button-group offset of its own (private selectors, present on macOS 15 and
+// 27, the systems tested), which every layout pass of the titlebar honours.
+// The buttons, the group's hover area, the zoom button's tiling menu, key and
+// appearance changes all follow from AppKit's own layout, so nothing undoes
+// them. The offset is calibrated against where
 // AppKit actually puts the close button, so its centre lands on
 // Options.TrafficLights whatever AppKit's default inset is; the spacing stays
 // AppKit's (20 pt on macOS 15, 23 on 27).
@@ -50,10 +50,19 @@ import (
 // windowWillEnterFullScreen: until the exit or the failed entry
 // (shell_darwin.go), and runs then and on the next run-loop turn.
 //
-// The selectors are checked (respondsToSelector:) once per window. Where any
-// is missing, or AppKit does not put the close button where asked, the
-// buttons stay where AppKit puts them by default; SystemButtons still says
-// where that is, so the app keeps its content clear of them.
+// Those selectors and every call of them are in lights_private_darwin.go,
+// which a build with the gnui_publicapi tag leaves out
+// (lights_public_darwin.go): a store binary does not contain them
+// (DECISIONS.md D53). The selectors are checked once per window
+// (respondsToSelector:) and their signatures once per process (the type
+// encodings: a double, and an NSSize of two doubles), so a changed method is
+// never called with the wrong arguments. Where any is missing or differs,
+// where the build or the app asked for public interfaces only (the tag,
+// Options.PublicAPIOnly), or where AppKit does not put the close button where
+// asked, the buttons stay where AppKit puts them by default; SystemButtons
+// still says where that is, so the app keeps its content clear of them. The
+// last case undoes what it set: AppKit's own height and offset, and the hover
+// areas.
 //
 // Measured and rejected: the NSToolbar styles give the buttons fixed centres,
 // (26, 26) unified and (19, 20) unifiedCompact on macOS 27, not a configurable
@@ -75,10 +84,6 @@ type titlebarChrome struct {
 }
 
 var (
-	selSetTitlebarHeight    = objc.Sel("setTitlebarHeight:")                  // NSWindow, private
-	selTitlebarHeight       = objc.Sel("titlebarHeight")                      // NSWindow, private
-	selSetButtonGroupOffset = objc.Sel("setStandardWindowButtonGroupOffset:") // NSWindow, private; an NSSize whose height points up
-	selButtonGroupOffset    = objc.Sel("standardWindowButtonGroupOffset")     // NSWindow, private
 	selLayoutSubtree        = objc.Sel("layoutSubtreeIfNeeded")
 	selUpdateTrackingAreas  = objc.Sel("updateTrackingAreas")
 	selTitlebarFrameChanged = objc.Sel("gnuiTitlebarFrameChanged:")
@@ -92,6 +97,7 @@ var (
 	lightsObserverClass, lightsNSObject  objc.ID
 	lightsCenter, lightsFrameChangedName objc.ID
 	lightsForceDefault                   bool // tests: new windows behave as where the selectors are missing
+
 )
 
 func lightsSetup() {
@@ -166,62 +172,13 @@ func (w *Window) placeButtons() {
 	w.measureButtons(btn)
 }
 
-// setUpLights checks the selectors and creates the observer (once per
-// window).
+// setUpLights decides whether AppKit places the buttons (privateAPI,
+// titlebarMetricsUsable) and creates the observer (once per window).
 func (w *Window) setUpLights() {
 	lightsOnce.Do(lightsSetup)
 	w.tb.setUp = true
-	w.tb.native = !lightsForceDefault &&
-		objc.SendBool1(w.win, selRespondsTo, uintptr(selSetTitlebarHeight)) &&
-		objc.SendBool1(w.win, selRespondsTo, uintptr(selTitlebarHeight)) &&
-		objc.SendBool1(w.win, selRespondsTo, uintptr(selSetButtonGroupOffset)) &&
-		objc.SendBool1(w.win, selRespondsTo, uintptr(selButtonGroupOffset))
+	w.tb.native = !lightsForceDefault && w.privateAPI() && w.titlebarMetricsUsable()
 	w.tb.observer = objc.Send(objc.Send(lightsObserverClass, selAlloc), selInit)
-}
-
-// placeNative sets AppKit's titlebar height and button-group offset where
-// they differ from ours. From a frame-change notification (inside AppKit's
-// layout) that is all: AppKit's layout places the buttons and posts their
-// frame changes, which measure them. Otherwise, when it changed them or has
-// not calibrated yet, it lays the titlebar out and checks the close button:
-// if its centre is off it corrects the offset by the difference (AppKit's
-// default inset is not ours to know), and if that does not land either it
-// gives up and leaves AppKit's default.
-func (w *Window) placeNative(btn [3]objc.ID) {
-	changed := false
-	if h := objc.F.Reset().Arg(uintptr(w.win)).Arg(uintptr(selTitlebarHeight)).Call(objc.MsgSend).F64(0); math.Abs(h-w.titlebar) > 0.01 {
-		objc.F.Reset().Arg(uintptr(w.win)).Arg(uintptr(selSetTitlebarHeight)).ArgF64(w.titlebar).Call(objc.MsgSend)
-		changed = true
-	}
-	if ox, oy := objc.SendPoint(w.win, selButtonGroupOffset); ox != w.tb.offset[0] || oy != w.tb.offset[1] {
-		w.setGroupOffset()
-		changed = true
-	}
-	if w.tb.inNote || (!changed && w.tb.calibrated) {
-		return
-	}
-	frame := objc.Send(objc.Send(objc.Send(btn[0], selSuperview), selSuperview), selSuperview) // the theme frame
-	for try := 0; ; try++ {
-		objc.Send(frame, selLayoutSubtree)
-		cx, cy := w.buttonCentre(btn[0])
-		dx, dy := float64(w.lights[0])-cx, float64(w.lights[1])-cy
-		if math.Abs(dx) <= 0.25 && math.Abs(dy) <= 0.25 {
-			w.tb.calibrated = true
-			break
-		}
-		if try == 2 { // AppKit does not put them where asked: leave its default
-			w.tb.native = false
-			w.tb.offset = [2]float64{}
-			w.setGroupOffset()
-			objc.F.Reset().Arg(uintptr(w.win)).Arg(uintptr(selSetTitlebarHeight)).ArgF64(-1).Call(objc.MsgSend)
-			objc.Send(frame, selLayoutSubtree)
-			break
-		}
-		w.tb.offset[0] += dx
-		w.tb.offset[1] -= dy
-		w.setGroupOffset()
-	}
-	w.refreshButtonTracking()
 }
 
 // refreshButtonTracking has the theme frame and the titlebar view compute
@@ -231,15 +188,15 @@ func (w *Window) refreshButtonTracking() {
 	if w.titlebar == 0 || !w.tb.native || w.tb.closed || w.fullScreen || objc.Send(w.win, selStyleMask)&(1<<14) != 0 {
 		return
 	}
+	w.updateButtonTracking()
+}
+
+func (w *Window) updateButtonTracking() {
 	if b := objc.Send1(w.win, selStdButton, 0); b != 0 {
 		tv := objc.Send(b, selSuperview)
 		objc.Send(objc.Send(objc.Send(tv, selSuperview), selSuperview), selUpdateTrackingAreas)
 		objc.Send(tv, selUpdateTrackingAreas)
 	}
-}
-
-func (w *Window) setGroupOffset() {
-	objc.F.Reset().Arg(uintptr(w.win)).Arg(uintptr(selSetButtonGroupOffset)).ArgPoint(w.tb.offset[0], w.tb.offset[1]).Call(objc.MsgSend)
 }
 
 // watchTitlebar observes frame changes of the container, the titlebar view

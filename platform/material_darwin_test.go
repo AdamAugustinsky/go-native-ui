@@ -263,7 +263,7 @@ func TestMaterialsReduceTransparency(t *testing.T) {
 	}
 }
 
-// With the shell's private API off at run time (publicAPIOnly) or left out
+// With the private API off at run time (Options.PublicAPIOnly) or left out
 // of the build (gnui_publicapi), the sidebar and the inspector are plain
 // public glass, regular style, with no private variant set, and the backdrop
 // glass does not take the window's private corner radius.
@@ -287,7 +287,7 @@ func TestMaterialsWithoutPrivateAPI(t *testing.T) {
 		if glass = rig.glass; !glass {
 			return
 		}
-		w.noPrivateAPI, w.mat.rtTest = true, -1
+		w.publicOnly, w.mat.rtTest = true, -1
 		r := [4]float32{0, 0, 200, 400}
 		w.SetMaterials([]MaterialRegion{{Area: AreaSidebar, Rect: r}, {Area: AreaInspector, Rect: r}})
 		w.FlushShell()
@@ -313,7 +313,7 @@ func TestMaterialsWithoutPrivateAPI(t *testing.T) {
 		defer bw.Close()
 		viewRadius := func() float64 { return objc.SendF64(bw.effect, objc.Sel("cornerRadius")) }
 		backdrop, privRadius = true, viewRadius()
-		bw.noPrivateAPI = true
+		bw.publicOnly = true
 		bw.fitBackdrop()
 		radius = viewRadius()
 	})

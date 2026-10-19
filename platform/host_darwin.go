@@ -101,8 +101,13 @@ type hostState struct {
 	nVis      int
 	pointerIn bool // the last move was over a host (an EvPointerLeave was queued)
 	bubbling  bool // a scroll is travelling up from a host (hostScrollWheel)
-	holes     [MaxHosts][4]float32
-	applied   int // applyHosts calls (tests)
+	// queuedScroll and queuedAt are the scroll event last queued and its
+	// timestamp: the one the event loop queued is not queued again when
+	// AppKit hands it to a host that gives it back (markScroll).
+	queuedScroll objc.ID
+	queuedAt     float64
+	holes        [MaxHosts][4]float32
+	applied      int // applyHosts calls (tests)
 }
 
 func (h *hostState) id(i int) HostID { return HostID(h.slots[i].gen<<8 | uint32(i+1)) }
@@ -412,9 +417,7 @@ func (w *Window) scrollToHost(ev objc.ID) bool {
 	if w.hosts.nVis == 0 || w.hosts.bubbling {
 		return false
 	}
-	lx, ly := objc.SendPoint(ev, selLocation)
-	s := float64(w.scale)
-	return w.overHost(float32(lx*s), float32((w.hPt-ly)*s))
+	return w.overHost(w.locate(ev))
 }
 
 // hostFocused reports whether a host holds the first responder: keys then
@@ -529,30 +532,54 @@ func clipHost(self objc.ID) (*Window, int) {
 	return w, i
 }
 
-// hostScrollWheel is GNUIHostClip's scrollWheel:: a scroll the host did not
-// use, handed up the responder chain, goes to ui.
-func hostScrollWheel(c *ffi.CB) {
-	w, _ := clipHost(objc.ID(c.Int(0)))
-	if w == nil {
+// Each scroll event reaches ui once, whichever view AppKit gives it to. The
+// event loop queues one whose point is not over a host before AppKit sees it
+// (Window.scrollEvent); one over a host goes to the host, and what the host
+// does not use comes back to its clip view (hostScrollWheel). AppKit may give
+// the events of a trackpad gesture to the view the gesture began in even once
+// the pointer has moved over another (it latches gestures), so a scroll can
+// also arrive at the clip view of a host though the loop queued it, or at our
+// view though the loop left it to a host (viewScrollWheel): the event queued
+// last is remembered, and each path queues only one that is not. ui then
+// latches the gesture to the box under its first event (F6).
+
+// markScroll records ev as queued.
+func (h *hostState) markScroll(ev objc.ID) {
+	h.queuedScroll, h.queuedAt = ev, objc.SendF64(ev, selTimestamp)
+}
+
+// scrollQueued reports whether ev is the scroll event queued last (the same
+// object with the same timestamp: an address alone may be a later event's).
+func (h *hostState) scrollQueued(ev objc.ID) bool {
+	return ev == h.queuedScroll && objc.SendF64(ev, selTimestamp) == h.queuedAt
+}
+
+// queueHandedScroll queues scroll event ev, which a view handed on, at its
+// own point, unless it is queued already.
+func (w *Window) queueHandedScroll(ev objc.ID) {
+	if w.hosts.scrollQueued(ev) {
 		return
 	}
-	ev := objc.ID(c.Int(2))
 	w.hosts.bubbling = true
 	w.scrollEvent(ev, int64(objc.SendF64(ev, selTimestamp)*1e9))
 	w.hosts.bubbling = false
 }
 
-// overHostScroll marks scroll event e, which a host handed back, with where
-// it happened: ui is told the pointer left when it went onto the host, so the
-// scroll's own position is what finds the scroll container around the host.
-func (w *Window) overHostScroll(e *Event, ev objc.ID) {
-	if !w.hosts.bubbling {
-		return
+// hostScrollWheel is GNUIHostClip's scrollWheel:: a scroll the host did not
+// use, handed up the responder chain, goes to ui.
+func hostScrollWheel(c *ffi.CB) {
+	if w, _ := clipHost(objc.ID(c.Int(0))); w != nil {
+		w.queueHandedScroll(objc.ID(c.Int(2)))
 	}
-	lx, ly := objc.SendPoint(ev, selLocation)
-	s := float64(w.scale)
-	e.Flags |= FlagOverHost
-	e.X, e.Y = float32(lx*s), float32((w.hPt-ly)*s)
+}
+
+// viewScrollWheel is GNUIView's scrollWheel:: AppKit gave our view a scroll
+// the event loop left to a host (a gesture that began over ui, now over the
+// host); it goes to ui.
+func viewScrollWheel(c *ffi.CB) {
+	if w := theWindow.Load(); w != nil && w.view == objc.ID(c.Int(0)) {
+		w.queueHandedScroll(objc.ID(c.Int(2)))
+	}
 }
 
 // hostKeyDown is GNUIHostClip's keyDown:: a key the host's view did not

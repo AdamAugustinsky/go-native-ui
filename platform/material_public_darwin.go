@@ -8,9 +8,7 @@ import "gonativeui/internal/objc"
 // with the gnui_publicapi tag (Mac App Store apps): the sidebar and the
 // inspector are regular NSGlassEffectView glass, and the window's corner
 // radius is not known (the backdrop glass keeps square corners, which the
-// window's mask rounds).
-
-const privateAPI = false
+// window's mask rounds). DECISIONS.md D53.
 
 func setSplitGlass(objc.ID, MaterialArea) {}
 

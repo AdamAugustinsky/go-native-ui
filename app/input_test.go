@@ -1,6 +1,7 @@
 package app
 
 import (
+	"runtime"
 	"testing"
 
 	"gonativeui/platform"
@@ -160,6 +161,42 @@ func TestPreciseAndWheelScroll(t *testing.T) {
 
 	if tr.event(scroll(0, 0, platform.FlagPrecise), nil) {
 		t.Fatal("an empty scroll repaints")
+	}
+}
+
+// TestScrollPhasesReachUI: every scroll event goes to ui.Input.Scrolls with
+// its phases, those without a delta (fingers resting, lifting) too, and a
+// wheel's as notches.
+func TestScrollPhasesReachUI(t *testing.T) {
+	for p := platform.PhaseNone; p <= platform.PhaseStationary; p++ {
+		if want := [...]ui.ScrollPhase{ui.PhaseNone, ui.PhaseMayBegin, ui.PhaseBegan, ui.PhaseChanged, ui.PhaseEnded,
+			ui.PhaseCancelled, ui.PhaseStationary}[p]; ui.ScrollPhase(p) != want {
+			t.Fatalf("platform phase %d is ui phase %d, want %d", p, ui.ScrollPhase(p), want)
+		}
+	}
+	tr := newTranslator()
+	tr.wheelStep = 48
+	add := func(e platform.Event) bool { e.Kind = platform.EvScroll; return tr.event(&e, nil) }
+	if !add(platform.Event{Flags: platform.FlagPrecise, Phase: platform.PhaseMayBegin, Time: 1}) {
+		t.Fatal("fingers resting on the trackpad are not input")
+	}
+	add(platform.Event{Flags: platform.FlagPrecise | platform.FlagInverted, Phase: platform.PhaseBegan, DY: 4, Time: 2})
+	add(platform.Event{Flags: platform.FlagPrecise, Momentum: platform.PhaseChanged, DY: 6, Time: 3})
+	add(platform.Event{DY: 96, Time: 4})
+	in := &tr.in
+	want := []ui.ScrollEvent{
+		{Phase: ui.PhaseMayBegin, Precise: true, Time: 1},
+		{Phase: ui.PhaseBegan, DY: 4, Precise: true, Inverted: true, Time: 2},
+		{Momentum: ui.PhaseChanged, DY: 6, Precise: true, Time: 3},
+		{DY: 2, Time: 4},
+	}
+	if in.NScrolls != len(want) {
+		t.Fatalf("%d records, want %d: %+v", in.NScrolls, len(want), in.Scrolls[:in.NScrolls])
+	}
+	for i, w := range want {
+		if in.Scrolls[i] != w {
+			t.Errorf("record %d: %+v, want %+v", i, in.Scrolls[i], w)
+		}
 	}
 }
 
@@ -331,5 +368,71 @@ func TestTabCharacterIsNotText(t *testing.T) {
 	text(&tr, "\t")
 	if got(&tr) != "\t\t" {
 		t.Fatalf("tabs after a release and after another key: %q", got(&tr))
+	}
+}
+
+// TestScrollKeepsItsPointerPosition: a scroll event records where the pointer
+// was when it came, so a pointer move later in the same frame does not choose
+// the box it scrolls.
+func TestScrollKeepsItsPointerPosition(t *testing.T) {
+	tr := newTranslator()
+	tr.event(ev(platform.EvPointerMove, func(e *platform.Event) { e.X, e.Y = 10, 20 }), nil)
+	tr.event(ev(platform.EvScroll, func(e *platform.Event) { e.DY, e.Flags, e.Phase = 3, platform.FlagPrecise, platform.PhaseBegan }), nil)
+	tr.event(ev(platform.EvPointerMove, func(e *platform.Event) { e.X, e.Y = 300, 40 }), nil)
+	in := &tr.in
+	if r := in.Scrolls[0]; !r.Pos || r.X != 10 || r.Y != 20 || in.MouseX != 300 {
+		t.Fatalf("record at %v,%v (pos %v), pointer at %v", r.X, r.Y, r.Pos, in.MouseX)
+	}
+}
+
+// TestWheelJumpsOnMacOS: a wheel jumps on macOS, as AppKit's does, and
+// glides elsewhere.
+func TestWheelJumpsOnMacOS(t *testing.T) {
+	c := ui.New(nil)
+	uiDefaults(c)
+	if c.WheelJumps != (runtime.GOOS == "darwin") {
+		t.Fatalf("WheelJumps %v on %s", c.WheelJumps, runtime.GOOS)
+	}
+}
+
+// TestScrollOverflowWaitsForTheNextFrame: more scroll events than a frame
+// holds are not merged; the rest wait, in order, for the next frame.
+func TestScrollOverflowWaitsForTheNextFrame(t *testing.T) {
+	tr := newTranslator()
+	for i := 0; i < ui.MaxScrolls+6; i++ {
+		ph := platform.PhaseBegan
+		if i%2 == 1 {
+			ph = platform.PhaseEnded
+		}
+		tr.event(ev(platform.EvScroll, func(e *platform.Event) {
+			e.DY, e.Flags, e.Phase, e.Time = 1, platform.FlagPrecise, ph, int64(i+1)
+		}), nil)
+	}
+	if tr.in.NScrolls != ui.MaxScrolls || !tr.pending() {
+		t.Fatalf("first frame: %d events, pending %v", tr.in.NScrolls, tr.pending())
+	}
+	tr.endFrame()
+	in := &tr.in
+	if in.NScrolls != 6 || in.Scrolls[0].Time != ui.MaxScrolls+1 || in.Scrolls[5].Phase != ui.PhaseEnded {
+		t.Fatalf("second frame: %+v", in.Scrolls[:in.NScrolls])
+	}
+}
+
+// TestScrollUsesTheEventsPosition: a scroll that says where it happened
+// (FlagPos: a scroll bubbled up from a native host, say) is recorded there,
+// not where the pointer is; one that does not is recorded at the pointer.
+func TestScrollUsesTheEventsPosition(t *testing.T) {
+	tr := newTranslator()
+	tr.event(ev(platform.EvPointerMove, func(e *platform.Event) { e.X, e.Y = 10, 20 }), nil)
+	tr.event(ev(platform.EvScroll, func(e *platform.Event) {
+		e.DY, e.X, e.Y, e.Flags = 3, 300, 40, platform.FlagPrecise|platform.FlagPos
+	}), nil)
+	tr.event(ev(platform.EvScroll, func(e *platform.Event) { e.DY, e.Flags = 2, platform.FlagPrecise }), nil)
+	in := &tr.in
+	if r := in.Scrolls[0]; !r.Pos || r.X != 300 || r.Y != 40 {
+		t.Fatalf("the positioned scroll is recorded at %v,%v (pos %v)", r.X, r.Y, r.Pos)
+	}
+	if r := in.Scrolls[1]; !r.Pos || r.X != 10 || r.Y != 20 {
+		t.Fatalf("the other is recorded at %v,%v (pos %v)", r.X, r.Y, r.Pos)
 	}
 }

@@ -4,14 +4,12 @@ package platform
 
 import "gonativeui/internal/objc"
 
-// The shell's private AppKit API: the sidebar's and the inspector's glass
-// variants and the window's corner radius. A build with the gnui_publicapi
-// tag (Mac App Store apps) leaves this file out, so that its binary does not
-// contain these selectors, and uses material_public_darwin.go instead; at run
-// time Window.publicAPIOnly turns the same calls off.
-
-// privateAPI is whether this build has the shell's private AppKit calls.
-const privateAPI = true
+// The native shell's private AppKit API: the sidebar's and the inspector's
+// glass variants (and the probe that reads them on systems not listed) and
+// the window's corner radius. A build with the gnui_publicapi tag (Mac App
+// Store apps) leaves this file out, so that its binary does not contain these
+// selectors, and uses material_public_darwin.go instead; at run time every
+// call is behind Window.privateAPI (DECISIONS.md D53).
 
 // setSplitGlass gives glass view v the private configuration AppKit gives
 // the sidebar's (a == AreaSidebar) or the inspector's glass, when the view

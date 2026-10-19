@@ -166,7 +166,7 @@ func TestOffscreenHostPlaceholder(t *testing.T) {
 
 // A scroll a host hands back reaches the scroll container around the host:
 // the pointer left ui when it went onto the host (EvPointerLeave), and the
-// scroll's own position (FlagOverHost) finds the container. Nothing is
+// scroll's own position (FlagPos) finds the container. Nothing is
 // hovered meanwhile.
 func TestHostScrollReachesItsContainer(t *testing.T) {
 	c := ui.New(noText{})
@@ -198,7 +198,7 @@ func TestHostScrollReachesItsContainer(t *testing.T) {
 		t.Fatal("the page is not hovered with the pointer over it")
 	}
 	tr.event(&platform.Event{Kind: platform.EvPointerLeave}, nil) // onto the host at 100,140–300,200
-	tr.event(&platform.Event{Kind: platform.EvScroll, DY: -30, Flags: platform.FlagPrecise | platform.FlagOverHost, X: 150, Y: 160}, nil)
+	tr.event(&platform.Event{Kind: platform.EvScroll, DY: -30, Flags: platform.FlagPrecise | platform.FlagPos, X: 150, Y: 160}, nil)
 	build()
 	if _, y := c.Scroll(list); y != 30 {
 		t.Errorf("the page scrolled to %v by a scroll its host handed back, want 30", y)
@@ -211,5 +211,58 @@ func TestHostScrollReachesItsContainer(t *testing.T) {
 	build()
 	if _, y := c.Scroll(list); y != 30 {
 		t.Errorf("a scroll with no position moved the page to %v", y)
+	}
+}
+
+// A trackpad gesture that begins over a host, which hands it back, latches
+// to the scroll container around the host and keeps it while the pointer
+// moves over another scroll box and back over the host.
+func TestHostGestureLatchesItsContainer(t *testing.T) {
+	c := ui.New(noText{})
+	tr := newTranslator()
+	var page, inner ui.ID
+	var l gpu.DrawList
+	build := func() {
+		c.Begin(&tr.in, 800, 600, 2, 1.0/60)
+		c.NextSize(ui.Px(300), ui.Px(300))
+		c.NextPos(100, 100)
+		c.NextPad(0)
+		page = c.Box(ui.ScrollY|ui.Clip|ui.FloatingX|ui.FloatingY, "page")
+		c.Push(page)
+		c.NextSize(ui.Px(200), ui.Px(60))
+		c.Host(5, 1, 0) // 100,100–300,160
+		c.NextSize(ui.Px(300), ui.Px(100))
+		c.NextPad(0)
+		inner = c.Box(ui.ScrollY|ui.Clip, "inner") // 100,160–400,260
+		c.Push(inner)
+		c.NextSize(ui.Px(300), ui.Px(1000))
+		c.Box(0, "inner content")
+		c.Pop()
+		c.NextSize(ui.Px(300), ui.Px(1000))
+		c.Box(0, "below")
+		c.Pop()
+		c.End(&l)
+		tr.endFrame()
+	}
+	build()
+	build()
+	tr.event(&platform.Event{Kind: platform.EvPointerLeave}, nil) // the pointer is over the host
+	ev := func(x, y, dy float32, ph platform.ScrollPhase) {
+		tr.event(&platform.Event{Kind: platform.EvScroll, DY: dy, Phase: ph, X: x, Y: y,
+			Flags: platform.FlagPrecise | platform.FlagPos}, nil)
+	}
+	ev(150, 130, -10, platform.PhaseBegan) // handed back by the host
+	build()
+	tr.event(&platform.Event{Kind: platform.EvPointerMove, X: 150, Y: 200}, nil)
+	ev(150, 200, -10, platform.PhaseChanged) // over the inner box now
+	build()
+	ev(150, 130, -10, platform.PhaseChanged) // back over the host
+	ev(150, 130, 0, platform.PhaseEnded)
+	build()
+	if _, y := c.Scroll(page); y != 30 {
+		t.Errorf("the page scrolled to %v, want 30 (all three moves)", y)
+	}
+	if _, y := c.Scroll(inner); y != 0 {
+		t.Errorf("the inner box scrolled to %v: the gesture is the page's", y)
 	}
 }
