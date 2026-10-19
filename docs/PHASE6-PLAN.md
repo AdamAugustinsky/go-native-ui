@@ -91,7 +91,7 @@ s := &sender{call: clib.NewCall(), err: new(zfErr), fn: fn}            // alloca
 
 st := s.call.Reset().Ptr(unsafe.Pointer(core)).Ptr(unsafe.Pointer(&buf[0])).Uint(uint64(n)).
 	Ptr(unsafe.Pointer(s.err)).Do(s.fn).Int32()                         // four arguments; the error comes back in s.err
-runtime.KeepAlive(buf)
+                                                                       // no runtime.KeepAlive(buf): Ptr keeps buf reachable until Do returns
 if st != 0 {
 	return s.err.toError()                                              // allocates only on failure
 }
