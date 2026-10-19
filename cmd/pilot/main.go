@@ -81,7 +81,9 @@ func main() {
 	resizeTest := flag.Bool("live-resize-test", false, "macOS: drag the window size through the frame handler (as a user resizing does) and print the result as JSON")
 	mode := flag.String("mode", "light", "with -o: light (the default), dark or system (what this machine says)")
 	verbose := flag.Bool("v", false, "print the startup timeline and listing times to stderr; in a window or bench also a state line every second while frames stop coming")
+	budgetScale := flag.Float64("budget-scale", 1, "with -gate: multiply the time budgets by this (3: the coarse, catastrophic check of a shared CI runner)")
 	flag.Parse()
+	*maxCPU *= *budgetScale
 
 	look, err := parseLook(*mode)
 	if err != nil {

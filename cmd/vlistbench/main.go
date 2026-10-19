@@ -64,8 +64,10 @@ type report struct {
 	// in wall time. Its P99 and Max are gated; the whole frame is FrameCPUus.
 	ListWorkUs app.Stats
 	// EditFrameMaxUs is the most main-thread CPU a counted frame spent in the
-	// edits and BeginVList, EditFrameMeanUs the mean.
+	// edits and BeginVList, EditFrameMeanUs the mean; EditFrameUs is their
+	// distribution (its P99 and Max are gated).
 	EditFrameMaxUs, EditFrameMeanUs float64
+	EditFrameUs                     app.Stats
 	Arrivals, HistoryLoads          int
 	Rebuilds                        int      // edits rebuilt in slices
 	Jumps                           int      // edits above the view that moved it
@@ -83,7 +85,10 @@ func main() {
 	maxEdit := flag.Float64("max-edit-us", defaultMaxEditUs, "with -gate: the most a frame may spend in edits and BeginVList, in µs (0: do not gate)")
 	timeout := flag.Duration("timeout", 90*time.Second, "with -bench: give up after this long")
 	sites := flag.Bool("allocsites", false, "with -bench: profile every allocation and print the call stacks of those inside the measured frames")
+	budgetScale := flag.Float64("budget-scale", 1, "with -gate: multiply the time budgets by this (3: the coarse, catastrophic check of a shared CI runner)")
 	flag.Parse()
+	*maxList *= *budgetScale
+	*maxEdit *= *budgetScale
 
 	ch := newChat(max(*items, 1))
 	var err error
@@ -154,8 +159,8 @@ func (ch *chat) report(br app.BenchReport) report {
 	rep := report{
 		OS: runtime.GOOS, Arch: runtime.GOARCH, Items: ch.st.Len(), BenchReport: br,
 		ItemsBuiltMax: ch.builtMax, ListWorkUs: app.Summarize(ch.listUs),
-		EditFrameMaxUs: float64(ch.editMax.Nanoseconds()) / 1e3,
-		Arrivals:       ch.arrivals, HistoryLoads: ch.histLoads, Rebuilds: ch.rebuilds,
+		EditFrameMaxUs: float64(ch.editMax.Nanoseconds()) / 1e3, EditFrameUs: app.Summarize(ch.editUs),
+		Arrivals: ch.arrivals, HistoryLoads: ch.histLoads, Rebuilds: ch.rebuilds,
 		Jumps: ch.jumps, Unpinned: ch.unpinned,
 	}
 	if ch.buildCalls > 0 {
@@ -181,6 +186,9 @@ func gateFailures(r report, allowUnpaced bool, maxList, maxEdit float64) []strin
 	}
 	if maxList > 0 && r.ListWorkUs.Max > maxList {
 		f = append(f, fmt.Sprintf("a frame spent %.0f µs in the list's work, budget %.0f", r.ListWorkUs.Max, maxList))
+	}
+	if maxEdit > 0 && r.EditFrameUs.P99 > maxEdit {
+		f = append(f, fmt.Sprintf("the edits and BeginVList per frame have a P99 of %.0f µs, budget %.0f", r.EditFrameUs.P99, maxEdit))
 	}
 	if maxEdit > 0 && r.EditFrameMaxUs > maxEdit {
 		f = append(f, fmt.Sprintf("a frame spent %.0f µs in edits and BeginVList, budget %.0f", r.EditFrameMaxUs, maxEdit))

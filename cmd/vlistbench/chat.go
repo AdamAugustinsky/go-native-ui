@@ -146,13 +146,14 @@ type chat struct {
 	// BeginVList (with a rebuild's slice), the Item calls and EndVList; the
 	// items' contents, layout and drawing are the frame's (BenchReport).
 	listUs []float64
+	editUs []float64 // per counted frame, the edits and BeginVList in µs (main-thread CPU)
 
 	script func(frame int, in *ui.Input) bool
 	pre    func(c *chat) // the script's edits, run in Build before the list
 }
 
 func newChat(n int) *chat {
-	ch := &chat{n: n, jumpTo: -1, listUs: make([]float64, 0, maxListSamples)}
+	ch := &chat{n: n, jumpTo: -1, listUs: make([]float64, 0, maxListSamples), editUs: make([]float64, 0, maxListSamples)}
 	ch.o = base.VListOpts{Estimate: estPt, StickToBottom: true}
 	ch.st.Reserve(n + n/2)
 	ids := make([]uint64, n)
@@ -288,6 +289,9 @@ func (ch *chat) Build(c *ui.Context) {
 	if ch.counting {
 		ch.editMax = max(ch.editMax, el)
 		ch.editSum += el
+		if len(ch.editUs) < cap(ch.editUs) {
+			ch.editUs = append(ch.editUs, float64(el.Nanoseconds())/1e3)
+		}
 	}
 	ch.listBox = v.Outer
 	ch.nb = 0

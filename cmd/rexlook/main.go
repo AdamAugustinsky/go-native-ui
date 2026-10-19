@@ -100,7 +100,9 @@ func main() {
 	poseTab := flag.Int("pose-tab", 1, "with -pose: the tab, from 0")
 	idle := flag.Duration("idle", 0, "show the window, wait a second, count the frames drawn over this long while nothing happens, print them as JSON and exit")
 	verbose := flag.Bool("v", false, "print the startup timeline to stderr; with -bench or in a window, also a state line every second while frames stop coming")
+	budgetScale := flag.Float64("budget-scale", 1, "with -gate: multiply the time budgets by this (3: the coarse, catastrophic check of a shared CI runner)")
 	flag.Parse()
+	*maxCPU *= *budgetScale
 
 	if *drawn {
 		config = rex.Config

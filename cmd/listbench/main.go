@@ -63,7 +63,9 @@ func main() {
 	timeout := flag.Duration("timeout", 60*time.Second, "with -bench: give up after this long")
 	sites := flag.Bool("allocsites", false, "with -bench: profile every allocation and print the call stacks of those inside the measured frames")
 	exitFirst := flag.Bool("exit-first", false, "print the startup timeline as JSON and exit once the first frame is on glass")
+	budgetScale := flag.Float64("budget-scale", 1, "with -gate: multiply the time budgets by this (3: the coarse, catastrophic check of a shared CI runner)")
 	flag.Parse()
+	*maxCPU *= *budgetScale
 
 	l := newListApp(max(*rows, 1))
 	var err error
