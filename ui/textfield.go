@@ -201,7 +201,7 @@ func (c *Context) TextField(label string, buf *TextBuffer) TextFieldSignal {
 	disabled := b.flags&Disabled != 0
 	in := &c.in
 	res := TextFieldSignal{ID: id, Signal: sig}
-	focused := c.focusKey == key && !disabled && !c.blocked(b) // (beneath a modal overlay a field takes no input)
+	focused := c.focusKey == key && !disabled && !c.blocked(b) && !c.wasHidden(b) // (beneath a modal overlay a field takes no input)
 	active := focused && in.Focused
 	res.Focused = focused
 	// Input ownership is fixed at Begin (fieldOwner: the field that had the

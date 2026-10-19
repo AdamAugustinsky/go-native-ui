@@ -180,7 +180,7 @@ func (c *Context) Signal(id ID) Signal {
 	}
 	b := &c.boxes[id]
 	k := b.key
-	if b.flags&Disabled != 0 || c.blocked(b) {
+	if b.flags&Disabled != 0 || c.blocked(b) || c.wasHidden(b) {
 		return s // inert: also an activation or press that was queued before
 	}
 	for i := 0; i < c.in.NActions; i++ {

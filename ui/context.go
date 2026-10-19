@@ -31,6 +31,9 @@ type persist struct {
 	wrap wrapCache
 	// flowOut is what the last layout of a flow box found (flow.go).
 	flowOut flowOut
+	// hid is whether the last layout hid the box (flow.go); newBox moves it to
+	// the box's prevHid and clears it for the frame being laid out.
+	hid bool
 	// rp is the last layout of a RichText box (hit testing), pressSpan 1 +
 	// the span its press began on.
 	rp        richPrev
@@ -80,8 +83,8 @@ type box struct {
 
 	sem int32 // 1 + the index of its record in Context.sems, 0 without a role
 
-	flow flowSpec // the options of a flow box (AxisFlow, flow.go)
-	hid  bool     // hidden by the MaxLines of the flow it is in, or inside such a box (flow.go)
+	flow    flowSpec // the options of a flow box (AxisFlow, flow.go)
+	prevHid bool     // the previous layout's hid: what the input checks of the build see (wasHidden)
 
 	// the paragraph of a WrapText or RichText box: lnN lines, laid out at
 	// width paraW (-1: not yet this frame) in the cache generation paraGen
@@ -574,6 +577,7 @@ func (c *Context) newBox(flags Flags, key Key) ID {
 	b := &c.boxes[id]
 	p := b.persist
 	*b = box{persist: p}
+	b.prevHid, b.hid = p.hid, false
 	b.lastFrame = c.frame
 	b.flags = flags
 

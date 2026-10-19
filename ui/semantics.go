@@ -431,7 +431,7 @@ func (c *Context) semActions() {
 			continue
 		}
 		if v, ok := c.table.Get(uint64(r.Key)); ok {
-			if b := &c.boxes[v]; b.lastFrame == c.frame-1 && b.flags&(Focusable|Disabled) == Focusable && !c.blocked(b) {
+			if b := &c.boxes[v]; b.lastFrame == c.frame-1 && b.flags&(Focusable|Disabled) == Focusable && !b.hid && !c.blocked(b) {
 				c.focusKey = r.Key
 				c.focusVisible = true
 			}
@@ -449,7 +449,7 @@ func (c *Context) semScroll() {
 			continue
 		}
 		v, ok := c.table.Get(uint64(r.Key))
-		if !ok || c.boxes[v].lastFrame != c.frame || c.boxes[v].flags&Disabled != 0 {
+		if !ok || c.boxes[v].lastFrame != c.frame || c.boxes[v].flags&Disabled != 0 || c.boxes[v].hid {
 			continue
 		}
 		b := &c.boxes[v]
@@ -459,7 +459,12 @@ func (c *Context) semScroll() {
 				continue
 			}
 			x, y := float32(sc.scroll[0])-sc.rect[0], float32(sc.scroll[1])-sc.rect[1]
-			c.ScrollIntoView(p, [4]float32{b.rect[0] + x, b.rect[1] + y, b.rect[2] + x, b.rect[3] + y})
+			r := [4]float32{b.rect[0] + x, b.rect[1] + y, b.rect[2] + x, b.rect[3] + y}
+			if sc.axis == AxisFlow && sc.flow.rtl { // an RTL flow's x counts from its right edge (flow.go)
+				s := float32(sc.scroll[0])
+				r[0], r[2] = sc.rect[2]-b.rect[2]+s, sc.rect[2]-b.rect[0]+s
+			}
+			c.ScrollIntoView(p, r)
 			break
 		}
 	}

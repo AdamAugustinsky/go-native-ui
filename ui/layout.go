@@ -76,11 +76,11 @@ func (c *Context) layout() {
 			p.scroll[a] = math.Min(math.Max(p.scroll[a], 0), hi)
 			p.scrollTgt[a] = math.Min(math.Max(p.scrollTgt[a], 0), hi)
 		}
-		if p.first == 0 {
+		if p.axis == AxisFlow { // also without children: its results are then 0
+			c.flowPlace(p)
 			continue
 		}
-		if p.axis == AxisFlow {
-			c.flowPlace(p)
+		if p.first == 0 {
 			continue
 		}
 		cur := p.pad[la] + float32(lead-p.scroll[la])
