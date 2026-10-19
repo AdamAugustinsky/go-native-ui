@@ -131,12 +131,16 @@ func TestOtherPeersAreNotServed(t *testing.T) {
 	if err := s.Send([]string{"fine"}); err != nil {
 		t.Errorf("unsupported peer check: %v", err)
 	}
-	setPeer(t, func(net.Conn) (uint32, bool, error) { return uint32(euid()), true, nil })
-	if err := s.Send([]string{"mine"}); err != nil {
-		t.Errorf("own uid: %v", err)
+	want := 1
+	if euid() >= 0 { // Windows has no user ids, and never reports a peer
+		setPeer(t, func(net.Conn) (uint32, bool, error) { return uint32(euid()), true, nil })
+		if err := s.Send([]string{"mine"}); err != nil {
+			t.Errorf("own uid: %v", err)
+		}
+		want = 2
 	}
-	if got := p.Poll(nil); len(got) != 2 {
-		t.Errorf("stored %+v", got)
+	if got := p.Poll(nil); len(got) != want {
+		t.Errorf("stored %+v, want %d requests", got, want)
 	}
 }
 
