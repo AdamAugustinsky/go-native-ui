@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"runtime"
 	"sync"
 	"unsafe"
 
@@ -31,6 +32,10 @@ func rasterConfigured(name string, config func() objc.ID) (pix []byte, w, h int,
 		warnOnce(err.Error())
 		return nil, 0, 0, false
 	}
+	// an autorelease pool belongs to a thread: pushed on one and popped on
+	// another, it crashes
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	F := objc.F
 	pool := F.Call0(objc.PoolPush)
 	defer F.Call1(objc.PoolPop, pool)
