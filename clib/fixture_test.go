@@ -673,9 +673,16 @@ type sender struct {
 }
 
 // TestZeroAlloc asserts exact heap-allocation deltas over thousands of calls
-// of every kind once the Calls exist. The counters are process-wide, so one
-// clean round out of three passes; an allocation per call shows up
-// thousands of times in every round.
+// of every kind once the Calls exist. The counters are process-wide, so the
+// first clean round of up to zeroAllocRounds passes (D27); an allocation per
+// call shows up thousands of times in every round. The runtime's own
+// one-offs miss most rounds: the GC before each round wakes the background
+// scavenger, whose timer then goes on the heap of whichever P it runs on,
+// and that heap's slice grows (16 bytes) the first times a P holds a timer.
+// That is bounded by the number of Ps, and it hit up to three rounds in a
+// row on a 10-core Mac (2 of 30 runs failed with three rounds).
+const zeroAllocRounds = 10
+
 func TestZeroAlloc(t *testing.T) {
 	s := &sender{NewCall(), new(fxErr), fn(t, "fx_send")}
 	c := NewCall()
@@ -711,8 +718,8 @@ func TestZeroAlloc(t *testing.T) {
 		if o1 == o0 && b1 == b0 {
 			return
 		}
-		if round == 3 {
-			t.Fatalf("allocated %d objects / %d bytes over 8000 calls (in each of 3 rounds)", o1-o0, b1-b0)
+		if round == zeroAllocRounds {
+			t.Fatalf("allocated %d objects / %d bytes over 8000 calls (in each of %d rounds)", o1-o0, b1-b0, round)
 		}
 		t.Logf("round %d: %d objects / %d bytes (retrying)", round, o1-o0, b1-b0)
 	}
