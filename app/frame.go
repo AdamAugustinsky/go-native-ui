@@ -143,6 +143,7 @@ func (a *App) drawFrame(inHandler bool, passes int) bool {
 
 	a.settle = false
 	a.syncAppearance()
+	a.syncWindow()
 	for i := 0; i < passes; i++ {
 		a.build(a.fr.W, a.fr.H, dt)
 	}

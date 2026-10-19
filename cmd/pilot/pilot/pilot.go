@@ -41,13 +41,14 @@ const (
 // titlebarPt is the height of the titlebar band in points: the Rex theme's.
 const titlebarPt = 46
 
-// Config is Pilot's window: the Rex chrome (46 pt titlebar, traffic lights at
-// (21, 22)) at 1200×760 pt, at least 600×400.
+// Config is Pilot's window: the Rex chrome (46 pt titlebar, the system's window
+// buttons where ButtonsTraffic draws its own, theme.TrafficCentrePt) at
+// 1200×760 pt, at least 600×400.
 func Config() app.Config {
 	return app.Config{
 		Title: "Pilot", Width: WindowWidthPt, Height: WindowHeightPt,
 		MinWidth: MinWidthPt, MinHeight: MinHeightPt,
-		Titlebar: titlebarPt, TrafficLights: [2]float32{21, 22},
+		Titlebar: titlebarPt, TrafficLights: theme.TrafficCentrePt,
 		Clear: [4]float32{0.9, 0.9, 0.9, 1}, // the background mesh covers every pixel
 	}
 }
