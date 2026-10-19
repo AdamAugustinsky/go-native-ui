@@ -33,6 +33,7 @@ import (
 
 var (
 	selTerminate          = objc.Sel("terminate:")
+	selAppWindows         = objc.Sel("windows")
 	selReplyTerminate     = objc.Sel("replyToApplicationShouldTerminate:")
 	selActivationPolicy   = objc.Sel("activationPolicy")
 	selSharedAEManager    = objc.Sel("sharedAppleEventManager")
@@ -44,8 +45,6 @@ var (
 	selEnumCodeValue      = objc.Sel("enumCodeValue")
 	selStringValue        = objc.Sel("stringValue")
 	selSetEventHandler    = objc.Sel("setEventHandler:andSelector:forEventClass:andEventID:")
-	selURLCount           = objc.Sel("count")
-	selURLAt              = objc.Sel("objectAtIndex:")
 	selIsFileURL          = objc.Sel("isFileURL")
 	selPath               = objc.Sel("path")
 	selAbsoluteString     = objc.Sel("absoluteString")
@@ -110,7 +109,11 @@ var appObj struct {
 	ctx      *[10]uintptr // the source's context (CF copies it; kept anyway)
 
 	reason QuitReason // the reason of a terminate: we are sending
-	woke   bool       // a wake arrived since WaitApp last reported one
+
+	// A quit decided without terminate: (a sheet was open): outside, its
+	// answer is pending; allowed, the next terminate: is answered "now".
+	quitOutside, quitAllowed bool
+	woke                     bool // a wake arrived since WaitApp last reported one
 
 	scratch [4][]byte // the data of synchronous events, by nesting depth
 	depth   int
@@ -292,6 +295,11 @@ func LastShouldTerminate() int { return lastShouldTerminate }
 func shouldTerminate() int {
 	if quitState.phase != quitIdle { // a quit is already being decided
 		return terminateCancel
+	}
+	if appObj.quitAllowed { // decided without terminate: (sendTerminate)
+		appObj.quitAllowed = false
+		appObj.reason = 0
+		return terminateNow
 	}
 	reason := appObj.reason
 	appObj.reason = 0
@@ -503,27 +511,91 @@ func appNextEvent(until objc.ID) objc.ID {
 // defers runs AppKit's modal wait inside this call. Nothing happens while a
 // quit request is already being decided. With an allowed quit, AppKit ends
 // the process after AppEvWillTerminate.
-func Terminate(reason QuitReason) {
-	if quitState.phase != quitIdle || !appObj.started {
-		return
-	}
-	appObj.reason = reason
-	objc.Send1(appObj.app, selTerminate, 0)
-	appObj.reason = 0
-}
+func Terminate(reason QuitReason) { sendTerminate(reason, 0) }
 
 // requestTerminate is the menu's Quit (gnuiQuit:): the quit policy, as for
 // AppKit's own Quit item.
-func requestTerminate(sender objc.ID) {
+func requestTerminate(sender objc.ID) { sendTerminate(QuitMenu, sender) }
+
+// sendTerminate sends terminate: as reason. AppKit's terminate: ends the
+// sheets attached to windows before it asks the delegate, even when the quit
+// is then refused (observed on macOS 26 with an alert sheet; with a plain
+// window as the sheet it returns without asking at all). So while a sheet is
+// open the policy is asked here, without terminate:, and terminate: is sent
+// only once the quit is allowed, after ending the sheets. A quit Apple event
+// (the Dock, a logout) reaches terminate: directly and ends them anyway.
+func sendTerminate(reason QuitReason, sender objc.ID) {
 	if quitState.phase != quitIdle || !appObj.started {
 		return
 	}
-	appObj.reason = QuitMenu
+	pool := objc.F.Call0(objc.PoolPush)
+	defer objc.F.Call1(objc.PoolPop, pool)
+	if appObj.quitAllowed {
+		endSheets()
+	} else if sheetAttached() {
+		quitWithoutTerminate(reason)
+		return
+	}
+	appObj.reason = reason
 	objc.Send1(appObj.app, selTerminate, uintptr(sender))
 	appObj.reason = 0
+	appObj.quitAllowed = false
+}
+
+// quitWithoutTerminate asks the quit policy what terminate: would ask
+// (sendTerminate): allowed, terminate: follows at once; deferred, it follows
+// the app's allowing answer (osReplyQuit).
+func quitWithoutTerminate(reason QuitReason) {
+	if dispatch.sink == nil {
+		if w := theWindow.Load(); w != nil {
+			w.q.push(Event{Kind: EvClose, Time: Now()})
+		}
+		return
+	}
+	switch beginQuit(reason) {
+	case 0:
+		appObj.quitOutside = true
+	case 1:
+		appObj.quitAllowed = true
+		sendTerminate(reason, 0)
+	}
+}
+
+// sheetAttached reports whether a window of the app has a sheet attached.
+func sheetAttached() bool {
+	wins := objc.Send(appObj.app, selAppWindows)
+	for i, n := 0, int(objc.Send(wins, selURLCount)); i < n; i++ {
+		if objc.Send(objc.Send1(wins, selURLAt, uintptr(i)), selAttachedSheet) != 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// endSheets ends the sheets attached to the app's windows, as cancelled
+// (NSModalResponseAbort): the quit was allowed.
+func endSheets() {
+	wins := objc.Send(appObj.app, selAppWindows)
+	for i, n := 0, int(objc.Send(wins, selURLCount)); i < n; i++ {
+		w := objc.Send1(wins, selURLAt, uintptr(i))
+		if sheet := objc.Send(w, selAttachedSheet); sheet != 0 {
+			objc.Send2(w, selEndSheet, uintptr(sheet), modalResponseAbort)
+		}
+	}
 }
 
 func osReplyQuit(allow bool) {
+	if appObj.quitOutside { // no terminate: is waiting for the answer
+		appObj.quitOutside = false
+		if allow {
+			// terminate: is sent from the app's loop (TakeQuitRequest), not
+			// from inside the handler that answered.
+			appObj.quitAllowed = true
+			dispatch.quitAsked.Store(int64(quitState.reason))
+			Wake()
+		}
+		return
+	}
 	var v uintptr
 	if allow {
 		v = 1

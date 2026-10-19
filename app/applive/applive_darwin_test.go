@@ -35,6 +35,23 @@ func TestQuitRoutes(t *testing.T) {
 	}
 }
 
+// ⌘Q under a sheet asks the app without AppKit's terminate:, which would end
+// the sheet even when the quit is refused: refused, the sheet stays; allowed
+// (at once or later), the sheet is ended and the app terminates.
+func TestQuitUnderASheet(t *testing.T) {
+	for _, mode := range []string{"now", "later"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
+			r := child(t, "sheetquit", 60*time.Second, "MODE="+mode)
+			if r.code != 0 || r.get("sheet_before") != "true" || r.get("reason1") != "1" || r.get("sheet_after_refuse") != "true" ||
+				r.get("terminated") != "1" || r.get("requests") != "2" || r.get("last") != "now" || r.get("sheet_at_exit") != "false" ||
+				mode == "later" && r.get("pending") != "true" {
+				t.Fatalf("exit %d, results %v\n%s", r.code, r.kv, r.out)
+			}
+		})
+	}
+}
+
 // ⌘Q is the native menu's Quit item, decided by the app's model like every
 // system item: disabled, it asks nothing; enabled, it is a quit request.
 func TestQuitItemFollowsTheModel(t *testing.T) {

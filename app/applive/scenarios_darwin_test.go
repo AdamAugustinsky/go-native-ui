@@ -200,6 +200,54 @@ func init() {
 		app.Main(app.AppConfig{KeepRunning: true}, h)
 		say("main=returned")
 	}
+	// sheetquit: ⌘Q while an alert sheet is open. Refused, the sheet stays;
+	// asked again and allowed (MODE=now at once, MODE=later 300 ms on), the
+	// sheet is ended and the app terminates.
+	scenarios["sheetquit"] = func() {
+		mode := os.Getenv("MODE")
+		var sh *sheets
+		h := &handler{}
+		h.start = func(a *app.App) error {
+			if _, ok := openWindows(a, 1, &view{}); !ok {
+				os.Exit(0)
+			}
+			sh = newSheets()
+			a.AtSafePoint(func() { sh.begin(ourWindow(a), "Sheet") })
+			after(500*time.Millisecond, 1)
+			return nil
+		}
+		h.event = func(a *app.App, e *app.Event) bool {
+			switch {
+			case e.Kind == app.EvPost && e.ID == 1:
+				say("sheet_before=%v", objc.Send(ourWindow(a), objc.Sel("attachedSheet")) != 0)
+				postCmdQ(windowNumber(ourWindow(a)))
+			case e.Kind == app.EvQuitRequested && h.requests == 1:
+				say("reason1=%d", e.A)
+				a.ReplyQuit(false)
+				after(500*time.Millisecond, 2)
+			case e.Kind == app.EvPost && e.ID == 2:
+				say("sheet_after_refuse=%v", objc.Send(ourWindow(a), objc.Sel("attachedSheet")) != 0)
+				postCmdQ(windowNumber(ourWindow(a)))
+			case e.Kind == app.EvQuitRequested:
+				if mode == "later" {
+					after(300*time.Millisecond, 3)
+				} else {
+					a.ReplyQuit(true)
+				}
+			case e.Kind == app.EvPost && e.ID == 3:
+				say("pending=%v", a.QuitPending())
+				a.ReplyQuit(true)
+			case e.Kind == app.EvWillTerminate:
+				say("sheet_at_exit=%v", objc.Send(ourWindow(a), objc.Sel("attachedSheet")) != 0)
+				return false
+			default:
+				return false
+			}
+			return true
+		}
+		app.Main(app.AppConfig{}, h)
+		say("main=returned")
+	}
 	scenarios["delayed"] = delayedScenario
 	scenarios["noreply"] = noReplyScenario
 	scenarios["saturation"] = saturationScenario
@@ -251,8 +299,8 @@ func endSheet(win, alert objc.ID, code int) {
 // delayed: the quit answer is deferred 2 s; meanwhile a worker's posts and an
 // alert sheet's completion are delivered during AppKit's wait, and a "Save
 // changes?" sheet asked for then opens; its answer allows the quit. The
-// sheets begin after the request: with a sheet up, AppKit's terminate:
-// returns without asking the delegate.
+// sheets begin after the request: a quit Apple event reaches AppKit's
+// terminate:, which ends a sheet that is up (sendTerminate in platform).
 func delayedScenario() {
 	v := &view{}
 	var (
