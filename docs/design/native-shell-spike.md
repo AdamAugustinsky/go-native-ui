@@ -176,8 +176,8 @@ and `_objc_autoreleasePoolPrint` before and after the toggle:
 
 The outer frame had also lost its drawable (a leaked retain) and its
 command buffer. Any AppKit call that resizes the window or runs a nested
-loop from Build does the same; `runModalForWindow:` with an animated
-`zoom:` crashed alike.
+loop from Build does the same; an animated `zoom:` inside a nested
+`runUntilDate:` crashed alike.
 
 **The fix:**
 
@@ -191,8 +191,9 @@ loop from Build does the same; `runModalForWindow:` with an animated
 
 **The tests** run in a child process, so a crash fails the test:
 
-- `TestNestedRunLoopInFrame` covers `toggleFullScreen:` and a modal zoom,
-  both from Build. Without the fix, both crash.
+- `TestNestedRunLoopInFrame` covers `toggleFullScreen:`, and an animated
+  `zoom:` in a nested run loop, both from Build. Without the fix, both
+  crash.
 - `TestGreenButtonFullScreen` clicks the green button from the run loop,
   into full screen and back, with frames drawn during both animations.
 - `TestFrameDrawablesBounded` checks over 600 frames that drawables are

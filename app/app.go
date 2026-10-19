@@ -459,12 +459,13 @@ func (a *App) onEvent(e *platform.Event) {
 // window.
 //
 // It does nothing while a frame is being drawn. AppKit calls it
-// synchronously from inside calls the app makes during a frame
-// (toggleFullScreen:, runModalForWindow:, a zoom or a setFrame: resize the
-// window and tick the display link at once), and a frame drawn there would
-// run Build inside Build and draw into the frame in progress (once a crash:
-// the outer EndFrame found the frame cleared by the inner one). What it
-// would have handled stays queued, and the next Wait delivers it.
+// synchronously from inside calls the app makes during a frame: anything
+// that animates the window as a live resize (toggleFullScreen:, an animated
+// zoom:), directly or in a nested run loop (a modal session, menu
+// tracking). A frame drawn there would run Build inside Build and draw into
+// the frame in progress (once a crash: the outer EndFrame found the frame
+// cleared by the inner one). What it would have handled stays queued, and
+// the next Wait delivers it.
 func (a *App) frameHandler() {
 	if a.inFrame {
 		a.reentries++

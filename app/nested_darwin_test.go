@@ -49,7 +49,7 @@ func TestNestedRunLoopInFrame(t *testing.T) {
 	if testing.Short() {
 		t.Skip("opens a window and goes full screen")
 	}
-	for _, c := range []string{"fullscreen", "modal-zoom"} {
+	for _, c := range []string{"fullscreen", "runloop-zoom"} {
 		t.Run(c, func(t *testing.T) {
 			cmd := exec.Command(os.Args[0])
 			cmd.Env = append(os.Environ(), nestedChild+"="+c)
@@ -122,16 +122,16 @@ func (b *nestedBuilder) Build(c *ui.Context) {
 		// The green button's action, synchronously: AppKit resizes the
 		// window and calls back before it returns.
 		objc.Send1(win, objc.Sel("toggleFullScreen:"), 0)
-	case "modal-zoom":
-		// A modal session (a nested run loop) on the window, in which an
-		// animated zoom resizes it step by step; stopModal ends it.
-		modes := objc.Send1(objc.Cls("NSArray"), objc.Sel("arrayWithObject:"), uintptr(objc.Str("kCFRunLoopCommonModes")))
-		sel := objc.Sel("performSelector:withObject:afterDelay:inModes:")
-		zoom, stop := objc.Sel("zoom:"), objc.Sel("stopModal")
-		app := objc.Send(objc.Cls("NSApplication"), objc.Sel("sharedApplication"))
-		objc.F.Reset().Arg(uintptr(win)).Arg(uintptr(sel)).Arg(uintptr(zoom)).Arg(0).ArgF64(0.05).Arg(uintptr(modes)).Call(objc.MsgSend)
-		objc.F.Reset().Arg(uintptr(app)).Arg(uintptr(sel)).Arg(uintptr(stop)).Arg(0).ArgF64(1.0).Arg(uintptr(modes)).Call(objc.MsgSend)
-		objc.Send1(app, objc.Sel("runModalForWindow:"), uintptr(win))
+	case "runloop-zoom":
+		// A nested run loop (what modal sessions and menu tracking run), in
+		// which an animated zoom resizes the window. AppKit treats the
+		// animation as a live resize and calls the frame handler at each
+		// step, from inside both.
+		sel, zoom := objc.Sel("performSelector:withObject:afterDelay:"), objc.Sel("zoom:")
+		objc.F.Reset().Arg(uintptr(win)).Arg(uintptr(sel)).Arg(uintptr(zoom)).Arg(0).ArgF64(0.05).Call(objc.MsgSend)
+		date, selDate := objc.Cls("NSDate"), objc.Sel("dateWithTimeIntervalSinceNow:")
+		until := objc.ID(objc.F.Reset().Arg(uintptr(date)).Arg(uintptr(selDate)).ArgF64(1).Call(objc.MsgSend).R0())
+		objc.Send1(objc.Send(objc.Cls("NSRunLoop"), objc.Sel("currentRunLoop")), objc.Sel("runUntilDate:"), uintptr(until))
 	}
 }
 
