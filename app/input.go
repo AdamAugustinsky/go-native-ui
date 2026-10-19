@@ -171,6 +171,9 @@ func (t *translator) conflicts(e *platform.Event) bool {
 	if e.Kind == platform.EvText && replacing(e) && !t.in.CanReplace() {
 		return true
 	}
+	if e.Kind == platform.EvScroll && t.in.NScrolls == ui.MaxScrolls {
+		return true // the frame is full of scroll events: the rest go to the next frame as they are, not merged
+	}
 	if !t.transitioned() {
 		return false
 	}

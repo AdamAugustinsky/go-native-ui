@@ -438,8 +438,9 @@ func TestScrollGestureAllocatesNothing(t *testing.T) {
 	}
 }
 
-// TestScrollRecordsMerge: a frame keeps its events in order, one by one, and
-// a full frame merges into its last record.
+// TestScrollRecordsMerge: a frame keeps its events in order, one by one; a
+// full frame of events that cannot merge (the start and end of gestures)
+// refuses more rather than lose a transition.
 func TestScrollRecordsMerge(t *testing.T) {
 	var in Input
 	in.AddScrollEvent(ScrollEvent{Phase: PhaseMayBegin, Precise: true})
@@ -451,19 +452,23 @@ func TestScrollRecordsMerge(t *testing.T) {
 		t.Fatalf("records %+v", in.Scrolls[:in.NScrolls])
 	}
 	in = Input{}
+	refused := 0
 	for i := 0; i < MaxScrolls+3; i++ {
 		p := PhaseBegan
 		if i%2 == 1 {
 			p = PhaseEnded
 		}
-		in.AddScrollEvent(ScrollEvent{Phase: p, DY: 1, Precise: true})
+		if !in.AddScrollEvent(ScrollEvent{Phase: p, DY: 1, Precise: true}) {
+			refused++
+		}
 	}
-	sum := float32(0)
-	for _, e := range in.Scrolls[:in.NScrolls] {
-		sum += e.DY
+	for i, e := range in.Scrolls[:in.NScrolls] {
+		if e.DY != 1 || (e.Phase == PhaseEnded) != (i%2 == 1) {
+			t.Fatalf("full: record %d is %+v", i, e)
+		}
 	}
-	if in.NScrolls != MaxScrolls || sum != MaxScrolls+3 || in.Scrolls[MaxScrolls-1].Phase != PhaseBegan {
-		t.Fatalf("full: %d records, sum %v, last phase %v", in.NScrolls, sum, in.Scrolls[MaxScrolls-1].Phase)
+	if in.NScrolls != MaxScrolls || refused != 3 {
+		t.Fatalf("full: %d records, %d refused", in.NScrolls, refused)
 	}
 }
 
@@ -646,5 +651,168 @@ func TestWheelJumps(t *testing.T) {
 	r.step()
 	if r.y(r.box) != 96 || r.c.Animating() {
 		t.Fatalf("at %v (animating %v), want 96 at once", r.y(r.box), r.c.Animating())
+	}
+}
+
+// TestOverflowKeepsTheGesture: a frame with more events than it holds, which
+// cross from the fingers to the momentum and from a wheel to precise deltas,
+// does what the same events do one a frame: the pull past the end is let go
+// (the stretch springs back), and the wheel's notches and the precise pixels
+// keep their units.
+func TestOverflowKeepsTheGesture(t *testing.T) {
+	var stream []ScrollEvent
+	add := func(n int, e ScrollEvent) {
+		for i := 0; i < n; i++ {
+			stream = append(stream, e)
+		}
+	}
+	at := func(e ScrollEvent) ScrollEvent { e.X, e.Y, e.Pos = 50, 50, true; return e }
+	add(1, at(ScrollEvent{DY: -1, Phase: PhaseBegan, Precise: true}))
+	add(69, at(ScrollEvent{DY: -2, Phase: PhaseChanged, Precise: true})) // to the end (900), then 99 px past it
+	add(1, at(ScrollEvent{Phase: PhaseEnded, Precise: true}))
+	add(1, at(ScrollEvent{Momentum: PhaseBegan, Precise: true}))
+	add(2, at(ScrollEvent{Momentum: PhaseChanged, Precise: true}))
+	add(1, at(ScrollEvent{Momentum: PhaseEnded, Precise: true}))
+	add(3, at(ScrollEvent{DY: 1}))                // three notches back: 3 × 48
+	add(3, at(ScrollEvent{DY: 5, Precise: true})) // 15 px
+	add(2, at(ScrollEvent{DY: 1}))                // and two notches
+	if len(stream) <= MaxScrolls {
+		t.Fatal("the stream fits a frame")
+	}
+	run := func(perFrame int) (float64, float64) {
+		r := newGestureRig(t)
+		r.c.WheelJumps = true
+		r.c.SetScroll(r.box, 0, 860)
+		r.step()
+		for i, e := range stream {
+			e.Time = r.now + int64(i+1)*1e6
+			if !r.in.AddScrollEvent(e) {
+				t.Fatalf("event %d refused", i)
+			}
+			if (i+1)%perFrame == 0 || i == len(stream)-1 {
+				r.step()
+			}
+		}
+		for i := 0; i < 120; i++ {
+			r.step()
+		}
+		if r.c.Animating() {
+			t.Fatalf("%d events a frame: still animating, stretch %v", perFrame, r.stretch(r.box))
+		}
+		_, y := r.c.Scroll(r.box)
+		return y, r.stretch(r.box)
+	}
+	want := 900.0 - 3*48 - 15 - 2*48
+	for _, per := range []int{1, len(stream)} {
+		if y, s := run(per); y != want || s != 0 {
+			t.Errorf("%d events a frame: at %v, stretch %v; want %v, 0", per, y, s, want)
+		}
+	}
+}
+
+// TestEachScrollFindsItsBox: in one frame, a wheel over A and one over B
+// scroll A and B; a gesture over A that ends and one that begins over B
+// latch to A and B. Walking to the points allocates nothing.
+func TestEachScrollFindsItsBox(t *testing.T) {
+	r, b := twoBoxes(t)
+	r.move(150, 50)
+	r.in.AddScrollEvent(ScrollEvent{DY: -4, Precise: true, X: 50, Y: 50, Pos: true})
+	r.in.AddScrollEvent(ScrollEvent{DY: -6, Precise: true, X: 150, Y: 50, Pos: true})
+	r.step()
+	if r.y(r.box) != 4 || r.y(*b) != 6 {
+		t.Fatalf("wheels: A at %v, B at %v; want 4, 6", r.y(r.box), r.y(*b))
+	}
+	r.in.AddScrollEvent(ScrollEvent{DY: -10, Phase: PhaseBegan, Precise: true, X: 50, Y: 50, Pos: true})
+	r.in.AddScrollEvent(ScrollEvent{Phase: PhaseEnded, Precise: true, X: 50, Y: 50, Pos: true})
+	r.in.AddScrollEvent(ScrollEvent{DY: -20, Phase: PhaseBegan, Precise: true, X: 150, Y: 50, Pos: true})
+	r.in.AddScrollEvent(ScrollEvent{DY: -5, Phase: PhaseChanged, Precise: true, X: 60, Y: 50, Pos: true}) // the latch holds
+	r.step()
+	if r.y(r.box) != 14 || r.y(*b) != 31 {
+		t.Fatalf("gestures: A at %v, B at %v; want 14, 31", r.y(r.box), r.y(*b))
+	}
+	r.in.AddScrollEvent(ScrollEvent{Phase: PhaseEnded, Precise: true})
+	r.step()
+	if n := testing.AllocsPerRun(20, func() {
+		r.in.AddScrollEvent(ScrollEvent{DY: -1, Precise: true, X: 50, Y: 50, Pos: true})
+		r.in.AddScrollEvent(ScrollEvent{DY: -1, Precise: true, X: 150, Y: 50, Pos: true})
+		r.step()
+	}); n != 0 {
+		t.Fatalf("%v allocations", n)
+	}
+}
+
+// TestScrollSignalForEveryBox: a frame whose events go to MaxScrolls boxes
+// reports each its own movement.
+func TestScrollSignalForEveryBox(t *testing.T) {
+	h := newHarness(t, 300, 300)
+	var ids [MaxScrolls]ID
+	var sig [MaxScrolls]Signal
+	build := func(c *Context) {
+		c.NextAxis(AxisY)
+		c.Open(0, "grid")
+		for row := 0; row < 8; row++ {
+			c.NextAxis(AxisX)
+			c.NextSize(Px(240), Px(30))
+			c.Push(c.BoxKeyed(0, KeyN(c.ParentKey(), uint64(row)), nil))
+			for col := 0; col < 8; col++ {
+				i := row*8 + col
+				c.NextSize(Px(30), Px(30))
+				ids[i] = c.BoxKeyed(ScrollY|Clip, KeyN(c.ParentKey(), uint64(i)), nil)
+				c.Push(ids[i])
+				c.NextSize(Px(30), Px(300))
+				c.Box(0, "content")
+				c.Close()
+				sig[i] = c.Signal(ids[i])
+			}
+			c.Close()
+		}
+		c.Close()
+	}
+	h.frame(build)
+	h.frame(build)
+	h.move(5, 5)
+	for i := range ids {
+		r := h.c.Rect(ids[i])
+		h.in.AddScrollEvent(ScrollEvent{DY: -float32(i%5 + 1), Precise: true, X: r[0] + 15, Y: r[1] + 15, Pos: true})
+	}
+	h.frame(build)
+	for i := range ids {
+		if want := float32(i%5 + 1); sig[i].Scroll != [2]float32{0, want} {
+			t.Fatalf("box %d: Scroll %v, want %v", i, sig[i].Scroll, want)
+		}
+	}
+}
+
+// TestAccessibilityRevealDuringAStretch: an accessibility reveal of a box in
+// a stretched view works from where the box really is in the content, and
+// shows it whole.
+func TestAccessibilityRevealDuringAStretch(t *testing.T) {
+	r := newGestureRig(t)
+	var target ID
+	r.build = func(c *Context) {
+		c.NextSize(Px(100), Px(100))
+		c.NextAxis(AxisY)
+		r.box = c.Open(ScrollY|Clip, "box")
+		c.NextSize(Px(100), Px(80))
+		c.Box(0, "above")
+		c.NextSize(Px(100), Px(80))
+		target = c.Box(0, "target") // [80, 160] in the content
+		c.NextSize(Px(100), Px(840))
+		c.Box(0, "below")
+		c.Close()
+	}
+	r.step()
+	r.pull(100, 25) // past the top, the fingers down
+	if r.stretch(r.box) > -50 {
+		t.Fatalf("stretch %v", r.stretch(r.box))
+	}
+	r.in.PushAction(SemRequest{Key: r.c.KeyOf(target), Action: ActScrollIntoView})
+	r.step()
+	for i := 0; i < 60 && r.c.Animating(); i++ {
+		r.step()
+	}
+	b, v := r.c.Rect(target), r.c.Rect(r.box)
+	if b[1] < v[1]-0.5 || b[3] > v[3]+0.5 {
+		t.Fatalf("the target shows at %v–%v in a view at %v–%v (offset %v, stretch %v)", b[1], b[3], v[1], v[3], r.y(r.box), r.stretch(r.box))
 	}
 }

@@ -145,6 +145,11 @@ type wayland struct {
 	axisAcc              [2]float32
 	axisMoved, axisStops uint8
 	fingerAxes           uint8
+	// a wheel's notches in the frame (axis_value120 from seat version 8,
+	// axis_discrete before it), on the axes in axisNotched: they replace the
+	// compositor's pixel value, so that a notch scrolls as one on X11
+	axisNotch   [2]float32
+	axisNotched uint8
 
 	args   [8]uint64 // union wl_argument array for marshal calls
 	title  [128]byte
@@ -915,6 +920,17 @@ func (w *Window) onPointer(op uint32, a unsafe.Pointer) {
 		} else {
 			y.axisStops |= 1
 		}
+	case 8, 9: // axis_discrete(axis, discrete) before version 8, axis_value120(axis, value120) from it
+		ax := 0
+		if argU(a, 0) == 0 {
+			ax = 1
+		}
+		n := float32(int32(argU(a, 1)))
+		if op == 9 {
+			n /= 120
+		}
+		y.axisNotch[ax] += n
+		y.axisNotched |= 1 << ax
 	}
 }
 
@@ -925,6 +941,15 @@ func (w *Window) onPointer(op uint32, a unsafe.Pointer) {
 func (w *Window) scrollFrame(now int64) {
 	y := &w.wy
 	finger := y.axisSource == 1
+	if !finger && y.axisSource != 2 { // a wheel: its notches, when told, are exact
+		step := scrollStep * float32(w.s120) / 120
+		for ax := 0; ax < 2; ax++ {
+			if y.axisNotched&(1<<ax) != 0 {
+				y.axisAcc[ax] = -y.axisNotch[ax] * step
+				y.axisMoved |= 1 << ax
+			}
+		}
+	}
 	if y.axisMoved != 0 {
 		ev := Event{Kind: EvScroll, DX: y.axisAcc[0], DY: y.axisAcc[1], Mods: w.mods, Time: now}
 		if y.axisSource == 1 || y.axisSource == 2 { // finger, continuous
@@ -947,6 +972,7 @@ func (w *Window) scrollFrame(now int64) {
 		}
 	}
 	y.axisAcc, y.axisMoved, y.axisStops, y.axisSource = [2]float32{}, 0, 0, 0
+	y.axisNotch, y.axisNotched = [2]float32{}, 0
 }
 
 func (w *Window) onKeyboard(op uint32, a unsafe.Pointer) {

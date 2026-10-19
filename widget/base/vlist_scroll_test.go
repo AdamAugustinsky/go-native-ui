@@ -163,3 +163,70 @@ func TestVListScrollToLetsGoOfTheStretch(t *testing.T) {
 		t.Fatalf("item 50 at %v after ScrollTo (stretch %v), want 0", y, h.stretch())
 	}
 }
+
+// TestVListRequestAtTheOffsetLetsGoOfTheStretch: Home, or a ScrollTo of the
+// item the view is at, lets go of a stretch past the top: while the fingers
+// hold it, and while it springs back.
+func TestVListRequestAtTheOffsetLetsGoOfTheStretch(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		release bool
+		request func(h *vt)
+	}{
+		{"ScrollTo held", false, func(h *vt) { h.st.ScrollTo(0, AlignStart) }},
+		{"ScrollTo springing", true, func(h *vt) { h.st.ScrollTo(0, AlignStart) }},
+		{"Home held", false, func(h *vt) { h.in.PushKey(ui.KeyEvent{Code: ui.KeyHome, Down: true}) }},
+		{"Home springing", true, func(h *vt) { h.in.PushKey(ui.KeyEvent{Code: ui.KeyHome, Down: true}) }},
+	} {
+		h := newVT(t, 200, VListOpts{})
+		h.frames(3)
+		h.c.SetFocus(h.v.Key())
+		h.frame()
+		h.pull(100, 20)
+		if h.stretch() > -20 {
+			t.Fatalf("%s: stretch %v", tc.name, h.stretch())
+		}
+		if tc.release {
+			h.gesture(ui.PhaseEnded, ui.PhaseNone, 0)
+			h.frames(2)
+			if h.stretch() == 0 || !h.c.Animating() {
+				t.Fatalf("%s: not springing (stretch %v)", tc.name, h.stretch())
+			}
+		}
+		tc.request(h)
+		h.frame()
+		if y := h.y(1000); y != 0 || h.stretch() != 0 {
+			t.Fatalf("%s: the first item at %v, stretch %v; want 0, 0", tc.name, y, h.stretch())
+		}
+	}
+}
+
+// TestVListPileFollowsTheStretch: items prepended while the list is
+// stretched past its top go in the pile above the anchor, which sits right
+// on the stretched flow, so nothing parts as the stretch springs back.
+func TestVListPileFollowsTheStretch(t *testing.T) {
+	h := newVT(t, 200, VListOpts{})
+	h.frames(3)
+	h.pull(100, 20)
+	if h.stretch() > -20 {
+		t.Fatalf("stretch %v", h.stretch())
+	}
+	h.edit = func() { h.st.Prepend(seq(1, 30)) }
+	h.frame()
+	if _, ok := h.box[30]; !ok {
+		t.Fatalf("the prepended item above the anchor was not built (%d..%d)", h.v.First, h.v.Last)
+	}
+	adjacent := func(what string) {
+		t.Helper()
+		if a, b := h.c.Rect(h.box[30])[3], h.y(1000); math.Abs(float64(a-b)) > 0.5 {
+			t.Fatalf("%s: item 30 ends at %v, item 1000 starts at %v (stretch %v)", what, a, b, h.stretch())
+		}
+		h.together(what)
+	}
+	adjacent("prepended while stretched")
+	h.gesture(ui.PhaseEnded, ui.PhaseNone, 0)
+	for i := 0; i < 120 && (i == 0 || h.c.Animating()); i++ {
+		h.frame()
+		adjacent("springing back")
+	}
+}

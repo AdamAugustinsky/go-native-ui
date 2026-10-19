@@ -102,3 +102,44 @@ func TestWaylandScrollFrameHasBothAxes(t *testing.T) {
 	send(4, 0, 0, fixed(1))
 	check("seat v4", []Event{{Kind: EvScroll, DX: -2}, {Kind: EvScroll, DY: -1}})
 }
+
+// TestWaylandWheelNotches: a wheel's notches (axis_value120 from seat
+// version 8, axis_discrete before it) scroll as many X11 wheel clicks,
+// whatever pixel value the compositor sends with them; a high-resolution
+// wheel's fraction of a notch scrolls that fraction.
+func TestWaylandWheelNotches(t *testing.T) {
+	var args [4]uint64
+	a := unsafe.Pointer(&args)
+	var w *Window
+	send := func(op uint32, v ...uint32) {
+		args = [4]uint64{}
+		for i, x := range v {
+			args[i] = uint64(x)
+		}
+		w.onPointer(op, a)
+	}
+	neg := func(v int32) uint32 { return uint32(v) }
+	fixed := func(v float32) uint32 { return uint32(int32(v * 256)) }
+	for _, tc := range []struct {
+		seat  uint32
+		op    uint32 // 9 axis_value120, 8 axis_discrete
+		notch int32  // in the event's units
+		value float32
+		want  float32
+	}{
+		{8, 9, 120, 15, -scrollStep},
+		{8, 9, 30, 3.75, -scrollStep / 4},
+		{8, 9, -240, -30, 2 * scrollStep},
+		{6, 8, 2, 30, -2 * scrollStep},
+	} {
+		w = &Window{s120: 120}
+		w.wy.seatV = tc.seat
+		send(6, 0) // axis_source: wheel
+		send(tc.op, 0, neg(tc.notch))
+		send(4, 0, 0, fixed(tc.value))
+		send(5)
+		if len(w.q.ev) != 1 || w.q.ev[0].DY != tc.want || w.q.ev[0].Flags != 0 || w.q.ev[0].Phase != PhaseNone {
+			t.Errorf("seat v%d, op %d, %d: %+v, want DY %v", tc.seat, tc.op, tc.notch, w.q.ev, tc.want)
+		}
+	}
+}

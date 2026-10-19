@@ -13,23 +13,14 @@ import "math"
 // Overlays are hit-tested after the main tree, in order, so the topmost wins;
 // everything beneath a modal is skipped, and tooltips are never hit.
 //
-// The scroll box is found where the frame's first scroll event happened
-// (ScrollEvent.Pos), which a later pointer move in the same frame must not
-// change.
+// Scroll events that carry where they happened (ScrollEvent.Pos) find their
+// box there instead (scrollAt).
 func (c *Context) hitTest() {
 	c.hotID, c.hotKey, c.scrollKey, c.sp.hit = 0, 0, 0, 0
-	if c.root == 0 {
+	if c.root == 0 || !c.in.Inside {
 		return
 	}
-	if c.in.Inside {
-		c.hitAll(c.in.MouseX, c.in.MouseY)
-	}
-	hot := c.hotID
-	if in := &c.in; in.NScrolls > 0 && in.Scrolls[0].Pos && (!in.Inside || in.Scrolls[0].X != in.MouseX || in.Scrolls[0].Y != in.MouseY) {
-		c.scrollKey, c.sp.hit = 0, 0
-		c.hitAll(in.Scrolls[0].X, in.Scrolls[0].Y)
-		c.hotID = hot
-	}
+	c.hitAll(c.in.MouseX, c.in.MouseY)
 	if c.hotID != 0 {
 		c.hotKey = c.boxes[c.hotID].key
 	}

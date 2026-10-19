@@ -394,3 +394,26 @@ func TestWheelJumpsOnMacOS(t *testing.T) {
 		t.Fatalf("WheelJumps %v on %s", c.WheelJumps, runtime.GOOS)
 	}
 }
+
+// TestScrollOverflowWaitsForTheNextFrame: more scroll events than a frame
+// holds are not merged; the rest wait, in order, for the next frame.
+func TestScrollOverflowWaitsForTheNextFrame(t *testing.T) {
+	tr := newTranslator()
+	for i := 0; i < ui.MaxScrolls+6; i++ {
+		ph := platform.PhaseBegan
+		if i%2 == 1 {
+			ph = platform.PhaseEnded
+		}
+		tr.event(ev(platform.EvScroll, func(e *platform.Event) {
+			e.DY, e.Flags, e.Phase, e.Time = 1, platform.FlagPrecise, ph, int64(i+1)
+		}), nil)
+	}
+	if tr.in.NScrolls != ui.MaxScrolls || !tr.pending() {
+		t.Fatalf("first frame: %d events, pending %v", tr.in.NScrolls, tr.pending())
+	}
+	tr.endFrame()
+	in := &tr.in
+	if in.NScrolls != 6 || in.Scrolls[0].Time != ui.MaxScrolls+1 || in.Scrolls[5].Phase != ui.PhaseEnded {
+		t.Fatalf("second frame: %+v", in.Scrolls[:in.NScrolls])
+	}
+}

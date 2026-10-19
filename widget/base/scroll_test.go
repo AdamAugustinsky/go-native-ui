@@ -185,3 +185,78 @@ func TestStretchedListPicksTheRowShown(t *testing.T) {
 		t.Fatal("clicked row 5 as shown, nothing selected")
 	}
 }
+
+// TestListRevealDuringAStretch: Reveal of a row that the offset shows but a
+// trackpad's stretch past the top pushes out of the view brings it back in.
+func TestListRevealDuringAStretch(t *testing.T) {
+	g, st, _, _, list := listRig(t)
+	g.move(200, 150)
+	g.in.AddScrollEvent(ui.ScrollEvent{Phase: ui.PhaseMayBegin, Precise: true})
+	g.frame()
+	for i := 0; i < 30; i++ {
+		p := ui.PhaseChanged
+		if i == 0 {
+			p = ui.PhaseBegan
+		}
+		g.in.AddScrollEvent(ui.ScrollEvent{DY: 40, Phase: p, Precise: true})
+		g.frame()
+	}
+	r := g.c.Rect(*list)
+	view := r[3] - r[1]
+	row := int((view-st.PadPx())/st.RowPx()) - 1 // the last row the offset shows whole
+	if b := st.RowTop(row) + st.RowPx(); b <= view {
+		t.Fatalf("row %d ends at %v in a %v view: the stretch does not hide it", row, b, view)
+	}
+	st.Reveal(row)
+	g.frames(30) // the fingers stay down
+	if top := st.RowTop(row); top < 0 || top+st.RowPx() > view+0.5 {
+		t.Fatalf("row %d shows at %v–%v in a %v view", row, top, top+st.RowPx(), view)
+	}
+}
+
+// TestListScrollingAllocatesNothing: once warm, a list's and a VList's
+// scrolling frames allocate nothing: a trackpad pull past the edge and its
+// spring, a wheel at another point, a frame with more events than it holds,
+// a Reveal, and a prepend while stretched.
+func TestListScrollingAllocatesNothing(t *testing.T) {
+	g, st, _, _, _ := listRig(t)
+	g.move(200, 150)
+	ev := func(e ui.ScrollEvent) { e.Precise, e.X, e.Y, e.Pos = true, 200, 150, true; g.in.AddScrollEvent(e) }
+	list := func() {
+		ev(ui.ScrollEvent{Phase: ui.PhaseMayBegin})
+		g.frame()
+		ev(ui.ScrollEvent{DY: 40, Phase: ui.PhaseBegan})
+		g.frame()
+		for i := 0; i < ui.MaxScrolls+10; i++ {
+			ev(ui.ScrollEvent{DY: 3, Phase: ui.PhaseChanged})
+		}
+		g.frame()
+		st.Reveal(5)
+		g.frame()
+		ev(ui.ScrollEvent{Phase: ui.PhaseEnded})
+		g.in.AddScrollEvent(ui.ScrollEvent{DY: -2, X: 100, Y: 50, Pos: true}) // a wheel
+		g.frames(40)
+		g.in.AddScrollEvent(ui.ScrollEvent{DY: 2, X: 100, Y: 50, Pos: true})
+		g.frames(40)
+	}
+	list()
+	if n := testing.AllocsPerRun(5, list); n != 0 {
+		t.Errorf("list: %v allocations per run", n)
+	}
+
+	h := newVT(t, 2000, VListOpts{})
+	h.st.Reserve(2100)
+	h.frames(3)
+	ids, next := seq(1, 100), 0
+	prepend := func() { h.st.Prepend(ids[next : next+1]); next++ }
+	vlist := func() {
+		h.pull(60, 6)
+		h.edit = prepend
+		h.frame()
+		h.release()
+	}
+	vlist()
+	if n := testing.AllocsPerRun(5, vlist); n != 0 {
+		t.Errorf("vlist: %v allocations per run", n)
+	}
+}

@@ -291,11 +291,13 @@ func (l *List) scrollRequests() {
 		top := float64(l.padT) + float64(r)*float64(l.rowH)
 		bottom := top + float64(l.rowH)
 		_, sy := c.Scroll(l.s)
+		_, stretch := c.ScrollStretch(l.s)
+		shown := sy + stretch // a trackpad's stretch moves the rows too
 		var target float64
 		switch {
-		case top < sy:
+		case top < shown:
 			target = top
-		case bottom > sy+view:
+		case bottom > shown+view:
 			target = bottom - view
 		default:
 			return

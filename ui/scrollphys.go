@@ -51,9 +51,10 @@ type ScrollEvent struct {
 	// Time is the event's time in platform.Now nanoseconds, 0 if unknown.
 	Time int64
 	// X, Y are where the pointer was when the event came (pixels, like
-	// Input.MouseX), when Pos is set: the frame's scrolling goes to the box
-	// under the pointer at its first event, wherever the pointer is by the
-	// end of the frame.
+	// Input.MouseX), when Pos is set: a wheel event, or the event that starts
+	// a gesture, goes to the box under that point, wherever the pointer is by
+	// the end of the frame. Without Pos it goes to the box under Input.MouseX,
+	// MouseY.
 	X, Y float32
 	Pos  bool
 }
@@ -80,8 +81,9 @@ const (
 	// maxRubber is the number of boxes that can be stretched at once.
 	maxRubber = 4
 	// maxApplied is the number of boxes a frame's scrolling reports
-	// movement for (Signal.Scroll); more share the last record.
-	maxApplied = 8
+	// movement for (Signal.Scroll): each scroll event moves one box at most,
+	// so a frame's MaxScrolls events cannot fill it.
+	maxApplied = MaxScrolls
 )
 
 // elasticStretch is the stretch shown for a pull of force past an edge of a
@@ -144,6 +146,11 @@ type scrollPhys struct {
 	n       int
 	hit     ID   // the scroll box under the pointer (hitTest)
 	focused bool // the window had the keyboard focus in the last frame
+	// the scroll box under the last point scrollAt walked to this frame
+	aimX, aimY float32
+	aimOK      bool
+	aimKey     Key
+	aimHit     ID
 	// applied[:nApplied] is how far this frame's scrolling moved each box
 	// it went to (Signal.Scroll).
 	applied  [maxApplied]appliedRec
@@ -163,11 +170,10 @@ func (c *Context) addApplied(k Key, a int, d float64) {
 	for ; i < sp.nApplied && sp.applied[i].key != k; i++ {
 	}
 	if i == sp.nApplied {
-		if i == maxApplied {
-			i--
-		} else {
-			sp.nApplied++
+		if i == len(sp.applied) {
+			return // cannot happen: one box per event (maxApplied)
 		}
+		sp.nApplied++
 		sp.applied[i] = appliedRec{key: k}
 	}
 	sp.applied[i].d[a] += float32(d)
@@ -258,7 +264,7 @@ func (c *Context) rubberFor(k Key) *rubber {
 // When the window loses the keyboard focus, the gesture ends there: what is
 // left of its momentum is dropped and every stretch springs back.
 func (c *Context) scrollInput() {
-	c.sp.nApplied = 0
+	c.sp.nApplied, c.sp.aimOK = 0, false
 	in := &c.in
 	if in.NScrolls == 0 {
 		if in.ScrollX != 0 || in.ScrollY != 0 { // set without AddScroll
@@ -280,7 +286,8 @@ func (c *Context) scrollEvent(e *ScrollEvent) {
 	g := &c.sp.g
 	switch {
 	case e.Phase == PhaseMayBegin:
-		c.touchDown(e.Time)
+		_, hit := c.scrollAt(e)
+		c.touchDown(hit, e.Time)
 	case e.Phase == PhaseBegan:
 		*g = gesture{fingers: true, axis: -1}
 		c.gestureDelta(e, false)
@@ -314,14 +321,35 @@ func (c *Context) scrollEvent(e *ScrollEvent) {
 	}
 }
 
+// scrollAt is the scroll box under event e (its key and its id in the last
+// frame's tree): under the point it happened at (ScrollEvent.Pos), else under
+// the pointer. A frame's events mostly share a point, which is walked to once.
+func (c *Context) scrollAt(e *ScrollEvent) (Key, ID) {
+	if !e.Pos || (c.in.Inside && e.X == c.in.MouseX && e.Y == c.in.MouseY) {
+		return c.scrollKey, c.sp.hit
+	}
+	sp := &c.sp
+	if !sp.aimOK || sp.aimX != e.X || sp.aimY != e.Y {
+		hot, k, hit := c.hotID, c.scrollKey, sp.hit
+		c.scrollKey, sp.hit = 0, 0
+		if c.root != 0 {
+			c.hitAll(e.X, e.Y)
+		}
+		sp.aimX, sp.aimY, sp.aimOK, sp.aimKey, sp.aimHit = e.X, e.Y, true, c.scrollKey, sp.hit
+		c.hotID, c.scrollKey, sp.hit = hot, k, hit
+	}
+	return sp.aimKey, sp.aimHit
+}
+
 // scrollPlain applies a wheel event, or precise deltas without a gesture, to
-// the box under the pointer: hard-clamped, precise deltas at once and wheels
-// smoothly (the target moves), or at once too with WheelJumps.
+// the box under it: hard-clamped, precise deltas at once and wheels smoothly
+// (the target moves), or at once too with WheelJumps.
 func (c *Context) scrollPlain(e *ScrollEvent) {
-	if c.scrollKey == 0 {
+	key, _ := c.scrollAt(e)
+	if key == 0 {
 		return
 	}
-	v, ok := c.table.Get(uint64(c.scrollKey))
+	v, ok := c.table.Get(uint64(key))
 	if !ok {
 		return
 	}
@@ -346,15 +374,15 @@ func (c *Context) scrollPlain(e *ScrollEvent) {
 	}
 }
 
-// touchDown: fingers rest on the trackpad at time now (ns, 0 unknown). The
-// springs and smooth scrolls of the boxes under the pointer stop where they
-// are, and what is left of a momentum is dropped.
-func (c *Context) touchDown(now int64) {
+// touchDown: fingers rest on the trackpad at time now (ns, 0 unknown), over
+// scroll box hit. The springs and smooth scrolls of hit and the boxes around
+// it stop where they are, and what is left of a momentum is dropped.
+func (c *Context) touchDown(hit ID, now int64) {
 	g := &c.sp.g
 	if g.momentum {
 		g.ignoreMom = true
 	}
-	for id := c.sp.hit; id != 0; id = c.boxes[id].parent {
+	for id := hit; id != 0; id = c.boxes[id].parent {
 		b := &c.boxes[id]
 		if b.flags&scrollMask == 0 {
 			continue
@@ -416,7 +444,8 @@ func springTime(r *rubber, a int, now int64) float64 {
 // gestureDelta applies the delta of a gesture or momentum event to the box
 // the gesture latched to, latching it first if needed (the first event with a
 // delta latches, at the box under the pointer): along the locked axis, through
-// the rubber band.
+// the rubber band. A gesture that has latched stays with its box wherever
+// the pointer goes.
 func (c *Context) gestureDelta(e *ScrollEvent, momentum bool) {
 	g := &c.sp.g
 	mul := float64(1)
@@ -431,7 +460,8 @@ func (c *Context) gestureDelta(e *ScrollEvent, momentum bool) {
 	d[1-a] = 0
 	g.track(e.Time, d, c.dt)
 	if g.key == 0 {
-		g.key = c.latchTarget(a)
+		_, hit := c.scrollAt(e)
+		g.key = c.latchTarget(a, hit)
 		if g.key == 0 {
 			return
 		}
@@ -508,12 +538,12 @@ func (g *gesture) track(t int64, d [2]float64, dt float32) {
 }
 
 // latchTarget is the box a gesture on axis a latches to: from the scroll box
-// under the pointer outward, the first that scrolls on a and has more content
+// hit (under the gesture's first delta) outward, the first that scrolls on a and has more content
 // than view on it, else the first that scrolls on a (it rubber-bands, as an
 // NSScrollView with a scroller does), else none.
-func (c *Context) latchTarget(a int) Key {
+func (c *Context) latchTarget(a int, hit ID) Key {
 	var first Key
-	for id := c.sp.hit; id != 0; id = c.boxes[id].parent {
+	for id := hit; id != 0; id = c.boxes[id].parent {
 		b := &c.boxes[id]
 		if !b.scrollOn(a) || b.flags&Disabled != 0 {
 			continue

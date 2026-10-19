@@ -325,28 +325,63 @@ func (in *Input) AddScroll(dx, dy float32, precise bool) {
 // AddScrollEvent appends e to Scrolls; it leaves ScrollX and ScrollY alone
 // (the caller keeps them). Events are kept one by one, so that how a stream
 // of them is split into frames does not change what they do (the axis a
-// gesture locks to, the momentum's velocity). Only when Scrolls is full is
-// the event merged into the last one (deltas added, the later time kept),
-// which then takes the event's phases unless they are Changed: more than
-// MaxScrolls events in a frame (a stalled frame) are approximated.
-func (in *Input) AddScrollEvent(e ScrollEvent) {
+// gesture locks to, the momentum's velocity, the box each goes to). When
+// Scrolls is full, the earliest two consecutive events that can be merged
+// without changing what they do are (scrollMergeable), to make room; when no
+// two can, e is not kept and AddScrollEvent reports false (app keeps it for
+// the next frame instead).
+func (in *Input) AddScrollEvent(e ScrollEvent) bool {
 	if in.NScrolls == MaxScrolls {
-		l := &in.Scrolls[in.NScrolls-1]
-		l.DX += e.DX
-		l.DY += e.DY
-		if e.Time != 0 {
-			l.Time = e.Time
+		i := 0
+		for i < in.NScrolls-1 && !scrollMergeable(&in.Scrolls[i], &in.Scrolls[i+1]) {
+			i++
 		}
-		if e.Phase != PhaseChanged {
-			l.Phase = e.Phase
+		if i == in.NScrolls-1 {
+			if !scrollMergeable(&in.Scrolls[i], &e) {
+				return false
+			}
+			mergeScroll(&in.Scrolls[i], &e)
+			return true
 		}
-		if e.Momentum != PhaseChanged {
-			l.Momentum = e.Momentum
-		}
-		return
+		mergeScroll(&in.Scrolls[i], &in.Scrolls[i+1])
+		copy(in.Scrolls[i+1:in.NScrolls], in.Scrolls[i+2:in.NScrolls])
+		in.NScrolls--
 	}
 	in.Scrolls[in.NScrolls] = e
 	in.NScrolls++
+	return true
+}
+
+// scrollMergeable reports whether consecutive events a and b do as one event
+// what they do one after the other: the same stage of one gesture (the
+// fingers moving, the momentum moving) or both plain scrolling at the same
+// point (so to the same box), from the same kind of device, in the same
+// direction on each axis (so that the axis lock and the clamping at the
+// edges see the same thing). Only the velocity of a merged momentum is an
+// average.
+func scrollMergeable(a, b *ScrollEvent) bool {
+	if a.Phase != b.Phase || a.Momentum != b.Momentum || a.Precise != b.Precise || a.Inverted != b.Inverted ||
+		a.DX*b.DX < 0 || a.DY*b.DY < 0 {
+		return false
+	}
+	switch {
+	case a.Phase == PhaseChanged || a.Phase == PhaseStationary:
+		return a.Momentum == PhaseNone
+	case a.Phase == PhaseNone && a.Momentum == PhaseChanged:
+		return true
+	case a.Phase == PhaseNone && a.Momentum == PhaseNone:
+		return a.Pos == b.Pos && a.X == b.X && a.Y == b.Y
+	}
+	return false
+}
+
+// mergeScroll adds b, the event after a, to a.
+func mergeScroll(a, b *ScrollEvent) {
+	a.DX += b.DX
+	a.DY += b.DY
+	if b.Time != 0 {
+		a.Time = b.Time
+	}
 }
 
 // PushKey queues a key event; it reports false if the frame's queue is full.

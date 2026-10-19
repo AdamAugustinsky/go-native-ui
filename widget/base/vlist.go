@@ -333,7 +333,9 @@ func BeginVList(c *ui.Context, label string, st *VListState, o VListOpts) VList 
 		vlSetScroll(c, v.Body, s, explicit)
 	default:
 		yPx, offPx := y*sc, st.offset*sc
-		if !have || (math.Abs(s-yPx) > 0.25 && !c.Animating()) || s-offPx < -1e-9 || s > max(content-view*sc, 0)+1e-9 {
+		// An explicit move always sets the offset, even one the view is at
+		// or while something animates: it lets go of a stretch.
+		if explicit || !have || (math.Abs(s-yPx) > 0.25 && !c.Animating()) || s-offPx < -1e-9 || s > max(content-view*sc, 0)+1e-9 {
 			vlSetScroll(c, v.Body, yPx, explicit)
 			s = yPx
 		}
@@ -570,7 +572,10 @@ func (v *VList) openPile() {
 	}
 	fl := ui.ScrollY
 	if !v.bottom {
-		c.NextPos(0, v.pileY)
+		// The pile floats, so it is not moved by a trackpad's stretch of the
+		// body as the flow is: it ends where the anchor is shown.
+		_, stretch := c.ScrollStretch(v.Body)
+		c.NextPos(0, v.pileY-float32(stretch))
 		fl |= ui.FloatingX | ui.FloatingY
 	}
 	c.NextSize(ui.Pct(1), ui.Px(0))
