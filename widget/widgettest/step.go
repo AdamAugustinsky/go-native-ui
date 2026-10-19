@@ -40,9 +40,18 @@ type Step struct {
 	text string
 }
 
-// DefaultWaitMs is how long a wait (WaitFor, WaitGone, Settle) lasts at most,
-// unless the step says otherwise (Step.Within).
+// DefaultWaitMs is how long a wait (WaitFor, WaitGone, WaitChange, Settle)
+// lasts at most, unless the step says otherwise (Step.Within). A wait counts
+// frame time: the clock between consecutive frames, a gap counted as at most
+// MaxFrameGapMs. A window whose frames stop for a while (a display that stops
+// delivering them) has not run the wait out, since nothing could change
+// without frames; the run's own timeout bounds a stall that does not end.
 const DefaultWaitMs = 4000
+
+// MaxFrameGapMs is the most one gap between two frames adds to a wait: the
+// longest step an animation takes in one frame (app.App passes a longer gap as
+// 1/60 s).
+const MaxFrameGapMs = 100
 
 // Idle is n frames without input.
 func Idle(n int) Step { return Step{op: opIdle, n: n} }

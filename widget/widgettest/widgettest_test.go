@@ -143,6 +143,60 @@ func TestPlayerAsAScripter(t *testing.T) {
 	}
 }
 
+// animator asks for frames for its next n frames: an animation that takes a
+// number of frames, whatever the clock does between them (n < 0: forever).
+type animator struct{ n int }
+
+func (a *animator) Build(c *ui.Context) {
+	if a.n != 0 {
+		a.n--
+		c.RequestFrame()
+	}
+}
+
+// A wait counts frame time. Frames that stop for longer than the wait (a
+// display that stops delivering them) do not run it out; an animation that
+// never ends still fails it after DefaultWaitMs of frames, and says how the
+// frames came.
+func TestWaitsCountFrameTimeNotStalls(t *testing.T) {
+	r := widgettest.NewRig(t, widgettest.FakeOptions{Width: 200, Height: 100})
+	a := &animator{n: 30}
+	r.Run(a)
+	var now int64 = 1e9
+	p := widgettest.NewPlayer(r, []widgettest.Step{widgettest.Settle()}, widgettest.Options{})
+	widgettest.SetClock(p, func() int64 { return now })
+	r.Use(p)
+	for i := 0; i < 100 && !p.Done() && p.Err() == nil; i++ {
+		now += 16_666_667
+		if i == 3 {
+			now += 20e9 // the frames stop for 20 s in the middle of the wait
+		}
+		r.Frame()
+	}
+	if err := p.Err(); err != nil || !p.Done() {
+		t.Fatalf("a 20 s gap between frames of a 30-frame animation: error %v, done %v", err, p.Done())
+	}
+
+	a.n = -1
+	p.Load(widgettest.Settle())
+	frames := 0
+	for ; frames < 1000 && p.Err() == nil; frames++ {
+		now += 16_666_667
+		if frames%50 == 10 {
+			now += 30e9
+		}
+		r.Frame()
+	}
+	err := p.Err()
+	if err == nil || !strings.Contains(err.Error(), "still animating after 4000 ms of frame time") ||
+		!strings.Contains(err.Error(), "longest gap between frames 30016 ms") {
+		t.Fatalf("an animation that never ends gave %v", err)
+	}
+	if frames < 4000/widgettest.MaxFrameGapMs {
+		t.Errorf("the wait ran out after %d frames: the gaps counted for more than %d ms each", frames, widgettest.MaxFrameGapMs)
+	}
+}
+
 // Dump writes roles, names and states without geometry.
 func TestDump(t *testing.T) {
 	r, _ := newCounter(t)
