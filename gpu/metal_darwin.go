@@ -138,6 +138,8 @@ func (s *Surface) Resize(w, h int32, scale float32) {
 	if w <= 0 || h <= 0 {
 		return
 	}
+	pool := objc.F.Call0(objc.PoolPush) // the caller may hold no pool
+	defer objc.F.Call1(objc.PoolPop, pool)
 	objc.F.Reset().Arg(uintptr(s.layer)).Arg(uintptr(selSetScale)).ArgF64(float64(scale)).Call(objc.MsgSend)
 	objc.F.Reset().Arg(uintptr(s.layer)).Arg(uintptr(selSetDrawableSize)).ArgPoint(float64(w), float64(h)).Call(objc.MsgSend)
 	s.w, s.h = int(w), int(h)
@@ -163,9 +165,7 @@ type Frame struct {
 	Target uintptr // id<MTLTexture>: the drawable's texture, BGRA8Unorm
 	W, H   int     // target size in pixels
 
-	drawable objc.ID
-	taken    bool
-	pool     uintptr
+	drawable objc.ID // retained until EndFrame
 }
 
 // BeginFrame acquires the frame's drawable and a command buffer. It returns
@@ -173,13 +173,20 @@ type Frame struct {
 // layer (after the first frame) a drawable comes only with a frame tick, so
 // draw on EvFrame. Every successful BeginFrame must be followed by EndFrame
 // on the same thread.
+//
+// No autorelease pool stays open between BeginFrame and EndFrame: each
+// drains its own before it returns, and the frame keeps the drawable and the
+// command buffer by explicit retains. The app's code runs in between, and
+// whatever it does to the run loop and its pools (a nested run loop, a frame
+// drawn from inside it) cannot leave the frame holding a stale pool token.
 func (s *Surface) BeginFrame(f *Frame) bool {
 	F := objc.F
 	first := s.presented == 0
 	if first {
 		s.Trace.Start = platform.Now()
 	}
-	f.pool = F.Call0(objc.PoolPush)
+	pool := F.Call0(objc.PoolPush)
+	defer F.Call1(objc.PoolPop, pool)
 	// During a live resize the platform has no CAMetalDisplayLink (the layer
 	// would throw on nextDrawable) and the frame is presented inside the
 	// window's Core Animation transaction (see EndFrame).
@@ -193,17 +200,16 @@ func (s *Surface) BeginFrame(f *Frame) bool {
 	}
 	// A paced frame comes with its drawable (CAMetalDisplayLink); otherwise
 	// (first frame, unpaced) ask the layer, which may block.
-	d, linked := platform.TakeMetalDrawable()
-	f.drawable, f.taken = objc.ID(d), d != 0
-	if !f.taken && !linked {
+	d, linked := platform.TakeMetalDrawable() // retained
+	f.drawable = objc.ID(d)
+	if d == 0 && !linked {
 		t0 := platform.Now()
-		f.drawable = objc.Send(s.layer, selNextDrawable)
+		f.drawable = objc.Retain(objc.Send(s.layer, selNextDrawable))
 		if d := platform.Now() - t0; s.live && d > 20e6 && platform.TraceLive() {
 			println("gnui live: nextDrawable blocked", d/1e6, "ms; got a drawable:", f.drawable != 0)
 		}
 	}
 	if f.drawable == 0 {
-		F.Call1(objc.PoolPop, f.pool)
 		return false
 	}
 	if first {
@@ -214,13 +220,14 @@ func (s *Surface) BeginFrame(f *Frame) bool {
 		}
 	}
 	f.Target = uintptr(objc.Send(f.drawable, selTexture))
-	f.CmdBuf = uintptr(objc.Send(s.queue, selCommandBuffer))
+	f.CmdBuf = uintptr(objc.Retain(objc.Send(s.queue, selCommandBuffer)))
 	f.W, f.H = s.w, s.h
 	return true
 }
 
 // EndFrame commits the frame's commands and presents its drawable.
 func (s *Surface) EndFrame(f *Frame) {
+	pool := objc.F.Call0(objc.PoolPush)
 	cb := objc.ID(f.CmdBuf)
 	switch {
 	case s.presented == 0 && s.reveal != nil:
@@ -291,10 +298,9 @@ func (s *Surface) EndFrame(f *Frame) {
 		}
 	}
 	s.presented++
-	if f.taken {
-		objc.Send(f.drawable, selRelease) // TakeMetalDrawable returned it retained
-	}
-	objc.F.Call1(objc.PoolPop, f.pool)
+	objc.Send(cb, selRelease)
+	objc.Send(f.drawable, selRelease)
+	objc.F.Call1(objc.PoolPop, pool)
 	*f = Frame{}
 }
 
@@ -314,9 +320,29 @@ func (s *Surface) presentWithShell(drawable objc.ID) {
 	objc.Send(clsCATransaction, selCommit)
 }
 
+// AbandonFrame gives up a frame that BeginFrame began, without presenting
+// it (a panic in the middle of the frame): it releases the drawable and the
+// uncommitted command buffer, and resets the Frame. A reset Frame is left
+// alone.
+func (s *Surface) AbandonFrame(f *Frame) {
+	if f.CmdBuf != 0 {
+		objc.Send(objc.ID(f.CmdBuf), selRelease)
+	}
+	if f.drawable != 0 {
+		objc.Send(f.drawable, selRelease)
+	}
+	*f = Frame{}
+}
+
+// testPresentEncoder, set by tests, sees the render encoder of each Present.
+var testPresentEncoder func(objc.ID)
+
 // Present clears the next drawable to the colour and presents it. It
-// returns false if no drawable was available (see BeginFrame).
+// returns false if no drawable was available (see BeginFrame). It drains
+// what it autoreleases: the caller may hold no pool.
 func (s *Surface) Present(r, g, b, a float32) bool {
+	pool := objc.F.Call0(objc.PoolPush)
+	defer objc.F.Call1(objc.PoolPop, pool)
 	f := &s.frame
 	if !s.BeginFrame(f) {
 		return false
@@ -325,7 +351,11 @@ func (s *Surface) Present(r, g, b, a float32) bool {
 	// MTLClearColor is 4 doubles: an HFA on arm64, MEMORY class on amd64 (ArgRect handles both).
 	objc.F.Reset().Arg(uintptr(s.color0)).Arg(uintptr(selSetClearColor)).
 		ArgRect(float64(r), float64(g), float64(b), float64(a)).Call(objc.MsgSend)
-	objc.Send(objc.Send1(objc.ID(f.CmdBuf), selRenderEncoder, uintptr(s.rpd)), selEndEncoding)
+	enc := objc.Send1(objc.ID(f.CmdBuf), selRenderEncoder, uintptr(s.rpd)) // autoreleased
+	objc.Send(enc, selEndEncoding)
+	if testPresentEncoder != nil {
+		testPresentEncoder(enc)
+	}
 	objc.Send1(s.color0, selSetTexture, 0)
 	s.EndFrame(f)
 	return true

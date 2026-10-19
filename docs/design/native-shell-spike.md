@@ -155,18 +155,78 @@ gonativeui/gpu.(*Surface).EndFrame(...)  gpu/metal_darwin.go:271           objc.
 gonativeui/app.(*App).drawFrame → present → loop → RunWith
 ```
 
-The same run with the call deferred to the run loop's next turn
-(`performSelector:withObject:afterDelay:0`, the committed hook) entered and
-left full screen without a crash on the MacBook. Two things are not known:
+**The cause** (`p6-framepool`, found on the same Mac mini). The cause was
+a frame drawn inside a frame, not a pool that AppKit popped.
 
-- whether the pool token goes stale because AppKit drains or replaces the
-  frame's pool during the transition;
-- why the crash comes when the zoom finishes rather than in the frame of the
-  call.
+The evidence is the frame's pool token at every `BeginFrame` and `EndFrame`,
+and `_objc_autoreleasePoolPrint` before and after the toggle:
 
-The spike's first report called it an "out-of-order pop". That was a guess; what is
-established is the crash site above. Until the cause is known, a full-screen
-API should call AppKit from outside the frame.
+1. The frame pushes its pool (token `0x78b5014038`) and calls Build, and
+   Build calls `toggleFullScreen:`.
+2. Inside that call, AppKit resizes the window synchronously, and
+   `windowDidResize:` calls the app's frame handler. The handler draws a
+   second frame into the same `gpu.Frame`. It pushes a pool above the first
+   (`0x78b56e85c8`) and runs Build inside Build. Its `EndFrame` pops its own
+   pool and clears the shared `Frame`, token included.
+3. `toggleFullScreen:` returns after 76 ms. The pool print then still shows
+   the first pool, intact, at the bottom of the stack: AppKit had popped
+   nothing.
+4. The outer `EndFrame` pops token 0: SIGSEGV at address 0 in
+   `objc_autoreleasePoolPop`.
+
+The outer frame had also lost its drawable (a leaked retain) and its
+command buffer. Any AppKit call that resizes the window or runs a nested
+loop from Build does the same; an animated `zoom:` inside a nested
+`runUntilDate:` crashed alike.
+
+**The fix:**
+
+- `app.App.frameHandler` does nothing while a frame is in progress
+  (`inFrame`). What it would have handled stays queued for the next `Wait`.
+- `gpu.Surface.BeginFrame` and `EndFrame` each drain a pool of their own
+  before returning. The frame holds its drawable and command buffer by
+  explicit retains, so no pool token outlives either call.
+- `drawFrame` drains the app code's autoreleases in a pool whose token is a
+  local variable.
+- `Surface.Present` and `Resize` drain pools of their own, since their
+  callers may hold none (`cmd/spike` presents outside `Wait`'s pool).
+  Without this, `Present`'s autoreleased render encoder was never released.
+- A panic in Build no longer leaves the frame half done. A `defer` in
+  `drawFrame` calls `Surface.AbandonFrame`, which releases the drawable and
+  the uncommitted command buffer. It also drains the frame's pool and clears
+  `inFrame`, so after a recovered panic the frame handler is not refused
+  and the loop draws on.
+
+**The tests** run in a child process, so a crash fails the test:
+
+- `TestNestedRunLoopInFrame` covers `toggleFullScreen:`, and an animated
+  `zoom:` in a nested run loop, both from Build. Without the fix, both
+  crash.
+- `TestGreenButtonFullScreen` clicks the green button from the run loop,
+  into full screen and back. It follows the window's four full-screen
+  notifications, and checks that no full-screen style bit is left after
+  the exit. It also counts the frames that the frame handler presents
+  between each will/did pair.
+  - On the MacBook, the handler presents 1 of the 4 frames drawn during
+    each animation: the frame at the new size, in the resize's
+    transaction.
+  - With the platform's handler calls disabled, both counts are 0 and the
+    test fails.
+  - The test skips when the window is not visible. Under a locked screen,
+    AppKit never posts `windowDidEnterFullScreen`.
+- `TestFrameDrawablesBounded` checks over 600 frames that drawables are
+  released, a frame makes no Go allocations, and the leak counters stay
+  level. It also checks that `Present`, called with no pool of the
+  caller's, releases its render encoders: none of 100 is left alive, where
+  without `Present`'s pool all of them were.
+- `TestBuildPanicRecovered` recovers a panic raised in Build. It then
+  checks that the frame was abandoned, that the frame handler is not
+  refused, and that the loop draws 10 more frames. It fails without the
+  `defer`.
+
+The spike's first report called it an "out-of-order pop", which was wrong.
+The deferred `DebugToggleFullScreen` hook is no longer needed, but it is
+harmless.
 
 ## Generalised: materials per area (N3a) and hosted views (N3b)
 
@@ -215,6 +275,11 @@ Rules that differ from the spike:
   frames present asynchronously.
 - **Inactive windows and Increase Contrast** are AppKit's: the configured
   glass and effect views draw them.
+- **Private API.** The sidebar and inspector variants and the backdrop's
+  `_cornerRadius` are private AppKit. The shell's `noPrivateAPI` switch
+  (internal for now, to follow the coming public-API-only option for Mac App
+  Store builds) turns them off: public regular glass, which stays lighter
+  when inactive, and square backdrop corners rounded by the window's mask.
 
 ## Numbers (MacBook, macOS 27.2, under the user's load)
 

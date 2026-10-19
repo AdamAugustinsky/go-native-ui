@@ -39,6 +39,7 @@ import (
 // NSVisualEffectView with material n.
 
 var (
+	selSetFrame              = objc.Sel("setFrame:")
 	selSetOpaqueWin          = objc.Sel("setOpaque:")
 	selSetBGColor            = objc.Sel("setBackgroundColor:")
 	selColorWhiteAlpha       = objc.Sel("colorWithWhite:alpha:")
@@ -85,7 +86,15 @@ type shell struct {
 	glassRadius float64        // the backdrop glass's corner radius as last set (fitBackdrop)
 	fullScreen  bool           // between windowWillEnterFullScreen: and its exit
 	materials   bool           // Options.Materials: the surface is transparent over an opaque window
-	delegate    objc.ID        // the window delegate, the native buttons' target
+	// noPrivateAPI turns off the shell's private AppKit calls: the sidebar's
+	// and inspector's glass variants (set_variant:, set_adaptiveAppearance:,
+	// read with _variant), and the window's _cornerRadius for the backdrop.
+	// The glass then uses the public NSGlassEffectView styles, and the
+	// backdrop keeps square corners that the window's mask rounds. To be set
+	// from Options.PublicAPIOnly (Mac App Store builds) once that option
+	// exists; until then it is off.
+	noPrivateAPI bool
+	delegate     objc.ID // the window delegate, the native buttons' target
 
 	mat   matState  // material regions (material_darwin.go)
 	hosts hostState // hosted views (host_darwin.go)
@@ -126,6 +135,7 @@ func windowDidLeaveFullScreen(*ffi.CB) {
 	if w := theWindow.Load(); w != nil {
 		w.fullScreen = false
 		w.fitBackdrop()
+		w.layoutChromeSoon() // AppKit dropped the titlebar's height for full screen
 	}
 }
 
@@ -223,7 +233,7 @@ func (w *Window) fitBackdrop() {
 		return
 	}
 	r := 0.0
-	if !w.fullScreen && objc.Send(w.win, selStyleMask)&(1<<14) == 0 && // NSWindowStyleMaskFullScreen
+	if !w.fullScreen && !w.noPrivateAPI && objc.Send(w.win, selStyleMask)&(1<<14) == 0 && // NSWindowStyleMaskFullScreen
 		objc.SendBool1(w.win, selRespondsTo, uintptr(selWinCornerRadius)) {
 		r = max(objc.SendF64(w.win, selWinCornerRadius), 0)
 	}

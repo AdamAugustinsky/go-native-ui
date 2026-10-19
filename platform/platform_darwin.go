@@ -47,6 +47,7 @@ type Window struct {
 	wPt, hPt   float64
 	titlebar   float64    // custom titlebar height in points (Options.Titlebar); 0 = standard
 	lights     [2]float32 // close button centre (Options.TrafficLights)
+	tb         titlebarChrome
 	sysButtons [4]float32 // SystemButtons: where the OS draws the window buttons over the content (points, top left), as of the last layoutChrome
 	wPx, hPx   int32
 	scale      float32

@@ -48,10 +48,12 @@ func FocusRingGeom(rect [4]float32, radius, scale float32) RingGeom {
 }
 
 // FocusRing builds the keyboard focus ring of the component whose root is id,
-// outside its shape (FocusRingGeom: the root's rectangle of the previous frame,
-// with the corner radius radius in pixels), in the theme's focus-ring colour at
-// v.Ring. It draws nothing while v.Ring is 0 (the focus came from the pointer,
-// or the component is not focused).
+// outside its shape (the root's rectangle of the previous frame, with the
+// corner radius radius in pixels), in the FocusRing role at v.Ring. The
+// geometry is FocusRingGeom's with the theme's Lines tokens (FocusOutset and
+// FocusWidth). It draws nothing while v.Ring is 0 (the focus came from the
+// pointer, or the component is not focused), and nothing in an inactive
+// window, where AppKit hides the ring.
 //
 // Build it in the component's root, when the root does not clip its children,
 // or after the root in the root's parent: either way the ring is not clipped by
@@ -59,7 +61,7 @@ func FocusRingGeom(rect [4]float32, radius, scale float32) RingGeom {
 // ancestor (a scroll view, a pane) cuts it, as a clip view cuts AppKit's. Leave
 // FocusRingOutsetPt of room around a control that can take the focus.
 func (k *Kit) FocusRing(id ui.ID, v Visual, radius float32) {
-	if v.Ring <= 0.004 || id == 0 {
+	if v.Ring <= 0.004 || v.Inactive || id == 0 {
 		return
 	}
 	c := k.c
@@ -69,9 +71,10 @@ func (k *Kit) FocusRing(id ui.ID, v Visual, radius float32) {
 	}
 	p := c.Rect(c.Parent())
 	rel := [4]float32{r[0] - p[0], r[1] - p[1], r[2] - p[0], r[3] - p[1]}
-	g := FocusRingGeom(rel, radius, k.scale)
+	o, w := theme.Snap(k.r.Lines.FocusOutset), theme.Snap(k.r.Lines.FocusWidth)
+	g := RingGeom{Rect: [4]float32{rel[0] - o, rel[1] - o, rel[2] + o, rel[3] + o}, Radius: radius + o, Width: w}
 	theme.At(c, g.Rect[0], g.Rect[1], g.Rect[2]-g.Rect[0], g.Rect[3]-g.Rect[1])
-	c.NextBorder(theme.WithAlpha(k.r.Pal.FocusRing, v.Ring), g.Width)
+	c.NextBorder(theme.WithAlpha(k.r.Colors[theme.FocusRing], v.Ring), g.Width)
 	c.NextRadius(g.Radius)
 	c.BoxKeyed(ui.DrawBorder|Floating, ui.KeyN(c.KeyOf(id), 9004), nil)
 }

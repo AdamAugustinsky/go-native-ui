@@ -196,10 +196,15 @@ func clsGlassContainer() objc.ID {
 // glass for the area (macOS 27.2, read from AppKit's views): the sidebar and
 // the inspector of an NSSplitViewController use their own private glass
 // variants with adaptive appearance 1; toolbar item platters and the composer
-// are regular glass with interactive effects (effectIsInteractive).
-func configureGlass(v objc.ID, a MaterialArea) {
+// are regular glass with interactive effects (effectIsInteractive). With
+// private false (Window.noPrivateAPI) the sidebar and inspector keep the
+// public regular style.
+func configureGlass(v objc.ID, a MaterialArea, private bool) {
 	switch a {
 	case AreaSidebar, AreaInspector:
+		if !private {
+			return
+		}
 		sv := splitGlass()
 		g := sv[0]
 		if a == AreaInspector {
@@ -379,7 +384,7 @@ func (w *Window) newMaterial(r *MaterialRegion, k matView) objc.ID {
 	case mvGlass, mvCapsule:
 		v = newViewOf(clsGlass(), 0, 0, 0, 0)
 		objc.Send1(v, selSetGlassStyle, 0) // regular
-		configureGlass(v, r.Area)
+		configureGlass(v, r.Area, !w.noPrivateAPI)
 	case mvEffect:
 		if effectCls == 0 {
 			effectCls = objc.Cls("NSVisualEffectView")

@@ -288,3 +288,88 @@ func TestMaterialsReduceTransparency(t *testing.T) {
 		t.Errorf("after Reduce Transparency the container holds %v, want the glass back", back)
 	}
 }
+
+// With the shell's private API off (noPrivateAPI, for Mac App Store builds)
+// the sidebar is plain public glass: no private variant is set on it.
+func TestMaterialsWithoutPrivateAPI(t *testing.T) {
+	var err error
+	var glass, responds bool
+	var got, plain int64
+	onMain(func() {
+		rig, e := openMatRig()
+		if e != nil {
+			err = e
+			return
+		}
+		w := rig.w
+		defer w.Close()
+		pool := objc.F.Call0(objc.PoolPush)
+		defer objc.F.Call1(objc.PoolPop, pool)
+		if glass = rig.glass; !glass {
+			return
+		}
+		w.noPrivateAPI, w.mat.rtTest = true, -1
+		w.SetMaterials(rig.regs)
+		w.FlushShell()
+		v := w.mat.slots[0].view
+		if responds = objc.SendBool1(v, selRespondsTo, uintptr(selVariant)); !responds {
+			return
+		}
+		fresh := newViewOf(clsGlass(), 0, 0, 10, 10)
+		objc.Send1(fresh, selSetGlassStyle, 0) // regular, as the shell sets it
+		got, plain = int64(objc.Send(v, selVariant)), int64(objc.Send(fresh, selVariant))
+		objc.Send(fresh, selReleaseObj)
+	})
+	switch {
+	case err != nil:
+		t.Skipf("cannot open a window here: %v", err)
+	case !glass || !responds:
+		t.Skip("no configurable Liquid Glass here")
+	}
+	if got != plain {
+		t.Errorf("sidebar glass variant %d without private API, want the public default %d", got, plain)
+	}
+}
+
+// A toolbar band's bar (AreaTitlebar) over the whole titlebar leaves the
+// window buttons above it: a click at the close button's centre hits the
+// button, and SystemButtons still reports them.
+func TestTitlebarRegionLeavesWindowButtons(t *testing.T) {
+	var err error
+	var hitButton bool
+	var sys [4]float32
+	onMain(func() {
+		w, e := Open(Options{Title: "titlebar region", Width: 600, Height: 400, Hidden: true, Materials: true,
+			Titlebar: 52, TrafficLights: [2]float32{26, 26}})
+		if e != nil {
+			err = e
+			return
+		}
+		defer w.Close()
+		pool := objc.F.Call0(objc.PoolPush)
+		defer objc.F.Call1(objc.PoolPop, pool)
+		s := w.scale
+		w.SetMaterials([]MaterialRegion{{Area: AreaTitlebar, Rect: [4]float32{0, 0, 600 * s, 52 * s}, Solid: 0xFFFFFFFF}})
+		w.FlushShell()
+		w.layoutChrome()
+		sys = w.SystemButtons()
+		close := objc.Send1(w.win, selStdButton, 0)
+		b := objc.SendRect(close, selBounds)
+		objc.F.Reset().Arg(uintptr(close)).Arg(uintptr(selConvertPointToView)).ArgPoint(b.W/2, b.H/2).Arg(0).Call(objc.MsgSend)
+		x, y := objc.F.F64(0), objc.F.F64(1)
+		frame := objc.Send(w.content, selSuperview)
+		hit := objc.ID(objc.F.Reset().Arg(uintptr(frame)).Arg(uintptr(selHitTest)).ArgPoint(x, y).Call(objc.MsgSend).R0())
+		for v := hit; v != 0; v = objc.Send(v, selSuperview) {
+			hitButton = hitButton || v == close
+		}
+	})
+	if err != nil {
+		t.Skipf("cannot open a window here: %v", err)
+	}
+	if !hitButton {
+		t.Error("a click at the close button's centre does not reach it under the toolbar band's bar")
+	}
+	if sys[2] <= sys[0] || sys[3] <= sys[1] {
+		t.Errorf("SystemButtons %v with a titlebar region: want the buttons' rectangle", sys)
+	}
+}

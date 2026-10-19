@@ -262,7 +262,10 @@ type Options struct {
 	// Titlebar > 0 extends the content under a transparent titlebar band of
 	// that height in logical units; the app draws the band. The close
 	// button's centre goes to TrafficLights (logical units from the window's
-	// top-left), keeping the native button spacing. macOS only so far.
+	// top-left), keeping the native button spacing. macOS only so far, and
+	// where AppKit has the titlebar metrics for it (platform/lights_darwin.go);
+	// elsewhere the buttons stay at AppKit's default place, which
+	// Window.SystemButtons reports.
 	Titlebar      float32
 	TrafficLights [2]float32
 

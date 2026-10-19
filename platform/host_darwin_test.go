@@ -398,3 +398,54 @@ func TestHostFocusCommands(t *testing.T) {
 		}
 	}
 }
+
+// While a host holds the keyboard, a menu's key equivalent still goes
+// through AppKit's menu (the command arrives once), and other keys stay the
+// host's.
+func TestKeyEquivalentWithHostFocused(t *testing.T) {
+	var why string
+	var focused bool
+	var keys, plainKeys int
+	var cmds []uint64
+	onMain(func() {
+		rig, w0 := openMenuRig(testMenuSpec(), false)
+		if w0 != "" {
+			why = w0
+			return
+		}
+		w := rig.w
+		defer w.Close()
+		pool := objc.F.Call0(objc.PoolPush)
+		defer objc.F.Call1(objc.PoolPop, pool)
+		field := newViewOf(objc.Cls("NSTextField"), 0, 0, 120, 24)
+		id, err := w.NewHost(HostView, HostOptions{View: uintptr(field), Focusable: true})
+		objc.Send(field, selReleaseObj)
+		if err != nil {
+			why = err.Error()
+			return
+		}
+		s := w.scale
+		w.SetHosts([]HostRegion{{ID: id, Rect: pxRect(s, 20, 60, 140, 84), Clip: pxRect(s, 20, 60, 140, 84)}})
+		w.FlushShell()
+		w.FocusHost(id)
+		focused = w.hostFocused()
+		w.q.reset()
+		w.handle(keyDown(w, "s", 1<<20, 0x01))
+		keys, cmds, _ = countEvents(w.q.ev)
+		w.q.reset()
+		w.handle(keyDown(w, "a", 0, 0x00))
+		plainKeys, _, _ = countEvents(w.q.ev)
+	})
+	if why != "" {
+		t.Skipf("cannot open a window here: %s", why)
+	}
+	if !focused {
+		t.Fatal("the host did not take the keyboard")
+	}
+	if keys != 0 || len(cmds) != 1 || cmds[0] != tcSave {
+		t.Errorf("⌘S with a host focused: %d key-downs and commands %v, want none and [%d]", keys, cmds, tcSave)
+	}
+	if plainKeys != 0 {
+		t.Errorf("a plain key with a host focused reached ui %d times", plainKeys)
+	}
+}

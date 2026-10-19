@@ -38,10 +38,10 @@ func pushButton(k *Kit, label string, hover Hover, clip bool, out *Press) Signal
 }
 
 // ringQuads are the quads of the frame drawn as a focus ring: an outline in
-// the theme's focus-ring colour.
+// the theme's FocusRing role.
 func ringQuads(g *rig) []gpu.Quad {
 	var qs []gpu.Quad
-	ring := g.k.Theme().Pal.FocusRing
+	ring := g.k.Theme().Colors[theme.FocusRing]
 	for _, q := range g.list.Quads {
 		if q.Border > 0 && q.BorderColor>>8 == ring>>8 && q.BorderColor&255 > 0 {
 			qs = append(qs, q)
