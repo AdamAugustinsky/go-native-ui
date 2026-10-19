@@ -49,8 +49,21 @@ type report struct {
 	IdleRSSMB            float64
 	WakeLatencyUs        stats
 	Frames               int
-	FramesPaced          bool // false: no EvFrame arrived (window occluded / display asleep); frames ran unpaced
-	PresentFailures      int  // Present returned false (occluded / device lost); retried after presentRetryNs
+	FramesPaced          bool // false: some measured frames were drawn without an EvFrame (window occluded / display asleep)
+	UnpacedFrames        int  // measured frames drawn without an EvFrame
+	// FrameSourceStalls counts the times the frame events stopped for over a
+	// second while a frame was requested, and came back, during the animated
+	// frames. The first maxRestarts of them restarted the measured frames
+	// (MeasureRestarts), so that these hold no stall. StallCause says what the
+	// window state showed (StallTicks: display-link ticks during the longest
+	// silence).
+	FrameSourceStalls    int
+	LongestStallMs       float64
+	MeasureRestarts      int
+	StallCause           string `json:",omitempty"`
+	StallTicks           uint64
+	UnpacedState         string `json:",omitempty"` // the window state when frames went unpaced for good
+	PresentFailures      int    // Present returned false (occluded / device lost); retried after presentRetryNs
 	FrameCPUus           float64
 	FrameIntervalMs      stats
 	FrameAllocObjects    uint64
@@ -99,12 +112,49 @@ const (
 	// presentRetryNs backs off after a failed Present (e.g. DXGI_STATUS_OCCLUDED)
 	// instead of spinning on it.
 	presentRetryNs = int64(50 * time.Millisecond)
+	// silenceNs is how long a requested frame may take before the loop calls
+	// the frame source silent and draws unpaced (app's pacer does the same).
+	silenceNs = int64(time.Second)
+	// maxRestarts bounds how often a stall restarts the measured frames; later
+	// stalls stay in them (their unpaced frames, if any, count as such).
+	maxRestarts = 3
 )
+
+// Causes of a silence of the frame source, from the window's state (macOS).
+const (
+	causeLinkSilent   = "the display link stopped ticking (the display, not the app)"
+	causeOccluded     = "the window was not visible"
+	causeNotRequested = "no frame was requested (a bug of the loop)"
+	causeLostFrames   = "the display link ticked but no frame event came (a bug of the frame delivery)"
+	causeUnknown      = "unknown (no window state on this OS)"
+)
+
+// stallCause says why the frame events stopped between the window states a
+// (when the request went silent) and b (now).
+func stallCause(a, b platform.DebugState) string {
+	switch {
+	case !a.Valid || !b.Valid:
+		return causeUnknown
+	case !a.FrameArmed:
+		return causeNotRequested
+	case !a.Visible || !b.Visible:
+		return causeOccluded
+	case b.Ticks-a.Ticks > 1: // the tick that ends a silence delivers its frame
+		return causeLostFrames
+	}
+	return causeLinkSilent
+}
+
+// appBug reports whether a stall cause is the program's fault, not the
+// machine's.
+func appBug(cause string) bool { return cause == causeNotRequested || cause == causeLostFrames }
 
 var (
 	wakeSentAt atomic.Int64 // Now() when the worker called Wake (bench)
 	wakeAck    = make(chan struct{}, 1)
 	curPhase   atomic.Int32 // bench phase, for the -timeout message
+	silentAt   atomic.Int64 // when the frame source went silent, 0 while it delivers (for the -timeout message)
+	stallCount atomic.Int32
 	colorIndex atomic.Uint32
 )
 
@@ -129,7 +179,11 @@ func main() {
 	}
 	if *deadline > 0 {
 		time.AfterFunc(*deadline, func() {
-			fmt.Fprintf(os.Stderr, "spike: timed out after %v in bench phase %d\n", *deadline, curPhase.Load())
+			msg := ""
+			if t := silentAt.Load(); t != 0 {
+				msg = fmt.Sprintf("; the frame events stopped %.1f s ago (%d earlier stalls)", float64(platform.Now()-t)/1e9, stallCount.Load())
+			}
+			fmt.Fprintf(os.Stderr, "spike: timed out after %v in bench phase %d%s\n", *deadline, curPhase.Load(), msg)
 			os.Exit(2)
 		})
 	}
@@ -196,6 +250,9 @@ func main() {
 		presentRetryAt             int64
 		paced                      = true
 		animCPU0                   int64
+		silent0                    platform.DebugState // the window state when the frame source went silent
+		unpaced                    int                 // measured frames presented without a frame event
+		silence                    int64               // when it did (the request that got no frame)
 		// ReadMemStats flushes the per-P allocation caches, so its deltas are
 		// exact. runtime/metrics heap counters are credited a whole span at a
 		// time and miss small allocations (see DECISIONS D11).
@@ -219,8 +276,10 @@ func main() {
 	tLoop0, tWait0 := platform.Now(), int64(0)
 	for phase != phaseDone {
 		timeout := int64(-1)
-		if phase == phaseAnimate && !frameReady && paced && requestedAt != 0 && platform.Now()-requestedAt > int64(time.Second) {
+		if phase == phaseAnimate && !frameReady && paced && requestedAt != 0 && platform.Now()-requestedAt > silenceNs {
 			paced, frameReady = false, true // display link silent: occluded window or display asleep
+			silence, silent0 = requestedAt, win.DebugState()
+			silentAt.Store(silence)
 		}
 		switch {
 		case needDraw && frameReady && presentRetryAt == 0:
@@ -273,6 +332,29 @@ func main() {
 			case platform.EvFrame:
 				frameReady = true
 				presentRetryAt = 0 // a fresh frame supersedes the retry backstop
+				if !paced && phase == phaseAnimate {
+					// The frame source is back after a silence (app's pacer
+					// returns to paced frames the same way). The silence
+					// is not measured: the animated frames start over.
+					now := platform.Now()
+					cause := stallCause(silent0, win.DebugState())
+					d := ms(now - silence)
+					rep.FrameSourceStalls++
+					stallCount.Add(1)
+					if d > rep.LongestStallMs || appBug(cause) && !appBug(rep.StallCause) {
+						rep.LongestStallMs = max(rep.LongestStallMs, d)
+						rep.StallCause, rep.StallTicks = cause, win.DebugState().Ticks-silent0.Ticks
+					}
+					paced, silence = true, 0
+					silentAt.Store(0)
+					if rep.MeasureRestarts < maxRestarts {
+						fmt.Fprintf(os.Stderr, "spike: the frame events stopped for %.1f s (%s); the measured frames start over\n", d/1e3, cause)
+						rep.MeasureRestarts++
+						idlePresentsBase, lastFrame, intervals, unpaced = presents, 0, intervals[:0], 0
+					} else {
+						fmt.Fprintf(os.Stderr, "spike: the frame events stopped for %.1f s (%s); measured as it was\n", d/1e3, cause)
+					}
+				}
 				if phase == phaseAnimate {
 					now := platform.Now()
 					if lastFrame != 0 && presents-idlePresentsBase > animWarmup {
@@ -378,6 +460,9 @@ func main() {
 			requestedAt = platform.Now()
 			if surf.Present(c[0], c[1], c[2], 1) {
 				presents++
+				if !paced && phase == phaseAnimate && presents-idlePresentsBase > animWarmup {
+					unpaced++
+				}
 				frameReady = !paced
 				if firstPresent == 0 {
 					firstPresent = platform.Now()
@@ -404,7 +489,13 @@ func main() {
 				rep.FrameAllocObjects = mem1.Mallocs - mem0.Mallocs
 				rep.FrameAllocBytes = mem1.TotalAlloc - mem0.TotalAlloc
 				rep.FrameGCs = uint64(mem1.NumGC - mem0.NumGC)
-				rep.FramesPaced = paced
+				rep.UnpacedFrames = unpaced
+				rep.FramesPaced = unpaced == 0
+				if !rep.FramesPaced {
+					st := win.DebugState()
+					rep.UnpacedState = string(st.Append(nil))
+					rep.StallCause = stallCause(silent0, st)
+				}
 				rep.FrameCPUus = float64(cpu1-animCPU0) / 1e3 / float64(rep.Frames)
 				phase = phaseDone
 			}
@@ -432,7 +523,11 @@ func main() {
 			failed = append(failed, fmt.Sprintf("%d measured frames, want %d", rep.Frames, animFrames))
 		}
 		if !rep.FramesPaced && !*allowUnpaced {
-			failed = append(failed, "frames were not vsync-paced (no frame callbacks)")
+			failed = append(failed, fmt.Sprintf("%d of %d measured frames were not vsync-paced, drawn without a frame callback (%s; %s); -allow-unpaced accepts a machine without a working display",
+				rep.UnpacedFrames, rep.Frames, rep.StallCause, rep.UnpacedState))
+		}
+		if appBug(rep.StallCause) {
+			failed = append(failed, fmt.Sprintf("the frame events stopped because %s", rep.StallCause))
 		}
 		if rep.IdlePresents != 0 {
 			failed = append(failed, fmt.Sprintf("%d presents while idle", rep.IdlePresents))

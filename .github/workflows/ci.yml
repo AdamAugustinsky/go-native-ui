@@ -145,6 +145,9 @@ jobs:
           ./bin/spike -exit-first -timeout 60s >/dev/null || true
           ./bin/spike -bench -idle 5s -gate -allocsites -timeout 120s | tee spike-macos.json
           { echo '```json'; cat spike-macos.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          # The runner's display link sometimes stops for 20-60 s; the spike
+          # restarts its measured frames after such a stall and says so.
+          jq -r 'select(.FrameSourceStalls > 0) | "::warning title=spike: frame source stalled::\(.FrameSourceStalls) stall(s), longest \(.LongestStallMs / 1000 | floor) s: \(.StallCause); measured frames restarted \(.MeasureRestarts) time(s)"' spike-macos.json
       - name: listbench + rex (offscreen PNGs, windowed bench with the allocation gate)
         run: |
           go build -trimpath -ldflags="-s -w" -o bin/listbench ./cmd/listbench
