@@ -119,10 +119,17 @@ func loadMetal() error {
 }
 
 type ringSlot struct {
-	buf   objc.ID
-	mem   unsafe.Pointer // contents of buf (persistently mapped)
-	quads int            // capacity in quads
-	cb    objc.ID        // retained command buffer that last read buf
+	buf    objc.ID
+	mem    unsafe.Pointer // contents of buf (persistently mapped)
+	quads  int            // capacity in quads
+	cb     objc.ID        // retained command buffer that last read buf
+	serial uint64         // the frame encoded into the slot (Renderer.serial)
+}
+
+// retiredTex is a freed texture waiting for the frames that may sample it.
+type retiredTex struct {
+	tex    objc.ID
+	serial uint64 // the last frame encoded when it was freed
 }
 
 // Renderer draws DrawLists with Metal. All methods share objc.F, so they
@@ -135,9 +142,14 @@ type Renderer struct {
 	pipeline, sampler objc.ID
 	rpd, color0       objc.ID
 	slots             [ringSlots]ringSlot
-	next              int // ring slot used by the next Encode
-	textures          []objc.ID
-	kinds             []TextureKind
+	next              int    // ring slot used by the next Encode
+	serial            uint64 // frames encoded so far: the serial of the last one
+	ids               texTable
+	textures          []objc.ID     // by index
+	kinds             []TextureKind // by index
+	lastUse           []uint64      // by index: serial of the last frame that bound it (0 = none)
+	retiring          []retiredTex
+	empty             objc.ID // 1×1 transparent texture bound for a freed id
 	draws, totalDraws int
 	offscreen         objc.ID
 	offW, offH        int
@@ -214,8 +226,15 @@ func NewRenderer(device, queue uintptr) (*Renderer, error) {
 	// Texture 0: 1×1 white RGBA texel that shape quads bind.
 	t0 := r.NewTexture(TexRGBA8, 1, 1)
 	r.Upload(t0, 0, 0, 1, 1, []byte{255, 255, 255, 255}, 4)
+	// The texture a quad naming a freed texture samples: one transparent texel.
+	r.empty = r.newMTLTexture(TexRGBA8, 1, 1)
+	argRegion(objc.F.Reset().Arg(uintptr(r.empty)).Arg(uintptr(rsReplace)), 0, 0, 1, 1).
+		Arg(0).Arg(uintptr(unsafe.Pointer(&emptyTexel[0]))).Arg(4).Call(objc.MsgSend)
 	return r, nil
 }
+
+// emptyTexel is the content of Renderer.empty (a global: C reads it).
+var emptyTexel [4]byte
 
 // NewOffscreenRenderer creates the system default device and a command
 // queue and a Renderer on them; Destroy releases all three. It returns
@@ -252,9 +271,24 @@ const (
 	mtlBGRA8Unorm = 80
 )
 
-// NewTexture creates a w×h texture (setup path: it allocates). Contents are
-// undefined until Upload.
+// NewTexture creates a w×h texture. Contents are undefined until Upload. It
+// reuses the index of a freed texture under a new generation (see
+// FreeTexture); the table grows only past the most textures ever live at
+// once, so creating textures in the frame path allocates on the Go heap only
+// then (Metal allocates its own memory).
 func (r *Renderer) NewTexture(kind TextureKind, w, h int) TextureID {
+	tex := r.newMTLTexture(kind, w, h)
+	i, id := r.ids.add()
+	if i == len(r.textures) {
+		r.textures = append(r.textures, 0)
+		r.kinds = append(r.kinds, 0)
+		r.lastUse = append(r.lastUse, 0)
+	}
+	r.textures[i], r.kinds[i], r.lastUse[i] = tex, kind, 0
+	return id
+}
+
+func (r *Renderer) newMTLTexture(kind TextureKind, w, h int) objc.ID {
 	format := uintptr(mtlRGBA8Unorm)
 	if kind == TexR8 {
 		format = mtlR8Unorm
@@ -267,9 +301,58 @@ func (r *Renderer) NewTexture(kind TextureKind, w, h int) TextureID {
 	if tex == 0 {
 		panic("gpu: texture creation failed")
 	}
-	r.textures = append(r.textures, tex)
-	r.kinds = append(r.kinds, kind)
-	return TextureID(len(r.textures) - 1)
+	return tex
+}
+
+// FreeTexture frees texture t. Its id stops resolving at once: Upload and
+// FreeTexture ignore it, and quads that still name it draw nothing. The Metal
+// texture is released when the frames encoded so far have finished on the
+// GPU (see textures.go); FreeTexture itself never waits. Freeing texture 0,
+// an unknown id or an id already freed does nothing.
+func (r *Renderer) FreeTexture(t TextureID) {
+	i, ok := r.ids.lookup(t)
+	if !ok || i == 0 {
+		return
+	}
+	r.retiring = append(r.retiring, retiredTex{r.textures[i], r.serial})
+	r.textures[i] = 0
+	r.ids.remove(i)
+	r.collect()
+}
+
+// TextureCounts reports the live textures (texture 0 included) and the freed
+// ones whose release still waits for the GPU.
+func (r *Renderer) TextureCounts() (live, retiring int) { return r.ids.n, len(r.retiring) }
+
+// collect retires the ring slots whose command buffers have completed,
+// without waiting, and releases the freed textures no unfinished frame may
+// sample. A command buffer that is not committed yet is unfinished: it
+// retires only when Encode reuses its slot.
+func (r *Renderer) collect() {
+	pending := r.serial + 1 // the oldest frame still to finish
+	for i := range r.slots {
+		s := &r.slots[i]
+		if s.cb == 0 {
+			continue
+		}
+		if st := objc.Send(s.cb, rsStatus); st >= 4 { // Completed, Error
+			objc.Release(s.cb)
+			s.cb = 0
+			continue
+		}
+		pending = min(pending, s.serial)
+	}
+	n := 0
+	for _, x := range r.retiring {
+		if x.serial < pending {
+			objc.Release(x.tex)
+			continue
+		}
+		r.retiring[n] = x
+		n++
+	}
+	clear(r.retiring[n:])
+	r.retiring = r.retiring[:n]
 }
 
 // argRegion appends an MTLRegion (origin x, y, 0; size w, h, 1) by value.
@@ -288,13 +371,18 @@ func argRegion(f *ffi.Frame, x, y, w, h int) *ffi.Frame {
 }
 
 // Upload copies a w×h block of pixels into texture t at (x, y). pixels[0] is
-// the block's first texel and stride is the byte distance between rows.
+// the block's first texel and stride is the byte distance between rows. An
+// id that was freed is ignored.
 func (r *Renderer) Upload(t TextureID, x, y, w, h int, pixels []byte, stride int) {
 	if w <= 0 || h <= 0 {
 		return
 	}
+	i, ok := r.ids.lookup(t)
+	if !ok {
+		return
+	}
 	bpp := 1
-	if r.kinds[t] == TexRGBA8 {
+	if r.kinds[i] == TexRGBA8 {
 		bpp = 4
 	}
 	if stride < w*bpp || len(pixels) < (h-1)*stride+w*bpp {
@@ -302,14 +390,14 @@ func (r *Renderer) Upload(t TextureID, x, y, w, h int, pixels []byte, stride int
 	}
 	// replaceRegion doesn't synchronise with the GPU: wait until frames
 	// already submitted have stopped sampling the texture.
-	r.waitSubmitted()
+	r.waitSubmitted(r.lastUse[i])
 	pinnedBytes = &pixels[0] // force the backing array onto the heap while C reads it
 	if stride%bpp == 0 {
-		argRegion(objc.F.Reset().Arg(uintptr(r.textures[t])).Arg(uintptr(rsReplace)), x, y, w, h).
+		argRegion(objc.F.Reset().Arg(uintptr(r.textures[i])).Arg(uintptr(rsReplace)), x, y, w, h).
 			Arg(0).Arg(uintptr(unsafe.Pointer(&pixels[0]))).Arg(uintptr(stride)).Call(objc.MsgSend)
 	} else { // Metal needs bytesPerRow to be a multiple of the pixel size: copy row by row
 		for row := 0; row < h; row++ {
-			argRegion(objc.F.Reset().Arg(uintptr(r.textures[t])).Arg(uintptr(rsReplace)), x, y+row, w, 1).
+			argRegion(objc.F.Reset().Arg(uintptr(r.textures[i])).Arg(uintptr(rsReplace)), x, y+row, w, 1).
 				Arg(0).Arg(uintptr(unsafe.Pointer(&pixels[row*stride]))).Arg(uintptr(w * bpp)).Call(objc.MsgSend)
 		}
 	}
@@ -317,14 +405,20 @@ func (r *Renderer) Upload(t TextureID, x, y, w, h int, pixels []byte, stride int
 	runtime.KeepAlive(pixels)
 }
 
-// waitSubmitted waits for every committed command buffer that may still read
-// the renderer's textures. A buffer that isn't committed yet (the frame being
-// built) is left alone: it reads the new contents.
-func (r *Renderer) waitSubmitted() {
+// waitSubmitted waits for the committed command buffers of frames from
+// serial since on, which may still read a texture that frame since last
+// bound; since 0 (never bound) waits for nothing, so filling a new texture
+// never stalls. A buffer that isn't committed yet (the frame being built) is
+// left alone: it reads the new contents.
+func (r *Renderer) waitSubmitted(since uint64) {
+	if since == 0 {
+		return
+	}
 	for i := range r.slots {
-		if cb := r.slots[i].cb; cb != 0 {
-			if st := objc.Send(cb, rsStatus); st >= 2 && st < 4 { // Committed, Scheduled
-				objc.Send(cb, rsWait)
+		s := &r.slots[i]
+		if s.cb != 0 && s.serial >= since {
+			if st := objc.Send(s.cb, rsStatus); st >= 2 && st < 4 { // Committed, Scheduled
+				objc.Send(s.cb, rsWait)
 			}
 		}
 	}
@@ -375,8 +469,10 @@ func (s *ringSlot) retire() {
 // clear is written to the target as is, so it should be premultiplied. The
 // instance data is copied into the next ring slot; if that slot's previous
 // frame is still on the GPU, Encode waits for it, so at most ringSlots
-// frames are in flight. A cmdBuf that is never committed must not be
-// expected to protect its slot.
+// frames are in flight. A cmdBuf that is not committed yet keeps its slot,
+// and the textures freed since it was encoded, until Encode reuses the slot;
+// then it is dropped without waiting, so one that is never committed must
+// not be committed later.
 //
 // Encode allocates nothing on the Go heap once the renderer and list are
 // warm. It grows the ring slot only if the list is larger than any before.
@@ -391,6 +487,11 @@ func (r *Renderer) Encode(cmdBuf, target uintptr, width, height int, clear [4]fl
 		r.next = 0
 	}
 	s.retire()
+	r.serial++
+	s.serial = r.serial
+	if len(r.retiring) > 0 {
+		r.collect()
+	}
 	var quads []Quad
 	if list != nil {
 		quads = list.Quads
@@ -422,6 +523,7 @@ func (r *Renderer) Encode(cmdBuf, target uintptr, width, height int, clear [4]fl
 	// open; only a texture quad with a different texture ends it.
 	bound := TextureID(0)
 	objc.Send2(enc, rsSetFTexture, uintptr(r.textures[0]), 0)
+	r.lastUse[0] = r.serial
 	runStart := 0
 	for i := range quads {
 		q := &quads[i]
@@ -433,10 +535,12 @@ func (r *Renderer) Encode(cmdBuf, target uintptr, width, height int, clear [4]fl
 		}
 		runStart = i
 		bound = q.Tex
-		if int(bound) >= len(r.textures) {
-			bound = 0
+		tex := r.empty // a freed or unknown id draws nothing
+		if k, ok := r.ids.lookup(bound); ok {
+			tex = r.textures[k]
+			r.lastUse[k] = r.serial
 		}
-		objc.Send2(enc, rsSetFTexture, uintptr(r.textures[bound]), 0)
+		objc.Send2(enc, rsSetFTexture, uintptr(tex), 0)
 	}
 	if len(quads) > runStart {
 		r.draw(enc, runStart, len(quads)-runStart)
@@ -480,14 +584,21 @@ func (r *Renderer) RenderToRGBA(width, height int, clear [4]float32, list *DrawL
 	r.Encode(uintptr(cb), uintptr(r.offscreen), width, height, clear, list)
 	objc.Send(cb, rsCommit)
 	objc.Send(cb, rsWait)
+	r.readTarget(out)
+	F.Call1(objc.PoolPop, pool)
+}
+
+// readTarget copies the offscreen target into out as RGBA8.
+func (r *Renderer) readTarget(out []byte) {
+	width, height := r.offW, r.offH
+	n := width * height * 4
 	if cap(r.readback) < n {
 		r.readback = make([]byte, n)
 	}
 	r.readback = r.readback[:n]
-	argRegion(F.Reset().Arg(uintptr(r.offscreen)).Arg(uintptr(rsGetBytes)).
+	argRegion(objc.F.Reset().Arg(uintptr(r.offscreen)).Arg(uintptr(rsGetBytes)).
 		Arg(uintptr(unsafe.Pointer(&r.readback[0]))).Arg(uintptr(width*4)), 0, 0, width, height).
 		Arg(0).Call(objc.MsgSend)
-	F.Call1(objc.PoolPop, pool)
 	for i := 0; i < n; i += 4 { // BGRA → RGBA
 		out[i], out[i+1], out[i+2], out[i+3] = r.readback[i+2], r.readback[i+1], r.readback[i], r.readback[i+3]
 	}
@@ -524,15 +635,20 @@ func (r *Renderer) Destroy() {
 		}
 	}
 	for _, t := range r.textures {
-		objc.Release(t)
+		if t != 0 {
+			objc.Release(t)
+		}
 	}
-	r.textures = nil
-	for _, o := range []objc.ID{r.offscreen, r.pipeline, r.sampler, r.rpd} {
+	for _, x := range r.retiring {
+		objc.Release(x.tex)
+	}
+	r.textures, r.retiring = nil, nil
+	for _, o := range []objc.ID{r.offscreen, r.pipeline, r.sampler, r.rpd, r.empty} {
 		if o != 0 {
 			objc.Release(o)
 		}
 	}
-	r.offscreen, r.pipeline, r.sampler, r.rpd = 0, 0, 0, 0
+	r.offscreen, r.pipeline, r.sampler, r.rpd, r.empty = 0, 0, 0, 0, 0
 	if r.ownsDevice {
 		objc.Release(r.queue)
 		objc.Release(r.device)

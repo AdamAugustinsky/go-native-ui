@@ -97,6 +97,10 @@ const (
 	glMapInvalidateBuffer = 0x0008
 	glVersionEnum         = 0x1F02
 	glNoError             = 0
+	glSyncGPUCommands     = 0x9117 // GL_SYNC_GPU_COMMANDS_COMPLETE
+	glAlreadySignaled     = 0x911A
+	glConditionSatisfied  = 0x911C
+	glWaitFailed          = 0x911D
 )
 
 // glx holds the resolved GL entry points.
@@ -118,6 +122,7 @@ var glx struct {
 	genRenderbuffers, bindRenderbuffer, renderbufferStorage            uintptr
 	framebufferRenderbuffer, checkFramebufferStatus                    uintptr
 	deleteRenderbuffers, readPixels                                    uintptr
+	fenceSync, clientWaitSync, deleteSync                              uintptr
 }
 
 // gls is scratch memory handed to C by pointer: package-level, so never on a
@@ -198,6 +203,7 @@ func loadGLFuncs() error {
 			{"glRenderbufferStorage", &glx.renderbufferStorage}, {"glFramebufferRenderbuffer", &glx.framebufferRenderbuffer},
 			{"glCheckFramebufferStatus", &glx.checkFramebufferStatus}, {"glDeleteRenderbuffers", &glx.deleteRenderbuffers},
 			{"glReadPixels", &glx.readPixels},
+			{"glFenceSync", &glx.fenceSync}, {"glClientWaitSync", &glx.clientWaitSync}, {"glDeleteSync", &glx.deleteSync},
 		} {
 			if *e.dst = getProc(e.name); *e.dst == 0 && glLoadErr == nil {
 				glLoadErr = fmt.Errorf("gpu: cannot resolve %s", e.name)
@@ -232,8 +238,16 @@ func glString(p uintptr) string {
 }
 
 type ringSlot struct {
-	buf   uint32
-	quads int // capacity in quads
+	buf    uint32
+	quads  int     // capacity in quads
+	sync   uintptr // GLsync fenced after the slot's last frame; 0 = none pending
+	serial uint64  // the frame the sync follows
+}
+
+// retiredTex is a freed texture waiting for the frames that may sample it.
+type retiredTex struct {
+	name   uint32
+	serial uint64 // the last frame encoded when it was freed
 }
 
 // Attribute layout of a Quad record (offsets checked against the struct).
@@ -279,9 +293,14 @@ type Renderer struct {
 	prog, vao    uint32
 	locView      int32
 	slots        [ringSlots]ringSlot
-	next         int // ring slot used by the next Encode
-	tex          []uint32
+	next         int    // ring slot used by the next Encode
+	serial       uint64 // frames encoded so far: the serial of the last one
+	done         uint64 // every frame up to this serial has finished on the GPU
+	ids          texTable
+	tex          []uint32 // by index
 	kinds        []TextureKind
+	empty        uint32 // 1×1 transparent texture bound for a freed id
+	retiring     []retiredTex
 	draws        int
 	totalDraw    int
 	fbo, rbo     uint32
@@ -377,6 +396,12 @@ func (r *Renderer) init() error {
 	// Texture 0: 1×1 white RGBA texel that shape quads bind.
 	t0 := r.NewTexture(TexRGBA8, 1, 1)
 	r.Upload(t0, 0, 0, 1, 1, []byte{255, 255, 255, 255}, 4)
+	// The texture a quad naming a freed texture samples: one transparent texel.
+	r.empty = r.newGLTexture(TexRGBA8, 1, 1)
+	gls.pinned = &emptyTexel[0]
+	fr.Call2(glx.pixelStorei, glUnpackAlignment, 1)
+	r.subImage(0, 0, 1, 1, glRGBA, unsafe.Pointer(&emptyTexel[0]))
+	gls.pinned = nil
 	// A GL error during setup is not fatal by itself (the shaders linked and
 	// the buffers exist); TestNoGLErrors reports them. Leave none pending.
 	r.setupGLError = r.glErr()
@@ -438,9 +463,92 @@ func (r *Renderer) glErr() uint32 {
 	return first
 }
 
-// NewTexture creates a w×h texture (setup path: it allocates). Contents are
-// undefined until Upload.
+// emptyTexel is the content of Renderer.empty (a global: C reads it).
+var emptyTexel [4]byte
+
+// NewTexture creates a w×h texture. Contents are undefined until Upload. It
+// reuses the index of a freed texture under a new generation (see
+// FreeTexture); the table grows only past the most textures ever live at
+// once.
 func (r *Renderer) NewTexture(kind TextureKind, w, h int) TextureID {
+	name := r.newGLTexture(kind, w, h)
+	i, id := r.ids.add()
+	if i == len(r.tex) {
+		r.tex = append(r.tex, 0)
+		r.kinds = append(r.kinds, 0)
+	}
+	r.tex[i], r.kinds[i] = name, kind
+	return id
+}
+
+// FreeTexture frees texture t. Its id stops resolving at once: Upload and
+// FreeTexture ignore it, and quads that still name it draw nothing. The GL
+// texture is deleted when the sync object of the last frame encoded so far
+// has signalled (see textures.go); FreeTexture itself never waits. Freeing
+// texture 0, an unknown id or an id already freed does nothing.
+func (r *Renderer) FreeTexture(t TextureID) {
+	i, ok := r.ids.lookup(t)
+	if !ok || i == 0 {
+		return
+	}
+	r.retiring = append(r.retiring, retiredTex{r.tex[i], r.serial})
+	r.tex[i] = 0
+	r.ids.remove(i)
+	r.collect()
+}
+
+// TextureCounts reports the live textures (texture 0 included) and the freed
+// ones whose deletion still waits for the GPU.
+func (r *Renderer) TextureCounts() (live, retiring int) { return r.ids.n, len(r.retiring) }
+
+// syncDone reads a sync object without waiting (a zero timeout, no flush:
+// the swap flushes). A failed wait counts as done.
+func syncDone(s uintptr) bool {
+	switch uint32(fr.Reset().Arg(s).Arg32(0).Arg(0).Call(glx.clientWaitSync).R0()) {
+	case glAlreadySignaled, glConditionSatisfied, glWaitFailed:
+		return true
+	}
+	return false
+}
+
+// collect advances done from the slots' sync objects that have signalled,
+// without waiting, and deletes the freed textures no unfinished frame may
+// sample. GL runs a context's commands in order, so a signalled sync
+// completes every earlier frame too.
+func (r *Renderer) collect() {
+	for i := range r.slots {
+		s := &r.slots[i]
+		if s.sync != 0 && syncDone(s.sync) {
+			r.done = max(r.done, s.serial)
+			fr.Call1(glx.deleteSync, s.sync)
+			s.sync = 0
+		}
+	}
+	n := 0
+	for _, x := range r.retiring {
+		if x.serial <= r.done {
+			gls.u32[0] = x.name
+			fr.Call2(glx.deleteTextures, 1, uintptr(unsafe.Pointer(&gls.u32[0])))
+			continue
+		}
+		r.retiring[n] = x
+		n++
+	}
+	r.retiring = r.retiring[:n]
+}
+
+// fence follows the frame just encoded in slot s with a sync object. A
+// previous sync of the slot that has not signalled is given up: the new one,
+// later in the same command stream, signals after it.
+func (r *Renderer) fence(s *ringSlot) {
+	if s.sync != 0 {
+		fr.Call1(glx.deleteSync, s.sync)
+	}
+	s.sync = fr.Reset().Arg32(glSyncGPUCommands).Arg32(0).Call(glx.fenceSync).R0()
+	s.serial = r.serial
+}
+
+func (r *Renderer) newGLTexture(kind TextureKind, w, h int) uint32 {
 	internal, format := uintptr(glRGBA8), uintptr(glRGBA)
 	if kind == TexR8 {
 		internal, format = glR8, glRed
@@ -458,19 +566,23 @@ func (r *Renderer) NewTexture(kind TextureKind, w, h int) TextureID {
 	}
 	fr.Reset().Arg32(glTexture2D).Arg32(0).Arg32(uint32(internal)).Arg(uintptr(w)).Arg(uintptr(h)).Arg32(0).
 		Arg32(uint32(format)).Arg32(glUnsignedByte).Arg(0).Call(glx.texImage2D)
-	r.tex = append(r.tex, name)
-	r.kinds = append(r.kinds, kind)
-	return TextureID(len(r.tex) - 1)
+	return name
 }
 
 // Upload copies a w×h block of pixels into texture t at (x, y). pixels[0] is
-// the block's first texel and stride is the byte distance between rows.
+// the block's first texel and stride is the byte distance between rows. An
+// id that was freed is ignored. glTexSubImage2D is ordered with the draws, so
+// frames already submitted read the old contents.
 func (r *Renderer) Upload(t TextureID, x, y, w, h int, pixels []byte, stride int) {
 	if w <= 0 || h <= 0 {
 		return
 	}
+	i, ok := r.ids.lookup(t)
+	if !ok {
+		return
+	}
 	bpp, format := 1, uintptr(glRed)
-	if r.kinds[t] == TexRGBA8 {
+	if r.kinds[i] == TexRGBA8 {
 		bpp, format = 4, glRGBA
 	}
 	if stride < w*bpp || len(pixels) < (h-1)*stride+w*bpp {
@@ -478,7 +590,7 @@ func (r *Renderer) Upload(t TextureID, x, y, w, h int, pixels []byte, stride int
 	}
 	gls.pinned = &pixels[0] // force the backing array onto the heap while C reads it
 	fr.Call1(glx.activeTexture, glTexture0)
-	fr.Call2(glx.bindTexture, glTexture2D, uintptr(r.tex[t]))
+	fr.Call2(glx.bindTexture, glTexture2D, uintptr(r.tex[i]))
 	fr.Call2(glx.pixelStorei, glUnpackAlignment, 1)
 	if stride%bpp == 0 {
 		fr.Call2(glx.pixelStorei, glUnpackRowLength, uintptr(stride/bpp))
@@ -542,10 +654,15 @@ func (r *Renderer) Encode(cmdBuf, target uintptr, width, height int, clear [4]fl
 	if r.next++; r.next == ringSlots {
 		r.next = 0
 	}
+	r.serial++
+	if len(r.retiring) > 0 {
+		r.collect()
+	}
 	var quads []Quad
 	if list != nil {
 		quads = list.Quads
 	}
+	defer r.fence(s)
 
 	fr.Call2(glx.bindFramebuffer, glFramebuffer, target)
 	fr.Reset().Arg32(0).Arg32(0).Arg32(uint32(width)).Arg32(uint32(height)).Call(glf.viewport)
@@ -584,10 +701,11 @@ func (r *Renderer) Encode(cmdBuf, target uintptr, width, height int, clear [4]fl
 		}
 		runStart = i
 		bound = q.Tex
-		if int(bound) >= len(r.tex) {
-			bound = 0
+		name := r.empty // a freed or unknown id draws nothing
+		if k, ok := r.ids.lookup(bound); ok {
+			name = r.tex[k]
 		}
-		fr.Call2(glx.bindTexture, glTexture2D, uintptr(r.tex[bound]))
+		fr.Call2(glx.bindTexture, glTexture2D, uintptr(name))
 	}
 	if len(quads) > runStart {
 		r.draw(s, runStart, len(quads)-runStart)
@@ -702,8 +820,15 @@ func (r *Renderer) Destroy() {
 		}
 		for i := range r.slots {
 			del(glx.deleteBuffers, r.slots[i].buf)
+			if s := r.slots[i].sync; s != 0 {
+				fr.Call1(glx.deleteSync, s)
+			}
 		}
 		del(glx.deleteTextures, r.tex...)
+		for _, x := range r.retiring {
+			del(glx.deleteTextures, x.name)
+		}
+		del(glx.deleteTextures, r.empty)
 		del(glx.deleteFramebuffers, r.fbo)
 		del(glx.deleteRenderbuffers, r.rbo)
 		del(glx.deleteVertexArrays, r.vao)
@@ -711,7 +836,7 @@ func (r *Renderer) Destroy() {
 			fr.Call1(glx.deleteProgram, uintptr(r.prog))
 		}
 	}
-	r.tex, r.kinds = nil, nil
+	r.tex, r.kinds, r.retiring = nil, nil, nil
 	if r.ownsCtx {
 		r.releaseOffscreen()
 	}

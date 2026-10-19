@@ -443,3 +443,84 @@ func TestEncodeZeroAlloc(t *testing.T) {
 	}
 	t.Errorf("frame path allocated in all %d windows (last: %d mallocs, %d bytes over %d frames)", attempts, mallocs, bytes, frames)
 }
+
+// TestFreeTextureWaitsForUncommittedFrame: a frame that is encoded but not
+// committed yet keeps the textures it samples, however long the commit takes;
+// once it has run they are released without anyone waiting for them.
+func TestFreeTextureWaitsForUncommittedFrame(t *testing.T) {
+	r := newTestRenderer(t)
+	r.newTarget(2, 1)
+	tex := texel(r, 255, 0, 0, 255)
+	F := objc.F
+	pool := F.Call0(objc.PoolPush)
+	defer F.Call1(objc.PoolPop, pool)
+	cb := objc.Retain(objc.Send(r.queue, rsCommandBuf))
+	defer objc.Release(cb)
+	r.Encode(uintptr(cb), uintptr(r.offscreen), 2, 1, black, &DrawList{Quads: []Quad{rgbaQuad(0, tex)}})
+
+	r.FreeTexture(tex)
+	if _, retiring := r.TextureCounts(); retiring != 1 {
+		t.Fatalf("%d textures retiring right after the free, want 1 (the frame is not committed)", retiring)
+	}
+	time.Sleep(20 * time.Millisecond) // time passing releases nothing
+	r.collect()
+	if _, retiring := r.TextureCounts(); retiring != 1 {
+		t.Fatalf("%d textures retiring before the commit, want 1", retiring)
+	}
+	objc.Send(cb, rsCommit)
+	objc.Send(cb, rsWait)
+	r.collect()
+	if _, retiring := r.TextureCounts(); retiring != 0 {
+		t.Fatalf("%d textures retiring after the frame completed, want 0", retiring)
+	}
+	m := img{2, 1, make([]byte, 8)}
+	r.readTarget(m.pix)
+	near(t, "the committed frame drew the texture freed while it waited", m.at(0, 0), [4]int{255, 0, 0, 255}, 1)
+}
+
+// TestFreeTextureNeverCommitted: a frame that is never committed holds its
+// slot's textures until Encode reuses the slot, which drops it without
+// waiting (waiting on it would never return).
+func TestFreeTextureNeverCommitted(t *testing.T) {
+	r := newTestRenderer(t)
+	r.newTarget(1, 1)
+	tex := texel(r, 255, 0, 0, 255)
+	F := objc.F
+	pool := F.Call0(objc.PoolPush)
+	cb := objc.Send(r.queue, rsCommandBuf)
+	r.Encode(uintptr(cb), uintptr(r.offscreen), 1, 1, black, &DrawList{Quads: []Quad{rgbaQuad(0, tex)}})
+	F.Call1(objc.PoolPop, pool) // the slot keeps its own reference
+	r.FreeTexture(tex)
+	for i := 0; i < ringSlots; i++ { // a wait on the uncommitted buffer would hang here
+		render(r, 1, 1, black)
+	}
+	if live, retiring := r.TextureCounts(); retiring != 0 || live != 1 {
+		t.Fatalf("%d live, %d retiring after the slot was reused; want 1 (texture 0), 0", live, retiring)
+	}
+}
+
+// TestUploadToFreshTextureDoesNotWait: filling a texture no frame has bound
+// does not wait for the frames in flight; filling one they bound does.
+func TestUploadToFreshTextureDoesNotWait(t *testing.T) {
+	r := newTestRenderer(t)
+	r.newTarget(1, 1)
+	used := texel(r, 1, 2, 3, 255)
+	F := objc.F
+	pool := F.Call0(objc.PoolPush)
+	defer F.Call1(objc.PoolPop, pool)
+	cb := objc.Send(r.queue, rsCommandBuf)
+	r.Encode(uintptr(cb), uintptr(r.offscreen), 1, 1, black, &DrawList{Quads: []Quad{rgbaQuad(0, used)}})
+	if r.lastUse[used.index()] != r.serial {
+		t.Fatalf("lastUse %d, serial %d: Encode did not record the binding", r.lastUse[used.index()], r.serial)
+	}
+	fresh := r.NewTexture(TexRGBA8, 1, 1)
+	if r.lastUse[fresh.index()] != 0 {
+		t.Fatal("a new texture starts as bound by a frame")
+	}
+	r.Upload(fresh, 0, 0, 1, 1, []byte{9, 9, 9, 255}, 4) // must not block on the uncommitted frame either
+	objc.Send(cb, rsCommit)
+	r.Upload(used, 0, 0, 1, 1, []byte{4, 5, 6, 255}, 4) // waits for the frame
+	if st := objc.Send(cb, rsStatus); st < 4 {
+		t.Fatalf("command buffer status %d after an upload into a texture it samples, want completed", st)
+	}
+}

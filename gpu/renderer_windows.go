@@ -35,12 +35,14 @@ const (
 	vtDeviceCreateBlendState         = 20
 	vtDeviceCreateRasterizerState    = 22
 	vtDeviceCreateSamplerState       = 23
+	vtDeviceCreateQuery              = 24
 )
 
 // ID3D11DeviceContext (d3d11.h:6729-7379): VSSetConstantBuffers 7,
 // PSSetShaderResources 8, PSSetShader 9, PSSetSamplers 10, VSSetShader 11,
 // Map 14, Unmap 15, IASetInputLayout 17, IASetVertexBuffers 18,
-// DrawInstanced 21, IASetPrimitiveTopology 24, OMSetBlendState 35,
+// DrawInstanced 21, IASetPrimitiveTopology 24, End 28, GetData 29 (Begin 27
+// sits between; an event query has no Begin), OMSetBlendState 35,
 // RSSetState 43, RSSetViewports 44, CopyResource 47, UpdateSubresource 48
 // (OMSetRenderTargets 33 and ClearRenderTargetView 50 are in d3d11_windows.go).
 const (
@@ -55,6 +57,8 @@ const (
 	vtContextIASetVertexBuffers     = 18
 	vtContextDrawInstanced          = 21
 	vtContextIASetPrimitiveTopology = 24
+	vtContextEnd                    = 28
+	vtContextGetData                = 29
 	vtContextOMSetBlendState        = 35
 	vtContextRSSetState             = 43
 	vtContextRSSetViewports         = 44
@@ -112,6 +116,10 @@ const (
 	cullNone         = 1    // D3D11_CULL_NONE (d3d11.h:1098)
 	inputPerInstance = 1    // D3D11_INPUT_PER_INSTANCE_DATA (d3d11.h:1366)
 	topologyTriStrip = 5    // D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP (d3dcommon.h:603)
+
+	queryEvent      = 0 // D3D11_QUERY_EVENT (d3d11.h, enum D3D11_QUERY)
+	asyncDoNotFlush = 1 // D3D11_ASYNC_GETDATA_DONOTFLUSH
+	hrFalse         = 1 // S_FALSE: GetData's "not yet"
 
 	compileStrict = 0x800  // D3DCOMPILE_ENABLE_STRICTNESS (d3dcompiler.h:54)
 	compileOpt3   = 0x8000 // D3DCOMPILE_OPTIMIZATION_LEVEL3 (d3dcompiler.h:60)
@@ -185,6 +193,8 @@ type rasterizerDesc struct {
 
 type viewport struct{ X, Y, W, H, MinDepth, MaxDepth float32 }
 
+type queryDesc struct{ Query, MiscFlags uint32 } // D3D11_QUERY_DESC
+
 // Sizes of the C structs (verified by hand from the field lists above).
 var (
 	_ = [1]struct{}{}[unsafe.Sizeof(bufferDesc{})-24]
@@ -197,6 +207,7 @@ var (
 	_ = [1]struct{}{}[unsafe.Sizeof(samplerDesc{})-52]
 	_ = [1]struct{}{}[unsafe.Sizeof(rasterizerDesc{})-40]
 	_ = [1]struct{}{}[unsafe.Sizeof(viewport{})-24]
+	_ = [1]struct{}{}[unsafe.Sizeof(queryDesc{})-8]
 )
 
 // instanceElems describes the Quad record to the input assembler (per-
@@ -266,6 +277,21 @@ var ErrNoDevice = errors.New("gpu: no Direct3D 11 device")
 // initialQuads is the starting capacity of the instance ring, in quads.
 const initialQuads = 4096
 
+// ringSlots is the number of frame fences in rotation (see textures.go).
+const ringSlots = 3
+
+// frameFence is the event query issued after one frame's draws.
+type frameFence struct {
+	query  uintptr // ID3D11Query (D3D11_QUERY_EVENT); 0 = none pending
+	serial uint64
+}
+
+// retiredTex is a freed texture waiting for the frames that may sample it.
+type retiredTex struct {
+	tex, srv uintptr
+	serial   uint64 // the last frame encoded when it was freed
+}
+
 // Renderer draws DrawLists with Direct3D 11. It is single-threaded: every
 // method must be called from the thread that owns the device context.
 //
@@ -285,9 +311,18 @@ type Renderer struct {
 	vb                                         uintptr // instance ring (ID3D11Buffer)
 	capQuads, head                             int     // ring capacity and write position, in quads
 
-	textures, srvs []uintptr
+	ids            texTable
+	textures, srvs []uintptr // by index
 	kinds          []TextureKind
 	texW, texH     []int
+	emptyTex       uintptr // 1×1 transparent texture bound for a freed id
+	emptySRV       uintptr
+	retiring       []retiredTex
+	fences         [ringSlots]frameFence
+	nextFence      int
+	serial         uint64 // frames encoded so far: the serial of the last one
+	done           uint64 // every frame up to this serial has finished on the GPU
+	qd             queryDesc
 
 	draws, totalDraws int
 
@@ -445,6 +480,10 @@ func (r *Renderer) init() error {
 	// Texture 0: 1×1 white RGBA texel that shape quads bind.
 	t0 := r.NewTexture(TexRGBA8, 1, 1)
 	r.Upload(t0, 0, 0, 1, 1, []byte{255, 255, 255, 255}, 4)
+	// The texture a quad naming a freed texture samples: one transparent texel.
+	r.emptyTex, r.emptySRV = r.newD3DTexture(TexRGBA8, 1, 1)
+	r.box = d3dBox{Right: 1, Bottom: 1, Back: 1}
+	win32.Com(r.ctx, vtContextUpdateSubresource, r.emptyTex, 0, uintptr(unsafe.Pointer(&r.box)), uintptr(unsafe.Pointer(&r.zero)), 4, 0)
 	return nil
 }
 
@@ -499,9 +538,99 @@ func (r *Renderer) growRing(quads int) error {
 	return nil
 }
 
-// NewTexture creates a w×h texture (setup path: it allocates). Contents are
-// undefined until Upload.
+// NewTexture creates a w×h texture. Contents are undefined until Upload. It
+// reuses the index of a freed texture under a new generation (see
+// FreeTexture); the table grows only past the most textures ever live at
+// once.
 func (r *Renderer) NewTexture(kind TextureKind, w, h int) TextureID {
+	tex, srv := r.newD3DTexture(kind, w, h)
+	i, id := r.ids.add()
+	if i == len(r.textures) {
+		r.textures = append(r.textures, 0)
+		r.srvs = append(r.srvs, 0)
+		r.kinds = append(r.kinds, 0)
+		r.texW = append(r.texW, 0)
+		r.texH = append(r.texH, 0)
+	}
+	r.textures[i], r.srvs[i], r.kinds[i], r.texW[i], r.texH[i] = tex, srv, kind, w, h
+	return id
+}
+
+// FreeTexture frees texture t. Its id stops resolving at once: Upload and
+// FreeTexture ignore it, and quads that still name it draw nothing. The
+// texture and its view are released when the event query of the last frame
+// encoded so far has signalled (see textures.go); FreeTexture itself never
+// waits. Freeing texture 0, an unknown id or an id already freed does
+// nothing.
+func (r *Renderer) FreeTexture(t TextureID) {
+	i, ok := r.ids.lookup(t)
+	if !ok || i == 0 {
+		return
+	}
+	r.retiring = append(r.retiring, retiredTex{r.textures[i], r.srvs[i], r.serial})
+	r.textures[i], r.srvs[i] = 0, 0
+	r.ids.remove(i)
+	r.collect()
+}
+
+// TextureCounts reports the live textures (texture 0 included) and the freed
+// ones whose release still waits for the GPU.
+func (r *Renderer) TextureCounts() (live, retiring int) { return r.ids.n, len(r.retiring) }
+
+// fenceDone reads an event query without waiting (and without flushing:
+// Present flushes). A failed read (a removed device) counts as done.
+func (r *Renderer) fenceDone(q uintptr) bool {
+	return win32.HR(win32.Com(r.ctx, vtContextGetData, q, 0, 0, asyncDoNotFlush)) != hrFalse
+}
+
+// collect advances done from the frame fences that have signalled, without
+// waiting, and releases the freed textures no unfinished frame may sample.
+// The immediate context runs its commands in order, so a signalled fence
+// completes every earlier frame too.
+func (r *Renderer) collect() {
+	for i := range r.fences {
+		f := &r.fences[i]
+		if f.query != 0 && r.fenceDone(f.query) {
+			r.done = max(r.done, f.serial)
+			win32.Release(f.query)
+			f.query = 0
+		}
+	}
+	n := 0
+	for _, x := range r.retiring {
+		if x.serial <= r.done {
+			win32.Release(x.srv)
+			win32.Release(x.tex)
+			continue
+		}
+		r.retiring[n] = x
+		n++
+	}
+	clear(r.retiring[n:])
+	r.retiring = r.retiring[:n]
+}
+
+// fence issues the event query of the frame just encoded. A slot whose
+// previous query has not signalled yet gives it up: the new one, later in
+// the same command stream, signals after it.
+func (r *Renderer) fence() {
+	f := &r.fences[r.nextFence]
+	if r.nextFence++; r.nextFence == ringSlots {
+		r.nextFence = 0
+	}
+	if f.query == 0 {
+		r.qd = queryDesc{Query: queryEvent}
+		r.out = 0
+		if hr := win32.HR(win32.Com(r.dev, vtDeviceCreateQuery, uintptr(unsafe.Pointer(&r.qd)), uintptr(unsafe.Pointer(&r.out)))); hr < 0 {
+			return // no fence: what this frame frees waits for a later one
+		}
+		f.query, r.out = r.out, 0
+	}
+	f.serial = r.serial
+	win32.Com(r.ctx, vtContextEnd, f.query)
+}
+
+func (r *Renderer) newD3DTexture(kind TextureKind, w, h int) (tex, srv uintptr) {
 	format := uint32(fmtRGBA8)
 	if kind == TexR8 {
 		format = fmtR8
@@ -514,39 +643,40 @@ func (r *Renderer) NewTexture(kind TextureKind, w, h int) TextureID {
 	if hr := win32.HR(win32.Com(r.dev, vtDeviceCreateTexture2D, uintptr(unsafe.Pointer(&r.td)), 0, uintptr(unsafe.Pointer(&r.out)))); hr < 0 {
 		panic(hresultError("CreateTexture2D", hr))
 	}
-	tex := r.out
+	tex = r.out
 	r.out = 0
 	if hr := win32.HR(win32.Com(r.dev, vtDeviceCreateShaderResourceView, tex, 0, uintptr(unsafe.Pointer(&r.out)))); hr < 0 {
 		panic(hresultError("CreateShaderResourceView", hr))
 	}
-	r.textures = append(r.textures, tex)
-	r.srvs = append(r.srvs, r.out)
-	r.kinds = append(r.kinds, kind)
-	r.texW = append(r.texW, w)
-	r.texH = append(r.texH, h)
-	r.out = 0
-	return TextureID(len(r.textures) - 1)
+	srv, r.out = r.out, 0
+	return tex, srv
 }
 
 // Upload copies a w×h block of pixels into texture t at (x, y). pixels[0] is
-// the block's first texel and stride is the byte distance between rows.
+// the block's first texel and stride is the byte distance between rows. An
+// id that was freed is ignored. UpdateSubresource is ordered with the
+// context's draws, so frames already submitted read the old contents.
 func (r *Renderer) Upload(t TextureID, x, y, w, h int, pixels []byte, stride int) {
 	if w <= 0 || h <= 0 {
 		return
 	}
+	i, ok := r.ids.lookup(t)
+	if !ok {
+		return
+	}
 	bpp := 1
-	if r.kinds[t] == TexRGBA8 {
+	if r.kinds[i] == TexRGBA8 {
 		bpp = 4
 	}
 	if stride < w*bpp || len(pixels) < (h-1)*stride+w*bpp {
 		panic("gpu: Upload: pixels too short for region")
 	}
-	if x < 0 || y < 0 || x+w > r.texW[t] || y+h > r.texH[t] {
+	if x < 0 || y < 0 || x+w > r.texW[i] || y+h > r.texH[i] {
 		panic("gpu: Upload: region outside the texture")
 	}
 	r.box = d3dBox{Left: uint32(x), Top: uint32(y), Right: uint32(x + w), Bottom: uint32(y + h), Back: 1}
 	r.pinned = &pixels[0] // force the backing array onto the heap while D3D reads it
-	win32.Com(r.ctx, vtContextUpdateSubresource, r.textures[t], 0, uintptr(unsafe.Pointer(&r.box)),
+	win32.Com(r.ctx, vtContextUpdateSubresource, r.textures[i], 0, uintptr(unsafe.Pointer(&r.box)),
 		uintptr(unsafe.Pointer(&pixels[0])), uintptr(stride), 0)
 	r.pinned = nil
 	runtime.KeepAlive(pixels)
@@ -569,6 +699,10 @@ func (r *Renderer) Encode(cmdBuf, target uintptr, width, height int, clear [4]fl
 		return
 	}
 	ctx := cmdBuf
+	r.serial++
+	if len(r.retiring) > 0 {
+		r.collect()
+	}
 	var quads []Quad
 	if list != nil {
 		quads = list.Quads
@@ -632,19 +766,21 @@ func (r *Renderer) Encode(cmdBuf, target uintptr, width, height int, clear [4]fl
 		}
 		runStart = i
 		bound = q.Tex
-		if int(bound) >= len(r.textures) {
-			bound = 0
-		}
 		r.bindTexture(ctx, bound)
 	}
 	if len(quads) > runStart {
 		r.draw(ctx, base+runStart, len(quads)-runStart)
 	}
+	r.fence()
 	runtime.KeepAlive(r)
 }
 
+// bindTexture binds texture t; a freed or unknown id binds the empty texture.
 func (r *Renderer) bindTexture(ctx uintptr, t TextureID) {
-	r.srvArg = r.srvs[t]
+	r.srvArg = r.emptySRV
+	if i, ok := r.ids.lookup(t); ok {
+		r.srvArg = r.srvs[i]
+	}
 	win32.Com(ctx, vtContextPSSetShaderResources, 0, 1, uintptr(unsafe.Pointer(&r.srvArg)))
 }
 
@@ -739,8 +875,16 @@ func (r *Renderer) Destroy() {
 		win32.Release(r.srvs[i])
 		win32.Release(r.textures[i])
 	}
-	r.textures, r.srvs, r.kinds, r.texW, r.texH = nil, nil, nil, nil, nil
-	for _, p := range [...]*uintptr{&r.offRTV, &r.offTex, &r.staging, &r.vb, &r.cbuf, &r.sampler, &r.rast, &r.blend, &r.layout, &r.ps, &r.vs} {
+	for _, x := range r.retiring {
+		win32.Release(x.srv)
+		win32.Release(x.tex)
+	}
+	for i := range r.fences {
+		win32.Release(r.fences[i].query)
+		r.fences[i].query = 0
+	}
+	r.textures, r.srvs, r.kinds, r.texW, r.texH, r.retiring = nil, nil, nil, nil, nil, nil
+	for _, p := range [...]*uintptr{&r.offRTV, &r.offTex, &r.staging, &r.vb, &r.cbuf, &r.sampler, &r.rast, &r.blend, &r.layout, &r.ps, &r.vs, &r.emptySRV, &r.emptyTex} {
 		win32.Release(*p)
 		*p = 0
 	}
