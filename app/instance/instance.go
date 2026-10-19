@@ -19,9 +19,10 @@
 // The first copy takes a lock that only one process can hold and that the OS
 // releases when the process ends, however it ends: flock on a file in the
 // application's data directory (paths.Data) on Unix, a named mutex on Windows.
-// It also listens on a socket in the same directory, which only the user can
-// open (directory 0700, socket 0600). A second copy fails to take the lock, so
-// it is the secondary, and Send connects to the socket.
+// It also listens on a channel only the user can open: a Unix-domain socket in
+// the same directory (directory 0700, socket 0600), or a named pipe on Windows.
+// A second copy fails to take the lock, so it is the secondary, and Send
+// connects to the channel.
 //
 // # What a request is
 //
@@ -30,9 +31,10 @@
 // yet, in a ring it reserved when it started. A request is accepted only when
 // it fits: the primary stores it, and then answers "accepted". When the ring is
 // full it answers "busy" and stores nothing. The secondary retries a busy (or
-// unanswered) request for Options.Timeout (2 s) and then returns ErrBusy (or
-// ErrNoAnswer). So the primary sees exactly the requests whose senders were told
-// "accepted", and every sender knows whether its request will be seen.
+// unanswered) request for Options.Timeout (2 s; at most 15 s) and then returns
+// ErrBusy (or ErrNoAnswer, or ErrUncertain). So the primary sees exactly the
+// requests whose senders were told "accepted", and every sender knows whether
+// its request will be seen, except after ErrNoAnswer and ErrUncertain (below).
 //
 // # Delivery
 //
@@ -45,26 +47,38 @@
 // # Lost answers
 //
 // Every Send gives its request an ID and repeats the same ID in its retries.
-// The primary remembers the IDs of the last 256 requests it accepted and answers a
-// repeat "accepted" without storing it again, so an answer lost on the way (the
-// connection broke after the request was stored) does not deliver the request
-// twice. The memory is bounded: a retry more than 256 accepted requests later is
-// taken for a new request. A Send that returns ErrNoAnswer is uncertain: the
-// primary may have stored the request and lost only the answer for the whole
-// timeout. ErrBusy and ErrRejected are certain: nothing was stored.
+// The primary remembers the ID of every request it accepts, for at least 30
+// seconds (longer than any Send keeps trying) and for as long as the request has
+// not been polled, and answers a repeat "accepted" without storing it again. So
+// an answer lost on the way (the connection broke after the request was stored)
+// does not deliver the request twice. The memory is bounded (1024 IDs): when it is
+// full of IDs that must still be kept, the primary answers "busy" rather than
+// forget one. What Send returns says what is known:
+//
+//   - nil: the primary stored the request.
+//   - ErrBusy, ErrRejected: nothing was stored.
+//   - ErrUncertain: an earlier attempt of this Send reached the primary and its
+//     answer never came, and a later one was told "busy"; the request may or may
+//     not have been stored.
+//   - ErrNoAnswer: no answer came before the timeout; the request may have been
+//     stored and only the answer lost.
 //
 // # Who may connect
 //
-// The directory for the lock and the socket must be the user's own and private:
-// a real directory (not a link) owned by this user, mode 0700 (tightened when
-// wider, and an error when that fails), with no parent that other users can
-// write unless it has the sticky bit, like /tmp. Otherwise Acquire returns
-// ErrUntrusted and changes nothing. The lock file is opened without following
-// links and must be a regular file of this user with no other names; it is only
-// then locked, re-moded or written. The socket is made in that directory and given
-// mode 0600. The primary also asks the system who is on the other end of every
-// connection (SO_PEERCRED on Linux, getpeereid on macOS) and serves only this
-// user's processes; if it cannot find out, it refuses.
+// On Unix the directory for the lock and the socket must be the user's own and
+// private: a real directory (not a link) owned by this user, mode 0700
+// (tightened when wider, and an error when that fails), and none of its ancestors
+// may be used to swap it for something else: every ancestor, up to the root, must
+// belong to this user or to root and must not be writable by group or others
+// unless it has the sticky bit (like /tmp). Whatever its group: on macOS every user
+// is in "staff". Symbolic links are resolved once, and the lock, the socket and
+// every later operation use only the resolved path; a link retargeted afterwards
+// changes nothing. If any check fails Acquire returns ErrUntrusted and changes
+// nothing. The lock file is opened without following links and must be a regular
+// file of this user with no other names; it is only then locked, re-moded or
+// written. The socket is given mode 0600. The primary also asks the system who is
+// on the other end of every connection (SO_PEERCRED on Linux, getpeereid on macOS)
+// and serves only this user's processes; if it cannot find out, it refuses.
 //
 // # Crashes
 //
@@ -77,17 +91,17 @@
 //
 // # Windows
 //
-// The lock is a named mutex in the session's namespace. The request channel is
-// a Unix-domain socket in the application's data directory (Windows 10 version
-// 1803 and later), which that directory's access control list limits to the user,
-// instead of a named pipe: it is the same code and the same tests as on the other
-// systems. Two limits follow. The directory is checked for its owner (this user,
-// the Administrators group or SYSTEM) but its access control list is not read; the
-// directories the framework chooses are under the profile, whose list excludes
-// other users, and a directory given in Options.Dir is the caller's to protect.
-// And the primary cannot check who connects (the system call for it,
-// SIO_AF_UNIX_GETPEERPID, exists only from Windows 11 and Server 2022), so the
-// directory is what keeps other users out.
+// The lock is a named mutex in the session's namespace, and the channel is a
+// named pipe, \\.\pipe\gnui-instance-<hash of the id and the user's SID>. The pipe
+// is created with FILE_FLAG_FIRST_PIPE_INSTANCE, so a process that made a pipe of
+// that name first makes Acquire fail instead of receiving the requests, with
+// PIPE_REJECT_REMOTE_CLIENTS, and with a security descriptor that grants access to
+// the current user's SID only. The primary looks up the user of every client
+// (GetNamedPipeClientProcessId, then the process token) and serves only the same
+// SID; a secondary does the same for the server before it sends anything. No
+// directory is used on Windows: Options.Dir is not read as a path and only
+// separates one instance from another (tests use it), so its permissions do not
+// matter.
 package instance
 
 import (
@@ -98,9 +112,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"os"
-	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -111,7 +123,7 @@ import (
 
 var (
 	// ErrBusy is Send's error when the primary answered "busy" (its queue was
-	// full) until the timeout.
+	// full) until the timeout. It means the request was not stored.
 	ErrBusy = errors.New("instance: the running copy is busy")
 	// ErrNoAnswer is Send's error when the primary did not answer: nothing
 	// listened on its socket, or it accepted the connection and said nothing,
@@ -120,6 +132,10 @@ var (
 	// ErrRejected is Send's error when the primary refused the request as
 	// malformed or too large. Retrying the same request cannot help.
 	ErrRejected = errors.New("instance: the running copy rejected the request")
+	// ErrUncertain is Send's error when an earlier attempt of the same Send
+	// reached the primary without getting an answer, and a later one was told
+	// that the primary is busy: the request may or may not have been stored.
+	ErrUncertain = errors.New("instance: it is not known whether the running copy took the request")
 	// ErrUntrusted is Acquire's error when the directory for the lock and the
 	// socket, or the lock file in it, is not private to this user: it is a link
 	// or belongs to someone else, its mode cannot be made 0700, or a parent of
@@ -130,13 +146,15 @@ var (
 // Options configures Acquire. The zero value is usable.
 type Options struct {
 	// Dir is the directory for the lock file and the socket. "" means
-	// paths.Data(id). It is created with mode 0700.
+	// paths.Data(id). It is created with mode 0700. It is not used on Windows
+	// except to tell instances apart (see the package comment).
 	Dir string
 	// Queue is how many accepted requests the primary holds until they are
 	// polled. 0 means 16.
 	Queue int
 	// Timeout is how long Send keeps trying when the primary is busy or silent.
-	// 0 means 2 s.
+	// 0 means 2 s; more than 15 s is taken as 15 s (the primary remembers a
+	// request's ID for 30).
 	Timeout time.Duration
 }
 
@@ -172,8 +190,33 @@ type wire struct {
 	Dir  string   `json:"dir"`
 }
 
-// dedupSize is how many accepted request IDs the primary remembers.
-const dedupSize = 256
+// The primary's memory of accepted request IDs. Variables so that tests can
+// shrink them.
+var (
+	// dedupSize is how many IDs it holds.
+	dedupSize = 1024
+	// dedupHorizon is the least time an ID is kept: longer than the longest
+	// time Send keeps retrying (maxTimeout) with a margin.
+	dedupHorizon = 30 * time.Second
+	// nowFn is the clock for it.
+	nowFn = time.Now
+)
+
+// maxTimeout caps Options.Timeout.
+const maxTimeout = 15 * time.Second
+
+// A conn is one connection, in either direction. A listener accepts them.
+// Unix-domain sockets and Windows named pipes both fit.
+type (
+	conn interface {
+		io.ReadWriteCloser
+		SetDeadline(time.Time) error
+	}
+	listener interface {
+		Accept() (conn, error)
+		Close() error
+	}
+)
 
 // Acquire becomes the primary instance of the application id, or finds that
 // another process is: exactly one of primary and secondary is non-nil when err
@@ -183,52 +226,35 @@ func Acquire(id string) (*Primary, *Secondary, error) { return AcquireWith(id, O
 
 // AcquireWith is Acquire with options.
 func AcquireWith(id string, o Options) (*Primary, *Secondary, error) {
+	if !paths.ValidID(id) {
+		return nil, nil, fmt.Errorf("%w: %q", paths.ErrInvalidID, id)
+	}
 	if o.Queue <= 0 {
 		o.Queue = 16
 	}
 	if o.Timeout <= 0 {
 		o.Timeout = 2 * time.Second
 	}
-	dir := o.Dir
-	if dir == "" {
-		var err error
-		if dir, err = paths.Data(id); err != nil {
-			return nil, nil, err
-		}
-	}
-	if _, err := paths.Ensure(dir); err != nil {
-		return nil, nil, err
-	}
-	if err := checkPrivate(dir); err != nil {
-		return nil, nil, err
-	}
-	sock, err := socketPath(dir)
+	o.Timeout = min(o.Timeout, maxTimeout)
+	lockKey, addr, err := setup(id, o)
 	if err != nil {
 		return nil, nil, err
 	}
-	lk, got, err := acquireLock(filepath.Join(dir, "instance.lock"))
+	lk, got, err := acquireLock(lockKey)
 	if err != nil {
 		return nil, nil, err
 	}
 	if !got {
-		return nil, &Secondary{sock: sock, timeout: o.Timeout}, nil
+		return nil, &Secondary{addr: addr, timeout: o.Timeout}, nil
 	}
-	// The lock is ours: whatever socket file is there belongs to a copy that is gone.
-	os.Remove(sock)
-	ln, err := net.Listen("unix", sock)
+	// The lock is ours: whatever is left at the address belongs to a copy that is gone.
+	ln, err := listen(addr)
 	if err != nil {
 		lk.release()
-		return nil, nil, fmt.Errorf("instance: listening on %s: %w", sock, err)
+		return nil, nil, fmt.Errorf("instance: listening on %s: %w", addr, err)
 	}
-	// The directory is private (checked above), so no one else could reach the
-	// socket while it had the mode the umask gave it.
-	if err := os.Chmod(sock, 0o600); err != nil {
-		ln.Close()
-		lk.release()
-		return nil, nil, fmt.Errorf("instance: setting the mode of %s: %w", sock, err)
-	}
-	p := &Primary{ln: ln, lk: lk, sock: sock, ring: make([]Request, 0, o.Queue), limit: o.Queue,
-		seen: make(map[string]struct{}, dedupSize), seenOrder: make([]string, 0, dedupSize)}
+	p := &Primary{ln: ln, lk: lk, addr: addr, ring: make([]Request, 0, o.Queue), limit: o.Queue,
+		seen: make(map[string]*seenEntry, dedupSize)}
 	p.wg.Add(1)
 	go p.serve()
 	return p, nil, nil
@@ -236,32 +262,43 @@ func AcquireWith(id string, o Options) (*Primary, *Secondary, error) {
 
 // Primary is the instance that holds the lock and takes requests.
 type Primary struct {
-	ln   net.Listener
+	ln   listener
 	lk   lock
-	sock string
+	addr string
 
 	mu     sync.Mutex
-	ring   []Request // accepted, not yet polled; never grows past limit
+	ring   []Request    // accepted, not yet polled; never grows past limit
+	ringE  []*seenEntry // the IDs of the requests in ring
 	limit  int
 	closed bool
-	// The IDs of the last dedupSize accepted requests, oldest first in
-	// seenOrder: a retry of one of them is answered "accepted" and stored once.
-	seen      map[string]struct{}
-	seenOrder []string
+	// The IDs of accepted requests, oldest first in order: a repeat of one of
+	// them is answered "accepted" and stored once.
+	seen  map[string]*seenEntry
+	order []*seenEntry
 
 	serial atomic.Uint32
 	once   sync.Once
 	wg     sync.WaitGroup
 }
 
-// wake is platform.Wake; peerHook, which replaces the question about the socket peer's user, and dropAcks, which
-// makes the primary close a connection after accepting without answering, are
-// replaced or set by tests.
+// A seenEntry is the memory of one accepted request.
+type seenEntry struct {
+	id     string
+	at     time.Time
+	polled bool // no longer in the ring
+}
+
+// euid is the user whose files and peers are trusted.
+func euid() int { return os.Geteuid() + int(euidShift.Load()) }
+
+// wake is platform.Wake; peerHook replaces the question about who is on the other
+// end of a connection, and dropAcks makes the primary close a connection after
+// accepting without answering: tests set them.
 var (
-	euid     = os.Geteuid // the user whose files and peers are trusted
-	wake     = platform.Wake
-	peerHook atomic.Pointer[func(net.Conn) (uint32, bool, error)]
-	dropAcks atomic.Int32
+	euidShift atomic.Int32 // tests add to the user id, to be taken for another user
+	wake      = platform.Wake
+	peerHook  atomic.Pointer[func(conn) error]
+	dropAcks  atomic.Int32
 )
 
 func (p *Primary) serve() {
@@ -281,7 +318,7 @@ func (p *Primary) serve() {
 				p.handle(c)
 			}()
 		default: // too many at once: tell the sender to come back
-			c.SetWriteDeadline(time.Now().Add(ioTimeout))
+			c.SetDeadline(time.Now().Add(ioTimeout))
 			c.Write([]byte{replyBusy})
 			c.Close()
 		}
@@ -289,12 +326,12 @@ func (p *Primary) serve() {
 }
 
 // handle reads one request and answers it.
-func (p *Primary) handle(c net.Conn) {
+func (p *Primary) handle(c conn) {
 	defer c.Close()
 	// Only this user's processes are served. Where the system cannot say who is
 	// on the other end, the private directory is what keeps others out; where it
 	// can say and fails to, the connection is refused.
-	if uid, ok, err := peerOf(c); ok && (err != nil || int(uid) != euid()) {
+	if peerOf(c) != nil {
 		return
 	}
 	c.SetDeadline(time.Now().Add(ioTimeout))
@@ -330,8 +367,11 @@ func readRequest(r io.Reader) (id string, req Request, ok bool) {
 
 // offer stores the request if it fits. The answer is given only after the
 // request is in the ring. A request whose ID was accepted before is a retry of
-// one whose answer was lost: it is answered "accepted" and not stored again.
+// one whose answer was lost: it is answered "accepted" and not stored again. An
+// ID is forgotten only when it is old enough and its request has been polled; if
+// the table is full of IDs that must stay, the answer is "busy".
 func (p *Primary) offer(id string, r Request) byte {
+	now := nowFn()
 	p.mu.Lock()
 	if _, dup := p.seen[id]; dup {
 		p.mu.Unlock()
@@ -341,13 +381,21 @@ func (p *Primary) offer(id string, r Request) byte {
 		p.mu.Unlock()
 		return replyBusy
 	}
-	p.ring = append(p.ring, r)
-	if len(p.seenOrder) == dedupSize {
-		delete(p.seen, p.seenOrder[0])
-		p.seenOrder = append(p.seenOrder[:0], p.seenOrder[1:]...)
+	for len(p.order) >= dedupSize {
+		oldest := p.order[0]
+		if !oldest.polled || now.Sub(oldest.at) < dedupHorizon {
+			p.mu.Unlock()
+			return replyBusy
+		}
+		delete(p.seen, oldest.id)
+		p.order[0] = nil
+		p.order = p.order[1:]
 	}
-	p.seen[id] = struct{}{}
-	p.seenOrder = append(p.seenOrder, id)
+	e := &seenEntry{id: id, at: now}
+	p.seen[id] = e
+	p.order = append(p.order, e)
+	p.ring = append(p.ring, r)
+	p.ringE = append(p.ringE, e)
 	p.mu.Unlock()
 	p.serial.Add(1)
 	wake()
@@ -359,8 +407,12 @@ func (p *Primary) offer(id string, r Request) byte {
 func (p *Primary) Poll(dst []Request) []Request {
 	p.mu.Lock()
 	dst = append(dst, p.ring...)
+	for _, e := range p.ringE {
+		e.polled = true // from now on its ID may be forgotten, after the horizon
+	}
 	clear(p.ring)
-	p.ring = p.ring[:0]
+	clear(p.ringE)
+	p.ring, p.ringE = p.ring[:0], p.ringE[:0]
 	p.mu.Unlock()
 	return dst
 }
@@ -376,9 +428,9 @@ func (p *Primary) Close() error {
 		p.mu.Lock()
 		p.closed = true
 		p.mu.Unlock()
-		p.ln.Close() // removes the socket file as well, on Unix
+		p.ln.Close()
 		p.wg.Wait()
-		os.Remove(p.sock)
+		removeEndpoint(p.addr)
 		p.lk.release()
 	})
 	return nil
@@ -386,13 +438,14 @@ func (p *Primary) Close() error {
 
 // Secondary is a copy that found another one running.
 type Secondary struct {
-	sock    string
+	addr    string
 	timeout time.Duration
 }
 
 // Send hands args (and the working directory) to the primary. It returns nil
-// once the primary has accepted the request, and ErrBusy, ErrNoAnswer or
-// ErrRejected otherwise (see the package comment). It blocks for up to the
+// once the primary has accepted the request, and ErrBusy, ErrNoAnswer,
+// ErrUncertain or ErrRejected otherwise (see the package comment for what each
+// says about whether the request was stored). It blocks for up to the
 // timeout: call it from main before any UI, or from a worker.
 func (s *Secondary) Send(args []string) error {
 	dir, _ := os.Getwd()
@@ -412,16 +465,22 @@ func (s *Secondary) Send(args []string) error {
 
 	deadline := time.Now().Add(s.timeout)
 	last := ErrNoAnswer
+	maybe := false // an attempt delivered the request and got no answer
 	for wait := 25 * time.Millisecond; ; wait = min(wait*2, 200*time.Millisecond) {
 		if time.Until(deadline) <= 0 {
 			return last // the sleep used up the time: report the last answer, not a new one
 		}
-		reply, err := s.try(frame, deadline)
+		reply, sent, err := s.try(frame, deadline)
+		if sent && err != nil {
+			maybe = true
+		}
 		switch {
 		case err == nil && reply == replyAccepted:
 			return nil
 		case err == nil && reply == replyRejected:
 			return ErrRejected
+		case err == nil && maybe:
+			last = ErrUncertain
 		case err == nil:
 			last = ErrBusy
 		default:
@@ -435,32 +494,36 @@ func (s *Secondary) Send(args []string) error {
 	}
 }
 
-// try makes one attempt: connect, send, read the one-byte answer.
-func (s *Secondary) try(frame []byte, deadline time.Time) (byte, error) {
+// try makes one attempt: connect, send, read the one-byte answer. sent says the
+// request was written to the connection, so the primary may have it whatever
+// happened next.
+func (s *Secondary) try(frame []byte, deadline time.Time) (reply byte, sent bool, err error) {
 	limit := min(time.Until(deadline), ioTimeout)
 	if limit <= 0 {
-		return 0, ErrNoAnswer
+		return 0, false, ErrNoAnswer
 	}
-	c, err := net.DialTimeout("unix", s.sock, limit)
+	c, err := dial(s.addr, limit)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	defer c.Close()
 	c.SetDeadline(time.Now().Add(limit))
 	if _, err := c.Write(frame); err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	var b [1]byte
 	if _, err := io.ReadFull(c, b[:]); err != nil {
-		return 0, err
+		return 0, true, err
 	}
-	return b[0], nil
+	return b[0], true, nil
 }
 
-// peerOf asks who is on the other end of c: peerUID, or the test hook.
-func peerOf(c net.Conn) (uint32, bool, error) {
+// peerOf asks whether the process on the other end of c is this user's: nil if
+// it is (or if the system cannot tell and the channel's own protection is what
+// keeps others out), an error to refuse. A test can replace the question.
+func peerOf(c conn) error {
 	if h := peerHook.Load(); h != nil {
 		return (*h)(c)
 	}
-	return peerUID(c)
+	return peerCheck(c)
 }

@@ -135,10 +135,34 @@ func openTrash(root *tdir, strict bool) (*trashDirs, error) {
 	return &trashDirs{files, info}, nil
 }
 
+// afterParentOpen is called once the source's parent directory is open; tests use
+// it to swap a link on the way to p.
+var afterParentOpen = func() {}
+
 // trashXDG moves p (absolute, existing) to the trash. dataHome is the home
 // data directory; now stamps the deletion date.
+//
+// The directory that holds p is opened once, and that descriptor is all that is
+// used for p afterwards: it is checked on it (p must not be the root or the home
+// directory, compared by device and inode, the last component not followed) and
+// moved out of it. A link in the path to p that is replaced after this point
+// changes nothing.
 func trashXDG(p, dataHome string, uid int, now time.Time) error {
-	err := trashHome(p, dataHome, now)
+	if filepath.Dir(p) == p {
+		return ErrInvalid
+	}
+	src, err := openDir(filepath.Dir(p), true)
+	if err != nil {
+		return err
+	}
+	defer src.close()
+	afterParentOpen()
+	if prot, err := protectedAt(src, filepath.Base(p)); err != nil {
+		return err
+	} else if prot {
+		return ErrInvalid
+	}
+	err = trashHome(p, src, dataHome, now)
 	if !errors.Is(err, syscall.EXDEV) {
 		return err
 	}
@@ -157,7 +181,7 @@ func trashXDG(p, dataHome string, uid int, now time.Time) error {
 	}
 	defer topd.close()
 	if t, aerr := openSharedTrash(topd, uid); aerr == nil {
-		err := trashInto(p, t, rel, now)
+		err := trashInto(p, src, t, rel, now)
 		t.close()
 		if err == nil {
 			return nil
@@ -173,10 +197,10 @@ func trashXDG(p, dataHome string, uid int, now time.Time) error {
 		return err
 	}
 	defer t.close()
-	return trashInto(p, t, rel, now)
+	return trashInto(p, src, t, rel, now)
 }
 
-func trashHome(p, dataHome string, now time.Time) error {
+func trashHome(p string, src *tdir, dataHome string, now time.Time) error {
 	if err := os.MkdirAll(dataHome, 0o700); err != nil {
 		return err
 	}
@@ -195,7 +219,7 @@ func trashHome(p, dataHome string, now time.Time) error {
 		return err
 	}
 	defer t.close()
-	return trashInto(p, t, "", now)
+	return trashInto(p, src, t, "", now)
 }
 
 // openSharedTrash opens $topdir/.Trash/$uid when the administrator's
@@ -275,19 +299,34 @@ func trashName(base string, n int) string {
 	return base
 }
 
+// protectedAt says whether the entry name of parent is the root of its file
+// system or the home directory, by device and inode.
+func protectedAt(parent *tdir, name string) (bool, error) {
+	st, err := parent.statat(name)
+	if err != nil {
+		return false, err
+	}
+	targets := []string{"/"}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		targets = append(targets, home)
+	}
+	for _, t := range targets {
+		var ts syscall.Stat_t
+		if syscall.Stat(t, &ts) == nil && ts.Dev == st.Dev && ts.Ino == st.Ino {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // trashInto moves p into the trash t. recorded is the path to write in the info
 // file: "" means p itself (home trash), otherwise a path relative to the volume's
 // top. The original name is kept there whatever the file is called in the trash.
-func trashInto(p string, t *trashDirs, recorded string, now time.Time) error {
+func trashInto(p string, src *tdir, t *trashDirs, recorded string, now time.Time) error {
 	if recorded == "" {
 		recorded = p
 	}
 	body := "[Trash Info]\nPath=" + (&url.URL{Path: recorded}).EscapedPath() + "\nDeletionDate=" + now.Format("2006-01-02T15:04:05") + "\n"
-	src, err := openDir(filepath.Dir(p), true)
-	if err != nil {
-		return err
-	}
-	defer src.close()
 	base := filepath.Base(p)
 
 	for n := 1; n <= 10000; n++ {

@@ -15,6 +15,8 @@ import (
 type tdir struct {
 	fd   int
 	path string // for messages, and for the emulation
+	// follow is set when the last component of path was allowed to be a link.
+	follow bool
 }
 
 // openDir opens the directory at an absolute path. With follow unset the last
@@ -32,7 +34,7 @@ func openDir(path string, follow bool) (*tdir, error) {
 		if err != nil {
 			return nil, err
 		}
-		return &tdir{fd: fd, path: path}, nil
+		return &tdir{fd: fd, path: path, follow: follow}, nil
 	}
 }
 

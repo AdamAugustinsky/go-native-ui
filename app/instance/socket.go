@@ -1,3 +1,5 @@
+//go:build unix
+
 package instance
 
 import (
@@ -33,7 +35,8 @@ func socketPath(dir string) (string, error) {
 	if err := os.MkdirAll(short, 0o700); err != nil {
 		return "", err
 	}
-	if err := checkPrivate(short); err != nil {
+	short, err := checkPrivate(short)
+	if err != nil {
 		return "", err
 	}
 	p = filepath.Join(short, "s")

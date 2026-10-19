@@ -21,7 +21,11 @@ func (d *tdir) same() error {
 	if err := syscall.Fstat(d.fd, &a); err != nil {
 		return err
 	}
-	if err := syscall.Lstat(d.path, &b); err != nil {
+	stat := syscall.Lstat
+	if d.follow {
+		stat = syscall.Stat
+	}
+	if err := stat(d.path, &b); err != nil {
 		return err
 	}
 	if a.Dev != b.Dev || a.Ino != b.Ino {
@@ -71,4 +75,13 @@ func (d *tdir) renameInto(src *tdir, srcName, dstName string) error {
 		return syscall.EEXIST
 	}
 	return os.Rename(filepath.Join(src.path, srcName), to)
+}
+
+// statat is lstat of the entry name of d.
+func (d *tdir) statat(name string) (st syscall.Stat_t, err error) {
+	if err = d.same(); err != nil {
+		return
+	}
+	err = syscall.Lstat(filepath.Join(d.path, name), &st)
+	return
 }

@@ -23,11 +23,11 @@ var (
 const errAlreadyExists = syscall.Errno(183)
 
 // acquireLock creates a named mutex in the session's namespace, named after
-// the lock file's path. got is false when it already exists, which means another
+// key (see setup). got is false when it already exists, which means another
 // process (or another call in this one) holds it. The OS closes the handle when
 // the process ends, however it ends, and the mutex goes with its last handle.
-func acquireLock(path string) (lk lock, got bool, err error) {
-	sum := sha256.Sum256([]byte(path))
+func acquireLock(key string) (lk lock, got bool, err error) {
+	sum := sha256.Sum256([]byte(key))
 	name, err := syscall.UTF16PtrFromString(`Local\gnui-instance-` + hex.EncodeToString(sum[:12]))
 	if err != nil {
 		return nil, false, err

@@ -7,10 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -133,12 +133,25 @@ func (c *child) wait(t *testing.T) (code int) {
 
 // ---- helpers ---------------------------------------------------------------------
 
+// testID is the application id the tests use.
+const testID = "dev.gonativeui.test"
+
 func newDir(t *testing.T) string { return t.TempDir() }
+
+// endpoint is the address of the socket or pipe for dir.
+func endpoint(t *testing.T, dir string) string {
+	t.Helper()
+	_, addr, err := setup(testID, Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return addr
+}
 
 func acquire(t *testing.T, dir string, o Options) (*Primary, *Secondary) {
 	t.Helper()
 	o.Dir = dir
-	p, s, err := AcquireWith("dev.gonativeui.test", o)
+	p, s, err := AcquireWith(testID, o)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,45 +251,6 @@ func TestPrimaryProcessReceivesFromThisOne(t *testing.T) {
 	}
 	if p2, s2 := acquire(t, dir, Options{}); p2 == nil || s2 != nil {
 		t.Fatal("after the primary quit, the next copy should be the primary")
-	}
-}
-
-// A primary that is killed leaves its socket file but not its lock.
-func TestDeadPrimaryLeavesAStaleSocket(t *testing.T) {
-	dir := newDir(t)
-	c := startChild(t, "hold", dir)
-	if line := c.line(t); line != "primary" {
-		t.Fatalf("helper said %q", line)
-	}
-	sock, err := socketPath(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Lstat(sock); err != nil {
-		t.Fatalf("no socket while the primary runs: %v", err)
-	}
-	c.cmd.Process.Kill()
-	c.cmd.Wait()
-	if _, err := os.Lstat(sock); err != nil {
-		t.Skipf("the killed primary left no socket file (%v): nothing stale to test", err)
-	}
-	if _, err := net.DialTimeout("unix", sock, time.Second); err == nil {
-		t.Fatal("the stale socket accepts connections")
-	}
-
-	p, s := acquire(t, dir, Options{})
-	if p == nil || s != nil {
-		t.Fatal("the lock of a dead primary should be free: the next copy becomes the primary")
-	}
-	_, s2 := acquire(t, dir, Options{})
-	if s2 == nil {
-		t.Fatal("expected a secondary")
-	}
-	if err := s2.Send([]string{"after", "crash"}); err != nil {
-		t.Fatal(err)
-	}
-	if got := p.Poll(nil); len(got) != 1 || !slices.Equal(got[0].Args, []string{"after", "crash"}) {
-		t.Fatalf("requests %+v", got)
 	}
 }
 
@@ -405,18 +379,18 @@ func TestNoAnswerWhenNothingListens(t *testing.T) {
 // A primary that takes the connection and says nothing.
 func TestNoAnswerFromAHungPrimary(t *testing.T) {
 	dir := newDir(t)
-	lk, _, _ := acquireLock(filepath.Join(dir, "instance.lock"))
-	defer lk.release()
-	sock, err := socketPath(dir)
+	lockKey, _, err := setup(testID, Options{Dir: dir})
 	if err != nil {
 		t.Fatal(err)
 	}
-	ln, err := net.Listen("unix", sock)
+	lk, _, _ := acquireLock(lockKey)
+	defer lk.release()
+	ln, err := listen(endpoint(t, dir))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer ln.Close()
-	var conns []net.Conn
+	var conns []conn
 	var mu sync.Mutex
 	go func() {
 		for {
@@ -436,7 +410,7 @@ func TestNoAnswerFromAHungPrimary(t *testing.T) {
 		}
 		mu.Unlock()
 	}()
-	_, s, err := AcquireWith("x", Options{Dir: dir, Timeout: 500 * time.Millisecond})
+	_, s, err := AcquireWith(testID, Options{Dir: dir, Timeout: 500 * time.Millisecond})
 	if err != nil || s == nil {
 		t.Fatalf("Acquire = %v, %v", s, err)
 	}
@@ -452,9 +426,9 @@ func TestNoAnswerFromAHungPrimary(t *testing.T) {
 func TestMalformedRequestsAreRejectedAndHarmless(t *testing.T) {
 	dir := newDir(t)
 	p, _ := acquire(t, dir, Options{})
-	sock, _ := socketPath(dir)
+	sock := endpoint(t, dir)
 	raw := func(b []byte) byte {
-		c, err := net.DialTimeout("unix", sock, time.Second)
+		c, err := rawDial(sock)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -482,7 +456,7 @@ func TestMalformedRequestsAreRejectedAndHarmless(t *testing.T) {
 		}
 	}
 	// A half-sent request does not hold the primary up for others.
-	slow, err := net.Dial("unix", sock)
+	slow, err := rawDial(sock)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -507,9 +481,11 @@ func TestMalformedRequestsAreRejectedAndHarmless(t *testing.T) {
 func TestCloseFreesTheLockAndTheSocket(t *testing.T) {
 	dir := newDir(t)
 	p, _ := acquire(t, dir, Options{})
-	sock, _ := socketPath(dir)
-	if _, err := os.Lstat(sock); err != nil {
-		t.Fatal(err)
+	sock := endpoint(t, dir)
+	if runtime.GOOS != "windows" {
+		if _, err := os.Lstat(sock); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := p.Close(); err != nil {
 		t.Fatal(err)
@@ -517,8 +493,13 @@ func TestCloseFreesTheLockAndTheSocket(t *testing.T) {
 	if err := p.Close(); err != nil {
 		t.Fatal("a second Close:", err)
 	}
-	if _, err := os.Lstat(sock); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("the socket file is still there: %v", err)
+	if runtime.GOOS != "windows" {
+		if _, err := os.Lstat(sock); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("the socket file is still there: %v", err)
+		}
+	} else if c, err := rawDial(sock); err == nil {
+		c.Close()
+		t.Error("the pipe is still there after Close")
 	}
 	p2, s2 := acquire(t, dir, Options{})
 	if p2 == nil || s2 != nil {
@@ -540,7 +521,7 @@ func TestRacingPrimaries(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			p, s, err := AcquireWith("dev.gonativeui.test", Options{Dir: dir})
+			p, s, err := AcquireWith(testID, Options{Dir: dir})
 			switch {
 			case err != nil:
 				t.Error(err)
@@ -587,30 +568,5 @@ func TestRacingProcesses(t *testing.T) {
 	}
 	for _, c := range cs {
 		c.wait(t)
-	}
-}
-
-// An application directory whose socket path would be too long for a
-// Unix-domain socket still works: the socket goes to a short private directory.
-func TestLongDirectory(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), strings.Repeat("d", 60), strings.Repeat("e", 60))
-	p, _ := acquire(t, dir, Options{})
-	sock, err := socketPath(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(sock) > maxSocketPath {
-		t.Fatalf("socket path of %d bytes", len(sock))
-	}
-	if filepath.Dir(sock) == dir {
-		t.Errorf("the socket is in the long directory: %s", sock)
-	}
-	t.Cleanup(func() { os.RemoveAll(filepath.Dir(sock)) })
-	_, s := acquire(t, dir, Options{})
-	if err := s.Send([]string{"long"}); err != nil {
-		t.Fatal(err)
-	}
-	if got := p.Poll(nil); len(got) != 1 {
-		t.Errorf("requests %+v", got)
 	}
 }

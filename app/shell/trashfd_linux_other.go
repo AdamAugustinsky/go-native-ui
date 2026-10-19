@@ -2,6 +2,9 @@
 
 package shell
 
-// sysRenameat2 is 0 where its number is not known here: the move then checks for
-// the name first and uses renameat.
-const sysRenameat2 = 0
+// 0 where the numbers are not known here. Moving a file into the trash then
+// fails (it never falls back to something that could replace a file).
+const (
+	sysRenameat2 = 0
+	sysLinkat    = 0
+)

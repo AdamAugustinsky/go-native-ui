@@ -177,6 +177,14 @@ func Reveal(paths []string) error {
 // Trash moves a file or folder to the trash, where the user can recover it. It
 // does not follow a symbolic link (the link is trashed). It refuses a file
 // system root and the user's home folder.
+//
+// On Linux the check is made on the folder that holds the file, opened once: the
+// entry is compared with the root and the home folder by device and inode on that
+// descriptor, and the same descriptor is used to move it, so a link in the path
+// that is replaced meanwhile changes nothing. On macOS and Windows the system
+// moves a file given by its path (NSFileManager, SHFileOperation), so the check
+// before the call is by identity but cannot be tied to the call: a folder on the
+// path swapped by someone who can write to it in that instant is not caught.
 func Trash(path string) error {
 	abs, err := existing("trash", path)
 	if err != nil {
