@@ -162,6 +162,10 @@ type DialogResult struct {
 	// Paths are the chosen files or folders, as absolute paths; empty unless
 	// a panel was answered. They are owned by the caller.
 	Paths []string
+	// Err is set by the application layer (package app) when a dialog it had
+	// queued could not be shown; the outcome is then DialogCancelled. Results
+	// decoded from an EvDialog never have one.
+	Err error
 }
 
 // The layout of an EvDialog: Tag is the ticket; Code the button index of an
@@ -204,8 +208,9 @@ func (w *Window) DialogResult(e Event) DialogResult {
 	return r
 }
 
-// check reports whether an alert spec can be shown.
-func (s *AlertSpec) check() error {
+// Validate reports whether the spec can be shown: it has 1 to MaxAlertButtons
+// buttons and its destructive indexes name buttons. The error wraps ErrDialogSpec.
+func (s *AlertSpec) Validate() error {
 	if len(s.Buttons) == 0 || len(s.Buttons) > MaxAlertButtons {
 		return fmt.Errorf("%w: %d buttons (want 1 to %d)", ErrDialogSpec, len(s.Buttons), MaxAlertButtons)
 	}

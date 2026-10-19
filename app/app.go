@@ -125,13 +125,17 @@ type App struct {
 
 	// Cursor regions and the titlebar drag map handed to the window after
 	// every frame (regions.go); the buffers are reused.
-	curUI   []ui.CursorRegion
-	curPlat []platform.CursorRegion
-	dragUI  []ui.DragRegion
-	dragPl  []platform.DragRegion
-	tipUI   []ui.TooltipRegion // native tooltip regions (regions.go), reused
-	tipPl   []platform.TooltipRegion
-	dlg     []platform.DialogResult // dialog results not taken yet (dialogs.go)
+	curUI    []ui.CursorRegion
+	curPlat  []platform.CursorRegion
+	dragUI   []ui.DragRegion
+	dragPl   []platform.DragRegion
+	tipUI    []ui.TooltipRegion // native tooltip regions (regions.go), reused
+	tipPl    []platform.TooltipRegion
+	dlg      []platform.DialogResult // dialog results not taken yet (dialogs.go)
+	dlgQ     []pendingDialog         // dialogs queued for the end of the frame
+	dlgShown []shownDialog           // dialogs on screen
+	dlgSeq   platform.DialogTicket   // the last ticket given
+	dlgT     dialogTarget            // the window's dialogs; tests set a fake
 
 	wakeAt      int64 // platform.Now at which the UI wants a frame although nothing animates (ui.Context.WakeAfter); 0 = none
 	chromeDark  bool  // the mode last given to Win.SetDarkChrome
@@ -420,6 +424,7 @@ func (a *App) loop() error {
 		if a.demo != nil {
 			a.demo.run(a)
 		}
+		a.flushDialogs() // dialogs asked for outside a frame (an event handler, a hook)
 		if a.hook != nil {
 			a.hook()
 		}
@@ -504,6 +509,7 @@ func (a *App) present(inHandler bool, passes int) bool {
 		bn.before(a)
 	}
 	ok := a.drawFrame(inHandler, passes)
+	a.flushDialogs() // dialogs asked for in Build: shown now that the frame is over
 	now := platform.Now()
 	if ok {
 		a.consecFails, a.lastDrawT = 0, now

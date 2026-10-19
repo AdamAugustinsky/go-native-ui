@@ -7,6 +7,10 @@ package platform
 // (widget.Dialog). A native Windows TaskDialogIndirect or IFileDialog is not
 // built: both need COM vtable calls without cgo, which is not cheap.
 
+// NativeDialogs reports whether the OS has native alert and file panel sheets:
+// false here.
+const NativeDialogs = false
+
 // Alert is not available here: it returns ErrUnsupported.
 func (w *Window) Alert(AlertSpec) (DialogTicket, error) { return 0, ErrUnsupported }
 

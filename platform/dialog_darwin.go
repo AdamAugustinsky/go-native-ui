@@ -21,6 +21,10 @@ import (
 // measurement, D36), so Window.Close ends the sheet with NSModalResponseAbort
 // first (abortDialogs), which calls it exactly once.
 
+// NativeDialogs reports whether the OS has native alert and file panel sheets:
+// true here.
+const NativeDialogs = true
+
 // maxDialogs bounds the dialogs open at once, one per window at most.
 const maxDialogs = 8
 
@@ -159,7 +163,7 @@ func (w *Window) beginDialog(slot int, kind DialogKind, obj objc.ID) (DialogTick
 // It returns ErrDialogSpec for a spec with no or too many buttons and
 // ErrDialogBusy when the window already has a dialog open.
 func (w *Window) Alert(s AlertSpec) (DialogTicket, error) {
-	if err := s.check(); err != nil {
+	if err := s.Validate(); err != nil {
 		return 0, err
 	}
 	dialogInit()
