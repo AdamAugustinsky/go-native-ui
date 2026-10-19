@@ -32,6 +32,8 @@ import (
 	"sort"
 	"strings"
 	"text/tabwriter"
+
+	"gonativeui/internal/cielab"
 )
 
 func main() {
@@ -132,9 +134,9 @@ func checkRegions(rep *report, spec *Spec, ref, cand *image.NRGBA) {
 			for y := q[1]; y < q[3]; y++ {
 				for x := q[0]; x < q[2]; x++ {
 					a, b := pixel(ref, x, y), pixel(cand, x, y)
-					la := SRGBToLab(uint8(a[0]), uint8(a[1]), uint8(a[2]))
-					lb := SRGBToLab(uint8(b[0]), uint8(b[1]), uint8(b[2]))
-					des = append(des, DeltaE2000(la, lb))
+					la := cielab.SRGBToLab(uint8(a[0]), uint8(a[1]), uint8(a[2]))
+					lb := cielab.SRGBToLab(uint8(b[0]), uint8(b[1]), uint8(b[2]))
+					des = append(des, cielab.DeltaE2000(la, lb))
 				}
 			}
 		}
