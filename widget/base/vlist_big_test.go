@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"gonativeui/gpu"
+	"gonativeui/internal/sysinfo"
 	"gonativeui/ui"
 )
 
@@ -189,10 +190,23 @@ func TestVListSlicedRebuildIsCoherent(t *testing.T) {
 	}
 }
 
+// cpuClock is the clock the edit budget is measured with: the thread's CPU
+// time where it resolves a frame (darwin: microseconds; linux: nanoseconds),
+// so that a slice the scheduler descheduled on a busy CI runner is not
+// counted as the edit's; elsewhere (Windows: 15.6 ms ticks) wall time, and the
+// budget is only reported.
+func cpuClock() (now func() time.Duration, gated bool) {
+	if runtime.GOOS == "windows" || sysinfo.ThreadCPUNs() < 0 {
+		t0 := time.Now()
+		return func() time.Duration { return time.Since(t0) }, false
+	}
+	return func() time.Duration { return time.Duration(sysinfo.ThreadCPUNs()) }, true
+}
+
 // editTimes runs edit on a fresh million-item list (whose back buffer exists
 // already) and returns the longest frame's edit work: the call itself, then
 // each frame's Sync slice.
-func editTimes(edit func(st *VListState)) (worst time.Duration, frames int) {
+func editTimes(edit func(st *VListState), now func() time.Duration) (worst time.Duration, frames int) {
 	l := newLean(million, VListOpts{})
 	l.frame()
 	// warm: allocate the back buffer once with a long edit
@@ -201,25 +215,29 @@ func editTimes(edit func(st *VListState)) (worst time.Duration, frames int) {
 		l.frame()
 	}
 	runtime.GC()
-	t0 := time.Now()
+	t0 := now()
 	edit(&l.st)
-	worst = time.Since(t0)
+	worst = now() - t0
 	for f := uint32(1); l.st.Pending(); f++ {
-		t0 = time.Now()
+		t0 = now()
 		l.st.Sync(l.c.Frame() + f)
-		worst = max(worst, time.Since(t0))
+		worst = max(worst, now()-t0)
 		frames++
 	}
 	return worst, frames
 }
 
-// The edit budget: on a million items, an edit costs at most 2 ms in any one
-// frame, whether it is applied in place (moving the last item to the top) or
-// rebuilt in slices (a move between the quarters, a splice in the middle).
+// The edit budget: on a million items, an edit costs at most 2 ms of CPU in
+// any one frame, whether it is applied in place (moving the last item to the
+// top; the longest splice vlDirectMax lets through, cache-cold) or rebuilt in
+// slices (a move between the quarters, a splice in the middle).
 func TestVListEditFrameBudget(t *testing.T) {
 	if testing.Short() {
 		t.Skip("a million items")
 	}
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	now, gated := cpuClock()
 	const budget = 2 * time.Millisecond
 	for _, tc := range []struct {
 		name string
@@ -229,15 +247,15 @@ func TestVListEditFrameBudget(t *testing.T) {
 		{"move 250000 to 750000", func(st *VListState) { st.Move(250_000, 1, 750_000) }},
 		{"move a run of 100000", func(st *VListState) { st.Move(100_000, 100_000, 600_000) }},
 		{"splice in the middle", func(st *VListState) { st.Splice(500_000, 1000, seq(5_000_000, 1000)) }},
-		{"short splice near the top", func(st *VListState) { st.Splice(20_000, 5, seq(5_000_000, 3)) }},
+		{"the longest in-place splice", func(st *VListState) { st.Splice(vlDirectMax-12, 5, seq(5_000_000, 3)) }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			// The best of three: a frame that a GC or the scheduler took the CPU
-			// from is not the edit's.
+			// The best of three: a frame that a GC took the CPU from is not the
+			// edit's.
 			var worst time.Duration
 			var frames int
 			for a := 0; a < 3; a++ {
-				w, f := editTimes(tc.edit)
+				w, f := editTimes(tc.edit, now)
 				if a == 0 || w < worst {
 					worst, frames = w, f
 				}
@@ -245,9 +263,9 @@ func TestVListEditFrameBudget(t *testing.T) {
 					break
 				}
 			}
-			t.Logf("%s: worst frame %.3f ms over %d frames", tc.name, float64(worst)/1e6, frames)
-			if worst > budget {
-				t.Fatalf("%s: a frame spent %.3f ms on the edit, budget 2 ms", tc.name, float64(worst)/1e6)
+			t.Logf("%s: worst frame %.3f ms over %d frames (gated %v)", tc.name, float64(worst)/1e6, frames, gated)
+			if gated && worst > budget {
+				t.Fatalf("%s: a frame spent %.3f ms of CPU on the edit, budget 2 ms", tc.name, float64(worst)/1e6)
 			}
 		})
 	}

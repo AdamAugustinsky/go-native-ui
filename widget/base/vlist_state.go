@@ -38,11 +38,12 @@ type VListMark struct {
 
 // vlDirectMax is the most slots an edit may touch in place, in the frame it
 // is made; a longer edit is rebuilt in the back buffer over several frames.
-// Measured (BenchmarkVListDirectEdit, random ids in a million, so the id
-// table's probes miss the cache): 4 to 6 ns a slot on an Apple M4, so 65536
-// slots cost about 0.4 ms, a fifth of the 2 ms edit budget, which leaves room
-// for machines several times slower.
-const vlDirectMax = 1 << 16
+// Measured on an Apple M4 with a million items: 4 to 6 ns a slot while the
+// id table is in cache (BenchmarkVListDirectEdit), about 23 ns cold (the
+// first edit after a collection, TestVListEditFrameBudget's longest in-place
+// edit). 32768 slots cold cost about 0.75 ms, well inside the 2 ms edit
+// budget, with room for slower machines.
+const vlDirectMax = 1 << 15
 
 // vlDirect is vlDirectMax; tests lower it to drive short lists through the
 // rebuild.
