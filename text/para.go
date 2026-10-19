@@ -65,8 +65,8 @@ type Para struct {
 	// Fonts is the font of each style; a style beyond its end uses Fonts[0].
 	// It must not be empty. All fonts must have the same scale.
 	Fonts []FontKey
-	// Width is the width lines are broken at, in pixels; 0 or less breaks only
-	// at newlines.
+	// Width is the width lines are broken at, in pixels; less than 1 breaks
+	// only at newlines.
 	Width float32
 	// Dir is the base direction (DirAuto: per paragraph).
 	Dir Dir
@@ -202,17 +202,28 @@ func (p *ParaView) LineOf(off int) int {
 }
 
 // LineRun returns line i as a RunView, for RunView.CaretX and HitByte: its
-// glyphs, with clusters and Text indexing the paragraph's text (Text ends at
-// the line's end).
+// glyphs, with clusters and Text indexing the paragraph's text. Text ends
+// where the line's glyphs do: before the newline that ends it, and before
+// trailing white space that has no glyphs.
 func (p *ParaView) LineRun(i int) RunView {
 	l := &p.Lines[i]
 	g0, g1 := l.G0, l.G1
+	e := int(l.End)
+	if g1 > g0 {
+		var last int
+		for g := g0; g < g1; g++ {
+			last = max(last, int(p.Clusters[g]&^ClusterRTL))
+		}
+		if last < e {
+			e = max(trimEnd(p.Text, last, e), NextGrapheme(p.Text[:e], last))
+		}
+	}
 	return RunView{
 		Glyphs:   p.Glyphs[g0:g1:g1],
 		X:        p.X[g0:g1:g1],
 		Faces:    p.Faces[g0:g1:g1],
 		Clusters: p.Clusters[g0:g1:g1],
-		Text:     p.Text[:l.End:l.End],
+		Text:     p.Text[:e:e],
 		Advance:  l.Advance,
 	}
 }

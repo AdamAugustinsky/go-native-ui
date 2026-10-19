@@ -180,7 +180,7 @@ func (s *System) layoutCT(p *Para) {
 
 	scale := s.fonts[p.Fonts[0]].desc.Scale
 	wpt := float64(p.Width / scale)
-	if p.Width <= 0 {
+	if p.Width < 1 {
 		wpt = unboundedWidthPt
 	}
 	var top float32
@@ -267,7 +267,7 @@ func (s *System) ellipsisLine(p *Para, ts uintptr, u0 int, wpt float64, scale fl
 	ev := s.Run(s.Shape(font, pl.ell[:]))
 	ew := ev.Advance
 	cut := limit
-	if p.Width > 0 {
+	if p.Width >= 1 {
 		room := wpt - float64(ew/scale)
 		cnt := 0
 		if room > 0 {

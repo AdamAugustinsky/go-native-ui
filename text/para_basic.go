@@ -104,7 +104,8 @@ func (l *BasicLayouter) shapeRuns(p *Para) {
 }
 
 // measure is the advance of the bytes [a, b) of the text, from the whole
-// shaped style runs.
+// shaped style runs: the distance between the carets of its ends in each run
+// (right to left in a right-to-left run).
 func (l *BasicLayouter) measure(a, b int) float32 {
 	if b <= a {
 		return 0
@@ -113,7 +114,8 @@ func (l *BasicLayouter) measure(a, b int) float32 {
 	for k := runAt(l.runs, a); k < len(l.runs) && l.runs[k].start < b; k++ {
 		r := &l.runs[k]
 		v := l.sh.Run(l.refs[k])
-		w += v.CaretX(min(b, r.end)-r.start) - v.CaretX(max(a, r.start)-r.start)
+		d := v.CaretX(min(b, r.end)-r.start) - v.CaretX(max(a, r.start)-r.start)
+		w += max(d, -d)
 	}
 	return w
 }
@@ -273,7 +275,7 @@ func trimEnd(txt []byte, start, end int) int {
 // fit the width: the last grapheme boundary in [start, limit] whose text,
 // without trailing white space, leaves room for it.
 func (l *BasicLayouter) cutForEllipsis(p *Para, start, limit int, wrapping bool) int {
-	if !wrapping || p.Width <= 0 {
+	if !wrapping || p.Width < 1 {
 		return limit
 	}
 	ew := l.sh.Run(l.sh.Shape(paraFont(p, l.styleAt(max(limit-1, start))), l.ellipsisText())).Advance

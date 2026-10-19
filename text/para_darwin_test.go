@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -279,5 +280,157 @@ func TestParagraphMatchesAppKit(t *testing.T) {
 				t.Errorf("height %.3f pt, AppKit %.3f", float64(v.Height)/sc, ref[len(ref)-1].y+ref[len(ref)-1].h)
 			}
 		})
+	}
+}
+
+func TestParagraphDirectionsCoreText(t *testing.T) {
+	s := newSys(t)
+	f := s.Font(FontDesc{SizePt: 13, Scale: 2})
+	txt := "First paragraph.\nשלום עולם\n123 שלום\n(hi)"
+	p := Para{Text: []byte(txt), Fonts: []FontKey{f}, Width: 1000}
+	check := func(dir Dir, want ...bool) {
+		t.Helper()
+		p.Dir = dir
+		v := s.Paragraph(s.Layout(&p))
+		if len(v.Lines) != len(want) {
+			t.Fatalf("dir %d: %d lines", dir, len(v.Lines))
+		}
+		for i, w := range want {
+			if got := v.Lines[i].Flags&LineRTL != 0; got != w {
+				t.Errorf("dir %d line %d %q: rtl %v", dir, i, txt[v.Lines[i].Start:v.Lines[i].End], got)
+			}
+			if v.Lines[i].Flags&LineHard == 0 && i < len(want)-1 {
+				t.Errorf("line %d: not ended by its newline", i)
+			}
+		}
+		// A right-to-left line's glyphs run right to left: the first
+		// character of the line is the rightmost glyph.
+		for i, ln := range v.Lines {
+			if ln.Flags&LineRTL == 0 || dir != DirAuto {
+				continue
+			}
+			first, firstX := -1, float32(-1)
+			for g := ln.G0; g < ln.G1; g++ {
+				if int(v.Clusters[g]&^ClusterRTL) == int(ln.Start) {
+					first, firstX = int(g), v.X[g]
+				}
+			}
+			for g := ln.G0; g < ln.G1; g++ {
+				if first >= 0 && v.X[g] > firstX+0.01 && v.Clusters[g]&ClusterRTL != 0 {
+					t.Errorf("line %d: glyph %d right of the line's first character", i, g)
+				}
+			}
+		}
+	}
+	check(DirAuto, false, true, true, false)
+	check(DirLTR, false, false, false, false)
+	check(DirRTL, true, true, true, true)
+}
+
+func TestParagraphEllipsisCoreText(t *testing.T) {
+	s := newSys(t)
+	f := s.Font(FontDesc{SizePt: 13, Scale: 2})
+	for _, txt := range []string{
+		"The list keeps its place while history loads above and new messages arrive below",
+		"שלום לכולם, הפגישה תתקיים מחר בשעה עשר ואחר כך נדבר על הפרויקט",
+		"short\nsecond paragraph that is cut",
+	} {
+		const w = 300
+		p := Para{Text: []byte(txt), Fonts: []FontKey{f}, Width: w, MaxLines: 2, Ellipsis: true}
+		v := s.Paragraph(s.Layout(&p))
+		if len(v.Lines) != 2 || !v.Truncated {
+			t.Fatalf("%q: %d lines, truncated %v", txt, len(v.Lines), v.Truncated)
+		}
+		ln := v.Lines[1]
+		if ln.Flags&LineEllipsis == 0 || ln.Width > w+0.01 || ln.Width < w/3 {
+			t.Errorf("%q: last line %q flags %b width %v", txt, txt[ln.Start:ln.End], ln.Flags, ln.Width)
+		}
+		// The ellipsis is the visually last glyph: rightmost, or leftmost on a
+		// right-to-left line, and points at the cut.
+		ell, ex := -1, float32(0)
+		for g := ln.G0; g < ln.G1; g++ {
+			if v.Clusters[g]&^ClusterRTL == ln.End && v.X[g] >= 0 {
+				ell, ex = int(g), v.X[g]
+			}
+		}
+		if ell < 0 {
+			t.Fatalf("%q: no ellipsis glyph", txt)
+		}
+		for g := ln.G0; g < ln.G1; g++ {
+			if int(g) == ell || v.X[g] < 0 {
+				continue
+			}
+			if rtl := ln.Flags&LineRTL != 0; rtl && v.X[g] < ex || !rtl && v.X[g] > ex {
+				t.Errorf("%q: glyph %d at %v is beyond the ellipsis at %v", txt, g, v.X[g], ex)
+			}
+		}
+		// Without Ellipsis the text is just cut after two lines.
+		p.Ellipsis = false
+		if v = s.Paragraph(s.Layout(&p)); len(v.Lines) != 2 || v.Lines[1].Flags&LineEllipsis != 0 {
+			t.Errorf("%q: cut without ellipsis: %d lines", txt, len(v.Lines))
+		}
+	}
+}
+
+// Every caret position of a line hit-tests back to itself, on left-to-right
+// and right-to-left lines.
+func TestParagraphCaretRoundTripCoreText(t *testing.T) {
+	s := newSys(t)
+	f := s.Font(FontDesc{SizePt: 13, Scale: 2})
+	for _, txt := range []string{
+		"The list keeps its place while history loads",
+		"שלום לכולם, הפגישה תתקיים מחר",
+		"office fi flow 👍🏽 done",
+	} {
+		const w = 400
+		v := s.Paragraph(s.Layout(&Para{Text: []byte(txt), Fonts: []FontKey{f}, Width: w}))
+		for off := 0; off <= len(txt); off = NextGrapheme([]byte(txt), off) {
+			i, x := v.Caret(off, w)
+			ln := v.Lines[i]
+			y := ln.Top + ln.Height/2
+			if got := v.HitTest(x, y, w); got != off {
+				t.Errorf("%q: caret of %d at x %.2f hit-tests to %d", txt, off, x, got)
+			}
+			if off == len(txt) {
+				break
+			}
+		}
+	}
+}
+
+func TestParagraphLayoutAllocationsCoreText(t *testing.T) {
+	s := newSys(t)
+	s.ReserveParas(4096, 1<<18, 1<<18)
+	f := s.Font(FontDesc{SizePt: 13, Scale: 2})
+	b := s.Font(FontDesc{SizePt: 13, Weight: 700, Scale: 2})
+	words := []string{"hello", "שלום", "مرحبا", "👍🏽", "日本語", "world", "link.com", "and"}
+	txt := make([]byte, 0, 256)
+	spans := make([]Span, 1)
+	p := &Para{Fonts: []FontKey{f, b}, Width: 240, Spans: spans}
+	n := 0
+	make1 := func() {
+		n++
+		txt = txt[:0]
+		for w := 0; w < 3+n%9; w++ {
+			txt = append(append(txt, words[(n+w*3)%len(words)]...), ' ')
+		}
+		txt = strconv.AppendInt(txt, int64(n%5000), 10)
+		spans[0] = Span{Off: 0, Len: uint32(len(words[n%len(words)])), Style: 1}
+		p.Text = txt
+	}
+	for i := 0; i < 300; i++ { // the fonts, faces and fallbacks the words need
+		make1()
+		s.Layout(p)
+	}
+	allocFree(t, "laying out new paragraphs through CoreText", func() func() {
+		return func() {
+			for i := 0; i < 200; i++ {
+				make1()
+				s.Layout(p)
+			}
+		}
+	})
+	if a := testing.AllocsPerRun(100, func() { s.Layout(p) }); a != 0 {
+		t.Fatalf("%v allocations per cache hit", a)
 	}
 }

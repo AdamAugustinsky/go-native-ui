@@ -534,10 +534,9 @@ func (c *Context) emitRich(l *gpu.DrawList, b *box, r *richRec, clip [4]float32)
 				col := colOf(st)
 				m := c.sh.Metrics(r.fonts[st])
 				bx0, bx1 := ox+cellLeft(&pv, ln, g), ox+cellRight(&pv, ln, e-1)
-				// Leave out the white space that ends the line.
-				if e == ln.G1 {
-					bx1 = min(bx1, ox+ln.Width)
-				}
+				// Leave out the white space that ends the line (right of a
+				// left-to-right line's content, left of a right-to-left one's).
+				bx0, bx1 = max(bx0, ox), min(bx1, ox+ln.Width)
 				th := max(snap(m.UnderlineThickness), 1)
 				if m.UnderlineThickness == 0 {
 					th = max(snap(c.scale), 1)

@@ -11,6 +11,15 @@
 //   - The glyph cache and atlas (cache.go, atlas.go) store rasterized glyphs
 //     in 1024×1024 pages (R8 coverage, RGBA premultiplied for colour glyphs)
 //     and track the region changed since the last upload.
+//   - Paragraph layout (para.go, D42) breaks styled text (Para: the text,
+//     pointer-free Spans and a font per style) into lines at a width. On
+//     macOS it is CoreText's typesetter (para_darwin.go), which gives AppKit's
+//     line breaks, bidirectional line order, font fallback and line heights;
+//     the other backends use the basic layout of para_basic.go. Layouts are
+//     cached pointer-free (paracache.go) by everything in Para, with
+//     second-chance eviction; ParaView has the hit-testing, caret and range
+//     geometry that selection needs, and EmojiOnly the rule for large
+//     emoji-only messages.
 //
 // # Carets
 //
