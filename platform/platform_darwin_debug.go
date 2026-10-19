@@ -128,3 +128,17 @@ func (w *Window) DebugPostMouse(typ uintptr, xPt, yPt float64) {
 		objc.Send2(w.app, selPostEvent, uintptr(ev), 0)
 	}
 }
+
+// DebugToggleFullScreen is a test hook (macOS only): toggleFullScreen:, as
+// the green button or ⌃⌘F does, from the run loop's next turn (as a click
+// would arrive) rather than inside the caller's frame. Main thread.
+func (w *Window) DebugToggleFullScreen() {
+	sel, toggle := objc.Sel("performSelector:withObject:afterDelay:"), objc.Sel("toggleFullScreen:")
+	objc.F.Reset().Arg(uintptr(w.win)).Arg(uintptr(sel)).Arg(uintptr(toggle)).Arg(0).ArgF64(0).Call(objc.MsgSend)
+}
+
+// DebugGlassRadius is a test hook (macOS only): the backdrop's corner radius
+// as last set, and whether AppKit considers the window full screen.
+func (w *Window) DebugGlassRadius() (radius float64, fullScreen bool) {
+	return w.glassRadius, objc.Send(w.win, selStyleMask)&(1<<14) != 0
+}

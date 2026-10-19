@@ -11,6 +11,8 @@
 //
 //	AppKitShell [-light | -dark] [-backdrop glass|clear|window|none] [-glass-buttons] [-tabs [-unified]]
 //	            [-pose hover|press] [-quit-after S]
+//	AppKitShell -solid RRGGBB | -focus [-quit-after S]
+//	AppKitShell -print-labels
 //
 // -light and -dark set this app's own appearance (NSApp.appearance); nothing
 // on the system changes. Without them it follows the system. -pose (with
@@ -18,6 +20,11 @@
 // and with press a press held for 10 s, for captures of those states; the
 // system's pointer does not move. It quits after -quit-after seconds
 // (default 20) or when the window is closed.
+//
+// -solid opens only a plain window of that colour, to put a known backdrop
+// behind another window; -focus only a tiny one in a corner, to take the key
+// window away from another app. -print-labels prints AppKit's label colours
+// in both appearances and quits (no window).
 #import <AppKit/AppKit.h>
 
 static NSString *const kTabs = @"tabs", *const kCmd = @"cmd", *const kPlus = @"plus";
@@ -30,6 +37,8 @@ static NSString *const kTabs = @"tabs", *const kCmd = @"cmd", *const kPlus = @"p
 @property NSSegmentedControl *seg;
 @property NSTimeInterval quitAfter;
 @property NSMutableArray<NSView *> *panes;
+@property NSString *solid; // -solid RRGGBB: a plain backing window instead
+@property BOOL focus, printLabels;
 @end
 
 @implementation Shell
@@ -71,7 +80,60 @@ static NSString *const kTabs = @"tabs", *const kCmd = @"cmd", *const kPlus = @"p
 }
 - (void)noop:(id)sender {}
 
+// solidWindow is -solid's plain window, 1400 × 900 and centred, so it covers
+// what is behind a centred rexlook window; -focus's is 40 × 40 in the
+// screen's bottom-left corner, only there to take the key window from
+// another app.
+- (void)solidWindow {
+	NSRect scr = NSScreen.mainScreen.visibleFrame;
+	NSRect r = self.focus ? NSMakeRect(NSMinX(scr), NSMinY(scr), 40, 40) : NSMakeRect(0, 0, 1400, 900);
+	NSWindow *w = [[NSWindow alloc] initWithContentRect:r styleMask:NSWindowStyleMaskBorderless backing:NSBackingStoreBuffered defer:NO];
+	w.releasedWhenClosed = NO;
+	unsigned v = 0x808080;
+	if (self.solid) sscanf(self.solid.UTF8String, "%x", &v);
+	w.backgroundColor = [NSColor colorWithSRGBRed:((v >> 16) & 255) / 255.0 green:((v >> 8) & 255) / 255.0 blue:(v & 255) / 255.0 alpha:1];
+	w.hasShadow = NO;
+	if (!self.focus) [w center];
+	self.window = w;
+	[w makeKeyAndOrderFront:nil];
+	[NSApp activateIgnoringOtherApps:YES];
+}
+
+// printLabelColors prints AppKit's label colours resolved in Aqua and Dark
+// Aqua (sRGB, 0–255, alpha 0–1) as JSON, for the contrast floors.
+- (void)printLabelColors {
+	NSDictionary *cs = @{@"label" : NSColor.labelColor, @"secondaryLabel" : NSColor.secondaryLabelColor,
+	                     @"tertiaryLabel" : NSColor.tertiaryLabelColor, @"quaternaryLabel" : NSColor.quaternaryLabelColor,
+	                     @"windowBackground" : NSColor.windowBackgroundColor, @"textBackground" : NSColor.textBackgroundColor};
+	NSMutableString *out = [NSMutableString stringWithString:@"{"];
+	for (NSAppearanceName an in @[ NSAppearanceNameAqua, NSAppearanceNameDarkAqua ]) {
+		[out appendFormat:@"%@\"%@\": {", out.length > 1 ? @", " : @"", an];
+		__block BOOL first = YES;
+		[[NSAppearance appearanceNamed:an] performAsCurrentDrawingAppearance:^{
+			for (NSString *k in cs) {
+				NSColor *c = [cs[k] colorUsingColorSpace:NSColorSpace.sRGBColorSpace];
+				[out appendFormat:@"%@\"%@\": [%.1f, %.1f, %.1f, %.3f]", first ? @"" : @", ", k, c.redComponent * 255, c.greenComponent * 255,
+				                  c.blueComponent * 255, c.alphaComponent];
+				first = NO;
+			}
+		}];
+		[out appendString:@"}"];
+	}
+	[out appendString:@"}\n"];
+	fputs(out.UTF8String, stdout);
+}
+
 - (void)applicationDidFinishLaunching:(NSNotification *)n {
+	if (self.printLabels) {
+		[self printLabelColors];
+		[NSApp terminate:nil];
+		return;
+	}
+	if (self.solid || self.focus) {
+		[self solidWindow];
+		[NSTimer scheduledTimerWithTimeInterval:self.quitAfter repeats:NO block:^(NSTimer *t) { [NSApp terminate:nil]; }];
+		return;
+	}
 	NSRect r = NSMakeRect(0, 0, 1057, 639);
 	NSWindowStyleMask style = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable |
 	                          NSWindowStyleMaskResizable | NSWindowStyleMaskFullSizeContentView;
@@ -228,9 +290,13 @@ int main(int argc, const char **argv) {
 			else if (!strcmp(argv[i], "-pose") && i + 1 < argc) s.pose = [NSString stringWithUTF8String:argv[++i]];
 			else if (!strcmp(argv[i], "-backdrop") && i + 1 < argc) s.backdrop = [NSString stringWithUTF8String:argv[++i]];
 			else if (!strcmp(argv[i], "-quit-after") && i + 1 < argc) s.quitAfter = atof(argv[++i]);
+			else if (!strcmp(argv[i], "-solid") && i + 1 < argc) s.solid = [NSString stringWithUTF8String:argv[++i]];
+			else if (!strcmp(argv[i], "-focus")) s.focus = YES;
+			else if (!strcmp(argv[i], "-print-labels")) s.printLabels = YES;
 			else if (!strncmp(argv[i], "-psn", 4)) continue; // LaunchServices' process serial number
 			else {
-				fprintf(stderr, "usage: AppKitShell [-light | -dark] [-backdrop glass|clear|window|none] [-glass-buttons] [-tabs [-unified]] [-pose hover|press] [-quit-after S]\n");
+				fprintf(stderr, "usage: AppKitShell [-light | -dark] [-backdrop glass|clear|window|none] [-glass-buttons] [-tabs [-unified]] [-pose hover|press] [-quit-after S]\n"
+				                "       AppKitShell -solid RRGGBB | -focus | -print-labels\n");
 				return 64;
 			}
 		}

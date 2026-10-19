@@ -89,10 +89,10 @@ func (r *Rex) drawTitlebar(c *ui.Context) {
 	theme.At(c, capsule[0], capsule[1], capsule[2]-capsule[0], capsule[3]-capsule[1])
 	capTop, capBot := r.col(0xE8DCE9, 0x2B2C3B), r.col(0xE2DCE2, 0x282937)
 	if r.backdrop {
-		// Over the material the group is a film, as the reference's capsule
-		// is over its blurred wallpaper: a little darker in the light look,
-		// a little lighter in the dark one.
-		capTop, capBot = r.colA(0x3A2A4A, 0xFFFFFF, 0.055, 0.075), r.colA(0x3A2A4A, 0xFFFFFF, 0.07, 0.06)
+		// Over the material the group is the capsule's own tint, half
+		// covering: the material shows through it, and it pulls what shows
+		// toward the tint, which keeps the tab titles' contrast (labelAlpha).
+		capTop, capBot = r.colA(0xE8DCE9, 0x2B2C3B, capsuleAlpha[0], capsuleAlpha[1]), r.colA(0xE2DCE2, 0x282937, capsuleAlpha[0], capsuleAlpha[1])
 	}
 	c.NextBG4(capTop, capTop, capBot, capBot)
 	c.NextRadius(34 * k)
@@ -134,12 +134,20 @@ func (r *Rex) drawTitlebar(c *ui.Context) {
 	c.PushOpacity(theme.Lerp(inactiveOpacity, 1, kw))
 	devCol, hostCol, machCol := r.col(0x5F5E63, 0xA3A7B8), r.col(0x5F5D64, 0xB8BBCB), r.col(0x87848B, 0x8D91A3)
 	if r.backdrop {
-		devCol, hostCol, machCol = r.label(0.62), r.label(0.80), r.label(0.50)
+		devCol = r.label(0.62)
 	}
 	r.IconAt(c, &kg, icDevice, 209*k, 43*k, devCol)
+	if r.backdrop {
+		// Over the material the text dims by its colour, not by opacity,
+		// down to floors (labelAlpha).
+		c.PopOpacity()
+		hostCol, machCol = r.bandLabel(labelTitle), r.bandLabel(labelSecondary)
+	}
 	r.Put(c, &kg, r.th.Font.UISemi, "rex-snake", 245*k, 42*k, hostCol, 0, 0)
 	r.Put(c, &kg, r.th.Font.Small, "Mac Studio", 245*k, 66*k, machCol, 0, 0)
-	c.PopOpacity()
+	if !r.backdrop {
+		c.PopOpacity()
+	}
 
 	// Right edge: ⌘ and +, the window's own when it has native buttons.
 	if r.btns != nil || r.shellShot {
@@ -180,7 +188,12 @@ func (r *Rex) drawTab(c *ui.Context, i int, act, absX, tabW float32) {
 		c.BoxKeyed(ui.DrawBackground|fl, ui.KeyN(key, 6), nil)
 	}
 	c.PushOpacity(theme.Lerp(inactiveOpacity, 1, r.keyW))
-	defer c.PopOpacity()
+	dimmed := true
+	defer func() {
+		if dimmed {
+			c.PopOpacity()
+		}
+	}()
 
 	// Stacked cards: coloured cards peek out behind the front card.
 	st := &t.style
@@ -209,8 +222,13 @@ func (r *Rex) drawTab(c *ui.Context, i int, act, absX, tabW float32) {
 	// Title: the name, then the lighter path; text that does not fit fades out.
 	nameCol := r.col(theme.MixRGB(0x5A5A60, 0x1E2227, act), theme.MixRGB(0xA9ACBB, 0xF1F2F8, act))
 	pathCol := r.col(theme.MixRGB(0x928F95, 0x1E2227, act), theme.MixRGB(0x8D91A8, 0xF1F2F8, act))
-	if r.backdrop { // over the material: the system's label roles, legible over whatever shows through
-		nameCol, pathCol = r.label(theme.Lerp(0.72, 0.88, act)), r.label(theme.Lerp(0.48, 0.88, act))
+	if r.backdrop {
+		// Over the material: label colours whose alpha keeps AppKit's
+		// contrast floors, dimmed by colour rather than opacity.
+		c.PopOpacity()
+		dimmed = false
+		nameCol = r.label(theme.Lerp(r.labelAlpha(labelTab), r.labelAlpha(labelTitle), act))
+		pathCol = r.label(theme.Lerp(r.labelAlpha(labelSecondary), r.labelAlpha(labelTitle), act))
 	}
 	x := absX + st.textX*k
 	end := rc[2] - 10*r.Scale // right limit of the title
@@ -239,8 +257,52 @@ func (r *Rex) titleRun(c *ui.Context, kg *keyGen, s string, x, baseline float32,
 }
 
 // label is the text colour of the titlebar over a backdrop: black (light) or
-// white (dark) at alpha a, as the system's label colours are, so the text
-// keeps its contrast over whatever the material shows.
+// white (dark) at alpha a, as the system's label colours are.
 func (r *Rex) label(a float32) uint32 {
 	return theme.ColA(r.tone(0x000000, 0xFFFFFF), a)
 }
+
+// The titlebar's text over a backdrop must keep AppKit's contrast floors
+// (measured on 27.2; TestBandTextContrastOverGlass):
+//
+//   - in the key window, the title block and the chosen tab at least
+//     secondaryLabelColor's on the window background: 3.95:1 light
+//     (black 0.498 over white), 5.84:1 dark (white 0.549 over #1E1E1E);
+//   - the other tabs, and everything while the window is not key, at least
+//     AppKit's own inactive window title: 1.98:1 light (#B8B8B8 on white),
+//     2.25:1 dark (#5C5C5C on #262626; D0 captures, finder and chat).
+//
+// The background is the glass under the theme's scrim (and, for the tabs,
+// the capsule's tint), whose range was measured from screen captures over a
+// light and a dark window. Each role has a label alpha per look in the key
+// window and one when it is not; the key state animates between them.
+type labelRole uint8
+
+const (
+	labelTitle     labelRole = iota // the host name, the chosen tab
+	labelTab                        // another tab's name
+	labelSecondary                  // the machine name, a tab's path
+)
+
+var labelAlphas = [3]struct {
+	key [2]float32
+	off float32
+}{
+	labelTitle:     {key: [2]float32{0.85, 0.92}, off: 0.52},
+	labelTab:       {key: [2]float32{0.78, 0.86}, off: 0.48},
+	labelSecondary: {key: [2]float32{0.64, 0.84}, off: 0.44},
+}
+
+// capsuleAlpha is how much the tab capsule's tint covers the material,
+// light and dark.
+var capsuleAlpha = [2]float32{0.5, 0.55}
+
+// labelAlpha is the alpha of role's text now: the key window's for the look
+// (mixed light to dark), toward the not-key one as the window loses key.
+func (r *Rex) labelAlpha(role labelRole) float32 {
+	a := labelAlphas[role]
+	return theme.Lerp(a.off, theme.Lerp(a.key[0], a.key[1], r.th.T), r.keyW)
+}
+
+// bandLabel is role's text colour now.
+func (r *Rex) bandLabel(role labelRole) uint32 { return r.label(r.labelAlpha(role)) }
