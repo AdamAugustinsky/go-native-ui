@@ -8,8 +8,9 @@ import (
 	"gonativeui/widget/base"
 )
 
-// Drawn menus (Windows and Linux; on macOS the same model becomes the native
-// menu bar, phase 5B). A menu is a popup overlay: a press outside it and
+// Drawn menus (Windows and Linux, and benches and offscreen renders; on macOS
+// the app shows the same model natively, ui.Context.NativeMenus, and the
+// builders below ask for native menus instead). A menu is a popup overlay: a press outside it and
 // Escape close it, focus moves into it when it opens and back when it closes,
 // the arrow keys move between the items, Right opens a submenu and Left closes
 // it, Enter and Space choose. A choice is not acted on at once: it is handed to
@@ -64,6 +65,8 @@ func roleTitle(r menu.Role) string {
 		return "Zoom"
 	case menu.RoleCloseWindow:
 		return "Close Window"
+	case menu.RoleSettings:
+		return "Settings…"
 	}
 	return ""
 }
@@ -313,11 +316,12 @@ func (k *Kit) openSub(level, i int, row ui.Key) {
 // open their menus below them. While one menu is open, moving over another
 // title opens that one, and Left and Right move between menus. With the focus
 // on a title, Left and Right move along the bar and Enter, Space and Down open
-// the menu.
+// the menu. With native menus (macOS, ui.Context.NativeMenus) the bar is the
+// system's and MenuBar builds nothing.
 func (k *Kit) MenuBar() Signal {
 	c := k.c
 	m := k.Menu()
-	if m == nil {
+	if m == nil || c.NativeMenus() {
 		return Signal{}
 	}
 	p, px := &k.r.Pal, &k.r.Px
@@ -406,7 +410,7 @@ func b2f(b bool) float32 {
 }
 
 // MenuButton builds a button that opens menu number menuIdx of the model
-// below itself.
+// below itself: a pull-down, native with native menus (ui.Context.NativeMenus).
 func (k *Kit) MenuButton(label string, menuIdx int) Signal {
 	c := k.c
 	if m := k.Menu(); m == nil || menuIdx < 0 || menuIdx >= len(m.Menus()) {
@@ -416,6 +420,12 @@ func (k *Kit) MenuButton(label string, menuIdx int) Signal {
 	key := ui.HashString(c.ParentKey(), ident)
 	open := k.pop.Kind == base.PopupMenu && k.pop.Owner == key
 	s := k.ButtonIcon(icon.ChevronDown, label, ButtonDefault)
+	if c.NativeMenus() {
+		if s.Clicked {
+			c.RequestMenu(ui.MenuRequest{Kind: ui.MenuPullDown, Owner: key, Menu: menuIdx, Rect: c.Rect(s.ID)})
+		}
+		return s
+	}
 	if s.Clicked {
 		if open {
 			k.pop.Reset()
