@@ -48,6 +48,14 @@
 //   - A recipe, for the whole app: rexui.ButtonRecipes[rexui.ButtonPrimary].Fill = rexui.Of(theme.Green).
 //   - A component: copy its file and own it (README.md).
 //
+// # Forms, dialogs, alerts and tooltips
+//
+// Form lays rows out as macOS 27.2's Settings does (grouped inset sections) or
+// as an NSGridView does (labels right-aligned to a column). Dialog is a sheet
+// drawn by us for custom content; a message and a few buttons are an alert, and
+// that is app.Alert, which rexui does not wrap (README.md). Tooltip declares
+// the system's tooltip where there is one and draws its own elsewhere.
+//
 // # Allocation
 //
 // Building a frame allocates nothing: no closures, interfaces, maps or

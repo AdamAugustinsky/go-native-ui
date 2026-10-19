@@ -198,3 +198,18 @@ func TestDialogDimsTheWindow(t *testing.T) {
 		}
 	}
 }
+
+// An open dialog, with its text field, builds a frame without allocating, and
+// once its sheet has arrived it asks for no more frames.
+func TestDialogAllocatesNothing(t *testing.T) {
+	for _, m := range []theme.Mode{theme.Light, theme.Dark} {
+		g, _ := newDialogRig(t, m)
+		g.frames(5)
+		if g.c.Animating() {
+			t.Errorf("mode %d: an open dialog keeps animating", m)
+		}
+		if n := testing.AllocsPerRun(50, g.frame); n != 0 {
+			t.Fatalf("mode %d: %.1f allocations per frame", m, n)
+		}
+	}
+}

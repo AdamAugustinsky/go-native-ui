@@ -499,10 +499,12 @@ func Grid(samples []int) (cells []Cell, w, h float32) {
 }
 
 // Pages are the grids the gallery's appkit scenes show: the controls, and
-// the text styles, which would not fit under them on a laptop's screen.
+// the text styles and the forms, which would not fit under them on a laptop's
+// screen.
 var Pages = [...][]string{
 	{}, // every sample but those of the later pages
 	{"label-styles"},
+	{"form-group", "form-grid"},
 }
 
 // Page is the samples of page p (Pages) in catalogue order.
