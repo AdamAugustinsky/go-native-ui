@@ -28,6 +28,7 @@ type appkitMeasurement struct {
 	W, H, Radius          float64
 	Fill, Label, Ring     string
 	RingOutset, RingWidth float64
+	Fill2                 string
 }
 
 func loadAppKitRef(t *testing.T) *appkitRef {
@@ -93,6 +94,12 @@ func TestRecipesMatchAppKit(t *testing.T) {
 			var root ui.ID
 			g := newRig(t, theme.Mode(m), sys, sample(i, &root))
 			g.settle()
+			if s.Spec.Inside {
+				// a list's overlay scroll bars fade once it rests (0.9 s),
+				// as AppKit's are hidden at rest
+				g.frames(60)
+				g.settle()
+			}
 			got := measureQuads(g, root, s.Spec)
 			check := func(what string, d, tol float64, a, b any) {
 				if d > tol {
@@ -111,6 +118,9 @@ func TestRecipesMatchAppKit(t *testing.T) {
 			}
 			if sp.What&catalog.MeasureFill != 0 {
 				check("fill ΔE", deltaE(got.Fill, want.Fill), tolFill, want.Fill, got.Fill)
+			}
+			if sp.What&catalog.MeasureFill2 != 0 {
+				check("fill2 ΔE", deltaE(got.Fill2, want.Fill2), tolFill, want.Fill2, got.Fill2)
 			}
 			if sp.What&catalog.MeasureLabel != 0 {
 				check("label ΔE", deltaE(got.Label, want.Label), tolLabel, want.Label, got.Label)
@@ -155,6 +165,10 @@ func measureQuads(g *rig, root ui.ID, sp catalog.Spec) appkitMeasurement {
 	py := oy + float64(sp.Probe[1])*sc + 0.5
 	px, py = math.Floor(px)+0.5, math.Floor(py)+0.5
 
+	if sp.Inside {
+		return measureInside(g, shapes, root, sp, px, py)
+	}
+
 	var out appkitMeasurement
 	out.Fill = hex(composite(shapes, bg, px, py))
 	right := math.Inf(1)
@@ -189,18 +203,108 @@ func measureQuads(g *rig, root ui.ID, sp catalog.Spec) appkitMeasurement {
 			x0, y0 = ox+float64(sp.Label[0])*sc, oy+float64(sp.Label[1])*sc
 			x1, y1 = ox+float64(sp.Label[2])*sc, oy+float64(sp.Label[3])*sc
 		}
-		for i := range g.list.Quads {
-			q := &g.list.Quads[i]
-			if q.Mode != gpu.ModeMaskR8 {
-				continue
+		out.Label = labelOver(g, under, x0, y0, x1, y1)
+	}
+	return out
+}
+
+// labelOver is the colour of the first glyph in the region (x0, y0, x1, y1),
+// in pixels, over under; empty if none is there.
+func labelOver(g *rig, under uint32, x0, y0, x1, y1 float64) string {
+	for i := range g.list.Quads {
+		q := &g.list.Quads[i]
+		if q.Mode != gpu.ModeMaskR8 {
+			continue
+		}
+		if float64(q.Rect[0]) < x1 && float64(q.Rect[2]) > x0 && float64(q.Rect[1]) < y1 && float64(q.Rect[3]) > y0 {
+			return hex(over(q.Color[0], under))
+		}
+	}
+	return ""
+}
+
+// measureInside measures a shape inside the sample (catalog.Spec.Inside) as
+// tools/appkitref/measure does, at pixel centres: the run of the probe's
+// colour (px, py) along its column gives the top and bottom; the left and
+// right edges are where the colour changes scanning inward from 8 px outside
+// that run along its row, at most 12 pt below the top; the radius is the top
+// left corner's of the shape there.
+func measureInside(g *rig, shapes []gpu.Quad, root ui.ID, sp catalog.Spec, px, py float64) appkitMeasurement {
+	r := g.k.Theme()
+	sc := float64(g.scale)
+	rr := g.c.Rect(root)
+	ox, oy := float64(rr[0]), float64(rr[1])
+	bg := r.Colors[theme.Window] | 0xFF
+	tol := sp.Tol
+	if tol == 0 {
+		tol = 3
+	}
+	at := func(x, y float64) uint32 { return composite(shapes, bg, x, y) }
+	pc := at(px, py)
+	run := func(x, y, dx, dy float64) float64 { // the last pixel centre in the run
+		for n := 0; n < 4000; n++ {
+			if dist(at(x+dx, y+dy), pc) > tol {
+				break
 			}
-			if float64(q.Rect[0]) < x1 && float64(q.Rect[2]) > x0 && float64(q.Rect[1]) < y1 && float64(q.Rect[3]) > y0 {
-				out.Label = hex(over(q.Color[0], under))
+			x, y = x+dx, y+dy
+		}
+		if dx != 0 {
+			return x
+		}
+		return y
+	}
+	t, b := run(px, py, 0, -1)-0.5, run(px, py, 0, 1)+0.5
+	l0, r0 := run(px, py, -1, 0)-0.5, run(px, py, 1, 0)+0.5
+	y := math.Floor(t+min((b-t)/2, 12*sc)) + 0.5
+	xs := max(math.Floor(l0)-8, float64(rr[0])) + 0.5
+	xe := min(math.Ceil(r0)+8, float64(rr[2])-1) + 0.5
+	scan := func(x, dx float64) float64 { // the first pixel centre unlike x's
+		out := at(x, y)
+		for n := 0; n < 4000 && dist(at(x, y), out) <= 3; n++ {
+			x += dx
+		}
+		return x
+	}
+	l, rt := scan(xs, 1)-0.5, scan(xe, -1)+0.5
+
+	var out appkitMeasurement
+	if sp.What&catalog.MeasureFill != 0 {
+		out.Fill = hex(pc)
+	}
+	if sp.What&catalog.MeasureW != 0 {
+		out.W = (rt - l) / sc
+	}
+	if sp.What&catalog.MeasureH != 0 {
+		out.H = (b - t) / sc
+	}
+	if sp.What&catalog.MeasureRadius != 0 {
+		// the topmost shape with its top left corner at (l, t)
+		for i := len(shapes) - 1; i >= 0; i-- {
+			q := &shapes[i]
+			if math.Abs(float64(q.Rect[0])-l) < 1 && math.Abs(float64(q.Rect[1])-t) < 1 {
+				out.Radius = float64(q.Radii[0]) / sc
 				break
 			}
 		}
 	}
+	if sp.What&catalog.MeasureLabel != 0 {
+		out.Label = labelOver(g, pc, ox+float64(sp.Label[0])*sc, oy+float64(sp.Label[1])*sc,
+			ox+float64(sp.Label[2])*sc, oy+float64(sp.Label[3])*sc)
+	}
+	if sp.What&catalog.MeasureFill2 != 0 {
+		out.Fill2 = hex(at(math.Floor(ox+float64(sp.Probe2[0])*sc)+0.5, math.Floor(oy+float64(sp.Probe2[1])*sc)+0.5))
+	}
 	return out
+}
+
+// dist is the largest channel difference between two colours.
+func dist(a, b uint32) int {
+	d := 0
+	for s := uint(8); s <= 24; s += 8 {
+		x, y := int(a>>s&0xFF), int(b>>s&0xFF)
+		d = max(d, x-y, y-x)
+	}
+	return d
 }
 
 // visible reports whether q draws at (x, y): inside its rounded rectangle and

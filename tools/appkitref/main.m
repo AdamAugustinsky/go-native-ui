@@ -252,9 +252,26 @@ static NSButton *pushButton(NSString *title, NSControlSize size) {
 static NSImage *sym(NSString *n) { return [NSImage imageWithSystemSymbolName:n accessibilityDescription:nil]; }
 
 // --- table data
+
+// ARRowView is a table row view whose selection can be held emphasised: -live
+// shows one key window whose first responder is nil, so an "-emphasized"
+// sample keeps the look its table has as the first responder.
+@interface ARRowView : NSTableRowView
+@property BOOL forceEmph;
+@end
+@implementation ARRowView
+- (void)setEmphasized:(BOOL)e { [super setEmphasized:e || self.forceEmph]; }
+@end
+
 @interface TableData : NSObject <NSTableViewDataSource, NSTableViewDelegate>
+@property BOOL emph; // the rows' selection stays emphasised (ARRowView)
 @end
 @implementation TableData
+- (NSTableRowView *)tableView:(NSTableView *)tv rowViewForRow:(NSInteger)row {
+	ARRowView *v = [ARRowView new];
+	v.forceEmph = self.emph;
+	return v;
+}
 - (NSInteger)numberOfRowsInTableView:(NSTableView *)tv { return 14; }
 - (NSView *)tableView:(NSTableView *)tv viewForTableColumn:(NSTableColumn *)col row:(NSInteger)row {
 	NSTableCellView *cv = [NSTableCellView new];
@@ -334,6 +351,52 @@ static NSImage *sym(NSString *n) { return [NSImage imageWithSystemSymbolName:n a
 }
 @end
 
+// --- outline data: a file tree, every item a row (no group items)
+@interface TreeData : NSObject <NSOutlineViewDataSource, NSOutlineViewDelegate>
+@property NSArray *roots;
+@property BOOL emph; // the rows' selection stays emphasised (ARRowView)
+@end
+@implementation TreeData
+- (instancetype)init {
+	self = [super init];
+	SideItem * (^it)(NSString *, NSString *, NSArray *) = ^(NSString *t, NSString *s, NSArray *k) {
+		SideItem *i = [SideItem new];
+		i.title = t, i.symbol = s, i.kids = k;
+		return i;
+	};
+	self.roots = @[
+		it(@"Documents", @"folder",
+		   @[ it(@"Projects", @"folder", @[ it(@"Report.pdf", @"doc", nil), it(@"Budget.numbers", @"doc", nil) ]),
+			  it(@"Invoices", @"folder", @[ it(@"March.pdf", @"doc", nil) ]), it(@"Notes.txt", @"doc", nil) ]),
+		it(@"Downloads", @"folder", @[ it(@"Installer.dmg", @"doc", nil) ]), it(@"Music", @"folder", @[ it(@"Song.m4a", @"doc", nil) ]),
+		it(@"Pictures", @"folder", @[ it(@"Photo.heic", @"doc", nil) ]), it(@"README.md", @"doc", nil), it(@"Screenshot.png", @"doc", nil),
+		it(@"Todo.txt", @"doc", nil),
+	];
+	return self;
+}
+- (NSTableRowView *)outlineView:(NSOutlineView *)ov rowViewForItem:(id)item {
+	ARRowView *v = [ARRowView new];
+	v.forceEmph = self.emph;
+	return v;
+}
+- (NSInteger)outlineView:(NSOutlineView *)ov numberOfChildrenOfItem:(SideItem *)item { return item ? item.kids.count : self.roots.count; }
+- (id)outlineView:(NSOutlineView *)ov child:(NSInteger)i ofItem:(SideItem *)item { return item ? item.kids[i] : self.roots[i]; }
+- (BOOL)outlineView:(NSOutlineView *)ov isItemExpandable:(SideItem *)item { return item.kids.count > 0; }
+- (NSView *)outlineView:(NSOutlineView *)ov viewForTableColumn:(NSTableColumn *)col item:(SideItem *)item {
+	NSTableCellView *cv = [NSTableCellView new];
+	NSTextField *t = [NSTextField labelWithString:item.title];
+	t.lineBreakMode = NSLineBreakByTruncatingTail;
+	t.translatesAutoresizingMaskIntoConstraints = NO;
+	[cv addSubview:t];
+	cv.textField = t;
+	[NSLayoutConstraint activateConstraints:@[
+		[t.leadingAnchor constraintEqualToAnchor:cv.leadingAnchor constant:2], [t.trailingAnchor constraintEqualToAnchor:cv.trailingAnchor constant:-2],
+		[t.centerYAnchor constraintEqualToAnchor:cv.centerYAnchor]
+	]];
+	return cv;
+}
+@end
+
 // --- toolbar
 @interface TBDelegate : NSObject <NSToolbarDelegate>
 @end
@@ -348,13 +411,17 @@ static NSImage *sym(NSString *n) { return [NSImage imageWithSystemSymbolName:n a
 }
 @end
 
-static NSScrollView *tableIn(NSTableViewStyle style, BOOL alternating, NSSize size) {
+static NSScrollView *tableIn(NSTableViewStyle style, BOOL alternating, NSSize size, BOOL emph, BOOL fit) {
 	NSScrollView *sv = [[NSScrollView alloc] initWithFrame:(NSRect){NSZeroPoint, size}];
 	NSTableView *tv = [[NSTableView alloc] initWithFrame:sv.bounds];
 	tv.style = style;
 	tv.usesAlternatingRowBackgroundColors = alternating;
 	tv.allowsMultipleSelection = YES;
 	NSArray *cols = @[ @[ @"name", @"Name", @180 ], @[ @"kind", @"Kind", @120 ], @[ @"size", @"Size", @70 ] ];
+	if (fit) { // narrower columns: an inset table as wide as its view
+		cols = @[ @[ @"name", @"Name", @160 ], @[ @"kind", @"Kind", @110 ], @[ @"size", @"Size", @60 ] ];
+		tv.columnAutoresizingStyle = NSTableViewLastColumnOnlyAutoresizingStyle;
+	}
 	for (NSArray *c in cols) {
 		NSTableColumn *col = [[NSTableColumn alloc] initWithIdentifier:c[0]];
 		col.title = c[1];
@@ -365,11 +432,13 @@ static NSScrollView *tableIn(NSTableViewStyle style, BOOL alternating, NSSize si
 	tv.sortDescriptors = @[];
 	[tv setIndicatorImage:[NSImage imageNamed:@"NSAscendingSortIndicator"] inTableColumn:tv.tableColumns[0]];
 	TableData *td = [TableData new];
+	td.emph = emph;
 	[keep addObject:td];
 	tv.dataSource = td;
 	tv.delegate = td;
 	sv.documentView = tv;
 	sv.hasVerticalScroller = YES;
+	sv.scrollerStyle = NSScrollerStyleOverlay; // the system's preferred style, which reserves no room
 	sv.borderType = NSBezelBorder;
 	[tv reloadData];
 	[tv selectRowIndexes:[NSIndexSet indexSetWithIndexesInRange:NSMakeRange(2, 2)] byExtendingSelection:NO];
@@ -396,6 +465,41 @@ static NSScrollView *sidebarIn(NSSize size, NSTableViewRowSizeStyle rs) {
 	[ov reloadData];
 	[ov expandItem:nil expandChildren:YES];
 	[ov selectRowIndexes:[NSIndexSet indexSetWithIndex:4] byExtendingSelection:NO]; // Documents
+	return sv;
+}
+
+// outlineIn is a file tree in an NSOutlineView of the given style, without a
+// header: Documents and its Projects expanded, Invoices and the other folders
+// collapsed, Projects selected.
+static NSScrollView *outlineIn(NSTableViewStyle style, BOOL alternating, NSSize size, BOOL emph) {
+	NSScrollView *sv = [[NSScrollView alloc] initWithFrame:(NSRect){NSZeroPoint, size}];
+	NSOutlineView *ov = [[NSOutlineView alloc] initWithFrame:sv.bounds];
+	ov.style = style;
+	ov.usesAlternatingRowBackgroundColors = alternating;
+	ov.headerView = nil;
+	ov.allowsMultipleSelection = YES;
+	NSTableColumn *col = [[NSTableColumn alloc] initWithIdentifier:@"name"];
+	// narrow, then grown to as wide as the view leaves it: an inset outline
+	// wider than its view draws a full-width selection
+	col.width = 120;
+	ov.columnAutoresizingStyle = NSTableViewLastColumnOnlyAutoresizingStyle;
+	ov.autoresizesOutlineColumn = NO; // else expanding widens it past the view
+	[ov addTableColumn:col];
+	ov.outlineTableColumn = col;
+	TreeData *td = [TreeData new];
+	td.emph = emph;
+	[keep addObject:td];
+	ov.dataSource = td;
+	ov.delegate = td;
+	sv.documentView = ov;
+	sv.hasVerticalScroller = YES;
+	sv.scrollerStyle = NSScrollerStyleOverlay;
+	sv.borderType = NSBezelBorder;
+	[ov reloadData];
+	[ov sizeLastColumnToFit];
+	[ov expandItem:td.roots[0]];
+	[ov expandItem:[td.roots[0] kids][0]];
+	[ov selectRowIndexes:[NSIndexSet indexSetWithIndex:1] byExtendingSelection:NO]; // Projects
 	return sv;
 }
 
@@ -777,31 +881,69 @@ static void defineSamples(void) {
 
 	// lists
 	Sample *t;
+	// The "-emphasized" tables and outlines hold their selection emphasised
+	// (ARRowView), so that -live, whose window has no first responder, shows
+	// it as offscreen does.
 	t = add(@"list", @"table-fullwidth-emphasized", ^{
-		return tableIn(NSTableViewStyleFullWidth, YES, NSMakeSize(420, 240));
+		return tableIn(NSTableViewStyleFullWidth, YES, NSMakeSize(420, 240), YES, NO);
 	});
 	t.size = NSMakeSize(420, 240), t.noShape = YES;
 	t.after = ^(NSView *v, NSWindow *w) {
 		[w makeFirstResponder:((NSScrollView *)v).documentView];
 	};
 	t = add(@"list", @"table-fullwidth-unemphasized", ^{
-		return tableIn(NSTableViewStyleFullWidth, YES, NSMakeSize(420, 240));
+		return tableIn(NSTableViewStyleFullWidth, YES, NSMakeSize(420, 240), NO, NO);
 	});
 	t.size = NSMakeSize(420, 240), t.noShape = YES;
 	t.after = ^(NSView *v, NSWindow *w) {
 		[w makeFirstResponder:nil];
 	};
 	t = add(@"list", @"table-fullwidth-inactive", ^{
-		return tableIn(NSTableViewStyleFullWidth, YES, NSMakeSize(420, 240));
+		return tableIn(NSTableViewStyleFullWidth, YES, NSMakeSize(420, 240), NO, NO);
 	});
 	t.size = NSMakeSize(420, 240), t.noShape = YES, t.inactive = YES;
 	t.after = ^(NSView *v, NSWindow *w) {
 		[w makeFirstResponder:((NSScrollView *)v).documentView];
 	};
 	t = add(@"list", @"table-inset-emphasized", ^{
-		return tableIn(NSTableViewStyleInset, NO, NSMakeSize(420, 240));
+		return tableIn(NSTableViewStyleInset, NO, NSMakeSize(420, 240), YES, NO);
 	});
 	t.size = NSMakeSize(420, 240), t.noShape = YES;
+	t.after = ^(NSView *v, NSWindow *w) {
+		[w makeFirstResponder:((NSScrollView *)v).documentView];
+	};
+	t = add(@"list", @"table-inset-fit-emphasized", ^{
+		return tableIn(NSTableViewStyleInset, YES, NSMakeSize(420, 240), YES, YES);
+	});
+	t.size = NSMakeSize(420, 240), t.noShape = YES;
+	t.after = ^(NSView *v, NSWindow *w) {
+		[w makeFirstResponder:((NSScrollView *)v).documentView];
+	};
+	t = add(@"list", @"table-inset-fit-inactive", ^{
+		return tableIn(NSTableViewStyleInset, YES, NSMakeSize(420, 240), NO, YES);
+	});
+	t.size = NSMakeSize(420, 240), t.noShape = YES, t.inactive = YES;
+	t.after = ^(NSView *v, NSWindow *w) {
+		[w makeFirstResponder:((NSScrollView *)v).documentView];
+	};
+	t = add(@"list", @"outline-emphasized", ^{
+		return outlineIn(NSTableViewStyleFullWidth, NO, NSMakeSize(260, 240), YES);
+	});
+	t.size = NSMakeSize(260, 240), t.noShape = YES;
+	t.after = ^(NSView *v, NSWindow *w) {
+		[w makeFirstResponder:((NSScrollView *)v).documentView];
+	};
+	t = add(@"list", @"outline-unemphasized", ^{
+		return outlineIn(NSTableViewStyleFullWidth, NO, NSMakeSize(260, 240), NO);
+	});
+	t.size = NSMakeSize(260, 240), t.noShape = YES;
+	t.after = ^(NSView *v, NSWindow *w) {
+		[w makeFirstResponder:nil];
+	};
+	t = add(@"list", @"outline-inset-emphasized", ^{
+		return outlineIn(NSTableViewStyleInset, NO, NSMakeSize(260, 240), YES);
+	});
+	t.size = NSMakeSize(260, 240), t.noShape = YES;
 	t.after = ^(NSView *v, NSWindow *w) {
 		[w makeFirstResponder:((NSScrollView *)v).documentView];
 	};
@@ -1117,6 +1259,11 @@ static NSDictionary *renderSample(Sample *s, NSString *apName, NSString *dir) {
 						rd[@"textColor"] = resolveHex(cv.textField.textColor, ap);
 					}
 					if (cv.imageView) rd[@"imageFrame"] = rectJ(cv.imageView.frame);
+					if (cv.textField) rd[@"textFrame"] = rectJ(cv.textField.frame);
+					if ([ov isExpandable:it]) {
+						rd[@"disclosureFrame"] = rectJ([ov frameOfOutlineCellAtRow:r]);
+						rd[@"expanded"] = @([ov isItemExpanded:it]);
+					}
 					[rows addObject:rd];
 				}
 				td[@"rows"] = rows;
@@ -1127,6 +1274,15 @@ static NSDictionary *renderSample(Sample *s, NSString *apName, NSString *dir) {
 				td[@"headerFont"] = fontJ(hc.font);
 				NSTableRowView *rv = [tv rowViewAtRow:2 makeIfNecessary:NO];
 				if (rv) td[@"selectedRowView"] = @{@"emphasized" : @(rv.emphasized), @"frame" : rectJ(rv.frame)};
+				NSMutableArray *cells = [NSMutableArray array], *heads = [NSMutableArray array];
+				for (NSInteger c = 0; c < tv.numberOfColumns; c++) {
+					[cells addObject:rectJ([tv frameOfCellAtColumn:c row:0])];
+					if (tv.headerView) [heads addObject:rectJ([tv.headerView headerRectOfColumn:c])];
+				}
+				td[@"row0Cells"] = cells;
+				if (cv.textField) td[@"row0TextFrame"] = rectJ(cv.textField.frame);
+				if (tv.headerView) td[@"headerRects"] = heads;
+				td[@"contentWidth"] = num(tv.frame.size.width);
 			}
 			m[@"table"] = td;
 		}

@@ -47,6 +47,9 @@ const (
 	// MeasureRing is the focus ring's colour, 1.5 pt inside its outer edge on
 	// the probe's row.
 	MeasureRing
+	// MeasureFill2 is the colour at the second probe (Spec.Probe2): a
+	// table's stripe.
+	MeasureFill2
 )
 
 // Spec says where and what to measure in a sample. Coordinates are points
@@ -67,6 +70,22 @@ type Spec struct {
 	Label [4]float32
 	// Note says why a measurement is left out.
 	Note string
+
+	// Inside measures a shape inside the sample, such as a table's selection
+	// (lists.go): the shape is the run of the probe's colour, within Tol in
+	// every channel (a block's divider lines included), scanning outward
+	// from the probe for its top and bottom (along the probe's column) and
+	// for where to start; its left and right edges are then found scanning
+	// inward from just outside it, at most 12 pt below its top, past any
+	// corner, so that text inside it does not cut it short. The radius is the
+	// top-left corner's, and the label's ink is measured over the probe's
+	// colour.
+	Inside bool
+	// Tol is the largest channel difference from the probe's colour that
+	// is still the shape, for Inside (0: 3).
+	Tol int
+	// Probe2 is the second probe (MeasureFill2).
+	Probe2 [2]float32
 }
 
 const (
@@ -103,6 +122,8 @@ type State struct {
 	set  [8]bool
 
 	icons [numIcons]icon.ID
+
+	lists listState // the lists' samples (lists.go)
 }
 
 // The glyphs of AppKitRef's icon buttons: SF Symbols at AppKit's default
@@ -130,6 +151,7 @@ func NewState(k *base.Kit) *State {
 	for i := range s.icons {
 		s.icons[i] = k.AddIcon(iconSpecs[i])
 	}
+	s.lists.glyphs = rexui.AddListGlyphs(k)
 	return s
 }
 
@@ -457,6 +479,7 @@ func Grid(samples []int) (cells []Cell, w, h float32) {
 var Pages = [...][]string{
 	{}, // every sample but those of the later pages
 	{"label-styles"},
+	listPage, // lists.go
 }
 
 // Page is the samples of page p (Pages) in catalogue order.

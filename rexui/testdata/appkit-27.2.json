@@ -366,6 +366,48 @@
 				"label": "#242424"
 			}
 		},
+		"outline-emphasized": {
+			"dark": {
+				"w": 258,
+				"h": 24,
+				"fill": "#0059D1",
+				"label": "#FFFFFF"
+			},
+			"light": {
+				"w": 258,
+				"h": 24,
+				"fill": "#0064E1",
+				"label": "#FFFFFF"
+			}
+		},
+		"outline-inset-emphasized": {
+			"dark": {
+				"w": 238,
+				"h": 24,
+				"radius": 7.95,
+				"fill": "#0059D1",
+				"label": "#FFFFFF"
+			},
+			"light": {
+				"w": 238,
+				"h": 24,
+				"radius": 7.95,
+				"fill": "#0064E1",
+				"label": "#FFFFFF"
+			}
+		},
+		"outline-unemphasized": {
+			"dark": {
+				"w": 258,
+				"h": 24,
+				"fill": "#464646"
+			},
+			"light": {
+				"w": 258,
+				"h": 24,
+				"fill": "#DCDCDC"
+			}
+		},
 		"popup": {
 			"dark": {
 				"w": 124,
@@ -938,6 +980,94 @@
 				"h": 20.01,
 				"radius": 9.68,
 				"fill": "#0078F9"
+			}
+		},
+		"table-fullwidth-emphasized": {
+			"dark": {
+				"w": 418,
+				"h": 48,
+				"fill": "#0059D1",
+				"label": "#FFFFFF",
+				"fill2": "#292929"
+			},
+			"light": {
+				"w": 418,
+				"h": 48,
+				"fill": "#0064E1",
+				"label": "#FFFFFF",
+				"fill2": "#F4F5F5"
+			}
+		},
+		"table-fullwidth-inactive": {
+			"dark": {
+				"w": 418,
+				"h": 48,
+				"fill": "#464646",
+				"fill2": "#292929"
+			},
+			"light": {
+				"w": 418,
+				"h": 48,
+				"fill": "#DCDCDC",
+				"fill2": "#F4F5F5"
+			}
+		},
+		"table-fullwidth-unemphasized": {
+			"dark": {
+				"w": 418,
+				"h": 48,
+				"fill": "#464646",
+				"fill2": "#292929"
+			},
+			"light": {
+				"w": 418,
+				"h": 48,
+				"fill": "#DCDCDC",
+				"fill2": "#F4F5F5"
+			}
+		},
+		"table-inset-emphasized": {
+			"dark": {
+				"fill": "#0059D1",
+				"label": "#FFFFFF"
+			},
+			"light": {
+				"fill": "#0064E1",
+				"label": "#FFFFFF"
+			}
+		},
+		"table-inset-fit-emphasized": {
+			"dark": {
+				"w": 398,
+				"h": 48,
+				"radius": 7.95,
+				"fill": "#0059D1",
+				"label": "#FFFFFF",
+				"fill2": "#292929"
+			},
+			"light": {
+				"w": 398,
+				"h": 48,
+				"radius": 7.95,
+				"fill": "#0064E1",
+				"label": "#FFFFFF",
+				"fill2": "#F4F5F5"
+			}
+		},
+		"table-inset-fit-inactive": {
+			"dark": {
+				"w": 398,
+				"h": 48,
+				"radius": 7.95,
+				"fill": "#464646",
+				"fill2": "#292929"
+			},
+			"light": {
+				"w": 398,
+				"h": 48,
+				"radius": 7.96,
+				"fill": "#DCDCDC",
+				"fill2": "#F4F5F5"
 			}
 		}
 	}
