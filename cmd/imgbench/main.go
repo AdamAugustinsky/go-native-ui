@@ -154,15 +154,15 @@ func renderPNG(items int, path string) error {
 const (
 	phCold    = iota // scroll the whole grid once
 	phReturn         // back to the top
-	phPrime          // one session's path, loading what the sessions show
-	phSettle         // hold until nothing is pending
+	phPrime          // sessions until one draws every image in view
 	phSession        // the measured sessions, repeating
 )
 
 // session drives the grid in -bench and the test.
 type session struct {
 	phase      int
-	next       int // the frame of the session the next session frame is
+	next       int  // the frame of the session the next session frame is
+	missed     bool // a frame of this priming session drew a placeholder
 	visSum     int
 	readySum   int
 	sessFrames int
@@ -204,14 +204,7 @@ func (s *session) step(g *grid, c *ui.Context) {
 		}
 	case phPrime:
 		g.scroll = s.at(s.next)
-		if s.next++; s.next == s.period() {
-			s.phase, s.next = phSettle, 0
-		}
-	case phSettle:
-		g.scroll = 0
-		if st := g.cache.Stats(); st.Pending == 0 && g.ready == g.visible && g.visible > 0 {
-			s.phase = phSession
-		}
+		s.next++
 	case phSession:
 		g.scroll = s.at(s.next)
 		if s.next++; s.next == s.period() {
@@ -220,8 +213,22 @@ func (s *session) step(g *grid, c *ui.Context) {
 	}
 }
 
-// count accumulates what a session frame showed (called after Build).
+// count accumulates what a session frame showed (called after Build). The
+// sessions are measured once a whole priming session has drawn every image
+// in view: a slow decoder (the standard library's, ~30 ms a thumbnail on a
+// CI runner) finishes images after they left the view, and they upload when
+// they come back.
 func (s *session) count(g *grid) {
+	if s.phase == phPrime {
+		s.missed = s.missed || g.visible == 0 || g.ready != g.visible
+		if s.next == s.period() {
+			if !s.missed {
+				s.phase = phSession
+			}
+			s.next, s.missed = 0, false
+		}
+		return
+	}
 	if s.phase == phSession {
 		s.visSum += g.visible
 		s.readySum += g.ready
@@ -344,7 +351,7 @@ func (x *idler) Build(c *ui.Context) {
 	now := platform.Now()
 	switch {
 	case x.start.Load() == 0:
-		if x.ready == x.visible && x.visible > 0 && x.cache.Stats().Pending == 0 {
+		if x.ready == x.visible && x.visible > 0 && !c.Animating() {
 			x.start.Store(now + int64(200*time.Millisecond)) // the last upload's frames settle
 		}
 	case x.end.Load() != 0 && now >= x.end.Load() && !x.done:

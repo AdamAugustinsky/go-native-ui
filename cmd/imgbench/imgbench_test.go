@@ -34,7 +34,7 @@ func TestCachedSessionsAllocateNothing(t *testing.T) {
 	b := newBenchGrid(defItems)
 	o := newOffscreen(t, b)
 	t.Cleanup(func() { b.cache.Close(time.Second) })
-	deadline := time.Now().Add(60 * time.Second)
+	deadline := time.Now().Add(180 * time.Second) // the standard decoders on a slow runner
 	for b.s.phase != phSession || b.s.next != 0 {
 		o.Frame()
 		if time.Now().After(deadline) {

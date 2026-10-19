@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"errors"
 	"image"
-	"image/draw"
 	_ "image/gif"  // registers the GIF decoder
 	_ "image/jpeg" // registers the JPEG decoder
 	_ "image/png"  // registers the PNG decoder
@@ -65,12 +64,7 @@ func (w *worker) decode(c *Cache, j *job, data []byte) result {
 	case "gif":
 		frames, delay = gifFrames(data)
 	}
-	rgba, ok := m.(*image.RGBA)
-	if !ok {
-		rgba = image.NewRGBA(m.Bounds())
-		draw.Draw(rgba, rgba.Rect, m, m.Bounds().Min, draw.Src)
-	}
-	sw, sh := int32(rgba.Rect.Dx()), int32(rgba.Rect.Dy())
+	sw, sh := int32(m.Bounds().Dx()), int32(m.Bounds().Dy())
 	ow, oh := sw, sh
 	if orient >= 5 {
 		ow, oh = sh, sw
@@ -86,7 +80,7 @@ func (w *worker) decode(c *Cache, j *job, data []byte) result {
 		return fail(errTooLarge)
 	}
 	pix := c.bufs.bytes(buf, bw*bh*4)
-	resample(pix[(int(pad)*bw+int(pad))*4:], bw*4, int(tw), int(th), rgba, orient)
+	resample(pix[(int(pad)*bw+int(pad))*4:], bw*4, int(tw), int(th), m, orient)
 	if pad > 0 {
 		padEdges(pix, int(tw), int(th))
 	}
