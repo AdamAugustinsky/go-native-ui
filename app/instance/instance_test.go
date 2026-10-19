@@ -9,7 +9,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
@@ -358,12 +357,16 @@ loop:
 // stuck.
 func TestNoAnswerWhenNothingListens(t *testing.T) {
 	dir := newDir(t)
-	lk, got, err := acquireLock(filepath.Join(dir, "instance.lock"))
+	lockKey, _, err := setup(testID, Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lk, got, err := acquireLock(lockKey)
 	if err != nil || !got {
 		t.Fatalf("acquireLock: %v %v", got, err)
 	}
 	defer lk.release()
-	p, s, err := AcquireWith("x", Options{Dir: dir, Timeout: 300 * time.Millisecond})
+	p, s, err := AcquireWith(testID, Options{Dir: dir, Timeout: 300 * time.Millisecond})
 	if err != nil || p != nil || s == nil {
 		t.Fatalf("with the lock held elsewhere Acquire = %v, %v, %v", p, s, err)
 	}

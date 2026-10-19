@@ -17,12 +17,18 @@ import (
 // The pipe's DACL: one entry, an allow for the current user, nothing for anyone
 // else (no other user, no Everyone, no administrators).
 func TestPipeDACLIsTheUsersOnly(t *testing.T) {
-	p, _ := acquire(t, newDir(t), Options{})
-	l := p.ln.(*pipeListener)
-	l.mu.Lock()
-	h := l.next
-	l.mu.Unlock()
-	sddl := dacl(t, h)
+	// A listener nobody accepts on: the security of a handle cannot be read while
+	// a call is blocked on it.
+	_, addr, err := setup(testID, Options{Dir: newDir(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln, err := listen(addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	sddl := dacl(t, ln.(*pipeListener).next)
 	sid, err := userSID()
 	if err != nil {
 		t.Fatal(err)
