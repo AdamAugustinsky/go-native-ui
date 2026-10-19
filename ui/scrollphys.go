@@ -31,8 +31,8 @@ const (
 	PhaseStationary
 )
 
-// MaxScrolls is the number of scroll records a frame holds (Input.Scrolls).
-const MaxScrolls = 32
+// MaxScrolls is the number of scroll events a frame holds (Input.Scrolls).
+const MaxScrolls = 64
 
 // ScrollEvent is one scroll event of a frame (Input.Scrolls).
 type ScrollEvent struct {
@@ -50,6 +50,12 @@ type ScrollEvent struct {
 	Inverted bool
 	// Time is the event's time in platform.Now nanoseconds, 0 if unknown.
 	Time int64
+	// X, Y are where the pointer was when the event came (pixels, like
+	// Input.MouseX), when Pos is set: the frame's scrolling goes to the box
+	// under the pointer at its first event, wherever the pointer is by the
+	// end of the frame.
+	X, Y float32
+	Pos  bool
 }
 
 // The rubber band and its spring, fitted to NSScrollView (scrollfit_test.go).
@@ -73,6 +79,9 @@ const (
 	velTimeout = 100e6
 	// maxRubber is the number of boxes that can be stretched at once.
 	maxRubber = 4
+	// maxApplied is the number of boxes a frame's scrolling reports
+	// movement for (Signal.Scroll); more share the last record.
+	maxApplied = 8
 )
 
 // elasticStretch is the stretch shown for a pull of force past an edge of a
@@ -130,11 +139,63 @@ type gesture struct {
 
 // scrollPhys is the trackpad state of a Context.
 type scrollPhys struct {
-	g        gesture
-	rb       [maxRubber]rubber
-	n        int
-	hit      ID  // the scroll box under the pointer (hitTest)
-	scrolled Key // the box this frame's scrolling went to (Signal.Scroll)
+	g       gesture
+	rb      [maxRubber]rubber
+	n       int
+	hit     ID   // the scroll box under the pointer (hitTest)
+	focused bool // the window had the keyboard focus in the last frame
+	// applied[:nApplied] is how far this frame's scrolling moved each box
+	// it went to (Signal.Scroll).
+	applied  [maxApplied]appliedRec
+	nApplied int
+}
+
+type appliedRec struct {
+	key Key
+	d   [2]float32
+}
+
+// addApplied adds d pixels on axis a to what this frame's scrolling moved
+// the box with key k.
+func (c *Context) addApplied(k Key, a int, d float64) {
+	sp := &c.sp
+	i := 0
+	for ; i < sp.nApplied && sp.applied[i].key != k; i++ {
+	}
+	if i == sp.nApplied {
+		if i == maxApplied {
+			i--
+		} else {
+			sp.nApplied++
+		}
+		sp.applied[i] = appliedRec{key: k}
+	}
+	sp.applied[i].d[a] += float32(d)
+}
+
+// appliedTo is how far this frame's scrolling moved the box with key k.
+func (c *Context) appliedTo(k Key) [2]float32 {
+	for i := 0; i < c.sp.nApplied; i++ {
+		if c.sp.applied[i].key == k {
+			return c.sp.applied[i].d
+		}
+	}
+	return [2]float32{}
+}
+
+// unstretch lets go of the stretch of the box with key k on the axes in mask
+// (bit a): a jump or reveal of the box's content shows exactly its offset.
+func (c *Context) unstretch(k Key, mask uint8) {
+	if mask == 0 || c.sp.n == 0 {
+		return
+	}
+	if r := c.rubberOf(k); r != nil {
+		for a := 0; a < 2; a++ {
+			if mask&(1<<a) != 0 {
+				r.s[a], r.force[a], r.mode[a] = 0, 0, rbIdle
+			}
+		}
+	}
 }
 
 // ScrollStretch returns how far box id is pulled past the edges of its
@@ -194,20 +255,25 @@ func (c *Context) rubberFor(k Key) *rubber {
 }
 
 // scrollInput applies the frame's scroll events in order (mouse calls it).
+// When the window loses the keyboard focus, the gesture ends there: what is
+// left of its momentum is dropped and every stretch springs back.
 func (c *Context) scrollInput() {
-	c.scrollApplied = [2]float32{}
-	c.sp.scrolled = 0
+	c.sp.nApplied = 0
 	in := &c.in
 	if in.NScrolls == 0 {
 		if in.ScrollX != 0 || in.ScrollY != 0 { // set without AddScroll
 			e := ScrollEvent{DX: in.ScrollX, DY: in.ScrollY, Precise: in.Precise}
 			c.scrollEvent(&e)
 		}
-		return
 	}
 	for i := 0; i < in.NScrolls; i++ {
 		c.scrollEvent(&in.Scrolls[i])
 	}
+	if c.sp.focused && !in.Focused {
+		c.sp.g = gesture{axis: -1, ignoreMom: true}
+		c.release(in.Time)
+	}
+	c.sp.focused = in.Focused
 }
 
 func (c *Context) scrollEvent(e *ScrollEvent) {
@@ -230,7 +296,7 @@ func (c *Context) scrollEvent(e *ScrollEvent) {
 		g.fingers = false
 		c.release(e.Time)
 	case e.Momentum != PhaseNone:
-		if e.Momentum == PhaseBegan {
+		if e.Momentum == PhaseBegan && !g.ignoreMom {
 			g.momentum = true
 		}
 		if !g.ignoreMom {
@@ -249,8 +315,8 @@ func (c *Context) scrollEvent(e *ScrollEvent) {
 }
 
 // scrollPlain applies a wheel event, or precise deltas without a gesture, to
-// the box under the pointer: hard-clamped, wheels smoothly (the target moves)
-// and precise deltas at once.
+// the box under the pointer: hard-clamped, precise deltas at once and wheels
+// smoothly (the target moves), or at once too with WheelJumps.
 func (c *Context) scrollPlain(e *ScrollEvent) {
 	if c.scrollKey == 0 {
 		return
@@ -272,13 +338,12 @@ func (c *Context) scrollPlain(e *ScrollEvent) {
 		hi := math.Max(0, b.content[a]-float64(b.size[a]))
 		old := b.scrollTgt[a]
 		b.scrollTgt[a] = math.Min(math.Max(old+delta[a], 0), hi)
-		if e.Precise {
+		if e.Precise || c.WheelJumps {
 			b.scroll[a] = math.Min(math.Max(b.scroll[a]+delta[a], 0), hi)
 			b.scrollTgt[a] = b.scroll[a]
 		}
-		c.scrollApplied[a] += float32(b.scrollTgt[a] - old)
+		c.addApplied(b.key, a, b.scrollTgt[a]-old)
 	}
-	c.sp.scrolled = c.scrollKey
 }
 
 // touchDown: fingers rest on the trackpad at time now (ns, 0 unknown). The
@@ -388,7 +453,6 @@ func (c *Context) gestureDelta(e *ScrollEvent, momentum bool) {
 	if !b.scrollOn(a) {
 		return
 	}
-	c.sp.scrolled = g.key
 	if momentum {
 		if r := c.rubberOf(g.key); r != nil && r.s[a] != 0 && r.mode[a] == rbSpring {
 			if d[a]*r.s[a] > 0 { // outward into a spring: it plays out
@@ -492,7 +556,7 @@ func (c *Context) push(b *box, a int, d float64) float64 {
 		rem, n = n-hi, hi
 	}
 	b.scroll[a], b.scrollTgt[a] = n, n
-	c.scrollApplied[a] += float32(n - old)
+	c.addApplied(b.key, a, n-old)
 	if rem != 0 && view > 0 {
 		r := c.rubberFor(b.key)
 		r.mode[a], r.force[a], r.s[a] = rbFinger, rem, elasticStretch(rem, view)

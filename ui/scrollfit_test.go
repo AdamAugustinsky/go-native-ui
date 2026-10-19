@@ -134,6 +134,7 @@ func loadFit(t *testing.T, name string) *fitScenario {
 // (scroll plus stretch) after every frame: t, x, y, outer y.
 func (sc *fitScenario) run(t *testing.T) [][4]float64 {
 	h := newHarness(t, 1000, 1200)
+	h.c.WheelJumps = true // as app sets it on macOS
 	var box, outer ID
 	fl := Clip | ScrollY
 	if sc.doc[0] > sc.view[0] {
@@ -256,14 +257,13 @@ func (sc *fitScenario) compare(ours [][4]float64, lag float64) (worst float64, a
 
 var fitNames = []string{
 	"pull-5x40", "pull-20x40", "pull-20x150", "pull-20x150-v200", "pull-20x40-v200", "pull-20x40-v800",
-	"reverse", "catch", "regrab", "wheel-top", "drag-mid", "axis1", "axis2", "axis3", "nest-top", "nest-cross",
+	"reverse", "catch", "regrab", "wheel-top", "wheel-mid", "drag-mid", "axis1", "axis2", "axis3", "nest-top", "nest-cross",
 }
 
 // TestScrollTracksAppKit replays every scenario. Not compared: pull-bottom,
 // where NSScrollView applies the first event past the bottom edge undamped
 // (its pinned state lags an event: 30 pt more stretch), which ui does not
-// copy; and wheel-mid, where AppKit jumps a whole event at once and ui glides
-// to the same offset (checked at its end).
+// copy.
 func TestScrollTracksAppKit(t *testing.T) {
 	for _, name := range fitNames {
 		sc := loadFit(t, name)
@@ -281,11 +281,6 @@ func TestScrollTracksAppKit(t *testing.T) {
 		} else {
 			t.Logf("%s: within tolerance (margin %.2f pt, latency %v ms)", name, -best, bestLag)
 		}
-	}
-	sc := loadFit(t, "wheel-mid")
-	ours := sc.run(t)
-	if a, o := sc.ref[len(sc.ref)-1], ours[len(ours)-1]; math.Abs(a[2]-o[2]) > 0.5 {
-		t.Errorf("wheel-mid: settles at %.1f, AppKit at %.1f", o[2], a[2])
 	}
 }
 

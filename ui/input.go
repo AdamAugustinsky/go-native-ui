@@ -323,31 +323,27 @@ func (in *Input) AddScroll(dx, dy float32, precise bool) {
 }
 
 // AddScrollEvent appends e to Scrolls; it leaves ScrollX and ScrollY alone
-// (the caller keeps them). Consecutive events of the same kind in the middle
-// of a gesture are merged (their deltas add up, the later time stays), so a
-// frame's records fit; when Scrolls is full the event is merged into the
-// last record, which takes the event's phases unless they are Changed.
+// (the caller keeps them). Events are kept one by one, so that how a stream
+// of them is split into frames does not change what they do (the axis a
+// gesture locks to, the momentum's velocity). Only when Scrolls is full is
+// the event merged into the last one (deltas added, the later time kept),
+// which then takes the event's phases unless they are Changed: more than
+// MaxScrolls events in a frame (a stalled frame) are approximated.
 func (in *Input) AddScrollEvent(e ScrollEvent) {
-	if in.NScrolls > 0 {
+	if in.NScrolls == MaxScrolls {
 		l := &in.Scrolls[in.NScrolls-1]
-		same := l.Phase == e.Phase && l.Momentum == e.Momentum && l.Precise == e.Precise && l.Inverted == e.Inverted &&
-			(e.Phase == PhaseNone || e.Phase == PhaseChanged) && (e.Momentum == PhaseNone || e.Momentum == PhaseChanged)
-		if same || in.NScrolls == MaxScrolls {
-			l.DX += e.DX
-			l.DY += e.DY
-			if e.Time != 0 {
-				l.Time = e.Time
-			}
-			if !same {
-				if e.Phase != PhaseChanged {
-					l.Phase = e.Phase
-				}
-				if e.Momentum != PhaseChanged {
-					l.Momentum = e.Momentum
-				}
-			}
-			return
+		l.DX += e.DX
+		l.DY += e.DY
+		if e.Time != 0 {
+			l.Time = e.Time
 		}
+		if e.Phase != PhaseChanged {
+			l.Phase = e.Phase
+		}
+		if e.Momentum != PhaseChanged {
+			l.Momentum = e.Momentum
+		}
+		return
 	}
 	in.Scrolls[in.NScrolls] = e
 	in.NScrolls++

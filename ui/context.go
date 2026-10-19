@@ -100,6 +100,9 @@ type Context struct {
 	Rates Rates
 	// WheelStep is the number of pixels one wheel notch scrolls (default 48).
 	WheelStep float32
+	// WheelJumps makes a wheel jump straight to where it scrolls, as AppKit's
+	// does (app sets it on macOS); otherwise the offset glides there (Rates.Scroll).
+	WheelJumps bool
 	// TextEdit styles the text fields (colours and caret blink); see TextField.
 	TextEdit TextEditStyle
 	// ClipboardSet puts plain UTF-8 text on the system clipboard for the copy
@@ -182,7 +185,6 @@ type Context struct {
 	relClicks         [2]uint8
 	focusKey          Key
 	focusVisible      bool // focus came from the keyboard (FocusVisible)
-	scrollApplied     [2]float32
 	scrollSet         bool // ScrollTo was called this frame (End decides whether the scroll is still moving)
 
 	sp scrollPhys // trackpad gestures, latching and rubber bands (scrollphys.go)

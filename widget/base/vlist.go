@@ -172,10 +172,15 @@ func BeginVList(c *ui.Context, label string, st *VListState, o VListOpts) VList 
 		}
 	}
 	d := st.by / old // ui's offsets are in the last frame's pixels
+	byPt := d
 	st.by = 0
 	have = have && !rescaled // ui's offset is in the old pixels: set it again
 	focused := c.FocusKey() == bkey
 	jump := 0 // -1 top, 1 end
+	// explicit: the keyboard or a ScrollTo moves the view this frame, which
+	// lets go of a trackpad's stretch (ui.Context.SetScroll); otherwise the
+	// offset only restates the anchor (ui.Context.AnchorScroll).
+	explicit := false
 	if focused {
 		line := float64(o.Line)
 		page := max(view-line, line)
@@ -194,6 +199,7 @@ func BeginVList(c *ui.Context, label string, st *VListState, o VListOpts) VList 
 		case c.TakeKey(ui.KeyEnd, 0), c.TakeKey(ui.KeyDown, prim):
 			jump = 1
 		}
+		explicit = d != byPt || jump != 0
 	}
 	if (d != 0 || jump != 0) && st.settling {
 		st.req = false // the user scrolled: a ScrollTo stops settling
@@ -230,6 +236,7 @@ func BeginVList(c *ui.Context, label string, st *VListState, o VListOpts) VList 
 	case jump > 0:
 		y = maxY
 	case st.req && st.reqTarget(view, changed, o.MaxItems, &y):
+		explicit = true
 	case st.stuck && o.StickToBottom:
 		y = maxY + d
 	default:
@@ -319,15 +326,15 @@ func BeginVList(c *ui.Context, label string, st *VListState, o VListOpts) VList 
 	switch {
 	case v.short:
 		s = 0
-		c.SetScroll(v.Body, 0, s)
+		vlSetScroll(c, v.Body, s, explicit)
 	case v.bottom:
 		l = rows
 		s = content
-		c.SetScroll(v.Body, 0, s)
+		vlSetScroll(c, v.Body, s, explicit)
 	default:
 		yPx, offPx := y*sc, st.offset*sc
 		if !have || (math.Abs(s-yPx) > 0.25 && !c.Animating()) || s-offPx < -1e-9 || s > max(content-view*sc, 0)+1e-9 {
-			c.SetScroll(v.Body, 0, yPx)
+			vlSetScroll(c, v.Body, yPx, explicit)
 			s = yPx
 		}
 		l = int(math.Round((s - offPx) * 256))
@@ -354,6 +361,17 @@ func BeginVList(c *ui.Context, label string, st *VListState, o VListOpts) VList 
 		c.RequestFrame()
 	}
 	return v
+}
+
+// vlSetScroll sets the body's offset: as a jump (letting go of a trackpad's
+// stretch) when the keyboard or a ScrollTo moved the view, else as the same
+// place restated from the anchor, which keeps the stretch.
+func vlSetScroll(c *ui.Context, body ui.ID, y float64, explicit bool) {
+	if explicit {
+		c.SetScroll(body, 0, y)
+	} else {
+		c.AnchorScroll(body, 0, y)
+	}
 }
 
 // Key is the key of the list's scrolling box, the one that takes the keyboard

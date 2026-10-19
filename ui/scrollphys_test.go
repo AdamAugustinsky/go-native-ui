@@ -438,8 +438,8 @@ func TestScrollGestureAllocatesNothing(t *testing.T) {
 	}
 }
 
-// TestScrollRecordsMerge: a frame keeps its events in order, merging runs of
-// the same kind, and a full frame merges into its last record.
+// TestScrollRecordsMerge: a frame keeps its events in order, one by one, and
+// a full frame merges into its last record.
 func TestScrollRecordsMerge(t *testing.T) {
 	var in Input
 	in.AddScrollEvent(ScrollEvent{Phase: PhaseMayBegin, Precise: true})
@@ -447,7 +447,7 @@ func TestScrollRecordsMerge(t *testing.T) {
 	in.AddScrollEvent(ScrollEvent{Phase: PhaseChanged, DY: 2, Precise: true, Time: 5})
 	in.AddScrollEvent(ScrollEvent{Phase: PhaseChanged, DY: 3, Precise: true, Time: 6})
 	in.AddScrollEvent(ScrollEvent{Phase: PhaseEnded, Precise: true})
-	if in.NScrolls != 4 || in.Scrolls[2].DY != 5 || in.Scrolls[2].Time != 6 || in.Scrolls[3].Phase != PhaseEnded {
+	if in.NScrolls != 5 || in.Scrolls[2].DY != 2 || in.Scrolls[3].DY != 3 || in.Scrolls[3].Time != 6 || in.Scrolls[4].Phase != PhaseEnded {
 		t.Fatalf("records %+v", in.Scrolls[:in.NScrolls])
 	}
 	in = Input{}
@@ -464,5 +464,187 @@ func TestScrollRecordsMerge(t *testing.T) {
 	}
 	if in.NScrolls != MaxScrolls || sum != MaxScrolls+3 || in.Scrolls[MaxScrolls-1].Phase != PhaseBegan {
 		t.Fatalf("full: %d records, sum %v, last phase %v", in.NScrolls, sum, in.Scrolls[MaxScrolls-1].Phase)
+	}
+}
+
+// TestBatchingDoesNotChangeTheGesture: the same stream of events, delivered
+// one a frame, all in one frame or three a frame, ends in the same place: the
+// axis lock (a tie, then horizontal) and a momentum bounce off the top.
+func TestBatchingDoesNotChangeTheGesture(t *testing.T) {
+	type ev struct {
+		phase, mom ScrollPhase
+		dx, dy     float32
+	}
+	stream := []ev{{PhaseMayBegin, PhaseNone, 0, 0}, {PhaseBegan, PhaseNone, -1, -1}, {PhaseChanged, PhaseNone, -2, -1},
+		{PhaseChanged, PhaseNone, -3, -10}, {PhaseChanged, PhaseNone, 0, 4}, {PhaseEnded, PhaseNone, 0, 0}}
+	v := float32(40)
+	for i := 0; i < 12; i++ {
+		m := PhaseChanged
+		if i == 0 {
+			m = PhaseBegan
+		}
+		stream = append(stream, ev{PhaseNone, m, v, 0})
+		v *= 0.9
+	}
+	stream = append(stream, ev{PhaseNone, PhaseEnded, 0, 0})
+	run := func(per int) [4]float64 {
+		r := newGestureRig(t)
+		r.build = func(c *Context) {
+			c.NextSize(Px(100), Px(100))
+			r.box = c.Open(ScrollX|ScrollY|Clip, "box")
+			c.NextSize(Px(1000), Px(1000))
+			c.Box(0, "content")
+			c.Close()
+		}
+		r.step()
+		r.step()
+		r.c.SetScroll(r.box, 0, 0)
+		t0 := r.now
+		for i, e := range stream {
+			r.in.AddScrollEvent(ScrollEvent{DX: e.dx, DY: e.dy, Phase: e.phase, Momentum: e.mom, Precise: true,
+				Time: t0 + int64(i+1)*8e6})
+			if (i+1)%per == 0 || i == len(stream)-1 {
+				r.now = t0 + int64(i+1)*8e6 - frameNs // step adds a frame
+				r.step()
+			}
+		}
+		r.now = t0 + int64(len(stream))*8e6 + 60e6 - frameNs // the bounce under way
+		r.step()
+		x, y := r.c.Scroll(r.box)
+		sx, sy := r.c.ScrollStretch(r.box)
+		return [4]float64{x, y, sx, sy}
+	}
+	one := run(1)
+	if one[0] != 0 || one[1] != 1 || one[2] >= 0 {
+		t.Fatalf("one event a frame: at %v, want x 0 (bouncing off the left edge) and y 1 (the tie)", one)
+	}
+	for _, per := range []int{3, len(stream)} {
+		if got := run(per); got != one {
+			t.Errorf("%d events a frame: %v, one a frame: %v", per, got, one)
+		}
+	}
+}
+
+// TestFocusLossEndsTheGesture: the window losing the keyboard focus in the
+// middle of a pull, or while fingers rest on a spring, lets the stretch spring
+// back to rest, and the old momentum is dropped.
+func TestFocusLossEndsTheGesture(t *testing.T) {
+	settle := func(r *gestureRig, what string) {
+		t.Helper()
+		for i := 0; i < 120 && (r.c.Animating() || i == 0); i++ {
+			r.step()
+		}
+		if r.stretch(r.box) != 0 || r.c.Animating() {
+			t.Fatalf("%s: stretch %v, animating %v", what, r.stretch(r.box), r.c.Animating())
+		}
+	}
+	r := newGestureRig(t)
+	r.pull(20, 10)
+	r.in.Focused = false
+	settle(r, "focus lost during a pull")
+	r.in.Focused = true
+	r.ev(PhaseNone, PhaseChanged, 0, -30) // the old gesture's momentum
+	r.step()
+	if r.y(r.box) != 0 {
+		t.Fatalf("old momentum scrolled to %v", r.y(r.box))
+	}
+
+	r = newGestureRig(t)
+	r.pull(20, 10)
+	r.ev(PhaseEnded, PhaseNone, 0, 0)
+	r.step()
+	r.ev(PhaseMayBegin, PhaseNone, 0, 0)
+	r.step()
+	r.in.Focused = false
+	settle(r, "focus lost during a hold")
+}
+
+// TestRevealLetsGoOfTheStretch: an explicit jump or reveal of a stretched box
+// shows exactly its target; AnchorScroll (a list restating its position) keeps
+// the stretch.
+func TestRevealLetsGoOfTheStretch(t *testing.T) {
+	r := newGestureRig(t)
+	r.pull(20, 10) // fingers stay down: the stretch would stay
+	var content ID
+	reveal := func(c *Context) {
+		r.build(c)
+		content = c.boxes[r.box].first
+		c.ScrollIntoView(r.box, [4]float32{0, 50, 100, 150})
+	}
+	r.now += frameNs
+	r.in.Time = r.now
+	r.frame(reveal)
+	for i := 0; i < 60; i++ {
+		r.step()
+	}
+	if b := r.c.Rect(content)[1] + 150; b > 100.5 || r.stretch(r.box) != 0 {
+		t.Fatalf("the revealed rectangle ends at %v in a 100 px view (stretch %v)", b, r.stretch(r.box))
+	}
+
+	r = newGestureRig(t)
+	r.pull(20, 10)
+	s := r.stretch(r.box)
+	r.now += frameNs
+	r.frame(func(c *Context) { r.build(c); c.AnchorScroll(r.box, 0, 0) })
+	if r.stretch(r.box) != s {
+		t.Fatalf("AnchorScroll changed the stretch: %v → %v", s, r.stretch(r.box))
+	}
+	r.frame(func(c *Context) { r.build(c); c.SetScroll(r.box, 0, 300) })
+	if r.stretch(r.box) != 0 || r.y(r.box) != 300 {
+		t.Fatalf("SetScroll: at %v, stretch %v", r.y(r.box), r.stretch(r.box))
+	}
+}
+
+// TestScrollSignalPerBox: a frame whose scrolling goes to two boxes (the
+// latched one's momentum, a wheel over the other) reports each box its own
+// movement.
+func TestScrollSignalPerBox(t *testing.T) {
+	r, b := twoBoxes(t)
+	r.move(50, 50)
+	r.pull(-10, 2)
+	r.ev(PhaseEnded, PhaseNone, 0, 0)
+	r.step()
+	r.move(150, 50)
+	r.ev(PhaseNone, PhaseBegan, 0, -7)
+	r.in.AddScrollEvent(ScrollEvent{DY: -5, Precise: true, X: 150, Y: 50, Pos: true})
+	var sa, sb Signal
+	r.now += frameNs
+	r.in.Time = r.now
+	r.frame(func(c *Context) {
+		r.build(c)
+		sa, sb = c.Signal(r.box), c.Signal(*b)
+	})
+	if sa.Scroll != [2]float32{0, 7} || sb.Scroll != [2]float32{0, 5} {
+		t.Fatalf("A moved %v, B %v; want 7 and 5", sa.Scroll, sb.Scroll)
+	}
+	if n := testing.AllocsPerRun(20, func() {
+		r.ev(PhaseNone, PhaseChanged, 0, -1)
+		r.in.AddScrollEvent(ScrollEvent{DY: -1, Precise: true, X: 150, Y: 50, Pos: true})
+		r.step()
+	}); n != 0 {
+		t.Fatalf("%v allocations", n)
+	}
+}
+
+// TestLatchUsesThePositionOfTheFirstEvent: a pointer move later in the frame
+// than the gesture's first event does not choose the box it latches to.
+func TestLatchUsesThePositionOfTheFirstEvent(t *testing.T) {
+	r, b := twoBoxes(t)
+	r.move(150, 50) // over B by the end of the frame
+	r.in.AddScrollEvent(ScrollEvent{DY: -10, Phase: PhaseBegan, Precise: true, X: 50, Y: 50, Pos: true})
+	r.step()
+	if r.y(r.box) != 10 || r.y(*b) != 0 {
+		t.Fatalf("A at %v, B at %v: the gesture began over A", r.y(r.box), r.y(*b))
+	}
+}
+
+// TestWheelJumps: with WheelJumps (macOS) a wheel lands at once.
+func TestWheelJumps(t *testing.T) {
+	r := newGestureRig(t)
+	r.c.WheelJumps = true
+	r.in.AddScroll(0, -2, false)
+	r.step()
+	if r.y(r.box) != 96 || r.c.Animating() {
+		t.Fatalf("at %v (animating %v), want 96 at once", r.y(r.box), r.c.Animating())
 	}
 }

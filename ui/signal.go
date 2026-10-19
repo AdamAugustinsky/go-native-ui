@@ -12,21 +12,39 @@ import "math"
 //
 // Overlays are hit-tested after the main tree, in order, so the topmost wins;
 // everything beneath a modal is skipped, and tooltips are never hit.
+//
+// The scroll box is found where the frame's first scroll event happened
+// (ScrollEvent.Pos), which a later pointer move in the same frame must not
+// change.
 func (c *Context) hitTest() {
 	c.hotID, c.hotKey, c.scrollKey, c.sp.hit = 0, 0, 0, 0
-	if c.root == 0 || !c.in.Inside {
+	if c.root == 0 {
 		return
 	}
-	if c.modalIdx < 0 {
-		c.hitWalk(c.root, c.in.MouseX, c.in.MouseY)
+	if c.in.Inside {
+		c.hitAll(c.in.MouseX, c.in.MouseY)
 	}
-	for i := max(c.modalIdx, 0); i < c.nOvPrev; i++ {
-		if c.ovPrev[i].kind != OverlayTooltip {
-			c.hitWalk(c.ovPrev[i].id, c.in.MouseX, c.in.MouseY)
-		}
+	hot := c.hotID
+	if in := &c.in; in.NScrolls > 0 && in.Scrolls[0].Pos && (!in.Inside || in.Scrolls[0].X != in.MouseX || in.Scrolls[0].Y != in.MouseY) {
+		c.scrollKey, c.sp.hit = 0, 0
+		c.hitAll(in.Scrolls[0].X, in.Scrolls[0].Y)
+		c.hotID = hot
 	}
 	if c.hotID != 0 {
 		c.hotKey = c.boxes[c.hotID].key
+	}
+}
+
+// hitAll walks the main tree (unless a modal covers it) and the overlays at
+// (x, y).
+func (c *Context) hitAll(x, y float32) {
+	if c.modalIdx < 0 {
+		c.hitWalk(c.root, x, y)
+	}
+	for i := max(c.modalIdx, 0); i < c.nOvPrev; i++ {
+		if c.ovPrev[i].kind != OverlayTooltip {
+			c.hitWalk(c.ovPrev[i].id, x, y)
+		}
 	}
 }
 
@@ -189,8 +207,8 @@ func (c *Context) Signal(id ID) Signal {
 			s.DragDelta = [2]float32{c.in.MouseX - c.pressPos[0][0], c.in.MouseY - c.pressPos[0][1]}
 		}
 	}
-	if b.flags&scrollMask != 0 && c.sp.scrolled == k {
-		s.Scroll = c.scrollApplied
+	if b.flags&scrollMask != 0 {
+		s.Scroll = c.appliedTo(k)
 	}
 	if c.focusKey == k && b.flags&Focusable != 0 {
 		if c.activated == k {
@@ -279,8 +297,18 @@ func (c *Context) FocusT(id ID) float32 { return c.boxes[id].focusT }
 func (c *Context) Scroll(id ID) (x, y float64) { return c.boxes[id].scroll[0], c.boxes[id].scroll[1] }
 
 // SetScroll jumps the scroll offset of id (and its target); the layout clamps
-// it to the content.
+// it to the content. A trackpad's stretch of the box is let go (the jump
+// shows exactly the offset); see AnchorScroll.
 func (c *Context) SetScroll(id ID, x, y float64) {
+	b := &c.boxes[id]
+	b.scroll, b.scrollTgt = [2]float64{x, y}, [2]float64{x, y}
+	c.unstretch(b.key, 3)
+}
+
+// AnchorScroll is SetScroll for a view that states its position again every
+// frame, such as a list kept on an anchor item (base.VList): the offset is
+// the same place in other terms, so a trackpad's stretch of the box stays.
+func (c *Context) AnchorScroll(id ID, x, y float64) {
 	b := &c.boxes[id]
 	b.scroll, b.scrollTgt = [2]float64{x, y}, [2]float64{x, y}
 }
@@ -290,9 +318,13 @@ func (c *Context) SetScroll(id ID, x, y float64) {
 // frame animating if the offset is not there yet, so a frame loop that draws
 // only while Animating carries on to the target, also when this frame's own
 // content is what makes the target valid.
+//
+// A trackpad's stretch of the box is let go, so that the glide ends at the
+// target.
 func (c *Context) ScrollTo(id ID, x, y float64) {
 	c.boxes[id].scrollTgt = [2]float64{x, y}
 	c.scrollSet = true
+	c.unstretch(c.boxes[id].key, 3)
 }
 
 // scrollPending reports whether a scroll offset of a box built this frame is
@@ -327,9 +359,11 @@ func (c *Context) ScrollExtent(id ID) (content, view [2]float32) {
 // the target is clamped to the content when the frame is laid out. It
 // compares with the target of an earlier ScrollTo or ScrollIntoView of the
 // frame, so a series of calls (a selection that grows) accumulates. Axes the
-// box does not scroll on are left alone.
+// box does not scroll on are left alone. A trackpad's stretch that would
+// clip the rectangle is let go.
 func (c *Context) ScrollIntoView(id ID, r [4]float32) {
 	b := &c.boxes[id]
+	var clipped uint8
 	for a := 0; a < 2; a++ {
 		if !b.scrollOn(a) {
 			continue
@@ -344,7 +378,11 @@ func (c *Context) ScrollIntoView(id ID, r [4]float32) {
 			t = hi - view
 		}
 		b.scrollTgt[a] = math.Max(t, 0)
+		if s := c.stretchOf(b, a); s != 0 && (lo < b.scrollTgt[a]+s || hi > b.scrollTgt[a]+s+view) {
+			clipped |= 1 << a
+		}
 	}
+	c.unstretch(b.key, clipped)
 	c.scrollSet = true
 }
 

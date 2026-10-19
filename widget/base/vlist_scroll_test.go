@@ -146,3 +146,20 @@ func TestVListPinnedRubberBands(t *testing.T) {
 		t.Fatal("scrolling up from the bottom did not leave it")
 	}
 }
+
+// TestVListScrollToLetsGoOfTheStretch: a ScrollTo of a stretched list lands
+// its item exactly at the top, while the anchoring of the frames before it
+// kept the stretch (TestVListPinnedRubberBands).
+func TestVListScrollToLetsGoOfTheStretch(t *testing.T) {
+	h := newVT(t, 200, VListOpts{})
+	h.frames(3)
+	h.pull(20, 10) // the fingers stay down
+	if h.stretch() >= 0 {
+		t.Fatal("not stretched")
+	}
+	h.st.ScrollTo(50, AlignStart)
+	h.frames(12)
+	if y := h.y(h.st.ID(50)); y != 0 || h.stretch() != 0 {
+		t.Fatalf("item 50 at %v after ScrollTo (stretch %v), want 0", y, h.stretch())
+	}
+}
