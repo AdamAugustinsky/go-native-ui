@@ -10,3 +10,6 @@
 /tools/bouncerec/bin/
 /tools/appkitref/bin/
 /tools/gnuishot/bin/
+
+# gnui run: development bundles, logs
+.gnui/
