@@ -63,6 +63,15 @@ func (w *Window) handle(ev objc.ID) {
 		return // also used to unblock the loop after a display-link tick
 	}
 	t := int64(objc.SendF64(ev, selTimestamp) * 1e9)
+	if w.dialogOpen() {
+		// A sheet owns the window's input (dialog.go): its keys and clicks go
+		// to AppKit only, not to the app behind it.
+		switch typ {
+		case 1, 2, 3, 4, 5, 6, 7, 10, 11, 22, 25, 26, 27:
+			objc.Send1(w.app, selSendEvent, uintptr(ev))
+			return
+		}
+	}
 	switch typ {
 	case 1, 2, 3, 4, 5, 6, 7, 25, 26, 27: // mouse down/up/moved/dragged
 		if w.pointerEvent(ev, typ, t) {

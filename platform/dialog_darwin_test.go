@@ -1,0 +1,605 @@
+//go:build darwin
+
+package platform
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"gonativeui/internal/ffi"
+	"gonativeui/internal/objc"
+)
+
+var fakePanelClass, fakeURLs objc.ID
+
+// The native alert and panel sheets, driven programmatically: a sheet is ended
+// by pressing one of its buttons (performClick:) or with endSheet:returnCode:,
+// and the answers are read from the window's own event queue, as the app
+// would. Every scenario runs on the main thread inside one onMain call.
+
+// dlgRig is a real, visible window and the dialog events it has delivered.
+type dlgRig struct {
+	w       *Window
+	results []DialogResult
+	keys    int // EvKey events the app saw
+	errs    []string
+}
+
+func (r *dlgRig) failf(f string, a ...any) { r.errs = append(r.errs, fmt.Sprintf(f, a...)) }
+
+// openDlgRig opens a window and shows it; nil when no window can be opened.
+func openDlgRig() (*dlgRig, error) { return openDlgRigOpts(false) }
+
+func openDlgRigOpts(hidden bool) (*dlgRig, error) {
+	if os.Getenv("GNUI_NO_WINDOWS") != "" {
+		return nil, fmt.Errorf("GNUI_NO_WINDOWS")
+	}
+	w, err := Open(Options{Title: "dialog test", Width: 480, Height: 320, Hidden: hidden})
+	if err != nil {
+		return nil, err
+	}
+	return &dlgRig{w: w}, nil
+}
+
+// pump runs the event loop until done reports true or the time is up, and
+// reports whether done became true. Dialog results and keys are recorded.
+func (r *dlgRig) pump(d time.Duration, done func() bool) bool {
+	end := time.Now().Add(d)
+	for {
+		if done != nil && done() {
+			return true
+		}
+		if !time.Now().Before(end) {
+			return false
+		}
+		for _, e := range r.w.Wait(5e6) {
+			r.record(e)
+		}
+	}
+}
+
+func (r *dlgRig) record(e Event) {
+	switch e.Kind {
+	case EvDialog:
+		r.results = append(r.results, r.w.DialogResult(e))
+	case EvKey:
+		r.keys++
+	}
+}
+
+// drain records what the queue holds without waiting.
+func (r *dlgRig) drain() {
+	for _, e := range r.w.Wait(0) {
+		r.record(e)
+	}
+}
+
+// attached waits until a sheet is on the window.
+func (r *dlgRig) attached() bool {
+	return r.pump(5*time.Second, func() bool { return objc.Send(r.w.win, selAttachedSheet) != 0 })
+}
+
+func (r *dlgRig) button(a objc.ID, i int) objc.ID {
+	return objc.Send1(objc.Send(a, objc.Sel("buttons")), selURLAt, uintptr(i))
+}
+
+func withRig(f func(*dlgRig)) (errs []string, skip string, leaked bool) {
+	return withRigOpts(false, f)
+}
+
+func withRigOpts(hidden bool, f func(*dlgRig)) (errs []string, skip string, leaked bool) {
+	base := objc.Leaks()
+	onMain(func() {
+		r, err := openDlgRigOpts(hidden)
+		if err != nil {
+			skip = "cannot open a window here: " + err.Error()
+			return
+		}
+		f(r)
+		if r.w != nil && !r.w.aux.closed {
+			r.w.Close()
+		}
+		errs = r.errs
+		after := objc.Leaks()
+		leaked = after.Blocks != base.Blocks || after.KeptBlocks != base.KeptBlocks
+		for i := range dialogs {
+			if dialogs[i].ticket != 0 {
+				errs = append(errs, "a dialog record is still taken")
+				dialogs[i] = dialogRec{}
+			}
+		}
+	})
+	return
+}
+
+func runScenario(t *testing.T, f func(*dlgRig)) {
+	t.Helper()
+	errs, skip, leaked := withRig(f)
+	if skip != "" {
+		t.Skip(skip)
+	}
+	for _, e := range errs {
+		t.Error(e)
+	}
+	if leaked {
+		t.Errorf("leak counters did not return to the baseline: %+v", objc.Leaks())
+	}
+}
+
+func TestAlertButtons(t *testing.T) {
+	runScenario(t, func(r *dlgRig) {
+		w := r.w
+		for want := 0; want < 3; want++ {
+			r.results = nil
+			tk, err := w.Alert(AlertSpec{Style: AlertWarning, Message: "Delete the file?", Info: "This cannot be undone.",
+				Buttons: []string{"Delete", "Keep", "Cancel"}, Destructive: []int{0}})
+			if err != nil || tk == 0 {
+				r.failf("Alert: ticket %d, err %v", tk, err)
+				return
+			}
+			if !r.attached() {
+				r.failf("the sheet did not attach")
+				return
+			}
+			a := dialogs[0].obj
+			if want == 0 {
+				if got := objc.Send(objc.Send(a, selWindow), objc.Sel("initialFirstResponder")); got != r.button(a, 0) {
+					r.failf("the initial first responder is not the default button")
+				}
+				for i, wantD := range []bool{true, false, false} {
+					if got := objc.SendBool(r.button(a, i), objc.Sel("hasDestructiveAction")); got != wantD {
+						r.failf("button %d hasDestructiveAction %v, want %v", i, got, wantD)
+					}
+				}
+				if !w.dialogOpen() {
+					r.failf("dialogOpen is false while the sheet is up")
+				}
+				if _, err := w.Alert(AlertSpec{Message: "second", Buttons: []string{"OK"}}); err != ErrDialogBusy {
+					r.failf("a second dialog on the window: err %v, want ErrDialogBusy", err)
+				}
+			}
+			objc.Send1(r.button(a, want), objc.Sel("performClick:"), 0)
+			if !r.pump(5*time.Second, func() bool { return len(r.results) > 0 }) {
+				r.failf("button %d: no result", want)
+				return
+			}
+			r.drain()
+			if len(r.results) != 1 {
+				r.failf("button %d: %d results, want 1", want, len(r.results))
+				return
+			}
+			got := r.results[0]
+			if got.Ticket != tk || got.Kind != DialogAlert || got.Outcome != DialogAnswered || got.Button != want || got.Suppressed || got.Paths != nil {
+				r.failf("button %d: result %+v (ticket %d)", want, got, tk)
+			}
+			if w.dialogOpen() {
+				r.failf("dialogOpen is true after the answer")
+			}
+		}
+	})
+}
+
+func TestAlertSuppression(t *testing.T) {
+	runScenario(t, func(r *dlgRig) {
+		for _, on := range []bool{false, true} {
+			r.results = nil
+			if _, err := r.w.Alert(AlertSpec{Message: "Quit?", Buttons: []string{"Quit", "Cancel"}, Suppression: "Do not ask again"}); err != nil {
+				r.failf("Alert: %v", err)
+				return
+			}
+			if !r.attached() {
+				r.failf("the sheet did not attach")
+				return
+			}
+			a := dialogs[0].obj
+			sb := objc.Send(a, selSuppressionBtn)
+			if got := string(objc.AppendUTF8(nil, objc.Send(sb, objc.Sel("title")))); got != "Do not ask again" {
+				r.failf("suppression title %q", got)
+			}
+			if on {
+				objc.Send1(sb, objc.Sel("performClick:"), 0)
+			}
+			objc.Send1(r.button(a, 1), objc.Sel("performClick:"), 0)
+			if !r.pump(5*time.Second, func() bool { return len(r.results) > 0 }) {
+				r.failf("no result")
+				return
+			}
+			if got := r.results[0]; got.Suppressed != on || got.Button != 1 {
+				r.failf("suppression %v: result %+v", on, got)
+			}
+		}
+	})
+}
+
+func TestAlertSpecErrors(t *testing.T) {
+	runScenario(t, func(r *dlgRig) {
+		for _, s := range []AlertSpec{
+			{Message: "no buttons"},
+			{Message: "too many", Buttons: make([]string, MaxAlertButtons+1)},
+			{Message: "bad destructive", Buttons: []string{"OK"}, Destructive: []int{1}},
+		} {
+			if _, err := r.w.Alert(s); err == nil {
+				r.failf("%q: no error", s.Message)
+			}
+		}
+		if _, err := r.w.OpenPanel(OpenSpec{Types: []string{"not.a.known.type.identifier.zzz"}}); err == nil {
+			// An unknown identifier still resolves to a dynamic type on some systems; that is fine.
+			r.drain()
+			for i := range dialogs {
+				if dialogs[i].ticket != 0 {
+					r.w.CancelDialog(dialogs[i].ticket)
+				}
+			}
+		}
+		if _, err := r.w.OpenPanel(OpenSpec{Types: []string{"."}}); err == nil {
+			r.failf("an empty extension was accepted")
+		}
+	})
+}
+
+func TestSavePanelResult(t *testing.T) {
+	dir := t.TempDir()
+	runScenario(t, func(r *dlgRig) {
+		tk, err := r.w.SavePanel(SaveSpec{Name: "notes.txt", Types: []string{"public.plain-text"}, Start: dir, Title: "Save", Prompt: "Save"})
+		if err != nil {
+			r.failf("SavePanel: %v", err)
+			return
+		}
+		if !r.attached() {
+			r.failf("the sheet did not attach")
+			return
+		}
+		p := dialogs[0].obj
+		if got := string(objc.AppendUTF8(nil, objc.Send(p, objc.Sel("nameFieldStringValue")))); got != "notes.txt" {
+			r.failf("name field %q", got)
+		}
+		objc.Send2(r.w.win, selEndSheet, uintptr(p), 1) // NSModalResponseOK
+		if !r.pump(5*time.Second, func() bool { return len(r.results) > 0 }) {
+			r.failf("no result")
+			return
+		}
+		got := r.results[0]
+		want := filepath.Join(dir, "notes.txt")
+		if got.Ticket != tk || got.Kind != DialogSave || got.Outcome != DialogAnswered || got.Button != -1 || len(got.Paths) != 1 || got.Paths[0] != want {
+			r.failf("result %+v, want the path %q", got, want)
+		}
+	})
+}
+
+func TestPanelCancelled(t *testing.T) {
+	runScenario(t, func(r *dlgRig) {
+		for _, open := range []bool{true, false} {
+			r.results = nil
+			var tk DialogTicket
+			var err error
+			if open {
+				tk, err = r.w.OpenPanel(OpenSpec{Files: true, Dirs: true, Multiple: true, Types: []string{"public.png", ".jpg"}})
+			} else {
+				tk, err = r.w.SavePanel(SaveSpec{Name: "x"})
+			}
+			if err != nil {
+				r.failf("panel: %v", err)
+				return
+			}
+			if !r.attached() {
+				r.failf("the sheet did not attach")
+				return
+			}
+			p := dialogs[0].obj
+			if open {
+				if !objc.SendBool(p, objc.Sel("canChooseDirectories")) || !objc.SendBool(p, objc.Sel("canChooseFiles")) || !objc.SendBool(p, objc.Sel("allowsMultipleSelection")) {
+					r.failf("open panel flags")
+				}
+				if n := objc.Send(objc.Send(p, objc.Sel("allowedContentTypes")), selURLCount); n != 2 {
+					r.failf("%d allowed content types, want 2", n)
+				}
+			}
+			objc.Send2(r.w.win, selEndSheet, uintptr(p), 0) // NSModalResponseCancel, what the Cancel button ends it with
+			if !r.pump(5*time.Second, func() bool { return len(r.results) > 0 }) {
+				r.failf("no result")
+				return
+			}
+			if got := r.results[0]; got.Ticket != tk || got.Outcome != DialogCancelled || got.Paths != nil || got.Button != -1 {
+				r.failf("open %v: result %+v", open, got)
+			}
+		}
+	})
+}
+
+// A panel's paths are copied out as owned strings, whatever they hold.
+func TestPanelPathsMarshal(t *testing.T) {
+	runScenario(t, func(r *dlgRig) {
+		w := r.w
+		dialogInit()
+		paths := []string{"/tmp/a.txt", "/tmp/\u65e5\u672c\u8a9e \U0001F600.png", "/tmp/with\nnewline", "/"}
+		urls := objc.Send(clsNSMutableArray, selArray)
+		for _, p := range paths {
+			str := nsStr(p)
+			f := objc.F.Reset().Arg(uintptr(clsNSURL)).Arg(uintptr(selFileURLWithPath)).Arg(uintptr(str)).ArgBool(false)
+			objc.Send1(urls, selAddObject, f.Call(objc.MsgSend).R0())
+		}
+		fake := fakePanel(urls)
+		for i := range dialogs { // a record as beginDialog makes it, with no sheet
+			if dialogs[i].ticket == 0 {
+				req, err := dialogBlock.New(uintptr(i))
+				if err != nil {
+					r.failf("block: %v", err)
+					return
+				}
+				req.Sent()
+				lastTicket++
+				dialogs[i] = dialogRec{ticket: lastTicket, kind: DialogOpen, w: w, obj: fake, req: req}
+				finishDialog(i, 1)
+				req.Cancel() // the real completion would have freed the slot
+				break
+			}
+		}
+		r.drain()
+		if len(r.results) != 1 {
+			r.failf("%d results", len(r.results))
+			return
+		}
+		if got := r.results[0]; got.Outcome != DialogAnswered || !slices.Equal(got.Paths, paths) {
+			r.failf("paths %q, want %q (%+v)", got.Paths, paths, got)
+		}
+	})
+}
+
+// fakePanel returns an object that answers URLs like a finished NSOpenPanel.
+func fakePanel(urls objc.ID) objc.ID {
+	if fakePanelClass == 0 {
+		def := objc.Define("N2FakePanel", objc.Cls("NSObject"), nil)
+		def.Method(selURLs, "@@:", func(c *ffi.CB) { c.Ret(uintptr(fakeURLs)) })
+		fakePanelClass = def.Register()
+	}
+	fakeURLs = urls
+	return objc.Send(objc.Send(fakePanelClass, selAlloc), selInit)
+}
+
+// TestWindowClosedUnderSheet: closing a window with a sheet attached ends the
+// sheet with an abort first, so the app gets exactly one cancelled result and
+// no request keeps its slot (the leak check around every scenario).
+func TestWindowClosedUnderSheet(t *testing.T) {
+	for _, kind := range []string{"alert", "open", "save"} {
+		t.Run(kind, func(t *testing.T) {
+			runScenario(t, func(r *dlgRig) {
+				var tk DialogTicket
+				var err error
+				switch kind {
+				case "alert":
+					tk, err = r.w.Alert(AlertSpec{Message: "Open when closed", Buttons: []string{"OK"}})
+				case "open":
+					tk, err = r.w.OpenPanel(OpenSpec{})
+				default:
+					tk, err = r.w.SavePanel(SaveSpec{Name: "x"})
+				}
+				if err != nil {
+					r.failf("%v", err)
+					return
+				}
+				if !r.attached() {
+					r.failf("the sheet did not attach")
+					return
+				}
+				w := r.w
+				w.q.reset()
+				w.Close()
+				if !w.aux.closed {
+					r.failf("the window is not marked closed")
+				}
+				// What reached the queue now, and whatever AppKit still calls
+				// later, must be exactly one cancelled result.
+				var got []DialogResult
+				collect := func() {
+					for _, e := range w.q.ev {
+						if e.Kind == EvDialog {
+							got = append(got, w.DialogResult(e))
+						}
+					}
+				}
+				collect()
+				if len(got) != 1 { // AppKit runs the completion inside endSheet, so Close itself delivers it
+					t.Logf("results delivered inside Close: %d", len(got))
+				}
+				w.q.ev = w.q.ev[:0]
+				spin(0.4)
+				collect()
+				if len(got) != 1 {
+					r.failf("%d results after closing the window, want exactly 1: %+v", len(got), got)
+					return
+				}
+				if g := got[0]; g.Ticket != tk || g.Outcome != DialogCancelled || g.Button != -1 || g.Paths != nil {
+					r.failf("result %+v, want a cancelled result for ticket %d", g, tk)
+				}
+				if _, err := w.Alert(AlertSpec{Message: "late", Buttons: []string{"OK"}}); err == nil {
+					r.failf("a dialog was started on a closed window")
+				}
+			})
+		})
+	}
+}
+
+// A dialog whose sheet is not attached to the window when it closes (queued, or
+// never shown) cannot be ended with endSheet:; the window answers it itself,
+// cancels its request so that the late completion is stale, and frees its slot.
+func TestAbortUnattachedDialog(t *testing.T) {
+	runScenario(t, func(r *dlgRig) {
+		dialogInit()
+		req, err := dialogBlock.New(0)
+		if err != nil {
+			r.failf("block: %v", err)
+			return
+		}
+		req.Sent()
+		lastTicket++
+		tk := lastTicket
+		dialogs[0] = dialogRec{ticket: tk, kind: DialogSave, w: r.w, obj: fakePanel(0), req: req}
+		r.w.q.reset()
+		r.w.abortDialogs()
+		if req.Live() {
+			r.failf("the request is still live")
+		}
+		if dialogs[0].ticket != 0 {
+			r.failf("the record is still taken")
+		}
+		var got []DialogResult
+		for _, e := range r.w.q.ev {
+			if e.Kind == EvDialog {
+				got = append(got, r.w.DialogResult(e))
+			}
+		}
+		if len(got) != 1 || got[0].Ticket != tk || got[0].Outcome != DialogCancelled || got[0].Kind != DialogSave {
+			r.failf("results %+v, want one cancelled save result", got)
+		}
+	})
+}
+
+// A window that was never shown has no sheet attached when it closes: the
+// ticket is still answered once, cancelled, and its slot freed.
+func TestWindowClosedBeforeSheetAttached(t *testing.T) {
+	errs, skip, leaked := withRigOpts(true, func(r *dlgRig) {
+		tk, err := r.w.Alert(AlertSpec{Message: "Not shown", Buttons: []string{"OK"}})
+		if err != nil {
+			r.failf("%v", err)
+			return
+		}
+		w := r.w
+		w.q.reset()
+		w.Close()
+		var got []DialogResult
+		for i := 0; i < 2; i++ {
+			for _, e := range w.q.ev {
+				if e.Kind == EvDialog {
+					got = append(got, w.DialogResult(e))
+				}
+			}
+			w.q.ev = w.q.ev[:0]
+			spin(0.3)
+		}
+		if len(got) != 1 || got[0].Ticket != tk || got[0].Outcome != DialogCancelled {
+			r.failf("results %+v, want one cancelled result for ticket %d", got, tk)
+		}
+	})
+	if skip != "" {
+		t.Skip(skip)
+	}
+	for _, e := range errs {
+		t.Error(e)
+	}
+	if leaked {
+		t.Errorf("leak counters did not return to the baseline: %+v", objc.Leaks())
+	}
+}
+
+// A dialog the app withdraws closes its sheet and delivers nothing.
+func TestCancelDialog(t *testing.T) {
+	runScenario(t, func(r *dlgRig) {
+		w := r.w
+		tk, err := w.Alert(AlertSpec{Message: "Never mind", Buttons: []string{"OK"}})
+		if err != nil {
+			r.failf("%v", err)
+			return
+		}
+		if !r.attached() {
+			r.failf("the sheet did not attach")
+			return
+		}
+		stale0 := objc.Leaks().StaleCalls
+		if !w.CancelDialog(tk) || w.CancelDialog(tk) {
+			r.failf("CancelDialog should report true once, then false")
+		}
+		r.pump(5*time.Second, func() bool { return objc.Send(w.win, selAttachedSheet) == 0 })
+		r.pump(300*time.Millisecond, nil)
+		if len(r.results) != 0 {
+			r.failf("a withdrawn dialog delivered %+v", r.results)
+		}
+		if w.dialogOpen() {
+			r.failf("the dialog is still open")
+		}
+		if objc.Leaks().StaleCalls != stale0+1 {
+			r.failf("the dropped completion did not arrive as a stale call (%d, want %d)", objc.Leaks().StaleCalls, stale0+1)
+		}
+		// The window takes a new dialog at once.
+		if _, err := w.Alert(AlertSpec{Message: "Again", Buttons: []string{"OK"}}); err != nil {
+			r.failf("a dialog after a withdrawn one: %v", err)
+		}
+	})
+}
+
+// While a sheet is up, the window's keys and pointer events belong to it.
+func TestSheetOwnsInput(t *testing.T) {
+	runScenario(t, func(r *dlgRig) {
+		w := r.w
+		tk, err := w.Alert(AlertSpec{Message: "Modal", Buttons: []string{"OK"}})
+		if err != nil {
+			r.failf("%v", err)
+			return
+		}
+		if !r.attached() {
+			r.failf("the sheet did not attach")
+			return
+		}
+		w.q.reset()
+		for _, down := range []bool{true, false} {
+			w.handle(testKeyEvent(down, 0x07, "x")) // the X key
+		}
+		if len(w.q.ev) != 0 {
+			r.failf("the app saw %d events under the sheet: %+v", len(w.q.ev), w.q.ev)
+		}
+		w.CancelDialog(tk)
+		r.pump(2*time.Second, func() bool { return objc.Send(w.win, selAttachedSheet) == 0 })
+		w.q.reset()
+		w.handle(testKeyEvent(true, 0x07, "x"))
+		if n := len(w.q.ev); n == 0 || w.q.ev[0].Kind != EvKey {
+			r.failf("after the sheet, the key did not reach the app: %+v", w.q.ev)
+		}
+	})
+}
+
+func testKeyEvent(down bool, code uint16, chars string) objc.ID {
+	typ := uintptr(11)
+	if down {
+		typ = 10
+	}
+	s1 := nsStr(chars)
+	s2 := nsStr(chars)
+	sel := objc.Sel("keyEventWithType:location:modifierFlags:timestamp:windowNumber:context:characters:charactersIgnoringModifiers:isARepeat:keyCode:")
+	return objc.ID(objc.F.Reset().Arg(uintptr(objc.Cls("NSEvent"))).Arg(uintptr(sel)).Arg(typ).ArgPoint(0, 0).Arg(0).ArgF64(0).
+		Arg(0).Arg(0).Arg(uintptr(s1)).Arg(uintptr(s2)).ArgBool(false).Arg(uintptr(code)).Call(objc.MsgSend).R0())
+}
+
+// spin runs the main run loop for sec seconds.
+func spin(sec float64) {
+	end := time.Now().Add(time.Duration(sec * float64(time.Second)))
+	rl := objc.Send(clsRunLoop, selMainRunLoop)
+	for time.Now().Before(end) {
+		pool := objc.F.Call0(objc.PoolPush)
+		date := objc.ID(objc.F.Reset().Arg(uintptr(clsNSDate)).Arg(uintptr(selDateSinceNow)).ArgF64(0.01).Call(objc.MsgSend).R0())
+		objc.Send2(rl, objc.Sel("runMode:beforeDate:"), uintptr(defaultMode), uintptr(date))
+		objc.F.Call1(objc.PoolPop, pool)
+	}
+}
+
+func TestDialogResultDecoding(t *testing.T) {
+	w := &Window{q: newEventQueue()}
+	off := len(w.q.text)
+	w.q.text = append(w.q.text, "/a/b\x00/c d\x00"...)
+	e := dialogEvent(7, DialogOpen, DialogAnswered, 2, false, off, len(w.q.text)-off, 1)
+	got := w.DialogResult(e)
+	if got.Ticket != 7 || got.Kind != DialogOpen || got.Outcome != DialogAnswered || strings.Join(got.Paths, "|") != "/a/b|/c d" || got.Button != -1 {
+		t.Errorf("open result %+v", got)
+	}
+	got = w.DialogResult(dialogEvent(9, DialogAlert, DialogAnswered, 2, true, 0, 0, 1))
+	if got.Button != 2 || !got.Suppressed || got.Kind != DialogAlert || got.Paths != nil {
+		t.Errorf("alert result %+v", got)
+	}
+	got = w.DialogResult(dialogEvent(9, DialogAlert, DialogCancelled, 0, false, 0, 0, 1))
+	if got.Button != -1 || got.Outcome != DialogCancelled {
+		t.Errorf("cancelled alert result %+v", got)
+	}
+}

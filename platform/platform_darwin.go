@@ -98,6 +98,8 @@ type Window struct {
 	textInput   bool
 	imeUsed     bool
 	cmdCalled   bool
+
+	aux nativeAux // native dialogs and tooltips (dialog_darwin.go, tooltip_darwin.go)
 }
 
 const wakeSubtype = 0x4E55 // our NSEventTypeApplicationDefined subtype

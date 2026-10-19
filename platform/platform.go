@@ -26,6 +26,10 @@
 //	(*Window).Backdrop() Backdrop         the system material behind the content (Options.Backdrop), BackdropNone without; experimental
 //	(*Window).HasButtons() bool           whether native buttons are over the content (Options.Buttons); experimental
 //	(*Window).SetButtonEnabled(id, on)    enable or disable one; cheap when unchanged (macOS; no-op elsewhere); experimental
+//	(*Window).Alert(AlertSpec), OpenPanel(OpenSpec), SavePanel(SaveSpec)
+//	                                      native alert and file panel sheets (macOS; ErrUnsupported elsewhere); the answer is an EvDialog, see dialog.go
+//	(*Window).SetTooltipRegions(r)        native tooltips by content rectangle (macOS; no-op elsewhere); diffed, cheap to call every frame
+//	(*Window).SetTooltipText(f)           where the tooltip text comes from, asked for on demand when the system shows one
 //	(*Window).Close()
 //	Clipboard() string                    plain UTF-8 text of the system clipboard; main thread
 //	SetClipboard(text string)             replace the clipboard with plain text; main thread
@@ -100,6 +104,7 @@ const (
 	EvFrame                   // the frame slot armed by RequestFrame is available
 	EvPaste                   // the answer to RequestPaste: Text (plain text), Tag; FlagFailed when there is none
 	EvCommand                 // a native button was clicked: Tag is its command id (NativeButton.ID); experimental
+	EvDialog                  // an alert or file panel ended: Tag is its DialogTicket; decode with Window.DialogResult (dialog.go)
 )
 
 // Flags qualify an Event.

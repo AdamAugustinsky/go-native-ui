@@ -236,6 +236,8 @@ type Context struct {
 	pasteTag Key
 	pasteReq bool
 
+	nt nativeTips // native tooltips declared this frame (regions_native.go)
+
 	// boxes built this frame with a cursor or the WindowDrag flag (cursor.go)
 	nCursorBoxes, nDragBoxes int
 

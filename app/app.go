@@ -128,6 +128,9 @@ type App struct {
 	curPlat []platform.CursorRegion
 	dragUI  []ui.DragRegion
 	dragPl  []platform.DragRegion
+	tipUI   []ui.TooltipRegion // native tooltip regions (regions.go), reused
+	tipPl   []platform.TooltipRegion
+	dlg     []platform.DialogResult // dialog results not taken yet (dialogs.go)
 
 	wakeAt      int64 // platform.Now at which the UI wants a frame although nothing animates (ui.Context.WakeAfter); 0 = none
 	chromeDark  bool  // the mode last given to Win.SetDarkChrome
@@ -333,6 +336,10 @@ func (a *App) initUI() error {
 	a.UI = ui.New(a.Text)
 	a.UI.ClipboardSet = platform.SetClipboardText
 	a.UI.AtlasSync(a.R)
+	if a.Win != nil { // a window shows tooltips for the regions it is given; offscreen renders draw them
+		a.UI.SetNativeTooltips(platform.NativeTooltips)
+		a.Win.SetTooltipText(a.UI.TooltipText)
+	}
 	if in, ok := a.b.(Initer); ok {
 		if err := in.Init(a); err != nil {
 			return fmt.Errorf("app: init: %w", err)
@@ -441,6 +448,8 @@ func (a *App) onEvent(e *platform.Event) {
 		a.frameEvents++
 		a.lastFrameEv = platform.Now()
 		a.p.frameEvent()
+	case platform.EvDialog:
+		a.onDialog(e)
 	default:
 		var txt []byte
 		if e.Kind == platform.EvText || e.Kind == platform.EvPreedit || e.Kind == platform.EvPaste {
