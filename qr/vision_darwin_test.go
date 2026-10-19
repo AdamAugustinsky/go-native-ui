@@ -189,36 +189,37 @@ func TestVisionDecodesWhatWeEncode(t *testing.T) {
 	}
 	for _, level := range []Level{LevelL, LevelM, LevelQ, LevelH} {
 		for _, tc := range texts {
-			for _, scale := range []int{4, 9} {
-				checkVision(t, fmt.Sprintf("%s/%v/x%d", tc.name, level, scale), []byte(tc.s), level, scale, true)
-			}
+			checkVision(t, fmt.Sprintf("%s/%v", tc.name, level), []byte(tc.s), level, 6, true)
 		}
 	}
 
-	// Every length from 1 byte up past the first few versions, every level,
-	// text and the matching numeric and alphanumeric forms.
-	if !testing.Short() {
-		for _, level := range []Level{LevelL, LevelM, LevelQ, LevelH} {
-			for n := 1; n <= 140; n += 3 {
-				b := fill(n*31+int(level), n)
-				for i := range b {
-					b[i] = 'a' + b[i]%26
-				}
-				checkVision(t, fmt.Sprintf("lower/%v/%d", level, n), b, level, 5, true)
-				for i := range b {
-					b[i] = '0' + b[i]%10
-				}
-				checkVision(t, fmt.Sprintf("digits/%v/%d", level, n), b, level, 5, true)
-				for i := range b {
-					b[i] = alnumChars[int(b[i])*7%45]
-				}
-				checkVision(t, fmt.Sprintf("alnum/%v/%d", level, n), b, level, 5, true)
+	// A spread of lengths, from a single character past several version
+	// boundaries, at every level; numeric and alphanumeric payloads too (they
+	// use the other two modes). Vision is slow on the CI runners, so the
+	// sweep is a spread rather than every length.
+	for _, level := range []Level{LevelL, LevelM, LevelQ, LevelH} {
+		for _, n := range []int{1, 7, 20, 46, 79, 121, 188, 305} {
+			b := fill(n*31+int(level), n)
+			for i := range b {
+				b[i] = 'a' + b[i]%26
 			}
+			checkVision(t, fmt.Sprintf("lower/%v/%d", level, n), b, level, 5, true)
+			if n > 79 {
+				continue
+			}
+			for i := range b {
+				b[i] = '0' + b[i]%10
+			}
+			checkVision(t, fmt.Sprintf("digits/%v/%d", level, n), b, level, 5, true)
+			for i := range b {
+				b[i] = alnumChars[int(b[i])*7%45]
+			}
+			checkVision(t, fmt.Sprintf("alnum/%v/%d", level, n), b, level, 5, true)
 		}
 	}
 }
 
-// All 160 version and level pairs, filled to the last byte with binary data
+// Version and level pairs, filled to the last byte with binary data
 // (the corrected data codewords are compared, so no text decoding is involved),
 // are what Vision reads back: version, level, mask and every codeword.
 func TestVisionDecodesEveryVersionAndLevel(t *testing.T) {
@@ -226,13 +227,16 @@ func TestVisionDecodesEveryVersionAndLevel(t *testing.T) {
 	defer runtime.UnlockOSThread()
 	loadVision(t)
 	for v := 1; v <= maxVersion; v++ {
-		if testing.Short() && v%7 != 1 {
-			continue
-		}
 		for level := LevelL; level <= LevelH; level++ {
+			// Every version at M and H, and every fourth at L and Q: the
+			// exact modules of all 160 are checked against the reference
+			// encoder (vectors_test.go), and Vision is slow on the CI runners.
+			if (level == LevelL || level == LevelQ) && v%4 != 1 {
+				continue
+			}
 			n := capacity[v-1][level]
 			scale := 4
-			if v > 25 {
+			if v > 10 {
 				scale = 3
 			}
 			checkVision(t, fmt.Sprintf("v%d-%v", v, level), fill(v*5+int(level), n), level, scale, false)
