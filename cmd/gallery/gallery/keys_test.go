@@ -53,7 +53,7 @@ func TestEveryWidgetIsReachableByTab(t *testing.T) {
 		{ui.RoleMenuItem, "File"}, {ui.RoleMenuItem, "Edit"}, {ui.RoleMenuItem, "View"},
 		// one of each kind of the state matrix
 		{ui.RoleButton, "Button"}, {ui.RoleButton, "Primary"}, {ui.RoleButton, "Plain"}, {ui.RoleButton, "Add"},
-		{ui.RoleCheckbox, "Check"}, {ui.RoleCheckbox, "Mixed"}, {ui.RoleSwitch, "Wi-Fi"}, {ui.RoleRadio, "Radio"},
+		{ui.RoleCheckbox, "Check"}, {ui.RoleCheckbox, "Mixed"}, {ui.RoleSwitch, "On"}, {ui.RoleRadio, "Radio"},
 		{ui.RoleSlider, "Slider"}, {ui.RoleTextField, "Field"}, {ui.RoleComboBox, "Choice"},
 		// the live controls
 		{ui.RoleTextField, "Notes"}, {ui.RoleSearchField, "Filter"}, {ui.RoleCheckbox, "Enable feature"},

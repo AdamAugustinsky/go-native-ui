@@ -31,9 +31,9 @@ group() { # group NAME TITLE sample...
 	done
 }
 
-group buttons "Push buttons" push-regular push-default push-pressed push-disabled push-default-disabled push-focused push-destructive icon-rounded
-group choices "Checkbox, radio, switch" checkbox-off checkbox-on checkbox-mixed checkbox-on-disabled checkbox-on-focused radio-on radio-off switch-off switch-on switch-on-disabled switch-on-focused
-group selects "Popup, segmented, tabs, slider, progress" popup popup-disabled popup-focused segmented tabview slider slider-disabled slider-focused progress-bar separator
-group fields "Text fields" field-placeholder field-text field-focused field-disabled search-empty search-text
-group tables "Tables" table-fullwidth-emphasized table-fullwidth-unemphasized
-group type "Type" label-styles
+group buttons "Push buttons" push-mini push-small push-regular push-large push-xlarge push-default push-default-small push-default-inactive push-pressed push-default-pressed push-disabled push-default-disabled push-focused push-destructive push-glass
+group icons "Icon buttons" icon-rounded icon-toolbar icon-borderless
+group choices "Checkbox, radio, switch" checkbox-off checkbox-on checkbox-mixed checkbox-on-disabled checkbox-off-disabled checkbox-off-pressed checkbox-on-focused checkbox-on-small checkbox-on-large radio-off radio-on radio-on-disabled radio-on-focused switch-off switch-on switch-on-disabled switch-on-focused switch-on-small switch-on-mini switch-on-large
+group selects "Pop-up, segmented, slider" popup popup-small popup-disabled popup-focused pulldown popup-borderless segmented segmented-small slider slider-small slider-disabled slider-focused
+group fields "Text and search fields" field-placeholder field-text field-focused field-disabled field-small field-large search-empty search-text search-focused
+group containers "Separator, box, type" separator box label-styles
