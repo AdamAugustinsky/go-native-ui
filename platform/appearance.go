@@ -100,6 +100,7 @@ const (
 	ColorSystemPink                                               // systemPinkColor
 	ColorSystemBrown                                              // systemBrownColor
 	ColorSystemGray                                               // systemGrayColor
+	ColorControlText                                              // controlTextColor
 	// NumSystemColors is the number of system colours.
 	NumSystemColors
 )
@@ -118,6 +119,7 @@ var SystemColorNames = [NumSystemColors]string{
 	"keyboardFocusIndicatorColor", "alternatingContentBackgroundColors", "linkColor", "textInsertionPointColor", "findHighlightColor",
 	"systemRedColor", "systemOrangeColor", "systemYellowColor", "systemGreenColor", "systemMintColor", "systemTealColor",
 	"systemCyanColor", "systemBlueColor", "systemIndigoColor", "systemPurpleColor", "systemPinkColor", "systemBrownColor", "systemGrayColor",
+	"controlTextColor",
 }
 
 // SystemValues are the system's colours and settings (ReadSystemValues).

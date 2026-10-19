@@ -119,6 +119,10 @@ const (
 	Brown
 	// Gray is systemGrayColor.
 	Gray
+	// ControlText is the text of controls: the labels of checkboxes, radio
+	// buttons, switches and buttons, and an editable field's text
+	// (controlTextColor). It equals Label on macOS 27.2.
+	ControlText
 
 	// NumSystemRoles is the number of System roles: the roles below it.
 	NumSystemRoles
@@ -147,6 +151,13 @@ const (
 	// InputFill is the body of a text field (textBackgroundColor at 98 %;
 	// dark measured #171717F9).
 	InputFill
+	// Knob is the knob of a switch or slider: white in both modes (AppKit
+	// draws it, no NSColor names it; GnuiShot and AppKitRef measured it).
+	Knob
+	// FieldOutline is the one-point outline just outside a text field's
+	// frame: black at 15 % in light, white at 9 % in dark (#D9D9D9 over
+	// white, #323232 over #1E1E1E measured; no NSColor names it).
+	FieldOutline
 	// PaneHairline is the hairline round a Rex pane.
 	PaneHairline
 	// PaneHighlight is the light inner rim of an unfocused Rex pane.
@@ -266,8 +277,8 @@ var roleNames = [NumRoles]string{
 	"Text", "Placeholder", "TextDisabled", "HeaderText", "Fill1", "Fill2", "Fill3", "Fill4", "Fill5", "Separator", "Grid",
 	"Accent", "Selection", "SelectionUnemph", "OnSelection", "TextSelection", "TextSelectionUnemph", "SelectedText",
 	"FocusRing", "AltRow", "Link", "Caret", "FindHighlight",
-	"Red", "Orange", "Yellow", "Green", "Mint", "Teal", "Cyan", "Blue", "Indigo", "Purple", "Pink", "Brown", "Gray",
-	"Field", "Pane", "Raised", "OnAccent", "AccentPressed", "FillPressed", "FillDisabled", "InputFill",
+	"Red", "Orange", "Yellow", "Green", "Mint", "Teal", "Cyan", "Blue", "Indigo", "Purple", "Pink", "Brown", "Gray", "ControlText",
+	"Field", "Pane", "Raised", "OnAccent", "AccentPressed", "FillPressed", "FillDisabled", "InputFill", "Knob", "FieldOutline",
 	"PaneHairline", "PaneHighlight", "GlassTint", "Shadow", "Scrim",
 	"SidebarFill", "SidebarFillInactive", "SidebarLabel", "SidebarLabelInactive", "SidebarHeader", "SidebarHeaderInactive",
 	"SidebarSel", "SidebarSelUnemph", "SidebarSelInactive", "SelectionDivider",
@@ -309,9 +320,10 @@ var Measured = [2]Colors{
 		FocusRing: 0x0067F47F, AltRow: 0xF4F5F5FF, Link: 0x0068DAFF, Caret: 0x989898FF, FindHighlight: 0xFFFF00FF,
 		Red: 0xFF383CFF, Orange: 0xFF8D28FF, Yellow: 0xFFCC00FF, Green: 0x34C759FF, Mint: 0x00C8B3FF, Teal: 0x00C3D0FF,
 		Cyan: 0x00C0E8FF, Blue: 0x0088FFFF, Indigo: 0x6155F5FF, Purple: 0xCB30E0FF, Pink: 0xFF2D55FF, Brown: 0xAC7F5EFF, Gray: 0x8E8E93FF,
+		ControlText: 0x000000D8,
 
 		Field: 0xFFFFFFFF, Pane: 0xFFFFFFFF, Raised: 0xFFFFFFFF, OnAccent: 0xFFFFFFFF, AccentPressed: 0x006EE5FF,
-		FillPressed: 0x0000002B, FillDisabled: 0x0000000A, InputFill: 0xFFFFFFF9,
+		FillPressed: 0x0000002B, FillDisabled: 0x0000000A, InputFill: 0xFFFFFFF9, Knob: 0xFFFFFFFF, FieldOutline: 0x00000026,
 		PaneHairline: 0x00000019, PaneHighlight: 0xFFFFFF00, GlassTint: 0xFFFFFF00, Shadow: 0x00000033, Scrim: 0x00000000,
 		SidebarFill: 0xECECECFF, SidebarFillInactive: 0xF2F2F2FF, SidebarLabel: 0x000000FF, SidebarLabelInactive: 0x727272FF,
 		SidebarHeader: 0x878787FF, SidebarHeaderInactive: 0xA6A6A6FF,
@@ -332,9 +344,10 @@ var Measured = [2]Colors{
 		FocusRing: 0x1AA9FF7F, AltRow: 0xFFFFFF0C, Link: 0x419CFFFF, Caret: 0x8C8C8CFF, FindHighlight: 0xFFFF00FF,
 		Red: 0xFF4245FF, Orange: 0xFF9230FF, Yellow: 0xFFD600FF, Green: 0x30D158FF, Mint: 0x00DAC3FF, Teal: 0x00D2E0FF,
 		Cyan: 0x3CD3FEFF, Blue: 0x0091FFFF, Indigo: 0x6D7CFFFF, Purple: 0xDB34F2FF, Pink: 0xFF375FFF, Brown: 0xB78A66FF, Gray: 0x98989DFF,
+		ControlText: 0xFFFFFFD8,
 
 		Field: 0x1E1E1EFF, Pane: 0x1E1E1EFF, Raised: 0x2A2A2AFF, OnAccent: 0xFFFFFFFF, AccentPressed: 0x1A88FFFF,
-		FillPressed: 0xFFFFFF2B, FillDisabled: 0xFFFFFF0A, InputFill: 0x171717F9,
+		FillPressed: 0xFFFFFF2B, FillDisabled: 0xFFFFFF0A, InputFill: 0x171717F9, Knob: 0xFFFFFFFF, FieldOutline: 0xFFFFFF17,
 		PaneHairline: 0xFFFFFF19, PaneHighlight: 0xFFFFFF00, GlassTint: 0x1E1E1E00, Shadow: 0x00000066, Scrim: 0x00000000,
 		SidebarFill: 0x2A2A2AFF, SidebarFillInactive: 0x252525FF, SidebarLabel: 0xFFFFFFFF, SidebarLabelInactive: 0x929292FF,
 		SidebarHeader: 0x737373FF, SidebarHeaderInactive: 0x585858FF,

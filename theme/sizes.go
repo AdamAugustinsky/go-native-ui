@@ -43,8 +43,15 @@ type SizeSpec struct {
 	// Gap is the space between an icon or a box (checkbox, radio) and its
 	// label.
 	Gap float32
-	// Check is the side of a checkbox or a radio button.
+	// Check is the side of a checkbox's or a radio button's box: 16, 14 and
+	// 18 pt at regular, small and large on macOS 27.2 (macOS 15 draws 14, 12
+	// and 16), 12 at mini.
 	Check float32
+	// CheckRadius is the corner radius of a checkbox's box. AppKit draws a
+	// continuous (squircle) corner; a circular radius of the same uncovered
+	// area matches it best: 5.5, 4.5 and 6.25 pt at regular, small and large
+	// (4 at mini; tools/appkitref/measure). macOS 15 drew 3.5 at regular.
+	CheckRadius float32
 	// SwitchW and SwitchH are a switch's size.
 	SwitchW, SwitchH float32
 	// FontSize is the control font's point size and FontLine its line
@@ -60,11 +67,11 @@ type SizeSpec struct {
 // scaled from the regular one by the font's advance); mini and x-large field
 // heights, and Icon, are designed.
 var MacSizes = [NumSizes]SizeSpec{
-	SizeRegular: {Height: 24, FieldHeight: 24, PadX: 12, Radius: 6, FieldRadius: 6, Icon: 16, Gap: 6, Check: 14, SwitchW: 54, SwitchH: 24, FontSize: 13, FontLine: 16},
-	SizeMini:    {Height: 16, FieldHeight: 16, PadX: 8, Radius: 4, FieldRadius: 4, Icon: 12, Gap: 4, Check: 10, SwitchW: 36, SwitchH: 16, FontSize: 9, FontLine: 11},
-	SizeSmall:   {Height: 20, FieldHeight: 22, PadX: 10, Radius: 5, FieldRadius: 5, Icon: 14, Gap: 5, Check: 12, SwitchW: 44, SwitchH: 20, FontSize: 11, FontLine: 13},
-	SizeLarge:   {Height: 28, FieldHeight: 24, PadX: 14, Radius: 14, FieldRadius: 7, Capsule: true, Icon: 18, Gap: 6, Check: 16, SwitchW: 64, SwitchH: 28, FontSize: 13, FontLine: 16},
-	SizeXLarge:  {Height: 36, FieldHeight: 28, PadX: 18, Radius: 18, FieldRadius: 8, Capsule: true, Icon: 20, Gap: 8, Check: 16, SwitchW: 64, SwitchH: 28, FontSize: 13, FontLine: 16},
+	SizeRegular: {Height: 24, FieldHeight: 24, PadX: 12, Radius: 6, FieldRadius: 6, Icon: 16, Gap: 6, Check: 16, CheckRadius: 5.5, SwitchW: 54, SwitchH: 24, FontSize: 13, FontLine: 16},
+	SizeMini:    {Height: 16, FieldHeight: 16, PadX: 8, Radius: 4, FieldRadius: 4, Icon: 12, Gap: 4, Check: 12, CheckRadius: 4, SwitchW: 36, SwitchH: 16, FontSize: 9, FontLine: 11},
+	SizeSmall:   {Height: 20, FieldHeight: 22, PadX: 10, Radius: 5, FieldRadius: 5, Icon: 14, Gap: 5, Check: 14, CheckRadius: 4.5, SwitchW: 44, SwitchH: 20, FontSize: 11, FontLine: 13},
+	SizeLarge:   {Height: 28, FieldHeight: 24, PadX: 14, Radius: 14, FieldRadius: 7, Capsule: true, Icon: 18, Gap: 6, Check: 18, CheckRadius: 6.25, SwitchW: 64, SwitchH: 28, FontSize: 13, FontLine: 16},
+	SizeXLarge:  {Height: 36, FieldHeight: 28, PadX: 18, Radius: 18, FieldRadius: 8, Capsule: true, Icon: 20, Gap: 8, Check: 18, CheckRadius: 6.25, SwitchW: 64, SwitchH: 28, FontSize: 13, FontLine: 16},
 }
 
 func (s SizeSpec) scaled(k float32) SizeSpec {
@@ -76,6 +83,7 @@ func (s SizeSpec) scaled(k float32) SizeSpec {
 	s.Icon *= k
 	s.Gap *= k
 	s.Check *= k
+	s.CheckRadius *= k
 	s.SwitchW *= k
 	s.SwitchH *= k
 	if s.Capsule {
@@ -124,12 +132,14 @@ type Radii struct {
 	Pane float32
 	// Popover is a drawn popover's or menu's radius (designed).
 	Popover float32
-	// Checkbox is a checkbox's radius (3.5).
+	// Checkbox is a checkbox's radius at the regular size (5.5, the circular
+	// radius matching macOS 27.2's continuous corner; macOS 15's was 3.5).
+	// SizeSpec.CheckRadius holds the radius of every size.
 	Checkbox float32
 }
 
 // MacRadii are the radii measured on macOS 27.2, and Rex's pane.
-var MacRadii = Radii{Window: 16, Group: 12, Selection: 8, Pane: 10.5, Popover: 10, Checkbox: 3.5}
+var MacRadii = Radii{Window: 16, Group: 12, Selection: 8, Pane: 10.5, Popover: 10, Checkbox: 5.5}
 
 func (r Radii) scaled(k float32) Radii {
 	r.Window *= k

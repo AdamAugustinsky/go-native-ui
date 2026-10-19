@@ -557,3 +557,60 @@ func TestToolbarTitleX(t *testing.T) {
 		t.Errorf("unified: empty pane %v, after a capsule %v", u.TitleX(280, 0), u.TitleX(180, 274))
 	}
 }
+
+// The checkbox box and its radius are tokens of the size (D3b): the regular
+// radius is Radii.Checkbox's, and both scale to pixels.
+func TestCheckboxTokens(t *testing.T) {
+	if MacRadii.Checkbox != MacSizes[SizeRegular].CheckRadius {
+		t.Errorf("Radii.Checkbox %v, regular CheckRadius %v", MacRadii.Checkbox, MacSizes[SizeRegular].CheckRadius)
+	}
+	r := (&Theme{}).Resolve(&fakeText{}, 2, Light)
+	for s := range NumSizes {
+		if sp := MacSizes[s]; sp.Check <= 0 || sp.CheckRadius <= 0 || sp.CheckRadius >= sp.Check/2 {
+			t.Errorf("size %d: box %v radius %v", s, sp.Check, sp.CheckRadius)
+		}
+		if r.Sizes[s].Check != 2*MacSizes[s].Check || r.Sizes[s].CheckRadius != 2*MacSizes[s].CheckRadius {
+			t.Errorf("size %d resolved: %v, %v", s, r.Sizes[s].Check, r.Sizes[s].CheckRadius)
+		}
+	}
+}
+
+// The knob and the field outline are roles of the theme (no NSColor names
+// them); controlTextColor is a System role. The outline over the window is
+// what AppKit measured.
+func TestControlRoles(t *testing.T) {
+	if ControlText.Source() != SourceSystem || Knob.Source() != SourceTheme || FieldOutline.Source() != SourceTheme {
+		t.Error("sources of ControlText, Knob and FieldOutline")
+	}
+	for m, want := range [2]uint32{0xD9D9D9FF, 0x323232FF} { // light over white, dark over #1E1E1E
+		got := Over(Measured[m][FieldOutline], Measured[m][Window])
+		if !within(got, want, 1) {
+			t.Errorf("%s field outline over the window: %08X, AppKit %08X", modeNames[m], got, want)
+		}
+		if Measured[m][Knob] != 0xFFFFFFFF {
+			t.Errorf("%s knob %08X", modeNames[m], Measured[m][Knob])
+		}
+		if Measured[m][ControlText] != Measured[m][Label] {
+			t.Errorf("%s controlTextColor %08X, labelColor %08X", modeNames[m], Measured[m][ControlText], Measured[m][Label])
+		}
+	}
+}
+
+// The toolbar capsule has an opaque fallback for a theme whose capsule is
+// translucent, under Reduce Transparency.
+func TestToolbarMaterialSolid(t *testing.T) {
+	th := &Theme{Roles: Measured}
+	for m := range th.Roles {
+		th.Roles[m][CapsuleFill] = 0xFFFFFF80
+		th.Roles[m][CapsuleFillInactive] = 0xFFFFFF40
+	}
+	r := th.Resolve(&fakeText{}, 1, Light)
+	if m := r.Material(MatToolbar); m.Fill != CapsuleFill {
+		t.Fatalf("translucent capsule without Reduce Transparency: %+v", m)
+	}
+	r.SetSystem(&SystemValues{Known: true, Settings: Settings{ReduceTransparency: true}})
+	m := r.Material(MatToolbar)
+	if r.Colors[m.Fill]&0xFF != 0xFF || r.Colors[m.FillInactive]&0xFF != 0xFF {
+		t.Errorf("Reduce Transparency keeps a translucent capsule: %+v", m)
+	}
+}
