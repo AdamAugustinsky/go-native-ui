@@ -33,7 +33,11 @@ func newOffscreen(t testing.TB, b app.Builder) *app.Offscreen {
 func TestCachedSessionsAllocateNothing(t *testing.T) {
 	b := newBenchGrid(defItems)
 	o := newOffscreen(t, b)
-	t.Cleanup(func() { b.cache.Close(time.Second) })
+	t.Cleanup(func() {
+		if b.cache != nil {
+			b.cache.Close(time.Second)
+		}
+	})
 	deadline := time.Now().Add(180 * time.Second) // the standard decoders on a slow runner
 	for b.s.phase != phSession || b.s.next != 0 {
 		o.Frame()
@@ -77,7 +81,11 @@ func TestCachedSessionsAllocateNothing(t *testing.T) {
 func TestIdleOnceLoaded(t *testing.T) {
 	g := newGrid(500, img.Options{})
 	o := newOffscreen(t, g)
-	t.Cleanup(func() { g.cache.Close(time.Second) })
+	t.Cleanup(func() {
+		if g.cache != nil {
+			g.cache.Close(time.Second)
+		}
+	})
 	deadline := time.Now().Add(20 * time.Second)
 	for {
 		o.Frame()

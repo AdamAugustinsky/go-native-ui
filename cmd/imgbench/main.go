@@ -38,7 +38,7 @@ import (
 )
 
 const (
-	winW, winH = 760, 940 // points: 12 columns, 16 or 17 rows of thumbnails in view
+	winW, winH = 1000, 680 // points: 16 columns, 12 or 13 rows of thumbnails in view (fits a 1024×768 screen)
 	defItems   = 3000
 
 	coldSpeedPt   = 40  // points per frame through the whole grid
@@ -53,8 +53,10 @@ const (
 var config = app.Config{Title: "imgbench", Width: winW, Height: winH, Clear: [4]float32{0.1, 0.1, 0.11, 1}}
 
 // benchOptions are the cache budgets of the run: the grid's images need
-// about 150 MB at 2×, so the cold pass evicts.
-var benchOptions = img.Options{GPUBytes: 64 << 20, CPUBytes: 16 << 20}
+// about 40 MB at 1× (150 MB at 2×), so the cold pass evicts; the GPU budget
+// is for 1× and grows with the square of the scale (64 MB at 2×), while a
+// session's images fit in it.
+var benchOptions = img.Options{GPUBytes: 16 << 20, CPUBytes: 16 << 20}
 
 type report struct {
 	OS, Arch     string
@@ -296,7 +298,7 @@ func (b *benchGrid) report(br app.BenchReport) report {
 	r.Cache.EvictedGPU, r.Cache.EvictedCPU, r.Cache.OverBudget = st.EvictedGPU, st.EvictedCPU, st.OverBudget
 	r.Cache.GPUMB, r.Cache.CPUMB = float64(st.GPUBytes)/(1<<20), float64(st.CPUBytes)/(1<<20)
 	r.Cache.Pages, r.Cache.Entries = st.Pages, st.Entries
-	r.Cache.GPUBudgetMB, r.Cache.CPUBudgetMB = float64(benchOptions.GPUBytes)/(1<<20), float64(benchOptions.CPUBytes)/(1<<20)
+	r.Cache.GPUBudgetMB, r.Cache.CPUBudgetMB = float64(b.opt.GPUBytes)/(1<<20), float64(b.opt.CPUBytes)/(1<<20)
 	var ms runtime.MemStats
 	runtime.ReadMemStats(&ms)
 	r.GoHeapMB = float64(ms.HeapAlloc) / (1 << 20)

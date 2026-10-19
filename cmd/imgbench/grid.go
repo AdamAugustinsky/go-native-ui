@@ -35,8 +35,8 @@ const (
 type grid struct {
 	a     *app.App
 	k     *base.Kit
-	cache *img.Cache
-	opt   img.Options
+	cache *img.Cache  // made by the first Build, when the scale is known
+	opt   img.Options // its options; a GPU budget is for 1× and grows with the scale's square
 	items int
 	srcs  [][]byte
 
@@ -98,11 +98,18 @@ func (g *grid) Init(a *app.App) error {
 	g.a = a
 	a.UI.Reserve(8192)
 	g.k = base.NewKit(a.UI, a.Text, rex.Theme())
+	return nil
+}
+
+// newCache makes the cache at scale s: the thumbnails' bytes, and so the
+// budget that makes the cold pass evict, grow with its square.
+func (g *grid) newCache(s float32) {
 	o := g.opt
-	o.Renderer = a.R
+	o.Renderer = g.a.R
+	o.GPUBytes = int64(float32(o.GPUBytes) * s * s)
+	g.opt.GPUBytes = o.GPUBytes
 	g.cache = img.NewCache(o)
 	g.k.SetImages(g.cache)
-	return nil
 }
 
 // Script implements app.Scripter: the bench drives the grid from Build
@@ -131,6 +138,9 @@ func (g *grid) key(c *ui.Context, i int) img.Key {
 // Build implements app.Builder.
 func (g *grid) Build(c *ui.Context) {
 	g.frame++
+	if g.cache == nil {
+		g.newCache(c.Scale())
+	}
 	t0, c0 := platform.Now(), sysinfo.ThreadCPUNs()
 	if g.cache.Poll() {
 		c.RequestFrame()
