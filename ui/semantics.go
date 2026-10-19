@@ -77,6 +77,9 @@ const (
 	RoleTooltip
 	// RoleProgressBar is a progress indicator (its value is a range, see SemNode.Range).
 	RoleProgressBar
+	// RoleLink is a link or a mention in rich text (a child of the text's
+	// node, named by its text; pressing it is RichSignal.Clicked).
+	RoleLink
 )
 
 // SemState are the state bits of a node.
@@ -367,6 +370,9 @@ func (c *Context) Semantics(dst *SemTree) {
 			pr.lastChild = self
 		}
 		dst.Nodes = append(dst.Nodes, n)
+		if b.rich != 0 {
+			c.semLinks(dst, b, rec)
+		}
 	}
 	c.semFocusBubble(dst)
 }

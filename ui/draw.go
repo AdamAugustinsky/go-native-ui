@@ -114,6 +114,7 @@ func (c *Context) End(list *gpu.DrawList) {
 	} else {
 		c.overflowRun = 0
 	}
+	c.keepRich()
 	c.syncAtlas()
 }
 
@@ -348,18 +349,24 @@ func (c *Context) overlay(l *gpu.DrawList, b *box, clip [4]float32, color uint32
 
 // emitText draws the display text of b inside its padded rectangle.
 func (c *Context) emitText(l *gpu.DrawList, b *box, clip [4]float32) {
+	if r := c.recOf(b); r != nil {
+		c.emitRich(l, b, r, clip)
+		return
+	}
 	col := b.col(b.textColor)
 	if col&255 == 0 {
+		return
+	}
+	if b.flags&WrapText != 0 {
+		if b.lnN > 0 {
+			c.emitWrapped(l, b, clip)
+		}
 		return
 	}
 	if c.sh.RunGeneration() != b.runGen { // the run cache evicted since the build: shape again
 		bytes := c.fr.Cur().Bytes(b.txt)
 		b.run = c.sh.Shape(b.font, bytes)
 		b.runGen = c.sh.RunGeneration()
-	}
-	if b.flags&WrapText != 0 && b.lnN > 0 {
-		c.emitWrapped(l, b, clip)
-		return
 	}
 	v := c.sh.Run(b.run)
 	if len(v.Glyphs) == 0 {
@@ -408,42 +415,50 @@ func (c *Context) emitGlyphs(l *gpu.DrawList, b *box, v text.RunView, x, baselin
 		smooth = text.SmoothLevel(col)
 	}
 	for i, gid := range v.Glyphs {
-		pen := x + v.X[i]
-		ix := float32(math.Floor(float64(pen)))
-		sub := int((pen-ix)*4 + 0.5)
-		if sub == 4 {
-			sub, ix = 0, ix+1
+		c.emitGlyphFade(l, v.Faces[i], gid, x+v.X[i], baseline, tclip, fade, col, smooth)
+	}
+}
+
+// emitGlyph draws one glyph with its pen at (pen, baseline).
+func (c *Context) emitGlyph(l *gpu.DrawList, face text.FaceID, gid uint16, pen, baseline float32, tclip [4]float32, col uint32, smooth uint8) {
+	c.emitGlyphFade(l, face, gid, pen, baseline, tclip, [2]float32{}, col, smooth)
+}
+
+func (c *Context) emitGlyphFade(l *gpu.DrawList, face text.FaceID, gid uint16, pen, baseline float32, tclip [4]float32, fade [2]float32, col uint32, smooth uint8) {
+	ix := float32(math.Floor(float64(pen)))
+	sub := int((pen-ix)*4 + 0.5)
+	if sub == 4 {
+		sub, ix = 0, ix+1
+	}
+	e := c.sh.Glyph(face, gid, text.GlyphVariant(uint8(sub), smooth))
+	if c.finalPass {
+		if g := c.sh.AtlasGeneration(); g != c.passGen {
+			c.passGen = g
+			c.dropStaleGlyphs(l)
 		}
-		e := c.sh.Glyph(v.Faces[i], gid, text.GlyphVariant(uint8(sub), smooth))
-		if c.finalPass {
-			if g := c.sh.AtlasGeneration(); g != c.passGen {
-				c.passGen = g
-				c.dropStaleGlyphs(l)
-			}
-		}
-		if e.W == 0 {
-			continue
-		}
-		gx, gy := ix+e.BearingX, baseline-e.BearingY
-		gr := [4]float32{gx, gy, gx + float32(e.W), gy + float32(e.H)}
-		if gr[2] <= tclip[0] || gr[0] >= tclip[2] || gr[3] <= tclip[1] || gr[1] >= tclip[3] {
-			continue
-		}
-		mode := gpu.ModeMaskR8
-		if e.Color {
-			mode = gpu.ModeRGBA
-		}
-		l.Add(gpu.Quad{
-			Rect:  gr,
-			Clip:  tclip,
-			UV:    [4]float32{float32(e.X), float32(e.Y), float32(e.X) + float32(e.W), float32(e.Y) + float32(e.H)},
-			Color: [4]uint32{col, col, col, col},
-			FadeX: fade,
-			Mode:  mode,
-			Tex:   c.pageTexture(int(e.Page)),
-		})
-		if c.finalPass {
-			c.glyphQuads = append(c.glyphQuads, int32(len(l.Quads)-1))
-		}
+	}
+	if e.W == 0 {
+		return
+	}
+	gx, gy := ix+e.BearingX, baseline-e.BearingY
+	gr := [4]float32{gx, gy, gx + float32(e.W), gy + float32(e.H)}
+	if gr[2] <= tclip[0] || gr[0] >= tclip[2] || gr[3] <= tclip[1] || gr[1] >= tclip[3] {
+		return
+	}
+	mode := gpu.ModeMaskR8
+	if e.Color {
+		mode = gpu.ModeRGBA
+	}
+	l.Add(gpu.Quad{
+		Rect:  gr,
+		Clip:  tclip,
+		UV:    [4]float32{float32(e.X), float32(e.Y), float32(e.X) + float32(e.W), float32(e.Y) + float32(e.H)},
+		Color: [4]uint32{col, col, col, col},
+		FadeX: fade,
+		Mode:  mode,
+		Tex:   c.pageTexture(int(e.Page)),
+	})
+	if c.finalPass {
+		c.glyphQuads = append(c.glyphQuads, int32(len(l.Quads)-1))
 	}
 }

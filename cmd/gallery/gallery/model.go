@@ -40,31 +40,31 @@ const (
 // newModel builds the command and menu model: a File, Edit and View menu in
 // the bar, and the table's row menu.
 func newModel() (*menu.Model, error) {
-	cmd := func(id menu.ID, title string, key ui.KeyCode) menu.Command {
-		c := menu.Command{ID: id, Title: title}
+	cmd := func(id menu.ID, title string, key ui.KeyCode, symbol string) menu.Command {
+		c := menu.Command{ID: id, Title: title, Symbol: symbol}
 		if key != 0 {
 			c.Shortcut = menu.Shortcut{Key: key, Primary: true}
 		}
 		return c
 	}
 	cmds := []menu.Command{
-		cmd(cmdOpen, "Open…", 'O'),
-		cmd(cmdSave, "Save", 'S'),
-		cmd(cmdRecent1, "notes.txt", 0),
-		cmd(cmdRecent2, "report.md", 0),
-		cmd(cmdRecent3, "table.csv", 0),
-		cmd(cmdPrint, "Print…", 'P'),
+		cmd(cmdOpen, "Open…", 'O', "folder"),
+		cmd(cmdSave, "Save", 'S', "square.and.arrow.down"),
+		cmd(cmdRecent1, "notes.txt", 0, "doc.text"),
+		cmd(cmdRecent2, "report.md", 0, "doc.richtext"),
+		cmd(cmdRecent3, "table.csv", 0, "tablecells"),
+		cmd(cmdPrint, "Print…", 'P', "printer"),
 		{ID: cmdUndo, Role: menu.RoleUndo, Shortcut: menu.Shortcut{Key: 'Z', Primary: true}},
 		{ID: cmdRedo, Role: menu.RoleRedo, Shortcut: menu.Shortcut{Key: 'Z', Primary: true, Mods: shift}},
 		{ID: cmdCut, Role: menu.RoleCut, Shortcut: menu.Shortcut{Key: 'X', Primary: true}},
 		{ID: cmdCopy, Role: menu.RoleCopy, Shortcut: menu.Shortcut{Key: 'C', Primary: true}},
 		{ID: cmdPaste, Role: menu.RolePaste, Shortcut: menu.Shortcut{Key: 'V', Primary: true}},
 		{ID: cmdSelectAll, Role: menu.RoleSelectAll, Shortcut: menu.Shortcut{Key: 'A', Primary: true}},
-		{ID: cmdCycleAppearance, Title: "Cycle Appearance", Shortcut: menu.Shortcut{Key: 'D', Primary: true, Mods: shift}},
-		cmd(cmdRowNumbers, "Show Row Numbers", 0),
-		cmd(cmdRowOpen, "Open", 0),
-		cmd(cmdRowCopyPath, "Copy Path", 0),
-		cmd(cmdRowInfo, "Show Info", 0),
+		{ID: cmdCycleAppearance, Title: "Cycle Appearance", Shortcut: menu.Shortcut{Key: 'D', Primary: true, Mods: shift}, Symbol: "circle.lefthalf.filled"},
+		cmd(cmdRowNumbers, "Show Row Numbers", 0, ""),
+		cmd(cmdRowOpen, "Open", 0, "arrow.up.forward.app"),
+		cmd(cmdRowCopyPath, "Copy Path", 0, "doc.on.doc"),
+		cmd(cmdRowInfo, "Show Info", 0, "info.circle"),
 	}
 	item := func(id menu.ID) menu.Item { return menu.Item{Kind: menu.ItemCommand, Command: id} }
 	sep := menu.Item{Kind: menu.ItemSeparator}

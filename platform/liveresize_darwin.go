@@ -44,6 +44,7 @@ func (w *Window) runHandlerFrom(tick bool) {
 		return
 	}
 	w.inHandler = true
+	w.handlerRuns++
 	t0 := Now()
 	w.handler()
 	if traceLive && w.live {

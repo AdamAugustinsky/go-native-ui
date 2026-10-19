@@ -13,7 +13,8 @@ import (
 //	copy    copy the ids and heights in their new order (from the front
 //	        buffer's ranges; the inserted ids were copied in at the start)
 //	index   insert every id into the table (a Reset also takes the surviving
-//	        heights from the front buffer here)
+//	        heights from the front buffer here, a Splice clears the removed
+//	        bits of the items it inserts again)
 //	sum     the block sums, then the Fenwick tree
 //	replay  bring the heights measured during the copy up to date
 //	recon   only after the log overflowed: take every surviving height from
@@ -70,6 +71,8 @@ type vlJob struct {
 	dst       int // items copied
 	i         int // the cursor of the other phases
 	nNew      int
+	insAt     int // the inserted ids' place in the new order (a Splice's)
+	insN      int
 }
 
 func (j *vlJob) add(ins bool, off, n int) {
@@ -120,6 +123,7 @@ func (st *VListState) startJob(op vlOp, ins []uint64) {
 		j.add(false, at+rem, f.n-at-rem)
 		j.nNew = f.n - rem + op.n
 		insAt = at
+		j.insAt, j.insN = at, op.n
 	case opMove:
 		from, k, to := op.a, op.b, op.c
 		if to < from {
@@ -294,6 +298,12 @@ func (st *VListState) work(n, room int, fresh bool) int {
 			p := b.lo + i
 			id := b.ids[p]
 			b.tab.put(id, int32(i))
+			if i-j.insAt < j.insN && i >= j.insAt {
+				// an item the Splice removed and inserts again survives
+				if fi, ok := f.index(id); ok {
+					st.gone[fi>>6] &^= 1 << (fi & 63)
+				}
+			}
 			if j.reset {
 				h := vlUnmeasured
 				if fi, ok := f.index(id); ok {
@@ -428,7 +438,7 @@ func (st *VListState) shortCost(b *vlBuf, op vlOp) (cost int, short bool) {
 }
 
 // applyShort applies a short queued edit to b in place. The items of the
-// front buffer it removes are marked gone.
+// front buffer it removes are marked gone, those it inserts again not.
 func (st *VListState) applyShort(b *vlBuf, op vlOp) {
 	switch op.kind {
 	case opSplice:
@@ -437,7 +447,13 @@ func (st *VListState) applyShort(b *vlBuf, op vlOp) {
 				st.gone[fi>>6] |= 1 << (fi & 63)
 			}
 		}
-		b.splice(op.a, op.b, st.pool[op.off:op.off+op.n])
+		ins := st.pool[op.off : op.off+op.n]
+		for _, id := range ins {
+			if fi, ok := st.f.index(id); ok {
+				st.gone[fi>>6] &^= 1 << (fi & 63)
+			}
+		}
+		b.splice(op.a, op.b, ins)
 	case opMove:
 		st.scratch(op.b)
 		b.move(op.a, op.b, op.c, st.tmpIDs, st.tmpHs)

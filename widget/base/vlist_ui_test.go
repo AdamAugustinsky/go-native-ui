@@ -38,6 +38,8 @@ type vt struct {
 	hOf  map[uint64]float32 // heights that differ from defHeight
 	box  map[uint64]ui.ID   // the item boxes of the last frame
 	edit func()             // runs in the next Build, before BeginVList
+	// content, if set, builds the content of the items it reports it built
+	content func(id uint64) bool
 }
 
 func defHeight(id uint64) float32 { return float32(20 + id%5*10) }
@@ -82,6 +84,9 @@ func (h *vt) frame() {
 	for i := h.v.First; i < h.v.Last; i++ {
 		id := h.v.Item(i)
 		h.box[id] = c.Parent()
+		if h.content != nil && h.content(id) {
+			continue
+		}
 		c.NextSize(ui.Px(300), ui.Px(h.height(id)))
 		c.Box(0, "content")
 	}
@@ -624,4 +629,157 @@ func TestVListScrollIntoViewFromPile(t *testing.T) {
 	h.in.PushAction(ui.SemRequest{Key: h.c.KeyOf(h.box[id]), Action: ui.ActScrollIntoView})
 	h.frames(3)
 	h.mustTop("scrolled into view", id, 0)
+}
+
+// settles runs frames until the list stops asking for them.
+func (h *vt) settles(what string) {
+	h.t.Helper()
+	for i := 0; h.c.Animating(); i++ {
+		if i > 100 {
+			h.t.Fatalf("%s: the list keeps asking for frames", what)
+		}
+		h.frame()
+	}
+}
+
+// A ScrollTo whose item goes away, or that never had one, is dropped: the
+// list lets the app go idle.
+func TestVListRequestForMissingItemEnds(t *testing.T) {
+	h := newVT(t, 1000, VListOpts{})
+	h.frames(3)
+	h.st.ScrollTo(700, AlignCenter)
+	h.edit = func() { h.st.Reset(nil) } // cleared before the request settles
+	h.frame()
+	h.settles("cleared with a request outstanding")
+	if h.st.req {
+		t.Fatal("the request is still outstanding")
+	}
+
+	h = newVT(t, 0, VListOpts{})
+	h.frames(2)
+	h.st.ScrollToID(1234, AlignStart)
+	h.frame()
+	h.settles("a request on an empty list")
+}
+
+// tallRow builds, for the item id, a row tall px high with a 30 px button at
+// offset y from its top.
+func (h *vt) tallRow(id uint64, tall, y float32, btn *ui.ID) func(uint64) bool {
+	return func(got uint64) bool {
+		if got != id {
+			return false
+		}
+		c := h.c
+		c.NextSize(ui.Px(300), ui.Px(tall))
+		c.NextAxis(ui.AxisY)
+		c.Push(c.Box(0, "row"))
+		c.NextSize(ui.Px(10), ui.Px(y))
+		c.Box(0, "above")
+		c.NextSize(ui.Px(80), ui.Px(30))
+		*btn = c.Box(ui.Clickable, "button")
+		c.Pop()
+		return true
+	}
+}
+
+// Accessibility requests for a box inside a tall row in a pile show that box,
+// where it is in the row: a visible one moves nothing, one out of view comes
+// just into view.
+func TestVListScrollIntoViewOfDescendant(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		btnY  float32 // the button's offset in the 100,000 px row
+		wantY float32 // its screen top afterwards
+	}{
+		{"visible", 100_000 - 100, 600 - 100},
+		{"above the view", 2000, 0},
+	} {
+		h := newVT(t, 300, VListOpts{StickToBottom: true})
+		last := h.st.ID(299)
+		h.hOf[last] = 100_000
+		var btn ui.ID
+		h.content = h.tallRow(last, 100_000, tc.btnY, &btn)
+		h.frames(3)
+		h.in.PushAction(ui.SemRequest{Key: h.c.KeyOf(btn), Action: ui.ActScrollIntoView})
+		h.frame()
+		h.settles(tc.name)
+		if got := h.c.Rect(btn)[1]; got != tc.wantY {
+			t.Fatalf("%s: the button is at %v, want %v", tc.name, got, tc.wantY)
+		}
+		if tc.name == "visible" && (!h.v.AtEnd || h.y(last)+100_000 != float32(h.h)) {
+			t.Fatalf("%s: the list moved for a visible box", tc.name)
+		}
+	}
+}
+
+// A box inside a scroller of its own in a pile row is scrolled into view by
+// that scroller (ui's nearest scrolling ancestor), or not at all when it
+// shows in it; the list does not move.
+func TestVListScrollIntoViewInNestedScroller(t *testing.T) {
+	h := newVT(t, 1000, VListOpts{})
+	h.frames(3)
+	h.scrollTo(500, 0)
+	row := h.st.ID(499)
+	var inner, near, target ui.ID
+	h.content = func(id uint64) bool {
+		if id != row {
+			return false
+		}
+		c := h.c
+		c.NextSize(ui.Px(300), ui.Px(100))
+		c.NextAxis(ui.AxisY)
+		inner = c.Box(ui.ScrollY|ui.Clip, "inner")
+		c.Push(inner)
+		c.NextSize(ui.Px(300), ui.Px(40))
+		c.Box(0, "spacer")
+		c.NextSize(ui.Px(80), ui.Px(30))
+		near = c.Box(ui.Clickable, "near") // in the nested view
+		c.NextSize(ui.Px(300), ui.Px(730))
+		c.Box(0, "spacer2")
+		c.NextSize(ui.Px(80), ui.Px(30))
+		target = c.Box(ui.Clickable, "target")
+		c.Pop()
+		return true
+	}
+	h.frames(3)
+	h.mustTop("before", h.st.ID(500), 0)
+	h.in.PushAction(ui.SemRequest{Key: h.c.KeyOf(near), Action: ui.ActScrollIntoView})
+	h.frame()
+	h.settles("nested, in view")
+	h.mustTop("after a request for a box in view in a nested scroller", h.st.ID(500), 0)
+	if _, sy := h.c.Scroll(inner); sy != 0 {
+		t.Fatalf("the nested scroller moved to %v for a box in its view", sy)
+	}
+	h.in.PushAction(ui.SemRequest{Key: h.c.KeyOf(target), Action: ui.ActScrollIntoView})
+	h.frame()
+	h.settles("nested")
+	h.mustTop("after a request inside a nested scroller", h.st.ID(500), 0)
+	if _, sy := h.c.Scroll(inner); sy != 730 {
+		t.Fatalf("the nested scroller is at %v, want 730 (its target at its bottom)", sy)
+	}
+}
+
+// At a fractional scale the position holds in points across a scale change,
+// and the items still tile on whole device pixels: each starts where the one
+// above it ends.
+func TestVListFractionalScale(t *testing.T) {
+	h := newVT(t, 1000, VListOpts{})
+	h.frames(3)
+	h.scrollTo(400, 6)
+	id, _ := h.top()
+	h.sc = 1.5
+	h.frames(3)
+	if a, off := h.st.Anchor(); a != id || off != 6 {
+		t.Fatalf("the anchor is %d at %v pt, want %d at 6", a, off, id)
+	}
+	if got := h.y(id); got != -9 {
+		t.Fatalf("the top item is at %v px, want -9", got)
+	}
+	for i := h.v.First; i+1 < h.v.Last; i++ {
+		a, b := h.st.ID(i), h.st.ID(i+1)
+		r := h.c.Rect(h.box[a])
+		if r[1] != float32(int(r[1])) || h.c.Rect(h.box[b])[1] != r[3] {
+			t.Fatalf("items %d and %d: %v then %v, not tiled on pixels", i, i+1, r, h.c.Rect(h.box[b]))
+		}
+	}
 }

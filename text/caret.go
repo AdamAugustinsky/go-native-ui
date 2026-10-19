@@ -6,6 +6,9 @@ package text
 //
 // Glyph x positions are pen positions, which a mark may place left of the
 // glyph before it; cells are therefore taken from the running maximum of X.
+// Positions may be negative (a line's hanging white space, left of its
+// origin; see ParaView.LineRun): the running maximum starts at the first
+// glyph's when that is left of 0.
 //
 // Model. A glyph maps to the grapheme cluster that contains its shaper
 // cluster's first character (shapers report clusters per character or per
@@ -70,7 +73,7 @@ func (v *RunView) groupAt(j int) glyphGroup {
 // and including it (a mark placed to the left of its base does not pull the
 // cell back), and for j == len(Glyphs) the end of the run.
 func (v *RunView) cellStart(j int) float32 {
-	var m float32
+	m := v.xStart()
 	for k := 0; k < j && k < len(v.X); k++ {
 		m = max(m, v.X[k])
 	}
@@ -78,6 +81,15 @@ func (v *RunView) cellStart(j int) float32 {
 		return max(m, v.Advance)
 	}
 	return max(m, v.X[j])
+}
+
+// xStart is where the running maximum of X starts: 0, or the first glyph's
+// position when it is negative.
+func (v *RunView) xStart() float32 {
+	if len(v.X) > 0 && v.X[0] < 0 {
+		return v.X[0]
+	}
+	return 0
 }
 
 // graphemes counts the grapheme clusters of v.Text in [from, to).
@@ -148,7 +160,7 @@ func (v RunView) HitByte(x float32) int {
 	}
 	// The glyph under x: the last one whose cell starts at or before it.
 	j := 0
-	var m float32
+	m := v.xStart()
 	for k := range v.Glyphs {
 		if m = max(m, v.X[k]); m <= x {
 			j = k

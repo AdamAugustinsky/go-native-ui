@@ -143,8 +143,11 @@ func BeginVList(c *ui.Context, label string, st *VListState, o VListOpts) VList 
 			}
 		}
 	}
+	if st.ncand > 0 {
+		st.pileRequests(c, okey, ikey, old)
+	}
 	if in := c.Input(); in.NActions > 0 {
-		st.pileScrollIntoView(c, in, ikey, last[:st.piled[st.cur]])
+		st.pileCandidates(c, in, ikey, last[:st.piled[st.cur]])
 	}
 	st.cur ^= 1
 	if cap(st.built[st.cur]) < o.MaxItems {
@@ -198,6 +201,11 @@ func BeginVList(c *ui.Context, label string, st *VListState, o VListOpts) VList 
 
 	// the position, in points
 	f := &st.f
+	if st.req && !st.job.on {
+		if _, ok := f.index(st.reqID); !ok {
+			st.req = false // its item is gone (or never was), and no rebuild may add it
+		}
+	}
 	n := f.n
 	total := 0.0
 	if n > 0 {
@@ -342,7 +350,7 @@ func BeginVList(c *ui.Context, label string, st *VListState, o VListOpts) VList 
 	}
 	v.s, v.cont = s, content
 	c.Push(v.Body)
-	if changed || st.req || st.Pending() {
+	if changed || st.req || st.ncand > 0 || st.Pending() {
 		c.RequestFrame()
 	}
 	return v
@@ -370,6 +378,9 @@ func (st *VListState) reqTarget(view float64, changed bool, maxItems int, y *flo
 	est := st.est
 	top := f.top(i, est)
 	h := f.top(i+1, est) - top
+	if st.reqSub {
+		top, h = top+st.reqOff, st.reqH
+	}
 	a := st.reqAlign
 	if a == AlignNearest {
 		cur := 0.0
@@ -423,11 +434,13 @@ func (st *VListState) measured(y float64, i, limit int) bool {
 	return true
 }
 
-// pileScrollIntoView turns the accessibility requests to scroll a box built
-// in a pile in the last frame into view (ui.ActScrollIntoView), which ui
-// would apply to the pile, into a ScrollTo of its item.
-func (st *VListState) pileScrollIntoView(c *ui.Context, in *ui.Input, ikey ui.Key, piled []uint64) {
-	for k := 0; k < in.NActions; k++ {
+// pileCandidates notes, for the accessibility requests of this frame to
+// scroll a box into view (ui.ActScrollIntoView), the item built in a pile in
+// the last frame that holds the box. ui applies a request to the box's
+// nearest scrolling ancestor; when that is the pile, which does not scroll
+// the list, pileRequests applies it to the list in the next frame.
+func (st *VListState) pileCandidates(c *ui.Context, in *ui.Input, ikey ui.Key, piled []uint64) {
+	for k := 0; k < in.NActions && st.ncand < len(st.cand); k++ {
 		r := &in.Actions[k]
 		if r.Action&ui.ActScrollIntoView == 0 {
 			continue
@@ -443,10 +456,43 @@ func (st *VListState) pileScrollIntoView(c *ui.Context, in *ui.Input, ikey ui.Ke
 				continue
 			}
 			if ir := c.Rect(ib); br[0] >= ir[0] && br[2] <= ir[2] && br[1] >= ir[1] && br[3] <= ir[3] {
-				st.ScrollToID(id, AlignNearest)
+				st.cand[st.ncand] = vlCand{r.Key, id}
+				st.ncand++
 				break
 			}
 		}
+	}
+}
+
+// pileRequests applies the requests pileCandidates noted in the last frame,
+// if ui gave one to the pile (it scrolled the pile off its content's end,
+// which nothing else does): the box is shown where it is in its item, and
+// not moved when in view. A box in a scroller nearer to it than the pile was
+// scrolled by ui alone.
+func (st *VListState) pileRequests(c *ui.Context, okey, ikey ui.Key, scale float64) {
+	n := st.ncand
+	st.ncand = 0
+	pb, ok := c.BoxOf(ui.KeyN(okey, 3))
+	if !ok {
+		return
+	}
+	content, _ := c.ScrollExtent(pb)
+	if _, s := c.Scroll(pb); s == float64(content[1]) {
+		return
+	}
+	for k := n - 1; k >= 0; k-- { // ui's last request is the one that holds
+		cd := st.cand[k]
+		b, ok1 := c.BoxOf(cd.key)
+		ib, ok2 := c.BoxOf(ui.KeyN(ikey, cd.row))
+		if !ok1 || !ok2 {
+			continue
+		}
+		br, ir := c.Rect(b), c.Rect(ib)
+		st.ScrollToID(cd.row, AlignNearest)
+		st.reqSub = true
+		st.reqOff = float64(br[1]-ir[1]) / scale
+		st.reqH = float64(br[3]-br[1]) / scale
+		return
 	}
 }
 
