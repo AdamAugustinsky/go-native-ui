@@ -190,6 +190,10 @@ func TestAppServicesWithoutWindows(t *testing.T) {
 	t.Parallel()
 	r := child(t, "services", 60*time.Second)
 	cpu, _ := strconv.ParseFloat(r.get("idle_cpu_pct"), 64)
+	// Idle is about 0.03 % here; a CI runner's VM shows up to about 1.4 % for
+	// an idle process (the windowed spike's idle there), so the bound catches
+	// a pump that spins or polls, not that noise.
+	//
 	// The system may change the screens on its own (CI runners do): those
 	// events are left out; the one the test posted must be there.
 	var evs []string
@@ -198,7 +202,7 @@ func TestAppServicesWithoutWindows(t *testing.T) {
 			evs = append(evs, e)
 		}
 	}
-	if r.code != 0 || r.get("policy") != "1" || strings.Join(evs, ",") != "post,command7,reopen0,sleep,wake,session0,session1,screens" || r.get("main") != "returned" || cpu > 0.5 {
+	if r.code != 0 || r.get("policy") != "1" || strings.Join(evs, ",") != "post,command7,reopen0,sleep,wake,session0,session1,screens" || r.get("main") != "returned" || cpu > 2 {
 		t.Fatalf("exit %d, results %v\n%s", r.code, r.kv, r.out)
 	}
 	t.Logf("idle with no window: %.3f %% CPU", cpu)
