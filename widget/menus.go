@@ -5,6 +5,7 @@ import (
 	"gonativeui/menu"
 	"gonativeui/theme"
 	"gonativeui/ui"
+	"gonativeui/widget/base"
 )
 
 // Drawn menus (Windows and Linux; on macOS the same model becomes the native
@@ -19,97 +20,15 @@ import (
 // delivers the command as an edit action of that field. (A MenuButton is a
 // button and takes the focus when clicked, like any button.)
 
-const maxMenuDepth = 4
+const maxMenuDepth = base.MaxMenuDepth
 
-type popupKind uint8
-
-const (
-	popNone    popupKind = iota
-	popMenu              // a menu of the model opened from a bar item or a menu button
-	popContext           // a menu of the model opened at a point
-	popSelect            // the options of a Select
-)
-
-// popup is the one popup chain a window has open: the menu or dropdown, and
-// the submenu open at each level.
-type popup struct {
-	kind  popupKind
-	owner ui.Key
-	menu  int
-	at    [4]float32
-	hi    [maxMenuDepth]int32  // the submenu item open at each level, -1 none
-	row   [maxMenuDepth]ui.Key // the row of that item
-	// restore is the box that had the focus when the menu opened (the text
-	// field an Edit menu acts on); a choice gives the focus back to it at once,
-	// so that the command reaches it in the next frame.
-	restore ui.Key
-}
-
-func (p *popup) reset() {
-	*p = popup{}
-	for i := range p.hi {
-		p.hi[i] = -1
-	}
-}
-
-func (p *popup) open() bool { return p.kind != popNone }
-
-var popBase = ui.HashString(keyRoot, "popup")
-
-// CloseMenus closes the open menu or dropdown, if any.
-func (k *Kit) CloseMenus() { k.pop.reset() }
-
-// MenuOpen reports whether a menu or dropdown is open.
-func (k *Kit) MenuOpen() bool { return k.pop.open() }
-
-// OpenContextMenu opens menu number menuIdx of the model (see menu.Model.Menus)
-// as a context menu at the window position (x, y) in pixels, usually the
-// ContextAt of a list that was right-clicked. It is built at the end of the
-// frame (Kit.End) and in the frames after, until a choice or a click elsewhere
-// closes it.
-func (k *Kit) OpenContextMenu(menuIdx int, x, y float32) {
-	if k.menu == nil || menuIdx < 0 || menuIdx >= len(k.menu.Menus()) {
-		return
-	}
-	r := k.popRestore()
-	k.pop.reset()
-	k.pop.restore = r
-	k.pop.kind, k.pop.menu, k.pop.at = popContext, menuIdx, [4]float32{x, y, x, y}
-	k.c.RequestFrame()
-}
+var popBase = base.PopupKeyBase
 
 // contextMenu builds the open context menu, at the end of the frame.
 func (k *Kit) contextMenu() {
-	if k.pop.kind == popContext && k.menu != nil {
-		k.menuPanel(0, k.pop.menu, k.pop.at, ui.PlaceBelow)
+	if k.pop.Kind == base.PopupContext && k.Menu() != nil {
+		k.menuPanel(0, k.pop.Menu, k.pop.At, ui.PlaceBelow)
 	}
-}
-
-// popRestore is the focus to give back when the menu that is about to open
-// closes: the one the open menu will give back (a menu replaces another in the
-// bar), else the focus now.
-func (k *Kit) popRestore() ui.Key {
-	if k.pop.open() {
-		return k.pop.restore
-	}
-	return k.c.FocusKey()
-}
-
-// choose hands a command the user picked to the model's queue for the next
-// frame and closes the menus. The focus goes back at once to the box that had
-// it when the menu opened (the menu rows have it now, and give it up only at
-// the end of the next frame), so that the next frame's Begin sees the text
-// field an edit command is meant for.
-func (k *Kit) choose(id menu.ID) {
-	if k.npend < len(k.pend) {
-		k.pend[k.npend] = id
-		k.npend++
-	}
-	if r := k.pop.restore; r != 0 {
-		k.c.SetFocus(r)
-	}
-	k.pop.reset()
-	k.c.RequestFrame()
 }
 
 // roleTitle is the title a drawn menu gives a command that has only a role.
@@ -151,7 +70,7 @@ func roleTitle(r menu.Role) string {
 
 // itemTitle is the text of a menu item.
 func (k *Kit) itemTitle(it menu.Item) (title string, cmd menu.Command) {
-	m := k.menu
+	m := k.Menu()
 	switch it.Kind {
 	case menu.ItemSubmenu:
 		title = it.Title
@@ -178,56 +97,6 @@ func (k *Kit) popupSurface() {
 	c.NextRadius(px.RadiusMedium)
 	c.NextShadow(ui.Shadow{OffY: 2 * k.scale, Sigma: 8 * k.scale, Color: theme.WithAlpha(p.Shadow, 3)})
 	c.NextFlags(ui.DrawBackground | ui.DrawBorder | ui.DrawShadow)
-}
-
-// nav moves the focus between the items of a popup list with Up and Down,
-// wrapping at the ends. The items are built in order; the next one's key is
-// not known when Down is pressed, so the move is done when it arrives.
-type nav struct {
-	prev, first, last  ui.Key
-	pendNext, wrapBack bool
-}
-
-// arrive is called for each focusable item as it is built, before its keys.
-func (n *nav) arrive(c *ui.Context, key ui.Key) {
-	if n.pendNext {
-		c.SetFocus(key)
-		c.SetFocusVisible(true)
-		n.pendNext = false
-	}
-}
-
-// at takes Up and Down for the focusable item key.
-func (n *nav) at(c *ui.Context, key ui.Key, focused bool) {
-	if focused {
-		switch {
-		case c.TakeKey(ui.KeyDown, 0):
-			n.pendNext = true
-		case c.TakeKey(ui.KeyUp, 0):
-			if n.prev != 0 {
-				c.SetFocus(n.prev)
-				c.SetFocusVisible(true)
-			} else {
-				n.wrapBack = true
-			}
-		}
-	}
-	if n.first == 0 {
-		n.first = key
-	}
-	n.prev, n.last = key, key
-}
-
-// end wraps a move past either end.
-func (n *nav) end(c *ui.Context) {
-	if n.pendNext && n.first != 0 {
-		c.SetFocus(n.first)
-		c.SetFocusVisible(true)
-	}
-	if n.wrapBack && n.last != 0 {
-		c.SetFocus(n.last)
-		c.SetFocusVisible(true)
-	}
 }
 
 // optionRow describes one row of a popup list: a check mark column, the
@@ -310,7 +179,7 @@ func (k *Kit) optionRow(o optionRow) ui.ID {
 // choice goes to the model, a dismissal updates the popup state.
 func (k *Kit) menuPanel(level, mi int, anchor [4]float32, place ui.Placement) {
 	c := k.c
-	m := k.menu
+	m := k.Menu()
 	px := &k.r.Px
 	mn := &m.Menus()[mi]
 	if level >= maxMenuDepth {
@@ -351,13 +220,13 @@ func (k *Kit) menuPanel(level, mi int, anchor [4]float32, place ui.Placement) {
 	os := c.BeginOverlay(okey, ui.OverlayPopup, anchor, place)
 	if os.Dismissed {
 		if level == 0 {
-			k.pop.reset()
+			k.pop.Reset()
 		} else {
-			k.pop.hi[level-1] = -1
+			k.pop.Hi[level-1] = -1
 		}
 	}
 	n := len(mn.Items)
-	var nv nav
+	var nv base.PopupNav
 	for i, it := range mn.Items {
 		if it.Kind == menu.ItemSeparator {
 			c.NextSize(ui.Pct(1), ui.Px(2*pad))
@@ -387,55 +256,55 @@ func (k *Kit) menuPanel(level, mi int, anchor [4]float32, place ui.Placement) {
 		o.disabled = o.disabled || k.off()
 		row := k.optionRow(o)
 		if !o.disabled {
-			nv.arrive(c, key)
+			nv.Arrive(c, key)
 			s := c.Signal(row)
-			if s.Hovering && k.mouseMove {
+			if s.Hovering && k.MouseMoved() {
 				c.SetFocus(key)
 				c.SetFocusVisible(false)
 				if it.Kind == menu.ItemSubmenu {
-					k.openSub(level, i, key)
-				} else if k.pop.hi[level] >= 0 {
-					k.pop.hi[level] = -1
+					k.OpenSubmenu(level, i, key)
+				} else if k.pop.Hi[level] >= 0 {
+					k.pop.Hi[level] = -1
 				}
 			}
 			focused := c.Focused(row)
 			switch {
 			case s.Clicked || s.Activated:
 				if it.Kind == menu.ItemSubmenu {
-					k.openSub(level, i, key)
+					k.OpenSubmenu(level, i, key)
 				} else {
-					k.choose(cmd.ID)
+					k.ChooseCommand(cmd.ID)
 				}
 			case focused && it.Kind == menu.ItemSubmenu && c.TakeKey(ui.KeyRight, 0):
-				k.openSub(level, i, key)
+				k.OpenSubmenu(level, i, key)
 			case focused && level > 0 && c.TakeKey(ui.KeyLeft, 0):
-				c.SetFocus(k.pop.row[level-1])
+				c.SetFocus(k.pop.Row[level-1])
 				c.SetFocusVisible(true)
-				k.pop.hi[level-1] = -1
-			case focused && level == 0 && k.pop.kind == popMenu && c.TakeKey(ui.KeyLeft, 0):
-				k.barStep(-1)
-			case focused && level == 0 && k.pop.kind == popMenu && it.Kind != menu.ItemSubmenu && c.TakeKey(ui.KeyRight, 0):
-				k.barStep(1)
+				k.pop.Hi[level-1] = -1
+			case focused && level == 0 && k.pop.Kind == base.PopupMenu && c.TakeKey(ui.KeyLeft, 0):
+				k.StepMenuBar(-1)
+			case focused && level == 0 && k.pop.Kind == base.PopupMenu && it.Kind != menu.ItemSubmenu && c.TakeKey(ui.KeyRight, 0):
+				k.StepMenuBar(1)
 			}
-			nv.at(c, key, focused)
+			nv.At(c, key, focused)
 		}
-		if it.Kind == menu.ItemSubmenu && k.pop.hi[level] == int32(i) {
+		if it.Kind == menu.ItemSubmenu && k.pop.Hi[level] == int32(i) {
 			c.Push(row)
 			k.menuPanel(level+1, it.Submenu, c.Rect(row), ui.PlaceRight)
 			c.Pop()
 		}
 	}
-	nv.end(c)
+	nv.End(c)
 	c.EndOverlay()
 }
 
 // openSub opens the submenu of item i at level.
 func (k *Kit) openSub(level, i int, row ui.Key) {
-	if k.pop.hi[level] != int32(i) {
+	if k.pop.Hi[level] != int32(i) {
 		for l := level + 1; l < maxMenuDepth; l++ {
-			k.pop.hi[l] = -1
+			k.pop.Hi[l] = -1
 		}
-		k.pop.hi[level], k.pop.row[level] = int32(i), row
+		k.pop.Hi[level], k.pop.Row[level] = int32(i), row
 		k.c.RequestFrame()
 	}
 }
@@ -447,7 +316,7 @@ func (k *Kit) openSub(level, i int, row ui.Key) {
 // the menu.
 func (k *Kit) MenuBar() Signal {
 	c := k.c
-	m := k.menu
+	m := k.Menu()
 	if m == nil {
 		return Signal{}
 	}
@@ -466,10 +335,10 @@ func (k *Kit) MenuBar() Signal {
 	for bi, mi := range bar {
 		title := m.Menus()[mi].Title
 		key := ui.KeyN(bkey, uint64(bi))
-		open := k.pop.kind == popMenu && k.pop.owner == key
+		open := k.pop.Kind == base.PopupMenu && k.pop.Owner == key
 		w := theme.Snap(k.textW(k.r.Font.UI, title) + 2*px.Pad)
 		hi := max(c.HotTOf(key), c.FocusTOf(key))
-		flags := k.flags() | ui.DrawText
+		flags := k.InteractFlags(hoverOn) | ui.DrawText
 		if !k.off() {
 			flags |= ui.KeepFocus // a click on the bar does not take the focus from the field it acts on
 		}
@@ -498,11 +367,11 @@ func (k *Kit) MenuBar() Signal {
 			switch {
 			case s.Clicked || s.Activated || s.Action&(ui.ActExpand|ui.ActShowMenu) != 0:
 				if open {
-					k.pop.reset()
+					k.pop.Reset()
 				} else {
 					want = bi
 				}
-			case s.Hovering && k.mouseMove && k.pop.kind == popMenu && !open && k.isBarOwner(bkey):
+			case s.Hovering && k.MouseMoved() && k.pop.Kind == base.PopupMenu && !open && k.pop.Bar == bkey:
 				want = bi
 			case c.Focused(item) && !open && c.TakeKey(ui.KeyDown, 0):
 				want = bi
@@ -522,20 +391,12 @@ func (k *Kit) MenuBar() Signal {
 	}
 	c.Pop()
 	if want >= 0 {
-		r := k.popRestore()
-		k.pop.reset()
-		k.pop.restore = r
-		k.pop.kind, k.pop.owner, k.pop.menu = popMenu, ui.KeyN(bkey, uint64(want)), bar[want]
-		k.pop.row[0] = k.pop.owner
-		k.barKey = bkey
-		c.RequestFrame()
+		k.OpenPopup(base.PopupMenu, ui.KeyN(bkey, uint64(want)), bar[want], [4]float32{})
+		k.pop.Bar = bkey
 	}
 	k.undim(dim)
 	return Signal{ID: id}
 }
-
-// isBarOwner reports whether the open menu belongs to the bar with key bkey.
-func (k *Kit) isBarOwner(bkey ui.Key) bool { return k.barKey == bkey }
 
 func b2f(b bool) float32 {
 	if b {
@@ -544,51 +405,22 @@ func b2f(b bool) float32 {
 	return 0
 }
 
-// barStep opens the menu next to the open one in the bar, d = ±1.
-func (k *Kit) barStep(d int) {
-	bar := k.menu.Bar()
-	if len(bar) == 0 {
-		return
-	}
-	cur := -1
-	for bi, mi := range bar {
-		if mi == k.pop.menu {
-			cur = bi
-		}
-	}
-	if cur < 0 {
-		return
-	}
-	n := (cur + d + len(bar)) % len(bar)
-	k.pop.menu = bar[n]
-	k.pop.owner = ui.KeyN(k.barKey, uint64(n))
-	for l := range k.pop.hi {
-		k.pop.hi[l] = -1
-	}
-	k.c.RequestFrame()
-}
-
 // MenuButton builds a button that opens menu number menuIdx of the model
 // below itself.
 func (k *Kit) MenuButton(label string, menuIdx int) Signal {
 	c := k.c
-	if k.menu == nil || menuIdx < 0 || menuIdx >= len(k.menu.Menus()) {
+	if m := k.Menu(); m == nil || menuIdx < 0 || menuIdx >= len(m.Menus()) {
 		return Signal{}
 	}
 	_, ident := ui.SplitLabel(label)
 	key := ui.HashString(c.ParentKey(), ident)
-	open := k.pop.kind == popMenu && k.pop.owner == key
+	open := k.pop.Kind == base.PopupMenu && k.pop.Owner == key
 	s := k.ButtonIcon(icon.ChevronDown, label, ButtonDefault)
 	if s.Clicked {
 		if open {
-			k.pop.reset()
+			k.pop.Reset()
 		} else {
-			r := k.popRestore()
-			k.pop.reset()
-			k.pop.restore = r
-			k.pop.kind, k.pop.owner, k.pop.menu = popMenu, key, menuIdx
-			k.pop.row[0] = key
-			c.RequestFrame()
+			k.OpenPopup(base.PopupMenu, key, menuIdx, [4]float32{})
 		}
 	}
 	if open && !k.off() {

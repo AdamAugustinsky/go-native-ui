@@ -4,6 +4,7 @@ import (
 	"gonativeui/icon"
 	"gonativeui/theme"
 	"gonativeui/ui"
+	"gonativeui/widget/base"
 )
 
 // selectDefaultPt is the width of a Select that sets none, in points.
@@ -18,12 +19,11 @@ const selectDefaultPt = 160
 func (k *Kit) Select(label string, sel *int, options []string) Signal {
 	c := k.c
 	p, px := &k.r.Pal, &k.r.Px
-	display, ident := ui.SplitLabel(label)
 	dim := k.dim()
-	key := ui.HashString(c.ParentKey(), ident)
-	open := k.pop.kind == popSelect && k.pop.owner == key
+	b := k.PressState(label, hoverOn)
+	key := b.Key
+	open := k.pop.OpenBy(base.PopupSelect, key)
 	h := theme.Snap(px.ControlH)
-	v := k.vis(key)
 	cur := ""
 	if *sel >= 0 && *sel < len(options) {
 		cur = options[*sel]
@@ -33,18 +33,14 @@ func (k *Kit) Select(label string, sel *int, options []string) Signal {
 	if open {
 		state = ui.SemExpanded
 	}
-	k.size(k.Fixed(selectDefaultPt), ui.Px(h))
 	c.NextBG(p.ControlFill)
 	c.NextBorder(p.ControlBorder, px.BorderW)
 	c.NextRadius(px.RadiusMedium)
 	c.NextAxis(ui.AxisX)
 	c.NextPadding(px.Pad, 0, px.Pad, 0)
-	c.NextRole(ui.RoleComboBox)
-	c.NextSemName(display)
 	c.NextSemValueBytes(strBytes(cur))
 	c.NextSemState(state)
-	id := c.BoxKeyed(k.flags()|ui.DrawBackground|ui.DrawBorder|ui.Clip, key, nil)
-	c.Push(id)
+	id := k.BeginPress(&b, ui.RoleComboBox, k.Fixed(selectDefaultPt), ui.Px(h), ui.DrawBackground|ui.DrawBorder|ui.Clip, nil)
 	r := c.Rect(id)
 	w := r[2] - r[0]
 	chev := theme.Snap(px.IconSize)
@@ -56,7 +52,7 @@ func (k *Kit) Select(label string, sel *int, options []string) Signal {
 	_, ih := k.icons.Size(icon.ChevronDown)
 	k.center(ih, h)
 	c.BoxKeyed(f|ui.FloatingY, ui.KeyN(key, 2), disp)
-	k.decorate(id, v, px.RadiusMedium)
+	k.decorate(id, b.Visual, px.RadiusMedium)
 	c.Pop()
 
 	var changed bool
@@ -65,16 +61,16 @@ func (k *Kit) Select(label string, sel *int, options []string) Signal {
 		switch {
 		case s.Clicked || s.Activated || s.Action&(ui.ActExpand|ui.ActShowMenu) != 0:
 			if open {
-				k.pop.reset()
+				k.pop.Reset()
 			} else {
-				k.pop.reset()
-				k.pop.kind, k.pop.owner = popSelect, key
+				k.pop.Reset()
+				k.pop.Kind, k.pop.Owner = base.PopupSelect, key
 				open = true
 				c.RequestFrame()
 			}
 		case c.Focused(id) && !open && c.TakeKey(ui.KeyDown, 0):
-			k.pop.reset()
-			k.pop.kind, k.pop.owner = popSelect, key
+			k.pop.Reset()
+			k.pop.Kind, k.pop.Owner = base.PopupSelect, key
 			open = true
 			c.RequestFrame()
 		}
@@ -82,7 +78,7 @@ func (k *Kit) Select(label string, sel *int, options []string) Signal {
 	if open && !k.off() {
 		changed = k.selectPopup(id, key, sel, options, w)
 	}
-	sig := k.signal(id)
+	sig := k.SignalOf(id)
 	sig.Changed = changed
 	k.undim(dim)
 	return sig
@@ -109,20 +105,20 @@ func (k *Kit) selectPopup(id ui.ID, key ui.Key, sel *int, options []string, minW
 	c.NextSemName("Options")
 	os := c.BeginOverlay(okey, ui.OverlayPopup, c.Rect(id), ui.PlaceBelow)
 	if os.Dismissed {
-		k.pop.reset()
+		k.pop.Reset()
 	}
-	var nv nav
+	var nv base.PopupNav
 	for i, o := range options {
 		rkey := ui.KeyN(okey, uint64(i+1))
 		row := k.optionRow(optionRow{key: rkey, label: strBytes(o), checked: i == *sel, w: rowW,
 			lw: rowW - 2*px.Pad - iconW, iconW: iconW, role: ui.RoleListItem, pos: i, n: len(options)})
-		nv.arrive(c, rkey)
+		nv.Arrive(c, rkey)
 		if opening && i == max(*sel, 0) {
 			c.SetFocus(rkey)
 			c.SetFocusVisible(false)
 		}
 		s := c.Signal(row)
-		if s.Hovering && k.mouseMove {
+		if s.Hovering && k.MouseMoved() {
 			c.SetFocus(rkey)
 			c.SetFocusVisible(false)
 		}
@@ -130,13 +126,13 @@ func (k *Kit) selectPopup(id ui.ID, key ui.Key, sel *int, options []string, minW
 			if *sel != i {
 				*sel, changed = i, true
 			}
-			k.pop.reset()
+			k.pop.Reset()
 			c.SetFocus(key)
 			c.RequestFrame()
 		}
-		nv.at(c, rkey, c.Focused(row))
+		nv.At(c, rkey, c.Focused(row))
 	}
-	nv.end(c)
+	nv.End(c)
 	c.EndOverlay()
 	return changed
 }

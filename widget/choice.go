@@ -1,23 +1,23 @@
 package widget
 
 import (
-	"math"
-
 	"gonativeui/icon"
 	"gonativeui/theme"
 	"gonativeui/ui"
+	"gonativeui/widget/base"
 )
 
-// CheckState is the state of a tri-state checkbox.
-type CheckState int8
+// CheckState is the state of a tri-state checkbox (base.CheckState).
+type CheckState = base.CheckState
 
+// The states of a tri-state checkbox.
 const (
 	// Unchecked is an empty box.
-	Unchecked CheckState = iota
+	Unchecked = base.Unchecked
 	// Checked is a box with a check mark.
-	Checked
+	Checked = base.Checked
 	// Mixed is a box with a dash: some of what it stands for is checked.
-	Mixed
+	Mixed = base.Mixed
 )
 
 // rowH is the height of a checkbox, switch or radio row in pixels.
@@ -43,72 +43,43 @@ func (k *Kit) Checkbox(label string, v *bool) Signal {
 	if *v {
 		st = Checked
 	}
-	s := k.check(label, &st, false)
+	s := k.check(label, &st)
 	*v = st == Checked
 	return s
 }
 
 // CheckboxTri builds a tri-state checkbox that edits *st. Clicking a mixed
 // box checks it.
-func (k *Kit) CheckboxTri(label string, st *CheckState) Signal { return k.check(label, st, true) }
+func (k *Kit) CheckboxTri(label string, st *CheckState) Signal { return k.check(label, st) }
 
-func (k *Kit) check(label string, st *CheckState, tri bool) Signal {
+// check is the classic look over base's Toggle primitive.
+func (k *Kit) check(label string, st *CheckState) Signal {
 	c := k.c
 	p, px := &k.r.Pal, &k.r.Px
-	display, ident := ui.SplitLabel(label)
 	dim := k.dim()
-	key := ui.HashString(c.ParentKey(), ident)
-	var changed bool
-	if !k.off() {
-		if s := c.PeekSignal(key); s.Clicked || s.Activated || s.Action&ui.ActPress != 0 {
-			*st = nextCheck(*st)
-			changed = true
-		}
-	}
-	v := k.vis(key)
+	t := k.ToggleState(label, st, hoverOn)
 
 	h := k.rowH()
 	box := theme.Snap(px.IconSize)
-	var state ui.SemState
-	switch *st {
-	case Checked:
-		state = ui.SemChecked
-	case Mixed:
-		state = ui.SemMixed
-	}
-	k.size(ui.Children(1), ui.Px(h))
 	c.NextAxis(ui.AxisX)
 	c.NextGap(px.Pad)
-	c.NextRole(ui.RoleCheckbox)
-	c.NextSemName(display)
-	c.NextSemState(state)
-	id := c.BoxKeyed(k.flags(), key, nil)
-	c.Push(id)
+	k.BeginToggle(&t, ui.RoleCheckbox, ui.Children(1), ui.Px(h), 0)
 	k.center(box, h)
-	k.indicator(key, box, px.RadiusSmall, *st != Unchecked, v)
-	if *st != Unchecked {
-		k.indicatorMark(*st, box, p.OnAccent)
+	k.indicator(t.Key, box, px.RadiusSmall, t.State != Unchecked, t.Visual)
+	if t.State != Unchecked {
+		k.indicatorMark(t.State, box, p.OnAccent)
 	}
 	c.Pop()
-	k.labelBox(key, display, h)
-	c.Pop()
-	sig := k.signal(id)
-	sig.Changed = changed
+	k.labelBox(t.Key, t.Name, h)
+	sig := k.EndToggle(&t)
 	k.undim(dim)
 	return sig
-}
-
-func nextCheck(s CheckState) CheckState {
-	if s == Checked {
-		return Unchecked
-	}
-	return Checked
 }
 
 // indicator builds the box of a checkbox or radio button in the current parent
 // (the control's root) and leaves it as the current parent: the caller adds
 // the mark and pops. on fills it with the accent colour.
-func (k *Kit) indicator(key ui.Key, box, radius float32, on bool, v vis) ui.ID {
+func (k *Kit) indicator(key ui.Key, box, radius float32, on bool, v base.Visual) ui.ID {
 	c := k.c
 	p, px := &k.r.Pal, &k.r.Px
 	bg, border := p.ControlFill, p.ControlBorder
@@ -145,17 +116,9 @@ func (k *Kit) indicatorMark(st CheckState, box float32, col uint32) {
 func (k *Kit) Switch(label string, on *bool) Signal {
 	c := k.c
 	p, px := &k.r.Pal, &k.r.Px
-	display, ident := ui.SplitLabel(label)
 	dim := k.dim()
-	key := ui.HashString(c.ParentKey(), ident)
-	var changed bool
-	if !k.off() {
-		if s := c.PeekSignal(key); s.Clicked || s.Activated || s.Action&ui.ActPress != 0 {
-			*on = !*on
-			changed = true
-		}
-	}
-	v := k.vis(key)
+	tg := k.ToggleBool(label, on, hoverOn)
+	key := tg.Key
 	target := float32(0)
 	if *on {
 		target = 1
@@ -164,18 +127,9 @@ func (k *Kit) Switch(label string, on *bool) Signal {
 
 	h := k.rowH()
 	tw, th := theme.Snap(2*px.IconSize*1.1), theme.Snap(px.IconSize*1.2)
-	var state ui.SemState
-	if *on {
-		state = ui.SemChecked
-	}
-	k.size(ui.Children(1), ui.Px(h))
 	c.NextAxis(ui.AxisX)
 	c.NextGap(px.Pad)
-	c.NextRole(ui.RoleSwitch)
-	c.NextSemName(display)
-	c.NextSemState(state)
-	id := c.BoxKeyed(k.flags(), key, nil)
-	c.Push(id)
+	k.BeginToggle(&tg, ui.RoleSwitch, ui.Children(1), ui.Px(h), 0)
 	k.center(th, h)
 	c.NextSize(ui.Px(tw), ui.Px(th))
 	c.NextBG(theme.MixRGBA(p.TrackFill, p.Accent, t))
@@ -189,35 +143,12 @@ func (k *Kit) Switch(label string, on *bool) Signal {
 	c.NextRadius(d / 2)
 	c.NextShadow(ui.Shadow{OffY: px.BorderW, Sigma: px.BorderW * 1.5, Color: theme.ColA(p.Shadow>>8, 0.35)})
 	c.BoxKeyed(ui.DrawBackground|ui.DrawShadow|fl, ui.KeyN(key, 3), nil)
-	k.decorateBox(key, tw, th, v, th/2)
+	k.decorateBox(key, tw, th, tg.Visual, th/2)
 	c.Pop()
-	k.labelBox(key, display, h)
-	c.Pop()
-	sig := k.signal(id)
-	sig.Changed = changed
+	k.labelBox(key, tg.Name, h)
+	sig := k.EndToggle(&tg)
 	k.undim(dim)
 	return sig
-}
-
-// decorateBox builds the hover and press tints and the focus ring of a control whose
-// visible box is the current parent, w×h pixels.
-func (k *Kit) decorateBox(key ui.Key, w, h float32, v vis, radius float32) {
-	c := k.c
-	if v.hot > 0.004 {
-		theme.At(c, 0, 0, w, h)
-		c.NextBG(theme.WithAlpha(k.r.Pal.HoverOverlay, v.hot))
-		c.NextRadius(radius)
-		c.BoxKeyed(ui.DrawBackground|fl, ui.KeyN(key, 9001), nil)
-	}
-	if v.press > 0.004 {
-		theme.At(c, 0, 0, w, h)
-		c.NextBG(theme.WithAlpha(k.r.Pal.PressOverlay, v.press))
-		c.NextRadius(radius)
-		c.BoxKeyed(ui.DrawBackground|fl, ui.KeyN(key, 9002), nil)
-	}
-	if v.ring > 0.004 {
-		k.ringBox(key, w, h, radius, v.ring)
-	}
 }
 
 // RadioGroup builds a column of radio buttons, one per option, that edits
@@ -234,24 +165,16 @@ func (k *Kit) RadioRow(label string, sel *int, options []string) Signal {
 	return k.radioGroup(label, sel, options, ui.AxisX)
 }
 
+// radioGroup is the classic look over base's Choice primitive.
 func (k *Kit) radioGroup(label string, sel *int, options []string, axis ui.Axis) Signal {
 	c := k.c
 	px := &k.r.Px
-	display, ident := ui.SplitLabel(label)
 	dim := k.dim()
-	gkey := ui.HashString(c.ParentKey(), ident)
 	n := len(options)
-	stop := *sel
-	if stop < 0 || stop >= n {
-		stop = 0
-	}
-	var changed bool
-	if !k.off() {
-		changed = k.chooseByInput(gkey, sel, n)
-	}
+	ch := k.ChoiceState(label, sel, n)
 
 	c.NextRole(ui.RoleRadioGroup)
-	c.NextSemName(display)
+	c.NextSemName(ch.Name)
 	gap := float32(0)
 	if axis == ui.AxisX {
 		gap = px.Gap * 2
@@ -259,47 +182,31 @@ func (k *Kit) radioGroup(label string, sel *int, options []string, axis ui.Axis)
 	c.NextGap(gap)
 	k.size(ui.Children(1), ui.Children(1))
 	c.NextAxis(axis)
-	gid := c.BoxKeyed(0, gkey, nil)
+	gid := c.BoxKeyed(0, ch.Key, nil)
 	c.Push(gid)
 	h := k.rowH()
 	box := theme.Snap(px.IconSize)
 	for i, opt := range options {
-		key := ui.KeyN(gkey, uint64(i))
-		on := i == *sel
-		v := k.vis(key)
-		flags := k.flags()
-		if i != stop && !k.off() {
-			flags &^= ui.Focusable
-		}
-		var state ui.SemState
-		if on {
-			state = ui.SemChecked
-		}
-		k.size(ui.Children(1), ui.Px(h))
+		o := k.ChoiceItem(&ch, i, opt, hoverOn)
 		c.NextAxis(ui.AxisX)
 		c.NextGap(px.Pad)
-		c.NextRole(ui.RoleRadio)
-		c.NextSemName(opt)
-		c.NextSemState(state)
-		c.NextSemPos(i, n)
-		id := c.BoxKeyed(flags, key, nil)
-		c.Push(id)
+		k.BeginChoiceItem(&ch, &o, ui.RoleRadio, ui.Children(1), ui.Px(h), 0, nil)
 		k.center(box, h)
-		k.indicator(key, box, box/2, on, v)
-		if on {
+		k.indicator(o.Key, box, box/2, o.On, o.Visual)
+		if o.On {
 			d := theme.Snap(box / 2)
 			theme.At(c, (box-d)/2, (box-d)/2, d, d)
 			c.NextBG(k.r.Pal.OnAccent)
 			c.NextRadius(d / 2)
-			c.BoxKeyed(ui.DrawBackground|fl, ui.KeyN(key, 9100), nil)
+			c.BoxKeyed(ui.DrawBackground|fl, ui.KeyN(o.Key, 9100), nil)
 		}
 		c.Pop()
-		k.labelBox(key, opt, h)
+		k.labelBox(o.Key, opt, h)
 		c.Pop()
 	}
 	c.Pop()
 	k.undim(dim)
-	return Signal{ID: gid, Changed: changed, Focused: n > 0 && c.Focused(gid)}
+	return Signal{ID: gid, Changed: ch.Changed, Focused: n > 0 && c.Focused(gid)}
 }
 
 // Slider builds a horizontal slider that edits *v between lo and hi in steps
@@ -311,37 +218,21 @@ func (k *Kit) radioGroup(label string, sel *int, options []string, axis ui.Axis)
 func (k *Kit) Slider(label string, v *float32, lo, hi, step float32) Signal {
 	c := k.c
 	p, px := &k.r.Pal, &k.r.Px
-	display, ident := ui.SplitLabel(label)
 	dim := k.dim()
-	key := ui.HashString(c.ParentKey(), ident)
 	h := theme.Snap(px.ControlH)
 	thumb := theme.Snap(px.IconSize)
-	old := *v
-	if !k.off() {
-		*v = k.sliderInput(key, *v, lo, hi, step, thumb)
-	}
-	val := min(max(*v, lo), hi)
-	vz := k.vis(key)
+	rg := k.RangeState(label, v, lo, hi, step, thumb/2, hoverOn)
+	key := rg.Key
 
-	k.size(ui.Pct(1), ui.Px(h))
-	c.NextCursor(ui.CursorArrow)
-	c.NextRole(ui.RoleSlider)
-	c.NextSemName(display)
-	c.NextSemRange(float64(lo), float64(hi), float64(val), float64(step))
-	id := c.BoxKeyed(k.flags(), key, nil)
+	id := k.BeginRange(&rg, ui.Pct(1), ui.Px(h), 0)
 	r := c.Rect(id)
 	w := r[2] - r[0]
 	if w <= 0 {
 		w = thumb * 8
 	}
-	frac := float32(0)
-	if hi > lo {
-		frac = (val - lo) / (hi - lo)
-	}
-	c.Push(id)
 	th := theme.Snap(px.ScrollThumbW)
 	x0, x1 := thumb/2, w-thumb/2
-	cx := x0 + frac*(x1-x0)
+	cx := x0 + rg.Frac*(x1-x0)
 	// the track and its filled part
 	theme.At(c, x0, theme.Snap((h-th)/2), x1-x0, th)
 	c.NextBG(p.TrackFill)
@@ -360,97 +251,9 @@ func (k *Kit) Slider(label string, v *float32, lo, hi, step float32) Signal {
 	c.NextShadow(ui.Shadow{OffY: px.BorderW, Sigma: px.BorderW * 1.5, Color: theme.ColA(p.Shadow>>8, 0.35)})
 	tb := c.BoxKeyed(ui.DrawBackground|ui.DrawBorder|ui.DrawShadow|fl, ui.KeyN(key, 3), nil)
 	c.Push(tb)
-	k.decorateBox(key, thumb, thumb, vz, thumb/2)
+	k.decorateBox(key, thumb, thumb, rg.Visual, thumb/2)
 	c.Pop()
-	c.Pop()
-	sig := k.signal(id)
-	sig.Changed = *v != old
+	sig := k.EndRange(&rg)
 	k.undim(dim)
 	return sig
-}
-
-// sliderInput applies the pointer, keys and accessibility actions of the
-// previous frame's slider box to the value.
-func (k *Kit) sliderInput(key ui.Key, val, lo, hi, step, thumb float32) float32 {
-	c := k.c
-	s := c.PeekSignal(key)
-	span := hi - lo
-	if span <= 0 {
-		return val
-	}
-	big := step * 10
-	if step <= 0 {
-		step, big = span/100, span/10
-	}
-	if s.Dragging || s.Pressed { // while the button is down the value follows the pointer
-		r := c.RectOf(key)
-		if w := r[2] - r[0] - thumb; w > 0 {
-			f := (c.Input().MouseX - r[0] - thumb/2) / w
-			val = lo + min(max(f, 0), 1)*span
-		}
-	}
-	if s.Action&ui.ActIncrement != 0 {
-		val += step
-	}
-	if s.Action&ui.ActDecrement != 0 {
-		val -= step
-	}
-	if s.Action&ui.ActSetValue != 0 {
-		val = float32(s.ActionValue)
-	}
-	if c.FocusKey() == key {
-		switch {
-		case c.TakeKey(ui.KeyLeft, 0) || c.TakeKey(ui.KeyDown, 0):
-			val -= step
-		case c.TakeKey(ui.KeyRight, 0) || c.TakeKey(ui.KeyUp, 0):
-			val += step
-		case c.TakeKey(ui.KeyPageDown, 0):
-			val -= big
-		case c.TakeKey(ui.KeyPageUp, 0):
-			val += big
-		case c.TakeKey(ui.KeyHome, 0):
-			val = lo
-		case c.TakeKey(ui.KeyEnd, 0):
-			val = hi
-		}
-	}
-	if step > 0 {
-		val = lo + float32(math.Round(float64((val-lo)/step)))*step
-	}
-	return min(max(val, lo), hi)
-}
-
-// chooseByInput applies the clicks, presses and arrow keys of the previous
-// frame to the choice *sel among the n items keyed KeyN(group, i), before the
-// items are built, so that they all show the new choice. Arrow keys move the
-// choice and the focus together, wrapping at the ends. It reports whether the
-// choice changed.
-func (k *Kit) chooseByInput(group ui.Key, sel *int, n int) bool {
-	c := k.c
-	want := -1
-	for i := 0; i < n; i++ {
-		key := ui.KeyN(group, uint64(i))
-		if s := c.PeekSignal(key); s.Clicked || s.Action&ui.ActPress != 0 {
-			want = i
-			c.SetFocus(key)
-			c.SetFocusVisible(false)
-		}
-		if c.FocusKey() == key && n > 1 {
-			switch {
-			case c.TakeKey(ui.KeyDown, 0) || c.TakeKey(ui.KeyRight, 0):
-				want = (i + 1) % n
-			case c.TakeKey(ui.KeyUp, 0) || c.TakeKey(ui.KeyLeft, 0):
-				want = (i + n - 1) % n
-			}
-			if want >= 0 && want != i {
-				c.SetFocus(ui.KeyN(group, uint64(want)))
-				c.SetFocusVisible(true)
-			}
-		}
-	}
-	if want >= 0 && want != *sel {
-		*sel = want
-		return true
-	}
-	return false
 }
