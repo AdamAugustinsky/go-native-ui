@@ -24,6 +24,7 @@ func TestNativeShell(t *testing.T) {
 		selected                int
 		allocs                  float64
 		plusEnabled             bool
+		appKitItems             int
 	}
 	var r result
 	tabs := []ToolbarTab{{ID: 20, Symbol: "terminal", Label: "one"}, {ID: 21, Label: "two"}}
@@ -50,6 +51,7 @@ func TestNativeShell(t *testing.T) {
 		r.subviews = int(objc.Send(subs, objc.Sel("count")))
 		r.viewOnTop = objc.Send(subs, objc.Sel("lastObject")) == w.view
 		r.opaqueWindow = objc.SendBool(w.win, objc.Sel("isOpaque"))
+		r.appKitItems = int(objc.Send(objc.Send(objc.Send(w.win, objc.Sel("toolbar")), objc.Sel("items")), objc.Sel("count")))
 
 		w.q.reset()
 		delegate := objc.Send(w.win, objc.Sel("delegate"))
@@ -79,8 +81,8 @@ func TestNativeShell(t *testing.T) {
 	if r.subviews != 2 || !r.viewOnTop {
 		t.Errorf("content view has %d subviews, our view on top: %v; want the effect view under ours", r.subviews, r.viewOnTop)
 	}
-	if !r.toolbar {
-		t.Error("no toolbar")
+	if !r.toolbar || r.appKitItems != 3 {
+		t.Errorf("toolbar %v with %d items, want the 3 items", r.toolbar, r.appKitItems)
 	}
 	if len(r.cmds) != 2 || r.cmds[0] != 21 || r.cmds[1] != 7 {
 		t.Errorf("commands %v, want [21 7] (second tab, then +)", r.cmds)

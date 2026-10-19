@@ -8,6 +8,7 @@
 //	                           follows while it runs (-mode system, the default; -mode light or dark forces
 //	                           one; a change crossfades); Esc or the close button quits
 //	rexlook -exit-first        print the startup timeline as JSON and exit once the first frame is on glass
+//	                           (with -v, also platform.Open's stages on stderr)
 //	rexlook -bench             scripted pointer run (hover across the tabs, focus switching, both dividers
 //	                           dragged back and forth): 1000 warm-up + 900 measured frames; print allocation,
 //	                           CPU split, pacing and latency as JSON
@@ -166,6 +167,13 @@ func runWindow(pref theme.Preference, exitFirst, verbose bool) error {
 	} else if verbose {
 		b, _ := json.MarshalIndent(res.Startup, "", "  ")
 		fmt.Fprintln(os.Stderr, string(b))
+	}
+	if verbose { // platform.Open's stages, as ms since its start and since the stage before
+		st := platform.OpenTimeline()
+		for i, s := range st {
+			prev := st[max(i-1, 0)].T
+			fmt.Fprintf(os.Stderr, "open %-20s %7.2f ms  +%.2f\n", s.Name, float64(s.T-st[0].T)/1e6, float64(s.T-prev)/1e6)
+		}
 	}
 	return nil
 }

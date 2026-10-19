@@ -83,6 +83,7 @@ var (
 	selTBItemFor  = objc.Sel("toolbar:itemForItemIdentifier:willBeInsertedIntoToolbar:")
 	selTBAction   = objc.Sel("gnuiToolbarAction:")
 	appKitLib     uintptr // AppKit's handle, for its string constants (set by Open)
+	tbWindow      *Window // the window whose toolbar the delegate serves: set before setToolbar:, which asks for the items while Open runs (theWindow is not set yet)
 	nsImageClass  objc.ID
 	toolbarTabW   = 180.0 // ToolbarItem.TabWidth's default, points
 	glassMaterial = map[Backdrop]uintptr{BackdropGlass: 0, BackdropGlassClear: 1}
@@ -240,7 +241,7 @@ func (w *Window) makeToolbar(o Options, delegate objc.ID) {
 	objc.Send1(t.tb, selSetDelegate, uintptr(delegate))
 	objc.Send1(t.tb, selSetDisplayMode, 2) // NSToolbarDisplayModeIconOnly
 	objc.Send1(t.tb, selSetCustomizable, 0)
-	w.tb = t
+	w.tb, tbWindow = t, w
 	objc.Send1(w.win, selSetTitlebarClear, 1)
 	objc.Send1(w.win, selSetTitleVisible, 0) // NSWindowTitleVisible
 	if o.Subtitle != "" {
@@ -293,7 +294,7 @@ func fillTabs(x *tbItem, tabs []ToolbarTab, selected int) {
 // toolbarAllowedItemIdentifiers: (the toolbar is not customisable).
 func toolbarIdentifiers(c *ffi.CB) {
 	c.Ret(0)
-	if w := theWindow.Load(); w != nil && w.tb != nil {
+	if w := tbWindow; w != nil && w.tb != nil {
 		c.Ret(uintptr(w.tb.idents))
 	}
 }
@@ -302,7 +303,7 @@ func toolbarIdentifiers(c *ffi.CB) {
 // (self, _cmd, toolbar, identifier, flag): the item made in Open.
 func toolbarItemFor(c *ffi.CB) {
 	c.Ret(0)
-	w := theWindow.Load()
+	w := tbWindow
 	if w == nil || w.tb == nil {
 		return
 	}
@@ -320,7 +321,7 @@ func toolbarItemFor(c *ffi.CB) {
 // NSToolbarItem of a button, the NSSegmentedControl of tabs; its tag is the
 // item's index). It queues EvCommand.
 func toolbarAction(c *ffi.CB) {
-	w := theWindow.Load()
+	w := tbWindow
 	if w == nil || w.tb == nil {
 		return
 	}

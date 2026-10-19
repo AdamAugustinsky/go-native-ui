@@ -279,5 +279,8 @@ func (w *Window) Close() {
 		w.drawable = 0
 	}
 	objc.Send(w.win, selClose)
+	if tbWindow == w {
+		tbWindow = nil
+	}
 	theWindow.Store(nil)
 }
