@@ -49,8 +49,9 @@ type FontKey uint16
 // for a script the primary font lacks get their own IDs.
 type FaceID uint16
 
-// FontDesc describes a font to create. Sizes are in points; the font is
-// instantiated at SizePt*Scale pixels and every output is in pixels.
+// FontDesc describes a font to create. Sizes are in points and every output
+// is in pixels, at SizePt*Scale pixels per em. On macOS the optical size and
+// the tracking are those of SizePt, as in AppKit, whatever the Scale.
 type FontDesc struct {
 	Family string  // "" = system UI font (SF Pro on macOS)
 	Mono   bool    // system monospace font when Family == ""

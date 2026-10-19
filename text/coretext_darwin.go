@@ -46,6 +46,8 @@ var sy struct {
 	cgColorSpaceCreateDeviceGray, cgColorSpaceCreateDeviceRGB uintptr
 	cgBitmapContextCreate                                     uintptr
 	cgContextSetGrayFillColor                                 uintptr
+	cgContextSaveGState, cgContextRestoreGState               uintptr
+	cgContextScaleCTM                                         uintptr
 	cgSetBool                                                 [8]uintptr // (ctx, bool) setters, see ctxFlags
 	// constant CFStringRefs (values of the exported globals)
 	kFontAttribute, kTraitsAttribute, kWeightTrait, kFamilyAttribute uintptr
@@ -140,6 +142,8 @@ func loadSyms() error {
 		sy.cgColorSpaceCreateDeviceGray, sy.cgColorSpaceCreateDeviceRGB = sym(cg, "CGColorSpaceCreateDeviceGray"), sym(cg, "CGColorSpaceCreateDeviceRGB")
 		sy.cgBitmapContextCreate = sym(cg, "CGBitmapContextCreate")
 		sy.cgContextSetGrayFillColor = sym(cg, "CGContextSetGrayFillColor")
+		sy.cgContextSaveGState, sy.cgContextRestoreGState = sym(cg, "CGContextSaveGState"), sym(cg, "CGContextRestoreGState")
+		sy.cgContextScaleCTM = sym(cg, "CGContextScaleCTM")
 		for i, f := range ctxFlags {
 			sy.cgSetBool[i] = sym(cg, f.name)
 		}
@@ -151,20 +155,31 @@ func loadSyms() error {
 }
 
 // fontEnt is a created font.
+//
+// The CTFont is created at the point size, not at SizePt*Scale pixels:
+// CoreText picks the optical size (the opsz axis of SF) and the tracking
+// from the font size, so a 13 pt font made at 26 px on a 2x display would be
+// set in SF's 26 pt design and spacing, tighter and thinner than every
+// AppKit label. AppKit itself shapes in points and rasterises through a
+// scaled context; so do we: CoreText's points are multiplied by Scale for the
+// pixel outputs (metrics, pen positions, advances) and glyphs are drawn
+// through a Scale CTM (rasterize). The fallback fonts CoreText picks in the
+// cascade are then point-sized too.
 type fontEnt struct {
 	desc    FontDesc
-	font    uintptr // CTFontRef (+1)
+	font    uintptr // CTFontRef at desc.SizePt (+1)
 	attrs   uintptr // CFDictionary {kCTFontAttributeName: font} (+1), for attributed strings
 	face    FaceID
 	metrics Metrics
 }
 
-// faceEnt is a concrete face: the primary font of a FontKey or a fallback.
+// faceEnt is a concrete face: the primary font of a FontKey or a fallback,
+// at one pixel scale.
 type faceEnt struct {
-	font   uintptr // CTFontRef (+1)
-	color  bool
-	name   string // PostScript name
-	sizePx float32
+	font  uintptr // CTFontRef (+1), point-sized
+	color bool
+	name  string  // PostScript name
+	scale float32 // pixels per point the face is rasterised at
 }
 
 // bitmap is a reusable CGBitmapContext with its backing memory (Go-owned,
@@ -338,19 +353,20 @@ func (s *System) Font(d FontDesc) FontKey {
 	}
 	pool := s.poolPush()
 	defer s.poolPop(pool)
-	px := float64(d.SizePt * d.Scale)
-	font := s.createFont(d, px)
+	pt := float64(d.SizePt)
+	font := s.createFont(d, pt)
 	if font == 0 {
-		font = s.fr.Reset().Arg32(uiFontSystem).ArgF64(px).Arg(0).Call(sy.ctFontCreateUIFontForLanguage).R0()
+		font = s.fr.Reset().Arg32(uiFontSystem).ArgF64(pt).Arg(0).Call(sy.ctFontCreateUIFontForLanguage).R0()
 	}
 	fe := fontEnt{desc: d, font: font, attrs: s.dict1(sy.kFontAttribute, font)}
-	fe.face = s.faceFor(font)
+	fe.face = s.faceFor(font, d.Scale)
+	sc := float64(d.Scale)
 	fe.metrics = Metrics{
-		Ascent:    float32(s.f64(sy.ctFontGetAscent, font)),
-		Descent:   float32(s.f64(sy.ctFontGetDescent, font)),
-		LineGap:   float32(s.f64(sy.ctFontGetLeading, font)),
-		CapHeight: float32(s.f64(sy.ctFontGetCapHeight, font)),
-		XHeight:   float32(s.f64(sy.ctFontGetXHeight, font)),
+		Ascent:    float32(s.f64(sy.ctFontGetAscent, font) * sc),
+		Descent:   float32(s.f64(sy.ctFontGetDescent, font) * sc),
+		LineGap:   float32(s.f64(sy.ctFontGetLeading, font) * sc),
+		CapHeight: float32(s.f64(sy.ctFontGetCapHeight, font) * sc),
+		XHeight:   float32(s.f64(sy.ctFontGetXHeight, font) * sc),
 	}
 	fe.metrics.LineHeight = fe.metrics.Ascent + fe.metrics.Descent + fe.metrics.LineGap
 	s.fonts = append(s.fonts, fe)
@@ -359,7 +375,8 @@ func (s *System) Font(d FontDesc) FontKey {
 	return key
 }
 
-func (s *System) createFont(d FontDesc, px float64) uintptr {
+// createFont creates the CTFont for d at size pt (points; see fontEnt).
+func (s *System) createFont(d FontDesc, pt float64) uintptr {
 	if d.Family != "" {
 		fam := s.cfString([]byte(d.Family))
 		if fam == 0 {
@@ -379,11 +396,11 @@ func (s *System) createFont(d FontDesc, px float64) uintptr {
 		if desc == 0 {
 			return 0
 		}
-		f := s.fr.Reset().Arg(desc).ArgF64(px).Arg(0).Call(sy.ctFontCreateWithFontDescriptor).R0()
+		f := s.fr.Reset().Arg(desc).ArgF64(pt).Arg(0).Call(sy.ctFontCreateWithFontDescriptor).R0()
 		s.release(desc)
 		return f
 	}
-	base := s.fr.Reset().Arg32(uiFontSystem).ArgF64(px).Arg(0).Call(sy.ctFontCreateUIFontForLanguage).R0()
+	base := s.fr.Reset().Arg32(uiFontSystem).ArgF64(pt).Arg(0).Call(sy.ctFontCreateUIFontForLanguage).R0()
 	if base == 0 || (d.Weight == 400 && !d.Mono) {
 		return base
 	}
@@ -396,7 +413,7 @@ func (s *System) createFont(d FontDesc, px float64) uintptr {
 	if desc == 0 {
 		return base
 	}
-	f := s.fr.Reset().Arg(desc).ArgF64(px).Arg(0).Call(sy.ctFontCreateWithFontDescriptor).R0()
+	f := s.fr.Reset().Arg(desc).ArgF64(pt).Arg(0).Call(sy.ctFontCreateWithFontDescriptor).R0()
 	s.release(desc)
 	if f == 0 {
 		return base
@@ -415,12 +432,12 @@ func (s *System) Metrics(f FontKey) Metrics {
 
 // ---- Faces ----
 
-// faceFor maps a CTFont to a FaceID, retaining new fonts. Identity is the
-// CTFontRef pointer (cheap, exact while the font is retained) and otherwise
-// PostScript name + size.
-func (s *System) faceFor(font uintptr) FaceID {
+// faceFor maps a CTFont rasterised at scale to a FaceID, retaining new
+// fonts. Identity is the CTFontRef pointer (cheap, exact while the font is
+// retained) and otherwise PostScript name + size, with the scale.
+func (s *System) faceFor(font uintptr, scale float32) FaceID {
 	for i := range s.faces {
-		if s.faces[i].font == font {
+		if s.faces[i].font == font && s.faces[i].scale == scale {
 			return FaceID(i)
 		}
 	}
@@ -438,8 +455,10 @@ func (s *System) faceFor(font uintptr) FaceID {
 	}
 	size := float32(s.f64(sy.ctFontGetSize, font))
 	nameLen := len(s.name)
-	bits := math.Float32bits(size)
-	s.name = append(s.name, byte(bits), byte(bits>>8), byte(bits>>16), byte(bits>>24))
+	for _, v := range [2]float32{size, scale} {
+		bits := math.Float32bits(v)
+		s.name = append(s.name, byte(bits), byte(bits>>8), byte(bits>>16), byte(bits>>24))
+	}
 	if id, ok := s.faceByName[string(s.name)]; ok {
 		return id
 	}
@@ -450,7 +469,7 @@ func (s *System) faceFor(font uintptr) FaceID {
 	s.retain(font)
 	s.faces = append(s.faces, faceEnt{
 		font: font, color: traits&traitColorGlph != 0,
-		name: string(s.name[:nameLen]), sizePx: size,
+		name: string(s.name[:nameLen]), scale: scale,
 	})
 	id := FaceID(len(s.faces) - 1)
 	s.faceByName[string(s.name)] = id
@@ -499,11 +518,11 @@ func (s *System) shapeMiss(f FontKey, b []byte) RunRef {
 			nruns := int(s.fr.Call1(sy.cfArrayGetCount, runs))
 			for i := 0; i < nruns; i++ {
 				run := s.fr.Call2(sy.cfArrayGetValueAtIndex, runs, uintptr(i))
-				s.appendRun(run, fe.face)
+				s.appendRun(run, fe.face, fe.desc.Scale)
 			}
 			advance = float32(s.fr.Reset().Arg(line).ArgPtr(unsafe.Pointer(&s.three[0])).
 				ArgPtr(unsafe.Pointer(&s.three[1])).ArgPtr(unsafe.Pointer(&s.three[2])).
-				Call(sy.ctLineGetTypographicBounds).F64(0))
+				Call(sy.ctLineGetTypographicBounds).F64(0) * float64(fe.desc.Scale))
 			s.release(line)
 			s.release(as)
 			s.release(str)
@@ -545,8 +564,9 @@ func (s *System) sanitized(b []byte) []byte {
 	return s.san
 }
 
-// appendRun appends one CTRun's glyphs, pen positions, face and clusters.
-func (s *System) appendRun(run uintptr, primary FaceID) {
+// appendRun appends one CTRun's glyphs, pen positions (CoreText's points
+// times scale), face and clusters.
+func (s *System) appendRun(run uintptr, primary FaceID, scale float32) {
 	n := int(s.fr.Call1(sy.ctRunGetGlyphCount, run))
 	if n == 0 {
 		return
@@ -555,7 +575,7 @@ func (s *System) appendRun(run uintptr, primary FaceID) {
 	attrs := s.fr.Call1(sy.ctRunGetAttributes, run)
 	if attrs != 0 {
 		if font := s.fr.Call2(sy.cfDictionaryGetValue, attrs, sy.kFontAttribute); font != 0 {
-			face = s.faceFor(font)
+			face = s.faceFor(font, scale)
 		}
 	}
 	g0 := len(s.gbuf)
@@ -578,7 +598,7 @@ func (s *System) appendRun(run uintptr, primary FaceID) {
 	}
 	last := len(s.u16b) - 1
 	for i := 0; i < n; i++ {
-		s.xbuf = append(s.xbuf, float32(s.pos[2*i]))
+		s.xbuf = append(s.xbuf, float32(s.pos[2*i]*float64(scale)))
 		s.fbuf = append(s.fbuf, face)
 		u := int(s.idx[i])
 		if u < 0 || u > last {
@@ -644,7 +664,10 @@ func (s *System) rasterize(face FaceID, gid uint16, sub uint8) GlyphEntry {
 	s.fr.Reset().SetIndirectResult(unsafe.Pointer(&s.ret[0])).Arg(fc.font).Arg32(0).
 		ArgPtr(unsafe.Pointer(&s.gid[0])).ArgPtr(unsafe.Pointer(&s.rect[0])).Arg(1).
 		Call(sy.ctFontGetBoundingRectsForGlyphs)
-	bx, by, bw, bh := s.rect[0], s.rect[1], s.rect[2], s.rect[3]
+	// The face is point-sized and drawn through a scale CTM: the bounds in
+	// pixels are the point bounds times the scale.
+	sc := float64(fc.scale)
+	bx, by, bw, bh := s.rect[0]*sc, s.rect[1]*sc, s.rect[2]*sc, s.rect[3]*sc
 	if !(bw > 0 && bh > 0) || bw > PageSize || bh > PageSize || math.IsNaN(bx+by) {
 		return GlyphEntry{}
 	}
@@ -666,11 +689,14 @@ func (s *System) rasterize(face FaceID, gid uint16, sub uint8) GlyphEntry {
 	clear(bm.buf[:h*bm.stride])
 	// Bitmap row 0 is the top of the context. The region of interest is the
 	// top h rows, i.e. CG y in [bm.h-h, bm.h]; the baseline sits -y0 above
-	// that region's bottom edge.
-	s.pt[0] = sx - float64(x0)
-	s.pt[1] = float64(bm.h-h) - float64(y0)
+	// that region's bottom edge. The pen is given in the scaled user space.
+	s.pt[0] = (sx - float64(x0)) / sc
+	s.pt[1] = (float64(bm.h-h) - float64(y0)) / sc
+	s.fr.Call1(sy.cgContextSaveGState, bm.ctx)
+	s.fr.Reset().Arg(bm.ctx).ArgF64(sc).ArgF64(sc).Call(sy.cgContextScaleCTM)
 	s.fr.Reset().Arg(fc.font).ArgPtr(unsafe.Pointer(&s.gid[0])).ArgPtr(unsafe.Pointer(&s.pt[0])).
 		Arg(1).Arg(bm.ctx).Call(sy.ctFontDrawGlyphs)
+	s.fr.Call1(sy.cgContextRestoreGState, bm.ctx)
 	pg, ax, ay, ok := s.atlas.alloc(fc.color, w, h)
 	if !ok {
 		return GlyphEntry{}
