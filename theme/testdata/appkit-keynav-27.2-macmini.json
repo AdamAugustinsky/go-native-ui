@@ -1,0 +1,165 @@
+{
+  "controls" : {
+    "checkbox" : {
+      "acceptsFirstResponder" : true,
+      "canBecomeKeyView" : false,
+      "class" : "NSButton"
+    },
+    "colorWell" : {
+      "acceptsFirstResponder" : true,
+      "canBecomeKeyView" : false,
+      "class" : "NSColorWell"
+    },
+    "comboBox" : {
+      "acceptsFirstResponder" : true,
+      "canBecomeKeyView" : true,
+      "class" : "NSComboBox"
+    },
+    "datePicker" : {
+      "acceptsFirstResponder" : true,
+      "canBecomeKeyView" : true,
+      "class" : "NSDatePicker"
+    },
+    "disclosureTriangle" : {
+      "acceptsFirstResponder" : true,
+      "canBecomeKeyView" : false,
+      "class" : "NSButton"
+    },
+    "label" : {
+      "acceptsFirstResponder" : false,
+      "canBecomeKeyView" : false,
+      "class" : "NSTextField"
+    },
+    "outlineView" : {
+      "acceptsFirstResponder" : true,
+      "canBecomeKeyView" : true,
+      "class" : "NSOutlineView"
+    },
+    "popUpButton" : {
+      "acceptsFirstResponder" : true,
+      "canBecomeKeyView" : false,
+      "class" : "NSPopUpButton"
+    },
+    "pullDownButton" : {
+      "acceptsFirstResponder" : true,
+      "canBecomeKeyView" : false,
+      "class" : "NSPopUpButton"
+    },
+    "pushButton" : {
+      "acceptsFirstResponder" : true,
+      "canBecomeKeyView" : false,
+      "class" : "NSButton"
+    },
+    "pushButton2" : {
+      "acceptsFirstResponder" : true,
+      "canBecomeKeyView" : false,
+      "class" : "NSButton"
+    },
+    "radio" : {
+      "acceptsFirstResponder" : true,
+      "canBecomeKeyView" : false,
+      "class" : "NSButton"
+    },
+    "searchField" : {
+      "acceptsFirstResponder" : true,
+      "canBecomeKeyView" : true,
+      "class" : "NSSearchField"
+    },
+    "secureTextField" : {
+      "acceptsFirstResponder" : true,
+      "canBecomeKeyView" : true,
+      "class" : "NSSecureTextField"
+    },
+    "segmented" : {
+      "acceptsFirstResponder" : true,
+      "canBecomeKeyView" : false,
+      "class" : "NSSegmentedControl"
+    },
+    "selectableLabel" : {
+      "acceptsFirstResponder" : false,
+      "canBecomeKeyView" : false,
+      "class" : "NSTextField"
+    },
+    "slider" : {
+      "acceptsFirstResponder" : true,
+      "canBecomeKeyView" : false,
+      "class" : "NSSlider"
+    },
+    "stepper" : {
+      "acceptsFirstResponder" : true,
+      "canBecomeKeyView" : false,
+      "class" : "NSStepper"
+    },
+    "tableView" : {
+      "acceptsFirstResponder" : true,
+      "canBecomeKeyView" : true,
+      "class" : "NSTableView"
+    },
+    "textField" : {
+      "acceptsFirstResponder" : true,
+      "canBecomeKeyView" : true,
+      "class" : "NSTextField"
+    },
+    "textField2" : {
+      "acceptsFirstResponder" : true,
+      "canBecomeKeyView" : true,
+      "class" : "NSTextField"
+    },
+    "textView" : {
+      "acceptsFirstResponder" : true,
+      "canBecomeKeyView" : true,
+      "class" : "NSTextView"
+    },
+    "tokenField" : {
+      "acceptsFirstResponder" : true,
+      "canBecomeKeyView" : true,
+      "class" : "NSTokenField"
+    }
+  },
+  "fullKeyboardAccess" : false,
+  "machine" : {
+    "accent" : "pink",
+    "accentRendered" : "pink",
+    "appearance" : "light",
+    "date" : "2026-10-20",
+    "display" : {
+      "backingScale" : 2,
+      "heightPt" : 1440,
+      "heightPx" : 2880,
+      "name" : "LG ULTRAGEAR+",
+      "refreshHz" : 120,
+      "widthPt" : 2560,
+      "widthPx" : 5120
+    },
+    "macOS" : {
+      "build" : "26B5101f",
+      "version" : "27.2"
+    },
+    "model" : "Mac16,10",
+    "scrollerStyle" : "legacy"
+  },
+  "shiftTab" : [
+    "textField2",
+    "outlineView",
+    "tableView",
+    "textView",
+    "secureTextField",
+    "tokenField",
+    "comboBox",
+    "searchField",
+    "datePicker",
+    "textField"
+  ],
+  "tab" : [
+    "datePicker",
+    "searchField",
+    "comboBox",
+    "tokenField",
+    "secureTextField",
+    "textView",
+    "tableView",
+    "outlineView",
+    "textField2",
+    "textField"
+  ]
+}

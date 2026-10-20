@@ -130,7 +130,8 @@ func PathBar(k *base.Kit, label string, items []PathItem, o PathBarOpts) PathSig
 		ikey := ui.KeyN(key, uint64(i)+1)
 		down := c.ActiveTOf(ikey)
 		col := mix(rc.Text.RGBA(r), rc.TextPressed.RGBA(r), down)
-		theme.At(c, theme.Snap(x), 0, theme.Snap(w), h)
+		bw := theme.Snap(w)
+		theme.At(c, theme.Snap(x), 0, bw, h)
 		c.NextRole(ui.RoleButton)
 		c.NextSemName(it.Title)
 		flags := ui.Clickable | ui.Focusable | ui.ActiveAnimation | ui.FocusAnimation | base.Floating
@@ -142,14 +143,17 @@ func PathBar(k *base.Kit, label string, items []PathItem, o PathBarOpts) PathSig
 		ix := float32(0)
 		if id, ok := it.Glyph.ID(); ok {
 			if f, disp := k.Icons().Prepare(c, id, col); f != 0 {
+				// the symbol's box within the button: a glyph taller than the
+				// bar (a fallback font's line) is drawn centred, at its size
 				_, ih := k.IconSize(id)
-				theme.At(c, 0, theme.Snap((h-ih)/2), iconW[i], ih)
+				ih = min(ih, h)
+				theme.At(c, 0, theme.Snap((h-ih)/2), min(iconW[i], bw), ih)
 				c.BoxKeyed(f|base.Floating, ui.KeyN(ikey, 1), disp)
 				ix = iconW[i] + gap
 			}
 		}
-		if named[i] && w > ix {
-			theme.At(c, theme.Snap(ix), 0, theme.Snap(w-ix), h)
+		if tx := theme.Snap(ix); named[i] && bw > tx {
+			theme.At(c, tx, 0, bw-tx, h) // to the button's end, snapped once
 			c.NextFont(font)
 			c.NextTextColor(col)
 			c.BoxKeyed(ui.DrawText|ui.EllipsisOverflowX|base.Floating, ui.KeyN(ikey, 2), base.StrBytes(it.Title))

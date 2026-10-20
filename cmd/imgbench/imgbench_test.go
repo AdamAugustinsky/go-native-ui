@@ -8,6 +8,8 @@ import (
 
 	"gonativeui/app"
 	"gonativeui/img"
+	"gonativeui/platform"
+	"gonativeui/ui"
 )
 
 func newOffscreen(t testing.TB, b app.Builder) *app.Offscreen {
@@ -127,4 +129,63 @@ func TestGate(t *testing.T) {
 			t.Errorf("a failing run passed: %+v", r)
 		}
 	}
+}
+
+// TestAnimatedSamples: the first four cells are animations (a GIF and an APNG
+// of a disc, a GIF and an APNG of a colour ramp), made here; they decode and
+// play while in view, and scrolled away they ask for nothing.
+func TestAnimatedSamples(t *testing.T) {
+	g := newGrid(200, img.Options{})
+	g.anim = true
+	o := newOffscreen(t, &clocked{grid: g})
+	t.Cleanup(func() {
+		if g.cache != nil {
+			g.cache.Close(time.Second)
+		}
+	})
+	deadline := time.Now().Add(60 * time.Second)
+	for g.cache == nil || g.cache.Stats().Animations < 4 {
+		o.Frame()
+		time.Sleep(time.Millisecond)
+		if time.Now().After(deadline) {
+			t.Fatalf("animations never started: %+v", g.cache.Stats())
+		}
+	}
+	for i := 0; i < 4; i++ {
+		h, _, ok := g.cache.Get(img.Key{Hash: animHash + uint64(i), W: 56, H: 56, Flags: img.Animate})
+		if !ok || !g.cache.Animated(h) {
+			t.Errorf("sample %d (%s) is not an animation", i, g.samples[i].name)
+		}
+	}
+	// In view they play: frames are decoded after the first.
+	for end := time.Now().Add(5 * time.Second); g.cache.Stats().AnimDecodes < 8 && time.Now().Before(end); {
+		o.Frame()
+		time.Sleep(5 * time.Millisecond)
+	}
+	if n := g.cache.Stats().AnimDecodes; n < 8 {
+		t.Errorf("%d frames decoded after the first in 5 s of view", n)
+	}
+	// Scrolled away, nothing more.
+	g.scroll = 10 * pitchPt
+	for i := 0; i < 5; i++ {
+		o.Frame()
+	}
+	st := g.cache.Stats()
+	time.Sleep(50 * time.Millisecond)
+	for i := 0; i < 20; i++ {
+		o.Frame()
+		time.Sleep(5 * time.Millisecond)
+	}
+	if after := g.cache.Stats(); after.AnimDecodes > st.AnimDecodes+1 || after.AnimUploads != st.AnimUploads {
+		t.Errorf("scrolled away: %d more frames decoded, %d uploaded", after.AnimDecodes-st.AnimDecodes, after.AnimUploads-st.AnimUploads)
+	}
+}
+
+// clocked gives the offscreen frames a clock (they have none of their own): the
+// real one, so that the workers and the animations keep time together.
+type clocked struct{ *grid }
+
+func (x *clocked) Script(_ int, in *ui.Input) bool {
+	in.Time = platform.Now()
+	return true
 }

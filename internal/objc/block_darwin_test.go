@@ -529,3 +529,43 @@ func BenchmarkBlockRequest(b *testing.B) {
 		blockReleaseOf(c)
 	}
 }
+
+// TestGlobalBlocksConcurrent: global blocks made from many goroutines at once
+// are all kept (a lost append would leave a block nothing roots, which a
+// notification centre holding only its native pointer would then call after
+// it was collected).
+func TestGlobalBlocksConcurrent(t *testing.T) {
+	const gs, per = 16, 8
+	base := Leaks().GlobalBlocks
+	var wg sync.WaitGroup
+	ids := make([][per]ID, gs)
+	start := make(chan struct{})
+	for g := 0; g < gs; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			for k := 0; k < per; k++ {
+				ids[g][k] = NewGlobalBlock("v8@?0", func(*ffi.CB) {})
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	if got := Leaks().GlobalBlocks - base; got != gs*per {
+		t.Errorf("%d global blocks kept of %d made", got, gs*per)
+	}
+	globalsMu.Lock()
+	rooted := map[ID]bool{}
+	for _, g := range globals {
+		rooted[ID(unsafe.Pointer(&g.lit))] = true
+	}
+	globalsMu.Unlock()
+	for g := range ids {
+		for _, id := range ids[g] {
+			if !rooted[id] {
+				t.Fatalf("block %#x is not rooted", id)
+			}
+		}
+	}
+}
