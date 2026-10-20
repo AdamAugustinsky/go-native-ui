@@ -758,3 +758,47 @@ func TestScrollRedeliveredIsQueuedAgain(t *testing.T) {
 		t.Errorf("first delivery queued %d, the second %d: want 1 and 1", first, second)
 	}
 }
+
+// A window without a GPU surface whose view has an ordinary backing layer
+// (hosts asked for layers) applies its hosts: the shell does not ask that
+// layer for presentsWithTransaction, which only a CAMetalLayer answers
+// (AppKit threw and the process aborted, -count=3 of the package).
+func TestFlushShellWithAPlainBackingLayer(t *testing.T) {
+	var why string
+	var plain, applied bool
+	onMain(func() {
+		rig, w0 := openMenuRig(testMenuSpec(), false)
+		if w0 != "" {
+			why = w0
+			return
+		}
+		w := rig.w
+		defer w.Close()
+		pool := objc.F.Call0(objc.PoolPush)
+		defer objc.F.Call1(objc.PoolPop, pool)
+		objc.Send1(w.view, selSetWantsLayerV, 1)
+		l := objc.Send(w.view, selLayerOf)
+		plain = l != 0 && !objc.SendBool1(l, selRespondsTo, uintptr(selPresentsWithTx))
+		field := newViewOf(objc.Cls("NSTextField"), 0, 0, 120, 24)
+		id, err := w.NewHost(HostView, HostOptions{View: uintptr(field)})
+		objc.Send(field, selReleaseObj)
+		if err != nil {
+			why = err.Error()
+			return
+		}
+		s := w.scale
+		before := shellApplies.Load()
+		w.SetHosts([]HostRegion{{ID: id, Rect: pxRect(s, 20, 60, 140, 84), Clip: pxRect(s, 20, 60, 140, 84)}})
+		w.FlushShell()
+		applied = shellApplies.Load() > before && !w.hosts.dirty
+	})
+	if why != "" {
+		t.Skipf("cannot open a window here: %s", why)
+	}
+	if !plain {
+		t.Skip("the view's layer is not an ordinary backing layer here")
+	}
+	if !applied {
+		t.Fatal("the staged hosts were not applied")
+	}
+}
