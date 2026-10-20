@@ -100,7 +100,7 @@ func xdgSystem() *xdgDB {
 	xdgCache.mu.Lock()
 	defer xdgCache.mu.Unlock()
 	if xdgCache.db == nil || xdgCache.db.sig != sig {
-		xdgCache.db = newXDG(sig, home, dataHome, strings.Split(dataDirs, ":"), configHome)
+		xdgCache.db = newXDG(sig, home, dataHome, filepath.SplitList(dataDirs), configHome)
 	}
 	return xdgCache.db
 }
