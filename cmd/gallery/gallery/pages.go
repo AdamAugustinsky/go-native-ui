@@ -28,6 +28,7 @@ func (g *Gallery) beginForm(sc int, w, h float32) (base.ScrollView, rexui.Form) 
 	k := g.k
 	c := k.Context()
 	k.NextSize(ui.Px(w), ui.Px(h))
+	k.NextScrollInset(g.top)
 	v := k.BeginScroll(defs[sc].title, &g.scroll[sc], base.ScrollVertical)
 	g.scrollStart(v.Inner)
 	_, sy := c.Scroll(v.Inner)
@@ -390,7 +391,7 @@ func (g *Gallery) tableScene(w, h float32) {
 		g.table.SetTopRow(5, 0)
 	}
 	k.NextSize(ui.Px(w), ui.Px(h-barH))
-	t := rexui.BeginTable(k, "rows", &g.table, g.cols[:], g.rows, rexui.TableOpts{Striped: true, Glyphs: g.glyphs, ClearHeader: true})
+	t := rexui.BeginTable(k, "rows", &g.table, g.cols[:], g.rows, rexui.TableOpts{Striped: true, Glyphs: g.glyphs, ClearHeader: true, TopInset: g.top})
 	if t.SortChanged {
 		g.resort(t.Sort)
 	}

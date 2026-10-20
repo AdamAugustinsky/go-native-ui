@@ -3,6 +3,7 @@
 package live
 
 import (
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -10,13 +11,15 @@ import (
 	"gonativeui/app"
 	"gonativeui/cmd/gallery/gallery"
 	"gonativeui/internal/objc"
+	"gonativeui/internal/testlock"
 	"gonativeui/ui"
 	"gonativeui/widget/widgettest"
 )
 
 func startGallery(t *testing.T) *widgettest.LiveApp {
 	t.Helper()
-	g, err := gallery.New(gallery.Options{Rows: 1000})
+	// the panels start in the temporary directory, out of ~/Documents and ~/Desktop
+	g, err := gallery.New(gallery.Options{Rows: 1000, PanelStart: os.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,56 +33,50 @@ func value(l *widgettest.LiveApp, role ui.Role, name string) string {
 	return string(l.Tree().Text(n.Value))
 }
 
-// makeKey makes the window the key window of the active application, as the
-// menu's edit commands are enabled for the key window's focus.
-func makeKey(t *testing.T, l *widgettest.LiveApp) {
+// startRealGallery starts the gallery with the window's focus AppKit's, for
+// what the system gives one process at a time: the application active and the
+// window its key window (a menu's edit items are enabled for the key window's
+// focus, a sheet attaches to it). It holds the "activation" lock meanwhile.
+func startRealGallery(t *testing.T) *widgettest.LiveApp {
 	t.Helper()
+	testlock.Hold(t, "activation")
+	l := startGallery(t)
+	l.RealFocus()
 	l.Do(func(a *app.App) {
 		objc.Send1(widgettest.NSApp(), objc.Sel("activateIgnoringOtherApps:"), 1)
 		objc.Send1(objc.ID(a.Win.Native().NSWindow), objc.Sel("makeKeyAndOrderFront:"), 0)
 	})
-	var key bool
-	for i := 0; i < 20 && !key; i++ {
-		l.Frames(2)
-		l.Do(func(a *app.App) { key = objc.SendBool(objc.ID(a.Win.Native().NSWindow), objc.Sel("isKeyWindow")) })
-	}
-	if !key {
-		t.Skip("the window cannot be made the key window here")
-	}
+	l.Until("the window is the key window", 240, func() bool {
+		return objc.SendBool(objc.ID(l.App().Win.Native().NSWindow), objc.Sel("isKeyWindow"))
+	})
+	return l
 }
 
-// menuItem chooses the main menu's item at path as the user does. A window
-// that another application took the key from has its edit items disabled, so
-// a disabled item is tried again after the window is made key.
+// menuItem chooses the main menu's item at path as the user does.
 func menuItem(t *testing.T, l *widgettest.LiveApp, path ...string) {
 	t.Helper()
-	for try := 0; try < 4; try++ {
-		var found, done bool
-		l.Do(func(a *app.App) {
-			var it widgettest.MenuItem
-			if it, found = widgettest.FindMenuItem(path...); found {
-				done = it.Enabled && it.Perform()
-			}
-		})
-		if !found {
-			t.Fatalf("no menu item %v", path)
+	var found, done bool
+	l.Do(func(a *app.App) {
+		var it widgettest.MenuItem
+		if it, found = widgettest.FindMenuItem(path...); found {
+			done = it.Enabled && it.Perform()
 		}
-		if done {
-			l.Frames(3)
-			return
-		}
-		makeKey(t, l)
+	})
+	if !found {
+		t.Fatalf("no menu item %v", path)
 	}
-	t.Fatalf("the menu item %v stays disabled", path)
+	if !done {
+		t.Fatalf("the menu item %v is disabled", path)
+	}
+	l.Frames(3)
 }
 
 // Edit commands act once, in a field, through the real menu: Select All,
 // Cut, Paste, Copy and Paste again change the text by exactly one command each.
 func TestLiveEditMenuActsOnce(t *testing.T) {
-	l := startGallery(t)
+	l := startRealGallery(t)
 	l.Click(ui.RoleTextField, "Notes")
 	l.Frames(5)
-	makeKey(t, l)
 	menuItem(t, l, "Edit", "Select All")
 	l.Type("abc")
 	if v := value(l, ui.RoleTextField, "Notes"); v != "abc" {
@@ -99,7 +96,6 @@ func TestLiveEditMenuActsOnce(t *testing.T) {
 	if v := value(l, ui.RoleTextField, "Notes"); v != "abc" {
 		t.Fatalf("after Copy: %q", v)
 	}
-	makeKey(t, l)
 	l.Press(ui.KeyCode('V'), ui.ModSuper) // the key equivalent over the selection: replaces it once
 	l.Frames(6)
 	if v := value(l, ui.RoleTextField, "Notes"); v != "abc" {
@@ -213,8 +209,7 @@ func TestLiveZoom(t *testing.T) {
 // The Dialogs scene's alert is an NSAlert sheet: its button answers, the scene
 // shows the answer. The save panel opens as a sheet too and is cancelled.
 func TestLiveNativeAlertAndSavePanel(t *testing.T) {
-	l := startGallery(t)
-	makeKey(t, l)
+	l := startRealGallery(t)
 	l.Click(ui.RoleListItem, "Dialogs")
 	l.Frames(5)
 	var sheet widgettest.Sheet
@@ -223,15 +218,8 @@ func TestLiveNativeAlertAndSavePanel(t *testing.T) {
 		sheet = s
 		return ok
 	}
-	// a click that another application's activation swallowed is made again
-	for try := 0; try < 3; try++ {
-		l.Click(ui.RoleButton, "Show Alert…")
-		if l.Within("the alert sheet is attached", 90, sheetOf) {
-			break
-		}
-		makeKey(t, l)
-	}
-	l.Until("the alert sheet is attached", 10, sheetOf)
+	l.Click(ui.RoleButton, "Show Alert…")
+	l.Until("the alert sheet is attached", 240, sheetOf)
 	var titles []string
 	l.Do(func(a *app.App) { titles = sheet.Buttons() })
 	if !strings.Contains(strings.Join(titles, "|"), "Delete") {

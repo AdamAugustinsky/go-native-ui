@@ -93,6 +93,9 @@ type Options struct {
 	// Scrolled starts the content scrolled under the toolbar (120 pt, or as
 	// far as it goes; a table 5 rows).
 	Scrolled bool
+	// PanelStart is the directory the open and save panels start in (empty:
+	// the system's choice).
+	PanelStart string
 }
 
 // The ids of the table's columns.
@@ -127,8 +130,9 @@ type Gallery struct {
 	histN    int // entries, the last being the newest
 	histAt   int // the one shown
 	focused  bool
-	under    bool // the content is under the toolbar (the last frame's)
-	scrolled int  // frames left to apply Options.Scrolled
+	under    bool    // the content is under the toolbar (the last frame's)
+	top      float32 // the toolbar band's height this frame, in pixels: the inset of the scene's scroll view
+	scrolled int     // frames left to apply Options.Scrolled
 	scroll   [numScenes]base.ScrollState
 	ic       icons
 	glyphs   rexui.ListGlyphs
@@ -343,36 +347,24 @@ func (g *Gallery) Build(c *ui.Context) {
 	sbW := theme.Snap(sidebarPt * r.Scale)
 	sc := g.scene()
 
-	// The sidebar's glass, then the content below the toolbar's band and the
-	// toolbar over both. A table's header in the toolbar's pocket draws over
-	// the bar, so the table's toolbar comes first; otherwise it comes after
-	// the content, so that the scroll edge's hairline, just below the band,
-	// lies over it.
+	// The sidebar's glass, then the content pane, which runs under the
+	// toolbar's band with its scroll view inset by it (the scroll edge is the
+	// view's: ToolbarOpts.ContentEdge), and the toolbar over both.
 	theme.At(c, 0, 0, sbW, H)
 	c.Push(c.Box(base.Floating, "sidebar"))
 	g.sidebar(tbH)
 	c.Pop()
 	sc = g.scene() // the sidebar may have changed it
-	pocket := sc == scTable
-	if pocket {
-		g.toolbar(sc, sbW)
-	}
-	theme.At(c, sbW, tbH, W-sbW, H-tbH)
+	theme.At(c, sbW, 0, W-sbW, H)
 	flags := base.Floating
-	if !pocket { // the table paints its rows' background, below its header in the pocket
+	if sc != scTable { // the table paints its rows' background
 		c.NextBG(g.contentFill())
 		flags |= ui.DrawBackground
 	}
 	c.Push(c.Box(flags, "content"))
-	under := g.under
-	g.content(sc, W-sbW, H-tbH)
-	if pocket && g.under != under { // the toolbar of this frame used the last one's
-		c.RequestFrame()
-	}
+	g.content(sc, W-sbW, H, tbH)
 	c.Pop()
-	if !pocket {
-		g.toolbar(sc, sbW)
-	}
+	g.toolbar(sc, sbW)
 	g.dialog(c)
 	if g.scrolled > 0 {
 		g.scrolled--

@@ -87,10 +87,8 @@ func (g *Gallery) toolbar(sc int, sbW float32) {
 	k := g.k
 	c, r := k.Context(), k.Theme()
 	o := rexui.ToolbarOpts{Style: theme.ToolbarUnified, Title: defs[sc].title, Panes: [2]float32{sbW, 0},
-		ContentUnder: g.under, Traffic: g.opt.Traffic, BandFill: g.contentFill()}
-	if sc == scTable { // the table's header is in the toolbar's pocket
-		o.ContentUnder, o.Pocket = true, theme.Snap(r.Lines.HeaderH)
-	}
+		ContentUnder: g.under, Traffic: g.opt.Traffic, BandFill: g.contentFill(),
+		ContentEdge: true}
 	tb := rexui.BeginToolbar(k, "Toolbar", o)
 	tb.NextPane()
 	b, f := tb.Nav(g.ic.back, g.ic.forward, g.histAt > 0, g.histAt+1 < g.histN)
@@ -119,8 +117,10 @@ func (g *Gallery) toolbar(sc int, sbW float32) {
 }
 
 // content builds scene sc in the detail pane (the current parent), w by h
-// pixels.
-func (g *Gallery) content(sc int, w, h float32) {
+// pixels, the pane running under the toolbar's band: the scene's scroll view
+// starts its content top pixels down, below the band.
+func (g *Gallery) content(sc int, w, h, top float32) {
+	g.top = top
 	switch sc {
 	case scPlayground:
 		g.playgroundScene(w, h)

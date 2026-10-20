@@ -139,6 +139,7 @@ func (g *Gallery) catalogueScene(w, h float32, p int) {
 	sc := scCatalogue + p
 	pg := &g.pages[p]
 	k.NextSize(ui.Px(w), ui.Px(h))
+	k.NextScrollInset(g.top)
 	v := k.BeginScroll(defs[sc].title, &g.scroll[sc], base.ScrollBoth)
 	g.scrollStart(v.Inner)
 	_, sy := c.Scroll(v.Inner)

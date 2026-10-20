@@ -43,7 +43,11 @@ func benchSteps() []step {
 		move(roleButton, "Add item"), waitFor(ui.RoleTooltip, ""),
 		move(roleButton, "More"), waitGone(ui.RoleTooltip, ""), idle(3))
 
-	// typing, select all, copy, cut, undo
+	// typing, select all, copy, cut, undo. The form runs under the toolbar's
+	// band, where the player takes a target for visible (it knows the scroll
+	// area's rectangle, not its inset): back to the top first, so that a window
+	// too small for the scene has not scrolled the field under the band.
+	add(wheel(ui.RoleScrollArea, "Playground", 60, 12), idle(3))
 	add(click(ui.RoleTextField, "Notes"), idle(2), key(ui.KeyEnd, 0),
 		typeText("abc"), idle(2), typeText("de"), idle(2),
 		key('A', prim), idle(2), key('C', prim), idle(2), key(ui.KeyRight, 0), idle(2),

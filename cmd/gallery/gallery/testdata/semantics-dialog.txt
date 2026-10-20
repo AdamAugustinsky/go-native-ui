@@ -13,6 +13,7 @@ Window
       ListItem "Text styles"
       ListItem "Lists"
       ListItem "Forms"
+      ListItem "Components"
   SearchField "Search" [editable]
   ScrollArea "Playground"
     Group "Playground"

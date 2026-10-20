@@ -34,7 +34,7 @@ func (g *Gallery) showAlert() {
 // savePanel asks where to save a file.
 func (g *Gallery) savePanel() {
 	if g.a != nil {
-		t, err := g.a.SavePanel(platform.SaveSpec{Name: "gallery.txt", Prompt: "Save"})
+		t, err := g.a.SavePanel(platform.SaveSpec{Name: "gallery.txt", Prompt: "Save", Start: g.opt.PanelStart})
 		if err == nil {
 			g.alert = t
 			return
@@ -46,7 +46,7 @@ func (g *Gallery) savePanel() {
 // openPanel asks which file to open.
 func (g *Gallery) openPanel() {
 	if g.a != nil {
-		t, err := g.a.OpenPanel(platform.OpenSpec{Files: true, Prompt: "Open"})
+		t, err := g.a.OpenPanel(platform.OpenSpec{Files: true, Prompt: "Open", Start: g.opt.PanelStart})
 		if err == nil {
 			g.alert = t
 			return

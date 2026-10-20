@@ -21,14 +21,11 @@ import (
 // there, so a layout fault anywhere else on the pages still fails.
 var fontWide = []string{"label-styles", "link", "form-grid"}
 
-// legacyFiles accepts the columns of the lists page's Files table beside a
-// legacy scroll bar: the catalogue's table sample lays its last column out
-// for 12 pt of bar where AppKit's scroller takes 17 (rexui/README.md, the
-// lists' samples), so its Size cells run 7 px past their header. It is the
-// table recipe's, not the page's: the standalone appkit-lists page shows the
-// same finding with a legacy scroller pinned.
-var legacyFiles = widgettest.Allow{Check: ui.AuditColumn, Where: `Table "Files"`,
-	Reason: "the catalogue's Files sample reserves 12 pt for a legacy scroll bar where AppKit's takes 17 (rexui README, the lists' samples)"}
+// checkModes are the appearances every page is checked in.
+var checkModes = []struct {
+	name string
+	pref theme.Preference
+}{{"light", theme.ForceLight}, {"dark", theme.ForceDark}}
 
 // catalogueFontWide are fontWide's samples as the audit names them in a
 // catalogue page hosted in the window (the standalone pages are accepted by
@@ -55,20 +52,18 @@ func TestAuditScenes(t *testing.T) {
 		if legacy {
 			style = "legacy scrollers"
 		}
-		for _, name := range SceneNames() {
-			off, err := runScene(ShotOptions{Scene: name, Legacy: legacy})
-			if err != nil {
-				if os.Getenv("CI") == "" {
-					t.Skipf("offscreen rendering: %v", err)
+		for _, mode := range checkModes {
+			for _, name := range SceneNames() {
+				off, err := runScene(ShotOptions{Scene: name, Legacy: legacy, Preference: mode.pref})
+				if err != nil {
+					if os.Getenv("CI") == "" {
+						t.Skipf("offscreen rendering: %v", err)
+					}
+					t.Fatal(err)
 				}
-				t.Fatal(err)
+				widgettest.AuditLayout(t, name+", "+style+", "+mode.name, off.UI, catalogueFontWide(name)...)
+				off.Close()
 			}
-			allow := catalogueFontWide(name)
-			if legacy && name == "catalogue-lists" {
-				allow = append(allow, legacyFiles)
-			}
-			widgettest.AuditLayout(t, name+", "+style, off.UI, allow...)
-			off.Close()
 		}
 	}
 	// the smallest window: the forms and the matrix still fit
@@ -81,26 +76,28 @@ func TestAuditScenes(t *testing.T) {
 		off.Close()
 	}
 	const scale = 2
-	for p, name := range AppKitPages {
-		cells, _, _ := catalog.Grid(catalog.Page(p))
-		var allow []widgettest.Allow
-		if runtime.GOOS != "darwin" {
-			for _, cl := range cells {
-				sm := catalog.Samples[cl.Sample].Name
-				for _, w := range fontWide {
-					if w == sm {
-						allow = append(allow, widgettest.Allow{Check: ui.AuditOverflow,
-							Within: [4]float32{cl.X * scale, cl.Y * scale, (cl.X + cl.W) * scale, (cl.Y + cl.H) * scale},
-							Reason: sm + ": its frame is AppKit's, measured on macOS, and this system's font is wider than San Francisco"})
+	for _, mode := range checkModes {
+		for p, name := range AppKitPages {
+			cells, _, _ := catalog.Grid(catalog.Page(p))
+			var allow []widgettest.Allow
+			if runtime.GOOS != "darwin" {
+				for _, cl := range cells {
+					sm := catalog.Samples[cl.Sample].Name
+					for _, w := range fontWide {
+						if w == sm {
+							allow = append(allow, widgettest.Allow{Check: ui.AuditOverflow,
+								Within: [4]float32{cl.X * scale, cl.Y * scale, (cl.X + cl.W) * scale, (cl.Y + cl.H) * scale},
+								Reason: sm + ": its frame is AppKit's, measured on macOS, and this system's font is wider than San Francisco"})
+						}
 					}
 				}
 			}
+			off, err := runAppKit(p, mode.pref, scale, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			widgettest.AuditLayout(t, name+", "+mode.name, off.UI, allow...)
+			off.Close()
 		}
-		off, err := runAppKit(p, theme.ForceLight, scale, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		widgettest.AuditLayout(t, name, off.UI, allow...)
-		off.Close()
 	}
 }

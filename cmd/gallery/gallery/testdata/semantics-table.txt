@@ -13,23 +13,9 @@ Window
       ListItem "Text styles"
       ListItem "Lists"
       ListItem "Forms"
+      ListItem "Components"
   SearchField "Search" [editable]
-  Group "Toolbar"
-    Group "Back/Forward"
-      Button "Back"
-      Button "Forward" [disabled]
-    Label "Table"
-    SearchField "Search rows" [editable]
-    MenuBar "Menu bar"
-      MenuItem "File"
-      MenuItem "Edit"
-      MenuItem "View"
-      MenuItem "Go"
   Table "rows" [focused]
-    ColumnHeader "ID"
-    ColumnHeader "Name"
-    ColumnHeader "Kind"
-    ColumnHeader "Size"
     Row "0" pos=0/1000000
       Cell "0"
       Cell
@@ -227,5 +213,20 @@ Window
       Cell "Archive"
       Cell "459 KB"
     ScrollBar "Vertical scroll bar"
+    ColumnHeader "ID"
+    ColumnHeader "Name"
+    ColumnHeader "Kind"
+    ColumnHeader "Size"
   Label "4 selected · Ready"
   Label "1,000,000 rows"
+  Group "Toolbar"
+    Group "Back/Forward"
+      Button "Back"
+      Button "Forward" [disabled]
+    Label "Table"
+    SearchField "Search rows" [editable]
+    MenuBar "Menu bar"
+      MenuItem "File"
+      MenuItem "Edit"
+      MenuItem "View"
+      MenuItem "Go"
