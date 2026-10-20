@@ -1,6 +1,7 @@
 // Command pilot is the dual-pane file browser on app + ui + fs, built from the
-// widget kit and the Rex theme; the scene lives in package pilot. It builds on
-// every OS. The window follows the system's light or dark mode and accent colour.
+// rexui and the Rex theme in Finder's layout (unified toolbar, glass sidebar,
+// path bar); the scene lives in package pilot. It builds on every OS. The window
+// follows the system's light or dark mode and accent colour.
 //
 //	pilot [left [right]]        show the window; both panes start in the home directory by default
 //	pilot -exit-first -v        print the startup timeline as JSON (and exec → listings ready on

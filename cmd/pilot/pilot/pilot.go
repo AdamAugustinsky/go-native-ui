@@ -1,11 +1,14 @@
-// Package pilot is the dual-pane file browser on app + ui + fs, built from the
-// widget kit and the Rex theme: a widget.Table for each file list (selection by
-// entry index, sorting from the header, resizable columns), a widget.Splitter
-// between the panes, widget.TextFields for the path and the filter, and the
-// theme's chrome for the window. It follows the system's light or dark mode and
-// accent colour. It is OS-independent: the window loop, the file system service
-// and the text system come in through Options and app.App, so the same code is
-// the window, the benchmark and the offscreen screenshot.
+// Package pilot is the dual-pane file browser on app + ui + fs, built from
+// rexui, the Rex theme's components on macOS Finder's measured layout: a
+// unified toolbar (sidebar button, back and forward, up, the folder's name,
+// search) over a glass sidebar of places, a striped table for each file list
+// (selection by entry index, sorting from the header, resizable columns, the
+// system's icons), a splitter between the panes, and a path bar and a status
+// line under each. The filter is a search field and the path a text field.
+// It follows the system's light or dark mode, accent colour and settings. It
+// is OS-independent: the window loop, the file system service and the text
+// system come in through Options and app.App, so the same code is the window,
+// the benchmark and the offscreen screenshot.
 //
 //	pl := pilot.New(pilot.Options{...})
 //	app.RunWith(pilot.Config(), pl, app.RunOptions{})   // or RunBench / NewOffscreen
@@ -13,7 +16,9 @@
 // Package layout: view.go and pane.go are the model (listing, rows,
 // selection, navigation and history, reconciling a new listing of the same
 // directory by name, all in slices of bounded work per frame); keys.go maps
-// the keys the table does not take to it; build.go builds a frame; script.go
+// the keys the table does not take to it; build.go builds a frame, chrome.go
+// the toolbar, sidebar and path bar; icons.go caches the system's file icons;
+// menus.go is the View menu's zoom; script.go
 // drives the benchmark; synth.go makes synthetic directories; shot.go renders
 // the offscreen scene.
 package pilot
