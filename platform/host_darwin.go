@@ -109,8 +109,10 @@ type hostState struct {
 	// gestureHost: the trackpad gesture in progress began over a host, which
 	// owns it until the next one begins (momentum included).
 	gestureHost bool
-	holes       [MaxHosts][4]float32
-	applied     int // applyHosts calls (tests)
+	// pinchHost: the same for the pinch or rotation in progress.
+	pinchHost bool
+	holes     [MaxHosts][4]float32
+	applied   int // applyHosts calls (tests)
 }
 
 func (h *hostState) id(i int) HostID { return HostID(h.slots[i].gen<<8 | uint32(i+1)) }
@@ -430,6 +432,24 @@ func (w *Window) scrollToHost(ev objc.ID) bool {
 	}
 	if h.gestureHost && (phase != 0 || mom != 0) {
 		return true
+	}
+	return h.nVis > 0 && w.overHost(w.locate(ev))
+}
+
+// pinchToHost reports whether the pinch, rotation or smart zoom ev (NSEvent
+// type typ) goes to a host. As for a scroll gesture, who owns a phased one is
+// decided where it begins (Began, MayBegin) and holds until the next one
+// begins, wherever the pointer goes: a pinch that began over a host stays
+// with it, and one that began over ui never goes to a host it crosses. A
+// smart zoom has no phases and goes by its own point.
+func (w *Window) pinchToHost(ev objc.ID, typ uintptr) bool {
+	h := &w.hosts
+	phase := objc.Send(ev, selPhase)
+	if typ != 32 && phase != 0 {
+		if phase&(1|32) != 0 {
+			h.pinchHost = h.nVis > 0 && w.overHost(w.locate(ev))
+		}
+		return h.pinchHost
 	}
 	return h.nVis > 0 && w.overHost(w.locate(ev))
 }

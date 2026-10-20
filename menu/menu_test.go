@@ -153,6 +153,15 @@ func TestShortcutLabels(t *testing.T) {
 		{Shortcut{Key: ui.KeyBackspace, Primary: true}, "⌘⌫", "Ctrl+Backspace"},
 		{Shortcut{Key: ui.KeyLeftBracket, Mods: ui.ModShift, Primary: true}, "⇧⌘[", "Ctrl+Shift+["},
 		{Shortcut{Key: '1'}, "1", "1"},
+		{Shortcut{Key: ui.KeyF1}, "F1", "F1"},
+		{Shortcut{Key: ui.KeyF13, Primary: true}, "⌘F13", "Ctrl+F13"},
+		{Shortcut{Key: ui.KeyF20}, "F20", "F20"},
+		{Shortcut{Key: ui.KeyNum0}, "Num0", "Num0"},
+		{Shortcut{Key: ui.KeyNum9, Primary: true}, "⌘Num9", "Ctrl+Num9"},
+		{Shortcut{Key: ui.KeyNumAdd}, "Num+", "Num+"},
+		{Shortcut{Key: ui.KeyNumDivide}, "Num/", "Num/"},
+		{Shortcut{Key: ui.KeyNumEqual}, "Num=", "Num="},
+		{Shortcut{Key: ui.KeyNumClear}, "Clear", "Clear"},
 		{Shortcut{}, "", ""},
 	}
 	for _, c := range cases {

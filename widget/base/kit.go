@@ -204,6 +204,7 @@ func (k *Kit) Begin(c *ui.Context) {
 	c.Theme = k.r.UITheme()
 	c.Rates = k.r.Motion.Rates()
 	c.TextEdit.Selection = k.r.Colors[theme.TextSelection]
+	c.TextEdit.SelectionInactive = k.r.Colors[theme.TextSelectionUnemph]
 	c.TextEdit.Caret = k.r.Colors[theme.Caret]
 
 	in := c.Input()

@@ -182,6 +182,7 @@ type Context struct {
 	rich       []richRec
 	richSpans  []Span
 	richStyles []RichStyle
+	sel        selState // selection scopes (selection.go)
 
 	// semantics (semantics.go): the setters for the next box, and the records
 	// of this frame's boxes that have a role
@@ -203,7 +204,10 @@ type Context struct {
 	focusVisible      bool // focus came from the keyboard (FocusVisible)
 	scrollSet         bool // ScrollTo was called this frame (End decides whether the scroll is still moving)
 
-	sp scrollPhys // trackpad gestures, latching and rubber bands (scrollphys.go)
+	sp scrollPhys   // trackpad gestures, latching and rubber bands (scrollphys.go)
+	gs gestureState // pinch and rotation latching (gesture.go)
+
+	swapBuf []byte // scratch for EditTranspose (keymoves.go): kept, so a swap of long clusters allocates only while it grows
 
 	// animation (see anim.go)
 	animating             bool

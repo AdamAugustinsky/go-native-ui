@@ -10,6 +10,7 @@ import (
 
 var classesOnce sync.Once
 var viewClass, delegateClass objc.ID
+var viewDef *objc.ClassDef // GNUIView, for calls to its superclass
 
 // registerClasses defines GNUIView and GNUIWindowDelegate. Each concern adds
 // its own methods in its registerXxx function; the classes are created once,
@@ -17,10 +18,12 @@ var viewClass, delegateClass objc.ID
 func registerClasses() {
 	objc.Trace = debugIMP
 	view := objc.Define("GNUIView", objc.Cls("NSView"), []string{"NSTextInputClient"})
+	viewDef = view
 	registerViewKeyboard(view)
 	registerViewTextInput(view)
 	registerViewDraw(view)
 	registerViewMouse(view)
+	registerViewGesture(view)
 	registerViewEdit(view)
 	viewClass = view.Register()
 	delegate := objc.Define("GNUIWindowDelegate", objc.Cls("NSObject"), []string{"NSWindowDelegate"})

@@ -1,6 +1,9 @@
 package ui
 
-import "testing"
+import (
+	"math"
+	"testing"
+)
 
 // origin is box id's unsnapped position relative to box p on axis a.
 func (h *harness) rel(id, p ID, a int) float32 {
@@ -224,5 +227,73 @@ func TestJustifyAllocatesNothing(t *testing.T) {
 	}
 	if n := testing.AllocsPerRun(20, func() { h.frame(build) }); n != 0 {
 		t.Errorf("a frame of justified rows allocates %v times", n)
+	}
+}
+
+// The snapped rectangles of spaced children: the last one ends on the
+// parent's snapped end however many fractional spaces come before it, and
+// each is where its exact place snaps to, also inside a nested box.
+func TestJustifySnapped(t *testing.T) {
+	h := newHarness(t, 1200, 200)
+	var p ID
+	var ch [10]ID
+	var inner [3]ID
+	build := func(j Justify) func(c *Context) {
+		return func(c *Context) {
+			c.NextFlags(FloatingX | FloatingY)
+			c.NextPos(0.5, 0.5)
+			c.NextSize(Px(1000), Px(40))
+			c.NextAxis(AxisX)
+			c.NextJustify(j)
+			p = c.Open(0, "row")
+			for i := range ch {
+				c.NextSize(Px(32), Px(32))
+				if i == 4 { // a nested SpaceEvenly row: 3 × 5 px in 32 px
+					c.NextAxis(AxisX)
+					c.NextJustify(JustifySpaceEvenly)
+					ch[i] = c.Open(0, "inner")
+					for k := range inner {
+						c.NextSize(Px(5), Px(5))
+						inner[k] = c.BoxKeyed(0, KeyN(c.ParentKey(), uint64(k)), nil)
+					}
+					c.Close()
+					continue
+				}
+				ch[i] = c.BoxKeyed(0, KeyN(c.ParentKey(), uint64(i)), nil)
+			}
+			c.Close()
+		}
+	}
+	snap64 := func(v float64) float32 { return float32(math.Floor(v + 0.5)) }
+	for _, j := range []Justify{JustifySpaceBetween, JustifySpaceEvenly} {
+		h.frame(build(j))
+		var lead, step float64 // the exact places: lead + i·step
+		switch j {
+		case JustifySpaceBetween:
+			lead, step = 0.5, 32+680.0/9
+		default:
+			lead, step = 0.5+680.0/11, 32+680.0/11
+		}
+		for i := range ch {
+			x := lead + float64(i)*step
+			want := [2]float32{snap64(x), snap64(x + 32)}
+			if r := h.c.boxes[ch[i]].rect; r[0] != want[0] || r[2] != want[1] {
+				t.Errorf("justify %d: child %d spans %v..%v, want %v", j, i, r[0], r[2], want)
+			}
+			if i == 4 {
+				for k := range inner {
+					ix := x + 17.0/4*float64(k+1) + 5*float64(k)
+					wi := [2]float32{snap64(ix), snap64(ix + 5)}
+					if r := h.c.boxes[inner[k]].rect; r[0] != wi[0] || r[2] != wi[1] {
+						t.Errorf("justify %d: nested child %d spans %v..%v, want %v", j, k, r[0], r[2], wi)
+					}
+				}
+			}
+		}
+		if j == JustifySpaceBetween {
+			if pr, lr := h.c.boxes[p].rect, h.c.boxes[ch[9]].rect; lr[2] != pr[2] {
+				t.Errorf("the last child ends at %v, the row at %v", lr[2], pr[2])
+			}
+		}
 	}
 }

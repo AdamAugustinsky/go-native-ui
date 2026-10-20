@@ -77,7 +77,8 @@ type wayland struct {
 	compositorV, wmBaseV  uint32
 	seatV                 uint32
 
-	im wlIM // text input (im_linux.go)
+	im   wlIM   // text input (im_linux.go)
+	gest wlGest // pinch gestures (gesture_wl_linux.go)
 
 	// window export (export_linux.go)
 	exporter, exported uintptr
@@ -197,10 +198,14 @@ func loadWayland() error {
 	}); err != nil {
 		return err
 	}
-	if err := wl.Link(func(name string) uintptr {
+	sym := func(name string) uintptr {
 		p, _ := purego.Dlsym(h, name) // core interface tables ("wl_seat_interface", ...)
 		return p
-	}); err != nil {
+	}
+	if err := wl.Link(sym); err != nil {
+		return err
+	}
+	if err := wl.LinkGestures(sym); err != nil {
 		return err
 	}
 	dispatchCB = ffi.NewCallback(wlDispatch)
@@ -383,6 +388,7 @@ func (w *Window) closeWayland() {
 	w.wlCursorClose()
 	w.wlExportClose()
 	w.wlIMClose()
+	w.wlGestureClose()
 	w.release(y.frameCB, 0, 99) // wl_callback has no destructor request
 	w.release(y.keyboard, 0, 3) // wl_keyboard.release
 	w.release(y.pointer, 1, 3)  // wl_pointer.release
@@ -523,7 +529,10 @@ func (w *Window) wlKeyEvent(code uint32, down, repeat bool, now int64) {
 	}
 	kc := code + 8 // evdev -> xkb keycode
 	sym := uint32(fr.Call2(xk.getOneSym, y.xkbState, uintptr(kc)))
-	ev := Event{Kind: EvKey, Key: linuxKey(code, sym), Code: code, Mods: w.mods, Time: now}
+	if keysymIsModifier(sym) { // a modifier on its own is EvModifiers (sent on wl_keyboard.modifiers)
+		return
+	}
+	ev := Event{Kind: EvKey, Key: linuxKey(code, sym), Char: keysymChar(sym), Code: code, Mods: w.mods, Time: now}
 	if down {
 		ev.Flags |= FlagDown
 	}
@@ -591,6 +600,8 @@ func (w *Window) wlEvent(proxy uintptr, op uint32, a unsafe.Pointer) {
 		}
 	case y.pointer:
 		w.onPointer(op, a)
+	case y.gest.pinch:
+		w.onPinch(op, a)
 	case y.keyboard:
 		w.onKeyboard(op, a)
 	case y.exported:
@@ -646,6 +657,8 @@ func (w *Window) onRegistry(op uint32, a unsafe.Pointer) {
 			y.shm = w.bind(name, wlc.shm, peekPtr(wlc.shm), y.shmV)
 		case y.im.mgr == 0 && cstrIs(iface, "zwp_text_input_manager_v3"):
 			y.im.mgr = w.bind(name, wl.ZwpTextInputManagerV3.Addr(), wl.ZwpTextInputManagerV3.NameAddr(), 1)
+		case y.gest.mgr == 0 && cstrIs(iface, "zwp_pointer_gestures_v1"):
+			w.wlGestureBind(name, adv)
 		case y.exporter == 0 && cstrIs(iface, "zxdg_exporter_v2"):
 			y.exporter = w.bind(name, wl.ZxdgExporterV2.Addr(), wl.ZxdgExporterV2.NameAddr(), 1)
 		case y.shapeMgr == 0 && cstrIs(iface, "wp_cursor_shape_manager_v1"):
@@ -826,9 +839,11 @@ func (w *Window) onSeatCaps(caps uint32) {
 			y.args[0], y.args[1] = 0, uint64(y.pointer)
 			y.shapeDev = w.req(y.shapeMgr, 1, wl.WpCursorShapeDeviceV1.Addr(), y.shapeMgrV, 0)
 		}
+		w.wlGestureAttach()
 	} else if caps&1 == 0 && y.pointer != 0 {
 		w.release(y.shapeDev, 0, 1)
 		y.shapeDev = 0
+		w.wlGestureDetach()
 		w.release(y.pointer, 1, 3)
 		y.pointer = 0
 		w.ptrIn, w.curSet = false, false
@@ -1023,7 +1038,10 @@ func (w *Window) onKeyboard(op uint32, a unsafe.Pointer) {
 				m |= bit
 			}
 		}
-		w.mods = m
+		if m != w.mods {
+			w.mods = m
+			w.q.push(Event{Kind: EvModifiers, Mods: m, Time: now})
+		}
 	case 5: // repeat_info(rate, delay)
 		y.repeatRate, y.repeatDelay = int32(argU(a, 0)), int32(argU(a, 1))
 		if y.repeatRate <= 0 {
