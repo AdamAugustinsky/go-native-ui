@@ -67,3 +67,9 @@ func (s *System) ParaStats() ParaStats { return ParaStats{} }
 
 // ReserveParas does nothing on this OS.
 func (s *System) ReserveParas(b ParaBudget) {}
+
+// ReleaseScale releases nothing on this OS.
+func (s *System) ReleaseScale(float32) int { return 0 }
+
+// Scales is empty on this OS.
+func (s *System) Scales() []float32 { return nil }

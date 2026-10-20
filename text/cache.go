@@ -221,6 +221,15 @@ func (c *runCache) evict() {
 	c.rehash(len(c.table))
 }
 
+// drop empties the cache and changes the generation: every RunRef and RunView
+// is stale. The storage is kept.
+func (c *runCache) drop() {
+	c.gen++
+	c.ents = c.ents[:0]
+	c.text, c.glyph, c.xs, c.faces, c.clus = c.text[:0], c.glyph[:0], c.xs[:0], c.faces[:0], c.clus[:0]
+	clear(c.table)
+}
+
 // view returns the slices of a cached run. It does not allocate.
 func (c *runCache) view(r RunRef) RunView {
 	if r == 0 || int(r) > len(c.ents) {
@@ -302,6 +311,21 @@ func (t *glyphTable) insert(key uint64, e GlyphEntry) {
 		t.n++
 	}
 	t.slots[i] = glyphSlot{key, e}
+}
+
+// removeFaces drops the entries of the faces for which gone reports true. The
+// pixels of those glyphs stay in their pages until the next atlas reset, so
+// the entries of every other face, and the GPU's copy of the pages, are
+// untouched.
+func (t *glyphTable) removeFaces(gone func(FaceID) bool) {
+	old := t.slots
+	t.slots = make([]glyphSlot, len(old))
+	t.n = 0
+	for i := range old {
+		if k := old[i].key; k != 0 && !gone(FaceID(k>>24&0xFFFF)) {
+			t.insert(k, old[i].e)
+		}
+	}
 }
 
 func (t *glyphTable) clear() {

@@ -163,3 +163,15 @@ func normalizeDesc(d FontDesc) FontDesc {
 	}
 	return d
 }
+
+// scaleSet collects the distinct scales of live fonts, in order of first use.
+type scaleSet []float32
+
+func (l *scaleSet) add(scale float32) {
+	for _, s := range *l {
+		if s == scale {
+			return
+		}
+	}
+	*l = append(*l, scale)
+}

@@ -65,6 +65,7 @@ type faceKey struct {
 	index  int
 	weight int // only for variable fonts
 	size   uint32
+	owner  uint32 // the FontDesc.Scale of the fonts it is made for (bits): a face per scale, so that ReleaseScale frees only its own
 }
 
 // gtFace is a concrete face at one pixel size: the primary font of a
@@ -80,6 +81,9 @@ type gtFace struct {
 	strikePpem int
 	weight     int
 	hb         *harfbuzz.Font // lazily created by shape.go
+	owner      float32        // the FontDesc.Scale it was made for
+	key        faceKey        // its entry in faceKeys
+	gone       bool           // released by ReleaseScale: the slot is free for the next face
 }
 
 type gtFont struct {
@@ -90,6 +94,7 @@ type gtFont struct {
 	emoji    FaceID
 	hasEmoji bool
 	triedEmo bool
+	gone     bool // released by ReleaseScale: the slot is free for the next Font
 }
 
 // noFace marks "no face" in FaceID-valued caches.
@@ -214,17 +219,24 @@ func (s *goSystem) loadData(ref fontRef) (*fontData, error) {
 	return d, nil
 }
 
-// newFace returns the face for ref at px pixels, creating it on first use.
-// weight (CSS) applies to variable fonts.
-func (s *goSystem) newFace(ref fontRef, px float32, weight int) (FaceID, error) {
-	key := faceKey{ref.file, ref.index, 0, math.Float32bits(px)}
+// newFace returns the face for ref at px pixels for the fonts of scale owner,
+// creating it on first use. weight (CSS) applies to variable fonts.
+func (s *goSystem) newFace(ref fontRef, px float32, weight int, owner float32) (FaceID, error) {
+	key := faceKey{ref.file, ref.index, 0, math.Float32bits(px), math.Float32bits(owner)}
 	if ref.variable {
 		key.weight = weight
 	}
 	if id, ok := s.faceKeys[key]; ok {
 		return id, nil
 	}
-	if len(s.faces) >= int(noFace) {
+	free := -1
+	for i := range s.faces {
+		if s.faces[i].gone {
+			free = i
+			break
+		}
+	}
+	if free < 0 && len(s.faces) >= int(noFace) {
 		return 0, errors.New("text: too many faces")
 	}
 	d, err := s.loadData(ref)
@@ -233,7 +245,7 @@ func (s *goSystem) newFace(ref fontRef, px float32, weight int) (FaceID, error) 
 	}
 	fc := gtFace{
 		data: d, face: font.NewFace(d.font), sizePx: px, scale: px / d.upem,
-		color: d.cb != nil, weight: weight,
+		color: d.cb != nil, weight: weight, owner: owner, key: key,
 	}
 	if ref.variable {
 		fc.face.SetVariations([]font.Variation{{Tag: ot.MustNewTag("wght"), Value: float32(weight)}})
@@ -244,8 +256,14 @@ func (s *goSystem) newFace(ref fontRef, px float32, weight int) (FaceID, error) 
 	if d.cb != nil {
 		fc.strike, fc.strikePpem = d.cb.strikeFor(px)
 	}
-	s.faces = append(s.faces, fc)
-	id := FaceID(len(s.faces) - 1)
+	var id FaceID
+	if free >= 0 {
+		id = FaceID(free)
+		s.faces[id] = fc
+	} else {
+		s.faces = append(s.faces, fc)
+		id = FaceID(len(s.faces) - 1)
+	}
 	s.faceKeys[key] = id
 	s.faceOf[fc.face] = id
 	return id, nil
@@ -259,18 +277,23 @@ func (s *goSystem) faceName(f FaceID) string {
 }
 
 // Font returns the key of a font, creating it on first use. Fonts live until
-// Close. A family that fontconfig does not know resolves to the configured
+// Close, or until ReleaseScale releases the scale they were made for. A family that fontconfig does not know resolves to the configured
 // default. If no usable font exists at all, Font returns an invalid key
 // (Shape returns the empty run, Metrics the zero Metrics).
 func (s *goSystem) Font(d FontDesc) FontKey {
 	d = normalizeDesc(d)
+	free := -1
 	for i := range s.fonts {
-		if s.fonts[i].desc == d {
+		if s.fonts[i].gone {
+			if free < 0 {
+				free = i
+			}
+		} else if s.fonts[i].desc == d {
 			return FontKey(i)
 		}
 	}
 	const invalid = FontKey(math.MaxUint16)
-	if len(s.fonts) >= math.MaxUint16 {
+	if free < 0 && len(s.fonts) >= math.MaxUint16 {
 		return invalid
 	}
 	px := d.SizePt * d.Scale
@@ -278,7 +301,7 @@ func (s *goSystem) Font(d FontDesc) FontKey {
 	if !ok {
 		return invalid
 	}
-	id, err := s.newFace(ref, px, d.Weight)
+	id, err := s.newFace(ref, px, d.Weight, d.Scale)
 	if err != nil {
 		// The matched file is unreadable (removed since fontconfig cached
 		// it, unsupported format): take the first other font with a Latin
@@ -287,7 +310,7 @@ func (s *goSystem) Font(d FontDesc) FontKey {
 		if !ok || alt == ref {
 			return invalid
 		}
-		if id, err = s.newFace(alt, px, d.Weight); err != nil {
+		if id, err = s.newFace(alt, px, d.Weight, d.Scale); err != nil {
 			return invalid
 		}
 	}
@@ -303,10 +326,80 @@ func (s *goSystem) Font(d FontDesc) FontKey {
 		XHeight:   fc.face.LineMetric(font.XHeight) * k,
 	}
 	fe.metrics.LineHeight = fe.metrics.Ascent + fe.metrics.Descent + fe.metrics.LineGap
-	s.fonts = append(s.fonts, fe)
-	key := FontKey(len(s.fonts) - 1)
+	var key FontKey
+	if free >= 0 {
+		key = FontKey(free)
+		s.fonts[key] = fe
+	} else {
+		s.fonts = append(s.fonts, fe)
+		key = FontKey(len(s.fonts) - 1)
+	}
 	s.fonts[key].metrics.MonoAdvance = s.Run(s.Shape(key, []byte("0"))).Advance
 	return key
+}
+
+// ReleaseScale releases every font made for scale (FontDesc.Scale) and the
+// faces they shape and rasterise with, fallback faces included: the keys and
+// ids become free for later fonts, and nothing the other scales use changes
+// (their keys, faces and atlas entries stay valid). The font files stay loaded
+// (they are shared by every scale). The run and paragraph caches are emptied
+// (RunGeneration changes), because they are keyed by keys that may now name
+// other fonts; the glyph images of the released faces stay in their atlas
+// pages until the next atlas reset, without entries. It returns the number of
+// fonts released. Call it between frames, for a scale no frame being built or
+// drawn uses.
+func (s *goSystem) ReleaseScale(scale float32) int {
+	if s.closed {
+		return 0
+	}
+	n := 0
+	var gone []bool // by font key
+	for i := range s.fonts {
+		if f := &s.fonts[i]; !f.gone && f.desc.Scale == scale {
+			if gone == nil {
+				gone = make([]bool, len(s.fonts))
+			}
+			gone[i] = true
+			s.fonts[i] = gtFont{gone: true}
+			n++
+		}
+	}
+	faces := 0
+	for i := range s.faces {
+		if f := &s.faces[i]; !f.gone && f.owner == scale {
+			delete(s.faceKeys, f.key)
+			delete(s.faceOf, f.face)
+			s.hbuf.ForgetFace(f.face) // its shaping plans (the buffer's cache holds the face)
+			s.faces[i] = gtFace{gone: true}
+			faces++
+		}
+	}
+	if n == 0 && faces == 0 {
+		return 0
+	}
+	for k := range s.fb { // the fallback decisions of the released fonts
+		if f := int(k >> 32); f < len(gone) && gone[f] {
+			delete(s.fb, k)
+		}
+	}
+	s.runs.drop()
+	if s.plays != nil && s.plays.cache != nil {
+		s.plays.cache.dropAll()
+	}
+	s.atlas.glyphs.removeFaces(func(f FaceID) bool { return int(f) < len(s.faces) && s.faces[f].gone })
+	return n
+}
+
+// Scales lists the scales that have live fonts (FontDesc.Scale), in the order
+// they were first used since the last release.
+func (s *goSystem) Scales() []float32 {
+	var l scaleSet
+	for i := range s.fonts {
+		if !s.fonts[i].gone {
+			l.add(s.fonts[i].desc.Scale)
+		}
+	}
+	return l
 }
 
 // Metrics returns the font's metrics in pixels.
@@ -331,7 +424,7 @@ func (s *goSystem) emojiFace(f FontKey) (FaceID, bool) {
 	if !fe.triedEmo {
 		fe.triedEmo = true
 		if ref, ok := s.finder.emoji(fe.desc, fe.px); ok {
-			if id, err := s.newFace(ref, fe.px, fe.desc.Weight); err == nil && s.faces[id].color {
+			if id, err := s.newFace(ref, fe.px, fe.desc.Weight, fe.desc.Scale); err == nil && s.faces[id].color {
 				fe.emoji, fe.hasEmoji = id, true
 			}
 		}
@@ -361,7 +454,7 @@ func (s *goSystem) resolve(f FontKey, r rune) FaceID {
 	}
 	var found uint32
 	if ref, ok := s.finder.fallback(fe.desc, fe.px, r); ok {
-		if id, err := s.newFace(ref, fe.px, fe.desc.Weight); err == nil && s.has(id, r) {
+		if id, err := s.newFace(ref, fe.px, fe.desc.Weight, fe.desc.Scale); err == nil && s.has(id, r) {
 			found = uint32(id) + 1
 		}
 	}
@@ -382,7 +475,7 @@ func (s *goSystem) ResolveFace(r rune) *font.Face { return s.faces[s.resolve(s.c
 // returns a handle into the run cache. A hit allocates nothing. Invalid
 // UTF-8 is shaped as U+FFFD. Glyphs are in visual order.
 func (s *goSystem) Shape(f FontKey, utf8 []byte) RunRef {
-	if int(f) >= len(s.fonts) {
+	if int(f) >= len(s.fonts) || s.fonts[f].gone {
 		return 0
 	}
 	if r, ok := s.runs.lookup(f, utf8); ok {
@@ -453,7 +546,7 @@ func (s *goSystem) ReserveRuns(runs, glyphs, textBytes int) {
 //
 // Entries are valid until AtlasGeneration changes.
 func (s *goSystem) Glyph(face FaceID, gid uint16, sub uint8) GlyphEntry {
-	if int(face) >= len(s.faces) {
+	if int(face) >= len(s.faces) || s.faces[face].gone {
 		return GlyphEntry{}
 	}
 	if s.faces[face].color {

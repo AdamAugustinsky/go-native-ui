@@ -47,6 +47,7 @@ func (a *App) syncWindowFrom(win windowSource) {
 	case ui.ActionToggleMaximise:
 		win.ToggleMaximize()
 	}
+	a.syncTitlebar(win)
 	a.UI.SetDecorations(ui.Decorations{Client: win.ClientDecorations(), Maximized: win.Maximized()})
 	a.UI.SetWindowTitle(a.cfg.Title)
 	var r [4]float32
@@ -54,5 +55,5 @@ func (a *App) syncWindowFrom(win windowSource) {
 		p := b.SystemButtons()
 		r = [4]float32{p[0] * a.scale, p[1] * a.scale, p[2] * a.scale, p[3] * a.scale}
 	}
-	a.UI.SetSystemButtons(r)
+	a.UI.SetSystemButtons(r) // after syncTitlebar: where the buttons are now
 }

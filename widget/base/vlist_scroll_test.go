@@ -230,3 +230,52 @@ func TestVListPileFollowsTheStretch(t *testing.T) {
 		adjacent("springing back")
 	}
 }
+
+// topItem is the item under the top edge of the view and how far into it (in
+// points) the view starts.
+func (h *vt) topItem() (id uint64, into float64) {
+	h.t.Helper()
+	sc := float64(h.sc)
+	if sc == 0 {
+		sc = 1
+	}
+	for item, b := range h.box {
+		if r := h.c.Rect(b); r[1] <= 0 && r[3] > 0 {
+			return item, -float64(r[1]) / sc
+		}
+	}
+	h.t.Fatal("no item at the top of the view")
+	return 0, 0
+}
+
+// A list scrolled to near its end keeps its place in the content across a zoom
+// and back: the same item at the top of the view, as far into it, and not at the
+// end of the list that the new scale's layout has not been measured for yet.
+func TestVListKeepsItsAnchorAcrossAZoom(t *testing.T) {
+	h := newVT(t, 300, VListOpts{})
+	h.content = func(id uint64) bool { // the items are laid out in points, as the widgets do
+		h.c.NextSize(ui.Px(h.c.Pt(300)), ui.Px(h.c.Pt(h.height(id))))
+		h.c.Box(0, "content")
+		return true
+	}
+	h.frames(3)
+	h.in.AddScroll(0, -1e6, true) // to the end
+	h.frames(8)
+	h.in.AddScroll(0, 120, true) // a little back from it
+	h.frames(8)
+	if h.v.AtEnd {
+		t.Fatal("still at the end")
+	}
+	id0, into0 := h.topItem()
+	for _, sc := range []float32{2, 1, 2.5, 1} {
+		h.sc = sc
+		h.frames(10)
+		id, into := h.topItem()
+		if id != id0 || math.Abs(into-into0) > 1 {
+			t.Fatalf("at scale %v the view starts %.1f pt into item %d, was %.1f pt into item %d", sc, into, id, into0, id0)
+		}
+		if h.v.AtEnd {
+			t.Fatalf("at scale %v the list jumped to its end", sc)
+		}
+	}
+}
