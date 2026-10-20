@@ -51,8 +51,14 @@ func TextInput(v objc.ID) TextClient { return TextClient{View: v} }
 // replaces (NoRange for none).
 func (c TextClient) SetMarkedText(s string, sel, repl Range) {
 	str, m := objc.Str(s), objc.Sel("setMarkedText:selectedRange:replacementRange:") // before the call is assembled: they use the same frame
-	objc.F.Reset().Arg(uintptr(c.View)).Arg(uintptr(m)).
-		Arg(uintptr(str)).Arg(uintptr(sel.Loc)).Arg(uintptr(sel.Len)).Arg(uintptr(repl.Loc)).Arg(uintptr(repl.Len)).Call(objc.MsgSend)
+	f := objc.F.Reset().Arg(uintptr(c.View)).Arg(uintptr(m)).
+		Arg(uintptr(str)).Arg(uintptr(sel.Loc)).Arg(uintptr(sel.Len))
+	if runtime.GOARCH == "amd64" {
+		// SysV: after five integer arguments the replacement NSRange does not
+		// fit in the one register left (r9), so it is wholly on the stack.
+		f.Arg(0)
+	}
+	f.Arg(uintptr(repl.Loc)).Arg(uintptr(repl.Len)).Call(objc.MsgSend)
 }
 
 // InsertText is insertText:replacementRange: with s; repl is the range it
