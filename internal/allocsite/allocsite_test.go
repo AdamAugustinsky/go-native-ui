@@ -19,19 +19,44 @@ func allocateHere(n int) {
 	}
 }
 
+// allocateAt allocates once, depth calls down: each depth is a call stack of
+// its own.
+//
+//go:noinline
+func allocateAt(depth int) {
+	if depth > 0 {
+		allocateAt(depth - 1)
+		return
+	}
+	sink = append(sink, new([3]uint64))
+}
+
 // Profiling every allocation keeps the gates' counters exact: a new call
-// stack's bucket is not a heap allocation.
+// stack's bucket is not a heap allocation. The counters are the process's,
+// so another goroutine's allocation can land in an attempt (CI: 13 on a
+// loaded runner); each attempt is a stack the profile has not seen, and one
+// must count exactly its own allocation. A bucket that counted would be in
+// every attempt.
 func TestProfilingDoesNotAllocate(t *testing.T) {
 	defer allocsite.Enable()()
-	sink = make([]*[3]uint64, 0, 8)
-	var m0, m1 runtime.MemStats
-	runtime.GC()
-	runtime.ReadMemStats(&m0)
-	allocateHere(1) // a stack the profile has not seen
-	runtime.ReadMemStats(&m1)
-	if d := m1.Mallocs - m0.Mallocs; d != 1 {
-		t.Fatalf("one allocation counted as %d", d)
+	sink = make([]*[3]uint64, 0, 64)
+	var counts []uint64
+	for depth := 1; depth <= 20; depth++ {
+		var m0, m1 runtime.MemStats
+		runtime.GC()
+		runtime.ReadMemStats(&m0)
+		allocateAt(depth)
+		runtime.ReadMemStats(&m1)
+		d := m1.Mallocs - m0.Mallocs
+		if d == 1 {
+			return
+		}
+		if d == 0 {
+			t.Fatal("an allocation was not counted")
+		}
+		counts = append(counts, d)
 	}
+	t.Fatalf("one allocation on a new stack never counted as 1: %v", counts)
 }
 
 func TestDiffClassifies(t *testing.T) {
