@@ -267,6 +267,7 @@ func (k *Kit) beginList(label string, st *ListState, rows int, table bool, o Lis
 	// comes from the geometry
 	ps := c.PeekSignal(skey)
 	l.s = c.BoxKeyed(flags, skey, nil)
+	c.SetObscured(l.s, l.top, 0) // what covers the inset is out of view: reveals keep rows below it
 	c.Push(l.s)
 	l.Focused = c.Focused(l.s) && !k.Disabled()
 	l.ring = l.Focused && c.FocusVisible()
@@ -428,7 +429,7 @@ func (l *List) moveTo(r int, extend bool) {
 func (l *List) scrollTo(r int) {
 	w := l.k.c.Rect(l.s)
 	top := l.padT + l.top + float32(r)*l.rowH
-	l.k.c.ScrollIntoView(l.s, [4]float32{0, top - l.top, w[2] - w[0], top + l.rowH})
+	l.k.c.ScrollIntoView(l.s, [4]float32{0, top, w[2] - w[0], top + l.rowH})
 }
 
 // input applies the pointer and keys of this frame to the selection.
@@ -495,7 +496,7 @@ func (l *List) input(ps ui.Signal, rect [4]float32) {
 	if !l.Focused || l.Rows == 0 {
 		return
 	}
-	view := rect[3] - rect[1]
+	view := rect[3] - rect[1] - l.top // the rows under the inset are not in view
 	page := max(int(view/l.rowH)-1, 1)
 	cur := l.cursorRow()
 	was := l.Changed

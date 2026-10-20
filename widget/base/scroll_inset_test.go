@@ -78,3 +78,55 @@ func TestListInsetRowsUnderAndReveal(t *testing.T) {
 		t.Fatalf("Reveal(10): row 10 at %v, want it just below the inset (%v)", top, inset)
 	}
 }
+
+// insetList builds a 200-row list in a 400×300 window at scale 1, under an
+// 80-pixel band (NextScrollInset), keeping its rows' keys.
+func insetList(t *testing.T) (*rig, *ListState, *[200]ui.Key) {
+	var st ListState
+	var keys [200]ui.Key
+	g := newRig(t, 400, 300, 1, func(k *Kit) {
+		k.NextScrollInset(80)
+		l := k.BeginList("rows", &st, 200, ListOpts{})
+		for r := l.First; r < l.Last; r++ {
+			rs := l.RowState(r, uint32(r))
+			keys[r] = rs.Key
+			l.BeginRow(&rs, nil, 0)
+		}
+		l.CloseRows()
+		k.CloseList(&l)
+	})
+	g.frames(2)
+	return g, &st, &keys
+}
+
+// An assistive technology's ActScrollIntoView on a row under the band brings
+// it below the band: the band covers the view's top (ui.Context.SetObscured).
+func TestListInsetAccessibilityReveal(t *testing.T) {
+	g, st, keys := insetList(t)
+	st.SetTopRow(20, 0)
+	g.frames(2)
+	if top := st.RowTop(18); top >= 80 {
+		t.Fatalf("row 18 at %v: want it under the band", top)
+	}
+	g.in.PushAction(ui.SemRequest{Key: keys[18], Action: ui.ActScrollIntoView})
+	g.frames(30)
+	if top := st.RowTop(18); top < 79.5 || top > 80.5 {
+		t.Fatalf("revealed, row 18 at %v: want it just below the band (80)", top)
+	}
+}
+
+// Page Down moves by the rows in view below the band, not by the box's
+// height: a page is (300 - 80) / row height less one row.
+func TestListInsetPaging(t *testing.T) {
+	g, st, _ := insetList(t)
+	rowH := st.RowTop(1) - st.RowTop(0)
+	g.click(200, st.RowTop(0)+rowH/2) // row 0, the list focused
+	if it, ok := st.Sel.Cursor(); !ok || it != 0 {
+		t.Fatalf("the click selected %v, %v: want row 0", it, ok)
+	}
+	g.key(ui.KeyPageDown, 0)
+	want := uint32(int((300-80)/rowH) - 1)
+	if it, _ := st.Sel.Cursor(); it != want {
+		t.Fatalf("Page Down moved to row %d, want %d ((300 - 80) / %v - 1)", it, want, rowH)
+	}
+}

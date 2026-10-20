@@ -337,10 +337,14 @@ func BeginToolbar(k *base.Kit, label string, o ToolbarOpts) Toolbar {
 			c.BoxKeyed(ui.DrawBackground|base.Floating, ui.KeyN(tb.key, 1), nil)
 		}
 	}
+	// the band covers what scrolls under it: the pointer's hover and clicks
+	// and the wheel stop at it (its capsules take theirs), but a press on it
+	// still moves the window (a WindowDrag area, not a drag map's block)
 	theme.At(c, 0, 0, tb.w, h)
 	c.NextRole(ui.RoleGroup)
 	c.NextSemName(label)
-	tb.band = c.BoxKeyed(ui.WindowDrag|base.Floating, tb.key, nil)
+	tb.band = c.BoxKeyed(ui.WindowDrag|ui.Hoverable|base.Floating, tb.key, nil)
+	c.StopWheel(tb.band)
 	c.Push(tb.band)
 	if o.Traffic {
 		tb.trafficLights()

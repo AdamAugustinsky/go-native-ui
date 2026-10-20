@@ -72,6 +72,8 @@ type box struct {
 	justify     Justify
 	auditOff    AuditMask  // the checks of Audit the box is exempt from (NextAuditExempt)
 	pad         [4]float32 // l, t, r, b
+	obscured    [2]float32 // a scroll box's view covered at its top and bottom (SetObscured)
+	stopWheel   bool       // the wheel over the box scrolls nothing beneath it (StopWheel)
 	gap         float32
 	pref        [2]Size
 	fixed       [2]float32

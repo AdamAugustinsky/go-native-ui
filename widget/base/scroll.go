@@ -110,6 +110,7 @@ func (k *Kit) BeginScroll(label string, st *ScrollState, axes ScrollAxes) Scroll
 		c.NextPadding(0, st.top, 0, 0)
 	}
 	s := c.BoxKeyed(fl, skey, nil)
+	c.SetObscured(s, st.top, 0)
 	c.Push(s)
 	return ScrollView{Outer: o, Inner: s, State: st, Axes: axes, TopInset: st.top}
 }
