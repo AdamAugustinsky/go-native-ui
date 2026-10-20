@@ -38,8 +38,8 @@ func TestGateCatastrophicTimes(t *testing.T) {
 	}
 }
 
-// A slow frame in one session only (the host took the processor: CI's 7.8
-// and 14.9 ms single frames) passes; one in every session fails.
+// A slow frame in one session only (a one-off of the host's) passes; one in
+// every session fails.
 func TestGateMaximaAcrossSessions(t *testing.T) {
 	const s = 3
 	maxList, maxEdit := float64(s*defaultMaxListUs), float64(s*defaultMaxEditUs)

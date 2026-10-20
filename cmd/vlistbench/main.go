@@ -196,10 +196,9 @@ func gateFailures(r report, allowUnpaced bool, maxList, maxEdit float64) []strin
 		f = append(f, fmt.Sprintf("the list's work per frame has a P99 of %.0f µs, budget %.0f", r.ListWorkUs.P99, maxList))
 	}
 	// The maxima: every window is a whole session, so a frame of the
-	// program's that is too slow is in each of them, while a frame the host
-	// stole the processor from (a shared runner's vCPU: thread CPU time
-	// includes it; CI saw 7.8 and 14.9 ms single frames with a P99 of
-	// 1.4 ms) is in one. The gate fails when every window had a frame over
+	// program's that is too slow is in each of them, while a one-off of the
+	// host's (the vCPU taken away: thread CPU time includes it on a virtual
+	// machine) is in one. The gate fails when every window had a frame over
 	// the budget.
 	if lm := leastOf(r.ListWorkMaxUs, r.ListWorkUs.Max); maxList > 0 && lm > maxList {
 		f = append(f, fmt.Sprintf("a frame spent over %.0f µs in the list's work in each of %d sessions (%.0f µs at most), budget %.0f", lm, max(len(r.ListWorkMaxUs), 1), r.ListWorkUs.Max, maxList))
