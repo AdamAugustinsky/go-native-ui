@@ -420,6 +420,10 @@ func (k *Tickets) record(tk Ticket) (*record, int, uint32, bool) {
 // record. It reports false for a ticket that is not reserved any more
 // (completed, or cancelled): nothing is stored then.
 func (k *Tickets) Complete(tk Ticket, a, b int64, data []byte) bool {
+	if !enterGate() {
+		return false
+	}
+	defer leaveGate()
 	r, i, gen, ok := k.record(tk)
 	if !ok || !r.word.CompareAndSwap(uint64(gen)<<32|stReserved, uint64(gen)<<32|stWriting) {
 		return false
@@ -482,6 +486,11 @@ func NewRing(src Source, n, budget int) *Ring {
 // up to the ring's byte budget in all, so a steady flow does not allocate.
 func (r *Ring) Offer(a, b int64, data []byte) bool {
 	t := r.t
+	if !enterGate() {
+		t.refused.Add(1)
+		return false
+	}
+	defer leaveGate()
 	n := int64(len(data))
 	for {
 		u := t.used.Load()
@@ -530,6 +539,10 @@ func NewObservation(src Source) *Observation {
 // unless one is queued already. Any goroutine; it allocates nothing.
 func (o *Observation) Set(a, b int64) {
 	t := o.t
+	if !enterGate() {
+		return
+	}
+	defer leaveGate()
 	for { // seqlock writer: one writer at a time
 		s := t.seq.Load()
 		if s&1 == 0 && t.seq.CompareAndSwap(s, s+1) {
@@ -602,6 +615,11 @@ func PreparePosts() { postTable() }
 // tries again later.
 func PostApp(e AppEvent, data []byte) bool {
 	t := postTable()
+	if !enterGate() {
+		t.refused.Add(1)
+		return false
+	}
+	defer leaveGate()
 	if len(data) > t.maxData {
 		t.refused.Add(1)
 		return false
@@ -693,6 +711,31 @@ func (q *readyQueue) headReady() bool {
 // publishing it (tests: a producer paused there).
 var testHookReadyClaimed func()
 
+// gate is the producers' shutdown boundary (FlushApp). Every producer enters
+// before it claims a record and leaves once its reference is published; once
+// the gate is closed, producers refuse what they are given (PostApp and
+// Offer report false, a completion is not stored), and the last drain waits
+// for the producers inside to leave. Setting a sink opens it again.
+var gate struct {
+	closed   atomic.Bool
+	inflight atomic.Int64
+}
+
+func enterGate() bool {
+	gate.inflight.Add(1)
+	if gate.closed.Load() {
+		gate.inflight.Add(-1)
+		return false
+	}
+	return true
+}
+
+func leaveGate() { gate.inflight.Add(-1) }
+
+// flushWait bounds how long the last drain waits for a producer inside the
+// gate (one preempted between its claim and its publication).
+const flushWait = 2 * time.Second
+
 // ---- The dispatcher ----
 
 var dispatch struct {
@@ -711,8 +754,14 @@ var dispatch struct {
 }
 
 // SetAppSink makes s the receiver of the application object's events. Main
-// thread; nil detaches (events then wait on their records).
-func SetAppSink(s AppSink) { dispatch.sink = s }
+// thread; nil detaches (events then wait on their records). A receiver opens
+// the producers' gate again (a new run after an earlier one's last drain).
+func SetAppSink(s AppSink) {
+	dispatch.sink = s
+	if s != nil {
+		gate.closed.Store(false)
+	}
+}
 
 // signalApp tells the dispatcher there is work, from any thread: the first
 // signal after a dispatch reaches the OS, the others coalesce.
@@ -791,20 +840,45 @@ type nativeEv struct {
 	off, n int
 }
 
-// FlushApp delivers everything that is ready now, also while a frame holds
-// dispatch, without the safe-point work: the last delivery before the
-// process ends. It does nothing inside a delivery (what is queued could not
-// be delivered in order). Main thread.
+// FlushApp is the last delivery, before the process ends or Main returns:
+// it closes the producers' gate (Post refuses from then on), waits for the
+// producers inside it to publish (at most flushWait) and delivers everything
+// they and the others queued, also while a frame holds dispatch, without the
+// safe-point work. An unpublished head is not taken for an empty queue: the
+// drain ends when no producer is inside and nothing is queued. It does
+// nothing inside a delivery (what is queued could not be delivered in
+// order). Main thread.
 func FlushApp() {
 	s := dispatch.sink
 	if dispatch.running || s == nil {
 		return
 	}
+	gate.closed.Store(true)
 	dispatch.running = true
-	for i := 0; i < 8 && (len(natives.evs) > 0 || ready.headReady()); i++ {
+	deadline := time.Now().Add(flushWait)
+	for {
 		deliverReady(s)
+		if gate.inflight.Load() == 0 && ready.pending() == 0 && len(natives.evs) == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(50 * time.Microsecond)
 	}
 	dispatch.running = false
+}
+
+// EndApp ends the application object's part before Main returns: the quit
+// state is settled (on macOS every suspended quit Apple event is answered, a
+// terminate: still waiting is refused, and the open dialogs and sheets end as
+// cancelled), then the last drain delivers what was accepted (FlushApp).
+// After it nothing more is delivered; the caller sends its final event.
+// Main thread.
+func EndApp() {
+	osEndApp()
+	resetQuit()
+	FlushApp()
 }
 
 // HoldApp holds app-wide dispatch while on: the app is drawing a frame.
@@ -919,7 +993,7 @@ func DeliveredApp() uint64 { return dispatch.delivered }
 // request is being delivered is kept and returned by the delegate method;
 // only without one is the answer deferred.
 var quitState struct {
-	phase    int // quitIdle, quitAsking, quitLater
+	phase    int // quitIdle, quitAsking, quitLater, quitCommitted
 	answer   int // 0 none, 1 allow, 2 refuse
 	serial   uint64
 	reason   QuitReason
@@ -937,6 +1011,9 @@ const (
 	quitIdle = iota
 	quitAsking
 	quitLater
+	// quitCommitted: the quit was allowed and the native termination is on
+	// its way (macOS): a later request neither asks again nor replaces it.
+	quitCommitted
 )
 
 // QuitPending reports whether a quit request is waiting for its answer (the
@@ -1014,6 +1091,16 @@ func deferQuit(reason QuitReason) {
 // TakeQuitRequest returns a quit reason RequestQuit left for the app's loop,
 // 0 for none. Main thread.
 func TakeQuitRequest() QuitReason { return QuitReason(dispatch.quitAsked.Swap(0)) }
+
+// resetQuit ends any quit state: nothing is being decided or committed.
+func resetQuit() {
+	quitState.phase, quitState.answer = quitIdle, 0
+	if quitState.timer != nil {
+		quitState.timer.Stop()
+		quitState.timer = nil
+	}
+	dispatch.quitAsked.Store(0)
+}
 
 // beginQuit delivers the quit request (class 1) and returns the latched
 // answer: 1 allow, 2 refuse, 0 none (deferred).

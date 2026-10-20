@@ -186,13 +186,20 @@ func TestDialogsPresentAfterTheFrame(t *testing.T) {
 type recordingHandler struct {
 	DefaultHandler
 	got []Event
+	res []platform.DialogResult // each dialog event decoded from its native payload while delivered
 }
 
-func (h *recordingHandler) Event(a *App, e *Event) { h.got = append(h.got, *e) }
+func (h *recordingHandler) Event(a *App, e *Event) {
+	h.got = append(h.got, *e)
+	if e.Kind == EvService && e.Source == platform.SourceDialog {
+		h.res = append(h.res, platform.DialogResultOf(&platform.AppEvent{Kind: platform.AppEvService, Source: e.Source, ID: e.ID, A: e.A, B: e.B}, e.Data()))
+	}
+}
 
 // A sheet a test's dialog target ended (DebugDialogEnded) reaches the app as
 // a native one does: the result under the app's ticket for TakeDialog, and
-// EvService from SourceDialog with that ticket to the Handler.
+// EvService from SourceDialog with that ticket to the Handler, carrying the
+// native encoding (kind, outcome, button, suppression; a panel's paths).
 func TestDebugDialogEndedReachesTheHandler(t *testing.T) {
 	f := &fakeDialogs{}
 	h := &recordingHandler{}
@@ -201,16 +208,49 @@ func TestDebugDialogEndedReachesTheHandler(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	tk2, _ := a.OpenPanel(platform.OpenSpec{})
 	a.flushDialogs()
-	a.DebugDialogEnded(platform.DialogResult{Ticket: 100, Kind: platform.DialogAlert, Outcome: platform.DialogAnswered, Button: 1}) // the fake's ticket
-	if len(h.got) != 1 || h.got[0].Kind != EvService || h.got[0].Source != platform.SourceDialog || h.got[0].ID != uint64(tk) {
-		t.Fatalf("the handler got %+v, want EvService from SourceDialog with ID %d", h.got, tk)
+	a.DebugDialogEnded(platform.DialogResult{Ticket: 100, Kind: platform.DialogAlert, Outcome: platform.DialogAnswered, Button: 1, Suppressed: true}) // the fake's tickets
+	a.DebugDialogEnded(platform.DialogResult{Ticket: 200, Kind: platform.DialogOpen, Outcome: platform.DialogAnswered, Paths: []string{"/a b", "/c"}})
+	if len(h.got) != 2 || h.got[0].Kind != EvService || h.got[0].Source != platform.SourceDialog || h.got[0].ID != uint64(tk) || h.got[1].ID != uint64(tk2) {
+		t.Fatalf("the handler got %+v, want EvService from SourceDialog with IDs %d, %d", h.got, tk, tk2)
+	}
+	if r := h.res[0]; r.Kind != platform.DialogAlert || r.Outcome != platform.DialogAnswered || r.Button != 1 || !r.Suppressed {
+		t.Errorf("the alert's event decodes to %+v", r)
+	}
+	if r := h.res[1]; r.Kind != platform.DialogOpen || r.Outcome != platform.DialogAnswered || len(r.Paths) != 2 || r.Paths[0] != "/a b" || r.Paths[1] != "/c" {
+		t.Errorf("the panel's event decodes to %+v", r)
 	}
 	if r, ok := a.TakeDialog(); !ok || r.Ticket != tk || r.Button != 1 {
 		t.Fatalf("TakeDialog: %+v (ok %v)", r, ok)
 	}
 	a.DebugDialogEnded(platform.DialogResult{Ticket: 100, Kind: platform.DialogAlert}) // ended already: dropped
-	if len(h.got) != 1 {
+	if len(h.got) != 2 {
 		t.Fatalf("a result for a dialog not on screen was delivered: %+v", h.got)
+	}
+}
+
+// A dialog the window refuses at its safe point reaches the Handler as a
+// native completion does, once: EvService from SourceDialog with its ticket,
+// cancelled; TakeDialog has the error. So does a dialog still queued when the
+// app ends.
+func TestDialogThatCannotShowReachesTheHandler(t *testing.T) {
+	f := &fakeDialogs{err: platform.ErrDialogBusy}
+	h := &recordingHandler{}
+	a := &App{UI: ui.New(fakeui.New()), dlgT: f, handler: h}
+	tk, _ := a.Alert(platform.AlertSpec{Message: "m", Buttons: []string{"OK"}})
+	a.flushDialogs()
+	a.flushDialogs()
+	if len(h.got) != 1 || h.got[0].ID != uint64(tk) || h.res[0].Outcome != platform.DialogCancelled || h.res[0].Kind != platform.DialogAlert {
+		t.Fatalf("the handler got %+v (%+v), want one cancelled EvService for ticket %d", h.got, h.res, tk)
+	}
+	if r, ok := a.TakeDialog(); !ok || r.Ticket != tk || r.Err != platform.ErrDialogBusy {
+		t.Fatalf("TakeDialog: %+v (ok %v)", r, ok)
+	}
+	f.err = nil
+	tk2, _ := a.SavePanel(platform.SaveSpec{})
+	a.cancelQueuedDialogs() // the app ends before the safe point
+	if len(h.got) != 2 || h.got[1].ID != uint64(tk2) || h.res[1].Outcome != platform.DialogCancelled || len(f.calls) != 1 {
+		t.Fatalf("the handler got %+v (%+v), calls %v", h.got, h.res, f.calls)
 	}
 }

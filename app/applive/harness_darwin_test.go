@@ -282,24 +282,18 @@ func quitLater() {
 	})
 }
 
-// sendQuitWithReply sends a quit Apple event to this process and waits for
-// its reply, as the Dock or loginwindow would; logout adds kAEQuitReason
-// (kAELogOut). An event sent to the process itself is handled inside the
-// send, on the sending thread: this one, the main thread, from the pump
-// (later). It returns the reply's error number (0: none) or, when the send
-// failed, sendErr (the NSError's code). A handler that suspends the event
-// answers it after the send returned, which then fails with errAETimeout
-// (-1712).
-func sendQuitWithReply(logout bool) (errn, sendErr int) {
+// sendQuitWithReply sends the Dock's Quit (a quit Apple event without a
+// reason) to this process and waits for its reply. An event sent to the
+// process itself is handled inside the send, on the sending thread: the main
+// thread here. It returns the reply's error number (0: none) or, when the
+// send failed, sendErr (the NSError's code). A sender in another process is
+// startQuitSender.
+func sendQuitWithReply() (errn, sendErr int) {
 	cls := objc.Cls("NSAppleEventDescriptor")
 	target := objc.Send(cls, objc.Sel("currentProcessDescriptor"))
 	selMake := objc.Sel("appleEventWithEventClass:eventID:targetDescriptor:returnID:transactionID:")
-	ev := objc.ID(objc.F.Reset().Arg(uintptr(cls)).Arg(uintptr(selMake)).Arg(0x61657674).Arg(0x71756974). // 'aevt' 'quit'
-														Arg(uintptr(target)).Arg(^uintptr(0)).Arg(0).Call(objc.MsgSend).R0())
-	if logout {
-		why := objc.Send1(cls, objc.Sel("descriptorWithEnumCode:"), 0x6C6F676F)                  // kAELogOut 'logo'
-		objc.Send2(ev, objc.Sel("setAttributeDescriptor:forKeyword:"), uintptr(why), 0x7768793F) // keyAEQuitReason 'why?'
-	}
+	ev := objc.ID(objc.F.Reset().Arg(uintptr(cls)).Arg(uintptr(selMake)).Arg(fourCC("aevt")).Arg(fourCC("quit")).
+		Arg(uintptr(target)).Arg(^uintptr(0)).Arg(0).Call(objc.MsgSend).R0())
 	selSend := objc.Sel("sendEventWithOptions:timeout:error:")
 	errOut := new(uintptr)
 	reply := objc.ID(objc.F.Reset().Arg(uintptr(ev)).Arg(uintptr(selSend)).Arg(3 /* kAEWaitReply */).ArgF64(30).
@@ -307,15 +301,14 @@ func sendQuitWithReply(logout bool) (errn, sendErr int) {
 	if *errOut != 0 {
 		return 0, int(int64(objc.Send(objc.ID(*errOut), objc.Sel("code"))))
 	}
-	if d := objc.Send1(reply, objc.Sel("paramDescriptorForKeyword:"), 0x6572726E); d != 0 { // 'errn'
+	if d := objc.Send1(reply, objc.Sel("paramDescriptorForKeyword:"), fourCC("errn")); d != 0 {
 		errn = int(int32(uint32(objc.Send(d, objc.Sel("int32Value")))))
 	}
 	return errn, 0
 }
 
-// postCmdQ posts ⌘Q to window number win (0: no window), as the keyboard
-// would.
-func postCmdQ(win uintptr) {
+// cmdQ is ⌘Q as the keyboard sends it, to window number win (0: none).
+func cmdQ(win uintptr) objc.ID {
 	s := objc.Str("q")
 	cls := objc.Cls("NSEvent")
 	sel := objc.Sel("keyEventWithType:location:modifierFlags:timestamp:windowNumber:context:characters:charactersIgnoringModifiers:isARepeat:keyCode:")
@@ -327,8 +320,20 @@ func postCmdQ(win uintptr) {
 	} else {
 		f.Arg(0).Arg(code)
 	}
-	ev := objc.ID(f.Call(objc.MsgSend).R0())
-	objc.Send2(nsApp(), objc.Sel("postEvent:atStart:"), uintptr(ev), 0)
+	return objc.ID(f.Call(objc.MsgSend).R0())
+}
+
+// pressCmdQ hands ⌘Q to the main menu's key equivalents at once, as AppKit
+// does with the keyboard's: its Quit item acts before this returns.
+func pressCmdQ(win uintptr) bool {
+	menu := objc.Send(nsApp(), objc.Sel("mainMenu"))
+	return objc.SendBool1(menu, objc.Sel("performKeyEquivalent:"), uintptr(cmdQ(win)))
+}
+
+// postCmdQ posts ⌘Q to window number win (0: no window), as the keyboard
+// would.
+func postCmdQ(win uintptr) {
+	objc.Send2(nsApp(), objc.Sel("postEvent:atStart:"), uintptr(cmdQ(win)), 0)
 }
 
 // openPlainWindow opens a second, plain AppKit window (two windows of ours

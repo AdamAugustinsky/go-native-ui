@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"gonativeui/app"
+	"gonativeui/internal/objc"
+	"gonativeui/internal/testlock"
 	"gonativeui/ui"
 )
 
@@ -25,18 +27,26 @@ import (
 func TestBackgroundLaunchDrawsInactive(t *testing.T) {
 	for _, mode := range []string{"bg", "fg"} {
 		t.Run(mode, func(t *testing.T) {
+			testlock.Hold(t, "activation") // the activation is the system's to give one process at a time
 			r := launchBundle(t, "bgkey", mode == "bg", "MODE="+mode)
+			isBool := func(k string) bool { return r.get(k) == "true" || r.get(k) == "false" }
+			if r.get("done") != "1" || r.int("frames") < 1 || !isBool("first") || !isBool("first_active") || !isBool("focused") || !isBool("key") || !isBool("active") {
+				t.Fatalf("the scenario did not report a frame and its state, or did not finish: %v\n%s", r.kv, r.out)
+			}
+			if r.get("first") != r.get("first_active") { // a window not shown yet is key once shown if the app is active
+				t.Fatalf("the first frame's focus is not AppKit's state when it was drawn: %v\n%s", r.kv, r.out)
+			}
 			if r.get("key") != r.get("focused") {
 				t.Fatalf("the app's focus is not AppKit's key state: %v\n%s", r.kv, r.out)
 			}
 			if mode == "bg" && r.get("active") == "true" { // activated by the system all the same (a CI runner): when, is not known
 				t.Skipf("the app was activated although opened with open -g: %v", r.kv)
 			}
-			if r.get("first") != r.get("key") {
-				t.Fatalf("the first frame's focus is not AppKit's: %v\n%s", r.kv, r.out)
-			}
 			if mode == "bg" {
-				if r.get("after_key") != "true" || r.get("after_focused") != "true" {
+				if r.get("first") != "false" {
+					t.Fatalf("opened in the background, the first frame drew as key: %v\n%s", r.kv, r.out)
+				}
+				if r.get("activated") == "false" || r.get("after_key") != "true" || r.get("after_focused") != "true" {
 					t.Fatalf("after the activation: %v\n%s", r.kv, r.out)
 				}
 			}
@@ -146,6 +156,8 @@ func readResult(path string) result {
 // focusView records the window focus each frame saw (ui.Input.Focused).
 type focusView struct {
 	first, last atomic.Int32 // 0: no frame yet, 1 focused, 2 not
+	frames      atomic.Int64
+	firstActive atomic.Int32 // [NSApp isActive] when the first frame was built: 1 yes, 2 no
 }
 
 func (v *focusView) Build(c *ui.Context) {
@@ -153,8 +165,14 @@ func (v *focusView) Build(c *ui.Context) {
 	if c.Input().Focused {
 		f = 1
 	}
-	v.first.CompareAndSwap(0, f)
+	if v.first.CompareAndSwap(0, f) {
+		v.firstActive.Store(2)
+		if objc.SendBool(nsApp(), objc.Sel("isActive")) {
+			v.firstActive.Store(1)
+		}
+	}
 	v.last.Store(f)
+	v.frames.Add(1)
 	c.NextSize(ui.Pct(1), ui.Pct(1))
 	c.Box(0, "bg")
 }
@@ -190,7 +208,7 @@ func init() {
 			switch {
 			case e.Kind == app.EvPost && e.ID == 1:
 				st := a.Win.DebugState()
-				say("first=%s focused=%s key=%v active=%v", focusName(v.first.Load()), focusName(v.last.Load()), st.Key, st.AppActive)
+				say("first=%s first_active=%s focused=%s key=%v active=%v frames=%d", focusName(v.first.Load()), focusName(v.firstActive.Load()), focusName(v.last.Load()), st.Key, st.AppActive, v.frames.Load())
 				reported = true
 				if os.Getenv("MODE") == "fg" || st.AppActive {
 					a.Quit()
@@ -211,5 +229,6 @@ func init() {
 			return true
 		}
 		app.Main(app.AppConfig{KeepRunning: true}, h)
+		say("done=1") // the completion marker: the scenario ran to its end
 	}
 }

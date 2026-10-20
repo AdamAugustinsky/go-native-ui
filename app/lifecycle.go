@@ -180,9 +180,14 @@ func (a *App) bindApp(signals bool) error {
 func (a *App) unbindApp() { platform.SetAppSink(nil) }
 
 // finish delivers EvWillTerminate (if the system did not) and closes the
-// window.
+// window. Before that last event, as before the system's: the quit state is
+// settled (a suspended quit Apple event is answered, so a sender such as a
+// logout is not left waiting), every dialog ends as cancelled with its result
+// delivered, and what was accepted is delivered (platform.EndApp).
 func (a *App) finish() {
 	if !a.terminated {
+		platform.EndApp()
+		a.cancelQueuedDialogs()
 		a.terminated = true
 		a.deliver(&platform.AppEvent{Kind: platform.AppEvWillTerminate}, nil)
 	}

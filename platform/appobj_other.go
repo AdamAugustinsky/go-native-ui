@@ -41,6 +41,9 @@ func osReplyQuit(allow bool) {
 	}
 }
 
+// osEndApp has no native quit state to settle here.
+func osEndApp() {}
+
 // SetDockMenu does nothing here (no Dock).
 func SetDockMenu(spec *MenuSpec, idx int, state MenuState) {}
 

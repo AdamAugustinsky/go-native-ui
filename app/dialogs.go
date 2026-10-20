@@ -148,12 +148,37 @@ func (a *App) flushDialogs() {
 			plat, err = win.SavePanel(d.save)
 		}
 		if err != nil {
-			a.pushDialog(platform.DialogResult{Ticket: d.ticket, Kind: d.kind, Outcome: platform.DialogCancelled, Button: -1, Err: err})
+			a.dlgFailed = append(a.dlgFailed, platform.DialogResult{Ticket: d.ticket, Kind: d.kind, Outcome: platform.DialogCancelled, Button: -1, Err: err})
 			continue
 		}
 		a.dlgShown = append(a.dlgShown, shownDialog{app: d.ticket, plat: plat})
 	}
 	a.dlgQ = a.dlgQ[:0]
+	a.deliverFailedDialogs() // after the queue is reset: a Handler may ask for another
+}
+
+// cancelQueuedDialogs ends the dialogs asked for and not shown yet as
+// cancelled, as the app ends.
+func (a *App) cancelQueuedDialogs() {
+	for _, d := range a.dlgQ {
+		a.dlgFailed = append(a.dlgFailed, platform.DialogResult{Ticket: d.ticket, Kind: d.kind, Outcome: platform.DialogCancelled, Button: -1})
+	}
+	a.dlgQ = a.dlgQ[:0]
+	a.deliverFailedDialogs()
+}
+
+// deliverFailedDialogs delivers the results of the dialogs that ended without
+// being shown (the window refused them, or the app ended first) as a native
+// completion is: for TakeDialog, and to the Handler as an EvService from
+// SourceDialog with the dialog's ticket, once each.
+func (a *App) deliverFailedDialogs() {
+	for len(a.dlgFailed) > 0 {
+		r := a.dlgFailed[0]
+		a.dlgFailed = a.dlgFailed[:copy(a.dlgFailed, a.dlgFailed[1:])]
+		a.pushDialog(r)
+		pe, data := platform.DialogEvent(r)
+		a.deliver(&pe, data)
+	}
 }
 
 // TakeDialog returns the oldest dialog result not read yet, and false when

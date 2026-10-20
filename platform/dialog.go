@@ -187,6 +187,27 @@ func dialogA(kind DialogKind, out DialogOutcome, suppressed bool) int64 {
 	return a
 }
 
+// DialogEvent encodes r as a dialog's answer is delivered (the layout above):
+// an AppEvService from SourceDialog with r's ticket as ID, and its data. For
+// a dialog that ended without the system (one that could not be shown, a fake
+// in tests). r.Err is not encoded. It allocates the data of a panel's paths.
+func DialogEvent(r DialogResult) (AppEvent, []byte) {
+	e := AppEvent{Kind: AppEvService, Source: SourceDialog, ID: uint64(r.Ticket), A: dialogA(r.Kind, r.Outcome, r.Suppressed)}
+	var data []byte
+	switch {
+	case r.Kind == DialogAlert:
+		if r.Outcome == DialogAnswered {
+			e.B = int64(r.Button)
+		}
+	case r.Outcome == DialogAnswered:
+		e.B = int64(len(r.Paths))
+		for _, p := range r.Paths {
+			data = append(append(data, p...), 0)
+		}
+	}
+	return e, data
+}
+
 // DialogResultOf decodes a dialog's answer: an AppEvService with Source
 // SourceDialog, and its data. It allocates the path strings; a dialog result
 // is rare.

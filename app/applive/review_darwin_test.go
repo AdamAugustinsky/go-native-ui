@@ -5,6 +5,7 @@ package applive
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -65,47 +66,42 @@ func TestSheetResultsComeBeforeWillTerminate(t *testing.T) {
 	}
 }
 
-// A quit Apple event (the Dock's Quit, a logout) never presses an open
-// alert's first button: the quit is decided with the alert up; allowed (at
-// once or later), the alert ends as cancelled before EvWillTerminate;
-// refused, the alert stays and the reply carries userCanceledErr (-128),
-// which cancels a logout: the sender's reply for an answer given inside the
-// event, the suspended event's reply for a later one (resumed when the app
-// answers; resumed_reply 0 when allowed). A self-sent event is handled
-// inside the send, which a suspended event leaves with errAETimeout (-1712):
-// its reply comes later, which a sender in another process (loginwindow)
-// waits for.
+// A quit Apple event (the Dock's Quit, a logout), sent by another process
+// that waits for the reply, never presses an open alert's first button: the
+// quit is decided with the alert up; allowed (at once or later), the alert
+// ends as cancelled before EvWillTerminate and the sender's reply has no
+// error; refused, the alert stays and the sender's reply carries
+// userCanceledErr (-128), which cancels a logout. A later answer reaches the
+// sender through the suspended event, resumed with it.
 func TestQuitEventCancelsAnOpenAlert(t *testing.T) {
 	for _, reason := range []string{"dock", "logout"} {
 		for _, mode := range []string{"allow", "refuse", "laterallow", "laterrefuse"} {
 			t.Run(reason+"/"+mode, func(t *testing.T) {
 				t.Parallel()
-				r := child(t, "quitalert", 60*time.Second, "REASON="+reason, "MODE="+mode)
+				out := filepath.Join(t.TempDir(), "sender.txt")
+				r := child(t, "quitalert", 60*time.Second, "REASON="+reason, "MODE="+mode, "OUT="+out)
 				want := "2" // QuitDock
 				if reason == "logout" {
 					want = "3" // QuitLogout
 				}
-				ok := r.code == 0 && r.get("reason") == want && r.get("on_main") == "true"
+				ok := r.code == 0 && r.get("reason") == want
 				allow := strings.HasSuffix(mode, "allow")
 				if strings.HasPrefix(mode, "later") {
-					resumed := "0"
-					if !allow {
-						resumed = "-128"
-					}
-					ok = ok && r.get("open_while_pending") == "true" && r.get("resumed_reply") == resumed && r.get("send_err") == "-1712"
-				} else if !allow {
-					ok = ok && r.get("errn") == "-128" && r.get("send_err") == "0"
+					ok = ok && r.get("open_while_pending") == "true"
 				}
+				// What the sender, another process, received.
+				sent := readSender(out, 20*time.Second)
 				if allow {
-					ok = ok && r.get("order") == "shown,quit,dialog:cancelled,willterminate" && r.get("main") == ""
+					ok = ok && r.get("order") == "shown,quit,dialog:cancelled,willterminate" && r.get("main") == "" &&
+						sent["errn"] == "0" && sent["send_err"] == "0"
 				} else {
 					ok = ok && r.get("alive") == "1" && r.get("sheet_open") == "true" && r.get("pending") == "false" &&
-						r.get("quit_reply") == "-128" && r.get("order") == "shown,quit"
+						r.get("order") == "shown,quit" && sent["errn"] == "-128" && sent["send_err"] == "0"
 				}
 				if !ok {
-					t.Fatalf("exit %d, results %v\n%s", r.code, r.kv, r.out)
+					t.Fatalf("exit %d, results %v, sender %v\n%s", r.code, r.kv, sent, r.out)
 				}
-				t.Logf("%v", r.kv)
+				t.Logf("%v sender %v", r.kv, sent)
 			})
 		}
 	}
@@ -330,6 +326,7 @@ func init() {
 		mode := os.Getenv("MODE")
 		deferred := strings.HasPrefix(mode, "later")
 		allow := strings.HasSuffix(mode, "allow")
+		out := os.Getenv("OUT")
 		var (
 			order []string
 			win   objc.ID
@@ -353,17 +350,20 @@ func init() {
 				if sheetOpen() {
 					order = append(order, "shown")
 				}
-				logout := os.Getenv("REASON") == "logout"
-				later(func() {
-					errn, sendErr := sendQuitWithReply(logout)
-					say("errn=%d send_err=%d", errn, sendErr)
-					if !allow && !deferred {
+				reason := ""
+				if os.Getenv("REASON") == "logout" {
+					reason = "rlgo" // kAEReallyLogOut, as loginwindow sends it
+				}
+				startQuitSender(os.Getpid(), reason, out)
+				if !allow { // refused: the app runs on, and reports once the sender has its reply
+					go func() {
+						readSender(out, 30*time.Second)
 						postEvent(50, "")
-					}
-				})
+					}()
+				}
 			case e.Kind == app.EvQuitRequested:
 				order = append(order, "quit")
-				say("reason=%d on_main=%v", e.A, objc.SendBool(objc.Cls("NSThread"), objc.Sel("isMainThread")))
+				say("reason=%d", e.A)
 				if deferred {
 					after(600*time.Millisecond, 40)
 				} else {
@@ -372,10 +372,6 @@ func init() {
 			case e.Kind == app.EvPost && e.ID == 40:
 				say("open_while_pending=%v", sheetOpen() && a.QuitPending() && len(order) == 2)
 				a.ReplyQuit(quitID, allow)
-				say("resumed_reply=%d", platform.LastQuitEventReply())
-				if !allow {
-					after(300*time.Millisecond, 50)
-				}
 			case e.Kind == app.EvService && e.Source == platform.SourceDialog:
 				r, _ := a.TakeDialog()
 				out := fmt.Sprintf("button%d", r.Button)
@@ -387,10 +383,8 @@ func init() {
 				order = append(order, "willterminate")
 				say("order=%s", strings.Join(order, ","))
 			case e.Kind == app.EvPost && e.ID == 50:
-				if !allow { // refused: the alert is still up, the app runs on
-					say("alive=1 sheet_open=%v pending=%v quit_reply=%d order=%s", sheetOpen(), a.QuitPending(), platform.LastQuitEventReply(), strings.Join(order, ","))
-					os.Exit(0)
-				}
+				say("alive=1 sheet_open=%v pending=%v order=%s", sheetOpen(), a.QuitPending(), strings.Join(order, ","))
+				os.Exit(0)
 			default:
 				return false
 			}

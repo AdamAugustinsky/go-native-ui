@@ -37,7 +37,8 @@ func (a *App) DebugSetDialogs(t DialogTarget) {
 // result for a dialog that is not on screen is dropped, as a withdrawn
 // dialog's is. Main thread.
 func (a *App) DebugDialogEnded(r platform.DialogResult) {
-	a.dialogEnded(r, &platform.AppEvent{Kind: platform.AppEvService, Source: platform.SourceDialog}, nil)
+	pe, data := platform.DialogEvent(r)
+	a.dialogEnded(r, &pe, data)
 }
 
 // DebugFlushDialogs shows the dialogs queued so far, as the loop does after a

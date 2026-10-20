@@ -101,6 +101,7 @@ func (o LiveOptions) withDefaults() LiveOptions {
 // waiters after each, and keeps a frame coming while one is open.
 type sessionBuilder struct {
 	app.Builder
+	t     testing.TB
 	ap    atomic.Pointer[app.App]
 	built atomic.Int64
 	hold  atomic.Bool   // test seam: frames are built but not counted, as if none were delivered
@@ -119,6 +120,10 @@ type waiter struct {
 
 func (b *sessionBuilder) Init(a *app.App) error {
 	b.ap.Store(a)
+	// The input the test posts is a key window's, whether or not the system
+	// activated the test binary (platform.DebugAssumeKey); from Init, so the
+	// first frame is drawn key too.
+	b.t.Cleanup(platform.DebugAssumeKey(a.Win))
 	initDo()
 	if in, ok := b.Builder.(app.Initer); ok {
 		return in.Init(a)
@@ -176,13 +181,10 @@ func StartLiveWith(t testing.TB, cfg app.Config, b app.Builder, o LiveOptions) *
 	if !liveActive.CompareAndSwap(false, true) {
 		t.Fatal("widgettest: a LiveApp is already running (the platform has one window), or an earlier one could not be closed")
 	}
-	l := &LiveApp{t: t, lim: o.withDefaults(), end: make(chan struct{}), sb: &sessionBuilder{Builder: b, first: make(chan struct{})}}
+	l := &LiveApp{t: t, lim: o.withDefaults(), end: make(chan struct{}), sb: &sessionBuilder{Builder: b, t: t, first: make(chan struct{})}}
 	go func() {
 		defer close(l.end)
-		OnMain(func() {
-			platform.DebugAssumeKey(true) // the input posted to the window is a key window's, activated or not
-			_, l.err = app.RunWith(cfg, l.sb, app.RunOptions{})
-		})
+		OnMain(func() { _, l.err = app.RunWith(cfg, l.sb, app.RunOptions{}) })
 	}()
 	t.Cleanup(l.Close) // before the wait: a start that fails still ends the run
 	timer := time.NewTimer(l.lim.Start)

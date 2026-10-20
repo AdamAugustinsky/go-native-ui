@@ -196,6 +196,7 @@ func (w *Window) Native() Native {
 
 // Close closes the window.
 func (w *Window) Close() {
+	forgetAssumedKey(w)
 	w.closeAux() // sheets first: a window closed under a sheet never calls its completion
 	objc.Send(w.link, selInvalidate)
 	objc.Send(w.link, selReleaseObj) // Open retained the view link; attachMetalLink owns its link
@@ -218,7 +219,7 @@ func (w *Window) Close() {
 // whether the app is active. The app starts its input state from it, before
 // the first frame, and EvFocus follows every change.
 func (w *Window) Focused() bool {
-	if assumeKey {
+	if keyAssumed(w) {
 		return true
 	}
 	if objc.SendBool(w.win, selIsVisible) {
@@ -226,14 +227,3 @@ func (w *Window) Focused() bool {
 	}
 	return objc.SendBool(w.app, selIsActiveApp)
 }
-
-// assumeKey is DebugAssumeKey's state.
-var assumeKey bool
-
-// DebugAssumeKey makes the window count as the key window whatever AppKit
-// says (on), for live tests that post input to the window of a process the
-// system did not activate (a test binary started from a shell), or that run
-// beside other test processes that take the activation: Focused reports true
-// and losing the key window sends no EvFocus. Off (the default), the focus is
-// AppKit's. Main thread, before the window opens.
-func DebugAssumeKey(on bool) { assumeKey = on }

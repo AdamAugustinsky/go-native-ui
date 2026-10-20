@@ -134,17 +134,18 @@ type App struct {
 
 	// Cursor regions and the titlebar drag map handed to the window after
 	// every frame (regions.go); the buffers are reused.
-	curUI    []ui.CursorRegion
-	curPlat  []platform.CursorRegion
-	dragUI   []ui.DragRegion
-	dragPl   []platform.DragRegion
-	tipUI    []ui.TooltipRegion // native tooltip regions (regions.go), reused
-	tipPl    []platform.TooltipRegion
-	dlg      []platform.DialogResult // dialog results not taken yet (dialogs.go)
-	dlgQ     []pendingDialog         // dialogs queued for the end of the frame
-	dlgShown []shownDialog           // dialogs on screen
-	dlgSeq   platform.DialogTicket   // the last ticket given
-	dlgT     dialogTarget            // the window's dialogs; tests set a fake
+	curUI     []ui.CursorRegion
+	curPlat   []platform.CursorRegion
+	dragUI    []ui.DragRegion
+	dragPl    []platform.DragRegion
+	tipUI     []ui.TooltipRegion // native tooltip regions (regions.go), reused
+	tipPl     []platform.TooltipRegion
+	dlg       []platform.DialogResult // dialog results not taken yet (dialogs.go)
+	dlgQ      []pendingDialog         // dialogs queued for the end of the frame
+	dlgShown  []shownDialog           // dialogs on screen
+	dlgSeq    platform.DialogTicket   // the last ticket given
+	dlgT      dialogTarget            // the window's dialogs; tests set a fake
+	dlgFailed []platform.DialogResult // results of dialogs that ended without being shown, to deliver
 
 	sh shellSync // material and host regions handed to the window (shell.go)
 
@@ -341,7 +342,6 @@ func (a *App) openWin(cfg Config, b Builder, st *StartupReport, nativeMenus bool
 		a.cfg.Clear = [4]float32{} // premultiplied transparent: the backdrop or the materials show
 	}
 	a.Win, a.req = win, win
-	a.tr.in.Focused = win.Focused() // AppKit's state, not an assumption: a window opened in the background is not key
 	t0 := platform.Now()
 	st.OpenMs = ms(t0 - tEntry)
 
@@ -384,6 +384,10 @@ func (a *App) openWin(cfg Config, b Builder, st *StartupReport, nativeMenus bool
 	t4 := platform.Now()
 	st.InitMs = ms(t4 - t3)
 
+	// The first frame's focus is AppKit's (after Init, which may opt a test's
+	// window in to platform.DebugAssumeKey), not an assumption: a window
+	// opened in the background is not key.
+	a.tr.in.Focused = win.Focused()
 	// Draw-first: before the first Wait, which runs AppKit's deferred launch work.
 	if !a.present(false, 2) {
 		a.closeWin()

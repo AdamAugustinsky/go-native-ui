@@ -54,10 +54,10 @@ func windowDidBecomeKey(*ffi.CB) { windowFocus(true) }
 func windowDidResignKey(*ffi.CB) { windowFocus(false) }
 
 func windowFocus(key bool) {
-	if !key && assumeKey { // a test's window stays key (DebugAssumeKey)
-		return
-	}
 	if w := theWindow.Load(); w != nil {
+		if !key && keyAssumed(w) { // a test's window stays key (DebugAssumeKey)
+			return
+		}
 		e := Event{Kind: EvFocus, Time: Now()}
 		if key {
 			e.Flags = FlagDown

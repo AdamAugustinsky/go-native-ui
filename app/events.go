@@ -36,11 +36,18 @@ const (
 	// first button) before EvWillTerminate. A logout's request (QuitLogout)
 	// refused cancels the logout; left unanswered, the logout waits.
 	//
-	// A request asked while a frame is drawn (a native loop inside Build) is
-	// refused at once and arrives after the frame: the quit cannot wait for
-	// its answer inside the frame. So a logout that arrives then is
-	// cancelled; the request after the frame decides only whether the app
-	// quits.
+	// A request asked while a frame is drawn (a native loop inside Build)
+	// arrives after the frame. A quit Apple event (the Dock, a logout) waits
+	// for that request's answer meanwhile, so a logout then goes on or stops
+	// as the app answers. Only a terminate: someone else sends during a frame
+	// is refused at once (it cannot wait inside the frame) and asked again
+	// after it.
+	//
+	// Once a quit is allowed it is not asked again: a quit request that
+	// arrives before the app ends is answered yes and does not ask the
+	// handler. Leaving Main (App.Quit, the last window closing) while a
+	// request waits answers its quit event yes, ends the open dialogs as
+	// cancelled (their results arrive first) and then sends EvWillTerminate.
 	EvQuitRequested = EventKind(platform.AppEvQuitRequested)
 	// EvQuitDeadline: a quit request stayed unanswered past
 	// AppConfig.QuitDeadline; A is the QuitAction that was applied. An error
@@ -178,8 +185,9 @@ func (e *Event) QuitReason() QuitReason { return QuitReason(e.A) }
 // as EvPost with e's Source, Window, ID, A and B and a copy of data (up to
 // platform.MaxPostData bytes). Post never blocks and allocates nothing; it
 // returns false when platform.MaxPosted posts are waiting (or data is too
-// long), and the caller keeps the event and tries again later. Framework
-// services never use it.
+// long), and the caller keeps the event and tries again later. Once the app
+// is ending (the last delivery before EvWillTerminate has begun) it returns
+// false for good. Framework services never use it.
 func Post(e Event, data []byte) bool {
 	return platform.PostApp(platform.AppEvent{Source: e.Source, Window: e.Window, ID: e.ID, A: e.A, B: e.B}, data)
 }

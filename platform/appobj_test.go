@@ -469,6 +469,43 @@ func TestUnpublishedHeadDoesNotSpin(t *testing.T) {
 	}
 }
 
+// The last drain (FlushApp) does not take an unpublished head for an empty
+// queue: a producer paused between its claim and its publication, with a
+// later producer that published and returned, is waited for, and both are
+// delivered in order. After it the gate is closed: a post is refused.
+func TestLastDrainWaitsForAPausedProducer(t *testing.T) {
+	s := &recSink{}
+	withSink(t, s)
+	t.Cleanup(func() { gate.closed.Store(false) })
+	paused, release, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	testHookReadyClaimed = func() {
+		once.Do(func() {
+			close(paused)
+			<-release
+		})
+	}
+	t.Cleanup(func() { testHookReadyClaimed = nil })
+	go func() {
+		PostApp(AppEvent{ID: 7}, nil) // claims the head, then pauses
+		close(done)
+	}()
+	<-paused
+	testHookReadyClaimed = nil
+	if !PostApp(AppEvent{ID: 8}, nil) { // published behind the paused one
+		t.Fatal("the second post was refused")
+	}
+	time.AfterFunc(100*time.Millisecond, func() { close(release) })
+	FlushApp()
+	<-done
+	if len(s.evs) != 2 || s.evs[0].ID != 7 || s.evs[1].ID != 8 {
+		t.Fatalf("the last drain delivered %+v, want the paused post and the one behind it", s.evs)
+	}
+	if PostApp(AppEvent{ID: 9}, nil) {
+		t.Fatal("a post after the last drain was accepted")
+	}
+}
+
 // A ticket record whose generations are spent is retired, not reused: a
 // Ticket never repeats.
 func TestTicketsRetireSpentRecords(t *testing.T) {
