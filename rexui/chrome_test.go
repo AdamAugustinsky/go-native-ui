@@ -567,3 +567,39 @@ func TestChromeMarksMaterialRegions(t *testing.T) {
 		}
 	}
 }
+
+// A path bar's components hold their symbols and names: the layout audit
+// finds nothing past a component's button at any width and scale, whatever
+// the symbols' and the font's sizes (a symbol taller than the bar, as a
+// Windows fallback glyph is; fallback glyphs and names of fractional widths,
+// which end mid-pixel).
+func TestPathBarComponentsFit(t *testing.T) {
+	for _, scale := range []float32{1, 1.25, 1.5, 1.75, 2} {
+		g := openRig(t, theme.Light, nil, func(*rig) {})
+		g.scale = scale
+		tall := g.k.AddIcon(icon.Spec{Symbol: "folder", Fallback: '▣', Pt: 30})
+		fb := g.k.AddIcon(icon.Spec{Fallback: '▣', Pt: 13})
+		fb2 := g.k.AddIcon(icon.Spec{Fallback: '▤', Pt: 11})
+		s := rexui.Sym
+		m := &pathModel{got: -1, items: []rexui.PathItem{
+			{Title: "Macintosh HD", Glyph: s(tall)}, {Title: "Photos", Glyph: s(fb)}, {Title: "adam", Glyph: s(fb2)},
+			{Title: "Projects", Glyph: s(fb)}, {Title: "Q3", Glyph: s(fb2)}, {Title: "Documents", Glyph: s(fb)},
+		}}
+		g.build = m.build
+		m.w = 480
+		g.settle()
+		bar := g.frameOf(ui.RoleGroup, "Path")
+		if _, h := g.k.IconSize(tall); h/g.scale <= bar[3]-bar[1] {
+			t.Fatalf("the tall symbol is %v pt high: want it taller than the bar (%v)", h/g.scale, bar[3]-bar[1])
+		}
+		for w := float32(100); w <= 480; w += 0.25 { // the box from 10 pt in the 500-pt window
+			m.w = w
+			g.settle()
+			for _, f := range g.c.Audit(nil) {
+				if f.Check == ui.AuditOverflow {
+					t.Fatalf("scale %v, %v pt wide: %v overflows %v by %v px", scale, w, f.Rect, f.OtherRect, f.Delta)
+				}
+			}
+		}
+	}
+}
