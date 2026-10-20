@@ -23,24 +23,19 @@ func (c *Context) HitReaches(x, y float32, target Key) bool {
 	if top == 0 {
 		return true
 	}
-	var tid ID
-	for i := 1; i < len(c.boxes); i++ {
-		if c.boxes[i].key == target {
-			tid = ID(i)
-			break
-		}
-	}
-	if tid == 0 {
-		return false
-	}
 	for a := top; a != 0; a = c.boxes[a].parent { // the hit is inside the target
-		if a == tid {
+		if c.boxes[a].key == target {
 			return true
 		}
 	}
-	for a := tid; a != 0; a = c.boxes[a].parent { // the target is inside the hit
-		if a == top {
-			return true
+	for i := 1; i < len(c.boxes); i++ { // the target is inside the hit (a key can sit on stale boxes too)
+		if c.boxes[i].key != target {
+			continue
+		}
+		for a := ID(i); a != 0; a = c.boxes[a].parent {
+			if a == top {
+				return true
+			}
 		}
 	}
 	return false
