@@ -98,6 +98,9 @@ type Options struct {
 	// Legacy pins the system's scroller style to legacy (a window follows
 	// the system's; offscreen it is overlay otherwise).
 	Legacy bool
+	// Nested gives the finder's Documents children two levels deep, as
+	// tools/appkitscenes -nested does (Work, closed: Drafts; Personal).
+	Nested bool
 }
 
 // Demo is the demo window. It implements app.Builder and app.Initer.

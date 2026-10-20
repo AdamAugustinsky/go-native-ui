@@ -114,6 +114,8 @@ static NSImage *avatar(NSString *initials, NSColor *fill, CGFloat d) {
 
 typedef NS_ENUM(NSInteger, RowKind) { RowPlain, RowTwoLine, RowChat, RowTile };
 
+static BOOL gNested; // -nested: the finder scene's Documents has children (Work, closed: Drafts; Personal), to measure a nested row's disclosure
+
 @interface Node : NSObject
 @property(copy) NSString *title, *symbol, *detail, *preview, *initials;
 @property(strong) NSColor *tint;
@@ -251,6 +253,8 @@ static NSScrollView *sourceList(NSArray *roots, RowKind kind, NSString *selectTi
 	sv.autohidesScrollers = YES;
 	[ov reloadData];
 	[ov expandItem:nil expandChildren:YES];
+	for (NSInteger r = 0; gNested && r < ov.numberOfRows; r++) // -nested: Work closed, Documents open
+		if ([[[ov itemAtRow:r] title] isEqual:@"Work"]) [ov collapseItem:[ov itemAtRow:r]];
 	for (NSInteger r = 0; r < ov.numberOfRows; r++) {
 		Node *n = [ov itemAtRow:r];
 		if ([n.title isEqual:selectTitle]) [ov selectRowIndexes:[NSIndexSet indexSetWithIndex:r] byExtendingSelection:NO];
@@ -423,6 +427,15 @@ static void install(Scene *s, NSArray<NSSplitViewItem *> *items, NSSize size) {
 	[s.window setContentSize:size];
 }
 
+// nested is Documents with children two levels deep (-nested).
+static Node *nested(void) {
+	Node *work = I(@"Work", @"folder");
+	work.kids = @[ I(@"Drafts", @"folder") ];
+	Node *d = I(@"Documents", @"doc");
+	d.kids = @[ work, I(@"Personal", @"folder") ];
+	return d;
+}
+
 static Scene *finderScene(void) {
 	Scene *s = [Scene new];
 	s.name = @"finder";
@@ -460,7 +473,7 @@ static Scene *finderScene(void) {
 	NSArray *roots = @[
 		G(@"Favorites", @[
 			I(@"AirDrop", @"dot.radiowaves.left.and.right"), I(@"Recents", @"clock"), I(@"Applications", @"square.grid.2x2"),
-			I(@"Desktop", @"menubar.dock.rectangle"), I(@"Documents", @"doc"), I(@"Downloads", @"arrow.down.circle")
+			I(@"Desktop", @"menubar.dock.rectangle"), gNested ? nested() : I(@"Documents", @"doc"), I(@"Downloads", @"arrow.down.circle")
 		]),
 		G(@"iCloud", @[ I(@"iCloud Drive", @"icloud"), I(@"Shared", @"folder.badge.person.crop") ]),
 		G(@"Locations", @[ I(@"Macintosh HD", @"internaldrive"), I(@"Network", @"network") ]),
@@ -1537,11 +1550,12 @@ int main(int argc, const char **argv) {
 			else if (!strcmp(argv[i], "-offscreen")) gOffscreen = YES;
 			else if (!strcmp(argv[i], "-width") && i + 1 < argc) gWidth = atof(argv[++i]);
 			else if (!strcmp(argv[i], "-selectAll")) gSelectAll = YES;
+			else if (!strcmp(argv[i], "-nested")) gNested = YES;
 			else if (!strcmp(argv[i], "-phases") && i + 1 < argc) gPhases = [[NSString stringWithUTF8String:argv[++i]] componentsSeparatedByString:@","];
 			else if (!strcmp(argv[i], "-tag") && i + 1 < argc) gTag = [NSString stringWithUTF8String:argv[++i]];
 		}
 		if (!sceneName || !gHS || !([gAppearance isEqual:@"light"] || [gAppearance isEqual:@"dark"])) {
-			fprintf(stderr, "usage: AppKitScenes -scene finder|notes|settings|chat -appearance light|dark -hs DIR [-offscreen] [-tag T] [-phases a,b] [-width W] [-selectAll]\n"
+			fprintf(stderr, "usage: AppKitScenes -scene finder|notes|settings|chat -appearance light|dark -hs DIR [-offscreen] [-tag T] [-phases a,b] [-width W] [-selectAll] [-nested]\n"
 			                "       AppKitScenes -sheet MANIFEST.json OUT.png\n       AppKitScenes -measure DIR\n"
 			                "       AppKitScenes -crop|-probe|-profile|-radius IN.png ... (see measure.m)\n");
 			return 64;

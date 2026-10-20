@@ -3,6 +3,7 @@ package demo
 import (
 	"fmt"
 	"path"
+	"slices"
 	"sort"
 	"strings"
 
@@ -34,6 +35,9 @@ const (
 	placePurple
 	placeGrey
 	placeAllTags
+	placeWork
+	placeDrafts
+	placePersonal
 	hdrFavorites
 	hdrCloud
 	hdrLocations
@@ -142,6 +146,19 @@ func (d *Demo) model() {
 			tag(placeRed, "Red"), tag(placeOrange, "Orange"), tag(placeYellow, "Yellow"), tag(placeGreen, "Green"),
 			tag(placeBlue, "Blue"), tag(placePurple, "Purple"), tag(placeGrey, "Grey"),
 			{ID: placeAllTags, Title: "All Tags…", Glyph: g(ic.dashed)},
+		}
+		if d.opt.Nested {
+			for i := range d.places {
+				if d.places[i].ID == placeDocuments {
+					d.places[i].Open = &d.open[4]
+					d.open[5] = false // Work closed, as the scene's
+					d.places = slices.Insert(d.places, i+1,
+						rexui.SidebarItem{ID: placeWork, Title: "Work", Glyph: g(ic.folder), Level: 1, Open: &d.open[5]},
+						rexui.SidebarItem{ID: placeDrafts, Title: "Drafts", Glyph: g(ic.folder), Level: 2},
+						rexui.SidebarItem{ID: placePersonal, Title: "Personal", Glyph: g(ic.folder), Level: 1})
+					break
+				}
+			}
 		}
 		d.tagColours()
 		d.path = []rexui.PathItem{

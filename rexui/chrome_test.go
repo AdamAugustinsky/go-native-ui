@@ -567,3 +567,31 @@ func TestChromeMarksMaterialRegions(t *testing.T) {
 		}
 	}
 }
+
+// A row's disclosure is AppKit's (Finder's sidebar with Documents two
+// levels deep, the Mac mini's 27.2): a 13-wide box at 12 pt, 13 more per
+// level, 1 below the row's middle; and once any row has children every row's
+// content moves 9 right, for the disclosures' column.
+func TestSidebarDisclosurePlace(t *testing.T) {
+	g, m := newSidebarRig(t)
+	d := g.frameOf(ui.RoleButton, "Disclosure")
+	row := g.frameOf(ui.RoleListItem, "Projects")
+	if d[0] != 12 || d[2] != 25 || d[1] != row[1]+(row[3]-row[1]-13)/2+1 {
+		t.Errorf("Projects' disclosure at %v (the row %v), want x 12..25, 1 below the middle", d, row)
+	}
+	symX := func() float32 {
+		r := g.frameOf(ui.RoleListItem, "Documents")
+		for _, q := range g.list.Quads {
+			if x, y := q.Rect[0]/g.scale, q.Rect[1]/g.scale; q.Mode == gpu.ModeMaskR8 && y >= r[1] && y < r[3] && x < r[2] {
+				return x
+			}
+		}
+		return -1
+	}
+	nested := symX()
+	m.items[2].Open = nil
+	g.settle()
+	if flat := symX(); nested-flat != 9 {
+		t.Errorf("Documents' symbol at %v with a nested row, %v without: want 9 apart", nested, flat)
+	}
+}
