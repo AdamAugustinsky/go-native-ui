@@ -23,6 +23,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 	"unsafe"
@@ -41,10 +42,11 @@ import (
 var (
 	fakeOnce sync.Once
 	fakeInfo struct {
-		pb   objc.ID
-		x, y float64
-		mask uintptr
-		seq  int64
+		pb     objc.ID
+		x, y   float64
+		mask   uintptr
+		seq    int64
+		source objc.ID
 	}
 	fakeInfoObj objc.ID
 
@@ -65,6 +67,7 @@ func fakeInfoInit() {
 		def.Method(selDragPasteboard, "@@:", func(c *ffi.CB) { c.Ret(uintptr(fakeInfo.pb)) })
 		def.Method(selDragSourceMask, "Q@:", func(c *ffi.CB) { c.Ret(fakeInfo.mask) })
 		def.Method(selDragSeq, "q@:", func(c *ffi.CB) { c.Ret(uintptr(fakeInfo.seq)) })
+		def.Method(selDragSource, "@@:", func(c *ffi.CB) { c.Ret(uintptr(fakeInfo.source)) })
 		fakeInfoObj = objc.Send(objc.Send(def.Register(), selAlloc), selInit)
 	})
 }
@@ -1002,94 +1005,42 @@ func (r *dragRig) readPaths(limit int) ([]byte, int) {
 	return readPaths(new(ffi.Frame), objc.Send(r.pb, selPBItems), limit)
 }
 
-// ---- reading dropped data off the main thread ----
+// ---- copying the dropped data before the drop returns ----
 
-var (
-	providerOnce  sync.Once
-	providerObj   objc.ID
-	providerSleep atomic.Int64 // ns
-	providerBytes []byte
-
-	selSetProvider = objc.Sel("setDataProvider:forTypes:")
-)
-
-// slowProvider is an NSPasteboardItemDataProvider that takes providerSleep to
-// provide its text: a source that provides its data lazily, as a renderer in
-// another process or a file promise does.
-func slowProvider() objc.ID {
-	providerOnce.Do(func() {
-		def := objc.Define("GNUISlowProvider", objc.Cls("NSObject"), []string{"NSPasteboardItemDataProvider"})
-		def.Method(objc.Sel("pasteboard:item:provideDataForType:"), "v@:@@@", func(c *ffi.CB) {
-			time.Sleep(time.Duration(providerSleep.Load()))
-			f := c.Frame()
-			item, typ := objc.ID(c.Int(3)), objc.ID(c.Int(4))
-			providerBytes = []byte("lazy text")
-			data := wsend(f, clsNSData, selDataWithBytes, uintptr(unsafe.Pointer(&providerBytes[0])), uintptr(len(providerBytes)))
-			wsend(f, item, selSetData, uintptr(data), uintptr(typ))
-		})
-		providerObj = objc.Retain(objc.Send(objc.Send(def.Register(), selAlloc), selInit))
-	})
-	return providerObj
-}
-
-// putSlowText replaces the contents of pasteboard pb with one item whose text
-// the provider gives after d.
-func putSlowText(t *testing.T, pb objc.ID, d time.Duration) {
-	t.Helper()
-	providerSleep.Store(int64(d))
-	objc.Send(pb, selClearContents)
-	it := objc.Send(objc.Send(clsNSPasteboardItem, selAlloc), selInit)
-	types := objc.Send(clsNSMutableArray, selArrayClass)
-	objc.Send1(types, selAddObject, uintptr(tText))
-	if objc.Send2(it, selSetProvider, uintptr(slowProvider()), uintptr(types))&0xff == 0 {
-		t.Fatal("no data provider")
-	}
-	arr := objc.Send(clsNSMutableArray, selArrayClass)
-	objc.Send1(arr, selAddObject, uintptr(it))
-	objc.Send(it, selAutorelease)
-	if !objc.SendBool1(pb, selWriteObjects, uintptr(arr)) {
-		t.Fatal("writeObjects failed")
-	}
-}
-
-// TestSlowSourceChild is the other application of TestSlowDropDataDoesNotBlockTheMainThread:
-// it owns a named pasteboard whose text it provides after the time in the
-// environment, on its main thread's run loop, until it is killed.
-func TestSlowSourceChild(t *testing.T) {
-	name := os.Getenv("GNUI_SLOW_PB_CHILD")
+// TestPBOwnerChild is the other application of TestDropDataIsCopiedBeforeTheDropReturns:
+// it owns a named pasteboard with one item of text and a PNG, until it is killed.
+func TestPBOwnerChild(t *testing.T) {
+	name := os.Getenv("GNUI_PB_OWNER")
 	if name == "" {
-		t.Skip("child of TestSlowDropDataDoesNotBlockTheMainThread")
+		t.Skip("child of TestDropDataIsCopiedBeforeTheDropReturns")
 	}
-	ms, _ := strconv.Atoi(os.Getenv("GNUI_SLOW_PB_MS"))
 	onMain(func() {
 		dragInit()
-		fakeInfoInit()
 		pb := objc.Send1(clsPasteboard, selPBNamed, uintptr(objc.Str(name)))
-		putSlowText(t, pb, time.Duration(ms)*time.Millisecond)
-		os.Stdout.WriteString("READY\n")
-		loop := objc.Send(objc.Cls("NSRunLoop"), objc.Sel("currentRunLoop"))
-		mode := objc.Str("kCFRunLoopDefaultMode")
-		clsDate, selDate := objc.Cls("NSDate"), objc.Sel("dateWithTimeIntervalSinceNow:")
-		selRunMode := objc.Sel("runMode:beforeDate:")
-		for end := time.Now().Add(60 * time.Second); time.Now().Before(end); {
-			pool := objc.F.Call0(objc.PoolPush)
-			date := objc.ID(objc.F.Reset().Arg(uintptr(clsDate)).Arg(uintptr(selDate)).ArgF64(0.05).Call(objc.MsgSend).R0())
-			objc.Send2(loop, selRunMode, uintptr(mode), uintptr(date))
-			objc.F.Call1(objc.PoolPop, pool)
-			time.Sleep(time.Millisecond)
+		objc.Send(pb, selClearContents)
+		it := objc.Send(objc.Send(clsNSPasteboardItem, selAlloc), selInit)
+		objc.Send2(it, selSetData, uintptr(dataOf([]byte("eager text"))), uintptr(tText))
+		objc.Send2(it, selSetData, uintptr(dataOf(pngOf(16, 8, color.RGBA{0, 0, 255, 255}))), uintptr(tPNG))
+		arr := objc.Send(clsNSMutableArray, selArrayClass)
+		objc.Send1(arr, selAddObject, uintptr(it))
+		objc.Send(it, selAutorelease)
+		if !objc.SendBool1(pb, selWriteObjects, uintptr(arr)) {
+			os.Exit(1)
 		}
+		os.Stdout.WriteString("READY\n")
+		time.Sleep(60 * time.Second)
 	})
 }
 
 var selPBNamed = objc.Sel("pasteboardWithName:")
 
-// slowSource starts another process that owns a pasteboard whose text arrives
-// after d, and makes it the pasteboard of the rig's drags.
-func (r *dragRig) slowSource(d time.Duration) {
+// pbOwner starts another process that owns a pasteboard with an item of text
+// and a PNG, and makes it the pasteboard of the rig's drags.
+func (r *dragRig) pbOwner() objc.ID {
 	r.t.Helper()
-	name := "dev.gonativeui.test.slow." + strconv.Itoa(os.Getpid())
-	cmd := exec.Command(os.Args[0], "-test.run=^TestSlowSourceChild$")
-	cmd.Env = append(os.Environ(), "GNUI_SLOW_PB_CHILD="+name, "GNUI_SLOW_PB_MS="+strconv.Itoa(int(d/time.Millisecond)))
+	name := "dev.gonativeui.test.owner." + strconv.Itoa(os.Getpid())
+	cmd := exec.Command(os.Args[0], "-test.run=^TestPBOwnerChild$")
+	cmd.Env = append(os.Environ(), "GNUI_PB_OWNER="+name)
 	out, err := cmd.StdoutPipe()
 	if err != nil {
 		r.t.Fatal(err)
@@ -1122,77 +1073,186 @@ func (r *dragRig) slowSource(d time.Duration) {
 	pb := objc.Retain(objc.Send1(clsPasteboard, selPBNamed, uintptr(objc.Str(name))))
 	old := fakeInfo.pb
 	fakeInfo.pb = pb
-	r.t.Cleanup(func() { fakeInfo.pb = old; objc.Release(pb) })
+	r.t.Cleanup(func() { fakeInfo.pb = old; objc.Send(pb, selReleaseGlobal); objc.Release(pb) })
+	return pb
 }
 
-// waitWorkers waits for the read goroutines of the rig's window to end.
+// takeOver makes the pasteboard someone else's: the owner changes, as when
+// another drag starts, and the items read before are stale.
+func takeOver(t *testing.T, pb objc.ID) {
+	t.Helper()
+	objc.Send(pb, selClearContents)
+	arr := objc.Send(clsNSMutableArray, selArrayClass)
+	it := objc.Send(objc.Send(clsNSPasteboardItem, selAlloc), selInit)
+	objc.Send2(it, selSetData, uintptr(dataOf([]byte("someone else"))), uintptr(tText))
+	objc.Send1(arr, selAddObject, uintptr(it))
+	objc.Send(it, selAutorelease)
+	if !objc.SendBool1(pb, selWriteObjects, uintptr(arr)) {
+		t.Fatal("writeObjects failed")
+	}
+}
+
+func TestDropDataIsCopiedBeforeTheDropReturns(t *testing.T) {
+	r := newDragRig(t)
+	pb := r.pbOwner()
+	r.w.SetDropKinds(DragAny)
+	r.at(5, 5)
+
+	// Text is queued by the time the drop returns, whatever happens to the
+	// pasteboard after.
+	r.answer(DragAnswer{Op: DragOpCopy, Accept: DragText})
+	if !r.drop() {
+		t.Fatal("refused")
+	}
+	ev := r.events()
+	takeOver(t, pb)
+	if len(ev) != 1 || ev[0].Kind != EvDrop || ev[0].Flags != 0 || r.text(ev[0]) != "eager text" {
+		t.Fatalf("text drop: %+v", ev)
+	}
+
+	// An image's bytes are copied before the return too: the pasteboard
+	// changes owner straight after, and the decode (on a worker, later) still
+	// has the original.
+	r.w.q.reset()
+	pb = r.pbOwner()
+	r.answer(DragAnswer{Op: DragOpCopy, Accept: DragImage})
+	if !r.drop() {
+		t.Fatal("refused")
+	}
+	takeOver(t, pb)
+	e := r.next()
+	if e.Kind != EvDrop || e.Flags != 0 || DragKinds(e.Code) != DragImage {
+		t.Fatalf("image drop: %+v", e)
+	}
+	got, err := png.Decode(bytes.NewReader(r.w.q.textOf(e.Text)))
+	if err != nil || got.Bounds().Dx() != 16 || got.Bounds().Dy() != 8 {
+		t.Fatalf("decoded %v, %v", got, err)
+	}
+	if c := color.RGBAModel.Convert(got.At(3, 3)).(color.RGBA); c.B < 250 || c.R > 5 {
+		t.Errorf("pixel %+v: not the owner's blue image", c)
+	}
+}
+
+// A drag of our own session is answered from its spec, not from the pasteboard
+// (whose data a lazy provider would fulfil through the very thread that is in
+// the drop).
+func TestOwnDragIsAnsweredFromTheSpec(t *testing.T) {
+	r := newDragRig(t)
+	s := r.stubSession()
+	r.press()
+	file := filepath.Join(t.TempDir(), "a b.txt")
+	pic := pngOf(6, 4, color.RGBA{9, 200, 9, 255})
+	if _, err := r.w.StartDrag(&DragSpec{Items: []DragItem{{Path: file}, {Text: "own t\u00e9xt"}, {PNG: pic}}}); err != nil || s.calls != 1 {
+		t.Fatalf("StartDrag: %v", err)
+	}
+	pic[0] = 0 // the caller's slice is its own again
+	// The pasteboard holds something else, which must not be read.
+	r.put(map[string][]byte{"public.utf8-plain-text": []byte("pasteboard text"), "public.png": pngOf(2, 2, color.RGBA{255, 0, 0, 255}),
+		string(objc.AppendUTF8(nil, tFileURL)): fileURLBytes("/pasteboard/file")})
+	fakeInfo.source = dragSource
+	t.Cleanup(func() { fakeInfo.source = 0 })
+	r.w.SetDropKinds(DragAny)
+	r.at(5, 5)
+
+	r.answer(DragAnswer{Op: DragOpCopy, Accept: DragFiles})
+	if !r.drop() {
+		t.Fatal("refused")
+	}
+	if ev := r.events(); len(ev) != 1 || ev[0].SelStart != 1 || r.text(ev[0]) != file+"\x00" {
+		t.Errorf("files: %+v %q", ev, r.text(ev[0]))
+	}
+	r.w.q.reset()
+	r.answer(DragAnswer{Op: DragOpCopy, Accept: DragText})
+	if !r.drop() {
+		t.Fatal("refused")
+	}
+	if ev := r.events(); len(ev) != 1 || r.text(ev[0]) != "own t\u00e9xt" {
+		t.Errorf("text: %+v", ev)
+	}
+	r.w.q.reset()
+	r.answer(DragAnswer{Op: DragOpCopy, Accept: DragImage})
+	if !r.drop() {
+		t.Fatal("refused")
+	}
+	ev := r.events()
+	if len(ev) != 1 || ev[0].Flags != 0 {
+		t.Fatalf("image: %+v", ev)
+	}
+	if got, err := png.Decode(bytes.NewReader(r.w.q.textOf(ev[0].Text))); err != nil || got.Bounds().Dx() != 6 {
+		t.Errorf("image: %v %v", got, err)
+	}
+
+	// After the session the spec's data is gone: a later drag from "us" reads the pasteboard.
+	r.endSession(0)
+	r.w.q.reset()
+	r.answer(DragAnswer{Op: DragOpCopy, Accept: DragText})
+	if !r.drop() {
+		t.Fatal("refused")
+	}
+	if ev := r.events(); len(ev) != 1 || r.text(ev[0]) != "pasteboard text" {
+		t.Errorf("after the session: %+v", ev)
+	}
+}
+
+// An item that offers a file URL as well as image data: the file is the image.
+func TestImageDropTakesTheFileURLWhenThereIsOne(t *testing.T) {
+	r := newDragRig(t)
+	r.answer(DragAnswer{Op: DragOpCopy, Accept: DragImage})
+	r.w.SetDropKinds(DragImage)
+	r.at(5, 5)
+	dir := t.TempDir()
+	var jbuf bytes.Buffer
+	src, _ := png.Decode(bytes.NewReader(pngOf(16, 8, color.RGBA{200, 100, 0, 255})))
+	if err := jpeg.Encode(&jbuf, src, nil); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(dir, "photo.jpg")
+	if err := os.WriteFile(file, jbuf.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	url := string(objc.AppendUTF8(nil, tFileURL))
+	r.put(map[string][]byte{url: fileURLBytes(file), "public.png": pngOf(2, 2, color.RGBA{255, 0, 0, 255})})
+	if !r.drop() {
+		t.Fatal("refused")
+	}
+	e := r.next()
+	got, err := png.Decode(bytes.NewReader(r.w.q.textOf(e.Text)))
+	if e.Flags != 0 || err != nil || got.Bounds().Dx() != 16 || got.Bounds().Dy() != 8 {
+		t.Errorf("the file's image was not the drop: %+v %v %v", e, got, err)
+	}
+
+	// A file that is not an image, a directory, a file over MaxPaste, and a
+	// FIFO (opening one would block the worker) all fail.
+	fifo := filepath.Join(dir, "fifo")
+	if err := syscall.Mkfifo(fifo, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	big := filepath.Join(dir, "big.png")
+	if err := os.WriteFile(big, make([]byte, MaxPaste+1), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	text := filepath.Join(dir, "a.txt")
+	os.WriteFile(text, []byte("not an image"), 0o644)
+	for name, path := range map[string]string{"text file": text, "directory": dir, "big": big, "fifo": fifo, "missing": filepath.Join(dir, "none.png")} {
+		r.w.q.reset()
+		r.put(map[string][]byte{url: fileURLBytes(path), "public.png": pngOf(2, 2, color.RGBA{255, 0, 0, 255})})
+		if !r.drop() {
+			t.Fatalf("%s: refused", name)
+		}
+		if e := r.next(); e.Flags&FlagFailed == 0 || e.Text.Len != 0 {
+			t.Errorf("%s: %+v", name, e)
+		}
+	}
+	r.waitWorkers()
+}
+
+// waitWorkers waits for the decoding goroutines of the rig's window to end.
 func (r *dragRig) waitWorkers() {
 	r.t.Helper()
 	for end := time.Now().Add(10 * time.Second); r.w.drag.workers.Load() != 0; time.Sleep(2 * time.Millisecond) {
 		if time.Now().After(end) {
-			r.t.Fatal("a read goroutine never ended")
+			r.t.Fatal("a decoding goroutine never ended")
 		}
-	}
-}
-
-func TestSlowDropDataDoesNotBlockTheMainThread(t *testing.T) {
-	r := newDragRig(t)
-	r.answer(DragAnswer{Op: DragOpCopy, Accept: DragText})
-	r.w.SetDropKinds(DragText)
-	const lazy = 800 * time.Millisecond
-	r.slowSource(lazy)
-	r.at(5, 5)
-
-	start := time.Now()
-	if !r.drop() {
-		t.Fatal("refused")
-	}
-	if d := time.Since(start); d > lazy/3 {
-		t.Fatalf("performDragOperation took %v: it waited for the source's data", d)
-	}
-	// The loop keeps turning while the source thinks: a Wait turn queues nothing yet.
-	r.w.reapDrags()
-	if len(r.w.q.ev) != 0 || r.w.drag.workers.Load() != 1 {
-		t.Fatalf("events %+v, %d readers", r.w.q.ev, r.w.drag.workers.Load())
-	}
-	if time.Since(start) > lazy/2 {
-		t.Fatal("a Wait turn took as long as the source")
-	}
-	// The pasteboard is the worker's meanwhile: no other drag is taken.
-	if got := r.send(selDragEntered); got != 0 || r.drop() || len(r.w.q.ev) != 0 {
-		t.Errorf("a drag during the read: op %d, events %+v", got, r.w.q.ev)
-	}
-	e := r.next()
-	if e.Kind != EvDrop || e.Flags != 0 || r.text(e) != "lazy text" {
-		t.Errorf("drop %+v %q", e, r.text(e))
-	}
-	if time.Since(start) < lazy/2 {
-		t.Errorf("the text came after %v: the source was not slow", time.Since(start))
-	}
-}
-
-func TestSlowDropDataTimesOut(t *testing.T) {
-	r := newDragRig(t)
-	old := dropReadTimeout
-	dropReadTimeout = 100 * time.Millisecond
-	t.Cleanup(func() { dropReadTimeout = old })
-	r.answer(DragAnswer{Op: DragOpCopy, Accept: DragText})
-	r.w.SetDropKinds(DragText)
-	r.slowSource(1500 * time.Millisecond)
-	if !r.drop() {
-		t.Fatal("refused")
-	}
-	e := r.next()
-	if e.Kind != EvDrop || e.Flags&FlagFailed == 0 || e.Text.Len != 0 {
-		t.Fatalf("a read that timed out: %+v", e)
-	}
-	if r.w.drag.busy.Load() != 0 {
-		t.Error("still reading after the timeout")
-	}
-	r.waitWorkers()
-	r.w.reapDrags() // the late result is dropped
-	if len(r.w.q.ev) != 0 || len(r.w.q.text) != 0 {
-		t.Errorf("late result: %+v", r.w.q.ev)
 	}
 }
 
@@ -1458,5 +1518,343 @@ func TestFramesRunDuringOurOwnDragSession(t *testing.T) {
 	r.w.linkTick(nil, false)
 	if calls != 4 {
 		t.Errorf("an unrequested tick ran the handler (%d)", calls)
+	}
+}
+
+// ---- decoding ----
+
+// tiffPage is one image of a TIFF the tests build. Without pix, its strips are
+// zeros (compressed with deflate, so a huge image is a small file).
+type tiffPage struct {
+	w, h, bits, samples int
+	orient              int // 0: no tag
+	pix                 []byte
+}
+
+// tiffFile builds a little-endian baseline TIFF of the pages, in one IFD chain.
+func tiffFile(t *testing.T, pages ...tiffPage) []byte {
+	t.Helper()
+	le := binary.LittleEndian
+	var b bytes.Buffer
+	b.Write([]byte{'I', 'I', 42, 0, 0, 0, 0, 0})
+	patch := 4 // where the offset of the next IFD goes
+	align := func() {
+		if b.Len()%2 != 0 {
+			b.WriteByte(0)
+		}
+	}
+	for _, p := range pages {
+		rowBytes := (p.w*p.samples*p.bits + 7) / 8
+		rows := 64
+		if p.pix == nil {
+			rows = max(1, (8<<20)/rowBytes)
+		} else {
+			rows = p.h
+		}
+		var offs, counts []uint32
+		for y := 0; y < p.h; y += rows {
+			n := min(rows, p.h-y)
+			var strip []byte
+			if p.pix != nil {
+				strip = p.pix[y*rowBytes : (y+n)*rowBytes]
+			} else {
+				var z bytes.Buffer
+				zw, _ := zlib.NewWriterLevel(&z, zlib.BestSpeed)
+				zw.Write(make([]byte, n*rowBytes))
+				zw.Close()
+				strip = z.Bytes()
+			}
+			align()
+			offs, counts = append(offs, uint32(b.Len())), append(counts, uint32(len(strip)))
+			b.Write(strip)
+		}
+		type entry struct {
+			tag, typ uint16
+			count    uint32
+			val      []byte
+		}
+		u16 := func(vs ...int) []byte {
+			o := make([]byte, 2*len(vs))
+			for i, v := range vs {
+				le.PutUint16(o[2*i:], uint16(v))
+			}
+			return o
+		}
+		u32 := func(vs ...uint32) []byte {
+			o := make([]byte, 4*len(vs))
+			for i, v := range vs {
+				le.PutUint32(o[4*i:], v)
+			}
+			return o
+		}
+		bits := make([]int, p.samples)
+		for i := range bits {
+			bits[i] = p.bits
+		}
+		photometric := 2
+		if p.samples == 1 {
+			photometric = 1
+		}
+		compression := 8
+		if p.pix != nil {
+			compression = 1
+		}
+		es := []entry{
+			{256, 4, 1, u32(uint32(p.w))}, {257, 4, 1, u32(uint32(p.h))},
+			{258, 3, uint32(p.samples), u16(bits...)}, {259, 3, 1, u16(compression)}, {262, 3, 1, u16(photometric)},
+			{273, 4, uint32(len(offs)), u32(offs...)},
+		}
+		if p.orient != 0 {
+			es = append(es, entry{274, 3, 1, u16(p.orient)})
+		}
+		es = append(es, entry{277, 3, 1, u16(p.samples)}, entry{278, 4, 1, u32(uint32(rows))},
+			entry{279, 4, uint32(len(counts)), u32(counts...)}, entry{284, 3, 1, u16(1)})
+		if p.samples == 4 {
+			es = append(es, entry{338, 3, 1, u16(2)})
+		}
+		for i := range es { // the values that do not fit the entry go before the IFD
+			if len(es[i].val) > 4 {
+				align()
+				off := uint32(b.Len())
+				b.Write(es[i].val)
+				es[i].val = u32(off)
+			}
+		}
+		align()
+		le.PutUint32(b.Bytes()[patch:], uint32(b.Len()))
+		var n [2]byte
+		le.PutUint16(n[:], uint16(len(es)))
+		b.Write(n[:])
+		for _, e := range es {
+			var rec [12]byte
+			le.PutUint16(rec[0:], e.tag)
+			le.PutUint16(rec[2:], e.typ)
+			le.PutUint32(rec[4:], e.count)
+			copy(rec[8:], e.val)
+			b.Write(rec[:])
+		}
+		patch = b.Len()
+		b.Write([]byte{0, 0, 0, 0})
+	}
+	return b.Bytes()
+}
+
+// convert runs the worker's conversion on the test thread.
+func convert(b []byte) []byte { return imagePNG(new(ffi.Frame), b) }
+
+func withLimits(t *testing.T, pixels, decoded int64, pngBytes int) {
+	t.Helper()
+	op, od, oz := maxDropPixels, maxDropDecoded, maxDropPNG
+	maxDropPixels, maxDropDecoded, maxDropPNG = pixels, decoded, pngBytes
+	t.Cleanup(func() { maxDropPixels, maxDropDecoded, maxDropPNG = op, od, oz })
+}
+
+func TestDecodeBoundsTheBytesOfADeepImage(t *testing.T) {
+	newDragRig(t)
+	if !loadIIO() {
+		t.Skip("no ImageIO")
+	}
+	// A 16-bit RGBA TIFF of 8000×8000: 64 MP, under the pixel limit and four
+	// bytes a pixel at 8 bits (244 MiB), but eight at 16 bits (488 MiB), over
+	// MaxConvertBytes. A few kilobytes of file.
+	deep := tiffFile(t, tiffPage{w: 8000, h: 8000, bits: 16, samples: 4})
+	pool := objc.F.Call0(objc.PoolPush)
+	w, h, ok := imageSize(new(ffi.Frame), dataOf(deep))
+	objc.F.Call1(objc.PoolPop, pool)
+	if !ok || w != 8000 || h != 8000 {
+		t.Fatalf("the fixture reads as %d×%d (%v): the test would prove nothing", w, h, ok)
+	}
+	if convert(tiffFile(t, tiffPage{w: 100, h: 50, bits: 16, samples: 4})) == nil {
+		t.Fatal("a small 16-bit TIFF does not decode: the fixture is wrong")
+	}
+	before := convertCalls.Load()
+	if convert(deep) != nil || convertCalls.Load() != before {
+		t.Errorf("a 16-bit 8000×8000 TIFF (%d bytes) was decoded", len(deep))
+	}
+	// The same shape at 8 bits fits the byte limit: it is the depth that refuses
+	// the other (checked at lower limits, to keep the decode small).
+	withLimits(t, MaxImagePixels, 20<<20, MaxPaste)
+	if convert(tiffFile(t, tiffPage{w: 2000, h: 2000, bits: 16, samples: 4})) != nil { // 32 MB decoded
+		t.Error("a 16-bit 2000×2000 TIFF passed a 20 MiB limit")
+	}
+	if got := convert(tiffFile(t, tiffPage{w: 2000, h: 2000, bits: 8, samples: 4})); got == nil { // 16 MB decoded
+		t.Error("the same image at 8 bits was refused")
+	}
+}
+
+func TestDecodeReadsOnlyTheFirstImage(t *testing.T) {
+	newDragRig(t)
+	if !loadIIO() {
+		t.Skip("no ImageIO")
+	}
+	pix := []byte{
+		255, 0, 0, 0, 255, 0, 0, 0, 255,
+		10, 20, 30, 40, 50, 60, 70, 80, 90,
+	}
+	// Image 1 is 30000×30000: 900 MP, if anything looked at it.
+	multi := tiffFile(t, tiffPage{w: 3, h: 2, bits: 8, samples: 3, pix: pix}, tiffPage{w: 30000, h: 30000, bits: 1, samples: 1})
+	before := convertCalls.Load()
+	out := convert(multi)
+	if out == nil || convertCalls.Load() != before+1 {
+		t.Fatalf("a multi-image TIFF with a small first image: %d bytes, %d decodes", len(out), convertCalls.Load()-before)
+	}
+	img, err := png.Decode(bytes.NewReader(out))
+	if err != nil || img.Bounds().Dx() != 3 || img.Bounds().Dy() != 2 {
+		t.Fatalf("decoded %v, %v", img, err)
+	}
+	if c := color.NRGBAModel.Convert(img.At(1, 0)).(color.NRGBA); c.G < 250 || c.R > 5 || c.B > 5 {
+		t.Errorf("pixel (1,0) %+v, want green", c)
+	}
+	// And the other way round: a huge first image is refused though the second is small.
+	rev := tiffFile(t, tiffPage{w: 30000, h: 30000, bits: 1, samples: 1}, tiffPage{w: 3, h: 2, bits: 8, samples: 3, pix: pix})
+	if convert(rev) != nil {
+		t.Error("a huge first image was decoded")
+	}
+}
+
+func TestDecodeAppliesTheOrientation(t *testing.T) {
+	newDragRig(t)
+	if !loadIIO() {
+		t.Skip("no ImageIO")
+	}
+	// 4×2, stored: row 0 red, green, blue, white; row 1 black, grey, yellow, magenta.
+	px := [][3]byte{{255, 0, 0}, {0, 255, 0}, {0, 0, 255}, {255, 255, 255}, {0, 0, 0}, {128, 128, 128}, {255, 255, 0}, {255, 0, 255}}
+	var pix []byte
+	for _, p := range px {
+		pix = append(pix, p[0], p[1], p[2])
+	}
+	at := func(o int) (image.Image, []byte) {
+		out := convert(tiffFile(t, tiffPage{w: 4, h: 2, bits: 8, samples: 3, orient: o, pix: pix}))
+		if out == nil {
+			t.Fatalf("orientation %d: not decoded", o)
+		}
+		img, err := png.Decode(bytes.NewReader(out))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return img, out
+	}
+	same := func(img image.Image, x, y int, want [3]byte, name string) {
+		t.Helper()
+		c := color.NRGBAModel.Convert(img.At(x, y)).(color.NRGBA)
+		d := func(a, b uint8) int { return max(int(a)-int(b), int(b)-int(a)) }
+		if d(c.R, want[0]) > 3 || d(c.G, want[1]) > 3 || d(c.B, want[2]) > 3 {
+			t.Errorf("%s: pixel (%d,%d) is %v, want %v", name, x, y, c, want)
+		}
+	}
+	img, _ := at(0) // no tag: as stored
+	if b := img.Bounds(); b.Dx() != 4 || b.Dy() != 2 {
+		t.Fatalf("size %v", b)
+	}
+	same(img, 0, 0, px[0], "as stored")
+	same(img, 3, 1, px[7], "as stored")
+	img, _ = at(3) // rotated 180°
+	same(img, 0, 0, px[7], "rotated 180")
+	same(img, 3, 1, px[0], "rotated 180")
+	img, _ = at(6) // shown rotated 90° clockwise: 2 wide, 4 tall; the stored top-left is the top-right
+	if b := img.Bounds(); b.Dx() != 2 || b.Dy() != 4 {
+		t.Fatalf("orientation 6: size %v", b)
+	}
+	same(img, 1, 0, px[0], "rotated 90 cw")
+	same(img, 0, 0, px[4], "rotated 90 cw")
+	same(img, 0, 3, px[7], "rotated 90 cw")
+}
+
+// noiseJPEG is a JPEG of w×h noise that stays within the input limit.
+func noiseJPEG(t *testing.T, w, h, quality int) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
+	rnd := uint32(12345)
+	for i := 0; i < len(img.Pix); i += 4 {
+		rnd = rnd*1664525 + 1013904223
+		img.Pix[i], img.Pix[i+1], img.Pix[i+2], img.Pix[i+3] = byte(rnd>>8), byte(rnd>>16), byte(rnd>>24), 255
+	}
+	var b bytes.Buffer
+	if err := jpeg.Encode(&b, img, &jpeg.Options{Quality: quality}); err != nil {
+		t.Fatal(err)
+	}
+	return b.Bytes()
+}
+
+func TestEncodingThePNGIsBounded(t *testing.T) {
+	newDragRig(t)
+	if !loadIIO() {
+		t.Skip("no ImageIO")
+	}
+	check := func(name string, jpg []byte, limit int) {
+		t.Helper()
+		withLimits(t, MaxImagePixels, MaxConvertBytes, limit)
+		sinkPeak.Store(0)
+		sinkRefused.Store(false)
+		if got := convert(jpg); got != nil {
+			t.Errorf("%s: a %d byte PNG came out under a %d limit", name, len(got), limit)
+		}
+		if !sinkRefused.Load() {
+			t.Errorf("%s: the encoder was never refused", name)
+		}
+		if peak := sinkPeak.Load(); peak > int64(limit) {
+			t.Errorf("%s: the output grew to %d bytes, past %d", name, peak, limit)
+		}
+	}
+	// Noise does not compress as a PNG: a JPEG of 512×512 is some 100 KB and
+	// its PNG about a megabyte.
+	small := noiseJPEG(t, 512, 512, 60)
+	check("small limit", small, 64<<10)
+	if got := func() []byte { withLimits(t, MaxImagePixels, MaxConvertBytes, 8<<20); return convert(small) }(); got == nil {
+		t.Error("the same JPEG was refused under a limit it fits")
+	}
+	if testing.Short() {
+		return
+	}
+	// At the real limits: a JPEG under MaxPaste whose PNG is over it.
+	big := noiseJPEG(t, 3000, 3000, 50)
+	if len(big) > MaxPaste {
+		t.Skipf("the noise JPEG is %d bytes, over MaxPaste", len(big))
+	}
+	check("MaxPaste", big, MaxPaste)
+}
+
+func TestLeavingOurWindowDuringOurSessionPresentsAFrame(t *testing.T) {
+	r := newDragRig(t)
+	r.answer(DragAnswer{Op: DragOpCopy, Accept: DragText})
+	r.w.SetDropKinds(DragText)
+	r.put(map[string][]byte{"public.utf8-plain-text": []byte("x")})
+	r.at(10, 80)
+	enters, leaves := 0, 0
+	r.w.SetFrameHandler(func() {
+		for _, e := range r.w.Pending() {
+			switch e.Kind {
+			case EvDragEnter, EvDragMove:
+				enters++
+			case EvDragLeave:
+				leaves++
+			}
+		}
+	})
+	tick := func() { r.w.linkTick(nil, false) }
+
+	// Not our session: leaving asks for no frame (Wait is running).
+	r.send(selDragEntered)
+	r.send(selDragExited)
+	if r.w.frameArmed {
+		t.Fatal("a drag from another application asked for a frame on leaving")
+	}
+	r.w.q.reset()
+
+	// Our session: the highlight the enter drew must be cleared by a frame the
+	// leave asks for, since no Wait turn will deliver the event.
+	r.w.drag.active = true
+	r.send(selDragEntered)
+	tick()
+	if enters != 1 || leaves != 0 {
+		t.Fatalf("enter: %d enters, %d leaves", enters, leaves)
+	}
+	r.send(selDragExited)
+	if !r.w.frameArmed {
+		t.Fatal("leaving our own window during our session asked for no frame")
+	}
+	tick()
+	if leaves != 1 {
+		t.Errorf("the frame handler saw %d leaves", leaves)
 	}
 }

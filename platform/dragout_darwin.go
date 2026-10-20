@@ -139,6 +139,7 @@ func (w *Window) StartDrag(spec *DragSpec) (DragTicket, error) {
 		}
 		objc.Send1(items, selAddObject, uintptr(di))
 	}
+	d.own = ownItems(spec)
 	d.active, d.ticket, d.ops = true, ticket, spec.Ops
 	if d.ops == DragOpNone {
 		d.ops = DragOpCopy
@@ -147,12 +148,29 @@ func (w *Window) StartDrag(spec *DragSpec) (DragTicket, error) {
 	session := beginDragSession(w.view, items, d.press, dragSource)
 	if session == 0 {
 		if d.active && d.ticket == ticket { // the session did not start (no callback ended it)
-			d.active = false
+			d.active, d.own = false, nil
 		}
 		forget()
 		return 0, ErrDragRefused
 	}
 	return ticket, nil
+}
+
+// ownItems copies what the session carries that a drop on our own window can
+// use (paths, text, PNG bytes; a promise has nothing to read). The spec's
+// slices belong to the caller.
+func ownItems(spec *DragSpec) []DragItem {
+	var own []DragItem
+	for i := range spec.Items {
+		it := &spec.Items[i]
+		switch {
+		case it.Path != "" || it.Text != "":
+			own = append(own, DragItem{Path: it.Path, Text: it.Text})
+		case len(it.PNG) > 0:
+			own = append(own, DragItem{PNG: append([]byte(nil), it.PNG...)})
+		}
+	}
+	return own
 }
 
 // setDragImage gives the first dragging item its picture: the spec's, or the
@@ -479,7 +497,7 @@ func (w *Window) closeDrag() {
 		objc.Release(d.press)
 		d.press = 0
 	}
-	d.handler = nil
+	d.handler, d.own = nil, nil
 }
 
 // ---- the source ----
@@ -521,6 +539,6 @@ func sourceEnded(c *ffi.CB) {
 		promises = removeRecs(promises, func(r *promiseRec) bool { return r.w == w && r.session == d.ticket && !r.requested })
 		promiseMu.Unlock()
 	}
-	d.active = false
+	d.active, d.own = false, nil
 	w.nudge()
 }

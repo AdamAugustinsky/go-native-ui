@@ -25,7 +25,7 @@ import (
 //	             Text its data, SelStart the number of items, X, Y where, Tag the Target of the
 //	             answer that accepted it (0 when the handler named none).
 //	             FlagFailed: the data could not be read, is over MaxPaste, or is an image over
-//	             MaxImagePixels
+//	             the limits (MaxImagePixels, MaxConvertBytes)
 //
 // The data of an EvDrop is in the window's text buffer and valid like that of
 // an EvPaste (until the next Wait or Poll), bounded like a paste (MaxPaste):
@@ -34,15 +34,23 @@ import (
 // for DragText UTF-8. Of the kinds a drag offers, the one delivered is the
 // first of files, image, text that the target accepts (DragAnswer.Accept).
 //
-// Reading the dropped data never happens on the main thread: a drag source may
-// provide its data lazily (a file promise, a renderer in another process), and
-// reading it can take as long as that source does. performDragOperation: only
-// retains the pasteboard's items and starts a worker; the EvDrop arrives in a
-// later Wait. One read is in flight at a time, and while it runs the window
-// takes no new drag (NSPasteboard is not documented as thread-safe, so the main
-// thread keeps off it meanwhile); a read that takes over DropReadTimeout fails.
-// An image is checked before it is decoded: its dimensions are read from the
-// header, and one over MaxImagePixels fails without being decoded.
+// The data is copied during performDragOperation: on the main thread, before
+// it returns, because the pasteboard's items go stale when the pasteboard
+// changes owner (another drag can start first). File URLs and text are read at
+// once, within their caps, and their EvDrop is queued at once. An image is
+// taken as the file its item names (Finder and Photos offer one) or as a copy of
+// its encoded bytes (over MaxPaste is refused), and decoded to PNG on a worker:
+// its EvDrop arrives in a later Wait. The worker never touches the pasteboard.
+// An image is checked from its header before it is decoded: image 0 only, over
+// MaxImagePixels pixels, or more decoded bytes than MaxConvertBytes, fails; the
+// PNG it is encoded to is bounded by MaxPaste, the encoder failing past it.
+// A drag from our own session (StartDrag) is answered from the spec's data and
+// not through the pasteboard.
+//
+// Known risk: a source that provides its data lazily (a renderer in another
+// process) can hold the main thread inside the copy until the system's
+// pasteboard timeout. That is documented, not worked around (reading on a
+// worker would read items that may be stale), and tracked as a follow-up.
 //
 // The system asks synchronously, at every enter and move, which operation the
 // window answers, so that it can show the right cursor: the handler of
@@ -139,10 +147,6 @@ type DragAnswer struct {
 // allows the operations in allowed. It runs on the main thread, inside the
 // system's call, so it must be quick and must not call into the window.
 type DragHandler func(x, y float32, offered DragKinds, allowed DragOp) DragAnswer
-
-// DropReadTimeout is how long reading the data of a drop may take before the
-// EvDrop fails.
-const DropReadTimeout = 30 * time.Second
 
 // MaxImagePixels is the largest image, in pixels (width times height), that
 // a dropped image or a decoder takes: a small compressed file can decode to
