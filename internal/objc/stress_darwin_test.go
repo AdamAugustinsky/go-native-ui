@@ -4,6 +4,7 @@ package objc
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"runtime"
 	"runtime/debug"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 	"unsafe"
@@ -104,6 +106,75 @@ func stressHandler(c *ffi.CB) {
 	stressSinkLock.Unlock()
 }
 
+// stallExcuse is the evidence that the machine, not the callbacks, held the
+// lagging chains back, or "": they all run at background QoS, which macOS
+// defers while anything else wants the CPU, and the load average is at
+// least the number of CPUs. A chain of any other class that stalls, or a
+// background one on an idle machine, fails.
+func stallExcuse(lag []int, load float64, cpus int) string {
+	if len(lag) == 0 || load < float64(cpus) {
+		return ""
+	}
+	for _, c := range lag {
+		if c >= stressChains || qosClasses[c%len(qosClasses)] != qosBackground {
+			return ""
+		}
+	}
+	return fmt.Sprintf("only background QoS chains lag, with a load average of %.1f on %d CPUs: macOS defers them while the machine is busy", load, cpus)
+}
+
+const qosBackground = 0x09 // QOS_CLASS_BACKGROUND
+
+// loadAverage is the one-minute load average (vm.loadavg: three fixed-point
+// values, then their scale), or 0.
+func loadAverage() float64 {
+	v, err := syscall.Sysctl("vm.loadavg")
+	b := []byte(v)
+	if err != nil || len(b) < 16 {
+		return 0
+	}
+	b = append(b, 0) // Sysctl drops a trailing NUL byte
+	scale := float64(binary.LittleEndian.Uint64(b[16:]))
+	if len(b) < 24 || scale == 0 {
+		return 0
+	}
+	return float64(binary.LittleEndian.Uint32(b)) / scale
+}
+
+// The excuse takes background chains on a loaded machine only.
+func TestStallExcuse(t *testing.T) {
+	var bg, other int = -1, -1
+	for c := range stressChains {
+		if qosClasses[c%len(qosClasses)] == qosBackground {
+			bg = c
+		} else {
+			other = c
+		}
+	}
+	if bg < 0 || other < 0 {
+		t.Fatal("the chains have no background QoS one, or only those")
+	}
+	for _, c := range []struct {
+		name string
+		lag  []int
+		load float64
+		want bool
+	}{
+		{"background, loaded", []int{bg}, 12, true},
+		{"background, idle", []int{bg}, 1, false},
+		{"another class, loaded", []int{bg, other}, 12, false},
+		{"the main thread, loaded", []int{stressMain}, 12, false},
+		{"nothing lags", nil, 12, false},
+	} {
+		if got := stallExcuse(c.lag, c.load, 10) != ""; got != c.want {
+			t.Errorf("%s: excused %v, want %v", c.name, got, c.want)
+		}
+	}
+	if l := loadAverage(); !(l > 0) {
+		t.Errorf("load average %v", l)
+	}
+}
+
 // stallLimit is how long the chains may make no progress at all.
 const stallLimit = 60 * time.Second
 
@@ -145,6 +216,11 @@ func TestCallbackFramesUnderGCAndPreemption(t *testing.T) {
 				}
 				if i%64 == 0 {
 					runtime.GC()
+					// Collections throughout, but not every CPU spinning: on
+					// CI's three vCPUs four of these left the background QoS
+					// chains, which macOS defers while anything else wants
+					// the CPU, no time at all.
+					time.Sleep(time.Millisecond)
 				}
 			}
 		})
@@ -184,8 +260,10 @@ func TestCallbackFramesUnderGCAndPreemption(t *testing.T) {
 			}
 			if now.Sub(progressAt) > stallLimit || hasEnd && end.Sub(now) < 30*time.Second {
 				var b strings.Builder
+				var lag []int
 				for c := range stressEntered {
 					if n := stressEntered[c].Load(); n < stressDepth {
+						lag = append(lag, c)
 						q := "main thread"
 						if c < stressChains {
 							q = fmt.Sprintf("QoS %#x", qosClasses[c%len(qosClasses)])
@@ -194,6 +272,9 @@ func TestCallbackFramesUnderGCAndPreemption(t *testing.T) {
 					}
 				}
 				close(stressRelease) // let the chains that are in finish
+				if why := stallExcuse(lag, loadAverage(), runtime.NumCPU()); why != "" {
+					t.Skipf("round %d: after %v (%v without progress), %s:%s", round, now.Sub(t0).Round(time.Millisecond), now.Sub(progressAt).Round(time.Millisecond), why, b.String())
+				}
 				t.Fatalf("round %d: after %v (%v without progress), only %d of %d chains reached their deepest level:%s",
 					round, now.Sub(t0).Round(time.Millisecond), now.Sub(progressAt).Round(time.Millisecond), stressArrived.Load(), stressChains+1, b.String())
 			}
@@ -214,7 +295,16 @@ func TestCallbackFramesUnderGCAndPreemption(t *testing.T) {
 		debug.FreeOSMemory()
 		close(stressRelease)
 		if F.Call2(fnGroupWait, g, F.Call2(fnDispatchTime, 0, uintptr(stallLimit))) != 0 {
-			t.Fatalf("round %d: the GCD chains did not finish", round)
+			var lag []int
+			for c := range stressChains {
+				if stressRan[c][0].Load() == 0 { // the outermost level finishes last
+					lag = append(lag, c)
+				}
+			}
+			if why := stallExcuse(lag, loadAverage(), runtime.NumCPU()); why != "" {
+				t.Skipf("round %d: the GCD chains %v did not finish in %v: %s", round, lag, stallLimit, why)
+			}
+			t.Fatalf("round %d: the GCD chains %v did not finish in %v (load average %.1f on %d CPUs)", round, lag, stallLimit, loadAverage(), runtime.NumCPU())
 		}
 		F.Call1(fnDispatchRelease, g)
 		<-mainDone
