@@ -154,6 +154,7 @@ func (a *App) drawFrame(inHandler bool, passes int) bool {
 		a.build(a.fr.W, a.fr.H, dt)
 	}
 	a.syncRegions()
+	a.syncShell()
 	a.syncText(a.Win, m.start)
 	a.syncChrome(a.Win)
 	if metered {
@@ -163,7 +164,8 @@ func (a *App) drawFrame(inHandler bool, passes int) bool {
 	animating := a.UI.Animating()
 	why := a.arm(inHandler, animating, dirty, m.start)
 	a.R.Encode(a.fr.CmdBuf, a.fr.Target, a.fr.W, a.fr.H, a.cfg.Clear, &a.list)
-	a.Surf.EndFrame(&a.fr)
+	a.Surf.EndFrame(&a.fr) // applies the shell changes syncShell staged, in the present's transaction
+	a.Win.FlushShell()     // (nothing is left; a safety net), inside the frame's pool
 	framePoolPop(pool)
 	a.inFrame = false
 	m.commit = platform.Now()

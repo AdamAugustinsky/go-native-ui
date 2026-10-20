@@ -1,0 +1,96 @@
+//go:build darwin
+
+package locale
+
+import (
+	"sync"
+
+	"gonativeui/internal/cf"
+	"gonativeui/internal/ffi"
+	"gonativeui/internal/objc"
+)
+
+// macOS: NSLocale through internal/cf, on whatever goroutine asks (a frame and
+// an autorelease pool of its own), and one block observer of
+// NSCurrentLocaleDidChangeNotification on the default center. The observer's
+// block is global and runs on the thread that posts the notification; it only
+// marks the cache stale and wakes the loop.
+
+const volatile = false
+
+var syms struct {
+	once    sync.Once
+	err     error
+	country uintptr // NSLocaleCountryCode
+	didChg  uintptr // NSCurrentLocaleDidChangeNotification
+}
+
+func load() {
+	if syms.err = cf.Init(); syms.err != nil {
+		return
+	}
+	lib, err := cf.Framework("Foundation")
+	if err != nil {
+		syms.err = err
+		return
+	}
+	syms.country, syms.didChg = cf.Const(lib, "NSLocaleCountryCode"), cf.Const(lib, "NSCurrentLocaleDidChangeNotification")
+	if syms.country == 0 || syms.didChg == 0 {
+		syms.err = cf.ErrUnavailable
+	}
+}
+
+// watch installs the observer. A failure leaves Serial at 0 and Current
+// re-reading only when asked to: it reports nothing wrong, as Current reads
+// fresh values on its first call either way.
+func watch() {
+	syms.once.Do(load)
+	if syms.err != nil {
+		return
+	}
+	fr := cf.Acquire()
+	defer cf.Release(fr)
+	defer cf.Pool(fr)()
+	block := objc.NewGlobalBlock("v16@?0@8", func(*ffi.CB) { changed() })
+	center := cf.Msg(fr, cf.Cls(fr, "NSNotificationCenter"), cf.Sel(fr, "defaultCenter"))
+	if center == 0 {
+		return
+	}
+	// addObserverForName:object:queue:usingBlock: with no queue calls the block
+	// on the posting thread. The center keeps the returned observer and the block.
+	cf.Msg(fr, center, cf.Sel(fr, "addObserverForName:object:queue:usingBlock:"), syms.didChg, 0, 0, uintptr(block))
+}
+
+func read() Info {
+	syms.once.Do(load)
+	if syms.err != nil {
+		return Info{}
+	}
+	fr := cf.Acquire()
+	defer cf.Release(fr)
+	defer cf.Pool(fr)()
+
+	var info Info
+	langs := cf.Msg(fr, cf.Cls(fr, "NSLocale"), cf.Sel(fr, "preferredLanguages"))
+	if langs != 0 {
+		for i, n := 0, cf.ArrayLen(fr, langs); i < n; i++ {
+			if tag := normalizeTag(cf.GoString(fr, cf.ArrayAt(fr, langs, i))); tag != "" {
+				info.Languages = append(info.Languages, tag)
+			}
+		}
+	}
+	loc := cf.Msg(fr, cf.Cls(fr, "NSLocale"), cf.Sel(fr, "autoupdatingCurrentLocale"))
+	if loc == 0 {
+		return info
+	}
+	info.Region = cf.GoString(fr, cf.Msg(fr, loc, cf.Sel(fr, "objectForKey:"), syms.country))
+	// The template "j" asks for the user's preferred hour cycle: "h a" or "HH".
+	tmpl := cf.String(fr, "j")
+	pat := cf.Msg(fr, cf.Cls(fr, "NSDateFormatter"), cf.Sel(fr, "dateFormatFromTemplate:options:locale:"), tmpl, 0, loc)
+	cf.CFRelease(fr, tmpl)
+	info.Hour24, _ = hour24FromPattern(cf.GoString(fr, pat))
+	if info.Region == "" && len(info.Languages) > 0 {
+		info.Region = regionOf(info.Languages[0])
+	}
+	return info
+}

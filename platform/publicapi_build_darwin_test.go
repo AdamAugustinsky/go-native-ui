@@ -10,13 +10,19 @@ import (
 	"testing"
 )
 
-// The private AppKit selector names the framework calls (lights). A build
-// with the gnui_publicapi tag must not contain them (DECISIONS.md D53).
+// The private AppKit selector names the framework calls (lights, the native
+// shell's materials and backdrop). A build with the gnui_publicapi tag must
+// not contain them (DECISIONS.md D53).
 var privateSelectorNames = []string{
 	"setTitlebarHeight:",
 	"titlebarHeight",
 	"setStandardWindowButtonGroupOffset:",
 	"standardWindowButtonGroupOffset",
+	"set_variant:",
+	"set_adaptiveAppearance:",
+	"_variant",
+	"_adaptiveAppearance",
+	"_cornerRadius",
 }
 
 // rexlook built with gnui_publicapi contains none of the private selector
