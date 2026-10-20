@@ -3,6 +3,8 @@ package rexui_test
 import (
 	"testing"
 
+	"gonativeui/gpu"
+	"gonativeui/icon"
 	"gonativeui/internal/cielab"
 	"gonativeui/rexui"
 	"gonativeui/theme"
@@ -45,7 +47,7 @@ func edgeQuad(g *rig, y float32, col uint32) bool {
 }
 
 // edgeColor is the colour of the scroll edge's bar from the top of the
-// window down to y pixels, and whether there is one.
+// window down to y pixels (a blur's fallback), and whether there is one.
 func edgeColor(g *rig, y float32) (uint32, bool) {
 	for i := range g.list.Quads {
 		if q := &g.list.Quads[i]; q.Rect[1] == 0 && q.Rect[3] == y {
@@ -55,12 +57,24 @@ func edgeColor(g *rig, y float32) (uint32, bool) {
 	return 0, false
 }
 
+// edgeBlur is the blur of the scroll edge from the top of the window down to
+// y pixels, and whether it is one.
+func edgeBlur(g *rig, y float32) (gpu.Backdrop, bool) {
+	for i := range g.list.Quads {
+		if q := &g.list.Quads[i]; q.Rect[1] == 0 && q.Rect[3] == y && q.Mode == gpu.ModeBackdrop {
+			return g.list.Backdrops[q.Tex], true
+		}
+	}
+	return gpu.Backdrop{}, false
+}
+
 // A table under a toolbar's band: at rest its rows start below the pinned
 // header; scrolled, the rows run under the header and the band. The scroll
 // edge's bar covers both at rest and scrolled, as Finder's pocket does,
 // ended by the header's own line; the header is built over the rows. At rest
 // it is ScrollEdgeLook.Bar (measured: flat, a fifth of what is under it
-// showing); scrolled, opaque (Under). None of it allocates.
+// showing); scrolled, AppKit's Hard blur of the rows (its fallback opaque,
+// Under), the inactive recipe in an inactive window. None of it allocates.
 func TestTableScrollEdge(t *testing.T) {
 	e := &edgeTable{cols: [2]base.Column{{Title: "Name", Width: 300}, {Title: "Kind", Width: 200}}}
 	g := newRig(t, theme.Light, nil, e.build)
@@ -78,11 +92,32 @@ func TestTableScrollEdge(t *testing.T) {
 	if !edgeQuad(g, band+hh, bar) {
 		t.Fatal("at rest, no scroll edge over the band and the header")
 	}
+	if _, ok := edgeBlur(g, band+hh); ok {
+		t.Error("at rest, the scroll edge blurs: nothing is under it")
+	}
 	e.st.SetTopRow(10, 0)
 	g.settle()
-	if col, ok := edgeColor(g, band+hh); !ok || col&0xFF != 0xFF {
+	if col, ok := edgeColor(g, band+hh); !ok || col != rexui.ScrollEdgeLook.Under.At(r.T)|0xFF {
 		t.Fatalf("scrolled, no opaque scroll edge over the band and the header (%08x)", col)
 	}
+	hard := rexui.ScrollEdgeLook.Hard
+	if b, ok := edgeBlur(g, band+hh); !ok || b != hard.Backdrop(g.k) || b.Down != 4 || b.Sigma != g.k.Pt(6) || b.Tint != r.Colors[theme.ControlBackground] {
+		t.Errorf("scrolled, the scroll edge is not AppKit's Hard blur: %+v", b)
+	}
+	g.in.Focused = false
+	g.settle()
+	if b, ok := edgeBlur(g, band+hh); !ok || b != rexui.ScrollEdgeLook.HardInactive.Backdrop(g.k) {
+		t.Errorf("inactive, the scroll edge is not the inactive Hard blur: %+v", b)
+	}
+	rexui.ScrollEdgeLook.HardInactive.Mix[0] = 0.5 // the inactive recipe is the one used
+	g.settle()
+	b, _ := edgeBlur(g, band+hh)
+	rexui.ScrollEdgeLook.HardInactive = hard
+	if b.Mix != 0.5 {
+		t.Errorf("inactive, the scroll edge's blur %+v is not HardInactive", b)
+	}
+	g.in.Focused = true
+	g.settle()
 	for i := range g.list.Quads {
 		q := &g.list.Quads[i]
 		if q.Rect[1] == band+hh && q.Color[0] == rexui.ScrollEdgeLook.Line.RGBA(r) {
@@ -136,6 +171,9 @@ func TestScrollViewScrollEdge(t *testing.T) {
 	if !edgeQuad(g, band, rexui.ScrollEdgeLook.Under.At(r.T)|0xFF) || !line() {
 		t.Fatal("scrolled, no opaque scroll edge and hairline over the band")
 	}
+	if b, ok := edgeBlur(g, band); !ok || b != rexui.ScrollEdgeLook.Thin.Backdrop(g.k) || !b.TintUnder || b.Down != 2 {
+		t.Errorf("scrolled, the scroll edge is not AppKit's ThinFilm blur: %+v", b)
+	}
 	g.c.SetScroll(inner, 0, 0)
 	g.in.Focused = false
 	g.settle()
@@ -146,7 +184,7 @@ func TestScrollViewScrollEdge(t *testing.T) {
 
 // Under Reduce Transparency the scroll edge is opaque, nothing of the
 // content showing, in light and dark, key and inactive: the material's fill
-// at rest, the measured pocket's (Under) with rows under it.
+// at rest, the measured pocket's (Under) with rows under it, not a blur.
 func TestScrollEdgeOpaqueUnderReduceTransparency(t *testing.T) {
 	for _, m := range []theme.Mode{theme.Light, theme.Dark} {
 		for _, inactive := range []bool{false, true} {
@@ -171,6 +209,9 @@ func TestScrollEdgeOpaqueUnderReduceTransparency(t *testing.T) {
 			if col, ok := edgeColor(g, band+hh); !ok || col&0xFF != 0xFF {
 				t.Errorf("mode %d, inactive %v: scrolled, no opaque scroll edge over the band (%08x)", m, inactive, col)
 			}
+			if _, ok := edgeBlur(g, band+hh); ok {
+				t.Errorf("mode %d, inactive %v: scrolled, the scroll edge blurs", m, inactive)
+			}
 		}
 	}
 }
@@ -181,6 +222,7 @@ type bandTable struct {
 	edgeTable
 	right bool   // a row was right-clicked
 	list  ui.Key // the rows' box
+	under bool   // ContentUnder
 }
 
 func (b *bandTable) build(g *rig) {
@@ -200,7 +242,7 @@ func (b *bandTable) build(g *rig) {
 	}
 	rexui.EndTable(k, &t)
 	c.Pop()
-	tb := rexui.BeginToolbar(k, "Toolbar", rexui.ToolbarOpts{Style: theme.ToolbarUnified, Title: "Files", ContentEdge: true})
+	tb := rexui.BeginToolbar(k, "Toolbar", rexui.ToolbarOpts{Style: theme.ToolbarUnified, Title: "Files", ContentEdge: true, ContentUnder: b.under})
 	tb.Title()
 	tb.Flexible()
 	tb.End()
@@ -275,13 +317,13 @@ func TestToolbarBandCoversTheRows(t *testing.T) {
 	}
 }
 
-// Rows scrolled under the band cannot show through the scroll edge: seen
-// through it, a row's text (and the white text of a selected row) differs
-// from the row's background by under ΔE 1, in light and dark, key and
-// inactive; and the edge is the colour AppKit's blurred pocket averages to
-// over rows of text (#FCFCFC, #2B2B2B, measured on the Mac mini's 27.2),
-// within ΔE 2 for the system's colours, or tinted toward the selection
-// where selected rows are under it.
+// Where there is no blur, rows scrolled under the band cannot show through
+// the scroll edge's fallback: seen through it, a row's text (and the white
+// text of a selected row) differs from the row's background by under ΔE 1,
+// in light and dark, key and inactive; and the edge is the colour AppKit's
+// blurred pocket averages to over rows of text (#FCFCFC, #2B2B2B, measured
+// on the Mac mini's 27.2), within ΔE 2 for the system's colours, or tinted
+// toward the selection where selected rows are under it.
 func TestScrollEdgeHidesRows(t *testing.T) {
 	measured := [2][3]uint8{{0xFC, 0xFC, 0xFC}, {0x2B, 0x2B, 0x2B}}
 	rgb := func(c uint32) [3]uint8 { return [3]uint8{uint8(c >> 24), uint8(c >> 16), uint8(c >> 8)} }
@@ -340,5 +382,166 @@ func TestScrollEdgeHidesRows(t *testing.T) {
 				t.Errorf("%s: a selection under the scroll edge leaves it %v (was %v, the selection %v)", name, tinted, was, sel)
 			}
 		}
+	}
+}
+
+// The toolbar's own band while content is scrolled under the toolbar
+// (ContentUnder, not ContentEdge) is AppKit's titlebar pocket: the Hard blur
+// of what is drawn under the band, its Base the content's colour (BandFill),
+// so that over nothing, as here, the renderer draws it flat (#FFFFFF; #262626
+// over #1E1E1E), its fallback opaque (Under); the inactive recipe in an
+// inactive window. Under Reduce Transparency it is Under, opaque, and does
+// not blur.
+func TestToolbarBandHardPocket(t *testing.T) {
+	for _, m := range []theme.Mode{theme.Light, theme.Dark} {
+		for _, rt := range []bool{false, true} {
+			sys := theme.SystemValues{Known: true, Settings: theme.Settings{ReduceTransparency: rt}}
+			g := openRig(t, m, &sys, func(*rig) {})
+			g.w, g.h = 2240, 400
+			f := &finderToolbar{ic: addChromeIcons(g), style: theme.ToolbarUnified, under: true}
+			f.views = []icon.ID{f.ic.grid, f.ic.list}
+			g.build = func(g *rig) {
+				f.fill = g.k.Theme().Colors[theme.ControlBackground]
+				f.build(g)
+			}
+			g.settle()
+			r := g.k.Theme()
+			under := rexui.ScrollEdgeLook.Under.At(r.T) | 0xFF
+			band := [4]float32{g.k.Pt(180), 0, g.k.Pt(890), g.k.Pt(52)}
+			bar := func() (gpu.Quad, bool) {
+				for i := range g.list.Quads {
+					if q := g.list.Quads[i]; q.Rect == band {
+						return q, true
+					}
+				}
+				return gpu.Quad{}, false
+			}
+			q, ok := bar()
+			if rt {
+				if !ok || q.Mode != gpu.ModeShape || q.Color[0] != under {
+					t.Errorf("mode %d, reduce transparency: the band %v %08x (mode %d), want Under %08x", m, ok, q.Color[0], q.Mode, under)
+				}
+				continue
+			}
+			want := rexui.ScrollEdgeLook.Hard.Backdrop(g.k)
+			want.Base = f.fill
+			if !ok || q.Mode != gpu.ModeBackdrop || q.Color[0] != under || g.list.Backdrops[q.Tex] != want {
+				t.Fatalf("mode %d: the band %v, mode %d, fallback %08x, want the Hard blur over BandFill, fallback Under %08x", m, ok, q.Mode, q.Color[0], under)
+			}
+			if flat := want.Over(want.Base); flat != [2]uint32{0xFFFFFFFF, 0x262626FF}[m] {
+				t.Errorf("mode %d: over nothing the band is %08x", m, flat)
+			}
+			rexui.ScrollEdgeLook.HardInactive.Add = 0.1
+			g.in.Focused = false
+			g.settle()
+			q, _ = bar()
+			inactive := rexui.ScrollEdgeLook.HardInactive.Backdrop(g.k)
+			rexui.ScrollEdgeLook.HardInactive = rexui.ScrollEdgeLook.Hard
+			inactive.Base = f.fill
+			if q.Mode != gpu.ModeBackdrop || g.list.Backdrops[q.Tex] != inactive {
+				t.Errorf("mode %d, inactive: the band's blur is not HardInactive's", m)
+			}
+		}
+	}
+}
+
+// bandBlurs are the backdrops whose rectangle meets the top band of g's
+// window, x0 to x1 pixels across and band pixels high.
+func bandBlurs(g *rig, x0, x1, band float32) []gpu.Backdrop {
+	var bs []gpu.Backdrop
+	for i := range g.list.Quads {
+		if q := &g.list.Quads[i]; q.Mode == gpu.ModeBackdrop && q.Rect[0] < x1 && q.Rect[2] > x0 && q.Rect[1] < band {
+			bs = append(bs, g.list.Backdrops[q.Tex])
+		}
+	}
+	return bs
+}
+
+// Rows drawn under the band, which a toolbar built after them covers
+// (ContentUnder, not ContentEdge: their view has no inset and no scroll edge
+// of its own), are blurred by the band, once: one backdrop over them, after
+// them in the draw list, AppKit's Hard over BandFill.
+func TestToolbarBandBlursRows(t *testing.T) {
+	g := newRig(t, theme.Dark, nil, func(g *rig) {
+		k := g.k
+		c := k.Context()
+		r := k.Theme()
+		theme.At(c, 0, 0, float32(g.w), float32(g.h))
+		c.Push(c.Box(theme.Floating, "pane"))
+		for i := range 20 {
+			c.NextSize(ui.Pct(1), ui.Px(k.Pt(24)))
+			c.NextBG(rexui.ListLook.Background.RGBA(r) | 0xFF)
+			if i == 1 {
+				c.NextBG(rexui.ListLook.Selection.RGBA(r))
+			}
+			c.BoxKeyed(ui.DrawBackground, ui.KeyN(c.ParentKey(), uint64(i)), nil)
+		}
+		c.Pop()
+		tb := rexui.BeginToolbar(k, "Toolbar", rexui.ToolbarOpts{Style: theme.ToolbarUnified, Title: "Files", ContentUnder: true,
+			BandFill: r.Colors[theme.ControlBackground]})
+		tb.Title()
+		tb.End()
+	})
+	g.settle()
+	r := g.k.Theme()
+	band := g.k.Pt(52)
+	bs := bandBlurs(g, 0, float32(g.w), band)
+	want := rexui.ScrollEdgeLook.Hard.Backdrop(g.k)
+	want.Base = r.Colors[theme.ControlBackground]
+	if len(bs) != 1 || bs[0] != want {
+		t.Fatalf("the band's blurs %+v, want one: the Hard pocket over BandFill", bs)
+	}
+	sel, blur := -1, -1
+	for i := range g.list.Quads {
+		q := &g.list.Quads[i]
+		if q.Mode == gpu.ModeShape && q.Color[0] == rexui.ListLook.Selection.RGBA(r) && q.Rect[1] < band {
+			sel = i
+		}
+		if q.Mode == gpu.ModeBackdrop {
+			blur = i
+		}
+	}
+	if sel < 0 || blur < sel {
+		t.Errorf("the selected row under the band is quad %d, the band's blur %d: it is not blurred", sel, blur)
+	}
+}
+
+// A pane whose scroll view runs under the band draws the band's blur itself
+// (ContentEdge): the toolbar over it, content scrolled under it
+// (ContentUnder), adds none, so the band is blurred once: a table's Hard
+// pocket, a plain scroll view's thin film.
+func TestToolbarBandBlursOnce(t *testing.T) {
+	b := &bandTable{edgeTable: edgeTable{cols: [2]base.Column{{Title: "Name", Width: 300}, {Title: "Kind", Width: 200}}}, under: true}
+	g := newRig(t, theme.Light, nil, b.build)
+	b.st.SetTopRow(10, 0)
+	g.settle()
+	if bs := bandBlurs(g, 0, float32(g.w), g.k.Pt(52)); len(bs) != 1 || bs[0] != rexui.ScrollEdgeLook.Hard.Backdrop(g.k) {
+		t.Errorf("a table under the band: its blurs %+v, want one, the table's Hard pocket", bs)
+	}
+	var st base.ScrollState
+	var inner ui.ID
+	g = newRig(t, theme.Light, nil, func(g *rig) {
+		k := g.k
+		c := k.Context()
+		theme.At(c, 0, 0, float32(g.w), float32(g.h))
+		c.Push(c.Box(theme.Floating, "pane"))
+		k.NextScrollInset(k.Pt(52))
+		k.NextSize(ui.Pct(1), ui.Pct(1))
+		v := k.BeginScroll("Note", &st, base.ScrollVertical)
+		inner = v.Inner
+		c.NextSize(ui.Pct(1), ui.Px(4000))
+		c.BoxKeyed(0, ui.HashString(c.ParentKey(), "text"), nil)
+		k.CloseScrollContent(&v)
+		rexui.ScrollBars(k, &v)
+		k.CloseScroll(&v)
+		c.Pop()
+		tb := rexui.BeginToolbar(k, "Toolbar", rexui.ToolbarOpts{Style: theme.ToolbarUnified, Title: "Note", ContentUnder: true, ContentEdge: true})
+		tb.Title()
+		tb.End()
+	})
+	g.c.SetScroll(inner, 0, 200)
+	g.settle()
+	if bs := bandBlurs(g, 0, float32(g.w), g.k.Pt(52)); len(bs) != 1 || bs[0] != rexui.ScrollEdgeLook.Thin.Backdrop(g.k) {
+		t.Errorf("a scroll view under the band: its blurs %+v, want one, the thin film", bs)
 	}
 }

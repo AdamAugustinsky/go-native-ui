@@ -1,6 +1,7 @@
 package rexui
 
 import (
+	"gonativeui/gpu"
 	"gonativeui/icon"
 	"gonativeui/theme"
 	"gonativeui/ui"
@@ -51,13 +52,22 @@ type ToolbarOpts struct {
 	Panes [2]float32
 	// ContentUnder says content is scrolled under the toolbar: the band shows
 	// its bar and hairline (the scroll-edge effect) over the content pane
-	// (between Panes), as it always does while the window is inactive.
+	// (between Panes), as it always does while the window is inactive. The
+	// bar is AppKit's titlebar pocket (ScrollEdgeLook.Hard): a blur of what
+	// is drawn under the band (build the toolbar after it), over BandFill
+	// where nothing is (gpu.Backdrop.Base); with the content below the band,
+	// the pocket over the content's colour, flat (#FFFFFF, #262626 over
+	// #1E1E1E). Where there is no blur and under Reduce Transparency it is
+	// opaque (ScrollEdgeLook.Under). A pane whose scroll view runs under the
+	// band draws its own (ContentEdge): the band blurs once.
 	ContentUnder bool
 	// ContentEdge says the content pane's scroll view runs under the band
 	// (base.Kit.NextScrollInset, rexui.TableOpts.TopInset) and draws the
-	// scroll edge itself (ScrollEdgeLook, from ScrollBars): the band over
-	// the content pane is clear, whatever ContentUnder, Pocket and BandFill
-	// say, and the content shows through it. With the system's materials
+	// scroll edge itself (ScrollEdgeLook, from ScrollBars), the band's one
+	// blur (Hard for a table, the thin film for a plain scroll view, as
+	// AppKit's): the band over the content pane is clear, whatever
+	// ContentUnder, Pocket and BandFill say, and the content shows through
+	// it, blurred while it is scrolled under it. With the system's materials
 	// (base.Kit.Materials) the capsules are drawn then, not the system's
 	// glass, which lies below the window's pixels, under the content.
 	ContentEdge bool
@@ -325,16 +335,28 @@ func BeginToolbar(k *base.Kit, label string, o ToolbarOpts) Toolbar {
 		// toolbar), and the hairline just below it (y 52..52.5 measured: the
 		// line is outside the band); at rest, the content's colour
 		pk := theme.Snap(max(o.Pocket, 0))
-		fill := o.BandFill
+		fill, bg := o.BandFill, uint32(0)
+		var blur gpu.Backdrop
 		switch {
-		case bar && o.ContentUnder: // the blurred pocket's colour (ScrollEdgeRecipe.Under)
+		case bar && o.ContentUnder && r.Settings.ReduceTransparency: // opaque: the blurred pocket's colour (ScrollEdgeRecipe.Under)
 			fill = scrollEdgeUnder(k, 0, nil)
+		case bar && o.ContentUnder: // AppKit's titlebar pocket (Hard): a blur of what is drawn under the band, over the content's colour
+			blur = scrollEdgeBlur(k, true)
+			blur.Base = o.BandFill
+			if blur.Base == 0 {
+				blur.Base = blur.Tint
+			}
+			fill, bg = blur.Over(blur.Base), scrollEdgeUnder(k, 0, nil)
 		case bar:
 			fill = glassFallback(k, GlassTitlebar)
 		}
 		theme.At(c, bx0, 0, max(bx1-bx0, 0), h+pk)
 		flags := base.Floating
 		if !GlassNative(k, GlassTitlebar) {
+			if bg != 0 { // the blur, flat over nothing; its fallback, opaque (Under)
+				c.NextBackdrop(blur)
+				fill = bg
+			}
 			c.NextBG(fill)
 			flags |= ui.DrawBackground
 		}

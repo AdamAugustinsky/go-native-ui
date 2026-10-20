@@ -100,7 +100,9 @@ func NewSurface(n platform.Native, w, h int32, scale float32) (*Surface, error) 
 	s.layer = objc.Retain(objc.Send(objc.Cls("CAMetalLayer"), selLayer))
 	objc.Send1(s.layer, selSetDevice, uintptr(s.device))
 	objc.Send1(s.layer, selSetPixelFormat, 80) // MTLPixelFormatBGRA8Unorm
-	objc.Send1(s.layer, selSetFBOnly, 1)
+	// Not framebuffer-only: a backdrop (gpu.ModeBackdrop) reads back what
+	// the frame drew so far.
+	objc.Send1(s.layer, selSetFBOnly, 0)
 	objc.Send1(s.layer, selSetMaxDrawables, 2)
 	objc.Send1(s.layer, selSetDisplaySync, 1)
 	// A window with a backdrop shows it through the layer wherever the app
