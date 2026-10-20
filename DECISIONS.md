@@ -980,3 +980,28 @@ The whole UI is rewritten in Go on the framework with the Rex design system, mac
 **Reasoning:** moving the buttons from outside (Electron's `trafficLightPosition`) lasts only until AppKit's next titlebar layout (a title, key or appearance change, full screen), and the group's hover area follows AppKit's model, not the moved frames; holding it from outside needs the private `_mouseInGroup:` anyway (Electron, Godot, iTerm2). With AppKit's own metrics every layout pass places the buttons, their hover areas and the zoom button's tiling menu. The selectors exist on macOS 15 and 27, the systems tested. The tag keeps the names out of a store binary; the runtime switch lets tests and apps exercise the public path in an ordinary build.
 
 **Alternatives:** an `NSToolbar` (fixed centres only: (26, 26) unified, (19, 20) unifiedCompact, and its title area takes the presses meant for tabs drawn in the band); a titlebar accessory (the buttons stay at (16, 16)); re-applied frames (hover areas stay at AppKit's default place); a runtime switch alone (the names stay in the binary).
+
+## D54. Blur over our own content is drawn by our renderer (phase 6, 2026-10-20)
+
+**Decision.** The scroll edge and the toolbar band blur what scrolls under them with a backdrop-blur primitive in our renderer, not with native views over the Metal layer. It follows AppKit's measured recipe: for the band and table headers the "Hard" edge (a blur of radius 6 at ¼ scale, the window colour mixed in at 0.8245 plus 0.03, and a 1-px hairline); for plain scroll views the softer "ThinFilm" recipe. Metal comes first, then D3D11 and GL. Until a backend has it, and under Reduce Transparency, the band is the opaque fill measured from AppKit's blurred band (`p6-pocketfill`: `#FCFCFC` light, `#2B2B2B` dark, tinted by selected rows under it). Native glass stays where it already works, below our layer: the sidebar, the inspector and the window backdrop (N3, D52).
+
+**Evidence** (`docs/research/glass-over-metal.md`, `p6-glassprobe`, Mac mini, macOS 27.2 26B5101f):
+- **Native glass sees our content.** Native backdrops placed over a CAMetalLayer sample it live, in the same frame (30 of 30 flash captures), and the titlebar pocket looks the same over Metal as over AppKit content (ΔE ≤ 0.1). So both paths are possible.
+- **Cost.** The drawn blur adds 0.07–0.16 ms of GPU time per frame (GPU busy 18.5 % against 15 % with no blur), against 22 % for the native titlebar pocket and 33 % for native toolbar items. Idle stays at 0 presents.
+- **Look.** The drawn Hard recipe is within mean ΔE 0.23 (light) and 0.24 (dark) of AppKit; over saturated colour it is ΔE 2.50 (light) and 0.61 (dark).
+- **Native glass above our layer** needs a second, transparent foreground layer for the toolbar glyphs, hover and press. Keeping it in step costs about 1.4 ms of main-thread wait per frame (`presentsWithTransaction`: 0 out-of-step frames in 7,129); without that wait, frames get out of step (1 in 4,259, and 2 in 2,128 by another method). An `NSToolbar` also takes every click in the band, even where it is empty.
+
+**Reasoning:**
+- The drawn blur changes in the same frame as our scroll state and works in an inactive window.
+- It appears in offscreen renders and golden tests.
+- Windows and Linux share it.
+- It costs a fraction of the native paths, and it needs no second drawable or main-thread wait.
+
+**Risks:**
+- The recipe's numbers come from AppKit's private layer names and may change in a later macOS; the probe re-reads them (`-phases inactive-dump`).
+- The Liquid Glass slider, Increase Contrast and full screen were not measured, so the drawn band does not follow them yet.
+
+**Alternatives:**
+- **Native glass capsules over a drawn pocket,** with a foreground layer for the glyphs (effort L). Possible later, decided by eye once the drawn band ships, but it costs the second drawable, the ~1.4 ms wait, and AppKit's own press response.
+- **Hosting an `NSToolbar`.** Rejected: it takes the band's clicks.
+- **A transparent `NSScrollView` over our layer, to borrow its pocket.** Rejected: the colour is wrong, and it relies on behaviour AppKit doesn't promise.
