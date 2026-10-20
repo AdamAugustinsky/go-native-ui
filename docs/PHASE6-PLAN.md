@@ -1031,7 +1031,7 @@ Running. **Checkpoint 1 is the priority:** D4 (matching D0's scenes, with N3's g
 
 **Machine facts found on the Mac mini (2026-10-20):**
 - **Scroll bars:** a mouse is attached, so the system's scroller style is legacy. A new process reads overlay for about 5 s, until AppKit hears from the mouse, then gets `NSPreferredScrollerStyleDidChangeNotification` and relays out. That is the system, not us; the idle test allows frames only right after such a system-value change. With legacy scrollers, AppKit lays content out beside the scroller; D4 is making our scroll areas do the same.
-- **New windows stay hidden for about 5.5 s** in test processes here. The live harness waits for visibility instead of calling it a blocked main thread (`p6-stallfix`); the cause, and whether a launched app is affected, is being found on `p6-occluded`. Startup numbers taken here wait on it.
+- **A process with no bundle identifier** (a test binary, `go run`) got no events for about 5.5 s after its window opened: AppKit's launch-time window restoration waits with nowhere to look. A pure AppKit program does the same, and bundled apps launched with `open` don't (0.14–0.19 s). `p6-occluded` turns restoration off, in memory, for processes without a bundle identifier (`platform/restore_darwin.go`); first-frame and startup numbers were never affected, since the first frame is drawn before the wait. The live harness also waits for visibility instead of calling it a blocked main thread (`p6-stallfix`).
 - **Build 26B5101f vs the MacBook's 26B5091g:** the selected sidebar row is regular weight here and semibold there. We keep semibold, since the MacBook is the reference. The dark `separatorColor` differs slightly; it is read live.
 - **The external SSD** (Go's cache and temp dirs) stopped answering on 2026-10-20 because macOS was asking whether OpenCode.app may access a removable volume. Until that is answered, Go uses one shared cache in the opencode temp dir on the main disk, and a watchdog removes agents' private caches if free space falls below 4 GB.
 
@@ -1057,7 +1057,7 @@ Running. **Checkpoint 1 is the priority:** D4 (matching D0's scenes, with N3's g
 | N4 `NSTextView` composer | `p6-n4` | its one fix round: IME commit never sends, the amd64 `NSRange` passing, frames inside the autocorrect panel's loop |
 | C6 animated images | `p6-c6` | in review |
 | CI flakes, round 2 | `p6-flakes` | the macOS spike vsync gate first (it blocks most branches), then the timing tests, a possible white first frame on Windows, duplicate traffic-light tracking areas |
-| The 5.5 s hidden window | `p6-occluded` | finding the cause |
+| Window restoration off for unbundled processes | `p6-occluded` | done; merges after `main` is green on Linux again |
 
 **Queued:** D6 (gallery, notes, Pilot, one agent each) once D4 merges; F4 and S3 once F3 merges; D7b once N4 and D7a merge; then S4, C7, T4, T5, N6, and ZapFast Z2 when its inputs land. New build agents start once the SSD is back.
 
