@@ -9,22 +9,23 @@ import (
 )
 
 // Finder's rows scrolled under the toolbar cannot be read through its scroll
-// edge, as AppKit's blur leaves none legible: in the pocket's clear parts (the
-// band above and below the capsules, between the title and the view
-// capsule; the header between its titles) no pixel is more than ΔE 2 from
-// the pocket's median, though rows, their text and a selection lie under it.
+// edge, as AppKit's blur leaves none legible: in strips across the pocket
+// clear of the toolbar's and the header's own parts on every platform (the
+// band above and below the capsules, the header above and below its titles
+// and separators) no pixel is more than ΔE 2 from the pocket's median,
+// though rows, their text and a selection lie under them.
 // And the pocket is the colour AppKit's averages to there, within ΔE 2
 // (captures-macmini, finder-*-scrolled, 26B5101f: its two selected rows tint
 // it), in light and dark, key and inactive.
 func TestFinderRowsUnderTheBand(t *testing.T) {
-	regions := [][4]int{{190, 1, 880, 7}, {190, 45, 880, 51}, {380, 8, 585, 44}, {300, 54, 440, 79}, {560, 54, 630, 79}} // points
+	regions := [][4]int{{190, 1, 880, 7}, {190, 45, 880, 51}, {190, 54, 880, 57}, {190, 74, 880, 79}} // points
 	for _, c := range []struct {
 		pref     theme.Preference
 		inactive bool
 		appkit   [3]uint8 // the mean over the regions
 	}{
-		{theme.ForceLight, false, [3]uint8{228, 240, 255}}, {theme.ForceLight, true, [3]uint8{251, 251, 251}},
-		{theme.ForceDark, false, [3]uint8{35, 46, 61}}, {theme.ForceDark, true, [3]uint8{44, 44, 44}},
+		{theme.ForceLight, false, [3]uint8{229, 241, 255}}, {theme.ForceLight, true, [3]uint8{252, 252, 252}},
+		{theme.ForceDark, false, [3]uint8{35, 46, 60}}, {theme.ForceDark, true, [3]uint8{43, 43, 43}},
 	} {
 		off, dm, img, err := render(ShotOptions{Scene: Finder, Preference: c.pref, Inactive: c.inactive, Scrolled: true})
 		if err != nil {
@@ -32,14 +33,18 @@ func TestFinderRowsUnderTheBand(t *testing.T) {
 		}
 		dm.Close() // the file icons' cache
 		off.Close()
-		var px [][3]uint8
+		type pixel struct {
+			c    [3]uint8
+			x, y int
+		}
+		var px []pixel
 		var sum [3]int
 		for _, r := range regions {
 			for y := 2 * r[1]; y < 2*r[3]; y++ {
 				for x := 2 * r[0]; x < 2*r[2]; x += 2 {
 					p := img.PixOffset(x, y)
 					v := [3]uint8{img.Pix[p], img.Pix[p+1], img.Pix[p+2]}
-					px = append(px, v)
+					px = append(px, pixel{v, x, y})
 					for i := range sum {
 						sum[i] += int(v[i])
 					}
@@ -47,15 +52,19 @@ func TestFinderRowsUnderTheBand(t *testing.T) {
 			}
 		}
 		sort.Slice(px, func(i, j int) bool {
-			return int(px[i][0])+int(px[i][1])+int(px[i][2]) < int(px[j][0])+int(px[j][1])+int(px[j][2])
+			a, b := px[i].c, px[j].c
+			return int(a[0])+int(a[1])+int(a[2]) < int(b[0])+int(b[1])+int(b[2])
 		})
-		med := lab(px[len(px)/2])
-		worst := 0.0
+		med := px[len(px)/2]
+		worst, at := 0.0, med
 		for _, v := range px {
-			worst = max(worst, cielab.DeltaE2000(lab(v), med))
+			if d := cielab.DeltaE2000(lab(v.c), lab(med.c)); d > worst {
+				worst, at = d, v
+			}
 		}
 		if worst > 2 {
-			t.Errorf("preference %d, inactive %v: rows show through the scroll edge (a pixel ΔE %.1f from the pocket's median)", c.pref, c.inactive, worst)
+			t.Errorf("preference %d, inactive %v: rows show through the scroll edge (%v at (%d, %d) px, ΔE %.1f from the pocket's median %v)",
+				c.pref, c.inactive, at.c, at.x, at.y, worst, med.c)
 		}
 		n := len(px)
 		mean := [3]uint8{uint8((sum[0] + n/2) / n), uint8((sum[1] + n/2) / n), uint8((sum[2] + n/2) / n)}
