@@ -118,12 +118,28 @@ func TestRemoveIsARealAlert(t *testing.T) {
 // Paste and Undo through the menu, and ⌘V through the window.
 func TestEditMenuActsOnce(t *testing.T) {
 	testlock.Hold(t, "pasteboard") // the general pasteboard is the system's: Cut and Paste must see each other's
-	l, _ := startReal(t)
+	l, n := startReal(t)
 	l.Click(ui.RoleTextField, "New note")
 	l.Type("hello")
-	if got := fieldText(l); got != "hello" {
-		t.Fatalf("the field holds %q after typing", got)
+	// A paste is answered by the pasteboard worker in a later frame: the field
+	// is read once it holds what the step should have made it hold.
+	holds := func(after, want string) {
+		t.Helper()
+		var tr ui.SemTree // the condition runs on the main thread, where the tree is read directly
+		field := func() string {
+			n.Context().Semantics(&tr)
+			for i := range tr.Nodes {
+				if nd := &tr.Nodes[i]; nd.Role == ui.RoleTextField && string(tr.Text(nd.Name)) == "New note" {
+					return string(tr.Text(nd.Value))
+				}
+			}
+			return "<no field>"
+		}
+		if !l.Within("the field holds "+want, 240, func() bool { return field() == want }) {
+			t.Errorf("after %s the field holds %q, want %q", after, fieldText(l), want)
+		}
 	}
+	holds("typing", "hello")
 	choose := func(item string) {
 		t.Helper()
 		var ok bool
@@ -134,25 +150,16 @@ func TestEditMenuActsOnce(t *testing.T) {
 		if !ok {
 			t.Fatalf("no enabled Edit ▸ %s", item)
 		}
-		l.Frames(4)
 	}
 	choose("Select All")
 	choose("Cut")
-	if got := fieldText(l); got != "" {
-		t.Errorf("after Cut the field holds %q", got)
-	}
+	holds("Cut", "")
 	choose("Paste")
-	if got := fieldText(l); got != "hello" {
-		t.Errorf("after one Paste the field holds %q, want hello once", got)
-	}
+	holds("one Paste", "hello")
 	l.Press(ui.KeyCode('V'), ui.ModSuper)
-	if got := fieldText(l); got != "hellohello" {
-		t.Errorf("after ⌘V the field holds %q, want hello twice", got)
-	}
+	holds("⌘V", "hellohello")
 	choose("Undo")
-	if got := fieldText(l); got != "hello" {
-		t.Errorf("after Undo the field holds %q, want one paste undone", got)
-	}
+	holds("Undo", "hello")
 }
 
 // The keyboard focus ring follows Tab, not the mouse: a click on the switch
