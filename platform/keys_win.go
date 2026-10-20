@@ -50,14 +50,28 @@ func buildKeyMap() (m [256]Key) {
 	for i := 0; i < 12; i++ {
 		m[0x70+i] = KeyF1 + Key(i) // VK_F1..VK_F12
 	}
+	for i := 0; i < 8; i++ {
+		m[0x7C+i] = KeyF13 + Key(i) // VK_F13..VK_F20
+	}
+	// The keypad, by virtual key: they are VK_NUMPADn only while NumLock is
+	// on; with it off the same keys send VK_HOME, VK_UP and so on, which are
+	// the navigation keys above.
+	for i := 0; i < 10; i++ {
+		m[0x60+i] = KeyNum0 + Key(i) // VK_NUMPAD0..VK_NUMPAD9
+	}
+	m[0x6A], m[0x6B], m[0x6D], m[0x6E], m[0x6F] = KeyNumMultiply, KeyNumAdd, KeyNumSubtract, KeyNumDecimal, KeyNumDivide
+	m[0x0C] = KeyNumClear // VK_CLEAR: keypad 5 with NumLock off
+	m[0x92] = KeyNumEqual // VK_OEM_NEC_EQUAL: the keypad's =
 	return m
 }
 
-// scanKeys maps set-1 scancodes of the letter and digit keys to Key by
-// physical (US) position, so letters/digits match macOS and Linux regardless
-// of the keyboard layout (VK_A..VK_Z follow the layout).
-var scanKeys = func() (t [0x35]Key) {
+// scanKeys maps set-1 scancodes of the letter, digit and punctuation keys to
+// Key by physical (US) position, so they match macOS and Linux regardless of
+// the keyboard layout (VK_A..VK_Z follow the layout).
+var scanKeys = func() (t [0x36]Key) {
 	t[0x1A], t[0x1B], t[0x34] = KeyLeftBracket, KeyRightBracket, KeyPeriod
+	t[0x0C], t[0x0D], t[0x27], t[0x28], t[0x29], t[0x2B], t[0x33], t[0x35] =
+		KeyMinus, KeyEqual, KeySemicolon, KeyQuote, KeyGrave, KeyBackslash, KeyComma, KeySlash
 	for i, r := range "1234567890" {
 		t[0x02+i] = Key0 + Key(r-'0')
 	}
@@ -72,3 +86,62 @@ var scanKeys = func() (t [0x35]Key) {
 	}
 	return t
 }()
+
+// vkIsModifier reports whether virtual key wp is a modifier key (Shift,
+// Control, Alt, the Windows keys, left or right): its press or release is an
+// EvModifiers, not a key.
+func vkIsModifier(wp uintptr) bool {
+	switch wp {
+	case 0x10, 0x11, 0x12, 0x5B, 0x5C, 0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5:
+		return true
+	}
+	return false
+}
+
+// winNeedsChar reports whether Event.Char of virtual key wp needs the
+// layout to say (MapVirtualKeyW): the VK_OEM_* keys, whose meaning differs
+// between layouts; the letters are their own character.
+func winNeedsChar(wp uintptr) bool { return wp >= 0xBA && wp <= 0xE2 }
+
+// winChar is the character virtual key wp types with no modifier but Shift
+// (Event.Char), lower-cased: a letter's virtual key is the letter on the
+// user's layout (VK_A..VK_Z follow it), and an OEM key's is the printable
+// character mapped (MapVirtualKeyW(vk, MAPVK_VK_TO_CHAR), whose top bit marks a
+// dead key). 0 for the rest.
+func winChar(wp uintptr, mapped uint32) rune {
+	if wp >= 'A' && wp <= 'Z' {
+		return rune(wp-'A') + 'a'
+	}
+	if !winNeedsChar(wp) || mapped&0x80000000 != 0 {
+		return 0
+	}
+	if r := rune(mapped & 0xFFFF); r > 0x20 && r < 0x7F {
+		if r >= 'A' && r <= 'Z' {
+			r += 'a' - 'A'
+		}
+		return r
+	}
+	return 0
+}
+
+// A precision touchpad's pinch reaches a window that does not handle
+// WM_POINTER or WM_GESTURE as WM_MOUSEWHEEL with MK_CONTROL set while the
+// Control key is not down (the system adds the flag; Chromium and Firefox read
+// it the same way), and no phases: each message is one step of the pinch.
+const (
+	mkControl = 0x0008
+	// winPinchPerNotch is the change in scale one notch of wheel delta (120)
+	// stands for, 0.1. The system gives no scale of its own; the figure is
+	// a calibration to refine against a touchpad.
+	winPinchPerNotch = 0.1
+)
+
+// winPinch reports whether a WM_MOUSEWHEEL with wParam wp is a touchpad pinch
+// (ctrlDown: the Control key is physically down, then it is an ordinary
+// Ctrl+wheel) and the change in scale it makes: forward, fingers apart, grows.
+func winPinch(wp uintptr, ctrlDown bool) (amount float32, ok bool) {
+	if wp&mkControl == 0 || ctrlDown {
+		return 0, false
+	}
+	return float32(int16(wp>>16)) / 120 * winPinchPerNotch, true
+}

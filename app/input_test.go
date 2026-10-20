@@ -210,8 +210,8 @@ func TestKeysAndText(t *testing.T) {
 	tr.event(key(platform.KeyDown, 0, 0), nil)
 	tr.event(key(platform.KeyA+2, platform.FlagDown, platform.ModCtrl), nil)
 	tr.event(key(platform.Key0+7, platform.FlagDown, 0), nil)
-	if tr.event(key(platform.KeyF5, platform.FlagDown, 0), nil) {
-		t.Fatal("a function key repaints although ui has no code for it")
+	if tr.event(key(platform.KeyUnknown, platform.FlagDown, 0), nil) {
+		t.Fatal("a key repaints although ui has no code for it")
 	}
 	in := &tr.in
 	want := []ui.KeyEvent{

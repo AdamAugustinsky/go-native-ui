@@ -55,19 +55,75 @@ const (
 	KeyEnd
 	KeyPageUp
 	KeyPageDown
+	// KeyNum0..KeyNum9 are the numeric keypad's digits (contiguous); the keypad's
+	// Enter is KeyEnter.
+	KeyNum0
+	KeyNum1
+	KeyNum2
+	KeyNum3
+	KeyNum4
+	KeyNum5
+	KeyNum6
+	KeyNum7
+	KeyNum8
+	KeyNum9
+	KeyNumDecimal
+	KeyNumAdd
+	KeyNumSubtract
+	KeyNumMultiply
+	KeyNumDivide
+	KeyNumEqual
+	KeyNumClear
+	// KeyF1..KeyF20 are the function keys (contiguous).
+	KeyF1
+	KeyF2
+	KeyF3
+	KeyF4
+	KeyF5
+	KeyF6
+	KeyF7
+	KeyF8
+	KeyF9
+	KeyF10
+	KeyF11
+	KeyF12
+	KeyF13
+	KeyF14
+	KeyF15
+	KeyF16
+	KeyF17
+	KeyF18
+	KeyF19
+	KeyF20
 )
 
-// Punctuation keys, by physical (US) position; their codes are their ASCII values.
+// Punctuation keys; their codes are their ASCII values. Where the platform
+// reports what a key types, a Ctrl or Super chord names the key by it (see
+// KeyEvent.Code), so these are the characters; otherwise the US position.
 const (
 	KeyLeftBracket  KeyCode = '['
 	KeyRightBracket KeyCode = ']'
 	KeyPeriod       KeyCode = '.'
+	KeyComma        KeyCode = ','
+	KeyEqual        KeyCode = '='
+	KeyMinus        KeyCode = '-'
+	KeySlash        KeyCode = '/'
+	KeySemicolon    KeyCode = ';'
+	KeyQuote        KeyCode = '\''
+	KeyBackslash    KeyCode = '\\'
+	KeyGrave        KeyCode = '`'
 )
 
 // KeyEvent is one key press (Down) or release this frame.
 type KeyEvent struct {
-	// Code is the key.
+	// Code is the key a shortcut names: the character the key types on the
+	// user's layout (letters and the punctuation above) while Ctrl or Super is
+	// held and the platform tells it, so that ⌘Z is where an AZERTY or Dvorak
+	// user expects it; the physical key otherwise (Physical).
 	Code KeyCode
+	// Physical is the key by its position on a US keyboard, whatever the
+	// layout types; 0 when the same as Code or unknown.
+	Physical KeyCode
 	// Mods are the modifiers held at the event.
 	Mods Mods
 	// Down is true for a press (or auto-repeat), false for a release.
@@ -93,6 +149,45 @@ const (
 	EditDelete                          // delete the selection
 )
 
+// The commands of the system's key bindings, which the platform delivers
+// instead of the keys while a field has focus (macOS: the Emacs keys of ⌃A,
+// ⌃E, ⌃K and ⌃T, and the standard moves and deletes, as the user's
+// DefaultKeyBinding.dict has them). A move with EditExtend added (Extend) extends
+// the selection instead of moving the caret. A single-line field treats line,
+// paragraph and document alike.
+const (
+	EditMoveLeft EditAction = EditDelete + 1 + iota // one character cluster (a selection collapses to its edge)
+	EditMoveRight
+	EditMoveUp // a single-line field goes to the start (macOS), as the key does
+	EditMoveDown
+	EditMoveWordLeft
+	EditMoveWordRight
+	EditMoveLineStart
+	EditMoveLineEnd
+	EditMoveParagraphStart
+	EditMoveParagraphEnd
+	EditMoveDocumentStart
+	EditMoveDocumentEnd
+	EditDeleteBackward // the selection, else a character cluster
+	EditDeleteForward
+	EditDeleteWordBackward
+	EditDeleteWordForward
+	EditDeleteToLineStart // the selection, else to the start or end of the line or paragraph
+	EditDeleteToLineEnd
+	EditDeleteToParagraphStart
+	EditDeleteToParagraphEnd
+	EditTranspose // swap the two characters around the caret
+
+	// EditExtend, added to a move, extends the selection with it.
+	EditExtend EditAction = 0x80
+)
+
+// Extend returns the move a with EditExtend added.
+func (a EditAction) Extend() EditAction { return a | EditExtend }
+
+// Base returns a without EditExtend, and whether it had it.
+func (a EditAction) Base() (EditAction, bool) { return a &^ EditExtend, a&EditExtend != 0 }
+
 // SemRequest is an assistive technology's request for an action on a box,
 // delivered through Input.Actions: Key names the box, Action which action
 // (one bit of SemAction), Value its argument (ActSetValue: the new value of a
@@ -110,7 +205,9 @@ const (
 	// MaxKeys is the number of key events per frame.
 	MaxKeys = 8
 	// MaxEdit is the number of edit actions per frame.
-	MaxEdit = 4
+	MaxEdit = 8
+	// MaxGestures is the number of trackpad gesture events per frame.
+	MaxGestures = 16
 	// MaxCommands is the number of menu commands per frame.
 	MaxCommands = 8
 	// MaxActions is the number of accessibility action requests per frame.
@@ -215,8 +312,16 @@ type Input struct {
 
 	// Edit[:NEdit] are this frame's edit actions for the focused text field
 	// (PushEdit).
-	Edit  [MaxEdit]EditAction
-	NEdit int
+	// EditAfter[i] is how many of this frame's keys came before Edit[i]: the
+	// field applies keys and edit actions in the order they arrived.
+	Edit      [MaxEdit]EditAction
+	EditAfter [MaxEdit]uint16
+	NEdit     int
+	// Gestures[:NGestures] are this frame's trackpad gesture events in order
+	// (AddGesture); ui latches each gesture to a box (gesture.go) and reports
+	// it through Signal.Magnify and Signal.Rotate.
+	Gestures  [MaxGestures]GestureEvent
+	NGestures int
 	// Commands[:NCommands] are the ids of the menu commands the system
 	// delivered this frame, such as a native menu item (PushCommand); package
 	// menu takes them with the commands that matched a shortcut.
@@ -253,7 +358,7 @@ func (in *Input) PushEdit(a EditAction) bool {
 	if in.NEdit >= MaxEdit {
 		return false
 	}
-	in.Edit[in.NEdit] = a
+	in.Edit[in.NEdit], in.EditAfter[in.NEdit] = a, uint16(in.NKeys)
 	in.NEdit++
 	return true
 }
@@ -456,7 +561,7 @@ func (in *Input) ClearFrame() {
 	in.NKeys, in.NText = 0, 0
 	in.CommitOff, in.CommitLen = 0, 0
 	in.FocusGained = false
-	in.NEdit, in.NCommands, in.NActions = 0, 0, 0
+	in.NEdit, in.NCommands, in.NActions, in.NGestures = 0, 0, 0, 0
 	in.HasPaste, in.HasReplace, in.ReplaceN = false, false, 0
 	in.HasMenuChoice = false
 	if cap(in.Paste) > MaxKeptPaste { // do not hold on to more than a supported paste
@@ -498,5 +603,22 @@ type Signal struct {
 	ActionValue   float64   // the argument of the last requested action (ActSetValue)
 	DragDelta     [2]float32
 	Scroll        [2]float32 // scroll applied to the box this frame, in pixels (positive scrolls the view toward the end)
-	Mouse         [2]float32 // pointer position relative to the box's top-left corner (previous frame's rectangle)
+	// Magnify is the pinch that went to the box this frame, as the change in
+	// scale (0.1 grows the content by 10 %, -0.1 shrinks it; the frame's
+	// events add up): the box under the pointer when the pinch began, and its
+	// ancestors, wherever the fingers go (Context.Gesture). Rotate is the
+	// rotation, in radians, positive counterclockwise as the user sees it.
+	// SmartMagnify is a two-finger double tap on the box (smart zoom).
+	// GestureBegan and GestureEnded say that this frame had the start or the end
+	// (or cancel) of a pinch or rotation; GestureCancelled that it was
+	// cancelled, or cut short by its box going away or the window losing the
+	// keyboard focus (the box that went away is told nothing); GestureAt is where the gesture's last
+	// event this frame was (pixels, like Mouse's window coordinates).
+	Magnify, Rotate  float32
+	SmartMagnify     bool
+	GestureBegan     bool
+	GestureEnded     bool
+	GestureCancelled bool
+	GestureAt        [2]float32
+	Mouse            [2]float32 // pointer position relative to the box's top-left corner (previous frame's rectangle)
 }
