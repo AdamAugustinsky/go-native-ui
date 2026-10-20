@@ -154,7 +154,7 @@ func Sidebar(k *base.Kit, label string, st *SidebarState, items []SidebarItem, o
 	c.NextBG(GlassFill(k, GlassSidebar))
 	c.NextRole(ui.RoleList)
 	c.NextSemName(label)
-	flags := ui.DrawBackground | ui.Clip | ui.Focusable | ui.FocusAnimation
+	flags := ui.DrawBackground | ui.Clip | ui.Focusable
 	if k.Disabled() {
 		flags = ui.DrawBackground | ui.Clip | ui.Disabled
 	}
