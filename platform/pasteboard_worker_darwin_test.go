@@ -594,14 +594,13 @@ func TestPasteFilesValidatesURLs(t *testing.T) {
 		"file://otherhost/share/x",
 		"file://localhost/tmp/local%20one",
 		"mailto:a@b.c",
-		"file:///tmp/nul%00byte",
 		"file:///tmp/plain",
 		"not a url at all",
 	)
 	e := r.request(1, WantFiles)
 	got := PasteFilePaths(r.w.q.textOf(e.Text))
-	// (A %00 stays as the three characters: NSURL does not decode it. A NUL in a path comes from a legacy list, above.)
-	if e.Flags != 0 || len(got) != 3 || got[0] != "/tmp/local one" || got[1] != "/tmp/nul%00byte" || got[2] != "/tmp/plain" {
+	// (NSURL's treatment of a %00 differs between macOS versions; a NUL inside a path is tested with the legacy lists, above.)
+	if e.Flags != 0 || len(got) != 2 || got[0] != "/tmp/local one" || got[1] != "/tmp/plain" {
 		t.Errorf("paths %q (flags %v)", got, e.Flags)
 	}
 }

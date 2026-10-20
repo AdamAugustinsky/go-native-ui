@@ -77,7 +77,8 @@ type clipboard struct {
 	tag      uint64
 	kinds    PasteKinds // what the request wants
 	kind     PasteKind  // what is being received (chosen by the backend)
-	big      bool       // a wanted kind is there but over MaxPaste
+	big      bool       // the kind being read is over MaxPaste
+	bigSeen  bool       // an earlier requested kind was over MaxPaste and another is being tried: if that gives nothing, the failure is FlagTooBig
 	deadline int64      // when the request fails without progress
 	buf      []byte     // the data being received; reused by every request
 
@@ -219,7 +220,7 @@ func (w *Window) clipRequestKinds(tag uint64, kinds PasteKinds) {
 	c := &w.clip
 	w.clipCancel()
 	c.ready = false // a newer request replaces an answer not yet delivered
-	c.pending, c.tag, c.kinds, c.big = true, tag, kinds, false
+	c.pending, c.tag, c.kinds, c.big, c.bigSeen = true, tag, kinds, false, false
 	c.kind = PasteText
 	if c.owned {
 		switch {
@@ -300,7 +301,7 @@ func (w *Window) clipFinish() {
 	fl := Flags(0)
 	if len(c.buf) == 0 {
 		fl = FlagFailed
-		if c.big {
+		if c.big || c.bigSeen {
 			fl |= FlagTooBig
 		}
 	}
@@ -349,6 +350,7 @@ func (w *Window) clipFailBig() {
 			started = w.x11BeginPaste()
 		}
 		if started {
+			c.bigSeen, c.big = true, false // the data of the next kind is not the one that was too big
 			c.deadline = nanotime() + clipTimeout
 			return
 		}
