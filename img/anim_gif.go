@@ -43,6 +43,12 @@ func openGIF(data []byte) (*gifAnim, error) {
 	}
 	g := &gifAnim{data: data, plays: 1}
 	g.w, g.h = int(data[6])|int(data[7])<<8, int(data[8])|int(data[9])<<8
+	if g.w == 0 || g.h == 0 {
+		return nil, errGIF
+	}
+	if !fitsCanvas(int64(g.w), int64(g.h)) {
+		return nil, errAnimLarge
+	}
 	i := 13
 	if data[10]&0x80 != 0 {
 		i += 3 << (data[10]&7 + 1)
@@ -94,6 +100,15 @@ func openGIF(data []byte) (*gifAnim, error) {
 			}
 			start := i
 			flags := data[i+9]
+			// The standard decoder allocates a frame's own width by height:
+			// a frame has to fit the canvas limit too.
+			fw, fh := int64(data[i+5])|int64(data[i+6])<<8, int64(data[i+7])|int64(data[i+8])<<8
+			if fw == 0 || fh == 0 {
+				return nil, errGIF
+			}
+			if !fitsCanvas(fw, fh) {
+				return nil, errAnimLarge
+			}
 			i += 10
 			if flags&0x80 != 0 {
 				i += 3 << (flags&7 + 1)
@@ -133,9 +148,13 @@ func (g *gifAnim) finish() (*gifAnim, error) {
 }
 
 func (g *gifAnim) size() (w, h int) { return g.w, g.h }
-func (g *gifAnim) count() int       { return len(g.frames) }
-func (g *gifAnim) playCount() int   { return g.plays }
-func (g *gifAnim) delay(i int) int  { return int(g.frames[i].delayMs) }
+
+// retained: the file, and the compositor's canvas, the canvas it restores
+// and the converted frame (three canvases at most).
+func (g *gifAnim) retained() int64 { return int64(len(g.data)) + 3*4*int64(g.w)*int64(g.h) }
+func (g *gifAnim) count() int      { return len(g.frames) }
+func (g *gifAnim) playCount() int  { return g.plays }
+func (g *gifAnim) delay(i int) int { return int(g.frames[i].delayMs) }
 
 // frame composites frame i and returns the canvas (valid until the next
 // call). Frames are cheap in order; asking for another frame replays the

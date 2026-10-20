@@ -3,9 +3,13 @@
 package img
 
 import (
+	"sync"
+	"sync/atomic"
 	"unsafe"
 
+	"gonativeui/internal/cf"
 	"gonativeui/internal/ffi"
+	"gonativeui/internal/objc"
 )
 
 // Which formats beyond GIF and APNG the system can animate: ImageIO decodes
@@ -15,18 +19,102 @@ const (
 	osAnimHEIF = true
 )
 
-// systemAutoplay reads the system's "Auto-play animated images" setting
-// (System Settings, Accessibility, Motion; macOS 14+) with
-// AXAnimatedImagesEnabled from Accessibility.framework, declared in
-// AXSettings.h (API_AVAILABLE macos(14.0)) and never written. Before macOS
-// 14, or when the symbol is missing, animations play. The framework is
-// opened with the decoding frameworks by the first worker that decodes an
-// image, which has happened before any animated image can be shown.
+// The system's "Auto-play animated images" setting (System Settings,
+// Accessibility, Motion; macOS 14+) is read with AXAnimatedImagesEnabled from
+// Accessibility.framework, declared in AXSettings.h (API_AVAILABLE macos(14.0)),
+// and never written. The framework is opened, and its change notification
+// observed, by the first worker that opens an animation of any format (a GIF
+// too), before the owner can hold an animated handle. Before macOS 14, or
+// when the symbol is missing, animations play.
+var ax struct {
+	once sync.Once
+	fn   uintptr // AXAnimatedImagesEnabled
+	name uintptr // AXAnimatedImagesEnabledDidChangeNotification
+	mu   sync.Mutex
+	// The caches with animations: the change notification wakes their loops.
+	caches []*Cache
+}
+
+// axLoads counts calls to axLoad (tests check a GIF-only app makes them).
+var axLoads atomic.Int32
+
+// axLoad opens Accessibility.framework and installs the observer of
+// AXAnimatedImagesEnabledDidChangeNotification, once. It runs on a worker.
+func axLoad() {
+	axLoads.Add(1)
+	ax.once.Do(func() {
+		if cf.Init() != nil {
+			return
+		}
+		lib, err := cf.Framework("Accessibility")
+		if err != nil {
+			return
+		}
+		ax.fn = cf.Sym(lib, "AXAnimatedImagesEnabled")
+		name := cf.Const(lib, "AXAnimatedImagesEnabledDidChangeNotification")
+		ax.name = name
+		if ax.fn == 0 || name == 0 {
+			return
+		}
+		fr := cf.Acquire()
+		defer cf.Release(fr)
+		defer cf.Pool(fr)()
+		// The block is global and runs on the thread that posts: it wakes
+		// the loop of every cache that has an animation, whose next frame
+		// reads the setting again (autoplay is read once per frame).
+		block := objc.NewGlobalBlock("v16@?0@8", func(*ffi.CB) { axChanged() })
+		center := cf.Msg(fr, cf.Cls(fr, "NSNotificationCenter"), cf.Sel(fr, "defaultCenter"))
+		if center != 0 {
+			cf.Msg(fr, center, cf.Sel(fr, "addObserverForName:object:queue:usingBlock:"), name, 0, 0, uintptr(block))
+		}
+	})
+}
+
+// axChanged wakes the caches' loops.
+func axChanged() {
+	ax.mu.Lock()
+	cs := append([]*Cache(nil), ax.caches...)
+	ax.mu.Unlock()
+	for _, c := range cs {
+		if c.wake != nil {
+			c.wake()
+		}
+	}
+}
+
+// watchAutoplay registers c for the setting's change notification, once.
+func watchAutoplay(c *Cache) {
+	if c.watching {
+		return
+	}
+	c.watching = true
+	ax.mu.Lock()
+	ax.caches = append(ax.caches, c)
+	ax.mu.Unlock()
+}
+
+// unwatchAutoplay ends c's registration (Close).
+func unwatchAutoplay(c *Cache) {
+	if !c.watching {
+		return
+	}
+	c.watching = false
+	ax.mu.Lock()
+	for k, o := range ax.caches {
+		if o == c {
+			ax.caches = append(ax.caches[:k], ax.caches[k+1:]...)
+			break
+		}
+	}
+	ax.mu.Unlock()
+}
+
+// systemAutoplay reads the setting on the owner's goroutine, with its frame.
 func systemAutoplay(fr *ffi.Frame) bool {
-	if iio.axAnimated == 0 {
+	if ax.fn == 0 {
 		return true
 	}
-	return fr.Call0(iio.axAnimated)&0xFF != 0
+	return fr.Call0(ax.fn)&0xFF != 0
 }
 
 // iioAnim is an animation decoded by ImageIO: the source object stays open
@@ -46,6 +134,10 @@ func (d *iioAnim) count() int       { return len(d.delays) }
 func (d *iioAnim) playCount() int   { return d.plays }
 func (d *iioAnim) delay(i int) int  { return int(d.delays[i]) }
 
+// retained: the file, and what ImageIO keeps of the composited canvas (taken
+// as two canvases).
+func (d *iioAnim) retained() int64 { return int64(len(d.data)) + 2*4*int64(d.w)*int64(d.h) }
+
 func (d *iioAnim) close(fr *cframe) {
 	if d.src != 0 {
 		fr.Call1(iio.cfRelease, d.src)
@@ -57,6 +149,7 @@ func (d *iioAnim) close(fr *cframe) {
 // file's background colour where browsers clear it to transparent) and the
 // other animated formats with ImageIO.
 func (w *worker) openSystemDecoder(data []byte) (animDecoder, error) {
+	axLoad() // the setting's reader, before the owner can hold an animation of any format
 	if sniff(data) == "gif" {
 		return openGoDecoder(data, false)
 	}

@@ -83,9 +83,13 @@ func (k *Kit) imageTexKeyed(h img.Handle, key ui.Key) (tex gpu.TextureID, uv [4]
 		Visible:      !c.Input().Hidden,
 		ReduceMotion: k.ReduceMotion || k.Theme().Settings.ReduceMotion,
 	}
-	if id, ok := c.BoxOf(key); ok && p.Visible { // a box not laid out yet shows (this frame lays it out)
-		r := c.ShownRect(id)
-		p.Visible = r[2] > r[0] && r[3] > r[1]
+	if p.Visible { // the box as the last layout placed it; one not laid out yet shows (this frame lays it out)
+		if id, ok := c.BoxOf(key); ok {
+			r := c.ShownRect(id)
+			p.Visible = r[2] > r[0] && r[3] > r[1]
+		}
+		// A layout that reveals the box, or hides it, asks for another frame.
+		c.WatchShown(key, p.Visible)
 	}
 	tex, uv, st, wake := k.imgs.UseAnimated(h, p)
 	if wake > 0 {

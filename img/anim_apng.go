@@ -44,34 +44,55 @@ var errAPNG = errors.New("img: malformed APNG")
 const pngSig = "\x89PNG\r\n\x1a\n"
 
 // openAPNG indexes the animated PNG in data; it fails for a plain PNG
-// (errNotAnimated).
+// (errNotAnimated) and for one that breaks the specification: a chunk with a
+// wrong checksum, frame control and frame data chunks out of sequence, a
+// frame count that is not the number of frames, an operation that is not
+// defined, a frame outside the canvas, a canvas over the limit.
 func openAPNG(data []byte) (*apngAnim, error) {
 	if len(data) < 8+25 || string(data[:8]) != pngSig {
 		return nil, errAPNG
 	}
 	a := &apngAnim{data: data, plays: 1}
 	var cur *apngFrame
-	animated, sawIDAT := false, false
+	animated, sawIDAT, sawIEND, sawIHDR := false, false, false, false
+	declared := 0
+	seq := uint32(0) // the next sequence number of an fcTL or fdAT chunk
 	i := 8
-	for i+12 <= len(data) {
-		n := int(binary.BigEndian.Uint32(data[i:]))
+	for i+12 <= len(data) && !sawIEND {
+		n64 := int64(binary.BigEndian.Uint32(data[i:]))
+		if n64 > int64(len(data)-i-12) {
+			return nil, errAPNG // runs past the end
+		}
+		n := int(n64)
 		typ := string(data[i+4 : i+8])
-		if n < 0 || i+12+n > len(data) {
-			break
+		if crc32.ChecksumIEEE(data[i+4:i+8+n]) != binary.BigEndian.Uint32(data[i+8+n:]) {
+			return nil, errAPNG
 		}
 		body := data[i+8 : i+8+n]
 		switch typ {
 		case "IHDR":
-			if n != 13 {
+			if n != 13 || sawIHDR {
 				return nil, errAPNG
 			}
-			a.w, a.h = int(binary.BigEndian.Uint32(body)), int(binary.BigEndian.Uint32(body[4:]))
+			sawIHDR = true
+			w, h := int64(binary.BigEndian.Uint32(body)), int64(binary.BigEndian.Uint32(body[4:]))
+			if w == 0 || h == 0 {
+				return nil, errAPNG
+			}
+			if !fitsCanvas(w, h) {
+				return nil, errAnimLarge
+			}
+			a.w, a.h = int(w), int(h)
 			a.ihdr = body
 		case "acTL":
-			if n != 8 || sawIDAT {
+			if n != 8 || sawIDAT || animated {
 				return nil, errAPNG
 			}
 			animated = true
+			declared = int(binary.BigEndian.Uint32(body))
+			if declared < 1 || declared > maxAnimFrames {
+				return nil, errAPNG
+			}
 			a.plays = int(binary.BigEndian.Uint32(body[4:]))
 			if a.plays > 1<<20 { // absurd; the field is 32 bits
 				a.plays = 0
@@ -80,44 +101,61 @@ func openAPNG(data []byte) (*apngAnim, error) {
 			if n != 26 || !animated {
 				return nil, errAPNG
 			}
-			f := apngFrame{}
-			w, h := int(binary.BigEndian.Uint32(body[4:])), int(binary.BigEndian.Uint32(body[8:]))
-			x, y := int(binary.BigEndian.Uint32(body[12:])), int(binary.BigEndian.Uint32(body[16:]))
-			num, den := int32(binary.BigEndian.Uint16(body[20:])), int32(binary.BigEndian.Uint16(body[22:]))
+			if !sawIDAT && len(a.frames) > 0 {
+				return nil, errAPNG // a second control chunk before the image data
+			}
+			if binary.BigEndian.Uint32(body) != seq {
+				return nil, errAPNG
+			}
+			seq++
+			w, h := int64(binary.BigEndian.Uint32(body[4:])), int64(binary.BigEndian.Uint32(body[8:]))
+			x, y := int64(binary.BigEndian.Uint32(body[12:])), int64(binary.BigEndian.Uint32(body[16:]))
+			if w <= 0 || h <= 0 || x+w > int64(a.w) || y+h > int64(a.h) {
+				return nil, errAPNG
+			}
+			f := apngFrame{rect: image.Rect(int(x), int(y), int(x+w), int(y+h))}
+			num, den := int64(binary.BigEndian.Uint16(body[20:])), int64(binary.BigEndian.Uint16(body[22:]))
 			if den == 0 {
 				den = 100
 			}
-			f.delayMs = int32((int64(num)*1000 + int64(den)/2) / int64(den))
-			f.rect = image.Rect(x, y, x+w, y+h)
-			if w <= 0 || h <= 0 || x < 0 || y < 0 || x+w > a.w || y+h > a.h {
-				return nil, errAPNG
-			}
+			f.delayMs = int32((num*1000 + den/2) / den)
 			switch body[24] {
+			case 0:
 			case 1:
 				f.disposal = disposeBackground
 			case 2:
 				f.disposal = disposePrevious
+			default:
+				return nil, errAPNG
 			}
-			f.over = body[25] == 1
+			switch body[25] {
+			case 0:
+			case 1:
+				f.over = true
+			default:
+				return nil, errAPNG
+			}
 			a.frames = append(a.frames, f)
 			cur = &a.frames[len(a.frames)-1]
-			if len(a.frames) > maxAnimFrames {
+			if len(a.frames) > declared {
 				return nil, errAPNG
 			}
 		case "IDAT":
-			s := span{int32(i + 8), int32(n)}
 			sawIDAT = true
 			if cur != nil && len(a.frames) == 1 { // the first frame's control chunk came before the data: the default image is frame 0
-				cur.data = append(cur.data, s)
+				cur.data = append(cur.data, span{int32(i + 8), int32(n)})
 			}
 		case "fdAT":
-			if n < 4 || cur == nil {
+			if n < 4 || cur == nil || !sawIDAT {
 				return nil, errAPNG
 			}
+			if binary.BigEndian.Uint32(body) != seq {
+				return nil, errAPNG
+			}
+			seq++
 			cur.data = append(cur.data, span{int32(i + 12), int32(n - 4)})
 		case "IEND":
-			i = len(data)
-			continue
+			sawIEND = true
 		default:
 			if !sawIDAT && typ != "acTL" { // ancillary chunks (palette, transparency, colour) before the image data describe every frame
 				a.shared = append(a.shared, data[i:i+12+n])
@@ -125,8 +163,14 @@ func openAPNG(data []byte) (*apngAnim, error) {
 		}
 		i += 12 + n
 	}
-	if !animated || len(a.frames) == 0 || a.w <= 0 || a.h <= 0 {
+	if !sawIHDR || !sawIDAT {
+		return nil, errAPNG
+	}
+	if !animated {
 		return nil, errNotAnimated
+	}
+	if !sawIEND || len(a.frames) != declared {
+		return nil, errAPNG
 	}
 	for k := range a.frames {
 		if len(a.frames[k].data) == 0 {
@@ -139,9 +183,12 @@ func openAPNG(data []byte) (*apngAnim, error) {
 var errNotAnimated = errors.New("img: not an animation")
 
 func (a *apngAnim) size() (w, h int) { return a.w, a.h }
-func (a *apngAnim) count() int       { return len(a.frames) }
-func (a *apngAnim) playCount() int   { return a.plays }
-func (a *apngAnim) delay(i int) int  { return int(a.frames[i].delayMs) }
+
+// retained: see gifAnim.
+func (a *apngAnim) retained() int64 { return int64(len(a.data)) + 3*4*int64(a.w)*int64(a.h) }
+func (a *apngAnim) count() int      { return len(a.frames) }
+func (a *apngAnim) playCount() int  { return a.plays }
+func (a *apngAnim) delay(i int) int { return int(a.frames[i].delayMs) }
 
 // frame composites frame i; see gifAnim.frame.
 func (a *apngAnim) frame(i int) (*image.RGBA, error) {

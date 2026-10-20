@@ -47,7 +47,7 @@ var iio struct {
 	dictWebP, webpUnclamped, webpDelay                   uintptr
 	dictHEICS, heicsUnclamped, heicsDelay                uintptr
 	loopGIF, loopAPNG, loopWebP, loopHEICS               uintptr
-	srcFileProps, axAnimated                             uintptr
+	srcFileProps                                         uintptr
 	imgW, imgH, imgRelease                               uintptr
 	bitmapCreate, ctxBlend, ctxDraw, ctxRelease, srgb    uintptr
 	ctxInterp                                            uintptr
@@ -162,13 +162,6 @@ func loadImageIO() error {
 		iio.colorSpaceName = val(cg, "kCGColorSpaceSRGB", false)
 		if iio.err != nil {
 			return
-		}
-		// The animated-images setting (macOS 14+) is in Accessibility.framework:
-		// optional, so that an older system plays animations.
-		if ax, err := dlopen("/System/Library/Frameworks/Accessibility.framework/Accessibility"); err == nil {
-			if p, err := dlsym(ax, "AXAnimatedImagesEnabled"); err == nil {
-				iio.axAnimated = p
-			}
 		}
 		iio.srgb = new(ffi.Frame).Call1(iio.cgColorSpaceCreate, iio.colorSpaceName) // kept for the process
 		if iio.srgb == 0 {

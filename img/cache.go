@@ -57,6 +57,8 @@ type Cache struct {
 	ringCap                        int     // decoded frames an animation holds waiting, besides the one showing
 	autoFn                         func() bool
 	autoVal, autoKnown             bool
+	wake                           func() // wakes the UI loop (Options.Wake)
+	watching                       bool   // registered for the autoplay setting's change notification
 	bufs                           *bufPool
 	fr                             *cframe // the owner's C call frame (C memory on macOS)
 	wmu                            core.Mutex
@@ -129,7 +131,8 @@ func NewCache(o Options) *Cache {
 		c.ents[i] = entry{gen: 1, buf: -1, page: -1, prev: -1, next: -1}
 	}
 	c.pool = task.NewPool(task.Options{Workers: o.Workers, Queue: queue, Wake: o.Wake}, c.decodeJob)
-	c.apool = task.NewPool(task.Options{Workers: 2, Queue: queue}, c.decodeJob)
+	c.apool = task.NewPool(task.Options{Workers: animWorkers, Queue: queue}, c.decodeJob)
+	c.wake = o.Wake
 	c.ringCap, c.autoFn = o.AnimRing-1, o.Autoplay
 	if c.autoFn == nil {
 		c.autoFn = func() bool { return systemAutoplay(c.fr) }
@@ -140,7 +143,7 @@ func NewCache(o Options) *Cache {
 	if workers <= 0 {
 		workers = 4 // at least as many as task's default
 	}
-	c.workers = make([]*worker, 0, max(workers, 64))
+	c.workers = make([]*worker, 0, max(workers+animWorkers, 64)) // a worker's scratch for every goroutine of both pools
 	for i := 0; i < cap(c.workers); i++ {
 		c.workers = append(c.workers, new(worker))
 	}
@@ -355,7 +358,6 @@ func (c *Cache) Poll() (more bool) {
 	}
 	clear(c.results) // no stale copies of anything
 	c.pollFrames()
-	c.pollAnims()
 	budget := c.upBudget
 	for c.upN > 0 {
 		i := c.upq[c.upHead]
@@ -549,7 +551,15 @@ func (c *Cache) trimCPU() {
 		prev := c.ents[i].prev
 		e := &c.ents[i]
 		switch {
-		case e.stage == stGPU && e.buf >= 0 && c.anims[i] == nil: // an animation keeps the frame it shows
+		case c.anims[i] != nil && !c.inUse(e) && !c.animBusy(i): // an animation that is not shown goes whole: its decoder, canvases and frames
+			if e.stage == stGPU {
+				c.evictGPU(i)
+			}
+			if c.ents[i].stage != stFree {
+				c.remove(i)
+			}
+			c.st.EvictedCPU++
+		case e.stage == stGPU && e.buf >= 0 && c.anims[i] == nil: // an animation in view keeps the frame it shows
 			c.dropPixels(i)
 			c.st.EvictedCPU++
 		case e.stage == stCPU && !c.inUse(e) && !c.animBusy(i):
@@ -631,6 +641,7 @@ func (c *Cache) Close(wait time.Duration) {
 		return
 	}
 	c.closed = true
+	unwatchAutoplay(c)
 	c.refs.Store(1) // Close's own, dropped at the end
 	// Take every job that is not running; mark the running ones, to be
 	// settled after the wait.
@@ -659,7 +670,10 @@ func (c *Cache) Close(wait time.Duration) {
 		old := c.jobs[i].Swap(jobClosed)
 		if old == jobDraining {
 			c.leases[i] = nil
-			c.anims[i] = nil // a frame job still running closes its animation's decoder
+			if a := c.anims[i]; a != nil {
+				c.dropRing(a) // the frames waiting are the owner's: only the decoder goes to the running job
+				c.anims[i] = nil
+			}
 			continue
 		}
 		c.refs.Add(-1)

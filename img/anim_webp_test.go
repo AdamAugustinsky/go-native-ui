@@ -3,6 +3,7 @@
 package img
 
 import (
+	"bytes"
 	"encoding/binary"
 	"testing"
 )
@@ -84,7 +85,7 @@ func webpAnimation(w, h, n, delayMs, loops int) []byte {
 // sequence of frames with delays and a loop count.
 func TestImageIOWebP(t *testing.T) {
 	data := webpAnimation(32, 32, 3, 80, 4)
-	if sniff(data) != "webp" || !mayAnimate(data) {
+	if sniff(data) != "webp" || !animCandidate(bytes.NewReader(data), int64(len(data))) {
 		t.Fatal("not recognised as an animated WebP")
 	}
 	w := new(worker)

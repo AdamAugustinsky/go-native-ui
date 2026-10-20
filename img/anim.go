@@ -224,6 +224,10 @@ func mod(a, n int64) int64 {
 const maxRing = 8
 
 const (
+	// animWorkers is the goroutines of the pool that decodes animations'
+	// frames.
+	animWorkers = 2
+
 	defaultAnimRing = 3
 	// starveRetry is how soon a frame that was due and is not decoded yet is
 	// looked for again, in ns.
@@ -247,6 +251,7 @@ type anim struct {
 	delay       []int32 // each frame's display time in ms, after the 10 ms rule
 	tw, th, pad int32   // the display size every frame is decoded at
 	bytes       int64   // one decoded frame, with its border
+	mem         int64   // what the decoder keeps between frames: counted in the cache's CPU bytes
 
 	ring  [maxRing]ringSlot // decoded frames not yet shown, in order of seq
 	nring int
@@ -344,10 +349,7 @@ func (c *Cache) animTick(i int32, a *anim, p Present) (wake int64) {
 	e := &c.ents[i]
 	a.reduce = p.ReduceMotion
 	if !p.Visible || p.Now == 0 {
-		if a.nring > 0 && !p.Visible {
-			c.dropRing(a) // nobody sees the frames waiting
-		}
-		return 0
+		return 0 // the frames waiting stay: they are the ones that come next
 	}
 	// Not shown in the last frame, or woken long after the deadline asked
 	// for: time stood still (a hidden window, a row scrolled out).
@@ -471,9 +473,12 @@ func (c *Cache) finishFrame(r *taskResult) {
 	c.st.AnimDecodes++
 	c.st.DecodeNs += out.ns
 	if out.buf < 0 {
-		if out.err != errTooLarge { // errTooLarge is no buffer free: asked for again
+		switch {
+		case out.err != errTooLarge:
 			a.broken = true
 			c.st.AnimErrors++
+		case out.epoch == a.epoch && out.seq < a.next:
+			a.next = out.seq // no buffer was free: the frame is asked for again, not skipped
 		}
 		return
 	}
@@ -486,16 +491,6 @@ func (c *Cache) finishFrame(r *taskResult) {
 	c.cpuUsed += a.bytes
 }
 
-// pollAnims drops the decoded frames of the animations that are not in view.
-func (c *Cache) pollAnims() {
-	for _, i := range c.animList {
-		a := c.anims[i]
-		if a.nring > 0 && !c.inUse(&c.ents[i]) {
-			c.dropRing(a)
-		}
-	}
-}
-
 // startAnim takes over the animation a worker built for entry i, once its
 // first frame is decoded.
 func (c *Cache) startAnim(i int32, a *anim) {
@@ -506,6 +501,8 @@ func (c *Cache) startAnim(i int32, a *anim) {
 	}
 	a.next = 1
 	c.st.Animations++
+	c.cpuUsed += a.mem
+	watchAutoplay(c)
 }
 
 // removeAnim ends entry i's animation: its frames, its decoder.
@@ -516,6 +513,7 @@ func (c *Cache) removeAnim(i int32) {
 	}
 	c.dropRing(a)
 	a.dec.close(c.fr)
+	c.cpuUsed -= a.mem
 	c.anims[i] = nil
 	for k, j := range c.animList {
 		if j == i {

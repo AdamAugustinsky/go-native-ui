@@ -102,7 +102,10 @@ func GIF(w, h int, frames []Frame, loopCount int) []byte {
 
 // APNG encodes frames on a w×h canvas. plays is the number of times the
 // animation plays; 0 plays forever. The first frame is the default image, so
-// a viewer without APNG support shows it.
+// a viewer without APNG support shows it, and the default image has to be the
+// canvas' size: a first frame that is smaller is drawn on a transparent
+// canvas (the canvas before the first frame is transparent, so it shows the
+// same, whatever its blend and disposal).
 func APNG(w, h int, frames []Frame, plays int) []byte {
 	var b bytes.Buffer
 	b.WriteString("\x89PNG\r\n\x1a\n")
@@ -127,6 +130,11 @@ func APNG(w, h int, frames []Frame, plays int) []byte {
 	chunk("IHDR", append(u32(uint32(w), uint32(h)), 8, 6, 0, 0, 0)) // 8-bit RGBA
 	chunk("acTL", u32(uint32(len(frames)), uint32(plays)))
 	seq := uint32(0)
+	if len(frames) > 0 && frames[0].Image.Rect != image.Rect(0, 0, w, h) {
+		canvas := image.NewNRGBA(image.Rect(0, 0, w, h))
+		draw.Draw(canvas, frames[0].Image.Rect, frames[0].Image, frames[0].Image.Rect.Min, draw.Src)
+		frames = append([]Frame{{Image: canvas, DelayMs: frames[0].DelayMs, Dispose: frames[0].Dispose, Over: frames[0].Over}}, frames[1:]...)
+	}
 	for i, f := range frames {
 		r := f.Image.Rect
 		fc := u32(seq, uint32(r.Dx()), uint32(r.Dy()), uint32(r.Min.X), uint32(r.Min.Y))

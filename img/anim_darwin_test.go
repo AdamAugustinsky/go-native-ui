@@ -114,11 +114,9 @@ func TestImageIOAPNGAtDisplaySize(t *testing.T) {
 // without changing it, and without a crash on a system that lacks it.
 func TestSystemAutoplayReads(t *testing.T) {
 	c, _ := newTestCache(t, Options{})
-	if err := loadImageIO(); err != nil {
-		t.Skip(err)
-	}
+	axLoad()
 	on := systemAutoplay(c.fr)
-	t.Logf("AXAnimatedImagesEnabled symbol %#x: auto-play animated images is %v", iio.axAnimated, on)
+	t.Logf("AXAnimatedImagesEnabled symbol %#x: auto-play animated images is %v", ax.fn, on)
 	if systemAutoplay(c.fr) != on {
 		t.Error("the setting changed between two reads")
 	}

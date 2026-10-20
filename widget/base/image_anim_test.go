@@ -16,13 +16,14 @@ type animRig struct {
 	*rig
 	cache *img.Cache
 	h     img.Handle
+	clipH float32 // the height of the box that clips the image (a test may change it)
 }
 
 func newAnimRig(t *testing.T, clipH float32) *animRig { return newAnimRigAuto(t, clipH, true) }
 
 func newAnimRigAuto(t *testing.T, clipH float32, autoplay bool) *animRig {
 	data := animgen.GIF(32, 32, animgen.Sheet(32, 32, 6, 50), 0)
-	a := &animRig{}
+	a := &animRig{clipH: clipH}
 	a.cache = img.NewCache(img.Options{Renderer: &texRenderer{}, Wake: func() {}, Autoplay: func() bool { return autoplay }})
 	t.Cleanup(func() { a.cache.Close(time.Second) })
 	key := img.Key{Hash: img.HashBytes(data), W: 32, H: 32, Flags: img.Animate}
@@ -32,7 +33,7 @@ func newAnimRigAuto(t *testing.T, clipH float32, autoplay bool) *animRig {
 		a.h, _ = a.cache.Request(key, img.Bytes(data))
 		c := k.Context()
 		c.NextPos(20, 30)
-		c.NextSize(ui.Px(100), ui.Px(clipH))
+		c.NextSize(ui.Px(100), ui.Px(a.clipH))
 		clip := c.BoxKeyed(ui.Clip|Floating, ui.KeyN(c.ParentKey(), 77), nil)
 		c.Push(clip)
 		c.NextPos(0, 0)
@@ -156,5 +157,28 @@ func TestImageAnimatedFrameAllocatesNothing(t *testing.T) {
 	a.frames(10)
 	if n := testing.AllocsPerRun(200, a.frame); n != 0 {
 		t.Errorf("%v allocations per frame", n)
+	}
+}
+
+// TestImageRevealedByLayoutStarts: an animation that was out of view, and that
+// a layout (not another frame's request) brings into view, starts by itself:
+// the app, which draws a frame only when the context asks for one, gets the
+// next frame that builds the image as shown.
+func TestImageRevealedByLayoutStarts(t *testing.T) {
+	a := newAnimRig(t, 0) // clipped away
+	a.waitReady(t)
+	a.run(200)
+	if w := a.c.WakeAfter(); w != 0 || a.c.Animating() {
+		t.Fatalf("clipped: wake %d, animating %v", w, a.c.Animating())
+	}
+	before := a.cache.Stats().AnimUploads
+	a.clipH = 100 // an event changes the layout: this one frame is drawn for it
+	a.frame()
+	for i := 0; i < 300 && (a.c.Animating() || a.c.WakeAfter() > 0); i++ { // then only the frames the context asks for
+		time.Sleep(time.Millisecond)
+		a.frame()
+	}
+	if n := a.cache.Stats().AnimUploads - before; n < 2 {
+		t.Errorf("%d frames shown after the layout revealed the image", n)
 	}
 }

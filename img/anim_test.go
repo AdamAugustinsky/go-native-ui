@@ -21,12 +21,14 @@ type fakeDec struct {
 	block  chan struct{} // if set, render waits for a receive
 	rend   *atomic.Int32
 	closes *atomic.Int32
+	mem    int64 // what retained reports
 }
 
 func (f *fakeDec) size() (int, int) { return f.w, f.h }
 func (f *fakeDec) count() int       { return len(f.delays) }
 func (f *fakeDec) playCount() int   { return f.plays }
 func (f *fakeDec) delay(i int) int  { return f.delays[i] }
+func (f *fakeDec) retained() int64  { return f.mem }
 func (f *fakeDec) close(fr *cframe) { f.closes.Add(1) }
 func (f *fakeDec) render(_ *worker, i int, tw, th, pad int32, pix []byte, bw int) error {
 	if f.block != nil {
@@ -303,10 +305,10 @@ func TestAnimNothingWhileHidden(t *testing.T) {
 		now += 100 * ms
 	}
 	shown := r.g.shown()
-	st := r.c.Stats()
 	renders, stages, wakes := fs.renders.Load(), r.g.stages, r.wake.Load()
 	r.waitFrame()
 	renders = fs.renders.Load()
+	ring := r.anim().nring
 	for i := 0; i < 50; i++ { // a hidden window: the app still builds, the box says it does not show
 		if w := r.frame(now, Present{Visible: false}); w != 0 {
 			t.Fatalf("hidden: wake %d", w)
@@ -319,8 +321,8 @@ func TestAnimNothingWhileHidden(t *testing.T) {
 	if r.g.shown() != shown {
 		t.Error("the frame changed while hidden")
 	}
-	if a := r.anim(); a.nring != 0 || r.c.Stats().CPUBytes > st.CPUBytes {
-		t.Errorf("the ring still holds %d frames after the image was out of view", a.nring)
+	if a := r.anim(); a.nring != ring { // the frames waiting are the ones that come next
+		t.Errorf("the ring held %d frames, now %d", ring, a.nring)
 	}
 	// Back in view: it carries on with the next frame, a frame's time later.
 	w := r.frame(now, Present{Visible: true})
@@ -341,13 +343,13 @@ func TestAnimNotUsedNothingRuns(t *testing.T) {
 	r.start()
 	r.frame(1_000*ms, Present{Visible: true})
 	r.waitFrame()
-	renders := fs.renders.Load()
+	renders, ring := fs.renders.Load(), r.anim().nring
 	for i := 0; i < 20; i++ {
 		r.c.Poll()
 	}
 	time.Sleep(20 * time.Millisecond)
-	if fs.renders.Load() != renders || r.anim().nring != 0 {
-		t.Error("an image that was not drawn kept decoding or holding frames")
+	if fs.renders.Load() != renders || r.anim().nring != ring {
+		t.Error("an image that was not drawn kept decoding")
 	}
 }
 
