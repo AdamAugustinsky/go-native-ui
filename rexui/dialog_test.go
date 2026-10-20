@@ -54,7 +54,7 @@ func newDialogRig(t *testing.T, m theme.Mode) (*rig, *dialogHarness) {
 	return g, h
 }
 
-// The dialog is a sheet over a dimmed, inert window: Return is the default
+// The dialog is a sheet over an inert window: Return is the default
 // action, Escape is Cancel, the focus starts on the default action and stays
 // in the sheet.
 func TestDialogKeyboardAndModality(t *testing.T) {
@@ -182,19 +182,16 @@ func TestDialogMatchesAppKitSheets(t *testing.T) {
 	}
 }
 
-// The window dims behind the sheet, in light and in dark.
-func TestDialogDimsTheWindow(t *testing.T) {
+// A macOS sheet does not dim the window behind it: nothing but the sheet
+// covers it, in light and in dark.
+func TestDialogDoesNotDimTheWindow(t *testing.T) {
 	for _, m := range []theme.Mode{theme.Light, theme.Dark} {
 		g, _ := newDialogRig(t, m)
-		found := false
 		for i := range g.list.Quads {
 			q := &g.list.Quads[i]
-			if q.Mode == gpu.ModeShape && q.Rect == [4]float32{0, 0, float32(g.w), float32(g.h)} && q.Color[0]&0xFF != 0 && q.Color[0]&0xFF < 0x80 {
-				found = true
+			if q.Mode == gpu.ModeShape && q.Rect == [4]float32{0, 0, float32(g.w), float32(g.h)} && q.Color[0]&0xFF != 0 {
+				t.Errorf("mode %d: a scrim covers the window behind the sheet", m)
 			}
-		}
-		if !found {
-			t.Errorf("mode %d: nothing dims the window behind the sheet", m)
 		}
 	}
 }

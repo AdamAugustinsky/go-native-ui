@@ -27,7 +27,7 @@ directly with `k.Kit`, or copies a component and owns it.
 | `Separator` | 1 pt, or a hairline | — | Horizontal in a column, vertical in a row. |
 | `BeginCard` / `EndCard` | Box, Inset (form rows), Rex pane | — | Box: radius 12, no border, optional title. |
 | `BeginForm` / `Section` / `Row` / `EndForm` | Grouped (Settings), Aligned (NSGridView) | — | Grouped: inset sections (`CardInset`) of 40 pt rows, label at the leading edge and control at the trailing one, a 1 pt line between rows, a 13 pt semibold header and an 11 pt footer. Aligned: labels right-aligned to a shared column, controls 6 pt beyond it, rows 6 pt apart. Tab order is the rows' order. |
-| `BeginDialog` / `Action` / `EndDialog` | — | — | A sheet drawn by us, for custom content: radius 26, 20 pt padding, large capsule buttons with the default last, Return is the default, Escape is Cancel, Tab stays inside, the window dims. See "Dialogs, alerts and tooltips". |
+| `BeginDialog` / `Action` / `EndDialog` | — | — | A sheet drawn by us, for custom content: radius 26, 20 pt padding, large capsule buttons with the default last, Return is the default, Escape is Cancel, Tab stays inside, the window behind is inert and does not dim, as behind a macOS sheet. See "Dialogs, alerts and tooltips". |
 | `Tooltip` | — | — | The system's tooltip on macOS (a region AppKit shows after its own delay); a drawn one elsewhere. |
 | `Label`, `LabelBytes`, `Caption` | the macOS text styles × colour roles | — | Zero value: body text in labelColor. |
 
@@ -158,12 +158,12 @@ named group for assistive technology.
 
 **Dialog** is a sheet drawn by us, for content a native alert cannot hold: a
 form, a picker, a progress view. It hangs from the titlebar, centred, over a
-window that has dimmed; Return is the default action, Escape is Cancel, and
+window that stays inert (a macOS sheet does not dim it); Return is the default action, Escape is Cancel, and
 Tab stays inside. Its radius (26) is that of the glass frame of an alert's
 panel, read from AppKit (`sheets.alertPanelCornerRadius`; a plain titled
 window reads 16), its content is 20 pt from the sides and top and its buttons
 are the alert's 28 pt capsules with the default rightmost and 16 pt from the
-bottom. The dim and the slide are designed.
+bottom. The slide is designed.
 
 **Alert is `app.Alert`.** A message, an explanation, a few buttons and a
 suppression checkbox are an `NSAlert` sheet on macOS, with the system's

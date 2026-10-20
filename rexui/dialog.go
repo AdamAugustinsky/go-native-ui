@@ -43,11 +43,6 @@ type DialogRecipe struct {
 	// SlideY is how far above its place the sheet starts, in points, and
 	// fades in from, over the theme's Sheet duration.
 	SlideY float32
-	// Dim is what lies under the sheet, laid over the whole window: the
-	// window dims as it does behind a sheet (designed: black at 10 % in
-	// light and 30 % in dark; the system draws its own and no AppKit
-	// measurement covers it).
-	Dim Tint
 	// Fill is the sheet's fill; Title colours the title.
 	Fill, Title Tint
 	// Elevation is the sheet's elevation (theme.ElevModal: its edge and
@@ -60,7 +55,6 @@ var DialogLook = DialogRecipe{
 	Width: 420,
 	PadX:  20, PadTop: 20, PadBottom: 16, TitleGap: 10, ActionsGap: 16,
 	ButtonGap: 8, ButtonSize: theme.SizeLarge, SlideY: 12,
-	Dim:  OfAlpha(theme.Shadow, 0.10, 0.30),
 	Fill: Of(theme.Raised), Title: Of(theme.Label),
 	Elevation: theme.ElevModal,
 }
@@ -93,7 +87,8 @@ type Dialog struct {
 }
 
 // BeginDialog starts a modal dialog while *open is true: a sheet hanging
-// from the top of the window, centred, over a window that has dimmed. Build
+// from the top of the window, centred. The window behind is inert and
+// does not dim, as it does not behind a macOS sheet. Build
 // its content, then its actions, then call EndDialog:
 //
 //	d := rexui.BeginDialog(k, "rename", &v.renaming, rexui.DialogOpts{Title: "Rename “Report”"})
@@ -140,9 +135,7 @@ func BeginDialog(k *base.Kit, label string, open *bool, o DialogOpts) Dialog {
 
 	w, h := c.Size()
 	c.NextSize(ui.Pct(1), ui.Pct(1))
-	c.NextBG(rc.Dim.RGBA(r))
 	c.NextAxis(ui.AxisY)
-	c.NextFlags(ui.DrawBackground)
 	c.NextRole(ui.RoleDialog)
 	c.NextSemName(o.Title)
 	c.BeginOverlay(okey, ui.OverlayModal, [4]float32{0, 0, float32(w), float32(h)}, ui.PlaceCenter)
