@@ -605,3 +605,33 @@ func TestLoopingMotionAllocatesNothing(t *testing.T) {
 		t.Fatalf("%.1f allocations per frame while animating", n)
 	}
 }
+
+// Indicators in a disabled region report it to assistive technologies, as
+// the controls do; out of it they do not.
+func TestDisabledIndicatorsReportDisabled(t *testing.T) {
+	g := newRig(t, theme.Light, nil, column(func(g *rig) {
+		for _, off := range []bool{true, false} {
+			g.k.BeginDisabled(off)
+			name := "on"
+			if off {
+				name = "off"
+			}
+			rexui.ProgressBar(g.k, "Bar "+name, 0.5, rexui.ProgressOpts{})
+			rexui.ProgressBar(g.k, "Busy "+name, -1, rexui.ProgressOpts{})
+			rexui.LevelIndicator(g.k, "Level "+name, 3, 0, 10, rexui.LevelOpts{})
+			rexui.Spinner(g.k, "Spinner "+name, rexui.SpinnerOpts{})
+			g.k.EndDisabled()
+		}
+	}))
+	for _, n := range []string{"Bar", "Busy", "Level", "Spinner"} {
+		for _, off := range []bool{true, false} {
+			name := n + " on"
+			if off {
+				name = n + " off"
+			}
+			if got := g.node(ui.RoleProgressBar, name).State&ui.SemDisabled != 0; got != off {
+				t.Errorf("%s: SemDisabled %v, want %v", name, got, off)
+			}
+		}
+	}
+}

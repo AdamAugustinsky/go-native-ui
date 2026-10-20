@@ -50,6 +50,15 @@ func shown(k *base.Kit, key ui.Key) bool {
 	return ok && !c.WasHidden(id) && k.Visible(c.Rect(id))
 }
 
+// disabledFlag is ui.Disabled in a disabled region (base.Kit.BeginDisabled):
+// what an indicator's root box carries so that it reports SemDisabled.
+func disabledFlag(k *base.Kit) ui.Flags {
+	if k.Disabled() {
+		return ui.Disabled
+	}
+	return 0
+}
+
 // cycle is where the frame's clock is in a cycle of period ns, 0 to 1.
 func cycle(k *base.Kit, period int64) float32 {
 	return float32(k.Context().Input().Time%period) / float32(period)
