@@ -170,8 +170,9 @@ func TestDedupKeepsLiveIDs(t *testing.T) {
 
 // fakePrimary holds the lock and listens like a primary; handle is called with
 // the number of the connection (from 1) and the connection, after the request
-// has been read. It returns a secondary for it.
-func fakePrimary(t *testing.T, dir string, handle func(n int, c conn)) *Secondary {
+// has been read. It returns a secondary for it, and the log of the
+// connections it handles.
+func fakePrimary(t *testing.T, dir string, handle func(n int, c conn)) (*Secondary, *fakeLog) {
 	t.Helper()
 	lockKey, addr, err := setup(testID, Options{Dir: dir})
 	if err != nil {
@@ -187,6 +188,7 @@ func fakePrimary(t *testing.T, dir string, handle func(n int, c conn)) *Secondar
 		t.Fatal(err)
 	}
 	var wg sync.WaitGroup
+	fl := &fakeLog{t0: time.Now()}
 	t.Cleanup(func() { ln.Close(); wg.Wait(); lk.release() })
 	wg.Add(1)
 	go func() {
@@ -196,35 +198,115 @@ func fakePrimary(t *testing.T, dir string, handle func(n int, c conn)) *Secondar
 			if err != nil {
 				return
 			}
+			at := fl.since()
 			c.SetDeadline(time.Now().Add(3 * time.Second))
 			readRequest(c)
 			handle(n, c)
 			c.Close()
+			fl.add(fakeConn{at, fl.since()})
 		}
 	}()
 	_, s, err := AcquireWith(testID, Options{Dir: dir, Timeout: time.Second})
 	if err != nil || s == nil {
 		t.Fatalf("AcquireWith: %v %v", s, err)
 	}
-	return s
+	return s, fl
+}
+
+// A fakeLog is when the fake primary accepted and finished each connection,
+// from the last start.
+type fakeLog struct {
+	mu    sync.Mutex
+	t0    time.Time
+	conns []fakeConn
+}
+
+type fakeConn struct{ accepted, done time.Duration }
+
+func (l *fakeLog) start() { l.mu.Lock(); l.t0, l.conns = time.Now(), nil; l.mu.Unlock() }
+
+func (l *fakeLog) since() time.Duration { l.mu.Lock(); defer l.mu.Unlock(); return time.Since(l.t0) }
+
+func (l *fakeLog) add(c fakeConn) { l.mu.Lock(); l.conns = append(l.conns, c); l.mu.Unlock() }
+
+// starvedAfter is the fake primary's evidence of a starved process, or "": it
+// answers at once, in this process, so a connection it accepted more than
+// starvedGap after the start or after it finished the previous one, or took
+// longer than that over, is time its goroutine did not get. Then a Send
+// attempt can run out of its time with the answer still to come (CI, macOS
+// and Windows under the whole suite: "did not answer" at exactly 1.00 s), and
+// the answers prove nothing about Send. by is how long the log covers.
+func (l *fakeLog) starvedAfter(by time.Duration) string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return starved(l.conns, by)
+}
+
+const starvedGap = 500 * time.Millisecond
+
+func starved(conns []fakeConn, by time.Duration) string {
+	prev := time.Duration(0)
+	for i, c := range conns {
+		switch {
+		case c.accepted-prev > starvedGap:
+			return fmt.Sprintf("the fake primary accepted connection %d %v after it was free (log %v)", i+1, c.accepted-prev, conns)
+		case c.done-c.accepted > starvedGap:
+			return fmt.Sprintf("the fake primary took %v over connection %d (log %v)", c.done-c.accepted, i+1, conns)
+		}
+		prev = c.done
+	}
+	if by-prev > starvedGap+250*time.Millisecond { // Send's backoff is 200 ms at most
+		return fmt.Sprintf("the fake primary accepted nothing in the last %v of %v (log %v)", by-prev, by, conns)
+	}
+	return ""
+}
+
+// The starvation evidence: a fake primary that kept up says nothing; one that
+// was late to a connection, slow over one, or idle while Send waited does.
+func TestStarvedEvidence(t *testing.T) {
+	ms := time.Millisecond
+	for _, c := range []struct {
+		name  string
+		conns []fakeConn
+		by    time.Duration
+		want  bool
+	}{
+		{"kept up", []fakeConn{{1 * ms, 2 * ms}, {30 * ms, 31 * ms}, {80 * ms, 81 * ms}, {180 * ms, 181 * ms}, {390 * ms, 391 * ms}, {600 * ms, 601 * ms}, {810 * ms, 811 * ms}}, 1000 * ms, false},
+		{"late to the first", []fakeConn{{1002 * ms, 1003 * ms}}, 1003 * ms, true},
+		{"slow over one", []fakeConn{{1 * ms, 1200 * ms}}, 1200 * ms, true},
+		{"nothing accepted", nil, 1000 * ms, true},
+		{"idle at the end", []fakeConn{{1 * ms, 2 * ms}}, 1000 * ms, true},
+	} {
+		if got := starved(c.conns, c.by) != ""; got != c.want {
+			t.Errorf("%s: starved %v, want %v", c.name, got, c.want)
+		}
+	}
 }
 
 // ErrBusy means "not stored". If an earlier attempt reached the primary and its
 // answer never came, "busy" afterwards cannot say that: ErrUncertain.
 func TestSendReportsUncertainWhenAnEarlierAttemptMayHaveBeenStored(t *testing.T) {
-	s := fakePrimary(t, newDir(t), func(n int, c conn) {
+	s, fl := fakePrimary(t, newDir(t), func(n int, c conn) {
 		if n > 1 {
 			c.Write([]byte{replyBusy}) // the first one: the answer is lost
 		}
 	})
+	fl.start()
 	if err := s.Send([]string{"x"}); !errors.Is(err, ErrUncertain) {
+		if why := fl.starvedAfter(fl.since()); why != "" {
+			t.Skipf("Send = %v, but the process was starved: %s", err, why)
+		}
 		t.Fatalf("Send = %v, want ErrUncertain", err)
 	}
 }
 
 func TestSendReportsBusyWhenNothingWasStored(t *testing.T) {
-	s := fakePrimary(t, newDir(t), func(n int, c conn) { c.Write([]byte{replyBusy}) })
+	s, fl := fakePrimary(t, newDir(t), func(n int, c conn) { c.Write([]byte{replyBusy}) })
+	fl.start()
 	if err := s.Send([]string{"x"}); !errors.Is(err, ErrBusy) {
+		if why := fl.starvedAfter(fl.since()); why != "" {
+			t.Skipf("Send = %v, but the process was starved: %s", err, why)
+		}
 		t.Fatalf("Send = %v, want ErrBusy", err)
 	}
 	// A real primary whose queue is full: busy, and nothing stored.

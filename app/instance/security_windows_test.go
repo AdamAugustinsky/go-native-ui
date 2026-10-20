@@ -272,7 +272,7 @@ func finishes(t *testing.T, what string, within time.Duration, f func()) {
 // A peer that takes the request and says nothing: Send is back when its timeout
 // is, with a small margin, not later.
 func TestSilentPeerDoesNotHoldSend(t *testing.T) {
-	s := fakePrimary(t, newDir(t), func(n int, c conn) { time.Sleep(3 * time.Second) })
+	s, _ := fakePrimary(t, newDir(t), func(n int, c conn) { time.Sleep(3 * time.Second) })
 	s.timeout = 400 * time.Millisecond
 	start := time.Now()
 	var err error
