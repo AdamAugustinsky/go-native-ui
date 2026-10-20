@@ -26,13 +26,16 @@ func TestBackgroundLaunchDrawsInactive(t *testing.T) {
 	for _, mode := range []string{"bg", "fg"} {
 		t.Run(mode, func(t *testing.T) {
 			r := launchBundle(t, "bgkey", mode == "bg", "MODE="+mode)
-			if r.get("key") != r.get("focused") || r.get("first") != r.get("key") {
+			if r.get("key") != r.get("focused") {
 				t.Fatalf("the app's focus is not AppKit's key state: %v\n%s", r.kv, r.out)
 			}
+			if mode == "bg" && r.get("active") == "true" { // activated by the system all the same (a CI runner): when, is not known
+				t.Skipf("the app was activated although opened with open -g: %v", r.kv)
+			}
+			if r.get("first") != r.get("key") {
+				t.Fatalf("the first frame's focus is not AppKit's: %v\n%s", r.kv, r.out)
+			}
 			if mode == "bg" {
-				if r.get("key") != "false" || r.get("active") != "false" {
-					t.Skipf("the app was active although opened with open -g: %v", r.kv)
-				}
 				if r.get("after_key") != "true" || r.get("after_focused") != "true" {
 					t.Fatalf("after the activation: %v\n%s", r.kv, r.out)
 				}
