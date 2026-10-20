@@ -664,3 +664,37 @@ func TestListScrollKnobMatchesAppKit(t *testing.T) {
 		}
 	}
 }
+
+// A striped list scrolled deep, then shrunk (a filter that matches nothing,
+// or a few rows): the frame that sees the new row count stripes only the
+// room in view, as many boxes as the viewport holds whatever the stale
+// offset, the offset lands at a valid one (the layout clamps it to the
+// content), and the frames after it allocate nothing.
+func TestFillerRowsStayInTheViewportWhenAListShrinksDeep(t *testing.T) {
+	for _, shrunk := range []int{0, 3} {
+		v := &listView{n: 1_000_000, style: rexui.ListFullWidth, striped: true}
+		g := newRig(t, theme.Light, nil, v.build)
+		box, _ := g.c.BoxOf(v.key)
+		g.c.SetScroll(box, 0, 24_000_000)
+		g.frames(3)
+		if _, sy := g.c.Scroll(box); sy < 20_000_000 {
+			t.Fatalf("the list is at %v, not deep", sy)
+		}
+		full := g.c.Boxes()
+		v.n = shrunk
+		g.frame()
+		if n := g.c.Boxes(); n > full+8 {
+			t.Errorf("%d rows left: the frame that saw them built %d boxes, %d in a full list", shrunk, n, full)
+		}
+		g.frames(3)
+		if n := g.c.Boxes(); n > full+8 {
+			t.Errorf("%d rows left: %d boxes once settled, %d in a full list", shrunk, n, full)
+		}
+		if _, sy := g.c.Scroll(box); sy != 0 {
+			t.Errorf("%d rows left: the list is still scrolled to %v", shrunk, sy)
+		}
+		if n := testing.AllocsPerRun(30, g.frame); n != 0 {
+			t.Errorf("%d rows left: %.1f allocations per frame", shrunk, n)
+		}
+	}
+}
