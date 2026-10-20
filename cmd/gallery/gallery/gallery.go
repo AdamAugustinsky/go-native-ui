@@ -40,7 +40,7 @@ import (
 const (
 	WindowWidthPt  = 1100
 	WindowHeightPt = 720
-	MinWidthPt     = 760
+	MinWidthPt     = 770
 	MinHeightPt    = 480
 )
 

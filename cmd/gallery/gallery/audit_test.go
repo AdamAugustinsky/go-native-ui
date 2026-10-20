@@ -3,6 +3,7 @@ package gallery
 import (
 	"os"
 	"runtime"
+	"strings"
 	"testing"
 
 	"gonativeui/rexui/catalog"
@@ -29,6 +30,22 @@ var fontWide = []string{"label-styles", "link", "form-grid"}
 var legacyFiles = widgettest.Allow{Check: ui.AuditColumn, Where: `Table "Files"`,
 	Reason: "the catalogue's Files sample reserves 12 pt for a legacy scroll bar where AppKit's takes 17 (rexui README, the lists' samples)"}
 
+// catalogueFontWide are fontWide's samples as the audit names them in a
+// catalogue page hosted in the window (the standalone pages are accepted by
+// their frames), off macOS.
+func catalogueFontWide(scene string) []widgettest.Allow {
+	if runtime.GOOS == "darwin" || !strings.HasPrefix(scene, "catalogue") {
+		return nil
+	}
+	const why = ": its frame is AppKit's, measured on macOS, and this system's font is wider than San Francisco"
+	return []widgettest.Allow{
+		{Check: ui.AuditOverflow, Where: `Link "Learn more"`, Reason: "link" + why},
+		{Check: ui.AuditOverflow, Where: `Label "Large Title`, Reason: "label-styles" + why},
+		{Check: ui.AuditOverflow, Where: `Group "Name:"`, Reason: "form-grid" + why},
+		{Check: ui.AuditOverflow, Where: `Group "Email address:"`, Reason: "form-grid" + why},
+	}
+}
+
 // TestAuditScenes runs the layout audit on the last frame of every scene of
 // Shot, with overlay and with legacy scroll bars, and of every appkit page
 // (all of rexui's catalog samples), on the real text system and renderer.
@@ -46,7 +63,7 @@ func TestAuditScenes(t *testing.T) {
 				}
 				t.Fatal(err)
 			}
-			var allow []widgettest.Allow
+			allow := catalogueFontWide(name)
 			if legacy && name == "catalogue-lists" {
 				allow = append(allow, legacyFiles)
 			}
@@ -60,7 +77,7 @@ func TestAuditScenes(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		widgettest.AuditLayout(t, name+", the smallest window", off.UI)
+		widgettest.AuditLayout(t, name+", the smallest window", off.UI, catalogueFontWide(name)...)
 		off.Close()
 	}
 	const scale = 2

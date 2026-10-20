@@ -18,7 +18,7 @@ const (
 	fieldPt = 200
 	// cellPt is the width of one state column of the matrix, in points, and
 	// nameColPt the column of the widgets' names.
-	cellPt, nameColPt = 80, 62
+	cellPt, nameColPt = 82, 62
 )
 
 // beginForm starts scene sc's form in the detail pane (the current parent),
