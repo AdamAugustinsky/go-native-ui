@@ -1,6 +1,7 @@
 package platform
 
 import (
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"unsafe"
@@ -157,7 +158,9 @@ func (w *regWatch) open() {
 	for {
 		sub := mustUTF16(path)
 		r := win32.Call(pRegOpenKeyExW, hkeyCurrentUser, uintptr(unsafe.Pointer(sub)), 0, keyQueryNotify, uintptr(unsafe.Pointer(&scratchKey)))
-		if r == 0 {
+		runtime.KeepAlive(sub) // win32.Call, unlike syscall.SyscallN, does not keep it alive
+		// An LSTATUS is 32 bits: the upper half of the register is not part of it.
+		if uint32(r) == 0 {
 			w.key, w.exact = scratchKey, path == w.path
 			return
 		}
@@ -210,7 +213,7 @@ func (w *regWatch) dword(name *uint16) (uint32, bool) {
 	scratchTyp, scratchVal, scratchLen = 0, 0, 4
 	r := win32.Call(pRegQueryValueExW, w.key, uintptr(unsafe.Pointer(name)), 0,
 		uintptr(unsafe.Pointer(&scratchTyp)), uintptr(unsafe.Pointer(&scratchVal)), uintptr(unsafe.Pointer(&scratchLen)))
-	return scratchVal, r == 0 && scratchTyp == regDWORD && scratchLen == 4
+	return scratchVal, uint32(r) == 0 && scratchTyp == regDWORD && scratchLen == 4
 }
 
 var (

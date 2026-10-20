@@ -55,7 +55,10 @@ func Proc(dll uintptr, name string) uintptr {
 
 // Call invokes the function at fn with the given arguments and returns the
 // raw return register. For functions returning BOOL, HRESULT or int, only the
-// low 32 bits are meaningful; use [HR] and [Bool].
+// low 32 bits are meaningful; use [HR] and [Bool]. Unlike syscall.SyscallN,
+// Call does not keep alive what a pointer converted in its arguments points
+// to: that memory must stay reachable through something else for the whole
+// call (a heap field or a package variable, or runtime.KeepAlive after it).
 func Call(fn uintptr, args ...uintptr) uintptr {
 	r, _, _ := syscall.SyscallN(fn, args...)
 	return r
