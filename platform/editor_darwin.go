@@ -433,6 +433,27 @@ func (e *Editor) SetText(b []byte) error {
 	return e.SetSelection(TextSelection{len(e.text), len(e.text)})
 }
 
+// CommitComposition ends an input method's composition, keeping its text as
+// typed: the marked text becomes ordinary text where it is, the selection and
+// the undo history stay as they are, and the input method forgets the
+// composition. Nothing happens without marked text. It fires no EditorChanged
+// (the text is the same) and ends the EditorComposing it had.
+func (e *Editor) CommitComposition() {
+	if !objc.SendBool(e.tv, selHasMarkedText) {
+		return
+	}
+	e.quiet = true
+	objc.Send(e.tv, selUnmarkText)
+	if ctx := objc.Send(e.tv, selInputContext); ctx != 0 {
+		objc.Send(ctx, selDiscardMarked)
+	}
+	e.quiet = false
+	e.copyText()
+	e.pend &^= EditorComposing
+	e.dirtyH = true
+	e.wake()
+}
+
 // SetSelection selects s (bytes; Anchor == Focus for a caret). AppKit widens
 // a selection that splits a character (a grapheme cluster: an emoji with a
 // modifier, a letter and its combining marks) to the whole character;
@@ -602,6 +623,7 @@ func (e *Editor) wake() {
 // copyText copies the text view's text into the buffer, rebuilds the map,
 // and reads the selection and the marked text.
 func (e *Editor) copyText() {
+	e.rev++
 	str := objc.Send(objc.Send(e.tv, selTextStorage), selString)
 	e.text = objc.AppendUTF8(e.text[:0], str)
 	e.m.build(e.text)
@@ -622,10 +644,14 @@ func (e *Editor) readSelection() {
 	objc.F.Reset().Arg(uintptr(e.tv)).Arg(uintptr(selSelectedRange)).Call(objc.MsgSend)
 	loc, n := int(objc.F.R0()), int(objc.F.R1())
 	lo, hi := e.m.toByte(e.text, loc), e.m.toByte(e.text, loc+n)
+	was := e.sel
 	if lo != hi && e.sel.Anchor == hi {
 		e.sel = TextSelection{hi, lo}
 	} else {
 		e.sel = TextSelection{lo, hi}
+	}
+	if e.sel != was {
+		e.rev++
 	}
 }
 
@@ -737,7 +763,8 @@ func (e *Editor) command(sel objc.SEL) bool {
 				objc.Send(e.tv, selUnmarkText)
 			}
 		case e.compl:
-			e.toApp(CmdAccept)
+			e.pushCommandSends(CmdAccept, sel == selInsertNewline && e.sends(currentMods()))
+			e.wake()
 		case sel == selInsertNewline && e.sends(currentMods()):
 			e.pend |= EditorSubmitted
 			e.wake()
@@ -826,7 +853,8 @@ func edKeyDown(c *ffi.CB) {
 	m := mods(uintptr(objc.Send(ev, selModifierFlags)))
 	if (code == 0x24 || code == 0x4C) && m&ModSuper != 0 && !marked {
 		if e.compl {
-			e.toApp(CmdAccept)
+			e.pushCommandSends(CmdAccept, true)
+			e.wake()
 		} else {
 			e.pend |= EditorSubmitted
 			e.wake()

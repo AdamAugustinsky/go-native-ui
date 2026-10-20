@@ -151,9 +151,10 @@ type List struct {
 type rowLook struct {
 	style   ListStyle
 	striped bool
-	emph    bool   // the row being built shows the selection emphasised
-	fgTint  Tint   // its text colour, as a recipe names it
-	fg, fg2 uint32 // its text colours
+	under   [3]float32 // the rows' fills under the scroll edge less the background, by pixel rows (scrollEdge)
+	emph    bool       // the row being built shows the selection emphasised
+	fgTint  Tint       // its text colour, as a recipe names it
+	fg, fg2 uint32     // its text colours
 }
 
 // listOpts are the base options of a list of style o and a header or not.
@@ -215,6 +216,9 @@ func (lk *rowLook) begin(l *base.List, ol *base.Outline, rs *base.RowState, name
 	}
 	var flags ui.Flags
 	if bg&0xFF != 0 {
+		if rs.Selected { // the stripes are in Under's measured mean already
+			lk.underRow(l, rs.Row, bg)
+		}
 		flags |= ui.DrawBackground
 		c.NextBG(bg)
 		if rc.Rounded[lk.style] {
@@ -262,6 +266,26 @@ func (lk *rowLook) begin(l *base.List, ol *base.Outline, rs *base.RowState, name
 		c.Pop()
 	}
 	return id
+}
+
+// underRow adds display row r's selection bg, where it lies under the
+// scroll edge's inset, to the mean the edge takes on (ScrollEdgeRecipe.Under).
+func (lk *rowLook) underRow(l *base.List, r int, bg uint32) {
+	inset := l.ScrollView().TopInset
+	if inset <= 0 {
+		return
+	}
+	top := l.FillerTop(r - l.Rows) // where row r shows: the filler rows' place, before them
+	ov := min(top+l.RowH(), inset) - max(top, 0)
+	if ov <= 0 {
+		return
+	}
+	back := ListLook.Background.RGBA(l.Kit().Theme()) | 0xFF
+	fill := theme.Over(bg, back)
+	for i := range lk.under {
+		sh := 24 - 8*uint(i)
+		lk.under[i] += ov * (float32(fill>>sh&0xFF) - float32(back>>sh&0xFF))
+	}
 }
 
 // Text is the colour of the row being built's text, for a component's
@@ -342,74 +366,8 @@ func EndList(k *base.Kit, l *List) {
 	l.Filler()
 	l.CloseRows()
 	v := l.ScrollView()
-	scrollBars(k, &v, !l.edgeOwnLine)
+	scrollBars(k, &v, !l.edgeOwnLine, &l.under)
 	k.CloseList(&l.List)
-}
-
-// ScrollEdgeRecipe is the scroll edge (NSScrollPocket) over a scroll view
-// that runs under a toolbar (base.Kit.NextScrollInset): over its top inset,
-// while content is scrolled under it or the window is inactive
-// (theme.ScrollEdgeVisible), and always above a table's header, a bar (opaque
-// under Reduce Transparency: the scroll edge material's fill) of the window's colour that leaves a
-// fifth of the content showing, and a hairline below it.
-type ScrollEdgeRecipe struct {
-	// Bar and BarInactive are the bar (the content under it shows through
-	// its alpha). Measured on the Mac mini's 27.2 (26B5101f) over a solid
-	// selection the whole pocket deep (tools/appkitscenes -selectAll):
-	// flat, no gradient, from the top of the band to the pocket's end; of
-	// the content 18% shows in light (17% of the accent, 15% of an
-	// inactive selection), 22% in dark (21–22%), the same with legacy and
-	// overlay scrollers. AppKit blurs the content too; this does not.
-	Bar, BarInactive Tint
-	// Line is the hairline at the inset's end (none under a table's
-	// header, whose own line ends it), theme.Window.ScrollEdge.Line high.
-	Line Tint
-}
-
-// ScrollEdgeLook is the scroll edge's recipe.
-var ScrollEdgeLook = ScrollEdgeRecipe{
-	Bar:         OfAlpha(theme.ScrollEdgeBar, 0.82, 0.78),
-	BarInactive: OfAlpha(theme.ScrollEdgeBarInactive, 0.85, 0.79),
-	Line:        Of(theme.ScrollEdgeLine),
-}
-
-// scrollEdge draws the scroll edge over the top inset of the view whose
-// outer box is the current parent, and its hairline if line.
-func scrollEdge(k *base.Kit, v *base.ScrollView, line bool) {
-	if v.TopInset <= 0 {
-		return
-	}
-	c, r := k.Context(), k.Theme()
-	// a table's header in the pocket keeps the bar at rest, as Finder's
-	// does (#262626 over its #1E1E1E rows in dark)
-	_, sy := c.Scroll(v.Inner)
-	if line && !theme.ScrollEdgeVisible(sy > 0.5, !k.Inactive()) {
-		return
-	}
-	rc := &ScrollEdgeLook
-	bar := rc.Bar.RGBA(r)
-	if k.Inactive() {
-		bar = rc.BarInactive.RGBA(r)
-	}
-	if r.Settings.ReduceTransparency { // the material's opaque fill
-		m := r.Material(theme.MatScrollEdge)
-		role := m.Fill
-		if k.Inactive() {
-			role = m.FillInactive
-		}
-		bar = r.Colors[role] | 0xFF
-	}
-	or := c.Rect(v.Outer)
-	w := or[2] - or[0]
-	key := c.KeyOf(v.Outer)
-	theme.At(c, 0, 0, w, v.TopInset)
-	c.NextBG(bar)
-	c.BoxKeyed(ui.DrawBackground|base.Floating, ui.KeyN(key, 6100), nil)
-	if line {
-		theme.At(c, 0, v.TopInset, w, r.Window.ScrollEdge.Line)
-		c.NextBG(rc.Line.RGBA(r))
-		c.BoxKeyed(ui.DrawBackground|base.Floating, ui.KeyN(key, 6101), nil)
-	}
 }
 
 // ScrollBars builds the scroll bars of the view whose outer box is the
@@ -420,10 +378,10 @@ func scrollEdge(k *base.Kit, v *base.ScrollView, line bool) {
 //
 // A view with a top inset (base.Kit.NextScrollInset) gets the scroll edge
 // over it first (ScrollEdgeLook).
-func ScrollBars(k *base.Kit, v *base.ScrollView) { scrollBars(k, v, true) }
+func ScrollBars(k *base.Kit, v *base.ScrollView) { scrollBars(k, v, true, nil) }
 
-func scrollBars(k *base.Kit, v *base.ScrollView, line bool) {
-	scrollEdge(k, v, line)
+func scrollBars(k *base.Kit, v *base.ScrollView, line bool, under *[3]float32) {
+	scrollEdge(k, v, line, under)
 	c, r := k.Context(), k.Theme()
 	px := &r.Px
 	bars := k.ScrollBars(v)

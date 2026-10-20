@@ -21,6 +21,7 @@ import (
 //		…
 //	}
 //	for c := ed.TakeCommand(); c != platform.CmdNone; c = ed.TakeCommand() { … } // while SetCompletionActive(true)
+//	for c := ed.TakeFieldCommand(); c != ui.FieldNone; c = ed.TakeFieldCommand() { … } // the same, as ui.FieldCommands
 //
 // The completion handoff: when the app opens a completion popup (from Changed
 // and Selection, placed at CaretRect above or below the editor, so that it
@@ -54,6 +55,54 @@ func NewNativeEditor(w *platform.Window, o platform.EditorOptions) (*NativeEdito
 	return &NativeEditor{Editor: e}, nil
 }
 
+// FieldCommandOf is the ui field command of a completion key the editor handed
+// over (platform.EditorCommand): Up and Down are FieldMoveUp and FieldMoveDown,
+// Tab and Shift+Tab FieldInsertTab and FieldInsertBacktab, Enter (in any of the
+// Enter-policy variants) FieldInsertNewline and Escape FieldCancel. So one
+// ui.FieldCommander (a completion list, a combo box) takes the keys of a drawn
+// text field and of the hosted editor alike. CmdNone is FieldNone.
+func FieldCommandOf(c platform.EditorCommand) ui.FieldCommand {
+	switch c {
+	case platform.CmdUp:
+		return ui.FieldMoveUp
+	case platform.CmdDown:
+		return ui.FieldMoveDown
+	case platform.CmdTab:
+		return ui.FieldInsertTab
+	case platform.CmdBacktab:
+		return ui.FieldInsertBacktab
+	case platform.CmdAccept:
+		return ui.FieldInsertNewline
+	case platform.CmdCancel:
+		return ui.FieldCancel
+	}
+	return ui.FieldNone
+}
+
+// TakeFieldCommand is TakeCommand as a ui field command (FieldCommandOf): the
+// oldest completion key not taken yet, or FieldNone. The editor has no
+// commands without SetCompletionActive(true), and an editor with no view (an
+// offscreen window) none at all.
+func (e *NativeEditor) TakeFieldCommand() ui.FieldCommand {
+	if e.Editor == nil {
+		return ui.FieldNone
+	}
+	return FieldCommandOf(e.TakeCommand())
+}
+
+// TakeFieldCommandRev is TakeFieldCommand with whether an Enter
+// (FieldInsertNewline) is one that sends by the Enter policy, and the editor's
+// Rev when the key came (platform.Editor.TakeCommandRev): what a completion
+// that declines the key does with it, and whether the key was followed by a
+// change of the text.
+func (e *NativeEditor) TakeFieldCommandRev() (cmd ui.FieldCommand, sends bool, rev uint32) {
+	if e.Editor == nil {
+		return ui.FieldNone, false, 0
+	}
+	c, sends, rev := e.TakeCommandRev()
+	return FieldCommandOf(c), sends, rev
+}
+
 // NativeEditorSignal is what the editor reported since the last frame.
 type NativeEditorSignal struct {
 	// ID is the host's box.
@@ -83,8 +132,9 @@ type NativeEditorSignal struct {
 const offscreenLinePt = 16
 
 // NativeEditor builds the editor's box in the current parent: as wide as the
-// parent unless NextSize says otherwise, Height points high, focusable (Tab
-// reaches the text view through it), with the text-field role and label's
+// parent unless NextSize says otherwise, Height points high, focusable as text
+// entry (Tab reaches the text view through it, with the Keyboard navigation
+// setting off too), with the text-field role and label's
 // shown part as its accessible name. It takes the editor's signals of the
 // frame. It allocates nothing.
 func (k *Kit) NativeEditor(ed *NativeEditor, label string) NativeEditorSignal {
@@ -104,7 +154,7 @@ func (k *Kit) NativeEditor(ed *NativeEditor, label string) NativeEditorSignal {
 	if ed.Editor != nil {
 		c.NextSemValueBytes(ed.Text())
 	}
-	id := c.Host(host, ui.HashString(c.ParentKey(), ident), ui.HostFocusable)
+	id := c.Host(host, ui.HashString(c.ParentKey(), ident), ui.HostFocusable|ui.HostTextEntry)
 	sig := NativeEditorSignal{
 		ID:            id,
 		Changed:       s&platform.EditorChanged != 0,

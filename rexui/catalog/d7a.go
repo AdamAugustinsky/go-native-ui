@@ -124,28 +124,61 @@ func row(s *State, fn func(s *State)) {
 	k.EndRow()
 }
 
+// item opens a box of its own for item i of a row, as large as what it
+// holds: badges and avatars are keyed by their parent, so that each of a row
+// of them gets a key of its own rather than one told apart by its order.
+// Close it with c.Pop.
+func item(s *State, i uint64) {
+	c := s.k.Context()
+	c.NextSize(ui.Children(1), ui.Children(1))
+	c.Push(c.BoxKeyed(0, ui.KeyN(c.ParentKey(), 100+i), nil))
+}
+
 func badges(s *State) {
 	k := s.k
+	c := k.Context()
 	row(s, func(s *State) {
-		rexui.BadgeCountN(k, 3, rexui.BadgeOpts{})
-		rexui.BadgeCountN(k, 42, rexui.BadgeOpts{})
-		rexui.BadgeCountN(k, 120, rexui.BadgeOpts{})
+		for i, n := range [...]int{3, 42, 120} {
+			item(s, uint64(i))
+			rexui.BadgeCountN(k, n, rexui.BadgeOpts{})
+			c.Pop()
+		}
+		item(s, 3)
 		rexui.Badge(k, "", rexui.BadgeOpts{Variant: rexui.BadgeStatus, Name: "Online"})
+		c.Pop()
+		item(s, 4)
 		rexui.Badge(k, "Beta", rexui.BadgeOpts{Variant: rexui.BadgeTag})
+		c.Pop()
+		item(s, 5)
 		k.BeginDisabled(true)
 		rexui.Badge(k, "Off", rexui.BadgeOpts{Variant: rexui.BadgeTag})
 		k.EndDisabled()
+		c.Pop()
 	})
 }
 
+var avatarSamples = [...]struct {
+	name string
+	o    rexui.AvatarOpts
+}{
+	{"Ada Lovelace", rexui.AvatarOpts{}},
+	{"Alan Turing", rexui.AvatarOpts{Presence: rexui.PresenceOnline}},
+	{"Grace", rexui.AvatarOpts{Size: 28, Presence: rexui.PresenceBusy}},
+	{"k", rexui.AvatarOpts{Size: 20}},
+}
+
+var members = []string{"Ada Lovelace", "Alan Turing", "Grace Hopper", "Katherine Johnson", "Margaret Hamilton"}
+
 func avatars(s *State) {
 	k := s.k
+	c := k.Context()
 	row(s, func(s *State) {
-		rexui.Avatar(k, "Ada Lovelace", rexui.AvatarOpts{})
-		rexui.Avatar(k, "Alan Turing", rexui.AvatarOpts{Presence: rexui.PresenceOnline})
-		rexui.Avatar(k, "Grace", rexui.AvatarOpts{Size: 28, Presence: rexui.PresenceBusy})
-		rexui.Avatar(k, "k", rexui.AvatarOpts{Size: 20})
-		rexui.AvatarStack(k, "Members", []string{"Ada Lovelace", "Alan Turing", "Grace Hopper", "Katherine Johnson", "Margaret Hamilton"}, 3, rexui.AvatarOpts{Size: 28})
+		for i := range avatarSamples {
+			item(s, uint64(i))
+			rexui.Avatar(k, avatarSamples[i].name, avatarSamples[i].o)
+			c.Pop()
+		}
+		rexui.AvatarStack(k, "Members", members, 3, rexui.AvatarOpts{Size: 28})
 	})
 }
 
@@ -182,10 +215,9 @@ func popoverSample(edge rexui.PopoverEdge) func(s *State) {
 		k, c := s.k, s.k.Context()
 		k.NextPadding(0, 0, 0, 0)
 		var anchor ui.ID
+		k.NextJustify(ui.JustifyCenter)
 		k.Row("anchor")
-		k.Spacer()
 		anchor = rexui.Button(k, "Anchor", rexui.ButtonOpts{}).ID
-		k.Spacer()
 		k.EndRow()
 		pop := rexui.BeginPopover(k, "pop", c.Rect(anchor), rexui.PopoverOpts{Edge: edge, Width: 220, Behavior: rexui.PopoverApplicationDefined})
 		rexui.Label(k, "Popover", rexui.LabelOpts{Style: rexui.TextHeadline})
@@ -279,6 +311,7 @@ var d7aPage = []string{
 	"badges", "avatars", "skeletons", "empty-state",
 	"banner-info", "banner-success", "banner-warning", "banner-error", "toast",
 	"popover-below", "popover-above", "chat", "chat-rows", "completion-list",
+	"composer", "composer-typing", "composer-attachments", "composer-sending", "composer-disabled", "composer-completion", "composer-inactive", // d7b.go
 }
 
 func init() {

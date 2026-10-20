@@ -94,6 +94,16 @@ type OverlayOpts struct {
 	// the popup opens and closes, and Tab does not stay inside it. A
 	// completion list is one.
 	NoFocus bool
+	// AvoidHosts makes a popup that never lies over a hosted native view
+	// (Context.Host): a native view is above everything ui draws, so a popup
+	// over one would hide the view (HostRegions). The popup's owner places it
+	// beside the view from the last frame's layout; if the layout of this
+	// frame, finished, puts it over a host after all (a parent moved the host
+	// since), the popup is not drawn, takes no input and is not reported to
+	// hide the view in this frame, and another frame is asked for, in which
+	// the owner places it against the new layout. Only hosts below the popup
+	// count.
+	AvoidHosts bool
 }
 
 // NextOverlay sets the options of the next BeginOverlay (a popup or modal).
@@ -355,6 +365,34 @@ func (c *Context) placeOverlay(b *box) {
 	y = max(min(y, H-h), 0)
 	b.origin = [2]float32{x, y}
 	setRect(b)
+}
+
+// avoidHosts hides, in the finished layout, the AvoidHosts overlays that lie
+// over a host (End, after layout, before the hidden marks are spread to the
+// descendants).
+func (c *Context) avoidHosts() {
+	if c.shell.frame != c.frame || c.shell.nHosts == 0 {
+		return
+	}
+	for i := 0; i < c.nOvs; i++ {
+		ov := &c.ovs[i]
+		b := &c.boxes[ov.id]
+		if !ov.opts.AvoidHosts || b.hid {
+			continue
+		}
+		for j := 0; j < c.shell.nHosts; j++ {
+			h := c.shell.hosts[j].id
+			hb := &c.boxes[h]
+			if hb.lastFrame != c.frame || hb.hid || int(hb.ovl) >= i+1 {
+				continue
+			}
+			if !empty(intersect(b.rect, c.clippedRect(h))) {
+				c.hide(b, b.origin[0], b.origin[1])
+				c.animating = true
+				break
+			}
+		}
+	}
 }
 
 // overlayFocus moves the focus for the overlays that closed and opened in this

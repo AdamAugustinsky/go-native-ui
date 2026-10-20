@@ -132,6 +132,7 @@ type State struct {
 	lists listState // the lists' samples (lists.go)
 	name  []byte    // the name of the sample being built
 	d7a   d7aState  // the D7a samples (d7a.go)
+	d7b   d7bState  // the composer samples (d7b.go)
 }
 
 // The glyphs of AppKitRef's icon buttons: SF Symbols at AppKit's default

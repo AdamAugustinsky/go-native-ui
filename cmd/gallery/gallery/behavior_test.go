@@ -110,7 +110,7 @@ func TestControlsExportTheirValuesAndStates(t *testing.T) {
 	if r.state(ui.RoleCheckbox, "Enable feature")&ui.SemChecked == 0 {
 		t.Fatal("Enable feature starts unchecked")
 	}
-	r.Play(click(ui.RoleCheckbox, "Enable feature"), idle(2))
+	r.Play(click(ui.RoleCheckbox, "Enable feature").Through(), idle(2))
 	if r.state(ui.RoleCheckbox, "Enable feature")&ui.SemChecked != 0 {
 		t.Error("a click did not uncheck the checkbox")
 	}
@@ -179,7 +179,7 @@ func TestDialogIsModalAndItsActionsReachTheApp(t *testing.T) {
 	}
 
 	// what is beneath it is inert: pointer, keys and shortcuts
-	r.Play(click(ui.RoleCheckbox, "Enable feature"), idle(2))
+	r.Play(click(ui.RoleCheckbox, "Enable feature").Through(), idle(2))
 	if !g.check {
 		t.Error("a click on the checkbox beneath the dialog went through")
 	}
@@ -219,7 +219,7 @@ func TestDialogIsModalAndItsActionsReachTheApp(t *testing.T) {
 		t.Errorf("the status is %q, want Deleted", g.status)
 	}
 	// and the window works again
-	r.Play(click(ui.RoleCheckbox, "Enable feature"), idle(2))
+	r.Play(click(ui.RoleCheckbox, "Enable feature").Through(), idle(2))
 	if g.check {
 		t.Error("the checkbox does not respond after the dialog closed")
 	}

@@ -205,6 +205,7 @@ type Context struct {
 	relClicks         [2]uint8
 	focusKey          Key
 	focusVisible      bool // focus came from the keyboard (FocusVisible)
+	textOnlyTab       bool // Tab skips the controls (focus classes, focus.go): SetTabReachesControls(false)
 	scrollSet         bool // ScrollTo was called this frame (End decides whether the scroll is still moving)
 
 	sp scrollPhys   // trackpad gestures, latching and rubber bands (scrollphys.go)
@@ -224,6 +225,8 @@ type Context struct {
 	// again (ns from the frame start, 0 = none), and the input-method
 	// rectangle of the focused field.
 	wakeNs int64
+
+	shownWatch []shownWatch // WatchShown's boxes of this frame, checked after layout
 	// deadlines (deadline.go) are the named one-shot deadlines in force.
 	deadlines []deadline
 	imeRect   [4]float32

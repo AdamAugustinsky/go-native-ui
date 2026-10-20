@@ -27,6 +27,9 @@ func (e *Editor) Focus() {}
 // SetText replaces the whole text.
 func (e *Editor) SetText([]byte) error { return ErrNoHosts }
 
+// CommitComposition ends a composition, keeping its text.
+func (e *Editor) CommitComposition() {}
+
 // SetSelection sets the selection.
 func (e *Editor) SetSelection(TextSelection) error { return ErrNoHosts }
 

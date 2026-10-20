@@ -68,7 +68,10 @@ func (w *Window) keyEvent(ev objc.ID, typ uintptr, t int64) (keyIdx int) {
 	code := uint32(objc.Send(ev, selKeyCode)) & 0xFFFF
 	m := mods(uintptr(objc.Send(ev, selModifierFlags)))
 	e := Event{Kind: EvKey, Key: macKey(code), Code: code, Mods: m, Time: t, Char: w.keyChar(ev, code)}
-	w.lastMods = m // (EvModifiers reports changes against what the app last saw)
+	w.lastMods = m                 // (EvModifiers reports changes against what the app last saw)
+	if code == 0x30 && typ == 10 { // Tab: the Keyboard navigation setting may have changed since the app was active
+		refreshKeynav()
+	}
 	if typ == 10 {
 		e.Flags = FlagDown
 		if objc.SendBool(ev, selIsARepeat) {

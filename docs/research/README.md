@@ -12,6 +12,7 @@ code was copied.
 | [gpui-ghostty.md](gpui-ghostty.md) | GPUI (Zed) and Ghostty: native macOS integration, hosting native views next to a GPU surface |
 | [electron-tauri.md](electron-tauri.md) | App infrastructure: lifecycle, notifications, tray, updates, packaging, signing, notarization |
 | [go-and-others.md](go-and-others.md) | Gio, Fyne, Wails, Slint, Iced |
+| [glass-over-metal.md](glass-over-metal.md) | Issue #25 probe (2026-10-20): native glass/pocket over our Metal layer vs a drawn scroll edge; captures, costs, sync, recommendation (`probes/glass/`) |
 
 The design measurements are in `docs/design/native-audit.md` and
 `docs/design/rex-design-system.md` (AppKit reference: `tools/appkitref`).

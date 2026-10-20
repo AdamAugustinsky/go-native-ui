@@ -17,7 +17,9 @@ func TestSelectAllActsOnTheSceneOnShow(t *testing.T) {
 		t.Fatalf("one row of the table was clicked: %d selected", n)
 	}
 	r.goTo(scPlayground)
-	r.Play(click(ui.RoleListItem, "List item 2"), idle(2))
+	// the list is below the form's fold, and the player scrolls the nearest
+	// scrolling container around a target (the list itself): the form first
+	r.Play(wheel(ui.RoleScrollArea, "Playground", -60, 12), idle(3), click(ui.RoleListItem, "List item 2"), idle(2))
 	if n := r.g.list.Sel.Count(); n != 1 {
 		t.Fatalf("one item of the list was clicked: %d selected", n)
 	}

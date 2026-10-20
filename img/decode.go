@@ -15,14 +15,28 @@ type job struct {
 	copyN int32
 	w, h  int32
 	flags Flags
-	frame int32 // the frame of an animated image (0 for now; C6 decodes the others)
+	kind  uint8 // jobStill, or jobFrame for a frame of an animation
+	// A frame job: the animation (its decoder is used by this job alone), the
+	// frame of the file, its sequence number and the seek epoch it belongs to.
+	anim  *anim
+	frame int32
+	seq   int64
+	epoch uint32
 }
+
+// Kinds of job.
+const (
+	jobStill uint8 = iota // an image's first decode (an animation's decoder is built with it)
+	jobFrame              // a later frame of an animation
+)
 
 // result is a finished decode (pointer-free: it crosses threads).
 type result struct {
 	buf          int32 // pooled pixels, -1 on failure
 	w, h, pad    int32 // image size; pad is the replicated border around it (atlas images)
 	frames, dlay int32 // frame count, first frame's delay in ms
+	seq          int64 // a frame job's sequence number
+	epoch        uint32
 	ns           int64 // worker time
 	err          uint8
 }
@@ -73,24 +87,42 @@ func (c *Cache) decodeJob(t task.Token, j job) result {
 		data = j.src.lease.Bytes()
 	}
 	var r result
-	if t.Cancelled() {
+	var a *anim // the animation a first decode built
+	switch {
+	case t.Cancelled():
 		r = result{buf: -1, err: errDecode}
-	} else if j.src.isIcon() {
+	case j.kind == jobFrame:
+		r = w.decodeFrame(c, &j)
+	case j.src.isIcon():
 		r = w.decodeIcon(c, &j)
-	} else {
-		r = w.decode(c, &j, data)
+	default:
+		handled := false
+		if j.flags&Animate != 0 {
+			r, a, handled = w.openAnim(c, &j, data)
+		}
+		if !handled {
+			r = w.decode(c, &j, data)
+		}
 	}
 	if j.copy >= 0 {
 		c.bufs.put(j.copy, &w.fr)
 	}
 	r.ns = platform.Now() - t0
 	c.jobOut[j.ent] = r.buf
+	c.animOut[j.ent] = a
 	if st.CompareAndSwap(jobRunning, jobDone) || st.CompareAndSwap(jobDraining, jobDone) {
 		return r
 	}
 	// Still running when Close returned: nobody takes the result.
 	if r.buf >= 0 {
 		c.bufs.put(r.buf, &w.fr)
+	}
+	if a != nil {
+		a.dec.close(&w.fr)
+		c.animOut[j.ent] = nil
+	}
+	if j.kind == jobFrame {
+		j.anim.dec.close(&w.fr) // Close left the animation to this job
 	}
 	if j.src.kind == srcLease {
 		j.src.lease.Release()
