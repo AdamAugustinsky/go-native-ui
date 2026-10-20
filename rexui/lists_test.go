@@ -2,6 +2,7 @@ package rexui_test
 
 import (
 	"slices"
+	"strconv"
 	"sort"
 	"testing"
 	"time"
@@ -30,9 +31,12 @@ var (
 // outlineView is an outline of tree in a 260 × 240 pt box at the window's
 // top left, full width, so that row r spans y 48r to 48r+48 px.
 type outlineView struct {
-	tree base.Tree
-	st   base.OutlineState
-	ol   rexui.Outline
+	tree  base.Tree
+	st    base.OutlineState
+	ol    rexui.Outline
+	names [][]byte // the nodes' accessible names, if set
+	// changed: the selection changed in a frame
+	changed bool
 }
 
 func newOutlineView(size []uint32, depth []uint16) *outlineView {
@@ -48,9 +52,14 @@ func (v *outlineView) build(g *rig) {
 	c.Push(c.Box(0, "frame"))
 	v.ol = rexui.BeginOutline(k, "Files", &v.st, &v.tree, rexui.OutlineOpts{Style: rexui.ListFullWidth})
 	for r := v.ol.First; r < v.ol.Last; r++ {
-		v.ol.Row(r, nil)
+		var name []byte
+		if v.names != nil {
+			name = v.names[v.st.Rows()[r]]
+		}
+		v.ol.Row(r, name)
 		v.ol.TextBytes([]byte("node"))
 	}
+	v.changed = v.changed || v.ol.Changed
 	rexui.EndOutline(k, &v.ol)
 	c.Pop()
 }
@@ -448,6 +457,39 @@ func TestFillerStripesAreNotContent(t *testing.T) {
 		}
 		if stripes < 3 {
 			t.Fatalf("%d rows: %d stripes in a 240 pt list", n, stripes)
+		}
+	}
+}
+
+
+// named gives the nodes of v the names n0, n1 …
+func (v *outlineView) named() *outlineView {
+	for i := range v.tree.Size {
+		v.names = append(v.names, []byte("n"+strconv.Itoa(i)))
+	}
+	return v
+}
+
+// An assistive technology's expand and collapse requests reach a styled
+// outline's rows: the row of a collapsed node offers ActExpand, and the
+// request expands it; ActCollapse collapses it again.
+func TestOutlineTakesExpandAndCollapseRequests(t *testing.T) {
+	v := newOutlineView(smallSize, smallDepth).named()
+	g := newRig(t, theme.Light, nil, v.build)
+	g.settle()
+	for _, step := range []struct {
+		act  ui.SemAction
+		open bool
+	}{{ui.ActExpand, true}, {ui.ActCollapse, false}} {
+		n := g.node(ui.RoleListItem, "n0")
+		if n.Actions&step.act == 0 {
+			t.Fatalf("the row of node 0 does not offer action %v (it offers %v)", step.act, n.Actions)
+		}
+		g.in.PushAction(ui.SemRequest{Key: n.Key, Action: step.act})
+		g.frame()
+		g.settle()
+		if v.st.Expanded(0) != step.open {
+			t.Fatalf("after action %v node 0 is expanded: %v", step.act, v.st.Expanded(0))
 		}
 	}
 }

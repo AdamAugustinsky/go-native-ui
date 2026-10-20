@@ -183,12 +183,14 @@ func BeginList(k *base.Kit, label string, st *base.ListState, rows int, o ListOp
 // flow left to right. It ends the row before it.
 func (l *List) Row(r int, item uint32, name []byte) base.RowState {
 	rs := l.RowState(r, item)
-	l.begin(&l.List, &rs, name)
+	l.begin(&l.List, nil, &rs, name)
 	return rs
 }
 
-// begin builds the row rs of l in the look and pushes it.
-func (lk *rowLook) begin(l *base.List, rs *base.RowState, name []byte) ui.ID {
+// begin builds the row rs of l in the look and pushes it; an outline's row
+// (ol not nil) through the outline, which takes its expand and collapse
+// requests.
+func (lk *rowLook) begin(l *base.List, ol *base.Outline, rs *base.RowState, name []byte) ui.ID {
 	k := l.Kit()
 	c, r := k.Context(), k.Theme()
 	rc := &ListLook
@@ -227,7 +229,12 @@ func (lk *rowLook) begin(l *base.List, rs *base.RowState, name []byte) ui.ID {
 		lk.fgTint, lk.fg2 = rc.Label, rc.Label2.RGBA(r)
 	}
 	lk.fg = lk.fgTint.RGBA(r)
-	id := l.BeginRow(rs, name, flags)
+	var id ui.ID
+	if ol != nil {
+		id = ol.BeginRow(rs, name, flags) // an outline's row: it takes expand and collapse requests
+	} else {
+		id = l.BeginRow(rs, name, flags)
+	}
 	if rs.Selected && rs.NextSelected && rc.Rounded[lk.style] {
 		// the line between two rows of an inset block, in the upper one's
 		// last point

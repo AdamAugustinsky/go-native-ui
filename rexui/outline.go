@@ -82,7 +82,7 @@ func (ol *Outline) Row(r int, name []byte) uint32 {
 	ol.CloseRow()
 	rs := ol.RowState(r)
 	rc := &OutlineLook
-	ol.begin(&ol.List, &rs, name)
+	ol.begin(&ol.List, &ol.Outline, &rs, name)
 	sc := k.Scale()
 	level := float32(rs.Level) * rs0.Lines.Indent
 	rh := ol.RowH()
