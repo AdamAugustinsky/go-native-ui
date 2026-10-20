@@ -299,6 +299,7 @@ func Pump(timeoutNs int64) {
 
 // pump runs nextEventMatchingMask until the timeout and routes the events.
 func pump(timeoutNs int64) {
+	pumpStats.pumps++
 	pumpDepth++
 	defer func() { pumpDepth-- }()
 	F := objc.F
@@ -332,7 +333,9 @@ func pump(timeoutNs int64) {
 // unblocks the pump: the wakes it stands for are given out here, if the
 // run-loop source has not done it yet.
 func route(ev objc.ID) {
+	pumpStats.routed++
 	if uintptr(objc.Send(ev, selType)) == 15 && uintptr(objc.Send(ev, selSubtype))&0xFFFF == wakeSubtype {
+		pumpStats.wakeEvents++
 		giveWakes()
 		return // also used to unblock the loop after a display-link tick
 	}
@@ -474,6 +477,10 @@ func bury(obj objc.ID) {
 		graveyard = append(graveyard, obj)
 	}
 }
+
+// pumpStats count the pump's work, for a test's look at a loop that stopped
+// (DebugPumpState). Main thread.
+var pumpStats struct{ performs, pushes, routed, wakeEvents, pumps uint64 }
 
 // pumpDepth is how many pumps are running: more than none is a pump nested
 // in a callout of another (a window opened from a performed selector waits

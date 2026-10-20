@@ -633,6 +633,7 @@ func deliverScratch(kind AppEventKind, count int64, buf []byte) {
 // pending Wake is handed to the window and the pump, then the app's events
 // are dispatched.
 func appPerform(*ffi.CB) {
+	pumpStats.performs++
 	if giveWakes() {
 		pushWake()
 	}
@@ -644,6 +645,7 @@ func appPerform(*ffi.CB) {
 // return. If a native loop dequeues that event instead, our pump was not
 // blocked anyway.
 func pushWake() {
+	pumpStats.pushes++
 	appObj.woke = true
 	objc.Send2(appObj.app, selPostEvent, uintptr(appObj.wakeEv), 0)
 }

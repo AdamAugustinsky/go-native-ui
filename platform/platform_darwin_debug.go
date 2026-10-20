@@ -2,7 +2,11 @@
 
 package platform
 
-import "gonativeui/internal/objc"
+import (
+	"fmt"
+
+	"gonativeui/internal/objc"
+)
 
 // Selectors are resolved up front: objc.Sel uses the main thread's call frame,
 // so it must not be called in the middle of building an argument list.
@@ -154,4 +158,38 @@ func (w *Window) DebugToggleFullScreen() {
 // as last set, and whether AppKit considers the window full screen.
 func (w *Window) DebugGlassRadius() (radius float64, fullScreen bool) {
 	return w.glassRadius, objc.Send(w.win, selStyleMask)&(1<<14) != 0
+}
+
+// DebugPumpState describes the app's pump and its wakes for a test that
+// finds the loop stopped: the wake flags, the pump's counters, and the next
+// event in AppKit's queue (looked at, not taken). Main thread.
+func DebugPumpState() string {
+	b := []byte("pump{")
+	b = appendFlag(b, "wakePending", wakePending.Load())
+	b = appendFlag(b, " loopWake", loopWake.Load())
+	b = appendFlag(b, " woke", appObj.woke)
+	b = appendFlag(b, " dispatchRunning", dispatch.running)
+	b = appendFlag(b, " held", dispatch.held)
+	b = appendFlag(b, " signalled", dispatch.signalled.Load())
+	b = appendFlag(b, " native", NativeLoop())
+	b = append(b, fmt.Sprintf(" depth=%d pumps=%d performs=%d pushes=%d routed=%d wakeEvents=%d windows=%d", pumpDepth, pumpStats.pumps, pumpStats.performs, pumpStats.pushes, pumpStats.routed, pumpStats.wakeEvents, reg.n)...)
+	for i := 0; i < reg.n; i++ {
+		w := reg.open[i]
+		b = append(b, fmt.Sprintf(" w%d{mark=%v queued=%d returned=%v}", w.slot, w.wakeMark.Load(), len(w.q.ev), w.returned)...)
+	}
+	ev := objc.Send4(appObj.app, selNextEvent, ^uintptr(0), uintptr(appObj.distantPast), uintptr(defaultMode), 0)
+	if ev == 0 {
+		b = append(b, " next=none"...)
+	} else {
+		b = append(b, fmt.Sprintf(" next=type%d/sub%#x/win%d", objc.Send(ev, selType), uintptr(objc.Send(ev, selSubtype))&0xFFFF, objc.Send(ev, selWindowNumber))...)
+	}
+	return string(append(b, '}'))
+}
+
+func appendFlag(b []byte, name string, v bool) []byte {
+	b = append(b, name...)
+	if v {
+		return append(b, "=1"...)
+	}
+	return append(b, "=0"...)
 }

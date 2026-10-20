@@ -348,20 +348,32 @@ func TestEachWindowHasItsOwnComposer(t *testing.T) {
 		t.Errorf("the editors' focus: first %v, second %v; want both (each window keeps its first responder)", p1.ed.Focused(), p2.ed.Focused())
 	}
 
-	l.Do(func(*app.App) {
-		p2.ed.Release() // the app's: before its window closes (or after)
-		w2.Close()
-	})
+	// The loop goes on turning: after the editor's release, after the
+	// window's close.
+	turns := func(what string) {
+		t.Helper()
+		b1, b2 := p1.builds.Load(), p2.builds.Load()
+		l.Do(func(*app.App) { w1.Wake(); w2.Wake() })
+		if !waitFor(5*time.Second, func() bool { return p1.builds.Load() > b1 }) {
+			var pump string
+			l.Do(func(*app.App) { pump = platform.DebugPumpState() })
+			t.Fatalf("%s: the app's loop stopped (builds: first %d → %d, second %d → %d)\n%s%s\n%s", what, b1, p1.builds.Load(), b2, p2.builds.Load(), pump, mwStates(l, w1, w2), stacks())
+		}
+	}
+	turns("before the release")
+	l.Do(func(*app.App) { p2.ed.Release() }) // the app's: before its window closes (or after)
+	turns("after the second window's editor was released")
+	l.Do(func(*app.App) { w2.Close() })
 	if !waitFor(5*time.Second, func() bool {
 		var open bool
 		l.Do(func(*app.App) { open = w2.Open() })
 		return !open
 	}) {
-		t.Fatalf("the second window did not close%s\n%s", mwStates(l, w1, w2), stacks())
+		var pump string
+		l.Do(func(*app.App) { pump = platform.DebugPumpState() })
+		t.Fatalf("the second window did not close\n%s%s\n%s", pump, mwStates(l, w1, w2), stacks())
 	}
-	if !l.Within("the first window draws after the second closed", 120, func() bool { return true }) {
-		t.Fatalf("the first window does not draw after the second closed\n%s", stacks())
-	}
+	turns("after the second window closed")
 	var hosts int64
 	l.Do(func(*app.App) { hosts = platform.ShellObjects().Hosts })
 	if hosts != hosts0 {
