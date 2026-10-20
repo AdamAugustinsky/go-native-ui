@@ -1,7 +1,12 @@
 // Command notes is the example application of the guide (docs/GUIDE.md).
 //
 //	notes                  open the window, in the system's light or dark mode, which it follows
-//	notes -o out.png       render the window offscreen at 840×1120 px and exit (-dark: in the dark mode)
+//	notes -mode dark       open the window in this mode (system, the default; light or dark);
+//	                       -scrolled starts the note scrolled under the toolbar
+//	notes -o out.png       render the window offscreen at 1800×1200 px (2×) and exit (-dark: in the dark mode)
+//	notes -measure         print the frames, in points from the window's top left, of the toolbar's items,
+//	                       the title, the sidebar's rows and the fields as JSON, for comparison with
+//	                       tools/appkitscenes' dump of the Notes scene (-dark, -scrolled as with -o)
 //	notes -exit-first -v   print the startup timeline as JSON, and with -v exec → first frame, and exit
 //	                       once the first frame is on glass
 //	notes -bench           scripted session on the real window: add, select and remove notes, the
@@ -22,12 +27,17 @@ import (
 
 	"gonativeui/app"
 	"gonativeui/examples/notes/notes"
+	"gonativeui/theme"
 	"gonativeui/ui"
+	"gonativeui/widget/widgettest"
 )
 
 func main() {
 	out := flag.String("o", "", "render the window offscreen into this PNG and exit")
 	dark := flag.Bool("dark", false, "with -o: render the dark mode")
+	mode := flag.String("mode", "system", "system (follow the system's light or dark mode: the default), light or dark")
+	measure := flag.Bool("measure", false, "print the frames of the window's parts in points as JSON and exit")
+	scrolled := flag.Bool("scrolled", false, "start with the open note scrolled under the toolbar")
 	bench := flag.Bool("bench", false, "scripted session; print allocation, CPU and pacing as JSON")
 	gate := flag.Bool("gate", false, "with -bench: exit with status 3 unless there were 0 allocations, main-thread CPU within budget and frames were paced")
 	allowUnpaced := flag.Bool("allow-unpaced", false, "with -gate: accept unpaced frames (no frame events: display asleep)")
@@ -37,14 +47,18 @@ func main() {
 	verbose := flag.Bool("v", false, "print a state line every second while frames stop coming")
 	flag.Parse()
 
-	var err error
-	switch {
-	case *out != "":
-		err = render(*out, *dark)
-	case *bench:
-		err = runBench(*gate, *allowUnpaced, *maxCPU, *timeout, *verbose)
-	default:
-		err = runWindow(*exitFirst, *verbose)
+	pref, err := parseMode(*mode)
+	if err == nil {
+		switch {
+		case *out != "":
+			err = render(*out, *dark, *scrolled)
+		case *measure:
+			err = runMeasure(*dark, *scrolled)
+		case *bench:
+			err = runBench(*gate, *allowUnpaced, *maxCPU, *timeout, *verbose)
+		default:
+			err = runWindow(*exitFirst, *verbose, pref, *scrolled)
+		}
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "notes:", err)
@@ -52,11 +66,24 @@ func main() {
 	}
 }
 
-func runWindow(exitFirst, verbose bool) error {
+func parseMode(s string) (theme.Preference, error) {
+	switch s {
+	case "system":
+		return theme.System, nil
+	case "light":
+		return theme.ForceLight, nil
+	case "dark":
+		return theme.ForceDark, nil
+	}
+	return 0, fmt.Errorf("-mode %q: want system, light or dark", s)
+}
+
+func runWindow(exitFirst, verbose bool, pref theme.Preference, scrolled bool) error {
 	n, err := notes.New()
 	if err != nil {
 		return err
 	}
+	n.Mode, n.Scrolled = pref, scrolled
 	res, err := app.RunWith(notes.Config(), n, app.RunOptions{ExitFirst: exitFirst, Verbose: verbose})
 	if err == nil && exitFirst {
 		printJSON(res.Startup)
@@ -68,12 +95,14 @@ func runWindow(exitFirst, verbose bool) error {
 }
 
 // render draws the window offscreen, once everything has settled, into a PNG.
-func render(path string, dark bool) error {
+func render(path string, dark, scrolled bool) error {
 	n, err := notes.New()
 	if err != nil {
 		return err
 	}
-	o, err := app.NewOffscreen(notes.Config(), 840, 1120, 2, n)
+	n.Traffic, n.Scrolled = true, scrolled // an offscreen window has no system traffic lights
+	cfg := notes.Config()
+	o, err := app.NewOffscreen(cfg, int(cfg.Width*2), int(cfg.Height*2), 2, n)
 	if err != nil {
 		return err
 	}
@@ -89,6 +118,43 @@ func render(path string, dark bool) error {
 	}
 	defer f.Close()
 	return png.Encode(f, img)
+}
+
+// node is one part of the window: its role and name in the semantic tree and
+// its frame in points from the window's top left (x, y, w, h).
+type node struct {
+	Role, Name string
+	Frame      [4]float32
+}
+
+// runMeasure renders the window at rest at 2× and prints its parts' frames.
+func runMeasure(dark, scrolled bool) error {
+	n, err := notes.New()
+	if err != nil {
+		return err
+	}
+	n.Traffic, n.Scrolled = true, scrolled
+	cfg := notes.Config()
+	o, err := app.NewOffscreen(cfg, int(cfg.Width*2), int(cfg.Height*2), 2, n)
+	if err != nil {
+		return err
+	}
+	defer o.Close()
+	o.UI.SetSystemAppearance(ui.Appearance{Dark: dark, Known: true})
+	for i := 0; i < 600 && (i < 3 || o.UI.Animating()); i++ {
+		o.Frame()
+	}
+	o.Frame()
+	var t ui.SemTree
+	n.Context().Semantics(&t)
+	var out []node
+	for i := range t.Nodes {
+		sn := &t.Nodes[i]
+		b := sn.Bounds
+		out = append(out, node{widgettest.RoleName(sn.Role), string(t.Text(sn.Name)), [4]float32{b[0] / 2, b[1] / 2, (b[2] - b[0]) / 2, (b[3] - b[1]) / 2}})
+	}
+	printJSON(out)
+	return nil
 }
 
 // report is the JSON of -bench.
