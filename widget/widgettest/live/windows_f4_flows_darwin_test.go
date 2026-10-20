@@ -11,6 +11,7 @@ package live
 import (
 	"os"
 	"runtime"
+	"runtime/debug"
 	"strconv"
 	"sync/atomic"
 	"testing"
@@ -86,7 +87,7 @@ func init() {
 	// f4-measure: one window left idle for IDLE1 seconds (presents, wakeups,
 	// CPU: the baseline), a second window's opening time and the memory it
 	// adds, the two windows left idle for IDLE seconds (both 5 by default),
-	// then both animating (allocations per frame).
+	// then, unless NOANIM is set, both animating (allocations per frame).
 	widgettest.RegisterScenario("f4-measure", func() {
 		seconds := func(k string) time.Duration {
 			if s, err := strconv.Atoi(os.Getenv(k)); err == nil && s > 0 {
@@ -105,7 +106,7 @@ func init() {
 			widgettest.After(d, func() {
 				s1, b1 := sysinfo.Read(), first.builds.Load()+second.builds.Load()
 				sec := d.Seconds()
-				runtime.GC()
+				debug.FreeOSMemory() // a GC that also returns the freed memory now, not during the next idle
 				footprint[key] = sysinfo.Read().Footprint
 				widgettest.Say("%s_footprint_mb=%.2f", key, float64(footprint[key])/(1<<20))
 				widgettest.Say("%s_s=%.0f %s_presents=%d %s_wakeups_per_s=%.2f %s_int_wakeups_per_s=%.2f %s_cpu_pct=%.3f",
@@ -120,7 +121,7 @@ func init() {
 			}
 			widgettest.After(1500*time.Millisecond, func() {
 				idleFor("idle1", idle1, func() {
-					runtime.GC()
+					debug.FreeOSMemory() // a GC that also returns the freed memory now, not during the next idle
 					m0 := sysinfo.Read().Footprint
 					t0 := time.Now()
 					w2, err := a.OpenWindow(mwConfig("second"), second) // draws its first frame before it returns
@@ -130,11 +131,15 @@ func init() {
 					}
 					w2.SetFrame(20, 60, 360, 268)
 					widgettest.After(2*time.Second, func() {
-						runtime.GC()
+						debug.FreeOSMemory() // a GC that also returns the freed memory now, not during the next idle
 						m1 := sysinfo.Read().Footprint
 						widgettest.Say("open_ms=%.1f mem_added_mb=%.2f", float64(open.Microseconds())/1000, (float64(m1)-float64(m0))/(1<<20))
 						idleFor("idle", idle, func() {
 							widgettest.Say("mem_steady_added_mb=%.2f", (float64(footprint["idle"])-float64(footprint["idle1"]))/(1<<20))
+							if os.Getenv("NOANIM") != "" { // a long idle measurement: the child's watchdog ends it at 90 s
+								a.Quit()
+								return
+							}
 							first.measure(second, func(mallocs, frames uint64) {
 								widgettest.Say("anim_frames=%d anim_mallocs=%d", frames, mallocs)
 								a.Quit()
