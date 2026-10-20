@@ -21,7 +21,15 @@ func (k *Kit) Images() *img.Cache { return k.imgs }
 // images of one parent apart.
 //
 // It marks the image in use this frame (img.Cache.Use), so the cache does
-// not evict it while it shows. A styled recipe (an avatar with initials while
+// not evict it while it shows. An animated image (img.Animate) plays: the
+// frame showing is drawn, and the box asks the context to wake the app at
+// the next frame's deadline (Context.WakeIn), never every frame. It plays
+// only while it shows: the window is not hidden (Input.Hidden), and the
+// box, as the last layout placed it, is not hidden by a flow and has some of
+// it inside the window and the clip rectangles around it (Context.ShownRect).
+// Reduce Motion (Kit.ReduceMotion or the system's) and the system's
+// "Auto-play animated images" hold it on the first frame until
+// Cache.Animation(h).Play. A styled recipe (an avatar with initials while
 // loading) reads the state itself with ImageState and draws its own
 // placeholder.
 func (k *Kit) Image(n uint64, h img.Handle, fit ui.ImageFit, radius float32, alt string) ui.ID {
@@ -35,7 +43,7 @@ func (k *Kit) Image(n uint64, h img.Handle, fit ui.ImageFit, radius float32, alt
 		c.NextSemName(alt)
 	}
 	key := ui.KeyN(c.ParentKey(), 9040+n)
-	tex, uv, st := k.imageTex(h)
+	tex, uv, st := k.imageTexKeyed(h, key)
 	if st == img.Ready {
 		c.NextImageFit(tex, uv, fit)
 		c.NextTextColor(0xFFFFFFFF) // the image at full opacity (the box's opacity still applies)
@@ -57,4 +65,31 @@ func (k *Kit) imageTex(h img.Handle) (tex gpu.TextureID, uv [4]float32, st img.S
 		return 0, uv, img.Pending
 	}
 	return k.imgs.Use(h)
+}
+
+// imageTexKeyed is imageTex for the image box keyed key: an animated image is
+// advanced by the frame's clock if the box shows, and its next deadline is
+// asked for.
+func (k *Kit) imageTexKeyed(h img.Handle, key ui.Key) (tex gpu.TextureID, uv [4]float32, st img.State) {
+	if k.imgs == nil || h == 0 {
+		return 0, uv, img.Pending
+	}
+	if !k.imgs.Animated(h) {
+		return k.imgs.Use(h)
+	}
+	c := k.c
+	p := img.Present{
+		Now:          c.Input().Time,
+		Visible:      !c.Input().Hidden,
+		ReduceMotion: k.ReduceMotion || k.Theme().Settings.ReduceMotion,
+	}
+	if id, ok := c.BoxOf(key); ok && p.Visible { // a box not laid out yet shows (this frame lays it out)
+		r := c.ShownRect(id)
+		p.Visible = r[2] > r[0] && r[3] > r[1]
+	}
+	tex, uv, st, wake := k.imgs.UseAnimated(h, p)
+	if wake > 0 {
+		c.WakeIn(wake)
+	}
+	return tex, uv, st
 }
