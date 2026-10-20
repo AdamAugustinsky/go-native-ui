@@ -30,10 +30,11 @@ go-text's own tests and test data are not copied.
 - `harfbuzz/ot_shape_arabic.go`: the Arabic fallback plan is kept on the shape plan once built (upstream rebuilt it on every call), with its apply context.
 - `bidi/bidi.go`, `core.go`, `bracket.go`: level runs, isolating run sequences and bracket pairs live in scratch buffers on `Paragraph`; the bracket opener stack is an array, not a `container/list`. The regression test is `text/rtl_alloc_test.go`.
 - `font/glyphs.go`, `font/renderer.go`, `font/font.go`: `Face.GlyphDataOutline` for glyf outlines extracts into scratch storage on the `Face` (points per nesting depth, loop guard, segments), so a glyph the engine rasterizes for the first time, or at a new subpixel offset, allocates nothing once the storage has grown. The returned segments are valid until the next extraction on the same `Face`. CFF outlines still allocate. The regression test is `text/glyph_alloc_test.go`.
+- `harfbuzz/aat_layout.go`, `harfbuzz/buffer.go`: the AAT/kern apply context (fonts with a `kern`, `kerx`, `morx` or `trak` table) lives in a field on `Buffer` and keeps its glyph set's storage; upstream made one, and a glyph set, on every shape. The regression test is `harfbuzz/zeroalloc_test.go`, which CI runs from the root module (`go test github.com/go-text/typesetting/harfbuzz`).
 - `font/opentype/tables/ot_layout.go`: `parseValueRecord` reads into a 16-element stack array. Sixteen because the size counts every format bit, reserved ones included; the regression test is `font/opentype/tables/zeroalloc_test.go`, which CI runs.
 
 ## Updating
 
 1. Copy the same package set from the new upstream version.
 2. Re-apply `zeroalloc.patch`.
-3. Run `go test -tags textengine ./text/`. Its exact zero-allocation test (`TestEngineMissAllocsAreHarfbuzzsAlone`) and the reference-pipeline tests in `text/shape_test.go` must pass.
+3. Run `go test -tags textengine ./text/` and `go test github.com/go-text/typesetting/harfbuzz` from the root. Its exact zero-allocation test (`TestEngineMissAllocsAreHarfbuzzsAlone`) and the reference-pipeline tests in `text/shape_test.go` must pass.

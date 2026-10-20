@@ -519,13 +519,37 @@
  func (f *Face) GlyphDataOutline(gid GID) (GlyphOutline, bool) {
  	g := gID(gid)
  	out, err := f.glyphDataFromCFF1(g)
+--- a/harfbuzz/aat_layout.go
++++ b/harfbuzz/aat_layout.go
+@@ -472,13 +472,14 @@
+ 	machineClassCache aatClassCache // readonly
+ }
+ 
++// newAatApplyContext returns the buffer's apply context, reset, keeping the
++// storage of its glyph set: one call shapes with one context at a time, and
++// a context made afresh (and its glyph set) allocated on every shape of a
++// font with a kern, kerx, morx or trak table.
+ func newAatApplyContext(plan *otShapePlan, font *Font, buffer *Buffer) *aatApplyContext {
+-	var out aatApplyContext
+-	out.plan = plan
+-	out.font = font
+-	out.face = font.face
+-	out.buffer = buffer
+-	return &out
++	c := &buffer.aatCtx
++	*c = aatApplyContext{plan: plan, font: font, face: font.face, buffer: buffer, bufferGlyphSet: c.bufferGlyphSet[:0]}
++	return c
+ }
+ 
+ func (c *aatApplyContext) reverseBuffer() {
 --- a/harfbuzz/buffer.go
 +++ b/harfbuzz/buffer.go
-@@ -54,6 +54,7 @@
+@@ -54,6 +54,8 @@
  // Buffer is the main structure holding the input text segment and its properties before shaping,
  // and output glyphs and their information after shaping.
  type Buffer struct {
 +	normCtx otNormalizeContext
++	aatCtx  aatApplyContext // the AAT and kern apply context, reused (newAatApplyContext)
  	// Info is used as internal storage during the shaping,
  	// and also exposes the result: the glyph to display
  	// and its original Cluster value.

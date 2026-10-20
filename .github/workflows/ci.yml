@@ -106,7 +106,11 @@ jobs:
           cat "$gsum" "$nsum" >> "$GITHUB_STEP_SUMMARY"
           exit $fail
       - name: patched go-text (third_party/typesetting) tests
-        run: cd third_party/typesetting && go test -count=1 ./font/opentype/tables/
+        # harfbuzz imports font (golang.org/x/image), whose sums are the root
+        # module's: its test runs from here, through the replace.
+        run: |
+          (cd third_party/typesetting && go test -count=1 ./font/opentype/tables/)
+          go test -count=1 github.com/go-text/typesetting/harfbuzz
       - uses: actions/upload-artifact@v4
         with:
           name: spike-binaries
