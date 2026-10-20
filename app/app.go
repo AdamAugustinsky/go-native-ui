@@ -426,23 +426,7 @@ func (a *App) loop() error {
 		if a.done {
 			break
 		}
-		now = platform.Now()
-		if a.wakeAt != 0 && now >= a.wakeAt {
-			a.wakeAt = 0
-			a.p.invalidate() // a text field's caret blink is due
-			if a.dbg != nil {
-				a.debugTimer()
-			}
-		}
-		if a.verbose {
-			a.dumpIfStalled(now)
-		}
-		draw, request := a.p.poll(now)
-		if request {
-			a.Win.RequestFrame()
-			a.p.requested(now)
-		}
-		if draw {
+		if a.turn(platform.Now()) {
 			a.present(false, 1)
 		}
 		a.popUpMenus()
@@ -463,10 +447,34 @@ func (a *App) loop() error {
 	return nil
 }
 
+// turn is the loop's step after Wait's events were handled, at now: a due
+// wake (held while the window is hidden), then the pacer's verdict. It requests a frame if the pacer says so
+// and reports whether to draw now.
+func (a *App) turn(now int64) (draw bool) {
+	if a.wakeAt != 0 && now >= a.wakeAt && !a.p.hidden {
+		a.wakeAt = 0
+		a.p.invalidate() // a text field's caret blink is due
+		if a.dbg != nil {
+			a.debugTimer()
+		}
+	}
+	if a.verbose {
+		a.dumpIfStalled(now)
+	}
+	draw, request := a.p.poll(now)
+	if request {
+		a.req.RequestFrame()
+		a.p.requested(now)
+	}
+	return draw
+}
+
 // timeout is the Wait timeout; a bench also wakes in time for its deadline.
+// A hidden window does not wake for the UI's timed requests (a caret blink,
+// a spinner's next step): nothing would be drawn.
 func (a *App) timeout(now int64) int64 {
 	t := a.p.timeout(now)
-	if a.wakeAt != 0 { // the UI asked for a frame at a time (WakeAfter)
+	if a.wakeAt != 0 && !a.p.hidden { // the UI asked for a frame at a time (WakeAfter)
 		if d := max(a.wakeAt-now, 0); t < 0 || d < t {
 			t = d
 		}
@@ -497,8 +505,13 @@ func (a *App) onEvent(e *platform.Event) {
 		}
 	case platform.EvVisible:
 		a.tr.in.Hidden = e.Flags&platform.FlagDown == 0
-		if e.Flags&platform.FlagDown != 0 {
-			a.p.invalidate() // shown again: what was skipped while hidden is owed
+		// Hidden, timed wakes wait and a failed attempt parks the loop
+		// (pacer); shown again, what was skipped is owed. A bench draws
+		// regardless: it measures frames, and a machine with its display
+		// asleep reports the window covered.
+		a.p.hide(a.tr.in.Hidden && a.bench == nil)
+		if !a.tr.in.Hidden {
+			a.p.invalidate()
 		}
 	case platform.EvWake:
 		a.p.invalidate() // a worker published something
@@ -576,7 +589,7 @@ func (a *App) present(inHandler bool, passes int) bool {
 	// Nothing was painted: the repaint is still owed, and so is the frame
 	// request that will bring the slot to draw it in.
 	a.p.failed(now)
-	a.Win.RequestFrame()
+	a.req.RequestFrame()
 	a.p.requested(now)
 	return false
 }

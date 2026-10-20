@@ -90,6 +90,7 @@ Window
     Label "A card groups related controls."
     Button "Revert"
     Button "Apply"
+    ScrollBar "Horizontal scroll bar"
   ScrollArea "controls"
     Label "Text"
     Label "Body text, the default style"

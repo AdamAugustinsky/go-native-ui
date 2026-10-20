@@ -1,6 +1,7 @@
 package app
 
 import (
+	"math"
 	"unicode/utf8"
 
 	"gonativeui/platform"
@@ -174,6 +175,12 @@ func (t *translator) conflicts(e *platform.Event) bool {
 	if e.Kind == platform.EvScroll && t.in.NScrolls == ui.MaxScrolls {
 		return true // the frame is full of scroll events: the rest go to the next frame as they are, not merged
 	}
+	if e.Kind == platform.EvEdit && t.in.NEdit == ui.MaxEdit {
+		return true // a key held down: its commands wait their turn, none is lost
+	}
+	if (e.Kind == platform.EvMagnify || e.Kind == platform.EvRotate || e.Kind == platform.EvSmartMagnify) && t.in.NGestures == ui.MaxGestures {
+		return true // phases matter: a gesture's events go on in the next frame, in order
+	}
 	if !t.transitioned() {
 		return false
 	}
@@ -258,14 +265,47 @@ func (t *translator) apply(e *platform.Event, txt []byte) bool {
 		t.scroll(e)
 	case platform.EvKey:
 		in.Mods = mods(e.Mods)
-		code := keyCode(e.Key)
-		if code == 0 {
-			return false // not a key ui knows; a modifier change alone would not repaint anything
+		phys := keyCode(e.Key)
+		if phys == 0 {
+			return false // not a key ui knows
+		}
+		code := shortcutCode(phys, e.Char, in.Mods)
+		if code == phys {
+			phys = 0
 		}
 		in.PushKey(ui.KeyEvent{
-			Code: code, Mods: in.Mods,
+			Code: code, Physical: phys, Mods: in.Mods,
 			Down: e.Flags&platform.FlagDown != 0, Repeat: e.Flags&platform.FlagRepeat != 0,
 		})
+	case platform.EvModifiers:
+		m := mods(e.Mods)
+		if in.Mods == m {
+			return false
+		}
+		in.Mods = m // for the hints that follow a held modifier (⌘ shows shortcuts, ⌥ the alternate items)
+	case platform.EvEdit:
+		a := editAction(platform.EditCmd(e.Tag))
+		if a == 0 {
+			return false
+		}
+		if e.Flags&platform.FlagSelect != 0 {
+			a = a.Extend()
+		}
+		if !in.PushEdit(a) {
+			return false // (conflicts keeps this from happening)
+		}
+	case platform.EvMagnify, platform.EvRotate, platform.EvSmartMagnify:
+		g := ui.GestureEvent{Kind: ui.GestureMagnify, Phase: ui.ScrollPhase(e.Phase), Amount: e.Amount, X: e.X, Y: e.Y, Time: e.Time}
+		switch e.Kind {
+		case platform.EvRotate:
+			g.Kind, g.Amount = ui.GestureRotate, e.Amount*(math.Pi/180) // degrees to radians
+		case platform.EvSmartMagnify:
+			g.Kind, g.Amount, g.Phase = ui.GestureSmartMagnify, 0, ui.PhaseNone
+		}
+		in.Mods = mods(e.Mods)
+		if !in.AddGesture(g) {
+			return false // (conflicts keeps this from happening)
+		}
 	case platform.EvText:
 		if replacing(e) { // may have no text: a removal
 			if in.ReplaceText(e.SelStart, e.SelLen, txt) {
@@ -315,6 +355,7 @@ func (t *translator) apply(e *platform.Event, txt []byte) bool {
 		in.Focused = down
 		in.FocusGained = down
 		if !down { // a release that happens in another window never arrives: cancel, not click
+			in.Mods = 0 // nor does a modifier's; the platform reports the ones held when focus returns
 			for b := range in.Down {
 				in.Cancel(b)
 			}
@@ -335,6 +376,10 @@ func (t *translator) clicks(b int, e *platform.Event, down bool) uint8 {
 	now := e.Time
 	if now == 0 {
 		now = platform.Now()
+	}
+	if e.Clicks > 0 { // the system counted: its double-click interval and distance are the user's
+		t.last[b] = clickState{t: now, x: e.X, y: e.Y, n: e.Clicks}
+		return e.Clicks
 	}
 	c := &t.last[b]
 	d := multiClickDist * t.scale
@@ -428,13 +473,21 @@ func mods(m platform.Mods) ui.Mods {
 
 // keyCode maps a platform key to ui's: named keys to ui's constants, letters
 // and digits to their upper-case ASCII value. It returns 0 for keys ui has no
-// code for (function keys, unknown).
+// code for (unknown).
 func keyCode(k platform.Key) ui.KeyCode {
 	switch {
 	case k >= platform.KeyA && k <= platform.KeyZ:
 		return ui.KeyCode('A' + (k - platform.KeyA))
 	case k >= platform.Key0 && k <= platform.Key9:
 		return ui.KeyCode('0' + (k - platform.Key0))
+	}
+	switch {
+	case k >= platform.KeyNum0 && k <= platform.KeyNum9:
+		return ui.KeyNum0 + ui.KeyCode(k-platform.KeyNum0)
+	case k >= platform.KeyF1 && k <= platform.KeyF12:
+		return ui.KeyF1 + ui.KeyCode(k-platform.KeyF1)
+	case k >= platform.KeyF13 && k <= platform.KeyF20:
+		return ui.KeyF13 + ui.KeyCode(k-platform.KeyF13)
 	}
 	switch k {
 	case platform.KeyLeftBracket:
@@ -443,6 +496,36 @@ func keyCode(k platform.Key) ui.KeyCode {
 		return ui.KeyRightBracket
 	case platform.KeyPeriod:
 		return ui.KeyPeriod
+	case platform.KeyComma:
+		return ui.KeyComma
+	case platform.KeyEqual:
+		return ui.KeyEqual
+	case platform.KeyMinus:
+		return ui.KeyMinus
+	case platform.KeySlash:
+		return ui.KeySlash
+	case platform.KeySemicolon:
+		return ui.KeySemicolon
+	case platform.KeyQuote:
+		return ui.KeyQuote
+	case platform.KeyBackslash:
+		return ui.KeyBackslash
+	case platform.KeyGrave:
+		return ui.KeyGrave
+	case platform.KeyNumDecimal:
+		return ui.KeyNumDecimal
+	case platform.KeyNumAdd:
+		return ui.KeyNumAdd
+	case platform.KeyNumSubtract:
+		return ui.KeyNumSubtract
+	case platform.KeyNumMultiply:
+		return ui.KeyNumMultiply
+	case platform.KeyNumDivide:
+		return ui.KeyNumDivide
+	case platform.KeyNumEqual:
+		return ui.KeyNumEqual
+	case platform.KeyNumClear:
+		return ui.KeyNumClear
 	}
 	switch k {
 	case platform.KeyEscape:
@@ -473,6 +556,80 @@ func keyCode(k platform.Key) ui.KeyCode {
 		return ui.KeyPageUp
 	case platform.KeyPageDown:
 		return ui.KeyPageDown
+	}
+	return 0
+}
+
+// shortcutCode is the key a shortcut names for the key phys with the platform's
+// character char while mods are held: with Ctrl or Super, the letter or
+// punctuation the key types on the user's layout, so that ⌘Z is where an AZERTY
+// or Dvorak user expects it; the physical key otherwise, and for a character
+// that is no letter or ASCII punctuation of ours (digits stay on their row: a
+// layout's digit row types symbols, and ⌘1 is the key labelled 1).
+func shortcutCode(phys ui.KeyCode, char rune, m ui.Mods) ui.KeyCode {
+	if char == 0 || m&(ui.ModCtrl|ui.ModSuper) == 0 {
+		return phys
+	}
+	switch {
+	case char >= 'a' && char <= 'z':
+		return ui.KeyCode('A' + (char - 'a'))
+	case char >= 'A' && char <= 'Z':
+		return ui.KeyCode(char)
+	}
+	switch c := ui.KeyCode(char); c {
+	case ui.KeyLeftBracket, ui.KeyRightBracket, ui.KeyPeriod, ui.KeyComma, ui.KeyEqual, ui.KeyMinus,
+		ui.KeySlash, ui.KeySemicolon, ui.KeyQuote, ui.KeyBackslash, ui.KeyGrave:
+		return c
+	}
+	return phys
+}
+
+// editAction maps a platform edit command to ui's, 0 for one ui has no action
+// for. ui's field is one line: a paragraph is the line.
+func editAction(c platform.EditCmd) ui.EditAction {
+	switch c {
+	case platform.EditMoveLeft:
+		return ui.EditMoveLeft
+	case platform.EditMoveRight:
+		return ui.EditMoveRight
+	case platform.EditMoveUp:
+		return ui.EditMoveUp
+	case platform.EditMoveDown:
+		return ui.EditMoveDown
+	case platform.EditMoveWordLeft:
+		return ui.EditMoveWordLeft
+	case platform.EditMoveWordRight:
+		return ui.EditMoveWordRight
+	case platform.EditMoveLineStart:
+		return ui.EditMoveLineStart
+	case platform.EditMoveLineEnd:
+		return ui.EditMoveLineEnd
+	case platform.EditMoveParagraphStart, platform.EditMoveParagraphBackward:
+		return ui.EditMoveParagraphStart
+	case platform.EditMoveParagraphEnd, platform.EditMoveParagraphForward:
+		return ui.EditMoveParagraphEnd
+	case platform.EditMoveDocumentStart:
+		return ui.EditMoveDocumentStart
+	case platform.EditMoveDocumentEnd:
+		return ui.EditMoveDocumentEnd
+	case platform.EditDeleteBackward:
+		return ui.EditDeleteBackward
+	case platform.EditDeleteForward:
+		return ui.EditDeleteForward
+	case platform.EditDeleteWordBackward:
+		return ui.EditDeleteWordBackward
+	case platform.EditDeleteWordForward:
+		return ui.EditDeleteWordForward
+	case platform.EditDeleteToLineStart:
+		return ui.EditDeleteToLineStart
+	case platform.EditDeleteToLineEnd:
+		return ui.EditDeleteToLineEnd
+	case platform.EditDeleteToParagraphStart:
+		return ui.EditDeleteToParagraphStart
+	case platform.EditDeleteToParagraphEnd:
+		return ui.EditDeleteToParagraphEnd
+	case platform.EditTranspose:
+		return ui.EditTranspose
 	}
 	return 0
 }

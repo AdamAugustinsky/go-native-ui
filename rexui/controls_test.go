@@ -83,6 +83,68 @@ func TestStepperClicksKeysAndLimits(t *testing.T) {
 	}
 }
 
+// frameNs runs one frame that lasted ns nanoseconds (the clock and dt both).
+func (g *rig) frameNs(ns int64) {
+	g.time += ns
+	g.in.Time = g.time
+	g.c.Begin(&g.in, g.w, g.h, g.scale, float32(ns)/1e9)
+	g.k.Begin(g.c)
+	g.build(g)
+	g.k.End()
+	g.c.End(&g.list)
+	g.in.ClearFrame()
+}
+
+// A held half makes exactly the steps due by the hold's elapsed time (the
+// clock in whole milliseconds since the frame it went down): one, one more
+// at the delay and one per interval, none twice, whatever the frame rate and
+// however the frames land on those boundaries.
+func TestStepperRepeatCountsAreExact(t *testing.T) {
+	rc := rexui.StepperLook
+	delay, every := int64(rc.RepeatDelay*1000+0.5), int64(rc.RepeatInterval*1000+0.5)
+	due := func(e int64) int {
+		n := 1
+		if e >= delay {
+			n += 1 + int((e-delay)/every)
+		}
+		return n
+	}
+	for _, tc := range []struct {
+		name string
+		dts  []int64 // the frames' lengths, repeated
+	}{
+		{"60 Hz", []int64{16_666_667}},
+		{"120 Hz", []int64{8_333_333}},
+		{"10 ms, on the boundaries", []int64{10_000_000}},
+		{"uneven", []int64{16_666_667, 7_000_000, 33_333_333, 1_000_000, 12_500_000, 4_999_999, 20_000_001, 3_000_000}},
+	} {
+		v := float32(0)
+		g := newRig(t, theme.Light, nil, column(func(g *rig) {
+			rexui.Stepper(g.k, "Count", &v, 0, 100000, 1, rexui.StepperOpts{})
+		}))
+		ux, uy, _, _ := halves(g.node(ui.RoleSlider, "Count"))
+		g.in.MouseX, g.in.MouseY = ux, uy
+		g.frame()
+		g.time = (g.time/1e6 + 1) * 1e6 // on a millisecond
+		g.in.SetButton(ui.ButtonLeft, true, 1)
+		var t0 int64 = -1
+		for i := 0; g.time-max(t0, 0)*1e6 < 1_500_000_000 || t0 < 0; i++ {
+			g.frameNs(tc.dts[i%len(tc.dts)])
+			if t0 < 0 {
+				if v == 0 {
+					continue
+				}
+				t0 = g.time / 1e6 // the hold's first frame, in ms
+			}
+			e := g.time/1e6 - t0
+			if want := due(e); int(v) != want {
+				t.Fatalf("%s: held %d ms: %v steps, want %d", tc.name, e, v, want)
+			}
+		}
+		releaseButton(g)
+	}
+}
+
 // A held half steps once when it goes down, once more after the recipe's delay
 // and then at its interval, only while the pointer is over it, and stops when
 // the button goes up.
@@ -167,6 +229,61 @@ func TestStepperDisabledAndField(t *testing.T) {
 	g.frame()
 	if w != 10 || buf2.String() != "10" {
 		t.Fatalf("after typing 42 and Enter: value %v, field %q, want 10 (clamped)", w, buf2.String())
+	}
+}
+
+// A disclosure that opens while nobody can see it, in a hidden window or
+// hidden by a flow's MaxLines, turns at once and asks for no frames; it shows
+// open when it shows again. In view, it turns over time.
+func TestDisclosureTurnsOnlyWhenShown(t *testing.T) {
+	for _, where := range []string{"view", "hidden window", "flow"} {
+		var open bool
+		g := newRig(t, theme.Light, nil, func(g *rig) {
+			c := g.c
+			c.NextSize(ui.Px(300), ui.Children(0))
+			c.BeginFlow("flow", ui.FlowOpts{MaxLines: 1})
+			if where == "flow" {
+				c.NextSize(ui.Px(300), ui.Px(20))
+				c.Box(0, "wide")
+			}
+			rexui.Disclosure(g.k, "Details", &open, rexui.DisclosureOpts{})
+			c.EndFlow()
+		})
+		g.k.ReduceMotion = false
+		g.settle()
+		g.in.Hidden = where == "hidden window"
+		g.frame()
+		open = true
+		g.frame()
+		if anim := g.c.Animating(); anim != (where == "view") {
+			t.Fatalf("%s: opening, animating %v", where, anim)
+		}
+		g.in.Hidden = false
+		g.settle()
+		if where == "flow" {
+			continue
+		}
+		// the chevron points down, as a settled open one does
+		var shapes []gpu.Quad
+		for _, q := range g.list.Quads {
+			if q.Mode == gpu.ModeShape && q.Color[0]&0xFF != 0 {
+				shapes = append(shapes, q)
+			}
+		}
+		if len(shapes) == 0 {
+			t.Fatalf("%s: no chevron", where)
+		}
+		x0, x1 := shapes[0].Rect[0], shapes[0].Rect[2]
+		for _, q := range shapes {
+			x0, x1 = min(x0, q.Rect[0]), max(x1, q.Rect[2])
+		}
+		y0, y1 := shapes[0].Rect[1], shapes[0].Rect[3]
+		for _, q := range shapes {
+			y0, y1 = min(y0, q.Rect[1]), max(y1, q.Rect[3])
+		}
+		if x1-x0 <= y1-y0 {
+			t.Fatalf("%s: the open chevron is %v wide and %v high: not turned down", where, x1-x0, y1-y0)
+		}
 	}
 }
 
@@ -405,6 +522,36 @@ func TestLoopingMotionAsksForFramesOnlyWhileRunning(t *testing.T) {
 	}
 }
 
+// A spinner and an indeterminate bar that a flow's MaxLines hides (their
+// rectangles are empty, as before their first layout) ask for no frames;
+// the same in the flow's first line run.
+func TestLoopingMotionHiddenInAFlowAsksNoFrames(t *testing.T) {
+	for _, hidden := range []bool{true, false} {
+		g := newRig(t, theme.Light, nil, func(g *rig) {
+			c := g.c
+			c.NextSize(ui.Px(300), ui.Children(0))
+			c.BeginFlow("flow", ui.FlowOpts{GapX: 6, GapY: 6, MaxLines: 1})
+			if hidden { // a full line before them
+				c.NextSize(ui.Px(300), ui.Px(20))
+				c.Box(0, "wide")
+			}
+			rexui.Spinner(g.k, "Spinner", rexui.SpinnerOpts{})
+			g.k.NextWidth(g.k.Fixed(100))
+			rexui.ProgressBar(g.k, "Bar", -1, rexui.ProgressOpts{})
+			c.EndFlow()
+		})
+		g.k.ReduceMotion = false
+		g.frames(3)
+		f, w := asked(g)
+		if hidden && (f || w != 0) {
+			t.Fatalf("hidden by MaxLines: animating %v, wake %d, want neither", f, w)
+		}
+		if !hidden && (!f || w == 0) {
+			t.Fatalf("in the flow's first line: animating %v, wake %d, want both", f, w)
+		}
+	}
+}
+
 // The spinner steps once per eighth of its period and is the same a period
 // later; the bar's segment moves with the clock.
 func TestSpinnerSteps(t *testing.T) {
@@ -456,5 +603,35 @@ func TestLoopingMotionAllocatesNothing(t *testing.T) {
 	g.frames(5)
 	if n := testing.AllocsPerRun(50, g.frame); n != 0 {
 		t.Fatalf("%.1f allocations per frame while animating", n)
+	}
+}
+
+// Indicators in a disabled region report it to assistive technologies, as
+// the controls do; out of it they do not.
+func TestDisabledIndicatorsReportDisabled(t *testing.T) {
+	g := newRig(t, theme.Light, nil, column(func(g *rig) {
+		for _, off := range []bool{true, false} {
+			g.k.BeginDisabled(off)
+			name := "on"
+			if off {
+				name = "off"
+			}
+			rexui.ProgressBar(g.k, "Bar "+name, 0.5, rexui.ProgressOpts{})
+			rexui.ProgressBar(g.k, "Busy "+name, -1, rexui.ProgressOpts{})
+			rexui.LevelIndicator(g.k, "Level "+name, 3, 0, 10, rexui.LevelOpts{})
+			rexui.Spinner(g.k, "Spinner "+name, rexui.SpinnerOpts{})
+			g.k.EndDisabled()
+		}
+	}))
+	for _, n := range []string{"Bar", "Busy", "Level", "Spinner"} {
+		for _, off := range []bool{true, false} {
+			name := n + " on"
+			if off {
+				name = n + " off"
+			}
+			if got := g.node(ui.RoleProgressBar, name).State&ui.SemDisabled != 0; got != off {
+				t.Errorf("%s: SemDisabled %v, want %v", name, got, off)
+			}
+		}
 	}
 }

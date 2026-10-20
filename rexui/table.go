@@ -42,6 +42,10 @@ type TableRecipe struct {
 	// and end the last column's 9 pt before the right).
 	CellPad float32
 	EdgePad [2]float32
+	// Corner fills the corner at the header's right above a legacy scroll
+	// bar (base.TableHead.Corner, NSTableView's cornerView) over the list's
+	// background: measured #FFFFFF on white, #262626 on #1E1E1E.
+	Corner Tint
 }
 
 // TableLook is the tables' recipe.
@@ -50,6 +54,7 @@ var TableLook = TableRecipe{
 	HeaderLine: Of(theme.Separator), Separator: Of(theme.Separator), SeparatorH: 16,
 	SortGlyph: OfAlpha(theme.Text, 0.38, 0.41), SortRight: 12.5, SortDY: 0.5,
 	CellPad: 10, EdgePad: [2]float32{8, 8},
+	Corner: OfAlpha(theme.Text, 0, 0.036),
 }
 
 // Table is an open table: the rows are a List (Row, TextColor …), the head
@@ -89,7 +94,8 @@ func BeginTable(k *base.Kit, label string, st *base.TableState, cols []base.Colu
 
 // TableHeader builds the header row of t: the titles in the Subheadline style,
 // a separator at the right of each, the sort chevron, the line under the row,
-// and a focus ring on a header reached with the keyboard. AppKit's headers do
+// and a focus ring on a header reached with the keyboard; beside a legacy
+// scroll bar the header stops at the corner above it. AppKit's headers do
 // not react to hover.
 func TableHeader(k *base.Kit, t *base.TableHead, g ListGlyphs) {
 	g = g.orStandard()
@@ -110,6 +116,12 @@ func TableHeader(k *base.Kit, t *base.TableHead, g ListGlyphs) {
 	sh := pt(k.Scale(), rc.SeparatorH)
 	for i := range t.Columns() {
 		hc := t.HeaderCell(i)
+		// as AppKit's, a right-aligned title that is sorted ends before the
+		// chevron rather than under it, off its numbers' edge on purpose
+		sortRoom := hc.Sorted && hc.Col.Align == ui.AlignRight
+		if sortRoom {
+			c.NextAuditExempt(ui.AuditColumn.Mask())
+		}
 		t.BeginHeaderCell(&hc, 0)
 		if hc.Col.Align == ui.AlignRight { // the title at the right, over the numbers
 			c.NextSize(ui.Pct(1), ui.Px(body))
@@ -124,6 +136,10 @@ func TableHeader(k *base.Kit, t *base.TableHead, g ListGlyphs) {
 			if hc.Descending {
 				ic = g.SortDown
 			}
+			if iw, _ := k.IconSize(ic); sortRoom {
+				c.NextSize(ui.Px(max(0, theme.Snap(k.Pt(rc.SortRight)+iw/2)-t.CellPad())), ui.Px(body))
+				c.BoxKeyed(0, ui.KeyN(hc.Key, 5), nil)
+			}
 			if f, disp := k.Icons().Prepare(c, ic, rc.SortGlyph.RGBA(r)); f != 0 {
 				iw, ih := k.IconSize(ic)
 				theme.At(c, hc.W-theme.Snap(k.Pt(rc.SortRight)+iw/2), theme.Snap((body-ih)/2+k.Pt(rc.SortDY)), iw, ih)
@@ -137,6 +153,9 @@ func TableHeader(k *base.Kit, t *base.TableHead, g ListGlyphs) {
 		id := c.Parent()
 		t.EndHeaderCell(&hc)
 		k.FocusRing(id, hc.Visual, 0)
+	}
+	if t.Corner() > 0 { // EndHeaderRow builds the corner above a legacy bar
+		c.NextBG(theme.Over(rc.Corner.RGBA(r), ListLook.Background.RGBA(r)))
 	}
 	t.EndHeaderRow()
 }

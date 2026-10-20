@@ -164,7 +164,8 @@ type flowOut struct {
 // parent: the children built until EndFlow wrap onto lines. The style stacks
 // apply to the box as to any other (NextWidth, NextPad, NextBG, NextFlags with
 // Clip, …); its width on auto is the parent's, its height on auto the lines'.
-// Its child gap is o.GapX; a NextGap or NextCross is replaced by o.
+// Its child gap is o.GapX; a NextGap or NextCross is replaced by o, and
+// NextJustify does nothing (o.Align places the lines).
 func (c *Context) BeginFlow(label string, o FlowOpts) ID {
 	if c.sW.peek().Kind == SizeAuto {
 		c.sW.set(Pct(1))
@@ -202,6 +203,11 @@ func (c *Context) FlowOverflow(id ID) int { return int(c.boxes[id].flowOut.over)
 // FlowLines is the number of lines flow box id showed in the last layout
 // (during a build, the previous frame's).
 func (c *Context) FlowLines(id ID) int { return int(c.boxes[id].flowOut.lines) }
+
+// WasHidden reports whether the last layout hid box id (during a build, the
+// previous frame's): a flow's MaxLines left it, or a box it is in, out of
+// its lines. Its rectangle then says nothing about where it shows.
+func (c *Context) WasHidden(id ID) bool { return c.wasHidden(&c.boxes[id]) }
 
 // wasHidden reports whether the last layout hid box b: the visibility that
 // input checks made while building see (a rebuilt box keeps the previous

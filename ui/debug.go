@@ -376,13 +376,13 @@ func (c *Context) EndDebugOverlay() {
 // DebugRoleName is the name of a role in the debug tools ("button"); roles
 // this file does not know are "role N".
 func DebugRoleName(r Role) string {
-	if int(r) < len(roleNames) && roleNames[r] != "" {
-		return roleNames[r]
+	if int(r) < len(debugRoleNames) && debugRoleNames[r] != "" {
+		return debugRoleNames[r]
 	}
 	return "role" + strconv.Itoa(int(r))
 }
 
-var roleNames = [...]string{
+var debugRoleNames = [...]string{
 	RoleNone: "", RoleWindow: "window", RoleGroup: "group", RoleLabel: "label", RoleImage: "image",
 	RoleButton: "button", RoleCheckbox: "checkbox", RoleSwitch: "switch", RoleRadio: "radio",
 	RoleRadioGroup: "radiogroup", RoleSlider: "slider", RoleTextField: "textfield",

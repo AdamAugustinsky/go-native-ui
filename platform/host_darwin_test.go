@@ -3,6 +3,7 @@
 package platform
 
 import (
+	"fmt"
 	"math"
 	"testing"
 
@@ -236,7 +237,35 @@ func (r *hostRig) scroll(x, y float64, dy int32) objc.ID {
 	return ev
 }
 
-var cgCreateScroll, cgSetLocation uintptr
+// gesture is a trackpad scroll event at x, y (as scroll) moving dy pixels,
+// with CGScrollPhase phase and CGMomentumScrollPhase momentum.
+func (r *hostRig) gesture(x, y float64, dy int32, phase, momentum uintptr) objc.ID {
+	create, setLoc := cgScrollFns()
+	if create == 0 || cgSetField == 0 {
+		return 0
+	}
+	cg := objc.F.Reset().Arg(0).Arg(0 /* kCGScrollEventUnitPixel */).Arg(1).Arg(uintptr(uint32(dy))).Arg(0).Arg(0).Call(create).R0()
+	if cg == 0 {
+		return 0
+	}
+	main := objc.Send(objc.Cls("NSScreen"), objc.Sel("mainScreen"))
+	sh := objc.SendRect(main, selFrame).H
+	objc.F.Reset().Arg(cg).ArgPoint(x, sh-(r.w.hPt-y)).Call(setLoc)
+	objc.F.Reset().Arg(cg).Arg(88).Arg(1).Call(cgSetField)         // kCGScrollWheelEventIsContinuous
+	objc.F.Reset().Arg(cg).Arg(99).Arg(phase).Call(cgSetField)     // kCGScrollWheelEventScrollPhase
+	objc.F.Reset().Arg(cg).Arg(123).Arg(momentum).Call(cgSetField) // kCGScrollWheelEventMomentumPhase
+	ev := objc.Send1(objc.Cls("NSEvent"), objc.Sel("eventWithCGEvent:"), cg)
+	objc.Release(objc.ID(cg))
+	return ev
+}
+
+// CGScrollPhase and CGMomentumScrollPhase values.
+const (
+	cgBegan, cgChanged, cgEnded, cgMayBegin = 1, 2, 4, 128
+	cgMomBegin, cgMomContinue, cgMomEnd     = 1, 2, 3
+)
+
+var cgCreateScroll, cgSetLocation, cgSetField uintptr
 
 func cgScrollFns() (uintptr, uintptr) {
 	if cgCreateScroll == 0 {
@@ -246,6 +275,7 @@ func cgScrollFns() (uintptr, uintptr) {
 		}
 		cgCreateScroll, _ = purego.Dlsym(h, "CGEventCreateScrollWheelEvent2") // not variadic, unlike CGEventCreateScrollWheelEvent
 		cgSetLocation, _ = purego.Dlsym(h, "CGEventSetLocation")
+		cgSetField, _ = purego.Dlsym(h, "CGEventSetIntegerValueField")
 	}
 	return cgCreateScroll, cgSetLocation
 }
@@ -571,5 +601,160 @@ func TestHostScrollReachesUIOnce(t *testing.T) {
 		if r := res[i]; r.n != 1 || math.Abs(float64(r.x)-st.x) > 1 || math.Abs(float64(r.y)-st.y) > 1 {
 			t.Errorf("%s: queued %d times, at (%v, %v); want once at (%v, %v)", st.name, r.n, r.x, r.y, st.x, st.y)
 		}
+	}
+}
+
+// A trackpad gesture that begins over a hosted NSScrollView is the native
+// view's to the end, momentum included: AppKit keeps giving it the events
+// once the pointer is over drawn content, and the scroll view takes them all
+// (it hands none back), so none reaches ui and no drawn scroller moves with
+// it. A plain view in the same place hands the gesture back, and ui gets it
+// all. A wheel and a gesture that begin over drawn content afterwards are
+// ui's again.
+func TestHostOwnsItsGesture(t *testing.T) {
+	type res struct {
+		err                 error
+		noEvents            bool
+		toUI, handedBack    []string
+		wheelAfter, gesture int
+	}
+	var r res
+	steps := []struct {
+		x, y       float64
+		dy         int32
+		phase, mom uintptr
+	}{
+		{150, 150, 0, cgMayBegin, 0},
+		{150, 150, -20, cgBegan, 0},
+		{150, 150, -20, cgChanged, 0},
+		{30, 30, -20, cgChanged, 0}, // the pointer is over drawn content now
+		{30, 30, 0, cgEnded, 0},
+		{30, 30, -15, 0, cgMomBegin},
+		{30, 30, -10, 0, cgMomContinue},
+		{30, 30, 0, 0, cgMomEnd},
+	}
+	onMain(func() {
+		w, err := Open(Options{Title: "native scroll", Width: 400, Height: 300, Hidden: true})
+		if err != nil {
+			r.err = err
+			return
+		}
+		defer w.Close()
+		pool := objc.F.Call0(objc.PoolPush)
+		defer objc.F.Call1(objc.PoolPop, pool)
+		objc.F.Reset().Arg(uintptr(w.win)).Arg(uintptr(selSetFrameOrigin)).ArgPoint(0, 0).Call(objc.MsgSend)
+		s := w.scale
+		rig := &hostRig{w: w}
+		// deliver is one event through the event loop (scrollEvent, as
+		// handle does), then to the view AppKit gives it to.
+		deliver := func(ev, to objc.ID) {
+			w.scrollEvent(ev, 1)
+			objc.Send1(to, selScrollWheel, uintptr(ev))
+			w.hosts.scrollDelivered()
+		}
+		// gesture runs the steps over a host showing view v, AppKit keeping
+		// them with v, and returns what reached ui.
+		gesture := func(v objc.ID) (got []string, ok bool) {
+			id, err := w.NewHost(HostView, HostOptions{View: uintptr(v)})
+			objc.Send(v, selReleaseObj)
+			if err != nil {
+				return nil, false
+			}
+			defer w.ReleaseHost(id)
+			w.SetHosts([]HostRegion{{ID: id, Rect: pxRect(s, 100, 100, 300, 200), Clip: pxRect(s, 100, 100, 300, 200)}})
+			w.FlushShell()
+			w.q.reset()
+			for _, st := range steps {
+				ev := rig.gesture(st.x, st.y, st.dy, st.phase, st.mom)
+				if ev == 0 {
+					return nil, false
+				}
+				deliver(ev, v)
+			}
+			for _, e := range w.q.ev {
+				if e.Kind == EvScroll {
+					got = append(got, fmt.Sprintf("dy %v at (%v, %v)", e.DY, e.X/s, e.Y/s))
+				}
+			}
+			return got, true
+		}
+		sv := newViewOf(objc.Cls("NSScrollView"), 0, 0, 200, 100)
+		doc := newViewOf(nsViewClass(), 0, 0, 200, 2000)
+		objc.Send1(sv, objc.Sel("setDocumentView:"), uintptr(doc))
+		objc.Send(doc, selReleaseObj)
+		objc.Send1(sv, objc.Sel("setHasVerticalScroller:"), 1)
+		var ok bool
+		if r.toUI, ok = gesture(sv); !ok {
+			r.noEvents = true
+			return
+		}
+		if r.handedBack, ok = gesture(newViewOf(nsViewClass(), 0, 0, 200, 100)); !ok {
+			r.noEvents = true
+			return
+		}
+		w.SetHosts(nil)
+		w.FlushShell()
+		w.q.reset()
+		deliver(rig.scroll(30, 30, -3), w.view)
+		r.wheelAfter = len(w.q.ev)
+		w.q.reset()
+		deliver(rig.gesture(30, 30, -20, cgBegan, 0), w.view)
+		deliver(rig.gesture(150, 150, -20, cgChanged, 0), w.view)
+		r.gesture = len(w.q.ev)
+	})
+	switch {
+	case r.err != nil:
+		t.Skipf("cannot open a window here: %v", r.err)
+	case r.noEvents:
+		t.Skip("no scroll events can be made here")
+	}
+	if len(r.toUI) != 0 {
+		t.Errorf("the NSScrollView's gesture also reached ui: %v", r.toUI)
+	}
+	if len(r.handedBack) != len(steps) {
+		t.Errorf("a plain view's gesture reached ui as %v: want all %d events, handed back", r.handedBack, len(steps))
+	}
+	if r.wheelAfter != 1 || r.gesture != 2 {
+		t.Errorf("afterwards: a wheel over drawn content queued %d events (want 1), a drawn gesture %d (want 2)", r.wheelAfter, r.gesture)
+	}
+}
+
+// The mark that keeps one delivery of a scroll from being queued twice lasts
+// for that delivery only: the same event delivered again (reposted) is
+// queued again.
+func TestScrollRedeliveredIsQueuedAgain(t *testing.T) {
+	var err error
+	var noScroll bool
+	var first, second int
+	onMain(func() {
+		rig, e := openHostRig()
+		if e != nil {
+			err = e
+			return
+		}
+		w := rig.w
+		defer w.Close()
+		pool := objc.F.Call0(objc.PoolPush)
+		defer objc.F.Call1(objc.PoolPop, pool)
+		ev := rig.scroll(30, 30, -3)
+		if ev == 0 {
+			noScroll = true
+			return
+		}
+		w.q.reset()
+		w.handle(ev) // the event loop: queued, then sendEvent:
+		first = len(w.q.ev)
+		w.q.reset()                                     // the frame drains it
+		objc.Send1(w.view, selScrollWheel, uintptr(ev)) // AppKit delivers it again
+		second = len(w.q.ev)
+	})
+	switch {
+	case err != nil:
+		t.Skipf("cannot open a window here: %v", err)
+	case noScroll:
+		t.Skip("no scroll events can be made here")
+	}
+	if first != 1 || second != 1 {
+		t.Errorf("first delivery queued %d, the second %d: want 1 and 1", first, second)
 	}
 }

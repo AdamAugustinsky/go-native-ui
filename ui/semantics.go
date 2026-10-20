@@ -126,6 +126,7 @@ type semNext struct {
 	hasRange   bool
 	pos        [2]int32
 	hasPos     bool
+	level      int32
 }
 
 // semRec is the semantics of one box that has a role, in build order.
@@ -141,6 +142,7 @@ type semRec struct {
 	hasRange   bool
 	pos        [2]int32
 	hasPos     bool
+	level      int32
 	sel        [2]int32
 	hasSel     bool
 	node       int32 // its index in the exported tree (scratch of Semantics)
@@ -190,6 +192,10 @@ func (c *Context) NextSemPos(index, total int) {
 	c.semNext.pos, c.semNext.hasPos = [2]int32{int32(index), int32(total)}, true
 }
 
+// NextSemLevel says that the next box is at depth level of a tree (an
+// outline's row): 1 for a root, 2 for its children, and so on.
+func (c *Context) NextSemLevel(level int) { c.semNext.level = int32(level) }
+
 // NextSemActions sets the actions the next box supports. When it is not called
 // the box has its role's default actions.
 func (c *Context) NextSemActions(a SemAction) {
@@ -234,6 +240,10 @@ type SemNode struct {
 	// TextSel is the selection of a text field in byte offsets of Value: the
 	// anchor and the caret. Both are 0 for other nodes.
 	TextSel [2]int32
+	// Level is the node's depth in a tree (NextSemLevel): 1 for a root row
+	// of an outline, 2 for its children, and so on; 0 for a node not in a
+	// tree. Whether the row shows its children is SemExpanded.
+	Level int32
 }
 
 // SemTree is a snapshot of the semantic tree. Nodes are in build order, parents
@@ -341,6 +351,7 @@ func (c *Context) Semantics(dst *SemTree) {
 			}
 			n.Pos = [2]int32{int32(idx), int32(pb.listRows)}
 		}
+		n.Level = rec.level
 		n.Name = c.semText(dst, rec.name)
 		n.Value = c.semText(dst, rec.value)
 		if rec.sel != [2]int32{} {

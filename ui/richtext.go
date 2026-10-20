@@ -132,6 +132,12 @@ type RichOpts struct {
 	// Palette holds the colours of RichStyle.Role and BGRole (read during
 	// RichText, not kept).
 	Palette []uint32
+	// Item and Part place the box in the selection scope it is built in
+	// (BeginSelection): the app's id of its item and which text of the item
+	// it is (0 for the body; parts are in order within an item). Outside a
+	// scope they are not read.
+	Item uint64
+	Part uint16
 }
 
 // RichSignal is what the pointer and assistive technologies did to a RichText
@@ -182,6 +188,9 @@ type richRec struct {
 	jumbo            bool
 	maxW             float32
 	hover            int32 // the span under the pointer, -1 none
+	selScope         int32 // 1 + the index of its selection scope in Context.sel.scopes, 0 none
+	part             uint16
+	item             uint64
 }
 
 // richPrev is what a RichText box keeps of its last layout, for the hit
@@ -205,6 +214,9 @@ type richPrev struct {
 // (right-to-left paragraphs at the right), AlignCenter and AlignRight align
 // every line. The box has the RoleLabel semantics named by body unless a role
 // was set with NextRole, and a RoleLink child per link or mention span.
+// Inside a selection scope (BeginSelection) the box is selectable text, at
+// RichOpts.Item and Part: it takes presses, shows the I-beam pointer (unless
+// a cursor was set) and draws the scope's highlight.
 func (c *Context) RichText(key Key, body []byte, spans []Span, st *RichStyles, o RichOpts) RichSignal {
 	links := false
 	for i := range spans {
@@ -214,9 +226,13 @@ func (c *Context) RichText(key Key, body []byte, spans []Span, st *RichStyles, o
 		}
 	}
 	flags := DrawText
-	if links {
+	sc := c.selOpen()
+	if links || sc != nil {
 		flags |= Clickable | Hoverable
 		c.nCursorBoxes++
+	}
+	if sc != nil && !c.sCursor.hasNext && c.sCursor.top() == CursorArrow {
+		c.NextCursor(CursorText)
 	}
 	if c.semNext.role == RoleNone {
 		c.semNext.role = RoleLabel
@@ -265,6 +281,11 @@ func (c *Context) RichText(key Key, body []byte, spans []Span, st *RichStyles, o
 			rec.fonts[i] = o.JumboFont
 		}
 	}
+	if sc != nil {
+		s := &c.sel
+		rec.selScope, rec.item, rec.part = s.open[s.nOpen-1]+1, o.Item, o.Part
+		s.cur = append(s.cur, selText{scope: sc.cid, key: b.key, item: o.Item, part: o.Part, n: uint32(len(body))})
+	}
 	c.rich = append(c.rich, rec)
 	b.rich = int32(len(c.rich))
 
@@ -299,7 +320,7 @@ func (c *Context) RichText(key Key, body []byte, spans []Span, st *RichStyles, o
 				sig.Pressed = pv.Spans[span].Tag
 			}
 		}
-		if bs.Clicked && span >= 0 && int32(span+1) == b.pressSpan {
+		if bs.Clicked && span >= 0 && int32(span+1) == b.pressSpan && !c.selOwnsClick(b.key) {
 			sig.Clicked, sig.ClickedSpan = pv.Spans[span].Tag, span
 		}
 	}
@@ -480,91 +501,112 @@ func (c *Context) emitRich(l *gpu.DrawList, b *box, r *richRec, clip [4]float32)
 	}
 	var smooth [MaxRichStyles]uint8
 	var smoothOK uint32
-	for i := range pv.Lines {
-		ln := &pv.Lines[i]
-		top := y0 + ln.Top
-		if top >= clip[3] {
-			break
+	// The span backgrounds of every line (pass 0), then a selection's
+	// highlight over them, then the glyphs and decorations of every line.
+	for pass := 0; pass < 2; pass++ {
+		if pass == 1 && r.selScope != 0 {
+			c.emitRichSel(l, b, r, &pv, x0, y0, w, clip)
 		}
-		if top+ln.Height <= clip[1] || ln.G1 == ln.G0 {
-			continue
-		}
-		ox := x0 + lineOrigin(&pv, i, w, b.align)
-		baseline := snap(y0 + ln.Baseline)
-		// Backgrounds, per stretch of glyphs of one span.
-		for g := ln.G0; g < ln.G1; {
-			e := g + 1
-			for e < ln.G1 && pv.SpanOf[e] == pv.SpanOf[g] {
-				e++
+		for i := range pv.Lines {
+			ln := &pv.Lines[i]
+			top := y0 + ln.Top
+			if top >= clip[3] {
+				break
 			}
-			if st := styleOf(g); styles[st].BG&255 != 0 {
-				bx0, bx1 := ox+cellLeft(&pv, i, g), ox+cellRight(&pv, i, e-1)
-				col := b.col(styles[st].BG)
-				q := gpu.Quad{Rect: [4]float32{snap(bx0), snap(top), snap(bx1), snap(top + ln.Height)}, Clip: clip,
-					Color: [4]uint32{col, col, col, col}}
-				rad := styles[st].Radius
-				q.Radii = [4]float32{rad, rad, rad, rad}
-				l.Add(q)
-			}
-			g = e
-		}
-		// Glyphs.
-		for g := ln.G0; g < ln.G1; g++ {
-			st := styleOf(g)
-			col := colOf(st)
-			if col&255 == 0 {
+			if top+ln.Height <= clip[1] || ln.G1 == ln.G0 {
 				continue
 			}
-			if smoothOK&(1<<st) == 0 {
-				smoothOK |= 1 << st
-				if b.flags&NoFontSmoothing == 0 {
-					smooth[st] = text.SmoothLevel(col)
-				}
+			ox := x0 + lineOrigin(&pv, i, w, b.align)
+			baseline := snap(y0 + ln.Baseline)
+			if pass == 0 {
+				c.emitRichBG(l, b, &pv, i, styles, ox, top, clip)
+				continue
 			}
-			c.emitGlyph(l, pv.Faces[g], pv.Glyphs[g], ox+pv.X[g], baseline-snap(styles[st].Shift), clip, col, smooth[st])
-		}
-		// Decorations, per stretch of one span.
-		for g := ln.G0; g < ln.G1; {
-			e := g + 1
-			for e < ln.G1 && pv.SpanOf[e] == pv.SpanOf[g] {
-				e++
-			}
-			st := styleOf(g)
-			deco := styles[st].Deco
-			if deco&DecoHoverUnderline != 0 && pv.SpanOf[g] != 0 && int32(pv.SpanOf[g]-1) == r.hover {
-				deco |= DecoUnderline
-			}
-			if deco&(DecoUnderline|DecoStrike) != 0 {
+			// Glyphs.
+			for g := ln.G0; g < ln.G1; g++ {
+				st := styleOf(g)
 				col := colOf(st)
-				m := c.sh.Metrics(r.fonts[st])
-				bx0, bx1 := ox+cellLeft(&pv, i, g), ox+cellRight(&pv, i, e-1)
-				// Leave out the white space that ends the line (right of a
-				// left-to-right line's content, left of a right-to-left one's).
-				bx0, bx1 = max(bx0, ox), min(bx1, ox+ln.Width)
-				th := max(snap(m.UnderlineThickness), 1)
-				if m.UnderlineThickness == 0 {
-					th = max(snap(c.scale), 1)
+				if col&255 == 0 {
+					continue
 				}
-				bl := baseline - snap(styles[st].Shift)
-				if deco&DecoUnderline != 0 {
-					pos := m.UnderlinePos
-					if pos == 0 {
-						pos = max(m.Descent*0.35, 1)
+				if smoothOK&(1<<st) == 0 {
+					smoothOK |= 1 << st
+					if b.flags&NoFontSmoothing == 0 {
+						smooth[st] = text.SmoothLevel(col)
 					}
-					y := snap(bl + pos - th/2)
-					c.rule(l, bx0, bx1, y, th, col, clip)
 				}
-				if deco&DecoStrike != 0 {
-					xh := m.XHeight
-					if xh == 0 {
-						xh = m.Ascent * 0.5
-					}
-					y := snap(bl - xh/2 - th/2)
-					c.rule(l, bx0, bx1, y, th, col, clip)
-				}
+				c.emitGlyph(l, pv.Faces[g], pv.Glyphs[g], ox+pv.X[g], baseline-snap(styles[st].Shift), clip, col, smooth[st])
 			}
-			g = e
+			// Decorations, per stretch of one span.
+			for g := ln.G0; g < ln.G1; {
+				e := g + 1
+				for e < ln.G1 && pv.SpanOf[e] == pv.SpanOf[g] {
+					e++
+				}
+				st := styleOf(g)
+				deco := styles[st].Deco
+				if deco&DecoHoverUnderline != 0 && pv.SpanOf[g] != 0 && int32(pv.SpanOf[g]-1) == r.hover {
+					deco |= DecoUnderline
+				}
+				if deco&(DecoUnderline|DecoStrike) != 0 {
+					col := colOf(st)
+					m := c.sh.Metrics(r.fonts[st])
+					bx0, bx1 := ox+cellLeft(&pv, i, g), ox+cellRight(&pv, i, e-1)
+					// Leave out the white space that ends the line (right of a
+					// left-to-right line's content, left of a right-to-left one's).
+					bx0, bx1 = max(bx0, ox), min(bx1, ox+ln.Width)
+					th := max(snap(m.UnderlineThickness), 1)
+					if m.UnderlineThickness == 0 {
+						th = max(snap(c.scale), 1)
+					}
+					bl := baseline - snap(styles[st].Shift)
+					if deco&DecoUnderline != 0 {
+						pos := m.UnderlinePos
+						if pos == 0 {
+							pos = max(m.Descent*0.35, 1)
+						}
+						y := snap(bl + pos - th/2)
+						c.rule(l, bx0, bx1, y, th, col, clip)
+					}
+					if deco&DecoStrike != 0 {
+						xh := m.XHeight
+						if xh == 0 {
+							xh = m.Ascent * 0.5
+						}
+						y := snap(bl - xh/2 - th/2)
+						c.rule(l, bx0, bx1, y, th, col, clip)
+					}
+				}
+				g = e
+			}
 		}
+	}
+}
+
+// emitRichBG draws the span backgrounds of line i of the RichText box b (the
+// paragraph pv, the line's origin at ox and its top at top), per stretch of
+// glyphs of one span.
+func (c *Context) emitRichBG(l *gpu.DrawList, b *box, pv *text.ParaView, i int, styles []RichStyle, ox, top float32, clip [4]float32) {
+	ln := &pv.Lines[i]
+	for g := ln.G0; g < ln.G1; {
+		e := g + 1
+		for e < ln.G1 && pv.SpanOf[e] == pv.SpanOf[g] {
+			e++
+		}
+		st := pv.Style(int(g))
+		if int(st) >= len(styles) {
+			st = 0
+		}
+		if styles[st].BG&255 != 0 {
+			bx0, bx1 := ox+cellLeft(pv, i, g), ox+cellRight(pv, i, e-1)
+			col := b.col(styles[st].BG)
+			q := gpu.Quad{Rect: [4]float32{snap(bx0), snap(top), snap(bx1), snap(top + ln.Height)}, Clip: clip,
+				Color: [4]uint32{col, col, col, col}}
+			rad := styles[st].Radius
+			q.Radii = [4]float32{rad, rad, rad, rad}
+			l.Add(q)
+		}
+		g = e
 	}
 }
 

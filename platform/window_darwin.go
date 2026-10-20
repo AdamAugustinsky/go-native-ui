@@ -221,4 +221,7 @@ func (w *Window) Close() {
 	objc.Send(w.win, selClose)
 	w.closeShell() // after close: nothing on screen changes
 	theWindow.Store(nil)
+	if secure.want {
+		SetSecureInput(false) // the field that wanted it is gone; activation must not bring it back
+	}
 }

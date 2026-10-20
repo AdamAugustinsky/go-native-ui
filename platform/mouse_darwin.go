@@ -70,7 +70,7 @@ func (w *Window) pointerEvent(ev objc.ID, typ uintptr, t int64) (consumed bool) 
 		e.Kind = EvPointerButton
 		switch typ {
 		case 1, 2:
-			e.Button = ButtonLeft
+			e.Button = w.leftButton(typ, e.Mods)
 		case 3, 4:
 			e.Button = ButtonRight
 		default:
@@ -85,6 +85,7 @@ func (w *Window) pointerEvent(ev objc.ID, typ uintptr, t int64) (consumed bool) 
 		}
 		if typ == 1 || typ == 3 || typ == 25 {
 			e.Flags = FlagDown
+			e.Clicks = uint8(min(max(int(objc.Send(ev, selClickCount)), 0), 255))
 		}
 	}
 	w.pointerIn = true
@@ -112,18 +113,37 @@ func (w *Window) pointerEvent(ev objc.ID, typ uintptr, t int64) (consumed bool) 
 	return false
 }
 
+// leftButton is the button of a left mouse press or release: a press with
+// ctrl held is a secondary click (macOS turns it into a context-menu request),
+// and its release is the secondary button's too, whatever ctrl does meanwhile.
+func (w *Window) leftButton(typ uintptr, m Mods) Button {
+	if typ == 1 {
+		w.ctrlClick = m&ModCtrl != 0
+	}
+	if !w.ctrlClick {
+		return ButtonLeft
+	}
+	if typ == 2 {
+		w.ctrlClick = false
+	}
+	return ButtonRight
+}
+
 // scrollEvent queues a scroll-wheel event.
 // The event carries where it happened (FlagPos), also when it bubbled up
 // from a native host the pointer is over.
 func (w *Window) scrollEvent(ev objc.ID, t int64) {
 	if w.scrollToHost(ev) {
+		w.hosts.queuedScroll = 0
 		return // the host gets it; one it does not use comes back (host_darwin.go)
 	}
 	e := scrollEventOf(ev, w.scale, t)
 	e.X, e.Y = w.locate(ev)
 	e.Flags |= FlagPos
 	w.q.push(e)
-	w.hosts.markScroll(ev)
+	if !w.hosts.bubbling {
+		w.hosts.queuedScroll = ev // for this delivery (host_darwin.go)
+	}
 }
 
 // locate is where mouse event ev happened in the window's content, in
