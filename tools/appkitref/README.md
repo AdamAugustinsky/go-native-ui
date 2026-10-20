@@ -41,6 +41,12 @@ CGO_ENABLED=0 go run ./tools/appkitref/ours -o OURS     # widget kit, Rex theme,
 sh tools/appkitref/sheets.sh OUT OURS SHEETS           # AppKit left, ours right, per group, light and dark
 ```
 
+Scroller geometry the renders cannot show (the knob is drawn by an
+uncaptured layer): `sh tools/appkitref/scroller.sh` prints NSScroller's
+widths, knob slots and knobs per control size and style as JSON
+(`-[NSScroller rectForPart:]`, no window, no GUI session). The theme's test
+reads it from `theme/testdata/appkit-scroller-27.2.json`.
+
 ## What offscreen rendering cannot show
 
 - **Key-window state.** An app that is never active has no key window. `ARWindow` and `ARApp` report key, main and active, so controls draw their active look. Samples marked `inactive` are drawn honestly. Emphasised and unemphasised selection are both rendered.

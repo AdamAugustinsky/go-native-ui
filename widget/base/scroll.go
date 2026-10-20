@@ -26,6 +26,11 @@ const scrollFadeNs = 900e6
 // grab point of a thumb being dragged and when the view was last active. The
 // app owns it, next to the data the view shows.
 type ScrollState struct {
+	// Size is the control size of the view's scroll bars (NSScroller's
+	// controlSize): a legacy bar is 17 pt wide at SizeRegular (the default)
+	// and 13 at SizeSmall and SizeMini. Overlay bars do not change.
+	Size theme.Size
+
 	grab    float32
 	lastT   int64
 	lastPos [2]float64 // the offsets shown last frame (stretch included)
@@ -55,7 +60,7 @@ func (k *Kit) BeginScroll(label string, st *ScrollState, axes ScrollAxes) Scroll
 	_, ident := ui.SplitLabel(label)
 	okey := ui.HashString(c.ParentKey(), ident)
 	k.ApplySize(ui.Pct(1), ui.Pct(1))
-	if pad := k.legacyReserve(ui.KeyN(okey, 1), axes); pad != [2]float32{} {
+	if pad := k.legacyReserve(ui.KeyN(okey, 1), axes, st.Size); pad != [2]float32{} {
 		c.NextPadding(0, 0, pad[0], pad[1])
 	}
 	c.NextRole(ui.RoleScrollArea)
@@ -84,11 +89,12 @@ func (k *Kit) CloseScrollContent(v *ScrollView) { k.c.Pop() }
 // CloseScroll ends the view.
 func (k *Kit) CloseScroll(v *ScrollView) { k.c.Pop() }
 
-// legacyReserve is the room legacy scroll bars take beside the content of
-// the view whose inner box has key skey: the bar's width on the right when
-// the content overflows vertically (in the last layout), its height at the
-// bottom when it overflows horizontally. Overlay bars take none.
-func (k *Kit) legacyReserve(skey ui.Key, axes ScrollAxes) (pad [2]float32) {
+// legacyReserve is the room legacy scroll bars of control size size take
+// beside the content of the view whose inner box has key skey: the bar's
+// width on the right when the content overflows vertically (in the last
+// layout), its height at the bottom when it overflows horizontally. Overlay
+// bars take none.
+func (k *Kit) legacyReserve(skey ui.Key, axes ScrollAxes, size theme.Size) (pad [2]float32) {
 	if !k.legacyBars() {
 		return
 	}
@@ -97,7 +103,7 @@ func (k *Kit) legacyReserve(skey ui.Key, axes ScrollAxes) (pad [2]float32) {
 		return
 	}
 	content, view := k.c.ScrollExtent(sid)
-	bw := theme.Snap(k.r.Px.ScrollbarW)
+	bw := k.legacyW(size)
 	if hasAxis(axes, 1) && content[1] > view[1]+0.5 {
 		pad[0] = bw
 	}
@@ -105,6 +111,16 @@ func (k *Kit) legacyReserve(skey ui.Key, axes ScrollAxes) (pad [2]float32) {
 		pad[1] = bw
 	}
 	return
+}
+
+// legacyW is the width in pixels of a legacy scroll bar of control size
+// size: AppKit's scrollerWidthForControlSize (theme.Lines.Scroller, 17 pt,
+// and ScrollerSmallLegacy, 13, for small and mini).
+func (k *Kit) legacyW(size theme.Size) float32 {
+	if size == theme.SizeSmall || size == theme.SizeMini {
+		return theme.Snap(k.r.Lines.ScrollerSmallLegacy)
+	}
+	return theme.Snap(k.r.Lines.Scroller)
 }
 
 // legacyBars reports whether scroll bars are the legacy kind, always shown
@@ -133,6 +149,10 @@ type ScrollBar struct {
 	// long it is. While the trackpad stretches the view past an edge the
 	// thumb shortens against that end, as AppKit's knob does.
 	ThumbOff, ThumbLen float32
+	// SlotOff and SlotLen are where along the track the thumb moves: a
+	// legacy bar's knob slot is inset at both ends (theme.Lines.
+	// ScrollerKnobInset), an overlay bar's is the whole track.
+	SlotOff, SlotLen float32
 	// Show is the bar's alpha, 0 to 1: overlay bars show while the view
 	// scrolls (or a thumb is dragged, or the pointer is on a bar that shows)
 	// and fade out after scrollFadeNs; legacy bars always show.
@@ -180,11 +200,15 @@ func (k *Kit) ScrollBars(v *ScrollView) [2]ScrollBar {
 				pa = float64(ca[a] - view[a])
 			}
 		}
-		inset, trackLen, thumbLen, thumbOff, ok := k.barGeom(a, ca, view, pa, both, legacy)
+		g, ok := k.barGeom(a, ca, view, pa, both, legacy)
 		if !ok {
 			continue
 		}
+		inset, trackLen := g.inset, g.trackLen
 		bw := theme.Snap(k.r.Px.ScrollbarW)
+		if legacy {
+			bw = k.legacyW(st.Size)
+		}
 		b := &bars[a]
 		b.On, b.Axis, b.Legacy = true, a, legacy
 		b.Key = ui.KeyN(okey, uint64(5000+a))
@@ -198,7 +222,7 @@ func (k *Kit) ScrollBars(v *ScrollView) [2]ScrollBar {
 		default:
 			b.X, b.Y, b.W, b.H = inset, view[1]-bw-inset, trackLen, bw
 		}
-		b.ThumbOff, b.ThumbLen = thumbOff, thumbLen
+		b.ThumbOff, b.ThumbLen, b.SlotOff, b.SlotLen = g.thumbOff, g.thumbLen, g.slotOff, g.slotLen
 		b.Pos, b.Max = pos[a], float64(content[a]-view[a])
 		if c.HotKey() == b.Key {
 			onBar = true
@@ -255,29 +279,40 @@ func (k *Kit) BeginScrollBar(b *ScrollBar) ui.ID {
 
 var scrollName = [2]string{"Horizontal scroll bar", "Vertical scroll bar"}
 
-// barGeom is the geometry of the bar on axis a (0 horizontal, 1 vertical) of a
-// view: the track starts inset pixels from the view's start and is trackLen
-// long, the thumb is thumbLen long and thumbOff from the track's start. ok is
-// false when the content fits and there is no bar. A legacy bar's track runs
-// the view's whole length beside it.
-func (k *Kit) barGeom(a int, content, view [2]float32, pos float64, both, legacy bool) (inset, trackLen, thumbLen, thumbOff float32, ok bool) {
+// barGeom is the geometry of the bar on axis a (0 horizontal, 1 vertical)
+// of a view; ok is false when the content fits and there is no bar.
+func (k *Kit) barGeom(a int, content, view [2]float32, pos float64, both, legacy bool) (g barGeometry, ok bool) {
 	if content[a] <= view[a]+0.5 || view[a] <= 0 {
-		return 0, 0, 0, 0, false
+		return g, false
 	}
 	if !legacy {
-		inset = theme.Snap(k.r.Px.BorderW * 2)
+		g.inset = theme.Snap(k.r.Px.BorderW * 2)
 	}
-	trackLen = view[a] - 2*inset
+	g.trackLen = view[a] - 2*g.inset
 	if both && !legacy {
-		trackLen -= k.r.Px.ScrollbarW
+		g.trackLen -= k.r.Px.ScrollbarW
 	}
-	thumbLen = min(max(trackLen*view[a]/content[a], k.Pt(24)), trackLen)
+	g.slotLen = g.trackLen
+	if legacy {
+		g.slotOff = theme.Snap(k.r.Lines.ScrollerKnobInset)
+		g.slotLen = max(g.trackLen-2*g.slotOff, 0)
+	}
+	g.thumbLen = min(max(g.slotLen*view[a]/content[a], k.Pt(24)), g.slotLen)
 	maxScroll := float64(content[a] - view[a])
 	frac := float32(0)
 	if maxScroll > 0 {
 		frac = float32(min(max(pos/maxScroll, 0), 1))
 	}
-	return inset, trackLen, thumbLen, (trackLen - thumbLen) * frac, true
+	g.thumbOff = g.slotOff + (g.slotLen-g.thumbLen)*frac
+	return g, true
+}
+
+// barGeometry is where a bar is: its track starts inset pixels from the
+// view's start and is trackLen long; the thumb moves in the slot, slotLen
+// long from slotOff along the track (a legacy bar's knob stays clear of the
+// track's ends), and is thumbLen long at thumbOff.
+type barGeometry struct {
+	inset, trackLen, slotOff, slotLen, thumbOff, thumbLen float32
 }
 
 // ScrollInput applies a thumb drag of the previous frame to the scroll offset
@@ -299,7 +334,7 @@ func (k *Kit) ScrollInput(okey, skey ui.Key, st *ScrollState, axes ScrollAxes) {
 		if !hasAxis(axes, a) {
 			continue
 		}
-		_, trackLen, thumbLen, thumbOff, ok := k.barGeom(a, content, view, pos[a], both, k.legacyBars())
+		g, ok := k.barGeom(a, content, view, pos[a], both, k.legacyBars())
 		if !ok {
 			continue
 		}
@@ -309,14 +344,14 @@ func (k *Kit) ScrollInput(okey, skey ui.Key, st *ScrollState, axes ScrollAxes) {
 		}
 		m := ps.Mouse[a]
 		if ps.Pressed {
-			if m >= thumbOff && m <= thumbOff+thumbLen {
-				st.grab = m - thumbOff
+			if m >= g.thumbOff && m <= g.thumbOff+g.thumbLen {
+				st.grab = m - g.thumbOff
 			} else {
-				st.grab = thumbLen / 2
+				st.grab = g.thumbLen / 2
 			}
 		}
-		if trackLen > thumbLen {
-			f := float64(min(max((m-st.grab)/(trackLen-thumbLen), 0), 1))
+		if g.slotLen > g.thumbLen {
+			f := float64(min(max((m-st.grab-g.slotOff)/(g.slotLen-g.thumbLen), 0), 1))
 			pos[a] = f * float64(content[a]-view[a])
 			if a == 0 {
 				c.SetScroll(sid, pos[0], sy)

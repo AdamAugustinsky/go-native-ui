@@ -132,6 +132,7 @@ type gesture struct {
 	fingers   bool // between Began and Ended or Cancelled
 	momentum  bool // between momentum Began and Ended
 	ignoreMom bool // the momentum bounced or was stopped: the rest is dropped
+	seen      bool // the gesture's Began came here: its momentum may follow
 	key       Key  // the box the gesture latched to, 0 before its first delta
 	axis      int8 // the locked axis, -1 while undecided
 	cum       [2]float64
@@ -289,11 +290,14 @@ func (c *Context) scrollEvent(e *ScrollEvent) {
 		_, hit := c.scrollAt(e)
 		c.touchDown(hit, e.Time)
 	case e.Phase == PhaseBegan:
-		*g = gesture{fingers: true, axis: -1}
+		*g = gesture{fingers: true, axis: -1, seen: true}
 		c.gestureDelta(e, false)
 	case e.Phase == PhaseChanged || e.Phase == PhaseStationary:
-		if !g.fingers { // its Began went elsewhere (the window was not key)
-			*g = gesture{fingers: true, axis: -1}
+		if !g.fingers {
+			// A gesture whose Began went elsewhere (a hosted native view
+			// took it): it is not ui's, nor is its momentum.
+			g.seen = false
+			return
 		}
 		c.gestureDelta(e, false)
 	case e.Phase == PhaseEnded || e.Phase == PhaseCancelled:
@@ -303,6 +307,9 @@ func (c *Context) scrollEvent(e *ScrollEvent) {
 		g.fingers = false
 		c.release(e.Time)
 	case e.Momentum != PhaseNone:
+		if !g.seen {
+			return // the momentum of a gesture ui did not see begin
+		}
 		if e.Momentum == PhaseBegan && !g.ignoreMom {
 			g.momentum = true
 		}
@@ -312,7 +319,7 @@ func (c *Context) scrollEvent(e *ScrollEvent) {
 		if e.Momentum == PhaseEnded || e.Momentum == PhaseCancelled {
 			g.momentum, g.ignoreMom = false, false
 			if !g.fingers {
-				g.key = 0
+				g.key, g.seen = 0, false
 			}
 			c.release(e.Time)
 		}
