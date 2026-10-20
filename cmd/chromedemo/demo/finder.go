@@ -250,7 +250,12 @@ func (d *Demo) fileList(w, h float32) {
 		f := &d.files[item]
 		t.Row(row, item, f.name)
 		// the name: a 16-pt icon, the text 5 after it (AppKit's image view
-		// and text field)
+		// and text field). The cell starts with the icon centred in its
+		// square at the title's x, and icons differ in ink (a folder, a
+		// page, a platform's fallback glyph) as AppKit's file icons do in
+		// their one 198–214 image view (finder capture: a folder's ink
+		// 199–213, a page's 200–212), so the column audit does not apply.
+		c.NextAuditExempt(ui.AuditColumn.Mask())
 		t.BeginCell(0)
 		cell := c.Parent()
 		cr := c.Rect(cell)
