@@ -104,6 +104,7 @@ func (w *Window) handle(ev objc.ID) {
 	// items validate as disabled while AppKit matches it (validate).
 	w.fieldKey = keyIdx >= 0 && w.fieldKeys != nil && w.fieldKeys(&w.q.ev[keyIdx])
 	objc.Send1(w.app, selSendEvent, uintptr(ev))
+	w.hosts.scrollDelivered()
 	w.fieldKey = false
 	if w.menuActed && keyIdx >= 0 && keyIdx < len(w.q.ev) && w.q.ev[keyIdx].Kind == EvKey && w.q.ev[keyIdx].Time == t {
 		// The key was a menu item's key equivalent (performKeyEquivalent:): the

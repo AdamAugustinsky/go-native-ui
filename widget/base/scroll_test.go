@@ -10,11 +10,15 @@ import (
 // scrollRig builds one vertical scroll view filling a 400×300 window over 40
 // rows of 20 px, and keeps its bars and inner box.
 func scrollRig(t *testing.T) (*rig, *[2]ScrollBar, *ui.ID) {
-	var sv ScrollState
+	return scrollRigOf(t, &ScrollState{})
+}
+
+// scrollRigOf is scrollRig with the view's state sv.
+func scrollRigOf(t *testing.T, sv *ScrollState) (*rig, *[2]ScrollBar, *ui.ID) {
 	var bars [2]ScrollBar
 	var inner ui.ID
 	g := newRig(t, 400, 300, 1, func(k *Kit) {
-		v := k.BeginScroll("s", &sv, ScrollVertical)
+		v := k.BeginScroll("s", sv, ScrollVertical)
 		inner = v.Inner
 		for i := 0; i < 40; i++ {
 			k.Space(20)
@@ -59,25 +63,62 @@ func TestOverlayBarsShowWhileScrolling(t *testing.T) {
 }
 
 // TestLegacyBarsReserveTheirWidth: with the system's legacy scrollers the
-// bar always shows, beside the content, which is narrower by its width; the
-// setting is followed live.
+// bar always shows, beside the content, which is narrower by AppKit's
+// legacy scroller width for the bar's control size (17 pt regular, 13 small
+// and mini; at 2× here, in a 400×300-pixel window); the knob moves in a slot 3 pt clear of the track's
+// ends. The setting is followed live.
 func TestLegacyBarsReserveTheirWidth(t *testing.T) {
-	g, bars, inner := scrollRig(t)
 	legacy := theme.SystemValues{Known: true, Settings: theme.Settings{Scroller: theme.ScrollerLegacy}}
-	g.k.fol.PinSystem(&legacy)
-	g.frames(90)
-	b := &bars[1]
-	bw := theme.Snap(g.k.Theme().Px.ScrollbarW)
-	if !b.Legacy || !b.Visible || b.Show != 1 || b.X != 400-bw || b.W != bw || b.H != 300 {
-		t.Fatalf("a legacy bar: %+v", *b)
+	for _, tc := range []struct {
+		size theme.Size
+		want float32 // pt
+	}{{theme.SizeRegular, 17}, {theme.SizeSmall, 13}, {theme.SizeMini, 13}} {
+		g, bars, inner := scrollRigOf(t, &ScrollState{Size: tc.size})
+		g.scale = 2
+		g.k.fol.PinSystem(&legacy)
+		g.frames(90)
+		b, bw := &bars[1], tc.want*2
+		if !b.Legacy || !b.Visible || b.Show != 1 || b.X != 400-bw || b.W != bw || b.H != 300 {
+			t.Fatalf("size %d: a legacy bar: %+v, want %v px wide", tc.size, *b, bw)
+		}
+		if r := g.c.Rect(*inner); r[2]-r[0] != 400-bw {
+			t.Fatalf("size %d: the content is %v wide beside a %v bar", tc.size, r[2]-r[0], bw)
+		}
+		if b.SlotOff != 6 || b.SlotLen != 300-12 || b.ThumbOff != 6 {
+			t.Fatalf("size %d: slot %v+%v, thumb at %v; want 6+288, at 6", tc.size, b.SlotOff, b.SlotLen, b.ThumbOff)
+		}
+		g.k.fol.PinSystem(&theme.SystemValues{Known: true})
+		g.frames(3)
+		if r := g.c.Rect(*inner); b.Legacy || r[2]-r[0] != 400 {
+			t.Fatalf("back to overlay bars: legacy %v, content %v wide", b.Legacy, r[2]-r[0])
+		}
 	}
-	if r := g.c.Rect(*inner); r[2]-r[0] != 400-bw {
-		t.Fatalf("the content is %v wide beside a %v bar", r[2]-r[0], bw)
+}
+
+// TestLegacyThumbDragsToTheEnds: dragging a legacy knob to the end of its
+// slot scrolls to the end, and back to its start to the top.
+func TestLegacyThumbDragsToTheEnds(t *testing.T) {
+	g, bars, inner := scrollRig(t)
+	g.k.fol.PinSystem(&theme.SystemValues{Known: true, Settings: theme.Settings{Scroller: theme.ScrollerLegacy}})
+	g.frames(4)
+	b := bars[1]
+	x, y := b.X+b.W/2, b.ThumbOff+b.ThumbLen/2
+	end := b.SlotOff + b.SlotLen - b.ThumbLen // the knob's top at the end of the slot
+	g.move(x, y)
+	g.in.SetButton(ui.ButtonLeft, true, 1)
+	g.frame()
+	g.move(x, y+end-b.ThumbOff)
+	g.frames(2)
+	content, view := g.c.ScrollExtent(*inner)
+	if _, sy := g.c.Scroll(*inner); sy != float64(content[1]-view[1]) {
+		t.Fatalf("the knob at the slot's end scrolled to %v, want %v", sy, content[1]-view[1])
 	}
-	g.k.fol.PinSystem(&theme.SystemValues{Known: true})
-	g.frames(3)
-	if r := g.c.Rect(*inner); b.Legacy || r[2]-r[0] != 400 {
-		t.Fatalf("back to overlay bars: legacy %v, content %v wide", b.Legacy, r[2]-r[0])
+	g.move(x, y)
+	g.frames(2)
+	g.in.SetButton(ui.ButtonLeft, false, 0)
+	g.frame()
+	if _, sy := g.c.Scroll(*inner); sy != 0 {
+		t.Fatalf("the knob back at the slot's start scrolled to %v", sy)
 	}
 }
 
@@ -258,5 +299,62 @@ func TestListScrollingAllocatesNothing(t *testing.T) {
 	vlist()
 	if n := testing.AllocsPerRun(5, vlist); n != 0 {
 		t.Errorf("vlist: %v allocations per run", n)
+	}
+}
+
+// TestTableHeaderLeavesTheCorner: beside a legacy scroll bar a table's
+// header stops at the bar's left edge, and the corner above the bar (as high
+// as the header) is a box of its own, as AppKit's corner view; the Fill
+// column narrows so that the columns end there too. With overlay bars the
+// header spans the table.
+func TestTableHeaderLeavesTheCorner(t *testing.T) {
+	var st TableState
+	cols := []Column{{ID: 1, Title: "Name", Width: 170, Fill: true}, {ID: 2, Title: "Size", Width: 20}} // 190 pt: wider than the rows beside the bar
+	var head TableHead
+	var bars [2]ScrollBar
+	var outer ui.ID
+	g := newRig(t, 400, 300, 2, func(k *Kit) {
+		head = k.BeginTableHeader("files", &st, cols)
+		head.BeginHeaderRow(0)
+		for i := range head.Columns() {
+			hc := head.HeaderCell(i)
+			head.BeginHeaderCell(&hc, 0)
+			head.EndHeaderCell(&hc)
+		}
+		head.EndHeaderRow()
+		l := k.BeginTableBody(&head, 100, ListOpts{})
+		for r := l.First; r < l.Last; r++ {
+			rs := l.RowState(r, uint32(r))
+			l.BeginRow(&rs, nil, 0)
+			head.TextCell(&l, 0, StrBytes("name"), ui.DrawText)
+		}
+		l.CloseRows()
+		v := l.ScrollView()
+		outer = v.Outer
+		bars = k.ScrollBars(&v)
+		k.CloseList(&l)
+		k.CloseTable(&head)
+	})
+	g.k.fol.PinSystem(&theme.SystemValues{Known: true, Settings: theme.Settings{Scroller: theme.ScrollerLegacy}})
+	g.frames(4)
+	b := bars[1]
+	table, row := g.c.Rect(head.root), g.c.RectOf(head.hkey)
+	corner := g.c.RectOf(ui.KeyN(head.tkey, 4))
+	barX := g.c.Rect(outer)[0] + b.X
+	if !b.Legacy || head.Corner() != 34 || b.W != 34 {
+		t.Fatalf("corner %v, bar %+v; want both 34 px (17 pt)", head.Corner(), b)
+	}
+	if row[2] != barX || corner != [4]float32{barX, table[1], table[2], table[1] + head.HeaderHeight()} {
+		t.Fatalf("the header ends at %v and the corner is %v; the bar is at %v, the table %v", row[2], corner, barX, table)
+	}
+	// the Fill column gives up room (as AppKit's last-column autoresizing)
+	// so that the columns end where the rows do, at the bar
+	if w := head.ColumnWidth(0) + head.ColumnWidth(1) + 2*head.Inset(); w != barX-table[0] {
+		t.Fatalf("the columns take %v px beside the bar, the rows %v", w, barX-table[0])
+	}
+	g.k.fol.PinSystem(&theme.SystemValues{Known: true})
+	g.frames(3)
+	if row = g.c.RectOf(head.hkey); head.Corner() != 0 || row[2] != table[2] {
+		t.Fatalf("overlay bars: corner %v, the header ends at %v of %v", head.Corner(), row[2], table[2])
 	}
 }

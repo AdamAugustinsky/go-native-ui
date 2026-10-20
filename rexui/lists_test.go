@@ -408,7 +408,67 @@ func TestListFollowsScrollerStyle(t *testing.T) {
 	if bar {
 		t.Fatal("overlay scrollers: a bar at rest")
 	}
-	if bw := theme.Snap(g.k.Theme().Px.ScrollbarW); wo-wl != bw {
+	if bw := theme.Snap(17 * g.k.Scale()); wo-wl != bw { // AppKit's legacy scroller is 17 pt wide
+
 		t.Fatalf("the rows are %v wide beside a legacy bar and %v without, want %v less", wl, wo, bw)
+	}
+}
+
+// A table beside a legacy scroll bar stops its header, and the line under
+// it, at the bar's left edge; the corner above the bar is AppKit's corner
+// view (#262626 on the dark list), and the bar's knob sits in its slot.
+func TestTableHeaderCornerAboveALegacyBar(t *testing.T) {
+	var st base.TableState
+	cols := []base.Column{{ID: 1, Title: "Name", Width: 200, Fill: true}, {ID: 2, Title: "Size", Width: 80}}
+	legacy := theme.SystemValues{Known: true, Settings: theme.Settings{Scroller: theme.ScrollerLegacy}}
+	g := newRig(t, theme.Dark, &legacy, func(g *rig) {
+		k := g.k
+		c := k.Context()
+		c.NextSize(ui.Px(k.Pt(420)), ui.Px(k.Pt(180)))
+		c.Push(c.Box(0, "frame"))
+		tb := rexui.BeginTable(k, "files", &st, cols, 40, rexui.TableOpts{Style: rexui.ListFullWidth})
+		for r := tb.First; r < tb.Last; r++ {
+			tb.Row(r, st.Item(r), nil)
+			tb.CellText(0, "name")
+			tb.CellText(1, "1 KB")
+		}
+		rexui.EndTable(k, &tb)
+		c.Pop()
+	})
+	g.settle()
+	r := g.k.Theme()
+	bar := g.node(ui.RoleScrollBar, "Vertical scroll bar").Bounds
+	tbl := g.node(ui.RoleTable, "files").Bounds
+	if w := bar[2] - bar[0]; w != 34 {
+		t.Fatalf("the bar is %v px wide, want 34 (17 pt)", w)
+	}
+	hh := r.Lines.HeaderH
+	var corner, line bool
+	for _, q := range g.list.Quads {
+		if q.Mode != gpu.ModeShape {
+			continue
+		}
+		if q.Rect == [4]float32{bar[0], tbl[1], tbl[2], tbl[1] + hh} && q.Color[0] == 0x262626FF {
+			corner = true
+		}
+		if q.Rect[1] >= tbl[1] && q.Rect[3] <= tbl[1]+hh && q.Border > 0 && q.BorderColor == rexui.TableLook.HeaderLine.RGBA(r) {
+			line = true
+			if q.Rect[2] != bar[0] {
+				t.Errorf("the header and its line end at %v, the bar starts at %v", q.Rect[2], bar[0])
+			}
+		}
+	}
+	if !corner || !line {
+		t.Fatalf("corner %v, header line %v", corner, line)
+	}
+	slot := rexui.ListLook.LegacySlot.RGBA(r)
+	var s []gpu.Quad
+	for _, q := range g.list.Quads {
+		if q.Mode == gpu.ModeShape && q.Color[0] == slot {
+			s = append(s, q)
+		}
+	}
+	if len(s) != 1 || s[0].Rect != [4]float32{bar[0] + 6, bar[1] + 6, bar[2] - 6, bar[3] - 6} {
+		t.Fatalf("the knob slot: %+v in the bar %v, want it inset 6 px (3 pt)", s, bar)
 	}
 }
