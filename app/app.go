@@ -149,6 +149,8 @@ type App struct {
 
 	sh shellSync // material and host regions handed to the window (shell.go)
 
+	paste pasteSlot // the answer to RequestPaste for an image or files (paste.go)
+
 	wakeAt      int64 // platform.Now at which the UI wants a frame although nothing animates (ui.Context.WakeAfter); 0 = none
 	chromeDark  bool  // the mode last given to Win.SetDarkChrome
 	chromeSet   bool  // SetDarkChrome was called
@@ -524,6 +526,10 @@ func (a *App) onEvent(e *platform.Event) {
 		}
 		a.onDrag(e, txt)
 	default:
+		if e.Kind == platform.EvPaste && a.paste.isMedia(e) { // the answer to RequestPaste (paste.go)
+			a.onMediaPaste(e, a.Win.Text(e.Text))
+			return
+		}
 		var txt []byte
 		if e.Kind == platform.EvText || e.Kind == platform.EvPreedit || e.Kind == platform.EvPaste {
 			txt = a.Win.Text(e.Text)

@@ -51,13 +51,40 @@ func (w *Window) clipWorkerFor() *clipWorker {
 // while the worker is stuck behind such an owner, a copy is dropped at once
 // (see the clipboard notes above). A newer copy replaces one the worker has not
 // started. Main thread.
-func SetClipboardText(b []byte) {
+func SetClipboardText(b []byte) { SetClipboardTextWith(b, ClipOptions{}) }
+
+// SetClipboardTextWith is SetClipboardText with options (see ClipOptions): with
+// Concealed the copy also carries ExcludeClipboardContentFromMonitorProcessing,
+// CanIncludeInClipboardHistory = 0 and CanUploadToCloudClipboard = 0. Main
+// thread.
+func SetClipboardTextWith(b []byte, o ClipOptions) {
 	w := theWindow
 	if w == nil || pOpenClipboard == 0 {
 		return
 	}
-	w.clipWorkerFor().submitCopy(b, nanotime()+clipTimeoutNs)
+	w.clipWorkerFor().submitCopyWith(b, nanotime()+clipTimeoutNs, false, o.Concealed)
 	w.clipStep()
+}
+
+// SetClipboardImage replaces the system clipboard with the PNG file png (see
+// paste.go). The clipboard worker writes it as the registered "PNG" format
+// and as CF_DIBV5 (an image of more than 32 million pixels only as PNG), with
+// ClipOptions.Concealed also the formats that keep it out of history and
+// sync. Like SetClipboardText it needs the open window, which owns what it
+// puts on the clipboard (ErrNoClipboard without one), returns at once, and
+// does not happen if the clipboard stays busy for clipTimeoutNs. Main thread.
+func SetClipboardImage(png []byte, opts ...ClipOptions) error {
+	n, err := checkPNG(png)
+	if err != nil {
+		return err
+	}
+	w := theWindow
+	if w == nil || pOpenClipboard == 0 {
+		return ErrNoClipboard
+	}
+	w.clipWorkerFor().submitCopyWith(png[:n], nanotime()+clipTimeoutNs, true, clipOpts(opts).Concealed)
+	w.clipStep()
+	return nil
 }
 
 // RequestPaste asks for the plain text on the clipboard. The answer arrives as
@@ -72,7 +99,15 @@ func SetClipboardText(b []byte) {
 // The text is read on the clipboard worker, so a clipboard owner that never
 // answers cannot stop the UI. While the worker is stuck waiting for such an
 // owner, a request fails at once (see the clipboard notes above).
-func (w *Window) RequestPaste(tag uint64) {
+func (w *Window) RequestPaste(tag uint64) { w.RequestPasteKinds(tag, WantText) }
+
+// RequestPasteKinds asks for the first of files (CF_HDROP), image and text, of
+// the requested kinds, that the clipboard holds (see paste.go). An image is
+// the registered "PNG" format as it is, or else CF_DIBV5 / CF_DIB converted to
+// PNG on the clipboard worker. The answer arrives like RequestPaste's: later,
+// as a failure at once if the worker is stuck behind an owner that does not
+// answer, and FlagFailed|FlagTooBig for data over MaxPaste. Main thread.
+func (w *Window) RequestPasteKinds(tag uint64, kinds PasteKinds) {
 	from := 0
 	if w.delivered {
 		from = w.nOut // the events before it are already with the app
@@ -81,17 +116,22 @@ func (w *Window) RequestPaste(tag uint64) {
 	w.pasteOn, w.pasteTag = true, tag
 	w.pasteSeq++
 	w.pasteGive = nanotime() + clipTimeoutNs
-	if !w.clipWorkerFor().submitPaste(w.pasteSeq, w.pasteGive) {
-		w.failPaste()
+	if !w.clipWorkerFor().submitPasteKinds(w.pasteSeq, w.pasteGive, kinds) {
+		w.failPaste(false)
 		return
 	}
 	w.clipStep()
 }
 
-// failPaste answers the paste being waited for with FlagFailed.
-func (w *Window) failPaste() {
+// failPaste answers the paste being waited for with FlagFailed (and FlagTooBig
+// when it is for data over MaxPaste).
+func (w *Window) failPaste(big bool) {
 	w.pasteOn = false
-	w.q.push(Event{Kind: EvPaste, Flags: FlagFailed, Tag: w.pasteTag, Time: Now()})
+	fl := Flags(FlagFailed)
+	if big {
+		fl |= FlagTooBig
+	}
+	w.q.push(Event{Kind: EvPaste, Flags: fl, Tag: w.pasteTag, Time: Now()})
 }
 
 // clipPending reports whether a paste is still waiting.
@@ -107,7 +147,7 @@ func (w *Window) clipStep() {
 		stuck = w.clip.expire(now)
 	}
 	if w.pasteOn && (stuck || now >= w.pasteGive+clipGraceNs) {
-		w.failPaste()
+		w.failPaste(false)
 	}
 	w.clipDue = 0
 	if w.pasteOn {
@@ -129,9 +169,9 @@ func (w *Window) clipCollect() {
 		switch {
 		case r.match && r.ok:
 			w.pasteOn = false
-			w.q.push(Event{Kind: EvPaste, Text: TextRef{uint32(r.off), uint32(r.n)}, Tag: w.pasteTag, Time: Now()})
+			w.q.push(Event{Kind: EvPaste, Paste: r.kind, Code: r.files, Text: TextRef{uint32(r.off), uint32(r.n)}, Tag: w.pasteTag, Time: Now()})
 		case r.match:
-			w.failPaste()
+			w.failPaste(r.big)
 		}
 	}
 	w.clipStep()

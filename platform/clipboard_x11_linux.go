@@ -49,6 +49,7 @@ var (
 	nameUTF8Str   = cstr("UTF8_STRING")
 	nameTargets   = cstr("TARGETS")
 	nameIncr      = cstr("INCR")
+	nameHint      = cstr("x-kde-passwordManagerHint")
 	namePasteProp = cstr("GNUI_PASTE")
 )
 
@@ -67,7 +68,9 @@ const x11ReqWins = 8
 // x11Clip is the X11 side of the clipboard state, part of x11.
 type x11Clip struct {
 	aClipboard, aUTF8, aTargets, aPlainUTF8, aPlain, aIncr, aProp uintptr
-	targetList                                                    [5]uint64 // the atoms TARGETS answers with
+	aPNG, aURIList, aHint                                         uintptr
+	targetList                                                    [8]uint64 // the atoms TARGETS answers with: the first nTargets
+	nTargets                                                      int
 
 	sends [maxSends]x11Send
 	nsend int
@@ -88,6 +91,12 @@ type x11Clip struct {
 	pasteIdx  int
 	pasteWait bool // a SelectionNotify is expected
 	incr      bool
+	// A request for more than text first asks the owner for its TARGETS
+	// (askTargets), picks the best of the requested kinds it lists and then
+	// converts to that target (target); text alone goes straight to the text
+	// targets, as it always did.
+	askTargets bool
+	target     uintptr
 
 	// XGetWindowProperty's results.
 	pType      uintptr
@@ -122,7 +131,7 @@ func (w *Window) x11ClipInit(root uintptr) {
 	x.aPlain = x.intern(mimePlain)
 	x.aIncr = x.intern(nameIncr)
 	x.aProp = x.intern(namePasteProp)
-	x.targetList = [5]uint64{uint64(x.aTargets), uint64(x.aUTF8), uint64(x.aPlainUTF8), uint64(x.aPlain), xaString}
+	x.aPNG, x.aURIList, x.aHint = x.intern(mimePNG), x.intern(mimeURIList), x.intern(nameHint)
 	fr.Call1(xf.setErrorHandler, xErrCB)
 }
 
@@ -141,8 +150,33 @@ func (x *x11) pasteTarget(n int) uintptr {
 
 // ---- owner ----
 
+// x11SetTargets lists what TARGETS answers with for what we own: the text
+// targets, or image/png, and the hint when concealed.
+func (w *Window) x11SetTargets() {
+	x, c := &w.x, &w.clip
+	n := 0
+	add := func(a uintptr) {
+		x.targetList[n] = uint64(a)
+		n++
+	}
+	add(x.aTargets)
+	if c.ownImg {
+		add(x.aPNG)
+	} else {
+		add(x.aUTF8)
+		add(x.aPlainUTF8)
+		add(x.aPlain)
+		add(xaString)
+	}
+	if c.hide {
+		add(x.aHint)
+	}
+	x.nTargets = n
+}
+
 func (w *Window) x11Publish() {
 	x := &w.x
+	w.x11SetTargets()
 	fr.Call4(xf.setSelectionOwner, x.dpy, x.aClipboard, x.win, 0)
 	fr.Call1(xf.flush, x.dpy)
 }
@@ -154,6 +188,22 @@ func (w *Window) x11SelectionClear() {
 // textTarget reports whether target asks for the text.
 func (x *x11) textTarget(t uintptr) bool {
 	return t == x.aUTF8 || t == x.aPlainUTF8 || t == x.aPlain || t == xaString
+}
+
+// ownedTarget is the data we offer for target: the text for a text target, the
+// PNG file for image/png, "secret" for the hint; nil if we offer none (the
+// request is refused).
+func (w *Window) ownedTarget(t uintptr) []byte {
+	x, c := &w.x, &w.clip
+	switch {
+	case x.textTarget(t):
+		return c.clipData(clipTText)
+	case t == x.aPNG:
+		return c.clipData(clipTImage)
+	case t == x.aHint:
+		return c.clipData(clipTHint)
+	}
+	return nil
 }
 
 func (w *Window) x11SelectionRequest() {
@@ -169,9 +219,9 @@ func (w *Window) x11SelectionRequest() {
 		reply = 0
 	case target == x.aTargets:
 		fr.Reset().Arg(x.dpy).Arg(requestor).Arg(prop).Arg(xaAtom).Arg(32).Arg(0).
-			Arg(uintptr(unsafe.Pointer(&x.targetList[0]))).Arg(uintptr(len(x.targetList))).Call(xf.changeProperty)
-	case x.textTarget(target):
-		data := c.own
+			Arg(uintptr(unsafe.Pointer(&x.targetList[0]))).Arg(uintptr(x.nTargets)).Call(xf.changeProperty)
+	case w.ownedTarget(target) != nil:
+		data := w.ownedTarget(target)
 		if target == xaString {
 			data = latin1(data)
 		}
@@ -308,15 +358,23 @@ func (w *Window) x11BeginPaste() bool {
 	x.gen++
 	x.cur = x.reqWin[x.gen%x11ReqWins]
 	w.clip.buf = w.clip.buf[:0]
-	w.x11Convert()
+	w.clip.kind = PasteText
+	x.askTargets = w.clip.kinds != WantText
+	if x.askTargets {
+		w.x11Convert(x.aTargets)
+	} else {
+		w.x11Convert(x.pasteTarget(0))
+	}
 	return true
 }
 
-func (w *Window) x11Convert() {
+// x11Convert asks the owner for target, to be put in the paste property.
+func (w *Window) x11Convert(target uintptr) {
 	x := &w.x
 	x.pasteWait = true
+	x.target = target
 	fr.Call3(xf.deleteProperty, x.dpy, x.cur, x.aProp)
-	fr.Reset().Arg(x.dpy).Arg(x.aClipboard).Arg(x.pasteTarget(x.pasteIdx)).Arg(x.aProp).Arg(x.cur).Arg(0).Call(xf.convertSelection)
+	fr.Reset().Arg(x.dpy).Arg(x.aClipboard).Arg(target).Arg(x.aProp).Arg(x.cur).Arg(0).Call(xf.convertSelection)
 	fr.Call1(xf.flush, x.dpy)
 }
 
@@ -325,7 +383,7 @@ func (w *Window) x11CancelPaste() {
 	if x.incr {
 		fr.Call3(xf.deleteProperty, x.dpy, x.cur, x.aProp)
 	}
-	x.pasteWait, x.incr = false, false
+	x.pasteWait, x.incr, x.askTargets = false, false, false
 }
 
 // getProp reads and deletes the paste property. The returned memory belongs
@@ -385,13 +443,26 @@ func (w *Window) x11SelectionNotify() {
 	}
 	x.pasteWait = false
 	prop := uintptr(x.i64(56))
-	if prop == 0 { // refused: try the next kind of text
-		x.pasteIdx++
-		if x.pasteTarget(x.pasteIdx) == 0 {
+	if prop == 0 { // refused
+		switch {
+		case x.askTargets: // an owner that will not list its targets: try the text ones, if text is wanted
+			x.askTargets = false
+			if !w.clip.kinds.Has(PasteText) {
+				w.clipFail()
+				return
+			}
+			x.pasteIdx = 0
+			w.x11Convert(x.pasteTarget(0))
+		case w.clip.kind != PasteText: // the chosen image or file list was refused
 			w.clipFail()
-			return
+		default: // try the next kind of text
+			x.pasteIdx++
+			if x.pasteTarget(x.pasteIdx) == 0 {
+				w.clipFail()
+				return
+			}
+			w.x11Convert(x.pasteTarget(x.pasteIdx))
 		}
-		w.x11Convert()
 		return
 	}
 	if !x.getProp() {
@@ -399,21 +470,89 @@ func (w *Window) x11SelectionNotify() {
 		return
 	}
 	defer x.freeProp()
-	if x.pAfter > 0 {
-		w.clipFail()
+	if x.pAfter > 0 { // more than we take
+		w.clipFailBig()
+		return
+	}
+	if x.askTargets {
+		w.x11Targets()
 		return
 	}
 	if x.pType == x.aIncr {
+		// The property's value is a lower bound of the size: an owner that
+		// announces more than we deliver is refused before a byte is stored.
+		if x.pFormat == 32 && x.pItems >= 1 && x.pData != 0 && *(*uint64)(ptr(x.pData)) > MaxPaste {
+			w.clipFailBig()
+			return
+		}
 		x.incr = true // the deletion told the owner to start; chunks follow
 		w.clip.deadline = nanotime() + clipTimeout
 		return
 	}
-	if x.pType != x.pasteTarget(x.pasteIdx) && x.pType != x.aUTF8 && x.pType != xaString && x.pType != x.aPlainUTF8 && x.pType != x.aPlain {
+	if w.clip.kind == PasteText {
+		if x.pType != x.target && x.pType != x.aUTF8 && x.pType != xaString && x.pType != x.aPlainUTF8 && x.pType != x.aPlain {
+			w.clipFail()
+			return
+		}
+	} else if x.pType != x.target {
 		w.clipFail()
 		return
 	}
 	w.x11Append(x.pType == xaString)
 	w.clipFinish()
+}
+
+// x11Targets takes the owner's list of targets (the property holds atoms) and
+// converts to the best one for the requested kinds.
+func (w *Window) x11Targets() {
+	x := &w.x
+	c := &w.clip
+	x.askTargets = false
+	if x.pType != xaAtom || x.pFormat != 32 || x.pData == 0 {
+		w.clipFail()
+		return
+	}
+	// Xlib returns 32-bit items as C longs.
+	atoms := unsafe.Slice((*uint64)(ptr(x.pData)), int(x.pItems))
+	has := func(a uintptr) bool {
+		for _, t := range atoms {
+			if uintptr(t) == a {
+				return true
+			}
+		}
+		return false
+	}
+	kind, ok := pickKind(c.kinds, func(k PasteKind) bool {
+		switch k {
+		case PasteFiles:
+			return has(x.aURIList)
+		case PasteImage:
+			return has(x.aPNG)
+		}
+		return has(x.aUTF8) || has(x.aPlainUTF8) || has(xaString) || has(x.aPlain)
+	})
+	if !ok {
+		w.clipFail()
+		return
+	}
+	c.kind = kind
+	var target uintptr
+	switch kind {
+	case PasteFiles:
+		target = x.aURIList
+	case PasteImage:
+		target = x.aPNG
+	default:
+		for i := 0; target == 0 && x.pasteTarget(i) != 0; i++ {
+			if t := x.pasteTarget(i); has(t) {
+				target, x.pasteIdx = t, i
+			}
+		}
+		if target == 0 { // only text/plain
+			target, x.pasteIdx = x.aPlain, 3
+		}
+	}
+	w.x11Convert(target)
 }
 
 // x11PasteChunk reads the next INCR chunk; an empty one ends the transfer.
@@ -434,9 +573,9 @@ func (w *Window) x11PasteChunk() {
 		w.clipFinish()
 		return
 	}
-	w.x11Append(x.pType == xaString || x.pasteTarget(x.pasteIdx) == xaString)
+	w.x11Append(c.kind == PasteText && (x.pType == xaString || x.target == xaString))
 	c.deadline = nanotime() + clipTimeout
 	if len(c.buf) > MaxPaste {
-		w.clipFail()
+		w.clipFailBig()
 	}
 }
