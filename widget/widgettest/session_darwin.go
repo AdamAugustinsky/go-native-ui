@@ -153,7 +153,7 @@ func (l *LiveApp) Close() {
 		select {
 		case <-l.end:
 		default:
-			l.doQuiet(func(a *app.App) {
+			l.call(func(a *app.App) {
 				a.Quit()
 				platform.Wake()
 			})
@@ -175,13 +175,18 @@ func (l *LiveApp) Close() {
 // app ended first, the test fails.
 func (l *LiveApp) Do(f func(a *app.App)) {
 	l.t.Helper()
-	if pv := l.doQuiet(f); pv != nil {
+	pv, ended := l.call(f)
+	if ended {
+		l.t.Fatalf("widgettest: the app ended before a call reached the main thread (%v)", l.err)
+	}
+	if pv != nil {
 		l.t.Fatalf("widgettest: panic in Do: %v", pv)
 	}
 }
 
-// doQuiet is Do that returns the panic value instead of failing.
-func (l *LiveApp) doQuiet(f func(a *app.App)) (panicked any) {
+// call is Do that reports a panic of f and the end of the app instead of
+// failing the test.
+func (l *LiveApp) call(f func(a *app.App)) (panicked any, ended bool) {
 	done := make(chan any, 1)
 	doMu.Lock()
 	doQ = append(doQ, func() {
@@ -197,17 +202,14 @@ func (l *LiveApp) doQuiet(f func(a *app.App)) (panicked any) {
 	postDo()
 	select {
 	case pv := <-done:
-		return pv
+		return pv, false
 	case <-l.end:
-		// the closure may have run just before the end
-		select {
+		select { // the closure may have run just before the end
 		case pv := <-done:
-			return pv
+			return pv, false
 		default:
 		}
-		l.t.Helper()
-		l.t.Fatalf("widgettest: the app ended before a call reached the main thread (%v)", l.err)
-		return nil
+		return nil, true
 	}
 }
 

@@ -230,10 +230,28 @@ func TestCaptureOfTheLiveWindow(t *testing.T) {
 
 // The harness leaves an idle app idle: with no wait open, a harness call that
 // changes nothing draws no frame, and a wait asks for frames only while it is
-// open.
+// open. The first seconds of a window's life may draw frames of the system's
+// making (activation, occlusion), so the test first waits for the app to go
+// quiet; an app that never does is a failure only if its window is on screen.
 func TestIdleAppDrawsNothingBetweenWaits(t *testing.T) {
 	l, _ := startProbe(t)
-	l.Frames(60) // the first frames settle the layout and the animations of the start
+	l.Frames(30)
+	quiet := false
+	for try := 0; try < 40 && !quiet; try++ {
+		n := l.Built()
+		time.Sleep(250 * time.Millisecond)
+		quiet = l.Built() == n
+	}
+	if !quiet {
+		var visible bool
+		l.Do(func(a *app.App) {
+			visible = uintptr(objc.Send(objc.ID(a.Win.Native().NSWindow), objc.Sel("occlusionState")))&2 != 0
+		})
+		if !visible {
+			t.Skip("the window is occluded here and the app keeps drawing: the pacer's fallback for a window that cannot be seen")
+		}
+		t.Fatal("the app kept drawing for 10 s with nothing to do")
+	}
 	n0 := l.Built()
 	time.Sleep(500 * time.Millisecond)
 	if n := l.Built(); n != n0 {
