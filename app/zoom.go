@@ -23,8 +23,11 @@ import (
 // The ui's points are zoomed points: at zoom 1.5 a ui point is 1.5 points of
 // the screen. Everything the window system sees is in screen points or in
 // pixels, which the zoom does not touch: Config.Width and Height, the window
-// frame, the content size of ContentSize, the system's window buttons, the
-// cursor, drag, tooltip and input-method rectangles (pixels). A window's
+// frame, the content size of ContentSize, the size of the system's window
+// buttons, the cursor, drag, tooltip and input-method rectangles (pixels).
+// The zoom is the whole window's, chrome included: a custom titlebar
+// (Config.Titlebar) is given the zoomed band and the window buttons move to
+// its centre (syncTitlebar), and SystemButtons follows. A window's
 // geometry is saved in screen points: derive it from ContentSize or the
 // platform's frame, never from the ui's points (Unzoomed converts them), and
 // keep the zoom itself in winstate.State.Zoom. A frame saved from ui points
@@ -170,4 +173,55 @@ func (a *App) syncZoomMenu() {
 	if id, ok := a.menu.RoleID(menu.RoleActualSize); ok {
 		a.menu.SetEnabled(id, z != 1)
 	}
+}
+
+// titlebarSetter is the part of the window that changes the custom titlebar's
+// metrics after it is open (platform.Window.SetTitlebar, macOS).
+type titlebarSetter interface {
+	SetTitlebar(height float32, lights [2]float32)
+}
+
+// syncTitlebar gives a window with a custom titlebar (Config.Titlebar) the
+// zoomed band: the zoom is the whole window's, as in a browser or an editor,
+// so the app's titlebar and toolbar scale with the content, and the system's
+// window buttons, which stay at the system's size, move to stay centred in
+// the band. It is called at the start of a frame, before the buttons' place is
+// read for the ui, so that a frame never mixes the new band with the old
+// buttons. It does nothing at the zoom the metrics were set for, so a frame at
+// any steady zoom costs one comparison.
+//
+// The band is Config.Titlebar times the zoom, and the close button's centre is
+// Config.TrafficLights with y times the zoom: y keeps its place in the band (a
+// centre at half the band stays at half the zoomed band). x stays where it
+// is. The buttons keep the inset from the window's edge that every macOS
+// window has, whatever the content's zoom; the toolbar's first item clears
+// them through SystemButtons, which follows, so its gap to the buttons and the
+// band's padding are the zoomed ones. Scaling x too would move the buttons
+// away from the edge by a fraction of the zoom for no gain, and AppKit
+// refreshes the group's hover area (the glyphs on hover) for a new x only at
+// the next title change, so a moved x leaves the glyphs 7 pt off the buttons
+// (measured on macOS 15; platform.Window.SetTitlebar).
+//
+// Where the buttons stay at the system's default place (platform.Options.
+// PublicAPIOnly, the gnui_publicapi build) the window ignores the centre and
+// SystemButtons says where they are.
+func (a *App) syncTitlebar(win any) {
+	if a.cfg.Titlebar <= 0 {
+		return
+	}
+	z := a.Zoom()
+	was := a.tbZoom
+	if was == 0 {
+		was = 1
+	}
+	if z == was {
+		return
+	}
+	set, ok := win.(titlebarSetter)
+	if !ok {
+		return
+	}
+	l := a.cfg.TrafficLights
+	set.SetTitlebar(a.cfg.Titlebar*z, [2]float32{l[0], l[1] * z})
+	a.tbZoom = z
 }
