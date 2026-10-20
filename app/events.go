@@ -22,8 +22,10 @@ const (
 	// EvNone is no event.
 	EvNone = EventKind(platform.AppEvNone)
 	// EvReopen: the Dock icon was clicked (or the app was opened again) while
-	// it runs; A is 1 when a window is visible. DefaultHandler shows a hidden
-	// or minimised window when none is visible.
+	// it runs; A is 1 when a window is visible. DefaultHandler shows the most
+	// recently opened hidden or minimised window when none is visible; with
+	// no window open it does nothing, and the app's Handler opens one if it
+	// wants (OpenWindow).
 	EvReopen = EventKind(platform.AppEvReopen)
 	// EvActivated: the app became the active application.
 	EvActivated = EventKind(platform.AppEvActivated)

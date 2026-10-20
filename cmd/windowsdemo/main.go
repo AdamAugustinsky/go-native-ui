@@ -66,6 +66,10 @@ const (
 )
 
 func (d *demo) Event(a *app.App, e *app.Event) {
+	if e.Kind == app.EvReopen && e.A == 0 && len(a.Windows(nil)) == 0 {
+		d.open(a) // the Dock's icon with no window open (-keep): a new one
+		return
+	}
 	if e.Kind == app.EvPost {
 		if w := d.wins[int(e.ID/10)]; w != nil && w.Open() {
 			switch e.ID % 10 {

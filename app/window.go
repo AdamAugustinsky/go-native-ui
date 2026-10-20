@@ -189,6 +189,8 @@ type winState struct {
 	edited    bool       // SetDocumentEdited's state
 
 	ownTex *winUploader // the textures the window's widgets made on the shared renderer
+
+	held bool // the App has held a window: its state is that window's until renew
 }
 
 // command applies window command c now when the app is at a safe point, and

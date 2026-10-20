@@ -35,6 +35,7 @@ type mwPane struct {
 	got     atomic.Int64 // worker results taken (results)
 	animate atomic.Bool
 	inBuild atomic.Bool
+	wakeIn  atomic.Int64 // ns: the next Build asks for a frame that much later (ui.Context.WakeIn)
 	results chan int
 	init    func(a *app.App) error
 	during  atomic.Pointer[func(c *ui.Context)] // run once, inside the next Build
@@ -82,6 +83,9 @@ func (p *mwPane) Build(c *ui.Context) {
 	}
 	if p.animate.Load() {
 		c.RequestFrame()
+	}
+	if ns := p.wakeIn.Swap(0); ns > 0 {
+		c.WakeIn(ns)
 	}
 }
 
@@ -277,6 +281,74 @@ func TestAStoppedDisplayLinkIsReplaced(t *testing.T) {
 	}
 	if !waitFor(3*time.Second, ticking) || st.Restarts != 1 {
 		t.Errorf("after the stop: %d restarts, metal link %v, ticks %d (were %d); want one restart and a new metal link that ticks", st.Restarts, st.MetalLink, st.Ticks, st0.Ticks)
+	}
+}
+
+// A composer in each window: each window's hosted NSTextView (the native
+// editor, N4) takes what is typed into that window, and its signals reach
+// that window's frames; the second window's editor, released, and the window,
+// closed, leave no host behind.
+func TestEachWindowHasItsOwnComposer(t *testing.T) {
+	p1, p2 := &edApp{}, &edApp{}
+	l := widgettest.StartLive(t, app.Config{Title: "composer 1", Width: 480, Height: 320}, p1)
+	t.Cleanup(func() { l.Do(func(*app.App) { p1.ed.Release() }) })
+	var hosts0 int64
+	l.Do(func(*app.App) { hosts0 = platform.ShellObjects().Hosts })
+	w2 := mwOpen(t, l, "composer 2", 20, p2, p2.builds.Load)
+	var w1 *app.Win
+	l.Do(func(a *app.App) { w1 = a.Window() })
+
+	// typeInto types into w's editor: as keys when the window can be made
+	// key (the pump hands them to the window's text view), else through the
+	// text view's input client (an app that cannot activate here, as a
+	// session in use by someone else).
+	keys := true
+	typeInto := func(w *app.Win, p *edApp, text string) {
+		t.Helper()
+		var win objc.ID
+		l.Do(func(*app.App) {
+			win = objc.ID(w.App().Win.Native().NSWindow)
+			objc.Send1(widgettest.NSApp(), objc.Sel("activateIgnoringOtherApps:"), 1)
+			objc.Send1(win, objc.Sel("makeKeyAndOrderFront:"), 0)
+		})
+		if keys && !waitFor(3*time.Second, func() bool {
+			var key bool
+			l.Do(func(*app.App) { key = objc.SendBool(win, objc.Sel("isKeyWindow")) })
+			return key
+		}) {
+			keys = false
+			t.Log("the windows cannot become key here: the text goes in through the text views' input clients, not as keys")
+		}
+		l.Do(func(*app.App) { p.ed.Focus() })
+		if keys {
+			l.Until("the editor has the keyboard", 120, func() bool { return p.ed.Focused() && p.sig.Focused })
+			l.Do(func(*app.App) { widgettest.NativeWindow(w.App()).TypeText(text) })
+		} else {
+			l.Do(func(*app.App) { widgettest.TextInput(tv(p)).InsertText(text, widgettest.NoRange) })
+		}
+		if !waitFor(5*time.Second, func() bool { return string(p.ed.Text()) == text && p.changed > 0 }) {
+			t.Fatalf("typed %q into the editor of its window: it holds %q, %d changes seen by its frames%s", text, p.ed.Text(), p.changed, mwStates(l, w1, w2))
+		}
+	}
+	typeInto(w2, p2, "two")
+	typeInto(w1, p1, "one")
+	settle()
+	if a, b := string(p1.ed.Text()), string(p2.ed.Text()); a != "one" || b != "two" {
+		t.Errorf("the editors hold %q and %q, want \"one\" and \"two\"%s", a, b, mwStates(l, w1, w2))
+	}
+	if keys && (!p1.ed.Focused() || p2.ed.Focused()) {
+		t.Errorf("the editors' focus: first %v, second %v; want the first's only (its window is key)", p1.ed.Focused(), p2.ed.Focused())
+	}
+
+	l.Do(func(*app.App) {
+		p2.ed.Release() // the app's: before its window closes (or after)
+		w2.Close()
+	})
+	l.Until("the second window closed", 120, func() bool { return !w2.Open() })
+	var hosts int64
+	l.Do(func(*app.App) { hosts = platform.ShellObjects().Hosts })
+	if hosts != hosts0 {
+		t.Errorf("hosts after the second window closed: %d, want %d (the first window's)", hosts, hosts0)
 	}
 }
 

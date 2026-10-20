@@ -338,9 +338,7 @@ func (a *App) openWin(cfg Config, b Builder, st *StartupReport, nativeMenus bool
 	}
 
 	a.cfg, a.b = cfg, b
-	if a.started { // a window again, after the last one closed (KeepRunning)
-		a.tr, a.p, a.frames, a.menuDirty = newTranslator(), newPacer(), 0, true
-	}
+	a.held = true
 	a.lastDrawT = tEntry
 	if cfg.Width <= 0 || cfg.Height <= 0 {
 		return errors.New("app: Config.Width and Height must be positive")

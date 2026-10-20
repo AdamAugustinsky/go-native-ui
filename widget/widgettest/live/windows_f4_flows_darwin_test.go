@@ -18,8 +18,10 @@ import (
 	"time"
 
 	"gonativeui/app"
+	"gonativeui/gpu"
 	"gonativeui/internal/objc"
 	"gonativeui/internal/sysinfo"
+	"gonativeui/platform"
 	"gonativeui/theme/rex"
 	"gonativeui/ui"
 	"gonativeui/widget"
@@ -82,6 +84,177 @@ func init() {
 		}
 		err := app.Main(app.AppConfig{KeepRunning: keep}, h)
 		widgettest.Say("main_returned=1 err=%v", err)
+	})
+
+	// f4-reuse: the Handler's window closed and opened again CYCLES times
+	// (200) with KeepRunning: each new window takes the closed one's place
+	// (the same App, a new id), and what was meant for the closed one does
+	// not reach it: a key event made for it, its Win's and its platform
+	// window's Wake, a command of its Win, a sheet it had open, a WakeIn of
+	// its that comes due after it closed.
+	widgettest.RegisterScenario("f4-reuse", func() {
+		cycles := envInt("CYCLES")
+		if cycles <= 0 {
+			cycles = 200
+		}
+		var (
+			root                                   *app.App
+			cur                                    *app.Win
+			curPane                                *mwPane
+			objs0                                  platform.WindowObjects
+			surf0                                  int64
+			notReused, staleKeys, staleDialogs     int
+			staleOpen, timerTries, timerDrew, done int
+		)
+		var cycle func(i int)
+		finish := func() {
+			objs := platform.LiveWindowObjects()
+			objs.Pending, objs0.Pending = 0, 0
+			widgettest.Say("cycles=%d not_reused=%d stale_keys=%d stale_dialogs=%d stale_open=%d timer_tries=%d timer_drew=%d objects_ok=%v surfaces_ok=%v",
+				done, notReused, staleKeys, staleDialogs, staleOpen, timerTries, timerDrew, objs == objs0, gpu.LiveSurfaces() == surf0)
+			root.Quit()
+		}
+		// reopen opens the next window once the closed one is gone, then
+		// delivers what was the closed one's, and checks the new one.
+		var reopen func(i int, old *app.Win, pw *platform.Window, key objc.ID, timer bool)
+		reopen = func(i int, old *app.Win, pw *platform.Window, key objc.ID, timer bool) {
+			if old.Open() {
+				widgettest.After(5*time.Millisecond, func() { reopen(i, old, pw, key, timer) })
+				return
+			}
+			p := &mwPane{}
+			nw, err := root.OpenWindow(mwConfig("reused"), p)
+			if err != nil {
+				widgettest.Fail("window %d: %v", i, err)
+			}
+			if nw.App() != root || nw.ID() <= old.ID() {
+				notReused++
+			}
+			old.Wake() // a worker's late result for the closed window
+			pw.Wake()
+			old.SetTitle("stale")
+			widgettest.Post(key)
+			objc.Release(key)
+			check := func() {
+				if p.keys.Load() > 0 {
+					staleKeys++
+				}
+				for _, ok := nw.App().TakeDialog(); ok; _, ok = nw.App().TakeDialog() {
+					staleDialogs++
+				}
+				if old.Open() || old.App() != nil {
+					staleOpen++
+				}
+				cur, curPane, done = nw, p, i
+				if i == cycles {
+					finish()
+					return
+				}
+				cycle(i + 1)
+			}
+			if !timer {
+				widgettest.After(30*time.Millisecond, check)
+				return
+			}
+			// The closed window's WakeIn comes due about 450 ms after this
+			// one opened: a frame then, and in nothing else, is the stale one.
+			widgettest.After(300*time.Millisecond, func() {
+				b := p.builds.Load()
+				widgettest.After(500*time.Millisecond, func() {
+					timerTries++
+					if p.builds.Load() > b {
+						timerDrew++
+					}
+					check()
+				})
+			})
+		}
+		cycle = func(i int) {
+			ca := cur.App()
+			timer, sheet := i%50 == 25, i%50 == 10
+			shut := func() {
+				key := objc.Retain(widgettest.NativeWindow(ca).Key(true, 'K', 0)) // made while the window is open
+				old, pw := cur, ca.Win
+				old.Close()
+				widgettest.After(5*time.Millisecond, func() { reopen(i, old, pw, key, timer) })
+			}
+			if !timer && !sheet {
+				shut()
+				return
+			}
+			if sheet { // a sheet left open when the window closes
+				if _, err := ca.Alert(platform.AlertSpec{Message: "left open", Buttons: []string{"OK", "Cancel"}}); err != nil {
+					widgettest.Fail("window %d: alert: %v", i, err)
+				}
+			}
+			if timer { // a frame the closed window asked for at a time after it closed
+				curPane.wakeIn.Store(int64(600 * time.Millisecond))
+				cur.Wake()
+			}
+			widgettest.After(150*time.Millisecond, shut)
+		}
+		h := &flowHandler{}
+		h.start = func(a *app.App) error {
+			root = a
+			p := &mwPane{}
+			w, err := a.OpenWindow(mwConfig("reused"), p)
+			if err != nil {
+				widgettest.Say("skip=no-window")
+				os.Exit(0)
+			}
+			cur, curPane = w, p
+			widgettest.After(300*time.Millisecond, func() {
+				objs0, surf0 = platform.LiveWindowObjects(), gpu.LiveSurfaces()
+				cycle(1)
+			})
+			return nil
+		}
+		if err := app.Main(app.AppConfig{KeepRunning: true}, h); err != nil {
+			widgettest.Say("main_err=%v", err)
+		}
+	})
+
+	// f4-reopen: two windows hidden: a reopen (the Dock icon, no window
+	// visible) shows the most recently opened one; with no window open
+	// (KeepRunning) the default opens none.
+	widgettest.RegisterScenario("f4-reopen", func() {
+		reopen := func() {
+			objc.Send2(objc.ID(platform.AppDelegate()), objc.Sel("applicationShouldHandleReopen:hasVisibleWindows:"), uintptr(widgettest.NSApp()), 0)
+		}
+		h := &flowHandler{}
+		h.start = func(a *app.App) error {
+			w1, err := a.OpenWindow(mwConfig("first"), &mwPane{})
+			if err != nil {
+				widgettest.Say("skip=no-window")
+				os.Exit(0)
+			}
+			w2, err := a.OpenWindow(mwConfig("second"), &mwPane{})
+			if err != nil {
+				widgettest.Fail("second window: %v", err)
+			}
+			w1.Hide()
+			w2.Hide()
+			widgettest.After(300*time.Millisecond, func() {
+				widgettest.Say("hidden_first=%v hidden_second=%v", !w1.App().Win.Visible(), !w2.App().Win.Visible())
+				reopen()
+				widgettest.After(300*time.Millisecond, func() {
+					widgettest.Say("first_visible=%v second_visible=%v", w1.App().Win.Visible(), w2.App().Win.Visible())
+					w1.Close()
+					w2.Close()
+					widgettest.After(300*time.Millisecond, func() {
+						reopen()
+						widgettest.After(400*time.Millisecond, func() {
+							widgettest.Say("windows_after_reopen=%d", len(a.Windows(nil)))
+							a.Quit()
+						})
+					})
+				})
+			})
+			return nil
+		}
+		if err := app.Main(app.AppConfig{KeepRunning: true}, h); err != nil {
+			widgettest.Say("main_err=%v", err)
+		}
 	})
 
 	// f4-measure: one window left idle for IDLE1 seconds (presents, wakeups,
@@ -307,3 +480,46 @@ func TestTwoWindowsIdleAndAnimate(t *testing.T) {
 		t.Errorf("the second window took %s ms to open", r.Get("open_ms"))
 	}
 }
+
+// The Handler's window, closed and opened again 200 times (KeepRunning),
+// keeps its place: each new window is the same App with a new id, and what
+// was meant for the closed one never reaches it (a key event made for it,
+// its Win's and its platform window's Wake, a sheet left open, a WakeIn that
+// comes due after it closed); the windows' objects and surfaces go with
+// them. A frame at the closed window's due time may come from another test
+// process (the focus moves) once in its tries, never in each.
+func TestTheHandlersWindowIsReusedWithNothingOfTheClosedOne(t *testing.T) {
+	r := widgettest.Scenario(t, "f4-reuse", 150*time.Second)
+	if r.Code != 0 || r.Get("cycles") != "200" {
+		t.Fatalf("exit %d, %q cycles\n%s", r.Code, r.Get("cycles"), r.Out)
+	}
+	for _, k := range []string{"not_reused", "stale_keys", "stale_dialogs", "stale_open"} {
+		if r.Get(k) != "0" {
+			t.Errorf("%s=%s, want 0\n%s", k, r.Get(k), r.Out)
+		}
+	}
+	if tries, drew := envNum(r.Get("timer_tries")), envNum(r.Get("timer_drew")); tries < 4 || drew > 1 {
+		t.Errorf("a closed window's WakeIn drew the new window %d times in %d tries", drew, tries)
+	}
+	if r.Get("objects_ok") != "true" || r.Get("surfaces_ok") != "true" {
+		t.Errorf("after 200 windows: window objects back %s, surfaces back %s\n%s", r.Get("objects_ok"), r.Get("surfaces_ok"), r.Out)
+	}
+}
+
+// A reopen (the Dock icon) with no window visible shows the most recently
+// opened of the hidden windows; with no window open, the default opens
+// none: that is the app's Handler's to decide.
+func TestReopenShowsTheLatestHiddenWindowAndOpensNone(t *testing.T) {
+	r := widgettest.Scenario(t, "f4-reopen", 60*time.Second)
+	if r.Code != 0 || r.Get("hidden_first") != "true" || r.Get("hidden_second") != "true" {
+		t.Fatalf("exit %d; the windows hidden first: %q, %q\n%s", r.Code, r.Get("hidden_first"), r.Get("hidden_second"), r.Out)
+	}
+	if r.Get("first_visible") != "false" || r.Get("second_visible") != "true" {
+		t.Errorf("after a reopen: the first window visible %q, the second %q; want the second (the latest) only\n%s", r.Get("first_visible"), r.Get("second_visible"), r.Out)
+	}
+	if r.Get("windows_after_reopen") != "0" {
+		t.Errorf("a reopen with no window open opened %s windows, want 0\n%s", r.Get("windows_after_reopen"), r.Out)
+	}
+}
+
+func envNum(s string) int { n, _ := strconv.Atoi(s); return n }

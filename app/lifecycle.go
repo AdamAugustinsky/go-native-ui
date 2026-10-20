@@ -72,10 +72,11 @@ type CloseRequester interface {
 
 // DefaultEvent is the default handling of e: a quit request is allowed when
 // every window agrees to close (CloseRequester) and refused otherwise; a
-// reopen with no visible window shows the main window (the first one the app
-// opened that is still open), or, with none open (KeepRunning), opens the
-// main window again with the configuration and Builder it had. Other events
-// need nothing.
+// reopen with no visible window shows the most recently opened of the
+// windows that are hidden or in the Dock. With no window open (KeepRunning)
+// a reopen does nothing here: which window to open is the app's to decide,
+// and its Handler opens one (OpenWindow) on EvReopen. Other events need
+// nothing.
 func (a *App) DefaultEvent(e *Event) {
 	switch e.Kind {
 	case EvQuitRequested:
@@ -84,13 +85,21 @@ func (a *App) DefaultEvent(e *Event) {
 		if e.A != 0 {
 			return
 		}
-		if m := a.mainWindow(); m != nil {
-			m.Win.Activate()
-		} else if r := a.root; r != nil && r.b != nil && r.Win == nil && !a.reopening {
-			a.reopening = true // once: the window opens at the next safe point
-			a.OpenWindow(r.cfg, r.b)
+		if w := a.reopenWindow(); w != nil {
+			w.Win.Activate()
 		}
 	}
+}
+
+// reopenWindow is the window a reopen shows: the most recently opened of the
+// open windows that are hidden or in the Dock; nil when none is.
+func (a *App) reopenWindow() *App {
+	for i := len(a.wins) - 1; i >= 0; i-- {
+		if w := a.wins[i]; w.Win != nil && !w.closing && (!w.Win.Visible() || w.Win.Miniaturized()) {
+			return w
+		}
+	}
+	return nil
 }
 
 // windowsAgreeToClose asks the builder of every open window, in the order
@@ -319,6 +328,8 @@ func (a *App) openWindowNow(cfg WindowConfig, b Builder, w *Win) error {
 	t := a.root
 	if t == nil || t.Win != nil || t.opening > 0 {
 		t = newWindowApp(a.appObject)
+	} else if t.held {
+		t.renew() // the root's window closed: its place goes to this one, with nothing of the closed one
 	}
 	var st StartupReport
 	a.opening++
@@ -332,9 +343,24 @@ func (a *App) openWindowNow(cfg WindowConfig, b Builder, w *Win) error {
 	t.winID, t.handle = a.nextWinID, w
 	w.a, w.id = t, a.nextWinID
 	w.pw.Store(t.Win)
-	a.reopening = false
 	a.markMenus() // the bar follows the key window (menus)
 	return nil
+}
+
+// renew readies the root App, whose window closed, for the next window it
+// holds: everything of the closed window starts afresh, as in a new window's
+// App (its input, pacing and frame counts, dialogs and their results, timed
+// wakes, regions, menus, debug state, id and commands), so that nothing meant
+// for the closed window (a late dialog answer, a WakeIn that comes due, a
+// command of its stale Win) reaches the new one; the closed window's Win
+// handle stays closed (its id is not the new one's). What the run set up
+// stays: a bench and its script, a test's hook and dialog and drag targets,
+// the verbose flag and the menu demo, the process's start time.
+func (a *App) renew() {
+	old := *a
+	*a = *newWindowApp(old.appObject)
+	a.bench, a.script, a.hook, a.verbose, a.demo, a.execNs = old.bench, old.script, old.hook, old.verbose, old.demo, old.execNs
+	a.dlgT, a.dragT = old.dlgT, old.dragT
 }
 
 // closeRequested is the window's close button (EvClose): its CloseRequester
@@ -391,7 +417,6 @@ type appObject struct {
 	framing     int         // windows between BeginFrame and EndFrame: no frame handler draws and no safe point runs
 	opening     int         // OpenWindow is opening a window (its Init runs)
 	queuedOpens int         // OpenWindow calls waiting for a safe point
-	reopening   bool        // DefaultEvent asked for the main window again
 	barWin      *App        // the window whose menu bar is installed (menus.go)
 	barModel    *menu.Model // the model of the last window bar installed
 
