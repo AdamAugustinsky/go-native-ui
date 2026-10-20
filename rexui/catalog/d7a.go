@@ -311,6 +311,7 @@ var d7aPage = []string{
 	"badges", "avatars", "skeletons", "empty-state",
 	"banner-info", "banner-success", "banner-warning", "banner-error", "toast",
 	"popover-below", "popover-above", "chat", "chat-rows", "completion-list",
+	"composer", "composer-typing", "composer-attachments", "composer-sending", "composer-disabled", "composer-completion", "composer-inactive", // d7b.go
 }
 
 func init() {

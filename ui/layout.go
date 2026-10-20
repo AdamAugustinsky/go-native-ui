@@ -153,6 +153,7 @@ func (c *Context) layout() {
 			setRect(cb)
 		}
 	}
+	c.avoidHosts()
 	c.propagateHidden()
 }
 

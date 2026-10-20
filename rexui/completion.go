@@ -10,8 +10,8 @@ import (
 // The completion popup list: the list of candidates a text box offers while it
 // is being typed in (mentions, emoji, slash commands, a combo box's choices).
 // It is a drawn popup below or above a caret rectangle with rows the keyboard
-// moves through. It is the contract the composer's completion handoff
-// (N4, D7b) is written against, and the list of Combobox.
+// moves through. It is the list of the Composer (the hosted editor's handoff,
+// N4 and D7b) and of Combobox.
 //
 // # The handoff
 //
@@ -31,6 +31,20 @@ import (
 //	sig := rexui.CompletionList(k, "Mentions", &v.comp, items, caretRect, rexui.CompletionOpts{Exclude: editorRect})
 //	if sig.Chosen >= 0 { v.insert(items[sig.Chosen]); v.closeList() } // a click
 //	if sig.Dismissed { v.closeList() }                                  // a press outside
+//
+// The Composer does all of this for its editor: it turns the hosted editor's
+// keys into ui.FieldCommands (base.FieldCommandOf) and offers them to the
+// list's commander, as it registers the commander with its drawn field, builds
+// the list at the caret with Exclude set to the field, and reports the result
+// (ComposerSignal.Completion). The rest of this comment is for an editor of
+// your own.
+//
+// The Composer does all of this for its editor: it turns the hosted editor's
+// keys into ui.FieldCommands (base.FieldCommandOf) and offers them to the
+// list's commander, as it registers the commander with its drawn field, builds
+// the list at the caret with Exclude set to the field, and reports the result
+// (ComposerSignal.Completion). The rest of this comment is for an editor of
+// your own.
 //
 // A drawn editor (a ui text field) does the same through ui's field commands:
 // CompletionState.Attach registers the state as the commander of the next
@@ -139,6 +153,7 @@ type CompletionState struct {
 	// row is brought into view when the highlight changes, not on every
 	// frame, so the wheel can scroll it away.
 	revealed int
+	rows     int              // how many rows the list showed in the last frame
 	n        int              // the number of rows, for Attach
 	pending  CompletionResult // what the last command did, for Take
 }
@@ -294,7 +309,12 @@ func completion(k *base.Kit, label string, st *CompletionState, items []Completi
 	}
 
 	// bring the highlight into view when it changes (the keyboard, the
-	// pointer, a reset); the wheel scrolls it away again and it stays away
+	// pointer, a reset) or when the list holds fewer or more rows than it did
+	// (the window or the editor moved: the highlight may be out of the rows
+	// that remain); the wheel scrolls it away again and it stays away
+	if st.rows != rows {
+		st.rows, st.revealed = rows, 0
+	}
 	if st.Sel >= 0 && st.revealed != st.Sel+1 {
 		if st.Sel < st.top {
 			st.top = st.Sel
@@ -326,7 +346,7 @@ func completion(k *base.Kit, label string, st *CompletionState, items []Completi
 	if ex := o.Exclude; ex[2] > ex[0] && ex[3] > ex[1] { // outside the editor: against its edge, at the caret's x
 		anchor = [4]float32{caret[0], ex[1], max(caret[2], caret[0]), ex[3]}
 	}
-	c.NextOverlay(ui.OverlayOpts{NoFocus: true, Dismiss: dismiss})
+	c.NextOverlay(ui.OverlayOpts{NoFocus: true, Dismiss: dismiss, AvoidHosts: true})
 	c.NextSize(ui.Px(w), ui.Children(1))
 	ov := c.BeginOverlay(okey, ui.OverlayPopup, anchor, place)
 	sig.Dismissed = ov.Dismissed
@@ -454,8 +474,15 @@ func (s *completionCmd) FieldCommand(cmd ui.FieldCommand, _ rune) bool {
 // Take says what they did. Call it only while the list is shown, and not while
 // the input method has marked text (the field offers nothing then anyway).
 func (s *CompletionState) Attach(c *ui.Context, n int) {
+	c.NextFieldCommander(s.commander(n), "")
+}
+
+// commander is the state as the ui.FieldCommander of a list of n rows: what
+// Attach registers with a drawn text field, and what the Composer offers the
+// hosted editor's keys (base.FieldCommandOf) to.
+func (s *CompletionState) commander(n int) ui.FieldCommander {
 	s.n = n
-	c.NextFieldCommander((*completionCmd)(s), "")
+	return (*completionCmd)(s)
 }
 
 // Take returns what the commands since the last Take did: the result of the
