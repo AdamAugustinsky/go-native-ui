@@ -1,5 +1,3 @@
-//go:build gnui_f3
-
 package widgettest
 
 import (
@@ -10,8 +8,7 @@ import (
 )
 
 // This file needs the application object (phase 6, F3: app.Main, Handler,
-// app.Event), and is built with the gnui_f3 tag until F3 is merged; then the
-// tag line goes and these are ordinary.
+// app.Event).
 //
 // The application object delivers what the system does to the app as app
 // events on the Handler. These deliver the same events without the system,

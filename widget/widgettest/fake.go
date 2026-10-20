@@ -19,7 +19,7 @@ import (
 // with ViewString and SetViewString (macOS, in a live window), the answers of
 // the AppKit sheets themselves are Sheet.Press and Sheet.End (macOS), and the application
 // object's events (notification responses, reopen, a quit request) are in
-// fake_f3.go behind the gnui_f3 tag until the application object lands.
+// fake_f3.go.
 
 // DialogCall is one alert or panel the app asked for.
 type DialogCall struct {
@@ -50,14 +50,13 @@ type FakeDialogs struct {
 
 	a    *app.App
 	next platform.DialogTicket
-	res  map[platform.DialogTicket]platform.DialogResult
 }
 
 var _ app.DialogTarget = (*FakeDialogs)(nil)
 
 // NewFakeDialogs makes a FakeDialogs for a (installing it with a.DebugSetDialogs).
 func NewFakeDialogs(a *app.App) *FakeDialogs {
-	f := &FakeDialogs{a: a, res: map[platform.DialogTicket]platform.DialogResult{}}
+	f := &FakeDialogs{a: a}
 	a.DebugSetDialogs(f)
 	return f
 }
@@ -99,11 +98,6 @@ func (f *FakeDialogs) CancelDialog(t platform.DialogTicket) bool {
 	return false
 }
 
-// DialogResult implements app.DialogTarget.
-func (f *FakeDialogs) DialogResult(e platform.Event) platform.DialogResult {
-	return f.res[platform.DialogTicket(e.Tag)]
-}
-
 // Open returns the dialogs shown and not answered yet, oldest first.
 func (f *FakeDialogs) Open() []DialogCall {
 	var open []DialogCall
@@ -127,7 +121,6 @@ func (f *FakeDialogs) finish(r platform.DialogResult, kinds ...platform.DialogKi
 		}
 		c.Answered = true
 		r.Ticket, r.Kind = c.Ticket, c.Kind
-		f.res[c.Ticket] = r
 		f.a.DebugDialogEnded(r)
 		return nil
 	}

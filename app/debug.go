@@ -433,8 +433,6 @@ func (a *App) dispatch(e *platform.Event) {
 		}
 	case platform.EvHostFocus, platform.EvHostCommand:
 		k = CauseHost
-	case platform.EvDialog:
-		k = CauseDialog
 	case platform.EvCommand:
 		k = CauseMenu
 	default:

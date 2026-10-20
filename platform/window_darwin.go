@@ -51,29 +51,17 @@ func Open(o Options) (*Window, error) {
 	}
 	nOpenStages = 0
 	markOpen("start")
-	appKit, err := loadFramework("/System/Library/Frameworks/AppKit.framework/AppKit")
-	if err != nil {
+	if err := ensureApp(); err != nil { // frameworks, classes, NSApp and its delegate (appobj_darwin.go)
 		return nil, err
 	}
-	if _, err := loadFramework("/System/Library/Frameworks/QuartzCore.framework/QuartzCore"); err != nil {
-		return nil, err
-	}
-	foundation, _ := loadFramework("/System/Library/Frameworks/Foundation.framework/Foundation")
-	defaultMode = stringConstant(foundation, "NSDefaultRunLoopMode")
-	commonModes = stringConstant(foundation, "NSRunLoopCommonModes")
-	_ = appKit
-	markOpen("frameworks")
-	classesOnce.Do(registerClasses)
-	markOpen("classes")
+	markOpen("app")
 
 	F := objc.F
 	pool := F.Call0(objc.PoolPush)
 	defer F.Call1(objc.PoolPop, pool)
 
 	w := &Window{q: newEventQueue(), scale: 1, linkPaused: true, visible: -1, marked: make([]byte, 0, 256), tmp: make([]byte, 0, 256)}
-	skipStateRestoration()
-	w.app = objc.Send(objc.Cls("NSApplication"), selSharedApplication)
-	objc.Send1(w.app, selSetActivation, 0) // NSApplicationActivationPolicyRegular
+	w.app = appObj.app
 	loadCursors()
 	markOpen("NSApplication")
 
@@ -127,18 +115,10 @@ func Open(o Options) (*Window, error) {
 		Arg(uintptr(w.view)).Arg(0).Call(objc.MsgSend).R0())
 	objc.Send1(w.view, selAddTracking, uintptr(ta))
 
-	// One reusable application-defined event for wakeups.
-	w.wakeEv = objc.Retain(objc.ID(F.Reset().Arg(uintptr(objc.Cls("NSEvent"))).Arg(uintptr(selOtherEvent)).
-		Arg(15 /* NSEventTypeApplicationDefined */).ArgPoint(0, 0).Arg(0).ArgF64(0).Arg(0).Arg(0).
-		Arg(wakeSubtype).Arg(0).Arg(0).Call(objc.MsgSend).R0()))
-	clsNSDate = objc.Cls("NSDate")
-	w.distantPast = objc.Retain(objc.Send(clsNSDate, selDistantPast))
-	w.distantFuture = objc.Retain(objc.Send(clsNSDate, selDistantFuture))
+	w.wakeEv, w.distantPast, w.distantFuture = appObj.wakeEv, appObj.distantPast, appObj.distantFuture
 
 	theWindow.Store(w)
 	markOpen("view+setup")
-	objc.Send(w.app, selFinishLaunching)
-	markOpen("finishLaunching")
 	if !o.Hidden {
 		w.Show()
 		markOpen("orderFront+activate")
@@ -162,13 +142,19 @@ func Open(o Options) (*Window, error) {
 }
 
 // Show orders the window front and activates the app. Open calls it unless
-// Options.Hidden is set.
+// Options.Hidden is set. The window becomes key only if the app is active:
+// opened in the background (open -g, or a launch that may not activate
+// itself) it is not, and an EvFocus says so; it becomes key, with its own
+// EvFocus, once the app is activated.
 func (w *Window) Show() {
 	objc.Send1(w.win, selMakeKeyFront, 0)
 	// A process started from a background shell may not activate itself
 	// (macOS 14 cooperative activation); its window would open occluded.
 	objc.Send(w.win, selOrderFrontRegardless)
 	objc.Send(w.app, selActivate)
+	if !objc.SendBool(w.win, selIsKeyWindow) {
+		windowFocus(false) // windowDidBecomeKey: reported it otherwise
+	}
 	if w.link != 0 {
 		w.setRateRange(w.link) // the screen is known for certain once shown
 	}
@@ -210,6 +196,7 @@ func (w *Window) Native() Native {
 
 // Close closes the window.
 func (w *Window) Close() {
+	forgetAssumedKey(w)
 	forgetPaste(w) // a read of the pasteboard for this window is not delivered (paste_darwin.go)
 	w.closeAux()   // sheets first: a window closed under a sheet never calls its completion
 	w.closeDrag()
@@ -227,4 +214,18 @@ func (w *Window) Close() {
 	if secure.want {
 		SetSecureInput(false) // the field that wanted it is gone; activation must not bring it back
 	}
+}
+
+// Focused reports whether the window has the keyboard focus (it is the key
+// window); for a window not shown yet, whether it will have it when shown:
+// whether the app is active. The app starts its input state from it, before
+// the first frame, and EvFocus follows every change.
+func (w *Window) Focused() bool {
+	if keyAssumed(w) {
+		return true
+	}
+	if objc.SendBool(w.win, selIsVisible) {
+		return objc.SendBool(w.win, selIsKeyWindow)
+	}
+	return objc.SendBool(w.app, selIsActiveApp)
 }

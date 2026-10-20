@@ -30,7 +30,7 @@
 //	(*Window).PopUpMenu(*Popup) int       a native context, pull-down or list menu; returns the chosen item (macOS; -1 elsewhere)
 //	HasNativeMenus() bool                 whether the OS has native menus (macOS)
 //	(*Window).Alert(AlertSpec), OpenPanel(OpenSpec), SavePanel(SaveSpec)
-//	                                      native alert and file panel sheets (macOS; ErrUnsupported elsewhere); the answer is an EvDialog, see dialog.go
+//	                                      native alert and file panel sheets (macOS; ErrUnsupported elsewhere); the answer is an AppEvService from SourceDialog, see dialog.go
 //	(*Window).SetTooltipRegions(r)        native tooltips by content rectangle (macOS; no-op elsewhere); diffed, cheap to call every frame
 //	(*Window).SetTooltipText(f)           where the tooltip text comes from, asked for on demand when the system shows one
 //	(*Window).SetDropKinds(k), SetDragHandler(h), StartDrag(spec)
@@ -130,7 +130,6 @@ const (
 	EvCommand                 // a native button or menu item was chosen: Tag is its command id (NativeButton.ID, HostOptions.Command, MenuItem.ID); with FlagStandard, a MenuAction
 	EvHostFocus               // the keyboard focus moved to a host (Tag: its HostID) or back to the app's own view (Tag 0)
 	EvHostCommand             // a focused host handed back Tab, Shift+Tab, Escape or Enter: Tag is the HostID, Key and Mods the key
-	EvDialog                  // an alert or file panel ended: Tag is its DialogTicket; decode with Window.DialogResult (dialog.go)
 	EvModifiers               // the modifier keys changed (a modifier pressed or released on its own): Mods are the new state, Code the raw code of the key that moved when the OS says
 	EvEdit                    // the system's key bindings turned a key into a text edit command while a text field has focus (SetTextInput): Tag is the EditCmd; the key's own EvKey is not sent (macOS: doCommandBySelector:)
 	EvMagnify                 // a pinch: Amount is the change in scale (0.1 = grow by 10 %), Phase its phase (PhaseNone: a device without phases), X, Y where it is; see Gestures
