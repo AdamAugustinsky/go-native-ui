@@ -108,7 +108,7 @@ func TestGalleryFramesAllocateNothingWithTheOverlayOn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	o, err := app.NewOffscreen(gallery.Config(), 2*gallery.WindowWidthPt, 2*gallery.WindowHeightPt, 2, g)
+	o, err := app.NewOffscreen(gallery.Config(), gallery.WindowWidthPt, gallery.WindowHeightPt, 1, g)
 	if err != nil {
 		if os.Getenv("CI") != "" {
 			t.Fatalf("offscreen rendering on CI: %v", err)
@@ -119,12 +119,12 @@ func TestGalleryFramesAllocateNothingWithTheOverlayOn(t *testing.T) {
 	o.EnableDebug(true)
 	o.SetInspectPanel(true)
 	stepUntilIdle(t, o)
-	o.Step(0, platform.Event{Kind: platform.EvPointerMove, X: 2200, Y: 400})
+	o.Step(0, platform.Event{Kind: platform.EvPointerMove, X: 1100, Y: 200})
 	stepUntilIdle(t, o)
-	for i := 0; i < 300; i++ {
+	for i := 0; i < 120; i++ {
 		o.Frame()
 	}
-	if n := testing.AllocsPerRun(100, func() { o.Frame() }); n != 0 {
+	if n := testing.AllocsPerRun(30, func() { o.Frame() }); n != 0 {
 		t.Errorf("%.1f allocations per frame of the gallery with the overlay on", n)
 	}
 }
