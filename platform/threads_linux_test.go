@@ -30,6 +30,15 @@ func threadsMade() int { return pprof.Lookup("threadcreate").Count() }
 // the burst then lacked (CI: "created 1 more"). The child waits for its first
 // answer (or failure) first, and a collection, whose mark workers want a
 // thread per processor, is off.
+//
+// The child runs with GOMAXPROCS=1 (runThreadsChild). With more processors,
+// the scheduler starts spinning threads to look for work while the burst's
+// goroutines wake, as many as it decides then: on a loaded runner one or two
+// more than at the priming (a probe on the CI runners, 600 children each:
+// 6 failed the burst loaded, 0 idle; a bare model of priming and burst made
+// an extra thread 3 times at GOMAXPROCS 4 and never at 1). With one
+// processor what is measured is what priming promises: the threads the
+// burst's goroutines hold are the primed ones.
 func threadsChild() {
 	debug.SetGCPercent(-1)
 	select {
@@ -64,7 +73,7 @@ func threadsChild() {
 func runThreadsChild(t *testing.T, burst int, env ...string) (c0, c1, c2 int) {
 	t.Helper()
 	cmd := exec.Command(os.Args[0], "-test.run=^$")
-	cmd.Env = append(os.Environ(), append([]string{"GNUI_THREADS_CHILD=1", "GNUI_THREADS_BURST=" + strconv.Itoa(burst)}, env...)...)
+	cmd.Env = append(os.Environ(), append([]string{"GNUI_THREADS_CHILD=1", "GNUI_THREADS_BURST=" + strconv.Itoa(burst), "GOMAXPROCS=1"}, env...)...)
 	out, err := cmd.Output()
 	if err != nil {
 		t.Fatalf("child: %v", err)
