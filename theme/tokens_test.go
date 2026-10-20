@@ -614,3 +614,40 @@ func TestToolbarMaterialSolid(t *testing.T) {
 		t.Errorf("Reduce Transparency keeps a translucent capsule: %+v", m)
 	}
 }
+
+// TestLegacyScrollersMatchAppKit: the legacy scrollers' widths and their
+// knob's inset match NSScroller's (testdata/appkit-scroller-27.2.json,
+// tools/appkitref/scroller.sh: -[NSScroller rectForPart:] of a vertical
+// scroller per control size and style). Overlay scrollers are not ours to
+// size (base keeps its own thin bar), so only their widths are checked.
+func TestLegacyScrollersMatchAppKit(t *testing.T) {
+	raw, err := os.ReadFile("testdata/appkit-scroller-27.2.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	type rect struct{ X, Y, W, H float32 }
+	var ref map[string]struct {
+		Width float32
+		Frame rect
+		Knob  rect
+		Slot  rect
+	}
+	if err := json.Unmarshal(raw, &ref); err != nil {
+		t.Fatal(err)
+	}
+	for k, w := range map[string]float32{"regular-legacy": MacLines.Scroller, "small-legacy": MacLines.ScrollerSmallLegacy, "mini-legacy": MacLines.ScrollerSmallLegacy, "regular-overlay": MacLines.Scroller, "small-overlay": MacLines.ScrollerSmall} {
+		r, ok := ref[k]
+		if !ok || r.Width != w || r.Frame.W != w {
+			t.Errorf("%s: %v pt, AppKit %+v", k, w, r)
+		}
+		if k[len(k)-6:] != "legacy" {
+			continue
+		}
+		in := MacLines.ScrollerKnobInset
+		for _, p := range []rect{r.Knob, r.Slot} {
+			if p.X != in || p.W != w-2*in || p.Y != in || p.Y+p.H > r.Frame.H-in+0.5 {
+				t.Errorf("%s: knob or slot %+v in %+v, want %v pt in at the sides and ends", k, p, r.Frame, in)
+			}
+		}
+	}
+}
