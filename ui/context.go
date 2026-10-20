@@ -273,6 +273,8 @@ type Context struct {
 	pasteReq bool
 
 	nt nativeTips // native tooltips declared this frame (regions_native.go)
+
+	drop dropState // drop targets and drags out (drag.go)
 	// native menus (nativemenu.go)
 	nativeMenus bool
 	menuReq     MenuRequest
@@ -426,6 +428,7 @@ func (c *Context) Begin(in *Input, widthPx, heightPx int, scale, dt float32) {
 	c.rScroll = rate(c.Rates.Scroll, dt)
 
 	c.hitTest()
+	c.dropBegin()
 	c.overlayInput()
 	c.mouse()
 	c.claimFieldKeys()
