@@ -266,6 +266,8 @@ type Context struct {
 	fieldOwner Key                 // the text field that had the focus at Begin and owns this frame's keys and edit actions; 0 none
 	carry      [MaxEdit]EditAction // edit actions queued after the field was built: for the next frame
 	nCarry     int
+	held       [MaxScrolls]ScrollEvent // scroll events kept for the frame after a scale change (holdScroll)
+	nHeld      int
 	cmdTaken   int // Input.Commands taken so far this frame (TakeCommand)
 	activated  Key // the box that took its Enter/Space activation this frame (Signal)
 	// a text field asked for the clipboard text (PasteRequest)
@@ -295,7 +297,8 @@ type Context struct {
 	overflowRun    int    // frames in a row that dropped glyphs
 	overflowFrames uint64 // ... in total
 
-	fonts []fontInfo
+	fonts   []fontInfo
+	fontGen uint32 // the text system's RunGeneration fonts was read at
 
 	dbg *debugState // the recording of EnableDebug (debug.go); nil off
 
@@ -403,11 +406,26 @@ func (c *Context) Begin(in *Input, widthPx, heightPx int, scale, dt float32) {
 	c.frame++
 	c.in = *in
 	c.pruneDeadlines()
+	if c.sh != nil {
+		if g := c.sh.RunGeneration(); g != c.fontGen {
+			// The text system dropped its runs: that happens when it evicts, and
+			// when it releases fonts (text.System.ReleaseScale), whose keys then
+			// name other fonts. What was read of the fonts is read again.
+			clear(c.fonts)
+			c.fontGen = g
+		}
+	}
+	old := c.scale
 	c.w, c.h, c.scale, c.dt = widthPx, heightPx, scale, dt
 	c.fr.Swap()
 	c.fmtA.Reset()
 	c.prevOrder, c.order = c.order, c.prevOrder[:0]
-	c.animating, c.scrollSet = false, false
+	changed := old > 0 && scale != old // the window's scale changed (a new display, an app zoom)
+	if changed {
+		c.rescaleScroll(float64(scale) / float64(old))
+	}
+	c.holdScroll(changed)
+	c.animating, c.scrollSet = c.nHeld > 0, false // (held input needs the next frame)
 	c.wakeNs, c.imeOK, c.imeCancel = 0, false, false
 	c.takeCommit()
 	c.rich, c.richSpans, c.richStyles = c.rich[:0], c.richSpans[:0], c.richStyles[:0]
@@ -449,6 +467,73 @@ func (c *Context) Begin(in *Input, widthPx, heightPx int, scale, dt float32) {
 	c.root = root
 	c.parents[0] = root
 	c.nparents = 1
+}
+
+// rescaleScroll keeps every scrolled box at the same place in its content
+// when the scale changes by the factor r: the offsets are in pixels, so they
+// are multiplied, and the view stays on what it showed at the top. The extents
+// (content, view) are not: they are not a ratio of the old ones (a viewport
+// that fills the window keeps its size in pixels when the zoom grows, a
+// virtual list divides by the scale), so they are laid out again by the frame,
+// and the frame's scroll input waits for that (holdScroll). The trackpad
+// stretches are pixels too.
+func (c *Context) rescaleScroll(r float64) {
+	for _, id := range c.prevOrder {
+		b := &c.boxes[id]
+		if b.flags&scrollMask == 0 {
+			continue
+		}
+		for a := 0; a < 2; a++ {
+			b.scroll[a] *= r
+			b.scrollTgt[a] *= r
+		}
+	}
+	for i := 0; i < c.sp.n; i++ {
+		rb := &c.sp.rb[i]
+		for a := 0; a < 2; a++ {
+			rb.s[a] *= r
+			rb.force[a] *= r
+			rb.x0[a] *= r
+			rb.v0[a] *= r
+		}
+	}
+}
+
+// holdScroll keeps the frame's scroll events (wheel, gesture, momentum) for
+// the next frame while the scale changes. The scroll limits are those of the
+// last layout, which is at the old scale; the first layout at the new scale is
+// this frame's, so events applied now would be clamped, or bounced off the
+// edge, by bounds that are about to change. They are applied, in order and
+// with their phases, in the frame after, against the layout that exists then
+// (and the frame is requested). Held events go before the ones that arrive
+// meanwhile, and a second scale change holds them again.
+func (c *Context) holdScroll(changed bool) {
+	in := &c.in
+	if !changed && c.nHeld == 0 {
+		return
+	}
+	if in.NScrolls == 0 && (in.ScrollX != 0 || in.ScrollY != 0) { // set without AddScroll
+		in.AddScrollEvent(ScrollEvent{DX: in.ScrollX, DY: in.ScrollY, Precise: in.Precise})
+	}
+	in.ScrollX, in.ScrollY = 0, 0
+	if changed { // everything waits, after what already waits
+		for i := 0; i < in.NScrolls; i++ {
+			addScrollEvent(&c.held, &c.nHeld, in.Scrolls[i])
+		}
+		in.NScrolls = 0
+		return
+	}
+	// The held events come first.
+	var now [MaxScrolls]ScrollEvent
+	n := copy(now[:], in.Scrolls[:in.NScrolls])
+	in.NScrolls = 0
+	for i := 0; i < c.nHeld; i++ {
+		in.AddScrollEvent(c.held[i])
+	}
+	c.nHeld = 0
+	for i := 0; i < n; i++ {
+		in.AddScrollEvent(now[i])
+	}
 }
 
 // takeCommit moves the text that committed an input-method composition out of

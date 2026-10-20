@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"testing"
 	"time"
 
@@ -372,5 +373,73 @@ func TestSaveDoesNotBlockOnTheDisk(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "window-main.json")); err != nil {
 		t.Errorf("Close wrote nothing: %v", err)
+	}
+}
+
+// The zoom is kept beside the frame and never mixed into it: a window saved at
+// 150 % comes back at the same frame and the same zoom, and a file from before
+// the zoom existed means 100 %.
+func TestZoomIsKeptApartFromTheFrame(t *testing.T) {
+	dir := t.TempDir()
+	s, _ := load(t, dir, Options{})
+	f := Rect{40, 60, 900, 640}
+	if err := s.Save(State{Frame: f, Screen: laptop(), Zoom: 1.5}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s2, _ := load(t, dir, Options{})
+	got := s2.State()
+	if got.Frame != f || got.Zoom != 1.5 || got.ZoomFactor() != 1.5 {
+		t.Errorf("loaded frame %+v zoom %v", got.Frame, got.Zoom)
+	}
+	if pl := Apply(cfg, got, []Screen{laptop()}); pl.Frame != f {
+		t.Errorf("Apply changed the frame of a zoomed window: %+v", pl.Frame)
+	}
+	if (State{Frame: f}).ZoomFactor() != 1 || (State{Zoom: -1}).ZoomFactor() != 1 || (State{Zoom: math.Inf(1)}).ZoomFactor() != 1 {
+		t.Error("no zoom, a negative zoom and an infinite one are not 100 %")
+	}
+	if err := s2.Save(State{Frame: f, Zoom: math.NaN()}); err != ErrInvalid {
+		t.Errorf("Save of a NaN zoom: %v", err)
+	}
+}
+
+// A Windows frame is in physical pixels: the points an app has (its content
+// size, Config.Width) are converted by the display's scale, and back, and the
+// zoom is not part of it.
+func TestFromPointsKnowsTheUnitOfTheOS(t *testing.T) {
+	cases := []struct {
+		goos  string
+		scale float64
+		want  float64
+	}{
+		{"darwin", 2, 1},
+		{"linux", 1.5, 1},
+		{"windows", 2, 2},
+		{"windows", 1.5, 1.5},
+		{"windows", 0, 1}, // a scale that is not known
+	}
+	for _, c := range cases {
+		if got := unitsPerPoint(c.goos, c.scale); got != c.want {
+			t.Errorf("%s at scale %v: %v units per point, want %v", c.goos, c.scale, got, c.want)
+		}
+	}
+	// A 900×640 pt window on Windows at 200 % is saved as 1800×1280 and comes back as 900×640 pt.
+	const w, h, scale = 900.0, 640.0, 2.0
+	k := unitsPerPoint("windows", scale)
+	f := Rect{X: 100, Y: 80, W: w * k, H: h * k}
+	if f.W != 1800 || f.H != 1280 {
+		t.Fatalf("frame %+v", f)
+	}
+	if f.W/k != w || f.H/k != h {
+		t.Errorf("round trip %v×%v pt", f.W/k, f.H/k)
+	}
+	// On this OS the exported pair agrees with the table.
+	if got := ToPoints(FromPoints(w, scale), scale); got != w {
+		t.Errorf("ToPoints(FromPoints(%v)) = %v", w, got)
+	}
+	if FromPoints(w, scale) != w*unitsPerPoint(runtime.GOOS, scale) {
+		t.Error("FromPoints does not use this OS's unit")
 	}
 }
