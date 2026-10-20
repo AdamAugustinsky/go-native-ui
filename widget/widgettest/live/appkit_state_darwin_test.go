@@ -6,6 +6,7 @@ import (
 	"os"
 	"slices"
 	"testing"
+	"time"
 
 	"gonativeui/app"
 	"gonativeui/internal/objc"
@@ -224,5 +225,27 @@ func TestCaptureOfTheLiveWindow(t *testing.T) {
 	path := widgettest.Capture(t, l, "probe")
 	if st, err := os.Stat(path); err != nil || st.Size() < 1000 {
 		t.Errorf("capture %s: %v", path, err)
+	}
+}
+
+// The harness leaves an idle app idle: with no wait open, a harness call that
+// changes nothing draws no frame, and a wait asks for frames only while it is
+// open.
+func TestIdleAppDrawsNothingBetweenWaits(t *testing.T) {
+	l, _ := startProbe(t)
+	l.Frames(60) // the first frames settle the layout and the animations of the start
+	n0 := l.Built()
+	time.Sleep(500 * time.Millisecond)
+	if n := l.Built(); n != n0 {
+		t.Errorf("the idle app built %d frames in half a second", n-n0)
+	}
+	l.Frames(3)
+	if n := l.Built(); n < n0+3 {
+		t.Errorf("a wait for 3 frames drew %d", n-n0)
+	}
+	n1 := l.Built()
+	time.Sleep(300 * time.Millisecond)
+	if n := l.Built(); n != n1 {
+		t.Errorf("the app kept drawing %d frames after the wait ended", n-n1)
 	}
 }

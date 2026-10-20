@@ -142,7 +142,10 @@ func (m MenuItem) Perform() bool {
 }
 
 // AppleEvent is a four-character code pair of an Apple event: class and ID.
-type AppleEvent struct{ Class, ID uint32 }
+type AppleEvent struct {
+	// Class and ID are the event's class and ID codes.
+	Class, ID uint32
+}
 
 // QuitAppleEvent is kAEQuitApplication ('aevt' 'quit'), the event the Dock's
 // Quit and the logout send.

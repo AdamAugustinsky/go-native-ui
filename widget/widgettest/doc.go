@@ -40,4 +40,48 @@
 // never returns false, so a test plays as many lists of steps as it likes; a
 // Player used on its own as a Scripter does return false when its steps are
 // done, unless it loops.
+//
+// # Real windows (macOS)
+//
+// Offscreen frames take the platform out of the picture. RunLive opens the real
+// window for a few frames and reads what the system says about it. StartLive
+// keeps it open: a LiveApp runs the app's loop on the main thread (the test
+// package calls RunMain from TestMain) while the test goroutine drives it:
+//
+//	l := widgettest.StartLive(t, cfg, builder)
+//	l.Click(ui.RoleButton, "Press")                 // real NSEvents, through the pump
+//	l.Type("hello")                                 // key events, the view's keyDown:, the input method
+//	l.Scroll(x, y, 0, -125)                         // a trackpad scroll, built from a CGEvent
+//	l.Magnify(x, y, 0.5, 3)                         // a pinch, begun, changed, ended
+//	l.Until("the dialog is answered", 120, cond)    // frame time, never wall time
+//	l.Do(func(a *app.App) { ... AppKit ... })       // on the main thread, between frames
+//
+// Waits count frames, not seconds, because a runner's display can stall for
+// half a minute; a test is skipped only when not one frame is drawn in 90 s.
+// The input helpers are also functions of Win (NativeWindow): MouseEvent,
+// KeyEvent, Key, ScrollEvent, MagnifyEvent, RotateEvent, SmartMagnifyEvent,
+// each building an NSEvent aimed at a pixel of the content, and Post, Send and
+// Dispatch hand it to AppKit. TextClient calls the NSTextInputClient methods
+// of a view (setMarkedText, insertText, unmarkText, firstRect…) as an input
+// method does; ViewString and SetViewString read and set the text of a hosted
+// native view. Windows, FindMenuItem, Sheet, SetAppAppearance, OpenPlainWindow,
+// SendQuitEvent and PressCmdQ are the AppKit state and the app-level flows (the
+// quit, a menu item, an alert sheet, another window, the appearance).
+//
+// A flow that ends the process (an allowed quit) is a Scenario: the test binary
+// runs again as a child, RegisterScenario's function on its main thread, and
+// reports with Say. The flows of the application object (reopen, quit with no
+// window, delayed replies, a menu command with no window) are in
+// live/appflows_f3_darwin_test.go behind the gnui_f3 tag until F3 is merged.
+//
+// # Golden files, captures and fakes
+//
+// AssertTree and AssertImage compare with files in testdata, rewrite them with
+// -update (DefineUpdateFlag) and leave what the test got in testdata/failed;
+// images are compared in CIELAB with a perceptual Tolerance. Capture takes a
+// picture of the real window with GnuiShot when GNUI_GNUISHOT names its
+// script. The fakes of native surfaces: FakeDialogs answers an app's alerts and
+// panels, and the steps Command, Edit, Appearance and Do deliver a menu
+// command, an Edit action, a change of the system's appearance and any
+// function at an exact frame.
 package widgettest

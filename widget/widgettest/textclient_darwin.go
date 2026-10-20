@@ -20,7 +20,10 @@ const NotFound = uint(1<<63 - 1)
 
 // Range is an NSRange: a location and a length in UTF-16 code units, the unit
 // of NSTextInputClient.
-type Range struct{ Loc, Len uint }
+type Range struct {
+	// Loc is the location and Len the length, in UTF-16 units.
+	Loc, Len uint
+}
 
 // NoRange is the range that means "none" in setMarkedText:selectedRange:
 // replacementRange: and insertText:replacementRange: (replace nothing: the
