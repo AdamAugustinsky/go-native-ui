@@ -3,6 +3,8 @@ package pilot
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"gonativeui/app"
@@ -11,6 +13,7 @@ import (
 	"gonativeui/platform"
 	"gonativeui/theme"
 	"gonativeui/ui"
+	"gonativeui/widget/widgettest"
 )
 
 // The offscreen scene: two folders with fixed names (some not ASCII, with an
@@ -90,15 +93,42 @@ func ready(dir string, l *fs.Listing) <-chan Ready {
 	return ch
 }
 
-// SceneOptions are the Options of the offscreen scene.
+// SceneOptions are the Options of the offscreen scene: the fixed folders, the
+// sidebar's places (the home folder's usual ones, the volume), the traffic
+// lights, UTC and animations held still.
 func SceneOptions() Options {
 	return Options{
-		Home: nativePath("/Users/rex"), Traffic: true, Loc: time.UTC,
+		Home: nativePath("/Users/rex"), Traffic: true, Loc: time.UTC, Still: true, RootTitle: "Macintosh HD",
+		Places: []Place{
+			{Title: "rex", Path: nativePath("/Users/rex"), Symbol: "house"},
+			{Title: "Desktop", Path: nativePath("/Users/rex/Desktop"), Symbol: "menubar.dock.rectangle"},
+			{Title: "Documents", Path: nativePath("/Users/rex/Documents"), Symbol: "doc"},
+			{Title: "Downloads", Path: nativePath("/Users/rex/Downloads"), Symbol: "arrow.down.circle"},
+			{Title: "Applications", Path: nativePath("/Applications"), Symbol: "square.grid.2x2"},
+			{Title: "Macintosh HD", Path: nativePath("/"), Group: 1, Symbol: "internaldrive"},
+		},
 		Initial: [2]<-chan Ready{
 			ready(nativePath("/Users/rex/Projects/pilot"), sceneListing(sceneLeft)),
 			ready(nativePath("/Users/rex/Downloads"), sceneListing(sceneRight)),
 		},
 	}
+}
+
+// longer repeats items n times, the copies numbered, so that a list is taller
+// than the window.
+func longer(items []item, n int) []item {
+	out := append([]item(nil), items...)
+	for k := 2; k <= n; k++ {
+		for _, it := range items {
+			if it.flags&fs.FlagHidden != 0 {
+				continue
+			}
+			ext := filepath.Ext(it.name)
+			it.name = fmt.Sprintf("%s %d%s", strings.TrimSuffix(it.name, ext), k, ext)
+			out = append(out, it)
+		}
+	}
+	return out
 }
 
 // SceneSetup puts the offscreen scene in its state: the left pane shows hidden
@@ -115,7 +145,8 @@ func (pl *Pilot) SceneSetup() {
 }
 
 // ScenePost selects rows 5..7 of the left pane (the cursor on the last) and
-// shows the keyboard cursor, as the left pane has the keyboard.
+// shows the keyboard cursor, as the left pane has the keyboard. In the
+// scrolled scene the left list is scrolled 130 pt, under the toolbar.
 func (pl *Pilot) ScenePost() {
 	v := &pl.panes[0].v
 	if v.nRows() > 8 {
@@ -123,18 +154,27 @@ func (pl *Pilot) ScenePost() {
 		v.ts.Sel.SelectRange(v.order(), 5, 7)
 		pl.panes[0].reveal = 7
 	}
+	if pl.scrolled {
+		pl.panes[0].reveal = -1
+		v.ts.SetTopRow(int((130-5)/24), (130-5)/24-float32(int((130-5)/24)))
+	}
 	if rv := &pl.panes[1].v; rv.nRows() > 0 {
 		rv.selectOnly(rv.entryAt(0))
 	}
 	pl.a.UI.SetFocusVisible(true)
 }
 
-// Look is how a picture is made light or dark. An offscreen window has no
-// system to follow: System says what the system's appearance is (the zero
-// value: not known, so light), and Preference whether the window follows it.
+// Look is how a picture is made. An offscreen window has no system to
+// follow: System says what the system's appearance is (the zero value: not
+// known, so light), and Preference whether the window follows it. Inactive
+// makes the window not key, Scrolled scrolls the left list under the toolbar
+// (the scene's lists are then longer), Legacy pins legacy scroll bars and Mono
+// sets the list in Menlo.
 type Look struct {
-	Preference theme.Preference
-	System     ui.Appearance
+	Preference                 theme.Preference
+	System                     ui.Appearance
+	Inactive, Scrolled, Legacy bool
+	Mono                       bool
 }
 
 // RenderDirsShot renders the first frame Pilot shows for two real directories
@@ -147,7 +187,7 @@ func RenderDirsShot(path string, w, h int, scale float32, home string, dirs [2]s
 
 // RenderDirsShotLook is RenderDirsShot in a Look.
 func RenderDirsShotLook(path string, w, h int, scale float32, home string, dirs [2]string, look Look) (quads, drawCalls int, err error) {
-	opt := Options{Home: home, Preference: look.Preference}
+	opt := Options{Home: home, Preference: look.Preference, Still: true, Legacy: look.Legacy, Mono: look.Mono}
 	for i, d := range dirs {
 		l := new(fs.Listing)
 		if err := fs.ListDir(d, l); err == nil {
@@ -155,7 +195,7 @@ func RenderDirsShotLook(path string, w, h int, scale float32, home string, dirs 
 		}
 		opt.Initial[i] = ready(d, l)
 	}
-	return shoot(New(opt), path, w, h, scale, true, look.System, nil, nil)
+	return shoot(New(opt), path, w, h, scale, true, look, nil, nil)
 }
 
 // RenderShot renders the scene offscreen at w×h pixels and the given scale
@@ -168,28 +208,59 @@ func RenderShot(path string, w, h int, scale float32, corners bool) (quads, draw
 
 // RenderShotLook is RenderShot in a Look.
 func RenderShotLook(path string, w, h int, scale float32, corners bool, look Look) (quads, drawCalls int, err error) {
+	pl := NewScene(look)
+	return shoot(pl, path, w, h, scale, corners, look, pl.SceneSetup, pl.ScenePost)
+}
+
+// NewScene is the offscreen scene's Pilot in a Look.
+func NewScene(look Look) *Pilot {
 	opt := SceneOptions()
 	opt.Preference = look.Preference
+	opt.Legacy, opt.Mono = look.Legacy, look.Mono
+	left, right := sceneLeft, sceneRight
+	if look.Scrolled {
+		left, right = longer(left, 3), longer(right, 3)
+	}
+	opt.Initial[0] = ready(nativePath("/Users/rex/Projects/pilot"), sceneListing(left))
+	opt.Initial[1] = ready(nativePath("/Users/rex/Downloads"), sceneListing(right))
 	pl := New(opt)
-	return shoot(pl, path, w, h, scale, corners, look.System, pl.SceneSetup, pl.ScenePost)
+	pl.scrolled = look.Scrolled
+	return pl
+}
+
+// shotApp is the scene with the window state an offscreen run lacks: the
+// system's appearance, whether the window is key, and a clock for the scroll
+// bars' fade.
+type shotApp struct {
+	*Pilot
+	sys      ui.Appearance
+	inactive bool
+}
+
+func (s *shotApp) Script(frame int, in *ui.Input) bool {
+	s.a.UI.SetSystemAppearance(s.sys)
+	in.Focused = !s.inactive
+	in.Time = widgettest.Clock(frame)
+	return true
 }
 
 // shoot renders pl offscreen until it settles (setup before the first frame,
 // post once the rows exist; either may be nil) and writes the PNG.
-func shoot(pl *Pilot, path string, w, h int, scale float32, corners bool, sys ui.Appearance, setup, post func()) (quads, drawCalls int, err error) {
-	o, err := app.NewOffscreen(Config(), w, h, scale, pl)
+func shoot(pl *Pilot, path string, w, h int, scale float32, corners bool, look Look, setup, post func()) (quads, drawCalls int, err error) {
+	sa := &shotApp{Pilot: pl, sys: look.System, inactive: look.Inactive}
+	o, err := app.NewOffscreen(Config(), w, h, scale, sa)
 	if err != nil {
 		return 0, 0, err
 	}
 	defer o.Close()
-	frame := func() {
-		o.UI.SetSystemAppearance(sys)
-		o.Frame()
-	}
 	settle := func() error {
 		for n := 0; n < 600; n++ {
-			frame()
-			if !o.UI.Animating() {
+			o.Frame()
+			if pl.IconsPending() {
+				time.Sleep(2 * time.Millisecond)
+				continue
+			}
+			if n > 90 && !o.UI.Animating() { // past the scroll bars' fade
 				return nil
 			}
 		}
@@ -207,25 +278,20 @@ func shoot(pl *Pilot, path string, w, h int, scale float32, corners bool, sys ui
 	if err := settle(); err != nil {
 		return 0, 0, err
 	}
-	o.UI.SetSystemAppearance(sys)
 	img, _ := o.Frame()
-	face := monoFace()
-	if face == "" {
-		face = "system monospaced"
+	face := "system"
+	if look.Mono {
+		face = monoFace()
+		if face == "" {
+			face = "system monospaced"
+		}
 	}
 	meta := map[string]any{
-		"cellAdvancePt": pl.cellAdvancePt(), "rowPitchPt": float64(listRowPt), "monoFace": face,
+		"listFont": face, "inactive": look.Inactive, "scrolled": look.Scrolled,
 		"quads": len(o.Quads()), "drawCalls": o.R.DrawCalls(),
 	}
 	if err := rexrig.WritePNG(path, img.Pix, w, h, corners, meta); err != nil {
 		return 0, 0, fmt.Errorf("pilot: write %s: %w", path, err)
 	}
 	return len(o.Quads()), o.R.DrawCalls(), nil
-}
-
-// cellAdvancePt is the advance of a character of the list's monospace font in
-// points.
-func (pl *Pilot) cellAdvancePt() float64 {
-	r := pl.k.Theme()
-	return float64(pl.a.Text.Metrics(r.Font.Mono).MonoAdvance) / float64(r.Scale)
 }

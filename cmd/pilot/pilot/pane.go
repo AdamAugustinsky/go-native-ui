@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"gonativeui/fs"
+	"gonativeui/rexui"
 	"gonativeui/ui"
 	"gonativeui/widget"
 )
@@ -81,8 +82,20 @@ type pane struct {
 	scrollRow int // row to put at the top at the next build (after a swap), -1 none
 	scrollOff float32
 
-	cols [3]widget.Column // the table's columns: Name, Size, Modified (the user can resize them)
+	cols [3]widget.Column // the table's columns: Name, Date Modified, Size (the user can resize them)
+
+	// the path bar: the components of dir from the root, and the bar's items
+	// (symbols set when it is drawn); pathEdit shows the path field in its
+	// place (⌘L) until it is left
+	crumbs    []crumb
+	crumbItem []rexui.PathItem
+	pathEdit  bool
+	rootTitle string
+	under     bool // rows are scrolled under the toolbar (the last frame's)
 }
+
+// crumb is one component of the path bar: its name and the folder it opens.
+type crumb struct{ title, path string }
 
 func newPane(id uint32, src Source, home string) *pane {
 	p := &pane{id: id, src: src, home: home, hideHidden: true, pendSel: -1, topEntry: -1, reveal: -1, scrollRow: -1}
@@ -97,6 +110,38 @@ func (p *pane) setDir(dir string) {
 	p.base = filepath.Base(dir)
 	if p.base == "." || p.base == string(filepath.Separator) {
 		p.base = dir
+		if p.rootTitle != "" && dir == p.parent {
+			p.base = p.rootTitle
+		}
+	}
+	p.setCrumbs()
+}
+
+// setCrumbs makes the path bar's components: the folders from the root to
+// dir, the root named by the volume's name.
+func (p *pane) setCrumbs() {
+	p.crumbs = p.crumbs[:0]
+	for d := p.dir; d != ""; {
+		title := filepath.Base(d)
+		parent := parentPath(d)
+		if parent == d {
+			title = d
+			if p.rootTitle != "" {
+				title = p.rootTitle
+			}
+		}
+		p.crumbs = append(p.crumbs, crumb{title, d})
+		if parent == d {
+			break
+		}
+		d = parent
+	}
+	for i, j := 0, len(p.crumbs)-1; i < j; i, j = i+1, j-1 {
+		p.crumbs[i], p.crumbs[j] = p.crumbs[j], p.crumbs[i]
+	}
+	p.crumbItem = p.crumbItem[:0]
+	for _, c := range p.crumbs {
+		p.crumbItem = append(p.crumbItem, rexui.PathItem{Title: c.title})
 	}
 }
 

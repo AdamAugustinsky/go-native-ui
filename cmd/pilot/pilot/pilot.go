@@ -24,33 +24,39 @@ import (
 
 	"gonativeui/app"
 	"gonativeui/fs"
+	"gonativeui/img"
+	"gonativeui/rexui"
 	"gonativeui/text"
 	"gonativeui/theme"
 	"gonativeui/ui"
 	"gonativeui/widget"
+	"gonativeui/widget/base"
 )
 
 // Window geometry, in points.
 const (
 	WindowWidthPt  = 1200
 	WindowHeightPt = 760
-	MinWidthPt     = 600
+	MinWidthPt     = 640
 	MinHeightPt    = 400
 )
 
-// titlebarPt is the height of the titlebar band in points: the Rex theme's.
-const titlebarPt = 46
+// toolbarStyle is Pilot's toolbar: Finder's unified one (52 pt, capsule
+// items, a 15 pt bold title), with the system's glass behind the sidebar and
+// the capsules.
+const toolbarStyle = theme.ToolbarUnified
 
-// Config is Pilot's window: the Rex chrome (46 pt titlebar, the system's window
-// buttons where ButtonsTraffic draws its own, theme.TrafficCentrePt) at
-// 1200×760 pt, at least 600×400.
+// Config is Pilot's window: the unified toolbar's titlebar and the system's
+// window buttons placed for it (rexui.TitlebarFor), the system's materials
+// (DECISIONS D52), at 1200×760 pt, at least 640×400.
 func Config() app.Config {
-	return app.Config{
+	cfg := app.Config{
 		Title: "Pilot", Width: WindowWidthPt, Height: WindowHeightPt,
 		MinWidth: MinWidthPt, MinHeight: MinHeightPt,
-		Titlebar: titlebarPt, TrafficLights: theme.TrafficCentrePt,
-		Clear: [4]float32{0.9, 0.9, 0.9, 1}, // the background mesh covers every pixel
+		Clear: [4]float32{1, 1, 1, 1}, Materials: true,
 	}
+	cfg.Titlebar, cfg.TrafficLights = rexui.TitlebarFor(toolbarStyle)
+	return cfg
 }
 
 // Ready is a listing made before the window existed (content-first startup):
@@ -83,6 +89,17 @@ type Options struct {
 
 	// Traffic makes the scene draw the traffic lights (offscreen only).
 	Traffic bool
+	// Mono sets the file list in Menlo (the theme's monospace font off macOS)
+	// in 7.5 pt cells, as a terminal's, instead of the system font.
+	Mono bool
+	// Places are the sidebar's locations (nil: the home folder and the usual
+	// folders in it that exist, and the root); RootTitle names the root
+	// volume ("" looks for the startup volume's name).
+	Places    []Place
+	RootTitle string
+	// Still holds animations still and Legacy pins the legacy scroll bars, for
+	// pictures (an offscreen window has no system to follow).
+	Still, Legacy bool
 	// Loc is the time zone modification times are shown in (default time.Local).
 	Loc *time.Location
 }
@@ -90,11 +107,13 @@ type Options struct {
 // Pilot is the scene: both panes and the chrome. It implements app.Builder and
 // app.Initer.
 type Pilot struct {
-	k *widget.Kit
+	k  *widget.Kit
+	bk *base.Kit // k's base kit, which rexui's components take
 	// Traffic makes the scene draw the window's traffic lights (offscreen output).
 	Traffic bool
 	opt     Options
-	ico     entryIcons
+	sys     *sysIcons
+	sym     symbols
 	a       *app.App
 	src     Source
 	loc     *time.Location
@@ -104,6 +123,19 @@ type Pilot struct {
 	panes  [2]*pane
 	active int
 	split  widget.SplitState // the share of the width each pane gets
+
+	// the window's chrome: the sidebar (shown or hidden), its places and
+	// state, the disclosure of its groups, the dir of the active pane its
+	// selection was last set for, and whether rows are under the toolbar
+	sidebar   bool
+	scrolled  bool // the scene starts scrolled (ScenePost)
+	side      rexui.SidebarState
+	places    []place
+	items     []rexui.SidebarItem
+	open      [2]bool
+	sideFor   string
+	under     bool
+	rootTitle string
 
 	init     [2]<-chan Ready
 	listedAt [2]int64
@@ -130,12 +162,17 @@ func New(o Options) *Pilot {
 	if o.Loc == nil {
 		o.Loc = time.Local
 	}
-	pl := &Pilot{opt: o, src: o.Src, loc: o.Loc, mac: runtime.GOOS == "darwin", win: runtime.GOOS == "windows", init: o.Initial}
+	pl := &Pilot{opt: o, src: o.Src, loc: o.Loc, mac: runtime.GOOS == "darwin", win: runtime.GOOS == "windows", init: o.Initial, sidebar: true}
+	pl.rootTitle = o.RootTitle
+	if pl.rootTitle == "" {
+		pl.rootTitle = volumeName()
+	}
 	pl.split = widget.NewSplitState(1, 1)
 	pl.split.Min = [widget.MaxPanes]float32{minPanePt, minPanePt}
 	pl.Traffic = o.Traffic
 	for i := range pl.panes {
 		pl.panes[i] = newPane(uint32(i+1), o.Src, o.Home)
+		pl.panes[i].rootTitle = pl.rootTitle
 		pl.panes[i].initColumns()
 	}
 	return pl
@@ -149,9 +186,18 @@ var _ app.Initer = (*Pilot)(nil)
 // first listings.
 func (pl *Pilot) Init(a *app.App) error {
 	pl.a = a
-	pl.k = widget.NewKit(a.UI, a.Text, look())
-	pl.k.SetPreference(pl.opt.Preference)
-	pl.ico = entryIcons{link: pl.k.AddIcon(specLink), exec: pl.k.AddIcon(specExec), other: pl.k.AddIcon(specOther)}
+	pl.k = widget.NewKit(a.UI, a.Text, look(pl.opt.Mono))
+	pl.bk = pl.k.Kit
+	pl.bk.SetPreference(pl.opt.Preference)
+	pl.bk.Materials = a.Win != nil && a.Win.HasMaterials()
+	pl.bk.ReduceMotion = pl.opt.Still
+	if pl.opt.Legacy {
+		pl.bk.PinSystem(&theme.SystemValues{Known: true, Settings: theme.Settings{Scroller: theme.ScrollerLegacy}})
+	}
+	pl.sys = newSysIcons(img.NewCache(img.Options{Renderer: a.R}))
+	pl.bk.SetImages(pl.sys.cache)
+	pl.addSymbols()
+	pl.makePlaces()
 	a.UI.Reserve(4096)
 	a.Text.ReserveRuns(text.MaxCachedRuns, text.MaxCachedGlyphs, text.MaxCachedTextBytes)
 
@@ -198,10 +244,13 @@ func (pl *Pilot) land(i int, r Ready) {
 // has not landed.
 func (pl *Pilot) ListedAt(i int) int64 { return pl.listedAt[i] }
 
-// Close stops the Source.
+// Close stops the Source and the icon workers.
 func (pl *Pilot) Close() {
 	if pl.src != nil {
 		pl.src.Close()
+	}
+	if pl.sys != nil {
+		pl.sys.close()
 	}
 }
 

@@ -155,12 +155,14 @@ func (pl *Pilot) key(c *ui.Context, k ui.KeyEvent) bool {
 		if inPath {
 			a.path.SetString(a.dir)
 			a.pathErr = ""
+			a.pathEdit = false
 		}
 		pl.active ^= 1
 		pl.focusList(c)
 		c.SetFocusVisible(true)
 		return true
 	case prim && k.Code == 'L' && !shift:
+		a.pathEdit = true // the path field takes the path bar's place
 		c.SetFocus(pathKey(pl.active))
 		a.path.SelectAll()
 		return true

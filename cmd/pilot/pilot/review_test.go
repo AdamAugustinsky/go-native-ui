@@ -501,8 +501,9 @@ func TestClickingTheOtherPaneLeavesTheTextField(t *testing.T) {
 	if pl.active != 1 || r.o.UI.FocusKey() == filterKey(0) {
 		t.Errorf("header click: active %d focus %v", pl.active, r.o.UI.FocusKey())
 	}
-	// clicking into a field of the other pane still focuses that field
-	r.at(r.center(pathKey(0)))
+	// clicking into a field of the other pane still focuses that field: a
+	// press on the band of its path bar, beside the components, opens it
+	r.atBand(0)
 	r.click(0)
 	if pl.active != 0 || r.o.UI.FocusKey() != pathKey(0) {
 		t.Errorf("click into a field: active %d focus %v", pl.active, r.o.UI.FocusKey())
@@ -587,8 +588,9 @@ func TestCompositionAndTabAndFieldClicks(t *testing.T) {
 	if pl.active != 0 || r.o.UI.FocusKey() != filterKey(0) || !a.filterOpen {
 		t.Fatalf("keys while composing: active %d focus %v filter open %v", pl.active, r.o.UI.FocusKey(), a.filterOpen)
 	}
-	r.at(r.center(pathKey(0)))
+	r.atBand(0)
 	r.press(1, 0)
+	r.frames(1) // the press is seen while the bar is built: the composition is committed in the frame after
 	if r.o.UI.FocusKey() != pathKey(0) {
 		t.Fatalf("focus %v, want the path field", r.o.UI.FocusKey())
 	}

@@ -3,6 +3,7 @@ package pilot
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"gonativeui/app"
 	"gonativeui/fs"
@@ -49,6 +50,11 @@ func newDrive(t *testing.T) *drive {
 	for i := 0; i < 5; i++ {
 		dr.o.Frame()
 	}
+	for n := 0; n < 1000 && d.IconsPending(); n++ { // the system's icons decode on workers
+		time.Sleep(time.Millisecond)
+		dr.o.Frame()
+	}
+	dr.o.Frame()
 	return dr
 }
 
@@ -100,6 +106,12 @@ func (r *drive) text(s string) {
 func (r *drive) center(k ui.Key) (x, y float32) {
 	b := r.o.UI.RectOf(k)
 	return (b[0] + b[2]) / 2, (b[1] + b[3]) / 2
+}
+
+// atBand points at the end of pane i's path bar band, beside the components.
+func (r *drive) atBand(i int) {
+	_, y := r.center(pathBandKey(i))
+	r.at(r.d.Pilot.geo[i].rect[2]-20, y)
 }
 
 func (r *drive) rowAt(pane, row int) {

@@ -5,6 +5,7 @@
 //
 //	go run ./cmd/pilot/pilotshot -o pilot.png      # 2400×1520 px at 2×, traffic lights, window corners
 //	go run ./cmd/pilot/pilotshot -o dark.png -mode dark
+//	go run ./cmd/pilot/pilotshot -o s.png -inactive -scrolled -legacy
 package main
 
 import (
@@ -25,8 +26,12 @@ func main() {
 	scale := flag.Float64("scale", 2, "pixels per point")
 	corners := flag.Bool("corners", true, "make the window corners transparent (superellipse)")
 	mode := flag.String("mode", "light", "light, dark or system (what this machine says)")
+	inactive := flag.Bool("inactive", false, "the window is not key")
+	scrolled := flag.Bool("scrolled", false, "the left list is scrolled under the toolbar (longer lists)")
+	legacy := flag.Bool("legacy", false, "legacy scroll bars (overlay ones otherwise)")
+	mono := flag.Bool("mono", false, "set the lists in Menlo")
 	flag.Parse()
-	var look pilot.Look
+	look := pilot.Look{Inactive: *inactive, Scrolled: *scrolled, Legacy: *legacy, Mono: *mono}
 	switch *mode {
 	case "light":
 		look.Preference = theme.ForceLight

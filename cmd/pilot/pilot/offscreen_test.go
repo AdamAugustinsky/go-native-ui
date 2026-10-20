@@ -164,7 +164,8 @@ func TestShot(t *testing.T) {
 	}
 	// Something is drawn where the rows are: dark pixels (names, sizes and dates
 	// are dark on the light panes, in whatever font the OS has) in both lists.
-	// The left list shows 21 rows from y = 106 and the right one 8, at 1×.
+	// The left list shows 21 rows of 24 from y = 80 (the sidebar is 180 wide, the
+	// lists 510 each) and the right one 8, at 1×.
 	dark := func(x0, y0, x1, y1 int) (n int) {
 		for y := y0; y < y1; y++ {
 			for x := x0; x < x1; x++ {
@@ -176,13 +177,13 @@ func TestShot(t *testing.T) {
 		}
 		return n
 	}
-	if n := dark(20, 110, 590, 440); n < 800 {
+	if n := dark(200, 84, 680, 570); n < 800 {
 		t.Errorf("%d dark pixels in the left list, want text", n)
 	}
-	if n := dark(615, 110, 1185, 235); n < 300 {
+	if n := dark(700, 84, 1190, 270); n < 300 {
 		t.Errorf("%d dark pixels in the right list, want text", n)
 	}
-	if n := dark(20, 452, 590, 700); n > 0 {
+	if n := dark(200, 590, 680, 700); n > 0 {
 		t.Errorf("%d dark pixels below the last row of the left list, want none", n)
 	}
 	var distinct = map[[3]uint32]int{}
