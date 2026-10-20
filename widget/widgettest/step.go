@@ -22,6 +22,10 @@ const (
 	opWheel                    // over the target: dy pixels of trackpad scroll on each of n frames
 	opSweep                    // the pointer down the target, top to bottom, over n frames
 	opDrag                     // press on the target, move dx pixels along x on each of n frames, let go
+	opCommand                  // a native menu command, by id
+	opEdit                     // an Edit menu action
+	opAppearance               // the system appearance changes
+	opDo                       // a function, run in the frame before it is built
 )
 
 // Step is one thing a person does: move the pointer to a node, click it, press a
@@ -38,6 +42,9 @@ type Step struct {
 	dy   float32
 	dx   float32
 	text string
+	fn   func()
+	id   uint16
+	edit ui.EditAction
 }
 
 // DefaultWaitMs is how long a wait (WaitFor, WaitGone, WaitChange, Settle)
@@ -142,3 +149,37 @@ func (s Step) With(m ui.Mods) Step { s.mods = m; return s }
 // Within limits a wait (WaitFor, WaitGone, Settle) to ms milliseconds of clock
 // time in place of DefaultWaitMs.
 func (s Step) Within(ms int64) Step { s.ms = ms; return s }
+
+// The fakes of native surfaces that reach the app as input or as a change of
+// the system: what the platform would deliver when the user chooses a menu
+// item, or flips the system's appearance. (Dialog answers, which reach the app
+// through its window, are FakeDialogs; a function to run at an exact frame is
+// Do.)
+
+// Command delivers the menu command with the id as a native menu item does
+// (ui.Input.PushCommand), in one frame; the app reads it with
+// ui.Context.TakeCommand (widget.Kit.Command). It is what choosing the item
+// with no window to take the click would deliver.
+func Command(id uint16) Step { return Step{op: opCommand, id: id} }
+
+// Edit delivers an Edit menu action (ui.EditCopy and the others) as the native
+// Edit menu does, in one frame.
+func Edit(a ui.EditAction) Step { return Step{op: opEdit, edit: a} }
+
+// Appearance makes the system report the dark (true) or light appearance
+// (ui.Context.SetSystemAppearance), from the next frame. An offscreen window
+// has no system to follow, so the setting stays; in a live window the
+// platform overwrites it every frame (SetAppAppearance flips the real one).
+func Appearance(dark bool) Step { return Step{op: opAppearance, id: b2u(dark)} }
+
+func b2u(b bool) uint16 {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// Do runs f in the frame, on the thread of the frame, before it is built: it
+// is how a script delivers something that is not input at an exact point (a
+// fake dialog's answer, a text set into a host).
+func Do(f func()) Step { return Step{op: opDo, fn: f} }

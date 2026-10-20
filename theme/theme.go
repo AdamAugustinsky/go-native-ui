@@ -304,7 +304,7 @@ func (r *Resolved) applyRoles() {
 		if live {
 			for i, v := range r.sys.Colors[m] {
 				if v != 0 {
-					c[i] = v
+					c[systemColorRole[i]] = v
 				}
 			}
 		}

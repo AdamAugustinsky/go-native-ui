@@ -139,6 +139,17 @@ jobs:
         run: |
           go vet -tags gnui_publicapi $(go list ./... | grep -v -E "$PKGS_EXCLUDE")
           go test -tags gnui_publicapi -count=1 ./platform ./app
+      - name: vet the F3 tests (gnui_f3)
+        # The widgettest flows that need F3's application events sit behind the
+        # gnui_f3 tag until F3 is on main. This vets them as soon as
+        # platform.AppEvent exists, so the merge that brings F3 cannot leave
+        # them uncompiled; taking the tag off is part of that merge.
+        run: |
+          if grep -rq '^type AppEvent ' platform/; then
+            go vet -tags gnui_f3 ./widget/widgettest/...
+          else
+            echo "F3 (platform.AppEvent) is not on this branch: the gnui_f3 tests are not vetted yet"
+          fi
       - name: test internal/ffi and clib (amd64 under Rosetta)
         run: |
           softwareupdate --install-rosetta --agree-to-license >/dev/null 2>&1 || true
@@ -227,6 +238,44 @@ jobs:
           go build -trimpath -ldflags="-s -w" -o bin/rexlook ./cmd/rexlook
           ./bin/rexlook -live-resize-test | tee rexlook-live-resize-macos.json
           ./bin/pilot -live-resize-test | tee pilot-live-resize-macos.json
+      - name: GnuiShot on the hosted runner (informational, phase 6 T2)
+        # Can a hosted runner capture its own windows with GnuiShot? It needs the
+        # Screen Recording grant, which a runner cannot be given interactively.
+        # This tries it and records the answer in the job summary; it never
+        # fails the job.
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        timeout-minutes: 4
+        run: |
+          set +e
+          out=$RUNNER_TEMP/gnuishot-probe.md
+          {
+            echo '### GnuiShot on the hosted runner'
+            echo '```'
+            sw_vers
+            echo "--- build"
+            bash tools/gnuishot/build.sh 2>&1
+            APP=$PWD/tools/gnuishot/bin/GnuiShot.app
+            export APP
+            echo "--- selftest (no screen, no grant)"
+            "$APP/Contents/MacOS/GnuiShot" selftest 2>&1 | tail -n 3
+            echo "--- permission"
+            sh tools/gnuishot/shot.sh permission 2>&1 | head -n 20
+            echo "exit: ${PIPESTATUS[0]}"
+            echo "--- display capture"
+            sh tools/gnuishot/shot.sh display -out "$RUNNER_TEMP/gnuishot-display.png" -no-prompt 2>&1 | head -n 20
+            echo "exit: ${PIPESTATUS[0]}"
+            echo "--- screencapture (the system tool, for comparison)"
+            screencapture -x "$RUNNER_TEMP/screencapture.png" 2>&1
+            ls -l "$RUNNER_TEMP"/screencapture.png "$RUNNER_TEMP"/gnuishot-display.png 2>&1
+            echo "--- the live window test with GNUI_GNUISHOT"
+            GNUI_GNUISHOT=$PWD/tools/gnuishot/shot.sh go test -count=1 -v -run CaptureOfTheLiveWindow ./widget/widgettest/live 2>&1 | tail -n 15
+            echo "--- do synthetic gestures reach a view on the runner (window key? app active?)"
+            go test -count=1 -v -run SyntheticGestures ./widget/widgettest/live 2>&1 | grep -v '^=== ' | tail -n 8
+            echo '```'
+          } > "$out" 2>&1
+          cat "$out" >> "$GITHUB_STEP_SUMMARY"
+          cat "$out"
       - uses: actions/upload-artifact@v4
         if: always()
         with:

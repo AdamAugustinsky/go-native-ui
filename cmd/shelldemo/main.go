@@ -46,6 +46,10 @@ const (
 	inspectorW  = 230
 	headerH     = 28
 	rowH        = 24
+	rowInset    = 16  // row padding and cell padding: where the Name column starts
+	dateCol     = 200 // the Date Modified column's left edge, from the pane's right edge
+	slotW       = 22  // the actions column before it: the row's native button
+	cellGap     = 8
 	rows        = 60
 	hostRow     = 3 // the table row with a native button
 	cmdHostRow  = 11
@@ -417,7 +421,7 @@ func (d *demo) capsule(c *ui.Context, i int, p palette, dark bool) {
 	c.NextRadius(pt(capsuleH / 2))
 	c.NextAxis(ui.AxisX)
 	c.NextCross(ui.CrossCenter)
-	c.NextAlign(ui.AlignCenter)
+	c.NextJustify(ui.JustifyCenter)
 	c.NextGap(pt(14))
 	id := c.BoxKeyed(ui.Clickable, key, nil)
 	c.Material(id, ui.AreaToolbarCapsule, uint8(theme.MatToolbar), solid(dark, 0xF2F2F2FF, 0x333333FF))
@@ -487,14 +491,16 @@ func (d *demo) tableView(c *ui.Context, p palette, x, wd, h float32) {
 	c.NextBG(p.bar)
 	c.Box(ui.DrawBackground, "hdrbg")
 	c.NextFlags(theme.Floating)
-	c.NextPos(x+pt(16), top+pt(6))
+	c.NextPos(x+pt(rowInset), top+pt(6))
 	c.NextFont(d.small)
 	c.NextTextColor(p.label2)
+	c.NextRole(ui.RoleColumnHeader)
 	c.Box(ui.DrawText, "Name##hdr")
 	c.NextFlags(theme.Floating)
-	c.NextPos(x+wd-pt(200), top+pt(6))
+	c.NextPos(x+wd-pt(dateCol), top+pt(6))
 	c.NextFont(d.small)
 	c.NextTextColor(p.label2)
+	c.NextRole(ui.RoleColumnHeader)
 	c.Box(ui.DrawText, "Date Modified##hdr2")
 	c.NextFlags(theme.Floating)
 	c.NextPos(x, top+pt(headerH-1))
@@ -513,11 +519,15 @@ func (d *demo) tableView(c *ui.Context, p palette, x, wd, h float32) {
 		c.SetScroll(d.table, 0, float64(pt(d.scrollTo)))
 		d.scrollTo = 0
 	}
+	// The columns: Name from rowInset, the actions slot (every row has
+	// one, so no row's dates move), Date Modified from dateCol.
+	nameW := wd - pt(rowInset+cellGap+slotW+cellGap+dateCol)
 	c.Push(d.table)
 	for r := 0; r < rows; r++ {
 		key := ui.KeyN(ui.HashString(0, "row"), uint64(r))
 		c.NextSize(ui.Px(wd), ui.Px(pt(rowH)))
 		c.NextPadding(pt(10), 0, pt(10), 0)
+		c.NextRole(ui.RoleRow)
 		row := c.BoxKeyed(0, key, nil)
 		c.Push(row)
 		if r%2 == 1 { // the stripe: an inset rounded band, as the selection
@@ -527,23 +537,31 @@ func (d *demo) tableView(c *ui.Context, p palette, x, wd, h float32) {
 		c.NextSize(ui.Pct(1), ui.Pct(1))
 		c.NextAxis(ui.AxisX)
 		c.NextCross(ui.CrossCenter)
-		c.NextPadding(pt(6), 0, pt(6), 0)
+		c.NextPadding(pt(rowInset-10), 0, pt(rowInset-10), 0)
+		c.NextGap(pt(cellGap))
 		c.Push(c.BoxKeyed(ui.DrawBackground, ui.KeyN(key, 9), nil))
+		c.NextSize(ui.Px(nameW), ui.Pct(1))
+		c.NextAxis(ui.AxisX)
+		c.NextCross(ui.CrossCenter)
+		c.NextGap(pt(cellGap))
+		c.NextRole(ui.RoleCell)
+		c.Push(c.BoxKeyed(ui.Clip, ui.KeyN(key, 2), nil))
 		f, b := d.icons.Prepare(c, icDocs, 0x1E90FFFF)
 		c.BoxKeyed(f, ui.KeyN(key, 1), b)
-		c.NextSize(ui.Px(pt(8)), ui.Px(1))
-		c.BoxKeyed(0, ui.KeyN(key, 2), nil)
 		c.NextFont(d.body)
 		c.NextTextColor(p.label)
-		c.NextWidth(ui.Px(wd - pt(260)))
 		c.BoxKeyed(ui.DrawText, ui.KeyN(key, 3), d.names[r])
+		c.Pop()
+		c.NextSize(ui.Px(pt(slotW)), ui.Px(pt(slotW)))
 		if r == hostRow {
-			c.NextSize(ui.Px(pt(22)), ui.Px(pt(22)))
 			c.Host(uint32(d.rowBtn), ui.KeyN(key, 4), 0)
+		} else {
+			c.BoxKeyed(0, ui.KeyN(key, 4), nil)
 		}
 		c.NextFont(d.body)
 		c.NextTextColor(p.label2)
-		c.Box(ui.DrawText, "  Today at 09:41")
+		c.NextRole(ui.RoleCell)
+		c.Box(ui.DrawText, "Today at 09:41")
 		c.Pop()
 		c.Pop()
 	}

@@ -45,7 +45,10 @@ type ToolbarSpec struct {
 	// CapsuleH is the height of a toolbar item's capsule (0: none) and
 	// CapsuleY its top; the radius is CapsuleH/2.
 	CapsuleH, CapsuleY float32
-	// ItemW is the width of a one-icon item's capsule.
+	// ItemW is the width of a one-icon item's capsule: the narrowest, since
+	// an item is its symbol and 12 (measured on 27.2: 27 for trash, 31.5 for
+	// sidebar.left in the compact style; at least 36, a circle, in the
+	// unified one).
 	ItemW float32
 	// FirstGap is the space between the zoom button's right edge and the
 	// first item.
@@ -59,10 +62,16 @@ type CapsuleSpec struct {
 	// Gap is the space between two neighbouring capsules; WideGap next to a
 	// menu, a flexible space or a tracking separator.
 	Gap, WideGap float32
-	// NavW is the width of the back/forward capsule; MenuW a menu item's
-	// (glyph and chevron); PickerW a select-one group collapsed to a pop-up.
-	NavW, MenuW, PickerW float32
-	// Glyph is the point size of a toolbar symbol.
+	// NavW is the width of the back/forward capsule; PickerW a select-one
+	// group collapsed to a pop-up.
+	NavW, PickerW float32
+	// MenuW is the narrowest a menu item is, MenuPad what it takes besides
+	// its symbol (the chevron and the sides): one minimum plus a fit to the
+	// item's content, not several widths (MenuItemW). Measured on 27.2:
+	// 44.5 for ellipsis.circle and 47.5 for a 20-wide symbol.
+	MenuW, MenuPad float32
+	// Glyph is the point size of a toolbar symbol: 13 in both styles (the
+	// symbols AppKit draws are 15 to 20 pt wide).
 	Glyph float32
 }
 
@@ -139,16 +148,20 @@ var MacWindow = WindowSpec{
 	Radius: 16, TrafficD: TrafficDiameterPt, TrafficSpacing: TrafficSpacingPt,
 	Toolbars: [NumToolbarStyles]ToolbarSpec{
 		ToolbarPlain:   {Height: 32, Traffic: [2]float32{16, 16}, Title: StyleWindowTitle, TitleY: 8, TitleGap: 10, TitleInset: 10},
-		ToolbarCompact: {Height: 40, Traffic: [2]float32{19, 20}, Title: StyleWindowTitle, TitleY: 12, TitleGap: 10, TitleInset: 10, CapsuleH: 24, CapsuleY: 8, ItemW: 28, FirstGap: 19.5},
+		ToolbarCompact: {Height: 40, Traffic: [2]float32{19, 20}, Title: StyleWindowTitle, TitleY: 12, TitleGap: 10, TitleInset: 10, CapsuleH: 24, CapsuleY: 8, ItemW: 27, FirstGap: 19.5},
 		ToolbarUnified: {Height: 52, Traffic: [2]float32{26, 26}, Title: StyleToolbarTitle, TitleY: 16.5, TitleGap: 10, TitleInset: 18, CapsuleH: 36, CapsuleY: 8, ItemW: 36, FirstGap: 17},
 		ToolbarRex:     {Height: 46, Traffic: [2]float32{23, 23}, Title: StyleWindowTitle, TitleY: 15, TitleGap: 10, TitleInset: 10},
 	},
-	Capsule:     CapsuleSpec{GroupGap: 8, Gap: 4, WideGap: 8, NavW: 86, MenuW: 46, PickerW: 46, Glyph: 16},
+	Capsule:     CapsuleSpec{GroupGap: 8, Gap: 4, WideGap: 8, NavW: 86, PickerW: 46, MenuW: 44.5, MenuPad: 27.5, Glyph: 13},
 	Sidebar:     SidebarSpec{RowH: 32, HeaderH: 19, GroupGap: 13, IconX: 19, Icon: 20, TextX: 43, HeaderX: 14, Indent: 13, SearchH: 24, SearchInset: 10},
 	Selection:   SelectionSpec{Inset: 10, Radius: 8, Divider: 1},
 	GroupRadius: 12,
 	ScrollEdge:  ScrollEdgeSpec{Line: 0.5, AccessoryPad: 9},
 }
+
+// MenuItemW is the width of a menu item whose symbol is symbolW wide: the
+// symbol and MenuPad, at least MenuW. Points or pixels, as c is.
+func (c *CapsuleSpec) MenuItemW(symbolW float32) float32 { return max(symbolW+c.MenuPad, c.MenuW) }
 
 // TitleX is where the title starts: TitleGap after the right edge of the
 // last capsule before it (prevRight), but at least TitleInset into the
@@ -183,7 +196,7 @@ func (w WindowSpec) scaled(k float32) WindowSpec {
 		}
 	}
 	c := &w.Capsule
-	for _, p := range [...]*float32{&c.GroupGap, &c.Gap, &c.WideGap, &c.NavW, &c.MenuW, &c.PickerW} {
+	for _, p := range [...]*float32{&c.GroupGap, &c.Gap, &c.WideGap, &c.NavW, &c.PickerW, &c.MenuW, &c.MenuPad} {
 		*p *= k
 	}
 	s := &w.Sidebar

@@ -861,6 +861,15 @@ wave 5  fixes from both checkpoints' findings                               ║ 
      - closing the last window and clicking the Dock icon;
      - Dock → Quit with no window open;
      - pinch and rotate on the trackpad over the gallery's image scene, if F5 could not test gestures on the live path.
+   - **Added from the items' reports** (2026-10-19 and 20; each needs a real pointer, trackpad or system service):
+     - **gestures (F5, T2):** a real pinch and rotate over the gallery's image scene, including the rotation's direction; Windows touchpad pinch on Windows hardware;
+     - **keys (F5):** switch the keyboard layout while an app runs and check that shortcuts follow; secure input in a password field against the system's real state;
+     - **scrolling (N3fix):** a scroll gesture continued after the window loses focus mid-gesture is dropped; check that it feels right;
+     - **hidden windows (D3b fixes):** with a spinner showing, lock and unlock the screen and cover and uncover the window; it draws correctly each time;
+     - **zoom (C9):** ⌘+, ⌘=, ⌘− and ⌘0 from the keyboard and the View menu; rexlook (custom titlebar) zoomed to 150 % and back, with the lights, their hover symbols and the tabs;
+     - **drag and drop (N5):** a Finder file and text from another app onto a drop target (hover highlight, copy or not-allowed cursor, the data delivered); a PNG from Safari or Preview; a box dragged out to Finder as a file; a promised file to the Desktop, then the same cancelled with Esc (nothing written); a drag from a toolbar button (the window doesn't move); a drag over a hosted native view; a drop from our own window into itself; a slow source (a large image from an app that renders lazily), noting any main-thread hold;
+     - **clipboard (S6):** paste an image from Preview and files from Finder; a concealed copy that a clipboard manager doesn't record;
+     - **selection (C4):** select across a long chat, copy, and paste into TextEdit; double- and triple-click; a selection drag over a link doesn't open it.
 
    Your findings are fixed before wave 5 ends.
 2. **ZapFast at parity.** See the phase-7 plan. You see ZapFast for the first time there, at full parity (D33). Before it, you run N4's hand checklist (a real Japanese or Chinese input method, dictation, Writing Tools) and one real login with "Open at login" on, to confirm the app starts hidden; everything else in the editor matrix is automated and run by the N4 agent.
@@ -992,52 +1001,63 @@ The entries are in `DECISIONS.md`, written on this branch on 2026-10-18 at your 
 | Accessibility on Windows (UIA) and Linux (AT-SPI) | phase-5 plan | D34 |
 | The X11 PRIMARY selection and an X11 input method | PHASE5 Status | Unchanged from phase 5 |
 
-## Status (2026-10-19, evening)
+## Status (2026-10-20)
 
-Running. **Checkpoint 1 is the priority:** N3 (merged; `p6-n3fix` closing its re-review) → D4 → the rest of D3b → D6, one agent per app in parallel → the apps shown live on the MacBook.
+Running. **Checkpoint 1 is the priority:** D4 (matching D0's scenes, with N3's glass) → the rest of D3b (forms) → D6, one agent per app in parallel → the apps shown live to you.
 
-**How the work runs now (your instructions, 2026-10-19):**
-- **Parallelism:** up to about 14 agents at once, each item in its own worktree (`~/Projects/gnui-wt/<item>`) and branch (`p6-<item>`), keeping this plan's file ownership. Above the cap, items wait in the queue below. If builds contend (load above about 9 on the Mac mini's 10 cores, or memory pressure), it is measured and the cap lowered, not guessed.
-- **Integration:** a dedicated integrator agent owns `main`, the main checkout (`~/Projects/go-native-ui`), merge conflicts in shared files and the CI runs on `main`. It merges a branch once three things hold: the branch's CI is green on its head, its review findings are closed with tests, and rexcompare is 40/40 on the merged tree. Shared-file changes that need a design decision come back to the plan owner.
+**How the work runs (your instructions, 2026-10-19 and 2026-10-20):**
+- **Parallelism:** up to about 14 agents at once, each item in its own worktree (`~/Projects/gnui-wt/<item>`) and branch (`p6-<item>`), keeping this plan's file ownership. Above the cap, items wait in the queue below. If builds contend (load above about 9 on the Mac mini's 10 cores, or memory pressure), it is measured and the cap lowered, not guessed. Build caches and worktrees live in `….noindex` folders, so Spotlight does not index them (a load spike to 19.5 on 2026-10-19 was Spotlight, not the builds).
+- **Integration:** a dedicated integrator agent owns `main`, the main checkout (`~/Projects/go-native-ui`), merge conflicts in shared files and the CI runs on `main`. It merges a branch once three things hold: the branch's CI is green on its head, its review findings are closed with tests, and rexcompare is 40/40 on the merged tree. Shared-file changes that need a design decision come back to the plan owner. Merge-order rules: `p6-d4` merges after `p6-align`; whichever of `p6-t2` and `p6-f3` merges second removes the `gnui_f3` build tag, and the tagged tests must pass.
 - **Reviews:** one independent review per item, plus at most one scoped re-review of the fixes. Anything still open after that is a GitHub issue labelled `follow-up`, not another blocking round. Small, mechanical follow-ups need no review.
-- **The MacBook:** agents quit every app they open there when their captures are done, and every capture is looked at before anything is called matching.
+- **Live testing is on the Mac mini (2026-10-20):**
+  - **What runs here:** live window tests, frame timing, startup, half-bounce, the live AppKitRef and `appkitscenes` comparisons, GnuiShot captures and hand-test builds, plus the builds, unit tests, offscreen renders and CI dispatch. `GNUI_TEST_HOST` stays unset or `localhost`.
+  - **Before every live run:** check `IOConsoleLocked = No` (`ioreg -n Root -d1`). If it reads Yes, report it; don't fall back silently.
+  - **Keeping the display awake:** it sleeps after 10 minutes and gives no frames while asleep. Wrap every live run in `caffeinate -d`. The coordinator also holds a 12-hour `caffeinate -d` for the session.
+  - **Why it works here now:** Adam turned off the lock-screen password, so the session stays unlocked after Screen Sharing disconnects. `cmd/spike -bench -gate` passes live: 600 frames paced, p50 8.33 ms, p99 8.97 ms, 0 allocations, 0 idle presents, ExecToOnGlass 136 ms. Before that change it re-locked on every disconnect, and a locked session gives no frames.
+  - **The display:** an LG UltraGear 5K at 2× (looks like 2560×1440), 120 Hz, on macOS 27.2 (26B5101f).
+  - **GnuiShot** is at `~/gnui-test/` here, signed with `gnui-dev`, with Screen Recording granted on 2026-10-20 (CDHash `b000e88b…`, recorded in `tools/gnuishot/README.md`). Never rebuild or replace that bundle: it is write-protected, and a new one needs Adam to grant it again.
+  - **The AppKit references are re-measured here** (`p6-refmini`), with the machine recorded in each measurement file. The MacBook's numbers (26B5091g) are kept.
+  - **The MacBook is reserved** for the final exit-criteria numbers and Adam's hand tests. An ssh guard on the Mac mini (`~/.ssh/config`) refuses agent connections to it.
+- **Captures:** every capture is looked at before anything is called matching, and agents quit every app they open.
 
-**Merged on `main` (d5999fb):**
-- D0, D1, D2 (`widget/base`), D3a (`rexui` core), D3b controls and D3b lists;
-- F1 (objc runtime), F2, F6 (trackpad scrolling);
-- N1 (menus, and the menu-rebuild fix), N2 (dialogs, tooltips), N3 (materials and hosting), the window buttons (D53: private AppKit API behind `gnui_publicapi` and `PublicAPIOnly`);
-- C1 (VList), C2 (rich text), C3 (flow), C5 (images), C8 (QR);
-- S1, S2 and S5 (app services; three security rounds; known limits in `follow-up` issues);
-- T1 (`gnui` CLI), `clib`, the frame-pool crash fix, the Windows clipboard heap-corruption fix.
+**Merged on `main`:**
+- D0, D1, D2 (`widget/base`), D3a (`rexui` core), D3b controls and lists, with their review fixes (`p6-d3b-fix`, including hidden windows no longer retrying frames);
+- F1 (objc runtime), F2, F6 (trackpad scrolling), with the legacy scroller widths and table header corner (`p6-scrollw`);
+- N1 (menus), N2 (dialogs, tooltips), N3 (materials and hosting) with its re-review fixes (`p6-n3fix`), the window buttons (D53);
+- C1 (VList), C2 (rich text), C3 (flow), C5 (images), C8 (QR); C4 (selectable text) is being merged;
+- S1, S2 and S5 (app services);
+- T1 (`gnui` CLI), `clib`, the frame-pool crash fix, the Windows clipboard heap-corruption fix, the reliable full-screen test (`p6-fsflake`).
 
 **In flight:**
 
 | Item | Branch | State |
 |---|---|---|
-| D4 window chrome, Rex tabs | `p6-d4` | building; wires N3's glass now that it is on `main` |
-| D3b forms and token fixes | `p6-d3b-forms` | building; then one combined D3b review |
-| Layout `NextJustify` and the layout audit | `p6-align` | building; after the user found misaligned content in `shelldemo` |
-| F3 application object | `p6-f3` | review fixes done; Dock/logout quit through our own Apple-event handler, then one scoped re-review |
-| N3 re-review fixes | `p6-n3fix` | gesture ownership by delivery, per-delivery dedup, radii |
-| Legacy scroller width and header corner | `p6-scrollw` | follow-up from D3b lists |
-| CI flakes, round 2 | `p6-flakes` | review fixes (stall evidence, D27 attribution, 3× budgets) |
-| Full-screen test flake | `p6-fsflake` | |
-| F5 keys and gestures | `p6-f5` | started 2026-10-19 |
-| C4 selectable text | `p6-c4` | started 2026-10-19 |
-| C9 app zoom | `p6-c9` | started 2026-10-19 |
-| S6 clipboard images and files | `p6-s6` | started 2026-10-19 |
-| T2 live-window harness | `p6-t2` | started 2026-10-19 |
-| N5 drag and drop | `p6-n5` | started 2026-10-19 |
+| D4 window chrome, Rex tabs | `p6-d4` | merging `main`, wiring N3's glass, the layout audit, matching D0's Finder, Settings and Notes scenes; then its review fixes |
+| D3b forms and token fixes | `p6-d3b-forms` | its one fix round (semantics, append-only colour roles, sizes from the audit, D4's measured tokens) |
+| Layout `NextJustify` and the layout audit | `p6-align` | its one fix round; `shelldemo` fixed and checked live |
+| F3 application object | `p6-f3` | Dock/logout quit through our own Apple-event handler, then one scoped re-review |
+| F5 keys and gestures | `p6-f5` | its one fix round (layout-aware shortcuts through `UCKeyTranslate`, secure input released on close) |
+| C9 app zoom | `p6-c9` | its one fix round; the titlebar and lights follow the zoom |
+| S6 clipboard images and files | `p6-s6` | its one fix round; one shared off-main pasteboard reader |
+| N5 drag and drop | `p6-n5` | fixes done; scoped re-review of its two high fixes |
+| T2 live-window harness | `p6-t2` | review fixes done, CI green; waiting for the integrator |
+| T3 debug overlay | `p6-t3` | building |
+| AppKit references on the Mac mini | `p6-refmini` | re-measuring, offscreen and live |
+| System file icons | `p6-sysicon` | building: real system icons as an `img` source, for D4 and Pilot |
+| CI flakes, round 2 | `p6-flakes` | review fixes, and the new macOS timing failures; `gpu` `TestFirstFrameIsContent` on Windows is treated as a possible real white flash |
 
-**Queued (next free slot):** T3 debug overlay; then D6 (gallery, notes, Pilot, one agent each) once D4 merges; then F4, N4, C6/C7, S3/S4, T4/T5, N6, N7, and ZapFast Z2 when its inputs land.
+**Queued (next free slot):** D6 (gallery, notes, Pilot, one agent each) once D4 merges; then F4, N4, C6/C7, S3/S4, T4/T5, N6, N7, and ZapFast Z2 when its inputs land.
 
 **Parked until an app needs them:** S7 audio and S8 video (not started).
+
+**Follow-up issues:** #1–#6 (`follow-up` label).
 
 **Waiting on you:**
 - creating a macOS test user on the MacBook for F3's logout test (the steps are in `app/applive/logout_darwin_test.go`);
 - Rex public-test access, to measure Rex directly.
 
 **History:**
+- 2026-10-19: parallelism raised to about 14, the integrator owns `main`, the review cap; S7/S8 parked.
 - 2026-10-18: planned; revised after the independent review and its scoped re-review.
 - Phase 5: 5A is closed, and 5B is absorbed here (`docs/PHASE5-PLAN.md`, Status).
 - N3a and N3b: materials per area and hosted native views, demo `cmd/shelldemo`; what each area uses and the deviations are in `docs/design/native-shell-spike.md`, "Generalised".

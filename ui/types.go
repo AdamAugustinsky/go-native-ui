@@ -146,7 +146,58 @@ const (
 	CrossEnd
 )
 
-// Align positions a box's text horizontally inside its padded rectangle.
+// Justify is where a linear box (AxisX or AxisY) places its flow children
+// along its layout axis, in the room its padded area has left once the
+// children are sized and the gaps between them counted (the free space):
+//
+//   - Start and End are the leading and trailing edge of the axis. ui's linear
+//     boxes have no text direction: a row runs left to right and a column top
+//     to bottom, so Start is the left of a row and the top of a column (a
+//     mirrored row is built in reverse order). The one layout that has a
+//     direction, the flow, has its own alignment, FlowOpts.Align, whose
+//     FlowStart, FlowCenter and FlowEnd follow FlowOpts.RTL; a flow box
+//     ignores Justify.
+//   - Only the free space moves: children keep their sizes and the gap stays
+//     the least space between two of them. A child sized Pct(1), or children
+//     whose percentages add up to the whole, leave no free space, and neither
+//     does a box sized by its children (the default); Justify then changes
+//     nothing. Percentages below the whole leave the rest, which is placed like
+//     any other free space.
+//   - Children that do not fit (no free space, or less than none) are placed
+//     from Start, as without Justify: content never moves past the leading
+//     edge.
+//   - A scrolling box (ScrollX, ScrollY) justifies its content along the
+//     scrolled axis while the content is smaller than the box, and scrolls it
+//     from Start once it is larger. A virtual list (ListRange) counts its
+//     whole extent, not only the rows built.
+//   - Floating children take no part: they keep their fixed position.
+//
+// Justify is the main-axis counterpart of Cross; Align is about a box's own
+// text and does not move children.
+type Justify uint8
+
+const (
+	// JustifyStart places the children from the leading edge (the default).
+	JustifyStart Justify = iota
+	// JustifyCenter centres the children as a group, the free space split
+	// evenly before the first and after the last (the leading part rounded to
+	// a whole pixel, as CrossCenter does).
+	JustifyCenter
+	// JustifyEnd places the children against the trailing edge.
+	JustifyEnd
+	// JustifySpaceBetween puts the first child at the leading edge, the last at
+	// the trailing edge and shares the free space between the gaps; a single
+	// child stays at the leading edge.
+	JustifySpaceBetween
+	// JustifySpaceEvenly shares the free space equally between the edges and
+	// the gaps: the same extra space before the first child, between every two
+	// and after the last.
+	JustifySpaceEvenly
+)
+
+// Align positions a box's text horizontally inside its padded rectangle. It is
+// about the box's own display text only: it does not move the box's children
+// (see Justify and Cross for those).
 type Align uint8
 
 const (

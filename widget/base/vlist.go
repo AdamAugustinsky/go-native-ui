@@ -618,3 +618,28 @@ func EndVList(v *VList) {
 	st := v.st
 	st.lastS, st.lastContent, st.hasLast = v.s, v.cont, true
 }
+
+// *VListState is the Enumerator, ItemTracker and EdgeScroller of a selection
+// scope over the list (ui.ScopeOpts.Items): the scope orders and walks the
+// items by the list's ids, follows its endpoints' items through edits with
+// marks VListMarks-2 and VListMarks-1, and scrolls the list when a drag goes
+// past its edge.
+var (
+	_ ui.Enumerator   = (*VListState)(nil)
+	_ ui.ItemTracker  = (*VListState)(nil)
+	_ ui.EdgeScroller = (*VListState)(nil)
+)
+
+// TrackItem makes the mark of a selection scope's slot (0 or 1: marks
+// VListMarks-2 and VListMarks-1) follow item id (ui.ItemTracker).
+func (st *VListState) TrackItem(slot int, id uint64) { st.SetMark(VListMarks-2+slot, id) }
+
+// TrackedItem is what became of the item a selection scope's slot follows
+// (ui.ItemTracker).
+func (st *VListState) TrackedItem(slot int) ui.ItemFate {
+	m := st.Mark(VListMarks - 2 + slot)
+	return ui.ItemFate{
+		ID: m.ID, Removed: m.Removed, Reset: m.Reset,
+		Next: m.Next, Prev: m.Prev, HasNext: m.Next != NoID, HasPrev: m.Prev != NoID,
+	}
+}

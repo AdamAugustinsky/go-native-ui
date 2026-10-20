@@ -124,8 +124,8 @@ type State struct {
 	tri  base.CheckState
 	sel  int
 	v    float32
-	bufs [8]ui.TextBuffer
-	set  [8]bool
+	bufs [10]ui.TextBuffer
+	set  [10]bool
 
 	icons [numIcons]icon.ID
 
@@ -142,9 +142,9 @@ const (
 )
 
 var iconSpecs = [numIcons]icon.Spec{
-	iconPlus:    {Symbol: "plus", Segoe: 0xE710, Fallback: '+', Pt: 13},
-	iconSidebar: {Symbol: "sidebar.left", Segoe: 0xE700, Fallback: '▤', Pt: 13},
-	iconGear:    {Symbol: "gearshape", Segoe: 0xE713, Fallback: '⚙', Pt: 13},
+	iconPlus:    icon.Spec{Symbol: "plus", Segoe: 0xE710, Fallback: '+'}.In(icon.StyleBody, icon.ScaleMedium),
+	iconSidebar: icon.Spec{Symbol: "sidebar.left", Segoe: 0xE700, Fallback: '▤'}.In(icon.StyleBody, icon.ScaleMedium),
+	iconGear:    icon.Spec{Symbol: "gearshape", Segoe: 0xE713, Fallback: '⚙'}.In(icon.StyleBody, icon.ScaleMedium),
 }
 
 // NewState makes the samples' state, adding the samples' icons to k (call
@@ -232,6 +232,7 @@ func toggle(on bool, size theme.Size, look base.Look, disabled bool) func(s *Sta
 		fw, fh := k.Pt(54), k.Pt(24)
 		c.NextSize(ui.Px(fw), ui.Px(fh))
 		c.NextPadding(theme.Snap((fw-sz.SwitchW)/2), theme.Snap((fh-sz.SwitchH)/2), 0, 0)
+		c.NextAuditExempt(ui.AuditOverflow.Mask()) // AppKit's frame: a switch of ours that differs is the recipes' business
 		frame := c.Box(0, "frame")
 		c.Push(frame)
 		rexui.Switch(k, "", &s.b, rexui.SwitchOpts{Size: size})
@@ -475,7 +476,53 @@ var Samples = []Sample{
 		rexui.EndCard(s.k, &cd)
 		return cd.ID()
 	}, Spec{Probe: [2]float32{4, 50}, What: MeasureW | MeasureH | MeasureFill, Note: "radius by eye: the title crosses the top-left corner"}},
+	{"form-group", 360, 122, formGroup, Spec{Probe: [2]float32{4, 60}, What: shapeW}},
+	{"form-grid", 294, 76, formGrid, skip("no shape: the layout is compared with AppKit's frames (rexui's form test)")},
 	{"label-styles", 375, 337, labelStyles, skip("text rendering: AppKitRef's cacheDisplay draws labels darker than a live window does")},
+}
+
+// The form samples (D3b). formGroup is AppKitRef's form-group: three rows of
+// a grouped section, 360 pt wide; formGrid its NSGridView form-grid.
+var formChoices = [...]string{"Auto", "Light", "Dark"}
+
+func formGroup(s *State) ui.ID {
+	k := s.k
+	s.sel, s.b, s.v = 0, true, 40
+	k.NextWidth(k.Fixed(360))
+	f := rexui.BeginForm(k, "form", rexui.FormOpts{})
+	f.Section(k, "")
+	f.Row(k, "Appearance", rexui.RowOpts{})
+	k.NextWidth(k.Fixed(79))
+	rexui.Select(k, "Appearance", &s.sel, formChoices[:], rexui.SelectOpts{})
+	f.EndRow(k)
+	f.Row(k, "Wi-Fi", rexui.RowOpts{})
+	rexui.Switch(k, "", &s.b, rexui.SwitchOpts{})
+	f.EndRow(k)
+	f.Row(k, "Brightness", rexui.RowOpts{})
+	k.NextWidth(k.Fixed(120))
+	rexui.Slider(k, "Brightness", &s.v, 0, 100, 0, rexui.SliderOpts{})
+	f.EndRow(k)
+	rexui.EndForm(k, &f)
+	return f.ID()
+}
+
+var gridLabels = [...]string{"Name:", "Email address:", "Notifications:"}
+
+func formGrid(s *State) ui.ID {
+	k := s.k
+	f := rexui.BeginForm(k, "form", rexui.FormOpts{Variant: rexui.FormAligned, Labels: gridLabels[:]})
+	for i, l := range gridLabels[:2] {
+		f.Row(k, l, rexui.RowOpts{})
+		k.NextWidth(k.Fixed(200))
+		rexui.TextField(k, l, s.text(8+i, ""), "", rexui.FieldOpts{}) // buffers 8 and 9 are the form's
+		f.EndRow(k)
+	}
+	f.Row(k, gridLabels[2], rexui.RowOpts{})
+	s.b = false
+	rexui.Checkbox(k, "Send me updates", &s.b, rexui.CheckboxOpts{})
+	f.EndRow(k)
+	rexui.EndForm(k, &f)
+	return f.ID()
 }
 
 var styleNames = [...]struct {
@@ -575,11 +622,13 @@ func Grid(samples []int) (cells []Cell, w, h float32) {
 }
 
 // Pages are the grids the gallery's appkit scenes show: the controls, and
-// the text styles, which would not fit under them on a laptop's screen.
+// the text styles and the forms, which would not fit under them on a laptop's
+// screen.
 var Pages = [...][]string{
 	{}, // every sample but those of the later pages
 	{"label-styles"},
 	listPage, // lists.go
+	{"form-group", "form-grid"},
 }
 
 // Page is the samples of page p (Pages) in catalogue order.

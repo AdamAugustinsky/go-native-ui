@@ -60,6 +60,7 @@ func windowFocus(key bool) {
 			e.Flags = FlagDown
 		}
 		w.q.push(e)
+		w.focusMods(key, e.Time)
 	}
 }
 

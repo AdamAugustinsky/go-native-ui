@@ -618,6 +618,41 @@ func TestSheetOwnsInput(t *testing.T) {
 	})
 }
 
+// The trackpad's gestures belong to the sheet too: the UI underneath gets no
+// pinch, rotation or smart zoom, and gets them again after the sheet.
+func TestSheetOwnsGestures(t *testing.T) {
+	g := newCGGesture(t)
+	runScenario(t, func(r *dlgRig) {
+		w := r.w
+		tk, err := w.Alert(AlertSpec{Message: "Modal", Buttons: []string{"OK"}})
+		if err != nil {
+			r.failf("%v", err)
+			return
+		}
+		if !r.attached() {
+			r.failf("the sheet did not attach")
+			return
+		}
+		seq := func() {
+			for _, ev := range gestureSequence(g, w) {
+				w.handle(ev)
+			}
+		}
+		w.q.reset()
+		seq()
+		if len(w.q.ev) != 0 {
+			r.failf("the app saw %d gesture events under the sheet: %+v", len(w.q.ev), w.q.ev)
+		}
+		w.CancelDialog(tk)
+		r.pump(2*time.Second, func() bool { return objc.Send(w.win, selAttachedSheet) == 0 })
+		w.q.reset()
+		seq()
+		if len(w.q.ev) != len(gestureWant) {
+			r.failf("after the sheet, %d gesture events reached the app, want %d", len(w.q.ev), len(gestureWant))
+		}
+	})
+}
+
 func testKeyEvent(down bool, code uint16, chars string) objc.ID {
 	typ := uintptr(11)
 	if down {
