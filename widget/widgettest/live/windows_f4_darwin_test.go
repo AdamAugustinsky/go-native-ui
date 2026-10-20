@@ -11,10 +11,16 @@ package live
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
 	"runtime"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/ebitengine/purego"
 
 	"gonativeui/app"
 	"gonativeui/gpu"
@@ -150,6 +156,51 @@ func coveredSince(l *widgettest.LiveApp, w *app.Win, start int64) (covered bool)
 // settle lets the frames that a Do or an opening owes be drawn: the harness
 // wakes every window after each call.
 func settle() { time.Sleep(400 * time.Millisecond) }
+
+// mainThreadSample is the main thread's native stack, sampled for a second
+// (/usr/bin/sample on this process).
+func mainThreadSample() string {
+	out, err := exec.Command("/usr/bin/sample", strconv.Itoa(os.Getpid()), "1", "-mayDie").CombinedOutput()
+	if err != nil {
+		return fmt.Sprintf("sample: %v\n%s", err, out)
+	}
+	lines := strings.Split(string(out), "\n")
+	var b strings.Builder
+	in := false
+	n := 0
+	for _, ln := range lines {
+		if strings.Contains(ln, "Thread_") {
+			if in {
+				break
+			}
+			in = strings.Contains(ln, "main-thread")
+		}
+		if in && n < 220 {
+			b.WriteString(ln)
+			b.WriteByte('\n')
+			n++
+		}
+	}
+	if b.Len() == 0 {
+		return string(out[:min(len(out), 4000)])
+	}
+	return b.String()
+}
+
+var cfRunLoopGetMain, cfRunLoopStop uintptr
+
+// stopMainRunLoop stops the innermost run of the main run loop. Main thread.
+func stopMainRunLoop() {
+	if cfRunLoopStop == 0 {
+		h, err := purego.Dlopen("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation", purego.RTLD_NOW|purego.RTLD_GLOBAL)
+		if err != nil {
+			return
+		}
+		cfRunLoopGetMain, _ = purego.Dlsym(h, "CFRunLoopGetMain")
+		cfRunLoopStop, _ = purego.Dlsym(h, "CFRunLoopStop")
+	}
+	objc.F.Call1(cfRunLoopStop, objc.F.Call0(cfRunLoopGetMain))
+}
 
 // stacks is every goroutine's stack (the main thread's tells where the app's
 // loop is).
@@ -357,7 +408,12 @@ func TestEachWindowHasItsOwnComposer(t *testing.T) {
 		if !waitFor(5*time.Second, func() bool { return p1.builds.Load() > b1 }) {
 			var pump string
 			l.Do(func(*app.App) { pump = platform.DebugPumpState() })
-			t.Fatalf("%s: the app's loop stopped (builds: first %d → %d, second %d → %d)\n%s%s\n%s", what, b1, p1.builds.Load(), b2, p2.builds.Load(), pump, mwStates(l, w1, w2), stacks())
+			native := mainThreadSample()
+			// Does stopping the run loop AppKit waits in let the queued
+			// wake through?
+			l.Do(func(*app.App) { stopMainRunLoop() })
+			unstuck := waitFor(3*time.Second, func() bool { return p1.builds.Load() > b1 })
+			t.Fatalf("%s: the app's loop stopped (builds: first %d → %d, second %d → %d); CFRunLoopStop let it go on: %v\n%s%s\nthe main thread (sample):\n%s\n%s", what, b1, p1.builds.Load(), b2, p2.builds.Load(), unstuck, pump, mwStates(l, w1, w2), native, stacks())
 		}
 	}
 	turns("before the release")
