@@ -150,13 +150,16 @@ func TestIMEMarkedTextFlow(t *testing.T) {
 // it into text, also when the input method answers with unmarkText.
 func TestIMEDiscardComposition(t *testing.T) {
 	r := newIMERig(t)
-	r.w.DiscardComposition() // nothing composing: nothing happens
+	// DiscardComposition is main-thread only: it tells the view's
+	// NSTextInputContext, which trapped (SIGTRAP inside discardMarkedText,
+	// CI) when called from the test goroutine's thread.
+	r.w.DiscardComposition() // nothing composing: nothing happens, AppKit is not called
 	if ev := r.events(); len(ev) != 0 {
 		t.Fatalf("events without a composition: %+v", ev)
 	}
 	r.setMarked("かな", 1, 0)
 	r.events()
-	r.w.DiscardComposition()
+	onMain(r.w.DiscardComposition)
 	ev := r.events()
 	if len(ev) != 1 || ev[0].Kind != EvPreedit || ev[0].Text.Len != 0 {
 		t.Fatalf("discard: %+v", ev)
@@ -173,7 +176,7 @@ func TestIMEDiscardComposition(t *testing.T) {
 	r.setMarked("あ", 1, 0)
 	r.events()
 	r.w.textInput = true
-	r.w.SetTextInput(false)
+	onMain(func() { r.w.SetTextInput(false) })
 	if ev = r.events(); len(ev) != 1 || ev[0].Kind != EvPreedit || ev[0].Text.Len != 0 {
 		t.Fatalf("SetTextInput(false): %+v", ev)
 	}
