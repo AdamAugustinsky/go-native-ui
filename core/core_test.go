@@ -95,6 +95,34 @@ func TestFrame(t *testing.T) {
 	}
 }
 
+// A peak frame grows only the arena of its turn; the next frame gives the
+// other one the same room, so the same peak on the other's turn does not
+// allocate, and repeated peaks do not grow either arena further.
+func TestFramePeakOnEitherTurn(t *testing.T) {
+	var f Frame
+	peak := make([]byte, 5000)
+	f.Swap()
+	f.Cur().AppendBytes(peak) // grows this frame's arena
+	f.Swap()                  // a small frame on the other's turn
+	f.Swap()
+	f.Swap() // the peak again, on the other arena's turn
+	var m0, m1 runtime.MemStats
+	runtime.ReadMemStats(&m0)
+	f.Cur().AppendBytes(peak)
+	runtime.ReadMemStats(&m1)
+	if n := m1.Mallocs - m0.Mallocs; n != 0 {
+		t.Errorf("the peak on the other arena's turn allocated %d times", n)
+	}
+	c0, c1 := cap(f.a[0].buf), cap(f.a[1].buf)
+	for range 10 {
+		f.Swap()
+		f.Cur().AppendBytes(peak)
+	}
+	if cap(f.a[0].buf) != c0 || cap(f.a[1].buf) != c1 || c0 != c1 {
+		t.Errorf("capacities %d and %d, then %d and %d after more peaks", c0, c1, cap(f.a[0].buf), cap(f.a[1].buf))
+	}
+}
+
 func TestArenaNoAlloc(t *testing.T) {
 	var a Arena
 	a.Reserve(4096)
