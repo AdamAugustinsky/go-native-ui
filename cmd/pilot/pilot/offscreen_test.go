@@ -10,6 +10,7 @@ import (
 
 	"gonativeui/app"
 	"gonativeui/fs"
+	"gonativeui/theme"
 	"gonativeui/ui"
 )
 
@@ -264,5 +265,22 @@ func TestFollowsTheSystemMode(t *testing.T) {
 	}
 	if dark, _ := o.UI.ChromeDark(); dark {
 		t.Error("the chrome is still declared dark")
+	}
+}
+
+// A synthetic bench primes the names in the fonts its rows are drawn in:
+// those of the theme the kit makes in its first frame (at Init it has none
+// yet, and priming there shaped the names in no font a row uses).
+func TestBenchPrimesTheFontsItDraws(t *testing.T) {
+	b := NewSynthBench(5000)
+	defer b.Close()
+	o := newOffscreen(t, b)
+	o.Frame()
+	f := b.k.Theme().Font
+	if f == (theme.FontKeys{}) {
+		t.Fatal("the theme has no fonts after a frame")
+	}
+	if b.primed != f {
+		t.Fatalf("the names were primed in %+v, the rows are drawn in %+v", b.primed, f)
 	}
 }
