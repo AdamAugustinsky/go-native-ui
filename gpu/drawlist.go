@@ -152,9 +152,12 @@ func (l *DrawList) Add(q Quad) { l.Quads = append(l.Quads, q) }
 
 // AddBackdrop appends q as a ModeBackdrop quad of recipe b: it blurs what the
 // quads added before it drew under q.Rect (see ModeBackdrop). q's Mode and
-// Tex are set here.
+// Tex are set here, and its Border, BorderColor and Soft cleared: ignored by
+// the blur, they must not turn its fallback shape into an outline or a
+// shadow.
 func (l *DrawList) AddBackdrop(q Quad, b Backdrop) {
 	q.Mode, q.Tex = ModeBackdrop, TextureID(len(l.Backdrops))
+	q.Border, q.BorderColor, q.Soft = 0, 0, 0
 	l.Backdrops = append(l.Backdrops, b)
 	l.Quads = append(l.Quads, q)
 }

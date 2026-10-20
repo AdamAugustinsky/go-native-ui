@@ -11,15 +11,18 @@ func renderList(r *Renderer, w, h int, clear [4]float32, list *DrawList) img {
 
 // A backdrop over two colours: a renderer with the blur shows their blend
 // near the edge between them (and only inside the backdrop's rectangle), one
-// without fills the rectangle with the fallback colour; the quads after it
-// draw over it either way, and an empty one draws nothing.
+// without fills the rectangle with the fallback colour, flat to its edges
+// whatever the quad's (ignored) border and softness; the quads after it draw
+// over it either way, and an empty one draws nothing.
 func TestBackdropOrFallback(t *testing.T) {
 	r := newTestRenderer(t)
 	const w, h = 64, 32
 	list := &DrawList{}
 	list.Add(solid(0, 0, 32, 32, 0xFF0000FF))
 	list.Add(solid(32, 0, 64, 32, 0x0000FFFF))
-	list.AddBackdrop(solid(8, 8, 56, 24, 0x00FF00FF), Backdrop{Sigma: 8, Down: 4, Saturation: 1})
+	bq := solid(8, 8, 56, 24, 0x00FF00FF)
+	bq.Border, bq.BorderColor, bq.Soft = 2, 0xFFFFFFFF, 3
+	list.AddBackdrop(bq, Backdrop{Sigma: 8, Down: 4, Saturation: 1})
 	list.Add(solid(30, 14, 34, 18, 0xFFFFFFFF))
 	list.AddBackdrop(solid(70, 0, 80, 10, 0x00FF00FF), Backdrop{Sigma: 8, Down: 4, Saturation: 1}) // off the target
 	m := renderList(r, w, h, black, list)
@@ -30,6 +33,8 @@ func TestBackdropOrFallback(t *testing.T) {
 	if !r.Backdrops() {
 		near(t, "the fallback", m.at(20, 10), [4]int{0, 255, 0, 255}, 0)
 		near(t, "the fallback", m.at(50, 22), [4]int{0, 255, 0, 255}, 0)
+		near(t, "the fallback at its edge", m.at(8, 12), [4]int{0, 255, 0, 255}, 0)
+		near(t, "the fallback at its corner", m.at(55, 23), [4]int{0, 255, 0, 255}, 0)
 		return
 	}
 	l, rt := m.at(28, 10), m.at(36, 10)

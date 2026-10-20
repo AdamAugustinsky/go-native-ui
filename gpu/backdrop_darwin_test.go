@@ -268,8 +268,8 @@ func TestBackdropRadii(t *testing.T) {
 }
 
 // Into a target that cannot be sampled (a framebuffer-only drawable's
-// usage), a backdrop is its fallback colour, as on a renderer without the
-// blur.
+// usage), a backdrop is its fallback colour, flat to its edges whatever the
+// quad's (ignored) border and softness, as on a renderer without the blur.
 func TestBackdropUnreadableTarget(t *testing.T) {
 	r := newTestRenderer(t)
 	const w, h = 32, 16
@@ -287,7 +287,9 @@ func TestBackdropUnreadableTarget(t *testing.T) {
 	list := &DrawList{}
 	list.Add(solid(0, 0, 16, 16, 0xFF0000FF))
 	list.Add(solid(16, 0, 32, 16, 0x0000FFFF))
-	list.AddBackdrop(solid(4, 4, 28, 12, 0x00FF00FF), Backdrop{Sigma: 4, Down: 2, Saturation: 1})
+	bq := solid(4, 4, 28, 12, 0x00FF00FF)
+	bq.Border, bq.BorderColor, bq.Soft = 2, 0xFFFFFFFF, 3
+	list.AddBackdrop(bq, Backdrop{Sigma: 4, Down: 2, Saturation: 1})
 	cb := objc.Send(r.queue, rsCommandBuf)
 	r.Encode(uintptr(cb), uintptr(target), w, h, black, list)
 	objc.Send(cb, rsCommit)
@@ -297,6 +299,8 @@ func TestBackdropUnreadableTarget(t *testing.T) {
 		Arg(uintptr(unsafe.Pointer(&out[0]))).Arg(w*4), 0, 0, w, h).Arg(0).Call(objc.MsgSend)
 	m := img{w, h, out} // BGRA
 	near(t, "the fallback", m.at(15, 8), [4]int{0, 255, 0, 255}, 0)
+	near(t, "the fallback at its edge", m.at(4, 8), [4]int{0, 255, 0, 255}, 0)
+	near(t, "the fallback at its corner", m.at(27, 11), [4]int{0, 255, 0, 255}, 0)
 	near(t, "beside it", m.at(1, 1), [4]int{0, 0, 255, 255}, 0) // red, as BGRA
 }
 
