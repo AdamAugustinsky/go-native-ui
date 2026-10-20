@@ -55,6 +55,9 @@ func windowDidResize(c *ffi.CB) {
 
 func windowDidBecomeKey(c *ffi.CB) {
 	if w := delegateWindow(objc.ID(c.Int(0))); w != nil {
+		if nativeMenus.owner != w {
+			w.installMenus(false) // the bar is the key window's before any later event
+		}
 		w.focus(true)
 	}
 }

@@ -235,6 +235,7 @@ func (w *Window) Close() {
 	w.closeShell() // after close: nothing on screen changes
 	unregister(w)
 	forgetWindow(w)
+	adoptMenuBar() // its bar, if it was the installed one, goes to the next window
 	w.buryObjects()
 	if secure.want && reg.n == 0 {
 		SetSecureInput(false) // the field that wanted it is gone; activation must not bring it back
@@ -258,7 +259,7 @@ func (w *Window) buryObjects() {
 // bar's owner, the colour panel's target, the event being sent.
 func forgetWindow(w *Window) {
 	if nativeMenus.owner == w {
-		nativeMenus.owner = nil
+		nativeMenus.owner, nativeMenus.state = nil, nil // the closed window's state is not asked any more
 	}
 	if nativeMenus.popup == w {
 		nativeMenus.popup = nil

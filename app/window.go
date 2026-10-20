@@ -378,7 +378,7 @@ func (a *App) releaseShared() {
 		s.text.Close()
 		s.text = nil
 	}
-	s.atlas, s.nScales = nil, 0
+	s.atlas, s.scales = nil, s.scales[:0]
 	if s.dev != nil {
 		s.dev.Release()
 		s.dev = nil
@@ -398,38 +398,17 @@ func (a *App) forget() {
 			break
 		}
 	}
-	if s.barWin == a {
-		s.barWin = nil
-	}
 	if a.handle != nil {
 		a.handle.pw.Store(nil)
 	}
 }
 
-// markMenus has the menu bar installed again for the windows that are open
-// (the key one's, at the loop's next turn), or the app's bar with none.
+// markMenus has the app's menu bar installed again once no window is open
+// (the platform hands a closed window's bar to the next key window's).
 func (a *App) markMenus() {
-	s := a.appObject
-	if s.barWin != nil && s.barWin.Win == nil {
-		s.barWin = nil
-	}
-	if s.root != nil && len(s.wins) == 0 {
+	if s := a.appObject; s.root != nil && len(s.wins) == 0 {
 		s.root.menuDirty = true
 	}
-}
-
-// menuWin is the window the menu bar is for: the key window, else the one
-// whose bar is installed, else the main window.
-func (a *App) menuWin() *App {
-	for _, w := range a.wins {
-		if w.tr.in.Focused {
-			return w
-		}
-	}
-	if b := a.barWin; b != nil && b.Win != nil {
-		return b
-	}
-	return a.mainWindow()
 }
 
 // windowSource is the part of platform.Window that syncWindow reads and

@@ -380,11 +380,12 @@ func (w *Window) dragMoved(info objc.ID, enter bool) uintptr {
 	w.q.push(Event{Kind: kind, X: x, Y: y, Code: uint32(offered), SelStart: int32(allowed), SelLen: int32(items),
 		Mods: mods(uintptr(objc.Send(clsNSEvent, selModifierFlags))), Tag: d.seq, Time: Now()})
 	w.nudge()
-	if d.active {
-		// AppKit runs our own drag session in a loop of its own, where Wait does
-		// not return: ask for a frame, which the display link's tick hands to the
-		// frame handler (linkTick), so that a target of ours highlights as the
-		// drag moves over it.
+	if NativeLoop() {
+		// AppKit runs our own drag session (from this window or another of
+		// ours) in a loop of its own, where the app's pump does not return:
+		// ask for a frame, which the display link's tick hands to the frame
+		// handler (linkTick), so that a target of ours highlights as the drag
+		// moves over it.
 		w.RequestFrame()
 	}
 	return opToNS(ans.Op)
@@ -399,7 +400,7 @@ func (w *Window) dragLeft() {
 	d.inside = false
 	w.q.push(Event{Kind: EvDragLeave, Tag: d.seq, Time: Now()})
 	w.nudge()
-	if d.active {
+	if NativeLoop() {
 		w.RequestFrame() // our own session: a frame that clears the highlight (see dragMoved)
 	}
 }

@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"slices"
 
 	"gonativeui/platform"
 )
@@ -215,14 +216,19 @@ func (a *App) AppEvent(pe *platform.AppEvent, data []byte) {
 		return
 	}
 	if pe.Kind == platform.AppEvService && pe.Source == platform.SourceDialog {
-		a.dialogWindow(pe).onDialog(pe, data)
+		if w := a.dialogWindow(pe); w != nil {
+			w.onDialog(pe, data)
+		} else {
+			a.closedDialog(pe, data)
+		}
 		return
 	}
 	a.deliver(pe, data)
 }
 
 // dialogWindow is the window whose dialog a SourceDialog event answers (the
-// one showing it under the platform's ticket), a when none is.
+// one showing it under the platform's ticket), else a if it shows it (an
+// App with no window of the loop's: offscreen), else nil.
 func (a *App) dialogWindow(pe *platform.AppEvent) *App {
 	t := platform.DialogTicket(pe.ID)
 	for _, w := range a.wins {
@@ -232,7 +238,53 @@ func (a *App) dialogWindow(pe *platform.AppEvent) *App {
 			}
 		}
 	}
-	return a
+	for _, d := range a.dlgShown {
+		if d.plat == t {
+			return a
+		}
+	}
+	return nil
+}
+
+// closedDialog is a dialog that was on screen when its window closed: its
+// sheet ends as cancelled after the window is gone.
+type closedDialog struct {
+	shownDialog
+	a   *App   // the window's App, which showed it
+	win uint32 // the closed window's id
+}
+
+// keepClosedDialogs keeps the dialogs on screen as the window closes for
+// closedDialog: their sheets end as cancelled after the window is gone.
+func (a *App) keepClosedDialogs() {
+	for _, d := range a.dlgShown {
+		a.closedDlg = append(a.closedDlg, closedDialog{shownDialog: d, a: a, win: a.winID})
+	}
+	a.dlgShown = a.dlgShown[:0]
+}
+
+// closedDialog delivers the answer of a dialog whose window closed while it
+// was on screen: to the Handler, as an EvService with the app's ticket and the
+// closed window's id (Event.Window), and to TakeDialog of the window's App,
+// unless that App holds another window by now (the Handler's, opened again:
+// the answer is not the new window's). An answer of no such dialog (a
+// withdrawn one) is dropped.
+func (a *App) closedDialog(pe *platform.AppEvent, data []byte) {
+	t := platform.DialogTicket(pe.ID)
+	for i, d := range a.closedDlg {
+		if d.plat == t {
+			a.closedDlg = slices.Delete(a.closedDlg, i, i+1)
+			if d.a.winID == d.win {
+				r := platform.DialogResultOf(pe, data)
+				r.Ticket = d.app
+				d.a.pushDialog(r)
+			}
+			e := *pe
+			e.ID, e.Window = uint64(d.app), d.win
+			a.deliver(&e, data)
+			return
+		}
+	}
 }
 
 // AppSafePoint runs the deferred safe-point work (platform.AppSink): also
@@ -268,6 +320,9 @@ func (a *App) deliver(pe *platform.AppEvent, data []byte) {
 	// else in every window.
 	native := len(a.wins) > 0 && platform.NativeLoop()
 	only := a.windowOf(pe.Window)
+	if only == nil && pe.Window != 0 {
+		return // for a window that has closed: none draws
+	}
 	for _, w := range a.wins {
 		if only != nil && w != only {
 			continue

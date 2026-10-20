@@ -210,7 +210,7 @@ type App struct {
 	verbose     bool
 	diagBuf     []byte
 
-	barOn bool        // the native menu bar is installed (menus.go)
+	barOn bool        // the window has given the platform its menu bar (menus.go)
 	dbg   *debugState // the debug overlay (debug.go); nil off
 	step  stepState   // Offscreen.Step (debugstep.go)
 }
@@ -356,6 +356,9 @@ func (a *App) openWin(cfg Config, b Builder, st *StartupReport, nativeMenus bool
 		a.cfg.Clear = [4]float32{} // premultiplied transparent: the backdrop or the materials show
 	}
 	a.Win, a.req = win, win
+	if a.handle != nil && a.handle.a == a && a.handle.id == a.winID {
+		a.handle.pw.Store(win) // the handle OpenWindow gave the window, for Init and the first Build (Window)
+	}
 	t0 := platform.Now()
 	st.OpenMs = ms(t0 - tEntry)
 
@@ -506,8 +509,8 @@ func (a *App) loop() error {
 			a.idleTurn()
 			continue
 		}
-		if m := a.menuWin(); m != nil {
-			m.syncMenuBar()
+		for _, w := range a.wins {
+			w.syncMenuBar()
 		}
 		now := platform.Now()
 		if a.bench != nil && now > a.bench.deadline {

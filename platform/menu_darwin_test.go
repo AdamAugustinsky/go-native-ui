@@ -789,3 +789,94 @@ func TestShiftKeyEquivalentsMatchTheRealChord(t *testing.T) {
 		}
 	}
 }
+
+// With two windows the bar is the key window's from the moment it becomes
+// key (windowDidBecomeKey:), before the app's loop turns again: a key
+// equivalent that follows the focus change acts on the new key window, as its
+// state validates it. A menu popped up over a window is validated by that
+// window's state, whichever window owns the bar. When the bar's owner closes,
+// the other window's bar takes over, and the closed one's state is not asked.
+func TestTheMenuBarFollowsTheKeyWindowAtOnce(t *testing.T) {
+	const tcClose = 41
+	var r struct {
+		why                  string
+		ownerFirst           bool
+		aCmds, bCmds         []uint64
+		bKeys                int
+		popTracked, popValid bool
+		ownerAfter           bool
+		asked                []uint16
+	}
+	onMain(func() {
+		spec := testMenuSpec()
+		spec.Menus[1].Items = append(spec.Menus[1].Items, MenuItem{ID: tcClose, Title: "Close", Key: 'w', Mods: ModSuper})
+		a, err := Open(Options{Title: "A", Width: 300, Height: 200})
+		if err != nil {
+			r.why = err.Error()
+			return
+		}
+		defer a.Close()
+		b, err := Open(Options{Title: "B", Width: 300, Height: 200})
+		if err != nil {
+			r.why = err.Error()
+			return
+		}
+		pool := objc.F.Call0(objc.PoolPush)
+		defer objc.F.Call1(objc.PoolPop, pool)
+		// A's state disables Save and the row menu's Open; B's enables them.
+		stA := &menuRig{off: map[uint16]bool{tcSave: true, tcRow: true}, checked: map[uint16]bool{}}
+		stB := &menuRig{off: map[uint16]bool{}, checked: map[uint16]bool{}}
+		model := new(int) // the windows' one model: they share the bar
+		a.SetWindowMenus(spec, stA.state, model)
+		b.SetWindowMenus(spec, stB.state, model)
+		r.ownerFirst = a.MenuBarOwner() && !b.MenuBarOwner()
+
+		objc.Send1(b.delegate, selDidBecomeKey, 0) // AppKit's, as B is made key
+		a.q.reset()
+		b.q.reset()
+		cmd := uintptr(1 << 20)
+		b.handle(keyDown(b, "w", cmd, 0x0D)) // ⌘W, in the same turn
+		b.handle(keyDown(b, "s", cmd, 0x01)) // ⌘S: A's state would refuse it
+		_, r.aCmds, _ = countEvents(a.q.ev)
+		r.bKeys, r.bCmds, _ = countEvents(b.q.ev)
+
+		menuOpenHook = func(m objc.ID) {
+			r.popTracked = true
+			r.popValid = objc.SendBool1(nativeMenus.target, selValidateItem, uintptr(itemAt(m, 0)))
+			objc.Send(m, objc.Sel("cancelTracking"))
+		}
+		a.PopUpMenu(&Popup{Spec: spec, Menu: 7, Kind: PopupContext, X0: 40, Y0: 40, X1: 40, Y1: 40}) // over A, while B owns the bar
+		menuOpenHook = nil
+
+		stB.record = true
+		b.Close()
+		r.ownerAfter = a.MenuBarOwner()
+		save := itemAt(objc.Send(itemAt(nativeMenus.bar, 1), objc.Sel("submenu")), 0) // File ▸ Save
+		objc.SendBool1(nativeMenus.target, selValidateItem, uintptr(save))
+		stA.record = true
+		a.Close() // the last: no window takes the bar over
+		objc.SendBool1(nativeMenus.target, selValidateItem, uintptr(save))
+		r.asked = append(stB.asked, stA.asked...)
+	})
+	if r.why != "" {
+		t.Skipf("cannot open a window here: %s", r.why)
+	}
+	if !r.ownerFirst {
+		t.Error("the first window to give its menus does not own the bar")
+	}
+	if len(r.aCmds) != 0 || len(r.bCmds) != 2 || r.bCmds[0] != tcClose || r.bCmds[1] != tcSave || r.bKeys != 0 {
+		t.Errorf("⌘W and ⌘S right after B became key: commands %v to A, %v and %d keys to B; want none, [%d %d] and none", r.aCmds, r.bCmds, r.bKeys, tcClose, tcSave)
+	}
+	if !r.popTracked {
+		t.Fatal("the menu over A did not open")
+	}
+	if r.popValid {
+		t.Error("the menu popped up over A is validated by B's state (the bar's owner): A disables its item")
+	}
+	if !r.ownerAfter {
+		t.Error("after the bar's owner closed, the other window does not own the bar")
+	}
+	if len(r.asked) != 0 {
+		t.Errorf("the closed windows' state was asked about %v", r.asked)
+	}
+}

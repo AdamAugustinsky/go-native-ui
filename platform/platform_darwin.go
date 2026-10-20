@@ -117,7 +117,8 @@ type Window struct {
 	menuActed   bool      // a native menu item acted during this event's sendEvent (menu_darwin.go)
 	fieldKey    bool      // the key-down being sent is the focused field's: no menu item acts on it
 	fieldKeys   FieldKeys
-	handlerRuns int // calls of the frame handler (DebugMenu.Frame)
+	menus       windowMenus // the window's bar and the state of its menus (SetWindowMenus, menu_darwin.go)
+	handlerRuns int         // calls of the frame handler (DebugMenu.Frame)
 
 	// The registry (windows_darwin.go).
 	slot       int         // the window's slot in the registry (windows_darwin.go)

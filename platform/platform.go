@@ -27,6 +27,8 @@
 //	(*Window).HasButtons() bool           whether native buttons are over the content (Options.Buttons); experimental
 //	(*Window).SetButtonEnabled(id, on)    enable or disable one; cheap when unchanged (macOS; no-op elsewhere); experimental
 //	(*Window).SetMenuBar(spec, state)     the application's native menu bar (menu.go; macOS; no-op elsewhere)
+//	(*Window).SetWindowMenus(spec, state, model)
+//	                                      the window's bar, installed while it is key, and its menus' state (macOS; no-op elsewhere)
 //	(*Window).PopUpMenu(*Popup) int       a native context, pull-down or list menu; returns the chosen item (macOS; -1 elsewhere)
 //	HasNativeMenus() bool                 whether the OS has native menus (macOS)
 //	(*Window).Alert(AlertSpec), OpenPanel(OpenSpec), SavePanel(SaveSpec)

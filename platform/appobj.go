@@ -807,7 +807,10 @@ func DispatchApp() {
 		signalApp()
 	}
 	if got {
-		Wake() // the app's loop runs a turn: what the events changed may want a frame
+		// The app's loop runs a turn: the events' sink asked the windows they
+		// changed for their frames (a Wake would hand every window an EvWake,
+		// and each would draw).
+		WakeLoop()
 	}
 }
 

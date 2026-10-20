@@ -254,3 +254,39 @@ func TestDialogThatCannotShowReachesTheHandler(t *testing.T) {
 		t.Fatalf("the handler got %+v (%+v), calls %v", h.got, h.res, f.calls)
 	}
 }
+
+// The answer of a sheet whose window closed with it on screen reaches the
+// Handler once, with the app's ticket and the closed window's id, and the
+// window's App has it for TakeDialog; unless that App holds another window by
+// the time it arrives (the Handler's App, opened again), whose TakeDialog
+// does not get it.
+func TestTheAnswerOfAClosedWindowsSheet(t *testing.T) {
+	for _, reopened := range []bool{false, true} {
+		f := &fakeDialogs{}
+		h := &recordingHandler{}
+		a := &App{appObject: &appObject{handler: h, started: true}, UI: ui.New(fakeui.New()), dlgT: f}
+		a.winID = 5
+		tk, err := a.Alert(platform.AlertSpec{Message: "m", Buttons: []string{"OK", "Cancel"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		a.flushDialogs()
+		a.keepClosedDialogs() // the window closes, the sheet on screen
+		if reopened {
+			a.winID = 9
+		}
+		pe, data := platform.DialogEvent(platform.DialogResult{Ticket: 100, Kind: platform.DialogAlert, Outcome: platform.DialogCancelled, Button: -1}) // the fake's ticket
+		a.AppEvent(&pe, data)
+		a.AppEvent(&pe, data) // once
+		if len(h.got) != 1 || h.got[0].ID != uint64(tk) || h.got[0].Window != 5 || h.res[0].Outcome != platform.DialogCancelled {
+			t.Fatalf("reopened %v: the handler got %+v, want one cancelled EvService for ticket %d of window 5", reopened, h.got, tk)
+		}
+		r, ok := a.TakeDialog()
+		if reopened && ok {
+			t.Errorf("the window opened in the App since has the closed one's answer: %+v", r)
+		}
+		if !reopened && (!ok || r.Ticket != tk || r.Outcome != platform.DialogCancelled) {
+			t.Errorf("TakeDialog of the closed window's App: %+v (ok %v)", r, ok)
+		}
+	}
+}

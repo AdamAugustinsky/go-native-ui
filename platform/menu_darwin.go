@@ -120,6 +120,7 @@ var nativeMenus struct {
 	services objc.ID // the Services menu every bar shares (servicesMenu), retained
 	popups   []popupMenu
 	owner    *Window // the window whose bar is installed (SetMenuBar): the bar's commands are its; nil: the app's
+	model    any     // the model the installed bar was built from (SetWindowMenus), nil: none known
 	popup    *Window // the window PopUpMenu shows a menu over, while it does
 }
 
@@ -191,13 +192,68 @@ func ensureMenuTarget() {
 // building the menus allocates, so call it at a safe point, not every frame.
 // The spec is read during the call only.
 //
-// With several windows open, the bar is the key window's: its commands
-// arrive as that window's EvCommand. The app installs each window's bar when
-// it becomes key (or, when two windows share one model, only switches the
-// state with UseMenuBar).
+// Its commands arrive as this window's EvCommand. With several windows open,
+// the bar is the key window's: SetWindowMenus gives each window its own, and
+// installs it the moment that window becomes key.
 func (w *Window) SetMenuBar(spec *MenuSpec, state MenuState) {
 	setMenuBar(w.app, spec, state)
-	nativeMenus.owner = w
+	nativeMenus.owner, nativeMenus.model = w, nil
+}
+
+// windowMenus is what SetWindowMenus gave the window.
+type windowMenus struct {
+	spec  *MenuSpec
+	state MenuState
+	model any
+}
+
+// SetWindowMenus gives the window its menu bar and the function that enables
+// and checks the items of its menus: its bar's while that bar is installed,
+// and its popped-up menus' (PopUpMenu) always. The installed bar is the key
+// window's: this one's is installed now if the window is key, owns the bar
+// already (a new spec: the bar is built again) or no open window owns it,
+// and otherwise the moment the window becomes key, before any later event,
+// so that a key equivalent or a menu item always acts on the key window.
+// Windows with the same model (a pointer, nil for none) share the bar built
+// for it: taking it over switches its commands and state only. When the
+// window that owns the bar closes, the next key window's bar is installed.
+// spec is kept until the next call or until the window closes; call again
+// when it changes. Main thread, at a safe point: building a bar allocates.
+func (w *Window) SetWindowMenus(spec *MenuSpec, state MenuState, model any) {
+	w.menus = windowMenus{spec, state, model}
+	if o := nativeMenus.owner; o == w || o == nil || !o.registered || objc.SendBool(w.win, selIsKeyWindow) {
+		w.installMenus(o == w)
+	}
+}
+
+// installMenus makes the window's bar (SetWindowMenus) the installed one: the
+// one installed already, with its commands and state switched to this
+// window, when it was built for the same model and rebuild is false; else a
+// new build.
+func (w *Window) installMenus(rebuild bool) {
+	m := &w.menus
+	if m.spec == nil {
+		return
+	}
+	if !rebuild && nativeMenus.bar != 0 && m.model != nil && m.model == nativeMenus.model {
+		nativeMenus.state, nativeMenus.owner = m.state, w
+		return
+	}
+	setMenuBar(w.app, m.spec, m.state)
+	nativeMenus.owner, nativeMenus.model = w, m.model
+}
+
+// adoptMenuBar installs the bar of the window the menus are for now (the key
+// window, else the one an event would go to) once the bar's owner has
+// closed; with none, the closed window's bar stays with no state and no
+// owner (its commands are the application's or the next window's).
+func adoptMenuBar() {
+	if nativeMenus.owner != nil {
+		return
+	}
+	if w := fallbackWindow(); w != nil && w.menus.spec != nil {
+		w.installMenus(false)
+	}
 }
 
 // UseMenuBar makes the installed bar this window's without building it
@@ -218,7 +274,7 @@ func (w *Window) MenuBarOwner() bool { return nativeMenus.owner == w && nativeMe
 func SetAppMenuBar(spec *MenuSpec, state MenuState) {
 	if appObj.started {
 		setMenuBar(appObj.app, spec, state)
-		nativeMenus.owner = nil
+		nativeMenus.owner, nativeMenus.model = nil, nil
 	}
 }
 
@@ -834,6 +890,9 @@ func validate(item objc.ID, id uint16, act MenuAction) bool {
 		return false
 	}
 	fn := nativeMenus.state
+	if p := nativeMenus.popup; p != nil && p.menus.state != nil {
+		fn = p.menus.state // a popped-up menu is its window's, whichever window owns the bar
+	}
 	if fn == nil {
 		return id != 0 || (act != MenuNone && !act.IsEdit())
 	}

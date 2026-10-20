@@ -113,19 +113,6 @@ func (a *App) windowsAgreeToClose() bool {
 	return true
 }
 
-// mainWindow is the app's main window: the first one it opened (the Handler's
-// App holds it) if it is open, else the one of the others that opened first;
-// nil with none open.
-func (a *App) mainWindow() *App {
-	if r := a.root; r != nil && r.Win != nil {
-		return r
-	}
-	if len(a.wins) > 0 {
-		return a.wins[0]
-	}
-	return nil
-}
-
 // AppConfig configures the application object (Main).
 type AppConfig struct {
 	// ID is the app's reverse-DNS identifier ("dev.example.notes"). Empty:
@@ -178,7 +165,7 @@ func Main(cfg AppConfig, h Handler) error {
 	}
 	defer a.unbindApp()
 	if err := h.Start(a); err != nil {
-		a.close()
+		a.closeAll() // the windows Start opened
 		return err
 	}
 	a.started = true
@@ -331,19 +318,21 @@ func (a *App) openWindowNow(cfg WindowConfig, b Builder, w *Win) error {
 	} else if t.held {
 		t.renew() // the root's window closed: its place goes to this one, with nothing of the closed one
 	}
+	// The window's identity comes first: Init and the first Build that ask
+	// for it (App.Window) get the handle OpenWindow returns.
+	a.nextWinID++
+	t.winID, t.handle = a.nextWinID, w
+	w.a, w.id = t, a.nextWinID
 	var st StartupReport
 	a.opening++
 	err := t.openWin(cfg, b, &st, true, platform.Now(), sysinfo.ProcessAgeNs())
 	a.opening--
 	if err != nil {
+		t.winID, t.handle, w.a = 0, nil, nil
+		w.pw.Store(nil)
 		return err
 	}
 	t.Win.SetFrameHandler(t.frameHandler)
-	a.nextWinID++
-	t.winID, t.handle = a.nextWinID, w
-	w.a, w.id = t, a.nextWinID
-	w.pw.Store(t.Win)
-	a.markMenus() // the bar follows the key window (menus)
 	return nil
 }
 
@@ -417,20 +406,19 @@ type appObject struct {
 	framing     int         // windows between BeginFrame and EndFrame: no frame handler draws and no safe point runs
 	opening     int         // OpenWindow is opening a window (its Init runs)
 	queuedOpens int         // OpenWindow calls waiting for a safe point
-	barWin      *App        // the window whose menu bar is installed (menus.go)
-	barModel    *menu.Model // the model of the last window bar installed
+	barModel    *menu.Model // the model of the last window bar given to the platform (menus.go)
 
-	dlgSeq platform.DialogTicket // the last dialog ticket given (dialogs.go): one numbering for the app
+	dlgSeq    platform.DialogTicket // the last dialog ticket given (dialogs.go): one numbering for the app
+	closedDlg []closedDialog        // the dialogs of closed windows whose answer has not arrived (closedDialog)
 
 	// What the windows draw with, made with the first window and released
 	// with the last (window.go).
-	dev     *gpu.Device // the GPU device and queue, where the OS shares one (macOS)
-	noDev   bool        // the OS has no shared device: a surface makes its own
-	r       *gpu.Renderer
-	text    *text.System
-	atlas   *ui.SharedAtlas
-	scales  [fontScales]float32 // the scales whose fonts are alive, latest first (zoom.go)
-	nScales int
+	dev    *gpu.Device // the GPU device and queue, where the OS shares one (macOS)
+	noDev  bool        // the OS has no shared device: a surface makes its own
+	r      *gpu.Renderer
+	text   *text.System
+	atlas  *ui.SharedAtlas
+	scales []float32 // the scales whose fonts are alive, latest first (zoom.go)
 }
 
 // closeWindow closes the window at a safe point; the app ends with its last
@@ -441,6 +429,7 @@ func (a *App) closeWindow() {
 		return
 	}
 	a.cancelQueuedDialogs() // its dialogs not shown yet end as cancelled
+	a.keepClosedDialogs()
 	a.closeWin()
 	a.UI = nil
 	a.menuDirty = true // the app's bar, without the window's state
@@ -523,7 +512,6 @@ func (a *App) syncAppMenuBar() {
 	a.menuDirty = false
 	a.menuSpec = nativeMenuSpec(a.appModel())
 	platform.SetAppMenuBar(&a.menuSpec, a.appStateFn)
-	a.barWin = nil
 }
 
 // appModel is the menu model of the app's bar with no window open: the main
