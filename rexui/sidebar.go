@@ -387,7 +387,9 @@ func sidebarRow(k *base.Kit, key ui.Key, it *SidebarItem, sel, emph bool, rc *Si
 		c.NextJustify(ui.JustifyCenter)
 		c.NextCross(ui.CrossCenter)
 		c.NextAxis(ui.AxisX)
-		c.Push(c.BoxKeyed(ui.DrawBackground|base.Floating, ui.KeyN(rkey, 5), nil))
+		// (the symbol is cut at the square's edge, as AppKit's tile image cuts
+		// a wide one: battery.100)
+		c.Push(c.BoxKeyed(ui.DrawBackground|ui.Clip|base.Floating, ui.KeyN(rkey, 5), nil))
 		if f, disp := k.Icons().Prepare(c, id, rc.TileGlyph.RGBA(r)); f != 0 {
 			c.BoxKeyed(f, ui.KeyN(rkey, 1), disp)
 		}

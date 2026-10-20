@@ -40,8 +40,8 @@ func TestAuditLayout(t *testing.T) {
 // auditAllow are the findings that are right as they are, each with the
 // AppKit capture it follows.
 var auditAllow = []widgettest.Allow{
-	{Check: ui.AuditColumn, Where: `Row "Invoices" in Table "Files"`,
-		Reason: "a folder's symbol and a page's differ in width, centred in the same 16-pt square at the cell's start, as AppKit's file icons differ in ink in their one 198–214 image view (finder capture: a folder 199–213, a page 200–212); the names after them line up"},
+	{Check: ui.AuditColumn, Where: `in Table "Files"`, Other: `ColumnHeader "Name"`,
+		Reason: "a name cell starts with its file's icon centred in a 16-pt square at the title's x, and icons differ in ink (a folder, a page, a platform's fallback glyph), as AppKit's file icons do in their one 198–214 image view (finder capture: a folder's ink 199–213, a page's 200–212); the names after them line up"},
 }
 
 func newRigOpts(t *testing.T, o Options) (*widgettest.Rig, *Demo) {
