@@ -47,6 +47,18 @@ widths, knob slots and knobs per control size and style as JSON
 (`-[NSScroller rectForPart:]`, no window, no GUI session). The theme's test
 reads it from `theme/testdata/appkit-scroller-27.2.json`.
 
+Which controls Tab reaches: `sh tools/appkitref/keynav.sh` prints, for a window
+of the usual controls, `canBecomeKeyView` of each and the order `nextValidKeyView`
+walks, with System Settings ▸ Keyboard ▸ Keyboard navigation as the machine has
+it (the tool never changes it; no override short of the setting itself reaches
+AppKit's controls, so only the machine's own value can be measured).
+`platform.TabReachesControls` and `ui.Context.SetTabReachesControls` follow
+the result (`theme/testdata/appkit-keynav-27.2-macmini.json`, taken with the
+setting off: text fields of every kind, the date picker, text views, tables and
+outlines are reached; push buttons, checkboxes, radios, pop-up and pull-down
+buttons, sliders, steppers, segmented controls, color wells and disclosure
+triangles are not).
+
 ## Which machine, which reference set
 
 Every measurement file has a top-level `machine` object (`machine.h`): the

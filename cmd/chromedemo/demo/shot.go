@@ -6,6 +6,7 @@ import (
 	"image"
 	"image/png"
 	"os"
+	"time"
 
 	"gonativeui/app"
 	"gonativeui/theme"
@@ -71,9 +72,14 @@ func renderDemo(d *Demo, o ShotOptions) (*app.Offscreen, *Demo, *image.RGBA, err
 	settled := false
 	for n := 0; n < 600 && !settled; n++ {
 		off.Frame()
-		settled = n > 90 && !off.UI.Animating() // past the scroll bars' fade
+		// past the scroll bars' fade, the file icons decoded
+		settled = n > 90 && !off.UI.Animating() && !d.iconsPending
+		if d.iconsPending {
+			time.Sleep(time.Millisecond)
+		}
 	}
 	if !settled {
+		d.Close()
 		off.Close()
 		return nil, nil, nil, errors.New("chromedemo: the scene did not settle")
 	}
@@ -84,11 +90,12 @@ func renderDemo(d *Demo, o ShotOptions) (*app.Offscreen, *Demo, *image.RGBA, err
 // Shot renders the scene offscreen at rest, with the traffic lights drawn by
 // the toolbar, and writes the PNG to path. It returns the frame's quads.
 func Shot(path string, o ShotOptions) (quads int, err error) {
-	off, _, img, err := render(o)
+	off, d, img, err := render(o)
 	if err != nil {
 		return 0, err
 	}
 	defer off.Close()
+	defer d.Close()
 	f, err := os.Create(path)
 	if err != nil {
 		return 0, err
@@ -116,6 +123,7 @@ func Measure(o ShotOptions) ([]Node, error) {
 		return nil, err
 	}
 	defer off.Close()
+	defer d.Close()
 	if o.Scale <= 0 {
 		o.Scale = 2
 	}
