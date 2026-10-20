@@ -204,6 +204,11 @@ func (c *Context) FlowOverflow(id ID) int { return int(c.boxes[id].flowOut.over)
 // (during a build, the previous frame's).
 func (c *Context) FlowLines(id ID) int { return int(c.boxes[id].flowOut.lines) }
 
+// WasHidden reports whether the last layout hid box id (during a build, the
+// previous frame's): a flow's MaxLines left it, or a box it is in, out of
+// its lines. Its rectangle then says nothing about where it shows.
+func (c *Context) WasHidden(id ID) bool { return c.wasHidden(&c.boxes[id]) }
+
 // wasHidden reports whether the last layout hid box b: the visibility that
 // input checks made while building see (a rebuilt box keeps the previous
 // layout's in prevHid; a box not rebuilt yet still has it in hid).
