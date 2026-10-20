@@ -579,7 +579,8 @@ func (c *Context) imageRect(b *box) ([4]float32, bool) {
 // draws it, without the spaces at either end: from the pen position of the
 // first glyph that is not a space to the advance of the last, by the font's
 // ascent and descent, clipped to the padded box as emitText clips text that
-// overflows with FadeOverflowX. n is the number of glyphs inside it. ok is
+// overflows with FadeOverflowX or EllipsisOverflowX (an ellipsis ends inside
+// it). n is the number of glyphs inside it. ok is
 // false for a box without such text (none, wrapped or rich).
 func (c *Context) textInk(b *box) (n int, ink [4]float32, ok bool) {
 	if b.flags&DrawText == 0 || b.flags&WrapText != 0 || b.txt.Len == 0 || c.recOf(b) != nil {
@@ -629,7 +630,7 @@ func (c *Context) textInk(b *box) (n int, ink [4]float32, ok bool) {
 	}
 	baseline := snap(y0 + ((y1-y0)-(fi.ascent+fi.descent))/2 + fi.ascent)
 	ink = [4]float32{x + v.X[i0], baseline - fi.ascent, x + end, baseline + fi.descent}
-	if over && b.flags&FadeOverflowX != 0 { // emitText clips it to the padded box
+	if over && b.flags&(FadeOverflowX|EllipsisOverflowX) != 0 { // emitText clips it to the padded box
 		ink[0], ink[2] = max(ink[0], x0), min(ink[2], x1)
 		if ink[2] <= ink[0] {
 			return 0, ink, false
@@ -752,7 +753,7 @@ func (c *Context) auditColumns(dst []Finding, tol float32) []Finding {
 }
 
 // inkOf is the union of the glyph and image boxes of id's subtree (its text
-// and images) and the alignment of its widest text (the name beside an icon
+// and images, as far as they are drawn: see inkUnion) and the alignment of its widest text (the name beside an icon
 // of the symbol font, which is centred in its box); ok is false when it has
 // neither text nor images.
 func (c *Context) inkOf(id ID) (ink [4]float32, al Align, ok bool) {
@@ -782,18 +783,33 @@ func (c *Context) widestText(id ID) ID {
 	return best
 }
 
+// inkUnion is the union of the glyph and image boxes of id's subtree, as far
+// as they are drawn: what a Clip box of the subtree cuts off its descendants
+// (as emit does) is not counted.
 func (c *Context) inkUnion(id ID) (ink [4]float32, ok bool) {
+	return c.inkUnionIn(id, [4]float32{-1e9, -1e9, 1e9, 1e9})
+}
+
+func (c *Context) inkUnionIn(id ID, clip [4]float32) (ink [4]float32, ok bool) {
 	b := &c.boxes[id]
 	if b.hid {
 		return ink, false
 	}
 	if _, r, has := c.textInk(b); has {
-		ink, ok = r, true
+		ink, ok = intersect(r, clip), true
 	} else if b.flags&DrawImage != 0 && b.img.Tex != 0 {
-		ink, ok = c.iconInk(b)
+		if r, has := c.iconInk(b); has {
+			ink, ok = intersect(r, clip), true
+		}
+	}
+	if ok && empty(ink) {
+		ok = false
+	}
+	if b.flags&Clip != 0 {
+		clip = intersect(clip, b.rect)
 	}
 	for ch := b.first; ch != 0; ch = c.boxes[ch].next {
-		r, has := c.inkUnion(ch)
+		r, has := c.inkUnionIn(ch, clip)
 		switch {
 		case !has:
 		case ok:
