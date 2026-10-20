@@ -32,7 +32,7 @@ const maxSide = 16384
 
 // maxPixels bounds the source images the decoders accept (a decompression
 // bomb is refused from its header, before any pixel is decoded).
-const maxPixels = 100 << 20
+const maxPixels = platform.MaxImagePixels
 
 // Who owns a job's resources (its inline copy, its lease, its output): the
 // cache's jobs table holds one of these per entry, moved by compare-and-swap

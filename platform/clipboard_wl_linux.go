@@ -22,10 +22,22 @@ var (
 	mimeUTF8Plain  = cstr("text/plain;charset=utf-8")
 	mimeUTF8String = cstr("UTF8_STRING")
 	mimePlain      = cstr("text/plain")
+	mimePNG        = cstr("image/png")
+	mimeURIList    = cstr("text/uri-list")
+	mimeHint       = cstr("x-kde-passwordManagerHint")
 
-	// wlMimes are the text types we offer and accept, in preference order;
-	// wlOffer.mimes has bit i set when the offer lists wlMimes[i].
-	wlMimes = [...][]byte{mimeUTF8Plain, mimeUTF8String, mimePlain}
+	// wlMimes are the types we offer and accept, in preference order within a
+	// kind (indexes wlText.. below); wlOffer.mimes has bit i set when the
+	// offer lists wlMimes[i].
+	wlMimes = [...][]byte{mimeUTF8Plain, mimeUTF8String, mimePlain, mimePNG, mimeURIList, mimeHint}
+)
+
+// The indexes in wlMimes: the text types are 0 to wlTextN-1.
+const (
+	wlTextN = 3
+	wlPNG   = 3
+	wlURI   = 4
+	wlHint  = 5
 )
 
 const maxOffers = 4
@@ -120,17 +132,17 @@ func (w *Window) onDataSource(op uint32, a unsafe.Pointer) {
 	case 1: // send(mime_type, fd)
 		fd := int(int32(argU(a, 1)))
 		m := argP(a, 0)
-		ok := false
-		for _, name := range wlMimes {
+		var data []byte
+		for i, name := range wlMimes {
 			if cstrIs(m, string(name[:len(name)-1])) {
-				ok = true
+				data = c.clipData(wlTargetClass(i))
 			}
 		}
-		if !ok || !c.owned {
+		if data == nil || !c.owned {
 			syscall.Close(fd)
 			return
 		}
-		w.wlStartSend(fd)
+		w.wlStartSend(fd, data)
 	case 2: // cancelled: another application took the selection
 		c.owned = false
 		w.release(y.src, 1, 1) // wl_data_source.destroy
@@ -151,7 +163,10 @@ func (w *Window) wlPublish() {
 	y.src = w.req(y.ddm, 0, wlc.dataSource, y.ddmV, 0)
 	listen(y.src)
 	v := version(y.src)
-	for _, m := range wlMimes {
+	for i, m := range wlMimes {
+		if w.clip.clipData(wlTargetClass(i)) == nil { // the text types for text, image/png for an image, the hint when concealed
+			continue
+		}
 		y.args[0] = uint64(uintptr(unsafe.Pointer(&m[0])))
 		w.req(y.src, 0, 0, v, 0) // offer(mime_type)
 	}
@@ -163,12 +178,25 @@ func (w *Window) wlPublish() {
 	fr.Call1(wlf.flush, y.display)
 }
 
-// wlStartSend writes the clipboard text to fd (ours to close) without
-// blocking: what a full pipe does not take is written from the poll set.
-func (w *Window) wlStartSend(fd int) {
+// wlTargetClass is the class of target wlMimes[i] belongs to.
+func wlTargetClass(i int) clipTarget {
+	switch {
+	case i < wlTextN:
+		return clipTText
+	case i == wlPNG:
+		return clipTImage
+	case i == wlHint:
+		return clipTHint
+	}
+	return 255 // text/uri-list: we never offer a file list
+}
+
+// wlStartSend writes data (the clipboard text, the PNG file or the hint) to fd
+// (ours to close) without blocking: what a full pipe does not take is written
+// from the poll set.
+func (w *Window) wlStartSend(fd int, data []byte) {
 	c := &w.clip
 	syscall.SetNonblock(fd, true)
-	data := c.own
 	off := 0
 	for off < len(data) {
 		n, err := syscall.Write(fd, data[off:])
@@ -235,8 +263,9 @@ func (w *Window) wlSendDeadline() int64 {
 
 // ---- paste ----
 
-// wlBeginPaste asks the selection offer for its text and starts receiving it.
-// It reports false when there is no usable offer.
+// wlBeginPaste asks the selection offer for the best of the requested kinds
+// it lists and starts receiving it. It reports false when there is no usable
+// offer.
 func (w *Window) wlBeginPaste() bool {
 	y := &w.wy
 	c := &w.clip
@@ -244,16 +273,36 @@ func (w *Window) wlBeginPaste() bool {
 		return false
 	}
 	o := &y.offers[y.sel]
-	k := -1
-	for i := range wlMimes {
-		if o.mimes&(1<<i) != 0 {
-			k = i
-			break
-		}
-	}
-	if k < 0 || o.proxy == 0 {
+	if o.proxy == 0 {
 		return false
 	}
+	k := -1
+	kind, ok := pickKind(c.kinds, func(k PasteKind) bool {
+		switch k {
+		case PasteFiles:
+			return o.mimes&(1<<wlURI) != 0
+		case PasteImage:
+			return o.mimes&(1<<wlPNG) != 0
+		}
+		return o.mimes&(1<<wlTextN-1) != 0
+	})
+	if !ok {
+		return false
+	}
+	switch kind {
+	case PasteFiles:
+		k = wlURI
+	case PasteImage:
+		k = wlPNG
+	default:
+		for i := 0; i < wlTextN; i++ {
+			if o.mimes&(1<<i) != 0 {
+				k = i
+				break
+			}
+		}
+	}
+	c.kind = kind
 	// The write end goes to the other application and must stay blocking: it
 	// shares its file description with the copy the compositor passes on.
 	if err := syscall.Pipe2(c.pipe[:], syscall.O_CLOEXEC); err != nil {
@@ -305,7 +354,7 @@ func (w *Window) wlReadPaste() {
 		c.buf = c.buf[:len(c.buf)+n]
 		c.deadline = nanotime() + clipTimeout
 		if len(c.buf) > MaxPaste {
-			w.clipFail()
+			w.clipFailBig()
 			return
 		}
 	}

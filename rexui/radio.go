@@ -45,7 +45,7 @@ func RadioGroup(k *base.Kit, label string, sel *int, options []string, o RadioOp
 	s := &r.Sizes[size]
 	n := len(options)
 	ch := k.ChoiceState(label, sel, n)
-	box := pt(k.Scale(), cb.Box[size])
+	box := theme.Snap(s.Check)
 	dot := pt(k.Scale(), rc.Dot[size])
 
 	axis, gap := ui.AxisY, k.Pt(rc.RowGap)
@@ -75,7 +75,7 @@ func RadioGroup(k *base.Kit, label string, sel *int, options []string, o RadioOp
 		}
 		c.NextAxis(ui.AxisX)
 		c.NextCross(ui.CrossCenter)
-		c.NextGap(s.Gap)
+		c.NextGap(s.CheckGap)
 		k.BeginChoiceItem(&ch, &it, ui.RoleRadio, ui.Children(1), ui.Px(box), 0, nil)
 		c.NextSize(ui.Px(box), ui.Px(box))
 		c.NextBG(fill)

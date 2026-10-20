@@ -33,6 +33,9 @@
 //	                                      native alert and file panel sheets (macOS; ErrUnsupported elsewhere); the answer is an AppEvService from SourceDialog, see dialog.go
 //	(*Window).SetTooltipRegions(r)        native tooltips by content rectangle (macOS; no-op elsewhere); diffed, cheap to call every frame
 //	(*Window).SetTooltipText(f)           where the tooltip text comes from, asked for on demand when the system shows one
+//	(*Window).SetDropKinds(k), SetDragHandler(h), StartDrag(spec)
+//	                                      drag and drop in and out (macOS; ErrDragUnsupported elsewhere), see drag.go
+//	DragThreshold() float32               how far a press moves before it is a drag, in logical units
 //	(*Window).Close()
 //	SetSecureInput(on bool)               macOS: bracket EnableSecureEventInput for a password field (balanced, released while the app is inactive); no-op elsewhere
 //	Clipboard() string                    plain UTF-8 text of the system clipboard; main thread
@@ -121,7 +124,7 @@ const (
 	EvPreedit                 // Text: input-method composition (marked text), empty when it ended; SelStart, SelLen: caret/selection inside it
 	EvWake                    // a goroutine called Wake
 	EvFrame                   // the frame slot armed by RequestFrame is available
-	EvPaste                   // the answer to RequestPaste: Text (plain text), Tag; FlagFailed when there is none
+	EvPaste                   // the answer to RequestPaste or RequestPasteKinds: Paste (the kind), Text (plain text, PNG bytes or NUL-separated paths), Tag; FlagFailed when there is none (FlagTooBig too when it was over MaxPaste)
 	EvCommand                 // a native button or menu item was chosen: Tag is its command id (NativeButton.ID, HostOptions.Command, MenuItem.ID); with FlagStandard, a MenuAction
 	EvHostFocus               // the keyboard focus moved to a host (Tag: its HostID) or back to the app's own view (Tag 0)
 	EvHostCommand             // a focused host handed back Tab, Shift+Tab, Escape or Enter: Tag is the HostID, Key and Mods the key
@@ -130,6 +133,11 @@ const (
 	EvMagnify                 // a pinch: Amount is the change in scale (0.1 = grow by 10 %), Phase its phase (PhaseNone: a device without phases), X, Y where it is; see Gestures
 	EvSmartMagnify            // the two-finger double tap (smart zoom): X, Y where it happened
 	EvRotate                  // a two-finger rotation: Amount in degrees, counterclockwise positive as the user sees it, Phase, X, Y
+	EvDragEnter               // a drag came over the window (drag.go): X, Y, Code the kinds offered, SelStart the operations allowed, SelLen the items, Tag the drag's number
+	EvDragMove                // the pointer moved in a drag over the window: as EvDragEnter
+	EvDragLeave               // the drag left the window or was cancelled: Tag
+	EvDrop                    // the drag was dropped: Code the kind delivered, Text its data, X, Y, Tag; FlagFailed when it could not be read
+	EvDragEnd                 // a drag out ended: Tag is its DragTicket, Code the operation performed (DragOpNone: cancelled)
 )
 
 // Flags qualify an Event.
@@ -139,11 +147,12 @@ const (
 	FlagDown     Flags = 1 << iota // key/button pressed, focus gained, became visible
 	FlagRepeat                     // key auto-repeat
 	FlagPrecise                    // scroll deltas are precise pixels (trackpad)
-	FlagFailed                     // EvPaste: no text (empty, not text, over MaxPaste, or the transfer failed)
+	FlagFailed                     // EvPaste: nothing of the requested kinds (empty, another kind, over MaxPaste, or the transfer failed)
 	FlagStandard                   // EvCommand: Tag is the MenuAction of a standard edit item without a command (menu.go)
 	FlagInverted                   // EvScroll: the device's direction is inverted ("natural" scrolling); DX, DY already move the content
 	FlagPos                        // EvScroll: X, Y are where the pointer was at the event (a scroll goes to the box under it, not under a later move)
 	FlagSelect                     // EvEdit: the command extends the selection instead of moving the caret (macOS: the ...AndModifySelection: selectors)
+	FlagTooBig                     // EvPaste, with FlagFailed: the clipboard holds a requested kind, but over MaxPaste (an image's PNG, a file list, text); nothing of it was copied
 )
 
 // ScrollPhase is the phase of a trackpad scroll gesture (Event.Phase) or of
@@ -330,7 +339,7 @@ type Event struct {
 	// text; the text field converts with its own buffer.
 	SelStart, SelLen int32
 	Time             int64  // OS event time in Now() nanoseconds; 0 if unknown
-	Tag              uint64 // EvPaste: the tag given to RequestPaste
+	Tag              uint64 // EvPaste: the tag given to RequestPaste or RequestPasteKinds
 	// Phase and Momentum are an EvScroll's gesture phase and momentum phase
 	// (at most one is not PhaseNone); see ScrollPhase for what each system
 	// reports. Without FlagPrecise, DX and DY are wheel lines converted to
@@ -345,6 +354,9 @@ type Event struct {
 	// as the user sees it). The Phase of both is Began, Changed, Ended or
 	// Cancelled, or PhaseNone from a device without phases.
 	Amount float32
+	// Paste is which kind of data an EvPaste carries in Text (PasteText,
+	// the zero value, for every other event too). See RequestPasteKinds.
+	Paste PasteKind
 }
 
 // Options configure Open.

@@ -4,6 +4,7 @@ package platform
 
 import (
 	"os"
+	"strings"
 	"sync/atomic"
 
 	"github.com/ebitengine/purego"
@@ -101,6 +102,7 @@ type Window struct {
 	ctrlClick   bool // the left button is held as a secondary click (ctrl-click)
 
 	aux         nativeAux // native dialogs and tooltips (dialog_darwin.go, tooltip_darwin.go)
+	drag        dragState // drag and drop in and out (drag_darwin.go)
 	menuActed   bool      // a native menu item acted during this event's sendEvent (menu_darwin.go)
 	fieldKey    bool      // the key-down being sent is the focused field's: no menu item acts on it
 	fieldKeys   FieldKeys
@@ -118,8 +120,17 @@ var (
 	clsNSDate                         objc.ID // cached: objc.Cls allocates, and Wait runs every frame
 )
 
-// GNUI_DEBUG=1 traces every Objective-C method our classes receive (allocates).
-var debugIMP = os.Getenv("GNUI_DEBUG") != ""
+// GNUI_DEBUG=1 (or a comma-separated list with "imp") traces every Objective-C
+// method our classes receive (allocates). The other words of GNUI_DEBUG belong
+// to the app's debug overlay (package app), which must not turn this on.
+var debugIMP = func() bool {
+	for _, f := range strings.Split(os.Getenv("GNUI_DEBUG"), ",") {
+		if f = strings.TrimSpace(f); f == "1" || f == "imp" {
+			return true
+		}
+	}
+	return false
+}()
 
 // Selectors used by more than one file. A selector only one file uses is
 // declared in that file.

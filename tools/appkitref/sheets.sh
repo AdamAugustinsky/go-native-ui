@@ -37,3 +37,4 @@ group choices "Checkbox, radio, switch" checkbox-off checkbox-on checkbox-mixed 
 group selects "Pop-up, segmented, slider" popup popup-small popup-disabled popup-focused pulldown popup-borderless segmented segmented-small slider slider-small slider-disabled slider-focused
 group fields "Text and search fields" field-placeholder field-text field-focused field-disabled field-small field-large search-empty search-text search-focused
 group containers "Separator, box, type" separator box label-styles
+group forms "Forms (grouped section, grid)" form-group form-grid

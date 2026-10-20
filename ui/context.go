@@ -273,6 +273,8 @@ type Context struct {
 	pasteReq bool
 
 	nt nativeTips // native tooltips declared this frame (regions_native.go)
+
+	drop dropState // drop targets and drags out (drag.go)
 	// native menus (nativemenu.go)
 	nativeMenus bool
 	menuReq     MenuRequest
@@ -294,6 +296,8 @@ type Context struct {
 	overflowFrames uint64 // ... in total
 
 	fonts []fontInfo
+
+	dbg *debugState // the recording of EnableDebug (debug.go); nil off
 
 	up      Uploader
 	pageTex []gpu.TextureID
@@ -426,6 +430,7 @@ func (c *Context) Begin(in *Input, widthPx, heightPx int, scale, dt float32) {
 	c.rScroll = rate(c.Rates.Scroll, dt)
 
 	c.hitTest()
+	c.dropBegin()
 	c.overlayInput()
 	c.mouse()
 	c.claimFieldKeys()
@@ -584,6 +589,9 @@ func (c *Context) newBox(flags Flags, key Key) ID {
 		if c.boxes[v].lastFrame != c.frame {
 			id, found = ID(v), true
 			break
+		}
+		if n == 0 && c.dbg != nil {
+			c.debugDup(key)
 		}
 		key = KeyN(key, n) // duplicate key among this frame's boxes: derive a distinct one
 	}

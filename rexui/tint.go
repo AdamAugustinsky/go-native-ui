@@ -14,9 +14,10 @@ const NoRole theme.Role = 255
 // crossfade and the system's live colours cost nothing extra.
 //
 // Alpha replaces the role's alpha (both 0 keep it). It is for the few colours
-// macOS 27.2 draws that no role names, such as a text field's outline (black
-// at 15 % in light, white at 9 % in dark); each such use is measured and
-// documented in its recipe.
+// macOS 27.2 draws that no role names (the accent at 70 % of a disabled
+// switch, red at 25 % of a destructive button); each such use is measured and
+// documented in its recipe. A colour several recipes share gets a role of its
+// own (theme.Knob, theme.FieldOutline).
 type Tint struct {
 	// Role is the colour role (NoRole: nothing).
 	Role theme.Role

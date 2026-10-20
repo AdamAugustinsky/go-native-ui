@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The clipboard round trip through the real general pasteboard. It restores
@@ -64,11 +65,33 @@ func newPasteRig(t *testing.T) *pasteRig {
 	return &pasteRig{t: t, w: &Window{q: newEventQueue()}}
 }
 
+// awaitPaste lets the pasteboard worker answer: it takes the answer into w's
+// queue as Wait would, until the queue holds an EvPaste. spin keeps the loop
+// from sleeping (a timer allocates, and the allocation tests count).
+func awaitPaste(t testing.TB, w *Window, spin bool) {
+	t.Helper()
+	for end := time.Now().Add(30 * time.Second); time.Now().Before(end); {
+		w.reapPaste()
+		for _, e := range w.q.ev {
+			if e.Kind == EvPaste {
+				return
+			}
+		}
+		if spin {
+			runtime.Gosched()
+		} else {
+			time.Sleep(200 * time.Microsecond)
+		}
+	}
+	t.Fatal("the pasteboard worker did not answer")
+}
+
 // paste requests a paste and returns its one event and text.
 func (r *pasteRig) paste(tag uint64) (Event, string) {
 	r.t.Helper()
 	r.w.q.reset()
 	r.w.RequestPaste(tag)
+	awaitPaste(r.t, r.w, false)
 	if len(r.w.q.ev) != 1 || r.w.q.ev[0].Kind != EvPaste || r.w.q.ev[0].Tag != tag {
 		r.t.Fatalf("events after RequestPaste: %+v", r.w.q.ev)
 	}
@@ -135,7 +158,10 @@ func TestRequestPasteNewerReplacesPending(t *testing.T) {
 	r.w.RequestPaste(1)
 	q.push(Event{Kind: EvPointerMove})
 	SetClipboardText([]byte("two"))
-	r.w.RequestPaste(2)
+	r.w.RequestPaste(2) // replaces 1, which may have been read by now: its answer is never delivered
+	awaitPaste(t, r.w, false)
+	time.Sleep(20 * time.Millisecond)
+	r.w.reapPaste()
 	var kinds []EventKind
 	for _, e := range q.ev {
 		kinds = append(kinds, e.Kind)
@@ -149,6 +175,9 @@ func TestRequestPasteNewerReplacesPending(t *testing.T) {
 	// Events already handed out stay: only undelivered pastes are replaced.
 	r.w.returned, r.w.nOut = true, len(q.ev)
 	r.w.RequestPaste(3)
+	for end := time.Now().Add(10 * time.Second); len(q.ev) < 4 && time.Now().Before(end); time.Sleep(time.Millisecond) {
+		r.w.reapPaste()
+	}
 	if n := len(q.ev); n != 4 || q.ev[2].Tag != 2 || q.ev[3].Tag != 3 {
 		t.Errorf("after a delivery: %+v", q.ev)
 	}
@@ -171,6 +200,7 @@ func TestRequestPasteOverMaxFails(t *testing.T) {
 	r.w.q.reset()
 	runtime.ReadMemStats(&before)
 	r.w.RequestPaste(4)
+	awaitPaste(t, r.w, false)
 	runtime.ReadMemStats(&after)
 	if len(r.w.q.ev) != 1 || r.w.q.ev[0].Kind != EvPaste || r.w.q.ev[0].Flags&FlagFailed == 0 || r.w.q.ev[0].Tag != 4 || len(r.w.q.text) != 0 {
 		t.Errorf("events %+v, %d text bytes", r.w.q.ev, len(r.w.q.text))
@@ -196,6 +226,7 @@ func TestClipboardZeroAllocs(t *testing.T) {
 			SetClipboardText(b)
 			r.w.q.reset()
 			r.w.RequestPaste(1)
+			awaitPaste(t, r.w, true)
 		}
 	}
 	for _, c := range []struct {

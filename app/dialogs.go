@@ -223,6 +223,7 @@ func (a *App) dialogEnded(r platform.DialogResult, pe *platform.AppEvent, data [
 			e := *pe
 			e.ID = uint64(s.app)
 			a.deliver(&e, data)
+			a.debugSweep(CauseDialog)
 			return
 		}
 	}
