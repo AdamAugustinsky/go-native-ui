@@ -412,7 +412,7 @@ func (e *Editor) SetText(b []byte) error {
 	if !utf8.Valid(b) {
 		return ErrNotBoundary
 	}
-	str := nsStringBytes(b)
+	str := edNSString(b)
 	e.quiet = true // the composition's end and the new text are one quiet change
 	if objc.SendBool(e.tv, selHasMarkedText) {
 		if ctx := objc.Send(e.tv, selInputContext); ctx != 0 {
@@ -466,7 +466,7 @@ func (e *Editor) Replace(r TextRange, text []byte, sel TextRange) error {
 		return ErrComposing
 	}
 	loc, n, _ := e.rangeU16(r)
-	str := nsStringBytes(text)
+	str := edNSString(text)
 	defer objc.Release(str)
 	tv := e.tv
 	if !objc.F.Reset().Arg(uintptr(tv)).Arg(uintptr(selShouldChange)).Arg(uintptr(loc)).Arg(uintptr(n)).Arg(uintptr(str)).Call(objc.MsgSend).Bool() {
@@ -511,8 +511,8 @@ func nsColor(c uint32) objc.ID {
 		ArgF64(f(24)).ArgF64(f(16)).ArgF64(f(8)).ArgF64(f(0)).Call(objc.MsgSend).R0())
 }
 
-// nsStringBytes is a new NSString (+1) of UTF-8 b.
-func nsStringBytes(b []byte) objc.ID {
+// edNSString is a new NSString (+1) of UTF-8 b.
+func edNSString(b []byte) objc.ID {
 	s := objc.Send(clsEdString, selAlloc)
 	var p unsafe.Pointer
 	if len(b) > 0 {

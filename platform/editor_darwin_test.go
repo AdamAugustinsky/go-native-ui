@@ -3,6 +3,7 @@
 package platform
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -113,11 +114,26 @@ func withEditorIn(t *testing.T, hidden bool, o EditorOptions, f func(e *Editor))
 		}
 		defer func() { e.Release(); w.Close() }()
 		if !hidden {
-			objc.Send1(w.win, objc.Sel("makeKeyAndOrderFront:"), 0)
+			activateKey(w)
 			objc.Send1(w.win, objc.Sel("makeFirstResponder:"), uintptr(e.tv))
 		}
 		f(e)
 	})
+}
+
+// activateKey makes the app active and w the key window, as a click does,
+// running the event loop up to 2 s for it: an input context handles keys
+// only in the key window. Main thread.
+func activateKey(w *Window) {
+	objc.Send1(w.app, objc.Sel("activateIgnoringOtherApps:"), 1)
+	objc.Send1(w.win, objc.Sel("makeKeyAndOrderFront:"), 0)
+	isKey, since := objc.Sel("isKeyWindow"), objc.Sel("dateWithTimeIntervalSinceNow:")
+	for i := 0; i < 40 && !objc.SendBool(w.win, isKey); i++ {
+		until := objc.ID(objc.F.Reset().Arg(uintptr(clsNSDate)).Arg(uintptr(since)).ArgF64(0.05).Call(objc.MsgSend).R0())
+		if ev := w.nextEvent(until); ev != 0 {
+			objc.Send1(w.app, selSendEvent, uintptr(ev))
+		}
+	}
 }
 
 // sendSetMarked is setMarkedText:selectedRange:replacementRange: as an input
@@ -155,7 +171,13 @@ func TestEditorEscapeAbandonsComposition(t *testing.T) {
 // committing Enter back as insertNewline:, within one keyDown:. That Enter
 // sends nothing and adds no line; a plain Enter afterwards sends.
 func TestEditorCommitThenNewlineInOneKey(t *testing.T) {
+	var notKey string
 	withEditorIn(t, false, EditorOptions{}, func(e *Editor) {
+		if !objc.SendBool(e.w.win, objc.Sel("isKeyWindow")) {
+			notKey = fmt.Sprintf("the window did not become key in 2 s (NSApp isActive=%v, keyWindow=%#x): keys reach no input context here",
+				objc.SendBool(e.w.app, objc.Sel("isActive")), objc.Send(e.w.app, objc.Sel("keyWindow")))
+			return
+		}
 		e.SetText([]byte("ab"))
 		e.TakeSignals()
 		ret := func() {
@@ -187,6 +209,9 @@ func TestEditorCommitThenNewlineInOneKey(t *testing.T) {
 			t.Errorf("a plain Enter did not send (%#x), text %q", s, e.Text())
 		}
 	})
+	if notKey != "" {
+		t.Skip(notKey)
+	}
 }
 
 // A trailing newline starts a line, empty as it is: the height counts it at
