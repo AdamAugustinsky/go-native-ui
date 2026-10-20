@@ -71,7 +71,6 @@ func TestQuitRoutes(t *testing.T) {
 	for _, route := range []string{"dock", "cmdq"} {
 		for _, windows := range []int{1, 2} {
 			t.Run(fmt.Sprintf("%s/%dwindows", route, windows), func(t *testing.T) {
-				t.Parallel()
 				r := widgettest.Scenario(t, "main-quit", 60*time.Second, "ROUTE="+route, fmt.Sprintf("WINDOWS=%d", windows))
 				t.Logf("%v (%v)\n%s", r.KV, r.Took.Round(time.Millisecond), r.Out)
 				if r.Get("send_err") != "" && r.Get("send_err") != "0" {

@@ -302,7 +302,6 @@ func TestF3QuitWithZeroOneTwoWindows(t *testing.T) {
 	for _, route := range []string{"dock", "cmdq", "request"} {
 		for n := 0; n <= 2; n++ {
 			t.Run(fmt.Sprintf("%s/%dwindows", route, n), func(t *testing.T) {
-				t.Parallel()
 				r := widgettest.Scenario(t, "f3-quit", 60*time.Second, "ROUTE="+route, fmt.Sprintf("WINDOWS=%d", n))
 				want := map[string]int{"cmdq": int(app.QuitMenu), "dock": int(app.QuitDock), "request": int(app.QuitApp)}[route]
 				if r.Code != 0 || r.Get("terminated") != "1" || r.Int("reason") != want || r.Get("main_returned") != "" || r.Int("open_windows") < n {
@@ -317,7 +316,6 @@ func TestF3QuitWithZeroOneTwoWindows(t *testing.T) {
 // delivered while the answer is awaited (the worker's posts arrive) and then
 // allowed.
 func TestF3RefusalThenDelayedAllow(t *testing.T) {
-	t.Parallel()
 	r := widgettest.Scenario(t, "f3-refuse-delay", 60*time.Second)
 	if r.Code != 0 || r.Get("alive_after_refusal") != "true" || r.Get("terminated") != "1" || r.Int("requests") != 2 ||
 		r.Get("pending_before_reply") != "true" || r.Int("posted_during") < 3 || r.Int("waited_ms") < 1500 {
@@ -328,7 +326,6 @@ func TestF3RefusalThenDelayedAllow(t *testing.T) {
 // The Dock icon's click with the window hidden shows it again (the default
 // handler); with a window visible it is only reported.
 func TestF3Reopen(t *testing.T) {
-	t.Parallel()
 	r := widgettest.Scenario(t, "f3-reopen", 60*time.Second)
 	if r.Code != 0 || r.Int("visible_before") != 0 || r.Int("visible_after_reopen") != 1 || r.Int("reopens") != 2 || r.Int("first_a") != 0 || r.Int("second_a") != 1 {
 		t.Fatalf("exit %d, report %v\n%s", r.Code, r.KV, r.Out)
@@ -337,7 +334,6 @@ func TestF3Reopen(t *testing.T) {
 
 // A menu command chosen with no window open is delivered to the handler.
 func TestF3MenuCommandWithNoWindow(t *testing.T) {
-	t.Parallel()
 	r := widgettest.Scenario(t, "f3-menucmd", 60*time.Second)
 	if r.Code != 0 || r.Int("windows") != 0 || r.Get("item") != "true" || r.Get("enabled") != "true" || r.Int("command") != 5 || r.Get("timeout") != "" {
 		t.Fatalf("exit %d, report %v\n%s", r.Code, r.KV, r.Out)
@@ -346,7 +342,6 @@ func TestF3MenuCommandWithNoWindow(t *testing.T) {
 
 // The fakes of app events reach the Handler with their data.
 func TestF3FakeAppEvents(t *testing.T) {
-	t.Parallel()
 	r := widgettest.Scenario(t, "f3-fakes", 60*time.Second)
 	if r.Code != 0 || r.Int("seen") != 3 || r.Get("e0") != fmt.Sprintf("service:%d:9:2:hello", int(platform.SourceNotifyResponse)) ||
 		r.Get("e1") != "urls:2:gnui-test://a|gnui-test://b" || r.Get("e2") != "reopen:0" {
