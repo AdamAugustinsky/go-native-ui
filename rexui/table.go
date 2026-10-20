@@ -19,6 +19,13 @@ type TableOpts struct {
 	// toolbar's scroll-edge pocket (ToolbarOpts.Pocket), whose bar shows
 	// behind it, as Finder's does.
 	ClearHeader bool
+	// TopInset, in pixels, runs the table under a toolbar's band that high
+	// (base.TableOpts.TopInset): the header is pinned below the band, over
+	// the rows, which scroll up under it and the band, and the scroll edge
+	// (ScrollEdgeLook) covers both, ended by the header's line, as Finder's
+	// pocket is (80 = 52 + 28). The header is built in EndTable. The
+	// toolbar leaves the band over the table clear (ToolbarOpts.ContentEdge).
+	TopInset float32
 }
 
 // TableRecipe is the look of a table's header and cells (macOS 27.2,
@@ -66,6 +73,9 @@ var TableLook = TableRecipe{
 type Table struct {
 	List
 	base.TableHead
+	glyphs ListGlyphs
+	clear  bool
+	late   bool // the header is built in EndTable (TopInset)
 }
 
 // BeginTable starts a table of the columns cols (their widths include the
@@ -88,11 +98,13 @@ func BeginTable(k *base.Kit, label string, st *base.TableState, cols []base.Colu
 	rc := &TableLook
 	t := Table{TableHead: k.BeginTableHeaderOpts(label, st, cols, base.TableOpts{
 		Inset: ListLook.Inset[s], HeaderH: k.Theme().Lines.HeaderH / k.Scale(),
-		CellPad: rc.CellPad, EdgePad: rc.EdgePad, Set: true,
-	})}
-	tableHeader(k, &t.TableHead, o.Glyphs, o.ClearHeader)
+		CellPad: rc.CellPad, EdgePad: rc.EdgePad, Set: true, TopInset: max(o.TopInset, 0) / k.Scale(),
+	}), glyphs: o.Glyphs, clear: o.ClearHeader, late: o.TopInset > 0}
+	if !t.late {
+		tableHeader(k, &t.TableHead, o.Glyphs, o.ClearHeader)
+	}
 	t.List = List{List: k.BeginTableBody(&t.TableHead, rows, listOpts(k, ListOpts{Style: o.Style, Striped: o.Striped}, true)),
-		rowLook: rowLook{style: s, striped: o.Striped}}
+		rowLook: rowLook{style: s, striped: o.Striped}, edgeOwnLine: t.late}
 	return t
 }
 
@@ -209,5 +221,8 @@ func (t *Table) cell(col int, b []byte, color uint32) {
 // bar and the table.
 func EndTable(k *base.Kit, t *Table) {
 	EndList(k, &t.List)
+	if t.late { // over the rows and their scroll edge
+		tableHeader(k, &t.TableHead, t.glyphs, t.clear)
+	}
 	k.CloseTable(&t.TableHead)
 }

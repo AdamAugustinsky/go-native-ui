@@ -160,6 +160,7 @@ type List struct {
 	skey    ui.Key
 	rowH    float32
 	padT    float32
+	top     float32 // the view's top inset (NextScrollInset): the rows start padT below it
 	padX    float32
 	inRow   bool
 	hover   int // display row under the pointer, -1
@@ -242,6 +243,8 @@ func (k *Kit) beginList(label string, st *ListState, rows int, table bool, o Lis
 	}
 	l.o = c.BoxKeyed(ui.Clip|o.Flags, okey, nil)
 	c.Push(l.o)
+	l.top = k.takeScrollInset()
+	st.Scroll.top = l.top
 	k.ScrollInput(okey, skey, &st.Scroll, ScrollVertical)
 
 	l.padT = theme.Snap(px.GapSmall)
@@ -251,7 +254,7 @@ func (k *Kit) beginList(label string, st *ListState, rows int, table bool, o Lis
 	}
 	l.padX = inset
 	c.NextSize(ui.Pct(1), ui.Pct(1))
-	c.NextPadding(inset, l.padT, inset, l.padT)
+	c.NextPadding(inset, l.padT+l.top, inset, l.padT)
 	if !table { // a table's root is its node: the header and the rows are its children
 		c.NextRole(ui.RoleList)
 		c.NextSemName(label)
@@ -272,7 +275,7 @@ func (k *Kit) beginList(label string, st *ListState, rows int, table bool, o Lis
 	f := k.TakeForce()
 	l.Emphasised = (l.Focused || f&LookFocused != 0) && !k.Inactive() && f&LookInactive == 0 && !l.off
 
-	st.rowPx, st.padPx = rowH, l.padT
+	st.rowPx, st.padPx = rowH, l.padT+l.top
 	l.scrollRequests()
 	l.First, l.Last = c.ListRange(l.s, rows, rowH, 2)
 	_, sy := c.Scroll(l.s)
@@ -301,7 +304,7 @@ func (l *List) scrollRequests() {
 	st, c := l.st, l.k.c
 	if st.topWant {
 		st.topWant = false
-		span := float64(l.padT)*2 + float64(l.Rows)*float64(l.rowH) - float64(c.Rect(l.s)[3]-c.Rect(l.s)[1])
+		span := float64(l.padT)*2 + float64(l.top) + float64(l.Rows)*float64(l.rowH) - float64(c.Rect(l.s)[3]-c.Rect(l.s)[1])
 		c.SetScroll(l.s, 0, min(max((float64(st.topRow)+float64(st.topFrac))*float64(l.rowH), 0), max(span, 0)))
 	}
 	if st.revWant {
@@ -312,15 +315,15 @@ func (l *List) scrollRequests() {
 		r := min(max(st.revRow, 0), l.Rows-1)
 		rect := c.Rect(l.s)
 		view := float64(rect[3] - rect[1])
-		top := float64(l.padT) + float64(r)*float64(l.rowH)
+		top := float64(l.padT+l.top) + float64(r)*float64(l.rowH)
 		bottom := top + float64(l.rowH)
 		_, sy := c.Scroll(l.s)
 		_, stretch := c.ScrollStretch(l.s)
 		shown := sy + stretch // a trackpad's stretch moves the rows too
 		var target float64
 		switch {
-		case top < shown:
-			target = top
+		case top < shown+float64(l.top): // below the inset, not under it
+			target = top - float64(l.top)
 		case bottom > shown+view:
 			target = bottom - view
 		default:
@@ -345,7 +348,7 @@ func (l *List) hoverFrom(ps ui.Signal) {
 // rowAt is the display row at y pixels from the top of the list box, -1 if
 // none.
 func (l *List) rowAt(y float32) int {
-	f := math.Floor((float64(y-l.padT) + l.st.disp) / float64(l.rowH))
+	f := math.Floor((float64(y-l.padT-l.top) + l.st.disp) / float64(l.rowH))
 	if f < 0 || f >= float64(l.Rows) {
 		return -1
 	}
@@ -424,8 +427,8 @@ func (l *List) moveTo(r int, extend bool) {
 
 func (l *List) scrollTo(r int) {
 	w := l.k.c.Rect(l.s)
-	top := l.padT + float32(r)*l.rowH
-	l.k.c.ScrollIntoView(l.s, [4]float32{0, top, w[2] - w[0], top + l.rowH})
+	top := l.padT + l.top + float32(r)*l.rowH
+	l.k.c.ScrollIntoView(l.s, [4]float32{0, top - l.top, w[2] - w[0], top + l.rowH})
 }
 
 // input applies the pointer and keys of this frame to the selection.
@@ -717,7 +720,7 @@ func (l *List) FillerRows() int {
 		return 0
 	}
 	r := l.k.c.Rect(l.s)
-	view := r[3] - r[1] - l.padT
+	view := r[3] - r[1] - l.padT - l.top
 	used := float32(l.Rows)*l.rowH - float32(l.st.disp)
 	if view <= used {
 		return 0
@@ -730,7 +733,7 @@ func (l *List) FillerRows() int {
 // stretch included. A recipe places those rows there as floating boxes, so
 // that they are not content: they never make the list scrollable.
 func (l *List) FillerTop(i int) float32 {
-	return l.padT + float32(l.Rows+i)*l.rowH - float32(l.st.disp)
+	return l.padT + l.top + float32(l.Rows+i)*l.rowH - float32(l.st.disp)
 }
 
 // BoxKey is the key of the list's outer box; the recipe keys its own boxes in
@@ -749,7 +752,7 @@ func (l *List) CloseRows() {
 
 // ScrollView is the list's scroll view, for its bar (Kit.ScrollBars).
 func (l *List) ScrollView() ScrollView {
-	return ScrollView{Outer: l.o, Inner: l.s, State: &l.st.Scroll, Axes: ScrollVertical}
+	return ScrollView{Outer: l.o, Inner: l.s, State: &l.st.Scroll, Axes: ScrollVertical, TopInset: l.top}
 }
 
 // CloseList ends the list, after CloseRows and its scroll bar.

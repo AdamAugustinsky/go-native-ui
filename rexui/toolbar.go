@@ -53,6 +53,12 @@ type ToolbarOpts struct {
 	// its bar and hairline (the scroll-edge effect) over the content pane
 	// (between Panes), as it always does while the window is inactive.
 	ContentUnder bool
+	// ContentEdge says the content pane's scroll view runs under the band
+	// (base.Kit.NextScrollInset, rexui.TableOpts.TopInset) and draws the
+	// scroll edge itself (ScrollEdgeLook, from ScrollBars): the band over
+	// the content pane is clear, whatever ContentUnder, Pocket and BandFill
+	// say, and the content shows through it.
+	ContentEdge bool
 	// Pocket is how far below the toolbar, in pixels, the scroll edge
 	// reaches: a table's header pinned under the toolbar is in it (§4: the
 	// pocket ends at the header's bottom, 80 = 52 + 28), so the bar covers
@@ -289,7 +295,7 @@ func BeginToolbar(k *base.Kit, label string, o ToolbarOpts) Toolbar {
 	// over the content pane (each pane has its own pocket: the sidebar's and
 	// the inspector's glass run to the top without one)
 	bar := o.Style != theme.ToolbarRex && theme.ScrollEdgeVisible(o.ContentUnder, !k.Inactive())
-	if o.Style != theme.ToolbarRex && (bar || o.BandFill != 0) {
+	if o.Style != theme.ToolbarRex && !o.ContentEdge && (bar || o.BandFill != 0) {
 		bx0, bx1 := float32(0), tb.w
 		if o.Panes[0] > 0 {
 			bx0 = o.Panes[0]

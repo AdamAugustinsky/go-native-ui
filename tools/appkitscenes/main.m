@@ -388,6 +388,7 @@ static NSToolbarItem *menuItem(NSString *ident, NSString *symbol, NSString *lbl)
 @end
 
 static CGFloat gWidth; // -width: the window's content width instead of the scene's
+static BOOL gSelectAll; // -selectAll: the finder scene selects every row (one solid colour under the scroll edge, to measure it)
 
 static NSViewController *vc(NSView *v) {
 	NSViewController *c = [NSViewController new];
@@ -512,6 +513,7 @@ static Scene *finderScene(void) {
 	sv.drawsBackground = YES;
 	[tv reloadData];
 	[tv selectRowIndexes:[NSIndexSet indexSetWithIndexesInRange:NSMakeRange(3, 2)] byExtendingSelection:NO];
+	if (gSelectAll) [tv selectAll:nil];
 	s.main = sv;
 	NSSplitViewItem *content = [NSSplitViewItem splitViewItemWithViewController:vc(sv)];
 	content.minimumThickness = 360;
@@ -1534,11 +1536,12 @@ int main(int argc, const char **argv) {
 			else if (!strcmp(argv[i], "-hs") && i + 1 < argc) gHS = [NSString stringWithUTF8String:argv[++i]];
 			else if (!strcmp(argv[i], "-offscreen")) gOffscreen = YES;
 			else if (!strcmp(argv[i], "-width") && i + 1 < argc) gWidth = atof(argv[++i]);
+			else if (!strcmp(argv[i], "-selectAll")) gSelectAll = YES;
 			else if (!strcmp(argv[i], "-phases") && i + 1 < argc) gPhases = [[NSString stringWithUTF8String:argv[++i]] componentsSeparatedByString:@","];
 			else if (!strcmp(argv[i], "-tag") && i + 1 < argc) gTag = [NSString stringWithUTF8String:argv[++i]];
 		}
 		if (!sceneName || !gHS || !([gAppearance isEqual:@"light"] || [gAppearance isEqual:@"dark"])) {
-			fprintf(stderr, "usage: AppKitScenes -scene finder|notes|settings|chat -appearance light|dark -hs DIR [-offscreen] [-tag T] [-phases a,b] [-width W]\n"
+			fprintf(stderr, "usage: AppKitScenes -scene finder|notes|settings|chat -appearance light|dark -hs DIR [-offscreen] [-tag T] [-phases a,b] [-width W] [-selectAll]\n"
 			                "       AppKitScenes -sheet MANIFEST.json OUT.png\n       AppKitScenes -measure DIR\n"
 			                "       AppKitScenes -crop|-probe|-profile|-radius IN.png ... (see measure.m)\n");
 			return 64;

@@ -108,6 +108,7 @@ type TableHead struct {
 	// box that holds the header row and the corner is open.
 	corner float32
 	strip  bool
+	top    float32 // TableOpts.TopInset, pixels
 }
 
 // TableOpts are a table's metrics, for BeginTableHeaderOpts, in points. With
@@ -126,6 +127,12 @@ type TableOpts struct {
 	EdgePad [2]float32
 	// Set says the fields hold the metrics.
 	Set bool
+	// TopInset puts the header that far below the table's top, over the
+	// rows, which run up under it and under the strip above it (a toolbar's
+	// band: NextScrollInset): the body's inset is TopInset and the header.
+	// Build the header after the body then (it floats there), so that it
+	// draws over the rows.
+	TopInset float32
 }
 
 // TableKey is the key of the list box of the table built with label inside the
@@ -204,6 +211,7 @@ func (k *Kit) BeginTableHeaderOpts(label string, st *TableState, cols []Column, 
 		}
 		t.pad, t.inset = k.Pt(o.CellPad), theme.Snap(k.Pt(o.Inset))
 		t.edge = [2]float32{k.Pt(o.EdgePad[0]), k.Pt(o.EdgePad[1])}
+		t.top = theme.Snap(k.Pt(o.TopInset))
 	}
 	t.hkey = ui.KeyN(t.tkey, 2)
 
@@ -222,7 +230,7 @@ func (k *Kit) BeginTableHeaderOpts(label string, st *TableState, cols []Column, 
 	t.headerInput()
 	// A legacy bar beside the rows leaves a corner above it: the header row
 	// and the corner share a strip (EndHeaderRow builds the corner).
-	if t.corner = k.legacyReserve(bkey, ScrollVertical, st.Scroll.Size)[0]; t.corner > 0 {
+	if t.corner = k.legacyReserve(bkey, ScrollVertical, st.Scroll.Size)[0]; t.corner > 0 && t.top == 0 {
 		c.NextSize(ui.Pct(1), ui.Px(t.hh))
 		c.NextAxis(ui.AxisX)
 		c.Push(c.BoxKeyed(0, ui.KeyN(t.tkey, 3), nil))
@@ -237,6 +245,9 @@ func (k *Kit) BeginTableHeaderOpts(label string, st *TableState, cols []Column, 
 // (TableOpts.Inset), so that the cells stay under their headers.
 func (k *Kit) BeginTableBody(t *TableHead, rows int, o ListOpts) List {
 	t.closeStrip() // a header without its row
+	if t.top > 0 {
+		t.tk.NextScrollInset(t.top + t.hh)
+	}
 	if o.OwnPad {
 		o.Pad[0] = t.inset / k.scale
 	}
@@ -352,6 +363,18 @@ func (t *TableHead) headerInput() {
 // EndHeaderRow after the cells.
 func (t *TableHead) BeginHeaderRow(flags ui.Flags) ui.ID {
 	c := t.tk.c
+	if t.top > 0 { // over the rows, below the inset (TableOpts.TopInset)
+		if t.corner > 0 {
+			c.NextPos(0, t.top)
+			c.NextSize(ui.Pct(1), ui.Px(t.hh))
+			c.NextAxis(ui.AxisX)
+			c.Push(c.BoxKeyed(Floating, ui.KeyN(t.tkey, 3), nil))
+			t.strip = true
+		} else {
+			c.NextPos(0, t.top)
+			flags |= Floating
+		}
+	}
 	c.NextSize(ui.Pct(1), ui.Px(t.hh))
 	c.NextAxis(ui.AxisX)
 	c.NextPadding(t.inset, 0, t.inset, 0)

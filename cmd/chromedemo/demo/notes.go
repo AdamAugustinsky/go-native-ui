@@ -82,7 +82,9 @@ func (d *Demo) notesEditor(w, h float32) {
 	k.NextSize(ui.Px(w), ui.Px(h))
 	v := k.BeginScroll("Note", &d.content, base.ScrollVertical)
 	if d.scrolled > 0 {
-		c.SetScroll(v.Inner, 0, float64(theme.Snap(160*s)))
+		// the scene asks for 160 and gets its end, 114 (the text view at
+		// y -74, 40 at rest)
+		c.SetScroll(v.Inner, 0, float64(theme.Snap(114*s)))
 		d.scrolled--
 	}
 	_, sy := c.Scroll(v.Inner)

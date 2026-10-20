@@ -415,7 +415,9 @@ func (c *Context) ListRange(id ID, rows int, rowHeightPx float32, overscan int) 
 		scroll = hi
 	}
 	scroll = math.Max(scroll, 0)
-	vf := int(math.Floor(scroll / rh))
+	// the rows start below the top padding (a scroll inset under a
+	// toolbar): the view's top shows them from the offset less that
+	vf := int(math.Floor(math.Max(scroll-float64(b.pad[1]), 0) / rh))
 	vl := int(math.Ceil((scroll + viewH) / rh))
 	first = min(max(vf-overscan, 0), rows)
 	last = min(max(vl+overscan, first), rows)

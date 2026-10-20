@@ -34,6 +34,7 @@ type ScrollState struct {
 	grab    float32
 	lastT   int64
 	lastPos [2]float64 // the offsets shown last frame (stretch included)
+	top     float32    // the view's top inset this frame (NextScrollInset)
 }
 
 // ScrollView is an open scroll view.
@@ -45,6 +46,33 @@ type ScrollView struct {
 	State *ScrollState
 	// Axes are the axes it scrolls on.
 	Axes ScrollAxes
+	// TopInset is how far below the view's top its content starts at rest,
+	// in pixels (NextScrollInset): the content scrolls up under that strip.
+	TopInset float32
+}
+
+// NextScrollInset makes the next scroll view (BeginScroll, a list's, a
+// table's body) start its content top pixels below its top edge, as AppKit's
+// contentInsets under a full-size content view do: the view runs under what
+// covers that strip (a toolbar's band, a pinned header), its content at rest
+// starts below it and scrolls up under it, and its vertical bar starts below
+// it. Reveal and keyboard scrolling keep rows below the strip. The recipe
+// draws the scroll edge over the strip (rexui.ScrollBars).
+func (k *Kit) NextScrollInset(top float32) { k.scrollTop = max(top, 0) }
+
+// takeScrollInset returns the inset NextScrollInset set and clears it.
+func (k *Kit) takeScrollInset() float32 {
+	t := k.scrollTop
+	k.scrollTop = 0
+	return t
+}
+
+// barView is the content and view extents bar geometry works on: a vertical
+// bar's track runs below the view's top inset.
+func barView(content, view [2]float32, top float32) ([2]float32, [2]float32) {
+	content[1] -= top
+	view[1] -= top
+	return content, view
 }
 
 // BeginScroll starts a scroll view: a clipping box (as wide and high as its
@@ -68,6 +96,7 @@ func (k *Kit) BeginScroll(label string, st *ScrollState, axes ScrollAxes) Scroll
 	o := c.BoxKeyed(ui.Clip, okey, nil)
 	c.Push(o)
 	skey := ui.KeyN(okey, 1)
+	st.top = k.takeScrollInset()
 	k.ScrollInput(okey, skey, st, axes)
 	var fl ui.Flags
 	if axes&ScrollVertical != 0 {
@@ -77,9 +106,12 @@ func (k *Kit) BeginScroll(label string, st *ScrollState, axes ScrollAxes) Scroll
 		fl |= ui.ScrollX
 	}
 	c.NextSize(ui.Pct(1), ui.Pct(1))
+	if st.top > 0 {
+		c.NextPadding(0, st.top, 0, 0)
+	}
 	s := c.BoxKeyed(fl, skey, nil)
 	c.Push(s)
-	return ScrollView{Outer: o, Inner: s, State: st, Axes: axes}
+	return ScrollView{Outer: o, Inner: s, State: st, Axes: axes, TopInset: st.top}
 }
 
 // CloseScrollContent ends the content of the view: the outer box is the
@@ -180,6 +212,7 @@ func (k *Kit) ScrollBars(v *ScrollView) [2]ScrollBar {
 	legacy := k.legacyBars()
 	or := c.Rect(o)
 	outer := [2]float32{or[2] - or[0], or[3] - or[1]}
+	top := st.top
 
 	shown := [2]float64{pos[0] + stretch[0], pos[1] + stretch[1]}
 	active := shown != st.lastPos
@@ -202,7 +235,8 @@ func (k *Kit) ScrollBars(v *ScrollView) [2]ScrollBar {
 				pa = float64(ca[a] - view[a])
 			}
 		}
-		g, ok := k.barGeom(a, ca, view, pa, both, legacy)
+		bc, bv := barView(ca, view, top)
+		g, ok := k.barGeom(a, bc, bv, pa, both, legacy)
 		if !ok {
 			continue
 		}
@@ -218,11 +252,11 @@ func (k *Kit) ScrollBars(v *ScrollView) [2]ScrollBar {
 		case legacy && a == 1:
 			// at the outer box's edge: the content's room for it may be
 			// last frame's, in the frame the system's style changes
-			b.X, b.Y, b.W, b.H = outer[0]-bw, 0, bw, trackLen
+			b.X, b.Y, b.W, b.H = outer[0]-bw, top, bw, trackLen
 		case legacy:
 			b.X, b.Y, b.W, b.H = 0, outer[1]-bw, trackLen, bw
 		case a == 1:
-			b.X, b.Y, b.W, b.H = view[0]-bw-inset, inset, bw, trackLen
+			b.X, b.Y, b.W, b.H = view[0]-bw-inset, top+inset, bw, trackLen
 		default:
 			b.X, b.Y, b.W, b.H = inset, view[1]-bw-inset, trackLen, bw
 		}
@@ -334,11 +368,12 @@ func (k *Kit) ScrollInput(okey, skey ui.Key, st *ScrollState, axes ScrollAxes) {
 	sx, sy := c.Scroll(sid)
 	pos := [2]float64{sx, sy}
 	both := axes == ScrollBoth
+	bc, bv := barView(content, view, st.top)
 	for a := 0; a < 2; a++ {
 		if !hasAxis(axes, a) {
 			continue
 		}
-		g, ok := k.barGeom(a, content, view, pos[a], both, k.legacyBars())
+		g, ok := k.barGeom(a, bc, bv, pos[a], both, k.legacyBars())
 		if !ok {
 			continue
 		}

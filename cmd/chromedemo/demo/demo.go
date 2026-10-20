@@ -288,31 +288,30 @@ func (d *Demo) Build(c *ui.Context) {
 		d.inspector(tbH)
 		c.Pop()
 	}
-	// A table's header in the toolbar's pocket draws over the bar: the
-	// toolbar comes first. Otherwise it comes after the content, so that the
-	// scroll edge's hairline, just below the band, lies over it.
-	pocket := d.opt.Scene == Finder
-	if pocket {
-		d.toolbar(sbW, W-inW)
+	// The content pane runs under the band, its scroll view inset by it
+	// (the scroll edge is the view's: ToolbarOpts.ContentEdge), but the
+	// tabs scene's, which starts below it. The toolbar comes after the
+	// content, over it.
+	y0 := float32(0)
+	if !d.contentEdge() {
+		y0 = tbH
 	}
-	theme.At(c, sbW, tbH, W-sbW-inW, H-tbH)
+	theme.At(c, sbW, y0, W-sbW-inW, H-y0)
 	flags := base.Floating
-	if !pocket { // the table paints its rows' background, below its header in the pocket
+	if d.opt.Scene != Finder { // the table paints its rows' background
 		c.NextBG(d.contentFill())
 		flags |= ui.DrawBackground
 	}
 	c.Push(c.Box(flags, "content"))
-	under := d.under
-	d.contentPane(tbH, W-sbW-inW, H-tbH)
-	if pocket && d.under != under { // the toolbar of this frame used the last one's
-		c.RequestFrame()
-	}
+	d.contentPane(tbH-y0, W-sbW-inW, H-y0)
 	c.Pop()
-	if !pocket {
-		d.toolbar(sbW, W-inW)
-	}
+	d.toolbar(sbW, W-inW)
 	d.wk.End()
 }
+
+// contentEdge says the content pane's scroll view runs under the toolbar's
+// band and draws its scroll edge.
+func (d *Demo) contentEdge() bool { return d.opt.Scene != Tabs }
 
 // contentFill is the content pane's background: a table's, a text view's.
 func (d *Demo) contentFill() uint32 {
@@ -343,10 +342,8 @@ func (d *Demo) toolbar(sbW, inX float32) {
 	if d.l.inspector > 0 {
 		panes[1] = inX
 	}
-	o := rexui.ToolbarOpts{Style: d.l.style, Title: d.l.title, Panes: panes, ContentUnder: d.under, Traffic: d.opt.Traffic, BandFill: d.contentFill()}
-	if d.opt.Scene == Finder { // the file list's header is in the toolbar's pocket
-		o.ContentUnder, o.Pocket = true, theme.Snap(k.Theme().Lines.HeaderH)
-	}
+	o := rexui.ToolbarOpts{Style: d.l.style, Title: d.l.title, Panes: panes, ContentUnder: d.under, Traffic: d.opt.Traffic, BandFill: d.contentFill(),
+		ContentEdge: d.contentEdge()}
 	switch d.opt.Scene {
 	case Finder:
 		tb := rexui.BeginToolbar(k, "Toolbar", o)
@@ -445,13 +442,15 @@ func (d *Demo) sidebar(tbH float32) {
 
 // contentPane builds the content (the current parent, below the toolbar) of
 // width w and height h.
-func (d *Demo) contentPane(tbH, w, h float32) {
+func (d *Demo) contentPane(top, w, h float32) {
 	switch d.opt.Scene {
 	case Finder:
-		d.fileList(w, h)
+		d.fileList(top, w, h)
 	case Settings:
+		d.k.NextScrollInset(top)
 		d.settingsForm(w, h)
 	case Notes:
+		d.k.NextScrollInset(top)
 		d.notesEditor(w, h)
 	case Tabs:
 		d.tabsContent(w, h)
