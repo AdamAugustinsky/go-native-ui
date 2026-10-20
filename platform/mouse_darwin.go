@@ -36,6 +36,7 @@ func registerViewMouse(v *objc.ClassDef) {
 	v.Method(selResetCursorRects, "v@:", viewResetCursorRects)
 	v.Method(selMouseDownCanMoveWindow, "c@:", viewMouseDownCanMoveWindow)
 	v.Method(selMouseDown, "v@:@", viewMouseDown)
+	v.Method(selScrollWheel, "v@:@", viewScrollWheel) // host_darwin.go
 }
 
 func viewResetCursorRects(*ffi.CB) {
@@ -87,6 +88,9 @@ func (w *Window) pointerEvent(ev objc.ID, typ uintptr, t int64) (consumed bool) 
 		}
 	}
 	w.pointerIn = true
+	if typ == 5 && w.hostMove(e.X, e.Y, t) {
+		return false // over a host (host_darwin.go)
+	}
 	if w.content != w.view && (typ == 1 || typ == 3 || typ == 25) && !w.hitsView(lx, ly) {
 		// A press on a native view (a button of Options.Buttons, a window
 		// button) is AppKit's: its controls track the release themselves, so
@@ -112,10 +116,14 @@ func (w *Window) pointerEvent(ev objc.ID, typ uintptr, t int64) (consumed bool) 
 // The event carries where it happened (FlagPos), also when it bubbled up
 // from a native host the pointer is over.
 func (w *Window) scrollEvent(ev objc.ID, t int64) {
+	if w.scrollToHost(ev) {
+		return // the host gets it; one it does not use comes back (host_darwin.go)
+	}
 	e := scrollEventOf(ev, w.scale, t)
 	e.X, e.Y = w.locate(ev)
 	e.Flags |= FlagPos
 	w.q.push(e)
+	w.hosts.markScroll(ev)
 }
 
 // locate is where mouse event ev happened in the window's content, in

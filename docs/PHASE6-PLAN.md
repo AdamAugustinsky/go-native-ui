@@ -999,3 +999,4 @@ Planned; not started. Revised after the independent review (GPT-6.1 Sol, 2026-10
 - **Inputs, on `main` at d32d248:** the research reports, the native audit, the design-system proposal and AppKitRef.
 - **GnuiShot:** on `p6-gnuishot` (a0ae73f), granted on the MacBook and not yet merged; wave 0 merges it.
 - **Phase 5:** 5A is closed, and 5B is absorbed here (`docs/PHASE5-PLAN.md`, Status).
+- **N3a and N3b (2026-10-19, `p6-n3`):** done on macOS: materials per area and hosted native views, demo `cmd/shelldemo` (D0's Finder scene), live captures matching AppKit's Finder at every probe point, light and dark, active and inactive. What each area uses and the deviations (materials cannot blur our own pixels; the toolbar band's bar is an opaque fill) are in `docs/design/native-shell-spike.md`, "Generalised". rexlook unchanged (identical window captures, `rexcompare` 40/40).

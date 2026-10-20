@@ -113,6 +113,7 @@ func refreshSystemValues() {
 		v.ReduceTransparency = objc.SendBool(svWorkspace, selReduceTransparency)
 		v.IncreaseContrast = objc.SendBool(svWorkspace, selIncreaseContrast)
 	}
+	v.ReduceTransparency = v.ReduceTransparency || forceReduceTransparency // GNUI_REDUCE_TRANSPARENCY (material_darwin.go)
 	if svClsScroller != 0 {
 		v.LegacyScrollers = objc.Send(svClsScroller, selScrollerStyle) == 0 // NSScrollerStyleLegacy
 	}

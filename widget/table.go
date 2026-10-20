@@ -1,7 +1,7 @@
 package widget
 
 import (
-	"gonativeui/icon"
+	"gonativeui/rexui"
 	"gonativeui/theme"
 	"gonativeui/ui"
 	"gonativeui/widget/base"
@@ -65,61 +65,18 @@ func TableKey(parent ui.Key, label string) ui.Key { return base.TableKey(parent,
 // minimum. A header is a ui.RoleColumnHeader that reports its sort direction
 // (ui.SemSortAscending, ui.SemSortDescending) and the actions press (sortable
 // columns), increment and decrement (the width) and focus.
+//
+// The look is rexui's (rexui.BeginTable, the inset style): AppKit's 28-pt
+// header and rows, with the selection described at BeginList.
 func (k *Kit) BeginTable(label string, st *TableState, cols []Column, rows int) Table {
-	t := Table{TableHead: k.BeginTableHeader(label, st, cols)}
-	k.header(&t.TableHead)
-	t.List.List = k.BeginTableBody(&t.TableHead, rows, base.ListOpts{Hover: hoverOn})
-	return t
-}
-
-// header builds the classic look of the header row: semibold muted titles, a
-// hairline below, a hover tint on sortable titles and the sort chevron.
-func (k *Kit) header(t *base.TableHead) {
-	c := k.c
-	px, p := &k.r.Px, &k.r.Pal
-	hh := t.HeaderHeight()
-	c.NextBorderSides(ui.SideBottom)
-	c.NextBorder(p.Line, px.BorderW)
-	t.BeginHeaderRow(ui.DrawBorder)
-	for i := range t.Columns() {
-		hc := t.HeaderCell(i)
-		var flags ui.Flags
-		if hc.Hot > 0.004 {
-			flags |= ui.DrawBackground
-			c.NextBG(theme.WithAlpha(p.HoverOverlay, hc.Hot))
-			c.NextRadius(px.RadiusSmall)
-		}
-		t.BeginHeaderCell(&hc, flags)
-		if hc.Col.Align == ui.AlignRight { // the title (and the sort mark) at the right, over the numbers
-			c.NextSize(ui.Pct(1), ui.Px(hh))
-			c.BoxKeyed(0, ui.KeyN(hc.Key, 3), nil)
-		}
-		c.NextSize(ui.TextSize(labelSlack), ui.Px(hh))
-		c.NextFont(k.r.Font.UISemi)
-		c.NextTextColor(p.TextMuted)
-		c.BoxKeyed(ui.DrawText|ui.FadeOverflowX, ui.KeyN(hc.Key, 1), strBytes(hc.Col.Title))
-		if hc.Sorted {
-			ic := icon.SortUp
-			if hc.Descending {
-				ic = icon.SortDown
-			}
-			f, disp := k.icons.Prepare(c, ic, p.TextMuted)
-			_, ih := k.icons.Size(ic)
-			k.center(ih, hh)
-			c.BoxKeyed(f|ui.FloatingY, ui.KeyN(hc.Key, 2), disp)
-		}
-		if hc.Ring > 0.004 {
-			k.ringBox(hc.Key, hc.W, hh, px.RadiusSmall, hc.Ring)
-		}
-		t.EndHeaderCell(&hc)
-	}
-	t.EndHeaderRow()
+	rt := rexui.BeginTable(k.Kit, label, st, cols, rows, rexui.TableOpts{})
+	return Table{List: List{List: rt.List}, TableHead: rt.TableHead}
 }
 
 // BeginCell starts cell col of the row being built: a box as wide as the
 // column, as high as the row, clipping its children, which flow left to right.
 // End it with EndCell.
-func (t *Table) BeginCell(col int) ui.ID { return t.TableHead.BeginCell(&t.List.List, col) }
+func (t *Table) BeginCell(col int) ui.ID { return t.TableHead.BeginCell(&t.List.List.List, col) }
 
 // CellBytes builds cell col of the row being built as one line of text, in the
 // column's alignment, fading out where it does not fit. The bytes are copied.
@@ -128,10 +85,10 @@ func (t *Table) BeginCell(col int) ui.ID { return t.TableHead.BeginCell(&t.List.
 func (t *Table) CellBytes(col int, b []byte) {
 	k := t.Kit()
 	c := k.Context()
-	c.NextFont(k.Theme().Font.UI)
-	c.NextTextColor(t.textCol)
+	c.NextFont(k.Theme().Styles[theme.StyleBody].Font)
+	c.NextTextColor(t.TextColor())
 	c.NextAlign(t.Columns()[col].Align)
-	t.TextCell(&t.List.List, col, b, ui.DrawText|ui.FadeOverflowX)
+	t.TextCell(&t.List.List.List, col, b, ui.DrawText|ui.FadeOverflowX)
 }
 
 // CellText is CellBytes for a string.
