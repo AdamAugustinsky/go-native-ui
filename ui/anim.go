@@ -66,7 +66,12 @@ func (c *Context) Animating() bool { return c.animating }
 
 // RequestFrame makes Animating report true for this frame, for effects the
 // app animates itself.
-func (c *Context) RequestFrame() { c.animating = true }
+func (c *Context) RequestFrame() {
+	c.animating = true
+	if c.dbg != nil {
+		c.debugCaller(DebugCallerRequestFrame)
+	}
+}
 
 // approach moves *v toward target and reports whether it still has to move.
 func approach(v *float32, target, rate float32) bool {

@@ -286,6 +286,8 @@ type Context struct {
 
 	fonts []fontInfo
 
+	dbg *debugState // the recording of EnableDebug (debug.go); nil off
+
 	up      Uploader
 	pageTex []gpu.TextureID
 	texOK   []bool
@@ -572,6 +574,9 @@ func (c *Context) newBox(flags Flags, key Key) ID {
 		if c.boxes[v].lastFrame != c.frame {
 			id, found = ID(v), true
 			break
+		}
+		if n == 0 && c.dbg != nil {
+			c.debugDup(key)
 		}
 		key = KeyN(key, n) // duplicate key among this frame's boxes: derive a distinct one
 	}
