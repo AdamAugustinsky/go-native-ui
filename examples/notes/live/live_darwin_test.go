@@ -130,14 +130,28 @@ func TestEditMenuActsOnce(t *testing.T) {
 	if got := fieldText(l); got != "" {
 		t.Errorf("after Cut the field holds %q", got)
 	}
+	// A paste lands when the pasteboard worker's answer comes, some frames
+	// after the key or the item (platform.RequestPaste; CI: still "hello" two
+	// frames after ⌘V). Wait for it, then make sure nothing more lands.
+	pasted := func(after, want string) {
+		t.Helper()
+		got := fieldText(l)
+		for i := 0; i < 120 && got != want; i++ {
+			l.Frames(1)
+			got = fieldText(l)
+		}
+		if got == want {
+			l.Frames(6)
+			got = fieldText(l)
+		}
+		if got != want {
+			t.Errorf("after %s the field holds %q, want %q", after, got, want)
+		}
+	}
 	choose("Paste")
-	if got := fieldText(l); got != "hello" {
-		t.Errorf("after one Paste the field holds %q, want hello once", got)
-	}
+	pasted("one Paste", "hello")
 	l.Press(ui.KeyCode('V'), ui.ModSuper)
-	if got := fieldText(l); got != "hellohello" {
-		t.Errorf("after ⌘V the field holds %q, want hello twice", got)
-	}
+	pasted("⌘V", "hellohello")
 	choose("Undo")
 	if got := fieldText(l); got != "hello" {
 		t.Errorf("after Undo the field holds %q, want one paste undone", got)
