@@ -44,6 +44,9 @@ var iio struct {
 	dictGIF, gifUnclamped, gifDelay                      uintptr
 	dictPNG, apngUnclamped, apngDelay                    uintptr
 	dictWebP, webpUnclamped, webpDelay                   uintptr
+	dictHEICS, heicsUnclamped, heicsDelay                uintptr
+	loopGIF, loopAPNG, loopWebP, loopHEICS               uintptr
+	srcFileProps, axAnimated                             uintptr
 	imgW, imgH, imgRelease                               uintptr
 	bitmapCreate, ctxBlend, ctxDraw, ctxRelease, srgb    uintptr
 	ctxInterp                                            uintptr
@@ -137,6 +140,15 @@ func loadImageIO() error {
 		iio.webpUnclamped = val(io, "kCGImagePropertyWebPUnclampedDelayTime", true)
 		iio.webpDelay = val(io, "kCGImagePropertyWebPDelayTime", true)
 
+		iio.dictHEICS = val(io, "kCGImagePropertyHEICSDictionary", true)
+		iio.heicsUnclamped = val(io, "kCGImagePropertyHEICSUnclampedDelayTime", true)
+		iio.heicsDelay = val(io, "kCGImagePropertyHEICSDelayTime", true)
+		iio.loopGIF = val(io, "kCGImagePropertyGIFLoopCount", true)
+		iio.loopAPNG = val(io, "kCGImagePropertyAPNGLoopCount", true)
+		iio.loopWebP = val(io, "kCGImagePropertyWebPLoopCount", true)
+		iio.loopHEICS = val(io, "kCGImagePropertyHEICSLoopCount", true)
+		iio.srcFileProps = fn(io, "CGImageSourceCopyProperties")
+
 		iio.imgW = fn(cg, "CGImageGetWidth")
 		iio.imgH = fn(cg, "CGImageGetHeight")
 		iio.imgRelease = fn(cg, "CGImageRelease")
@@ -149,6 +161,13 @@ func loadImageIO() error {
 		iio.colorSpaceName = val(cg, "kCGColorSpaceSRGB", false)
 		if iio.err != nil {
 			return
+		}
+		// The animated-images setting (macOS 14+) is in Accessibility.framework:
+		// optional, so that an older system plays animations.
+		if ax, err := dlopen("/System/Library/Frameworks/Accessibility.framework/Accessibility"); err == nil {
+			if p, err := dlsym(ax, "AXAnimatedImagesEnabled"); err == nil {
+				iio.axAnimated = p
+			}
 		}
 		iio.srgb = new(ffi.Frame).Call1(iio.cgColorSpaceCreate, iio.colorSpaceName) // kept for the process
 		if iio.srgb == 0 {
@@ -368,11 +387,17 @@ func (w *worker) int32Prop(fr *ffi.Frame, dict, key uintptr) (int32, bool) {
 
 // delayMs reads a frame's delay from its GIF, APNG or WebP dictionary:
 // the unclamped delay where there is one.
-func (w *worker) delayMs(fr *ffi.Frame, props uintptr) int32 {
+func (w *worker) delayMs(fr *ffi.Frame, props uintptr) int32 { return w.delayOf(fr, props, false) }
+
+// delayOf is delayMs; with zeroOK an unclamped delay of 0 is returned as 0
+// (a frame the file gives no time: the animation applies its own minimum),
+// where delayMs falls back to the clamped delay.
+func (w *worker) delayOf(fr *ffi.Frame, props uintptr, zeroOK bool) int32 {
 	for _, d := range [...][3]uintptr{
 		{iio.dictGIF, iio.gifUnclamped, iio.gifDelay},
 		{iio.dictPNG, iio.apngUnclamped, iio.apngDelay},
 		{iio.dictWebP, iio.webpUnclamped, iio.webpDelay},
+		{iio.dictHEICS, iio.heicsUnclamped, iio.heicsDelay},
 	} {
 		if d[0] == 0 {
 			continue
@@ -390,7 +415,7 @@ func (w *worker) delayMs(fr *ffi.Frame, props uintptr) int32 {
 				continue
 			}
 			w.f64 = 0
-			if fr.Reset().Arg(n).Arg(cfNumberFloat64).ArgPtr(unsafe.Pointer(&w.f64)).Call(iio.cfNumGet).Bool() && w.f64 > 0 {
+			if fr.Reset().Arg(n).Arg(cfNumberFloat64).ArgPtr(unsafe.Pointer(&w.f64)).Call(iio.cfNumGet).Bool() && (w.f64 > 0 || zeroOK && key == d[1]) {
 				return int32(math.Round(w.f64 * 1000))
 			}
 		}
