@@ -1299,6 +1299,174 @@
 				"radius": 12.1,
 				"fill": "#F7F7F7"
 			}
+		},
+		"checkbox-on-inactive": {
+			"dark": {
+				"w": 16,
+				"h": 16,
+				"radius": 5.38,
+				"fill": "#3E3E3E",
+				"label": "#DDDDDD"
+			},
+			"light": {
+				"w": 16,
+				"h": 16,
+				"radius": 5.39,
+				"fill": "#DBDBDB",
+				"label": "#272727"
+			}
+		},
+		"checkbox-mixed-inactive": {
+			"dark": {
+				"w": 16,
+				"h": 16,
+				"radius": 5.38,
+				"fill": "#3E3E3E",
+				"label": "#DDDDDD"
+			},
+			"light": {
+				"w": 16,
+				"h": 16,
+				"radius": 5.39,
+				"fill": "#DBDBDB",
+				"label": "#272727"
+			}
+		},
+		"checkbox-off-inactive": {
+			"dark": {
+				"w": 16,
+				"h": 16,
+				"radius": 5.39,
+				"fill": "#343434",
+				"label": "#DDDDDD"
+			},
+			"light": {
+				"w": 16,
+				"h": 16,
+				"radius": 5.4,
+				"fill": "#E6E6E6",
+				"label": "#272727"
+			}
+		},
+		"radio-on-inactive": {
+			"dark": {
+				"w": 16,
+				"h": 16,
+				"radius": 7.91,
+				"fill": "#3E3E3E",
+				"label": "#DDDDDD"
+			},
+			"light": {
+				"w": 16,
+				"h": 16,
+				"radius": 7.88,
+				"fill": "#DBDBDB",
+				"label": "#272727"
+			}
+		},
+		"switch-on-inactive": {
+			"dark": {
+				"w": 54,
+				"h": 24,
+				"radius": 11.98,
+				"fill": "#3E3E3E"
+			},
+			"light": {
+				"w": 54.03,
+				"h": 24.05,
+				"radius": 11.99,
+				"fill": "#DBDBDB"
+			}
+		},
+		"switch-off-inactive": {
+			"dark": {
+				"w": 54,
+				"h": 24,
+				"fill": "#343434"
+			},
+			"light": {
+				"w": 54.04,
+				"h": 24.07,
+				"fill": "#E6E6E6"
+			}
+		},
+		"segmented-inactive": {
+			"dark": {
+				"h": 24,
+				"radius": 5.82,
+				"fill": "#4A4A4A"
+			},
+			"light": {
+				"h": 24,
+				"radius": 5.87,
+				"fill": "#CDCDCD"
+			}
+		},
+		"slider-inactive": {
+			"dark": {
+				"w": 200,
+				"h": 6,
+				"radius": 2.8,
+				"fill": "#515151"
+			},
+			"light": {
+				"w": 200,
+				"h": 6,
+				"radius": 2.8,
+				"fill": "#C5C5C5"
+			}
+		},
+		"stepper-inactive": {
+			"dark": {
+				"w": 20,
+				"h": 24,
+				"radius": 5.8,
+				"fill": "#303030"
+			},
+			"light": {
+				"w": 20,
+				"h": 24,
+				"radius": 5.8,
+				"fill": "#EBEBEB"
+			}
+		},
+		"progress-bar-inactive": {
+			"dark": {
+				"w": 200,
+				"h": 8,
+				"radius": 3.72,
+				"fill": "#AAAAAA"
+			},
+			"light": {
+				"w": 200,
+				"h": 8,
+				"radius": 3.65,
+				"fill": "#AAAAAA"
+			}
+		},
+		"progress-indeterminate-inactive": {
+			"dark": {
+				"w": 200,
+				"h": 8,
+				"fill": "#AAAAAA"
+			},
+			"light": {
+				"w": 200,
+				"h": 8,
+				"fill": "#AAAAAA"
+			}
+		},
+		"level-inactive": {
+			"dark": {
+				"w": 160,
+				"h": 16,
+				"fill": "#30D158"
+			},
+			"light": {
+				"w": 160,
+				"h": 16,
+				"fill": "#34C759"
+			}
 		}
 	},
 	"layouts": {
@@ -1430,5 +1598,23 @@
 		"alertPanelContentFrameClass": "NSGlassContentFrameView",
 		"alertPanelCornerRadius": 26,
 		"plainTitledPanelCornerRadius": 16
+	},
+	"borrowed": {
+		"from": "Mac16,10, macOS 27.2 26B5101f (the Mac mini)",
+		"samples": [
+			"checkbox-on-inactive",
+			"checkbox-mixed-inactive",
+			"checkbox-off-inactive",
+			"radio-on-inactive",
+			"switch-on-inactive",
+			"switch-off-inactive",
+			"segmented-inactive",
+			"slider-inactive",
+			"stepper-inactive",
+			"progress-bar-inactive",
+			"progress-indeterminate-inactive",
+			"level-inactive"
+		],
+		"note": "The window-inactive samples of the accent-filled controls were measured on the Mac mini (offscreen AppKitRef, accent rendered blue) and not on this MacBook, which was not used for them. Their colours come from labelColor alphas that the two Macs agree on in every sample measured on both (push-default-inactive, toggle-on-inactive, switch-on, slider, checkbox-on). Re-measure here when the MacBook is next used."
 	}
 }
