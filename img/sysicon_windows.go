@@ -112,6 +112,19 @@ var (
 	iidImageList = win32.GUID{Data1: 0x46eb5926, Data2: 0x582e, Data3: 0x4017, Data4: [8]byte{0x9f, 0xdf, 0xe8, 0x99, 0x8d, 0xaa, 0x09, 0x50}}
 )
 
+// iconTrace, when set (tests), is told where a decode failed and with what
+// HRESULT or result.
+var iconTrace func(step string, code uintptr)
+
+func trace(step string, code uintptr) {
+	if f := iconTrace; f != nil {
+		f(step, code)
+	}
+}
+
+// typeIconMu serialises the use of the shell's system image lists.
+var typeIconMu sync.Mutex
+
 var shell struct {
 	once sync.Once
 	ok   bool
@@ -207,6 +220,8 @@ func (w *worker) fileIcon(path string, side int32) (*image.RGBA, uint8) {
 // typeIcon is the icon of a type without a file, from the system image
 // list nearest to side pixels.
 func (w *worker) typeIcon(src *Source, side int32) (*image.RGBA, uint8) {
+	typeIconMu.Lock()
+	defer typeIconMu.Unlock()
 	name, attrs := "", uintptr(attrNormal)
 	switch src.kind {
 	case srcIconFolder:
@@ -234,6 +249,7 @@ func (w *worker) typeIcon(src *Source, side int32) (*image.RGBA, uint8) {
 	r := win32.Call(shell.getFileInfo, uintptr(unsafe.Pointer(p)), attrs, uintptr(unsafe.Pointer(&ic.sfi)), unsafe.Sizeof(ic.sfi), shgfiSysIconIndex|shgfiUseAttrs)
 	runtime.KeepAlive(p)
 	if r == 0 {
+		trace("SHGetFileInfo", r)
 		return nil, errUnsupported
 	}
 	idx := ic.sfi.IconIdx
@@ -248,11 +264,13 @@ func (w *worker) typeIcon(src *Source, side int32) (*image.RGBA, uint8) {
 	}
 	ic.ptr, ic.hicon = 0, 0
 	if hr := win32.HR(win32.Call(shell.getImageList, list, uintptr(unsafe.Pointer(&iidImageList)), uintptr(unsafe.Pointer(&ic.ptr)))); hr < 0 || ic.ptr == 0 {
+		trace("SHGetImageList", uintptr(uint32(hr)))
 		return nil, errUnsupported
 	}
 	imageList := ic.ptr
 	defer win32.Release(imageList)
 	if hr := win32.HR(win32.Com(imageList, imageListGetIcon, uintptr(uint32(idx)), ildTransparent, uintptr(unsafe.Pointer(&ic.hicon)))); hr < 0 || ic.hicon == 0 {
+		trace("IImageList.GetIcon", uintptr(uint32(hr)))
 		return nil, errUnsupported
 	}
 	hicon := ic.hicon
@@ -266,6 +284,7 @@ func (w *worker) iconImage(hicon uintptr) (*image.RGBA, uint8) {
 	ic := &w.icon
 	ic.ii = iconInfo{}
 	if !win32.Bool(win32.Call(shell.getIconInfo, hicon, uintptr(unsafe.Pointer(&ic.ii)))) {
+		trace("GetIconInfo", 0)
 		return nil, errDecode
 	}
 	mask, color := ic.ii.Mask, ic.ii.Color
@@ -276,10 +295,12 @@ func (w *worker) iconImage(hicon uintptr) (*image.RGBA, uint8) {
 		defer win32.Call(shell.deleteObject, color)
 	}
 	if color == 0 {
+		trace("no colour bitmap", 0)
 		return nil, errDecode
 	}
 	w32, h32, px, ok := w.bitmapPixels(color, &ic.color)
 	if !ok {
+		trace("bitmapPixels (icon)", 0)
 		return nil, errDecode
 	}
 	var mpx []byte

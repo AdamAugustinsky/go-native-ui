@@ -3,11 +3,54 @@
 package img
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
 	"testing"
 )
+
+// sysIconEnv records where decodes fail, and shows it if the test does.
+func sysIconEnv(t testing.TB) {
+	var mu sync.Mutex
+	var fails []string
+	iconTrace = func(step string, code uintptr) {
+		mu.Lock()
+		fails = append(fails, fmt.Sprintf("%s: %#x", step, code))
+		mu.Unlock()
+	}
+	t.Cleanup(func() {
+		iconTrace = nil
+		mu.Lock()
+		defer mu.Unlock()
+		if t.Failed() || len(fails) > 0 {
+			t.Logf("failed decode steps: %v", fails)
+		}
+	})
+}
+
+// TestSystemIconsWindowsBurst: a burst of 200 icons of unknown extensions on
+// the cache's workers, all of which must arrive.
+func TestSystemIconsWindowsBurst(t *testing.T) {
+	sysIconEnv(t)
+	c, _ := newTestCache(t, Options{Workers: 4})
+	const n = 200
+	var keys [n]Key
+	var srcs [n]Source
+	for i := range keys {
+		ext := fmt.Sprintf("burst%d", i)
+		keys[i] = Key{Hash: HashTypeIcon(ext), W: 64, H: 64}
+		srcs[i] = ExtensionIcon(ext)
+	}
+	settle(t, c, func() {
+		for i := range keys {
+			c.Request(keys[i], srcs[i])
+		}
+	})
+	if s := c.Stats(); s.Ready != n {
+		t.Errorf("%d of %d icons ready (%+v)", s.Ready, n, s)
+	}
+}
 
 // TestSystemIconsWindows decodes the shell's icons on a worker at 32 and 64
 // pixels: a folder and a .txt, from a path (IShellItemImageFactory) and from
