@@ -542,7 +542,7 @@ func (s *System) ReleaseScale(scale float32) int {
 	}
 	s.runs.drop()
 	if s.plays != nil && s.plays.cache != nil {
-		s.plays.cache.drop()
+		s.plays.cache.dropAll()
 	}
 	s.atlas.glyphs.removeFaces(func(f FaceID) bool { return int(f) < len(s.faces) && s.faces[f].gone })
 	return n

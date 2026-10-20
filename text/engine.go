@@ -369,6 +369,7 @@ func (s *goSystem) ReleaseScale(scale float32) int {
 		if f := &s.faces[i]; !f.gone && f.owner == scale {
 			delete(s.faceKeys, f.key)
 			delete(s.faceOf, f.face)
+			s.hbuf.ForgetFace(f.face) // its shaping plans (the buffer's cache holds the face)
 			s.faces[i] = gtFace{gone: true}
 			faces++
 		}
@@ -383,7 +384,7 @@ func (s *goSystem) ReleaseScale(scale float32) int {
 	}
 	s.runs.drop()
 	if s.plays != nil && s.plays.cache != nil {
-		s.plays.cache.drop()
+		s.plays.cache.dropAll()
 	}
 	s.atlas.glyphs.removeFaces(func(f FaceID) bool { return int(f) < len(s.faces) && s.faces[f].gone })
 	return n

@@ -2,7 +2,11 @@
 
 package text
 
-import "testing"
+import (
+	"fmt"
+	"strings"
+	"testing"
+)
 
 func engineFontsAt(s *goSystem, scale float32) (FontKey, FontKey) {
 	return s.Font(FontDesc{SizePt: 13, Scale: scale, Weight: 400}), s.Font(FontDesc{SizePt: 12, Scale: scale, Weight: 400, Mono: true})
@@ -112,5 +116,78 @@ func TestEngineReleaseScaleBoundsTheTables(t *testing.T) {
 	}
 	if len(s.fb) > 40 {
 		t.Errorf("%d fallback decisions kept", len(s.fb))
+	}
+}
+
+// overBudget is a paragraph that does not fit the paragraph cache's budget: it
+// is laid out outside the cache, in the over slabs, which a cache drop keeps.
+func overBudget(f FontKey) Para {
+	return Para{Text: []byte(strings.Repeat("abcdefg h", 40)), Fonts: []FontKey{f}, Width: 300}
+}
+
+func lineWidths(v ParaView) []float32 {
+	w := make([]float32, len(v.Lines))
+	for i, l := range v.Lines {
+		w[i] = l.Width
+	}
+	return w
+}
+
+// A layout outside the cache's budget does not outlive the fonts it was made
+// with: once the scale is released and its key reused by another scale, the
+// same paragraph is laid out afresh, not answered with the old measurements.
+func TestEngineReleaseScaleForgetsTheOverBudgetLayout(t *testing.T) {
+	budget := ParaBudget{Paras: 8, Glyphs: 200, Text: 100}
+	s, _ := newEngine(t)
+	s.ReserveParas(budget)
+	old := s.Font(FontDesc{SizePt: 13, Scale: 1, Weight: 400})
+	p := overBudget(old)
+	if r := s.Layout(&p); r != overRef {
+		t.Fatalf("the paragraph is not over the budget: ref %d", r)
+	}
+	before := lineWidths(s.Paragraph(overRef))
+	if n := s.ReleaseScale(1); n != 1 {
+		t.Fatalf("released %d fonts", n)
+	}
+	reused := s.Font(FontDesc{SizePt: 13, Scale: 2, Weight: 400})
+	if reused != old {
+		t.Fatalf("the slot was not reused: %d, was %d", reused, old)
+	}
+	p = overBudget(reused)
+	s.Layout(&p)
+	got := lineWidths(s.Paragraph(overRef))
+
+	fresh, _ := newEngine(t)
+	fresh.ReserveParas(budget)
+	fk := fresh.Font(FontDesc{SizePt: 13, Scale: 2, Weight: 400})
+	fp := overBudget(fk)
+	fresh.Layout(&fp)
+	want := lineWidths(fresh.Paragraph(overRef))
+	if len(got) == 0 || fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("after the reuse: %v, a fresh layout: %v (before the release: %v)", got, want, before)
+	}
+}
+
+// The shaping plans of released faces go with them: scales used one after
+// another, many times over, leave the plan cache as many faces as are alive.
+func TestEngineReleaseScaleBoundsThePlanCache(t *testing.T) {
+	s, _ := newEngine(t)
+	var live []float32
+	most := 0
+	for i := 0; i < 300; i++ {
+		sc := 1 + float32(i%50)/50 + float32(i/50) // never the same scale twice in a row
+		u, mo := engineFontsAt(s, sc)
+		eShape(s, u, engineMixed)
+		eShape(s, mo, "0123")
+		live = append(live, sc)
+		if len(live) > 4 {
+			s.ReleaseScale(live[0])
+			live = live[1:]
+		}
+		most = max(most, s.hbuf.CachedFaces())
+	}
+	// Four scales alive: each a UI face, a mono face and an Arabic fallback.
+	if alive := len(s.faceOf); most > alive+3*3 || most > 20 {
+		t.Errorf("the plan cache held shaping plans of %d faces (%d alive now)", most, alive)
 	}
 }

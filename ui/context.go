@@ -266,6 +266,8 @@ type Context struct {
 	fieldOwner Key                 // the text field that had the focus at Begin and owns this frame's keys and edit actions; 0 none
 	carry      [MaxEdit]EditAction // edit actions queued after the field was built: for the next frame
 	nCarry     int
+	held       [MaxScrolls]ScrollEvent // scroll events kept for the frame after a scale change (holdScroll)
+	nHeld      int
 	cmdTaken   int // Input.Commands taken so far this frame (TakeCommand)
 	activated  Key // the box that took its Enter/Space activation this frame (Signal)
 	// a text field asked for the clipboard text (PasteRequest)
@@ -414,10 +416,12 @@ func (c *Context) Begin(in *Input, widthPx, heightPx int, scale, dt float32) {
 	c.fr.Swap()
 	c.fmtA.Reset()
 	c.prevOrder, c.order = c.order, c.prevOrder[:0]
-	if old > 0 && scale != old { // the window's scale changed (a new display, an app zoom)
+	changed := old > 0 && scale != old // the window's scale changed (a new display, an app zoom)
+	if changed {
 		c.rescaleScroll(float64(scale) / float64(old))
 	}
-	c.animating, c.scrollSet = false, false
+	c.holdScroll(changed)
+	c.animating, c.scrollSet = c.nHeld > 0, false // (held input needs the next frame)
 	c.wakeNs, c.imeOK, c.imeCancel = 0, false, false
 	c.takeCommit()
 	c.rich, c.richSpans, c.richStyles = c.rich[:0], c.richSpans[:0], c.richStyles[:0]
@@ -461,12 +465,13 @@ func (c *Context) Begin(in *Input, widthPx, heightPx int, scale, dt float32) {
 }
 
 // rescaleScroll keeps every scrolled box at the same place in its content
-// when the scale changes by the factor r. The offsets and the extents they
-// are limited by (the content and the view, from the previous layout) are in
-// pixels, so all of them are multiplied: the view stays on what it showed at
-// the top, and the input of the frame the scale changes in (a scroll event,
-// a momentum) is clamped against the bounds at the new scale, not the old.
-// Trackpad stretches are pixels too.
+// when the scale changes by the factor r: the offsets are in pixels, so they
+// are multiplied, and the view stays on what it showed at the top. The extents
+// (content, view) are not: they are not a ratio of the old ones (a viewport
+// that fills the window keeps its size in pixels when the zoom grows, a
+// virtual list divides by the scale), so they are laid out again by the frame,
+// and the frame's scroll input waits for that (holdScroll). The trackpad
+// stretches are pixels too.
 func (c *Context) rescaleScroll(r float64) {
 	for _, id := range c.prevOrder {
 		b := &c.boxes[id]
@@ -476,8 +481,6 @@ func (c *Context) rescaleScroll(r float64) {
 		for a := 0; a < 2; a++ {
 			b.scroll[a] *= r
 			b.scrollTgt[a] *= r
-			b.content[a] *= r
-			b.size[a] = float32(float64(b.size[a]) * r)
 		}
 	}
 	for i := 0; i < c.sp.n; i++ {
@@ -488,6 +491,43 @@ func (c *Context) rescaleScroll(r float64) {
 			rb.x0[a] *= r
 			rb.v0[a] *= r
 		}
+	}
+}
+
+// holdScroll keeps the frame's scroll events (wheel, gesture, momentum) for
+// the next frame while the scale changes. The scroll limits are those of the
+// last layout, which is at the old scale; the first layout at the new scale is
+// this frame's, so events applied now would be clamped, or bounced off the
+// edge, by bounds that are about to change. They are applied, in order and
+// with their phases, in the frame after, against the layout that exists then
+// (and the frame is requested). Held events go before the ones that arrive
+// meanwhile, and a second scale change holds them again.
+func (c *Context) holdScroll(changed bool) {
+	in := &c.in
+	if !changed && c.nHeld == 0 {
+		return
+	}
+	if in.NScrolls == 0 && (in.ScrollX != 0 || in.ScrollY != 0) { // set without AddScroll
+		in.AddScrollEvent(ScrollEvent{DX: in.ScrollX, DY: in.ScrollY, Precise: in.Precise})
+	}
+	in.ScrollX, in.ScrollY = 0, 0
+	if changed { // everything waits, after what already waits
+		for i := 0; i < in.NScrolls; i++ {
+			addScrollEvent(&c.held, &c.nHeld, in.Scrolls[i])
+		}
+		in.NScrolls = 0
+		return
+	}
+	// The held events come first.
+	var now [MaxScrolls]ScrollEvent
+	n := copy(now[:], in.Scrolls[:in.NScrolls])
+	in.NScrolls = 0
+	for i := 0; i < c.nHeld; i++ {
+		in.AddScrollEvent(c.held[i])
+	}
+	c.nHeld = 0
+	for i := 0; i < n; i++ {
+		in.AddScrollEvent(now[i])
 	}
 }
 

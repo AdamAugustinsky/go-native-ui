@@ -2,7 +2,11 @@
 
 package text
 
-import "testing"
+import (
+	"fmt"
+	"strings"
+	"testing"
+)
 
 func fontsAt(s *System, scale float32) (ui, mono FontKey) {
 	return s.Font(FontDesc{SizePt: 13, Scale: scale, Weight: 400}), s.Font(FontDesc{SizePt: 12, Scale: scale, Weight: 400, Mono: true})
@@ -110,5 +114,51 @@ func TestReleaseScaleBoundsTheTables(t *testing.T) {
 	}
 	if len(s.fonts) > 10 || len(s.faces) > 40 {
 		t.Errorf("%d fonts and %d faces after 100 scales", len(s.fonts), len(s.faces))
+	}
+}
+
+func overBudgetPara(f FontKey) Para {
+	return Para{Text: []byte(strings.Repeat("abcdefg h", 40)), Fonts: []FontKey{f}, Width: 300}
+}
+
+func paraWidths(v ParaView) []float32 {
+	w := make([]float32, len(v.Lines))
+	for i, l := range v.Lines {
+		w[i] = l.Width
+	}
+	return w
+}
+
+// A layout outside the paragraph cache's budget does not outlive the fonts it
+// was made with: the key of a released scale is reused by another, and the
+// same paragraph is laid out afresh.
+func TestReleaseScaleForgetsTheOverBudgetLayout(t *testing.T) {
+	budget := ParaBudget{Paras: 8, Glyphs: 200, Text: 100}
+	s := newSys(t)
+	s.ReserveParas(budget)
+	old := s.Font(FontDesc{SizePt: 13, Scale: 1, Weight: 400})
+	p := overBudgetPara(old)
+	if r := s.Layout(&p); r != overRef {
+		t.Fatalf("the paragraph is not over the budget: ref %d", r)
+	}
+	before := paraWidths(s.Paragraph(overRef))
+	if n := s.ReleaseScale(1); n != 1 {
+		t.Fatalf("released %d fonts", n)
+	}
+	reused := s.Font(FontDesc{SizePt: 13, Scale: 2, Weight: 400})
+	if reused != old {
+		t.Fatalf("the slot was not reused: %d, was %d", reused, old)
+	}
+	p = overBudgetPara(reused)
+	s.Layout(&p)
+	got := paraWidths(s.Paragraph(overRef))
+
+	fresh := newSys(t)
+	fresh.ReserveParas(budget)
+	fp := overBudgetPara(fresh.Font(FontDesc{SizePt: 13, Scale: 2, Weight: 400}))
+	fresh.Layout(&fp)
+	want := paraWidths(fresh.Paragraph(overRef))
+	if len(got) == 0 || fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("after the reuse: %v, a fresh layout: %v (before the release: %v)", got, want, before)
 	}
 }

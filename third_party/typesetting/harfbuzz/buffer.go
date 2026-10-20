@@ -112,6 +112,14 @@ type Buffer struct {
 	digest setDigest
 }
 
+// ForgetFace drops the shaping plans cached for face. The cache keeps every
+// face it has shaped with alive; a caller that is done with a face (a text
+// system that releases it) calls this.
+func (b *Buffer) ForgetFace(face Face) { delete(b.planCache, face) }
+
+// CachedFaces is the number of faces the buffer holds shaping plans for.
+func (b *Buffer) CachedFaces() int { return len(b.planCache) }
+
 // NewBuffer allocate a storage with default options.
 // It should then be populated with `AddRunes` and shapped with `Shape`.
 func NewBuffer() *Buffer {

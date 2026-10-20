@@ -473,7 +473,7 @@ func (s *System) ReleaseScale(scale float32) int {
 		return 0
 	}
 	s.runs.drop()
-	s.paras.drop()
+	s.paras.dropAll()
 	s.atlas.glyphs.removeFaces(func(f FaceID) bool { return int(f) < len(s.faces) && s.faces[f].gone })
 	return n
 }
