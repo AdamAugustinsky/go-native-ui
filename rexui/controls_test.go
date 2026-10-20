@@ -232,6 +232,61 @@ func TestStepperDisabledAndField(t *testing.T) {
 	}
 }
 
+// A disclosure that opens while nobody can see it, in a hidden window or
+// hidden by a flow's MaxLines, turns at once and asks for no frames; it shows
+// open when it shows again. In view, it turns over time.
+func TestDisclosureTurnsOnlyWhenShown(t *testing.T) {
+	for _, where := range []string{"view", "hidden window", "flow"} {
+		var open bool
+		g := newRig(t, theme.Light, nil, func(g *rig) {
+			c := g.c
+			c.NextSize(ui.Px(300), ui.Children(0))
+			c.BeginFlow("flow", ui.FlowOpts{MaxLines: 1})
+			if where == "flow" {
+				c.NextSize(ui.Px(300), ui.Px(20))
+				c.Box(0, "wide")
+			}
+			rexui.Disclosure(g.k, "Details", &open, rexui.DisclosureOpts{})
+			c.EndFlow()
+		})
+		g.k.ReduceMotion = false
+		g.settle()
+		g.in.Hidden = where == "hidden window"
+		g.frame()
+		open = true
+		g.frame()
+		if anim := g.c.Animating(); anim != (where == "view") {
+			t.Fatalf("%s: opening, animating %v", where, anim)
+		}
+		g.in.Hidden = false
+		g.settle()
+		if where == "flow" {
+			continue
+		}
+		// the chevron points down, as a settled open one does
+		var shapes []gpu.Quad
+		for _, q := range g.list.Quads {
+			if q.Mode == gpu.ModeShape && q.Color[0]&0xFF != 0 {
+				shapes = append(shapes, q)
+			}
+		}
+		if len(shapes) == 0 {
+			t.Fatalf("%s: no chevron", where)
+		}
+		x0, x1 := shapes[0].Rect[0], shapes[0].Rect[2]
+		for _, q := range shapes {
+			x0, x1 = min(x0, q.Rect[0]), max(x1, q.Rect[2])
+		}
+		y0, y1 := shapes[0].Rect[1], shapes[0].Rect[3]
+		for _, q := range shapes {
+			y0, y1 = min(y0, q.Rect[1]), max(y1, q.Rect[3])
+		}
+		if x1-x0 <= y1-y0 {
+			t.Fatalf("%s: the open chevron is %v wide and %v high: not turned down", where, x1-x0, y1-y0)
+		}
+	}
+}
+
 func TestDisclosureToggles(t *testing.T) {
 	var open, push bool
 	var changed int

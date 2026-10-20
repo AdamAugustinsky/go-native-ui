@@ -37,6 +37,19 @@ func loops(k *base.Kit, id ui.ID) bool {
 	return k.Visible(r)
 }
 
+// shown reports whether the box keyed key showed in the previous frame: the
+// window is showing (not ui.Input.Hidden), and the box was laid out in view
+// and not hidden by a flow's MaxLines. A transition of a box that did not
+// show jumps to its end: it would ask for frames nobody sees.
+func shown(k *base.Kit, key ui.Key) bool {
+	c := k.Context()
+	if c.Input().Hidden {
+		return false
+	}
+	id, ok := c.BoxOf(key)
+	return ok && !c.WasHidden(id) && k.Visible(c.Rect(id))
+}
+
 // cycle is where the frame's clock is in a cycle of period ns, 0 to 1.
 func cycle(k *base.Kit, period int64) float32 {
 	return float32(k.Context().Input().Time%period) / float32(period)
