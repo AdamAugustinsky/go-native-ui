@@ -178,6 +178,8 @@ func (k *Kit) ScrollBars(v *ScrollView) [2]ScrollBar {
 	stretch := [2]float64{ex, ey}
 	now := c.Input().Time
 	legacy := k.legacyBars()
+	or := c.Rect(o)
+	outer := [2]float32{or[2] - or[0], or[3] - or[1]}
 
 	shown := [2]float64{pos[0] + stretch[0], pos[1] + stretch[1]}
 	active := shown != st.lastPos
@@ -214,9 +216,11 @@ func (k *Kit) ScrollBars(v *ScrollView) [2]ScrollBar {
 		b.Key = ui.KeyN(okey, uint64(5000+a))
 		switch {
 		case legacy && a == 1:
-			b.X, b.Y, b.W, b.H = view[0], 0, bw, trackLen
+			// at the outer box's edge: the content's room for it may be
+			// last frame's, in the frame the system's style changes
+			b.X, b.Y, b.W, b.H = outer[0]-bw, 0, bw, trackLen
 		case legacy:
-			b.X, b.Y, b.W, b.H = 0, view[1], trackLen, bw
+			b.X, b.Y, b.W, b.H = 0, outer[1]-bw, trackLen, bw
 		case a == 1:
 			b.X, b.Y, b.W, b.H = view[0]-bw-inset, inset, bw, trackLen
 		default:

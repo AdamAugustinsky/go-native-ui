@@ -33,8 +33,10 @@ go-text's own tests and test data are not copied.
 - `harfbuzz/aat_layout.go`, `harfbuzz/buffer.go`: the AAT/kern apply context (fonts with a `kern`, `kerx`, `morx` or `trak` table) lives in a field on `Buffer` and keeps its glyph set's storage; upstream made one, and a glyph set, on every shape. The regression test is `harfbuzz/zeroalloc_test.go`, which CI runs from the root module (`go test github.com/go-text/typesetting/harfbuzz`).
 - `font/opentype/tables/ot_layout.go`: `parseValueRecord` reads into a 16-element stack array. Sixteen because the size counts every format bit, reserved ones included; the regression test is `font/opentype/tables/zeroalloc_test.go`, which CI runs.
 
+`forgetface.patch` (C9, 2026-10-20) adds two methods to `harfbuzz.Buffer`, `ForgetFace` and `CachedFaces`. Upstream's plan cache keeps every face it has shaped with alive; our text engine releases a zoom level's faces (`ReleaseScale` in `text/engine.go`) and drops their plans with `ForgetFace`. `TestEngineReleaseScaleBoundsThePlanCache` checks it.
+
 ## Updating
 
 1. Copy the same package set from the new upstream version.
-2. Re-apply `zeroalloc.patch`.
+2. Re-apply `zeroalloc.patch` and `forgetface.patch`.
 3. Run `go test -tags textengine ./text/` and `go test github.com/go-text/typesetting/harfbuzz` from the root. Its exact zero-allocation test (`TestEngineMissAllocsAreHarfbuzzsAlone`) and the reference-pipeline tests in `text/shape_test.go` must pass.

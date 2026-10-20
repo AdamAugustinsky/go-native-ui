@@ -138,7 +138,7 @@ func (r *Rex) drawPanes(c *ui.Context) {
 	c.PushOpacity(fade)
 	// All shadows first, so no pane's shadow lands on a neighbour's fill.
 	for _, slot := range ord[:n] {
-		r.th.Chrome.SurfaceShadow(c, &r.th, r.surface(t, slot, ft[slot], opa[slot]))
+		r.th.Chrome.SurfaceShadow(c, r.th, r.surface(t, slot, ft[slot], opa[slot]))
 	}
 	for _, slot := range ord[:n] {
 		r.drawPane(c, t, slot, r.disp[slot], ft[slot], opa[slot])
@@ -165,7 +165,7 @@ func (r *Rex) drawPane(c *ui.Context, t *tab, slot int8, d [4]float32, ft, opa f
 	key := paneKey(p.uid)
 
 	s := r.surface(t, slot, ft, opa)
-	kg := r.th.Chrome.BeginSurface(c, &r.th, s)
+	kg := r.th.Chrome.BeginSurface(c, r.th, s)
 
 	// Header: process icon and title; the buttons only on the focused pane.
 	hc := 36.5 * k
@@ -213,7 +213,7 @@ func (r *Rex) drawPane(c *ui.Context, t *tab, slot int8, d [4]float32, ft, opa f
 		g.shell()
 	}
 
-	r.th.Chrome.EndSurface(c, &r.th, s, kg)
+	r.th.Chrome.EndSurface(c, r.th, s, kg)
 }
 
 // drawDividers builds the grab areas of the gutters between panes (theme.Chrome.Divider).
@@ -223,6 +223,6 @@ func (r *Rex) drawDividers(c *ui.Context, t *tab) {
 		if !n.used || n.leaf {
 			continue
 		}
-		r.th.Chrome.Divider(c, &r.th, divKey(n.uid), n.axis, n.rect, n.gut)
+		r.th.Chrome.Divider(c, r.th, divKey(n.uid), n.axis, n.rect, n.gut)
 	}
 }

@@ -47,6 +47,36 @@ widths, knob slots and knobs per control size and style as JSON
 (`-[NSScroller rectForPart:]`, no window, no GUI session). The theme's test
 reads it from `theme/testdata/appkit-scroller-27.2.json`.
 
+## Which machine, which reference set
+
+Every measurement file has a top-level `machine` object (`machine.h`): the
+model, macOS version and build, the main display (name, points, backing scale,
+refresh), the system appearance and accent (and the accent this process
+rendered with, when `-AppleAccentColor` was passed), the scroller style and
+the date. `AppKitRef -machine FILE` writes it alone; `scroller.sh -machine`
+does the same for the scroller tool.
+
+There are two committed sets, the MacBook's (the file names without a suffix)
+and the Mac mini's (`-macmini`):
+
+| | MacBook | Mac mini |
+|---|---|---|
+| Machine | MacBook Pro 14", `Mac15,6`, 26B5091g, built-in 1512×982 @2x, 120 Hz | Mac mini, `Mac16,10`, 26B5101f, LG UltraGear 5K, 2560×1440 @2x, 120 Hz |
+| Recipes | `rexui/testdata/appkit-27.2.json` | `…-macmini.json` |
+| NSScroller | `theme/testdata/appkit-scroller-27.2.json` | `…-macmini.json` |
+| Scroll recordings | `ui/testdata/appkit-scroll/NAME.appkit` | `NAME-macmini.appkit` |
+| Runs and scenes (outside the repo) | `~/Projects/research/appkit-ref/macbook-blue`, `macbook-system`, `scenes/captures` | `macmini-blue`, `macmini-system`, `scenes/captures-macmini` |
+
+Which one a comparison reads is decided in one place, `internal/appkitref`:
+
+- **CI tests** read the MacBook set, unless `GNUI_APPKIT_REF=macbook|macmini` names one (`TestRecipesMatchAppKit`, `TestLegacyScrollersMatchAppKit`, `TestScrollTracksAppKit`). The MacBook is reserved for the exit-criteria measurements.
+- **Live comparisons and the dev tools** use the same variable, else the set whose machine is this host's (model and macOS build), else the MacBook's. `measure -set` prints the choice and the files; `measure -ref auto`, `ours -ref auto` and `gallery -ref auto` read that set's `metrics.json`.
+- **Recording** never falls back: `measure -set-name` (used by `scroll.sh`) names the host's own set, or fails on an unknown machine unless the variable is set, so a new machine cannot write over another's files.
+
+The scroller style is the system's, as a running app sees it. The Mac mini has a mouse, so its style is legacy and D0's live windows have 17 pt scroll bars; the MacBook's trackpad gives overlay. The mini's `appkitscenes` were captured both ways (`captures-macmini`, and `captures-macmini-overlay` with `EXTRA="-AppleShowScrollBars WhenScrolling"`), the second being the like-for-like set against the MacBook's.
+
+`measure -diff macbook macmini` (from the repository root) lists what differs between the sets, biggest first: `docs/design/appkit-macbook-vs-macmini.md`. `unlocked.sh` exits 3 when the screen is locked; `live.sh` and the live runs start with it, and run under `caffeinate -d`.
+
 ## What offscreen rendering cannot show
 
 - **Key-window state.** An app that is never active has no key window. `ARWindow` and `ARApp` report key, main and active, so controls draw their active look. Samples marked `inactive` are drawn honestly. Emphasised and unemphasised selection are both rendered.

@@ -7,14 +7,24 @@ import (
 	"strconv"
 	"strings"
 
+	"gonativeui/internal/appkitref"
 	"gonativeui/platform"
 	"gonativeui/theme"
 )
 
 // LoadSystem reads the light and dark system colours of an AppKitRef
 // metrics.json into SystemValues, for renders that reproduce that run's
-// appearance (base.Kit.PinSystem).
+// appearance (base.Kit.PinSystem). "auto" is the metrics.json of this host's
+// reference set (internal/appkitref: GNUI_APPKIT_REF, else the set measured on
+// this model and macOS build).
 func LoadSystem(path string) (*theme.SystemValues, error) {
+	if path == "auto" {
+		set, err := appkitref.Select()
+		if err != nil {
+			return nil, err
+		}
+		path = appkitref.Metrics(set)
+	}
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err

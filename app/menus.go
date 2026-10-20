@@ -35,6 +35,7 @@ import (
 // (widget.Kit.SetMenu).
 func (a *App) SetMenu(m *menu.Model) {
 	a.menu, a.menuDirty = m, true
+	a.syncZoomMenu()
 }
 
 // syncMenuBar installs the menu bar when it is due: once after the first
@@ -44,11 +45,12 @@ func (a *App) syncMenuBar() {
 		return
 	}
 	a.menuDirty = false
-	a.menuSpec = nativeMenuSpec(a.menu)
+	a.menuSpec = a.nativeSpec()
 	if a.menuStateFn == nil {
 		a.menuStateFn, a.fieldKeysFn = a.menuState, a.fieldTakesKey
 	}
 	a.Win.SetMenuBar(&a.menuSpec, a.menuStateFn)
+	a.barOn = true
 	a.Win.SetFieldKeys(a.fieldKeysFn)
 }
 
@@ -59,6 +61,11 @@ func (a *App) syncMenuBar() {
 // (id 0): an edit item when a text field has the focus; a system item (Hide,
 // Quit, Minimize …) unless a modal is open, as a command not marked InModal.
 func (a *App) menuState(id uint16, act platform.MenuAction) (enabled, checked bool) {
+	if devBuild && id >= debugCmdBase {
+		if en, ch, ok := a.debugMenuState(id); ok {
+			return en, ch
+		}
+	}
 	if id == 0 {
 		if act.IsEdit() {
 			return a.UI.TextFieldFocused(), false
@@ -99,7 +106,7 @@ func (a *App) popUpMenus() {
 			return
 		}
 		if a.menuDirty || len(a.menuSpec.Menus) == 0 {
-			a.menuSpec = nativeMenuSpec(a.menu)
+			a.menuSpec = a.nativeSpec()
 		}
 		p.Spec, p.Menu, p.Kind = &a.menuSpec, r.Menu, platform.PopupContext
 		if r.Kind == ui.MenuPullDown {

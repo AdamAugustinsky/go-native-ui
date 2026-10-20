@@ -33,7 +33,7 @@ func cmdPackage(args []string, stdout, stderr io.Writer) error {
 	notarize := fs.Bool("notarize", false, "notarize and staple (needs a Developer ID identity and -notary-profile)")
 	profile := fs.String("notary-profile", os.Getenv("GNUI_NOTARY_PROFILE"), "notarytool keychain profile (xcrun notarytool store-credentials); default $GNUI_NOTARY_PROFILE")
 	dmg := fs.Bool("dmg", false, "also build a .dmg (signed and notarized when the identity allows)")
-	tags := fs.String("tags", "", "go build -tags")
+	tags := fs.String("tags", "", "go build -tags (gnui_release is always added)")
 	ldflags := fs.String("ldflags", "", `extra go build -ldflags ("-s -w" is always added)`)
 	if err := parseFlags(fs, args); err != nil {
 		return err

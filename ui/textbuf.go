@@ -33,6 +33,7 @@ type TextBuffer struct {
 	rev           uint32 // changes with every change of the text
 
 	scroll    float32 // horizontal scroll offset of the text, pixels
+	scrollAt  float32 // the scale scroll is in (Context.scale when TextField last ran), 0 before the first
 	activity  int64   // Input.Time of the last interaction (caret blink origin)
 	focused   bool    // the field had keyboard focus in the window's active state last frame
 	composing bool    // an input-method composition was shown last frame

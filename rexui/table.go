@@ -15,6 +15,10 @@ type TableOpts struct {
 	// Glyphs are the sort indicators (AddListGlyphs; zero: the standard
 	// chevrons).
 	Glyphs ListGlyphs
+	// ClearHeader leaves the header's background unpainted: it lies in a
+	// toolbar's scroll-edge pocket (ToolbarOpts.Pocket), whose bar shows
+	// behind it, as Finder's does.
+	ClearHeader bool
 }
 
 // TableRecipe is the look of a table's header and cells (macOS 27.2,
@@ -86,7 +90,7 @@ func BeginTable(k *base.Kit, label string, st *base.TableState, cols []base.Colu
 		Inset: ListLook.Inset[s], HeaderH: k.Theme().Lines.HeaderH / k.Scale(),
 		CellPad: rc.CellPad, EdgePad: rc.EdgePad, Set: true,
 	})}
-	TableHeader(k, &t.TableHead, o.Glyphs)
+	tableHeader(k, &t.TableHead, o.Glyphs, o.ClearHeader)
 	t.List = List{List: k.BeginTableBody(&t.TableHead, rows, listOpts(k, ListOpts{Style: o.Style, Striped: o.Striped}, true)),
 		rowLook: rowLook{style: s, striped: o.Striped}}
 	return t
@@ -97,16 +101,23 @@ func BeginTable(k *base.Kit, label string, st *base.TableState, cols []base.Colu
 // and a focus ring on a header reached with the keyboard; beside a legacy
 // scroll bar the header stops at the corner above it. AppKit's headers do
 // not react to hover.
-func TableHeader(k *base.Kit, t *base.TableHead, g ListGlyphs) {
+func TableHeader(k *base.Kit, t *base.TableHead, g ListGlyphs) { tableHeader(k, t, g, false) }
+
+func tableHeader(k *base.Kit, t *base.TableHead, g ListGlyphs, clear bool) {
 	g = g.orStandard()
 	c, r := k.Context(), k.Theme()
 	rc := &TableLook
 	hh := t.HeaderHeight()
 	lw := pt(k.Scale(), 1)
-	c.NextBG(ListLook.Background.RGBA(r))
+	flags := ui.DrawBackground | ui.DrawBorder
+	if clear {
+		flags = ui.DrawBorder
+	} else {
+		c.NextBG(ListLook.Background.RGBA(r))
+	}
 	c.NextBorderSides(ui.SideBottom)
 	c.NextBorder(rc.HeaderLine.RGBA(r), lw)
-	t.BeginHeaderRow(ui.DrawBackground | ui.DrawBorder)
+	t.BeginHeaderRow(flags)
 	font := r.Styles[theme.StyleSubheadline].Font
 	tc, sepC := rc.HeaderText.RGBA(r), rc.Separator.RGBA(r)
 	if k.Disabled() {
@@ -130,7 +141,7 @@ func TableHeader(k *base.Kit, t *base.TableHead, g ListGlyphs) {
 		c.NextSize(ui.TextSize(base.LabelSlack), ui.Px(body))
 		c.NextFont(font)
 		c.NextTextColor(tc)
-		c.BoxKeyed(ui.DrawText|ui.FadeOverflowX, ui.KeyN(hc.Key, 1), base.StrBytes(hc.Col.Title))
+		c.BoxKeyed(ui.DrawText|ui.EllipsisOverflowX, ui.KeyN(hc.Key, 1), base.StrBytes(hc.Col.Title))
 		if hc.Sorted {
 			ic := g.SortUp
 			if hc.Descending {
@@ -146,10 +157,14 @@ func TableHeader(k *base.Kit, t *base.TableHead, g ListGlyphs) {
 				c.BoxKeyed(f|base.Floating, ui.KeyN(hc.Key, 2), disp)
 			}
 		}
-		// the separator at the column's right edge, in the room above the line
-		theme.At(c, hc.W-lw, theme.Snap((body-lw-sh)/2), lw, sh)
-		c.NextBG(sepC)
-		c.BoxKeyed(ui.DrawBackground|base.Floating, ui.KeyN(hc.Key, 4), nil)
+		// the separator at the column's right edge, in the room above the
+		// line; none after a last column that runs to the rows' edge
+		// (Finder's Kind)
+		if !(hc.Col.Fill && hc.Index == len(t.Columns())-1) {
+			theme.At(c, hc.W-lw, theme.Snap((body-lw-sh)/2), lw, sh)
+			c.NextBG(sepC)
+			c.BoxKeyed(ui.DrawBackground|base.Floating, ui.KeyN(hc.Key, 4), nil)
+		}
 		id := c.Parent()
 		t.EndHeaderCell(&hc)
 		k.FocusRing(id, hc.Visual, 0)
@@ -187,7 +202,7 @@ func (t *Table) cell(col int, b []byte, color uint32) {
 	c.NextFont(k.Theme().Styles[theme.StyleBody].Font)
 	c.NextTextColor(color)
 	c.NextAlign(t.Columns()[col].Align)
-	t.TextCell(&t.List.List, col, b, ui.DrawText|ui.FadeOverflowX)
+	t.TextCell(&t.List.List, col, b, ui.DrawText|ui.EllipsisOverflowX)
 }
 
 // EndTable ends the table: the stripes below the rows, the rows, the scroll

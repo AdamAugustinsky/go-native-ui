@@ -22,8 +22,25 @@
 //
 // Rectangles are in the units of the platform's window frame, in one space for
 // all screens, with the origin at the top-left of the primary screen and y
-// growing downwards (points on macOS, pixels on Windows). The frame is the whole
-// window, title bar included. platform.Screens returns the screens in this form.
+// growing downwards. The unit differs by OS:
+//
+//   - macOS: points (the logical units of Config.Width and Height);
+//   - Linux: points too (no screens are read yet, so only the size is kept);
+//   - Windows: physical pixels (the process is DPI-aware), which are points
+//     times the display's scale.
+//
+// The frame is the whole window, title bar included. platform.Screens returns
+// the screens in this form.
+//
+// App code that has lengths in points (app.App.ContentSize, Config.Width and
+// Height) converts them with FromPoints and ToPoints, which know the unit of the
+// OS, and never multiplies by a scale by hand: at 200 % on Windows a size
+// saved in points is half the window.
+//
+// The frame is never in a window's zoomed ui points: with app zoom
+// (app.App.SetZoom) the window keeps its size and only its content scales, so
+// the frame is unchanged by the zoom, which is kept in State.Zoom. Derive a
+// frame from app.App.ContentSize, not from the ui's extent.
 //
 // # What Apply does
 //
@@ -53,6 +70,7 @@ package winstate
 import (
 	"errors"
 	"math"
+	"runtime"
 )
 
 // Rect is a rectangle: top-left corner and size.
@@ -116,6 +134,37 @@ type State struct {
 	// App is kept with the window and returned unchanged: the application's
 	// own bytes (at most MaxApp).
 	App []byte `json:"app,omitempty"`
+	// Zoom is the window's app zoom factor (app.App.Zoom); 0 means 1. Frame is
+	// in screen points whatever the zoom: it is never multiplied or divided
+	// by it, so a window restored at 150 % opens at the size it was saved at.
+	Zoom float64 `json:"zoom,omitempty"`
+}
+
+// FromPoints converts a length in points (app.App.ContentSize, the Width and
+// Height of app.Config) to the unit of Frame on this OS, for a display of the
+// given scale (the pixels per point app.App.Size reports): the same number on
+// macOS and Linux, the number of physical pixels on Windows.
+func FromPoints(pt, scale float64) float64 { return pt * unitsPerPoint(runtime.GOOS, scale) }
+
+// ToPoints is the inverse of FromPoints: a length of Frame (a Placement's) as
+// points for app.Config.
+func ToPoints(units, scale float64) float64 { return units / unitsPerPoint(runtime.GOOS, scale) }
+
+// unitsPerPoint is how many units of Frame make a point on goos at a display scale.
+func unitsPerPoint(goos string, scale float64) float64 {
+	if goos == "windows" && scale > 0 && !math.IsInf(scale, 0) {
+		return scale
+	}
+	return 1
+}
+
+// ZoomFactor is Zoom as a factor to give app.App.SetZoom: 1 when none is saved
+// or the saved one is not a positive number.
+func (s State) ZoomFactor() float64 {
+	if s.Zoom > 0 && !math.IsInf(s.Zoom, 0) {
+		return s.Zoom
+	}
+	return 1
 }
 
 // MaxApp is the most application bytes a State may carry.
@@ -136,7 +185,7 @@ const maxExtent = 1 << 20
 // size and finite numbers within limits. Apply ignores a state that is not.
 func (s State) Valid() bool {
 	f := s.Frame
-	return f.finite() && f.W > 0 && f.H > 0 && f.W <= maxExtent && f.H <= maxExtent &&
+	return !math.IsNaN(s.Zoom) && !math.IsInf(s.Zoom, 0) && f.finite() && f.W > 0 && f.H > 0 && f.W <= maxExtent && f.H <= maxExtent &&
 		math.Abs(f.X) <= maxExtent && math.Abs(f.Y) <= maxExtent
 }
 

@@ -230,9 +230,9 @@ type bandState struct {
 	in   func(h *hrn) bool // the scene shows the state
 }
 
-func hot(h *hrn, i int) bool { return h.c.HotTOf(tabKey(h.x.tabs[i].uid)) > 0.99 }
+func hot(h *hrn, i int) bool { return h.c.HotTOf(h.x.tabKey(h.x.tabs[i].uid)) > 0.99 }
 func held(h *hrn, i int) bool {
-	return h.c.ActiveTOf(tabKey(h.x.tabs[i].uid)) > 0.99 && h.x.active == i
+	return h.c.ActiveTOf(h.x.tabKey(h.x.tabs[i].uid)) > 0.99 && h.x.active == i
 }
 
 var bandStates = []bandState{

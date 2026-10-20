@@ -473,6 +473,12 @@ func (w Win) KeyIn(k *KeyLayout, down bool, code ui.KeyCode, mods ui.Mods) objc.
 	if len(plain) == 1 && plain[0] >= 0x20 && plain[0] < 0x7f { // a printing key: the layout decides
 		chars = k.Translate(vk, mods&(ui.ModShift|ui.ModAlt))
 		plain = k.Translate(vk, mods&ui.ModShift)
+		if mods&ui.ModSuper != 0 && mods&ui.ModAlt == 0 {
+			// ⌘ takes Shift off the characters but not off the ones without
+			// modifiers: AppKit makes ⇧⌘Z "z" / "Z", ⇧⌘4 "4" / "$" (measured
+			// with +[NSEvent eventWithCGEvent:] of a keyboard CGEvent).
+			chars = k.Translate(vk, 0)
+		}
 	}
 	return w.KeyEvent(down, chars, plain, vk, mods, false)
 }

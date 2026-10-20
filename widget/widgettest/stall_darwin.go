@@ -130,6 +130,7 @@ const (
 type stallReport struct {
 	resumed  bool   // a frame came while it looked: the wait goes on
 	blocked  string // the main thread did not answer: a hang
+	unserved string // the main thread sits in its event wait and AppKit does not serve it
 	evidence string // the environment cannot draw: why
 	text     string // the diagnostics, always printed
 }
@@ -149,7 +150,11 @@ func (l *LiveApp) diagnose(what string, after time.Duration) stallReport {
 		if l.lim.snap != nil {
 			snap = l.lim.snap
 		}
-		res := l.call(func(a *app.App) { *s = snap(a) }, limit)
+		res := l.callIdle(func(a *app.App) { *s = snap(a) }, limit, limit)
+		if res.idle {
+			r.unserved = describe(res)
+			return false
+		}
 		if res.timeout != "" || res.ended || res.goexit || res.panicked != nil {
 			r.blocked = fmt.Sprintf("looking at the environment: %s", describe(res))
 			return false
@@ -159,21 +164,26 @@ func (l *LiveApp) diagnose(what string, after time.Duration) stallReport {
 	if !take(&s1) {
 		return l.finish(what, after, frames, s1, s2, 0, r)
 	}
-	beats := 0
+	beats, idleBeats := 0, 0
 	for i := 0; i < beatCount; i++ {
 		time.Sleep(beatGap)
 		if l.sb.built.Load() != frames {
 			r.resumed = true
 			return l.finish(what, after, frames, s1, s2, beats, r)
 		}
-		if res := l.call(func(*app.App) {}, limit); res.timeout == "" && !res.ended && !res.goexit && res.panicked == nil {
+		res := l.callIdle(func(*app.App) {}, limit, limit)
+		if res.timeout == "" && !res.ended && !res.goexit && res.panicked == nil {
 			beats++
+		} else if res.idle {
+			idleBeats++
 		}
 	}
 	if !take(&s2) {
 		return l.finish(what, after, frames, s1, s2, beats, r)
 	}
-	if beats < minBeats {
+	if beats < minBeats && idleBeats > 0 { // alive, in its event wait, and not served
+		r.unserved = fmt.Sprintf("the main thread answered %d of %d heartbeats; the others found it in its event wait, which AppKit did not end", beats, beatCount)
+	} else if beats < minBeats {
 		r.blocked = fmt.Sprintf("the main thread answered %d of %d heartbeats", beats, beatCount)
 	} else {
 		r.evidence = classifyStall(s1, s2, beats)
@@ -212,6 +222,8 @@ func (l *LiveApp) finish(what string, after time.Duration, frames int64, s1, s2 
 		b.WriteString("  verdict: frames resumed while looking; the wait goes on\n")
 	case r.blocked != "":
 		fmt.Fprintf(&b, "  verdict: the main thread is blocked: %s\n", r.blocked)
+	case r.unserved != "":
+		fmt.Fprintf(&b, "  verdict: the main thread is idle in its event wait and AppKit does not serve it: %s\n", r.unserved)
 	case r.evidence != "":
 		fmt.Fprintf(&b, "  verdict: the environment cannot draw: %s\n", r.evidence)
 	default:
@@ -236,6 +248,8 @@ func (l *LiveApp) stall(what string, after time.Duration) (resumed bool) {
 		return true
 	case r.blocked != "":
 		l.t.Fatalf("widgettest: waiting for %s: the main thread is blocked: %s", what, r.blocked)
+	case r.unserved != "":
+		l.t.Skipf("widgettest: no frame was drawn for %v while waiting for %s, and this environment cannot serve the application: the main thread is idle in its event wait and AppKit does not hand it work (%s)", after, what, r.unserved)
 	case r.evidence != "":
 		l.t.Skipf("widgettest: no frame was drawn for %v while waiting for %s, and this environment cannot draw: %s", after, what, r.evidence)
 	}

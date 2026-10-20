@@ -113,6 +113,14 @@ const (
 	// of the thickening AppKit gives labels (D38). For terminal-like content,
 	// as Ghostty draws by default; UI text keeps the default.
 	NoFontSmoothing
+
+	// EllipsisOverflowX ends one line of display text that is wider than the
+	// box with "…" in its font, cut after the last glyph that leaves room for
+	// it (spaces before the cut are dropped), as AppKit truncates a label's
+	// tail (NSLineBreakByTruncatingTail). Right-to-left text fades out
+	// instead (FadeOverflowX). Rich and wrapped text use text.Para's
+	// Ellipsis.
+	EllipsisOverflowX
 )
 
 // scrollable flags, either axis.

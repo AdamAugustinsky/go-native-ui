@@ -1,0 +1,23 @@
+{
+  "machine": {
+    "accent": "pink",
+    "appearance": "dark",
+    "date": "2026-10-19",
+    "display": {
+      "backingScale": 2,
+      "heightPt": 982,
+      "heightPx": 1964,
+      "name": "Built-in Liquid Retina XDR Display",
+      "refreshHz": 120,
+      "widthPt": 1512,
+      "widthPx": 3024
+    },
+    "macOS": {
+      "build": "26B5091g",
+      "version": "27.2"
+    },
+    "model": "Mac15,6",
+    "note": "MacBook Pro 14\" (M3 Pro). Recorded afterwards from docs/measurements/phase1-macos.md and GnuiShot's display dump; the scroll tool did not write it.",
+    "scrollerStyle": "overlay"
+  }
+}

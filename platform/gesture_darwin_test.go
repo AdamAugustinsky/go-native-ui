@@ -214,9 +214,12 @@ func TestGestureEventsThroughAppKitsRouting(t *testing.T) {
 // trackpad's stream, which arrives through the event queue as in
 // TestGestureEventsThroughTheQueue, starts one), so what is checked is that the
 // one-shot smart zoom still gets through with its point, and that nothing wrong
-// comes out. Inactive (a runner whose window is not key) it is skipped; the
-// phased pinch and rotation on a real trackpad are on the checkpoint-1 hand
-// list ("pinch and rotate on the trackpad over the gallery's image scene").
+// comes out. Inactive (a runner whose window is not key) it is skipped. The
+// phased pinch and rotation reach ui's boxes through -[NSWindow sendEvent:]
+// (widgettest.SendToWindow) and through the queue, with the host ownership
+// rule, in widget/widgettest/live/gesture_ui_darwin_test.go; on a real
+// trackpad they are on the checkpoint-1 hand list ("pinch and rotate on the
+// trackpad over the gallery's image scene").
 func TestGestureEventsThroughNSAppSendEvent(t *testing.T) {
 	g := newCGGesture(t)
 	var evs []Event
