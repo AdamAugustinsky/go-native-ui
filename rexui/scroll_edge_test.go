@@ -222,6 +222,7 @@ type bandTable struct {
 	edgeTable
 	right bool   // a row was right-clicked
 	list  ui.Key // the rows' box
+	under bool   // ContentUnder
 }
 
 func (b *bandTable) build(g *rig) {
@@ -241,7 +242,7 @@ func (b *bandTable) build(g *rig) {
 	}
 	rexui.EndTable(k, &t)
 	c.Pop()
-	tb := rexui.BeginToolbar(k, "Toolbar", rexui.ToolbarOpts{Style: theme.ToolbarUnified, Title: "Files", ContentEdge: true})
+	tb := rexui.BeginToolbar(k, "Toolbar", rexui.ToolbarOpts{Style: theme.ToolbarUnified, Title: "Files", ContentEdge: true, ContentUnder: b.under})
 	tb.Title()
 	tb.Flexible()
 	tb.End()
@@ -385,11 +386,12 @@ func TestScrollEdgeHidesRows(t *testing.T) {
 }
 
 // The toolbar's own band while content is scrolled under the toolbar
-// (ContentUnder, not ContentEdge: the content lies below the band) is
-// AppKit's titlebar pocket over the content's colour: the Hard recipe over
-// BandFill, flat (#262626 over #1E1E1E; white over white), the inactive
-// recipe in an inactive window; under Reduce Transparency it is the blurred
-// pocket's colour (Under), opaque. It never blurs: nothing is under it.
+// (ContentUnder, not ContentEdge) is AppKit's titlebar pocket: the Hard blur
+// of what is drawn under the band, its Base the content's colour (BandFill),
+// so that over nothing, as here, the renderer draws it flat (#FFFFFF; #262626
+// over #1E1E1E), its fallback opaque (Under); the inactive recipe in an
+// inactive window. Under Reduce Transparency it is Under, opaque, and does
+// not blur.
 func TestToolbarBandHardPocket(t *testing.T) {
 	for _, m := range []theme.Mode{theme.Light, theme.Dark} {
 		for _, rt := range []bool{false, true} {
@@ -404,6 +406,7 @@ func TestToolbarBandHardPocket(t *testing.T) {
 			}
 			g.settle()
 			r := g.k.Theme()
+			under := rexui.ScrollEdgeLook.Under.At(r.T) | 0xFF
 			band := [4]float32{g.k.Pt(180), 0, g.k.Pt(890), g.k.Pt(52)}
 			bar := func() (gpu.Quad, bool) {
 				for i := range g.list.Quads {
@@ -414,15 +417,19 @@ func TestToolbarBandHardPocket(t *testing.T) {
 				return gpu.Quad{}, false
 			}
 			q, ok := bar()
-			want := [2]uint32{0xFFFFFFFF, 0x262626FF}[m]
 			if rt {
-				want = rexui.ScrollEdgeLook.Under.At(r.T) | 0xFF
-			}
-			if !ok || q.Mode != gpu.ModeShape || q.Color[0] != want {
-				t.Errorf("mode %d, reduce transparency %v: the band %v %08x (mode %d), want %08x", m, rt, ok, q.Color[0], q.Mode, want)
-			}
-			if rt {
+				if !ok || q.Mode != gpu.ModeShape || q.Color[0] != under {
+					t.Errorf("mode %d, reduce transparency: the band %v %08x (mode %d), want Under %08x", m, ok, q.Color[0], q.Mode, under)
+				}
 				continue
+			}
+			want := rexui.ScrollEdgeLook.Hard.Backdrop(g.k)
+			want.Base = f.fill
+			if !ok || q.Mode != gpu.ModeBackdrop || q.Color[0] != under || g.list.Backdrops[q.Tex] != want {
+				t.Fatalf("mode %d: the band %v, mode %d, fallback %08x, want the Hard blur over BandFill, fallback Under %08x", m, ok, q.Mode, q.Color[0], under)
+			}
+			if flat := want.Over(want.Base); flat != [2]uint32{0xFFFFFFFF, 0x262626FF}[m] {
+				t.Errorf("mode %d: over nothing the band is %08x", m, flat)
 			}
 			rexui.ScrollEdgeLook.HardInactive.Add = 0.1
 			g.in.Focused = false
@@ -430,9 +437,111 @@ func TestToolbarBandHardPocket(t *testing.T) {
 			q, _ = bar()
 			inactive := rexui.ScrollEdgeLook.HardInactive.Backdrop(g.k)
 			rexui.ScrollEdgeLook.HardInactive = rexui.ScrollEdgeLook.Hard
-			if want := inactive.Over(r.Colors[theme.ControlBackground]); q.Color[0] != want || (m == theme.Dark && want == 0x262626FF) {
-				t.Errorf("mode %d, inactive: the band %08x, want HardInactive's %08x", m, q.Color[0], want)
+			inactive.Base = f.fill
+			if q.Mode != gpu.ModeBackdrop || g.list.Backdrops[q.Tex] != inactive {
+				t.Errorf("mode %d, inactive: the band's blur is not HardInactive's", m)
 			}
 		}
+	}
+}
+
+// bandBlurs are the backdrops whose rectangle meets the top band of g's
+// window, x0 to x1 pixels across and band pixels high.
+func bandBlurs(g *rig, x0, x1, band float32) []gpu.Backdrop {
+	var bs []gpu.Backdrop
+	for i := range g.list.Quads {
+		if q := &g.list.Quads[i]; q.Mode == gpu.ModeBackdrop && q.Rect[0] < x1 && q.Rect[2] > x0 && q.Rect[1] < band {
+			bs = append(bs, g.list.Backdrops[q.Tex])
+		}
+	}
+	return bs
+}
+
+// Rows drawn under the band, which a toolbar built after them covers
+// (ContentUnder, not ContentEdge: their view has no inset and no scroll edge
+// of its own), are blurred by the band, once: one backdrop over them, after
+// them in the draw list, AppKit's Hard over BandFill.
+func TestToolbarBandBlursRows(t *testing.T) {
+	g := newRig(t, theme.Dark, nil, func(g *rig) {
+		k := g.k
+		c := k.Context()
+		r := k.Theme()
+		theme.At(c, 0, 0, float32(g.w), float32(g.h))
+		c.Push(c.Box(theme.Floating, "pane"))
+		for i := range 20 {
+			c.NextSize(ui.Pct(1), ui.Px(k.Pt(24)))
+			c.NextBG(rexui.ListLook.Background.RGBA(r) | 0xFF)
+			if i == 1 {
+				c.NextBG(rexui.ListLook.Selection.RGBA(r))
+			}
+			c.BoxKeyed(ui.DrawBackground, ui.KeyN(c.ParentKey(), uint64(i)), nil)
+		}
+		c.Pop()
+		tb := rexui.BeginToolbar(k, "Toolbar", rexui.ToolbarOpts{Style: theme.ToolbarUnified, Title: "Files", ContentUnder: true,
+			BandFill: r.Colors[theme.ControlBackground]})
+		tb.Title()
+		tb.End()
+	})
+	g.settle()
+	r := g.k.Theme()
+	band := g.k.Pt(52)
+	bs := bandBlurs(g, 0, float32(g.w), band)
+	want := rexui.ScrollEdgeLook.Hard.Backdrop(g.k)
+	want.Base = r.Colors[theme.ControlBackground]
+	if len(bs) != 1 || bs[0] != want {
+		t.Fatalf("the band's blurs %+v, want one: the Hard pocket over BandFill", bs)
+	}
+	sel, blur := -1, -1
+	for i := range g.list.Quads {
+		q := &g.list.Quads[i]
+		if q.Mode == gpu.ModeShape && q.Color[0] == rexui.ListLook.Selection.RGBA(r) && q.Rect[1] < band {
+			sel = i
+		}
+		if q.Mode == gpu.ModeBackdrop {
+			blur = i
+		}
+	}
+	if sel < 0 || blur < sel {
+		t.Errorf("the selected row under the band is quad %d, the band's blur %d: it is not blurred", sel, blur)
+	}
+}
+
+// A pane whose scroll view runs under the band draws the band's blur itself
+// (ContentEdge): the toolbar over it, content scrolled under it
+// (ContentUnder), adds none, so the band is blurred once: a table's Hard
+// pocket, a plain scroll view's thin film.
+func TestToolbarBandBlursOnce(t *testing.T) {
+	b := &bandTable{edgeTable: edgeTable{cols: [2]base.Column{{Title: "Name", Width: 300}, {Title: "Kind", Width: 200}}}, under: true}
+	g := newRig(t, theme.Light, nil, b.build)
+	b.st.SetTopRow(10, 0)
+	g.settle()
+	if bs := bandBlurs(g, 0, float32(g.w), g.k.Pt(52)); len(bs) != 1 || bs[0] != rexui.ScrollEdgeLook.Hard.Backdrop(g.k) {
+		t.Errorf("a table under the band: its blurs %+v, want one, the table's Hard pocket", bs)
+	}
+	var st base.ScrollState
+	var inner ui.ID
+	g = newRig(t, theme.Light, nil, func(g *rig) {
+		k := g.k
+		c := k.Context()
+		theme.At(c, 0, 0, float32(g.w), float32(g.h))
+		c.Push(c.Box(theme.Floating, "pane"))
+		k.NextScrollInset(k.Pt(52))
+		k.NextSize(ui.Pct(1), ui.Pct(1))
+		v := k.BeginScroll("Note", &st, base.ScrollVertical)
+		inner = v.Inner
+		c.NextSize(ui.Pct(1), ui.Px(4000))
+		c.BoxKeyed(0, ui.HashString(c.ParentKey(), "text"), nil)
+		k.CloseScrollContent(&v)
+		rexui.ScrollBars(k, &v)
+		k.CloseScroll(&v)
+		c.Pop()
+		tb := rexui.BeginToolbar(k, "Toolbar", rexui.ToolbarOpts{Style: theme.ToolbarUnified, Title: "Note", ContentUnder: true, ContentEdge: true})
+		tb.Title()
+		tb.End()
+	})
+	g.c.SetScroll(inner, 0, 200)
+	g.settle()
+	if bs := bandBlurs(g, 0, float32(g.w), g.k.Pt(52)); len(bs) != 1 || bs[0] != rexui.ScrollEdgeLook.Thin.Backdrop(g.k) {
+		t.Errorf("a scroll view under the band: its blurs %+v, want one, the thin film", bs)
 	}
 }

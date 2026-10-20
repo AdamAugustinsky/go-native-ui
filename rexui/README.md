@@ -348,11 +348,16 @@ scene tool's `-width`, `-selectAll` and `-nested`:
   selection, which AppKit's dark blur saturates a little more. The blur
   costs 0.07–0.10 ms of GPU a frame, a 5K window at 2x included, and
   nothing at rest. At rest, nothing under it, the bar is as before.
-- The toolbar's own band (`ContentUnder`, a pane that does not run its
-  content under the band) has nothing drawn under it to blur: it is the
-  Hard pocket over the content pane's colour (`BandFill`, else the control
-  background; `gpu.Backdrop.Over`), #FFFFFF in light and #262626 over
-  #1E1E1E in dark.
+- The toolbar's own band (`ContentUnder` without `ContentEdge`) is the Hard
+  pocket too: a blur of whatever is drawn under it, built before the
+  toolbar, its `gpu.Backdrop.Base` the content pane's colour (`BandFill`,
+  else the control background), which the blur sees where nothing is drawn
+  instead of the window's clear colour (white in dark mode would blur to
+  #4C4C4C). With the content below the band, nothing is under it, and every
+  renderer draws it flat without blurring: the pocket over that colour,
+  #FFFFFF in light and #262626 over #1E1E1E in dark. A pane whose scroll
+  view runs under the band (`ContentEdge`) draws the band's blur itself and
+  the toolbar adds none: one blur per region.
 - Where there is no blur, under Reduce Transparency and where the renderer
   has none (Direct3D 11, OpenGL: `gpu.Renderer.Backdrops`), the scroll edge
   over content is the colour AppKit's blurred pocket averages to, opaque
