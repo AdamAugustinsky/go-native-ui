@@ -20,8 +20,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ebitengine/purego"
-
 	"gonativeui/app"
 	"gonativeui/gpu"
 	"gonativeui/internal/objc"
@@ -185,21 +183,6 @@ func mainThreadSample() string {
 		return string(out[:min(len(out), 4000)])
 	}
 	return b.String()
-}
-
-var cfRunLoopGetMain, cfRunLoopStop uintptr
-
-// stopMainRunLoop stops the innermost run of the main run loop. Main thread.
-func stopMainRunLoop() {
-	if cfRunLoopStop == 0 {
-		h, err := purego.Dlopen("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation", purego.RTLD_NOW|purego.RTLD_GLOBAL)
-		if err != nil {
-			return
-		}
-		cfRunLoopGetMain, _ = purego.Dlsym(h, "CFRunLoopGetMain")
-		cfRunLoopStop, _ = purego.Dlsym(h, "CFRunLoopStop")
-	}
-	objc.F.Call1(cfRunLoopStop, objc.F.Call0(cfRunLoopGetMain))
 }
 
 // stacks is every goroutine's stack (the main thread's tells where the app's
@@ -389,11 +372,16 @@ func TestEachWindowHasItsOwnComposer(t *testing.T) {
 			t.Fatalf("typed %q into the editor of its window: it holds %q, %d changes seen by its frames%s", text, p.ed.Text(), p.changed, mwStates(l, w1, w2))
 		}
 	}
-	typeInto(w2, p2, "two")
-	typeInto(w1, p1, "one")
+	// Digits, with autocorrect off: a word may get a correction, and
+	// NSCorrectionPanel's bubble runs a nested loop until the next key (the
+	// loop's turns, a window's close, wait for it; editor_darwin_test.go
+	// tests that loop).
+	l.Do(func(*app.App) { p1.ed.SetAutocorrect(false); p2.ed.SetAutocorrect(false) })
+	typeInto(w2, p2, "34")
+	typeInto(w1, p1, "12")
 	settle()
-	if a, b := string(p1.ed.Text()), string(p2.ed.Text()); a != "one" || b != "two" {
-		t.Errorf("the editors hold %q and %q, want \"one\" and \"two\"%s", a, b, mwStates(l, w1, w2))
+	if a, b := string(p1.ed.Text()), string(p2.ed.Text()); a != "12" || b != "34" {
+		t.Errorf("the editors hold %q and %q, want \"12\" and \"34\"%s", a, b, mwStates(l, w1, w2))
 	}
 	if !p1.ed.Focused() || !p2.ed.Focused() {
 		t.Errorf("the editors' focus: first %v, second %v; want both (each window keeps its first responder)", p1.ed.Focused(), p2.ed.Focused())
@@ -408,12 +396,7 @@ func TestEachWindowHasItsOwnComposer(t *testing.T) {
 		if !waitFor(5*time.Second, func() bool { return p1.builds.Load() > b1 }) {
 			var pump string
 			l.Do(func(*app.App) { pump = platform.DebugPumpState() })
-			native := mainThreadSample()
-			// Does stopping the run loop AppKit waits in let the queued
-			// wake through?
-			l.Do(func(*app.App) { stopMainRunLoop() })
-			unstuck := waitFor(3*time.Second, func() bool { return p1.builds.Load() > b1 })
-			t.Fatalf("%s: the app's loop stopped (builds: first %d → %d, second %d → %d); CFRunLoopStop let it go on: %v\n%s%s\nthe main thread (sample):\n%s\n%s", what, b1, p1.builds.Load(), b2, p2.builds.Load(), unstuck, pump, mwStates(l, w1, w2), native, stacks())
+			t.Fatalf("%s: the app's loop stopped (builds: first %d → %d, second %d → %d)\n%s%s\nthe main thread (sample):\n%s\n%s", what, b1, p1.builds.Load(), b2, p2.builds.Load(), pump, mwStates(l, w1, w2), mainThreadSample(), stacks())
 		}
 	}
 	turns("before the release")
