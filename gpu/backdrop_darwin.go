@@ -229,11 +229,13 @@ func readable(target uintptr) bool {
 }
 
 // prepareBackdrops readies the frame's backdrops in inst, the ring slot's
-// copy of quads: with the blur (it returns true) it sizes the textures for
-// them; without, it turns each into a shape quad of its fallback colour, as
-// it does one without a recipe or whose region is empty.
-func (r *Renderer) prepareBackdrops(target uintptr, w, h int, list *DrawList, inst []Quad) bool {
-	blur := readable(target) && r.initBackdrops()
+// copy of quads. Those it blurs stay backdrops: it returns true if there are
+// any, sizes the textures for them and writes the fills of their regions
+// with their Base into pre (at most len(pre)), returning how many. Any
+// other it turns into a shape (backdropShape): without the blur, without a
+// recipe, over nothing with a Base, or with an empty region.
+func (r *Renderer) prepareBackdrops(target uintptr, w, h int, list *DrawList, inst, pre []Quad) (bool, int) {
+	canRead := readable(target)
 	needW, needH := 0, 0
 	for i := range inst {
 		q := &inst[i]
@@ -242,18 +244,36 @@ func (r *Renderer) prepareBackdrops(target uintptr, w, h int, list *DrawList, in
 		}
 		b, ok := list.backdropOf(q)
 		x0, y0, x1, y1, inside := backdropRegion(q, w, h)
-		if !blur || !ok || !inside { // (outside the target and clip, the shape draws nothing)
-			q.Mode = ModeShape
+		if !canRead || !ok || !inside || (b.Base&0xFF != 0 && backdropOverNothing(list.Quads, i)) {
+			backdropShape(inst, i, list) // (outside the target and clip, the shape draws nothing)
 			continue
 		}
 		d := backdropDown(&b)
 		needW = max(needW, (x1-x0+d-1)/d+1)
 		needH = max(needH, (y1-y0+d-1)/d+1)
 	}
-	if blur && needW > 0 {
-		r.sizeBackdrops(needW, needH, w, h)
+	if needW == 0 {
+		return false, 0
 	}
-	return blur
+	if !r.initBackdrops() {
+		backdropsAsShapes(inst, list)
+		return false, 0
+	}
+	r.sizeBackdrops(needW, needH, w, h)
+	n := 0
+	for i := range inst {
+		q := &inst[i]
+		if q.Mode != ModeBackdrop || n == len(pre) {
+			continue
+		}
+		if b, _ := list.backdropOf(q); b.Base&0xFF != 0 {
+			x0, y0, x1, y1, _ := backdropRegion(q, w, h)
+			c := b.Base | 0xFF
+			pre[n] = Quad{Rect: [4]float32{float32(x0), float32(y0), float32(x1), float32(y1)}, Color: [4]uint32{c, c, c, c}}
+			n++
+		}
+	}
+	return true, n
 }
 
 // sizeBackdrops makes the textures at least w×h texels, for a target of

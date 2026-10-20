@@ -250,6 +250,50 @@ func TestBackdropMatchesModel(t *testing.T) {
 	}
 }
 
+// Where the quads before a backdrop drew nothing, its blur sees its Base, not
+// the target's clear colour (white, as a dark window's): it matches the
+// model of its region filled with Base and then those quads, within 2 levels,
+// and away from them it is Over(Base) (#262626), not the blur of white
+// (#4C4C4C). Outside it the clear colour is untouched. Over nothing it never
+// compiles the blur.
+func TestBackdropBase(t *testing.T) {
+	r := newTestRenderer(t)
+	const w, h = 140, 70
+	white := [4]float32{1, 1, 1, 1}
+	b := Backdrop{Sigma: 6, Down: 2, Tint: 0x1E1E1EFF, Mix: 0.8245, Saturation: 1, Add: 0.03, Base: 0x1E1E1EFF}
+	q := solid(10, 0, 130, 40, 0)
+	list := &DrawList{}
+	list.AddBackdrop(q, b)
+	renderList(r, w, h, white, list)
+	if r.bd.tried {
+		t.Error("a backdrop over nothing compiled the blur")
+	}
+	content := pattern(w, h)
+	for i := range content {
+		content[i].Clip = [4]float32{0, 28, w, h} // the region's bottom 12 px, and below it
+	}
+	list = &DrawList{Quads: append([]Quad(nil), content...)}
+	list.AddBackdrop(q, b)
+	m := renderList(r, w, h, white, list)
+	under := renderList(r, w, h, white, &DrawList{Quads: append([]Quad{solid(10, 0, 130, 40, b.Base)}, content...)})
+	model := newBDModel(under, q, b)
+	worst := 0
+	for y := 0; y < 40; y++ {
+		for x := 10; x < 130; x++ {
+			got, want := m.at(x, y), model.at(x, y)
+			for k := 0; k < 3; k++ {
+				worst = max(worst, got[k]-want[k], want[k]-got[k])
+			}
+		}
+	}
+	if worst > 2 {
+		t.Errorf("the blur differs from the model of its Base under it by up to %d levels, want at most 2", worst)
+	}
+	o := b.Over(b.Base)
+	near(t, "away from the content", m.at(70, 4), [4]int{int(o >> 24), int(o >> 16 & 0xFF), int(o >> 8 & 0xFF), 255}, 1)
+	near(t, "beside it", m.at(5, 10), [4]int{255, 255, 255, 255}, 0)
+}
+
 // A backdrop's corner radii cut it as they cut a shape: the content shows
 // in the corner, the blur inside.
 func TestBackdropRadii(t *testing.T) {

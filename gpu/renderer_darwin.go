@@ -643,11 +643,15 @@ func (r *Renderer) Encode(cmdBuf, target uintptr, width, height int, clear [4]fl
 	}
 	r.flushStaged(s)
 	var quads []Quad
+	extra := 0 // room after them for the backdrops' fills (Backdrop.Base)
 	if list != nil {
 		quads = list.Quads
+		if len(quads) > 0 {
+			extra = len(list.Backdrops)
+		}
 	}
-	if len(quads) > s.quads {
-		if err := r.growSlot(s, len(quads)); err != nil {
+	if len(quads)+extra > s.quads {
+		if err := r.growSlot(s, len(quads)+extra); err != nil {
 			panic(err)
 		}
 	}
@@ -660,12 +664,15 @@ func (r *Renderer) Encode(cmdBuf, target uintptr, width, height int, clear [4]fl
 
 	pool := F.Call0(objc.PoolPush)
 	// Backdrops (backdrop_darwin.go) end the pass, blur and resume it; or,
-	// without the blur, are drawn as shapes of their fallback colour.
+	// without the blur, are drawn as shapes of their fallback colour. Their
+	// regions' fills (Backdrop.Base) are drawn first, after the list's quads
+	// in the slot.
 	var inst []Quad
-	blur := false
-	if len(quads) > 0 && len(list.Backdrops) > 0 {
-		inst = unsafe.Slice((*Quad)(s.mem), len(quads))
-		blur = r.prepareBackdrops(target, width, height, list, inst)
+	blur, pre := false, 0
+	if extra > 0 {
+		all := unsafe.Slice((*Quad)(s.mem), len(quads)+extra)
+		inst = all[:len(quads)]
+		blur, pre = r.prepareBackdrops(target, width, height, list, inst, all[len(quads):])
 	}
 	objc.Send1(r.color0, rsSetTexture, target)
 	F.Reset().Arg(uintptr(r.color0)).Arg(uintptr(rsSetClear)).
@@ -677,6 +684,9 @@ func (r *Renderer) Encode(cmdBuf, target uintptr, width, height int, clear [4]fl
 	bound := TextureID(0)
 	objc.Send2(enc, rsSetFTexture, uintptr(r.textures[0]), 0)
 	r.use(s, 0)
+	if pre > 0 {
+		r.draw(enc, len(quads), pre)
+	}
 	runStart := 0
 	for i := range quads {
 		q := &quads[i]

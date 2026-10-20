@@ -374,7 +374,8 @@ func TestRingGrowth(t *testing.T) {
 
 // TestEncodeZeroAlloc counts heap allocations with exact runtime.MemStats
 // deltas (runtime/metrics heap counters are span-granular and miss small
-// allocations). The frames have backdrops too.
+// allocations). The frames have backdrops too, with a Base (their regions
+// filled first) over content and over nothing (flat).
 func TestEncodeZeroAlloc(t *testing.T) {
 	r := newTestRenderer(t)
 	const w, h = 256, 256
@@ -401,8 +402,14 @@ func TestEncodeZeroAlloc(t *testing.T) {
 				q.Soft = 4
 			}
 			list.Add(q)
+			b := Backdrop{Sigma: 12, Down: 4, Tint: 0xFFFFFFFF, Mix: 0.8245, Saturation: 1, Add: 0.03}
 			if i == 150 || i == 299 { // two backdrops: the pass ends, blurs and resumes twice
-				list.AddBackdrop(solid(0, float32(i/30)*8, 240, float32(i/30)*8+40, 0xFFFFFFFF), Backdrop{Sigma: 12, Down: 4, Tint: 0xFFFFFFFF, Mix: 0.8245, Saturation: 1, Add: 0.03})
+				list.AddBackdrop(solid(0, float32(i/30)*8, 240, float32(i/30)*8+40, 0xFFFFFFFF), b)
+			}
+			if i == 299 { // one with a Base over content, one over nothing (flat)
+				b.Base = 0xFCFCFCFF
+				list.AddBackdrop(solid(0, 60, 240, 100, 0xFFFFFFFF), b)
+				list.AddBackdrop(solid(0, 200, 240, 240, 0xFFFFFFFF), b)
 			}
 		}
 	}

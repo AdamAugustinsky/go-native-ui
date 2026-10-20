@@ -70,6 +70,14 @@ type Backdrop struct {
 	// (ThinFilm's background replay, below its blur layer); otherwise Tint
 	// plus Add is mixed over the result (Hard's, above it).
 	TintUnder bool
+	// Base, if its alpha is not 0, is what the blur sees where the quads
+	// before the backdrop drew nothing this frame, instead of the target's
+	// clear colour (a window's white in dark mode, or transparent where the
+	// system's materials show): the renderer fills the backdrop's rectangle
+	// (inside its clip) with it, opaque, before the frame's first quad. Where
+	// no quad before the backdrop reaches its rectangle at all, every
+	// renderer draws it flat, Over(Base), without blurring.
+	Base uint32
 }
 
 // Over is the colour b draws over the uniform opaque colour c (0xRRGGBBAA,
@@ -171,17 +179,54 @@ func (l *DrawList) backdropOf(q *Quad) (Backdrop, bool) {
 }
 
 // backdropsAsShapes turns the ModeBackdrop quads of dst, a renderer's copy
-// of l's quads, into shapes of their fallback colour: the backdrops of a
-// renderer without the blur.
+// of l's quads, into shapes (backdropShape): the backdrops of a renderer
+// without the blur.
 func backdropsAsShapes(dst []Quad, l *DrawList) {
 	if l == nil || len(l.Backdrops) == 0 {
 		return
 	}
 	for i := range dst {
 		if dst[i].Mode == ModeBackdrop {
-			dst[i].Mode = ModeShape
+			backdropShape(dst, i, l)
 		}
 	}
+}
+
+// backdropShape turns backdrop dst[i] (dst a renderer's copy of l's quads)
+// into a shape: of its fallback colour, or of Over(Base) where it has a Base
+// and nothing before it reaches it (Backdrop.Base).
+func backdropShape(dst []Quad, i int, l *DrawList) {
+	q := &dst[i]
+	if b, ok := l.backdropOf(q); ok && b.Base&0xFF != 0 && backdropOverNothing(l.Quads, i) {
+		c := b.Over(b.Base)
+		q.Color = [4]uint32{c, c, c, c}
+	}
+	q.Mode = ModeShape
+}
+
+// backdropOverNothing reports whether no quad before quads[i], a backdrop,
+// reaches its rectangle (inside its clip): all it would blur is what the
+// target was cleared to, or its Base.
+func backdropOverNothing(quads []Quad, i int) bool {
+	r := quads[i].Rect
+	if c := quads[i].Clip; c != [4]float32{} {
+		r = [4]float32{max(r[0], c[0]), max(r[1], c[1]), min(r[2], c[2]), min(r[3], c[3])}
+	}
+	for j := range i {
+		p := &quads[j]
+		b := p.Rect
+		if p.Mode == ModeShape && p.Soft > 0 { // a shadow reaches 3 sigma out (the shaders' pad)
+			g := 3*p.Soft + 1
+			b = [4]float32{b[0] - g, b[1] - g, b[2] + g, b[3] + g}
+		}
+		if c := p.Clip; c != [4]float32{} {
+			b = [4]float32{max(b[0], c[0]), max(b[1], c[1]), min(b[2], c[2]), min(b[3], c[3])}
+		}
+		if b[0] < b[2] && b[1] < b[3] && b[0] < r[2] && b[2] > r[0] && b[1] < r[3] && b[3] > r[1] {
+			return false
+		}
+	}
+	return true
 }
 
 // backdropDown is b.Down as the renderers use it: 1, 2, 4 or 8.

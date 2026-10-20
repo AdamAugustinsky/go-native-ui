@@ -45,6 +45,47 @@ func TestBackdropOrFallback(t *testing.T) {
 	near(t, "far from the edge, right", m.at(55, 16), [4]int{0, 0, 255, 255}, 1)
 }
 
+// A backdrop with a Base that no quad before it reaches (here: one beside it
+// and one below it only touch its edges, a clipped one and a shadow fall
+// short of it) is Over(Base), flat, on every renderer, not the blur of the
+// clear colour (white) nor its fallback, and without the blur's passes: the
+// frame is one draw call.
+func TestBackdropBaseOverNothing(t *testing.T) {
+	r := newTestRenderer(t)
+	const w, h = 96, 48
+	b := Backdrop{Sigma: 12, Down: 4, Tint: 0x1E1E1EFF, Mix: 0.8245, Saturation: 1, Add: 0.03, Base: 0x1E1E1EFF}
+	list := &DrawList{}
+	list.Add(solid(0, 0, 16, 48, 0xFF0000FF))   // beside it
+	list.Add(solid(16, 24, 96, 48, 0x0000FFFF)) // below it
+	clipped := solid(20, 4, 40, 20, 0x00FF00FF)
+	clipped.Clip = [4]float32{0, 30, 96, 48}
+	list.Add(clipped)
+	shadow := solid(0, 26, 8, 34, 0x000000FF)
+	shadow.Soft = 2 // reaches 7 px out: to x 15
+	list.Add(shadow)
+	list.AddBackdrop(solid(16, 0, 96, 24, 0x00FF00FF), b)
+	m := renderList(r, w, h, [4]float32{1, 1, 1, 1}, list)
+	o := b.Over(b.Base)
+	want := [4]int{int(o >> 24), int(o >> 16 & 0xFF), int(o >> 8 & 0xFF), 255}
+	for _, p := range [][2]int{{16, 0}, {30, 10}, {95, 23}} {
+		near(t, "the backdrop over nothing", m.at(p[0], p[1]), want, 0)
+	}
+	near(t, "beside it", m.at(15, 10), [4]int{255, 0, 0, 255}, 0)
+	near(t, "below it", m.at(50, 24), [4]int{0, 0, 255, 255}, 0)
+	if n := r.DrawCalls(); n != 1 {
+		t.Errorf("%d draw calls, want 1: the backdrop over nothing is a shape", n)
+	}
+	list.Quads[3].Rect = [4]float32{0, 10, 12, 18} // the shadow now reaches it (to x 19)
+	m = renderList(r, w, h, [4]float32{1, 1, 1, 1}, list)
+	if r.Backdrops() {
+		if n := r.DrawCalls(); n < 2 {
+			t.Errorf("%d draw calls: a shadow reaching the backdrop is not blurred", n)
+		}
+	} else {
+		near(t, "a shadow reaching it: the fallback", m.at(60, 10), [4]int{0, 255, 0, 255}, 0)
+	}
+}
+
 // Over is what a backdrop draws over a single colour: AppKit's Hard pocket
 // keeps white white and lifts #1E1E1E to #262626 (an empty toolbar's pocket
 // over its window, measured by GlassProbe), and ThinFilm's tint goes in
