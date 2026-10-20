@@ -108,6 +108,40 @@ func mwOpen(t *testing.T, l *widgettest.LiveApp, title string, x float64, b app.
 	return w
 }
 
+// mwStates is each window's frame state (app.StateLine), for a failure's
+// message: why a window drew nothing.
+func mwStates(l *widgettest.LiveApp, wins ...*app.Win) string {
+	var b []byte
+	l.Do(func(*app.App) {
+		now := platform.Now()
+		for i, w := range wins {
+			b = fmt.Appendf(b, "\n  window %d: ", i+1)
+			if w.Open() {
+				b = w.App().StateLine(b, now)
+			} else {
+				b = append(b, "closed"...)
+			}
+		}
+	})
+	return string(b)
+}
+
+// coveredSince reports whether w's window was hidden at some time since
+// start (platform.Now): it is not visible now, or its visibility changed
+// since. A covered window gets no frames (the display link does not tick for
+// it), and the windows of other test processes, run in parallel by go test,
+// open over these tests' ones. The evidence is the window server's, not the
+// frame counts a test measures.
+func coveredSince(l *widgettest.LiveApp, w *app.Win, start int64) (covered bool) {
+	l.Do(func(*app.App) {
+		if w.Open() {
+			st := w.App().Win.DebugState()
+			covered = !st.Visible || st.LastVisibleT >= start
+		}
+	})
+	return covered
+}
+
 // settle lets the frames that a Do or an opening owes be drawn: the harness
 // wakes every window after each call.
 func settle() { time.Sleep(400 * time.Millisecond) }
@@ -171,11 +205,14 @@ func TestWindowsPaceOnTheirOwn(t *testing.T) {
 	first, second := &mwPane{}, &mwPane{}
 	l := widgettest.StartLive(t, mwConfig("first"), first)
 	w2 := mwOpen(t, l, "second", 20, second, second.builds.Load)
+	var w1 *app.Win
+	l.Do(func(a *app.App) { w1 = a.Window() })
 
 	measure := func(name string, anim, idle *mwPane, win *app.Win) {
 		t.Helper()
 		var other int64
 		for try := 1; try <= quietTries; try++ {
+			start := platform.Now()
 			anim.animate.Store(true)
 			l.Do(func(*app.App) { win.Wake() })
 			settle()
@@ -186,25 +223,21 @@ func TestWindowsPaceOnTheirOwn(t *testing.T) {
 			settle()
 			t.Logf("%s animating: %d frames in 1 s; the other window: %d", name, a1-a0, i1-i0)
 			if a1-a0 < 10 {
-				var visible bool
-				l.Do(func(*app.App) { visible = win.App().Win.DebugState().Visible })
-				if !visible { // covered by another process's windows: a covered window does not draw
+				if coveredSince(l, win, start) { // a covered window does not draw
 					if try == quietTries {
 						t.Skipf("%s stays covered by other windows: it cannot animate", name)
 					}
 					continue
 				}
-				t.Errorf("%s animated %d frames in 1 s", name, a1-a0)
+				t.Errorf("%s animated %d frames in 1 s%s", name, a1-a0, mwStates(l, w1, w2))
 				return
 			}
 			if other = i1 - i0; other == 0 {
 				return
 			}
 		}
-		t.Errorf("while %s animated, the other window drew %d frames, want 0 (%d tries)", name, other, quietTries)
+		t.Errorf("while %s animated, the other window drew %d frames, want 0 (%d tries)%s", name, other, quietTries, mwStates(l, w1, w2))
 	}
-	var w1 *app.Win
-	l.Do(func(a *app.App) { w1 = a.Window() })
 	measure("the second window", second, first, w2)
 	measure("the first window", first, second, w1)
 }
@@ -217,10 +250,13 @@ func TestWorkerResultsReachTheirWindow(t *testing.T) {
 	second := &mwPane{results: make(chan int, 16)}
 	l := widgettest.StartLive(t, mwConfig("first"), first)
 	w2 := mwOpen(t, l, "second", 20, second, second.builds.Load)
+	var w1 *app.Win
+	l.Do(func(a *app.App) { w1 = a.Window() })
 	settle()
 
 	var others int64
 	for try := 1; try <= quietTries; try++ {
+		start := platform.Now()
 		f0, s0, got0 := first.builds.Load(), second.builds.Load(), second.got.Load()
 		go func() {
 			for i := 0; i < 5; i++ {
@@ -229,8 +265,16 @@ func TestWorkerResultsReachTheirWindow(t *testing.T) {
 				time.Sleep(40 * time.Millisecond)
 			}
 		}()
-		if !waitFor(5*time.Second, func() bool { return second.got.Load() == got0+5 }) {
-			t.Fatalf("the second window took %d of 5 results", second.got.Load()-got0)
+		if took := func() bool { return second.got.Load() == got0+5 }; !waitFor(5*time.Second, took) {
+			if !coveredSince(l, w2, start) {
+				t.Fatalf("the second window took %d of 5 results%s", second.got.Load()-got0, mwStates(l, w1, w2))
+			}
+			// Covered, it parks; it takes the rest when it shows again.
+			if try == quietTries || !waitFor(20*time.Second, took) {
+				t.Skipf("the second window stays covered by other windows: it took %d of 5 results", second.got.Load()-got0)
+			}
+			t.Logf("try %d: the second window was covered by another window", try)
+			continue
 		}
 		settle()
 		if n := second.builds.Load() - s0; n < 1 || n > 10 {
@@ -248,10 +292,14 @@ func TestWorkerResultsReachTheirWindow(t *testing.T) {
 		t.Errorf("the first window drew %d frames for the second window's results (%d tries)", others, quietTries)
 	}
 
+	start := platform.Now()
 	f0, s0 := first.builds.Load(), second.builds.Load()
 	platform.Wake()
 	if !waitFor(5*time.Second, func() bool { return first.builds.Load() > f0 && second.builds.Load() > s0 }) {
-		t.Errorf("platform.Wake: the first window drew %d frames, the second %d; want both", first.builds.Load()-f0, second.builds.Load()-s0)
+		if coveredSince(l, w1, start) || coveredSince(l, w2, start) {
+			t.Skipf("platform.Wake: a window covered by other windows drew nothing (first %d frames, second %d)", first.builds.Load()-f0, second.builds.Load()-s0)
+		}
+		t.Errorf("platform.Wake: the first window drew %d frames, the second %d; want both%s", first.builds.Load()-f0, second.builds.Load()-s0, mwStates(l, w1, w2))
 	}
 
 	l.Do(func(*app.App) { w2.Close() })
