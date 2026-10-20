@@ -30,7 +30,11 @@ func TestAuditLayout(t *testing.T) {
 				r.Frames(8)
 				r.AuditLayout(name, auditAllow...)
 				if s == Settings {
-					r.Click(ui.RoleComboBox, "Accent colour")
+					popup := "Accent colour"
+					if scrolled { // under the toolbar's band, which takes the click: one below it
+						popup = "Sidebar icon size"
+					}
+					r.Click(ui.RoleComboBox, popup)
 					r.Frames(8)
 					if !d.k.MenuOpen() {
 						t.Fatalf("%s: the pop-up menu did not open", name)

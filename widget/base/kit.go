@@ -64,6 +64,7 @@ type Kit struct {
 	nOff  int // how many of them are on
 
 	rowPt      float32 // NextRowHeight, in points; 0 when none
+	scrollTop  float32 // NextScrollInset, pixels
 	nw, nh     ui.Size // Size for the next component (NextSize)
 	hasW, hasH bool
 	nextAlign  ui.Align

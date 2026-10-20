@@ -3,6 +3,7 @@ package demo
 import (
 	"fmt"
 	"path"
+	"slices"
 	"sort"
 	"strings"
 
@@ -34,6 +35,9 @@ const (
 	placePurple
 	placeGrey
 	placeAllTags
+	placeWork
+	placeDrafts
+	placePersonal
 	hdrFavorites
 	hdrCloud
 	hdrLocations
@@ -143,6 +147,19 @@ func (d *Demo) model() {
 			tag(placeBlue, "Blue"), tag(placePurple, "Purple"), tag(placeGrey, "Grey"),
 			{ID: placeAllTags, Title: "All Tags…", Glyph: g(ic.dashed)},
 		}
+		if d.opt.Nested {
+			for i := range d.places {
+				if d.places[i].ID == placeDocuments {
+					d.places[i].Open = &d.open[4]
+					d.open[5] = false // Work closed, as the scene's
+					d.places = slices.Insert(d.places, i+1,
+						rexui.SidebarItem{ID: placeWork, Title: "Work", Glyph: g(ic.folder), Level: 1, Open: &d.open[5]},
+						rexui.SidebarItem{ID: placeDrafts, Title: "Drafts", Glyph: g(ic.folder), Level: 2},
+						rexui.SidebarItem{ID: placePersonal, Title: "Personal", Glyph: g(ic.folder), Level: 1})
+					break
+				}
+			}
+		}
 		d.tagColours()
 		d.path = []rexui.PathItem{
 			{Title: "Macintosh HD", Glyph: g(ic.disk)}, {Title: "Users", Glyph: g(ic.folder)},
@@ -224,7 +241,7 @@ func (d *Demo) tagColours() {
 // fileList is the finder's table: its header in the toolbar's pocket, inset
 // striped rows, a selection of two merged rows; a path bar below it when
 // asked.
-func (d *Demo) fileList(w, h float32) {
+func (d *Demo) fileList(top, w, h float32) {
 	k := d.k
 	c, r := k.Context(), k.Theme()
 	s := r.Scale
@@ -235,12 +252,13 @@ func (d *Demo) fileList(w, h float32) {
 	if d.opt.Scene == Finder {
 		d.tagColours()
 	}
-	if d.scrolled > 0 { // the scene's scrolled phase: 130 pt down
-		d.table.SetTopRow(int((130-5)/24), (130-5)/24-float32(int((130-5)/24)))
+	if d.scrolled > 0 { // the scene's scrolled phase: 130 pt down (the table at y -50, 80 at rest)
+		at := float32(130) / 24
+		d.table.SetTopRow(int(at), at-float32(int(at)))
 		d.scrolled--
 	}
 	k.NextSize(ui.Px(w), ui.Px(h-pathH))
-	t := rexui.BeginTable(k, "Files", &d.table, d.cols[:], len(d.files), rexui.TableOpts{Striped: true, Glyphs: d.glyphs, ClearHeader: true})
+	t := rexui.BeginTable(k, "Files", &d.table, d.cols[:], len(d.files), rexui.TableOpts{Striped: true, Glyphs: d.glyphs, ClearHeader: true, TopInset: top})
 	if t.SortChanged {
 		d.sortFiles(t.Sort)
 	}

@@ -108,6 +108,8 @@ const (
 type entry struct {
 	src  Source
 	w, h float32 // pixels
+	aw   float32 // SourceImage: the symbol's alignment width, pixels (exact)
+	mw   float32 // SourceImage: its image's width at the medium scale, pixels (exact)
 	// SourceImage: the texel rectangle in the atlas.
 	x, y, iw, ih int
 	// text sources: the font and the UTF-8 of the glyph.
@@ -195,6 +197,14 @@ func (a *Atlas) Raster(scale float32) {
 						copy(a.pix[(y+r)*atlasW+x:(y+r)*atlasW+x+w], pix[r*w:(r+1)*w])
 					}
 					*e = entry{src: SourceImage, w: float32(w), h: float32(h), x: x, y: y, iw: w, ih: h}
+					// measured at the point size, as AppKit lays out
+					// (its sizes are whole or half points there), then scaled
+					if aw, _, ok := symbolWidths(sp.Symbol, float64(sp.Pt), float64(sp.Weight), sp.Scale); ok {
+						e.aw = float32(aw) * scale
+					}
+					if _, mw, ok := symbolWidths(sp.Symbol, float64(sp.Pt), float64(sp.Weight), ScaleMedium); ok {
+						e.mw = float32(mw) * scale
+					}
 					x += w + 1
 					rowH = max(rowH, h)
 					continue
@@ -270,6 +280,37 @@ func (a *Atlas) Size(id ID) (w, h float32) {
 	}
 	e := &a.ents[id]
 	return e.w, e.h
+}
+
+// AlignWidth returns the width in pixels of icon id's content, exactly, as
+// layouts measure it: a symbol's alignment rectangle (NSImage.alignmentRect,
+// not rounded to whole pixels and without the raster's margin: AppKit sizes
+// toolbar buttons by it), a text icon's advance. It is 0 for an icon that
+// draws nothing.
+func (a *Atlas) AlignWidth(id ID) float32 {
+	if int(id) >= len(a.ents) {
+		return 0
+	}
+	e := &a.ents[id]
+	if e.src == SourceImage && e.aw > 0 {
+		return e.aw
+	}
+	return e.w
+}
+
+// MediumWidth returns the exact width in pixels of icon id's image at the
+// medium symbol scale, whatever scale it is drawn at (NSImage.size; AppKit
+// sizes a toolbar menu item by it): the text icon's advance, 0 for an icon
+// that draws nothing.
+func (a *Atlas) MediumWidth(id ID) float32 {
+	if int(id) >= len(a.ents) {
+		return 0
+	}
+	e := &a.ents[id]
+	if e.src == SourceImage && e.mw > 0 {
+		return e.mw
+	}
+	return e.w
 }
 
 // Prepare readies the next box to show icon id in colour (RGBA): it sets the

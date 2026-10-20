@@ -45,6 +45,7 @@ func (w *Window) Wait(timeoutNs int64) []Event {
 	w.reapPaste() // a pasted TIFF converted on a worker (paste_darwin.go)
 	F.Call1(objc.PoolPop, pool)
 	w.returned, w.nOut = true, len(w.q.ev)
+	w.frameOut, w.nested = false, false // back in the app's loop
 	return w.q.ev
 }
 
@@ -132,5 +133,6 @@ func (w *Window) Pending() []Event {
 		w.q.dropFirst(w.nOut)
 		w.returned = false
 	}
+	w.frameOut = false
 	return w.q.takePending()
 }
