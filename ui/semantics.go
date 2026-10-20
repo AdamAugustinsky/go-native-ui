@@ -80,6 +80,17 @@ const (
 	// RoleLink is a link or a mention in rich text (a child of the text's
 	// node, named by its text; pressing it is RichSignal.Clicked).
 	RoleLink
+	// RoleHeading is the heading of a section; SemNode.Level is its level (1
+	// for the top one).
+	RoleHeading
+	// RoleToolbar is a toolbar: a group of controls for its window or pane.
+	RoleToolbar
+	// RoleSheet is a sheet: a modal pane attached to its window.
+	RoleSheet
+	// RoleHost is a hosted native view (Context.Host): SemNode.Host is its
+	// platform.HostID. The export adds one for each host box built; the
+	// accessibility bridge puts the native view itself in the tree there.
+	RoleHost
 )
 
 // SemState are the state bits of a node.
@@ -96,6 +107,7 @@ const (
 	SemModal                               // a modal overlay: everything beneath it is inert
 	SemSortAscending                       // a column header the table is sorted by, ascending
 	SemSortDescending                      // a column header the table is sorted by, descending
+	SemLive                                // a live region: a change of its name or value is announced
 )
 
 // SemAction are the actions a node supports (SemNode.Actions) and that an
@@ -244,7 +256,29 @@ type SemNode struct {
 	// of an outline, 2 for its children, and so on; 0 for a node not in a
 	// tree. Whether the row shows its children is SemExpanded.
 	Level int32
+	// Host is the platform.HostID of the native view hosted in the node's
+	// box: a RoleHost node, or a host box given a role of its own (the native
+	// view is then inside the node); 0 for others.
+	Host uint32
+	// Text says which text of the node has character geometry (lines,
+	// ranges, the selection), for the text functions of assistive
+	// technologies: SemTextField (the Value of a text field) or SemTextRich
+	// (the Name of a RichText box; TextSel is then its selection in a
+	// selection scope, see Context.RichSelection).
+	Text SemTextKind
 }
+
+// SemTextKind is which text of a node has character geometry (SemNode.Text).
+type SemTextKind uint8
+
+const (
+	// SemTextNone: the node's text has no geometry to ask about.
+	SemTextNone SemTextKind = iota
+	// SemTextField: the Value of a text field (one line).
+	SemTextField
+	// SemTextRich: the Name of a RichText box (its paragraph).
+	SemTextRich
+)
 
 // SemTree is a snapshot of the semantic tree. Nodes are in build order, parents
 // before children; Nodes[0] is the window.
@@ -255,6 +289,13 @@ type SemTree struct {
 	// Dropped is the number of boxes with a role left out of the last export
 	// because the tree reached MaxSemNodes.
 	Dropped int
+	// Announce is the text the frame asked to be announced (Context.Announce),
+	// a span of Bytes; empty when it asked for none.
+	Announce [2]uint32
+	// AnnounceSeq numbers the announcement (it grows with every
+	// Context.Announce), so that the same text asked for again in the next
+	// frame is announced again, and a tree exported twice is announced once.
+	AnnounceSeq uint32
 }
 
 // Reserve makes room for the given numbers of nodes and text bytes, so that
@@ -306,86 +347,105 @@ func defaultActions(r Role) SemAction {
 // box with the keyboard focus, SemModal for a modal overlay. A box under a
 // ListRange box that did not say NextSemPos reports its place in the whole list.
 func (c *Context) Semantics(dst *SemTree) {
-	dst.Nodes, dst.Bytes, dst.Dropped = dst.Nodes[:0], dst.Bytes[:0], 0
-	for i := range c.sems {
-		rec := &c.sems[i]
-		b := &c.boxes[rec.id]
-		if b.hid { // hidden by a flow's MaxLines
-			rec.node = -1
-			continue
-		}
-		if len(dst.Nodes) >= MaxSemNodes {
-			dst.Dropped = len(c.sems) - i
-			break
-		}
-		n := SemNode{
-			Key: b.key, Role: rec.role, State: rec.state, Actions: rec.actions,
-			Bounds: b.rect, Parent: -1, FirstChild: -1, NextSibling: -1,
-		}
-		if !rec.hasActions {
-			n.Actions = defaultActions(rec.role)
-		}
-		if b.flags&Disabled != 0 {
-			n.State |= SemDisabled
-			n.Actions = 0
-		}
-		if c.focusKey == b.key {
-			n.State |= SemFocused
-		}
-		if b.ovRoot && b.ovl > 0 && int(b.ovl) <= c.nOvs && c.ovs[b.ovl-1].kind == OverlayModal {
-			n.State |= SemModal
-		}
-		if rec.hasRange {
-			n.Range = rec.rng
-		}
-		switch {
-		case rec.hasPos:
-			n.Pos = rec.pos
-		case b.parent != 0 && c.boxes[b.parent].listRows > 0 && b.flags&floatingMask == 0:
-			pb := &c.boxes[b.parent]
-			idx := pb.listFirst
-			for q := b.prev; q != 0; q = c.boxes[q].prev {
-				if c.boxes[q].flags&floatingMask == 0 {
-					idx++
-				}
+	dst.Nodes, dst.Bytes, dst.Dropped, dst.Announce, dst.AnnounceSeq = dst.Nodes[:0], dst.Bytes[:0], 0, [2]uint32{}, 0
+	if c.shell.frame == c.frame && c.shell.nHosts > 0 {
+		c.semWithHosts(dst)
+	} else {
+		for i := range c.sems {
+			if !c.semAppend(dst, &c.sems[i]) {
+				dst.Dropped = len(c.sems) - i
+				break
 			}
-			n.Pos = [2]int32{int32(idx), int32(pb.listRows)}
-		}
-		n.Level = rec.level
-		n.Name = c.semText(dst, rec.name)
-		n.Value = c.semText(dst, rec.value)
-		if rec.sel != [2]int32{} {
-			// The selection is offsets into the exported value: when the value
-			// did not fit the byte budget it is empty, and so is the selection.
-			n.TextSel = [2]int32{min(rec.sel[0], int32(n.Value[1])), min(rec.sel[1], int32(n.Value[1]))}
-		}
-
-		// The parent: the nearest ancestor with a role; an overlay hangs from the window.
-		p := b.parent
-		for p != 0 && c.boxes[p].sem == 0 {
-			p = c.boxes[p].parent
-		}
-		if p == 0 && b.ovRoot && c.boxes[c.root].sem != 0 {
-			p = c.root
-		}
-		self := int32(len(dst.Nodes))
-		rec.node, rec.lastChild = self, -1
-		if p != 0 {
-			pr := &c.sems[c.boxes[p].sem-1]
-			n.Parent = pr.node
-			if pr.lastChild < 0 {
-				dst.Nodes[pr.node].FirstChild = self
-			} else {
-				dst.Nodes[pr.lastChild].NextSibling = self
-			}
-			pr.lastChild = self
-		}
-		dst.Nodes = append(dst.Nodes, n)
-		if b.rich != 0 {
-			c.semLinks(dst, b, rec)
 		}
 	}
 	c.semFocusBubble(dst)
+	c.semAnnounce(dst)
+}
+
+// semAppend appends the node of record rec (and its link children) to dst; it
+// reports false when the tree is full.
+func (c *Context) semAppend(dst *SemTree, rec *semRec) bool {
+	b := &c.boxes[rec.id]
+	if b.hid { // hidden by a flow's MaxLines
+		rec.node = -1
+		return true
+	}
+	if len(dst.Nodes) >= MaxSemNodes {
+		return false
+	}
+	n := SemNode{
+		Key: b.key, Role: rec.role, State: rec.state, Actions: rec.actions,
+		Bounds: b.rect, Parent: -1, FirstChild: -1, NextSibling: -1,
+	}
+	if !rec.hasActions {
+		n.Actions = defaultActions(rec.role)
+	}
+	if b.flags&Disabled != 0 {
+		n.State |= SemDisabled
+		n.Actions = 0
+	}
+	if c.focusKey == b.key {
+		n.State |= SemFocused
+	}
+	if b.ovRoot && b.ovl > 0 && int(b.ovl) <= c.nOvs && c.ovs[b.ovl-1].kind == OverlayModal {
+		n.State |= SemModal
+	}
+	if rec.hasRange {
+		n.Range = rec.rng
+	}
+	switch {
+	case rec.hasPos:
+		n.Pos = rec.pos
+	case b.parent != 0 && c.boxes[b.parent].listRows > 0 && b.flags&floatingMask == 0:
+		pb := &c.boxes[b.parent]
+		idx := pb.listFirst
+		for q := b.prev; q != 0; q = c.boxes[q].prev {
+			if c.boxes[q].flags&floatingMask == 0 {
+				idx++
+			}
+		}
+		n.Pos = [2]int32{int32(idx), int32(pb.listRows)}
+	}
+	n.Level = rec.level
+	n.Name = c.semText(dst, rec.name)
+	n.Value = c.semText(dst, rec.value)
+	if rec.sel != [2]int32{} {
+		// The selection is offsets into the exported value: when the value
+		// did not fit the byte budget it is empty, and so is the selection.
+		n.TextSel = [2]int32{min(rec.sel[0], int32(n.Value[1])), min(rec.sel[1], int32(n.Value[1]))}
+	}
+	c.semTextOf(b, rec, &n)
+	c.semLink(dst, b, rec, &n)
+	if b.rich != 0 {
+		c.semLinks(dst, b, rec)
+	}
+	return true
+}
+
+// semLink links node n of box b (record rec) into dst under the node of the
+// nearest ancestor with a role (an overlay hangs from the window) and appends
+// it.
+func (c *Context) semLink(dst *SemTree, b *box, rec *semRec, n *SemNode) {
+	p := b.parent
+	for p != 0 && c.boxes[p].sem == 0 {
+		p = c.boxes[p].parent
+	}
+	if p == 0 && b.ovRoot && c.boxes[c.root].sem != 0 {
+		p = c.root
+	}
+	self := int32(len(dst.Nodes))
+	rec.node, rec.lastChild = self, -1
+	if p != 0 {
+		pr := &c.sems[c.boxes[p].sem-1]
+		n.Parent = pr.node
+		if pr.lastChild < 0 {
+			dst.Nodes[pr.node].FirstChild = self
+		} else {
+			dst.Nodes[pr.lastChild].NextSibling = self
+		}
+		pr.lastChild = self
+	}
+	dst.Nodes = append(dst.Nodes, *n)
 }
 
 // semFocusBubble marks the node of the nearest ancestor with a role as focused

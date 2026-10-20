@@ -18,12 +18,14 @@ func (a *App) build(w, h int, dt float32) {
 		a.debugBuildStart()
 	}
 	a.useFontScale() // zoom.go
+	a.ax.building = true
 	a.UI.Begin(&a.tr.in, w, h, a.EffectiveScale(), dt)
 	a.b.Build(a.UI)
 	if a.dbg != nil {
 		a.debugBuild()
 	}
 	a.UI.End(&a.list)
+	a.ax.building = false
 	if a.dbg != nil {
 		a.dbg.mark(PhaseLayout)
 	}
@@ -169,6 +171,7 @@ func (a *App) drawFrame(inHandler bool, passes int) bool {
 	}
 	a.syncRegions()
 	a.syncShell()
+	a.syncAX()
 	a.syncText(a.Win, m.start)
 	a.syncChrome(a.Win)
 	if metered {
@@ -217,6 +220,7 @@ func (a *App) abandonFrame(pool uintptr) {
 		return
 	}
 	a.inFrame = false
+	a.ax.building = false // a Build that panicked never reached End
 	abandonSurfaceFrame(a.Surf, &a.fr)
 	framePoolPop(pool)
 }

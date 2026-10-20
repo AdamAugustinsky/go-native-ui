@@ -189,6 +189,7 @@ type Context struct {
 	semNext semNext
 	sems    []semRec
 	semA    core.Arena // the names and values of this frame's semantics
+	semX    semExtra   // announcements (semantics_a11y.go)
 
 	// interaction (see signal.go)
 	hotKey, scrollKey Key

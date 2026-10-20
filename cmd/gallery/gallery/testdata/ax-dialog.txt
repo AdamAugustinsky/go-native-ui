@@ -1,0 +1,6 @@
+AXWindow
+  AXGroup/AXApplicationDialog "Delete the selected rows?"
+    AXStaticText value="Delete the selected rows?"
+    AXStaticText value="4 rows are selected. Deleting them cannot be undone, and this text is long enough to wrap inside the dialog."
+    AXButton "Cancel" {Press}
+    AXButton "Delete" [focused] {Press}
