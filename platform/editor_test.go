@@ -113,6 +113,26 @@ func TestEditorReplaceChecks(t *testing.T) {
 	}
 }
 
+// What an Enter would have done goes with its command, in order, through the
+// ring's wrap-around.
+func TestEditorCommandSends(t *testing.T) {
+	e := &Editor{}
+	for round := 0; round < 3; round++ {
+		for i := 0; i < maxCommands-1; i++ {
+			e.pushCommandSends(CmdAccept, i%2 == 0)
+		}
+		e.pushCommand(CmdDown)
+		for i := 0; i < maxCommands-1; i++ {
+			if c, sends := e.TakeCommandSends(); c != CmdAccept || sends != (i%2 == 0) {
+				t.Fatalf("round %d, command %d: %d, sends %v", round, i, c, sends)
+			}
+		}
+		if c, sends := e.TakeCommandSends(); c != CmdDown || sends {
+			t.Fatalf("round %d: %d, sends %v after the Enters", round, c, sends)
+		}
+	}
+}
+
 // Completion commands queue in order and drop when the queue is full; ending
 // the completion drops them.
 func TestEditorCommands(t *testing.T) {

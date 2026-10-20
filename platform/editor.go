@@ -167,6 +167,7 @@ type editorState struct {
 	mr     TextRange
 	pend   EditorSignals
 	cmds   [maxCommands]EditorCommand
+	csends [maxCommands]bool
 	cHead  int
 	cN     int
 	compl  bool
@@ -223,20 +224,34 @@ func (e *Editor) TakeSignals() EditorSignals {
 // TakeCommand returns the oldest completion command not taken yet, or
 // CmdNone.
 func (e *Editor) TakeCommand() EditorCommand {
-	if e.cN == 0 {
-		return CmdNone
-	}
-	c := e.cmds[e.cHead]
-	e.cHead = (e.cHead + 1) % maxCommands
-	e.cN--
+	c, _ := e.TakeCommandSends()
 	return c
 }
 
-func (e *Editor) pushCommand(c EditorCommand) {
+// TakeCommandSends is TakeCommand with what the key would have done without a
+// completion: for CmdAccept, whether the Enter was one that sends by the Enter
+// policy (Enter under EnterSends, ⌘Enter under either; not Shift+Enter or
+// Option+Enter under EnterSends, nor Enter under CmdEnterSends), so that an app
+// whose completion does not take it can do what the editor would have: send or
+// add a line. It is false for every other command.
+func (e *Editor) TakeCommandSends() (c EditorCommand, sends bool) {
+	if e.cN == 0 {
+		return CmdNone, false
+	}
+	c, sends = e.cmds[e.cHead], e.csends[e.cHead]
+	e.cHead = (e.cHead + 1) % maxCommands
+	e.cN--
+	return c, sends
+}
+
+func (e *Editor) pushCommand(c EditorCommand) { e.pushCommandSends(c, false) }
+
+func (e *Editor) pushCommandSends(c EditorCommand, sends bool) {
 	if e.cN == maxCommands {
 		return
 	}
-	e.cmds[(e.cHead+e.cN)%maxCommands] = c
+	i := (e.cHead + e.cN) % maxCommands
+	e.cmds[i], e.csends[i] = c, sends
 	e.cN++
 }
 

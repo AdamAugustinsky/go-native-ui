@@ -10,6 +10,7 @@ import (
 
 	"gonativeui/app"
 	"gonativeui/internal/objc"
+	"gonativeui/internal/testlock"
 	"gonativeui/menu"
 	"gonativeui/platform"
 	"gonativeui/rexui"
@@ -56,6 +57,13 @@ type cmpLab struct {
 	typing   []uint64
 	measure  bool
 	disabled bool
+
+	// what the findings of the review need
+	noHighlight bool                     // the list opens with no row highlighted
+	keepOpen    bool                     // the app does not close the list when the composer says Cancelled
+	results     []rexui.CompletionResult // each frame's Completion result that was not None
+	watchHidden bool                     // count the frames the hosted view was hidden while the list was open
+	hidden      int
 }
 
 func (p *cmpLab) Init(a *app.App) error {
@@ -92,6 +100,9 @@ func (p *cmpLab) allocs() uint64 {
 func (p *cmpLab) Build(c *ui.Context) {
 	k := p.k
 	k.Begin(c)
+	if p.watchHidden && p.open && !p.disabled && p.st.Hosted() && objc.SendBool(objc.ID(p.st.Editor().View()), objc.Sel("isHiddenOrHasHiddenAncestor")) {
+		p.hidden++ // the last frame's host regions, as the window applied them
+	}
 	k.NextPad(20)
 	k.NextHeight(ui.Pct(1))
 	k.Column("col")
@@ -135,7 +146,10 @@ func (p *cmpLab) take(s rexui.ComposerSignal) {
 	}
 	if s.Cancelled {
 		p.cancels++
-		p.open = false
+		p.open = p.open && p.keepOpen
+	}
+	if s.Completion != rexui.ResultNone {
+		p.results = append(p.results, s.Completion)
 	}
 	if s.Submitted {
 		p.sent = append(p.sent, string(st.Text()))
@@ -172,7 +186,7 @@ func (p *cmpLab) complete() {
 	at := bytes.LastIndexByte(t[:caret], '@')
 	open := at >= 0 && caret-at >= 2 && !bytes.ContainsAny(t[at:caret], " \n")
 	if open && !p.open {
-		p.list.Reset(len(mentionNames), true)
+		p.list.Reset(len(mentionNames), !p.noHighlight)
 	}
 	p.open = open
 	if open {
@@ -599,5 +613,293 @@ func TestLiveComposerAllocationsWithCompletion(t *testing.T) {
 	}
 	if len(typing) == 0 || bad != 0 {
 		t.Errorf("typing with the list open: %d of %d frames allocated: %v", bad, len(typing), typing)
+	}
+}
+
+// ---- the review's findings, on the hosted view ----
+
+func (p *cmpLab) text() string { return string(p.st.Text()) }
+
+// A key the list does not take (no row highlighted) does what the editor would
+// have done by the Enter policy, with the modifiers it came with: under
+// EnterSends Shift+Enter adds a line and Enter sends; under CmdEnterSends Enter
+// adds a line and ⌘Enter sends.
+func TestLiveComposerDeclinedEnterFollowsThePolicy(t *testing.T) {
+	t.Run("EnterSends", func(t *testing.T) {
+		l, p := startComposer(t, rexui.ComposerSetup{Placeholder: "Message"}, 480, 420)
+		l.Do(func(*app.App) { p.noHighlight = true })
+		p.focus(t, l)
+		l.Type("1 @pa")
+		l.Until("the list opens", 120, func() bool { return p.open && p.st.Editor().CompletionActive() })
+		l.Press(ui.KeyEnter, ui.ModShift)
+		l.Until("Shift+Enter added a line", 120, func() bool { return p.text() == "1 @pa\n" })
+		l.Frames(3)
+		if len(p.sent) != 0 {
+			t.Fatalf("Shift+Enter sent %q", p.sent)
+		}
+		l.Do(func(*app.App) { p.st.SetText(nil) })
+		l.Type("1 @pa")
+		l.Until("the list opens again", 120, func() bool { return p.open && p.st.Editor().CompletionActive() })
+		l.Press(ui.KeyEnter, 0)
+		l.Until("Enter sent", 120, func() bool { return len(p.sent) == 1 })
+		if p.sent[0] != "1 @pa" {
+			t.Fatalf("sent %q", p.sent)
+		}
+	})
+	t.Run("CmdEnterSends", func(t *testing.T) {
+		l, p := startComposer(t, rexui.ComposerSetup{Placeholder: "Message", Enter: platform.CmdEnterSends}, 480, 420)
+		l.Do(func(*app.App) { p.noHighlight = true })
+		p.focus(t, l)
+		l.Type("1 @pa")
+		l.Until("the list opens", 120, func() bool { return p.open && p.st.Editor().CompletionActive() })
+		l.Press(ui.KeyEnter, ui.ModSuper)
+		l.Until("⌘Enter sent", 120, func() bool { return len(p.sent) == 1 })
+		if p.sent[0] != "1 @pa" {
+			t.Fatalf("sent %q", p.sent)
+		}
+		l.Type("1 @pa")
+		l.Until("the list opens again", 120, func() bool { return p.open && p.st.Editor().CompletionActive() })
+		l.Press(ui.KeyEnter, 0)
+		l.Until("Enter added a line", 120, func() bool { return p.text() == "1 @pa\n" })
+		l.Frames(3)
+		if len(p.sent) != 1 {
+			t.Fatalf("Enter sent under CmdEnterSends: %q", p.sent)
+		}
+	})
+}
+
+// When neither side of the composer has room for a row, the list is left out;
+// when only some rows fit it shows those. It never covers the hosted view.
+func TestLiveComposerCompletionNeverCoversTheHost(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		h          float32 // window height in points
+		wantList   bool
+		minRows    int
+		overlapped bool
+	}{
+		{"room for the rows", 420, true, 3, false},
+		{"room for two rows", 130, true, 1, false},
+		{"room for none", 80, false, 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			l, p := startComposer(t, rexui.ComposerSetup{Placeholder: "Message"}, 480, tc.h)
+			l.Do(func(*app.App) { p.watchHidden = true })
+			p.focus(t, l)
+			l.Type("1 @pa")
+			l.Until("the list opens", 120, func() bool { return p.open })
+			l.Frames(6)
+			b := p.boxes(l)
+			if got := b.list[2] > b.list[0]; got != tc.wantList {
+				t.Fatalf("list shown %v, want %v (field %v, list %v)", got, tc.wantList, b.field, b.list)
+			}
+			if tc.wantList {
+				if overlap(b.list, b.field) || overlap(b.list, b.text) {
+					t.Errorf("the list %v covers the field %v / text %v", b.list, b.field, b.text)
+				}
+				if b.list[1] < 0 {
+					t.Errorf("the list %v starts above the window", b.list)
+				}
+			}
+			if p.hidden != 0 {
+				t.Errorf("the hosted view was hidden for %d frames while the list was open", p.hidden)
+			}
+		})
+	}
+}
+
+// The list is placed against the editor of this frame: when the text grows a
+// line with the list open, the bottom-aligned composer rises, and the list must
+// not cover it, even for the one frame the geometry changes.
+func TestLiveComposerCompletionFollowsAGrowingEditor(t *testing.T) {
+	l, p := startComposer(t, rexui.ComposerSetup{Placeholder: "Message"}, 480, 420)
+	p.focus(t, l)
+	l.Type("@p")
+	l.Until("the list opens", 120, func() bool { return p.open && p.st.Editor().CompletionActive() })
+	l.Frames(4)
+	l.Do(func(*app.App) { p.watchHidden = true; p.hidden = 0 })
+	h0 := p.st.Editor().Height()
+	for i := 0; i < 20 && p.st.Editor().Height() == h0; i++ { // letters with no space wrap at the field's width
+		l.Type(strings.Repeat("a", 12))
+		l.Frames(2)
+	}
+	if p.st.Editor().Height() == h0 {
+		t.Fatal("the editor did not grow")
+	}
+	l.Frames(6)
+	if !p.open {
+		t.Fatal("the list closed")
+	}
+	if p.hidden != 0 {
+		t.Errorf("the hosted view was hidden for %d frames while it grew under the open list", p.hidden)
+	}
+	if b := p.boxes(l); overlap(b.list, b.field) {
+		t.Errorf("the list %v covers the grown field %v", b.list, b.field)
+	}
+}
+
+// Marked text closes the list for as long as it lasts, even when the app keeps
+// the list open: the composer's Composing is the editor's state, not the one
+// frame the editor reported it in.
+func TestLiveComposerMarkedTextKeepsTheListClosed(t *testing.T) {
+	l, p := startComposer(t, rexui.ComposerSetup{Placeholder: "Message"}, 480, 420)
+	l.Do(func(*app.App) { p.keepOpen = true })
+	p.focus(t, l)
+	l.Type("1 @pa")
+	l.Until("the list opens", 120, func() bool { return p.open && p.st.Editor().CompletionActive() })
+	l.Frames(4)
+	var in widgettest.TextClient
+	l.Do(func(*app.App) { in = widgettest.TextInput(cview(p)) })
+	l.Do(func(*app.App) { in.SetMarkedText("か", widgettest.Range{Loc: 1}, widgettest.NoRange) })
+	l.Until("composing", 120, func() bool { _, m := p.st.Editor().Marked(); return m })
+	for i := 0; i < 8; i++ {
+		l.Frames(2)
+		if b := p.boxes(l); b.list[2] > b.list[0] {
+			t.Fatalf("frame %d of the composition: the list is drawn again %v", i, b.list)
+		}
+		if p.st.Editor().CompletionActive() {
+			t.Fatalf("frame %d of the composition: keys are diverted again", i)
+		}
+	}
+}
+
+// Commands that arrive with a change of the text wait for the app to have seen
+// the change: Enter typed in the same frame as a letter accepts the row of the
+// list for the new text and replaces the new trigger, not the old one.
+func TestLiveComposerAcceptWaitsForTheChangedText(t *testing.T) {
+	l, p := startComposer(t, rexui.ComposerSetup{Placeholder: "Message"}, 480, 420)
+	p.focus(t, l)
+	l.Type("1 @pa")
+	l.Until("the list opens", 120, func() bool { return p.open && p.st.Editor().CompletionActive() })
+	l.Press(ui.KeyDown, 0)
+	l.Until("row 1", 120, func() bool { return p.list.Sel == 1 })
+	var in widgettest.TextClient
+	l.Do(func(*app.App) {
+		in = widgettest.TextInput(cview(p))
+		in.InsertText("m", widgettest.NoRange) // a letter and
+		in.DoCommand("insertNewline:")         // Enter before the frame that sees the letter
+	})
+	l.Until("accepted", 240, func() bool { return p.accepts == 1 })
+	l.Frames(4)
+	if got := p.text(); got != "1 @Pamela " {
+		t.Fatalf("the text is %q, want %q (the new trigger replaced)", got, "1 @Pamela ")
+	}
+}
+
+// Commands after a terminal result are not run into the list: Escape then Down
+// is a cancel, Enter then Down an accept.
+func TestLiveComposerFirstTerminalResultSticks(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		first string
+		want  rexui.CompletionResult
+	}{{"cancel", "cancelOperation:", rexui.ResultCancel}, {"accept", "insertNewline:", rexui.ResultAccept}} {
+		t.Run(tc.name, func(t *testing.T) {
+			l, p := startComposer(t, rexui.ComposerSetup{Placeholder: "Message"}, 480, 420)
+			p.focus(t, l)
+			l.Type("1 @pa")
+			l.Until("the list opens", 120, func() bool { return p.open && p.st.Editor().CompletionActive() })
+			l.Frames(4)
+			var in widgettest.TextClient
+			l.Do(func(*app.App) { p.results = p.results[:0] })
+			l.Do(func(*app.App) {
+				in = widgettest.TextInput(cview(p))
+				in.DoCommand(tc.first)
+				in.DoCommand("moveDown:")
+			})
+			l.Until("the list is over", 240, func() bool { return !p.open })
+			l.Frames(4)
+			if len(p.results) != 1 || p.results[0] != tc.want {
+				t.Fatalf("results %v, want [%v]", p.results, tc.want)
+			}
+		})
+	}
+}
+
+// A press on the list gives the keyboard back; hovering over it does not: after
+// a shortcut moves the keyboard elsewhere, the composer does not take it back.
+func TestLiveComposerHoverDoesNotStealTheKeyboard(t *testing.T) {
+	l, p := startComposer(t, rexui.ComposerSetup{Placeholder: "Message"}, 480, 420)
+	p.focus(t, l)
+	l.Type("1 @pa")
+	l.Until("the list opens", 120, func() bool { return p.open && p.st.Editor().CompletionActive() })
+	l.Frames(4)
+	b := p.boxes(l)
+	l.MoveTo((b.list[0]+b.list[2])/2, (b.list[1]+b.list[3])/2)
+	l.Frames(2)
+	c0 := p.cancels
+	l.Do(func(a *app.App) { a.Win.FocusHost(0) }) // a shortcut moves the keyboard to the window's view
+	l.Until("the completion ended", 120, func() bool { return p.cancels > c0 })
+	l.Frames(6)
+	focused := true
+	l.Do(func(*app.App) { focused = p.st.Editor().Focused() })
+	if focused {
+		t.Fatal("the composer took the keyboard back from a shortcut because the pointer rested on its list")
+	}
+}
+
+// A window that stops being key ends the completion: AppKit keeps the first
+// responder, but the list goes and the app is told.
+func TestLiveComposerWindowDeactivationEndsTheCompletion(t *testing.T) {
+	testlock.Hold(t, "activation") // another window takes the key: the app's focus is AppKit's
+	l, p := startComposer(t, rexui.ComposerSetup{Placeholder: "Message"}, 480, 420)
+	l.Do(func(*app.App) { p.keepOpen = true })
+	p.focus(t, l)
+	l.Type("1 @pa")
+	l.Until("the list opens", 120, func() bool { return p.open && p.st.Editor().CompletionActive() })
+	l.Frames(4)
+	l.RealFocus()
+	c0 := p.cancels
+	var other widgettest.PlainWindow
+	l.Do(func(*app.App) {
+		other = l.OpenPlainWindow("other", 600, 100)
+		objc.Send1(other.Window, objc.Sel("makeKeyAndOrderFront:"), 0)
+	})
+	l.Until("the window is not key", 240, func() bool { return !p.k.Context().Input().Focused })
+	l.Until("the app is told", 120, func() bool { return p.cancels > c0 })
+	l.Frames(4)
+	if b := p.boxes(l); b.list[2] > b.list[0] {
+		t.Errorf("the list is still drawn in a window that is not key: %v", b.list)
+	}
+	if p.st.Editor().CompletionActive() {
+		t.Error("keys are still diverted in a window that is not key")
+	}
+}
+
+// Disabling drops what the editor had queued: an Enter that arrived just before
+// does not send after the composer is enabled again, and a composition is
+// settled before the text is drawn.
+func TestLiveComposerDisablingSettlesTheEditor(t *testing.T) {
+	l, p := startComposer(t, rexui.ComposerSetup{Placeholder: "Message"}, 480, 420)
+	p.focus(t, l)
+	l.Type("hi")
+	l.Until("typed", 120, func() bool { return p.text() == "hi" })
+	l.Do(func(*app.App) {
+		widgettest.TextInput(cview(p)).DoCommand("insertNewline:") // Enter, before a frame takes it
+		p.disabled = true
+	})
+	l.Frames(4)
+	l.Do(func(*app.App) { p.disabled = false })
+	l.Frames(6)
+	if len(p.sent) != 0 {
+		t.Fatalf("an Enter from before the composer was disabled sent %q after it was enabled", p.sent)
+	}
+
+	// a composition in progress when it is disabled
+	var in widgettest.TextClient
+	l.Do(func(*app.App) {
+		in = widgettest.TextInput(cview(p))
+		in.SetMarkedText("か", widgettest.Range{Loc: 1}, widgettest.NoRange)
+	})
+	l.Until("composing", 120, func() bool { _, m := p.st.Editor().Marked(); return m })
+	l.Do(func(*app.App) { p.disabled = true })
+	l.Frames(4)
+	var marked bool
+	l.Do(func(*app.App) { marked = in.HasMarkedText() })
+	if _, m := p.st.Editor().Marked(); m || marked {
+		t.Errorf("the composition is still open while the text is drawn static (editor %v, view %v)", m, marked)
+	}
+	if got := p.text(); got != "hiか" {
+		t.Errorf("the text after settling is %q", got)
 	}
 }

@@ -90,6 +90,17 @@ func (e *NativeEditor) TakeFieldCommand() ui.FieldCommand {
 	return FieldCommandOf(e.TakeCommand())
 }
 
+// TakeFieldCommandSends is TakeFieldCommand with whether an Enter (FieldInsertNewline)
+// is one that sends by the Enter policy (platform.Editor.TakeCommandSends): what a
+// completion that declines the key does with it.
+func (e *NativeEditor) TakeFieldCommandSends() (cmd ui.FieldCommand, sends bool) {
+	if e.Editor == nil {
+		return ui.FieldNone, false
+	}
+	c, sends := e.TakeCommandSends()
+	return FieldCommandOf(c), sends
+}
+
 // NativeEditorSignal is what the editor reported since the last frame.
 type NativeEditorSignal struct {
 	// ID is the host's box.

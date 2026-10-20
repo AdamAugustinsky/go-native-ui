@@ -523,3 +523,303 @@ func TestComposerAttachmentsScrollSideways(t *testing.T) {
 		t.Fatalf("scrolling the attachments moved or resized the field: %v, was %v", got, field)
 	}
 }
+
+// ---- the review's findings, on the drawn field ----
+
+// newBottomComposerRig is the composer at the bottom of a window hPx pixels
+// high (a chat's), as the list's placement meets it.
+func newBottomComposerRig(t *testing.T, hPx int) *composerRig {
+	t.Helper()
+	st, err := rexui.NewComposer(nil, rexui.ComposerSetup{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cr := &composerRig{st: st}
+	cr.rig = newRig(t, theme.Light, nil, func(g *rig) {
+		g.k.NextHeight(ui.Pct(1))
+		g.k.Column("col")
+		g.k.NextHeight(ui.Pct(1))
+		g.k.Column("fill")
+		g.k.EndColumn()
+		g.k.NextWidth(g.k.Fixed(380))
+		cr.sig = rexui.Composer(g.k, "Message", cr.st, cr.o)
+		if cr.sig.Submitted {
+			cr.submits++
+		}
+		g.k.EndColumn()
+	})
+	cr.h = hPx
+	cr.settle()
+	return cr
+}
+
+func (cr *composerRig) listBounds() ([4]float32, bool) {
+	cr.c.Semantics(&cr.sem)
+	for _, n := range cr.sem.Nodes {
+		if n.Role == ui.RoleList && string(cr.sem.Text(n.Name)) == "Suggestions" {
+			return n.Bounds, true
+		}
+	}
+	return [4]float32{}, false
+}
+
+func boundsOverlap(a, b [4]float32) bool {
+	return a[0] < b[2] && a[2] > b[0] && a[1] < b[3] && a[3] > b[1]
+}
+
+// When neither side of the composer has room for the list, only the rows that
+// fit show, and when not even one fits there is no list: it never lies over the
+// field, where a hosted view is.
+func TestComposerCompletionFitsOrIsLeftOut(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		h    int
+		list bool
+	}{{"room for all rows", 800, true}, {"room for two rows", 200, true}, {"room for none", 90, false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			cr := newBottomComposerRig(t, tc.h)
+			cr.focus()
+			cr.typeText("hi @a")
+			var list rexui.CompletionState
+			list.Reset(len(composerItems), true)
+			cr.o.Completion, cr.o.Items = &list, composerItems
+			cr.settle()
+			field := cr.node(ui.RoleGroup, "Message").Bounds
+			lb, ok := cr.listBounds()
+			if ok != tc.list {
+				t.Fatalf("list shown %v, want %v (field %v)", ok, tc.list, field)
+			}
+			if ok {
+				if boundsOverlap(lb, field) {
+					t.Errorf("the list %v covers the field %v", lb, field)
+				}
+				if lb[1] < 0 || lb[3] > float32(tc.h) {
+					t.Errorf("the list %v leaves the window (%d px high)", lb, tc.h)
+				}
+			}
+		})
+	}
+}
+
+// The list is placed against the field this frame builds: when the field grows
+// (an attachment row appears above the text of a composer at the bottom), the
+// list does not cover it, in the frame of the change too.
+func TestComposerCompletionDoesNotCoverAChangingField(t *testing.T) {
+	cr := newBottomComposerRig(t, 800)
+	cr.focus()
+	cr.typeText("hi @a")
+	var list rexui.CompletionState
+	list.Reset(len(composerItems), true)
+	cr.o.Completion, cr.o.Items = &list, composerItems
+	cr.settle()
+	cr.o.Attachments = []rexui.ComposerAttachment{{Name: "a.png"}}
+	for i := 0; i < 4; i++ { // the frame of the change, and the ones after
+		cr.frame()
+		field := cr.node(ui.RoleGroup, "Message").Bounds
+		if lb, ok := cr.listBounds(); ok && boundsOverlap(lb, field) {
+			t.Fatalf("frame %d: the list %v covers the field %v", i, lb, field)
+		}
+	}
+	if _, ok := cr.listBounds(); !ok {
+		t.Fatal("the list did not come back once the field settled")
+	}
+}
+
+// Only the first terminal result of a frame counts, and the commands after it
+// do not run into the list: Escape then Down is a cancel, Enter then Down an
+// accept, and the highlight stays where the terminal command left it.
+func TestComposerFirstTerminalResultSticks(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		first ui.KeyCode
+		want  rexui.CompletionResult
+	}{{"cancel", ui.KeyEscape, rexui.ResultCancel}, {"accept", ui.KeyEnter, rexui.ResultAccept}} {
+		t.Run(tc.name, func(t *testing.T) {
+			cr := newComposerRig(t, 400, rexui.ComposerSetup{})
+			var list rexui.CompletionState
+			cr.focus()
+			cr.typeText("hi @a")
+			list.Reset(len(composerItems), true)
+			cr.o.Completion, cr.o.Items = &list, composerItems
+			cr.settle()
+			cr.in.PushKey(ui.KeyEvent{Code: tc.first, Down: true})
+			cr.in.PushKey(ui.KeyEvent{Code: ui.KeyDown, Down: true})
+			cr.frame()
+			if cr.sig.Completion != tc.want {
+				t.Fatalf("result %d, want %d", cr.sig.Completion, tc.want)
+			}
+			if list.Sel != 0 {
+				t.Fatalf("a command after the terminal one moved the highlight to %d", list.Sel)
+			}
+			if cr.submits != 0 {
+				t.Fatal("a command after the terminal one sent")
+			}
+		})
+	}
+}
+
+// An Enter that arrives in the frame of a letter is not the list's: the list
+// belongs to the text before the letter, so it is not accepted.
+func TestComposerRejectsAcceptAfterTheTextChanged(t *testing.T) {
+	cr := newComposerRig(t, 400, rexui.ComposerSetup{})
+	var list rexui.CompletionState
+	cr.focus()
+	cr.typeText("hi @a")
+	list.Reset(len(composerItems), true)
+	cr.o.Completion, cr.o.Items = &list, composerItems
+	cr.settle()
+	cr.in.AppendText("l")
+	cr.in.PushKey(ui.KeyEvent{Code: ui.KeyEnter, Down: true})
+	cr.frame()
+	if cr.sig.Completion == rexui.ResultAccept {
+		t.Fatal("Enter accepted a row of a list built for the text before the letter")
+	}
+	if cr.submits != 0 {
+		t.Fatal("the rejected Enter sent")
+	}
+	// the next Enter, with the list refreshed, accepts
+	cr.settle()
+	cr.in.PushKey(ui.KeyEvent{Code: ui.KeyEnter, Down: true})
+	cr.frame()
+	if cr.sig.Completion != rexui.ResultAccept {
+		t.Fatalf("a later Enter: result %d", cr.sig.Completion)
+	}
+}
+
+// A window that stops being key ends the completion: the app is told once
+// (Cancelled) and the list goes.
+func TestComposerWindowDeactivationEndsTheCompletion(t *testing.T) {
+	cr := newComposerRig(t, 400, rexui.ComposerSetup{})
+	var list rexui.CompletionState
+	cr.focus()
+	cr.typeText("hi @a")
+	list.Reset(len(composerItems), true)
+	cr.o.Completion, cr.o.Items = &list, composerItems
+	cr.settle()
+	if _, ok := cr.listBounds(); !ok {
+		t.Fatal("no list")
+	}
+	cancels := 0
+	inner := cr.build
+	cr.build = func(g *rig) {
+		inner(g)
+		if cr.sig.Cancelled {
+			cancels++
+		}
+	}
+	cr.in.Focused = false
+	cr.settle()
+	if _, ok := cr.listBounds(); ok {
+		t.Error("the list is still shown in a window that is not key")
+	}
+	if cancels != 1 {
+		t.Errorf("the app was told %d times, want once", cancels)
+	}
+}
+
+// The remove button works from the keyboard (Enter and Space) and from an
+// accessibility press, not only from a click.
+func TestComposerRemoveByKeyboardAndAccessibility(t *testing.T) {
+	two := []rexui.ComposerAttachment{{Name: "a.png", ID: 1}, {Name: "b.png", ID: 2}}
+	t.Run("Enter", func(t *testing.T) {
+		cr := newComposerRig(t, 0, rexui.ComposerSetup{})
+		cr.o.Attachments = two
+		cr.settle()
+		cr.key(ui.KeyTab, 0) // the first remove button
+		cr.key(ui.KeyEnter, 0)
+		if len(cr.removed) != 1 || cr.removed[0] != 0 {
+			t.Fatalf("Enter on the focused remove button: removed %v", cr.removed)
+		}
+	})
+	t.Run("Space", func(t *testing.T) {
+		cr := newComposerRig(t, 0, rexui.ComposerSetup{})
+		cr.o.Attachments = two
+		cr.settle()
+		cr.key(ui.KeyTab, 0)
+		cr.in.PushKey(ui.KeyEvent{Code: ui.KeySpace, Down: true})
+		cr.frame()
+		cr.in.PushKey(ui.KeyEvent{Code: ui.KeySpace, Down: false})
+		cr.frame()
+		if len(cr.removed) != 1 || cr.removed[0] != 0 {
+			t.Fatalf("Space on a remove button: removed %v", cr.removed)
+		}
+	})
+	t.Run("accessibility", func(t *testing.T) {
+		cr := newComposerRig(t, 0, rexui.ComposerSetup{})
+		cr.o.Attachments = two
+		cr.settle()
+		cr.in.PushAction(ui.SemRequest{Key: cr.node(ui.RoleButton, "Remove b.png").Key, Action: ui.ActPress})
+		cr.frame()
+		if len(cr.removed) != 1 || cr.removed[0] != 1 {
+			t.Fatalf("an accessibility press on Remove b.png: removed %v", cr.removed)
+		}
+	})
+}
+
+// A remove button belongs to its attachment, not to its place in the row: when
+// the list changes between the press and the release, the one now under the
+// pointer is not removed.
+func TestComposerRemoveFollowsTheAttachment(t *testing.T) {
+	cr := newComposerRig(t, 0, rexui.ComposerSetup{})
+	cr.o.Attachments = []rexui.ComposerAttachment{{Name: "a.png", ID: 1}, {Name: "b.png", ID: 2}}
+	cr.settle()
+	x, y := centre(cr.node(ui.RoleButton, "Remove a.png"))
+	cr.in.MouseX, cr.in.MouseY = x, y
+	cr.frame()
+	cr.in.SetButton(ui.ButtonLeft, true, 1)
+	cr.frame()
+	cr.o.Attachments = []rexui.ComposerAttachment{{Name: "b.png", ID: 2}} // a was removed elsewhere: b's button is under the pointer now
+	cr.frame()
+	cr.frame()
+	cr.in.SetButton(ui.ButtonLeft, false, 0)
+	cr.frame()
+	cr.frame()
+	if len(cr.removed) != 0 {
+		t.Fatalf("the release removed %v: another attachment's button took the click", cr.removed)
+	}
+}
+
+// The drawn field's text API is the hosted editor's: SetText refuses what
+// the hosted one does and changes nothing; Replace is exact (a combining mark
+// alone, not its whole character) and refuses a selection that is not on
+// boundaries of the text it would make, changing nothing.
+func TestComposerDrawnTextAPIMatchesHosted(t *testing.T) {
+	st, _ := rexui.NewComposer(nil, rexui.ComposerSetup{MaxLen: 8})
+	st.SetText([]byte("abc"))
+	if err := st.SetText([]byte("123456789")); err != platform.ErrTooLong {
+		t.Errorf("SetText over the maximum: %v", err)
+	}
+	if err := st.SetText([]byte("a\xffb")); err != platform.ErrNotBoundary {
+		t.Errorf("SetText of invalid UTF-8: %v", err)
+	}
+	if string(st.Text()) != "abc" {
+		t.Fatalf("a refused SetText changed the text to %q", st.Text())
+	}
+
+	st.SetText([]byte("e\u0301"))
+	if err := st.Replace(platform.TextRange{Start: 1, End: 3}, []byte("x"), platform.TextRange{Start: 2, End: 2}); err != nil {
+		t.Fatal(err)
+	}
+	if string(st.Text()) != "ex" {
+		t.Fatalf("replacing the combining mark alone gave %q, want %q", st.Text(), "ex")
+	}
+	st.SetText([]byte("e\u0301"))
+	if err := st.Replace(platform.TextRange{Start: 0, End: 1}, []byte("E"), platform.TextRange{Start: 1, End: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if string(st.Text()) != "E\u0301" {
+		t.Fatalf("replacing the base alone gave %q", st.Text())
+	}
+
+	st.SetText([]byte("xy"))
+	for _, sel := range []platform.TextRange{{Start: 5, End: 5}, {Start: 1, End: 0}, {Start: 1, End: 1}} {
+		// "é" is two bytes: byte 1 of the result is inside it
+		err := st.Replace(platform.TextRange{Start: 0, End: 1}, []byte("é"), sel)
+		if err != platform.ErrNotBoundary {
+			t.Errorf("selection %v: %v, want ErrNotBoundary", sel, err)
+		}
+		if string(st.Text()) != "xy" {
+			t.Fatalf("a refused Replace (selection %v) changed the text to %q", sel, st.Text())
+		}
+	}
+}

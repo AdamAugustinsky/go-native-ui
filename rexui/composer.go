@@ -1,12 +1,14 @@
 package rexui
 
 import (
+	"bytes"
 	"errors"
 	"unicode/utf8"
 
 	"gonativeui/icon"
 	"gonativeui/img"
 	"gonativeui/platform"
+	"gonativeui/text"
 	"gonativeui/theme"
 	"gonativeui/ui"
 	"gonativeui/widget/base"
@@ -53,6 +55,12 @@ type ComposerAttachment struct {
 	// Thumb is the thumbnail in the kit's image cache (Kit.SetImages); the
 	// zero Handle shows the file icon instead.
 	Thumb img.Handle
+	// ID is the attachment's identity, which its remove button keeps while
+	// the list changes around it (a press that began on one attachment's
+	// button never ends as another's). 0 uses the attachment's place in the
+	// row; give each a distinct non-zero ID when attachments can come and go
+	// between a press and its release.
+	ID uint64
 }
 
 // ComposerState is a composer's state, owned by the app: the text, the
@@ -76,6 +84,19 @@ type ComposerState struct {
 	// rectangle then
 	completing bool
 	list       [4]float32
+	cc         composerCmd  // the completion's keys of the frame being built
+	geom       composerGeom // what the last frame's layout depended on
+	edPx       float32      // the hosted editor's height in the last frame, pixels
+	grow       float32      // by how much the field grows in this frame, pixels
+}
+
+// composerGeom is what can move the field between one frame and the next
+// without the app's say: the list is placed against the layout of the last
+// frame, so a frame in which this changes does not show it.
+type composerGeom struct {
+	attached int
+	w, h     int
+	known    bool
 }
 
 // NewComposer makes the state of a composer in window w. With an NSTextView
@@ -127,11 +148,20 @@ func (s *ComposerState) Text() []byte {
 }
 
 // SetText sets the whole text (restoring a draft); nil empties it. It clears
-// the undo stack, and fires no Changed. A hosted editor refuses it while an
-// input method composes (platform.ErrComposing).
+// the undo stack, and fires no Changed. It refuses text longer than the maximum
+// (platform.ErrTooLong) and text that is not valid UTF-8 (platform.ErrNotBoundary)
+// and then changes nothing. It ends an input method's composition: the hosted
+// editor discards the marked text, as AppKit does when a document is set. The
+// drawn field is one line, and shows a line break as a space.
 func (s *ComposerState) SetText(b []byte) error {
 	if s.ed != nil {
 		return s.ed.SetText(b)
+	}
+	if len(b) > s.maxLen {
+		return platform.ErrTooLong
+	}
+	if !utf8.Valid(b) {
+		return platform.ErrNotBoundary
 	}
 	s.buf.SetBytes(b)
 	return nil
@@ -146,8 +176,14 @@ func (s *ComposerState) Selection() platform.TextSelection {
 }
 
 // Replace replaces the bytes r with text and puts the selection at sel (bytes
-// of the new text), as one undo step: the completion's accept. The hosted
-// editor refuses it while an input method composes (platform.ErrComposing).
+// of the new text), as one undo step: the completion's accept. It refuses, and
+// changes nothing, for a range or a selection that is not on UTF-8 boundaries
+// of the text it would make (platform.ErrNotBoundary), text over the maximum
+// (platform.ErrTooLong), and, hosted, while an input method composes
+// (platform.ErrComposing). The range is exact: a combining mark can be replaced
+// without its base. The drawn field puts its caret on character boundaries, so
+// a selection inside a character is widened to it, and it is one line (a line
+// break in text becomes a space).
 func (s *ComposerState) Replace(r platform.TextRange, text []byte, sel platform.TextRange) error {
 	if s.ed != nil {
 		return s.ed.Replace(r, text, sel)
@@ -159,10 +195,44 @@ func (s *ComposerState) Replace(r platform.TextRange, text []byte, sel platform.
 	if n := len(b) - (r.End - r.Start) + len(text); n > s.maxLen {
 		return platform.ErrTooLong
 	}
-	s.buf.SetSelection(r.Start, r.End)
-	s.buf.Insert(text)
+	// the text it makes, to check the selection against before touching the
+	// field's own (one line: the text is cleaned as typing is)
+	var made ui.TextBuffer
+	made.Max = s.maxLen
+	made.SetBytes(b)
+	replaceExact(&made, r, text)
+	res := made.Bytes()
+	if sel.Start < 0 || sel.End < sel.Start || sel.End > len(res) || !boundary(res, sel.Start) || !boundary(res, sel.End) {
+		return platform.ErrNotBoundary
+	}
+	replaceExact(&s.buf, r, text)
 	s.buf.SetSelection(sel.Start, sel.End)
 	return nil
+}
+
+// replaceExact replaces the bytes r of t with p, on the byte boundaries given
+// (not widened to whole characters, as a selection is): the caret goes on the
+// character boundary at or before the range and ReplaceUTF16 counts out from
+// there.
+func replaceExact(t *ui.TextBuffer, r platform.TextRange, p []byte) {
+	b := t.Bytes()
+	base := text.GraphemeStart(b, r.Start)
+	t.SetCaret(base)
+	t.ReplaceUTF16(utf16Len(b[base:r.Start]), utf16Len(b[r.Start:r.End]), p)
+}
+
+// utf16Len is the number of UTF-16 units of b.
+func utf16Len(b []byte) int {
+	n := 0
+	for len(b) > 0 {
+		r, w := utf8.DecodeRune(b)
+		n++
+		if r >= 0x10000 {
+			n++
+		}
+		b = b[w:]
+	}
+	return n
 }
 
 // boundary reports whether byte offset i of b is on a UTF-8 scalar boundary.
@@ -353,16 +423,31 @@ func Composer(k *base.Kit, label string, st *ComposerState, o ComposerOpts) Comp
 	hosted := st.ed != nil && !disabled // a disabled composer draws its text: the view cannot be made read-only
 	look := k.TakeForce()
 	sig := ComposerSignal{Removed: -1, Chosen: -1}
-
-	// the completion this frame: a list with rows, and no marked text
-	var cmdr ui.FieldCommander
-	if o.Completion != nil && len(o.Items) > 0 && !disabled {
-		cmdr = o.Completion.commander(len(o.Items))
-	}
+	notKey := k.Inactive() // the window is not key (a forced look is only a look)
 
 	key := ui.HashString(c.ParentKey(), ident)
 	prev := c.RectOf(key)
 	attached := len(o.Attachments) > 0
+	winW, winH := c.Size()
+	geom := composerGeom{attached: len(o.Attachments), w: winW, h: winH, known: true}
+	settled := st.geom == geom // the layout the list is placed against is this frame's
+	st.geom = geom
+
+	// the completion this frame: a list with rows that has room somewhere
+	var cc *composerCmd
+	var rows int
+	var above, haveRoom bool
+	if o.Completion != nil && len(o.Items) > 0 && !disabled {
+		o.Completion.n = len(o.Items)
+		st.cc = composerCmd{list: o.Completion, st: st, rev: st.buf.Rev(), caret: st.buf.Caret()}
+		cc = &st.cc
+		if !hosted { // a hosted editor's height is known once it has taken its signals
+			rows, above, haveRoom = popupRoom(c, sc, prev, 0, len(o.Items))
+			if haveRoom && rows < 1 {
+				cc = nil
+			}
+		}
+	}
 
 	var ns base.NativeEditorSignal
 	submit := false
@@ -404,23 +489,34 @@ func Composer(k *base.Kit, label string, st *ComposerState, o ComposerOpts) Comp
 	var drawn base.FieldSignal
 	var ti base.TextInput
 	var ringVisual base.Visual
-	inactive := k.Inactive() || look&base.LookInactive != 0
+	inactive := notKey || look&base.LookInactive != 0
 	switch {
 	case hosted:
+		var fx ui.Size
 		if st.variant == ComposerExpanded && st.ed.Height() < rc.ExpandedMinH {
-			k.NextHeight(k.Fixed(rc.ExpandedMinH))
+			fx = k.Fixed(rc.ExpandedMinH)
+			k.NextHeight(fx)
 		}
 		ns = k.NativeEditor(st.ed, label)
+		editorPx := st.ed.Height() * sc // after the editor took its signals: this frame's
+		if fx.Value > 0 {
+			editorPx = fx.Value
+		}
 		sig.Key = c.KeyOf(ns.ID)
 		sig.Editor = ns.ID
-		sig.Changed, sig.Composing, sig.Selected = ns.Changed, ns.Composing, ns.Selected
+		_, marked := st.ed.Marked()
+		sig.Composing = ns.Composing || marked // the editor's state, not the one frame it said so in
+		sig.Changed, sig.Selected = ns.Changed, ns.Selected
 		sig.Cancelled, sig.PastedImage, sig.HeightChanged = ns.Cancelled, ns.PastedImage, ns.HeightChanged
 		sig.Focused = ns.Focused
-		if st.completing && ns.Cancelled && !ns.Focused && cmdr != nil && !sig.Composing && inside(c.Input().MouseX, c.Input().MouseY, st.list) {
+		in := c.Input()
+		pressing := (in.Down[ui.ButtonLeft] || in.Pressed[ui.ButtonLeft]) && !notKey
+		if st.completing && ns.Cancelled && !ns.Focused && cc != nil && !sig.Composing && pressing && inside(in.MouseX, in.MouseY, st.list) {
 			// A press on the list took the first responder from the text view
 			// (any press on the window's own view does), which ended the
 			// completion. The press is the list's: give the keyboard back and
-			// keep the list for the click.
+			// keep the list for the click. Hovering is not a press: after a
+			// shortcut moved the keyboard elsewhere it stays there.
 			st.ed.Focus()
 			sig.Cancelled, ns.Cancelled = false, false
 			sig.Focused = true
@@ -430,11 +526,27 @@ func Composer(k *base.Kit, label string, st *ComposerState, o ComposerOpts) Comp
 		if sig.Focused || look&base.LookFocused != 0 {
 			ringVisual.Focus = 1
 		}
+		// the list is placed against this frame's editor: the field grows by as
+		// much as the editor did, upwards when it is at the bottom of the
+		// window, downwards when it is at the top
+		var grow float32
+		if st.edPx > 0 && editorPx > st.edPx {
+			grow = editorPx - st.edPx
+		}
+		st.edPx = editorPx
+		if cc != nil {
+			rows, above, haveRoom = popupRoom(c, sc, prev, grow, len(o.Items))
+			if haveRoom && rows < 1 {
+				cc = nil
+			}
+			st.grow = grow
+		}
 	case st.ed != nil: // disabled: the text, drawn
+		st.settleDisabled()
 		sig.Editor = composerStatic(k, st, rc)
 		ringVisual = base.Visual{Inactive: inactive, Disabled: true}
 	default:
-		sig.Editor, drawn, ti = composerField(k, st, label, look, cmdr)
+		sig.Editor, drawn, ti = composerField(k, st, label, look, cc)
 		sig.Changed, sig.Focused = drawn.Changed, drawn.Focused
 		sig.Composing = k.Composing(drawn)
 		sig.Cancelled = drawn.Cancelled
@@ -457,41 +569,73 @@ func Composer(k *base.Kit, label string, st *ComposerState, o ComposerOpts) Comp
 		st.Focus(k) // a press on the field's padding puts the caret in the text
 	}
 
-	// Enter by the policy, and the keys of a completion, take effect
-	if cmdr != nil && hosted {
-		for cmd := st.ed.TakeFieldCommand(); cmd != ui.FieldNone; cmd = st.ed.TakeFieldCommand() {
+	// the hosted editor's keys: the list's while one shows, else what the editor
+	// would have done with them. They wait while the text or the selection has
+	// changed in a way the app has not seen, so that the list they act on is the
+	// one for the text they were typed after.
+	if hosted {
+		hold := cc != nil && (ns.Changed || ns.Selected)
+	drain:
+		for !hold {
+			cmd, sends := st.ed.TakeFieldCommandSends()
+			if cmd == ui.FieldNone {
+				break
+			}
 			c.RequestFrame()
-			if cmdr.FieldCommand(cmd, 0) {
+			if cc != nil {
+				if cc.FieldCommand(cmd, 0) {
+					if cc.done {
+						break drain // what comes after a terminal result is not the list's
+					}
+					continue
+				}
+				// a key the list does not use: the hosted editor already took it
+				switch cmd {
+				case ui.FieldInsertNewline: // Enter with no row highlighted is the editor's own
+					if sends {
+						submit = true
+					} else {
+						st.newline()
+					}
+				case ui.FieldInsertTab, ui.FieldInsertBacktab: // the list closes; Tab does not leave the text
+					cc.FieldCommand(ui.FieldCancel, 0)
+					if cc.done {
+						break drain
+					}
+				}
 				continue
 			}
-			// a key the list does not use: the hosted editor already took it
+			// keys left over from a list that is gone
 			switch cmd {
-			case ui.FieldInsertNewline: // Enter with no row highlighted is the editor's own
-				if st.enter == platform.EnterSends {
+			case ui.FieldInsertNewline:
+				if sends {
 					submit = true
 				} else {
 					st.newline()
 				}
-			case ui.FieldInsertTab, ui.FieldInsertBacktab: // the list closes; Tab does not leave the text
-				cmdr.FieldCommand(ui.FieldCancel, 0)
+			case ui.FieldCancel:
+				sig.Cancelled = true
 			}
 		}
+		if hold {
+			c.RequestFrame()
+		}
 	}
-	if o.Completion != nil {
-		sig.Completion = o.Completion.Take()
+	if cc != nil {
+		sig.Completion = cc.result
 	}
-	if sig.Completion == ResultAccept || sig.Completion == ResultCancel {
-		cmdr = nil // the list is over: stop diverting keys at once
+
+	// completion shows while the text has the keyboard in a key window and no
+	// input method composes
+	want := cc != nil && !sig.Composing && (sig.Focused || look&base.LookFocused != 0) && !notKey
+	if st.completing && cc != nil && notKey {
+		sig.Cancelled = true // AppKit keeps the first responder of a window that resigns key: the app is told here
 	}
 	if hosted {
-		if cmdr == nil || sig.Composing || !sig.Focused {
-			if st.ed.CompletionActive() {
-				st.ed.SetCompletionActive(false)
-			}
-		} else if !st.ed.CompletionActive() {
-			st.ed.SetCompletionActive(true)
+		if want != st.ed.CompletionActive() {
+			st.ed.SetCompletionActive(want)
 		}
-		if hosted && (sig.Changed || sig.Selected || sig.Cancelled || sig.HeightChanged || sig.PastedImage || submit) {
+		if sig.Changed || sig.Selected || sig.Cancelled || sig.HeightChanged || sig.PastedImage || submit {
 			c.RequestFrame() // what the app does with these is drawn in the next frame
 		}
 	}
@@ -507,8 +651,12 @@ func Composer(k *base.Kit, label string, st *ComposerState, o ComposerOpts) Comp
 	c.Pop()
 
 	// the completion list, at the caret and outside the field
-	completing := cmdr != nil && !sig.Composing && (sig.Focused || look&base.LookFocused != 0)
-	if completing {
+	show := want && !cc.done
+	if show && !settled {
+		c.RequestFrame() // the field moved: the list waits for the layout it is placed against
+		show = false
+	}
+	if show {
 		var caret [4]float32
 		if hosted {
 			if !st.completing || sig.Changed || sig.Selected || sig.HeightChanged || st.caretOK == false {
@@ -519,11 +667,14 @@ func Composer(k *base.Kit, label string, st *ComposerState, o ComposerOpts) Comp
 			caret = [4]float32{ime[0], ime[1], ime[0] + 1, ime[1] + ime[3]}
 			st.caretOK = true
 		}
-		if prev[2] > prev[0] && prev[3] > prev[1] {
+		if prev[2] > prev[0] && prev[3] > prev[1] && haveRoom {
 			if !st.caretOK {
 				caret = [4]float32{prev[0], prev[1], prev[0] + 1, prev[3]}
 			}
-			lo := CompletionOpts{Exclude: prev, Above: true} // above, as a composer at the bottom of a chat: below when there is no room
+			ex := prev
+			ex[1] -= st.grow
+			ex[3] += st.grow
+			lo := CompletionOpts{Exclude: ex, Above: above, MaxRows: rows}
 			name := o.CompletionLabel
 			if name == "" {
 				name = "Suggestions"
@@ -533,11 +684,95 @@ func Composer(k *base.Kit, label string, st *ComposerState, o ComposerOpts) Comp
 			st.list = c.Rect(cs.ID)
 		}
 	}
-	st.completing = completing
-	if !completing {
+	st.completing = show
+	if !show {
 		st.caretOK = false
 	}
+	st.grow = 0
 	return sig
+}
+
+// popupRoom is how many rows of a list of n the completion can show without
+// covering the field (whose frame, widened by grow at both ends for a field
+// that is growing, is ex): all of them above it, or else below, or the most
+// that fit on the side with the most room. haveRoom is false while the field's
+// frame is not known (its first frame): nothing is shown then. A list with no
+// row that fits has rows 0.
+func popupRoom(c *ui.Context, sc float32, ex [4]float32, grow float32, n int) (rows int, above, haveRoom bool) {
+	if ex[2] <= ex[0] || ex[3] <= ex[1] {
+		return 0, true, false
+	}
+	rc := &CompletionLook
+	rowH, pad := pt(sc, rc.RowH), pt(sc, rc.Pad)
+	_, h := c.Size()
+	fit := func(space float32) int { return max(int((space-2*pad-2)/rowH), 0) } // 2 px for the panel's outline
+	want := min(n, 8)
+	ra, rb := fit(ex[1]-grow), fit(float32(h)-ex[3]-grow)
+	switch {
+	case ra >= want:
+		return want, true, true
+	case rb >= want:
+		return want, false, true
+	case ra >= rb:
+		return ra, true, true
+	}
+	return rb, false, true
+}
+
+// composerCmd is the completion's keys for one frame of a composer: the list's
+// commander (CompletionState) with two rules. After a terminal result (an
+// accept or a cancel) the frame's later keys are not run into the list, so
+// that Escape then Down is a cancel and the first result stands. And in a drawn
+// field an accept is refused when the text or the caret has changed in this
+// frame before it, because the list the app built is for the text before the
+// change (a hosted editor's keys wait for the app instead).
+type composerCmd struct {
+	list   *CompletionState
+	st     *ComposerState
+	rev    uint32
+	caret  int
+	result CompletionResult
+	done   bool
+}
+
+// FieldCommand implements ui.FieldCommander.
+func (c *composerCmd) FieldCommand(cmd ui.FieldCommand, r rune) bool {
+	if c.done {
+		return true
+	}
+	l := c.list
+	if c.st.ed == nil && (cmd == ui.FieldInsertTab || cmd == ui.FieldInsertNewline) {
+		l.init(l.n)
+		if l.Sel >= 0 && l.Sel < l.n && (c.st.buf.Rev() != c.rev || c.st.buf.Caret() != c.caret) {
+			return true // the Enter or Tab the list would have taken, for text that is gone: refused
+		}
+	}
+	if !(*completionCmd)(l).FieldCommand(cmd, r) {
+		return false
+	}
+	if res := l.Take(); res != ResultNone {
+		c.result = res
+		c.done = res == ResultAccept || res == ResultCancel
+	}
+	return true
+}
+
+// settleDisabled takes the hosted editor's state while the composer is
+// disabled and its view is not built: what it queued is dropped (an Enter from
+// before does not send when the composer is enabled again), and a composition
+// is ended with its text kept, so that the text drawn in the view's place is
+// the text the editor has.
+func (s *ComposerState) settleDisabled() {
+	_ = s.ed.TakeSignals()
+	for s.ed.TakeCommand() != platform.CmdNone {
+	}
+	if s.ed.CompletionActive() {
+		s.ed.SetCompletionActive(false)
+	}
+	if _, marked := s.ed.Marked(); marked {
+		_ = s.ed.SetText(bytes.Clone(s.ed.Text()))
+	}
+	s.completing = false
 }
 
 // inside reports whether (x, y) is in rectangle r (x0, y0, x1, y1).
@@ -560,7 +795,7 @@ func (s *ComposerState) newline() {
 
 // composerField builds the drawn single-line text field of the composer, in
 // the send button's height.
-func composerField(k *base.Kit, st *ComposerState, label string, look base.Look, cmdr ui.FieldCommander) (ui.ID, base.FieldSignal, base.TextInput) {
+func composerField(k *base.Kit, st *ComposerState, label string, look base.Look, cc *composerCmd) (ui.ID, base.FieldSignal, base.TextInput) {
 	c, r := k.Context(), k.Theme()
 	rc := &ComposerLook
 	sc := k.Scale()
@@ -579,8 +814,8 @@ func composerField(k *base.Kit, st *ComposerState, label string, look base.Look,
 	c.NextPadding(padL, 0, padL, 0)
 	c.NextFont(font)
 	c.NextTextColor(tc)
-	if cmdr != nil && !ti.Disabled {
-		c.NextFieldCommander(cmdr, "") // the list's keys, as the hosted editor's are offered
+	if cc != nil && !ti.Disabled {
+		c.NextFieldCommander(cc, "") // the list's keys, as the hosted editor's are offered
 	}
 	res := k.TextInput(&ti, &st.buf, ui.RoleTextField, false)
 	if st.buf.Len() == 0 && !k.Composing(res) && st.hint != "" {
@@ -641,6 +876,9 @@ func composerAttachments(k *base.Kit, fieldKey ui.Key, list []ComposerAttachment
 	for i := range list {
 		a := &list[i]
 		ck := ui.KeyN(rowKey, uint64(1+i))
+		if a.ID != 0 { // the chip is its attachment's, wherever it sits in the row
+			ck = ui.KeyN(ui.KeyN(rowKey, 0xA8), a.ID)
+		}
 		nameW := theme.Snap(min(k.TextWidth(font, a.Name)+base.LabelSlack, pt(sc, rc.ChipMaxW)))
 		c.NextBG(rc.Chip.RGBA(r))
 		c.NextRadius(chipH / 2)
@@ -685,7 +923,7 @@ func composerAttachments(k *base.Kit, fieldKey ui.Key, list []ComposerAttachment
 		k.FocusRing(rm, v, side/2)
 		c.Pop()
 		c.Pop()
-		if !k.Disabled() && c.Signal(rm).Clicked {
+		if !k.Disabled() && k.SignalOf(rm).Clicked {
 			removed = i
 		}
 	}

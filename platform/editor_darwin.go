@@ -737,7 +737,8 @@ func (e *Editor) command(sel objc.SEL) bool {
 				objc.Send(e.tv, selUnmarkText)
 			}
 		case e.compl:
-			e.toApp(CmdAccept)
+			e.pushCommandSends(CmdAccept, sel == selInsertNewline && e.sends(currentMods()))
+			e.wake()
 		case sel == selInsertNewline && e.sends(currentMods()):
 			e.pend |= EditorSubmitted
 			e.wake()
@@ -826,7 +827,8 @@ func edKeyDown(c *ffi.CB) {
 	m := mods(uintptr(objc.Send(ev, selModifierFlags)))
 	if (code == 0x24 || code == 0x4C) && m&ModSuper != 0 && !marked {
 		if e.compl {
-			e.toApp(CmdAccept)
+			e.pushCommandSends(CmdAccept, true)
+			e.wake()
 		} else {
 			e.pend |= EditorSubmitted
 			e.wake()
