@@ -114,7 +114,7 @@ func init() {
 				case e.Kind == app.EvQuitRequested && mode == "nested":
 					objc.Send(nested, objc.Sel("gnuiNested")) // a native callback that answers, nested in the event
 				case e.Kind == app.EvPost && e.ID == 2:
-					say("alive=1 early=%d ours=%d last=%s pending=%v", earlyReplies.Load(), platform.RepliesSent(), lastTerminate(), a.QuitPending())
+					say("alive=1 early=%d ours=%d last=%s quit_reply=%d pending=%v", earlyReplies.Load(), platform.RepliesSent(), lastTerminate(), platform.LastQuitEventReply(), a.QuitPending())
 					a.Quit()
 				default:
 					return false
@@ -298,10 +298,10 @@ func endSheet(win, alert objc.ID, code int) {
 }
 
 // delayed: the quit answer is deferred 2 s; meanwhile a worker's posts and an
-// alert sheet's completion are delivered during AppKit's wait, and a "Save
-// changes?" sheet asked for then opens; its answer allows the quit. The
-// sheets begin after the request: a quit Apple event reaches AppKit's
-// terminate:, which ends a sheet that is up (sendTerminate in platform).
+// alert sheet's completion are delivered (VIA terminate: during AppKit's
+// wait), and a "Save changes?" sheet asked for then opens; its answer allows
+// the quit. The sheets begin after the request: a foreign terminate: ends a
+// sheet that is up before it asks.
 func delayedScenario() {
 	v := &view{}
 	var (
@@ -348,7 +348,7 @@ func delayedScenario() {
 			a.AtSafePoint(func() { endSheet(ourWindow(a), report, 1000) })
 		case e.Kind == app.EvService && e.ID == uint64(reportTk):
 			reportDuring = a.QuitPending()
-			a.AtSafePoint(func() { // runs from the dispatcher: our loop is suspended in AppKit's wait
+			a.AtSafePoint(func() { // VIA terminate: runs from the dispatcher, our loop is suspended in AppKit's wait
 				save, saveTk = sh.begin(ourWindow(a), "Save changes?")
 				saveOpen = objc.Send(ourWindow(a), objc.Sel("attachedSheet")) != 0 && a.QuitPending()
 				go func() {
@@ -362,6 +362,7 @@ func delayedScenario() {
 			say("worker=%d/%d report_during=%v save_open=%v save_answer=%d pending=%v waited_ms=%d builds_during=%d",
 				workerDuring, workerAll, reportDuring, saveOpen, e.A, a.QuitPending(), time.Since(quitT0).Milliseconds(), v.builds.Load()-buildsAtQuit)
 			a.ReplyQuit(quitID, e.A == 1000)
+			say("quit_reply=%d", platform.LastQuitEventReply())
 		default:
 			return false
 		}

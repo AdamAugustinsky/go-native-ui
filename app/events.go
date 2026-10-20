@@ -31,8 +31,16 @@ const (
 	EvDeactivated = EventKind(platform.AppEvDeactivated)
 	// EvQuitRequested asks the app to quit: e.QuitReason says who asks, and
 	// ID identifies the request. Answer with App.ReplyQuit(e.ID, allow), now
-	// or later (see App.ReplyQuit); a request asked while a frame is drawn
-	// (a native loop inside Build) arrives after the frame.
+	// or later (see App.ReplyQuit). The quit is decided with the app's sheets
+	// and alerts still up; allowed, they end as cancelled (never with their
+	// first button) before EvWillTerminate. A logout's request (QuitLogout)
+	// refused cancels the logout; left unanswered, the logout waits.
+	//
+	// A request asked while a frame is drawn (a native loop inside Build) is
+	// refused at once and arrives after the frame: the quit cannot wait for
+	// its answer inside the frame. So a logout that arrives then is
+	// cancelled; the request after the frame decides only whether the app
+	// quits.
 	EvQuitRequested = EventKind(platform.AppEvQuitRequested)
 	// EvQuitDeadline: a quit request stayed unanswered past
 	// AppConfig.QuitDeadline; A is the QuitAction that was applied. An error
@@ -248,7 +256,8 @@ func (a *App) flushStartup() {
 
 // AtSafePoint runs f at the next safe point: between frames, outside Build
 // and outside every event delivery. While the app's own loop is suspended in
-// a native loop (AppKit's wait for a quit answer, menu tracking), the app
+// a native loop (menu tracking, AppKit's wait for the answer to a terminate:
+// sent by someone else), the app
 // object's dispatcher runs it, so a sheet asked for then still opens. f may
 // begin sheets and alerts, open and close windows and rebuild menus; it must
 // not start a native loop of its own (a popped-up menu, runModal). Main

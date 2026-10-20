@@ -268,8 +268,50 @@ func runNested(d time.Duration) {
 	}
 }
 
-// quitLater sends the Dock's Quit from the pump (later) and reports how.
-func quitLater() { later(func() { say("via=%s", sendQuitEvent()) }) }
+// quitLater sends the Dock's Quit from the pump (later) and reports how; with
+// VIA=terminate, a terminate: sent by someone else than the app instead (the
+// route that asks the delegate's applicationShouldTerminate:).
+func quitLater() {
+	later(func() {
+		if os.Getenv("VIA") == "terminate" {
+			say("via=terminate")
+			objc.Send1(nsApp(), objc.Sel("terminate:"), 0)
+			return
+		}
+		say("via=%s", sendQuitEvent())
+	})
+}
+
+// sendQuitWithReply sends a quit Apple event to this process and waits for
+// its reply, as the Dock or loginwindow would; logout adds kAEQuitReason
+// (kAELogOut). An event sent to the process itself is handled inside the
+// send, on the sending thread: this one, the main thread, from the pump
+// (later). It returns the reply's error number (0: none) or, when the send
+// failed, sendErr (the NSError's code). A handler that suspends the event
+// answers it after the send returned, which then fails with errAETimeout
+// (-1712).
+func sendQuitWithReply(logout bool) (errn, sendErr int) {
+	cls := objc.Cls("NSAppleEventDescriptor")
+	target := objc.Send(cls, objc.Sel("currentProcessDescriptor"))
+	selMake := objc.Sel("appleEventWithEventClass:eventID:targetDescriptor:returnID:transactionID:")
+	ev := objc.ID(objc.F.Reset().Arg(uintptr(cls)).Arg(uintptr(selMake)).Arg(0x61657674).Arg(0x71756974). // 'aevt' 'quit'
+														Arg(uintptr(target)).Arg(^uintptr(0)).Arg(0).Call(objc.MsgSend).R0())
+	if logout {
+		why := objc.Send1(cls, objc.Sel("descriptorWithEnumCode:"), 0x6C6F676F)                  // kAELogOut 'logo'
+		objc.Send2(ev, objc.Sel("setAttributeDescriptor:forKeyword:"), uintptr(why), 0x7768793F) // keyAEQuitReason 'why?'
+	}
+	selSend := objc.Sel("sendEventWithOptions:timeout:error:")
+	errOut := new(uintptr)
+	reply := objc.ID(objc.F.Reset().Arg(uintptr(ev)).Arg(uintptr(selSend)).Arg(3 /* kAEWaitReply */).ArgF64(30).
+		ArgPtr(unsafe.Pointer(errOut)).Call(objc.MsgSend).R0())
+	if *errOut != 0 {
+		return 0, int(int64(objc.Send(objc.ID(*errOut), objc.Sel("code"))))
+	}
+	if d := objc.Send1(reply, objc.Sel("paramDescriptorForKeyword:"), 0x6572726E); d != 0 { // 'errn'
+		errn = int(int32(uint32(objc.Send(d, objc.Sel("int32Value")))))
+	}
+	return errn, 0
+}
 
 // postCmdQ posts ⌘Q to window number win (0: no window), as the keyboard
 // would.

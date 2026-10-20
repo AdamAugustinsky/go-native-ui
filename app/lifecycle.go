@@ -317,6 +317,7 @@ type appObject struct {
 	terminated  bool // EvWillTerminate was delivered
 	startHidden bool
 	closing     bool // the window closes at the next safe point
+	pumping     bool // the loop is inside the window's Wait or a popped-up menu: the window stays open under it
 	inSafe      bool
 	winID       uint32
 	nextWinID   uint32
@@ -372,14 +373,17 @@ func (a *App) appTurn() {
 
 // safePoint is the work that waits for a safe point, from the loop's turn and
 // from the application object's dispatch alike: the queued functions, the
-// dialogs asked for, a window to close. Not inside a frame or an event.
+// dialogs asked for, a window to close. Not inside a frame or an event. The
+// window is not closed under the loop's own call into it (its Wait, a
+// popped-up menu), where the dispatcher may run too: Close wakes the loop,
+// whose turn closes it right after.
 func (a *App) safePoint() {
 	if a.inFrame || a.evDepth > 0 {
 		return
 	}
 	a.runSafePoints()
 	a.flushDialogs()
-	if a.closing {
+	if a.closing && !a.pumping {
 		a.closeWindow()
 	}
 }

@@ -49,26 +49,65 @@ func TestAlertAnswersADeferredQuit(t *testing.T) {
 	}
 }
 
-// An allowed quit with an alert open: the alert's completion runs and its
-// result is delivered before EvWillTerminate (the Dock's Quit, which AppKit's
-// terminate: takes, and ⌘Q, which ends the sheet itself).
+// An allowed quit with an alert open: the alert ends as cancelled, never with
+// its first button, and its result is delivered before EvWillTerminate (the
+// Dock's Quit and ⌘Q alike: both are decided without AppKit's terminate:,
+// which would end the alert with its first button).
 func TestSheetResultsComeBeforeWillTerminate(t *testing.T) {
 	for _, route := range []string{"dock", "cmdq"} {
 		t.Run(route, func(t *testing.T) {
 			t.Parallel()
 			r := child(t, "dialogexit", 60*time.Second, "ROUTE="+route)
-			// ⌘Q is decided without terminate: and ends the sheet itself, as
-			// cancelled; the Dock's Quit goes through AppKit's terminate:,
-			// which ends it with the default button (observed): the result
-			// is delivered all the same.
-			want := "shown,quit,dialog:cancelled,willterminate"
-			if route == "dock" {
-				want = "shown,quit,dialog:answered,willterminate"
-			}
-			if r.code != 0 || r.get("order") != want {
+			if r.code != 0 || r.get("order") != "shown,quit,dialog:cancelled,willterminate" {
 				t.Fatalf("exit %d, results %v\n%s", r.code, r.kv, r.out)
 			}
 		})
+	}
+}
+
+// A quit Apple event (the Dock's Quit, a logout) never presses an open
+// alert's first button: the quit is decided with the alert up; allowed (at
+// once or later), the alert ends as cancelled before EvWillTerminate;
+// refused, the alert stays and the reply carries userCanceledErr (-128),
+// which cancels a logout: the sender's reply for an answer given inside the
+// event, the suspended event's reply for a later one (resumed when the app
+// answers; resumed_reply 0 when allowed). A self-sent event is handled
+// inside the send, which a suspended event leaves with errAETimeout (-1712):
+// its reply comes later, which a sender in another process (loginwindow)
+// waits for.
+func TestQuitEventCancelsAnOpenAlert(t *testing.T) {
+	for _, reason := range []string{"dock", "logout"} {
+		for _, mode := range []string{"allow", "refuse", "laterallow", "laterrefuse"} {
+			t.Run(reason+"/"+mode, func(t *testing.T) {
+				t.Parallel()
+				r := child(t, "quitalert", 60*time.Second, "REASON="+reason, "MODE="+mode)
+				want := "2" // QuitDock
+				if reason == "logout" {
+					want = "3" // QuitLogout
+				}
+				ok := r.code == 0 && r.get("reason") == want && r.get("on_main") == "true"
+				allow := strings.HasSuffix(mode, "allow")
+				if strings.HasPrefix(mode, "later") {
+					resumed := "0"
+					if !allow {
+						resumed = "-128"
+					}
+					ok = ok && r.get("open_while_pending") == "true" && r.get("resumed_reply") == resumed && r.get("send_err") == "-1712"
+				} else if !allow {
+					ok = ok && r.get("errn") == "-128" && r.get("send_err") == "0"
+				}
+				if allow {
+					ok = ok && r.get("order") == "shown,quit,dialog:cancelled,willterminate" && r.get("main") == ""
+				} else {
+					ok = ok && r.get("alive") == "1" && r.get("sheet_open") == "true" && r.get("pending") == "false" &&
+						r.get("quit_reply") == "-128" && r.get("order") == "shown,quit"
+				}
+				if !ok {
+					t.Fatalf("exit %d, results %v\n%s", r.code, r.kv, r.out)
+				}
+				t.Logf("%v", r.kv)
+			})
+		}
 	}
 }
 
@@ -274,6 +313,84 @@ func init() {
 			case e.Kind == app.EvWillTerminate:
 				order = append(order, "willterminate")
 				say("order=%s", strings.Join(order, ","))
+			default:
+				return false
+			}
+			return true
+		}
+		app.Main(app.AppConfig{KeepRunning: true}, h)
+		say("main=returned")
+	}
+
+	// quitalert: a quit Apple event (REASON dock, or logout with
+	// kAEQuitReason) arrives, from a sender that waits for the reply, while
+	// an alert whose first button is destructive is open; MODE allow, refuse,
+	// laterallow or laterrefuse answers it.
+	scenarios["quitalert"] = func() {
+		mode := os.Getenv("MODE")
+		deferred := strings.HasPrefix(mode, "later")
+		allow := strings.HasSuffix(mode, "allow")
+		var (
+			order []string
+			win   objc.ID
+		)
+		sheetOpen := func() bool { return objc.Send(win, objc.Sel("attachedSheet")) != 0 }
+		h := &handler{}
+		h.start = func(a *app.App) error {
+			if _, ok := openWindows(a, 1, &view{}); !ok {
+				os.Exit(0)
+			}
+			if _, err := a.Alert(platform.AlertSpec{Message: "Delete everything?", Buttons: []string{"Delete", "Cancel"}}); err != nil {
+				fail("alert: %v", err)
+			}
+			after(600*time.Millisecond, 1)
+			return nil
+		}
+		h.event = func(a *app.App, e *app.Event) bool {
+			switch {
+			case e.Kind == app.EvPost && e.ID == 1:
+				win = ourWindow(a)
+				if sheetOpen() {
+					order = append(order, "shown")
+				}
+				logout := os.Getenv("REASON") == "logout"
+				later(func() {
+					errn, sendErr := sendQuitWithReply(logout)
+					say("errn=%d send_err=%d", errn, sendErr)
+					if !allow && !deferred {
+						postEvent(50, "")
+					}
+				})
+			case e.Kind == app.EvQuitRequested:
+				order = append(order, "quit")
+				say("reason=%d on_main=%v", e.A, objc.SendBool(objc.Cls("NSThread"), objc.Sel("isMainThread")))
+				if deferred {
+					after(600*time.Millisecond, 40)
+				} else {
+					a.ReplyQuit(quitID, allow)
+				}
+			case e.Kind == app.EvPost && e.ID == 40:
+				say("open_while_pending=%v", sheetOpen() && a.QuitPending() && len(order) == 2)
+				a.ReplyQuit(quitID, allow)
+				say("resumed_reply=%d", platform.LastQuitEventReply())
+				if !allow {
+					after(300*time.Millisecond, 50)
+				}
+			case e.Kind == app.EvService && e.Source == platform.SourceDialog:
+				r, _ := a.TakeDialog()
+				out := fmt.Sprintf("button%d", r.Button)
+				if r.Outcome == platform.DialogCancelled {
+					out = "cancelled"
+				}
+				order = append(order, "dialog:"+out)
+			case e.Kind == app.EvWillTerminate:
+				order = append(order, "willterminate")
+				say("order=%s", strings.Join(order, ","))
+			case e.Kind == app.EvPost && e.ID == 50:
+				if !allow { // refused: the alert is still up, the app runs on
+					say("alive=1 sheet_open=%v pending=%v quit_reply=%d order=%s", sheetOpen(), a.QuitPending(), platform.LastQuitEventReply(), strings.Join(order, ","))
+					os.Exit(0)
+				}
 			default:
 				return false
 			}

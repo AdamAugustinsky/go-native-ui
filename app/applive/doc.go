@@ -1,8 +1,9 @@
 // Package applive holds the live tests of the application object (phase 6,
 // F3): the quit policy through real AppKit routes (a self-addressed quit
-// Apple event for the Dock's Quit, ⌘Q through the native menu), deferred
-// answers with sheets and app events delivered during AppKit's wait, quit
-// deadlines, open events, the Dock menu and the delivery classes saturated
+// Apple event for the Dock's Quit and a logout, ⌘Q through the native menu,
+// a terminate: sent by someone else), open alerts that a quit must not
+// press, deferred answers with sheets and app events delivered meanwhile
+// (for a foreign terminate:, during AppKit's wait), quit deadlines, open events, the Dock menu and the delivery classes saturated
 // during a quit.
 //
 // An allowed quit ends the process (AppKit's terminate:), so every scenario

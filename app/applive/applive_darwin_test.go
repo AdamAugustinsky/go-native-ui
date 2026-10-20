@@ -66,29 +66,38 @@ func TestQuitItemFollowsTheModel(t *testing.T) {
 	}
 }
 
-// Answers given inside applicationShouldTerminate: are latched: a
-// synchronous allow returns NSTerminateNow, a refusal NSTerminateCancel, and
-// a reply from a native call nested in the event is latched too.
-// replyToApplicationShouldTerminate: is never called.
+// Answers given inside the quit request are latched. For a terminate: sent
+// by someone else (VIA terminate), applicationShouldTerminate: returns
+// NSTerminateNow for a synchronous allow, NSTerminateCancel for a refusal,
+// and a reply from a native call nested in the event is latched too;
+// replyToApplicationShouldTerminate: is never called. For the quit Apple
+// event the delegate is not asked: a refusal is the event's userCanceledErr
+// reply, an allowed quit sends terminate: answered "now".
 func TestQuitAnswersLatched(t *testing.T) {
-	for _, mode := range []string{"allow", "refuse", "nested"} {
-		t.Run(mode, func(t *testing.T) {
-			t.Parallel()
-			r := child(t, "latch", 60*time.Second, "MODE="+mode)
-			if r.code != 0 || r.get("early") != "0" || r.get("ours") != "0" {
-				t.Fatalf("exit %d, results %v\n%s", r.code, r.kv, r.out)
-			}
-			switch mode {
-			case "refuse":
-				if r.get("alive") != "1" || r.get("last") != "cancel" || r.get("pending") != "false" || r.get("main") != "returned" || r.get("terminated") != "1" {
-					t.Fatalf("refused: %v\n%s", r.kv, r.out)
+	for _, via := range []string{"aevt", "terminate"} {
+		for _, mode := range []string{"allow", "refuse", "nested"} {
+			t.Run(via+"/"+mode, func(t *testing.T) {
+				t.Parallel()
+				r := child(t, "latch", 60*time.Second, "MODE="+mode, "VIA="+via)
+				if r.code != 0 || r.get("early") != "0" || r.get("ours") != "0" {
+					t.Fatalf("exit %d, results %v\n%s", r.code, r.kv, r.out)
 				}
-			default:
-				if r.get("terminated") != "1" || r.get("last") != "now" || r.get("main") != "" {
-					t.Fatalf("allowed: %v\n%s", r.kv, r.out)
+				switch mode {
+				case "refuse":
+					last, reply := "cancel", "1" // no quit event answered
+					if via == "aevt" {
+						last, reply = "none", "-128"
+					}
+					if r.get("alive") != "1" || r.get("last") != last || r.get("quit_reply") != reply || r.get("pending") != "false" || r.get("main") != "returned" || r.get("terminated") != "1" {
+						t.Fatalf("refused: %v\n%s", r.kv, r.out)
+					}
+				default:
+					if r.get("terminated") != "1" || r.get("last") != "now" || r.get("main") != "" {
+						t.Fatalf("allowed: %v\n%s", r.kv, r.out)
+					}
 				}
-			}
-		})
+			})
+		}
 	}
 }
 
@@ -101,19 +110,31 @@ func TestQuitRefuseThenAllow(t *testing.T) {
 	}
 }
 
-// A deferred answer (NSTerminateLater): for the 2 s it takes, a worker's
-// posts and an alert sheet's completion are delivered inside AppKit's wait,
-// a "Save changes?" sheet asked for then opens (the dispatcher runs the safe
-// point), and its answer allows the quit, through one
-// replyToApplicationShouldTerminate:.
+// A deferred answer: for the 2 s it takes, a worker's posts and an alert
+// sheet's completion are delivered, a "Save changes?" sheet asked for then
+// opens, and its answer allows the quit. For a terminate: sent by someone
+// else (VIA terminate) the delegate answered NSTerminateLater: all of it
+// happens inside AppKit's wait (the dispatcher runs the safe point), and the
+// answer goes through one replyToApplicationShouldTerminate:. For the quit
+// Apple event the app's loop runs on, the event is suspended and resumed
+// with the answer, and terminate: follows, answered "now".
 func TestQuitDeferredWithSheets(t *testing.T) {
-	t.Parallel()
-	r := child(t, "delayed", 60*time.Second)
-	if r.code != 0 || r.get("terminated") != "1" || r.get("worker") != "5/5" || r.get("report_during") != "true" ||
-		r.get("save_open") != "true" || r.get("save_answer") != "1000" || r.get("last") != "later" || r.get("ours") != "1" || r.get("replies") != "1" || r.int("waited_ms") < 2000 {
-		t.Fatalf("exit %d, results %v\n%s", r.code, r.kv, r.out)
+	for _, via := range []string{"aevt", "terminate"} {
+		t.Run(via, func(t *testing.T) {
+			t.Parallel()
+			r := child(t, "delayed", 60*time.Second, "VIA="+via)
+			last, reply := "now", "0"
+			if via == "terminate" {
+				last, reply = "later", "1" // no quit event answered
+			}
+			if r.code != 0 || r.get("terminated") != "1" || r.get("worker") != "5/5" || r.get("report_during") != "true" ||
+				r.get("save_open") != "true" || r.get("save_answer") != "1000" || r.get("last") != last || r.get("quit_reply") != reply ||
+				r.get("ours") != "1" || r.get("replies") != "1" || r.int("waited_ms") < 2000 {
+				t.Fatalf("exit %d, results %v\n%s", r.code, r.kv, r.out)
+			}
+			t.Logf("%v", r.kv)
+		})
 	}
-	t.Logf("%v", r.kv)
 }
 
 // A handler that never answers: with no deadline the app still runs and

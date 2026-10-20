@@ -464,7 +464,9 @@ func (a *App) loop() error {
 		if a.bench != nil && now > a.bench.deadline {
 			return a.benchTimeout(now)
 		}
+		a.pumping = true
 		evs := a.Win.Wait(a.timeout(now))
+		a.pumping = false
 		a.tr.wheelStep = a.UI.WheelStep
 		for i := range evs {
 			a.onEvent(&evs[i])
@@ -488,7 +490,9 @@ func (a *App) loop() error {
 		if draw {
 			a.present(false, 1)
 		}
+		a.pumping = true
 		a.popUpMenus()
+		a.pumping = false
 		if a.demo != nil {
 			a.demo.run(a)
 		}

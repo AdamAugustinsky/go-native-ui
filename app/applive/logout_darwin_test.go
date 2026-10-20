@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"gonativeui/app"
+	"gonativeui/platform"
 )
 
 // The feasibility test "logout behaviour" (phase 6 plan, F3; DECISIONS D37's
@@ -27,20 +28,21 @@ import (
 //  2. In gnuitest's session (its Terminal), hold mode:
 //     GNUI_LOGOUT_TEST=hold GNUI_LOGOUT_LOG=/Users/Shared/logout-hold.log \
 //     /Users/Shared/applive.test -test.run TestLogoutFeasibility -test.v
-//     The app answers the logout's quit request with NSTerminateLater, holds
-//     it 10 s, then allows it. The session must end about 10 s later. (The
+//     The app leaves the logout's quit request unanswered (its quit Apple
+//     event is suspended) for 10 s, then allows it. The session must end about 10 s later. (The
 //     first run may ask to allow Terminal to control "loginwindow": allow it,
 //     then run again.)
 //  3. Back as the admin: GNUI_LOGOUT_VERIFY=hold GNUI_LOGOUT_LOG=/Users/Shared/logout-hold.log \
 //     go test -run TestLogoutVerify ./app/applive
 //     It checks the log: the request came as QuitLogout, the answer was
-//     deferred (later), allowed 10 s on, and the app terminated.
+//     deferred, allowed 10 s on (the suspended event resumed without an
+//     error), and the app terminated.
 //  4. Log in to gnuitest again; cancel mode:
 //     GNUI_LOGOUT_TEST=cancel GNUI_LOGOUT_LOG=/Users/Shared/logout-cancel.log \
 //     /Users/Shared/applive.test -test.run TestLogoutFeasibility -test.v
-//     The app refuses the logout (NSTerminateCancel): the session must stay
+//     The app refuses the logout (userCanceledErr): the session must stay
 //     (the test sees it survive 20 s and passes); 10 s after the refusal the
-//     app quits through terminate: itself, and the logout must not resume
+//     app quits by itself (App.RequestQuit), and the logout must not resume
 //     (the session is still there when the test ends).
 //  5. Remove the user: sudo sysadminctl -deleteUser gnuitest.
 func TestLogoutFeasibility(t *testing.T) {
@@ -81,7 +83,7 @@ func TestLogoutVerify(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := string(b)
-	for _, want := range []string{"reason=3", "last=later", "allowed after_s=10", "terminated"} {
+	for _, want := range []string{"reason=3", "allowed after_s=10 reply=0", "terminated"} {
 		if !strings.Contains(s, want) {
 			t.Fatalf("no %q in the log:\n%s", want, s)
 		}
@@ -110,7 +112,7 @@ func init() {
 				logf("request reason=%d", e.A)
 				if mode == "cancel" {
 					a.ReplyQuit(quitID, false)
-					logf("answer=cancel")
+					logf("answer=cancel reply=%d", platform.LastQuitEventReply())
 					after(10*time.Second, 1)
 				} else {
 					after(10*time.Second, 2)
@@ -119,11 +121,11 @@ func init() {
 				logf("request reason=%d", e.A)
 				a.ReplyQuit(quitID, true)
 			case e.Kind == app.EvPost && e.ID == 1:
-				logf("terminate: again")
+				logf("quit again")
 				a.RequestQuit()
 			case e.Kind == app.EvPost && e.ID == 2:
-				logf("last=%s allowed after_s=%.0f", lastTerminate(), time.Since(t0).Seconds())
 				a.ReplyQuit(quitID, true)
+				logf("allowed after_s=%.0f reply=%d", time.Since(t0).Seconds(), platform.LastQuitEventReply())
 			case e.Kind == app.EvWillTerminate:
 				logf("terminated")
 			default:

@@ -23,9 +23,9 @@ import (
 // events synchronously (class 1). The run-loop source is a version-0
 // CFRunLoopSource on the main run loop in kCFRunLoopCommonModes, so it fires
 // in the default, modal-panel and event-tracking modes: with no window, inside
-// menu tracking, under a sheet, and while a quit answer is pending
-// (NSTerminateLater runs the run loop in NSModalPanelRunLoopMode until
-// replyToApplicationShouldTerminate:). Producers on any thread signal it
+// menu tracking, under a sheet, and while the answer to a foreign terminate:
+// is pending (NSTerminateLater runs the run loop in NSModalPanelRunLoopMode
+// until replyToApplicationShouldTerminate:). Producers on any thread signal it
 // (CFRunLoopSourceSignal and CFRunLoopWakeUp are thread-safe); its perform
 // callback runs DispatchApp on the main thread. Wake goes through it too, so
 // a wake reaches the loop with no window, and is not lost when a native loop
@@ -77,6 +77,13 @@ var (
 	selSessionActive     = objc.Sel("gnuiSessionActive:")
 	selSessionInactive   = objc.Sel("gnuiSessionInactive:")
 	selDockCommand       = objc.Sel("gnuiDockCommand:")
+	selQuitEvent         = objc.Sel("gnuiQuitEvent:withReplyEvent:")
+
+	selSuspendAE    = objc.Sel("suspendCurrentAppleEvent")
+	selReplyForSusp = objc.Sel("replyAppleEventForSuspensionID:")
+	selResumeSusp   = objc.Sel("resumeWithSuspensionID:")
+	selSetParamDesc = objc.Sel("setParamDescriptor:forKeyword:")
+	selDescInt32    = objc.Sel("descriptorWithInt32:")
 )
 
 // Apple event codes (FourCharCode).
@@ -87,6 +94,8 @@ const (
 	aeInternetClass = 0x4755524C // 'GURL'
 	aeGetURL        = 0x4755524C // 'GURL'
 	aeDirectObject  = 0x2D2D2D2D // '----'
+	aeErrorNumber   = 0x6572726E // 'errn' (keyErrorNumber)
+	userCanceledErr = -128       // the reply that refuses a quit (and cancels a logout)
 )
 
 // NSApplicationTerminateReply.
@@ -112,9 +121,12 @@ var appObj struct {
 
 	reason QuitReason // the reason of a terminate: we are sending
 
-	// A quit decided without terminate: (a sheet was open): outside, its
-	// answer is pending; allowed, the next terminate: is answered "now".
+	// A quit decided without terminate: (a quit Apple event, or ⌘Q with a
+	// sheet open): outside, its answer is pending; allowed, the next
+	// terminate: is answered "now". quitSusp is the suspended quit Apple
+	// event that waits for that answer (0: none).
 	quitOutside, quitAllowed bool
+	quitSusp                 uintptr
 	woke                     bool // a wake arrived since WaitApp last reported one
 
 	scratch [4][]byte // the data of synchronous events, by nesting depth
@@ -253,6 +265,7 @@ func registerAppDelegate() {
 	d.Method(selAppLastWindow, "c@:@", func(c *ffi.CB) { c.RetBool(false) }) // the app object decides (KeepRunning)
 	d.Method(selAppSecureRestore, "c@:@", func(c *ffi.CB) { c.RetBool(true) })
 	d.Method(selGetURL, "v@:@@", appGetURL)
+	d.Method(selQuitEvent, "v@:@@", appQuitEvent)
 	d.Method(selWillSleep, "v@:@", func(*ffi.CB) { deliverNow(AppEvWillSleep, 0, 0, 0, nil) })
 	d.Method(selDidWake, "v@:@", func(*ffi.CB) { deliverNow(AppEvDidWake, 0, 0, 0, nil) })
 	d.Method(selSessionActive, "v@:@", func(*ffi.CB) { deliverNow(AppEvSessionActive, 0, 1, 0, nil) })
@@ -269,16 +282,113 @@ func registerAppDelegate() {
 	appDelegateClass = d.Register()
 }
 
-// appWillFinishLaunching registers the get-URL Apple event handler, before
-// launch completes, so that a launch by URL is not lost.
+// appWillFinishLaunching registers our Apple event handlers, before launch
+// completes (and after AppKit installed its own, which ours replace): get-URL,
+// so that a launch by URL is not lost, and quit (appQuitEvent).
 func appWillFinishLaunching(*ffi.CB) {
 	m := objc.Send(objc.Cls("NSAppleEventManager"), selSharedAEManager)
 	objc.Send4(m, selSetEventHandler, uintptr(appObj.delegate), uintptr(selGetURL), aeInternetClass, aeGetURL)
+	objc.Send4(m, selSetEventHandler, uintptr(appObj.delegate), uintptr(selQuitEvent), aeCoreClass, aeQuit)
 }
 
-// appShouldTerminate is the quit policy: the request is delivered at once
-// (class 1); an answer given meanwhile is returned directly, and only without
-// one is the answer deferred (NSTerminateLater, then ReplyQuit sends it).
+// appQuitEvent is our handler of the quit Apple event (kAEQuitApplication):
+// the Dock's Quit, another app's, a logout, restart or shutdown (which carry
+// kAEQuitReason: QuitLogout). AppKit's own handler sends terminate:, which
+// ends every open sheet before it asks anything, an alert with its first
+// button: a quit would press an alert's default (perhaps destructive) action.
+// So a quit event takes ⌘Q's way with a sheet open: the policy is asked
+// without terminate:, sheets stay up while the answer is pending, and
+// terminate: is sent only once the quit is allowed, after ending the sheets
+// as cancelled (sendTerminate). The Apple event gets AppKit's answers: an
+// allowed quit ends the process; a refused one replies userCanceledErr,
+// which cancels a logout; a deferred one is suspended and resumed with the
+// app's answer (osReplyQuit).
+func appQuitEvent(c *ffi.CB) {
+	reply := objc.ID(c.Int(3))
+	reason := quitEventReason(objc.ID(c.Int(2)))
+	switch {
+	case dispatch.held:
+		// A native loop entered from Build: asked after the frame, and this
+		// event is refused (the answer cannot wait inside the frame).
+		deferQuit(reason)
+		refuseQuitEvent(reply)
+	case quitState.phase != quitIdle: // a quit is already being decided
+		refuseQuitEvent(reply)
+	case dispatch.sink == nil:
+		// No application object (a window opened with Open alone): the
+		// window's owner decides, as with its close button.
+		if w := theWindow.Load(); w != nil {
+			w.q.push(Event{Kind: EvClose, Time: Now()})
+			refuseQuitEvent(reply)
+			return
+		}
+		allowTerminate(reason)
+	default:
+		switch beginQuit(reason) {
+		case 0:
+			appObj.quitOutside = true
+			appObj.quitSusp = uintptr(objc.Send(aeManager(), selSuspendAE))
+		case 1:
+			allowTerminate(reason) // the process ends here
+		default:
+			refuseQuitEvent(reply)
+		}
+	}
+}
+
+func aeManager() objc.ID { return objc.Send(objc.Cls("NSAppleEventManager"), selSharedAEManager) }
+
+// quitEventReason is a quit Apple event's reason: QuitLogout when it carries
+// kAEQuitReason (logout, restart, shutdown), QuitDock otherwise.
+func quitEventReason(ev objc.ID) QuitReason {
+	if why := objc.Send1(ev, selAttrDescriptor, aeQuitReason); why != 0 && uint32(objc.Send(why, selEnumCodeValue)) != 0 {
+		return QuitLogout
+	}
+	return QuitDock
+}
+
+// refuseQuitEvent puts userCanceledErr in a quit Apple event's reply: the
+// sender (loginwindow for a logout) learns that the app refused.
+func refuseQuitEvent(reply objc.ID) {
+	if reply != 0 {
+		objc.Send2(reply, selSetParamDesc, uintptr(objc.Send1(clsAEDesc(), selDescInt32, 0xFFFFFF80 /* userCanceledErr as an SInt32 */)), aeErrorNumber)
+	}
+	lastQuitEventReply = userCanceledErr
+}
+
+func clsAEDesc() objc.ID { return objc.Cls("NSAppleEventDescriptor") }
+
+// resumeQuitEvent answers the suspended quit Apple event, if any: refused, its
+// reply carries userCanceledErr.
+func resumeQuitEvent(allow bool) {
+	id := appObj.quitSusp
+	if id == 0 {
+		return
+	}
+	appObj.quitSusp = 0
+	m := aeManager()
+	if allow {
+		lastQuitEventReply = 0
+	} else {
+		refuseQuitEvent(objc.Send1(m, selReplyForSusp, id))
+	}
+	objc.Send1(m, selResumeSusp, id)
+}
+
+// lastQuitEventReply is the error the last answered quit Apple event got: 0
+// none (allowed), userCanceledErr refused; 1 before any.
+var lastQuitEventReply = 1
+
+// LastQuitEventReply is the error number put in the reply of the last quit
+// Apple event the app answered: 0 when allowed, -128 (userCanceledErr) when
+// refused, 1 before any (tests).
+func LastQuitEventReply() int { return lastQuitEventReply }
+
+// appShouldTerminate is the quit policy for a terminate: the app did not
+// send itself (its own routes and the quit Apple event decide without it and
+// send it allowed: answered "now"): the request is delivered at once (class
+// 1); an answer given meanwhile is returned directly, and only without one is
+// the answer deferred (NSTerminateLater, then ReplyQuit sends it).
 func appShouldTerminate(c *ffi.CB) {
 	r := shouldTerminate()
 	lastShouldTerminate = r
@@ -528,25 +638,27 @@ func appNextEvent(until objc.ID) objc.ID {
 	return objc.Send4(appObj.app, selNextEvent, ^uintptr(0), uintptr(until), uintptr(defaultMode), 1)
 }
 
-// Terminate asks AppKit to terminate the app for reason, which runs the quit
-// policy (applicationShouldTerminate:). Main thread, from the app's loop:
-// never from inside the dispatcher or a Build, since an answer the app
-// defers runs AppKit's modal wait inside this call. Nothing happens while a
-// quit request is already being decided. With an allowed quit, AppKit ends
-// the process after AppEvWillTerminate.
+// Terminate asks the app to quit for reason through the quit policy
+// (AppEvQuitRequested), as ⌘Q does. Main thread, from the app's loop: never
+// from inside the dispatcher or a Build. Nothing happens while a quit request
+// is already being decided. With an allowed quit, AppKit ends the process
+// after AppEvWillTerminate.
 func Terminate(reason QuitReason) { sendTerminate(reason, 0) }
 
 // requestTerminate is the menu's Quit (gnuiQuit:): the quit policy, as for
 // AppKit's own Quit item.
 func requestTerminate(sender objc.ID) { sendTerminate(QuitMenu, sender) }
 
-// sendTerminate sends terminate: as reason. AppKit's terminate: ends the
-// sheets attached to windows before it asks the delegate, even when the quit
-// is then refused (observed on macOS 26 with an alert sheet; with a plain
-// window as the sheet it returns without asking at all). So while a sheet is
-// open the policy is asked here, without terminate:, and terminate: is sent
-// only once the quit is allowed, after ending the sheets. A quit Apple event
-// (the Dock, a logout) reaches terminate: directly and ends them anyway.
+// sendTerminate is the app's own quit routes (⌘Q, Terminate): the policy is
+// asked here, without terminate:, and terminate: is sent only once the quit
+// is allowed, after ending the open sheets as cancelled. AppKit's terminate:
+// would end every sheet before it asks the delegate, even when the quit is
+// then refused, an alert with its first button (observed on macOS 26; with a
+// plain window as the sheet it returns without asking at all); and its
+// "later" answer runs a wait of AppKit's own, nested in the app's loop. The
+// quit Apple event (the Dock, a logout) takes the same way (appQuitEvent).
+// Only a terminate: someone else sends reaches the delegate's policy
+// (shouldTerminate).
 func sendTerminate(reason QuitReason, sender objc.ID) {
 	if quitState.phase != quitIdle || !appObj.started {
 		return
@@ -555,14 +667,13 @@ func sendTerminate(reason QuitReason, sender objc.ID) {
 		deferQuit(reason)
 		return
 	}
-	pool := objc.F.Call0(objc.PoolPush)
-	defer objc.F.Call1(objc.PoolPop, pool)
-	if appObj.quitAllowed {
-		endSheets()
-	} else if sheetAttached() {
+	if !appObj.quitAllowed {
 		quitWithoutTerminate(reason)
 		return
 	}
+	pool := objc.F.Call0(objc.PoolPush)
+	defer objc.F.Call1(objc.PoolPop, pool)
+	endSheets()
 	appObj.reason = reason
 	objc.Send1(appObj.app, selTerminate, uintptr(sender))
 	appObj.reason = 0
@@ -570,33 +681,32 @@ func sendTerminate(reason QuitReason, sender objc.ID) {
 }
 
 // quitWithoutTerminate asks the quit policy what terminate: would ask
-// (sendTerminate): allowed, terminate: follows at once; deferred, it follows
-// the app's allowing answer (osReplyQuit).
+// (sendTerminate): allowed, terminate: follows at once (allowTerminate);
+// deferred, it follows the app's allowing answer (osReplyQuit).
 func quitWithoutTerminate(reason QuitReason) {
 	if dispatch.sink == nil {
+		// No application object (a window opened with Open alone): the
+		// window's owner decides, as with its close button.
 		if w := theWindow.Load(); w != nil {
 			w.q.push(Event{Kind: EvClose, Time: Now()})
+			return
 		}
+		allowTerminate(reason)
 		return
 	}
 	switch beginQuit(reason) {
 	case 0:
 		appObj.quitOutside = true
 	case 1:
-		appObj.quitAllowed = true
-		sendTerminate(reason, 0)
+		allowTerminate(reason)
 	}
 }
 
-// sheetAttached reports whether a window of the app has a sheet attached.
-func sheetAttached() bool {
-	wins := objc.Send(appObj.app, selAppWindows)
-	for i, n := 0, int(objc.Send(wins, selURLCount)); i < n; i++ {
-		if objc.Send(objc.Send1(wins, selURLAt, uintptr(i)), selAttachedSheet) != 0 {
-			return true
-		}
-	}
-	return false
+// allowTerminate sends terminate: for a quit that was allowed: answered
+// "now", it ends the process after AppEvWillTerminate.
+func allowTerminate(reason QuitReason) {
+	appObj.quitAllowed = true
+	sendTerminate(reason, 0)
 }
 
 // endSheets ends the sheets attached to the app's windows, as cancelled
@@ -614,6 +724,7 @@ func endSheets() {
 func osReplyQuit(allow bool) {
 	if appObj.quitOutside { // no terminate: is waiting for the answer
 		appObj.quitOutside = false
+		resumeQuitEvent(allow)
 		if allow {
 			// terminate: is sent from the app's loop (TakeQuitRequest), not
 			// from inside the handler that answered.
@@ -720,5 +831,10 @@ func BundleID() string {
 // the app's loop is suspended and the frame handler draws. Main thread.
 func NativeLoop() bool {
 	w := theWindow.Load()
-	return QuitPending() || menuTracking() || (w != nil && w.live)
+	return quitWaitNative() || menuTracking() || (w != nil && w.live)
 }
+
+// quitWaitNative reports whether AppKit runs its own loop waiting for a quit
+// answer (NSTerminateLater): not for a quit decided without terminate:,
+// during which the app's loop runs on.
+func quitWaitNative() bool { return QuitPending() && !appObj.quitOutside }
