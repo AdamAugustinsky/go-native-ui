@@ -297,11 +297,7 @@ func Open(o Options) (*Window, error) {
 	}
 	nOpenStages = 0
 	markOpen("start")
-	if pSetDpiAwarenessCtx == 0 || !win32.Bool(win32.Call(pSetDpiAwarenessCtx, ^uintptr(3))) { // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4
-		if pSetProcessDPIAware != 0 {
-			win32.Call(pSetProcessDPIAware)
-		}
-	}
+	setDPIAwareness()
 
 	title, err := syscall.UTF16PtrFromString(o.Title)
 	if err != nil {
