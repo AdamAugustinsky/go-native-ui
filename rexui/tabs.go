@@ -34,16 +34,6 @@ import (
 // MaxTabs is the most tabs a TabBar handles; tabs past it are not shown.
 const MaxTabs = 64
 
-// Glyph is an optional symbol: the zero value is none, Sym(id) is the icon
-// id of the kit's atlas.
-type Glyph uint16
-
-// Sym is the Glyph of icon id.
-func Sym(id icon.ID) Glyph { return Glyph(id) + 1 }
-
-// ID is the icon of g, and whether there is one.
-func (g Glyph) ID() (icon.ID, bool) { return icon.ID(g - 1), g != 0 }
-
 // Tab is one tab, as the app describes it every frame.
 type Tab struct {
 	// ID is the tab's stable identity, unique in the bar and not 0: the
@@ -78,27 +68,6 @@ const (
 	// NumTabsVariants is the number of variants.
 	NumTabsVariants
 )
-
-// Pair is a recipe colour that no role names (Rex's identity colours): a
-// light and a dark 0xRRGGBB colour with an alpha in each, mixed by the
-// theme's light/dark mix.
-type Pair struct {
-	// Light and Dark are the colours (0xRRGGBB).
-	Light, Dark uint32
-	// Alpha is the opacity in light and in dark.
-	Alpha [2]float32
-}
-
-// Solid is the opaque Pair of light and dark (0xRRGGBB).
-func Solid(light, dark uint32) Pair { return Pair{light, dark, [2]float32{1, 1}} }
-
-// PairA is the Pair of light and dark (0xRRGGBB) at alphas la and da.
-func PairA(light, dark uint32, la, da float32) Pair { return Pair{light, dark, [2]float32{la, da}} }
-
-// At is the colour at the light/dark mix t (0 light, 1 dark), 0xRRGGBBAA.
-func (p Pair) At(t float32) uint32 {
-	return theme.ColA(theme.MixRGB(p.Light, p.Dark, t), theme.Lerp(p.Alpha[0], p.Alpha[1], t))
-}
 
 // scaled is p at mix t with both its alphas scaled by a.
 func scaled(p Pair, a, t float32) uint32 {
@@ -255,8 +224,10 @@ type TabsOpts struct {
 	// Fill makes the tabs share all of X0..X1, however wide that makes them.
 	Fill bool
 	// Focusable makes the bar a tab stop (in content): the chosen tab takes
-	// the focus, the arrow keys move the choice. In a titlebar the tabs do
-	// not take the keyboard, as AppKit's window tabs do not.
+	// the focus, and while it has it the arrow keys and ⌃Tab move the
+	// choice; ⌘1…⌘9 stay the window's tabs'. In a titlebar the tabs do not
+	// take the focus, as AppKit's window tabs do not, and take the window's
+	// tab shortcuts whatever has the focus.
 	Focusable bool
 	// NoDrag keeps the tabs in place.
 	NoDrag bool
@@ -372,6 +343,9 @@ func (b *TabBar) Update(k *base.Kit, tabs []Tab, sel int) TabsEvents {
 		s := c.PeekSignal(b.TabKey(id))
 		if s.Pressed || s.Action&ui.ActPress != 0 {
 			ev.Select = i
+			if b.focusable && s.Pressed { // the pressed tab takes the focus, as a pressed control does
+				c.SetFocus(b.TabKey(id))
+			}
 			b.press, b.pressAt, b.dragging = id, [2]float32{in.MouseX, in.MouseY}, false
 			if i < b.n && b.ids[i] == id {
 				b.grab = in.MouseX - b.rects[i][0]
@@ -424,18 +398,23 @@ func (b *TabBar) Update(k *base.Kit, tabs []Tab, sel int) TabsEvents {
 		b.scroll -= d
 	}
 
-	// the keys
-	next := 0
-	switch {
-	case c.TakeKey(ui.KeyTab, ui.ModCtrl), c.TakeKey(ui.KeyRightBracket, prim|ui.ModShift):
-		next = 1
-	case c.TakeKey(ui.KeyTab, ui.ModCtrl|ui.ModShift), c.TakeKey(ui.KeyLeftBracket, prim|ui.ModShift):
-		next = -1
+	// the keys: a window's tabs (in the titlebar) take the window's tab
+	// shortcuts; tabs in content take them, and the arrows, while they hold
+	// the focus
+	focused := b.focusable && sel >= 0 && sel < n && c.FocusKey() == b.TabKey(tabs[sel].ID)
+	if !b.focusable || focused {
+		next := 0
+		switch {
+		case c.TakeKey(ui.KeyTab, ui.ModCtrl), c.TakeKey(ui.KeyRightBracket, prim|ui.ModShift):
+			next = 1
+		case c.TakeKey(ui.KeyTab, ui.ModCtrl|ui.ModShift), c.TakeKey(ui.KeyLeftBracket, prim|ui.ModShift):
+			next = -1
+		}
+		if next != 0 && n > 1 {
+			ev.Select = (sel + next + n) % n
+		}
 	}
-	if next != 0 && n > 1 {
-		ev.Select = (sel + next + n) % n
-	}
-	for d := 0; d < 9; d++ {
+	for d := 0; d < 9 && !b.focusable; d++ {
 		fired := b.Commands[0] != 0 && k.Command(b.Commands[d])
 		if fired || c.TakeKey(ui.KeyCode('1'+d), prim) {
 			if d == 8 {
@@ -445,7 +424,7 @@ func (b *TabBar) Update(k *base.Kit, tabs []Tab, sel int) TabsEvents {
 			}
 		}
 	}
-	if b.focusable && n > 1 && sel >= 0 && sel < n && c.FocusKey() == b.TabKey(tabs[sel].ID) {
+	if focused && n > 1 {
 		switch {
 		case c.TakeKey(ui.KeyRight, 0):
 			ev.Select = (sel + 1) % n
@@ -519,7 +498,7 @@ type TabsBuild struct {
 	kw    float32 // the window's key state, animated
 	tabY0 float32 // the tabs' top and bottom in the parent, snapped
 	tabY1 float32
-	top   float32 // the tabs' top in the parent, unsnapped
+	top   float32          // the tabs' top in the parent, unsnapped
 	pos   [MaxTabs]float32 // each tab's x in the parent, unsnapped
 	act   [MaxTabs]float32
 	hot   [MaxTabs]float32
