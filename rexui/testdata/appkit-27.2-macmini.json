@@ -18,7 +18,7 @@
 			"version": "27.2"
 		},
 		"model": "Mac16,10",
-		"scrollerStyle": "overlay"
+		"scrollerStyle": "legacy"
 	},
 	"source": "tools/appkitref/measure -ref macmini-blue (AppKitRef, Version 27.2 (Build 26B5101f))",
 	"scale": 2,

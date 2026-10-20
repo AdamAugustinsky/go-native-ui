@@ -18,6 +18,6 @@
       "version" : "27.2"
     },
     "model" : "Mac16,10",
-    "scrollerStyle" : "overlay"
+    "scrollerStyle" : "legacy"
   }
 }

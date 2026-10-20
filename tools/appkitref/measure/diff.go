@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	"math"
@@ -40,7 +41,6 @@ func diffSets(a, b string) error {
 		{"Recipe measurements (rexui/testdata/appkit-27.2.json)", appkitref.File(a, "rexui/testdata/appkit-27.2.json"), appkitref.File(b, "rexui/testdata/appkit-27.2.json")},
 		{"NSScroller geometry (theme/testdata/appkit-scroller-27.2.json)", appkitref.File(a, "theme/testdata/appkit-scroller-27.2.json"), appkitref.File(b, "theme/testdata/appkit-scroller-27.2.json")},
 		{"AppKitRef metrics.json (default accent)", appkitref.Metrics(a), appkitref.Metrics(b)},
-		{"appkitscenes measured.json", filepath.Join(appkitref.Scenes(a), "measured.json"), filepath.Join(appkitref.Scenes(b), "measured.json")},
 	}
 	for _, f := range files {
 		ja, err := readTree(f.a)
@@ -57,6 +57,9 @@ func diffSets(a, b string) error {
 		d.walk("", ja, jb)
 		d.report(&w, f.title)
 	}
+	scenesReport(&w, "appkitscenes dumps", appkitref.Scenes(a), appkitref.Scenes(b))
+	// the mini's windows have legacy scrollers (a mouse); its overlay run is the like-for-like one
+	scenesReport(&w, "appkitscenes dumps, "+b+" with overlay scrollers", appkitref.Scenes(a), appkitref.Scenes(b)+"-overlay")
 	pixelReport(&w, a, b)
 	fmt.Print(w.String())
 	return nil
@@ -320,4 +323,79 @@ func readPNG(path string) (image.Image, error) {
 	defer f.Close()
 	img, _, err := image.Decode(f)
 	return img, err
+}
+
+// scenesReport compares the geometry the appkitscenes dumps record (window,
+// split items, toolbar items, tables, system colours) capture by capture. The
+// window's position, number and the toolbar items' identifiers are where and
+// when, not what.
+func scenesReport(w *strings.Builder, title, da, db string) {
+	ents, err := os.ReadDir(da)
+	if err != nil {
+		fmt.Fprintf(w, "## %s\n\nskipped: %v\n\n", title, err)
+		return
+	}
+	var d treeDiff
+	n := 0
+	for _, e := range ents {
+		name := e.Name()
+		if !strings.HasSuffix(name, ".json") || strings.HasSuffix(name, ".shot.json") || name == "measured.json" {
+			continue
+		}
+		ja, err1 := readTree(filepath.Join(da, name))
+		jb, err2 := readTree(filepath.Join(db, name))
+		if errors.Is(err2, os.ErrNotExist) { // a variant the other run did not take
+			continue
+		}
+		if err1 != nil || err2 != nil {
+			fmt.Fprintf(w, "## %s\n\nskipped: %s: %v %v\n\n", title, name, err1, err2)
+			return
+		}
+		n++
+		ma, _ := ja.(map[string]any)
+		mb, _ := jb.(map[string]any)
+		for _, k := range []string{"window", "splitItems", "toolbarItems", "tables", "colors"} {
+			if v, ok := ma[k]; ok {
+				d.walk("/"+strings.TrimSuffix(name, ".json")+"/"+k, scrub(k, v), scrub(k, mb[k]))
+			}
+		}
+	}
+	d.report(w, fmt.Sprintf("%s (%d captures)", title, n))
+}
+
+// scrub drops where and when from a dump's subtree: the window's position and
+// number, and the toolbar items' UUIDs.
+func scrub(key string, v any) any {
+	switch key {
+	case "window":
+		if m, ok := v.(map[string]any); ok {
+			c := map[string]any{}
+			for k, x := range m {
+				c[k] = x
+			}
+			delete(c, "windowNumber")
+			if f, ok := c["frame"].(map[string]any); ok {
+				c["frame"] = map[string]any{"w": f["w"], "h": f["h"]}
+			}
+			return c
+		}
+	case "toolbarItems":
+		if l, ok := v.([]any); ok {
+			out := make([]any, len(l))
+			for i, x := range l {
+				if m, ok := x.(map[string]any); ok {
+					c := map[string]any{}
+					for k, y := range m {
+						if k != "subitems" {
+							c[k] = y
+						}
+					}
+					x = c
+				}
+				out[i] = x
+			}
+			return out
+		}
+	}
+	return v
 }

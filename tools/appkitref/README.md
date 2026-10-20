@@ -73,6 +73,8 @@ Which one a comparison reads is decided in one place, `internal/appkitref`:
 - **Live comparisons and the dev tools** use the same variable, else the set whose machine is this host's (model and macOS build), else the MacBook's. `measure -set` prints the choice and the files; `measure -ref auto`, `ours -ref auto` and `gallery -ref auto` read that set's `metrics.json`.
 - **Recording** never falls back: `measure -set-name` (used by `scroll.sh`) names the host's own set, or fails on an unknown machine unless the variable is set, so a new machine cannot write over another's files.
 
+The scroller style is the system's, as a running app sees it. The Mac mini has a mouse, so its style is legacy and D0's live windows have 17 pt scroll bars; the MacBook's trackpad gives overlay. The mini's `appkitscenes` were captured both ways (`captures-macmini`, and `captures-macmini-overlay` with `EXTRA="-AppleShowScrollBars WhenScrolling"`), the second being the like-for-like set against the MacBook's.
+
 `measure -diff macbook macmini` (from the repository root) lists what differs between the sets, biggest first: `docs/design/appkit-macbook-vs-macmini.md`. `unlocked.sh` exits 3 when the screen is locked; `live.sh` and the live runs start with it, and run under `caffeinate -d`.
 
 ## What offscreen rendering cannot show

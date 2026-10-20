@@ -1991,7 +1991,6 @@ int main(int argc, const char **argv) {
 			@"renderScale" : @2,
 			@"keyWindowSimulated" : @"ARWindow/ARApp report key, main and active; samples marked 'inactive' report not",
 		};
-		metricsOut[@"machine"] = machineInfo();
 		metricsOut[@"behaviour"] = behaviourTable();
 		metricsOut[@"fonts"] = fontTable();
 		metricsOut[@"colors"] = colorTable();
@@ -2036,6 +2035,7 @@ int main(int argc, const char **argv) {
 			savePNG(flowSheet(title, cells, bg, fg, fg2, 1500), [NSString stringWithFormat:@"%@/contact-%@.png", outDir, apShort]);
 		}
 		metricsOut[@"controls"] = controls;
+		metricsOut[@"machine"] = machineInfo(); // after the renders: it spins the run loop (machine.h)
 		NSData *js = [NSJSONSerialization dataWithJSONObject:metricsOut options:NSJSONWritingPrettyPrinted | NSJSONWritingSortedKeys error:nil];
 		[js writeToFile:[outDir stringByAppendingPathComponent:@"metrics.json"] atomically:YES];
 		printf("%lu samples x 2 appearances -> %s\n", (unsigned long)samples.count, outDir.UTF8String);

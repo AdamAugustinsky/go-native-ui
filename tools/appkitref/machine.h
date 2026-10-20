@@ -9,7 +9,10 @@
 //	appearance       the system's light or dark mode (global default, not this process's)
 //	accent           the system's accent colour; accentRendered is what this process saw
 //	                 (differs when -AppleAccentColor is on the command line)
-//	scrollerStyle    NSScroller.preferredScrollerStyle
+//	scrollerStyle    NSScroller.preferredScrollerStyle, as the system has it: a fresh process
+//	                 says overlay until its run loop has heard from the input devices
+//	                 (a mouse makes it legacy), so machineInfo reads it once and spins the run loop.
+//	                 That changes the style new scroll views take: call it after rendering.
 //	date             the day of the run (local)
 #import <AppKit/AppKit.h>
 #include <sys/sysctl.h>
@@ -40,6 +43,9 @@ static NSString *mcAccentName(id v) {
 }
 
 static NSDictionary *machineInfo(void) {
+	(void)NSScroller.preferredScrollerStyle; // the first read starts the system's query; the answer comes by the run loop
+	for (int i = 0; i < 50; i++) // 0.5 s
+		[NSRunLoop.currentRunLoop runMode:NSDefaultRunLoopMode beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.01]];
 	NSScreen *scr = NSScreen.mainScreen ?: NSScreen.screens.firstObject;
 	NSMutableDictionary *disp = [NSMutableDictionary dictionary];
 	if (scr) {
