@@ -2,6 +2,7 @@ package platform
 
 import (
 	"math/rand"
+	"runtime"
 	"testing"
 )
 
@@ -227,5 +228,38 @@ func TestFlattenOverBudgetKeepsHoles(t *testing.T) {
 		if overlaps(r.Rect, hole) {
 			t.Fatalf("piece %v over the hole %v", r, hole)
 		}
+	}
+}
+
+// A region list that grows a little from one frame to the next does not
+// allocate each time: the storage it is copied into keeps room to grow
+// (vlistbench's gate caught the cursor list growing by a few entries in a
+// measured window).
+func TestRegionListsGrowWithRoom(t *testing.T) {
+	const n = 100
+	curs := make([]CursorRegion, n+n/2)
+	holes := make([][4]float32, n+n/2)
+	drags := make([]DragRegion, n+n/2)
+	tips := make([]TooltipRegion, n+n/2)
+	for i := range curs {
+		curs[i].Rect = [4]float32{float32(i), 0, float32(i + 1), 1}
+		holes[i], drags[i].Rect, tips[i].Rect = curs[i].Rect, curs[i].Rect, curs[i].Rect
+	}
+	var m cursorMap
+	var d dragMap
+	var tm tooltipMap
+	m.setRegions(curs[:n])
+	m.setHoles(holes[:n])
+	d.set(drags[:n])
+	tm.set(tips[:n])
+	var m0, m1 runtime.MemStats
+	runtime.ReadMemStats(&m0)
+	m.setRegions(curs)
+	m.setHoles(holes)
+	d.set(drags)
+	tm.set(tips)
+	runtime.ReadMemStats(&m1)
+	if a := m1.Mallocs - m0.Mallocs; a != 0 {
+		t.Errorf("lists grown from %d to %d entries allocated %d times", n, n+n/2, a)
 	}
 }
