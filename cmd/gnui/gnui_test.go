@@ -525,6 +525,12 @@ func TestHdiutilRetriesOnlyABusyService(t *testing.T) {
 	if out, err := hdiutil("verify", "x.dmg"); err != nil || out != "ok" || calls != 3 {
 		t.Errorf("busy twice: %q %v after %d calls, want ok after 3", out, err, calls)
 	}
+	// EBUSY: XProtect holding a new image (CI, on a create).
+	calls = 0
+	busy = errors.New("hdiutil create -ov x.dmg: hdiutil: create failed - Resource busy")
+	if out, err := hdiutil("create", "-ov", "x.dmg"); err != nil || out != "ok" || calls != 3 {
+		t.Errorf("EBUSY twice: %q %v after %d calls, want ok after 3", out, err, calls)
+	}
 	calls = 0
 	hdiutilRun = func(string, ...string) (string, error) {
 		calls++

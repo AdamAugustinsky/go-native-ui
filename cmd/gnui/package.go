@@ -363,20 +363,29 @@ func cmdSign(args []string, stdout, stderr io.Writer) error {
 	return nil
 }
 
-// hdiutil runs hdiutil, and again while it fails with EAGAIN ("Resource
-// temporarily unavailable": the disk image service is busy with another
-// image; CI saw it on a verify), up to 4 more times 0.5, 1, 2 and 4 s apart.
-// Any other failure is returned at once.
+// hdiutil runs hdiutil, and again while it fails because something holds
+// the image for a moment, up to 7 more times 0.5, 1, 2, then 4 s apart (about
+// 20 s): EAGAIN ("Resource temporarily unavailable": the disk image service
+// is busy with another image; CI saw it on a verify) and EBUSY ("Resource
+// busy", error 49168: XProtect's behavior service locks a new image while it
+// looks at it; CI saw it on a create, and actions/runner-images#7522 has it
+// on every macOS since 13, with a retry as the cure). Any other failure is
+// returned at once.
 func hdiutil(args ...string) (string, error) {
 	wait := 500 * time.Millisecond
 	for try := 0; ; try++ {
 		out, err := hdiutilRun("hdiutil", args...)
-		if err == nil || try == 4 || !strings.Contains(err.Error(), "Resource temporarily unavailable") {
+		if err == nil || try == 7 || !hdiutilBusy(err) {
 			return out, err
 		}
 		time.Sleep(wait)
-		wait *= 2
+		wait = min(2*wait, 4*time.Second)
 	}
+}
+
+func hdiutilBusy(err error) bool {
+	m := err.Error()
+	return strings.Contains(m, "Resource temporarily unavailable") || strings.Contains(m, "Resource busy")
 }
 
 // hdiutilRun runs the tool (a test replaces it).
