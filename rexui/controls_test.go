@@ -405,6 +405,36 @@ func TestLoopingMotionAsksForFramesOnlyWhileRunning(t *testing.T) {
 	}
 }
 
+// A spinner and an indeterminate bar that a flow's MaxLines hides (their
+// rectangles are empty, as before their first layout) ask for no frames;
+// the same in the flow's first line run.
+func TestLoopingMotionHiddenInAFlowAsksNoFrames(t *testing.T) {
+	for _, hidden := range []bool{true, false} {
+		g := newRig(t, theme.Light, nil, func(g *rig) {
+			c := g.c
+			c.NextSize(ui.Px(300), ui.Children(0))
+			c.BeginFlow("flow", ui.FlowOpts{GapX: 6, GapY: 6, MaxLines: 1})
+			if hidden { // a full line before them
+				c.NextSize(ui.Px(300), ui.Px(20))
+				c.Box(0, "wide")
+			}
+			rexui.Spinner(g.k, "Spinner", rexui.SpinnerOpts{})
+			g.k.NextWidth(g.k.Fixed(100))
+			rexui.ProgressBar(g.k, "Bar", -1, rexui.ProgressOpts{})
+			c.EndFlow()
+		})
+		g.k.ReduceMotion = false
+		g.frames(3)
+		f, w := asked(g)
+		if hidden && (f || w != 0) {
+			t.Fatalf("hidden by MaxLines: animating %v, wake %d, want neither", f, w)
+		}
+		if !hidden && (!f || w == 0) {
+			t.Fatalf("in the flow's first line: animating %v, wake %d, want both", f, w)
+		}
+	}
+}
+
 // The spinner steps once per eighth of its period and is the same a period
 // later; the bar's segment moves with the clock.
 func TestSpinnerSteps(t *testing.T) {

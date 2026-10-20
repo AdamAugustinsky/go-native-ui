@@ -109,7 +109,7 @@ func ProgressBar(k *base.Kit, label string, frac float32, o ProgressOpts) ui.ID 
 			phase = o.Phase
 		case !reduced(k):
 			phase = cycle(k, int64(rc.Period*1e9))
-			if loops(k, c.Rect(root)) {
+			if loops(k, root) {
 				c.RequestFrame()
 			}
 		}

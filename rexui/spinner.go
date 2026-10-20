@@ -95,7 +95,7 @@ func Spinner(k *base.Kit, label string, o SpinnerOpts) ui.ID {
 		step = o.Step
 	case !reduced(k):
 		step = int(cycle(k, period) * spokes)
-		if loops(k, c.Rect(root)) {
+		if loops(k, root) {
 			c.WakeIn(untilNext(k, period, spokes))
 		}
 	}

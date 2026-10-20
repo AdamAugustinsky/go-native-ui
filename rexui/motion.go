@@ -18,16 +18,19 @@ func reduced(k *base.Kit) bool {
 	return k.ReduceMotion || k.Theme().Settings.ReduceMotion
 }
 
-// loops reports whether a looping animation in the box whose rectangle (the
-// previous frame's) is r may run now: motion is not reduced, the window is
-// showing (not minimised, hidden or covered: ui.Input.Hidden) and the box is
-// in view. Before the box has been laid out once its rectangle is empty and
-// the answer is yes, so that the frame that lays it out is not the last.
-// A loop that is not running asks for no frames: an idle window draws none.
-func loops(k *base.Kit, r [4]float32) bool {
-	if reduced(k) || k.Context().Input().Hidden {
+// loops reports whether a looping animation in box id may run now: motion is
+// not reduced, the window is showing (not minimised, hidden or covered:
+// ui.Input.Hidden), and the box is in view as the previous frame laid it
+// out, not hidden by a flow's MaxLines. Before the box has been laid out
+// once its rectangle is empty and the answer is yes, so that the frame that
+// lays it out is not the last. A loop that is not running asks for no
+// frames: an idle window draws none.
+func loops(k *base.Kit, id ui.ID) bool {
+	c := k.Context()
+	if reduced(k) || c.Input().Hidden || c.WasHidden(id) {
 		return false
 	}
+	r := c.Rect(id)
 	if r[2] <= r[0] || r[3] <= r[1] {
 		return true
 	}
