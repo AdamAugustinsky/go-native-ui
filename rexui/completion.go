@@ -454,8 +454,15 @@ func (s *completionCmd) FieldCommand(cmd ui.FieldCommand, _ rune) bool {
 // Take says what they did. Call it only while the list is shown, and not while
 // the input method has marked text (the field offers nothing then anyway).
 func (s *CompletionState) Attach(c *ui.Context, n int) {
+	c.NextFieldCommander(s.commander(n), "")
+}
+
+// commander is the state as the ui.FieldCommander of a list of n rows: what
+// Attach registers with a drawn text field, and what the Composer offers the
+// hosted editor's keys (base.FieldCommandOf) to.
+func (s *CompletionState) commander(n int) ui.FieldCommander {
 	s.n = n
-	c.NextFieldCommander((*completionCmd)(s), "")
+	return (*completionCmd)(s)
 }
 
 // Take returns what the commands since the last Take did: the result of the
