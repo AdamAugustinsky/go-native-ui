@@ -147,6 +147,7 @@ type App struct {
 	dlgT     dialogTarget            // the window's dialogs; tests set a fake
 
 	sh shellSync // material and host regions handed to the window (shell.go)
+	ax axBridge  // the accessibility bridge's source (a11y.go)
 
 	wakeAt      int64 // platform.Now at which the UI wants a frame although nothing animates (ui.Context.WakeAfter); 0 = none
 	chromeDark  bool  // the mode last given to Win.SetDarkChrome
@@ -347,6 +348,7 @@ func openWindowed(cfg Config, b Builder, st *StartupReport, nativeMenus bool) (*
 		return nil, err
 	}
 	a.UI.SetNativeMenus(nativeMenus && platform.HasNativeMenus())
+	a.initAX()
 	t4 := platform.Now()
 	st.InitMs = ms(t4 - t3)
 
@@ -515,6 +517,11 @@ func (a *App) onEvent(e *platform.Event) {
 		}
 	case platform.EvDialog:
 		a.onDialog(e)
+	case platform.EvAccessibility:
+		if a.axAction(e) {
+			a.tr.dirty = true
+			a.p.invalidate()
+		}
 	default:
 		var txt []byte
 		if e.Kind == platform.EvText || e.Kind == platform.EvPreedit || e.Kind == platform.EvPaste {

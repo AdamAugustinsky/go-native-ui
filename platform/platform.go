@@ -33,6 +33,8 @@
 //	                                      native alert and file panel sheets (macOS; ErrUnsupported elsewhere); the answer is an EvDialog, see dialog.go
 //	(*Window).SetTooltipRegions(r)        native tooltips by content rectangle (macOS; no-op elsewhere); diffed, cheap to call every frame
 //	(*Window).SetTooltipText(f)           where the tooltip text comes from, asked for on demand when the system shows one
+//	(*Window).SetAXSource(AXSource) error the app's semantic tree for assistive technologies (a11y.go; macOS; ErrAXUnsupported elsewhere)
+//	(*Window).SyncAX()                    after each frame's build: the bridge, once active, diffs the tree and notifies
 //	(*Window).Close()
 //	SetSecureInput(on bool)               macOS: bracket EnableSecureEventInput for a password field (balanced, released while the app is inactive); no-op elsewhere
 //	Clipboard() string                    plain UTF-8 text of the system clipboard; main thread
@@ -131,6 +133,7 @@ const (
 	EvMagnify                 // a pinch: Amount is the change in scale (0.1 = grow by 10 %), Phase its phase (PhaseNone: a device without phases), X, Y where it is; see Gestures
 	EvSmartMagnify            // the two-finger double tap (smart zoom): X, Y where it happened
 	EvRotate                  // a two-finger rotation: Amount in degrees, counterclockwise positive as the user sees it, Phase, X, Y
+	EvAccessibility           // an assistive technology asked for an action: Tag is the node's key, Code the AXAction, Amount its argument (a11y.go)
 )
 
 // Flags qualify an Event.

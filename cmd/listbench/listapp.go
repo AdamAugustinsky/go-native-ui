@@ -172,13 +172,16 @@ func (l *listApp) header(c *ui.Context) {
 	// audit checks that each title is over its column
 	c.NextSize(ui.Pct(1), ui.Pct(1))
 	c.NextRole(ui.RoleColumnHeader)
+	c.NextSemName("Name")
 	c.Box(ui.DrawText, "Name")
 	c.NextSize(ui.Px(c.Pt(90)), ui.Pct(1))
 	c.NextAlign(ui.AlignRight)
 	c.NextRole(ui.RoleColumnHeader)
+	c.NextSemName("Size")
 	c.Box(ui.DrawText, "Size")
 	c.NextSize(ui.Px(c.Pt(150)), ui.Pct(1))
 	c.NextRole(ui.RoleColumnHeader)
+	c.NextSemName("Modified")
 	c.Box(ui.DrawText, "Modified")
 	c.PopTextColor()
 	c.Close()
@@ -214,19 +217,25 @@ func (l *listApp) row(c *ui.Context, listKey ui.Key, row int, rh float32) {
 	c.Close()
 
 	c.NextSize(ui.Pct(1), ui.Pct(1))
+	name := rowName(c, row)
 	c.NextRole(ui.RoleCell)
-	c.BoxKeyed(ui.DrawText|ui.FadeOverflowX, ui.KeyN(c.ParentKey(), 0), rowName(c, row))
+	c.NextSemNameBytes(name) // and so the row's, which reads out by its first named cell
+	c.BoxKeyed(ui.DrawText|ui.FadeOverflowX, ui.KeyN(c.ParentKey(), 0), name)
 
 	c.NextSize(ui.Px(c.Pt(90)), ui.Pct(1))
 	c.NextAlign(ui.AlignRight)
 	c.NextTextColor(dim)
+	size := rowSize(c, row)
 	c.NextRole(ui.RoleCell)
-	c.BoxKeyed(ui.DrawText, ui.KeyN(c.ParentKey(), 1), rowSize(c, row))
+	c.NextSemNameBytes(size)
+	c.BoxKeyed(ui.DrawText, ui.KeyN(c.ParentKey(), 1), size)
 
 	c.NextSize(ui.Px(c.Pt(150)), ui.Pct(1))
 	c.NextTextColor(dim)
+	date := rowDate(c, row)
 	c.NextRole(ui.RoleCell)
-	c.BoxKeyed(ui.DrawText, ui.KeyN(c.ParentKey(), 2), rowDate(c, row))
+	c.NextSemNameBytes(date)
+	c.BoxKeyed(ui.DrawText, ui.KeyN(c.ParentKey(), 2), date)
 	c.Pop()
 }
 

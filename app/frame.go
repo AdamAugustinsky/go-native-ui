@@ -14,9 +14,11 @@ const maxLatencyNs = int64(5e9)
 func (a *App) build(w, h int, dt float32) {
 	a.settle = a.settle || a.resized
 	a.resized = false
+	a.ax.building = true
 	a.UI.Begin(&a.tr.in, w, h, a.scale, dt)
 	a.b.Build(a.UI)
 	a.UI.End(&a.list)
+	a.ax.building = false
 	a.tr.endFrame()
 }
 
@@ -155,6 +157,7 @@ func (a *App) drawFrame(inHandler bool, passes int) bool {
 	}
 	a.syncRegions()
 	a.syncShell()
+	a.syncAX()
 	a.syncText(a.Win, m.start)
 	a.syncChrome(a.Win)
 	if metered {
@@ -194,6 +197,7 @@ func (a *App) abandonFrame(pool uintptr) {
 		return
 	}
 	a.inFrame = false
+	a.ax.building = false // a Build that panicked never reached End
 	abandonSurfaceFrame(a.Surf, &a.fr)
 	framePoolPop(pool)
 }
