@@ -89,13 +89,13 @@ func Spinner(k *base.Kit, label string, o SpinnerOpts) ui.ID {
 	c.NextRole(ui.RoleProgressBar)
 	c.NextSemName(display)
 	k.ApplySize(ui.Px(side), ui.Px(side))
-	root = c.BoxKeyed(0, key, nil)
+	root = c.BoxKeyed(disabledFlag(k), key, nil) // disabled: reported to assistive technologies
 	switch {
 	case o.Still:
 		step = o.Step
 	case !reduced(k):
 		step = int(cycle(k, period) * spokes)
-		if loops(k, c.Rect(root)) {
+		if loops(k, root) {
 			c.WakeIn(untilNext(k, period, spokes))
 		}
 	}

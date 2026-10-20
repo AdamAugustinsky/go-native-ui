@@ -816,3 +816,32 @@ func TestAccessibilityRevealDuringAStretch(t *testing.T) {
 		t.Fatalf("the target shows at %v–%v in a view at %v–%v (offset %v, stretch %v)", b[1], b[3], v[1], v[3], r.y(r.box), r.stretch(r.box))
 	}
 }
+
+// TestGestureNotSeenToBeginIsNotUIs: the moves, end and momentum of a
+// gesture whose Began ui never saw (a hosted native view took it, and AppKit
+// keeps the gesture with it) scroll nothing; a gesture seen from its Began
+// still scrolls, momentum included.
+func TestGestureNotSeenToBeginIsNotUIs(t *testing.T) {
+	r := newGestureRig(t)
+	r.move(50, 50)
+	r.ev(PhaseChanged, PhaseNone, 0, -10)
+	r.step()
+	r.ev(PhaseChanged, PhaseNone, 0, -10)
+	r.ev(PhaseEnded, PhaseNone, 0, 0)
+	r.step()
+	r.ev(PhaseNone, PhaseBegan, 0, -7)
+	r.ev(PhaseNone, PhaseChanged, 0, -5)
+	r.ev(PhaseNone, PhaseEnded, 0, 0)
+	r.step()
+	if y := r.y(r.box); y != 0 {
+		t.Fatalf("a gesture that began elsewhere moved the box to %v", y)
+	}
+	r.ev(PhaseBegan, PhaseNone, 0, -10)
+	r.ev(PhaseEnded, PhaseNone, 0, 0)
+	r.ev(PhaseNone, PhaseBegan, 0, -7)
+	r.ev(PhaseNone, PhaseEnded, 0, 0)
+	r.step()
+	if y := r.y(r.box); y != 17 {
+		t.Fatalf("a gesture seen from its Began, with its momentum, moved the box to %v, want 17", y)
+	}
+}
