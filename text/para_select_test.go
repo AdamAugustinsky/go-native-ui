@@ -36,3 +36,23 @@ func TestParaSelectionRects(t *testing.T) {
 		}
 	}
 }
+
+// A selection that starts at a soft line break covers nothing of the line
+// before it; one that starts at a hard break covers its newline.
+func TestParaSelectionAtASoftBreak(t *testing.T) {
+	l := NewBasicLayouter(new(gridShaper))
+	v := l.Paragraph(l.Layout(&Para{Text: []byte("aaaa bbbb"), Fonts: []FontKey{0}, Width: 60}))
+	if got := fmt.Sprint(lines(v)); got != "[aaaa  bbbb]" {
+		t.Fatalf("lines %s", got)
+	}
+	if got := fmt.Sprint(v.SelectionRects(5, 9, 300, nil)); got != "[[0 14 40 28]]" {
+		t.Errorf("from the soft break: %s", got)
+	}
+	if got := fmt.Sprint(v.SelectionRects(4, 9, 300, nil)); got != "[[40 0 300 14] [0 14 40 28]]" {
+		t.Errorf("from before the break's space: %s", got)
+	}
+	h := l.Paragraph(l.Layout(&Para{Text: []byte("aaaa\nbbbb"), Fonts: []FontKey{0}, Width: 1000}))
+	if got := fmt.Sprint(h.SelectionRects(4, 9, 300, nil)); got != "[[40 0 300 14] [0 14 40 28]]" {
+		t.Errorf("from the hard break: %s", got)
+	}
+}

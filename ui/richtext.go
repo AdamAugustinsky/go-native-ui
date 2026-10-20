@@ -320,7 +320,7 @@ func (c *Context) RichText(key Key, body []byte, spans []Span, st *RichStyles, o
 				sig.Pressed = pv.Spans[span].Tag
 			}
 		}
-		if bs.Clicked && span >= 0 && int32(span+1) == b.pressSpan {
+		if bs.Clicked && span >= 0 && int32(span+1) == b.pressSpan && !c.selOwnsClick(b.key) {
 			sig.Clicked, sig.ClickedSpan = pv.Spans[span].Tag, span
 		}
 	}

@@ -69,7 +69,12 @@ import (
 // on by itself, faster the farther the pointer is (Items' ScrollBy when it is
 // an EdgeScroller, as base.VListState is, or the View box's own scroll
 // offset), with the focus at the start of the first text built or the end of
-// the last: a drag through three screens selects everything it passed.
+// the last: a drag through three screens selects everything it passed. The
+// move that comes with the release is where the drag ends. A gesture that
+// selects text on a link (a drag that moves, a double or triple click, a
+// shift-click) does not click it; a plain click does. A modal overlay that
+// opens over the scope ends its drag, and the scope does not take the edit
+// keys beneath it.
 //
 // # Keys and the clipboard
 //
@@ -105,7 +110,8 @@ import (
 // # Allocation
 //
 // Pressing, dragging, scrolling a selection, ⌘A, ForEachSelected and copying
-// allocate nothing once warm (the copy's buffer is kept for the next).
+// allocate nothing once warm (the copy's buffer is kept for the next, up to
+// MaxKeptCopy; see ScopeOpts.Text for what a copy costs).
 
 const (
 	// PartEnd as a Pos.Part is the end of the whole item, after all its parts
@@ -184,14 +190,23 @@ type SelectionText interface {
 type ScopeOpts struct {
 	// Items orders and walks the items (see Enumerator); nil: the ids are 0
 	// to n-1, n one more than the largest the scope's texts declared in the
-	// last frame.
+	// last frame. It must be comparable (a pointer, such as
+	// *base.VListState): the scope compares it with the last frame's to
+	// look up its optional interfaces (ItemTracker, EdgeScroller) only when
+	// it changes.
 	Items Enumerator
 	// View is the box the items are seen through (a VList's Outer), 0 for
 	// none: a press on its background starts a selection, and a drag past
 	// its top or bottom edge scrolls (see SelectionScope).
 	View ID
 	// Text, when set, is the text a copy assembles and puts on the clipboard
-	// (Context.ClipboardSet).
+	// (Context.ClipboardSet). The copy is synchronous and builds the whole
+	// selection's text in memory, O(selected bytes) in time and space: ⌘A
+	// then ⌘C over a long transcript costs its whole text. The buffer is kept
+	// for the next copy up to MaxKeptCopy bytes and released after a larger
+	// one (ReleaseSelectionCopy releases it at once). An app that must
+	// stream, or bound the work, leaves Text nil, takes ScopeSignal.Copy and
+	// walks the range itself with ForEachSelected.
 	Text SelectionText
 }
 
@@ -230,6 +245,7 @@ type SelectionScope struct {
 
 	drag     uint8 // selDrag* while the left button is held after a press
 	uLo, uHi Pos   // the word or paragraph the drag began on
+	layer    uint8 // the overlay the scope is built in, 1 + its index; 0 for the main tree
 
 	tracked [2]uint64 // what the tracker's slots follow
 	trackOn [2]bool
@@ -260,6 +276,13 @@ type selState struct {
 	focusID    uint32
 	focusKey   Key
 	focusFrame uint32
+	focusLayer uint8
+
+	// the press that began the last gesture on a text (its box), and
+	// whether the gesture selected text (a drag that moved, a double or
+	// triple click, a shift-click): then a link under it is not clicked
+	gestureKey Key
+	gestureSel bool
 
 	copyBuf []byte // the last copy's text, kept for the next
 }
@@ -290,6 +313,9 @@ func (s *selState) newFrame(f uint32) {
 	s.frame = f
 }
 
+// itemsLookups counts setItems's lookups of the optional interfaces (tests).
+var itemsLookups int
+
 // scopeSeq is the Enumerator of a scope without Items.
 type scopeSeq SelectionScope
 
@@ -299,12 +325,14 @@ func (q *scopeSeq) Last() (uint64, bool)          { return q.seqN - 1, q.seqN > 
 func (q *scopeSeq) Next(id uint64) (uint64, bool) { return id + 1, id+1 < q.seqN }
 
 // setItems makes e the scope's Enumerator. The interfaces it also implements
-// are looked up only when it changes: a type assertion to an interface may
-// allocate the first times it runs.
+// (ItemTracker, EdgeScroller) are looked up only when the app passes a
+// different value (==: an Enumerator must be comparable, as pointers are): a
+// type assertion to an interface may allocate the first times it runs.
 func (sc *SelectionScope) setItems(e Enumerator) {
-	if ifaceWords(e) == ifaceWords(sc.items) {
+	if e == sc.items {
 		return
 	}
+	itemsLookups++
 	sc.items = e
 	sc.tracker, _ = e.(ItemTracker)
 	sc.scroller, _ = e.(EdgeScroller)
@@ -322,10 +350,11 @@ func (sc *SelectionScope) enum() Enumerator {
 // itemCmp orders the items a and b: -1, 0 or 1, and false when either is
 // unknown.
 func (sc *SelectionScope) itemCmp(a, b uint64) (int, bool) {
-	if a == b {
-		return 0, true
-	}
 	e := sc.enum()
+	if a == b {
+		_, ok := e.IndexOf(a)
+		return 0, ok
+	}
 	ia, ok1 := e.IndexOf(a)
 	ib, ok2 := e.IndexOf(b)
 	switch {
@@ -403,6 +432,7 @@ func (sc *SelectionScope) Set(anchor, focus Pos) {
 func (sc *SelectionScope) Clear() {
 	sc.anchor, sc.focus, sc.has = Pos{}, Pos{}, false
 	sc.drag = selDragNone
+	sc.trackOn = [2]bool{}
 }
 
 // SelectAll selects from the start of the first item to the end of the last
@@ -624,6 +654,10 @@ func (c *Context) BeginSelection(sc *SelectionScope, o ScopeOpts) ScopeSignal {
 		sc.cid = s.nextID
 	}
 	sc.setItems(o.Items)
+	sc.layer = 0
+	if c.nparents > 0 {
+		sc.layer = c.boxes[c.parents[c.nparents-1]].ovl
+	}
 	s.open[s.nOpen] = int32(len(s.scopes))
 	s.nOpen++
 	s.scopes = append(s.scopes, sc)
@@ -692,8 +726,13 @@ func (c *Context) EndSelection() {
 // with the Copy and Select All roles, as edit actions (Context.QueueEdit).
 func (c *Context) SelectionFocused() bool {
 	s := &c.sel
-	return s.focusID != 0 && s.focusFrame+1 >= c.frame && c.focusKey == s.focusKey && c.in.Focused && !c.fieldFocus
+	return s.focusID != 0 && s.focusFrame+1 >= c.frame && c.focusKey == s.focusKey && c.in.Focused && !c.fieldFocus &&
+		!c.layerBlocked(s.focusLayer)
 }
+
+// layerBlocked reports whether a modal overlay above the input layer l (1 +
+// an overlay's index, 0 for the main tree) takes the input.
+func (c *Context) layerBlocked(l uint8) bool { return c.modalIdx >= 0 && int(l)-1 < c.modalIdx }
 
 // scopeFocused reports whether sc is the focused scope (SelectionFocused).
 func (c *Context) scopeFocused(sc *SelectionScope) bool {
@@ -713,7 +752,18 @@ func (c *Context) selCopy(sc *SelectionScope, o *ScopeOpts, sig *ScopeSignal) {
 	s.copyBuf = AppendSelection(s.copyBuf[:0], sc, o.Text)
 	c.ClipboardSet(s.copyBuf)
 	sig.Copied = true
+	if cap(s.copyBuf) > MaxKeptCopy {
+		s.copyBuf = nil
+	}
 }
+
+// MaxKeptCopy is the largest buffer a context keeps from one selection copy
+// (ScopeOpts.Text) to the next: copies up to it allocate nothing once warm;
+// the buffer of a larger one is released after it.
+const MaxKeptCopy = 1 << 20
+
+// ReleaseSelectionCopy releases the buffer kept from the last selection copy.
+func (c *Context) ReleaseSelectionCopy() { c.sel.copyBuf = nil }
 
 // selPointer applies the frame's press and drag to sc.
 func (c *Context) selPointer(sc *SelectionScope, o *ScopeOpts, sig *ScopeSignal) {
@@ -728,7 +778,7 @@ func (c *Context) selPointer(sc *SelectionScope, o *ScopeOpts, sig *ScopeSignal)
 					break
 				}
 			}
-		} else if o.View != 0 && c.modalIdx < 0 && inRect(c.boxes[o.View].rect, in.MouseX, in.MouseY) && c.hotUnder(o.View) {
+		} else if o.View != 0 && !c.layerBlocked(sc.layer) && inRect(c.boxes[o.View].rect, in.MouseX, in.MouseY) && c.hotUnder(o.View) {
 			start = true
 		}
 		switch {
@@ -743,11 +793,20 @@ func (c *Context) selPointer(sc *SelectionScope, o *ScopeOpts, sig *ScopeSignal)
 	if sc.drag == selDragNone {
 		return
 	}
-	if !in.Down[0] || in.Cancelled[0] {
+	switch {
+	case in.Cancelled[0] || c.layerBlocked(sc.layer):
+		// the window lost the button, or a modal opened over the scope
 		sc.drag = selDragNone
-		return
+	case !in.Down[0]:
+		// released: the move that came with the release counts, without
+		// another step of auto-scrolling
+		if in.Released[0] {
+			c.selDrag(sc, o, sig, true)
+		}
+		sc.drag = selDragNone
+	default:
+		c.selDrag(sc, o, sig, false)
 	}
-	c.selDrag(sc, o, sig)
 }
 
 // inRect reports whether (x, y) is in r.
@@ -794,17 +853,27 @@ func (c *Context) selPress(sc *SelectionScope, o *ScopeOpts) {
 		c.focusKey = 0
 	}
 	s := &c.sel
-	s.focusID, s.focusKey, s.focusFrame = sc.cid, c.focusKey, c.frame
+	s.focusID, s.focusKey, s.focusFrame, s.focusLayer = sc.cid, c.focusKey, c.frame, sc.layer
+	s.gestureKey, s.gestureSel = c.pressedKey[0], sc.drag != selDragChar || sc.anchor != sc.focus
+}
+
+// selOwnsClick reports whether the press on the box with key k that ends
+// this frame selected text, so that the box does not also report a click
+// (a link under a selection drag or a double click).
+func (c *Context) selOwnsClick(k Key) bool {
+	s := &c.sel
+	return s.gestureSel && s.gestureKey == k && k != 0
 }
 
 // selDrag moves the focus of sc to the pointer, scrolling past the view's
-// edge (selPointer).
-func (c *Context) selDrag(sc *SelectionScope, o *ScopeOpts, sig *ScopeSignal) {
+// edge unless final (the release; selPointer).
+func (c *Context) selDrag(sc *SelectionScope, o *ScopeOpts, sig *ScopeSignal, final bool) {
+	defer c.selMoved(sc)
 	in := &c.in
 	var p Pos
 	var b []byte
 	ok := false
-	if o.View != 0 {
+	if o.View != 0 && !final {
 		vb := &c.boxes[o.View]
 		r := vb.rect
 		var out float32
@@ -842,6 +911,13 @@ func (c *Context) selDrag(sc *SelectionScope, o *ScopeOpts, sig *ScopeSignal) {
 		sc.Set(sc.uHi, Pos{p.Item, p.Part, uint32(lo)})
 	} else {
 		sc.Set(sc.uLo, Pos{p.Item, p.Part, uint32(hi)})
+	}
+}
+
+// selMoved notes a drag that made the selection non-empty (selOwnsClick).
+func (c *Context) selMoved(sc *SelectionScope) {
+	if sc.anchor != sc.focus {
+		c.sel.gestureSel = true
 	}
 }
 
@@ -1030,11 +1106,11 @@ func (c *Context) emitRichSel(l *gpu.DrawList, b *box, r *richRec, pv *text.Para
 	if cont {
 		e = len(pv.Text) + 1
 	}
-	c.rects = pv.SelectionRects(s, e, w, c.rects[:0])
+	al := b.align
+	c.rects = pv.SelectionRectsAligned(s, e, w, func(i int) float32 { return alignDX(pv, i, w, al) }, c.rects[:0])
 	col = b.col(col)
 	for _, q := range c.rects {
-		dx := alignDX(pv, pv.LineAt(q[1]+0.5), w, b.align)
-		rr := [4]float32{snap(x0 + q[0] + dx), snap(y0 + q[1]), snap(x0 + q[2] + dx), snap(y0 + q[3])}
+		rr := [4]float32{snap(x0 + q[0]), snap(y0 + q[1]), snap(x0 + q[2]), snap(y0 + q[3])}
 		if rr[2] > rr[0] {
 			l.Add(gpu.Quad{Rect: rr, Clip: clip, Color: [4]uint32{col, col, col, col}})
 		}

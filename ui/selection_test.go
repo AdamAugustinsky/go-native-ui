@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -48,8 +49,22 @@ func (m *selModel) Next(id uint64) (uint64, bool) {
 	return m.ids[i+1], true
 }
 
+// remove deletes item i from the model.
+func (m *selModel) remove(i int) {
+	delete(m.idx, m.ids[i])
+	m.ids = append(m.ids[:i], m.ids[i+1:]...)
+	m.parts = append(m.parts[:i], m.parts[i+1:]...)
+	m.bytes = append(m.bytes[:i], m.bytes[i+1:]...)
+	for k := i; k < len(m.ids); k++ {
+		m.idx[m.ids[k]] = k
+	}
+}
+
 // AppendSelected joins the selected parts of an item with " | ".
 func (m *selModel) AppendSelected(dst []byte, id uint64, fp uint16, fo uint32, tp uint16, to uint32) []byte {
+	if _, ok := m.idx[id]; !ok {
+		panic(fmt.Sprintf("the copy asked for item %d, which the model does not have", id))
+	}
 	first := true
 	for p, s := range m.bytes[m.idx[id]] {
 		b := SelectedBytes(s, uint16(p), fp, fo, tp, to)
@@ -76,11 +91,17 @@ type scopeRig struct {
 	boxes  map[[2]uint64]ID // (item, part) -> box of the last frame
 	built  map[uint64]bool
 	clip   string
+	spans  func(i, part int) []Span // the spans of a text, nil for none
+	align  Align                    // the texts' alignment
+	rsig   map[[2]uint64]RichSignal // the texts' signals of the last frame
+	modal  bool                     // a modal overlay is open over the scope
+	styles *RichStyles
+	copies int // AppendSelected calls
 	before func(c *Context)
 }
 
 func newScopeRig(t *testing.T, m *selModel, enum bool, lo, hi int) *scopeRig {
-	r := &scopeRig{harness: newWrapHarness(t, 400, 600), m: m, lo: lo, hi: hi, boxes: map[[2]uint64]ID{}, built: map[uint64]bool{}}
+	r := &scopeRig{harness: newWrapHarness(t, 400, 600), m: m, lo: lo, hi: hi, boxes: map[[2]uint64]ID{}, built: map[uint64]bool{}, rsig: map[[2]uint64]RichSignal{}, styles: testStyles()}
 	if enum {
 		r.o.Items = m
 	}
@@ -106,11 +127,25 @@ func (r *scopeRig) step() {
 			for p, s := range r.m.bytes[i] {
 				c.NextWidth(Px(200))
 				c.NextTextColor(colBody)
-				sig := c.RichText(KeyN(KeyN(0, id), uint64(p)), s, nil, nil, RichOpts{Item: id, Part: uint16(p)})
+				if r.align != AlignLeft {
+					c.NextAlign(r.align)
+				}
+				var sp []Span
+				if r.spans != nil {
+					sp = r.spans(i, p)
+				}
+				sig := c.RichText(KeyN(KeyN(0, id), uint64(p)), s, sp, r.styles, RichOpts{Item: id, Part: uint16(p)})
 				r.boxes[[2]uint64{id, uint64(p)}] = sig.ID
+				r.rsig[[2]uint64{id, uint64(p)}] = sig
 			}
 		}
 		c.EndSelection()
+		if r.modal {
+			c.BeginOverlay(77, OverlayModal, [4]float32{300, 500, 390, 590}, PlaceCenter)
+			c.NextSize(Px(40), Px(40))
+			c.Box(Clickable, "ok")
+			c.EndOverlay()
+		}
 	})
 }
 
@@ -426,12 +461,37 @@ func TestSelectionAllocatesNothing(t *testing.T) {
 		cursors = r.c.CursorRegions(cursors[:0])
 		ForEachSelected(&r.sc, func(uint64, uint16, uint32, uint16, uint32) {})
 	}
-	for i := 0; i < 60; i++ {
-		frame()
+	cycle := func() { // one whole cycle of the six steps above
+		for i := 0; i < 6; i++ {
+			frame()
+		}
 	}
-	if a := testing.AllocsPerRun(120, frame); a != 0 {
-		t.Fatalf("%v allocations per frame selecting and copying", a)
+	if n := cycleMallocs(cycle, 10, 20); n != 0 {
+		t.Fatalf("%d allocations over 20 cycles of selecting and copying", n)
 	}
+}
+
+// cycleMallocs runs warm cycles, then counts the exact heap allocations
+// (MemStats.Mallocs) of n more: the first count of three that is 0, or the
+// last. An allocation in every cycle, or one in n, shows in each count.
+func cycleMallocs(cycle func(), warm, n int) uint64 {
+	for i := 0; i < warm; i++ {
+		cycle()
+	}
+	var d uint64
+	for try := 0; try < 3; try++ {
+		runtime.GC()
+		var m0, m1 runtime.MemStats
+		runtime.ReadMemStats(&m0)
+		for i := 0; i < n; i++ {
+			cycle()
+		}
+		runtime.ReadMemStats(&m1)
+		if d = m1.Mallocs - m0.Mallocs; d == 0 {
+			return 0
+		}
+	}
+	return d
 }
 
 // The cost of a frame of 30 texts in a scope, with nothing selected and with
@@ -452,5 +512,195 @@ func BenchmarkSelectionFrame(b *testing.B) {
 				r.step()
 			}
 		})
+	}
+}
+
+// Review fixes (C4).
+
+// With an app Enumerator that does not track edits, a selection inside one
+// item that the model deleted is gone: Selected checks that the endpoints'
+// items exist even when they are the same, and a copy does not ask the model
+// for the missing item.
+func TestSelectionInADeletedItemOfAnAppEnumerator(t *testing.T) {
+	m := newSelModel(10, words(10))
+	r := newScopeRig(t, m, true, 0, 10)
+	id := m.ids[4]
+	r.press(r.at(id, 0, 1))
+	r.dragTo(r.at(id, 0, 6))
+	r.release()
+	if _, _, ok := r.sc.Selected(); !ok {
+		t.Fatal("no selection")
+	}
+	m.remove(4)
+	r.hi = 9
+	r.step()
+	if from, to, ok := r.sc.Selected(); ok {
+		t.Fatalf("the selection %v to %v in a deleted item is still valid", from, to)
+	}
+	r.key('C', PrimaryMod()) // (the model panics if asked for the item)
+	if r.sig.Copy {
+		t.Fatal("copied a selection in a deleted item")
+	}
+}
+
+// A move that arrives with the release, in the same frame, is where the drag
+// ends.
+func TestReleaseFrameMoveEndsTheDrag(t *testing.T) {
+	r := newScopeRig(t, newSelModel(3, words(3)), false, 0, 3)
+	r.press(r.at(1, 0, 2))
+	r.move(r.at(1, 0, 9))
+	r.in.SetButton(0, false, 0)
+	r.step()
+	if from, to, ok := r.sc.Selected(); !ok || from != (Pos{1, 0, 2}) || to != (Pos{1, 0, 9}) {
+		t.Fatalf("selected %v to %v (%v), want 1.2 to 1.9", from, to, ok)
+	}
+	if r.sig.Dragging {
+		t.Fatal("still dragging after the release")
+	}
+}
+
+// Selecting inside a link by a drag or a double click does not activate it;
+// a plain click does.
+func TestSelectingInALinkDoesNotClickIt(t *testing.T) {
+	m := newSelModel(3, words(3))
+	r := newScopeRig(t, m, false, 0, 3)
+	r.spans = func(i, part int) []Span {
+		if i != 1 {
+			return nil
+		}
+		return []Span{spanOf(m.parts[1][0], "says", 1, SpanLink, 42)}
+	}
+	r.step()
+	link := [2]uint64{1, 0}
+	x, y := r.at(1, 0, 8) // in "says"
+	r.press(x, y)
+	r.release()
+	if r.rsig[link].Clicked != 42 {
+		t.Fatalf("a plain click on the link: clicked %d", r.rsig[link].Clicked)
+	}
+	r.step()
+	r.step() // (not a double click)
+	r.press(x, y)
+	r.dragTo(r.at(1, 0, 10))
+	r.release()
+	if _, _, ok := r.sc.Selected(); !ok || r.rsig[link].Clicked != 0 {
+		t.Fatalf("a selection drag in the link: clicked %d", r.rsig[link].Clicked)
+	}
+	r.pressN(x, y, 2)
+	r.release()
+	if from, to, _ := r.sc.Selected(); from != (Pos{1, 0, 7}) || to != (Pos{1, 0, 11}) || r.rsig[link].Clicked != 0 {
+		t.Fatalf("a double click in the link: %v to %v, clicked %d", from, to, r.rsig[link].Clicked)
+	}
+}
+
+// A modal that opens over a scope ends its drag.
+func TestModalCancelsASelectionDrag(t *testing.T) {
+	r := newScopeRig(t, newSelModel(3, words(3)), false, 0, 3)
+	r.press(r.at(0, 0, 1))
+	r.dragTo(r.at(0, 0, 4))
+	if !r.sig.Dragging {
+		t.Fatal("not dragging")
+	}
+	r.modal = true
+	r.step()
+	r.dragTo(r.at(0, 0, 10))
+	if _, f, _ := r.sc.Endpoints(); f != (Pos{0, 0, 4}) || r.sig.Dragging {
+		t.Fatalf("the drag went on under the modal: focus %v, dragging %v", f, r.sig.Dragging)
+	}
+	if r.c.SelectionFocused() {
+		t.Fatal("a scope under a modal takes the edit keys")
+	}
+	r.modal = false
+	r.step()
+	r.dragTo(r.at(0, 0, 12))
+	if _, f, _ := r.sc.Endpoints(); f != (Pos{0, 0, 4}) {
+		t.Fatalf("the cancelled drag came back: focus %v", f)
+	}
+}
+
+// The highlight of centred and right-aligned text that continues past a line
+// stays inside the box.
+func TestContinuedHighlightStaysInAlignedBoxes(t *testing.T) {
+	for _, al := range []Align{AlignCenter, AlignRight} {
+		r := newScopeRig(t, newSelModel(3, words(3)), false, 0, 3)
+		r.align = al
+		r.sc.Set(Pos{0, 0, 2}, Pos{2, 0, 3})
+		r.step()
+		rc := r.c.Rect(r.boxes[[2]uint64{0, 0}])
+		q := selQuads(&r.list, r.c.TextEdit.SelectionInactive)
+		if len(q) < 3 {
+			t.Fatalf("align %v: highlight %v", al, q)
+		}
+		for _, h := range q {
+			if h[0] < rc[0] || h[2] > rc[2] {
+				t.Fatalf("align %v: highlight %v outside the box %v", al, h, rc)
+			}
+		}
+		// the glyph coverage moved with the text: item 1 is selected whole,
+		// from its first glyph to the box's right edge
+		r1 := r.c.Rect(r.boxes[[2]uint64{1, 0}])
+		w := float32(len("item 1 says hello") * 8)
+		left := r1[0] + (200-w)/2
+		if al == AlignRight {
+			left = r1[0] + 200 - w
+		}
+		found := false
+		for _, h := range q {
+			if h[1] == r1[1] && h[0] == left && h[2] == r1[2] {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("align %v: no highlight from %v to %v on item 1 (%v)", al, left, r1[2], q)
+		}
+	}
+}
+
+// The scope looks its Enumerator's optional interfaces up when the app
+// passes a different one, not in every frame.
+func TestScopeLooksUpItsItemsOnlyWhenTheyChange(t *testing.T) {
+	m := newSelModel(10, words(10))
+	r := newScopeRig(t, m, true, 0, 10)
+	n0 := itemsLookups
+	for i := 0; i < 50; i++ {
+		r.step()
+	}
+	if d := itemsLookups - n0; d != 0 {
+		t.Fatalf("%d lookups over 50 frames with the same Enumerator", d)
+	}
+	m2 := newSelModel(10, words(10))
+	r.o.Items = m2
+	r.step()
+	r.step()
+	if d := itemsLookups - n0; d != 1 {
+		t.Fatalf("%d lookups after a new Enumerator, want 1", d)
+	}
+}
+
+// A copy larger than MaxKeptCopy does not keep its buffer; smaller ones do.
+func TestLargeCopyReleasesItsBuffer(t *testing.T) {
+	const n = 9000
+	m := newSelModel(n, func(i int) []string { return []string{fmt.Sprintf("%08d ", i) + strings.Repeat("x", 120)} })
+	r := newScopeRig(t, m, true, 0, 30)
+	r.press(r.at(m.ids[3], 0, 2))
+	r.release()
+	r.key('A', PrimaryMod())
+	r.key('C', PrimaryMod())
+	if len(r.clip) <= MaxKeptCopy || !r.sig.Copied {
+		t.Fatalf("copied %d bytes", len(r.clip))
+	}
+	if cap(r.c.sel.copyBuf) != 0 {
+		t.Fatalf("a %d-byte copy kept a %d-byte buffer", len(r.clip), cap(r.c.sel.copyBuf))
+	}
+	r.press(r.at(m.ids[3], 0, 2))
+	r.dragTo(r.at(m.ids[5], 0, 4))
+	r.release()
+	r.key('C', PrimaryMod())
+	if c := cap(r.c.sel.copyBuf); c == 0 || c > MaxKeptCopy {
+		t.Fatalf("a small copy kept %d bytes", c)
+	}
+	r.c.ReleaseSelectionCopy()
+	if r.c.sel.copyBuf != nil {
+		t.Fatal("ReleaseSelectionCopy kept the buffer")
 	}
 }

@@ -7,6 +7,7 @@ import (
 
 	"gonativeui/gpu"
 	"gonativeui/internal/fakeui"
+	"gonativeui/text"
 	"gonativeui/ui"
 )
 
@@ -30,11 +31,28 @@ type selVT struct {
 	built map[uint64]bool   // every item ever built
 	clip  string
 	edit  func() // runs in the next Build, before BeginVList
-	next  uint64 // the next id
+	// noScope builds the frame without the selection scope
+	noScope bool
+	next    uint64 // the next id
+}
+
+// layText is the fake text system with a paragraph layouter whose cache is
+// reserved, as an app reserves the text system's (text.System.ReserveParas),
+// so that scrolling through new messages allocates nothing.
+type layText struct {
+	*fakeui.Text
+	*text.BasicLayouter
+}
+
+func newLayText() layText {
+	ft := fakeui.New()
+	l := text.NewBasicLayouter(ft)
+	l.ReserveParas(text.ParaBudget{Paras: 1024, Glyphs: 1 << 16, Text: 1 << 16})
+	return layText{ft, l}
 }
 
 func newSelVT(t *testing.T, n int) *selVT {
-	h := &selVT{t: t, c: ui.New(fakeui.New()), w: 400, h: 300, msgs: map[uint64][]byte{}, boxes: map[uint64]ui.ID{}, built: map[uint64]bool{}, next: 1000}
+	h := &selVT{t: t, c: ui.New(newLayText()), w: 400, h: 300, msgs: map[uint64][]byte{}, boxes: map[uint64]ui.ID{}, built: map[uint64]bool{}, next: 1000}
 	h.c.ClipboardSet = func(b []byte) { h.clip = string(b) }
 	h.in.Inside, h.in.Focused = true, true
 	h.in.MouseX, h.in.MouseY = -100, -100
@@ -71,14 +89,18 @@ func (h *selVT) frame() {
 	}
 	clear(h.boxes)
 	h.v = BeginVList(c, "transcript", &h.st, h.o)
-	h.sig = c.BeginSelection(&h.sc, ui.ScopeOpts{Items: &h.st, View: h.v.Outer, Text: h})
+	if !h.noScope {
+		h.sig = c.BeginSelection(&h.sc, ui.ScopeOpts{Items: &h.st, View: h.v.Outer, Text: h})
+	}
 	for i := h.v.First; i < h.v.Last; i++ {
 		id := h.v.Item(i)
 		h.built[id] = true
 		c.NextTextColor(0xE0E0E0FF)
 		h.boxes[id] = c.RichText(ui.KeyN(c.ParentKey(), 0), h.msgs[id], nil, nil, ui.RichOpts{Item: id}).ID
 	}
-	c.EndSelection()
+	if !h.noScope {
+		c.EndSelection()
+	}
 	EndVList(&h.v)
 	c.End(&h.dl)
 	h.in.ClearFrame()
@@ -186,7 +208,10 @@ func TestVListSelectionDragAcrossThreeViewportsAutoScrolls(t *testing.T) {
 	if scrolled > -3*float32(h.h) {
 		t.Fatalf("auto-scroll went %v px", scrolled)
 	}
-	// the pointer comes back onto the top text in view and lets go
+	// the pointer comes back into the list (the last step of scrolling
+	// lands), then onto the top text in view, and lets go there
+	h.in.MouseY = float32(h.h) / 2
+	h.frames(2)
 	top := h.inView(0)
 	ti, _ := h.st.IndexOf(top)
 	h.in.MouseX, h.in.MouseY = h.at(top, 2)
@@ -382,13 +407,105 @@ func TestVListSelectionAllocatesNothing(t *testing.T) {
 		h.frame()
 	}
 	_ = a
-	for i := 0; i < 200; i++ {
-		frame()
+	cycle := func() { // one whole cycle of the 40 frames above
+		for i := 0; i < 40; i++ {
+			frame()
+		}
 	}
-	if n := testing.AllocsPerRun(200, frame); n != 0 {
-		t.Fatalf("%v allocations per frame", n)
+	for i := 0; i < 5; i++ {
+		cycle()
+	}
+	// the exact count over whole cycles (the first clean of three tries): an
+	// allocation once a cycle shows
+	var n uint64
+	for try := 0; try < 3; try++ {
+		if n = mallocs(func() {
+			for i := 0; i < 5; i++ {
+				cycle()
+			}
+		}); n == 0 {
+			break
+		}
+	}
+	if n != 0 {
+		t.Fatalf("%d allocations over 5 cycles of dragging, scrolling and copying", n)
+	}
+	for i := 0; i < 5; i++ { // (a cycle ends with its press)
+		frame()
 	}
 	if _, _, ok := h.sc.Selected(); !ok {
 		t.Fatal("no selection")
+	}
+}
+
+// Review fixes (C4).
+
+// An endpoint whose item goes moves to its item's survivors; when edits
+// before the next BeginSelection remove those too, it moves on to theirs:
+// edits in place, and a sliced rebuild that publishes while no scope is
+// built.
+func TestVListSurvivorsFollowLaterEdits(t *testing.T) {
+	for _, sliced := range []bool{false, true} {
+		h := newSelVT(t, 500)
+		h.st.SetAnchor(h.st.ID(100), 0)
+		h.frames(4)
+		a, b := h.inView(2), h.inView(6)
+		h.selectRange(a, 3, b, 5)
+		ai, _ := h.st.IndexOf(a)
+		bi, _ := h.st.IndexOf(b)
+		prev2, next2 := h.st.ID(ai-2), h.st.ID(bi+2)
+		// the focus's item, then the item after it; the anchor's, then the
+		// one before it
+		h.edit = func() {
+			h.st.Splice(bi, 1, nil)
+			h.st.Splice(ai, 1, nil)
+			if sliced {
+				vlDirect = 2 // the next two are rebuilt in slices
+			}
+			h.st.Splice(bi-1, 1, nil)
+			h.st.Splice(ai-1, 1, nil)
+		}
+		if sliced {
+			h.noScope = true
+			h.frame()
+			if !h.st.Pending() {
+				t.Fatal("the edits were not rebuilt in slices")
+			}
+			for f := 0; f < 200 && h.st.Pending(); f++ {
+				h.frame()
+			}
+			vlDirect = vlDirectMax
+			h.noScope = false
+		}
+		h.frame()
+		a1, f1, ok := h.sc.Endpoints()
+		if _, _, sel := h.sc.Selected(); !ok || !sel {
+			t.Fatalf("sliced %v: the selection was cleared", sliced)
+		}
+		if a1 != (ui.Pos{Item: prev2, Part: ui.PartEnd}) || f1 != (ui.Pos{Item: next2}) {
+			t.Fatalf("sliced %v: endpoints %v %v, want the end of %d and the start of %d", sliced, a1, f1, prev2, next2)
+		}
+	}
+}
+
+// After a Reset cleared the selection, a selection in the item the focus was
+// in holds (both of the scope's marks follow again).
+func TestVListReselectAfterReset(t *testing.T) {
+	h := newSelVT(t, 300)
+	a, b := h.inView(1), h.inView(3)
+	h.selectRange(a, 1, b, 2)
+	ids := make([]uint64, h.st.Len())
+	for i := range ids {
+		ids[i] = h.st.ID(i)
+	}
+	h.edit = func() { h.st.Reset(ids) }
+	h.frame()
+	if _, _, ok := h.sc.Endpoints(); ok {
+		t.Fatal("the reset kept the selection")
+	}
+	h.selectRange(b, 1, b, 4)
+	h.frames(3)
+	if from, to, ok := h.sc.Selected(); !ok || from != (ui.Pos{Item: b, Off: 1}) || to != (ui.Pos{Item: b, Off: 4}) {
+		t.Fatalf("reselected %v to %v (%v)", from, to, ok)
 	}
 }

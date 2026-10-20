@@ -21,9 +21,10 @@ import "gonativeui/ui"
 //
 // While a modal overlay is open (ui.Context.ModalOpen) the dialog owns the
 // keys, and commands are held back with two exceptions: a command with an edit
-// role still reaches a text field that has the focus inside the modal, as an
-// edit action (the shortcut of an edit command that the field did not claim
-// too); and a command marked InModal fires as usual. Every other command and
+// role still reaches a text field that has the focus inside the modal (and
+// Copy and Select All a focused selection scope in it), as an edit action
+// (the shortcut of an edit command that the field did not claim too); and a
+// command marked InModal fires as usual. Every other command and
 // shortcut is dropped (a system command) or left unmatched (a shortcut, whose
 // key stays unclaimed for the dialog's own widgets).
 //
@@ -78,10 +79,18 @@ func (m *Model) State(c *ui.Context, id ID) (enabled, checked bool) {
 }
 
 // inModal reports whether command i may act while a modal overlay is open: it
-// is marked InModal, or it has an edit role and a text field has the focus.
+// is marked InModal, or it is an edit action for the focused field or
+// selection (editTarget).
 func (m *Model) inModal(c *ui.Context, i int) bool {
 	cmd := &m.cmds[i]
-	return cmd.InModal || (cmd.Role.editAction() != 0 && c.TextFieldFocused())
+	return cmd.InModal || editTarget(c, cmd.Role.editAction())
+}
+
+// editTarget reports whether the edit action a (0 for none) has a target: a
+// text field has the focus, or a selection scope does and a is Copy or
+// Select All.
+func editTarget(c *ui.Context, a ui.EditAction) bool {
+	return a != 0 && (c.TextFieldFocused() || c.SelectionFocused() && (a == ui.EditCopy || a == ui.EditSelectAll))
 }
 
 // dispatch queues command i, or turns it into an edit action.
@@ -90,7 +99,7 @@ func (m *Model) dispatch(c *ui.Context, i int) {
 	if hasBit(m.off, i) {
 		return
 	}
-	if a := cmd.Role.editAction(); a != 0 && (c.TextFieldFocused() || c.SelectionFocused() && (a == ui.EditCopy || a == ui.EditSelectAll)) {
+	if a := cmd.Role.editAction(); editTarget(c, a) {
 		c.QueueEdit(a)
 		return
 	}

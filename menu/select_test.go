@@ -54,3 +54,43 @@ func TestEditRolesActOnAFocusedSelection(t *testing.T) {
 		t.Fatalf("Paste with a focused selection: fired %v", got)
 	}
 }
+
+// Copy reaches a focused selection scope inside a modal too (the modal
+// holds back the app's other commands).
+func TestEditRolesActOnASelectionInAModal(t *testing.T) {
+	r := newRig(t)
+	r.c = ui.New(fakeui.New())
+	var copied string
+	r.c.ClipboardSet = func(b []byte) { copied = string(b) }
+	body := selText("in the dialog")
+	var sc ui.SelectionScope
+	var text ui.ID
+	build := func(c *ui.Context) {
+		c.BeginOverlay(9, ui.OverlayModal, [4]float32{0, 0, 400, 300}, ui.PlaceCenter)
+		c.NextSize(ui.Px(300), ui.Px(200))
+		c.Open(0, "dialog")
+		c.BeginSelection(&sc, ui.ScopeOpts{Text: body})
+		c.NextWidth(ui.Px(200))
+		text = c.RichText(ui.KeyN(0, 1), body, nil, nil, ui.RichOpts{}).ID
+		c.EndSelection()
+		c.Close()
+		c.EndOverlay()
+	}
+	r.frame(build)
+	r.frame(build)
+	tr := r.c.Rect(text)
+	r.in.MouseX, r.in.MouseY = tr[0]+2, tr[1]+2
+	r.in.SetButton(0, true, 1)
+	r.frame(build)
+	r.in.SetButton(0, false, 0)
+	r.frame(build)
+	r.chord('A', ui.PrimaryMod())
+	r.frame(build)
+	if !r.c.ModalOpen() || !r.c.SelectionFocused() {
+		t.Fatalf("modal %v, selection focused %v", r.c.ModalOpen(), r.c.SelectionFocused())
+	}
+	r.in.PushCommand(uint16(cmdCopy))
+	if got := r.fired(build); len(got) != 0 || copied != "in the dialog" {
+		t.Fatalf("Edit → Copy in a modal: fired %v, copied %q", got, copied)
+	}
+}
