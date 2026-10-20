@@ -389,10 +389,14 @@ func (c *Context) Begin(in *Input, widthPx, heightPx int, scale, dt float32) {
 	c.frame++
 	c.in = *in
 	c.pruneDeadlines()
+	old := c.scale
 	c.w, c.h, c.scale, c.dt = widthPx, heightPx, scale, dt
 	c.fr.Swap()
 	c.fmtA.Reset()
 	c.prevOrder, c.order = c.order, c.prevOrder[:0]
+	if old > 0 && scale != old { // the window's scale changed (a new display, an app zoom)
+		c.rescaleScroll(float64(scale) / float64(old))
+	}
 	c.animating, c.scrollSet = false, false
 	c.wakeNs, c.imeOK, c.imeCancel = 0, false, false
 	c.takeCommit()
@@ -434,6 +438,22 @@ func (c *Context) Begin(in *Input, widthPx, heightPx int, scale, dt float32) {
 	c.root = root
 	c.parents[0] = root
 	c.nparents = 1
+}
+
+// rescaleScroll keeps every scrolled box at the same place in its content
+// when the scale changes by the factor r: the offsets are in pixels, so they
+// are multiplied, and the view stays on what it showed at the top.
+func (c *Context) rescaleScroll(r float64) {
+	for _, id := range c.prevOrder {
+		b := &c.boxes[id]
+		if b.flags&scrollMask == 0 {
+			continue
+		}
+		for a := 0; a < 2; a++ {
+			b.scroll[a] *= r
+			b.scrollTgt[a] *= r
+		}
+	}
 }
 
 // takeCommit moves the text that committed an input-method composition out of

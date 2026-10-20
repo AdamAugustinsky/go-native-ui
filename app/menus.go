@@ -35,6 +35,7 @@ import (
 // (widget.Kit.SetMenu).
 func (a *App) SetMenu(m *menu.Model) {
 	a.menu, a.menuDirty = m, true
+	a.syncZoomMenu()
 }
 
 // syncMenuBar installs the menu bar when it is due: once after the first

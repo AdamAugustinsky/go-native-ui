@@ -130,7 +130,8 @@ type App struct {
 	fr   gpu.Frame
 
 	w, h  int     // surface size in pixels
-	scale float32 // pixels per point
+	scale float32 // pixels per point (the backing scale; zoom.go has the zoom)
+	zoom  float32 // the app zoom, 0 = 1 (zoom.go)
 
 	// Cursor regions and the titlebar drag map handed to the window after
 	// every frame (regions.go); the buffers are reused.

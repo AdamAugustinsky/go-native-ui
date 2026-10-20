@@ -82,6 +82,15 @@ const (
 	// RoleSettings is the application's Settings command (⌘, on macOS, where
 	// it sits in the application menu). It is the app's to act on.
 	RoleSettings
+	// RoleZoomIn, RoleZoomOut and RoleActualSize are the View menu's app zoom
+	// commands (⌘+, ⌘− and ⌘0 on macOS; Ctrl elsewhere). The app handles
+	// them: the window's zoom steps up or down, or returns to 100 %, and
+	// Fired never reports them (see Model.TakeZoom). StandardCommand makes
+	// them with the standard title and shortcuts. RoleZoom is another
+	// command, the window's own zoom (its green button on macOS).
+	RoleZoomIn
+	RoleZoomOut
+	RoleActualSize
 
 	roleEnd // one past the last role
 )
@@ -136,8 +145,12 @@ type Command struct {
 	ID       ID
 	Title    string   // the menu text; may be empty for a command with a Role (the system supplies it)
 	Shortcut Shortcut // zero: none
-	Scope    Scope
-	Role     Role
+	// Alias is a second chord that triggers the command, such as ⌘= for
+	// Zoom In (the shortcut is ⌘+). Match takes it like Shortcut; menus show
+	// only Shortcut. Zero: none.
+	Alias Shortcut
+	Scope Scope
+	Role  Role
 	// Symbol is the SF Symbol shown before the title in native menus
 	// ("doc.on.doc"; "" none). Drawn menus do not show it yet.
 	Symbol string
@@ -209,6 +222,9 @@ type Model struct {
 	qn, qh int
 	qc     *ui.Context
 	qframe uint32
+
+	zq [zoomQueueSize]ZoomAction // zoom commands of the frame, not taken yet (zoom.go)
+	zn int
 }
 
 type idIndex struct {
@@ -262,11 +278,14 @@ func NewModel(commands []Command, menus []Menu, bar []int) (*Model, error) {
 			}
 			roles[c.Role] = c.ID
 		}
-		if !c.Shortcut.IsZero() {
-			if c.Shortcut.Key == 0 {
+		for _, s := range [...]Shortcut{c.Shortcut, c.Alias} {
+			if s.IsZero() {
+				continue
+			}
+			if s.Key == 0 {
 				return nil, fmt.Errorf("menu: command %d has a shortcut with modifiers but no key", c.ID)
 			}
-			k := keyIndex{key: c.Shortcut.Key, mods: c.Shortcut.Effective(), idx: i}
+			k := keyIndex{key: s.Key, mods: s.Effective(), idx: i}
 			sk := keyIndex{key: k.key, mods: k.mods}
 			if other, dup := shortcuts[sk]; dup {
 				return nil, fmt.Errorf("menu: commands %d and %d have the same shortcut", other, c.ID)

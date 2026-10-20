@@ -374,3 +374,32 @@ func TestSaveDoesNotBlockOnTheDisk(t *testing.T) {
 		t.Errorf("Close wrote nothing: %v", err)
 	}
 }
+
+// The zoom is kept beside the frame and never mixed into it: a window saved at
+// 150 % comes back at the same frame and the same zoom, and a file from before
+// the zoom existed means 100 %.
+func TestZoomIsKeptApartFromTheFrame(t *testing.T) {
+	dir := t.TempDir()
+	s, _ := load(t, dir, Options{})
+	f := Rect{40, 60, 900, 640}
+	if err := s.Save(State{Frame: f, Screen: laptop(), Zoom: 1.5}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s2, _ := load(t, dir, Options{})
+	got := s2.State()
+	if got.Frame != f || got.Zoom != 1.5 || got.ZoomFactor() != 1.5 {
+		t.Errorf("loaded frame %+v zoom %v", got.Frame, got.Zoom)
+	}
+	if pl := Apply(cfg, got, []Screen{laptop()}); pl.Frame != f {
+		t.Errorf("Apply changed the frame of a zoomed window: %+v", pl.Frame)
+	}
+	if (State{Frame: f}).ZoomFactor() != 1 || (State{Zoom: -1}).ZoomFactor() != 1 || (State{Zoom: math.Inf(1)}).ZoomFactor() != 1 {
+		t.Error("no zoom, a negative zoom and an infinite one are not 100 %")
+	}
+	if err := s2.Save(State{Frame: f, Zoom: math.NaN()}); err != ErrInvalid {
+		t.Errorf("Save of a NaN zoom: %v", err)
+	}
+}

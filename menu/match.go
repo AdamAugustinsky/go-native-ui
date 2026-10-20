@@ -31,7 +31,7 @@ import "gonativeui/ui"
 func (m *Model) Match(c *ui.Context) {
 	if m.qc != c || m.qframe != c.Frame() {
 		m.qc, m.qframe = c, c.Frame()
-		m.qn, m.qh = 0, 0
+		m.qn, m.qh, m.zn = 0, 0, 0
 	}
 	modal := c.ModalOpen()
 	for {
@@ -91,6 +91,13 @@ func (m *Model) dispatch(c *ui.Context, i int) {
 	}
 	if a := cmd.Role.editAction(); a != 0 && c.TextFieldFocused() {
 		c.QueueEdit(a)
+		return
+	}
+	if z, ok := cmd.Role.zoomAction(); ok {
+		if m.zn < len(m.zq) {
+			m.zq[m.zn] = z
+			m.zn++
+		}
 		return
 	}
 	if m.qn < len(m.q) {

@@ -20,6 +20,11 @@
 //
 // # Coordinates
 //
+// The frame is in screen units and never in a window's zoomed ui points: with
+// app zoom (app.App.SetZoom) the window keeps its size and only its content
+// scales, so the frame is unchanged by the zoom, which is kept in State.Zoom.
+// Save a frame derived from app.App.ContentSize, not from the ui's extent.
+//
 // Rectangles are in the units of the platform's window frame, in one space for
 // all screens, with the origin at the top-left of the primary screen and y
 // growing downwards (points on macOS, pixels on Windows). The frame is the whole
@@ -116,6 +121,19 @@ type State struct {
 	// App is kept with the window and returned unchanged: the application's
 	// own bytes (at most MaxApp).
 	App []byte `json:"app,omitempty"`
+	// Zoom is the window's app zoom factor (app.App.Zoom); 0 means 1. Frame is
+	// in screen points whatever the zoom: it is never multiplied or divided
+	// by it, so a window restored at 150 % opens at the size it was saved at.
+	Zoom float64 `json:"zoom,omitempty"`
+}
+
+// ZoomFactor is Zoom as a factor to give app.App.SetZoom: 1 when none is saved
+// or the saved one is not a positive number.
+func (s State) ZoomFactor() float64 {
+	if s.Zoom > 0 && !math.IsInf(s.Zoom, 0) {
+		return s.Zoom
+	}
+	return 1
 }
 
 // MaxApp is the most application bytes a State may carry.
@@ -136,7 +154,7 @@ const maxExtent = 1 << 20
 // size and finite numbers within limits. Apply ignores a state that is not.
 func (s State) Valid() bool {
 	f := s.Frame
-	return f.finite() && f.W > 0 && f.H > 0 && f.W <= maxExtent && f.H <= maxExtent &&
+	return !math.IsNaN(s.Zoom) && !math.IsInf(s.Zoom, 0) && f.finite() && f.W > 0 && f.H > 0 && f.W <= maxExtent && f.H <= maxExtent &&
 		math.Abs(f.X) <= maxExtent && math.Abs(f.Y) <= maxExtent
 }
 
