@@ -35,6 +35,10 @@ directly with `k.Kit`, or copies a component and owns it.
 | `Separator` | 1 pt, or a hairline | — | Horizontal in a column, vertical in a row. |
 | `BeginCard` / `EndCard` | Box, Inset (form rows), Rex pane | — | Box: radius 12, no border, optional title. |
 | `Label`, `LabelBytes`, `Caption` | the macOS text styles × colour roles | — | Zero value: body text in labelColor. |
+| `Tabs` (`TabBar`) | Rex, Neutral | — | Rex's tab capsule (rexlook's titlebar), in a titlebar band or in content: a press chooses, × on hover and a middle click close, a drag reorders live while the others slide, the strip scrolls when the tabs do not fit, ⌃Tab/⌃⇧Tab, ⌘⇧[ ], ⌘1…9 (keys or `TabCommands` menu commands). Tab-list and tab roles. Not AppKit's window tabs. |
+| `BeginToolbar` … `End` | Plain 32, Compact 40, Unified 52, Rex 46 | — | Items (`Item`, `Nav`, `Picker`, `Menu`, groups, `Search`/`SearchButton`, `Title`, `Flexible`, `Space`, `BeginCustom`) in glass capsules laid out per pane (`Panes`, `NextPane`). The band's empty parts drag the window. `TitlebarFor(style)` gives `app.Config.Titlebar` and `TrafficLights`. |
+| `Sidebar`, `SidebarSearch` | one-line and two-line (`Detail`) rows | medium rows; `RowH`/`HeaderH` | Source list on glass: headers, symbols, disclosure (13 per level), the selection inset 10 / radius 8 in the accent, grey or inactive grey. Up/Down, Left/Right, list and list-item roles. |
+| `PathBar` | — | control sizes | NSPathControl's standard style: symbol and name per component, chevrons; the middle names drop out when it is narrow. |
 
 Every component is keyboard-operable and records its semantics. Its focus
 ring sits outside the shape, shows for keyboard focus only (text fields:
@@ -131,6 +135,31 @@ sizes, and a toolbar toggle. `progress-indeterminate`, `level` radius and
 toggle widths (the fake text system measures differently) are left out of the
 comparison.
 
+### Window chrome (D4)
+
+`cmd/chromedemo` builds the Finder, Settings and Notes scenes of
+`tools/appkitscenes` (same window sizes, panes, items and symbols) from
+`Toolbar`, `Sidebar`, `PathBar` and `Tabs`, plus a window of Rex's tabs.
+`chromedemo -scene NAME -measure` prints the chrome's frames in points;
+`-o` renders the scene offscreen. Compared with the D0 dumps and captures
+(`appkit-ref/scenes/captures`, macOS 27.2), 2026-10-19:
+
+| Scene | Within ±0.5 pt | Off |
+|---|---|---|
+| finder | sidebar toggle 96, back/forward 188–274, title 284, collapsed picker 599.5–645.5, Group menu 653.5–701.5, share/tags group 705.5–789.5 (items 8 apart), Action 793.5–838, search 846–882, inspector toggle 898; sidebar rows and headers (52, 71 … 263, 276), row text ink 9 of 10 rows | Shared's text 2.5 right (AppKit puts it 1 after its 26-wide image, not 4) |
+| settings | back/forward 223–309, title 319, sidebar search 10, 56, 195 × 24, rows 86, 105 … 425 | — |
+| notes | sidebar toggle 91.5 (31 wide vs 31.5), title 250, search field 726–892, rows 40, 64 … 450 (52 tall), headers 24 | Delete 126.5 vs 137.5 (AppKit leaves 14.5 between the sidebar section's items); AppKit merges the adjacent Media and Share into one capsule (2 apart), so the format group lands at 525 vs 517 and New Note at 488 vs 477 |
+
+Colours at the same points, ΔE2000, light/dark × key/inactive: sidebar and
+inspector glass ≤ 1.3, selections (emphasised, unemphasised, inactive) ≤ 0.7,
+sidebar search fill 0, toolbar capsule ≤ 1.5, scroll-edge bar over the
+header ≤ 1.2; ink of the title, headers, rows, details, selected rows, toolbar
+symbols and the search placeholder ≤ 3 (2.9 at worst, most 0).
+
+Until the hosted materials (N3) land, the chrome draws each material's
+measured fallback; every piece asks for its material through `GlassFill`
+(`glass.go`), the one place the native materials take over.
+
 ### Left to the eye, and why
 
 - `push-glass` offscreen: AppKitRef's `cacheDisplay` renders Liquid Glass as
@@ -166,6 +195,29 @@ are reported against `theme/` (D1), not changed there:
   - Search: magnifier centred at 13.75, text at 24, clear button centred 12 from the end.
   - Pop-up chevron: centred 14 from the end (borderless 10, pull-down 13.25); borderless label pad 8.
   - Box: title band 12, title x 10.
+- Window chrome (D4):
+  - Toolbar symbols are 13 pt in both styles (AppKit's images: 15–20 wide);
+    `CapsuleSpec.Glyph` says 16.
+  - A one-symbol item is its symbol and 12 (`ToolbarRecipe.ItemPad`), at
+    least 24 compact and 36 unified; inside a group, the symbol and 17
+    (compact) or 21 (unified). `ToolbarSpec.ItemW` 28 is too wide for
+    compact (27 measured for trash).
+  - A menu item is its symbol and 27.5, at least 44.5 (44.5 and 47.5
+    measured); `CapsuleSpec.MenuW` is one 46.
+  - Toolbar symbols are labelColor made opaque by the vibrancy (#000000,
+    #FFFFFF; `SidebarLabel`'s value) and #A6A6A6 / #666666 inactive, lighter
+    than `TitleTextInactive`.
+  - The scroll edge's hairline lies just below the band (y 52–52.5), and
+    under a table header pinned below the toolbar the pocket's bar covers
+    the header (`ToolbarOpts.Pocket`).
+  - Sidebar symbols are 16 pt; the title's field starts 4 after the
+    symbol's own width (not a 20-pt column) and draws its text 2 in, as
+    the headers' (`SidebarRecipe.FieldInset`).
+  - A selected row in an inactive window is #676767 / #999999; a row's
+    detail line black 43 % / white 36 % (0.7 white on the accent); a
+    two-line row's title is semibold.
+  - The sidebar's search field is a filled capsule: #EAEAEA / #4E4E4E,
+    #E5E5E5 / #464646 inactive.
 
 ## Owning a component
 
