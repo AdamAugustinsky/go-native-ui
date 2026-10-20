@@ -95,8 +95,7 @@ type SidebarRecipe struct {
 	// OnSelInactive the selected row's text in an inactive window (measured
 	// #676767 and #999999: darker in light, lighter in dark than the other
 	// rows').
-	Sel, SelUnemph, SelInactive, OnSel Tint
-	OnSelInactive                      Pair
+	Sel, SelUnemph, SelInactive, OnSel, OnSelInactive Tint
 	// Symbol colours symbols that set no Color (the accent).
 	Symbol Tint
 	// SymbolGap is the space between the symbol and the title's text field:
@@ -112,7 +111,7 @@ type SidebarRecipe struct {
 	// selections (the vibrant secondary label: black at 43 %, white at 36 %,
 	// measured #868686 on #ECECEC and #747474 on #262626); DetailOnSel is
 	// OnSel's alpha for it on the accent (measured 0.7).
-	Detail      Pair
+	Detail      Tint
 	DetailOnSel float32
 	// DetailTop is a two-line row's title from the row's top (Notes' 8; the
 	// second line 2 below the title's line).
@@ -133,12 +132,13 @@ type SidebarRecipe struct {
 	// SearchFill and SearchFillInactive fill a search field on the
 	// sidebar's glass (SidebarSearch): a capsule of the field's height,
 	// measured #EAEAEA and #4E4E4E, #E5E5E5 and #464646 inactive (§2).
+	SearchFill, SearchFillInactive Tint
 	// SearchRim is the bright rim inside its edge in an active window
 	// (#FFFFFF 1 pt and #727272 0.5 pt wide) and SearchGlow the colour its
 	// fill fades from at the top and the bottom (#F4F4F4, #565656), SearchEdge and
 	// SearchEdgeInactive the hairline just outside it (#D8D8D8 and #8C8C8C;
 	// #CDCDCD and #181818 inactive).
-	SearchFill, SearchFillInactive, SearchRim, SearchGlow, SearchEdge, SearchEdgeInactive Pair
+	SearchRim, SearchGlow, SearchEdge, SearchEdgeInactive Pair
 	// TextEnd is how far before the sidebar's trailing edge a row's text
 	// ends (AppKit's cell view ends 16 short, its text field 4 more, the
 	// text 2 inside the field; a two-line row's 14, 6 and 2): longer text
@@ -158,14 +158,14 @@ var SidebarLook = SidebarRecipe{
 	Text: Of(theme.SidebarLabel), TextInactive: Of(theme.SidebarLabelInactive),
 	Header: Of(theme.SidebarHeader), HeaderInactive: Of(theme.SidebarHeaderInactive),
 	Sel: Of(theme.SidebarSel), SelUnemph: Of(theme.SidebarSelUnemph), SelInactive: Of(theme.SidebarSelInactive), OnSel: Of(theme.OnAccent),
-	OnSelInactive: Solid(0x676767, 0x999999),
+	OnSelInactive: Of(theme.SelectedRowTextInactive),
 	Symbol:        Of(theme.Accent),
 	SymbolGap:     4, DotW: 12, PlainTextX: 20, FieldInset: 2,
-	Detail: PairA(0x000000, 0xFFFFFF, 0.43, 0.36), DetailOnSel: 0.7, DetailTop: 8, HeaderChevronRight: 17.5, Chevron: Of(theme.Label3),
+	Detail: Of(theme.SidebarDetail), DetailOnSel: 0.7, DetailTop: 8, HeaderChevronRight: 17.5, Chevron: Of(theme.Label3),
 	Thumb: OfAlpha(theme.Label, 0.25, 0.3), ThumbW: 6,
 	LegacyKnob: Solid(0xA5A5A5, 0x5A5A5A), LegacyKnobInactive: Solid(0xABABAB, 0x585858),
 	LegacySlot: Solid(0xD8D8D8, 0x343434), LegacySlotInactive: Solid(0xDEDEDE, 0x323232),
-	SearchFill: Solid(0xEAEAEA, 0x4E4E4E), SearchFillInactive: Solid(0xE5E5E5, 0x464646),
+	SearchFill: Of(theme.SidebarSearchFill), SearchFillInactive: Of(theme.SidebarSearchFillInactive),
 	SearchRim: Solid(0xFFFFFF, 0x727272), SearchGlow: Solid(0xF4F4F4, 0x565656), SearchEdge: Solid(0xD8D8D8, 0x8C8C8C), SearchEdgeInactive: Solid(0xCDCDCD, 0x181818),
 	TextEnd:  22,
 	TileSize: 20, TileRadius: 5, TileGlyphPt: 11, TileInactive: 0.5, TileGlyph: Of(theme.OnAccent),
@@ -289,9 +289,9 @@ func SidebarSearch(k *base.Kit, label string, buf *ui.TextBuffer, placeholder st
 	c, r := k.Context(), k.Theme()
 	rc := &SidebarLook
 	h := theme.Snap(r.Window.Sidebar.SearchH)
-	fill, edge := rc.SearchFill.At(r.T), rc.SearchEdge.At(r.T)
+	fill, edge := rc.SearchFill.RGBA(r), rc.SearchEdge.At(r.T)
 	if k.Inactive() {
-		fill, edge = rc.SearchFillInactive.At(r.T), rc.SearchEdgeInactive.At(r.T)
+		fill, edge = rc.SearchFillInactive.RGBA(r), rc.SearchEdgeInactive.At(r.T)
 	}
 	k.ApplySize(ui.Pct(1), ui.Px(h))
 	c.NextBG(fill)
@@ -389,7 +389,7 @@ func sidebarRow(k *base.Kit, key ui.Key, it *SidebarItem, sel, emph bool, rc *Si
 		case emph:
 			textCol, symCol = rc.OnSel.RGBA(r), rc.OnSel.RGBA(r)
 		case k.Inactive():
-			textCol = rc.OnSelInactive.At(r.T)
+			textCol = rc.OnSelInactive.RGBA(r)
 		}
 	}
 
@@ -454,7 +454,7 @@ func sidebarRow(k *base.Kit, key ui.Key, it *SidebarItem, sel, emph bool, rc *Si
 	c.NextTextColor(textCol)
 	c.BoxKeyed(ui.DrawText|ui.EllipsisOverflowX|base.Floating, ui.KeyN(rkey, 2), base.StrBytes(it.Title))
 	if dt != nil {
-		col := rc.Detail.At(r.T)
+		col := rc.Detail.RGBA(r)
 		if sel && emph {
 			col = theme.WithAlpha(rc.OnSel.RGBA(r), rc.DetailOnSel)
 		}

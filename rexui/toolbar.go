@@ -79,7 +79,7 @@ type ToolbarRecipe struct {
 	// (measured #A6A6A6 and #666666: lighter than the dimmed title);
 	// GlyphDisabled when disabled.
 	Glyph, GlyphDisabled Tint
-	GlyphInactive        Pair
+	GlyphInactive        Tint
 	// Hover and Press are laid over a capsule's glass under the pointer and
 	// while pressed (ButtonToolbar's).
 	Hover, Press Tint
@@ -98,20 +98,17 @@ type ToolbarRecipe struct {
 	SegmentW float32
 	// ItemPad is the room a one-symbol item keeps on each side of its
 	// symbol, GroupPad that of an item in a group ([0] compact, [1]
-	// unified), ItemMin the narrowest item ([0] compact, [1] unified: a
-	// circle). Measured on 27.2 (§1): a compact item is its image and 12
-	// (27 for trash, 31.5 for sidebar.left), a unified one at least 36;
-	// inside a group, the image and 17–18 (compact) or 21–22.5 (unified).
-	// The symbols are 13 pt in both styles (AppKit's images: 15–20 wide).
+	// unified); an item is at least the style's ItemW (theme.ToolbarSpec).
+	// Measured on 27.2 (§1): a compact item is its image and 12 (27 for
+	// trash, 31.5 for sidebar.left), a unified one at least 36; inside a
+	// group, the image and 17–18 (compact) or 21–22.5 (unified). The
+	// symbols are theme.CapsuleSpec.Glyph (13 pt) in both styles, and a
+	// menu item is CapsuleSpec.MenuItemW wide.
 	ItemPad  float32
 	GroupPad [2]float32
-	ItemMin  [2]float32
-	// MenuPad is the room a menu item keeps besides its symbol (the
-	// chevron and the sides), MenuMin its narrowest (44.5 for
-	// ellipsis.circle, 47.5 for a 20-wide image).
-	MenuPad, MenuMin float32
 	// SearchGap is the gap before a search item, compact and unified (§1:
-	// 10 and 8); SearchW an expanded search field's width.
+	// 10 and 8); SearchW an expanded search field's width (167 on the Mac
+	// mini's 26B5101f, 166 on 26B5091g).
 	SearchGap [2]float32
 	SearchW   float32
 	// SidebarGap is the gap between two capsules over the sidebar (the
@@ -122,6 +119,13 @@ type ToolbarRecipe struct {
 	// Media and Share).
 	SidebarGap [2]float32
 	SharedGap  float32
+	// InspectorEdge is how far after the inspector pane's edge the toolbar
+	// takes it to be: AppKit's tracking separator lies half a point past
+	// the split view's divider, so the content pane's last item ends 7.5
+	// before the inspector's glass and the inspector's first starts 8.5
+	// into it (measured 0.5 on both machines: Search 882.5, Inspector
+	// 898.5 with the pane at 890).
+	InspectorEdge float32
 	// TitleTextX is how far into the title's text field (_NSToolbarTitleField,
 	// at the title's place) its text starts: an NSTextField's 2.
 	TitleTextX float32
@@ -137,16 +141,15 @@ type ToolbarRecipe struct {
 
 // ToolbarLook is the toolbar's recipe.
 var ToolbarLook = ToolbarRecipe{
-	Glyph: Of(theme.SidebarLabel), GlyphInactive: Solid(0xA6A6A6, 0x666666), GlyphDisabled: Of(theme.TextDisabled),
+	Glyph: Of(theme.SidebarLabel), GlyphInactive: Of(theme.ToolbarSymbolInactive), GlyphDisabled: Of(theme.TextDisabled),
 	Hover: Of(theme.Fill4), Press: Of(theme.Fill2),
 	Rim: Of(theme.CapsuleRim), RimInactive: Of(theme.CapsuleRimInactive), Highlight: Of(theme.CapsuleHighlight),
 	Title: Of(theme.TitleText), TitleInactive: Of(theme.TitleTextInactive), Subtitle: Of(theme.Label2),
 	Divider: Of(theme.Separator), DividerH: 16,
 	Selected: Of(theme.Fill2),
-	SegmentW: 39, ItemPad: 6, GroupPad: [2]float32{8.5, 10.5}, ItemMin: [2]float32{24, 36},
-	MenuPad: 27.5, MenuMin: 44.5,
-	SearchGap: [2]float32{10, 8}, SearchW: 166,
-	SidebarGap: [2]float32{14.5, 0}, SharedGap: 2, TitleTextX: 2,
+	SegmentW: 39, ItemPad: 6, GroupPad: [2]float32{8.5, 10.5},
+	SearchGap: [2]float32{10, 8}, SearchW: 167,
+	SidebarGap: [2]float32{14.5, 0}, SharedGap: 2, TitleTextX: 2, InspectorEdge: 0.5,
 	RexGlyph: Solid(0x5F5D62, 0xA3A7B8), RexGlyphHover: Solid(0x1E2227, 0xECEDF3), RexFill: PairA(0x2A2030, 0xFFFFFF, 0.08, 0.08),
 	RexHit: 28, RexRadius: 12,
 	Traffic:         [3]Pair{Solid(0xF87B72, 0xF35C52), Solid(0xFDC734, 0xFDBF00), Solid(0x7FD457, 0x2CC000)},
@@ -160,6 +163,8 @@ const (
 	tbStart tbKind = iota
 	tbCapsule
 	tbPicker
+	tbMenu
+	tbGroup
 	tbTitle
 	tbFlex
 )
@@ -351,6 +356,9 @@ func (tb *Toolbar) beginPane(i int, x, paneX float32) {
 			x1 = tb.w
 		}
 	}
+	if i == 1 && tb.o.Panes[1] > 0 {
+		x1 += theme.Snap(tb.k.Pt(tb.rc.InspectorEdge))
+	}
 	tb.pane, tb.x0, tb.x1, tb.paneX = i, x, x1, paneX
 	tb.cur, tb.fixed, tb.prev, tb.titled = 0, true, tbStart, false
 	tb.used, tb.over = 0, false
@@ -379,6 +387,8 @@ func (tb *Toolbar) NextPane() {
 	x, _ := tb.paneEdges(next)
 	if next == 2 && tb.o.Panes[1] <= 0 {
 		x = tb.w
+	} else if next == 2 {
+		x += theme.Snap(tb.k.Pt(tb.rc.InspectorEdge))
 	}
 	tb.beginPane(next, x+tb.k.Theme().Window.Capsule.WideGap, x)
 }
@@ -401,17 +411,24 @@ func (tb *Toolbar) gap(kind tbKind) {
 	if tb.inGroup {
 		return
 	}
-	tb.space(tb.gapW())
+	tb.space(tb.gapW(kind))
 	tb.prev = kind
 }
 
-// gapW is the gap the next capsule needs after what came before.
-func (tb *Toolbar) gapW() float32 {
+// gapW is the gap an item of kind needs after what came before: WideGap
+// next to a title, a picker, a menu or a group (on either side: measured
+// 8.5 between Finder's Group menu, its share-tag group and its Action menu,
+// and between Notes' two groups, on the Mac mini's 27.2, 26B5101f; 4.5 on
+// the earlier 26B5091g), Gap between other capsules.
+func (tb *Toolbar) gapW(kind tbKind) float32 {
 	wg := tb.k.Theme().Window.Capsule
 	switch tb.prev {
 	case tbStart, tbFlex:
 		return 0
-	case tbTitle, tbPicker:
+	case tbTitle, tbPicker, tbMenu, tbGroup:
+		return wg.WideGap
+	}
+	if kind == tbMenu || kind == tbGroup {
 		return wg.WideGap
 	}
 	g := wg.Gap
@@ -426,7 +443,7 @@ func (tb *Toolbar) gapW() float32 {
 // the pane, goes into the overflow menu at the band's end (End), listed by
 // name, and is not built; picked reports that the menu chose it this frame.
 // The pane keeps room for the overflow button after the items it shows.
-func (tb *Toolbar) overflows(w float32, name string) (hidden, picked bool) {
+func (tb *Toolbar) overflows(kind tbKind, w float32, name string) (hidden, picked bool) {
 	if tb.o.Style == theme.ToolbarRex {
 		return false, false
 	}
@@ -439,7 +456,7 @@ func (tb *Toolbar) overflows(w float32, name string) (hidden, picked bool) {
 			if tb.x1 >= tb.w-0.5 { // the last pane: the overflow button's room
 				room -= wg.Gap + tb.overflowW()
 			}
-			tb.over = tb.used+tb.gapW()+w > room+0.5
+			tb.over = tb.used+tb.gapW(kind)+w > room+0.5
 		}
 		hidden = tb.over
 	}
@@ -456,7 +473,7 @@ func (tb *Toolbar) overflows(w float32, name string) (hidden, picked bool) {
 
 // overflowW is the overflow button's width.
 func (tb *Toolbar) overflowW() float32 {
-	return theme.Snap(tb.k.Pt(tb.rc.ItemMin[tb.styleIndex()]))
+	return theme.Snap(tb.spec.ItemW)
 }
 
 // styleIndex is 0 for a compact toolbar, 1 for the others (the recipe's
@@ -490,7 +507,7 @@ func (tb *Toolbar) itemW(ic icon.ID) float32 {
 	if tb.inGroup {
 		pad = tb.rc.GroupPad[i]
 	}
-	return theme.Snap(max(tb.k.Pt(tb.rc.ItemMin[i]), iw+2*tb.k.Pt(pad)))
+	return theme.Snap(max(tb.spec.ItemW, iw+2*tb.k.Pt(pad)))
 }
 
 // glyph is the symbol colour in the visual state v.
@@ -500,7 +517,7 @@ func (tb *Toolbar) glyph(v base.Visual) uint32 {
 	case v.Disabled:
 		return tb.rc.GlyphDisabled.RGBA(r)
 	case v.Inactive:
-		return tb.rc.GlyphInactive.At(r.T)
+		return tb.rc.GlyphInactive.RGBA(r)
 	}
 	return tb.rc.Glyph.RGBA(r)
 }
@@ -562,7 +579,7 @@ func (tb *Toolbar) Item(ic icon.ID, name string) base.Signal {
 	k := tb.k
 	h := tb.capsuleH()
 	w := tb.itemW(ic)
-	if hidden, picked := tb.overflows(w, name); hidden {
+	if hidden, picked := tb.overflows(tbCapsule, w, name); hidden {
 		return base.Signal{Clicked: picked}
 	}
 	tb.gap(tbCapsule)
@@ -649,11 +666,11 @@ func (tb *Toolbar) beginGroup(name string, shared bool) {
 		gw = lr[2] - lr[0]
 	}
 	c.KeepValue(wkey, 0, gw)
-	if hidden, _ := tb.overflows(gw, ""); hidden {
+	if hidden, _ := tb.overflows(tbGroup, gw, ""); hidden {
 		tb.inGroup, tb.hideGrp = true, true
 		return
 	}
-	tb.gap(tbCapsule)
+	tb.gap(tbGroup)
 	flags := tb.capsuleLook(base.Visual{Inactive: k.Inactive(), Disabled: k.Disabled()}, h)
 	c.NextAxis(ui.AxisX)
 	c.NextCross(ui.CrossCenter)
@@ -700,8 +717,8 @@ func (tb *Toolbar) Nav(back, forward icon.ID, canBack, canForward bool) (b, f ba
 	c, r := k.Context(), k.Theme()
 	h := tb.capsuleH()
 	w := theme.Snap(r.Window.Capsule.NavW)
-	if hidden, picked := tb.overflows(w, "Back"); hidden {
-		_, pf := tb.overflows(w, "Forward")
+	if hidden, picked := tb.overflows(tbCapsule, w, "Back"); hidden {
+		_, pf := tb.overflows(tbCapsule, w, "Forward")
 		return base.Signal{Clicked: picked && canBack}, base.Signal{Clicked: pf && canForward}
 	}
 	tb.gap(tbCapsule)
@@ -761,7 +778,7 @@ func (tb *Toolbar) Picker(label string, sel *int, icons []icon.ID, names []strin
 	if !collapsed {
 		pw = theme.Snap(k.Pt(tb.rc.SegmentW)) * float32(len(icons))
 	}
-	if hidden, picked := tb.overflows(pw, label); hidden {
+	if hidden, picked := tb.overflows(tbPicker, pw, label); hidden {
 		// chosen from the overflow menu: the next option, as a click on the
 		// collapsed picker without native menus
 		sig := base.Signal{Clicked: picked}
@@ -878,11 +895,11 @@ func (tb *Toolbar) Menu(ic icon.ID, name string, menuIndex int) base.Signal {
 	c := k.Context()
 	h := tb.capsuleH()
 	iw, _ := k.IconSize(ic)
-	w := theme.Snap(max(k.Pt(tb.rc.MenuMin), iw+k.Pt(tb.rc.MenuPad)))
-	if hidden, picked := tb.overflows(w, name); hidden {
+	w := theme.Snap(k.Theme().Window.Capsule.MenuItemW(iw))
+	if hidden, picked := tb.overflows(tbMenu, w, name); hidden {
 		return base.Signal{Clicked: picked}
 	}
-	tb.gap(tbCapsule)
+	tb.gap(tbMenu)
 	p := k.PressState(name, base.HoverOn)
 	flags := tb.capsuleLook(p.Visual, h)
 	k.BeginPress(&p, ui.RoleButton, ui.Px(w), ui.Px(h), flags, nil)
@@ -903,7 +920,7 @@ func (tb *Toolbar) Menu(ic icon.ID, name string, menuIndex int) base.Signal {
 // unified toolbar short of room) showing ic (a magnifying glass at the
 // toolbar's symbol size); the app expands it on Clicked.
 func (tb *Toolbar) SearchButton(ic icon.ID, name string) base.Signal {
-	if hidden, picked := tb.overflows(tb.itemW(ic)+tb.searchGapW()-tb.gapW(), name); hidden {
+	if hidden, picked := tb.overflows(tbCapsule, tb.itemW(ic)+tb.searchGapW()-tb.gapW(tbCapsule), name); hidden {
 		return base.Signal{Clicked: picked}
 	}
 	tb.searchGap()
@@ -939,7 +956,7 @@ func (tb *Toolbar) Search(label string, buf *ui.TextBuffer, placeholder string, 
 	}
 	h := tb.capsuleH()
 	w := theme.Snap(k.Pt(widthPt))
-	if hidden, _ := tb.overflows(w+tb.searchGapW()-tb.gapW(), label); hidden {
+	if hidden, _ := tb.overflows(tbCapsule, w+tb.searchGapW()-tb.gapW(tbCapsule), label); hidden {
 		return base.FieldSignal{}
 	}
 	tb.searchGap()
@@ -973,7 +990,7 @@ func (tb *Toolbar) Title() {
 	if tb.fixed {
 		x := tb.x0 + tb.cur
 		g = tb.paneX + tb.spec.TitleInset - x
-		if tb.prev == tbCapsule || tb.prev == tbPicker {
+		if tb.prev == tbCapsule || tb.prev == tbPicker || tb.prev == tbMenu || tb.prev == tbGroup {
 			g = max(g, tb.spec.TitleGap)
 		}
 	}
@@ -1103,7 +1120,7 @@ func (tb *Toolbar) overflowButton() ToolbarOverflow {
 	c := k.Context()
 	res := ToolbarOverflow{N: tb.nOv, Names: tb.ov}
 	names := res.Names[:res.N]
-	tb.space(tb.gapW())
+	tb.space(tb.gapW(tbCapsule))
 	h := tb.capsuleH()
 	w := tb.overflowW()
 	p := base.Press{Key: tb.ovKey, Name: "Show More", Hover: base.HoverOn, Visual: k.VisualOf(tb.ovKey, base.HoverOn)}

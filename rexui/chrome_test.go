@@ -124,32 +124,34 @@ func (g *rig) frameOf(role ui.Role, name string) [4]float32 {
 	return [4]float32{b[0] / g.scale, b[1] / g.scale, b[2] / g.scale, b[3] / g.scale}
 }
 
-func near(a, b float32) bool { return math.Abs(float64(a-b)) <= 0.5 }
+func nearPt(a, b float32) bool { return math.Abs(float64(a-b)) <= 0.5 }
 
 // The toolbar lays its items out as AppKit lays out the finder scene's
 // (docs/design/liquid-glass-reference.md §1): the first capsule 17 after
-// the zoom light (x 96), sections at the panes' edges, 4 between capsules
-// and 8 after a picker and before search, the title 10 after the capsule
-// before it, the items after the flexible title packed against the pane's
-// end, 36-tall capsules at y 8.
+// the zoom light (x 96), sections at the panes' edges (the inspector's half a
+// point past it), 8 next to a picker, a menu or a group and before search,
+// the title 10 after the capsule before it, the items after the flexible
+// title packed against the pane's end, 36-tall capsules at y 8; every
+// capsule within 0.5 of AppKit's frame in the Mac mini's Finder scene
+// (captures-macmini, 26B5101f).
 func TestToolbarLayoutUnified(t *testing.T) {
 	g, _ := newFinderToolbar(t, theme.ToolbarUnified)
 	f := g.frameOf
 	sb := f(ui.RoleButton, "Sidebar")
-	if !near(sb[0], 96) || !near(sb[1], 8) || !near(sb[3]-sb[1], 36) || sb[2]-sb[0] < 36-0.5 {
+	if !nearPt(sb[0], 96) || !nearPt(sb[1], 8) || !nearPt(sb[3]-sb[1], 36) || sb[2]-sb[0] < 36-0.5 {
 		t.Errorf("the sidebar toggle at %v, want x 96, y 8, 36 tall, at least 36 wide", sb)
 	}
 	nav := f(ui.RoleGroup, "Back/Forward")
-	if !near(nav[0], 188) || !near(nav[2]-nav[0], 86) {
+	if !nearPt(nav[0], 188) || !nearPt(nav[2]-nav[0], 86) {
 		t.Errorf("back/forward at %v, want 188..274", nav)
 	}
 	title := f(ui.RoleLabel, "Documents")
-	if !near(title[0], nav[2]+10) || !near(title[1], 16.5) {
+	if !nearPt(title[0], nav[2]+10) || !nearPt(title[1], 16.5) {
 		t.Errorf("the title at %v, want x %v, y 16.5", title, nav[2]+10)
 	}
 	view, grp := f(ui.RoleComboBox, "View"), f(ui.RoleButton, "Group")
 	shareTag, action, search := f(ui.RoleGroup, "share-tag"), f(ui.RoleButton, "Action"), f(ui.RoleButton, "Search")
-	if !near(view[2]-view[0], 46) {
+	if !nearPt(view[2]-view[0], 46) {
 		t.Errorf("the collapsed picker is %v wide, want 46", view[2]-view[0])
 	}
 	for _, c := range []struct {
@@ -157,40 +159,46 @@ func TestToolbarLayoutUnified(t *testing.T) {
 		a, b [4]float32
 		gap  float32
 	}{
-		{"picker to menu", view, grp, 8},
-		{"menu to group", grp, shareTag, 4},
-		{"group to menu", shareTag, action, 4},
+		{"picker to menu", view, grp, 8.5},
+		{"menu to group", grp, shareTag, 8.5},
+		{"group to menu", shareTag, action, 8.5},
 		{"menu to search", action, search, 8},
 	} {
-		if g := c.b[0] - c.a[2]; !near(g, c.gap) {
+		if g := c.b[0] - c.a[2]; !nearPt(g, c.gap) {
 			t.Errorf("%s: %v apart, want %v", c.name, g, c.gap)
 		}
 	}
-	if !near(search[2], 890-8) || !near(search[2]-search[0], 36) {
-		t.Errorf("the search capsule at %v, want 36 wide ending at 882", search)
-	}
-	if in := f(ui.RoleButton, "Inspector"); !near(in[0], 890+8) {
-		t.Errorf("the inspector toggle at %v, want x 898", in)
+	for _, c := range []struct {
+		name string
+		r    [4]float32
+		x, w float32
+	}{
+		{"View", view, 591.5, 46}, {"Group", grp, 646, 47.5}, {"share-tag", shareTag, 702, 83.5},
+		{"Action", action, 794, 44.5}, {"Search", search, 846.5, 36}, {"Inspector", f(ui.RoleButton, "Inspector"), 898.5, 36},
+	} {
+		if !nearPt(c.r[0], c.x) || !nearPt(c.r[2]-c.r[0], c.w) {
+			t.Errorf("%s at %v, %v wide; AppKit's at %v, %v wide", c.name, c.r[0], c.r[2]-c.r[0], c.x, c.w)
+		}
 	}
 	share, tags := f(ui.RoleButton, "Share"), f(ui.RoleButton, "Tags")
-	if !near(tags[0]-share[2], 8) || share[0] != shareTag[0] || tags[2] != shareTag[2] {
+	if !nearPt(tags[0]-share[2], 8) || share[0] != shareTag[0] || tags[2] != shareTag[2] {
 		t.Errorf("the group's items %v, %v in %v: want 8 apart filling it", share, tags, shareTag)
 	}
 }
 
 // A compact toolbar: 24-tall capsules, the first at x 91.5, an expanded
-// search field 166 wide 10 after the item before it.
+// search field 10 after the item before it.
 func TestToolbarLayoutCompact(t *testing.T) {
 	g, _ := newFinderToolbar(t, theme.ToolbarCompact)
 	sb := g.frameOf(ui.RoleButton, "Sidebar")
-	if !near(sb[0], 91.5) || !near(sb[1], 8) || !near(sb[3]-sb[1], 24) {
+	if !nearPt(sb[0], 91.5) || !nearPt(sb[1], 8) || !nearPt(sb[3]-sb[1], 24) {
 		t.Errorf("the sidebar toggle at %v, want x 91.5, y 8, 24 tall", sb)
 	}
-	if title := g.frameOf(ui.RoleLabel, "Documents"); !near(title[1], 12) {
+	if title := g.frameOf(ui.RoleLabel, "Documents"); !nearPt(title[1], 12) {
 		t.Errorf("the compact title at %v, want y 12", title)
 	}
 	action, search := g.frameOf(ui.RoleButton, "Action"), g.frameOf(ui.RoleSearchField, "Search")
-	if !near(search[0]-action[2], 10) {
+	if !nearPt(search[0]-action[2], 10) {
 		t.Errorf("the search field is %v after the item before it, want 10", search[0]-action[2])
 	}
 }
@@ -311,8 +319,8 @@ func (g *rig) has(role ui.Role, name string) bool {
 func selectionFill(g *rig, f [4]float32) uint32 {
 	for _, q := range g.list.Quads {
 		r := q.Rect
-		if q.Mode == gpu.ModeShape && near(r[0]/g.scale, 10) && near(r[2]/g.scale, 170) &&
-			near(r[1]/g.scale, f[1]) && near(r[3]/g.scale, f[3]) && near(q.Radii[0]/g.scale, 8) {
+		if q.Mode == gpu.ModeShape && nearPt(r[0]/g.scale, 10) && nearPt(r[2]/g.scale, 170) &&
+			nearPt(r[1]/g.scale, f[1]) && nearPt(r[3]/g.scale, f[3]) && nearPt(q.Radii[0]/g.scale, 8) {
 			return q.Color[0]
 		}
 	}
@@ -450,7 +458,7 @@ func TestPathBarReportsAndElides(t *testing.T) {
 	g.settle()
 	narrow := g.frameOf(ui.RoleButton, "Users")
 	iw, _ := g.k.IconSize(ic.folder)
-	if !near(narrow[2]-narrow[0], iw/g.scale) || wide[2]-wide[0] <= narrow[2]-narrow[0] {
+	if !nearPt(narrow[2]-narrow[0], iw/g.scale) || wide[2]-wide[0] <= narrow[2]-narrow[0] {
 		t.Errorf("Users is %v wide in a narrow bar (was %v), want its symbol's %v", narrow[2]-narrow[0], wide[2]-wide[0], iw/g.scale)
 	}
 	if first := g.frameOf(ui.RoleButton, "Macintosh HD"); first[2]-first[0] <= iw/g.scale+1 {
@@ -514,11 +522,11 @@ func TestToolbarSidebarGapAndSharedCapsule(t *testing.T) {
 	}
 	g.settle()
 	sb, del := g.frameOf(ui.RoleButton, "Sidebar"), g.frameOf(ui.RoleButton, "Delete")
-	if !near(del[0]-sb[2], 14.5) {
+	if !nearPt(del[0]-sb[2], 14.5) {
 		t.Errorf("Delete is %v after the sidebar toggle, want 14.5", del[0]-sb[2])
 	}
 	media, share, both := g.frameOf(ui.RoleButton, "Media"), g.frameOf(ui.RoleButton, "Share"), g.frameOf(ui.RoleGroup, "insert-share")
-	if !near(share[0]-media[2], 2) || media[0] != both[0] || share[2] != both[2] {
+	if !nearPt(share[0]-media[2], 2) || media[0] != both[0] || share[2] != both[2] {
 		t.Errorf("Media %v and Share %v in %v: want 2 apart filling one capsule", media, share, both)
 	}
 }

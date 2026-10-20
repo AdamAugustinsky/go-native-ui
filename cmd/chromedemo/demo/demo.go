@@ -215,7 +215,7 @@ func (d *Demo) addIcons() {
 	tool := func(sym string, fb rune, pt float32) icon.ID {
 		return k.AddIcon(icon.Spec{Symbol: sym, Fallback: fb, Pt: pt})
 	}
-	const pt = 13 // AppKit's toolbar symbols, in both styles
+	pt := theme.MacWindow.Capsule.Glyph // AppKit's toolbar symbols, in both styles
 	ic := &d.ic
 	ic.sidebar = tool("sidebar.left", '▤', pt)
 	ic.inspector = tool("sidebar.right", '▥', pt)

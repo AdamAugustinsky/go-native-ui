@@ -218,6 +218,19 @@ Transparency and off macOS the measured fallbacks are drawn. The rows of a
 sidebar and the content scroll below the band, clipped there, where AppKit
 fades them under it.
 
+On the theme's values from D3b forms (2026-10-20): toolbar symbols
+`CapsuleSpec.Glyph`, items at least the style's `ItemW`, menus
+`CapsuleSpec.MenuItemW`, and the roles `ToolbarSymbolInactive`,
+`SelectedRowTextInactive`, `SidebarDetail`, `SidebarSearchFill(Inactive)`.
+Against the Mac mini's Finder (`captures-macmini`, 27.2 26B5101f, AppKit's
+frames from its tree) every capsule is within 0.5: WideGap next to a menu
+or a group as well as a picker (8.5 there; 4.5 on 26B5091g), the inspector
+pane's items half a point past its edge (`ToolbarRecipe.InspectorEdge`),
+Group and Share 0.5 wider than AppKit's (our symbols' widths are whole
+pixels). Notes' search field is 167 there (166 on 26B5091g); its checklist
+item is 31 there (35.5 ours, 36 on 26B5091g), so the format group is 4.5
+wider and New Note 2 left of AppKit's 477.
+
 With legacy scrollers (the system's style, followed live; a mouse on the
 Mac mini) every scroll view's content leaves the bar's 17 pt beside it and
 the bar is the legacy one: the sidebar's an opaque knob, 11 pt wide and 3 in,
