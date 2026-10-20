@@ -3,6 +3,7 @@ package rexui_test
 import (
 	"slices"
 	"sort"
+	"strconv"
 	"testing"
 	"time"
 
@@ -30,9 +31,12 @@ var (
 // outlineView is an outline of tree in a 260 × 240 pt box at the window's
 // top left, full width, so that row r spans y 48r to 48r+48 px.
 type outlineView struct {
-	tree base.Tree
-	st   base.OutlineState
-	ol   rexui.Outline
+	tree  base.Tree
+	st    base.OutlineState
+	ol    rexui.Outline
+	names [][]byte // the nodes' accessible names, if set
+	// changed: the selection changed in a frame
+	changed bool
 }
 
 func newOutlineView(size []uint32, depth []uint16) *outlineView {
@@ -48,9 +52,14 @@ func (v *outlineView) build(g *rig) {
 	c.Push(c.Box(0, "frame"))
 	v.ol = rexui.BeginOutline(k, "Files", &v.st, &v.tree, rexui.OutlineOpts{Style: rexui.ListFullWidth})
 	for r := v.ol.First; r < v.ol.Last; r++ {
-		v.ol.Row(r, nil)
+		var name []byte
+		if v.names != nil {
+			name = v.names[v.st.Rows()[r]]
+		}
+		v.ol.Row(r, name)
 		v.ol.TextBytes([]byte("node"))
 	}
+	v.changed = v.changed || v.ol.Changed
 	rexui.EndOutline(k, &v.ol)
 	c.Pop()
 }
@@ -201,10 +210,11 @@ func TestStretchedOutline(t *testing.T) {
 // listView is a list of n rows with rows 1 and 2 selected, in style s, in a
 // 300 × 240 pt box at the window's top left.
 type listView struct {
-	st    base.ListState
-	style rexui.ListStyle
-	n     int
-	key   ui.Key // the list's, as of the last frame
+	st      base.ListState
+	style   rexui.ListStyle
+	striped bool
+	n       int
+	key     ui.Key // the list's, as of the last frame
 }
 
 func (v *listView) build(g *rig) {
@@ -212,7 +222,7 @@ func (v *listView) build(g *rig) {
 	c := k.Context()
 	c.NextSize(ui.Px(k.Pt(300)), ui.Px(k.Pt(240)))
 	c.Push(c.Box(0, "frame"))
-	l := rexui.BeginList(k, "Notes", &v.st, v.n, rexui.ListOpts{Style: v.style})
+	l := rexui.BeginList(k, "Notes", &v.st, v.n, rexui.ListOpts{Style: v.style, Striped: v.striped})
 	for r := l.First; r < l.Last; r++ {
 		l.Row(r, v.st.Item(r), nil)
 		rexui.LabelBytes(k, []byte("note"), rexui.LabelOpts{Color: l.Text()})
@@ -470,5 +480,137 @@ func TestTableHeaderCornerAboveALegacyBar(t *testing.T) {
 	}
 	if len(s) != 1 || s[0].Rect != [4]float32{bar[0] + 6, bar[1] + 6, bar[2] - 6, bar[3] - 6} {
 		t.Fatalf("the knob slot: %+v in the bar %v, want it inset 6 px (3 pt)", s, bar)
+	}
+}
+
+// The stripes below the last row of a striped list are not content: an empty
+// (or short) list is not scrollable, has no scroll bar even with legacy
+// scrollers, and still shows its stripes.
+func TestFillerStripesAreNotContent(t *testing.T) {
+	for _, n := range []int{0, 3} {
+		v := &listView{n: n, striped: true}
+		v.st.Sel.Reserve(max(n, 1))
+		legacy := theme.SystemValues{Known: true, Settings: theme.Settings{Scroller: theme.ScrollerLegacy}}
+		g := newRig(t, theme.Light, &legacy, v.build)
+		g.settle()
+		id, ok := g.c.BoxOf(v.key)
+		if !ok {
+			t.Fatal("no list box")
+		}
+		content, view := g.c.ScrollExtent(id)
+		if content[1] > view[1] {
+			t.Fatalf("%d rows: %v px of content in a %v px view: the stripes scroll", n, content[1], view[1])
+		}
+		r := g.k.Theme()
+		stripe, knob := rexui.ListLook.Stripe.RGBA(r)>>8, rexui.ListLook.LegacyKnob.RGBA(r)>>8
+		stripes := 0
+		for _, q := range g.list.Quads {
+			if q.Mode != gpu.ModeShape || q.Color[0]&0xFF == 0 {
+				continue
+			}
+			switch q.Color[0] >> 8 {
+			case knob:
+				t.Fatalf("%d rows: a scroll bar", n)
+			case stripe:
+				stripes++
+			}
+		}
+		if stripes < 3 {
+			t.Fatalf("%d rows: %d stripes in a 240 pt list", n, stripes)
+		}
+	}
+}
+
+// named gives the nodes of v the names n0, n1 …
+func (v *outlineView) named() *outlineView {
+	for i := range v.tree.Size {
+		v.names = append(v.names, []byte("n"+strconv.Itoa(i)))
+	}
+	return v
+}
+
+// An assistive technology's expand and collapse requests reach a styled
+// outline's rows: the row of a collapsed node offers ActExpand, and the
+// request expands it; ActCollapse collapses it again.
+func TestOutlineTakesExpandAndCollapseRequests(t *testing.T) {
+	v := newOutlineView(smallSize, smallDepth).named()
+	g := newRig(t, theme.Light, nil, v.build)
+	g.settle()
+	for _, step := range []struct {
+		act  ui.SemAction
+		open bool
+	}{{ui.ActExpand, true}, {ui.ActCollapse, false}} {
+		n := g.node(ui.RoleListItem, "n0")
+		if n.Actions&step.act == 0 {
+			t.Fatalf("the row of node 0 does not offer action %v (it offers %v)", step.act, n.Actions)
+		}
+		g.in.PushAction(ui.SemRequest{Key: n.Key, Action: step.act})
+		g.frame()
+		g.settle()
+		if v.st.Expanded(0) != step.open {
+			t.Fatalf("after action %v node 0 is expanded: %v", step.act, v.st.Expanded(0))
+		}
+	}
+}
+
+// An outline's rows tell assistive technologies their depth in the tree
+// (SemNode.Level, 1 for a root) and whether they show their children
+// (SemExpanded); a list's rows are in no tree.
+func TestOutlineRowsExportTheirLevel(t *testing.T) {
+	v := newOutlineView(smallSize, smallDepth).named()
+	v.st.Expand(&v.tree, 0, true, false)
+	v.st.Expand(&v.tree, 1, true, false)
+	g := newRig(t, theme.Light, nil, v.build)
+	g.settle()
+	for _, w := range []struct {
+		name     string
+		level    int32
+		expanded bool
+	}{{"n0", 1, true}, {"n1", 2, true}, {"n2", 3, false}, {"n3", 2, false}, {"n4", 1, false}, {"n6", 1, false}} {
+		n := g.node(ui.RoleListItem, w.name)
+		if n.Level != w.level || (n.State&ui.SemExpanded != 0) != w.expanded {
+			t.Errorf("%s: level %d, expanded %v; want %d, %v", w.name, n.Level, n.State&ui.SemExpanded != 0, w.level, w.expanded)
+		}
+	}
+
+	l := &listView{n: 3}
+	l.st.Sel.Reserve(3)
+	lg := newRig(t, theme.Light, nil, l.build)
+	lg.settle()
+	lg.c.Semantics(&lg.sem)
+	for _, n := range lg.sem.Nodes {
+		if n.Role == ui.RoleListItem && n.Level != 0 {
+			t.Fatalf("a list's row reports level %d", n.Level)
+		}
+	}
+}
+
+// Collapsing a node whose hidden child is selected moves the selection to
+// the node, and the outline reports the change (Changed), whichever way the
+// collapse comes: a disclosure click or an assistive technology's request.
+func TestOutlineCollapseReportsTheSelectionChange(t *testing.T) {
+	for _, how := range []string{"disclosure", "action"} {
+		v := newOutlineView(smallSize, smallDepth).named()
+		v.st.Expand(&v.tree, 0, true, false)
+		v.st.Sel.Only(1)
+		v.st.Sel.SetCursor(1)
+		g := newRig(t, theme.Light, nil, v.build)
+		g.settle()
+		v.changed = false
+		if how == "disclosure" {
+			g.click(17, 24) // node 0's disclosure, row 0
+		} else {
+			g.in.PushAction(ui.SemRequest{Key: g.node(ui.RoleListItem, "n0").Key, Action: ui.ActCollapse})
+			g.frames(3)
+		}
+		if v.st.Expanded(0) {
+			t.Fatalf("%s: node 0 did not collapse", how)
+		}
+		if got := v.selected(); !slices.Equal(got, []uint32{0}) {
+			t.Fatalf("%s: selection %v, want the collapsed node", how, got)
+		}
+		if !v.changed {
+			t.Fatalf("%s: the selection changed, and Changed never said so", how)
+		}
 	}
 }

@@ -91,7 +91,7 @@ func ProgressBar(k *base.Kit, label string, frac float32, o ProgressOpts) ui.ID 
 	if !indeterminate {
 		c.NextSemRange(0, 1, float64(max(frac, 0)), 0)
 	}
-	root := c.BoxKeyed(0, key, nil)
+	root := c.BoxKeyed(disabledFlag(k), key, nil) // disabled: reported to assistive technologies
 	c.Push(root)
 
 	c.NextSize(ui.Pct(1), ui.Px(bar))
@@ -109,7 +109,7 @@ func ProgressBar(k *base.Kit, label string, frac float32, o ProgressOpts) ui.ID 
 			phase = o.Phase
 		case !reduced(k):
 			phase = cycle(k, int64(rc.Period*1e9))
-			if loops(k, c.Rect(root)) {
+			if loops(k, root) {
 				c.RequestFrame()
 			}
 		}
@@ -215,7 +215,7 @@ func LevelIndicator(k *base.Kit, label string, value, lo, hi float32, o LevelOpt
 	c.NextRole(ui.RoleProgressBar)
 	c.NextSemName(display)
 	c.NextSemRange(float64(lo), float64(hi), float64(value), 0)
-	root := c.BoxKeyed(0, key, nil)
+	root := c.BoxKeyed(disabledFlag(k), key, nil) // disabled: reported to assistive technologies
 	c.Push(root)
 
 	c.NextSize(ui.Pct(1), ui.Px(bar))

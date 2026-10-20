@@ -21,6 +21,9 @@ var altGrIsCtrlAlt = runtime.GOOS == "windows"
 type TextEditStyle struct {
 	// Selection is the highlight of the selected text (RGBA8) in a focused field.
 	Selection uint32
+	// SelectionInactive is the highlight of a selection scope's text when the
+	// scope is not focused or the window is inactive (see SelectionScope).
+	SelectionInactive uint32
 	// Caret is the caret colour (RGBA8); 0 uses the field's text colour.
 	Caret uint32
 	// BlinkHalfNs is how long the caret stays on and off; 0 disables blinking.
@@ -30,7 +33,7 @@ type TextEditStyle struct {
 	BlinkTimeoutNs int64
 }
 
-var defaultTextEdit = TextEditStyle{Selection: 0x2D6BFF55, BlinkHalfNs: 500e6, BlinkTimeoutNs: 10e9}
+var defaultTextEdit = TextEditStyle{Selection: 0x2D6BFF55, SelectionInactive: 0x8080804C, BlinkHalfNs: 500e6, BlinkTimeoutNs: 10e9}
 
 // TextFieldSignal is what TextField reports.
 type TextFieldSignal struct {

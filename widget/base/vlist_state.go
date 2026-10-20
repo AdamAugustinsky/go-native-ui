@@ -368,7 +368,8 @@ func (st *VListState) setHeight(id uint64, h float32) bool {
 
 // SetMark makes mark i (0 to VListMarks-1) follow item id, so that the app
 // learns what became of it when an edit removes it (Mark). A selection scope
-// marks its endpoints' items.
+// over the list marks its endpoints' items with the last two marks
+// (TrackItem); an app that has one leaves them alone.
 // SetMark(i, NoID) clears the mark.
 func (st *VListState) SetMark(i int, id uint64) {
 	st.marks[i] = VListMark{ID: id, Next: NoID, Prev: NoID}
@@ -483,17 +484,25 @@ func (st *VListState) spliceInPlace(at, removed int, ids []uint64) {
 	f := &st.f
 	// where the followed items are in the run, -1 if they are not in it
 	ar := -1
-	var mr [VListMarks]int
+	var mr, mn, mp [VListMarks]int // a mark's item, or a removed mark's Next and Prev
 	tracked := false
 	if removed > 0 && st.started {
 		ar = runIndex(f, st.anchorID, at, removed)
 		tracked = ar >= 0
 	}
 	for i := range st.marks {
-		mr[i] = -1
-		if removed > 0 && st.markOn[i] && !st.marks[i].Removed {
-			mr[i] = runIndex(f, st.marks[i].ID, at, removed)
+		mr[i], mn[i], mp[i] = -1, -1, -1
+		if removed == 0 || !st.markOn[i] {
+			continue
+		}
+		if m := &st.marks[i]; !m.Removed {
+			mr[i] = runIndex(f, m.ID, at, removed)
 			tracked = tracked || mr[i] >= 0
+		} else if !m.Reset {
+			// the survivors a removed mark points to may go too: they move
+			// on to theirs
+			mn[i], mp[i] = runIndex(f, m.Next, at, removed), runIndex(f, m.Prev, at, removed)
+			tracked = tracked || mn[i] >= 0 || mp[i] >= 0
 		}
 	}
 	if !tracked {
@@ -548,6 +557,12 @@ func (st *VListState) spliceInPlace(at, removed int, ids []uint64) {
 		if _, ok := f.index(m.ID); mr[i] >= 0 && !ok {
 			m.Removed = true
 			m.Next, m.Prev = survivors(mr[i])
+		}
+		if _, ok := f.index(m.Next); mn[i] >= 0 && !ok {
+			m.Next, _ = survivors(mn[i])
+		}
+		if _, ok := f.index(m.Prev); mp[i] >= 0 && !ok {
+			_, m.Prev = survivors(mp[i])
 		}
 	}
 }
