@@ -33,6 +33,9 @@
 //	                                      native alert and file panel sheets (macOS; ErrUnsupported elsewhere); the answer is an EvDialog, see dialog.go
 //	(*Window).SetTooltipRegions(r)        native tooltips by content rectangle (macOS; no-op elsewhere); diffed, cheap to call every frame
 //	(*Window).SetTooltipText(f)           where the tooltip text comes from, asked for on demand when the system shows one
+//	(*Window).SetDropKinds(k), SetDragHandler(h), StartDrag(spec)
+//	                                      drag and drop in and out (macOS; ErrDragUnsupported elsewhere), see drag.go
+//	DragThreshold() float32               how far a press moves before it is a drag, in logical units
 //	(*Window).Close()
 //	Clipboard() string                    plain UTF-8 text of the system clipboard; main thread
 //	SetClipboard(text string)             replace the clipboard with plain text; main thread
@@ -110,6 +113,11 @@ const (
 	EvHostFocus               // the keyboard focus moved to a host (Tag: its HostID) or back to the app's own view (Tag 0)
 	EvHostCommand             // a focused host handed back Tab, Shift+Tab, Escape or Enter: Tag is the HostID, Key and Mods the key
 	EvDialog                  // an alert or file panel ended: Tag is its DialogTicket; decode with Window.DialogResult (dialog.go)
+	EvDragEnter               // a drag came over the window (drag.go): X, Y, Code the kinds offered, SelStart the operations allowed, SelLen the items, Tag the drag's number
+	EvDragMove                // the pointer moved in a drag over the window: as EvDragEnter
+	EvDragLeave               // the drag left the window or was cancelled: Tag
+	EvDrop                    // the drag was dropped: Code the kind delivered, Text its data, X, Y, Tag; FlagFailed when it could not be read
+	EvDragEnd                 // a drag out ended: Tag is its DragTicket, Code the operation performed (DragOpNone: cancelled)
 )
 
 // Flags qualify an Event.

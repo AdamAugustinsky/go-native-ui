@@ -98,6 +98,7 @@ type Window struct {
 	cmdCalled   bool
 
 	aux         nativeAux // native dialogs and tooltips (dialog_darwin.go, tooltip_darwin.go)
+	drag        dragState // drag and drop in and out (drag_darwin.go)
 	menuActed   bool      // a native menu item acted during this event's sendEvent (menu_darwin.go)
 	fieldKey    bool      // the key-down being sent is the focused field's: no menu item acts on it
 	fieldKeys   FieldKeys

@@ -45,6 +45,7 @@ func (w *Window) Wait(timeoutNs int64) []Event {
 		w.handle(ev)
 	}
 	w.reapDialogs()
+	w.reapDrags() // images converted on workers, promised files asked for (drag_darwin.go)
 	F.Call1(objc.PoolPop, pool)
 	w.returned, w.nOut = true, len(w.q.ev)
 	return w.q.ev

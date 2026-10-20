@@ -22,6 +22,7 @@ func registerClasses() {
 	registerViewDraw(view)
 	registerViewMouse(view)
 	registerViewEdit(view)
+	registerViewDrag(view)
 	viewClass = view.Register()
 	delegate := objc.Define("GNUIWindowDelegate", objc.Cls("NSObject"), []string{"NSWindowDelegate"})
 	registerWindowDelegate(delegate)

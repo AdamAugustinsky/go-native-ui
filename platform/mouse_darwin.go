@@ -108,6 +108,9 @@ func (w *Window) pointerEvent(ev objc.ID, typ uintptr, t int64) (consumed bool) 
 		}
 		return true
 	}
+	if typ == 1 {
+		w.notePress(ev) // a drag out starts from this press (drag_darwin.go)
+	}
 	w.q.push(e)
 	return false
 }
