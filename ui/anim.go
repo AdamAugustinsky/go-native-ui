@@ -28,6 +28,22 @@ func (c *Context) AnimateValueFrom(key Key, initial, target, k float32) float32 
 	return c.animate(key, initial, target, k)
 }
 
+// KeepValue stores v for key and returns what the previous frame stored for
+// it, or initial if it stored nothing: a little state a component keeps from
+// frame to frame without a field of the app's (how many repeats a held
+// button has made). Call it once per frame; like AnimateValue's, a value not
+// asked for in a frame is dropped. Keys share AnimateValue's space.
+func (c *Context) KeepValue(key Key, initial, v float32) (prev float32) {
+	prev = initial
+	if i, ok := c.avTable.Get(uint64(key)); ok {
+		prev = c.av[i].cur
+		c.av[i].cur, c.av[i].tgt, c.av[i].lastFrame = v, v, c.frame
+		return prev
+	}
+	c.animate(key, v, v, 0) // a new entry, at v
+	return prev
+}
+
 func (c *Context) animate(key Key, initial, target, k float32) float32 {
 	var e *animEnt
 	if v, ok := c.avTable.Get(uint64(key)); ok {

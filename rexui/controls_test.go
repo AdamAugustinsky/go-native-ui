@@ -83,6 +83,68 @@ func TestStepperClicksKeysAndLimits(t *testing.T) {
 	}
 }
 
+// frameNs runs one frame that lasted ns nanoseconds (the clock and dt both).
+func (g *rig) frameNs(ns int64) {
+	g.time += ns
+	g.in.Time = g.time
+	g.c.Begin(&g.in, g.w, g.h, g.scale, float32(ns)/1e9)
+	g.k.Begin(g.c)
+	g.build(g)
+	g.k.End()
+	g.c.End(&g.list)
+	g.in.ClearFrame()
+}
+
+// A held half makes exactly the steps due by the hold's elapsed time (the
+// clock in whole milliseconds since the frame it went down): one, one more
+// at the delay and one per interval, none twice, whatever the frame rate and
+// however the frames land on those boundaries.
+func TestStepperRepeatCountsAreExact(t *testing.T) {
+	rc := rexui.StepperLook
+	delay, every := int64(rc.RepeatDelay*1000+0.5), int64(rc.RepeatInterval*1000+0.5)
+	due := func(e int64) int {
+		n := 1
+		if e >= delay {
+			n += 1 + int((e-delay)/every)
+		}
+		return n
+	}
+	for _, tc := range []struct {
+		name string
+		dts  []int64 // the frames' lengths, repeated
+	}{
+		{"60 Hz", []int64{16_666_667}},
+		{"120 Hz", []int64{8_333_333}},
+		{"10 ms, on the boundaries", []int64{10_000_000}},
+		{"uneven", []int64{16_666_667, 7_000_000, 33_333_333, 1_000_000, 12_500_000, 4_999_999, 20_000_001, 3_000_000}},
+	} {
+		v := float32(0)
+		g := newRig(t, theme.Light, nil, column(func(g *rig) {
+			rexui.Stepper(g.k, "Count", &v, 0, 100000, 1, rexui.StepperOpts{})
+		}))
+		ux, uy, _, _ := halves(g.node(ui.RoleSlider, "Count"))
+		g.in.MouseX, g.in.MouseY = ux, uy
+		g.frame()
+		g.time = (g.time/1e6 + 1) * 1e6 // on a millisecond
+		g.in.SetButton(ui.ButtonLeft, true, 1)
+		var t0 int64 = -1
+		for i := 0; g.time-max(t0, 0)*1e6 < 1_500_000_000 || t0 < 0; i++ {
+			g.frameNs(tc.dts[i%len(tc.dts)])
+			if t0 < 0 {
+				if v == 0 {
+					continue
+				}
+				t0 = g.time / 1e6 // the hold's first frame, in ms
+			}
+			e := g.time/1e6 - t0
+			if want := due(e); int(v) != want {
+				t.Fatalf("%s: held %d ms: %v steps, want %d", tc.name, e, v, want)
+			}
+		}
+		releaseButton(g)
+	}
+}
+
 // A held half steps once when it goes down, once more after the recipe's delay
 // and then at its interval, only while the pointer is over it, and stops when
 // the button goes up.
