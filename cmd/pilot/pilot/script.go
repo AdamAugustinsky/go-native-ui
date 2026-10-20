@@ -107,7 +107,7 @@ var benchSteps = [...]step{
 	{op: opWait, n: 200},
 	{op: opKey, a: int(ui.KeyEscape)},
 	{op: opWait, n: 200},
-	// the other pane
+	// the other pane (Tab; Shift+Tab comes back, the sidebar being in the loop)
 	{op: opKey, a: int(ui.KeyTab)},
 	{op: opWheel, a: 1, b: -30, n: 30},
 	{op: opClick, a: 1, b: 4},
@@ -118,7 +118,7 @@ var benchSteps = [...]step{
 	{op: opIdle, n: 3},
 	{op: opKey, a: int(ui.KeyEscape)},
 	{op: opIdle, n: 3},
-	{op: opKey, a: int(ui.KeyTab)},
+	{op: opKey, a: int(ui.KeyTab), m: modShift},
 	// sort by each column, then by name again
 	{op: opHeader, a: 1, b: 0},
 	{op: opWait, n: 400},

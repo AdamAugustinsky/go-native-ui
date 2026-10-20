@@ -8,6 +8,7 @@ import (
 	"gonativeui/app"
 	"gonativeui/fs"
 	"gonativeui/ui"
+	"gonativeui/widget/widgettest"
 )
 
 // driver is a Pilot that feeds the input a test hands it, one frame at a time,
@@ -381,10 +382,10 @@ func TestRegainingFocusRelistsBothPanes(t *testing.T) {
 	}
 }
 
-// Tab in a text field leaves it for the other pane: no tab character is typed
-// into the field, the focus returns to a list, and the keyboard is the other
-// pane's.
-func TestTabInATextFieldSwitchesPanes(t *testing.T) {
+// Tab in a text field leaves it without a tab character typed into the field.
+// From the filter it goes on to the other pane's table; from the path field,
+// the last stop of the loop, to the sidebar, and the edited path is dropped.
+func TestTabInATextFieldLeavesIt(t *testing.T) {
 	r := newDrive(t)
 	pl := r.d.Pilot
 	a, b := pl.panes[0], pl.panes[1]
@@ -419,10 +420,74 @@ func TestTabInATextFieldSwitchesPanes(t *testing.T) {
 		in.MouseX, in.MouseY = r.x, r.y
 		in.PushKey(ui.KeyEvent{Code: ui.KeyTab, Down: true})
 	})
-	if pl.active != 0 || r.o.UI.FocusKey() != listKey(0) {
-		t.Errorf("Tab in the path field: active %d focus %v", pl.active, r.o.UI.FocusKey())
+	if r.o.UI.FocusKey() != pl.sideKey || b.pathEdit {
+		t.Errorf("Tab in the path field: focus %v (sidebar %v), path edit %v", r.o.UI.FocusKey(), pl.sideKey, b.pathEdit)
 	}
 	if b.path.String() != b.dir || b.pathErr != "" {
 		t.Errorf("the edited path stays after Tab: %q (dir %q)", b.path.String(), b.dir)
 	}
+}
+
+// Tab's loop with the setting for keyboard navigation off (as it is by
+// default): the sidebar, each pane's table, and a pane's filter or path field
+// while shown, in that order, wrapping, and back with Shift+Tab. Toolbar
+// buttons and column headers are never in it, however many times it is
+// walked.
+func TestTabLoop(t *testing.T) {
+	r := newDrive(t)
+	pl := r.d.Pilot
+	walk := func(mods ui.Mods, steps int) []ui.Key {
+		var got []ui.Key
+		for i := 0; i < steps; i++ {
+			r.key(ui.KeyTab, mods)
+			r.frames(1)
+			got = append(got, r.o.UI.FocusKey())
+			var tr ui.SemTree
+			r.o.UI.Semantics(&tr)
+			for _, n := range tr.Nodes {
+				if n.State&ui.SemFocused != 0 && (n.Role == ui.RoleButton || n.Role == ui.RoleColumnHeader) {
+					t.Errorf("Tab reached a %s", widgettest.RoleName(n.Role))
+				}
+			}
+		}
+		return got
+	}
+	check := func(what string, got []ui.Key, want ...ui.Key) {
+		t.Helper()
+		if len(got) != len(want) {
+			t.Fatalf("%s: %d stops, want %d", what, len(got), len(want))
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Errorf("%s: stop %d is %#x, want %#x", what, i, uint64(got[i]), uint64(want[i]))
+			}
+		}
+	}
+	r.frames(2)
+	pl.focusList(r.o.UI)
+	r.frames(1)
+	sb, l0, l1 := pl.sideKey, listKey(0), listKey(1)
+	if r.o.UI.FocusKey() != l0 || sb == 0 {
+		t.Fatalf("setup: focus %v, sidebar key %v", r.o.UI.FocusKey(), sb)
+	}
+	check("forward", walk(0, 4), l1, sb, l0, l1)
+	check("back", walk(ui.ModShift, 4), l0, sb, l1, l0)
+
+	// a filter and a path field in the loop, after their panes' tables
+	pl.panes[0].filterOpen = true
+	pl.panes[1].pathEdit = true
+	r.frames(2)
+	pl.setActive(r.o.UI, 0)
+	pl.focusList(r.o.UI)
+	r.frames(1)
+	check("with fields", walk(0, 6), filterKey(0), l1, pathKey(1), sb, l0, filterKey(0))
+
+	// the sidebar hidden: not in it
+	pl.panes[0].filterOpen, pl.panes[1].pathEdit = false, false
+	pl.sidebar = false
+	r.frames(2)
+	pl.setActive(r.o.UI, 0)
+	pl.focusList(r.o.UI)
+	r.frames(1)
+	check("no sidebar", walk(0, 3), l1, l0, l1)
 }

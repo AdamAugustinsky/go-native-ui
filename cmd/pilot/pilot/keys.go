@@ -52,6 +52,65 @@ func (pl *Pilot) setActive(c *ui.Context, i int) {
 // focusList gives the active pane's list the focus.
 func (pl *Pilot) focusList(c *ui.Context) { c.SetFocus(listKey(pl.active)) }
 
+// tabStop is a place Tab can go to: a key, and the pane it belongs to (-1: the
+// sidebar).
+type tabStop struct {
+	key  ui.Key
+	pane int
+}
+
+// tab moves the keyboard through Tab's loop, forward or back: the sidebar (a
+// list), then for each pane its table and the filter or the path field when
+// shown. Toolbar buttons and the column headers are not in it, as with
+// macOS's Keyboard navigation off, where Tab reaches text fields, lists and
+// tables only. (When ui's own rule lands, which adds the buttons when that
+// setting is on, this is what to give back to ui.) A focus outside the loop
+// (a button that was clicked, the divider) goes on from the active pane's table.
+// Leaving the path field drops the edit as Esc does; a filter stays.
+func (pl *Pilot) tab(c *ui.Context, back bool) {
+	var loop [8]tabStop
+	n := 0
+	if pl.sidebar && pl.sideKey != 0 { // not before its first frame
+		loop[n], n = tabStop{pl.sideKey, -1}, n+1
+	}
+	for i, p := range pl.panes {
+		loop[n], n = tabStop{listKey(i), i}, n+1
+		if p.filterOpen {
+			loop[n], n = tabStop{filterKey(i), i}, n+1
+		}
+		if p.pathEdit {
+			loop[n], n = tabStop{pathKey(i), i}, n+1
+		}
+	}
+	fk := c.FocusKey()
+	at, onActive := -1, 0
+	for i := 0; i < n; i++ {
+		if fk != 0 && loop[i].key == fk {
+			at = i
+		}
+		if loop[i].key == listKey(pl.active) {
+			onActive = i
+		}
+	}
+	if at < 0 {
+		at = onActive // from outside the loop, as if from the active pane's table
+	}
+	to := (at + 1) % n
+	if back {
+		to = (at + n - 1) % n
+	}
+	if a := pl.panes[pl.active]; fk == pathKey(pl.active) && loop[to].key != fk {
+		a.path.SetString(a.dir)
+		a.pathErr = ""
+		a.pathEdit = false
+	}
+	if st := loop[to]; st.pane >= 0 {
+		pl.active = st.pane
+	}
+	c.SetFocus(loop[to].key)
+	c.SetFocusVisible(true)
+}
+
 // syncFocus keeps the keyboard focus where the active pane is: in its list or
 // one of its fields. When it is nowhere (a click on nothing) or in the other
 // pane, it moves to the active pane's list. A focus elsewhere (the divider) is
@@ -149,17 +208,7 @@ func (pl *Pilot) key(c *ui.Context, k ui.KeyEvent) bool {
 	// Shortcuts that work wherever the focus is.
 	switch {
 	case k.Code == ui.KeyTab && k.Mods&(ui.ModCtrl|ui.ModSuper|ui.ModAlt) == 0:
-		// Tab switches panes from the list and from either text field (the field
-		// is left, not given a tab character: its focus goes before it is built).
-		// A path being edited is dropped like Esc drops it; a filter stays.
-		if inPath {
-			a.path.SetString(a.dir)
-			a.pathErr = ""
-			a.pathEdit = false
-		}
-		pl.active ^= 1
-		pl.focusList(c)
-		c.SetFocusVisible(true)
+		pl.tab(c, shift)
 		return true
 	case prim && k.Code == 'L' && !shift:
 		a.pathEdit = true // the path field takes the path bar's place

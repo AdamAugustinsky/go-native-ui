@@ -579,7 +579,7 @@ func TestKeyboardMap(t *testing.T) {
 				t.Error("hidden shortcut")
 			}
 
-			// Tab switches the pane; the other pane keeps its own state
+			// Tab goes to the other pane's table; that pane keeps its own state
 			r.press(ui.KeyTab, 0)
 			if r.pl.active != 1 {
 				t.Error("tab")
@@ -588,7 +588,7 @@ func TestKeyboardMap(t *testing.T) {
 			if r.sel() != "alpha" || a.v.nSel() != 0 {
 				t.Errorf("right pane selection %q, left %d", r.sel(), a.v.nSel())
 			}
-			r.press(ui.KeyTab, 0)
+			r.press(ui.KeyTab, ui.ModShift)
 			if r.pl.active != 0 {
 				t.Error("tab back")
 			}

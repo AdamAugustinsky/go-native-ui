@@ -144,6 +144,7 @@ type Pilot struct {
 	items      []rexui.SidebarItem
 	open       [2]bool
 	sideFor    string
+	sideKey    ui.Key // the sidebar's box, as of the last frame: a stop of Tab's loop
 	under      bool
 	rootTitle  string
 
