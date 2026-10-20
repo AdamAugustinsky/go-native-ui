@@ -44,6 +44,7 @@ type pane struct {
 	fver       uint32        // counts changes of q and hideHidden
 
 	pathErr string // shown under the path field (in the status line): why Enter did not navigate
+	pathReq uint64 // the request the path field's Enter made, while its listing is awaited
 	pathOK  bool   // a folder was shown while the path field was open: the field goes away
 	msg     string // status line: an error or a note
 	msgErr  bool
@@ -202,11 +203,23 @@ func (p *pane) relist() {
 // to the folder shown, and the reason it was refused with it.
 func (p *pane) dropPathEdit() {
 	p.path.SetString(p.dir)
+	p.clearPathErr()
+	p.pathEdit = false
+	// The navigation the field asked for goes with it: its listing, when it
+	// comes, is nobody's (another navigation, started since, is left alone).
+	if p.nav.pending && p.pathReq != 0 && p.nav.req == p.pathReq {
+		p.nav.pending = false
+	}
+	p.pathReq = 0
+}
+
+// clearPathErr takes away the reason the path was refused, in the status line
+// as well (a failed navigation sets both).
+func (p *pane) clearPathErr() {
 	if p.msg == p.pathErr {
 		p.msg = ""
 	}
 	p.pathErr = ""
-	p.pathEdit = false
 }
 
 func (p *pane) setMsg(s string, isErr bool) { p.msg, p.msgErr = s, isErr }

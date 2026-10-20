@@ -200,9 +200,9 @@ func TestSlowFileSystemProbesDoNotHoldUpTheFirstFrame(t *testing.T) {
 	gate := make(chan struct{})
 	var once sync.Once
 	release := func() { once.Do(func() { close(gate) }) }
-	t.Cleanup(release)
 	timer := time.AfterFunc(4*time.Second, release) // (what a stalled probe would take)
 	defer timer.Stop()
+	defer release() // (before the cleanups, which close the Pilot: a Fatal does not skip it)
 
 	opt := SceneOptions()
 	opt.Places, opt.RootTitle = nil, ""

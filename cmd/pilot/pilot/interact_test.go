@@ -706,9 +706,12 @@ func TestActivationReadsTheIconStyleOffTheFrame(t *testing.T) {
 		}
 		return style.Load()
 	}
-	t.Cleanup(func() { iconStyle = old; release() })
+	t.Cleanup(func() { iconStyle = old })
+	// (a function defer, not a cleanup: it must run before the fixture's
+	// cleanups, whatever way the test ends, and a Fatal does not stop it)
 	timer := time.AfterFunc(4*time.Second, release)
 	defer timer.Stop()
+	defer release()
 
 	r := newDrive(t)
 	pl := r.d.Pilot

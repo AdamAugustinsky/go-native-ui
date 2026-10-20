@@ -262,12 +262,14 @@ func (pl *Pilot) pathSignals(c *ui.Context, i int, p *pane, f widget.FieldSignal
 		// shown (drawPathBar closes it) or the listing fails (the reason shows in the
 		// status line until the text is changed or cancelled)
 		p.goTo(p.path.String())
-		if !p.nav.pending {
+		if p.nav.pending {
+			p.pathReq = p.nav.req
+		} else {
 			p.pathErr = p.msg // nothing to list with
 		}
 		pl.active = i
 	case f.Changed:
-		p.pathErr = ""
+		p.clearPathErr()
 	}
 	if f.Focused && f.Pressed && pl.prevFocus != pathKey(i) { // a click that brought focus here selects all
 		p.path.SelectAll()

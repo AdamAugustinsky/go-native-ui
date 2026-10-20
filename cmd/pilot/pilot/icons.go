@@ -64,10 +64,11 @@ type sysIcons struct {
 
 	// The style is read on a worker (it queries the system's preferences and
 	// allocates): requestStyle asks, applyStyle takes the latest answer.
-	latest atomic.Uint64
-	ask    chan struct{}
-	done   chan struct{}
-	wg     sync.WaitGroup
+	latest   atomic.Uint64
+	ask      chan struct{}
+	stop     guard
+	done     chan struct{}
+	doneOnce sync.Once
 
 	folder, generic, exec iconRec
 	exts                  map[string]*extRec
@@ -81,21 +82,28 @@ func newSysIcons(cache *img.Cache, wake func()) *sysIcons {
 	ic := &sysIcons{cache: cache, ask: make(chan struct{}, 1), done: make(chan struct{})}
 	ic.exts = make(map[string]*extRec, 64)
 	ic.bundles = make(map[bundleID]*bundleRec, 16)
-	ic.wg.Add(1)
 	go ic.styleWorker(wake)
 	ic.requestStyle()
 	return ic
 }
 
 // styleWorker reads the icon style whenever it is asked to and wakes the loop
-// when it changed.
+// when it changed. It never ends a read, so close does not wait for it: a
+// read that comes back after close publishes nothing and the worker ends.
 func (ic *sysIcons) styleWorker(wake func()) {
-	defer ic.wg.Done()
 	for {
 		select {
 		case <-ic.ask:
-			if s := iconStyle(); s != ic.latest.Swap(s) && wake != nil {
-				wake()
+			if ic.stop.stopped() { // (a request that was queued before close)
+				return
+			}
+			s := iconStyle()
+			if !ic.stop.publish(func() {
+				if s != ic.latest.Swap(s) && wake != nil {
+					wake()
+				}
+			}) {
+				return
 			}
 		case <-ic.done:
 			return
@@ -232,9 +240,15 @@ func (ic *sysIcons) bundle(p *pane, pi int, e *fs.Entry, name []byte) *iconRec {
 
 // close stops the workers and frees the textures.
 func (ic *sysIcons) close() {
-	close(ic.done)
-	ic.wg.Wait()
+	ic.stopStyle()
 	ic.cache.Close(time.Second)
+}
+
+// stopStyle ends the style worker without waiting for it: a read of the
+// preferences in progress finishes into nothing.
+func (ic *sysIcons) stopStyle() {
+	ic.stop.close()
+	ic.doneOnce.Do(func() { close(ic.done) })
 }
 
 // fileIcon builds the icon of an entry in the current parent, a row rowH

@@ -159,15 +159,21 @@ func (pl *Pilot) startProbe() {
 	pl.probed = ch
 	pr, home, root, wake := pl.opt.Probe, pl.opt.Home, pl.rootTitle, pl.wake
 	named := pl.opt.RootTitle != ""
+	pl.probeWG.Add(1)
 	go func() {
+		defer pl.probeWG.Done()
 		r := placesProbed{}
 		if !named {
 			r.volume = pr.volumeName()()
 			root = r.volume
 		}
-		r.places = defaultPlaces(home, root, pr.isDir())
-		ch <- r // (buffered: the worker never waits for the window)
-		wake()
+		// (between probes: a closed Pilot has no use for the rest)
+		isDir := pr.isDir()
+		r.places = defaultPlaces(home, root, func(p string) bool { return !pl.probeStop.stopped() && isDir(p) })
+		pl.probeStop.publish(func() {
+			ch <- r // (buffered: the worker never waits for the window)
+			wake()
+		})
 	}()
 }
 

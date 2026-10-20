@@ -152,6 +152,8 @@ type Pilot struct {
 	tbH        float32 // the toolbar's height in pixels, as of the last frame
 	rootTitle  string
 	closeOnce  sync.Once
+	probeStop  guard             // ends the places worker's publishing at Close
+	probeWG    sync.WaitGroup    // the places worker, for whoever wants to know it ended
 	probed     chan placesProbed // the worker's places, until they are taken
 	wake       func()            // wakes the loop (platform.Wake)
 
@@ -274,6 +276,7 @@ func (pl *Pilot) ListedAt(i int) int64 { return pl.listedAt[i] }
 // called more than once.
 func (pl *Pilot) Close() {
 	pl.closeOnce.Do(func() {
+		pl.probeStop.close() // (the places worker, if a probe is blocked, ends when it returns)
 		if pl.src != nil {
 			pl.src.Close()
 		}
