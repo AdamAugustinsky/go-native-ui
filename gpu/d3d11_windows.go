@@ -387,10 +387,12 @@ func (s *Surface) EndFrame(f *Frame) {
 		if s.reveal != nil && s.lastShown && pDwmFlush != 0 {
 			// Present only queues the frame for the compositor. Uncloaked now,
 			// the window can be composed once before DWM has taken the frame
-			// in, and that pass shows an empty (white) client area: seen by
-			// TestFirstFrameIsContent on the runners, whose WARP device
-			// renders on the CPU. DwmFlush returns after the composition pass
-			// that has taken in this present, so the reveal shows the frame.
+			// in: its frame around an empty client area (the window has no
+			// surface of its own, WS_EX_NOREDIRECTIONBITMAP; with one, that
+			// pass showed it white). It happens on the runners, whose WARP
+			// device renders on the CPU. DwmFlush returns after the
+			// composition pass that has taken in this present, so the reveal
+			// shows the frame.
 			win32.Call(pDwmFlush)
 		}
 		s.Trace.Done = platform.Now()
