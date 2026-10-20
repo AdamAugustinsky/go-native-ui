@@ -61,6 +61,13 @@ type Window struct {
 	metalLayer objc.ID // layer to attach a CAMetalDisplayLink to on the next view-link tick
 	drawable   objc.ID // retained drawable from the current CAMetalDisplayLink tick
 	idleTicks  int     // display-link ticks since the last frame request
+	// Nested loops (an AppKit loop, or a block's, that does not return to
+	// Wait: NSCorrectionPanel's): frameOut is set while an EvFrame a tick
+	// queued (at frameOutT) has not reached the app (Wait, Pending); a tick
+	// that finds one older than nestedAfter sets nested, and until Wait
+	// returns the frame handler draws on the ticks (view_darwin.go, linkTick).
+	frameOut, nested bool
+	frameOutT        int64
 
 	// Frame-delivery diagnostics (DebugState); plain counters and times.
 	ticks, ticksSinceFrame, pauses uint64

@@ -1,6 +1,7 @@
 package img
 
 import (
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -49,6 +50,18 @@ type Cache struct {
 	gpuBudget, cpuBudget, upBudget int64
 	pool                           *task.Pool[job, result]
 	results                        []task.Result[result]
+	apool                          *task.Pool[job, result] // the frames of animations: it wakes nobody (a frame is looked for at its deadline)
+	aresults                       []task.Result[result]
+	anims                          []*anim // by entry: an animated image's state
+	animOut                        []*anim // by entry: the animation a finished first decode built, until Poll takes it
+	animList                       []int32 // the entries that are animations
+	ringCap                        int     // decoded frames an animation holds waiting, besides the one showing
+	autoFn                         func() bool
+	autoVal, autoKnown             bool
+	wake                           func() // wakes the UI loop (Options.Wake)
+	watching                       bool   // registered for the autoplay setting's change notification
+	wakeMu                         sync.Mutex
+	wakeShut                       bool // Close ran: wakeApp does nothing
 	bufs                           *bufPool
 	fr                             *cframe // the owner's C call frame (C memory on macOS)
 	wmu                            core.Mutex
@@ -91,6 +104,10 @@ func NewCache(o Options) *Cache {
 	if o.Wake == nil {
 		o.Wake = platform.Wake
 	}
+	if o.AnimRing <= 0 {
+		o.AnimRing = defaultAnimRing
+	}
+	o.AnimRing = max(2, min(o.AnimRing, maxRing))
 	n := o.Entries
 	queue := 64
 	c := &Cache{
@@ -101,6 +118,8 @@ func NewCache(o Options) *Cache {
 		jobCopy: make([]int32, n),
 		jobOut:  make([]int32, n),
 		ents:    make([]entry, n),
+		anims:   make([]*anim, n),
+		animOut: make([]*anim, n),
 		free:    make([]int32, n),
 		upq:     make([]int32, n),
 		head:    -1, tail: -1,
@@ -115,19 +134,39 @@ func NewCache(o Options) *Cache {
 		c.ents[i] = entry{gen: 1, buf: -1, page: -1, prev: -1, next: -1}
 	}
 	c.pool = task.NewPool(task.Options{Workers: o.Workers, Queue: queue, Wake: o.Wake}, c.decodeJob)
+	c.apool = task.NewPool(task.Options{Workers: animWorkers, Queue: queue}, c.decodeJob)
+	c.wake = o.Wake
+	c.ringCap, c.autoFn = o.AnimRing-1, o.Autoplay
+	if c.autoFn == nil {
+		c.autoFn = func() bool { return systemAutoplay(c.fr) }
+	}
+	c.animList = make([]int32, 0, n)
+	c.aresults = make([]task.Result[result], 0, queue)
 	workers := o.Workers
 	if workers <= 0 {
 		workers = 4 // at least as many as task's default
 	}
-	c.workers = make([]*worker, 0, max(workers, 64))
+	c.workers = make([]*worker, 0, max(workers+animWorkers, 64)) // a worker's scratch for every goroutine of both pools
 	for i := 0; i < cap(c.workers); i++ {
 		c.workers = append(c.workers, new(worker))
 	}
 	c.results = make([]task.Result[result], 0, queue)
 	// Buffer records: every entry's pixels, and per job a source copy and
 	// its output, plus the free list.
-	c.bufs = newBufPool(n+2*(queue+cap(c.workers))+maxFreeBufs, 16<<20)
+	c.bufs = newBufPool(n+2*(queue+cap(c.workers))+maxFreeBufs+256*o.AnimRing, 16<<20)
+	c.bufs.wake = c.wakeApp
 	return c
+}
+
+// wakeApp calls Options.Wake from any goroutine, and never once Close has
+// returned (a notification that was on its way when the cache closed finds
+// nothing to wake).
+func (c *Cache) wakeApp() {
+	c.wakeMu.Lock()
+	defer c.wakeMu.Unlock()
+	if !c.wakeShut && c.wake != nil {
+		c.wake()
+	}
 }
 
 // Request returns the handle and state of the image key, and starts decoding
@@ -259,7 +298,11 @@ func (c *Cache) Info(h Handle) (Info, bool) {
 	if e == nil || (e.stage != stCPU && e.stage != stGPU) {
 		return Info{}, false
 	}
-	return Info{W: int(e.w), H: int(e.h), Frames: int(e.frames), DelayMs: int(e.dlay)}, true
+	plays := 1
+	if a := c.anims[h.index()]; a != nil {
+		plays = int(a.plays)
+	}
+	return Info{W: int(e.w), H: int(e.h), Frames: int(e.frames), DelayMs: int(e.dlay), Plays: plays}, true
 }
 
 // Stats returns the cache's counters.
@@ -323,11 +366,13 @@ func (c *Cache) Poll() (more bool) {
 		return false
 	}
 	c.frame++
+	c.autoKnown = false
 	c.results = c.pool.Poll(c.results[:0])
 	for k := range c.results {
 		c.finish(&c.results[k])
 	}
 	clear(c.results) // no stale copies of anything
+	c.pollFrames()
 	budget := c.upBudget
 	for c.upN > 0 {
 		i := c.upq[c.upHead]
@@ -360,6 +405,8 @@ func (c *Cache) finish(r *task.Result[result]) {
 	c.jobs[i].Store(jobIdle)
 	c.st.Decodes++
 	c.st.DecodeNs += out.ns
+	a := c.animOut[i]
+	c.animOut[i] = nil
 	if l := c.leases[i]; l != nil {
 		c.leases[i] = nil
 		l.Release()
@@ -368,15 +415,24 @@ func (c *Cache) finish(r *task.Result[result]) {
 		if out.buf >= 0 {
 			c.bufs.put(out.buf, c.fr)
 		}
+		if a != nil {
+			a.dec.close(c.fr)
+		}
 		return
 	}
 	if out.buf < 0 {
 		e.stage, e.err = stFailed, out.err
+		if a != nil {
+			a.dec.close(c.fr)
+		}
 		return
 	}
 	e.stage, e.buf = stCPU, out.buf
 	e.w, e.h, e.pad, e.frames, e.dlay = out.w, out.h, out.pad, out.frames, out.dlay
 	c.cpuUsed += e.cpuBytes()
+	if a != nil {
+		c.startAnim(i, a)
+	}
 	c.enqueue(i)
 }
 
@@ -510,10 +566,18 @@ func (c *Cache) trimCPU() {
 		prev := c.ents[i].prev
 		e := &c.ents[i]
 		switch {
-		case e.stage == stGPU && e.buf >= 0:
+		case c.anims[i] != nil && !c.inUse(e) && !c.animBusy(i): // an animation that is not shown goes whole: its decoder, canvases and frames
+			if e.stage == stGPU {
+				c.evictGPU(i)
+			}
+			if c.ents[i].stage != stFree {
+				c.remove(i)
+			}
+			c.st.EvictedCPU++
+		case e.stage == stGPU && e.buf >= 0 && c.anims[i] == nil: // an animation in view keeps the frame it shows
 			c.dropPixels(i)
 			c.st.EvictedCPU++
-		case e.stage == stCPU && !c.inUse(e):
+		case e.stage == stCPU && !c.inUse(e) && !c.animBusy(i):
 			c.remove(i)
 			c.st.EvictedCPU++
 		}
@@ -541,7 +605,7 @@ func (c *Cache) alloc() int32 {
 		if c.inUse(e) {
 			return -1
 		}
-		if e.stage == stDecoding {
+		if e.stage == stDecoding || c.animBusy(i) {
 			continue
 		}
 		if e.stage == stGPU {
@@ -565,6 +629,7 @@ func (c *Cache) release(i int32) { c.free = append(c.free, i) }
 // LRU list. Its GPU memory must be gone already.
 func (c *Cache) remove(i int32) {
 	e := &c.ents[i]
+	c.removeAnim(i)
 	if e.buf >= 0 {
 		c.dropPixels(i)
 	}
@@ -591,6 +656,10 @@ func (c *Cache) Close(wait time.Duration) {
 		return
 	}
 	c.closed = true
+	unwatchAutoplay(c)
+	c.wakeMu.Lock()
+	c.wakeShut = true
+	c.wakeMu.Unlock()
 	c.refs.Store(1) // Close's own, dropped at the end
 	// Take every job that is not running; mark the running ones, to be
 	// settled after the wait.
@@ -611,6 +680,7 @@ func (c *Cache) Close(wait time.Duration) {
 		}
 	}
 	c.pool.Close(wait)
+	c.apool.Close(wait)
 	// A decode that finished within the wait is freed here; one still
 	// running is its worker's to free.
 	for i := range c.jobs {
@@ -618,6 +688,10 @@ func (c *Cache) Close(wait time.Duration) {
 		old := c.jobs[i].Swap(jobClosed)
 		if old == jobDraining {
 			c.leases[i] = nil
+			if a := c.anims[i]; a != nil {
+				c.dropRing(a) // the frames waiting are the owner's: only the decoder goes to the running job
+				c.anims[i] = nil
+			}
 			continue
 		}
 		c.refs.Add(-1)
@@ -627,6 +701,11 @@ func (c *Cache) Close(wait time.Duration) {
 		e := &c.ents[i]
 		if e.stage == stFree {
 			continue
+		}
+		if a := c.anims[i]; a != nil {
+			c.dropRing(a)
+			a.dec.close(c.fr)
+			c.anims[i] = nil
 		}
 		if e.stage == stGPU && e.page < 0 {
 			c.r.FreeTexture(e.tex)
@@ -644,6 +723,7 @@ func (c *Cache) Close(wait time.Duration) {
 		}
 	}
 	c.gpuUsed, c.cpuUsed = 0, 0
+	c.animList = c.animList[:0]
 	c.unref(c.fr)
 }
 
@@ -658,6 +738,10 @@ func (c *Cache) closeJob(i int, old uint32) {
 	case jobDone:
 		if k := c.jobOut[i]; k >= 0 {
 			c.bufs.put(k, c.fr)
+		}
+		if a := c.animOut[i]; a != nil { // a first decode's animation nobody took
+			c.animOut[i] = nil
+			a.dec.close(c.fr)
 		}
 	case jobClosed:
 		return

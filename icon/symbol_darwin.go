@@ -75,6 +75,38 @@ func rasterConfigured(name string, config func() objc.ID) (pix []byte, w, h int,
 	return pix, w, h, true
 }
 
+// symbolWidths are the widths in points of the SF Symbol configured as
+// rasterSymbol does at size points: its alignment rectangle, exactly (AppKit
+// rounds the rectangle to half points, so it is measured 64 times larger),
+// and its image (NSImage.size, whole points, as AppKit reports it).
+func symbolWidths(name string, size, weight float64, scale Scale) (align, image float64, ok bool) {
+	if err := loadSyms(); err != nil {
+		return 0, 0, false
+	}
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	F := objc.F
+	pool := F.Call0(objc.PoolPush)
+	defer F.Call1(objc.PoolPop, pool)
+	base := objc.Send2(clsNSImage, selSymbolNamed, uintptr(objc.Str(name)), 0)
+	if base == 0 {
+		return 0, 0, false
+	}
+	at := func(pt float64) objc.ID {
+		cfg := objc.ID(F.Reset().Arg(uintptr(clsSymbolConfig)).Arg(uintptr(selConfigPt)).ArgF64(pt).ArgF64(weight).Arg(uintptr(symbolScale(scale))).Call(objc.MsgSend).R0())
+		if cfg != 0 {
+			if sized := objc.Send1(base, selWithConfig, uintptr(cfg)); sized != 0 {
+				return sized
+			}
+		}
+		return base
+	}
+	const k = 64
+	r := objc.SendRect(at(size*k), selAlignmentRect)
+	w, _ := objc.SendPoint(at(size), selSize)
+	return r.W / k, w, r.W > 0
+}
+
 // symbolScale is NSImageSymbolScale: small 1, medium 2, large 3.
 func symbolScale(s Scale) int {
 	switch s {
@@ -92,6 +124,7 @@ var cg struct {
 
 var (
 	selSymbolNamed, selWithConfig, selConfigPt, selSize, selDrawInRect objc.SEL
+	selAlignmentRect                                                   objc.SEL
 	selGCWithCG, selGCSave, selGCRestore, selGCSetCurrent              objc.SEL
 	clsNSImage, clsSymbolConfig, clsNSGraphicsContext                  objc.ID
 	symsLoaded                                                         bool
@@ -127,6 +160,7 @@ func loadSyms() error {
 	selWithConfig = objc.Sel("imageWithSymbolConfiguration:")
 	selConfigPt = objc.Sel("configurationWithPointSize:weight:scale:")
 	selSize = objc.Sel("size")
+	selAlignmentRect = objc.Sel("alignmentRect")
 	selDrawInRect = objc.Sel("drawInRect:")
 	selGCWithCG = objc.Sel("graphicsContextWithCGContext:flipped:")
 	selGCSave = objc.Sel("saveGraphicsState")

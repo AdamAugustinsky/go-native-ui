@@ -3,10 +3,13 @@ package demo
 import (
 	"fmt"
 	"path"
+	"runtime"
+	"slices"
 	"sort"
 	"strings"
 
 	"gonativeui/icon"
+	"gonativeui/img"
 	"gonativeui/rexui"
 	"gonativeui/text"
 	"gonativeui/theme"
@@ -34,6 +37,9 @@ const (
 	placePurple
 	placeGrey
 	placeAllTags
+	placeWork
+	placeDrafts
+	placePersonal
 	hdrFavorites
 	hdrCloud
 	hdrLocations
@@ -73,6 +79,7 @@ const (
 type file struct {
 	name, date, size, kind []byte
 	folder                 bool
+	typ                    int // index in fileTypes
 }
 
 // The finder scene's files (tools/appkitscenes: Files): 48 rows of 16 names,
@@ -84,6 +91,11 @@ var (
 		"Team Offsite.key", "Timesheet.numbers", "Travel.pdf"}
 	fileKinds = [...]string{"PDF document", "Numbers spreadsheet", "Pages document", "Keynote presentation", "Folder", "Plain text", "PNG image",
 		"Folder", "PDF document", "Pages document", "Markdown document", "Folder", "PNG image", "Keynote presentation", "Numbers spreadsheet", "PDF document"}
+	// fileTypes are the names' types, whose system icons the rows show (the
+	// scene's iconForContentType:).
+	fileTypes = [...]string{"com.adobe.pdf", "com.apple.iwork.numbers.sffnumbers", "com.apple.iwork.pages.sffpages", "com.apple.iwork.keynote.sffkey",
+		"public.folder", "public.plain-text", "public.png", "public.folder", "com.adobe.pdf", "com.apple.iwork.pages.sffpages",
+		"net.daringfireball.markdown", "public.folder", "public.png", "com.apple.iwork.keynote.sffkey", "com.apple.iwork.numbers.sffnumbers", "com.adobe.pdf"}
 )
 
 const fileRows = 48
@@ -103,7 +115,7 @@ func makeFiles() []file {
 			size = fmt.Sprintf("%d KB", row*137%900+12)
 		}
 		fs[row] = file{name: []byte(name), date: []byte(fmt.Sprintf("%d Oct 2026 at %02d:%02d", 18-row%17, 8+row%11, row*7%60)),
-			size: []byte(size), kind: []byte(fileKinds[i]), folder: folder}
+			size: []byte(size), kind: []byte(fileKinds[i]), folder: folder, typ: i}
 	}
 	return fs
 }
@@ -142,6 +154,19 @@ func (d *Demo) model() {
 			tag(placeRed, "Red"), tag(placeOrange, "Orange"), tag(placeYellow, "Yellow"), tag(placeGreen, "Green"),
 			tag(placeBlue, "Blue"), tag(placePurple, "Purple"), tag(placeGrey, "Grey"),
 			{ID: placeAllTags, Title: "All Tags…", Glyph: g(ic.dashed)},
+		}
+		if d.opt.Nested {
+			for i := range d.places {
+				if d.places[i].ID == placeDocuments {
+					d.places[i].Open = &d.open[4]
+					d.open[5] = false // Work closed, as the scene's
+					d.places = slices.Insert(d.places, i+1,
+						rexui.SidebarItem{ID: placeWork, Title: "Work", Glyph: g(ic.folder), Level: 1, Open: &d.open[5]},
+						rexui.SidebarItem{ID: placeDrafts, Title: "Drafts", Glyph: g(ic.folder), Level: 2},
+						rexui.SidebarItem{ID: placePersonal, Title: "Personal", Glyph: g(ic.folder), Level: 1})
+					break
+				}
+			}
 		}
 		d.tagColours()
 		d.path = []rexui.PathItem{
@@ -224,7 +249,7 @@ func (d *Demo) tagColours() {
 // fileList is the finder's table: its header in the toolbar's pocket, inset
 // striped rows, a selection of two merged rows; a path bar below it when
 // asked.
-func (d *Demo) fileList(w, h float32) {
+func (d *Demo) fileList(top, w, h float32) {
 	k := d.k
 	c, r := k.Context(), k.Theme()
 	s := r.Scale
@@ -235,12 +260,13 @@ func (d *Demo) fileList(w, h float32) {
 	if d.opt.Scene == Finder {
 		d.tagColours()
 	}
-	if d.scrolled > 0 { // the scene's scrolled phase: 130 pt down
-		d.table.SetTopRow(int((130-5)/24), (130-5)/24-float32(int((130-5)/24)))
+	if d.scrolled > 0 { // the scene's scrolled phase: 130 pt down (the table at y -50, 80 at rest)
+		at := float32(130) / 24
+		d.table.SetTopRow(int(at), at-float32(int(at)))
 		d.scrolled--
 	}
 	k.NextSize(ui.Px(w), ui.Px(h-pathH))
-	t := rexui.BeginTable(k, "Files", &d.table, d.cols[:], len(d.files), rexui.TableOpts{Striped: true, Glyphs: d.glyphs, ClearHeader: true})
+	t := rexui.BeginTable(k, "Files", &d.table, d.cols[:], len(d.files), rexui.TableOpts{Striped: true, Glyphs: d.glyphs, ClearHeader: true, TopInset: top})
 	if t.SortChanged {
 		d.sortFiles(t.Sort)
 	}
@@ -262,7 +288,7 @@ func (d *Demo) fileList(w, h float32) {
 		pl, pr := t.CellPads(0)
 		c.NextSize(ui.Px(iconW+theme.Snap(5*s)-r.Px.GapSmall), ui.Pct(1))
 		c.Push(c.BoxKeyed(0, ui.KeyN(c.KeyOf(cell), 1), nil))
-		d.fileIcon(c, f.folder, iconW, t.RowH())
+		d.fileIcon(c, f, iconW, t.RowH())
 		c.Pop()
 		c.NextSize(ui.Px(max(cr[2]-cr[0]-pl-pr-iconW-theme.Snap(5*s), 0)), ui.Pct(1))
 		c.NextFont(r.Styles[theme.StyleBody].Font)
@@ -310,12 +336,56 @@ var (
 	previewEdge = rexui.Solid(0xDCDCDC, 0xDCDCDC)
 )
 
+// typeIcon requests the system's icon of fileTypes[i] (i < 0: the scene's
+// presentation, the inspector's preview) at side pixels: the UTI's on macOS,
+// as the scene's iconForContentType:, the extension's elsewhere. ok is false
+// without an image cache (a test's fake text system) or when the system has
+// no icon: the stand-in symbols show then.
+func (d *Demo) typeIcon(i int, side float32) (h img.Handle, st img.State, ok bool) {
+	if d.imgs == nil {
+		return 0, img.Failed, false
+	}
+	typ, ext := "public.presentation", "key"
+	if i >= 0 {
+		typ, ext = fileTypes[i], strings.TrimPrefix(path.Ext(fileNames[i]), ".")
+	}
+	var src img.Source
+	switch {
+	case runtime.GOOS == "darwin":
+		src = img.TypeIcon(typ)
+	case typ == "public.folder":
+		src = img.FolderIcon()
+	default:
+		typ, src = ext, img.ExtensionIcon(ext)
+	}
+	px := int32(side + 0.5)
+	h, st = d.imgs.Request(img.Key{Hash: img.HashTypeIcon(typ), W: px, H: px}, src)
+	if st == img.Failed && runtime.GOOS == "darwin" && typ != "public.data" {
+		// a type the system does not know: the scene's UTTypeData
+		h, st = d.imgs.Request(img.Key{Hash: img.HashTypeIcon("public.data"), W: px, H: px}, img.TypeIcon("public.data"))
+	}
+	if st == img.Pending {
+		d.iconsPending = true
+	}
+	return h, st, st != img.Failed
+}
+
 // fileIcon builds a file's 16-pt icon at the left of the current parent, a
-// row h high: the box is the icon's square, the symbol centred in it.
-func (d *Demo) fileIcon(c *ui.Context, folder bool, side, h float32) {
+// row h high: the box is the icon's square, the system's icon of the file's
+// type in it (nothing while it loads), or the stand-in symbol without one.
+func (d *Demo) fileIcon(c *ui.Context, f *file, side, h float32) {
 	k := d.k
 	t := k.Theme().T
 	key := c.ParentKey()
+	if ih, st, ok := d.typeIcon(f.typ, side); ok {
+		if st == img.Ready {
+			theme.At(c, 0, theme.Snap((h-side)/2), side, side)
+			c.NextFlags(base.Floating)
+			k.Image(1, ih, ui.FitContain, 0, "")
+		}
+		return
+	}
+	folder := f.folder
 	layer := func(n uint64, ic icon.ID, col uint32) {
 		if f, disp := k.Icons().Prepare(c, ic, col); f != 0 {
 			theme.At(c, 0, theme.Snap((h-side)/2), side, side)
@@ -372,17 +442,28 @@ func (d *Demo) inspectorContent(tbH, w float32) {
 	pad := theme.Snap(16 * s)
 	y := tbH + pad
 	t := r.T
-	// the preview: a page, as the scene's presentation icon
-	big := theme.Snap(128 * s)
+	// the preview: the system's presentation icon, as the scene's (a page
+	// without one): NSImageView scales its 32-pt image down only, so it
+	// shows at 32 in the middle of the 128-pt view
+	big, icon32 := theme.Snap(128*s), theme.Snap(32*s)
 	theme.At(c, pad, y, big, big)
 	c.NextJustify(ui.JustifyCenter)
 	c.NextCross(ui.CrossCenter)
 	c.NextAxis(ui.AxisX)
 	c.Push(c.BoxKeyed(base.Floating, ui.KeyN(key, 1), nil))
+	ih, st, sys := d.typeIcon(-1, icon32)
+	if sys && st == img.Ready {
+		theme.At(c, theme.Snap((big-icon32)/2), theme.Snap((big-icon32)/2), icon32, icon32)
+		c.NextFlags(base.Floating)
+		k.Image(1, ih, ui.FitContain, 0, "")
+	}
 	for i, layer := range [2]struct {
 		ic  icon.ID
 		col uint32
 	}{{d.ic.previewFill, pageFill.At(t)}, {d.ic.preview, previewEdge.At(t)}} {
+		if sys {
+			break
+		}
 		if f, disp := k.Icons().Prepare(c, layer.ic, layer.col); f != 0 {
 			iw, ih := k.IconSize(layer.ic)
 			theme.At(c, theme.Snap((big-iw)/2), theme.Snap((big-ih)/2), iw, ih)

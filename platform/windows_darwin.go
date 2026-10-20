@@ -314,6 +314,7 @@ func (w *Window) release() {
 func (w *Window) Events() []Event {
 	w.release()
 	w.returned, w.nOut = true, len(w.q.ev)
+	w.frameOut, w.nested = false, false // its frame reached the app's loop
 	return w.q.ev
 }
 

@@ -114,5 +114,6 @@ func (w *Window) Pending() []Event {
 		w.q.dropFirst(w.nOut)
 		w.returned = false
 	}
+	w.frameOut = false
 	return w.q.takePending()
 }

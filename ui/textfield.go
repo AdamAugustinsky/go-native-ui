@@ -212,7 +212,7 @@ func (c *Context) TextField(label string, buf *TextBuffer) TextFieldSignal {
 	if c.semNext.role == RoleNone {
 		c.NextRole(RoleTextField)
 	}
-	flags := Clickable | Focusable | Clip | DrawBackground | DrawBorder | HotAnimation | FocusAnimation
+	flags := Clickable | Focusable | FocusText | Clip | DrawBackground | DrawBorder | HotAnimation | FocusAnimation
 	if still {
 		flags &^= HotAnimation
 	}

@@ -49,7 +49,8 @@ for s in $scenes; do
 				break
 			fi
 			id=$(sed -n 's/^    "windowNumber" : \([0-9][0-9]*\).*/\1/p' "$hs/$base.json" | head -n 1)
-			sh "$SHOT" window -id "$id" -scale 2 -no-prompt -out "$out/$base.png" >"$out/$base.shot.json" || echo "$base: capture failed" >&2
+			# APP is this tool; shot.sh reads its own APP
+			env -u APP sh "$SHOT" window -id "$id" -scale 2 -no-prompt -out "$out/$base.png" >"$out/$base.shot.json" || echo "$base: capture failed" >&2
 			cp "$hs/$base.json" "$out/$base.json"
 			: >"$hs/$base.done"
 			echo "$base ok"

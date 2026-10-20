@@ -74,7 +74,7 @@ func viewSetMarkedText(c *ffi.CB) {
 	}
 	n = min(n, total-loc)
 	w.imeUsed = true
-	if rs, rn, ok := w.replacement(c.Int(5), c.Int(6)); ok {
+	if rs, rn, ok := w.replacement(rangeAfter5(c)); ok {
 		w.q.push(Event{Kind: EvText, SelStart: rs, SelLen: rn, Time: Now()})
 	}
 	w.setMarkedFrom(b, loc, n, total)

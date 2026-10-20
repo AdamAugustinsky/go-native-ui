@@ -72,6 +72,8 @@ type box struct {
 	justify     Justify
 	auditOff    AuditMask  // the checks of Audit the box is exempt from (NextAuditExempt)
 	pad         [4]float32 // l, t, r, b
+	obscured    [2]float32 // a scroll box's view covered at its top and bottom (SetObscured)
+	stopWheel   bool       // the wheel over the box scrolls nothing beneath it (StopWheel)
 	gap         float32
 	pref        [2]Size
 	fixed       [2]float32
@@ -203,6 +205,7 @@ type Context struct {
 	relClicks         [2]uint8
 	focusKey          Key
 	focusVisible      bool // focus came from the keyboard (FocusVisible)
+	textOnlyTab       bool // Tab skips the controls (focus classes, focus.go): SetTabReachesControls(false)
 	scrollSet         bool // ScrollTo was called this frame (End decides whether the scroll is still moving)
 
 	sp scrollPhys   // trackpad gestures, latching and rubber bands (scrollphys.go)
@@ -222,6 +225,8 @@ type Context struct {
 	// again (ns from the frame start, 0 = none), and the input-method
 	// rectangle of the focused field.
 	wakeNs int64
+
+	shownWatch []shownWatch // WatchShown's boxes of this frame, checked after layout
 	// deadlines (deadline.go) are the named one-shot deadlines in force.
 	deadlines []deadline
 	imeRect   [4]float32
