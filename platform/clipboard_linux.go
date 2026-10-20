@@ -331,9 +331,28 @@ func (w *Window) clipFail() {
 	w.clipFinish()
 }
 
-// clipFailBig is clipFail for data over MaxPaste (FlagTooBig).
+// clipFailBig ends the transfer of data over MaxPaste: the kinds that were
+// requested after it are tried (the owner may offer a short text as well as a
+// huge image), and the request fails with FlagTooBig only when none is left or
+// none of them is offered.
 func (w *Window) clipFailBig() {
-	w.clip.big = true
+	c := &w.clip
+	c.big = true
+	if rest := c.kinds &^ (1 << c.kind); c.pending && rest != 0 {
+		w.clipCancelTransfer()
+		c.buf = c.buf[:0]
+		c.kinds = rest
+		started := false
+		if w.wl {
+			started = w.wlBeginPaste()
+		} else {
+			started = w.x11BeginPaste()
+		}
+		if started {
+			c.deadline = nanotime() + clipTimeout
+			return
+		}
+	}
 	w.clipFail()
 }
 

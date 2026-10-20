@@ -10,8 +10,10 @@ import (
 	"image/png"
 	"math/rand"
 	"reflect"
+	"strings"
 	"testing"
 	"unicode/utf16"
+	"unicode/utf8"
 )
 
 // testPNG encodes a w x h image whose pixels differ (including alpha).
@@ -123,29 +125,50 @@ func dropFiles(wide bool, paths ...string) []byte {
 	return append(blk, 0)
 }
 
+// cp1252 is the decoder an ANSI block is read with in the tests: Windows-1252,
+// where 0x80 is the euro sign (it is not Latin-1's control character).
+func cp1252(dst, p []byte) []byte {
+	for _, c := range p {
+		if c == 0x80 {
+			dst = utf8.AppendRune(dst, '\u20ac')
+		} else {
+			dst = utf8.AppendRune(dst, rune(c))
+		}
+	}
+	return dst
+}
+
 func TestDropFiles(t *testing.T) {
-	for _, wide := range []bool{true, false} {
-		blk := dropFiles(wide, `C:\Users\a\Doc one.txt`, "D:\\caf\u00e9\U0001F600.png")
-		want := "C:\\Users\\a\\Doc one.txt\x00D:\\caf\u00e9\U0001F600.png\x00"
-		if !wide { // ANSI input that is not UTF-8 is read as Latin-1
-			blk = dropFiles(wide, `C:\Users\a\Doc one.txt`, "D:\\caf\xe9.png")
-		}
-		if !wide {
-			want = "C:\\Users\\a\\Doc one.txt\x00D:\\caf\u00e9.png\x00"
-		}
-		out, n, ok := appendDropFiles(nil, blk, 1<<20)
-		if !ok || n != 2 || string(out) != want {
-			t.Errorf("wide=%v: %d %q %v, want %q", wide, n, out, ok, want)
-		}
+	wide := dropFiles(true, `C:\Users\a\Doc one.txt`, "D:\\caf\u00e9\U0001F600.png")
+	out, n, ok := appendDropFiles(nil, wide, 1<<20, nil)
+	if want := "C:\\Users\\a\\Doc one.txt\x00D:\\caf\u00e9\U0001F600.png\x00"; !ok || n != 2 || string(out) != want {
+		t.Errorf("wide: %d %q %v, want %q", n, out, ok, want)
+	}
+	// An ANSI block is in the system code page: 0x80 is the euro sign in
+	// Windows-1252, and 0xe9 is an e acute.
+	ansi := dropFiles(false, `C:\Users\a\Doc one.txt`, "D:\\price\x80\x20caf\xe9.png")
+	out, n, ok = appendDropFiles(nil, ansi, 1<<20, cp1252)
+	if want := "C:\\Users\\a\\Doc one.txt\x00D:\\price\u20ac caf\u00e9.png\x00"; !ok || n != 2 || string(out) != want {
+		t.Errorf("ansi with the code page's decoder: %d %q %v, want %q", n, out, ok, want)
+	}
+	// With no decoder: Latin-1 (and ASCII paths are themselves).
+	out, n, _ = appendDropFiles(nil, dropFiles(false, "/a/b\xe9"), 1<<20, nil)
+	if string(out) != "/a/b\u00e9\x00" || n != 1 {
+		t.Errorf("ansi without a decoder: %q", out)
+	}
+	// A decoder that gives nothing drops the path.
+	out, n, _ = appendDropFiles(nil, ansi, 1<<20, func(dst, p []byte) []byte { return dst })
+	if n != 0 || len(out) != 0 {
+		t.Errorf("a path that does not decode: %d %q", n, out)
 	}
 	// Bounded.
 	big := dropFiles(true, string(bytes.Repeat([]byte("a"), 300)), string(bytes.Repeat([]byte("b"), 300)))
-	if out, _, ok := appendDropFiles([]byte("keep"), big, 400); ok || string(out) != "keep" {
+	if out, _, ok := appendDropFiles([]byte("keep"), big, 400, nil); ok || string(out) != "keep" {
 		t.Errorf("over the bound: ok=%v out=%q", ok, out[:4])
 	}
 	// Garbage is no files, not a panic.
 	for _, g := range [][]byte{nil, {1, 2, 3}, make([]byte, 20), append([]byte{0xff, 0xff, 0xff, 0xff}, make([]byte, 30)...)} {
-		if out, n, ok := appendDropFiles(nil, g, 100); !ok || n != 0 || len(out) != 0 {
+		if out, n, ok := appendDropFiles(nil, g, 100, nil); !ok || n != 0 || len(out) != 0 {
 			t.Errorf("garbage %v: %d %v", g, n, ok)
 		}
 	}
@@ -286,5 +309,56 @@ func TestPNGShapedBlob(t *testing.T) {
 	b := pngShaped(t, 1<<20)
 	if len(b) != 1<<20 || pngEnd(b) != 1<<20 {
 		t.Errorf("a %d-byte blob measures %d", len(b), pngEnd(b))
+	}
+}
+
+// A "file://" with nothing after it is no path (it once read the byte after the
+// end of the URI).
+func TestURIListBareScheme(t *testing.T) {
+	for _, list := range []string{"file://", "file://\r\nfile:///ok\r\n", "FILE://", "# c\nfile://"} {
+		want := ""
+		if strings.Contains(list, "ok") {
+			want = "/ok\x00"
+		}
+		got, n := appendURIListPaths(nil, []byte(list))
+		if string(got) != want || (want == "") != (n == 0) {
+			t.Errorf("%q: %d paths %q, want %q", list, n, got, want)
+		}
+		in := []byte(list) // in place, the way a paste converts it
+		got, n = appendURIListPaths(in[:0], in)
+		if string(got) != want || (want == "") != (n == 0) {
+			t.Errorf("%q in place: %d paths %q, want %q", list, n, got, want)
+		}
+	}
+	if got, ok := appendFileURI(nil, []byte("file://")); ok || len(got) != 0 {
+		t.Errorf("appendFileURI of a bare scheme: %q %v", got, ok)
+	}
+}
+
+// A true-color DIB with a color table (biClrUsed) has its pixels after the
+// table: a 24-bit V5 bitmap built by another program.
+func TestDIBTrueColorWithColorTable(t *testing.T) {
+	le := binary.LittleEndian
+	for _, hdr := range []int{40, 108, 124} {
+		dib := make([]byte, hdr)
+		le.PutUint32(dib, uint32(hdr))
+		le.PutUint32(dib[4:], 1)
+		le.PutUint32(dib[8:], 1)
+		le.PutUint16(dib[12:], 1)
+		le.PutUint16(dib[14:], 24)
+		le.PutUint32(dib[32:], 1)       // biClrUsed: one table entry
+		dib = append(dib, 9, 9, 9, 0)   // the table
+		dib = append(dib, 0, 0, 255, 0) // the pixel: B G R, padded to 4 bytes
+		out, err := dibToPNG(nil, dib, MaxPaste)
+		if err != nil {
+			t.Fatalf("header %d: %v", hdr, err)
+		}
+		if c := decodeNRGBA(t, out).NRGBAAt(0, 0); c != (color.NRGBA{255, 0, 0, 255}) {
+			t.Errorf("header %d: pixel %v, want red (the table was read as pixels)", hdr, c)
+		}
+		// A table that runs past the data is refused.
+		if _, err := dibToPNG(nil, dib[:len(dib)-6], MaxPaste); err == nil {
+			t.Errorf("header %d: a truncated table was accepted", hdr)
+		}
 	}
 }

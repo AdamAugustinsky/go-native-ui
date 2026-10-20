@@ -3,7 +3,9 @@
 package platform
 
 import (
+	"bytes"
 	"runtime"
+	"strings"
 	"sync"
 	"unsafe"
 
@@ -13,28 +15,35 @@ import (
 
 // Images, file URLs and the concealed hint on NSPasteboard.
 //
-// The readers take the pasteboard as an argument, so another pasteboard (the
-// drag pasteboard of a drop) can use them:
+// The readers run on the pasteboard worker's thread (pasteboard_worker_darwin.go)
+// with a frame of its own, never on the main thread: a pasteboard read waits for
+// the owner of the data, which may be another process that is slow to answer.
+// They take the pasteboard as an argument, so another pasteboard (the drag
+// pasteboard of a drop) can use them:
 //
-//	pbAppendPNG(pb, dst)    the bytes of public.png
-//	pbTIFFData(pb)          the NSData of public.tiff (borrowed; convertToPNG converts it on a worker)
-//	pbAppendFiles(pb, dst)  file URLs (public.file-url, then NSFilenamesPboardType) as NUL-ended paths
+//	pbAppendPNG(fr, pb, dst)     the bytes of public.png
+//	pbTIFFData(fr, pb)           the NSData of public.tiff (borrowed; convertToPNG converts it)
+//	pbAppendFiles(fr, pb, dst)   file URLs (public.file-url, then NSFilenamesPboardType) as NUL-ended paths
+//	pbAppendText(fr, pb, dst)    public.utf8-plain-text
 //
-// All run on the main thread inside an autorelease pool of the caller, copy
-// into dst with no Go allocation once dst has the capacity, and measure
-// before they copy, so a pasteboard over MaxPaste costs nothing on the Go
-// heap. convertToPNG (clipboard_imageio_darwin.go) is the worker side.
+// Each runs inside an autorelease pool of the caller, copies into dst with no
+// Go allocation once dst has the capacity, and measures before it copies, so a
+// pasteboard over MaxPaste costs nothing on the Go heap. Every object it is
+// handed by AppKit is checked with isKindOfClass: before it is messaged, because
+// a pasteboard holds whatever its owner put there. convertToPNG
+// (clipboard_imageio_darwin.go) is the conversion side.
 
 var (
 	pbImgOnce sync.Once
 	// types
 	pbPNG, pbTIFF, pbFileURL, pbFilenames, pbConcealed, pbTransient objc.ID
-	clsPBNSData, clsPBNSURL                                         objc.ID
+	clsPBNSData, clsPBNSURL, clsPBArray, clsPBString, clsPBItem     objc.ID
 	// selectors
-	selPBDataForType, selPBSetDataFT, selPBDataWithBytes, selPBNSDataEmpty objc.SEL
-	selPBBytes, selPBLength, selPBItems, selPBCount, selPBObjectAt         objc.SEL
-	selPBURLWithString, selPBFilePathURL, selPBPath, selPBPropListForType  objc.SEL
-	selPBTypes                                                             objc.SEL
+	selPBDataForType, selPBSetDataFT, selPBDataWithBytes, selPBNSDataEmpty     objc.SEL
+	selPBBytes, selPBLength, selPBItems, selPBCount, selPBObjectAt             objc.SEL
+	selPBURLWithString, selPBFilePathURL, selPBPath, selPBPropListForType      objc.SEL
+	selPBTypes, selPBIsKind, selPBIsFileURL, selPBHost, selPBUTF8              objc.SEL
+	selPBGeneral, selPBStringForType, selPBLenBytes, selPBRetain, selPBRelease objc.SEL
 )
 
 func pbImageInit() {
@@ -44,13 +53,17 @@ func pbImageInit() {
 		pbFileURL, pbFilenames = objc.Retain(objc.Str("public.file-url")), objc.Retain(objc.Str("NSFilenamesPboardType"))
 		pbConcealed, pbTransient = objc.Retain(objc.Str("org.nspasteboard.ConcealedType")), objc.Retain(objc.Str("org.nspasteboard.TransientType"))
 		clsPBNSData, clsPBNSURL = objc.Cls("NSData"), objc.Cls("NSURL")
+		clsPBArray, clsPBString, clsPBItem = objc.Cls("NSArray"), objc.Cls("NSString"), objc.Cls("NSPasteboardItem")
 		selPBDataForType, selPBSetDataFT = objc.Sel("dataForType:"), objc.Sel("setData:forType:")
 		selPBDataWithBytes, selPBNSDataEmpty = objc.Sel("dataWithBytes:length:"), objc.Sel("data")
 		selPBBytes, selPBLength = objc.Sel("bytes"), objc.Sel("length")
 		selPBItems, selPBCount, selPBObjectAt = objc.Sel("pasteboardItems"), objc.Sel("count"), objc.Sel("objectAtIndex:")
 		selPBURLWithString, selPBFilePathURL, selPBPath = objc.Sel("URLWithString:"), objc.Sel("filePathURL"), objc.Sel("path")
 		selPBPropListForType = objc.Sel("propertyListForType:")
-		selPBTypes = objc.Sel("types")
+		selPBTypes, selPBIsKind, selPBIsFileURL = objc.Sel("types"), objc.Sel("isKindOfClass:"), objc.Sel("isFileURL")
+		selPBHost, selPBUTF8 = objc.Sel("host"), objc.Sel("UTF8String")
+		selPBGeneral, selPBStringForType, selPBLenBytes = objc.Sel("generalPasteboard"), objc.Sel("stringForType:"), objc.Sel("lengthOfBytesUsingEncoding:")
+		selPBRetain, selPBRelease = objc.Sel("retain"), objc.Sel("release")
 	})
 }
 
@@ -63,88 +76,209 @@ const (
 	pbTooBig                 // it has it, over MaxPaste: nothing was copied
 )
 
-// pbAppendPNG appends the bytes of the pasteboard's public.png to dst.
-func pbAppendPNG(pb objc.ID, dst []byte) ([]byte, pbResult) {
-	data := objc.Send1(pb, selPBDataForType, uintptr(pbPNG))
-	if data == 0 {
+// Messages on a worker's frame (the objc.Send helpers are the main thread's).
+func pbSend(fr *ffi.Frame, recv uintptr, sel objc.SEL) uintptr {
+	return fr.Call2(objc.MsgSend, recv, uintptr(sel))
+}
+
+func pbSend1(fr *ffi.Frame, recv uintptr, sel objc.SEL, a uintptr) uintptr {
+	return fr.Call3(objc.MsgSend, recv, uintptr(sel), a)
+}
+
+// pbIsKind reports whether obj is an instance of cls (nil is not).
+func pbIsKind(fr *ffi.Frame, obj uintptr, cls objc.ID) bool {
+	return obj != 0 && fr.Reset().Arg(obj).Arg(uintptr(selPBIsKind)).Arg(uintptr(cls)).Call(objc.MsgSend).Bool()
+}
+
+// pbGrow makes room for n more bytes in dst without the append's doubling
+// past MaxPaste: n must fit in MaxPaste together with len(dst).
+func pbGrow(dst []byte, n int) []byte {
+	if cap(dst)-len(dst) >= n {
+		return dst
+	}
+	c := min(max(len(dst)+n, 2*cap(dst)), MaxPaste+1)
+	out := make([]byte, len(dst), max(c, len(dst)+n))
+	copy(out, dst)
+	return out
+}
+
+// pbAppendString appends the UTF-8 bytes of the NSString str to dst when they
+// are at most room, measuring them before copying. An object that is not a
+// string, or an empty one, is pbAbsent.
+func pbAppendString(fr *ffi.Frame, str uintptr, dst []byte, room int) ([]byte, pbResult) {
+	if !pbIsKind(fr, str, clsPBString) {
 		return dst, pbAbsent
 	}
-	n := int(objc.Send(data, selPBLength))
-	if n > MaxPaste {
+	n := int(pbSend1(fr, str, selPBLenBytes, 4 /* NSUTF8StringEncoding */))
+	if n <= 0 {
+		return dst, pbAbsent
+	}
+	if n > room {
+		return dst, pbTooBig
+	}
+	p := pbSend(fr, str, selPBUTF8)
+	if p == 0 {
+		return dst, pbAbsent
+	}
+	dst = pbGrow(dst, n)
+	return append(dst, unsafe.Slice((*byte)(ffi.PtrFromC(p)), n)...), pbFound
+}
+
+// pbAppendText appends the pasteboard's plain text to dst.
+func pbAppendText(fr *ffi.Frame, pb uintptr, dst []byte) ([]byte, pbResult) {
+	return pbAppendString(fr, pbSend1(fr, pb, selPBStringForType, uintptr(pbType)), dst, MaxPaste-len(dst))
+}
+
+// pbAppendPNG appends the bytes of the pasteboard's public.png to dst.
+func pbAppendPNG(fr *ffi.Frame, pb uintptr, dst []byte) ([]byte, pbResult) {
+	data := pbSend1(fr, pb, selPBDataForType, uintptr(pbPNG))
+	if !pbIsKind(fr, data, clsPBNSData) {
+		return dst, pbAbsent
+	}
+	n := int(pbSend(fr, data, selPBLength))
+	if n > MaxPaste-len(dst) {
 		return dst, pbTooBig
 	}
 	if n < 8 {
 		return dst, pbAbsent
 	}
-	p := objc.Send(data, selPBBytes)
+	p := pbSend(fr, data, selPBBytes)
 	if p == 0 {
 		return dst, pbAbsent
 	}
-	src := unsafe.Slice((*byte)(ffi.PtrFromC(uintptr(p))), n)
+	src := unsafe.Slice((*byte)(ffi.PtrFromC(p)), n)
 	if [8]byte(src) != pngSig {
 		return dst, pbAbsent
 	}
-	return append(dst, src...), pbFound
+	return append(pbGrow(dst, n), src...), pbFound
 }
 
 // pbTIFFData returns the pasteboard's public.tiff data (0: none) and its
-// length. The NSData belongs to the caller's autorelease pool: Retain it to
-// hand it to a worker (convertToPNG releases what it is given).
-func pbTIFFData(pb objc.ID) (data objc.ID, n int) {
-	data = objc.Send1(pb, selPBDataForType, uintptr(pbTIFF))
-	if data == 0 {
+// length. The NSData belongs to the caller's autorelease pool: retain it to
+// keep it past the pool (convertToPNG releases what it is given).
+func pbTIFFData(fr *ffi.Frame, pb uintptr) (data uintptr, n int) {
+	data = pbSend1(fr, pb, selPBDataForType, uintptr(pbTIFF))
+	if !pbIsKind(fr, data, clsPBNSData) {
 		return 0, 0
 	}
-	return data, int(objc.Send(data, selPBLength))
+	return data, int(pbSend(fr, data, selPBLength))
 }
 
-// pbAppendFiles appends the pasteboard's file URLs to dst as paths, each ended
-// by a NUL, and returns how many. It reads public.file-url of each pasteboard
-// item and, if there is none, the NSFilenamesPboardType list that older
-// programs write. Items that are not file URLs are left out. The paths are
-// bounded by MaxPaste: more is pbTooBig and dst is as it was.
-func pbAppendFiles(pb objc.ID, dst []byte) ([]byte, int, pbResult) {
-	start := len(dst)
-	n := 0
-	items := objc.Send(pb, selPBItems)
-	for i, cnt := 0, int(objc.Send(items, selPBCount)); items != 0 && i < cnt; i++ {
-		item := objc.Send1(items, selPBObjectAt, uintptr(i))
-		s := objc.Send1(item, selStringForType, uintptr(pbFileURL))
-		if s == 0 {
-			continue
-		}
-		url := objc.Send1(clsPBNSURL, selPBURLWithString, uintptr(s))
-		if url == 0 {
-			continue
-		}
-		if fu := objc.Send(url, selPBFilePathURL); fu != 0 { // also resolves file reference URLs (file:///.file/id=)
-			url = fu
-		}
-		before := len(dst)
-		dst = objc.AppendUTF8(dst, objc.Send(url, selPBPath))
-		if len(dst) == before {
-			continue
-		}
-		dst = append(dst, 0)
-		n++
-		if len(dst)-start > MaxPaste {
-			return dst[:start], 0, pbTooBig
+// pbLocalHost reports whether an NSURL host (0: none) names this machine: no
+// host, or "localhost".
+func pbLocalHost(fr *ffi.Frame, host uintptr) bool {
+	if host == 0 {
+		return true
+	}
+	if !pbIsKind(fr, host, clsPBString) {
+		return false
+	}
+	n := int(pbSend1(fr, host, selPBLenBytes, 4))
+	if n == 0 {
+		return true
+	}
+	p := pbSend(fr, host, selPBUTF8)
+	return n == 9 && p != 0 && strings.EqualFold(string(unsafe.Slice((*byte)(ffi.PtrFromC(p)), n)), "localhost")
+}
+
+// pbEachPath calls f with the NSString of each path the pasteboard offers as a
+// file: the file URL of each pasteboard item (only file URLs on this machine: an
+// empty host or localhost) and, if there is no such item, the entries of the
+// NSFilenamesPboardType list that older programs write. Entries that are not
+// what they should be (an item that is not a pasteboard item, a value that is
+// not a string or an array, a URL that is not a file URL) are not visited. f
+// returns false to stop. It reports how many paths were visited.
+func pbEachPath(fr *ffi.Frame, pb uintptr, f func(str uintptr) bool) (n int) {
+	items := pbSend(fr, pb, selPBItems)
+	if pbIsKind(fr, items, clsPBArray) {
+		for i, cnt := 0, int(pbSend(fr, items, selPBCount)); i < cnt; i++ {
+			item := pbSend1(fr, items, selPBObjectAt, uintptr(i))
+			if !pbIsKind(fr, item, clsPBItem) {
+				continue
+			}
+			s := pbSend1(fr, item, selPBStringForType, uintptr(pbFileURL))
+			if !pbIsKind(fr, s, clsPBString) {
+				continue
+			}
+			url := pbSend1(fr, uintptr(clsPBNSURL), selPBURLWithString, s)
+			if !pbIsKind(fr, url, clsPBNSURL) || !fr.Reset().Arg(url).Arg(uintptr(selPBIsFileURL)).Call(objc.MsgSend).Bool() ||
+				!pbLocalHost(fr, pbSend(fr, url, selPBHost)) {
+				continue
+			}
+			fu := pbSend(fr, url, selPBFilePathURL) // also resolves file reference URLs (file:///.file/id=)
+			if !pbIsKind(fr, fu, clsPBNSURL) {
+				continue
+			}
+			path := pbSend(fr, fu, selPBPath)
+			if !pbIsKind(fr, path, clsPBString) {
+				continue
+			}
+			n++
+			if !f(path) {
+				return n
+			}
 		}
 	}
-	if n == 0 { // the older list
-		list := objc.Send1(pb, selPBPropListForType, uintptr(pbFilenames))
-		for i, cnt := 0, int(objc.Send(list, selPBCount)); list != 0 && i < cnt; i++ {
-			before := len(dst)
-			dst = objc.AppendUTF8(dst, objc.Send1(list, selPBObjectAt, uintptr(i)))
-			if len(dst) == before {
+	if n > 0 {
+		return n
+	}
+	list := pbSend1(fr, pb, selPBPropListForType, uintptr(pbFilenames))
+	if pbIsKind(fr, list, clsPBArray) {
+		for i, cnt := 0, int(pbSend(fr, list, selPBCount)); i < cnt; i++ {
+			path := pbSend1(fr, list, selPBObjectAt, uintptr(i))
+			if !pbIsKind(fr, path, clsPBString) {
 				continue
+			}
+			n++
+			if !f(path) {
+				return n
+			}
+		}
+	}
+	return n
+}
+
+// pbAppendFiles appends the pasteboard's file paths (pbEachPath) to dst, each
+// ended by a NUL, and returns how many. The paths are measured first, without
+// copying a byte, against MaxPaste (the NULs counted): a list over it is
+// pbTooBig and dst is as it was, and one that fits is copied into room made for
+// exactly its size. A path with a NUL inside is skipped, since it would split in
+// two.
+func pbAppendFiles(fr *ffi.Frame, pb uintptr, dst []byte) ([]byte, int, pbResult) {
+	start := len(dst)
+	total := 0
+	pbEachPath(fr, pb, func(str uintptr) bool {
+		if n := int(pbSend1(fr, str, selPBLenBytes, 4)); n > 0 {
+			total += n + 1
+		}
+		return total <= MaxPaste
+	})
+	switch {
+	case total > MaxPaste-start:
+		return dst, 0, pbTooBig
+	case total == 0:
+		return dst, 0, pbAbsent
+	}
+	dst = pbGrow(dst, total)
+	n, big := 0, false
+	pbEachPath(fr, pb, func(str uintptr) bool {
+		before := len(dst)
+		var res pbResult
+		if dst, res = pbAppendString(fr, str, dst, MaxPaste-(len(dst)-start)-1); res == pbTooBig { // (the list changed since it was measured)
+			big = true
+			return false
+		} else if res == pbFound {
+			if bytes.IndexByte(dst[before:], 0) >= 0 {
+				dst = dst[:before]
+				return true
 			}
 			dst = append(dst, 0)
 			n++
-			if len(dst)-start > MaxPaste {
-				return dst[:start], 0, pbTooBig
-			}
 		}
+		return true
+	})
+	if big {
+		return dst[:start], 0, pbTooBig
 	}
 	if n == 0 {
 		return dst[:start], 0, pbAbsent

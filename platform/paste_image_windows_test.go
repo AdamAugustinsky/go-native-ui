@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"image/color"
+	"math/rand"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -245,6 +246,14 @@ func takeClipboardData(t *testing.T, what string, files []string) error {
 		puts = append(puts, clipPut{f.png, allocClipboardBytes(pngShaped(t, MaxPaste+1<<20))})
 	case "hdrop":
 		puts = append(puts, clipPut{cfHDrop, allocClipboardBytes(dropFiles(true, files...))})
+	case "dibbig": // a bitmap whose PNG is over MaxPaste (noise does not compress), with a text
+		const w, h = 2400, 3000
+		px := make([]byte, 3*w*h)
+		rand.New(rand.NewSource(3)).Read(px)
+		puts = append(puts, clipPut{cfDIB, allocClipboardBytes(dibOf(w, h, 24, 0, nil, px))},
+			clipPut{cfUnicodeText, allocClipboardText([]byte("alt text"))})
+	case "hdropansi": // an ANSI block (fWide 0), its paths in the system code page
+		puts = append(puts, clipPut{cfHDrop, allocClipboardBytes(dropFiles(false, "C:\\price\x80 caf\xe9.png"))})
 	case "all": // a copied file: its path, its name as text and a picture of it
 		puts = append(puts, clipPut{cfHDrop, allocClipboardBytes(dropFiles(true, files...))},
 			clipPut{f.png, allocClipboardBytes(src)},
@@ -442,5 +451,37 @@ func TestImageAndFilesWithPowerShell(t *testing.T) {
 	e, got = pasteKindsOf(t, w, 2, WantFiles, 10*time.Second)
 	if want := []string{f1, f2}; e.Flags != 0 || e.Paste != PasteFiles || !slices.Equal(PasteFilePaths(got), want) {
 		t.Errorf("files from Set-Clipboard -Path: flags %v: %q, want %q", e.Flags, PasteFilePaths(got), want)
+	}
+}
+
+// The paths of an ANSI CF_HDROP are in the system's code page, not Latin-1: in
+// Windows-1252 byte 0x80 is the euro sign.
+func TestAnsiDropFilesUseTheCodePage(t *testing.T) {
+	if acp := uint32(win32.Call(pGetACP)); acp != 1252 {
+		t.Skipf("the ANSI code page is %d, not 1252", acp)
+	}
+	if got := string(acpToUTF8(nil, []byte("a\x80b\xe9"))); got != "a\u20acb\u00e9" {
+		t.Errorf("acpToUTF8 = %q", got)
+	}
+	w := openTestWindow(t)
+	otherData(t, "hdropansi")
+	e, got := pasteKindsOf(t, w, 1, WantFiles, 5*time.Second)
+	if want := []string{"C:\\price\u20ac caf\u00e9.png"}; e.Flags != 0 || e.Paste != PasteFiles || !slices.Equal(PasteFilePaths(got), want) {
+		t.Errorf("an ANSI file list: flags %v %q, want %q", e.Flags, PasteFilePaths(got), want)
+	}
+}
+
+// An image whose PNG would be over MaxPaste is passed over for the text the
+// clipboard also holds.
+func TestOversizedDIBFallsBackToText(t *testing.T) {
+	w := openTestWindow(t)
+	shortPasteTimeout(t, 30*time.Second) // (a longer limit: converting 7 million pixels takes a while on a loaded runner)
+	otherData(t, "dibbig")
+	e, got := pasteKindsOf(t, w, 1, WantImage|WantText, 20*time.Second)
+	if e.Flags != 0 || e.Paste != PasteText || string(got) != "alt text" {
+		t.Errorf("an oversized bitmap with text: flags %v kind %v %q", e.Flags, e.Paste, got)
+	}
+	if e, _ := pasteKindsOf(t, w, 2, WantImage, 20*time.Second); e.Flags != FlagFailed|FlagTooBig {
+		t.Errorf("an oversized bitmap alone: %+v", e)
 	}
 }

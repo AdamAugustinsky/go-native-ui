@@ -103,18 +103,15 @@ func tiffRGB(w, h int, px []byte) []byte {
 	return append(b, px...)
 }
 
-// waitConverted lets the conversion worker finish and reaps its answer.
+// waitConverted lets the pasteboard worker finish and returns its answer.
 func waitConverted(t *testing.T, w *Window) Event {
 	t.Helper()
-	for end := time.Now().Add(20 * time.Second); time.Now().Before(end); time.Sleep(2 * time.Millisecond) {
-		w.reapPaste()
-		for _, e := range w.q.ev {
-			if e.Kind == EvPaste {
-				return e
-			}
+	awaitPaste(t, w, false)
+	for _, e := range w.q.ev {
+		if e.Kind == EvPaste {
+			return e
 		}
 	}
-	t.Fatal("no EvPaste from the conversion worker")
 	return Event{}
 }
 
@@ -122,6 +119,7 @@ func (r *pasteRig) request(tag uint64, kinds PasteKinds) Event {
 	r.t.Helper()
 	r.w.q.reset()
 	r.w.RequestPasteKinds(tag, kinds)
+	awaitPaste(r.t, r.w, false)
 	if len(r.w.q.ev) != 1 || r.w.q.ev[0].Kind != EvPaste || r.w.q.ev[0].Tag != tag {
 		r.t.Fatalf("events after RequestPasteKinds: %+v", r.w.q.ev)
 	}
@@ -246,8 +244,8 @@ func TestPasteTIFFConvertedOnWorker(t *testing.T) {
 	pbPutData("public.tiff", tiffRGB(w, h, px))
 	r.w.q.reset()
 	r.w.RequestPasteKinds(9, WantImage)
-	if len(r.w.q.ev) != 0 || !pastePending() {
-		t.Fatalf("a TIFF is converted off the UI thread: events %+v, pending %v", r.w.q.ev, pastePending())
+	if len(r.w.q.ev) != 0 {
+		t.Fatalf("the answer came during the call: %+v", r.w.q.ev)
 	}
 	e := waitConverted(t, r.w)
 	if e.Flags != 0 || e.Paste != PasteImage || e.Tag != 9 || pastePending() {
@@ -326,6 +324,7 @@ func TestPasteImageOverMaxIsRefused(t *testing.T) {
 	r.w.q.reset()
 	runtime.ReadMemStats(&before)
 	r.w.RequestPasteKinds(4, WantImage)
+	awaitPaste(t, r.w, false)
 	runtime.ReadMemStats(&after)
 	if len(r.w.q.ev) != 1 || r.w.q.ev[0].Flags != FlagFailed|FlagTooBig || r.w.q.ev[0].Tag != 4 || len(r.w.q.text) != 0 {
 		t.Errorf("events %+v, %d text bytes", r.w.q.ev, len(r.w.q.text))
@@ -361,6 +360,7 @@ func TestPasteKindsZeroAllocs(t *testing.T) {
 		poll := func() {
 			r.w.q.reset()
 			r.w.RequestPasteKinds(1, c.kinds)
+			awaitPaste(t, r.w, true)
 		}
 		poll()
 		poll()

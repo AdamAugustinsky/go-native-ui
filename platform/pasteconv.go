@@ -100,6 +100,9 @@ func appendFileURI(dst, uri []byte) ([]byte, bool) {
 		return dst, false
 	}
 	rest := uri[len(scheme):]
+	if len(rest) == 0 { // "file://" and nothing after it
+		return dst, false
+	}
 	if rest[0] != '/' { // a host: only this one's files are paths
 		i := bytes.IndexByte(rest, '/')
 		if i < 0 {
@@ -147,8 +150,10 @@ func unhex(c byte) int {
 // appendDropFiles appends to dst the paths of a DROPFILES block (CF_HDROP),
 // as UTF-8, each ended by a NUL, and returns how many. max bounds the
 // appended bytes: it reports false, with dst as it was, when they would be
-// more.
-func appendDropFiles(dst, blk []byte, max int) (out []byte, n int, ok bool) {
+// more. The paths of an ANSI block (fWide 0) are in the system code page:
+// ansi appends one of them to dst as UTF-8 (Windows: MultiByteToWideChar with
+// CP_ACP); nil reads them as Latin-1.
+func appendDropFiles(dst, blk []byte, max int, ansi func(dst, path []byte) []byte) (out []byte, n int, ok bool) {
 	// DROPFILES: DWORD pFiles; POINT pt; BOOL fNC; BOOL fWide  (20 bytes)
 	if len(blk) < 20 {
 		return dst, 0, true
@@ -161,26 +166,21 @@ func appendDropFiles(dst, blk []byte, max int) (out []byte, n int, ok bool) {
 	list := blk[off:]
 	start := len(dst)
 	if !wide {
+		if ansi == nil {
+			ansi = latin1ToUTF8
+		}
 		for len(list) > 0 && list[0] != 0 {
 			i := bytes.IndexByte(list, 0)
 			if i < 0 {
 				i = len(list)
 			}
-			// ANSI paths are in the system code page: kept as they are when they
-			// are valid UTF-8 (ASCII, the usual case) and otherwise read as
-			// Latin-1, which never invents a character.
-			p := list[:i]
 			before := len(dst)
-			if utf8.Valid(p) {
-				dst, _ = appendPath(dst, p)
-			} else {
-				for _, c := range p {
-					dst = utf8.AppendRune(dst, rune(c))
-				}
+			dst = ansi(dst, list[:i])
+			if len(dst) > before && bytes.IndexByte(dst[before:], 0) < 0 {
 				dst = append(dst, 0)
-			}
-			if len(dst) > before {
 				n++
+			} else {
+				dst = dst[:before]
 			}
 			if len(dst)-start > max {
 				return dst[:start], 0, false
@@ -225,6 +225,14 @@ func appendDropFiles(dst, blk []byte, max int) (out []byte, n int, ok bool) {
 		}
 	}
 	return dst, n, true
+}
+
+// latin1ToUTF8 appends p, read as Latin-1, to dst as UTF-8.
+func latin1ToUTF8(dst, p []byte) []byte {
+	for _, c := range p {
+		dst = utf8.AppendRune(dst, rune(c))
+	}
+	return dst
 }
 
 // ---- DIB (Windows) ----
@@ -331,8 +339,11 @@ func dibToPNG(dst, dib []byte, max int) ([]byte, error) {
 			pal[i] = [4]byte{dib[off+4*i+2], dib[off+4*i+1], dib[off+4*i], 0xff} // RGBA from BGRx
 		}
 		off += 4 * n
-	} else if used > 0 && hdr == 40 && comp == biRGB {
-		off += 4 * used // an optimization table on a true-color bitmap
+	} else {
+		off += 4 * used // the color table a true-color bitmap may have too (biClrUsed counts it, whatever the header or the compression)
+		if off > len(dib) {
+			return dst, errDIBUnsupported
+		}
 	}
 	stride := (w*bpp + 31) / 32 * 4
 	if off > len(dib) || len(dib)-off < stride*h {

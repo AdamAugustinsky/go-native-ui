@@ -522,6 +522,7 @@ func (c *clipWorker) read(owner uintptr, r clipReq) clipRead {
 		kinds = WantText
 	}
 	settle := min(nanotime()+clipSettleNs, r.give)
+	big := false // a requested kind was there but over MaxPaste (and the ones after it did not do)
 	for {
 		if !c.open(owner, r) {
 			return clipRead{}
@@ -530,12 +531,20 @@ func (c *clipWorker) read(owner uintptr, r clipReq) clipRead {
 		closeClipboard()
 		if dib {
 			rd = c.convertDIB()
+			if !rd.ok && kinds&^WantImage != 0 {
+				// The image did not convert, or its PNG is over MaxPaste: the
+				// kinds after it are tried, as if it had not been there.
+				big = big || rd.big
+				kinds &^= WantImage
+				continue
+			}
 		}
 		if retry && nanotime() < settle && c.alive(r) {
 			c.pump()
 			time.Sleep(clipSettleStep)
 			continue
 		}
+		rd.big = !rd.ok && (rd.big || big)
 		return rd
 	}
 }
@@ -575,7 +584,7 @@ func (c *clipWorker) look(r clipReq, kinds PasteKinds) (rd clipRead, retry, dib 
 			default:
 				var n int
 				var ok bool
-				if c.buf, n, ok = appendDropFiles(c.buf, blk, MaxPaste); !ok {
+				if c.buf, n, ok = appendDropFiles(c.buf, blk, MaxPaste, acpToUTF8); !ok {
 					rd.big = true
 				} else if n > 0 {
 					rd = clipRead{n: len(c.buf), ok: true, kind: PasteFiles, files: uint32(n)}

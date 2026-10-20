@@ -622,3 +622,59 @@ func TestX11PasteImageFromOtherAppNoAlloc(t *testing.T) {
 		t.Errorf("the paste poll of an image from another application allocates %.1f times per round, want 0", n)
 	}
 }
+
+// An image the owner sends too much of is passed over for the text it also
+// offers.
+func TestX11PasteOversizedImageFallsBackToText(t *testing.T) {
+	s := newXSess(t)
+	s.p.own()
+	x := &s.w.x
+	var got []kpaste
+
+	s.w.RequestPasteKinds(1, WantImage|WantText)
+	req := s.kuntil("TARGETS", &got, isType(xSelectionRequest))
+	s.p.putAtoms(req.reqWin(), req.reqProp(), x.aTargets, x.aUTF8, x.aPNG)
+	s.p.notify(req, req.reqProp())
+	req = s.kuntil("the image request", &got, isType(xSelectionRequest))
+	if uintptr(req[7]) != x.aPNG {
+		t.Fatalf("asked for target %d, want image/png", req[7])
+	}
+	fr.Call3(xf.selectInput, s.p.dpy, req.reqWin(), xPropertyChangeMask)
+	size := uint64(MaxPaste + 1)
+	fr.Reset().Arg(s.p.dpy).Arg(req.reqWin()).Arg(req.reqProp()).Arg(x.aIncr).Arg(32).Arg(0).Arg(uintptr(unsafe.Pointer(&size))).Arg(1).Call(xf.changeProperty)
+	s.p.notify(req, req.reqProp())
+
+	// The text is asked for next, without the image getting a failure first.
+	req = s.kuntil("the text request", &got, isType(xSelectionRequest))
+	if uintptr(req[7]) != x.aUTF8 {
+		t.Fatalf("asked for target %d after the image, want UTF8_STRING", req[7])
+	}
+	if len(got) != 0 {
+		t.Fatalf("answered before the text arrived: %+v", got[0].Event)
+	}
+	s.p.putProp(req.reqWin(), req.reqProp(), x.aUTF8, []byte("alt text"))
+	s.p.notify(req, req.reqProp())
+	s.kuntil0(&got, func() bool { return len(got) > 0 })
+	if e := got[0]; e.Flags != 0 || e.Paste != PasteText || string(e.data) != "alt text" || e.Tag != 1 {
+		t.Errorf("answer %+v %q", e.Event, e.data)
+	}
+}
+
+// The same on Wayland: a files request whose list is over MaxPaste goes on to
+// the text, and when that is over MaxPaste too the failure says so.
+func TestWaylandPasteOversizedFallsBackToNextKind(t *testing.T) {
+	f, w := focused(t, "")
+	f.do("ext-copy-big %d", MaxPaste+1024)
+	selectionSeen(t, w, true)
+	w.RequestPasteKinds(1, WantFiles|WantText)
+	var got []kpaste
+	for end := time.Now().Add(60 * time.Second); len(got) == 0 && time.Now().Before(end); {
+		collectPastes(w, w.Wait(int64(5*time.Millisecond)), &got)
+	}
+	if !f.seen(`REQ wl_data_offer.receive "text/uri-list"`) || !f.seen(`REQ wl_data_offer.receive "text/plain;charset=utf-8"`) {
+		t.Fatalf("the text was not tried after the file list; got %+v", got)
+	}
+	if len(got) != 1 || got[0].Flags != FlagFailed|FlagTooBig {
+		t.Errorf("answer %+v", got)
+	}
+}
