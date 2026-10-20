@@ -180,6 +180,7 @@ var (
 	pSetCapture         = win32.Proc(user32, "SetCapture")
 	pReleaseCapture     = win32.Proc(user32, "ReleaseCapture")
 	pGetKeyState        = win32.Proc(user32, "GetKeyState")
+	pMapVirtualKeyW     = win32.Proc(user32, "MapVirtualKeyW")
 	pScreenToClient     = win32.Proc(user32, "ScreenToClient")
 	pGetCursorPos       = win32.Proc(user32, "GetCursorPos")
 	pTrackMouseEvent    = win32.Proc(user32, "TrackMouseEvent")
@@ -254,6 +255,7 @@ type Window struct {
 
 	hiSurrogate uint16
 	utf8        [4]byte
+	lastMods    Mods // the modifiers EvModifiers last reported
 
 	// The clipboard requests in flight (paste_windows.go): the paste being
 	// waited for, with its tag and time limit, the worker that reads it, and
@@ -765,7 +767,19 @@ func wndProc(hwnd, m, wp, lp uintptr) uintptr {
 		if !ok {
 			return 0 // processed by an input method (VK_PROCESSKEY)
 		}
-		w.q.push(Event{Kind: EvKey, Key: k, Code: code, Mods: currentMods(), Flags: f, Time: Now()})
+		cur := currentMods()
+		if vkIsModifier(wp) { // a modifier on its own is EvModifiers, once per change
+			if cur != w.lastMods {
+				w.lastMods = cur
+				w.q.push(Event{Kind: EvModifiers, Mods: cur, Code: code, Time: Now()})
+			}
+		} else {
+			var mapped uint32
+			if winNeedsChar(wp) {
+				mapped = uint32(win32.Call(pMapVirtualKeyW, wp, 2 /* MAPVK_VK_TO_CHAR */))
+			}
+			w.q.push(Event{Kind: EvKey, Key: k, Char: winChar(wp, mapped), Code: code, Mods: cur, Flags: f, Time: Now()})
+		}
 		if m == wmSysKeyDown || m == wmSysKeyUp {
 			return defProc(hwnd, m, wp, lp) // keeps Alt+F4 and Alt+Space working
 		}
@@ -839,6 +853,12 @@ func wndProc(hwnd, m, wp, lp uintptr) uintptr {
 		w.pt = point{loword(lp), hiword(lp)} // screen coordinates
 		win32.Call(pScreenToClient, hwnd, uintptr(unsafe.Pointer(&w.pt)))
 		raw := hiword(wp)
+		if m == wmMouseWheel {
+			if amt, pinch := winPinch(wp, keyIsDown(vkControl)); pinch {
+				w.q.push(Event{Kind: EvMagnify, Amount: amt, X: float32(w.pt.x), Y: float32(w.pt.y), Mods: currentMods(), Time: Now()})
+				return 0
+			}
+		}
 		delta := float32(raw) / wheelDelta * wheelLinesPerNotch * wheelLogicalPerLine * w.scale
 		e := Event{Kind: EvScroll, X: float32(w.pt.x), Y: float32(w.pt.y), Mods: currentMods(), Time: Now()}
 		// A precision touchpad sends pixel-sized deltas (not whole notches)
