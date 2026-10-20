@@ -71,7 +71,12 @@ type appkitRef struct {
 	} `json:"scenes"`
 	Chrome struct {
 		Light, Dark    map[string]string
-		GroupBoxRadius float64 `json:"groupBoxRadius"`
+		GroupBoxRadius float64                                 `json:"groupBoxRadius"`
+		CheckboxChrome struct{ Regular, Small, Large float64 } `json:"checkboxChrome"`
+		Toolbar        struct {
+			Glyph, CompactItemMin, UnifiedItemMin float64
+			MenuItems                             []struct{ Symbol, W float64 }
+		} `json:"toolbar"`
 	} `json:"chrome"`
 }
 
@@ -122,14 +127,15 @@ var modeNames = [2]string{"light", "dark"}
 func TestMeasuredSystemRolesAreAppKits(t *testing.T) {
 	ref := loadRef(t)
 	for m, mode := range modeNames {
-		for i := range NumSystemRoles {
-			name := platform.SystemColorNames[i]
+		for c := range platform.NumSystemColors {
+			name := platform.SystemColorNames[c]
+			role := SystemRole(c)
 			want := hex(t, ref.Colors[mode][name])
-			if got := Measured[m][i]; !within(got, want, 1) {
-				t.Errorf("%s %v (%s): %08X, AppKit %08X", mode, Role(i), name, got, want)
+			if got := Measured[m][role]; !within(got, want, 1) {
+				t.Errorf("%s %v (%s): %08X, AppKit %08X", mode, role, name, got, want)
 			}
-			if Role(i).Source() != SourceSystem {
-				t.Errorf("%v is not a System role", Role(i))
+			if role.Source() != SourceSystem {
+				t.Errorf("%v is not a System role", role)
 			}
 		}
 	}
@@ -150,7 +156,7 @@ func TestMeasuredChromeRoles(t *testing.T) {
 	ref := loadRef(t)
 	r := (&Theme{}).Resolve(&fakeText{}, 2, Light)
 	byName := map[string]Role{}
-	for i := Field; i < NumRoles; i++ {
+	for i := range NumRoles {
 		byName[i.String()] = i
 	}
 	for m, want := range [2]map[string]string{ref.Chrome.Light, ref.Chrome.Dark} {
@@ -434,15 +440,16 @@ func TestSetSystem(t *testing.T) {
 			sys.Colors[m][i] = uint32(0x01000000*(m+1)) | uint32(i)<<8 | 0x80
 		}
 	}
-	sys.Colors[Light][Label5] = 0 // a colour this system does not have
+	sys.Colors[Light][platform.ColorQuinaryLabel] = 0 // a colour this system does not have
 
 	th := &Theme{SystemColors: true, SystemAccent: true}
 	r := th.Resolve(&fakeText{}, 1, Light)
 	r.SetSystem(&sys)
 	for m := range 2 {
 		r.Mix(float32(m))
-		for i := range NumSystemRoles {
-			want := sys.Colors[m][i]
+		for c := range platform.NumSystemColors {
+			i := SystemRole(c)
+			want := sys.Colors[m][c]
 			if want == 0 {
 				want = Measured[m][i]
 			}
@@ -649,5 +656,112 @@ func TestLegacyScrollersMatchAppKit(t *testing.T) {
 				t.Errorf("%s: knob or slot %+v in %+v, want %v pt in at the sides and ends", k, p, r.Frame, in)
 			}
 		}
+	}
+}
+
+// The toolbar's symbol size, its narrowest items and its menu items' widths
+// are what 27.2 measures: a symbol is 13 pt, a compact item at least 27, a
+// menu item its symbol and MenuPad but at least MenuW.
+func TestToolbarItemsAreAppKits(t *testing.T) {
+	ref := loadRef(t).Chrome.Toolbar
+	c := &MacWindow.Capsule
+	if !near(c.Glyph, ref.Glyph, 0) {
+		t.Errorf("toolbar symbol %v pt, AppKit's %v", c.Glyph, ref.Glyph)
+	}
+	if got := MacWindow.Toolbars[ToolbarCompact].ItemW; !near(got, ref.CompactItemMin, 0) {
+		t.Errorf("compact item %v, AppKit's narrowest %v", got, ref.CompactItemMin)
+	}
+	if got := MacWindow.Toolbars[ToolbarUnified].ItemW; !near(got, ref.UnifiedItemMin, 0) {
+		t.Errorf("unified item %v, AppKit's narrowest %v", got, ref.UnifiedItemMin)
+	}
+	if len(ref.MenuItems) == 0 {
+		t.Fatal("no menu items measured")
+	}
+	for _, m := range ref.MenuItems {
+		if got := c.MenuItemW(float32(m.Symbol)); !near(got, m.W, 0.01) {
+			t.Errorf("a menu item with a %v pt symbol is %v wide, AppKit's %v", m.Symbol, got, m.W)
+		}
+	}
+	// the sizes scale as the rest of the window's lengths do; the symbol is a
+	// point size and does not
+	r := (&Theme{}).Resolve(&fakeText{}, 2, Light)
+	if rc := r.Window.Capsule; rc.MenuW != 2*c.MenuW || rc.MenuPad != 2*c.MenuPad || rc.Glyph != c.Glyph {
+		t.Errorf("resolved at 2x: MenuW %v MenuPad %v Glyph %v", rc.MenuW, rc.MenuPad, rc.Glyph)
+	}
+}
+
+// A sidebar row's second line is black at 43 % in light and white at 36 % in
+// dark: over the glass it gives the measured #868686 on #ECECEC and #747474
+// on #262626.
+func TestSidebarDetail(t *testing.T) {
+	for m, c := range [2]struct{ bg, want uint32 }{{0xECECECFF, 0x868686FF}, {0x262626FF, 0x747474FF}} {
+		if got := Over(Measured[m][SidebarDetail], c.bg); !within(got, c.want, 2) {
+			t.Errorf("%s detail over %08X: %08X, measured %08X", modeNames[m], c.bg, got, c.want)
+		}
+	}
+}
+
+// The chrome roles that no NSColor gives are fixed values, because the
+// system colours nearest to them, composited as AppKit composites them, are
+// not the measured pixels (D4's measurements; a colour with a match would be
+// a System role read live).
+func TestChromeRolesWithoutNSColor(t *testing.T) {
+	cases := []struct {
+		role  Role
+		under Role
+	}{
+		{ToolbarSymbolInactive, ScrollEdgeBarInactive},
+		{SelectedRowTextInactive, SidebarSelInactive},
+	}
+	for m := range 2 {
+		for _, c := range cases {
+			want := Measured[m][c.role]
+			closest := 255
+			for _, n := range [...]Role{Label, Label2, Label3, Label4, TextDisabled, SelectedText, Text} {
+				got := Over(Measured[m][n], Measured[m][c.under])
+				d := 0
+				for sh := 8; sh < 32; sh += 8 {
+					d = max(d, abs(int(got>>sh&255)-int(want>>sh&255)))
+				}
+				closest = min(closest, d)
+			}
+			if closest < 8 {
+				t.Errorf("%s %v is within %d/255 of a system colour: read that one live instead", modeNames[m], c.role, closest)
+			}
+		}
+		if Over(Measured[m][Label2], Measured[m][SidebarFill])>>8 == Over(Measured[m][SidebarDetail], Measured[m][SidebarFill])>>8 {
+			t.Errorf("%s: SidebarDetail equals secondaryLabelColor over the glass", modeNames[m])
+		}
+	}
+	for _, r := range [...]Role{ToolbarSymbolInactive, SelectedRowTextInactive, SidebarDetail, SidebarSearchFill, SidebarSearchFillInactive} {
+		if r.Source() != SourceTheme {
+			t.Errorf("%v: a fixed role, not a System one", r)
+		}
+	}
+}
+
+func abs(x int) int {
+	if x < 0 {
+		return -x
+	}
+	return x
+}
+
+// A checkbox's box and the gap before its label are AppKit's: its frame is
+// them and the label's width rounded up to half a point.
+func TestCheckboxChromeIsAppKits(t *testing.T) {
+	ref := loadRef(t).Chrome.CheckboxChrome
+	for _, c := range []struct {
+		size Size
+		want float64
+	}{{SizeRegular, ref.Regular}, {SizeSmall, ref.Small}, {SizeLarge, ref.Large}} {
+		sp := MacSizes[c.size]
+		if got := sp.Check + sp.CheckGap; !near(got, c.want, 0) {
+			t.Errorf("size %d: box %v + gap %v = %v, AppKit's %v", c.size, sp.Check, sp.CheckGap, got, c.want)
+		}
+	}
+	r := (&Theme{}).Resolve(&fakeText{}, 2, Light)
+	if r.Sizes[SizeSmall].CheckGap != 8 {
+		t.Errorf("the gap does not scale: %v at 2x", r.Sizes[SizeSmall].CheckGap)
 	}
 }

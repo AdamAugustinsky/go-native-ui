@@ -230,3 +230,50 @@ func TestFormRowsWithoutASection(t *testing.T) {
 		t.Error("the switch in a form row did not toggle")
 	}
 }
+
+// A row's role and name belong to the row, not to the separator that a
+// grouped form draws above it: each row is one named group holding its
+// control, in every row after the first too, and nothing else in the form is
+// a group.
+func TestFormRowSemanticsAcrossRows(t *testing.T) {
+	names := [4]string{"One", "Two", "Three", "Four"}
+	for _, variant := range []rexui.FormVariant{rexui.FormGrouped, rexui.FormAligned} {
+		var on [4]bool
+		g := newRig(t, theme.Light, nil, column(func(g *rig) {
+			k := g.k
+			f := rexui.BeginForm(k, "form", rexui.FormOpts{Variant: variant})
+			f.Section(k, "")
+			for i, n := range names {
+				f.Row(k, n, rexui.RowOpts{})
+				rexui.Switch(k, n+" switch", &on[i], rexui.SwitchOpts{})
+				f.EndRow(k)
+			}
+			rexui.EndForm(k, &f)
+		}))
+		g.settle()
+		g.c.Semantics(&g.sem)
+		groups := 0
+		for _, n := range g.sem.Nodes {
+			if name := string(g.sem.Text(n.Name)); n.Role == ui.RoleGroup && name != "" && name != "form" { // the form is a group too
+				groups++
+			}
+		}
+		if groups != len(names) {
+			t.Errorf("variant %d: %d row groups in the form, want one per row (%d)", variant, groups, len(names))
+		}
+		minH := float32(36) // a grouped row is 40 pt; a separator is 1
+		if variant == rexui.FormAligned {
+			minH = 20
+		}
+		for _, n := range names {
+			row := g.node(ui.RoleGroup, n)
+			sw := g.node(ui.RoleSwitch, n+" switch")
+			if sw.Parent < 0 || g.sem.Nodes[sw.Parent].Key != row.Key {
+				t.Errorf("variant %d: the switch %q is not in its row's group", variant, n)
+			}
+			if rh := (row.Bounds[3] - row.Bounds[1]) / g.scale; rh < minH {
+				t.Errorf("variant %d: row %q's group is %.1f pt high: it is a separator, not the row", variant, n, rh)
+			}
+		}
+	}
+}

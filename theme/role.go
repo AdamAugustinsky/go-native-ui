@@ -7,18 +7,17 @@ import "gonativeui/platform"
 // in its tables and reads r.Colors[role]; the light/dark crossfade is one
 // loop over the array.
 //
-// Each role has a Source. The System roles come first, in the order of
-// platform.SystemColor: on macOS they are the system's colours, alpha
-// included, read live from NSColor (Follower); elsewhere, and before the
-// system is read, they are the theme's values, which for Rex are the
-// colours measured on macOS 27.2 (Measured). The roles after them are the
-// theme's own (SourceTheme): Rex's identity, and the window-chrome colours
-// measured from live macOS 27.2 windows (docs/design/liquid-glass-reference.md),
-// which no NSColor names.
+// Each role has a Source. The System roles take a platform.SystemColor each
+// (systemColorRole): on macOS they are the system's colours, alpha included,
+// read live from NSColor (Follower); elsewhere, and before the system is
+// read, they are the theme's values, which for Rex are the colours measured
+// on macOS 27.2 (Measured). The other roles are the theme's own
+// (SourceTheme): Rex's identity, and the window-chrome colours measured from
+// live macOS 27.2 windows (docs/design/liquid-glass-reference.md), which no
+// NSColor names. Roles are append-only; their numbers are API.
 type Role uint8
 
-// The System roles, one per platform.SystemColor; the comment names the
-// NSColor.
+// The roles; for a System role the comment names the NSColor.
 const (
 	// Window is the window's background (windowBackgroundColor).
 	Window Role = iota
@@ -119,20 +118,13 @@ const (
 	Brown
 	// Gray is systemGrayColor.
 	Gray
-	// ControlText is the text of controls: the labels of checkboxes, radio
-	// buttons, switches and buttons, and an editable field's text
-	// (controlTextColor). It equals Label on macOS 27.2.
-	ControlText
 
-	// NumSystemRoles is the number of System roles: the roles below it.
-	NumSystemRoles
-)
+	// The theme's own roles (SourceTheme) follow, then the roles added since
+	// (the end of the list).
 
-// The theme's own roles (SourceTheme).
-const (
 	// Field is the average colour of the window's background field (Rex's
 	// four-corner gradient, which Chrome paints).
-	Field Role = iota + NumSystemRoles
+	Field
 	// Pane is the opaque fill of a focused pane, a card or a content area.
 	// Dark is neutral.
 	Pane
@@ -151,13 +143,6 @@ const (
 	// InputFill is the body of a text field (textBackgroundColor at 98 %;
 	// dark measured #171717F9).
 	InputFill
-	// Knob is the knob of a switch or slider: white in both modes (AppKit
-	// draws it, no NSColor names it; GnuiShot and AppKitRef measured it).
-	Knob
-	// FieldOutline is the one-point outline just outside a text field's
-	// frame: black at 15 % in light, white at 9 % in dark (#D9D9D9 over
-	// white, #323232 over #1E1E1E measured; no NSColor names it).
-	FieldOutline
 	// PaneHairline is the hairline round a Rex pane.
 	PaneHairline
 	// PaneHighlight is the light inner rim of an unfocused Rex pane.
@@ -222,6 +207,45 @@ const (
 	// GroupBox is a group box's fill (NSBox primary, untitled; no border).
 	GroupBox
 
+	// Roles are append-only: a role's number is part of the API (a theme
+	// indexes its colours by it), so new roles go below, in the order they
+	// were added (TestRoleNumbersAreStable).
+
+	// ControlText is the text of controls: the labels of checkboxes, radio
+	// buttons, switches and buttons, and an editable field's text
+	// (controlTextColor, a System role). It equals Label on macOS 27.2.
+	ControlText
+	// Knob is the knob of a switch or slider: white in both modes (AppKit
+	// draws it, no NSColor names it; GnuiShot and AppKitRef measured it).
+	Knob
+	// FieldOutline is the one-point outline just outside a text field's
+	// frame: black at 15 % in light, white at 9 % in dark (#D9D9D9 over
+	// white, #323232 over #1E1E1E measured; no NSColor names it).
+	FieldOutline
+	// ToolbarSymbolInactive is a toolbar symbol in an inactive window
+	// (measured #A6A6A6 / #666666: lighter than TitleTextInactive). No
+	// NSColor gives it: the nearest, tertiaryLabelColor over the inactive
+	// bar, is #BDBDBD / #5C5C5C.
+	ToolbarSymbolInactive
+	// SelectedRowTextInactive is the text of a selected sidebar row in an
+	// inactive window (measured #676767 / #999999: darker in light, lighter
+	// in dark than the other rows'). unemphasizedSelectedTextColor is black /
+	// white, and secondaryLabelColor over SidebarSelInactive is #747474 /
+	// #A3A3A3, so the measured value stays the theme's.
+	SelectedRowTextInactive
+	// SidebarDetail is a sidebar row's second line over the glass: black at
+	// 43 % in light, white at 36 % in dark (#868686 on #ECECEC and #747474 on
+	// #262626 measured). It is secondaryLabelColor as the sidebar's vibrancy
+	// draws it; the NSColor itself (50 % / 55 %) over the same glass is
+	// #767676 / #9D9D9D, off by more than the tolerance, so it is not read.
+	SidebarDetail
+	// SidebarSearchFill is the fill of a search field on the sidebar's glass
+	// (measured #EAEAEA on #ECECEC, #4E4E4E on dark's glass): a capsule.
+	SidebarSearchFill
+	// SidebarSearchFillInactive is that fill in an inactive window (measured
+	// #E5E5E5 / #464646).
+	SidebarSearchFillInactive
+
 	// NumRoles is the number of roles.
 	NumRoles
 )
@@ -238,12 +262,69 @@ const (
 	Info = Blue
 )
 
-// The System roles take platform.SystemValues' colours one to one: the two
-// lists must have the same length (a negative constant does not compile).
-const (
-	_ = uint(NumSystemRoles) - uint(platform.NumSystemColors)
-	_ = uint(platform.NumSystemColors) - uint(NumSystemRoles)
-)
+// systemColorRole maps each platform.SystemColor to the System role that
+// takes its colour. The System roles are not contiguous: the ones added
+// after the first release sit at the end of the roles, like every other new
+// role (TestSystemColorRoles).
+var systemColorRole = [platform.NumSystemColors]Role{
+	platform.ColorWindowBackground:                      Window,
+	platform.ColorUnderPageBackground:                   UnderPage,
+	platform.ColorControlBackground:                     ControlBackground,
+	platform.ColorTextBackground:                        TextBackground,
+	platform.ColorLabel:                                 Label,
+	platform.ColorSecondaryLabel:                        Label2,
+	platform.ColorTertiaryLabel:                         Label3,
+	platform.ColorQuaternaryLabel:                       Label4,
+	platform.ColorQuinaryLabel:                          Label5,
+	platform.ColorText:                                  Text,
+	platform.ColorPlaceholderText:                       Placeholder,
+	platform.ColorDisabledControlText:                   TextDisabled,
+	platform.ColorHeaderText:                            HeaderText,
+	platform.ColorSystemFill:                            Fill1,
+	platform.ColorSecondarySystemFill:                   Fill2,
+	platform.ColorTertiarySystemFill:                    Fill3,
+	platform.ColorQuaternarySystemFill:                  Fill4,
+	platform.ColorQuinarySystemFill:                     Fill5,
+	platform.ColorSeparator:                             Separator,
+	platform.ColorGrid:                                  Grid,
+	platform.ColorControlAccent:                         Accent,
+	platform.ColorSelectedContentBackground:             Selection,
+	platform.ColorUnemphasizedSelectedContentBackground: SelectionUnemph,
+	platform.ColorAlternateSelectedControlText:          OnSelection,
+	platform.ColorSelectedTextBackground:                TextSelection,
+	platform.ColorUnemphasizedSelectedTextBackground:    TextSelectionUnemph,
+	platform.ColorSelectedText:                          SelectedText,
+	platform.ColorKeyboardFocusIndicator:                FocusRing,
+	platform.ColorAlternatingContentBackground:          AltRow,
+	platform.ColorLink:                                  Link,
+	platform.ColorTextInsertionPoint:                    Caret,
+	platform.ColorFindHighlight:                         FindHighlight,
+	platform.ColorSystemRed:                             Red,
+	platform.ColorSystemOrange:                          Orange,
+	platform.ColorSystemYellow:                          Yellow,
+	platform.ColorSystemGreen:                           Green,
+	platform.ColorSystemMint:                            Mint,
+	platform.ColorSystemTeal:                            Teal,
+	platform.ColorSystemCyan:                            Cyan,
+	platform.ColorSystemBlue:                            Blue,
+	platform.ColorSystemIndigo:                          Indigo,
+	platform.ColorSystemPurple:                          Purple,
+	platform.ColorSystemPink:                            Pink,
+	platform.ColorSystemBrown:                           Brown,
+	platform.ColorSystemGray:                            Gray,
+	platform.ColorControlText:                           ControlText,
+}
+
+// SystemRole is the System role that takes the colour of c.
+func SystemRole(c platform.SystemColor) Role { return systemColorRole[c] }
+
+// isSystemRole is true for the roles systemColorRole names.
+var isSystemRole = func() (a [NumRoles]bool) {
+	for _, r := range systemColorRole {
+		a[r] = true
+	}
+	return
+}()
 
 // Source says where a role's colour comes from.
 type Source uint8
@@ -258,7 +339,7 @@ const (
 
 // Source is where r's colour comes from.
 func (r Role) Source() Source {
-	if r < NumSystemRoles {
+	if r < NumRoles && isSystemRole[r] {
 		return SourceSystem
 	}
 	return SourceTheme
@@ -277,13 +358,14 @@ var roleNames = [NumRoles]string{
 	"Text", "Placeholder", "TextDisabled", "HeaderText", "Fill1", "Fill2", "Fill3", "Fill4", "Fill5", "Separator", "Grid",
 	"Accent", "Selection", "SelectionUnemph", "OnSelection", "TextSelection", "TextSelectionUnemph", "SelectedText",
 	"FocusRing", "AltRow", "Link", "Caret", "FindHighlight",
-	"Red", "Orange", "Yellow", "Green", "Mint", "Teal", "Cyan", "Blue", "Indigo", "Purple", "Pink", "Brown", "Gray", "ControlText",
-	"Field", "Pane", "Raised", "OnAccent", "AccentPressed", "FillPressed", "FillDisabled", "InputFill", "Knob", "FieldOutline",
+	"Red", "Orange", "Yellow", "Green", "Mint", "Teal", "Cyan", "Blue", "Indigo", "Purple", "Pink", "Brown", "Gray",
+	"Field", "Pane", "Raised", "OnAccent", "AccentPressed", "FillPressed", "FillDisabled", "InputFill",
 	"PaneHairline", "PaneHighlight", "GlassTint", "Shadow", "Scrim",
 	"SidebarFill", "SidebarFillInactive", "SidebarLabel", "SidebarLabelInactive", "SidebarHeader", "SidebarHeaderInactive",
 	"SidebarSel", "SidebarSelUnemph", "SidebarSelInactive", "SelectionDivider",
 	"TitleText", "TitleTextInactive", "CapsuleFill", "CapsuleFillInactive", "CapsuleRim", "CapsuleRimInactive", "CapsuleHighlight",
 	"ScrollEdgeBar", "ScrollEdgeBarInactive", "ScrollEdgeLine", "AccessoryLine", "GroupBox",
+	"ControlText", "Knob", "FieldOutline", "ToolbarSymbolInactive", "SelectedRowTextInactive", "SidebarDetail", "SidebarSearchFill", "SidebarSearchFillInactive",
 }
 
 // Colors holds a colour per role, 0xRRGGBBAA, indexed by Role.
@@ -331,7 +413,9 @@ var Measured = [2]Colors{
 		TitleText: 0x000000B2, TitleTextInactive: 0xB8B8B8FF,
 		CapsuleFill: 0xF9F9F9FF, CapsuleFillInactive: 0xF2F2F2FF, CapsuleRim: 0x00000040, CapsuleRimInactive: 0xC1C1C1FF, CapsuleHighlight: 0xFFFFFFFF,
 		ScrollEdgeBar: 0xFFFFFFFF, ScrollEdgeBarInactive: 0xFFFFFFFF, ScrollEdgeLine: 0x0000001A, AccessoryLine: 0x0000000D,
-		GroupBox: 0xF7F7F7FF,
+		GroupBox:              0xF7F7F7FF,
+		ToolbarSymbolInactive: 0xA6A6A6FF, SelectedRowTextInactive: 0x676767FF, SidebarDetail: 0x0000006E,
+		SidebarSearchFill: 0xEAEAEAFF, SidebarSearchFillInactive: 0xE5E5E5FF,
 	},
 	{
 		Window: 0x1E1E1EFF, UnderPage: 0x282828FF, ControlBackground: 0x1E1E1EFF, TextBackground: 0x1E1E1EFF,
@@ -355,7 +439,9 @@ var Measured = [2]Colors{
 		TitleText: 0xFFFFFFE6, TitleTextInactive: 0x5C5C5CFF,
 		CapsuleFill: 0x3A3A3AFF, CapsuleFillInactive: 0x333333FF, CapsuleRim: 0x0D0D0DFF, CapsuleRimInactive: 0x131313FF, CapsuleHighlight: 0x787878FF,
 		ScrollEdgeBar: 0x292929FF, ScrollEdgeBarInactive: 0x262626FF, ScrollEdgeLine: 0xFFFFFF12, AccessoryLine: 0xFFFFFF0D,
-		GroupBox: 0x252525FF,
+		GroupBox:              0x252525FF,
+		ToolbarSymbolInactive: 0x666666FF, SelectedRowTextInactive: 0x999999FF, SidebarDetail: 0xFFFFFF5C,
+		SidebarSearchFill: 0x4E4E4EFF, SidebarSearchFillInactive: 0x464646FF,
 	},
 }
 

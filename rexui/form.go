@@ -248,10 +248,11 @@ func (f *Form) Row(k *base.Kit, label string, o RowOpts) ui.ID {
 	if !f.inCard { // rows without a section: one anonymous section
 		f.Section(k, "")
 	}
+	f.card.separate(k)         // its own settings come after: they are the row's
 	k.NextGap(rc.LabelGap / 2) // either side of the spacer
 	k.Context().NextRole(ui.RoleGroup)
 	k.Context().NextSemName(label)
-	f.row = f.card.RowHeight(k, label, o.Height)
+	f.row = f.card.row(k, label, o.Height)
 	f.label = formLabel(k, label)
 	k.Spacer()
 	return f.row

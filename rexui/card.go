@@ -162,6 +162,14 @@ func (cd *Card) Row(k *base.Kit, label string) ui.ID { return cd.RowHeight(k, la
 // RowHeight is Row for a row of height pt points (0: the recipe's RowH), for a
 // row whose control is taller than a row.
 func (cd *Card) RowHeight(k *base.Kit, label string, pt float32) ui.ID {
+	cd.separate(k)
+	return cd.row(k, label, pt)
+}
+
+// separate builds the line that separates a row from the row before it. It
+// comes before the row's own Next… settings (role, name, gap), which belong to
+// the row and not to the line.
+func (cd *Card) separate(k *base.Kit) {
 	c, r := k.Context(), k.Theme()
 	rc := &CardLook
 	if cd.rows > 0 {
@@ -169,6 +177,11 @@ func (cd *Card) RowHeight(k *base.Kit, label string, pt float32) ui.ID {
 		c.NextBG(rc.Divider.RGBA(r))
 		c.BoxKeyed(ui.DrawBackground, ui.KeyN(cd.key, 100+uint64(cd.rows)), nil)
 	}
+}
+
+// row builds the row itself, after its separator.
+func (cd *Card) row(k *base.Kit, label string, pt float32) ui.ID {
+	rc := &CardLook
 	cd.rows++
 	if pt <= 0 {
 		pt = rc.RowH

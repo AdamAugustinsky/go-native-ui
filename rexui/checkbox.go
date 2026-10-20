@@ -83,7 +83,7 @@ func CheckboxTri(k *base.Kit, label string, st *base.CheckState, o CheckboxOpts)
 
 	c.NextAxis(ui.AxisX)
 	c.NextCross(ui.CrossCenter)
-	c.NextGap(s.Gap)
+	c.NextGap(s.CheckGap)
 	k.BeginToggle(&t, ui.RoleCheckbox, ui.Children(1), ui.Px(box), 0)
 	c.NextSize(ui.Px(box), ui.Px(box))
 	c.NextBG(fill)

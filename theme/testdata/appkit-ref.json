@@ -558,6 +558,10 @@
    "ScrollEdgeBar": "#FFFFFF",
    "ScrollEdgeLineOnWindow": "#E5E5E5",
    "GroupBox": "#F7F7F7",
+   "ToolbarSymbolInactive": "#A6A6A6",
+   "SelectedRowTextInactive": "#676767",
+   "SidebarSearchFill": "#EAEAEA",
+   "SidebarSearchFillInactive": "#E5E5E5",
    "SelectionDivider": "#1973E4",
    "FillPressed": "#0000002B",
    "FillDisabled": "#0000000A",
@@ -580,11 +584,31 @@
    "ScrollEdgeBarInactive": "#262626",
    "ScrollEdgeLineOnWindow": "#2E2E2E",
    "GroupBox": "#252525",
+   "ToolbarSymbolInactive": "#666666",
+   "SelectedRowTextInactive": "#999999",
+   "SidebarSearchFill": "#4E4E4E",
+   "SidebarSearchFillInactive": "#464646",
    "SelectionDivider": "#196AD6",
    "FillPressed": "#FFFFFF2B",
    "FillDisabled": "#FFFFFF0A",
    "AccentPressed": "#1988FF"
   },
-  "groupBoxRadius": 12.2
+  "groupBoxRadius": 12.2,
+  "checkboxChrome": {
+   "source": "AppKitRef metrics.json: a checkbox's frame (60.5, 51.5, 62.5 for \"Check\") less NSString's width of the label (38.33, 33.08, 38.33), rounded up to half a point: the box and the gap",
+   "regular": 22,
+   "small": 18,
+   "large": 24
+  },
+  "toolbar": {
+   "source": "docs/design/liquid-glass-reference.md \u00a71 (tools/appkitscenes: the symbols' and items' frames); D4's measurements",
+   "glyph": 13,
+   "compactItemMin": 27,
+   "unifiedItemMin": 36,
+   "menuItems": [
+    {"symbol": 17, "w": 44.5},
+    {"symbol": 20, "w": 47.5}
+   ]
+  }
  }
 }
