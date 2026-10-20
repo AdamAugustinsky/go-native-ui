@@ -34,10 +34,14 @@ type drive struct {
 	x, y float32
 }
 
-func newDrive(t *testing.T) *drive {
+func newDrive(t *testing.T) *drive { return newDriveWith(t, func(*Options) {}) }
+
+// newDriveWith is newDrive with the options changed first.
+func newDriveWith(t *testing.T, set func(*Options)) *drive {
 	t.Helper()
 	src := &fakeSrc{}
 	opt := SceneOptions()
+	set(&opt)
 	opt.Src = src
 	d := &driver{Pilot: New(opt)}
 	dr := &drive{t: t, d: d, src: src}

@@ -203,6 +203,12 @@ func (pl *Pilot) Init(a *app.App) error {
 	pl.bk.SetImages(pl.sys.cache)
 	pl.addSymbols()
 	pl.makePlaces()
+	m, err := newMenuModel()
+	if err != nil {
+		return err
+	}
+	pl.bk.SetMenu(m) // the shortcuts, and the zoom the model's commands do
+	a.SetMenu(m)     // the macOS menu bar
 	a.UI.Reserve(4096)
 	a.Text.ReserveRuns(text.MaxCachedRuns, text.MaxCachedGlyphs, text.MaxCachedTextBytes)
 
