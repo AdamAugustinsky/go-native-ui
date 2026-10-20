@@ -130,6 +130,9 @@ type State struct {
 	icons [numIcons]icon.ID
 
 	lists listState // the lists' samples (lists.go)
+	name  []byte    // the name of the sample being built
+	d7a   d7aState  // the D7a samples (d7a.go)
+	d7b   d7bState  // the composer samples (d7b.go)
 }
 
 // The glyphs of AppKitRef's icon buttons: SF Symbols at AppKit's default
@@ -165,6 +168,7 @@ func NewState(k *base.Kit) *State {
 // root of our control.
 func (s *State) Build(k *base.Kit, i int) ui.ID {
 	s.k = k
+	s.name = append(s.name[:0], Samples[i].Name...)
 	return Samples[i].build(s)
 }
 
@@ -220,8 +224,11 @@ func toggle(on bool, size theme.Size, look base.Look, disabled bool) func(s *Sta
 		s.b = on
 		s.k.BeginDisabled(disabled)
 		s.k.Force(look)
+		// NSSwitch has no title (one would be drawn beside the track): the
+		// sample's name, its caption, is its accessible name
 		if size == theme.SizeRegular {
 			id := rexui.Switch(s.k, "", &s.b, rexui.SwitchOpts{Size: size}).ID
+			s.k.Context().SetSemNameBytes(id, s.name)
 			s.k.EndDisabled()
 			return id
 		}
@@ -235,7 +242,7 @@ func toggle(on bool, size theme.Size, look base.Look, disabled bool) func(s *Sta
 		c.NextAuditExempt(ui.AuditOverflow.Mask()) // AppKit's frame: a switch of ours that differs is the recipes' business
 		frame := c.Box(0, "frame")
 		c.Push(frame)
-		rexui.Switch(k, "", &s.b, rexui.SwitchOpts{Size: size})
+		c.SetSemNameBytes(rexui.Switch(k, "", &s.b, rexui.SwitchOpts{Size: size}).ID, s.name)
 		c.Pop()
 		s.k.EndDisabled()
 		return frame
@@ -274,9 +281,10 @@ func popup(v rexui.SelectVariant, w float32, size theme.Size, look base.Look, di
 	}
 }
 
-func segmented(sel int, size theme.Size) func(s *State) ui.ID {
+func segmented(sel int, size theme.Size, look base.Look) func(s *State) ui.ID {
 	return func(s *State) ui.ID {
 		s.sel = sel
+		s.k.Force(look)
 		return rexui.SegmentedControl(s.k, "Segments", &s.sel, segments[:], rexui.SegmentedOpts{Size: size}).ID
 	}
 }
@@ -339,8 +347,9 @@ func stepper(look base.Look, disabled bool) func(s *State) ui.ID {
 // indeterminate with its segment at a fixed phase (AppKit's offscreen render
 // stops the animation after its first step, with the segment entering at
 // the start: its leading edge 4.5 pt in).
-func progress(frac float32) func(s *State) ui.ID {
+func progress(frac float32, look base.Look) func(s *State) ui.ID {
 	return func(s *State) ui.ID {
+		s.k.Force(look)
 		s.k.NextWidth(s.k.Fixed(200))
 		return rexui.ProgressBar(s.k, "Progress", frac, rexui.ProgressOpts{Still: true, Phase: 4.5 / (200 + 0.35*200)})
 	}
@@ -354,9 +363,14 @@ func spinner(size theme.Size) func(s *State) ui.ID {
 	}
 }
 
-func level(s *State) ui.ID {
-	s.k.NextWidth(s.k.Fixed(160))
-	return rexui.LevelIndicator(s.k, "Level", 6, 0, 10, rexui.LevelOpts{})
+func levelLook(look base.Look) func(s *State) ui.ID {
+	return func(s *State) ui.ID {
+		s.k.Force(look) // AppKit's level indicator is the same in an inactive window
+		s.k.NextWidth(s.k.Fixed(160))
+		id := rexui.LevelIndicator(s.k, "Level", 6, 0, 10, rexui.LevelOpts{})
+		s.k.TakeForce()
+		return id
+	}
 }
 
 func toggleButton(on bool, look base.Look, disabled bool) func(s *State) ui.ID {
@@ -427,10 +441,14 @@ var Samples = []Sample{
 	{"checkbox-on-focused", 60.5, 16, check(base.Checked, theme.SizeRegular, focused, false), boxed(16, labelled|MeasureRing)},
 	{"checkbox-on-small", 51.5, 14, check(base.Checked, theme.SizeSmall, 0, false), boxed(14, shapeW|MeasureLabel)},
 	{"checkbox-on-large", 62.5, 18, check(base.Checked, theme.SizeLarge, 0, false), boxed(18, shapeW|MeasureLabel)},
+	{"checkbox-on-inactive", 60.5, 16, check(base.Checked, theme.SizeRegular, inactive, false), boxed(16, shapeW|MeasureLabel)},
+	{"checkbox-mixed-inactive", 60.5, 16, check(base.Mixed, theme.SizeRegular, inactive, false), boxed(16, shapeW|MeasureLabel)},
+	{"checkbox-off-inactive", 60.5, 16, check(base.Unchecked, theme.SizeRegular, inactive, false), boxed(16, shapeW|MeasureLabel)},
 	{"radio-off", 56.5, 16, radio(false, 0, false), boxed(16, shapeW|MeasureLabel)},
 	{"radio-on", 56.5, 16, radio(true, 0, false), boxed(16, shapeW|MeasureLabel)},
 	{"radio-on-disabled", 56.5, 16, radio(true, 0, true), boxed(16, shapeW|MeasureLabel)},
 	{"radio-on-focused", 56.5, 16, radio(true, focused, false), boxed(16, labelled|MeasureRing)},
+	{"radio-on-inactive", 56.5, 16, radio(true, inactive, false), boxed(16, shapeW|MeasureLabel)},
 	{"switch-off", 54, 24, toggle(false, theme.SizeRegular, 0, false), Spec{Probe: [2]float32{50, 12}, What: MeasureW | MeasureH | MeasureFill, Note: "radius on switch-on: the knob lies over this corner"}},
 	{"switch-on", 54, 24, toggle(true, theme.SizeRegular, 0, false), at(4, 12, shapeW)},
 	{"switch-on-disabled", 54, 24, toggle(true, theme.SizeRegular, 0, true), at(4, 12, shapeW)},
@@ -438,19 +456,24 @@ var Samples = []Sample{
 	{"switch-on-small", 54, 24, toggle(true, theme.SizeSmall, 0, false), at(8, 12, shapeW)},
 	{"switch-on-mini", 54, 24, toggle(true, theme.SizeMini, 0, false), at(12, 12, shapeW)},
 	{"switch-on-large", 54, 24, toggle(true, theme.SizeLarge, 0, false), at(-2, 12, shapeW)},
+	{"switch-on-inactive", 54, 24, toggle(true, theme.SizeRegular, inactive, false), at(4, 12, shapeW)},
+	{"switch-off-inactive", 54, 24, toggle(false, theme.SizeRegular, inactive, false), Spec{Probe: [2]float32{50, 12}, What: MeasureW | MeasureH | MeasureFill}},
 	{"popup", 124, 24, popup(rexui.SelectDefault, 124, theme.SizeRegular, 0, false), at(3, 12, labelled|MeasureW)},
 	{"popup-small", 106, 20, popup(rexui.SelectDefault, 106, theme.SizeSmall, 0, false), at(3, 10, labelled|MeasureW)},
 	{"popup-disabled", 124, 24, popup(rexui.SelectDefault, 124, theme.SizeRegular, 0, true), at(3, 12, labelled|MeasureW)},
 	{"popup-focused", 124, 24, popup(rexui.SelectDefault, 124, theme.SizeRegular, focused, false), at(3, 12, labelled|MeasureW|MeasureRing)},
 	{"pulldown", 93, 24, popup(rexui.SelectPullDown, 93, theme.SizeRegular, 0, false), at(3, 12, labelled|MeasureW)},
 	{"popup-borderless", 122, 25, popup(rexui.SelectBorderless, 122, theme.SizeRegular, 0, false), skip("no shape; AppKitRef's cacheDisplay draws its label twice, as label-styles' (#060606 for labelColor)")},
-	{"segmented", 157.5, 24, segmented(0, theme.SizeRegular), at(3, 12, shape)},
-	{"segmented-small", 133.5, 20, segmented(1, theme.SizeSmall), at(3, 10, shape)},
+	{"segmented", 157.5, 24, segmented(0, theme.SizeRegular, 0), at(3, 12, shape)},
+	{"segmented-inactive", 157.5, 24, segmented(0, theme.SizeRegular, inactive), at(3, 12, shape)},
+	{"segmented-small", 133.5, 20, segmented(1, theme.SizeSmall, 0), at(3, 10, shape)},
 	{"slider", 200, 16, slider(theme.SizeRegular, 0, false), at(3, 8, shapeW)},
 	{"slider-small", 200, 14, slider(theme.SizeSmall, 0, false), at(3, 7, shapeW)},
 	{"slider-disabled", 200, 16, slider(theme.SizeRegular, 0, true), at(3, 8, shapeW)},
 	{"slider-focused", 200, 16, slider(theme.SizeRegular, focused, false), Spec{Probe: [2]float32{3, 8}, What: MeasureFill, Note: "AppKitRef draws no focus ring for NSSlider"}},
+	{"slider-inactive", 200, 16, slider(theme.SizeRegular, inactive, false), at(3, 8, shapeW)},
 	{"stepper", 20, 24, stepper(0, false), at(2, 8, shapeW)},
+	{"stepper-inactive", 20, 24, stepper(inactive, false), at(2, 8, shapeW)},
 	{"field-placeholder", 200, 24, field(0, "", "Placeholder", false, theme.SizeRegular, 0, false), fieldSpec(24, shapeW)},
 	{"field-text", 200, 24, field(1, "Hello, world", "Placeholder", false, theme.SizeRegular, 0, false), fieldSpec(24, shapeW)},
 	{"field-focused", 200, 24, field(2, "Hello, world", "Placeholder", false, theme.SizeRegular, focused, false), fieldSpec(24, shapeW|MeasureRing)},
@@ -460,11 +483,14 @@ var Samples = []Sample{
 	{"search-empty", 200, 24, field(6, "", "Search", true, theme.SizeRegular, 0, false), fieldSpec(24, shapeW)},
 	{"search-text", 200, 24, field(7, "query", "Search", true, theme.SizeRegular, 0, false), fieldSpec(24, shapeW)},
 	{"search-focused", 200, 24, field(7, "query", "Search", true, theme.SizeRegular, focused, false), fieldSpec(24, shapeW|MeasureRing)},
-	{"progress-bar", 200, 20, progress(0.4), at(150, 10, shapeW)},
-	{"progress-indeterminate", 200, 20, progress(-1), Spec{Probe: [2]float32{2, 10}, What: shapeW &^ MeasureRadius, Note: "radius by eye: AppKit's corner is the segment clipped by the bar's end"}},
+	{"progress-bar", 200, 20, progress(0.4, 0), at(150, 10, shapeW)},
+	{"progress-bar-inactive", 200, 20, progress(0.4, inactive), at(10, 10, shapeW)},
+	{"progress-indeterminate", 200, 20, progress(-1, 0), Spec{Probe: [2]float32{2, 10}, What: shapeW &^ MeasureRadius, Note: "radius by eye: AppKit's corner is the segment clipped by the bar's end"}},
+	{"progress-indeterminate-inactive", 200, 20, progress(-1, inactive), Spec{Probe: [2]float32{2, 10}, What: shapeW &^ MeasureRadius, Note: "radius by eye: AppKit's corner is the segment clipped by the bar's end"}},
 	{"spinner", 32, 32, spinner(theme.SizeRegular), Spec{Probe: [2]float32{16, 3.25}, What: MeasureW | MeasureH | MeasureFill, Note: "the spokes' step is not measured: an AppKit render shows one phase"}},
 	{"spinner-small", 16, 16, spinner(theme.SizeSmall), Spec{Probe: [2]float32{8, 1.25}, What: MeasureW | MeasureH | MeasureFill, Note: "the spokes' step is not measured: an AppKit render shows one phase"}},
-	{"level", 160, 18, level, Spec{Probe: [2]float32{30, 8}, What: shapeW &^ MeasureRadius, Note: "radius by eye: the measure cannot find AppKit's corner through the edge shading"}},
+	{"level", 160, 18, levelLook(0), Spec{Probe: [2]float32{30, 8}, What: shapeW &^ MeasureRadius, Note: "radius by eye: the measure cannot find AppKit's corner through the edge shading"}},
+	{"level-inactive", 160, 18, levelLook(inactive), Spec{Probe: [2]float32{30, 8}, What: shapeW &^ MeasureRadius, Note: "radius by eye: the measure cannot find AppKit's corner through the edge shading"}},
 	{"separator", 200, 1, func(s *State) ui.ID {
 		s.k.NextWidth(s.k.Fixed(200))
 		return rexui.Separator(s.k, rexui.SeparatorOpts{})
@@ -629,6 +655,7 @@ var Pages = [...][]string{
 	{"label-styles"},
 	listPage, // lists.go
 	{"form-group", "form-grid"},
+	d7aPage, // d7a.go
 }
 
 // Page is the samples of page p (Pages) in catalogue order.

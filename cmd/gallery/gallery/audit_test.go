@@ -5,6 +5,7 @@ import (
 	"runtime"
 	"testing"
 
+	"gonativeui/app"
 	"gonativeui/rexui/catalog"
 	"gonativeui/theme"
 	"gonativeui/ui"
@@ -22,7 +23,9 @@ var fontWide = []string{"label-styles", "link", "form-grid"}
 
 // TestAuditScenes runs the layout audit on the last frame of every scene of
 // Shot and of every appkit page (all of rexui's catalog samples), on the real
-// text system and renderer.
+// text system and renderer; on the pages no two boxes share a key either
+// (ui's duplicate-key check: a box told apart from a sibling only by its order
+// takes the sibling's state when one before it comes or goes).
 func TestAuditScenes(t *testing.T) {
 	for _, name := range SceneNames() {
 		off, err := runScene(ShotOptions{Scene: name})
@@ -56,6 +59,20 @@ func TestAuditScenes(t *testing.T) {
 			t.Fatal(err)
 		}
 		widgettest.AuditLayout(t, name, off.UI, allow...)
+		noDuplicateKeys(t, name, off)
 		off.Close()
+	}
+}
+
+// noDuplicateKeys fails t for each key that two boxes of off's next frames
+// share.
+func noDuplicateKeys(t *testing.T, name string, off *app.Offscreen) {
+	t.Helper()
+	off.UI.EnableDebug(true, false)
+	defer off.UI.EnableDebug(false, false)
+	off.Frame()
+	off.Frame()
+	for _, d := range off.UI.DebugDups() {
+		t.Errorf("%s: %d boxes under parent %x share the key %x", name, d.Count+1, d.Parent, d.Key)
 	}
 }

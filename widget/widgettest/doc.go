@@ -86,7 +86,7 @@
 // runs again as a child, RegisterScenario's function on its main thread, and
 // reports with Say. The flows of the application object (reopen, quit with no
 // window, delayed replies, a menu command with no window) are in
-// live/appflows_f3_darwin_test.go behind the gnui_f3 tag until F3 is merged.
+// live/appflows_f3_darwin_test.go.
 //
 // # Golden files, captures and fakes
 //

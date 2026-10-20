@@ -176,10 +176,13 @@ func (p *Player) find(role ui.Role, name string, nth int) int {
 	return -1
 }
 
-// visible reports whether the centre of node i is in the window and inside
-// every scrolling container around it: a pointer step on a target scrolled out
-// of view would click on whatever is there instead.
-func (p *Player) visible(i int) bool {
+// visible reports whether the centre of node i is in the window, inside every
+// scrolling container around it, and not covered: a click there reaches the
+// node (ui.Context.HitReaches: input's own hit test). A pointer step on a
+// target scrolled out of view, or under a toolbar band the content scrolls
+// beneath, would click on whatever is there instead (unless the step is
+// Through).
+func (p *Player) visible(i int, st *Step) bool {
 	t := &p.sem
 	r := t.Nodes[i].Bounds
 	x, y := (r[0]+r[2])/2, (r[1]+r[3])/2
@@ -196,14 +199,21 @@ func (p *Player) visible(i int) bool {
 			}
 		}
 	}
-	return true
+	return st.thru || p.h.Context().HitReaches(x, y, t.Nodes[i].Key)
 }
 
-// scrollAncestor is the index of the nearest scroll area around node i, or -1.
+// scrolls reports whether a node of this role scrolls its content: a scroll
+// area, a list or a table (visible treats all three alike).
+func scrolls(r ui.Role) bool {
+	return r == ui.RoleScrollArea || r == ui.RoleList || r == ui.RoleTable
+}
+
+// scrollAncestor is the index of the nearest scrolling container around node
+// i, or -1.
 func (p *Player) scrollAncestor(i int) int {
 	t := &p.sem
 	for a := t.Nodes[i].Parent; a >= 0; a = t.Nodes[a].Parent {
-		if t.Nodes[a].Role == ui.RoleScrollArea {
+		if scrolls(t.Nodes[a].Role) {
 			return int(a)
 		}
 	}
@@ -220,7 +230,7 @@ func (p *Player) revealFrame(st *Step, in *ui.Input) bool {
 		p.fail("the %d named %q (#%d) vanished while it was scrolled into view", st.role, st.name, st.nth)
 		return false
 	}
-	if p.visible(i) {
+	if p.visible(i, st) {
 		p.reveal, p.ok = false, true
 		p.rect = p.sem.Nodes[i].Bounds
 		return true
@@ -233,13 +243,16 @@ func (p *Player) revealFrame(st *Step, in *ui.Input) bool {
 	t := &p.sem
 	var b [4]float32
 	for k := range t.Nodes {
-		if t.Nodes[k].Key == p.revKey && t.Nodes[k].Role == ui.RoleScrollArea {
+		if t.Nodes[k].Key == p.revKey && scrolls(t.Nodes[k].Role) {
 			b = t.Nodes[k].Bounds
 		}
 	}
-	dy := float32(60) // toward the start
-	if ty := (t.Nodes[i].Bounds[1] + t.Nodes[i].Bounds[3]) / 2; ty >= b[3] {
-		dy = -60 // toward the end
+	// Toward the start, unless the target is below the middle of the area: past
+	// its end, or covered by something at the bottom (it is scrolled out from
+	// under a band at the top by moving the content down).
+	dy := float32(60)
+	if ty := (t.Nodes[i].Bounds[1] + t.Nodes[i].Bounds[3]) / 2; ty >= (b[1]+b[3])/2 {
+		dy = -60
 	}
 	p.goTo(in, (b[0]+b[2])/2, (b[1]+b[3])/2)
 	in.AddScroll(0, dy, true)
@@ -275,12 +288,12 @@ func (p *Player) resolve(st *Step) {
 		switch {
 		case !p.ok:
 			p.fail("no node with role %d named %q (#%d) in the semantic tree", st.role, st.name, st.nth)
-		case !p.visible(i):
+		case !p.visible(i, st):
 			p.ok = false
 			if a := p.scrollAncestor(i); a >= 0 {
 				p.reveal, p.revKey, p.revFrames = true, p.sem.Nodes[a].Key, 0
 			} else {
-				p.fail("the node with role %d named %q (#%d) is outside the window", st.role, st.name, st.nth)
+				p.fail("the node with role %d named %q (#%d) is outside the window or covered by another box, and no scroll area around it can bring it clear", st.role, st.name, st.nth)
 			}
 		default:
 			p.rect = p.sem.Nodes[i].Bounds

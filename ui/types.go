@@ -121,6 +121,17 @@ const (
 	// instead (FadeOverflowX). Rich and wrapped text use text.Para's
 	// Ellipsis.
 	EllipsisOverflowX
+
+	// FocusText and FocusList give a Focusable box its focus class for Tab
+	// traversal (focus.go): FocusText a text-entry control (a text field, a
+	// search field, a hosted text view), FocusList a list, table or outline.
+	// A Focusable box with neither is a control (a button, a checkbox, a
+	// slider ...). Tab always reaches the first two; the controls only while
+	// Context.TabReachesControls, which follows the system's convention (macOS:
+	// the Keyboard navigation setting). Clicking a box or an assistive
+	// technology focusing it do not look at the class.
+	FocusText
+	FocusList
 )
 
 // scrollable flags, either axis.

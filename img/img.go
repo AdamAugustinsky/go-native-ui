@@ -24,7 +24,10 @@
 // A Source says where the encoded bytes are: a file, inline bytes (copied at
 // the first request that needs them, for small images such as WhatsApp's
 // inline JPEG thumbnails), or a Lease of bytes the app owns, which the cache
-// releases once the decoder has read them.
+// releases once the decoder has read them. A Source can also be a system icon
+// (FileIcon, ExtensionIcon, TypeIcon, FolderIcon): what the file manager shows
+// for a file, folder, volume or type, decoded at the size shown; see
+// sysicon.go for how to key them.
 //
 // # Decoding
 //
@@ -41,11 +44,15 @@
 //   - Windows and Linux: the standard library's PNG, JPEG and GIF decoders,
 //     scaled by area averaging. JPEG's EXIF orientation is applied (a scan of
 //     the APP1 segment). WebP and other formats fail with ErrUnsupported.
+//     Animated GIFs and APNGs (frame chunks rebuilt into one-frame PNGs for
+//     the PNG decoder) play with the Animate flag.
 //
 // An image whose header gives it more than 100 megapixels fails with
-// ErrTooLarge before any pixel is decoded. A GIF decodes its first frame, on
-// the image's logical screen; Info reports the frame count and the first
-// frame's delay for the animation work to come (C6).
+// ErrTooLarge before any pixel is decoded. A GIF without the Animate flag
+// decodes its first frame, on the image's logical screen; Info reports the
+// frame count and the first frame's delay. With the flag, GIFs, APNGs and
+// (macOS) animated HEIC, HEICS and WebP play: see Animate and the animation
+// section below.
 //
 // # GPU memory
 //
@@ -59,6 +66,17 @@
 // exceeded rather than leaving an image blank (Stats.OverBudget counts it).
 // Decoded pixels stay in CPU memory within Options.CPUBytes, so an image
 // evicted from the GPU and needed again is uploaded without decoding again.
+//
+// # Animated images
+//
+// Key.Flags Animate makes a GIF or an APNG an animation (animated HEIC,
+// HEICS and WebP too on macOS). Kit.Image draws the frame showing and wakes
+// the app at each frame's deadline; Cache.Animation gives play, pause and
+// seek. Frames are decoded only while the image is in view, a few ahead, at
+// display size; a hidden window or a row scrolled out decodes and wakes
+// nothing. A file's loop count is honoured; delays of 10 ms or less show
+// for 100 ms. The system's "Auto-play animated images" setting and Reduce
+// Motion hold the first frame until Animation.Play. Details: anim.go.
 //
 // # Threads and allocation
 //
@@ -101,7 +119,9 @@ type Options struct {
 	GPUBytes int64
 	// CPUBytes is the budget of decoded pixels kept in memory, waiting for
 	// their upload or kept to upload again after a GPU eviction (default 32
-	// MiB). Pixels waiting for their upload are never dropped.
+	// MiB). Pixels waiting for their upload are never dropped. What an
+	// animation keeps (its file and canvases) counts too: one not in view is
+	// dropped whole, to stay within the budget.
 	CPUBytes int64
 	// UploadBytes is the most Poll uploads in one frame (default 4 MiB); one
 	// image is uploaded per frame however large it is.
@@ -114,6 +134,16 @@ type Options struct {
 	// Wake is called from a worker when a decode has finished, to wake the
 	// UI loop (default platform.Wake; see package task).
 	Wake func()
+	// AnimRing is the most decoded frames an animated image holds in
+	// memory: the one showing and the ones ahead of it (default 3, from 2
+	// to 8). See the animation section of the package comment.
+	AnimRing int
+	// Autoplay reports whether animated images may play without being asked
+	// to: the system's "Auto-play animated images" setting. It is read at
+	// most once per frame, on the cache's goroutine, when an animated image
+	// is shown. The default reads the system (macOS 14 and later; elsewhere
+	// animations play); tests and apps with a setting of their own replace it.
+	Autoplay func() bool
 }
 
 // Flags change how an image is decoded. They are part of its Key.
@@ -274,6 +304,9 @@ type Info struct {
 	// DelayMs is the first frame's display time in milliseconds (0 for a
 	// still image).
 	DelayMs int
+	// Plays is how many times an animation plays (0: for ever); 1 for a
+	// still image.
+	Plays int
 }
 
 // Stats are counters of a cache.
@@ -283,7 +316,8 @@ type Stats struct {
 	Entries, Ready, Pending, Failed int
 	// GPUBytes is the texture memory in use: atlas pages and own textures.
 	GPUBytes int64
-	// CPUBytes is the decoded pixels held in memory.
+	// CPUBytes is the decoded pixels held in memory, and an estimate of what
+	// each animation keeps between frames (its file and its canvases).
 	CPUBytes int64
 	// Pages is the number of atlas pages.
 	Pages int
@@ -296,6 +330,11 @@ type Stats struct {
 	// OverBudget counts the uploads made over the GPU budget because every
 	// resident image was in view.
 	OverBudget int
+	// Animations is the animated images the cache has decoded the first
+	// frame of; AnimDecodes the frames decoded after the first and
+	// AnimUploads the frames put on the GPU; AnimErrors the animations that
+	// stopped at a frame that did not decode.
+	Animations, AnimDecodes, AnimUploads, AnimErrors int
 	// Refused counts requests turned away because the decode queue or the
 	// entry table was full of work in view (they are retried by the next
 	// Request).

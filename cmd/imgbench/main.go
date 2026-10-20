@@ -97,6 +97,8 @@ func main() {
 	gate := flag.Bool("gate", false, "with -bench: exit with status 3 unless the budgets held")
 	allowUnpaced := flag.Bool("allow-unpaced", false, "with -gate: accept unpaced frames (no frame events: display asleep)")
 	maxPoll := flag.Float64("max-poll-ms", defaultMaxPollMs, "with -gate: the most CPU a frame's Poll may take in the cold pass, in ms (a quarter of it on average; 0: do not gate)")
+	anim := flag.Bool("anim", false, "with -bench and -idle: show the animated samples too (the window and -o always do)")
+	away := flag.Bool("away", false, "with -idle -anim: scroll past the animated samples first: they are out of view and the app must draw 0 frames")
 	idle := flag.Duration("idle", 0, "show the window, wait for the view to load, count the frames drawn over this long, print them as JSON")
 	timeout := flag.Duration("timeout", 120*time.Second, "with -bench: give up after this long")
 	sites := flag.Bool("allocsites", false, "with -bench: print the call stacks of the allocations attributed over the measured windows")
@@ -107,11 +109,12 @@ func main() {
 	case *out != "":
 		err = renderPNG(*items, *out)
 	case *bench:
-		err = runBench(*items, *gate, *allowUnpaced, *sites, *maxPoll, *timeout)
+		err = runBench(*items, *gate, *allowUnpaced, *sites, *maxPoll, *timeout, *anim)
 	case *idle > 0:
-		err = runIdle(*items, *idle)
+		err = runIdle(*items, *idle, *anim, *away)
 	default:
 		g := newGrid(*items, img.Options{})
+		g.anim = true
 		_, err = app.RunWith(config, &interactive{g}, app.RunOptions{})
 	}
 	if err != nil {
@@ -135,7 +138,7 @@ func (x *interactive) Build(c *ui.Context) {
 
 func renderPNG(items int, path string) error {
 	g := newGrid(items, img.Options{})
-	g.blocking = true
+	g.blocking, g.anim = true, true
 	m, err := app.RenderOffscreen(config, 600*2, 640*2, 2, g, 2)
 	if err != nil {
 		return err
@@ -260,8 +263,9 @@ func (b *benchGrid) Build(c *ui.Context) {
 // sessions of cached images.
 func (b *benchGrid) AtCycleStart() bool { return b.s.phase == phSession && b.s.next == 0 }
 
-func runBench(items int, gate, allowUnpaced, sites bool, maxPoll float64, timeout time.Duration) error {
+func runBench(items int, gate, allowUnpaced, sites bool, maxPoll float64, timeout time.Duration, anim bool) error {
 	b := newBenchGrid(items)
+	b.anim = anim
 	br, err := app.RunBench(config, b, app.BenchOptions{Warm: 1, Windows: maxWindows, Timeout: timeout, PrintAllocSites: sites})
 	if err != nil {
 		return err
@@ -350,9 +354,13 @@ type idler struct {
 	start, end atomic.Int64
 	frames     int
 	done       bool
+	away       bool // scrolled past the animated samples
 }
 
 func (x *idler) Build(c *ui.Context) {
+	if x.away {
+		x.grid.scroll = 6 * pitchPt
+	}
 	x.grid.Build(c)
 	now := platform.Now()
 	switch {
@@ -368,8 +376,9 @@ func (x *idler) Build(c *ui.Context) {
 	}
 }
 
-func runIdle(items int, d time.Duration) error {
-	x := &idler{grid: newGrid(items, img.Options{})}
+func runIdle(items int, d time.Duration, anim, away bool) error {
+	x := &idler{grid: newGrid(items, img.Options{}), away: away}
+	x.anim = anim
 	go func() {
 		for x.start.Load() == 0 {
 			time.Sleep(10 * time.Millisecond)
@@ -386,8 +395,10 @@ func runIdle(items int, d time.Duration) error {
 		IdleSeconds float64
 		IdleFrames  int
 		Visible     int
-	}{d.Seconds(), x.frames, x.visible})
-	if x.frames != 0 {
+		Animated    bool // the animated samples are in view: their frames are drawn at their deadlines
+		Away        bool // ... or scrolled out of it: nothing is drawn
+	}{d.Seconds(), x.frames, x.visible, anim && !away, away})
+	if x.frames != 0 && (!anim || away) {
 		os.Exit(3)
 	}
 	return nil

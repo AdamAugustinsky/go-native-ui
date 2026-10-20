@@ -145,6 +145,16 @@ func (c *Context) IMECancel() bool { return c.imeCancel }
 // field turns line breaks and tabs in pasted text into spaces (CR, LF and CRLF
 // are one space each) and drops other control characters.
 //
+// # Commands for a component
+//
+// A component that gives Up, Down, Enter, Escape, Tab or Backspace another
+// meaning (a combo box, a token field, a completion list) registers a
+// FieldCommander for the field with Context.NextFieldCommander (fieldcmd.go).
+// The field offers it the frame's keys and edit actions in the order they
+// arrived, once each, before it acts on them, and the typed separator
+// characters at the place they are inserted; what the commander handles the
+// field leaves alone.
+//
 // # Input methods
 //
 // While Input.Preedit is set (the platform reports marked text) the focused
@@ -188,6 +198,8 @@ func (c *Context) TextField(label string, buf *TextBuffer) TextFieldSignal {
 	font, pad, textColor := c.sFont.peek(), c.sPad.peek(), c.sText.peek()
 	escClears, still := c.nextEscClr, c.nextStill // (a box resets the styles)
 	c.nextEscClr, c.nextStill = false, false
+	cmdr, seps := c.nextCmdr, c.nextSeps
+	c.nextCmdr, c.nextSeps = nil, ""
 	fi := c.fontInfo(font)
 	lh := fi.ascent + fi.descent
 	if c.sH.peek().Kind == SizeAuto {
@@ -200,7 +212,7 @@ func (c *Context) TextField(label string, buf *TextBuffer) TextFieldSignal {
 	if c.semNext.role == RoleNone {
 		c.NextRole(RoleTextField)
 	}
-	flags := Clickable | Focusable | Clip | DrawBackground | DrawBorder | HotAnimation | FocusAnimation
+	flags := Clickable | Focusable | FocusText | Clip | DrawBackground | DrawBorder | HotAnimation | FocusAnimation
 	if still {
 		flags &^= HotAnimation
 	}
@@ -310,6 +322,9 @@ func (c *Context) TextField(label string, buf *TextBuffer) TextFieldSignal {
 	// Typed text, then keys and edit actions.
 	if owns {
 		c.fieldKey, c.fieldBuilt = key, true
+		if !composing && !orphan { // (a field's marked text is the input method's: nothing is offered)
+			c.cmdr, c.cmdrSeps = cmdr, seps
+		}
 		typed := in.Text[:in.NText]
 		if in.HasReplace { // press-and-hold accents: the first part of the text replaces a range
 			n := min(in.ReplaceN, len(typed))
@@ -318,7 +333,7 @@ func (c *Context) TextField(label string, buf *TextBuffer) TextFieldSignal {
 			touched = true
 		}
 		if len(typed) > 0 {
-			buf.Insert(typed)
+			c.insertTyped(buf, typed, false)
 			touched = true
 		}
 		if composing {
@@ -339,11 +354,18 @@ func (c *Context) TextField(label string, buf *TextBuffer) TextFieldSignal {
 				to := min(int(in.EditAfter[i]), in.NKeys)
 				touched = c.editKeys(buf, &res, from, to) || touched
 				from = max(from, to)
+				if c.cmdr != nil {
+					if cmd := editCommand(in.Edit[i], buf); cmd != FieldNone && c.cmdr.FieldCommand(cmd, 0) {
+						touched = true
+						continue
+					}
+				}
 				c.applyEdit(buf, in.Edit[i])
 				touched = true // a handled command is activity: the caret blink restarts
 			}
 			touched = c.editKeys(buf, &res, from, in.NKeys) || touched
 		}
+		c.cmdr, c.cmdrSeps = nil, ""
 	}
 	switch {
 	case orphan:
@@ -574,6 +596,15 @@ func (c *Context) editKeys(buf *TextBuffer, res *TextFieldSignal, from, to int) 
 	}
 	for i := from; i < to; i++ {
 		e := in.Keys[i]
+		bit := uint16(1) << uint(i)
+		if c.cmdr != nil && e.Down && ((c.fieldKeys|c.fieldPeek)&bit != 0 || e.Code == KeyTab && c.claimed&bit == 0) {
+			// the commander is offered the key before the field acts on it
+			if cmd := keyCommand(&e, buf); cmd != FieldNone && c.cmdr.FieldCommand(cmd, 0) {
+				c.ClaimKey(i)
+				pressed = true
+				continue
+			}
+		}
 		if !e.Down || (c.fieldKeys|c.fieldPeek)&(1<<uint(i)) == 0 { // only the keys claimed for the field
 			continue
 		}

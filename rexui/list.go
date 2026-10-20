@@ -111,12 +111,16 @@ type ListRecipe struct {
 	// Rounded says the selection and the stripes have the theme's selection
 	// radius (Radii.Selection, 8), per style.
 	Rounded [NumListStyles]bool
-	// LegacyKnob colours a legacy scroll bar's knob, an opaque grey on the
-	// list's background (measured #7A7A7A on white, #9F9F9F on #1E1E1E), and
-	// LegacySlot the rounded slot it moves in, as wide and as far from the
-	// track's sides and ends (theme.Lines.ScrollerKnobInset; measured
-	// #F3F3F3 on white, #292929 on #1E1E1E).
-	LegacyKnob, LegacySlot Tint
+	// LegacyKnob colours a legacy scroll bar's knob, laid over its slot
+	// (measured #7A7A7A on white, #9F9F9F on #1E1E1E: labelColor-black at
+	// 49.8 % and white at 55.1 % over the slot), and LegacySlot the rounded
+	// slot it moves in, as wide and as far from the track's sides and ends
+	// (theme.Lines.ScrollerKnobInset; measured #F3F3F3 on white, #292929 on
+	// #1E1E1E). OverlayKnob colours an overlay scroll bar's knob (the same
+	// 49.8 % and 55.1 % over the view: #808080 on white, #9A9A9A on #1E1E1E,
+	// #7B7B7B on an alternating row; AppKitRef -live -flash, macOS 27.2
+	// 26B5101f), which fades with Show.
+	LegacyKnob, LegacySlot, OverlayKnob Tint
 }
 
 // ListLook is the recipe of lists, tables and outlines.
@@ -131,13 +135,15 @@ var ListLook = ListRecipe{
 	PadY:         [NumListStyles]float32{ListFullWidth: 0, ListInset: 10},
 	HeaderPadY:   [NumListStyles]float32{ListFullWidth: 0, ListInset: 5},
 	Rounded:      [NumListStyles]bool{ListInset: true},
-	LegacyKnob:   OfAlpha(theme.Text, 0.52, 0.58), LegacySlot: OfAlpha(theme.Text, 0.047, 0.047),
+	LegacyKnob:   OfAlpha(theme.Text, 0.498, 0.551), LegacySlot: OfAlpha(theme.Text, 0.047, 0.047),
+	OverlayKnob: OfAlpha(theme.Text, 0.498, 0.551),
 }
 
 // List is an open list: base's List and the look of its rows.
 type List struct {
 	base.List
 	rowLook
+	edgeOwnLine bool // a table's header ends its scroll edge with its own line
 }
 
 // rowLook draws the rows of a list, table or outline and holds the colours of
@@ -145,9 +151,10 @@ type List struct {
 type rowLook struct {
 	style   ListStyle
 	striped bool
-	emph    bool   // the row being built shows the selection emphasised
-	fgTint  Tint   // its text colour, as a recipe names it
-	fg, fg2 uint32 // its text colours
+	under   [3]float32 // the rows' fills under the scroll edge less the background, by pixel rows (scrollEdge)
+	emph    bool       // the row being built shows the selection emphasised
+	fgTint  Tint       // its text colour, as a recipe names it
+	fg, fg2 uint32     // its text colours
 }
 
 // listOpts are the base options of a list of style o and a header or not.
@@ -209,6 +216,9 @@ func (lk *rowLook) begin(l *base.List, ol *base.Outline, rs *base.RowState, name
 	}
 	var flags ui.Flags
 	if bg&0xFF != 0 {
+		if rs.Selected { // the stripes are in Under's measured mean already
+			lk.underRow(l, rs.Row, bg)
+		}
 		flags |= ui.DrawBackground
 		c.NextBG(bg)
 		if rc.Rounded[lk.style] {
@@ -256,6 +266,26 @@ func (lk *rowLook) begin(l *base.List, ol *base.Outline, rs *base.RowState, name
 		c.Pop()
 	}
 	return id
+}
+
+// underRow adds display row r's selection bg, where it lies under the
+// scroll edge's inset, to the mean the edge takes on (ScrollEdgeRecipe.Under).
+func (lk *rowLook) underRow(l *base.List, r int, bg uint32) {
+	inset := l.ScrollView().TopInset
+	if inset <= 0 {
+		return
+	}
+	top := l.FillerTop(r - l.Rows) // where row r shows: the filler rows' place, before them
+	ov := min(top+l.RowH(), inset) - max(top, 0)
+	if ov <= 0 {
+		return
+	}
+	back := ListLook.Background.RGBA(l.Kit().Theme()) | 0xFF
+	fill := theme.Over(bg, back)
+	for i := range lk.under {
+		sh := 24 - 8*uint(i)
+		lk.under[i] += ov * (float32(fill>>sh&0xFF) - float32(back>>sh&0xFF))
+	}
 }
 
 // Text is the colour of the row being built's text, for a component's
@@ -336,7 +366,7 @@ func EndList(k *base.Kit, l *List) {
 	l.Filler()
 	l.CloseRows()
 	v := l.ScrollView()
-	ScrollBars(k, &v)
+	scrollBars(k, &v, !l.edgeOwnLine, &l.under)
 	k.CloseList(&l.List)
 }
 
@@ -345,7 +375,13 @@ func EndList(k *base.Kit, l *List) {
 // knob that thickens under the pointer, over the content and fading when the
 // view rests (overlay), or always shown in the room the view left beside its
 // content (legacy, "Show scroll bars: Always").
-func ScrollBars(k *base.Kit, v *base.ScrollView) {
+//
+// A view with a top inset (base.Kit.NextScrollInset) gets the scroll edge
+// over it first (ScrollEdgeLook).
+func ScrollBars(k *base.Kit, v *base.ScrollView) { scrollBars(k, v, true, nil) }
+
+func scrollBars(k *base.Kit, v *base.ScrollView, line bool, under *[3]float32) {
+	scrollEdge(k, v, line, under)
 	c, r := k.Context(), k.Theme()
 	px := &r.Px
 	bars := k.ScrollBars(v)
@@ -369,7 +405,7 @@ func ScrollBars(k *base.Kit, v *base.ScrollView) {
 		// inset each side, over its slot
 		tw := theme.Snap(px.ScrollThumbW * (1 + b.Hot))
 		in := theme.Snap(px.BorderW * 2)
-		col := theme.WithAlpha(r.Pal.ScrollThumb, b.Show)
+		col := theme.WithAlpha(ListLook.OverlayKnob.RGBA(r), b.Show)
 		if b.Legacy {
 			in = theme.Snap(r.Lines.ScrollerKnobInset)
 			tw = max(bw-2*in, theme.Snap(px.ScrollThumbW))

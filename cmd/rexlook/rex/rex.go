@@ -131,15 +131,16 @@ func New(ts TextSystem, scale float32) *Rex {
 // once the text system and the renderer exist; set Traffic before that if the
 // scene draws the traffic lights itself.
 func NewApp() *Rex {
+	setHeaderRecipe()
 	r := &Rex{nextUID: 1}
-	r.k = base.NewKit(nil, nil, rextheme.Theme()) // holds the preference until Init makes the real one
+	r.k = base.NewKit(nil, nil, headerTheme()) // holds the preference until Init makes the real one
 	return r
 }
 
 func (r *Rex) init(ts TextSystem, scale float32) {
 	r.ts = ts
 	pref := r.k.Preference()
-	r.k = base.NewKit(nil, ts, rextheme.Theme())
+	r.k = base.NewKit(nil, ts, headerTheme())
 	r.k.SetPreference(pref)
 	for i := range iconSpecs {
 		r.k.AddIcon(iconSpecs[i]) // the scene's icons follow the standard ones, as iconID says
@@ -212,7 +213,12 @@ const (
 	numBtns
 )
 
-func btnKey(paneUID uint32, b int) ui.Key { return ui.KeyN(paneKey(paneUID), uint64(b)+1) }
+// holderKey is the key of the box that holds button b of a pane header;
+// btnKey is the button's own, which carries its signals.
+func holderKey(paneUID uint32, b int) ui.Key { return ui.KeyN(paneKey(paneUID), uint64(b)+1) }
+func btnKey(paneUID uint32, b int) ui.Key {
+	return ui.HashString(holderKey(paneUID, b), headerButtons[b])
+}
 
 // Build builds the frame: it applies the input of the frame to the model
 // (clicks, drags), then builds every box. Call it between ui.Begin and ui.End.

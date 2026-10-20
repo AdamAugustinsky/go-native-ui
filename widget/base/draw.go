@@ -123,8 +123,8 @@ const LabelSlack = 1
 
 // Icon builds the icon id of the kit's atlas in colour (RGBA; 0 takes the text
 // colour) in the box the icon needs (NextHeight makes the box taller, with the
-// glyph centred in it). An icon that cannot be drawn on this system builds an
-// empty box.
+// glyph centred in it). An icon that cannot be drawn on this system, or that
+// is not ready yet, builds an empty box. It consumes NextSize either way.
 func (k *Kit) Icon(id icon.ID, color uint32) ui.ID {
 	if color == 0 {
 		color = k.r.Pal.Text
@@ -135,10 +135,18 @@ func (k *Kit) Icon(id icon.ID, color uint32) ui.ID {
 		w, _ := k.icons.Size(id)
 		c.NextSize(ui.Px(w), k.nh)
 	}
-	k.hasH = false
+	k.hasW, k.hasH = false, false // whether or not the icon is ready: NextSize is the icon's, not the next box's
 	c.NextRole(ui.RoleImage)
 	return c.BoxKeyed(flags, ui.KeyN(c.ParentKey(), 7000+uint64(id)), disp)
 }
 
 // IconSize is the size in pixels of the box Icon builds for id.
 func (k *Kit) IconSize(id icon.ID) (w, h float32) { return k.icons.Size(id) }
+
+// IconAlignWidth is the exact width in pixels of icon id's content, as
+// layouts measure it (icon.Atlas.AlignWidth).
+func (k *Kit) IconAlignWidth(id icon.ID) float32 { return k.icons.AlignWidth(id) }
+
+// IconMediumWidth is the exact width in pixels of icon id's image at the
+// medium symbol scale (icon.Atlas.MediumWidth).
+func (k *Kit) IconMediumWidth(id icon.ID) float32 { return k.icons.MediumWidth(id) }

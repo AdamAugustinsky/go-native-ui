@@ -17,7 +17,8 @@ var roleNames = map[ui.Role]string{
 	ui.RoleSplitter: "Splitter", ui.RoleTabList: "TabList", ui.RoleTab: "Tab", ui.RoleTabPanel: "TabPanel",
 	ui.RoleMenuBar: "MenuBar", ui.RoleMenu: "Menu", ui.RoleMenuItem: "MenuItem",
 	ui.RoleMenuItemCheckbox: "MenuItemCheckbox", ui.RoleDialog: "Dialog", ui.RoleTooltip: "Tooltip",
-	ui.RoleProgressBar: "ProgressBar", ui.RoleLink: "Link",
+	ui.RoleProgressBar: "ProgressBar", ui.RoleLink: "Link", ui.RoleHeading: "Heading",
+	ui.RoleToolbar: "Toolbar", ui.RoleSheet: "Sheet", ui.RoleHost: "Host",
 }
 
 // RoleName is the name of a role as Dump writes it ("Button", "ListItem").
@@ -34,7 +35,7 @@ var semStateNames = [...]struct {
 }{
 	{ui.SemChecked, "checked"}, {ui.SemMixed, "mixed"}, {ui.SemSelected, "selected"},
 	{ui.SemExpanded, "expanded"}, {ui.SemDisabled, "disabled"}, {ui.SemFocused, "focused"},
-	{ui.SemEditable, "editable"}, {ui.SemModal, "modal"},
+	{ui.SemEditable, "editable"}, {ui.SemModal, "modal"}, {ui.SemLive, "live"},
 }
 
 // Dump writes the semantic tree as indented text: roles, names, values, states,

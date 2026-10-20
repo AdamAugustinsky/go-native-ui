@@ -18,12 +18,14 @@ func (a *App) build(w, h int, dt float32) {
 		a.debugBuildStart()
 	}
 	a.useFontScale() // zoom.go
+	a.ax.building = true
 	a.UI.Begin(&a.tr.in, w, h, a.EffectiveScale(), dt)
 	a.b.Build(a.UI)
 	if a.dbg != nil {
 		a.debugBuild()
 	}
 	a.UI.End(&a.list)
+	a.ax.building = false
 	if a.dbg != nil {
 		a.dbg.mark(PhaseLayout)
 	}
@@ -135,6 +137,7 @@ func (a *App) drawFrame(inHandler bool, passes int) bool {
 		return false
 	}
 	a.inFrame = true
+	platform.HoldApp(true) // no app-wide event is delivered inside the frame
 	if a.dbg != nil {
 		a.debugFrameStart()
 	}
@@ -169,7 +172,9 @@ func (a *App) drawFrame(inHandler bool, passes int) bool {
 	}
 	a.syncRegions()
 	a.syncShell()
+	a.syncAX()
 	a.syncText(a.Win, m.start)
+	a.syncColorPanel(a.Win)
 	a.syncChrome(a.Win)
 	if metered {
 		m.cpu2 = sysinfo.ThreadCPUNs()
@@ -188,6 +193,7 @@ func (a *App) drawFrame(inHandler bool, passes int) bool {
 	a.Win.FlushShell()     // (nothing is left; a safety net), inside the frame's pool
 	framePoolPop(pool)
 	a.inFrame = false
+	platform.HoldApp(false)
 	m.commit = platform.Now()
 	if metered {
 		m.cpu3 = sysinfo.ThreadCPUNs()
@@ -217,6 +223,8 @@ func (a *App) abandonFrame(pool uintptr) {
 		return
 	}
 	a.inFrame = false
+	a.ax.building = false // a Build that panicked never reached End
+	platform.HoldApp(false)
 	abandonSurfaceFrame(a.Surf, &a.fr)
 	framePoolPop(pool)
 }

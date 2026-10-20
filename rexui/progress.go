@@ -31,7 +31,10 @@ type ProgressRecipe struct {
 	Track, TrackEdge Tint
 	// Fill is the progress, FillDisabled the progress of a disabled bar
 	// (not measured: the slider's).
-	Fill, FillDisabled Tint
+	// FillInactive replaces Fill in a window that is not the key window: an
+	// opaque #AAAAAA in light and dark alike (measured), here labelColor at
+	// 29 % and 59 % over the track, which makes that grey over the bar.
+	Fill, FillDisabled, FillInactive Tint
 	// Segment is an indeterminate bar's segment as a share of the bar's
 	// width, Period the time it takes to cross, in seconds, and RestPhase
 	// where it stands under Reduce Motion. The sample's AppKit render shows
@@ -45,7 +48,8 @@ var ProgressLook = ProgressRecipe{
 	Frame: 20, Bar: 8,
 	Track: OfAlpha(theme.Label, 0.0588, 0.08), TrackEdge: OfAlpha(theme.Label, 0.071, 0.039),
 	Fill: Of(theme.Accent), FillDisabled: OfAlpha(theme.Label, 0.15, 0.15),
-	Segment: 0.35, Period: 1.4, RestPhase: 0.5,
+	FillInactive: OfAlpha(theme.Label, 0.292, 0.589),
+	Segment:      0.35, Period: 1.4, RestPhase: 0.5,
 }
 
 // edgeRing builds a ring of colour col and width w pixels inside the edge of
@@ -83,6 +87,8 @@ func ProgressBar(k *base.Kit, label string, frac float32, o ProgressOpts) ui.ID 
 	fill := rc.Fill.RGBA(r)
 	if k.Disabled() {
 		fill = rc.FillDisabled.RGBA(r)
+	} else if k.VisualOf(key, base.HoverOff).Inactive {
+		fill = rc.FillInactive.RGBA(r)
 	}
 	k.ApplySize(ui.Pct(1), ui.Px(frame))
 	c.NextPadding(0, theme.Snap((frame-bar)/2), 0, 0)

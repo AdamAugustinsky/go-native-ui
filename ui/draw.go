@@ -69,7 +69,9 @@ func (c *Context) End(list *gpu.DrawList) {
 	if c.nparents != 1 || c.nOvOpen != 0 {
 		panic("ui: unbalanced Push/Pop or BeginOverlay/EndOverlay at End")
 	}
+	c.cpLast, c.cpNow = c.cpNow, colorReq{} // (the colour panel request of this frame, for the app and the next frame)
 	c.layout()
+	c.checkShownWatch()
 	c.semScroll()
 	c.traverseFocus()
 	c.animateBoxes()

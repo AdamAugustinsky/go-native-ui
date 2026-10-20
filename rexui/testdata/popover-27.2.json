@@ -1,0 +1,20 @@
+{
+	"source": "tools/appkitref/popover.sh: a real NSPopover (AppKitPopover, macOS 27.2 Build 26B5101f, Mac mini Mac16,10) 260 x 140 pt, measured from GnuiShot display captures at 2x, light and dark, content on the window background, popover below its anchor (arrow up), 2026-10-20",
+	"scale": 2,
+	"modes": {
+		"light": {
+			"radius": 20,
+			"arrowH": 11,
+			"gap": 2,
+			"fill": "#F2F2F2",
+			"edge": "#ECECEC"
+		},
+		"dark": {
+			"radius": 20,
+			"arrowH": 11,
+			"gap": 2,
+			"fill": "#2E2E2E",
+			"edge": "#2A2A2A"
+		}
+	}
+}

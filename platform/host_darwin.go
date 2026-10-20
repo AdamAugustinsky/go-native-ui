@@ -55,6 +55,7 @@ var (
 func registerShellClasses() {
 	c := objc.Define("GNUIContainer", objc.Cls("NSView"), nil)
 	c.Method(selIsFlipped, "c@:", retYes)
+	registerContainerA11y(c)
 	containerClass = c.Register()
 
 	h := objc.Define("GNUIHostClip", objc.Cls("NSView"), nil)
@@ -294,8 +295,10 @@ func (w *Window) takeKeyboardBack() {
 	objc.SendBool1(w.win, selMakeFirstResp, uintptr(w.view))
 }
 
-// releaseAllHosts releases every host (closeShell).
+// releaseAllHosts releases every host (closeShell). The accessibility
+// elements, whose children the hosts are, go first.
 func (w *Window) releaseAllHosts() {
+	w.closeAX()
 	for i := range w.hosts.slots {
 		if w.hosts.slots[i].live {
 			w.ReleaseHost(w.hosts.id(i))
@@ -475,6 +478,11 @@ func (w *Window) FocusHost(id HostID) {
 			return
 		}
 		target = s.view
+		if objc.SendBool1(target, selIsKindOfClass, uintptr(clsScrollView())) { // a scroll view's document view takes the keyboard (an Editor)
+			if d := objc.Send(target, selDocumentView); d != 0 {
+				target = d
+			}
+		}
 		if s.kind == HostGlass {
 			if f := objc.Send(objc.Send(s.content, selSubviews), selFirstObject); f != 0 {
 				target = f
@@ -501,7 +509,14 @@ func (w *Window) hostOf(v objc.ID) int {
 	return 0
 }
 
-var nsViewCls objc.ID
+var nsViewCls, nsScrollViewCls objc.ID
+
+func clsScrollView() objc.ID {
+	if nsScrollViewCls == 0 {
+		nsScrollViewCls = objc.Cls("NSScrollView")
+	}
+	return nsScrollViewCls
+}
 
 func nsViewClass() objc.ID {
 	if nsViewCls == 0 {

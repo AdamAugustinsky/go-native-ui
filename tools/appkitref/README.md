@@ -47,6 +47,18 @@ widths, knob slots and knobs per control size and style as JSON
 (`-[NSScroller rectForPart:]`, no window, no GUI session). The theme's test
 reads it from `theme/testdata/appkit-scroller-27.2.json`.
 
+Which controls Tab reaches: `sh tools/appkitref/keynav.sh` prints, for a window
+of the usual controls, `canBecomeKeyView` of each and the order `nextValidKeyView`
+walks, with System Settings ▸ Keyboard ▸ Keyboard navigation as the machine has
+it (the tool never changes it; no override short of the setting itself reaches
+AppKit's controls, so only the machine's own value can be measured).
+`platform.TabReachesControls` and `ui.Context.SetTabReachesControls` follow
+the result (`theme/testdata/appkit-keynav-27.2-macmini.json`, taken with the
+setting off: text fields of every kind, the date picker, text views, tables and
+outlines are reached; push buttons, checkboxes, radios, pop-up and pull-down
+buttons, sliders, steppers, segmented controls, color wells and disclosure
+triangles are not).
+
 ## Which machine, which reference set
 
 Every measurement file has a top-level `machine` object (`machine.h`): the
@@ -82,5 +94,5 @@ The scroller style is the system's, as a running app sees it. The Mac mini has a
 - **Key-window state.** An app that is never active has no key window. `ARWindow` and `ARApp` report key, main and active, so controls draw their active look. Samples marked `inactive` are drawn honestly. Emphasised and unemphasised selection are both rendered.
 - **Focus rings.** AppKit draws them in a separate layer that `cacheDisplayInRect:` does not capture. The tool draws them with the documented API (`NSSetFocusRingStyle(NSFocusRingOnly)` plus `drawFocusRingMask`) from the view's own mask, and measures that ring.
 - **Window-server work.** Vibrancy and materials (sidebars, menus, popovers, toolbars), Liquid Glass (`NSBezelStyleGlass`), window shadows and the rounded window mask are all composited by the window server and are missing.
-- **Some layers.** Scroller knobs (legacy and overlay), `NSTabView` tabs, and a sidebar's unemphasised selection are drawn by layers that are not captured; scroller widths are in the metrics instead.
+- **Some layers.** Scroller knobs (legacy and overlay; `-live NAMES -flash` shows overlay knobs in a live window by flashing the scrollers every 0.25 s), `NSTabView` tabs, and a sidebar's unemphasised selection are drawn by layers that are not captured; scroller widths are in the metrics instead.
 - **Menus, popovers and tooltips.** They live in their own system windows. Only menu metrics are reported.

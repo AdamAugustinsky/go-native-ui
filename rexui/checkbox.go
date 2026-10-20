@@ -24,6 +24,11 @@ type CheckboxRecipe struct {
 	// On, OnPressed and OnDisabled fill a checked or mixed box: the accent,
 	// darker pressed, and secondarySystemFill disabled.
 	On, OnPressed, OnDisabled Tint
+	// OnInactive and MarkInactive replace On and Mark in a window that is
+	// not the key window: AppKit greys the checked box (labelColor at 14 %,
+	// #DBDBDB over white and #3E3E3E over #1E1E1E measured) and draws the
+	// check in labelColor over it. An unchecked box does not change.
+	OnInactive, MarkInactive Tint
 	// Mark and MarkDisabled colour the check and the dash.
 	Mark, MarkDisabled Tint
 	// Label and LabelDisabled colour the label.
@@ -38,6 +43,7 @@ var CheckboxLook = CheckboxRecipe{
 	Off: Of(theme.Fill1), OffPressed: Of(theme.FillPressed), OffDisabled: Of(theme.Fill3),
 	On: Of(theme.Accent), OnPressed: Of(theme.AccentPressed), OnDisabled: Of(theme.Fill2),
 	Mark: Of(theme.OnAccent), MarkDisabled: Of(theme.Label3),
+	OnInactive: OfAlpha(theme.Label, 0.141, 0.142), MarkInactive: Of(theme.Label),
 	Label: Of(theme.ControlText), LabelDisabled: Of(theme.TextDisabled),
 	DashW: 7, DashH: 1.75,
 }
@@ -75,6 +81,8 @@ func CheckboxTri(k *base.Kit, label string, st *base.CheckState, o CheckboxOpts)
 		fill, mark, lc = rc.OnDisabled.RGBA(r), rc.MarkDisabled.RGBA(r), rc.LabelDisabled.RGBA(r)
 	case t.Disabled:
 		fill, lc = rc.OffDisabled.RGBA(r), rc.LabelDisabled.RGBA(r)
+	case on && t.Inactive:
+		fill, mark = rc.OnInactive.RGBA(r), rc.MarkInactive.RGBA(r)
 	case on:
 		fill = mix(rc.On.RGBA(r), rc.OnPressed.RGBA(r), t.Down)
 	default:

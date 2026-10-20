@@ -398,7 +398,7 @@ func TestListFollowsScrollerStyle(t *testing.T) {
 			if q.Mode != gpu.ModeShape || q.Color[0]&0xFF == 0 {
 				continue
 			}
-			if c := q.Color[0] >> 8; c == r.Pal.ScrollThumb>>8 || c == rexui.ListLook.LegacyKnob.RGBA(r)>>8 {
+			if c := q.Color[0] >> 8; c == rexui.ListLook.OverlayKnob.RGBA(r)>>8 || c == rexui.ListLook.LegacyKnob.RGBA(r)>>8 {
 				bar = true
 			}
 		}
@@ -611,6 +611,156 @@ func TestOutlineCollapseReportsTheSelectionChange(t *testing.T) {
 		}
 		if !v.changed {
 			t.Fatalf("%s: the selection changed, and Changed never said so", how)
+		}
+	}
+}
+
+// A list's scroll knob is AppKit's, in both scroller styles and both modes:
+// the legacy knob over its slot over the list's background, and the overlay
+// knob, drawn while the view scrolls, over the background (measured live,
+// macOS 27.2 26B5101f: legacy #7A7A7A on white and #9F9F9F on #1E1E1E,
+// overlay #808080 and #9A9A9A).
+func TestListScrollKnobMatchesAppKit(t *testing.T) {
+	for _, tc := range []struct {
+		mode   theme.Mode
+		legacy bool
+		want   uint32
+	}{
+		{theme.Light, true, 0x7A7A7A}, {theme.Dark, true, 0x9F9F9F},
+		{theme.Light, false, 0x808080}, {theme.Dark, false, 0x9A9A9A},
+	} {
+		v := &listView{n: 40, style: rexui.ListFullWidth}
+		v.st.Sel.Reserve(v.n)
+		sys := &theme.SystemValues{Known: true}
+		if tc.legacy {
+			sys.Settings.Scroller = theme.ScrollerLegacy
+		}
+		g := newRig(t, tc.mode, sys, v.build)
+		g.in.MouseX, g.in.MouseY = 200, 200
+		g.in.AddScroll(0, -3, true)
+		g.frame()
+		g.frame()
+		r := g.k.Theme()
+		bg := r.Colors[theme.ControlBackground]
+		var knob, under uint32
+		if tc.legacy {
+			knob = rexui.ListLook.LegacyKnob.RGBA(r)
+			under = theme.Over(rexui.ListLook.LegacySlot.RGBA(r), bg)
+		} else {
+			knob, under = rexui.ListLook.OverlayKnob.RGBA(r), bg
+		}
+		drawn := false
+		for _, q := range g.list.Quads {
+			drawn = drawn || q.Mode == gpu.ModeShape && q.Color[0] == knob
+		}
+		if !drawn {
+			t.Fatalf("mode %v legacy %v: no knob of colour %08X in the frame", tc.mode, tc.legacy, knob)
+		}
+		got := theme.Over(knob, under) >> 8
+		for sh := uint(0); sh < 24; sh += 8 {
+			if d := int(got>>sh&0xFF) - int(tc.want>>sh&0xFF); d < -2 || d > 2 {
+				t.Fatalf("mode %v legacy %v: the knob shows #%06X, AppKit's is #%06X", tc.mode, tc.legacy, got, tc.want)
+			}
+		}
+	}
+}
+
+// Header and rows share one content width, with legacy scroll bars (the
+// rows and the header give 17 pt to the bar) and with overlay ones, in both
+// styles: the last header cell, the rows and their cells end at the same
+// edge, and what the header draws in the last column (here the sort mark of
+// a sorted, right-aligned column that fills the room) is inside its box.
+func TestTableHeaderAndRowsShareTheirWidth(t *testing.T) {
+	for _, legacyBars := range []bool{false, true} {
+		for _, style := range []rexui.ListStyle{rexui.ListFullWidth, rexui.ListInset} {
+			var st base.TableState
+			st.Sort = base.SortState{Active: true, Column: 3}
+			cols := []base.Column{
+				{ID: 1, Title: "Name", Width: 150}, {ID: 2, Title: "Kind", Width: 100},
+				{ID: 3, Title: "Size", Width: 66, Align: ui.AlignRight, Fill: true, Sortable: true},
+			}
+			sys := theme.SystemValues{Known: true}
+			if legacyBars {
+				sys.Settings.Scroller = theme.ScrollerLegacy
+			}
+			g := newRig(t, theme.Light, &sys, func(g *rig) {
+				k := g.k
+				c := k.Context()
+				c.NextSize(ui.Px(k.Pt(420)), ui.Px(k.Pt(180)))
+				c.Push(c.Box(0, "frame"))
+				tb := rexui.BeginTable(k, "files", &st, cols, 40, rexui.TableOpts{Style: style})
+				for r := tb.First; r < tb.Last; r++ {
+					tb.Row(r, st.Item(r), nil)
+					tb.CellText(0, "name")
+					tb.CellText(1, "kind")
+					tb.CellText(2, "123 KB")
+				}
+				rexui.EndTable(k, &tb)
+				c.Pop()
+			})
+			g.settle()
+			g.frames(30)
+			g.c.Semantics(&g.sem)
+			var hdr, cell, row [4]float32
+			for _, n := range g.sem.Nodes {
+				switch {
+				case n.Role == ui.RoleColumnHeader && n.Name != [2]uint32{} && n.Bounds[0] > hdr[0]:
+					hdr = n.Bounds
+				case n.Role == ui.RoleCell && n.Bounds[0] > cell[0]:
+					cell = n.Bounds
+				case n.Role == ui.RoleRow && row == [4]float32{}:
+					row = n.Bounds
+				}
+			}
+			what := map[bool]string{false: "overlay", true: "legacy"}[legacyBars]
+			if hdr[2] != row[2] || cell[2] != row[2] || hdr[0] != cell[0] {
+				t.Errorf("%s style %d: header cell %v, cell %v, row %v", what, style, hdr, cell, row)
+			}
+			if legacyBars && row[2] >= g.node(ui.RoleScrollBar, "Vertical scroll bar").Bounds[0]+1 {
+				t.Errorf("%s style %d: the rows end at %v, inside the bar", what, style, row[2])
+			}
+			for _, q := range g.list.Quads {
+				if q.Mode == gpu.ModeShape || q.Rect[1] < hdr[1] || q.Rect[3] > hdr[3] || q.Rect[0] < hdr[0] || q.Rect[2] <= q.Rect[0] {
+					continue
+				}
+				if q.Rect[2] > hdr[2]+0.5 {
+					t.Errorf("%s style %d: the header draws to %v, past its last cell's edge %v", what, style, q.Rect[2], hdr[2])
+				}
+			}
+		}
+	}
+}
+
+// A striped list scrolled deep, then shrunk (a filter that matches nothing,
+// or a few rows): the frame that sees the new row count stripes only the
+// room in view, as many boxes as the viewport holds whatever the stale
+// offset, the offset lands at a valid one (the layout clamps it to the
+// content), and the frames after it allocate nothing.
+func TestFillerRowsStayInTheViewportWhenAListShrinksDeep(t *testing.T) {
+	for _, shrunk := range []int{0, 3} {
+		v := &listView{n: 1_000_000, style: rexui.ListFullWidth, striped: true}
+		g := newRig(t, theme.Light, nil, v.build)
+		box, _ := g.c.BoxOf(v.key)
+		g.c.SetScroll(box, 0, 24_000_000)
+		g.frames(3)
+		if _, sy := g.c.Scroll(box); sy < 20_000_000 {
+			t.Fatalf("the list is at %v, not deep", sy)
+		}
+		full := g.c.Boxes()
+		v.n = shrunk
+		g.frame()
+		if n := g.c.Boxes(); n > full+8 {
+			t.Errorf("%d rows left: the frame that saw them built %d boxes, %d in a full list", shrunk, n, full)
+		}
+		g.frames(3)
+		if n := g.c.Boxes(); n > full+8 {
+			t.Errorf("%d rows left: %d boxes once settled, %d in a full list", shrunk, n, full)
+		}
+		if _, sy := g.c.Scroll(box); sy != 0 {
+			t.Errorf("%d rows left: the list is still scrolled to %v", shrunk, sy)
+		}
+		if n := testing.AllocsPerRun(30, g.frame); n != 0 {
+			t.Errorf("%d rows left: %.1f allocations per frame", shrunk, n)
 		}
 	}
 }

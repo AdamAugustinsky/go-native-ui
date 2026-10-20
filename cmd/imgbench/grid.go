@@ -10,12 +10,16 @@ import (
 
 	"gonativeui/app"
 	"gonativeui/img"
+	"gonativeui/internal/animgen"
 	"gonativeui/internal/sysinfo"
 	"gonativeui/platform"
 	"gonativeui/theme/rex"
 	"gonativeui/ui"
 	"gonativeui/widget/base"
 )
+
+// animHash is the first content hash of the animated samples.
+const animHash = 1 << 40
 
 // Geometry in points.
 const (
@@ -54,11 +58,35 @@ type grid struct {
 	coldStart              int64
 	coldEnd                int64
 	blocking               bool // offscreen PNG: wait in Build until the view has loaded
+
+	// anim puts the animated samples in the first cells (animSamples); off
+	// in -bench and -idle, which measure the still grid.
+	anim    bool
+	samples []animSample
+}
+
+// An animated sample is an item of the grid whose image animates.
+type animSample struct {
+	name string
+	data []byte
+}
+
+// animSamples are the animated cells, items 0 to 3: a GIF and an APNG of a
+// disc travelling a transparent canvas (frames disposed to the background),
+// and a GIF and an APNG that sweep a colour ramp slowly. All are made here.
+func animSamples() []animSample {
+	return []animSample{
+		{"GIF disc", animgen.GIF(96, 96, animgen.Ball(96, 96, 24, 50, color.NRGBA{236, 72, 153, 255}), 0)},
+		{"APNG disc", animgen.APNG(96, 96, animgen.Ball(96, 96, 24, 70, color.NRGBA{37, 150, 255, 255}), 0)},
+		{"GIF ramp", animgen.GIF(96, 96, animgen.Sheet(96, 96, 12, 400), 0)},
+		{"APNG ramp", animgen.APNG(96, 96, animgen.Sheet(96, 96, 12, 400), 0)},
+	}
 }
 
 func newGrid(items int, o img.Options) *grid {
 	g := &grid{items: items, opt: o,
 		pollNs: make([]float64, 0, 1<<14), pollCPU: make([]float64, 0, 1<<14), build: make([]float64, 0, 1<<14)}
+	g.samples = animSamples()
 	g.srcs = make([][]byte, sources)
 	for i := range g.srcs {
 		g.srcs[i] = photo(i)
@@ -172,7 +200,13 @@ func (g *grid) Build(c *ui.Context) {
 				if i >= g.items {
 					break
 				}
-				h, st := g.cache.Request(g.key(c, i), img.Bytes(g.srcs[i%sources]))
+				key, src := g.key(c, i), img.Bytes(g.srcs[i%sources])
+				sample := g.anim && i < len(g.samples)
+				if sample {
+					key.Hash, key.Flags = animHash+uint64(i), img.Animate
+					src = img.Bytes(g.samples[i].data)
+				}
+				h, st := g.cache.Request(key, src)
 				g.visible++
 				if st == img.Ready {
 					g.ready++
@@ -182,8 +216,20 @@ func (g *grid) Build(c *ui.Context) {
 				}
 				c.NextPos((marginPt+float32(col)*pitchPt)*s, (marginPt+float32(r)*pitchPt-g.scroll)*s)
 				c.NextSize(ui.Px(cellPt*s), ui.Px(cellPt*s))
-				c.NextFlags(base.Floating)
-				k.Image(uint64(i), h, ui.FitFill, radiusPt*s, "")
+				flags := base.Floating
+				if sample {
+					flags |= ui.Clickable // a click pauses and plays
+				}
+				c.NextFlags(flags)
+				id := k.Image(uint64(i), h, ui.FitFill, radiusPt*s, "")
+				if sample && c.Signal(id).Clicked {
+					if an := g.cache.Animation(h); an.Playing() {
+						an.Pause()
+					} else {
+						an.Play()
+					}
+				}
+
 			}
 		}
 		if !g.blocking {

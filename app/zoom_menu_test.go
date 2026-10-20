@@ -55,13 +55,13 @@ func (f *titlebarWindow) SetTitlebar(h float32, l [2]float32) {
 func TestZoomGivesTheWindowTheZoomedTitlebar(t *testing.T) {
 	a := &App{UI: ui.New(nil), cfg: Config{Titlebar: 46, TrafficLights: [2]float32{21, 23}}, scale: 2}
 	w := &titlebarWindow{fakeMacWindow: fakeMacWindow{buttons: [4]float32{14, 16, 74, 30}}}
-	a.syncWindowFrom(w)
+	a.syncWindowFrom(w, w)
 	if w.setCall != 0 {
 		t.Fatal("the titlebar was set at 100 %, as opened")
 	}
 
 	a.SetZoom(1.5)
-	a.syncWindowFrom(w)
+	a.syncWindowFrom(w, w)
 	if w.setCall != 1 || w.height != 69 || w.lights != [2]float32{21, 34.5} {
 		t.Fatalf("titlebar %v with lights %v (%d calls), want 69 and (21, 34.5)", w.height, w.lights, w.setCall)
 	}
@@ -73,17 +73,17 @@ func TestZoomGivesTheWindowTheZoomedTitlebar(t *testing.T) {
 		t.Errorf("the ui has the buttons at %v, want %v", got, want)
 	}
 	for i := 0; i < 5; i++ {
-		a.syncWindowFrom(w)
+		a.syncWindowFrom(w, w)
 	}
 	if w.setCall != 1 {
 		t.Errorf("%d calls over steady frames", w.setCall)
 	}
-	if n := testing.AllocsPerRun(100, func() { a.syncWindowFrom(w) }); n != 0 {
+	if n := testing.AllocsPerRun(100, func() { a.syncWindowFrom(w, w) }); n != 0 {
 		t.Errorf("%v allocations per steady frame", n)
 	}
 
 	a.ZoomReset()
-	a.syncWindowFrom(w)
+	a.syncWindowFrom(w, w)
 	if w.setCall != 2 || w.height != 46 || w.lights != [2]float32{21, 23} {
 		t.Errorf("after the reset: titlebar %v, lights %v", w.height, w.lights)
 	}
@@ -92,7 +92,7 @@ func TestZoomGivesTheWindowTheZoomedTitlebar(t *testing.T) {
 	b := &App{UI: ui.New(nil), cfg: Config{}, scale: 2}
 	w2 := &titlebarWindow{}
 	b.SetZoom(2)
-	b.syncWindowFrom(w2)
+	b.syncWindowFrom(w2, w2)
 	if w2.setCall != 0 {
 		t.Error("a window with the system's titlebar was given metrics")
 	}

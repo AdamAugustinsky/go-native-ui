@@ -14,9 +14,9 @@ import (
 	"os"
 )
 
-// osDecoder has no state: the standard library's decoders allocate their
-// own images (on the worker).
-type osDecoder struct{}
+// osDecoder holds what the system icons need (Windows); the standard
+// library's decoders allocate their own images (on the worker).
+type osDecoder struct{ icon iconDecoder }
 
 // decode decodes the image in data (or the file j.src.path) with the
 // standard library and scales it to its display size by area averaging,

@@ -38,6 +38,21 @@ type Visual struct {
 	Inactive bool
 }
 
+// TextEntry returns v with the focus ring of a text-entry control: AppKit's
+// NSTextField, NSComboBox, NSTokenField and NSSearchField show it whenever
+// they have the focus, however they got it (a click included), where a button
+// or another control shows it for keyboard focus only (Visual.Ring as
+// VisualOf sets it). No ring shows in a window that is not the key window.
+// The four text-entry components draw their ring from it, so they cannot
+// disagree.
+func (v Visual) TextEntry() Visual {
+	v.Ring = 0
+	if !v.Inactive {
+		v.Ring = v.Focus
+	}
+	return v
+}
+
 // VisualOf reads the visual state of the box with the given key, with the
 // component's hover policy, and consumes the look forced with Force.
 func (k *Kit) VisualOf(key ui.Key, hover Hover) Visual {
