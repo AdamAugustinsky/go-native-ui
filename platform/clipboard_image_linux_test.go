@@ -287,26 +287,30 @@ func xclipOwn(t *testing.T, typ string, data []byte) *exec.Cmd {
 	return cmd
 }
 
-// pasteKindsEventually pastes until it succeeds (xclip takes a moment to own the selection).
-func pasteKindsEventually(t *testing.T, w *Window, kinds PasteKinds, d time.Duration) kpaste {
+// pasteKindsEventually pastes until the answer is a success that satisfies
+// ok (xclip takes a moment to own the selection, and the one before it may
+// still own it).
+func pasteKindsEventually(t *testing.T, w *Window, kinds PasteKinds, d time.Duration, ok func(kpaste) bool) kpaste {
 	t.Helper()
 	var p kpaste
 	for end, tag := time.Now().Add(d), uint64(1); time.Now().Before(end); tag++ {
 		p, _ = pasteKinds(t, w, tag, kinds, 5*time.Second)
-		if p.Kind == EvPaste && p.Flags&FlagFailed == 0 {
+		if p.Kind == EvPaste && p.Flags&FlagFailed == 0 && ok(p) {
 			return p
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatalf("no paste of kinds %b: %+v", kinds, p.Event)
+	t.Fatalf("no matching paste of kinds %b: %+v, %d bytes", kinds, p.Event, len(p.data))
 	return p
 }
+
+func isKind(k PasteKind) func(kpaste) bool { return func(p kpaste) bool { return p.Paste == k } }
 
 func TestX11ImageAndFilesFromXclip(t *testing.T) {
 	w := openEnv(t, "x11")
 	src, _ := testPNG(t, 45, 25)
 	xclipOwn(t, "image/png", src)
-	p := pasteKindsEventually(t, w, WantText|WantImage, 5*time.Second)
+	p := pasteKindsEventually(t, w, WantText|WantImage, 5*time.Second, isKind(PasteImage))
 	if p.Paste != PasteImage || !bytes.Equal(p.data, src) {
 		t.Errorf("image: kind %v, %d bytes (want %d)", p.Paste, len(p.data), len(src))
 	}
@@ -320,20 +324,20 @@ func TestX11ImageAndFilesFromXclip(t *testing.T) {
 		t.Fatalf("the test image is only %d bytes", len(big))
 	}
 	xclipOwn(t, "image/png", big)
-	p = pasteKindsEventually(t, w, WantImage, 10*time.Second)
+	p = pasteKindsEventually(t, w, WantImage, 10*time.Second, func(p kpaste) bool { return len(p.data) == len(big) })
 	if p.Paste != PasteImage || !bytes.Equal(p.data, big) {
 		t.Errorf("big image: %d bytes (want %d)", len(p.data), len(big))
 	}
 
 	xclipOwn(t, "text/uri-list", []byte("# files\r\nfile:///tmp/a%20b.txt\r\nhttp://example.com/x\r\nfile://localhost/tmp/c\u00e9\r\n"))
-	p = pasteKindsEventually(t, w, WantFiles, 5*time.Second)
+	p = pasteKindsEventually(t, w, WantFiles, 5*time.Second, isKind(PasteFiles))
 	if want := []string{"/tmp/a b.txt", "/tmp/c\u00e9"}; p.Paste != PasteFiles || p.Code != 2 || !slices.Equal(PasteFilePaths(p.data), want) {
 		t.Errorf("files: %v code %d %q", p.Paste, p.Code, PasteFilePaths(p.data))
 	}
 
 	// Text still pastes as before, with the new request too.
 	xclipOwn(t, "UTF8_STRING", []byte("plain text"))
-	p = pasteKindsEventually(t, w, WantText|WantImage|WantFiles, 5*time.Second)
+	p = pasteKindsEventually(t, w, WantText|WantImage|WantFiles, 5*time.Second, isKind(PasteText))
 	if p.Paste != PasteText || string(p.data) != "plain text" {
 		t.Errorf("text: %v %q", p.Paste, p.data)
 	}
@@ -596,7 +600,7 @@ func TestX11PasteImageFromOtherAppNoAlloc(t *testing.T) {
 	w := openEnv(t, "x11")
 	src, _ := testPNG(t, 64, 64)
 	xclipOwn(t, "image/png", src)
-	pasteKindsEventually(t, w, WantImage, 5*time.Second)
+	pasteKindsEventually(t, w, WantImage, 5*time.Second, isKind(PasteImage))
 	step := func() {
 		w.RequestPasteKinds(1, WantImage)
 		for end := time.Now().Add(5 * time.Second); time.Now().Before(end); {
