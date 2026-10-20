@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"gonativeui/gpu"
-	"gonativeui/internal/ffi"
 	"gonativeui/internal/objc"
 	"gonativeui/platform"
 	"gonativeui/ui"
@@ -101,8 +100,6 @@ type nestedBuilder struct {
 	inBuild bool
 	nested  int       // Builds that began inside a Build
 	targets []uintptr // the distinct drawable textures drawn into
-	// green-button: whether each click was made
-	clicks [2]bool
 }
 
 func (b *nestedBuilder) Init(a *App) error { b.a = a; return nil }
@@ -119,8 +116,7 @@ func (b *nestedBuilder) Build(c *ui.Context) {
 	c.RequestFrame()
 	win := objc.ID(b.a.Win.Native().NSWindow)
 	if b.c == "green-button" {
-		fs.frames[fs.phase]++
-		b.greenButton(win)
+		greenFrame(b.a, win)
 		return
 	}
 	if b.n++; b.done || b.n < 3 {
@@ -159,24 +155,16 @@ func runNestedChild(c string) {
 		fmt.Println("SKIP: cannot open a window here:", err)
 		return
 	}
-	// The frames the frame handler presents (live resize: AppKit's
-	// animations), counted per full-screen phase.
-	a.Win.SetFrameHandler(func() {
-		n := a.frames
-		a.frameHandler()
-		fs.handlerFrames[fs.phase] += a.frames - n
-	})
+	a.Win.SetFrameHandler(a.frameHandler)
 	if c == "green-button" {
-		observeFullScreen(objc.ID(a.Win.Native().NSWindow))
+		runGreenButtonChild(a, b)
+		a.close()
+		return
 	}
 	var quit atomic.Bool
-	life := 3 * time.Second
-	if c == "green-button" {
-		life = 20 * time.Second // the deadline; the case ends once the exit is over
-	}
-	time.AfterFunc(life, func() { quit.Store(true); platform.Wake() })
+	time.AfterFunc(3*time.Second, func() { quit.Store(true); platform.Wake() })
 	a.hook = func() {
-		if quit.Load() || c == "green-button" && fs.phase == fsDone && platform.Now()-fs.at[fsDone] > 300e6 {
+		if quit.Load() {
 			a.done = true
 		}
 	}
@@ -188,16 +176,6 @@ func runNestedChild(c string) {
 		fmt.Println("loop:", err)
 	}
 	fmt.Printf("nested %s: ok, frames %d, refused %d, acted %v, nested builds %d, drawables %d", c, a.frames, a.reentries, b.done, b.nested, len(b.targets))
-	if c == "green-button" {
-		if st := a.Win.DebugState(); fs.at[fsDone] == 0 && !st.Visible {
-			// A locked screen covers the window, and AppKit never
-			// finishes the transition (no windowDidEnterFullScreen).
-			fmt.Printf("\nSKIP: the window is not visible (occlusionState %d: a locked screen?), so full screen does not complete\n", st.Occlusion)
-		}
-		fmt.Printf(", entered %t, exited %t, windowed after exit %t, handler frames during entry %d of %d, during exit %d of %d",
-			fs.at[fsFull] != 0, fs.at[fsDone] != 0, fs.windowedAfterExit,
-			fs.handlerFrames[fsEntering], fs.frames[fsEntering], fs.handlerFrames[fsExiting], fs.frames[fsExiting])
-	}
 	fmt.Print(pan)
 	fmt.Println()
 	a.close()
@@ -226,126 +204,6 @@ func runPanicCase(a *App) string {
 	}
 	return fmt.Sprintf(", recovered %t, in frame after %t, frame reset %t, handler refused after %t, frames from %d",
 		r == errBuildPanic, inFrame, reset, a.reentries != refused, n)
-}
-
-// greenButton clicks the window's green button from the run loop, as a user
-// does (performClick: on the zoom button, scheduled for the next turn, not
-// sent from the frame): into full screen, and once the window has been in
-// full screen for a second, out of it.
-func (b *nestedBuilder) greenButton(win objc.ID) {
-	b.n++
-	i := -1
-	switch {
-	case b.n == 3:
-		i = 0
-	case !b.clicks[1] && fs.phase == fsFull && platform.Now()-fs.at[fsFull] > 1e9:
-		i = 1
-	}
-	if i < 0 {
-		return
-	}
-	b.clicks[i], b.done = true, true
-	zoom := objc.Send1(win, objc.Sel("standardWindowButton:"), 2) // NSWindowZoomButton
-	sel, click := objc.Sel("performSelector:withObject:afterDelay:"), objc.Sel("performClick:")
-	objc.F.Reset().Arg(uintptr(zoom)).Arg(uintptr(sel)).Arg(uintptr(click)).Arg(0).ArgF64(0).Call(objc.MsgSend)
-}
-
-// The full-screen phases of the green-button case, as the window's
-// notifications report them.
-const (
-	fsWindowed = iota
-	fsEntering // windowWillEnterFullScreen to windowDidEnterFullScreen
-	fsFull
-	fsExiting // windowWillExitFullScreen to windowDidExitFullScreen
-	fsDone
-	fsPhases
-)
-
-var fs struct {
-	phase             int
-	at                [fsPhases]int64 // when each phase began
-	handlerFrames     [fsPhases]int   // frames the frame handler presented in each
-	frames            [fsPhases]int   // all the frames built in each
-	windowedAfterExit bool            // no NSWindowStyleMaskFullScreen at windowDidExitFullScreen
-	win               objc.ID
-}
-
-// observeFullScreen follows the window's four full-screen notifications.
-func observeFullScreen(win objc.ID) {
-	fs.win = win
-	d := objc.Define("GNUITestFullScreenObserver", objc.Cls("NSObject"), nil)
-	notes := [...]struct {
-		sel, name string
-		phase     int
-	}{
-		{"gnuiWillEnter:", "NSWindowWillEnterFullScreenNotification", fsEntering},
-		{"gnuiDidEnter:", "NSWindowDidEnterFullScreenNotification", fsFull},
-		{"gnuiWillExit:", "NSWindowWillExitFullScreenNotification", fsExiting},
-		{"gnuiDidExit:", "NSWindowDidExitFullScreenNotification", fsDone},
-	}
-	for _, n := range notes {
-		d.Method(objc.Sel(n.sel), "v@:@", func(*ffi.CB) { fullScreenPhase(n.phase) })
-	}
-	cls := d.Register()
-	obs := objc.Send(objc.Send(cls, objc.Sel("alloc")), objc.Sel("init"))
-	center := objc.Send(objc.Cls("NSNotificationCenter"), objc.Sel("defaultCenter"))
-	add := objc.Sel("addObserver:selector:name:object:")
-	for _, n := range notes {
-		sel, name := objc.Sel(n.sel), objc.Str(n.name)
-		objc.F.Reset().Arg(uintptr(center)).Arg(uintptr(add)).Arg(uintptr(obs)).Arg(uintptr(sel)).Arg(uintptr(name)).Arg(uintptr(win)).Call(objc.MsgSend)
-	}
-}
-
-func fullScreenPhase(p int) {
-	fs.phase, fs.at[p] = p, platform.Now()
-	if p == fsDone {
-		fs.windowedAfterExit = objc.Send(fs.win, objc.Sel("styleMask"))&(1<<14) == 0 // NSWindowStyleMaskFullScreen
-	}
-}
-
-// The user's way into full screen and out: the green button clicked from
-// the run loop, not from a frame. Both transitions complete (the window's
-// notifications; no full-screen style bit after the exit), the frame handler
-// presents frames while each animation runs (live resize, between the
-// will- and did- notifications), and nothing crashes.
-func TestGreenButtonFullScreen(t *testing.T) {
-	if testing.Short() {
-		t.Skip("opens a window and goes full screen")
-	}
-	cmd := exec.Command(os.Args[0])
-	cmd.Env = append(os.Environ(), nestedChild+"=green-button")
-	out, err := cmd.CombinedOutput()
-	s := string(out)
-	if i := strings.Index(s, "SKIP:"); i >= 0 {
-		t.Skip(strings.TrimSpace(s[i+5:]))
-	}
-	i := strings.Index(s, "nested green-button: ok")
-	if err != nil || i < 0 {
-		if len(s) > 3000 {
-			s = s[:3000]
-		}
-		t.Fatalf("the child failed (%v):\n%s", err, s)
-	}
-	l := s[i:]
-	if j := strings.IndexByte(l, '\n'); j >= 0 {
-		l = l[:j]
-	}
-	t.Log(l)
-	var frames, refused, nested, drawables, entry, entryAll, exit, exitAll int
-	var acted, entered, exited, windowed bool
-	if _, err := fmt.Sscanf(l, "nested green-button: ok, frames %d, refused %d, acted %t, nested builds %d, drawables %d, entered %t, exited %t, windowed after exit %t, handler frames during entry %d of %d, during exit %d of %d",
-		&frames, &refused, &acted, &nested, &drawables, &entered, &exited, &windowed, &entry, &entryAll, &exit, &exitAll); err != nil {
-		t.Fatalf("cannot read %q: %v", l, err)
-	}
-	if !entered || !exited || !windowed {
-		t.Error("want the window into full screen and back out of it")
-	}
-	if entry == 0 || exit == 0 {
-		t.Error("want frames presented by the frame handler while each animation runs")
-	}
-	if nested != 0 {
-		t.Error("a Build ran inside a Build")
-	}
 }
 
 // A panic in Build, recovered further up (a test harness, an app's own

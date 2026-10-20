@@ -270,3 +270,23 @@ func TestMaterialRegionsInDrawOrder(t *testing.T) {
 		t.Errorf("MaterialRegions allocates %.1f times", allocs)
 	}
 }
+
+// A material's corners that have a radius share one, the largest; square
+// corners stay square (a native view has one corner radius).
+func TestMaterialRadiiShareOne(t *testing.T) {
+	h := newHarness(t, 400, 300)
+	build := func(c *Context) {
+		c.NextSize(Px(100), Px(100))
+		c.NextRadii(4, 8, 0, 2)
+		c.Material(c.Box(0, "a"), AreaPopover, 1, 0)
+		c.NextSize(Px(100), Px(100))
+		c.NextRadii(0, 6, 6, 0)
+		c.Material(c.Box(0, "b"), AreaSidebar, 1, 0)
+	}
+	h.frame(build)
+	h.frame(build)
+	m := h.c.MaterialRegions(nil)
+	if len(m) != 2 || m[0].Radii != [4]float32{8, 8, 0, 8} || m[1].Radii != [4]float32{0, 6, 6, 0} {
+		t.Fatalf("regions %+v: want radii 8,8,0,8 and 0,6,6,0", m)
+	}
+}
