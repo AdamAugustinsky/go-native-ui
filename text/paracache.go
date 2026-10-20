@@ -380,6 +380,13 @@ func (c *paraCache) drop() {
 	clear(c.table)
 }
 
+// dropAll empties the cache, the over layout included: what a font key
+// released and reused (ReleaseScale) must not be answered from.
+func (c *paraCache) dropAll() {
+	c.drop()
+	c.releaseOver()
+}
+
 // releaseOver frees the over layout's storage.
 func (c *paraCache) releaseOver() {
 	c.gen++

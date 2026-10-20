@@ -133,6 +133,8 @@ type harness struct {
 	in   Input
 	list gpu.DrawList
 	w, h int
+	// scale is the scale of the frames; 0 is 1.
+	scale float32
 }
 
 func newHarness(t *testing.T, w, h int) *harness {
@@ -146,7 +148,11 @@ func newHarness(t *testing.T, w, h int) *harness {
 
 // frame runs one 60 Hz frame; build runs between Begin and End.
 func (h *harness) frame(build func(c *Context)) {
-	h.c.Begin(&h.in, h.w, h.h, 1, 1.0/60)
+	sc := h.scale
+	if sc == 0 {
+		sc = 1
+	}
+	h.c.Begin(&h.in, h.w, h.h, sc, 1.0/60)
 	if build != nil {
 		build(h.c)
 	}

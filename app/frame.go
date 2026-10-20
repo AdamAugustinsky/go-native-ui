@@ -17,7 +17,8 @@ func (a *App) build(w, h int, dt float32) {
 	if a.dbg != nil {
 		a.debugBuildStart()
 	}
-	a.UI.Begin(&a.tr.in, w, h, a.scale, dt)
+	a.useFontScale() // zoom.go
+	a.UI.Begin(&a.tr.in, w, h, a.EffectiveScale(), dt)
 	a.b.Build(a.UI)
 	if a.dbg != nil {
 		a.debugBuild()
@@ -26,6 +27,7 @@ func (a *App) build(w, h int, dt float32) {
 	if a.dbg != nil {
 		a.dbg.mark(PhaseLayout)
 	}
+	a.applyMenuZoom() // zoom.go
 	a.tr.endFrame()
 }
 
