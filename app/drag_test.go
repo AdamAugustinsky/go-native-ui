@@ -3,8 +3,6 @@ package app
 import (
 	"bytes"
 	"errors"
-	"image"
-	"image/png"
 	"testing"
 
 	"gonativeui/gpu"
@@ -199,51 +197,108 @@ func TestFlushDragRegistersKindsAndStartsDrags(t *testing.T) {
 	}
 }
 
-// The snapshot of a box is the frame's pixels in its rectangle.
-func TestSnapshotOfABox(t *testing.T) {
-	b := &tiny{}
-	o, err := NewOffscreen(Config{Clear: [4]float32{0, 0, 0, 1}}, 300, 200, 1, b)
-	if err != nil {
-		skipOrFail(t, "offscreen rendering", err)
-	}
-	defer o.Close()
-	for i := 0; i < 4; i++ {
-		o.Frame()
-	}
-	// tiny: a 100×50 red box at (20, 20) on a blue background.
-	data := o.snapshot([4]float32{20, 20, 120, 70})
-	img, err := png.Decode(bytes.NewReader(data))
-	if err != nil {
-		t.Fatalf("not a PNG (%d bytes): %v", len(data), err)
-	}
-	if img.Bounds() != image.Rect(0, 0, 100, 50) {
-		t.Fatalf("size %v", img.Bounds())
-	}
-	if got := rgbaOf(img, 50, 25); !near(got, red, 1) {
-		t.Errorf("box pixel %#08x, want %#08x", got, uint32(red))
-	}
-	// A corner of the box and the blue around it.
-	part, err := png.Decode(bytes.NewReader(o.snapshot([4]float32{10, 10, 40, 40})))
-	if err != nil || part.Bounds() != image.Rect(0, 0, 30, 30) {
-		t.Fatalf("partial: %v %v", part, err)
-	}
-	if got := rgbaOf(part, 2, 2); !near(got, blue, 1) {
-		t.Errorf("outside the box %#08x, want blue", got)
-	}
-	if got := rgbaOf(part, 20, 20); !near(got, red, 1) {
-		t.Errorf("inside the box %#08x, want red", got)
-	}
-	if o.snapshot([4]float32{500, 500, 600, 600}) != nil || o.snapshot([4]float32{10, 10, 10, 40}) != nil {
-		t.Error("a snapshot of nothing")
-	}
-	if (&App{}).snapshot([4]float32{0, 0, 10, 10}) != nil {
-		t.Error("a snapshot without a renderer")
+// Without a picture from the app the window gets none: the system draws the
+// icon of the first item. (A snapshot of the box would drain the frame's GPU
+// work synchronously.)
+func TestDragWithoutAPreviewAsksForNone(t *testing.T) {
+	d := newDragApp()
+	win := &fakeDrag{}
+	d.dragT = win
+	d.frame()
+	d.tr.in.Inside = true
+	d.tr.in.MouseX, d.tr.in.MouseY = 40, 30
+	d.tr.in.SetButton(ui.ButtonLeft, true, 1)
+	d.start = &ui.DragSpec{Text: "t"}
+	d.frame()
+	d.flushDrag()
+	if len(win.specs) != 1 || win.specs[0].Preview != nil {
+		t.Errorf("specs %+v", win.specs)
 	}
 }
 
-func rgbaOf(img image.Image, x, y int) uint32 {
-	r, g, b, a := img.At(x, y).RGBA()
-	return uint32(r>>8)<<24 | uint32(g>>8)<<16 | uint32(b>>8)<<8 | uint32(a>>8)
+// Drops that arrive together are all delivered, one a frame and in order, each
+// to the target that accepted it; what does not fit the queue is lost, not
+// written over the others.
+func TestDropsThatArriveTogetherAreAllDelivered(t *testing.T) {
+	d := newDragApp()
+	d.frame()
+	d.frame()
+	_, _, key := d.UI.DropAt(50, 40, ui.DropText, ui.DropAllOps)
+	if key == 0 {
+		t.Fatal("no target")
+	}
+	ev := func(txt string) {
+		d.onDrag(&platform.Event{Kind: platform.EvDrop, X: 50, Y: 40, Code: uint32(platform.DragText), SelStart: 1, Tag: uint64(key)}, []byte(txt))
+	}
+	ev("one")
+	ev("two")
+	ev("three")
+	var got []string
+	for i := 0; i < 5; i++ {
+		d.frame()
+		if d.got {
+			got = append(got, string(d.drop.Data))
+		}
+		if i < 2 && !d.tr.pending() {
+			t.Fatalf("frame %d: no frame owed for the drops behind", i)
+		}
+	}
+	if len(got) != 3 || got[0] != "one" || got[1] != "two" || got[2] != "three" {
+		t.Errorf("delivered %q", got)
+	}
+
+	// The queue is bounded: the rest is lost, and what was queued stays intact.
+	// (The first goes into the input, maxQueuedDrops wait behind it.)
+	for i := 0; i < maxQueuedDrops+5; i++ {
+		ev(string(rune('a' + i)))
+	}
+	if d.tr.drops.lost != 4 {
+		t.Errorf("%d lost, want 4", d.tr.drops.lost)
+	}
+	got = got[:0]
+	for i := 0; i < maxQueuedDrops+3; i++ {
+		d.frame()
+		if d.got {
+			got = append(got, string(d.drop.Data))
+		}
+	}
+	if len(got) != maxQueuedDrops+1 || got[0] != "a" || got[maxQueuedDrops] != string(rune('a'+maxQueuedDrops)) {
+		t.Errorf("delivered %q", got)
+	}
+
+	// A queued drop is bounded in bytes too: it fails rather than grow the queue past a paste.
+	big := bytes.Repeat([]byte("x"), ui.MaxKeptPaste)
+	ev("first")
+	ev(string(big))
+	ev("tail")
+	d.frame()
+	d.frame()
+	if !d.got || d.drop.Failed || len(d.drop.Data) != ui.MaxKeptPaste {
+		t.Fatalf("second: got %v failed %v, %d bytes", d.got, d.drop.Failed, len(d.drop.Data))
+	}
+	d.frame()
+	if !d.got || !d.drop.Failed || len(d.drop.Data) != 0 {
+		t.Errorf("a drop that would take the queue past MaxKeptPaste: got %v %+v", d.got, d.drop)
+	}
+}
+
+// The target that accepted the drop goes with it into the input.
+func TestDropCarriesItsTarget(t *testing.T) {
+	d := newDragApp()
+	d.frame()
+	d.frame()
+	ans := d.dragAnswer(50, 40, platform.DragText, platform.DragOpAll)
+	if ans.Target == 0 || ans.Op == platform.DragOpNone {
+		t.Fatalf("answer %+v", ans)
+	}
+	d.onDrag(&platform.Event{Kind: platform.EvDrop, X: 300, Y: 250, Code: uint32(platform.DragText), SelStart: 1, Tag: ans.Target}, []byte("late"))
+	if d.tr.in.Drop.Target != ui.Key(ans.Target) {
+		t.Errorf("target %v, want %v", d.tr.in.Drop.Target, ans.Target)
+	}
+	d.frame() // the pointer is nowhere near the box, the drop is the box's anyway
+	if !d.got || string(d.drop.Data) != "late" {
+		t.Errorf("got %v %+v", d.got, d.drop)
+	}
 }
 
 // A frame with drop targets and no drag costs the window one comparison.

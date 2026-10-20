@@ -46,6 +46,9 @@ type translator struct {
 	// commitNow: apply is applying a commit's text.
 	commitNow bool
 
+	// drops waits for the frames of the drops behind the one in the input (drag.go).
+	drops dropQueue
+
 	// refed: endFrame fed deferred events into the input, which wait for the
 	// frame that follows (cleared by take).
 	refed bool
@@ -207,6 +210,7 @@ func (t *translator) conflicts(e *platform.Event) bool {
 // input of the next frame (which may defer some of them once more).
 func (t *translator) endFrame() {
 	t.in.ClearFrame()
+	t.nextDrop()
 	if len(t.carry) == 0 {
 		return
 	}

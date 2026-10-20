@@ -1,12 +1,6 @@
 package app
 
 import (
-	"bytes"
-	"image"
-	"image/png"
-	"math"
-
-	"gonativeui/gpu"
 	"gonativeui/platform"
 	"gonativeui/ui"
 )
@@ -24,21 +18,21 @@ import (
 //
 // Out. A box asks for a drag with ui.Context.StartDrag during Build; after the
 // frame (flushDrag, a safe point) the request is turned into a platform.DragSpec
-// and started. The picture is the spec's, or a snapshot of the box: the quads
-// of the finished frame that touch the box's rectangle, drawn again offscreen
-// and encoded as PNG. The system takes the mouse then, so the press is
-// cancelled at once (no release will come), and EvDragEnd tells ui when and
-// how the drag ended.
+// and started. The picture is the spec's, or else the system's icon for the
+// first item: a snapshot of the box would drain the GPU work of the frame
+// synchronously (an asynchronous one is a follow-up). The system takes the
+// mouse then, so the press is cancelled at once (no release will come), and
+// EvDragEnd tells ui when and how the drag ended.
+//
+// A drop reaches the next frame's input; the drops that arrive while a frame
+// still holds one wait in a bounded queue (maxQueuedDrops) and each gets a frame
+// of its own, in order.
 
 // dragTarget is the part of platform.Window that drags use.
 type dragTarget interface {
 	SetDropKinds(platform.DragKinds)
 	StartDrag(*platform.DragSpec) (platform.DragTicket, error)
 }
-
-// maxSnapshotPixels bounds a drag picture: a box larger than this is dragged
-// without one (the system draws none, or a file's icon).
-const maxSnapshotPixels = 2048 * 2048
 
 func (a *App) dragWin() dragTarget {
 	if a.dragT != nil {
@@ -62,8 +56,8 @@ func (a *App) initDrag() {
 // dragAnswer is the platform's drag handler: the operation and the kinds taken
 // at a position, from the last finished frame.
 func (a *App) dragAnswer(x, y float32, offered platform.DragKinds, allowed platform.DragOp) platform.DragAnswer {
-	op, accept := a.UI.DropAt(x, y, ui.DropKinds(offered), ui.DropOp(allowed))
-	return platform.DragAnswer{Op: platform.DragOp(op), Accept: platform.DragKinds(accept)}
+	op, accept, target := a.UI.DropAt(x, y, ui.DropKinds(offered), ui.DropOp(allowed))
+	return platform.DragAnswer{Op: platform.DragOp(op), Accept: platform.DragKinds(accept), Target: uint64(target)}
 }
 
 // onDrag handles the drag events: they go into the next frame's input. txt is
@@ -76,7 +70,7 @@ func (a *App) onDrag(e *platform.Event, txt []byte) {
 	case platform.EvDragLeave:
 		d.ClearDragOver()
 	case platform.EvDrop:
-		d.SetDrop(ui.DropKinds(e.Code), txt, e.X, e.Y, int(e.SelStart), e.Flags&platform.FlagFailed == 0)
+		a.tr.dropIn(ui.DropKinds(e.Code), txt, e.X, e.Y, int(e.SelStart), e.Flags&platform.FlagFailed == 0, ui.Key(e.Tag))
 	case platform.EvDragEnd:
 		d.EndDrag(ui.DropOp(e.Code))
 	}
@@ -116,12 +110,8 @@ func (a *App) startDrag(win dragTarget, req ui.DragStart) bool {
 	for i := range s.Promises {
 		spec.Items = append(spec.Items, platform.DragItem{Promise: &s.Promises[i]})
 	}
-	pic := s.Preview
-	if len(pic) == 0 {
-		pic = a.snapshot(req.Box)
-	}
-	if len(pic) > 0 {
-		spec.Preview = &platform.DragPreview{PNG: pic, Rect: req.Box}
+	if len(s.Preview) > 0 {
+		spec.Preview = &platform.DragPreview{PNG: s.Preview, Rect: req.Box}
 	}
 	if _, err := win.StartDrag(&spec); err != nil {
 		return false
@@ -134,42 +124,62 @@ func (a *App) startDrag(win dragTarget, req ui.DragStart) bool {
 	return true
 }
 
-// snapshot is a PNG of the window's pixels in rect (x0, y0, x1, y1): the quads
-// of the last drawn frame that touch it, moved to the origin and drawn into an
-// offscreen target. Nil when there is no renderer, the rectangle is empty or
-// too large, or the encoding fails. The renderer is the window's: it is used
-// between frames, on the main thread.
-func (a *App) snapshot(rect [4]float32) []byte {
-	if a.R == nil {
-		return nil
+// maxQueuedDrops bounds the drops waiting for a frame; one more is lost.
+const maxQueuedDrops = 8
+
+// queuedDrop is a drop that waits for its frame; its data is at buf[off:off+n].
+type queuedDrop struct {
+	kind   ui.DropKinds
+	x, y   float32
+	items  int
+	ok     bool
+	target ui.Key
+	off, n int
+}
+
+// dropQueue holds the drops that arrived while the input of the next frame
+// had one already (Input.Drop holds one drop a frame).
+type dropQueue struct {
+	q    []queuedDrop
+	buf  []byte // their data, kept until the queue is empty
+	lost int    // drops that did not fit
+}
+
+// dropIn takes a drop for the next frame's input, or queues it behind the one
+// that is there. The data is bounded in all by ui.MaxKeptPaste: a drop that
+// would pass it is queued failed.
+func (t *translator) dropIn(kind ui.DropKinds, data []byte, x, y float32, items int, ok bool, target ui.Key) {
+	d := &t.in.Drop
+	q := &t.drops
+	if !d.Has && len(q.q) == 0 {
+		d.SetDrop(kind, data, x, y, items, ok)
+		d.Target = target
+		return
 	}
-	x0, y0 := int(math.Floor(float64(max(rect[0], 0)))), int(math.Floor(float64(max(rect[1], 0))))
-	x1, y1 := int(math.Ceil(float64(min(rect[2], float32(a.w))))), int(math.Ceil(float64(min(rect[3], float32(a.h)))))
-	w, h := x1-x0, y1-y0
-	if w <= 0 || h <= 0 || w*h > maxSnapshotPixels {
-		return nil
+	if len(q.q) >= maxQueuedDrops {
+		q.lost++
+		return
 	}
-	dx, dy := float32(x0), float32(y0)
-	var sub gpu.DrawList
-	for i := range a.list.Quads {
-		q := a.list.Quads[i]
-		if q.Rect[2] <= rect[0] || q.Rect[0] >= rect[2] || q.Rect[3] <= rect[1] || q.Rect[1] >= rect[3] {
-			continue
-		}
-		q.Rect = [4]float32{q.Rect[0] - dx, q.Rect[1] - dy, q.Rect[2] - dx, q.Rect[3] - dy}
-		if q.Clip != ([4]float32{}) {
-			q.Clip = [4]float32{q.Clip[0] - dx, q.Clip[1] - dy, q.Clip[2] - dx, q.Clip[3] - dy}
-		}
-		sub.Add(q)
+	if !ok || len(q.buf)+len(data) > ui.MaxKeptPaste {
+		data, ok = nil, false
 	}
-	if len(sub.Quads) == 0 {
-		return nil
+	q.q = append(q.q, queuedDrop{kind: kind, x: x, y: y, items: items, ok: ok, target: target, off: len(q.buf), n: len(data)})
+	q.buf = append(q.buf, data...)
+}
+
+// nextDrop puts the oldest queued drop into the input, after a frame took the
+// one before it, and owes a frame for it.
+func (t *translator) nextDrop() {
+	q := &t.drops
+	if len(q.q) == 0 {
+		return
 	}
-	img := image.NewRGBA(image.Rect(0, 0, w, h))
-	a.R.RenderToRGBA(w, h, [4]float32{}, &sub, img.Pix)
-	var b bytes.Buffer
-	if png.Encode(&b, img) != nil {
-		return nil
+	r := q.q[0]
+	t.in.Drop.SetDrop(r.kind, q.buf[r.off:r.off+r.n], r.x, r.y, r.items, r.ok)
+	t.in.Drop.Target = r.target
+	q.q = q.q[:copy(q.q, q.q[1:])]
+	if len(q.q) == 0 {
+		q.buf = q.buf[:0]
 	}
-	return b.Bytes()
+	t.dirty, t.refed = true, true
 }
