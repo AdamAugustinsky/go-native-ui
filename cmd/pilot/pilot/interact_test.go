@@ -1,6 +1,7 @@
 package pilot
 
 import (
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -538,5 +539,150 @@ func TestTabReachesTheToolbarWithKeyboardNavigation(t *testing.T) {
 		if !seen[want] {
 			t.Errorf("Tab never reached %q; reached %v", want, seen)
 		}
+	}
+}
+
+// shown reports what the screen has now, from the semantic tree: whether a
+// node with this role and name is there, and its value.
+func (r *drive) shown(role ui.Role, name string) (value string, ok bool) {
+	var tr ui.SemTree
+	r.o.UI.Semantics(&tr)
+	for _, n := range tr.Nodes {
+		if n.Role == role && string(tr.Text(n.Name)) == name {
+			return string(tr.Text(n.Value)), true
+		}
+	}
+	return "", false
+}
+
+// statusLines are the labels of the status lines as shown.
+func (r *drive) statusLines() (out []string) {
+	var tr ui.SemTree
+	r.o.UI.Semantics(&tr)
+	for _, n := range tr.Nodes {
+		if n.Role == ui.RoleLabel && n.Bounds[1] > 700 {
+			out = append(out, string(tr.Text(n.Name)))
+		}
+	}
+	return out
+}
+
+func (r *drive) statusHas(s string) bool {
+	for _, l := range r.statusLines() {
+		if l == s {
+			return true
+		}
+	}
+	return false
+}
+
+// Enter on a path that cannot be listed keeps the field open with the text
+// that was typed and says why, until the text is changed or cancelled (Finder's
+// Go to Folder); a path that can be listed closes the field on the folder.
+func TestFailedPathSubmissionStaysOpenAndSaysWhy(t *testing.T) {
+	r := newDrive(t)
+	pl := r.d.Pilot
+	a := pl.panes[0]
+	r.key('L', pl.primary())
+	r.text("~/Nope")
+	r.key(ui.KeyEnter, 0)
+	bad := new(fs.Listing)
+	bad.Err = os.ErrNotExist
+	deliver(a, bad)
+	r.frames(3)
+	v, open := r.shown(ui.RoleTextField, "path")
+	if !open {
+		t.Fatal("the path field went away on a failed path")
+	}
+	if v != "~/Nope" {
+		t.Errorf("the field shows %q, want what was typed", v)
+	}
+	if !r.statusHas("No such file or directory") {
+		t.Errorf("the reason is not shown: status %q", r.statusLines())
+	}
+	if r.o.UI.FocusKey() != pathKey(0) {
+		t.Error("the field lost the keyboard")
+	}
+	// the relist that follows the failure does not take the reason away
+	deliver(a, listing(fs.SortName, false, dirItems...))
+	r.frames(3)
+	if !r.statusHas("No such file or directory") {
+		t.Errorf("the reason went with the relist: status %q", r.statusLines())
+	}
+	// correcting the text takes it away; the corrected path opens and closes the field
+	r.text("x")
+	r.frames(2)
+	if r.statusHas("No such file or directory") {
+		t.Error("the reason stays after the text changed")
+	}
+	r.key('A', pl.primary())
+	r.text("/ok")
+	r.key(ui.KeyEnter, 0)
+	if _, open := r.shown(ui.RoleTextField, "path"); !open {
+		t.Error("the field closed before the folder was shown")
+	}
+	deliver(a, listing(fs.SortName, false, dirItems...))
+	r.frames(3)
+	if _, open := r.shown(ui.RoleTextField, "path"); open {
+		t.Error("the field stays open on the folder it went to")
+	}
+	if r.o.UI.FocusKey() != listKey(0) {
+		t.Errorf("focus %v after the folder was shown, want its list", r.o.UI.FocusKey())
+	}
+}
+
+// Esc on a failed path closes the field and takes the reason away.
+func TestEscapeEndsAFailedPath(t *testing.T) {
+	r := newDrive(t)
+	pl := r.d.Pilot
+	a := pl.panes[0]
+	r.key('L', pl.primary())
+	r.text("~/Nope")
+	r.key(ui.KeyEnter, 0)
+	bad := new(fs.Listing)
+	bad.Err = os.ErrNotExist
+	deliver(a, bad)
+	r.frames(2)
+	r.key(ui.KeyEscape, 0)
+	r.frames(2)
+	if _, open := r.shown(ui.RoleTextField, "path"); open || r.statusHas("No such file or directory") {
+		t.Errorf("Esc: field open %v, status %q", open, r.statusLines())
+	}
+}
+
+// The path bar's empty part is a named button that the keyboard and assistive
+// technology operate, as the pointer does.
+func TestPathBandOpensTheEditorForEveryInput(t *testing.T) {
+	for _, how := range []string{"accessibility", "keyboard"} {
+		t.Run(how, func(t *testing.T) {
+			r := newDrive(t)
+			pl := r.d.Pilot
+			var tr ui.SemTree
+			r.o.UI.Semantics(&tr)
+			var key ui.Key
+			n := 0
+			for _, nd := range tr.Nodes {
+				if nd.Role == ui.RoleButton && string(tr.Text(nd.Name)) == "Edit Path" {
+					if n == 0 {
+						key = nd.Key
+					}
+					n++
+				}
+			}
+			if n != 2 {
+				t.Fatalf("%d \"Edit Path\" buttons in the tree, want one per pane", n)
+			}
+			if how == "accessibility" {
+				r.feed(func(in *ui.Input) { in.PushAction(ui.SemRequest{Key: key, Action: ui.ActPress}) })
+			} else {
+				r.o.UI.SetFocus(key)
+				r.frames(1)
+				r.key(ui.KeyEnter, 0)
+			}
+			r.frames(2)
+			if !pl.panes[0].pathEdit || r.o.UI.FocusKey() != pathKey(0) {
+				t.Errorf("path edit %v, focus %v", pl.panes[0].pathEdit, r.o.UI.FocusKey())
+			}
+		})
 	}
 }

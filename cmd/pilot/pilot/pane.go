@@ -43,7 +43,8 @@ type pane struct {
 	q          []byte        // the query the rows were built for
 	fver       uint32        // counts changes of q and hideHidden
 
-	pathErr string // shown in the path field: why Enter did not navigate
+	pathErr string // shown under the path field (in the status line): why Enter did not navigate
+	pathOK  bool   // a folder was shown while the path field was open: the field goes away
 	msg     string // status line: an error or a note
 	msgErr  bool
 
@@ -197,6 +198,17 @@ func (p *pane) relist() {
 	p.relPending = true
 }
 
+// dropPathEdit ends the path field without going anywhere: the text goes back
+// to the folder shown, and the reason it was refused with it.
+func (p *pane) dropPathEdit() {
+	p.path.SetString(p.dir)
+	if p.msg == p.pathErr {
+		p.msg = ""
+	}
+	p.pathErr = ""
+	p.pathEdit = false
+}
+
 func (p *pane) setMsg(s string, isErr bool) { p.msg, p.msgErr = s, isErr }
 
 // onResult takes what the Source reports for the pane.
@@ -321,6 +333,7 @@ func (p *pane) install(dir string, l *fs.Listing, lease uint32, sel string) {
 	p.v.ts.Sel.Reserve(withSlack(len(l.Entries)))
 	p.path.SetString(dir)
 	p.pathErr, p.msg = "", ""
+	p.pathOK = p.pathEdit // the path field, if open, has done its work
 	p.filter.Reset()
 	p.filterOpen = false
 	p.q = p.q[:0]

@@ -234,6 +234,15 @@ func (pl *Pilot) drawPathBar(c *ui.Context, r *theme.Resolved, i int, p *pane, w
 	s := r.Scale
 	h := theme.Snap(pathBarPt * s)
 	pl.band(c, r, pathBandKey(i), w, h, true)
+	if p.pathOK { // the folder typed is shown
+		p.pathOK = false
+		if p.pathEdit {
+			p.pathEdit = false
+			if c.FocusKey() == pathKey(i) {
+				c.SetFocus(listKey(i))
+			}
+		}
+	}
 	if p.pathEdit {
 		theme.At(c, theme.Snap(8*s), theme.Snap(2*s), max(w-theme.Snap(16*s), 0), h-theme.Snap(4*s))
 		c.Push(c.BoxKeyed(base.Floating, pathBoxKey(i), nil))
@@ -243,8 +252,11 @@ func (pl *Pilot) drawPathBar(c *ui.Context, r *theme.Resolved, i int, p *pane, w
 	} else {
 		// a press on the band beside the components types a path, as in a
 		// file manager's address bar
+		// (a button for the keyboard and assistive technology as well: ⌘L does the same)
 		theme.At(c, 0, 0, w, h)
-		if c.Signal(c.BoxKeyed(ui.Clickable|base.Floating, ui.KeyN(paneKey(i), 23), nil)).Pressed {
+		c.NextRole(ui.RoleButton)
+		c.NextSemName("Edit Path")
+		if sig := c.Signal(c.BoxKeyed(ui.Clickable|ui.Focusable|base.Floating, ui.KeyN(paneKey(i), 23), nil)); sig.Pressed || sig.Activated {
 			p.pathEdit = true
 			p.path.SelectAll()
 			c.SetFocus(pathKey(i))

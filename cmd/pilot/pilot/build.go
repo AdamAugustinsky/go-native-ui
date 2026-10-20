@@ -253,15 +253,17 @@ func (pl *Pilot) drawPane(c *ui.Context, r *theme.Resolved, i int, w, h float32)
 func (pl *Pilot) pathSignals(c *ui.Context, i int, p *pane, f widget.FieldSignal) {
 	switch {
 	case f.Cancelled:
-		p.path.SetString(p.dir)
-		p.pathErr = ""
-		p.pathEdit = false
+		p.dropPathEdit()
 		pl.focusList(c)
 	case f.Submitted:
+		// Go to Folder: the field stays open, with what was typed, until the folder is
+		// shown (drawPathBar closes it) or the listing fails (the reason shows in the
+		// status line until the text is changed or cancelled)
 		p.goTo(p.path.String())
-		p.pathEdit = false
+		if !p.nav.pending {
+			p.pathErr = p.msg // nothing to list with
+		}
 		pl.active = i
-		pl.focusList(c)
 	case f.Changed:
 		p.pathErr = ""
 	}
@@ -269,9 +271,7 @@ func (pl *Pilot) pathSignals(c *ui.Context, i int, p *pane, f widget.FieldSignal
 		p.path.SelectAll()
 	}
 	if pl.prevFocus == pathKey(i) && c.FocusKey() != pathKey(i) && p.pathEdit { // left the field (Tab): the edit is dropped, as Esc does
-		p.path.SetString(p.dir)
-		p.pathErr = ""
-		p.pathEdit = false
+		p.dropPathEdit()
 	}
 }
 
@@ -509,6 +509,9 @@ func (pl *Pilot) drawStatus(c *ui.Context, r *theme.Resolved, i int, p *pane, w 
 	var tx []byte
 	col := r.Colors[theme.Label2]
 	switch {
+	case p.pathEdit && p.pathErr != "": // why the path typed did not go anywhere
+		tx = strBytes(p.pathErr)
+		col = r.Pal.Danger
 	case p.msg != "":
 		tx = strBytes(p.msg)
 		if p.msgErr {
@@ -546,6 +549,8 @@ func (pl *Pilot) drawStatus(c *ui.Context, r *theme.Resolved, i int, p *pane, w 
 	c.NextTextColor(col)
 	c.NextAlign(ui.AlignCenter)
 	c.NextCross(ui.CrossCenter)
+	c.NextRole(ui.RoleLabel) // the status line is read out as well: the count, or why something failed
+	c.NextSemNameBytes(tx)
 	c.BoxKeyed(ui.DrawText|ui.EllipsisOverflowX|fl, ui.KeyN(statusKey(i), 2), tx)
 	c.Pop()
 }
