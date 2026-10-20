@@ -496,6 +496,14 @@ func newMenuItem(title string, sel objc.SEL, key rune, mods Mods) objc.ID {
 	t := newNSString(title)
 	kn := 0
 	if key != 0 {
+		// A letter with Shift is the uppercase one, as AppKit's own Redo is
+		// ("Z"): NSMenu matches an item "z" with Shift only against an event
+		// whose charactersIgnoringModifiers is "z", and an uppercase item
+		// against both "Z" and "z" (what a key with Shift types depends on the
+		// layout and on how the event was made).
+		if mods&ModShift != 0 && key >= 'a' && key <= 'z' {
+			key -= 'a' - 'A'
+		}
 		kn = utf8.EncodeRune(keyBuf[:], key)
 	}
 	k := newNSStringBytes(keyBuf[:kn])
