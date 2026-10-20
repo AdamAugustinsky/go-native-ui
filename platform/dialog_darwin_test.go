@@ -20,8 +20,32 @@ var fakePanelClass, fakeURLs objc.ID
 
 // The native alert and panel sheets, driven programmatically: a sheet is ended
 // by pressing one of its buttons (performClick:) or with endSheet:returnCode:,
-// and the answers are read from the window's own event queue, as the app
-// would. Every scenario runs on the main thread inside one onMain call.
+// and the answers are read as the application object delivers them, through
+// a sink that keeps the dialog results (dlgSink), as the app would. Every
+// scenario runs on the main thread inside one onMain call.
+
+// dlgSink receives the application object's events and keeps the dialog
+// results.
+type dlgSink struct{ got []DialogResult }
+
+func (s *dlgSink) AppEvent(e *AppEvent, data []byte) {
+	if e.Kind == AppEvService && e.Source == SourceDialog {
+		s.got = append(s.got, DialogResultOf(e, data))
+	}
+}
+
+func (s *dlgSink) AppSafePoint() {}
+
+var theDlgSink = &dlgSink{}
+
+// dialogResults delivers what the application object has ready and returns
+// the dialog results delivered since the last call.
+func dialogResults() []DialogResult {
+	DispatchApp()
+	got := theDlgSink.got
+	theDlgSink.got = nil
+	return got
+}
 
 // dlgRig is a real, visible window and the dialog events it has delivered.
 type dlgRig struct {
@@ -61,23 +85,22 @@ func (r *dlgRig) pump(d time.Duration, done func() bool) bool {
 		for _, e := range r.w.Wait(5e6) {
 			r.record(e)
 		}
+		r.results = append(r.results, dialogResults()...)
 	}
 }
 
 func (r *dlgRig) record(e Event) {
-	switch e.Kind {
-	case EvDialog:
-		r.results = append(r.results, r.w.DialogResult(e))
-	case EvKey:
+	if e.Kind == EvKey {
 		r.keys++
 	}
 }
 
-// drain records what the queue holds without waiting.
+// drain records what the queue holds and the results ready, without waiting.
 func (r *dlgRig) drain() {
 	for _, e := range r.w.Wait(0) {
 		r.record(e)
 	}
+	r.results = append(r.results, dialogResults()...)
 }
 
 // attached waits until a sheet is on the window.
@@ -96,6 +119,10 @@ func withRig(f func(*dlgRig)) (errs []string, skip string, leaked bool) {
 func withRigOpts(hidden bool, f func(*dlgRig)) (errs []string, skip string, leaked bool) {
 	base := objc.Leaks()
 	onMain(func() {
+		prev := dispatch.sink
+		SetAppSink(theDlgSink)
+		defer SetAppSink(prev)
+		dialogResults() // a result an earlier test left undelivered is not this one's
 		r, err := openDlgRigOpts(hidden)
 		if err != nil {
 			skip = "cannot open a window here: " + err.Error()
@@ -344,8 +371,12 @@ func finishFake(r *dlgRig, urls objc.ID) []DialogResult {
 				return nil
 			}
 			req.Sent()
-			lastTicket++
-			dialogs[i] = dialogRec{ticket: lastTicket, kind: DialogOpen, w: r.w, obj: fake, req: req}
+			tk, err := dialogTickets.Reserve(0)
+			if err != nil {
+				r.failf("ticket: %v", err)
+				return nil
+			}
+			dialogs[i] = dialogRec{ticket: DialogTicket(tk), kind: DialogOpen, w: r.w, obj: fake, req: req}
 			finishDialog(i, 1)
 			req.Cancel() // the real completion would have freed the slot
 			break
@@ -444,28 +475,18 @@ func TestWindowClosedUnderSheet(t *testing.T) {
 					return
 				}
 				w := r.w
-				w.q.reset()
 				w.Close()
 				if !w.aux.closed {
 					r.failf("the window is not marked closed")
 				}
-				// What reached the queue now, and whatever AppKit still calls
-				// later, must be exactly one cancelled result.
-				var got []DialogResult
-				collect := func() {
-					for _, e := range w.q.ev {
-						if e.Kind == EvDialog {
-							got = append(got, w.DialogResult(e))
-						}
-					}
+				// What Close answered, and whatever AppKit still calls later,
+				// must be exactly one cancelled result.
+				got := dialogResults()
+				if len(got) != 1 { // AppKit runs the completion inside endSheet, so Close itself answers it
+					t.Logf("results answered inside Close: %d", len(got))
 				}
-				collect()
-				if len(got) != 1 { // AppKit runs the completion inside endSheet, so Close itself delivers it
-					t.Logf("results delivered inside Close: %d", len(got))
-				}
-				w.q.ev = w.q.ev[:0]
 				spin(0.4)
-				collect()
+				got = append(got, dialogResults()...)
 				if len(got) != 1 {
 					r.failf("%d results after closing the window, want exactly 1: %+v", len(got), got)
 					return
@@ -493,10 +514,13 @@ func TestAbortUnattachedDialog(t *testing.T) {
 			return
 		}
 		req.Sent()
-		lastTicket++
-		tk := lastTicket
+		ticket, err := dialogTickets.Reserve(0)
+		if err != nil {
+			r.failf("ticket: %v", err)
+			return
+		}
+		tk := DialogTicket(ticket)
 		dialogs[0] = dialogRec{ticket: tk, kind: DialogSave, w: r.w, obj: fakePanel(0), req: req}
-		r.w.q.reset()
 		r.w.abortDialogs()
 		if req.Live() {
 			r.failf("the request is still live")
@@ -504,12 +528,7 @@ func TestAbortUnattachedDialog(t *testing.T) {
 		if dialogs[0].ticket != 0 {
 			r.failf("the record is still taken")
 		}
-		var got []DialogResult
-		for _, e := range r.w.q.ev {
-			if e.Kind == EvDialog {
-				got = append(got, r.w.DialogResult(e))
-			}
-		}
+		got := dialogResults()
 		if len(got) != 1 || got[0].Ticket != tk || got[0].Outcome != DialogCancelled || got[0].Kind != DialogSave {
 			r.failf("results %+v, want one cancelled save result", got)
 		}
@@ -526,16 +545,10 @@ func TestWindowClosedBeforeSheetAttached(t *testing.T) {
 			return
 		}
 		w := r.w
-		w.q.reset()
 		w.Close()
 		var got []DialogResult
 		for i := 0; i < 2; i++ {
-			for _, e := range w.q.ev {
-				if e.Kind == EvDialog {
-					got = append(got, w.DialogResult(e))
-				}
-			}
-			w.q.ev = w.q.ev[:0]
+			got = append(got, dialogResults()...)
 			spin(0.3)
 		}
 		if len(got) != 1 || got[0].Ticket != tk || got[0].Outcome != DialogCancelled {
@@ -678,19 +691,18 @@ func spin(sec float64) {
 }
 
 func TestDialogResultDecoding(t *testing.T) {
-	w := &Window{q: newEventQueue()}
-	off := len(w.q.text)
-	w.q.text = append(w.q.text, "/a/b\x00/c d\x00"...)
-	e := dialogEvent(7, DialogOpen, DialogAnswered, 2, false, off, len(w.q.text)-off, 1)
-	got := w.DialogResult(e)
+	ev := func(tk uint64, kind DialogKind, out DialogOutcome, b int64, supp bool) *AppEvent {
+		return &AppEvent{Kind: AppEvService, Source: SourceDialog, ID: tk, A: dialogA(kind, out, supp), B: b}
+	}
+	got := DialogResultOf(ev(7, DialogOpen, DialogAnswered, 2, false), []byte("/a/b\x00/c d\x00"))
 	if got.Ticket != 7 || got.Kind != DialogOpen || got.Outcome != DialogAnswered || strings.Join(got.Paths, "|") != "/a/b|/c d" || got.Button != -1 {
 		t.Errorf("open result %+v", got)
 	}
-	got = w.DialogResult(dialogEvent(9, DialogAlert, DialogAnswered, 2, true, 0, 0, 1))
+	got = DialogResultOf(ev(9, DialogAlert, DialogAnswered, 2, true), nil)
 	if got.Button != 2 || !got.Suppressed || got.Kind != DialogAlert || got.Paths != nil {
 		t.Errorf("alert result %+v", got)
 	}
-	got = w.DialogResult(dialogEvent(9, DialogAlert, DialogCancelled, 0, false, 0, 0, 1))
+	got = DialogResultOf(ev(9, DialogAlert, DialogCancelled, 0, false), nil)
 	if got.Button != -1 || got.Outcome != DialogCancelled {
 		t.Errorf("cancelled alert result %+v", got)
 	}

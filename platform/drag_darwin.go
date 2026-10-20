@@ -136,7 +136,6 @@ var (
 	selSetData          = objc.Sel("setData:forType:")
 	selSetSize          = objc.Sel("setSize:")
 	selIconForFile      = objc.Sel("iconForFile:")
-	selSharedWorkspace  = objc.Sel("sharedWorkspace")
 	selInitFilePromise  = objc.Sel("initWithFileType:delegate:")
 	selSetUserInfo      = objc.Sel("setUserInfo:")
 	selUserInfo         = objc.Sel("userInfo")

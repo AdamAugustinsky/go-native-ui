@@ -30,12 +30,14 @@
 //	(*Window).PopUpMenu(*Popup) int       a native context, pull-down or list menu; returns the chosen item (macOS; -1 elsewhere)
 //	HasNativeMenus() bool                 whether the OS has native menus (macOS)
 //	(*Window).Alert(AlertSpec), OpenPanel(OpenSpec), SavePanel(SaveSpec)
-//	                                      native alert and file panel sheets (macOS; ErrUnsupported elsewhere); the answer is an EvDialog, see dialog.go
+//	                                      native alert and file panel sheets (macOS; ErrUnsupported elsewhere); the answer is an AppEvService from SourceDialog, see dialog.go
 //	(*Window).SetTooltipRegions(r)        native tooltips by content rectangle (macOS; no-op elsewhere); diffed, cheap to call every frame
 //	(*Window).SetTooltipText(f)           where the tooltip text comes from, asked for on demand when the system shows one
 //	(*Window).SetDropKinds(k), SetDragHandler(h), StartDrag(spec)
 //	                                      drag and drop in and out (macOS; ErrDragUnsupported elsewhere), see drag.go
 //	DragThreshold() float32               how far a press moves before it is a drag, in logical units
+//	(*Window).SetAXSource(AXSource) error the app's semantic tree for assistive technologies (a11y.go; macOS; ErrAXUnsupported elsewhere)
+//	(*Window).SyncAX()                    after each frame's build: the bridge, once active, diffs the tree and notifies
 //	(*Window).Close()
 //	SetSecureInput(on bool)               macOS: bracket EnableSecureEventInput for a password field (balanced, released while the app is inactive); no-op elsewhere
 //	Clipboard() string                    plain UTF-8 text of the system clipboard; main thread
@@ -128,7 +130,6 @@ const (
 	EvCommand                 // a native button or menu item was chosen: Tag is its command id (NativeButton.ID, HostOptions.Command, MenuItem.ID); with FlagStandard, a MenuAction
 	EvHostFocus               // the keyboard focus moved to a host (Tag: its HostID) or back to the app's own view (Tag 0)
 	EvHostCommand             // a focused host handed back Tab, Shift+Tab, Escape or Enter: Tag is the HostID, Key and Mods the key
-	EvDialog                  // an alert or file panel ended: Tag is its DialogTicket; decode with Window.DialogResult (dialog.go)
 	EvModifiers               // the modifier keys changed (a modifier pressed or released on its own): Mods are the new state, Code the raw code of the key that moved when the OS says
 	EvEdit                    // the system's key bindings turned a key into a text edit command while a text field has focus (SetTextInput): Tag is the EditCmd; the key's own EvKey is not sent (macOS: doCommandBySelector:)
 	EvMagnify                 // a pinch: Amount is the change in scale (0.1 = grow by 10 %), Phase its phase (PhaseNone: a device without phases), X, Y where it is; see Gestures
@@ -139,6 +140,8 @@ const (
 	EvDragLeave               // the drag left the window or was cancelled: Tag
 	EvDrop                    // the drag was dropped: Code the kind delivered, Text its data, X, Y, Tag; FlagFailed when it could not be read
 	EvDragEnd                 // a drag out ended: Tag is its DragTicket, Code the operation performed (DragOpNone: cancelled)
+	EvAccessibility           // an assistive technology asked for an action: Tag is the node's key, Code the AXAction, Amount its argument (a11y.go)
+	EvColor                   // the system colour panel: the user chose a colour (Code 0: X, Y, DX, DY are its red, green, blue and alpha in sRGB, 0 to 1) or closed the panel (Code 1); see colorpanel.go
 )
 
 // Flags qualify an Event.

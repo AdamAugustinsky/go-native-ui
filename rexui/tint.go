@@ -91,3 +91,11 @@ func mix(a, b uint32, t float32) uint32 {
 
 // pt is v points in whole pixels at the kit's scale.
 func pt(scale, v float32) float32 { return theme.Snap(v * scale) }
+
+// b2f is 1 for true and 0 for false (shared: tint.go comes with every component).
+func b2f(b bool) float32 {
+	if b {
+		return 1
+	}
+	return 0
+}

@@ -20,8 +20,9 @@ func reduced(k *base.Kit) bool {
 
 // loops reports whether a looping animation in box id may run now: motion is
 // not reduced, the window is showing (not minimised, hidden or covered:
-// ui.Input.Hidden), and the box is in view as the previous frame laid it
-// out, not hidden by a flow's MaxLines. Before the box has been laid out
+// ui.Input.Hidden), and some of the box is in view as the previous frame laid
+// it out: inside the window and the clips and scroll areas around it, not
+// hidden by a flow's MaxLines. Before the box has been laid out
 // once its rectangle is empty and the answer is yes, so that the frame that
 // lays it out is not the last. A loop that is not running asks for no
 // frames: an idle window draws none.
@@ -34,7 +35,8 @@ func loops(k *base.Kit, id ui.ID) bool {
 	if r[2] <= r[0] || r[3] <= r[1] {
 		return true
 	}
-	return k.Visible(r)
+	s := c.ShownRect(id) // clipped by the scroll areas and clips around it, not only by the window
+	return s[2] > s[0] && s[3] > s[1]
 }
 
 // shown reports whether the box keyed key showed in the previous frame: the
@@ -47,7 +49,11 @@ func shown(k *base.Kit, key ui.Key) bool {
 		return false
 	}
 	id, ok := c.BoxOf(key)
-	return ok && !c.WasHidden(id) && k.Visible(c.Rect(id))
+	if !ok {
+		return false
+	}
+	r := c.ShownRect(id)
+	return r[2] > r[0] && r[3] > r[1]
 }
 
 // disabledFlag is ui.Disabled in a disabled region (base.Kit.BeginDisabled):

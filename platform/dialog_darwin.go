@@ -15,7 +15,9 @@ import (
 // NSSavePanel each copy the completion block they are given and call it once,
 // on the main thread, when the sheet ends. The block carries the index of the
 // dialog's record; the record holds the sheet object (retained until the
-// completion), the window and the block request.
+// completion), the window, the block request and the ticket: a completion
+// record of dialogTickets reserved before the sheet begins, which the
+// completion fills in (the application object delivers it).
 //
 // A window closing under a sheet calls the completion 0 times (F1's
 // measurement, D36), so Window.Close ends the sheet with NSModalResponseAbort
@@ -46,8 +48,9 @@ var (
 	dialogOnce    sync.Once
 	dialogBlock   *objc.BlockKind
 	dialogs       [maxDialogs]dialogRec
-	lastTicket    DialogTicket
-	dialogScratch []byte // bytes handed to NSString, in memory the Go GC does not move
+	dialogTickets *Tickets // the results, delivered by the application object
+	dialogPaths   []byte   // a finished panel's paths, NUL-ended (main thread)
+	dialogScratch []byte   // bytes handed to NSString, in memory the Go GC does not move
 
 	clsNSAlert, clsNSOpenPanel, clsNSSavePanel, clsUTType, clsNSMutableArray, clsNSURL objc.ID
 
@@ -100,6 +103,9 @@ func dialogInit() {
 		dialogBlock = objc.NewBlockKind("v16@?0q8", true, func(ctx uintptr, c *ffi.CB) {
 			finishDialog(int(ctx), int64(c.Int(1)))
 		}, nil)
+		// Two per dialog: a result may wait for delivery while the next
+		// dialog of its window is open.
+		dialogTickets = NewTickets(SourceDialog, 2*maxDialogs, 4<<10)
 	})
 }
 
@@ -146,20 +152,27 @@ func (w *Window) dialogSlot() (int, error) {
 // beginDialog starts the sheet obj (+1, owned from here on) on w in record
 // slot.
 func (w *Window) beginDialog(slot int, kind DialogKind, obj objc.ID) (DialogTicket, error) {
+	tk, err := dialogTickets.Reserve(0)
+	if err != nil {
+		objc.Release(obj)
+		return 0, ErrDialogBusy
+	}
 	req, err := dialogBlock.New(uintptr(slot))
 	if err != nil {
+		dialogTickets.Cancel(tk)
 		objc.Release(obj)
 		return 0, err
 	}
-	lastTicket++
-	dialogs[slot] = dialogRec{ticket: lastTicket, kind: kind, w: w, obj: obj, req: req}
+	t := DialogTicket(tk)
+	dialogs[slot] = dialogRec{ticket: t, kind: kind, w: w, obj: obj, req: req}
 	objc.Send2(obj, selBeginSheet, uintptr(w.win), uintptr(req.Block()))
 	req.Sent()
-	return lastTicket, nil
+	return t, nil
 }
 
 // Alert shows an alert sheet on the window and returns its ticket. The answer
-// arrives as an EvDialog (Window.DialogResult). Main thread, at a safe point.
+// arrives as a SourceDialog AppEvService (DialogResultOf). Main thread, at a
+// safe point.
 // It returns ErrDialogSpec for a spec with no or too many buttons and
 // ErrDialogBusy when the window already has a dialog open.
 func (w *Window) Alert(s AlertSpec) (DialogTicket, error) {
@@ -211,7 +224,8 @@ func (w *Window) Alert(s AlertSpec) (DialogTicket, error) {
 }
 
 // OpenPanel shows an open panel sheet and returns its ticket. The paths arrive
-// in the EvDialog (Window.DialogResult). Main thread, at a safe point.
+// in its SourceDialog AppEvService (DialogResultOf). Main thread, at a safe
+// point.
 func (w *Window) OpenPanel(s OpenSpec) (DialogTicket, error) {
 	dialogInit()
 	slot, err := w.dialogSlot()
@@ -235,7 +249,8 @@ func (w *Window) OpenPanel(s OpenSpec) (DialogTicket, error) {
 }
 
 // SavePanel shows a save panel sheet and returns its ticket. The path arrives
-// in the EvDialog (Window.DialogResult). Main thread, at a safe point.
+// in its SourceDialog AppEvService (DialogResultOf). Main thread, at a safe
+// point.
 func (w *Window) SavePanel(s SaveSpec) (DialogTicket, error) {
 	dialogInit()
 	slot, err := w.dialogSlot()
@@ -308,50 +323,47 @@ func configurePanel(p, types objc.ID, start, title, message, prompt string) {
 	}
 }
 
-// finishDialog is the completion handler of record i: it turns the sheet's
-// response into the EvDialog, frees the record and lets the sheet object go.
-// It runs on the main thread, inside the event pump, and only for a request
-// that was live: a withdrawn dialog's completion is stale and never gets here.
+// finishDialog is the completion handler of record i: it fills in the
+// dialog's ticket with the sheet's response (the application object delivers
+// it), frees the record and lets the sheet object go. It runs on the main
+// thread, wherever AppKit ends the sheet, and only for a request that was
+// live: a withdrawn dialog's completion is stale and never gets here.
 func finishDialog(i int, resp int64) {
 	r := &dialogs[i]
 	if r.ticket == 0 {
 		return
 	}
-	w := r.w
 	pool := objc.F.Call0(objc.PoolPush)
-	now := Now()
-	var e Event
 	switch r.kind {
 	case DialogAlert:
 		supp := objc.SendBool(r.obj, selShowsSupp) && objc.Send(objc.Send(r.obj, selSuppressionBtn), selControlState) == 1
 		if idx := resp - alertFirstButtonRet; idx >= 0 && idx < MaxAlertButtons {
-			e = dialogEvent(r.ticket, r.kind, DialogAnswered, uint32(idx), supp, 0, 0, now)
+			dialogTickets.Complete(Ticket(r.ticket), dialogA(r.kind, DialogAnswered, supp), idx, nil)
 		} else {
-			e = dialogEvent(r.ticket, r.kind, DialogCancelled, 0, supp, 0, 0, now)
+			dialogTickets.Complete(Ticket(r.ticket), dialogA(r.kind, DialogCancelled, supp), 0, nil)
 		}
 	default:
 		if resp != modalResponseOK {
-			e = dialogEvent(r.ticket, r.kind, DialogCancelled, 0, false, 0, 0, now)
+			dialogTickets.Complete(Ticket(r.ticket), dialogA(r.kind, DialogCancelled, false), 0, nil)
 			break
 		}
-		off := len(w.q.text)
-		n := w.appendPanelPaths(r)
-		e = dialogEvent(r.ticket, r.kind, DialogAnswered, uint32(n), false, off, len(w.q.text)-off, now)
+		n := appendPanelPaths(r)
+		dialogTickets.Complete(Ticket(r.ticket), dialogA(r.kind, DialogAnswered, false), int64(n), dialogPaths)
 	}
-	w.q.push(e)
 	r.release()
 	objc.F.Call1(objc.PoolPop, pool)
 }
 
-// appendPanelPaths appends the chosen paths of a finished panel to the
-// window's text buffer, each ended by a NUL, and returns how many.
-func (w *Window) appendPanelPaths(r *dialogRec) int {
+// appendPanelPaths puts the chosen paths of a finished panel in dialogPaths,
+// each ended by a NUL, and returns how many.
+func appendPanelPaths(r *dialogRec) int {
 	n := 0
+	dialogPaths = dialogPaths[:0]
 	add := func(u objc.ID) {
 		// The file system representation, bytes as the file system has them,
 		// not the NSString path: a name that is not valid UTF-8 survives.
 		if p := uintptr(objc.Send(u, selFSRep)); p != 0 {
-			w.q.text = append(appendCString(w.q.text, p), 0)
+			dialogPaths = append(appendCString(dialogPaths, p), 0)
 			n++
 		}
 	}
@@ -428,6 +440,7 @@ func (w *Window) CancelDialog(t DialogTicket) bool {
 		}
 		pool := objc.F.Call0(objc.PoolPush)
 		r.req.Cancel() // the completion that follows is stale and dropped
+		dialogTickets.Cancel(Ticket(t))
 		if r.endSheet() {
 			r.release()
 		} else {
@@ -467,7 +480,7 @@ func (w *Window) abortDialogs() {
 			r.release()
 		} else if r.ticket != 0 {
 			r.req.Cancel() // a late completion is stale
-			w.q.push(dialogEvent(r.ticket, r.kind, DialogCancelled, 0, false, 0, 0, Now()))
+			dialogTickets.Complete(Ticket(r.ticket), dialogA(r.kind, DialogCancelled, false), 0, nil)
 			r.release()
 		}
 	}

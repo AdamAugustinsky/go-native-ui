@@ -277,3 +277,75 @@ func TestFormRowSemanticsAcrossRows(t *testing.T) {
 		}
 	}
 }
+
+// A form row's label names its control when the control has no name of its
+// own, as AppKit's form rows read "Wi-Fi, switch"; a named control keeps its
+// name, and of several controls only the first unnamed one takes the label.
+func TestFormRowLabelNamesItsControl(t *testing.T) {
+	for _, variant := range []rexui.FormVariant{rexui.FormGrouped, rexui.FormAligned} {
+		var on, on2 bool
+		var sel int
+		var vol float32 = 30
+		var buf ui.TextBuffer
+		buf.Reserve(16)
+		choices := []string{"Auto", "Light"}
+		g := newRig(t, theme.Light, nil, column(func(g *rig) {
+			k := g.k
+			f := rexui.BeginForm(k, "form", rexui.FormOpts{Variant: variant})
+			f.Section(k, "")
+			f.Row(k, "Wi-Fi", rexui.RowOpts{})
+			rexui.Switch(k, "", &on, rexui.SwitchOpts{})
+			f.EndRow(k)
+			f.Row(k, "Appearance", rexui.RowOpts{})
+			rexui.Select(k, "", &sel, choices, rexui.SelectOpts{})
+			f.EndRow(k)
+			f.Row(k, "Brightness", rexui.RowOpts{})
+			k.NextWidth(k.Fixed(120))
+			rexui.Slider(k, "", &vol, 0, 100, 0, rexui.SliderOpts{})
+			f.EndRow(k)
+			f.Row(k, "Bluetooth", rexui.RowOpts{})
+			rexui.Switch(k, "Own name", &on2, rexui.SwitchOpts{})
+			f.EndRow(k)
+			f.Row(k, "Both", rexui.RowOpts{})
+			rexui.Switch(k, "", &on, rexui.SwitchOpts{})
+			rexui.Switch(k, "", &on2, rexui.SwitchOpts{})
+			f.EndRow(k)
+			rexui.EndForm(k, &f)
+		}))
+		g.settle()
+		g.c.Semantics(&g.sem)
+		var names []string
+		for _, n := range g.sem.Nodes {
+			switch n.Role {
+			case ui.RoleSwitch, ui.RoleComboBox, ui.RoleSlider:
+				names = append(names, string(g.sem.Text(n.Name)))
+			}
+		}
+		want := []string{"Wi-Fi", "Appearance", "Brightness", "Own name", "Both", ""}
+		if len(names) != len(want) {
+			t.Fatalf("variant %d: names %q, want %q", variant, names, want)
+		}
+		for i := range want {
+			if names[i] != want[i] {
+				t.Errorf("variant %d: control %d is named %q, want %q", variant, i, names[i], want[i])
+			}
+		}
+	}
+}
+
+// Naming a row's control allocates nothing.
+func TestFormRowNamesAllocateNothing(t *testing.T) {
+	var on bool
+	g := newRig(t, theme.Light, nil, column(func(g *rig) {
+		f := rexui.BeginForm(g.k, "form", rexui.FormOpts{})
+		f.Section(g.k, "")
+		f.Row(g.k, "Wi-Fi", rexui.RowOpts{})
+		rexui.Switch(g.k, "", &on, rexui.SwitchOpts{})
+		f.EndRow(g.k)
+		rexui.EndForm(g.k, &f)
+	}))
+	g.settle()
+	if n := testing.AllocsPerRun(50, g.frame); n != 0 {
+		t.Errorf("a form row with an unnamed switch allocates %v per frame", n)
+	}
+}

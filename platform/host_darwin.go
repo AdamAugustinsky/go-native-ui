@@ -55,6 +55,7 @@ var (
 func registerShellClasses() {
 	c := objc.Define("GNUIContainer", objc.Cls("NSView"), nil)
 	c.Method(selIsFlipped, "c@:", retYes)
+	registerContainerA11y(c)
 	containerClass = c.Register()
 
 	h := objc.Define("GNUIHostClip", objc.Cls("NSView"), nil)
@@ -294,8 +295,10 @@ func (w *Window) takeKeyboardBack() {
 	objc.SendBool1(w.win, selMakeFirstResp, uintptr(w.view))
 }
 
-// releaseAllHosts releases every host (closeShell).
+// releaseAllHosts releases every host (closeShell). The accessibility
+// elements, whose children the hosts are, go first.
 func (w *Window) releaseAllHosts() {
+	w.closeAX()
 	for i := range w.hosts.slots {
 		if w.hosts.slots[i].live {
 			w.ReleaseHost(w.hosts.id(i))

@@ -111,6 +111,7 @@ const cmdClear menu.ID = 1
 // focused field takes for its own undo; inModal puts the field in a dialog
 // and marks Clear InModal.
 type fieldApp struct {
+	t       *testing.T
 	a       *app.App
 	k       *widget.Kit
 	m       *menu.Model
@@ -128,6 +129,7 @@ type fieldApp struct {
 
 func (f *fieldApp) Init(a *app.App) error {
 	f.a = a
+	f.t.Cleanup(platform.DebugAssumeKey(a.Win)) // the keys posted to it are a key window's, activated or not
 	f.k = widget.NewKit(a.UI, a.Text, rex.Theme())
 	var err error
 	f.m, err = menu.NewModel([]menu.Command{{ID: cmdClear, Title: "Clear", Shortcut: menu.Shortcut{Key: 'Z', Primary: true}, InModal: f.inModal}},
@@ -187,7 +189,7 @@ func TestFocusedFieldTakesItsChordBeforeTheMenu(t *testing.T) {
 			name = "dialog"
 		}
 		t.Run(name, func(t *testing.T) {
-			f := &fieldApp{inModal: inModal}
+			f := &fieldApp{t: t, inModal: inModal}
 			dog := time.AfterFunc(20*time.Second, func() { f.a.Quit(); platform.Wake() }) // no frames (occluded): end anyway
 			run(t, f)
 			dog.Stop()

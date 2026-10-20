@@ -108,10 +108,12 @@ func (o LiveOptions) withDefaults() LiveOptions {
 // waiters after each, and keeps a frame coming while one is open.
 type sessionBuilder struct {
 	app.Builder
-	ap    atomic.Pointer[app.App]
-	built atomic.Int64
-	hold  atomic.Bool   // test seam: frames are built but not counted, as if none were delivered
-	first chan struct{} // closed after the first frame
+	t          testing.TB
+	restoreKey func() // ends the window's DebugAssumeKey (RealFocus)
+	ap         atomic.Pointer[app.App]
+	built      atomic.Int64
+	hold       atomic.Bool   // test seam: frames are built but not counted, as if none were delivered
+	first      chan struct{} // closed after the first frame
 
 	mu    sync.Mutex
 	waits []*waiter
@@ -126,6 +128,11 @@ type waiter struct {
 
 func (b *sessionBuilder) Init(a *app.App) error {
 	b.ap.Store(a)
+	// The input the test posts is a key window's, whether or not the system
+	// activated the test binary (platform.DebugAssumeKey); from Init, so the
+	// first frame is drawn key too.
+	b.restoreKey = platform.DebugAssumeKey(a.Win)
+	b.t.Cleanup(b.restoreKey)
 	initDo()
 	if in, ok := b.Builder.(app.Initer); ok {
 		return in.Init(a)
@@ -183,7 +190,7 @@ func StartLiveWith(t testing.TB, cfg app.Config, b app.Builder, o LiveOptions) *
 	if !liveActive.CompareAndSwap(false, true) {
 		t.Fatal("widgettest: a LiveApp is already running (the platform has one window), or an earlier one could not be closed")
 	}
-	l := &LiveApp{t: t, lim: o.withDefaults(), end: make(chan struct{}), sb: &sessionBuilder{Builder: b, first: make(chan struct{})}}
+	l := &LiveApp{t: t, lim: o.withDefaults(), end: make(chan struct{}), sb: &sessionBuilder{Builder: b, t: t, first: make(chan struct{})}}
 	go func() {
 		defer close(l.end)
 		OnMain(func() { _, l.err = app.RunWith(cfg, l.sb, app.RunOptions{}) })
@@ -235,6 +242,17 @@ const settleCap = 10 * time.Second
 func (l *LiveApp) startTimeout() {
 	l.t.Helper()
 	l.stall("the first frame", l.lim.Start) // ends the test unless the frame came while it looked
+}
+
+// RealFocus makes the window's focus AppKit's from now on, for a test of the
+// focus itself: StartLive has the window count as key whatever AppKit says
+// (platform.DebugAssumeKey), so that the input a test posts is a key
+// window's. After it the window loses the focus when another window or app
+// takes it. A test that needs the app really active holds
+// testlock.Hold(t, "activation").
+func (l *LiveApp) RealFocus() {
+	l.t.Helper()
+	l.Do(func(*app.App) { l.sb.restoreKey() })
 }
 
 // App is the running app. Use it only inside Do (it belongs to the main thread).

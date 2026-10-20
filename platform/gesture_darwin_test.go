@@ -8,6 +8,7 @@ import (
 	"github.com/ebitengine/purego"
 
 	"gonativeui/internal/objc"
+	"gonativeui/internal/testlock"
 )
 
 // cgGesture builds trackpad gesture NSEvents the way the system's arrive: a
@@ -221,6 +222,7 @@ func TestGestureEventsThroughAppKitsRouting(t *testing.T) {
 // trackpad they are on the checkpoint-1 hand list ("pinch and rotate on the
 // trackpad over the gallery's image scene").
 func TestGestureEventsThroughNSAppSendEvent(t *testing.T) {
+	testlock.Hold(t, "activation") // it makes the app active: one process at a time
 	g := newCGGesture(t)
 	var evs []Event
 	var scale float32

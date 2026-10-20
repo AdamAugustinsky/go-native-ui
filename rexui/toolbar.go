@@ -861,13 +861,6 @@ func (tb *Toolbar) Picker(label string, sel *int, icons []icon.ID, names []strin
 	return base.Signal{ID: g, Changed: ch.Changed}
 }
 
-func b2f(b bool) float32 {
-	if b {
-		return 1
-	}
-	return 0
-}
-
 // glyphAndChevron lays a symbol and a chevron (a pull-down's, a pop-up's)
 // centred in a w × h capsule (a menu item, a collapsed picker).
 func (tb *Toolbar) glyphAndChevron(key ui.Key, ic, chev icon.ID, fg uint32, w, h float32) {
