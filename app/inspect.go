@@ -113,9 +113,14 @@ type InspectSnapshot struct {
 
 // InspectHost receives the inspector's snapshot, once per frame, while the
 // overlay is on. The snapshot is valid during the call; copy what is kept. A
-// host that shows it somewhere else than the window (a second window) is set
-// with SetInspectHost; without one the overlay draws the panel itself
-// (Ctrl+Alt+Shift+I, or SetInspectPanel).
+// host that shows it somewhere else than the window is set with
+// SetInspectHost; without one the overlay draws the panel itself (in
+// development builds: Debug > Inspector, or SetInspectPanel).
+//
+// The plan puts the inspector in a second window. That needs more than one
+// window, which is F4's: until it lands the panel is the inspector, and the
+// second window is a host that owns its own ui.Context and draws the snapshot
+// there. Deferred to F4.
 type InspectHost interface {
 	Inspect(s *InspectSnapshot)
 }
@@ -124,35 +129,32 @@ type InspectHost interface {
 // longer draws the panel in the window; the host gets every frame's snapshot.
 // nil goes back to the panel.
 func (a *App) SetInspectHost(h InspectHost) {
-	if a.dbg != nil {
-		a.dbg.host = h
-	} else if h != nil {
+	if a.dbg == nil {
+		if h == nil {
+			return
+		}
 		a.EnableDebug(true)
-		a.dbg.host = h
 	}
+	a.dbg.host = h
+	a.debugRepaint()
 }
 
 // SetInspectPanel shows or hides the inspector panel in the window (the
-// overlay must be on).
+// overlay must be on; release builds have no panel).
 func (a *App) SetInspectPanel(on bool) {
-	if a.dbg != nil {
+	if a.dbg != nil && a.dbg.panel != on {
 		a.dbg.panel = on
+		a.debugRepaint()
 	}
 }
 
-// SetDebugAudit is the hook for a layout audit. fn appends its findings to dst
-// and returns it; the overlay calls it when the audit is turned on
-// (Ctrl+Alt+Shift+A, or DebugRunAudit) and shows each finding as a red
-// outline with its Reason. It runs on demand, not every frame, because an audit
-// walks every box and allocates for what it reports. The audit itself is not
-// part of the overlay: when ui.Context.Audit exists, a caller wires it here:
-//
-//	a.SetDebugAudit(func(dst []app.DebugFinding) []app.DebugFinding {
-//		for _, f := range a.UI.Audit(nil) {
-//			dst = append(dst, app.DebugFinding{Key: f.Key, Rect: f.Rect, Reason: f.String()})
-//		}
-//		return dst
-//	})
+// SetDebugAudit sets the layout audit the overlay runs. fn appends its
+// findings to dst and returns it; the overlay calls it when the audit is turned
+// on (Debug > Run Layout Audit, or DebugRunAudit) and shows each finding as a
+// red outline with its Reason. nil restores the default, which is
+// ui.Context.Audit of the last frame without the overlay's own boxes. It runs
+// on demand, not every frame, because an audit walks every box and allocates
+// for what it reports.
 func (a *App) SetDebugAudit(fn func(dst []DebugFinding) []DebugFinding) {
 	if a.dbg == nil {
 		if fn == nil {
@@ -160,11 +162,14 @@ func (a *App) SetDebugAudit(fn func(dst []DebugFinding) []DebugFinding) {
 		}
 		a.EnableDebug(true)
 	}
+	if fn == nil {
+		fn = a.uiAudit
+	}
 	a.dbg.audit = fn
 }
 
-// DebugRunAudit runs the audit hook now and shows its findings (the first
-// 32). It does nothing without a hook.
+// DebugRunAudit runs the audit now, on the last frame, and shows its findings
+// (the first 32). Call it outside Build.
 func (a *App) DebugRunAudit() {
 	d := a.dbg
 	if d == nil || d.audit == nil {
@@ -174,6 +179,7 @@ func (a *App) DebugRunAudit() {
 	var tmp [maxFindings]DebugFinding
 	fs := d.audit(tmp[:0])
 	d.nFind = copy(d.findings[:], fs)
+	a.debugRepaint()
 }
 
 // fillSnapshot fills d.snap for the frame being built, before the overlay's

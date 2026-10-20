@@ -211,7 +211,7 @@ func (a *App) debugBuild() {
 	hudLines(s, &ds.hud)
 	cardLines(s, &ds.card)
 	if d.panel && d.host == nil {
-		inspectLines(s, &ds.side, &d.sym)
+		buildInspector(s, &ds.side, &d.sym) // nothing in a release build
 	}
 	d.logDups(s)
 
@@ -408,7 +408,7 @@ func hudLines(s *InspectSnapshot, ls *dbgLines) {
 
 // flagsLine appends the flags of a box.
 func flagsLine(l *dbgLine, f ui.Flags) {
-	var t [96]byte
+	var t [ui.DebugFlagNamesMax]byte // room for every flag at once: no growth, no allocation
 	l.bytes(ui.DebugFlagNames(t[:0], f))
 }
 
@@ -433,91 +433,6 @@ func cardLines(s *InspectSnapshot, ls *dbgLines) {
 		ls.next(colDim).str("overlay ").num(int64(b.Overlay - 1))
 	}
 	ls.next(colDim).str("parent #").hex(uint64(b.Parent), 16)
-}
-
-// inspectLines is the inspector panel: the stack of boxes under the pointer,
-// the recent frames with their causes, the duplicate keys and the findings.
-func inspectLines(s *InspectSnapshot, ls *dbgLines, sym *symCache) {
-	ls.next(colAccent).str("inspector")
-	if s.Inside {
-		ls.next(colDim).str("under the pointer, outer to inner:")
-		for i := 0; i < s.NUnder; i++ {
-			b := &s.Under[i]
-			col := uint32(colText)
-			if i == s.NUnder-1 {
-				col = colInner
-			}
-			l := ls.next(col).str(" ").hex(uint64(b.Key), 8)
-			if b.Role != ui.RoleNone {
-				l.str(" ").str(ui.DebugRoleName(b.Role))
-			}
-			if b.NameLen > 0 {
-				l.str(" \"").bytes(b.Name[:min(int(b.NameLen), 24)]).str("\"")
-			}
-		}
-	} else {
-		ls.next(colDim).str("the pointer is outside the window")
-	}
-	ls.next(colDim).str("frames (newest first):")
-	hist := func(r *FrameRecord) {
-		col := uint32(colText)
-		if r.Unexplained() {
-			col = colBad
-		}
-		l := ls.next(col).str(" #").unum(r.N).str(" ")
-		appendCauses(l, r.Causes[:r.NCauses])
-		l.str("  ").us(r.TotalCPUns()).str("us")
-		if r.Allocs != 0 {
-			l.str(" ").unum(r.Allocs).str(" allocs")
-		}
-		for i := 0; i < r.NCauses; i++ {
-			c := &r.Causes[i]
-			for j := 0; j < int(c.NCallers) && j < 1; j++ {
-				ls.next(colDim).str("   at ").bytes(sym.symbol(c.Callers[j]))
-			}
-		}
-	}
-	this := s.This2()
-	hist(&this)
-	if s.HasLast {
-		hist(&s.Last)
-	}
-	for i := 0; i < s.NHistory; i++ {
-		hist(&s.History[i])
-	}
-	if s.NDups > 0 {
-		ls.next(colWarn).str("duplicate keys:")
-		for i := 0; i < s.NDups; i++ {
-			d := &s.Dups[i]
-			l := ls.next(colWarn).str(" #").hex(uint64(d.Key), 16).str(" x").unum(uint64(d.Count))
-			l.str(" (").unum(d.Total).str(" total)")
-			if s.HasDupBox[i] {
-				b := &s.DupBoxes[i]
-				l = ls.next(colWarn).str("   ")
-				if b.Role != ui.RoleNone {
-					l.str(ui.DebugRoleName(b.Role)).str(" ")
-				}
-				if b.NameLen > 0 {
-					l.str("\"").bytes(b.Name[:min(int(b.NameLen), 24)]).str("\" ")
-				}
-				l.str("at ").rect(b.Rect)
-			}
-		}
-		if s.DupsMore > 0 {
-			ls.next(colWarn).str(" and ").num(int64(s.DupsMore)).str(" more")
-		}
-	}
-	if s.NFindings > 0 {
-		ls.next(colBad).str("layout audit:")
-		for i := 0; i < s.NFindings; i++ {
-			ls.next(colBad).str(" ").str(s.Findings[i].Reason)
-		}
-	}
-}
-
-// This2 is the frame being built as a record (its causes), for the history.
-func (s *InspectSnapshot) This2() FrameRecord {
-	return FrameRecord{N: s.Frame, Causes: s.This, NCauses: s.NThis}
 }
 
 // logDups writes each duplicate key to stderr once, when the overlay logs.

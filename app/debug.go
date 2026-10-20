@@ -20,12 +20,21 @@ import (
 // build; GNUI_DEBUG=overlay,log also prints one line per frame to stderr
 // (the causes, the CPU and the allocations). GNUI_DEBUG is a comma-separated
 // list: the platform's "1" or "imp", which traces Objective-C calls, is
-// another word of it and does not turn the overlay on. In a development build (every
-// build except one with the gnui_release tag) the chord Ctrl+Alt+Shift+D
-// (Cmd+Opt+Shift+D on macOS) toggles it while the app runs, Ctrl+Alt+Shift+I
-// the inspector panel and Ctrl+Alt+Shift+A the layout audit (SetDebugAudit).
-// The chords are taken from the input and never reach the app. EnableDebug
-// does the same from code.
+// another word of it and does not turn the overlay on. EnableDebug does the
+// same from code.
+//
+// In a development build (every build without the gnui_release tag; gnui
+// package always sets it) the app has a Debug menu on macOS, with Toggle
+// Overlay (Cmd+Opt+Shift+D), Inspector (...I) and Run Layout Audit (...A);
+// AppKit matches those by character on any layout. Where the app has no native
+// menu bar, and on Windows and Linux, the same chords (Ctrl for Cmd) are
+// recognised once, when the key event arrives, by the character the key types
+// on the user's layout (platform.Event.Char), and never reach the app. A
+// release build has no Debug menu, no chords and no inspector panel.
+//
+// The inspector is a panel in the window. The plan puts it in a second window;
+// that waits for F4 (more than one window), and InspectHost is where it will
+// plug in (inspect.go).
 //
 // # What it costs
 //
@@ -92,12 +101,15 @@ const (
 	// CauseDriver: the frame was asked for by the code that drives an app with
 	// no window (Offscreen.Frame).
 	CauseDriver
+	// CauseDebug: the overlay, its inspector or its audit was turned on or off,
+	// or the audit ran.
+	CauseDebug
 
 	numCauses
 )
 
 var causeNames = [numCauses]string{"NO CAUSE", "first", "input", "resize", "visible", "wake", "appearance",
-	"anim", "timer", "hover", "settle", "backlog", "bench", "host", "dialog", "menu", "driver"}
+	"anim", "timer", "hover", "settle", "backlog", "bench", "host", "dialog", "menu", "driver", "debug"}
 
 // String is the short name of the cause.
 func (c Cause) String() string {
@@ -242,26 +254,37 @@ func (a *App) debugInit() {
 	if !on {
 		return
 	}
-	a.EnableDebug(true)
+	a.enableDebug()
 	a.dbg.log = log
 }
 
 // EnableDebug turns the debug overlay on or off (see the notes at the top of
-// debug.go). Turning it on allocates.
+// debug.go) and schedules the repaint that shows the change, so an idle app
+// shows it at once (that frame's cause is CauseDebug). Turning it on allocates.
+// Call it outside Build.
 func (a *App) EnableDebug(on bool) {
-	if !on {
+	if on == (a.dbg != nil) {
+		return
+	}
+	if on {
+		a.enableDebug()
+	} else {
 		a.dbg = nil
 		if a.UI != nil {
 			a.UI.EnableDebug(false, false)
 		}
-		return
 	}
+	a.debugRepaint()
+}
+
+func (a *App) enableDebug() {
 	if a.dbg != nil {
 		return
 	}
 	d := &debugState{pcs: devBuild, out: make([]byte, 0, 512)}
 	d.serial = platform.AppearanceSerial()
 	d.draw.init()
+	d.audit = a.uiAudit
 	// The renderer's texture bytes, once it reports them (a type assertion at
 	// each frame would allocate its cache in the measured frames).
 	if tb, ok := any(a.R).(interface{ TextureBytes() int64 }); ok {
@@ -271,6 +294,39 @@ func (a *App) EnableDebug(on bool) {
 	if a.UI != nil {
 		a.UI.EnableDebug(true, d.pcs)
 	}
+}
+
+// debugCmdBase is the first command id of the Debug menu (debug_dev.go): the top
+// of the 16-bit command space, which an app's own ids should avoid; the app
+// never sees these.
+const debugCmdBase uint16 = 0xFFF0
+
+// nativeSpec is the native menu bar: the model's, and in a development build
+// the Debug menu.
+func (a *App) nativeSpec() platform.MenuSpec {
+	s := nativeMenuSpec(a.menu)
+	if devBuild {
+		a.debugMenu(&s)
+	}
+	return s
+}
+
+// debugRepaint owes one frame, with its own cause, for a change of what the
+// overlay shows; it does not keep animating.
+func (a *App) debugRepaint() {
+	a.p.invalidate()
+	if a.dbg != nil {
+		a.dbg.note(CauseDebug, 0, 0, nil)
+	}
+}
+
+// uiAudit is the default layout audit: ui.Context.Audit of the last frame,
+// without the overlay's own boxes.
+func (a *App) uiAudit(dst []DebugFinding) []DebugFinding {
+	for _, f := range a.UI.DebugAudit(nil) {
+		dst = append(dst, DebugFinding{Key: f.Key, Rect: f.Rect, Reason: f.String()})
+	}
+	return dst
 }
 
 // DebugOn reports whether the overlay is on.
@@ -343,39 +399,45 @@ func (d *debugState) note(kind Cause, sub uint8, key ui.Key, pcs []uintptr) {
 // ---- hooks the loop and the frame call (each behind a.dbg != nil) ----
 
 // dispatch hands one platform event to onEvent and notes why it made a frame
-// owed, if it did.
+// owed, if it did: each event on its own, whether or not a frame was already
+// owed. In development builds it first gives the debug chords and commands
+// their turn (debug_dev.go).
 func (a *App) dispatch(e *platform.Event) {
+	if devBuild && a.debugIngress(e) {
+		return
+	}
 	d := a.dbg
 	if d == nil {
 		a.onEvent(e)
 		return
 	}
-	need, dirty := a.p.needDraw, a.tr.dirty
+	n := a.p.inval
 	a.onEvent(e)
-	if (a.p.needDraw && !need) || (a.tr.dirty && !dirty) {
-		var k Cause
-		switch e.Kind {
-		case platform.EvResize:
-			k = CauseResize
-		case platform.EvVisible:
-			k = CauseVisible
-		case platform.EvWake:
-			if s := platform.AppearanceSerial(); s != d.serial {
-				d.serial, k = s, CauseAppearance
-			} else {
-				k = CauseWake
-			}
-		case platform.EvHostFocus, platform.EvHostCommand:
-			k = CauseHost
-		case platform.EvDialog:
-			k = CauseDialog
-		case platform.EvCommand:
-			k = CauseMenu
-		default:
-			k = CauseInput
-		}
-		d.note(k, 0, 0, nil)
+	if a.p.inval == n {
+		return
 	}
+	var k Cause
+	switch e.Kind {
+	case platform.EvResize:
+		k = CauseResize
+	case platform.EvVisible:
+		k = CauseVisible
+	case platform.EvWake:
+		if s := platform.AppearanceSerial(); s != d.serial {
+			d.serial, k = s, CauseAppearance
+		} else {
+			k = CauseWake
+		}
+	case platform.EvHostFocus, platform.EvHostCommand:
+		k = CauseHost
+	case platform.EvDialog:
+		k = CauseDialog
+	case platform.EvCommand:
+		k = CauseMenu
+	default:
+		k = CauseInput
+	}
+	d.note(k, 0, 0, nil)
 }
 
 // debugTimer notes that the time the last frame asked for has come.
@@ -462,12 +524,13 @@ func (d *debugState) openFrame(a *App) {
 	d.open = true
 	d.nFrames++
 	d.cur = FrameRecord{N: d.nFrames}
+	if d.nFrames == 1 && a.frames == 0 && (a.Win != nil || a.step.started) {
+		d.note(CauseFirst, 0, 0, nil)
+	}
 	if d.npend == 0 {
 		switch {
 		case a.Win == nil && !a.step.started:
 			d.note(CauseDriver, 0, 0, nil)
-		case d.nFrames == 1:
-			d.note(CauseFirst, 0, 0, nil)
 		case a.bench != nil:
 			d.note(CauseBench, 0, 0, nil)
 		default:
@@ -573,38 +636,6 @@ func appendCause(b []byte, c *RepaintCause) []byte {
 		b = strconv.AppendUint(b, uint64(c.N), 10)
 	}
 	return b
-}
-
-// ---- the hidden command (development builds) ----
-
-// debugChord handles the chords that toggle the overlay, its inspector and the
-// audit, and removes them from the frame's input.
-func (a *App) debugChord() {
-	in := &a.tr.in
-	want := ui.PrimaryMod() | ui.ModAlt | ui.ModShift
-	for i := 0; i < in.NKeys; i++ {
-		k := in.Keys[i]
-		if k.Mods != want || (k.Code != 'D' && k.Code != 'I' && k.Code != 'A') {
-			continue
-		}
-		in.NKeys = copy(in.Keys[i:], in.Keys[i+1:in.NKeys]) + i
-		i--
-		if !k.Down || k.Repeat {
-			continue
-		}
-		switch {
-		case k.Code == 'D':
-			a.EnableDebug(a.dbg == nil)
-		case a.dbg == nil:
-		case k.Code == 'I':
-			a.dbg.panel = !a.dbg.panel
-		case k.Code == 'A':
-			a.dbg.auditOn = !a.dbg.auditOn
-			if a.dbg.auditOn {
-				a.DebugRunAudit()
-			}
-		}
-	}
 }
 
 // ---- symbols of caller program counters ----

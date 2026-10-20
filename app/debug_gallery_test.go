@@ -51,8 +51,14 @@ func TestIdleGalleryRecordsNoFrames(t *testing.T) {
 	if first := stepUntilIdle(t, o); first == 0 {
 		t.Fatal("the first frame was not drawn")
 	}
-	if r, ok := o.DebugFrame(int(o.DebugFrames()) - 1); ok && r.Causes[0].Kind != app.CauseFirst {
-		t.Errorf("the first frame's causes are %v", causeNames(r))
+	if r, ok := o.DebugFrame(int(o.DebugFrames()) - 1); ok {
+		first := false
+		for _, c := range r.Causes[:r.NCauses] {
+			first = first || c.Kind == app.CauseFirst
+		}
+		if !first {
+			t.Errorf("the first frame's causes are %v", causeNames(r))
+		}
 	}
 	recorded := o.DebugFrames()
 	for i := 0; i < 600; i++ { // ten seconds of nothing

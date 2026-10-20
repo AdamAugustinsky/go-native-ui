@@ -14,9 +14,6 @@ const maxLatencyNs = int64(5e9)
 func (a *App) build(w, h int, dt float32) {
 	a.settle = a.settle || a.resized
 	a.resized = false
-	if devBuild {
-		a.debugChord()
-	}
 	if a.dbg != nil {
 		a.debugBuildStart()
 	}

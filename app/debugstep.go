@@ -32,15 +32,7 @@ func (o *Offscreen) Step(ns int64, evs ...platform.Event) (drew bool) {
 	for i := range evs {
 		a.dispatch(&evs[i])
 	}
-	if a.wakeAt != 0 && st.clock >= a.wakeAt {
-		a.wakeAt = 0
-		a.p.invalidate()
-		if a.dbg != nil {
-			a.debugTimer()
-		}
-	}
-	draw, _ := a.p.poll(st.clock)
-	if !draw {
+	if !a.turn(st.clock) { // a due wake, then the pacer's verdict (zero pacer: unpaced, no request)
 		return false
 	}
 	dirty := a.tr.dirty
@@ -50,8 +42,7 @@ func (o *Offscreen) Step(ns int64, evs ...platform.Event) (drew bool) {
 	o.Frame()
 	why := a.owedReasons(a.UI.Animating(), dirty)
 	if a.dbg != nil {
-		a.debugOwed(why)
-		a.debugFrameEnd()
+		a.debugOwed(why) // Frame closed the record
 	}
 	a.owedWhy, a.more = why, why != 0
 	a.frames++

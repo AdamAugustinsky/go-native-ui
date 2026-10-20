@@ -225,3 +225,137 @@ func runtimeFuncName(pc uintptr) string {
 	}
 	return "?"
 }
+
+//go:noinline
+func wakeLong(c *Context) { c.WakeIn(1e9) }
+
+//go:noinline
+func wakeShort(c *Context) { c.WakeIn(10e6) }
+
+// The earliest wake names who asked for it, when it was asked: a short WakeIn
+// after a long one keeps the short one's caller; a Deadline that is later than
+// the WakeIn is not blamed for it; and a focused text field does not take the
+// blame for a WakeIn that is shorter than its caret blink.
+func TestDebugWakeProvenanceIsRecordedWhenTheWinnerIsChosen(t *testing.T) {
+	h := newHarness(t, 400, 300)
+	h.c.EnableDebug(true, true)
+	h.in.Time = 1e9
+	h.frame(func(c *Context) { wakeLong(c); wakeShort(c) })
+	kind, _ := h.c.DebugWake()
+	pcs := h.c.DebugCallers(DebugCallerWakeIn)
+	if kind != DebugWakeIn || len(pcs) < 2 || !strings.Contains(callerName(pcs[1]), "TestDebugWakeProvenance") {
+		t.Fatalf("kind %v, callers %v", kind, pcs)
+	}
+	// the winner's own function is the first frame's caller: wakeShort called WakeIn
+	if n := runtime.FuncForPC(pcs[0] - 1).Name(); !strings.HasSuffix(n, "wakeShort") {
+		t.Errorf("the first caller is %s, want wakeShort", n)
+	}
+	h.frame(func(c *Context) { wakeShort(c); wakeLong(c) })
+	if pcs := h.c.DebugCallers(DebugCallerWakeIn); len(pcs) == 0 || !strings.HasSuffix(runtime.FuncForPC(pcs[0]-1).Name(), "wakeShort") {
+		t.Error("a later, longer WakeIn replaced the caller of the winner")
+	}
+	// a Deadline that is later than the WakeIn
+	dk := HashString(0, "late")
+	h.frame(func(c *Context) { c.Deadline(dk, 1e9+500e6); c.WakeIn(10e6) })
+	if kind, key := h.c.DebugWake(); kind != DebugWakeIn || key != 0 {
+		t.Errorf("a later deadline was blamed: %v %x", kind, uint64(key))
+	}
+	// and one that is earlier wins, and a WakeIn is no longer the caller
+	h.frame(func(c *Context) { c.WakeIn(500e6); c.Deadline(dk, 1e9+20e6) })
+	if kind, key := h.c.DebugWake(); kind != DebugWakeDeadline || key != dk || h.c.DebugCallers(DebugCallerWakeIn) != nil {
+		t.Errorf("the earlier deadline lost: %v %x", kind, uint64(key))
+	}
+}
+
+func TestDebugWakeIsNotTheCaretWhenAWakeInIsShorter(t *testing.T) {
+	r := newRig(t, true)
+	r.c.EnableDebug(true, true)
+	field := func(wake func(*Context)) func(c *Context) {
+		return func(c *Context) {
+			c.NextSize(Px(200), Px(24))
+			r.res = c.TextField("f", &r.buf)
+			wake(c)
+		}
+	}
+	r.now += 16e6
+	r.in.Time = r.now
+	r.harness.frame(field(func(c *Context) {}))
+	if kind, key := r.c.DebugWake(); kind != DebugWakeField || key == 0 || key != r.c.focusKey {
+		t.Fatalf("the focused field's blink is %v %x", kind, uint64(key))
+	}
+	r.now += 16e6
+	r.in.Time = r.now
+	r.harness.frame(field(func(c *Context) { c.WakeIn(1e6) }))
+	if kind, _ := r.c.DebugWake(); kind != DebugWakeIn {
+		t.Errorf("a 1 ms WakeIn with a focused field is reported as %v", kind)
+	}
+	if len(r.c.DebugCallers(DebugCallerWakeIn)) == 0 {
+		t.Error("its caller is not recorded")
+	}
+}
+
+// The count of collisions beyond the capacity is per frame: it falls to 0 once
+// the duplicates are gone, instead of growing for ever.
+func TestDebugDupsLostCountsPerFrame(t *testing.T) {
+	h := newHarness(t, 400, 300)
+	h.c.EnableDebug(true, false)
+	many := func(c *Context) {
+		for k := 0; k < maxDebugDups+4; k++ {
+			c.BoxKeyed(0, KeyN(77, uint64(k)), nil)
+			c.BoxKeyed(0, KeyN(77, uint64(k)), nil)
+		}
+	}
+	for i := 0; i < 5; i++ {
+		h.frame(many)
+	}
+	if got := h.c.DebugDupsLost(); got != 4 {
+		t.Errorf("%d collisions lost in the last frame after 5 frames, want 4", got)
+	}
+	h.frame(nil)
+	if got := h.c.DebugDupsLost(); got != 0 {
+		t.Errorf("%d lost in a frame with no duplicates", got)
+	}
+}
+
+func TestDebugUnderWithNoRoomReturnsZero(t *testing.T) {
+	h := newHarness(t, 400, 300)
+	h.c.EnableDebug(true, false)
+	h.frame(dbgScene(h, false, false))
+	if n := h.c.DebugUnder(50, 40, nil); n != 0 {
+		t.Errorf("%d for a nil destination", n)
+	}
+	if n := h.c.DebugUnder(50, 40, make([]ID, 0)); n != 0 {
+		t.Errorf("%d for an empty destination", n)
+	}
+}
+
+// The room DebugFlagNames needs for every flag is within DebugFlagNamesMax, so
+// callers that size their buffer by it never grow it.
+func TestDebugFlagNamesMaxCoversEveryFlag(t *testing.T) {
+	if n := len(DebugFlagNames(nil, ^Flags(0))); n > DebugFlagNamesMax {
+		t.Errorf("every flag needs %d bytes, DebugFlagNamesMax is %d", n, DebugFlagNamesMax)
+	}
+}
+
+func TestDebugAuditSkipsTheOverlay(t *testing.T) {
+	h := newHarness(t, 400, 300)
+	h.c.EnableDebug(true, false)
+	build := func(c *Context) {
+		dbgScene(h, false, false)(c)
+		c.BeginDebugOverlay()
+		c.NextPos(0, 0)
+		c.NextSize(Px(500), Px(20)) // wider than its parent, the window
+		c.Box(FloatingX|FloatingY|DrawBackground, "wide")
+		c.EndDebugOverlay()
+	}
+	for i := 0; i < 3; i++ {
+		h.frame(build)
+	}
+	n := len(h.c.order)
+	if got := h.c.DebugAudit(nil); len(got) != 0 {
+		t.Errorf("the overlay's boxes were audited: %v", got)
+	}
+	if len(h.c.order) != n {
+		t.Error("the frame's order was left cut")
+	}
+}

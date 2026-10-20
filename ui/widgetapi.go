@@ -14,9 +14,8 @@ func (c *Context) Uploader() Uploader { return c.up }
 // delay or the fade of a scroll bar, uses it instead of an animation, so that
 // an idle window costs nothing. A request below 1 ns is rounded up.
 func (c *Context) WakeIn(ns int64) {
-	c.wakeAfter(ns)
-	if c.dbg != nil {
-		c.debugCaller(DebugCallerWakeIn)
+	if c.wakeAfter(ns) && c.dbg != nil {
+		c.debugWake(DebugWakeIn, 0)
 	}
 }
 

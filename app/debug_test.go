@@ -212,37 +212,6 @@ func TestDebugEnvTurnsTheOverlayOn(t *testing.T) {
 	}
 }
 
-// The chord toggles the overlay in a development build and is not seen by the
-// app.
-func TestDebugChordTogglesTheOverlay(t *testing.T) {
-	if !devBuild {
-		t.Skip("release build")
-	}
-	o := newOverlayRig(t, &scene{}, 200, 120, 1)
-	chord := func(code ui.KeyCode) {
-		o.tr.in.PushKey(ui.KeyEvent{Code: 'X', Down: true})
-		o.tr.in.PushKey(ui.KeyEvent{Code: code, Mods: ui.PrimaryMod() | ui.ModAlt | ui.ModShift, Down: true})
-		o.tr.in.PushKey(ui.KeyEvent{Code: 'Y', Down: true})
-		o.Frame()
-	}
-	chord('D')
-	if !o.DebugOn() {
-		t.Fatal("the chord did not turn the overlay on")
-	}
-	chord('I')
-	if !o.dbg.panel {
-		t.Error("the inspector chord did not show the panel")
-	}
-	// the other keys of the frame are kept, the chord is not
-	if n := o.tr.in.NKeys; n != 0 {
-		t.Errorf("%d keys left after the frame", n)
-	}
-	chord('D')
-	if o.DebugOn() {
-		t.Error("the chord did not turn the overlay off")
-	}
-}
-
 // Two boxes built with one key in a frame are reported once, with the key
 // and a count, and the overlay's own boxes are never among them.
 func TestDuplicateKeysAreDetected(t *testing.T) {

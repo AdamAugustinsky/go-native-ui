@@ -35,15 +35,24 @@ type DebugDup struct {
 
 // debugState is the recording of EnableDebug.
 type debugState struct {
-	dups  [maxDebugDups]DebugDup
-	nDups int
-	lost  uint32 // distinct duplicate keys beyond the capacity
-	mute  bool   // the debug overlay's own boxes are being built
+	dups      [maxDebugDups]DebugDup
+	nDups     int
+	lost      uint32 // collisions of keys beyond the capacity, in lostFrame
+	lostFrame uint32
+	mute      bool // the debug overlay's own boxes are being built
 
 	pc      bool
-	pcs     [2][debugPCs]uintptr // the caller of RequestFrame and of WakeIn, first in the frame
+	pcs     [2][debugPCs]uintptr // the caller of RequestFrame (first in the frame) and of the WakeIn that won
 	npc     [2]int
 	pcFrame [2]uint32
+
+	// what asked for the earliest wake of wakeFrame (wakeAfter's winner)
+	wakeKind  DebugWakeKind
+	wakeKey   Key
+	wakeFrame uint32
+
+	// where the debug overlay's boxes begin in the frame's order, in markFrame
+	orderMark, markFrame int
 }
 
 // DebugCaller selects which call DebugCallers reports.
@@ -98,6 +107,9 @@ func (c *Context) debugDup(key Key) {
 		return
 	}
 	if d.nDups == len(d.dups) {
+		if d.lostFrame != c.frame {
+			d.lostFrame, d.lost = c.frame, 0
+		}
 		d.lost++
 		return
 	}
@@ -115,17 +127,18 @@ func (c *Context) DebugDups() []DebugDup {
 	return c.dbg.dups[:c.dbg.nDups]
 }
 
-// DebugDupsLost is the number of distinct duplicate keys that did not fit in
-// DebugDups.
+// DebugDupsLost is the number of collisions in the frame just built (the one
+// DebugFrame names) of keys that did not fit in DebugDups; it counts per frame,
+// so it falls back to 0 once the cause is gone.
 func (c *Context) DebugDupsLost() int {
-	if c.dbg == nil {
+	if c.dbg == nil || c.dbg.lostFrame != c.frame {
 		return 0
 	}
 	return int(c.dbg.lost)
 }
 
-// debugCaller records who called RequestFrame or WakeIn, the first time in a
-// frame. skip 3: runtime.Callers, debugCaller, the API function.
+// debugCaller records who called RequestFrame, the first time in a frame.
+// runtime.Callers' skip 3: Callers itself, debugCaller, RequestFrame.
 func (c *Context) debugCaller(which DebugCaller) {
 	d := c.dbg
 	if !d.pc || d.pcFrame[which] == c.frame {
@@ -135,12 +148,30 @@ func (c *Context) debugCaller(which DebugCaller) {
 	d.npc[which] = runtime.Callers(3, d.pcs[which][:])
 }
 
+// debugWake records who asked for the earliest wake of the frame: wakeAfter
+// calls it when its request became the earliest. For a WakeIn it records the
+// caller too (skip 3: Callers, debugWake, WakeIn).
+func (c *Context) debugWake(kind DebugWakeKind, key Key) {
+	d := c.dbg
+	d.wakeKind, d.wakeKey, d.wakeFrame = kind, key, c.frame
+	d.npc[DebugCallerWakeIn] = 0
+	if kind == DebugWakeIn && d.pc {
+		d.pcFrame[DebugCallerWakeIn] = c.frame
+		d.npc[DebugCallerWakeIn] = runtime.Callers(3, d.pcs[DebugCallerWakeIn][:])
+	}
+}
+
 // DebugCallers is the call stack (program counters, innermost first) of the
-// first call of which in the frame being built or just built, nil when there
-// was none or pcs was off. The slice aliases the recording.
+// first call of RequestFrame in the frame being built or just built
+// (DebugCallerRequestFrame), or of the WakeIn call that asked for the earliest
+// wake (DebugCallerWakeIn; nil when a Deadline or a caret asked for it). It is
+// nil when there was none or pcs was off. The slice aliases the recording.
 func (c *Context) DebugCallers(which DebugCaller) []uintptr {
 	d := c.dbg
 	if d == nil || !d.pc || d.pcFrame[which] != c.frame {
+		return nil
+	}
+	if which == DebugCallerWakeIn && (d.wakeFrame != c.frame || d.wakeKind != DebugWakeIn) {
 		return nil
 	}
 	return d.pcs[which][:d.npc[which]]
@@ -160,24 +191,17 @@ const (
 	DebugWakeIn
 )
 
-// DebugWake says what produced WakeAfter after the frame was built: the key of
-// the Deadline, of the focused text field, or 0 for a WakeIn. It infers the
-// source from the time asked for, so a WakeIn that asks for the same instant as
-// a deadline is reported as the deadline.
+// DebugWake says what asked for the earliest WakeAfter of the frame just built:
+// the key of the Deadline or of the focused text field, or 0 for a WakeIn. It is
+// recorded when the winning request is made, so a shorter WakeIn that follows a
+// longer one, or one made while a text field is focused, is not mistaken for
+// another source.
 func (c *Context) DebugWake() (kind DebugWakeKind, key Key) {
-	if c.wakeNs == 0 {
+	d := c.dbg
+	if d == nil || c.wakeNs == 0 || d.wakeFrame != c.frame {
 		return DebugWakeNone, 0
 	}
-	for i := range c.deadlines {
-		d := &c.deadlines[i]
-		if !d.fired && d.seen == c.frame && c.in.Time != 0 && d.at-c.in.Time == c.wakeNs {
-			return DebugWakeDeadline, d.key
-		}
-	}
-	if c.fieldFocus {
-		return DebugWakeField, c.focusKey
-	}
-	return DebugWakeIn, 0
+	return d.wakeKind, d.wakeKey
 }
 
 // DebugAnimating stores in out the keys of the boxes built this frame whose
@@ -304,6 +328,9 @@ func (c *Context) DebugBoxByKey(k Key, out *DebugBox) bool {
 // The debug overlay is skipped. It returns the number stored; when there are
 // more than len(out) the innermost are kept.
 func (c *Context) DebugUnder(x, y float32, out []ID) int {
+	if len(out) == 0 {
+		return 0
+	}
 	n := 0
 	if c.root != 0 {
 		n = c.underWalk(c.root, x, y, out, n)
@@ -359,6 +386,7 @@ var (
 func (c *Context) BeginDebugOverlay() {
 	if c.dbg != nil {
 		c.dbg.mute = true
+		c.dbg.orderMark, c.dbg.markFrame = len(c.order), int(c.frame)
 	}
 	w, h := float32(c.w), float32(c.h)
 	c.NextSize(Px(w), Px(h))
@@ -419,3 +447,18 @@ var flagNames = [...]struct {
 	{WindowDrag, "drag"}, {Disabled, "disabled"}, {WrapText, "wrap"}, {KeepFocus, "keepfocus"},
 	{NoFontSmoothing, "nosmooth"},
 }
+
+// DebugAudit is Audit of the frame the app built, without the debug overlay's
+// own boxes (the HUD and the outlines are not the app's layout). Without the
+// overlay in the frame it is Audit.
+func (c *Context) DebugAudit(dst []Finding) []Finding {
+	if d := c.dbg; d != nil && d.markFrame == int(c.frame) && d.orderMark <= len(c.order) {
+		all := c.order
+		c.order = all[:d.orderMark]
+		defer func() { c.order = all }()
+	}
+	return c.Audit(dst)
+}
+
+// DebugFlagNamesMax is the room DebugFlagNames needs for every flag at once.
+const DebugFlagNamesMax = 192

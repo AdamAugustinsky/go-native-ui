@@ -193,8 +193,9 @@ type App struct {
 	verbose     bool
 	diagBuf     []byte
 
-	dbg  *debugState // the debug overlay (debug.go); nil off
-	step stepState   // Offscreen.Step (debugstep.go)
+	barOn bool        // the native menu bar is installed (menus.go)
+	dbg   *debugState // the debug overlay (debug.go); nil off
+	step  stepState   // Offscreen.Step (debugstep.go)
 }
 
 // frameRequester is the part of platform.Window that arms the next frame.
