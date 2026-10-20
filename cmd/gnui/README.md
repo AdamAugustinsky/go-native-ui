@@ -15,7 +15,7 @@ cd cmd/gallery && go run ../gnui package      # release bundle in ./dist
 
 | command | what it does |
 |---|---|
-| `gnui package` | release `.app` from `gnui.json`: universal binary, `Info.plist`, `.icns`, resources, nested frameworks signed inside out, generated entitlements, hardened runtime; optional notarize + staple and `.dmg` |
+| `gnui package` | release `.app` from `gnui.json`: built with `-tags gnui_release` (no debug overlay Debug menu, chords or inspector; a plain `go build` and `gnui run` stay development builds), universal binary, `Info.plist`, `.icns`, resources, nested frameworks signed inside out, generated entitlements, hardened runtime; optional notarize + staple and `.dmg` |
 | `gnui run` | development bundle `.gnui/dev/<Name>.app` (bundle id + `.dev`), signed with `gnui-dev`, launched through LaunchServices; output streamed |
 | `gnui sign app.app` | signs an existing bundle, nested code first (the tool apps) |
 | `gnui doctor` | checks the toolchain, `gnui.json`, the `gnui-dev` identity (trust, validity, a real signing round trip) and release identities |
