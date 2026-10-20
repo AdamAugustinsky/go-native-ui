@@ -368,7 +368,8 @@ func (st *VListState) setHeight(id uint64, h float32) bool {
 
 // SetMark makes mark i (0 to VListMarks-1) follow item id, so that the app
 // learns what became of it when an edit removes it (Mark). A selection scope
-// marks its endpoints' items.
+// over the list marks its endpoints' items with the last two marks
+// (TrackItem); an app that has one leaves them alone.
 // SetMark(i, NoID) clears the mark.
 func (st *VListState) SetMark(i int, id uint64) {
 	st.marks[i] = VListMark{ID: id, Next: NoID, Prev: NoID}

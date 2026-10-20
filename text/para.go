@@ -411,6 +411,67 @@ func (p *ParaView) RangeRects(from, to int, width float32, dst [][4]float32) [][
 	return dst
 }
 
+// SelectionRects appends to dst the highlight of a selection of the bytes
+// [from, to) when the paragraph is drawn width wide, line by line: the
+// rectangles of RangeRects, and, for every line the selection goes on past
+// (beyond the line's last caret position: over its newline or onto the next
+// line), the rest of the line out to the paragraph's edge on the side the
+// line ends (right of a left-to-right line, left of a right-to-left one), as
+// AppKit's text views draw a selection that continues. An empty line the
+// selection runs through is highlighted across. A to beyond the end of the
+// text says that the selection continues after the paragraph: its last line
+// is extended too. A line selected whole is one rectangle, its extent
+// (LineExtent) and the rest of the line together.
+func (p *ParaView) SelectionRects(from, to int, width float32, dst [][4]float32) [][4]float32 {
+	from = max(from, 0)
+	if from >= to {
+		return dst
+	}
+	for i := range p.Lines {
+		l := &p.Lines[i]
+		if int(l.Start) > to || int(l.Start) == to && to < len(p.Text) {
+			break
+		}
+		ec := p.lineEndCaret(i)
+		if from > ec && from >= int(l.End) {
+			continue
+		}
+		more := from <= ec && to > ec // the selection goes on past the line
+		left := p.LineLeft(i, width)
+		x0, x1 := p.LineExtent(i)
+		y0, y1 := l.Top, l.Top+l.Height
+		switch {
+		case l.G1 == l.G0:
+			if more {
+				dst = append(dst, [4]float32{0, y0, width, y1})
+			}
+			continue
+		case from <= int(l.Start) && to >= ec:
+			// the whole line: one rectangle with the rest of it
+			a, b := left+x0, left+x1
+			if more && l.Flags&LineRTL != 0 {
+				a = 0
+			} else if more {
+				b = width
+			}
+			dst = append(dst, [4]float32{a, y0, b, y1})
+			continue
+		}
+		dst = p.RangeRects(max(from, int(l.Start)), min(to, int(l.End)), width, dst)
+		if !more {
+			continue
+		}
+		r := [4]float32{left + x1, y0, width, y1}
+		if l.Flags&LineRTL != 0 {
+			r[0], r[2] = 0, left+x0
+		}
+		if r[2] > r[0] {
+			dst = append(dst, r)
+		}
+	}
+	return dst
+}
+
 // groupCover returns the part [a, b] of group g's x interval that the bytes
 // [from, to) (grapheme boundaries) cover, and whether there is one. A group
 // that stands for no grapheme (an ellipsis, at the cut) is covered whole when

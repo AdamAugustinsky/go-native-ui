@@ -15,8 +15,9 @@ import "gonativeui/ui"
 // when a text field has the focus does not fire; it becomes the matching
 // ui edit action for that field (ui.Context.QueueEdit), which acts once, for a
 // native Edit menu item as much as for a shortcut the field did not claim.
-// When no text field has the focus it fires like any other command, so that
-// a list can copy its selection.
+// So do Copy and Select All while a selection scope takes the edit keys
+// (ui.Context.SelectionFocused), for the scope. Otherwise it fires like any
+// other command, so that a list can copy its selection.
 //
 // While a modal overlay is open (ui.Context.ModalOpen) the dialog owns the
 // keys, and commands are held back with two exceptions: a command with an edit
@@ -89,7 +90,7 @@ func (m *Model) dispatch(c *ui.Context, i int) {
 	if hasBit(m.off, i) {
 		return
 	}
-	if a := cmd.Role.editAction(); a != 0 && c.TextFieldFocused() {
+	if a := cmd.Role.editAction(); a != 0 && (c.TextFieldFocused() || c.SelectionFocused() && (a == ui.EditCopy || a == ui.EditSelectAll)) {
 		c.QueueEdit(a)
 		return
 	}
