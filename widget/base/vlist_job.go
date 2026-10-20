@@ -505,7 +505,18 @@ func (st *VListState) publish() {
 	}
 	for i := range st.marks {
 		m := &st.marks[i]
-		if !st.markOn[i] || m.Removed {
+		if !st.markOn[i] || m.Reset {
+			continue
+		}
+		if m.Removed {
+			// the survivors a removed mark points to may go too: they move
+			// on to theirs
+			if _, ok := nw.index(m.Next); !ok && m.Next != NoID {
+				m.Next, _, _ = st.survivors(m.Next, reset)
+			}
+			if _, ok := nw.index(m.Prev); !ok && m.Prev != NoID {
+				_, m.Prev, _ = st.survivors(m.Prev, reset)
+			}
 			continue
 		}
 		if _, ok := nw.index(m.ID); !ok {

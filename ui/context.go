@@ -177,6 +177,7 @@ type Context struct {
 	rich       []richRec
 	richSpans  []Span
 	richStyles []RichStyle
+	sel        selState // selection scopes (selection.go)
 
 	// semantics (semantics.go): the setters for the next box, and the records
 	// of this frame's boxes that have a role

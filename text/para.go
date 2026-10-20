@@ -411,6 +411,90 @@ func (p *ParaView) RangeRects(from, to int, width float32, dst [][4]float32) [][
 	return dst
 }
 
+// SelectionRects appends to dst the highlight of a selection of the bytes
+// [from, to) when the paragraph is drawn width wide, line by line: the
+// rectangles of RangeRects, and, for every line the selection goes on past
+// (beyond the line's last caret position: over its newline, or from inside
+// the line onto the next), the rest of the line out to the paragraph's edge
+// on the side the line ends (right of a left-to-right line, left of a
+// right-to-left one), as AppKit's text views draw a selection that
+// continues. A selection that starts at a soft line break covers nothing of
+// the line before it. An empty line the selection runs through is
+// highlighted across. A to beyond the end of the text says that the
+// selection continues after the paragraph: its last line is extended too. A
+// line selected whole is one rectangle, its extent (LineExtent) and the rest
+// of the line together. See SelectionRectsAligned for lines that are not
+// naturally aligned.
+func (p *ParaView) SelectionRects(from, to int, width float32, dst [][4]float32) [][4]float32 {
+	return p.SelectionRectsAligned(from, to, width, nil, dst)
+}
+
+// SelectionRectsAligned is SelectionRects for lines moved by dx(i) from
+// where natural alignment puts them (LineLeft; dx nil for none): centred or
+// right-aligned text. The glyph coverage moves with its line; the rest of a
+// line still runs to the paragraph's edges, 0 and width.
+func (p *ParaView) SelectionRectsAligned(from, to int, width float32, dx func(line int) float32, dst [][4]float32) [][4]float32 {
+	from = max(from, 0)
+	if from >= to {
+		return dst
+	}
+	for i := range p.Lines {
+		l := &p.Lines[i]
+		if int(l.Start) > to || int(l.Start) == to && to < len(p.Text) {
+			break
+		}
+		ec := p.lineEndCaret(i)
+		if from > ec && from >= int(l.End) {
+			continue
+		}
+		// the selection goes on past the line: over its newline (or the
+		// paragraph's end), or from before a soft break onto the next line
+		soft := l.Flags&LineHard == 0 && i < len(p.Lines)-1
+		more := to > ec && (from < ec || from == ec && !soft)
+		var sh float32
+		if dx != nil {
+			sh = dx(i)
+		}
+		left := p.LineLeft(i, width) + sh
+		x0, x1 := p.LineExtent(i)
+		y0, y1 := l.Top, l.Top+l.Height
+		switch {
+		case l.G1 == l.G0:
+			if more {
+				dst = append(dst, [4]float32{0, y0, width, y1})
+			}
+			continue
+		case from <= int(l.Start) && to >= ec:
+			// the whole line: one rectangle with the rest of it
+			a, b := left+x0, left+x1
+			if more && l.Flags&LineRTL != 0 {
+				a = 0
+			} else if more {
+				b = width
+			}
+			dst = append(dst, [4]float32{a, y0, b, y1})
+			continue
+		}
+		n := len(dst)
+		dst = p.RangeRects(max(from, int(l.Start)), min(to, int(l.End)), width, dst)
+		for k := n; k < len(dst); k++ {
+			dst[k][0] += sh
+			dst[k][2] += sh
+		}
+		if !more {
+			continue
+		}
+		r := [4]float32{left + x1, y0, width, y1}
+		if l.Flags&LineRTL != 0 {
+			r[0], r[2] = 0, left+x0
+		}
+		if r[2] > r[0] {
+			dst = append(dst, r)
+		}
+	}
+	return dst
+}
+
 // groupCover returns the part [a, b] of group g's x interval that the bytes
 // [from, to) (grapheme boundaries) cover, and whether there is one. A group
 // that stands for no grapheme (an ellipsis, at the cut) is covered whole when
