@@ -8,8 +8,10 @@ package ui
 //     that was built in the previous frame, the keys it handles are claimed
 //     for it: every key-down without the primary modifier except Tab
 //     (characters, caret moves, Enter and Escape, which the field reports),
-//     and with it A, C, X, V, Z, Y (not on macOS) and the primary caret moves
-//     and deletes. The field applies exactly those.
+//     and with it A, C, X, V, Y (not on macOS), Z with or without Shift (undo,
+//     redo), and the primary caret moves and deletes. On macOS a chord with
+//     more modifiers than that (⇧⌘C, ⌥⌘V, ⌥⌘Z) is not the field's: it reaches
+//     the commands. The field applies exactly the keys it claims.
 //  2. Commands: menu.Match takes the unclaimed keys that match a shortcut.
 //  3. Widget keys: Signal.Activated and a widget's own keys use TakeKey and
 //     ClaimKey; Tab traversal takes Tab at End if it is still unclaimed.
@@ -135,8 +137,13 @@ func fieldWants(e *KeyEvent) bool {
 		return e.Code != KeyTab
 	}
 	switch e.Code {
-	case 'A', 'C', 'X', 'V', 'Z':
-		return true
+	case 'A', 'C', 'X', 'V':
+		// On macOS only the plain chord: ⇧⌘C is Show Colors, ⌥⌘V Paste Style,
+		// ⇧⌘A a command of the app's, not Copy or Paste. (Elsewhere Ctrl with
+		// anything else still is Ctrl.)
+		return !macKeys || e.Mods&(ModShift|ModAlt) == 0
+	case 'Z':
+		return !macKeys || e.Mods&ModAlt == 0 // ⌘Z undoes and ⇧⌘Z redoes; ⌥⌘Z is another command
 	case 'Y':
 		return !macKeys
 	case KeyLeft, KeyRight, KeyUp, KeyDown, KeyHome, KeyEnd, KeyBackspace, KeyDelete:

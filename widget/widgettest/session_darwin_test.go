@@ -328,3 +328,33 @@ func TestLiveAppClosesItsPlainWindows(t *testing.T) {
 		t.Error("the plain window was not released when the run ended")
 	}
 }
+
+// A main thread in the platform's event wait is alive; one in a callback of
+// ours, or anywhere else, is not given the idle time.
+func TestInEventWait(t *testing.T) {
+	const wait = `goroutine 1 [syscall, locked to thread]:
+gonativeui/internal/ffi.(*Frame).Call(0x1)
+	ffi.go:270 +0x3c
+gonativeui/platform.(*Window).nextEvent(...)
+	app_darwin.go:54
+gonativeui/platform.(*Window).Wait(0x1, 0xffffffffffffffff)
+	app_darwin.go:44 +0x1c8
+gonativeui/app.(*App).loop(0x1)
+	app.go:417 +0x74
+`
+	inCallback := strings.Replace(wait, "gonativeui/internal/ffi.(*Frame).Call(0x1)\n\tffi.go:270 +0x3c\n",
+		"gonativeui/internal/ffi.cbDispatch(0x1)\n\tcb.go:1\nruntime.cgocallback(0x1)\n\tasm.s:1\n", 1)
+	for _, c := range []struct {
+		name, dump string
+		want       bool
+	}{
+		{"idle", wait + "\ngoroutine 7 [running]:\nmain.x()\n", true},
+		{"in a callback under the wait", inCallback, false},
+		{"elsewhere", "goroutine 1 [select]:\ngonativeui/app.(*App).loop(0x1)\n\tapp.go:417\n", false},
+		{"no main goroutine", "goroutine 7 [running]:\nmain.x()\n", false},
+	} {
+		if got := inEventWait(c.dump); got != c.want {
+			t.Errorf("%s: inEventWait = %v, want %v", c.name, got, c.want)
+		}
+	}
+}

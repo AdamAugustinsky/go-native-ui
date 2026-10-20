@@ -180,7 +180,14 @@ func TestKeyCharactersFollowTheLayout(t *testing.T) {
 			{ui.KeyLeftBracket, ui.ModShift, "{", "{"},
 			{ui.KeyRightBracket, ui.ModShift, "}", "}"},
 			{ui.KeyPeriod, ui.ModShift, ">", ">"},
-			{ui.KeyCode('4'), ui.ModShift | ui.ModSuper, "$", "$"},
+			// With ⌘ the characters lose Shift, the ones ignoring modifiers keep
+			// it: what AppKit itself makes of a keyboard CGEvent with these
+			// flags (+[NSEvent eventWithCGEvent:], 2026-10-20), which NSMenu
+			// matches key equivalents against.
+			{ui.KeyCode('4'), ui.ModShift | ui.ModSuper, "4", "$"},
+			{ui.KeyCode('Z'), ui.ModShift | ui.ModSuper, "z", "Z"},
+			{ui.KeyCode('S'), ui.ModShift | ui.ModSuper, "s", "S"},
+			{ui.KeyLeftBracket, ui.ModShift | ui.ModSuper, "[", "{"},
 			{ui.KeyEnter, 0, "\r", "\r"},
 			{ui.KeyLeft, ui.ModShift, "\uf702", "\uf702"},
 		} {
