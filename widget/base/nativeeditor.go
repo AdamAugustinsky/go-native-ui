@@ -90,15 +90,17 @@ func (e *NativeEditor) TakeFieldCommand() ui.FieldCommand {
 	return FieldCommandOf(e.TakeCommand())
 }
 
-// TakeFieldCommandSends is TakeFieldCommand with whether an Enter (FieldInsertNewline)
-// is one that sends by the Enter policy (platform.Editor.TakeCommandSends): what a
-// completion that declines the key does with it.
-func (e *NativeEditor) TakeFieldCommandSends() (cmd ui.FieldCommand, sends bool) {
+// TakeFieldCommandRev is TakeFieldCommand with whether an Enter
+// (FieldInsertNewline) is one that sends by the Enter policy, and the editor's
+// Rev when the key came (platform.Editor.TakeCommandRev): what a completion
+// that declines the key does with it, and whether the key was followed by a
+// change of the text.
+func (e *NativeEditor) TakeFieldCommandRev() (cmd ui.FieldCommand, sends bool, rev uint32) {
 	if e.Editor == nil {
-		return ui.FieldNone, false
+		return ui.FieldNone, false, 0
 	}
-	c, sends := e.TakeCommandSends()
-	return FieldCommandOf(c), sends
+	c, sends, rev := e.TakeCommandRev()
+	return FieldCommandOf(c), sends, rev
 }
 
 // NativeEditorSignal is what the editor reported since the last frame.

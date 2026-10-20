@@ -133,6 +133,21 @@ func TestEditorCommandSends(t *testing.T) {
 	}
 }
 
+// A command carries the Rev the editor had at the key, so that a change after
+// it can be told from one before it.
+func TestEditorCommandRev(t *testing.T) {
+	e := &Editor{}
+	e.pushCommand(CmdAccept)
+	e.rev += 2
+	e.pushCommandSends(CmdAccept, true)
+	if _, _, r := e.TakeCommandRev(); r != 0 {
+		t.Errorf("first command stamped %d, want 0", r)
+	}
+	if _, sends, r := e.TakeCommandRev(); r != 2 || !sends {
+		t.Errorf("second command stamped %d (sends %v), want 2", r, sends)
+	}
+}
+
 // Completion commands queue in order and drop when the queue is full; ending
 // the completion drops them.
 func TestEditorCommands(t *testing.T) {

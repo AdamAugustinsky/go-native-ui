@@ -64,6 +64,7 @@ type cmpLab struct {
 	results     []rexui.CompletionResult // each frame's Completion result that was not None
 	watchHidden bool                     // count the frames the hosted view was hidden while the list was open
 	hidden      int
+	shift       float32 // space under the composer, in points (a parent moving it)
 }
 
 func (p *cmpLab) Init(a *app.App) error {
@@ -121,6 +122,9 @@ func (p *cmpLab) Build(c *ui.Context) {
 	k.BeginDisabled(p.disabled)
 	sig := rexui.Composer(k, "Message", p.st, p.o)
 	k.EndDisabled()
+	if p.shift > 0 {
+		k.Space(p.shift)
+	}
 	if p.measure {
 		d := p.allocs() - before
 		p.deltas = append(p.deltas, d)
@@ -901,5 +905,159 @@ func TestLiveComposerDisablingSettlesTheEditor(t *testing.T) {
 	}
 	if got := p.text(); got != "hiか" {
 		t.Errorf("the text after settling is %q", got)
+	}
+}
+
+// ---- the second review's findings ----
+
+// An Enter that was followed by typing in the same frame is not retargeted at
+// the text the typing made: its accept is dropped, the typed letter stays and
+// the list stays open.
+func TestLiveComposerAcceptBeforeLaterTypingIsDropped(t *testing.T) {
+	l, p := startComposer(t, rexui.ComposerSetup{Placeholder: "Message"}, 480, 420)
+	p.focus(t, l)
+	l.Type("1 @pa")
+	l.Until("the list opens", 120, func() bool { return p.open && p.st.Editor().CompletionActive() })
+	l.Press(ui.KeyDown, 0)
+	l.Until("row 1", 120, func() bool { return p.list.Sel == 1 })
+	l.Frames(3)
+	l.Do(func(*app.App) {
+		in := widgettest.TextInput(cview(p))
+		in.DoCommand("insertNewline:") // Enter, then
+		in.InsertText("x", widgettest.NoRange)
+	})
+	l.Until("typed", 120, func() bool { return p.text() == "1 @pax" })
+	l.Frames(8)
+	if p.accepts != 0 || p.text() != "1 @pax" {
+		t.Fatalf("accepts %d, text %q: the Enter replaced text it was not typed at", p.accepts, p.text())
+	}
+	if !p.open {
+		t.Error("the list closed: the dropped accept should leave it open")
+	}
+}
+
+// A key waiting for the app to see the text must not wait for ever: under
+// typing in every frame the Enter before it is dropped as soon as a letter
+// follows, nothing acts on it later, and the editor's queue is free for the
+// next Enter.
+func TestLiveComposerKeysDoNotWaitUnderContinuousTyping(t *testing.T) {
+	l, p := startComposer(t, rexui.ComposerSetup{Placeholder: "Message"}, 480, 420)
+	p.focus(t, l)
+	l.Type("1 @pa")
+	l.Until("the list opens", 120, func() bool { return p.open && p.st.Editor().CompletionActive() })
+	l.Frames(3)
+	l.Do(func(*app.App) { widgettest.TextInput(cview(p)).DoCommand("insertNewline:") })
+	for i := 0; i < 30; i++ {
+		l.Do(func(*app.App) { widgettest.TextInput(cview(p)).InsertText("a", widgettest.NoRange) })
+		l.Frames(1)
+	}
+	l.Frames(6)
+	if p.accepts != 0 {
+		t.Fatalf("an Enter from before 30 letters accepted afterwards (%d)", p.accepts)
+	}
+	l.Press(ui.KeyEnter, 0)
+	l.Until("a fresh Enter accepts", 120, func() bool { return p.accepts == 1 })
+	l.Frames(4)
+	if p.accepts != 1 {
+		t.Fatalf("accepts %d", p.accepts)
+	}
+}
+
+// When a parent moves the composer between frames, the list - placed against
+// the last layout - does not cover the hosted view in any frame that is shown.
+func TestLiveComposerListNeverCoversAMovedHost(t *testing.T) {
+	l, p := startComposer(t, rexui.ComposerSetup{Placeholder: "Message"}, 480, 420)
+	p.focus(t, l)
+	l.Type("1 @pa")
+	l.Until("the list opens", 120, func() bool { return p.open && p.st.Editor().CompletionActive() })
+	l.Frames(6)
+	l.Do(func(*app.App) { p.watchHidden = true; p.hidden = 0; p.shift = 60 })
+	l.Frames(10)
+	if p.hidden != 0 {
+		t.Fatalf("the hosted view was hidden for %d frames while the composer moved under the list", p.hidden)
+	}
+	if !p.open {
+		t.Fatal("the list closed")
+	}
+	if b := p.boxes(l); b.list[2] <= b.list[0] || overlap(b.list, b.field) {
+		t.Errorf("the list %v is not shown clear of the field %v after the move", b.list, b.field)
+	}
+}
+
+// Disabling during a composition commits it where it is: the history and the
+// selection stay.
+func TestLiveComposerDisablingKeepsUndoAndSelection(t *testing.T) {
+	l, p := startComposer(t, rexui.ComposerSetup{Placeholder: "Message"}, 480, 420)
+	p.focus(t, l)
+	l.Type("abc")
+	l.Until("typed", 120, func() bool { return p.text() == "abc" })
+	var in widgettest.TextClient
+	l.Do(func(*app.App) {
+		_ = p.st.Editor().SetSelection(platform.TextSelection{Anchor: 1, Focus: 1}) // a composition in the middle of the text
+		in = widgettest.TextInput(cview(p))
+		in.SetMarkedText("か", widgettest.Range{Loc: 1}, widgettest.NoRange)
+	})
+	l.Until("composing", 120, func() bool { _, m := p.st.Editor().Marked(); return m })
+	before := p.st.Selection()
+	l.Do(func(*app.App) { p.disabled = true })
+	l.Frames(4)
+	l.Do(func(*app.App) { p.disabled = false })
+	l.Frames(4)
+	if got := p.text(); got != "aかbc" {
+		t.Fatalf("text %q after the commit", got)
+	}
+	if got := p.st.Selection(); got != before {
+		t.Errorf("selection %v after the disable, was %v (the end of the composition, not of the text)", got, before)
+	}
+	p.focus(t, l)
+	l.Press('Z', ui.ModSuper)
+	l.Until("undo undid something", 120, func() bool { return p.text() != "aかbc" })
+}
+
+// A terminal key ends the diversion of keys at once, not a frame later.
+func TestLiveComposerTerminalKeyEndsTheDiversionAtOnce(t *testing.T) {
+	l, p := startComposer(t, rexui.ComposerSetup{Placeholder: "Message"}, 480, 420)
+	p.focus(t, l)
+	l.Type("1 @pa")
+	l.Until("the list opens", 120, func() bool { return p.open && p.st.Editor().CompletionActive() })
+	l.Frames(3)
+	l.Do(func(*app.App) { widgettest.TextInput(cview(p)).DoCommand("cancelOperation:") })
+	l.Frames(1)
+	var active bool
+	l.Do(func(*app.App) { active = p.st.Editor().CompletionActive() })
+	if active {
+		t.Fatal("keys are still diverted in the frame of the Escape")
+	}
+}
+
+// A press that began on the list gives the keyboard back to the text; a button
+// held while a shortcut takes the keyboard elsewhere does not.
+func TestLiveComposerHeldButtonDoesNotStealTheKeyboard(t *testing.T) {
+	l, p := startComposer(t, rexui.ComposerSetup{Placeholder: "Message"}, 480, 420)
+	p.focus(t, l)
+	l.Type("1 @pa")
+	l.Until("the list opens", 120, func() bool { return p.open && p.st.Editor().CompletionActive() })
+	l.Frames(4)
+	b := p.boxes(l)
+	x, y := (b.list[0]+b.list[2])/2, (b.list[1]+b.list[3])/2
+	l.MoveTo(x, y)
+	l.Frames(2)
+	l.Native(func(w widgettest.Win) { widgettest.Post(w.MouseEvent(widgettest.MouseDown, x, y, 0, 1)) })
+	l.Frames(3)
+	t.Cleanup(func() {
+		l.Native(func(w widgettest.Win) { widgettest.Post(w.MouseEvent(widgettest.MouseUp, x, y, 0, 1)) })
+	})
+	var focused bool
+	l.Do(func(*app.App) { focused = p.st.Editor().Focused() })
+	if !focused {
+		t.Fatal("a press on the list did not keep the keyboard in the text")
+	}
+	c0 := p.cancels
+	l.Do(func(a *app.App) { a.Win.FocusHost(0) }) // a shortcut moves the keyboard away; the button is still down
+	l.Until("the completion ended", 120, func() bool { return p.cancels > c0 })
+	l.Frames(6)
+	l.Do(func(*app.App) { focused = p.st.Editor().Focused() })
+	if focused {
+		t.Fatal("the composer took the keyboard back from a shortcut because the button was held")
 	}
 }

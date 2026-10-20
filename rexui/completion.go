@@ -153,6 +153,7 @@ type CompletionState struct {
 	// row is brought into view when the highlight changes, not on every
 	// frame, so the wheel can scroll it away.
 	revealed int
+	rows     int              // how many rows the list showed in the last frame
 	n        int              // the number of rows, for Attach
 	pending  CompletionResult // what the last command did, for Take
 }
@@ -308,7 +309,12 @@ func completion(k *base.Kit, label string, st *CompletionState, items []Completi
 	}
 
 	// bring the highlight into view when it changes (the keyboard, the
-	// pointer, a reset); the wheel scrolls it away again and it stays away
+	// pointer, a reset) or when the list holds fewer or more rows than it did
+	// (the window or the editor moved: the highlight may be out of the rows
+	// that remain); the wheel scrolls it away again and it stays away
+	if st.rows != rows {
+		st.rows, st.revealed = rows, 0
+	}
 	if st.Sel >= 0 && st.revealed != st.Sel+1 {
 		if st.Sel < st.top {
 			st.top = st.Sel
@@ -340,7 +346,7 @@ func completion(k *base.Kit, label string, st *CompletionState, items []Completi
 	if ex := o.Exclude; ex[2] > ex[0] && ex[3] > ex[1] { // outside the editor: against its edge, at the caret's x
 		anchor = [4]float32{caret[0], ex[1], max(caret[2], caret[0]), ex[3]}
 	}
-	c.NextOverlay(ui.OverlayOpts{NoFocus: true, Dismiss: dismiss})
+	c.NextOverlay(ui.OverlayOpts{NoFocus: true, Dismiss: dismiss, AvoidHosts: true})
 	c.NextSize(ui.Px(w), ui.Children(1))
 	ov := c.BeginOverlay(okey, ui.OverlayPopup, anchor, place)
 	sig.Dismissed = ov.Dismissed

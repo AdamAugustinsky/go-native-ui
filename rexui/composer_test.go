@@ -823,3 +823,107 @@ func TestComposerDrawnTextAPIMatchesHosted(t *testing.T) {
 		}
 	}
 }
+
+// ---- the second review's findings, on the drawn field ----
+
+func shownDrawnList(t *testing.T, cr *composerRig, list *rexui.CompletionState, items []rexui.CompletionItem) {
+	t.Helper()
+	cr.focus()
+	cr.typeText("hi @a")
+	cr.o.Completion, cr.o.Items = list, items
+	cr.settle()
+	if _, ok := cr.listBounds(); !ok {
+		t.Fatal("no list")
+	}
+}
+
+// Keys after a terminal result are not eaten: Escape then Left is a cancel and
+// a step of the caret.
+func TestComposerKeysAfterATerminalResultAreTheFields(t *testing.T) {
+	cr := newComposerRig(t, 400, rexui.ComposerSetup{})
+	var list rexui.CompletionState
+	list.Reset(len(composerItems), true)
+	shownDrawnList(t, cr, &list, composerItems)
+	at := cr.st.Selection().Focus
+	cr.in.PushKey(ui.KeyEvent{Code: ui.KeyEscape, Down: true})
+	cr.in.PushKey(ui.KeyEvent{Code: ui.KeyLeft, Down: true})
+	cr.frame()
+	if cr.sig.Completion != rexui.ResultCancel {
+		t.Fatalf("result %d, want a cancel", cr.sig.Completion)
+	}
+	if got := cr.st.Selection().Focus; got != at-1 {
+		t.Fatalf("the caret is at %d after Escape, Left from %d: the Left was eaten", got, at)
+	}
+}
+
+// The app is told when the window stops being key although the list's drawing
+// was suspended in the frame before (the field's size changed).
+func TestComposerDeactivationDuringASuspendedListIsReported(t *testing.T) {
+	cr := newBottomComposerRig(t, 800)
+	var list rexui.CompletionState
+	list.Reset(len(composerItems), true)
+	shownDrawnList(t, cr, &list, composerItems)
+	cancels := 0
+	inner := cr.build
+	cr.build = func(g *rig) {
+		inner(g)
+		if cr.sig.Cancelled {
+			cancels++
+		}
+	}
+	cr.o.Attachments = []rexui.ComposerAttachment{{Name: "a.png"}} // the list waits a frame for the new layout
+	cr.frame()
+	if _, ok := cr.listBounds(); ok {
+		t.Fatal("the list was drawn in the frame the field changed")
+	}
+	cr.in.Focused = false
+	cr.frame()
+	cr.frame()
+	if cancels != 1 {
+		t.Fatalf("the app was told %d times that the completion ended, want once", cancels)
+	}
+}
+
+// When the list has fewer rows than before (the window shrank), the
+// highlighted row is brought into view.
+func TestComposerCompletionRevealsTheHighlightWhenRowsShrink(t *testing.T) {
+	items := make([]rexui.CompletionItem, 9)
+	for i := range items {
+		items[i].Title = "Item " + string(rune('A'+i))
+	}
+	cr := newBottomComposerRig(t, 800)
+	var list rexui.CompletionState
+	list.Reset(len(items), true)
+	list.Sel = 7
+	shownDrawnList(t, cr, &list, items)
+	if n := cr.node(ui.RoleListItem, "Item H"); n.Bounds[2] <= n.Bounds[0] {
+		t.Fatal("the highlighted row is not shown with room for 8")
+	}
+	cr.h = 380 // room for five rows above the composer
+	cr.settle()
+	cr.settle()
+	if n := cr.node(ui.RoleListItem, "Item H"); n.Bounds[2] <= n.Bounds[0] {
+		t.Fatal("the highlighted row is out of the rows that remain")
+	}
+}
+
+// The drawn Replace allocates nothing once it has run.
+func TestComposerDrawnReplaceAllocatesNothing(t *testing.T) {
+	st, _ := rexui.NewComposer(nil, rexui.ComposerSetup{})
+	st.SetText([]byte("hello world"))
+	e := []byte("é")
+	do := func() {
+		if err := st.Replace(platform.TextRange{Start: 1, End: 2}, e, platform.TextRange{Start: 3, End: 3}); err != nil {
+			t.Fatal(err)
+		}
+		if err := st.Replace(platform.TextRange{Start: 1, End: 3}, []byte("e"), platform.TextRange{Start: 2, End: 2}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < 50; i++ {
+		do()
+	}
+	if n := testing.AllocsPerRun(200, do); n != 0 {
+		t.Fatalf("Replace allocates %.1f times per pair", n)
+	}
+}

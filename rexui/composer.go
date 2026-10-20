@@ -1,7 +1,6 @@
 package rexui
 
 import (
-	"bytes"
 	"errors"
 	"unicode/utf8"
 
@@ -88,6 +87,26 @@ type ComposerState struct {
 	geom       composerGeom // what the last frame's layout depended on
 	edPx       float32      // the hosted editor's height in the last frame, pixels
 	grow       float32      // by how much the field grows in this frame, pixels
+	// wasActive: the last frame held a completion (the keys were diverted),
+	// whether or not its list was drawn; the app is told when the window
+	// stops being key while one is held.
+	wasActive bool
+	// seenRev is the hosted editor's Rev as of the last frame's signals: the
+	// text the app built its list for. pend is a key that waits a frame for
+	// the app to see the text it was typed after.
+	seenRev uint32
+	pend    pendingKey
+	// frame counts the composer's frames; pressFrame is the last in which the
+	// left button went down on the list.
+	frame, pressFrame uint32
+	made              ui.TextBuffer // Replace's scratch: the text it would make
+}
+
+// pendingKey is a completion key of the hosted editor not processed yet.
+type pendingKey struct {
+	cmd   ui.FieldCommand
+	sends bool
+	rev   uint32
 }
 
 // composerGeom is what can move the field between one frame and the next
@@ -113,6 +132,8 @@ func NewComposer(w *platform.Window, s ComposerSetup) (*ComposerState, error) {
 	}
 	st.buf.Max = st.maxLen
 	st.buf.Reserve(st.maxLen)
+	st.made.Max = st.maxLen
+	st.made.Reserve(st.maxLen)
 	if w == nil {
 		return st, nil
 	}
@@ -197,10 +218,9 @@ func (s *ComposerState) Replace(r platform.TextRange, text []byte, sel platform.
 	}
 	// the text it makes, to check the selection against before touching the
 	// field's own (one line: the text is cleaned as typing is)
-	var made ui.TextBuffer
-	made.Max = s.maxLen
+	made := &s.made
 	made.SetBytes(b)
-	replaceExact(&made, r, text)
+	replaceExact(made, r, text)
 	res := made.Bytes()
 	if sel.Start < 0 || sel.End < sel.Start || sel.End > len(res) || !boundary(res, sel.Start) || !boundary(res, sel.End) {
 		return platform.ErrNotBoundary
@@ -424,6 +444,7 @@ func Composer(k *base.Kit, label string, st *ComposerState, o ComposerOpts) Comp
 	look := k.TakeForce()
 	sig := ComposerSignal{Removed: -1, Chosen: -1}
 	notKey := k.Inactive() // the window is not key (a forced look is only a look)
+	st.frame++
 
 	key := ui.HashString(c.ParentKey(), ident)
 	prev := c.RectOf(key)
@@ -450,6 +471,7 @@ func Composer(k *base.Kit, label string, st *ComposerState, o ComposerOpts) Comp
 	}
 
 	var ns base.NativeEditorSignal
+	var now, appRev uint32
 	submit := false
 
 	// the field
@@ -502,6 +524,8 @@ func Composer(k *base.Kit, label string, st *ComposerState, o ComposerOpts) Comp
 		if fx.Value > 0 {
 			editorPx = fx.Value
 		}
+		now, appRev = st.ed.Rev(), st.seenRev // the text of this frame's signals, and the one the app's list is for
+		st.seenRev = now
 		sig.Key = c.KeyOf(ns.ID)
 		sig.Editor = ns.ID
 		_, marked := st.ed.Marked()
@@ -510,13 +534,16 @@ func Composer(k *base.Kit, label string, st *ComposerState, o ComposerOpts) Comp
 		sig.Cancelled, sig.PastedImage, sig.HeightChanged = ns.Cancelled, ns.PastedImage, ns.HeightChanged
 		sig.Focused = ns.Focused
 		in := c.Input()
-		pressing := (in.Down[ui.ButtonLeft] || in.Pressed[ui.ButtonLeft]) && !notKey
-		if st.completing && ns.Cancelled && !ns.Focused && cc != nil && !sig.Composing && pressing && inside(in.MouseX, in.MouseY, st.list) {
-			// A press on the list took the first responder from the text view
-			// (any press on the window's own view does), which ended the
+		if in.Pressed[ui.ButtonLeft] && !notKey && inside(in.MouseX, in.MouseY, st.list) {
+			st.pressFrame = st.frame // a press began on the list
+		}
+		if st.completing && ns.Cancelled && !ns.Focused && cc != nil && !sig.Composing && st.pressFrame != 0 && st.frame-st.pressFrame <= 1 {
+			// The press on the list took the first responder from the text
+			// view (any press on the window's own view does), which ended the
 			// completion. The press is the list's: give the keyboard back and
-			// keep the list for the click. Hovering is not a press: after a
-			// shortcut moved the keyboard elsewhere it stays there.
+			// keep the list for the click. Only a press does this: hovering,
+			// or a button held from before, is not one, and after a shortcut
+			// moved the keyboard elsewhere it stays there.
 			st.ed.Focus()
 			sig.Cancelled, ns.Cancelled = false, false
 			sig.Focused = true
@@ -569,56 +596,62 @@ func Composer(k *base.Kit, label string, st *ComposerState, o ComposerOpts) Comp
 		st.Focus(k) // a press on the field's padding puts the caret in the text
 	}
 
-	// the hosted editor's keys: the list's while one shows, else what the editor
-	// would have done with them. They wait while the text or the selection has
-	// changed in a way the app has not seen, so that the list they act on is the
-	// one for the text they were typed after.
+	// The hosted editor's keys, in the order they came: the list's while one
+	// shows, else what the editor would have done with them. A key that would
+	// accept a row is for the text as it was at the key: if the text or the
+	// selection has changed since, the accept is dropped (the list stays), and
+	// if the app has not seen the text it was typed after (its list is for the
+	// text before), it waits one frame for the app to see it.
 	if hosted {
-		hold := cc != nil && (ns.Changed || ns.Selected)
-	drain:
-		for !hold {
-			cmd, sends := st.ed.TakeFieldCommandSends()
-			if cmd == ui.FieldNone {
+		for cc == nil || !cc.done {
+			var cmd ui.FieldCommand
+			var sends bool
+			var rev uint32
+			if st.pend.cmd != ui.FieldNone {
+				cmd, sends, rev = st.pend.cmd, st.pend.sends, st.pend.rev
+				st.pend = pendingKey{}
+			} else if cmd, sends, rev = st.ed.TakeFieldCommandRev(); cmd == ui.FieldNone {
 				break
 			}
 			c.RequestFrame()
-			if cc != nil {
-				if cc.FieldCommand(cmd, 0) {
-					if cc.done {
-						break drain // what comes after a terminal result is not the list's
-					}
-					continue
-				}
-				// a key the list does not use: the hosted editor already took it
-				switch cmd {
-				case ui.FieldInsertNewline: // Enter with no row highlighted is the editor's own
-					if sends {
-						submit = true
-					} else {
-						st.newline()
-					}
-				case ui.FieldInsertTab, ui.FieldInsertBacktab: // the list closes; Tab does not leave the text
-					cc.FieldCommand(ui.FieldCancel, 0)
-					if cc.done {
-						break drain
-					}
-				}
+			if cc == nil {
+				submit = st.leftover(cmd, sends, submit, &sig) // keys of a list that is gone
 				continue
 			}
-			// keys left over from a list that is gone
-			switch cmd {
-			case ui.FieldInsertNewline:
-				if sends {
-					submit = true
-				} else {
-					st.newline()
+			if cc.accepts(cmd) {
+				if rev != now { // typed before a later change: for text that is gone
+					continue
 				}
-			case ui.FieldCancel:
-				sig.Cancelled = true
+				if rev != appRev { // the app has not seen this text yet
+					st.pend = pendingKey{cmd, sends, rev}
+					break
+				}
+			}
+			if cc.FieldCommand(cmd, 0) {
+				continue
+			}
+			// a key the list does not use: the hosted editor already took it
+			switch cmd {
+			case ui.FieldInsertNewline: // Enter with no row highlighted is the editor's own
+				submit = st.leftover(cmd, sends, submit, &sig)
+			case ui.FieldInsertTab, ui.FieldInsertBacktab: // the list closes; Tab does not leave the text
+				cc.FieldCommand(ui.FieldCancel, 0)
 			}
 		}
-		if hold {
-			c.RequestFrame()
+		if cc != nil && cc.done {
+			// what the editor queued after the terminal key is still its own
+			// (Enter sends, as it would without a list), but not another
+			// accept of the row just chosen
+			for {
+				cmd, sends, _ := st.ed.TakeFieldCommandRev()
+				if cmd == ui.FieldNone {
+					break
+				}
+				if cc.result == ResultAccept && (cmd == ui.FieldInsertNewline || cmd == ui.FieldInsertTab) {
+					continue
+				}
+				submit = st.leftover(cmd, sends, submit, &sig)
+			}
 		}
 	}
 	if cc != nil {
@@ -626,11 +659,12 @@ func Composer(k *base.Kit, label string, st *ComposerState, o ComposerOpts) Comp
 	}
 
 	// completion shows while the text has the keyboard in a key window and no
-	// input method composes
-	want := cc != nil && !sig.Composing && (sig.Focused || look&base.LookFocused != 0) && !notKey
-	if st.completing && cc != nil && notKey {
+	// input method composes, until a terminal key ends it
+	want := cc != nil && !cc.done && !sig.Composing && (sig.Focused || look&base.LookFocused != 0) && !notKey
+	if st.wasActive && cc != nil && notKey {
 		sig.Cancelled = true // AppKit keeps the first responder of a window that resigns key: the app is told here
 	}
+	st.wasActive = want
 	if hosted {
 		if want != st.ed.CompletionActive() {
 			st.ed.SetCompletionActive(want)
@@ -687,6 +721,7 @@ func Composer(k *base.Kit, label string, st *ComposerState, o ComposerOpts) Comp
 	st.completing = show
 	if !show {
 		st.caretOK = false
+		st.list = [4]float32{}
 	}
 	st.grow = 0
 	return sig
@@ -735,17 +770,27 @@ type composerCmd struct {
 	done   bool
 }
 
+// accepts reports whether cmd would accept the list's highlighted row.
+func (c *composerCmd) accepts(cmd ui.FieldCommand) bool {
+	if cmd != ui.FieldInsertTab && cmd != ui.FieldInsertNewline {
+		return false
+	}
+	l := c.list
+	l.init(l.n)
+	return l.Sel >= 0 && l.Sel < l.n
+}
+
 // FieldCommand implements ui.FieldCommander.
 func (c *composerCmd) FieldCommand(cmd ui.FieldCommand, r rune) bool {
 	if c.done {
-		return true
+		// After a terminal result the list takes nothing more: the keys that
+		// follow are the field's (Left after Escape moves the caret), except
+		// another accept of the row just chosen.
+		return c.result == ResultAccept && (cmd == ui.FieldInsertTab || cmd == ui.FieldInsertNewline)
 	}
 	l := c.list
-	if c.st.ed == nil && (cmd == ui.FieldInsertTab || cmd == ui.FieldInsertNewline) {
-		l.init(l.n)
-		if l.Sel >= 0 && l.Sel < l.n && (c.st.buf.Rev() != c.rev || c.st.buf.Caret() != c.caret) {
-			return true // the Enter or Tab the list would have taken, for text that is gone: refused
-		}
+	if c.st.ed == nil && c.accepts(cmd) && (c.st.buf.Rev() != c.rev || c.st.buf.Caret() != c.caret) {
+		return true // the Enter or Tab the list would have taken, for text that is gone: refused
 	}
 	if !(*completionCmd)(l).FieldCommand(cmd, r) {
 		return false
@@ -757,10 +802,26 @@ func (c *composerCmd) FieldCommand(cmd ui.FieldCommand, r rune) bool {
 	return true
 }
 
+// leftover is what a hosted editor's key does when no list takes it: Enter
+// sends by the Enter policy or adds a line, Escape is reported as Cancelled.
+// It returns whether a send is asked for.
+func (s *ComposerState) leftover(cmd ui.FieldCommand, sends, submit bool, sig *ComposerSignal) bool {
+	switch cmd {
+	case ui.FieldInsertNewline:
+		if sends {
+			return true
+		}
+		s.newline()
+	case ui.FieldCancel:
+		sig.Cancelled = true
+	}
+	return submit
+}
+
 // settleDisabled takes the hosted editor's state while the composer is
 // disabled and its view is not built: what it queued is dropped (an Enter from
 // before does not send when the composer is enabled again), and a composition
-// is ended with its text kept, so that the text drawn in the view's place is
+// is committed with its text kept, so that the text drawn in the view's place is
 // the text the editor has.
 func (s *ComposerState) settleDisabled() {
 	_ = s.ed.TakeSignals()
@@ -770,9 +831,10 @@ func (s *ComposerState) settleDisabled() {
 		s.ed.SetCompletionActive(false)
 	}
 	if _, marked := s.ed.Marked(); marked {
-		_ = s.ed.SetText(bytes.Clone(s.ed.Text()))
+		s.ed.CommitComposition() // the marked text stays as ordinary text; undo and the selection are kept
+		_ = s.ed.TakeSignals()
 	}
-	s.completing = false
+	s.completing, s.wasActive, s.pend = false, false, pendingKey{}
 }
 
 // inside reports whether (x, y) is in rectangle r (x0, y0, x1, y1).

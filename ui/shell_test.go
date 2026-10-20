@@ -14,6 +14,9 @@ type shellRig struct {
 	popupAt        [4]float32 // the popup's anchor
 	hostInPopup    bool       // a second host inside the popup
 	capsuleInPopup bool
+	avoid          bool // the popup is OverlayOpts.AvoidHosts
+	panel          ID
+	ovRect         [4]float32 // the popup's rectangle in the frame before, as BeginOverlay says
 }
 
 func newShellRig(t *testing.T) *shellRig {
@@ -47,10 +50,12 @@ func (r *shellRig) build(c *Context) {
 	c.Pop()
 
 	if r.popup {
-		c.BeginOverlay(1, OverlayPopup, r.popupAt, PlaceBelow)
+		c.NextOverlay(OverlayOpts{NoFocus: r.avoid, AvoidHosts: r.avoid})
+		r.ovRect = c.BeginOverlay(1, OverlayPopup, r.popupAt, PlaceBelow).Rect
 		c.NextSize(Px(100), Px(50))
 		c.NextRadius(25)
 		p := c.Box(0, "panel")
+		r.panel = p
 		if r.capsuleInPopup {
 			c.Material(p, AreaPopover, 5, 0)
 		}
@@ -162,6 +167,45 @@ func TestHostRegionsZOrder(t *testing.T) {
 	r.frame(r.build)
 	if h := r.hosts(); h[0].Hidden {
 		t.Error("the host stays hidden after the modal closed")
+	}
+}
+
+// A popup that asks to avoid hosts is not drawn over one: the layout of the
+// frame, finished, decides, whatever the owner placed it against, and the
+// host stays shown. It comes back, in the frame after, once it is clear of the
+// host.
+func TestAvoidHostsOverlay(t *testing.T) {
+	r := newShellRig(t)
+	r.popup, r.avoid = true, true
+	r.popupAt = [4]float32{210, 70, 260, 70} // its panel covers the host's lower part
+	r.frame(r.build)
+	if h := r.hosts(); h[0].Hidden {
+		t.Errorf("a popup that avoids hosts hid the host: %+v", h)
+	}
+	if !r.c.Animating() {
+		t.Error("no further frame was asked for")
+	}
+	r.frame(r.build)
+	if r.ovRect[2] > r.ovRect[0] {
+		t.Errorf("the popup over the host has a rectangle %v: it should be left out", r.ovRect)
+	}
+	r.popupAt = [4]float32{10, 250, 60, 250} // clear of the host
+	r.frame(r.build)
+	r.frame(r.build)
+	if h := r.hosts(); h[0].Hidden {
+		t.Errorf("the host is hidden by a popup beside it: %+v", h)
+	}
+	if r.ovRect[2]-r.ovRect[0] != 100 {
+		t.Errorf("the popup beside the host has a rectangle %v, want 100 wide", r.ovRect)
+	}
+
+	// a popup that does not ask is drawn, and the host is hidden, as before
+	r.avoid = false
+	r.popupAt = [4]float32{210, 70, 260, 70}
+	r.frame(r.build)
+	r.frame(r.build)
+	if h := r.hosts(); !h[0].Hidden {
+		t.Errorf("a plain popup over the host does not hide it: %+v", h)
 	}
 }
 

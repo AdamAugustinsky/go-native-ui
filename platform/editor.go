@@ -168,6 +168,8 @@ type editorState struct {
 	pend   EditorSignals
 	cmds   [maxCommands]EditorCommand
 	csends [maxCommands]bool
+	crev   [maxCommands]uint32 // the text's Rev when the command was queued
+	rev    uint32
 	cHead  int
 	cN     int
 	compl  bool
@@ -235,13 +237,27 @@ func (e *Editor) TakeCommand() EditorCommand {
 // whose completion does not take it can do what the editor would have: send or
 // add a line. It is false for every other command.
 func (e *Editor) TakeCommandSends() (c EditorCommand, sends bool) {
+	c, sends, _ = e.TakeCommandRev()
+	return c, sends
+}
+
+// Rev changes whenever the text or the selection does, for any reason (typing,
+// an input method, undo, SetText, Replace, SetSelection). A command is stamped
+// with the Rev of the editor at the key, so that an app can tell an accept of
+// the text it looked at from one typed before later changes.
+func (e *Editor) Rev() uint32 { return e.rev }
+
+// TakeCommandRev is TakeCommandSends with the Rev the editor had when the key
+// came: a command whose Rev is behind the editor's was followed by a change of
+// the text or the selection.
+func (e *Editor) TakeCommandRev() (c EditorCommand, sends bool, rev uint32) {
 	if e.cN == 0 {
-		return CmdNone, false
+		return CmdNone, false, e.rev
 	}
-	c, sends = e.cmds[e.cHead], e.csends[e.cHead]
+	c, sends, rev = e.cmds[e.cHead], e.csends[e.cHead], e.crev[e.cHead]
 	e.cHead = (e.cHead + 1) % maxCommands
 	e.cN--
-	return c, sends
+	return c, sends, rev
 }
 
 func (e *Editor) pushCommand(c EditorCommand) { e.pushCommandSends(c, false) }
@@ -251,7 +267,7 @@ func (e *Editor) pushCommandSends(c EditorCommand, sends bool) {
 		return
 	}
 	i := (e.cHead + e.cN) % maxCommands
-	e.cmds[i], e.csends[i] = c, sends
+	e.cmds[i], e.csends[i], e.crev[i] = c, sends, e.rev
 	e.cN++
 }
 
