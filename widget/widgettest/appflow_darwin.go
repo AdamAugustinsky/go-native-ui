@@ -19,14 +19,29 @@ import (
 // ordinary titled NSWindow with no content, to stand for "another window"
 // (the key window moves to it, it keeps the application alive, the Dock's
 // reopen counts it) until the framework opens windows of its own (F4).
+//
+// A window made by OpenPlainWindow is owned by the PlainWindow (and its
+// copies): Close closes it and releases it, once, and the copies see that it
+// is gone. A PlainWindow built around a window that belongs to someone else
+// (PlainWindow{Window: w}) owns nothing: Close closes the window and releases
+// nothing.
 type PlainWindow struct {
 	// Window is the NSWindow*.
 	Window objc.ID
+
+	own *plainOwner // set when the window is ours to release
+}
+
+// plainOwner is the one reference a PlainWindow owns, shared by its copies.
+type plainOwner struct {
+	mu       sync.Mutex
+	released bool
 }
 
 // OpenPlainWindow opens a plain titled window at (x, y) in screen points
 // (0, 0: the system's choice) and orders it front without activating the
-// application. Main thread.
+// application. The caller owns it: Close it, or open it with
+// LiveApp.OpenPlainWindow, which closes it when the run ends. Main thread.
 func OpenPlainWindow(title string, x, y float64) PlainWindow {
 	str := objc.Str(title)
 	sel := objc.Sel("initWithContentRect:styleMask:backing:defer:")
@@ -35,21 +50,53 @@ func OpenPlainWindow(title string, x, y float64) PlainWindow {
 		x, y = 80, 80
 	}
 	w = objc.ID(objc.F.Reset().Arg(uintptr(w)).Arg(uintptr(sel)).ArgRect(x, y, 240, 160).Arg(1 | 2 | 4 | 8).Arg(2).ArgBool(false).Call(objc.MsgSend).R0())
-	objc.Send1(w, objc.Sel("setReleasedWhenClosed:"), 0)
+	objc.Send1(w, objc.Sel("setReleasedWhenClosed:"), 0) // the PlainWindow releases it, in Close
 	objc.Send1(w, objc.Sel("setTitle:"), uintptr(str))
 	objc.Send(w, objc.Sel("orderFrontRegardless"))
-	return PlainWindow{w}
+	return PlainWindow{Window: w, own: &plainOwner{}}
 }
 
-// Close closes the window (performClose is not used: no delegate asks).
-func (p PlainWindow) Close() { objc.Send(p.Window, objc.Sel("close")) }
+// gone reports whether the window was released by Close.
+func (p PlainWindow) gone() bool {
+	if p.own == nil {
+		return false
+	}
+	p.own.mu.Lock()
+	defer p.own.mu.Unlock()
+	return p.own.released
+}
+
+// Close closes the window (performClose is not used: no delegate asks) and,
+// if the PlainWindow owns it, releases it. Closing again does nothing, and
+// releases nothing again.
+func (p PlainWindow) Close() {
+	if p.own == nil {
+		objc.Send(p.Window, objc.Sel("close"))
+		return
+	}
+	p.own.mu.Lock()
+	defer p.own.mu.Unlock()
+	if p.own.released {
+		return
+	}
+	p.own.released = true
+	objc.Send(p.Window, objc.Sel("close"))
+	objc.Release(p.Window)
+}
 
 // Hide orders the window out, the way the Dock's "hide" and a minimised
-// window leave no visible window.
-func (p PlainWindow) Hide() { objc.Send1(p.Window, objc.Sel("orderOut:"), 0) }
+// window leave no visible window. It does nothing for a window that was
+// closed.
+func (p PlainWindow) Hide() {
+	if !p.gone() {
+		objc.Send1(p.Window, objc.Sel("orderOut:"), 0)
+	}
+}
 
-// Visible reports whether the window is on screen.
-func (p PlainWindow) Visible() bool { return objc.SendBool(p.Window, selIsVisible) }
+// Visible reports whether the window is on screen (false once it was closed).
+func (p PlainWindow) Visible() bool {
+	return !p.gone() && objc.SendBool(p.Window, selIsVisible)
+}
 
 // SetAppAppearance makes the application draw as dark (true) or light (false)
 // by setting NSApp's appearance, the flip an app-wide override does (it is

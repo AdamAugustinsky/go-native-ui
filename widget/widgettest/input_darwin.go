@@ -70,9 +70,10 @@ func (w Win) viewPoint(x, y float32) (px, py float64) {
 	return float64(x / w.Scale), h - float64(y/w.Scale)
 }
 
-// windowPoint is (x, y) in the window's own coordinates, the
-// locationInWindow of an event.
-func (w Win) windowPoint(x, y float32) (wx, wy float64) {
+// WindowPoint is (x, y) pixels from the content's top left in the window's
+// own coordinates (points from its bottom left): the locationInWindow an
+// event aimed at (x, y) has. Main thread.
+func (w Win) WindowPoint(x, y float32) (wx, wy float64) {
 	px, py := w.viewPoint(x, y)
 	objc.F.Reset().Arg(uintptr(w.View)).Arg(uintptr(selConvertToView)).ArgPoint(px, py).Arg(0).Call(objc.MsgSend)
 	return objc.F.F64(0), objc.F.F64(1)
@@ -81,7 +82,7 @@ func (w Win) windowPoint(x, y float32) (wx, wy float64) {
 // screenPoint is (x, y) in Quartz global coordinates: points from the top
 // left of the main display, which is where CGEvents are located.
 func (w Win) screenPoint(x, y float32) (sx, sy float64) {
-	wx, wy := w.windowPoint(x, y)
+	wx, wy := w.WindowPoint(x, y)
 	objc.F.Reset().Arg(uintptr(w.Window)).Arg(uintptr(selConvertToScreen)).ArgPoint(wx, wy).Call(objc.MsgSend)
 	cx, cy := objc.F.F64(0), objc.F.F64(1)
 	screens := objc.Send(objc.Cls("NSScreen"), objc.Sel("screens"))
@@ -119,7 +120,7 @@ var mouseTypes = [...]uintptr{
 // the modifiers held and the click count (1 for a click, 2 for the second of
 // a double click; 0 for a move). The event is autoreleased.
 func (w Win) MouseEvent(kind MouseKind, x, y float32, mods ui.Mods, clicks int) objc.ID {
-	wx, wy := w.windowPoint(x, y)
+	wx, wy := w.WindowPoint(x, y)
 	pressure := float32(1)
 	if kind == MouseMove || kind == MouseUp || kind == RightUp {
 		pressure = 0
@@ -200,7 +201,16 @@ func (p ScrollPhase) momentumBits() int64 {
 // natural scrolling does (the content follows the fingers). phase is the
 // gesture's phase, momentum the inertia's (ScrollNone outside either). It is a
 // CGEvent turned into an NSEvent, as a trackpad's is.
+//
+// The deltas must be whole numbers of points. A precise CGEvent carries its
+// scrolling deltas in integer fields only (the point deltas; no other field
+// of the event reaches scrollingDeltaX and scrollingDeltaY when the event is
+// continuous), so a fraction cannot be represented and is refused rather than
+// truncated. ScrollLinesEvent makes events with fractional deltas.
 func (w Win) ScrollEvent(x, y, dx, dy float32, phase, momentum ScrollPhase, mods ui.Mods) (objc.ID, error) {
+	if dx != float32(int32(dx)) || dy != float32(int32(dy)) {
+		return 0, fmt.Errorf("widgettest: ScrollEvent(%v, %v): a precise scroll event carries whole points only; use ScrollLinesEvent for fractional deltas", dx, dy)
+	}
 	if err := loadCoreGraphics(); err != nil {
 		return 0, err
 	}
@@ -216,10 +226,42 @@ func (w Win) ScrollEvent(x, y, dx, dy float32, phase, momentum ScrollPhase, mods
 	cgSetInt(cg, 99, phase.scrollBits())       // kCGScrollWheelEventScrollPhase
 	cgSetInt(cg, 123, momentum.momentumBits()) // kCGScrollWheelEventMomentumPhase
 	cgSetInt(cg, 88, 1)                        // kCGScrollWheelEventIsContinuous
-	w.aim(cg)
-	ev := nsEventFromCG(cg)
-	w.aimEvent(ev, x, y)
-	return ev, nil
+	if err := w.aim(cg, x, y); err != nil {
+		objc.F.Call1(g.release, cg)
+		return 0, err
+	}
+	return nsEventFromCG(cg), nil
+}
+
+// ScrollLinesEvent builds the NSEvent of a mouse wheel over (x, y): deltas dx
+// and dy in lines, fractions allowed (an accelerated wheel reports them), as
+// scrollingDeltaX and scrollingDeltaY of an event whose
+// hasPreciseScrollingDeltas is false: the receiver turns lines into points
+// itself. The deltas travel in the CGEvent's fixed-point (16.16) line fields,
+// which are the only fractional scroll fields there are: they are exact to
+// 1/65536 of a line. Positive dy scrolls the
+// content down, as in ScrollEvent.
+func (w Win) ScrollLinesEvent(x, y, dx, dy float32, mods ui.Mods) (objc.ID, error) {
+	if err := loadCoreGraphics(); err != nil {
+		return 0, err
+	}
+	g := &coreGraphics
+	// kCGScrollEventUnitLine = 1; the integer line deltas stay zero, the
+	// fixed-point ones carry the values
+	cg := objc.F.Reset().Arg(0).Arg(1).Arg(2).Arg(0).Arg(0).Arg(0).Call(g.scroll2).R0()
+	if cg == 0 {
+		return 0, fmt.Errorf("widgettest: CGEventCreateScrollWheelEvent2 failed")
+	}
+	sx, sy := w.screenPoint(x, y)
+	objc.F.Reset().Arg(cg).ArgPoint(sx, sy).Call(g.setLoc)
+	objc.F.Reset().Arg(cg).Arg(nsFlags(mods)).Call(g.setFlags)
+	cgSetDbl(cg, 93, float64(dy)) // kCGScrollWheelEventFixedPtDeltaAxis1
+	cgSetDbl(cg, 94, float64(dx)) // kCGScrollWheelEventFixedPtDeltaAxis2
+	if err := w.aim(cg, x, y); err != nil {
+		objc.F.Call1(g.release, cg)
+		return 0, err
+	}
+	return nsEventFromCG(cg), nil
 }
 
 // GesturePhase is the phase of a magnify or rotate gesture.
@@ -269,10 +311,11 @@ func (w Win) gestureEvent(kind int64, field uint32, amount float64, phase Gestur
 		cgSetDbl(cg, field, amount)
 	}
 	cgSetInt(cg, cgGesturePhase, phase.bits())
-	w.aim(cg)
-	ev := nsEventFromCG(cg)
-	w.aimEvent(ev, x, y)
-	return ev, nil
+	if err := w.aim(cg, x, y); err != nil {
+		objc.F.Call1(g.release, cg)
+		return 0, err
+	}
+	return nsEventFromCG(cg), nil
 }
 
 // MagnifyEvent builds the NSEvent of a pinch (NSEventTypeMagnify) over
@@ -294,14 +337,25 @@ func (w Win) SmartMagnifyEvent(x, y float32) (objc.ID, error) {
 	return w.gestureEvent(22, 0, 0, GestureBegan, x, y)
 }
 
-// aim makes the window the target of a CGEvent: NSEvent takes its windowNumber
-// from field 51 (the window server's target window) and the mouse window
-// fields 91 and 92 (under the pointer, and the one that can handle the event).
-func (w Win) aim(cg uintptr) {
+// aim makes the window and the point the target of a CGEvent, so that the
+// NSEvent AppKit makes of it carries them itself: the window number (field 51,
+// the window server's target window) and the mouse window fields 91 and 92
+// (under the pointer, and the one that can handle the event) name the window,
+// and the window-relative location (CGEventSetWindowLocation: top left
+// origin, points) gives locationInWindow. Without the last, AppKit takes the
+// location from where the real pointer is, which a test must not move.
+func (w Win) aim(cg uintptr, x, y float32) error {
+	if coreGraphics.setWinLoc == 0 {
+		return fmt.Errorf("widgettest: CGEventSetWindowLocation is not available on this macOS: scroll and gesture events cannot be aimed at a point")
+	}
 	n := int64(w.Number())
 	cgSetInt(cg, 51, n)
 	cgSetInt(cg, 91, n)
 	cgSetInt(cg, 92, n)
+	wx, wy := w.WindowPoint(x, y)
+	h := objc.SendRect(w.Window, selFrameOf).H
+	objc.F.Reset().Arg(cg).ArgPoint(wx, h-wy).Call(coreGraphics.setWinLoc)
+	return nil
 }
 
 // BeginGestureEvent builds the NSEventTypeBeginGesture the trackpad sends when
@@ -390,17 +444,35 @@ func KeyFor(code ui.KeyCode) (vk uint16, chars string, ok bool) {
 }
 
 // Key builds the key-down (or key-up) NSEvent of an app key code with
-// modifiers, the way the keyboard would produce it: a letter with Shift types
-// its capital, with ⌘ or Ctrl its character without them (as AppKit gives
-// key equivalents). It panics for a code KeyFor does not know.
+// modifiers, the way the keyboard would produce it on the US layout: the
+// characters are what the layout types with Shift and Option held (Shift+1 is
+// "!", Shift+A is "A"), and without any modifier but Shift for the
+// characters-ignoring-modifiers; with ⌘ or Ctrl they are those of the key
+// without them, as AppKit gives key equivalents. The key code names a
+// physical key (KeyFor); KeyIn presses it on another layout, and KeyEvent
+// makes an event with characters of the caller's choosing. It panics for a
+// code KeyFor does not know and when the US layout cannot be read. Main thread.
 func (w Win) Key(down bool, code ui.KeyCode, mods ui.Mods) objc.ID {
+	us, err := NamedKeyLayout(US)
+	if err != nil {
+		panic(err.Error())
+	}
+	return w.KeyIn(us, down, code, mods)
+}
+
+// KeyIn is Key on the keyboard layout k (NamedKeyLayout, CurrentKeyLayout):
+// the physical key of the code, the characters the layout types for it. The
+// function keys and the editing keys have the same characters on every
+// layout. Main thread.
+func (w Win) KeyIn(k *KeyLayout, down bool, code ui.KeyCode, mods ui.Mods) objc.ID {
 	vk, plain, ok := KeyFor(code)
 	if !ok {
 		panic(fmt.Sprintf("widgettest: no virtual key code for key %#x", uint16(code)))
 	}
 	chars := plain
-	if mods&ui.ModShift != 0 && len(plain) == 1 && plain[0] >= 'a' && plain[0] <= 'z' {
-		chars = string(rune(plain[0]) - 'a' + 'A')
+	if len(plain) == 1 && plain[0] >= 0x20 && plain[0] < 0x7f { // a printing key: the layout decides
+		chars = k.Translate(vk, mods&(ui.ModShift|ui.ModAlt))
+		plain = k.Translate(vk, mods&ui.ModShift)
 	}
 	return w.KeyEvent(down, chars, plain, vk, mods, false)
 }

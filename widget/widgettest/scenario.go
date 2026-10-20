@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -44,6 +46,9 @@ func runScenario() {
 	if name == "" {
 		return
 	}
+	if lf := liveScenarios[name]; lf != nil {
+		runLiveScenario(lf)
+	}
 	f := scenarios[name]
 	if f == nil {
 		fmt.Printf("FAIL no scenario %q\n", name)
@@ -52,6 +57,106 @@ func runScenario() {
 	time.AfterFunc(90*time.Second, func() { fmt.Println("FAIL watchdog: the scenario ran 90 s"); os.Exit(3) })
 	f()
 	os.Exit(0)
+}
+
+// liveScenarios are the scenarios that drive a LiveApp: they need a test
+// goroutine of their own, with the main thread free to serve it.
+var liveScenarios = map[string]func(testing.TB){}
+
+// RegisterLiveScenario registers a scenario that is a test of the harness
+// itself: a function that gets a testing.TB and may start a LiveApp with it,
+// as a test does, in a child process. The TB records instead of failing: a
+// Fatal, a Skip or an Error is reported to the parent as a line "T kind:
+// message" in the output and as outcome=fatal|errors|skip|pass (a failure outranks a skip, as in testing), and the child
+// exits when the function and its cleanups are done. Use it to test what
+// happens when a LiveApp is used wrongly or its environment is broken, which
+// cannot be done in the test binary itself.
+func RegisterLiveScenario(name string, f func(t testing.TB)) {
+	if scenarios[name] != nil || liveScenarios[name] != nil {
+		panic("widgettest: scenario " + name + " registered twice")
+	}
+	liveScenarios[name] = f
+}
+
+// runLiveScenario runs f on a goroutine with a recording TB and serves the
+// main thread meanwhile.
+func runLiveScenario(f func(testing.TB)) {
+	mainRunning.Store(true)
+	time.AfterFunc(120*time.Second, func() { fmt.Println("FAIL watchdog: the scenario ran 120 s"); os.Exit(3) })
+	s := &scenarioT{}
+	go func() {
+		done := make(chan struct{})
+		go func() { defer close(done); f(s) }()
+		<-done
+		s.finish()
+		os.Exit(0)
+	}()
+	serveMain()
+}
+
+// scenarioT is the testing.TB of a live scenario: it records.
+type scenarioT struct {
+	testing.TB // nil: the methods a LiveApp does not use panic
+	mu         sync.Mutex
+	cleanups   []func()
+	fatals     int
+	failed     bool
+	skipped    bool
+}
+
+func (s *scenarioT) note(kind, format string, args ...any) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	msg := strings.ReplaceAll(fmt.Sprintf(format, args...), "\n", "\n  ")
+	fmt.Printf("T %s: %s\n", kind, msg)
+}
+
+func (s *scenarioT) Helper()                 {}
+func (s *scenarioT) Name() string            { return "scenario" }
+func (s *scenarioT) Cleanup(f func())        { s.mu.Lock(); s.cleanups = append(s.cleanups, f); s.mu.Unlock() }
+func (s *scenarioT) Log(args ...any)         { s.note("log", "%s", fmt.Sprint(args...)) }
+func (s *scenarioT) Logf(f string, a ...any) { s.note("log", f, a...) }
+func (s *scenarioT) Error(args ...any)       { s.Errorf("%s", fmt.Sprint(args...)) }
+func (s *scenarioT) Errorf(f string, a ...any) {
+	s.failed = true
+	s.note("error", f, a...)
+}
+func (s *scenarioT) Fatal(args ...any) { s.Fatalf("%s", fmt.Sprint(args...)) }
+func (s *scenarioT) Fatalf(f string, a ...any) {
+	s.mu.Lock()
+	s.failed = true
+	s.fatals++
+	s.mu.Unlock()
+	s.note("fatal", f, a...)
+	runtime.Goexit()
+}
+func (s *scenarioT) Skip(args ...any) { s.Skipf("%s", fmt.Sprint(args...)) }
+func (s *scenarioT) Skipf(f string, a ...any) {
+	s.mu.Lock()
+	s.skipped = true
+	s.mu.Unlock()
+	s.note("skip", f, a...)
+	runtime.Goexit()
+}
+func (s *scenarioT) Failed() bool { return s.failed }
+
+// finish runs the cleanups last to first and reports the outcome.
+func (s *scenarioT) finish() {
+	for i := len(s.cleanups) - 1; i >= 0; i-- {
+		done := make(chan struct{})
+		go func() { defer close(done); s.cleanups[i]() }() // a Fatal in a cleanup ends only its goroutine
+		<-done
+	}
+	outcome := "pass" // as testing reports it: a failure outranks a skip
+	switch {
+	case s.fatals > 0:
+		outcome = "fatal"
+	case s.failed:
+		outcome = "errors"
+	case s.skipped:
+		outcome = "skip"
+	}
+	Say("outcome=%s", outcome)
 }
 
 // Say reports a result line from a scenario: "key=value" pairs, no spaces in

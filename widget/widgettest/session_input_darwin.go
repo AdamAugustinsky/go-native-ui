@@ -140,11 +140,11 @@ func (l *LiveApp) gesture(x, y float32, steps int, build func(w Win, p GesturePh
 	if steps < 1 {
 		steps = 1
 	}
-	send := func(p GesturePhase, per float64) {
+	send := func(mk func(w Win) (objc.ID, error)) {
 		var err error
 		l.Native(func(w Win) {
 			var ev objc.ID
-			if ev, err = build(w, p, per); err == nil {
+			if ev, err = mk(w); err == nil {
 				Dispatch(ev)
 			}
 		})
@@ -153,21 +153,14 @@ func (l *LiveApp) gesture(x, y float32, steps int, build func(w Win, p GesturePh
 		}
 		l.Frames(1)
 	}
-	l.Native(func(w Win) {
-		if ev, err := w.BeginGestureEvent(x, y); err == nil {
-			Dispatch(ev)
-		}
-	})
-	l.Frames(1)
-	send(GestureBegan, 0)
-	for i := 0; i < steps; i++ {
-		send(GestureChanged, total/float64(steps))
+	phase := func(p GesturePhase, per float64) {
+		send(func(w Win) (objc.ID, error) { return build(w, p, per) })
 	}
-	send(GestureEnded, 0)
-	l.Native(func(w Win) {
-		if ev, err := w.EndGestureEvent(x, y); err == nil {
-			Dispatch(ev)
-		}
-	})
-	l.Frames(1)
+	send(func(w Win) (objc.ID, error) { return w.BeginGestureEvent(x, y) })
+	phase(GestureBegan, 0)
+	for i := 0; i < steps; i++ {
+		phase(GestureChanged, total/float64(steps))
+	}
+	phase(GestureEnded, 0)
+	send(func(w Win) (objc.ID, error) { return w.EndGestureEvent(x, y) })
 }

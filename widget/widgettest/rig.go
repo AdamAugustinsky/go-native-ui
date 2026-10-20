@@ -228,6 +228,17 @@ func (r *Rig) AssertImage(name string, tol Tolerance) {
 	AssertImage(r.t, name, r.img, tol)
 }
 
+// AssertImageRect is the package function AssertImageRect on the part of the
+// rig's last frame inside r (pixels from the top left): compare the control,
+// not the window around it.
+func (r *Rig) AssertImageRect(name string, rect image.Rectangle, tol Tolerance) {
+	r.t.Helper()
+	if r.img == nil {
+		r.t.Fatal("widgettest: AssertImageRect needs a rig made by Open that has run a frame")
+	}
+	AssertImageRect(r.t, name, r.img, rect, tol)
+}
+
 // Frames runs n frames.
 func (r *Rig) Frames(n int) {
 	for i := 0; i < n; i++ {

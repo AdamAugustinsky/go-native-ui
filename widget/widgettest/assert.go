@@ -125,20 +125,30 @@ func writeFile(path string, b []byte) error {
 // Tolerance says how far an image may be from its golden file and still
 // match. Two renderings of the same scene differ in the last bits (GPU
 // rounding, text antialiasing, a different OS release), so a byte comparison
-// fails for nothing; this one counts only what a person could see.
+// fails for nothing; this one counts only what a person could see, and counts
+// it strictly, so that a control that moved by one pixel is not lost in a big
+// picture.
 //
 // Each pixel is compared in the CIELAB colour space (sRGB, D65), where the
 // distance between two colours (CIE76 ΔE) follows how different they look:
 // about 1 is the least a trained eye can tell apart on a flat patch, 2.3 is
-// one just-noticeable difference. Pixels are first composited over white.
-// A pixel counts as different when its ΔE exceeds Delta. The images match
-// when they have the same size, no pixel is off by more than Hard, and at
-// most Fraction of the pixels are different.
+// one just-noticeable difference. Pixels are first composited over white (so
+// an alpha difference counts only as far as it shows over white; Exact
+// compares the raw pixels, alpha included). A pixel counts as different when
+// its ΔE exceeds Delta. The images match when they have the same size, no
+// pixel is off by more than Hard, and the number of different pixels is at
+// most Fraction of all of them and at most MaxPixels.
 //
-// The zero Tolerance is the default: Delta 2.3 (one just-noticeable
-// difference), Fraction 0.001 (one pixel in a thousand: antialiased edges of
-// text move by this much between renderers) and Hard 25 (nothing may be a
-// different colour altogether). Use Exact for a comparison of every byte.
+// The zero Tolerance is the default: Delta 1.5 (a difference a person can
+// just see; one level of one channel is below it), Fraction 0.001 (antialiased
+// edges of text move by this much between renderers), MaxPixels 16 and Hard
+// 25 (nothing may be a different colour altogether). MaxPixels is what keeps
+// the default strict as the picture grows: a thousandth of a window is
+// thousands of pixels, enough to hide a checkbox that moved by a pixel (about
+// 60 pixels of its outline change), so the allowance never exceeds sixteen.
+// For a control, compare the control (AssertImageRect), not the window around
+// it. A Tolerance that sets any field is taken as written: an unset
+// MaxPixels there means no cap, and Exact accepts only identical pixels.
 type Tolerance struct {
 	// Delta is the ΔE up to which a pixel is the same colour.
 	Delta float64
@@ -146,15 +156,18 @@ type Tolerance struct {
 	Fraction float64
 	// Hard is the ΔE no pixel may exceed.
 	Hard float64
+	// MaxPixels is the most pixels that may exceed Delta, whatever Fraction
+	// allows for a big picture (0: no cap in an explicit Tolerance).
+	MaxPixels int
 }
 
-// Exact is the Tolerance that accepts only identical pixels (a negative Delta
-// means any difference counts, a negative Hard no limit).
+// Exact is the Tolerance that accepts only identical pixels, alpha included
+// (a negative Delta means any difference counts, a negative Hard no limit).
 var Exact = Tolerance{Delta: -1, Fraction: 0, Hard: -1}
 
 func (tol Tolerance) resolved() Tolerance {
 	if tol == (Tolerance{}) {
-		return Tolerance{Delta: 2.3, Fraction: 0.001, Hard: 25}
+		return Tolerance{Delta: 1.5, Fraction: 0.001, Hard: 25, MaxPixels: 16}
 	}
 	return tol
 }
@@ -170,6 +183,37 @@ func AssertImage(t testing.TB, name string, img image.Image, tol Tolerance) {
 	if err := assertImage(goldenDir, name, img, tol, updating()); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// AssertImageRect is AssertImage for the part of img inside r (in img's
+// coordinates): the golden file is the crop. Compare a control, not the
+// window around it; the tolerance then scales with the control (see
+// Tolerance).
+func AssertImageRect(t testing.TB, name string, img image.Image, r image.Rectangle, tol Tolerance) {
+	t.Helper()
+	crop, err := Crop(img, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	AssertImage(t, name, crop, tol)
+}
+
+// Crop copies the part of img inside r (in img's coordinates) into an image
+// of its own whose origin is (0, 0). It is an error if r is empty or reaches
+// outside img: a crop that silently lost its edge would compare less than the
+// test asked for.
+func Crop(img image.Image, r image.Rectangle) (*image.RGBA, error) {
+	b := img.Bounds()
+	if r.Empty() || !r.In(b) {
+		return nil, fmt.Errorf("widgettest: crop %v is empty or outside the %v image", r, b)
+	}
+	out := image.NewRGBA(image.Rect(0, 0, r.Dx(), r.Dy()))
+	for y := 0; y < r.Dy(); y++ {
+		for x := 0; x < r.Dx(); x++ {
+			out.Set(x, y, img.At(r.Min.X+x, r.Min.Y+y))
+		}
+	}
+	return out, nil
 }
 
 func assertImage(dir, name string, img image.Image, tol Tolerance, update bool) error {
@@ -226,6 +270,8 @@ type Comparison struct {
 	Different, Pixels int
 	Worst             float64
 	WorstAt           image.Point
+	// FirstAt is where the first pixel beyond Delta is.
+	FirstAt image.Point
 	// Diff is a picture of the difference (nil when the sizes differ).
 	Diff *image.RGBA
 }
@@ -241,17 +287,24 @@ func CompareImages(want, got image.Image, tol Tolerance) Comparison {
 	c.Diff = image.NewRGBA(image.Rect(0, 0, wb.Dx(), wb.Dy()))
 	for y := 0; y < wb.Dy(); y++ {
 		for x := 0; x < wb.Dx(); x++ {
-			wr, wg, wbl := overWhite(want.At(wb.Min.X+x, wb.Min.Y+y))
-			gr, gg, gbl := overWhite(got.At(gb.Min.X+x, gb.Min.Y+y))
+			wc, gc := want.At(wb.Min.X+x, wb.Min.Y+y), got.At(gb.Min.X+x, gb.Min.Y+y)
+			wr, wg, wbl := overWhite(wc)
+			gr, gg, gbl := overWhite(gc)
 			var d float64
 			same := wr == gr && wg == gg && wbl == gbl
-			if !same {
+			if tol.Delta < 0 { // Exact: the raw pixels, alpha included, not what shows over white
+				same = sameRGBA(wc, gc)
+			}
+			if wr != gr || wg != gg || wbl != gbl {
 				d = deltaE(wr, wg, wbl, gr, gg, gbl)
 			}
 			if d > c.Worst {
 				c.Worst, c.WorstAt = d, image.Pt(x, y)
 			}
 			if tol.Delta < 0 && !same || tol.Delta >= 0 && d > tol.Delta {
+				if c.Different == 0 {
+					c.FirstAt = image.Pt(x, y)
+				}
 				c.Different++
 				c.Diff.SetRGBA(x, y, color.RGBA{255, 0, 0, 255})
 			} else { // faded copy of the golden image
@@ -260,9 +313,14 @@ func CompareImages(want, got image.Image, tol Tolerance) Comparison {
 		}
 	}
 	allowed := int(math.Floor(tol.Fraction * float64(c.Pixels)))
+	if tol.MaxPixels > 0 && allowed > tol.MaxPixels {
+		allowed = tol.MaxPixels
+	}
 	switch {
 	case c.Worst > tol.Hard && tol.Hard >= 0:
 		c.Why = fmt.Sprintf("the pixel at %v differs by ΔE %.1f, more than the %.1f any pixel may", c.WorstAt, c.Worst, tol.Hard)
+	case c.Different > allowed && tol.Delta < 0:
+		c.Why = fmt.Sprintf("%d of %d pixels differ in an exact comparison (first at %v)", c.Different, c.Pixels, c.FirstAt)
 	case c.Different > allowed:
 		c.Why = fmt.Sprintf("%d of %d pixels (%.3f %%) differ by more than ΔE %.1f, %d are allowed (largest ΔE %.1f at %v)",
 			c.Different, c.Pixels, 100*float64(c.Different)/float64(c.Pixels), tol.Delta, allowed, c.Worst, c.WorstAt)
@@ -270,6 +328,14 @@ func CompareImages(want, got image.Image, tol Tolerance) Comparison {
 		c.OK = true
 	}
 	return c
+}
+
+// sameRGBA reports whether two colours are the same pixel: the same
+// (premultiplied) red, green, blue and alpha, with no compositing.
+func sameRGBA(a, b color.Color) bool {
+	ar, ag, ab, aa := a.RGBA()
+	br, bg, bb, ba := b.RGBA()
+	return ar == br && ag == bg && ab == bb && aa == ba
 }
 
 // overWhite is the colour of c composited over white, as 8-bit sRGB.

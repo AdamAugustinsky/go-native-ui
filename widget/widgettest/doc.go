@@ -57,11 +57,25 @@
 //	l.Do(func(a *app.App) { ... AppKit ... })       // on the main thread, between frames
 //
 // Waits count frames, not seconds, because a runner's display can stall for
-// half a minute; a test is skipped only when not one frame is drawn in 90 s.
+// half a minute. Every hand-off to the main thread is bounded in wall time
+// (LiveOptions): a callback that never returns, a main thread that never
+// answers and a window that never draws end in a failure that says which. A
+// function given to Do runs on the main thread: it must not call t.Fatal or
+// t.Skip (the failure is reported, naming the mistake). A wait that sees no
+// frame looks at the environment and skips only with evidence that it cannot
+// draw (a locked screen, a hidden or covered window, a display that does not
+// tick while the run loop is alive); otherwise it fails, with the app's state
+// line.
+//
 // The input helpers are also functions of Win (NativeWindow): MouseEvent,
-// KeyEvent, Key, ScrollEvent, MagnifyEvent, RotateEvent, SmartMagnifyEvent,
-// each building an NSEvent aimed at a pixel of the content, and Post, Send and
-// Dispatch hand it to AppKit. TextClient calls the NSTextInputClient methods
+// KeyEvent, Key (the US layout; KeyIn takes another, NamedKeyLayout reads one
+// without selecting it), ScrollEvent (whole points: a precise scroll event
+// has no fractions), ScrollLinesEvent (a wheel's fractional lines),
+// MagnifyEvent, RotateEvent, SmartMagnifyEvent, each building an NSEvent that
+// AppKit itself says is aimed at a pixel of the content. Post, Send and
+// SendToWindow hand an event to AppKit, and Dispatch picks the way that works
+// for its kind (a gesture goes to the window: [NSApp sendEvent:] does not hand
+// a synthetic one on to a view). TextClient calls the NSTextInputClient methods
 // of a view (setMarkedText, insertText, unmarkText, firstRect…) as an input
 // method does; ViewString and SetViewString read and set the text of a hosted
 // native view. Windows, FindMenuItem, Sheet, SetAppAppearance, OpenPlainWindow,
@@ -78,7 +92,10 @@
 //
 // AssertTree and AssertImage compare with files in testdata, rewrite them with
 // -update (DefineUpdateFlag) and leave what the test got in testdata/failed;
-// images are compared in CIELAB with a perceptual Tolerance. Capture takes a
+// images are compared in CIELAB with a perceptual Tolerance that is strict by
+// default (a control that moved by one pixel is seen; AssertImageRect compares
+// the control, not the window around it) and Exact compares raw pixels, alpha
+// included. ViewImage draws an NSView as AppKit does. Capture takes a
 // picture of the real window with GnuiShot when GNUI_GNUISHOT names its
 // script. The fakes of native surfaces: FakeDialogs answers an app's alerts and
 // panels, and the steps Command, Edit, Appearance and Do deliver a menu

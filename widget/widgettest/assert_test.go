@@ -140,3 +140,112 @@ func TestDeltaE(t *testing.T) {
 		t.Errorf("transparent over white: %d %d %d", r, g, b)
 	}
 }
+
+// Exact compares the pixels as they are, alpha included: a transparent pixel
+// is not the white pixel it looks like over white.
+func TestExactSeesAlpha(t *testing.T) {
+	white := image.NewNRGBA(image.Rect(0, 0, 4, 4))
+	clear := image.NewNRGBA(image.Rect(0, 0, 4, 4))
+	for y := 0; y < 4; y++ {
+		for x := 0; x < 4; x++ {
+			white.SetNRGBA(x, y, color.NRGBA{255, 255, 255, 255})
+			clear.SetNRGBA(x, y, color.NRGBA{255, 255, 255, 0})
+		}
+	}
+	if c := CompareImages(white, white, Exact); !c.OK {
+		t.Errorf("identical images: %s", c.Why)
+	}
+	c := CompareImages(white, clear, Exact)
+	if c.OK || c.Different != 16 {
+		t.Errorf("opaque white against transparent white under Exact: ok %v, %d different, want 16: %s", c.OK, c.Different, c.Why)
+	}
+	// a difference of alpha alone, one level
+	a254 := image.NewNRGBA(image.Rect(0, 0, 4, 4))
+	for i := range a254.Pix {
+		a254.Pix[i] = 255
+	}
+	a254.Pix[3] = 254
+	if c := CompareImages(white, a254, Exact); c.OK {
+		t.Error("one level of alpha went unseen by Exact")
+	}
+}
+
+// indicator is a window-sized picture with a small low-contrast round control
+// in it, drawn dx pixels from its place.
+func indicator(dx int) *image.RGBA {
+	img := flat(800, 600, color.RGBA{242, 242, 242, 255})
+	for y := 0; y < 600; y++ {
+		for x := 0; x < 800; x++ {
+			if cx, cy := x-(400+dx), y-300; cx*cx+cy*cy <= 16*16 {
+				img.SetRGBA(x, y, color.RGBA{234, 234, 234, 255})
+			}
+		}
+	}
+	return img
+}
+
+// The default tolerance sees a small control that moved by one pixel in a
+// window-sized picture, and does not see the noise of two renderings.
+func TestDefaultToleranceSeesAOnePixelShiftOfASmallControl(t *testing.T) {
+	want := indicator(0)
+	for _, c := range []struct {
+		name string
+		got  *image.RGBA
+		ok   bool
+	}{
+		{"the same", indicator(0), true},
+		{"one pixel to the right", indicator(1), false},
+		{"one pixel to the left", indicator(-1), false},
+	} {
+		if r := CompareImages(want, c.got, Tolerance{}); r.OK != c.ok {
+			t.Errorf("%s, whole picture: ok %v, want %v (%d of %d pixels differ, largest ΔE %.1f)", c.name, r.OK, c.ok, r.Different, r.Pixels, r.Worst)
+		}
+	}
+	// the crop around the control: the tolerance scales with the control
+	rect := image.Rect(360, 260, 440, 340)
+	crop := func(img *image.RGBA) *image.RGBA {
+		c, err := Crop(img, rect)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	if r := CompareImages(crop(want), crop(indicator(1)), Tolerance{}); r.OK {
+		t.Errorf("one pixel shift, cropped: not seen (%d of %d pixels differ)", r.Different, r.Pixels)
+	}
+	// noise between two renderings: every channel of every pixel one level off
+	noisy := indicator(0)
+	for i := range noisy.Pix {
+		if i%4 != 3 {
+			noisy.Pix[i]--
+		}
+	}
+	if r := CompareImages(want, noisy, Tolerance{}); !r.OK {
+		t.Errorf("one level of noise on every pixel: %s", r.Why)
+	}
+	if r := CompareImages(crop(want), crop(noisy), Tolerance{}); !r.OK {
+		t.Errorf("one level of noise on every pixel, cropped: %s", r.Why)
+	}
+	// text antialiasing noise: a few edge pixels of another shade pass in a big picture
+	edge := indicator(0)
+	for x := 0; x < 10; x++ {
+		edge.SetRGBA(x, 5, color.RGBA{200, 200, 200, 255})
+	}
+	if r := CompareImages(want, edge, Tolerance{}); !r.OK {
+		t.Errorf("10 edge pixels of 480000: %s", r.Why)
+	}
+}
+
+// A crop reaches inside the picture or it is an error: no silently shorter
+// comparison.
+func TestCrop(t *testing.T) {
+	img := flat(10, 10, color.RGBA{1, 2, 3, 255})
+	if c, err := Crop(img, image.Rect(2, 3, 6, 9)); err != nil || c.Bounds() != image.Rect(0, 0, 4, 6) {
+		t.Errorf("a crop inside: %v %v", c, err)
+	}
+	for _, r := range []image.Rectangle{image.Rect(5, 5, 11, 9), image.Rect(-1, 0, 4, 4), image.Rect(3, 3, 3, 8)} {
+		if _, err := Crop(img, r); err == nil {
+			t.Errorf("crop %v of a 10×10 image was accepted", r)
+		}
+	}
+}

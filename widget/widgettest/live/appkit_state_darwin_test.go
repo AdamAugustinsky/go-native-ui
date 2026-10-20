@@ -129,7 +129,7 @@ func TestOtherWindows(t *testing.T) {
 	if n0 < 1 {
 		t.Fatalf("%d visible windows with the app's window open", n0)
 	}
-	l.Do(func(a *app.App) { plain = widgettest.OpenPlainWindow("other", 0, 0) })
+	l.Do(func(a *app.App) { plain = l.OpenPlainWindow("other", 0, 0) })
 	l.Do(func(a *app.App) {
 		if n := widgettest.VisibleWindows(); n != n0+1 {
 			t.Errorf("%d visible windows after opening another, want %d", n, n0+1)

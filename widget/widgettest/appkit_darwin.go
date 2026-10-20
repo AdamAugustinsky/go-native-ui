@@ -37,6 +37,8 @@ const (
 	nsOtherMouseUp     = 26
 	nsOtherMouseDrag   = 27
 	nsRotate           = 18
+	nsBeginGesture     = 19
+	nsEndGesture       = 20
 	nsMagnify          = 30
 	nsSmartMagnify     = 32
 )
@@ -77,18 +79,37 @@ func Uptime() float64 {
 func Post(ev objc.ID) { objc.Send2(NSApp(), selPostEvent, uintptr(ev), 0) }
 
 // Dispatch delivers ev the way that works for its kind: a key or mouse event
-// is posted (Post: the app's pump takes it, as it takes the user's), anything
-// else (scroll and gesture events, which AppKit rebuilds from the event
-// record when they pass through the queue and so loses where they were
-// aimed) goes straight to [NSApp sendEvent:] (Send). Main thread.
+// is posted (Post: the app's pump takes it, as it takes the user's); a
+// gesture (magnify, rotate, smart magnify, and the begin and end of a
+// gesture) goes to its window (SendToWindow), because [NSApp sendEvent:]
+// does not hand a synthetic gesture on to a view, though the window does;
+// anything else (scroll events) goes straight to [NSApp sendEvent:] (Send).
+// Main thread.
 func Dispatch(ev objc.ID) {
 	switch EventType(ev) {
 	case nsKeyDown, nsKeyUp, nsLeftMouseDown, nsLeftMouseUp, nsRightMouseDown, nsRightMouseUp, nsMouseMoved,
 		nsLeftMouseDragged, nsRightMouseDrag, nsOtherMouseDown, nsOtherMouseUp, nsOtherMouseDrag:
 		Post(ev)
+	case nsMagnify, nsRotate, nsSmartMagnify, nsBeginGesture, nsEndGesture:
+		SendToWindow(ev)
 	default:
 		Send(ev)
 	}
+}
+
+// SendToWindow hands ev to [window sendEvent:] for the window the event
+// names: the window finds the view under the event's location (or the first
+// responder) and sends it magnifyWithEvent:, rotateWithEvent: and the other
+// gesture messages. It is how a gesture reaches a view in a test: it works
+// whether or not the application is active and the window key, which a
+// session without a user may not allow. It panics if the event names no
+// window (an event of this package's builders always does). Main thread.
+func SendToWindow(ev objc.ID) {
+	w := objc.Send(ev, objc.Sel("window"))
+	if w == 0 {
+		panic("widgettest: SendToWindow: the event names no window")
+	}
+	objc.Send1(w, selSendEvent, uintptr(ev))
 }
 
 // Send hands ev to [NSApp sendEvent:] at once, from the caller's stack: the
@@ -106,6 +127,7 @@ var coreGraphics struct {
 	err                                     error
 	create, setType, setLoc, setInt, setDbl uintptr
 	scroll2, release, setFlags              uintptr
+	setWinLoc                               uintptr // CGEventSetWindowLocation (private)
 }
 
 func loadCoreGraphics() error {
@@ -125,6 +147,7 @@ func loadCoreGraphics() error {
 		}
 		g.create, g.setType, g.setLoc = sym("CGEventCreate"), sym("CGEventSetType"), sym("CGEventSetLocation")
 		g.setInt, g.setDbl = sym("CGEventSetIntegerValueField"), sym("CGEventSetDoubleValueField")
+		g.setWinLoc = sym("CGEventSetWindowLocation")
 		g.scroll2, g.release, g.setFlags = sym("CGEventCreateScrollWheelEvent2"), sym("CFRelease"), sym("CGEventSetFlags")
 	})
 	return g.err
