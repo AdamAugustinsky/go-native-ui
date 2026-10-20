@@ -127,11 +127,12 @@ type SidebarRecipe struct {
 	// SearchFill and SearchFillInactive fill a search field on the
 	// sidebar's glass (SidebarSearch): a capsule of the field's height,
 	// measured #EAEAEA and #4E4E4E, #E5E5E5 and #464646 inactive (§2).
-	// SearchRim is the bright rim it fades from at its top and bottom in an
-	// active window (#FFFFFF and #727272 at its edge), SearchEdge and
+	// SearchRim is the bright rim inside its edge in an active window
+	// (#FFFFFF 1 pt and #727272 0.5 pt wide) and SearchGlow the colour its
+	// fill fades from at the top and the bottom (#F4F4F4, #565656), SearchEdge and
 	// SearchEdgeInactive the hairline just outside it (#D8D8D8 and #8C8C8C;
 	// #CDCDCD and #181818 inactive).
-	SearchFill, SearchFillInactive, SearchRim, SearchEdge, SearchEdgeInactive Pair
+	SearchFill, SearchFillInactive, SearchRim, SearchGlow, SearchEdge, SearchEdgeInactive Pair
 	// TextEnd is how far before the sidebar's trailing edge a row's text
 	// ends (AppKit's cell view ends 16 short, its text field 4 more, the
 	// text 2 inside the field; a two-line row's 14, 6 and 2): longer text
@@ -157,7 +158,7 @@ var SidebarLook = SidebarRecipe{
 	Detail: PairA(0x000000, 0xFFFFFF, 0.43, 0.36), DetailOnSel: 0.7, DetailTop: 8, HeaderChevronRight: 17.5, Chevron: Of(theme.Label3),
 	Thumb: OfAlpha(theme.Label, 0.25, 0.3), ThumbW: 6,
 	SearchFill: Solid(0xEAEAEA, 0x4E4E4E), SearchFillInactive: Solid(0xE5E5E5, 0x464646),
-	SearchRim: Solid(0xFFFFFF, 0x727272), SearchEdge: Solid(0xD8D8D8, 0x8C8C8C), SearchEdgeInactive: Solid(0xCDCDCD, 0x181818),
+	SearchRim: Solid(0xFFFFFF, 0x727272), SearchGlow: Solid(0xF4F4F4, 0x565656), SearchEdge: Solid(0xD8D8D8, 0x8C8C8C), SearchEdgeInactive: Solid(0xCDCDCD, 0x181818),
 	TextEnd:  22,
 	TileSize: 20, TileRadius: 5, TileGlyphPt: 11, TileInactive: 0.5, TileGlyph: Of(theme.OnAccent),
 }
@@ -286,17 +287,23 @@ func SidebarSearch(k *base.Kit, label string, buf *ui.TextBuffer, placeholder st
 	w := rr[2] - rr[0]
 	lw := r.Lines.Hairline
 	if !k.Inactive() {
-		// the bright rim, fading into the fill from the top and the bottom
-		rim := rc.SearchRim.At(r.T)
+		// the bright rim at the edge, then a glow that fades into the fill
+		// towards the middle (measured: #FFFFFF for 1 pt, #F4F4F4 1.5 pt in,
+		// the fill 7 pt in; #727272 for 0.5 pt, #565656, the fill)
+		glow := rc.SearchGlow.At(r.T)
 		half := theme.Snap(h / 2)
 		theme.At(c, 0, 0, w, half)
-		c.NextBG4(rim, rim, fill, fill)
+		c.NextBG4(glow, glow, fill, fill)
 		c.NextRadii(h/2, h/2, 0, 0)
 		c.BoxKeyed(ui.DrawBackground|base.Floating, ui.KeyN(capKey, 1), nil)
 		theme.At(c, 0, half, w, h-half)
-		c.NextBG4(fill, fill, rim, rim)
+		c.NextBG4(fill, fill, glow, glow)
 		c.NextRadii(0, 0, h/2, h/2)
 		c.BoxKeyed(ui.DrawBackground|base.Floating, ui.KeyN(capKey, 2), nil)
+		theme.At(c, 0, 0, w, h)
+		c.NextBorder(rc.SearchRim.At(r.T), theme.Snap(k.Pt(1-0.5*r.T)))
+		c.NextRadius(h / 2)
+		c.BoxKeyed(ui.DrawBorder|base.Floating, ui.KeyN(capKey, 5), nil)
 	}
 	// the edge, a hairline just outside the capsule
 	theme.At(c, -lw, -lw, w+2*lw, h+2*lw)

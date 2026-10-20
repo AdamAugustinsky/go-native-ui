@@ -178,6 +178,14 @@ Live windows on the MacBook (`Chrome D4`, light and dark, key and not key)
 give the same numbers: fills ΔE ≤ 1.5, ink ≤ 1.9, traffic lights at the
 scenes' centres (26, 26 and 19, 20).
 
+With the system's glass, live on the Mac mini (2026-10-20, 16 captures, the
+same points): the drawn fills within ΔE 2; the toolbar capsules, now the
+system's glass, 2.3–3.6 darker-than-AppKit greys in dark mode (the glass
+adapts to what is behind the window, which differs between the machines).
+Over a striped window (`-plain`) nothing shows through the content; the
+sidebar's glass takes the tint of what is behind it at its edge, as AppKit's
+does (wallpaper tinting).
+
 Second pass (2026-10-20), offscreen against the same captures: the window
 titles' ink within 0.5 (their text 2 into the title field, `TitleTextX`);
 Finder's file list is `rexui.Table` (header in the pocket, `ClearHeader`;

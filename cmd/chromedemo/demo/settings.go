@@ -128,6 +128,10 @@ const (
 	sliderW                  = 200
 )
 
+// formLine is the line between a box's rows, measured on its fill (#F7F7F7,
+// #252525): separatorColor over the box.
+var formLine = rexui.Solid(0xDFDFDF, 0x3A3A3A)
+
 // settingsForm builds the form in the content pane (the current parent), w
 // by h, in a scroll view.
 func (d *Demo) settingsForm(w, h float32) {
@@ -190,7 +194,7 @@ func (d *Demo) settingsForm(w, h float32) {
 		} else {
 			// the line between two rows, the box's whole width
 			c.NextSize(ui.Pct(1), ui.Px(p(1)))
-			c.NextBG(r.Colors[theme.Separator])
+			c.NextBG(formLine.At(r.T))
 			c.BoxKeyed(ui.DrawBackground, ui.KeyN(rk, 3), nil)
 		}
 		prevHeader = false

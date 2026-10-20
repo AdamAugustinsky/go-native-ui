@@ -270,8 +270,8 @@ func (d *Demo) Build(c *ui.Context) {
 	sbW := theme.Snap(d.l.sidebar * s)
 	inW := theme.Snap(d.l.inspector * s)
 
-	// The panes' glass, the toolbar over it, then the content below the
-	// toolbar's band (a table's header in its pocket draws over the bar).
+	// The panes' glass, then the toolbar over it and the content below the
+	// toolbar's band.
 	if sbW > 0 {
 		theme.At(c, 0, 0, sbW, H)
 		c.Push(c.Box(base.Floating, "sidebar"))
@@ -284,20 +284,29 @@ func (d *Demo) Build(c *ui.Context) {
 		d.inspector(tbH)
 		c.Pop()
 	}
-	d.toolbar(sbW, W-inW)
+	// A table's header in the toolbar's pocket draws over the bar: the
+	// toolbar comes first. Otherwise it comes after the content, so that the
+	// scroll edge's hairline, just below the band, lies over it.
+	pocket := d.opt.Scene == Finder
+	if pocket {
+		d.toolbar(sbW, W-inW)
+	}
 	theme.At(c, sbW, tbH, W-sbW-inW, H-tbH)
 	flags := base.Floating
-	if d.opt.Scene != Finder { // the table paints its rows' background, below its header in the pocket
+	if !pocket { // the table paints its rows' background, below its header in the pocket
 		c.NextBG(d.contentFill())
 		flags |= ui.DrawBackground
 	}
 	c.Push(c.Box(flags, "content"))
 	under := d.under
 	d.contentPane(tbH, W-sbW-inW, H-tbH)
-	if d.under != under { // the toolbar of this frame used the last one's
+	if pocket && d.under != under { // the toolbar of this frame used the last one's
 		c.RequestFrame()
 	}
 	c.Pop()
+	if !pocket {
+		d.toolbar(sbW, W-inW)
+	}
 	d.wk.End()
 }
 
