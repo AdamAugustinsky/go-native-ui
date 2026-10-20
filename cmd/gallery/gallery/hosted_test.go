@@ -2,6 +2,7 @@ package gallery
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"gonativeui/theme"
@@ -40,7 +41,7 @@ func TestHostedCataloguePagesKeepTheirGeometry(t *testing.T) {
 		want := controlNodes(&at)
 		alone.Close()
 
-		scene := []string{"catalogue", "catalogue-type", "catalogue-lists", "catalogue-forms"}[p]
+		scene := "catalogue" + strings.TrimPrefix(name, "appkit")
 		// a window as large as the page and the sidebar and toolbar round it
 		host, err := runScene(ShotOptions{Scene: scene, Width: int(pg.w+400) * scale, Height: int(pg.h+200) * scale, Scale: scale})
 		if err != nil {
@@ -105,11 +106,12 @@ func abs32(v float32) float32 {
 // No scene builds two stateful boxes under one key: a key shared in a frame is
 // state shared by accident (issue #9 was two byte labels in one parent). The
 // layout spacers (base.Kit.Space and Spacer, which the form uses) share a key
-// by design: they have no state.
+// by design: they have no state. The catalogue pages are rexui/catalog's
+// samples, not the gallery's: they are not checked here.
 func TestNoSceneHasDuplicateKeys(t *testing.T) {
 	r := newRig(t, Options{Still: true})
 	c := r.Context()
-	for sc := range defs {
+	for sc := range scCatalogue {
 		r.goTo(sc)
 		c.EnableDebug(false, false)
 		c.EnableDebug(true, false)

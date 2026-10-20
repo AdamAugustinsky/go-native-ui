@@ -1,6 +1,11 @@
 package gallery
 
-import "gonativeui/ui"
+import (
+	"strings"
+
+	"gonativeui/rexui/catalog"
+	"gonativeui/ui"
+)
 
 // The sessions. Every one ends where it began (the same mode, the dialog and
 // the menus closed, the table back at its top), so that the benchmark can run
@@ -119,6 +124,15 @@ func benchSteps() []step {
 	return s
 }
 
+func init() {
+	// a scene for each page of the catalogue: its row in the sidebar
+	for p := range catalog.Pages {
+		title := defs[scCatalogue+p].title
+		scenes = append(scenes, scene{"catalogue" + strings.TrimPrefix(AppKitPages[p], "appkit"),
+			func() []step { return []step{idle(4), click(sidebarRow, title), settle(), idle(2)} }})
+	}
+}
+
 // scene is the steps that put the gallery in the state of a screenshot.
 type scene struct {
 	name  string
@@ -138,10 +152,6 @@ var scenes = []scene{
 	}},
 	{"appearance", func() []step { return []step{idle(4), click(sidebarRow, "Appearance"), settle(), idle(2)} }},
 	{"dialogs", func() []step { return []step{idle(4), click(sidebarRow, "Dialogs"), settle(), idle(2)} }},
-	{"catalogue", func() []step { return []step{idle(4), click(sidebarRow, "Controls"), settle(), idle(2)} }},
-	{"catalogue-type", func() []step { return []step{idle(4), click(sidebarRow, "Text styles"), settle(), idle(2)} }},
-	{"catalogue-lists", func() []step { return []step{idle(4), click(sidebarRow, "Lists"), settle(), idle(2)} }},
-	{"catalogue-forms", func() []step { return []step{idle(4), click(sidebarRow, "Forms"), settle(), idle(2)} }},
 	{"menu", func() []step {
 		return []step{idle(4), click(ui.RoleMenuItem, "File"), waitFor(ui.RoleMenuItem, "Open Recent"),
 			click(ui.RoleMenuItem, "Open Recent"), settle(), idle(2)}
