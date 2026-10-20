@@ -1,6 +1,7 @@
 package rexui_test
 
 import (
+	"math"
 	"slices"
 	"testing"
 
@@ -119,4 +120,45 @@ func TestAccentControlsGreyWhenInactive(t *testing.T) {
 		}
 	}
 	_ = inactive
+}
+
+// An on switch in an inactive window is the grey AppKit's own settings window
+// shows, measured in a real, inactive window of this Mac's System Settings
+// (tools/appkitscenes captures, the card behind the switch: #F7F7F7 light,
+// #252525 dark): the track is the label colour's tint over the card, #D4D4D4
+// and #434343 there. (The recipe's own values are AppKitRef's, over the
+// window colour: #DBDBDB and #3E3E3E.)
+func TestInactiveSwitchMatchesAppKitsSettingsWindow(t *testing.T) {
+	for _, c := range []struct {
+		mode      theme.Mode
+		card, own uint32 // the card's colour; the track over it in AppKit's window
+	}{{theme.Light, 0xF7F7F7, 0xD4D4D4}, {theme.Dark, 0x252525, 0x434343}} {
+		on := true
+		g := newRig(t, c.mode, nil, column(func(g *rig) {
+			g.k.Context().NextBG(c.card<<8 | 0xFF)
+			g.k.NextPad(10)
+			g.k.Column("card")
+			rexui.Switch(g.k, "Wi-Fi", &on, rexui.SwitchOpts{})
+			g.k.EndColumn()
+		}))
+		g.in.Focused = false
+		g.settle()
+		track := g.k.Theme().Sizes[theme.SizeRegular].SwitchW
+		var col uint32
+		for _, q := range g.list.Quads {
+			if q.Mode == gpu.ModeShape && q.Rect[2]-q.Rect[0] >= track-1 && q.Rect[2]-q.Rect[0] <= track+1 && q.Rect[3]-q.Rect[1] < track/2 {
+				col = q.Color[0]
+			}
+		}
+		if col == 0 {
+			t.Fatalf("mode %v: no track", c.mode)
+		}
+		a := float64(col&0xFF) / 255
+		for sh, want := range [3]uint32{16, 8, 0} {
+			got := a*float64(col>>(24-8*uint(sh))&0xFF) + (1-a)*float64(c.card>>want&0xFF)
+			if d := math.Abs(got - float64(c.own>>want&0xFF)); d > 2.5 {
+				t.Errorf("mode %v: the inactive track's channel %d over the card is %.1f, AppKit's is %d", c.mode, sh, got, c.own>>want&0xFF)
+			}
+		}
+	}
 }

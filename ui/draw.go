@@ -71,6 +71,7 @@ func (c *Context) End(list *gpu.DrawList) {
 	}
 	c.cpLast, c.cpNow = c.cpNow, colorReq{} // (the colour panel request of this frame, for the app and the next frame)
 	c.layout()
+	c.checkShownWatch()
 	c.semScroll()
 	c.traverseFocus()
 	c.animateBoxes()
