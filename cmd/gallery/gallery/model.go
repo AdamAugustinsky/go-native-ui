@@ -27,6 +27,9 @@ const (
 	cmdRowInfo
 	cmdBack
 	cmdForward
+	cmdZoomIn
+	cmdZoomOut
+	cmdActualSize
 )
 
 // Menu indices in the model.
@@ -68,6 +71,9 @@ func newModel() (*menu.Model, error) {
 		cmd(cmdRowInfo, "Show Info", 0, "info.circle"),
 		cmd(cmdBack, "Back", '[', "chevron.left"),
 		cmd(cmdForward, "Forward", ']', "chevron.right"),
+		menu.StandardCommand(cmdZoomIn, menu.RoleZoomIn),
+		menu.StandardCommand(cmdZoomOut, menu.RoleZoomOut),
+		menu.StandardCommand(cmdActualSize, menu.RoleActualSize),
 	}
 	item := func(id menu.ID) menu.Item { return menu.Item{Kind: menu.ItemCommand, Command: id} }
 	sep := menu.Item{Kind: menu.ItemSeparator}
@@ -76,7 +82,8 @@ func newModel() (*menu.Model, error) {
 			{Kind: menu.ItemSubmenu, Submenu: menuRecent, Title: "Open Recent"}, sep, item(cmdPrint)}},
 		menuEdit: {Title: "Edit", Items: []menu.Item{item(cmdUndo), item(cmdRedo), sep, item(cmdCut), item(cmdCopy),
 			item(cmdPaste), item(cmdSelectAll)}},
-		menuView:   {Title: "View", Items: []menu.Item{item(cmdCycleAppearance)}},
+		menuView: {Title: "View", Items: []menu.Item{item(cmdCycleAppearance), sep, item(cmdActualSize), item(cmdZoomIn),
+			item(cmdZoomOut)}},
 		menuGo:     {Title: "Go", Items: []menu.Item{item(cmdBack), item(cmdForward)}},
 		menuRecent: {Title: "Open Recent", Items: []menu.Item{item(cmdRecent1), item(cmdRecent2), item(cmdRecent3)}},
 		menuRow:    {Title: "Row", Items: []menu.Item{item(cmdRowOpen), item(cmdRowCopyPath), sep, item(cmdRowInfo)}},
