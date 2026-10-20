@@ -25,6 +25,7 @@ func run(t *testing.T, b app.Builder) {
 	t.Helper()
 	var err error
 	widgettest.OnMain(func() {
+		platform.DebugAssumeKey(true) // the keys posted to the window are a key window's, activated or not
 		_, err = app.RunWith(app.Config{Title: "menu test", Width: 480, Height: 320}, b, app.RunOptions{})
 	})
 	if err != nil {

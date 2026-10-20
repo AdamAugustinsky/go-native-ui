@@ -142,13 +142,19 @@ func Open(o Options) (*Window, error) {
 }
 
 // Show orders the window front and activates the app. Open calls it unless
-// Options.Hidden is set.
+// Options.Hidden is set. The window becomes key only if the app is active:
+// opened in the background (open -g, or a launch that may not activate
+// itself) it is not, and an EvFocus says so; it becomes key, with its own
+// EvFocus, once the app is activated.
 func (w *Window) Show() {
 	objc.Send1(w.win, selMakeKeyFront, 0)
 	// A process started from a background shell may not activate itself
 	// (macOS 14 cooperative activation); its window would open occluded.
 	objc.Send(w.win, selOrderFrontRegardless)
 	objc.Send(w.app, selActivate)
+	if !objc.SendBool(w.win, selIsKeyWindow) {
+		windowFocus(false) // windowDidBecomeKey: reported it otherwise
+	}
 	if w.link != 0 {
 		w.setRateRange(w.link) // the screen is known for certain once shown
 	}
@@ -206,3 +212,28 @@ func (w *Window) Close() {
 		SetSecureInput(false) // the field that wanted it is gone; activation must not bring it back
 	}
 }
+
+// Focused reports whether the window has the keyboard focus (it is the key
+// window); for a window not shown yet, whether it will have it when shown:
+// whether the app is active. The app starts its input state from it, before
+// the first frame, and EvFocus follows every change.
+func (w *Window) Focused() bool {
+	if assumeKey {
+		return true
+	}
+	if objc.SendBool(w.win, selIsVisible) {
+		return objc.SendBool(w.win, selIsKeyWindow)
+	}
+	return objc.SendBool(w.app, selIsActiveApp)
+}
+
+// assumeKey is DebugAssumeKey's state.
+var assumeKey bool
+
+// DebugAssumeKey makes the window count as the key window whatever AppKit
+// says (on), for live tests that post input to the window of a process the
+// system did not activate (a test binary started from a shell), or that run
+// beside other test processes that take the activation: Focused reports true
+// and losing the key window sends no EvFocus. Off (the default), the focus is
+// AppKit's. Main thread, before the window opens.
+func DebugAssumeKey(on bool) { assumeKey = on }

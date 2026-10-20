@@ -1,12 +1,13 @@
-//go:build darwin
+//go:build darwin && gnui_f3
 
 package live
 
 // The app-level flows of phase 6's F3, driven through AppKit state: reopen,
 // quit with no window, one and two (⌘Q through the menu, a quit Apple event
 // the process sends itself, the app's own request), a refusal and a delayed
-// reply, and a menu command with no window open, through the application
-// object (app.Main, Handler, RequestQuit, ReplyQuit).
+// reply, and a menu command with no window open. They need the application
+// object (app.Main, Handler, RequestQuit, ReplyQuit), so the file is built
+// with the gnui_f3 tag until F3 is merged; then the tag line goes.
 //
 // An allowed quit ends the process, so each flow is a Scenario: a child
 // process of the test binary that runs app.Main and reports what it saw

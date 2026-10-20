@@ -19,7 +19,7 @@ import (
 // with ViewString and SetViewString (macOS, in a live window), the answers of
 // the AppKit sheets themselves are Sheet.Press and Sheet.End (macOS), and the application
 // object's events (notification responses, reopen, a quit request) are in
-// fake_f3.go.
+// fake_f3.go behind the gnui_f3 tag until the application object lands.
 
 // DialogCall is one alert or panel the app asked for.
 type DialogCall struct {

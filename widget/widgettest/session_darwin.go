@@ -179,7 +179,10 @@ func StartLiveWith(t testing.TB, cfg app.Config, b app.Builder, o LiveOptions) *
 	l := &LiveApp{t: t, lim: o.withDefaults(), end: make(chan struct{}), sb: &sessionBuilder{Builder: b, first: make(chan struct{})}}
 	go func() {
 		defer close(l.end)
-		OnMain(func() { _, l.err = app.RunWith(cfg, l.sb, app.RunOptions{}) })
+		OnMain(func() {
+			platform.DebugAssumeKey(true) // the input posted to the window is a key window's, activated or not
+			_, l.err = app.RunWith(cfg, l.sb, app.RunOptions{})
+		})
 	}()
 	t.Cleanup(l.Close) // before the wait: a start that fails still ends the run
 	timer := time.NewTimer(l.lim.Start)

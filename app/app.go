@@ -341,6 +341,7 @@ func (a *App) openWin(cfg Config, b Builder, st *StartupReport, nativeMenus bool
 		a.cfg.Clear = [4]float32{} // premultiplied transparent: the backdrop or the materials show
 	}
 	a.Win, a.req = win, win
+	a.tr.in.Focused = win.Focused() // AppKit's state, not an assumption: a window opened in the background is not key
 	t0 := platform.Now()
 	st.OpenMs = ms(t0 - tEntry)
 
