@@ -1,0 +1,23 @@
+{
+  "machine" : {
+    "accent" : "pink",
+    "accentRendered" : "pink",
+    "appearance" : "dark",
+    "date" : "2026-10-20",
+    "display" : {
+      "backingScale" : 2,
+      "heightPt" : 1440,
+      "heightPx" : 2880,
+      "name" : "LG ULTRAGEAR+",
+      "refreshHz" : 120,
+      "widthPt" : 2560,
+      "widthPx" : 5120
+    },
+    "macOS" : {
+      "build" : "26B5101f",
+      "version" : "27.2"
+    },
+    "model" : "Mac16,10",
+    "scrollerStyle" : "legacy"
+  }
+}

@@ -55,13 +55,17 @@ func (c *Context) WakeAfter() int64 { return c.wakeNs }
 // for no frames. A field whose look does not react to hover (AppKit's) uses it.
 func (c *Context) NextFieldNoHover() { c.nextStill = true }
 
-func (c *Context) wakeAfter(ns int64) {
+// wakeAfter asks for a frame in ns and reports whether that is now the
+// earliest request of the frame (the debug overlay records who asked then).
+func (c *Context) wakeAfter(ns int64) (earliest bool) {
 	if ns < 1 {
 		ns = 1
 	}
 	if c.wakeNs == 0 || ns < c.wakeNs {
 		c.wakeNs = ns
+		return true
 	}
+	return false
 }
 
 // IMERect is the rectangle (x, y, w, h in window pixels, origin top left) of the
@@ -454,7 +458,9 @@ func (c *Context) TextField(label string, buf *TextBuffer) TextFieldSignal {
 			half := c.TextEdit.BlinkHalfNs
 			k := el / half
 			caretOn = k%2 == 0
-			c.wakeAfter((k+1)*half - el)
+			if c.wakeAfter((k+1)*half-el) && c.dbg != nil {
+				c.debugWake(DebugWakeField, c.focusKey)
+			}
 		}
 	}
 

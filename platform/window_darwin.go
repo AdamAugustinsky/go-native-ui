@@ -209,7 +209,9 @@ func (w *Window) Native() Native {
 
 // Close closes the window.
 func (w *Window) Close() {
-	w.closeAux() // sheets first: a window closed under a sheet never calls its completion
+	forgetPaste(w) // a read of the pasteboard for this window is not delivered (paste_darwin.go)
+	w.closeAux()   // sheets first: a window closed under a sheet never calls its completion
+	w.closeDrag()
 	objc.Send(w.link, selInvalidate)
 	objc.Send(w.link, selReleaseObj) // Open retained the view link; attachMetalLink owns its link
 	w.link = 0

@@ -68,9 +68,10 @@ func TestFollowerReadsTheLiveSystem(t *testing.T) {
 	if !sv.Known {
 		t.Skip("the system's colours cannot be read here")
 	}
-	for i := range theme.NumSystemRoles {
-		if light[i] != sv.Colors[0][i] || dark[i] != sv.Colors[1][i] {
-			t.Errorf("%v: light %08X dark %08X, the system says %08X and %08X", i, light[i], dark[i], sv.Colors[0][i], sv.Colors[1][i])
+	for c := range platform.NumSystemColors {
+		i := theme.SystemRole(c)
+		if light[i] != sv.Colors[0][c] || dark[i] != sv.Colors[1][c] {
+			t.Errorf("%v: light %08X dark %08X, the system says %08X and %08X", i, light[i], dark[i], sv.Colors[0][c], sv.Colors[1][c])
 		}
 	}
 	if settings.ReduceMotion != sv.ReduceMotion || settings.ReduceTransparency != sv.ReduceTransparency ||

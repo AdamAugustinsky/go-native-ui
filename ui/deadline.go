@@ -44,7 +44,9 @@ func (c *Context) Deadline(key Key, at int64) bool {
 		d.fired = true
 		return true
 	}
-	c.wakeAfter(at - now)
+	if c.wakeAfter(at-now) && c.dbg != nil {
+		c.debugWake(DebugWakeDeadline, key)
+	}
 	return false
 }
 

@@ -145,10 +145,13 @@ type App struct {
 	dlgShown []shownDialog           // dialogs on screen
 	dlgSeq   platform.DialogTicket   // the last ticket given
 	dlgT     dialogTarget            // the window's dialogs; tests set a fake
+	dragT    dragTarget              // the window's drags; tests set a fake (drag.go)
 
 	cp colorPanelSync // the system colour panel (colorpanel.go)
 
 	sh shellSync // material and host regions handed to the window (shell.go)
+
+	paste pasteSlot // the answer to RequestPaste for an image or files (paste.go)
 
 	wakeAt      int64 // platform.Now at which the UI wants a frame although nothing animates (ui.Context.WakeAfter); 0 = none
 	chromeDark  bool  // the mode last given to Win.SetDarkChrome
@@ -194,6 +197,10 @@ type App struct {
 	lastDumpT   int64
 	verbose     bool
 	diagBuf     []byte
+
+	barOn bool        // the native menu bar is installed (menus.go)
+	dbg   *debugState // the debug overlay (debug.go); nil off
+	step  stepState   // Offscreen.Step (debugstep.go)
 }
 
 // frameRequester is the part of platform.Window that arms the next frame.
@@ -372,9 +379,11 @@ func (a *App) initUI() error {
 	uiDefaults(a.UI)
 	a.UI.ClipboardSet = platform.SetClipboardText
 	a.UI.AtlasSync(a.R)
+	a.debugInit()
 	if a.Win != nil { // a window shows tooltips for the regions it is given; offscreen renders draw them
 		a.UI.SetNativeTooltips(platform.NativeTooltips)
 		a.Win.SetTooltipText(a.UI.TooltipText)
+		a.initDrag()
 	}
 	if in, ok := a.b.(Initer); ok {
 		if err := in.Init(a); err != nil {
@@ -419,7 +428,7 @@ func (a *App) loop() error {
 		evs := a.Win.Wait(a.timeout(now))
 		a.tr.wheelStep = a.UI.WheelStep
 		for i := range evs {
-			a.onEvent(&evs[i])
+			a.dispatch(&evs[i])
 		}
 		if a.done {
 			break
@@ -428,12 +437,18 @@ func (a *App) loop() error {
 			a.present(false, 1)
 		}
 		a.popUpMenus()
+		if a.dbg != nil {
+			a.debugSweep(CauseMenu)
+		}
 		if a.demo != nil {
 			a.demo.run(a)
 		}
 		a.flushDialogs() // dialogs asked for outside a frame (an event handler, a hook)
 		if a.hook != nil {
 			a.hook()
+		}
+		if a.dbg != nil {
+			a.debugSweep(CauseUnknown)
 		}
 	}
 	return nil
@@ -446,6 +461,9 @@ func (a *App) turn(now int64) (draw bool) {
 	if a.wakeAt != 0 && now >= a.wakeAt && !a.p.hidden {
 		a.wakeAt = 0
 		a.p.invalidate() // a text field's caret blink is due
+		if a.dbg != nil {
+			a.debugTimer()
+		}
 	}
 	if a.verbose {
 		a.dumpIfStalled(now)
@@ -517,12 +535,22 @@ func (a *App) onEvent(e *platform.Event) {
 		}
 	case platform.EvDialog:
 		a.onDialog(e)
+	case platform.EvDragEnter, platform.EvDragMove, platform.EvDragLeave, platform.EvDrop, platform.EvDragEnd:
+		var txt []byte
+		if e.Kind == platform.EvDrop && e.Text.Len > 0 {
+			txt = a.Win.Text(e.Text)
+		}
+		a.onDrag(e, txt)
 	case platform.EvColor:
 		a.onColor(e)
 		if a.tr.event(e, nil) {
 			a.p.invalidate()
 		}
 	default:
+		if e.Kind == platform.EvPaste && a.paste.isMedia(e) { // the answer to RequestPaste (paste.go)
+			a.onMediaPaste(e, a.Win.Text(e.Text))
+			return
+		}
 		var txt []byte
 		if e.Kind == platform.EvText || e.Kind == platform.EvPreedit || e.Kind == platform.EvPaste {
 			txt = a.Win.Text(e.Text)
@@ -553,7 +581,7 @@ func (a *App) frameHandler() {
 	a.tr.wheelStep = a.UI.WheelStep
 	evs := a.Win.Pending()
 	for i := range evs {
-		a.onEvent(&evs[i])
+		a.dispatch(&evs[i])
 	}
 	if a.p.needDraw && !a.done {
 		a.present(true, 1)
@@ -569,6 +597,7 @@ func (a *App) present(inHandler bool, passes int) bool {
 	}
 	ok := a.drawFrame(inHandler, passes)
 	a.flushDialogs() // dialogs asked for in Build: shown now that the frame is over
+	a.flushDrag()    // drop kinds for the window, drags out asked for in Build (drag.go)
 	now := platform.Now()
 	if ok {
 		a.consecFails, a.lastDrawT = 0, now

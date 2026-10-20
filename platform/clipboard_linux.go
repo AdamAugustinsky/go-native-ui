@@ -65,16 +65,29 @@ type clipboard struct {
 	spare [maxSends][]byte
 	owned bool // this application holds the selection
 
+	// img is the PNG file offered instead of the text (ownImg), and hide
+	// adds x-kde-passwordManagerHint (ClipOptions.Concealed). Replaced, like
+	// own, while no write in flight reads it.
+	img    []byte
+	ownImg bool
+	hide   bool
+
 	// The pending paste request.
 	pending  bool
 	tag      uint64
-	deadline int64  // when the request fails without progress
-	buf      []byte // the text being received; reused by every request
+	kinds    PasteKinds // what the request wants
+	kind     PasteKind  // what is being received (chosen by the backend)
+	big      bool       // the kind being read is over MaxPaste
+	bigSeen  bool       // an earlier requested kind was over MaxPaste and another is being tried: if that gives nothing, the failure is FlagTooBig
+	deadline int64      // when the request fails without progress
+	buf      []byte     // the data being received; reused by every request
 
 	// An answer for the next Wait to deliver (see the file comment).
-	ready       bool
-	readyTag    uint64
-	readyFailed bool
+	ready      bool
+	readyTag   uint64
+	readyFlags Flags
+	readyKind  PasteKind
+	readyCode  uint32
 
 	// Wayland: the read end of the pipe a paste is received through, the
 	// writes in flight, and where they sit in the poll set (-1: not in it).
@@ -89,7 +102,7 @@ type clipboard struct {
 }
 
 func (c *clipboard) init() {
-	*c = clipboard{rfd: -1, pollRead: -1, own: c.own[:0], spare: c.spare, buf: c.buf[:0]}
+	*c = clipboard{rfd: -1, pollRead: -1, own: c.own[:0], spare: c.spare, img: c.img[:0], buf: c.buf[:0]}
 	for i := range c.pollSend {
 		c.pollSend[i] = -1
 	}
@@ -121,16 +134,28 @@ func cleanText(b []byte) []byte {
 // ---- the platform-neutral operations (paste_linux.go calls these) ----
 
 // clipSet makes b the clipboard text and offers it to other applications.
-func (w *Window) clipSet(b []byte) {
+func (w *Window) clipSet(b []byte) { w.clipSetData(b, false, false) }
+
+// clipSetData makes b the clipboard content: the text, or with img the PNG
+// file. With hide, the content is offered with x-kde-passwordManagerHint too.
+func (w *Window) clipSetData(b []byte, img, hide bool) {
 	c := &w.clip
-	if !utf8.Valid(b) {
-		b = []byte(strings.ToValidUTF8(string(b), "\uFFFD"))
+	if img {
+		if w.clipUses(c.img) { // writes in flight keep the old backing array
+			c.img = nil
+		}
+		c.img = append(c.img[:0], b...)
+	} else {
+		if !utf8.Valid(b) {
+			b = []byte(strings.ToValidUTF8(string(b), "\uFFFD"))
+		}
+		if w.clipUses(c.own) {
+			w.clipSwapOwn()
+		}
+		c.own = append(c.own[:0], b...)
+		c.own = cleanText(c.own)
 	}
-	if w.clipUses(c.own) { // writes in flight keep the old backing array
-		w.clipSwapOwn()
-	}
-	c.own = append(c.own[:0], b...)
-	c.own = cleanText(c.own)
+	c.ownImg, c.hide = img, hide
 	c.owned = true
 	if !w.open {
 		return
@@ -142,14 +167,70 @@ func (w *Window) clipSet(b []byte) {
 	}
 }
 
-// clipRequest starts a paste request: the answer arrives as EvPaste.
-func (w *Window) clipRequest(tag uint64) {
+// hintData is what x-kde-passwordManagerHint carries. It is never written to.
+var hintData = []byte("secret")
+
+// clipData returns what the clipboard we own offers for target class m: the
+// text, the PNG file, or the hint; nil if we offer none of it.
+func (c *clipboard) clipData(k clipTarget) []byte {
+	var d []byte
+	switch {
+	case k == clipTText && !c.ownImg:
+		d = c.own
+	case k == clipTImage && c.ownImg:
+		d = c.img
+	case k == clipTHint && c.hide:
+		d = hintData
+	default:
+		return nil
+	}
+	if d == nil {
+		d = emptyData // empty text is still offered
+	}
+	return d
+}
+
+var emptyData = []byte{}
+
+// The classes of target we offer.
+type clipTarget uint8
+
+const (
+	clipTText clipTarget = iota
+	clipTImage
+	clipTHint
+)
+
+// pickKind chooses what to ask the owner for among the requested kinds: files,
+// then image, then text, the first the owner offers.
+func pickKind(kinds PasteKinds, offers func(PasteKind) bool) (PasteKind, bool) {
+	for _, k := range [...]PasteKind{PasteFiles, PasteImage, PasteText} {
+		if kinds.Has(k) && offers(k) {
+			return k, true
+		}
+	}
+	return 0, false
+}
+
+// clipRequest starts a text paste request: the answer arrives as EvPaste.
+func (w *Window) clipRequest(tag uint64) { w.clipRequestKinds(tag, WantText) }
+
+// clipRequestKinds starts a paste request for kinds.
+func (w *Window) clipRequestKinds(tag uint64, kinds PasteKinds) {
 	c := &w.clip
 	w.clipCancel()
 	c.ready = false // a newer request replaces an answer not yet delivered
-	c.pending, c.tag = true, tag
+	c.pending, c.tag, c.kinds, c.big, c.bigSeen = true, tag, kinds, false, false
+	c.kind = PasteText
 	if c.owned {
-		c.buf = append(c.buf[:0], c.own...)
+		switch {
+		case c.ownImg && kinds.Has(PasteImage):
+			c.kind, c.buf = PasteImage, append(c.buf[:0], c.img...)
+		case !c.ownImg && kinds.Has(PasteText):
+			c.buf = append(c.buf[:0], c.own...)
+		default:
+			c.buf = c.buf[:0]
+		}
 		w.clipFinish()
 		return
 	}
@@ -184,7 +265,9 @@ func (w *Window) clipCancel() {
 	c.deadline = 0
 }
 
-// clipFinish answers the pending request with c.buf (empty: failed).
+// clipFinish answers the pending request with c.buf (empty: failed), checked
+// and converted by its kind: text gets \n line ends, an image must be a
+// complete PNG file, a list of URIs becomes the file paths.
 func (w *Window) clipFinish() {
 	c := &w.clip
 	if !c.pending {
@@ -192,17 +275,53 @@ func (w *Window) clipFinish() {
 	}
 	c.pending = false
 	c.deadline = 0
-	c.buf = cleanText(c.buf)
-	failed := len(c.buf) == 0 || len(c.buf) > MaxPaste
-	if c.inWait {
-		if failed {
-			w.q.pushPaste(nil, c.tag, nanotime())
+	var code uint32
+	if len(c.buf) > MaxPaste {
+		c.big = true
+	}
+	switch {
+	case c.big:
+		c.buf = c.buf[:0]
+	case c.kind == PasteImage:
+		if n := pngEnd(c.buf); n > 0 {
+			c.buf = c.buf[:n]
 		} else {
-			w.q.pushPaste(c.buf, c.tag, nanotime())
+			c.buf = c.buf[:0]
 		}
+	case c.kind == PasteFiles:
+		var n int
+		c.buf, n = appendURIListPaths(c.buf[:0], c.buf)
+		code = uint32(n)
+	default:
+		c.buf = cleanText(c.buf)
+	}
+	if len(c.buf) > MaxPaste { // (a list can come out longer than it went in by its NULs: not by one beyond MaxPaste)
+		c.big, c.buf = true, c.buf[:0]
+	}
+	fl := Flags(0)
+	if len(c.buf) == 0 {
+		fl = FlagFailed
+		if c.big || c.bigSeen {
+			fl |= FlagTooBig
+		}
+	}
+	if c.inWait {
+		w.q.pushPasteKind(c.kind, code, c.buf, fl, c.tag, nanotime())
 		return
 	}
-	c.ready, c.readyTag, c.readyFailed = true, c.tag, failed
+	c.ready, c.readyTag, c.readyFlags, c.readyKind, c.readyCode = true, c.tag, fl, c.kind, code
+}
+
+// pushPasteKind queues an EvPaste with a copy of b; with FlagFailed it
+// carries no data.
+func (q *eventQueue) pushPasteKind(kind PasteKind, code uint32, b []byte, fl Flags, tag uint64, t int64) {
+	if fl&FlagFailed != 0 {
+		q.push(Event{Kind: EvPaste, Flags: fl, Tag: tag, Time: t})
+		return
+	}
+	off := len(q.text)
+	q.text = append(q.text, b...)
+	q.push(Event{Kind: EvPaste, Paste: kind, Code: code, Text: TextRef{uint32(off), uint32(len(b))}, Tag: tag, Time: t})
 }
 
 // clipFail answers the pending request with a failure and releases whatever
@@ -211,6 +330,32 @@ func (w *Window) clipFail() {
 	w.clipCancelTransfer()
 	w.clip.buf = w.clip.buf[:0]
 	w.clipFinish()
+}
+
+// clipFailBig ends the transfer of data over MaxPaste: the kinds that were
+// requested after it are tried (the owner may offer a short text as well as a
+// huge image), and the request fails with FlagTooBig only when none is left or
+// none of them is offered.
+func (w *Window) clipFailBig() {
+	c := &w.clip
+	c.big = true
+	if rest := c.kinds &^ (1 << c.kind); c.pending && rest != 0 {
+		w.clipCancelTransfer()
+		c.buf = c.buf[:0]
+		c.kinds = rest
+		started := false
+		if w.wl {
+			started = w.wlBeginPaste()
+		} else {
+			started = w.x11BeginPaste()
+		}
+		if started {
+			c.bigSeen, c.big = true, false // the data of the next kind is not the one that was too big
+			c.deadline = nanotime() + clipTimeout
+			return
+		}
+	}
+	w.clipFail()
 }
 
 // clipCancelTransfer releases the transfer's resources but keeps the request
@@ -232,11 +377,7 @@ func (w *Window) clipDeliver() {
 		return
 	}
 	c.ready = false
-	if c.readyFailed {
-		w.q.pushPaste(nil, c.readyTag, nanotime())
-	} else {
-		w.q.pushPaste(c.buf, c.readyTag, nanotime())
-	}
+	w.q.pushPasteKind(c.readyKind, c.readyCode, c.buf, c.readyFlags, c.readyTag, nanotime())
 }
 
 // clipDeadline is the earliest moment a transfer gives up (nanotime), or -1.
