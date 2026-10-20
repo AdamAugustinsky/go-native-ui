@@ -154,6 +154,7 @@ func (d *Demo) settingsForm(w, h float32) {
 	c.Push(c.BoxKeyed(0, key, nil))
 	body := &r.Styles[theme.StyleBody]
 	box := ui.ID(0)
+	by := float32(0) // where the box's next line goes, in it
 	prevHeader := false
 	for i := range settingsForm {
 		fr := &settingsForm[i]
@@ -190,13 +191,21 @@ func (d *Demo) settingsForm(w, h float32) {
 			c.NextRole(ui.RoleGroup)
 			box = c.BoxKeyed(ui.DrawBackground, ui.KeyN(rk, 2), nil)
 			c.Push(box)
+			by = 0
 		} else {
-			// the line between two rows, the box's whole width
+			// the line between two rows, the box's whole width, drawn half
+			// a point up: AppKit's lies at 111.5–112.5 below a row from 72,
+			// the next row's text as after a line at 112–113
 			c.NextSize(ui.Pct(1), ui.Px(p(1)))
+			c.BoxKeyed(0, ui.KeyN(rk, 3), nil)
+			br := c.Rect(box) // as wide as the box was laid out
+			theme.At(c, 0, by-p(0.5), br[2]-br[0], p(1))
 			c.NextBG(formLine.At(r.T))
-			c.BoxKeyed(ui.DrawBackground, ui.KeyN(rk, 3), nil)
+			c.BoxKeyed(ui.DrawBackground|base.Floating, ui.KeyN(rk, 5), nil)
+			by += p(1)
 		}
 		prevHeader = false
+		by += p(formRowH)
 		c.NextSize(ui.Pct(1), ui.Px(p(formRowH)))
 		c.NextAxis(ui.AxisX)
 		c.NextCross(ui.CrossCenter)

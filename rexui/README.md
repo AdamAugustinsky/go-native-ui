@@ -235,7 +235,8 @@ With legacy scrollers (the system's style, followed live; a mouse on the
 Mac mini) every scroll view's content leaves the bar's 17 pt beside it and
 the bar is the legacy one: the sidebar's an opaque knob, 11 pt wide and 3 in,
 in its slot (#A5A5A5 in #D8D8D8, #5A5A5A in #343434; #ABABAB in #DEDEDE,
-#585858 in #323232 inactive); the settings form's boxes end 20 before it.
+#585858 in #323232 inactive); the settings form's boxes end 20 before it (its lines between rows lie
+half a point up, on the rows' boundary, 111.5–112.5 as AppKit's).
 In the frame the style changes the bar is at the view's edge already
 (`base.ScrollBars`). `chromedemo -legacy` renders them offscreen, which is
 overlay otherwise; against `captures-macmini` the bars, knobs and the boxes'
