@@ -731,3 +731,61 @@ func TestPopUpMenus(t *testing.T) {
 		t.Errorf("standard Select All delivered %+v", r.edit)
 	}
 }
+
+// A key equivalent with Shift fires its command from the key-down of a real
+// ⇧⌘ chord. AppKit makes such an event with characters "z" (⌘ takes Shift off
+// them) and charactersIgnoringModifiers "Z" (+[NSEvent eventWithCGEvent:] of a
+// keyboard CGEvent with those flags, 2026-10-20, macOS 27), and NSMenu matches an
+// item against the latter, case-sensitively: an item made with the lowercase
+// letter and Shift in its mask ("z") never matched, so Edit ▸ Redo did not act
+// on ⇧⌘Z for a hosted text view, which does not hand keys back to the app to
+// match. The item's letter is the uppercase one, as AppKit's own Redo is.
+func TestShiftKeyEquivalentsMatchTheRealChord(t *testing.T) {
+	const tcRedo, tcSaveAs = 31, 32
+	spec := &MenuSpec{
+		Menus: []Menu{
+			0: {Title: "App", Role: MenuRoleApp, Items: []MenuItem{{Action: MenuQuit}}},
+			1: {Title: "File", Items: []MenuItem{{ID: tcSaveAs, Title: "Save As…", Key: 's', Mods: ModSuper | ModShift}}},
+			2: {Title: "Edit", Items: []MenuItem{{ID: tcRedo, Title: "Redo", Key: 'z', Mods: ModSuper | ModShift}}},
+		},
+		Bar: []int{0, 1, 2},
+	}
+	type res struct {
+		keys int
+		cmds []uint64
+	}
+	var got [2]res
+	var why string
+	cases := []struct {
+		chars, ignoring string
+		code            uint16
+		want            uint64
+	}{
+		{"z", "Z", 0x06, tcRedo}, {"s", "S", 0x01, tcSaveAs},
+	}
+	onMain(func() {
+		rig, y := openMenuRig(spec, false)
+		if y != "" {
+			why = y
+			return
+		}
+		defer rig.w.Close()
+		w := rig.w
+		pool := objc.F.Call0(objc.PoolPush)
+		defer objc.F.Call1(objc.PoolPop, pool)
+		for i, c := range cases {
+			w.q.reset()
+			w.handle(nsKey(w, 10, c.chars, c.ignoring, 1<<20|1<<17, c.code, 1))
+			got[i].keys, got[i].cmds, _ = countEvents(w.q.ev)
+			w.q.reset()
+		}
+	})
+	if why != "" {
+		t.Skipf("cannot open a window here: %s", why)
+	}
+	for i, c := range cases {
+		if r := got[i]; r.keys != 0 || len(r.cmds) != 1 || r.cmds[0] != c.want {
+			t.Errorf("⇧⌘ event %q/%q: %d key-downs and commands %v, want none and [%d]", c.chars, c.ignoring, r.keys, r.cmds, c.want)
+		}
+	}
+}
