@@ -222,6 +222,7 @@ type fontEnt struct {
 	face    FaceID
 	metrics Metrics
 	lookup  string // which families were tried and what came of it, for diagnostics
+	gone    bool   // released by ReleaseScale: the slot is free for the next Font
 }
 
 // faceEnt is a concrete face at a concrete size: the primary face of a
@@ -231,6 +232,9 @@ type faceEnt struct {
 	sizePx float32 // em size in pixels
 	color  bool    // the font has a COLR table: glyphs may be colour
 	name   string  // "Family Face", for diagnostics
+	scale  float32 // the FontDesc.Scale of the font that made it (a face is made per scale, so that ReleaseScale can free it)
+	key    string  // its entry in faceByKey
+	gone   bool    // released by ReleaseScale: the slot is free for the next face
 }
 
 // layer is one colour layer of a colour glyph during rasterization.
@@ -426,15 +430,21 @@ func (s *System) findFont(names []string, weight int, style uintptr) (font uintp
 }
 
 // Font returns the key of a font, creating it on first use. Fonts live until
-// Close. A family that isn't installed silently resolves to the default.
+// Close, or until ReleaseScale releases the scale they were made for. A family
+// that isn't installed silently resolves to the default.
 func (s *System) Font(d FontDesc) FontKey {
 	d = normalizeDesc(d)
+	free := -1
 	for i := range s.fonts {
-		if s.fonts[i].desc == d {
+		if s.fonts[i].gone {
+			if free < 0 {
+				free = i
+			}
+		} else if s.fonts[i].desc == d {
 			return FontKey(i)
 		}
 	}
-	if len(s.fonts) >= math.MaxUint16 {
+	if free < 0 && len(s.fonts) >= math.MaxUint16 {
 		return 0
 	}
 	weight := min(max(d.Weight, 1), 999)
@@ -463,14 +473,20 @@ func (s *System) Font(d FontDesc) FontKey {
 	px := d.SizePt * d.Scale
 	fe := fontEnt{desc: d, weight: uint32(weight), style: style, lookup: strings.Join(s.tried, "; ")}
 	fe.family = append([]uint16(nil), s.utf16z(fam)...)
-	face, ok := s.faceFromFont(font, px)
+	face, ok := s.faceFromFont(font, px, d.Scale)
 	com.Release(font)
 	if !ok {
 		return 0
 	}
 	fe.face = face
-	s.fonts = append(s.fonts, fe)
-	key := FontKey(len(s.fonts) - 1)
+	var key FontKey
+	if free >= 0 {
+		key = FontKey(free)
+		s.fonts[key] = fe
+	} else {
+		s.fonts = append(s.fonts, fe)
+		key = FontKey(len(s.fonts) - 1)
+	}
 
 	// Metrics from the primary face.
 	fc := &s.faces[fe.face]
@@ -492,6 +508,58 @@ func (s *System) Font(d FontDesc) FontKey {
 	return key
 }
 
+// ReleaseScale releases every font made for scale (FontDesc.Scale) and the
+// faces they shape and rasterise with, fallback faces included: the
+// IDWriteFontFaces are released, the keys and ids become free for later fonts,
+// and nothing the other scales use changes (their keys, faces and atlas
+// entries stay valid). The run and paragraph caches are emptied (RunGeneration
+// changes), because they are keyed by keys that may now name other fonts; the
+// glyph images of the released faces stay in their atlas pages until the next
+// atlas reset, without entries. It returns the number of fonts released. Call
+// it between frames, for a scale no frame being built or drawn uses.
+func (s *System) ReleaseScale(scale float32) int {
+	if s.closed {
+		return 0
+	}
+	n := 0
+	for i := range s.fonts {
+		if f := &s.fonts[i]; !f.gone && f.desc.Scale == scale {
+			*f = fontEnt{gone: true}
+			n++
+		}
+	}
+	faces := 0
+	for i := range s.faces {
+		if f := &s.faces[i]; !f.gone && f.scale == scale {
+			com.Release(f.face)
+			delete(s.faceByKey, f.key)
+			*f = faceEnt{gone: true}
+			faces++
+		}
+	}
+	if n == 0 && faces == 0 {
+		return 0
+	}
+	s.runs.drop()
+	if s.plays != nil && s.plays.cache != nil {
+		s.plays.cache.drop()
+	}
+	s.atlas.glyphs.removeFaces(func(f FaceID) bool { return int(f) < len(s.faces) && s.faces[f].gone })
+	return n
+}
+
+// Scales lists the scales that have live fonts (FontDesc.Scale), in the order
+// they were first used since the last release.
+func (s *System) Scales() []float32 {
+	var l scaleSet
+	for i := range s.fonts {
+		if !s.fonts[i].gone {
+			l.add(s.fonts[i].desc.Scale)
+		}
+	}
+	return l
+}
+
 // Metrics returns the font's metrics in pixels.
 func (s *System) Metrics(f FontKey) Metrics {
 	if int(f) >= len(s.fonts) {
@@ -506,9 +574,11 @@ func (s *System) Metrics(f FontKey) Metrics {
 // creating the IDWriteFontFace on first use. Face identity is the font
 // file's reference key, the face index, the simulations and the weight,
 // stretch and style of the IDWriteFont (the latter distinguish the named
-// instances of one variable font file), plus the size. It does not take
-// ownership of font.
-func (s *System) faceFromFont(font uintptr, px float32) (FaceID, bool) {
+// instances of one variable font file), plus the size and the scale of the
+// FontDesc it is made for (the same pixel size at two scales is two faces, so
+// that releasing one scale frees only its own). It does not take ownership of
+// font.
+func (s *System) faceFromFont(font uintptr, px, scale float32) (FaceID, bool) {
 	s.out1 = 0
 	if font == 0 || win32.HR(com.Call(font, vtFontCreateFontFace, uintptr(unsafe.Pointer(&s.out1)))) < 0 {
 		return 0, false
@@ -535,7 +605,7 @@ func (s *System) faceFromFont(font uintptr, px float32) (FaceID, bool) {
 	for _, v := range [...]uint32{
 		uint32(com.Call(face, vtFaceGetIndex)), uint32(com.Call(face, vtFaceGetSimulations)),
 		uint32(com.Call(font, vtFontGetWeight)), uint32(com.Call(font, vtFontGetStretch)), uint32(com.Call(font, vtFontGetStyle)),
-		math.Float32bits(px),
+		math.Float32bits(px), math.Float32bits(scale),
 	} {
 		s.name = append(s.name, byte(v), byte(v>>8), byte(v>>16), byte(v>>24))
 	}
@@ -543,20 +613,33 @@ func (s *System) faceFromFont(font uintptr, px float32) (FaceID, bool) {
 		com.Release(face)
 		return id, true
 	}
-	if len(s.faces) >= math.MaxUint16 {
+	free := -1
+	for i := range s.faces {
+		if s.faces[i].gone {
+			free = i
+			break
+		}
+	}
+	if free < 0 && len(s.faces) >= math.MaxUint16 {
 		com.Release(face)
 		return 0, false
 	}
-	fc := faceEnt{face: face, sizePx: px, name: s.fontName(font)}
+	fc := faceEnt{face: face, sizePx: px, name: s.fontName(font), scale: scale, key: string(s.name)}
 	s.b1 = 0
 	s.tablePtr, s.tableCtx = 0, 0
 	if hr := win32.HR(com.Call(face, vtFaceTryGetFontTable, tagCOLR, uintptr(unsafe.Pointer(&s.tablePtr)), uintptr(unsafe.Pointer(&s.tableSize)), uintptr(unsafe.Pointer(&s.tableCtx)), uintptr(unsafe.Pointer(&s.b1)))); hr >= 0 && s.b1 != 0 {
 		fc.color = true
 		com.Call(face, vtFaceReleaseFontTable, s.tableCtx)
 	}
-	s.faces = append(s.faces, fc)
-	id := FaceID(len(s.faces) - 1)
-	s.faceByKey[string(s.name)] = id
+	var id FaceID
+	if free >= 0 {
+		id = FaceID(free)
+		s.faces[id] = fc
+	} else {
+		s.faces = append(s.faces, fc)
+		id = FaceID(len(s.faces) - 1)
+	}
+	s.faceByKey[fc.key] = id
 	return id, true
 }
 
@@ -619,7 +702,7 @@ func (s *System) faceName(f FaceID) string {
 //
 // Entries are valid until AtlasGeneration changes.
 func (s *System) Glyph(face FaceID, gid uint16, sub uint8) GlyphEntry {
-	if int(face) >= len(s.faces) {
+	if int(face) >= len(s.faces) || s.faces[face].gone {
 		return GlyphEntry{}
 	}
 	if s.faces[face].color {

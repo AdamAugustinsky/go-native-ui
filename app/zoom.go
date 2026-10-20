@@ -27,11 +27,13 @@ import (
 // buttons, the cursor, drag, tooltip and input-method rectangles (pixels).
 // The zoom is the whole window's, chrome included: a custom titlebar
 // (Config.Titlebar) is given the zoomed band and the window buttons move to
-// its centre (syncTitlebar), and SystemButtons follows. A window's
-// geometry is saved in screen points: derive it from ContentSize or the
-// platform's frame, never from the ui's points (Unzoomed converts them), and
-// keep the zoom itself in winstate.State.Zoom. A frame saved from ui points
-// would grow by the zoom with every restart; this is the bug egui apps had
+// its centre (syncTitlebar), and SystemButtons follows. A window's geometry is
+// saved in the unit of the OS's window frame (winstate: points on macOS and
+// Linux, physical pixels on Windows), derived from ContentSize, in screen
+// points, through winstate.FromPoints and ToPoints, never from the ui's
+// points (Unzoomed converts them) and never by a scale of your own. Keep the
+// zoom itself in winstate.State.Zoom. A frame saved from ui points would grow
+// by the zoom with every restart; this is the bug egui apps had
 // (docs/research/egui.md §2.6).
 //
 // # Commands
@@ -64,8 +66,15 @@ func (a *App) Zoom() float32 {
 	return a.zoom
 }
 
-// SetZoom sets the zoom factor, limited to MinZoom..MaxZoom, and returns the
-// factor that was set. A value that is not a number leaves the zoom as it is.
+// SetZoom sets the zoom factor, limited to MinZoom..MaxZoom and rounded to a
+// whole percent, and returns the factor that was set. A value that is not a
+// number leaves the zoom as it is.
+//
+// The rounding bounds the fonts: every effective scale has a set of fonts of
+// its own (theme fonts, text icons), so a factor of any precision would make
+// a new set for each value it passes through, and a drag or a script through
+// the range has hundreds of values. At most fontScales of them (the current
+// one and the latest few) are kept; see useFontScale.
 // The window keeps its size; the next frame is built and drawn at the new
 // scale. It can be called from Init (the first frame is drawn at that zoom),
 // from Build and from an event handler, on the main thread.
@@ -74,6 +83,7 @@ func (a *App) SetZoom(f float32) float32 {
 		return a.Zoom()
 	}
 	f = min(max(f, MinZoom), MaxZoom)
+	f = float32(math.Round(float64(f)*100)) / 100
 	if f == a.Zoom() {
 		return f
 	}
@@ -156,22 +166,25 @@ func (a *App) applyMenuZoom() {
 	}
 }
 
-// syncZoomMenu enables the zoom commands of the menu model as the zoom allows:
+// syncZoomMenu shows the zoom commands of the menu model as the zoom allows:
 // Zoom In below the top of the range, Zoom Out above the bottom, Actual Size
-// away from 100 %. The native menu reads it when it opens.
+// away from 100 %. The commands are only shown disabled (Model.SetLimited): they
+// are still delivered, and the bounds are enforced when they are applied, in
+// order, so that Zoom In then Actual Size at 100 % ends at 100 %. The native
+// menu reads it when it opens.
 func (a *App) syncZoomMenu() {
 	if a.menu == nil {
 		return
 	}
 	z := a.Zoom()
 	if id, ok := a.menu.RoleID(menu.RoleZoomIn); ok {
-		a.menu.SetEnabled(id, z < MaxZoom)
+		a.menu.SetLimited(id, z >= MaxZoom)
 	}
 	if id, ok := a.menu.RoleID(menu.RoleZoomOut); ok {
-		a.menu.SetEnabled(id, z > MinZoom)
+		a.menu.SetLimited(id, z <= MinZoom)
 	}
 	if id, ok := a.menu.RoleID(menu.RoleActualSize); ok {
-		a.menu.SetEnabled(id, z != 1)
+		a.menu.SetLimited(id, z == 1)
 	}
 }
 
@@ -224,4 +237,49 @@ func (a *App) syncTitlebar(win any) {
 	l := a.cfg.TrafficLights
 	set.SetTitlebar(a.cfg.Titlebar*z, [2]float32{l[0], l[1] * z})
 	a.tbZoom = z
+}
+
+// fontScales is how many effective scales keep their fonts alive. The current
+// one is always among them. Four cover the common back-and-forth (100 %, a
+// step either way, and one more) without a re-creation, and bound the font
+// memory to four sets whatever the zoom does.
+const fontScales = 4
+
+// useFontScale keeps the fonts of at most fontScales scales alive. It runs at
+// the start of every build, before the kit asks for the fonts of the frame's
+// scale: when that scale is new and fontScales are already in use, the one
+// used longest ago is released (text.System.ReleaseScale: the CTFonts,
+// DirectWrite faces or Go font faces, and the keys and ids they held).
+//
+// That scale is safe to release. It is the fifth most recent, so at least four
+// frames at other scales have been built since a frame used it, and the
+// renderer has at most three frames in flight (and they hold atlas pages and
+// draw lists, never fonts: nothing of the CPU-side fonts is read after
+// Build). The glyph images stay in the atlas until its next reset, so the
+// frames in flight and the scales kept are not disturbed.
+func (a *App) useFontScale() {
+	if a.Text == nil {
+		return
+	}
+	s := a.EffectiveScale()
+	if a.nScales > 0 && a.scales[0] == s {
+		return
+	}
+	i := -1
+	for j := 0; j < a.nScales; j++ {
+		if a.scales[j] == s {
+			i = j
+			break
+		}
+	}
+	if i < 0 {
+		if a.nScales < fontScales {
+			a.nScales++
+		} else {
+			a.Text.ReleaseScale(a.scales[a.nScales-1]) // the least recently used
+		}
+		i = a.nScales - 1
+	}
+	copy(a.scales[1:i+1], a.scales[:i])
+	a.scales[0] = s
 }

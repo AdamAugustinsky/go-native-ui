@@ -72,7 +72,7 @@ func (m *Model) State(c *ui.Context, id ID) (enabled, checked bool) {
 	if !ok {
 		return false, false
 	}
-	enabled = !hasBit(m.off, i) && (!c.ModalOpen() || m.inModal(c, i))
+	enabled = !hasBit(m.off, i) && !hasBit(m.lim, i) && (!c.ModalOpen() || m.inModal(c, i))
 	return enabled, hasBit(m.check, i)
 }
 

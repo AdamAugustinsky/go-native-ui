@@ -284,7 +284,8 @@ type Context struct {
 	overflowRun    int    // frames in a row that dropped glyphs
 	overflowFrames uint64 // ... in total
 
-	fonts []fontInfo
+	fonts   []fontInfo
+	fontGen uint32 // the text system's RunGeneration fonts was read at
 
 	up      Uploader
 	pageTex []gpu.TextureID
@@ -389,6 +390,15 @@ func (c *Context) Begin(in *Input, widthPx, heightPx int, scale, dt float32) {
 	c.frame++
 	c.in = *in
 	c.pruneDeadlines()
+	if c.sh != nil {
+		if g := c.sh.RunGeneration(); g != c.fontGen {
+			// The text system dropped its runs: that happens when it evicts, and
+			// when it releases fonts (text.System.ReleaseScale), whose keys then
+			// name other fonts. What was read of the fonts is read again.
+			clear(c.fonts)
+			c.fontGen = g
+		}
+	}
 	old := c.scale
 	c.w, c.h, c.scale, c.dt = widthPx, heightPx, scale, dt
 	c.fr.Swap()
@@ -441,8 +451,12 @@ func (c *Context) Begin(in *Input, widthPx, heightPx int, scale, dt float32) {
 }
 
 // rescaleScroll keeps every scrolled box at the same place in its content
-// when the scale changes by the factor r: the offsets are in pixels, so they
-// are multiplied, and the view stays on what it showed at the top.
+// when the scale changes by the factor r. The offsets and the extents they
+// are limited by (the content and the view, from the previous layout) are in
+// pixels, so all of them are multiplied: the view stays on what it showed at
+// the top, and the input of the frame the scale changes in (a scroll event,
+// a momentum) is clamped against the bounds at the new scale, not the old.
+// Trackpad stretches are pixels too.
 func (c *Context) rescaleScroll(r float64) {
 	for _, id := range c.prevOrder {
 		b := &c.boxes[id]
@@ -452,6 +466,17 @@ func (c *Context) rescaleScroll(r float64) {
 		for a := 0; a < 2; a++ {
 			b.scroll[a] *= r
 			b.scrollTgt[a] *= r
+			b.content[a] *= r
+			b.size[a] = float32(float64(b.size[a]) * r)
+		}
+	}
+	for i := 0; i < c.sp.n; i++ {
+		rb := &c.sp.rb[i]
+		for a := 0; a < 2; a++ {
+			rb.s[a] *= r
+			rb.force[a] *= r
+			rb.x0[a] *= r
+			rb.v0[a] *= r
 		}
 	}
 }

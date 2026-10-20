@@ -143,3 +143,48 @@ func TestZoomMatchAllocatesNothing(t *testing.T) {
 		t.Fatalf("%v allocations per frame", n)
 	}
 }
+
+// A command at its limit shows disabled but is still delivered, in order: the
+// limit is checked where the command acts, after the ones before it. A
+// command that is disabled for good stays held back.
+func TestLimitedCommandsAreStillDelivered(t *testing.T) {
+	r := newRig(t)
+	r.m = zoomModel(t)
+	r.m.SetLimited(cmdActual, true)
+	if r.m.Enabled(cmdActual) || !r.m.Enabled(cmdIn) {
+		t.Fatal("a limited command shows enabled, or an unlimited one disabled")
+	}
+	if en, _ := r.m.State(r.c, cmdActual); en {
+		t.Error("State of a limited command is enabled")
+	}
+	pm := ui.PrimaryMod()
+	var got []ZoomAction
+	frame := func() {
+		got = nil
+		r.frame(func(c *ui.Context) {
+			r.m.Match(c)
+			for z, ok := r.m.TakeZoom(); ok; z, ok = r.m.TakeZoom() {
+				got = append(got, z)
+			}
+		})
+	}
+	r.in.PushCommand(uint16(cmdIn))
+	r.in.PushCommand(uint16(cmdActual))
+	frame()
+	if len(got) != 2 || got[0] != ZoomIn || got[1] != ZoomReset {
+		t.Errorf("Zoom In then Actual Size at its limit: %v", got)
+	}
+	r.chord('0', pm)
+	frame()
+	if len(got) != 1 || got[0] != ZoomReset {
+		t.Errorf("the limited shortcut: %v", got)
+	}
+	r.m.SetLimited(cmdActual, false)
+	r.m.SetEnabled(cmdActual, false)
+	r.in.PushCommand(uint16(cmdActual))
+	r.chord('0', pm)
+	frame()
+	if len(got) != 0 {
+		t.Errorf("a disabled command was delivered: %v", got)
+	}
+}

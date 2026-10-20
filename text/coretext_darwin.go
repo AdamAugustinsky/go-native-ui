@@ -202,6 +202,7 @@ type fontEnt struct {
 	attrs   uintptr // CFDictionary {kCTFontAttributeName: font} (+1), for attributed strings
 	face    FaceID
 	metrics Metrics
+	gone    bool // released by ReleaseScale: the slot is free for the next Font
 }
 
 // faceEnt is a concrete face: the primary font of a FontKey or a fallback,
@@ -211,6 +212,8 @@ type faceEnt struct {
 	color bool
 	name  string  // PostScript name
 	scale float32 // pixels per point the face is rasterised at
+	key   string  // its entry in faceByName
+	gone  bool    // released by ReleaseScale: the slot is free for the next face
 }
 
 // bitmap is a reusable CGBitmapContext with its backing memory (Go-owned,
@@ -374,15 +377,21 @@ func (s *System) traitsAttrs(weight int, mono bool) uintptr {
 // ---- Fonts ----
 
 // Font returns the key of a font, creating it on first use. Fonts live until
-// Close. A family that doesn't exist silently resolves to CoreText's default.
+// Close, or until ReleaseScale releases the scale they were made for. A family
+// that doesn't exist silently resolves to CoreText's default.
 func (s *System) Font(d FontDesc) FontKey {
 	d = normalizeDesc(d)
+	free := -1
 	for i := range s.fonts {
-		if s.fonts[i].desc == d {
+		if s.fonts[i].gone {
+			if free < 0 {
+				free = i
+			}
+		} else if s.fonts[i].desc == d {
 			return FontKey(i)
 		}
 	}
-	if len(s.fonts) >= math.MaxUint16 {
+	if free < 0 && len(s.fonts) >= math.MaxUint16 {
 		return 0
 	}
 	pool := s.poolPush()
@@ -415,10 +424,70 @@ func (s *System) Font(d FontDesc) FontKey {
 		UnderlineThickness: float32(s.f64(sy.ctFontGetUnderlineThick, font) * sc),
 	}
 	fe.metrics.LineHeight = fe.metrics.Ascent + fe.metrics.Descent + fe.metrics.LineGap
-	s.fonts = append(s.fonts, fe)
-	key := FontKey(len(s.fonts) - 1)
+	var key FontKey
+	if free >= 0 {
+		key = FontKey(free)
+		s.fonts[key] = fe
+	} else {
+		s.fonts = append(s.fonts, fe)
+		key = FontKey(len(s.fonts) - 1)
+	}
 	s.fonts[key].metrics.MonoAdvance = s.Run(s.Shape(key, []byte("0"))).Advance
 	return key
+}
+
+// ReleaseScale releases every font made for scale (FontDesc.Scale) and the
+// faces they rasterise with, fallback faces included: the CTFonts are
+// released, the keys and ids become free for later fonts, and nothing the
+// other scales use changes (their keys, faces and atlas entries stay valid).
+// The run and paragraph caches are emptied (RunGeneration and ParaGeneration
+// change), because they are keyed by the keys that may now name other fonts;
+// the glyph images of the released faces stay in their atlas pages until the
+// next atlas reset, without entries. It returns the number of fonts released.
+// Call it between frames, for a scale no frame being built or drawn uses
+// (app zoom: a level that was last used longer ago than the frames in
+// flight).
+func (s *System) ReleaseScale(scale float32) int {
+	if s.closed {
+		return 0
+	}
+	n := 0
+	for i := range s.fonts {
+		if f := &s.fonts[i]; !f.gone && f.desc.Scale == scale {
+			s.release(f.attrs)
+			s.release(f.font)
+			*f = fontEnt{gone: true}
+			n++
+		}
+	}
+	faces := 0
+	for i := range s.faces {
+		if f := &s.faces[i]; !f.gone && f.scale == scale {
+			s.release(f.font)
+			delete(s.faceByName, f.key)
+			*f = faceEnt{gone: true}
+			faces++
+		}
+	}
+	if n == 0 && faces == 0 {
+		return 0
+	}
+	s.runs.drop()
+	s.paras.drop()
+	s.atlas.glyphs.removeFaces(func(f FaceID) bool { return int(f) < len(s.faces) && s.faces[f].gone })
+	return n
+}
+
+// Scales lists the scales that have live fonts (FontDesc.Scale), in the order
+// they were first used since the last release.
+func (s *System) Scales() []float32 {
+	var l scaleSet
+	for i := range s.fonts {
+		if !s.fonts[i].gone {
+			l.add(s.fonts[i].desc.Scale)
+		}
+	}
+	return l
 }
 
 // createFont creates the CTFont for d at size pt (points; see fontEnt).
@@ -482,8 +551,13 @@ func (s *System) Metrics(f FontKey) Metrics {
 // fonts. Identity is the CTFontRef pointer (cheap, exact while the font is
 // retained) and otherwise PostScript name + size, with the scale.
 func (s *System) faceFor(font uintptr, scale float32) FaceID {
+	free := -1
 	for i := range s.faces {
-		if s.faces[i].font == font && s.faces[i].scale == scale {
+		if s.faces[i].gone {
+			if free < 0 {
+				free = i
+			}
+		} else if s.faces[i].font == font && s.faces[i].scale == scale {
 			return FaceID(i)
 		}
 	}
@@ -508,17 +582,24 @@ func (s *System) faceFor(font uintptr, scale float32) FaceID {
 	if id, ok := s.faceByName[string(s.name)]; ok {
 		return id
 	}
-	if len(s.faces) >= math.MaxUint16 {
+	if free < 0 && len(s.faces) >= math.MaxUint16 {
 		return 0
 	}
 	traits := uint32(s.fr.Call1(sy.ctFontGetSymbolicTraits, font))
 	s.retain(font)
-	s.faces = append(s.faces, faceEnt{
+	fe := faceEnt{
 		font: font, color: traits&traitColorGlph != 0,
-		name: string(s.name[:nameLen]), scale: scale,
-	})
-	id := FaceID(len(s.faces) - 1)
-	s.faceByName[string(s.name)] = id
+		name: string(s.name[:nameLen]), scale: scale, key: string(s.name),
+	}
+	var id FaceID
+	if free >= 0 {
+		id = FaceID(free)
+		s.faces[id] = fe
+	} else {
+		s.faces = append(s.faces, fe)
+		id = FaceID(len(s.faces) - 1)
+	}
+	s.faceByName[fe.key] = id
 	return id
 }
 
@@ -536,7 +617,7 @@ func (s *System) faceName(f FaceID) string {
 // cache. A hit allocates nothing. Every invalid UTF-8 byte is shaped as U+FFFD
 // (one character, and one cluster offset).
 func (s *System) Shape(f FontKey, utf8 []byte) RunRef {
-	if int(f) >= len(s.fonts) {
+	if int(f) >= len(s.fonts) || s.fonts[f].gone {
 		return 0
 	}
 	if r, ok := s.runs.lookup(f, utf8); ok {
@@ -716,7 +797,7 @@ func (s *System) reserveScratch(n int) {
 //
 // Entries are valid until AtlasGeneration changes.
 func (s *System) Glyph(face FaceID, gid uint16, sub uint8) GlyphEntry {
-	if int(face) >= len(s.faces) {
+	if int(face) >= len(s.faces) || s.faces[face].gone {
 		return GlyphEntry{}
 	}
 	smooth := min(sub>>smoothShift, smoothLevels)
@@ -947,7 +1028,7 @@ func (s *System) Close() {
 		return
 	}
 	s.closed = true
-	for _, f := range s.fonts {
+	for _, f := range s.fonts { // (a released font has none: zeros)
 		s.release(f.attrs)
 		s.release(f.font)
 	}

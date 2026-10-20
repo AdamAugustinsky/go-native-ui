@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"testing"
 	"time"
 
@@ -401,5 +402,44 @@ func TestZoomIsKeptApartFromTheFrame(t *testing.T) {
 	}
 	if err := s2.Save(State{Frame: f, Zoom: math.NaN()}); err != ErrInvalid {
 		t.Errorf("Save of a NaN zoom: %v", err)
+	}
+}
+
+// A Windows frame is in physical pixels: the points an app has (its content
+// size, Config.Width) are converted by the display's scale, and back, and the
+// zoom is not part of it.
+func TestFromPointsKnowsTheUnitOfTheOS(t *testing.T) {
+	cases := []struct {
+		goos  string
+		scale float64
+		want  float64
+	}{
+		{"darwin", 2, 1},
+		{"linux", 1.5, 1},
+		{"windows", 2, 2},
+		{"windows", 1.5, 1.5},
+		{"windows", 0, 1}, // a scale that is not known
+	}
+	for _, c := range cases {
+		if got := unitsPerPoint(c.goos, c.scale); got != c.want {
+			t.Errorf("%s at scale %v: %v units per point, want %v", c.goos, c.scale, got, c.want)
+		}
+	}
+	// A 900×640 pt window on Windows at 200 % is saved as 1800×1280 and comes back as 900×640 pt.
+	const w, h, scale = 900.0, 640.0, 2.0
+	k := unitsPerPoint("windows", scale)
+	f := Rect{X: 100, Y: 80, W: w * k, H: h * k}
+	if f.W != 1800 || f.H != 1280 {
+		t.Fatalf("frame %+v", f)
+	}
+	if f.W/k != w || f.H/k != h {
+		t.Errorf("round trip %v×%v pt", f.W/k, f.H/k)
+	}
+	// On this OS the exported pair agrees with the table.
+	if got := ToPoints(FromPoints(w, scale), scale); got != w {
+		t.Errorf("ToPoints(FromPoints(%v)) = %v", w, got)
+	}
+	if FromPoints(w, scale) != w*unitsPerPoint(runtime.GOOS, scale) {
+		t.Error("FromPoints does not use this OS's unit")
 	}
 }

@@ -14,6 +14,7 @@ const maxLatencyNs = int64(5e9)
 func (a *App) build(w, h int, dt float32) {
 	a.settle = a.settle || a.resized
 	a.resized = false
+	a.useFontScale() // zoom.go
 	a.UI.Begin(&a.tr.in, w, h, a.EffectiveScale(), dt)
 	a.b.Build(a.UI)
 	a.UI.End(&a.list)

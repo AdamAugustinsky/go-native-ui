@@ -215,6 +215,7 @@ type Model struct {
 	byID  []idIndex // sorted by id, for lookup
 	keys  []keyIndex
 	off   []uint64 // bit i set: command i is disabled (the default is enabled)
+	lim   []uint64 // bit i set: command i is at its limit (SetLimited): shown disabled, but still delivered
 	check []uint64 // bit i set: command i is checked
 
 	// the commands of the frame being built (see Match)
@@ -302,7 +303,7 @@ func NewModel(commands []Command, menus []Menu, bar []int) (*Model, error) {
 		}
 	}
 	words := (len(m.cmds) + 63) / 64
-	m.off, m.check = make([]uint64, words), make([]uint64, words)
+	m.off, m.lim, m.check = make([]uint64, words), make([]uint64, words), make([]uint64, words)
 
 	parent := make([]int, len(m.menus)) // 1 + the index of the menu that holds it as a submenu
 	menuRoles := make(map[MenuRole]int)
@@ -402,10 +403,23 @@ func (m *Model) SetEnabled(id ID, on bool) {
 	}
 }
 
-// Enabled reports whether the command exists and is enabled.
+// Enabled reports whether the command exists and shows enabled: it is neither
+// disabled (SetEnabled) nor at its limit (SetLimited).
 func (m *Model) Enabled(id ID) bool {
 	i, ok := m.index(id)
-	return ok && !hasBit(m.off, i)
+	return ok && !hasBit(m.off, i) && !hasBit(m.lim, i)
+}
+
+// SetLimited marks a command as at its limit, such as Zoom In at the largest
+// zoom: menus show it disabled (Enabled, State), but unlike SetEnabled it is
+// still delivered, because the limit is the app's to enforce where the command
+// acts. Commands that arrive together act in the order they were delivered, and
+// an earlier one may lift the limit a later one needs (Zoom In, then Actual
+// Size, at 100 %). Unknown ids are ignored.
+func (m *Model) SetLimited(id ID, on bool) {
+	if i, ok := m.index(id); ok {
+		setBit(m.lim, i, on)
+	}
 }
 
 // SetChecked sets the check mark of a command (a menu item that toggles

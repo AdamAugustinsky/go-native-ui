@@ -217,6 +217,12 @@ func (c *Context) TextField(label string, buf *TextBuffer) TextFieldSignal {
 		owns = active && !c.fieldBuilt
 	}
 	buf.now = in.Time
+	if buf.scrollAt != c.scale { // a new scale (a display, an app zoom): the same text stays in view
+		if buf.scrollAt > 0 {
+			buf.scroll *= c.scale / buf.scrollAt
+		}
+		buf.scrollAt = c.scale
+	}
 	rev0 := buf.rev
 	touched := active && !buf.focused // focus just arrived
 	buf.focused = active

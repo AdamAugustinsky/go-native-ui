@@ -1,6 +1,7 @@
 package app_test
 
 import (
+	"image"
 	"math"
 	"os"
 	"path/filepath"
@@ -36,7 +37,8 @@ type zoomApp struct {
 	listRow0     ui.ID
 	uiW, uiH     int // the ui's size in pixels, as the last Build saw it
 	scale        float32
-	fired        int // CmdOther
+	fired        int  // CmdOther
+	noList       bool // leave the list out: its scroll position depends on the zoom's history
 
 	pushCmd []uint16      // commands for the next frames
 	pushKey []ui.KeyEvent // key chords for the next frames
@@ -85,6 +87,13 @@ func (z *zoomApp) Build(c *ui.Context) {
 	k.BeginWindow()
 	z.button = k.Button("Open").ID
 	k.Label("Hello, zoom")
+	if z.noList {
+		k.Label("Some more text, in a few lines")
+		k.Button("Another button")
+		k.EndWindow()
+		k.End()
+		return
+	}
 	k.NextHeight(k.Fixed(120))
 	l := k.BeginList("rows", &z.ls, 200)
 	z.list = c.Parent() // the list's scrolling box
@@ -113,7 +122,11 @@ func skipOrFail(t testing.TB, what string, err error) {
 
 func openZoom(t *testing.T, wPx, hPx int, scale float32) (*app.Offscreen, *zoomApp) {
 	t.Helper()
-	z := newZoomApp(t)
+	return openZoomApp(t, wPx, hPx, scale, newZoomApp(t))
+}
+
+func openZoomApp(t *testing.T, wPx, hPx int, scale float32, z *zoomApp) (*app.Offscreen, *zoomApp) {
+	t.Helper()
 	o, err := app.NewOffscreen(app.Config{Width: float32(wPx) / scale, Height: float32(hPx) / scale}, wPx, hPx, scale, z)
 	if err != nil {
 		skipOrFail(t, "offscreen renderer", err)
@@ -263,7 +276,8 @@ func TestZoomGeometryIsStoredUnzoomed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	frame := winstate.Rect{X: 100, Y: 80, W: float64(w2), H: float64(h2) + 28}
+	_, _, backing := o.Size()
+	frame := winstate.Rect{X: 100, Y: 80, W: winstate.FromPoints(float64(w2), float64(backing)), H: winstate.FromPoints(float64(h2)+28, float64(backing))}
 	if err := st.Save(winstate.State{Frame: frame, Zoom: float64(o.Zoom())}); err != nil {
 		t.Fatal(err)
 	}
@@ -445,4 +459,108 @@ func TestZoomedFramesAllocateNothing(t *testing.T) {
 			t.Errorf("zoom %v: %v allocations per frame", zoom, n)
 		}
 	}
+}
+
+// Zoom commands that arrive together act in the order they came, each against
+// the zoom the ones before it left: the limits are not those of the frame's
+// start. Zoom In then Actual Size at 100 % ends at 100 %.
+func TestZoomCommandsInOneFrameActInOrder(t *testing.T) {
+	in, out, actual := uint16(cmdZoomIn), uint16(cmdZoomOut), uint16(cmdActual)
+	cases := []struct {
+		name string
+		from float32
+		cmds []uint16
+		want float32
+	}{
+		{"in, actual size at 100 %", 1, []uint16{in, actual}, 1},
+		{"actual size, in at 100 %", 1, []uint16{actual, in}, 1.1},
+		{"in, out at the top", app.MaxZoom, []uint16{in, out}, 2.5},
+		{"out, in at the top", app.MaxZoom, []uint16{out, in}, app.MaxZoom},
+		{"out, in at the bottom", app.MinZoom, []uint16{out, in}, 0.67},
+		{"in, out at the bottom", app.MinZoom, []uint16{in, out}, app.MinZoom},
+		{"actual size, out at the top", app.MaxZoom, []uint16{actual, out}, 0.9},
+		{"out, actual size at the bottom", app.MinZoom, []uint16{out, actual}, 1},
+	}
+	for _, c := range cases {
+		o, z := openZoom(t, 800, 600, 2)
+		frames(o, 2)
+		o.SetZoom(c.from)
+		frames(o, 2)
+		z.pushCmd = c.cmds
+		frames(o, 3)
+		if o.Zoom() != c.want {
+			t.Errorf("%s: zoom %v, want %v", c.name, o.Zoom(), c.want)
+		}
+	}
+}
+
+// SetZoom takes whole percents: a drag through the range does not pass through
+// a font set per fraction.
+func TestZoomSnapsToWholePercent(t *testing.T) {
+	o, _ := openZoom(t, 800, 600, 2)
+	for _, c := range []struct{ in, want float32 }{{1.234, 1.23}, {1.236, 1.24}, {0.5004, 0.5}, {2.999, 3}, {1.0049, 1}} {
+		if got := o.SetZoom(c.in); got != c.want || o.Zoom() != c.want {
+			t.Errorf("SetZoom(%v) = %v (zoom %v), want %v", c.in, got, o.Zoom(), c.want)
+		}
+	}
+}
+
+// A hundred distinct zoom levels keep at most four font sets alive, and the
+// text at the current one draws exactly as in a window that was never anywhere
+// else.
+func TestZoomKeepsAtMostFourFontSets(t *testing.T) {
+	o, _ := openZoomApp(t, 900, 600, 2, &zoomApp{m: newZoomApp(t).m, noList: true})
+	frames(o, 2)
+	most := 0
+	for i := 0; i < 100; i++ {
+		o.SetZoom(0.5 + float32(i)/100*2.5) // 100 distinct levels over the whole range
+		frames(o, 2)
+		most = max(most, len(o.Text.Scales()))
+		if n := len(o.Text.Scales()); n > 4 {
+			t.Fatalf("level %d: %d font sets alive: %v", i, n, o.Text.Scales())
+		}
+	}
+	if most != 4 {
+		t.Errorf("at most %d font sets were alive, want the limit of 4 reached", most)
+	}
+	cur := o.EffectiveScale()
+	if sc := o.Text.Scales(); sc[len(sc)-1] != cur && !slicesContain(sc, cur) {
+		t.Errorf("the fonts of the current scale %v are not alive: %v", cur, sc)
+	}
+
+	frames(o, 3)
+	got := append([]byte(nil), mustFrame(o).Pix...)
+	fresh, _ := openZoomApp(t, 900, 600, 2, &zoomApp{m: newZoomApp(t).m, noList: true})
+	fresh.SetZoom(o.Zoom())
+	frames(fresh, 3)
+	if want := mustFrame(fresh).Pix; string(got) != string(want) {
+		t.Error("the window that went through 100 levels draws differently from a fresh one at the same zoom")
+	}
+	if inkless(got) {
+		t.Error("nothing is drawn at the current zoom")
+	}
+}
+
+func slicesContain(l []float32, v float32) bool {
+	for _, x := range l {
+		if x == v {
+			return true
+		}
+	}
+	return false
+}
+
+func mustFrame(o *app.Offscreen) *image.RGBA {
+	img, _ := o.Frame()
+	return img
+}
+
+// inkless reports whether the frame is one colour.
+func inkless(pix []byte) bool {
+	for i := 4; i+3 < len(pix); i += 4 {
+		if pix[i] != pix[0] || pix[i+1] != pix[1] || pix[i+2] != pix[2] {
+			return false
+		}
+	}
+	return true
 }
