@@ -829,9 +829,13 @@ func TestTheMenuBarFollowsTheKeyWindowAtOnce(t *testing.T) {
 		model := new(int) // the windows' one model: they share the bar
 		a.SetWindowMenus(spec, stA.state, model)
 		b.SetWindowMenus(spec, stB.state, model)
+		// AppKit's windowDidBecomeKey:, as each is made key in turn (the
+		// app may not be able to activate here, and a window that opens is
+		// made key where it can).
+		objc.Send1(a.delegate, selDidBecomeKey, 0)
 		r.ownerFirst = a.MenuBarOwner() && !b.MenuBarOwner()
 
-		objc.Send1(b.delegate, selDidBecomeKey, 0) // AppKit's, as B is made key
+		objc.Send1(b.delegate, selDidBecomeKey, 0)
 		a.q.reset()
 		b.q.reset()
 		cmd := uintptr(1 << 20)
@@ -862,7 +866,7 @@ func TestTheMenuBarFollowsTheKeyWindowAtOnce(t *testing.T) {
 		t.Skipf("cannot open a window here: %s", r.why)
 	}
 	if !r.ownerFirst {
-		t.Error("the first window to give its menus does not own the bar")
+		t.Error("the window that became key does not own the bar")
 	}
 	if len(r.aCmds) != 0 || len(r.bCmds) != 2 || r.bCmds[0] != tcClose || r.bCmds[1] != tcSave || r.bKeys != 0 {
 		t.Errorf("⌘W and ⌘S right after B became key: commands %v to A, %v and %d keys to B; want none, [%d %d] and none", r.aCmds, r.bCmds, r.bKeys, tcClose, tcSave)
