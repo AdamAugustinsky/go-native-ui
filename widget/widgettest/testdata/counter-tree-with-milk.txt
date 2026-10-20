@@ -1,0 +1,6 @@
+Window
+  TextField "Item" [focused editable]
+  Button "Add" [disabled]
+  List "items"
+    ListItem "milk" pos=0/1
+      Label "milk"

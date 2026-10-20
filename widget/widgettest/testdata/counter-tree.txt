@@ -1,0 +1,4 @@
+Window
+  TextField "Item" [editable]
+  Button "Add" [disabled]
+  List "items"

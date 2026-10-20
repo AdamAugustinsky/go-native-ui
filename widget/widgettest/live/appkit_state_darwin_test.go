@@ -3,10 +3,13 @@
 package live
 
 import (
+	"os"
+	"slices"
 	"testing"
 
 	"gonativeui/app"
 	"gonativeui/internal/objc"
+	"gonativeui/platform"
 	"gonativeui/ui"
 	"gonativeui/widget/widgettest"
 )
@@ -157,5 +160,69 @@ func TestOtherWindows(t *testing.T) {
 	l.Click(ui.RoleButton, "Press") // the app goes on
 	if p.press != 1 {
 		t.Errorf("the app did not take a click after another window closed: %d", p.press)
+	}
+}
+
+// An alert the app asks for is a real AppKit sheet on the window; pressing
+// its button by title ends it and the app takes the answer with TakeDialog.
+func TestRealAlertSheetAnswered(t *testing.T) {
+	l, _ := startProbe(t)
+	l.Frames(3)
+	var tk platform.DialogTicket
+	l.Do(func(a *app.App) {
+		var err error
+		tk, err = a.Alert(platform.AlertSpec{Message: "Save changes?", Info: "Your edits will be lost.",
+			Buttons: []string{"Save", "Cancel", "Don't Save"}, Suppression: "Don't ask again"})
+		if err != nil {
+			t.Errorf("Alert: %v", err)
+		}
+	})
+	var sheet widgettest.Sheet
+	l.Until("the sheet is attached", 240, func() bool {
+		s, ok := widgettest.SheetOf(objc.ID(l.App().Win.Native().NSWindow))
+		sheet = s
+		return ok
+	})
+	var titles []string
+	l.Do(func(a *app.App) { titles = sheet.Buttons() })
+	for _, want := range []string{"Save", "Cancel", "Don't Save", "Don't ask again"} {
+		if !slices.Contains(titles, want) {
+			t.Errorf("the sheet has buttons %q, none titled %q", titles, want)
+		}
+	}
+	l.Do(func(a *app.App) {
+		if !sheet.Press("Don't Save") {
+			t.Error("no such button")
+		}
+	})
+	var got platform.DialogResult
+	l.Until("the answer arrives", 240, func() bool {
+		r, ok := l.App().TakeDialog()
+		if ok {
+			got = r
+		}
+		return ok
+	})
+	if got.Ticket != tk || got.Outcome != platform.DialogAnswered || got.Button != 2 {
+		t.Errorf("answer %+v, want button 2 of ticket %d", got, tk)
+	}
+	l.Do(func(a *app.App) {
+		if _, ok := widgettest.SheetOf(objc.ID(a.Win.Native().NSWindow)); ok {
+			t.Error("the sheet is still attached")
+		}
+	})
+}
+
+// A live capture of the window, with GnuiShot, runs where GNUI_GNUISHOT names
+// it (the test Mac); elsewhere it is skipped.
+func TestCaptureOfTheLiveWindow(t *testing.T) {
+	if !widgettest.CaptureEnabled() {
+		t.Skip("captures are off: GNUI_GNUISHOT does not name GnuiShot's shot.sh")
+	}
+	l, _ := startProbe(t)
+	l.Frames(10)
+	path := widgettest.Capture(t, l, "probe")
+	if st, err := os.Stat(path); err != nil || st.Size() < 1000 {
+		t.Errorf("capture %s: %v", path, err)
 	}
 }

@@ -190,6 +190,7 @@ func (l *LiveApp) doQuiet(f func(a *app.App)) (panicked any) {
 			defer func() { pv = recover() }()
 			withPool(func() { f(l.sb.a) })
 		}()
+		platform.Wake() // the loop turns once more: it flushes what f asked for (a dialog) and draws what f changed
 		done <- pv
 	})
 	doMu.Unlock()
@@ -316,4 +317,12 @@ func postDo() {
 	postFrame.Reset().Arg(uintptr(doTarget)).Arg(uintptr(doPerform)).Arg(uintptr(doSel)).Arg(0).ArgBool(false).Call(objc.MsgSend)
 	postMu.Unlock()
 	runtime.UnlockOSThread()
+}
+
+// WindowNumber is the window server's number of the app's window (GnuiShot's
+// -id); a LiveApp is a Windowed, so Capture takes it.
+func (l *LiveApp) WindowNumber() int {
+	var n int
+	l.Do(func(a *app.App) { n = NativeWindow(a).Number() })
+	return n
 }

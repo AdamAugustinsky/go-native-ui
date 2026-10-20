@@ -297,3 +297,71 @@ func DumpMenu() string {
 	walk(objc.Send(NSApp(), objc.Sel("mainMenu")), 0)
 	return string(b)
 }
+
+// ---- the sheets of a window ----
+
+// Sheet is the sheet attached to a window: an alert or a file panel the app
+// asked for through the platform's native dialogs.
+type Sheet struct {
+	// Window is the sheet's window (an NSPanel), 0 when none is attached.
+	Window objc.ID
+	// Parent is the window it is attached to.
+	Parent objc.ID
+}
+
+// SheetOf is the sheet attached to the window win, if any. Main thread.
+func SheetOf(win objc.ID) (Sheet, bool) {
+	s := objc.Send(win, selAttachedSheet)
+	return Sheet{Window: s, Parent: win}, s != 0
+}
+
+// buttons collects the NSButtons under view, depth first.
+func buttons(view objc.ID, out *[]objc.ID) {
+	if view == 0 {
+		return
+	}
+	if objc.SendBool1(view, objc.Sel("isKindOfClass:"), uintptr(objc.Cls("NSButton"))) {
+		*out = append(*out, view)
+	}
+	subs := objc.Send(view, objc.Sel("subviews"))
+	n := int(objc.Send(subs, selCount))
+	for i := 0; i < n; i++ {
+		buttons(objc.Send1(subs, selObjectAtIndex, uintptr(i)), out)
+	}
+}
+
+// Buttons are the titles of the sheet's buttons: the alert's buttons and its
+// suppression checkbox, or a panel's Cancel and its confirm button.
+func (s Sheet) Buttons() []string {
+	var bs []objc.ID
+	buttons(objc.Send(s.Window, objc.Sel("contentView")), &bs)
+	out := make([]string, 0, len(bs))
+	for _, b := range bs {
+		out = append(out, goString(objc.Send(b, selTitle)))
+	}
+	return out
+}
+
+// Press presses the sheet's button with the title as the user does
+// (performClick:), which ends the sheet and calls the app's completion; it
+// reports whether there was such a button. An alert's buttons carry the titles
+// the app gave in AlertSpec.Buttons.
+func (s Sheet) Press(title string) bool {
+	var bs []objc.ID
+	buttons(objc.Send(s.Window, objc.Sel("contentView")), &bs)
+	for _, b := range bs {
+		if goString(objc.Send(b, selTitle)) == title {
+			objc.Send1(b, objc.Sel("performClick:"), 0)
+			return true
+		}
+	}
+	return false
+}
+
+// End ends the sheet with the response code (NSModalResponseCancel 0, OK 1,
+// or an alert's NSAlertFirstButtonReturn 1000 + button index) as
+// endSheet:returnCode: does: what a panel gives when the test has no button
+// to press.
+func (s Sheet) End(code int) {
+	objc.Send2(s.Parent, objc.Sel("endSheet:returnCode:"), uintptr(s.Window), uintptr(code))
+}
