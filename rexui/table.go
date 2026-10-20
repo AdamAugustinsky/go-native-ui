@@ -116,6 +116,12 @@ func TableHeader(k *base.Kit, t *base.TableHead, g ListGlyphs) {
 	sh := pt(k.Scale(), rc.SeparatorH)
 	for i := range t.Columns() {
 		hc := t.HeaderCell(i)
+		// as AppKit's, a right-aligned title that is sorted ends before the
+		// chevron rather than under it, off its numbers' edge on purpose
+		sortRoom := hc.Sorted && hc.Col.Align == ui.AlignRight
+		if sortRoom {
+			c.NextAuditExempt(ui.AuditColumn.Mask())
+		}
 		t.BeginHeaderCell(&hc, 0)
 		if hc.Col.Align == ui.AlignRight { // the title at the right, over the numbers
 			c.NextSize(ui.Pct(1), ui.Px(body))
@@ -129,6 +135,10 @@ func TableHeader(k *base.Kit, t *base.TableHead, g ListGlyphs) {
 			ic := g.SortUp
 			if hc.Descending {
 				ic = g.SortDown
+			}
+			if iw, _ := k.IconSize(ic); sortRoom {
+				c.NextSize(ui.Px(max(0, theme.Snap(k.Pt(rc.SortRight)+iw/2)-t.CellPad())), ui.Px(body))
+				c.BoxKeyed(0, ui.KeyN(hc.Key, 5), nil)
 			}
 			if f, disp := k.Icons().Prepare(c, ic, rc.SortGlyph.RGBA(r)); f != 0 {
 				iw, ih := k.IconSize(ic)

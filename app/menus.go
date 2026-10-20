@@ -77,7 +77,8 @@ func (a *App) menuState(id uint16, act platform.MenuAction) (enabled, checked bo
 // so that no native menu item's key equivalent acts on it.
 func (a *App) fieldTakesKey(e *platform.Event) bool {
 	code := keyCode(e.Key)
-	return code != 0 && a.UI.FieldClaims(ui.KeyEvent{Code: code, Mods: mods(e.Mods), Down: true})
+	m := mods(e.Mods)
+	return code != 0 && a.UI.FieldClaims(ui.KeyEvent{Code: shortcutCode(code, e.Char, m), Mods: m, Down: true})
 }
 
 // popUpMenus opens the native menu the last frame requested, if any. It is

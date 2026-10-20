@@ -21,6 +21,9 @@ var altGrIsCtrlAlt = runtime.GOOS == "windows"
 type TextEditStyle struct {
 	// Selection is the highlight of the selected text (RGBA8) in a focused field.
 	Selection uint32
+	// SelectionInactive is the highlight of a selection scope's text when the
+	// scope is not focused or the window is inactive (see SelectionScope).
+	SelectionInactive uint32
 	// Caret is the caret colour (RGBA8); 0 uses the field's text colour.
 	Caret uint32
 	// BlinkHalfNs is how long the caret stays on and off; 0 disables blinking.
@@ -30,7 +33,7 @@ type TextEditStyle struct {
 	BlinkTimeoutNs int64
 }
 
-var defaultTextEdit = TextEditStyle{Selection: 0x2D6BFF55, BlinkHalfNs: 500e6, BlinkTimeoutNs: 10e9}
+var defaultTextEdit = TextEditStyle{Selection: 0x2D6BFF55, SelectionInactive: 0x8080804C, BlinkHalfNs: 500e6, BlinkTimeoutNs: 10e9}
 
 // TextFieldSignal is what TextField reports.
 type TextFieldSignal struct {
@@ -113,8 +116,12 @@ func (c *Context) IMECancel() bool { return c.imeCancel }
 // Typed text is applied before the frame's keys, so a Backspace in the same
 // frame as the letters it follows deletes the last of them.
 //
+// On macOS the system's key bindings (the standard ones, the Emacs keys ⌃A,
+// ⌃E, ⌃K, ⌃T … and the user's DefaultKeyBinding.dict) arrive as edit actions
+// (EditMoveWordLeft … EditTranspose, keymoves.go) instead of keys.
+//
 // Not implemented: bidirectional visual caret movement (← and →
-// move logically), and the macOS Emacs bindings (Ctrl+A/E/K...).
+// move logically), and a kill ring (⌃Y).
 //
 // # Keys, edit actions and the clipboard
 //
@@ -321,10 +328,17 @@ func (c *Context) TextField(label string, buf *TextBuffer) TextFieldSignal {
 			}
 		}
 		if !composing && !orphan {
-			touched = c.editKeys(buf, &res) || touched
+			// Keys and edit actions in the order they arrived: Left, then
+			// select all, is not select all, then Left.
+			from := 0
 			for i := 0; i < in.NEdit; i++ {
+				to := min(int(in.EditAfter[i]), in.NKeys)
+				touched = c.editKeys(buf, &res, from, to) || touched
+				from = max(from, to)
 				c.applyEdit(buf, in.Edit[i])
+				touched = true // a handled command is activity: the caret blink restarts
 			}
+			touched = c.editKeys(buf, &res, from, in.NKeys) || touched
 		}
 	}
 	switch {
@@ -544,15 +558,15 @@ func (c *Context) mouseDrag(buf *TextBuffer, font text.FontKey, x float32) {
 	}
 }
 
-// editKeys applies the frame's key events to buf and reports whether any key
-// went down.
-func (c *Context) editKeys(buf *TextBuffer, res *TextFieldSignal) (pressed bool) {
+// editKeys applies the frame's key events from..to-1 to buf and reports whether
+// any key went down.
+func (c *Context) editKeys(buf *TextBuffer, res *TextFieldSignal, from, to int) (pressed bool) {
 	in := &c.in
 	primaryMod, wordMod := ModCtrl, ModCtrl
 	if macKeys {
 		primaryMod, wordMod = ModSuper, ModAlt
 	}
-	for i := 0; i < in.NKeys; i++ {
+	for i := from; i < to; i++ {
 		e := in.Keys[i]
 		if !e.Down || (c.fieldKeys|c.fieldPeek)&(1<<uint(i)) == 0 { // only the keys claimed for the field
 			continue
@@ -684,5 +698,7 @@ func (c *Context) applyEdit(buf *TextBuffer, a EditAction) {
 		buf.breakRun()
 		buf.deleteSelection()
 		buf.breakRun()
+	default:
+		c.applyBinding(buf, a) // the system's key bindings (keymoves.go)
 	}
 }

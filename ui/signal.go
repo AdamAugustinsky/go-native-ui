@@ -107,6 +107,7 @@ func (c *Context) mouse() {
 	}
 
 	c.scrollInput()
+	c.gestureInput()
 }
 
 // focusOnPress moves focus to the nearest focusable box at or above the box
@@ -179,6 +180,9 @@ func (c *Context) Signal(id ID) Signal {
 				s.Activated = true
 			}
 		}
+	}
+	if c.gs.n > 0 {
+		c.gestureOf(b, &s)
 	}
 	if b.flags&(hitMask|scrollMask) == 0 {
 		return s
