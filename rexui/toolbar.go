@@ -443,7 +443,7 @@ func (tb *Toolbar) overflows(w float32, name string) (hidden, picked bool) {
 	if !hidden {
 		return false, false
 	}
-	if tb.nOv < MaxToolbarOverflow {
+	if name != "" && tb.nOv < MaxToolbarOverflow { // a group lists its parts, not itself
 		picked = tb.nOv == tb.pick
 		tb.ov[tb.nOv] = name
 		tb.nOv++
@@ -647,7 +647,6 @@ func (tb *Toolbar) beginGroup(name string, shared bool) {
 	}
 	c.KeepValue(wkey, 0, gw)
 	if hidden, _ := tb.overflows(gw, ""); hidden {
-		tb.nOv-- // the parts are listed, not the group
 		tb.inGroup, tb.hideGrp = true, true
 		return
 	}
