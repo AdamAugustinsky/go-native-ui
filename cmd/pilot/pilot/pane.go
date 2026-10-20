@@ -1,6 +1,7 @@
 package pilot
 
 import (
+	"bytes"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -464,7 +465,11 @@ func (p *pane) setQuery() {
 	if !p.filterOpen {
 		q = nil
 	}
+	changed := !bytes.Equal(p.q, q)
 	p.q = append(p.q[:0], q...)
+	if changed { // a new search starts at the top, as results do; a view left far down would otherwise stripe rows that are not there
+		p.scrollRow, p.scrollOff = 0, 0
+	}
 	if p.v.l != nil {
 		p.startRows()
 	}
