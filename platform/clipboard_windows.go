@@ -3,17 +3,22 @@
 package platform
 
 import (
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"time"
 	"unicode/utf16"
+	"unicode/utf8"
 	"unsafe"
 
 	"gonativeui/internal/win32"
 )
 
 const (
+	cfDIB         = 8
 	cfUnicodeText = 13
+	cfHDrop       = 15
+	cfDIBV5       = 17
 	gmemMoveable  = 0x0002
 )
 
@@ -30,6 +35,9 @@ var (
 	pGlobalLock                 = win32.Proc(kernel32, "GlobalLock")
 	pGlobalUnlock               = win32.Proc(kernel32, "GlobalUnlock")
 	pGlobalSize                 = win32.Proc(kernel32, "GlobalSize")
+	pRegisterClipboardFormatW   = win32.Proc(user32, "RegisterClipboardFormatW")
+	pMultiByteToWideChar        = win32.Proc(kernel32, "MultiByteToWideChar")
+	pGetACP                     = win32.Proc(kernel32, "GetACP")
 
 	clipClassName = mustUTF16("STATIC") // the clipboard worker's window: a system class, so no window procedure of ours runs on its thread
 )
@@ -126,4 +134,26 @@ func Clipboard() string {
 		}
 	}
 	return strings.ReplaceAll(string(utf16.Decode(u)), "\r\n", "\n")
+}
+
+// acpToUTF8 appends the path p, in the system's ANSI code page (CP_ACP), to dst
+// as UTF-8: what an ANSI CF_HDROP holds. A path the code page cannot convert
+// appends nothing.
+func acpToUTF8(dst, p []byte) []byte {
+	if len(p) == 0 {
+		return dst
+	}
+	n := int(int32(win32.Call(pMultiByteToWideChar, 0 /* CP_ACP */, 0, uintptr(unsafe.Pointer(&p[0])), uintptr(len(p)), 0, 0)))
+	runtime.KeepAlive(p)
+	if n <= 0 {
+		return dst
+	}
+	u := make([]uint16, n)
+	m := int(int32(win32.Call(pMultiByteToWideChar, 0, 0, uintptr(unsafe.Pointer(&p[0])), uintptr(len(p)), uintptr(unsafe.Pointer(&u[0])), uintptr(n))))
+	runtime.KeepAlive(p)
+	runtime.KeepAlive(u)
+	for _, r := range utf16.Decode(u[:max(m, 0)]) {
+		dst = utf8.AppendRune(dst, r)
+	}
+	return dst
 }

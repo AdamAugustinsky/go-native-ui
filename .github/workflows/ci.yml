@@ -185,6 +185,14 @@ jobs:
           ./bin/gallery -o gallery-macos.png -o-dark gallery-macos-dark.png
           ./bin/gallery -bench -gate -allow-unpaced -timeout 150s | tee gallery-macos.json
           { echo '```json'; cat gallery-macos.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: gallery with the debug overlay on (windowed bench with the allocation gate)
+        if: ${{ !cancelled() }}
+        run: |
+          GNUI_DEBUG=overlay ./bin/gallery -bench -gate -allow-unpaced -timeout 150s | tee gallery-overlay-macos.json
+          { echo '```json'; cat gallery-overlay-macos.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: a release build has no debug chord, menu or inspector panel (gnui_release)
+        if: ${{ !cancelled() }}
+        run: go test -tags gnui_release ./app -run 'Release' -count=1
       - name: notes example (windowed bench with the allocation gate)
         if: ${{ !cancelled() }}
         run: |

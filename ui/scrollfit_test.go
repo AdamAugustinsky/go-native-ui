@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"gonativeui/internal/appkitref"
 )
 
 // The AppKit comparison: every scenario of testdata/appkit-scroll was replayed
@@ -26,6 +28,9 @@ import (
 //
 // The constants are also fitted from the recordings directly and must be
 // within 3 % (the band's c) and 5 % (the spring's k) of ui's.
+//
+// CI reads the MacBook's recordings (NAME.appkit); GNUI_APPKIT_REF=macmini
+// reads the Mac mini's (NAME-macmini.appkit).
 
 type fitEvent struct {
 	t               float64 // ms, when AppKit got it
@@ -112,7 +117,14 @@ func loadFit(t *testing.T, name string) *fitScenario {
 		}
 	})
 	n := 0
-	lines(filepath.Join(dir, name+".appkit"), func(f []string) {
+	set, ok, err := appkitref.FromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		set = appkitref.Default
+	}
+	lines(filepath.Join(dir, appkitref.File(set, name+".appkit")), func(f []string) {
 		if f[0] == "e" {
 			sc.evs[n].t = num(f[2]) // when AppKit got it
 			n++

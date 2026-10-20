@@ -37,10 +37,11 @@ type pacer struct {
 	hidden      bool // the window is hidden (hide)
 	parked      bool // hidden, and an attempt found no frame: wait for an event
 	needDraw    bool
-	frameReady  bool  // a frame slot is available
-	paced       bool  // EvFrame is being delivered (false after the silence fallback)
-	requestedAt int64 // when the outstanding frame request was made; 0 if none
-	retryAt     int64 // do not attempt a draw before this time; 0 if none
+	frameReady  bool   // a frame slot is available
+	paced       bool   // EvFrame is being delivered (false after the silence fallback)
+	requestedAt int64  // when the outstanding frame request was made; 0 if none
+	retryAt     int64  // do not attempt a draw before this time; 0 if none
+	inval       uint32 // calls of invalidate, for the debug overlay's causes (debug.go)
 }
 
 const (
@@ -53,7 +54,7 @@ const (
 func newPacer() pacer { return pacer{needDraw: true, frameReady: true, paced: true} }
 
 // invalidate says a repaint is owed (and a parked loop tries again).
-func (p *pacer) invalidate() { p.needDraw, p.parked = true, false }
+func (p *pacer) invalidate() { p.needDraw, p.parked, p.inval = true, false, p.inval+1 }
 
 // frameEvent handles EvFrame: a slot is free, the frame source is alive.
 func (p *pacer) frameEvent() {

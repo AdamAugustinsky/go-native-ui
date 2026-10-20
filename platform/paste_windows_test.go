@@ -979,8 +979,6 @@ func TestClipboardOtherProgram(t *testing.T) {
 	os.Exit(0)
 }
 
-var pRegisterClipboardFormatW = win32.Proc(user32, "RegisterClipboardFormatW")
-
 // takeClipboard is what the other program does: OpenClipboard with a window
 // of its own (with no window EmptyClipboard leaves no owner, and
 // SetClipboardData then fails), EmptyClipboard, SetClipboardData, each

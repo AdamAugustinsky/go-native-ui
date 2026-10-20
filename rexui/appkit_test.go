@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"gonativeui/gpu"
+	"gonativeui/internal/appkitref"
 	"gonativeui/internal/cielab"
 	"gonativeui/platform"
 	"gonativeui/rexui"
@@ -19,7 +20,9 @@ import (
 
 // appkitRef is rexui/testdata/appkit-27.2.json: macOS 27.2's controls as
 // tools/appkitref/measure read them from AppKitRef's renders (MacBook,
-// default blue accent), and the system colours of that run.
+// default blue accent), and the system colours of that run. CI reads the
+// MacBook's set; GNUI_APPKIT_REF=macmini reads appkit-27.2-macmini.json, the
+// Mac mini's (internal/appkitref).
 type appkitRef struct {
 	System  map[string]map[string]string            `json:"system"`
 	Samples map[string]map[string]appkitMeasurement `json:"samples"`
@@ -39,10 +42,18 @@ type appkitMeasurement struct {
 
 func loadAppKitRef(t *testing.T) *appkitRef {
 	t.Helper()
-	b, err := os.ReadFile("testdata/appkit-27.2.json")
+	set, ok, err := appkitref.FromEnv()
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !ok {
+		set = appkitref.Default
+	}
+	b, err := os.ReadFile(appkitref.File(set, "testdata/appkit-27.2.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("AppKit reference: %s", set)
 	var f appkitRef
 	if err := json.Unmarshal(b, &f); err != nil {
 		t.Fatal(err)

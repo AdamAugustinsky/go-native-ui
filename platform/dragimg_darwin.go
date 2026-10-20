@@ -224,8 +224,6 @@ func (h imgHeader) fits() bool {
 	return h.w*h.h*bpp <= maxDropDecoded
 }
 
-var pngSig = []byte("\x89PNG\r\n\x1a\n")
-
 // sourceOf makes a CGImageSource of NSData data.
 func sourceOf(f *ffi.Frame, data objc.ID) uintptr {
 	return f.Call2(iio.srcWithData, uintptr(data), 0)
@@ -266,7 +264,7 @@ func imagePNG(f *ffi.Frame, b []byte) []byte {
 	if !ok || !hd.fits() {
 		return nil
 	}
-	if len(b) <= maxDropPNG && len(b) >= len(pngSig) && string(b[:len(pngSig)]) == string(pngSig) {
+	if len(b) <= maxDropPNG && len(b) >= len(pngSig) && string(b[:len(pngSig)]) == string(pngSig[:]) {
 		return append([]byte(nil), b...)
 	}
 	convertMu.Lock()
