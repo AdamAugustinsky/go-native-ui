@@ -83,8 +83,8 @@ func TestEventsAreWhatAppKitCallsThem(t *testing.T) {
 		}
 		// aimed at the point asked, whatever the real pointer is doing
 		x, y := objc.SendPoint(ev, objc.Sel("locationInWindow"))
-		if x != 50 || y < 100 {
-			t.Errorf("locationInWindow %v,%v, want x 50 (100 px at scale 2)", x, y)
+		if want := 100 / float64(w.Scale); x != want || y < 1 {
+			t.Errorf("locationInWindow %v,%v, want x %v (100 px at scale %v)", x, y, want, w.Scale)
 		}
 		ev, _ = w.ScrollEvent(100, 100, 3, -50, widgettest.ScrollChanged, widgettest.ScrollNone, 0)
 		if dx, dy := objc.SendF64(ev, objc.Sel("scrollingDeltaX")), objc.SendF64(ev, objc.Sel("scrollingDeltaY")); dx != 3 || dy != -50 {

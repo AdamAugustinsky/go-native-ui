@@ -221,6 +221,8 @@ jobs:
             ls -l "$RUNNER_TEMP"/screencapture.png "$RUNNER_TEMP"/gnuishot-display.png 2>&1
             echo "--- the live window test with GNUI_GNUISHOT"
             GNUI_GNUISHOT=$PWD/tools/gnuishot/shot.sh go test -count=1 -v -run CaptureOfTheLiveWindow ./widget/widgettest/live 2>&1 | tail -n 15
+            echo "--- do synthetic gestures reach a view on the runner (window key? app active?)"
+            go test -count=1 -v -run SyntheticGestures ./widget/widgettest/live 2>&1 | grep -v '^=== ' | tail -n 8
             echo '```'
           } > "$out" 2>&1
           cat "$out" >> "$GITHUB_STEP_SUMMARY"
