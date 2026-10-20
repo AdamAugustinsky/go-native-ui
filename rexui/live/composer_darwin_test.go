@@ -4,7 +4,7 @@ package live
 
 import (
 	"bytes"
-	"runtime/metrics"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -51,7 +51,7 @@ type cmpLab struct {
 
 	// allocations: the Go allocations of the composer's Build, per frame, and
 	// of the frames whose text changed
-	mallocs  [1]metrics.Sample
+	ms       runtime.MemStats
 	deltas   []uint64
 	typing   []uint64
 	measure  bool
@@ -60,7 +60,6 @@ type cmpLab struct {
 
 func (p *cmpLab) Init(a *app.App) error {
 	p.k = base.NewKit(a.UI, a.Text, rex.Theme())
-	p.mallocs[0].Name = "/gc/heap/allocs:objects"
 	cmds := []menu.Command{
 		{ID: cmdUndo, Title: "Undo", Role: menu.RoleUndo, Shortcut: menu.Shortcut{Key: 'Z', Primary: true}},
 		{ID: cmdRedo, Title: "Redo", Role: menu.RoleRedo, Shortcut: menu.Shortcut{Key: 'Z', Primary: true, Mods: ui.ModShift}},
@@ -83,9 +82,11 @@ func (p *cmpLab) Init(a *app.App) error {
 	return nil
 }
 
+// allocs is the number of heap objects the process has allocated (exact: it
+// stops the world, which a metric of the runtime's does not).
 func (p *cmpLab) allocs() uint64 {
-	metrics.Read(p.mallocs[:])
-	return p.mallocs[0].Value.Uint64()
+	runtime.ReadMemStats(&p.ms)
+	return p.ms.Mallocs
 }
 
 func (p *cmpLab) Build(c *ui.Context) {

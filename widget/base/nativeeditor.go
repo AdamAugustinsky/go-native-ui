@@ -21,6 +21,7 @@ import (
 //		…
 //	}
 //	for c := ed.TakeCommand(); c != platform.CmdNone; c = ed.TakeCommand() { … } // while SetCompletionActive(true)
+//	for c := ed.TakeFieldCommand(); c != ui.FieldNone; c = ed.TakeFieldCommand() { … } // the same, as ui.FieldCommands
 //
 // The completion handoff: when the app opens a completion popup (from Changed
 // and Selection, placed at CaretRect above or below the editor, so that it

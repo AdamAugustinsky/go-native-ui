@@ -158,6 +158,9 @@ func TestComposerFocusRing(t *testing.T) {
 		t.Fatal("a ring without focus")
 	}
 	cr.focus() // a click
+	if cr.c.FocusKey() != cr.sig.Key {
+		t.Fatalf("the focus is on %v, the signal's key is %v", cr.c.FocusKey(), cr.sig.Key)
+	}
 	if !ringShown(cr.rig) {
 		t.Fatal("no ring after a click on the text")
 	}
@@ -491,5 +494,32 @@ func TestComposerDrawnTextAPI(t *testing.T) {
 	}
 	if err := st.Replace(platform.TextRange{Start: 5, End: 5}, []byte(" and more text"), platform.TextRange{Start: 5, End: 5}); err != platform.ErrTooLong {
 		t.Fatalf("Replace over the maximum: %v", err)
+	}
+}
+
+// More attachments than the field is wide for scroll the row sideways; the
+// field itself stays as wide as it was.
+func TestComposerAttachmentsScrollSideways(t *testing.T) {
+	cr := newComposerRig(t, 0, rexui.ComposerSetup{})
+	for _, n := range []string{"alpha.png", "bravo.png", "charlie.png", "delta.png", "echo.png", "foxtrot.png", "golf.png"} {
+		cr.o.Attachments = append(cr.o.Attachments, rexui.ComposerAttachment{Name: n})
+	}
+	cr.settle()
+	field := cr.node(ui.RoleGroup, "Message").Bounds
+	first := cr.node(ui.RoleListItem, "alpha.png").Bounds
+	if last := cr.node(ui.RoleListItem, "golf.png").Bounds; last[2] <= field[2] {
+		t.Fatalf("the chips fit in the field (%v, last chip %v): the test needs more", field, last)
+	}
+	b := cr.node(ui.RoleList, "Attachments").Bounds
+	cr.in.MouseX, cr.in.MouseY = (b[0]+b[2])/2, (b[1]+b[3])/2
+	cr.frame()
+	cr.in.ScrollX = -200
+	cr.frame()
+	cr.settle()
+	if got := cr.node(ui.RoleListItem, "alpha.png").Bounds; got[0] >= first[0] {
+		t.Fatalf("the row did not scroll: the first chip is at %v, was %v", got[0], first[0])
+	}
+	if got := cr.node(ui.RoleGroup, "Message").Bounds; got != field {
+		t.Fatalf("scrolling the attachments moved or resized the field: %v, was %v", got, field)
 	}
 }

@@ -364,7 +364,6 @@ func Composer(k *base.Kit, label string, st *ComposerState, o ComposerOpts) Comp
 	prev := c.RectOf(key)
 	attached := len(o.Attachments) > 0
 
-	// the hosted editor's signals and keys are taken before anything is built
 	var ns base.NativeEditorSignal
 	submit := false
 
@@ -411,7 +410,8 @@ func Composer(k *base.Kit, label string, st *ComposerState, o ComposerOpts) Comp
 		if st.variant == ComposerExpanded && st.ed.Height() < rc.ExpandedMinH {
 			k.NextHeight(k.Fixed(rc.ExpandedMinH))
 		}
-		ns = k.NativeEditor(st.ed, ident)
+		ns = k.NativeEditor(st.ed, label)
+		sig.Key = c.KeyOf(ns.ID)
 		sig.Editor = ns.ID
 		sig.Changed, sig.Composing, sig.Selected = ns.Changed, ns.Composing, ns.Selected
 		sig.Cancelled, sig.PastedImage, sig.HeightChanged = ns.Cancelled, ns.PastedImage, ns.HeightChanged
@@ -434,7 +434,7 @@ func Composer(k *base.Kit, label string, st *ComposerState, o ComposerOpts) Comp
 		sig.Editor = composerStatic(k, st, rc)
 		ringVisual = base.Visual{Inactive: inactive, Disabled: true}
 	default:
-		sig.Editor, drawn, ti = composerField(k, st, ident, look, cmdr)
+		sig.Editor, drawn, ti = composerField(k, st, label, look, cmdr)
 		sig.Changed, sig.Focused = drawn.Changed, drawn.Focused
 		sig.Composing = k.Composing(drawn)
 		sig.Cancelled = drawn.Cancelled
@@ -442,7 +442,7 @@ func Composer(k *base.Kit, label string, st *ComposerState, o ComposerOpts) Comp
 		sel := st.drawnSelection()
 		sig.Selected = sel != st.sel
 		st.sel = sel
-		st.fieldKey = ti.Key
+		st.fieldKey, sig.Key = ti.Key, ti.Key
 		ringVisual = ti.Visual
 	}
 	ringVisual = ringVisual.TextEntry()
@@ -560,14 +560,14 @@ func (s *ComposerState) newline() {
 
 // composerField builds the drawn single-line text field of the composer, in
 // the send button's height.
-func composerField(k *base.Kit, st *ComposerState, ident string, look base.Look, cmdr ui.FieldCommander) (ui.ID, base.FieldSignal, base.TextInput) {
+func composerField(k *base.Kit, st *ComposerState, label string, look base.Look, cmdr ui.FieldCommander) (ui.ID, base.FieldSignal, base.TextInput) {
 	c, r := k.Context(), k.Theme()
 	rc := &ComposerLook
 	sc := k.Scale()
 	s := &r.Sizes[theme.SizeRegular]
 	k.Force(look)
 	h := pt(sc, rc.SendSize)
-	ti := k.BeginTextInput(ident, h, base.HoverOff)
+	ti := k.BeginTextInput(label, h, base.HoverOff)
 	font := s.Font.Font
 	padL := pt(sc, rc.InsetX+5)
 	tc := rc.Text.RGBA(r)
@@ -636,7 +636,7 @@ func composerAttachments(k *base.Kit, fieldKey ui.Key, list []ComposerAttachment
 	c.NextSize(ui.Pct(1), ui.Children(1))
 	c.NextRole(ui.RoleList)
 	c.NextSemName("Attachments")
-	row := c.BoxKeyed(ui.Clip, rowKey, nil)
+	row := c.BoxKeyed(ui.ScrollX|ui.Clip, rowKey, nil) // a row longer than the field scrolls sideways
 	c.Push(row)
 	for i := range list {
 		a := &list[i]

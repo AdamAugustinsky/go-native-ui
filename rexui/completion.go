@@ -10,8 +10,8 @@ import (
 // The completion popup list: the list of candidates a text box offers while it
 // is being typed in (mentions, emoji, slash commands, a combo box's choices).
 // It is a drawn popup below or above a caret rectangle with rows the keyboard
-// moves through. It is the contract the composer's completion handoff
-// (N4, D7b) is written against, and the list of Combobox.
+// moves through. It is the list of the Composer (the hosted editor's handoff,
+// N4 and D7b) and of Combobox.
 //
 // # The handoff
 //
@@ -31,6 +31,20 @@ import (
 //	sig := rexui.CompletionList(k, "Mentions", &v.comp, items, caretRect, rexui.CompletionOpts{Exclude: editorRect})
 //	if sig.Chosen >= 0 { v.insert(items[sig.Chosen]); v.closeList() } // a click
 //	if sig.Dismissed { v.closeList() }                                  // a press outside
+//
+// The Composer does all of this for its editor: it turns the hosted editor's
+// keys into ui.FieldCommands (base.FieldCommandOf) and offers them to the
+// list's commander, as it registers the commander with its drawn field, builds
+// the list at the caret with Exclude set to the field, and reports the result
+// (ComposerSignal.Completion). The rest of this comment is for an editor of
+// your own.
+//
+// The Composer does all of this for its editor: it turns the hosted editor's
+// keys into ui.FieldCommands (base.FieldCommandOf) and offers them to the
+// list's commander, as it registers the commander with its drawn field, builds
+// the list at the caret with Exclude set to the field, and reports the result
+// (ComposerSignal.Completion). The rest of this comment is for an editor of
+// your own.
 //
 // A drawn editor (a ui text field) does the same through ui's field commands:
 // CompletionState.Attach registers the state as the commander of the next

@@ -56,7 +56,8 @@ directly with `k.Kit`, or copies a component and owns it.
 | `ColorWell` | the system's colour panel, or `Drawn` for its own picker | — | NSColorWell's 48 × 24 bezel and inset swatch; a popover of the system colours and a hex field. |
 | `MessageBubble`, `BeginBubble` / `EndBubble` | incoming, outgoing, system; sent, sending, failed | — | C2 rich text in a bubble, emoji-only messages large and bubble-less, selectable across bubbles in a `VList` under one selection scope (C4). |
 | `ChatListRow`, `DateDivider`, `TypingIndicator` | compact; pill; inline | — | A 56 pt conversation row (avatar, title, two-line preview, time, unread count); a hairline-flanked date; three dots that pulse only while visible. |
-| `CompletionList`, `CompletionState` | — | — | The completion popup of a text box: the contract N4 writes the composer against (its doc comment). |
+| `CompletionList`, `CompletionState` | — | — | The completion popup of a text box: the contract the composer and the combo box share (its doc comment). |
+| `Composer`, `NewComposer` | default (1 → 6 lines), expanded (3 → 8) | empty, typing, attachments, sending, disabled | The chat composer (D7b): a rounded field (the text field's fill and outline) holding an attachments row, the text and a 28 pt send button. The text is a hosted `NSTextView` on macOS (spell check, autocorrect, dictation, emoji palette, Writing Tools) that grows with its `Height` signal, and a drawn single-line field elsewhere and offscreen. The send button needs text or an attachment and no send in flight; the list is a `CompletionList` above the field, never over the hosted view. |
 
 Every component is keyboard-operable and records its semantics. Its focus
 ring sits outside the shape, shows for keyboard focus only (the text-entry
@@ -425,7 +426,10 @@ at the place it is typed. On macOS the arrows and Backspace arrive as edit
 actions (`doCommandBySelector:`), not keys, and the commander sees them the same.
 `CompletionList`'s doc comment is the contract for an editor that is not ours
 (a native `NSTextView` sends the same commands): units, the exclusion rectangle
-and what the caller must do.
+and what the caller must do. The composer is that editor: the hosted view's
+keys (`platform.EditorCommand`) become the same commands (`base.FieldCommandOf`)
+and go to the same commander (`CompletionState`) as a drawn field's, so one list
+serves both.
 
 **The completion list and the combo box's list take no focus**
 (`OverlayOpts.NoFocus`): the focus, a hosted native view's first responder
