@@ -11,6 +11,7 @@ package live
 
 import (
 	"fmt"
+	"runtime"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -149,6 +150,13 @@ func coveredSince(l *widgettest.LiveApp, w *app.Win, start int64) (covered bool)
 // settle lets the frames that a Do or an opening owes be drawn: the harness
 // wakes every window after each call.
 func settle() { time.Sleep(400 * time.Millisecond) }
+
+// stacks is every goroutine's stack (the main thread's tells where the app's
+// loop is).
+func stacks() []byte {
+	buf := make([]byte, 1<<20)
+	return buf[:runtime.Stack(buf, true)]
+}
 
 // waitFor polls cond from the test goroutine, without asking any window for
 // a frame (Until would ask the first window for one), for at most d.
@@ -336,15 +344,24 @@ func TestEachWindowHasItsOwnComposer(t *testing.T) {
 	if a, b := string(p1.ed.Text()), string(p2.ed.Text()); a != "one" || b != "two" {
 		t.Errorf("the editors hold %q and %q, want \"one\" and \"two\"%s", a, b, mwStates(l, w1, w2))
 	}
-	if keys && (!p1.ed.Focused() || p2.ed.Focused()) {
-		t.Errorf("the editors' focus: first %v, second %v; want the first's only (its window is key)", p1.ed.Focused(), p2.ed.Focused())
+	if !p1.ed.Focused() || !p2.ed.Focused() {
+		t.Errorf("the editors' focus: first %v, second %v; want both (each window keeps its first responder)", p1.ed.Focused(), p2.ed.Focused())
 	}
 
 	l.Do(func(*app.App) {
 		p2.ed.Release() // the app's: before its window closes (or after)
 		w2.Close()
 	})
-	l.Until("the second window closed", 120, func() bool { return !w2.Open() })
+	if !waitFor(5*time.Second, func() bool {
+		var open bool
+		l.Do(func(*app.App) { open = w2.Open() })
+		return !open
+	}) {
+		t.Fatalf("the second window did not close%s\n%s", mwStates(l, w1, w2), stacks())
+	}
+	if !l.Within("the first window draws after the second closed", 120, func() bool { return true }) {
+		t.Fatalf("the first window does not draw after the second closed\n%s", stacks())
+	}
 	var hosts int64
 	l.Do(func(*app.App) { hosts = platform.ShellObjects().Hosts })
 	if hosts != hosts0 {
