@@ -131,9 +131,10 @@ func nearPt(a, b float32) bool { return math.Abs(float64(a-b)) <= 0.5 }
 // the zoom light (x 96), sections at the panes' edges (the inspector's half a
 // point past it), 8 next to a picker, a menu or a group and before search,
 // the title 10 after the capsule before it, the items after the flexible
-// title packed against the pane's end, 36-tall capsules at y 8; every
-// capsule within 0.5 of AppKit's frame in the Mac mini's Finder scene
-// (captures-macmini, 26B5101f).
+// title packed against the pane's end, 36-tall capsules at y 8: AppKit's
+// frames in the Mac mini's Finder scene (captures-macmini, 26B5101f) where
+// they do not depend on the symbols' widths, which differ between systems
+// (the README compares the rest).
 func TestToolbarLayoutUnified(t *testing.T) {
 	g, _ := newFinderToolbar(t, theme.ToolbarUnified)
 	f := g.frameOf
@@ -173,12 +174,14 @@ func TestToolbarLayoutUnified(t *testing.T) {
 		r    [4]float32
 		x, w float32
 	}{
-		{"View", view, 591.5, 46}, {"Group", grp, 646, 47.5}, {"share-tag", shareTag, 702, 83.5},
-		{"Action", action, 794, 44.5}, {"Search", search, 846.5, 36}, {"Inspector", f(ui.RoleButton, "Inspector"), 898.5, 36},
+		{"Search", search, 846.5, 36}, {"Inspector", f(ui.RoleButton, "Inspector"), 898.5, 36},
 	} {
 		if !nearPt(c.r[0], c.x) || !nearPt(c.r[2]-c.r[0], c.w) {
 			t.Errorf("%s at %v, %v wide; AppKit's at %v, %v wide", c.name, c.r[0], c.r[2]-c.r[0], c.x, c.w)
 		}
+	}
+	if !nearPt(action[2], 838.5) {
+		t.Errorf("Action ends at %v, AppKit's at 838.5", action[2])
 	}
 	share, tags := f(ui.RoleButton, "Share"), f(ui.RoleButton, "Tags")
 	if !nearPt(tags[0]-share[2], 8) || share[0] != shareTag[0] || tags[2] != shareTag[2] {
