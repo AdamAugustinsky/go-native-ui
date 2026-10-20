@@ -89,18 +89,20 @@ func (w *Window) linkTick(c *ffi.CB, metal bool) {
 			w.drawable = objc.Retain(objc.Send(objc.ID(c.Int(3)), selUpdateDrawable))
 		}
 		w.ticksSinceFrame, w.lastFrameT = 0, now
-		if w.frameOut { // the last tick's frame never reached Wait: a nested loop runs
+		if w.frameOut && now-w.frameOutT > nestedAfter { // an earlier tick's frame never reached Wait: a nested loop runs
 			w.nested = true
 		}
-		w.q.push(Event{Kind: EvFrame, Time: now})
-		w.frameOut = true
+		if !w.frameOut { // one undelivered EvFrame is enough (a nested loop may last)
+			w.q.push(Event{Kind: EvFrame, Time: now})
+			w.frameOut, w.frameOutT = true, now
+		}
 		objc.Send2(w.app, selPostEvent, uintptr(w.wakeEv), 0) // unblock nextEventMatchingMask
 		if w.live || menuTracking() || w.drag.active || w.nested {
 			w.runHandlerFrom(true) // a requested frame (animation, input) while AppKit's resize, menu tracking, drag session or another nested loop runs
 		}
 		return
 	}
-	if w.frameOut && !w.inHandler {
+	if w.frameOut && w.handler != nil && !w.inHandler && now-w.frameOutT > nestedAfter {
 		// A frame was queued a tick ago and Wait has not returned it: the
 		// main thread is in a loop that does not return to the app's (a
 		// correction bubble's, a block's). Arm a frame, whose tick brings a
@@ -111,7 +113,8 @@ func (w *Window) linkTick(c *ffi.CB, metal bool) {
 	}
 	// Keep ticking through short gaps: pausing after every tick made the
 	// link re-sync on each RequestFrame (uneven intervals on ProMotion).
-	if w.idleTicks++; w.idleTicks >= linkIdleTicks && !w.linkPaused {
+	// Not while a frame waits for the app: the ticks must see a nested loop.
+	if w.idleTicks++; w.idleTicks >= linkIdleTicks && !w.linkPaused && !w.frameOut {
 		objc.Send1(w.link, selSetPaused, 1)
 		w.linkPaused = true
 		w.pauses++
@@ -217,3 +220,8 @@ func (w *Window) setRateRange(link objc.ID) {
 // linkIdleTicks is how many display-link ticks without a frame request pass
 // before the link is paused (idle must stay at zero wakeups).
 const linkIdleTicks = 4
+
+// nestedAfter is how long an EvFrame may wait for the app's loop before the
+// ticks take the main thread for a nested loop's (a few refreshes: Wait
+// returns at once after a tick, unless the run loop never gets back to it).
+const nestedAfter = int64(50e6)
