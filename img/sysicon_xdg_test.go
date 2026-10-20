@@ -189,8 +189,8 @@ func TestXDGLookup(t *testing.T) {
 			t.Errorf("%s: code %d, want %d (%s)", tc.what, code, tc.code, got)
 			continue
 		}
-		if tc.want != "" && got != filepath.Join(icons, filepath.FromSlash(tc.want)) {
-			t.Errorf("%s: %s, want %s", tc.what, strings.TrimPrefix(got, icons), tc.want)
+		if tc.want != "" && filepath.ToSlash(got) != filepath.ToSlash(filepath.Join(icons, tc.want)) {
+			t.Errorf("%s: %s, want %s", tc.what, strings.TrimPrefix(filepath.ToSlash(got), filepath.ToSlash(icons)+"/"), tc.want)
 		}
 	}
 }
