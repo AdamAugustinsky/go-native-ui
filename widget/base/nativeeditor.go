@@ -83,8 +83,9 @@ type NativeEditorSignal struct {
 const offscreenLinePt = 16
 
 // NativeEditor builds the editor's box in the current parent: as wide as the
-// parent unless NextSize says otherwise, Height points high, focusable (Tab
-// reaches the text view through it), with the text-field role and label's
+// parent unless NextSize says otherwise, Height points high, focusable as text
+// entry (Tab reaches the text view through it, with the Keyboard navigation
+// setting off too), with the text-field role and label's
 // shown part as its accessible name. It takes the editor's signals of the
 // frame. It allocates nothing.
 func (k *Kit) NativeEditor(ed *NativeEditor, label string) NativeEditorSignal {
@@ -104,7 +105,7 @@ func (k *Kit) NativeEditor(ed *NativeEditor, label string) NativeEditorSignal {
 	if ed.Editor != nil {
 		c.NextSemValueBytes(ed.Text())
 	}
-	id := c.Host(host, ui.HashString(c.ParentKey(), ident), ui.HostFocusable)
+	id := c.Host(host, ui.HashString(c.ParentKey(), ident), ui.HostFocusable|ui.HostTextEntry)
 	sig := NativeEditorSignal{
 		ID:            id,
 		Changed:       s&platform.EditorChanged != 0,

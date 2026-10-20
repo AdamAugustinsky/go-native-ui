@@ -205,6 +205,7 @@ type Context struct {
 	relClicks         [2]uint8
 	focusKey          Key
 	focusVisible      bool // focus came from the keyboard (FocusVisible)
+	textOnlyTab       bool // Tab skips the controls (focus classes, focus.go): SetTabReachesControls(false)
 	scrollSet         bool // ScrollTo was called this frame (End decides whether the scroll is still moving)
 
 	sp scrollPhys   // trackpad gestures, latching and rubber bands (scrollphys.go)

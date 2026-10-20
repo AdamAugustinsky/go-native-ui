@@ -259,7 +259,7 @@ func (k *Kit) beginList(label string, st *ListState, rows int, table bool, o Lis
 		c.NextRole(ui.RoleList)
 		c.NextSemName(label)
 	}
-	flags := ui.ScrollY | ui.Clickable | ui.Focusable | ui.FocusAnimation
+	flags := ui.ScrollY | ui.Clickable | ui.Focusable | ui.FocusList | ui.FocusAnimation
 	if k.Disabled() {
 		flags = ui.ScrollY | ui.Disabled
 	}

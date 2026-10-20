@@ -16,6 +16,18 @@ func (c *Context) FocusVisible() bool { return c.focusVisible }
 // SetFocus and then SetFocusVisible(true).
 func (c *Context) SetFocusVisible(v bool) { c.focusVisible = v }
 
+// SetTabReachesControls sets whether Tab and Shift+Tab reach every focusable
+// box (the default, and the convention of Windows and Linux) or only the
+// text-entry controls and the lists (FocusText, FocusList: macOS's convention
+// with System Settings' Keyboard navigation off). A control that has the
+// focus keeps it, and Tab leaves it for the next text-entry control or list.
+// Clicking a control, an assistive technology and SetFocus still focus it.
+// The app sets it before each frame from platform.TabReachesControls.
+func (c *Context) SetTabReachesControls(all bool) { c.textOnlyTab = !all }
+
+// TabReachesControls reports what SetTabReachesControls set.
+func (c *Context) TabReachesControls() bool { return !c.textOnlyTab }
+
 // traverseFocus handles Tab and Shift+Tab after the frame was built, and drops
 // the focus from a box that became disabled.
 func (c *Context) traverseFocus() {
@@ -43,13 +55,18 @@ func (c *Context) traverseFocus() {
 		if b.flags&Focusable == 0 || b.flags&Disabled != 0 || b.hid || b.ovl != scope || b.ovRoot {
 			continue
 		}
+		cur := b.key == c.focusKey
+		if cur {
+			seenCur = true
+			prev = last
+		}
+		if c.textOnlyTab && b.flags&(FocusText|FocusList) == 0 {
+			continue // a control: Tab passes it by (the one that has the focus still marks the place)
+		}
 		if first == 0 {
 			first = id
 		}
-		if b.key == c.focusKey {
-			seenCur = true
-			prev = last
-		} else if seenCur && next == 0 {
+		if !cur && seenCur && next == 0 {
 			next = id
 		}
 		last = id
