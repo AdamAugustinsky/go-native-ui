@@ -112,6 +112,7 @@ type layoutState struct {
 	hasPad   bool
 	cross    ui.Cross // for the next container
 	hasCross bool
+	justify  ui.Justify // for the next container
 }
 
 // NextGap sets the gap between the children of the next Row, Column or
@@ -143,12 +144,19 @@ func (k *Kit) AddNextPadTop(pt float32) { k.lay.pad[1] += pt }
 // heights sit on one line; a Column starts them at the left.
 func (k *Kit) NextCross(a ui.Cross) { k.lay.cross, k.lay.hasCross = a, true }
 
+// NextJustify sets where the next Row, Column or container places its
+// children along its axis, in the room they leave (ui.JustifyStart by
+// default; see ui.Justify): a Row of buttons at the right is
+// NextJustify(ui.JustifyEnd). A container sized by its children leaves no
+// room, and a child of size Fill takes it all.
+func (k *Kit) NextJustify(j ui.Justify) { k.lay.justify = j }
+
 // BeginContainer builds a box that lays its children out along axis and
-// pushes it: of size w×h (NextSize replaces them), with the gap, padding and
-// cross placement the app asked for (NextGap, NextPad, NextCross) or the
-// theme's gap and cross, and the given flags (the drawing flags of a styled
-// container whose look was set with ui's Next calls). End it with
-// EndContainer.
+// pushes it: of size w×h (NextSize replaces them), with the gap, padding,
+// cross and main-axis placement the app asked for (NextGap, NextPad,
+// NextCross, NextJustify) or the theme's gap and cross, and the given flags
+// (the drawing flags of a styled container whose look was set with ui's Next
+// calls). End it with EndContainer.
 func (k *Kit) BeginContainer(axis ui.Axis, cross ui.Cross, label string, w, h ui.Size, flags ui.Flags) ui.ID {
 	c := k.c
 	l := &k.lay
@@ -169,6 +177,8 @@ func (k *Kit) BeginContainer(axis ui.Axis, cross ui.Cross, label string, w, h ui
 	l.hasGap, l.hasPad, l.hasCross = false, false, false
 	c.NextAxis(axis)
 	c.NextCross(cross)
+	c.NextJustify(l.justify)
+	l.justify = ui.JustifyStart
 	c.NextGap(gap)
 	c.NextPadding(pad[0], pad[1], pad[2], pad[3])
 	id := c.Box(flags, label)

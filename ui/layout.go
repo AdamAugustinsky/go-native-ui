@@ -89,7 +89,28 @@ func (c *Context) layout() {
 			off[0] += c.stretchOf(p, 0)
 			off[1] += c.stretchOf(p, 1)
 		}
-		cur := p.pad[la] + float32(lead-off[la])
+		start := p.pad[la] + float32(lead-off[la]) // the padded area's leading edge
+		cur := start
+		var between float32 // the free space each gap takes on top of the gap (Justify)
+		var last ID         // with between: the last flow child, put at the end
+		if p.justify != JustifyStart {
+			var first float32
+			first, between = c.justifyOffsets(p, la)
+			cur += first
+			if between != 0 {
+				for ch := p.first; ch != 0; ch = boxes[ch].next {
+					if !boxes[ch].floatingOn(la) {
+						last = ch
+					}
+				}
+			}
+		}
+		// With between, a child's place comes from its index and the sizes
+		// before it rather than from adding up gap after gap, and the last
+		// one's end is the padded area's (less SpaceEvenly's margin): a
+		// fractional between builds up no error over many children.
+		var n int
+		var sizes float64
 		flow := false
 		for ch := p.first; ch != 0; ch = boxes[ch].next {
 			cb := &boxes[ch]
@@ -98,6 +119,19 @@ func (c *Context) layout() {
 				switch {
 				case cb.floatingOn(a):
 					rel = cb.fixed[a]
+				case a == la && between != 0:
+					switch {
+					case ch == last:
+						var margin float32
+						if p.justify == JustifySpaceEvenly {
+							margin = between
+						}
+						rel = start + p.size[a] - p.padSum(a) - margin - cb.size[a]
+					default:
+						rel = cur + float32(sizes+float64(n)*float64(p.gap+between))
+					}
+					n++
+					sizes += float64(cb.size[a])
 				case a == la:
 					if flow {
 						cur += p.gap
@@ -120,6 +154,41 @@ func (c *Context) layout() {
 		}
 	}
 	c.propagateHidden()
+}
+
+// justifyOffsets is where the Justify of linear box p puts its flow children
+// along its layout axis la: the offset of the first from the leading edge of
+// the padded area, and the extra space after each gap. Both are 0 when the
+// children leave no free space (see Justify). p.content is set.
+func (c *Context) justifyOffsets(p *box, la int) (first, between float32) {
+	free := p.size[la] - float32(p.content[la])
+	if free <= 0.001 {
+		return 0, 0
+	}
+	switch p.justify {
+	case JustifyCenter:
+		return snap(free / 2), 0
+	case JustifyEnd:
+		return free, 0
+	}
+	n := 0
+	for ch := p.first; ch != 0; ch = c.boxes[ch].next {
+		if !c.boxes[ch].floatingOn(la) {
+			n++
+		}
+	}
+	switch p.justify {
+	case JustifySpaceBetween:
+		if n > 1 {
+			return 0, free / float32(n-1)
+		}
+	case JustifySpaceEvenly:
+		if n > 0 {
+			e := free / float32(n+1)
+			return e, e
+		}
+	}
+	return 0, 0
 }
 
 // sizeAxis runs the size stages 1 to 4 of layout for axis a (0 = x, 1 = y).

@@ -164,7 +164,8 @@ type flowOut struct {
 // parent: the children built until EndFlow wrap onto lines. The style stacks
 // apply to the box as to any other (NextWidth, NextPad, NextBG, NextFlags with
 // Clip, …); its width on auto is the parent's, its height on auto the lines'.
-// Its child gap is o.GapX; a NextGap or NextCross is replaced by o.
+// Its child gap is o.GapX; a NextGap or NextCross is replaced by o, and
+// NextJustify does nothing (o.Align places the lines).
 func (c *Context) BeginFlow(label string, o FlowOpts) ID {
 	if c.sW.peek().Kind == SizeAuto {
 		c.sW.set(Pct(1))

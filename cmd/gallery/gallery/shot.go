@@ -43,6 +43,29 @@ func SceneNames() []string {
 // Shot renders the gallery offscreen in a scene and writes the PNG to path. It
 // returns the number of quads of the frame.
 func Shot(path string, o ShotOptions) (quads int, err error) {
+	off, err := runScene(o)
+	if err != nil {
+		return 0, err
+	}
+	defer off.Close()
+	img, _ := off.Frame()
+	f, err := os.Create(path)
+	if err != nil {
+		return 0, err
+	}
+	if err := png.Encode(f, img); err != nil {
+		f.Close()
+		return 0, fmt.Errorf("gallery: write %s: %w", path, err)
+	}
+	if err := f.Close(); err != nil {
+		return 0, err
+	}
+	return len(off.Quads()), nil
+}
+
+// runScene opens the offscreen window of Shot and plays the scene to its
+// settled state; the caller closes the window.
+func runScene(o ShotOptions) (*app.Offscreen, error) {
 	if o.Width <= 0 || o.Height <= 0 {
 		o.Width, o.Height = 2*WindowWidthPt, 2*WindowHeightPt
 	}
@@ -59,49 +82,37 @@ func Shot(path string, o ShotOptions) (quads int, err error) {
 		}
 	}
 	if sc == nil {
-		return 0, fmt.Errorf("gallery: no scene %q (have %v)", o.Scene, SceneNames())
+		return nil, fmt.Errorf("gallery: no scene %q (have %v)", o.Scene, SceneNames())
 	}
 	g, err := New(Options{Rows: o.Rows, Preference: o.Preference, Traffic: true, Still: true, Synthetic: true})
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	pl := widgettest.NewPlayer(g, sc.steps(), widgettest.Options{Synthetic: true})
 	b := &scripted{Gallery: g, p: pl, sys: o.System}
 	off, err := app.NewOffscreen(Config(), o.Width, o.Height, o.Scale, b)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	defer off.Close()
+	fail := func(err error) (*app.Offscreen, error) { off.Close(); return nil, err }
 	for n := 0; ; n++ {
 		if _, more := off.Frame(); !more {
 			break
 		}
 		if n > 20000 {
-			return 0, errors.New("gallery: the scene's script did not end")
+			return fail(errors.New("gallery: the scene's script did not end"))
 		}
 	}
 	if err := pl.Err(); err != nil {
-		return 0, err
+		return fail(err)
 	}
 	for n := 0; off.UI.Animating(); n++ { // let the crossfades and the scroll bars settle
 		if n > 600 {
-			return 0, errors.New("gallery: the scene did not settle")
+			return fail(errors.New("gallery: the scene did not settle"))
 		}
 		off.Frame()
 	}
-	img, _ := off.Frame()
-	f, err := os.Create(path)
-	if err != nil {
-		return 0, err
-	}
-	if err := png.Encode(f, img); err != nil {
-		f.Close()
-		return 0, fmt.Errorf("gallery: write %s: %w", path, err)
-	}
-	if err := f.Close(); err != nil {
-		return 0, err
-	}
-	return len(off.Quads()), nil
+	return off, nil
 }
 
 // scripted is a Gallery with a script.
