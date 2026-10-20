@@ -146,6 +146,8 @@ type App struct {
 	dlgSeq   platform.DialogTicket   // the last ticket given
 	dlgT     dialogTarget            // the window's dialogs; tests set a fake
 
+	cp colorPanelSync // the system colour panel (colorpanel.go)
+
 	sh shellSync // material and host regions handed to the window (shell.go)
 
 	wakeAt      int64 // platform.Now at which the UI wants a frame although nothing animates (ui.Context.WakeAfter); 0 = none
@@ -515,6 +517,11 @@ func (a *App) onEvent(e *platform.Event) {
 		}
 	case platform.EvDialog:
 		a.onDialog(e)
+	case platform.EvColor:
+		a.onColor(e)
+		if a.tr.event(e, nil) {
+			a.p.invalidate()
+		}
 	default:
 		var txt []byte
 		if e.Kind == platform.EvText || e.Kind == platform.EvPreedit || e.Kind == platform.EvPaste {

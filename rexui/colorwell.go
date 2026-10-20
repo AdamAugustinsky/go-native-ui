@@ -17,12 +17,15 @@ type ColorWellState struct {
 
 // ColorWellOpts are a colour well's options, passed by value.
 type ColorWellOpts struct {
-	// Panel makes the well ask for the system's colour panel (NSColorPanel on
-	// macOS) rather than open its own picker: ColorWellSignal.Panel is set when
-	// it is pressed, and the app shows the panel and writes the colour the
-	// panel reports to the well's value. There is no platform call for the
-	// panel yet (an N2-style request, to be added to platform and app), so
-	// until there is, leave this off: the drawn picker is complete.
+	// Panel makes the well use the system's colour panel (NSColorPanel on
+	// macOS; platform.NativeColorPanel says whether there is one) instead of
+	// its own picker. Pressing the well opens the panel with the well's
+	// colour; the colour the user sets there, continuously, is the well's
+	// (Changed); a colour the app sets moves the panel; the panel closes when
+	// the user closes it, when another well takes it, when the well is
+	// disabled and when it is no longer built. The app drives the panel
+	// (package app does it from ui.Context.ColorPanel); without it, or on
+	// a system with no panel, leave Panel off: the drawn picker is complete.
 	Panel bool
 }
 
@@ -75,11 +78,9 @@ var pickerColors = [...]struct {
 // ColorWellSignal is what a colour well reports.
 type ColorWellSignal struct {
 	base.Signal
-	// Open: the drawn picker is showing.
+	// Open: the drawn picker, or with ColorWellOpts.Panel the system's colour
+	// panel, is showing.
 	Open bool
-	// Panel: the well was pressed with ColorWellOpts.Panel on: the app shows
-	// the system's colour panel.
-	Panel bool
 }
 
 // ColorWell builds a colour well editing *rgba (0xRRGGBBAA): a bezel holding the
@@ -134,16 +135,21 @@ func ColorWell(k *base.Kit, label string, st *ColorWellState, rgba *uint32, o Co
 	k.FocusRing(id, p.Visual, radius)
 	sig := ColorWellSignal{Signal: k.EndPress(&p)}
 
+	claim := false
 	if !p.Disabled && sig.Clicked {
 		switch {
-		case o.Panel:
-			sig.Panel = true
 		case st.Open:
 			st.Open = false
 		default:
 			st.Open = true
-			st.Hex.SetBytes(hexBytes(c, *rgba))
+			claim = o.Panel
+			if !o.Panel {
+				st.Hex.SetBytes(hexBytes(c, *rgba))
+			}
 		}
+	}
+	if o.Panel {
+		sig.Changed = colorPanelSync(c, p.Key, st, rgba, claim, p.Disabled) || sig.Changed
 	}
 	if st.Open && !o.Panel && !p.Disabled {
 		anchor := c.Rect(id)
@@ -158,6 +164,27 @@ func ColorWell(k *base.Kit, label string, st *ColorWellState, rgba *uint32, o Co
 	}
 	sig.Open = st.Open
 	return sig
+}
+
+// colorPanelSync follows the system colour panel for a well whose panel is
+// open: the user's colour becomes the well's, the panel's closing or another
+// well's taking it ends it, and otherwise the well asks for the panel with its
+// colour. It reports whether *rgba changed.
+func colorPanelSync(c *ui.Context, key ui.Key, st *ColorWellState, rgba *uint32, claim, disabled bool) (changed bool) {
+	if !st.Open {
+		return false
+	}
+	if disabled || c.ColorPanelClosed(key) {
+		st.Open = false
+		return false
+	}
+	if v, ok := c.TakeColorPick(key); ok && v != *rgba {
+		*rgba, changed = v, true
+	}
+	if !c.ColorPanel(key, *rgba, claim) {
+		st.Open = false
+	}
+	return changed
 }
 
 // colorPicker builds the picker's content in the popover: rows of swatches and

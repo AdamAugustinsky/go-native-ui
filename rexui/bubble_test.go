@@ -142,6 +142,60 @@ func TestMessageBubblesSelectAcrossAVirtualList(t *testing.T) {
 	}
 }
 
+// A selection that spans bubbles survives the list recycling its rows: scroll
+// until the bubbles at both ends are out of the built range, and the selection
+// is still those items and copies all of their text, from the model.
+func TestBubbleSelectionSurvivesRecycling(t *testing.T) {
+	g := newChatRig(t, 200)
+	var ids []uint64
+	for i := g.v.First; i < g.v.Last; i++ {
+		if id := g.st.ID(i); g.c.Rect(g.texts[id])[1] >= 0 {
+			ids = append(ids, id)
+		}
+	}
+	a, b := ids[1], ids[3]
+	ra, rb := g.c.Rect(g.texts[a]), g.c.Rect(g.texts[b])
+	g.in.MouseX, g.in.MouseY = ra[0]+3, ra[1]+3
+	g.frame()
+	g.in.SetButton(ui.ButtonLeft, true, 1)
+	g.frame()
+	g.in.MouseX, g.in.MouseY = rb[0]+30, rb[1]+3
+	g.frame()
+	g.in.SetButton(ui.ButtonLeft, false, 0)
+	g.frame()
+	if from, to, ok := g.sc.Selected(); !ok || from.Item != a || to.Item != b {
+		t.Fatalf("selected %v to %v (%v), want items %d to %d", from, to, ok, a, b)
+	}
+	// the wheel carries the transcript far away: the selected bubbles are recycled
+	g.in.MouseX, g.in.MouseY = 250, 200
+	g.frame()
+	built := func(id uint64) bool {
+		for i := g.v.First; i < g.v.Last; i++ {
+			if g.st.ID(i) == id {
+				return true
+			}
+		}
+		return false
+	}
+	for i := 0; i < 80 && (built(a) || built(b)); i++ {
+		g.in.ScrollY = -600
+		g.frame()
+	}
+	g.frames(3)
+	if built(a) || built(b) {
+		t.Fatal("the selected bubbles were never recycled")
+	}
+	from, to, ok := g.sc.Selected()
+	if !ok || from.Item != a || to.Item != b {
+		t.Fatalf("after recycling: selected %v to %v (%v), want items %d to %d", from, to, ok, a, b)
+	}
+	g.in.PushKey(ui.KeyEvent{Code: 'C', Mods: ui.PrimaryMod(), Down: true})
+	g.frame()
+	if want := string(g.msgs[a+1]); !strings.Contains(g.clip, want) || strings.Count(g.clip, "message") < 2 {
+		t.Fatalf("the copy after recycling %q lacks the text between the ends", g.clip)
+	}
+}
+
 // An emoji-only message is drawn large with no bubble; a system message has
 // none either; the failed one carries a badge and its status in the tree.
 func TestMessageBubbleVariants(t *testing.T) {

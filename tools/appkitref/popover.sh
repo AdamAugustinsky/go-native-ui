@@ -4,6 +4,7 @@
 # window for about ten seconds and quits it).
 #
 #	sh popover.sh build
+#	sh popover.sh behavior OUT_DIR
 #	sh popover.sh capture OUT_DIR [below|above|right|left] [WxH]
 #
 # It writes OUT/popover-<edge>-<mode>.png (the window's region of the main
@@ -25,6 +26,39 @@ build)
 	sed -e 's/AppKitRef/AppKitPopover/g' -e 's/dev.gonativeui.appkitref/dev.gonativeui.appkitpopover/' -e 's/ARApp/NSApplication/' "$here/Info.plist" >"$app/Contents/Info.plist"
 	codesign -s "${SIGN_IDENTITY:--}" -f --identifier dev.gonativeui.appkitpopover "$app"
 	echo "built $app"
+	;;
+behavior)
+	# what closes a real NSPopover of each behavior (popover_behavior.m): one JSON line per
+	# behavior and scenario, in OUT_DIR/behavior.jsonl
+	out=${2:?usage: popover.sh behavior OUT_DIR}
+	bapp=$here/bin/AppKitPopoverBehavior.app
+	sdk=${SDKROOT:-/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk}
+	[ -d "$sdk" ] || sdk=$(xcrun --show-sdk-path)
+	rm -rf "$bapp"
+	mkdir -p "$bapp/Contents/MacOS" "$out"
+	clang -O2 -Wall -Wextra -Wno-unused-parameter -Wno-deprecated-declarations -fobjc-arc -mmacosx-version-min=14.0 -isysroot "$sdk" \
+		-framework AppKit -o "$bapp/Contents/MacOS/AppKitPopoverBehavior" "$here/popover_behavior.m"
+	sed -e 's/AppKitRef/AppKitPopoverBehavior/g' -e 's/dev.gonativeui.appkitref/dev.gonativeui.appkitpopoverbehavior/' -e 's/ARApp/NSApplication/' "$here/Info.plist" >"$bapp/Contents/Info.plist"
+	codesign -s "${SIGN_IDENTITY:--}" -f --identifier dev.gonativeui.appkitpopoverbehavior "$bapp"
+	if ioreg -n Root -d1 | grep -q '"IOConsoleLocked" = Yes'; then
+		echo "console locked: not running" >&2
+		exit 3
+	fi
+	: >"$out/behavior.jsonl"
+	for b in transient semi app; do
+		for s in other empty titlebar anchor inside away escape return deactivate; do
+			rm -f "$out/one.out"
+			# run the binary itself (open(1) can leave the app inactive, with no key window)
+			"$bapp/Contents/MacOS/AppKitPopoverBehavior" -behavior $b -scenario $s >"$out/one.out" 2>/dev/null &
+			pid=$!
+			sleep 4
+			kill $pid 2>/dev/null || true
+			wait $pid 2>/dev/null || true
+			cat "$out/one.out" >>"$out/behavior.jsonl" 2>/dev/null || true
+		done
+	done
+	rm -f "$out/one.out"
+	cat "$out/behavior.jsonl"
 	;;
 capture)
 	out=${2:?usage: popover.sh capture OUT_DIR [edge] [WxH]}
@@ -50,7 +84,7 @@ capture)
 	echo done
 	;;
 *)
-	echo "usage: popover.sh build | capture OUT_DIR [edge] [WxH]" >&2
+	echo "usage: popover.sh build | behavior OUT_DIR | capture OUT_DIR [edge] [WxH]" >&2
 	exit 64
 	;;
 esac

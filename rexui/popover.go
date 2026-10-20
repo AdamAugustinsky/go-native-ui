@@ -27,16 +27,21 @@ const (
 type PopoverBehavior uint8
 
 const (
-	// PopoverTransient closes on a press outside it, on Escape, and when the
-	// window stops being the key window: the signal's Dismissed is set and
-	// the app stops building it. It is the zero value, as AppKit's default
-	// for a popover that is meant to be a bubble of help or a picker.
+	// PopoverTransient closes on Escape, on a press outside it and when the
+	// window stops being the key window (the app is switched away from): the
+	// signal's Dismissed is set and the app stops building it. A press
+	// outside reaches what it landed on, except on the anchor, which it
+	// closes the popover on and does not reach, so the button that opens a
+	// popover does not reopen it. It is the zero value, as AppKit's default
+	// (all measured on macOS 27.2, tools/appkitref/popover.sh behavior).
 	PopoverTransient PopoverBehavior = iota
-	// PopoverSemitransient closes when the window stops being the key
-	// window (the app is switched away from), not on a press outside the
-	// popover or on Escape.
+	// PopoverSemitransient closes on Escape and on a press in the window
+	// outside the popover, which reaches what it landed on, the anchor
+	// included, and does not close it there; it stays when the window stops
+	// being key.
 	PopoverSemitransient
-	// PopoverApplicationDefined never closes by itself: the app decides.
+	// PopoverApplicationDefined never closes by itself, on Escape or on a
+	// press: the app decides. Presses outside reach what they land on.
 	PopoverApplicationDefined
 )
 
@@ -178,9 +183,8 @@ func popoverSide(want PopoverEdge, a [4]float32, need, W, H float32) PopoverEdge
 // opens and gives it back when the app stops building it.
 //
 // The app owns whether it is open: it builds the popover while it is, and
-// stops when the signal says Dismissed (see PopoverBehavior). A press outside
-// a popover that closes it is not also delivered to what it landed on, so a
-// press on the anchor closes it and does not reopen it.
+// stops when the signal says Dismissed (see PopoverBehavior for what closes
+// each kind and what becomes of the press).
 //
 //	if rexui.Button(k, "Info", rexui.ButtonOpts{}).Clicked { v.open = !v.open }
 //	if v.open {
@@ -283,13 +287,21 @@ func BeginPopover(k *base.Kit, label string, anchor [4]float32, o PopoverOpts) P
 	c.NextSize(ui.Px(wrapW), ui.Children(1))
 	c.NextRole(ui.RoleDialog)
 	c.NextSemName(display)
+	dismiss := ui.DismissTransient
+	switch o.Behavior {
+	case PopoverSemitransient:
+		dismiss = ui.DismissSemitransient
+	case PopoverApplicationDefined:
+		dismiss = ui.DismissApplication
+	}
+	c.NextOverlay(ui.OverlayOpts{Dismiss: dismiss})
 	os := c.BeginOverlay(okey, ui.OverlayPopup, a, place)
 	pop := Popover{PopoverSignal{Edge: edge}}
 	switch o.Behavior {
 	case PopoverTransient:
 		pop.Dismissed = os.Dismissed || !c.Input().Focused
 	case PopoverSemitransient:
-		pop.Dismissed = !c.Input().Focused
+		pop.Dismissed = os.Dismissed
 	}
 	if prev == ([4]float32{}) { // a second frame puts it, and its arrow, where the window leaves room
 		c.RequestFrame()

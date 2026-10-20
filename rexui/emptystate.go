@@ -67,6 +67,9 @@ func EmptyState(k *base.Kit, title string, o EmptyStateOpts) EmptyStateSignal {
 	c.NextGap(pt(sc, rc.Gap))
 	c.NextRole(ui.RoleGroup)
 	c.NextSemName(display)
+	if o.Message != "" {
+		c.NextSemValueBytes(base.StrBytes(o.Message)) // the explanation is the group's value
+	}
 	root := c.BoxKeyed(disabledFlag(k), key, nil)
 	c.Push(root)
 	sig := EmptyStateSignal{ID: root}

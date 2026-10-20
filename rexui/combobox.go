@@ -14,6 +14,12 @@ type ComboState struct {
 	Open bool
 	// List is the list's state (CompletionState).
 	List CompletionState
+
+	// what the field's commands need and leave (see comboCmd)
+	items    []string
+	text     *ui.TextBuffer
+	accepted bool // the field's commands chose row pick
+	pick     int
 }
 
 // ComboOpts are a combo box's options, passed by value.
@@ -63,7 +69,11 @@ type ComboSignal struct {
 // what has been typed, and a click, or Enter on a highlighted row, puts that
 // choice in the field and closes the list. Up and Down move through the list
 // (the field keeps the focus and the text does not move meanwhile); Escape and
-// a press elsewhere close it. The list is a CompletionList below the field.
+// a press elsewhere close it; Tab takes the highlighted row and Shift+Tab does
+// not, and both close the list and let the focus move on. The keys are the
+// field's commands (ui.FieldCommander), so the arrows work as the system's edit
+// actions too, as macOS sends them. The list is a CompletionList below the
+// field that takes no focus.
 //
 // The state is the app's: st holds whether the list is open, and buf the text.
 //
@@ -78,28 +88,8 @@ func Combobox(k *base.Kit, label string, st *ComboState, buf *ui.TextBuffer, ite
 	n := len(items)
 	out := ComboSignal{Chosen: -1}
 
-	// keys the list takes before the field sees them
-	focused := !k.Disabled() && c.FocusKey() == fkey
-	if st.Open && st.List.restore {
-		c.SetFocus(fkey) // the list's overlay took the focus when it opened
-		st.List.restore = false
-	}
-	if focused && n > 0 {
-		switch {
-		case takeEditorKey(c, ui.KeyDown):
-			if !st.Open {
-				comboOpen(st, buf, items)
-			} else {
-				st.List.Command(CompletionDown, n)
-			}
-		case st.Open && takeEditorKey(c, ui.KeyUp):
-			st.List.Command(CompletionUp, n)
-		case st.Open && st.List.Sel >= 0 && takeEditorKey(c, ui.KeyEnter):
-			out.Chosen = st.List.Sel
-		case st.Open && takeEditorKey(c, ui.KeyEscape):
-			st.Open = false
-		}
-	}
+	// the keys the list takes are offered to the field's commander (comboCmd)
+	st.items, st.text, st.accepted = items, buf, false
 
 	if _, ok := k.PendingWidth(); !ok {
 		k.NextWidth(k.Fixed(rc.Width))
@@ -122,6 +112,9 @@ func Combobox(k *base.Kit, label string, st *ComboState, buf *ui.TextBuffer, ite
 	c.NextFont(font)
 	c.NextTextColor(tc)
 	c.NextSemState(comboState(st))
+	if n > 0 && !ti.Disabled {
+		c.NextFieldCommander((*comboCmd)(st), "")
+	}
 	res := k.TextInput(&ti, buf, ui.RoleComboBox, false)
 	out.FieldSignal = res
 
@@ -178,10 +171,10 @@ func Combobox(k *base.Kit, label string, st *ComboState, buf *ui.TextBuffer, ite
 			}
 		}
 	}
-	// the focus ring: whenever the field is focused, in a key window
+	// the focus ring: the keyboard's, in a key window
 	ring := ti.Visual
-	if !ti.Inactive {
-		ring.Ring = ti.Focus
+	if ti.Inactive {
+		ring.Ring = 0
 	}
 	k.FocusRing(res.ID, ring, radius)
 	k.EndTextInput(&ti)
@@ -192,7 +185,7 @@ func Combobox(k *base.Kit, label string, st *ComboState, buf *ui.TextBuffer, ite
 	}
 	if st.Open && n > 0 && !ti.Disabled {
 		anchor := c.RectOf(ti.WrapKey)
-		cs := completion(k, "Options", &st.List, nil, items, anchor, CompletionOpts{Owner: fkey, Width: (anchor[2] - anchor[0]) / sc})
+		cs := completion(k, "Options", &st.List, nil, items, anchor, CompletionOpts{Width: (anchor[2] - anchor[0]) / sc}, ui.DismissSemitransient)
 		if cs.Chosen >= 0 {
 			out.Chosen = cs.Chosen
 		}
@@ -200,17 +193,68 @@ func Combobox(k *base.Kit, label string, st *ComboState, buf *ui.TextBuffer, ite
 			st.Open = false
 		}
 	}
+	if st.accepted {
+		out.Chosen = st.pick
+	}
 	if out.Chosen >= 0 && out.Chosen < n {
 		buf.SetString(items[out.Chosen])
 		out.Changed = true
 		st.Open = false
-		c.SetFocus(fkey)
 		c.RequestFrame()
 	} else {
 		out.Chosen = -1
 	}
 	out.Open = st.Open
 	return out
+}
+
+// comboCmd is a ComboState as the field commander of its text field: the keys
+// the list takes, as the keys or the system's edit actions (macOS delivers the
+// arrows as edit actions), in the order they arrive. Down opens the list or
+// moves down it; Up moves up; Enter takes the highlighted row; Escape closes
+// it; Tab takes the highlighted row, if any, and Shift+Tab does not, and
+// either closes the list and leaves the focus to move on.
+type comboCmd ComboState
+
+// FieldCommand implements ui.FieldCommander.
+func (s *comboCmd) FieldCommand(cmd ui.FieldCommand, _ rune) bool {
+	st := (*ComboState)(s)
+	n := len(st.items)
+	if n == 0 {
+		return false
+	}
+	switch cmd {
+	case ui.FieldMoveDown:
+		if !st.Open {
+			comboOpen(st, st.text, st.items)
+		} else {
+			st.List.Command(CompletionDown, n)
+		}
+		return true
+	case ui.FieldMoveUp:
+		if st.Open {
+			st.List.Command(CompletionUp, n)
+			return true
+		}
+	case ui.FieldInsertNewline:
+		if st.Open && st.List.Sel >= 0 && st.List.Sel < n {
+			st.accepted, st.pick = true, st.List.Sel
+			return true
+		}
+	case ui.FieldCancel:
+		if st.Open {
+			st.Open = false
+			return true
+		}
+	case ui.FieldInsertTab, ui.FieldInsertBacktab:
+		if st.Open {
+			if cmd == ui.FieldInsertTab && st.List.Sel >= 0 && st.List.Sel < n {
+				st.accepted, st.pick = true, st.List.Sel
+			}
+			st.Open = false
+		}
+	}
+	return false
 }
 
 // comboOpen opens the list with the highlight on the choice the text names, or

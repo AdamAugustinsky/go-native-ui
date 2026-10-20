@@ -125,8 +125,9 @@ func TestPopoverMatchesAppKit(t *testing.T) {
 }
 
 // A transient popover closes on Escape, on a press outside it and when the
-// window stops being key; an application-defined one only when the app says;
-// it moves the focus in when it opens and back when it closes.
+// window stops being key; a semitransient one on Escape and a press outside
+// but not when the window stops being key; an application-defined one only
+// when the app says (all as measured on NSPopover).
 func TestPopoverDismissal(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -137,8 +138,9 @@ func TestPopoverDismissal(t *testing.T) {
 		{"escape", rexui.PopoverTransient, func(g *rig) { g.key(ui.KeyEscape, 0) }, true},
 		{"press outside", rexui.PopoverTransient, func(g *rig) { g.click(20, 20) }, true},
 		{"inactive window", rexui.PopoverTransient, func(g *rig) { g.in.Focused = false; g.frame() }, true},
-		{"semitransient escape", rexui.PopoverSemitransient, func(g *rig) { g.key(ui.KeyEscape, 0) }, false},
-		{"semitransient inactive", rexui.PopoverSemitransient, func(g *rig) { g.in.Focused = false; g.frame() }, true},
+		{"semitransient escape", rexui.PopoverSemitransient, func(g *rig) { g.key(ui.KeyEscape, 0) }, true},
+		{"semitransient press outside", rexui.PopoverSemitransient, func(g *rig) { g.click(20, 20) }, true},
+		{"semitransient inactive", rexui.PopoverSemitransient, func(g *rig) { g.in.Focused = false; g.frame() }, false},
 		{"app-defined escape", rexui.PopoverApplicationDefined, func(g *rig) { g.key(ui.KeyEscape, 0) }, false},
 		{"app-defined press outside", rexui.PopoverApplicationDefined, func(g *rig) { g.click(20, 20) }, false},
 	} {
@@ -257,6 +259,7 @@ func TestTokenFieldKeyboard(t *testing.T) {
 	if !st.HasSel || st.Sel != 1 || len(tokens) != 2 {
 		t.Fatalf("Backspace at an empty field: sel %v/%d, tokens %q", st.HasSel, st.Sel, tokens)
 	}
+	g.frame() // (the tokens are drawn before the field takes the key: the frame after shows it)
 	if n := g.node(ui.RoleListItem, "alan"); n.State&ui.SemSelected == 0 {
 		t.Fatal("the selected token is not selected in the semantic tree")
 	}
@@ -269,6 +272,7 @@ func TestTokenFieldKeyboard(t *testing.T) {
 		t.Fatalf("Backspace on a selected token left %q", tokens)
 	}
 	// a click selects a token
+	g.frames(2)
 	g.click(centre(g.node(ui.RoleListItem, "alan")))
 	if !st.HasSel || st.Sel != 0 {
 		t.Fatal("a click did not select the token")
@@ -276,6 +280,47 @@ func TestTokenFieldKeyboard(t *testing.T) {
 	g.typeText("x")
 	if st.HasSel {
 		t.Fatal("typing kept the token selected")
+	}
+}
+
+// The press that closes a popover and what it does to the anchor, as
+// NSPopover does it: a transient popover's press on the anchor closes it and
+// does not reach the button (it would reopen it); a semitransient or
+// application-defined one's reaches the button and leaves it open.
+func TestPopoverAnchorPress(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		behavior  rexui.PopoverBehavior
+		dismissed bool
+		clicked   bool
+	}{
+		{"transient", rexui.PopoverTransient, true, false},
+		{"semitransient", rexui.PopoverSemitransient, false, true},
+		{"app-defined", rexui.PopoverApplicationDefined, false, true},
+	} {
+		var dismissed, clicked bool
+		g := newRig(t, theme.Light, nil, func(g *rig) {
+			k := g.k
+			if rexui.Button(k, "Open", rexui.ButtonOpts{}).Clicked {
+				clicked = true
+			}
+			anchor := g.c.RectOf(ui.HashString(g.c.ParentKey(), "Open"))
+			if anchor == ([4]float32{}) {
+				return
+			}
+			p := rexui.BeginPopover(k, "Details", anchor, rexui.PopoverOpts{Behavior: tc.behavior})
+			rexui.Label(k, "Body", rexui.LabelOpts{})
+			rexui.EndPopover(k, &p)
+			dismissed = dismissed || p.Dismissed
+		})
+		g.h = 800
+		g.frames(3)
+		x, y := centre(g.node(ui.RoleButton, "Open"))
+		g.click(x, y)
+		if dismissed != tc.dismissed || clicked != tc.clicked {
+			t.Errorf("%s: a press on the anchor: dismissed %v (want %v), the button clicked %v (want %v)",
+				tc.name, dismissed, tc.dismissed, clicked, tc.clicked)
+		}
 	}
 }
 
@@ -319,6 +364,59 @@ func TestColorWellPicker(t *testing.T) {
 	}
 }
 
+// With Panel the well drives the system colour panel through ui: a click asks
+// for it with the well's colour, what the user sets there is the well's colour,
+// a colour the app sets is asked again, closing the panel ends it, and a
+// second well that claims the panel ends the first.
+func TestColorWellPanel(t *testing.T) {
+	var st, st2 rexui.ColorWellState
+	col, col2 := uint32(0x336699FF), uint32(0x112233FF)
+	var sig rexui.ColorWellSignal
+	g := newRig(t, theme.Light, nil, column(func(g *rig) {
+		sig = rexui.ColorWell(g.k, "Accent", &st, &col, rexui.ColorWellOpts{Panel: true})
+		rexui.ColorWell(g.k, "Other", &st2, &col2, rexui.ColorWellOpts{Panel: true})
+	}))
+	g.click(centre(g.node(ui.RoleButton, "Accent")))
+	owner, rgba, ok := g.c.ColorPanelRequest()
+	if !ok || rgba != 0x336699FF || !st.Open || !sig.Open {
+		t.Fatalf("a click: request %v %08X %v, open %v", owner, rgba, ok, st.Open)
+	}
+	if st.Hex.Len() != 0 {
+		t.Error("the drawn picker's state was touched")
+	}
+	g.in.SetColorPick(0xAA5500FF)
+	g.frame()
+	if col != 0xAA5500FF || !sig.Changed {
+		t.Fatalf("the user's colour: %08X changed %v", col, sig.Changed)
+	}
+	if _, rgba, _ = g.c.ColorPanelRequest(); rgba != 0xAA5500FF {
+		t.Errorf("the panel is asked for %08X after the user chose", rgba)
+	}
+	col = 0x010203FF // the app changes it
+	g.frame()
+	if _, rgba, _ = g.c.ColorPanelRequest(); rgba != 0x010203FF {
+		t.Errorf("the panel is asked for %08X after the app changed the colour", rgba)
+	}
+	// the second well takes the panel: the first closes
+	g.click(centre(g.node(ui.RoleButton, "Other")))
+	g.frames(2)
+	if st.Open || !st2.Open {
+		t.Fatalf("after another well claimed it: first %v, second %v", st.Open, st2.Open)
+	}
+	if o2, _, _ := g.c.ColorPanelRequest(); o2 == owner {
+		t.Error("the panel still belongs to the first well")
+	}
+	g.in.SetColorClosed()
+	g.frame()
+	g.frame()
+	if st2.Open {
+		t.Error("closing the panel left the well open")
+	}
+	if _, _, ok := g.c.ColorPanelRequest(); ok {
+		t.Error("nothing should ask for the panel now")
+	}
+}
+
 func TestCompletionStateCommands(t *testing.T) {
 	var s rexui.CompletionState
 	s.Reset(3, true)
@@ -346,8 +444,9 @@ func TestCompletionStateCommands(t *testing.T) {
 	}
 }
 
-// The completion list hands the focus back to its owner in the frame after it
-// opens, reports a click on a row and a press outside it, and names its rows.
+// The completion list takes no focus (the field keeps it from the frame it
+// opens in, and through a click on a row), reports a click on a row and a press
+// outside it, and names its rows.
 func TestCompletionListClickAndFocus(t *testing.T) {
 	items := []rexui.CompletionItem{{Title: "Ada", Detail: "@ada"}, {Title: "Alan", Detail: "@alan"}}
 	var st rexui.CompletionState
@@ -360,7 +459,7 @@ func TestCompletionListClickAndFocus(t *testing.T) {
 		g.k.NextWidth(g.k.Fixed(200))
 		owner = rexui.TextField(g.k, "Message", &buf, "", rexui.FieldOpts{}).Key
 		if open {
-			sig := rexui.CompletionList(g.k, "Mentions", &st, items, [4]float32{40, 40, 41, 60}, rexui.CompletionOpts{Owner: owner})
+			sig := rexui.CompletionList(g.k, "Mentions", &st, items, [4]float32{40, 40, 41, 60}, rexui.CompletionOpts{})
 			if sig.Chosen >= 0 {
 				chosen = sig.Chosen
 			}
@@ -376,6 +475,8 @@ func TestCompletionListClickAndFocus(t *testing.T) {
 	if got := g.c.FocusKey(); got != owner {
 		t.Fatalf("the focus is %v, the owner is %v", got, owner)
 	}
+	g.in.PushKey(ui.KeyEvent{Code: 'x', Down: true}) // (the list is on screen; the field is still the one with the focus)
+	g.frame()
 	n := g.node(ui.RoleListItem, "Alan")
 	if n.State&ui.SemSelected != 0 || string(g.sem.Text(n.Value)) != "@alan" {
 		t.Fatalf("row %v", n)
@@ -383,6 +484,9 @@ func TestCompletionListClickAndFocus(t *testing.T) {
 	g.click(centre(n))
 	if chosen != 1 {
 		t.Fatalf("a click on the second row chose %d", chosen)
+	}
+	if got := g.c.FocusKey(); got != owner {
+		t.Fatalf("a click on a row moved the focus from the field to %v", got)
 	}
 	g.click(600, 600)
 	if !dismissed {
@@ -437,6 +541,23 @@ func TestLoopingComponentsAnimateOnlyWhileVisible(t *testing.T) {
 			g.frames(6)
 			if g.c.Animating() || g.c.WakeAfter() != 0 {
 				t.Fatal("a loop below the window's bottom asks for frames")
+			}
+			// inside the window but below a short scroll viewport: clipped out
+			g.w, g.h = 1000, 400
+			g.build = func(g *rig) {
+				c := g.c
+				c.NextSize(ui.Px(300), ui.Px(100))
+				c.NextAxis(ui.AxisY)
+				sa := c.Box(ui.ScrollY|ui.Clip|ui.Hoverable, "viewport")
+				c.Push(sa)
+				c.NextSize(ui.Px(200), ui.Px(300))
+				c.Box(0, "tall")
+				tc.build(g)
+				c.Pop()
+			}
+			g.frames(6)
+			if g.c.Animating() || g.c.WakeAfter() != 0 {
+				t.Fatal("a loop clipped out of a scroll viewport asks for frames")
 			}
 		})
 	}
@@ -594,6 +715,26 @@ func TestFocusRingIsKeyboardOnly(t *testing.T) {
 	g.settle()
 	if n := countRings(g); n != 0 {
 		t.Fatalf("a click left %d rings on the colour well", n)
+	}
+	// nor on the combo box or the token field: they are text, but the ring is the keyboard's
+	for _, tc := range []struct {
+		name, label string
+		role        ui.Role
+		build       func(g *rig)
+	}{
+		{"combo box", "Font", ui.RoleComboBox, func(g *rig) { rexui.Combobox(g.k, "Font", &cb, &cbuf, []string{"a"}, rexui.ComboOpts{}) }},
+		{"token field", "Tokens", ui.RoleTextField, func(g *rig) { rexui.TokenField(g.k, "Tokens", &tf, &toks, rexui.TokenFieldOpts{}) }},
+	} {
+		g := newRig(t, theme.Light, nil, column(tc.build))
+		g.h = 800
+		g.click(centre(g.node(tc.role, tc.label)))
+		g.settle()
+		if !g.c.TextFieldFocused() {
+			t.Fatalf("%s: the click did not focus the field", tc.name)
+		}
+		if n := countRings(g); n != 0 {
+			t.Fatalf("%s: pointer focus left %d rings", tc.name, n)
+		}
 	}
 }
 

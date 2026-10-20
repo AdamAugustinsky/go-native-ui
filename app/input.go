@@ -330,6 +330,12 @@ func (t *translator) apply(e *platform.Event, txt []byte) bool {
 		// (ui drops it unless that field has the focus). A failed paste still
 		// counts as input: the frame that follows may be the one that learns it.
 		in.SetPaste(ui.Key(e.Tag), txt, e.Flags&platform.FlagFailed == 0)
+	case platform.EvColor: // the system colour panel (colorpanel.go)
+		if e.Code == 1 {
+			in.SetColorClosed()
+		} else {
+			in.SetColorPick(rgbaOf(e.X, e.Y, e.DX, e.DY))
+		}
 	case platform.EvCommand: // a native button or menu item (platform.Options.Buttons, menus.go)
 		if e.Flags&platform.FlagStandard != 0 { // a standard Edit item without a command: the focused field's
 			if a := standardEdit(platform.MenuAction(e.Tag)); a == 0 || !in.PushEdit(a) {

@@ -131,6 +131,7 @@ const (
 	EvMagnify                 // a pinch: Amount is the change in scale (0.1 = grow by 10 %), Phase its phase (PhaseNone: a device without phases), X, Y where it is; see Gestures
 	EvSmartMagnify            // the two-finger double tap (smart zoom): X, Y where it happened
 	EvRotate                  // a two-finger rotation: Amount in degrees, counterclockwise positive as the user sees it, Phase, X, Y
+	EvColor                   // the system colour panel: the user chose a colour (Code 0: X, Y, DX, DY are its red, green, blue and alpha in sRGB, 0 to 1) or closed the panel (Code 1); see colorpanel.go
 )
 
 // Flags qualify an Event.

@@ -31,6 +31,10 @@ type BadgeOpts struct {
 	// dot, the text of a tag. The zero Tint keeps the default (red for a
 	// count, green for a status, the secondary label for a tag).
 	Color Tint
+	// TextColor replaces the text colour of a count (a count on a coloured
+	// row whose fill is Color needs a text that contrasts with it). The zero
+	// Tint keeps the variant's.
+	TextColor Tint
 	// Max is the largest count shown; above it the badge reads "Max+" (0:
 	// 99). BadgeCountN only.
 	Max int
@@ -112,6 +116,9 @@ func badge(k *base.Kit, txt []byte, o BadgeOpts) ui.ID {
 		} else {
 			fillC = o.Color.RGBA(r)
 		}
+	}
+	if o.TextColor != (Tint{}) && !k.Disabled() && v != BadgeStatus && v != BadgeTag {
+		fg = o.TextColor
 	}
 	st := &r.Styles[theme.StyleCaption2]
 	w := h

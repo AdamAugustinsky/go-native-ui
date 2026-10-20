@@ -15,6 +15,9 @@ type TokenFieldState struct {
 	// Sel is the selected token, when HasSel.
 	Sel    int
 	HasSel bool
+
+	tokens  *[]string // the app's list, for the field's commands (tokenCmd)
+	changed bool      // the commands added or removed a token this frame
 }
 
 // TokenFieldOpts are a token field's options, passed by value.
@@ -91,42 +94,16 @@ func TokenField(k *base.Kit, label string, st *TokenFieldState, tokens *[]string
 	out := TokenFieldSignal{}
 	toks := *tokens
 
-	// keys the tokens take before the field sees them
+	// the keys the tokens take are the field's commands (tokenCmd), offered
+	// as the field is built; typing leaves a selected token
 	focused := !k.Disabled() && c.FocusKey() == fkey
 	if st.HasSel && st.Sel >= len(toks) {
 		st.HasSel = false
 	}
-	if focused {
-		in := c.Input()
-		switch {
-		case st.HasSel:
-			switch {
-			case takeEditorKey(c, ui.KeyBackspace) || takeEditorKey(c, ui.KeyDelete):
-				i := st.Sel
-				*tokens = append(toks[:i], toks[i+1:]...)
-				toks = *tokens
-				out.Tokens = true
-				st.HasSel = len(toks) > 0
-				st.Sel = min(st.Sel, len(toks)-1)
-			case takeEditorKey(c, ui.KeyLeft):
-				st.Sel = max(st.Sel-1, 0)
-			case takeEditorKey(c, ui.KeyRight):
-				if st.Sel+1 < len(toks) {
-					st.Sel++
-				} else {
-					st.HasSel = false
-				}
-			case takeEditorKey(c, ui.KeyEscape):
-				st.HasSel = false
-			case in.NText > 0:
-				st.HasSel = false
-			}
-		case len(toks) > 0 && buf.Len() == 0 && takeEditorKey(c, ui.KeyBackspace):
-			st.Sel, st.HasSel = len(toks)-1, true
-		case len(toks) > 0 && buf.Caret() == 0 && !buf.HasSelection() && takeEditorKey(c, ui.KeyLeft):
-			st.Sel, st.HasSel = len(toks)-1, true
-		}
+	if focused && st.HasSel && c.Input().NText > 0 {
+		st.HasSel = false
 	}
+	st.tokens, st.changed = tokens, false
 
 	// the field's body: wide as the parent unless sized; lines of tokens
 	pw := pt(sc, rc.Width)
@@ -230,7 +207,11 @@ func TokenField(k *base.Kit, label string, st *TokenFieldState, tokens *[]string
 	c.NextRole(ui.RoleTextField)
 	c.NextSemName(display)
 	c.NextFieldNoHover()
+	if !k.Disabled() {
+		c.NextFieldCommander((*tokenCmd)(st), ",")
+	}
 	fs := c.TextField("input", buf)
+	out.Tokens = st.changed
 	out.FieldSignal = base.FieldSignal{
 		Signal:    base.Signal{ID: wrap, Hovering: fs.Hovering, Focused: fs.Focused, Changed: fs.Changed, Clicked: fs.Clicked},
 		Submitted: fs.Submitted, Cancelled: fs.Cancelled, Pressed: fs.Pressed, Key: fkey,
@@ -247,26 +228,7 @@ func TokenField(k *base.Kit, label string, st *TokenFieldState, tokens *[]string
 		c.BoxKeyed(ui.DrawText|base.Floating, ui.KeyN(wkey, 2), base.StrBytes(o.Placeholder))
 	}
 	c.EndFlow()
-	c.Pop()
-
-	// a comma or Enter ends a token
-	if fs.Changed && buf.Len() > 0 && buf.Bytes()[buf.Len()-1] == ',' {
-		if tokenCommit(tokens, buf, buf.Len()-1) {
-			out.Tokens = true
-		}
-		k.ClearField(buf, &out.FieldSignal)
-	} else if fs.Submitted && buf.Len() > 0 {
-		if tokenCommit(tokens, buf, buf.Len()) {
-			out.Tokens = true
-		}
-		k.ClearField(buf, &out.FieldSignal)
-		out.Submitted = false
-	}
-	if out.Tokens {
-		st.HasSel = false
-	}
-
-	// the outline just outside the frame, and the ring whenever it has focus
+	// the outline just outside the frame, a floating child of the field's body
 	if ww > 0 {
 		bw := pt(sc, fl.BorderW)
 		theme.At(c, -bw, -bw, ww+2*bw, wr[3]-wr[1]+2*bw)
@@ -275,12 +237,94 @@ func TokenField(k *base.Kit, label string, st *TokenFieldState, tokens *[]string
 		c.NextAuditExempt(ui.AuditOverflow.Mask())
 		c.BoxKeyed(ui.DrawBorder|base.Floating, ui.KeyN(wkey, 5), nil)
 	}
+	c.Pop()
+
+	if out.Tokens {
+		c.RequestFrame() // the tokens drawn above are the ones before the command
+	}
+	if out.Tokens {
+		st.HasSel = false
+	}
+
+	// the ring: the keyboard's, in a key window
 	ring := vis
-	if !vis.Inactive {
-		ring.Ring = vis.Focus
+	if vis.Inactive {
+		ring.Ring = 0
 	}
 	k.FocusRing(wrap, ring, radius)
 	return out
+}
+
+// tokenCmd is a TokenFieldState as the field commander of its input: the keys
+// of the tokens, as the keys or the system's edit actions, in the order they
+// arrive. Left and Right move between the selected tokens (Left at the start of
+// the text selects the last); Backspace at the start selects the last token
+// and, with one selected, removes it, as does Delete at the end; Escape leaves
+// a selected token; Enter makes what is typed a token; a comma makes the text
+// before it a token, wherever it is typed and however many come in one batch.
+type tokenCmd TokenFieldState
+
+// FieldCommand implements ui.FieldCommander.
+func (s *tokenCmd) FieldCommand(cmd ui.FieldCommand, r rune) bool {
+	st := (*TokenFieldState)(s)
+	toks := *st.tokens
+	buf := &st.Input
+	switch cmd {
+	case ui.FieldInsertSeparator:
+		if tokenCommit(st.tokens, buf, buf.Caret()) {
+			st.changed = true
+		}
+		buf.Remove(0, buf.Caret())
+		st.HasSel = false
+		return true
+	case ui.FieldInsertNewline:
+		if buf.Len() == 0 {
+			return false // the field's own Enter: Submitted
+		}
+		if tokenCommit(st.tokens, buf, buf.Len()) {
+			st.changed = true
+		}
+		buf.Reset()
+		st.HasSel = false
+		return true
+	case ui.FieldMoveLeft:
+		switch {
+		case st.HasSel:
+			st.Sel = max(st.Sel-1, 0)
+			return true
+		case len(toks) > 0 && buf.Caret() == 0 && !buf.HasSelection():
+			st.Sel, st.HasSel = len(toks)-1, true
+			return true
+		}
+	case ui.FieldMoveRight:
+		if st.HasSel {
+			if st.Sel+1 < len(toks) {
+				st.Sel++
+			} else {
+				st.HasSel = false
+			}
+			return true
+		}
+	case ui.FieldDeleteBackward, ui.FieldDeleteForward:
+		switch {
+		case st.HasSel:
+			i := st.Sel
+			*st.tokens = append(toks[:i], toks[i+1:]...)
+			st.changed = true
+			st.HasSel = len(*st.tokens) > 0
+			st.Sel = min(st.Sel, len(*st.tokens)-1)
+			return true
+		case cmd == ui.FieldDeleteBackward && len(toks) > 0:
+			st.Sel, st.HasSel = len(toks)-1, true
+			return true
+		}
+	case ui.FieldCancel:
+		if st.HasSel {
+			st.HasSel = false
+			return true
+		}
+	}
+	return false
 }
 
 // tokenCommit appends the text of buf[:end], trimmed of white space, to

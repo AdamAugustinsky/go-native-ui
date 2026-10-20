@@ -16,10 +16,9 @@ import (
 // # The handoff
 //
 // The editor keeps the keyboard focus, and so it also keeps Up, Down, Tab,
-// Enter and Escape: it intercepts them (a native text view in
-// doCommandBySelector:, a drawn field by taking the keys before it builds) and
-// hands the app a CompletionCmd for each, which the app applies to the
-// list's state with CompletionState.Command:
+// Enter and Escape. A native editor (an NSTextView) intercepts them in
+// doCommandBySelector: and hands the app a CompletionCmd for each, which the
+// app applies to the list's state with CompletionState.Command:
 //
 //	// each frame, while the app shows the list
 //	switch v.comp.Command(cmd, len(items)) { // cmd: the host's command this frame, or CompletionNone
@@ -29,25 +28,59 @@ import (
 //	case rexui.ResultCancel:
 //		v.closeList() // Escape; the text is untouched and the next Enter sends
 //	}
-//	sig := rexui.CompletionList(k, "Mentions", &v.comp, items, caretRect, rexui.CompletionOpts{})
+//	sig := rexui.CompletionList(k, "Mentions", &v.comp, items, caretRect, rexui.CompletionOpts{Exclude: editorRect})
 //	if sig.Chosen >= 0 { v.insert(items[sig.Chosen]); v.closeList() } // a click
 //	if sig.Dismissed { v.closeList() }                                  // a press outside
 //
-// While the list is shown, Up and Down (and Tab and Enter) are the host's:
-// the text does not move, nothing is sent. The caret rectangle is the editor's
-// caret in window pixels (x0, y0, x1, y1: ui.Context.RichCaret, a text
-// field's, or NSTextView's firstRectForCharacterRange converted to the
-// window); the list opens below it with its left edge at the caret, or above
-// when there is no room below, and stays inside the window.
+// A drawn editor (a ui text field) does the same through ui's field commands:
+// CompletionState.Attach registers the state as the commander of the next
+// TextField, which offers it Up, Down, Tab, Enter and Escape as the keys or as
+// the system's edit actions (macOS delivers the arrows as edit actions) and
+// leaves to the text field what the list does not take; CompletionState.Take
+// then says what happened:
 //
-// The list is an overlay: it draws above the window and takes presses, but not
-// the keyboard focus: it asks for the focus to go back to CompletionOpts.Owner
-// in the frame after it opens (the overlay machinery moves the focus into an
-// overlay when it opens), so a drawn field keeps its caret and ring. A native
-// editor that holds the real first responder sets no Owner. Nothing the list
-// draws may lie over a hosted native view (N3b): place it clear of the
-// editor's frame, as the caret rectangle's side that has room.
-
+//	v.comp.Attach(c, len(items))
+//	f := c.TextField("compose", &v.buf)
+//	switch v.comp.Take() { … } // as above
+//
+// While the list is shown, Up and Down (and Tab and Enter, when a row is
+// highlighted) are the list's: the text does not move, nothing is sent.
+//
+// # Coordinates
+//
+// The caret rectangle and Exclude are in window pixels: x0, y0, x1, y1, the
+// origin at the top left of the window's content, y down, in physical pixels
+// (points times the backing scale: Kit.Scale), the units of ui.Context.Rect.
+// A text field's caret is ui.Context.RichCaret or the rectangle of the field
+// (ui.Context.IMERect); a native editor's is NSTextView's
+// firstRectForCharacterRange converted to the window and multiplied by the
+// backing scale. The list opens below it with its left edge at the caret, or
+// above when there is no room below (CompletionOpts.Above prefers above), and
+// stays inside the window. Widths in CompletionOpts and the look are points.
+//
+// Exclude is the editor's bounds in the same units. When it is set the list is
+// placed outside it, against the edge of Exclude on the side that has room
+// (below it, else above it) and with its left edge at the caret, so it never
+// lies over a hosted native editor, which draws above the window's own content
+// (N3b), and ui's host regions never hide it. Without Exclude the list sits
+// against the caret rectangle itself, which is right for a drawn editor.
+//
+// # The caller's obligations
+//
+// The list takes no keyboard focus (it is a popup that never takes it: the
+// focus stays where it is, a native editor's first responder included, so
+// opening it does not move it). The caller must:
+//
+//   - close it (stop building it) when the editor loses the focus: on
+//     platform.EvHostFocus away from the editor, when the window stops being
+//     key, and when the caret leaves the word being completed;
+//   - not open it, and ignore any command it holds, while the input method has
+//     marked text (ui.Input.NPreedit > 0, NSTextView's hasMarkedText): the
+//     input method owns Return, Escape, Backspace and the arrows then, and a
+//     ui text field is not offered them (ui.FieldCommander);
+//   - stop building it on Dismissed (a press outside, the press reaches what
+//     it landed on) and on ResultCancel.
+//
 // CompletionItem is one candidate.
 type CompletionItem struct {
 	// Title is the text the row shows and the accessible name; Detail the
@@ -102,7 +135,12 @@ type CompletionState struct {
 	started bool
 	top     int     // the first row shown
 	acc     float32 // scroll not yet worth a row, in pixels
-	restore bool    // the focus is to go back to the owner at the next frame
+	// revealed is Sel+1 for the highlight the list was last scrolled to show: a
+	// row is brought into view when the highlight changes, not on every
+	// frame, so the wheel can scroll it away.
+	revealed int
+	n        int              // the number of rows, for Attach
+	pending  CompletionResult // what the last command did, for Take
 }
 
 // Reset starts the list over for n items: the first row highlighted, or none
@@ -136,9 +174,10 @@ func (s *CompletionState) Command(cmd CompletionCmd, n int) CompletionResult {
 	switch cmd {
 	case CompletionUp:
 		if n > 0 {
-			s.Sel = (s.Sel - 1 + n) % n
-			if s.Sel < 0 {
+			if s.Sel <= 0 { // from none, or from the first row, to the last
 				s.Sel = n - 1
+			} else {
+				s.Sel--
 			}
 			return ResultMoved
 		}
@@ -159,9 +198,9 @@ func (s *CompletionState) Command(cmd CompletionCmd, n int) CompletionResult {
 
 // CompletionOpts are the list's options, passed by value.
 type CompletionOpts struct {
-	// Owner is the key of the box that must keep the keyboard focus (a drawn
-	// field's: base.FieldKey); 0 for none, as when the editor is native.
-	Owner ui.Key
+	// Exclude is the editor's bounds in window pixels: the list is placed
+	// outside it (see the coordinates above); the zero rectangle for none.
+	Exclude [4]float32
 	// MaxRows is how many rows show before the list scrolls (0: 8).
 	MaxRows int
 	// Width is the list's width in points; 0 fits the widest row, at least
@@ -209,12 +248,12 @@ type CompletionSignal struct {
 // (see the handoff above). The label is its accessible name. A move of the
 // pointer over a row highlights it; a click chooses it.
 func CompletionList(k *base.Kit, label string, st *CompletionState, items []CompletionItem, caret [4]float32, o CompletionOpts) CompletionSignal {
-	return completion(k, label, st, items, nil, caret, o)
+	return completion(k, label, st, items, nil, caret, o, ui.DismissTransient)
 }
 
 // completion is CompletionList over items, or over strs when items is nil
 // (Combobox's choices, which have only titles).
-func completion(k *base.Kit, label string, st *CompletionState, items []CompletionItem, strs []string, caret [4]float32, o CompletionOpts) CompletionSignal {
+func completion(k *base.Kit, label string, st *CompletionState, items []CompletionItem, strs []string, caret [4]float32, o CompletionOpts, dismiss ui.Dismissal) CompletionSignal {
 	c, r := k.Context(), k.Theme()
 	rc := &CompletionLook
 	sc := k.Scale()
@@ -226,17 +265,6 @@ func completion(k *base.Kit, label string, st *CompletionState, items []Completi
 	display, ident := ui.SplitLabel(label)
 	okey := ui.HashString(ui.HashString(c.ParentKey(), "completion"), ident)
 	sig := CompletionSignal{Chosen: -1}
-
-	// the overlay opens and takes the focus; give it back to the owner in the frame after
-	opening := !c.OverlayOpen(okey)
-	if st.restore && o.Owner != 0 {
-		c.SetFocus(o.Owner)
-		st.restore = false
-	}
-	if opening {
-		st.restore = true
-		c.RequestFrame()
-	}
 
 	rows := o.MaxRows
 	if rows <= 0 {
@@ -265,14 +293,16 @@ func completion(k *base.Kit, label string, st *CompletionState, items []Completi
 		w = max(theme.Snap(widest+2*pad), pt(sc, rc.MinW))
 	}
 
-	// keep the highlight in view; the wheel scrolls
-	if st.Sel >= 0 {
+	// bring the highlight into view when it changes (the keyboard, the
+	// pointer, a reset); the wheel scrolls it away again and it stays away
+	if st.Sel >= 0 && st.revealed != st.Sel+1 {
 		if st.Sel < st.top {
 			st.top = st.Sel
 		}
 		if st.Sel >= st.top+rows {
 			st.top = st.Sel - rows + 1
 		}
+		st.revealed = st.Sel + 1
 	}
 	prev := c.RectOf(ui.KeyN(okey, 1))
 	if dy := c.Input().ScrollY; dy != 0 && c.Input().MouseY >= prev[1] && c.Input().MouseY < prev[3] && c.Input().MouseX >= prev[0] && c.Input().MouseX < prev[2] {
@@ -292,8 +322,13 @@ func completion(k *base.Kit, label string, st *CompletionState, items []Completi
 	if o.Above {
 		place = ui.PlaceAbove
 	}
+	anchor := caret
+	if ex := o.Exclude; ex[2] > ex[0] && ex[3] > ex[1] { // outside the editor: against its edge, at the caret's x
+		anchor = [4]float32{caret[0], ex[1], max(caret[2], caret[0]), ex[3]}
+	}
+	c.NextOverlay(ui.OverlayOpts{NoFocus: true, Dismiss: dismiss})
 	c.NextSize(ui.Px(w), ui.Children(1))
-	ov := c.BeginOverlay(okey, ui.OverlayPopup, caret, place)
+	ov := c.BeginOverlay(okey, ui.OverlayPopup, anchor, place)
 	sig.Dismissed = ov.Dismissed
 
 	// the panel
@@ -382,20 +417,52 @@ func completionTitle(items []CompletionItem, strs []string, i int) string {
 	return items[i].Title
 }
 
-// takeEditorKey takes the key code (with no modifier) from this frame's input
-// before the text field that has the focus is built, so that the field does
-// not see it, and reports whether there was one. A focused field claims the
-// keys it handles at the start of the frame (ui's key claiming), so
-// TakeKey cannot get Up, Down, Enter, Escape or Backspace from it; a component
-// that gives them another meaning (a list's highlight, a token's selection)
-// takes them here, which is what the completion handoff of a drawn editor does.
-func takeEditorKey(c *ui.Context, code ui.KeyCode) bool {
-	in := c.Input()
-	for i := 0; i < in.NKeys; i++ {
-		if e := &in.Keys[i]; e.Down && e.Code == code && e.Mods == 0 {
-			e.Down = false
-			return true
-		}
+// completionCmd is a CompletionState as the field commander of a drawn editor.
+type completionCmd CompletionState
+
+// FieldCommand maps the editor's commands to the list's: Up, Down, Tab, Enter
+// and Escape (see CompletionState.Attach).
+func (s *completionCmd) FieldCommand(cmd ui.FieldCommand, _ rune) bool {
+	var c CompletionCmd
+	switch cmd {
+	case ui.FieldMoveUp:
+		c = CompletionUp
+	case ui.FieldMoveDown:
+		c = CompletionDown
+	case ui.FieldInsertTab:
+		c = CompletionTab
+	case ui.FieldInsertNewline:
+		c = CompletionEnter
+	case ui.FieldCancel:
+		c = CompletionEscape
+	default:
+		return false
 	}
-	return false
+	st := (*CompletionState)(s)
+	r := st.Command(c, st.n)
+	if r == ResultNone {
+		return false // an Enter or Tab with no row highlighted is the editor's own
+	}
+	st.pending = r
+	return true
+}
+
+// Attach registers the list's state as the commander of the next ui TextField
+// (the drawn editor), for a list of n rows that is showing: the field offers it
+// Up, Down, Tab, Enter and Escape, in the order they arrive, as keys or as
+// the system's edit actions, and the list takes the ones it has a use for.
+// Take says what they did. Call it only while the list is shown, and not while
+// the input method has marked text (the field offers nothing then anyway).
+func (s *CompletionState) Attach(c *ui.Context, n int) {
+	s.n = n
+	c.NextFieldCommander((*completionCmd)(s), "")
+}
+
+// Take returns what the commands since the last Take did: the result of the
+// last command that did anything (ResultNone if none), and forgets it. Call
+// it after the TextField Attach registered the state for.
+func (s *CompletionState) Take() CompletionResult {
+	r := s.pending
+	s.pending = ResultNone
+	return r
 }

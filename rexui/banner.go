@@ -1,6 +1,8 @@
 package rexui
 
 import (
+	"math"
+
 	"gonativeui/icon"
 	"gonativeui/theme"
 	"gonativeui/ui"
@@ -130,20 +132,9 @@ func Toast(k *base.Kit, title string, o ToastOpts) BannerSignal {
 	if dur == 0 {
 		dur = ToastLook.Duration
 	}
-	// the seconds left, kept from frame to frame in the context
-	left := c.KeepValue(ui.KeyN(tkey, 70), dur, dur)
 	sig := banner(k, title, o.BannerOpts, true, tkey)
-	if dur > 0 && !c.Input().Hidden {
-		hot := c.Hot(sig.ID)
-		if !hot && c.Input().Time != 0 {
-			left -= c.DT()
-		}
-		c.KeepValue(ui.KeyN(tkey, 70), dur, left)
-		if left <= 0 {
-			sig.Dismissed = true
-		} else if !hot {
-			c.WakeIn(int64(left * 1e9))
-		}
+	if dur > 0 {
+		toastClock(k, tkey, dur, &sig)
 	}
 	return sig
 }
@@ -178,9 +169,9 @@ func banner(k *base.Kit, title string, o BannerOpts, floating bool, tkey ui.Key)
 		el := &r.Elevations[theme.ElevRaised]
 		sh := el.Shadows[0]
 		c.NextShadow(ui.Shadow{OffY: sh.Y, Sigma: sh.Blur, Color: sh.Color(r.Colors[theme.Shadow], r.T)})
-		fade := c.AnimateValueFrom(ui.KeyN(key, 71), 0, 1, RateFor(r.Motion.Dismiss))
-		if reduced(k) {
-			fade = 1
+		fade := float32(1) // no fade under Reduce Motion or in a window that is not showing: nothing to schedule
+		if !reduced(k) && !c.Input().Hidden {
+			fade = c.AnimateValueFrom(ui.KeyN(key, 71), 0, 1, RateFor(r.Motion.Dismiss))
 		}
 		c.NextOpacity(fade)
 		if h == 0 { // laid out at the bottom from the second frame
@@ -198,6 +189,9 @@ func banner(k *base.Kit, title string, o BannerOpts, floating bool, tkey ui.Key)
 	c.NextCross(ui.CrossCenter)
 	c.NextRole(ui.RoleGroup)
 	c.NextSemName(bannerName(c, lv, display))
+	if o.Message != "" {
+		c.NextSemValueBytes(base.StrBytes(o.Message)) // the explanation is the group's value
+	}
 	flags := ui.DrawBackground | ui.DrawBorder | disabledFlag(k)
 	if floating {
 		flags |= ui.DrawShadow | ui.Hoverable | base.Floating
@@ -246,4 +240,51 @@ func banner(k *base.Kit, title string, o BannerOpts, floating bool, tkey ui.Key)
 // bannerName is "Level: title", built for the accessibility tree.
 func bannerName(c *ui.Context, lv BannerLevel, title string) string {
 	return c.Fmt().Str([...]string{"Info", "Success", "Warning", "Error"}[lv]).Str(": ").Str(title).String()
+}
+
+// toastWrap is the period, in seconds, the toast keeps its last frame's time
+// modulo: a float32 holds that many seconds to well under a millisecond.
+const toastWrap = 1024
+
+// toastClock runs the toast's time on the monotonic clock of the frames
+// (ui.Input.Time), not on the animation step: a frame that comes after a long
+// sleep, at the toast's deadline, finds all of that time gone. The time left
+// stands still while the pointer is over the toast (its close button included)
+// and while the window is not showing, keeping what is left across them, and
+// the toast sleeps with a wake-up at its deadline while it counts. The state
+// is three values the context keeps: the seconds left, the time of the last
+// frame (modulo toastWrap) and whether that frame was paused.
+func toastClock(k *base.Kit, tkey ui.Key, dur float32, sig *BannerSignal) {
+	c := k.Context()
+	in := c.Input()
+	if in.Time == 0 { // synthetic input has no clock
+		return
+	}
+	left := c.KeepValue(ui.KeyN(tkey, 70), dur, dur)
+	prev := c.KeepValue(ui.KeyN(tkey, 72), 0, 0)
+	wasPaused := c.KeepValue(ui.KeyN(tkey, 73), 1, 1) > 0 // (a toast that was just built has no interval yet)
+	now := float32(math.Mod(float64(in.Time)/1e9, toastWrap))
+	r := c.Rect(sig.ID)
+	over := in.Inside && in.MouseX >= r[0] && in.MouseX < r[2] && in.MouseY >= r[1] && in.MouseY < r[3]
+	paused := in.Hidden || over
+	if !paused && !wasPaused {
+		el := now - prev
+		if el < 0 {
+			el += toastWrap
+		}
+		left -= el
+	}
+	c.KeepValue(ui.KeyN(tkey, 70), dur, left)
+	c.KeepValue(ui.KeyN(tkey, 72), 0, now)
+	pausedV := float32(0)
+	if paused {
+		pausedV = 1
+	}
+	c.KeepValue(ui.KeyN(tkey, 73), 1, pausedV)
+	switch {
+	case left <= 0:
+		sig.Dismissed = true
+	case !paused:
+		c.WakeIn(int64(left * 1e9))
+	}
 }

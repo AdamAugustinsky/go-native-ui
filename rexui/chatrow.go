@@ -166,7 +166,7 @@ func ChatListRow(k *base.Kit, label, title, preview, when string, o ChatRowOpts)
 			bo.Color = Of(theme.Gray)
 		}
 		if o.Selected && active {
-			bo.Color = Of(theme.OnAccent)
+			bo.Color, bo.TextColor = Of(theme.OnAccent), Of(theme.Accent) // (white on the accent row: the text is the accent)
 		}
 		BadgeCountN(k, o.Unread, bo)
 	}
