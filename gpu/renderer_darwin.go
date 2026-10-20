@@ -177,6 +177,7 @@ type Renderer struct {
 	offscreen         objc.ID
 	offW, offH        int
 	readback          []byte
+	bd                backdropKit
 	destroyed         bool
 }
 
@@ -658,15 +659,18 @@ func (r *Renderer) Encode(cmdBuf, target uintptr, width, height int, clear [4]fl
 	viewportArg[0], viewportArg[1] = float32(width), float32(height)
 
 	pool := F.Call0(objc.PoolPush)
+	// Backdrops (backdrop_darwin.go) end the pass, blur and resume it; or,
+	// without the blur, are drawn as shapes of their fallback colour.
+	var inst []Quad
+	blur := false
+	if len(quads) > 0 && len(list.Backdrops) > 0 {
+		inst = unsafe.Slice((*Quad)(s.mem), len(quads))
+		blur = r.prepareBackdrops(target, width, height, list, inst)
+	}
 	objc.Send1(r.color0, rsSetTexture, target)
 	F.Reset().Arg(uintptr(r.color0)).Arg(uintptr(rsSetClear)).
 		ArgRect(float64(clear[0]), float64(clear[1]), float64(clear[2]), float64(clear[3])).Call(objc.MsgSend)
-	enc := objc.Send1(objc.ID(cmdBuf), rsEncoder, uintptr(r.rpd))
-	objc.Send1(enc, rsSetPipeline, uintptr(r.pipeline))
-	objc.Send3(enc, rsSetVBuffer, uintptr(s.buf), 0, 0)
-	objc.Send3(enc, rsSetFBuffer, uintptr(s.buf), 0, 0)
-	objc.Send3(enc, rsSetVBytes, uintptr(unsafe.Pointer(&viewportArg)), 8, 1)
-	objc.Send2(enc, rsSetFSampler, uintptr(r.sampler), 0)
+	enc := r.beginPass(cmdBuf, r.rpd, s)
 
 	// Shape quads don't read the bound texture, so they join whatever run is
 	// open; only a texture quad with a different texture ends it.
@@ -676,6 +680,25 @@ func (r *Renderer) Encode(cmdBuf, target uintptr, width, height int, clear [4]fl
 	runStart := 0
 	for i := range quads {
 		q := &quads[i]
+		if q.Mode == ModeBackdrop {
+			if !blur || inst[i].Mode != ModeBackdrop {
+				continue // its fallback, a shape
+			}
+			if i > runStart {
+				r.draw(enc, runStart, i-runStart)
+			}
+			objc.Send(enc, rsEndEncoding)
+			b := list.Backdrops[q.Tex]
+			r.encodeBackdrop(objc.ID(cmdBuf), target, width, height, q, &b, &inst[i])
+			objc.Send1(r.bd.loadCol0, rsSetTexture, target)
+			enc = r.beginPass(cmdBuf, r.bd.load, s)
+			objc.Send2(enc, rsSetFTexture, uintptr(r.bd.tex[0]), 0)
+			r.draw(enc, i, 1)
+			bound = 0
+			objc.Send2(enc, rsSetFTexture, uintptr(r.textures[0]), 0)
+			runStart = i + 1
+			continue
+		}
 		if q.Mode == ModeShape || q.Tex == bound {
 			continue
 		}
@@ -696,7 +719,22 @@ func (r *Renderer) Encode(cmdBuf, target uintptr, width, height int, clear [4]fl
 	}
 	objc.Send(enc, rsEndEncoding)
 	objc.Send1(r.color0, rsSetTexture, 0)
+	if blur {
+		objc.Send1(r.bd.loadCol0, rsSetTexture, 0)
+	}
 	F.Call1(objc.PoolPop, pool)
+}
+
+// beginPass begins an encoder of the main pass with descriptor rpd (its
+// target set) and binds the quad pipeline and slot s's instances.
+func (r *Renderer) beginPass(cmdBuf uintptr, rpd objc.ID, s *ringSlot) objc.ID {
+	enc := objc.Send1(objc.ID(cmdBuf), rsEncoder, uintptr(rpd))
+	objc.Send1(enc, rsSetPipeline, uintptr(r.pipeline))
+	objc.Send3(enc, rsSetVBuffer, uintptr(s.buf), 0, 0)
+	objc.Send3(enc, rsSetFBuffer, uintptr(s.buf), 0, 0)
+	objc.Send3(enc, rsSetVBytes, uintptr(unsafe.Pointer(&viewportArg)), 8, 1)
+	objc.Send2(enc, rsSetFSampler, uintptr(r.sampler), 0)
+	return enc
 }
 
 // draw issues one instanced triangle-strip draw of count quads starting at
@@ -796,6 +834,7 @@ func (r *Renderer) Destroy() {
 	for _, x := range r.retiring {
 		objc.Release(x.tex)
 	}
+	r.destroyBackdrops()
 	r.textures, r.retiring, r.ids = nil, nil, texTable{} // ids freed after Destroy resolve to nothing
 	for _, o := range []objc.ID{r.offscreen, r.pipeline, r.sampler, r.rpd, r.empty} {
 		if o != 0 {

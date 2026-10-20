@@ -8,29 +8,49 @@ import (
 	"gonativeui/theme"
 )
 
-// Finder's rows scrolled under the toolbar cannot be read through its scroll
-// edge, as AppKit's blur leaves none legible: in strips across the pocket
-// clear of the toolbar's and the header's own parts on every platform (the
-// band above and below the capsules, the header above and below its titles
-// and separators) no pixel is more than ΔE 2 from the pocket's median,
-// though rows, their text and a selection lie under them.
-// And the pocket is the colour AppKit's averages to there, within ΔE 2
-// (captures-macmini, finder-*-scrolled, 26B5101f: its two selected rows tint
-// it), in light and dark, key and inactive.
+// Finder's rows scrolled under the toolbar, seen through its scroll edge, in
+// strips across the pocket clear of the toolbar's and the header's own parts
+// on every platform (the band above and below the capsules, the header above
+// and below its titles and separators), against AppKit's (captures-macmini,
+// finder-*-scrolled, 26B5101f; its two selected rows tint it), light and
+// dark, key and inactive.
+//
+// With the blur (gpu.Renderer.Backdrops) each pixel row's mean across the
+// strips is within ΔE2000 1 of AppKit's on average, and 1.5 at worst (a
+// level in dark), where the rows under it are plain (an inactive window:
+// its selection is grey; measured 0.13 / 0.25, at worst 0.8 / 1.1), and 1.5
+// and 2.5 where the key window's blue selection is (0.8 / 1.1, at worst 1.4
+// / 2.2: AppKit's pocket is a little more saturated over blue in dark).
+// Without it, the edge is opaque (ScrollEdgeLook.Under): no row shows (no
+// pixel more than ΔE 2 from the pocket's median) and the pocket is the colour
+// AppKit's averages to, within ΔE 2.
 func TestFinderRowsUnderTheBand(t *testing.T) {
 	regions := [][4]int{{190, 1, 880, 7}, {190, 45, 880, 51}, {190, 54, 880, 57}, {190, 74, 880, 79}} // points
 	for _, c := range []struct {
 		pref     theme.Preference
 		inactive bool
 		appkit   [3]uint8 // the mean over the regions
+		rows     []uint32 // AppKit's mean of every other pixel row of the regions, top down
+		plain    bool     // nothing saturated under the pocket
 	}{
-		{theme.ForceLight, false, [3]uint8{229, 241, 255}}, {theme.ForceLight, true, [3]uint8{252, 252, 252}},
-		{theme.ForceDark, false, [3]uint8{35, 46, 60}}, {theme.ForceDark, true, [3]uint8{43, 43, 43}},
+		{theme.ForceLight, false, [3]uint8{229, 241, 255}, []uint32{
+			0xFFFFFF, 0xFFFFFF, 0xFFFFFF, 0xFFFFFF, 0xFFFFFF, 0xFFFFFF, 0xD4E7FE, 0xD4E7FE, 0xD4E7FE, 0xD3E7FE,
+			0xD3E6FE, 0xD3E6FE, 0xD4E7FF, 0xD4E7FF, 0xD4E7FF, 0xE1EFFF, 0xE3F0FF, 0xE5F1FF, 0xE7F2FF, 0xE9F3FF}, false},
+		{theme.ForceLight, true, [3]uint8{252, 252, 252}, []uint32{
+			0xFFFFFF, 0xFFFFFF, 0xFFFFFF, 0xFFFFFF, 0xFFFFFF, 0xFFFFFF, 0xF8F8F8, 0xF9F9F9, 0xF9F9F9, 0xF9F9F9,
+			0xF9F9F9, 0xF9F9F9, 0xF9FAF9, 0xF9FAF9, 0xF9F9F9, 0xFBFCFB, 0xFCFCFC, 0xFCFCFC, 0xFCFCFC, 0xFCFDFC}, true},
+		{theme.ForceDark, false, [3]uint8{35, 46, 60}, []uint32{
+			0x272727, 0x272727, 0x272727, 0x272727, 0x282828, 0x282828, 0x22324A, 0x21324A, 0x21324A, 0x21324A,
+			0x20324A, 0x20324A, 0x20324A, 0x20324A, 0x20324A, 0x222E3E, 0x222D3D, 0x232D3B, 0x232D3A, 0x242C38}, false},
+		{theme.ForceDark, true, [3]uint8{43, 43, 43}, []uint32{
+			0x272727, 0x272727, 0x272727, 0x272727, 0x282828, 0x282828, 0x2F2F2F, 0x2F2F2F, 0x2F2F2F, 0x2E2E2E,
+			0x2E2E2E, 0x2E2E2E, 0x2E2E2E, 0x2E2E2E, 0x2E2E2E, 0x2B2C2B, 0x2B2B2B, 0x2B2B2B, 0x2B2B2B, 0x2A2A2A}, true},
 	} {
 		off, dm, img, err := render(ShotOptions{Scene: Finder, Preference: c.pref, Inactive: c.inactive, Scrolled: true})
 		if err != nil {
 			t.Fatal(err)
 		}
+		blur := off.R.Backdrops()
 		dm.Close() // the file icons' cache
 		off.Close()
 		type pixel struct {
@@ -39,17 +59,51 @@ func TestFinderRowsUnderTheBand(t *testing.T) {
 		}
 		var px []pixel
 		var sum [3]int
+		var rows [][3]uint8
 		for _, r := range regions {
 			for y := 2 * r[1]; y < 2*r[3]; y++ {
-				for x := 2 * r[0]; x < 2*r[2]; x += 2 {
+				var row [3]int
+				n := 0
+				for x := 2 * r[0]; x < 2*r[2]; x++ {
 					p := img.PixOffset(x, y)
 					v := [3]uint8{img.Pix[p], img.Pix[p+1], img.Pix[p+2]}
+					for i := range row {
+						row[i] += int(v[i])
+					}
+					n++
+					if x%2 != 0 {
+						continue
+					}
 					px = append(px, pixel{v, x, y})
 					for i := range sum {
 						sum[i] += int(v[i])
 					}
 				}
+				rows = append(rows, [3]uint8{uint8((row[0] + n/2) / n), uint8((row[1] + n/2) / n), uint8((row[2] + n/2) / n)})
 			}
+		}
+		if blur {
+			limit := [2]float64{1.5, 2.5} // mean, row
+			if c.plain {
+				limit = [2]float64{1, 1.5}
+			}
+			worst, mean := 0.0, 0.0
+			for i, want := range c.rows {
+				got := rows[2*i]
+				d := cielab.DeltaE2000(lab(got), lab([3]uint8{uint8(want >> 16), uint8(want >> 8), uint8(want)}))
+				mean += d / float64(len(c.rows))
+				if d > worst {
+					worst = d
+				}
+				if d > limit[1] {
+					t.Errorf("preference %d, inactive %v: the pocket's row %d is %v, AppKit's %06X (ΔE %.1f, want at most %.1f)", c.pref, c.inactive, 2*i, got, want, d, limit[1])
+				}
+			}
+			t.Logf("preference %d, inactive %v: the blurred pocket's rows from AppKit's: ΔE2000 mean %.2f, max %.2f", c.pref, c.inactive, mean, worst)
+			if mean > limit[0] {
+				t.Errorf("preference %d, inactive %v: the blurred pocket's rows are ΔE2000 %.2f from AppKit's on average, want at most %.1f", c.pref, c.inactive, mean, limit[0])
+			}
+			continue
 		}
 		sort.Slice(px, func(i, j int) bool {
 			a, b := px[i].c, px[j].c

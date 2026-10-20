@@ -51,7 +51,10 @@ type ToolbarOpts struct {
 	Panes [2]float32
 	// ContentUnder says content is scrolled under the toolbar: the band shows
 	// its bar and hairline (the scroll-edge effect) over the content pane
-	// (between Panes), as it always does while the window is inactive.
+	// (between Panes), as it always does while the window is inactive. The
+	// bar is AppKit's titlebar pocket (ScrollEdgeLook.Hard) over BandFill:
+	// the content lies below the band, so the pocket has nothing but the
+	// content's colour to blur (#FFFFFF, #262626 over #1E1E1E).
 	ContentUnder bool
 	// ContentEdge says the content pane's scroll view runs under the band
 	// (base.Kit.NextScrollInset, rexui.TableOpts.TopInset) and draws the
@@ -327,8 +330,15 @@ func BeginToolbar(k *base.Kit, label string, o ToolbarOpts) Toolbar {
 		pk := theme.Snap(max(o.Pocket, 0))
 		fill := o.BandFill
 		switch {
-		case bar && o.ContentUnder: // the blurred pocket's colour (ScrollEdgeRecipe.Under)
+		case bar && o.ContentUnder && r.Settings.ReduceTransparency: // opaque: the blurred pocket's colour (ScrollEdgeRecipe.Under)
 			fill = scrollEdgeUnder(k, 0, nil)
+		case bar && o.ContentUnder: // AppKit's titlebar pocket (Hard) over the content's colour, all there is under the band
+			b := scrollEdgeBlur(k, true)
+			under := o.BandFill
+			if under == 0 {
+				under = b.Tint
+			}
+			fill = b.Over(under)
 		case bar:
 			fill = glassFallback(k, GlassTitlebar)
 		}

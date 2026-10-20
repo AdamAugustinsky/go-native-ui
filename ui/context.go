@@ -52,6 +52,7 @@ type box struct {
 	ovRoot                          bool  // the root box of an overlay
 	ovl                             uint8 // the overlay the box belongs to, 1 + its index in the frame's overlays; 0 for the main tree
 	mat                             uint8 // 1 + the box's record in shell.mats when Material marked it (material.go)
+	bdrop                           uint8 // 1 + the box's recipe in Context.bd.recs when it is a backdrop (NextBackdrop)
 
 	bg          [4]uint32
 	textColor   uint32
@@ -170,6 +171,7 @@ type Context struct {
 	hasNextPos bool
 	nextFlags  Flags
 	nextAudit  AuditMask // the exemptions of the next box (NextAuditExempt)
+	bd         backdrops // this frame's backdrops and the next box's (NextBackdrop)
 
 	flowHidden bool // a flow hid children this layout (flow.go)
 
@@ -596,6 +598,7 @@ func (c *Context) resetStyles() {
 	c.hasNextPos = false
 	c.nextFlags = 0
 	c.nextAudit = 0
+	c.bd.n, c.bd.hasNext = 0, false
 	c.nextEscClr = false
 	c.nextStill = false
 	c.nextCmdr, c.nextSeps = nil, ""
@@ -752,6 +755,7 @@ func (c *Context) newBox(flags Flags, key Key) ID {
 	b.cross = c.sCross.take()
 	b.justify = c.sJustify.take()
 	b.auditOff, c.nextAudit = c.nextAudit, 0
+	c.takeBackdrop(b)
 	b.pad = c.sPad.take()
 	b.gap = c.sGap.take()
 	b.pref = [2]Size{c.sW.take(), c.sH.take()}

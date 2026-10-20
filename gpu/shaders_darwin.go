@@ -26,7 +26,7 @@ struct Quad {
 	uint          borderColor;
 	float         soft;
 	packed_float2 fadeX;
-	uint          mode;    // 0 shape, 1 mask R8, 2 RGBA
+	uint          mode;    // 0 shape, 1 mask R8, 2 RGBA, 3 backdrop
 	uint          tex;
 };
 
@@ -165,7 +165,9 @@ fragment float4 fs_main(VOut in [[stage_in]],
 		}
 		float2 texel = uv.xy + (p - rect.xy) * ((uv.zw - uv.xy) / size);
 		float4 s = tex.sample(smp, texel / float2(tex.get_width(), tex.get_height()));
-		res = (mode == 1u ? col * s.r : s * col.a) * cov;
+		// mode 3: a backdrop, its blurred region (uv: the texels the
+		// renderer put it at; backdrop_darwin.go), opaque
+		res = (mode == 1u ? col * s.r : mode == 3u ? float4(s.rgb, 1.0) : s * col.a) * cov;
 	}
 
 	if (any(clip != 0.0)) {

@@ -77,12 +77,13 @@ type finderToolbar struct {
 	view  int
 	views []icon.ID
 	q     ui.TextBuffer
-	under bool // content is under the toolbar
+	under bool   // content is under the toolbar
+	fill  uint32 // BandFill
 }
 
 func (f *finderToolbar) build(g *rig) {
 	ic := f.ic
-	o := rexui.ToolbarOpts{Style: f.style, Title: "Documents", Panes: [2]float32{g.k.Pt(180), g.k.Pt(890)}, ContentUnder: f.under}
+	o := rexui.ToolbarOpts{Style: f.style, Title: "Documents", Panes: [2]float32{g.k.Pt(180), g.k.Pt(890)}, ContentUnder: f.under, BandFill: f.fill}
 	tb := rexui.BeginToolbar(g.k, "Toolbar", o)
 	tb.Item(ic.sidebar, "Sidebar")
 	tb.NextPane()

@@ -1,0 +1,358 @@
+//go:build darwin
+
+package gpu
+
+import (
+	"errors"
+	"fmt"
+	"math"
+	"unsafe"
+
+	"gonativeui/internal/objc"
+)
+
+// Backdrops (ModeBackdrop, D54). The main pass ends at a backdrop quad;
+// three small passes then read the region under it from the target, scaled
+// down (bd_down), and blur it horizontally and vertically (bd_blur), the
+// last pass applying the recipe; the main pass resumes, loading the target,
+// and draws the quad sampling the result (mode 3 of quadMSL). All of it is
+// in the frame's command buffer, in order: Metal's hazard tracking orders
+// the passes' reads after the writes before them, so one pair of textures
+// serves every backdrop of a frame and every frame.
+//
+// The two textures are the reduced region and the blur's intermediate,
+// allocated for the largest region seen (one column and one row more: the
+// last pass replicates the edge there, so the bilinear composite never
+// samples past the region) and reallocated only when a region outgrows them
+// or the target's size changes. Nothing is allocated on the Go heap per
+// frame. The pipelines are compiled with the first frame that has a backdrop.
+
+const backdropMSL = `
+#include <metal_stdlib>
+using namespace metal;
+
+struct BU {
+	float4 src;     // the region in the source, pixels: x0, y0, x1, y1
+	float4 tint;    // rgb, mix
+	float2 srcSize; // the source texture's size
+	float2 n;       // the region's size at the reduced scale, texels
+	float2 vp;      // the attachment's size
+	float2 dir;     // the blur's direction
+	float sigma;    // reduced texels
+	float radius;   // taps on each side
+	float down;
+	float sat;
+	float add;
+	float last;     // 1: the last pass, which applies the recipe
+	float under;    // 1: the tint is mixed in before the colour adjustments
+	float pad;
+};
+
+// A quad over the region and one more column and row, which repeat its edge.
+vertex float4 bd_vs(uint vid [[vertex_id]], constant BU& u [[buffer(0)]]) {
+	float2 c = float2(float(vid & 1u), float(vid >> 1));
+	float2 p = c * (u.n + 1.0);
+	return float4(p / u.vp * float2(2.0, -2.0) + float2(-1.0, 1.0), 0.0, 1.0);
+}
+
+// The mean of each down×down block of the region: bilinear taps on the
+// corners between pixels, each the mean of four (clamped to the region's
+// pixel centres, so a partial block at its far edge repeats its last pixels).
+fragment float4 bd_down(float4 pos [[position]], constant BU& u [[buffer(0)]],
+                        texture2d<float> t [[texture(0)]], sampler s [[sampler(0)]]) {
+	float2 i = min(floor(pos.xy), u.n - 1.0);
+	float2 o = u.src.xy + i * u.down;
+	float2 lo = u.src.xy + 0.5, hi = u.src.zw - 0.5;
+	int n = max(int(u.down) / 2, 1);
+	float4 acc = 0.0;
+	for (int b = 0; b < n; b++) {
+		for (int a = 0; a < n; a++) {
+			float2 p = u.down < 2.0 ? o + 0.5 : o + float2(float(2 * a + 1), float(2 * b + 1));
+			acc += t.sample(s, clamp(p, lo, hi) / u.srcSize);
+		}
+	}
+	return acc / float(n * n);
+}
+
+// One direction of the Gaussian, its edges normalised: taps outside the
+// region are dropped and the others' weights renormalised.
+fragment float4 bd_blur(float4 pos [[position]], constant BU& u [[buffer(0)]],
+                        texture2d<float> t [[texture(0)]]) {
+	int2 n = int2(u.n);
+	int2 i = min(int2(pos.xy), n - 1);
+	int2 d = int2(u.dir);
+	int r = int(u.radius);
+	float k = -0.5 / max(u.sigma * u.sigma, 1e-6);
+	float4 acc = 0.0;
+	float ws = 0.0;
+	for (int j = -r; j <= r; j++) {
+		int2 q = i + d * j;
+		if (any(q < 0) || any(q >= n)) {
+			continue;
+		}
+		float w = exp(k * float(j * j));
+		acc += w * t.read(uint2(q));
+		ws += w;
+	}
+	float4 c = acc / ws;
+	if (u.last < 0.5) {
+		return c;
+	}
+	float3 m = c.rgb;
+	if (u.under > 0.5) {
+		m = mix(m, u.tint.rgb, u.tint.a);
+	}
+	float l = dot(m, float3(0.2126, 0.7152, 0.0722));
+	m = clamp(l + u.sat * (m - l) + u.add, 0.0, 1.0);
+	if (u.under < 0.5) {
+		m = mix(m, clamp(u.tint.rgb + u.add, 0.0, 1.0), u.tint.a);
+	}
+	return float4(m, 1.0);
+}
+`
+
+var (
+	rsSetFBytes    = objc.Sel("setFragmentBytes:length:atIndex:")
+	rsDrawSimple   = objc.Sel("drawPrimitives:vertexStart:vertexCount:")
+	rsUsage        = objc.Sel("usage")
+	bdUniform      bdUniforms // the passes' constants (a global: C reads it)
+	errBackdropMSL = errors.New("gpu: backdrop shader entry points missing")
+)
+
+// bdUniforms mirrors backdropMSL's BU (96 bytes).
+type bdUniforms struct {
+	src     [4]float32
+	tint    [4]float32
+	srcSize [2]float32
+	n       [2]float32
+	vp      [2]float32
+	dir     [2]float32
+	sigma   float32
+	radius  float32
+	down    float32
+	sat     float32
+	add     float32
+	last    float32
+	under   float32
+	_       float32
+}
+
+var _ = [1]struct{}{}[unsafe.Sizeof(bdUniforms{})-96]
+
+// backdropKit is the renderer's backdrop state.
+type backdropKit struct {
+	tried, ok      bool    // the pipelines were compiled (tried), successfully (ok)
+	err            error   // why not
+	down, blur     objc.ID // pipelines
+	tex            [2]objc.ID
+	tw, th         int // the textures' size
+	forW, forH     int // the target size they were sized for
+	rpd, color0    objc.ID
+	load, loadCol0 objc.ID // the main pass resumed: load, store
+}
+
+// Backdrops reports whether the renderer blurs ModeBackdrop quads (Metal
+// does, into a target with shader-read usage; elsewhere it draws their
+// fallback colour).
+func (r *Renderer) Backdrops() bool { return true }
+
+// initBackdrops compiles the backdrop pipelines once; on failure backdrops
+// draw their fallback.
+func (r *Renderer) initBackdrops() bool {
+	bd := &r.bd
+	if bd.tried {
+		return bd.ok
+	}
+	bd.tried = true
+	if bd.err = r.buildBackdrops(); bd.err != nil {
+		return false // the backdrops draw their fallback colour
+	}
+	bd.ok = true
+	return true
+}
+
+func (r *Renderer) buildBackdrops() error {
+	bd := &r.bd
+	nsErrorOut = 0
+	lib := objc.Send3(r.device, rsNewLibrary, uintptr(objc.Str(backdropMSL)), 0, uintptr(unsafe.Pointer(&nsErrorOut)))
+	if lib == 0 {
+		return fmt.Errorf("gpu: compiling the backdrop shaders: %s", nsErrorText())
+	}
+	defer objc.Release(lib)
+	vs := objc.Send1(lib, rsNewFunction, uintptr(objc.Str("bd_vs")))
+	fd := objc.Send1(lib, rsNewFunction, uintptr(objc.Str("bd_down")))
+	fb := objc.Send1(lib, rsNewFunction, uintptr(objc.Str("bd_blur")))
+	for _, f := range []objc.ID{vs, fd, fb} {
+		if f != 0 {
+			defer objc.Release(f)
+		}
+	}
+	if vs == 0 || fd == 0 || fb == 0 {
+		return errBackdropMSL
+	}
+	pipe := func(fs objc.ID) (objc.ID, error) {
+		pd := objc.Send(objc.Send(clsPipelineDesc, rsAlloc), rsInit)
+		defer objc.Release(pd)
+		objc.Send1(pd, rsSetVertexFn, uintptr(vs))
+		objc.Send1(pd, rsSetFragFn, uintptr(fs))
+		ca := objc.Send1(objc.Send(pd, rsColorAttach), rsObjectAt, 0)
+		objc.Send1(ca, rsSetPixelFmt, mtlBGRA8Unorm)
+		nsErrorOut = 0
+		p := objc.Send2(r.device, rsNewPipeline, uintptr(pd), uintptr(unsafe.Pointer(&nsErrorOut)))
+		if p == 0 {
+			return 0, fmt.Errorf("gpu: creating a backdrop pipeline: %s", nsErrorText())
+		}
+		return p, nil
+	}
+	var err error
+	if bd.down, err = pipe(fd); err != nil {
+		return err
+	}
+	if bd.blur, err = pipe(fb); err != nil {
+		return err
+	}
+	bd.rpd = objc.Retain(objc.Send(clsRPD, rsRPD))
+	bd.color0 = objc.Send1(objc.Send(bd.rpd, rsColorAttach), rsObjectAt, 0)
+	objc.Send1(bd.color0, rsSetLoad, 0)  // DontCare: each pass writes what it reads
+	objc.Send1(bd.color0, rsSetStore, 1) // Store
+	bd.load = objc.Retain(objc.Send(clsRPD, rsRPD))
+	bd.loadCol0 = objc.Send1(objc.Send(bd.load, rsColorAttach), rsObjectAt, 0)
+	objc.Send1(bd.loadCol0, rsSetLoad, 1)  // Load
+	objc.Send1(bd.loadCol0, rsSetStore, 1) // Store
+	return nil
+}
+
+// readable reports whether target (an id<MTLTexture>) can be sampled: a
+// drawable of a framebufferOnly layer cannot.
+func readable(target uintptr) bool {
+	return uintptr(objc.Send(objc.ID(target), rsUsage))&1 != 0 // MTLTextureUsageShaderRead
+}
+
+// prepareBackdrops readies the frame's backdrops in inst, the ring slot's
+// copy of quads: with the blur (it returns true) it sizes the textures for
+// them; without, it turns each into a shape quad of its fallback colour, as
+// it does one without a recipe or whose region is empty.
+func (r *Renderer) prepareBackdrops(target uintptr, w, h int, list *DrawList, inst []Quad) bool {
+	blur := readable(target) && r.initBackdrops()
+	needW, needH := 0, 0
+	for i := range inst {
+		q := &inst[i]
+		if q.Mode != ModeBackdrop {
+			continue
+		}
+		b, ok := list.backdropOf(q)
+		x0, y0, x1, y1, inside := backdropRegion(q, w, h)
+		if !blur || !ok || !inside { // (outside the target and clip, the shape draws nothing)
+			q.Mode = ModeShape
+			continue
+		}
+		d := backdropDown(&b)
+		needW = max(needW, (x1-x0+d-1)/d+1)
+		needH = max(needH, (y1-y0+d-1)/d+1)
+	}
+	if blur && needW > 0 {
+		r.sizeBackdrops(needW, needH, w, h)
+	}
+	return blur
+}
+
+// sizeBackdrops makes the textures at least w×h texels, for a target of
+// tw×th pixels: they grow when a region outgrows them and are made again,
+// to fit, when the target's size has changed.
+func (r *Renderer) sizeBackdrops(w, h, tw, th int) {
+	bd := &r.bd
+	resized := bd.forW != tw || bd.forH != th
+	if bd.tex[0] != 0 && w <= bd.tw && h <= bd.th && !resized {
+		return
+	}
+	bd.forW, bd.forH = tw, th
+	if !resized {
+		w, h = max(w, bd.tw), max(h, bd.th)
+	}
+	w, h = (w+31)&^31, (h+31)&^31
+	if bd.tex[0] != 0 && w == bd.tw && h == bd.th {
+		return
+	}
+	for i, t := range bd.tex {
+		if t != 0 {
+			r.retiring = append(r.retiring, retiredTex{t, r.serial})
+		}
+		d := objc.Send4(clsTexDesc, rsTexDesc, mtlBGRA8Unorm, uintptr(w), uintptr(h), 0)
+		objc.Send1(d, rsSetUsage, 1|4) // ShaderRead | RenderTarget
+		objc.Send1(d, rsSetStorage, 2) // Private
+		bd.tex[i] = objc.Send1(r.device, rsNewTexture, uintptr(d))
+		if bd.tex[i] == 0 {
+			panic("gpu: backdrop texture creation failed")
+		}
+	}
+	bd.tw, bd.th = w, h
+}
+
+// encodeBackdrop encodes the passes that blur backdrop quad q (inst, its
+// ring copy, gets the texel rectangle the composite samples) of a w×h
+// target into cmdBuf, between two encoders of the main pass. The result is
+// in the first texture.
+func (r *Renderer) encodeBackdrop(cmdBuf objc.ID, target uintptr, w, h int, q *Quad, b *Backdrop, inst *Quad) {
+	bd := &r.bd
+	x0, y0, x1, y1, _ := backdropRegion(q, w, h)
+	d := backdropDown(b)
+	fd := float32(d)
+	nw, nh := (x1-x0+d-1)/d, (y1-y0+d-1)/d
+	sigma := max(b.Sigma, 0) / fd
+	u := &bdUniform
+	*u = bdUniforms{
+		src:     [4]float32{float32(x0), float32(y0), float32(x1), float32(y1)},
+		tint:    [4]float32{float32(b.Tint>>24) / 255, float32(b.Tint>>16&0xFF) / 255, float32(b.Tint>>8&0xFF) / 255, min(max(b.Mix, 0), 1)},
+		srcSize: [2]float32{float32(w), float32(h)},
+		n:       [2]float32{float32(nw), float32(nh)},
+		vp:      [2]float32{float32(bd.tw), float32(bd.th)},
+		sigma:   sigma,
+		radius:  float32(math.Ceil(float64(3 * sigma))),
+		down:    fd,
+		sat:     b.Saturation,
+		add:     b.Add,
+		under:   b2f(b.TintUnder),
+	}
+	r.backdropPass(cmdBuf, bd.tex[0], bd.down, objc.ID(target))
+	u.dir = [2]float32{1, 0}
+	r.backdropPass(cmdBuf, bd.tex[1], bd.blur, bd.tex[0])
+	u.dir, u.last = [2]float32{0, 1}, 1
+	r.backdropPass(cmdBuf, bd.tex[0], bd.blur, bd.tex[1])
+	// the composite samples (p - region origin) / down
+	inst.UV = [4]float32{(q.Rect[0] - float32(x0)) / fd, (q.Rect[1] - float32(y0)) / fd,
+		(q.Rect[2] - float32(x0)) / fd, (q.Rect[3] - float32(y0)) / fd}
+}
+
+// backdropPass draws one of a backdrop's passes into dst, reading src.
+func (r *Renderer) backdropPass(cmdBuf, dst, pipe, src objc.ID) {
+	bd := &r.bd
+	objc.Send1(bd.color0, rsSetTexture, uintptr(dst))
+	enc := objc.Send1(cmdBuf, rsEncoder, uintptr(bd.rpd))
+	objc.Send1(enc, rsSetPipeline, uintptr(pipe))
+	objc.Send3(enc, rsSetVBytes, uintptr(unsafe.Pointer(&bdUniform)), unsafe.Sizeof(bdUniform), 0)
+	objc.Send3(enc, rsSetFBytes, uintptr(unsafe.Pointer(&bdUniform)), unsafe.Sizeof(bdUniform), 0)
+	objc.Send2(enc, rsSetFTexture, uintptr(src), 0)
+	objc.Send2(enc, rsSetFSampler, uintptr(r.sampler), 0)
+	objc.Send3(enc, rsDrawSimple, 4, 0, 4) // MTLPrimitiveTypeTriangleStrip
+	objc.Send(enc, rsEndEncoding)
+	objc.Send1(bd.color0, rsSetTexture, 0)
+}
+
+// b2f is 1 for true.
+func b2f(b bool) float32 {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// destroyBackdrops releases the backdrop state.
+func (r *Renderer) destroyBackdrops() {
+	bd := &r.bd
+	for _, o := range []objc.ID{bd.tex[0], bd.tex[1], bd.down, bd.blur, bd.rpd, bd.load} {
+		if o != 0 {
+			objc.Release(o)
+		}
+	}
+	*bd = backdropKit{tried: true}
+}
