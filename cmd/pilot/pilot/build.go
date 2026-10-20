@@ -83,8 +83,9 @@ func (pl *Pilot) Build(c *ui.Context) {
 	k.Begin(c)
 	pl.lastW, pl.lastH = w, h
 	pl.sys.setScale(c.Scale())
+	pl.sys.applyStyle()
 	if c.Input().FocusGained {
-		pl.sys.refreshStyle()
+		pl.sys.requestStyle()
 	}
 	if pl.sys.cache.Poll() { // icons decoded: the uploads are for the next frame
 		c.RequestFrame()

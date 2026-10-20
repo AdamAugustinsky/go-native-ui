@@ -1,6 +1,8 @@
 package pilot
 
 import (
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"gonativeui/fs"
@@ -60,22 +62,61 @@ type sysIcons struct {
 	px    int32  // the icon's side in pixels at the current scale
 	style uint64 // img.IconStyle(): the variant of application icons
 
+	// The style is read on a worker (it queries the system's preferences and
+	// allocates): requestStyle asks, applyStyle takes the latest answer.
+	latest atomic.Uint64
+	ask    chan struct{}
+	done   chan struct{}
+	wg     sync.WaitGroup
+
 	folder, generic, exec iconRec
 	exts                  map[string]*extRec
 	bundles               map[bundleID]*bundleRec
 }
 
-func newSysIcons(cache *img.Cache) *sysIcons {
-	ic := &sysIcons{cache: cache, style: img.IconStyle()}
+// iconStyle reads the icon style setting (a variable for the tests).
+var iconStyle = img.IconStyle
+
+func newSysIcons(cache *img.Cache, wake func()) *sysIcons {
+	ic := &sysIcons{cache: cache, ask: make(chan struct{}, 1), done: make(chan struct{})}
 	ic.exts = make(map[string]*extRec, 64)
 	ic.bundles = make(map[bundleID]*bundleRec, 16)
+	ic.wg.Add(1)
+	go ic.styleWorker(wake)
+	ic.requestStyle()
 	return ic
 }
 
-// refreshStyle asks the system for the icon style again; a change makes every
+// styleWorker reads the icon style whenever it is asked to and wakes the loop
+// when it changed.
+func (ic *sysIcons) styleWorker(wake func()) {
+	defer ic.wg.Done()
+	for {
+		select {
+		case <-ic.ask:
+			if s := iconStyle(); s != ic.latest.Swap(s) && wake != nil {
+				wake()
+			}
+		case <-ic.done:
+			return
+		}
+	}
+}
+
+// requestStyle asks for the icon style again (the window was activated, which
+// is when a person may have changed the setting). It does not wait and
+// allocates nothing.
+func (ic *sysIcons) requestStyle() {
+	select {
+	case ic.ask <- struct{}{}:
+	default: // a read is already due
+	}
+}
+
+// applyStyle takes the style the worker last read; a change makes every
 // application icon a new image (the variant is part of its key).
-func (ic *sysIcons) refreshStyle() {
-	if s := img.IconStyle(); s != ic.style {
+func (ic *sysIcons) applyStyle() {
+	if s := ic.latest.Load(); s != ic.style {
 		ic.style = s
 		clear(ic.bundles)
 	}
@@ -190,7 +231,11 @@ func (ic *sysIcons) bundle(p *pane, pi int, e *fs.Entry, name []byte) *iconRec {
 }
 
 // close stops the workers and frees the textures.
-func (ic *sysIcons) close() { ic.cache.Close(time.Second) }
+func (ic *sysIcons) close() {
+	close(ic.done)
+	ic.wg.Wait()
+	ic.cache.Close(time.Second)
+}
 
 // fileIcon builds the icon of an entry in the current parent, a row rowH
 // high: the system's once decoded, the kit's symbol when the system has none,

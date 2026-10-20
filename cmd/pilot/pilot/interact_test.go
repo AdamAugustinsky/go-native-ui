@@ -3,6 +3,8 @@ package pilot
 import (
 	"os"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -684,5 +686,50 @@ func TestPathBandOpensTheEditorForEveryInput(t *testing.T) {
 				t.Errorf("path edit %v, focus %v", pl.panes[0].pathEdit, r.o.UI.FocusKey())
 			}
 		})
+	}
+}
+
+// Activating the window asks the system for the icon style on a worker: a
+// frame with the focus gained does not wait for the answer (a read of the
+// system's preferences that blocks would freeze the window), and a style that
+// changed is taken in the next frame after it came.
+func TestActivationReadsTheIconStyleOffTheFrame(t *testing.T) {
+	gate := make(chan struct{})
+	var once sync.Once
+	release := func() { once.Do(func() { close(gate) }) }
+	var calls atomic.Int32
+	style := atomic.Uint64{}
+	old := iconStyle
+	iconStyle = func() uint64 {
+		if calls.Add(1) > 1 { // the read at the start is quick
+			<-gate
+		}
+		return style.Load()
+	}
+	t.Cleanup(func() { iconStyle = old; release() })
+	timer := time.AfterFunc(4*time.Second, release)
+	defer timer.Stop()
+
+	r := newDrive(t)
+	pl := r.d.Pilot
+	pl.sys.bundles[bundleID{name: 1}] = &bundleRec{}
+	style.Store(7)
+	t0 := time.Now()
+	for i := 0; i < 5; i++ { // activated again and again while the answer is out
+		r.feed(func(in *ui.Input) { in.FocusGained = true })
+	}
+	if d := time.Since(t0); d > time.Second {
+		t.Fatalf("five activations took %v: a frame waits for the icon style", d)
+	}
+	if pl.sys.style != 0 || len(pl.sys.bundles) != 1 {
+		t.Fatalf("the style changed before it was read")
+	}
+	release()
+	for n := 0; n < 500 && pl.sys.style != 7; n++ {
+		time.Sleep(2 * time.Millisecond)
+		r.frames(1)
+	}
+	if pl.sys.style != 7 || len(pl.sys.bundles) != 0 {
+		t.Errorf("style %d, %d bundle icons: a changed style is not taken (and the application icons asked for again)", pl.sys.style, len(pl.sys.bundles))
 	}
 }

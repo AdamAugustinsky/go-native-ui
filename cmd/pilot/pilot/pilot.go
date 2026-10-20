@@ -25,6 +25,7 @@ package pilot
 
 import (
 	"runtime"
+	"sync"
 	"time"
 
 	"gonativeui/app"
@@ -150,6 +151,7 @@ type Pilot struct {
 	sideFor    string
 	tbH        float32 // the toolbar's height in pixels, as of the last frame
 	rootTitle  string
+	closeOnce  sync.Once
 	probed     chan placesProbed // the worker's places, until they are taken
 	wake       func()            // wakes the loop (platform.Wake)
 
@@ -211,7 +213,7 @@ func (pl *Pilot) Init(a *app.App) error {
 	if pl.opt.Legacy {
 		pl.bk.PinSystem(&theme.SystemValues{Known: true, Settings: theme.Settings{Scroller: theme.ScrollerLegacy}})
 	}
-	pl.sys = newSysIcons(img.NewCache(img.Options{Renderer: a.R}))
+	pl.sys = newSysIcons(img.NewCache(img.Options{Renderer: a.R}), pl.wake)
 	pl.bk.SetImages(pl.sys.cache)
 	pl.addSymbols()
 	pl.makePlaces()
@@ -268,14 +270,17 @@ func (pl *Pilot) land(i int, r Ready) {
 // has not landed.
 func (pl *Pilot) ListedAt(i int) int64 { return pl.listedAt[i] }
 
-// Close stops the Source and the icon workers.
+// Close stops the Source and the workers (the icons', the style's). It may be
+// called more than once.
 func (pl *Pilot) Close() {
-	if pl.src != nil {
-		pl.src.Close()
-	}
-	if pl.sys != nil {
-		pl.sys.close()
-	}
+	pl.closeOnce.Do(func() {
+		if pl.src != nil {
+			pl.src.Close()
+		}
+		if pl.sys != nil {
+			pl.sys.close()
+		}
+	})
 }
 
 // poll takes the listings that landed and what the Source reports.
