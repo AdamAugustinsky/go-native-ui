@@ -59,7 +59,7 @@ type chromeIcons struct{ sidebar, back, fwd, grid, list, group, share, tag, acti
 
 func addChromeIcons(g *rig) *chromeIcons {
 	k := g.k
-	sym := func(s string, fb rune) icon.ID { return k.AddIcon(icon.Spec{Symbol: s, Fallback: fb, Pt: 13}) }
+	sym := func(s string, fb rune) icon.ID { return k.AddIcon(rexui.ToolbarSymbol(s, fb)) }
 	return &chromeIcons{
 		sidebar: sym("sidebar.left", '▤'), back: sym("chevron.left", '‹'), fwd: sym("chevron.right", '›'),
 		grid: sym("square.grid.2x2", '▦'), list: sym("list.bullet", '≡'), group: sym("square.grid.3x1.folder.badge.plus", '▦'),

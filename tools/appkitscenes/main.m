@@ -387,6 +387,8 @@ static NSToolbarItem *menuItem(NSString *ident, NSString *symbol, NSString *lbl)
 @implementation Scene
 @end
 
+static CGFloat gWidth; // -width: the window's content width instead of the scene's
+
 static NSViewController *vc(NSView *v) {
 	NSViewController *c = [NSViewController new];
 	c.view = v;
@@ -416,6 +418,7 @@ static void install(Scene *s, NSArray<NSSplitViewItem *> *items, NSSize size) {
 	for (NSSplitViewItem *it in items) [sp addSplitViewItem:it];
 	s.split = sp;
 	s.window.contentViewController = sp;
+	if (gWidth > 0) size.width = gWidth;
 	[s.window setContentSize:size];
 }
 
@@ -1530,11 +1533,12 @@ int main(int argc, const char **argv) {
 			else if (!strcmp(argv[i], "-appearance") && i + 1 < argc) gAppearance = [NSString stringWithUTF8String:argv[++i]];
 			else if (!strcmp(argv[i], "-hs") && i + 1 < argc) gHS = [NSString stringWithUTF8String:argv[++i]];
 			else if (!strcmp(argv[i], "-offscreen")) gOffscreen = YES;
+			else if (!strcmp(argv[i], "-width") && i + 1 < argc) gWidth = atof(argv[++i]);
 			else if (!strcmp(argv[i], "-phases") && i + 1 < argc) gPhases = [[NSString stringWithUTF8String:argv[++i]] componentsSeparatedByString:@","];
 			else if (!strcmp(argv[i], "-tag") && i + 1 < argc) gTag = [NSString stringWithUTF8String:argv[++i]];
 		}
 		if (!sceneName || !gHS || !([gAppearance isEqual:@"light"] || [gAppearance isEqual:@"dark"])) {
-			fprintf(stderr, "usage: AppKitScenes -scene finder|notes|settings|chat -appearance light|dark -hs DIR [-offscreen] [-tag T] [-phases a,b]\n"
+			fprintf(stderr, "usage: AppKitScenes -scene finder|notes|settings|chat -appearance light|dark -hs DIR [-offscreen] [-tag T] [-phases a,b] [-width W]\n"
 			                "       AppKitScenes -sheet MANIFEST.json OUT.png\n       AppKitScenes -measure DIR\n"
 			                "       AppKitScenes -crop|-probe|-profile|-radius IN.png ... (see measure.m)\n");
 			return 64;

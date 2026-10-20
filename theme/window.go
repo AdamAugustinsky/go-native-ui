@@ -73,6 +73,12 @@ type CapsuleSpec struct {
 	// Glyph is the point size of a toolbar symbol: 13 in both styles (the
 	// symbols AppKit draws are 15 to 20 pt wide).
 	Glyph float32
+	// GlyphScale is the symbol scale toolbar symbols are drawn at: AppKit's
+	// are large (Finder's list.bullet 16.5 pt of ink at 13 pt, as
+	// NSImageSymbolScaleLarge draws it). Items are laid out by the symbols'
+	// alignment widths at that scale (icon.Atlas.AlignWidth). It is an
+	// icon.Scale (2, large; theme does not import icon, whose tests use it).
+	GlyphScale uint8
 }
 
 // SidebarSpec is a source-list sidebar's geometry (medium row size), in
@@ -152,7 +158,7 @@ var MacWindow = WindowSpec{
 		ToolbarUnified: {Height: 52, Traffic: [2]float32{26, 26}, Title: StyleToolbarTitle, TitleY: 16.5, TitleGap: 10, TitleInset: 18, CapsuleH: 36, CapsuleY: 8, ItemW: 36, FirstGap: 17},
 		ToolbarRex:     {Height: 46, Traffic: [2]float32{23, 23}, Title: StyleWindowTitle, TitleY: 15, TitleGap: 10, TitleInset: 10},
 	},
-	Capsule:     CapsuleSpec{GroupGap: 8, Gap: 4, WideGap: 8, NavW: 86, PickerW: 46, MenuW: 44.5, MenuPad: 27.5, Glyph: 13},
+	Capsule:     CapsuleSpec{GroupGap: 8, Gap: 4, WideGap: 8, NavW: 86, PickerW: 46, MenuW: 44.5, MenuPad: 27.5, Glyph: 13, GlyphScale: 2},
 	Sidebar:     SidebarSpec{RowH: 32, HeaderH: 19, GroupGap: 13, IconX: 19, Icon: 20, TextX: 43, HeaderX: 14, Indent: 13, SearchH: 24, SearchInset: 10},
 	Selection:   SelectionSpec{Inset: 10, Radius: 8, Divider: 1},
 	GroupRadius: 12,

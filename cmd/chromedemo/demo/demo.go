@@ -212,31 +212,29 @@ func (d *Demo) WindowPx() (w, h int, scale float32) { return d.winW, d.winH, d.w
 
 func (d *Demo) addIcons() {
 	k := d.k
-	tool := func(sym string, fb rune, pt float32) icon.ID {
-		return k.AddIcon(icon.Spec{Symbol: sym, Fallback: fb, Pt: pt})
-	}
+	tool := func(sym string, fb rune) icon.ID { return k.AddIcon(rexui.ToolbarSymbol(sym, fb)) }
 	pt := theme.MacWindow.Capsule.Glyph // AppKit's toolbar symbols, in both styles
 	ic := &d.ic
-	ic.sidebar = tool("sidebar.left", '▤', pt)
-	ic.inspector = tool("sidebar.right", '▥', pt)
+	ic.sidebar = tool("sidebar.left", '▤')
+	ic.inspector = tool("sidebar.right", '▥')
 	ic.back = k.AddIcon(icon.Spec{Symbol: "chevron.left", Fallback: '‹', Pt: pt, Weight: 0.23})
 	ic.forward = k.AddIcon(icon.Spec{Symbol: "chevron.right", Fallback: '›', Pt: pt, Weight: 0.23})
-	ic.grid = tool("square.grid.2x2", '▦', pt)
-	ic.list = tool("list.bullet", '≡', pt)
-	ic.columns = tool("rectangle.split.3x1", '▥', pt)
-	ic.gallery = tool("square.grid.3x1.below.line.grid.1x2", '▭', pt)
-	ic.group = tool("square.grid.3x1.folder.badge.plus", '▦', pt)
-	ic.action = tool("ellipsis.circle", '…', pt)
-	ic.share = tool("square.and.arrow.up", '⇪', pt)
-	ic.tag = tool("tag", '⌗', pt)
-	ic.search = tool("magnifyingglass", '⌕', pt)
-	ic.trash = tool("trash", '⌫', pt)
-	ic.compose = tool("square.and.pencil", '✎', pt)
-	ic.format = tool("textformat", 'A', pt)
-	ic.checklist = tool("checklist", '☑', pt)
-	ic.table = tool("tablecells", '▦', pt)
-	ic.media = tool("photo.on.rectangle", '▨', pt)
-	ic.plus = tool("plus", '+', pt)
+	ic.grid = tool("square.grid.2x2", '▦')
+	ic.list = tool("list.bullet", '≡')
+	ic.columns = tool("rectangle.split.3x1", '▥')
+	ic.gallery = tool("square.grid.3x1.below.line.grid.1x2", '▭')
+	ic.group = tool("square.grid.3x1.folder.badge.plus", '▦')
+	ic.action = tool("ellipsis.circle", '…')
+	ic.share = tool("square.and.arrow.up", '⇪')
+	ic.tag = tool("tag", '⌗')
+	ic.search = tool("magnifyingglass", '⌕')
+	ic.trash = tool("trash", '⌫')
+	ic.compose = tool("square.and.pencil", '✎')
+	ic.format = tool("textformat", 'A')
+	ic.checklist = tool("checklist", '☑')
+	ic.table = tool("tablecells", '▦')
+	ic.media = tool("photo.on.rectangle", '▨')
+	ic.plus = tool("plus", '+')
 	si := &rexui.SidebarIcons
 	ic.recents, ic.apps, ic.desktop, ic.docs = k.AddIcon(si.Recents), k.AddIcon(si.Applications), k.AddIcon(si.Desktop), k.AddIcon(si.Documents)
 	ic.downloads, ic.cloud, ic.shared, ic.disk = k.AddIcon(si.Downloads), k.AddIcon(si.Cloud), k.AddIcon(si.Shared), k.AddIcon(si.Disk)
