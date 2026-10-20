@@ -30,6 +30,8 @@ type ShotOptions struct {
 	Scrolled bool
 	// Legacy renders legacy scroll bars (overlay ones otherwise).
 	Legacy bool
+	// Nested is Options.Nested.
+	Nested bool
 }
 
 // shot is the demo with the window state an offscreen run lacks.
@@ -52,7 +54,7 @@ func render(o ShotOptions) (*app.Offscreen, *Demo, *image.RGBA, error) {
 	if o.Scale <= 0 {
 		o.Scale = 2
 	}
-	d := New(Options{Scene: o.Scene, Preference: o.Preference, Traffic: true, Still: true, Scrolled: o.Scrolled, Legacy: o.Legacy})
+	d := New(Options{Scene: o.Scene, Preference: o.Preference, Traffic: true, Still: true, Scrolled: o.Scrolled, Legacy: o.Legacy, Nested: o.Nested})
 	return renderDemo(d, o)
 }
 
