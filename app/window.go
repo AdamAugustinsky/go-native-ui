@@ -187,6 +187,8 @@ type winState struct {
 	cmd       cmdMask    // window commands waiting for the safe point
 	frameWant [4]float64 // SetFrame's frame
 	edited    bool       // SetDocumentEdited's state
+
+	ownTex *winUploader // the textures the window's widgets made on the shared renderer
 }
 
 // command applies window command c now when the app is at a safe point, and
@@ -273,9 +275,9 @@ func (a *App) Windows(dst []*Win) []*Win {
 // menu bar and the Dock) and its scale, in the space of Win.Frame.
 type Screen = platform.ScreenInfo
 
-// Screens appends the displays to dst, the primary one first, and returns
-// it; with room in dst it allocates nothing. Main thread. Nil on Linux so
-// far (the displays are not read there yet).
+// Screens returns the displays, the primary one first, in dst's storage
+// (dst[:0], grown when short); with room in dst it allocates nothing. Main
+// thread. Empty on Linux so far (the displays are not read there yet).
 func Screens(dst []Screen) []Screen { return platform.ScreensInto(dst[:0]) }
 
 // The resources the windows share (D30), made with the first window and
@@ -328,6 +330,34 @@ func (a *App) sharedText() (*text.System, error) {
 		s.text = t
 	}
 	return s.text, nil
+}
+
+// winUploader is a window's widgets' way to the shared renderer
+// (ui.Context.Uploader: a kit's icon atlas makes its texture with it). It
+// remembers what they made and frees it when the window closes: the
+// renderer outlives the window and would keep it.
+type winUploader struct {
+	r    *gpu.Renderer
+	made []gpu.TextureID
+}
+
+func (u *winUploader) NewTexture(kind gpu.TextureKind, w, h int) gpu.TextureID {
+	t := u.r.NewTexture(kind, w, h)
+	u.made = append(u.made, t)
+	return t
+}
+
+func (u *winUploader) Upload(t gpu.TextureID, x, y, w, h int, pixels []byte, stride int) {
+	u.r.Upload(t, x, y, w, h, pixels, stride)
+}
+
+// free frees the window's textures (the frames in flight that sample them
+// keep them until they finish: Renderer.FreeTexture).
+func (u *winUploader) free() {
+	for _, t := range u.made {
+		u.r.FreeTexture(t)
+	}
+	u.made = u.made[:0]
 }
 
 // releaseShared releases what the windows shared, once none is open: the

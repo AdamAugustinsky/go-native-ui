@@ -689,6 +689,9 @@ func osWake() { osSignalApp() }
 // has (menus, key equivalents, Apple events), and reports whether a wake
 // arrived. Main thread; not with a window open (its Wait is the pump then).
 func WaitApp(timeoutNs int64) bool {
+	reap() // the last window's objects (windows_darwin.go)
+	pumpDepth++
+	defer func() { pumpDepth-- }()
 	F := objc.F
 	pool := F.Call0(objc.PoolPush)
 	until := appObj.distantFuture

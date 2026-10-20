@@ -316,8 +316,12 @@ func (w *Window) PopUpMenu(p *Popup) int {
 		x, y = x0-listInsetX+listTextX, w.hPt-(y0+y1)/2+listItemH/2
 	}
 	nativeMenus.chosen, nativeMenus.root, nativeMenus.popup = -1, m, w
+	depth := nativeMenus.depth
 	objc.F.Reset().Arg(uintptr(m)).Arg(uintptr(selPopUpMenu)).Arg(uintptr(item)).ArgPoint(x, y).Arg(uintptr(w.view)).Call(objc.MsgSend)
 	nativeMenus.root, nativeMenus.popup = 0, nil
+	// The tracking is over: a menu cancelled as it opened gets no
+	// menuDidClose:, and must not leave the app in a native loop.
+	nativeMenus.depth = min(nativeMenus.depth, depth)
 	return nativeMenus.chosen
 }
 

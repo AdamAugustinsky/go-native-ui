@@ -53,8 +53,9 @@ func (w *Window) SetFrameRect(x, y, width, height float64) {
 	if width <= 0 || height <= 0 {
 		return
 	}
+	bottom := primaryTop() - y - height // before the call is assembled: it uses the same frame
 	objc.F.Reset().Arg(uintptr(w.win)).Arg(uintptr(selSetFrameDisplay)).
-		ArgRect(x, primaryTop()-y-height, width, height).ArgBool(true).Call(objc.MsgSend)
+		ArgRect(x, bottom, width, height).ArgBool(true).Call(objc.MsgSend)
 }
 
 // ToggleFullScreen enters full screen or leaves it, animated (toggleFullScreen:).

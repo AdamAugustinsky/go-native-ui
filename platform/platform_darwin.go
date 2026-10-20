@@ -113,6 +113,7 @@ type Window struct {
 	// The registry (windows_darwin.go).
 	slot       int         // the window's slot, its objects' index ivars minus 1
 	registered bool        // open: in the registry
+	buried     bool        // closed: Open's references are handed to the next Pump
 	wakeMark   atomic.Bool // Wake: this window has something new from another goroutine
 }
 

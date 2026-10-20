@@ -288,7 +288,7 @@ func RunWith(cfg Config, b Builder, o RunOptions) (RunResult, error) {
 	if err != nil {
 		return res, err
 	}
-	defer a.close()
+	defer a.closeAll() // the windows OpenWindow opened too
 	a.verbose = o.Verbose
 	if !o.ExitFirst {
 		a.Win.SetFrameHandler(a.frameHandler)
@@ -328,6 +328,8 @@ func openWindowed(cfg Config, b Builder, st *StartupReport, nativeMenus bool) (*
 // tEntry is when the opening started (the startup report's origin) and age
 // the process's age then (-1 unknown).
 func (a *App) openWin(cfg Config, b Builder, st *StartupReport, nativeMenus bool, tEntry, age int64) error {
+	pool := framePoolPush() // Init and the setup may create native views outside any frame
+	defer framePoolPop(pool)
 	execNs := int64(-1)
 	st.ExecToMainMs, st.ExecToOnGlassMs, st.ExecToFirstPresentMs = -1, -1, -1
 	if age >= 0 {
@@ -426,6 +428,8 @@ func (a *App) initUI() error {
 	a.UI.ClipboardSet = platform.SetClipboardText
 	if a.appObject != nil && a.atlas != nil {
 		a.UI.ShareAtlas(a.atlas) // the app's glyph pages, uploaded once for every window (D30)
+		a.ownTex = &winUploader{r: a.R}
+		a.UI.SetWidgetUploader(a.ownTex) // what the window's widgets make goes with it (window.go)
 	} else {
 		a.UI.AtlasSync(a.R)
 	}
@@ -465,8 +469,16 @@ func (a *App) close() {
 // (releaseShared), the renderer before that window's surface, as it waits
 // for the frames in flight.
 func (a *App) closeWin() {
+	pool := framePoolPush() // what releasing the window's objects autoreleases
+	defer framePoolPop(pool)
 	a.forget() // out of the app's windows (window.go)
 	last := len(a.wins) == 0
+	if a.ownTex != nil {
+		if !last {
+			a.ownTex.free() // the last window's go with the renderer
+		}
+		a.ownTex = nil
+	}
 	if last && a.R != nil {
 		a.R.Destroy()
 		a.r = nil

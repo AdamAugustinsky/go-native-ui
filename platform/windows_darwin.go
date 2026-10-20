@@ -6,6 +6,7 @@ import (
 	"errors"
 	"sync/atomic"
 
+	"gonativeui/internal/ffi"
 	"gonativeui/internal/objc"
 )
 
@@ -210,6 +211,7 @@ func fallbackWindow() *Window {
 // with events still queued (pushed between two pumps) does not block it.
 // Main thread.
 func Pump(timeoutNs int64) {
+	reap()
 	pending := false
 	for _, w := range openWindows() {
 		w.release()
@@ -225,6 +227,8 @@ func Pump(timeoutNs int64) {
 
 // pump runs nextEventMatchingMask until the timeout and routes the events.
 func pump(timeoutNs int64) {
+	pumpDepth++
+	defer func() { pumpDepth-- }()
 	F := objc.F
 	pool := F.Call0(objc.PoolPush)
 	until := appObj.distantFuture
@@ -337,4 +341,87 @@ func keyWindowOurs() *Window {
 // WindowNumber is the window's number in the window server (tests, tools).
 func (w *Window) WindowNumber() int { return int(objc.Send(w.win, selWindowNumber)) }
 
-var selWindowNumber = objc.Sel("windowNumber")
+var (
+	selWindowNumber = objc.Sel("windowNumber")
+	selDealloc      = objc.Sel("dealloc")
+)
+
+// WindowObjects counts the objects of Open's windows alive in the process,
+// for the open/close leak gate: once a closed window's objects are reaped
+// (the next Pump) the counts are back where they were before it opened.
+type WindowObjects struct {
+	Windows, Views, Delegates int64 // GNUIWindow, GNUIView, GNUIWindowDelegate
+	Pending                   int   // released by the next Pump
+}
+
+// LiveWindowObjects returns the current counts. Any goroutine for the
+// counts; Pending is the main thread's.
+func LiveWindowObjects() WindowObjects {
+	return WindowObjects{Windows: live.windows.Load(), Views: live.views.Load(), Delegates: live.delegates.Load(), Pending: len(graveyard)}
+}
+
+var live struct {
+	windows, views, delegates          atomic.Int64
+	windowMark, viewMark, delegateMark *objc.Ivar // set on the objects Open counted
+}
+
+// countInstances gives def a mark ivar and a dealloc that, on a marked
+// object, takes one off n; Open marks what it makes (mark). Dealloc may run
+// on any thread.
+func countInstances(def *objc.ClassDef, n *atomic.Int64) *objc.Ivar {
+	mark := def.Ivar("gnuiCounted")
+	def.Method(selDealloc, "v@:", func(c *ffi.CB) {
+		self := objc.ID(c.Int(0))
+		if mark.Get(self) != 0 {
+			mark.Set(self, 0)
+			n.Add(-1)
+		}
+		objc.SendSuper(c.Frame(), def.Superclass(), self, selDealloc)
+	})
+	return mark
+}
+
+// mark counts obj, made by Open, as alive until its dealloc.
+func mark(iv *objc.Ivar, obj objc.ID, n *atomic.Int64) {
+	if obj != 0 && iv.Get(obj) == 0 {
+		iv.Set(obj, 1)
+		n.Add(1)
+	}
+}
+
+// graveyard is the objects of the windows closed since the last Pump: Close
+// hands them over and Pump releases them at the top of the loop, so none
+// goes from under an AppKit callback or nested loop that asked for the
+// close while one of them is on its stack.
+var graveyard []objc.ID
+
+// bury hands obj (one reference Open owns) to the next Pump.
+func bury(obj objc.ID) {
+	if obj != 0 {
+		graveyard = append(graveyard, obj)
+	}
+}
+
+// pumpDepth is how many pumps are running: more than none is a pump nested
+// in a callout of another (a window opened from a performed selector waits
+// for its first frame on glass).
+var pumpDepth int
+
+// reap releases the closed windows' objects, in the order Close buried them
+// (the view and the delegate before the window that may still refer to
+// them), inside a pool: what their deallocation autoreleases goes with it.
+// Only from the top of the loop: not from a pump nested in a callout, nor
+// while AppKit runs a loop of its own (a window closed inside its own live
+// resize waits for the loop's end).
+func reap() {
+	if len(graveyard) == 0 || pumpDepth > 0 || NativeLoop() {
+		return
+	}
+	pool := objc.F.Call0(objc.PoolPush)
+	for i, obj := range graveyard {
+		objc.Send(obj, selReleaseObj)
+		graveyard[i] = 0
+	}
+	graveyard = graveyard[:0]
+	objc.F.Call1(objc.PoolPop, pool)
+}

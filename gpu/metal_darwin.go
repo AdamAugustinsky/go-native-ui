@@ -197,8 +197,16 @@ func NewSurfaceOn(d *Device, n platform.Native, w, h int32, scale float32) (*Sur
 	s.color0 = objc.Send1(objc.Send(s.rpd, selColorAttach), selObjectAtIndexed, 0)
 	objc.Send1(s.color0, selSetLoadAction, 2)  // MTLLoadActionClear
 	objc.Send1(s.color0, selSetStoreAction, 1) // MTLStoreActionStore
+	liveSurfaces.Add(1)
 	return s, nil
 }
+
+// liveSurfaces counts the surfaces created and not destroyed.
+var liveSurfaces atomic.Int64
+
+// LiveSurfaces is how many surfaces are created and not destroyed, for the
+// open/close leak gate.
+func LiveSurfaces() int64 { return liveSurfaces.Load() }
 
 // Resize sets the drawable size in physical pixels.
 func (s *Surface) Resize(w, h int32, scale float32) {
@@ -510,8 +518,13 @@ func (s *Surface) FrameSource() uintptr { return uintptr(s.layer) }
 // Destroy releases the surface's layer and its references to the device and
 // queue; other surfaces on the same device are not affected.
 func (s *Surface) Destroy() {
+	if s.layer == 0 {
+		return
+	}
 	objc.Send(s.rpd, selRelease)
 	objc.Send(s.layer, selRelease)
 	objc.Send(s.queue, selRelease)
 	objc.Send(s.device, selRelease)
+	s.rpd, s.layer, s.queue, s.device = 0, 0, 0, 0
+	liveSurfaces.Add(-1)
 }

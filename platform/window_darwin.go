@@ -82,6 +82,7 @@ func Open(o Options) (*Window, error) {
 		return nil, errors.New("platform: NSWindow init failed")
 	}
 	objc.Send1(w.win, selSetReleased, 0)
+	mark(live.windowMark, w.win, &live.windows)
 	w.publicOnly = o.PublicAPIOnly
 	if o.Titlebar > 0 {
 		w.titlebar, w.lights = float64(o.Titlebar), o.TrafficLights
@@ -94,6 +95,8 @@ func Open(o Options) (*Window, error) {
 	w.view = objc.ID(F.Reset().Arg(uintptr(w.view)).Arg(uintptr(selInitWithFrame)).
 		ArgRect(0, 0, width, height).Call(objc.MsgSend).R0())
 	delegate := objc.Send(objc.Send(delegateClass, selAlloc), objc.Sel("init"))
+	mark(live.viewMark, w.view, &live.views)
+	mark(live.delegateMark, delegate, &live.delegates)
 	w.content = w.view
 	w.openShell(&o, delegate, width, height)
 	objc.Send1(w.win, selSetContentView, uintptr(w.content))
@@ -116,6 +119,7 @@ func Open(o Options) (*Window, error) {
 		Arg(0x01 | 0x20 | 0x200 /* EnteredAndExited | ActiveInKeyWindow | InVisibleRect */).
 		Arg(uintptr(w.view)).Arg(0).Call(objc.MsgSend).R0())
 	objc.Send1(w.view, selAddTracking, uintptr(ta))
+	objc.Send(ta, selReleaseObj) // the view keeps it
 
 	w.wakeEv, w.distantPast, w.distantFuture = appObj.wakeEv, appObj.distantPast, appObj.distantFuture
 	if !appObj.tabbing {
@@ -126,6 +130,7 @@ func Open(o Options) (*Window, error) {
 		w.closeLights()
 		objc.Send(w.win, selClose)
 		w.closeShell()
+		w.buryObjects()
 		return nil, err
 	}
 	markOpen("view+setup")
@@ -141,6 +146,7 @@ func Open(o Options) (*Window, error) {
 		w.closeLights()
 		objc.Send(w.win, selClose)
 		w.closeShell()
+		w.buryObjects()
 		return nil, errors.New("platform: displayLinkWithTarget:selector: failed (macOS 14+ required)")
 	}
 	w.updateSize()
@@ -204,8 +210,13 @@ func (w *Window) Native() Native {
 	return Native{NSWindow: uintptr(w.win), NSView: uintptr(w.view), Transparent: w.HasMaterials(), w: w}
 }
 
-// Close closes the window.
+// Close closes the window. A second Close does nothing.
 func (w *Window) Close() {
+	if w.buried {
+		return
+	}
+	pool := objc.F.Call0(objc.PoolPush) // the caller may hold none: what closing autoreleases must not leak
+	defer objc.F.Call1(objc.PoolPop, pool)
 	forgetAssumedKey(w)
 	forgetPaste(w) // a read of the pasteboard for this window is not delivered (paste_darwin.go)
 	w.closeAux()   // sheets first: a window closed under a sheet never calls its completion
@@ -222,9 +233,23 @@ func (w *Window) Close() {
 	w.closeShell() // after close: nothing on screen changes
 	unregister(w)
 	forgetWindow(w)
+	w.buryObjects()
 	if secure.want && reg.n == 0 {
 		SetSecureInput(false) // the field that wanted it is gone; activation must not bring it back
 	}
+}
+
+// buryObjects detaches the closed window's delegate and hands Open's
+// references to its view, delegate and NSWindow to the next Pump (reap).
+func (w *Window) buryObjects() {
+	if w.win == 0 || w.buried {
+		return
+	}
+	w.buried = true
+	objc.Send1(w.win, selSetDelegate, 0)
+	bury(w.view)
+	bury(w.delegate)
+	bury(w.win)
 }
 
 // forgetWindow drops the app-wide references to a closed window: the menu

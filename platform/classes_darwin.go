@@ -28,10 +28,12 @@ func registerClasses() {
 	registerViewEdit(view)
 	registerViewDrag(view)
 	registerViewA11y(view)
+	live.viewMark = countInstances(view, &live.views)
 	viewClass = view.Register()
 	delegate := objc.Define("GNUIWindowDelegate", objc.Cls("NSObject"), []string{"NSWindowDelegate"})
 	registerWindowDelegate(delegate)
 	registerShell(delegate)
+	live.delegateMark = countInstances(delegate, &live.delegates)
 	delegateClass, delegateDef = delegate.Register(), delegate
 	registerShellClasses() // GNUIContainer, GNUIHostClip, GNUIWindow (host_darwin.go)
 	registerMenuTarget()

@@ -35,6 +35,9 @@ func registerWindowDelegate(d *objc.ClassDef) {
 func windowShouldClose(c *ffi.CB) {
 	if w := delegateWindow(objc.ID(c.Int(0))); w != nil {
 		w.q.push(Event{Kind: EvClose, Time: Now()})
+		// Asked outside an event (performClose: from code, the close
+		// button's accessibility press), nothing else ends the pump's wait.
+		WakeLoop()
 	}
 	c.RetBool(false)
 }

@@ -4,9 +4,22 @@ package ui
 // needs from a Context that the builder API does not give.
 
 // Uploader returns the renderer the Context syncs its glyph atlas to
-// (AtlasSync), nil before the first AtlasSync. A widget kit uses it to give its
-// icon atlas a texture on the same renderer.
-func (c *Context) Uploader() Uploader { return c.up }
+// (AtlasSync), nil before the first AtlasSync, or the uploader set with
+// SetWidgetUploader. A widget kit uses it to give its icon atlas a texture on
+// the same renderer.
+func (c *Context) Uploader() Uploader {
+	if c.widgetUp != nil {
+		return c.widgetUp
+	}
+	return c.up
+}
+
+// SetWidgetUploader sets what Uploader returns, on the renderer the atlas is
+// synced to, without changing where the atlas pages go: an app whose windows
+// share a renderer gives each window's widgets an uploader of the window's
+// own, which frees what they made when the window closes. Nil restores the
+// atlas's renderer.
+func (c *Context) SetWidgetUploader(u Uploader) { c.widgetUp = u }
 
 // WakeIn asks for another frame at most ns nanoseconds after the start of this
 // one although nothing animates (WakeAfter reports the earliest request of the

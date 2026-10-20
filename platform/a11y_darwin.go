@@ -55,8 +55,8 @@ var (
 	selAXObjectAt      = objc.Sel("objectAtIndex:")
 )
 
-// axDarwin is the bridge's state. There is one window (Open refuses a
-// second), so it is the package's, tied to the window it serves.
+// axDarwin is the bridge's state. It is the package's, tied to the one
+// window it serves (SetAXSource: the first that sets its source).
 type axDarwin struct {
 	core    axCore
 	w       *Window

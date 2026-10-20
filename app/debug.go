@@ -32,9 +32,9 @@ import (
 // on the user's layout (platform.Event.Char), and never reach the app. A
 // release build has no Debug menu, no chords and no inspector panel.
 //
-// The inspector is a panel in the window. The plan puts it in a second window;
-// that waits for F4 (more than one window), and InspectHost is where it will
-// plug in (inspect.go).
+// The inspector is a panel in the window. The plan puts it in a second window,
+// which OpenWindow can now open (F4); InspectHost is where it will plug in
+// (inspect.go).
 //
 // # What it costs
 //

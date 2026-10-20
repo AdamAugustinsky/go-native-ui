@@ -42,11 +42,11 @@ import (
 // with no such evidence fail it, on CI as well as locally, with the app's
 // state line.
 //
-// There is one LiveApp at a time: the platform has one window until F4
-// (more than one window of the framework's own). "Several windows" today
-// means the other windows of the process (OpenPlainWindow), which is what
-// the app-level flows need: a window other than ours takes the key, keeps
-// the application alive, and counts for the Dock's reopen.
+// There is one LiveApp at a time (one app per process). Its window is the
+// app's first; a test opens more of the framework's own with app.OpenWindow
+// inside Do (macOS, D30), and plain windows of the process with
+// OpenPlainWindow: a window other than ours takes the key, keeps the
+// application alive, and counts for the Dock's reopen.
 //
 //	func TestMain(m *testing.M) { widgettest.RunMain(m) }
 //
@@ -188,7 +188,7 @@ func StartLive(t testing.TB, cfg app.Config, b app.Builder) *LiveApp {
 func StartLiveWith(t testing.TB, cfg app.Config, b app.Builder, o LiveOptions) *LiveApp {
 	t.Helper()
 	if !liveActive.CompareAndSwap(false, true) {
-		t.Fatal("widgettest: a LiveApp is already running (the platform has one window), or an earlier one could not be closed")
+		t.Fatal("widgettest: a LiveApp is already running (one app per process), or an earlier one could not be closed")
 	}
 	l := &LiveApp{t: t, lim: o.withDefaults(), end: make(chan struct{}), sb: &sessionBuilder{Builder: b, t: t, first: make(chan struct{})}}
 	go func() {
@@ -428,7 +428,7 @@ func (l *LiveApp) callIdle(f func(a *app.App), limit, idle time.Duration) (res c
 }
 
 // mainInEventWait reports whether the main goroutine is waiting in the
-// platform's nextEvent with no callback of ours above it: the thread is alive
+// platform's appNextEvent with no callback of ours above it: the thread is alive
 // and idle, waiting for AppKit, not busy and not blocked in a callback. It
 // reads the goroutine's stack (the main goroutine is goroutine 1).
 func mainInEventWait() bool {
@@ -452,11 +452,11 @@ func inEventWait(dump string) bool {
 	if j := strings.Index(g, "\n\n"); j >= 0 {
 		g = g[:j]
 	}
-	k := strings.Index(g, "platform.(*Window).nextEvent")
+	k := strings.Index(g, "platform.appNextEvent") // the app-wide pump's (D30)
 	if k < 0 {
 		return false
 	}
-	above := g[:k] // the frames inside nextEvent, innermost first: only the call into AppKit
+	above := g[:k] // the frames inside appNextEvent, innermost first: only the call into AppKit
 	return !strings.Contains(above, "cbDispatch") && !strings.Contains(above, "cgocallback")
 }
 
