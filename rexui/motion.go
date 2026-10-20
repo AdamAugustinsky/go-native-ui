@@ -18,20 +18,45 @@ func reduced(k *base.Kit) bool {
 	return k.ReduceMotion || k.Theme().Settings.ReduceMotion
 }
 
-// loops reports whether a looping animation in the box whose rectangle (the
-// previous frame's) is r may run now: motion is not reduced, the window is
-// showing (not minimised, hidden or covered: ui.Input.Hidden) and the box is
-// in view. Before the box has been laid out once its rectangle is empty and
-// the answer is yes, so that the frame that lays it out is not the last.
-// A loop that is not running asks for no frames: an idle window draws none.
-func loops(k *base.Kit, r [4]float32) bool {
-	if reduced(k) || k.Context().Input().Hidden {
+// loops reports whether a looping animation in box id may run now: motion is
+// not reduced, the window is showing (not minimised, hidden or covered:
+// ui.Input.Hidden), and the box is in view as the previous frame laid it
+// out, not hidden by a flow's MaxLines. Before the box has been laid out
+// once its rectangle is empty and the answer is yes, so that the frame that
+// lays it out is not the last. A loop that is not running asks for no
+// frames: an idle window draws none.
+func loops(k *base.Kit, id ui.ID) bool {
+	c := k.Context()
+	if reduced(k) || c.Input().Hidden || c.WasHidden(id) {
 		return false
 	}
+	r := c.Rect(id)
 	if r[2] <= r[0] || r[3] <= r[1] {
 		return true
 	}
 	return k.Visible(r)
+}
+
+// shown reports whether the box keyed key showed in the previous frame: the
+// window is showing (not ui.Input.Hidden), and the box was laid out in view
+// and not hidden by a flow's MaxLines. A transition of a box that did not
+// show jumps to its end: it would ask for frames nobody sees.
+func shown(k *base.Kit, key ui.Key) bool {
+	c := k.Context()
+	if c.Input().Hidden {
+		return false
+	}
+	id, ok := c.BoxOf(key)
+	return ok && !c.WasHidden(id) && k.Visible(c.Rect(id))
+}
+
+// disabledFlag is ui.Disabled in a disabled region (base.Kit.BeginDisabled):
+// what an indicator's root box carries so that it reports SemDisabled.
+func disabledFlag(k *base.Kit) ui.Flags {
+	if k.Disabled() {
+		return ui.Disabled
+	}
+	return 0
 }
 
 // cycle is where the frame's clock is in a cycle of period ns, 0 to 1.

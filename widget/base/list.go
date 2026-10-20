@@ -168,6 +168,7 @@ type List struct {
 	ring    bool
 	axes    ScrollAxes
 	table   bool
+	tree    bool // an outline's: rows export their level
 	off     bool // built in a disabled region: the rows are disabled too
 
 	// the row being built
@@ -236,7 +237,7 @@ func (k *Kit) beginList(label string, st *ListState, rows int, table bool, o Lis
 
 	k.ApplySize(ui.Pct(1), ui.Pct(1))
 	skey := ui.KeyN(okey, 1)
-	if pad := k.legacyReserve(skey, ScrollVertical); pad != [2]float32{} {
+	if pad := k.legacyReserve(skey, ScrollVertical, st.Scroll.Size); pad != [2]float32{} {
 		c.NextPadding(0, 0, pad[0], pad[1]) // room for a legacy scroll bar
 	}
 	l.o = c.BoxKeyed(ui.Clip|o.Flags, okey, nil)
@@ -651,6 +652,9 @@ func (l *List) BeginRow(rs *RowState, name []byte, flags ui.Flags) ui.ID {
 		c.NextSemActions(ui.ActPress | ui.ActFocus | ui.ActScrollIntoView | ui.ActExpand | ui.ActCollapse)
 	}
 	c.NextSemPos(rs.Row, l.Rows)
+	if l.tree {
+		c.NextSemLevel(rs.Level + 1)
+	}
 	if name != nil {
 		c.NextSemNameBytes(name)
 	}
@@ -719,6 +723,14 @@ func (l *List) FillerRows() int {
 		return 0
 	}
 	return int(math.Ceil(float64((view - used) / l.rowH)))
+}
+
+// FillerTop is where the ith row of the room below the last row
+// (FillerRows) shows, in pixels from the top of the list's scrolling box,
+// stretch included. A recipe places those rows there as floating boxes, so
+// that they are not content: they never make the list scrollable.
+func (l *List) FillerTop(i int) float32 {
+	return l.padT + float32(l.Rows+i)*l.rowH - float32(l.st.disp)
 }
 
 // BoxKey is the key of the list's outer box; the recipe keys its own boxes in

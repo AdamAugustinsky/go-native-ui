@@ -111,10 +111,10 @@ type ListRecipe struct {
 	Rounded [NumListStyles]bool
 	// LegacyKnob colours a legacy scroll bar's knob, an opaque grey on the
 	// list's background (measured #7A7A7A on white, #9F9F9F on #1E1E1E), and
-	// LegacyKnobInset is the room between it and the track's sides, in
-	// points (3 of AppKit's 17-pt scroller).
-	LegacyKnob      Tint
-	LegacyKnobInset float32
+	// LegacySlot the rounded slot it moves in, as wide and as far from the
+	// track's sides and ends (theme.Lines.ScrollerKnobInset; measured
+	// #F3F3F3 on white, #292929 on #1E1E1E).
+	LegacyKnob, LegacySlot Tint
 }
 
 // ListLook is the recipe of lists, tables and outlines.
@@ -128,7 +128,7 @@ var ListLook = ListRecipe{
 	PadY:       [NumListStyles]float32{ListFullWidth: 0, ListInset: 10},
 	HeaderPadY: [NumListStyles]float32{ListFullWidth: 0, ListInset: 5},
 	Rounded:    [NumListStyles]bool{ListInset: true},
-	LegacyKnob: OfAlpha(theme.Text, 0.52, 0.58), LegacyKnobInset: 3,
+	LegacyKnob: OfAlpha(theme.Text, 0.52, 0.58), LegacySlot: OfAlpha(theme.Text, 0.047, 0.047),
 }
 
 // List is an open list: base's List and the look of its rows.
@@ -183,12 +183,14 @@ func BeginList(k *base.Kit, label string, st *base.ListState, rows int, o ListOp
 // flow left to right. It ends the row before it.
 func (l *List) Row(r int, item uint32, name []byte) base.RowState {
 	rs := l.RowState(r, item)
-	l.begin(&l.List, &rs, name)
+	l.begin(&l.List, nil, &rs, name)
 	return rs
 }
 
-// begin builds the row rs of l in the look and pushes it.
-func (lk *rowLook) begin(l *base.List, rs *base.RowState, name []byte) ui.ID {
+// begin builds the row rs of l in the look and pushes it; an outline's row
+// (ol not nil) through the outline, which takes its expand and collapse
+// requests.
+func (lk *rowLook) begin(l *base.List, ol *base.Outline, rs *base.RowState, name []byte) ui.ID {
 	k := l.Kit()
 	c, r := k.Context(), k.Theme()
 	rc := &ListLook
@@ -227,7 +229,12 @@ func (lk *rowLook) begin(l *base.List, rs *base.RowState, name []byte) ui.ID {
 		lk.fgTint, lk.fg2 = rc.Label, rc.Label2.RGBA(r)
 	}
 	lk.fg = lk.fgTint.RGBA(r)
-	id := l.BeginRow(rs, name, flags)
+	var id ui.ID
+	if ol != nil {
+		id = ol.BeginRow(rs, name, flags) // an outline's row: it takes expand and collapse requests
+	} else {
+		id = l.BeginRow(rs, name, flags)
+	}
 	if rs.Selected && rs.NextSelected && rc.Rounded[lk.style] {
 		// the line between two rows of an inset block, in the upper one's
 		// last point
@@ -284,18 +291,20 @@ func (lk *rowLook) filler(l *base.List) {
 	k := l.Kit()
 	c, r := k.Context(), k.Theme()
 	rc := &ListLook
+	// floating, at the rows' places: the stripes are not content and never
+	// make the list scrollable, with no rows at all either
+	sr := c.Rect(l.ScrollView().Inner)
+	w := sr[2] - sr[0] - 2*l.PadX()
 	for i := 0; i < n; i++ {
-		row := l.Rows + i
-		var flags ui.Flags
-		if row&1 == 1 {
-			flags = ui.DrawBackground
-			c.NextBG(rc.Stripe.RGBA(r))
-			if rc.Rounded[lk.style] {
-				c.NextRadius(r.Radii.Selection)
-			}
+		if (l.Rows+i)&1 == 0 { // the even rows are not striped
+			continue
 		}
-		c.NextSize(ui.Pct(1), ui.Px(l.RowH()))
-		c.BoxKeyed(flags, ui.KeyN(l.BoxKey(), 3<<32|uint64(i)), nil)
+		c.NextBG(rc.Stripe.RGBA(r))
+		if rc.Rounded[lk.style] {
+			c.NextRadius(r.Radii.Selection)
+		}
+		theme.At(c, l.PadX(), l.FillerTop(i), w, l.RowH())
+		c.BoxKeyed(ui.DrawBackground|base.Floating, ui.KeyN(l.BoxKey(), 3<<32|uint64(i)), nil)
 	}
 }
 
@@ -354,15 +363,23 @@ func ScrollBars(k *base.Kit, v *base.ScrollView) {
 		k.BeginScrollBar(b)
 		// overlay: a thin translucent knob near the edge that thickens under
 		// the pointer; legacy: an opaque one filling the track but for an
-		// inset each side
+		// inset each side, over its slot
 		tw := theme.Snap(px.ScrollThumbW * (1 + b.Hot))
 		in := theme.Snap(px.BorderW * 2)
 		col := theme.WithAlpha(r.Pal.ScrollThumb, b.Show)
 		if b.Legacy {
-			in = theme.Snap(k.Pt(ListLook.LegacyKnobInset))
+			in = theme.Snap(r.Lines.ScrollerKnobInset)
 			tw = max(bw-2*in, theme.Snap(px.ScrollThumbW))
 			in = (bw - tw) / 2
 			col = ListLook.LegacyKnob.RGBA(r)
+			if a == 1 {
+				theme.At(c, in, b.SlotOff, tw, b.SlotLen)
+			} else {
+				theme.At(c, b.SlotOff, in, b.SlotLen, tw)
+			}
+			c.NextBG(ListLook.LegacySlot.RGBA(r))
+			c.NextRadius(tw / 2)
+			c.BoxKeyed(ui.DrawBackground|base.Floating, ui.KeyN(b.Key, 2), nil)
 		}
 		if a == 1 {
 			theme.At(c, bw-tw-in, b.ThumbOff, tw, b.ThumbLen)
