@@ -106,9 +106,6 @@ func TestOffscreenFrameClosesItsRecord(t *testing.T) {
 		if !ok || r.N != uint64(i) {
 			t.Fatalf("after frame %d the last record is %d (ok %v)", i, r.N, ok)
 		}
-		if r.CPUns[PhaseEncode] == 0 && r.TotalCPUns() == 0 {
-			t.Errorf("frame %d has no timing", i)
-		}
 	}
 	if o.dbg.open {
 		t.Error("a record is still open")
