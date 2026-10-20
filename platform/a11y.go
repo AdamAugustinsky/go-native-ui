@@ -6,6 +6,9 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"unicode/utf8"
+
+	"gonativeui/text"
 )
 
 // The accessibility bridge (phase 6, N7; the contract is
@@ -140,7 +143,7 @@ type AXNode struct {
 	Pos                             [2]int32   // index in its list and the list's length (0: unknown)
 	TextSel                         [2]int32   // anchor and caret, bytes of the text (Text)
 	Level                           int32      // depth in an outline (1: a root row), a heading's level
-	Host                            uint32     // the HostID of an AXRoleHost node
+	Host                            uint32     // the HostID of the native view in the node (an AXRoleHost node, or one with a role of its own around it)
 	Text                            AXTextKind // which text has geometry
 }
 
@@ -152,6 +155,9 @@ type AXTree struct {
 	Bytes []byte
 	// Announce is text to announce now (a span of Bytes), empty for none.
 	Announce [2]uint32
+	// AnnounceSeq numbers the announcement (ui.SemTree.AnnounceSeq): one is
+	// posted once, and a new one also when its text is the last one's.
+	AnnounceSeq uint32
 }
 
 // Text returns the bytes of a span of t.
@@ -173,7 +179,7 @@ func (t *AXTree) text(n *AXNode) []byte {
 
 // Equal reports whether t and u are the same tree.
 func (t *AXTree) Equal(u *AXTree) bool {
-	if len(t.Nodes) != len(u.Nodes) || string(t.Bytes) != string(u.Bytes) || t.Announce != u.Announce {
+	if len(t.Nodes) != len(u.Nodes) || string(t.Bytes) != string(u.Bytes) || t.Announce != u.Announce || t.AnnounceSeq != u.AnnounceSeq {
 		return false
 	}
 	for i := range t.Nodes {
@@ -192,14 +198,18 @@ func (t *AXTree) Equal(u *AXTree) bool {
 //
 // The text functions answer for the node with the given key and the text that
 // has geometry (AXNode.Text), in bytes and window pixels: the line an offset
-// is on, the bytes of a line, the rectangle a range covers, and the offset
-// nearest to a point. AXHelp appends the node's help text (its tooltip).
+// is on, the bytes of a line, the rectangle a range covers, the offset
+// nearest to a point, and the bytes that show. AXHelp appends the node's help
+// text (its tooltip). All of them answer from the frame AXExport last
+// published; while the app is building the next one they answer nothing (ok
+// false, dst unchanged), and the bridge falls back to the node's own data.
 type AXSource interface {
 	AXExport(dst *AXTree) bool
 	AXLine(key uint64, off int) (line int, ok bool)
 	AXLineRange(key uint64, line int) (from, to int, ok bool)
 	AXBounds(key uint64, from, to int) (r [4]float32, ok bool)
 	AXOffset(key uint64, x, y float32) (off int, ok bool)
+	AXVisible(key uint64) (from, to int, ok bool)
 	AXHelp(key uint64, dst []byte) []byte
 }
 
@@ -267,6 +277,8 @@ type axCore struct {
 	last   []uint64  // scratch: per node, the key of its last child seen
 	focus  int32     // the slot of the focused node, -1 for none
 	syncs  int       // SyncAX calls that exported a tree (tests)
+	depth  []int32   // scratch: per node, its depth (the window's is 0)
+	ann    uint32    // the AnnounceSeq last posted
 }
 
 func (c *axCore) tree() *AXTree { return &c.trees[c.cur] }
@@ -307,6 +319,7 @@ func (c *axCore) begin(export func(*AXTree) bool) {
 	}
 	c.sync(export)
 	c.events = c.events[:0]
+	c.ann = c.tree().AnnounceSeq // what the app said before anything listened is not repeated
 }
 
 // sync exports the next tree into the other buffer and diffs it with the
@@ -338,13 +351,23 @@ func (c *axCore) diff(prev, cur *AXTree) {
 	}
 	c.last = c.last[:len(cur.Nodes)]
 	clear(c.last)
+	if cap(c.depth) < len(cur.Nodes) {
+		c.depth = make([]int32, len(cur.Nodes), cap(cur.Nodes))
+	}
+	c.depth = c.depth[:len(cur.Nodes)]
+	c.depth[0] = 0
 	rootLayout := false
 	focus := int32(-1)
+	moved := int32(-1) // the nearest common container of the nodes that moved or were resized
 	for i := 1; i < len(cur.Nodes); i++ {
 		n := &cur.Nodes[i]
 		var pkey uint64
+		c.depth[i] = 0
 		if n.Parent > 0 {
 			pkey = cur.Nodes[n.Parent].Key
+			c.depth[i] = c.depth[n.Parent] + 1
+		} else if n.Parent == 0 {
+			c.depth[i] = 1
 		}
 		var prevSib uint64
 		if n.Parent >= 0 {
@@ -387,6 +410,9 @@ func (c *axCore) diff(prev, cur *AXTree) {
 		if o == nil {
 			continue
 		}
+		if n.Bounds != o.Bounds && n.Parent >= 0 {
+			moved = c.common(cur, moved, n.Parent)
+		}
 		nameCh := string(cur.Text(n.Name)) != string(prev.Text(o.Name))
 		valCh := string(cur.Text(n.Value)) != string(prev.Text(o.Value)) || n.Range[2] != o.Range[2] ||
 			n.State&(AXChecked|AXMixed) != o.State&(AXChecked|AXMixed)
@@ -399,11 +425,17 @@ func (c *axCore) diff(prev, cur *AXTree) {
 		if valCh || n.Role != o.Role {
 			sl.pend |= noteValue
 		}
+		// A control labelled by its content: its label is a descendant's
+		// name, which may have changed (axContentName looks three levels
+		// down, so each node is compared by at most three such ancestors).
+		if !nameCh && n.Name[1] == 0 && axLabelledByContent(n.Role) && string(axLabel(cur, n)) != string(axLabel(prev, o)) {
+			sl.pend |= noteTitle
+		}
 		if n.TextSel != o.TextSel && n.Text != AXTextNone {
 			sl.pend |= noteSelectedText
 		}
 		if (n.State^o.State)&AXSelected != 0 && n.Parent > 0 {
-			if ps, ok := c.byKey[pkey]; ok {
+			if ps, ok := c.byKey[cur.Nodes[axOwner(cur, n.Parent)].Key]; ok {
 				c.slots[ps].pend |= noteSelectedRows
 			}
 		}
@@ -417,6 +449,12 @@ func (c *axCore) diff(prev, cur *AXTree) {
 		if n.State&AXLive != 0 && (nameCh || valCh) {
 			sl.pend |= noteLive
 		}
+	}
+	switch {
+	case moved == 0:
+		rootLayout = true
+	case moved > 0:
+		rootLayout = c.markLayout(cur.Nodes[moved].Key) || rootLayout
 	}
 	// The elements whose nodes are gone: their parents' children changed.
 	c.dead = c.dead[:0]
@@ -466,9 +504,40 @@ func (c *axCore) diff(prev, cur *AXTree) {
 			c.events = append(c.events, ev)
 		}
 	}
-	if !first && cur.Announce[1] > 0 {
+	if !first && cur.Announce[1] > 0 && cur.AnnounceSeq != c.ann {
+		c.ann = cur.AnnounceSeq
 		c.events = append(c.events, axEvent{note: noteLive, slot: -1})
 	}
+}
+
+// common returns the nearest common ancestor of nodes a (-1: none yet) and b
+// of t, by their depths (c.depth, filled up to b).
+func (c *axCore) common(t *AXTree, a, b int32) int32 {
+	if a < 0 {
+		return b
+	}
+	for a != b && a > 0 && b > 0 {
+		if c.depth[a] >= c.depth[b] {
+			a = t.Nodes[a].Parent
+		} else {
+			b = t.Nodes[b].Parent
+		}
+	}
+	if a != b {
+		return 0
+	}
+	return a
+}
+
+// axOwner is the list, table or outline that node i (a row's parent) belongs
+// to: i itself or its nearest such ancestor; i when there is none.
+func axOwner(t *AXTree, i int32) int32 {
+	for p := i; p > 0; p = t.Nodes[p].Parent {
+		if r := t.Nodes[p].Role; r == AXRoleList || r == AXRoleTable {
+			return p
+		}
+	}
+	return i
 }
 
 // emit records the notes p of slot s, one event each, in noteNames' order.
@@ -922,6 +991,12 @@ func AXDump(t *AXTree) string {
 			if n.Pos[1] > 0 {
 				st = append(st, fmt.Sprintf("index=%d/%d", n.Pos[0], n.Pos[1]))
 			}
+			if n.Role == AXRoleList || n.Role == AXRoleTable {
+				st = append(st, fmt.Sprintf("rows=%d", axRowCount(t, ch)))
+				if n.Role == AXRoleTable {
+					st = append(st, fmt.Sprintf("columns=%d", axColumnCount(t, ch)))
+				}
+			}
 			if len(st) > 0 {
 				b.WriteString(" [" + strings.Join(st, " ") + "]")
 			}
@@ -939,6 +1014,9 @@ func AXDump(t *AXTree) string {
 			}
 			b.WriteByte('\n')
 			walk(ch, depth+1)
+			if n.Host != 0 { // a host box with a role of its own: the native view is inside
+				fmt.Fprintf(&b, "%sHost #%d\n", strings.Repeat("  ", depth+1), n.Host)
+			}
 		}
 	}
 	walk(0, 1)
@@ -948,10 +1026,108 @@ func AXDump(t *AXTree) string {
 // utf16Count is the length of UTF-8 text b in UTF-16 units.
 func utf16Count(b []byte) int { return int(utf16Len(b)) }
 
-// byteOfUnit is the byte offset of UTF-16 offset u in UTF-8 text b.
-func byteOfUnit(b []byte, u int) int {
-	if u <= 0 {
-		return 0
+// unitToByte is the byte offset in UTF-8 text b of the character that holds
+// UTF-16 offset u: an offset inside a surrogate pair rounds down to the pair's
+// start; one past the end is the end.
+func unitToByte(b []byte, u int) int {
+	n := 0
+	for i := 0; i < len(b); {
+		r, size := utf8.DecodeRune(b[i:])
+		w := 1
+		if r >= 0x10000 {
+			w = 2
+		}
+		if n+w > u {
+			return i
+		}
+		n += w
+		i += size
 	}
-	return u16ToByte(b, uintptr(u))
+	return len(b)
+}
+
+// charRange is the UTF-16 range of the composed character sequence (the
+// grapheme cluster: a surrogate pair, a letter with its combining marks, an
+// emoji ZWJ sequence) that holds byte offset off of b.
+func charRange(b []byte, off int) (loc, n uintptr) {
+	off = min(max(off, 0), len(b))
+	if off == len(b) {
+		return unitRange(b, off, off)
+	}
+	s := text.GraphemeStart(b, off)
+	return unitRange(b, s, text.NextGrapheme(b, s))
+}
+
+// unitRange converts the byte range [lo, hi) of b to UTF-16 units.
+func unitRange(b []byte, lo, hi int) (loc, n uintptr) {
+	lo, hi = min(max(lo, 0), len(b)), min(max(hi, 0), len(b))
+	if hi < lo {
+		lo, hi = hi, lo
+	}
+	return uintptr(utf16Count(b[:lo])), uintptr(utf16Count(b[lo:hi]))
+}
+
+// byteRange converts the UTF-16 range {loc, n} of b to bytes.
+func byteRange(b []byte, loc, n uintptr) (lo, hi int) {
+	lo = unitToByte(b, int(min(loc, 1<<31)))
+	hi = unitToByte(b, int(min(loc+min(n, 1<<31), 1<<31)))
+	return lo, max(hi, lo)
+}
+
+// rows appends the rows of list or table node i: its children and its scroll
+// area's or group's children that are rows.
+func axRows(t *AXTree, i int32, dst []int32, selectedOnly bool) []int32 {
+	add := func(ch int32) {
+		n := &t.Nodes[ch]
+		if (n.Role == AXRoleRow || n.Role == AXRoleListItem) && (!selectedOnly || n.State&AXSelected != 0) {
+			dst = append(dst, ch)
+		}
+	}
+	for ch := t.Nodes[i].FirstChild; ch >= 0; ch = t.Nodes[ch].NextSibling {
+		add(ch)
+		if r := t.Nodes[ch].Role; r == AXRoleScrollArea || r == AXRoleGroup {
+			for g := t.Nodes[ch].FirstChild; g >= 0; g = t.Nodes[g].NextSibling {
+				add(g)
+			}
+		}
+	}
+	return dst
+}
+
+// axRowCount is the number of rows of list or table node i: the total its
+// rows report (a virtual list builds only the visible ones), or the rows
+// built.
+func axRowCount(t *AXTree, i int32) int {
+	var buf [8]int32
+	for ch := t.Nodes[i].FirstChild; ch >= 0; ch = t.Nodes[ch].NextSibling {
+		n := &t.Nodes[ch]
+		if (n.Role == AXRoleRow || n.Role == AXRoleListItem) && n.Pos[1] > 0 {
+			return int(n.Pos[1])
+		}
+	}
+	rows := axRows(t, i, buf[:0], false)
+	for _, r := range rows {
+		if p := t.Nodes[r].Pos[1]; p > 0 {
+			return int(p)
+		}
+	}
+	return len(rows)
+}
+
+// axColumnCount is the number of columns of table node i: its column
+// headers (at most two levels down), or 1.
+func axColumnCount(t *AXTree, i int32) int {
+	n := 0
+	var walk func(ch int32, depth int)
+	walk = func(ch int32, depth int) {
+		for ; ch >= 0; ch = t.Nodes[ch].NextSibling {
+			if t.Nodes[ch].Role == AXRoleColumnHeader {
+				n++
+			} else if depth > 1 && t.Nodes[ch].Role != AXRoleRow && t.Nodes[ch].Role != AXRoleListItem {
+				walk(t.Nodes[ch].FirstChild, depth-1)
+			}
+		}
+	}
+	walk(t.Nodes[i].FirstChild, 2)
+	return max(n, 1)
 }

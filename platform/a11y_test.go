@@ -57,7 +57,7 @@ type exporter struct{ next *AXTree }
 func (e *exporter) export(dst *AXTree) bool {
 	dst.Nodes = append(dst.Nodes[:0], e.next.Nodes...)
 	dst.Bytes = append(dst.Bytes[:0], e.next.Bytes...)
-	dst.Announce = e.next.Announce
+	dst.Announce, dst.AnnounceSeq = e.next.Announce, e.next.AnnounceSeq
 	return true
 }
 
@@ -135,7 +135,7 @@ func TestAXDiffNotifications(t *testing.T) {
 	b.t.Nodes[b.idx(11)].State |= AXSelected
 	b.t.Nodes[b.idx(20)].State |= AXLive
 	step("live, changed", b, "value:20 title:20 live:20")
-	b.t.Announce = [2]uint32{uint32(len(b.t.Bytes)), 4}
+	b.t.Announce, b.t.AnnounceSeq = [2]uint32{uint32(len(b.t.Bytes)), 4}, 1
 	b.t.Bytes = append(b.t.Bytes, "Sent"...)
 	step("announce", b, "live:window")
 	b = newAXBuild()
@@ -242,7 +242,7 @@ func TestAXDumpMapsRoles(t *testing.T) {
   AXCheckBox/AXSwitch "Wi-Fi" value=1 {Press}
   AXSlider "Volume" value=4 {Increment,Decrement}
   AXTextField/AXSearchField "Search" value="héllo" sel=1+1
-  AXOutline "Files"
+  AXOutline "Files" [rows=2]
     AXRow/AXOutlineRow "src" [selected expanded level=1 index=0/2] {Press,Disclose}
     AXRow/AXOutlineRow "main.go" [level=2]
   AXHeading value="Settings" [level=1]
@@ -252,5 +252,143 @@ func TestAXDumpMapsRoles(t *testing.T) {
 `
 	if got := AXDump(&b.t); got != want {
 		t.Errorf("dump:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// The same announcement in two frames is two announcements; one frame synced
+// twice is one.
+func TestAXAnnouncementsAreCounted(t *testing.T) {
+	var c axCore
+	b := listTree(nil, "x")
+	e := &exporter{next: &b.t}
+	c.begin(e.export)
+	say := func(seq uint32) *axBuild {
+		b := listTree(nil, "x")
+		b.t.Announce, b.t.AnnounceSeq = [2]uint32{uint32(len(b.t.Bytes)), 4}, seq
+		b.t.Bytes = append(b.t.Bytes, "Sent"...)
+		return b
+	}
+	for _, s := range []struct {
+		name string
+		b    *axBuild
+		want string
+	}{
+		{"first", say(1), "live:window"},
+		{"the same frame again", say(1), ""},
+		{"the same text in the next frame", say(2), "live:window"},
+		{"none", listTree(nil, "x"), ""},
+	} {
+		e.next = &s.b.t
+		c.sync(e.export)
+		if got := events(&c); got != s.want {
+			t.Errorf("%s: events %q, want %q", s.name, got, s.want)
+		}
+	}
+}
+
+// A change of geometry alone (a scroll, a relayout, a zoom) is one layout
+// notification on the nearest container of what moved.
+func TestAXGeometryChangesNotifyTheirContainer(t *testing.T) {
+	var c axCore
+	base := listTree([]uint64{11, 12, 13}, "x")
+	e := &exporter{next: &base.t}
+	c.begin(e.export)
+	b := listTree([]uint64{11, 12, 13}, "x")
+	for _, k := range []uint64{11, 12, 13} {
+		b.t.Nodes[b.idx(k)].Bounds[1] += 20 // the rows scrolled
+	}
+	e.next = &b.t
+	c.sync(e.export)
+	if got := events(&c); got != "layout:10" {
+		t.Errorf("rows moved: events %q, want layout:10", got)
+	}
+	b2 := listTree([]uint64{11, 12, 13}, "x")
+	for _, k := range []uint64{11, 12, 13} {
+		b2.t.Nodes[b2.idx(k)].Bounds[1] += 20
+	}
+	b2.t.Nodes[b2.idx(30)].State |= AXFocused
+	e.next = &b2.t
+	c.sync(e.export)
+	b3 := listTree([]uint64{11, 12, 13}, "x")
+	for i := 1; i < len(b3.t.Nodes); i++ { // a zoom: everything grows
+		n := &b3.t.Nodes[i]
+		n.Bounds = [4]float32{n.Bounds[0] * 2, n.Bounds[1] * 2, n.Bounds[2] * 2, n.Bounds[3] * 2}
+		if n.Key >= 11 && n.Key <= 13 {
+			n.Bounds[1], n.Bounds[3] = n.Bounds[1]+40, n.Bounds[3]+40
+		}
+	}
+	b3.t.Nodes[b3.idx(30)].State |= AXFocused
+	e.next = &b3.t
+	c.sync(e.export)
+	if got := events(&c); got != "layout:window" {
+		t.Errorf("zoomed with the button focused: events %q, want layout:window", got)
+	}
+}
+
+// An unnamed row reads out by its first named cell: a new cell name is a new
+// title of the row too.
+func TestAXDerivedLabelsAreDiffed(t *testing.T) {
+	tree := func(cell string) *axBuild {
+		b := newAXBuild()
+		b.add(0, 10, AXRoleTable, "Files")
+		b.add(1, 11, AXRoleRow, "")
+		b.add(2, 12, AXRoleCell, cell)
+		return b
+	}
+	var c axCore
+	e := &exporter{next: &tree("a.txt").t}
+	c.begin(e.export)
+	e.next = &tree("b.txt").t
+	c.sync(e.export)
+	if got := events(&c); got != "title:11 title:12" {
+		t.Errorf("events %q, want title:11 title:12", got)
+	}
+}
+
+// A selection change is told to the list or table that owns the rows, also
+// when they are inside its scroll area.
+func TestAXSelectionNotifiesTheOwner(t *testing.T) {
+	tree := func(sel bool) *axBuild {
+		b := newAXBuild()
+		b.add(0, 10, AXRoleTable, "Files")
+		b.add(1, 11, AXRoleScrollArea, "")
+		r := b.add(2, 12, AXRoleRow, "a")
+		if sel {
+			r.State |= AXSelected
+		}
+		return b
+	}
+	var c axCore
+	e := &exporter{next: &tree(false).t}
+	c.begin(e.export)
+	e.next = &tree(true).t
+	c.sync(e.export)
+	if got := events(&c); got != "selected-rows:10" {
+		t.Errorf("events %q, want selected-rows:10", got)
+	}
+}
+
+// A character range is the whole composed sequence that holds the index: a
+// surrogate pair, a letter and its combining mark, an emoji ZWJ sequence.
+func TestAXCharacterRanges(t *testing.T) {
+	for _, c := range []struct {
+		text    string
+		index   int
+		loc, n  uintptr
+		comment string
+	}{
+		{"A😀B", 2, 1, 2, "inside the surrogate pair"},
+		{"A😀B", 1, 1, 2, "at the pair"},
+		{"A😀B", 3, 3, 1, "after it"},
+		{"e\u0301x", 1, 0, 2, "on the combining mark"},
+		{"👨\u200d👩\u200d👧!", 3, 0, 8, "inside a ZWJ family"},
+	} {
+		b := []byte(c.text)
+		if loc, n := charRange(b, unitToByte(b, c.index)); loc != c.loc || n != c.n {
+			t.Errorf("%q at %d (%s): {%d, %d}, want {%d, %d}", c.text, c.index, c.comment, loc, n, c.loc, c.n)
+		}
+	}
+	if lo, hi := byteRange([]byte("A😀B"), 2, 1); lo != 1 || hi != 5 {
+		t.Errorf("byte range of units {2, 1}: %d..%d, want 1..5 (the start rounds down to the pair)", lo, hi)
 	}
 }

@@ -35,7 +35,7 @@ func (b *axBridge) AXExport(dst *platform.AXTree) bool {
 // bits and actions have the same values on both sides.
 func ExportAX(src *ui.SemTree, dst *platform.AXTree) {
 	dst.Bytes = append(dst.Bytes[:0], src.Bytes...)
-	dst.Announce = src.Announce
+	dst.Announce, dst.AnnounceSeq = src.Announce, src.AnnounceSeq
 	dst.Nodes = dst.Nodes[:0]
 	for i := range src.Nodes {
 		n := &src.Nodes[i]
@@ -49,23 +49,52 @@ func ExportAX(src *ui.SemTree, dst *platform.AXTree) {
 	}
 }
 
+// The text and help functions answer from the published frame only: while a
+// frame is being built (an assistive technology asking from inside a nested
+// run loop of the app's Build), the context holds half of the next frame, so
+// they answer nothing and the bridge falls back to the published nodes.
+
 func (b *axBridge) AXLine(key uint64, off int) (int, bool) {
+	if b.building {
+		return 0, false
+	}
 	return b.a.UI.SemTextLine(ui.Key(key), off)
 }
 
 func (b *axBridge) AXLineRange(key uint64, line int) (int, int, bool) {
+	if b.building {
+		return 0, 0, false
+	}
 	return b.a.UI.SemTextLineRange(ui.Key(key), line)
 }
 
 func (b *axBridge) AXBounds(key uint64, from, to int) ([4]float32, bool) {
+	if b.building {
+		return [4]float32{}, false
+	}
 	return b.a.UI.SemTextBounds(ui.Key(key), from, to)
 }
 
 func (b *axBridge) AXOffset(key uint64, x, y float32) (int, bool) {
+	if b.building {
+		return 0, false
+	}
 	return b.a.UI.SemTextOffset(ui.Key(key), x, y)
 }
 
-func (b *axBridge) AXHelp(key uint64, dst []byte) []byte { return b.a.UI.TooltipText(key, dst) }
+func (b *axBridge) AXVisible(key uint64) (int, int, bool) {
+	if b.building {
+		return 0, 0, false
+	}
+	return b.a.UI.SemTextVisible(ui.Key(key))
+}
+
+func (b *axBridge) AXHelp(key uint64, dst []byte) []byte {
+	if b.building {
+		return dst
+	}
+	return b.a.UI.TooltipText(key, dst)
+}
 
 // initAX gives the window the bridge's source (after initUI). Where the OS
 // has no bridge yet the window says so, and nothing happens.

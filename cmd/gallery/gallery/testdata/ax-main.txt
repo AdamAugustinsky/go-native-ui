@@ -130,7 +130,7 @@ AXWindow
       AXRadioButton/AXTabButton "History" value=0 [index=2/3] {Press,ScrollToVisible}
     AXStaticText value="A summary of the thing."
     AXStaticText value="List"
-    AXTable "items" {ScrollToVisible}
+    AXTable "items" [rows=40] {ScrollToVisible}
       AXRow/AXTableRow "List item 1" [index=0/40] {Press,ScrollToVisible}
         AXStaticText value="List item 1"
       AXRow/AXTableRow "List item 2" [index=1/40] {Press,ScrollToVisible}
@@ -150,7 +150,7 @@ AXWindow
   AXStaticText value="Table"
   AXStaticText value="1,000,000 rows"
   AXTextField/AXSearchField "Search rows" sel=0+0
-  AXTable "rows" {ScrollToVisible}
+  AXTable "rows" [rows=1000000 columns=4] {ScrollToVisible}
     AXButton/AXSortButton "ID" {Press,Increment,Decrement}
     AXButton/AXSortButton "Name" {Press,Increment,Decrement}
     AXButton/AXSortButton "Kind" {Increment,Decrement}

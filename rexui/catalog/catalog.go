@@ -130,6 +130,7 @@ type State struct {
 	icons [numIcons]icon.ID
 
 	lists listState // the lists' samples (lists.go)
+	name  []byte    // the name of the sample being built
 }
 
 // The glyphs of AppKitRef's icon buttons: SF Symbols at AppKit's default
@@ -165,6 +166,7 @@ func NewState(k *base.Kit) *State {
 // root of our control.
 func (s *State) Build(k *base.Kit, i int) ui.ID {
 	s.k = k
+	s.name = append(s.name[:0], Samples[i].Name...)
 	return Samples[i].build(s)
 }
 
@@ -220,8 +222,11 @@ func toggle(on bool, size theme.Size, look base.Look, disabled bool) func(s *Sta
 		s.b = on
 		s.k.BeginDisabled(disabled)
 		s.k.Force(look)
+		// NSSwitch has no title (one would be drawn beside the track): the
+		// sample's name, its caption, is its accessible name
 		if size == theme.SizeRegular {
 			id := rexui.Switch(s.k, "", &s.b, rexui.SwitchOpts{Size: size}).ID
+			s.k.Context().SetSemNameBytes(id, s.name)
 			s.k.EndDisabled()
 			return id
 		}
@@ -235,7 +240,7 @@ func toggle(on bool, size theme.Size, look base.Look, disabled bool) func(s *Sta
 		c.NextAuditExempt(ui.AuditOverflow.Mask()) // AppKit's frame: a switch of ours that differs is the recipes' business
 		frame := c.Box(0, "frame")
 		c.Push(frame)
-		rexui.Switch(k, "", &s.b, rexui.SwitchOpts{Size: size})
+		c.SetSemNameBytes(rexui.Switch(k, "", &s.b, rexui.SwitchOpts{Size: size}).ID, s.name)
 		c.Pop()
 		s.k.EndDisabled()
 		return frame

@@ -337,6 +337,13 @@ func (b *axDarwin) children(i int32) objc.ID {
 		}
 		b.kids = append(b.kids, uintptr(o))
 	}
+	if i > 0 && int(i) < len(t.Nodes) && t.Nodes[i].Host != 0 && t.Nodes[i].Role != AXRoleHost {
+		// a host box with a role of its own: the native view is inside it
+		if o := b.hostObj(t.Nodes[i].Host); o != 0 {
+			objc.Send1(o, selSetAXParent, uintptr(b.objOf(i)))
+			b.kids = append(b.kids, uintptr(o))
+		}
+	}
 	return axArray(b.kids)
 }
 
@@ -374,17 +381,29 @@ func (b *axDarwin) hit(x, y float64) objc.ID {
 		return b.viewAncestor()
 	}
 	o := b.objOf(i)
-	if b.core.tree().Nodes[i].Role == AXRoleHost && o != 0 {
-		r := objc.F.Reset().Arg(uintptr(o)).Arg(uintptr(selAXHitTest)).ArgPoint(x, y).Call(objc.MsgSend).R0()
-		if r != 0 {
-			return objc.ID(r)
+	if h := b.core.tree().Nodes[i].Host; h != 0 {
+		if ho := b.hostObj(h); ho != 0 {
+			r := objc.F.Reset().Arg(uintptr(ho)).Arg(uintptr(selAXHitTest)).ArgPoint(x, y).Call(objc.MsgSend).R0()
+			if r != 0 {
+				return objc.ID(r)
+			}
 		}
 	}
 	return o
 }
 
-// focused is the focused element (a focused host's own answer), or 0.
+// focused is the focused element, or 0. A host whose native view holds the
+// first responder answers for itself, whether or not the app's tree says so
+// yet (or ever: a host Tab does not reach).
 func (b *axDarwin) focused() objc.ID {
+	if f := b.w.hosts.focus; f != 0 {
+		if o := b.hostObj(uint32(b.w.hosts.id(f - 1))); o != 0 {
+			if fe := objc.Send(o, selAXFocused); fe != 0 {
+				return fe
+			}
+			return o
+		}
+	}
 	s := b.core.focus
 	if s < 0 {
 		return 0
@@ -411,8 +430,16 @@ func (b *axDarwin) focused() objc.ID {
 // The view's and the container's methods. Without a source (a window the
 // app gave none, as in platform's own tests) they are NSView's.
 
+// axOurs reports whether self is the window's view or content view: the
+// container class also backs a glass host's content and other native
+// containers, which keep NSView's own answers (their native subviews).
+func axOurs(self objc.ID) bool {
+	w := theWindow.Load()
+	return w != nil && (self == w.view || self == w.content)
+}
+
 func viewAXChildren(c *ffi.CB) {
-	if axActivate() == nil {
+	if !axOurs(objc.ID(c.Int(0))) || axActivate() == nil {
 		c.Ret(axSuper(c, selAXChildren))
 		return
 	}
@@ -424,7 +451,7 @@ func viewAXChildren(c *ffi.CB) {
 }
 
 func viewAXHitTest(c *ffi.CB) {
-	if axActivate() == nil {
+	if !axOurs(objc.ID(c.Int(0))) || axActivate() == nil {
 		c.Ret(objc.SuperFrame(c.Frame(), nsViewClass(), objc.ID(c.Int(0)), selAXHitTest).ArgPoint(c.F64(0), c.F64(1)).Call(objc.MsgSendSuper).R0())
 		return
 	}
@@ -444,7 +471,7 @@ func viewAXHitTest(c *ffi.CB) {
 }
 
 func viewAXFocused(c *ffi.CB) {
-	if axActivate() == nil {
+	if !axOurs(objc.ID(c.Int(0))) || axActivate() == nil {
 		c.Ret(axSuper(c, selAXFocused))
 		return
 	}

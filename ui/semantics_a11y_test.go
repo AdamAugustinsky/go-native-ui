@@ -1,6 +1,9 @@
 package ui
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // Hosted views take their place among their siblings in the tree, as nodes
 // of RoleHost with their host's id; the frame's announcement is exported for
@@ -129,4 +132,104 @@ func TestSemanticsRichSelection(t *testing.T) {
 		}
 	}
 	t.Fatal("the paragraph is not in the tree")
+}
+
+// A host box given a role of its own keeps it, with the host's id, and does
+// not drop the hosts built after it; a host that is not Tab-focusable reports
+// the keyboard focus its native view took.
+func TestSemanticsHostWithARoleAndHostFocus(t *testing.T) {
+	h := newHarness(t, 300, 200)
+	var tree SemTree
+	build := func(c *Context) {
+		c.NextSize(Px(100), Px(20))
+		c.NextRole(RoleGroup)
+		c.NextSemName("Editor")
+		c.Host(7, 70, HostFocusable)
+		c.NextSize(Px(100), Px(20))
+		c.Host(8, 80, 0)
+		c.NextSize(Px(100), Px(20))
+		c.Host(9, 90, 0)
+	}
+	h.frame(build)
+	h.c.Semantics(&tree)
+	var got []string
+	for _, n := range tree.Nodes[1:] {
+		got = append(got, string(tree.Text(n.Name))+"/"+string(rune('0'+n.Host)))
+		if n.Host == 7 && n.Role != RoleGroup {
+			t.Errorf("the named host has role %d", n.Role)
+		}
+		if n.Host != 7 && n.Role != RoleHost {
+			t.Errorf("host %d has role %d", n.Host, n.Role)
+		}
+	}
+	if len(got) != 3 || got[0] != "Editor/7" || got[1] != "/8" || got[2] != "/9" {
+		t.Fatalf("nodes %v, want Editor/7 /8 /9", got)
+	}
+	h.c.FocusHostBox(8) // the user clicked into the native view of a host Tab does not reach
+	h.frame(build)
+	h.c.Semantics(&tree)
+	for _, n := range tree.Nodes[1:] {
+		if (n.State&SemFocused != 0) != (n.Host == 8) {
+			t.Errorf("host %d focused: %v", n.Host, n.State&SemFocused != 0)
+		}
+	}
+}
+
+// Each Announce is a new announcement, the same text in the next frame too;
+// one frame exported twice is the same one.
+func TestSemanticsAnnouncementsAreCounted(t *testing.T) {
+	h := newHarness(t, 300, 200)
+	var a, b, again SemTree
+	h.frame(func(c *Context) { c.Announce("Sent") })
+	h.c.Semantics(&a)
+	h.c.Semantics(&again)
+	h.frame(func(c *Context) { c.Announce("Sent") })
+	h.c.Semantics(&b)
+	if a.AnnounceSeq == 0 || a.AnnounceSeq != again.AnnounceSeq || b.AnnounceSeq == a.AnnounceSeq {
+		t.Errorf("sequence numbers %d, %d (again), %d (next frame)", a.AnnounceSeq, again.AnnounceSeq, b.AnnounceSeq)
+	}
+}
+
+// The visible range is what shows: the characters between a scrolled field's
+// edges, the lines of a paragraph inside its clip.
+func TestSemanticsVisibleText(t *testing.T) {
+	r := newRig(t, true)
+	r.typ(strings.Repeat("abcdefghij", 4)) // 40 cells in a field 24 wide: scrolled to the end
+	var tree SemTree
+	r.c.Semantics(&tree)
+	var n SemNode
+	for _, x := range tree.Nodes {
+		if x.Text == SemTextField {
+			n = x
+		}
+	}
+	if n.Text != SemTextField {
+		t.Fatal("no field node")
+	}
+	from, to, ok := r.c.SemTextVisible(n.Key)
+	if !ok || from < 15 || to != 40 || to-from > 25 {
+		t.Errorf("the scrolled field shows %d..%d (%v), want about 16..40", from, to, ok)
+	}
+
+	h := newWrapHarness(t, 400, 600)
+	body := []byte("one two three four five six seven eight nine ten eleven twelve")
+	var sig RichSignal
+	h.frame(func(c *Context) {})
+	build := func(c *Context) {
+		c.NextSize(Px(100), Px(10))
+		c.Open(Clip, "clip")
+		c.NextWidth(Px(100))
+		sig = c.RichText(HashString(0, "para"), body, nil, testStyles(), RichOpts{})
+		c.Close()
+	}
+	h.frame(build)
+	h.frame(build)
+	pv, _, _, _, _ := h.c.RichLayout(sig.ID)
+	if len(pv.Lines) < 3 {
+		t.Fatalf("%d lines", len(pv.Lines))
+	}
+	from, to, ok = h.c.SemTextVisible(h.c.KeyOf(sig.ID))
+	if !ok || from != 0 || to != int(pv.Lines[0].End) {
+		t.Errorf("the clipped paragraph shows %d..%d (%v), want its first line 0..%d", from, to, ok, pv.Lines[0].End)
+	}
 }

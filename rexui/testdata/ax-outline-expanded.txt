@@ -1,5 +1,5 @@
 AXWindow
-  AXOutline "Files" [focused] {ScrollToVisible}
+  AXOutline "Files" [focused rows=5] {ScrollToVisible}
     AXRow/AXOutlineRow "A" [selected expanded level=1 index=0/5] {Press,ScrollToVisible,Disclose}
     AXRow/AXOutlineRow "A1" [level=2 index=1/5] {Press,ScrollToVisible,Disclose}
     AXRow/AXOutlineRow "A2" [level=2 index=2/5] {Press,ScrollToVisible}

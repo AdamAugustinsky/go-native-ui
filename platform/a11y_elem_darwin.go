@@ -4,7 +4,6 @@ package platform
 
 import (
 	"runtime"
-	"unicode/utf8"
 
 	"gonativeui/internal/ffi"
 	"gonativeui/internal/objc"
@@ -67,6 +66,8 @@ func axMethodTable() []axMethod {
 		{sel: "accessibilityDisclosureLevel", types: "q@:", h: elemLevel, req: reqLevel},
 		{sel: "accessibilityIndex", types: "q@:", h: elemIndex, req: reqIndex},
 		{sel: "accessibilityRows", types: "@@:", h: elemRows, req: reqRows},
+		{sel: "accessibilityRowCount", types: "q@:", h: elemRowCount, req: reqRows},
+		{sel: "accessibilityColumnCount", types: "q@:", h: elemColumnCount, req: reqRows},
 		{sel: "accessibilitySelectedRows", types: "@@:", h: elemSelectedRows, req: reqRows},
 		{sel: "accessibilitySelectedChildren", types: "@@:", h: elemSelectedRows, req: reqRows},
 		{sel: "accessibilityHitTest:", types: "@@:{CGPoint=dd}", h: elemHitTest},
@@ -301,24 +302,22 @@ func elemIndex(c *ffi.CB) {
 	c.Ret(uintptr(n.Pos[0]))
 }
 
-// rows appends the rows of list or table node i: its children and its scroll
-// area's or group's children that are rows.
-func axRows(t *AXTree, i int32, dst []int32, selectedOnly bool) []int32 {
-	add := func(ch int32) {
-		n := &t.Nodes[ch]
-		if (n.Role == AXRoleRow || n.Role == AXRoleListItem) && (!selectedOnly || n.State&AXSelected != 0) {
-			dst = append(dst, ch)
-		}
+func elemRowCount(c *ffi.CB) {
+	n, i, ok := elemNode(self(c))
+	if !ok || !reqRows.meets(nil, n, i) {
+		c.Ret(0)
+		return
 	}
-	for ch := t.Nodes[i].FirstChild; ch >= 0; ch = t.Nodes[ch].NextSibling {
-		add(ch)
-		if r := t.Nodes[ch].Role; r == AXRoleScrollArea || r == AXRoleGroup {
-			for g := t.Nodes[ch].FirstChild; g >= 0; g = t.Nodes[g].NextSibling {
-				add(g)
-			}
-		}
+	c.Ret(uintptr(axRowCount(ax.core.tree(), i)))
+}
+
+func elemColumnCount(c *ffi.CB) {
+	n, i, ok := elemNode(self(c))
+	if !ok || !reqRows.meets(nil, n, i) {
+		c.Ret(0)
+		return
 	}
-	return dst
+	c.Ret(uintptr(axColumnCount(ax.core.tree(), i)))
 }
 
 func elemRows(c *ffi.CB)         { elemRowList(c, false) }
@@ -474,22 +473,6 @@ func elemText(c *ffi.CB) (*AXNode, []byte, bool) {
 	return n, axTextFor(n), true
 }
 
-// unitRange converts the byte range [lo, hi) of b to UTF-16 units.
-func unitRange(b []byte, lo, hi int) (loc, n uintptr) {
-	lo, hi = min(max(lo, 0), len(b)), min(max(hi, 0), len(b))
-	if hi < lo {
-		lo, hi = hi, lo
-	}
-	return uintptr(utf16Count(b[:lo])), uintptr(utf16Count(b[lo:hi]))
-}
-
-// byteRange converts the UTF-16 range {loc, n} of b to bytes.
-func byteRange(b []byte, loc, n uintptr) (lo, hi int) {
-	lo = byteOfUnit(b, int(min(loc, 1<<31)))
-	hi = byteOfUnit(b, int(min(loc+min(n, 1<<31), 1<<31)))
-	return lo, max(hi, lo)
-}
-
 func elemNumberOfCharacters(c *ffi.CB) {
 	_, txt, ok := elemText(c)
 	if !ok {
@@ -528,11 +511,19 @@ func elemSelectedTextRange(c *ffi.CB) {
 	c.Ret2(unitRange(txt, lo, hi))
 }
 
+// elemVisibleRange is the part of the text that shows (AXVisible), the whole
+// text when the app does not say.
 func elemVisibleRange(c *ffi.CB) {
-	_, txt, ok := elemText(c)
+	n, txt, ok := elemText(c)
 	if !ok {
 		c.Ret2(0, 0)
 		return
+	}
+	if n.Text != AXTextNone && ax.src != nil {
+		if lo, hi, ok := ax.src.AXVisible(n.Key); ok {
+			c.Ret2(unitRange(txt, lo, hi))
+			return
+		}
 	}
 	c.Ret2(0, uintptr(utf16Count(txt)))
 }
@@ -565,7 +556,7 @@ func elemLineForIndex(c *ffi.CB) {
 		c.Ret(0)
 		return
 	}
-	c.Ret(uintptr(lineOf(n, byteOfUnit(txt, int(min(c.Int(2), 1<<31))))))
+	c.Ret(uintptr(lineOf(n, unitToByte(txt, int(min(c.Int(2), 1<<31))))))
 }
 
 func elemRangeForLine(c *ffi.CB) {
@@ -628,20 +619,13 @@ func elemRangeForPosition(c *ffi.CB) {
 	c.Ret2(charRange(txt, off))
 }
 
-// charRange is the UTF-16 range of the character at byte offset off of b.
-func charRange(b []byte, off int) (loc, n uintptr) {
-	off = min(max(off, 0), len(b))
-	_, size := utf8.DecodeRune(b[off:])
-	return unitRange(b, off, off+size)
-}
-
 func elemRangeForIndex(c *ffi.CB) {
 	_, txt, ok := elemText(c)
 	if !ok {
 		c.Ret2(nsNotFound, 0)
 		return
 	}
-	c.Ret2(charRange(txt, byteOfUnit(txt, int(min(c.Int(2), 1<<31)))))
+	c.Ret2(charRange(txt, unitToByte(txt, int(min(c.Int(2), 1<<31)))))
 }
 
 // ---- frames ----

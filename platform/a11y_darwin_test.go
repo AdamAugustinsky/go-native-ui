@@ -21,7 +21,7 @@ func (f *fakeAX) AXExport(dst *AXTree) bool {
 	f.exports++
 	dst.Nodes = append(dst.Nodes[:0], f.t.Nodes...)
 	dst.Bytes = append(dst.Bytes[:0], f.t.Bytes...)
-	dst.Announce = f.t.Announce
+	dst.Announce, dst.AnnounceSeq = f.t.Announce, f.t.AnnounceSeq
 	return true
 }
 func (f *fakeAX) AXLine(key uint64, off int) (int, bool) { return off / 4, true } // 4 bytes a line
@@ -32,6 +32,7 @@ func (f *fakeAX) AXBounds(key uint64, from, to int) ([4]float32, bool) {
 	return [4]float32{float32(from * 10), 0, float32(to * 10), 20}, true
 }
 func (f *fakeAX) AXOffset(key uint64, x, y float32) (int, bool) { return int(x / 10), true }
+func (f *fakeAX) AXVisible(key uint64) (int, int, bool)         { return 2, 6, true }
 func (f *fakeAX) AXHelp(key uint64, dst []byte) []byte {
 	if key == 30 {
 		return append(dst, "Sends the message"...)
@@ -237,7 +238,7 @@ func TestAXBridgeInProcess(t *testing.T) {
 		}
 		// An announcement is posted with its frame.
 		posted = ax.posted
-		b.t.Announce = [2]uint32{uint32(len(b.t.Bytes)), 4}
+		b.t.Announce, b.t.AnnounceSeq = [2]uint32{uint32(len(b.t.Bytes)), 4}, 1
 		b.t.Bytes = append(b.t.Bytes, "Sent"...)
 		w.SyncAX()
 		b.t.Announce = [2]uint32{}
@@ -273,4 +274,151 @@ func TestAXBridgeInProcess(t *testing.T) {
 func rangeForLine(o objc.ID, line uintptr) (uintptr, uintptr) {
 	f := msg(o, "accessibilityRangeForLine:", line)
 	return f.R0(), f.R1()
+}
+
+// axSelf is the accessibility object of view v (a control's is its cell).
+func axSelf(v objc.ID) objc.ID {
+	if d := objc.ID(objc.F.Call1(axk.unignoredDescendant, uintptr(v))); d != 0 {
+		return d
+	}
+	return v
+}
+
+// axReach walks the accessibility children from o (at most depth levels and
+// 200 objects) and reports whether it reaches want, and whether it reaches
+// one of the window's own elements or views (a cycle back into the app).
+func axReach(w *Window, o, want objc.ID, depth int) (found, cycle bool) {
+	seen := 0
+	var walk func(o objc.ID, d int)
+	walk = func(o objc.ID, d int) {
+		if o == 0 || d > depth || seen > 200 {
+			return
+		}
+		seen++
+		if o == want {
+			found = true
+		}
+		if o == w.view || o == w.content || objc.SendBool1(o, selIsKindOfClass, uintptr(ax.elem)) {
+			cycle = true
+			return
+		}
+		for _, ch := range arrayObjs(objc.Send(o, selAXChildren)) {
+			walk(ch, d+1)
+		}
+	}
+	walk(o, 0)
+	return found, cycle
+}
+
+// Native views inside the app's tree: a glass host's controls are reached as
+// themselves (the glass's content view keeps NSView's answers); a host box
+// with a role of its own holds its native view as its last child, and a
+// native view that took the keyboard is the focused element whatever the
+// tree says. Also the native list and text properties the tree carries: the
+// row count of a virtual list and a text's visible range.
+func TestAXBridgeNativeChildren(t *testing.T) {
+	var errs []string
+	fail := func(f string, a ...any) { errs = append(errs, fmt.Sprintf(f, a...)) }
+	onMain(func() {
+		w, err := Open(Options{Title: "ax", Width: 400, Height: 300, Hidden: true})
+		if err != nil {
+			fail("open: %v", err)
+			return
+		}
+		defer w.Close()
+		pool := objc.F.Call0(objc.PoolPush)
+		defer objc.F.Call1(objc.PoolPop, pool)
+
+		glass, err := w.NewHost(HostGlass, HostOptions{Radius: 8})
+		if err != nil {
+			fail("glass host: %v", err)
+			return
+		}
+		btn := newViewOf(objc.Cls("NSButton"), 4, 4, 60, 24)
+		objc.Send1(btn, selSetTitle, uintptr(objc.Str("Native")))
+		objc.Send1(objc.ID(w.HostView(glass)), selAddSubview, uintptr(btn))
+		objc.Send(btn, selReleaseObj)
+		tf := newViewOf(objc.Cls("NSTextField"), 0, 0, 100, 24)
+		edit, err := w.NewHost(HostView, HostOptions{View: uintptr(tf)})
+		objc.Send(tf, selReleaseObj)
+		if err != nil {
+			fail("view host: %v", err)
+			return
+		}
+		w.SetHosts([]HostRegion{
+			{ID: glass, Rect: [4]float32{0, 100, 100, 140}, Clip: [4]float32{0, 100, 100, 140}},
+			{ID: edit, Rect: [4]float32{0, 150, 100, 174}, Clip: [4]float32{0, 150, 100, 174}},
+		})
+		w.FlushShell()
+
+		b := newAXBuild()
+		b.add(0, 10, AXRoleHost, "").Host = uint32(glass)
+		ed := b.add(0, 20, AXRoleGroup, "Editor")
+		ed.Host = uint32(edit)
+		b.add(0, 30, AXRoleList, "Messages")
+		r := b.add(b.idx(30), 31, AXRoleListItem, "Message 500")
+		r.Pos = [2]int32{500, 1_000_000}
+		f := b.add(0, 40, AXRoleTextField, "Search")
+		b.value(f, "abcdefgh")
+		f.Text = AXTextField
+		src := &fakeAX{t: &b.t}
+		if err := w.SetAXSource(src); err != nil {
+			fail("SetAXSource: %v", err)
+			return
+		}
+		top := arrayObjs(objc.Send(w.view, selAXChildren))
+		if len(top) != 4 {
+			fail("%d top elements, want 4", len(top))
+			return
+		}
+
+		// The glass: its button, and no way back into the app's tree.
+		found, cycle := axReach(w, top[0], axSelf(btn), 4)
+		if !found || cycle {
+			fail("from the glass host: the button reached %v, a cycle %v", found, cycle)
+		}
+		if kids := arrayObjs(objc.Send(objc.ID(w.HostView(glass)), selAXChildren)); len(kids) != 1 || kids[0] != axSelf(btn) {
+			fail("the glass content's children are %d objects, want its button %s", len(kids), goString(objc.Send(kids[0], objc.Sel("description"))))
+		}
+
+		// The role'd host box: the native view is inside it.
+		kids := arrayObjs(objc.Send(top[1], selAXChildren))
+		if len(kids) != 1 || kids[0] != axSelf(tf) {
+			fail("the Editor group has %d children, want the text field %s", len(kids), goString(objc.Send(kids[0], objc.Sel("description"))))
+		} else if p := objc.Send(kids[0], objc.Sel("accessibilityParent")); p != top[1] {
+			fail("the text field's parent is %#x, want the Editor group", p)
+		}
+
+		// Virtual list: the total, one row built.
+		if n := msg(top[2], "accessibilityRowCount").R0(); n != 1_000_000 {
+			fail("row count %d, want 1000000", n)
+		}
+		if rows := arrayObjs(objc.Send(top[2], objc.Sel("accessibilityRows"))); len(rows) != 1 {
+			fail("%d rows materialised, want 1", len(rows))
+		}
+
+		// The visible range is the app's (fakeAX: bytes 2..6).
+		if loc, n := axRange(top[3], "accessibilityVisibleCharacterRange"); loc != 2 || n != 4 {
+			fail("visible range {%d, %d}, want {2, 4}", loc, n)
+		}
+
+		// The user clicks into the text field: it is focused, though no
+		// node of the tree says so.
+		w.FocusHost(edit)
+		if w.hosts.focus == 0 {
+			fail("the text field did not take the keyboard")
+			return
+		}
+		w.SyncAX()
+		want := objc.Send(tf, selAXFocused)
+		if want == 0 {
+			want = tf
+		}
+		if got := objc.Send(w.view, selAXFocused); got != want {
+			fail("focused element %#x, want the text field's %#x (the field %#x)", got, want, tf)
+		}
+	})
+	for _, e := range errs {
+		t.Error(e)
+	}
 }

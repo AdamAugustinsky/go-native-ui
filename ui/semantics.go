@@ -256,7 +256,9 @@ type SemNode struct {
 	// of an outline, 2 for its children, and so on; 0 for a node not in a
 	// tree. Whether the row shows its children is SemExpanded.
 	Level int32
-	// Host is the platform.HostID of a RoleHost node, 0 for others.
+	// Host is the platform.HostID of the native view hosted in the node's
+	// box: a RoleHost node, or a host box given a role of its own (the native
+	// view is then inside the node); 0 for others.
 	Host uint32
 	// Text says which text of the node has character geometry (lines,
 	// ranges, the selection), for the text functions of assistive
@@ -290,6 +292,10 @@ type SemTree struct {
 	// Announce is the text the frame asked to be announced (Context.Announce),
 	// a span of Bytes; empty when it asked for none.
 	Announce [2]uint32
+	// AnnounceSeq numbers the announcement (it grows with every
+	// Context.Announce), so that the same text asked for again in the next
+	// frame is announced again, and a tree exported twice is announced once.
+	AnnounceSeq uint32
 }
 
 // Reserve makes room for the given numbers of nodes and text bytes, so that
@@ -341,7 +347,7 @@ func defaultActions(r Role) SemAction {
 // box with the keyboard focus, SemModal for a modal overlay. A box under a
 // ListRange box that did not say NextSemPos reports its place in the whole list.
 func (c *Context) Semantics(dst *SemTree) {
-	dst.Nodes, dst.Bytes, dst.Dropped, dst.Announce = dst.Nodes[:0], dst.Bytes[:0], 0, [2]uint32{}
+	dst.Nodes, dst.Bytes, dst.Dropped, dst.Announce, dst.AnnounceSeq = dst.Nodes[:0], dst.Bytes[:0], 0, [2]uint32{}, 0
 	if c.shell.frame == c.frame && c.shell.nHosts > 0 {
 		c.semWithHosts(dst)
 	} else {

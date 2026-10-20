@@ -43,11 +43,7 @@ func TestAccessibleNames(t *testing.T) {
 		}
 		var tree ui.SemTree
 		off.UI.Semantics(&tree)
-		widgettest.LintNames(t, name, &tree, appkitNames...)
+		widgettest.LintNames(t, name, &tree)
 		off.Close()
 	}
-}
-
-var appkitNames = []widgettest.NameAllow{
-	{Role: ui.RoleSwitch, Reason: "the appkit page reproduces AppKitRef's NSSwitch samples, which have no title (a title would be drawn beside the track and break the comparison); each sample is captioned by the label after it"},
 }

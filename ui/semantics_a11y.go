@@ -13,51 +13,63 @@ import "gonativeui/core"
 type semExtra struct {
 	annFrame uint32
 	announce core.Span // in semA
+	seq      uint32    // Announce calls so far
 }
 
 // Announce asks assistive technologies to read text out now (a message sent,
 // a download finished): the accessibility bridge posts it as an announcement
 // with the tree of this frame. The text is copied; the last call of a frame
-// wins. Changes that are part of the interface are better announced by a
-// SemLive node, whose new name or value is read when it changes.
+// wins. Each call is a new announcement, also of the same text as the last
+// frame's (SemTree.AnnounceSeq). Changes that are part of the interface are
+// better announced by a SemLive node, whose new name or value is read when it
+// changes.
 func (c *Context) Announce(text string) {
 	c.semX.annFrame, c.semX.announce = c.frame, c.semA.AppendString(text)
+	c.semX.seq++
 }
 
 // semAnnounce exports the frame's announcement.
 func (c *Context) semAnnounce(dst *SemTree) {
 	if c.semX.annFrame == c.frame && c.semX.announce.Len > 0 {
 		dst.Announce = c.semText(dst, c.semX.announce)
+		dst.AnnounceSeq = c.semX.seq
 	}
 }
 
 // semWithHosts is the export's loop when the frame built hosts: the boxes in
 // build order, so that a host's node takes its place among its siblings. The
 // hosts were recorded in build order too (Context.Host), so one pass merges
-// them.
+// them, whatever semantics the boxes have. A host box with a role of its own
+// (NextRole before Host) is exported once, with that role and its name, and
+// with Host set: the bridge puts the native view inside that node, as its
+// last child. Any other host box gets a node of RoleHost.
 func (c *Context) semWithHosts(dst *SemTree) {
 	h, done := 0, 0
 	for _, id := range c.order {
 		b := &c.boxes[id]
+		var host uint32
+		if h < c.shell.nHosts && c.shell.hosts[h].id == id {
+			host = c.shell.hosts[h].host
+			h++
+		}
 		if b.sem != 0 {
-			if !c.semAppend(dst, &c.sems[b.sem-1]) {
+			rec := &c.sems[b.sem-1]
+			if !c.semAppend(dst, rec) {
 				dst.Dropped = len(c.sems) - done
 				return
 			}
 			done++
+			if host != 0 && rec.node >= 0 {
+				dst.Nodes[rec.node].Host = host
+			}
 			continue
 		}
-		if h >= c.shell.nHosts || c.shell.hosts[h].id != id {
-			continue
-		}
-		host := c.shell.hosts[h].host
-		h++
-		if b.hid || host == 0 || len(dst.Nodes) >= MaxSemNodes {
+		if host == 0 || b.hid || len(dst.Nodes) >= MaxSemNodes {
 			continue
 		}
 		var rec semRec
 		n := SemNode{Key: b.key, Role: RoleHost, Bounds: b.rect, Parent: -1, FirstChild: -1, NextSibling: -1, Host: host}
-		if b.flags&Focusable != 0 && c.focusKey == b.key {
+		if c.focusKey == b.key { // the native view has the keyboard (FocusHostBox), Tab-focusable or not
 			n.State |= SemFocused
 		}
 		c.semLink(dst, b, &rec, &n)
@@ -97,6 +109,12 @@ func (c *Context) semTextBox(k Key) (ID, *box, bool) {
 // fieldText is the text box of the text field b (the child of its clip box
 // that draws the text) and the field's value as exported.
 func (c *Context) fieldText(b *box) (*box, []byte, bool) {
+	tb, _, val, ok := c.fieldParts(b)
+	return tb, val, ok
+}
+
+// fieldParts is fieldText with the field's clip box.
+func (c *Context) fieldParts(b *box) (*box, ID, []byte, bool) {
 	for cl := b.first; cl != 0; cl = c.boxes[cl].next {
 		if c.boxes[cl].flags&Clip == 0 {
 			continue
@@ -107,11 +125,59 @@ func (c *Context) fieldText(b *box) (*box, []byte, bool) {
 				if b.sem != 0 {
 					val = c.semA.Bytes(c.sems[b.sem-1].value)
 				}
-				return tb, val, true
+				return tb, cl, val, true
 			}
 		}
 	}
-	return nil, nil, false
+	return nil, 0, nil, false
+}
+
+// SemTextVisible returns the bytes [from, to) of the text of the node with key
+// k that show in the last finished frame: within the clip rectangles around
+// it and the window. A scrolled field shows the characters between its edges,
+// a paragraph the lines that cross its visible part; both are empty when
+// nothing shows.
+func (c *Context) SemTextVisible(k Key) (from, to int, ok bool) {
+	id, b, ok := c.semTextBox(k)
+	if !ok {
+		return 0, 0, false
+	}
+	if b.field {
+		tb, clip, val, ok := c.fieldParts(b)
+		if !ok {
+			return 0, 0, false
+		}
+		vis := c.clippedRect(clip)
+		if empty(vis) {
+			return 0, 0, true
+		}
+		v := c.sh.Run(c.sh.Shape(tb.font, val))
+		from = min(v.HitByte(vis[0]-tb.rect[0]), len(val))
+		to = min(v.HitByte(vis[2]-tb.rect[0]), len(val))
+		if vis[2]-tb.rect[0] >= v.Advance {
+			to = len(val)
+		}
+		return min(from, to), max(from, to), true
+	}
+	pv, _, oy, _, ok := c.RichLayout(id)
+	if !ok {
+		return 0, 0, false
+	}
+	vis := c.clippedRect(id)
+	first, last := -1, -1
+	for i := range pv.Lines {
+		ln := &pv.Lines[i]
+		if !empty(vis) && oy+ln.Top < vis[3] && oy+ln.Top+ln.Height > vis[1] {
+			if first < 0 {
+				first = i
+			}
+			last = i
+		}
+	}
+	if first < 0 {
+		return 0, 0, true
+	}
+	return int(pv.Lines[first].Start), int(pv.Lines[last].End), true
 }
 
 // SemTextLine returns the line (from 0) that byte offset off of the text of

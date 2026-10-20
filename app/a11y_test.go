@@ -1,11 +1,13 @@
 package app
 
 import (
+	"fmt"
 	"runtime"
 	"testing"
 	"time"
 
 	"gonativeui/platform"
+	"gonativeui/text"
 	"gonativeui/ui"
 )
 
@@ -160,4 +162,65 @@ func TestAXExportAllocatesNothing(t *testing.T) {
 		}
 	}
 	t.Errorf("frames with the export allocated (last: %d mallocs over 300 frames)", mallocs)
+}
+
+// tipFieldApp is a window with a text field that has a tooltip; probe, when
+// set, runs in the middle of its Build, after the field (an assistive technology asking from
+// inside a nested run loop of the app's code).
+type tipFieldApp struct {
+	a     *App
+	font  text.FontKey
+	buf   ui.TextBuffer
+	key   ui.Key
+	probe func()
+}
+
+func (b *tipFieldApp) Build(c *ui.Context) {
+	if b.font == 0 {
+		b.font = b.a.Text.Font(text.FontDesc{SizePt: 13, Weight: 400, Scale: c.Scale()})
+	}
+	c.PushFont(b.font)
+	c.NextSize(ui.Px(200), ui.Px(24))
+	f := c.TextField("f", &b.buf)
+	b.key = c.KeyOf(f.ID)
+	c.NativeTooltip(f.ID, "Type here")
+	if b.probe != nil { // the field is built again, not laid out yet
+		b.probe()
+	}
+	c.PopFont()
+}
+
+// Every source callback answers from the published frame; in the middle of a
+// build it answers nothing (the bridge then keeps to the published nodes),
+// never from the half-built next frame.
+func TestAXQueriesInTheMiddleOfABuild(t *testing.T) {
+	b := &tipFieldApp{}
+	o, err := NewOffscreen(Config{}, 400, 100, 1, b)
+	if err != nil {
+		skipOrFail(t, "offscreen rendering", err)
+	}
+	defer o.Close()
+	b.a = o.App
+	o.ax.a = o.App
+	b.buf.SetString("hello world")
+	o.Frame()
+	o.Frame()
+	ask := func() string {
+		k := uint64(b.key)
+		_, l := o.ax.AXLine(k, 2)
+		_, _, lr := o.ax.AXLineRange(k, 0)
+		_, bo := o.ax.AXBounds(k, 0, 3)
+		_, of := o.ax.AXOffset(k, 10, 10)
+		_, _, vi := o.ax.AXVisible(k)
+		return fmt.Sprintln(l, lr, bo, of, vi, string(o.ax.AXHelp(k, nil)))
+	}
+	if got := ask(); got != "true true true true true Type here\n" {
+		t.Fatalf("after a frame: %q", got)
+	}
+	var mid string
+	b.probe = func() { mid = ask() }
+	o.Frame()
+	if mid != "false false false false false \n" {
+		t.Errorf("in the middle of a build: %q, want nothing answered", mid)
+	}
 }
