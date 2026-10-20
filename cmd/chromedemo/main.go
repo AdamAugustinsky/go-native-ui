@@ -50,7 +50,9 @@ func main() {
 	outDark := flag.String("o-dark", "", "with -o: also render the dark mode into this PNG")
 	mode := flag.String("mode", "system", "system (the default), light or dark; with -o and -measure the default is light")
 	inactive := flag.Bool("inactive", false, "with -o or -measure: the window is not key")
-	scrolled := flag.Bool("scrolled", false, "with -o or -measure: the content is scrolled under the toolbar")
+	scrolled := flag.Bool("scrolled", false, "the content starts scrolled under the toolbar")
+	plain := flag.Bool("plain", false, "show a plain striped window (the backdrop of glass captures) and nothing else")
+	drawn := flag.Bool("drawn", false, "in a window: draw the glass's fallbacks instead of the system's materials")
 	measure := flag.Bool("measure", false, "print the chrome's frames in points as JSON and exit")
 	bench := flag.Bool("bench", false, "scripted session; print allocation, CPU and pacing as JSON")
 	gate := flag.Bool("gate", false, "with -bench: exit with status 3 unless 0 allocations, CPU within budget and paced frames")
@@ -78,6 +80,8 @@ func main() {
 			o.System = ui.Appearance{Dark: a.Dark, Accent: a.Accent, Known: a.Known}
 		}
 		switch {
+		case *plain:
+			err = runPlain()
 		case *out != "":
 			err = render(*out, *outDark, o)
 		case *measure:
@@ -90,7 +94,9 @@ func main() {
 		case *idle > 0:
 			err = runIdle(s, pref, *idle)
 		default:
-			_, err = app.RunWith(demo.Config(s), &builder{Demo: demo.New(demo.Options{Scene: s, Preference: pref})}, app.RunOptions{})
+			cfg := demo.Config(s)
+			cfg.Materials = !*drawn
+			_, err = app.RunWith(cfg, &builder{Demo: demo.New(demo.Options{Scene: s, Preference: pref, Scrolled: *scrolled})}, app.RunOptions{})
 		}
 	}
 	if err != nil {
@@ -143,6 +149,37 @@ func (b *builder) Build(c *ui.Context) {
 		}
 	}
 	b.Demo.Build(c)
+}
+
+// plainWindow is a window of wide red, green and blue stripes: placed
+// behind the demo for a capture of the screen region, it shows whether any
+// of it shows through the demo's window or its glass.
+type plainWindow struct{ a *app.App }
+
+func (p *plainWindow) Init(a *app.App) error { p.a = a; return nil }
+
+func (p *plainWindow) Build(c *ui.Context) {
+	in := c.Input()
+	for i := 0; i < in.NKeys; i++ {
+		if k := in.Keys[i]; k.Down && k.Code == ui.KeyEscape {
+			p.a.Quit()
+		}
+	}
+	w, h := c.Size()
+	stripe := c.Pt(80)
+	cols := [3]uint32{0xE0352BFF, 0x2BB04AFF, 0x2B6CE0FF}
+	for i := 0; float32(i)*stripe < float32(w); i++ {
+		c.NextFlags(theme.Floating)
+		c.NextPos(float32(i)*stripe, 0)
+		c.NextSize(ui.Px(stripe), ui.Px(float32(h)))
+		c.NextBG(cols[i%3])
+		c.BoxKeyed(ui.DrawBackground, ui.KeyN(ui.HashString(0, "stripe"), uint64(i)), nil)
+	}
+}
+
+func runPlain() error {
+	_, err := app.RunWith(app.Config{Title: "Plain", Width: 1400, Height: 900, Clear: [4]float32{1, 1, 1, 1}}, &plainWindow{}, app.RunOptions{})
+	return err
 }
 
 // idler counts the frames built during the idle window of -idle.

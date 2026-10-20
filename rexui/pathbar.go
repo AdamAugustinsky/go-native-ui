@@ -148,7 +148,7 @@ func PathBar(k *base.Kit, label string, items []PathItem, o PathBarOpts) PathSig
 			theme.At(c, theme.Snap(ix), 0, theme.Snap(w-ix), h)
 			c.NextFont(font)
 			c.NextTextColor(col)
-			c.BoxKeyed(ui.DrawText|ui.FadeOverflowX|base.Floating, ui.KeyN(ikey, 2), base.StrBytes(it.Title))
+			c.BoxKeyed(ui.DrawText|ui.EllipsisOverflowX|base.Floating, ui.KeyN(ikey, 2), base.StrBytes(it.Title))
 		}
 		c.Pop()
 		if sg := c.Signal(b); (sg.Clicked || sg.Action&ui.ActPress != 0) && !k.Disabled() {

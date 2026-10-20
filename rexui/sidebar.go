@@ -34,6 +34,11 @@ type SidebarItem struct {
 	// macOS 27 draws sidebar symbols).
 	Glyph Glyph
 	Color uint32
+	// Tile draws the symbol white on a rounded square of this colour (RGBA;
+	// 0: none), as System Settings' sidebar does: TileSize square, radius
+	// TileRadius, in the place of a symbol. Give the tiles their symbols at
+	// TileGlyphPt (SidebarTileSymbol).
+	Tile uint32
 	// Header makes the row a group header: small bold text, not selectable;
 	// the rows up to the next header are its group.
 	Header bool
@@ -54,10 +59,13 @@ type SidebarState struct {
 
 // SidebarOpts are a sidebar's options, passed by value.
 type SidebarOpts struct {
-	// Top is the room above the first row, in pixels: the toolbar's height
-	// (the sidebar's glass runs under the toolbar to the window's top).
+	// Top is the room above the rows, in pixels: the toolbar's height. The
+	// sidebar's glass runs under the toolbar to the window's top; the rows
+	// scroll below it (the capsules over the glass are below the window's
+	// pixels when the glass is the system's).
 	Top float32
-	// Pad is extra room below Top, in points (a search field's place).
+	// Pad is extra room below Top, in points, where the rows do not scroll
+	// either: a search field's place (SidebarSearch).
 	Pad float32
 	// RowH and HeaderH replace the rows' and the headers' heights, in points
 	// (0: the medium sidebar's 32 and 19); BodyHeaders sets the headers in
@@ -106,6 +114,9 @@ type SidebarRecipe struct {
 	// OnSel's alpha for it on the accent (measured 0.7).
 	Detail      Pair
 	DetailOnSel float32
+	// DetailTop is a two-line row's title from the row's top (Notes' 8; the
+	// second line 2 below the title's line).
+	DetailTop float32
 	// HeaderChevronRight is a header's disclosure from the trailing edge
 	// (centre), shown under the pointer; Chevron its colour.
 	HeaderChevronRight float32
@@ -116,7 +127,22 @@ type SidebarRecipe struct {
 	// SearchFill and SearchFillInactive fill a search field on the
 	// sidebar's glass (SidebarSearch): a capsule of the field's height,
 	// measured #EAEAEA and #4E4E4E, #E5E5E5 and #464646 inactive (§2).
-	SearchFill, SearchFillInactive Pair
+	// SearchRim is the bright rim it fades from at its top and bottom in an
+	// active window (#FFFFFF and #727272 at its edge), SearchEdge and
+	// SearchEdgeInactive the hairline just outside it (#D8D8D8 and #8C8C8C;
+	// #CDCDCD and #181818 inactive).
+	SearchFill, SearchFillInactive, SearchRim, SearchEdge, SearchEdgeInactive Pair
+	// TextEnd is how far before the sidebar's trailing edge a row's text
+	// ends (AppKit's cell view ends 16 short, its text field 4 more, the
+	// text 2 inside the field; a two-line row's 14, 6 and 2): longer text
+	// ends there with an ellipsis.
+	TextEnd float32
+	// TileSize, TileRadius and TileGlyphPt are a tile's square, its corner
+	// and its symbol's size (SidebarItem.Tile; measured 20, 5 and 11);
+	// TileGlyph colours the symbol; TileInactive is the tile's opacity in an
+	// inactive window (measured 0.5: #0070F4 shows as #79B1F4 on #F2F2F2).
+	TileSize, TileRadius, TileGlyphPt, TileInactive float32
+	TileGlyph                                       Tint
 }
 
 // SidebarLook is the sidebar's recipe (the colours are theme roles measured
@@ -128,9 +154,18 @@ var SidebarLook = SidebarRecipe{
 	OnSelInactive: Solid(0x676767, 0x999999),
 	Symbol:        Of(theme.Accent),
 	SymbolGap:     4, DotW: 12, PlainTextX: 20, FieldInset: 2,
-	Detail: PairA(0x000000, 0xFFFFFF, 0.43, 0.36), DetailOnSel: 0.7, HeaderChevronRight: 17.5, Chevron: Of(theme.Label3),
+	Detail: PairA(0x000000, 0xFFFFFF, 0.43, 0.36), DetailOnSel: 0.7, DetailTop: 8, HeaderChevronRight: 17.5, Chevron: Of(theme.Label3),
 	Thumb: OfAlpha(theme.Label, 0.25, 0.3), ThumbW: 6,
 	SearchFill: Solid(0xEAEAEA, 0x4E4E4E), SearchFillInactive: Solid(0xE5E5E5, 0x464646),
+	SearchRim: Solid(0xFFFFFF, 0x727272), SearchEdge: Solid(0xD8D8D8, 0x8C8C8C), SearchEdgeInactive: Solid(0xCDCDCD, 0x181818),
+	TextEnd:  22,
+	TileSize: 20, TileRadius: 5, TileGlyphPt: 11, TileInactive: 0.5, TileGlyph: Of(theme.OnAccent),
+}
+
+// SidebarTileSymbol is the icon spec of a tile's symbol (SidebarItem.Tile):
+// the SF Symbol name at the tile's size and weight, for Kit.AddIcon.
+func SidebarTileSymbol(symbol string, fallback rune) icon.Spec {
+	return icon.Spec{Symbol: symbol, Fallback: fallback, Pt: SidebarLook.TileGlyphPt, Weight: 0.23}
 }
 
 // Sidebar builds a sidebar of items in the current parent (it takes the
@@ -150,15 +185,20 @@ func Sidebar(k *base.Kit, label string, st *SidebarState, items []SidebarItem, o
 	var res SidebarSignal
 
 	// the glass, full height, and the box that takes the keyboard
+	// (the rows scroll in the room below Top: the band above them is the
+	// window's titlebar, where the toolbar's capsules are, which a hosted
+	// glass shows below the window's pixels)
 	k.ApplySize(ui.Pct(1), ui.Pct(1))
 	c.NextBG(GlassFill(k, GlassSidebar))
 	c.NextRole(ui.RoleList)
 	c.NextSemName(label)
+	c.NextPadding(0, o.Top+theme.Snap(k.Pt(o.Pad)), 0, 0)
 	flags := ui.DrawBackground | ui.Clip | ui.Focusable
 	if k.Disabled() {
 		flags = ui.DrawBackground | ui.Clip | ui.Disabled
 	}
 	root := c.BoxKeyed(flags, key, nil)
+	GlassRegion(k, root, GlassSidebar, 0)
 	c.Push(root)
 	focused := c.Focused(root) && !k.Disabled()
 	emph := focused && !k.Inactive()
@@ -170,8 +210,6 @@ func Sidebar(k *base.Kit, label string, st *SidebarState, items []SidebarItem, o
 
 	k.NextSize(ui.Pct(1), ui.Pct(1))
 	v := k.BeginScroll("rows", &st.Scroll, base.ScrollVertical)
-	c.NextSize(ui.Pct(1), ui.Px(o.Top+k.Pt(o.Pad)))
-	c.BoxKeyed(0, ui.KeyN(key, 1), nil)
 	_, sy := c.Scroll(v.Inner)
 	res.Under = sy > 0.5
 
@@ -231,9 +269,9 @@ func SidebarSearch(k *base.Kit, label string, buf *ui.TextBuffer, placeholder st
 	c, r := k.Context(), k.Theme()
 	rc := &SidebarLook
 	h := theme.Snap(r.Window.Sidebar.SearchH)
-	fill := rc.SearchFill.At(r.T)
+	fill, edge := rc.SearchFill.At(r.T), rc.SearchEdge.At(r.T)
 	if k.Inactive() {
-		fill = rc.SearchFillInactive.At(r.T)
+		fill, edge = rc.SearchFillInactive.At(r.T), rc.SearchEdgeInactive.At(r.T)
 	}
 	k.ApplySize(ui.Pct(1), ui.Px(h))
 	c.NextBG(fill)
@@ -241,8 +279,37 @@ func SidebarSearch(k *base.Kit, label string, buf *ui.TextBuffer, placeholder st
 	c.NextAxis(ui.AxisX)
 	c.NextCross(ui.CrossCenter)
 	_, ident := ui.SplitLabel(label)
-	c.Push(c.BoxKeyed(ui.DrawBackground, ui.HashString(c.ParentKey(), ident+" capsule"), nil))
+	capKey := ui.HashString(c.ParentKey(), ident+" capsule")
+	cp := c.BoxKeyed(ui.DrawBackground, capKey, nil)
+	c.Push(cp)
+	rr := c.Rect(cp)
+	w := rr[2] - rr[0]
+	lw := r.Lines.Hairline
+	if !k.Inactive() {
+		// the bright rim, fading into the fill from the top and the bottom
+		rim := rc.SearchRim.At(r.T)
+		half := theme.Snap(h / 2)
+		theme.At(c, 0, 0, w, half)
+		c.NextBG4(rim, rim, fill, fill)
+		c.NextRadii(h/2, h/2, 0, 0)
+		c.BoxKeyed(ui.DrawBackground|base.Floating, ui.KeyN(capKey, 1), nil)
+		theme.At(c, 0, half, w, h-half)
+		c.NextBG4(fill, fill, rim, rim)
+		c.NextRadii(0, 0, h/2, h/2)
+		c.BoxKeyed(ui.DrawBackground|base.Floating, ui.KeyN(capKey, 2), nil)
+	}
+	// the edge, a hairline just outside the capsule
+	theme.At(c, -lw, -lw, w+2*lw, h+2*lw)
+	c.NextBorder(edge, lw)
+	c.NextRadius(h/2 + lw)
+	c.BoxKeyed(ui.DrawBorder|base.Floating, ui.KeyN(capKey, 3), nil)
+	// the field over them (floating boxes draw in the order they are built)
+	theme.At(c, 0, 0, w, h)
+	c.NextAxis(ui.AxisX)
+	c.NextCross(ui.CrossCenter)
+	c.Push(c.BoxKeyed(base.Floating, ui.KeyN(capKey, 4), nil))
 	res := SearchField(k, label, buf, placeholder, FieldOpts{Variant: FieldBorderless})
+	c.Pop()
 	c.Pop()
 	return res
 }
@@ -302,11 +369,34 @@ func sidebarRow(k *base.Kit, key ui.Key, it *SidebarItem, sel, emph bool, rc *Si
 
 	indent := float32(it.Level) * sp.Indent
 	if it.Open != nil {
-		// in the indentation before the cell (x 16, the symbol's 3 before it)
-		toggled = sidebarChevron(k, rkey, it.Open, theme.Snap(sp.IconX+indent-k.Pt(3+DisclosureLook.Box)), h, textCol, false)
+		// inside the selection, between its edge and the symbol
+		side := theme.Snap(k.Pt(DisclosureLook.Box))
+		mid := (theme.Snap(r.Window.Selection.Inset) + sp.IconX) / 2
+		toggled = sidebarChevron(k, rkey, it.Open, theme.Snap(mid+indent-side/2), h, textCol, false)
 	}
 	textX := k.Pt(rc.PlainTextX+rc.FieldInset) + indent
-	if id, ok := it.Glyph.ID(); ok {
+	if id, ok := it.Glyph.ID(); ok && it.Tile != 0 {
+		// a tile: the symbol white on a rounded square of the row's colour
+		ts := theme.Snap(k.Pt(rc.TileSize))
+		if k.Inactive() { // half transparent, the symbol too (measured)
+			c.PushOpacity(rc.TileInactive)
+		}
+		theme.At(c, theme.Snap(sp.IconX+indent), theme.Snap((h-ts)/2), ts, ts)
+		c.NextBG(it.Tile)
+		c.NextRadius(k.Pt(rc.TileRadius))
+		c.NextJustify(ui.JustifyCenter)
+		c.NextCross(ui.CrossCenter)
+		c.NextAxis(ui.AxisX)
+		c.Push(c.BoxKeyed(ui.DrawBackground|base.Floating, ui.KeyN(rkey, 5), nil))
+		if f, disp := k.Icons().Prepare(c, id, rc.TileGlyph.RGBA(r)); f != 0 {
+			c.BoxKeyed(f, ui.KeyN(rkey, 1), disp)
+		}
+		c.Pop()
+		if k.Inactive() {
+			c.PopOpacity()
+		}
+		textX = sp.IconX + indent + ts + k.Pt(rc.SymbolGap+rc.FieldInset)
+	} else if ok {
 		iw, ih := k.IconSize(id)
 		if f, disp := k.Icons().Prepare(c, id, symCol); f != 0 {
 			box := iw
@@ -324,17 +414,17 @@ func sidebarRow(k *base.Kit, key ui.Key, it *SidebarItem, sel, emph bool, rc *Si
 	if sel || it.Detail != "" {
 		st = &r.Styles[theme.StyleBodySemibold]
 	}
-	tw := max(w-theme.Snap(textX)-theme.Snap(r.Window.Selection.Inset)-k.Pt(6), 0)
+	tw := max(w-theme.Snap(textX)-theme.Snap(k.Pt(rc.TextEnd)), 0)
 	ty := theme.Snap((h - st.Line) / 2)
 	var dt *theme.StyleFont
 	if it.Detail != "" {
 		dt = &r.Styles[theme.StyleSubheadline]
-		ty = theme.Snap((h - st.Line - k.Pt(2) - dt.Line) / 2)
+		ty = theme.Snap(k.Pt(rc.DetailTop))
 	}
 	theme.At(c, theme.Snap(textX), ty, tw, st.Line)
 	c.NextFont(st.Font)
 	c.NextTextColor(textCol)
-	c.BoxKeyed(ui.DrawText|ui.FadeOverflowX|base.Floating, ui.KeyN(rkey, 2), base.StrBytes(it.Title))
+	c.BoxKeyed(ui.DrawText|ui.EllipsisOverflowX|base.Floating, ui.KeyN(rkey, 2), base.StrBytes(it.Title))
 	if dt != nil {
 		col := rc.Detail.At(r.T)
 		if sel && emph {
@@ -343,7 +433,7 @@ func sidebarRow(k *base.Kit, key ui.Key, it *SidebarItem, sel, emph bool, rc *Si
 		theme.At(c, theme.Snap(textX), ty+st.Line+theme.Snap(k.Pt(2)), tw, dt.Line)
 		c.NextFont(dt.Font)
 		c.NextTextColor(col)
-		c.BoxKeyed(ui.DrawText|ui.FadeOverflowX|base.Floating, ui.KeyN(rkey, 4), base.StrBytes(it.Detail))
+		c.BoxKeyed(ui.DrawText|ui.EllipsisOverflowX|base.Floating, ui.KeyN(rkey, 4), base.StrBytes(it.Detail))
 	}
 	c.Pop()
 	return pressed, toggled
@@ -400,7 +490,7 @@ func sidebarHeader(k *base.Kit, key ui.Key, it *SidebarItem, rc *SidebarRecipe, 
 	theme.At(c, hx, theme.Snap((h-st.Line)/2), max(w-hx-k.Pt(28), 0), st.Line)
 	c.NextFont(st.Font)
 	c.NextTextColor(col)
-	c.BoxKeyed(ui.DrawText|ui.FadeOverflowX|base.Floating, ui.KeyN(hkey, 1), base.StrBytes(it.Title))
+	c.BoxKeyed(ui.DrawText|ui.EllipsisOverflowX|base.Floating, ui.KeyN(hkey, 1), base.StrBytes(it.Title))
 	if it.Open != nil {
 		show := max(c.HotTOf(hkey), c.HotTOf(ui.KeyN(hkey, 9)))
 		if !*it.Open {
@@ -449,7 +539,7 @@ func sidebarChevron(k *base.Kit, rkey ui.Key, open *bool, x, h float32, col uint
 	cb := c.BoxKeyed(ui.Clickable|ui.HotAnimation|ui.ActiveAnimation|base.Floating, ckey, nil)
 	c.Push(cb)
 	// over the sidebar's glass: the chevron in the colour it composites to
-	under := GlassFill(k, GlassSidebar)
+	under := glassFallback(k, GlassSidebar)
 	chevron(c, ckey, 100, &DisclosureLook.Closed, t*DisclosureLook.Open, DisclosureLook.Width, k.Scale(), ink(col, under))
 	c.Pop()
 	return toggled
@@ -565,5 +655,5 @@ var SidebarIcons = struct {
 	Disk:         icon.Spec{Symbol: "internaldrive", Fallback: '▤', Pt: 16},
 	Network:      icon.Spec{Symbol: "network", Fallback: '◎', Pt: 16},
 	Folder:       icon.Spec{Symbol: "folder", Fallback: '▣', Pt: 16},
-	Tag:          icon.Spec{Symbol: "circle.fill", Fallback: '●', Pt: 9},
+	Tag:          icon.Spec{Symbol: "circle.fill", Fallback: '●', Pt: 16},
 }

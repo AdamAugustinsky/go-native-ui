@@ -83,6 +83,13 @@ type Kit struct {
 	// settle set it as well.
 	ReduceMotion bool
 
+	// Materials says the window shows the system's materials behind its
+	// layer (app.Config.Materials, and the window got them): components
+	// whose theme material is native (theme.MaterialSpec.Native) then mark
+	// their boxes as material regions (ui.Context.Material) and paint
+	// nothing there, instead of drawing the material's fallback.
+	Materials bool
+
 	// TooltipDelayNs is how long the pointer rests on a component before its
 	// tooltip shows (DefaultTooltipDelayNs when zero).
 	TooltipDelayNs int64

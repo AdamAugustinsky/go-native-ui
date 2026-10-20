@@ -1,18 +1,22 @@
 // Package demo is the window-chrome demo: Finder-, Settings- and Notes-like
 // windows, and one with Rex's tabs, built from rexui's Toolbar, Sidebar,
-// PathBar and Tabs on the macOS 27.2 layouts measured by tools/appkitscenes
-// (docs/design/liquid-glass-reference.md). The finder, settings and notes
-// windows have the scenes' sizes and contents, so that their geometry can be
-// compared with AppKit's number for number.
+// Table, PathBar and Tabs on the macOS 27.2 layouts measured by
+// tools/appkitscenes (docs/design/liquid-glass-reference.md). The finder,
+// settings and notes windows have the scenes' sizes and contents
+// (tools/appkitscenes/main.m), so that they can be compared with AppKit's
+// captures number for number and side by side. In a window the glass is the
+// system's (app.Config.Materials, rexui's GlassRegion).
 package demo
 
 import (
 	"gonativeui/app"
 	"gonativeui/icon"
 	"gonativeui/rexui"
+	"gonativeui/text"
 	"gonativeui/theme"
 	"gonativeui/theme/rex"
 	"gonativeui/ui"
+	"gonativeui/widget"
 	"gonativeui/widget/base"
 )
 
@@ -66,12 +70,12 @@ var layouts = [NumScenes]layout{
 	Tabs:     {w: 1000, h: 640, style: theme.ToolbarUnified, sidebar: 0, title: "Projects"},
 }
 
-// Config is the window of scene s: its size, and the titlebar and traffic
-// lights its toolbar style asks for (rexui.TitlebarFor).
+// Config is the window of scene s: its size, the titlebar and traffic lights
+// its toolbar style asks for (rexui.TitlebarFor), and the system's materials.
 func Config(s Scene) app.Config {
 	l := &layouts[s%NumScenes]
 	cfg := app.Config{Title: l.title, Width: l.w, Height: l.h, MinWidth: 640, MinHeight: 400,
-		Clear: [4]float32{1, 1, 1, 1}}
+		Clear: [4]float32{1, 1, 1, 1}, Materials: true}
 	cfg.Titlebar, cfg.TrafficLights = rexui.TitlebarFor(l.style)
 	return cfg
 }
@@ -88,6 +92,9 @@ type Options struct {
 	Scrolled bool
 	// Still holds animations still, for pictures.
 	Still bool
+	// PathBar shows a path bar under the finder's file list (AppKit's scene
+	// has none).
+	PathBar bool
 }
 
 // Demo is the demo window. It implements app.Builder and app.Initer.
@@ -95,6 +102,7 @@ type Demo struct {
 	opt Options
 	l   *layout
 	c   *ui.Context
+	wk  *widget.Kit
 	k   *base.Kit
 	ic  icons
 
@@ -102,28 +110,38 @@ type Demo struct {
 	places   []rexui.SidebarItem
 	open     [8]bool // the disclosure states the places point at
 	focused  bool    // the first focus is given
-	content  base.ScrollState
-	under    bool // the content is under the toolbar
-	scrolled int  // frames left to apply Options.Scrolled
+	under    bool    // the content is under the toolbar (the last frame's)
+	scrolled int     // frames left to apply Options.Scrolled
 	view     int
 	views    [4]icon.ID
 	query    ui.TextBuffer
 	sideQ    ui.TextBuffer
-	dark     int
-	accent   int
+	search   bool // the finder's search is expanded
 	path     []rexui.PathItem
-	files    []file
-	fileSel  [2]int
-	settings [len(settingsOptions)]int
 
-	bar      rexui.TabBar
-	tabs     []rexui.Tab
-	tabSel   int
-	inBar    rexui.TabBar
-	inTabs   []rexui.Tab
-	inSel    int
-	nextTab  uint64
-	editor   ui.TextBuffer
+	files  []file
+	table  base.TableState
+	cols   [4]base.Column
+	glyphs rexui.ListGlyphs
+
+	content  base.ScrollState // the settings form's and the note's scroll views
+	pops     [len(settingsPopups)]int
+	switches [len(settingsSwitches)]bool
+	sliders  [2]float32
+
+	rich     ui.RichStyles
+	richBody []byte
+	spans    []ui.Span
+	fontsAt  float32
+
+	bar     rexui.TabBar
+	tabs    []rexui.Tab
+	tabSel  int
+	inBar   rexui.TabBar
+	inTabs  []rexui.Tab
+	inSel   int
+	nextTab uint64
+
 	winW     int
 	winH     int
 	winScale float32
@@ -131,11 +149,11 @@ type Demo struct {
 
 // icons are the symbols the scenes add to the kit.
 type icons struct {
-	sidebar, inspector, back, forward, grid, list, columns, gallery, group, action, share, tag, search icon.ID
-	trash, compose, format, checklist, table, media, plus                                              icon.ID
-	airdrop, recents, apps, desktop, docs, downloads, cloud, shared, disk, network, folder, dot        icon.ID
-	sun, moon, gear, bell, lock, person, wifi, paint                                                   icon.ID
-	note, doc                                                                                          icon.ID
+	sidebar, inspector, back, forward, grid, list, columns, gallery, group, action, share, tag, search  icon.ID
+	trash, compose, format, checklist, table, media, plus                                               icon.ID
+	airdrop, recents, apps, desktop, docs, downloads, cloud, shared, disk, network, folder, dot, dashed icon.ID
+	doc, fileDoc, fileDocFill, fileFolder, preview, previewFill                                         icon.ID
+	tiles                                                                                               [len(settingsTiles)]icon.ID
 }
 
 // New returns the demo.
@@ -146,8 +164,6 @@ func New(o Options) *Demo {
 	}
 	d.query.Reserve(64)
 	d.sideQ.Reserve(64)
-	d.editor.Reserve(4096)
-	d.editor.SetString(notesText)
 	return d
 }
 
@@ -156,10 +172,12 @@ var (
 	_ app.Initer  = (*Demo)(nil)
 )
 
-// Init implements app.Initer.
+// Init implements app.Initer: the kit, and the system's glass when the window
+// has it.
 func (d *Demo) Init(a *app.App) error {
 	d.Attach(a.UI, a.Text)
-	a.UI.Reserve(4096)
+	d.k.Materials = a.Win != nil && a.Win.HasMaterials()
+	a.UI.Reserve(8192)
 	return nil
 }
 
@@ -167,7 +185,8 @@ func (d *Demo) Init(a *app.App) error {
 // call it with a fake text system.
 func (d *Demo) Attach(c *ui.Context, ts base.TextSystem) {
 	d.c = c
-	d.k = base.NewKit(c, ts, rex.Theme())
+	d.wk = widget.NewKit(c, ts, rex.Theme())
+	d.k = d.wk.Kit
 	d.k.SetPreference(d.opt.Preference)
 	d.k.ReduceMotion = d.opt.Still
 	d.addIcons()
@@ -217,10 +236,19 @@ func (d *Demo) addIcons() {
 	ic.downloads, ic.cloud, ic.shared, ic.disk = k.AddIcon(si.Downloads), k.AddIcon(si.Cloud), k.AddIcon(si.Shared), k.AddIcon(si.Disk)
 	ic.network, ic.folder, ic.dot = k.AddIcon(si.Network), k.AddIcon(si.Folder), k.AddIcon(si.Tag)
 	ic.airdrop = k.AddIcon(icon.Spec{Symbol: "dot.radiowaves.left.and.right", Fallback: '◉', Pt: 16})
-	side := func(sym string, fb rune) icon.ID { return k.AddIcon(icon.Spec{Symbol: sym, Fallback: fb, Pt: 16}) }
-	ic.sun, ic.moon, ic.gear, ic.bell = side("sun.max", '☀'), side("moon", '☾'), side("gearshape", '⚙'), side("bell", '♪')
-	ic.lock, ic.person, ic.wifi, ic.paint = side("lock", '⚿'), side("person.crop.circle", '☺'), side("wifi", '≋'), side("paintpalette", '◐')
-	ic.note, ic.doc = side("note.text", '▤'), k.AddIcon(icon.Spec{Symbol: "doc", Fallback: '▢', Pt: 12})
+	ic.dashed = k.AddIcon(icon.Spec{Symbol: "circle.dashed", Fallback: '◌', Pt: 16})
+	ic.doc = k.AddIcon(icon.Spec{Symbol: "doc", Fallback: '▢', Pt: 12})
+	// the file list's icons: a white page with a grey edge and a blue
+	// folder, the system's neutral look (Finder's icons are the files' own)
+	ic.fileDocFill = k.AddIcon(icon.Spec{Symbol: "doc.fill", Fallback: '▮', Pt: 13})
+	ic.fileDoc = k.AddIcon(icon.Spec{Symbol: "doc", Fallback: '▯', Pt: 13})
+	ic.fileFolder = k.AddIcon(icon.Spec{Symbol: "folder.fill", Fallback: '▬', Pt: 12})
+	ic.previewFill = k.AddIcon(icon.Spec{Symbol: "doc.fill", Fallback: '▮', Pt: 28})
+	ic.preview = k.AddIcon(icon.Spec{Symbol: "doc", Fallback: '▯', Pt: 28})
+	for i, t := range settingsTiles {
+		ic.tiles[i] = k.AddIcon(rexui.SidebarTileSymbol(t.symbol, '■'))
+	}
+	d.glyphs = rexui.AddListGlyphs(k)
 }
 
 // Build builds the frame. It implements app.Builder.
@@ -231,19 +259,19 @@ func (d *Demo) Build(c *ui.Context) {
 	}
 	d.winW, d.winH, d.winScale = w, h, c.Scale()
 	k := d.k
-	k.Begin(c)
+	d.wk.Begin(c)
 	r := k.Theme()
 	W, H := float32(w), float32(h)
 	s := r.Scale
+	if d.fontsAt != s {
+		d.fonts(s)
+	}
 	tbH := theme.Snap(r.Window.Toolbars[d.l.style].Height)
-
-	// the window's content colour under everything
-	theme.At(c, 0, 0, W, H)
-	c.NextBG(r.Colors[theme.Window])
-	c.BoxKeyed(ui.DrawBackground|base.Floating, ui.HashString(0, "bg"), nil)
-
 	sbW := theme.Snap(d.l.sidebar * s)
 	inW := theme.Snap(d.l.inspector * s)
+
+	// The panes' glass, the toolbar over it, then the content below the
+	// toolbar's band (a table's header in its pocket draws over the bar).
 	if sbW > 0 {
 		theme.At(c, 0, 0, sbW, H)
 		c.Push(c.Box(base.Floating, "sidebar"))
@@ -256,16 +284,42 @@ func (d *Demo) Build(c *ui.Context) {
 		d.inspector(tbH)
 		c.Pop()
 	}
-	theme.At(c, sbW, 0, W-sbW-inW, H)
-	c.Push(c.Box(base.Floating, "content"))
-	d.contentPane(tbH, W-sbW-inW, H)
-	c.Pop()
-
 	d.toolbar(sbW, W-inW)
-	if d.opt.Scene == Finder {
-		d.fileHeader(sbW, tbH, W-sbW-inW)
+	theme.At(c, sbW, tbH, W-sbW-inW, H-tbH)
+	flags := base.Floating
+	if d.opt.Scene != Finder { // the table paints its rows' background, below its header in the pocket
+		c.NextBG(d.contentFill())
+		flags |= ui.DrawBackground
 	}
-	k.End()
+	c.Push(c.Box(flags, "content"))
+	under := d.under
+	d.contentPane(tbH, W-sbW-inW, H-tbH)
+	if d.under != under { // the toolbar of this frame used the last one's
+		c.RequestFrame()
+	}
+	c.Pop()
+	d.wk.End()
+}
+
+// contentFill is the content pane's background: a table's, a text view's.
+func (d *Demo) contentFill() uint32 {
+	r := d.k.Theme()
+	if d.opt.Scene == Notes {
+		return r.Colors[theme.TextBackground]
+	}
+	return r.Colors[theme.ControlBackground]
+}
+
+// fonts makes the fonts the scenes set themselves, at scale s.
+func (d *Demo) fonts(s float32) {
+	d.fontsAt = s
+	ts := d.k.TextSystem()
+	f := func(pt float32, wt int) text.FontKey { return ts.Font(text.FontDesc{SizePt: pt, Weight: wt, Scale: s}) }
+	d.rich = ui.RichStyles{}
+	d.rich.Set(0, ui.RichStyle{Font: f(13, theme.WeightRegular)})
+	d.rich.Set(1, ui.RichStyle{Font: f(22, theme.WeightRegular)}) // Title 1
+	d.rich.Set(2, ui.RichStyle{Font: f(15, theme.WeightSemibold)})
+	finderFonts[0], finderFonts[1] = f(15, theme.WeightSemibold), f(13, theme.WeightSemibold)
 }
 
 // toolbar builds the scene's toolbar over the panes.
@@ -276,17 +330,16 @@ func (d *Demo) toolbar(sbW, inX float32) {
 	if d.l.inspector > 0 {
 		panes[1] = inX
 	}
-	o := rexui.ToolbarOpts{Style: d.l.style, Title: d.l.title, Panes: panes, ContentUnder: d.under, Traffic: d.opt.Traffic}
+	o := rexui.ToolbarOpts{Style: d.l.style, Title: d.l.title, Panes: panes, ContentUnder: d.under, Traffic: d.opt.Traffic, BandFill: d.contentFill()}
 	if d.opt.Scene == Finder { // the file list's header is in the toolbar's pocket
-		o.ContentUnder, o.Pocket = true, theme.Snap(fileHeaderH*d.k.Theme().Scale)
+		o.ContentUnder, o.Pocket = true, theme.Snap(k.Theme().Lines.HeaderH)
 	}
 	switch d.opt.Scene {
 	case Finder:
-		o.Subtitle = ""
 		tb := rexui.BeginToolbar(k, "Toolbar", o)
 		tb.Item(ic.sidebar, "Sidebar")
 		tb.NextPane()
-		tb.Nav(ic.back, ic.forward, true, false)
+		tb.Nav(ic.back, ic.forward, true, true)
 		tb.Title()
 		tb.Flexible()
 		tb.Picker("View", &d.view, d.views[:], viewNames, true)
@@ -296,7 +349,13 @@ func (d *Demo) toolbar(sbW, inX float32) {
 		tb.Item(ic.tag, "Tags")
 		tb.EndGroup()
 		tb.Menu(ic.action, "Action", -1)
-		tb.SearchButton(ic.search, "Search")
+		if d.search {
+			if s := tb.Search("Search", &d.query, "Search", 0); s.Submitted || (!s.Focused && d.query.Len() == 0) {
+				d.search = false
+			}
+		} else if tb.SearchButton(ic.search, "Search").Clicked {
+			d.search = true
+		}
 		tb.NextPane()
 		tb.Item(ic.inspector, "Inspector")
 		tb.End()
@@ -319,8 +378,10 @@ func (d *Demo) toolbar(sbW, inX float32) {
 		tb.Item(ic.checklist, "Checklist")
 		tb.Item(ic.table, "Table")
 		tb.EndGroup()
+		tb.BeginShared("insert-share")
 		tb.Item(ic.media, "Media")
 		tb.Item(ic.share, "Share")
+		tb.EndGroup()
 		tb.Search("Search", &d.query, "Search", 0)
 		tb.End()
 	case Tabs:
@@ -338,3 +399,67 @@ func (d *Demo) toolbar(sbW, inX float32) {
 }
 
 var viewNames = []string{"as Icons", "as List", "as Columns", "as Gallery"}
+
+// sidebar builds the sidebar pane (the current parent).
+func (d *Demo) sidebar(tbH float32) {
+	k := d.k
+	o := rexui.SidebarOpts{Top: tbH}
+	if d.opt.Scene == Settings {
+		o.Pad = 34 // the search field: 4 below the safe area, 24 tall, 6 above the rows
+	}
+	if d.opt.Scene == Notes {
+		o.RowH, o.HeaderH = 52, 24
+	}
+	if d.opt.Scene == Settings {
+		d.tileColours()
+	}
+	s := rexui.Sidebar(k, "Sidebar", &d.side, d.places, o)
+	if !d.focused && d.opt.Scene != Finder { // settings and notes start with the keyboard in the sidebar
+		k.Context().SetFocus(k.Context().KeyOf(s.ID))
+		d.focused = true
+	}
+	if d.opt.Scene == Settings {
+		c := k.Context()
+		r := k.Theme()
+		w := c.Rect(c.Parent())
+		inset := theme.Snap(r.Window.Sidebar.SearchInset)
+		theme.At(c, inset, tbH+theme.Snap(k.Pt(4)), max(w[2]-w[0]-2*inset, 0), theme.Snap(r.Window.Sidebar.SearchH))
+		c.Push(c.Box(base.Floating, "search"))
+		rexui.SidebarSearch(k, "Search Settings", &d.sideQ, "Search")
+		c.Pop()
+	}
+}
+
+// contentPane builds the content (the current parent, below the toolbar) of
+// width w and height h.
+func (d *Demo) contentPane(tbH, w, h float32) {
+	switch d.opt.Scene {
+	case Finder:
+		d.fileList(w, h)
+	case Settings:
+		d.settingsForm(w, h)
+	case Notes:
+		d.notesEditor(w, h)
+	case Tabs:
+		d.tabsContent(w, h)
+	}
+}
+
+// inspector builds the inspector pane (the current parent).
+func (d *Demo) inspector(tbH float32) {
+	k := d.k
+	c := k.Context()
+	pr := c.Rect(c.Parent())
+	theme.At(c, 0, 0, pr[2]-pr[0], pr[3]-pr[1])
+	g := rexui.GlassFill(k, rexui.GlassInspector)
+	flags := base.Floating
+	if g != 0 {
+		c.NextBG(g)
+		flags |= ui.DrawBackground
+	}
+	id := c.BoxKeyed(flags, ui.HashString(0, "inspector glass"), nil)
+	rexui.GlassRegion(k, id, rexui.GlassInspector, 0)
+	c.Push(id)
+	d.inspectorContent(tbH, pr[2]-pr[0])
+	c.Pop()
+}

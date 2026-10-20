@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"math"
 	"os"
+	"runtime"
 	"testing"
 
 	"gonativeui/gpu"
@@ -76,11 +77,12 @@ type finderToolbar struct {
 	view  int
 	views []icon.ID
 	q     ui.TextBuffer
+	under bool // content is under the toolbar
 }
 
 func (f *finderToolbar) build(g *rig) {
 	ic := f.ic
-	o := rexui.ToolbarOpts{Style: f.style, Title: "Documents", Panes: [2]float32{g.k.Pt(180), g.k.Pt(890)}}
+	o := rexui.ToolbarOpts{Style: f.style, Title: "Documents", Panes: [2]float32{g.k.Pt(180), g.k.Pt(890)}, ContentUnder: f.under}
 	tb := rexui.BeginToolbar(g.k, "Toolbar", o)
 	tb.Item(ic.sidebar, "Sidebar")
 	tb.NextPane()
@@ -482,6 +484,75 @@ func TestChromeAllocatesNothingPerFrame(t *testing.T) {
 		g.frames(5)
 		if n := testing.AllocsPerRun(50, g.frame); n != 0 {
 			t.Fatalf("mode %d: %.1f allocations per frame", m, n)
+		}
+	}
+}
+
+// Over the sidebar a compact toolbar's capsules lie 14.5 apart (Notes'
+// sidebar toggle and Delete: AppKit centres each in a 44-pt viewer), and
+// items that share a capsule without being a group lie 2 apart in it
+// (Notes' Media and Share).
+func TestToolbarSidebarGapAndSharedCapsule(t *testing.T) {
+	g := openRig(t, theme.Light, nil, func(*rig) {})
+	g.w, g.h = 1800, 200
+	ic := addChromeIcons(g)
+	var q ui.TextBuffer
+	q.Reserve(16)
+	g.build = func(g *rig) {
+		tb := rexui.BeginToolbar(g.k, "Toolbar", rexui.ToolbarOpts{Style: theme.ToolbarCompact, Title: "Notes", Panes: [2]float32{g.k.Pt(240), 0}})
+		tb.Item(ic.sidebar, "Sidebar")
+		tb.Item(ic.action, "Delete")
+		tb.NextPane()
+		tb.Title()
+		tb.Flexible()
+		tb.BeginShared("insert-share")
+		tb.Item(ic.group, "Media")
+		tb.Item(ic.share, "Share")
+		tb.EndGroup()
+		tb.Search("Search", &q, "Search", 0)
+		tb.End()
+	}
+	g.settle()
+	sb, del := g.frameOf(ui.RoleButton, "Sidebar"), g.frameOf(ui.RoleButton, "Delete")
+	if !near(del[0]-sb[2], 14.5) {
+		t.Errorf("Delete is %v after the sidebar toggle, want 14.5", del[0]-sb[2])
+	}
+	media, share, both := g.frameOf(ui.RoleButton, "Media"), g.frameOf(ui.RoleButton, "Share"), g.frameOf(ui.RoleGroup, "insert-share")
+	if !near(share[0]-media[2], 2) || media[0] != both[0] || share[2] != both[2] {
+		t.Errorf("Media %v and Share %v in %v: want 2 apart filling one capsule", media, share, both)
+	}
+}
+
+// In a window with the system's materials the chrome marks its glass as
+// material regions: the sidebar, the toolbar band's bar over the content,
+// and on macOS each capsule; elsewhere, and under Reduce Transparency, it
+// marks none but the band's bar (opaque: the layer cannot show the
+// capsules over its own pixels) and draws the fallbacks.
+func TestChromeMarksMaterialRegions(t *testing.T) {
+	for _, rt := range []bool{false, true} {
+		sys := theme.SystemValues{Known: true, Settings: theme.Settings{ReduceTransparency: rt}}
+		g := openRig(t, theme.Light, &sys, func(*rig) {})
+		g.w, g.h = 2240, 800
+		f := &finderToolbar{ic: addChromeIcons(g), style: theme.ToolbarUnified, under: true}
+		f.views = []icon.ID{f.ic.grid, f.ic.list}
+		m := newSidebarModel(f.ic)
+		g.build = func(g *rig) {
+			m.build(g)
+			f.build(g)
+		}
+		g.k.Materials = true
+		g.settle()
+		var n [ui.AreaHUD + 1]int
+		for _, r := range g.c.MaterialRegions(nil) {
+			n[r.Area]++
+		}
+		native := runtime.GOOS == "darwin" && !rt
+		wantSide, wantCaps := 0, 0
+		if native {
+			wantSide, wantCaps = 1, 7 // sidebar toggle, nav, view, group, share-tag, action, search, inspector
+		}
+		if n[ui.AreaSidebar] != wantSide || n[ui.AreaTitlebar] != 1 || (native && n[ui.AreaToolbarCapsule] < wantCaps) || (!native && n[ui.AreaToolbarCapsule] != 0) {
+			t.Errorf("reduce transparency %v: regions %v; want %d sidebar, 1 titlebar, %d+ capsules", rt, n, wantSide, wantCaps)
 		}
 	}
 }

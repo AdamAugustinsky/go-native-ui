@@ -65,13 +65,12 @@ func benchSteps(s Scene) []widgettest.Step {
 			click(ui.RoleComboBox, "View"), idle(3), click(ui.RoleComboBox, "View"), idle(3),
 			click(ui.RoleComboBox, "View"), idle(3), click(ui.RoleComboBox, "View"), idle(3))
 		add(click(row, "Desktop"), idle(3), keys(ui.KeyDown, 0, 3), idle(3), keys(ui.KeyUp, 0, 2), idle(3),
-			click(button, "Disclosure"), idle(20), click(button, "Disclosure"), idle(20),
-			move(ui.RoleGroup, "Tags"), idle(10), sweep(ui.RoleList, "Sidebar", 30), idle(3),
-			click(row, "Documents"), idle(3))
-		add(sweep(ui.RoleScrollArea, "Files", 30), wheel(ui.RoleScrollArea, "Files", -12, 20), idle(10),
-			wheel(ui.RoleScrollArea, "Files", 12, 30), idle(10),
-			click(row, "Moodboard.png"), idle(3), click(row, "Design Review.key"), idle(3),
-			move(button, "Users"), idle(3), down(button, "adam"), idle(3), up(), idle(3))
+			move(ui.RoleGroup, "Tags"), idle(10), click(button, "Show or Hide"), idle(20), click(button, "Show or Hide"), idle(20),
+			sweep(ui.RoleList, "Sidebar", 30), idle(3), click(row, "Documents"), idle(3))
+		add(sweep(ui.RoleTable, "Files", 30), wheel(ui.RoleTable, "Files", -12, 20), idle(10),
+			wheel(ui.RoleTable, "Files", 12, 30), idle(10),
+			click(ui.RoleRow, "Moodboard.png"), idle(3), click(ui.RoleRow, "Design Review.key"), idle(3),
+			click(button, "Search"), idle(10), typ("rep"), idle(3), key(ui.KeyEscape, 0), idle(10))
 	case Settings:
 		add(move(button, "Back"), idle(3), move(button, "Forward"), idle(3),
 			click(row, "Wi-Fi"), idle(3), keys(ui.KeyDown, 0, 5), idle(3), click(row, "Appearance"), idle(3),

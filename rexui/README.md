@@ -151,7 +151,13 @@ comparison.
 
 `cmd/chromedemo` builds the Finder, Settings and Notes scenes of
 `tools/appkitscenes` (same window sizes, panes, items and symbols) from
-`Toolbar`, `Sidebar`, `PathBar` and `Tabs`, plus a window of Rex's tabs.
+`Toolbar`, `Sidebar`, `Table`, `PathBar` and `Tabs`, plus a window of Rex's
+tabs, with the scenes' contents (`tools/appkitscenes/main.m`: the 48 files,
+the inspector, the settings form, the note) so that the pictures compare side
+by side. `-plain` opens a striped backdrop window for glass captures and
+`-drawn` turns the system's materials off. The layout audit
+(`demo/audit_test.go`) runs on every scene, light and dark, at the top and
+scrolled, and with a settings pop-up menu open.
 `chromedemo -scene NAME -measure` prints the chrome's frames in points;
 `-o` renders the scene offscreen. Compared with the D0 dumps and captures
 (`appkit-ref/scenes/captures`, macOS 27.2), 2026-10-19:
@@ -160,7 +166,7 @@ comparison.
 |---|---|---|
 | finder | sidebar toggle 96, back/forward 188–274, title 284, collapsed picker 599.5–645.5, Group menu 653.5–701.5, share/tags group 705.5–789.5 (items 8 apart), Action 793.5–838, search 846–882, inspector toggle 898; sidebar rows and headers (52, 71 … 263, 276), row text ink 9 of 10 rows | Shared's text 2.5 right (AppKit puts it 1 after its 26-wide image, not 4) |
 | settings | back/forward 223–309, title 319, sidebar search 10, 56, 195 × 24, rows 86, 105 … 425 | — |
-| notes | sidebar toggle 91.5 (31 wide vs 31.5), title 250, search field 726–892, rows 40, 64 … 450 (52 tall), headers 24 | Delete 126.5 vs 137.5 (AppKit leaves 14.5 between the sidebar section's items); AppKit merges the adjacent Media and Share into one capsule (2 apart), so the format group lands at 525 vs 517 and New Note at 488 vs 477 |
+| notes | sidebar toggle 91.5 (31 wide vs 31.5), Delete 137 (14.5 after the toggle, `SidebarGap`), title 250, format group 517, Media and Share one capsule 644.5–716 (`BeginShared`, 2 apart), search field 726–892, rows 40, 64 … 450 (52 tall), headers 24 | New Note 480 vs 477 (AppKit's viewer there is 40 wide around a 28.5 platter; the rule is not found) |
 
 Colours at the same points, ΔE2000, light/dark × key/inactive: sidebar and
 inspector glass ≤ 1.3, selections (emphasised, unemphasised, inactive) ≤ 0.7,
@@ -172,9 +178,23 @@ Live windows on the MacBook (`Chrome D4`, light and dark, key and not key)
 give the same numbers: fills ΔE ≤ 1.5, ink ≤ 1.9, traffic lights at the
 scenes' centres (26, 26 and 19, 20).
 
-Until the hosted materials (N3) land, the chrome draws each material's
-measured fallback; every piece asks for its material through `GlassFill`
-(`glass.go`), the one place the native materials take over.
+Second pass (2026-10-20), offscreen against the same captures: the window
+titles' ink within 0.5 (their text 2 into the title field, `TitleTextX`);
+Finder's file list is `rexui.Table` (header in the pocket, `ClearHeader`;
+Size right-aligned under its title; no separator after the filling Kind
+column; secondary text on the emphasised selection white at 0.7, measured
+#B3D1F6 on #0064E1); the settings tiles 20 × 20, radius 5, 11-pt white
+symbols, half opaque in an inactive window; pop-ups as wide as their widest
+option and 47.5, at the row's end; tags 16-pt circles (17 measured).
+
+The glass is the system's in a window (`base.Kit.Materials`, set from
+`Window.HasMaterials`): `GlassFill` leaves the box clear and `GlassRegion`
+marks it (sidebar, inspector, each capsule; the band over the content is an
+opaque `AreaTitlebar` region of the bar's or the content's colour, since the
+capsules lie below the window's pixels). Offscreen, under Reduce
+Transparency and off macOS the measured fallbacks are drawn. The rows of a
+sidebar and the content scroll below the band, clipped there, where AppKit
+fades them under it.
 
 ### Left to the eye, and why
 
@@ -239,7 +259,15 @@ are reported against `theme/` (D1), not changed there:
     detail line black 43 % / white 36 % (0.7 white on the accent); a
     two-line row's title is semibold.
   - The sidebar's search field is a filled capsule: #EAEAEA / #4E4E4E,
-    #E5E5E5 / #464646 inactive.
+    #E5E5E5 / #464646 inactive, fading from a #FFFFFF / #727272 rim at its
+    top and bottom in a key window, with a hairline just outside it
+    (#D8D8D8 / #8C8C8C; #CDCDCD / #181818 inactive).
+  - Single-line labels end in "…" (`ui.EllipsisOverflowX`: sidebar rows,
+    table cells and headers, pop-ups, the path bar); tabs keep their fade.
+    A row's text ends 22 before the sidebar's edge (`SidebarRecipe.TextEnd`).
+  - A disclosure in a sidebar row lies between the selection's edge and
+    the symbol; no AppKit capture has a nested source-list row, so this
+    place is not measured.
   - Lists: inset 10, rows 10 pt below the top (5 below a header), block
     divider inset 6; header 28 with 1 × 16 column separators; cell padding
     10, 8 at the outer sides; disclosure x 2, width 13, content at 15 + 13

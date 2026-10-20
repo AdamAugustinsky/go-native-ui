@@ -56,12 +56,19 @@ type ToolbarOpts struct {
 	// Pocket is how far below the toolbar, in pixels, the scroll edge
 	// reaches: a table's header pinned under the toolbar is in it (§4: the
 	// pocket ends at the header's bottom, 80 = 52 + 28), so the bar covers
-	// the header and the hairline lies below it. Build the header after the
-	// toolbar, so that it draws on the bar.
+	// the header, whose own line ends the pocket (the toolbar draws none).
+	// Build the header after the toolbar, so that it draws on the bar, and
+	// leave its background clear (TableOpts.ClearHeader).
 	Pocket float32
 	// Traffic draws the traffic lights at the style's place (offscreen
 	// renders; in a window the system draws them).
 	Traffic bool
+	// BandFill is the colour of the content pane's top under the band while
+	// nothing is scrolled under it (the content's background, 0: none). The
+	// content lies below the band, which shows it: with hosted materials the
+	// band over the content pane is the system's opaque bar (GlassTitlebar)
+	// of this colour, as the capsules are below the window's own pixels.
+	BandFill uint32
 }
 
 // ToolbarRecipe is the toolbar's look. Lengths are in points.
@@ -107,6 +114,17 @@ type ToolbarRecipe struct {
 	// 10 and 8); SearchW an expanded search field's width.
 	SearchGap [2]float32
 	SearchW   float32
+	// SidebarGap is the gap between two capsules over the sidebar (the
+	// first pane), compact and unified (0: the theme's Capsule.Gap): AppKit
+	// centres each in a 44-pt item viewer there, so Notes' sidebar toggle
+	// and Delete lie 14.5 apart. SharedGap is the gap between items that
+	// share a capsule without being a group (BeginShared; measured 2, Notes'
+	// Media and Share).
+	SidebarGap [2]float32
+	SharedGap  float32
+	// TitleTextX is how far into the title's text field (_NSToolbarTitleField,
+	// at the title's place) its text starts: an NSTextField's 2.
+	TitleTextX float32
 	// RexGlyph, RexGlyphHover and RexFill are the Rex band's borderless
 	// items (rexlook's ⌘ and +), RexHit their side, RexRadius their corner.
 	RexGlyph, RexGlyphHover, RexFill Pair
@@ -128,6 +146,7 @@ var ToolbarLook = ToolbarRecipe{
 	SegmentW: 39, ItemPad: 6, GroupPad: [2]float32{8.5, 10.5}, ItemMin: [2]float32{24, 36},
 	MenuPad: 27.5, MenuMin: 44.5,
 	SearchGap: [2]float32{10, 8}, SearchW: 166,
+	SidebarGap: [2]float32{14.5, 0}, SharedGap: 2, TitleTextX: 2,
 	RexGlyph: Solid(0x5F5D62, 0xA3A7B8), RexGlyphHover: Solid(0x1E2227, 0xECEDF3), RexFill: PairA(0x2A2030, 0xFFFFFF, 0.08, 0.08),
 	RexHit: 28, RexRadius: 12,
 	Traffic:         [3]Pair{Solid(0xF87B72, 0xF35C52), Solid(0xFDC734, 0xFDBF00), Solid(0x7FD457, 0x2CC000)},
@@ -169,6 +188,7 @@ type Toolbar struct {
 	nGroup  int
 	n       uint64
 	open    bool
+	native  bool // the capsules are the system's glass (GlassNative)
 }
 
 // BeginToolbar starts the toolbar of the window at its top: the band, the
@@ -190,6 +210,7 @@ func BeginToolbar(k *base.Kit, label string, o ToolbarOpts) Toolbar {
 		o.Style = theme.ToolbarPlain
 	}
 	tb := Toolbar{k: k, o: o, rc: &ToolbarLook, spec: r.Window.Toolbars[o.Style], open: true}
+	tb.native = o.Style != theme.ToolbarRex && GlassNative(k, GlassToolbarCapsule)
 	_, ident := ui.SplitLabel(label)
 	tb.key = ui.HashString(c.ParentKey(), ident)
 	w, _ := c.Size()
@@ -201,12 +222,7 @@ func BeginToolbar(k *base.Kit, label string, o ToolbarOpts) Toolbar {
 	// over the content pane (each pane has its own pocket: the sidebar's and
 	// the inspector's glass run to the top without one)
 	bar := o.Style != theme.ToolbarRex && theme.ScrollEdgeVisible(o.ContentUnder, !k.Inactive())
-	theme.At(c, 0, 0, tb.w, h)
-	c.NextRole(ui.RoleGroup)
-	c.NextSemName(label)
-	tb.band = c.BoxKeyed(ui.WindowDrag|base.Floating, tb.key, nil)
-	c.Push(tb.band)
-	if bar {
+	if o.Style != theme.ToolbarRex && (bar || o.BandFill != 0) {
 		bx0, bx1 := float32(0), tb.w
 		if o.Panes[0] > 0 {
 			bx0 = o.Panes[0]
@@ -216,15 +232,30 @@ func BeginToolbar(k *base.Kit, label string, o ToolbarOpts) Toolbar {
 		}
 		// the bar down to the pocket's end (a header pinned under the
 		// toolbar), and the hairline just below it (y 52..52.5 measured: the
-		// line is outside the band)
+		// line is outside the band); at rest, the content's colour
 		pk := theme.Snap(max(o.Pocket, 0))
+		fill := o.BandFill
+		if bar {
+			fill = glassFallback(k, GlassTitlebar)
+		}
 		theme.At(c, bx0, 0, max(bx1-bx0, 0), h+pk)
-		c.NextBG(GlassFill(k, GlassTitlebar))
-		c.BoxKeyed(ui.DrawBackground|base.Floating, ui.KeyN(tb.key, 2), nil)
-		theme.At(c, bx0, h+pk, max(bx1-bx0, 0), r.Window.ScrollEdge.Line)
-		c.NextBG(r.Colors[theme.ScrollEdgeLine])
-		c.BoxKeyed(ui.DrawBackground|base.Floating, ui.KeyN(tb.key, 1), nil)
+		flags := base.Floating
+		if !GlassNative(k, GlassTitlebar) {
+			c.NextBG(fill)
+			flags |= ui.DrawBackground
+		}
+		GlassRegion(k, c.BoxKeyed(flags, ui.KeyN(tb.key, 2), nil), GlassTitlebar, fill)
+		if bar && pk == 0 {
+			theme.At(c, bx0, h+pk, max(bx1-bx0, 0), r.Window.ScrollEdge.Line)
+			c.NextBG(r.Colors[theme.ScrollEdgeLine])
+			c.BoxKeyed(ui.DrawBackground|base.Floating, ui.KeyN(tb.key, 1), nil)
+		}
 	}
+	theme.At(c, 0, 0, tb.w, h)
+	c.NextRole(ui.RoleGroup)
+	c.NextSemName(label)
+	tb.band = c.BoxKeyed(ui.WindowDrag|base.Floating, tb.key, nil)
+	c.Push(tb.band)
 	if o.Traffic {
 		tb.trafficLights()
 	}
@@ -344,9 +375,22 @@ func (tb *Toolbar) gap(kind tbKind) {
 	case tbPicker:
 		tb.space(wg.WideGap)
 	default:
-		tb.space(wg.Gap)
+		g := wg.Gap
+		if i := tb.styleIndex(); tb.pane == 0 && tb.o.Panes[0] > 0 && tb.rc.SidebarGap[i] > 0 {
+			g = theme.Snap(tb.k.Pt(tb.rc.SidebarGap[i]))
+		}
+		tb.space(g)
 	}
 	tb.prev = kind
+}
+
+// styleIndex is 0 for a compact toolbar, 1 for the others (the recipe's
+// pairs).
+func (tb *Toolbar) styleIndex() int {
+	if tb.o.Style == theme.ToolbarCompact {
+		return 0
+	}
+	return 1
 }
 
 func (tb *Toolbar) capsuleH() float32 {
@@ -393,19 +437,29 @@ func (tb *Toolbar) capsuleLook(v base.Visual, h float32) ui.Flags {
 	fill := GlassFill(tb.k, GlassToolbarCapsule)
 	fill = over(fill, tb.rc.Hover.RGBA(r), v.Hot)
 	fill = over(fill, tb.rc.Press.RGBA(r), v.Down)
+	c.NextRadius(h / 2)
+	if tb.native { // the system's glass has its own rim
+		if fill&0xFF == 0 {
+			return 0
+		}
+		c.NextBG(fill)
+		return ui.DrawBackground
+	}
 	rim := tb.rc.Rim.RGBA(r)
 	if v.Inactive || v.Disabled {
 		rim = tb.rc.RimInactive.RGBA(r)
 	}
 	c.NextBG(fill)
-	c.NextRadius(h / 2)
 	c.NextBorder(rim, r.Lines.Hairline)
 	return ui.DrawBackground | ui.DrawBorder
 }
 
+// glass marks the capsule id as the toolbar's glass (GlassRegion).
+func (tb *Toolbar) glass(id ui.ID) { GlassRegion(tb.k, id, GlassToolbarCapsule, 0) }
+
 // highlight draws a capsule's bright bottom rim (dark mode), in the root id.
 func (tb *Toolbar) highlight(id ui.ID, v base.Visual, h float32) {
-	if v.Inactive || v.Disabled {
+	if v.Inactive || v.Disabled || tb.native {
 		return
 	}
 	if hl := tb.rc.Highlight.RGBA(tb.k.Theme()); hl&0xFF != 0 && tb.k.Theme().Dark() {
@@ -450,6 +504,7 @@ func (tb *Toolbar) Item(ic icon.ID, name string) base.Signal {
 	k.BeginPress(&p, ui.RoleButton, ui.Px(w), ui.Px(h), flags, nil)
 	tb.symbol(ui.KeyN(p.Key, 1), ic, tb.glyph(p.Visual))
 	if !tb.inGroup {
+		tb.glass(p.ID)
 		tb.highlight(p.ID, p.Visual, h)
 	}
 	k.FocusRing(p.ID, p.Visual, h/2)
@@ -489,7 +544,15 @@ func (tb *Toolbar) advance(w float32) {
 
 // BeginGroup starts a group of items that share one capsule (an
 // NSToolbarItemGroup): Item builds its parts, EndGroup closes it.
-func (tb *Toolbar) BeginGroup(name string) {
+func (tb *Toolbar) BeginGroup(name string) { tb.beginGroup(name, false) }
+
+// BeginShared starts items that are separate toolbar items side by side,
+// which AppKit gives one capsule (Notes' Media and Share): Item builds them,
+// EndGroup closes the capsule. They lie SharedGap apart, closer than a
+// group's parts.
+func (tb *Toolbar) BeginShared(name string) { tb.beginGroup(name, true) }
+
+func (tb *Toolbar) beginGroup(name string, shared bool) {
 	if tb.inGroup || tb.o.Style == theme.ToolbarRex {
 		return
 	}
@@ -501,11 +564,16 @@ func (tb *Toolbar) BeginGroup(name string) {
 	flags := tb.capsuleLook(base.Visual{Inactive: k.Inactive(), Disabled: k.Disabled()}, h)
 	c.NextAxis(ui.AxisX)
 	c.NextCross(ui.CrossCenter)
-	c.NextGap(k.Theme().Window.Capsule.GroupGap)
+	gap := k.Theme().Window.Capsule.GroupGap
+	if shared {
+		gap = theme.Snap(k.Pt(tb.rc.SharedGap))
+	}
+	c.NextGap(gap)
 	c.NextSize(ui.Children(1), ui.Px(h))
 	c.NextRole(ui.RoleGroup)
 	c.NextSemName(name)
 	tb.group = c.BoxKeyed(flags, ui.HashString(c.ParentKey(), ident), nil)
+	tb.glass(tb.group)
 	c.Push(tb.group)
 	tb.inGroup = true
 	tb.nGroup = 0
@@ -541,6 +609,7 @@ func (tb *Toolbar) Nav(back, forward icon.ID, canBack, canForward bool) (b, f ba
 	c.NextSemName("Back/Forward")
 	tb.n++
 	g := c.BoxKeyed(flags, ui.KeyN(tb.key, 2000+tb.n), nil)
+	tb.glass(g)
 	c.Push(g)
 	half := theme.Snap(w / 2)
 	for i, ic := range [2]icon.ID{back, forward} {
@@ -593,9 +662,10 @@ func (tb *Toolbar) Picker(label string, sel *int, icons []icon.ID, names []strin
 		c.NextAxis(ui.AxisX)
 		c.NextCross(ui.CrossCenter)
 		k.BeginPress(&p, ui.RoleComboBox, ui.Px(w), ui.Px(h), flags, nil)
+		tb.glass(p.ID)
 		fg := tb.glyph(p.Visual)
 		if *sel >= 0 && *sel < len(icons) {
-			tb.glyphAndChevron(p.Key, icons[*sel], fg, w, h)
+			tb.glyphAndChevron(p.Key, icons[*sel], icon.ChevronUpDown, fg, w, h)
 		}
 		tb.highlight(p.ID, p.Visual, h)
 		k.FocusRing(p.ID, p.Visual, h/2)
@@ -622,6 +692,7 @@ func (tb *Toolbar) Picker(label string, sel *int, icons []icon.ID, names []strin
 	c.NextSemName(ch.Name)
 	c.NextSize(ui.Children(1), ui.Px(h))
 	g := c.BoxKeyed(flags, ch.Key, nil)
+	tb.glass(g)
 	c.Push(g)
 	sw := theme.Snap(k.Pt(tb.rc.SegmentW))
 	var ring base.Visual
@@ -659,20 +730,20 @@ func b2f(b bool) float32 {
 	return 0
 }
 
-// glyphAndChevron lays a symbol and a pull-down chevron centred in a w × h
-// capsule (a menu item, a collapsed picker).
-func (tb *Toolbar) glyphAndChevron(key ui.Key, ic icon.ID, fg uint32, w, h float32) {
+// glyphAndChevron lays a symbol and a chevron (a pull-down's, a pop-up's)
+// centred in a w × h capsule (a menu item, a collapsed picker).
+func (tb *Toolbar) glyphAndChevron(key ui.Key, ic, chev icon.ID, fg uint32, w, h float32) {
 	k := tb.k
 	c := k.Context()
 	iw, ih := k.IconSize(ic)
-	cw, chh := k.IconSize(icon.PullDown)
+	cw, chh := k.IconSize(chev)
 	gap := theme.Snap(k.Pt(3))
 	x := theme.Snap((w - iw - gap - cw) / 2)
 	if f, disp := k.Icons().Prepare(c, ic, fg); f != 0 {
 		theme.At(c, x, theme.Snap((h-ih)/2), iw, ih)
 		c.BoxKeyed(f|base.Floating, ui.KeyN(key, 1), disp)
 	}
-	if f, disp := k.Icons().Prepare(c, icon.PullDown, fg); f != 0 {
+	if f, disp := k.Icons().Prepare(c, chev, fg); f != 0 {
 		theme.At(c, x+iw+gap, theme.Snap((h-chh)/2), cw, chh)
 		c.BoxKeyed(f|base.Floating, ui.KeyN(key, 2), disp)
 	}
@@ -691,7 +762,8 @@ func (tb *Toolbar) Menu(ic icon.ID, name string, menuIndex int) base.Signal {
 	p := k.PressState(name, base.HoverOn)
 	flags := tb.capsuleLook(p.Visual, h)
 	k.BeginPress(&p, ui.RoleButton, ui.Px(w), ui.Px(h), flags, nil)
-	tb.glyphAndChevron(p.Key, ic, tb.glyph(p.Visual), w, h)
+	tb.glass(p.ID)
+	tb.glyphAndChevron(p.Key, ic, icon.PullDown, tb.glyph(p.Visual), w, h)
 	tb.highlight(p.ID, p.Visual, h)
 	k.FocusRing(p.ID, p.Visual, h/2)
 	sig := k.EndPress(&p)
@@ -746,6 +818,7 @@ func (tb *Toolbar) Search(label string, buf *ui.TextBuffer, placeholder string, 
 	c.NextSize(ui.Px(w), ui.Px(h))
 	tb.n++
 	g := c.BoxKeyed(flags, ui.KeyN(tb.key, 3000+tb.n), nil)
+	tb.glass(g)
 	c.Push(g)
 	res := SearchField(k, label, buf, placeholder, FieldOpts{Variant: FieldBorderless})
 	tb.highlight(g, base.Visual{Inactive: k.Inactive()}, h)
@@ -794,8 +867,11 @@ func (tb *Toolbar) Title() {
 		lines += sub.Line
 	}
 	top := theme.Snap((h - lines) / 2)
+	// the title's text field, its text TitleTextX inside it
+	tx := k.Pt(tb.rc.TitleTextX)
 	theme.At(c, 0, top, 0, st.Line)
-	c.NextSize(ui.TextSize(base.LabelSlack), ui.Px(st.Line))
+	c.NextSize(ui.TextSize(base.LabelSlack+tx), ui.Px(st.Line))
+	c.NextPadding(tx, 0, 0, 0)
 	c.NextFont(st.Font)
 	c.NextTextColor(col)
 	c.NextRole(ui.RoleLabel)
@@ -807,7 +883,8 @@ func (tb *Toolbar) Title() {
 			sc = tb.rc.TitleInactive.RGBA(r)
 		}
 		theme.At(c, 0, top+st.Line, 0, sub.Line)
-		c.NextSize(ui.TextSize(base.LabelSlack), ui.Px(sub.Line))
+		c.NextSize(ui.TextSize(base.LabelSlack+tx), ui.Px(sub.Line))
+		c.NextPadding(tx, 0, 0, 0)
 		c.NextFont(sub.Font)
 		c.NextTextColor(sc)
 		c.BoxKeyed(ui.DrawText|ui.FadeOverflowX|base.Floating, ui.KeyN(tb.key, 6), base.StrBytes(tb.o.Subtitle))
