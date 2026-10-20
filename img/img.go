@@ -119,7 +119,9 @@ type Options struct {
 	GPUBytes int64
 	// CPUBytes is the budget of decoded pixels kept in memory, waiting for
 	// their upload or kept to upload again after a GPU eviction (default 32
-	// MiB). Pixels waiting for their upload are never dropped.
+	// MiB). Pixels waiting for their upload are never dropped. What an
+	// animation keeps (its file and canvases) counts too: one not in view is
+	// dropped whole, to stay within the budget.
 	CPUBytes int64
 	// UploadBytes is the most Poll uploads in one frame (default 4 MiB); one
 	// image is uploaded per frame however large it is.
@@ -314,7 +316,8 @@ type Stats struct {
 	Entries, Ready, Pending, Failed int
 	// GPUBytes is the texture memory in use: atlas pages and own textures.
 	GPUBytes int64
-	// CPUBytes is the decoded pixels held in memory.
+	// CPUBytes is the decoded pixels held in memory, and an estimate of what
+	// each animation keeps between frames (its file and its canvases).
 	CPUBytes int64
 	// Pages is the number of atlas pages.
 	Pages int
