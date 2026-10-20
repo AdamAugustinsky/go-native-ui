@@ -438,10 +438,10 @@ func (a *App) loop() error {
 }
 
 // turn is the loop's step after Wait's events were handled, at now: a due
-// wake, then the pacer's verdict. It requests a frame if the pacer says so
+// wake (held while the window is hidden), then the pacer's verdict. It requests a frame if the pacer says so
 // and reports whether to draw now.
 func (a *App) turn(now int64) (draw bool) {
-	if a.wakeAt != 0 && now >= a.wakeAt {
+	if a.wakeAt != 0 && now >= a.wakeAt && !a.p.hidden {
 		a.wakeAt = 0
 		a.p.invalidate() // a text field's caret blink is due
 	}
@@ -492,9 +492,10 @@ func (a *App) onEvent(e *platform.Event) {
 		}
 	case platform.EvVisible:
 		a.tr.in.Hidden = e.Flags&platform.FlagDown == 0
-		// Hidden, nothing is drawn (pacer.hide); shown again, what was
-		// skipped is owed. A bench draws regardless: it measures frames, and
-		// a machine with its display asleep reports the window covered.
+		// Hidden, timed wakes wait and a failed attempt parks the loop
+		// (pacer); shown again, what was skipped is owed. A bench draws
+		// regardless: it measures frames, and a machine with its display
+		// asleep reports the window covered.
 		a.p.hide(a.tr.in.Hidden && a.bench == nil)
 		if !a.tr.in.Hidden {
 			a.p.invalidate()
