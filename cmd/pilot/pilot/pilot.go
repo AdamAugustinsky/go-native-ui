@@ -97,6 +97,9 @@ type Options struct {
 	// volume ("" looks for the startup volume's name).
 	Places    []Place
 	RootTitle string
+	// ScrollLeft scrolls the left list 130 pt, under the toolbar, once it has
+	// rows (pictures, and pilot -scrolled).
+	ScrollLeft bool
 	// Still holds animations still and Legacy pins the legacy scroll bars, for
 	// pictures (an offscreen window has no system to follow).
 	Still, Legacy bool
@@ -127,15 +130,17 @@ type Pilot struct {
 	// the window's chrome: the sidebar (shown or hidden), its places and
 	// state, the disclosure of its groups, the dir of the active pane its
 	// selection was last set for, and whether rows are under the toolbar
-	sidebar   bool
-	scrolled  bool // the scene starts scrolled (ScenePost)
-	side      rexui.SidebarState
-	places    []place
-	items     []rexui.SidebarItem
-	open      [2]bool
-	sideFor   string
-	under     bool
-	rootTitle string
+	sidebar    bool
+	scrollDone bool         // Options.ScrollLeft has been applied
+	digitFont  text.FontKey // the font digitW is the widest digit of
+	digitW     float32
+	side       rexui.SidebarState
+	places     []place
+	items      []rexui.SidebarItem
+	open       [2]bool
+	sideFor    string
+	under      bool
+	rootTitle  string
 
 	init     [2]<-chan Ready
 	listedAt [2]int64

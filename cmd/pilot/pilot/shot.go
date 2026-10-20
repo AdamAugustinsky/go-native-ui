@@ -3,6 +3,7 @@ package pilot
 import (
 	"errors"
 	"fmt"
+	"image"
 	"path/filepath"
 	"strings"
 	"time"
@@ -108,7 +109,7 @@ func SceneOptions() Options {
 			{Title: "Macintosh HD", Path: nativePath("/"), Group: 1, Symbol: "internaldrive"},
 		},
 		Initial: [2]<-chan Ready{
-			ready(nativePath("/Users/rex/Projects/pilot"), sceneListing(sceneLeft)),
+			ready(nativePath("/Users/rex/Documents"), sceneListing(sceneLeft)),
 			ready(nativePath("/Users/rex/Downloads"), sceneListing(sceneRight)),
 		},
 	}
@@ -154,9 +155,8 @@ func (pl *Pilot) ScenePost() {
 		v.ts.Sel.SelectRange(v.order(), 5, 7)
 		pl.panes[0].reveal = 7
 	}
-	if pl.scrolled {
+	if pl.opt.ScrollLeft {
 		pl.panes[0].reveal = -1
-		v.ts.SetTopRow(int((130-5)/24), (130-5)/24-float32(int((130-5)/24)))
 	}
 	if rv := &pl.panes[1].v; rv.nRows() > 0 {
 		rv.selectOnly(rv.entryAt(0))
@@ -187,7 +187,7 @@ func RenderDirsShot(path string, w, h int, scale float32, home string, dirs [2]s
 
 // RenderDirsShotLook is RenderDirsShot in a Look.
 func RenderDirsShotLook(path string, w, h int, scale float32, home string, dirs [2]string, look Look) (quads, drawCalls int, err error) {
-	opt := Options{Home: home, Preference: look.Preference, Still: true, Legacy: look.Legacy, Mono: look.Mono}
+	opt := Options{Home: home, Preference: look.Preference, Still: true, Legacy: look.Legacy, Mono: look.Mono, ScrollLeft: look.Scrolled}
 	for i, d := range dirs {
 		l := new(fs.Listing)
 		if err := fs.ListDir(d, l); err == nil {
@@ -216,16 +216,14 @@ func RenderShotLook(path string, w, h int, scale float32, corners bool, look Loo
 func NewScene(look Look) *Pilot {
 	opt := SceneOptions()
 	opt.Preference = look.Preference
-	opt.Legacy, opt.Mono = look.Legacy, look.Mono
+	opt.Legacy, opt.Mono, opt.ScrollLeft = look.Legacy, look.Mono, look.Scrolled
 	left, right := sceneLeft, sceneRight
 	if look.Scrolled {
 		left, right = longer(left, 3), longer(right, 3)
 	}
-	opt.Initial[0] = ready(nativePath("/Users/rex/Projects/pilot"), sceneListing(left))
+	opt.Initial[0] = ready(nativePath("/Users/rex/Documents"), sceneListing(left))
 	opt.Initial[1] = ready(nativePath("/Users/rex/Downloads"), sceneListing(right))
-	pl := New(opt)
-	pl.scrolled = look.Scrolled
-	return pl
+	return New(opt)
 }
 
 // shotApp is the scene with the window state an offscreen run lacks: the
@@ -247,12 +245,36 @@ func (s *shotApp) Script(frame int, in *ui.Input) bool {
 // shoot renders pl offscreen until it settles (setup before the first frame,
 // post once the rows exist; either may be nil) and writes the PNG.
 func shoot(pl *Pilot, path string, w, h int, scale float32, corners bool, look Look, setup, post func()) (quads, drawCalls int, err error) {
-	sa := &shotApp{Pilot: pl, sys: look.System, inactive: look.Inactive}
-	o, err := app.NewOffscreen(Config(), w, h, scale, sa)
+	o, img, err := renderScene(pl, w, h, scale, look, setup, post)
 	if err != nil {
 		return 0, 0, err
 	}
 	defer o.Close()
+	face := "system"
+	if look.Mono {
+		face = monoFace()
+		if face == "" {
+			face = "system monospaced"
+		}
+	}
+	meta := map[string]any{
+		"listFont": face, "inactive": look.Inactive, "scrolled": look.Scrolled,
+		"quads": len(o.Quads()), "drawCalls": o.R.DrawCalls(),
+	}
+	if err := rexrig.WritePNG(path, img.Pix, w, h, corners, meta); err != nil {
+		return 0, 0, fmt.Errorf("pilot: write %s: %w", path, err)
+	}
+	return len(o.Quads()), o.R.DrawCalls(), nil
+}
+
+// renderScene runs pl offscreen until it is at rest, after setup and post,
+// and returns the window, still open, with its last frame.
+func renderScene(pl *Pilot, w, h int, scale float32, look Look, setup, post func()) (*app.Offscreen, *image.RGBA, error) {
+	sa := &shotApp{Pilot: pl, sys: look.System, inactive: look.Inactive}
+	o, err := app.NewOffscreen(Config(), w, h, scale, sa)
+	if err != nil {
+		return nil, nil, err
+	}
 	settle := func() error {
 		for n := 0; n < 600; n++ {
 			o.Frame()
@@ -270,28 +292,47 @@ func shoot(pl *Pilot, path string, w, h int, scale float32, corners bool, look L
 		setup()
 	}
 	if err := settle(); err != nil {
-		return 0, 0, err
+		o.Close()
+		return nil, nil, err
 	}
 	if post != nil {
 		post()
 	}
 	if err := settle(); err != nil {
-		return 0, 0, err
+		o.Close()
+		return nil, nil, err
 	}
 	img, _ := o.Frame()
-	face := "system"
-	if look.Mono {
-		face = monoFace()
-		if face == "" {
-			face = "system monospaced"
-		}
+	return o, img, nil
+}
+
+// Node is one element of the scene's semantic tree, its frame in window
+// points, as tools/appkitscenes reports AppKit's.
+type Node struct {
+	Role  string
+	Name  string
+	Frame [4]float32 // x, y, w, h
+}
+
+// Measure renders the scene (at the window's size and 2×, or w×h pixels at
+// scale) and returns the frames, in points, of the elements of its semantic
+// tree: toolbar items, the title, sidebar rows, headers, rows, cells and
+// path components.
+func Measure(w, h int, scale float32, look Look) ([]Node, error) {
+	pl := NewScene(look)
+	o, _, err := renderScene(pl, w, h, scale, look, pl.SceneSetup, pl.ScenePost)
+	if err != nil {
+		return nil, err
 	}
-	meta := map[string]any{
-		"listFont": face, "inactive": look.Inactive, "scrolled": look.Scrolled,
-		"quads": len(o.Quads()), "drawCalls": o.R.DrawCalls(),
+	defer o.Close()
+	var t ui.SemTree
+	pl.a.UI.Semantics(&t)
+	var out []Node
+	for i := range t.Nodes {
+		n := &t.Nodes[i]
+		b := n.Bounds
+		out = append(out, Node{Role: widgettest.RoleName(n.Role), Name: string(t.Text(n.Name)),
+			Frame: [4]float32{b[0] / scale, b[1] / scale, (b[2] - b[0]) / scale, (b[3] - b[1]) / scale}})
 	}
-	if err := rexrig.WritePNG(path, img.Pix, w, h, corners, meta); err != nil {
-		return 0, 0, fmt.Errorf("pilot: write %s: %w", path, err)
-	}
-	return len(o.Quads()), o.R.DrawCalls(), nil
+	return out, nil
 }

@@ -9,6 +9,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -30,6 +31,7 @@ func main() {
 	scrolled := flag.Bool("scrolled", false, "the left list is scrolled under the toolbar (longer lists)")
 	legacy := flag.Bool("legacy", false, "legacy scroll bars (overlay ones otherwise)")
 	mono := flag.Bool("mono", false, "set the lists in Menlo")
+	measure := flag.Bool("measure", false, "print the frames, in points, of the scene's elements as JSON instead of rendering")
 	flag.Parse()
 	look := pilot.Look{Inactive: *inactive, Scrolled: *scrolled, Legacy: *legacy, Mono: *mono}
 	switch *mode {
@@ -43,6 +45,16 @@ func main() {
 	default:
 		fmt.Fprintf(os.Stderr, "pilotshot: -mode %q: want light, dark or system\n", *mode)
 		os.Exit(2)
+	}
+	if *measure {
+		nodes, err := pilot.Measure(*w, *h, float32(*scale), look)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "pilotshot:", err)
+			os.Exit(1)
+		}
+		b, _ := json.MarshalIndent(nodes, "", " ")
+		fmt.Println(string(b))
+		return
 	}
 	quads, calls, err := pilot.RenderShotLook(*out, *w, *h, float32(*scale), *corners, look)
 	if err != nil {

@@ -207,7 +207,7 @@ func TestListKeysGoThroughTheTable(t *testing.T) {
 	}
 	r.key(ui.KeyHome, 0)
 	r.key(ui.KeyEnter, 0)
-	if want := nativePath("/Users/rex/Projects/pilot/app"); r.src.last() != want {
+	if want := nativePath("/Users/rex/Documents/app"); r.src.last() != want {
 		t.Errorf("enter on a folder lists %q, want %q", r.src.last(), want)
 	}
 	// ↑/↓ with the filter focused drive the list too (Home and End do as well)
@@ -232,7 +232,7 @@ func TestDoubleClickOpensAFolder(t *testing.T) {
 	r.release()
 	r.press(2, 0)
 	r.release() // the table reports the double click when the button comes up
-	if got, want := r.src.last(), nativePath("/Users/rex/Projects/pilot/cmd"); got != want {
+	if got, want := r.src.last(), nativePath("/Users/rex/Documents/cmd"); got != want {
 		t.Fatalf("double-click lists %q, want %q", got, want)
 	}
 }
@@ -281,7 +281,7 @@ func TestPathFieldNavigates(t *testing.T) {
 		t.Fatal("the shortcut focuses the path field")
 	}
 	r.frames(2)
-	if sel := string(a.path.Selected()); sel != nativePath("/Users/rex/Projects/pilot") {
+	if sel := string(a.path.Selected()); sel != nativePath("/Users/rex/Documents") {
 		t.Errorf("the path is selected: %q", sel)
 	}
 	r.text("~/Docs")
@@ -297,7 +297,7 @@ func TestPathFieldNavigates(t *testing.T) {
 	bad.Err = fs.ErrUnsupported
 	deliver(a, bad)
 	r.frames(2)
-	if a.pathErr == "" || a.path.String() != "~/Docs" || a.dir != nativePath("/Users/rex/Projects/pilot") {
+	if a.pathErr == "" || a.path.String() != "~/Docs" || a.dir != nativePath("/Users/rex/Documents") {
 		t.Errorf("path error %q text %q", a.pathErr, a.path.String())
 	}
 	// Esc restores the directory and gives the focus back to the list

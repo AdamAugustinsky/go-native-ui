@@ -166,6 +166,13 @@ func (pl *Pilot) key(c *ui.Context, k ui.KeyEvent) bool {
 		c.SetFocus(pathKey(pl.active))
 		a.path.SelectAll()
 		return true
+	case prim && k.Code == 'F' && !shift && !alt: // the toolbar's search button
+		a.filterOpen = true
+		c.SetFocus(filterKey(pl.active))
+		return true
+	case prim && alt && k.Code == 'S': // Hide Sidebar, as Finder's
+		pl.sidebar = !pl.sidebar
+		return true
 	case pl.mac && prim && k.Code == ui.KeyLeftBracket:
 		a.goBack()
 		return true

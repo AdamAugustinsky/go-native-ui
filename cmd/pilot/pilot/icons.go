@@ -26,6 +26,10 @@ const (
 	maxExtIcons   = 512 // distinct extensions kept; the rest share the generic document
 	maxExtLen     = 24
 	maxBundleIcon = 512
+
+	// genericExt is an extension no type has: the system's icon for it is its
+	// generic document (ExtensionIcon("") is not one the system answers).
+	genericExt = "gnui-no-type"
 )
 
 // iconRec is one icon: its key at the scale shown and where it comes from.
@@ -88,7 +92,7 @@ func (ic *sysIcons) setScale(scale float32) {
 	clear(ic.bundles)
 	key := func(h uint64) img.Key { return img.Key{Hash: h, W: px, H: px} }
 	ic.folder = iconRec{key(img.HashTypeIcon("public.folder")), img.FolderIcon()}
-	ic.generic = iconRec{key(img.HashTypeIcon("")), img.ExtensionIcon("")}
+	ic.generic = iconRec{key(img.HashTypeIcon(genericExt)), img.ExtensionIcon(genericExt)}
 	ic.exec = iconRec{key(img.HashTypeIcon("public.unix-executable")), img.TypeIcon("public.unix-executable")}
 }
 

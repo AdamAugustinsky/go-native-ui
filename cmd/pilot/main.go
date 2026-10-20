@@ -19,7 +19,13 @@
 //	                            render the first frame for real directories, without traffic lights (the
 //	                            expected complete content for tools/bouncerec)
 //	pilot -o out.png -mode dark the picture in the dark mode (-mode light, the default with -o; -mode system
-//	                            renders what this machine says)
+//	                            renders what this machine says); -inactive renders the window as not key,
+//	                            -scrolled with the left list scrolled under the toolbar, -legacy with legacy
+//	                            scroll bars
+//	pilot -mode dark            the window in a forced mode (the default, system, follows the system's)
+//	pilot -size 1120x640        the window at another size (the finder scene's, for comparing with its capture)
+//	pilot -mono                 set the file lists in Menlo, in 7.5 pt cells, instead of the system font
+//	pilot -scrolled             start with the left list scrolled under the toolbar
 //
 // Startup is content-first: both start directories are listed and sorted on
 // goroutines that run before the window system is touched, and the first frame
@@ -79,14 +85,34 @@ func main() {
 	timeout := flag.Duration("timeout", 180*time.Second, "with -bench: give up after this long")
 	sites := flag.Bool("allocsites", false, "with -bench: profile every allocation and print the call stacks of those inside the measured frames")
 	resizeTest := flag.Bool("live-resize-test", false, "macOS: drag the window size through the frame handler (as a user resizing does) and print the result as JSON")
-	mode := flag.String("mode", "light", "with -o: light (the default), dark or system (what this machine says)")
+	mode := flag.String("mode", "", "light, dark or system (what this machine says); the window defaults to system, -o to light")
+	inactive := flag.Bool("inactive", false, "with -o: render the window as not key")
+	scrolled := flag.Bool("scrolled", false, "scroll the left list under the toolbar (with -o the scene's lists are longer)")
+	legacy := flag.Bool("legacy", false, "with -o: legacy scroll bars")
+	size := flag.String("size", "", "the window's size in points, WIDTHxHEIGHT (the default is 1200x760; the finder scene is 1120x640)")
+	mono := flag.Bool("mono", false, "set the file lists in Menlo (the theme's monospace font off macOS), in 7.5 pt cells")
 	verbose := flag.Bool("v", false, "print the startup timeline and listing times to stderr; in a window or bench also a state line every second while frames stop coming")
 	flag.Parse()
 
-	look, err := parseLook(*mode)
+	m := *mode
+	if m == "" {
+		m = "light"
+		if *out == "" {
+			m = "system"
+		}
+	}
+	look, err := parseLook(m)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "pilot:", err)
 		os.Exit(2)
+	}
+	look.Inactive, look.Scrolled, look.Legacy, look.Mono = *inactive, *scrolled, *legacy, *mono
+	var winW, winH int
+	if *size != "" {
+		if _, err := fmt.Sscanf(*size, "%dx%d", &winW, &winH); err != nil || winW < pilot.MinWidthPt || winH < pilot.MinHeightPt {
+			fmt.Fprintf(os.Stderr, "pilot: -size %q: want WIDTHxHEIGHT of at least %dx%d\n", *size, pilot.MinWidthPt, pilot.MinHeightPt)
+			os.Exit(2)
+		}
 	}
 	switch {
 	case *out != "" && flag.NArg() > 0:
@@ -94,11 +120,11 @@ func main() {
 	case *out != "":
 		err = renderPNG(*out, *w, *h, float32(*scale), look)
 	case *resizeTest:
-		err = runResizeTest(flag.Args())
+		err = runResizeTest(flag.Args(), look)
 	case *bench:
 		err = runBench(*rows, *benchDir, *gate, *allowUnpaced, *sites, *maxCPU, *timeout, *verbose)
 	default:
-		err = runWindow(flag.Args(), *exitFirst, *verbose, t0, age)
+		err = runWindow(flag.Args(), *exitFirst, *verbose, t0, age, look, winW, winH)
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "pilot:", err)
@@ -133,9 +159,9 @@ func renderPNG(path string, w, h int, scale float32, look pilot.Look) error {
 // runResizeTest opens the normal window (real service, the given or home
 // directories) and drags its size through AppKit's live-resize path
 // (app.RunLiveResizeTest), then prints how many steps drew and what they cost.
-func runResizeTest(args []string) error {
+func runResizeTest(args []string, look pilot.Look) error {
 	home, _ := os.UserHomeDir()
-	o := pilot.Options{Home: home, Src: fs.NewService(platform.Wake)}
+	o := pilot.Options{Home: home, Src: fs.NewService(platform.Wake), Preference: look.Preference, Mono: look.Mono}
 	for i := range o.Initial {
 		var a string
 		if i < len(args) {
@@ -228,7 +254,7 @@ type startup struct {
 	ListingsFirstFrameCap string
 }
 
-func runWindow(args []string, exitFirst, verbose bool, t0, age int64) error {
+func runWindow(args []string, exitFirst, verbose bool, t0, age int64, look pilot.Look, winW, winH int) error {
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
 		cwd, _ := os.Getwd()
@@ -242,14 +268,18 @@ func runWindow(args []string, exitFirst, verbose bool, t0, age int64) error {
 		}
 		dirs[i] = startDir(a, home)
 	}
-	o := pilot.Options{Home: home, Src: fs.NewService(platform.Wake)}
+	o := pilot.Options{Home: home, Src: fs.NewService(platform.Wake), Preference: look.Preference, Mono: look.Mono, ScrollLeft: look.Scrolled}
 	for i, d := range dirs {
 		o.Initial[i] = listAsync(d)
 	}
 	pl := pilot.New(o)
 	defer pl.Close()
 
-	res, err := app.RunWith(pilot.Config(), pl, app.RunOptions{ExitFirst: exitFirst, Verbose: verbose})
+	cfg := pilot.Config()
+	if winW > 0 {
+		cfg.Width, cfg.Height = float32(winW), float32(winH)
+	}
+	res, err := app.RunWith(cfg, pl, app.RunOptions{ExitFirst: exitFirst, Verbose: verbose})
 	if err != nil {
 		return err
 	}
