@@ -72,7 +72,10 @@ const (
 	CauseVisible
 	// CauseWake: a worker woke the loop (a task result, a Post).
 	CauseWake
-	// CauseAppearance: the system appearance (dark mode, accent) changed.
+	// CauseAppearance: the system appearance or its values changed (dark mode,
+	// accent, system colours, accessibility display options, the preferred
+	// scroller style: macOS posts the last one about 5 s after a launch on a Mac
+	// whose mouse AppKit finds late).
 	CauseAppearance
 	// CauseAnimation: the previous frame left something animating. Key is the
 	// box whose hover, press or focus value was still moving; without one, a
