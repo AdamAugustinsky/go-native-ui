@@ -111,10 +111,10 @@ type ListRecipe struct {
 	Rounded [NumListStyles]bool
 	// LegacyKnob colours a legacy scroll bar's knob, an opaque grey on the
 	// list's background (measured #7A7A7A on white, #9F9F9F on #1E1E1E), and
-	// LegacyKnobInset is the room between it and the track's sides, in
-	// points (3 of AppKit's 17-pt scroller).
-	LegacyKnob      Tint
-	LegacyKnobInset float32
+	// LegacySlot the rounded slot it moves in, as wide and as far from the
+	// track's sides and ends (theme.Lines.ScrollerKnobInset; measured
+	// #F3F3F3 on white, #292929 on #1E1E1E).
+	LegacyKnob, LegacySlot Tint
 }
 
 // ListLook is the recipe of lists, tables and outlines.
@@ -128,7 +128,7 @@ var ListLook = ListRecipe{
 	PadY:       [NumListStyles]float32{ListFullWidth: 0, ListInset: 10},
 	HeaderPadY: [NumListStyles]float32{ListFullWidth: 0, ListInset: 5},
 	Rounded:    [NumListStyles]bool{ListInset: true},
-	LegacyKnob: OfAlpha(theme.Text, 0.52, 0.58), LegacyKnobInset: 3,
+	LegacyKnob: OfAlpha(theme.Text, 0.52, 0.58), LegacySlot: OfAlpha(theme.Text, 0.047, 0.047),
 }
 
 // List is an open list: base's List and the look of its rows.
@@ -354,15 +354,23 @@ func ScrollBars(k *base.Kit, v *base.ScrollView) {
 		k.BeginScrollBar(b)
 		// overlay: a thin translucent knob near the edge that thickens under
 		// the pointer; legacy: an opaque one filling the track but for an
-		// inset each side
+		// inset each side, over its slot
 		tw := theme.Snap(px.ScrollThumbW * (1 + b.Hot))
 		in := theme.Snap(px.BorderW * 2)
 		col := theme.WithAlpha(r.Pal.ScrollThumb, b.Show)
 		if b.Legacy {
-			in = theme.Snap(k.Pt(ListLook.LegacyKnobInset))
+			in = theme.Snap(r.Lines.ScrollerKnobInset)
 			tw = max(bw-2*in, theme.Snap(px.ScrollThumbW))
 			in = (bw - tw) / 2
 			col = ListLook.LegacyKnob.RGBA(r)
+			if a == 1 {
+				theme.At(c, in, b.SlotOff, tw, b.SlotLen)
+			} else {
+				theme.At(c, b.SlotOff, in, b.SlotLen, tw)
+			}
+			c.NextBG(ListLook.LegacySlot.RGBA(r))
+			c.NextRadius(tw / 2)
+			c.BoxKeyed(ui.DrawBackground|base.Floating, ui.KeyN(b.Key, 2), nil)
 		}
 		if a == 1 {
 			theme.At(c, bw-tw-in, b.ThumbOff, tw, b.ThumbLen)

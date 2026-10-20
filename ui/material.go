@@ -47,7 +47,10 @@ type MaterialRegion struct {
 	// clip rectangles and the window.
 	Rect [4]float32
 	// Radii are the box's corner radii in pixels (top left, top right,
-	// bottom right, bottom left).
+	// bottom right, bottom left). A native view has one corner radius, so
+	// the corners that have one share it: a box whose non-zero radii differ
+	// is reported with the largest on each of them (materialRadii), and the
+	// others stay square.
 	Radii [4]float32
 	// Solid is the opaque colour (0xRRGGBBAA) shown under Reduce
 	// Transparency, and always for AreaTitlebar; 0 takes the window
@@ -86,7 +89,7 @@ func (c *Context) shellFrame() {
 // given area, showing the theme material token (theme.Material) and, under
 // Reduce Transparency, the opaque colour solid (0xRRGGBBAA; 0: the window
 // background). The region takes the box's rectangle and corner radii after
-// layout. The app paints nothing in the box itself. At most 32 regions per
+// layout; corners with a radius share one (MaterialRegion.Radii). The app paints nothing in the box itself. At most 32 regions per
 // frame; more are ignored.
 func (c *Context) Material(id ID, area MaterialArea, token uint8, solid uint32) {
 	c.shellFrame()
@@ -137,7 +140,7 @@ func (c *Context) walkMaterials(id ID, clip [4]float32, hidden bool, w *matWalk)
 			r = [4]float32{}
 		}
 		rec := &c.shell.mats[m]
-		w.dst = append(w.dst, MaterialRegion{Area: rec.area, Token: rec.token, Rect: r, Radii: b.radii, Solid: rec.solid})
+		w.dst = append(w.dst, MaterialRegion{Area: rec.area, Token: rec.token, Rect: r, Radii: materialRadii(b.radii), Solid: rec.solid})
 		w.found++
 	}
 	if b.flags&Clip != 0 {
@@ -153,6 +156,18 @@ func (c *Context) walkMaterials(id ID, clip [4]float32, hidden bool, w *matWalk)
 			c.walkMaterials(ch, clip, hidden, w)
 		}
 	}
+}
+
+// materialRadii is radii as a material region has them: each non-zero radius
+// is the largest of them, the zero ones stay 0.
+func materialRadii(radii [4]float32) [4]float32 {
+	m := max(radii[0], radii[1], radii[2], radii[3])
+	for i, r := range radii {
+		if r > 0 {
+			radii[i] = m
+		}
+	}
+	return radii
 }
 
 // hiddenByLayout reports whether a flow hides box id or one of its ancestors
