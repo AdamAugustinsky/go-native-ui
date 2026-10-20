@@ -327,25 +327,44 @@ scene tool's `-width`, `-selectAll` and `-nested`:
   unless the header ends it. The toolbar leaves that band clear
   (`ToolbarOpts.ContentEdge`) and then draws its capsules, filled as the
   system's glass measured over the band (`EdgeFill`). Static at rest, no
-  allocation per frame. AppKit also blurs what is under the band, and only
-  with the blur is that bar opaque enough: without it, rows under the band
-  and behind a header in the pocket stayed legible. So while content is
-  under it the scroll edge is the colour AppKit's blurred pocket averages
-  to, opaque (`ScrollEdgeLook.Under`, `UnderInactive`): #FCFCFC and
-  #2B2B2B over rows of text, key and inactive, over the band and a header
-  alike (Mac mini 27.2: Settings, Notes, Finder, legacy and overlay
-  scrollers, #FAFAFA–#FEFEFE and #2A2A2A–#2D2D2D; AppKit's blurred band
-  itself varies by σL 0.6–4). A list's selected rows under it tint it as
-  the blur does, by their share of the inset at the share the bar lets
-  through: Finder's two selected rows give #E0EBF9 against AppKit's
-  #E4F0FF over the pocket (#273343 against #232E3D in dark). The toolbar's
-  own bar (`ContentUnder`) takes the same colour. At rest, nothing under
-  it, the bar is as before. Against `captures-macmini` finder-*-scrolled
-  every pixel of the pocket is within ΔE 2.7 of AppKit's pocket mean (live
-  0.5–1.6) and the rows' text no longer shows (before: ΔE up to 16 from
-  the pocket's median, text and selections legible; after: 0). This is
-  also the scroll edge under Reduce Transparency, offscreen, and on
-  Windows and Linux, until real glass (issue #25).
+  allocation per frame.
+- While content is under it the scroll edge blurs it as AppKit does (D54,
+  issue #25): `ui.Context.NextBackdrop` with AppKit's recipes read from its
+  layers on the Mac mini's 27.2 (`docs/research/glass-over-metal.md`).
+  A table's, whose header is in the pocket, is the Hard pocket
+  (`ScrollEdgeLook.Hard`): the content at a quarter of the backing scale
+  under a 6-pt Gaussian plus 0.03, and the control background plus 0.03 at
+  82.45 % over it. A plain scroll view's is the thin film
+  (`ScrollEdgeLook.Thin`): the control background mixed into the blur at
+  50 % / 60 % at half scale, saturation 1.25, plus 0.03; AppKit's blur
+  there falls off toward the hairline, which this does not model. An
+  inactive window's recipes are the same (`HardInactive`, `ThinInactive`;
+  AppKit's bands measured ΔE 0.00 apart). Drawn against AppKit's over
+  GlassProbe's rows (ΔE2000, mean / p99): Hard 0.07 / 0.83 light and
+  0.20 / 1.15 dark over text, 0.28 / 1.07 and 0.56 / 1.11 over a blue
+  selection; thin film 0.36 / 1.66 and 0.95 / 2.38. Finder scrolled
+  against `captures-macmini` finder-*-scrolled, per row of the pocket:
+  0.13 (light) and 0.25 (dark) inactive, 0.84 and 1.12 key over its blue
+  selection, which AppKit's dark blur saturates a little more. The blur
+  costs 0.07–0.10 ms of GPU a frame, a 5K window at 2x included, and
+  nothing at rest. At rest, nothing under it, the bar is as before.
+- The toolbar's own band (`ContentUnder`, a pane that does not run its
+  content under the band) has nothing drawn under it to blur: it is the
+  Hard pocket over the content pane's colour (`BandFill`, else the control
+  background; `gpu.Backdrop.Over`), #FFFFFF in light and #262626 over
+  #1E1E1E in dark.
+- Where there is no blur, under Reduce Transparency and where the renderer
+  has none (Direct3D 11, OpenGL: `gpu.Renderer.Backdrops`), the scroll edge
+  over content is the colour AppKit's blurred pocket averages to, opaque
+  (`ScrollEdgeLook.Under`, `UnderInactive`): #FCFCFC and #2B2B2B over rows
+  of text, key and inactive, over the band and a header alike (Mac mini
+  27.2: Settings, Notes, Finder, legacy and overlay scrollers,
+  #FAFAFA–#FEFEFE and #2A2A2A–#2D2D2D). A list's selected rows under it
+  tint it as the blur does, by their share of the inset at the share the
+  bar lets through: Finder's two selected rows give #E0EBF9 against
+  AppKit's #E4F0FF over the pocket (#273343 against #232E3D in dark).
+  Without the blur the bar alone left the rows under the band and behind a
+  header in the pocket legible; with this fill their text no longer shows.
 - A sidebar row's disclosure: once any row has children every row's content
   moves 9 right (`DisclosureRoom`); the disclosure is a 13-wide box at 12 pt,
   13 more per level (`DisclosureX`), its chevron 1 below the middle,
@@ -361,8 +380,9 @@ scene tool's `-width`, `-selectAll` and `-nested`:
   (`ui.Context.SetObscured`), so `ScrollIntoView`, the keyboard's moves and
   an assistive technology's `ActScrollIntoView` bring a row below it; a
   list's Page Up and Down count the rows below it.
-- Under Reduce Transparency the scroll edge is opaque: `MatScrollEdge`'s fill
-  at rest, `ScrollEdgeLook.Under` with content under it.
+- Under Reduce Transparency the scroll edge is opaque and not blurred:
+  `MatScrollEdge`'s fill at rest, `ScrollEdgeLook.Under` with content
+  under it (the toolbar's own band too).
 - Back and forward's divider: 1 × 20 pt from the capsule's middle, the
   separator's colour at 21 % (light) and 26.5 % (dark): #C8C8C8 on
   #FCFCFC, #707070 on #3C3C3C.
@@ -525,10 +545,10 @@ Still in recipe fields:
     sidebar's and inspector's glass run to the top), the hairline lies just
     below the band (y 52–52.5), and under a table header pinned below the
     toolbar the pocket's bar covers the header (`ToolbarOpts.Pocket`, or
-    the table's own with `TableOpts.TopInset`); the bar lets 18% (light) /
-    22% (dark) of the content through, with AppKit's blur; without one,
-    the pocket over content is opaque, AppKit's blurred mean
-    (`ScrollEdgeLook.Under`).
+    the table's own with `TableOpts.TopInset`); at rest the bar lets 18%
+    (light) / 22% (dark) of the content through; over content it is
+    AppKit's blur (`ScrollEdgeLook.Hard`, `Thin`), and without one opaque,
+    AppKit's blurred mean (`ScrollEdgeLook.Under`).
   - Sidebar symbols are 16 pt; the title's field starts 4 after the
     symbol's own width (not a 20-pt column) and draws its text 2 in, as
     the headers' (`SidebarRecipe.FieldInset`).
