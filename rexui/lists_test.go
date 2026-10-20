@@ -525,3 +525,33 @@ func TestOutlineRowsExportTheirLevel(t *testing.T) {
 		}
 	}
 }
+
+// Collapsing a node whose hidden child is selected moves the selection to
+// the node, and the outline reports the change (Changed), whichever way the
+// collapse comes: a disclosure click or an assistive technology's request.
+func TestOutlineCollapseReportsTheSelectionChange(t *testing.T) {
+	for _, how := range []string{"disclosure", "action"} {
+		v := newOutlineView(smallSize, smallDepth).named()
+		v.st.Expand(&v.tree, 0, true, false)
+		v.st.Sel.Only(1)
+		v.st.Sel.SetCursor(1)
+		g := newRig(t, theme.Light, nil, v.build)
+		g.settle()
+		v.changed = false
+		if how == "disclosure" {
+			g.click(17, 24) // node 0's disclosure, row 0
+		} else {
+			g.in.PushAction(ui.SemRequest{Key: g.node(ui.RoleListItem, "n0").Key, Action: ui.ActCollapse})
+			g.frames(3)
+		}
+		if v.st.Expanded(0) {
+			t.Fatalf("%s: node 0 did not collapse", how)
+		}
+		if got := v.selected(); !slices.Equal(got, []uint32{0}) {
+			t.Fatalf("%s: selection %v, want the collapsed node", how, got)
+		}
+		if !v.changed {
+			t.Fatalf("%s: the selection changed, and Changed never said so", how)
+		}
+	}
+}

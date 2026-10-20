@@ -54,6 +54,9 @@ type OutlineState struct {
 	pend    uint32 // an expansion an assistive technology asked for
 	pendOn  bool
 	hasPend bool
+	// selMoved: Expand changed the selection (a collapse hid selected
+	// nodes); the next frame's Outline reports it in Changed
+	selMoved bool
 }
 
 // Reserve makes room for a tree of nodes nodes: the expansion, the shown
@@ -144,12 +147,14 @@ func (st *OutlineState) Expand(t *Tree, node uint32, on, all bool) {
 		hid = true
 	}
 	if hasCur && cur > node && int(cur) < end {
-		if hid || s.Count() == 0 {
+		if (hid || s.Count() == 0) && !s.Has(node) {
 			s.Set(node, true)
+			hid = true
 		}
 		s.SetCursor(node)
 		s.SetAnchor(node)
 	}
+	st.selMoved = st.selMoved || hid
 }
 
 // rebuild makes the shown rows of t from the expansion: O(shown rows).
@@ -228,6 +233,9 @@ func (k *Kit) BeginOutline(label string, st *OutlineState, t *Tree, o ListOpts) 
 	}
 	ol.List = k.beginList(label, &st.ListState, len(st.rows), false, o)
 	ol.List.tree = true
+	if st.selMoved { // a collapse before the list began changed the selection
+		ol.Changed, st.selMoved = true, false
+	}
 	st.built = [2]int{ol.First, ol.Last}
 	return ol
 }
