@@ -410,6 +410,7 @@ func (g *Gallery) tableScene(w, h float32) {
 		t.BeginCell(1)
 		k.NextSize(ui.Px(iconW), widget.Fill)
 		k.Icon(icon.File, t.TextColor())
+		k.ClearSize() // an icon that is not ready yet does not take the size: the next label would
 		name := c.Fmt().Str("item-").Int(n).Bytes()
 		c.NextSize(ui.Pct(1), ui.Pct(1))
 		c.NextFont(r.Styles[theme.StyleBody].Font)
@@ -442,7 +443,8 @@ func (g *Gallery) tableScene(w, h float32) {
 	small := rexui.LabelOpts{Style: rexui.TextSubheadline, Color: rexui.Of(theme.Label2)}
 	g.line = appendInt(g.line[:0], g.table.Sel.Count())
 	g.line = append(append(g.line, " selected · "...), g.status...)
-	g.bytesIn(key, 2, ui.Pct(1), g.line, small)
+	g.bytesIn(key, 2, ui.Children(1), g.line, small)
+	k.Spacer()
 	rexui.Label(k, g.rowsText, small)
 	c.Pop()
 }
