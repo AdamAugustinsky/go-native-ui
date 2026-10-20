@@ -98,6 +98,9 @@ type Options struct {
 	// Legacy pins the system's scroller style to legacy (a window follows
 	// the system's; offscreen it is overlay otherwise).
 	Legacy bool
+	// Nested gives the finder's Documents children two levels deep, as
+	// tools/appkitscenes -nested does (Work, closed: Drafts; Personal).
+	Nested bool
 }
 
 // Demo is the demo window. It implements app.Builder and app.Initer.
@@ -212,31 +215,29 @@ func (d *Demo) WindowPx() (w, h int, scale float32) { return d.winW, d.winH, d.w
 
 func (d *Demo) addIcons() {
 	k := d.k
-	tool := func(sym string, fb rune, pt float32) icon.ID {
-		return k.AddIcon(icon.Spec{Symbol: sym, Fallback: fb, Pt: pt})
-	}
+	tool := func(sym string, fb rune) icon.ID { return k.AddIcon(rexui.ToolbarSymbol(sym, fb)) }
 	pt := theme.MacWindow.Capsule.Glyph // AppKit's toolbar symbols, in both styles
 	ic := &d.ic
-	ic.sidebar = tool("sidebar.left", '▤', pt)
-	ic.inspector = tool("sidebar.right", '▥', pt)
+	ic.sidebar = tool("sidebar.left", '▤')
+	ic.inspector = tool("sidebar.right", '▥')
 	ic.back = k.AddIcon(icon.Spec{Symbol: "chevron.left", Fallback: '‹', Pt: pt, Weight: 0.23})
 	ic.forward = k.AddIcon(icon.Spec{Symbol: "chevron.right", Fallback: '›', Pt: pt, Weight: 0.23})
-	ic.grid = tool("square.grid.2x2", '▦', pt)
-	ic.list = tool("list.bullet", '≡', pt)
-	ic.columns = tool("rectangle.split.3x1", '▥', pt)
-	ic.gallery = tool("square.grid.3x1.below.line.grid.1x2", '▭', pt)
-	ic.group = tool("square.grid.3x1.folder.badge.plus", '▦', pt)
-	ic.action = tool("ellipsis.circle", '…', pt)
-	ic.share = tool("square.and.arrow.up", '⇪', pt)
-	ic.tag = tool("tag", '⌗', pt)
-	ic.search = tool("magnifyingglass", '⌕', pt)
-	ic.trash = tool("trash", '⌫', pt)
-	ic.compose = tool("square.and.pencil", '✎', pt)
-	ic.format = tool("textformat", 'A', pt)
-	ic.checklist = tool("checklist", '☑', pt)
-	ic.table = tool("tablecells", '▦', pt)
-	ic.media = tool("photo.on.rectangle", '▨', pt)
-	ic.plus = tool("plus", '+', pt)
+	ic.grid = tool("square.grid.2x2", '▦')
+	ic.list = tool("list.bullet", '≡')
+	ic.columns = tool("rectangle.split.3x1", '▥')
+	ic.gallery = tool("square.grid.3x1.below.line.grid.1x2", '▭')
+	ic.group = tool("square.grid.3x1.folder.badge.plus", '▦')
+	ic.action = tool("ellipsis.circle", '…')
+	ic.share = tool("square.and.arrow.up", '⇪')
+	ic.tag = tool("tag", '⌗')
+	ic.search = tool("magnifyingglass", '⌕')
+	ic.trash = tool("trash", '⌫')
+	ic.compose = tool("square.and.pencil", '✎')
+	ic.format = tool("textformat", 'A')
+	ic.checklist = tool("checklist", '☑')
+	ic.table = tool("tablecells", '▦')
+	ic.media = tool("photo.on.rectangle", '▨')
+	ic.plus = tool("plus", '+')
 	si := &rexui.SidebarIcons
 	ic.recents, ic.apps, ic.desktop, ic.docs = k.AddIcon(si.Recents), k.AddIcon(si.Applications), k.AddIcon(si.Desktop), k.AddIcon(si.Documents)
 	ic.downloads, ic.cloud, ic.shared, ic.disk = k.AddIcon(si.Downloads), k.AddIcon(si.Cloud), k.AddIcon(si.Shared), k.AddIcon(si.Disk)
@@ -290,31 +291,30 @@ func (d *Demo) Build(c *ui.Context) {
 		d.inspector(tbH)
 		c.Pop()
 	}
-	// A table's header in the toolbar's pocket draws over the bar: the
-	// toolbar comes first. Otherwise it comes after the content, so that the
-	// scroll edge's hairline, just below the band, lies over it.
-	pocket := d.opt.Scene == Finder
-	if pocket {
-		d.toolbar(sbW, W-inW)
+	// The content pane runs under the band, its scroll view inset by it
+	// (the scroll edge is the view's: ToolbarOpts.ContentEdge), but the
+	// tabs scene's, which starts below it. The toolbar comes after the
+	// content, over it.
+	y0 := float32(0)
+	if !d.contentEdge() {
+		y0 = tbH
 	}
-	theme.At(c, sbW, tbH, W-sbW-inW, H-tbH)
+	theme.At(c, sbW, y0, W-sbW-inW, H-y0)
 	flags := base.Floating
-	if !pocket { // the table paints its rows' background, below its header in the pocket
+	if d.opt.Scene != Finder { // the table paints its rows' background
 		c.NextBG(d.contentFill())
 		flags |= ui.DrawBackground
 	}
 	c.Push(c.Box(flags, "content"))
-	under := d.under
-	d.contentPane(tbH, W-sbW-inW, H-tbH)
-	if pocket && d.under != under { // the toolbar of this frame used the last one's
-		c.RequestFrame()
-	}
+	d.contentPane(tbH-y0, W-sbW-inW, H-y0)
 	c.Pop()
-	if !pocket {
-		d.toolbar(sbW, W-inW)
-	}
+	d.toolbar(sbW, W-inW)
 	d.wk.End()
 }
+
+// contentEdge says the content pane's scroll view runs under the toolbar's
+// band and draws its scroll edge.
+func (d *Demo) contentEdge() bool { return d.opt.Scene != Tabs }
 
 // contentFill is the content pane's background: a table's, a text view's.
 func (d *Demo) contentFill() uint32 {
@@ -345,10 +345,8 @@ func (d *Demo) toolbar(sbW, inX float32) {
 	if d.l.inspector > 0 {
 		panes[1] = inX
 	}
-	o := rexui.ToolbarOpts{Style: d.l.style, Title: d.l.title, Panes: panes, ContentUnder: d.under, Traffic: d.opt.Traffic, BandFill: d.contentFill()}
-	if d.opt.Scene == Finder { // the file list's header is in the toolbar's pocket
-		o.ContentUnder, o.Pocket = true, theme.Snap(k.Theme().Lines.HeaderH)
-	}
+	o := rexui.ToolbarOpts{Style: d.l.style, Title: d.l.title, Panes: panes, ContentUnder: d.under, Traffic: d.opt.Traffic, BandFill: d.contentFill(),
+		ContentEdge: d.contentEdge()}
 	switch d.opt.Scene {
 	case Finder:
 		tb := rexui.BeginToolbar(k, "Toolbar", o)
@@ -447,13 +445,15 @@ func (d *Demo) sidebar(tbH float32) {
 
 // contentPane builds the content (the current parent, below the toolbar) of
 // width w and height h.
-func (d *Demo) contentPane(tbH, w, h float32) {
+func (d *Demo) contentPane(top, w, h float32) {
 	switch d.opt.Scene {
 	case Finder:
-		d.fileList(w, h)
+		d.fileList(top, w, h)
 	case Settings:
+		d.k.NextScrollInset(top)
 		d.settingsForm(w, h)
 	case Notes:
+		d.k.NextScrollInset(top)
 		d.notesEditor(w, h)
 	case Tabs:
 		d.tabsContent(w, h)

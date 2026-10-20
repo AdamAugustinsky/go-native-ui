@@ -107,6 +107,20 @@ type SidebarRecipe struct {
 	// the text (NSTextField's 2): the ink lies there, after the field's x
 	// (theme.SidebarSpec.HeaderX too).
 	SymbolGap, DotW, PlainTextX, FieldInset float32
+	// DisclosureRoom is how far right every row's content moves once any
+	// row has children (NSOutlineView keeps a column for the disclosures
+	// then: the cells at 25 rather than 16), DisclosureX a row's disclosure
+	// box (DisclosureLook.Box, 13 wide, the row's height) from the row's
+	// left at level 0, Indent more per level: measured on the Mac mini's
+	// 27.2 with Finder's Documents two levels deep (tools/appkitscenes
+	// -nested): the box at 12 (Documents) and 25 (its child), the chevron
+	// centred in it, the symbols at 28 and 41; the chevron DisclosureDY
+	// below the row's middle (the ink's middle 0.75 below it closed, 1.5
+	// open; ours 1 higher centred). RowChevron colours a row's
+	// disclosure (secondaryLabelColor: #6D6D6D over #EDEDED, #A2A3A2 over
+	// #262626), but on the accent selection, where it is the text's.
+	DisclosureRoom, DisclosureX, DisclosureDY float32
+	RowChevron                                Tint
 	// Detail colours the second line over the glass and the grey
 	// selections (the vibrant secondary label: black at 43 %, white at 36 %,
 	// measured #868686 on #ECECEC and #747474 on #262626); DetailOnSel is
@@ -131,11 +145,14 @@ type SidebarRecipe struct {
 	LegacyKnob, LegacyKnobInactive, LegacySlot, LegacySlotInactive Pair
 	// SearchFill and SearchFillInactive fill a search field on the
 	// sidebar's glass (SidebarSearch): a capsule of the field's height,
-	// measured #EAEAEA and #4E4E4E, #E5E5E5 and #464646 inactive (§2).
+	// measured #EAEAEA and #4E4E4E, #E5E5E5 and #464646 inactive (§2, the
+	// MacBook's 26B5091g); SearchFills replaces them when set.
 	SearchFill, SearchFillInactive Tint
 	// SearchRim is the bright rim inside its edge in an active window
 	// (#FFFFFF 1 pt and #727272 0.5 pt wide) and SearchGlow the colour its
-	// fill fades from at the top and the bottom (#F4F4F4, #565656), SearchEdge and
+	// fill fades from at the top and the bottom (#F2F2F2, #5F5F5F on the
+	// Mac mini: 1 pt in #F1F1F1 and #606060; #F4F4F4, #565656 on the
+	// MacBook), SearchEdge and
 	// SearchEdgeInactive the hairline just outside it (#D8D8D8 and #8C8C8C;
 	// #CDCDCD and #181818 inactive).
 	SearchRim, SearchGlow, SearchEdge, SearchEdgeInactive Pair
@@ -150,6 +167,11 @@ type SidebarRecipe struct {
 	// inactive window (measured 0.5: #0070F4 shows as #79B1F4 on #F2F2F2).
 	TileSize, TileRadius, TileGlyphPt, TileInactive float32
 	TileGlyph                                       Tint
+	// SearchFills are the search field's fill, active and inactive, as the
+	// Mac mini's 27.2 (26B5101f) draws it, the target: #E9E9E9 / #565656
+	// and #E3E3E3 / #4D4D4D (the MacBook's in SearchFill's roles). Zero:
+	// SearchFill and SearchFillInactive.
+	SearchFills [2]Pair
 }
 
 // SidebarLook is the sidebar's recipe (the colours are theme roles measured
@@ -160,13 +182,14 @@ var SidebarLook = SidebarRecipe{
 	Sel: Of(theme.SidebarSel), SelUnemph: Of(theme.SidebarSelUnemph), SelInactive: Of(theme.SidebarSelInactive), OnSel: Of(theme.OnAccent),
 	OnSelInactive: Of(theme.SelectedRowTextInactive),
 	Symbol:        Of(theme.Accent),
-	SymbolGap:     4, DotW: 12, PlainTextX: 20, FieldInset: 2,
+	SymbolGap:     4, DotW: 12, PlainTextX: 20, FieldInset: 2, DisclosureRoom: 9, DisclosureX: 12, DisclosureDY: 1, RowChevron: Of(theme.Label2),
 	Detail: Of(theme.SidebarDetail), DetailOnSel: 0.7, DetailTop: 8, HeaderChevronRight: 17.5, Chevron: Of(theme.Label3),
 	Thumb: OfAlpha(theme.Label, 0.25, 0.3), ThumbW: 6,
 	LegacyKnob: Solid(0xA5A5A5, 0x5A5A5A), LegacyKnobInactive: Solid(0xABABAB, 0x585858),
 	LegacySlot: Solid(0xD8D8D8, 0x343434), LegacySlotInactive: Solid(0xDEDEDE, 0x323232),
 	SearchFill: Of(theme.SidebarSearchFill), SearchFillInactive: Of(theme.SidebarSearchFillInactive),
-	SearchRim: Solid(0xFFFFFF, 0x727272), SearchGlow: Solid(0xF4F4F4, 0x565656), SearchEdge: Solid(0xD8D8D8, 0x8C8C8C), SearchEdgeInactive: Solid(0xCDCDCD, 0x181818),
+	SearchFills: [2]Pair{Solid(0xE9E9E9, 0x565656), Solid(0xE3E3E3, 0x4D4D4D)},
+	SearchRim:   Solid(0xFFFFFF, 0x727272), SearchGlow: Solid(0xF2F2F2, 0x5F5F5F), SearchEdge: Solid(0xD8D8D8, 0x8C8C8C), SearchEdgeInactive: Solid(0xCDCDCD, 0x181818),
 	TextEnd:  22,
 	TileSize: 20, TileRadius: 5, TileGlyphPt: 11, TileInactive: 0.5, TileGlyph: Of(theme.OnAccent),
 }
@@ -224,6 +247,16 @@ func Sidebar(k *base.Kit, label string, st *SidebarState, items []SidebarItem, o
 	_, sy := c.Scroll(v.Inner)
 	res.Under = sy > 0.5
 
+	// a row with children anywhere moves every row's content right, for
+	// the disclosures' column
+	room := float32(0)
+	for i := range items {
+		if !items[i].Header && items[i].Open != nil {
+			room = k.Pt(rc.DisclosureRoom)
+			break
+		}
+	}
+
 	headers := 0
 	y := float32(0) // the content's height so far: where the next row starts in it
 	hide := -1      // rows deeper than this level are hidden (a closed row's children); -2 to the next header
@@ -253,7 +286,7 @@ func Sidebar(k *base.Kit, label string, st *SidebarState, items []SidebarItem, o
 			}
 			continue
 		}
-		pressed, toggled, rh := sidebarRow(k, key, it, st.Sel == it.ID, emph, rc, &o)
+		pressed, toggled, rh := sidebarRow(k, key, it, st.Sel == it.ID, emph, rc, &o, room)
 		if pressed && st.Sel != it.ID {
 			st.Sel, changed = it.ID, true
 		}
@@ -292,6 +325,13 @@ func SidebarSearch(k *base.Kit, label string, buf *ui.TextBuffer, placeholder st
 	fill, edge := rc.SearchFill.RGBA(r), rc.SearchEdge.At(r.T)
 	if k.Inactive() {
 		fill, edge = rc.SearchFillInactive.RGBA(r), rc.SearchEdgeInactive.At(r.T)
+	}
+	i := 0
+	if k.Inactive() {
+		i = 1
+	}
+	if rc.SearchFills[i] != (Pair{}) {
+		fill = rc.SearchFills[i].At(r.T)
 	}
 	k.ApplySize(ui.Pct(1), ui.Px(h))
 	c.NextBG(fill)
@@ -342,7 +382,7 @@ func SidebarSearch(k *base.Kit, label string, buf *ui.TextBuffer, placeholder st
 
 // sidebarRow builds one row; it reports a press on it and a click on its
 // disclosure.
-func sidebarRow(k *base.Kit, key ui.Key, it *SidebarItem, sel, emph bool, rc *SidebarRecipe, o *SidebarOpts) (pressed, toggled bool, h float32) {
+func sidebarRow(k *base.Kit, key ui.Key, it *SidebarItem, sel, emph bool, rc *SidebarRecipe, o *SidebarOpts, room float32) (pressed, toggled bool, h float32) {
 	c, r := k.Context(), k.Theme()
 	sp := &r.Window.Sidebar
 	rkey := ui.KeyN(key, 1<<32|uint64(it.ID))
@@ -395,11 +435,14 @@ func sidebarRow(k *base.Kit, key ui.Key, it *SidebarItem, sel, emph bool, rc *Si
 
 	indent := float32(it.Level) * sp.Indent
 	if it.Open != nil {
-		// inside the selection, between its edge and the symbol
-		side := theme.Snap(k.Pt(DisclosureLook.Box))
-		mid := (theme.Snap(r.Window.Selection.Inset) + sp.IconX) / 2
-		toggled = sidebarChevron(k, rkey, key, it.Open, theme.Snap(mid+indent-side/2), h, textCol, false)
+		// in the disclosures' column, left of the row's content
+		col := rc.RowChevron.RGBA(r)
+		if sel && emph {
+			col = textCol
+		}
+		toggled = sidebarChevron(k, rkey, key, it.Open, theme.Snap(k.Pt(rc.DisclosureX)+indent), k.Pt(rc.DisclosureDY), h, col, false)
 	}
+	indent += room
 	textX := k.Pt(rc.PlainTextX+rc.FieldInset) + indent
 	if id, ok := it.Glyph.ID(); ok && it.Tile != 0 {
 		// a tile: the symbol white on a rounded square of the row's colour
@@ -528,18 +571,18 @@ func sidebarHeader(k *base.Kit, key ui.Key, it *SidebarItem, rc *SidebarRecipe, 
 		}
 		// built while hidden too: the keyboard and assistive technologies
 		// reach it
-		toggled = sidebarChevron(k, hkey, key, it.Open, theme.Snap(w-k.Pt(rc.HeaderChevronRight)-k.Pt(6.5)), h, theme.WithAlpha(rc.Chevron.RGBA(r)|0xFF, show), true)
+		toggled = sidebarChevron(k, hkey, key, it.Open, theme.Snap(w-k.Pt(rc.HeaderChevronRight)-k.Pt(6.5)), 0, h, theme.WithAlpha(rc.Chevron.RGBA(r)|0xFF, show), true)
 	}
 	c.Pop()
 	return h, toggled
 }
 
 // sidebarChevron builds the disclosure chevron of a row or header at x in a
-// row of height h, which turns over the Standard duration, and toggles *open
+// row of height h, dy below its middle, which turns over the Standard duration, and toggles *open
 // on a click or an assistive technology's press. A header's takes the focus
 // from the keyboard (Tab; Space or Enter toggles it); a click on it leaves
 // the focus with the sidebar (root).
-func sidebarChevron(k *base.Kit, rkey, root ui.Key, open *bool, x, h float32, col uint32, header bool) bool {
+func sidebarChevron(k *base.Kit, rkey, root ui.Key, open *bool, x, dy, h float32, col uint32, header bool) bool {
 	c, r := k.Context(), k.Theme()
 	ckey := ui.KeyN(rkey, 9)
 	ps := c.PeekSignal(ckey)
@@ -560,7 +603,7 @@ func sidebarChevron(k *base.Kit, rkey, root ui.Key, open *bool, x, h float32, co
 	}
 	t := c.AnimateValue(ui.KeyN(ckey, 1), tgt, rate)
 	side := theme.Snap(k.Pt(DisclosureLook.Box))
-	theme.At(c, x, theme.Snap((h-side)/2), side, side)
+	theme.At(c, x, theme.Snap((h-side)/2+dy), side, side)
 	c.NextRole(ui.RoleButton)
 	if header {
 		c.NextSemName("Show or Hide")

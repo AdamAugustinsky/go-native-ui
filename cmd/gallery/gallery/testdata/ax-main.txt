@@ -1,0 +1,358 @@
+AXWindow
+  AXMenuBar "Menu bar"
+    AXMenuBarItem "File" {Press,Disclose}
+    AXMenuBarItem "Edit" {Press,Disclose}
+    AXMenuBarItem "View" {Press,Disclose}
+  AXScrollArea "states" {ScrollToVisible}
+    AXStaticText value="States"
+    AXStaticText value="Normal"
+    AXStaticText value="Hover"
+    AXStaticText value="Pressed"
+    AXStaticText value="Focused"
+    AXStaticText value="Disabled"
+    AXStaticText value="Button"
+    AXButton "Button" {Press}
+    AXButton "Button" {Press}
+    AXButton "Button" {Press}
+    AXButton "Button" {Press}
+    AXButton "Button" [disabled]
+    AXStaticText value="Primary"
+    AXButton "Primary" {Press}
+    AXButton "Primary" {Press}
+    AXButton "Primary" {Press}
+    AXButton "Primary" {Press}
+    AXButton "Primary" [disabled]
+    AXStaticText value="Plain"
+    AXButton "Plain" {Press}
+    AXButton "Plain" {Press}
+    AXButton "Plain" {Press}
+    AXButton "Plain" {Press}
+    AXButton "Plain" [disabled]
+    AXStaticText value="Icon"
+    AXButton "Add" {Press}
+    AXButton "Add" {Press}
+    AXButton "Add" {Press}
+    AXButton "Add" {Press}
+    AXButton "Add" [disabled]
+    AXStaticText value="Checkbox"
+    AXCheckBox "Check" value=1 {Press}
+    AXCheckBox "Check" value=1 {Press}
+    AXCheckBox "Check" value=1 {Press}
+    AXCheckBox "Check" value=1 {Press}
+    AXCheckBox "Check" value=1 [disabled]
+    AXStaticText value="Mixed"
+    AXCheckBox "Mixed" value=2 {Press}
+    AXCheckBox "Mixed" value=2 {Press}
+    AXCheckBox "Mixed" value=2 {Press}
+    AXCheckBox "Mixed" value=2 {Press}
+    AXCheckBox "Mixed" value=2 [disabled]
+    AXStaticText value="Switch"
+    AXCheckBox/AXSwitch "On" value=1 {Press}
+    AXCheckBox/AXSwitch "On" value=1 {Press}
+    AXCheckBox/AXSwitch "On" value=1 {Press}
+    AXCheckBox/AXSwitch "On" value=1 {Press}
+    AXCheckBox/AXSwitch "On" value=1 [disabled]
+    AXStaticText value="Radio"
+    AXRadioGroup "Radio"
+      AXRadioButton "Radio" value=1 [index=0/1] {Press}
+    AXRadioGroup "Radio"
+      AXRadioButton "Radio" value=1 [index=0/1] {Press}
+    AXRadioGroup "Radio"
+      AXRadioButton "Radio" value=1 [index=0/1] {Press}
+    AXRadioGroup "Radio"
+      AXRadioButton "Radio" value=1 [index=0/1] {Press}
+    AXRadioGroup "Radio"
+      AXRadioButton "Radio" value=1 [disabled index=0/1]
+    AXStaticText value="Slider"
+    AXSlider "Slider" value=40 {Increment,Decrement}
+    AXSlider "Slider" value=40 {Increment,Decrement}
+    AXSlider "Slider" value=40 {Increment,Decrement}
+    AXSlider "Slider" value=40 {Increment,Decrement}
+    AXSlider "Slider" value=40 [disabled]
+    AXStaticText value="Field"
+    AXTextField "Field" value="Field" sel=5+0
+    AXTextField "Field" value="Field" sel=5+0
+    AXTextField "Field" value="Field" sel=5+0
+    AXTextField "Field" value="Field" sel=5+0
+    AXTextField "Field" value="Field" sel=5+0 [disabled]
+    AXStaticText value="Select"
+    AXPopUpButton "Choice" value="Choice" {ShowMenu,Disclose}
+    AXPopUpButton "Choice" value="Choice" {ShowMenu,Disclose}
+    AXPopUpButton "Choice" value="Choice" {ShowMenu,Disclose}
+    AXPopUpButton "Choice" value="Choice" {ShowMenu,Disclose}
+    AXPopUpButton "Choice" value="Choice" [disabled]
+    AXStaticText value="Progress"
+    AXProgressIndicator "Empty" value=0
+    AXProgressIndicator "Half" value=0.5
+    AXProgressIndicator "Full" value=1
+    AXProgressIndicator "Working" value=0
+    AXStaticText value="Card"
+    AXStaticText value="A card groups related controls."
+    AXButton "Revert" {Press}
+    AXButton "Apply" {Press}
+    AXScrollBar "Horizontal scroll bar" {Increment,Decrement}
+  AXScrollArea "controls" {ScrollToVisible}
+    AXStaticText value="Text"
+    AXStaticText value="Body text, the default style"
+    AXStaticText value="Muted secondary text"
+    AXStaticText value="Small caption"
+    AXStaticText value="Monospace 0123456789"
+    AXStaticText value="Wrapped text breaks at the width it is given, at the line break opportunities of Unicode, and keeps the long words whole where it can."
+    AXStaticText value="Entry"
+    AXTextField "Notes" value="Hello, gallery" sel=14+0
+    AXTextField/AXSearchField "Filter" sel=0+0
+    AXStaticText value="Choices"
+    AXCheckBox "Enable feature" value=1 {Press}
+    AXCheckBox "All options" value=2 {Press}
+    AXCheckBox/AXSwitch "Notifications" value=0 {Press}
+    AXRadioGroup "Radio"
+      AXRadioButton "One" value=1 [index=0/3] {Press}
+      AXRadioButton "Two" value=0 [index=1/3] {Press}
+      AXRadioButton "Three" value=0 [index=2/3] {Press}
+    AXStaticText value="Volume"
+    AXSlider "Volume" value=40 {Increment,Decrement}
+    AXStaticText value="40"
+    AXPopUpButton "Format" value="Plain text" {ShowMenu,Disclose}
+    AXPopUpButton "Appearance" value="System" {ShowMenu,Disclose}
+    AXStaticText value="Buttons"
+    AXButton "Open…" {Press}
+    AXButton "Save" {Press}
+    AXButton "More" {Press}
+    AXButton "Remove" {Press}
+    AXButton "Add item" {Press}
+    AXButton "Menu" {Press}
+    AXButton "Delete…" {Press}
+    AXCheckBox/AXSwitch "Show activity" value=1 {Press}
+    AXStaticText value="Tabs"
+    AXTabGroup "Sections"
+      AXRadioButton/AXTabButton "Overview" value=1 [selected index=0/3] {Press,ScrollToVisible}
+      AXRadioButton/AXTabButton "Details" value=0 [index=1/3] {Press,ScrollToVisible}
+      AXRadioButton/AXTabButton "History" value=0 [index=2/3] {Press,ScrollToVisible}
+    AXStaticText value="A summary of the thing."
+    AXStaticText value="List"
+    AXTable "items" [rows=40] {ScrollToVisible}
+      AXRow/AXTableRow "List item 1" [index=0/40] {Press,ScrollToVisible}
+        AXStaticText value="List item 1"
+      AXRow/AXTableRow "List item 2" [index=1/40] {Press,ScrollToVisible}
+        AXStaticText value="List item 2"
+      AXRow/AXTableRow "List item 3" [index=2/40] {Press,ScrollToVisible}
+        AXStaticText value="List item 3"
+      AXRow/AXTableRow "List item 4" [index=3/40] {Press,ScrollToVisible}
+        AXStaticText value="List item 4"
+      AXRow/AXTableRow "List item 5" [index=4/40] {Press,ScrollToVisible}
+        AXStaticText value="List item 5"
+      AXRow/AXTableRow "List item 6" [index=5/40] {Press,ScrollToVisible}
+        AXStaticText value="List item 6"
+      AXRow/AXTableRow "List item 7" [index=6/40] {Press,ScrollToVisible}
+        AXStaticText value="List item 7"
+    AXScrollBar "Vertical scroll bar" {Increment,Decrement}
+    AXScrollBar "Vertical scroll bar" {Increment,Decrement}
+  AXStaticText value="Table"
+  AXStaticText value="1,000,000 rows"
+  AXTextField/AXSearchField "Search rows" sel=0+0
+  AXTable "rows" [rows=1000000 columns=4] {ScrollToVisible}
+    AXButton/AXSortButton "ID" {Press,Increment,Decrement}
+    AXButton/AXSortButton "Name" {Press,Increment,Decrement}
+    AXButton/AXSortButton "Kind" {Increment,Decrement}
+    AXButton/AXSortButton "Size" {Increment,Decrement}
+    AXRow/AXTableRow "0" [index=0/1000000] {Press,ScrollToVisible}
+      AXCell "0"
+      AXCell "item-0"
+        AXImage
+        AXStaticText value="item-0"
+      AXCell "Document"
+      AXCell "0 KB"
+    AXRow/AXTableRow "1" [index=1/1000000] {Press,ScrollToVisible}
+      AXCell "1"
+      AXCell "item-1"
+        AXImage
+        AXStaticText value="item-1"
+      AXCell "Image"
+      AXCell "17 KB"
+    AXRow/AXTableRow "2" [index=2/1000000] {Press,ScrollToVisible}
+      AXCell "2"
+      AXCell "item-2"
+        AXImage
+        AXStaticText value="item-2"
+      AXCell "Archive"
+      AXCell "34 KB"
+    AXRow/AXTableRow "3" [index=3/1000000] {Press,ScrollToVisible}
+      AXCell "3"
+      AXCell "item-3"
+        AXImage
+        AXStaticText value="item-3"
+      AXCell "Folder"
+      AXCell "51 KB"
+    AXRow/AXTableRow "4" [index=4/1000000] {Press,ScrollToVisible}
+      AXCell "4"
+      AXCell "item-4"
+        AXImage
+        AXStaticText value="item-4"
+      AXCell "Audio"
+      AXCell "68 KB"
+    AXRow/AXTableRow "5" [index=5/1000000] {Press,ScrollToVisible}
+      AXCell "5"
+      AXCell "item-5"
+        AXImage
+        AXStaticText value="item-5"
+      AXCell "Document"
+      AXCell "85 KB"
+    AXRow/AXTableRow "6" [index=6/1000000] {Press,ScrollToVisible}
+      AXCell "6"
+      AXCell "item-6"
+        AXImage
+        AXStaticText value="item-6"
+      AXCell "Image"
+      AXCell "102 KB"
+    AXRow/AXTableRow "7" [index=7/1000000] {Press,ScrollToVisible}
+      AXCell "7"
+      AXCell "item-7"
+        AXImage
+        AXStaticText value="item-7"
+      AXCell "Archive"
+      AXCell "119 KB"
+    AXRow/AXTableRow "8" [index=8/1000000] {Press,ScrollToVisible}
+      AXCell "8"
+      AXCell "item-8"
+        AXImage
+        AXStaticText value="item-8"
+      AXCell "Folder"
+      AXCell "136 KB"
+    AXRow/AXTableRow "9" [index=9/1000000] {Press,ScrollToVisible}
+      AXCell "9"
+      AXCell "item-9"
+        AXImage
+        AXStaticText value="item-9"
+      AXCell "Audio"
+      AXCell "153 KB"
+    AXRow/AXTableRow "10" [index=10/1000000] {Press,ScrollToVisible}
+      AXCell "10"
+      AXCell "item-10"
+        AXImage
+        AXStaticText value="item-10"
+      AXCell "Document"
+      AXCell "170 KB"
+    AXRow/AXTableRow "11" [index=11/1000000] {Press,ScrollToVisible}
+      AXCell "11"
+      AXCell "item-11"
+        AXImage
+        AXStaticText value="item-11"
+      AXCell "Image"
+      AXCell "187 KB"
+    AXRow/AXTableRow "12" [index=12/1000000] {Press,ScrollToVisible}
+      AXCell "12"
+      AXCell "item-12"
+        AXImage
+        AXStaticText value="item-12"
+      AXCell "Archive"
+      AXCell "204 KB"
+    AXRow/AXTableRow "13" [index=13/1000000] {Press,ScrollToVisible}
+      AXCell "13"
+      AXCell "item-13"
+        AXImage
+        AXStaticText value="item-13"
+      AXCell "Folder"
+      AXCell "221 KB"
+    AXRow/AXTableRow "14" [index=14/1000000] {Press,ScrollToVisible}
+      AXCell "14"
+      AXCell "item-14"
+        AXImage
+        AXStaticText value="item-14"
+      AXCell "Audio"
+      AXCell "238 KB"
+    AXRow/AXTableRow "15" [index=15/1000000] {Press,ScrollToVisible}
+      AXCell "15"
+      AXCell "item-15"
+        AXImage
+        AXStaticText value="item-15"
+      AXCell "Document"
+      AXCell "255 KB"
+    AXRow/AXTableRow "16" [index=16/1000000] {Press,ScrollToVisible}
+      AXCell "16"
+      AXCell "item-16"
+        AXImage
+        AXStaticText value="item-16"
+      AXCell "Image"
+      AXCell "272 KB"
+    AXRow/AXTableRow "17" [index=17/1000000] {Press,ScrollToVisible}
+      AXCell "17"
+      AXCell "item-17"
+        AXImage
+        AXStaticText value="item-17"
+      AXCell "Archive"
+      AXCell "289 KB"
+    AXRow/AXTableRow "18" [index=18/1000000] {Press,ScrollToVisible}
+      AXCell "18"
+      AXCell "item-18"
+        AXImage
+        AXStaticText value="item-18"
+      AXCell "Folder"
+      AXCell "306 KB"
+    AXRow/AXTableRow "19" [index=19/1000000] {Press,ScrollToVisible}
+      AXCell "19"
+      AXCell "item-19"
+        AXImage
+        AXStaticText value="item-19"
+      AXCell "Audio"
+      AXCell "323 KB"
+    AXRow/AXTableRow "20" [index=20/1000000] {Press,ScrollToVisible}
+      AXCell "20"
+      AXCell "item-20"
+        AXImage
+        AXStaticText value="item-20"
+      AXCell "Document"
+      AXCell "340 KB"
+    AXRow/AXTableRow "21" [index=21/1000000] {Press,ScrollToVisible}
+      AXCell "21"
+      AXCell "item-21"
+        AXImage
+        AXStaticText value="item-21"
+      AXCell "Image"
+      AXCell "357 KB"
+    AXRow/AXTableRow "22" [index=22/1000000] {Press,ScrollToVisible}
+      AXCell "22"
+      AXCell "item-22"
+        AXImage
+        AXStaticText value="item-22"
+      AXCell "Archive"
+      AXCell "374 KB"
+    AXRow/AXTableRow "23" [index=23/1000000] {Press,ScrollToVisible}
+      AXCell "23"
+      AXCell "item-23"
+        AXImage
+        AXStaticText value="item-23"
+      AXCell "Folder"
+      AXCell "391 KB"
+    AXRow/AXTableRow "24" [index=24/1000000] {Press,ScrollToVisible}
+      AXCell "24"
+      AXCell "item-24"
+        AXImage
+        AXStaticText value="item-24"
+      AXCell "Audio"
+      AXCell "408 KB"
+    AXRow/AXTableRow "25" [index=25/1000000] {Press,ScrollToVisible}
+      AXCell "25"
+      AXCell "item-25"
+        AXImage
+        AXStaticText value="item-25"
+      AXCell "Document"
+      AXCell "425 KB"
+    AXRow/AXTableRow "26" [index=26/1000000] {Press,ScrollToVisible}
+      AXCell "26"
+      AXCell "item-26"
+        AXImage
+        AXStaticText value="item-26"
+      AXCell "Image"
+      AXCell "442 KB"
+    AXRow/AXTableRow "27" [index=27/1000000] {Press,ScrollToVisible}
+      AXCell "27"
+      AXCell "item-27"
+        AXImage
+        AXStaticText value="item-27"
+      AXCell "Archive"
+      AXCell "459 KB"
+    AXScrollBar "Vertical scroll bar" {Increment,Decrement}
+  AXStaticText value="0 selected ·"
+  AXStaticText value="Ready"
+  AXSplitter "Divider" [index=0/2] {Increment,Decrement}
+  AXSplitter "Divider" [index=1/2] {Increment,Decrement}

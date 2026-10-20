@@ -105,6 +105,8 @@ type Form struct {
 	rows     int
 	row      ui.ID
 	label    ui.ID
+	rowLabel string // the open row's label, which names its first unnamed control
+	mark     int    // where the open row's semantics start (ui.Context.SemMark)
 }
 
 // BeginForm starts a form and makes it the parent: a column as wide as its
@@ -229,6 +231,7 @@ func (f *Form) EndSection(k *base.Kit, footer string) {
 func (f *Form) Row(k *base.Kit, label string, o RowOpts) ui.ID {
 	rc := &FormLook
 	f.rows++
+	f.rowLabel, f.mark = label, k.Context().SemMark()
 	if f.variant == FormAligned {
 		if f.rows > 1 {
 			k.Space(rc.RowGap)
@@ -268,8 +271,16 @@ func formLabel(k *base.Kit, label string) ui.ID {
 // Label is the box of the current row's label.
 func (f *Form) Label() ui.ID { return f.label }
 
-// EndRow ends the row Row started.
-func (f *Form) EndRow(k *base.Kit) { k.EndRow() }
+// EndRow ends the row Row started. The row's label names the row's first
+// control that has no accessible name of its own, so that a switch built with
+// an empty label reads "Wi-Fi, switch" as AppKit's form rows do; a control
+// that has a name keeps it, and of several controls in a row only the first
+// unnamed interactive one (button, check box, switch, radio button, slider,
+// text or search field, pop-up) takes the label.
+func (f *Form) EndRow(k *base.Kit) {
+	k.Context().NameFirstUnnamed(f.mark, base.StrBytes(f.rowLabel))
+	k.EndRow()
+}
 
 // EndForm closes the form BeginForm started, and the section still open.
 func EndForm(k *base.Kit, f *Form) {

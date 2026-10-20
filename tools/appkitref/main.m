@@ -417,6 +417,11 @@ static NSImage *sym(NSString *n) { return [NSImage imageWithSystemSymbolName:n a
 // listScrollers is the scroller style of the lists' scroll views: overlay in
 // the offscreen renders (AppKit's at rest, hidden), the system's in -live.
 static BOOL gLiveLists;
+static BOOL gFlash; // -live -flash: overlay scrollers are flashed again and again, so that a capture shows their knobs
+static void flashScrollViews(NSView *v) {
+	if ([v isKindOfClass:NSScrollView.class]) [(NSScrollView *)v flashScrollers];
+	for (NSView *sub in v.subviews) flashScrollViews(sub);
+}
 static NSScrollerStyle listScrollers(void) { return gLiveLists ? NSScroller.preferredScrollerStyle : NSScrollerStyleOverlay; }
 
 static NSScrollView *tableIn(NSTableViewStyle style, BOOL alternating, NSSize size, BOOL emph, BOOL fit) {
@@ -814,6 +819,9 @@ static void defineSamples(void) {
 		{@"checkbox-on-focused", NSControlStateValueOn, YES, YES, NO, NSControlSizeRegular},
 		{@"checkbox-on-small", NSControlStateValueOn, YES, NO, NO, NSControlSizeSmall},
 		{@"checkbox-on-large", NSControlStateValueOn, YES, NO, NO, NSControlSizeLarge},
+		{@"checkbox-on-inactive", NSControlStateValueOn, YES, NO, NO, NSControlSizeRegular},
+		{@"checkbox-mixed-inactive", NSControlStateValueMixed, YES, NO, NO, NSControlSizeRegular},
+		{@"checkbox-off-inactive", NSControlStateValueOff, YES, NO, NO, NSControlSizeRegular},
 	};
 	for (size_t i = 0; i < sizeof checks / sizeof checks[0]; i++) {
 		__auto_type c = checks[i];
@@ -827,6 +835,7 @@ static void defineSamples(void) {
 			return b;
 		});
 		s.focus = c.focus, s.pressed = c.pressed, s.probe = 4;
+		s.inactive = [c.n hasSuffix:@"-inactive"];
 	}
 	struct {
 		NSString *n;
@@ -837,6 +846,7 @@ static void defineSamples(void) {
 		{@"radio-on", NSControlStateValueOn, YES, NO},
 		{@"radio-on-disabled", NSControlStateValueOn, NO, NO},
 		{@"radio-on-focused", NSControlStateValueOn, YES, YES},
+		{@"radio-on-inactive", NSControlStateValueOn, YES, NO},
 	};
 	for (size_t i = 0; i < sizeof radios / sizeof radios[0]; i++) {
 		__auto_type c = radios[i];
@@ -847,6 +857,7 @@ static void defineSamples(void) {
 			return b;
 		});
 		s.focus = c.focus, s.probe = 4;
+		s.inactive = [c.n hasSuffix:@"-inactive"];
 	}
 	struct {
 		NSString *n;
@@ -861,6 +872,8 @@ static void defineSamples(void) {
 		{@"switch-on-small", NSControlStateValueOn, YES, NO, NSControlSizeSmall},
 		{@"switch-on-mini", NSControlStateValueOn, YES, NO, NSControlSizeMini},
 		{@"switch-on-large", NSControlStateValueOn, YES, NO, NSControlSizeLarge},
+		{@"switch-on-inactive", NSControlStateValueOn, YES, NO, NSControlSizeRegular},
+		{@"switch-off-inactive", NSControlStateValueOff, YES, NO, NSControlSizeRegular},
 	};
 	for (size_t i = 0; i < sizeof switches / sizeof switches[0]; i++) {
 		__auto_type c = switches[i];
@@ -872,6 +885,7 @@ static void defineSamples(void) {
 			return w;
 		});
 		s.focus = c.focus;
+		s.inactive = [c.n hasSuffix:@"-inactive"];
 	}
 
 	// menus and selection
@@ -914,6 +928,11 @@ static void defineSamples(void) {
 		s.selectedSegment = 0;
 		return s;
 	});
+	add(@"select", @"segmented-inactive", ^{
+		NSSegmentedControl *s = [NSSegmentedControl segmentedControlWithLabels:@[ @"One", @"Two", @"Three" ] trackingMode:NSSegmentSwitchTrackingSelectOne target:nil action:nil];
+		s.selectedSegment = 0;
+		return s;
+	}).inactive = YES;
 	add(@"select", @"segmented-small", ^{
 		NSSegmentedControl *s = [NSSegmentedControl segmentedControlWithLabels:@[ @"One", @"Two", @"Three" ] trackingMode:NSSegmentSwitchTrackingSelectOne target:nil action:nil];
 		s.controlSize = NSControlSizeSmall;
@@ -948,6 +967,7 @@ static void defineSamples(void) {
 		{@"slider-small", 0, YES, NO, NSControlSizeSmall},
 		{@"slider-disabled", 0, NO, NO, NSControlSizeRegular},
 		{@"slider-focused", 0, YES, YES, NSControlSizeRegular},
+		{@"slider-inactive", 0, YES, NO, NSControlSizeRegular},
 	};
 	for (size_t i = 0; i < sizeof sliders / sizeof sliders[0]; i++) {
 		__auto_type c = sliders[i];
@@ -959,14 +979,30 @@ static void defineSamples(void) {
 			return sl;
 		});
 		s.size = NSMakeSize(200, 0), s.focus = c.focus;
+		s.inactive = [c.n hasSuffix:@"-inactive"];
 	}
 	add(@"select", @"stepper", ^{
 		NSStepper *st = [NSStepper new];
 		return st;
 	});
+	add(@"select", @"stepper-inactive", ^{
+		NSStepper *st = [NSStepper new];
+		return st;
+	}).inactive = YES;
 	add(@"select", @"color-well", ^{
 		NSColorWell *w = [NSColorWell colorWellWithStyle:NSColorWellStyleDefault];
 		w.color = NSColor.systemTealColor;
+		return w;
+	});
+	add(@"select", @"color-well-swatch", ^{ // the swatch of "color-well"
+		NSColorWell *w = [NSColorWell colorWellWithStyle:NSColorWellStyleDefault];
+		w.color = NSColor.systemTealColor;
+		return w;
+	});
+	add(@"select", @"color-well-disabled", ^{
+		NSColorWell *w = [NSColorWell colorWellWithStyle:NSColorWellStyleDefault];
+		w.color = NSColor.systemTealColor;
+		w.enabled = NO;
 		return w;
 	});
 	add(@"select", @"date-picker", ^{
@@ -1030,6 +1066,43 @@ static void defineSamples(void) {
 	add(@"field", @"textview", ^{
 		return textScroll(NSScrollerStyleOverlay, NSMakeSize(320, 110), NO);
 	}).size = NSMakeSize(320, 110);
+
+	// D7a: the states of the combo box, token field and colour well that
+	// rexui's samples (rexui/catalog/d7a.go) are set against, each under its
+	// own name; the "-chip", "-button" and "-swatch" ones are the same control
+	// as "token", "combo" and "color-well", measured at the part they name.
+	struct {
+		NSString *n;
+		BOOL token, en, focus;
+	} d7a[] = {
+		{@"combo-focused", NO, YES, YES},
+		{@"combo-disabled", NO, NO, NO},
+		{@"combo-button", NO, YES, NO},
+		{@"token-focused", YES, YES, YES},
+		{@"token-disabled", YES, NO, NO},
+		{@"token-chip", YES, YES, NO},
+	};
+	for (size_t i = 0; i < sizeof d7a / sizeof d7a[0]; i++) {
+		__auto_type c = d7a[i];
+		Sample *s = add(@"field", c.n, ^NSView * {
+			NSTextField *f;
+			if (c.token) {
+				NSTokenField *t = [NSTokenField new];
+				t.objectValue = @[ @"Alpha", @"Beta" ];
+				f = t;
+			} else {
+				NSComboBox *cb = [NSComboBox new];
+				[cb addItemsWithObjectValues:@[ @"Combo", @"Other" ]];
+				cb.stringValue = @"Combo";
+				f = cb;
+			}
+			f.font = [NSFont systemFontOfSize:[NSFont systemFontSizeForControlSize:NSControlSizeRegular]];
+			f.placeholderString = @"Placeholder";
+			f.enabled = c.en;
+			return f;
+		});
+		s.size = NSMakeSize(c.token ? 200 : 160, 0), s.focus = c.focus;
+	}
 
 	// lists
 	Sample *t;
@@ -1168,6 +1241,29 @@ static void defineSamples(void) {
 		p.doubleValue = 40;
 		return p;
 	}).size = NSMakeSize(200, 0);
+	Sample *pbi = add(@"progress", @"progress-bar-inactive", ^{
+		NSProgressIndicator *p = [NSProgressIndicator new];
+		p.style = NSProgressIndicatorStyleBar;
+		p.indeterminate = NO;
+		p.doubleValue = 40;
+		return p;
+	});
+	pbi.size = NSMakeSize(200, 0), pbi.inactive = YES;
+	Sample *pii = add(@"progress", @"progress-indeterminate-inactive", ^{
+		NSProgressIndicator *p = [NSProgressIndicator new];
+		p.style = NSProgressIndicatorStyleBar;
+		p.indeterminate = YES;
+		[p startAnimation:nil];
+		return p;
+	});
+	pii.size = NSMakeSize(200, 0), pii.inactive = YES;
+	Sample *lvi = add(@"progress", @"level-inactive", ^{
+		NSLevelIndicator *l = [NSLevelIndicator new];
+		l.levelIndicatorStyle = NSLevelIndicatorStyleContinuousCapacity;
+		l.maxValue = 10, l.doubleValue = 6;
+		return l;
+	});
+	lvi.size = NSMakeSize(160, 0), lvi.inactive = YES;
 	add(@"progress", @"progress-indeterminate", ^{
 		NSProgressIndicator *p = [NSProgressIndicator new];
 		p.style = NSProgressIndicatorStyleBar;
@@ -2084,6 +2180,13 @@ static int runLive(NSString *namesPath, NSString *apName, double seconds, CGFloa
 			                                  savePNG(rep, dump);
 		                                  }];
 	}
+	if (gFlash) {
+		[NSTimer scheduledTimerWithTimeInterval:0.25
+		                                repeats:YES
+		                                  block:^(NSTimer *t) {
+			                                  flashScrollViews(root);
+		                                  }];
+	}
 	[NSTimer scheduledTimerWithTimeInterval:seconds
 	                                repeats:NO
 	                                  block:^(NSTimer *t) {
@@ -2109,6 +2212,7 @@ int main(int argc, const char **argv) {
 			else if (!strcmp(argv[i], "-sheet") && i + 2 < argc)
 				return pairSheet([NSString stringWithUTF8String:argv[i + 1]], [NSString stringWithUTF8String:argv[i + 2]]);
 			else if (!strcmp(argv[i], "-live") && i + 1 < argc) live = [NSString stringWithUTF8String:argv[++i]], gLiveLists = YES;
+			else if (!strcmp(argv[i], "-flash")) gFlash = YES;
 			else if (!strcmp(argv[i], "-mode") && i + 1 < argc) liveAp = strcmp(argv[++i], "dark") ? NSAppearanceNameAqua : NSAppearanceNameDarkAqua;
 			else if (!strcmp(argv[i], "-seconds") && i + 1 < argc) seconds = atof(argv[++i]);
 			else if (!strcmp(argv[i], "-width") && i + 1 < argc) maxW = atof(argv[++i]);

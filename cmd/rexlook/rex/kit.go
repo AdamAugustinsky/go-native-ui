@@ -4,6 +4,7 @@ import (
 	"math"
 	"unsafe"
 
+	"gonativeui/rexui"
 	"gonativeui/text"
 	"gonativeui/theme"
 	rextheme "gonativeui/theme/rex"
@@ -135,4 +136,76 @@ func (r *Rex) IconButton(c *ui.Context, key ui.Key, id iconID, cx, cy, hit float
 		c.PopOpacity()
 	}
 	c.Pop()
+}
+
+// headerButtons are the pane header buttons' accessible names, by button.
+var headerButtons = [numBtns]string{btnSplitX: "Split right", btnSplitY: "Split down", btnMax: "Maximise", btnClose: "Close"}
+
+// HeaderButton builds a pane header button: a rexui.IconButton (borderless)
+// the size of the hit box, centred at (cx, cy), inside a holder that draws
+// the hover and press chip behind it. Rex's greys come from roles the scene
+// owns (see setHeaderRecipe); a disabled button is faded and takes no input.
+func (r *Rex) HeaderButton(c *ui.Context, holder ui.Key, id iconID, name string, cx, cy, hit float32, enabled bool) {
+	inner := ui.HashString(holder, name)
+	bx, by := theme.Snap(cx-hit/2), theme.Snap(cy-hit/2)
+	bg := uint32(0)
+	if enabled {
+		t, pressed := c.HotTOf(inner), c.ActiveTOf(inner)
+		bg = theme.ColA(r.tone(0x2A2030, 0xFFFFFF), 0.08*t+0.07*pressed)
+	}
+	theme.At(c, bx, by, hit, hit)
+	c.NextBG(bg)
+	c.NextRadius(6 * r.Scale)
+	box := c.BoxKeyed(ui.DrawBackground|fl, holder, nil)
+	c.Push(box)
+	// The icon sits where the scene's grid puts it (centred on (cx, cy), snapped
+	// to a pixel). The button centres it in its own box, so the box is at a
+	// whole pixel, as large as the hit box but for a pixel of parity with the
+	// icon's size, and has the icon's centre as its own.
+	iw, ih := r.k.IconSize(id)
+	w, h := fitParity(theme.Snap(hit), iw), fitParity(theme.Snap(hit), ih)
+	x, y := theme.Snap(cx-iw/2)-bx+(iw-w)/2, theme.Snap(cy-ih/2)-by+(ih-h)/2
+	theme.At(c, x, y, w, h)
+	c.NextFlags(fl)
+	r.k.BeginDisabled(!enabled)
+	r.k.NextSize(ui.Px(w), ui.Px(h))
+	if enabled {
+		c.NextCursor(ui.CursorPointer) // Rex's buttons show the hand
+	}
+	rexui.IconButton(r.k, id, name, rexui.IconButtonOpts{Variant: rexui.IconBorderless})
+	r.k.EndDisabled()
+	c.Pop()
+}
+
+// fitParity is the side n, or one pixel less if that makes n - m even.
+func fitParity(n, m float32) float32 {
+	if math.Mod(float64(n-m), 2) != 0 {
+		return n - 1
+	}
+	return n
+}
+
+// setHeaderRecipe gives the borderless icon button Rex's pane-header greys: a
+// quiet grey that darkens to the text colour under the pointer. The scene has
+// no sidebar, so two of the theme's own sidebar roles carry the colours
+// (headerTheme sets them); rexui and theme/rex should own a role for it.
+func setHeaderRecipe() {
+	rc := &rexui.IconButtonRecipes[rexui.IconBorderless]
+	rest := rexui.Of(theme.SidebarLabel)
+	rc.Label, rc.LabelInactive, rc.LabelPressed = rest, rest, rexui.Of(theme.SidebarHeader)
+	rc.LabelDisabled = rexui.OfAlpha(theme.SidebarLabel, 0.4, 0.4)
+	rexui.IconButtonHoverLabel = rexui.Of(theme.SidebarHeader)
+}
+
+// headerTheme is the Rex theme with the scene's own pieces: the pane title's
+// text style (12.75 pt semibold, the reference's) and the header buttons'
+// greys.
+func headerTheme() *theme.Theme {
+	t := rextheme.Theme()
+	t.Text = theme.MacText
+	t.Text[theme.StylePaneTitle] = theme.TextSpec{Size: 12.75, Line: 16, Weight: theme.WeightSemibold}
+	l, d := &t.Roles[theme.Light], &t.Roles[theme.Dark]
+	l[theme.SidebarLabel], d[theme.SidebarLabel] = theme.Col(0x96999B), theme.Col(0x8A8EA1)
+	l[theme.SidebarHeader], d[theme.SidebarHeader] = theme.Col(0x3F4246), theme.Col(0xECEDF3)
+	return t
 }

@@ -21,6 +21,10 @@ type SwitchRecipe struct {
 	// insets tall (measured: 32 × 20 in 54 × 24, 26 × 16 in 44 × 20, 38 × 24
 	// in 64 × 28, 21 × 13 in 36 × 16).
 	KnobW, Inset [theme.NumSizes]float32
+	// OnInactive replaces On in a window that is not the key window (as
+	// CheckboxRecipe's OnInactive: labelColor at 14 % measured); the off
+	// track and the knob do not change.
+	OnInactive Tint
 	// Off and On fill the track; OffPressed and OnPressed while pressed;
 	// OffDisabled and OnDisabled when disabled (the accent at 70 %, measured
 	// #ED4D98B4 for the pink accent).
@@ -44,7 +48,8 @@ var SwitchLook = SwitchRecipe{
 	KnobW: [theme.NumSizes]float32{theme.SizeRegular: 32, theme.SizeMini: 21, theme.SizeSmall: 26, theme.SizeLarge: 38, theme.SizeXLarge: 38},
 	Inset: [theme.NumSizes]float32{theme.SizeRegular: 2, theme.SizeMini: 1.5, theme.SizeSmall: 2, theme.SizeLarge: 2, theme.SizeXLarge: 2},
 	Off:   Of(theme.Fill1), OffPressed: Of(theme.FillPressed), OffDisabled: Of(theme.Fill3),
-	On: Of(theme.Accent), OnPressed: Of(theme.AccentPressed), OnDisabled: OfAlpha(theme.Accent, 0.7, 0.7),
+	OnInactive: OfAlpha(theme.Label, 0.141, 0.142),
+	On:         Of(theme.Accent), OnPressed: Of(theme.AccentPressed), OnDisabled: OfAlpha(theme.Accent, 0.7, 0.7),
 	Knob: Of(theme.Knob), KnobShadow: OfAlpha(theme.Shadow, 0.15, 0),
 	KnobShadowY: 1, KnobShadowBlur: 1,
 	KnobAmbient: OfAlpha(theme.Shadow, 0.13, 0), KnobAmbientY: 2, KnobAmbientBlur: 10,
@@ -74,6 +79,8 @@ func Switch(k *base.Kit, label string, on *bool, o SwitchOpts) base.Signal {
 	switch {
 	case tg.Disabled:
 		off, onc, lc = rc.OffDisabled.RGBA(r), rc.OnDisabled.RGBA(r), rc.LabelDisabled.RGBA(r)
+	case tg.Inactive:
+		onc = rc.OnInactive.RGBA(r)
 	case tg.Down > 0:
 		off, onc = mix(off, rc.OffPressed.RGBA(r), tg.Down), mix(onc, rc.OnPressed.RGBA(r), tg.Down)
 	}

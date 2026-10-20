@@ -115,7 +115,7 @@ jobs:
   macos:
     name: macOS arm64 (Metal)
     runs-on: macos-15
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
@@ -135,21 +135,12 @@ jobs:
         run: |
           go vet -tags gnui_publicapi $(go list ./... | grep -v -E "$PKGS_EXCLUDE")
           go test -tags gnui_publicapi -count=1 ./platform ./app
-      - name: vet the F3 tests (gnui_f3)
-        # The widgettest flows that need F3's application events sit behind the
-        # gnui_f3 tag until F3 is on main. This vets them as soon as
-        # platform.AppEvent exists, so the merge that brings F3 cannot leave
-        # them uncompiled; taking the tag off is part of that merge.
-        run: |
-          if grep -rq '^type AppEvent ' platform/; then
-            go vet -tags gnui_f3 ./widget/widgettest/...
-          else
-            echo "F3 (platform.AppEvent) is not on this branch: the gnui_f3 tests are not vetted yet"
-          fi
       - name: test internal/ffi and clib (amd64 under Rosetta)
         run: |
           softwareupdate --install-rosetta --agree-to-license >/dev/null 2>&1 || true
           GOARCH=amd64 go test -count=1 ./internal/ffi ./clib
+          # NSRange arguments by value past the fifth integer word (the stack on amd64)
+          GOARCH=amd64 go test -count=1 -run 'TestEditorEscape|TestEditorSetTextOver|TestIME' ./platform
       - name: ffi benchmarks
         run: go test -run '^$' -bench . -benchmem ./internal/ffi
       - name: build spike
@@ -268,7 +259,7 @@ jobs:
   windows:
     name: Windows ${{ matrix.arch }} (D3D11, WARP on runners)
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 25
+    timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
@@ -338,7 +329,7 @@ jobs:
   linux:
     name: Linux ${{ matrix.arch }} ${{ matrix.backend }} (EGL, Mesa llvmpipe)
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 15
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:

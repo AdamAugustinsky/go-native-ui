@@ -55,6 +55,11 @@ The run takes some options:
 
 `run.sh` always passes `-AppleAccentColor 4`, the default blue.
 
+`-width W` (the tool's own argument) lays the scene out W points wide.
+`toolbarprobe.m` is a separate probe: it lays out a toolbar of given items
+offscreen and prints its item viewers', platters' and buttons' frames (how
+AppKit sizes toolbar items; build and usage in its header).
+
 The tool itself:
 
 ```

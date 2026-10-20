@@ -59,7 +59,8 @@ type DebugFinding struct {
 // for the HUD, the pointer card and the inspector.
 type InspectSnapshot struct {
 	// Frame is the number of the frame being built, counted since the
-	// overlay turned on. W, H and Scale are the window in pixels.
+	// overlay turned on. W and H are the window in pixels and Scale the pixels
+	// per ui point (App.EffectiveScale: the backing scale times the zoom).
 	Frame uint64
 	W, H  int
 	Scale float32
@@ -189,7 +190,7 @@ func (a *App) fillSnapshot() {
 	s := &d.snap
 	c := a.UI
 	s.Frame = d.nFrames
-	s.W, s.H, s.Scale = a.w, a.h, a.scale
+	s.W, s.H, s.Scale = a.w, a.h, a.EffectiveScale()
 	in := c.Input()
 	s.Pointer, s.Inside = [2]float32{in.MouseX, in.MouseY}, in.Inside
 	s.Boxes = c.DebugBoxes()

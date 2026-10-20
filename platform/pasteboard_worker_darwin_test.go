@@ -522,7 +522,7 @@ func nsArray(objs ...uintptr) uintptr {
 	return uintptr(objc.F.Reset().Arg(uintptr(clsArr)).Arg(uintptr(selArr)).ArgPtr(p).Arg(uintptr(len(objs))).Call(objc.MsgSend).R0())
 }
 
-func nsNumber(n int) uintptr {
+func nsIntNumber(n int) uintptr {
 	cls, sel := objc.Cls("NSNumber"), objc.Sel("numberWithInt:")
 	return uintptr(objc.Send1(cls, sel, uintptr(n)))
 }
@@ -561,11 +561,11 @@ func TestPasteFilesFromMalformedPasteboards(t *testing.T) {
 	// Legacy lists.
 	fakeItems.Store(0)
 	good, nul := nsStringBytes([]byte("/tmp/good")), nsStringBytes([]byte("/tmp/a\x00b"))
-	fakeList.Store(nsArray(nsNumber(7), good, nsDict(), nsStringBytes(nil), nul, nsNumber(1)))
+	fakeList.Store(nsArray(nsIntNumber(7), good, nsDict(), nsStringBytes(nil), nul, nsIntNumber(1)))
 	if out, n, res := run(); res != pbFound || n != 1 || out != "keep/tmp/good\x00" {
 		t.Errorf("a list with numbers, a dictionary, an empty string and a NUL path: %q %d %v", out, n, res)
 	}
-	for name, v := range map[string]uintptr{"a string": good, "a number": nsNumber(3), "a dictionary": nsDict(), "an empty list": nsArray(), "nothing": 0} {
+	for name, v := range map[string]uintptr{"a string": good, "a number": nsIntNumber(3), "a dictionary": nsDict(), "an empty list": nsArray(), "nothing": 0} {
 		fakeList.Store(v)
 		if out, n, res := run(); res != pbAbsent || n != 0 || out != "keep" {
 			t.Errorf("%s as the list: %q %d %v", name, out, n, res)
@@ -574,11 +574,11 @@ func TestPasteFilesFromMalformedPasteboards(t *testing.T) {
 
 	// Items.
 	fakeList.Store(0)
-	fakeItems.Store(nsArray(nsNumber(1), good, nsDict(), fileURLItem("file:///tmp/ok")))
+	fakeItems.Store(nsArray(nsIntNumber(1), good, nsDict(), fileURLItem("file:///tmp/ok")))
 	if out, n, res := run(); res != pbFound || n != 1 || out != "keep/tmp/ok\x00" {
 		t.Errorf("items of other classes: %q %d %v", out, n, res)
 	}
-	for name, v := range map[string]uintptr{"a string": good, "a number": nsNumber(3), "a dictionary": nsDict()} {
+	for name, v := range map[string]uintptr{"a string": good, "a number": nsIntNumber(3), "a dictionary": nsDict()} {
 		fakeItems.Store(v)
 		if out, n, res := run(); res != pbAbsent || n != 0 || out != "keep" {
 			t.Errorf("%s as the items: %q %d %v", name, out, n, res)

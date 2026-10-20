@@ -45,10 +45,23 @@ directly with `k.Kit`, or copies a component and owns it.
 | `BeginList` / `EndList` | Inset (default), FullWidth; striped | — | NSTableView's selection: selectedContentBackgroundColor with white text while the list has focus in the key window, unemphasised (label-coloured text) otherwise. Selected neighbours merge into one block (inset: rounded at its ends, a 1 pt divider between rows). No hover, no per-row focus ring. |
 | `BeginTable` / `TableHeader` / `EndTable` | as `List` | — | 28 pt header with 1 × 16 pt column separators and sort chevrons; cells padded 10 pt, 8 pt at the outer sides. |
 | `BeginOutline` / `EndOutline` | as `List` | — | NSOutlineView: disclosure chevrons, 13 pt per level, Left/Right collapse and expand (Option: the subtree). Virtualised over a pre-order `base.Tree`. |
+| `BeginPopover` / `EndPopover` | below, above, right, left; transient, semitransient, application-defined | — | NSPopover's look, drawn (see D7a below): 20 pt radius, an 11 pt arrow 2 pt from the anchor that points at its centre, flips when the window has no room. Escape, a press outside and a window that stops being key close a transient one; a semitransient one closes on Escape and a press outside, not on a window that stops being key (measured: `tools/appkitref/popover.sh behavior`). |
+| `Banner`, `Toast` | info, success, warning, error | — | The level's colour as a tint, its symbol, a title, a message, an action and a close button. A toast floats at the bottom centre of its parent, fades in, and goes after its time (the pointer over it holds it). |
+| `Badge`, `BadgeCountN` | count, status dot, tag | — | A 16 pt count capsule ("99+" above 99), an 8 pt dot, an 18 pt tag. |
+| `Avatar`, `AvatarStack` | image (`img.Handle`) or initials, presence dot | — | A circle; the initials on a colour picked by a hash of the name until the picture is ready. |
+| `Skeleton` | line, block, avatar | — | A placeholder whose sheen sweeps only while it is on screen and the window shown; Reduce Motion shows the track alone. |
+| `EmptyState` | — | — | Glyph, Title 3, message, action, centred in its parent. |
+| `TokenField` | — | small … large | NSTokenField: tokens of the blue at 33 %, wrapped onto lines; Enter or a comma ends a token, Backspace selects and removes the last. |
+| `Combobox` | — | small … large | NSComboBox: a text field and a 23.5 × 17.5 button holding a chevron; a `CompletionList` below it, Down opens it and Up/Down/Enter/Escape drive it. |
+| `ColorWell` | the system's colour panel, or `Drawn` for its own picker | — | NSColorWell's 48 × 24 bezel and inset swatch; a popover of the system colours and a hex field. |
+| `MessageBubble`, `BeginBubble` / `EndBubble` | incoming, outgoing, system; sent, sending, failed | — | C2 rich text in a bubble, emoji-only messages large and bubble-less, selectable across bubbles in a `VList` under one selection scope (C4). |
+| `ChatListRow`, `DateDivider`, `TypingIndicator` | compact; pill; inline | — | A 56 pt conversation row (avatar, title, two-line preview, time, unread count); a hairline-flanked date; three dots that pulse only while visible. |
+| `CompletionList`, `CompletionState` | — | — | The completion popup of a text box: the contract N4 writes the composer against (its doc comment). |
 
 Every component is keyboard-operable and records its semantics. Its focus
-ring sits outside the shape, shows for keyboard focus only (text fields:
-whenever focused), and never shows in an inactive window. Disabled is a
+ring sits outside the shape, shows for keyboard focus only (the text-entry
+controls, text, search, combo box and token field, whenever focused, as AppKit
+does: `base.Visual.TextEntry`), and never shows in an inactive window. Disabled is a
 colour, not an opacity. Building a frame allocates nothing (the
 `TestNoAllocationsPerFrame` test builds every sample).
 
@@ -108,6 +121,29 @@ The live misses, all under the eye's threshold at 1×:
 
 Live AppKit cannot show focus rings or inactive samples in one key window, so
 `-live` leaves those to the offscreen comparison.
+
+Inactive windows (2026-10-20, Mac mini, macOS 27.2 26B5101f, blue accent):
+AppKit greys what the accent fills when the window is not key, and the
+accent returns with it. Measured offscreen (`*-inactive` samples; the
+simulation agrees with real inactive windows, AppKitScenes' settings scene,
+to 1 level) as labelColor at an opacity, over the control's own backdrop:
+a checked or mixed box, a chosen radio button and an on switch 14.1 % (#DBDBDB,
+#3E3E3E; the check and the dot labelColor), the slider's filled track 22.7 %
+(#C5C5C5, #515151), the chosen segment 12.8 % over the track (#CDCDCD,
+#4A4A4A), a determinate or indeterminate progress bar #AAAAAA in both modes,
+the stepper's arrows secondaryLabelColor (#767676, #A1A1A1) with its fill
+unchanged. Off boxes and switches and the level indicator do not change; the
+default and toggle buttons were already measured. The MacBook's JSON carries
+the same samples, taken from the Mac mini (`borrowed`), as that Mac was not
+used for them.
+
+Scroll knobs (same day, live, AppKitRef `-live -flash` and the AppKitScenes
+Finder scene): a legacy knob over its slot reads #7A7A7A in light and #9F9F9F
+in dark, an overlay knob #808080 and #9A9A9A over the view, both
+labelColor-black at 49.8 % and white at 55.1 % (`ListRecipe.LegacyKnob`,
+`OverlayKnob`). Ours were #747474 and #A5A5A5 for legacy, and an overlay knob
+in the Rex palette's purple-grey. The legacy knob is 5 % longer in AppKit's
+capture than ours (a knob-length difference not addressed here).
 
 The lists' samples (page 2, `appkit-lists`; tables, outlines) on 2026-10-19:
 86 of 86 offscreen in blue and in pink; 66 of 66 live with the Mac's
@@ -217,8 +253,8 @@ marks it (sidebar, inspector, each capsule; the band over the content is an
 opaque `AreaTitlebar` region of the bar's or the content's colour, since the
 capsules lie below the window's pixels). Offscreen, under Reduce
 Transparency and off macOS the measured fallbacks are drawn. The rows of a
-sidebar and the content scroll below the band, clipped there, where AppKit
-fades them under it.
+sidebar scroll below the band, clipped there; the content pane's run under it
+(D4b, below).
 
 On the theme's values from D3b forms (2026-10-20): toolbar symbols
 `CapsuleSpec.Glyph`, items at least the style's `ItemW`, menus
@@ -227,11 +263,9 @@ On the theme's values from D3b forms (2026-10-20): toolbar symbols
 Against the Mac mini's Finder (`captures-macmini`, 27.2 26B5101f, AppKit's
 frames from its tree) every capsule is within 0.5: WideGap next to a menu
 or a group as well as a picker (8.5 there; 4.5 on 26B5091g), the inspector
-pane's items half a point past its edge (`ToolbarRecipe.InspectorEdge`),
-Group and Share 0.5 wider than AppKit's (our symbols' widths are whole
-pixels). Notes' search field is 167 there (166 on 26B5091g); its checklist
-item is 31 there (35.5 ours, 36 on 26B5091g), so the format group is 4.5
-wider and New Note 2 left of AppKit's 477.
+pane's items half a point past its edge (`ToolbarRecipe.InspectorEdge`).
+Notes' search field is 167 there (166 on 26B5091g). Since D4b Notes'
+items are within 0.5 too (below).
 
 With legacy scrollers (the system's style, followed live; a mouse on the
 Mac mini) every scroll view's content leaves the bar's 17 pt beside it and
@@ -258,6 +292,157 @@ with the rest of the pane, into a » overflow menu at the band's end, as
 NSToolbar's do (`Toolbar.End` reports them; with native menus a choice
 comes back as the item's Clicked); the collapsed picker opens for Show Menu
 and Expand, and back and forward show the focus ring.
+
+### Toolbar symbols, the scroll edge, the row disclosure (D4b)
+
+Measured on the Mac mini (27.2, 26B5101f), 2026-10-20, with
+`tools/appkitscenes/toolbarprobe.m` (any toolbar of symbols offscreen: 21
+symbols alone, in 3-item and 2-item groups, compact and unified) and the
+scene tool's `-width`, `-selectAll` and `-nested`:
+
+- Toolbar symbols draw at AppKit's large scale (`CapsuleSpec.GlyphScale`,
+  `ToolbarSymbol`: 13 pt; sidebar.left's image 24 × 18, not 18 × 14). An
+  item is the symbol's exact alignment width at that scale
+  (`icon.Atlas.AlignWidth`, measured 64× larger, since AppKit reports it
+  rounded to half points) and 8.43 (`GroupPad`, the mean over the 21
+  symbols; each is within half a point, no formula found fits all exactly),
+  4 more unified, at least 36 unified; in a capsule of several items the
+  first part is 4 wider and the last 5 (`EdgePad`). So Notes' Checklist is
+  31 as the middle of its group, not a rounding (it is 35 first and 36
+  last). Menus are their medium-scale image width and 27.5
+  (`IconMediumWidth`); 8.5 next to a menu or a group (`MenuGap`; 4.5 on
+  26B5091g); a flexible space keeps 3.5 after a compact item (`FlexAfter`).
+  Finder's and Notes' capsules are within 0.5 of AppKit's tree, and the
+  parts of Notes' groups within 0.5 wide (`TestNotesToolbarMatchesAppKitTree`,
+  `TestToolbarItemWidthsMatchAppKit`; macOS 27 only, the symbols' widths
+  differ elsewhere).
+- The scroll edge (NSScrollPocket) is flat: over a selection the whole pocket
+  deep the content shows through at 18% (light, 15% inactive) and 22% (dark,
+  21% inactive) from the band's top to the pocket's end, no gradient, the
+  same with legacy and overlay scrollers. A content pane's scroll view runs
+  under the band (`base.Kit.NextScrollInset`; a table's
+  `TableOpts.TopInset`, its header pinned below the band over the rows) and
+  `ScrollBars` draws the bar (`ScrollEdgeLook`) while content is under it or
+  the window is inactive, always above a table's header, with the hairline
+  unless the header ends it. The toolbar leaves that band clear
+  (`ToolbarOpts.ContentEdge`) and then draws its capsules, filled as the
+  system's glass measured over the band (`EdgeFill`). Static at rest, no
+  allocation per frame. AppKit also blurs what is under the band; this does
+  not: text under the band is sharp, and its ink differs from AppKit's
+  blurred one (ΔE up to 4.6 between lines).
+- A sidebar row's disclosure: once any row has children every row's content
+  moves 9 right (`DisclosureRoom`); the disclosure is a 13-wide box at 12 pt,
+  13 more per level (`DisclosureX`), its chevron 1 below the middle,
+  secondaryLabelColor (`RowChevron`); Finder's `-nested` sidebar within half
+  a point (`chromedemo -nested`).
+- The band covers what scrolls under it: it is hoverable and stops the wheel
+  (`ui.Context.StopWheel`), so hover, secondary clicks and the wheel do not
+  reach rows under it, while a press still moves the window. AppKit's
+  titlebar views keep the wheel too: through NSWindow's routing on 27.2 the
+  wheel over the band (empty, title, item, top edge) scrolled nothing,
+  unified and compact, while over the content it scrolled 40 px a step.
+- Reveals keep rows below the band: a scroll view's inset is obscured
+  (`ui.Context.SetObscured`), so `ScrollIntoView`, the keyboard's moves and
+  an assistive technology's `ActScrollIntoView` bring a row below it; a
+  list's Page Up and Down count the rows below it.
+- Under Reduce Transparency the scroll edge is `MatScrollEdge`'s opaque fill.
+- Back and forward's divider: 1 × 20 pt from the capsule's middle, the
+  separator's colour at 21 % (light) and 26.5 % (dark): #C8C8C8 on
+  #FCFCFC, #707070 on #3C3C3C.
+
+Live captures (`Chrome D4`, the Mac mini, legacy and overlay scrollers,
+light and dark, key and inactive, at the top and scrolled: 48) against
+`captures-macmini` and `captures-macmini-overlay` at the probe points: fills
+within ΔE 2, but the blurred text under the band (the sidebar search field
+in dark, 2.1 key and 2.4 inactive then, now follows the Mac mini:
+`SidebarRecipe.SearchFills`). The scrolled phases are
+AppKit's offsets (Finder 130; Notes 114 with legacy bars, 98 overlay: our
+note keeps NSTextView's empty line after its last newline).
+
+### Overlays, feedback, text input and chat (D7a)
+
+Popover, banner and toast, badge, avatar, skeleton, empty state, token field,
+combo box, colour well and the chat pieces (message bubble, chat list row,
+date divider, typing indicator, completion list) are in `rexui`, in
+`catalog` (`appkit-d7a`, the fourth grid page) and in `tools/rexui`.
+
+AppKit has three of them as controls, so those are measured like the rest:
+`combo`, `token` and `color-well` and the states beside them (`combo-focused`,
+`combo-disabled`, `combo-button`, `token-focused`, `token-disabled`,
+`token-chip`, `color-well-swatch`, `color-well-disabled`) are in
+`tools/appkitref` and in `testdata/appkit-27.2.json`, which `TestRecipesMatchAppKit`
+checks: all of them within tolerance, light and dark. The new keys were
+measured on the Mac mini (Mac16,10, macOS 27.2 build 26B5101f, 2026-10-20) and
+merged into the committed file without touching its other keys, which
+`p6-refmini` is re-measuring. Two readings worth knowing: the token's fill is
+the system blue at 33 % whatever the accent (AppKitRef with the red accent
+draws the same pixels), and a token is 1.75 pt round, not 2.5.
+
+**The popover is drawn, not hosted.** A hosted `NSPopover` can carry only a
+native view; our content (rich text with selection, lists, fields) is built in
+the window's own layer, and a native material region is a rounded rectangle
+that cannot take the arrow's shape. So the fill is opaque, the colour the real
+popover has over the window background. An `NSPopover` is a window the window
+server composites, which AppKitRef's offscreen renders cannot show, so it is
+measured live: `tools/appkitref/popover.sh` opens a real one on a real window
+(`AppKitPopover`, `popover.m`) and captures it with GnuiShot.
+`testdata/popover-27.2.json` holds what it measured (body radius 20 pt, arrow
+11 pt high and 2 pt from the anchor, fill #F2F2F2 and #2E2E2E, 1 px edge) and
+`TestPopoverMatchesAppKit` checks the draw list against it. The drawn popover
+does not leave the window; if a popover ever must (content over the title bar
+or another window), that one is hosted.
+
+Not in the AppKit comparison, because AppKit has no control or draws none
+offscreen: badge, avatar, skeleton, empty state, banner, toast, the chat
+pieces and the completion list. They are designed after the same tokens and
+shown on the `appkit-d7a` page, audited by `widgettest.AuditLayout` and built
+by `TestNoAllocationsPerFrame` with everything else.
+
+**What closes a popover** was measured on the real `NSPopover` (macOS 27.2,
+`tools/appkitref/popover.sh behavior`, `popover_behavior.m`, 2026-10-20): a
+transient one closes on Escape, on a click anywhere outside and when the app
+resigns; the click reaches the control under it, except on the anchor, which it
+closes the popover on and does not reach. A semitransient one closes on Escape
+and on a click in its window outside it (the anchor included: that click
+reaches the anchor and the popover stays open on it) and stays when the app
+resigns. An application-defined one closes on nothing and every click passes
+through. Return closes none. `ui.OverlayOpts{Dismiss}` has the three
+(`DismissTransient`, `DismissSemitransient`, `DismissApplication`; the zero
+value is a menu's, which also consumes the click) and `rexui.PopoverBehavior`
+maps onto them.
+
+**Text input takes its keys through `ui`'s field commands.** A focused text
+field claims the keys it handles at the start of the frame, so a component
+that gives Up, Down, Enter, Escape, Tab or Backspace another meaning (the combo
+box's list, the token field's selection, a completion list) registers a
+`ui.FieldCommander` for one `TextField` (`Context.NextFieldCommander`). The
+field offers it the frame's keys and the system's edit actions in the order they
+arrived, once each, after composition is handled (nothing while the input
+method has marked text), as AppKit's selectors: move up/down/left/right, page
+up/down, insert newline, cancel, insert tab/backtab, delete backward/forward at
+the start/end of the text, and the insertion of a separator character, offered
+at the place it is typed. On macOS the arrows and Backspace arrive as edit
+actions (`doCommandBySelector:`), not keys, and the commander sees them the same.
+`CompletionList`'s doc comment is the contract for an editor that is not ours
+(a native `NSTextView` sends the same commands): units, the exclusion rectangle
+and what the caller must do.
+
+**The completion list and the combo box's list take no focus**
+(`OverlayOpts.NoFocus`): the focus, a hosted native view's first responder
+included, stays where it is when they open and close.
+
+**The colour well drives the real colour panel** by default: pressing it opens
+the shared `NSColorPanel` with its colour, the colour set there (continuous,
+sRGB) is its colour, a colour the app sets moves the panel, and the panel closes
+when the user closes it, when another well takes it, when the well is disabled
+or no longer built. The path is `ui.Context.ColorPanel` (a request per frame) →
+`app` (`syncColorPanel`) → `platform.Window.ShowColorPanel/SetColorPanelColor/
+CloseColorPanel` and `platform.EvColor` back. The drawn picker is the fallback
+where the platform has no panel (`platform.NativeColorPanel` is false, or
+`ShowColorPanel` returns `ErrUnsupported`: the app tells the well with
+`Input.SetColorFailed`) and what `ColorWellOpts{Drawn: true}` asks for.
+Offscreen renders open no panel. `rexui/live` drives the panel, the combo box
+and the token field with real AppKit events.
 
 ### Left to the eye, and why
 
@@ -309,38 +494,46 @@ Still in recipe fields:
   - Pop-up chevron: centred 14 from the end (borderless 10, pull-down 13.25); borderless label pad 8.
   - Box: title band 12, title x 10.
 - Window chrome (D4):
-  - Toolbar symbols are 13 pt in both styles (AppKit's images: 15–20 wide);
-    `CapsuleSpec.Glyph` says 16.
-  - A one-symbol item is its symbol and 12 (`ToolbarRecipe.ItemPad`), at
-    least 24 compact and 36 unified; inside a group, the symbol and 17
-    (compact) or 21 (unified). `ToolbarSpec.ItemW` 28 is too wide for
-    compact (27 measured for trash).
-  - A menu item is its symbol and 27.5, at least 44.5 (44.5 and 47.5
-    measured); `CapsuleSpec.MenuW` is one 46.
+  - Toolbar symbols are 13 pt at the large scale (`CapsuleSpec.GlyphScale`).
+  - A one-symbol item is its symbol's alignment width and 8.43 compact,
+    12.43 unified (`ToolbarRecipe.GroupPad`), at least 36 unified, the ends
+    of a capsule of several 4 and 5 wider (`EdgePad`); `ToolbarSpec.ItemW`
+    sets only the unified minimum.
+  - A menu item is its symbol's medium image and 27.5, at least 44.5 (44.5
+    and 47.5 measured); `CapsuleSpec.MenuW` is one 46.
   - Toolbar symbols are labelColor made opaque by the vibrancy (#000000,
     #FFFFFF; `SidebarLabel`'s value) and #A6A6A6 / #666666 inactive, lighter
     than `TitleTextInactive`.
   - The scroll edge's bar and hairline cover the content pane only (the
     sidebar's and inspector's glass run to the top), the hairline lies just
     below the band (y 52–52.5), and under a table header pinned below the
-    toolbar the pocket's bar covers the header (`ToolbarOpts.Pocket`).
+    toolbar the pocket's bar covers the header (`ToolbarOpts.Pocket`, or
+    the table's own with `TableOpts.TopInset`); the bar lets 18% (light) /
+    22% (dark) of the content through (`ScrollEdgeLook`).
   - Sidebar symbols are 16 pt; the title's field starts 4 after the
     symbol's own width (not a 20-pt column) and draws its text 2 in, as
     the headers' (`SidebarRecipe.FieldInset`).
   - A selected row in an inactive window is #676767 / #999999; a row's
     detail line black 43 % / white 36 % (0.7 white on the accent); a
     two-line row's title is semibold.
-  - The sidebar's search field is a filled capsule: #EAEAEA / #4E4E4E,
-    #E5E5E5 / #464646 inactive; in a key window a #FFFFFF / #727272 rim
-    inside its edge and a #F4F4F4 / #565656 glow fading into the fill
+  - The sidebar's search field is a filled capsule: #E9E9E9 / #565656,
+    #E3E3E3 / #4D4D4D inactive on the Mac mini (26B5101f,
+    `SidebarRecipe.SearchFills`; #EAEAEA / #4E4E4E, #E5E5E5 / #464646 on the
+    MacBook's 26B5091g, the `SidebarSearchFill` roles); in a key window a
+    #FFFFFF / #727272 rim inside its edge and a #F2F2F2 / #5F5F5F glow
+    (#F4F4F4 / #565656 on the MacBook) fading into the fill
     towards the middle, with a hairline just outside it (#D8D8D8 / #8C8C8C;
     #CDCDCD / #181818 inactive).
   - Single-line labels end in "…" (`ui.EllipsisOverflowX`: sidebar rows,
     table cells and headers, pop-ups, the path bar); tabs keep their fade.
     A row's text ends 22 before the sidebar's edge (`SidebarRecipe.TextEnd`).
-  - A disclosure in a sidebar row lies between the selection's edge and
-    the symbol; no AppKit capture has a nested source-list row, so this
-    place is not measured.
+  - A sidebar row's disclosure is at 12 pt, 13 more per level, and moves
+    every row's content 9 right (`SidebarRecipe.DisclosureRoom`,
+    `DisclosureX`, `DisclosureDY`, `RowChevron`; D4b).
+  - A sidebar selection on 52-pt rows is the row's full height (64–116 pt in
+    Notes, no inset) from 10 pt, on both builds; AppKit's corner is
+    continuous, cutting the area of an 8.32-pt circle, ours a circle of 8
+    (`Window.Selection.Radius`).
   - Lists: inset 10, rows 10 pt below the top (5 below a header), block
     divider inset 6; header 28 with 1 × 16 column separators; cell padding
     10, 8 at the outer sides; disclosure x 2, width 13, content at 15 + 13

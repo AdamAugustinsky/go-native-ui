@@ -66,14 +66,19 @@ func TestSecureInputBracketsEnableAndDisable(t *testing.T) {
 	onMain(func() {
 		pool := objc.F.Call0(objc.PoolPush)
 		defer objc.F.Call1(objc.PoolPop, pool)
-		other := owner() != 0 && owner() != pid // another process has it on (a locked screen's loginwindow): the system's answer cannot tell ours
+		// While another process has it on (a locked screen's loginwindow, or a
+		// test in another package running in parallel), the system's answer
+		// cannot tell ours, so only this process's own state is checked. That
+		// is decided at every step: the other process can take it or let it go
+		// during the test.
+		other := func() bool { o := owner(); return o != 0 && o != pid }
 		check := func(what string, wantOurs bool) {
-			if SecureInputEnabled() != wantOurs || (!other && (owner() == pid) != wantOurs) {
+			if SecureInputEnabled() != wantOurs || (!other() && (owner() == pid) != wantOurs) {
 				steps = append(steps, what+": our state "+boolStr(SecureInputEnabled())+", the system's owner "+itoa(owner())+", want ours "+boolStr(wantOurs))
 			}
 		}
-		if other {
-			t.Logf("process %d has secure input on: only this process's own state is checked", owner())
+		if other() {
+			t.Logf("process %d has secure input on: only this process's own state is checked while it does", owner())
 		}
 		SetSecureInput(false) // (the notification observers exist from here on)
 		postAppNotification("NSApplicationDidBecomeActiveNotification")

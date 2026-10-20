@@ -138,20 +138,24 @@ type App struct {
 
 	// Cursor regions and the titlebar drag map handed to the window after
 	// every frame (regions.go); the buffers are reused.
-	curUI    []ui.CursorRegion
-	curPlat  []platform.CursorRegion
-	dragUI   []ui.DragRegion
-	dragPl   []platform.DragRegion
-	tipUI    []ui.TooltipRegion // native tooltip regions (regions.go), reused
-	tipPl    []platform.TooltipRegion
-	dlg      []platform.DialogResult // dialog results not taken yet (dialogs.go)
-	dlgQ     []pendingDialog         // dialogs queued for the end of the frame
-	dlgShown []shownDialog           // dialogs on screen
-	dlgSeq   platform.DialogTicket   // the last ticket given
-	dlgT     dialogTarget            // the window's dialogs; tests set a fake
-	dragT    dragTarget              // the window's drags; tests set a fake (drag.go)
+	curUI     []ui.CursorRegion
+	curPlat   []platform.CursorRegion
+	dragUI    []ui.DragRegion
+	dragPl    []platform.DragRegion
+	tipUI     []ui.TooltipRegion // native tooltip regions (regions.go), reused
+	tipPl     []platform.TooltipRegion
+	dlg       []platform.DialogResult // dialog results not taken yet (dialogs.go)
+	dlgQ      []pendingDialog         // dialogs queued for the end of the frame
+	dlgShown  []shownDialog           // dialogs on screen
+	dlgSeq    platform.DialogTicket   // the last ticket given
+	dlgT      dialogTarget            // the window's dialogs; tests set a fake
+	dragT     dragTarget              // the window's drags; tests set a fake (drag.go)
+	dlgFailed []platform.DialogResult // results of dialogs that ended without being shown, to deliver
+
+	cp colorPanelSync // the system colour panel (colorpanel.go)
 
 	sh shellSync // material and host regions handed to the window (shell.go)
+	ax axBridge  // the accessibility bridge's source (a11y.go)
 
 	paste pasteSlot // the answer to RequestPaste for an image or files (paste.go)
 
@@ -179,6 +183,10 @@ type App struct {
 	hook  func() // runs after every iteration of the loop (RunLiveResizeTest)
 
 	req frameRequester // where drawFrame asks for the next frame (the Win)
+	// buttons is the Win's buttonsSource, nil where it has none: resolved
+	// once in initUI, because the first type assertion of a frame would fill
+	// the runtime's assertion cache (a 48 B allocation on a random frame).
+	buttons buttonsSource
 
 	// Native menus (menus.go).
 	menu        *menu.Model
@@ -189,6 +197,8 @@ type App struct {
 	listSpec    platform.MenuSpec // the options of a select, reused
 	listItems   []platform.MenuItem
 	demo        *menuDemo // GNUI_MENU_DEMO (menudemo.go)
+
+	appObject // the application object: Main's handler, app events, the quit policy (lifecycle.go)
 
 	// Diagnostics (diag.go).
 	owedWhy     owedMask // why the last frame left another owed
@@ -208,8 +218,12 @@ type App struct {
 // frameRequester is the part of platform.Window that arms the next frame.
 type frameRequester interface{ RequestFrame() }
 
-// Quit ends the run after the current iteration.
-func (a *App) Quit() { a.done = true }
+// Quit ends the run after the current iteration. It wakes the loop, which
+// may be waiting with no window open.
+func (a *App) Quit() {
+	a.done = true
+	platform.Wake()
+}
 
 // Size is the surface size in pixels and the pixels per point.
 func (a *App) Size() (w, h int, scale float32) { return a.w, a.h, a.scale }
@@ -295,8 +309,25 @@ func RunWith(cfg Config, b Builder, o RunOptions) (RunResult, error) {
 // runs keep the drawn ones, which their scripts drive. Every windowed run gets
 // the native menu bar.
 func openWindowed(cfg Config, b Builder, st *StartupReport, nativeMenus bool) (*App, error) {
-	tEntry := platform.Now()
-	age := sysinfo.ProcessAgeNs()
+	tEntry, age := platform.Now(), sysinfo.ProcessAgeNs()
+	a := newApp()
+	a.handler = DefaultHandler{}
+	if err := a.bindApp(false); err != nil {
+		return nil, err
+	}
+	if err := a.openWin(cfg, b, st, nativeMenus, tEntry, age); err != nil {
+		a.unbindApp()
+		return nil, err
+	}
+	a.started = true
+	a.flushStartup()
+	return a, nil
+}
+
+// openWin opens the window with builder b into a, and draws its first frame;
+// tEntry is when the opening started (the startup report's origin) and age
+// the process's age then (-1 unknown).
+func (a *App) openWin(cfg Config, b Builder, st *StartupReport, nativeMenus bool, tEntry, age int64) error {
 	execNs := int64(-1)
 	st.ExecToMainMs, st.ExecToOnGlassMs, st.ExecToFirstPresentMs = -1, -1, -1
 	if age >= 0 {
@@ -304,10 +335,13 @@ func openWindowed(cfg Config, b Builder, st *StartupReport, nativeMenus bool) (*
 		st.ExecToMainMs = ms(age)
 	}
 
-	a := &App{cfg: cfg, b: b, tr: newTranslator(), p: newPacer(), lat: newSampler(8192), diagBuf: make([]byte, 0, 2048), menuDirty: true}
+	a.cfg, a.b = cfg, b
+	if a.started { // a window again, after the last one closed (KeepRunning)
+		a.tr, a.p, a.frames, a.menuDirty = newTranslator(), newPacer(), 0, true
+	}
 	a.lastDrawT = tEntry
 	if cfg.Width <= 0 || cfg.Height <= 0 {
-		return nil, errors.New("app: Config.Width and Height must be positive")
+		return errors.New("app: Config.Width and Height must be positive")
 	}
 	win, err := platform.Open(platform.Options{
 		Title: cfg.Title, Width: int(cfg.Width + 0.5), Height: int(cfg.Height + 0.5), Hidden: true,
@@ -316,7 +350,7 @@ func openWindowed(cfg Config, b Builder, st *StartupReport, nativeMenus bool) (*
 		Backdrop: cfg.Backdrop, Buttons: cfg.Buttons, Materials: cfg.Materials,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("app: open window: %w", err)
+		return fmt.Errorf("app: open window: %w", err)
 	}
 	if win.HasMaterials() {
 		a.cfg.Clear = [4]float32{} // premultiplied transparent: the backdrop or the materials show
@@ -331,40 +365,48 @@ func openWindowed(cfg Config, b Builder, st *StartupReport, nativeMenus bool) (*
 	surf, err := gpu.NewSurface(win.Native(), w, h, scale)
 	if err != nil {
 		win.Close()
-		return nil, fmt.Errorf("app: surface: %w", err)
+		a.Win, a.req = nil, nil
+		return fmt.Errorf("app: surface: %w", err)
 	}
 	a.Surf = surf
 	win.SetFrameSource(surf.FrameSource())
-	surf.RevealOnFirstFrame(win.Show) // content-first: the window appears with its first frame
+	if !a.startHidden || a.started {
+		surf.RevealOnFirstFrame(win.Show) // content-first: the window appears with its first frame
+	}
 	t1 := platform.Now()
 	st.SurfaceMs = ms(t1 - t0)
 
 	if a.R, err = gpu.NewRenderer(surf.Device(), surf.Queue()); err != nil {
-		a.close()
-		return nil, fmt.Errorf("app: renderer: %w", err)
+		a.closeWin()
+		return fmt.Errorf("app: renderer: %w", err)
 	}
 	t2 := platform.Now()
 	st.RendererMs = ms(t2 - t1)
 
 	if a.Text, err = text.New(); err != nil {
-		a.close()
-		return nil, fmt.Errorf("app: text: %w", err)
+		a.closeWin()
+		return fmt.Errorf("app: text: %w", err)
 	}
 	t3 := platform.Now()
 	st.TextMs = ms(t3 - t2)
 
 	if err := a.initUI(); err != nil {
-		a.close()
-		return nil, err
+		a.closeWin()
+		return err
 	}
 	a.UI.SetNativeMenus(nativeMenus && platform.HasNativeMenus())
+	a.initAX()
 	t4 := platform.Now()
 	st.InitMs = ms(t4 - t3)
 
+	// The first frame's focus is AppKit's (after Init, which may opt a test's
+	// window in to platform.DebugAssumeKey), not an assumption: a window
+	// opened in the background is not key.
+	a.tr.in.Focused = win.Focused()
 	// Draw-first: before the first Wait, which runs AppKit's deferred launch work.
 	if !a.present(false, 2) {
-		a.close()
-		return nil, errors.New("app: no frame available for the first frame")
+		a.closeWin()
+		return errors.New("app: no frame available for the first frame")
 	}
 	t5 := platform.Now()
 	st.FirstFrameMs = ms(t5 - t0)
@@ -372,7 +414,7 @@ func openWindowed(cfg Config, b Builder, st *StartupReport, nativeMenus bool) (*
 		st.ExecToFirstPresentMs = ms(t5 - execNs)
 	}
 	a.execNs = execNs
-	return a, nil
+	return nil
 }
 
 // initUI creates the ui context and runs the Initer.
@@ -385,6 +427,7 @@ func (a *App) initUI() error {
 	if a.Win != nil { // a window shows tooltips for the regions it is given; offscreen renders draw them
 		a.UI.SetNativeTooltips(platform.NativeTooltips)
 		a.Win.SetTooltipText(a.UI.TooltipText)
+		a.buttons, _ = windowSource(a.Win).(buttonsSource)
 		a.initDrag()
 	}
 	if in, ok := a.b.(Initer); ok {
@@ -401,9 +444,18 @@ func ms(ns int64) float64 { return float64(ns) / 1e6 }
 // wheel jumps to where it scrolls, as AppKit's does; elsewhere it glides.
 func uiDefaults(c *ui.Context) { c.WheelJumps = runtime.GOOS == "darwin" }
 
-// close releases everything in reverse order of creation. It is safe on a
-// partially built App.
+// close releases everything in reverse order of creation and, for a Run, the
+// application object. It is safe on a partially built App and when called
+// again.
 func (a *App) close() {
+	a.closeWin()
+	if !a.mainApp {
+		a.unbindApp()
+	}
+}
+
+// closeWin releases the window and its GPU and text objects.
+func (a *App) closeWin() {
 	if a.R != nil {
 		a.R.Destroy()
 	}
@@ -417,17 +469,26 @@ func (a *App) close() {
 		a.Text.Close()
 	}
 	a.R, a.Surf, a.Win, a.Text = nil, nil, nil, nil
+	a.buttons = nil
 }
 
-// loop is the event loop. See pacer for the frame rules.
+// loop is the event loop. See pacer for the frame rules. With no window open
+// it is the application object's pump (idleTurn).
 func (a *App) loop() error {
+	a.launch()
 	for !a.done {
+		if a.Win == nil {
+			a.idleTurn()
+			continue
+		}
 		a.syncMenuBar()
 		now := platform.Now()
 		if a.bench != nil && now > a.bench.deadline {
 			return a.benchTimeout(now)
 		}
+		a.pumping = true
 		evs := a.Win.Wait(a.timeout(now))
+		a.pumping = false
 		a.tr.wheelStep = a.UI.WheelStep
 		for i := range evs {
 			a.dispatch(&evs[i])
@@ -438,7 +499,9 @@ func (a *App) loop() error {
 		if a.turn(platform.Now()) {
 			a.present(false, 1)
 		}
+		a.pumping = true
 		a.popUpMenus()
+		a.pumping = false
 		if a.dbg != nil {
 			a.debugSweep(CauseMenu)
 		}
@@ -449,6 +512,7 @@ func (a *App) loop() error {
 		if a.hook != nil {
 			a.hook()
 		}
+		a.appTurn()
 		if a.dbg != nil {
 			a.debugSweep(CauseUnknown)
 		}
@@ -500,7 +564,7 @@ func (a *App) timeout(now int64) int64 {
 func (a *App) onEvent(e *platform.Event) {
 	switch e.Kind {
 	case platform.EvClose:
-		a.done = true
+		a.closeRequested()
 	case platform.EvResize:
 		if e.W > 0 && e.H > 0 {
 			a.w, a.h, a.scale = int(e.W), int(e.H), e.Scale
@@ -535,14 +599,24 @@ func (a *App) onEvent(e *platform.Event) {
 		if a.hostCommand(e) {
 			a.p.invalidate()
 		}
-	case platform.EvDialog:
-		a.onDialog(e)
+	case platform.EvHostEdit: // the editor holds what changed; its widget takes it in the frame
+		a.p.invalidate()
 	case platform.EvDragEnter, platform.EvDragMove, platform.EvDragLeave, platform.EvDrop, platform.EvDragEnd:
 		var txt []byte
 		if e.Kind == platform.EvDrop && e.Text.Len > 0 {
 			txt = a.Win.Text(e.Text)
 		}
 		a.onDrag(e, txt)
+	case platform.EvAccessibility:
+		if a.axAction(e) {
+			a.tr.dirty = true
+			a.p.invalidate()
+		}
+	case platform.EvColor:
+		a.onColor(e)
+		if a.tr.event(e, nil) {
+			a.p.invalidate()
+		}
 	default:
 		if e.Kind == platform.EvPaste && a.paste.isMedia(e) { // the answer to RequestPaste (paste.go)
 			a.onMediaPaste(e, a.Win.Text(e.Text))

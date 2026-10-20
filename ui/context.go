@@ -72,6 +72,8 @@ type box struct {
 	justify     Justify
 	auditOff    AuditMask  // the checks of Audit the box is exempt from (NextAuditExempt)
 	pad         [4]float32 // l, t, r, b
+	obscured    [2]float32 // a scroll box's view covered at its top and bottom (SetObscured)
+	stopWheel   bool       // the wheel over the box scrolls nothing beneath it (StopWheel)
 	gap         float32
 	pref        [2]Size
 	fixed       [2]float32
@@ -189,6 +191,7 @@ type Context struct {
 	semNext semNext
 	sems    []semRec
 	semA    core.Arena // the names and values of this frame's semantics
+	semX    semExtra   // announcements (semantics_a11y.go)
 
 	// interaction (see signal.go)
 	hotKey, scrollKey Key
@@ -255,10 +258,17 @@ type Context struct {
 	pressConsumed bool
 
 	// key claiming and edit actions (keys.go)
-	claimed    uint16              // bit i: key event i is handled
-	fieldKeys  uint16              // bit i: key event i was claimed for the focused text field
-	nextEscClr bool                // the next TextField clears itself on Escape (NextEscapeClears)
-	nextStill  bool                // the next TextField does not animate hover (NextFieldNoHover)
+	claimed    uint16         // bit i: key event i is handled
+	fieldKeys  uint16         // bit i: key event i was claimed for the focused text field
+	nextEscClr bool           // the next TextField clears itself on Escape (NextEscapeClears)
+	nextStill  bool           // the next TextField does not animate hover (NextFieldNoHover)
+	nextCmdr   FieldCommander // the next TextField offers its commands to this (NextFieldCommander)
+	nextSeps   string         // ... and its separator characters
+	cpNow      colorReq       // the colour panel request of the frame being built (ColorPanel)
+	cpLast     colorReq       // ... and of the frame before
+	nextOvl    OverlayOpts    // the options of the next popup overlay (NextOverlay)
+	cmdr       FieldCommander // the commander of the field being built, while it processes its input
+	cmdrSeps   string
 	fieldPeek  uint16              // bit i: key event i (Escape) is seen by the focused field in an overlay but not claimed
 	fieldFocus bool                // the focused box is a text field that takes keys
 	fieldBuilt bool                // the focused field applied this frame's edit actions already
@@ -587,6 +597,8 @@ func (c *Context) resetStyles() {
 	c.nextAudit = 0
 	c.nextEscClr = false
 	c.nextStill = false
+	c.nextCmdr, c.nextSeps = nil, ""
+	c.nextOvl = OverlayOpts{}
 	c.semNext = semNext{}
 }
 

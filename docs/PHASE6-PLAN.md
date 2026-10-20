@@ -177,7 +177,8 @@ w, err := a.OpenWindow(app.WindowConfig{Title: "Settings", Chrome: rexui.ChromeC
   - `Mac`: grouped OS-only options (`go-and-others.md` §3.3).
 - **The NSApplication delegate** is a runtime class, set before `finishLaunching`. It handles:
   - `applicationShouldHandleReopen:hasVisibleWindows:` → `EvReopen`;
-  - `applicationShouldTerminate:` → `EvQuitRequested{Reason}`, then `NSTerminateNow`, `NSTerminateCancel` or `NSTerminateLater` (the quit policy, below);
+  - the quit Apple event (`kAEQuitApplication`: the Dock, another app, a logout), with a handler of our own registered in `applicationWillFinishLaunching:` in place of AppKit's → `EvQuitRequested{Dock|Logout}` (the quit policy, below);
+  - `applicationShouldTerminate:` → `EvQuitRequested{Reason}`, then `NSTerminateNow`, `NSTerminateCancel` or `NSTerminateLater`, for a `terminate:` the app did not send itself (the quit policy, below);
   - become and resign active;
   - `application:openURLs:` and the `kAEGetURL` Apple event, registered in `applicationWillFinishLaunching:` so a launch by URL is not lost;
   - `applicationDockMenu:`, which `app/dock` supplies;
@@ -189,7 +190,7 @@ w, err := a.OpenWindow(app.WindowConfig{Title: "Settings", Chrome: rexui.ChromeC
   - Native code can spin the run loop without returning to our pump: `NSTerminateLater` runs it in `NSModalPanelRunLoopMode` until `replyToApplicationShouldTerminate:`; menu tracking runs it in `NSEventTrackingRunLoopMode`; sheets run it modally. With zero windows there is no frame to piggyback on either.
   - So app events have their own dispatcher: a `CFRunLoopSource` (version 0) on the main run loop, added for `kCFRunLoopCommonModes`. AppKit puts the default, modal-panel and event-tracking modes in the common set, so the source fires in every one of those loops. Producers mark their record ready, call `CFRunLoopSourceSignal` and `CFRunLoopWakeUp` (both thread-safe), and the source's perform callback delivers ready events to `Handler.Event` on the main thread.
   - It is independent of frames: it fires with zero windows, while every window is occluded, and inside nested loops. The frame handler (D30) keeps windows drawing in those loops through the display links, which are also in the common modes.
-  - **Never inside Build.** The run loop runs only in the pump and in native loops, and native loops start only at safe points (D30), so the source can never fire during Build or encoding. A `Handler.Event` that opens a window or a sheet has it queued to the next safe point, as today.
+  - **Never inside Build.** The run loop runs only in the pump and in native loops, and native loops start only at safe points (D30), so the source can never fire during Build or encoding. A `Handler.Event` that opens a window or a sheet has it queued to the next safe point, as today. A native loop that a call made from Build runs anyway (an animated resize, a nested modal call) finds dispatch held for the frame: the source delivers nothing, the delegate's native events are queued and delivered after the frame (will-terminate excepted), and a quit asked then is refused and asked again after the frame (the quit policy, below).
   - **Safe-point work runs from the dispatcher too.** While the outer pump is suspended inside a native loop (`NSTerminateLater`'s modal-panel wait, menu tracking, a sheet), it never reaches its own safe point. So after delivering events, the source's perform callback runs the deferred safe-point queue itself: windows opened or closed, sheets and alerts begun, hosts created or released, menu rebuilds. The callback runs between events, never inside Build or encoding, so it is a safe point by the D30 definition. Without this, a "Save changes?" sheet asked for during a pending quit would never open.
 - **App events.**
   - `app.Event` is a fixed-size, pointer-free record: kind, source, window, id, two integers, and a data span.
@@ -205,10 +206,15 @@ w, err := a.OpenWindow(app.WindowConfig{Title: "Settings", Chrome: rexui.ChromeC
   - **`app.Post(e, data)`** is the app's own path from its goroutines: a reserved ring of its own; it is allocation-free, never blocks, and returns false when the ring is full, so the caller keeps the event and retries. Framework producers never use it.
   - **Releasing native resources never depends on delivery:** block copies, buffer leases, pixel buffers and completion handlers are released or called by the native callback itself.
 - **The quit policy.** Every route arrives as `EvQuitRequested{Menu|Dock|Logout|Update|Signal}`: ⌘Q (the native menu, N1), Dock → Quit, logout and `a.Quit()`.
-  - `applicationShouldTerminate:` delivers `EvQuitRequested` synchronously (class 1). The default handler (`app.DefaultHandler`, embeddable) asks each window's `CloseRequested`; one refusal cancels the quit. `a.ReplyQuit(allow)` answers.
-  - **An answer given inside `applicationShouldTerminate:` is latched, not sent.** If the handler answers synchronously, or a `ReplyQuit` arrives before the delegate method returns, the answer is recorded and the method returns `NSTerminateNow` or `NSTerminateCancel` directly. Only when no answer exists at return does it return `NSTerminateLater`; from then on `ReplyQuit` calls `replyToApplicationShouldTerminate:`. The framework never calls `replyToApplicationShouldTerminate:` before `NSTerminateLater` has been returned.
-  - While a deferred answer is pending, AppKit's modal-panel loop runs, our source keeps dispatching events and safe-point work (a window's "Save changes?" sheet opens, a worker finishes), and windows keep drawing.
-  - **Why `NSTerminateLater` and not cancel-then-restart.** The other design returns `NSTerminateCancel`, runs the policy in our own loop, and calls `terminate:` again once approved. `NSTerminateLater` is the documented way to defer the answer. That cancelling during a logout or restart abandons it, and that a later `terminate:` does not resume it, is **an assumption** (Apple's documentation says a cancel stops the logout; the resume behaviour is not documented); F3's feasibility test "logout behaviour" checks both on the MacBook with a real logout of a test user. The common-modes source is what makes `NSTerminateLater` safe for us.
+  - The request is delivered synchronously (class 1), with its serial as `e.ID`. The default handler (`app.DefaultHandler`, embeddable) asks each window's `CloseRequested`; one refusal cancels the quit. `a.ReplyQuit(id, allow)` answers; a reply whose id is not the pending request's (a stale one) is ignored.
+  - **The app's routes are decided without AppKit's `terminate:`** (as built in F3). ⌘Q, `a.Quit()`, signals and the quit Apple event (Dock → Quit, another app's Quit, and a logout, restart or shutdown, whose `kAEQuitReason` parameter makes the reason `Logout`: `kAEQuitAll`, `kAEShutDown`, `kAERestart`, `kAEReallyLogOut`, and the system's `kAELogOut`, `kAEShowRestartDialog`, `kAEShowShutdownDialog`; without the parameter it is `Dock`) ask the policy directly; `terminate:` is sent only once the quit is allowed, after the open sheets are ended **as cancelled**, and is answered `NSTerminateNow`. The reason: AppKit's `terminate:` ends every sheet attached to a window before it asks the delegate, even when the quit is then refused, and it ends an alert with its first button, so a Dock Quit or a logout would press a confirmation's default action ("Delete"). With a plain window as the sheet it returns without asking at all. Observed on macOS 26.
+  - **An answer given inside the request is latched.** If the handler answers synchronously, or a `ReplyQuit` arrives before the request returns, the quit is allowed or refused at once. Otherwise it is pending: the app's own loop runs on, events, safe-point work (a window's "Save changes?" sheet opens, a worker finishes) and frames included, until `ReplyQuit`.
+  - **The quit Apple event gets AppKit's reply semantics.** A refusal puts `userCanceledErr` (-128) in the event's reply, which cancels a logout. A pending answer suspends the event (`suspendCurrentAppleEvent`); `ReplyQuit` resumes it (`resumeWithSuspensionID:`) with the answer, the error when refused, which is what `NSTerminateLater` does inside AppKit. A quit event that arrives while another quit is being decided is suspended too and answered with that decision; each suspended event is resumed exactly once. An allowed quit answers its event yes before the process ends.
+  - **An allowed quit is committed.** Between the approval and the native termination (which the app's loop sends), a later quit request (another quit event, ⌘Q, a signal) neither asks the handler again nor replaces the termination: a quit event is answered yes, ⌘Q does nothing. If AppKit returns from `terminate:` without terminating, the commitment ends and a later request is asked anew.
+  - **Leaving `Main` with a quit pending.** `a.Quit()` or the last window closing while a quit request waits settles it before the last event: every suspended quit event is answered yes (the app is ending), a foreign `terminate:` still waiting is answered no (its wait returns to the app's loop), the open dialogs and sheets end as cancelled, and the last drain delivers their results and everything accepted before `EvWillTerminate`. The last drain closes the producers' gate (posts are refused from then on) and waits for producers between a claim and its publication.
+  - **A `terminate:` the app did not send** (someone calling `[NSApp terminate:]`) still goes through `applicationShouldTerminate:`, with the answer latched in the same way: `NSTerminateNow` or `NSTerminateCancel` when answered inside the delegate method, otherwise `NSTerminateLater`, after which `ReplyQuit` calls `replyToApplicationShouldTerminate:` (never before `NSTerminateLater` has been returned). While that answer is pending, AppKit's modal-panel loop runs, our source keeps dispatching events and safe-point work, and windows keep drawing; a window closed then closes once the loop is back in the pump.
+  - **A quit during a frame is asked after it.** A quit that arrives inside a native loop entered from Build (dispatch held, above) cannot be answered there. The quit Apple event (the Dock, a logout) is suspended, its request reaches the handler once the frame ends, and the event is resumed with that answer, so a logout goes on or stops as the app answers. A `terminate:` someone else sends cannot wait inside Build (it blocks until answered, which would deadlock), so it alone is refused at once (`NSTerminateCancel`) and asked again after the frame.
+  - **The logout assumptions.** That a refused quit stops a logout or restart, that a suspended reply holds it until the app answers, and that a later quit does not resume an abandoned logout are **assumptions** (Apple's documentation says a cancel stops the logout; the rest is not documented). F3's feasibility test "logout behaviour" checks them on the MacBook with a real logout of a test user.
   - **No automatic answer.** By default there is no watchdog: the app's quit policy owns the answer, however long it takes. An app may set `QuitDeadline` (above); its action defaults to cancelling the quit, with `EvQuitDeadline` reported, and force-quitting happens only if the app chose `Allow`. Whatever timeout the system applies at logout is the system's, not ours, and how long it is is not documented; the guide says to answer promptly when the reason is `Logout`.
   - The hard-coded ⌘Q (`platform/platform_darwin.go:649`) goes.
 - **The last window closing** quits the app, unless `KeepRunning`. `EvReopen` with no visible window shows or reopens the main window by default.
@@ -652,7 +658,7 @@ Phase 7's Z0 (the Rust ABI) starts now, in the ZapFast repo.
 
 - **F1. The Objective-C runtime:** the class registry with ivars, `SendSuper`; per-request stack-class blocks with generation-checked slots and the per-API cancellation table; process-lifetime global blocks with `BLOCK_IS_GLOBAL`; calling and keeping blocks we are given; each callback's own frame on the C stack (no lease pool); 1024 callbacks; the generation rule; the lookup rule; leak counters. **F1's feasibility tests (Contracts, "The Objective-C runtime") run first**, and nothing builds on F1 until they pass: concurrent callbacks, thread churn, cold attachment, measured Go allocations, late callbacks after a cancelled and reused slot, a callback in flight during cancellation, the block flags, block copy per API, callback progress, frames under the runtime, and the generation rule. **Done 2026-10-19** (D36's evidence). *Opus (high).* M.
 - **F2. `clib`**, with the fixture-library tests (threads, signals, float arguments and results, an error returned through caller-owned storage from a call that hopped threads) and its documentation, including the rule on thread-local errors. *Opus (high).* S–M.
-- **F3. The application object:** the delegate; the app-wide pump with zero windows; the common-modes run-loop source that dispatches app events; the safe-point queue run from the dispatcher while the pump is suspended; the four delivery classes, with tickets, reserved response slots for notifications and accept-or-busy rings; reopen; the quit policy (answers latched inside `applicationShouldTerminate:`, `NSTerminateLater` otherwise, the optional `QuitDeadline`); open-URL and open-file events (with the startup list); sleep and wake, screens, activation policy; `app.Main`, `Handler` and `Post`. *Led by me, with an Opus (high) agent.* M.
+- **F3. The application object:** the delegate; the app-wide pump with zero windows; the common-modes run-loop source that dispatches app events; the safe-point queue run from the dispatcher while the pump is suspended; the four delivery classes, with tickets, reserved response slots for notifications and accept-or-busy rings; reopen; the quit policy (decided without `terminate:`, answers latched inside the request, the quit Apple event suspended until answered, a foreign `terminate:` through `NSTerminateLater`, the optional `QuitDeadline`); open-URL and open-file events (with the startup list); sleep and wake, screens, activation policy; `app.Main`, `Handler` and `Post`. *Led by me, with an Opus (high) agent.* M.
   - **Tests (macOS CI, through AppKit state; T2's harness):**
     - Dock Quit (a `kAEQuitApplication` Apple event the test sends to its own process; that a self-addressed Apple event needs no Automation grant is an assumption, checked the first time the test runs in CI, with a fallback of calling the handler `NSApp` installs for that event) and ⌘Q through the menu, each with zero windows open, one window, and two;
     - a reply delayed by 2 s while a worker posts and an alert sheet completes, all delivered during the modal-panel loop; a "Save changes?" sheet requested by the handler during that wait opens (the safe-point queue runs from the dispatcher) and its answer then allows the quit;
@@ -660,7 +666,7 @@ Phase 7's Z0 (the Rust ABI) starts now, in the ZapFast repo.
     - a refusal, then a second quit that is allowed;
     - a handler that never replies: with no `QuitDeadline` the app is still running and still answering 60 s later; with `QuitDeadline: 1s` the quit is cancelled and `EvQuitDeadline` arrives; with `QuitDeadlineAction: Allow` the app quits;
     - **saturation:** `app.Post` and the observation slots flooded from 8 goroutines while 64 alert and panel completions (a full ticket table; a 65th request fails with `ErrBusy` at once), responses to 32 posted actionable notifications (each with a reserved slot; a 257th actionable post comes back `PostedWithoutActions`), 40 second-instance requests (32 accepted, 8 answered `busy` and accepted on retry once the ring drains) and a quit request arrive. It passes when every completion, every notification response with its reply text, every accepted second-instance request and the quit are delivered; every native acknowledgement is made; the only losses are coalesced observations and `app.Post` calls that returned false (both counted); and nothing deadlocks.
-  - **Feasibility test "logout behaviour"** (on the MacBook, by the F3 agent, with a dedicated test user so your session is never logged out): `NSTerminateLater` held for 10 s during a real logout of that user, then allowed, completes the logout; `NSTerminateCancel` during logout stops it; a later `terminate:` does not resume it. Until it runs, those statements are assumptions.
+  - **Feasibility test "logout behaviour"** (on the MacBook, by the F3 agent, with a dedicated test user so your session is never logged out): the logout's quit Apple event, suspended for 10 s and then resumed allowed, completes the logout; refused (`userCanceledErr`), it stops the logout; a later quit does not resume it. Until it runs, those statements are assumptions.
 - **F4. More than one window on macOS (D30):**
   - the shared device and atlas;
   - the window registry on ivars;
@@ -870,9 +876,18 @@ wave 5  fixes from both checkpoints' findings                               ║ 
      - **drag and drop (N5):** a Finder file and text from another app onto a drop target (hover highlight, copy or not-allowed cursor, the data delivered); a PNG from Safari or Preview; a box dragged out to Finder as a file; a promised file to the Desktop, then the same cancelled with Esc (nothing written); a drag from a toolbar button (the window doesn't move); a drag over a hosted native view; a drop from our own window into itself; a slow source (a large image from an app that renders lazily), noting any main-thread hold;
      - **clipboard (S6):** paste an image from Preview and files from Finder; a concealed copy that a clipboard manager doesn't record;
      - **selection (C4):** select across a long chat, copy, and paste into TextEdit; double- and triple-click; a selection drag over a link doesn't open it.
+     - **VoiceOver (N7):** in the gallery, VO+arrows reach the controls with the right names and roles, VO+Space presses a button and toggles a checkbox, VO+Shift+↑/↓ moves the slider; open Delete… and VoiceOver stays inside the dialog; an outline reads its level and expanded state and VO+\\ expands it; a text field reads characters, lines and the selection, and the VO cursor lines up with the text; a selection in rich text is read; an app announcement is spoken; Accessibility Inspector frames are right at 1×, 2× and after zooming;
+     - **drag and drop, more (N5):** a Finder PNG and then a Photos image onto an image target, checking the image that arrives; a lazily rendered image from another app, where the window may stall until macOS's timeout and must recover (#13);
+     - **sheets (N4's finding):** after an alert sheet is ended by its button, the window is still key and typing goes to it;
+     - **⇧⌘ shortcuts (`p6-idlewake`):** ⇧⌘Z redoes in a text field, ⇧⌘S and ⇧⌘G reach their menu items, and ⇧⌘C reaches Show Colors instead of copying.
 
    Your findings are fixed before wave 5 ends.
 2. **ZapFast at parity.** See the phase-7 plan. You see ZapFast for the first time there, at full parity (D33). Before it, you run N4's hand checklist (a real Japanese or Chinese input method, dictation, Writing Tools) and one real login with "Open at login" on, to confirm the app starts hidden; everything else in the editor matrix is automated and run by the N4 agent.
+   - **N4's checklist** (`go run ./cmd/composerdemo` on the MacBook):
+     - Japanese–Romaji or Pinyin: type "nihongo", Space, pick a candidate with ↓, Enter. It commits without sending and without opening the completion; a second Enter sends;
+     - dictation (Edit ▸ Start Dictation or fn fn): the sentence appears and Enter sends it;
+     - Writing Tools: paste a paragraph, Select All, Edit ▸ Writing Tools ▸ Rewrite, Replace; ⌘Z restores the original;
+     - ⇧⌘Z redoes in the composer; while the autocorrect bubble shows, typing still draws and the completion still updates.
 
 ### Who does what
 
@@ -960,7 +975,7 @@ The entries are in `DECISIONS.md`, written on this branch on 2026-10-18 at your 
 | D34 | Phase 6 is macOS-first; Windows and Linux compile, stay green and return `ErrUnsupported` for new APIs; their parity is a later phase |
 | D35 | A public `clib` package gives apps cgo-free C calls (no callbacks; errors returned in the same call); the framework itself still loads only system libraries |
 | D36 | `internal/objc` gains a cross-file class registry, ivars and `SendSuper`; per-request blocks are stack-class literals copied by the runtime, with slots claimed atomically (generation plus active claims) and reused only when no callback is inside; blocks we keep are copied first; every callback has its own frame on the C stack, so none waits or runs out; 1024 callbacks; a slot's generation never repeats |
-| D37 | An application object: NSApplication delegate, one app-wide pump, app events dispatched by a common-modes run-loop source, four delivery classes where nothing accepted is lost (responses reserved at post time, outside requests refused with `busy`), a quit policy (answers latched inside `applicationShouldTerminate:`, `NSTerminateLater` otherwise, no automatic answer), windowless running; D30 built for macOS now |
+| D37 | An application object: NSApplication delegate, one app-wide pump, app events dispatched by a common-modes run-loop source, four delivery classes where nothing accepted is lost (responses reserved at post time, outside requests refused with `busy`), a quit policy (decided without `terminate:`, which follows only an allowed quit with sheets cancelled; answers latched inside the request; the quit Apple event suspended until answered; a foreign `terminate:` through `applicationShouldTerminate:` and `NSTerminateLater`; a quit during a frame refused and asked again; no automatic answer), windowless running; D30 built for macOS now |
 | D38 | Text is shaped and laid out at the point size and rasterised with a scaled context; dilation only if captures show it |
 | D39 | Design tokens v2: indexed roles with System or Rex sources read live through the D32 path, System roles exactly the system's colours; contrast checked composited, with AppKit's own contrast as the floor for secondary roles; traffic lights stored as the close button's centre |
 | D40 | Components in three layers: `widget/base` (headless and the Kit), `rexui` (styled, one file each, copyable), `widget` (wrappers); amends D28's layering |
@@ -1020,43 +1035,58 @@ Running. **Checkpoint 1 is the priority:** D4 (matching D0's scenes, with N3's g
   - **The MacBook is reserved** for the final exit-criteria numbers and Adam's hand tests. An ssh guard on the Mac mini (`~/.ssh/config`) refuses agent connections to it.
 - **Captures:** every capture is looked at before anything is called matching, and agents quit every app they open.
 
+**Machine facts found on the Mac mini (2026-10-20):**
+- **Scroll bars:** a mouse is attached, so the system's scroller style is legacy. A new process reads overlay for about 5 s, until AppKit hears from the mouse, then gets `NSPreferredScrollerStyleDidChangeNotification` and relays out. That is the system, not us; the idle test allows frames only right after such a system-value change. With legacy scrollers, AppKit lays content out beside the scroller; D4 is making our scroll areas do the same.
+- **A process with no bundle identifier** (a test binary, `go run`) got no events for about 5.5 s after its window opened: AppKit's launch-time window restoration waits with nowhere to look. A pure AppKit program does the same, and bundled apps launched with `open` don't (0.14–0.19 s). `p6-occluded` turns restoration off, in memory, for processes without a bundle identifier (`platform/restore_darwin.go`); first-frame and startup numbers were never affected, since the first frame is drawn before the wait. The live harness also waits for visibility instead of calling it a blocked main thread (`p6-stallfix`).
+- **Build 26B5101f vs the MacBook's 26B5091g:** the selected sidebar row is regular weight here and semibold there. We keep semibold, since the MacBook is the reference. The dark `separatorColor` differs slightly; it is read live.
+- **The external SSD** (Go's cache and temp dirs) stopped answering on 2026-10-20 because macOS was asking whether OpenCode.app may access a removable volume. Until that is answered, Go uses one shared cache in the opencode temp dir on the main disk, and a watchdog removes agents' private caches if free space falls below 4 GB.
+
 **Merged on `main`:**
-- D0, D1, D2 (`widget/base`), D3a (`rexui` core), D3b controls and lists, with their review fixes (`p6-d3b-fix`, including hidden windows no longer retrying frames);
-- F1 (objc runtime), F2, F6 (trackpad scrolling), with the legacy scroller widths and table header corner (`p6-scrollw`);
-- N1 (menus), N2 (dialogs, tooltips), N3 (materials and hosting) with its re-review fixes (`p6-n3fix`), the window buttons (D53);
-- C1 (VList), C2 (rich text), C3 (flow), C5 (images), C8 (QR); C4 (selectable text) is being merged;
-- S1, S2 and S5 (app services);
-- T1 (`gnui` CLI), `clib`, the frame-pool crash fix, the Windows clipboard heap-corruption fix, the reliable full-screen test (`p6-fsflake`).
+- D0, D1, D2 (`widget/base`), D3a (`rexui` core), D3b controls, lists and forms, with their review fixes;
+- F1 (objc runtime), F2, F5 (layout-aware keys, gestures), F6 (trackpad scrolling, legacy scroller widths);
+- N1 (menus), N2 (dialogs, tooltips), N3 (materials and hosting), N5 (drag and drop), the window buttons (D53);
+- C1 (VList), C2 (rich text), C3 (flow), C4 (selectable text), C5 (images), C8 (QR);
+- S1, S2, S5 (app services), S6 (clipboard images and files);
+- T1 (`gnui` CLI), T2 (live-window harness, with live pinch and rotate, #8), T3 (debug overlay: `GNUI_DEBUG=overlay`, a Debug menu in development builds, none of it in `gnui package` builds), the layout audit and `NextJustify` (`p6-align`), the AppKit references re-measured on the Mac mini (`p6-refmini`).
+
+**With the integrator** (reviews closed, CI green; batches 7 and 8):
+- `p6-auditforms`: the forms page's aligned rows are font-dependent off macOS; this makes `main`'s Linux CI green again;
+- C9 (app zoom), N7 (the NSAccessibility bridge), `p6-stallfix` (live harness), `p6-idlewake` (⇧⌘ letter shortcuts match the real chord; drawn fields claim only plain ⌘C/X/V/A);
+- system file icons as an `img` source (`p6-sysicon`), F3 (application object and lifecycle; removes the `gnui_f3` tag).
 
 **In flight:**
 
 | Item | Branch | State |
 |---|---|---|
-| D4 window chrome, Rex tabs | `p6-d4` | merging `main`, wiring N3's glass, the layout audit, matching D0's Finder, Settings and Notes scenes; then its review fixes |
-| D3b forms and token fixes | `p6-d3b-forms` | its one fix round (semantics, append-only colour roles, sizes from the audit, D4's measured tokens) |
-| Layout `NextJustify` and the layout audit | `p6-align` | its one fix round; `shelldemo` fixed and checked live |
-| F3 application object | `p6-f3` | Dock/logout quit through our own Apple-event handler, then one scoped re-review |
-| F5 keys and gestures | `p6-f5` | its one fix round (layout-aware shortcuts through `UCKeyTranslate`, secure input released on close) |
-| C9 app zoom | `p6-c9` | its one fix round; the titlebar and lights follow the zoom |
-| S6 clipboard images and files | `p6-s6` | its one fix round; one shared off-main pasteboard reader |
-| N5 drag and drop | `p6-n5` | fixes done; scoped re-review of its two high fixes |
-| T2 live-window harness | `p6-t2` | review fixes done, CI green; waiting for the integrator |
-| T3 debug overlay | `p6-t3` | building |
-| AppKit references on the Mac mini | `p6-refmini` | re-measuring, offscreen and live |
-| System file icons | `p6-sysicon` | building: real system icons as an `img` source, for D4 and Pilot |
-| CI flakes, round 2 | `p6-flakes` | review fixes, and the new macOS timing failures; `gpu` `TestFirstFrameIsContent` on Windows is treated as a possible real white flash |
+| D4 window chrome, Rex tabs | `p6-d4` | review fixes done; scroll areas beside legacy scrollers, toolbar sizes onto the forms values, then all 16 scenes recaptured against this Mac's AppKit captures |
+| D7a components apps need next | `p6-d7a` | its one fix round: a `ui` field-command API, non-focus popups, `NSPopover` dismissal rules, the real `NSColorPanel` |
+| N4 `NSTextView` composer | `p6-n4` | its one fix round: IME commit never sends, the amd64 `NSRange` passing, frames inside the autocorrect panel's loop |
+| C6 animated images | `p6-c6` | in review |
+| CI flakes, round 2 | `p6-flakes` | the macOS spike vsync gate first (it blocks most branches), then the timing tests, a possible white first frame on Windows, duplicate traffic-light tracking areas |
+| Window restoration off for unbundled processes | `p6-occluded` | done; merges after `main` is green on Linux again |
 
-**Queued (next free slot):** D6 (gallery, notes, Pilot, one agent each) once D4 merges; then F4, N4, C6/C7, S3/S4, T4/T5, N6, N7, and ZapFast Z2 when its inputs land.
+**Queued:** D6 (gallery, notes, Pilot, one agent each) once D4 merges; F4 and S3 once F3 merges; D7b once N4 and D7a merge; then S4, C7, T4, T5, N6, and ZapFast Z2 when its inputs land. New build agents start once the SSD is back.
 
 **Parked until an app needs them:** S7 audio and S8 video (not started).
 
-**Follow-up issues:** #1–#6 (`follow-up` label).
+**Decisions made during the work (2026-10-19 and 20):**
+- Release builds: `gnui package` builds with `gnui_release`, which removes the debug overlay, its menu and test seams such as `DebugAssumeKey`; a plain `go build` is a development build.
+- App zoom: scroll input arriving in the frame where the scale changes is applied one frame later, against the real layout, instead of predicting the new bounds.
+- Popover is drawn in the window (its content is ours); being clipped to the window and opaque is #14. ColorWell opens the real `NSColorPanel` on macOS.
+- Components that take keys from a focused text field do it through a `ui` field-command API named after AppKit's selectors, which the composer also uses.
+- The composer's placeholder is drawn through public API; AppKit's private placeholder property only without `gnui_publicapi` (D53).
+- System icons: the cache key can't see badges, associations or the icon style change; apps pass a revision in `variant`.
+- Off macOS, the gallery's AppKit pages accept text overflow only in the samples whose fonts differ (`label-styles`, `link`, `form-grid`).
+
+**Follow-up issues:** #1–#19 (`follow-up` label).
 
 **Waiting on you:**
+- on the Mac mini: **Allow** for "OpenCode.app would like to access files on a removable volume" (it blocks the SSD), and a password dialog under it whose origin we couldn't find;
 - creating a macOS test user on the MacBook for F3's logout test (the steps are in `app/applive/logout_darwin_test.go`);
 - Rex public-test access, to measure Rex directly.
 
 **History:**
+- 2026-10-20: live testing moved to the Mac mini; batches 3–6 merged (C4, the layout audit, T2, F5, D3b forms, N5, S6, the Mac mini references, T3, live gestures).
 - 2026-10-19: parallelism raised to about 14, the integrator owns `main`, the review cap; S7/S8 parked.
 - 2026-10-18: planned; revised after the independent review and its scoped re-review.
 - Phase 5: 5A is closed, and 5B is absorbed here (`docs/PHASE5-PLAN.md`, Status).

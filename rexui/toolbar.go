@@ -53,6 +53,14 @@ type ToolbarOpts struct {
 	// its bar and hairline (the scroll-edge effect) over the content pane
 	// (between Panes), as it always does while the window is inactive.
 	ContentUnder bool
+	// ContentEdge says the content pane's scroll view runs under the band
+	// (base.Kit.NextScrollInset, rexui.TableOpts.TopInset) and draws the
+	// scroll edge itself (ScrollEdgeLook, from ScrollBars): the band over
+	// the content pane is clear, whatever ContentUnder, Pocket and BandFill
+	// say, and the content shows through it. With the system's materials
+	// (base.Kit.Materials) the capsules are drawn then, not the system's
+	// glass, which lies below the window's pixels, under the content.
+	ContentEdge bool
 	// Pocket is how far below the toolbar, in pixels, the scroll edge
 	// reaches: a table's header pinned under the toolbar is in it (§4: the
 	// pocket ends at the header's bottom, 80 = 52 + 28), so the bar covers
@@ -89,23 +97,43 @@ type ToolbarRecipe struct {
 	// Title and TitleInactive colour the title (§1, §7); Subtitle the line
 	// below it.
 	Title, TitleInactive, Subtitle Tint
-	// Divider is the line between back and forward, DividerH its height.
+	// Divider is the line between back and forward, DividerH its height
+	// and DividerW its width, from the capsule's middle (measured on the
+	// Mac mini: 1 by 20 pt, the separator's colour at 21 % over the light
+	// capsule and 26.5 % over the dark one: #C8C8C8 on #FCFCFC, #707070 on
+	// #3C3C3C).
 	Divider  Tint
 	DividerH float32
+	DividerW float32
 	// Selected fills the chosen segment of an expanded picker.
 	Selected Tint
 	// SegmentW is an expanded picker's segment (156 for 4, §1).
 	SegmentW float32
-	// ItemPad is the room a one-symbol item keeps on each side of its
-	// symbol, GroupPad that of an item in a group ([0] compact, [1]
-	// unified); an item is at least the style's ItemW (theme.ToolbarSpec).
-	// Measured on 27.2 (§1): a compact item is its image and 12 (27 for
-	// trash, 31.5 for sidebar.left), a unified one at least 36; inside a
-	// group, the image and 17–18 (compact) or 21–22.5 (unified). The
-	// symbols are theme.CapsuleSpec.Glyph (13 pt) in both styles, and a
-	// menu item is CapsuleSpec.MenuItemW wide.
-	ItemPad  float32
+	// GroupPad is the room a one-symbol item keeps on each side of its
+	// symbol ([0] compact, [1] unified), alone or in a group alike: the
+	// symbol's exact alignment width as drawn (theme.CapsuleSpec.Glyph at
+	// GlyphScale, large: icon.Atlas.AlignWidth) and twice the pad, to the
+	// pixel; a unified item is at least the style's ItemW (36), a compact
+	// one has no minimum. In a capsule of several items (a group, or
+	// BeginShared) the first is EdgePad[0] wider and the last EdgePad[0]
+	// and then EdgePad[1] (after the minimum). Measured on the Mac mini's
+	// 27.2 (26B5101f) with 21 symbols in lone items, 3-item groups and
+	// 2-item groups (tools/appkitscenes/toolbarprobe.m): compact = width +
+	// 8.43 (their mean; each within half a point, no formula fits all:
+	// trash 18.24 → 27, textformat 22.78 → 31.5, checklist 22.38 → 31 in
+	// the middle of Notes' group), unified 4 more; first +4, last +5
+	// (unified: max(36, w+4)+1).
 	GroupPad [2]float32
+	EdgePad  [2]float32
+	// Deprecated: ItemPad is unused; GroupPad sizes every item.
+	ItemPad float32
+	// A menu item is theme.CapsuleSpec.MenuItemW of its symbol's image
+	// width at the medium scale (icon.Atlas.MediumWidth: AppKit's 47.5 for
+	// square.grid.3x1.folder.badge.plus, 20 wide, and 44.5 for
+	// ellipsis.circle, 15). MenuGap is the gap next to a menu or a group
+	// (8.5 on the Mac mini's 26B5101f; 4.5 between them on the MacBook's
+	// 26B5091g, where the theme's WideGap, 8, is the picker's).
+	MenuGap float32
 	// SearchGap is the gap before a search item, compact and unified (§1:
 	// 10 and 8); SearchW an expanded search field's width (167 on the Mac
 	// mini's 26B5101f, 166 on 26B5091g).
@@ -119,6 +147,18 @@ type ToolbarRecipe struct {
 	// Media and Share).
 	SidebarGap [2]float32
 	SharedGap  float32
+	// FlexAfter is the room a flexible space keeps after a one-symbol item,
+	// compact and unified: AppKit's item viewer is wider than a compact
+	// item's capsule (Notes' New Note ends 3.5 before the flexible space;
+	// the toolbar probe, 3.5 to 4.5), not a unified one's.
+	FlexAfter [2]float32
+	// EdgeFill and EdgeFillInactive fill the capsules a ContentEdge toolbar
+	// draws (not the system's glass), the native glass's colour over the
+	// band at rest, measured on the Mac mini's 27.2 (Finder, Notes and
+	// Settings): #FAFAFA–#FDFDFD / #3E3E3E–#454545 in a key window,
+	// #F0F0F0 / #3A3A3A in an inactive one. The glass lightens over content
+	// scrolled under it (#4A4D4F over Finder's dark selection); these do not.
+	EdgeFill, EdgeFillInactive Pair
 	// InspectorEdge is how far after the inspector pane's edge the toolbar
 	// takes it to be: AppKit's tracking separator lies half a point past
 	// the split view's divider, so the content pane's last item ends 7.5
@@ -139,17 +179,27 @@ type ToolbarRecipe struct {
 	TrafficInactive Pair
 }
 
+// ToolbarSymbol is the icon spec of a toolbar item's SF Symbol (with a
+// fallback rune elsewhere), at the theme's toolbar size and scale
+// (theme.CapsuleSpec.Glyph, GlyphScale): add it to the kit (Kit.AddIcon)
+// before the first frame.
+func ToolbarSymbol(symbol string, fallback rune) icon.Spec {
+	c := &theme.MacWindow.Capsule
+	return icon.Spec{Symbol: symbol, Fallback: fallback, Pt: c.Glyph, Scale: icon.Scale(c.GlyphScale)}
+}
+
 // ToolbarLook is the toolbar's recipe.
 var ToolbarLook = ToolbarRecipe{
 	Glyph: Of(theme.SidebarLabel), GlyphInactive: Of(theme.ToolbarSymbolInactive), GlyphDisabled: Of(theme.TextDisabled),
 	Hover: Of(theme.Fill4), Press: Of(theme.Fill2),
 	Rim: Of(theme.CapsuleRim), RimInactive: Of(theme.CapsuleRimInactive), Highlight: Of(theme.CapsuleHighlight),
 	Title: Of(theme.TitleText), TitleInactive: Of(theme.TitleTextInactive), Subtitle: Of(theme.Label2),
-	Divider: Of(theme.Separator), DividerH: 16,
+	Divider: OfAlpha(theme.Separator, 0.21, 0.265), DividerH: 20, DividerW: 1,
 	Selected: Of(theme.Fill2),
-	SegmentW: 39, ItemPad: 6, GroupPad: [2]float32{8.5, 10.5},
+	SegmentW: 39, GroupPad: [2]float32{4.215, 6.215}, EdgePad: [2]float32{4, 1}, MenuGap: 8.5,
 	SearchGap: [2]float32{10, 8}, SearchW: 167,
-	SidebarGap: [2]float32{14.5, 0}, SharedGap: 2, TitleTextX: 2, InspectorEdge: 0.5,
+	SidebarGap: [2]float32{14.5, 0}, SharedGap: 2, FlexAfter: [2]float32{3.5, 0},
+	EdgeFill: Solid(0xFAFAFA, 0x414141), EdgeFillInactive: Solid(0xF0F0F0, 0x3A3A3A), TitleTextX: 2, InspectorEdge: 0.5,
 	RexGlyph: Solid(0x5F5D62, 0xA3A7B8), RexGlyphHover: Solid(0x1E2227, 0xECEDF3), RexFill: PairA(0x2A2030, 0xFFFFFF, 0.08, 0.08),
 	RexHit: 28, RexRadius: 12,
 	Traffic:         [3]Pair{Solid(0xF87B72, 0xF35C52), Solid(0xFDC734, 0xFDBF00), Solid(0x7FD457, 0x2CC000)},
@@ -190,7 +240,9 @@ type Toolbar struct {
 	row     ui.ID
 	group   ui.ID
 	inGroup bool
-	nGroup  int
+	nGroup  int // the group's parts built so far
+	gParts  int // the group's parts last frame
+	gKey    ui.Key
 	n       uint64
 	open    bool
 	native  bool // the capsules are the system's glass (GlassNative)
@@ -243,7 +295,9 @@ func BeginToolbar(k *base.Kit, label string, o ToolbarOpts) Toolbar {
 		o.Style = theme.ToolbarPlain
 	}
 	tb := Toolbar{k: k, o: o, rc: &ToolbarLook, spec: r.Window.Toolbars[o.Style], open: true}
-	tb.native = o.Style != theme.ToolbarRex && GlassNative(k, GlassToolbarCapsule)
+	// a pane's content under the band is the layer's own pixels, over the
+	// system's glass: the capsules are drawn then, over it
+	tb.native = o.Style != theme.ToolbarRex && !o.ContentEdge && GlassNative(k, GlassToolbarCapsule)
 	_, ident := ui.SplitLabel(label)
 	tb.key = ui.HashString(c.ParentKey(), ident)
 	tb.ovKey, tb.pick = ui.KeyN(tb.key, 6000), -1
@@ -259,7 +313,7 @@ func BeginToolbar(k *base.Kit, label string, o ToolbarOpts) Toolbar {
 	// over the content pane (each pane has its own pocket: the sidebar's and
 	// the inspector's glass run to the top without one)
 	bar := o.Style != theme.ToolbarRex && theme.ScrollEdgeVisible(o.ContentUnder, !k.Inactive())
-	if o.Style != theme.ToolbarRex && (bar || o.BandFill != 0) {
+	if o.Style != theme.ToolbarRex && !o.ContentEdge && (bar || o.BandFill != 0) {
 		bx0, bx1 := float32(0), tb.w
 		if o.Panes[0] > 0 {
 			bx0 = o.Panes[0]
@@ -288,10 +342,14 @@ func BeginToolbar(k *base.Kit, label string, o ToolbarOpts) Toolbar {
 			c.BoxKeyed(ui.DrawBackground|base.Floating, ui.KeyN(tb.key, 1), nil)
 		}
 	}
+	// the band covers what scrolls under it: the pointer's hover and clicks
+	// and the wheel stop at it (its capsules take theirs), but a press on it
+	// still moves the window (a WindowDrag area, not a drag map's block)
 	theme.At(c, 0, 0, tb.w, h)
 	c.NextRole(ui.RoleGroup)
 	c.NextSemName(label)
-	tb.band = c.BoxKeyed(ui.WindowDrag|base.Floating, tb.key, nil)
+	tb.band = c.BoxKeyed(ui.WindowDrag|ui.Hoverable|base.Floating, tb.key, nil)
+	c.StopWheel(tb.band)
 	c.Push(tb.band)
 	if o.Traffic {
 		tb.trafficLights()
@@ -425,6 +483,11 @@ func (tb *Toolbar) gapW(kind tbKind) float32 {
 	switch tb.prev {
 	case tbStart, tbFlex:
 		return 0
+	}
+	if (kind == tbMenu || kind == tbGroup) && tb.rc.MenuGap > 0 {
+		return theme.Snap(tb.k.Pt(tb.rc.MenuGap))
+	}
+	switch tb.prev {
 	case tbTitle, tbPicker, tbMenu, tbGroup:
 		return wg.WideGap
 	}
@@ -493,21 +556,30 @@ func (tb *Toolbar) capsuleH() float32 {
 }
 
 // itemW is the width of a one-symbol item: its symbol and the padding, at
-// least the style's narrowest.
+// least the style's narrowest (unified), and wider at the ends of a capsule
+// of several items (the group's next part is its part'th, of the parts it
+// had last frame).
 func (tb *Toolbar) itemW(ic icon.ID) float32 {
-	iw, _ := tb.k.IconSize(ic)
 	if tb.spec.CapsuleH == 0 {
 		return theme.Snap(tb.k.Pt(tb.rc.RexHit))
 	}
-	i := 1
-	if tb.o.Style == theme.ToolbarCompact {
-		i = 0
+	k := tb.k
+	i := tb.styleIndex()
+	w := theme.Snap(k.IconAlignWidth(ic) + 2*k.Pt(tb.rc.GroupPad[i]))
+	first, last := false, false
+	if tb.inGroup && tb.gParts > 1 {
+		first, last = tb.nGroup == 0, tb.nGroup == tb.gParts-1
 	}
-	pad := tb.rc.ItemPad
-	if tb.inGroup {
-		pad = tb.rc.GroupPad[i]
+	if first || last {
+		w += theme.Snap(k.Pt(tb.rc.EdgePad[0]))
 	}
-	return theme.Snap(max(tb.spec.ItemW, iw+2*tb.k.Pt(pad)))
+	if i == 1 {
+		w = max(w, theme.Snap(tb.spec.ItemW))
+	}
+	if last {
+		w += theme.Snap(k.Pt(tb.rc.EdgePad[1]))
+	}
+	return w
 }
 
 // glyph is the symbol colour in the visual state v.
@@ -527,6 +599,12 @@ func (tb *Toolbar) glyph(v base.Visual) uint32 {
 func (tb *Toolbar) capsuleLook(v base.Visual, h float32) ui.Flags {
 	c, r := tb.k.Context(), tb.k.Theme()
 	fill := GlassFill(tb.k, GlassToolbarCapsule)
+	switch {
+	case tb.o.ContentEdge && v.Inactive:
+		fill = tb.rc.EdgeFillInactive.At(r.T)
+	case tb.o.ContentEdge:
+		fill = tb.rc.EdgeFill.At(r.T)
+	}
 	fill = over(fill, tb.rc.Hover.RGBA(r), v.Hot)
 	fill = over(fill, tb.rc.Press.RGBA(r), v.Down)
 	c.NextRadius(h / 2)
@@ -547,7 +625,11 @@ func (tb *Toolbar) capsuleLook(v base.Visual, h float32) ui.Flags {
 }
 
 // glass marks the capsule id as the toolbar's glass (GlassRegion).
-func (tb *Toolbar) glass(id ui.ID) { GlassRegion(tb.k, id, GlassToolbarCapsule, 0) }
+func (tb *Toolbar) glass(id ui.ID) {
+	if tb.native {
+		GlassRegion(tb.k, id, GlassToolbarCapsule, 0)
+	}
+}
 
 // highlight draws a capsule's bright bottom rim (dark mode), in the root id.
 func (tb *Toolbar) highlight(id ui.ID, v base.Visual, h float32) {
@@ -605,6 +687,9 @@ func (tb *Toolbar) Item(ic icon.ID, name string) base.Signal {
 	}
 	k.FocusRing(p.ID, p.Visual, h/2)
 	tb.advance(w)
+	if tb.inGroup {
+		tb.nGroup++
+	}
 	return k.EndPress(&p)
 }
 
@@ -687,6 +772,10 @@ func (tb *Toolbar) beginGroup(name string, shared bool) {
 	c.Push(tb.group)
 	tb.inGroup = true
 	tb.nGroup = 0
+	// the parts it had last frame; closeGroup stores this frame's over the
+	// placeholder (KeepValue's second call in a frame returns the first's)
+	tb.gKey = ui.KeyN(gkey, 0x6A1)
+	tb.gParts = int(c.KeepValue(tb.gKey, -1, -1))
 }
 
 // EndGroup closes the group BeginGroup started.
@@ -701,6 +790,11 @@ func (tb *Toolbar) closeGroup() {
 		return
 	}
 	c := tb.k.Context()
+	// the ends' widths follow the parts: a changed count lays out again
+	c.KeepValue(tb.gKey, -1, float32(tb.nGroup))
+	if tb.gParts != tb.nGroup {
+		c.RequestFrame()
+	}
 	tb.highlight(tb.group, base.Visual{Inactive: tb.k.Inactive()}, tb.capsuleH())
 	c.Pop()
 	tb.inGroup = false
@@ -727,7 +821,8 @@ func (tb *Toolbar) Nav(back, forward icon.ID, canBack, canForward bool) (b, f ba
 	c.NextRole(ui.RoleGroup)
 	c.NextSemName("Back/Forward")
 	tb.n++
-	g := c.BoxKeyed(flags, ui.KeyN(tb.key, 2000+tb.n), nil)
+	gkey := ui.KeyN(tb.key, 2000+tb.n)
+	g := c.BoxKeyed(flags, gkey, nil)
 	tb.glass(g)
 	c.Push(g)
 	half := theme.Snap(w / 2)
@@ -744,12 +839,6 @@ func (tb *Toolbar) Nav(back, forward icon.ID, canBack, canForward bool) (b, f ba
 		c.NextRadius(h / 2)
 		k.BeginPress(&p, ui.RoleButton, ui.Px(half), ui.Px(h), ui.DrawBackground, nil)
 		tb.symbol(ui.KeyN(p.Key, 1), ic, tb.glyph(p.Visual))
-		if i == 0 {
-			dh := theme.Snap(k.Pt(tb.rc.DividerH))
-			theme.At(c, half-r.Lines.Hairline, theme.Snap((h-dh)/2), r.Lines.Hairline, dh)
-			c.NextBG(tb.rc.Divider.RGBA(r))
-			c.BoxKeyed(ui.DrawBackground|base.Floating, ui.KeyN(p.Key, 2), nil)
-		}
 		k.FocusRing(p.ID, p.Visual, h/2)
 		s := k.EndPress(&p)
 		k.EndDisabled()
@@ -759,6 +848,11 @@ func (tb *Toolbar) Nav(back, forward icon.ID, canBack, canForward bool) (b, f ba
 			f = s
 		}
 	}
+	// the divider starts at the capsule's middle, over the forward half
+	dh, dw := theme.Snap(k.Pt(tb.rc.DividerH)), max(theme.Snap(k.Pt(tb.rc.DividerW)), r.Lines.Hairline)
+	theme.At(c, half, theme.Snap((h-dh)/2), dw, dh)
+	c.NextBG(tb.rc.Divider.RGBA(r))
+	c.BoxKeyed(ui.DrawBackground|base.Floating, ui.KeyN(gkey, 1), nil)
 	tb.highlight(g, base.Visual{Inactive: k.Inactive()}, h)
 	c.Pop()
 	tb.advance(w)
@@ -861,13 +955,6 @@ func (tb *Toolbar) Picker(label string, sel *int, icons []icon.ID, names []strin
 	return base.Signal{ID: g, Changed: ch.Changed}
 }
 
-func b2f(b bool) float32 {
-	if b {
-		return 1
-	}
-	return 0
-}
-
 // glyphAndChevron lays a symbol and a chevron (a pull-down's, a pop-up's)
 // centred in a w × h capsule (a menu item, a collapsed picker).
 func (tb *Toolbar) glyphAndChevron(key ui.Key, ic, chev icon.ID, fg uint32, w, h float32) {
@@ -894,8 +981,7 @@ func (tb *Toolbar) Menu(ic icon.ID, name string, menuIndex int) base.Signal {
 	k := tb.k
 	c := k.Context()
 	h := tb.capsuleH()
-	iw, _ := k.IconSize(ic)
-	w := theme.Snap(k.Theme().Window.Capsule.MenuItemW(iw))
+	w := theme.Snap(k.Theme().Window.Capsule.MenuItemW(k.IconMediumWidth(ic)))
 	if hidden, picked := tb.overflows(tbMenu, w, name); hidden {
 		return base.Signal{Clicked: picked}
 	}
@@ -1049,6 +1135,9 @@ func (tb *Toolbar) Flexible() {
 		return
 	}
 	c := tb.k.Context()
+	if g := tb.rc.FlexAfter[tb.styleIndex()]; tb.prev == tbCapsule && g > 0 {
+		tb.space(theme.Snap(tb.k.Pt(g)))
+	}
 	tb.n++
 	if tb.titled {
 		c.NextSize(ui.Px(tb.k.Theme().Window.Capsule.WideGap), ui.Px(0))

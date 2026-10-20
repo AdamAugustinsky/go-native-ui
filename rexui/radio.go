@@ -68,6 +68,8 @@ func RadioGroup(k *base.Kit, label string, sel *int, options []string, o RadioOp
 			fill, mark, lc = cb.OnDisabled.RGBA(r), cb.MarkDisabled.RGBA(r), cb.LabelDisabled.RGBA(r)
 		case it.Disabled:
 			fill, lc = cb.OffDisabled.RGBA(r), cb.LabelDisabled.RGBA(r)
+		case it.On && it.Inactive:
+			fill, mark = cb.OnInactive.RGBA(r), cb.MarkInactive.RGBA(r)
 		case it.On:
 			fill = mix(cb.On.RGBA(r), cb.OnPressed.RGBA(r), it.Down)
 		default:

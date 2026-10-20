@@ -1,8 +1,6 @@
 package app
 
 import (
-	"slices"
-
 	"gonativeui/platform"
 )
 
@@ -19,8 +17,6 @@ type DialogTarget interface {
 	SavePanel(platform.SaveSpec) (platform.DialogTicket, error)
 	// CancelDialog withdraws the sheet with the ticket.
 	CancelDialog(platform.DialogTicket) bool
-	// DialogResult decodes the EvDialog of a sheet that ended.
-	DialogResult(platform.Event) platform.DialogResult
 }
 
 // DebugSetDialogs makes t the receiver of the app's alerts and panels in
@@ -34,20 +30,15 @@ func (a *App) DebugSetDialogs(t DialogTarget) {
 	a.dlgT = t
 }
 
-// DebugDialogEnded delivers the end of a sheet the target showed: r carries
-// the ticket the target gave (not the app's), and the app takes the result,
-// under its own ticket, with TakeDialog from the next frame. A result for a
-// dialog that is not on screen is dropped, as a withdrawn dialog's is. Main
-// thread.
+// DebugDialogEnded delivers the end of a sheet the target showed, as a native
+// one's is: r carries the ticket the target gave (not the app's); the app
+// takes the result, under its own ticket, with TakeDialog, and the Handler
+// (app.Main) gets EvService from SourceDialog with that ticket as ID. A
+// result for a dialog that is not on screen is dropped, as a withdrawn
+// dialog's is. Main thread.
 func (a *App) DebugDialogEnded(r platform.DialogResult) {
-	for i, s := range a.dlgShown {
-		if s.plat == r.Ticket {
-			r.Ticket = s.app
-			a.dlgShown = slices.Delete(a.dlgShown, i, i+1)
-			a.pushDialog(r)
-			return
-		}
-	}
+	pe, data := platform.DialogEvent(r)
+	a.dialogEnded(r, &pe, data)
 }
 
 // DebugFlushDialogs shows the dialogs queued so far, as the loop does after a
