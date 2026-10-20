@@ -326,7 +326,10 @@ func BeginToolbar(k *base.Kit, label string, o ToolbarOpts) Toolbar {
 		// line is outside the band); at rest, the content's colour
 		pk := theme.Snap(max(o.Pocket, 0))
 		fill := o.BandFill
-		if bar {
+		switch {
+		case bar && o.ContentUnder: // the blurred pocket's colour (ScrollEdgeRecipe.Under)
+			fill = scrollEdgeUnder(k, 0, nil)
+		case bar:
 			fill = glassFallback(k, GlassTitlebar)
 		}
 		theme.At(c, bx0, 0, max(bx1-bx0, 0), h+pk)

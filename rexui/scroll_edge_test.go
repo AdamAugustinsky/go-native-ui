@@ -3,6 +3,7 @@ package rexui_test
 import (
 	"testing"
 
+	"gonativeui/internal/cielab"
 	"gonativeui/rexui"
 	"gonativeui/theme"
 	"gonativeui/ui"
@@ -43,12 +44,23 @@ func edgeQuad(g *rig, y float32, col uint32) bool {
 	return false
 }
 
+// edgeColor is the colour of the scroll edge's bar from the top of the
+// window down to y pixels, and whether there is one.
+func edgeColor(g *rig, y float32) (uint32, bool) {
+	for i := range g.list.Quads {
+		if q := &g.list.Quads[i]; q.Rect[1] == 0 && q.Rect[3] == y {
+			return q.Color[0], true
+		}
+	}
+	return 0, false
+}
+
 // A table under a toolbar's band: at rest its rows start below the pinned
 // header; scrolled, the rows run under the header and the band. The scroll
-// edge's bar (ScrollEdgeLook, measured: flat, a fifth of the content
-// showing) covers both at rest and scrolled, as Finder's pocket does, ended
-// by the header's own line; the header is built over the rows. None of it
-// allocates.
+// edge's bar covers both at rest and scrolled, as Finder's pocket does,
+// ended by the header's own line; the header is built over the rows. At rest
+// it is ScrollEdgeLook.Bar (measured: flat, a fifth of what is under it
+// showing); scrolled, opaque (Under). None of it allocates.
 func TestTableScrollEdge(t *testing.T) {
 	e := &edgeTable{cols: [2]base.Column{{Title: "Name", Width: 300}, {Title: "Kind", Width: 200}}}
 	g := newRig(t, theme.Light, nil, e.build)
@@ -68,8 +80,8 @@ func TestTableScrollEdge(t *testing.T) {
 	}
 	e.st.SetTopRow(10, 0)
 	g.settle()
-	if !edgeQuad(g, band+hh, bar) {
-		t.Fatal("scrolled, no scroll edge over the band and the header")
+	if col, ok := edgeColor(g, band+hh); !ok || col&0xFF != 0xFF {
+		t.Fatalf("scrolled, no opaque scroll edge over the band and the header (%08x)", col)
 	}
 	for i := range g.list.Quads {
 		q := &g.list.Quads[i]
@@ -121,8 +133,8 @@ func TestScrollViewScrollEdge(t *testing.T) {
 	}
 	g.c.SetScroll(inner, 0, 200)
 	g.settle()
-	if !edgeQuad(g, band, bar) || !line() {
-		t.Fatal("scrolled, no scroll edge and hairline over the band")
+	if !edgeQuad(g, band, rexui.ScrollEdgeLook.Under.At(r.T)|0xFF) || !line() {
+		t.Fatal("scrolled, no opaque scroll edge and hairline over the band")
 	}
 	g.c.SetScroll(inner, 0, 0)
 	g.in.Focused = false
@@ -132,8 +144,9 @@ func TestScrollViewScrollEdge(t *testing.T) {
 	}
 }
 
-// Under Reduce Transparency the scroll edge is the material's opaque fill,
-// nothing of the content showing, in light and dark, key and inactive.
+// Under Reduce Transparency the scroll edge is opaque, nothing of the
+// content showing, in light and dark, key and inactive: the material's fill
+// at rest, the measured pocket's (Under) with rows under it.
 func TestScrollEdgeOpaqueUnderReduceTransparency(t *testing.T) {
 	for _, m := range []theme.Mode{theme.Light, theme.Dark} {
 		for _, inactive := range []bool{false, true} {
@@ -141,7 +154,6 @@ func TestScrollEdgeOpaqueUnderReduceTransparency(t *testing.T) {
 			e := &edgeTable{cols: [2]base.Column{{Title: "Name", Width: 300}, {Title: "Kind", Width: 200}}}
 			g := newRig(t, m, &sys, e.build)
 			g.in.Focused = !inactive
-			e.st.SetTopRow(10, 0)
 			g.settle()
 			r := g.k.Theme()
 			mat := r.Material(theme.MatScrollEdge)
@@ -152,7 +164,12 @@ func TestScrollEdgeOpaqueUnderReduceTransparency(t *testing.T) {
 			want := r.Colors[role] | 0xFF
 			band, hh := g.k.Pt(52), theme.Snap(r.Lines.HeaderH)
 			if !edgeQuad(g, band+hh, want) {
-				t.Errorf("mode %d, inactive %v: no opaque scroll edge %08x over the band", m, inactive, want)
+				t.Errorf("mode %d, inactive %v: at rest, no opaque scroll edge %08x over the band", m, inactive, want)
+			}
+			e.st.SetTopRow(10, 0)
+			g.settle()
+			if col, ok := edgeColor(g, band+hh); !ok || col&0xFF != 0xFF {
+				t.Errorf("mode %d, inactive %v: scrolled, no opaque scroll edge over the band (%08x)", m, inactive, col)
 			}
 		}
 	}
@@ -255,5 +272,73 @@ func TestToolbarBandCoversTheRows(t *testing.T) {
 	}
 	if !wheel(rows) {
 		t.Error("the wheel over the rows did not scroll them")
+	}
+}
+
+// Rows scrolled under the band cannot show through the scroll edge: seen
+// through it, a row's text (and the white text of a selected row) differs
+// from the row's background by under ΔE 1, in light and dark, key and
+// inactive; and the edge is the colour AppKit's blurred pocket averages to
+// over rows of text (#FCFCFC, #2B2B2B, measured on the Mac mini's 27.2),
+// within ΔE 2 for the system's colours, or tinted toward the selection
+// where selected rows are under it.
+func TestScrollEdgeHidesRows(t *testing.T) {
+	measured := [2][3]uint8{{0xFC, 0xFC, 0xFC}, {0x2B, 0x2B, 0x2B}}
+	rgb := func(c uint32) [3]uint8 { return [3]uint8{uint8(c >> 24), uint8(c >> 16), uint8(c >> 8)} }
+	lab := func(c uint32) cielab.Lab { v := rgb(c); return cielab.SRGBToLab(v[0], v[1], v[2]) }
+	for _, m := range []theme.Mode{theme.Light, theme.Dark} {
+		for _, inactive := range []bool{false, true} {
+			e := &edgeTable{cols: [2]base.Column{{Title: "Name", Width: 300}, {Title: "Kind", Width: 200}}}
+			g := newRig(t, m, nil, e.build)
+			g.in.Focused = !inactive
+			g.settle()
+			e.st.SetTopRow(10, 0) // rows 7 to 10 under the band and the header
+			g.settle()
+			r := g.k.Theme()
+			band, hh := g.k.Pt(52), theme.Snap(r.Lines.HeaderH)
+			name := [2]string{"light", "dark"}[m]
+			if inactive {
+				name += " inactive"
+			}
+			check := func(what string) uint32 {
+				t.Helper()
+				edge, ok := edgeColor(g, band+hh)
+				if !ok {
+					t.Fatalf("%s, %s: no scroll edge over the band", name, what)
+				}
+				back := rexui.ListLook.Background.RGBA(r) | 0xFF
+				for _, ink := range []uint32{rexui.ListLook.Label.RGBA(r), rexui.ListLook.OnSelection.RGBA(r), rexui.ListLook.Selection.RGBA(r)} {
+					seen, ground := theme.Over(edge, theme.Over(ink, back)), theme.Over(edge, back)
+					if d := cielab.DeltaE2000(lab(seen), lab(ground)); d >= 1 {
+						t.Errorf("%s, %s: a row's %08x under the scroll edge %08x shows through (ΔE %.1f)", name, what, ink, edge, d)
+					}
+				}
+				return edge
+			}
+			edge := check("rows under it")
+			want := measured[m]
+			if d := cielab.DeltaE2000(lab(edge), cielab.SRGBToLab(want[0], want[1], want[2])); d > 2 {
+				t.Errorf("%s: the scroll edge %08x over rows, AppKit's pocket %v (ΔE %.1f)", name, edge, want, d)
+			}
+			for it := uint32(7); it <= 10; it++ { // a selection under it tints it, as the blur does
+				e.st.Sel.Set(it, true)
+			}
+			g.settle()
+			sel := rgb(rexui.ListLook.SelectionUnemph.RGBA(r))
+			if !inactive {
+				sel = rgb(rexui.ListLook.Selection.RGBA(r))
+			}
+			tinted := rgb(check("a selection under it"))
+			was := rgb(edge)
+			closer := 0
+			for i := range sel {
+				if d0, d1 := int(sel[i])-int(was[i]), int(sel[i])-int(tinted[i]); d1*d1 < d0*d0 {
+					closer++
+				}
+			}
+			if closer == 0 {
+				t.Errorf("%s: a selection under the scroll edge leaves it %v (was %v, the selection %v)", name, tinted, was, sel)
+			}
+		}
 	}
 }

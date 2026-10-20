@@ -148,6 +148,6 @@ func EndOutline(k *base.Kit, ol *Outline) {
 	ol.filler(&ol.List)
 	ol.CloseRows()
 	v := ol.ScrollView()
-	ScrollBars(k, &v)
+	scrollBars(k, &v, true, &ol.under)
 	k.CloseList(&ol.List)
 }

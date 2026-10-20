@@ -1016,9 +1016,9 @@ The entries are in `DECISIONS.md`, written on this branch on 2026-10-18 at your 
 | Accessibility on Windows (UIA) and Linux (AT-SPI) | phase-5 plan | D34 |
 | The X11 PRIMARY selection and an X11 input method | PHASE5 Status | Unchanged from phase 5 |
 
-## Status (2026-10-20)
+## Status (2026-10-20, afternoon)
 
-Running. **Checkpoint 1 is the priority:** D4 (matching D0's scenes, with N3's glass) → the rest of D3b (forms) → D6, one agent per app in parallel → the apps shown live to you.
+Running. **Checkpoint 1 is the priority:** the three D6 apps are nearly final (gallery and notes done, Pilot in its last round), then one review across them, the toolbar band's blur (D4c), and the apps shown live to you.
 
 **How the work runs (your instructions, 2026-10-19 and 2026-10-20):**
 - **Parallelism:** up to about 14 agents at once, each item in its own worktree (`~/Projects/gnui-wt/<item>`) and branch (`p6-<item>`), keeping this plan's file ownership. Above the cap, items wait in the queue below. If builds contend (load above about 9 on the Mac mini's 10 cores, or memory pressure), it is measured and the cap lowered, not guessed. Build caches and worktrees live in `….noindex` folders, so Spotlight does not index them (a load spike to 19.5 on 2026-10-19 was Spotlight, not the builds).
@@ -1039,33 +1039,58 @@ Running. **Checkpoint 1 is the priority:** D4 (matching D0's scenes, with N3's g
 - **Scroll bars:** a mouse is attached, so the system's scroller style is legacy. A new process reads overlay for about 5 s, until AppKit hears from the mouse, then gets `NSPreferredScrollerStyleDidChangeNotification` and relays out. That is the system, not us; the idle test allows frames only right after such a system-value change. With legacy scrollers, AppKit lays content out beside the scroller; D4 is making our scroll areas do the same.
 - **A process with no bundle identifier** (a test binary, `go run`) got no events for about 5.5 s after its window opened: AppKit's launch-time window restoration waits with nowhere to look. A pure AppKit program does the same, and bundled apps launched with `open` don't (0.14–0.19 s). `p6-occluded` turns restoration off, in memory, for processes without a bundle identifier (`platform/restore_darwin.go`); first-frame and startup numbers were never affected, since the first frame is drawn before the wait. The live harness also waits for visibility instead of calling it a blocked main thread (`p6-stallfix`).
 - **Build 26B5101f vs the MacBook's 26B5091g:** the selected sidebar row is regular weight here and semibold there. We keep semibold, since the MacBook is the reference. The dark `separatorColor` differs slightly; it is read live.
-- **The external SSD** (Go's cache and temp dirs) stopped answering on 2026-10-20 because macOS was asking whether OpenCode.app may access a removable volume. Until that is answered, Go uses one shared cache in the opencode temp dir on the main disk, and a watchdog removes agents' private caches if free space falls below 4 GB.
+- **The external SSD** (Go's cache and temp dirs) stopped answering on 2026-10-20. macOS first asked whether OpenCode.app may access a removable volume (Adam allowed it), but the real cause is that macOS's file-permission checks are stuck system-wide. The kernel logs "watchdog expired for approval entry", and anything under `~/Desktop`, `~/Documents`, `~/Downloads` or `/Volumes/SSD` waits 6–20 s, then fails with EINTR. Restarting the per-user `tccd` didn't help, so the fix needs Adam: `sudo killall -9 sandboxd tccd`, or a restart. Until then Go uses one shared cache in the opencode temp dir on the main disk; a watchdog trims it below 7 GB free and removes private caches below 4 GB. Agents keep tests and demos away from those folders.
+- **Rosetta:** x86_64 processes hung, unkillable, while Rosetta's updater waited behind a SecurityAgent password dialog. They cleared when the dialog closed. Agents never run amd64 binaries on this Mac; Intel builds are cross-compiled and vetted in CI. Whether to add a CI job on GitHub's Intel Mac runner (`macos-15-intel`, available until August 2027), or to drop Intel Macs, is with Adam.
+- **CI time limits** were raised to 25 minutes for macOS and Linux and 35 for Windows (`p6-citimeout`), as the suite grew past 15. Cutting the time is #30.
 
 **Merged on `main`:**
-- D0, D1, D2 (`widget/base`), D3a (`rexui` core), D3b controls, lists and forms, with their review fixes;
-- F1 (objc runtime), F2, F5 (layout-aware keys, gestures), F6 (trackpad scrolling, legacy scroller widths);
-- N1 (menus), N2 (dialogs, tooltips), N3 (materials and hosting), N5 (drag and drop), the window buttons (D53);
-- C1 (VList), C2 (rich text), C3 (flow), C4 (selectable text), C5 (images), C8 (QR);
-- S1, S2, S5 (app services), S6 (clipboard images and files);
-- T1 (`gnui` CLI), T2 (live-window harness, with live pinch and rotate, #8), T3 (debug overlay: `GNUI_DEBUG=overlay`, a Debug menu in development builds, none of it in `gnui package` builds), the layout audit and `NextJustify` (`p6-align`), the AppKit references re-measured on the Mac mini (`p6-refmini`).
+- **Track D:**
+  - D0, D1, D2 (`widget/base`), D3a (`rexui` core), D3b controls, lists and forms;
+  - D4 (window chrome, Rex tabs), D4b (toolbar symbols at the large scale, content under the toolbar band, `TableOpts.TopInset`/`ContentEdge`) and the D4 follow-ups (Finder demo system icons, PathBar overflow on Windows, catalogue duplicate keys);
+  - D7a (Popover, Toast, Badge, Avatar, Skeleton, EmptyState, TokenField, Combobox, ColorWell, chat pieces, completion list);
+  - the first D6 notes and rexlook round;
+  - inactive-window control colours, list fixes, the table scroller, filler rows clamped to the viewport.
+- **Track F:**
+  - F1 (objc runtime), F2, F3 (application object and lifecycle);
+  - F5 (keys, gestures) with Tab following the macOS Keyboard navigation setting (`p6-fka`);
+  - F6 (trackpad scrolling).
+- **Track N:**
+  - N1 (menus), N2 (dialogs, tooltips), N3 (materials and hosting);
+  - N4 (the `NSTextView` composer), N5 (drag and drop), N7 (the NSAccessibility bridge);
+  - secure input, the window buttons (D53).
+- **Track C:**
+  - C1 (VList), C2 (rich text), C3 (flow), C4 (selectable text), C5 (images);
+  - C6 (animated images: GIF, APNG, and on macOS HEICS and WebP);
+  - C8 (QR), C9 (app zoom, overlay zoom);
+  - system file icons as an `img` source.
+- **Track S:** S1, S2, S5 (app services), S6 (clipboard images and files).
+- **Track T and tooling:**
+  - T1 (`gnui` CLI), T2 (live-window harness), T3 (debug overlay);
+  - the layout audit (with clipped text excluded), Form row names;
+  - the Mac mini AppKit references;
+  - live-harness fixes (stall, idle wake, window restoration off for unbundled processes);
+  - the CI time limits.
 
-**With the integrator** (reviews closed, CI green; batches 7 and 8):
-- `p6-auditforms`: the forms page's aligned rows are font-dependent off macOS; this makes `main`'s Linux CI green again;
-- C9 (app zoom), N7 (the NSAccessibility bridge), `p6-stallfix` (live harness), `p6-idlewake` (⇧⌘ letter shortcuts match the real chord; drawn fields claim only plain ⌘C/X/V/A);
-- system file icons as an `img` source (`p6-sysicon`), F3 (application object and lifecycle; removes the `gnui_f3` tag).
+**With the integrator:** `p6-fillerinset` (tests for filler rows under a toolbar band) and `p6-pocketfill`. Until D4c lands, the scroll edge is drawn opaque, in the colour measured from AppKit's blurred band (`#FCFCFC` light, `#2B2B2B` dark), with the hairline; rows under it can no longer be read.
 
 **In flight:**
 
 | Item | Branch | State |
 |---|---|---|
-| D4 window chrome, Rex tabs | `p6-d4` | review fixes done; scroll areas beside legacy scrollers, toolbar sizes onto the forms values, then all 16 scenes recaptured against this Mac's AppKit captures |
-| D7a components apps need next | `p6-d7a` | its one fix round: a `ui` field-command API, non-focus popups, `NSPopover` dismissal rules, the real `NSColorPanel` |
-| N4 `NSTextView` composer | `p6-n4` | its one fix round: IME commit never sends, the amd64 `NSRange` passing, frames inside the autocorrect panel's loop |
-| C6 animated images | `p6-c6` | in review |
-| CI flakes, round 2 | `p6-flakes` | the macOS spike vsync gate first (it blocks most branches), then the timing tests, a possible white first frame on Windows, duplicate traffic-light tracking areas |
-| Window restoration off for unbundled processes | `p6-occluded` | done; merges after `main` is green on Linux again |
+| D6 gallery | `p6-d6-gallery` | done, CI green; waits for the joint D6 review |
+| D6 notes and rexlook, round 2 | `p6-d6-notes2` | done, CI green; the native composer is not adopted yet (display-only rich text, no title or heading styles in `NativeEditor`, no Windows or Linux editor) |
+| D6 Pilot | `p6-d6-pilot` | last round: main merged, the PathBar allowance removed, Tab through `ui`'s Keyboard-navigation traversal |
+| D7b Rex Composer | `p6-d7b` | review and re-review done; the re-review's 2 highs and 6 mediums are being fixed, and the coordinator checks the fixes |
+| S3 `app/notify` | `p6-s3` | review and re-review done; the re-review's 1 high and 2 mediums are being fixed, and the coordinator checks the fixes |
+| F4 more than one window | `p6-f4` | built; CI and report pending |
+| D4c drawn backdrop blur (D54, #25) | `p6-blur` | started: AppKit's Hard and ThinFilm recipes in our renderer, Metal first |
+| Inactive-window switch colour | `p6-inactiveswitch` | started |
+| `widgettest.Player` and the toolbar band | `p6-playerband` | started: the Player clicked targets hidden under the band |
+| CI flakes, round 2 | `p6-flakes` | running; more handed over: the idle-test family (possibly a real wake problem), "bench stalled, no drawable" (possibly real), the Windows white first frame (2 occurrences), PowerShell, objc callback chains (a data race in `internal/ffi`), `TestEditorNestedLoopDraws`, `TestDragTypesDoNotReachHosts` |
 
-**Queued:** D6 (gallery, notes, Pilot, one agent each) once D4 merges; F4 and S3 once F3 merges; D7b once N4 and D7a merge; then S4, C7, T4, T5, N6, and ZapFast Z2 when its inputs land. New build agents start once the SSD is back.
+**Queued:**
+- **Checkpoint 1:** one independent review across the three D6 apps once Pilot's round ends; the apps merge `main` for the opaque pocket, then D4c's blur; package and copy them to the MacBook; the hand list below.
+- **Next:** S4, C7, T4, T5, N6, N3b (on F4), ZapFast Z2 when its inputs land; an Intel Mac CI job if Adam wants one.
 
 **Parked until an app needs them:** S7 audio and S8 video (not started).
 
@@ -1073,19 +1098,43 @@ Running. **Checkpoint 1 is the priority:** D4 (matching D0's scenes, with N3's g
 - Release builds: `gnui package` builds with `gnui_release`, which removes the debug overlay, its menu and test seams such as `DebugAssumeKey`; a plain `go build` is a development build.
 - App zoom: scroll input arriving in the frame where the scale changes is applied one frame later, against the real layout, instead of predicting the new bounds.
 - Popover is drawn in the window (its content is ours); being clipped to the window and opaque is #14. ColorWell opens the real `NSColorPanel` on macOS.
-- Components that take keys from a focused text field do it through a `ui` field-command API named after AppKit's selectors, which the composer also uses.
+- Components that take keys from a focused text field do it through a `ui` field-command API named after AppKit's selectors. The composer's completion keys use the same path (D7b), so one completion list serves the drawn field and the hosted editor.
 - The composer's placeholder is drawn through public API; AppKit's private placeholder property only without `gnui_publicapi` (D53).
 - System icons: the cache key can't see badges, associations or the icon style change; apps pass a revision in `variant`.
 - Off macOS, the gallery's AppKit pages accept text overflow only in the samples whose fonts differ (`label-styles`, `link`, `form-grid`).
+- **Tab follows Keyboard navigation**, as measured on macOS 27.2.
+  - Off: text fields, search, secure and combo fields, token fields, the date picker, text views, tables and outlines.
+  - On: every control.
+  - Windows and Linux: every control.
+  - The setting is re-read on activation and on Tab.
+- **Blur over our own content is drawn by our renderer (D54)**, from the glass probe's measurements (`docs/research/glass-over-metal.md`). The opaque measured fill is the fallback.
+- **Notifications:** `notify.Setup` runs before `app.Main` and returns `ErrTooLate` after launch. Slots of notes the user cleared are reclaimed on activation, and when the table fills, against a snapshot. A response is always stored before the system is told, waiting for a record if it must.
+- **Review rounds:** when a scoped re-review still finds highs, the agent fixes them with tests that fail first, and the coordinator checks the fixes; there is no third review. The rest become `follow-up` issues.
 
-**Follow-up issues:** #1–#19 (`follow-up` label).
+**Follow-up issues:** #1–#32 (`follow-up` label). New today: #29 Pilot's 1M-row filter runs at half speed in a real window; #30 CI duration; #31 hidden-but-built animations not evicted; #32 `WatchShown`'s 64 limit.
+
+**Checkpoint hand lists, additions (2026-10-20):**
+- **Tab with Keyboard navigation on** (System Settings → Keyboard): Tab reaches buttons. Agents can't change the setting, so it's unmeasured.
+- **Composer (D7b):**
+  - dictation, Writing Tools (rewrite, then undo), the emoji picker (⌃⌘Space), spell check and autocorrect, a Japanese or Chinese input method;
+  - an input method while an `@` list is open;
+  - real mouse clicks on a list row and on Send keep the caret;
+  - an image paste;
+  - how the bordered field looks next to the toolbar glass.
+- **Notifications (S3, checkpoint 2):**
+  - a reply round trip (`GNUI_LIVE_NOTIFY=hand go test -run Live -timeout 6m ./app/notify`);
+  - relaunch by a reply from Notification Center;
+  - the grant surviving two rebuilds with `gnui-dev` trusted.
 
 **Waiting on you:**
-- on the Mac mini: **Allow** for "OpenCode.app would like to access files on a removable volume" (it blocks the SSD), and a password dialog under it whose origin we couldn't find;
-- creating a macOS test user on the MacBook for F3's logout test (the steps are in `app/applive/logout_darwin_test.go`);
-- Rex public-test access, to measure Rex directly.
+- **On the Mac mini:** the stuck permission checks, by `sudo killall -9 sandboxd tccd` in Terminal or a restart. They block the SSD, and also Hermes's MindYoung ads script, Raycast and the Contacts helper.
+- **The macOS 27.2 RC** is scheduled to install on the Mac mini tonight. Postpone it, or let it install, and then update the MacBook to the same build?
+- **Intel Macs:** a CI job on GitHub's Intel Mac runner, compile-only as now, or drop them?
+- **Logout test user:** creating a macOS test user on the MacBook for F3's logout test (the steps are in `app/applive/logout_darwin_test.go`).
+- **Rex public-test access,** to measure Rex directly.
 
 **History:**
+- 2026-10-20 afternoon: batches 7–11 merged (F3, N4, N7, D4, D4b, D7a, C6, C9, Tab and Keyboard navigation, the CI time limits, the first D6 notes round and the D4 follow-ups); F4, S3, D7b, the glass probe and D4c started; D54 decided.
 - 2026-10-20: live testing moved to the Mac mini; batches 3–6 merged (C4, the layout audit, T2, F5, D3b forms, N5, S6, the Mac mini references, T3, live gestures).
 - 2026-10-19: parallelism raised to about 14, the integrator owns `main`, the review cap; S7/S8 parked.
 - 2026-10-18: planned; revised after the independent review and its scoped re-review.
