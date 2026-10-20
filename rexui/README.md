@@ -109,6 +109,29 @@ The live misses, all under the eye's threshold at 1×:
 Live AppKit cannot show focus rings or inactive samples in one key window, so
 `-live` leaves those to the offscreen comparison.
 
+Inactive windows (2026-10-20, Mac mini, macOS 27.2 26B5101f, blue accent):
+AppKit greys what the accent fills when the window is not key, and the
+accent returns with it. Measured offscreen (`*-inactive` samples; the
+simulation agrees with real inactive windows, AppKitScenes' settings scene,
+to 1 level) as labelColor at an opacity, over the control's own backdrop:
+a checked or mixed box, a chosen radio button and an on switch 14.1 % (#DBDBDB,
+#3E3E3E; the check and the dot labelColor), the slider's filled track 22.7 %
+(#C5C5C5, #515151), the chosen segment 12.8 % over the track (#CDCDCD,
+#4A4A4A), a determinate or indeterminate progress bar #AAAAAA in both modes,
+the stepper's arrows secondaryLabelColor (#767676, #A1A1A1) with its fill
+unchanged. Off boxes and switches and the level indicator do not change; the
+default and toggle buttons were already measured. The MacBook's JSON carries
+the same samples, taken from the Mac mini (`borrowed`), as that Mac was not
+used for them.
+
+Scroll knobs (same day, live, AppKitRef `-live -flash` and the AppKitScenes
+Finder scene): a legacy knob over its slot reads #7A7A7A in light and #9F9F9F
+in dark, an overlay knob #808080 and #9A9A9A over the view, both
+labelColor-black at 49.8 % and white at 55.1 % (`ListRecipe.LegacyKnob`,
+`OverlayKnob`). Ours were #747474 and #A5A5A5 for legacy, and an overlay knob
+in the Rex palette's purple-grey. The legacy knob is 5 % longer in AppKit's
+capture than ours (a knob-length difference not addressed here).
+
 The lists' samples (page 2, `appkit-lists`; tables, outlines) on 2026-10-19:
 86 of 86 offscreen in blue and in pink; 66 of 66 live with the Mac's
 scroller style (overlay). The lists follow the system's scroller style as

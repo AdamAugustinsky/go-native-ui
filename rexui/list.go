@@ -111,12 +111,16 @@ type ListRecipe struct {
 	// Rounded says the selection and the stripes have the theme's selection
 	// radius (Radii.Selection, 8), per style.
 	Rounded [NumListStyles]bool
-	// LegacyKnob colours a legacy scroll bar's knob, an opaque grey on the
-	// list's background (measured #7A7A7A on white, #9F9F9F on #1E1E1E), and
-	// LegacySlot the rounded slot it moves in, as wide and as far from the
-	// track's sides and ends (theme.Lines.ScrollerKnobInset; measured
-	// #F3F3F3 on white, #292929 on #1E1E1E).
-	LegacyKnob, LegacySlot Tint
+	// LegacyKnob colours a legacy scroll bar's knob, laid over its slot
+	// (measured #7A7A7A on white, #9F9F9F on #1E1E1E: labelColor-black at
+	// 49.8 % and white at 55.1 % over the slot), and LegacySlot the rounded
+	// slot it moves in, as wide and as far from the track's sides and ends
+	// (theme.Lines.ScrollerKnobInset; measured #F3F3F3 on white, #292929 on
+	// #1E1E1E). OverlayKnob colours an overlay scroll bar's knob (the same
+	// 49.8 % and 55.1 % over the view: #808080 on white, #9A9A9A on #1E1E1E,
+	// #7B7B7B on an alternating row; AppKitRef -live -flash, macOS 27.2
+	// 26B5101f), which fades with Show.
+	LegacyKnob, LegacySlot, OverlayKnob Tint
 }
 
 // ListLook is the recipe of lists, tables and outlines.
@@ -131,7 +135,8 @@ var ListLook = ListRecipe{
 	PadY:         [NumListStyles]float32{ListFullWidth: 0, ListInset: 10},
 	HeaderPadY:   [NumListStyles]float32{ListFullWidth: 0, ListInset: 5},
 	Rounded:      [NumListStyles]bool{ListInset: true},
-	LegacyKnob:   OfAlpha(theme.Text, 0.52, 0.58), LegacySlot: OfAlpha(theme.Text, 0.047, 0.047),
+	LegacyKnob:   OfAlpha(theme.Text, 0.498, 0.551), LegacySlot: OfAlpha(theme.Text, 0.047, 0.047),
+	OverlayKnob: OfAlpha(theme.Text, 0.498, 0.551),
 }
 
 // List is an open list: base's List and the look of its rows.
@@ -369,7 +374,7 @@ func ScrollBars(k *base.Kit, v *base.ScrollView) {
 		// inset each side, over its slot
 		tw := theme.Snap(px.ScrollThumbW * (1 + b.Hot))
 		in := theme.Snap(px.BorderW * 2)
-		col := theme.WithAlpha(r.Pal.ScrollThumb, b.Show)
+		col := theme.WithAlpha(ListLook.OverlayKnob.RGBA(r), b.Show)
 		if b.Legacy {
 			in = theme.Snap(r.Lines.ScrollerKnobInset)
 			tw = max(bw-2*in, theme.Snap(px.ScrollThumbW))
