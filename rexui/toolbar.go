@@ -211,8 +211,11 @@ const MaxToolbarOverflow = 24
 // system's menu shows them and a choice comes back as the item's Clicked).
 // It is a value, so that keeping it allocates nothing.
 type ToolbarOverflow struct {
-	N       int
-	Names   [MaxToolbarOverflow]string
+	// N is how many items are in the menu.
+	N int
+	// Names are their accessible names, in the band's order.
+	Names [MaxToolbarOverflow]string
+	// Clicked reports a press on the » button without native menus.
 	Clicked bool
 }
 
