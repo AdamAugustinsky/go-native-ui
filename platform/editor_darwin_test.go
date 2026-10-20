@@ -3,7 +3,6 @@
 package platform
 
 import (
-	"fmt"
 	"strings"
 	"testing"
 
@@ -114,26 +113,11 @@ func withEditorIn(t *testing.T, hidden bool, o EditorOptions, f func(e *Editor))
 		}
 		defer func() { e.Release(); w.Close() }()
 		if !hidden {
-			activateKey(w)
+			objc.Send1(w.win, objc.Sel("makeKeyAndOrderFront:"), 0)
 			objc.Send1(w.win, objc.Sel("makeFirstResponder:"), uintptr(e.tv))
 		}
 		f(e)
 	})
-}
-
-// activateKey makes the app active and w the key window, as a click does,
-// running the event loop up to 2 s for it: an input context handles keys
-// only in the key window. Main thread.
-func activateKey(w *Window) {
-	objc.Send1(w.app, objc.Sel("activateIgnoringOtherApps:"), 1)
-	objc.Send1(w.win, objc.Sel("makeKeyAndOrderFront:"), 0)
-	isKey, since := objc.Sel("isKeyWindow"), objc.Sel("dateWithTimeIntervalSinceNow:")
-	for i := 0; i < 40 && !objc.SendBool(w.win, isKey); i++ {
-		until := objc.ID(objc.F.Reset().Arg(uintptr(clsNSDate)).Arg(uintptr(since)).ArgF64(0.05).Call(objc.MsgSend).R0())
-		if ev := w.nextEvent(until); ev != 0 {
-			objc.Send1(w.app, selSendEvent, uintptr(ev))
-		}
-	}
 }
 
 // sendSetMarked is setMarkedText:selectedRange:replacementRange: as an input
@@ -167,34 +151,28 @@ func TestEditorEscapeAbandonsComposition(t *testing.T) {
 	})
 }
 
-// An input method may commit (unmarkText, insertText:) before it hands the
+// An input method may commit (unmarkText, insertText:) and then hand the
 // committing Enter back as insertNewline:, within one keyDown:. That Enter
-// sends nothing and adds no line; a plain Enter afterwards sends.
+// sends nothing and adds no line; an Enter with nothing composing sends. The
+// input method's part runs in the key's dispatch (edKeyHook), so the test
+// needs no input source of the system's.
 func TestEditorCommitThenNewlineInOneKey(t *testing.T) {
-	var notKey string
-	withEditorIn(t, false, EditorOptions{}, func(e *Editor) {
-		if !objc.SendBool(e.w.win, objc.Sel("isKeyWindow")) {
-			notKey = fmt.Sprintf("the window did not become key in 2 s (NSApp isActive=%v, keyWindow=%#x): keys reach no input context here",
-				objc.SendBool(e.w.app, objc.Sel("isActive")), objc.Send(e.w.app, objc.Sel("keyWindow")))
-			return
-		}
+	withEditor(t, EditorOptions{}, func(e *Editor) {
 		e.SetText([]byte("ab"))
 		e.TakeSignals()
-		ret := func() {
-			ev := nsKey(e.w, 10, "\r", "\r", 0, 0x24, float64(Now())/1e9)
-			objc.Send1(e.tv, selKeyDown, uintptr(ev))
-		}
 		for _, commit := range []string{"unmark", "insert"} {
 			sendSetMarked(e.tv, "か", 1, 0, nsNotFound, 0)
-			edKeyHook = func(e *Editor) { // the input method commits, then returns the key
+			edKeyHook = func(e *Editor) { // the input method commits, then returns the key as a command
 				if commit == "unmark" {
 					objc.Send(e.tv, selUnmarkText)
 				} else {
 					objc.Send3(e.tv, selInsertText, uintptr(objc.Str("仮")), uintptr(nsNotFound), 0)
 				}
-				edKeyHook = nil
+				objc.Send1(e.tv, selDoCommand, uintptr(selInsertNewline))
 			}
-			ret()
+			ev := nsKey(e.w, 10, "\r", "\r", 0, 0x24, float64(Now())/1e9)
+			objc.Send1(e.tv, selKeyDown, uintptr(ev))
+			edKeyHook = nil
 			s := e.TakeSignals()
 			if s&EditorSubmitted != 0 || strings.Contains(string(e.Text()), "\n") {
 				t.Errorf("%s then insertNewline: in one key: signals %#x, text %q; want no send and no line", commit, s, e.Text())
@@ -203,15 +181,11 @@ func TestEditorCommitThenNewlineInOneKey(t *testing.T) {
 				t.Errorf("%s: still composing", commit)
 			}
 		}
-		edKeyHook = nil
-		ret()
+		objc.Send1(e.tv, selDoCommand, uintptr(selInsertNewline)) // Enter with nothing composing
 		if s := e.TakeSignals(); s&EditorSubmitted == 0 {
-			t.Errorf("a plain Enter did not send (%#x), text %q", s, e.Text())
+			t.Errorf("Enter with nothing composing did not send (%#x), text %q", s, e.Text())
 		}
 	})
-	if notKey != "" {
-		t.Skip(notKey)
-	}
 }
 
 // A trailing newline starts a line, empty as it is: the height counts it at
