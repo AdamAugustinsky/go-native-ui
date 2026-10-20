@@ -12,6 +12,7 @@ code was copied.
 | [gpui-ghostty.md](gpui-ghostty.md) | GPUI (Zed) and Ghostty: native macOS integration, hosting native views next to a GPU surface |
 | [electron-tauri.md](electron-tauri.md) | App infrastructure: lifecycle, notifications, tray, updates, packaging, signing, notarization |
 | [go-and-others.md](go-and-others.md) | Gio, Fyne, Wails, Slint, Iced |
+| [displaylink-stall.md](displaylink-stall.md) | A macOS display link that stops calling back on CI: the evidence, two leads, the recovery |
 
 The design measurements are in `docs/design/native-audit.md` and
 `docs/design/rex-design-system.md` (AppKit reference: `tools/appkitref`).

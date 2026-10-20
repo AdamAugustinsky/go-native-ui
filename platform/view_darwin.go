@@ -274,10 +274,14 @@ func (w *Window) restartLink() bool {
 	if link == 0 {
 		return false
 	}
+	now := Now()
+	// Once per restart (docs/research/displaylink-stall.md): the stall is not
+	// understood yet, and each one is evidence.
+	println("gnui: display link of window", w.slot, "stopped calling back: armed", (now-w.armedT)/1e6, "ms ago, last tick", (now-w.lastTickT)/1e6, "ms ago, ticks", w.ticks, "pauses", w.pauses, "windows open", reg.n, "; replaced (restart", w.restarts+1, ")")
 	objc.Send(w.link, selInvalidate)
 	objc.Send(w.link, selReleaseObj)
 	w.link, w.metalLink, w.metalLayer = link, false, w.frameLayer
-	w.restarts, w.restartT = w.restarts+1, Now()
+	w.restarts, w.restartT = w.restarts+1, now
 	objc.Send1(w.link, selSetPaused, 0) // a frame is armed
 	w.linkPaused = false
 	return true
