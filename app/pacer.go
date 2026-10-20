@@ -24,7 +24,18 @@ package app
 //     attempt fails again (nothing can be presented), it backs off by
 //     retryNs instead of spinning. Any EvFrame returns the loop to paced
 //     mode.
+//   - While the window is hidden (minimised, covered, on another space) a
+//     draw attempt that finds no frame parks the loop: no retries, no
+//     waiting on the clock, until an event (the window shows, a frame
+//     event, input). A covered window gets no frames to draw into, so the
+//     retries would fail every retryNs, forever, and no Build would run to
+//     let the animations see Input.Hidden. A hidden window that can still
+//     draw (some report covered while they draw, an asleep display) draws
+//     on, and its Build sees Input.Hidden. What is owed stays owed, and the
+//     first frame after the window shows draws it.
 type pacer struct {
+	hidden      bool // the window is hidden (hide)
+	parked      bool // hidden, and an attempt found no frame: wait for an event
 	needDraw    bool
 	frameReady  bool  // a frame slot is available
 	paced       bool  // EvFrame is being delivered (false after the silence fallback)
@@ -41,13 +52,29 @@ const (
 // slot is assumed free (the first frame is drawn before the first Wait).
 func newPacer() pacer { return pacer{needDraw: true, frameReady: true, paced: true} }
 
-// invalidate says a repaint is owed.
-func (p *pacer) invalidate() { p.needDraw = true }
+// invalidate says a repaint is owed (and a parked loop tries again).
+func (p *pacer) invalidate() { p.needDraw, p.parked = true, false }
 
 // frameEvent handles EvFrame: a slot is free, the frame source is alive.
 func (p *pacer) frameEvent() {
-	p.frameReady, p.paced = true, true
+	p.frameReady, p.paced, p.parked = true, true, false
 	p.requestedAt, p.retryAt = 0, 0
+}
+
+// hide records that the window is hidden (on) or shows again. Shown, a
+// repaint is owed, and the frame source is asked afresh, its silence while
+// hidden being no evidence that it stopped.
+func (p *pacer) hide(on bool) {
+	if p.hidden == on {
+		return
+	}
+	p.hidden, p.parked = on, false
+	if !on {
+		p.needDraw, p.retryAt = true, 0
+		if !p.paced || !p.frameReady { // unless a frame event left a slot
+			p.paced, p.frameReady, p.requestedAt = true, false, 0
+		}
+	}
 }
 
 // requested records that the loop called RequestFrame at now.
@@ -57,7 +84,7 @@ func (p *pacer) requested(now int64) { p.requestedAt = now }
 // frame is awaited with nothing else to time), 0 polls (a draw can happen
 // now).
 func (p *pacer) timeout(now int64) int64 {
-	if !p.needDraw {
+	if !p.needDraw || p.parked {
 		return -1
 	}
 	if p.frameReady {
@@ -76,7 +103,7 @@ func (p *pacer) timeout(now int64) int64 {
 // draw says to attempt a draw now; request says to call RequestFrame (and
 // tell requested) because a frame is owed with none outstanding.
 func (p *pacer) poll(now int64) (draw, request bool) {
-	if !p.needDraw {
+	if !p.needDraw || p.parked {
 		return false, false
 	}
 	if !p.frameReady {
@@ -111,11 +138,14 @@ func (p *pacer) drawn(more bool) {
 
 // failed records a draw attempt that found no frame to draw into. The
 // repaint stays owed. Paced, the loop waits for the next EvFrame (it must
-// have requested one); unpaced it retries after retryNs.
+// have requested one); unpaced it retries after retryNs; hidden it parks.
 func (p *pacer) failed(now int64) {
 	p.needDraw = true
 	p.frameReady = !p.paced
-	if !p.paced {
+	switch {
+	case p.hidden:
+		p.parked = true // no frames while hidden: wait for an event
+	case !p.paced:
 		p.retryAt = now + retryNs
 	}
 }
