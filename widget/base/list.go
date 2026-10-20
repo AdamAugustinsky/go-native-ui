@@ -236,7 +236,7 @@ func (k *Kit) beginList(label string, st *ListState, rows int, table bool, o Lis
 
 	k.ApplySize(ui.Pct(1), ui.Pct(1))
 	skey := ui.KeyN(okey, 1)
-	if pad := k.legacyReserve(skey, ScrollVertical); pad != [2]float32{} {
+	if pad := k.legacyReserve(skey, ScrollVertical, st.Scroll.Size); pad != [2]float32{} {
 		c.NextPadding(0, 0, pad[0], pad[1]) // room for a legacy scroll bar
 	}
 	l.o = c.BoxKeyed(ui.Clip|o.Flags, okey, nil)
