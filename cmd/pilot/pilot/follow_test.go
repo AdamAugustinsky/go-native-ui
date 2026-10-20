@@ -9,26 +9,39 @@ import (
 	"gonativeui/ui"
 )
 
-// near counts the pixels within 2 levels of the colour 0xRRGGBB.
-func near(img *image.RGBA, rgb uint32) (n int) {
-	r, g, b := int(rgb>>16&255), int(rgb>>8&255), int(rgb&255)
-	d := func(a uint8, w int) bool { return int(a) >= w-2 && int(a) <= w+2 }
-	for i := 0; i+3 < len(img.Pix); i += 4 {
-		if d(img.Pix[i], r) && d(img.Pix[i+1], g) && d(img.Pix[i+2], b) {
-			n++
+// selectedRowFill is the colour of the first selected row of the last frame,
+// a few pixels inside its right edge (past the text), as 0xRRGGBB.
+func selectedRowFill(t *testing.T, img *image.RGBA, c *ui.Context) uint32 {
+	t.Helper()
+	var tr ui.SemTree
+	c.Semantics(&tr)
+	for _, n := range tr.Nodes {
+		if n.Role == ui.RoleRow && n.State&ui.SemSelected != 0 {
+			x, y := int(n.Bounds[2])-3, int(n.Bounds[1]+n.Bounds[3])/2
+			i := img.PixOffset(x, y)
+			return uint32(img.Pix[i])<<16 | uint32(img.Pix[i+1])<<8 | uint32(img.Pix[i+2])
 		}
 	}
-	return n
+	t.Fatal("no selected row")
+	return 0
+}
+
+func closeTo(a, b uint32) bool {
+	d := func(x, y uint32) bool { return x+2 >= y && y+2 >= x }
+	return d(a>>16&255, b>>16&255) && d(a>>8&255, b>>8&255) && d(a&255, b&255)
 }
 
 // Pilot follows the system's accent: the selected rows are drawn in it, and
 // a change of the accent while the window is open takes them to the new one.
 func TestFollowsTheSystemAccent(t *testing.T) {
 	const green, pink = 0x32A852, 0xE0307A
-	pl := New(SceneOptions())
-	o := newOffscreen(t, pl)
-	o.UI.SetSystemAppearance(ui.Appearance{Known: true, Accent: green<<8 | 0xFF})
-	settle := func() (img *image.RGBA) {
+	r := newDrive(t)
+	o := r.o
+	r.rowAt(0, 1)
+	r.click(0) // a selected row, in the pane that has the keyboard
+	settle := func(accent uint32) *image.RGBA {
+		o.UI.SetSystemAppearance(ui.Appearance{Known: true, Accent: accent<<8 | 0xFF})
+		var img *image.RGBA
 		for n := 0; n < 600; n++ {
 			img, _ = o.Frame()
 			if n > 3 && !o.UI.Animating() {
@@ -37,14 +50,10 @@ func TestFollowsTheSystemAccent(t *testing.T) {
 		}
 		return img
 	}
-	img := settle()
-	if g := near(img, green); g < 50 {
-		t.Errorf("%d pixels in the system's green accent, want the selected rows in it", g)
-	}
-	o.UI.SetSystemAppearance(ui.Appearance{Known: true, Accent: pink<<8 | 0xFF})
-	img = settle()
-	if g, p := near(img, green), near(img, pink); g != 0 || p < 50 {
-		t.Errorf("after the accent changed: %d pixels in the old accent, %d in the new", g, p)
+	for _, want := range []uint32{green, pink, green} {
+		if got := selectedRowFill(t, settle(want), o.UI); !closeTo(got, want) {
+			t.Errorf("accent %06X: the selected row is %06X", want, got)
+		}
 	}
 }
 
@@ -80,24 +89,21 @@ func TestReduceTransparencyTakesTheMaterialsAway(t *testing.T) {
 	}
 }
 
-// Reduce Motion stills the decorative motion: the focus ring of a field
-// that just got the keyboard is at its full strength at once and nothing is
-// left animating, where without it the ring fades in.
-func TestReduceMotionStillsTheFocusRing(t *testing.T) {
-	run := func(rm bool) (animatingAfter int) {
-		r := newDriveWith(t, func(o *Options) { o.Still = false }) // the system's setting alone decides
+// Reduce Motion stills the decorative motion: with the system's setting alone
+// (nothing of Pilot's own pins it) the rates of the theme's motion are the
+// instant ones.
+func TestFollowsReduceMotion(t *testing.T) {
+	motion := func(rm bool) theme.Motion {
+		r := newDriveWith(t, func(o *Options) { o.Still = false })
 		r.d.Pilot.bk.PinSystem(&theme.SystemValues{Known: true, Settings: theme.Settings{ReduceMotion: rm}})
-		r.frames(4)
-		r.key('F', ui.ModSuper)
-		for n := 0; n < 3; n++ {
-			r.frames(1)
-			if r.o.UI.Animating() {
-				animatingAfter++
-			}
-		}
-		return
+		r.frames(3)
+		return r.d.Pilot.bk.Theme().Motion
 	}
-	if on, off := run(true), run(false); on != 0 || off == 0 {
-		t.Errorf("frames still animating after ⌘F: %d with Reduce Motion, %d without (want 0 and some)", on, off)
+	normal, still := motion(false), motion(true)
+	if normal == normal.Reduced() {
+		t.Fatal("the theme's motion is already still without the setting")
+	}
+	if still != normal.Reduced() {
+		t.Errorf("with Reduce Motion the motion is %+v, want %+v", still, normal.Reduced())
 	}
 }

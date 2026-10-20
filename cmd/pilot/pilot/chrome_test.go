@@ -101,7 +101,7 @@ func TestToolbarNavigates(t *testing.T) {
 }
 
 // The toolbar's search button and ⌘F open the filter in the active pane and
-// give it the keyboard; ⌘⌥S hides and shows the sidebar and the toolbar's
+// give it the keyboard; ⌘⌥S (Ctrl+B elsewhere) hides and shows the sidebar and the toolbar's
 // first item does as well.
 func TestFilterButtonAndSidebarToggle(t *testing.T) {
 	r := newDrive(t)
@@ -123,7 +123,11 @@ func TestFilterButtonAndSidebarToggle(t *testing.T) {
 	r.key(ui.KeyEscape, 0)
 
 	w0 := pl.geo[0].rect[0]
-	r.key('S', pl.primary()|ui.ModAlt)
+	if pl.mac {
+		r.key('S', pl.primary()|ui.ModAlt)
+	} else {
+		r.key('B', pl.primary()) // Ctrl+Alt is AltGr on Windows
+	}
 	r.frames(2)
 	if pl.sidebar || pl.geo[0].rect[0] >= w0 || r.hasNode(ui.RoleListItem, "Downloads") {
 		t.Errorf("⌘⌥S: sidebar shown %v, the list starts at %v (was %v)", pl.sidebar, pl.geo[0].rect[0], w0)

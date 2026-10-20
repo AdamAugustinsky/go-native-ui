@@ -170,8 +170,8 @@ func (pl *Pilot) key(c *ui.Context, k ui.KeyEvent) bool {
 		a.filterOpen = true
 		c.SetFocus(filterKey(pl.active))
 		return true
-	case prim && alt && k.Code == 'S': // Hide Sidebar, as Finder's
-		pl.sidebar = !pl.sidebar
+	case pl.mac && prim && alt && k.Code == 'S', !pl.mac && prim && !alt && !shift && k.Code == 'B':
+		pl.sidebar = !pl.sidebar // Hide Sidebar: Finder's ⌥⌘S; Ctrl+Alt is AltGr on Windows, so Ctrl+B elsewhere
 		return true
 	case pl.mac && prim && k.Code == ui.KeyLeftBracket:
 		a.goBack()

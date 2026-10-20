@@ -47,7 +47,11 @@ func TestAuditLayout(t *testing.T) {
 	for _, s := range auditScenes {
 		t.Run(s.name, func(t *testing.T) {
 			_, o := scene(t, s.look)
-			widgettest.AuditLayout(t, "pilot "+s.name, o.UI)
+			widgettest.AuditLayout(t, "pilot "+s.name, o.UI, widgettest.Allow{
+				Check: ui.AuditOverflow, Where: `Group "Path"`,
+				Reason: "rexui.PathBar snaps each crumb's button, its symbol and its name separately: on Windows the symbol's " +
+					"fallback glyph and the last name reach 1 to 2 px past the button (component owner's; measured in CI run 39417646800)",
+			})
 		})
 	}
 }
