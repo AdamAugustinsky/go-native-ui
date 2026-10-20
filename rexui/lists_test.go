@@ -2,8 +2,8 @@ package rexui_test
 
 import (
 	"slices"
-	"strconv"
 	"sort"
+	"strconv"
 	"testing"
 	"time"
 
@@ -460,7 +460,6 @@ func TestFillerStripesAreNotContent(t *testing.T) {
 		}
 	}
 }
-
 
 // named gives the nodes of v the names n0, n1 …
 func (v *outlineView) named() *outlineView {
