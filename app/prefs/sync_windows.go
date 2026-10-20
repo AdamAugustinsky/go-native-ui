@@ -31,7 +31,7 @@ func moveFile(src, dst string) error {
 	}
 	r, _, e := syscall.SyscallN(pMoveFileExW, uintptr(unsafe.Pointer(s)), uintptr(unsafe.Pointer(d)),
 		movefileReplaceExisting|movefileWriteThrough)
-	if r == 0 {
+	if uint32(r) == 0 { // a BOOL: only the low 32 bits of the register
 		return &os.LinkError{Op: "rename", Old: src, New: dst, Err: e}
 	}
 	return nil

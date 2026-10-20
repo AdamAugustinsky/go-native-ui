@@ -65,6 +65,8 @@ type Result struct {
 	Fill   string  `json:"fill,omitempty"`
 	Label  string  `json:"label,omitempty"`
 	Ring   string  `json:"ring,omitempty"`
+	// Fill2 is the colour at the second probe (a table's stripe).
+	Fill2 string `json:"fill2,omitempty"`
 	// RingOutset and RingWidth are AppKit's focus ring as AppKitRef measured
 	// it from the ring's own mask (metrics.json, focusRing).
 	RingOutset float64 `json:"ringOutset,omitempty"`
@@ -252,6 +254,9 @@ func compare(what catalog.Measure, a, o Result) []row {
 	if what&catalog.MeasureRing != 0 {
 		colour("ring", a.Ring, o.Ring, tolFill)
 	}
+	if what&catalog.MeasureFill2 != 0 {
+		colour("fill2", a.Fill2, o.Fill2, tolFill)
+	}
 	return rows
 }
 
@@ -303,6 +308,9 @@ func ink(c, bg [3]int) bool { return dist(c, bg) > thresh }
 // Measure measures img (a render at 2× with the frame at 14 pt) as sp says.
 func Measure(img image.Image, sp catalog.Spec) Result {
 	p := px{img, img.Bounds()}
+	if sp.Inside {
+		return measureInside(p, sp)
+	}
 	bg := p.at(p.b.Min.X, p.b.Min.Y)
 	cx := origin + int(math.Floor(float64(sp.Probe[0])*scale))
 	cy := origin + int(math.Floor(float64(sp.Probe[1])*scale))
@@ -347,6 +355,72 @@ func Measure(img image.Image, sp catalog.Spec) Result {
 		r.Label = hex(labelInk(p, under, x0, y0, x1, y1))
 	}
 	return r
+}
+
+// measureInside measures a shape inside the sample, as Spec.Inside says: the
+// run of the probe's colour (within Spec.Tol) along the probe's column gives
+// the top and bottom; along its row, where to start scanning for the left and
+// right edges, which are then found from just outside the shape, inward, at
+// most 12 pt below its top (clear of the corners, and of text inside it).
+func measureInside(p px, sp catalog.Spec) Result {
+	tol := sp.Tol
+	if tol == 0 {
+		tol = thresh
+	}
+	cx := origin + int(math.Floor(float64(sp.Probe[0])*scale))
+	cy := origin + int(math.Floor(float64(sp.Probe[1])*scale))
+	pc := p.at(cx, cy)
+	row := func(y int) func(int) [3]int { return func(x int) [3]int { return p.at(x, y) } }
+	col := func(x int) [3]int { return p.at(cx, x) }
+	t := runEdge(col, pc, tol, cy, -1)
+	b := runEdge(col, pc, tol, cy, 1)
+	l0 := runEdge(row(cy), pc, tol, cx, -1)
+	r0 := runEdge(row(cy), pc, tol, cx, 1)
+	y := int(math.Floor(t + math.Min((b-t)/2, 12*scale)))
+	xs := max(int(math.Floor(l0))-8, origin)
+	xe := min(int(math.Ceil(r0))+8, p.b.Max.X-origin-1)
+	out := p.at(xs, y)
+	l := edge(row(y), out, xs, cx, 1)
+	r := edge(row(y), p.at(xe, y), xe, cx, -1)
+	var res Result
+	res.Fill = hex(pc)
+	if sp.What&catalog.MeasureW != 0 {
+		res.W = round2((r - l) / scale)
+	}
+	if sp.What&catalog.MeasureH != 0 {
+		res.H = round2((b - t) / scale)
+	}
+	if sp.What&catalog.MeasureRadius != 0 {
+		// within the top 12 pt: AppKit's offscreen inset rows are not
+		// merged, and the first row's bottom corners would count
+		res.Radius = round2(radius(p, out, l, t, r-l, math.Min(b-t, 24*scale)) / scale)
+	}
+	if sp.What&catalog.MeasureFill == 0 {
+		res.Fill = ""
+	}
+	if sp.What&catalog.MeasureLabel != 0 {
+		res.Label = hex(labelInk(p, pc, origin+int(sp.Label[0]*scale), origin+int(sp.Label[1]*scale),
+			origin+int(sp.Label[2]*scale), origin+int(sp.Label[3]*scale)))
+	}
+	if sp.What&catalog.MeasureFill2 != 0 {
+		res.Fill2 = hex(p.at(origin+int(math.Floor(float64(sp.Probe2[0])*scale)), origin+int(math.Floor(float64(sp.Probe2[1])*scale))))
+	}
+	return res
+}
+
+// runEdge is where the run of colour c (within tol in every channel) through
+// i = from ends, going in steps of dir: the first pixel beyond it, less the
+// share of c it still covers, in pixel coordinates.
+func runEdge(get func(int) [3]int, c [3]int, tol, from, dir int) float64 {
+	j := from
+	for n := 0; n < 4000 && dist(get(j), c) <= tol; n++ {
+		j += dir
+	}
+	cov := coverage(get(j), c, get(j+dir))
+	if dir > 0 {
+		return float64(j) + cov
+	}
+	return float64(j+1) - cov
 }
 
 // edges finds the shape's left, right, top and bottom edges in pixels with

@@ -129,6 +129,7 @@ type wayland struct {
 	enterSerial       uint32 // serial of the latest wl_pointer.enter, for set_cursor
 	btnSerial         uint32
 	axisSource        uint32
+	fingerScroll      bool // a finger scroll is in progress (until axis_stop)
 	xkbCtx            uintptr
 	keymap, xkbState  uintptr
 	modIdx            [4]uint32
@@ -136,6 +137,19 @@ type wayland struct {
 	repeatDelay       int32  // ms
 	repCode           uint32 // evdev code of the key being repeated, 0 = none
 	repAt             int64
+
+	// a wl_pointer frame's scrolling, sent as one event at the frame: the
+	// deltas, the axes that moved (bit 0 horizontal, 1 vertical) and those
+	// that stopped; fingerAxes are the axes of the finger scroll in progress,
+	// which ends when all of them stopped.
+	axisAcc              [2]float32
+	axisMoved, axisStops uint8
+	fingerAxes           uint8
+	// a wheel's notches in the frame (axis_value120 from seat version 8,
+	// axis_discrete before it), on the axes in axisNotched: they replace the
+	// compositor's pixel value, so that a notch scrolls as one on X11
+	axisNotch   [2]float32
+	axisNotched uint8
 
 	args   [8]uint64 // union wl_argument array for marshal calls
 	title  [128]byte
@@ -880,21 +894,95 @@ func (w *Window) onPointer(op uint32, a unsafe.Pointer) {
 		w.q.push(ev)
 	case 4: // axis(time, axis, value)
 		v := -argFixed(a, 2) * scale // wl_pointer: positive = scrolling down/right = content moves up/left
-		ev := Event{Kind: EvScroll, Mods: w.mods, Time: now}
-		if y.axisSource == 1 || y.axisSource == 2 { // finger, continuous
-			ev.Flags = FlagPrecise
+		ax := 0                      // horizontal_scroll
+		if argU(a, 1) == 0 {         // vertical_scroll
+			ax = 1
 		}
-		if argU(a, 1) == 0 { // vertical_scroll
-			ev.DY = v
-		} else {
-			ev.DX = v
+		if y.seatV < 5 { // no frame events: each axis event is a scroll of its own
+			ev := w.scrollAt(Event{Kind: EvScroll, Mods: w.mods, Time: now})
+			if ax == 1 {
+				ev.DY = v
+			} else {
+				ev.DX = v
+			}
+			w.q.push(ev)
+			return
 		}
-		w.q.push(ev)
-	case 5: // frame
-		y.axisSource = 0
+		y.axisAcc[ax] += v
+		y.axisMoved |= 1 << ax
+	case 5: // frame: the axes' events of one moment are complete
+		w.scrollFrame(now)
 	case 6: // axis_source(source)
 		y.axisSource = argU(a, 0)
+	case 7: // axis_stop(time, axis): the fingers lifted on that axis
+		if argU(a, 1) == 0 {
+			y.axisStops |= 2
+		} else {
+			y.axisStops |= 1
+		}
+	case 8, 9: // axis_discrete(axis, discrete) before version 8, axis_value120(axis, value120) from it
+		ax := 0
+		if argU(a, 0) == 0 {
+			ax = 1
+		}
+		n := float32(int32(argU(a, 1)))
+		if op == 9 {
+			n /= 120
+		}
+		y.axisNotch[ax] += n
+		y.axisNotched |= 1 << ax
 	}
+}
+
+// scrollAt gives scroll event e the pointer's position, while the pointer is
+// in the window.
+func (w *Window) scrollAt(e Event) Event {
+	if w.ptrIn {
+		e.X, e.Y = w.ptrX, w.ptrY
+		e.Flags |= FlagPos
+	}
+	return e
+}
+
+// scrollFrame sends the scrolling of a wl_pointer frame as one EvScroll with
+// both axes. Fingers make it a gesture (Began, then Changed) over the axes
+// they moved, which ends when every one of them stopped (axis_stop), not
+// when the first did.
+func (w *Window) scrollFrame(now int64) {
+	y := &w.wy
+	finger := y.axisSource == 1
+	if !finger && y.axisSource != 2 { // a wheel: its notches, when told, are exact
+		step := scrollStep * float32(w.s120) / 120
+		for ax := 0; ax < 2; ax++ {
+			if y.axisNotched&(1<<ax) != 0 {
+				y.axisAcc[ax] = -y.axisNotch[ax] * step
+				y.axisMoved |= 1 << ax
+			}
+		}
+	}
+	if y.axisMoved != 0 {
+		ev := w.scrollAt(Event{Kind: EvScroll, DX: y.axisAcc[0], DY: y.axisAcc[1], Mods: w.mods, Time: now})
+		if y.axisSource == 1 || y.axisSource == 2 { // finger, continuous
+			ev.Flags |= FlagPrecise
+		}
+		if finger {
+			ev.Phase = PhaseChanged
+			if !y.fingerScroll {
+				ev.Phase, y.fingerScroll = PhaseBegan, true
+			}
+			y.fingerAxes |= y.axisMoved
+		}
+		w.q.push(ev)
+	}
+	if y.axisStops != 0 && y.fingerScroll {
+		y.fingerAxes &^= y.axisStops
+		if y.fingerAxes == 0 {
+			y.fingerScroll = false
+			w.q.push(Event{Kind: EvScroll, Flags: FlagPrecise, Phase: PhaseEnded, Mods: w.mods, Time: now})
+		}
+	}
+	y.axisAcc, y.axisMoved, y.axisStops, y.axisSource = [2]float32{}, 0, 0, 0
+	y.axisNotch, y.axisNotched = [2]float32{}, 0
 }
 
 func (w *Window) onKeyboard(op uint32, a unsafe.Pointer) {

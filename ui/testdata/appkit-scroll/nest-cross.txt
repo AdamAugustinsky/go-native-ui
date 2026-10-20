@@ -1,0 +1,33 @@
+# inner view near its top: scroll down, then up past the top in one gesture
+nested
+view 400 400
+doc 400 2000
+start 0 20
+ev 0 p maybegin none 0 0
+ev 8 p began none 0 -10
+ev 16 p changed none 0 -10
+ev 24 p changed none 0 -10
+ev 32 p changed none 0 -10
+ev 40 p changed none 0 -10
+ev 48 p changed none 0 10
+ev 56 p changed none 0 10
+ev 64 p changed none 0 10
+ev 72 p changed none 0 10
+ev 80 p changed none 0 10
+ev 88 p changed none 0 10
+ev 96 p changed none 0 10
+ev 104 p changed none 0 10
+ev 112 p changed none 0 10
+ev 120 p changed none 0 10
+ev 128 p changed none 0 10
+ev 136 p changed none 0 10
+ev 144 p changed none 0 10
+ev 152 p changed none 0 10
+ev 160 p changed none 0 10
+ev 168 p changed none 0 10
+ev 176 p changed none 0 10
+ev 184 p changed none 0 10
+ev 192 p changed none 0 10
+ev 200 p changed none 0 10
+ev 208 p ended none 0 0
+end 816

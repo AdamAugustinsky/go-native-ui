@@ -84,13 +84,14 @@ func Open(o Options) (*Window, error) {
 	if o.Titlebar > 0 {
 		style |= 1 << 15 // NSWindowStyleMaskFullSizeContentView
 	}
-	w.win = objc.Send(objc.Cls("NSWindow"), selAlloc)
+	w.win = objc.Send(windowClass, selAlloc) // GNUIWindow: NSWindow with the host focus hand-off (host_darwin.go)
 	w.win = objc.ID(F.Reset().Arg(uintptr(w.win)).Arg(uintptr(selInitWindow)).
 		ArgRect(0, 0, width, height).Arg(style).Arg(2 /* buffered */).ArgBool(false).Call(objc.MsgSend).R0())
 	if w.win == 0 {
 		return nil, errors.New("platform: NSWindow init failed")
 	}
 	objc.Send1(w.win, selSetReleased, 0)
+	w.publicOnly = o.PublicAPIOnly
 	if o.Titlebar > 0 {
 		w.titlebar, w.lights = float64(o.Titlebar), o.TrafficLights
 		objc.Send1(w.win, selSetTitlebarClear, 1)
@@ -103,14 +104,7 @@ func Open(o Options) (*Window, error) {
 		ArgRect(0, 0, width, height).Call(objc.MsgSend).R0())
 	delegate := objc.Send(objc.Send(delegateClass, selAlloc), objc.Sel("init"))
 	w.content = w.view
-	if o.Backdrop != BackdropNone {
-		w.makeBackdrop(o.Backdrop, width, height)
-		markOpen("backdrop")
-	}
-	if len(o.Buttons) > 0 {
-		w.makeButtons(o.Buttons, delegate, width, height)
-		markOpen("buttons")
-	}
+	w.openShell(&o, delegate, width, height)
 	objc.Send1(w.win, selSetContentView, uintptr(w.content))
 	objc.Send1(w.win, selMakeFirstResp, uintptr(w.view))
 	objc.Send1(w.win, selSetDelegate, uintptr(delegate))
@@ -210,7 +204,7 @@ func (w *Window) Size() (int32, int32, float32) { return w.wPx, w.hPx, w.scale }
 
 // Native returns the AppKit handles.
 func (w *Window) Native() Native {
-	return Native{NSWindow: uintptr(w.win), NSView: uintptr(w.view), Transparent: w.backdrop != BackdropNone}
+	return Native{NSWindow: uintptr(w.win), NSView: uintptr(w.view), Transparent: w.HasMaterials()}
 }
 
 // Close closes the window.

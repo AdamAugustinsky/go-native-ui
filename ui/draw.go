@@ -314,8 +314,13 @@ func strip(l *gpu.DrawList, ring *gpu.Quad, clip [4]float32) {
 	l.Add(q)
 }
 
-// emitImage draws b's image centred in the padded rectangle.
+// emitImage draws b's image centred in the padded rectangle (or placed by
+// its Fit).
 func (c *Context) emitImage(l *gpu.DrawList, b *box, clip [4]float32) {
+	if b.img.Fit != FitNatural {
+		c.emitFitted(l, b, clip)
+		return
+	}
 	uv := b.img.UV
 	w, h := uv[2]-uv[0], uv[3]-uv[1]
 	r := b.rect

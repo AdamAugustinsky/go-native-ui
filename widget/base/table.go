@@ -96,9 +96,29 @@ type TableHead struct {
 	hkey  ui.Key
 	label string
 	hh    float32
-	pad   float32 // the padding at the sides of a cell
+	pad   float32    // the padding at the sides of a cell
+	edge  [2]float32 // the padding at the outer sides of the first and last cells
+	inset float32    // the room at the sides of the header and the rows
 	avail float32
 	hx    float32 // where the next header cell starts
+}
+
+// TableOpts are a table's metrics, for BeginTableHeaderOpts, in points. With
+// Set they replace BeginTableHeader's (a zero HeaderH keeps its height).
+type TableOpts struct {
+	// Inset is the room at the left and right of the header and the rows:
+	// the list's side padding (ListOpts.Pad[0]), which BeginTableBody
+	// takes from here.
+	Inset float32
+	// HeaderH is the header row's height.
+	HeaderH float32
+	// CellPad is the padding at the sides of a cell; EdgePad is the
+	// padding at the left of the first column's cells (EdgePad[0]) and at
+	// the right of the last's (EdgePad[1]).
+	CellPad float32
+	EdgePad [2]float32
+	// Set says the fields hold the metrics.
+	Set bool
 }
 
 // TableKey is the key of the list box of the table built with label inside the
@@ -119,6 +139,23 @@ func (t *TableHead) HeaderHeight() float32 { return t.hh }
 // CellPad is the padding in pixels at the sides of a cell.
 func (t *TableHead) CellPad() float32 { return t.pad }
 
+// CellPads is the padding in pixels at the left and right of column col's
+// cells and header (TableOpts.CellPad, and EdgePad at the table's sides).
+func (t *TableHead) CellPads(col int) (l, r float32) {
+	l, r = t.pad, t.pad
+	if col == 0 {
+		l = t.edge[0]
+	}
+	if col == len(t.cols)-1 {
+		r = t.edge[1]
+	}
+	return l, r
+}
+
+// Inset is the room in pixels at the sides of the header and the rows
+// (TableOpts.Inset).
+func (t *TableHead) Inset() float32 { return t.inset }
+
 // Columns are the columns shown (at most MaxColumns).
 func (t *TableHead) Columns() []Column { return t.cols }
 
@@ -130,6 +167,11 @@ func (t *TableHead) ColumnWidth(col int) float32 { return t.ts.colPx[col] }
 // says otherwise), the columns' widths, and the sorting and resizing the
 // header's input of the previous frame asks for.
 func (k *Kit) BeginTableHeader(label string, st *TableState, cols []Column) TableHead {
+	return k.BeginTableHeaderOpts(label, st, cols, TableOpts{})
+}
+
+// BeginTableHeaderOpts is BeginTableHeader with the table's metrics.
+func (k *Kit) BeginTableHeaderOpts(label string, st *TableState, cols []Column, o TableOpts) TableHead {
 	c := k.c
 	px := &k.r.Px
 	if len(cols) > MaxColumns {
@@ -142,6 +184,14 @@ func (k *Kit) BeginTableHeader(label string, st *TableState, cols []Column) Tabl
 	if pt := k.PeekRowHeight(); pt > 0 { // compact rows keep a header a little taller than themselves, and the cells close
 		t.hh, t.pad = theme.Snap(k.Pt(pt+4)), px.GapSmall
 	}
+	t.edge, t.inset = [2]float32{t.pad, t.pad}, theme.Snap(px.GapSmall)
+	if o.Set {
+		if o.HeaderH > 0 {
+			t.hh = theme.Snap(k.Pt(o.HeaderH))
+		}
+		t.pad, t.inset = k.Pt(o.CellPad), theme.Snap(k.Pt(o.Inset))
+		t.edge = [2]float32{k.Pt(o.EdgePad[0]), k.Pt(o.EdgePad[1])}
+	}
 	t.hkey = ui.KeyN(t.tkey, 2)
 
 	k.ApplySize(ui.Pct(1), ui.Pct(1))
@@ -153,15 +203,20 @@ func (k *Kit) BeginTableHeader(label string, st *TableState, cols []Column) Tabl
 
 	// the width the columns share: the list's, from the last frame
 	body := c.RectOf(ui.KeyN(ui.HashString(t.tkey, ident), 1))
-	t.avail = body[2] - body[0] - 2*theme.Snap(px.GapSmall)
+	t.avail = body[2] - body[0] - 2*t.inset
 	t.layoutColumns(t.avail)
 	t.headerInput()
 	return t
 }
 
 // BeginTableBody starts the rows of the table, after its header: a List of
-// rows rows, built as a list's are (RowState, BeginRow), with cells.
+// rows rows, built as a list's are (RowState, BeginRow), with cells. With
+// ListOpts.OwnPad the padding at the sides of the rows is the table's
+// (TableOpts.Inset), so that the cells stay under their headers.
 func (k *Kit) BeginTableBody(t *TableHead, rows int, o ListOpts) List {
+	if o.OwnPad {
+		o.Pad[0] = t.inset / k.scale
+	}
 	t.layoutColumns(t.avail) // a resize in the header
 	return k.beginList(t.label, &t.ts.ListState, rows, true, o)
 }
@@ -273,10 +328,9 @@ func (t *TableHead) headerInput() {
 // EndHeaderRow after the cells.
 func (t *TableHead) BeginHeaderRow(flags ui.Flags) ui.ID {
 	c := t.tk.c
-	inset := theme.Snap(t.tk.r.Px.GapSmall)
 	c.NextSize(ui.Pct(1), ui.Px(t.hh))
 	c.NextAxis(ui.AxisX)
-	c.NextPadding(inset, 0, inset, 0)
+	c.NextPadding(t.inset, 0, t.inset, 0)
 	t.hx = 0
 	id := c.BoxKeyed(flags, t.hkey, nil)
 	c.Push(id)
@@ -351,7 +405,8 @@ func (t *TableHead) BeginHeaderCell(hc *HeaderCell, flags ui.Flags) ui.ID {
 	c.NextSize(ui.Px(hc.W), ui.Px(t.hh))
 	c.NextAxis(ui.AxisX)
 	c.NextGap(k.r.Px.GapSmall)
-	c.NextPadding(t.pad, 0, t.pad, 0)
+	pl, pr := t.CellPads(hc.Index)
+	c.NextPadding(pl, 0, pr, 0)
 	c.NextRole(ui.RoleColumnHeader)
 	c.NextSemName(hc.Col.Title)
 	c.NextSemState(state)
@@ -368,9 +423,8 @@ func (t *TableHead) EndHeaderCell(hc *HeaderCell) {
 	c := k.c
 	c.Pop()
 	t.hx += hc.W
-	inset := theme.Snap(k.r.Px.GapSmall)
 	grab := theme.Snap(k.Pt(8))
-	theme.At(c, inset+t.hx-grab/2, 0, grab, t.hh)
+	theme.At(c, t.inset+t.hx-grab/2, 0, grab, t.hh)
 	c.NextCursor(ui.CursorResizeEW)
 	rflags := ui.Clickable | Floating
 	if k.Disabled() {
@@ -387,7 +441,8 @@ func (t *TableHead) BeginCell(l *List, col int) ui.ID {
 	c.NextSize(ui.Px(t.ts.colPx[col]), ui.Pct(1))
 	c.NextAxis(ui.AxisX)
 	c.NextGap(t.tk.r.Px.GapSmall)
-	c.NextPadding(t.pad, 0, t.pad, 0)
+	pl, pr := t.CellPads(col)
+	c.NextPadding(pl, 0, pr, 0)
 	c.NextRole(ui.RoleCell)
 	id := c.BoxKeyed(ui.Clip, ui.KeyN(l.rowKey, uint64(col)), nil)
 	c.Push(id)
@@ -405,7 +460,8 @@ func (t *TableHead) EndCell() { t.tk.c.Pop() }
 func (t *TableHead) TextCell(l *List, col int, b []byte, flags ui.Flags) {
 	c := t.tk.c
 	c.NextSize(ui.Px(t.ts.colPx[col]), ui.Pct(1))
-	c.NextPadding(t.pad, 0, t.pad, 0)
+	pl, pr := t.CellPads(col)
+	c.NextPadding(pl, 0, pr, 0)
 	c.NextRole(ui.RoleCell)
 	c.NextSemNameBytes(b)
 	c.BoxKeyed(flags|ui.Clip, ui.KeyN(l.rowKey, uint64(col)), b)

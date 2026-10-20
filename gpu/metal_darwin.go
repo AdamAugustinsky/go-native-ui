@@ -25,6 +25,10 @@ type Surface struct {
 	frame                Frame  // Present's frame (kept here so Present doesn't allocate)
 	reveal               func() // shows the window inside the first frame's transaction (RevealOnFirstFrame)
 	Trace                FirstPresentTrace
+	// SyncedPresents counts the frames presented with presentsWithTransaction
+	// because the native shell's views moved with them (outside live resize
+	// and the first frame).
+	SyncedPresents int
 }
 
 var (
@@ -64,6 +68,7 @@ var (
 	selSetGravity        = objc.Sel("setContentsGravity:")
 	selBegin             = objc.Sel("begin")
 	selPresentedTime     = objc.Sel("presentedTime")
+	selSetDisableActions = objc.Sel("setDisableActions:")
 
 	mtlCreateSystemDefaultDevice uintptr
 	cgColorSpaceRelease          uintptr
@@ -224,30 +229,28 @@ func (s *Surface) BeginFrame(f *Frame) bool {
 func (s *Surface) EndFrame(f *Frame) {
 	pool := objc.F.Call0(objc.PoolPush)
 	cb := objc.ID(f.CmdBuf)
-	if s.presented == 0 {
-		if s.reveal != nil {
-			// Apple's sequence for presenting in step with other Core
-			// Animation changes: commit, wait until scheduled, then present
-			// the drawable inside the transaction that also shows the window.
-			objc.Send1(s.layer, selSetPresentsWithTx, 1)
-			objc.Send(cb, selCommit)
-			objc.Send(cb, selWaitScheduled)
-			s.Trace.Committed = platform.Now()
-			objc.Send(clsCATransaction, selBegin)
-			objc.Send(f.drawable, selPresent)
-			s.reveal()
-			objc.Send(clsCATransaction, selCommit)
-			objc.Send1(s.layer, selSetPresentsWithTx, 0)
-		} else {
-			objc.Send1(cb, selPresentDrawable, uintptr(f.drawable))
-			objc.Send(cb, selCommit)
-			s.Trace.Committed = platform.Now()
-		}
+	switch {
+	case s.presented == 0 && s.reveal != nil:
+		// Apple's sequence for presenting in step with other Core
+		// Animation changes: commit, wait until scheduled, then present
+		// the drawable inside the transaction that also shows the window
+		// (and places the native shell's views for this frame).
+		objc.Send1(s.layer, selSetPresentsWithTx, 1)
+		objc.Send(cb, selCommit)
+		objc.Send(cb, selWaitScheduled)
+		s.Trace.Committed = platform.Now()
+		objc.Send(clsCATransaction, selBegin)
+		objc.Send1(clsCATransaction, selSetDisableActions, 1)
+		platform.ApplyShell()
+		objc.Send(f.drawable, selPresent)
+		s.reveal()
+		objc.Send(clsCATransaction, selCommit)
+		objc.Send1(s.layer, selSetPresentsWithTx, 0)
 		// Commit the enclosing implicit transaction now instead of at the end
 		// of the run-loop turn: measured 171 → 139 ms to window-on-screen.
 		objc.Send(clsCATransaction, selFlush)
 		s.Trace.Done = platform.Now()
-	} else if s.live {
+	case s.live:
 		// Live resize: present in step with the window. With
 		// presentsWithTransaction the drawable shows up when the transaction
 		// that carries the window's new size commits, so the content and the
@@ -265,17 +268,56 @@ func (s *Surface) EndFrame(f *Frame) {
 		// step, and leaves at most one present uncommitted.
 		objc.Send(cb, selCommit)
 		objc.Send(cb, selWaitScheduled)
-		objc.Send(f.drawable, selPresent)
+		s.presentWithShell(f.drawable)
 		objc.Send(clsCATransaction, selFlush)
-	} else {
+		if s.presented == 0 {
+			s.Trace.Committed, s.Trace.Done = platform.Now(), platform.Now()
+		}
+	case platform.ShellPending():
+		// The native shell's views move this frame (material regions,
+		// hosts): present in the transaction that moves them, as the live
+		// resize does, so they never show a frame apart from the pixels drawn
+		// for them. Other frames present asynchronously.
+		objc.Send1(s.layer, selSetPresentsWithTx, 1)
+		objc.Send(cb, selCommit)
+		objc.Send(cb, selWaitScheduled)
+		s.presentWithShell(f.drawable)
+		objc.Send1(s.layer, selSetPresentsWithTx, 0)
+		objc.Send(clsCATransaction, selFlush)
+		if s.presented == 0 {
+			s.Trace.Committed, s.Trace.Done = platform.Now(), platform.Now()
+		}
+		s.SyncedPresents++
+	default:
 		objc.Send1(cb, selPresentDrawable, uintptr(f.drawable))
 		objc.Send(cb, selCommit)
+		if s.presented == 0 {
+			s.Trace.Committed = platform.Now()
+			objc.Send(clsCATransaction, selFlush)
+			s.Trace.Done = platform.Now()
+		}
 	}
 	s.presented++
 	objc.Send(cb, selRelease)
 	objc.Send(f.drawable, selRelease)
 	objc.F.Call1(objc.PoolPop, pool)
 	*f = Frame{}
+}
+
+// presentWithShell presents drawable inside an explicit transaction with
+// implicit animations off, together with the native shell's staged changes
+// (platform.ApplyShell; nothing when none are staged). The layer presents
+// with the transaction (presentsWithTransaction).
+func (s *Surface) presentWithShell(drawable objc.ID) {
+	if !platform.ShellPending() {
+		objc.Send(drawable, selPresent)
+		return
+	}
+	objc.Send(clsCATransaction, selBegin)
+	objc.Send1(clsCATransaction, selSetDisableActions, 1)
+	platform.ApplyShell()
+	objc.Send(drawable, selPresent)
+	objc.Send(clsCATransaction, selCommit)
 }
 
 // AbandonFrame gives up a frame that BeginFrame began, without presenting

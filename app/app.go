@@ -90,6 +90,7 @@ type Config struct {
 	MinHeight     float32
 	Titlebar      float32    // macOS custom titlebar height (pt); ignored elsewhere
 	TrafficLights [2]float32 // macOS close-button centre (pt); ignored elsewhere
+	PublicAPIOnly bool       // no private system interfaces at run time (a store build uses the gnui_publicapi tag); see platform.Options.PublicAPIOnly
 	Clear         [4]float32 // clear colour, with the semantics of gpu.Renderer.Encode's clear
 
 	// Backdrop and Buttons are the native shell of platform.Options (macOS;
@@ -100,6 +101,14 @@ type Config struct {
 	// buttons' ids; App.Win.SetButtonEnabled enables and disables them.
 	Backdrop platform.Backdrop
 	Buttons  []platform.NativeButton
+
+	// Materials makes the window show material regions (macOS): the
+	// builder marks boxes with ui.Context.Material and paints nothing in
+	// them, and the frame clears to transparent instead of Clear, so the
+	// system's window background shows wherever the builder paints nothing
+	// and the materials show in their regions. Hosted native views
+	// (App.Win.NewHost, ui.Context.Host) need nothing here.
+	Materials bool
 }
 
 // App is the running application: the window, the GPU objects and the ui
@@ -136,6 +145,8 @@ type App struct {
 	dlgShown []shownDialog           // dialogs on screen
 	dlgSeq   platform.DialogTicket   // the last ticket given
 	dlgT     dialogTarget            // the window's dialogs; tests set a fake
+
+	sh shellSync // material and host regions handed to the window (shell.go)
 
 	wakeAt      int64 // platform.Now at which the UI wants a frame although nothing animates (ui.Context.WakeAfter); 0 = none
 	chromeDark  bool  // the mode last given to Win.SetDarkChrome
@@ -290,14 +301,14 @@ func openWindowed(cfg Config, b Builder, st *StartupReport, nativeMenus bool) (*
 	win, err := platform.Open(platform.Options{
 		Title: cfg.Title, Width: int(cfg.Width + 0.5), Height: int(cfg.Height + 0.5), Hidden: true,
 		MinWidth: int(cfg.MinWidth + 0.5), MinHeight: int(cfg.MinHeight + 0.5),
-		Titlebar: cfg.Titlebar, TrafficLights: cfg.TrafficLights,
-		Backdrop: cfg.Backdrop, Buttons: cfg.Buttons,
+		Titlebar: cfg.Titlebar, TrafficLights: cfg.TrafficLights, PublicAPIOnly: cfg.PublicAPIOnly,
+		Backdrop: cfg.Backdrop, Buttons: cfg.Buttons, Materials: cfg.Materials,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("app: open window: %w", err)
 	}
-	if win.Backdrop() != platform.BackdropNone {
-		a.cfg.Clear = [4]float32{} // premultiplied transparent: the backdrop shows
+	if win.HasMaterials() {
+		a.cfg.Clear = [4]float32{} // premultiplied transparent: the backdrop or the materials show
 	}
 	a.Win, a.req = win, win
 	t0 := platform.Now()
@@ -356,6 +367,7 @@ func openWindowed(cfg Config, b Builder, st *StartupReport, nativeMenus bool) (*
 // initUI creates the ui context and runs the Initer.
 func (a *App) initUI() error {
 	a.UI = ui.New(a.Text)
+	uiDefaults(a.UI)
 	a.UI.ClipboardSet = platform.SetClipboardText
 	a.UI.AtlasSync(a.R)
 	if a.Win != nil { // a window shows tooltips for the regions it is given; offscreen renders draw them
@@ -371,6 +383,10 @@ func (a *App) initUI() error {
 }
 
 func ms(ns int64) float64 { return float64(ns) / 1e6 }
+
+// uiDefaults sets what the platform decides in a new ui context: on macOS a
+// wheel jumps to where it scrolls, as AppKit's does; elsewhere it glides.
+func uiDefaults(c *ui.Context) { c.WheelJumps = runtime.GOOS == "darwin" }
 
 // close releases everything in reverse order of creation. It is safe on a
 // partially built App.
@@ -467,6 +483,7 @@ func (a *App) onEvent(e *platform.Event) {
 			a.p.invalidate()
 		}
 	case platform.EvVisible:
+		a.tr.in.Hidden = e.Flags&platform.FlagDown == 0
 		if e.Flags&platform.FlagDown != 0 {
 			a.p.invalidate() // shown again: what was skipped while hidden is owed
 		}
@@ -476,6 +493,13 @@ func (a *App) onEvent(e *platform.Event) {
 		a.frameEvents++
 		a.lastFrameEv = platform.Now()
 		a.p.frameEvent()
+	case platform.EvHostFocus:
+		a.hostFocus(uint32(e.Tag))
+		a.p.invalidate()
+	case platform.EvHostCommand:
+		if a.hostCommand(e) {
+			a.p.invalidate()
+		}
 	case platform.EvDialog:
 		a.onDialog(e)
 	default:

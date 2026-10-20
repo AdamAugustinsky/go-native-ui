@@ -17,6 +17,9 @@ var (
 	selScrollDX               = objc.Sel("scrollingDeltaX")
 	selScrollDY               = objc.Sel("scrollingDeltaY")
 	selPrecise                = objc.Sel("hasPreciseScrollingDeltas")
+	selPhase                  = objc.Sel("phase")
+	selMomentumPhase          = objc.Sel("momentumPhase")
+	selInverted               = objc.Sel("isDirectionInvertedFromDevice")
 	selResetCursorRects       = objc.Sel("resetCursorRects")
 	selDiscardCursorRects     = objc.Sel("discardCursorRects")
 	selAddCursorRect          = objc.Sel("addCursorRect:cursor:")
@@ -33,6 +36,7 @@ func registerViewMouse(v *objc.ClassDef) {
 	v.Method(selResetCursorRects, "v@:", viewResetCursorRects)
 	v.Method(selMouseDownCanMoveWindow, "c@:", viewMouseDownCanMoveWindow)
 	v.Method(selMouseDown, "v@:@", viewMouseDown)
+	v.Method(selScrollWheel, "v@:@", viewScrollWheel) // host_darwin.go
 }
 
 func viewResetCursorRects(*ffi.CB) {
@@ -84,6 +88,9 @@ func (w *Window) pointerEvent(ev objc.ID, typ uintptr, t int64) (consumed bool) 
 		}
 	}
 	w.pointerIn = true
+	if typ == 5 && w.hostMove(e.X, e.Y, t) {
+		return false // over a host (host_darwin.go)
+	}
 	if w.content != w.view && (typ == 1 || typ == 3 || typ == 25) && !w.hitsView(lx, ly) {
 		// A press on a native view (a button of Options.Buttons, a window
 		// button) is AppKit's: its controls track the release themselves, so
@@ -106,17 +113,71 @@ func (w *Window) pointerEvent(ev objc.ID, typ uintptr, t int64) (consumed bool) 
 }
 
 // scrollEvent queues a scroll-wheel event.
+// The event carries where it happened (FlagPos), also when it bubbled up
+// from a native host the pointer is over.
 func (w *Window) scrollEvent(ev objc.ID, t int64) {
+	if w.scrollToHost(ev) {
+		return // the host gets it; one it does not use comes back (host_darwin.go)
+	}
+	e := scrollEventOf(ev, w.scale, t)
+	e.X, e.Y = w.locate(ev)
+	e.Flags |= FlagPos
+	w.q.push(e)
+	w.hosts.markScroll(ev)
+}
+
+// locate is where mouse event ev happened in the window's content, in
+// pixels from its top-left.
+func (w *Window) locate(ev objc.ID) (x, y float32) {
+	lx, ly := objc.SendPoint(ev, selLocation)
+	s := float64(w.scale)
+	return float32(lx * s), float32((w.hPt - ly) * s)
+}
+
+// lineScroll is how many points a wheel line scrolls: NSScrollView's
+// verticalLineScroll and horizontalLineScroll (measured with
+// tools/appkitref/scroll.m: a 3-line event scrolls 30 points).
+const lineScroll = 10
+
+// scrollEventOf is the Event of an NSEvent of type scrollWheel in a window
+// of the given scale: precise deltas in pixels or lines converted to pixels,
+// the gesture and momentum phases, and whether the device is inverted.
+func scrollEventOf(ev objc.ID, scale float32, t int64) Event {
 	dx, dy := objc.SendF64(ev, selScrollDX), objc.SendF64(ev, selScrollDY)
 	e := Event{Kind: EvScroll, Mods: mods(uintptr(objc.Send(ev, selModifierFlags))), Time: t}
-	unit := float64(w.scale)
+	unit := float64(scale)
 	if objc.SendBool(ev, selPrecise) {
 		e.Flags = FlagPrecise
 	} else {
-		unit *= 16 // lines → logical pixels
+		unit *= lineScroll
 	}
+	if objc.SendBool(ev, selInverted) {
+		e.Flags |= FlagInverted
+	}
+	e.Phase = phaseOf(uintptr(objc.Send(ev, selPhase)))
+	e.Momentum = phaseOf(uintptr(objc.Send(ev, selMomentumPhase)))
 	e.DX, e.DY = float32(dx*unit), float32(dy*unit)
-	w.q.push(e)
+	return e
+}
+
+// phaseOf maps an NSEventPhase (a bit set, one bit at a time in practice) to
+// a ScrollPhase.
+func phaseOf(p uintptr) ScrollPhase {
+	switch {
+	case p&32 != 0: // NSEventPhaseMayBegin
+		return PhaseMayBegin
+	case p&1 != 0: // Began
+		return PhaseBegan
+	case p&8 != 0: // Ended
+		return PhaseEnded
+	case p&16 != 0: // Cancelled
+		return PhaseCancelled
+	case p&4 != 0: // Changed
+		return PhaseChanged
+	case p&2 != 0: // Stationary
+		return PhaseStationary
+	}
+	return PhaseNone
 }
 
 // cursorObjs caches the NSCursor singletons, loaded by loadCursors.

@@ -47,6 +47,9 @@ const (
 	// MeasureRing is the focus ring's colour, 1.5 pt inside its outer edge on
 	// the probe's row.
 	MeasureRing
+	// MeasureFill2 is the colour at the second probe (Spec.Probe2): a
+	// table's stripe.
+	MeasureFill2
 )
 
 // Spec says where and what to measure in a sample. Coordinates are points
@@ -67,6 +70,22 @@ type Spec struct {
 	Label [4]float32
 	// Note says why a measurement is left out.
 	Note string
+
+	// Inside measures a shape inside the sample, such as a table's selection
+	// (lists.go): the shape is the run of the probe's colour, within Tol in
+	// every channel (a block's divider lines included), scanning outward
+	// from the probe for its top and bottom (along the probe's column) and
+	// for where to start; its left and right edges are then found scanning
+	// inward from just outside it, at most 12 pt below its top, past any
+	// corner, so that text inside it does not cut it short. The radius is the
+	// top-left corner's, and the label's ink is measured over the probe's
+	// colour.
+	Inside bool
+	// Tol is the largest channel difference from the probe's colour that
+	// is still the shape, for Inside (0: 3).
+	Tol int
+	// Probe2 is the second probe (MeasureFill2).
+	Probe2 [2]float32
 }
 
 const (
@@ -88,6 +107,12 @@ func boxed(b float32, what Measure) Spec {
 // fieldSpec is a text field's Spec.
 func fieldSpec(h float32, what Measure) Spec { return at(4, h/2, what) }
 
+// glyph is a Spec of a glyph drawn in strokes: the colour at the probe, on
+// the stroke's centreline.
+func glyph(x, y float32, why string) Spec {
+	return Spec{Probe: [2]float32{x, y}, What: MeasureFill, Note: why}
+}
+
 // skip leaves a sample to the eye.
 func skip(why string) Spec { return Spec{Note: why} }
 
@@ -103,6 +128,8 @@ type State struct {
 	set  [10]bool
 
 	icons [numIcons]icon.ID
+
+	lists listState // the lists' samples (lists.go)
 }
 
 // The glyphs of AppKitRef's icon buttons: SF Symbols at AppKit's default
@@ -130,6 +157,7 @@ func NewState(k *base.Kit) *State {
 	for i := range s.icons {
 		s.icons[i] = k.AddIcon(iconSpecs[i])
 	}
+	s.lists.glyphs = rexui.AddListGlyphs(k)
 	return s
 }
 
@@ -275,6 +303,85 @@ func iconButton(ic int, v rexui.IconButtonVariant) func(s *State) ui.ID {
 	}
 }
 
+// The D3b controls: help, disclosure, stepper, progress, spinner, level,
+// toggle buttons and links.
+
+func help(look base.Look, disabled bool) func(s *State) ui.ID {
+	return func(s *State) ui.ID {
+		s.k.BeginDisabled(disabled)
+		s.k.Force(look)
+		id := rexui.HelpButton(s.k, "Help", rexui.HelpButtonOpts{}).ID
+		s.k.EndDisabled()
+		return id
+	}
+}
+
+func disclosure(v rexui.DisclosureVariant, open bool) func(s *State) ui.ID {
+	return func(s *State) ui.ID {
+		s.b = open
+		return rexui.Disclosure(s.k, "Disclosure", &s.b, rexui.DisclosureOpts{Variant: v}).ID
+	}
+}
+
+func stepper(look base.Look, disabled bool) func(s *State) ui.ID {
+	return func(s *State) ui.ID {
+		s.v = 5
+		s.k.BeginDisabled(disabled)
+		s.k.Force(look)
+		id := rexui.Stepper(s.k, "Stepper", &s.v, 0, 100, 1, rexui.StepperOpts{}).ID
+		s.k.EndDisabled()
+		return id
+	}
+}
+
+// progress is the progress bar of AppKitRef: 200 pt wide, 40 % done, or
+// indeterminate with its segment at a fixed phase (AppKit's offscreen render
+// stops the animation after its first step, with the segment entering at
+// the start: its leading edge 4.5 pt in).
+func progress(frac float32) func(s *State) ui.ID {
+	return func(s *State) ui.ID {
+		s.k.NextWidth(s.k.Fixed(200))
+		return rexui.ProgressBar(s.k, "Progress", frac, rexui.ProgressOpts{Still: true, Phase: 4.5 / (200 + 0.35*200)})
+	}
+}
+
+// spinner is AppKit's spinning indicator at the phase of its render: the
+// spoke at the top is the head.
+func spinner(size theme.Size) func(s *State) ui.ID {
+	return func(s *State) ui.ID {
+		return rexui.Spinner(s.k, "Spinner", rexui.SpinnerOpts{Size: size, Still: true, Step: 0})
+	}
+}
+
+func level(s *State) ui.ID {
+	s.k.NextWidth(s.k.Fixed(160))
+	return rexui.LevelIndicator(s.k, "Level", 6, 0, 10, rexui.LevelOpts{})
+}
+
+func toggleButton(on bool, look base.Look, disabled bool) func(s *State) ui.ID {
+	return func(s *State) ui.ID {
+		s.b = on
+		s.k.BeginDisabled(disabled)
+		s.k.Force(look)
+		id := rexui.ToggleButton(s.k, "Toggle", &s.b, rexui.ToggleOpts{}).ID
+		s.k.EndDisabled()
+		return id
+	}
+}
+
+// link is AppKit's link in a text field's frame: 72.5 × 16 pt, the text 2 pt
+// in.
+func link(s *State) ui.ID {
+	k, c := s.k, s.k.Context()
+	c.NextSize(ui.Px(k.Pt(72.5)), ui.Px(k.Pt(16)))
+	c.NextPadding(k.Pt(2), 0, 0, 0)
+	frame := c.Box(0, "frame")
+	c.Push(frame)
+	rexui.Link(k, "Learn more", rexui.LinkOpts{})
+	c.Pop()
+	return frame
+}
+
 const (
 	pressed  = base.LookPressed
 	focused  = base.LookFocused
@@ -301,6 +408,15 @@ var Samples = []Sample{
 	{"icon-rounded", 37.5, 24, iconButton(iconPlus, rexui.IconBordered), at(3, 12, labelled)},
 	{"icon-toolbar", 30, 23, iconButton(iconSidebar, rexui.IconToolbar), skip("NSBezelStyleToolbar outside a toolbar draws a 30 × 23 rounded rectangle; ours is the in-toolbar capsule of the window tokens")},
 	{"icon-borderless", 16, 16, iconButton(iconGear, rexui.IconBorderless), Spec{What: MeasureLabel, Label: [4]float32{0, 0, 16, 16}}},
+	{"help", 24, 24, help(0, false), Spec{Probe: [2]float32{3, 12}, What: shapeW, Note: "the question mark's ink by eye: its thin stems never reach labelColor in AppKit's render"}},
+	{"disclosure-closed", 13, 13, disclosure(rexui.DisclosureTriangle, false), glyph(8.75, 6.25, "a chevron drawn in strokes: its ink at the vertex")},
+	{"disclosure-open", 13, 13, disclosure(rexui.DisclosureTriangle, true), glyph(6.5, 8.25, "a chevron drawn in strokes: its ink at the vertex")},
+	{"push-disclosure", 24, 24, disclosure(rexui.DisclosurePush, false), at(3, 12, shapeW)},
+	{"toggle-off", 65, 24, toggleButton(false, 0, false), at(3, 12, labelled)},
+	{"toggle-on", 65, 24, toggleButton(true, 0, false), at(3, 12, labelled)},
+	{"toggle-on-inactive", 65, 24, toggleButton(true, inactive, false), at(3, 12, labelled)},
+	{"toggle-on-disabled", 65, 24, toggleButton(true, 0, true), Spec{Probe: [2]float32{3, 12}, What: shape, Note: "the faint label by eye: AppKit and ours both show its fringe darker than the body in dark, which the draw list's text colour does not"}},
+	{"link", 72.5, 16, link, Spec{What: MeasureLabel, Label: [4]float32{0, 0, 72.5, 16}}},
 	{"checkbox-off", 60.5, 16, check(base.Unchecked, theme.SizeRegular, 0, false), boxed(16, shapeW|MeasureLabel)},
 	{"checkbox-on", 60.5, 16, check(base.Checked, theme.SizeRegular, 0, false), boxed(16, shapeW|MeasureLabel)},
 	{"checkbox-mixed", 60.5, 16, check(base.Mixed, theme.SizeRegular, 0, false), boxed(16, shapeW|MeasureLabel)},
@@ -333,6 +449,7 @@ var Samples = []Sample{
 	{"slider-small", 200, 14, slider(theme.SizeSmall, 0, false), at(3, 7, shapeW)},
 	{"slider-disabled", 200, 16, slider(theme.SizeRegular, 0, true), at(3, 8, shapeW)},
 	{"slider-focused", 200, 16, slider(theme.SizeRegular, focused, false), Spec{Probe: [2]float32{3, 8}, What: MeasureFill, Note: "AppKitRef draws no focus ring for NSSlider"}},
+	{"stepper", 20, 24, stepper(0, false), at(2, 8, shapeW)},
 	{"field-placeholder", 200, 24, field(0, "", "Placeholder", false, theme.SizeRegular, 0, false), fieldSpec(24, shapeW)},
 	{"field-text", 200, 24, field(1, "Hello, world", "Placeholder", false, theme.SizeRegular, 0, false), fieldSpec(24, shapeW)},
 	{"field-focused", 200, 24, field(2, "Hello, world", "Placeholder", false, theme.SizeRegular, focused, false), fieldSpec(24, shapeW|MeasureRing)},
@@ -342,6 +459,11 @@ var Samples = []Sample{
 	{"search-empty", 200, 24, field(6, "", "Search", true, theme.SizeRegular, 0, false), fieldSpec(24, shapeW)},
 	{"search-text", 200, 24, field(7, "query", "Search", true, theme.SizeRegular, 0, false), fieldSpec(24, shapeW)},
 	{"search-focused", 200, 24, field(7, "query", "Search", true, theme.SizeRegular, focused, false), fieldSpec(24, shapeW|MeasureRing)},
+	{"progress-bar", 200, 20, progress(0.4), at(150, 10, shapeW)},
+	{"progress-indeterminate", 200, 20, progress(-1), Spec{Probe: [2]float32{2, 10}, What: shapeW &^ MeasureRadius, Note: "radius by eye: AppKit's corner is the segment clipped by the bar's end"}},
+	{"spinner", 32, 32, spinner(theme.SizeRegular), Spec{Probe: [2]float32{16, 3.25}, What: MeasureW | MeasureH | MeasureFill, Note: "the spokes' step is not measured: an AppKit render shows one phase"}},
+	{"spinner-small", 16, 16, spinner(theme.SizeSmall), Spec{Probe: [2]float32{8, 1.25}, What: MeasureW | MeasureH | MeasureFill, Note: "the spokes' step is not measured: an AppKit render shows one phase"}},
+	{"level", 160, 18, level, Spec{Probe: [2]float32{30, 8}, What: shapeW &^ MeasureRadius, Note: "radius by eye: the measure cannot find AppKit's corner through the edge shading"}},
 	{"separator", 200, 1, func(s *State) ui.ID {
 		s.k.NextWidth(s.k.Fixed(200))
 		return rexui.Separator(s.k, rexui.SeparatorOpts{})
@@ -504,6 +626,7 @@ func Grid(samples []int) (cells []Cell, w, h float32) {
 var Pages = [...][]string{
 	{}, // every sample but those of the later pages
 	{"label-styles"},
+	listPage, // lists.go
 	{"form-group", "form-grid"},
 }
 

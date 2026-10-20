@@ -146,7 +146,7 @@ func (s *winScratch) winDirPath(path string) (p []uint16, err syscall.Errno) {
 	for {
 		r, _, e := syscall.SyscallN(pGetFullPathNameW,
 			uintptr(unsafe.Pointer(&s.in[0])), uintptr(len(s.full)), uintptr(unsafe.Pointer(&s.full[0])), 0)
-		n = r
+		n = uintptr(uint32(r)) // a DWORD: only the low 32 bits of the register
 		if n == 0 {
 			if e == 0 {
 				e = winErrInvalidName

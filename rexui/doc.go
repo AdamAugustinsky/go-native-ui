@@ -48,6 +48,15 @@
 //   - A recipe, for the whole app: rexui.ButtonRecipes[rexui.ButtonPrimary].Fill = rexui.Of(theme.Green).
 //   - A component: copy its file and own it (README.md).
 //
+// # Lists
+//
+// List, Table and Outline (list.go, table.go, outline.go) are AppKit's
+// NSTableView and NSOutlineView over base.List: they draw only the visible
+// rows, so a list of a million rows costs what one screenful does. The
+// selection is emphasised (the accent, white text) only while the list has
+// keyboard focus in the key window; ListLook, TableLook and OutlineLook are
+// their recipes. Glyphs at AppKit's sizes come from AddListGlyphs.
+//
 // # Forms, dialogs, alerts and tooltips
 //
 // Form lays rows out as macOS 27.2's Settings does (grouped inset sections) or

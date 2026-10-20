@@ -248,7 +248,7 @@ w, err := a.OpenWindow(app.WindowConfig{Title: "Settings", Chrome: rexui.ChromeC
   - momentum into an edge overshoots slightly, then springs back;
   - Ended without momentum springs back, critically damped, on `ui`'s animation clock;
   - MayBegin (fingers resting) stops any spring and any smooth scroll;
-  - wheels stay hard-clamped;
+  - wheels stay hard-clamped; on macOS they jump, as AppKit's do, and elsewhere they glide (review decision); Windows treats high-resolution wheels (fractions of a notch) as precise, like its touchpads;
   - the constants are tuned by hand on the MacBook against an `NSScrollView` in AppKitRef's live window (work item D5).
 - **Scrollers.** The scroller style (`NSScroller.preferredScrollerStyle` and its change notification) reaches `ui.Appearance`: overlay scrollers show only while scrolling; legacy ones reserve their width.
 - **Tests and gates.** Scripted phase sequences give the expected offsets and spring curves, with 0 allocations.
@@ -992,10 +992,52 @@ The entries are in `DECISIONS.md`, written on this branch on 2026-10-18 at your 
 | Accessibility on Windows (UIA) and Linux (AT-SPI) | phase-5 plan | D34 |
 | The X11 PRIMARY selection and an X11 input method | PHASE5 Status | Unchanged from phase 5 |
 
-## Status (2026-10-18)
+## Status (2026-10-19, evening)
 
-Planned; not started. Revised after the independent review (GPT-6.1 Sol, 2026-10-18), all findings accepted by you and fixed in place, then revised again after the scoped re-review. Wave 0 starts on your approval.
+Running. **Checkpoint 1 is the priority:** N3 (merged; `p6-n3fix` closing its re-review) → D4 → the rest of D3b → D6, one agent per app in parallel → the apps shown live on the MacBook.
 
-- **Inputs, on `main` at d32d248:** the research reports, the native audit, the design-system proposal and AppKitRef.
-- **GnuiShot:** on `p6-gnuishot` (a0ae73f), granted on the MacBook and not yet merged; wave 0 merges it.
-- **Phase 5:** 5A is closed, and 5B is absorbed here (`docs/PHASE5-PLAN.md`, Status).
+**How the work runs now (your instructions, 2026-10-19):**
+- **Parallelism:** up to about 14 agents at once, each item in its own worktree (`~/Projects/gnui-wt/<item>`) and branch (`p6-<item>`), keeping this plan's file ownership. Above the cap, items wait in the queue below. If builds contend (load above about 9 on the Mac mini's 10 cores, or memory pressure), it is measured and the cap lowered, not guessed.
+- **Integration:** a dedicated integrator agent owns `main`, the main checkout (`~/Projects/go-native-ui`), merge conflicts in shared files and the CI runs on `main`. It merges a branch once three things hold: the branch's CI is green on its head, its review findings are closed with tests, and rexcompare is 40/40 on the merged tree. Shared-file changes that need a design decision come back to the plan owner.
+- **Reviews:** one independent review per item, plus at most one scoped re-review of the fixes. Anything still open after that is a GitHub issue labelled `follow-up`, not another blocking round. Small, mechanical follow-ups need no review.
+- **The MacBook:** agents quit every app they open there when their captures are done, and every capture is looked at before anything is called matching.
+
+**Merged on `main` (d5999fb):**
+- D0, D1, D2 (`widget/base`), D3a (`rexui` core), D3b controls and D3b lists;
+- F1 (objc runtime), F2, F6 (trackpad scrolling);
+- N1 (menus, and the menu-rebuild fix), N2 (dialogs, tooltips), N3 (materials and hosting), the window buttons (D53: private AppKit API behind `gnui_publicapi` and `PublicAPIOnly`);
+- C1 (VList), C2 (rich text), C3 (flow), C5 (images), C8 (QR);
+- S1, S2 and S5 (app services; three security rounds; known limits in `follow-up` issues);
+- T1 (`gnui` CLI), `clib`, the frame-pool crash fix, the Windows clipboard heap-corruption fix.
+
+**In flight:**
+
+| Item | Branch | State |
+|---|---|---|
+| D4 window chrome, Rex tabs | `p6-d4` | building; wires N3's glass now that it is on `main` |
+| D3b forms and token fixes | `p6-d3b-forms` | building; then one combined D3b review |
+| Layout `NextJustify` and the layout audit | `p6-align` | building; after the user found misaligned content in `shelldemo` |
+| F3 application object | `p6-f3` | review fixes done; Dock/logout quit through our own Apple-event handler, then one scoped re-review |
+| N3 re-review fixes | `p6-n3fix` | gesture ownership by delivery, per-delivery dedup, radii |
+| Legacy scroller width and header corner | `p6-scrollw` | follow-up from D3b lists |
+| CI flakes, round 2 | `p6-flakes` | review fixes (stall evidence, D27 attribution, 3× budgets) |
+| Full-screen test flake | `p6-fsflake` | |
+| F5 keys and gestures | `p6-f5` | started 2026-10-19 |
+| C4 selectable text | `p6-c4` | started 2026-10-19 |
+| C9 app zoom | `p6-c9` | started 2026-10-19 |
+| S6 clipboard images and files | `p6-s6` | started 2026-10-19 |
+| T2 live-window harness | `p6-t2` | started 2026-10-19 |
+| N5 drag and drop | `p6-n5` | started 2026-10-19 |
+
+**Queued (next free slot):** T3 debug overlay; then D6 (gallery, notes, Pilot, one agent each) once D4 merges; then F4, N4, C6/C7, S3/S4, T4/T5, N6, N7, and ZapFast Z2 when its inputs land.
+
+**Parked until an app needs them:** S7 audio and S8 video (not started).
+
+**Waiting on you:**
+- creating a macOS test user on the MacBook for F3's logout test (the steps are in `app/applive/logout_darwin_test.go`);
+- Rex public-test access, to measure Rex directly.
+
+**History:**
+- 2026-10-18: planned; revised after the independent review and its scoped re-review.
+- Phase 5: 5A is closed, and 5B is absorbed here (`docs/PHASE5-PLAN.md`, Status).
+- N3a and N3b: materials per area and hosted native views, demo `cmd/shelldemo`; what each area uses and the deviations are in `docs/design/native-shell-spike.md`, "Generalised".

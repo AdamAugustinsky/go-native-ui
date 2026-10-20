@@ -26,9 +26,9 @@ type Native struct {
 	NSWindow uintptr
 	// NSView is the window's content NSView*, which the Metal layer is attached to.
 	NSView uintptr
-	// Transparent is set when the window has a backdrop (Options.Backdrop):
-	// the Metal layer must be non-opaque, its pixels premultiplied.
-	// Experimental.
+	// Transparent is set when the window has a backdrop or material regions
+	// (Options.Backdrop, Options.Materials): the Metal layer must be
+	// non-opaque, its pixels premultiplied.
 	Transparent bool
 }
 
@@ -40,18 +40,15 @@ type Window struct {
 	nOut     int  // how many events that Wait handed out
 
 	app, win, view, link, wakeEv objc.ID
-	content                      objc.ID // the content view: view, or the container that holds the backdrop, view and the buttons (shell_darwin.go)
-	effect                       objc.ID // the backdrop's effect view, 0 without one
-	backdrop                     Backdrop
-	buttons                      []nativeButton
-	glassRadius                  float64 // the glass's corner radius as last set (fitBackdrop)
-	fullScreen                   bool    // between windowWillEnterFullScreen: and its exit
+	content                      objc.ID // the content view: view, or the container that holds the materials, view and the hosts (shell_darwin.go)
+	shell                                // the native shell: backdrop, materials, hosts (shell_darwin.go)
 	distantPast, distantFuture   objc.ID
 
 	wPt, hPt   float64
 	titlebar   float64    // custom titlebar height in points (Options.Titlebar); 0 = standard
 	lights     [2]float32 // close button centre (Options.TrafficLights)
 	tb         titlebarChrome
+	publicOnly bool       // Options.PublicAPIOnly: no private AppKit selectors
 	sysButtons [4]float32 // SystemButtons: where the OS draws the window buttons over the content (points, top left), as of the last layoutChrome
 	wPx, hPx   int32
 	scale      float32
