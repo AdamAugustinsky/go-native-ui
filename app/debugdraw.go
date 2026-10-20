@@ -170,6 +170,12 @@ type drawState struct {
 	fontScale float32
 	adv, lh   float32 // the font's character advance and line height, pixels
 
+	// cols and lines are how many characters wide and lines tall a panel can
+	// be and still lie inside the window (with its margins): at a large zoom
+	// the text is as big as the UI's, and a block that would not fit is cut
+	// instead of running off the window.
+	cols, lines int
+
 	n    uint64 // boxes made this frame, for their keys
 	rows int
 	hud  dbgLines
@@ -181,16 +187,17 @@ type drawState struct {
 func (s *drawState) init() {}
 
 func (s *drawState) ensureFont(a *App) {
-	if s.fontScale == a.scale && s.fontScale != 0 {
+	es := a.EffectiveScale() // pixels per ui point: the backing scale times the zoom, as the UI is built at
+	if s.fontScale == es && s.fontScale != 0 {
 		return
 	}
-	s.font = a.Text.Font(text.FontDesc{Mono: true, SizePt: 10, Weight: 400, Scale: a.scale})
+	s.font = a.Text.Font(text.FontDesc{Mono: true, SizePt: 10, Weight: 400, Scale: es})
 	m := a.Text.Metrics(s.font)
 	s.adv, s.lh = m.MonoAdvance, m.LineHeight
 	if m.LineHeight <= 0 {
 		s.lh = m.Ascent + m.Descent + m.LineGap
 	}
-	s.fontScale = a.scale
+	s.fontScale = es
 }
 
 // debugBuild builds the overlay's boxes. build calls it between Build and End.
@@ -200,6 +207,7 @@ func (a *App) debugBuild() {
 	c := a.UI
 	ds := &d.draw
 	ds.ensureFont(a)
+	ds.fit(a)
 	a.fillSnapshot()
 	s := &d.snap
 	if d.host != nil {
@@ -218,7 +226,8 @@ func (a *App) debugBuild() {
 	ds.n, ds.rows = 0, 0
 	c.BeginDebugOverlay()
 	ds.outlines(a, s)
-	m := 8 * a.scale
+	es := a.EffectiveScale()
+	m := 8 * es
 	w, h := float32(a.w), float32(a.h)
 	if ds.hud.n > 0 {
 		_, ph := ds.size(a, &ds.hud)
@@ -226,12 +235,12 @@ func (a *App) debugBuild() {
 	}
 	if s.Inside && s.NUnder > 0 && ds.card.n > 0 {
 		pw, ph := ds.size(a, &ds.card)
-		x, y := s.Pointer[0]+16*a.scale, s.Pointer[1]+16*a.scale
+		x, y := s.Pointer[0]+16*es, s.Pointer[1]+16*es
 		if x+pw > w-m {
-			x = s.Pointer[0] - 16*a.scale - pw
+			x = s.Pointer[0] - 16*es - pw
 		}
 		if y+ph > h-m {
-			y = s.Pointer[1] - 16*a.scale - ph
+			y = s.Pointer[1] - 16*es - ph
 		}
 		ds.panel(a, max(x, m), max(y, m), "card", &ds.card)
 	}
@@ -243,16 +252,25 @@ func (a *App) debugBuild() {
 	d.mark(PhaseOverlay)
 }
 
-// size is the size in pixels a block of lines takes in a panel.
+// fit sets how much text a panel can hold inside the window.
+func (s *drawState) fit(a *App) {
+	es := a.EffectiveScale()
+	edge := 2 * (8 + 6) * es // the margin and the padding, both sides
+	s.cols = max(int((float32(a.w)-edge)/max(s.adv, 1)), 1)
+	s.lines = max(int((float32(a.h)-edge)/max(s.lh, 1)), 1)
+}
+
+// size is the size in pixels a block of lines takes in a panel (what panel
+// draws: no more than fits the window).
 func (s *drawState) size(a *App, ls *dbgLines) (w, h float32) {
-	pad := 6 * a.scale
-	return float32(ls.maxLen())*s.adv + 2*pad, float32(ls.n)*s.lh + 2*pad
+	pad := 6 * a.EffectiveScale()
+	return float32(min(ls.maxLen(), s.cols))*s.adv + 2*pad, float32(min(ls.n, s.lines))*s.lh + 2*pad
 }
 
 // outlines draws the boxes under the pointer and the audit's findings.
 func (s *drawState) outlines(a *App, snap *InspectSnapshot) {
 	c := a.UI
-	bw := max(1, float32(int(a.scale+0.5)))
+	bw := max(1, float32(int(a.EffectiveScale()+0.5)))
 	for i := 0; i < snap.NUnder; i++ {
 		b := &snap.Under[i]
 		inner := i == snap.NUnder-1
@@ -303,12 +321,12 @@ func (s *drawState) panel(a *App, x, y float32, label string, ls *dbgLines) {
 	c.NextPos(x, y)
 	c.NextBG(colPanel)
 	c.NextBorder(colEdge, 1)
-	c.NextRadius(6 * a.scale)
-	c.NextPad(6 * a.scale)
+	c.NextRadius(6 * a.EffectiveScale())
+	c.NextPad(6 * a.EffectiveScale())
 	c.NextAxis(ui.AxisY)
 	c.Open(ui.FloatingX|ui.FloatingY|ui.DrawBackground|ui.DrawBorder, label)
-	for i := 0; i < ls.n; i++ {
-		s.row(c, ls.l[i].b[:ls.l[i].n], ls.l[i].col)
+	for i := 0; i < min(ls.n, s.lines); i++ {
+		s.row(c, ls.l[i].b[:min(ls.l[i].n, s.cols)], ls.l[i].col)
 	}
 	c.Close()
 }
