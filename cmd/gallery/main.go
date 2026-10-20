@@ -52,7 +52,7 @@ func main() {
 	scale := flag.Float64("scale", 2, "with -o: pixels per point")
 	scene := flag.String("scene", "main", "with -o: the state to render ("+strings.Join(gallery.SceneNames(), ", ")+"); "+
 		strings.Join(gallery.AppKitPages[:], " and ")+" show rexui's AppKitRef samples, in a window or with -o")
-	ref := flag.String("ref", "", "with -o and an appkit scene: pin the system colours to an AppKitRef metrics.json")
+	ref := flag.String("ref", "", "with -o and an appkit scene: pin the system colours to an AppKitRef metrics.json (\"auto\": this host's reference set, GNUI_APPKIT_REF overrides)")
 	mode := flag.String("mode", "system", "system (follow the system: the default), light or dark; with -o the default is light")
 	rows := flag.Int("rows", gallery.DefaultRows, "rows of the table")
 	bench := flag.Bool("bench", false, "scripted session; print allocation, CPU, pacing and latency as JSON")

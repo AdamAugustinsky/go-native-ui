@@ -31,25 +31,52 @@ func goTool() (string, error) {
 	return exec.LookPath("go")
 }
 
+// releaseTag is the build tag of release binaries: it takes the debug overlay's
+// Debug menu, chords and inspector panel out of the app (package app,
+// debug_release.go). gnui package always sets it; gnui run, a development
+// bundle, and a plain go build do not.
+const releaseTag = "gnui_release"
+
+// buildArgs are the arguments of go build for one executable: a release build
+// (not Dev) is trimmed, stripped and tagged gnui_release, besides the tags the
+// caller asked for.
+func buildArgs(c *Config, out string, o buildOptions) []string {
+	args := []string{"build"}
+	ld := o.Ldflags
+	tags := o.Tags
+	if !o.Dev {
+		args = append(args, "-trimpath")
+		ld = strings.TrimSpace("-s -w " + ld)
+		if !hasTag(tags, releaseTag) {
+			tags = strings.Trim(tags+","+releaseTag, ",")
+		}
+	}
+	if ld != "" {
+		args = append(args, "-ldflags="+ld)
+	}
+	if tags != "" {
+		args = append(args, "-tags", tags)
+	}
+	return append(args, "-o", out, c.Main)
+}
+
+// hasTag reports whether the -tags list (comma or space separated) has tag.
+func hasTag(list, tag string) bool {
+	for _, t := range strings.FieldsFunc(list, func(r rune) bool { return r == ',' || r == ' ' }) {
+		if t == tag {
+			return true
+		}
+	}
+	return false
+}
+
 // buildExecutable builds the main package for darwin/<arch> with cgo off.
 func buildExecutable(c *Config, arch, out string, o buildOptions) error {
 	goBin, err := goTool()
 	if err != nil {
 		return fmt.Errorf("go not found: put the Go toolchain on PATH or set GNUI_GO (%w)", err)
 	}
-	args := []string{"build"}
-	ld := o.Ldflags
-	if !o.Dev {
-		args = append(args, "-trimpath")
-		ld = strings.TrimSpace("-s -w " + ld)
-	}
-	if ld != "" {
-		args = append(args, "-ldflags="+ld)
-	}
-	if o.Tags != "" {
-		args = append(args, "-tags", o.Tags)
-	}
-	args = append(args, "-o", out, c.Main)
+	args := buildArgs(c, out, o)
 	cmd := exec.Command(goBin, args...)
 	cmd.Dir = c.dir
 	cmd.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS=darwin", "GOARCH="+arch)

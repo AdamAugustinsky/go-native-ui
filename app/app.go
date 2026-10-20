@@ -149,6 +149,8 @@ type App struct {
 
 	sh shellSync // material and host regions handed to the window (shell.go)
 
+	paste pasteSlot // the answer to RequestPaste for an image or files (paste.go)
+
 	wakeAt      int64 // platform.Now at which the UI wants a frame although nothing animates (ui.Context.WakeAfter); 0 = none
 	chromeDark  bool  // the mode last given to Win.SetDarkChrome
 	chromeSet   bool  // SetDarkChrome was called
@@ -193,6 +195,10 @@ type App struct {
 	lastDumpT   int64
 	verbose     bool
 	diagBuf     []byte
+
+	barOn bool        // the native menu bar is installed (menus.go)
+	dbg   *debugState // the debug overlay (debug.go); nil off
+	step  stepState   // Offscreen.Step (debugstep.go)
 }
 
 // frameRequester is the part of platform.Window that arms the next frame.
@@ -371,6 +377,7 @@ func (a *App) initUI() error {
 	uiDefaults(a.UI)
 	a.UI.ClipboardSet = platform.SetClipboardText
 	a.UI.AtlasSync(a.R)
+	a.debugInit()
 	if a.Win != nil { // a window shows tooltips for the regions it is given; offscreen renders draw them
 		a.UI.SetNativeTooltips(platform.NativeTooltips)
 		a.Win.SetTooltipText(a.UI.TooltipText)
@@ -419,7 +426,7 @@ func (a *App) loop() error {
 		evs := a.Win.Wait(a.timeout(now))
 		a.tr.wheelStep = a.UI.WheelStep
 		for i := range evs {
-			a.onEvent(&evs[i])
+			a.dispatch(&evs[i])
 		}
 		if a.done {
 			break
@@ -428,12 +435,18 @@ func (a *App) loop() error {
 			a.present(false, 1)
 		}
 		a.popUpMenus()
+		if a.dbg != nil {
+			a.debugSweep(CauseMenu)
+		}
 		if a.demo != nil {
 			a.demo.run(a)
 		}
 		a.flushDialogs() // dialogs asked for outside a frame (an event handler, a hook)
 		if a.hook != nil {
 			a.hook()
+		}
+		if a.dbg != nil {
+			a.debugSweep(CauseUnknown)
 		}
 	}
 	return nil
@@ -446,6 +459,9 @@ func (a *App) turn(now int64) (draw bool) {
 	if a.wakeAt != 0 && now >= a.wakeAt && !a.p.hidden {
 		a.wakeAt = 0
 		a.p.invalidate() // a text field's caret blink is due
+		if a.dbg != nil {
+			a.debugTimer()
+		}
 	}
 	if a.verbose {
 		a.dumpIfStalled(now)
@@ -524,6 +540,10 @@ func (a *App) onEvent(e *platform.Event) {
 		}
 		a.onDrag(e, txt)
 	default:
+		if e.Kind == platform.EvPaste && a.paste.isMedia(e) { // the answer to RequestPaste (paste.go)
+			a.onMediaPaste(e, a.Win.Text(e.Text))
+			return
+		}
 		var txt []byte
 		if e.Kind == platform.EvText || e.Kind == platform.EvPreedit || e.Kind == platform.EvPaste {
 			txt = a.Win.Text(e.Text)
@@ -554,7 +574,7 @@ func (a *App) frameHandler() {
 	a.tr.wheelStep = a.UI.WheelStep
 	evs := a.Win.Pending()
 	for i := range evs {
-		a.onEvent(&evs[i])
+		a.dispatch(&evs[i])
 	}
 	if a.p.needDraw && !a.done {
 		a.present(true, 1)

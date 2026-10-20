@@ -13,7 +13,11 @@ func (c *Context) Uploader() Uploader { return c.up }
 // frame). A widget that waits for a time to pass, such as a tooltip's hover
 // delay or the fade of a scroll bar, uses it instead of an animation, so that
 // an idle window costs nothing. A request below 1 ns is rounded up.
-func (c *Context) WakeIn(ns int64) { c.wakeAfter(ns) }
+func (c *Context) WakeIn(ns int64) {
+	if c.wakeAfter(ns) && c.dbg != nil {
+		c.debugWake(DebugWakeIn, 0)
+	}
+}
 
 // DT is the time in seconds the frame being built follows the previous one by,
 // as given to Begin. A widget that repeats an action while a button is held

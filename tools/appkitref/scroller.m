@@ -5,19 +5,28 @@
 // has the widths only, and offscreen renders do not capture the knob, whose
 // inset widget/base and rexui copy.
 //
-//	sh tools/appkitref/scroller.sh
+//	sh tools/appkitref/scroller.sh [-machine]
 //
-// It makes no window visible and needs no GUI session.
+// It makes no window visible and needs no GUI session. The "machine" key
+// says where it ran (machine.h); the rest are the style-size keys.
 #import <AppKit/AppKit.h>
+#import "machine.h"
 
 static NSDictionary *rectJ(NSRect r) {
 	return @{@"x" : @(r.origin.x), @"y" : @(r.origin.y), @"w" : @(r.size.width), @"h" : @(r.size.height)};
 }
 
-int main(void) {
+int main(int argc, char **argv) {
 	@autoreleasepool {
 		[NSApplication sharedApplication];
+		if (argc > 1 && !strcmp(argv[1], "-machine")) { // only where it ran
+			NSData *m = [NSJSONSerialization dataWithJSONObject:@{@"machine" : machineInfo()} options:NSJSONWritingPrettyPrinted | NSJSONWritingSortedKeys error:nil];
+			fwrite(m.bytes, 1, m.length, stdout);
+			fputc('\n', stdout);
+			return 0;
+		}
 		NSMutableDictionary *out = [NSMutableDictionary dictionary];
+		out[@"machine"] = machineInfo();
 		NSArray *sizes = @[ @[ @"regular", @(NSControlSizeRegular) ], @[ @"small", @(NSControlSizeSmall) ], @[ @"mini", @(NSControlSizeMini) ] ];
 		NSArray *styles = @[ @[ @"legacy", @(NSScrollerStyleLegacy) ], @[ @"overlay", @(NSScrollerStyleOverlay) ] ];
 		for (NSArray *cs in sizes) {

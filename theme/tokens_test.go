@@ -7,6 +7,7 @@ import (
 	"os"
 	"testing"
 
+	"gonativeui/internal/appkitref"
 	"gonativeui/platform"
 )
 
@@ -628,7 +629,14 @@ func TestToolbarMaterialSolid(t *testing.T) {
 // scroller per control size and style). Overlay scrollers are not ours to
 // size (base keeps its own thin bar), so only their widths are checked.
 func TestLegacyScrollersMatchAppKit(t *testing.T) {
-	raw, err := os.ReadFile("testdata/appkit-scroller-27.2.json")
+	set, ok, err := appkitref.FromEnv() // CI reads the MacBook's set
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		set = appkitref.Default
+	}
+	raw, err := os.ReadFile(appkitref.File(set, "testdata/appkit-scroller-27.2.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
