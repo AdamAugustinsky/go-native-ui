@@ -344,7 +344,7 @@ func EndList(k *base.Kit, l *List) {
 // ScrollEdgeRecipe is the scroll edge (NSScrollPocket) over a scroll view
 // that runs under a toolbar (base.Kit.NextScrollInset): over its top inset,
 // while content is scrolled under it or the window is inactive
-// (theme.ScrollEdgeVisible), a bar of the window's colour that leaves a
+// (theme.ScrollEdgeVisible), and always above a table's header, a bar of the window's colour that leaves a
 // fifth of the content showing, and a hairline below it.
 type ScrollEdgeRecipe struct {
 	// Bar and BarInactive are the bar (the content under it shows through
@@ -374,8 +374,10 @@ func scrollEdge(k *base.Kit, v *base.ScrollView, line bool) {
 		return
 	}
 	c, r := k.Context(), k.Theme()
+	// a table's header in the pocket keeps the bar at rest, as Finder's
+	// does (#262626 over its #1E1E1E rows in dark)
 	_, sy := c.Scroll(v.Inner)
-	if !theme.ScrollEdgeVisible(sy > 0.5, !k.Inactive()) {
+	if line && !theme.ScrollEdgeVisible(sy > 0.5, !k.Inactive()) {
 		return
 	}
 	rc := &ScrollEdgeLook

@@ -363,19 +363,15 @@ func (t *TableHead) headerInput() {
 // EndHeaderRow after the cells.
 func (t *TableHead) BeginHeaderRow(flags ui.Flags) ui.ID {
 	c := t.tk.c
+	w := ui.Pct(1)
 	if t.top > 0 { // over the rows, below the inset (TableOpts.TopInset)
-		if t.corner > 0 {
-			c.NextPos(0, t.top)
-			c.NextSize(ui.Pct(1), ui.Px(t.hh))
-			c.NextAxis(ui.AxisX)
-			c.Push(c.BoxKeyed(Floating, ui.KeyN(t.tkey, 3), nil))
-			t.strip = true
-		} else {
-			c.NextPos(0, t.top)
-			flags |= Floating
+		c.NextPos(0, t.top)
+		flags |= Floating
+		if t.corner > 0 { // the rows' width: the corner floats after it
+			w = ui.Px(t.avail + 2*t.inset)
 		}
 	}
-	c.NextSize(ui.Pct(1), ui.Px(t.hh))
+	c.NextSize(w, ui.Px(t.hh))
 	c.NextAxis(ui.AxisX)
 	c.NextPadding(t.inset, 0, t.inset, 0)
 	t.hx = 0
@@ -390,10 +386,15 @@ func (t *TableHead) BeginHeaderRow(flags ui.Flags) ui.ID {
 func (t *TableHead) EndHeaderRow() {
 	c := t.tk.c
 	c.Pop()
-	if t.strip {
+	switch {
+	case t.strip:
 		c.NextSize(ui.Px(t.corner), ui.Px(t.hh))
 		c.BoxKeyed(ui.DrawBackground, ui.KeyN(t.tkey, 4), nil)
 		t.closeStrip()
+	case t.top > 0 && t.corner > 0:
+		c.NextPos(t.avail+2*t.inset, t.top)
+		c.NextSize(ui.Px(t.corner), ui.Px(t.hh))
+		c.BoxKeyed(ui.DrawBackground|Floating, ui.KeyN(t.tkey, 4), nil)
 	}
 }
 

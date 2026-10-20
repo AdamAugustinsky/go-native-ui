@@ -57,7 +57,9 @@ type ToolbarOpts struct {
 	// (base.Kit.NextScrollInset, rexui.TableOpts.TopInset) and draws the
 	// scroll edge itself (ScrollEdgeLook, from ScrollBars): the band over
 	// the content pane is clear, whatever ContentUnder, Pocket and BandFill
-	// say, and the content shows through it.
+	// say, and the content shows through it. With the system's materials
+	// (base.Kit.Materials) the capsules are drawn then, not the system's
+	// glass, which lies below the window's pixels, under the content.
 	ContentEdge bool
 	// Pocket is how far below the toolbar, in pixels, the scroll edge
 	// reaches: a table's header pinned under the toolbar is in it (§4: the
@@ -144,6 +146,13 @@ type ToolbarRecipe struct {
 	// item's capsule (Notes' New Note ends 3.5 before the flexible space;
 	// the toolbar probe, 3.5 to 4.5), not a unified one's.
 	FlexAfter [2]float32
+	// EdgeFill and EdgeFillInactive fill the capsules a ContentEdge toolbar
+	// draws (not the system's glass), the native glass's colour over the
+	// band at rest, measured on the Mac mini's 27.2 (Finder, Notes and
+	// Settings): #FAFAFA–#FDFDFD / #3E3E3E–#454545 in a key window,
+	// #F0F0F0 / #3A3A3A in an inactive one. The glass lightens over content
+	// scrolled under it (#4A4D4F over Finder's dark selection); these do not.
+	EdgeFill, EdgeFillInactive Pair
 	// InspectorEdge is how far after the inspector pane's edge the toolbar
 	// takes it to be: AppKit's tracking separator lies half a point past
 	// the split view's divider, so the content pane's last item ends 7.5
@@ -183,7 +192,8 @@ var ToolbarLook = ToolbarRecipe{
 	Selected: Of(theme.Fill2),
 	SegmentW: 39, GroupPad: [2]float32{4.215, 6.215}, EdgePad: [2]float32{4, 1}, MenuGap: 8.5,
 	SearchGap: [2]float32{10, 8}, SearchW: 167,
-	SidebarGap: [2]float32{14.5, 0}, SharedGap: 2, FlexAfter: [2]float32{3.5, 0}, TitleTextX: 2, InspectorEdge: 0.5,
+	SidebarGap: [2]float32{14.5, 0}, SharedGap: 2, FlexAfter: [2]float32{3.5, 0},
+	EdgeFill: Solid(0xFAFAFA, 0x414141), EdgeFillInactive: Solid(0xF0F0F0, 0x3A3A3A), TitleTextX: 2, InspectorEdge: 0.5,
 	RexGlyph: Solid(0x5F5D62, 0xA3A7B8), RexGlyphHover: Solid(0x1E2227, 0xECEDF3), RexFill: PairA(0x2A2030, 0xFFFFFF, 0.08, 0.08),
 	RexHit: 28, RexRadius: 12,
 	Traffic:         [3]Pair{Solid(0xF87B72, 0xF35C52), Solid(0xFDC734, 0xFDBF00), Solid(0x7FD457, 0x2CC000)},
@@ -279,7 +289,9 @@ func BeginToolbar(k *base.Kit, label string, o ToolbarOpts) Toolbar {
 		o.Style = theme.ToolbarPlain
 	}
 	tb := Toolbar{k: k, o: o, rc: &ToolbarLook, spec: r.Window.Toolbars[o.Style], open: true}
-	tb.native = o.Style != theme.ToolbarRex && GlassNative(k, GlassToolbarCapsule)
+	// a pane's content under the band is the layer's own pixels, over the
+	// system's glass: the capsules are drawn then, over it
+	tb.native = o.Style != theme.ToolbarRex && !o.ContentEdge && GlassNative(k, GlassToolbarCapsule)
 	_, ident := ui.SplitLabel(label)
 	tb.key = ui.HashString(c.ParentKey(), ident)
 	tb.ovKey, tb.pick = ui.KeyN(tb.key, 6000), -1
@@ -577,6 +589,12 @@ func (tb *Toolbar) glyph(v base.Visual) uint32 {
 func (tb *Toolbar) capsuleLook(v base.Visual, h float32) ui.Flags {
 	c, r := tb.k.Context(), tb.k.Theme()
 	fill := GlassFill(tb.k, GlassToolbarCapsule)
+	switch {
+	case tb.o.ContentEdge && v.Inactive:
+		fill = tb.rc.EdgeFillInactive.At(r.T)
+	case tb.o.ContentEdge:
+		fill = tb.rc.EdgeFill.At(r.T)
+	}
 	fill = over(fill, tb.rc.Hover.RGBA(r), v.Hot)
 	fill = over(fill, tb.rc.Press.RGBA(r), v.Down)
 	c.NextRadius(h / 2)
@@ -597,7 +615,11 @@ func (tb *Toolbar) capsuleLook(v base.Visual, h float32) ui.Flags {
 }
 
 // glass marks the capsule id as the toolbar's glass (GlassRegion).
-func (tb *Toolbar) glass(id ui.ID) { GlassRegion(tb.k, id, GlassToolbarCapsule, 0) }
+func (tb *Toolbar) glass(id ui.ID) {
+	if tb.native {
+		GlassRegion(tb.k, id, GlassToolbarCapsule, 0)
+	}
+}
 
 // highlight draws a capsule's bright bottom rim (dark mode), in the root id.
 func (tb *Toolbar) highlight(id ui.ID, v base.Visual, h float32) {

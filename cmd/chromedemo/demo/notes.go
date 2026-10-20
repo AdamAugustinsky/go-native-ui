@@ -83,7 +83,7 @@ func (d *Demo) notesEditor(w, h float32) {
 	v := k.BeginScroll("Note", &d.content, base.ScrollVertical)
 	if d.scrolled > 0 {
 		// the scene asks for 160 and gets its end, 114 (the text view at
-		// y -74, 40 at rest)
+		// y -74, 40 at rest; with overlay scrollers, wider, 98)
 		c.SetScroll(v.Inner, 0, float64(theme.Snap(114*s)))
 		d.scrolled--
 	}
@@ -91,7 +91,9 @@ func (d *Demo) notesEditor(w, h float32) {
 	d.under = sy > 0.5
 	px, py := theme.Snap(noteInsetX*s), theme.Snap(noteInsetY*s)
 	c.NextSize(ui.Pct(1), ui.Children(1))
-	c.NextPadding(px, py, px, py)
+	// the text ends in a newline: NSTextView lays out the empty line after
+	// it (its extra line fragment), a body line more below the text
+	c.NextPadding(px, py, px, py+r.Styles[theme.StyleBody].Line)
 	c.Push(c.Box(0, "note page"))
 	c.NextSize(ui.Pct(1), ui.TextSize(0))
 	c.NextTextColor(r.Colors[theme.Text])

@@ -181,7 +181,7 @@ func tableHeader(k *base.Kit, t *base.TableHead, g ListGlyphs, clear bool) {
 		t.EndHeaderCell(&hc)
 		k.FocusRing(id, hc.Visual, 0)
 	}
-	if t.Corner() > 0 { // EndHeaderRow builds the corner above a legacy bar
+	if t.Corner() > 0 && !clear { // EndHeaderRow builds the corner above a legacy bar
 		c.NextBG(theme.Over(rc.Corner.RGBA(r), ListLook.Background.RGBA(r)))
 	}
 	t.EndHeaderRow()
