@@ -204,6 +204,17 @@ Transparency and off macOS the measured fallbacks are drawn. The rows of a
 sidebar and the content scroll below the band, clipped there, where AppKit
 fades them under it.
 
+With legacy scrollers (the system's style, followed live; a mouse on the
+Mac mini) every scroll view's content leaves the bar's 17 pt beside it and
+the bar is the legacy one: the sidebar's an opaque knob, 11 pt wide and 3 in,
+in its slot (#A5A5A5 in #D8D8D8, #5A5A5A in #343434; #ABABAB in #DEDEDE,
+#585858 in #323232 inactive); the settings form's boxes end 20 before it.
+In the frame the style changes the bar is at the view's edge already
+(`base.ScrollBars`). `chromedemo -legacy` renders them offscreen, which is
+overlay otherwise; against `captures-macmini` the bars, knobs and the boxes'
+ends are within 0.5 pt, the content knob #747474 / #A5A5A5 against
+#7A7A7A / #9F9F9F (`ListLook.LegacyKnob`, D3b's).
+
 Without the pointer (review fixes, 2026-10-20): a sidebar group's Show or
 Hide is a tab stop (Space toggles it; a click leaves the focus with the
 list), and an assistive technology's press works on it and on a row's

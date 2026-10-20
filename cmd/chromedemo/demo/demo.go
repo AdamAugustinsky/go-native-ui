@@ -95,6 +95,9 @@ type Options struct {
 	// PathBar shows a path bar under the finder's file list (AppKit's scene
 	// has none).
 	PathBar bool
+	// Legacy pins the system's scroller style to legacy (a window follows
+	// the system's; offscreen it is overlay otherwise).
+	Legacy bool
 }
 
 // Demo is the demo window. It implements app.Builder and app.Initer.
@@ -189,6 +192,9 @@ func (d *Demo) Attach(c *ui.Context, ts base.TextSystem) {
 	d.k = d.wk.Kit
 	d.k.SetPreference(d.opt.Preference)
 	d.k.ReduceMotion = d.opt.Still
+	if d.opt.Legacy {
+		d.k.PinSystem(&theme.SystemValues{Known: true, Settings: theme.Settings{Scroller: theme.ScrollerLegacy}})
+	}
 	d.addIcons()
 	d.views = [4]icon.ID{d.ic.grid, d.ic.list, d.ic.columns, d.ic.gallery}
 	d.view = 1 // as List, as the finder scene

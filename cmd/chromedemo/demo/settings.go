@@ -152,7 +152,6 @@ func (d *Demo) settingsForm(w, h float32) {
 	c.NextPadding(p(formPad), p(formPad), p(formPad), p(formPadBottom))
 	c.NextAxis(ui.AxisY)
 	c.Push(c.BoxKeyed(0, key, nil))
-	boxW := w - 2*p(formPad)
 	body := &r.Styles[theme.StyleBody]
 	box := ui.ID(0)
 	prevHeader := false
@@ -166,7 +165,7 @@ func (d *Demo) settingsForm(w, h float32) {
 			}
 			c.NextSize(ui.Pct(1), ui.Px(p(formHeadGap)))
 			c.BoxKeyed(0, ui.KeyN(rk, 1), nil)
-			c.NextSize(ui.Px(boxW-p(formRowX)), ui.Px(p(formHeadH)))
+			c.NextSize(ui.Pct(1), ui.Px(p(formHeadH)))
 			c.NextPadding(p(formRowX), 0, 0, 0)
 			c.NextFont(finderFonts[1])
 			c.NextTextColor(r.Colors[theme.Label])
@@ -184,7 +183,7 @@ func (d *Demo) settingsForm(w, h float32) {
 				c.NextSize(ui.Pct(1), ui.Px(p(formHeadAfter)))
 				c.BoxKeyed(0, ui.KeyN(rk, 1), nil)
 			}
-			c.NextSize(ui.Px(boxW), ui.Children(1))
+			c.NextSize(ui.Pct(1), ui.Children(1)) // beside a legacy scroll bar too
 			c.NextAxis(ui.AxisY)
 			c.NextBG(r.Colors[theme.GroupBox])
 			c.NextRadius(p(12))

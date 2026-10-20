@@ -9,11 +9,13 @@ import (
 )
 
 // The layout audit finds nothing in any scene, light and dark, at the top and
-// scrolled under the toolbar, with the settings' pop-up menu open.
+// scrolled under the toolbar, with overlay and legacy scroll bars, with the
+// settings' pop-up menu open.
 func TestAuditLayout(t *testing.T) {
 	for s := Scene(0); s < NumScenes; s++ {
 		for _, pref := range []theme.Preference{theme.ForceLight, theme.ForceDark} {
-			for _, scrolled := range []bool{false, true} {
+			for i := range 3 {
+				scrolled, legacy := i == 1, i == 2
 				name := SceneNames[s]
 				if pref == theme.ForceDark {
 					name += " dark"
@@ -21,7 +23,10 @@ func TestAuditLayout(t *testing.T) {
 				if scrolled {
 					name += " scrolled"
 				}
-				r, d := newRigOpts(t, Options{Scene: s, Preference: pref, Traffic: true, Still: true, Scrolled: scrolled})
+				if legacy {
+					name += " legacy scrollers"
+				}
+				r, d := newRigOpts(t, Options{Scene: s, Preference: pref, Traffic: true, Still: true, Scrolled: scrolled, Legacy: legacy})
 				r.Frames(8)
 				r.AuditLayout(name, auditAllow...)
 				if s == Settings {

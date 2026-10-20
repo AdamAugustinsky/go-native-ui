@@ -124,6 +124,12 @@ type SidebarRecipe struct {
 	// Thumb is the scroll bar's thumb, ThumbW its width.
 	Thumb  Tint
 	ThumbW float32
+	// LegacyKnob and LegacySlot colour a legacy scroll bar (the system's
+	// scroller style; the rows leave room for it): an opaque knob in a
+	// slot as wide, 3 pt clear of the bar's sides and ends (measured on the
+	// Mac mini: #A5A5A5 in #D8D8D8, #5A5A5A in #343434), and the same in an
+	// inactive window (#ABABAB in #DEDEDE, #585858 in #323232).
+	LegacyKnob, LegacyKnobInactive, LegacySlot, LegacySlotInactive Pair
 	// SearchFill and SearchFillInactive fill a search field on the
 	// sidebar's glass (SidebarSearch): a capsule of the field's height,
 	// measured #EAEAEA and #4E4E4E, #E5E5E5 and #464646 inactive (§2).
@@ -157,6 +163,8 @@ var SidebarLook = SidebarRecipe{
 	SymbolGap:     4, DotW: 12, PlainTextX: 20, FieldInset: 2,
 	Detail: PairA(0x000000, 0xFFFFFF, 0.43, 0.36), DetailOnSel: 0.7, DetailTop: 8, HeaderChevronRight: 17.5, Chevron: Of(theme.Label3),
 	Thumb: OfAlpha(theme.Label, 0.25, 0.3), ThumbW: 6,
+	LegacyKnob: Solid(0xA5A5A5, 0x5A5A5A), LegacyKnobInactive: Solid(0xABABAB, 0x585858),
+	LegacySlot: Solid(0xD8D8D8, 0x343434), LegacySlotInactive: Solid(0xDEDEDE, 0x323232),
 	SearchFill: Solid(0xEAEAEA, 0x4E4E4E), SearchFillInactive: Solid(0xE5E5E5, 0x464646),
 	SearchRim: Solid(0xFFFFFF, 0x727272), SearchGlow: Solid(0xF4F4F4, 0x565656), SearchEdge: Solid(0xD8D8D8, 0x8C8C8C), SearchEdgeInactive: Solid(0xCDCDCD, 0x181818),
 	TextEnd:  22,
@@ -651,7 +659,9 @@ func sidebarKeys(c *ui.Context, st *SidebarState, items []SidebarItem) (changed 
 	return false, toggled
 }
 
-// sidebarThumb builds the overlay scroll bar of the sidebar's view.
+// sidebarThumb builds the scroll bar of the sidebar's view: an overlay
+// thumb, or with the system's legacy scrollers a knob in its slot, in the
+// room the rows left for it.
 func sidebarThumb(k *base.Kit, v *base.ScrollView, rc *SidebarRecipe) {
 	c, r := k.Context(), k.Theme()
 	bars := k.ScrollBars(v)
@@ -660,6 +670,24 @@ func sidebarThumb(k *base.Kit, v *base.ScrollView, rc *SidebarRecipe) {
 		return
 	}
 	k.BeginScrollBar(b)
+	if b.Legacy {
+		knob, slot := rc.LegacyKnob, rc.LegacySlot
+		if k.Inactive() {
+			knob, slot = rc.LegacyKnobInactive, rc.LegacySlotInactive
+		}
+		in := theme.Snap(r.Lines.ScrollerKnobInset)
+		tw := b.W - 2*in
+		theme.At(c, in, b.SlotOff, tw, b.SlotLen)
+		c.NextBG(slot.At(r.T))
+		c.NextRadius(tw / 2)
+		c.BoxKeyed(ui.DrawBackground|base.Floating, ui.KeyN(b.Key, 2), nil)
+		theme.At(c, in, b.ThumbOff, tw, b.ThumbLen)
+		c.NextBG(knob.At(r.T))
+		c.NextRadius(tw / 2)
+		c.BoxKeyed(ui.DrawBackground|base.Floating, ui.KeyN(b.Key, 1), nil)
+		c.Pop()
+		return
+	}
 	tw := theme.Snap(k.Pt(rc.ThumbW) * (1 + b.Hot) / 2)
 	theme.At(c, b.W-tw-theme.Snap(k.Pt(2)), b.ThumbOff, tw, b.ThumbLen)
 	c.NextBG(theme.WithAlpha(rc.Thumb.RGBA(r), b.Show))

@@ -51,6 +51,7 @@ func main() {
 	mode := flag.String("mode", "system", "system (the default), light or dark; with -o and -measure the default is light")
 	inactive := flag.Bool("inactive", false, "with -o or -measure: the window is not key")
 	scrolled := flag.Bool("scrolled", false, "the content starts scrolled under the toolbar")
+	legacy := flag.Bool("legacy", false, "with -o or -measure: legacy scroll bars (a window follows the system's style)")
 	plain := flag.Bool("plain", false, "show a plain striped window (the backdrop of glass captures) and nothing else")
 	drawn := flag.Bool("drawn", false, "in a window: draw the glass's fallbacks instead of the system's materials")
 	measure := flag.Bool("measure", false, "print the chrome's frames in points as JSON and exit")
@@ -71,7 +72,7 @@ func main() {
 	flag.Visit(func(f *flag.Flag) { explicit = explicit || f.Name == "mode" })
 	if err == nil {
 		s := demo.Scene(sc)
-		o := demo.ShotOptions{Scene: s, Preference: pref, Inactive: *inactive, Scrolled: *scrolled}
+		o := demo.ShotOptions{Scene: s, Preference: pref, Inactive: *inactive, Scrolled: *scrolled, Legacy: *legacy}
 		if !explicit {
 			o.Preference = theme.ForceLight
 		}

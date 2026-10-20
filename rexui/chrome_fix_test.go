@@ -291,3 +291,45 @@ func TestToolbarOverflowMenu(t *testing.T) {
 		t.Errorf("with room: overflow %v", ov.Names[:ov.N])
 	}
 }
+
+// With the system's legacy scrollers the sidebar's rows leave room for the
+// bar (17 pt) at its edge, and the bar is a legacy one: an opaque knob 11 pt
+// wide, 3 pt in, in its slot; with overlay scrollers the rows take the
+// whole width again.
+func TestSidebarLegacyScroller(t *testing.T) {
+	sys := theme.SystemValues{Known: true, Settings: theme.Settings{Scroller: theme.ScrollerLegacy}}
+	g := openRig(t, theme.Light, &sys, func(*rig) {})
+	g.w, g.h = 1000, 400
+	ic := addChromeIcons(g)
+	m := &sidebarModel{}
+	m.items = []rexui.SidebarItem{{ID: 1, Title: "Places", Header: true}}
+	for i := uint32(2); i < 30; i++ {
+		m.items = append(m.items, rexui.SidebarItem{ID: i, Title: "Row", Glyph: rexui.Sym(ic.folder)})
+	}
+	g.build = m.build
+	g.settle()
+	row := g.nodeAt(ui.RoleListItem, 0)
+	if right := row.Bounds[2] / g.scale; right > 180-17+0.5 {
+		t.Errorf("a row ends at %v, under the legacy bar at %v", right, 180-17)
+	}
+	knob := rexui.SidebarLook.LegacyKnob.At(0)
+	found := false
+	for _, q := range g.list.Quads {
+		if q.Color[0] == knob {
+			w := (q.Rect[2] - q.Rect[0]) / g.scale
+			x := q.Rect[0] / g.scale
+			if w < 10.5 || w > 11.5 || x < 180-14-0.5 || x > 180-14+0.5 {
+				t.Errorf("the legacy knob is at %v, %v wide; want 166, 11", x, w)
+			}
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("no legacy knob drawn")
+	}
+	g.k.PinSystem(&theme.SystemValues{Known: true})
+	g.settle()
+	if right := g.nodeAt(ui.RoleListItem, 0).Bounds[2] / g.scale; right <= 180-17+0.5 {
+		t.Errorf("with overlay scrollers a row still ends at %v", right)
+	}
+}
