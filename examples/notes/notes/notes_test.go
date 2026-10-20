@@ -399,6 +399,7 @@ func TestReduceMotionAndTransparency(t *testing.T) {
 	r.d.k.Materials = true
 	r.Frames(4)
 	clear := pixel(r, 4, 330)
+	native := r.d.k.Theme().Material(theme.MatSidebar).Native // a platform without the material draws the same grey either way
 
 	// the same with both settings on: the sidebar is its fallback colour, and
 	// the switch has finished moving the frame after the click
@@ -407,7 +408,7 @@ func TestReduceMotionAndTransparency(t *testing.T) {
 	r.d.k.PinSystem(&theme.SystemValues{Known: true, Settings: theme.Settings{ReduceMotion: true, ReduceTransparency: true}})
 	r.Frames(4)
 	opaque := pixel(r, 4, 330)
-	if opaque == clear || opaque[0] > 0xF4 || opaque[0] < 0xE0 {
+	if native && (opaque == clear || opaque[0] > 0xF4 || opaque[0] < 0xE0) {
 		t.Errorf("the sidebar is %x with transparency reduced and %x without: want the opaque fallback grey", opaque, clear)
 	}
 	r.Play(click(ui.RoleSwitch, "Newest first"))
