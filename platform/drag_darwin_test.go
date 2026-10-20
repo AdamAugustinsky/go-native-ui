@@ -3,17 +3,23 @@
 package platform
 
 import (
+	"bufio"
 	"bytes"
+	"compress/zlib"
 	"context"
+	"encoding/binary"
 	"errors"
+	"hash/crc32"
 	"image"
 	"image/color"
 	"image/jpeg"
 	"image/png"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -292,8 +298,8 @@ func TestDropFiles(t *testing.T) {
 	if !objc.SendBool1(r.view, selPrepareDrag, uintptr(fakeInfoObj)) || !r.drop() {
 		t.Fatal("the drop was refused")
 	}
-	ev := r.events()
-	if len(ev) != 1 || ev[0].Kind != EvDrop || DragKinds(ev[0].Code) != DragFiles || ev[0].SelStart != 2 || ev[0].Flags != 0 || ev[0].X != 20 || ev[0].Y != 40 || ev[0].Tag != 41 {
+	ev := []Event{r.next()}
+	if ev[0].Kind != EvDrop || DragKinds(ev[0].Code) != DragFiles || ev[0].SelStart != 2 || ev[0].Flags != 0 || ev[0].X != 20 || ev[0].Y != 40 || ev[0].Tag != 0 {
 		t.Fatalf("events %+v", ev)
 	}
 	if got := r.text(ev[0]); got != a+"\x00"+b+"\x00" {
@@ -309,8 +315,8 @@ func TestDropFiles(t *testing.T) {
 	if !r.drop() {
 		t.Fatal("the text drop was refused")
 	}
-	ev = r.events()
-	if len(ev) != 1 || DragKinds(ev[0].Code) != DragText || r.text(ev[0]) != "a b.txt" {
+	ev = []Event{r.next()}
+	if DragKinds(ev[0].Code) != DragText || r.text(ev[0]) != "a b.txt" {
 		t.Errorf("text of a file drag: %+v", ev)
 	}
 
@@ -336,8 +342,8 @@ func TestDropText(t *testing.T) {
 	if !r.drop() {
 		t.Fatal("refused")
 	}
-	ev := r.events()
-	if len(ev) != 1 || ev[0].Kind != EvDrop || DragKinds(ev[0].Code) != DragText || ev[0].Flags != 0 || r.text(ev[0]) != txt {
+	ev := []Event{r.next()}
+	if ev[0].Kind != EvDrop || DragKinds(ev[0].Code) != DragText || ev[0].Flags != 0 || r.text(ev[0]) != txt {
 		t.Fatalf("events %+v %q", ev, r.text(ev[0]))
 	}
 	// Bounded like a paste: one byte over fails, with nothing kept.
@@ -346,13 +352,13 @@ func TestDropText(t *testing.T) {
 	if !r.drop() {
 		t.Fatal("refused")
 	}
-	ev = r.events()
-	if len(ev) != 1 || ev[0].Flags&FlagFailed == 0 || ev[0].Text.Len != 0 || len(r.w.q.text) != 0 {
+	ev = []Event{r.next()}
+	if ev[0].Flags&FlagFailed == 0 || ev[0].Text.Len != 0 || len(r.w.q.text) != 0 {
 		t.Errorf("oversized text: %+v (%d bytes kept)", ev, len(r.w.q.text))
 	}
 }
 
-func TestDropImageConvertsOnAWorker(t *testing.T) {
+func TestDropImageIsReadAndConvertedOnAWorker(t *testing.T) {
 	r := newDragRig(t)
 	r.answer(DragAnswer{Op: DragOpCopy, Accept: DragImage})
 	r.w.SetDropKinds(DragImage)
@@ -368,7 +374,7 @@ func TestDropImageConvertsOnAWorker(t *testing.T) {
 		t.Fatalf("the event came before the worker: %+v", r.w.q.ev)
 	}
 	e := r.next()
-	if e.Kind != EvDrop || DragKinds(e.Code) != DragImage || e.Flags != 0 || e.Tag != 41 || !bytes.Equal(r.w.q.textOf(e.Text), want) {
+	if e.Kind != EvDrop || DragKinds(e.Code) != DragImage || e.Flags != 0 || !bytes.Equal(r.w.q.textOf(e.Text), want) {
 		t.Errorf("png drop: %+v", e)
 	}
 
@@ -405,16 +411,7 @@ func TestDropImageConvertsOnAWorker(t *testing.T) {
 		if !r.drop() {
 			t.Fatalf("%s: refused", name)
 		}
-		var e Event
-		if name == "huge" {
-			ev := r.events()
-			if len(ev) != 1 {
-				t.Fatalf("%s: %+v", name, ev)
-			}
-			e = ev[0]
-		} else {
-			e = r.next()
-		}
+		e := r.next()
 		if e.Kind != EvDrop || e.Flags&FlagFailed == 0 || e.Text.Len != 0 {
 			t.Errorf("%s: %+v", name, e)
 		}
@@ -605,9 +602,8 @@ func TestStartDragBuildsTheSession(t *testing.T) {
 	if k, n := offeredKinds(r.pb); k != DragAny || n != 4 {
 		t.Errorf("the pasteboard offers %v in %d items", k, n)
 	}
-	q := &eventQueue{}
-	if n := appendDropPaths(q, r.pb); n != 1 || string(q.text) != file+"\x00" {
-		t.Errorf("file items: %d, %q", n, q.text)
+	if paths, n := r.readPaths(MaxPaste); n != 1 || string(paths) != file+"\x00" {
+		t.Errorf("file items: %d, %q", n, paths)
 	}
 	if got := string(objc.AppendUTF8(nil, objc.Send1(r.pb, selStringForType, uintptr(tText)))); got != "t\u00e9xt" {
 		t.Errorf("text item %q", got)
@@ -996,5 +992,471 @@ func TestPressForDragFollowsTheDragMap(t *testing.T) {
 	}
 	if !plain || !blocked || !pressAfterBlock || !ownedByWM {
 		t.Errorf("plain press kept %v, press on a Block region kept %v, window-drag band owned by the window %v", plain, blocked, ownedByWM)
+	}
+}
+
+// readPaths reads the file URLs of the rig's pasteboard as the worker does.
+func (r *dragRig) readPaths(limit int) ([]byte, int) {
+	pool := objc.F.Call0(objc.PoolPush)
+	defer objc.F.Call1(objc.PoolPop, pool)
+	return readPaths(new(ffi.Frame), objc.Send(r.pb, selPBItems), limit)
+}
+
+// ---- reading dropped data off the main thread ----
+
+var (
+	providerOnce  sync.Once
+	providerObj   objc.ID
+	providerSleep atomic.Int64 // ns
+	providerBytes []byte
+
+	selSetProvider = objc.Sel("setDataProvider:forTypes:")
+)
+
+// slowProvider is an NSPasteboardItemDataProvider that takes providerSleep to
+// provide its text: a source that provides its data lazily, as a renderer in
+// another process or a file promise does.
+func slowProvider() objc.ID {
+	providerOnce.Do(func() {
+		def := objc.Define("GNUISlowProvider", objc.Cls("NSObject"), []string{"NSPasteboardItemDataProvider"})
+		def.Method(objc.Sel("pasteboard:item:provideDataForType:"), "v@:@@@", func(c *ffi.CB) {
+			time.Sleep(time.Duration(providerSleep.Load()))
+			f := c.Frame()
+			item, typ := objc.ID(c.Int(3)), objc.ID(c.Int(4))
+			providerBytes = []byte("lazy text")
+			data := wsend(f, clsNSData, selDataWithBytes, uintptr(unsafe.Pointer(&providerBytes[0])), uintptr(len(providerBytes)))
+			wsend(f, item, selSetData, uintptr(data), uintptr(typ))
+		})
+		providerObj = objc.Retain(objc.Send(objc.Send(def.Register(), selAlloc), selInit))
+	})
+	return providerObj
+}
+
+// putSlowText replaces the contents of pasteboard pb with one item whose text
+// the provider gives after d.
+func putSlowText(t *testing.T, pb objc.ID, d time.Duration) {
+	t.Helper()
+	providerSleep.Store(int64(d))
+	objc.Send(pb, selClearContents)
+	it := objc.Send(objc.Send(clsNSPasteboardItem, selAlloc), selInit)
+	types := objc.Send(clsNSMutableArray, selArrayClass)
+	objc.Send1(types, selAddObject, uintptr(tText))
+	if objc.Send2(it, selSetProvider, uintptr(slowProvider()), uintptr(types))&0xff == 0 {
+		t.Fatal("no data provider")
+	}
+	arr := objc.Send(clsNSMutableArray, selArrayClass)
+	objc.Send1(arr, selAddObject, uintptr(it))
+	objc.Send(it, selAutorelease)
+	if !objc.SendBool1(pb, selWriteObjects, uintptr(arr)) {
+		t.Fatal("writeObjects failed")
+	}
+}
+
+// TestSlowSourceChild is the other application of TestSlowDropDataDoesNotBlockTheMainThread:
+// it owns a named pasteboard whose text it provides after the time in the
+// environment, on its main thread's run loop, until it is killed.
+func TestSlowSourceChild(t *testing.T) {
+	name := os.Getenv("GNUI_SLOW_PB_CHILD")
+	if name == "" {
+		t.Skip("child of TestSlowDropDataDoesNotBlockTheMainThread")
+	}
+	ms, _ := strconv.Atoi(os.Getenv("GNUI_SLOW_PB_MS"))
+	onMain(func() {
+		dragInit()
+		fakeInfoInit()
+		pb := objc.Send1(clsPasteboard, selPBNamed, uintptr(objc.Str(name)))
+		putSlowText(t, pb, time.Duration(ms)*time.Millisecond)
+		os.Stdout.WriteString("READY\n")
+		loop := objc.Send(objc.Cls("NSRunLoop"), objc.Sel("currentRunLoop"))
+		mode := objc.Str("kCFRunLoopDefaultMode")
+		clsDate, selDate := objc.Cls("NSDate"), objc.Sel("dateWithTimeIntervalSinceNow:")
+		selRunMode := objc.Sel("runMode:beforeDate:")
+		for end := time.Now().Add(60 * time.Second); time.Now().Before(end); {
+			pool := objc.F.Call0(objc.PoolPush)
+			date := objc.ID(objc.F.Reset().Arg(uintptr(clsDate)).Arg(uintptr(selDate)).ArgF64(0.05).Call(objc.MsgSend).R0())
+			objc.Send2(loop, selRunMode, uintptr(mode), uintptr(date))
+			objc.F.Call1(objc.PoolPop, pool)
+			time.Sleep(time.Millisecond)
+		}
+	})
+}
+
+var selPBNamed = objc.Sel("pasteboardWithName:")
+
+// slowSource starts another process that owns a pasteboard whose text arrives
+// after d, and makes it the pasteboard of the rig's drags.
+func (r *dragRig) slowSource(d time.Duration) {
+	r.t.Helper()
+	name := "dev.gonativeui.test.slow." + strconv.Itoa(os.Getpid())
+	cmd := exec.Command(os.Args[0], "-test.run=^TestSlowSourceChild$")
+	cmd.Env = append(os.Environ(), "GNUI_SLOW_PB_CHILD="+name, "GNUI_SLOW_PB_MS="+strconv.Itoa(int(d/time.Millisecond)))
+	out, err := cmd.StdoutPipe()
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		r.t.Fatal(err)
+	}
+	r.t.Cleanup(func() { cmd.Process.Kill(); cmd.Wait() })
+	ready := make(chan bool, 1)
+	go func() {
+		sc := bufio.NewScanner(out)
+		for sc.Scan() {
+			if strings.Contains(sc.Text(), "READY") {
+				ready <- true
+				io.Copy(io.Discard, out)
+				return
+			}
+		}
+		ready <- false
+	}()
+	select {
+	case ok := <-ready:
+		if !ok {
+			r.t.Skip("the pasteboard owner did not start")
+		}
+	case <-time.After(20 * time.Second):
+		r.t.Skip("the pasteboard owner did not start in time")
+	}
+	pb := objc.Retain(objc.Send1(clsPasteboard, selPBNamed, uintptr(objc.Str(name))))
+	old := fakeInfo.pb
+	fakeInfo.pb = pb
+	r.t.Cleanup(func() { fakeInfo.pb = old; objc.Release(pb) })
+}
+
+// waitWorkers waits for the read goroutines of the rig's window to end.
+func (r *dragRig) waitWorkers() {
+	r.t.Helper()
+	for end := time.Now().Add(10 * time.Second); r.w.drag.workers.Load() != 0; time.Sleep(2 * time.Millisecond) {
+		if time.Now().After(end) {
+			r.t.Fatal("a read goroutine never ended")
+		}
+	}
+}
+
+func TestSlowDropDataDoesNotBlockTheMainThread(t *testing.T) {
+	r := newDragRig(t)
+	r.answer(DragAnswer{Op: DragOpCopy, Accept: DragText})
+	r.w.SetDropKinds(DragText)
+	const lazy = 800 * time.Millisecond
+	r.slowSource(lazy)
+	r.at(5, 5)
+
+	start := time.Now()
+	if !r.drop() {
+		t.Fatal("refused")
+	}
+	if d := time.Since(start); d > lazy/3 {
+		t.Fatalf("performDragOperation took %v: it waited for the source's data", d)
+	}
+	// The loop keeps turning while the source thinks: a Wait turn queues nothing yet.
+	r.w.reapDrags()
+	if len(r.w.q.ev) != 0 || r.w.drag.workers.Load() != 1 {
+		t.Fatalf("events %+v, %d readers", r.w.q.ev, r.w.drag.workers.Load())
+	}
+	if time.Since(start) > lazy/2 {
+		t.Fatal("a Wait turn took as long as the source")
+	}
+	// The pasteboard is the worker's meanwhile: no other drag is taken.
+	if got := r.send(selDragEntered); got != 0 || r.drop() || len(r.w.q.ev) != 0 {
+		t.Errorf("a drag during the read: op %d, events %+v", got, r.w.q.ev)
+	}
+	e := r.next()
+	if e.Kind != EvDrop || e.Flags != 0 || r.text(e) != "lazy text" {
+		t.Errorf("drop %+v %q", e, r.text(e))
+	}
+	if time.Since(start) < lazy/2 {
+		t.Errorf("the text came after %v: the source was not slow", time.Since(start))
+	}
+}
+
+func TestSlowDropDataTimesOut(t *testing.T) {
+	r := newDragRig(t)
+	old := dropReadTimeout
+	dropReadTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { dropReadTimeout = old })
+	r.answer(DragAnswer{Op: DragOpCopy, Accept: DragText})
+	r.w.SetDropKinds(DragText)
+	r.slowSource(1500 * time.Millisecond)
+	if !r.drop() {
+		t.Fatal("refused")
+	}
+	e := r.next()
+	if e.Kind != EvDrop || e.Flags&FlagFailed == 0 || e.Text.Len != 0 {
+		t.Fatalf("a read that timed out: %+v", e)
+	}
+	if r.w.drag.busy.Load() != 0 {
+		t.Error("still reading after the timeout")
+	}
+	r.waitWorkers()
+	r.w.reapDrags() // the late result is dropped
+	if len(r.w.q.ev) != 0 || len(r.w.q.text) != 0 {
+		t.Errorf("late result: %+v", r.w.q.ev)
+	}
+}
+
+func TestDropFilesListThatDoesNotFitIsRefusedWhole(t *testing.T) {
+	r := newDragRig(t)
+	dir := t.TempDir()
+	var names [3]string
+	var items []map[string][]byte
+	for i := range names {
+		names[i] = filepath.Join(dir, strings.Repeat(string(rune('a'+i)), 20))
+		items = append(items, map[string][]byte{string(objc.AppendUTF8(nil, tFileURL)): fileURLBytes(names[i])})
+	}
+	r.put(items...)
+	all := len(names[0]) + len(names[1]) + len(names[2]) + 3
+	if paths, n := r.readPaths(all); n != 3 || len(paths) != all {
+		t.Fatalf("a list that fits exactly: %d paths, %d bytes", n, len(paths))
+	}
+	// One byte short: not the first two, nothing.
+	if paths, n := r.readPaths(all - 1); n != 0 || paths != nil {
+		t.Errorf("a list one byte over: %d paths, %q", n, paths)
+	}
+	// Whatever came before in the queue is no part of the measure.
+	r.w.q.text = bytes.Repeat([]byte("x"), MaxPaste)
+	if _, n := r.readPaths(MaxPaste); n != 3 {
+		t.Errorf("with a full queue: %d paths", n)
+	}
+}
+
+// hugePNG is a 1-bit PNG of w by h pixels: a few tens of kilobytes that decode
+// to w*h*4 bytes in a 32-bit bitmap (a decompression bomb).
+func hugePNG(w, h uint32) []byte {
+	var out bytes.Buffer
+	out.WriteString("\x89PNG\r\n\x1a\n")
+	chunk := func(typ string, data []byte) {
+		var n [4]byte
+		binary.BigEndian.PutUint32(n[:], uint32(len(data)))
+		out.Write(n[:])
+		out.WriteString(typ)
+		out.Write(data)
+		binary.BigEndian.PutUint32(n[:], crc32.ChecksumIEEE(append([]byte(typ), data...)))
+		out.Write(n[:])
+	}
+	ihdr := make([]byte, 13)
+	binary.BigEndian.PutUint32(ihdr, w)
+	binary.BigEndian.PutUint32(ihdr[4:], h)
+	ihdr[8] = 1 // bit depth 1, colour type 0 (grey)
+	chunk("IHDR", ihdr)
+	var z bytes.Buffer
+	zw, _ := zlib.NewWriterLevel(&z, zlib.BestCompression)
+	row := make([]byte, 1+(w+7)/8) // a filter byte, then zeros
+	for y := uint32(0); y < h; y++ {
+		zw.Write(row)
+	}
+	zw.Close()
+	chunk("IDAT", z.Bytes())
+	chunk("IEND", nil)
+	return out.Bytes()
+}
+
+func TestDropImageOverTheLimitsIsRefusedBeforeDecoding(t *testing.T) {
+	r := newDragRig(t)
+	r.answer(DragAnswer{Op: DragOpCopy, Accept: DragImage})
+	r.w.SetDropKinds(DragImage)
+	r.at(5, 5)
+
+	pool := objc.F.Call0(objc.PoolPush)
+	w, h, ok := imageSize(new(ffi.Frame), dataOf(hugePNG(20000, 20000)))
+	objc.F.Call1(objc.PoolPop, pool)
+	if !ok || w != 20000 || h != 20000 {
+		t.Fatalf("the header read as %d x %d (%v): the test would prove nothing", w, h, ok)
+	}
+
+	cases := []struct {
+		name string
+		typ  string
+		data []byte
+	}{
+		{"over 100 MP, as a PNG", "public.png", hugePNG(20000, 20000)},
+		{"over 100 MP, as a TIFF", "public.tiff", hugePNG(20000, 20000)},
+		{"under 100 MP, over the conversion limit", "public.tiff", hugePNG(10000, 10000)},
+		{"under 100 MP, over the conversion limit, JPEG", "public.jpeg", hugePNG(10000, 10000)},
+	}
+	for _, c := range cases {
+		before := convertCalls.Load()
+		r.w.q.reset()
+		r.put(map[string][]byte{c.typ: c.data})
+		if !r.drop() {
+			t.Fatalf("%s: refused", c.name)
+		}
+		e := r.next()
+		if e.Kind != EvDrop || e.Flags&FlagFailed == 0 || e.Text.Len != 0 {
+			t.Errorf("%s: %+v", c.name, e)
+		}
+		if convertCalls.Load() != before {
+			t.Errorf("%s: the image was decoded", c.name)
+		}
+	}
+
+	// Conversions run one at a time: while another holds the turn, this one waits.
+	r.w.q.reset()
+	r.put(map[string][]byte{"public.tiff": tiffOf(t, pngOf(4, 4, color.RGBA{9, 9, 9, 255}))})
+	before := convertCalls.Load()
+	convertMu.Lock()
+	if !r.drop() {
+		convertMu.Unlock()
+		t.Fatal("refused")
+	}
+	time.Sleep(150 * time.Millisecond)
+	r.w.reapDrags()
+	waiting := len(r.w.q.ev) == 0 && convertCalls.Load() == before
+	convertMu.Unlock()
+	if !waiting {
+		t.Error("a conversion ran while another had the turn")
+	}
+	if e := r.next(); e.Flags != 0 || convertCalls.Load() != before+1 {
+		t.Errorf("after the turn: %+v", e)
+	}
+}
+
+// ---- drag out: names, pictures, records ----
+
+func TestPromiseNamesMustBeBaseNames(t *testing.T) {
+	r := newDragRig(t)
+	s := r.stubSession()
+	r.press()
+	write := func(context.Context, string) error { return nil }
+	bad := []string{"", ".", "..", "a/b", "/abs", "../x", "a:b", "nul\x00byte", "\xff\xfe", strings.Repeat("x", MaxPromiseName+1)}
+	for _, name := range bad {
+		_, err := r.w.StartDrag(&DragSpec{Items: []DragItem{{Promise: &FilePromise{Name: name, Write: write}}}})
+		if !errors.Is(err, ErrDragSpec) {
+			t.Errorf("name %q: %v", name, err)
+		}
+	}
+	if s.calls != 0 {
+		t.Errorf("%d sessions started for bad names", s.calls)
+	}
+	promiseMu.Lock()
+	n := len(promises)
+	promiseMu.Unlock()
+	if n != 0 {
+		t.Errorf("%d promise records made for bad names", n)
+	}
+	for _, name := range []string{"a.txt", "caf\u00e9 \u65e5\u672c.mp4", strings.Repeat("x", MaxPromiseName)} {
+		if _, err := r.w.StartDrag(&DragSpec{Items: []DragItem{{Promise: &FilePromise{Name: name, Write: write}}}}); err != nil {
+			t.Errorf("name %q: %v", name, err)
+		}
+		r.endSession(0)
+	}
+}
+
+func TestDragPictureIsTheSystemIconWithoutAPreview(t *testing.T) {
+	r := newDragRig(t)
+	r.press()
+	write := func(context.Context, string) error { return nil }
+	for name, it := range map[string]DragItem{
+		"text":    {Text: "hello"},
+		"promise": {Promise: &FilePromise{Name: "a.mp4", Type: "public.mpeg-4", Write: write}},
+		"png":     {PNG: pngOf(200, 100, color.RGBA{1, 2, 3, 255})},
+	} {
+		s := r.stubSession()
+		if _, err := r.w.StartDrag(&DragSpec{Items: []DragItem{it}}); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		f := objc.SendRect(s.item(0), selDraggingFrame)
+		switch {
+		case name == "png" && (f.W != 64 || f.H != 32):
+			t.Errorf("png: the picture is %+v, want the image scaled to fit 64 points", f)
+		case name != "png" && (f.W != 32 || f.H != 32):
+			t.Errorf("%s: the picture is %+v, want a 32 point icon (not the 16 point placeholder)", name, f)
+		}
+		r.endSession(0)
+	}
+}
+
+func TestRemovedPromisesAreNotKeptAlive(t *testing.T) {
+	r := newDragRig(t)
+	mk := func(name string) *promiseRec {
+		return newPromise(r.w, 1, &FilePromise{Name: name, Write: func(context.Context, string) error { return nil }})
+	}
+	a, b, c := mk("a"), mk("b"), mk("c")
+	promiseMu.Lock()
+	backing := promises[:cap(promises)]
+	n := len(promises)
+	promiseMu.Unlock()
+	removePromise(b)
+	promiseMu.Lock()
+	tail := backing[len(promises):n]
+	live := len(promises)
+	promiseMu.Unlock()
+	if live != n-1 {
+		t.Fatalf("%d records, want %d", live, n-1)
+	}
+	for i, x := range tail {
+		if x != nil {
+			t.Errorf("slot %d past the end still holds %q's record", i, x.name)
+		}
+	}
+	// closeDrag drops the window's records the same way.
+	r.w.closeDrag()
+	promiseMu.Lock()
+	for i, x := range backing[:cap(backing)] {
+		if x == a || x == b || x == c {
+			t.Errorf("slot %d still holds a record after the window closed", i)
+		}
+	}
+	promiseMu.Unlock()
+}
+
+// ---- repaint during our own drag session ----
+
+func TestFramesRunDuringOurOwnDragSession(t *testing.T) {
+	r := newDragRig(t)
+	r.answer(DragAnswer{Op: DragOpCopy, Accept: DragText})
+	r.w.SetDropKinds(DragText)
+	r.put(map[string][]byte{"public.utf8-plain-text": []byte("x")})
+	r.at(10, 80)
+	calls, moves, nested := 0, 0, 0
+	r.w.SetFrameHandler(func() {
+		calls++
+		for _, e := range r.w.Pending() {
+			if e.Kind == EvDragMove || e.Kind == EvDragEnter {
+				moves++
+			}
+		}
+		r.w.frameArmed = true
+		r.w.linkTick(nil, false) // a tick inside the handler: no nested frame
+		nested = calls
+		r.send(selDragUpdated) // AppKit's next draggingUpdated:, as the pointer moves: it arms the next frame
+	})
+	tick := func() { r.w.frameArmed = true; r.w.linkTick(nil, false) }
+
+	// A drag from another application over the window: Wait is running, the
+	// handler is not for it.
+	r.send(selDragEntered)
+	tick()
+	if calls != 0 {
+		t.Fatalf("the frame handler ran %d times for a drag in", calls)
+	}
+	r.w.q.reset()
+
+	// Our own session: the drag's events arm a frame, and a tick runs the
+	// handler, which sees them. Each handler call's own draggingUpdated: arms
+	// the next frame, so frames keep coming while the pointer moves.
+	r.w.drag.active = true
+	r.send(selDragUpdated)
+	if !r.w.frameArmed {
+		t.Fatal("a drag event during our session asked for no frame")
+	}
+	for i := 0; i < 4; i++ {
+		r.w.linkTick(nil, false)
+		if i < 3 && !r.w.frameArmed {
+			t.Fatalf("tick %d: the handler's drag event did not arm the next frame", i)
+		}
+	}
+	if calls != 4 || moves < 4 {
+		t.Errorf("handler ran %d times and saw %d drag events", calls, moves)
+	}
+	if nested != calls {
+		t.Errorf("a tick inside the handler ran a nested frame (%d of %d)", nested, calls)
+	}
+	// Without a requested frame, a tick does nothing (an idle drag costs no frames).
+	r.w.frameArmed = false
+	r.w.linkTick(nil, false)
+	if calls != 4 {
+		t.Errorf("an unrequested tick ran the handler (%d)", calls)
 	}
 }

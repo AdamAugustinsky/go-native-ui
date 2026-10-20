@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // Drag and drop (phase 6, N5).
@@ -20,16 +22,27 @@ import (
 //	EvDragMove   the same, as the pointer moves (also repeated while it is still)
 //	EvDragLeave  the drag left the window, or was cancelled
 //	EvDrop       the drag was dropped: Code the one kind delivered (a single DragKinds bit),
-//	             Text its data, SelStart the number of items, X, Y where, Tag the drag's number.
-//	             FlagFailed: the data could not be read or is over MaxPaste
+//	             Text its data, SelStart the number of items, X, Y where, Tag the Target of the
+//	             answer that accepted it (0 when the handler named none).
+//	             FlagFailed: the data could not be read, is over MaxPaste, or is an image over
+//	             MaxImagePixels
 //
 // The data of an EvDrop is in the window's text buffer and valid like that of
 // an EvPaste (until the next Wait or Poll), bounded like a paste (MaxPaste):
-// for DragFiles the paths, each ended by a NUL byte; for DragImage a PNG
-// (a TIFF, JPEG or HEIC image is converted on a worker, so that event may
-// arrive in a later Wait); for DragText UTF-8. Of the kinds a drag offers, the
-// one delivered is the first of files, image, text that the target accepts
-// (DragAnswer.Accept).
+// for DragFiles the paths, each ended by a NUL byte (a list that does not fit
+// whole fails); for DragImage a PNG (a TIFF, JPEG or HEIC image is converted);
+// for DragText UTF-8. Of the kinds a drag offers, the one delivered is the
+// first of files, image, text that the target accepts (DragAnswer.Accept).
+//
+// Reading the dropped data never happens on the main thread: a drag source may
+// provide its data lazily (a file promise, a renderer in another process), and
+// reading it can take as long as that source does. performDragOperation: only
+// retains the pasteboard's items and starts a worker; the EvDrop arrives in a
+// later Wait. One read is in flight at a time, and while it runs the window
+// takes no new drag (NSPasteboard is not documented as thread-safe, so the main
+// thread keeps off it meanwhile); a read that takes over DropReadTimeout fails.
+// An image is checked before it is decoded: its dimensions are read from the
+// header, and one over MaxImagePixels fails without being decoded.
 //
 // The system asks synchronously, at every enter and move, which operation the
 // window answers, so that it can show the right cursor: the handler of
@@ -115,6 +128,10 @@ type DragAnswer struct {
 	// of a drop is the first of files, image and text in it that the drag
 	// offered.
 	Accept DragKinds
+	// Target identifies the target that answered (ui: its box key); an
+	// EvDrop carries it in Tag, so that data that arrives later goes to the
+	// target that took the drop and to no other. 0 names none.
+	Target uint64
 }
 
 // DragHandler answers a drag over the window at (x, y) (physical pixels from
@@ -122,6 +139,22 @@ type DragAnswer struct {
 // allows the operations in allowed. It runs on the main thread, inside the
 // system's call, so it must be quick and must not call into the window.
 type DragHandler func(x, y float32, offered DragKinds, allowed DragOp) DragAnswer
+
+// DropReadTimeout is how long reading the data of a drop may take before the
+// EvDrop fails.
+const DropReadTimeout = 30 * time.Second
+
+// MaxImagePixels is the largest image, in pixels (width times height), that
+// a dropped image or a decoder takes: a small compressed file can decode to
+// gigabytes, so it is refused from its header. package img uses the same limit.
+const MaxImagePixels = 100 << 20
+
+// MaxConvertBytes is the most decoded bytes (four a pixel) a dropped image of
+// a format other than PNG may need to be converted to PNG.
+const MaxConvertBytes = 256 << 20
+
+// MaxPromiseName is the longest file name of a FilePromise, in bytes.
+const MaxPromiseName = 255
 
 // MaxDragItems is the most items one StartDrag takes.
 const MaxDragItems = 256
@@ -225,8 +258,11 @@ func (s *DragSpec) Validate() error {
 		}
 		if it.Promise != nil {
 			n++
-			if it.Promise.Name == "" || it.Promise.Write == nil {
-				return errors.Join(ErrDragSpec, errors.New("a promise needs a name and a writer"))
+			if it.Promise.Write == nil {
+				return errors.Join(ErrDragSpec, errors.New("a promise needs a writer"))
+			}
+			if err := validPromiseName(it.Promise.Name); err != nil {
+				return errors.Join(ErrDragSpec, err)
 			}
 		}
 		if n != 1 {
@@ -246,3 +282,22 @@ const (
 	dragThresholdWindows = 4
 	dragThresholdLinux   = 8
 )
+
+// validPromiseName reports why name cannot be the file name of a promise: the
+// destination creates it inside its own folder, so it must be a base name (not
+// empty, ".", "..", or anything with a path separator), without NUL or ":"
+// (the old path separator, which Finder shows as "/"), valid UTF-8, and short
+// enough for a file system.
+func validPromiseName(name string) error {
+	switch {
+	case name == "" || name == "." || name == "..":
+		return errors.New("a promise needs a file name")
+	case len(name) > MaxPromiseName:
+		return errors.New("the promise's file name is too long")
+	case !utf8.ValidString(name):
+		return errors.New("the promise's file name is not valid UTF-8")
+	case strings.ContainsAny(name, "/:\x00"):
+		return errors.New("the promise's file name must be a base name without / : or NUL")
+	}
+	return nil
+}

@@ -43,6 +43,8 @@ var (
 	}
 
 	selFileURLPath = objc.Sel("fileURLWithPath:")
+	selIconForType = objc.Sel("iconForFileType:")
+	selImageSize   = objc.Sel("size")
 )
 
 // promiseRec is one promised file of a drag out. The delegate's thread, the
@@ -168,6 +170,20 @@ func (w *Window) setDragImage(di objc.ID, spec *DragSpec, it *DragItem, px, py f
 	case it.Path != "":
 		img = objc.Send1(objc.Send(clsNSWorkspace, selSharedWorkspace), selIconForFile, uintptr(nsStr(it.Path)))
 		x, y, wd, ht = px-16, py-16, 32, 32
+	case it.Text != "": // the system's text clipping icon
+		img = iconForType("textClipping")
+		x, y, wd, ht = px-16, py-16, 32, 32
+	case it.Promise != nil: // the icon of the file it will become
+		img = iconForType(it.Promise.Type)
+		x, y, wd, ht = px-16, py-16, 32, 32
+	case len(it.PNG) > 0: // the image itself, at most 64 points a side
+		if img = imageFromPNG(it.PNG); img != 0 {
+			sw, sh := objc.SendPoint(img, selImageSize)
+			if f := 64 / max(sw, sh, 1); f < 1 {
+				sw, sh = sw*f, sh*f
+			}
+			x, y, wd, ht = px-sw/2, py-sh/2, sw, sh
+		}
 	}
 	if img == 0 || wd <= 0 || ht <= 0 {
 		return false
@@ -175,6 +191,15 @@ func (w *Window) setDragImage(di objc.ID, spec *DragSpec, it *DragItem, px, py f
 	objc.F.Reset().Arg(uintptr(img)).Arg(uintptr(selSetSize)).ArgPoint(wd, ht).Call(objc.MsgSend) // points, not the PNG's pixels
 	objc.F.Reset().Arg(uintptr(di)).Arg(uintptr(selSetDragFrame)).ArgRect(x, y, wd, ht).Arg(uintptr(img)).Call(objc.MsgSend)
 	return true
+}
+
+// iconForType returns the system's icon for a file type (an extension or a
+// UTI; "" is generic data).
+func iconForType(typ string) objc.ID {
+	if typ == "" {
+		typ = "public.data"
+	}
+	return objc.Send1(objc.Send(clsNSWorkspace, selSharedWorkspace), selIconForType, uintptr(nsStr(typ)))
 }
 
 // dragBytes copies b into memory the Go GC does not move and returns its
@@ -213,13 +238,7 @@ func newPromise(w *Window, session DragTicket, p *FilePromise) *promiseRec {
 	defer promiseMu.Unlock()
 	// Promises of drags that ended without a drop are removed when they end;
 	// one a destination never asked for after a drop is dropped when it is old.
-	for i := 0; i < len(promises); {
-		if r := promises[i]; !r.requested && time.Since(r.made) > time.Hour {
-			promises = append(promises[:i], promises[i+1:]...)
-			continue
-		}
-		i++
-	}
+	promises = removeRecs(promises, func(r *promiseRec) bool { return !r.requested && time.Since(r.made) > time.Hour })
 	promiseSeq++
 	r := &promiseRec{id: promiseSeq, w: w, session: session, name: []byte(p.Name), uti: p.Type, write: p.Write, timeout: p.Timeout, made: time.Now()}
 	if r.uti == "" {
@@ -248,12 +267,22 @@ func promiseProvider(r *promiseRec) objc.ID {
 func removePromise(r *promiseRec) {
 	promiseMu.Lock()
 	defer promiseMu.Unlock()
-	for i, x := range promises {
-		if x == r {
-			promises = append(promises[:i], promises[i+1:]...)
-			break
+	promises = removeRecs(promises, func(x *promiseRec) bool { return x == r })
+}
+
+// removeRecs removes the records for which drop is true from s, keeping the
+// order, and clears the slots past the new end: the backing array would
+// otherwise keep the removed records, with their writers (closures over the
+// application's state) and their windows, alive.
+func removeRecs(s []*promiseRec, drop func(*promiseRec) bool) []*promiseRec {
+	out := s[:0]
+	for _, r := range s {
+		if !drop(r) {
+			out = append(out, r)
 		}
 	}
+	clear(s[len(out):])
+	return out
 }
 
 // promiseOf finds the promise of an NSFilePromiseProvider (by its userInfo).
@@ -353,15 +382,12 @@ func startPromises(w *Window) {
 	}
 	promiseMu.Lock()
 	var mine []*promiseRec
-	rest := promiseReqs[:0]
-	for _, r := range promiseReqs {
+	promiseReqs = removeRecs(promiseReqs, func(r *promiseRec) bool {
 		if r.w == w {
 			mine = append(mine, r)
-		} else {
-			rest = append(rest, r)
 		}
-	}
-	promiseReqs = rest
+		return r.w == w
+	})
 	promiseQueued.Add(-int32(len(mine)))
 	ctx := w.drag.ctx
 	promiseMu.Unlock()
@@ -430,24 +456,18 @@ func (w *Window) closeDrag() {
 	promiseMu.Lock()
 	d.closed = true
 	var mine []*promiseRec
-	rest := promises[:0]
-	for _, r := range promises {
+	promises = removeRecs(promises, func(r *promiseRec) bool {
 		if r.w == w {
 			mine = append(mine, r)
-		} else {
-			rest = append(rest, r)
 		}
-	}
-	promises = rest
-	reqs := promiseReqs[:0]
-	for _, r := range promiseReqs {
+		return r.w == w
+	})
+	promiseReqs = removeRecs(promiseReqs, func(r *promiseRec) bool {
 		if r.w == w {
 			promiseQueued.Add(-1)
-		} else {
-			reqs = append(reqs, r)
 		}
-	}
-	promiseReqs = reqs
+		return r.w == w
+	})
 	promiseMu.Unlock()
 	if d.cancel != nil {
 		d.cancel()
@@ -498,13 +518,7 @@ func sourceEnded(c *ffi.CB) {
 	}
 	if op == DragOpNone { // nothing will ask for the files of a drag nobody took
 		promiseMu.Lock()
-		var keep []*promiseRec
-		for _, r := range promises {
-			if !(r.w == w && r.session == d.ticket && !r.requested) {
-				keep = append(keep, r)
-			}
-		}
-		promises = append(promises[:0], keep...)
+		promises = removeRecs(promises, func(r *promiseRec) bool { return r.w == w && r.session == d.ticket && !r.requested })
 		promiseMu.Unlock()
 	}
 	d.active = false

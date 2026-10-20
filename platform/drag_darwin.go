@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"sync"
 	"sync/atomic"
+	"time"
 	"unsafe"
 
 	"gonativeui/internal/ffi"
@@ -17,14 +18,21 @@ import (
 //
 // In: GNUIView adopts NSDraggingDestination. Its draggingEntered:,
 // draggingUpdated: and draggingExited: queue EvDragEnter, EvDragMove and
-// EvDragLeave and answer the operation the handler gives; performDragOperation:
-// reads the dropped data. Files and text are read there, on the main thread
-// (AppKit requires the pasteboard to be read inside the call; both are bounded
-// by MaxPaste). An image is the exception: its NSData is only retained there,
-// and the copy of a PNG or the conversion of a TIFF, JPEG or HEIC image to PNG
-// (NSBitmapImageRep, which Apple documents as usable off the main thread) runs
-// on a worker goroutine, which queues the result for reapDrags (called by Wait)
-// and wakes the loop.
+// EvDragLeave and answer the operation the handler gives. performDragOperation:
+// reads nothing: a drag source may provide its data lazily, and reading blocks
+// until it does. It retains the pasteboard's NSPasteboardItems and starts a
+// worker goroutine (readDrop) that reads the paths, text or image from them and
+// queues the result for reapDrags (called by Wait), then wakes the loop. Apple
+// does not document NSPasteboard as thread-safe, so one read runs at a time and
+// the main thread does not touch the pasteboard (no new drag is taken) until
+// reapDrags has the result or the read times out. An image is checked from its
+// header (imageSize) before it is decoded, and conversions to PNG are
+// serialised.
+//
+// A drag out runs in a loop of AppKit's (beginDraggingSession...), in which the
+// events of a drag over our own window arrive but Wait does not run: while a
+// session of the window is active, each draggingEntered:/Updated: asks for a
+// frame, and linkTick runs the frame handler for it, as in a live resize.
 //
 // The view registers for dragged types only while the application has a drop
 // target (SetDropKinds), and only the types of those kinds. A hosted native
@@ -65,8 +73,17 @@ const (
 	nsOpDelete  = 32
 )
 
-// maxDropWorkers bounds the image conversions in flight; a drop past it fails.
-const maxDropWorkers = 4
+// dropReadTimeout is how long a read of dropped data may take (a variable for
+// the tests).
+var dropReadTimeout = DropReadTimeout
+
+// convertMu serialises the conversions of dropped images to PNG, which can
+// need hundreds of megabytes (MaxConvertBytes) each; convertCalls counts them
+// (tests).
+var (
+	convertMu    sync.Mutex
+	convertCalls atomic.Int32
+)
 
 var (
 	dragOnce sync.Once
@@ -109,6 +126,7 @@ var (
 	selDictionary     = objc.Sel("dictionary")
 	selArrayClass     = objc.Sel("array")
 	selPressedButtons = objc.Sel("pressedMouseButtons")
+	selUTF8           = objc.Sel("UTF8String")
 
 	selBeginDragging    = objc.Sel("beginDraggingSessionWithItems:event:source:")
 	selInitWriter       = objc.Sel("initWithPasteboardWriter:")
@@ -190,8 +208,14 @@ type dragState struct {
 	offered DragKinds
 	allowed DragOp
 
-	// Image drops being converted on workers, and their results.
-	workers atomic.Int32
+	// The read of dropped data in flight: its number (0: none), the event it
+	// answers and when it started. The worker's results wait in done.
+	busy    atomic.Uint64
+	jobSeq  uint64
+	job     Event
+	jobAt   time.Time
+	timer   *time.Timer
+	workers atomic.Int32 // read goroutines running (tests)
 	nDone   atomic.Int32
 	mu      sync.Mutex
 	done    []dropDone
@@ -208,13 +232,11 @@ type dragState struct {
 	skipBtn bool
 }
 
-// dropDone is a converted image on its way to the event queue.
+// dropDone is the data a worker read, on its way to the event queue.
 type dropDone struct {
-	seq    uint64
-	x, y   float32
-	mods   Mods
-	t      int64
+	id     uint64
 	data   []byte
+	n      int // the number of paths, for files
 	failed bool
 }
 
@@ -338,7 +360,7 @@ func viewNoPeriodic(c *ffi.CB)  { c.RetBool(false) } // updates when the pointer
 // NSDragOperation.
 func dragUpdate(c *ffi.CB, enter bool) uintptr {
 	w := theWindow.Load()
-	if w == nil || w.drag.kinds == 0 {
+	if w == nil || w.drag.kinds == 0 || w.drag.busy.Load() != 0 { // not while a read has the pasteboard
 		return 0
 	}
 	return w.dragMoved(objc.ID(c.Int(2)), enter)
@@ -363,6 +385,13 @@ func (w *Window) dragMoved(info objc.ID, enter bool) uintptr {
 	w.q.push(Event{Kind: kind, X: x, Y: y, Code: uint32(offered), SelStart: int32(allowed), SelLen: int32(items),
 		Mods: mods(uintptr(objc.Send(clsNSEvent, selModifierFlags))), Tag: d.seq, Time: Now()})
 	w.nudge()
+	if d.active {
+		// AppKit runs our own drag session in a loop of its own, where Wait does
+		// not return: ask for a frame, which the display link's tick hands to the
+		// frame handler (linkTick), so that a target of ours highlights as the
+		// drag moves over it.
+		w.RequestFrame()
+	}
 	return opToNS(ans.Op)
 }
 
@@ -387,7 +416,7 @@ func viewDragExited(*ffi.CB) {
 // drag where it is.
 func viewPrepareDrag(c *ffi.CB) {
 	w := theWindow.Load()
-	if w == nil || w.drag.kinds == 0 {
+	if w == nil || w.drag.kinds == 0 || w.drag.busy.Load() != 0 {
 		c.RetBool(false)
 		return
 	}
@@ -417,10 +446,13 @@ func viewPerformDrag(c *ffi.CB) {
 	c.RetBool(w.performDrop(objc.ID(c.Int(2))))
 }
 
-// performDrop reads the dropped data of the dragging info and queues the
-// EvDrop (an image: when a worker has it).
+// performDrop takes the drop if the handler does: it retains the pasteboard's
+// items and starts the worker that reads them; the EvDrop comes from reapDrags.
 func (w *Window) performDrop(info objc.ID) bool {
 	d := &w.drag
+	if d.busy.Load() != 0 { // a read has the pasteboard; dragUpdate refuses meanwhile, so this is a race lost
+		return false
+	}
 	pb := objc.Send(info, selDragPasteboard)
 	offered, items := offeredKinds(pb)
 	x, y := w.dragPoint(info)
@@ -432,121 +464,55 @@ func (w *Window) performDrop(info objc.ID) bool {
 		return false
 	}
 	d.inside = false // the drop ends the drag over the window; no EvDragLeave follows
-	e := Event{Kind: EvDrop, X: x, Y: y, SelStart: int32(items), Tag: d.seq, Time: Now(),
+	e := Event{Kind: EvDrop, X: x, Y: y, SelStart: int32(items), Tag: ans.Target, Time: Now(),
 		Mods: mods(uintptr(objc.Send(clsNSEvent, selModifierFlags)))}
-	q := &w.q
-	off := len(q.text)
+	var kind DragKinds
 	switch {
 	case take&DragFiles != 0:
-		e.Code = uint32(DragFiles)
-		e.SelStart = int32(appendDropPaths(q, pb))
+		kind = DragFiles
 	case take&DragImage != 0:
-		e.Code = uint32(DragImage)
-		if !w.startImageDrop(pb, e) {
-			e.Flags = FlagFailed
-			q.push(e)
-		}
+		kind = DragImage
+	default:
+		kind = DragText
+	}
+	e.Code = uint32(kind)
+	arr := objc.Send(pb, selPBItems)
+	if arr == 0 {
+		e.Flags = FlagFailed
+		w.q.push(e)
 		w.nudge()
 		return true
-	default:
-		e.Code = uint32(DragText)
-		if str := objc.Send1(pb, selStringForType, uintptr(tText)); str != 0 {
-			if n := int(objc.Send1(str, selLenBytes, 4)); n > 0 && n <= MaxPaste {
-				q.text = objc.AppendUTF8(q.text, str)
-			}
-		}
 	}
-	n := len(q.text) - off
-	if n == 0 || n > MaxPaste {
-		q.text = q.text[:off]
-		e.Flags, n = FlagFailed, 0
-	}
-	e.Text = TextRef{uint32(off), uint32(n)}
-	q.push(e)
-	w.nudge()
-	return true
-}
-
-// appendDropPaths appends the paths of the file URLs on the pasteboard to the
-// queue's text, each ended by a NUL byte, and returns how many. A name that is
-// not valid UTF-8 comes through unchanged (fileSystemRepresentation).
-func appendDropPaths(q *eventQueue, pb objc.ID) int {
-	items := objc.Send(pb, selPBItems)
-	if items == 0 {
-		return 0
-	}
-	n := 0
-	for i, cnt := 0, int(objc.Send(items, selURLCount)); i < cnt; i++ {
-		item := objc.Send1(items, selURLAt, uintptr(i))
-		str := objc.Send1(item, selStringForType, uintptr(tFileURL))
-		if str == 0 {
-			continue
-		}
-		url := objc.Send1(clsNSURL, selURLWithString, uintptr(str))
-		if url == 0 {
-			continue
-		}
-		if ref := objc.Send(url, selFilePathURL); ref != 0 { // resolves a file reference URL (file:///.file/id=...)
-			url = ref
-		}
-		p := uintptr(objc.Send(url, selFSRep))
-		if p == 0 {
-			continue
-		}
-		q.text = appendCString(q.text, p)
-		q.text = append(q.text, 0)
-		n++
-		if len(q.text) > MaxPaste {
-			break
-		}
-	}
-	return n
-}
-
-// startImageDrop takes the image of the pasteboard and has a worker turn it into
-// PNG bytes; it reports false if there is none or it is too large to take.
-func (w *Window) startImageDrop(pb objc.ID, e Event) bool {
-	d := &w.drag
-	typ := objc.Send1(pb, selAvailableType, uintptr(arrImage))
-	if typ == 0 || int(d.workers.Load()) >= maxDropWorkers {
-		return false
-	}
-	data := objc.Send1(pb, selDataForType, uintptr(typ))
-	if data == 0 || int(objc.Send(data, selDataLength)) > MaxPaste || objc.Send(data, selDataLength) == 0 {
-		return false
-	}
-	isPNG := objc.SendBool1(typ, selIsEqualStr, uintptr(tPNG))
-	objc.Retain(data)
+	objc.Retain(arr) // the worker's: it releases it
+	d.jobSeq++
+	id := d.jobSeq
+	d.job, d.jobAt = e, time.Now()
+	d.busy.Store(id)
 	d.workers.Add(1)
-	go d.convertImage(data, isPNG, e)
+	d.timer = time.AfterFunc(dropReadTimeout+time.Millisecond, Wake) // a Wait that is blocked must see the timeout
+	go d.readDrop(id, arr, kind)
 	return true
 }
 
-// convertImage runs on a worker goroutine: it copies the PNG data, or converts
-// the other image formats to PNG, and queues the result. It uses frames and
-// calls of its own, and consumes the retained NSData.
-func (d *dragState) convertImage(data objc.ID, isPNG bool, e Event) {
+// readDrop runs on a worker goroutine: it reads the dropped data of kind from
+// the retained items (consuming the reference) and queues the result. It uses
+// a frame and an autorelease pool of its own.
+func (d *dragState) readDrop(id uint64, items objc.ID, kind DragKinds) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	f := new(ffi.Frame)
 	pool := f.Call0(objc.PoolPush)
-	out := dropDone{seq: e.Tag, x: e.X, y: e.Y, mods: e.Mods, t: Now()}
-	png, rep := data, objc.ID(0)
-	if !isPNG {
-		png, rep = convertToPNG(f, data)
-	}
-	if png != 0 {
-		p := uintptr(wsend(f, png, selBytes))
-		n := int(wsend(f, png, selDataLength))
-		if p != 0 && n > 0 && n <= MaxPaste {
-			out.data = append([]byte(nil), unsafe.Slice((*byte)(ffi.PtrFromC(p)), n)...)
-		}
+	out := dropDone{id: id}
+	switch kind {
+	case DragFiles:
+		out.data, out.n = readPaths(f, items, MaxPaste)
+	case DragImage:
+		out.data = readImage(f, items)
+	default:
+		out.data = readText(f, items, MaxPaste)
 	}
 	out.failed = len(out.data) == 0
-	if rep != 0 {
-		wsend(f, rep, selReleaseObj)
-	}
-	wsend(f, data, selReleaseObj)
+	wsend(f, items, selReleaseObj)
 	f.Call1(objc.PoolPop, pool)
 	d.mu.Lock()
 	d.done = append(d.done, out)
@@ -554,6 +520,92 @@ func (d *dragState) convertImage(data objc.ID, isPNG bool, e Event) {
 	d.nDone.Add(1)
 	d.workers.Add(-1)
 	Wake()
+}
+
+// readPaths returns the paths of the file URLs in the pasteboard items, each
+// ended by a NUL byte, and how many. A name that is not valid UTF-8 comes
+// through unchanged (fileSystemRepresentation). A list that does not fit in
+// limit bytes whole is refused whole: nil. Any thread, with its frame f.
+func readPaths(f *ffi.Frame, items objc.ID, limit int) (out []byte, n int) {
+	for i, cnt := 0, int(wsend(f, items, selURLCount)); i < cnt; i++ {
+		item := wsend(f, items, selURLAt, uintptr(i))
+		str := wsend(f, item, selStringForType, uintptr(tFileURL))
+		if str == 0 {
+			continue
+		}
+		url := wsend(f, clsNSURL, selURLWithString, uintptr(str))
+		if url == 0 {
+			continue
+		}
+		if ref := wsend(f, url, selFilePathURL); ref != 0 { // resolves a file reference URL (file:///.file/id=...)
+			url = ref
+		}
+		p := uintptr(wsend(f, url, selFSRep))
+		if p == 0 {
+			continue
+		}
+		l := 0
+		for *(*byte)(unsafe.Add(ffi.PtrFromC(p), l)) != 0 {
+			l++
+		}
+		if len(out)+l+1 > limit {
+			return nil, 0
+		}
+		out = appendCString(out, p)
+		out = append(out, 0)
+		n++
+	}
+	return out, n
+}
+
+// readText returns the text of the first pasteboard item that has some, nil if
+// it has none or it is over limit bytes of UTF-8. Any thread, with its frame f.
+func readText(f *ffi.Frame, items objc.ID, limit int) []byte {
+	for i, cnt := 0, int(wsend(f, items, selURLCount)); i < cnt; i++ {
+		str := wsend(f, wsend(f, items, selURLAt, uintptr(i)), selStringForType, uintptr(tText))
+		if str == 0 {
+			continue
+		}
+		n := int(wsend(f, str, selLenBytes, 4 /* NSUTF8StringEncoding */))
+		p := uintptr(wsend(f, str, selUTF8))
+		if n <= 0 || n > limit || p == 0 {
+			return nil
+		}
+		return append([]byte(nil), unsafe.Slice((*byte)(ffi.PtrFromC(p)), n)...)
+	}
+	return nil
+}
+
+// readImage returns a PNG of the first image of the pasteboard items, nil if
+// there is none or it is not one to take: it is over MaxPaste bytes, its
+// header says more than MaxImagePixels pixels (or, for a format that needs
+// converting, more than MaxConvertBytes decoded), or ImageIO cannot read it.
+// Any thread, with its frame f.
+func readImage(f *ffi.Frame, items objc.ID) []byte {
+	for i, cnt := 0, int(wsend(f, items, selURLCount)); i < cnt; i++ {
+		item := wsend(f, items, selURLAt, uintptr(i))
+		typ := wsend(f, item, selAvailableType, uintptr(arrImage))
+		if typ == 0 {
+			continue
+		}
+		data := wsend(f, item, selDataForType, uintptr(typ)) // may wait for the source to provide it
+		n := int(wsend(f, data, selDataLength))
+		if data == 0 || n == 0 || n > MaxPaste {
+			return nil
+		}
+		w, h, ok := imageSize(f, data)
+		if !ok || w > MaxImagePixels || h > MaxImagePixels || w*h > MaxImagePixels { // (each side first: the product could overflow)
+			return nil
+		}
+		if wsend(f, typ, selIsEqualStr, uintptr(tPNG))&0xff != 0 {
+			return append([]byte(nil), unsafe.Slice((*byte)(ffi.PtrFromC(uintptr(wsend(f, data, selBytes)))), n)...)
+		}
+		if w*h*4 > MaxConvertBytes {
+			return nil
+		}
+		return convertToPNG(f, data)
+	}
+	return nil
 }
 
 // wsend sends sel to id with integer or pointer arguments on frame f, which
@@ -567,20 +619,33 @@ func wsend(f *ffi.Frame, id objc.ID, sel objc.SEL, args ...uintptr) objc.ID {
 	return objc.ID(f.Call(objc.MsgSend).R0())
 }
 
-// convertToPNG turns image data of any format NSBitmapImageRep reads into PNG.
-// It returns the PNG NSData (autoreleased into the caller's pool) and the
-// bitmap representation, which the caller releases once the bytes are copied.
-func convertToPNG(f *ffi.Frame, data objc.ID) (png, rep objc.ID) {
-	rep = wsend(f, wsend(f, clsNSBitmapRep, selAlloc), selInitWithData, uintptr(data)) // nil if it is not an image
+// convertToPNG turns image data of any format NSBitmapImageRep reads into PNG
+// bytes (nil if it is not one, or the PNG is over MaxPaste). One conversion
+// runs at a time. NSBitmapImageRep is documented as usable off the main thread.
+func convertToPNG(f *ffi.Frame, data objc.ID) []byte {
+	convertMu.Lock()
+	defer convertMu.Unlock()
+	convertCalls.Add(1)
+	rep := wsend(f, wsend(f, clsNSBitmapRep, selAlloc), selInitWithData, uintptr(data)) // nil if it is not an image
 	if rep == 0 {
-		return 0, 0
+		return nil
 	}
+	defer wsend(f, rep, selReleaseObj)
 	const nsBitmapImageFileTypePNG = 4
-	return wsend(f, rep, selRepresentation, nsBitmapImageFileTypePNG, uintptr(wsend(f, clsNSDictionary, selDictionary))), rep
+	png := wsend(f, rep, selRepresentation, nsBitmapImageFileTypePNG, uintptr(wsend(f, clsNSDictionary, selDictionary)))
+	if png == 0 {
+		return nil
+	}
+	p, n := uintptr(wsend(f, png, selBytes)), int(wsend(f, png, selDataLength))
+	if p == 0 || n <= 0 || n > MaxPaste {
+		return nil
+	}
+	return append([]byte(nil), unsafe.Slice((*byte)(ffi.PtrFromC(p)), n)...)
 }
 
-// reapDrags runs in Wait: it queues the images the workers finished and starts
-// the promised files the destination asked for.
+// reapDrags runs in Wait: it queues the data the workers read (the EvDrop of
+// the read in flight, or a failed one if it timed out) and starts the promised
+// files the destination asked for.
 func (w *Window) reapDrags() {
 	d := &w.drag
 	if d.nDone.Load() != 0 {
@@ -589,18 +654,39 @@ func (w *Window) reapDrags() {
 		d.done = nil
 		d.mu.Unlock()
 		d.nDone.Add(-int32(len(done)))
-		q := &w.q
 		for _, r := range done {
-			e := Event{Kind: EvDrop, Code: uint32(DragImage), X: r.x, Y: r.y, Mods: r.mods, Tag: r.seq, SelStart: 1, Time: r.t}
-			if r.failed {
-				e.Flags = FlagFailed
-			} else {
-				off := len(q.text)
-				q.text = append(q.text, r.data...)
-				e.Text = TextRef{uint32(off), uint32(len(r.data))}
-			}
-			q.push(e)
+			w.finishDrop(r)
 		}
 	}
+	if id := d.busy.Load(); id != 0 && time.Since(d.jobAt) > dropReadTimeout {
+		w.finishDrop(dropDone{id: id, failed: true}) // the worker's late result is ignored
+	}
 	startPromises(w)
+}
+
+// finishDrop queues the EvDrop for the result r of the read in flight; the
+// result of a read that was given up on (timed out) is dropped.
+func (w *Window) finishDrop(r dropDone) {
+	d := &w.drag
+	if r.id != d.busy.Load() {
+		return
+	}
+	d.busy.Store(0)
+	if d.timer != nil {
+		d.timer.Stop()
+		d.timer = nil
+	}
+	e, q := d.job, &w.q
+	d.job = Event{}
+	if r.n != 0 {
+		e.SelStart = int32(r.n)
+	}
+	if r.failed || len(r.data) == 0 {
+		e.Flags = FlagFailed
+	} else {
+		off := len(q.text)
+		q.text = append(q.text, r.data...)
+		e.Text = TextRef{uint32(off), uint32(len(r.data))}
+	}
+	q.push(e)
 }
