@@ -23,6 +23,7 @@ page=${2:-0}
 scene=appkit
 [ "$page" = 1 ] && scene=appkit-type
 [ "$page" = 2 ] && scene=appkit-lists
+[ "$page" = 3 ] && scene=appkit-forms
 mkdir -p "$out"
 for mode in light dark; do
 	open -n "$here/RexuiAppKit.app" --args -scene $scene -mode $mode

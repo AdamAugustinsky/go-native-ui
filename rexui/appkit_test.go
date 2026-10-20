@@ -11,6 +11,7 @@ import (
 	"gonativeui/gpu"
 	"gonativeui/internal/cielab"
 	"gonativeui/platform"
+	"gonativeui/rexui"
 	"gonativeui/rexui/catalog"
 	"gonativeui/theme"
 	"gonativeui/ui"
@@ -22,6 +23,11 @@ import (
 type appkitRef struct {
 	System  map[string]map[string]string            `json:"system"`
 	Samples map[string]map[string]appkitMeasurement `json:"samples"`
+	// Layouts are the frames of the form samples' subviews, in points from
+	// the sample's top left (AppKitRef's "layouts"); Sheets what it read of
+	// sheets.
+	Layouts map[string]map[string]json.RawMessage `json:"layouts"`
+	Sheets  map[string]any                        `json:"sheets"`
 }
 
 type appkitMeasurement struct {
@@ -438,4 +444,51 @@ func deltaE(a, b string) float64 {
 func lab(h string) cielab.Lab {
 	v, _ := strconv.ParseUint(strings.TrimPrefix(h, "#"), 16, 32)
 	return cielab.SRGBToLab(uint8(v>>16), uint8(v>>8), uint8(v))
+}
+
+// The layout audit of p6-align compared our boxes with AppKitRef's sample
+// frames. Two of those frames are not the control's. AppKitRef gives every
+// NSSwitch a 54 × 24 frame, while NSSwitch's own size (its fittingSize, and the
+// ink in the reference) is 36 × 16, 44 × 20, 54 × 24 and 64 × 28 by control
+// size. A text field's frame is 200 × 24 and its bezel's 1 pt outline is drawn
+// outside it (the reference's field is 202 × 26 over a 200 × 24 frame, its
+// fill 200 × 24). Our boxes are AppKit's.
+func TestBoxesAreAppKitsNotTheSampleFrames(t *testing.T) {
+	ref := loadAppKitRef(t)
+	sys := ref.systemValues(t)
+	for name, size := range map[string]theme.Size{"switch-on-mini": theme.SizeMini, "switch-on-small": theme.SizeSmall, "switch-on": theme.SizeRegular, "switch-on-large": theme.SizeLarge} {
+		var on = true
+		var id ui.ID
+		g := newRig(t, theme.Light, sys, column(func(g *rig) {
+			id = rexui.Switch(g.k, "", &on, rexui.SwitchOpts{Size: size}).ID
+		}))
+		g.settle()
+		want := ref.Samples[name]["light"]
+		got := ourRect(g, id, g.c.Rect(id)[0], g.c.Rect(id)[1])
+		near(t, name+" width", got.W, want.W)
+		near(t, name+" height", got.H, want.H)
+	}
+
+	i := catalog.Index("field-text")
+	var root ui.ID
+	g := newRig(t, theme.Light, sys, sample(i, &root))
+	g.settle()
+	frame := g.c.Rect(root)
+	s := catalog.Samples[i]
+	got := ourRect(g, root, frame[0], frame[1])
+	near(t, "field frame width", got.W, float64(s.W))
+	near(t, "field frame height", got.H, float64(s.H))
+	sc := g.scale
+	found := false
+	for _, q := range g.list.Quads {
+		if q.Mode == gpu.ModeShape && q.Border > 0 && q.Rect == [4]float32{frame[0] - sc, frame[1] - sc, frame[2] + sc, frame[3] + sc} {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("the field's outline is not the 1 pt ring just outside its frame, as AppKit's bezel is")
+	}
+	if w := ref.Samples["field-text"]["light"]; w.W != float64(s.W)+2 || w.H != float64(s.H)+2 {
+		t.Errorf("the reference's field is %v × %v: not the frame plus the outline", w.W, w.H)
+	}
 }

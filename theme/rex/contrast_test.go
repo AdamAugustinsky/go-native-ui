@@ -161,6 +161,11 @@ func TestContrastFloors(t *testing.T) {
 				if v < 4.5 {
 					t.Errorf("Label on %s (%08X): %.2f:1, want >= 4.5", g.name, g.bg, v)
 				}
+				// controlTextColor labels the controls (checkbox, switch and
+				// radio labels, a field's text) on the same backgrounds.
+				if v := theme.ContrastOn(c[theme.ControlText], g.bg, g.under); v < 4.5 {
+					t.Errorf("ControlText on %s (%08X): %.2f:1, want >= 4.5", g.name, g.bg, v)
+				}
 			}
 			t.Logf("Label: worst %.2f:1 over %d backgrounds", worst, len(all))
 			for _, p := range []struct {

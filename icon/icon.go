@@ -8,6 +8,17 @@
 //
 // # Where an icon comes from
 //
+// # Text styles and scales
+//
+// An icon next to text is sized for the text's style, as
+// NSImage.SymbolConfiguration(textStyle:scale:) does: Spec.In gives a spec the
+// point size and weight of a text style (StyleBody, StyleHeadline,
+// StyleTitle1 …) and a scale (ScaleSmall, ScaleMedium, ScaleLarge). On macOS
+// the symbol is rasterised by AppKit's own configuration for that size,
+// weight and scale (a test compares it with textStyle:scale: for every style
+// and scale); on Windows and Linux the drawn glyph takes the style's size
+// and the scale's factor.
+//
 // Atlas.Raster picks a source per icon, once per scale, and never per frame:
 //
 //   - On macOS the SF Symbol is rasterised through AppKit into an R8 coverage
@@ -57,6 +68,10 @@ type Spec struct {
 	// Weight is the SF Symbol weight as NSFontWeight: 0 regular, 0.23 medium,
 	// 0.3 semibold. Other sources ignore it.
 	Weight float32
+	// Scale is the symbol's scale within its size (NSImageSymbolScale): the
+	// zero value is medium. Spec.In sets Pt, Weight and Scale together from a
+	// text style.
+	Scale Scale
 }
 
 // Source says what an icon is drawn from.
@@ -169,7 +184,7 @@ func (a *Atlas) Raster(scale float32) {
 		e := &a.ents[i]
 		*e = entry{}
 		if sp.Symbol != "" {
-			pix, w, h, ok := rasterSymbol(sp.Symbol, float64(sp.Pt)*float64(scale), float64(sp.Weight))
+			pix, w, h, ok := rasterSymbol(sp.Symbol, float64(sp.Pt)*float64(scale), float64(sp.Weight), sp.Scale)
 			// Shelf-pack with a 1 px gutter.
 			if ok && w <= atlasW && h <= atlasH {
 				if x+w > atlasW {
@@ -186,11 +201,11 @@ func (a *Atlas) Raster(scale float32) {
 				}
 			}
 		}
-		if sp.Segoe != 0 && a.family != "" && a.textEntry(e, SourceSymbolFont, a.family, sp.Segoe, sp.Pt) {
+		if sp.Segoe != 0 && a.family != "" && a.textEntry(e, SourceSymbolFont, a.family, sp.Segoe, sp.Pt*scaleFactor(sp.Scale)) {
 			continue
 		}
 		if sp.Fallback != 0 {
-			a.textEntry(e, SourceFallback, "", sp.Fallback, sp.Pt)
+			a.textEntry(e, SourceFallback, "", sp.Fallback, sp.Pt*scaleFactor(sp.Scale))
 		}
 	}
 	a.upload()

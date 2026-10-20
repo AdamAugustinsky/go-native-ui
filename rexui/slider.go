@@ -38,7 +38,7 @@ var SliderLook = SliderRecipe{
 	KnobW:  [theme.NumSizes]float32{theme.SizeRegular: 20, theme.SizeMini: 15, theme.SizeSmall: 17.5, theme.SizeLarge: 20, theme.SizeXLarge: 20},
 	KnobH:  [theme.NumSizes]float32{theme.SizeRegular: 16, theme.SizeMini: 12, theme.SizeSmall: 14, theme.SizeLarge: 16, theme.SizeXLarge: 16},
 	Rest:   Of(theme.Fill1), Filled: Of(theme.Accent), FilledDisabled: OfAlpha(theme.Label, 0.15, 0.15),
-	Knob: Of(theme.OnAccent), KnobShadow: OfAlpha(theme.Shadow, 0.25, 0),
+	Knob: Of(theme.Knob), KnobShadow: OfAlpha(theme.Shadow, 0.25, 0),
 	KnobShadowY: 0.5, KnobShadowBlur: 2,
 }
 
