@@ -187,21 +187,24 @@ func pattern(w, h int) []Quad {
 }
 
 // The blur's output on a test card matches the CPU model of the same steps
-// within 2 levels (and a mean under half a level), for AppKit's two recipes,
-// on a region that is not a multiple of the scale, cut by a clip. And the
-// pixels around it, and a quad drawn after it, are untouched.
+// within 2 levels (and a mean under half a level), for AppKit's two recipes
+// and a saturation that leaves the range before the tint (3 levels), on a
+// region that is not a multiple of the scale, cut by a clip. And the pixels
+// around it, and a quad drawn after it, are untouched.
 func TestBackdropMatchesModel(t *testing.T) {
 	r := newTestRenderer(t)
 	const w, h = 220, 90
 	for _, c := range []struct {
 		name string
 		b    Backdrop
+		tol  int // levels
 	}{
-		{"hard", Backdrop{Sigma: 12, Down: 4, Tint: 0xFFFFFFFF, Mix: 0.8245, Saturation: 1, Add: 0.03}},
-		{"hard, dark", Backdrop{Sigma: 12, Down: 4, Tint: 0x1E1E1EFF, Mix: 0.8245, Saturation: 1, Add: 0.03}},
-		{"thin film", Backdrop{Sigma: 12, Down: 2, Tint: 0x1E1E1EFF, Mix: 0.6, Saturation: 1.25, Add: 0.03, TintUnder: true}},
-		{"no tint", Backdrop{Sigma: 5, Down: 4, Saturation: 1}},
-		{"no blur, full scale", Backdrop{Down: 1, Saturation: 0.5}},
+		{"hard", Backdrop{Sigma: 12, Down: 4, Tint: 0xFFFFFFFF, Mix: 0.8245, Saturation: 1, Add: 0.03}, 2},
+		{"hard, dark", Backdrop{Sigma: 12, Down: 4, Tint: 0x1E1E1EFF, Mix: 0.8245, Saturation: 1, Add: 0.03}, 2},
+		{"thin film", Backdrop{Sigma: 12, Down: 2, Tint: 0x1E1E1EFF, Mix: 0.6, Saturation: 1.25, Add: 0.03, TintUnder: true}, 2},
+		{"no tint", Backdrop{Sigma: 5, Down: 4, Saturation: 1}, 2},
+		{"saturated past 1, then tinted", Backdrop{Sigma: 3, Down: 2, Tint: 0x808080FF, Mix: 0.5, Saturation: 1.5, Add: 0.03}, 3}, // the saturation amplifies the passes' rounding
+		{"no blur, full scale", Backdrop{Down: 1, Saturation: 0.5}, 2},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			card := pattern(w, h)
@@ -236,8 +239,8 @@ func TestBackdropMatchesModel(t *testing.T) {
 			}
 			mean := float64(sum) / float64(n)
 			t.Logf("%s: max |GPU - model| %d levels at %v (%v vs %v), mean %.3f", c.name, worst, at, m.at(at[0], at[1]), model.at(at[0], at[1]), mean)
-			if worst > 2 || mean > 0.5 {
-				t.Errorf("%s: the blur differs from the model by up to %d levels (mean %.2f), want at most 2 (0.5)", c.name, worst, mean)
+			if worst > c.tol || mean > 0.5 {
+				t.Errorf("%s: the blur differs from the model by up to %d levels (mean %.2f), want at most %d (0.5)", c.name, worst, mean, c.tol)
 			}
 			for _, p := range [][2]int{{12, 30}, {201, 30}, {50, 6}, {50, 81}, {0, 0}, {219, 89}} {
 				near(t, fmt.Sprintf("outside at %v", p), m.at(p[0], p[1]), under.at(p[0], p[1]), 0)
