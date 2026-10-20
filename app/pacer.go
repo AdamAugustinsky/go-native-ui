@@ -24,7 +24,14 @@ package app
 //     attempt fails again (nothing can be presented), it backs off by
 //     retryNs instead of spinning. Any EvFrame returns the loop to paced
 //     mode.
+//   - While the window is hidden (minimised, covered, on another space) the
+//     loop neither draws nor retries nor waits on the clock: a covered
+//     window gets no frames to draw into, so attempts would only fail every
+//     retryNs, forever, and no Build would run to let the animations see
+//     Input.Hidden. What is owed stays owed, and the first frame after it
+//     shows again draws it.
 type pacer struct {
+	hidden      bool // the window is hidden: draw nothing until it shows (hide)
 	needDraw    bool
 	frameReady  bool  // a frame slot is available
 	paced       bool  // EvFrame is being delivered (false after the silence fallback)
@@ -50,6 +57,22 @@ func (p *pacer) frameEvent() {
 	p.requestedAt, p.retryAt = 0, 0
 }
 
+// hide suspends drawing while the window is hidden (on) and resumes it when
+// it shows again: then a repaint is owed, and the frame source is asked
+// afresh, its silence while hidden being no evidence that it stopped.
+func (p *pacer) hide(on bool) {
+	if p.hidden == on {
+		return
+	}
+	p.hidden = on
+	if !on {
+		p.needDraw, p.retryAt = true, 0
+		if !p.frameReady {
+			p.paced, p.requestedAt = true, 0
+		}
+	}
+}
+
 // requested records that the loop called RequestFrame at now.
 func (p *pacer) requested(now int64) { p.requestedAt = now }
 
@@ -57,7 +80,7 @@ func (p *pacer) requested(now int64) { p.requestedAt = now }
 // frame is awaited with nothing else to time), 0 polls (a draw can happen
 // now).
 func (p *pacer) timeout(now int64) int64 {
-	if !p.needDraw {
+	if !p.needDraw || p.hidden {
 		return -1
 	}
 	if p.frameReady {
@@ -76,7 +99,7 @@ func (p *pacer) timeout(now int64) int64 {
 // draw says to attempt a draw now; request says to call RequestFrame (and
 // tell requested) because a frame is owed with none outstanding.
 func (p *pacer) poll(now int64) (draw, request bool) {
-	if !p.needDraw {
+	if !p.needDraw || p.hidden {
 		return false, false
 	}
 	if !p.frameReady {
