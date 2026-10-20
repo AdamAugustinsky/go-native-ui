@@ -1,6 +1,7 @@
 package widget
 
 import (
+	"gonativeui/rexui"
 	"gonativeui/theme"
 	"gonativeui/ui"
 	"gonativeui/widget/base"
@@ -38,9 +39,16 @@ func (k *Kit) EndScroll(v ScrollView) {
 	k.CloseScroll(&v)
 }
 
-// scrollBars builds the classic overlay bars of the view whose outer box is
-// the current parent: a thin thumb that thickens under the pointer.
+// scrollBars builds the bars of the view whose outer box is the current
+// parent: with legacy scrollers AppKit's (rexui.ScrollBars), otherwise the
+// classic overlay bars, a thin thumb that thickens under the pointer.
 func (k *Kit) scrollBars(v *base.ScrollView) {
+	if k.r.Settings.Scroller == theme.ScrollerLegacy {
+		// legacy bars are the system's, whatever the kit's theme: AppKit's
+		// track, slot and knob, drawn in one place (rexui)
+		rexui.ScrollBars(k.Kit, v)
+		return
+	}
 	c := k.c
 	px := &k.r.Px
 	bars := k.ScrollBars(v)
