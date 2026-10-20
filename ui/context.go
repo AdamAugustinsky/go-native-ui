@@ -640,7 +640,7 @@ func (c *Context) newBox(flags Flags, key Key) ID {
 	}
 	if n := &c.semNext; n.role != RoleNone {
 		c.sems = append(c.sems, semRec{id: id, role: n.role, state: n.state, actions: n.actions, hasActions: n.hasActions,
-			name: n.name, value: n.value, rng: n.rng, hasRange: n.hasRange, pos: n.pos, hasPos: n.hasPos})
+			name: n.name, value: n.value, rng: n.rng, hasRange: n.hasRange, pos: n.pos, hasPos: n.hasPos, level: n.level})
 		b.sem = int32(len(c.sems))
 	}
 	c.semNext = semNext{}

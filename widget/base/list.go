@@ -168,6 +168,7 @@ type List struct {
 	ring    bool
 	axes    ScrollAxes
 	table   bool
+	tree    bool // an outline's: rows export their level
 	off     bool // built in a disabled region: the rows are disabled too
 
 	// the row being built
@@ -651,6 +652,9 @@ func (l *List) BeginRow(rs *RowState, name []byte, flags ui.Flags) ui.ID {
 		c.NextSemActions(ui.ActPress | ui.ActFocus | ui.ActScrollIntoView | ui.ActExpand | ui.ActCollapse)
 	}
 	c.NextSemPos(rs.Row, l.Rows)
+	if l.tree {
+		c.NextSemLevel(rs.Level + 1)
+	}
 	if name != nil {
 		c.NextSemNameBytes(name)
 	}

@@ -227,6 +227,7 @@ func (k *Kit) BeginOutline(label string, st *OutlineState, t *Tree, o ListOpts) 
 		st.rebuild(t)
 	}
 	ol.List = k.beginList(label, &st.ListState, len(st.rows), false, o)
+	ol.List.tree = true
 	st.built = [2]int{ol.First, ol.Last}
 	return ol
 }

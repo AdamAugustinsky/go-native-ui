@@ -493,3 +493,35 @@ func TestOutlineTakesExpandAndCollapseRequests(t *testing.T) {
 		}
 	}
 }
+
+// An outline's rows tell assistive technologies their depth in the tree
+// (SemNode.Level, 1 for a root) and whether they show their children
+// (SemExpanded); a list's rows are in no tree.
+func TestOutlineRowsExportTheirLevel(t *testing.T) {
+	v := newOutlineView(smallSize, smallDepth).named()
+	v.st.Expand(&v.tree, 0, true, false)
+	v.st.Expand(&v.tree, 1, true, false)
+	g := newRig(t, theme.Light, nil, v.build)
+	g.settle()
+	for _, w := range []struct {
+		name     string
+		level    int32
+		expanded bool
+	}{{"n0", 1, true}, {"n1", 2, true}, {"n2", 3, false}, {"n3", 2, false}, {"n4", 1, false}, {"n6", 1, false}} {
+		n := g.node(ui.RoleListItem, w.name)
+		if n.Level != w.level || (n.State&ui.SemExpanded != 0) != w.expanded {
+			t.Errorf("%s: level %d, expanded %v; want %d, %v", w.name, n.Level, n.State&ui.SemExpanded != 0, w.level, w.expanded)
+		}
+	}
+
+	l := &listView{n: 3}
+	l.st.Sel.Reserve(3)
+	lg := newRig(t, theme.Light, nil, l.build)
+	lg.settle()
+	lg.c.Semantics(&lg.sem)
+	for _, n := range lg.sem.Nodes {
+		if n.Role == ui.RoleListItem && n.Level != 0 {
+			t.Fatalf("a list's row reports level %d", n.Level)
+		}
+	}
+}
