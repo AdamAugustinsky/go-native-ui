@@ -209,7 +209,7 @@ func (r *Rex) button(t *tab, slot int8, b int) {
 // shortcuts: ⌘1…⌘8 a tab and ⌘9 the last, ⌃Tab and ⌘⇧] the next, ⌃⇧Tab and
 // ⌘⇧[ the previous (both wrap).
 func (r *Rex) tabKeys(c *ui.Context) {
-	if c.TakeKey('T', ui.PrimaryMod()) {
+	if c.TakeKey('T', ui.ModSuper) {
 		r.newTab()
 	}
 }

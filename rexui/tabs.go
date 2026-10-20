@@ -255,6 +255,10 @@ type TabBar struct {
 	// Commands, when set (Commands[0] != 0), are the menu commands that
 	// choose tabs 1 to 8 and the last (⌘1…⌘9; TabCommands makes them).
 	Commands [9]menu.ID
+	// Mod is the modifier of the number and bracket shortcuts (0: the
+	// platform's, ui.PrimaryMod: ⌘ on macOS, Ctrl elsewhere). An app whose
+	// shortcuts are ⌘ everywhere (rexlook) sets ui.ModSuper.
+	Mod ui.Mods
 
 	key       ui.Key
 	variant   TabsVariant
@@ -335,7 +339,10 @@ func (b *TabBar) Update(k *base.Kit, tabs []Tab, sel int) TabsEvents {
 	}
 	in := c.Input()
 	rc := &TabsRecipes[b.variant%NumTabsVariants]
-	prim := ui.PrimaryMod()
+	prim := b.Mod
+	if prim == 0 {
+		prim = ui.PrimaryMod()
+	}
 
 	// the pointer: a press chooses, a click on × or a middle click closes
 	for i := 0; i < n; i++ {

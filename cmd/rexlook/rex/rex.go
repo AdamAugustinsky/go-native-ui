@@ -145,6 +145,7 @@ func (r *Rex) init(ts TextSystem, scale float32) {
 		r.k.AddIcon(iconSpecs[i]) // the scene's icons follow the standard ones, as iconID says
 	}
 	r.th = r.k.Theme()
+	r.bar.Mod = ui.ModSuper // Rex's tab shortcuts are ⌘ on every system
 	r.SetScale(scale)
 	r.initTabs()
 }
