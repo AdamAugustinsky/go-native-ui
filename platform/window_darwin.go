@@ -109,6 +109,7 @@ func Open(o Options) (*Window, error) {
 	}
 	objc.Send1(w.win, selSetTitle, uintptr(objc.Str(o.Title)))
 	objc.Send(w.win, selCenter)
+	w.cascade()
 	if os.Getenv("GNUI_NOANIM") != "" {
 		objc.Send1(w.win, selSetAnimBehavior, 2) // NSWindowAnimationBehaviorNone
 	}

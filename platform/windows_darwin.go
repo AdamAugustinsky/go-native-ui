@@ -203,6 +203,35 @@ func fallbackWindow() *Window {
 	return reg.open[0]
 }
 
+var selCascade = objc.Sel("cascadeTopLeftFromPoint:")
+
+// cascade moves a window opening while others are open off the centre every
+// window opens at, which would hide the one under it: below and right of the
+// newest window, by what keeps both title bars in view, as AppKit's document
+// windows cascade. The newest, not the key one: two windows opened from the
+// same key window would land on each other. A window in full screen or in
+// the Dock is no place to start from. Open calls it before registering w.
+// Main thread.
+func (w *Window) cascade() {
+	var from *Window
+	for i := reg.n - 1; i >= 0 && from == nil; i-- {
+		if reg.open[i].cascadesFrom() {
+			from = reg.open[i]
+		}
+	}
+	if from == nil {
+		return
+	}
+	f := objc.SendRect(from.win, selFrame)
+	// The first call puts w's top-left on from's and returns the point a
+	// title bar below and right of it, where the second puts it.
+	objc.F.Reset().Arg(uintptr(w.win)).Arg(uintptr(selCascade)).ArgPoint(f.X, f.Y+f.H).Call(objc.MsgSend)
+	x, y := objc.F.F64(0), objc.F.F64(1)
+	objc.F.Reset().Arg(uintptr(w.win)).Arg(uintptr(selCascade)).ArgPoint(x, y).Call(objc.MsgSend)
+}
+
+func (w *Window) cascadesFrom() bool { return !w.FullScreen() && !w.Miniaturized() }
+
 // Pump is the app-wide event pump with windows open (D5, D30): it blocks
 // until an event, a wake, a frame slot of any window or the timeout (ns; 0
 // polls, negative waits without one), hands every event to the window it is

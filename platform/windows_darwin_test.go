@@ -47,6 +47,56 @@ func testInstall(w *Window) (remove func()) {
 	}
 }
 
+// A window opening while another is open cascades from it (below and right,
+// both title bars in view) instead of covering it at the centre; the next
+// cascades from that one; with every window closed the next one is centred
+// again.
+func TestWindowsOpenCascaded(t *testing.T) {
+	var (
+		err    error
+		frames [4][4]float64 // x, y (top-left space), width, height
+	)
+	onMain(func() {
+		Pump(0)
+		var ws [3]*Window
+		for i := range ws {
+			if ws[i], err = Open(Options{Title: fmt.Sprint("cascade ", i), Width: 300, Height: 200, Hidden: true}); err != nil {
+				return
+			}
+			x, y, wd, h := ws[i].FrameRect()
+			frames[i] = [4]float64{x, y, wd, h}
+		}
+		for _, w := range ws {
+			w.Close()
+		}
+		Pump(0)
+		var w *Window
+		if w, err = Open(Options{Title: "alone", Width: 300, Height: 200, Hidden: true}); err != nil {
+			return
+		}
+		x, y, wd, h := w.FrameRect()
+		frames[3] = [4]float64{x, y, wd, h}
+		w.Close()
+		Pump(0)
+	})
+	if err != nil {
+		t.Skipf("cannot open a window here: %v", err)
+	}
+	for i := 1; i < 3; i++ {
+		prev, cur := frames[i-1], frames[i]
+		dx, dy := cur[0]-prev[0], cur[1]-prev[1]
+		if dx < 10 || dy < 10 || dy > 60 {
+			t.Errorf("window %d at %v, after one at %v: want it below and right by about a title bar", i, cur, prev)
+		}
+		if cur[2] != prev[2] || cur[3] != prev[3] {
+			t.Errorf("window %d is %vx%v, want the size it asked for, %vx%v", i, cur[2], cur[3], prev[2], prev[3])
+		}
+	}
+	if frames[3] != frames[0] {
+		t.Errorf("a window opened with none open is at %v, want the centre the first one had, %v", frames[3], frames[0])
+	}
+}
+
 // A closed window's own objects (its GNUIWindow, GNUIView and delegate,
 // with a host and a backdrop in it) are freed by the next pump, while the
 // window still open keeps its own; nothing is freed by Close itself (an
