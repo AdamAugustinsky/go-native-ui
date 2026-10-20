@@ -150,6 +150,8 @@ jobs:
         run: |
           softwareupdate --install-rosetta --agree-to-license >/dev/null 2>&1 || true
           GOARCH=amd64 go test -count=1 ./internal/ffi ./clib
+          # NSRange arguments by value past the fifth integer word (the stack on amd64)
+          GOARCH=amd64 go test -count=1 -run 'TestEditorEscape|TestEditorSetTextOver|TestIME' ./platform
       - name: ffi benchmarks
         run: go test -run '^$' -bench . -benchmem ./internal/ffi
       - name: build spike

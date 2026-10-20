@@ -89,11 +89,24 @@ func (w *Window) linkTick(c *ffi.CB, metal bool) {
 			w.drawable = objc.Retain(objc.Send(objc.ID(c.Int(3)), selUpdateDrawable))
 		}
 		w.ticksSinceFrame, w.lastFrameT = 0, now
-		w.q.push(Event{Kind: EvFrame, Time: now})
-		objc.Send2(w.app, selPostEvent, uintptr(w.wakeEv), 0) // unblock nextEventMatchingMask
-		if w.live || menuTracking() || w.drag.active {
-			w.runHandlerFrom(true) // a requested frame (animation) while AppKit's resize, menu tracking or drag session loop runs
+		if w.frameOut { // the last tick's frame never reached Wait: a nested loop runs
+			w.nested = true
 		}
+		w.q.push(Event{Kind: EvFrame, Time: now})
+		w.frameOut = true
+		objc.Send2(w.app, selPostEvent, uintptr(w.wakeEv), 0) // unblock nextEventMatchingMask
+		if w.live || menuTracking() || w.drag.active || w.nested {
+			w.runHandlerFrom(true) // a requested frame (animation, input) while AppKit's resize, menu tracking, drag session or another nested loop runs
+		}
+		return
+	}
+	if w.frameOut && !w.inHandler {
+		// A frame was queued a tick ago and Wait has not returned it: the
+		// main thread is in a loop that does not return to the app's (a
+		// correction bubble's, a block's). Arm a frame, whose tick brings a
+		// drawable and draws through the frame handler.
+		w.nested = true
+		w.RequestFrame()
 		return
 	}
 	// Keep ticking through short gaps: pausing after every tick made the

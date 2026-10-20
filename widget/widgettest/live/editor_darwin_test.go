@@ -7,10 +7,13 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unicode/utf16"
 	"unsafe"
+
+	"github.com/ebitengine/purego"
 
 	"gonativeui/app"
 	"gonativeui/internal/objc"
@@ -64,6 +67,8 @@ type edApp struct {
 	index      int
 	replaceErr error
 	spans      []platform.TextSpan
+	builds     atomic.Int64 // frames built
+	popupBuilt bool         // the last frame built the completion's row
 }
 
 func (p *edApp) Init(a *app.App) error {
@@ -102,19 +107,28 @@ func (p *edApp) Build(c *ui.Context) {
 	p.beforeKey = k.TextField("Before", &p.before, "").Key
 	k.NextHeight(widget.Fill) // the editor sizes itself; the filler keeps the after field at the bottom
 	k.Column("mid")
+	p.popupBuilt = p.popup
+	if p.popup { // the completion's row, built from the state before this frame's signals
+		k.Label("Paolo")
+	}
 	s := k.NativeEditor(p.ed, "Message")
 	k.EndColumn()
 	p.afterKey = k.TextField("After", &p.after, "").Key
 	k.EndWindow()
 	k.End()
 	p.sig, p.edID = s, s.ID
-	p.take(s)
+	p.builds.Add(1)
+	popup, index := p.popup, p.index
+	if p.take(s) || p.popup != popup || p.index != index {
+		c.RequestFrame() // the state this frame's signals changed is drawn in the next
+	}
 }
 
 // take is the app's side of the signals: the completion, the mention spans,
-// the submissions.
-func (p *edApp) take(s base.NativeEditorSignal) {
+// the submissions. It reports whether it took any.
+func (p *edApp) take(s base.NativeEditorSignal) (took bool) {
 	ed := p.ed
+	took = s.Changed || s.Selected || s.Submitted || s.Cancelled || s.PastedImage || s.HeightChanged
 	if s.Changed {
 		p.changed++
 		if s.Composing {
@@ -139,6 +153,7 @@ func (p *edApp) take(s base.NativeEditorSignal) {
 		ed.SetText(nil)
 	}
 	for c := ed.TakeCommand(); c != platform.CmdNone; c = ed.TakeCommand() {
+		took = true
 		p.cmds = append(p.cmds, c)
 		switch c {
 		case platform.CmdUp:
@@ -168,7 +183,13 @@ func (p *edApp) take(s base.NativeEditorSignal) {
 		}
 		ed.SetSpans(p.spans)
 		p.complete()
+	} else if s.Selected && p.popup && ed.Selection() != (platform.TextSelection{Anchor: p.trigger.End, Focus: p.trigger.End}) {
+		// The caret left the end of the trigger: the completion's range is
+		// stale, so it closes (a later edit there opens it again).
+		p.popup = false
+		ed.SetCompletionActive(false)
 	}
+	return took
 }
 
 // complete opens the completion when "@" and a prefix of "paolo" sit before
@@ -552,9 +573,9 @@ func TestEditorCompletion(t *testing.T) {
 func TestEditorEditMenu(t *testing.T) {
 	l, p := startEditor(t, platform.EditorOptions{})
 	focusEditor(t, l, p)
-	var saved *string
-	l.Do(func(*app.App) { saved = saveGeneralPB() })
-	defer l.Do(func(*app.App) { restoreGeneralPB(saved) })
+	var saved []pbItem
+	l.Do(func(*app.App) { saved = savePB(generalPB()) })
+	defer l.Do(func(*app.App) { restorePB(generalPB(), saved) })
 	l.Type("one two")
 	l.Until("typed", 120, textIs(p, "one two"))
 	perform := func(title string) {
@@ -865,24 +886,101 @@ func generalPBString(l *widgettest.LiveApp) string {
 	return s
 }
 
-// saveGeneralPB keeps the plain text of the user's clipboard, to put back.
-func saveGeneralPB() *string {
-	var s *string
-	onMainNow(func() {
-		str := objc.Send1(generalPB(), objc.Sel("stringForType:"), uintptr(objc.Str("public.utf8-plain-text")))
-		if str != 0 {
-			v := goStr(str)
-			s = &v
-		}
-	})
-	return s
+// pbItem is one item of a pasteboard: its types and the data of each.
+type pbItem struct {
+	types []string
+	data  [][]byte
 }
 
-func restoreGeneralPB(s *string) {
-	onMainNow(func() {
-		objc.Send(generalPB(), objc.Sel("clearContents"))
-		if s != nil {
-			objc.Send2(generalPB(), objc.Sel("setString:forType:"), uintptr(objc.Str(*s)), uintptr(objc.Str("public.utf8-plain-text")))
+// savePB copies every item of pb, every type of each, to put back with
+// restorePB: a test that writes the user's clipboard leaves it as it was.
+// Main thread.
+func savePB(pb objc.ID) []pbItem {
+	var out []pbItem
+	items := objc.Send(pb, objc.Sel("pasteboardItems"))
+	selAt, selTypes, selData := objc.Sel("objectAtIndex:"), objc.Sel("types"), objc.Sel("dataForType:")
+	selGet, selLen, selCount := objc.Sel("getBytes:length:"), objc.Sel("length"), objc.Sel("count")
+	for i := uintptr(0); i < uintptr(objc.Send(items, selCount)); i++ {
+		it := objc.Send1(items, selAt, i)
+		types := objc.Send(it, selTypes)
+		var item pbItem
+		for j := uintptr(0); j < uintptr(objc.Send(types, selCount)); j++ {
+			typ := objc.Send1(types, selAt, j)
+			d := objc.Send1(it, selData, uintptr(typ))
+			if d == 0 { // a promise that is not kept any more
+				continue
+			}
+			n := int(objc.Send(d, selLen))
+			b := make([]byte, n)
+			if n > 0 {
+				objc.F.Reset().Arg(uintptr(d)).Arg(uintptr(selGet)).ArgPtr(unsafe.Pointer(&b[0])).Arg(uintptr(n)).Call(objc.MsgSend)
+			}
+			item.types = append(item.types, goStr(typ))
+			item.data = append(item.data, b)
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+// restorePB replaces pb's contents with items saved by savePB. Main thread.
+func restorePB(pb objc.ID, items []pbItem) {
+	objc.Send(pb, objc.Sel("clearContents"))
+	if len(items) == 0 {
+		return
+	}
+	arr := objc.Send(objc.Cls("NSMutableArray"), objc.Sel("array"))
+	clsItem, clsData := objc.Cls("NSPasteboardItem"), objc.Cls("NSData")
+	selAlloc, selInit, selSetData := objc.Sel("alloc"), objc.Sel("init"), objc.Sel("setData:forType:")
+	selWith, selAdd := objc.Sel("dataWithBytes:length:"), objc.Sel("addObject:")
+	for _, item := range items {
+		it := objc.Send(objc.Send(clsItem, selAlloc), selInit)
+		for k, typ := range item.types {
+			b := item.data[k]
+			var ptr unsafe.Pointer
+			if len(b) > 0 {
+				ptr = unsafe.Pointer(&b[0])
+			}
+			d := objc.ID(objc.F.Reset().Arg(uintptr(clsData)).Arg(uintptr(selWith)).ArgPtr(ptr).Arg(uintptr(len(b))).Call(objc.MsgSend).R0())
+			t := objc.Str(typ)
+			objc.Send2(it, selSetData, uintptr(d), uintptr(t))
+		}
+		objc.Send1(arr, selAdd, uintptr(it))
+		objc.Release(it)
+	}
+	objc.Send1(pb, objc.Sel("writeObjects:"), uintptr(arr))
+}
+
+// The clipboard helpers keep every item and every type: a test leaves the
+// user's clipboard as it found it, rich text, images and all.
+func TestPasteboardSaveRestore(t *testing.T) {
+	if _, err := purego.Dlopen("/System/Library/Frameworks/AppKit.framework/AppKit", purego.RTLD_NOW|purego.RTLD_GLOBAL); err != nil {
+		t.Fatal(err) // no app runs in this test: NSPasteboard comes with AppKit
+	}
+	widgettest.OnMain(func() {
+		pb := objc.Retain(objc.Send(objc.Cls("NSPasteboard"), objc.Sel("pasteboardWithUniqueName")))
+		defer objc.Send(pb, objc.Sel("releaseGlobally"))
+		want := []pbItem{
+			{types: []string{"public.utf8-plain-text", "public.rtf", "com.gonativeui.test"}, data: [][]byte{[]byte("one"), []byte(`{\rtf1 one}`), {0, 1, 2, 0xFF}}},
+			{types: []string{"public.utf8-plain-text", "public.png"}, data: [][]byte{[]byte("two"), tinyPNG}},
+		}
+		restorePB(pb, want)
+		saved := savePB(pb)
+		setPBString(pb, "clobbered")
+		restorePB(pb, saved)
+		got := savePB(pb)
+		if len(got) != len(want) {
+			t.Fatalf("%d items back, want %d: %+v", len(got), len(want), got)
+		}
+		for i := range want { // every type written comes back (the pasteboard may add derived ones)
+			for k, typ := range want[i].types {
+				j := slices.Index(got[i].types, typ)
+				if j < 0 {
+					t.Errorf("item %d lost %s (has %q)", i, typ, got[i].types)
+				} else if !bytes.Equal(got[i].data[j], want[i].data[k]) {
+					t.Errorf("item %d, %s: %q, want %q", i, typ, got[i].data[j], want[i].data[k])
+				}
+			}
 		}
 	})
 }
@@ -987,4 +1085,104 @@ func TestEditorMaxLen(t *testing.T) {
 		}
 	})
 	l.Until("replaced", 120, textIs(p, "écde"))
+}
+
+// postKeys posts key-down and key-up events typing s to the window, and
+// runs no frame of its own. Main thread.
+func postKeys(w widgettest.Win, s string) {
+	for _, r := range s {
+		c := string(r)
+		widgettest.Post(w.KeyEvent(true, c, c, 0, 0, false))
+		widgettest.Post(w.KeyEvent(false, c, c, 0, 0, false))
+	}
+}
+
+// A completion whose trigger the caret left closes: "@pa", Left, Enter sends
+// the text as it is, and replaces nothing.
+func TestEditorCompletionClosesWhenTheCaretMoves(t *testing.T) {
+	l, p := startEditor(t, platform.EditorOptions{})
+	focusEditor(t, l, p)
+	l.Type("@pa")
+	l.Until("the completion opens", 120, func() bool { return p.popup && p.ed.CompletionActive() })
+	pressIn(l, ui.KeyLeft, 0)
+	l.Until("the caret left the trigger: the completion closes", 120, func() bool { return !p.popup && !p.ed.CompletionActive() })
+	pressIn(l, ui.KeyEnter, 0)
+	l.Until("Enter sends", 120, func() bool { return len(p.submitted) == 1 })
+	if p.submitted[0] != "@pa" || p.replaceErr != nil || slices.Contains(p.cmds, platform.CmdAccept) {
+		t.Errorf("sent %q, commands %v, Replace %v; want \"@pa\" with nothing accepted", p.submitted[0], p.cmds, p.replaceErr)
+	}
+}
+
+// The completion's row appears after typing with no frame forced by the
+// test: the state the editor's signals change asks for the frame that draws
+// it.
+func TestEditorCompletionShowsUnforced(t *testing.T) {
+	l, p := startEditor(t, platform.EditorOptions{})
+	focusEditor(t, l, p)
+	l.Native(func(w widgettest.Win) { postKeys(w, "@pa") })
+	time.Sleep(time.Second) // wall time: nothing here asks for frames
+	var popup, built bool
+	l.Do(func(*app.App) { popup, built = p.popup, p.popupBuilt })
+	if !popup || !built {
+		t.Fatalf("after \"@pa\": completion open %v, its row built %v (text %q)", popup, built, p.ed.Text())
+	}
+	if _, ok := l.Find(ui.RoleLabel, "Paolo"); !ok {
+		t.Errorf("the completion's row is not in the last frame:\n%s", l.Dump())
+	}
+}
+
+// While a nested event loop runs (as NSCorrectionPanel's does on macOS 15,
+// until the next key), keys it dispatches reach the editor and frames are
+// drawn for them: the text, the caret and the completion follow; with
+// nothing happening the app draws nothing, inside the loop and after it.
+func TestEditorNestedLoopDraws(t *testing.T) {
+	l, p := startEditor(t, platform.EditorOptions{})
+	focusEditor(t, l, p)
+	l.Frames(5)
+	var b0, bTyped, bQuiet0, bQuiet1 int64
+	var built bool
+	var text string
+	var caret platform.TextSelection
+	l.Do(func(a *app.App) {
+		w := widgettest.NativeWindow(a)
+		app_ := widgettest.NSApp()
+		selNext := objc.Sel("nextEventMatchingMask:untilDate:inMode:dequeue:")
+		selSend, selDate := objc.Sel("sendEvent:"), objc.Sel("dateWithTimeIntervalSinceNow:")
+		clsDate, mode := objc.Cls("NSDate"), objc.Str("kCFRunLoopDefaultMode")
+		b0 = p.builds.Load()
+		start := time.Now()
+		posted := false
+		for el := time.Duration(0); el < 2600*time.Millisecond; el = time.Since(start) {
+			switch {
+			case !posted && el > 200*time.Millisecond:
+				postKeys(w, "@pa")
+				posted = true
+			case bTyped == 0 && el > 1200*time.Millisecond:
+				bTyped, built, text, caret = p.builds.Load(), p.popupBuilt, string(p.ed.Text()), p.ed.Selection()
+			case bQuiet0 == 0 && el > 1500*time.Millisecond:
+				bQuiet0 = p.builds.Load()
+			}
+			until := objc.ID(objc.F.Reset().Arg(uintptr(clsDate)).Arg(uintptr(selDate)).ArgF64(0.02).Call(objc.MsgSend).R0())
+			if ev := objc.Send4(app_, selNext, ^uintptr(0), uintptr(until), uintptr(mode), 1); ev != 0 {
+				objc.Send1(app_, selSend, uintptr(ev))
+			}
+		}
+		bQuiet1 = p.builds.Load()
+	})
+	if text != "@pa" || caret != (platform.TextSelection{Anchor: 3, Focus: 3}) {
+		t.Errorf("in the nested loop the editor holds %q, caret %+v", text, caret)
+	}
+	if bTyped <= b0 || !built {
+		t.Errorf("in the nested loop: %d frames built for the typing, the completion's row built %v", bTyped-b0, built)
+	}
+	if bQuiet1 != bQuiet0 {
+		t.Errorf("%d frames built in the nested loop with nothing happening", bQuiet1-bQuiet0)
+	}
+	time.Sleep(500 * time.Millisecond) // the frame after Do (it wakes the loop) and any owed
+	n0 := p.builds.Load()              // atomics: read here, a Do would wake the loop
+	time.Sleep(time.Second)
+	n1 := p.builds.Load()
+	if n1 != n0 {
+		t.Errorf("after the nested loop, %d frames built in 1 s of nothing", n1-n0)
+	}
 }

@@ -41,7 +41,7 @@ func newIMERig(t *testing.T) *imeRig {
 // setMarked sends setMarkedText:selectedRange:replacementRange:.
 func (r *imeRig) setMarked(s string, loc, n uintptr) {
 	str := objc.Str(s) // before the call is assembled: it uses the same frame
-	objc.F.Reset().Arg(uintptr(r.view)).Arg(uintptr(selSetMarkedText)).Arg(uintptr(str)).Arg(loc).Arg(n).Arg(^uintptr(0)).Arg(0).Call(objc.MsgSend)
+	argRangeAfter5(objc.F.Reset().Arg(uintptr(r.view)).Arg(uintptr(selSetMarkedText)).Arg(uintptr(str)).Arg(loc).Arg(n), ^uintptr(0), 0).Call(objc.MsgSend)
 }
 
 func (r *imeRig) insert(s string) {

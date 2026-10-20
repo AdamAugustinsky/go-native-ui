@@ -47,6 +47,7 @@ var (
 	edTVDef, edDelDef      *objc.ClassDef
 	edEmpty                objc.ID           // @""
 	edApp                  objc.ID           // NSApp
+	edPHClass              objc.ID           // GNUIEditorPlaceholder
 	edTable                [MaxHosts]*Editor // index+1 is in the views' Index ivar
 	edStret                uintptr
 	edImageTypes           objc.ID // NSArray of the image types a paste routes to the app
@@ -87,8 +88,6 @@ var (
 	selUsedRect            = objc.Sel("usedRectForTextContainer:")
 	selSetContSpell        = objc.Sel("setContinuousSpellCheckingEnabled:")
 	selSetAutoCorrect      = objc.Sel("setAutomaticSpellingCorrectionEnabled:")
-	selSetPlaceholderStr   = objc.Sel("setPlaceholderString:")
-	selSetPlaceholderAttr  = objc.Sel("setPlaceholderAttributedString:")
 	selSetSelectedRange    = objc.Sel("setSelectedRange:")
 	selShouldChange        = objc.Sel("shouldChangeTextInRange:replacementString:")
 	selBeginEditing        = objc.Sel("beginEditing")
@@ -119,8 +118,6 @@ var (
 	selConvertRectFromScr  = objc.Sel("convertRectFromScreen:")
 	selConvertRectFromView = objc.Sel("convertRect:fromView:")
 	selSetDelegateEd       = objc.Sel("setDelegate:")
-	selInitWithAttrs       = objc.Sel("initWithString:attributes:")
-	selDictWithObjects     = objc.Sel("dictionaryWithObjects:forKeys:count:")
 	selPlaceholderColor    = objc.Sel("placeholderTextColor")
 	selUndo                = objc.Sel("undo:")
 	selRedo                = objc.Sel("redo:")
@@ -143,6 +140,15 @@ var (
 	selUndoManagerFor      = objc.Sel("undoManagerForTextView:")
 	selFrameChanged        = objc.Sel("gnuiFrameChanged:")
 	selSetMarkedText2      = objc.Sel("setMarkedText:selectedRange:")
+	selExtraLineRect       = objc.Sel("extraLineFragmentRect")
+	selLabelWithString     = objc.Sel("labelWithString:")
+	selSetLineBreakMode    = objc.Sel("setLineBreakMode:")
+	selSetAXElement        = objc.Sel("setAccessibilityElement:")
+	selSetAXPlaceholder    = objc.Sel("setAccessibilityPlaceholderValue:")
+	selAddSubviewRel       = objc.Sel("addSubview:positioned:relativeTo:")
+	selSizeToFit           = objc.Sel("sizeToFit")
+	selLineFragPadding     = objc.Sel("lineFragmentPadding")
+	selHitTestEd           = objc.Sel("hitTest:")
 )
 
 // editorNative is the macOS half of an Editor.
@@ -162,6 +168,11 @@ type editorNative struct {
 	dirtyH   bool    // the height is to be measured again (sync)
 	frameW   float64 // the text view's width when the height was last measured
 	quiet    bool    // SetText is setting the text: no EditorChanged
+	ph       objc.ID // the placeholder label, a subview of the text view (0: none)
+	phShown  bool
+	insetX   float64
+	inKey    bool // keyDown: is running
+	keyMark  bool // the key being handled came while marked text was there
 	released bool
 }
 
@@ -179,6 +190,10 @@ func registerEditorClasses() {
 	tv.Method(selRedo, "v@:@", edRedo)
 	tv.Method(selValidateItem, "c@:@", edValidate)
 	edTVClass, edTVDef = tv.Register(), tv
+
+	ph := objc.Define("GNUIEditorPlaceholder", objc.Cls("NSTextField"), nil)
+	ph.Method(selHitTestEd, "@@:{CGPoint=dd}", edPlaceholderHit)
+	edPHClass = ph.Register()
 
 	d := objc.Define("GNUIEditorDelegate", objc.Cls("NSObject"), []string{"NSTextViewDelegate"})
 	d.Method(selTextDidChange, "v@:@", edTextDidChange)
@@ -228,7 +243,7 @@ func (w *Window) NewEditor(o EditorOptions) (*Editor, error) {
 	if e.maxLines <= 0 {
 		e.maxLines = 6
 	}
-	e.insetY = float64(o.InsetY)
+	e.insetX, e.insetY = float64(o.InsetX), float64(o.InsetY)
 	size := float64(o.FontSize)
 	if size <= 0 {
 		size = 13
@@ -292,6 +307,8 @@ func (w *Window) NewEditor(o EditorOptions) (*Editor, error) {
 	}
 	e.host = id
 	edTable[slot] = e
+	e.frameW = objc.SendRect(tv, selFrameEd).W
+	e.layoutPlaceholder()
 	e.Reserve(256)
 	e.copyText()
 	e.dirtyH = true
@@ -301,26 +318,53 @@ func (w *Window) NewEditor(o EditorOptions) (*Editor, error) {
 
 const fltMax = 3.4028234663852886e38
 
-// setPlaceholder gives the text view its placeholder, in the placeholder
-// colour and the text's font.
+// setPlaceholder gives the text view its placeholder, through public API: a
+// label in the placeholder colour and the text's font, under the text view's
+// own drawing (its first subview, below the caret), where the first line's
+// text starts, shown while the text is empty (with no composition), passing
+// every click to the text view; and the accessibility placeholder value.
 func (e *Editor) setPlaceholder(s string, font objc.ID) {
 	str := objc.Str(s)
-	if objc.SendBool1(e.tv, selRespondsTo, uintptr(selSetPlaceholderAttr)) {
-		color := objc.Send(clsNSColor, selPlaceholderColor)
-		keys := &[2]objc.ID{objc.Str("NSFont"), edFgAttr} // on the heap
-		vals := &[2]objc.ID{font, color}
-		dictCls := objc.Cls("NSDictionary") // before the frame is assembled: it uses the same one
-		dict := objc.ID(objc.F.Reset().Arg(uintptr(dictCls)).Arg(uintptr(selDictWithObjects)).
-			ArgPtr(unsafe.Pointer(&vals[0])).ArgPtr(unsafe.Pointer(&keys[0])).Arg(2).Call(objc.MsgSend).R0())
-		as := objc.Send2(objc.Send(clsNSAttributedString, selAlloc), selInitWithAttrs, uintptr(str), uintptr(dict))
-		objc.Send1(e.tv, selSetPlaceholderAttr, uintptr(as))
-		objc.Release(as)
+	l := objc.Send1(edPHClass, selLabelWithString, uintptr(str))
+	objc.Send1(l, selSetFont, uintptr(font))
+	objc.Send1(l, selSetTextColor, uintptr(objc.Send(clsNSColor, selPlaceholderColor)))
+	objc.Send1(l, selSetLineBreakMode, 4) // NSLineBreakByTruncatingTail
+	objc.Send1(l, selSetAXElement, 0)     // the text view reports it (placeholder value)
+	objc.Send(l, selSizeToFit)
+	objc.Send3(e.tv, selAddSubviewRel, uintptr(l), uintptr(^uintptr(0)) /* NSWindowBelow */, 0)
+	objc.Send1(e.tv, selSetAXPlaceholder, uintptr(str))
+	e.ph, e.phShown = l, true
+	e.layoutPlaceholder()
+}
+
+// labelInset is the space an NSTextField label keeps between its frame and
+// its text, in points (its cell's padding).
+const labelInset = 2
+
+// layoutPlaceholder puts the placeholder where the text view's first line
+// starts and as wide as the line.
+func (e *Editor) layoutPlaceholder() {
+	if e.ph == 0 {
 		return
 	}
-	if objc.SendBool1(e.tv, selRespondsTo, uintptr(selSetPlaceholderStr)) {
-		objc.Send1(e.tv, selSetPlaceholderStr, uintptr(str))
+	pad := objc.SendF64(e.tc, selLineFragPadding)
+	f := objc.SendRect(e.tv, selFrameEd)
+	ph := objc.SendRect(e.ph, selFrameEd)
+	x := e.insetX + pad - labelInset
+	objc.F.Reset().Arg(uintptr(e.ph)).Arg(uintptr(selSetFrame)).ArgRect(x, e.insetY, max(f.W-x-e.insetX-pad+labelInset, 0), ph.H).Call(objc.MsgSend)
+}
+
+// showPlaceholder shows the placeholder while the text is empty.
+func (e *Editor) showPlaceholder() {
+	if show := len(e.text) == 0 && !e.marked; e.ph != 0 && show != e.phShown {
+		e.phShown = show
+		objc.Send1(e.ph, selSetHidden, uintptr(boolU(!show)))
 	}
 }
+
+// edPlaceholderHit is the placeholder's hitTest:: never, so that a click
+// on it is the text view's.
+func edPlaceholderHit(c *ffi.CB) { c.Ret(0) }
 
 // Host is the editor's host, for ui.Context.Host.
 func (e *Editor) Host() HostID { return e.host }
@@ -368,16 +412,22 @@ func (e *Editor) SetText(b []byte) error {
 	if !utf8.Valid(b) {
 		return ErrNotBoundary
 	}
+	str := nsStringBytes(b)
+	e.quiet = true // the composition's end and the new text are one quiet change
 	if objc.SendBool(e.tv, selHasMarkedText) {
+		if ctx := objc.Send(e.tv, selInputContext); ctx != 0 {
+			objc.Send(ctx, selDiscardMarked) // the input method forgets it too
+		}
 		objc.Send(e.tv, selUnmarkText)
 	}
-	str := nsStringBytes(b)
-	e.quiet = true
 	objc.Send1(e.tv, selSetString, uintptr(str))
 	e.quiet = false
 	objc.Release(str)
 	objc.Send(e.undo, selRemoveAllActions)
 	e.copyText()
+	// A change of the replaced text not taken yet is moot: the app set the
+	// text it now reads.
+	e.pend &^= EditorChanged | EditorComposing
 	e.dirtyH = true
 	e.wake()
 	return e.SetSelection(TextSelection{len(e.text), len(e.text)})
@@ -524,18 +574,28 @@ func (e *Editor) sync() {
 	used := e.rectCall(func(f *ffi.Frame) *ffi.Frame {
 		return f.Arg(uintptr(e.lm)).Arg(uintptr(selUsedRect)).Arg(uintptr(e.tc))
 	})
-	h := min(max(used.H, e.lineH), float64(e.maxLines)*e.lineH) + 2*e.insetY
+	// The empty line after a trailing newline is the extra line fragment;
+	// the used rect includes it on the systems seen, the union keeps it if not.
+	extra := e.rectCall(func(f *ffi.Frame) *ffi.Frame { return f.Arg(uintptr(e.lm)).Arg(uintptr(selExtraLineRect)) })
+	bottom := used.Y + used.H
+	if extra.H > 0 {
+		bottom = max(bottom, extra.Y+extra.H)
+	}
+	h := min(max(bottom, e.lineH), float64(e.maxLines)*e.lineH) + 2*e.insetY
 	if hf := float32(h); hf != e.height {
 		e.height = hf
 		e.pend |= EditorHeightChanged
 	}
 }
 
-// wake queues one EvHostEdit until the signals are taken.
+// wake queues one EvHostEdit until the signals are taken, and arms a frame:
+// inside a nested loop (the correction bubble's) the app's loop does not
+// run, and the frame's tick draws through the frame handler (linkTick).
 func (e *Editor) wake() {
 	if !e.woken {
 		e.woken = true
 		e.w.q.push(Event{Kind: EvHostEdit, Tag: uint64(e.host), Time: Now()})
+		e.w.RequestFrame()
 	}
 }
 
@@ -553,6 +613,7 @@ func (e *Editor) copyText() {
 	} else {
 		e.mr = TextRange{}
 	}
+	e.showPlaceholder()
 }
 
 // readSelection reads the selected range; the anchor stays where it was when
@@ -644,6 +705,7 @@ func edFrameChanged(c *ffi.CB) {
 	f := objc.SendRect(e.tv, selFrameEd)
 	if f.W != e.frameW {
 		e.frameW = f.W
+		e.layoutPlaceholder()
 		e.dirtyH = true
 		e.wake()
 	}
@@ -659,13 +721,21 @@ func currentMods() Mods {
 }
 
 // command is the editor's part of doCommandBySelector:: true if it took sel.
+//
+// A key that came while marked text was there belongs to the composition,
+// even when the input method commits it (unmarkText:, insertText:) before it
+// hands the same key back as a command: the Enter that commits, the Tab or
+// the Escape that ends a composition does nothing else.
 func (e *Editor) command(sel objc.SEL) bool {
 	marked := objc.SendBool(e.tv, selHasMarkedText)
+	composed := marked || e.inKey && e.keyMark
 	switch sel {
 	case selInsertNewline, selInsertLineBreak, selInsertNLIgnoring:
 		switch {
-		case marked: // Enter commits the composition and sends nothing
-			objc.Send(e.tv, selUnmarkText)
+		case composed: // Enter commits the composition and sends nothing
+			if marked {
+				objc.Send(e.tv, selUnmarkText)
+			}
 		case e.compl:
 			e.toApp(CmdAccept)
 		case sel == selInsertNewline && e.sends(currentMods()):
@@ -677,8 +747,10 @@ func (e *Editor) command(sel objc.SEL) bool {
 		return true
 	case selInsertTab, selInsertBacktab:
 		switch {
-		case marked:
-			objc.Send(e.tv, selUnmarkText)
+		case composed:
+			if marked {
+				objc.Send(e.tv, selUnmarkText)
+			}
 		case e.compl && sel == selInsertTab && currentMods()&ModShift == 0:
 			e.toApp(CmdTab)
 		case e.compl:
@@ -695,6 +767,7 @@ func (e *Editor) command(sel objc.SEL) bool {
 			objc.F.Reset().Arg(uintptr(e.tv)).Arg(uintptr(selSetMarkedText)).Arg(uintptr(edEmpty)).
 				Arg(0).Arg(0).Arg(uintptr(nsNotFound)).Arg(0).Call(objc.MsgSend)
 			objc.Send(e.tv, selUnmarkText)
+		case composed: // the input method ended it already
 		case e.compl:
 			e.toApp(CmdCancel)
 		default:
@@ -704,7 +777,7 @@ func (e *Editor) command(sel objc.SEL) bool {
 		}
 		return true
 	case selMoveUp, selMoveDown:
-		if e.compl && !marked {
+		if e.compl && !composed {
 			if sel == selMoveUp {
 				e.toApp(CmdUp)
 			} else {
@@ -739,24 +812,39 @@ func edDoCommand(c *ffi.CB) {
 }
 
 // edKeyDown is GNUITextView's keyDown:: ⌘Enter, which no key binding names,
-// submits (or accepts the completion); everything else is NSTextView's.
+// submits (or accepts the completion); everything else is NSTextView's,
+// with the composition state at the key's arrival kept for command.
 func edKeyDown(c *ffi.CB) {
 	self, ev := objc.ID(c.Int(0)), objc.ID(c.Int(2))
-	if e := editorOf(self); e != nil {
-		code := uint32(objc.Send(ev, selKeyCode)) & 0xFFFF
-		m := mods(uintptr(objc.Send(ev, selModifierFlags)))
-		if (code == 0x24 || code == 0x4C) && m&ModSuper != 0 && !objc.SendBool(self, selHasMarkedText) {
-			if e.compl {
-				e.toApp(CmdAccept)
-			} else {
-				e.pend |= EditorSubmitted
-				e.wake()
-			}
-			return
+	e := editorOf(self)
+	if e == nil {
+		objc.SuperFrame(c.Frame(), edTVDef.Superclass(), self, selKeyDown).Arg(uintptr(ev)).Call(objc.MsgSendSuper)
+		return
+	}
+	marked := objc.SendBool(self, selHasMarkedText)
+	code := uint32(objc.Send(ev, selKeyCode)) & 0xFFFF
+	m := mods(uintptr(objc.Send(ev, selModifierFlags)))
+	if (code == 0x24 || code == 0x4C) && m&ModSuper != 0 && !marked {
+		if e.compl {
+			e.toApp(CmdAccept)
+		} else {
+			e.pend |= EditorSubmitted
+			e.wake()
 		}
+		return
+	}
+	inKey, keyMark := e.inKey, e.keyMark
+	e.inKey, e.keyMark = true, marked
+	if edKeyHook != nil {
+		edKeyHook(e)
 	}
 	objc.SuperFrame(c.Frame(), edTVDef.Superclass(), self, selKeyDown).Arg(uintptr(ev)).Call(objc.MsgSendSuper)
+	e.inKey, e.keyMark = inKey, keyMark
 }
+
+// edKeyHook, when set (tests), runs in keyDown: before NSTextView takes the
+// key: where an input method acts on it.
+var edKeyHook func(e *Editor)
 
 // edReadSelection is GNUITextView's readSelectionFromPasteboard:: an image
 // with no plain text is the app's; anything else is NSTextView's (plain
@@ -815,17 +903,9 @@ func edUnmark(c *ffi.CB) {
 func edSetMarked(c *ffi.CB) {
 	self := objc.ID(c.Int(0))
 	str, sl, sn := c.Int(2), c.Int(3), c.Int(4)
+	rl, rn := rangeAfter5(c)
 	f := objc.SuperFrame(c.Frame(), edTVDef.Superclass(), self, selSetMarkedText).Arg(str).Arg(sl).Arg(sn)
-	var rl, rn uintptr
-	if runtime.GOARCH == "amd64" {
-		// SysV: the second NSRange does not fit in the one integer register
-		// left (r9), so it is wholly on the stack and r9 is unused.
-		rl, rn = c.Int(6), c.Int(7)
-		f.Arg(0)
-	} else {
-		rl, rn = c.Int(5), c.Int(6)
-	}
-	f.Arg(rl).Arg(rn).Call(objc.MsgSendSuper)
+	argRangeAfter5(f, rl, rn).Call(objc.MsgSendSuper)
 	if e := editorOf(self); e != nil {
 		e.compositionChanged()
 	}

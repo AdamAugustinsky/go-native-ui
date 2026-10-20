@@ -162,11 +162,10 @@ func (d *demo) Build(c *ui.Context) {
 		k.NextGap(2)
 		k.Column("completion")
 		for i := 0; i < d.nMatch; i++ {
-			name := names[d.matches[i]]
 			if i == d.row {
-				k.Label("▸ " + name)
+				k.Label(rowNames[d.matches[i]][1])
 			} else {
-				k.Label("   " + name)
+				k.Label(rowNames[d.matches[i]][0])
 			}
 		}
 		k.EndColumn()
@@ -185,12 +184,21 @@ func (d *demo) Build(c *ui.Context) {
 	k.EndRow()
 	k.EndWindow()
 	k.End()
-	if d.ed.Editor != nil {
-		d.take(s, send)
+	if d.ed.Editor != nil && d.take(s, send) {
+		c.RequestFrame() // this frame was built before the signals: the next shows what they changed
 	}
 }
 
 var rowLabels [64]string
+
+// rowNames are the completion's rows: each name, and selected (no string is
+// built per frame).
+var rowNames = func() (r [len(names)][2]string) {
+	for i, n := range names {
+		r[i] = [2]string{"   " + n + "###" + n, "▸ " + n + "###" + n}
+	}
+	return
+}()
 
 func rowLabel(i int) string {
 	if i >= len(rowLabels) {
@@ -203,9 +211,11 @@ func rowLabel(i int) string {
 }
 
 // take handles the editor's signals: sending, the mention completion and its
-// spans.
-func (d *demo) take(s base.NativeEditorSignal, send bool) {
+// spans. It reports whether there were any (the state they change is drawn
+// in the next frame).
+func (d *demo) take(s base.NativeEditorSignal, send bool) (took bool) {
 	ed := d.ed
+	took = send || s.Changed || s.Selected || s.Submitted || s.Cancelled || s.HeightChanged || s.PastedImage || s.Focused != d.focused
 	if d.focus {
 		d.focus = false
 		activate(d.a)
@@ -222,6 +232,7 @@ func (d *demo) take(s base.NativeEditorSignal, send bool) {
 		d.close()
 	}
 	for c := ed.TakeCommand(); c != platform.CmdNone; c = ed.TakeCommand() {
+		took = true
 		switch c {
 		case platform.CmdUp:
 			d.row = (d.row + d.nMatch - 1) % d.nMatch
@@ -246,7 +257,10 @@ func (d *demo) take(s base.NativeEditorSignal, send bool) {
 	if s.Changed && !s.Composing {
 		d.mentions()
 		d.complete()
+	} else if s.Selected && d.popup && ed.Selection() != (platform.TextSelection{Anchor: d.trigger.End, Focus: d.trigger.End}) {
+		d.close() // the caret left the trigger: its range is stale
 	}
+	return took
 }
 
 func (d *demo) close() {
