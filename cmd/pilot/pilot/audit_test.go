@@ -5,33 +5,48 @@ import (
 	"testing"
 
 	"gonativeui/app"
+	"gonativeui/theme"
 	"gonativeui/widget/widgettest"
 )
 
-// TestAuditLayout runs the layout audit on the -o scene at 2×, as shoot
-// renders it.
-func TestAuditLayout(t *testing.T) {
-	pl := New(SceneOptions())
-	o, err := app.NewOffscreen(Config(), 2400, 1520, 2, pl)
+// The scenes the audits run on: light and dark, key and inactive, top and
+// scrolled, with overlay and legacy scroll bars, and in Menlo.
+var auditScenes = []struct {
+	name string
+	look Look
+}{
+	{"light", Look{Preference: theme.ForceLight}},
+	{"dark", Look{Preference: theme.ForceDark}},
+	{"inactive", Look{Preference: theme.ForceLight, Inactive: true}},
+	{"scrolled", Look{Preference: theme.ForceLight, Scrolled: true}},
+	{"legacy", Look{Preference: theme.ForceLight, Legacy: true}},
+	{"legacy scrolled dark", Look{Preference: theme.ForceDark, Legacy: true, Scrolled: true}},
+	{"mono", Look{Preference: theme.ForceLight, Mono: true}},
+}
+
+// scene renders the offscreen scene at 2×, as shoot does, and returns the
+// window at rest.
+func scene(t *testing.T, look Look) (*Pilot, *app.Offscreen) {
+	t.Helper()
+	pl := NewScene(look)
+	o, _, err := renderScene(pl, 2400, 1520, 2, look, pl.SceneSetup, pl.ScenePost)
 	if err != nil {
 		if os.Getenv("CI") != "" {
 			t.Fatal(err)
 		}
 		t.Skipf("offscreen rendering: %v", err)
 	}
-	defer o.Close()
-	settle := func() {
-		for n := 0; n < 600; n++ {
-			o.Frame()
-			if !o.UI.Animating() {
-				return
-			}
-		}
-		t.Fatal("pilot: the scene did not settle")
+	t.Cleanup(func() { closeScene(pl, o) })
+	return pl, o
+}
+
+// TestAuditLayout runs the layout audit on the -o scene at 2×, as shoot
+// renders it, in each of its looks.
+func TestAuditLayout(t *testing.T) {
+	for _, s := range auditScenes {
+		t.Run(s.name, func(t *testing.T) {
+			_, o := scene(t, s.look)
+			widgettest.AuditLayout(t, "pilot "+s.name, o.UI)
+		})
 	}
-	pl.SceneSetup()
-	settle()
-	pl.ScenePost()
-	settle()
-	widgettest.AuditLayout(t, "pilot", o.UI)
 }

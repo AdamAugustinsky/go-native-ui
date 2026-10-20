@@ -53,12 +53,23 @@ func (pl *Pilot) setActive(c *ui.Context, i int) {
 func (pl *Pilot) focusList(c *ui.Context) { c.SetFocus(listKey(pl.active)) }
 
 // syncFocus keeps the keyboard focus where the active pane is: in its list or
-// one of its fields. When it is nowhere (a click on nothing) or in the other
-// pane, it moves to the active pane's list. A focus elsewhere (the divider) is
+// one of its fields. A focus that moved into a pane's list or field (Tab, which
+// ui does: the sidebar, the tables and the fields in build order, the toolbar's
+// buttons too when Keyboard navigation is on) makes that pane the active one.
+// When the focus is nowhere (a click on nothing) or in the other pane, it moves
+// to the active pane's list. A focus elsewhere (the sidebar, the divider) is
 // left alone.
 func (pl *Pilot) syncFocus(c *ui.Context) {
-	a := pl.active
 	fk := c.FocusKey()
+	if fk != pl.syncedFocus {
+		pl.syncedFocus = fk
+		for i := range pl.panes {
+			if fk != 0 && (fk == listKey(i) || fk == pathKey(i) || fk == filterKey(i)) {
+				pl.active = i
+			}
+		}
+	}
+	a := pl.active
 	if fk == listKey(a) || fk == pathKey(a) || fk == filterKey(a) {
 		return
 	}
@@ -148,21 +159,17 @@ func (pl *Pilot) key(c *ui.Context, k ui.KeyEvent) bool {
 
 	// Shortcuts that work wherever the focus is.
 	switch {
-	case k.Code == ui.KeyTab && k.Mods&(ui.ModCtrl|ui.ModSuper|ui.ModAlt) == 0:
-		// Tab switches panes from the list and from either text field (the field
-		// is left, not given a tab character: its focus goes before it is built).
-		// A path being edited is dropped like Esc drops it; a filter stays.
-		if inPath {
-			a.path.SetString(a.dir)
-			a.pathErr = ""
-		}
-		pl.active ^= 1
-		pl.focusList(c)
-		c.SetFocusVisible(true)
-		return true
 	case prim && k.Code == 'L' && !shift:
+		a.pathEdit = true // the path field takes the path bar's place
 		c.SetFocus(pathKey(pl.active))
 		a.path.SelectAll()
+		return true
+	case prim && k.Code == 'F' && !shift && !alt: // the toolbar's search button
+		a.filterOpen = true
+		c.SetFocus(filterKey(pl.active))
+		return true
+	case pl.mac && prim && alt && k.Code == 'S', !pl.mac && prim && !alt && !shift && k.Code == 'B':
+		pl.sidebar = !pl.sidebar // Hide Sidebar: Finder's ⌥⌘S; Ctrl+Alt is AltGr on Windows, so Ctrl+B elsewhere
 		return true
 	case pl.mac && prim && k.Code == ui.KeyLeftBracket:
 		a.goBack()
@@ -183,7 +190,7 @@ func (pl *Pilot) key(c *ui.Context, k ui.KeyEvent) bool {
 		return true
 	}
 	if inPath {
-		return true // the field edits; Enter and Esc come back through its signal
+		return k.Code != ui.KeyTab // the field edits; Enter and Esc come back through its signal; Tab is ui's
 	}
 	if !inList && !inFilter {
 		return false // the divider or something else has the keyboard

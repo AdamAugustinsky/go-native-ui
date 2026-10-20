@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 
 	"gonativeui/app"
 	"gonativeui/fs"
@@ -20,12 +21,18 @@ func newOffscreen(t testing.TB, b app.Builder) *app.Offscreen {
 	t.Helper()
 	o, err := app.NewOffscreen(Config(), tw, th, 1, b)
 	if err != nil {
+		if c, ok := b.(interface{ Close() }); ok {
+			c.Close()
+		}
 		if os.Getenv("CI") != "" {
 			t.Fatalf("offscreen rendering on CI: %v", err)
 		}
 		t.Skipf("offscreen rendering: %v", err)
 	}
 	t.Cleanup(o.Close)
+	if c, ok := b.(interface{ Close() }); ok {
+		t.Cleanup(c.Close) // (after the window's: first, so the icons' textures are freed while the renderer is there)
+	}
 	return o
 }
 
@@ -164,7 +171,8 @@ func TestShot(t *testing.T) {
 	}
 	// Something is drawn where the rows are: dark pixels (names, sizes and dates
 	// are dark on the light panes, in whatever font the OS has) in both lists.
-	// The left list shows 21 rows from y = 106 and the right one 8, at 1×.
+	// The left list shows 21 rows of 24 from y = 80 (the sidebar is 180 wide, the
+	// lists 510 each) and the right one 8, at 1×.
 	dark := func(x0, y0, x1, y1 int) (n int) {
 		for y := y0; y < y1; y++ {
 			for x := x0; x < x1; x++ {
@@ -176,13 +184,13 @@ func TestShot(t *testing.T) {
 		}
 		return n
 	}
-	if n := dark(20, 110, 590, 440); n < 800 {
+	if n := dark(200, 84, 680, 570); n < 800 {
 		t.Errorf("%d dark pixels in the left list, want text", n)
 	}
-	if n := dark(615, 110, 1185, 235); n < 300 {
+	if n := dark(700, 84, 1190, 270); n < 300 {
 		t.Errorf("%d dark pixels in the right list, want text", n)
 	}
-	if n := dark(20, 452, 590, 700); n > 0 {
+	if n := dark(200, 590, 680, 700); n > 0 {
 		t.Errorf("%d dark pixels below the last row of the left list, want none", n)
 	}
 	var distinct = map[[3]uint32]int{}
@@ -264,5 +272,55 @@ func TestFollowsTheSystemMode(t *testing.T) {
 	}
 	if dark, _ := o.UI.ChromeDark(); dark {
 		t.Error("the chrome is still declared dark")
+	}
+}
+
+// openFiles counts the process's open file descriptors (-1: not known here).
+func openFiles() int {
+	for _, dir := range []string{"/dev/fd", "/proc/self/fd"} {
+		if es, err := os.ReadDir(dir); err == nil {
+			return len(es)
+		}
+	}
+	return -1
+}
+
+// Rendering the scene again and again leaves nothing behind: the Pilot of each
+// run is closed with its window, so its icon workers end and their handles
+// are released.
+func TestOffscreenRunsLeaveNoWorkersOrHandles(t *testing.T) {
+	dir := t.TempDir()
+	run := func() {
+		if _, _, err := RenderShot(filepath.Join(dir, "pilot.png"), 1200, 760, 1, false); err != nil {
+			if os.Getenv("CI") != "" {
+				t.Fatal(err)
+			}
+			t.Skipf("offscreen rendering: %v", err)
+		}
+	}
+	settled := func(g0, f0 int) (g, f int) {
+		for n := 0; n < 200; n++ {
+			if g, f = runtime.NumGoroutine(), openFiles(); g <= g0 && f <= f0 {
+				return
+			}
+			runtime.GC()
+			time.Sleep(10 * time.Millisecond)
+		}
+		return
+	}
+	run() // (warm: the runtime's and the renderer's own threads and handles)
+	time.Sleep(100 * time.Millisecond)
+	runtime.GC()
+	g0, f0 := runtime.NumGoroutine(), openFiles()
+	const runs = 6
+	for i := 0; i < runs; i++ {
+		run()
+	}
+	g, f := settled(g0, f0)
+	if g > g0 {
+		t.Errorf("%d goroutines after %d runs, %d before: the workers were not stopped", g, runs, g0)
+	}
+	if f > f0 {
+		t.Errorf("%d open files after %d runs, %d before", f, runs, f0)
 	}
 }
