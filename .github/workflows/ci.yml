@@ -134,6 +134,7 @@ jobs:
       - name: test (arm64)
         run: |
           GNUI_FS_REPORT=$RUNNER_TEMP/fs-report.txt go test -count=1 $(go list $PKGS | grep -v -E "$PKGS_EXCLUDE")
+          go test -count=1 github.com/go-text/typesetting/font # vendored: CFF outline extraction allocates nothing (a system CFF font)
           { echo '```'; cat $RUNNER_TEMP/fs-report.txt || true; echo '```'; } | tee -a "$GITHUB_STEP_SUMMARY"
       - name: public-API build (gnui_publicapi, DECISIONS.md D53)
         run: |
@@ -327,6 +328,7 @@ jobs:
       - name: test
         run: |
           GNUI_FS_REPORT=$RUNNER_TEMP/fs-report.txt go test -count=1 $(go list $PKGS | grep -v -E "$PKGS_EXCLUDE")
+          go test -count=1 github.com/go-text/typesetting/font # vendored: CFF outline extraction allocates nothing (a system CFF font)
           { echo '```'; cat $RUNNER_TEMP/fs-report.txt || true; echo '```'; } | tee -a "$GITHUB_STEP_SUMMARY"
       - name: build spike
         run: go build -trimpath -ldflags="-s -w" -o bin/spike.exe ./cmd/spike

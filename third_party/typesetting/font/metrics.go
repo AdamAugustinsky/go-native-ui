@@ -375,11 +375,11 @@ func (f *Font) getExtentsFromSbix(glyph gID, xPpem, yPpem uint16) (GlyphExtents,
 	return extents, ok
 }
 
-func (f *Font) getExtentsFromCff1(glyph gID) (GlyphExtents, bool) {
+func (f *Face) getExtentsFromCff1(glyph gID) (GlyphExtents, bool) {
 	if f.cff == nil {
 		return GlyphExtents{}, false
 	}
-	_, bounds, err := f.cff.LoadGlyph(glyph)
+	_, bounds, err := f.cff.LoadGlyphInto(glyph, &f.cffScratch)
 	if err != nil {
 		return GlyphExtents{}, false
 	}

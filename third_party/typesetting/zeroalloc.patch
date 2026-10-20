@@ -290,14 +290,64 @@
  }
  
  // Assign level information to characters removed by rule X9. This is for
+--- a/font/cff/charstring.go
++++ b/font/cff/charstring.go
+@@ -14,15 +14,29 @@
+ // LoadGlyph parses the glyph charstring to compute segments and path bounds.
+ // It returns an error if the glyph is invalid or if decoding the charstring fails.
+ func (f *CFF) LoadGlyph(glyph tables.GlyphID) ([]ot.Segment, ps.PathBounds, error) {
++	var s LoadScratch
++	return f.LoadGlyphInto(glyph, &s)
++}
++
++// LoadScratch is the working storage of LoadGlyphInto: the interpreter, the
++// handler and the segments. A caller that keeps one and passes it to every
++// extraction allocates nothing once the segments have grown to its largest
++// glyph. The zero value is ready to use.
++type LoadScratch struct {
++	psi    ps.Machine
++	loader type2CharstringHandler
++}
++
++// LoadGlyphInto is LoadGlyph with its working storage in s. The segments
++// returned are s's: valid until s is used again.
++func (f *CFF) LoadGlyphInto(glyph tables.GlyphID, s *LoadScratch) ([]ot.Segment, ps.PathBounds, error) {
+ 	if int(glyph) >= len(f.Charstrings) {
+ 		return nil, ps.PathBounds{}, errGlyph
+ 	}
+ 
+ 	var (
+-		psi    ps.Machine
+-		loader type2CharstringHandler
+-		index  byte = 0
+-		err    error
++		index byte = 0
++		err   error
+ 	)
+ 	if f.fdSelect != nil {
+ 		index, err = f.fdSelect.fontDictIndex(glyph)
+@@ -31,9 +45,10 @@
+ 		}
+ 	}
+ 
++	s.loader = type2CharstringHandler{cs: ps.CharstringReader{Segments: s.loader.cs.Segments[:0]}}
+ 	subrs := f.localSubrs[index]
+-	err = psi.Run(f.Charstrings[glyph], subrs, f.globalSubrs, &loader)
+-	return loader.cs.Segments, loader.cs.Bounds, err
++	err = s.psi.Run(f.Charstrings[glyph], subrs, f.globalSubrs, &s.loader)
++	return s.loader.cs.Segments, s.loader.cs.Bounds, err
+ }
+ 
+ // type2CharstringHandler implements operators needed to fetch Type2 charstring metrics
 --- a/font/font.go
 +++ b/font/font.go
-@@ -626,6 +626,8 @@
+@@ -626,6 +626,9 @@
  
  	coords       []tables.Coord
  	xPpem, yPpem uint16
 +
-+	glyfScratch glyfScratch // glyphs.go: working storage of outline extraction
++	glyfScratch glyfScratch     // glyphs.go: working storage of outline extraction
++	cffScratch  cff.LoadScratch // renderer.go, metrics.go: the same for CFF outlines
  }
  
  // NewFace wraps [font] and initializes glyph caches.
@@ -446,6 +496,22 @@
  }
  
  func extentsFromPoints(allPoints []contourPoint) (ext GlyphExtents) {
+--- a/font/metrics.go
++++ b/font/metrics.go
+@@ -375,11 +375,11 @@
+ 	return extents, ok
+ }
+ 
+-func (f *Font) getExtentsFromCff1(glyph gID) (GlyphExtents, bool) {
++func (f *Face) getExtentsFromCff1(glyph gID) (GlyphExtents, bool) {
+ 	if f.cff == nil {
+ 		return GlyphExtents{}, false
+ 	}
+-	_, bounds, err := f.cff.LoadGlyph(glyph)
++	_, bounds, err := f.cff.LoadGlyphInto(glyph, &f.cffScratch)
+ 	if err != nil {
+ 		return GlyphExtents{}, false
+ 	}
 --- a/font/opentype/tables/ot_layout.go
 +++ b/font/opentype/tables/ot_layout.go
 @@ -492,10 +492,13 @@
@@ -508,14 +574,29 @@
  	return GlyphOutline{Segments: segments}, nil
  }
  
-@@ -432,6 +439,10 @@
+@@ -352,11 +359,11 @@
+ 	errNoCFF2Table error = errors.New("no CFF2 table")
+ )
+ 
+-func (f *Font) glyphDataFromCFF1(glyph gID) (GlyphOutline, error) {
++func (f *Face) glyphDataFromCFF1(glyph gID) (GlyphOutline, error) {
+ 	if f.cff == nil {
+ 		return GlyphOutline{}, errNoCFFTable
+ 	}
+-	segments, _, err := f.cff.LoadGlyph(glyph)
++	segments, _, err := f.cff.LoadGlyphInto(glyph, &f.cffScratch)
+ 	if err != nil {
+ 		return GlyphOutline{}, err
+ 	}
+@@ -432,6 +439,11 @@
  //
  // It is a bit faster than calling [Face.GlyphData] and may be used for instance
  // when rendering colored glyphs (from the 'COLR' table).
 +//
-+// For a glyf outline the Segments are in storage owned by the Face and valid
-+// until the next call of GlyphDataOutline (or any extraction of glyph points)
-+// on it: extracting allocates nothing once that storage has grown.
++// For a glyf or CFF outline the Segments are in storage owned by the Face and
++// valid until the next call of GlyphDataOutline (or any extraction of glyph
++// points or CFF extents) on it: extracting allocates nothing once that
++// storage has grown. CFF2 outlines still allocate.
  func (f *Face) GlyphDataOutline(gid GID) (GlyphOutline, bool) {
  	g := gID(gid)
  	out, err := f.glyphDataFromCFF1(g)

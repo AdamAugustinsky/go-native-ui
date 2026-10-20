@@ -627,7 +627,8 @@ type Face struct {
 	coords       []tables.Coord
 	xPpem, yPpem uint16
 
-	glyfScratch glyfScratch // glyphs.go: working storage of outline extraction
+	glyfScratch glyfScratch     // glyphs.go: working storage of outline extraction
+	cffScratch  cff.LoadScratch // renderer.go, metrics.go: the same for CFF outlines
 }
 
 // NewFace wraps [font] and initializes glyph caches.
