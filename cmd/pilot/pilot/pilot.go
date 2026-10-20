@@ -30,6 +30,7 @@ import (
 	"gonativeui/app"
 	"gonativeui/fs"
 	"gonativeui/img"
+	"gonativeui/platform"
 	"gonativeui/rexui"
 	"gonativeui/text"
 	"gonativeui/theme"
@@ -102,6 +103,9 @@ type Options struct {
 	// volume ("" looks for the startup volume's name).
 	Places    []Place
 	RootTitle string
+	// Probe is how the places are looked for (default: the real file system,
+	// on a worker, after the first frame).
+	Probe Probe
 	// ScrollLeft scrolls the left list 130 pt, under the toolbar, once it has
 	// rows (pictures, and pilot -scrolled).
 	ScrollLeft bool
@@ -146,6 +150,8 @@ type Pilot struct {
 	sideFor    string
 	tbH        float32 // the toolbar's height in pixels, as of the last frame
 	rootTitle  string
+	probed     chan placesProbed // the worker's places, until they are taken
+	wake       func()            // wakes the loop (platform.Wake)
 
 	init     [2]<-chan Ready
 	listedAt [2]int64
@@ -173,10 +179,10 @@ func New(o Options) *Pilot {
 	if o.Loc == nil {
 		o.Loc = time.Local
 	}
-	pl := &Pilot{opt: o, src: o.Src, loc: o.Loc, mac: runtime.GOOS == "darwin", win: runtime.GOOS == "windows", init: o.Initial, sidebar: true}
+	pl := &Pilot{wake: platform.Wake, opt: o, src: o.Src, loc: o.Loc, mac: runtime.GOOS == "darwin", win: runtime.GOOS == "windows", init: o.Initial, sidebar: true}
 	pl.rootTitle = o.RootTitle
 	if pl.rootTitle == "" {
-		pl.rootTitle = volumeName()
+		pl.rootTitle = startupVolumeName() // (the worker looks for the real name)
 	}
 	pl.split = widget.NewSplitState(1, 1)
 	pl.split.Min = [widget.MaxPanes]float32{minPanePt, minPanePt}
@@ -209,6 +215,7 @@ func (pl *Pilot) Init(a *app.App) error {
 	pl.bk.SetImages(pl.sys.cache)
 	pl.addSymbols()
 	pl.makePlaces()
+	pl.startProbe()
 	m, err := newMenuModel()
 	if err != nil {
 		return err

@@ -279,7 +279,7 @@ func renderScene(pl *Pilot, w, h int, scale float32, look Look, setup, post func
 	settle := func() error {
 		for n := 0; n < 600; n++ {
 			o.Frame()
-			if pl.IconsPending() {
+			if pl.IconsPending() || pl.PlacesPending() {
 				time.Sleep(2 * time.Millisecond)
 				continue
 			}

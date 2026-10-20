@@ -90,6 +90,7 @@ func (pl *Pilot) Build(c *ui.Context) {
 		c.RequestFrame()
 	}
 	pl.poll()
+	pl.pollPlaces(c)
 	pl.applyScroll()
 	pl.update(c)
 	pl.work()

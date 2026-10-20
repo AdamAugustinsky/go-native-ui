@@ -74,13 +74,53 @@ func (pl *Pilot) addSymbols() {
 	}
 }
 
+// Probe is how Pilot looks at the file system for the sidebar's places: the
+// usual folders of the home folder that exist, and the startup volume's name.
+// It runs on a worker, never in the window's start or a frame (a home on a
+// network volume, or a link that does not answer, would stall them). The zero
+// value looks at the real file system.
+type Probe struct {
+	// IsDir reports whether path is a folder (default: os.Stat).
+	IsDir func(path string) bool
+	// VolumeName is the startup volume's name (default: macOS's /Volumes
+	// entry that links to "/").
+	VolumeName func() string
+}
+
+func (pr Probe) isDir() func(string) bool {
+	if pr.IsDir != nil {
+		return pr.IsDir
+	}
+	return isDir
+}
+
+func (pr Probe) volumeName() func() string {
+	if pr.VolumeName != nil {
+		return pr.VolumeName
+	}
+	return volumeName
+}
+
+// placesProbed is what the worker found.
+type placesProbed struct {
+	places []Place
+	volume string
+}
+
 // makePlaces fills the sidebar: Favorites (the home folder and the usual
-// folders in it) and Locations (the startup volume), or Options.Places.
+// folders in it) and Locations (the startup volume), or Options.Places. Of the
+// usual places, the first frame has the ones that need no look at the disk (the
+// home folder and the volume, under the name the system usually gives it);
+// probePlaces finds the rest.
 func (pl *Pilot) makePlaces() {
 	ps := pl.opt.Places
 	if ps == nil {
-		ps = defaultPlaces(pl.opt.Home, pl.rootTitle)
+		ps = defaultPlaces(pl.opt.Home, pl.rootTitle, nil)
 	}
+	pl.setPlaces(ps)
+}
+
+func (pl *Pilot) setPlaces(ps []Place) {
 	pl.places = pl.places[:0]
 	for i, p := range ps {
 		pl.places = append(pl.places, place{p, placeFirst + uint32(i)})
@@ -105,23 +145,77 @@ func (pl *Pilot) makePlaces() {
 			pl.items = append(pl.items, rexui.SidebarItem{ID: p.id, Title: p.Title, Glyph: rexui.Sym(id)})
 		}
 	}
+	pl.sideFor = "" // the row of the folder shown is looked for again
 }
 
-// defaultPlaces are the home folder, the usual folders in it that exist, and
-// the root.
-func defaultPlaces(home, rootTitle string) []Place {
+// startProbe looks for the places on a worker: the result is taken by
+// pollPlaces in a frame (the worker wakes the loop). Options.Places are
+// the app's own and need no look.
+func (pl *Pilot) startProbe() {
+	if pl.opt.Places != nil {
+		return
+	}
+	ch := make(chan placesProbed, 1)
+	pl.probed = ch
+	pr, home, root, wake := pl.opt.Probe, pl.opt.Home, pl.rootTitle, pl.wake
+	named := pl.opt.RootTitle != ""
+	go func() {
+		r := placesProbed{}
+		if !named {
+			r.volume = pr.volumeName()()
+			root = r.volume
+		}
+		r.places = defaultPlaces(home, root, pr.isDir())
+		ch <- r // (buffered: the worker never waits for the window)
+		wake()
+	}()
+}
+
+// pollPlaces takes the worker's places and the volume's name, if they are
+// there.
+func (pl *Pilot) pollPlaces(c *ui.Context) {
+	if pl.probed == nil {
+		return
+	}
+	select {
+	case r := <-pl.probed:
+		pl.probed = nil
+		if r.volume != "" && r.volume != pl.rootTitle {
+			pl.rootTitle = r.volume
+			for _, p := range pl.panes {
+				p.rootTitle = r.volume
+				if p.dir != "" {
+					p.setDir(p.dir)
+				}
+			}
+		}
+		pl.setPlaces(r.places)
+		c.RequestFrame()
+	default:
+	}
+}
+
+// PlacesPending reports whether the sidebar's places are still being looked
+// for: a picture taken now would lack them.
+func (pl *Pilot) PlacesPending() bool { return pl.probed != nil }
+
+// defaultPlaces are the home folder, the usual folders in it that exist
+// (isDir says; nil: none is looked for) and the root.
+func defaultPlaces(home, rootTitle string, isDir func(string) bool) []Place {
 	var ps []Place
 	if home != "" {
 		ps = append(ps, Place{Title: filepath.Base(home), Path: home, Symbol: "house"})
-		for _, f := range [...]struct{ name, symbol string }{
-			{"Desktop", "menubar.dock.rectangle"}, {"Documents", "doc"}, {"Downloads", "arrow.down.circle"},
-		} {
-			if p := filepath.Join(home, f.name); isDir(p) {
-				ps = append(ps, Place{Title: f.name, Path: p, Symbol: f.symbol})
+		if isDir != nil {
+			for _, f := range [...]struct{ name, symbol string }{
+				{"Desktop", "menubar.dock.rectangle"}, {"Documents", "doc"}, {"Downloads", "arrow.down.circle"},
+			} {
+				if p := filepath.Join(home, f.name); isDir(p) {
+					ps = append(ps, Place{Title: f.name, Path: p, Symbol: f.symbol})
+				}
 			}
 		}
 	}
-	if runtime.GOOS == "darwin" && isDir("/Applications") {
+	if runtime.GOOS == "darwin" && (isDir == nil || isDir("/Applications")) {
 		ps = append(ps, Place{Title: "Applications", Path: "/Applications", Symbol: "square.grid.2x2"})
 	}
 	root := string(filepath.Separator)
@@ -136,9 +230,21 @@ func isDir(p string) bool {
 	return err == nil && st.IsDir()
 }
 
+// startupVolumeName is the name of the startup volume where it is known
+// without looking: macOS's usual one.
+func startupVolumeName() string {
+	switch runtime.GOOS {
+	case "darwin":
+		return "Macintosh HD"
+	case "windows":
+		return "This PC"
+	}
+	return "Computer"
+}
+
 // volumeName is the name of the startup volume: on macOS the entry of
 // /Volumes that is a link to "/" ("Macintosh HD"); "Computer" where it is not
-// known.
+// known. It reads the disk: a worker calls it.
 func volumeName() string {
 	if runtime.GOOS == "darwin" {
 		if es, err := os.ReadDir("/Volumes"); err == nil {
@@ -148,12 +254,8 @@ func volumeName() string {
 				}
 			}
 		}
-		return "Macintosh HD"
 	}
-	if runtime.GOOS == "windows" {
-		return "This PC"
-	}
-	return "Computer"
+	return startupVolumeName()
 }
 
 // placeFor is the sidebar row of the folder dir (0: none).

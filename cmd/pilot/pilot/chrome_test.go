@@ -2,7 +2,9 @@ package pilot
 
 import (
 	"runtime"
+	"sync"
 	"testing"
+	"time"
 
 	"gonativeui/fs"
 	"gonativeui/ui"
@@ -187,5 +189,49 @@ func TestRowsShowSystemIcons(t *testing.T) {
 	}
 	if rows := min(pl.panes[0].v.nRows(), pl.geo[0].visRows); n < rows {
 		t.Errorf("%d icons for %d rows", n, rows)
+	}
+}
+
+// A home folder or a startup volume that does not answer must not hold up the
+// window: the first frame is drawn at once with the places that need no look
+// at the disk (the home folder, the volume under its usual name), and the
+// others, and the volume's real name, come in when the worker gets its answer.
+func TestSlowFileSystemProbesDoNotHoldUpTheFirstFrame(t *testing.T) {
+	gate := make(chan struct{})
+	var once sync.Once
+	release := func() { once.Do(func() { close(gate) }) }
+	t.Cleanup(release)
+	timer := time.AfterFunc(4*time.Second, release) // (what a stalled probe would take)
+	defer timer.Stop()
+
+	opt := SceneOptions()
+	opt.Places, opt.RootTitle = nil, ""
+	opt.Probe = Probe{
+		IsDir:      func(string) bool { <-gate; return true },
+		VolumeName: func() string { <-gate; return "Big Disk" },
+	}
+	pl := New(opt)
+	t0 := time.Now()
+	o := newOffscreen(t, pl)
+	o.Frame()
+	if d := time.Since(t0); d > time.Second {
+		t.Fatalf("the window took %v to draw its first frame with the probes blocked", d)
+	}
+	r := &drive{t: t, o: o}
+	if !r.hasNode(ui.RoleListItem, "rex") || !r.hasNode(ui.RoleListItem, startupVolumeName()) {
+		t.Errorf("the first frame lacks the places that need no probe")
+	}
+	if r.hasNode(ui.RoleListItem, "Documents") || r.hasNode(ui.RoleListItem, "Big Disk") {
+		t.Errorf("places and names that need a probe are there before it answered")
+	}
+	release()
+	for n := 0; n < 500 && !(r.hasNode(ui.RoleListItem, "Documents") && r.hasNode(ui.RoleListItem, "Big Disk")); n++ {
+		time.Sleep(2 * time.Millisecond)
+		o.Frame()
+	}
+	for _, name := range []string{"Documents", "Downloads", "Desktop", "Big Disk"} {
+		if !r.hasNode(ui.RoleListItem, name) {
+			t.Errorf("%q did not appear once the probe answered", name)
+		}
 	}
 }
