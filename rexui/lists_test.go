@@ -664,3 +664,69 @@ func TestListScrollKnobMatchesAppKit(t *testing.T) {
 		}
 	}
 }
+
+// Header and rows share one content width, with legacy scroll bars (the
+// rows and the header give 17 pt to the bar) and with overlay ones, in both
+// styles: the last header cell, the rows and their cells end at the same
+// edge, and what the header draws in the last column (here the sort mark of
+// a sorted, right-aligned column that fills the room) is inside its box.
+func TestTableHeaderAndRowsShareTheirWidth(t *testing.T) {
+	for _, legacyBars := range []bool{false, true} {
+		for _, style := range []rexui.ListStyle{rexui.ListFullWidth, rexui.ListInset} {
+			var st base.TableState
+			st.Sort = base.SortState{Active: true, Column: 3}
+			cols := []base.Column{
+				{ID: 1, Title: "Name", Width: 150}, {ID: 2, Title: "Kind", Width: 100},
+				{ID: 3, Title: "Size", Width: 66, Align: ui.AlignRight, Fill: true, Sortable: true},
+			}
+			sys := theme.SystemValues{Known: true}
+			if legacyBars {
+				sys.Settings.Scroller = theme.ScrollerLegacy
+			}
+			g := newRig(t, theme.Light, &sys, func(g *rig) {
+				k := g.k
+				c := k.Context()
+				c.NextSize(ui.Px(k.Pt(420)), ui.Px(k.Pt(180)))
+				c.Push(c.Box(0, "frame"))
+				tb := rexui.BeginTable(k, "files", &st, cols, 40, rexui.TableOpts{Style: style})
+				for r := tb.First; r < tb.Last; r++ {
+					tb.Row(r, st.Item(r), nil)
+					tb.CellText(0, "name")
+					tb.CellText(1, "kind")
+					tb.CellText(2, "123 KB")
+				}
+				rexui.EndTable(k, &tb)
+				c.Pop()
+			})
+			g.settle()
+			g.frames(30)
+			g.c.Semantics(&g.sem)
+			var hdr, cell, row [4]float32
+			for _, n := range g.sem.Nodes {
+				switch {
+				case n.Role == ui.RoleColumnHeader && n.Name != [2]uint32{} && n.Bounds[0] > hdr[0]:
+					hdr = n.Bounds
+				case n.Role == ui.RoleCell && n.Bounds[0] > cell[0]:
+					cell = n.Bounds
+				case n.Role == ui.RoleRow && row == [4]float32{}:
+					row = n.Bounds
+				}
+			}
+			what := map[bool]string{false: "overlay", true: "legacy"}[legacyBars]
+			if hdr[2] != row[2] || cell[2] != row[2] || hdr[0] != cell[0] {
+				t.Errorf("%s style %d: header cell %v, cell %v, row %v", what, style, hdr, cell, row)
+			}
+			if legacyBars && row[2] >= g.node(ui.RoleScrollBar, "Vertical scroll bar").Bounds[0]+1 {
+				t.Errorf("%s style %d: the rows end at %v, inside the bar", what, style, row[2])
+			}
+			for _, q := range g.list.Quads {
+				if q.Mode == gpu.ModeShape || q.Rect[1] < hdr[1] || q.Rect[3] > hdr[3] || q.Rect[0] < hdr[0] || q.Rect[2] <= q.Rect[0] {
+					continue
+				}
+				if q.Rect[2] > hdr[2]+0.5 {
+					t.Errorf("%s style %d: the header draws to %v, past its last cell's edge %v", what, style, q.Rect[2], hdr[2])
+				}
+			}
+		}
+	}
+}

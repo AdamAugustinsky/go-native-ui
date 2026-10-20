@@ -599,6 +599,8 @@ func (a *App) onEvent(e *platform.Event) {
 		if a.hostCommand(e) {
 			a.p.invalidate()
 		}
+	case platform.EvHostEdit: // the editor holds what changed; its widget takes it in the frame
+		a.p.invalidate()
 	case platform.EvDragEnter, platform.EvDragMove, platform.EvDragLeave, platform.EvDrop, platform.EvDragEnd:
 		var txt []byte
 		if e.Kind == platform.EvDrop && e.Text.Len > 0 {

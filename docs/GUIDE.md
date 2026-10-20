@@ -4,10 +4,11 @@ This guide builds a small app, a list of notes, from an empty window to the
 finished program in [`examples/notes`](../examples/notes). It is for a Go
 developer who has not used the framework before.
 
-The app has a window in the Rex theme that follows the system's light or dark
-mode, a text field to add a note, a list with keyboard selection, Add and
-Remove buttons with disabled states, a switch, a menu with shortcuts, and a
-dialog that confirms removal. It allocates nothing while it runs.
+The app is laid out as macOS 27's Notes window and follows the system's light or
+dark mode and accent colour: a compact toolbar over the system's glass, a sidebar
+listing the notes in groups, the open note beside it, a text field to add a
+note, a switch for the order, a search, a menu with shortcuts and zoom, and a
+confirmation that is the system's alert. It allocates nothing while it runs.
 
 **Every code block is an excerpt of the example.** The fence names the file, the
 prose names the function, and a line `// …` marks lines left out. A test
@@ -29,6 +30,7 @@ go test ./examples/notes/...                  # the tests of the example
 | `examples/notes/notes/notes.go` | the app: state, `Build`, menu model |
 | `examples/notes/notes/script.go` | a scripted session (`widget/widgettest` steps) that gives the app the input a person would |
 | `examples/notes/notes/notes_test.go` | the tests: render, interaction, zero allocations |
+| `examples/notes/live/` | the tests that open a real window: the system's menus, alert and input |
 
 ## 1. The model
 
@@ -70,36 +72,47 @@ app.RunOptions{})` without the result; the example uses `RunWith` so that
 `-exit-first` can print the startup timeline.
 
 ```go examples/notes/main.go
-func runWindow(exitFirst, verbose bool) error {
+func runWindow(exitFirst, verbose bool, pref theme.Preference, scrolled bool) error {
 	n, err := notes.New()
 	if err != nil {
 		return err
 	}
+	n.Mode, n.Scrolled = pref, scrolled
 	res, err := app.RunWith(notes.Config(), n, app.RunOptions{ExitFirst: exitFirst, Verbose: verbose})
 ```
 
 `notes.go`, function `Config`. The size is in points, the pixels per point come
-from the display. `Titlebar` would give the window a custom macOS titlebar for
-`Kit.Titlebar` to fill, as the gallery does; this app keeps the system's.
+from the display. `Titlebar` and `TrafficLights` give the window a custom macOS
+titlebar for the toolbar to fill, with the system's window buttons where the
+toolbar's style (`rexui.TitlebarFor`) puts them; `Materials` lets the window
+host the system's live glass for the sidebar and the toolbar's capsules.
 
 ```go examples/notes/notes/notes.go
 func Config() app.Config {
-	return app.Config{Title: "Notes", Width: 420, Height: 560, MinWidth: 320, MinHeight: 360, Clear: [4]float32{0.92, 0.92, 0.92, 1}}
+	cfg := app.Config{Title: "Notes", Width: windowW, Height: windowH, MinWidth: 720, MinHeight: 360, Clear: [4]float32{1, 1, 1, 1}, Materials: true}
+	cfg.Titlebar, cfg.TrafficLights = rexui.TitlebarFor(theme.ToolbarCompact)
+	return cfg
 }
 ```
 
 `Init` runs once, after the window, the renderer and the text system exist and
 before the first frame. It makes the window's kit: the widget set bound to this
 window's `ui.Context`, its text system and a theme. `rex.Theme()` is the
-default look. `Reserve` and `ReserveRuns` size the caches up front, which is
-what keeps the frames allocation-free (section 10).
+default look. `Materials` says whether this window hosts glass; elsewhere (and
+under Reduce Transparency) the glass is drawn in its measured colour. `Reserve`
+and `ReserveRuns` size the caches up front, which is what keeps the frames
+allocation-free (section 10).
 
 ```go examples/notes/notes/notes.go
 func (n *Notes) Init(a *app.App) error {
+	n.a = a
 	n.k = widget.NewKit(a.UI, a.Text, rex.Theme())
+	n.k.SetPreference(n.Mode)
+	n.k.Materials = a.Win != nil && a.Win.HasMaterials() // the system's glass in a window
 	n.k.SetMenu(n.model)
 	a.SetMenu(n.model) // the native menu bar on macOS
-	a.UI.Reserve(1024)
+	n.addIcons()
+	a.UI.Reserve(2048)
 	a.Text.ReserveRuns(text.MaxCachedRuns, text.MaxCachedGlyphs, text.MaxCachedTextBytes)
 	return nil
 }
@@ -113,115 +126,136 @@ between frames.
 
 ```go examples/notes/notes/notes.go
 func (n *Notes) Build(c *ui.Context) {
+// …
 	k := n.k
 	k.Begin(c)
+	n.answers()
 	n.commands()
-	// …
+	n.rebuild()
+// …
 	k.End()
 }
 ```
-
-Between the two, the smallest app is `k.BeginWindow()`, widgets, `k.EndWindow()`:
-the next section shows it in the example.
 
 The first frame is built and drawn before the window is shown, so the window
 appears with its content (D21).
 
 ## 3. Layout
 
-`BeginWindow` draws the theme's window background and opens the content: a
-column that covers the window, over the background, with the theme's padding
-and gap (`NextPad` changes the padding, as here). Everything built until
-`EndWindow` is in flow layout: `Column` stacks children top to bottom, `Row`
-lays them left to right, and `Card` is a raised surface, a column with the
-theme's padding. A `Row` centres its children across, so that a switch and a
-button of different heights sit on one line (`NextCross` changes that).
+This window places its panes itself: the sidebar's glass runs to the top of the
+window under the toolbar, which is a band over both panes, so each pane is a
+floating box at a given place and size. `theme.At` sets the position and size of
+the next box in pixels and `base.Floating` makes it float; `Push` and `Pop`
+make it the parent of what is built meanwhile. Sizes come from the theme in
+points (`r.Window.Toolbars`) and the app's own constants, times the scale, and
+`theme.Snap` rounds them to whole pixels so that edges are sharp.
 
 ```go examples/notes/notes/notes.go
-	k.NextPad(10)
-	k.BeginWindow() // the background, and the window's content in flow layout over it
-	k.MenuBar()
-	k.NextHeight(widget.Fill)
-	k.BeginCard("card")
-	k.LabelStyle("Notes", widget.TextSemi)
+	if sbW > 0 {
+		theme.At(c, 0, 0, sbW, H)
+		c.Push(c.Box(base.Floating, "sidebar"))
+		n.sidebar(tbH)
+		c.Pop()
+	}
+	theme.At(c, sbW, tbH, W-sbW, H-tbH)
+	c.NextBG(r.Colors[theme.TextBackground])
+	c.Push(c.Box(base.Floating|ui.DrawBackground, "content"))
+	n.content(W-sbW, H-tbH)
+	c.Pop()
+	n.toolbar(tbH, sbW)
 ```
 
-- **Begin and End pair up.** `BeginWindow` ends with `EndWindow`, `Column` with
-  `EndColumn`, `Row` with `EndRow`, `BeginCard` with `EndCard`. The label
-  identifies the container among its siblings.
-- **`Next…` applies to the next widget only.** `NextSize`, `NextWidth`,
-  `NextHeight`, `NextPad` and `NextGap` set one property of the next widget or
-  container, and are then forgotten.
-- **Sizes.** A child fits its content by default. `widget.Fill` takes the room
-  its siblings leave, and `Kit.Fixed(pt)` is a fixed size.
-- **Placing children.** `NextJustify` places the children of the next row or
-  column along its axis, in the room they leave (`ui.JustifyEnd` puts a row of
-  buttons at the right, `ui.JustifyCenter` centres an icon in a capsule), and
-  `NextCross` places them across it. `NextAlign` is different: it aligns a
-  box's own text and never moves children.
-- **Units.** The widget API takes points (`NextPad(10)`); boxes are in
-  pixels, as everywhere in `ui`.
-- **Absolute placement** stays available. The background and the window's
-  box float, so that the content draws over them, and an app that places its
-  panes itself builds `Background` and floating boxes of its own (`theme.At`
-  places the next box, `theme.Floating` makes it float), as the gallery does.
+- **The toolbar is built last**, so that it draws over the panes. The content's
+  scroll state (`n.under`) is the previous frame's: the toolbar's band shows
+  its bar and hairline only while the note is scrolled under it.
+- **Inside the panes** the widgets flow: `Row`, `Column` and `Container` stack
+  children along an axis with the theme's gap and padding, `NextWidth` and
+  `NextSize` set one property of the next widget only (`widget.Fill` takes the
+  room its siblings leave, `Kit.Fixed(pt)` is a fixed size), and `NextJustify`
+  and `NextCross` place children along and across the axis.
+- **The menu bar.** Where the system draws none (Windows, Linux) the app's own
+  is the window's first strip and the panes lie below it. `Kit.MenuBar` builds
+  nothing on macOS.
+- **Units.** The widget API takes points (`NextPad(10)`); boxes are in pixels,
+  as everywhere in `ui`.
+- **Begin and End pair up.** `BeginContainer` ends with `EndContainer`, `Push`
+  with `Pop`. The label identifies the container among its siblings.
+
+The window's content is the rexui components the pane is made of:
+`rexui.Toolbar`, `rexui.Sidebar` and `rexui.ScrollBars` are built from `base`'s
+primitives and the theme's measured recipes, so that the window matches AppKit's
+Notes scene (docs/design/liquid-glass-reference.md).
 
 ## 4. State, a text field and a button
 
 The state of the app is one struct. The notes live in an array of fixed-size,
 pointer-free records, so adding a note never allocates; the limit is the
-overflow policy, and the Add button is disabled when it is reached. The text
-field's state is a `ui.TextBuffer` the app owns.
+overflow policy, and the Add button is disabled when it is reached. A note's
+`id` is never reused, so the list's selection follows the note, not its place.
+The text field's state is a `ui.TextBuffer` the app owns.
 
 `notes.go`, type `Notes` and its limits.
 
 ```go examples/notes/notes/notes.go
 const (
 	maxNotes = 64
-	maxLen   = 80 // bytes of a note
+	maxLen   = 80   // bytes of a note's title
+	maxBody  = 2048 // bytes of its text
+	maxLine  = 120  // bytes of the second line the list shows
 )
-
+// …
 // note is one note: pointer-free, so the array of them is too.
 type note struct {
-	n uint8
-	b [maxLen]byte
+	id     uint32 // never 0, and never reused: the list's selection follows it
+	group  uint8
+	tn, dn uint8  // bytes of the title and of the list's second line
+	bn     uint16 // bytes of the text
+	title  [maxLen]byte
+	detail [maxLine]byte // the date and the start of the text, as the list shows them
+	body   [maxBody]byte // the text; a line starting with "## " is a heading
 }
+```
+
+```go examples/notes/notes/notes.go
+	input    ui.TextBuffer      // the text field that adds a note
+	field    ui.Key             // the text field's key, to focus it
 // …
-	input   ui.TextBuffer // the text field
-	field   ui.Key        // the text field's key, to focus it
-	list    widget.ListState
-	newest  bool // the Switch: show the newest note first
-	confirm bool // the Dialog is open
-}
+	newest   bool    // the Switch: show the newest note first
 ```
 
 `New` sets the buffer's `Max`, which cuts typed or pasted text at a character
-boundary, and sizes the selection.
+boundary, and makes the notes the Notes scene lists, the newest open.
 
 ```go examples/notes/notes/notes.go
 func New() (*Notes, error) {
-	n := &Notes{}
+	n := &Notes{newest: true}
 	n.input.Max = maxLen
-	n.list.Sel.Reserve(maxNotes)
+	n.input.Reserve(maxLen)
+	n.query.Max = maxLen
+	n.query.Reserve(maxLen)
+// …
+	n.side.Sel = n.notes[n.count-1].id
 ```
 
-`Build`, the row with the field and the button. `TextField` edits the buffer in
-place (caret, selection, copy, cut, paste, undo and the input method are all
-handled) and returns a `FieldSignal`, which carries the field's key (`f.Key`,
-the same in every frame, unlike `f.ID`). `BeginDisabled(true)` draws what is
-inside dimmed, takes it out of the Tab order and makes it deaf to the pointer,
-the keyboard and any activation already queued. The pair can wrap a widget
-conditionally. Enter in the field or a click on Add adds the note, and
-`Kit.Focus` puts the keyboard back in the field.
+`content`, the bar below the open note, holds the field and the button.
+`TextField` edits the buffer in place (caret, selection, copy, cut, paste, undo
+and the input method are all handled) and returns a `FieldSignal`, which carries
+the field's key (`f.Key`, the same in every frame, unlike `f.ID`).
+`BeginDisabled(true)` draws what is inside dimmed, takes it out of the Tab order
+and makes it deaf to the pointer, the keyboard and any activation already
+queued. The pair can wrap a widget conditionally. Enter in the field or a click
+on Add adds the note, and `Kit.Focus` puts the keyboard back in the field.
 
 ```go examples/notes/notes/notes.go
-	k.Row("add")
+	k.NextWidth(widget.Fill)
 	f := k.TextField("New note", &n.input, "Add a note…")
 	n.field = f.Key
 	k.BeginDisabled(n.input.Len() == 0 || n.count == maxNotes)
 	added := k.ButtonKind("Add", widget.ButtonPrimary).Clicked
 	k.EndDisabled()
-	k.EndRow()
+	k.LabelBytesStyle(c.Fmt().Int(n.count).Str(" notes").Bytes(), widget.TextMuted)
+	k.EndContainer()
+// …
 	if added || f.Submitted {
 		n.add()
 		k.Focus(n.field)
@@ -233,123 +267,177 @@ func (n *Notes) add() {
 	if n.input.Len() == 0 || n.count == maxNotes {
 		return
 	}
-	nt := &n.notes[n.count]
-	nt.n = uint8(copy(nt.b[:], n.input.Bytes()))
-	n.count++
-	n.input.Reset()
-	n.rebuild()
-}
 ```
 
-## 5. The list
+## 5. The sidebar
 
-A note's *id* is its index in the array, and the list works in ids. A
-`widget.ListState` holds the selection (`Sel`, a `widget.Selection` indexed by
-id), the display order (`Order`, which maps a display row to an id; `Item(r)` is
-the id in row `r`, and `r` itself while `Order` is nil) and the scroll state. Because the selection is by id and not by row, reordering the list keeps
-the selection on the same notes.
+The list of notes is `rexui.Sidebar`: a source list as macOS 27 draws one, on
+the system's glass, with group headers and rows of two lines. The app describes
+its rows every frame as a slice of `rexui.SidebarItem` in display order, a
+header being an item with `Header` set, and the sidebar edits the selected
+row's id in its state. A press or the keyboard (Up and Down) changes the
+selection and reports `Changed`; the sidebar takes the keyboard when it is
+pressed, and the selection is the accent while it has it and grey otherwise.
 
-`rebuild` sets the order: the ids, or the ids reversed for the switch.
+`rebuild` makes the rows: the notes in the order the Switch asks for, those the
+search lets through, each group under its header. The items are views of the
+notes' own bytes (`str`) in an array the app owns, so nothing is allocated; the
+list is rebuilt every frame, which is as cheap as a screenful.
 
 ```go examples/notes/notes/notes.go
 func (n *Notes) rebuild() {
+	q := n.query.Bytes()
+	rows := n.items[:0]
+	group := -1
 	for r := 0; r < n.count; r++ {
-		n.order[r] = uint32(r)
+		i := r
 		if n.newest {
-			n.order[r] = uint32(n.count - 1 - r)
+			i = n.count - 1 - r
 		}
+		nt := &n.notes[i]
+		if !containsFold(nt.titleText(), q) || len(rows)+2 > len(n.items) {
+			continue
+		}
+		if int(nt.group) != group {
+			group = int(nt.group)
+			rows = append(rows, rexui.SidebarItem{ID: headerID + uint32(group), Title: groupTitles[group], Header: true})
+		}
+		rows = append(rows, rexui.SidebarItem{ID: nt.id, Title: str(nt.titleText()), Detail: str(nt.detail[:nt.dn])})
 	}
-	n.list.Order = n.order[:n.count]
+	n.rows = rows
+// …
 }
 ```
 
-`Build`, the list. `BeginList` is virtual: `First` and `Last` are the rows in view
-plus two, so a frame costs what a screenful costs, whether there are 3 rows or a
-million. `RowNamed(r, id, name)` starts a row whose boxes are keyed by the id, so
-their state follows the note when the order changes, and whose accessible name is
-the note's text: what assistive technology reads for the row, and what a test
-finds it by (`Row` without a name is for rows that have none; in a `Table` the
-first cell's text names the row). The row's children flow left to right. The
-loop is an ordinary `for`; there is no closure or interface call per row.
+`sidebar` builds the pane. It gives the keyboard to the list at the start, as
+the Notes scene has it.
 
 ```go examples/notes/notes/notes.go
-	k.NextHeight(widget.Fill)
-	l := k.BeginList("notes", &n.list, n.count)
-	for r := l.First; r < l.Last; r++ {
-		id := n.list.Item(r) // the stable id of the note in row r
-		l.RowNamed(r, id, n.Text(int(id)))
-		k.NextWidth(widget.Fill)
-		k.LabelBytes(n.Text(int(id)))
+func (n *Notes) sidebar(tbH float32) {
+	k := n.k
+	c := k.Context()
+	s := rexui.Sidebar(k.Kit, "Notes", &n.side, n.rows, rexui.SidebarOpts{Top: tbH, RowH: 52, HeaderH: 24})
+	if !n.focused { // the keyboard starts in the list, as in the Notes scene
+		c.SetFocus(c.KeyOf(s.ID))
+		n.focused = true
 	}
-	k.EndList(&l)
 ```
 
-A click selects a row (Shift extends a range from the anchor, the primary modifier
-toggles one). When the list has the focus, Up, Down, Page Up, Page Down, Home and
-End move the cursor and select, Shift extends the range, and ⌘A or Ctrl+A selects
-all. Enter or a double-click reports `l.Activated`, which this app does not use. The
-list also records the semantics that the accessibility bridges will read.
-
-Removing notes moves the later ones up, so their ids change. The selection held
-exactly the removed notes, so it is reset. An app that wants the selection to
-survive a change of the listing calls `Selection.Remap` with the new id of each old
-one instead.
+Removing a note moves the later ones up, which is why a note is told by its id
+and not by its place.
 
 ```go examples/notes/notes/notes.go
 func (n *Notes) removeSelected() {
-	j := 0
-	for i := 0; i < n.count; i++ {
-		if !n.list.Sel.Has(uint32(i)) {
-			n.notes[j] = n.notes[i]
-			j++
-		}
+	i := n.find(n.side.Sel)
+	if i < 0 {
+		return
 	}
-	n.count = j
-	n.list.Sel.Reset()
-	n.rebuild()
-}
 ```
 
-## 6. A switch, a button and a status line
+## 6. The note, a switch and a status line
 
-`Switch` edits a `bool` of the app's and reports `Changed`; the order is rebuilt
-when it does. `Spacer` pushes the Remove button to the right, and the row centres
-the switch and the button across, whatever their heights. Remove is disabled
-while nothing is selected. The status line is dynamic text: `c.Fmt()` builds it
-in the frame's arena and `LabelBytesStyle` copies the bytes (section 10).
+The open note is rich text in a scroll view: the title in Title 1, the headings
+in 15-pt semibold, the rest in body type, as the Notes scene's text view sets
+them. `setText` makes it from the note when the note changes, into buffers the
+app reserved in `New`; `BeginScroll` and `rexui.ScrollBars` are the scroll view
+and the scroll bars of the system's style (legacy, taking room, or overlay).
 
 ```go examples/notes/notes/notes.go
-	k.Row("footer")
+	c.NextSize(ui.Pct(1), ui.Children(1))
+	c.NextPadding(px, py, px, py)
+	c.Push(c.Box(0, "page"))
+	if i := n.find(n.side.Sel); i >= 0 {
+		n.setText(&n.notes[i])
+		c.NextSize(ui.Pct(1), ui.TextSize(0))
+		c.NextTextColor(r.Colors[theme.Text])
+		c.RichText(ui.KeyN(keyText, uint64(n.textID)), n.text, n.spans, &n.styles, ui.RichOpts{})
+	} else {
+		n.textID = 0
+		rexui.Label(k.Kit, "No Note Selected", rexui.LabelOpts{Style: rexui.TextTitle1, Color: rexui.Of(theme.Label3)})
+	}
+	c.Pop()
+```
+
+`Switch` edits a `bool` of the app's and reports `Changed`. It is a regular-size
+switch, the same one `NSSwitch` is. The status line is dynamic text: `c.Fmt()`
+builds it in the frame's arena and `LabelBytesStyle` copies the bytes
+(section 10).
+
+```go examples/notes/notes/notes.go
 	if k.Switch("Newest first", &n.newest).Changed {
 		n.rebuild()
 	}
-	k.Spacer()
-	k.BeginDisabled(n.list.Sel.Count() == 0)
-	if k.Button("Remove…").Clicked {
-		n.confirm = true
-	}
-	k.EndDisabled()
-	k.EndRow()
-	k.LabelBytesStyle(c.Fmt().Int(n.count).Str(" notes, ").Int(n.list.Sel.Count()).Str(" selected").Bytes(), widget.TextMuted)
-	k.EndCard()
-	k.EndWindow()
 ```
 
-## 7. A confirmation dialog
-
-A `Dialog` is an in-window modal, open while the app's `bool` is true. Build its
-content only when `Visible`. Everything under it is inert: no pointer, scrolling,
-text input or shortcut reaches the window, and Tab stays inside the dialog. An
-`Action` closes the dialog and returns true once. Escape cancels, also from a text
-field in the dialog; with dialogs stacked only the topmost takes Enter and Escape.
-The first `ButtonPrimary` is the default action: it has the focus when the dialog opens, and
-Enter chooses it. Build Cancel first, so that Enter on a focused Cancel is
-Cancel's.
+The toolbar is `rexui.Toolbar`: its items are glass capsules, with the window's
+traffic lights before them and the title after the capsule before it.
+`NextPane` moves the items on to the content pane, as an `NSToolbar`'s tracking
+separator does, `Flexible` is a flexible space, and `Search` is the expanded
+search field, which the app reads as a `TextBuffer` like any other.
 
 ```go examples/notes/notes/notes.go
-	d := k.BeginDialog("remove", "Remove notes?", &n.confirm)
+func (n *Notes) toolbar(tbH, sbW float32) {
+	k := n.k
+	r := k.Theme()
+	o := rexui.ToolbarOpts{Style: theme.ToolbarCompact, Title: "Notes", Panes: [2]float32{sbW, 0},
+		ContentUnder: n.under, Traffic: n.Traffic, BandFill: r.Colors[theme.TextBackground]}
+	tb := rexui.BeginToolbar(k.Kit, "Toolbar", o)
+	if tb.Item(n.ic.sidebar, "Sidebar").Clicked {
+		n.hidden = !n.hidden
+	}
+	k.BeginDisabled(n.Selected() == 0)
+	remove := tb.Item(n.ic.trash, "Remove…").Clicked
+	k.EndDisabled()
+	if sbW > 0 {
+		tb.NextPane()
+	}
+	tb.Title()
+	compose := tb.Item(n.ic.compose, "New Note").Clicked
+	tb.Flexible()
+	tb.Search("Search", &n.query, "Search", 0)
+	tb.End()
+```
+
+## 7. A confirmation: the system's alert
+
+Remove is a destructive action, and it is confirmed with the system's alert
+(`NSAlert`) where there is one. `app.App.Alert` queues an alert sheet for the
+window and returns a ticket; the sheet is shown after the frame, at a safe point,
+and its answer comes back with `TakeDialog` in a later frame. The first button
+is the default, and the destructive one is tinted. Where the system has no
+alerts, or the call fails, `Alert` returns an error and the app shows its own
+drawn dialog instead.
+
+```go examples/notes/notes/notes.go
+func (n *Notes) askRemove() {
+	if n.Selected() == 0 || n.ticket != 0 || n.confirm {
+		return
+	}
+```
+
+`answers` reads the answer at the start of the next frame.
+
+```go examples/notes/notes/notes.go
+func (n *Notes) answers() {
+	for r, ok := n.a.TakeDialog(); ok; r, ok = n.a.TakeDialog() {
+		if r.Ticket != n.ticket {
+			continue
+		}
+```
+
+The drawn dialog is a `Dialog`: an in-window modal, open while the app's `bool`
+is true. Build its content only when `Visible`. Everything under it is inert:
+no pointer, scrolling, text input or shortcut reaches the window, and Tab stays
+inside the dialog. An `Action` closes the dialog and returns true once. Escape
+cancels, also from a text field in the dialog; with dialogs stacked only the
+topmost takes Enter and Escape. The first `ButtonPrimary` is the default action:
+it has the focus when the dialog opens, and Enter chooses it. Build Cancel first,
+so that Enter on a focused Cancel is Cancel's.
+
+```go examples/notes/notes/notes.go
+	d := k.BeginDialog("remove", "Remove note?", &n.confirm)
 	if d.Visible {
-		k.Paragraph(c.Fmt().Str("Notes selected: ").Int(n.list.Sel.Count()).Str(". Removing them cannot be undone.").String())
+		k.Paragraph(c.Fmt().Str("“").Str(str(n.selectedTitle())).Str("” will be removed. This cannot be undone.").String())
 		d.BeginActions()
 		d.Action("Cancel", widget.ButtonDefault)
 		if d.Action("Remove", widget.ButtonPrimary) {
@@ -358,17 +446,20 @@ Cancel's.
 		d.EndActions()
 	}
 	k.EndDialog(&d)
-	k.End()
 ```
 
-The button that opens it is called "Remove…" and the dialog's action "Remove". The
-labels differ so that a test, or an assistive technology, finds each by name.
+The button that opens it is called "Remove…" and the dialog's action "Remove".
+The labels differ so that a test, or an assistive technology, finds each by name.
+The benchmark's window takes the drawn dialog always (`drawnOnly`): nobody
+answers a system alert in a loop.
 
 ## 8. Commands, menus and shortcuts
 
 A command is an id, a title and a shortcut. `menu.NewModel` takes the commands,
 the menus that show them and which menus are in the bar, and checks them. `Primary`
-means ⌘ on macOS and Ctrl elsewhere.
+means ⌘ on macOS and Ctrl elsewhere. The View menu's zoom commands are
+`menu.StandardCommand`s: a model with commands of the zoom roles zooms the window
+it was given to (`app.SetMenu`), with ⌘+, ⌘− and ⌘0.
 
 ```go examples/notes/notes/notes.go
 func newModel() (*menu.Model, error) {
@@ -377,11 +468,14 @@ func newModel() (*menu.Model, error) {
 		{ID: cmdNew, Title: "New Note", Shortcut: primary('N', 0)},
 		{ID: cmdRemove, Title: "Remove…", Shortcut: primary(ui.KeyBackspace, 0)},
 		{ID: cmdNewest, Title: "Newest First", Shortcut: primary('N', ui.ModShift)},
+		menu.StandardCommand(cmdZoomIn, menu.RoleZoomIn),
+		menu.StandardCommand(cmdZoomOut, menu.RoleZoomOut),
+		menu.StandardCommand(cmdActualSize, menu.RoleActualSize),
 	}
 	item := func(id menu.ID) menu.Item { return menu.Item{Kind: menu.ItemCommand, Command: id} }
 	menus := []menu.Menu{
 		{Title: "Note", Items: []menu.Item{item(cmdNew), item(cmdRemove)}},
-		{Title: "View", Items: []menu.Item{item(cmdNewest)}},
+		{Title: "View", Items: []menu.Item{item(cmdNewest), {Kind: menu.ItemSeparator}, item(cmdZoomIn), item(cmdZoomOut), item(cmdActualSize)}},
 	}
 	return menu.NewModel(cmds, menus, []int{0, 1})
 }
@@ -399,16 +493,6 @@ func (n *Notes) commands() {
 	if k.Command(cmdNew) {
 		k.Focus(n.field)
 	}
-	if k.Command(cmdNewest) {
-		n.newest = !n.newest
-		n.rebuild()
-	}
-	if k.Command(cmdRemove) {
-		n.confirm = true
-	}
-	n.model.SetEnabled(cmdRemove, n.list.Sel.Count() > 0)
-	n.model.SetChecked(cmdNewest, n.newest)
-}
 ```
 
 **One key, one handler.** A key event is offered in a fixed order and handled at
@@ -416,8 +500,8 @@ most once: the input method, then the focused text field, then the commands, the
 the widgets' own keys. While a field has the focus it takes every key but Tab
 unless the primary modifier is down, and with it A, C, X, V, Z, the arrows,
 Home, End, Backspace and Delete. So ⌘N works while you type, but ⌘Backspace in
-the field means "delete to the start of the line", and it removes notes only when
-the focus is elsewhere. A modal dialog holds back every command and shortcut
+the field means "delete to the start of the line", and it asks to remove a note
+only when the focus is elsewhere. A modal dialog holds back every command and shortcut
 except the edit commands for a text field in it and the commands marked
 `menu.Command.InModal`; its own keys are taken by its widgets.
 
@@ -470,12 +554,13 @@ proves it twice, offscreen in a test and in a window with the benchmark
    text is built with `c.Fmt()` (`Str`, `Int`, …), which appends to a frame arena
    that `Begin` resets, then `String()` or `Bytes()`. The result is valid until
    the next frame; do not keep it. Text you own as `[]byte` (a note's text) goes
-   straight to `LabelBytes`, which copies it. Never build text with `fmt.Sprintf`,
-   `+` or `string(b)` in `Build`.
+   straight to `LabelBytes`, which copies it, and a `string` the app needs of bytes it
+   owns for as long as they do is a view (`str`, `unsafe.String`), as the sidebar's
+   rows are. Never build text with `fmt.Sprintf`, `+` or `string(b)` in `Build`.
 3. **`Reserve` every growable store, and say what happens when it is full.**
    `Context.Reserve(n)` sizes the box cache for n live boxes. `Text.ReserveRuns` sizes
-   the shaped-run cache so that new strings never grow it. `Selection.Reserve(items)`
-   sizes the selection. A `TextBuffer` grows only past its high-water mark, and
+   the shaped-run cache so that new strings never grow it. A `TextBuffer` grows only
+   past its high-water mark, and
    `Max` bounds it. Undo history is bounded and drops the oldest. The note array is
    fixed, and the Add button is disabled when it is full. Pointer-free fixed
    records, like `note`, are what make a store simple.
@@ -528,21 +613,26 @@ func session() []step {
 		typeText("Book a table"), idle(2), click(ui.RoleButton, "Add"), idle(2),
 ```
 
-`notes_test.go`. The interaction test types, adds, selects with the keyboard, removes
-and confirms:
+`notes_test.go`. The interaction test types, adds, opens a note, removes it and
+confirms with the drawn dialog (offscreen there is no system alert; the test with
+`FakeDialogs` answers the alert's buttons instead):
 
 ```go examples/notes/notes/notes_test.go
 	r.play(click(ui.RoleTextField, "New note"), typeText("Buy bread"), key(ui.KeyEnter, 0))
-	if got := r.texts(); len(got) != 4 || got[3] != "Buy bread" || d.input.Len() != 0 {
-		t.Fatalf("after Enter the notes are %q, the field holds %q", got, d.input.String())
-	}
 	// …
-	r.play(click(ui.RoleListItem, "").Nth(3), key(ui.KeyDown, ui.ModShift))
+	r.play(click(ui.RoleListItem, "Buy bread"))
 	// …
 	r.play(click(ui.RoleButton, "Remove…"), waitFor(ui.RoleDialog, ""))
 	// …
 	r.play(click(ui.RoleButton, "Remove"), waitGone(ui.RoleDialog, ""))
 ```
+
+What only a real window has is tested in `examples/notes/live`: the first frame
+with the system's glass and the content in it, the Edit menu's items acting once
+on the focused field, the real `NSAlert` sheet, the focus ring that follows Tab
+and not the mouse, the appearance flip, the zoom commands, a trackpad scroll and
+an idle window that draws nothing. They need the main thread (`widgettest.RunMain`)
+and an unlocked screen, and skip where no window can be opened.
 
 The allocation test measures exactly, with `runtime.ReadMemStats` over whole sessions
 after a warm-up and a collection, as `app.RunBench` does (D11). It passes on the first
