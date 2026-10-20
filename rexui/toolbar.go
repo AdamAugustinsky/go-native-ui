@@ -97,9 +97,14 @@ type ToolbarRecipe struct {
 	// Title and TitleInactive colour the title (§1, §7); Subtitle the line
 	// below it.
 	Title, TitleInactive, Subtitle Tint
-	// Divider is the line between back and forward, DividerH its height.
+	// Divider is the line between back and forward, DividerH its height
+	// and DividerW its width, from the capsule's middle (measured on the
+	// Mac mini: 1 by 20 pt, the separator's colour at 21 % over the light
+	// capsule and 26.5 % over the dark one: #C8C8C8 on #FCFCFC, #707070 on
+	// #3C3C3C).
 	Divider  Tint
 	DividerH float32
+	DividerW float32
 	// Selected fills the chosen segment of an expanded picker.
 	Selected Tint
 	// SegmentW is an expanded picker's segment (156 for 4, §1).
@@ -189,7 +194,7 @@ var ToolbarLook = ToolbarRecipe{
 	Hover: Of(theme.Fill4), Press: Of(theme.Fill2),
 	Rim: Of(theme.CapsuleRim), RimInactive: Of(theme.CapsuleRimInactive), Highlight: Of(theme.CapsuleHighlight),
 	Title: Of(theme.TitleText), TitleInactive: Of(theme.TitleTextInactive), Subtitle: Of(theme.Label2),
-	Divider: Of(theme.Separator), DividerH: 16,
+	Divider: OfAlpha(theme.Separator, 0.21, 0.265), DividerH: 20, DividerW: 1,
 	Selected: Of(theme.Fill2),
 	SegmentW: 39, GroupPad: [2]float32{4.215, 6.215}, EdgePad: [2]float32{4, 1}, MenuGap: 8.5,
 	SearchGap: [2]float32{10, 8}, SearchW: 167,
@@ -816,7 +821,8 @@ func (tb *Toolbar) Nav(back, forward icon.ID, canBack, canForward bool) (b, f ba
 	c.NextRole(ui.RoleGroup)
 	c.NextSemName("Back/Forward")
 	tb.n++
-	g := c.BoxKeyed(flags, ui.KeyN(tb.key, 2000+tb.n), nil)
+	gkey := ui.KeyN(tb.key, 2000+tb.n)
+	g := c.BoxKeyed(flags, gkey, nil)
 	tb.glass(g)
 	c.Push(g)
 	half := theme.Snap(w / 2)
@@ -833,12 +839,6 @@ func (tb *Toolbar) Nav(back, forward icon.ID, canBack, canForward bool) (b, f ba
 		c.NextRadius(h / 2)
 		k.BeginPress(&p, ui.RoleButton, ui.Px(half), ui.Px(h), ui.DrawBackground, nil)
 		tb.symbol(ui.KeyN(p.Key, 1), ic, tb.glyph(p.Visual))
-		if i == 0 {
-			dh := theme.Snap(k.Pt(tb.rc.DividerH))
-			theme.At(c, half-r.Lines.Hairline, theme.Snap((h-dh)/2), r.Lines.Hairline, dh)
-			c.NextBG(tb.rc.Divider.RGBA(r))
-			c.BoxKeyed(ui.DrawBackground|base.Floating, ui.KeyN(p.Key, 2), nil)
-		}
 		k.FocusRing(p.ID, p.Visual, h/2)
 		s := k.EndPress(&p)
 		k.EndDisabled()
@@ -848,6 +848,11 @@ func (tb *Toolbar) Nav(back, forward icon.ID, canBack, canForward bool) (b, f ba
 			f = s
 		}
 	}
+	// the divider starts at the capsule's middle, over the forward half
+	dh, dw := theme.Snap(k.Pt(tb.rc.DividerH)), max(theme.Snap(k.Pt(tb.rc.DividerW)), r.Lines.Hairline)
+	theme.At(c, half, theme.Snap((h-dh)/2), dw, dh)
+	c.NextBG(tb.rc.Divider.RGBA(r))
+	c.BoxKeyed(ui.DrawBackground|base.Floating, ui.KeyN(gkey, 1), nil)
 	tb.highlight(g, base.Visual{Inactive: k.Inactive()}, h)
 	c.Pop()
 	tb.advance(w)

@@ -145,11 +145,14 @@ type SidebarRecipe struct {
 	LegacyKnob, LegacyKnobInactive, LegacySlot, LegacySlotInactive Pair
 	// SearchFill and SearchFillInactive fill a search field on the
 	// sidebar's glass (SidebarSearch): a capsule of the field's height,
-	// measured #EAEAEA and #4E4E4E, #E5E5E5 and #464646 inactive (§2).
+	// measured #EAEAEA and #4E4E4E, #E5E5E5 and #464646 inactive (§2, the
+	// MacBook's 26B5091g); SearchFills replaces them when set.
 	SearchFill, SearchFillInactive Tint
 	// SearchRim is the bright rim inside its edge in an active window
 	// (#FFFFFF 1 pt and #727272 0.5 pt wide) and SearchGlow the colour its
-	// fill fades from at the top and the bottom (#F4F4F4, #565656), SearchEdge and
+	// fill fades from at the top and the bottom (#F2F2F2, #5F5F5F on the
+	// Mac mini: 1 pt in #F1F1F1 and #606060; #F4F4F4, #565656 on the
+	// MacBook), SearchEdge and
 	// SearchEdgeInactive the hairline just outside it (#D8D8D8 and #8C8C8C;
 	// #CDCDCD and #181818 inactive).
 	SearchRim, SearchGlow, SearchEdge, SearchEdgeInactive Pair
@@ -164,6 +167,11 @@ type SidebarRecipe struct {
 	// inactive window (measured 0.5: #0070F4 shows as #79B1F4 on #F2F2F2).
 	TileSize, TileRadius, TileGlyphPt, TileInactive float32
 	TileGlyph                                       Tint
+	// SearchFills are the search field's fill, active and inactive, as the
+	// Mac mini's 27.2 (26B5101f) draws it, the target: #E9E9E9 / #565656
+	// and #E3E3E3 / #4D4D4D (the MacBook's in SearchFill's roles). Zero:
+	// SearchFill and SearchFillInactive.
+	SearchFills [2]Pair
 }
 
 // SidebarLook is the sidebar's recipe (the colours are theme roles measured
@@ -180,7 +188,8 @@ var SidebarLook = SidebarRecipe{
 	LegacyKnob: Solid(0xA5A5A5, 0x5A5A5A), LegacyKnobInactive: Solid(0xABABAB, 0x585858),
 	LegacySlot: Solid(0xD8D8D8, 0x343434), LegacySlotInactive: Solid(0xDEDEDE, 0x323232),
 	SearchFill: Of(theme.SidebarSearchFill), SearchFillInactive: Of(theme.SidebarSearchFillInactive),
-	SearchRim: Solid(0xFFFFFF, 0x727272), SearchGlow: Solid(0xF4F4F4, 0x565656), SearchEdge: Solid(0xD8D8D8, 0x8C8C8C), SearchEdgeInactive: Solid(0xCDCDCD, 0x181818),
+	SearchFills: [2]Pair{Solid(0xE9E9E9, 0x565656), Solid(0xE3E3E3, 0x4D4D4D)},
+	SearchRim:   Solid(0xFFFFFF, 0x727272), SearchGlow: Solid(0xF2F2F2, 0x5F5F5F), SearchEdge: Solid(0xD8D8D8, 0x8C8C8C), SearchEdgeInactive: Solid(0xCDCDCD, 0x181818),
 	TextEnd:  22,
 	TileSize: 20, TileRadius: 5, TileGlyphPt: 11, TileInactive: 0.5, TileGlyph: Of(theme.OnAccent),
 }
@@ -316,6 +325,13 @@ func SidebarSearch(k *base.Kit, label string, buf *ui.TextBuffer, placeholder st
 	fill, edge := rc.SearchFill.RGBA(r), rc.SearchEdge.At(r.T)
 	if k.Inactive() {
 		fill, edge = rc.SearchFillInactive.RGBA(r), rc.SearchEdgeInactive.At(r.T)
+	}
+	i := 0
+	if k.Inactive() {
+		i = 1
+	}
+	if rc.SearchFills[i] != (Pair{}) {
+		fill = rc.SearchFills[i].At(r.T)
 	}
 	k.ApplySize(ui.Pct(1), ui.Px(h))
 	c.NextBG(fill)

@@ -299,12 +299,27 @@ scene tool's `-width`, `-selectAll` and `-nested`:
   13 more per level (`DisclosureX`), its chevron 1 below the middle,
   secondaryLabelColor (`RowChevron`); Finder's `-nested` sidebar within half
   a point (`chromedemo -nested`).
+- The band covers what scrolls under it: it is hoverable and stops the wheel
+  (`ui.Context.StopWheel`), so hover, secondary clicks and the wheel do not
+  reach rows under it, while a press still moves the window. AppKit's
+  titlebar views keep the wheel too: through NSWindow's routing on 27.2 the
+  wheel over the band (empty, title, item, top edge) scrolled nothing,
+  unified and compact, while over the content it scrolled 40 px a step.
+- Reveals keep rows below the band: a scroll view's inset is obscured
+  (`ui.Context.SetObscured`), so `ScrollIntoView`, the keyboard's moves and
+  an assistive technology's `ActScrollIntoView` bring a row below it; a
+  list's Page Up and Down count the rows below it.
+- Under Reduce Transparency the scroll edge is `MatScrollEdge`'s opaque fill.
+- Back and forward's divider: 1 × 20 pt from the capsule's middle, the
+  separator's colour at 21 % (light) and 26.5 % (dark): #C8C8C8 on
+  #FCFCFC, #707070 on #3C3C3C.
 
 Live captures (`Chrome D4`, the Mac mini, legacy and overlay scrollers,
 light and dark, key and inactive, at the top and scrolled: 48) against
 `captures-macmini` and `captures-macmini-overlay` at the probe points: fills
-within ΔE 2, but the sidebar search field in dark (2.1 key, 2.4 inactive,
-the D4 field) and the blurred text under the band. The scrolled phases are
+within ΔE 2, but the blurred text under the band (the sidebar search field
+in dark, 2.1 key and 2.4 inactive then, now follows the Mac mini:
+`SidebarRecipe.SearchFills`). The scrolled phases are
 AppKit's offsets (Finder 130; Notes 114 with legacy bars, 98 overlay: our
 note keeps NSTextView's empty line after its last newline).
 
@@ -380,9 +395,12 @@ Still in recipe fields:
   - A selected row in an inactive window is #676767 / #999999; a row's
     detail line black 43 % / white 36 % (0.7 white on the accent); a
     two-line row's title is semibold.
-  - The sidebar's search field is a filled capsule: #EAEAEA / #4E4E4E,
-    #E5E5E5 / #464646 inactive; in a key window a #FFFFFF / #727272 rim
-    inside its edge and a #F4F4F4 / #565656 glow fading into the fill
+  - The sidebar's search field is a filled capsule: #E9E9E9 / #565656,
+    #E3E3E3 / #4D4D4D inactive on the Mac mini (26B5101f,
+    `SidebarRecipe.SearchFills`; #EAEAEA / #4E4E4E, #E5E5E5 / #464646 on the
+    MacBook's 26B5091g, the `SidebarSearchFill` roles); in a key window a
+    #FFFFFF / #727272 rim inside its edge and a #F2F2F2 / #5F5F5F glow
+    (#F4F4F4 / #565656 on the MacBook) fading into the fill
     towards the middle, with a hairline just outside it (#D8D8D8 / #8C8C8C;
     #CDCDCD / #181818 inactive).
   - Single-line labels end in "…" (`ui.EllipsisOverflowX`: sidebar rows,
@@ -391,6 +409,10 @@ Still in recipe fields:
   - A sidebar row's disclosure is at 12 pt, 13 more per level, and moves
     every row's content 9 right (`SidebarRecipe.DisclosureRoom`,
     `DisclosureX`, `DisclosureDY`, `RowChevron`; D4b).
+  - A sidebar selection on 52-pt rows is the row's full height (64–116 pt in
+    Notes, no inset) from 10 pt, on both builds; AppKit's corner is
+    continuous, cutting the area of an 8.32-pt circle, ours a circle of 8
+    (`Window.Selection.Radius`).
   - Lists: inset 10, rows 10 pt below the top (5 below a header), block
     divider inset 6; header 28 with 1 × 16 column separators; cell padding
     10, 8 at the outer sides; disclosure x 2, width 13, content at 15 + 13

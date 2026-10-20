@@ -66,3 +66,64 @@ func TestFinderHeaderInThePocket(t *testing.T) {
 		}
 	}
 }
+
+// The settings sidebar's search field is filled as the Mac mini's AppKit
+// fills it (captures-macmini settings-*-top, the field's middle at (150, 68)
+// pt): #E9E9E9 / #565656, #E3E3E3 / #4D4D4D inactive, within ΔE 1.
+func TestSidebarSearchFill(t *testing.T) {
+	for _, c := range []struct {
+		pref     theme.Preference
+		inactive bool
+		appkit   [3]uint8
+	}{
+		{theme.ForceLight, false, [3]uint8{233, 233, 233}}, {theme.ForceLight, true, [3]uint8{227, 227, 227}},
+		{theme.ForceDark, false, [3]uint8{86, 86, 86}}, {theme.ForceDark, true, [3]uint8{77, 77, 77}},
+	} {
+		off, _, img, err := render(ShotOptions{Scene: Settings, Preference: c.pref, Inactive: c.inactive})
+		if err != nil {
+			t.Fatal(err)
+		}
+		off.Close()
+		p := img.PixOffset(300, 136)
+		got := [3]uint8{img.Pix[p], img.Pix[p+1], img.Pix[p+2]}
+		if d := cielab.DeltaE2000(lab(got), lab(c.appkit)); d > 1 {
+			t.Errorf("preference %d, inactive %v: the field's fill %v, AppKit's %v (ΔE %.1f)", c.pref, c.inactive, got, c.appkit, d)
+		}
+	}
+}
+
+// Settings' back and forward have AppKit's divider between them
+// (captures-macmini settings-*-top): 1 pt wide at x 266 pt, from y 16 to 36
+// pt, #C8C8C8 / #BCBCBC inactive in light, #707070 / #6E6E6E in dark, within
+// ΔE 2; the capsule shows on either side of it.
+func TestSettingsNavDivider(t *testing.T) {
+	for _, c := range []struct {
+		pref     theme.Preference
+		inactive bool
+		appkit   uint8
+	}{
+		{theme.ForceLight, false, 200}, {theme.ForceLight, true, 188},
+		{theme.ForceDark, false, 112}, {theme.ForceDark, true, 110},
+	} {
+		off, _, img, err := render(ShotOptions{Scene: Settings, Preference: c.pref, Inactive: c.inactive})
+		if err != nil {
+			t.Fatal(err)
+		}
+		off.Close()
+		at := func(x, y int) [3]uint8 {
+			p := img.PixOffset(x, y)
+			return [3]uint8{img.Pix[p], img.Pix[p+1], img.Pix[p+2]}
+		}
+		want := lab([3]uint8{c.appkit, c.appkit, c.appkit})
+		for _, p := range [][2]int{{532, 33}, {533, 52}, {532, 70}} {
+			if d := cielab.DeltaE2000(lab(at(p[0], p[1])), want); d > 2 {
+				t.Errorf("preference %d, inactive %v: the divider at %v px is %v, AppKit's %d (ΔE %.1f)", c.pref, c.inactive, p, at(p[0], p[1]), c.appkit, d)
+			}
+		}
+		for _, p := range [][2]int{{531, 52}, {534, 52}, {532, 30}, {532, 73}} {
+			if d := cielab.DeltaE2000(lab(at(p[0], p[1])), want); d < 5 {
+				t.Errorf("preference %d, inactive %v: the divider reaches %v px", c.pref, c.inactive, p)
+			}
+		}
+	}
+}
