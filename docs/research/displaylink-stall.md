@@ -128,4 +128,11 @@ when a stall happens: it reports any 1 s silence as unpaced.
 - Drawables in flight per layer at the stall (presented minus released).
 - A run with `maximumDrawableCount` 3, one with per-surface queues, and one
   where the link is never paused: does any of them make the stall go away?
-- The restart log lines in CI's output, from runs that pass.
+- The restart log lines in CI's output, from runs that pass. The first ones
+  (runs `39498360641`, `39500861219`, `39503358053`, `39505572655`, macOS
+  arm64): each run of the live package logged one unprompted restart, for
+  window 0 of an F4 test, after one pause (`armed 1002 ms ago, last tick
+  1002 ms ago, ticks 12 pauses 1 windows open 2`): 4 runs out of 4. The
+  window-1 line next to it is `TestAStoppedDisplayLinkIsReplaced`'s own
+  stop. Running the F4 tests with `-v` would say which test it is; it looks
+  reproducible there.
