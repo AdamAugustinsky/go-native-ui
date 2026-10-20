@@ -300,6 +300,51 @@ func TestSendReportsUncertainWhenAnEarlierAttemptMayHaveBeenStored(t *testing.T)
 	}
 }
 
+// Send's answer is what all its attempts showed. "Busy", then an attempt that
+// sent the request and got no answer before the timeout: it may have been
+// stored, ErrUncertain (Send said ErrNoAnswer, the last attempt's).
+func TestSendUncertainWhenTheLastAttemptGotNoAnswer(t *testing.T) {
+	s, _ := fakePrimary(t, newDir(t), func(n int, c conn) {
+		if n == 1 {
+			c.Write([]byte{replyBusy})
+			return
+		}
+		time.Sleep(time.Second) // past the timeout: the request read, no answer
+	})
+	s.timeout = 600 * time.Millisecond
+	if err := s.Send([]string{"x"}); !errors.Is(err, ErrUncertain) {
+		t.Fatalf("Send = %v, want ErrUncertain", err)
+	}
+}
+
+// Send does not start an attempt it has hardly any time left for: "busy"
+// 60 ms before the timeout stays ErrBusy (Send tried again with 35 ms, which
+// a primary slower than that turned into ErrNoAnswer).
+func TestSendKeepsBusyWhenNoTimeIsLeft(t *testing.T) {
+	const timeout = 600 * time.Millisecond
+	var t0 atomic.Int64 // when Send started (UnixNano)
+	s, fl := fakePrimary(t, newDir(t), func(n int, c conn) {
+		if n == 1 {
+			time.Sleep(time.Until(time.Unix(0, t0.Load()).Add(timeout - 60*time.Millisecond)))
+			c.Write([]byte{replyBusy})
+			return
+		}
+		time.Sleep(time.Second)
+	})
+	s.timeout = timeout
+	fl.start()
+	t0.Store(time.Now().UnixNano())
+	if err := s.Send([]string{"x"}); !errors.Is(err, ErrBusy) {
+		fl.mu.Lock()
+		c := slices.Clone(fl.conns)
+		fl.mu.Unlock()
+		if len(c) == 0 || c[0].done > timeout {
+			t.Skipf("Send = %v, but the fake primary answered after the timeout (log %v)", err, c)
+		}
+		t.Fatalf("Send = %v, want ErrBusy", err)
+	}
+}
+
 func TestSendReportsBusyWhenNothingWasStored(t *testing.T) {
 	s, fl := fakePrimary(t, newDir(t), func(n int, c conn) { c.Write([]byte{replyBusy}) })
 	fl.start()

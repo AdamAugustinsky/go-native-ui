@@ -57,11 +57,15 @@
 //
 //   - nil: the primary stored the request.
 //   - ErrBusy, ErrRejected: nothing was stored.
-//   - ErrUncertain: an earlier attempt of this Send reached the primary and its
-//     answer never came, and a later one was told "busy"; the request may or may
-//     not have been stored.
+//   - ErrUncertain: an attempt of this Send reached the primary and its answer
+//     never came, and another was told "busy"; the request may or may not have
+//     been stored.
 //   - ErrNoAnswer: no answer came before the timeout; the request may have been
 //     stored and only the answer lost.
+//
+// Send says what all its attempts showed, not only the last: an attempt that
+// could not connect after a "busy" one leaves ErrBusy, and one that sent the
+// request and got no answer makes it ErrUncertain.
 //
 // # Who may connect
 //
@@ -126,7 +130,8 @@ import (
 
 var (
 	// ErrBusy is Send's error when the primary answered "busy" (its queue was
-	// full) until the timeout. It means the request was not stored.
+	// full) until the timeout, and no attempt delivered the request without an
+	// answer. It means the request was not stored.
 	ErrBusy = errors.New("instance: the running copy is busy")
 	// ErrNoAnswer is Send's error when the primary did not answer: nothing
 	// listened on its socket, or it accepted the connection and said nothing,
@@ -135,9 +140,9 @@ var (
 	// ErrRejected is Send's error when the primary refused the request as
 	// malformed or too large. Retrying the same request cannot help.
 	ErrRejected = errors.New("instance: the running copy rejected the request")
-	// ErrUncertain is Send's error when an earlier attempt of the same Send
-	// reached the primary without getting an answer, and a later one was told
-	// that the primary is busy: the request may or may not have been stored.
+	// ErrUncertain is Send's error when an attempt of the same Send reached the
+	// primary without getting an answer, and another was told that the primary
+	// is busy: the request may or may not have been stored.
 	ErrUncertain = errors.New("instance: it is not known whether the running copy took the request")
 	// ErrUntrusted is Acquire's error when the directory for the lock and the
 	// socket, or the lock file in it, is not private to this user: it is a link
@@ -181,6 +186,11 @@ const (
 	replyRejected = 'R'
 
 	ioTimeout = time.Second
+
+	// minAttempt is the least time left that Send starts another attempt in:
+	// one with less can hardly be answered, and only loses what the earlier
+	// answers said (a "busy" became "did not answer").
+	minAttempt = 50 * time.Millisecond
 )
 
 // wire is the request as sent: a length-prefixed JSON object.
@@ -467,31 +477,35 @@ func (s *Secondary) Send(args []string) error {
 	frame = append(frame, body...)
 
 	deadline := time.Now().Add(s.timeout)
-	last := ErrNoAnswer
+	busy := false  // an attempt was answered "busy"
 	maybe := false // an attempt delivered the request and got no answer
-	for wait := 25 * time.Millisecond; ; wait = min(wait*2, 200*time.Millisecond) {
-		if time.Until(deadline) <= 0 {
-			return last // the sleep used up the time: report the last answer, not a new one
+	result := func() error {
+		switch {
+		case busy && maybe:
+			return ErrUncertain
+		case busy:
+			return ErrBusy
+		}
+		return ErrNoAnswer
+	}
+	for wait, n := 25*time.Millisecond, 0; ; wait, n = min(wait*2, 200*time.Millisecond), n+1 {
+		if left := time.Until(deadline); left <= 0 || n > 0 && left < minAttempt {
+			return result()
 		}
 		reply, sent, err := s.try(frame, deadline)
-		if sent && err != nil {
-			maybe = true
-		}
 		switch {
 		case err == nil && reply == replyAccepted:
 			return nil
 		case err == nil && reply == replyRejected:
 			return ErrRejected
-		case err == nil && maybe:
-			last = ErrUncertain
 		case err == nil:
-			last = ErrBusy
-		default:
-			last = ErrNoAnswer
+			busy = true
+		case sent:
+			maybe = true
 		}
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
-			return last
+			return result()
 		}
 		time.Sleep(min(wait, remaining))
 	}
