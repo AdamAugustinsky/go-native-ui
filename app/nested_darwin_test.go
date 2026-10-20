@@ -148,6 +148,10 @@ func (b *nestedBuilder) Build(c *ui.Context) {
 }
 
 func runNestedChild(c string) {
+	if c == "dragin" {
+		runDragInChild() // drag_darwin_test.go
+		return
+	}
 	b := &nestedBuilder{c: c}
 	var st StartupReport
 	a, err := openWindowed(Config{Title: "nested " + c, Width: 400, Height: 300}, b, &st, false)
