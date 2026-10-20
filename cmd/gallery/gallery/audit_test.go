@@ -2,9 +2,11 @@ package gallery
 
 import (
 	"os"
+	"runtime"
 	"testing"
 
 	"gonativeui/theme"
+	"gonativeui/ui"
 	"gonativeui/widget/widgettest"
 )
 
@@ -23,12 +25,17 @@ func TestAuditScenes(t *testing.T) {
 		widgettest.AuditLayout(t, name, off.UI)
 		off.Close()
 	}
+	var allow []widgettest.Allow
+	if runtime.GOOS != "darwin" {
+		allow = append(allow, widgettest.Allow{Check: ui.AuditOverflow,
+			Reason: "a sample's frame is AppKit's, measured on macOS: another system's fonts are wider than San Francisco"})
+	}
 	for p, name := range AppKitPages {
 		off, err := runAppKit(p, theme.ForceLight, 2, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
-		widgettest.AuditLayout(t, name, off.UI)
+		widgettest.AuditLayout(t, name, off.UI, allow...)
 		off.Close()
 	}
 }

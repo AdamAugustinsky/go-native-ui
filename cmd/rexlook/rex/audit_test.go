@@ -43,6 +43,6 @@ func TestAuditLayout(t *testing.T) {
 // rexlookAllow are the findings on rexlook, the reference design, which is
 // not changed to satisfy the audit (rexcompare holds it to the reference).
 var rexlookAllow = []widgettest.Allow{
-	{Check: ui.AuditOverflow, Where: "image {floating}", Other: "{floating background clickable}",
-		Reason: "the pane-split, ⌘ and + icons are rasters with a transparent margin, a little larger than their 28-pt hit box (IconButton places the icon on the parent's grid); the ink is inside"},
+	{Check: ui.AuditOverflow, Other: "{floating background clickable}",
+		Reason: "the pane-split, ⌘ and + icons (symbol rasters on macOS, glyphs elsewhere) are a pixel or three larger than their hit box, as IconButton places them on the parent's grid; the ink is inside"},
 }

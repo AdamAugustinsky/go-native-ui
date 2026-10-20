@@ -97,6 +97,7 @@ func (k *Kit) header(t *base.TableHead) {
 		c.NextSize(ui.TextSize(labelSlack), ui.Px(hh))
 		c.NextFont(k.r.Font.UISemi)
 		c.NextTextColor(p.TextMuted)
+		c.NextAlign(hc.Col.Align) // a right-aligned title ends where the cells' text ends, not a slack pixel short
 		c.BoxKeyed(ui.DrawText|ui.FadeOverflowX, ui.KeyN(hc.Key, 1), strBytes(hc.Col.Title))
 		if hc.Sorted {
 			ic := icon.SortUp

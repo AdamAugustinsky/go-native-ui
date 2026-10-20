@@ -56,7 +56,7 @@ const (
 	// alignment edge, or not on the edge of the column's first cell, within
 	// half a point: the left edges for a left-aligned column, the right edges
 	// for a right-aligned one and the centres for a centred one, taken from
-	// the alignment of the cell's first text. The edges are those of the
+	// the alignment of the cell's widest text. The edges are those of the
 	// union of the glyph and image boxes in the header and in the cell (an
 	// icon and a name, a title and its sort mark), without the spaces at the
 	// ends of a text. A header is a box with RoleColumnHeader and a cell one
@@ -644,14 +644,34 @@ func (c *Context) auditColumns(dst []Finding, tol float32) []Finding {
 }
 
 // inkOf is the union of the glyph and image boxes of id's subtree (its text
-// and images) and the alignment of its first text; ok is false when it has
+// and images) and the alignment of its widest text (the name beside an icon
+// of the symbol font, which is centred in its box); ok is false when it has
 // neither text nor images.
 func (c *Context) inkOf(id ID) (ink [4]float32, al Align, ok bool) {
 	ink, ok = c.inkUnion(id)
-	if t := c.firstText(id); t != 0 {
+	if t := c.widestText(id); t != 0 {
 		al = c.boxes[t].align
 	}
 	return ink, al, ok
+}
+
+// widestText is the box of id's subtree with the widest line of text, 0 if
+// there is none.
+func (c *Context) widestText(id ID) ID {
+	b := &c.boxes[id]
+	if b.hid {
+		return 0
+	}
+	var best ID
+	if b.flags&DrawText != 0 && b.txt.Len > 0 && b.flags&WrapText == 0 {
+		best = id
+	}
+	for ch := b.first; ch != 0; ch = c.boxes[ch].next {
+		if t := c.widestText(ch); t != 0 && (best == 0 || c.boxes[t].textW > c.boxes[best].textW) {
+			best = t
+		}
+	}
+	return best
 }
 
 func (c *Context) inkUnion(id ID) (ink [4]float32, ok bool) {
@@ -688,24 +708,6 @@ func (c *Context) ancestorRole(id ID, r, stop Role) ID {
 			if stop != RoleNone && s.role == stop {
 				return 0
 			}
-		}
-	}
-	return 0
-}
-
-// firstText is the first box of id's subtree, in build order, that draws a
-// line of text, 0 if there is none.
-func (c *Context) firstText(id ID) ID {
-	b := &c.boxes[id]
-	if b.hid {
-		return 0
-	}
-	if b.flags&DrawText != 0 && b.txt.Len > 0 && b.flags&WrapText == 0 {
-		return id
-	}
-	for ch := b.first; ch != 0; ch = c.boxes[ch].next {
-		if t := c.firstText(ch); t != 0 {
-			return t
 		}
 	}
 	return 0
