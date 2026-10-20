@@ -131,6 +131,7 @@ type State struct {
 
 	lists listState // the lists' samples (lists.go)
 	name  []byte    // the name of the sample being built
+	d7a   d7aState  // the D7a samples (d7a.go)
 }
 
 // The glyphs of AppKitRef's icon buttons: SF Symbols at AppKit's default
@@ -653,6 +654,7 @@ var Pages = [...][]string{
 	{"label-styles"},
 	listPage, // lists.go
 	{"form-group", "form-grid"},
+	d7aPage, // d7a.go
 }
 
 // Page is the samples of page p (Pages) in catalogue order.

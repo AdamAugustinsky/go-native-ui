@@ -174,6 +174,7 @@ func (a *App) drawFrame(inHandler bool, passes int) bool {
 	a.syncShell()
 	a.syncAX()
 	a.syncText(a.Win, m.start)
+	a.syncColorPanel(a.Win)
 	a.syncChrome(a.Win)
 	if metered {
 		m.cpu2 = sysinfo.ThreadCPUNs()

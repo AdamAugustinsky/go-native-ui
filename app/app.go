@@ -152,6 +152,8 @@ type App struct {
 	dragT     dragTarget              // the window's drags; tests set a fake (drag.go)
 	dlgFailed []platform.DialogResult // results of dialogs that ended without being shown, to deliver
 
+	cp colorPanelSync // the system colour panel (colorpanel.go)
+
 	sh shellSync // material and host regions handed to the window (shell.go)
 	ax axBridge  // the accessibility bridge's source (a11y.go)
 
@@ -606,6 +608,11 @@ func (a *App) onEvent(e *platform.Event) {
 	case platform.EvAccessibility:
 		if a.axAction(e) {
 			a.tr.dirty = true
+			a.p.invalidate()
+		}
+	case platform.EvColor:
+		a.onColor(e)
+		if a.tr.event(e, nil) {
 			a.p.invalidate()
 		}
 	default:

@@ -45,10 +45,23 @@ directly with `k.Kit`, or copies a component and owns it.
 | `BeginList` / `EndList` | Inset (default), FullWidth; striped | — | NSTableView's selection: selectedContentBackgroundColor with white text while the list has focus in the key window, unemphasised (label-coloured text) otherwise. Selected neighbours merge into one block (inset: rounded at its ends, a 1 pt divider between rows). No hover, no per-row focus ring. |
 | `BeginTable` / `TableHeader` / `EndTable` | as `List` | — | 28 pt header with 1 × 16 pt column separators and sort chevrons; cells padded 10 pt, 8 pt at the outer sides. |
 | `BeginOutline` / `EndOutline` | as `List` | — | NSOutlineView: disclosure chevrons, 13 pt per level, Left/Right collapse and expand (Option: the subtree). Virtualised over a pre-order `base.Tree`. |
+| `BeginPopover` / `EndPopover` | below, above, right, left; transient, semitransient, application-defined | — | NSPopover's look, drawn (see D7a below): 20 pt radius, an 11 pt arrow 2 pt from the anchor that points at its centre, flips when the window has no room. Escape, a press outside and a window that stops being key close a transient one; a semitransient one closes on Escape and a press outside, not on a window that stops being key (measured: `tools/appkitref/popover.sh behavior`). |
+| `Banner`, `Toast` | info, success, warning, error | — | The level's colour as a tint, its symbol, a title, a message, an action and a close button. A toast floats at the bottom centre of its parent, fades in, and goes after its time (the pointer over it holds it). |
+| `Badge`, `BadgeCountN` | count, status dot, tag | — | A 16 pt count capsule ("99+" above 99), an 8 pt dot, an 18 pt tag. |
+| `Avatar`, `AvatarStack` | image (`img.Handle`) or initials, presence dot | — | A circle; the initials on a colour picked by a hash of the name until the picture is ready. |
+| `Skeleton` | line, block, avatar | — | A placeholder whose sheen sweeps only while it is on screen and the window shown; Reduce Motion shows the track alone. |
+| `EmptyState` | — | — | Glyph, Title 3, message, action, centred in its parent. |
+| `TokenField` | — | small … large | NSTokenField: tokens of the blue at 33 %, wrapped onto lines; Enter or a comma ends a token, Backspace selects and removes the last. |
+| `Combobox` | — | small … large | NSComboBox: a text field and a 23.5 × 17.5 button holding a chevron; a `CompletionList` below it, Down opens it and Up/Down/Enter/Escape drive it. |
+| `ColorWell` | the system's colour panel, or `Drawn` for its own picker | — | NSColorWell's 48 × 24 bezel and inset swatch; a popover of the system colours and a hex field. |
+| `MessageBubble`, `BeginBubble` / `EndBubble` | incoming, outgoing, system; sent, sending, failed | — | C2 rich text in a bubble, emoji-only messages large and bubble-less, selectable across bubbles in a `VList` under one selection scope (C4). |
+| `ChatListRow`, `DateDivider`, `TypingIndicator` | compact; pill; inline | — | A 56 pt conversation row (avatar, title, two-line preview, time, unread count); a hairline-flanked date; three dots that pulse only while visible. |
+| `CompletionList`, `CompletionState` | — | — | The completion popup of a text box: the contract N4 writes the composer against (its doc comment). |
 
 Every component is keyboard-operable and records its semantics. Its focus
-ring sits outside the shape, shows for keyboard focus only (text fields:
-whenever focused), and never shows in an inactive window. Disabled is a
+ring sits outside the shape, shows for keyboard focus only (the text-entry
+controls, text, search, combo box and token field, whenever focused, as AppKit
+does: `base.Visual.TextEntry`), and never shows in an inactive window. Disabled is a
 colour, not an opacity. Building a frame allocates nothing (the
 `TestNoAllocationsPerFrame` test builds every sample).
 
@@ -281,6 +294,91 @@ with the rest of the pane, into a » overflow menu at the band's end, as
 NSToolbar's do (`Toolbar.End` reports them; with native menus a choice
 comes back as the item's Clicked); the collapsed picker opens for Show Menu
 and Expand, and back and forward show the focus ring.
+
+### Overlays, feedback, text input and chat (D7a)
+
+Popover, banner and toast, badge, avatar, skeleton, empty state, token field,
+combo box, colour well and the chat pieces (message bubble, chat list row,
+date divider, typing indicator, completion list) are in `rexui`, in
+`catalog` (`appkit-d7a`, the fourth grid page) and in `tools/rexui`.
+
+AppKit has three of them as controls, so those are measured like the rest:
+`combo`, `token` and `color-well` and the states beside them (`combo-focused`,
+`combo-disabled`, `combo-button`, `token-focused`, `token-disabled`,
+`token-chip`, `color-well-swatch`, `color-well-disabled`) are in
+`tools/appkitref` and in `testdata/appkit-27.2.json`, which `TestRecipesMatchAppKit`
+checks: all of them within tolerance, light and dark. The new keys were
+measured on the Mac mini (Mac16,10, macOS 27.2 build 26B5101f, 2026-10-20) and
+merged into the committed file without touching its other keys, which
+`p6-refmini` is re-measuring. Two readings worth knowing: the token's fill is
+the system blue at 33 % whatever the accent (AppKitRef with the red accent
+draws the same pixels), and a token is 1.75 pt round, not 2.5.
+
+**The popover is drawn, not hosted.** A hosted `NSPopover` can carry only a
+native view; our content (rich text with selection, lists, fields) is built in
+the window's own layer, and a native material region is a rounded rectangle
+that cannot take the arrow's shape. So the fill is opaque, the colour the real
+popover has over the window background. An `NSPopover` is a window the window
+server composites, which AppKitRef's offscreen renders cannot show, so it is
+measured live: `tools/appkitref/popover.sh` opens a real one on a real window
+(`AppKitPopover`, `popover.m`) and captures it with GnuiShot.
+`testdata/popover-27.2.json` holds what it measured (body radius 20 pt, arrow
+11 pt high and 2 pt from the anchor, fill #F2F2F2 and #2E2E2E, 1 px edge) and
+`TestPopoverMatchesAppKit` checks the draw list against it. The drawn popover
+does not leave the window; if a popover ever must (content over the title bar
+or another window), that one is hosted.
+
+Not in the AppKit comparison, because AppKit has no control or draws none
+offscreen: badge, avatar, skeleton, empty state, banner, toast, the chat
+pieces and the completion list. They are designed after the same tokens and
+shown on the `appkit-d7a` page, audited by `widgettest.AuditLayout` and built
+by `TestNoAllocationsPerFrame` with everything else.
+
+**What closes a popover** was measured on the real `NSPopover` (macOS 27.2,
+`tools/appkitref/popover.sh behavior`, `popover_behavior.m`, 2026-10-20): a
+transient one closes on Escape, on a click anywhere outside and when the app
+resigns; the click reaches the control under it, except on the anchor, which it
+closes the popover on and does not reach. A semitransient one closes on Escape
+and on a click in its window outside it (the anchor included: that click
+reaches the anchor and the popover stays open on it) and stays when the app
+resigns. An application-defined one closes on nothing and every click passes
+through. Return closes none. `ui.OverlayOpts{Dismiss}` has the three
+(`DismissTransient`, `DismissSemitransient`, `DismissApplication`; the zero
+value is a menu's, which also consumes the click) and `rexui.PopoverBehavior`
+maps onto them.
+
+**Text input takes its keys through `ui`'s field commands.** A focused text
+field claims the keys it handles at the start of the frame, so a component
+that gives Up, Down, Enter, Escape, Tab or Backspace another meaning (the combo
+box's list, the token field's selection, a completion list) registers a
+`ui.FieldCommander` for one `TextField` (`Context.NextFieldCommander`). The
+field offers it the frame's keys and the system's edit actions in the order they
+arrived, once each, after composition is handled (nothing while the input
+method has marked text), as AppKit's selectors: move up/down/left/right, page
+up/down, insert newline, cancel, insert tab/backtab, delete backward/forward at
+the start/end of the text, and the insertion of a separator character, offered
+at the place it is typed. On macOS the arrows and Backspace arrive as edit
+actions (`doCommandBySelector:`), not keys, and the commander sees them the same.
+`CompletionList`'s doc comment is the contract for an editor that is not ours
+(a native `NSTextView` sends the same commands): units, the exclusion rectangle
+and what the caller must do.
+
+**The completion list and the combo box's list take no focus**
+(`OverlayOpts.NoFocus`): the focus, a hosted native view's first responder
+included, stays where it is when they open and close.
+
+**The colour well drives the real colour panel** by default: pressing it opens
+the shared `NSColorPanel` with its colour, the colour set there (continuous,
+sRGB) is its colour, a colour the app sets moves the panel, and the panel closes
+when the user closes it, when another well takes it, when the well is disabled
+or no longer built. The path is `ui.Context.ColorPanel` (a request per frame) →
+`app` (`syncColorPanel`) → `platform.Window.ShowColorPanel/SetColorPanelColor/
+CloseColorPanel` and `platform.EvColor` back. The drawn picker is the fallback
+where the platform has no panel (`platform.NativeColorPanel` is false, or
+`ShowColorPanel` returns `ErrUnsupported`: the app tells the well with
+`Input.SetColorFailed`) and what `ColorWellOpts{Drawn: true}` asks for.
+Offscreen renders open no panel. `rexui/live` drives the panel, the combo box
+and the token field with real AppKit events.
 
 ### Left to the eye, and why
 

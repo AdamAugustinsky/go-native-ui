@@ -141,6 +141,7 @@ const (
 	EvDrop                    // the drag was dropped: Code the kind delivered, Text its data, X, Y, Tag; FlagFailed when it could not be read
 	EvDragEnd                 // a drag out ended: Tag is its DragTicket, Code the operation performed (DragOpNone: cancelled)
 	EvAccessibility           // an assistive technology asked for an action: Tag is the node's key, Code the AXAction, Amount its argument (a11y.go)
+	EvColor                   // the system colour panel: the user chose a colour (Code 0: X, Y, DX, DY are its red, green, blue and alpha in sRGB, 0 to 1) or closed the panel (Code 1); see colorpanel.go
 )
 
 // Flags qualify an Event.

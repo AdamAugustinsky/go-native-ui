@@ -145,10 +145,7 @@ func field(k *base.Kit, label string, buf *ui.TextBuffer, placeholder string, o 
 		c.NextTextColor(pc)
 		c.BoxKeyed(ui.DrawText|base.Floating, ui.KeyN(ti.WrapKey, 2), base.StrBytes(placeholder))
 	}
-	ring := ti.Visual // a text field shows its ring however it got the focus, in a key window
-	if !ti.Inactive {
-		ring.Ring = ti.Focus
-	}
+	ring := ti.Visual.TextEntry() // a text-entry control rings however it got the focus
 	ringR := radius
 	if search { // AppKit rings a search field's frame as a capsule
 		ringR = h / 2
