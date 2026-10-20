@@ -197,6 +197,7 @@ func (w *worker) fileIcon(path string, side int32) (*image.RGBA, uint8) {
 	hr := win32.HR(win32.Call(shell.createItem, uintptr(unsafe.Pointer(p)), 0, uintptr(unsafe.Pointer(&iidShellItemImageFactory)), uintptr(unsafe.Pointer(&ic.ptr))))
 	runtime.KeepAlive(p)
 	if hr < 0 || ic.ptr == 0 {
+		trace("SHCreateItemFromParsingName", uintptr(uint32(hr)))
 		return nil, errRead
 	}
 	factory := ic.ptr
@@ -205,12 +206,14 @@ func (w *worker) fileIcon(path string, side int32) (*image.RGBA, uint8) {
 	size := uintptr(uint32(side)) | uintptr(uint32(side))<<32
 	hr = win32.HR(win32.Com(factory, shellItemGetImage, size, siigbfIconOnly, uintptr(unsafe.Pointer(&ic.hbm))))
 	if hr < 0 || ic.hbm == 0 {
+		trace("IShellItemImageFactory.GetImage", uintptr(uint32(hr)))
 		return nil, errDecode
 	}
 	hbm := ic.hbm
 	defer win32.Call(shell.deleteObject, hbm)
 	w32, h32, px, ok := w.bitmapPixels(hbm, &ic.color)
 	if !ok {
+		trace("bitmapPixels (item)", 0)
 		return nil, errDecode
 	}
 	shellPixels(px, nil)

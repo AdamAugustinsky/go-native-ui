@@ -56,6 +56,7 @@ func TestSystemIconsWindowsBurst(t *testing.T) {
 // pixels: a folder and a .txt, from a path (IShellItemImageFactory) and from
 // the type alone (the system image lists).
 func TestSystemIconsWindows(t *testing.T) {
+	sysIconEnv(t)
 	c, _ := newTestCache(t, Options{})
 	dir := t.TempDir()
 	file := filepath.Join(dir, "notes.txt")
@@ -91,11 +92,15 @@ func TestSystemIconsWindows(t *testing.T) {
 // COM on its own thread; every icon equals the one decoded alone (the shell
 // may settle an icon by a level or two, so within a small tolerance).
 func TestSystemIconsWindowsConcurrent(t *testing.T) {
+	sysIconEnv(t)
 	c, _ := newTestCache(t, Options{})
 	srcs := []Source{FolderIcon(), ExtensionIcon("txt"), ExtensionIcon("png"), FileIcon(os.TempDir())}
 	want := make([]decoded, len(srcs))
 	for i, s := range srcs {
 		want[i] = iconNow(t, c, s, 48, 48, 0)
+		if want[i].r.buf < 0 {
+			t.Fatalf("icon %d failed alone: %v", i, errOf(want[i].r.err))
+		}
 		again := iconNow(t, c, s, 48, 48, 0) // on this thread, one after the other
 		mean, worst := iconDiff(want[i], again)
 		t.Logf("icon %d decoded twice in a row: mean difference %.2f, worst %d", i, mean, worst)
@@ -108,6 +113,10 @@ func TestSystemIconsWindowsConcurrent(t *testing.T) {
 			for k := 0; k < 10; k++ {
 				for i, s := range srcs {
 					d := iconNow(t, c, s, 48, 48, 0)
+					if d.r.buf < 0 {
+						t.Errorf("icon %d failed when decoded concurrently: %v", i, errOf(d.r.err))
+						return
+					}
 					if mean, worst := iconDiff(want[i], d); mean > 1 || worst > 16 {
 						t.Errorf("icon %d differs when decoded concurrently: mean %.2f, worst %d (%d and %d distinct pixels)", i, mean, worst, distinct(want[i]), distinct(d))
 						return
