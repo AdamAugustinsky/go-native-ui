@@ -98,7 +98,7 @@ func (w *Window) DebugState() DebugState {
 		FrameArmed: w.frameArmed, ArmedT: w.armedT,
 		Drawable: w.drawable != 0, Live: w.live, Relink: w.relink,
 		Ticks: w.ticks, TicksSinceFrame: w.ticksSinceFrame, LastTickT: w.lastTickT, LastFrameT: w.lastFrameT,
-		Pauses: w.pauses, IdleTicks: w.idleTicks,
+		Pauses: w.pauses, IdleTicks: w.idleTicks, Restarts: w.restarts,
 	}
 	if w.link != 0 {
 		s.LinkPausedOS = objc.SendBool(w.link, selIsPausedLink)
@@ -127,6 +127,19 @@ func (w *Window) DebugPostMouse(typ uintptr, xPt, yPt float64) {
 	if ev != 0 {
 		objc.Send2(w.app, selPostEvent, uintptr(ev), 0)
 	}
+}
+
+// DebugStopLink is a test hook (macOS only): the window's CAMetalDisplayLink
+// stops calling back while the window believes it runs, as one did on CI's
+// virtual display (linkStopped): the link is paused behind the window's
+// back. It reports whether there was a metal link to stop. Main thread.
+func (w *Window) DebugStopLink() bool {
+	if !w.metalLink || w.link == 0 {
+		return false
+	}
+	objc.Send1(w.link, selSetPaused, 1)
+	w.linkPaused = false
+	return true
 }
 
 // DebugToggleFullScreen is a test hook (macOS only): toggleFullScreen:, as

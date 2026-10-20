@@ -242,6 +242,44 @@ func TestWindowsPaceOnTheirOwn(t *testing.T) {
 	measure("the first window", first, second, w1)
 }
 
+// A display link that stops calling back (a window's CAMetalDisplayLink did,
+// on CI's virtual display, after a pause and a resume) is replaced once the
+// loop's unpaced fallback finds no drawable: the window draws again, through
+// the layer's nextDrawable first, then paced by a new link.
+func TestAStoppedDisplayLinkIsReplaced(t *testing.T) {
+	first, second := &mwPane{}, &mwPane{}
+	l := widgettest.StartLive(t, mwConfig("first"), first)
+	w2 := mwOpen(t, l, "second", 20, second, second.builds.Load)
+	var w1 *app.Win
+	l.Do(func(a *app.App) { w1 = a.Window() })
+	settle()
+
+	var stopped bool
+	var st0 platform.DebugState
+	l.Do(func(*app.App) { st0 = w2.App().Win.DebugState(); stopped = w2.App().Win.DebugStopLink() })
+	if !stopped {
+		t.Fatalf("the second window has no CAMetalDisplayLink to stop: %s", st0.Append(nil))
+	}
+	start, b0 := platform.Now(), second.builds.Load()
+	second.animate.Store(true)
+	defer second.animate.Store(false)
+	l.Do(func(*app.App) { w2.Wake() })
+	if !waitFor(5*time.Second, func() bool { return second.builds.Load() >= b0+30 }) {
+		if coveredSince(l, w2, start) {
+			t.Skip("the second window was covered by other windows: it gets no frames")
+		}
+		t.Fatalf("the second window drew %d frames in 5 s after its link stopped%s", second.builds.Load()-b0, mwStates(l, w1, w2))
+	}
+	var st platform.DebugState
+	ticking := func() bool {
+		l.Do(func(*app.App) { st = w2.App().Win.DebugState() })
+		return st.MetalLink && st.Ticks > st0.Ticks
+	}
+	if !waitFor(3*time.Second, ticking) || st.Restarts != 1 {
+		t.Errorf("after the stop: %d restarts, metal link %v, ticks %d (were %d); want one restart and a new metal link that ticks", st.Restarts, st.MetalLink, st.Ticks, st0.Ticks)
+	}
+}
+
 // A worker's result reaches the window it is for (Win.Wake): that window
 // draws and takes it, the other draws nothing; platform.Wake wakes them all,
 // and a closed window's Wake does nothing.

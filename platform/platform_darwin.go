@@ -67,6 +67,8 @@ type Window struct {
 	armedT, lastTickT, lastFrameT  int64
 	visible                        int8 // last EvVisible: 1, 0, or -1 before any
 	visibleT                       int64
+	restarts                       uint64 // stopped links replaced (restartLink)
+	restartT                       int64
 
 	// Live resize (SetFrameHandler). AppKit runs its own loop inside
 	// sendEvent while the user drags a window edge; between

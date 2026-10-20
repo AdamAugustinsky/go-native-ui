@@ -222,9 +222,49 @@ func (w *Window) takeDrawable() (drawable uintptr, linked bool) {
 	d := w.drawable
 	w.drawable = 0
 	if d == 0 && w.metalLink {
+		if w.linkStopped() && w.restartLink() {
+			return 0, false // this frame takes the layer's nextDrawable, as the first one does
+		}
 		w.RequestFrame() // no frame is ready: the caller draws on the EvFrame that follows
 	}
 	return uintptr(d), w.metalLink
+}
+
+// linkStopNs is how long a running CAMetalDisplayLink may leave an armed
+// frame of a visible window without a tick before it counts as stopped.
+const linkStopNs = int64(1e9)
+
+// linkStopped reports a CAMetalDisplayLink that stopped calling back: a frame
+// has been armed for linkStopNs, the link runs, no tick came since, and the
+// window can be seen (a covered or miniaturized window gets no ticks, and
+// nextDrawable would block for it). The app's loop asks for a drawable
+// without a tick only after such a silence (its unpaced fallback, app/pacer.go),
+// and a linked layer has none to give: without a restart the window would
+// never draw again. Seen on CI's virtual display: a window's link stopped
+// after it was paused and resumed while another window of the app had just
+// drawn.
+func (w *Window) linkStopped() bool {
+	now := Now()
+	return w.frameArmed && !w.linkPaused && !w.live &&
+		now-w.armedT >= linkStopNs && now-w.lastTickT >= linkStopNs && now-w.restartT >= linkStopNs &&
+		uintptr(objc.Send(w.win, selOcclusionState))&2 != 0 && !objc.SendBool(w.win, selIsMini)
+}
+
+// restartLink replaces a stopped CAMetalDisplayLink by a view CADisplayLink,
+// as at startup: the caller draws with the layer's nextDrawable, and the view
+// link's first tick attaches a new CAMetalDisplayLink (linkTick).
+func (w *Window) restartLink() bool {
+	link := w.makeViewLink()
+	if link == 0 {
+		return false
+	}
+	objc.Send(w.link, selInvalidate)
+	objc.Send(w.link, selReleaseObj)
+	w.link, w.metalLink, w.metalLayer = link, false, w.frameLayer
+	w.restarts, w.restartT = w.restarts+1, Now()
+	objc.Send1(w.link, selSetPaused, 0) // a frame is armed
+	w.linkPaused = false
+	return true
 }
 
 func (w *Window) setRateRange(link objc.ID) {
