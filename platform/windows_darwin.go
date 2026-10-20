@@ -29,13 +29,17 @@ var reg struct {
 	slots   [MaxWindows]*Window // by slot; nil: free
 	open    [MaxWindows]*Window // the open windows, in the order they opened
 	n       int
+	gen     uint32  // the last generation given (register)
 	lastKey *Window // the window of ours that was key last
 }
 
 // errTooManyWindows is Open's error past MaxWindows.
 var errTooManyWindows = errors.New("platform: too many windows open")
 
-// register gives w a slot and marks its objects with it. Main thread.
+// register gives w the first free slot (a closed window's goes to the next
+// one) and a new generation, and marks its objects with both: what is left
+// of a closed window (a late callback of one of its objects) never finds the
+// window that has its slot now. Main thread.
 func register(w *Window) error {
 	i := 0
 	for i < MaxWindows && reg.slots[i] != nil {
@@ -44,15 +48,23 @@ func register(w *Window) error {
 	if i == MaxWindows {
 		return errTooManyWindows
 	}
-	reg.slots[i], w.slot = w, i
+	if reg.gen++; reg.gen == 0 {
+		reg.gen = 1
+	}
+	reg.slots[i], w.slot, w.gen = w, i, reg.gen
 	reg.open[reg.n] = w
 	reg.n++
-	viewDef.Index().Set(w.view, uintptr(i+1))
-	delegateDef.Index().Set(w.delegate, uintptr(i+1))
-	windowDef.Index().Set(w.win, uintptr(i+1))
+	mark := w.slotMark()
+	viewDef.Index().Set(w.view, mark)
+	delegateDef.Index().Set(w.delegate, mark)
+	windowDef.Index().Set(w.win, mark)
 	w.registered = true
 	return nil
 }
+
+// slotMark is what w's objects carry in their index ivar: the generation in
+// the high 32 bits, the slot plus 1 in the low.
+func (w *Window) slotMark() uintptr { return uintptr(w.gen)<<32 | uintptr(w.slot+1) }
 
 // unregister forgets w: its objects stop finding it (a late callback from
 // AppKit finds no window), and the windows after it keep their order.
@@ -85,13 +97,17 @@ func openWindows() []*Window { return reg.open[:reg.n] }
 // OpenCount is how many windows are open. Main thread.
 func OpenCount() int { return reg.n }
 
-// slotWindow is the window of slot index v (1-based, as the ivars hold it)
-// if its object obj is still that window's, else nil.
+// slotWindow is the open window an index ivar's value v names (slotMark):
+// the window in its slot if that one has its generation, else nil.
 func slotWindow(v uintptr) *Window {
-	if v == 0 || v > MaxWindows {
+	i := int(v&0xFFFFFFFF) - 1
+	if i < 0 || i >= MaxWindows {
 		return nil
 	}
-	return reg.slots[v-1]
+	if w := reg.slots[i]; w != nil && w.gen == uint32(v>>32) {
+		return w
+	}
+	return nil
 }
 
 // viewWindow is the window of GNUIView self.
@@ -163,22 +179,49 @@ var (
 // eventWindow is the window an NSEvent is for: the window it happened in, or
 // the one whose sheet it happened in; for an event of no window of ours (a
 // panel's, the menu bar's, none), the key window, else the main window, else
-// the one that was key last, else the first one opened. With one window open,
-// every event is that window's, as before the registry.
+// the one that was key last, else the first one opened (with one window
+// open, that one). An event for a window of ours that has closed (one that
+// outlived it in the queue) is no window's: nil, and AppKit alone gets it.
 func eventWindow(ev objc.ID) *Window {
-	if reg.n == 1 {
-		return reg.open[0]
-	}
 	nswin := objc.Send(ev, selWindow)
 	if w := findWindow(nswin); w != nil {
 		return w
 	}
 	if nswin != 0 {
+		if objc.SendBool1(nswin, selIsKindOfClass, uintptr(windowClass)) {
+			return nil // a GNUIWindow that is not open
+		}
 		if w := findWindow(objc.Send(nswin, selSheetParent)); w != nil {
 			return w
 		}
+	} else if n := int(objc.Send(ev, selWindowNumber)); n > 0 && wasClosed(n) {
+		return nil // its window is gone: AppKit finds none for the number
 	}
 	return fallbackWindow()
+}
+
+// closedNums are the window server's numbers of the windows of ours that
+// closed last (a number is not given again in the login session): an event
+// still queued for one of them (eventWindow) is no other window's.
+var closedNums struct {
+	n    [16]int
+	next int
+}
+
+func rememberClosed(num int) {
+	if num > 0 {
+		closedNums.n[closedNums.next] = num
+		closedNums.next = (closedNums.next + 1) % len(closedNums.n)
+	}
+}
+
+func wasClosed(num int) bool {
+	for _, n := range closedNums.n {
+		if n == num {
+			return true
+		}
+	}
+	return false
 }
 
 // fallbackWindow is the window an event or a command of no particular window

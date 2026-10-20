@@ -5,6 +5,7 @@ package platform
 import (
 	"fmt"
 	"testing"
+	"time"
 
 	"gonativeui/internal/objc"
 )
@@ -94,6 +95,122 @@ func TestWindowsOpenCascaded(t *testing.T) {
 	}
 	if frames[3] != frames[0] {
 		t.Errorf("a window opened with none open is at %v, want the centre the first one had, %v", frames[3], frames[0])
+	}
+}
+
+// A closed window's slot goes to the next window, and nothing meant for the
+// closed one reaches the new one in its slot: a worker's late Wake, a key
+// event that outlived it. 200 windows open and close in turn, and the closed
+// ones' objects go with them.
+func TestReusedSlotsGetNothingOfTheClosedWindow(t *testing.T) {
+	const cycles = 200
+	var (
+		err        error
+		base, open WindowObjects
+		fails      []string
+		control    bool
+	)
+	failf := func(i int, f string, a ...any) {
+		if len(fails) < 10 {
+			fails = append(fails, fmt.Sprintf("window %d: ", i)+fmt.Sprintf(f, a...))
+		}
+	}
+	keysIn := func(q []Event) (keys, wakes int) {
+		for _, e := range q {
+			switch e.Kind {
+			case EvKey, EvText:
+				keys++
+			case EvWake:
+				wakes++
+			}
+		}
+		return
+	}
+	settle := func() { // what was posted is taken by a pump that waits a little
+		for i := 0; i < 3; i++ {
+			Pump(int64(5 * time.Millisecond))
+		}
+	}
+	onMain(func() {
+		Pump(0)
+		base = LiveWindowObjects()
+		opts := Options{Title: "slot", Width: 200, Height: 120, Hidden: true}
+		var prev *Window
+		if prev, err = Open(opts); err != nil {
+			return
+		}
+		for i := 1; i <= cycles && err == nil; i++ {
+			pool := objc.F.Call0(objc.PoolPush) // the cycle's events (autoreleased, holding their windows) go with it
+			slot, gen, mark := prev.slot, prev.gen, viewDef.Index().Get(prev.view)
+			key := objc.Retain(keyDown(prev, "k", 0, 40)) // made while the window is open
+			var held objc.ID
+			if i%2 == 0 { // the event's window still exists (something holds it), closed
+				held = objc.Retain(prev.win)
+			}
+			prev.Close()
+			Pump(0)
+			var cur *Window
+			if cur, err = Open(opts); err != nil {
+				objc.Release(key)
+				objc.F.Call1(objc.PoolPop, pool)
+				break
+			}
+			if cur.slot != slot || cur.gen == gen {
+				failf(i, "slot %d gen %d after slot %d gen %d: want the freed slot, a new generation", cur.slot, cur.gen, slot, gen)
+			}
+			if w := slotWindow(mark); w != nil { // a value kept from the closed window (a callback's context)
+				failf(i, "the closed window's slot mark finds a window (the one in its slot: %v)", w == cur)
+			}
+			if slotWindow(viewDef.Index().Get(cur.view)) != cur {
+				failf(i, "the window's own slot mark does not find it")
+			}
+			prev.Wake()
+			if held != 0 {
+				// An event that holds its window: routed to none (AppKit's
+				// alone), it is not posted here, as AppKit would keep the
+				// closed window for the key's text input.
+				if w := eventWindow(key); w != nil {
+					failf(i, "a key event of the closed window, which still exists, goes to a window (the one in its slot: %v)", w == cur)
+				}
+				objc.Release(held)
+			} else {
+				objc.Send2(appObj.app, selPostEvent, uintptr(key), 0)
+			}
+			objc.Release(key)
+			settle()
+			if k, wk := keysIn(cur.Events()); k+wk != 0 {
+				failf(i, "the closed window's key and wake reached the window in its slot: %d keys, %d wakes", k, wk)
+			}
+			objc.F.Call1(objc.PoolPop, pool)
+			prev = cur
+		}
+		if err != nil {
+			return
+		}
+		Pump(0)
+		open = LiveWindowObjects() // the 200 closed: only the last one's objects left
+		// The check sees a key and a wake of the window's own. (After a key,
+		// the text input system holds on to the window it went to: the last
+		// one is left open.)
+		objc.Send2(appObj.app, selPostEvent, uintptr(keyDown(prev, "k", 0, 40)), 0)
+		prev.Wake()
+		settle()
+		k, wk := keysIn(prev.Events())
+		control = k > 0 && wk == 1
+		prev.Close()
+		Pump(0)
+	})
+	if err != nil {
+		t.Skipf("cannot open a window here: %v", err)
+	}
+	if !control {
+		t.Fatal("a window's own key and wake did not reach it: the check would see nothing")
+	}
+	for _, f := range fails {
+		t.Error(f)
+	}
+	if want := (WindowObjects{Windows: base.Windows + 1, Views: base.Views + 1, Delegates: base.Delegates + 1}); open != want {
+		t.Errorf("after %d windows closed, with one open: %+v, want %+v", cycles, open, want)
 	}
 }
 

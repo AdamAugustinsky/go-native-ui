@@ -230,6 +230,7 @@ func (w *Window) Close() {
 		w.drawable = 0
 	}
 	w.closeLights()
+	rememberClosed(int(objc.Send(w.win, selWindowNumber))) // events still queued for it reach no other window (eventWindow)
 	objc.Send(w.win, selClose)
 	w.closeShell() // after close: nothing on screen changes
 	unregister(w)

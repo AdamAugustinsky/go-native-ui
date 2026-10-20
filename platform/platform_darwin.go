@@ -120,7 +120,8 @@ type Window struct {
 	handlerRuns int // calls of the frame handler (DebugMenu.Frame)
 
 	// The registry (windows_darwin.go).
-	slot       int         // the window's slot, its objects' index ivars minus 1
+	slot       int         // the window's slot in the registry (windows_darwin.go)
+	gen        uint32      // its generation: no other window has it
 	registered bool        // open: in the registry
 	buried     bool        // closed: Open's references are handed to the next Pump
 	wakeMark   atomic.Bool // Wake: this window has something new from another goroutine
