@@ -189,6 +189,31 @@ type Toolbar struct {
 	n       uint64
 	open    bool
 	native  bool // the capsules are the system's glass (GlassNative)
+
+	// the overflow: what a pane has laid out (used), from which item on
+	// it is out of room (over), the items moved into the overflow menu
+	// (ov), and the entry chosen in it this frame (pick)
+	used    float32
+	over    bool
+	hideGrp bool
+	ov      [MaxToolbarOverflow]string
+	nOv     int
+	pick    int
+	ovKey   ui.Key
+}
+
+// MaxToolbarOverflow is the most items the overflow menu lists.
+const MaxToolbarOverflow = 24
+
+// ToolbarOverflow is what End reports: the names of the items that did not
+// fit, in the overflow menu (Names[:N]), and whether its button was pressed
+// while menus are the app's (Clicked: show them; with native menus the
+// system's menu shows them and a choice comes back as the item's Clicked).
+// It is a value, so that keeping it allocates nothing.
+type ToolbarOverflow struct {
+	N       int
+	Names   [MaxToolbarOverflow]string
+	Clicked bool
 }
 
 // BeginToolbar starts the toolbar of the window at its top: the band, the
@@ -213,6 +238,10 @@ func BeginToolbar(k *base.Kit, label string, o ToolbarOpts) Toolbar {
 	tb.native = o.Style != theme.ToolbarRex && GlassNative(k, GlassToolbarCapsule)
 	_, ident := ui.SplitLabel(label)
 	tb.key = ui.HashString(c.ParentKey(), ident)
+	tb.ovKey, tb.pick = ui.KeyN(tb.key, 6000), -1
+	if in := c.Input(); in.HasMenuChoice && in.MenuOwner == tb.ovKey {
+		tb.pick = int(in.MenuIndex) // the overflow menu's choice: the items it lists are this frame's too
+	}
 	w, _ := c.Size()
 	tb.w = float32(w)
 	h := theme.Snap(tb.spec.Height)
@@ -321,6 +350,7 @@ func (tb *Toolbar) beginPane(i int, x, paneX float32) {
 	}
 	tb.pane, tb.x0, tb.x1, tb.paneX = i, x, x1, paneX
 	tb.cur, tb.fixed, tb.prev, tb.titled = 0, true, tbStart, false
+	tb.used, tb.over = 0, false
 	h := theme.Snap(tb.spec.Height)
 	theme.At(c, x, 0, max(x1-x, 0), h)
 	c.NextAxis(ui.AxisX)
@@ -360,6 +390,7 @@ func (tb *Toolbar) space(px float32) {
 	c.NextSize(ui.Px(px), ui.Px(0))
 	c.BoxKeyed(0, ui.KeyN(tb.key, 1000+tb.n), nil)
 	tb.cur += px
+	tb.used += px
 }
 
 // gap lays the gap a capsule (or a picker) needs after what came before.
@@ -367,21 +398,62 @@ func (tb *Toolbar) gap(kind tbKind) {
 	if tb.inGroup {
 		return
 	}
+	tb.space(tb.gapW())
+	tb.prev = kind
+}
+
+// gapW is the gap the next capsule needs after what came before.
+func (tb *Toolbar) gapW() float32 {
 	wg := tb.k.Theme().Window.Capsule
 	switch tb.prev {
 	case tbStart, tbFlex:
-	case tbTitle:
-		tb.space(wg.WideGap)
-	case tbPicker:
-		tb.space(wg.WideGap)
-	default:
-		g := wg.Gap
-		if i := tb.styleIndex(); tb.pane == 0 && tb.o.Panes[0] > 0 && tb.rc.SidebarGap[i] > 0 {
-			g = theme.Snap(tb.k.Pt(tb.rc.SidebarGap[i]))
-		}
-		tb.space(g)
+		return 0
+	case tbTitle, tbPicker:
+		return wg.WideGap
 	}
-	tb.prev = kind
+	g := wg.Gap
+	if i := tb.styleIndex(); tb.pane == 0 && tb.o.Panes[0] > 0 && tb.rc.SidebarGap[i] > 0 {
+		g = theme.Snap(tb.k.Pt(tb.rc.SidebarGap[i]))
+	}
+	return g
+}
+
+// overflows decides whether an item w pixels wide (after its gap) is out
+// of room in its pane, as NSToolbar's: then it, and every item after it in
+// the pane, goes into the overflow menu at the band's end (End), listed by
+// name, and is not built; picked reports that the menu chose it this frame.
+// The pane keeps room for the overflow button after the items it shows.
+func (tb *Toolbar) overflows(w float32, name string) (hidden, picked bool) {
+	if tb.o.Style == theme.ToolbarRex {
+		return false, false
+	}
+	if tb.inGroup {
+		hidden = tb.hideGrp
+	} else {
+		if !tb.over {
+			wg := tb.k.Theme().Window.Capsule
+			room := tb.x1 - tb.x0 - wg.WideGap
+			if tb.x1 >= tb.w-0.5 { // the last pane: the overflow button's room
+				room -= wg.Gap + tb.overflowW()
+			}
+			tb.over = tb.used+tb.gapW()+w > room+0.5
+		}
+		hidden = tb.over
+	}
+	if !hidden {
+		return false, false
+	}
+	if tb.nOv < MaxToolbarOverflow {
+		picked = tb.nOv == tb.pick
+		tb.ov[tb.nOv] = name
+		tb.nOv++
+	}
+	return true, picked
+}
+
+// overflowW is the overflow button's width.
+func (tb *Toolbar) overflowW() float32 {
+	return theme.Snap(tb.k.Pt(tb.rc.ItemMin[tb.styleIndex()]))
 }
 
 // styleIndex is 0 for a compact toolbar, 1 for the others (the recipe's
@@ -480,13 +552,17 @@ func (tb *Toolbar) symbol(key ui.Key, ic icon.ID, col uint32) {
 // a part of the group's), a borderless symbol in the Rex band. name is its
 // accessible name and tooltip text.
 func (tb *Toolbar) Item(ic icon.ID, name string) base.Signal {
-	tb.gap(tbCapsule)
 	if tb.o.Style == theme.ToolbarRex {
+		tb.gap(tbCapsule)
 		return tb.rexItem(ic, name)
 	}
 	k := tb.k
 	h := tb.capsuleH()
 	w := tb.itemW(ic)
+	if hidden, picked := tb.overflows(w, name); hidden {
+		return base.Signal{Clicked: picked}
+	}
+	tb.gap(tbCapsule)
 	p := k.PressState(name, base.HoverOn)
 	var flags ui.Flags
 	if tb.inGroup {
@@ -539,6 +615,7 @@ func (tb *Toolbar) rexItem(ic icon.ID, name string) base.Signal {
 func (tb *Toolbar) advance(w float32) {
 	if !tb.inGroup {
 		tb.cur += w
+		tb.used += w
 	}
 }
 
@@ -556,11 +633,25 @@ func (tb *Toolbar) beginGroup(name string, shared bool) {
 	if tb.inGroup || tb.o.Style == theme.ToolbarRex {
 		return
 	}
-	tb.gap(tbCapsule)
 	k := tb.k
 	c := k.Context()
 	h := tb.capsuleH()
 	_, ident := ui.SplitLabel(name)
+	gkey := ui.HashString(c.ParentKey(), ident)
+	// as wide as it was laid out last (its parts decide), remembered while
+	// it is in the overflow menu; its parts go there when it is out of room
+	wkey := ui.KeyN(gkey, 0x6A0)
+	gw := c.KeepValue(wkey, 0, 0)
+	if lr := c.RectOf(gkey); lr[2] > lr[0] {
+		gw = lr[2] - lr[0]
+	}
+	c.KeepValue(wkey, 0, gw)
+	if hidden, _ := tb.overflows(gw, ""); hidden {
+		tb.nOv-- // the parts are listed, not the group
+		tb.inGroup, tb.hideGrp = true, true
+		return
+	}
+	tb.gap(tbCapsule)
 	flags := tb.capsuleLook(base.Visual{Inactive: k.Inactive(), Disabled: k.Disabled()}, h)
 	c.NextAxis(ui.AxisX)
 	c.NextCross(ui.CrossCenter)
@@ -572,7 +663,7 @@ func (tb *Toolbar) beginGroup(name string, shared bool) {
 	c.NextSize(ui.Children(1), ui.Px(h))
 	c.NextRole(ui.RoleGroup)
 	c.NextSemName(name)
-	tb.group = c.BoxKeyed(flags, ui.HashString(c.ParentKey(), ident), nil)
+	tb.group = c.BoxKeyed(flags, gkey, nil)
 	tb.glass(tb.group)
 	c.Push(tb.group)
 	tb.inGroup = true
@@ -586,23 +677,32 @@ func (tb *Toolbar) closeGroup() {
 	if !tb.inGroup {
 		return
 	}
+	if tb.hideGrp {
+		tb.inGroup, tb.hideGrp = false, false
+		return
+	}
 	c := tb.k.Context()
 	tb.highlight(tb.group, base.Visual{Inactive: tb.k.Inactive()}, tb.capsuleH())
 	c.Pop()
 	tb.inGroup = false
 	r := c.Rect(tb.group)
 	tb.cur += r[2] - r[0]
+	tb.used += r[2] - r[0]
 }
 
 // Nav builds the back and forward item: one capsule with a divider
 // (NSToolbarItemGroup, navigational). It reports each half's signal; a half
 // that cannot go is disabled.
 func (tb *Toolbar) Nav(back, forward icon.ID, canBack, canForward bool) (b, f base.Signal) {
-	tb.gap(tbCapsule)
 	k := tb.k
 	c, r := k.Context(), k.Theme()
 	h := tb.capsuleH()
 	w := theme.Snap(r.Window.Capsule.NavW)
+	if hidden, picked := tb.overflows(w, "Back"); hidden {
+		_, pf := tb.overflows(w, "Forward")
+		return base.Signal{Clicked: picked && canBack}, base.Signal{Clicked: pf && canForward}
+	}
+	tb.gap(tbCapsule)
 	flags := tb.capsuleLook(base.Visual{Inactive: k.Inactive()}, h)
 	c.NextAxis(ui.AxisX)
 	c.NextRole(ui.RoleGroup)
@@ -631,6 +731,7 @@ func (tb *Toolbar) Nav(back, forward icon.ID, canBack, canForward bool) (b, f ba
 			c.NextBG(tb.rc.Divider.RGBA(r))
 			c.BoxKeyed(ui.DrawBackground|base.Floating, ui.KeyN(p.Key, 2), nil)
 		}
+		k.FocusRing(p.ID, p.Visual, h/2)
 		s := k.EndPress(&p)
 		k.EndDisabled()
 		if i == 0 {
@@ -651,10 +752,23 @@ func (tb *Toolbar) Nav(back, forward icon.ID, canBack, canForward bool) (b, f ba
 // the system's menu (with native menus; otherwise a click moves to the next
 // option). names are the options' accessible names.
 func (tb *Toolbar) Picker(label string, sel *int, icons []icon.ID, names []string, collapsed bool) base.Signal {
-	tb.gap(tbPicker)
 	k := tb.k
 	c, r := k.Context(), k.Theme()
 	h := tb.capsuleH()
+	pw := theme.Snap(r.Window.Capsule.PickerW)
+	if !collapsed {
+		pw = theme.Snap(k.Pt(tb.rc.SegmentW)) * float32(len(icons))
+	}
+	if hidden, picked := tb.overflows(pw, label); hidden {
+		// chosen from the overflow menu: the next option, as a click on the
+		// collapsed picker without native menus
+		sig := base.Signal{Clicked: picked}
+		if picked && len(icons) > 0 {
+			*sel, sig.Changed = (*sel+1)%len(icons), true
+		}
+		return sig
+	}
+	tb.gap(tbPicker)
 	if collapsed {
 		p := k.PressState(label, base.HoverOn)
 		w := theme.Snap(r.Window.Capsule.PickerW)
@@ -670,6 +784,11 @@ func (tb *Toolbar) Picker(label string, sel *int, icons []icon.ID, names []strin
 		tb.highlight(p.ID, p.Visual, h)
 		k.FocusRing(p.ID, p.Visual, h/2)
 		sig := k.EndPress(&p)
+		// an assistive technology opens it as a pop-up button: show menu,
+		// expand, or press
+		if a := c.Signal(p.ID).Action; a&(ui.ActExpand|ui.ActShowMenu) != 0 {
+			sig.Clicked = true
+		}
 		if sig.Clicked && !k.Disabled() {
 			if c.NativeMenus() {
 				c.RequestMenu(ui.MenuRequest{Kind: ui.MenuList, Owner: p.Key, Options: names, Selected: *sel, Rect: c.Rect(p.ID)})
@@ -753,12 +872,15 @@ func (tb *Toolbar) glyphAndChevron(key ui.Key, ic, chev icon.ID, fg uint32, w, h
 // chevron that opens the menu model's menu at index menuIndex (the system's,
 // with native menus); otherwise Clicked tells the app to open its own.
 func (tb *Toolbar) Menu(ic icon.ID, name string, menuIndex int) base.Signal {
-	tb.gap(tbCapsule)
 	k := tb.k
 	c := k.Context()
 	h := tb.capsuleH()
 	iw, _ := k.IconSize(ic)
 	w := theme.Snap(max(k.Pt(tb.rc.MenuMin), iw+k.Pt(tb.rc.MenuPad)))
+	if hidden, picked := tb.overflows(w, name); hidden {
+		return base.Signal{Clicked: picked}
+	}
+	tb.gap(tbCapsule)
 	p := k.PressState(name, base.HoverOn)
 	flags := tb.capsuleLook(p.Visual, h)
 	k.BeginPress(&p, ui.RoleButton, ui.Px(w), ui.Px(h), flags, nil)
@@ -779,6 +901,9 @@ func (tb *Toolbar) Menu(ic icon.ID, name string, menuIndex int) base.Signal {
 // unified toolbar short of room) showing ic (a magnifying glass at the
 // toolbar's symbol size); the app expands it on Clicked.
 func (tb *Toolbar) SearchButton(ic icon.ID, name string) base.Signal {
+	if hidden, picked := tb.overflows(tb.itemW(ic)+tb.searchGapW()-tb.gapW(), name); hidden {
+		return base.Signal{Clicked: picked}
+	}
 	tb.searchGap()
 	tb.prev = tbStart // the gap is laid
 	s := tb.Item(ic, name)
@@ -790,21 +915,21 @@ func (tb *Toolbar) searchGap() {
 	if tb.inGroup {
 		return
 	}
-	i := 1
-	if tb.o.Style == theme.ToolbarCompact {
-		i = 0
+	tb.space(tb.searchGapW())
+}
+
+// searchGapW is the gap before a search item.
+func (tb *Toolbar) searchGapW() float32 {
+	if tb.prev == tbStart || tb.prev == tbFlex {
+		return 0
 	}
-	if tb.prev != tbStart && tb.prev != tbFlex {
-		tb.space(tb.k.Pt(tb.rc.SearchGap[i]))
-	}
+	return tb.k.Pt(tb.rc.SearchGap[tb.styleIndex()])
 }
 
 // Search builds an expanded search item: a search field (Escape and the clear
 // button empty it) in a glass capsule of the toolbar's height, widthPt wide
 // (0: the recipe's 166).
 func (tb *Toolbar) Search(label string, buf *ui.TextBuffer, placeholder string, widthPt float32) base.FieldSignal {
-	tb.searchGap()
-	tb.prev = tbCapsule
 	k := tb.k
 	c := k.Context()
 	if widthPt <= 0 {
@@ -812,6 +937,11 @@ func (tb *Toolbar) Search(label string, buf *ui.TextBuffer, placeholder string, 
 	}
 	h := tb.capsuleH()
 	w := theme.Snap(k.Pt(widthPt))
+	if hidden, _ := tb.overflows(w+tb.searchGapW()-tb.gapW(), label); hidden {
+		return base.FieldSignal{}
+	}
+	tb.searchGap()
+	tb.prev = tbCapsule
 	flags := tb.capsuleLook(base.Visual{Inactive: k.Inactive(), Disabled: k.Disabled()}, h)
 	c.NextAxis(ui.AxisX)
 	c.NextCross(ui.CrossCenter)
@@ -903,6 +1033,7 @@ func (tb *Toolbar) Flexible() {
 	tb.n++
 	if tb.titled {
 		c.NextSize(ui.Px(tb.k.Theme().Window.Capsule.WideGap), ui.Px(0))
+		tb.used += tb.k.Theme().Window.Capsule.WideGap
 	} else {
 		c.NextSize(ui.Pct(1), ui.Px(0))
 		tb.fixed = false
@@ -943,14 +1074,61 @@ func (tb *Toolbar) EndCustom() { tb.k.Context().Pop() }
 // starts.
 func (tb *Toolbar) Height() float32 { return theme.Snap(tb.spec.Height) }
 
-// End closes the toolbar.
-func (tb *Toolbar) End() {
+// End closes the toolbar. When items did not fit their panes it builds the
+// overflow button (») at the band's end, whose menu lists them (the system's,
+// with native menus: a choice comes back, in a later frame, as the item's
+// Clicked); otherwise it reports them and the button's press for the app's
+// own menu.
+func (tb *Toolbar) End() ToolbarOverflow {
+	var res ToolbarOverflow
 	if !tb.open {
-		return
+		return res
 	}
 	c := tb.k.Context()
 	tb.closeGroup()
+	if tb.nOv > 0 {
+		res = tb.overflowButton()
+	}
 	c.Pop() // the row
 	c.Pop() // the band
 	tb.open = false
+	return res
+}
+
+// overflowButton builds the » capsule at the end of the last row.
+func (tb *Toolbar) overflowButton() ToolbarOverflow {
+	k := tb.k
+	c := k.Context()
+	res := ToolbarOverflow{N: tb.nOv, Names: tb.ov}
+	names := res.Names[:res.N]
+	tb.space(tb.gapW())
+	h := tb.capsuleH()
+	w := tb.overflowW()
+	p := base.Press{Key: tb.ovKey, Name: "Show More", Hover: base.HoverOn, Visual: k.VisualOf(tb.ovKey, base.HoverOn)}
+	flags := tb.capsuleLook(p.Visual, h)
+	k.BeginPress(&p, ui.RoleButton, ui.Px(w), ui.Px(h), flags, nil)
+	tb.glass(p.ID)
+	// », two chevrons
+	fg := tb.glyph(p.Visual)
+	if f, disp := k.Icons().Prepare(c, icon.ChevronRight, fg); f != 0 {
+		cw, chh := k.IconSize(icon.ChevronRight)
+		d := theme.Snap(k.Pt(3.5))
+		x := theme.Snap((w - cw - d) / 2)
+		for i := range 2 {
+			theme.At(c, x+float32(i)*d, theme.Snap((h-chh)/2), cw, chh)
+			c.BoxKeyed(f|base.Floating, ui.KeyN(tb.ovKey, uint64(i)+1), disp)
+		}
+	}
+	tb.highlight(p.ID, p.Visual, h)
+	k.FocusRing(p.ID, p.Visual, h/2)
+	sig := k.EndPress(&p)
+	c.MenuChoice(p.ID, names) // taken as the items were built (BeginToolbar)
+	if sig.Clicked && !k.Disabled() {
+		if c.NativeMenus() {
+			c.RequestMenu(ui.MenuRequest{Kind: ui.MenuList, Owner: tb.ovKey, Options: names, Selected: -1, Rect: c.Rect(p.ID)})
+		} else {
+			res.Clicked = true
+		}
+	}
+	return res
 }

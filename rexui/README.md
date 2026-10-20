@@ -204,6 +204,20 @@ Transparency and off macOS the measured fallbacks are drawn. The rows of a
 sidebar and the content scroll below the band, clipped there, where AppKit
 fades them under it.
 
+Without the pointer (review fixes, 2026-10-20): a sidebar group's Show or
+Hide is a tab stop (Space toggles it; a click leaves the focus with the
+list), and an assistive technology's press works on it and on a row's
+disclosure; a row the keyboard selects scrolls into view. Every tab that
+can close has its Close Tab button in the tree, shown on hover; disabled
+tabs take no press and say so; tabs follow Reduce Motion and show no focus
+ring in an inactive window; a tab the app chooses comes into view; Escape
+during a drag puts the tab back where it started, as browsers do. The path
+bar's components are tab stops. Toolbar items that do not fit their pane go,
+with the rest of the pane, into a » overflow menu at the band's end, as
+NSToolbar's do (`Toolbar.End` reports them; with native menus a choice
+comes back as the item's Clicked); the collapsed picker opens for Show Menu
+and Expand, and back and forward show the focus ring.
+
 ### Left to the eye, and why
 
 - `push-glass` offscreen: AppKitRef's `cacheDisplay` renders Liquid Glass as
@@ -267,9 +281,10 @@ are reported against `theme/` (D1), not changed there:
     detail line black 43 % / white 36 % (0.7 white on the accent); a
     two-line row's title is semibold.
   - The sidebar's search field is a filled capsule: #EAEAEA / #4E4E4E,
-    #E5E5E5 / #464646 inactive, fading from a #FFFFFF / #727272 rim at its
-    top and bottom in a key window, with a hairline just outside it
-    (#D8D8D8 / #8C8C8C; #CDCDCD / #181818 inactive).
+    #E5E5E5 / #464646 inactive; in a key window a #FFFFFF / #727272 rim
+    inside its edge and a #F4F4F4 / #565656 glow fading into the fill
+    towards the middle, with a hairline just outside it (#D8D8D8 / #8C8C8C;
+    #CDCDCD / #181818 inactive).
   - Single-line labels end in "…" (`ui.EllipsisOverflowX`: sidebar rows,
     table cells and headers, pop-ups, the path bar); tabs keep their fade.
     A row's text ends 22 before the sidebar's edge (`SidebarRecipe.TextEnd`).

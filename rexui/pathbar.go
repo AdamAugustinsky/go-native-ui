@@ -55,7 +55,9 @@ const maxPath = 32
 
 // PathBar builds a path bar of items, the first the root and the last the
 // current location, as wide as its parent unless the kit's NextWidth says
-// otherwise. A click on a component reports its index.
+// otherwise. A click on a component reports its index, and so do Space and
+// Enter on a component that has the focus (each is a tab stop, as with the
+// keyboard's full access) and an assistive technology's press.
 //
 //	if p := rexui.PathBar(k, "Path", v.path, rexui.PathBarOpts{}); p.Index >= 0 {
 //		v.goTo(p.Index)
@@ -69,8 +71,10 @@ func PathBar(k *base.Kit, label string, items []PathItem, o PathBarOpts) PathSig
 	_, ident := ui.SplitLabel(label)
 	key := ui.HashString(c.ParentKey(), ident)
 	res := PathSignal{Index: -1}
+	off := 0 // the components left out at the start: indexes are into the app's items
 	if len(items) > maxPath {
-		items = items[len(items)-maxPath:]
+		off = len(items) - maxPath
+		items = items[off:]
 	}
 	n := len(items)
 
@@ -129,7 +133,7 @@ func PathBar(k *base.Kit, label string, items []PathItem, o PathBarOpts) PathSig
 		theme.At(c, theme.Snap(x), 0, theme.Snap(w), h)
 		c.NextRole(ui.RoleButton)
 		c.NextSemName(it.Title)
-		flags := ui.Clickable | ui.ActiveAnimation | base.Floating
+		flags := ui.Clickable | ui.Focusable | ui.ActiveAnimation | ui.FocusAnimation | base.Floating
 		if k.Disabled() {
 			flags = ui.Disabled | base.Floating
 		}
@@ -150,9 +154,10 @@ func PathBar(k *base.Kit, label string, items []PathItem, o PathBarOpts) PathSig
 			c.NextTextColor(col)
 			c.BoxKeyed(ui.DrawText|ui.EllipsisOverflowX|base.Floating, ui.KeyN(ikey, 2), base.StrBytes(it.Title))
 		}
+		k.FocusRing(b, k.VisualOf(ikey, base.HoverOff), k.Pt(4))
 		c.Pop()
-		if sg := c.Signal(b); (sg.Clicked || sg.Action&ui.ActPress != 0) && !k.Disabled() {
-			res.Index = i
+		if sg := c.Signal(b); (sg.Clicked || sg.Activated || sg.Action&ui.ActPress != 0) && !k.Disabled() {
+			res.Index = off + i
 		}
 		x += w
 		if i < n-1 {
