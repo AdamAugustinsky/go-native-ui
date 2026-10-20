@@ -131,6 +131,7 @@ const (
 	EvMagnify                 // a pinch: Amount is the change in scale (0.1 = grow by 10 %), Phase its phase (PhaseNone: a device without phases), X, Y where it is; see Gestures
 	EvSmartMagnify            // the two-finger double tap (smart zoom): X, Y where it happened
 	EvRotate                  // a two-finger rotation: Amount in degrees, counterclockwise positive as the user sees it, Phase, X, Y
+	EvHostEdit                // a hosted editor (Editor, N4) has signals or completion commands to take: Tag is its HostID; the app draws a frame
 )
 
 // Flags qualify an Event.

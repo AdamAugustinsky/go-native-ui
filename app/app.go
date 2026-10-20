@@ -513,6 +513,8 @@ func (a *App) onEvent(e *platform.Event) {
 		if a.hostCommand(e) {
 			a.p.invalidate()
 		}
+	case platform.EvHostEdit: // the editor holds what changed; its widget takes it in the frame
+		a.p.invalidate()
 	case platform.EvDialog:
 		a.onDialog(e)
 	default:
