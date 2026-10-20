@@ -715,18 +715,31 @@ func (l *List) PadY() float32 { return l.padT }
 // row, as of the last frame: none unless the last row is built in this
 // frame. A recipe that stripes its rows, as AppKit's alternating rows do,
 // stripes this room too, building as many row-high boxes after the last row.
-// A trackpad's stretch past the bottom shows more of it.
+// A trackpad's stretch past the bottom shows more of it. It is never more
+// than the rows the view holds: a list that shrank while scrolled deep (a
+// filter that matches nothing) still has last frame's offset in this frame,
+// which the layout clamps only when it ends.
 func (l *List) FillerRows() int {
 	if l.Last < l.Rows || l.rowH <= 0 {
 		return 0
 	}
 	r := l.k.c.Rect(l.s)
 	view := r[3] - r[1] - l.padT - l.top
-	used := float32(l.Rows)*l.rowH - float32(l.st.disp)
+	used := float32(float64(l.Rows)*float64(l.rowH) - l.shownOffset(r[3]-r[1]))
 	if view <= used {
 		return 0
 	}
-	return int(math.Ceil(float64((view - used) / l.rowH)))
+	return min(int(math.Ceil(float64((view-used)/l.rowH))), int(math.Ceil(float64(view/l.rowH))))
+}
+
+// shownOffset is where the rows show, in pixels from the top of the list's
+// scrolling box (the offset and a trackpad's stretch), as of the last frame
+// but clamped to the content of this one, whose end is as far as the layout
+// lets the list scroll, as high as the box is.
+func (l *List) shownOffset(boxH float32) float64 {
+	stretch := l.st.disp - l.st.shown
+	end := math.Max(2*float64(l.padT)+float64(l.top)+float64(l.Rows)*float64(l.rowH)-float64(boxH), 0)
+	return math.Min(l.st.shown, end) + stretch
 }
 
 // FillerTop is where the ith row of the room below the last row
@@ -734,7 +747,8 @@ func (l *List) FillerRows() int {
 // stretch included. A recipe places those rows there as floating boxes, so
 // that they are not content: they never make the list scrollable.
 func (l *List) FillerTop(i int) float32 {
-	return l.padT + l.top + float32(l.Rows+i)*l.rowH - float32(l.st.disp)
+	r := l.k.c.Rect(l.s)
+	return l.padT + l.top + float32(float64(l.Rows+i)*float64(l.rowH)-l.shownOffset(r[3]-r[1]))
 }
 
 // BoxKey is the key of the list's outer box; the recipe keys its own boxes in
