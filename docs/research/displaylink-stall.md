@@ -51,7 +51,7 @@ How to read them:
 
 ## When it happens
 
-- **After a pause and a resume of the link.** In both dumps the link had been
+- **In the F4 tests, after a pause and a resume of the link.** In both dumps the link had been
   paused once (idle) and resumed. It ticked a few times after the resume,
   then stopped. A link resumed in the same test after its first pause worked
   (the other window's: `pauses=2`, 60 frames).
@@ -76,6 +76,14 @@ How to read them:
 
   So the stall happens with one window too. Two out of two on this branch
   may be chance, or something F4 changed.
+- **The one-window benches, with no pause at all** (run `39507720375`, all
+  green, which shows the restart log): `pilot -bench -rows 1000000`
+  restarted twice (`ticks 163 pauses 0` and `ticks 574 pauses 0`), `notes
+  -bench` and `imgbench -bench` once each (`ticks 1311` and `ticks 89`,
+  `pauses 0`), all `windows open 1`. They pass with `-allow-unpaced`. So a
+  pause and a resume are not needed, and the stall is common on CI. These
+  benches run through the app package, so with F4 they use the shared device
+  and queue (`gpu.Device`); the spike does not.
 
 ## Two leads
 
@@ -128,11 +136,13 @@ when a stall happens: it reports any 1 s silence as unpaced.
 - Drawables in flight per layer at the stall (presented minus released).
 - A run with `maximumDrawableCount` 3, one with per-surface queues, and one
   where the link is never paused: does any of them make the stall go away?
-- The restart log lines in CI's output, from runs that pass. The first ones
-  (runs `39498360641`, `39500861219`, `39503358053`, `39505572655`, macOS
-  arm64): each run of the live package logged one unprompted restart, for
-  window 0 of an F4 test, after one pause (`armed 1002 ms ago, last tick
-  1002 ms ago, ticks 12 pauses 1 windows open 2`): 4 runs out of 4. The
-  window-1 line next to it is `TestAStoppedDisplayLinkIsReplaced`'s own
-  stop. Running the F4 tests with `-v` would say which test it is; it looks
-  reproducible there.
+- The restart log lines in CI's output. In 4 failing runs of the live
+  package (`39498360641`, `39500861219`, `39503358053`, `39505572655`, where
+  `go test` shows the package's output), each run logged one unprompted
+  restart: window 0 of an F4 test, after one pause (`armed 1002 ms ago, last
+  tick 1002 ms ago, ticks 12 pauses 1 windows open 2`). The window-1 line
+  next to it is `TestAStoppedDisplayLinkIsReplaced`'s own stop. Those runs
+  failed in `TestEachWindowHasItsOwnComposer`, whose typing opened
+  NSCorrectionPanel's nested loop. The restart may have come from that
+  test, and from that loop. A passing package prints nothing, so the
+  benches' lines above are the ones to watch.
