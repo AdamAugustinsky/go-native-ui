@@ -430,5 +430,5 @@ func (r *imeRig) imeUsedAndReset() bool {
 
 func (r *imeRig) setMarkedReplacing(s string, loc, n, rloc, rn uintptr) {
 	str := objc.Str(s)
-	objc.F.Reset().Arg(uintptr(r.view)).Arg(uintptr(selSetMarkedText)).Arg(uintptr(str)).Arg(loc).Arg(n).Arg(rloc).Arg(rn).Call(objc.MsgSend)
+	argRangeAfter5(objc.F.Reset().Arg(uintptr(r.view)).Arg(uintptr(selSetMarkedText)).Arg(uintptr(str)).Arg(loc).Arg(n), rloc, rn).Call(objc.MsgSend)
 }

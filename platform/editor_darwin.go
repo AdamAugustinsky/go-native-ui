@@ -764,8 +764,8 @@ func (e *Editor) command(sel objc.SEL) bool {
 	case selCancelOperation, selComplete:
 		switch {
 		case marked: // Escape abandons the composition
-			objc.F.Reset().Arg(uintptr(e.tv)).Arg(uintptr(selSetMarkedText)).Arg(uintptr(edEmpty)).
-				Arg(0).Arg(0).Arg(uintptr(nsNotFound)).Arg(0).Call(objc.MsgSend)
+			argRangeAfter5(objc.F.Reset().Arg(uintptr(e.tv)).Arg(uintptr(selSetMarkedText)).Arg(uintptr(edEmpty)).
+				Arg(0).Arg(0), uintptr(nsNotFound), 0).Call(objc.MsgSend)
 			objc.Send(e.tv, selUnmarkText)
 		case composed: // the input method ended it already
 		case e.compl:
