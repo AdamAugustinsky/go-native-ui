@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"runtime"
 	"sync"
 	"unsafe"
 
@@ -18,11 +19,23 @@ import (
 // pixels and weight (NSFontWeight: 0 regular, 0.23 medium, 0.3 semibold)
 // through AppKit and returns its coverage (alpha) as w×h bytes with a 1 px
 // margin. ok is false if the symbol does not exist on this macOS.
-func rasterSymbol(name string, sizePx, weight float64) (pix []byte, w, h int, ok bool) {
+func rasterSymbol(name string, sizePx, weight float64, scale Scale) (pix []byte, w, h int, ok bool) {
+	return rasterConfigured(name, func() objc.ID {
+		return objc.ID(objc.F.Reset().Arg(uintptr(clsSymbolConfig)).Arg(uintptr(selConfigPt)).ArgF64(sizePx).ArgF64(weight).Arg(uintptr(symbolScale(scale))).Call(objc.MsgSend).R0())
+	})
+}
+
+// rasterConfigured is rasterSymbol with the NSImageSymbolConfiguration made
+// by config (inside the autorelease pool, once the classes are loaded).
+func rasterConfigured(name string, config func() objc.ID) (pix []byte, w, h int, ok bool) {
 	if err := loadSyms(); err != nil {
 		warnOnce(err.Error())
 		return nil, 0, 0, false
 	}
+	// an autorelease pool belongs to a thread: pushed on one and popped on
+	// another, it crashes
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	F := objc.F
 	pool := F.Call0(objc.PoolPush)
 	defer F.Call1(objc.PoolPop, pool)
@@ -32,8 +45,7 @@ func rasterSymbol(name string, sizePx, weight float64) (pix []byte, w, h int, ok
 		warnOnce(fmt.Sprintf("symbol %q not available", name))
 		return nil, 0, 0, false
 	}
-	cfg := objc.ID(F.Reset().Arg(uintptr(clsSymbolConfig)).Arg(uintptr(selConfigPt)).ArgF64(sizePx).ArgF64(weight).Call(objc.MsgSend).R0())
-	if cfg != 0 {
+	if cfg := config(); cfg != 0 {
 		if sized := objc.Send1(img, selWithConfig, uintptr(cfg)); sized != 0 {
 			img = sized
 		}
@@ -61,6 +73,17 @@ func rasterSymbol(name string, sizePx, weight float64) (pix []byte, w, h int, ok
 		pix[i] = buf[i*4+3]
 	}
 	return pix, w, h, true
+}
+
+// symbolScale is NSImageSymbolScale: small 1, medium 2, large 3.
+func symbolScale(s Scale) int {
+	switch s {
+	case ScaleSmall:
+		return 1
+	case ScaleLarge:
+		return 3
+	}
+	return 2
 }
 
 var cg struct {
@@ -102,7 +125,7 @@ func loadSyms() error {
 	clsNSGraphicsContext = objc.Cls("NSGraphicsContext")
 	selSymbolNamed = objc.Sel("imageWithSystemSymbolName:accessibilityDescription:")
 	selWithConfig = objc.Sel("imageWithSymbolConfiguration:")
-	selConfigPt = objc.Sel("configurationWithPointSize:weight:")
+	selConfigPt = objc.Sel("configurationWithPointSize:weight:scale:")
 	selSize = objc.Sel("size")
 	selDrawInRect = objc.Sel("drawInRect:")
 	selGCWithCG = objc.Sel("graphicsContextWithCGContext:flipped:")

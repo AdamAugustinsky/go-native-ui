@@ -1,11 +1,12 @@
 {
-	"source": "tools/appkitref/measure -ref macbook-blue (AppKitRef, Version 27.2 (Build 26B5091g))",
+	"source": "tools/appkitref/measure -ref ref-blue-merged (AppKitRef, Version 27.2 (Build 26B5091g))",
 	"scale": 2,
 	"system": {
 		"dark": {
 			"alternateSelectedControlTextColor": "#FFFFFFFF",
 			"controlAccentColor": "#007AFFFF",
 			"controlBackgroundColor": "#1E1E1EFF",
+			"controlTextColor": "#FFFFFFD8",
 			"disabledControlTextColor": "#FFFFFF3F",
 			"findHighlightColor": "#FFFF00FF",
 			"gridColor": "#1A1A1AFF",
@@ -52,6 +53,7 @@
 			"alternateSelectedControlTextColor": "#FFFFFFFF",
 			"controlAccentColor": "#007AFFFF",
 			"controlBackgroundColor": "#FFFFFFFF",
+			"controlTextColor": "#000000D8",
 			"disabledControlTextColor": "#0000003F",
 			"findHighlightColor": "#FFFF00FF",
 			"gridColor": "#E6E6E6FF",
@@ -1261,6 +1263,150 @@
 				"fill": "#DFDFDF",
 				"label": "#2A2A2A"
 			}
+		},
+		"form-group": {
+			"dark": {
+				"w": 360,
+				"h": 122,
+				"radius": 12.06,
+				"fill": "#252525"
+			},
+			"light": {
+				"w": 360,
+				"h": 122,
+				"radius": 12.1,
+				"fill": "#F7F7F7"
+			}
 		}
+	},
+	"layouts": {
+		"form-grid": {
+			"check2": {
+				"h": 16,
+				"w": 128,
+				"x": 94,
+				"y": 60
+			},
+			"field0": {
+				"h": 24,
+				"w": 200,
+				"x": 94,
+				"y": 0
+			},
+			"field1": {
+				"h": 24,
+				"w": 200,
+				"x": 94,
+				"y": 30
+			},
+			"grid": {
+				"h": 76,
+				"w": 294,
+				"x": 0,
+				"y": 0
+			},
+			"label0": {
+				"h": 16,
+				"w": 44,
+				"x": 46,
+				"y": 4
+			},
+			"label1": {
+				"h": 16,
+				"w": 92,
+				"x": -2,
+				"y": 34
+			},
+			"label2": {
+				"h": 16,
+				"w": 85,
+				"x": 5,
+				"y": 60
+			},
+			"spacing": {
+				"column": 6,
+				"row": 6
+			}
+		},
+		"form-group": {
+			"box": {
+				"h": 122,
+				"w": 360,
+				"x": 0,
+				"y": 0
+			},
+			"control0": {
+				"h": 24,
+				"w": 79,
+				"x": 271,
+				"y": 8
+			},
+			"control1": {
+				"h": 24,
+				"w": 54,
+				"x": 296,
+				"y": 49
+			},
+			"control2": {
+				"h": 16,
+				"w": 120,
+				"x": 230,
+				"y": 94
+			},
+			"label0": {
+				"h": 16,
+				"w": 77,
+				"x": 8,
+				"y": 12
+			},
+			"label1": {
+				"h": 16,
+				"w": 37,
+				"x": 8,
+				"y": 53
+			},
+			"label2": {
+				"h": 16,
+				"w": 69,
+				"x": 8,
+				"y": 94
+			},
+			"row0": {
+				"h": 40,
+				"w": 360,
+				"x": 0,
+				"y": 0
+			},
+			"row1": {
+				"h": 40,
+				"w": 360,
+				"x": 0,
+				"y": 41
+			},
+			"row2": {
+				"h": 40,
+				"w": 360,
+				"x": 0,
+				"y": 82
+			},
+			"separator0": {
+				"h": 1,
+				"w": 360,
+				"x": 0,
+				"y": 39.5
+			},
+			"separator1": {
+				"h": 1,
+				"w": 360,
+				"x": 0,
+				"y": 80.5
+			}
+		}
+	},
+	"sheets": {
+		"alertPanelClass": "_NSAlertPanel",
+		"alertPanelContentFrameClass": "NSGlassContentFrameView",
+		"alertPanelCornerRadius": 26,
+		"plainTitledPanelCornerRadius": 16
 	}
 }

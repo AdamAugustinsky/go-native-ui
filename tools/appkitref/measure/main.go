@@ -79,6 +79,11 @@ type File struct {
 	Scale   int                          `json:"scale"`
 	System  map[string]map[string]string `json:"system"`
 	Samples map[string]map[string]Result `json:"samples"`
+	// Layouts are the frames of the form samples' subviews (AppKitRef's
+	// "layouts"), and Sheets what it read of sheets ("sheets"); rexui's form
+	// and dialog tests compare ours with them.
+	Layouts json.RawMessage `json:"layouts,omitempty"`
+	Sheets  json.RawMessage `json:"sheets,omitempty"`
 }
 
 var modes = [...]string{"light", "dark"}
@@ -125,6 +130,8 @@ func main() {
 		Scale:   scale,
 		System:  map[string]map[string]string{},
 		Samples: map[string]map[string]Result{},
+		Layouts: meta.Layouts,
+		Sheets:  meta.Sheets,
 	}
 	for mi, ap := range [...]string{"NSAppearanceNameAqua", "NSAppearanceNameDarkAqua"} {
 		cs := map[string]string{}
@@ -549,6 +556,8 @@ type metrics struct {
 			Width          float64 `json:"width"`
 		} `json:"focusRing"`
 	} `json:"controls"`
+	Layouts json.RawMessage `json:"layouts"`
+	Sheets  json.RawMessage `json:"sheets"`
 }
 
 func loadMetrics(path string) (*metrics, error) {

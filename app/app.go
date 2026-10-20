@@ -145,6 +145,7 @@ type App struct {
 	dlgShown []shownDialog           // dialogs on screen
 	dlgSeq   platform.DialogTicket   // the last ticket given
 	dlgT     dialogTarget            // the window's dialogs; tests set a fake
+	dragT    dragTarget              // the window's drags; tests set a fake (drag.go)
 
 	sh shellSync // material and host regions handed to the window (shell.go)
 
@@ -373,6 +374,7 @@ func (a *App) initUI() error {
 	if a.Win != nil { // a window shows tooltips for the regions it is given; offscreen renders draw them
 		a.UI.SetNativeTooltips(platform.NativeTooltips)
 		a.Win.SetTooltipText(a.UI.TooltipText)
+		a.initDrag()
 	}
 	if in, ok := a.b.(Initer); ok {
 		if err := in.Init(a); err != nil {
@@ -515,6 +517,12 @@ func (a *App) onEvent(e *platform.Event) {
 		}
 	case platform.EvDialog:
 		a.onDialog(e)
+	case platform.EvDragEnter, platform.EvDragMove, platform.EvDragLeave, platform.EvDrop, platform.EvDragEnd:
+		var txt []byte
+		if e.Kind == platform.EvDrop && e.Text.Len > 0 {
+			txt = a.Win.Text(e.Text)
+		}
+		a.onDrag(e, txt)
 	default:
 		var txt []byte
 		if e.Kind == platform.EvText || e.Kind == platform.EvPreedit || e.Kind == platform.EvPaste {
@@ -562,6 +570,7 @@ func (a *App) present(inHandler bool, passes int) bool {
 	}
 	ok := a.drawFrame(inHandler, passes)
 	a.flushDialogs() // dialogs asked for in Build: shown now that the frame is over
+	a.flushDrag()    // drop kinds for the window, drags out asked for in Build (drag.go)
 	now := platform.Now()
 	if ok {
 		a.consecFails, a.lastDrawT = 0, now

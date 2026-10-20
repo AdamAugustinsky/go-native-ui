@@ -19,7 +19,7 @@ import (
 // AppKitPages are the names of the appkit scenes: rexui's counterparts of
 // AppKitRef's samples in its grid (catalog.Pages), for side-by-side captures
 // with AppKitRef's live window.
-var AppKitPages = [len(catalog.Pages)]string{"appkit", "appkit-type", "appkit-lists"}
+var AppKitPages = [len(catalog.Pages)]string{"appkit", "appkit-type", "appkit-lists", "appkit-forms"}
 
 // AppKitPage is the page of an appkit scene's name, -1 if it is not one.
 func AppKitPage(scene string) int {

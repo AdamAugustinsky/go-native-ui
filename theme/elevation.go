@@ -127,7 +127,7 @@ var MacMaterials = [NumMaterials]MaterialSpec{
 	MatField:      {Fill: Field, FillInactive: Field},
 	MatGlass:      {Fill: GlassTint, FillInactive: GlassTint, Solid: Pane},
 	MatSidebar:    {Native: true, Fill: SidebarFill, FillInactive: SidebarFillInactive},
-	MatToolbar:    {Native: true, Fill: CapsuleFill, FillInactive: CapsuleFillInactive},
+	MatToolbar:    {Native: true, Fill: CapsuleFill, FillInactive: CapsuleFillInactive, Solid: Raised},
 	MatMenu:       {Native: true, Fill: Raised, FillInactive: Raised},
 	MatPopover:    {Native: true, Fill: Raised, FillInactive: Raised},
 	MatHUD:        {Native: true, Fill: Raised, FillInactive: Raised},
