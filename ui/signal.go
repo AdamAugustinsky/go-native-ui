@@ -51,6 +51,8 @@ func (c *Context) hitWalk(id ID, x, y float32) {
 		}
 		if b.flags&scrollMask != 0 {
 			c.scrollKey, c.sp.hit = b.key, id
+		} else if b.stopWheel {
+			c.scrollKey, c.sp.hit = 0, 0
 		}
 	} else if b.flags&Clip != 0 {
 		return
@@ -359,6 +361,9 @@ func (c *Context) ScrollExtent(id ID) (content, view [2]float32) {
 // frame, so a series of calls (a selection that grows) accumulates. Axes the
 // box does not scroll on are left alone. A trackpad's stretch that would
 // clip the rectangle is let go.
+//
+// The view is the box less what covers it (SetObscured): a rectangle under
+// a toolbar's band is out of view, and is revealed below it.
 func (c *Context) ScrollIntoView(id ID, r [4]float32) {
 	b := &c.boxes[id]
 	var clipped uint8
@@ -366,8 +371,12 @@ func (c *Context) ScrollIntoView(id ID, r [4]float32) {
 		if !b.scrollOn(a) {
 			continue
 		}
-		view := float64(b.size[a])
-		lo, hi := float64(r[a]), float64(r[a+2])
+		top, bottom := 0.0, 0.0
+		if a == 1 {
+			top, bottom = float64(b.obscured[0]), float64(b.obscured[1])
+		}
+		view := math.Max(float64(b.size[a])-top-bottom, 0)
+		lo, hi := float64(r[a])-top, float64(r[a+2])-top
 		t := b.scrollTgt[a]
 		switch {
 		case hi-lo >= view || lo < t:
@@ -383,6 +392,22 @@ func (c *Context) ScrollIntoView(id ID, r [4]float32) {
 	c.unstretch(b.key, clipped)
 	c.scrollSet = true
 }
+
+// SetObscured says that this frame the view of scroll box id is covered by
+// top pixels at its top and bottom at its bottom (a toolbar's band over a
+// view that runs under it): its content scrolls there but is not in view, so
+// every reveal (ScrollIntoView, ActScrollIntoView, the keyboard's) brings a
+// rectangle between them. Call it after the box is built, each frame.
+func (c *Context) SetObscured(id ID, top, bottom float32) {
+	c.boxes[id].obscured = [2]float32{max(top, 0), max(bottom, 0)}
+}
+
+// StopWheel makes box id, this frame, keep the wheel and the trackpad's
+// scrolling from the scroll boxes beneath it (drawn before it): over it they
+// scroll only a scroll box inside it. A toolbar's band over content that runs
+// under it is one: AppKit's titlebar views do not pass the wheel on to the
+// content (measured on 27.2 through NSWindow's routing).
+func (c *Context) StopWheel(id ID) { c.boxes[id].stopWheel = true }
 
 // ListRange declares box id a virtual list of rows fixed-height rows and
 // returns the half-open row range [first, last) to build: the rows that
@@ -415,7 +440,9 @@ func (c *Context) ListRange(id ID, rows int, rowHeightPx float32, overscan int) 
 		scroll = hi
 	}
 	scroll = math.Max(scroll, 0)
-	vf := int(math.Floor(scroll / rh))
+	// the rows start below the top padding (a scroll inset under a
+	// toolbar): the view's top shows them from the offset less that
+	vf := int(math.Floor(math.Max(scroll-float64(b.pad[1]), 0) / rh))
 	vl := int(math.Ceil((scroll + viewH) / rh))
 	first = min(max(vf-overscan, 0), rows)
 	last = min(max(vl+overscan, first), rows)
