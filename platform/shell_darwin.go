@@ -113,8 +113,8 @@ func registerShell(d *objc.ClassDef) {
 
 // windowWillEnterFullScreen: squares the glass's corners before the zoom
 // starts: a full-screen window has none.
-func windowWillEnterFullScreen(*ffi.CB) {
-	if w := theWindow.Load(); w != nil {
+func windowWillEnterFullScreen(c *ffi.CB) {
+	if w := delegateWindow(objc.ID(c.Int(0))); w != nil {
 		w.fullScreen = true
 		w.fitBackdrop()
 	}
@@ -122,8 +122,8 @@ func windowWillEnterFullScreen(*ffi.CB) {
 
 // windowDidLeaveFullScreen is windowDidExitFullScreen: and
 // windowDidFailToEnterFullScreen:: the window's corners are back.
-func windowDidLeaveFullScreen(*ffi.CB) {
-	if w := theWindow.Load(); w != nil {
+func windowDidLeaveFullScreen(c *ffi.CB) {
+	if w := delegateWindow(objc.ID(c.Int(0))); w != nil {
 		w.fullScreen = false
 		w.fitBackdrop()
 		w.layoutChromeSoon() // AppKit dropped the titlebar's height for full screen
@@ -360,7 +360,7 @@ func symbolImage(name, label string) objc.ID {
 // buttonAction is gnuiButtonAction:, the action of every HostButton (sender:
 // the NSButton, whose tag is its host slot). It queues EvCommand.
 func buttonAction(c *ffi.CB) {
-	w := theWindow.Load()
+	w := delegateWindow(objc.ID(c.Int(0)))
 	if w == nil {
 		return
 	}
@@ -390,20 +390,41 @@ func (w *Window) SetButtonEnabled(id uint16, enabled bool) {
 	}
 }
 
-// ShellPending reports whether the window has staged material or host
-// changes for the next present (gpu.Surface then presents in step with
-// them). Main thread.
+// ShellPending reports whether a window has staged material or host changes
+// for its next present. A surface asks about its own window with its
+// Native's ShellPending. Main thread.
 func ShellPending() bool {
-	w := theWindow.Load()
+	for _, w := range openWindows() {
+		if w.mat.dirty || w.hosts.dirty {
+			return true
+		}
+	}
+	return false
+}
+
+// ApplyShell applies every window's staged material and host changes; a
+// surface applies its own window's with its Native's ApplyShell. Main thread.
+func ApplyShell() {
+	for _, w := range openWindows() {
+		w.applyShell()
+	}
+}
+
+// ShellPending reports whether the window n belongs to has staged material
+// or host changes for the next present (gpu.Surface then presents in step
+// with them). Main thread.
+func (n Native) ShellPending() bool {
+	w := n.window()
 	return w != nil && (w.mat.dirty || w.hosts.dirty)
 }
 
-// ApplyShell applies the staged material and host changes. gpu.Surface
-// calls it inside the Core Animation transaction that presents the frame
-// (with actions disabled and presentsWithTransaction on), so the native
-// views move together with the pixels drawn for them. Main thread.
-func ApplyShell() {
-	if w := theWindow.Load(); w != nil {
+// ApplyShell applies the staged material and host changes of the window n
+// belongs to. gpu.Surface calls it inside the Core Animation transaction
+// that presents the frame (with actions disabled and presentsWithTransaction
+// on), so the native views move together with the pixels drawn for them.
+// Main thread.
+func (n Native) ApplyShell() {
+	if w := n.window(); w != nil {
 		w.applyShell()
 	}
 }

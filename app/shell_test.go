@@ -65,7 +65,7 @@ func (noText) RunGeneration() uint32   { return 0 }
 func (noText) Pages() int              { return 0 }
 
 func newShellApp() *shellApp {
-	return &shellApp{a: &App{UI: ui.New(noText{}), scale: 2}, hostX: 300}
+	return &shellApp{a: &App{appObject: &appObject{}, UI: ui.New(noText{}), scale: 2}, hostX: 300}
 }
 
 func (s *shellApp) frame() {

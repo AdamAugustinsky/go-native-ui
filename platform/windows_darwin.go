@@ -1,0 +1,340 @@
+//go:build darwin
+
+package platform
+
+import (
+	"errors"
+	"sync/atomic"
+
+	"gonativeui/internal/objc"
+)
+
+// The window registry (DECISIONS D30): every open window, in the order they
+// opened, in place of the single window of earlier phases. A window's own
+// objects (its GNUIView, GNUIWindowDelegate and GNUIWindow) carry its slot in
+// their index instance variable (objc.ClassDef.Index), so a method AppKit
+// calls on one of them finds its window from self, without a global and
+// without allocating. An object of no class of ours (the window of an
+// NSEvent, a panel, the menu bar's) is looked up among the open windows.
+//
+// One app-wide pump (Pump) serves every window: it hands each event to the
+// window it is for (route), each window keeps its own queue, display link and
+// frame handler, and an idle window neither ticks nor holds up another.
+
+// MaxWindows is how many windows can be open at once.
+const MaxWindows = 64
+
+var reg struct {
+	slots   [MaxWindows]*Window // by slot; nil: free
+	open    [MaxWindows]*Window // the open windows, in the order they opened
+	n       int
+	lastKey *Window // the window of ours that was key last
+}
+
+// errTooManyWindows is Open's error past MaxWindows.
+var errTooManyWindows = errors.New("platform: too many windows open")
+
+// register gives w a slot and marks its objects with it. Main thread.
+func register(w *Window) error {
+	i := 0
+	for i < MaxWindows && reg.slots[i] != nil {
+		i++
+	}
+	if i == MaxWindows {
+		return errTooManyWindows
+	}
+	reg.slots[i], w.slot = w, i
+	reg.open[reg.n] = w
+	reg.n++
+	viewDef.Index().Set(w.view, uintptr(i+1))
+	delegateDef.Index().Set(w.delegate, uintptr(i+1))
+	windowDef.Index().Set(w.win, uintptr(i+1))
+	w.registered = true
+	return nil
+}
+
+// unregister forgets w: its objects stop finding it (a late callback from
+// AppKit finds no window), and the windows after it keep their order.
+func unregister(w *Window) {
+	if !w.registered {
+		return
+	}
+	w.registered = false
+	viewDef.Index().Set(w.view, 0)
+	delegateDef.Index().Set(w.delegate, 0)
+	windowDef.Index().Set(w.win, 0)
+	reg.slots[w.slot] = nil
+	for i := 0; i < reg.n; i++ {
+		if reg.open[i] == w {
+			copy(reg.open[i:reg.n], reg.open[i+1:reg.n])
+			reg.n--
+			reg.open[reg.n] = nil
+			break
+		}
+	}
+	if reg.lastKey == w {
+		reg.lastKey = nil
+	}
+}
+
+// openWindows is the open windows, in the order they opened. The slice is
+// the registry's: it changes when a window opens or closes. Main thread.
+func openWindows() []*Window { return reg.open[:reg.n] }
+
+// OpenCount is how many windows are open. Main thread.
+func OpenCount() int { return reg.n }
+
+// slotWindow is the window of slot index v (1-based, as the ivars hold it)
+// if its object obj is still that window's, else nil.
+func slotWindow(v uintptr) *Window {
+	if v == 0 || v > MaxWindows {
+		return nil
+	}
+	return reg.slots[v-1]
+}
+
+// viewWindow is the window of GNUIView self.
+func viewWindow(self objc.ID) *Window {
+	if self == 0 {
+		return nil
+	}
+	if w := slotWindow(viewDef.Index().Get(self)); w != nil && w.view == self {
+		return w
+	}
+	return nil
+}
+
+// delegateWindow is the window of GNUIWindowDelegate self.
+func delegateWindow(self objc.ID) *Window {
+	if self == 0 {
+		return nil
+	}
+	if w := slotWindow(delegateDef.Index().Get(self)); w != nil && w.delegate == self {
+		return w
+	}
+	return nil
+}
+
+// nsWindowWindow is the window of GNUIWindow self.
+func nsWindowWindow(self objc.ID) *Window {
+	if self == 0 {
+		return nil
+	}
+	if w := slotWindow(windowDef.Index().Get(self)); w != nil && w.win == self {
+		return w
+	}
+	return nil
+}
+
+// findWindow is the open window whose NSWindow is nswin (any NSWindow, ours
+// or not), nil if none.
+func findWindow(nswin objc.ID) *Window {
+	if nswin == 0 {
+		return nil
+	}
+	for _, w := range openWindows() {
+		if w.win == nswin {
+			return w
+		}
+	}
+	return nil
+}
+
+// viewOrDelegateWindow is the window of self, a GNUIView or a
+// GNUIWindowDelegate (a method both classes implement).
+func viewOrDelegateWindow(self objc.ID) *Window {
+	for _, w := range openWindows() {
+		if w.view == self || w.delegate == self {
+			return w
+		}
+	}
+	return nil
+}
+
+var (
+	selKeyWindow        = objc.Sel("keyWindow")
+	selMainWindow       = objc.Sel("mainWindow")
+	selSheetParent      = objc.Sel("sheetParent")
+	selSetAllowsTabbing = objc.Sel("setAllowsAutomaticWindowTabbing:")
+	selSetTabbingMode   = objc.Sel("setTabbingMode:")
+)
+
+// eventWindow is the window an NSEvent is for: the window it happened in, or
+// the one whose sheet it happened in; for an event of no window of ours (a
+// panel's, the menu bar's, none), the key window, else the main window, else
+// the one that was key last, else the first one opened. With one window open,
+// every event is that window's, as before the registry.
+func eventWindow(ev objc.ID) *Window {
+	if reg.n == 1 {
+		return reg.open[0]
+	}
+	nswin := objc.Send(ev, selWindow)
+	if w := findWindow(nswin); w != nil {
+		return w
+	}
+	if nswin != 0 {
+		if w := findWindow(objc.Send(nswin, selSheetParent)); w != nil {
+			return w
+		}
+	}
+	return fallbackWindow()
+}
+
+// fallbackWindow is the window an event or a command of no particular window
+// goes to: the key window if it is ours, else the main window, else the one
+// that was key last, else the first one opened; nil with none open.
+func fallbackWindow() *Window {
+	if reg.n == 0 {
+		return nil
+	}
+	if reg.n == 1 {
+		return reg.open[0]
+	}
+	if w := findWindow(objc.Send(appObj.app, selKeyWindow)); w != nil {
+		return w
+	}
+	if w := findWindow(objc.Send(appObj.app, selMainWindow)); w != nil {
+		return w
+	}
+	if reg.lastKey != nil {
+		return reg.lastKey
+	}
+	return reg.open[0]
+}
+
+// Pump is the app-wide event pump with windows open (D5, D30): it blocks
+// until an event, a wake, a frame slot of any window or the timeout (ns; 0
+// polls, negative waits without one), hands every event to the window it is
+// for, and returns. Each window's events are then taken with Events. The
+// events Events or Wait handed out before are released first, so a window
+// with events still queued (pushed between two pumps) does not block it.
+// Main thread.
+func Pump(timeoutNs int64) {
+	pending := false
+	for _, w := range openWindows() {
+		w.release()
+		if len(w.q.ev) > 0 {
+			pending = true
+		}
+	}
+	if pending {
+		timeoutNs = 0
+	}
+	pump(timeoutNs)
+}
+
+// pump runs nextEventMatchingMask until the timeout and routes the events.
+func pump(timeoutNs int64) {
+	F := objc.F
+	pool := F.Call0(objc.PoolPush)
+	until := appObj.distantFuture
+	switch {
+	case timeoutNs == 0:
+		until = appObj.distantPast
+	case timeoutNs > 0:
+		until = objc.ID(F.Reset().Arg(uintptr(clsNSDate)).Arg(uintptr(selDateSinceNow)).
+			ArgF64(float64(timeoutNs) / 1e9).Call(objc.MsgSend).R0())
+	}
+	for i := 0; i < reg.n; i++ {
+		if w := reg.open[i]; w.live && !objc.SendBool(w.win, selInLiveResize) {
+			w.exitLiveResize() // windowDidEndLiveResize: never arrived (or the resize ended inside a nested loop)
+		}
+	}
+	for ev := appNextEvent(until); ev != 0; ev = appNextEvent(appObj.distantPast) {
+		route(ev)
+	}
+	for i := 0; i < reg.n; i++ {
+		w := reg.open[i]
+		w.reapDialogs()
+		w.reapDrags() // images converted on workers, promised files asked for (drag_darwin.go)
+		w.reapPaste() // a pasted TIFF converted on a worker (paste_darwin.go)
+	}
+	F.Call1(objc.PoolPop, pool)
+}
+
+// route hands one event to its window (eventWindow). The wake event only
+// unblocks the pump: the wakes it stands for are given out here, if the
+// run-loop source has not done it yet.
+func route(ev objc.ID) {
+	if uintptr(objc.Send(ev, selType)) == 15 && uintptr(objc.Send(ev, selSubtype))&0xFFFF == wakeSubtype {
+		giveWakes()
+		return // also used to unblock the loop after a display-link tick
+	}
+	if w := eventWindow(ev); w != nil {
+		w.handle(ev)
+		return
+	}
+	objc.Send1(appObj.app, selSendEvent, uintptr(ev))
+}
+
+// release drops the events the last Events or Wait handed out.
+func (w *Window) release() {
+	if w.returned {
+		w.q.dropFirst(w.nOut)
+		w.returned = false
+	}
+}
+
+// Events hands out the events Pump queued for the window (and any pushed
+// since the last call). The slice is valid until the next Pump, Wait, Events
+// or Pending. Main thread.
+func (w *Window) Events() []Event {
+	w.release()
+	w.returned, w.nOut = true, len(w.q.ev)
+	return w.q.ev
+}
+
+// WakeLoop makes the loop turn once, from any goroutine, without telling any
+// window that something changed (Wake does): for work that waits for the
+// loop's safe point (a window to close) and draws nothing by itself.
+func WakeLoop() {
+	if loopWake.CompareAndSwap(false, true) {
+		osWake()
+	}
+}
+
+var loopWake atomic.Bool
+
+// Wake marks this window as having something new from another goroutine (a
+// worker's result) and wakes the loop: the window gets an EvWake, the others
+// do not. Any goroutine; cheap when one is pending. A closed window's mark is
+// dropped.
+func (w *Window) Wake() {
+	if w.wakeMark.CompareAndSwap(false, true) {
+		osWake()
+	}
+}
+
+// giveWakes turns the pending wakes into EvWake events: the app-wide Wake
+// for every window, a window's own Wake for it. Inside a native loop (a live
+// resize, menu tracking, the wait for a quit answer) the woken windows ask
+// for a frame, so that their frame handler takes the wake: the pump that
+// would is suspended. It reports whether any wake was pending.
+func giveWakes() bool {
+	all := takeWake()
+	any := loopWake.Swap(false) || all
+	native := NativeLoop()
+	for _, w := range openWindows() {
+		if w.wakeMark.Swap(false) || all {
+			any = true
+			w.q.push(Event{Kind: EvWake, Time: Now()})
+			if native {
+				w.RequestFrame()
+			}
+		}
+	}
+	return any
+}
+
+// keyWindowOurs is the key window if it is one of ours.
+func keyWindowOurs() *Window {
+	if !appObj.started {
+		return nil
+	}
+	return findWindow(objc.Send(appObj.app, selKeyWindow))
+}
+
+// WindowNumber is the window's number in the window server (tests, tools).
+func (w *Window) WindowNumber() int { return int(objc.Send(w.win, selWindowNumber)) }
+
+var selWindowNumber = objc.Sel("windowNumber")

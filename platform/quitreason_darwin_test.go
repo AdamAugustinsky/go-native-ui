@@ -82,14 +82,14 @@ func TestDebugAssumeKeyIsPerWindowAndScoped(t *testing.T) {
 		w.q.reset()
 		other := &Window{}
 		restoreOther := DebugAssumeKey(other) // another fixture's window
-		windowFocus(false)
+		w.focus(false)
 		got = append(got, "other-opted", strconv.Itoa(losses()))
 		restoreOther()
 		restore := DebugAssumeKey(w)
-		windowFocus(false)
+		w.focus(false)
 		got = append(got, "opted", strconv.Itoa(losses()), boolS(w.Focused()))
 		restore()
-		windowFocus(false)
+		w.focus(false)
 		got = append(got, "restored", strconv.Itoa(losses()))
 		DebugAssumeKey(w) // never restored: the window's closing ends it
 		w.Close()

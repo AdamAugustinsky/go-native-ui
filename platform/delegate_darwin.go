@@ -33,14 +33,14 @@ func registerWindowDelegate(d *objc.ClassDef) {
 }
 
 func windowShouldClose(c *ffi.CB) {
-	if w := theWindow.Load(); w != nil {
+	if w := delegateWindow(objc.ID(c.Int(0))); w != nil {
 		w.q.push(Event{Kind: EvClose, Time: Now()})
 	}
 	c.RetBool(false)
 }
 
-func windowDidResize(*ffi.CB) {
-	if w := theWindow.Load(); w != nil {
+func windowDidResize(c *ffi.CB) {
+	if w := delegateWindow(objc.ID(c.Int(0))); w != nil {
 		w.layoutChrome() // AppKit re-lays out the titlebar on resize
 		w.fitBackdrop()
 		if !w.live && w.handler != nil && objc.SendBool(w.win, selInLiveResize) {
@@ -50,25 +50,37 @@ func windowDidResize(*ffi.CB) {
 	}
 }
 
-func windowDidBecomeKey(*ffi.CB) { windowFocus(true) }
-func windowDidResignKey(*ffi.CB) { windowFocus(false) }
-
-func windowFocus(key bool) {
-	if w := theWindow.Load(); w != nil {
-		if !key && keyAssumed(w) { // a test's window stays key (DebugAssumeKey)
-			return
-		}
-		e := Event{Kind: EvFocus, Time: Now()}
-		if key {
-			e.Flags = FlagDown
-		}
-		w.q.push(e)
-		w.focusMods(key, e.Time)
+func windowDidBecomeKey(c *ffi.CB) {
+	if w := delegateWindow(objc.ID(c.Int(0))); w != nil {
+		w.focus(true)
 	}
 }
 
-func windowDidChangeOcclusion(*ffi.CB) {
-	if w := theWindow.Load(); w != nil {
+func windowDidResignKey(c *ffi.CB) {
+	if w := delegateWindow(objc.ID(c.Int(0))); w != nil {
+		w.focus(false)
+	}
+}
+
+// focus queues the window's EvFocus: it became the key window, or stopped
+// being it.
+func (w *Window) focus(key bool) {
+	if !key && keyAssumed(w) { // a test's window stays key (DebugAssumeKey)
+		return
+	}
+	if key {
+		reg.lastKey = w
+	}
+	e := Event{Kind: EvFocus, Time: Now()}
+	if key {
+		e.Flags = FlagDown
+	}
+	w.q.push(e)
+	w.focusMods(key, e.Time)
+}
+
+func windowDidChangeOcclusion(c *ffi.CB) {
+	if w := delegateWindow(objc.ID(c.Int(0))); w != nil {
 		e := Event{Kind: EvVisible, Time: Now()}
 		w.visible, w.visibleT = 0, e.Time
 		if uintptr(objc.Send(w.win, selOcclusionState))&2 != 0 { // NSWindowOcclusionStateVisible
@@ -79,14 +91,14 @@ func windowDidChangeOcclusion(*ffi.CB) {
 	}
 }
 
-func windowWillStartLiveResize(*ffi.CB) {
-	if w := theWindow.Load(); w != nil {
+func windowWillStartLiveResize(c *ffi.CB) {
+	if w := delegateWindow(objc.ID(c.Int(0))); w != nil {
 		w.enterLiveResize()
 	}
 }
 
-func windowDidEndLiveResize(*ffi.CB) {
-	if w := theWindow.Load(); w != nil {
+func windowDidEndLiveResize(c *ffi.CB) {
+	if w := delegateWindow(objc.ID(c.Int(0))); w != nil {
 		w.exitLiveResize()
 	}
 }

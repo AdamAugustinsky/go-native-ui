@@ -4,6 +4,7 @@ package platform
 
 import (
 	"errors"
+	"fmt"
 	"runtime"
 	"sync/atomic"
 	"syscall"
@@ -295,7 +296,7 @@ func Open(o Options) (*Window, error) {
 		return nil, errors.New("platform: cannot load user32.dll")
 	}
 	if theWindow != nil {
-		return nil, errors.New("platform: window already open")
+		return nil, fmt.Errorf("platform: a second window: %w", errors.ErrUnsupported) // one window per app here so far (D30 is macOS-only in phase 6)
 	}
 	nOpenStages = 0
 	markOpen("start")

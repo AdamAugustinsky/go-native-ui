@@ -14,7 +14,7 @@ func (f *fakeChrome) SetDarkChrome(dark bool) { f.calls = append(f.calls, dark) 
 // it must follow the mode the UI shows, once per change, and stay untouched
 // for an app that never declares one.
 func TestChromeFollowsTheDeclaredModeOncePerChange(t *testing.T) {
-	a := &App{UI: ui.New(nil)}
+	a := &App{appObject: &appObject{}, UI: ui.New(nil)}
 	var w fakeChrome
 	for i := 0; i < 3; i++ {
 		a.syncChrome(&w)

@@ -25,10 +25,35 @@ var _ Uploader = (*gpu.Renderer)(nil)
 // recreated. Atlas resets mark every page dirty, so they are re-uploaded by
 // the next sync.
 func (c *Context) AtlasSync(u Uploader) {
+	if c.shared != nil && c.shared.up != u {
+		c.shared, c.up = nil, nil
+	}
 	if c.up != u {
 		c.up = u
 		c.pageTex = c.pageTex[:0]
 	}
+	c.syncAtlas()
+}
+
+// SharedAtlas is the textures of the text atlas's pages on one renderer,
+// shared by every Context that draws with the same text system and renderer
+// (an app's windows, DECISIONS D30). A page has one texture for all of them,
+// so a dirty region is uploaded once, by whichever context syncs first, and
+// clearing it consumes nothing another context still needs.
+type SharedAtlas struct {
+	up  Uploader
+	tex []gpu.TextureID
+}
+
+// NewSharedAtlas returns the shared page textures on u, none created yet.
+func NewSharedAtlas(u Uploader) *SharedAtlas { return &SharedAtlas{up: u} }
+
+// ShareAtlas makes c draw its text with the page textures of s (instead of
+// textures of its own) and syncs now: AtlasSync for contexts that share a
+// text system and a renderer. All of them must use the same text system.
+func (c *Context) ShareAtlas(s *SharedAtlas) {
+	c.shared, c.up = s, s.up
+	c.pageTex = c.pageTex[:0]
 	c.syncAtlas()
 }
 
@@ -38,15 +63,19 @@ func (c *Context) pageTexture(p int) gpu.TextureID {
 	if c.up == nil {
 		return 0
 	}
-	for len(c.pageTex) <= p {
-		w, h, color := c.sh.PageInfo(len(c.pageTex))
+	tex := &c.pageTex
+	if c.shared != nil {
+		tex = &c.shared.tex
+	}
+	for len(*tex) <= p {
+		w, h, color := c.sh.PageInfo(len(*tex))
 		kind := gpu.TexR8
 		if color {
 			kind = gpu.TexRGBA8
 		}
-		c.pageTex = append(c.pageTex, c.up.NewTexture(kind, w, h))
+		*tex = append(*tex, c.up.NewTexture(kind, w, h))
 	}
-	return c.pageTex[p]
+	return (*tex)[p]
 }
 
 func (c *Context) syncAtlas() {

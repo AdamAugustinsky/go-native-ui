@@ -57,7 +57,7 @@ func registerViewTextInput(v *objc.ClassDef) {
 // replacement range outside the composition (see imeAnchor) first removes that
 // text, as an empty EvText.
 func viewSetMarkedText(c *ffi.CB) {
-	w := theWindow.Load()
+	w := viewWindow(objc.ID(c.Int(0)))
 	if w == nil {
 		return
 	}
@@ -82,15 +82,15 @@ func viewSetMarkedText(c *ffi.CB) {
 
 // viewUnmarkText: the input method gives up the marking and leaves the text:
 // it becomes ordinary typed text.
-func viewUnmarkText(*ffi.CB) {
-	if w := theWindow.Load(); w != nil && len(w.marked) > 0 {
+func viewUnmarkText(c *ffi.CB) {
+	if w := viewWindow(objc.ID(c.Int(0))); w != nil && len(w.marked) > 0 {
 		w.imeUsed = true
 		w.commitMarked()
 	}
 }
 
 func viewInsertText(c *ffi.CB) {
-	w := theWindow.Load()
+	w := viewWindow(objc.ID(c.Int(0)))
 	if w == nil {
 		return
 	}
@@ -115,14 +115,14 @@ func viewInsertText(c *ffi.CB) {
 }
 
 func viewHasMarkedText(c *ffi.CB) {
-	w := theWindow.Load()
+	w := viewWindow(objc.ID(c.Int(0)))
 	c.RetBool(w != nil && len(w.marked) > 0)
 }
 
 // viewMarkedRange: the app owns the text, so the marked text is described as
 // sitting at the caret, which is at imeAnchor.
 func viewMarkedRange(c *ffi.CB) {
-	if w := theWindow.Load(); w != nil && len(w.marked) > 0 {
+	if w := viewWindow(objc.ID(c.Int(0))); w != nil && len(w.marked) > 0 {
 		c.Ret2(imeAnchor, w.marked16)
 	} else {
 		c.Ret2(nsNotFound, 0)
@@ -130,7 +130,7 @@ func viewMarkedRange(c *ffi.CB) {
 }
 
 func viewSelectedRange(c *ffi.CB) {
-	if w := theWindow.Load(); w != nil && len(w.marked) > 0 {
+	if w := viewWindow(objc.ID(c.Int(0))); w != nil && len(w.marked) > 0 {
 		c.Ret2(imeAnchor+w.markedSel16[0], w.markedSel16[1])
 	} else {
 		c.Ret2(imeAnchor, 0)
@@ -158,7 +158,11 @@ func (w *Window) dropConsumedKey(keyIdx int, markedBefore bool) {
 // returns in rax. arm64: CGRect is an HFA returned in d0-d3.
 func firstRectIMP(c *ffi.CB) {
 	var r objc.Rect
-	if w := theWindow.Load(); w != nil {
+	self := c.Int(0)
+	if runtime.GOARCH == "amd64" {
+		self = c.Int(1) // after the hidden result pointer
+	}
+	if w := viewWindow(objc.ID(self)); w != nil {
 		r = w.imeScreenRect()
 	}
 	if runtime.GOARCH == "amd64" {

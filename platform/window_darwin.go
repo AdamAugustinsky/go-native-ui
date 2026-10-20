@@ -44,10 +44,12 @@ var (
 	selSetContentMinSize    = objc.Sel("setContentMinSize:")
 )
 
-// Open creates and shows the window. Main thread only.
+// Open creates and shows a window; on macOS any number can be open
+// (MaxWindows), each with its own event queue, display link and frame
+// handler, served by one pump (Pump, Wait). Main thread only.
 func Open(o Options) (*Window, error) {
-	if theWindow.Load() != nil {
-		return nil, errors.New("platform: only one window is supported in phase 1")
+	if reg.n >= MaxWindows {
+		return nil, errTooManyWindows
 	}
 	nOpenStages = 0
 	markOpen("start")
@@ -116,8 +118,16 @@ func Open(o Options) (*Window, error) {
 	objc.Send1(w.view, selAddTracking, uintptr(ta))
 
 	w.wakeEv, w.distantPast, w.distantFuture = appObj.wakeEv, appObj.distantPast, appObj.distantFuture
+	if !appObj.tabbing {
+		objc.Send1(w.win, selSetTabbingMode, 2) // NSWindowTabbingModeDisallowed (AppOptions.WindowTabbing)
+	}
 
-	theWindow.Store(w)
+	if err := register(w); err != nil {
+		w.closeLights()
+		objc.Send(w.win, selClose)
+		w.closeShell()
+		return nil, err
+	}
 	markOpen("view+setup")
 	if !o.Hidden {
 		w.Show()
@@ -127,10 +137,10 @@ func Open(o Options) (*Window, error) {
 	// Display link (macOS 14+), created once the view is on a screen; paused
 	// until RequestFrame.
 	if w.link = w.makeViewLink(); w.link == 0 {
+		unregister(w)
 		w.closeLights()
 		objc.Send(w.win, selClose)
 		w.closeShell()
-		theWindow.Store(nil)
 		return nil, errors.New("platform: displayLinkWithTarget:selector: failed (macOS 14+ required)")
 	}
 	w.updateSize()
@@ -153,7 +163,7 @@ func (w *Window) Show() {
 	objc.Send(w.win, selOrderFrontRegardless)
 	objc.Send(w.app, selActivate)
 	if !objc.SendBool(w.win, selIsKeyWindow) {
-		windowFocus(false) // windowDidBecomeKey: reported it otherwise
+		w.focus(false) // windowDidBecomeKey: reported it otherwise
 	}
 	if w.link != 0 {
 		w.setRateRange(w.link) // the screen is known for certain once shown
@@ -191,7 +201,7 @@ func (w *Window) Size() (int32, int32, float32) { return w.wPx, w.hPx, w.scale }
 
 // Native returns the AppKit handles.
 func (w *Window) Native() Native {
-	return Native{NSWindow: uintptr(w.win), NSView: uintptr(w.view), Transparent: w.HasMaterials()}
+	return Native{NSWindow: uintptr(w.win), NSView: uintptr(w.view), Transparent: w.HasMaterials(), w: w}
 }
 
 // Close closes the window.
@@ -210,9 +220,27 @@ func (w *Window) Close() {
 	w.closeLights()
 	objc.Send(w.win, selClose)
 	w.closeShell() // after close: nothing on screen changes
-	theWindow.Store(nil)
-	if secure.want {
+	unregister(w)
+	forgetWindow(w)
+	if secure.want && reg.n == 0 {
 		SetSecureInput(false) // the field that wanted it is gone; activation must not bring it back
+	}
+}
+
+// forgetWindow drops the app-wide references to a closed window: the menu
+// bar's owner, the colour panel's target, the event being sent.
+func forgetWindow(w *Window) {
+	if nativeMenus.owner == w {
+		nativeMenus.owner = nil
+	}
+	if nativeMenus.popup == w {
+		nativeMenus.popup = nil
+	}
+	if colorPanel.owner == w {
+		colorPanel.owner = nil
+	}
+	if sending == w {
+		sending = nil
 	}
 }
 

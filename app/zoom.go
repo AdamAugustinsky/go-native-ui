@@ -273,12 +273,25 @@ func (a *App) useFontScale() {
 		}
 	}
 	if i < 0 {
-		if a.nScales < fontScales {
-			a.nScales++
-		} else {
-			a.Text.ReleaseScale(a.scales[a.nScales-1]) // the least recently used
+		// The scales are the app's (its windows share the text system): the
+		// one released is the least recently used that no open window is
+		// at now (D30); with every kept scale in use, one more is kept.
+		i = a.nScales
+		for j := a.nScales - 1; j >= 0 && a.nScales == fontScales; j-- {
+			if !a.scaleInUse(a.scales[j]) {
+				a.Text.ReleaseScale(a.scales[j])
+				i = j
+				break
+			}
 		}
-		i = a.nScales - 1
+		if i == a.nScales {
+			if a.nScales == len(a.scales) {
+				i = a.nScales - 1 // (more windows at distinct scales than kept: the oldest goes)
+				a.Text.ReleaseScale(a.scales[i])
+			} else {
+				a.nScales++
+			}
+		}
 	}
 	copy(a.scales[1:i+1], a.scales[:i])
 	a.scales[0] = s

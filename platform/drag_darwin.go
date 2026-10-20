@@ -354,7 +354,7 @@ func viewNoPeriodic(c *ffi.CB)  { c.RetBool(false) } // updates when the pointer
 // dragUpdate handles draggingEntered: and draggingUpdated: and returns the
 // NSDragOperation.
 func dragUpdate(c *ffi.CB, enter bool) uintptr {
-	w := theWindow.Load()
+	w := viewWindow(objc.ID(c.Int(0)))
 	if w == nil || w.drag.kinds == 0 {
 		return 0
 	}
@@ -404,8 +404,8 @@ func (w *Window) dragLeft() {
 	}
 }
 
-func viewDragExited(*ffi.CB) {
-	if w := theWindow.Load(); w != nil {
+func viewDragExited(c *ffi.CB) {
+	if w := viewWindow(objc.ID(c.Int(0))); w != nil {
 		w.dragLeft()
 	}
 }
@@ -413,7 +413,7 @@ func viewDragExited(*ffi.CB) {
 // viewPrepareDrag is prepareForDragOperation:: yes if the handler takes the
 // drag where it is.
 func viewPrepareDrag(c *ffi.CB) {
-	w := theWindow.Load()
+	w := viewWindow(objc.ID(c.Int(0)))
 	if w == nil || w.drag.kinds == 0 {
 		c.RetBool(false)
 		return
@@ -429,14 +429,14 @@ func viewConcludeDrag(*ffi.CB) {}
 
 // viewDragEnded is draggingEnded:, sent when the drag session is over for
 // this destination, whether it was dropped or not.
-func viewDragEnded(*ffi.CB) {
-	if w := theWindow.Load(); w != nil {
+func viewDragEnded(c *ffi.CB) {
+	if w := viewWindow(objc.ID(c.Int(0))); w != nil {
 		w.dragLeft()
 	}
 }
 
 func viewPerformDrag(c *ffi.CB) {
-	w := theWindow.Load()
+	w := viewWindow(objc.ID(c.Int(0)))
 	if w == nil || w.drag.kinds == 0 {
 		c.RetBool(false)
 		return

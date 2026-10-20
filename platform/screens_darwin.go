@@ -47,20 +47,26 @@ func scrSetup() bool {
 // everything on the Window. It returns nil when there are no displays (a session
 // without a window server).
 func Screens() []ScreenInfo {
-	if !scrSetup() {
+	out := ScreensInto(nil)
+	if len(out) == 0 {
 		return nil
+	}
+	return out
+}
+
+// ScreensInto appends the displays to dst as Screens returns them; with room
+// in dst it allocates nothing (a display's ID is made once). Main thread.
+func ScreensInto(dst []ScreenInfo) []ScreenInfo {
+	if !scrSetup() {
+		return dst
 	}
 	pool := objc.F.Call0(objc.PoolPush)
 	defer objc.F.Call1(objc.PoolPop, pool)
 	arr := objc.Send(scrCls, scrSelScreens)
 	if arr == 0 {
-		return nil
+		return dst
 	}
 	n := int(objc.Send(arr, scrSelCount))
-	if n == 0 {
-		return nil
-	}
-	out := make([]ScreenInfo, 0, n)
 	var top float64 // the primary display's top edge in AppKit's bottom-left space
 	for i := 0; i < n; i++ {
 		s := objc.Send1(arr, scrSelObjectAtIndex, uintptr(i))
@@ -75,10 +81,30 @@ func Screens() []ScreenInfo {
 		}
 		if desc := objc.Send(s, scrSelDeviceDescription); desc != 0 {
 			if num := objc.Send1(desc, scrSelObjectForKey, uintptr(scrKey)); num != 0 {
-				info.ID = strconv.FormatUint(uint64(uint32(objc.Send(num, scrSelUnsignedInt))), 10)
+				info.ID = screenID(uint32(objc.Send(num, scrSelUnsignedInt)))
 			}
 		}
-		out = append(out, info)
+		dst = append(dst, info)
 	}
-	return out
+	return dst
+}
+
+// scrIDs are the display IDs made so far, so that a display keeps one string.
+var scrIDs []struct {
+	num uint32
+	id  string
+}
+
+func screenID(num uint32) string {
+	for _, e := range scrIDs {
+		if e.num == num {
+			return e.id
+		}
+	}
+	id := strconv.FormatUint(uint64(num), 10)
+	scrIDs = append(scrIDs, struct {
+		num uint32
+		id  string
+	}{num, id})
+	return id
 }

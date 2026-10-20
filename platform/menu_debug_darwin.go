@@ -34,7 +34,7 @@ func DebugOnMenuOpen(f func(m DebugMenu)) {
 		menuOpenHook = nil
 		return
 	}
-	menuOpenHook = func(menu objc.ID) { f(DebugMenu{w: theWindow.Load(), menu: menu}) }
+	menuOpenHook = func(menu objc.ID) { f(DebugMenu{w: menuWindow(), menu: menu}) }
 }
 
 // DebugMenu is a native menu that is open (DebugOnMenuOpen).

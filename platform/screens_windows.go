@@ -77,3 +77,6 @@ func Screens() []ScreenInfo {
 	scr.out = nil
 	return out
 }
+
+// ScreensInto appends the displays to dst as Screens returns them.
+func ScreensInto(dst []ScreenInfo) []ScreenInfo { return append(dst, Screens()...) }

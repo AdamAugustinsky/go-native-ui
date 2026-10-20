@@ -23,7 +23,7 @@ func (f *fakeTips) SetTooltipRegions(r []platform.TooltipRegion) {
 // the same rectangles and keys, only when tooltips are native, and without
 // allocating once the buffers have grown.
 func TestSyncTooltips(t *testing.T) {
-	a := &App{UI: ui.New(fakeui.New())}
+	a := &App{appObject: &appObject{}, UI: ui.New(fakeui.New())}
 	win := &fakeTips{}
 	build := func(c *ui.Context) {
 		c.NextSize(ui.Px(100), ui.Px(40))
@@ -60,7 +60,7 @@ func TestSyncTooltips(t *testing.T) {
 
 // Dialog results come out of TakeDialog oldest first.
 func TestTakeDialog(t *testing.T) {
-	a := &App{}
+	a := &App{appObject: &appObject{}}
 	if _, ok := a.TakeDialog(); ok {
 		t.Fatal("a result from nothing")
 	}
@@ -75,7 +75,7 @@ func TestTakeDialog(t *testing.T) {
 	if first.Ticket != 3 || second.Ticket != 4 {
 		t.Errorf("tickets %d, %d: the oldest two were dropped, want 3 and 4 first", first.Ticket, second.Ticket)
 	}
-	if _, err := (&App{}).Alert(platform.AlertSpec{Buttons: []string{"OK"}}); err == nil {
+	if _, err := (&App{appObject: &appObject{}}).Alert(platform.AlertSpec{Buttons: []string{"OK"}}); err == nil {
 		t.Error("Alert without a window did not fail")
 	}
 }
@@ -121,7 +121,7 @@ func (f *fakeDialogs) CancelDialog(t platform.DialogTicket) bool {
 // copied, and the result carries the ticket the call returned.
 func TestDialogsPresentAfterTheFrame(t *testing.T) {
 	f := &fakeDialogs{}
-	a := &App{UI: ui.New(fakeui.New()), dlgT: f}
+	a := &App{appObject: &appObject{}, UI: ui.New(fakeui.New()), dlgT: f}
 	buttons := []string{"Save", "Cancel"}
 	types := []string{"public.png"}
 	var tk, tk2 platform.DialogTicket
@@ -203,7 +203,7 @@ func (h *recordingHandler) Event(a *App, e *Event) {
 func TestDebugDialogEndedReachesTheHandler(t *testing.T) {
 	f := &fakeDialogs{}
 	h := &recordingHandler{}
-	a := &App{UI: ui.New(fakeui.New()), dlgT: f, handler: h}
+	a := &App{appObject: &appObject{handler: h}, UI: ui.New(fakeui.New()), dlgT: f}
 	tk, err := a.Alert(platform.AlertSpec{Message: "m", Buttons: []string{"Delete", "Cancel"}})
 	if err != nil {
 		t.Fatal(err)
@@ -237,7 +237,7 @@ func TestDebugDialogEndedReachesTheHandler(t *testing.T) {
 func TestDialogThatCannotShowReachesTheHandler(t *testing.T) {
 	f := &fakeDialogs{err: platform.ErrDialogBusy}
 	h := &recordingHandler{}
-	a := &App{UI: ui.New(fakeui.New()), dlgT: f, handler: h}
+	a := &App{appObject: &appObject{handler: h}, UI: ui.New(fakeui.New()), dlgT: f}
 	tk, _ := a.Alert(platform.AlertSpec{Message: "m", Buttons: []string{"OK"}})
 	a.flushDialogs()
 	a.flushDialogs()

@@ -91,7 +91,7 @@ func newDragRig(t *testing.T) *dragRig {
 	t.Helper()
 	runtime.LockOSThread()
 	t.Cleanup(runtime.UnlockOSThread)
-	if theWindow.Load() != nil {
+	if reg.n > 0 {
 		t.Skip("a window is open")
 	}
 	loadFramework("/System/Library/Frameworks/AppKit.framework/AppKit")
@@ -104,7 +104,7 @@ func newDragRig(t *testing.T) *dragRig {
 		t.Skip("cannot create a view")
 	}
 	w := &Window{q: newEventQueue(), view: v, win: v, scale: 2, wPt: 100, hPt: 100}
-	theWindow.Store(w)
+	remove := testInstall(w)
 	pb := objc.Retain(objc.Send(clsPasteboard, selUniquePB))
 	if pb == 0 {
 		t.Skip("no private pasteboard here")
@@ -113,7 +113,7 @@ func newDragRig(t *testing.T) *dragRig {
 	r := &dragRig{t: t, w: w, view: v, pb: pb}
 	t.Cleanup(func() {
 		w.closeDrag()
-		theWindow.Store(nil)
+		remove()
 		objc.Send(pb, selReleaseGlobal)
 		objc.Release(pb)
 	})

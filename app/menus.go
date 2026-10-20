@@ -39,9 +39,20 @@ func (a *App) SetMenu(m *menu.Model) {
 }
 
 // syncMenuBar installs the menu bar when it is due: once after the first
-// present, and again when SetMenu changed the model.
+// present, again when SetMenu changed the model, and, with several windows,
+// when this window becomes the one the bar is for (the loop's menuWin: the
+// key window). A window whose model is the installed bar's only takes the bar
+// over (its commands and item states), without building it again.
 func (a *App) syncMenuBar() {
-	if !a.menuDirty || a.Win == nil || a.frames == 0 || !platform.HasNativeMenus() {
+	if a.Win == nil || a.frames == 0 || !platform.HasNativeMenus() {
+		return
+	}
+	if !a.menuDirty && a.barWin == a {
+		return
+	}
+	if b := a.barWin; !a.menuDirty && b != nil && b.Win != nil && b.menu == a.menu && a.menuStateFn != nil {
+		a.barWin = a
+		a.Win.UseMenuBar(a.menuStateFn)
 		return
 	}
 	a.menuDirty = false
@@ -51,6 +62,7 @@ func (a *App) syncMenuBar() {
 	}
 	a.Win.SetMenuBar(&a.menuSpec, a.menuStateFn)
 	a.barOn = true
+	a.barWin, a.barModel = a, a.menu
 	a.Win.SetFieldKeys(a.fieldKeysFn)
 }
 

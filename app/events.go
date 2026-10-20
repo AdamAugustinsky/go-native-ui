@@ -213,10 +213,24 @@ func (a *App) AppEvent(pe *platform.AppEvent, data []byte) {
 		return
 	}
 	if pe.Kind == platform.AppEvService && pe.Source == platform.SourceDialog {
-		a.onDialog(pe, data)
+		a.dialogWindow(pe).onDialog(pe, data)
 		return
 	}
 	a.deliver(pe, data)
+}
+
+// dialogWindow is the window whose dialog a SourceDialog event answers (the
+// one showing it under the platform's ticket), a when none is.
+func (a *App) dialogWindow(pe *platform.AppEvent) *App {
+	t := platform.DialogTicket(pe.ID)
+	for _, w := range a.wins {
+		for _, d := range w.dlgShown {
+			if d.plat == t {
+				return w
+			}
+		}
+	}
+	return a
 }
 
 // AppSafePoint runs the deferred safe-point work (platform.AppSink): also
@@ -240,15 +254,40 @@ func (a *App) deliver(pe *platform.AppEvent, data []byte) {
 	*e = Event{Kind: EventKind(pe.Kind), Source: pe.Source, Window: pe.Window, ID: pe.ID, A: pe.A, B: pe.B, slot: uint8(d), seq: seq}
 	prevData, prevSeq := delivering.data[d], delivering.seq[d]
 	delivering.data[d], delivering.seq[d] = data, seq
-	a.handler.Event(a, e)
+	h := a.root
+	if h == nil {
+		h = a
+	}
+	a.handler.Event(h, e)
 	delivering.data[d], delivering.seq[d] = prevData, prevSeq
 	a.evDepth--
-	if a.Win != nil { // what the event changed is drawn: by the loop, or by the frame handler inside a native loop
-		a.p.invalidate()
-		if platform.NativeLoop() {
-			a.Win.RequestFrame()
+	// What the event changed is drawn, by the loop, or by the frame handler
+	// inside a native loop: in the window the event is for (Event.Window),
+	// else in every window.
+	native := len(a.wins) > 0 && platform.NativeLoop()
+	only := a.windowOf(pe.Window)
+	for _, w := range a.wins {
+		if only != nil && w != only {
+			continue
+		}
+		w.p.invalidate()
+		if native {
+			w.Win.RequestFrame()
 		}
 	}
+}
+
+// windowOf is the open window with id, nil for 0 or none.
+func (a *App) windowOf(id uint32) *App {
+	if id == 0 {
+		return nil
+	}
+	for _, w := range a.wins {
+		if w.winID == id {
+			return w
+		}
+	}
+	return nil
 }
 
 // flushStartup delivers the events that arrived before Start returned, in

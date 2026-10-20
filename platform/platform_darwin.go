@@ -31,6 +31,8 @@ type Native struct {
 	// (Options.Backdrop, Options.Materials): the Metal layer must be
 	// non-opaque, its pixels premultiplied.
 	Transparent bool
+
+	w *Window // the window these are of (Window.Native); nil if made by hand
 }
 
 // Window is an AppKit window driven by our own event loop
@@ -107,13 +109,16 @@ type Window struct {
 	fieldKey    bool      // the key-down being sent is the focused field's: no menu item acts on it
 	fieldKeys   FieldKeys
 	handlerRuns int // calls of the frame handler (DebugMenu.Frame)
+
+	// The registry (windows_darwin.go).
+	slot       int         // the window's slot, its objects' index ivars minus 1
+	registered bool        // open: in the registry
+	wakeMark   atomic.Bool // Wake: this window has something new from another goroutine
 }
 
 const wakeSubtype = 0x4E55 // our NSEventTypeApplicationDefined subtype
 
 var (
-	theWindow atomic.Pointer[Window]
-
 	defaultMode, commonModes objc.ID
 
 	clsNSArray, clsNSAttributedString objc.ID

@@ -36,8 +36,8 @@ func viewSmartMagnify(c *ffi.CB) { viewGesture(c, EvSmartMagnify) }
 // viewGesture is a gesture AppKit handed to our view: one a native host
 // declined (the loop queues the others itself, gestureEvent).
 func viewGesture(c *ffi.CB, kind EventKind) {
-	w := theWindow.Load()
-	if w == nil || w.view != objc.ID(c.Int(0)) || w.dialogOpen() {
+	w := viewWindow(objc.ID(c.Int(0)))
+	if w == nil || w.dialogOpen() {
 		return // (a sheet owns the window's input)
 	}
 	ev := objc.ID(c.Int(2))

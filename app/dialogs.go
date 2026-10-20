@@ -177,6 +177,7 @@ func (a *App) deliverFailedDialogs() {
 		a.dlgFailed = a.dlgFailed[:copy(a.dlgFailed, a.dlgFailed[1:])]
 		a.pushDialog(r)
 		pe, data := platform.DialogEvent(r)
+		pe.Window = a.winID
 		a.deliver(&pe, data)
 	}
 }
@@ -221,7 +222,7 @@ func (a *App) dialogEnded(r platform.DialogResult, pe *platform.AppEvent, data [
 			a.dlgShown = slices.Delete(a.dlgShown, i, i+1)
 			a.pushDialog(r)
 			e := *pe
-			e.ID = uint64(s.app)
+			e.ID, e.Window = uint64(s.app), a.winID
 			a.deliver(&e, data)
 			a.debugSweep(CauseDialog)
 			return

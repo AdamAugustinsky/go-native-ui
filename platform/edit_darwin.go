@@ -79,7 +79,7 @@ func editFor(sel objc.SEL) (cmd EditCmd, extend, ok bool) {
 // other is swallowed (it would beep), remembering that the key was handed back
 // as a command so that it stays an EvKey.
 func viewDoCommand(c *ffi.CB) {
-	w := theWindow.Load()
+	w := viewWindow(objc.ID(c.Int(0)))
 	if w == nil {
 		return
 	}

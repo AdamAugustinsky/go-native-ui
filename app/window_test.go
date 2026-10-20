@@ -27,7 +27,7 @@ func (f *fakeMacWindow) SystemButtons() [4]float32 { return f.buttons }
 // The window's state reaches the UI before each frame, and what a titlebar
 // asked for in the last one is carried out once.
 func TestWindowStateReachesTheUIAndRequestsReachTheWindow(t *testing.T) {
-	a := &App{UI: ui.New(nil), cfg: Config{Title: "Notes"}, scale: 2}
+	a := &App{appObject: &appObject{}, UI: ui.New(nil), cfg: Config{Title: "Notes"}, scale: 2}
 	w := &fakeWindow{client: true, max: true}
 	a.syncWindowFrom(w, nil)
 	if d := a.UI.Decorations(); !d.Client || !d.Maximized {
@@ -59,7 +59,7 @@ func TestWindowStateReachesTheUIAndRequestsReachTheWindow(t *testing.T) {
 // The system's window buttons arrive in pixels (the platform reports points),
 // and change with the window.
 func TestSystemButtonsAreScaledToPixels(t *testing.T) {
-	a := &App{UI: ui.New(nil), scale: 2}
+	a := &App{appObject: &appObject{}, UI: ui.New(nil), scale: 2}
 	w := &fakeMacWindow{buttons: [4]float32{16, 16, 76, 30}}
 	a.syncWindowFrom(w, w)
 	if got, want := a.UI.SystemButtons(), [4]float32{32, 32, 152, 60}; got != want {

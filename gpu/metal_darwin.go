@@ -15,10 +15,14 @@ import (
 	"gonativeui/platform"
 )
 
-// Surface presents into a CAMetalLayer hosted by the platform's NSView.
+// Surface presents into a CAMetalLayer hosted by the platform's NSView. It
+// owns only its layer: the device and the command queue are the app's
+// (Device), shared by every window's surface, and destroying a surface leaves
+// the others drawing (D30).
 type Surface struct {
-	device, queue, layer objc.ID
-	rpd, color0          objc.ID // reused MTLRenderPassDescriptor and its colour attachment 0
+	native               platform.Native // the window's handles: its drawables, live resize and shell are its own
+	device, queue, layer objc.ID         // device and queue retained, the layer owned
+	rpd, color0          objc.ID         // reused MTLRenderPassDescriptor and its colour attachment 0
 	presented            int
 	w, h                 int    // drawable size in pixels
 	live                 bool   // layer.presentsWithTransaction is on: a live resize with a frame handler is in progress
@@ -75,28 +79,91 @@ var (
 	clsCATransaction             objc.ID
 )
 
-// NewSurface creates the Metal device, queue and layer and attaches the layer
-// to the window's view.
+// Device is the GPU device and command queue an app's windows share (D30):
+// one renderer, one glyph atlas and every window's surface run on it.
+type Device struct{ device, queue objc.ID }
+
+// NewDevice creates the system's default Metal device and a command queue
+// on it. Release them with Release once every surface and renderer on them
+// is destroyed.
+func NewDevice() (*Device, error) {
+	if err := loadSurfaceMetal(); err != nil {
+		return nil, err
+	}
+	dev := objc.ID(objc.F.Call0(mtlCreateSystemDefaultDevice))
+	if dev == 0 {
+		return nil, errors.New("gpu: no Metal device")
+	}
+	return &Device{device: dev, queue: objc.Send(dev, selNewCommandQueue)}, nil
+}
+
+// Handles are the id<MTLDevice> and id<MTLCommandQueue>, for NewRenderer.
+func (d *Device) Handles() (device, queue uintptr) { return uintptr(d.device), uintptr(d.queue) }
+
+// Release releases the device and the queue (the surfaces made on them keep
+// their own references until destroyed).
+func (d *Device) Release() {
+	if d == nil || d.device == 0 {
+		return
+	}
+	objc.Send(d.queue, selRelease)
+	objc.Send(d.device, selRelease)
+	d.device, d.queue = 0, 0
+}
+
+// loadSurfaceMetal loads Metal and what surfaces use, once.
+func loadSurfaceMetal() error {
+	surfaceOnce.Do(func() {
+		lib, err := purego.Dlopen("/System/Library/Frameworks/Metal.framework/Metal", purego.RTLD_NOW|purego.RTLD_GLOBAL)
+		if err != nil {
+			surfaceErr = err
+			return
+		}
+		if mtlCreateSystemDefaultDevice, err = purego.Dlsym(lib, "MTLCreateSystemDefaultDevice"); err != nil {
+			surfaceErr = err
+			return
+		}
+		clsCATransaction = objc.Cls("CATransaction")
+	})
+	return surfaceErr
+}
+
+var (
+	surfaceOnce sync.Once
+	surfaceErr  error
+)
+
+// NewSurface creates a Metal device and queue of its own and a surface on
+// them (a one-window program); NewSurfaceOn puts a surface on a device the
+// app shares between its windows.
 func NewSurface(n platform.Native, w, h int32, scale float32) (*Surface, error) {
-	lib, err := purego.Dlopen("/System/Library/Frameworks/Metal.framework/Metal", purego.RTLD_NOW|purego.RTLD_GLOBAL)
+	d, err := NewDevice()
 	if err != nil {
 		return nil, err
 	}
-	if mtlCreateSystemDefaultDevice, err = purego.Dlsym(lib, "MTLCreateSystemDefaultDevice"); err != nil {
+	s, err := NewSurfaceOn(d, n, w, h, scale)
+	d.Release() // the surface holds its own references
+	return s, err
+}
+
+// NewSurfaceOn creates the CAMetalLayer of a window, on device d, and
+// attaches it to the window's view. The surface retains d's device and
+// queue; Destroy releases them and the layer, and nothing of another
+// surface.
+func NewSurfaceOn(d *Device, n platform.Native, w, h int32, scale float32) (*Surface, error) {
+	if err := loadSurfaceMetal(); err != nil {
 		return nil, err
 	}
-	clsCATransaction = objc.Cls("CATransaction")
+	if d == nil || d.device == 0 {
+		return nil, errors.New("gpu: no Metal device")
+	}
 	presentedOnce.Do(initPresentedBlock) // one ffi callback slot per process, however many surfaces
 	F := objc.F
 	pool := F.Call0(objc.PoolPush)
 	defer F.Call1(objc.PoolPop, pool)
 
-	s := &Surface{}
-	s.device = objc.ID(F.Call0(mtlCreateSystemDefaultDevice))
-	if s.device == 0 {
-		return nil, errors.New("gpu: no Metal device")
-	}
-	s.queue = objc.Send(s.device, selNewCommandQueue)
+	s := &Surface{native: n}
+	s.device, s.queue = objc.Retain(d.device), objc.Retain(d.queue)
 	s.layer = objc.Retain(objc.Send(objc.Cls("CAMetalLayer"), selLayer))
 	objc.Send1(s.layer, selSetDevice, uintptr(s.device))
 	objc.Send1(s.layer, selSetPixelFormat, 80) // MTLPixelFormatBGRA8Unorm
@@ -146,7 +213,7 @@ func (s *Surface) Resize(w, h int32, scale float32) {
 }
 
 // Device and Queue return the id<MTLDevice> and id<MTLCommandQueue>, for
-// gpu.NewRenderer. The surface keeps owning them.
+// gpu.NewRenderer. The surface keeps a reference to them until Destroy.
 func (s *Surface) Device() uintptr { return uintptr(s.device) }
 
 // Queue returns the id<MTLCommandQueue>; see Device.
@@ -190,7 +257,7 @@ func (s *Surface) BeginFrame(f *Frame) bool {
 	// During a live resize the platform has no CAMetalDisplayLink (the layer
 	// would throw on nextDrawable) and the frame is presented inside the
 	// window's Core Animation transaction (see EndFrame).
-	if live := platform.InLiveResize(); live != s.live {
+	if live := s.native.InLiveResize(); live != s.live {
 		s.live = live
 		var on uintptr
 		if live {
@@ -200,7 +267,7 @@ func (s *Surface) BeginFrame(f *Frame) bool {
 	}
 	// A paced frame comes with its drawable (CAMetalDisplayLink); otherwise
 	// (first frame, unpaced) ask the layer, which may block.
-	d, linked := platform.TakeMetalDrawable() // retained
+	d, linked := s.native.TakeDrawable() // retained
 	f.drawable = objc.ID(d)
 	if d == 0 && !linked {
 		t0 := platform.Now()
@@ -241,7 +308,7 @@ func (s *Surface) EndFrame(f *Frame) {
 		s.Trace.Committed = platform.Now()
 		objc.Send(clsCATransaction, selBegin)
 		objc.Send1(clsCATransaction, selSetDisableActions, 1)
-		platform.ApplyShell()
+		s.native.ApplyShell()
 		objc.Send(f.drawable, selPresent)
 		s.reveal()
 		objc.Send(clsCATransaction, selCommit)
@@ -273,7 +340,7 @@ func (s *Surface) EndFrame(f *Frame) {
 		if s.presented == 0 {
 			s.Trace.Committed, s.Trace.Done = platform.Now(), platform.Now()
 		}
-	case platform.ShellPending():
+	case s.native.ShellPending():
 		// The native shell's views move this frame (material regions,
 		// hosts): present in the transaction that moves them, as the live
 		// resize does, so they never show a frame apart from the pixels drawn
@@ -309,13 +376,13 @@ func (s *Surface) EndFrame(f *Frame) {
 // (platform.ApplyShell; nothing when none are staged). The layer presents
 // with the transaction (presentsWithTransaction).
 func (s *Surface) presentWithShell(drawable objc.ID) {
-	if !platform.ShellPending() {
+	if !s.native.ShellPending() {
 		objc.Send(drawable, selPresent)
 		return
 	}
 	objc.Send(clsCATransaction, selBegin)
 	objc.Send1(clsCATransaction, selSetDisableActions, 1)
-	platform.ApplyShell()
+	s.native.ApplyShell()
 	objc.Send(drawable, selPresent)
 	objc.Send(clsCATransaction, selCommit)
 }
@@ -440,7 +507,8 @@ func srgbColorSpace() uintptr {
 // CAMetalDisplayLink on it, which hands over the drawable with each tick.
 func (s *Surface) FrameSource() uintptr { return uintptr(s.layer) }
 
-// Destroy releases the Metal objects.
+// Destroy releases the surface's layer and its references to the device and
+// queue; other surfaces on the same device are not affected.
 func (s *Surface) Destroy() {
 	objc.Send(s.rpd, selRelease)
 	objc.Send(s.layer, selRelease)

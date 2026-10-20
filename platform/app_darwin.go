@@ -18,56 +18,30 @@ var (
 	selTimestamp    = objc.Sel("timestamp")
 )
 
-// Wait blocks until at least one event, a wake, a frame slot or the timeout.
+// Wait blocks until at least one event, a wake, a frame slot or the timeout,
+// and returns the window's events. It is the app-wide Pump followed by
+// Events: the events of the app's other windows wait in their own queues.
+// The slice is valid until the next Wait, Pump, Events or Pending.
 func (w *Window) Wait(timeoutNs int64) []Event {
-	if w.returned {
-		w.q.dropFirst(w.nOut)
-		w.returned = false
-	}
-	F := objc.F
-	pool := F.Call0(objc.PoolPush)
-	until := w.distantFuture
-	switch {
-	case len(w.q.ev) > 0 || timeoutNs == 0:
-		until = w.distantPast
-	case timeoutNs > 0:
-		until = objc.ID(F.Reset().Arg(uintptr(clsNSDate)).Arg(uintptr(selDateSinceNow)).
-			ArgF64(float64(timeoutNs) / 1e9).Call(objc.MsgSend).R0())
-	}
-	if w.live && !objc.SendBool(w.win, selInLiveResize) {
-		w.exitLiveResize() // windowDidEndLiveResize: never arrived (or the resize ended inside a nested loop)
-	}
-	for ev := w.nextEvent(until); ev != 0; ev = w.nextEvent(w.distantPast) {
-		w.handle(ev)
-	}
-	w.reapDialogs()
-	w.reapDrags() // images converted on workers, promised files asked for (drag_darwin.go)
-	w.reapPaste() // a pasted TIFF converted on a worker (paste_darwin.go)
-	F.Call1(objc.PoolPop, pool)
-	w.returned, w.nOut = true, len(w.q.ev)
-	return w.q.ev
+	Pump(timeoutNs)
+	return w.Events()
 }
 
-func (w *Window) nextEvent(until objc.ID) objc.ID {
-	return objc.Send4(w.app, selNextEvent, ^uintptr(0), uintptr(until), uintptr(defaultMode), 1)
-}
-
+// handle is one event of this window (route): queued as the app's input, and
+// sent on to AppKit.
 func (w *Window) handle(ev objc.ID) {
 	keyIdx := -1 // index in the queue of the EvKey of this key-down event
 	typ := uintptr(objc.Send(ev, selType))
-	if typ == 15 && uintptr(objc.Send(ev, selSubtype))&0xFFFF == wakeSubtype {
-		if takeWake() {
-			w.q.push(Event{Kind: EvWake, Time: Now()})
-		}
-		return // also used to unblock the loop after a display-link tick
-	}
 	t := int64(objc.SendF64(ev, selTimestamp) * 1e9)
 	if w.dialogOpen() {
 		// A sheet owns the window's input (dialog.go): its keys and clicks go
 		// to AppKit only, not to the app behind it.
 		switch typ {
 		case 1, 2, 3, 4, 5, 6, 7, 10, 11, 18, 22, 25, 26, 27, 30, 32:
+			prev := sending
+			sending = w
 			objc.Send1(w.app, selSendEvent, uintptr(ev))
+			sending = prev
 			return
 		}
 	}
@@ -101,7 +75,10 @@ func (w *Window) handle(ev objc.ID) {
 	// A key the focused text field takes is not a key equivalent: the menu
 	// items validate as disabled while AppKit matches it (validate).
 	w.fieldKey = keyIdx >= 0 && w.fieldKeys != nil && w.fieldKeys(&w.q.ev[keyIdx])
+	prev := sending
+	sending = w
 	objc.Send1(w.app, selSendEvent, uintptr(ev))
+	sending = prev
 	w.hosts.scrollDelivered()
 	w.fieldKey = false
 	if w.menuActed && keyIdx >= 0 && keyIdx < len(w.q.ev) && w.q.ev[keyIdx].Kind == EvKey && w.q.ev[keyIdx].Time == t {
@@ -120,6 +97,11 @@ func (w *Window) handle(ev objc.ID) {
 	}
 	w.dropConsumedKey(keyIdx, markedBefore)
 }
+
+// sending is the window whose event handle is sending to AppKit, nil outside
+// one: a menu item that acts or validates meanwhile does so for that event's
+// key (menuActed, fieldKey).
+var sending *Window
 
 // Text returns the UTF-8 bytes of an EvText event.
 func (w *Window) Text(r TextRef) []byte { return w.q.textOf(r) }

@@ -22,7 +22,7 @@ func newIMERig(t *testing.T) *imeRig {
 	t.Helper()
 	runtime.LockOSThread()
 	t.Cleanup(runtime.UnlockOSThread)
-	if theWindow.Load() != nil {
+	if reg.n > 0 {
 		t.Skip("a window is open")
 	}
 	loadFramework("/System/Library/Frameworks/AppKit.framework/AppKit")
@@ -33,8 +33,7 @@ func newIMERig(t *testing.T) *imeRig {
 		t.Skip("cannot create a view")
 	}
 	w := &Window{q: newEventQueue(), view: v, scale: 2, wPt: 100, hPt: 100, marked: make([]byte, 0, 64), tmp: make([]byte, 0, 64)}
-	theWindow.Store(w)
-	t.Cleanup(func() { theWindow.Store(nil) })
+	t.Cleanup(testInstall(w))
 	return &imeRig{t: t, w: w, view: v}
 }
 
@@ -236,7 +235,7 @@ type screenRig struct {
 }
 
 func newScreenRig(style uintptr, nested bool) (r *screenRig, why string) {
-	if theWindow.Load() != nil {
+	if reg.n > 0 {
 		return nil, "a window is open"
 	}
 	if _, err := loadFramework("/System/Library/Frameworks/AppKit.framework/AppKit"); err != nil {

@@ -180,7 +180,7 @@ func TestTranslateMenuCommands(t *testing.T) {
 // items only with a text field focused; no allocation.
 func TestMenuState(t *testing.T) {
 	m := testMenuModel(t, true)
-	a := &App{UI: ui.New(nil), menu: m}
+	a := &App{appObject: &appObject{}, UI: ui.New(nil), menu: m}
 	m.SetEnabled(mcOpen, false)
 	m.SetChecked(mcToggle, true)
 	if on, _ := a.menuState(uint16(mcOpen), platform.MenuNone); on {
@@ -203,7 +203,7 @@ func TestMenuState(t *testing.T) {
 // Minimize …), like any command that is not.
 func TestMenuStateOfSystemItems(t *testing.T) {
 	m := testMenuModel(t, true)
-	a := &App{UI: ui.New(fakeui.New()), menu: m}
+	a := &App{appObject: &appObject{}, UI: ui.New(fakeui.New()), menu: m}
 	var list gpu.DrawList
 	frame := func(modal bool) {
 		in := ui.Input{Focused: true}

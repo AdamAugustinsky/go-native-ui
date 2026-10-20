@@ -39,8 +39,8 @@ func registerViewMouse(v *objc.ClassDef) {
 	v.Method(selScrollWheel, "v@:@", viewScrollWheel) // host_darwin.go
 }
 
-func viewResetCursorRects(*ffi.CB) {
-	if w := theWindow.Load(); w != nil {
+func viewResetCursorRects(c *ffi.CB) {
+	if w := viewWindow(objc.ID(c.Int(0))); w != nil {
 		w.addCursorRects()
 	}
 }

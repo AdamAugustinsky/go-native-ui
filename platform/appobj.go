@@ -197,6 +197,9 @@ type AppOptions struct {
 	// ending the process at once; a second one while the first is unanswered
 	// ends it.
 	Signals bool
+	// WindowTabbing lets macOS group the app's windows into tabs (its
+	// automatic window tabbing, the View menu's tab items); off by default.
+	WindowTabbing bool
 }
 
 // AppSink receives the application object's events, on the main thread. The

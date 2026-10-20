@@ -30,8 +30,22 @@ func (w *Window) SetFrameHandler(fn func()) { w.handler = fn }
 // progress: the frame source is then not a CAMetalDisplayLink (which makes
 // nextDrawable throw), so gpu.Surface acquires drawables with nextDrawable
 // and presents with presentsWithTransaction. Main thread only.
+//
+// It reports whether any window is in a live resize; a surface asks about its
+// own window with its Native's InLiveResize.
 func InLiveResize() bool {
-	w := theWindow.Load()
+	for _, w := range openWindows() {
+		if w.live {
+			return true
+		}
+	}
+	return false
+}
+
+// InLiveResize is the package's InLiveResize for the window n belongs to:
+// another window's live resize leaves this one's frame source alone.
+func (n Native) InLiveResize() bool {
+	w := n.window()
 	return w != nil && w.live
 }
 

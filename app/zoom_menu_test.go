@@ -53,7 +53,7 @@ func (f *titlebarWindow) SetTitlebar(h float32, l [2]float32) {
 // With a custom titlebar the zoom is the whole window's: the band is zoomed
 // and the buttons are put at its centre before the frame reads where they are.
 func TestZoomGivesTheWindowTheZoomedTitlebar(t *testing.T) {
-	a := &App{UI: ui.New(nil), cfg: Config{Titlebar: 46, TrafficLights: [2]float32{21, 23}}, scale: 2}
+	a := &App{appObject: &appObject{}, UI: ui.New(nil), cfg: Config{Titlebar: 46, TrafficLights: [2]float32{21, 23}}, scale: 2}
 	w := &titlebarWindow{fakeMacWindow: fakeMacWindow{buttons: [4]float32{14, 16, 74, 30}}}
 	a.syncWindowFrom(w, w)
 	if w.setCall != 0 {
@@ -89,7 +89,7 @@ func TestZoomGivesTheWindowTheZoomedTitlebar(t *testing.T) {
 	}
 
 	// No custom titlebar: nothing to set.
-	b := &App{UI: ui.New(nil), cfg: Config{}, scale: 2}
+	b := &App{appObject: &appObject{}, UI: ui.New(nil), cfg: Config{}, scale: 2}
 	w2 := &titlebarWindow{}
 	b.SetZoom(2)
 	b.syncWindowFrom(w2, w2)

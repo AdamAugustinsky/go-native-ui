@@ -37,8 +37,8 @@ func registerViewDraw(v *objc.ClassDef) {
 
 // windowBackingChanged is viewDidChangeBackingProperties and the window
 // delegate's windowDidChangeBackingProperties:.
-func windowBackingChanged(*ffi.CB) {
-	if w := theWindow.Load(); w != nil {
+func windowBackingChanged(c *ffi.CB) {
+	if w := viewOrDelegateWindow(objc.ID(c.Int(0))); w != nil {
 		w.backingChanged()
 	}
 }
@@ -53,14 +53,14 @@ func (w *Window) backingChanged() {
 
 // viewDisplayLinkFired is gnuiDisplayLink: (the CADisplayLink of the view).
 func viewDisplayLinkFired(c *ffi.CB) {
-	if w := theWindow.Load(); w != nil {
+	if w := viewWindow(objc.ID(c.Int(0))); w != nil {
 		w.linkTick(c, false)
 	}
 }
 
 // viewMetalLinkUpdate is metalDisplayLink:needsUpdate: (link, update).
 func viewMetalLinkUpdate(c *ffi.CB) {
-	if w := theWindow.Load(); w != nil {
+	if w := viewWindow(objc.ID(c.Int(0))); w != nil {
 		w.linkTick(c, true)
 	}
 }
@@ -91,8 +91,13 @@ func (w *Window) linkTick(c *ffi.CB, metal bool) {
 		w.ticksSinceFrame, w.lastFrameT = 0, now
 		w.q.push(Event{Kind: EvFrame, Time: now})
 		objc.Send2(w.app, selPostEvent, uintptr(w.wakeEv), 0) // unblock nextEventMatchingMask
-		if w.live || menuTracking() || quitWaitNative() || w.drag.active {
-			w.runHandlerFrom(true) // a requested frame (animation) while AppKit's resize, menu tracking or drag session loop, or its wait for a quit answer, runs
+		if NativeLoop() {
+			// A requested frame (animation, a worker's result) while AppKit
+			// runs a loop of its own, for this window or another (a live
+			// resize, menu tracking, a drag session, its wait for a quit
+			// answer): the app's pump is suspended, so the window's frame
+			// handler draws (D30).
+			w.runHandlerFrom(true)
 		}
 		return
 	}
@@ -180,11 +185,40 @@ const metalLinkLatency = 1
 // that a CAMetalDisplayLink drives the layer: then a 0 drawable means no
 // frame is ready (one is requested), and the caller must not call
 // nextDrawable (the layer throws). Main thread only.
+//
+// It is the first window's (a one-window app's); a surface of any window
+// uses its Native's TakeDrawable.
 func TakeMetalDrawable() (drawable uintptr, linked bool) {
-	w := theWindow.Load()
-	if w == nil {
+	if reg.n == 0 {
 		return 0, false
 	}
+	return reg.open[0].takeDrawable()
+}
+
+// TakeDrawable is TakeMetalDrawable for the window n belongs to (each window
+// has its own display link and drawables). Main thread only.
+func (n Native) TakeDrawable() (drawable uintptr, linked bool) {
+	if w := n.window(); w != nil {
+		return w.takeDrawable()
+	}
+	return 0, false
+}
+
+// window is the open window n belongs to, nil if it is closed (or n was made
+// by hand).
+func (n Native) window() *Window {
+	if w := n.w; w != nil && w.registered {
+		return w
+	}
+	for _, w := range openWindows() {
+		if uintptr(w.view) == n.NSView {
+			return w
+		}
+	}
+	return nil
+}
+
+func (w *Window) takeDrawable() (drawable uintptr, linked bool) {
 	d := w.drawable
 	w.drawable = 0
 	if d == 0 && w.metalLink {

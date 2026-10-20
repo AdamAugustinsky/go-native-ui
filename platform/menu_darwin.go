@@ -119,6 +119,8 @@ var nativeMenus struct {
 	root     objc.ID // the menu PopUpMenu shows, while it does
 	services objc.ID // the Services menu every bar shares (servicesMenu), retained
 	popups   []popupMenu
+	owner    *Window // the window whose bar is installed (SetMenuBar): the bar's commands are its; nil: the app's
+	popup    *Window // the window PopUpMenu shows a menu over, while it does
 }
 
 // popupMenu is a cached menu tree for PopUpMenu: the tree built for menu idx
@@ -188,7 +190,27 @@ func ensureMenuTarget() {
 // and state the function that enables and checks the items. Main thread;
 // building the menus allocates, so call it at a safe point, not every frame.
 // The spec is read during the call only.
-func (w *Window) SetMenuBar(spec *MenuSpec, state MenuState) { setMenuBar(w.app, spec, state) }
+//
+// With several windows open, the bar is the key window's: its commands
+// arrive as that window's EvCommand. The app installs each window's bar when
+// it becomes key (or, when two windows share one model, only switches the
+// state with UseMenuBar).
+func (w *Window) SetMenuBar(spec *MenuSpec, state MenuState) {
+	setMenuBar(w.app, spec, state)
+	nativeMenus.owner = w
+}
+
+// UseMenuBar makes the installed bar this window's without building it
+// again: its commands become this window's and state enables and checks its
+// items. For a window whose menus are the same as those of the window that
+// installed the bar. Main thread; allocates nothing.
+func (w *Window) UseMenuBar(state MenuState) {
+	nativeMenus.state, nativeMenus.owner = state, w
+}
+
+// MenuBarOwner reports whether the installed bar is this window's (SetMenuBar,
+// UseMenuBar) and has not been replaced since. Main thread.
+func (w *Window) MenuBarOwner() bool { return nativeMenus.owner == w && nativeMenus.bar != 0 }
 
 // SetAppMenuBar installs the menu bar of the application with no window open
 // (the app object's menus), as Window.SetMenuBar does with one: the bar is
@@ -196,6 +218,7 @@ func (w *Window) SetMenuBar(spec *MenuSpec, state MenuState) { setMenuBar(w.app,
 func SetAppMenuBar(spec *MenuSpec, state MenuState) {
 	if appObj.started {
 		setMenuBar(appObj.app, spec, state)
+		nativeMenus.owner = nil
 	}
 }
 
@@ -292,9 +315,9 @@ func (w *Window) PopUpMenu(p *Popup) int {
 		objc.F.Reset().Arg(uintptr(m)).Arg(uintptr(selSetMinWidth)).ArgF64(x1 - x0 + listInsetX).Call(objc.MsgSend)
 		x, y = x0-listInsetX+listTextX, w.hPt-(y0+y1)/2+listItemH/2
 	}
-	nativeMenus.chosen, nativeMenus.root = -1, m
+	nativeMenus.chosen, nativeMenus.root, nativeMenus.popup = -1, m, w
 	objc.F.Reset().Arg(uintptr(m)).Arg(uintptr(selPopUpMenu)).Arg(uintptr(item)).ArgPoint(x, y).Arg(uintptr(w.view)).Call(objc.MsgSend)
-	nativeMenus.root = 0
+	nativeMenus.root, nativeMenus.popup = 0, nil
 	return nativeMenus.chosen
 }
 
@@ -674,7 +697,7 @@ func chose(item objc.ID) {
 			nativeMenus.chosen = int(objc.Send1(m, selIndexOfItem, uintptr(item)))
 		}
 	}
-	if w := theWindow.Load(); w != nil {
+	if w := sending; w != nil {
 		w.menuActed = true
 	}
 }
@@ -693,7 +716,7 @@ func menuCommand(c *ffi.CB) {
 	sender := objc.ID(c.Int(2))
 	chose(sender)
 	if id := itemTag(sender); id != 0 {
-		if w := theWindow.Load(); w != nil {
+		if w := menuWindow(); w != nil {
 			w.q.push(Event{Kind: EvCommand, Tag: uint64(id), Time: Now()})
 		} else {
 			appCommand(id) // no window: the application's (F3)
@@ -756,7 +779,7 @@ func viewEditAction(c *ffi.CB) {
 	sender := objc.ID(c.Int(2))
 	act := editActionOf(objc.SEL(c.Int(1)))
 	chose(sender)
-	w := theWindow.Load()
+	w := viewWindow(objc.ID(c.Int(0)))
 	if w == nil || act == MenuNone {
 		return
 	}
@@ -803,7 +826,7 @@ func viewValidate(c *ffi.CB) {
 // While the key-down being sent is the focused text field's, every item is
 // disabled: no key equivalent may take it from the field.
 func validate(item objc.ID, id uint16, act MenuAction) bool {
-	if w := theWindow.Load(); w != nil && w.fieldKey {
+	if w := sending; w != nil && w.fieldKey {
 		return false
 	}
 	fn := nativeMenus.state
@@ -818,9 +841,23 @@ func validate(item objc.ID, id uint16, act MenuAction) bool {
 // menuWillSend observes NSMenuWillSendActionNotification: a menu item is
 // about to send its action, whoever its target is.
 func menuWillSend(*ffi.CB) {
-	if w := theWindow.Load(); w != nil {
+	if w := sending; w != nil {
 		w.menuActed = true
 	}
+}
+
+// menuWindow is the window a command from a menu is for: the one a popped-up
+// menu is over, else the one whose bar is installed, else (no window's bar
+// is installed yet) the key window or the window an event would go to; nil
+// with none open, when the command is the application's.
+func menuWindow() *Window {
+	if w := nativeMenus.popup; w != nil && w.registered {
+		return w
+	}
+	if w := nativeMenus.owner; w != nil && w.registered {
+		return w
+	}
+	return fallbackWindow()
 }
 
 func menuWillOpen(c *ffi.CB) {

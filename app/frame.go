@@ -137,6 +137,7 @@ func (a *App) drawFrame(inHandler bool, passes int) bool {
 		return false
 	}
 	a.inFrame = true
+	a.framing++            // no window's frame handler draws, and no safe point runs, inside it
 	platform.HoldApp(true) // no app-wide event is delivered inside the frame
 	if a.dbg != nil {
 		a.debugFrameStart()
@@ -193,7 +194,8 @@ func (a *App) drawFrame(inHandler bool, passes int) bool {
 	a.Win.FlushShell()     // (nothing is left; a safety net), inside the frame's pool
 	framePoolPop(pool)
 	a.inFrame = false
-	platform.HoldApp(false)
+	a.framing--
+	platform.HoldApp(a.framing > 0)
 	m.commit = platform.Now()
 	if metered {
 		m.cpu3 = sysinfo.ThreadCPUNs()
@@ -223,8 +225,9 @@ func (a *App) abandonFrame(pool uintptr) {
 		return
 	}
 	a.inFrame = false
+	a.framing--
 	a.ax.building = false // a Build that panicked never reached End
-	platform.HoldApp(false)
+	platform.HoldApp(a.framing > 0)
 	abandonSurfaceFrame(a.Surf, &a.fr)
 	framePoolPop(pool)
 }

@@ -10,6 +10,9 @@ func HasNativeMenus() bool { return false }
 // SetMenuBar installs a native menu bar: a no-op here.
 func (w *Window) SetMenuBar(spec *MenuSpec, state MenuState) {}
 
+// UseMenuBar does nothing here (no native menu bar).
+func (w *Window) UseMenuBar(state MenuState) {}
+
 // SetFieldKeys sets the focused field's claim on key equivalents: a no-op
 // here, where no native menu takes keys.
 func (w *Window) SetFieldKeys(f FieldKeys) {}

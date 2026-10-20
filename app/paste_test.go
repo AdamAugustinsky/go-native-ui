@@ -10,7 +10,7 @@ import (
 // An image or file answer is kept for TakePaste, once, and a failure says
 // whether the data was there but too big; the data is the App's own copy.
 func TestMediaPasteSlot(t *testing.T) {
-	a := &App{}
+	a := &App{appObject: &appObject{}}
 	if _, ok := a.TakePaste(); ok {
 		t.Fatal("a paste out of nothing")
 	}
