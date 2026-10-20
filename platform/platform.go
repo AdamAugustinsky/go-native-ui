@@ -36,6 +36,8 @@
 //	(*Window).SetDropKinds(k), SetDragHandler(h), StartDrag(spec)
 //	                                      drag and drop in and out (macOS; ErrDragUnsupported elsewhere), see drag.go
 //	DragThreshold() float32               how far a press moves before it is a drag, in logical units
+//	(*Window).SetAXSource(AXSource) error the app's semantic tree for assistive technologies (a11y.go; macOS; ErrAXUnsupported elsewhere)
+//	(*Window).SyncAX()                    after each frame's build: the bridge, once active, diffs the tree and notifies
 //	(*Window).Close()
 //	SetSecureInput(on bool)               macOS: bracket EnableSecureEventInput for a password field (balanced, released while the app is inactive); no-op elsewhere
 //	Clipboard() string                    plain UTF-8 text of the system clipboard; main thread
@@ -139,6 +141,7 @@ const (
 	EvDragLeave               // the drag left the window or was cancelled: Tag
 	EvDrop                    // the drag was dropped: Code the kind delivered, Text its data, X, Y, Tag; FlagFailed when it could not be read
 	EvDragEnd                 // a drag out ended: Tag is its DragTicket, Code the operation performed (DragOpNone: cancelled)
+	EvAccessibility           // an assistive technology asked for an action: Tag is the node's key, Code the AXAction, Amount its argument (a11y.go)
 )
 
 // Flags qualify an Event.

@@ -152,6 +152,7 @@ type App struct {
 	dragT    dragTarget              // the window's drags; tests set a fake (drag.go)
 
 	sh shellSync // material and host regions handed to the window (shell.go)
+	ax axBridge  // the accessibility bridge's source (a11y.go)
 
 	paste pasteSlot // the answer to RequestPaste for an image or files (paste.go)
 
@@ -358,6 +359,7 @@ func openWindowed(cfg Config, b Builder, st *StartupReport, nativeMenus bool) (*
 		return nil, err
 	}
 	a.UI.SetNativeMenus(nativeMenus && platform.HasNativeMenus())
+	a.initAX()
 	t4 := platform.Now()
 	st.InitMs = ms(t4 - t3)
 
@@ -543,6 +545,11 @@ func (a *App) onEvent(e *platform.Event) {
 			txt = a.Win.Text(e.Text)
 		}
 		a.onDrag(e, txt)
+	case platform.EvAccessibility:
+		if a.axAction(e) {
+			a.tr.dirty = true
+			a.p.invalidate()
+		}
 	default:
 		if e.Kind == platform.EvPaste && a.paste.isMedia(e) { // the answer to RequestPaste (paste.go)
 			a.onMediaPaste(e, a.Win.Text(e.Text))
