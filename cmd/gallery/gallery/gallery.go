@@ -90,8 +90,8 @@ type Options struct {
 	// Start is the scene to open on, by its title in the sidebar ("Table",
 	// "Lists"; the Playground when empty or unknown).
 	Start string
-	// Scrolled starts the content scrolled under the toolbar (120 pt, or as
-	// far as it goes; a table 5 rows).
+	// Scrolled shows each scene scrolled under the toolbar when it comes up
+	// (120 pt, or as far as it goes; a table 5 rows): for a capture of one.
 	Scrolled bool
 	// PanelStart is the directory the open and save panels start in (empty:
 	// the system's choice).
@@ -132,7 +132,8 @@ type Gallery struct {
 	focused  bool
 	under    bool    // the content is under the toolbar (the last frame's)
 	top      float32 // the toolbar band's height this frame, in pixels: the inset of the scene's scroll view
-	scrolled int     // frames left to apply Options.Scrolled
+	scrolled int     // frames left to apply Options.Scrolled to the scene just shown
+	shown    int     // the scene built last (-1: none yet)
 	scroll   [numScenes]base.ScrollState
 	ic       icons
 	glyphs   rexui.ListGlyphs
@@ -164,7 +165,8 @@ type Gallery struct {
 	tab       int
 	list      base.ListState
 	askDelete bool
-	// which list had the keyboard in the last frame, for Select All
+	// which list had the keyboard in the last frame, for Select All: only the
+	// scene built says so, so a scene that is not on show says nothing
 	tableFocus, listFocus bool
 	working               bool
 	alert                 platform.DialogTicket // the alert, save or open panel on screen (0: none)
@@ -229,9 +231,7 @@ func New(o Options) (*Gallery, error) {
 			g.side.Sel = sceneID(sc)
 		}
 	}
-	if o.Scrolled {
-		g.scrolled = 4
-	}
+	g.shown = -1
 	g.hist[0], g.histN = g.side.Sel, 1
 	g.setStatus("Ready")
 	return g, nil
@@ -340,6 +340,7 @@ func (g *Gallery) Build(c *ui.Context) {
 	k := g.k
 	g.wk.Begin(c)
 	g.commands(c)
+	g.tableFocus, g.listFocus = false, false // set again by the scene that is built
 	g.dialogResults()
 	r := k.Theme()
 	W, H := float32(w), float32(h)
@@ -355,6 +356,12 @@ func (g *Gallery) Build(c *ui.Context) {
 	g.sidebar(tbH)
 	c.Pop()
 	sc = g.scene() // the sidebar may have changed it
+	if sc != g.shown {
+		g.shown = sc
+		if g.opt.Scrolled { // a script that walks to the scene gets it scrolled too
+			g.scrolled = 4
+		}
+	}
 	theme.At(c, sbW, 0, W-sbW, H)
 	flags := base.Floating
 	if sc != scTable { // the table paints its rows' background
