@@ -49,6 +49,7 @@ func (g *Gallery) stateRow(kind int) {
 	k := g.k
 	name := rowNames[kind]
 	k.NextGap(4)
+	k.NextWidth(ui.Children(1))
 	k.Row(name)
 	k.NextSize(k.Fixed(nameColPt), k.Fixed(30))
 	k.LabelStyle(name, widget.TextMuted)
@@ -100,11 +101,16 @@ func (g *Gallery) stateWidget(kind, i int) {
 func (g *Gallery) statesPane(c *ui.Context) {
 	k := g.k
 	sv := k.BeginScroll("states", &g.scroll[0], widget.ScrollBoth)
+	// The matrix is as wide as its rows, which may be wider than the pane:
+	// the column takes their width (and the bars and the card below take the
+	// column's), so the pane scrolls sideways to the last state.
 	k.NextGap(6)
 	k.NextPadding(0, 0, scrollPadPt, 0)
+	k.NextWidth(ui.Children(1))
 	k.Column("states")
 	g.heading("States")
 	k.NextGap(4)
+	k.NextWidth(ui.Children(1))
 	k.Row("states-head")
 	k.NextSize(k.Fixed(nameColPt), k.Fixed(20))
 	k.Spacer()

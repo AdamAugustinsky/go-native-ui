@@ -240,3 +240,43 @@ func TestWaitForNativeTooltipChecksTheText(t *testing.T) {
 type builderFunc func(*ui.Context)
 
 func (f builderFunc) Build(c *ui.Context) { f(c) }
+
+var _ = widgettest.DefineUpdateFlag()
+
+// The semantic tree of the counter app matches its golden file
+// (testdata/counter-tree.txt; -update rewrites it), before and after an item.
+func TestAssertTreeGolden(t *testing.T) {
+	r, _ := newCounter(t)
+	r.AssertTree("counter-tree")
+	r.Play(widgettest.Click(ui.RoleTextField, "Item"), widgettest.Type("milk"), widgettest.Key(ui.KeyEnter, 0))
+	r.Frames(2)
+	r.AssertTree("counter-tree-with-milk")
+}
+
+// Two renderings of the same frame on the real renderer are the same pixels,
+// and CompareImages sees a change of one box.
+func TestRenderedImagesCompare(t *testing.T) {
+	var on bool
+	b := builderFunc(func(c *ui.Context) {
+		c.NextSize(ui.Px(60), ui.Px(40))
+		if on {
+			c.NextBG(0xE6661AFF)
+		} else {
+			c.NextBG(0x3366E6FF)
+		}
+		c.Box(ui.DrawBackground, "square")
+	})
+	o := widgettest.NewOffscreen(t, app.Config{Title: "t", Width: 200, Height: 120}, 200, 120, 1, b)
+	img1, _ := o.Frame()
+	first := *img1
+	first.Pix = append([]uint8(nil), img1.Pix...)
+	img2, _ := o.Frame()
+	if c := widgettest.CompareImages(&first, img2, widgettest.Exact); !c.OK {
+		t.Errorf("the same frame rendered twice differs: %s", c.Why)
+	}
+	on = true
+	img3, _ := o.Frame()
+	if c := widgettest.CompareImages(&first, img3, widgettest.Tolerance{}); c.OK || c.Different < 60*40/2 {
+		t.Errorf("a square of another colour: ok %v, %d pixels differ", c.OK, c.Different)
+	}
+}

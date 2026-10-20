@@ -1,6 +1,7 @@
 package widgettest
 
 import (
+	"image"
 	"os"
 	"runtime"
 	"testing"
@@ -38,7 +39,9 @@ type Rig struct {
 	ts   *fakeui.Text
 
 	// the offscreen window
-	o *app.Offscreen
+	o   *app.Offscreen
+	img *image.RGBA // its last frame
+	fd  *FakeDialogs
 }
 
 var _ Host = (*Rig)(nil)
@@ -192,7 +195,10 @@ func (r *Rig) N() int { return r.n }
 func (r *Rig) Frame() {
 	r.n++
 	if r.o != nil {
-		r.o.Frame()
+		r.img, _ = r.o.Frame()
+		if r.fd != nil {
+			r.o.App.DebugFlushDialogs() // what the loop does after a frame
+		}
 		return
 	}
 	if r.b == nil {
@@ -206,6 +212,31 @@ func (r *Rig) Frame() {
 	if tag, ok := r.c.PasteRequest(); ok { // the platform answers a paste request with the clipboard
 		r.in.SetPaste(tag, r.clip, len(r.clip) > 0)
 	}
+}
+
+// Image is the last frame a rig made by Open rendered (nil before the first
+// frame and for NewRig). The pixels are reused by the next frame.
+func (r *Rig) Image() *image.RGBA { return r.img }
+
+// AssertImage is the package function AssertImage on the rig's last frame; the
+// rig must be made by Open (the real renderer).
+func (r *Rig) AssertImage(name string, tol Tolerance) {
+	r.t.Helper()
+	if r.img == nil {
+		r.t.Fatal("widgettest: AssertImage needs a rig made by Open that has run a frame")
+	}
+	AssertImage(r.t, name, r.img, tol)
+}
+
+// AssertImageRect is the package function AssertImageRect on the part of the
+// rig's last frame inside r (pixels from the top left): compare the control,
+// not the window around it.
+func (r *Rig) AssertImageRect(name string, rect image.Rectangle, tol Tolerance) {
+	r.t.Helper()
+	if r.img == nil {
+		r.t.Fatal("widgettest: AssertImageRect needs a rig made by Open that has run a frame")
+	}
+	AssertImageRect(r.t, name, r.img, rect, tol)
 }
 
 // Frames runs n frames.

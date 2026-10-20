@@ -19,6 +19,12 @@ import "gonativeui/ui"
 //	510      jump to the end: stuck to the bottom again
 //	510-599  messages arrive every 8 frames, the view pinned
 //
+// The messages are selectable (a ui.SelectionScope over the list): a click
+// at 2 focuses the scope and ⌘A at 4 selects all million, so the session
+// scrolls, edits and draws a selection that spans the list; at 60 a press
+// and a drag above the list's top auto-scrolls up through history for 20
+// frames, and ⌘A at 84 selects everything again.
+//
 // The script ends at total.
 func (ch *chat) benchScript(warm, period, total int) func(frame int, in *ui.Input) bool {
 	return func(f int, in *ui.Input) bool {
@@ -31,6 +37,17 @@ func (ch *chat) benchScript(warm, period, total int) func(frame int, in *ui.Inpu
 		ev := f % period
 		in.Inside, in.Focused = true, true
 		in.MouseX, in.MouseY = 200, 400
+		prim := ui.PrimaryMod()
+		switch {
+		case ev == 2, ev == 60:
+			in.SetButton(ui.ButtonLeft, true, 1)
+		case ev == 3, ev == 81:
+			in.SetButton(ui.ButtonLeft, false, 0)
+		case ev == 4, ev == 84:
+			in.PushKey(ui.KeyEvent{Code: 'A', Mods: prim, Down: true})
+		case ev > 60 && ev < 81:
+			in.MouseY = 2 // above the list: it scrolls up by itself
+		}
 		switch {
 		case ev >= 120 && ev < 300:
 			in.AddScroll(0, 70, true)

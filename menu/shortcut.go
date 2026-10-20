@@ -55,6 +55,24 @@ func appendKey(dst []byte, k ui.KeyCode, mac bool) []byte {
 	if k >= 0x21 && k < 0x7F { // letters, digits and punctuation are their ASCII value
 		return append(dst, byte(k))
 	}
+	if k >= ui.KeyF1 && k <= ui.KeyF20 {
+		n := int(k-ui.KeyF1) + 1
+		dst = append(dst, 'F')
+		if n >= 10 {
+			dst = append(dst, byte('0'+n/10))
+		}
+		return append(dst, byte('0'+n%10))
+	}
+	if k >= ui.KeyNum0 && k <= ui.KeyNumClear {
+		if k == ui.KeyNumClear {
+			return append(dst, "Clear"...)
+		}
+		dst = append(dst, "Num"...) // Num0 … Num9, Num. Num+ Num- Num* Num/ Num=
+		if k <= ui.KeyNum9 {
+			return append(dst, byte('0'+(k-ui.KeyNum0)))
+		}
+		return append(dst, ".+-*/="[k-ui.KeyNumDecimal])
+	}
 	names := [...]struct{ mac, other string }{
 		ui.KeyEnter - ui.KeyEnter:     {"↩", "Enter"},
 		ui.KeySpace - ui.KeyEnter:     {"Space", "Space"},

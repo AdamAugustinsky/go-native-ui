@@ -396,6 +396,23 @@ func (p *Player) run(st *Step, in *ui.Input) bool {
 	case opText:
 		in.AppendText(st.text)
 		return true
+	case opCommand:
+		if !in.PushCommand(st.id) {
+			p.fail("the frame's command queue is full")
+		}
+		return true
+	case opEdit:
+		in.PushEdit(st.edit)
+		return true
+	case opAppearance:
+		c := p.h.Context()
+		a := c.SystemAppearance()
+		a.Dark, a.Known = st.id == 1, true
+		c.SetSystemAppearance(a)
+		return true
+	case opDo:
+		st.fn()
+		return true
 	case opWheel:
 		if !p.ok {
 			return true

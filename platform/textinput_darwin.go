@@ -51,15 +51,6 @@ func registerViewTextInput(v *objc.ClassDef) {
 	v.MethodIMP(selFirstRect, "{CGRect={CGPoint=dd}{CGSize=dd}}@:{_NSRange=QQ}^{_NSRange=QQ}", firstRectIMP)
 }
 
-// viewDoCommand is doCommandBySelector:. It is swallowed (the key is the
-// app's: it already has its EvKey), but remembers that the input method
-// handed this key back.
-func viewDoCommand(*ffi.CB) {
-	if w := theWindow.Load(); w != nil {
-		w.cmdCalled = true
-	}
-}
-
 // viewSetMarkedText is setMarkedText:selectedRange:replacementRange: — the
 // composition (an NSString or NSAttributedString) and the caret or selection
 // inside it, in UTF-16 units. The app shows the composition at its caret; a

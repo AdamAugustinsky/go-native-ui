@@ -84,7 +84,7 @@ type fakeComp struct {
 	serial uint32
 	out    *bufio.Writer
 
-	seat, kb, ptr, dd                 *fobj
+	seat, kb, ptr, dd, pinch          *fobj
 	mainSurf, xdgSurf, toplevel, deco *fobj
 	cursorSurf                        *fobj
 	clientSrc                         *fobj // the client's selection source
@@ -122,6 +122,10 @@ func fakeCompositorMain() {
 		fmt.Println("FATAL", err)
 		os.Exit(2)
 	}
+	if err := wl.LinkGestures(sym); err != nil {
+		fmt.Println("FATAL", err)
+		os.Exit(2)
+	}
 	s.byName = map[string]*wl.Interface{}
 	for _, n := range []string{"wl_display", "wl_registry", "wl_callback", "wl_compositor", "wl_surface", "wl_region", "wl_shm", "wl_shm_pool",
 		"wl_buffer", "wl_seat", "wl_pointer", "wl_keyboard", "wl_output", "wl_data_device_manager", "wl_data_device", "wl_data_source", "wl_data_offer"} {
@@ -135,7 +139,8 @@ func fakeCompositorMain() {
 	for _, i := range []*wl.Interface{&wl.XdgWmBase, &wl.XdgSurface, &wl.XdgToplevel, &wl.XdgPopup, &wl.XdgPositioner,
 		&wl.ZxdgDecorationManagerV1, &wl.ZxdgToplevelDecorationV1, &wl.WpFractionalScaleManagerV1, &wl.WpFractionalScaleV1,
 		&wl.WpViewporter, &wl.WpViewport, &wl.WpCursorShapeManagerV1, &wl.WpCursorShapeDeviceV1,
-		&wl.ZxdgExporterV2, &wl.ZxdgExportedV2, &wl.ZwpTextInputManagerV3, &wl.ZwpTextInputV3} {
+		&wl.ZxdgExporterV2, &wl.ZxdgExportedV2, &wl.ZwpTextInputManagerV3, &wl.ZwpTextInputV3,
+		&wl.ZwpPointerGesturesV1, &wl.ZwpPointerGesturePinchV1} {
 		s.byName[goString(i.Name)] = i
 	}
 
@@ -431,6 +436,12 @@ func (s *fakeComp) request(o *fobj, name string, a []farg) {
 				ver   uint32
 			}{"wp_cursor_shape_manager_v1", 1})
 		}
+		if s.opts["gestures"] {
+			g = append(g, struct {
+				iface string
+				ver   uint32
+			}{"zwp_pointer_gestures_v1", 3})
+		}
 		if s.opts["foreign"] {
 			g = append(g, struct {
 				iface string
@@ -553,6 +564,8 @@ func (s *fakeComp) request(o *fobj, name string, a []farg) {
 	case "zxdg_decoration_manager_v1.get_toplevel_decoration":
 		s.deco = s.adopt(a[0].v, &wl.ZxdgToplevelDecorationV1, o.ver)
 		s.event(s.deco, "configure", s.decoMode)
+	case "zwp_pointer_gestures_v1.get_pinch_gesture":
+		s.pinch = s.adopt(a[0].v, &wl.ZwpPointerGesturePinchV1, o.ver)
 	case "wp_cursor_shape_manager_v1.get_pointer":
 		s.adopt(a[0].v, &wl.WpCursorShapeDeviceV1, o.ver)
 	case "zwp_text_input_manager_v3.get_text_input":
@@ -684,6 +697,18 @@ func (s *fakeComp) command(line string) {
 	case "scale": // preferred_buffer_scale on the main surface
 		if m := s.mainSurface(); m != nil {
 			s.event(m, "preferred_buffer_scale", int32(num(0)))
+		}
+	case "pinch_begin":
+		if s.pinch != nil {
+			s.event(s.pinch, "begin", s.nextSerial(), uint32(0), s.mainSurface(), uint32(2))
+		}
+	case "pinch_update": // scale rotation
+		if s.pinch != nil {
+			s.event(s.pinch, "update", uint32(0), fx(0), fx(0), fx(num(0)), fx(num(1)))
+		}
+	case "pinch_end": // cancelled
+		if s.pinch != nil {
+			s.event(s.pinch, "end", s.nextSerial(), uint32(0), int32(num(0)))
 		}
 	case "leave":
 		if s.ptr != nil {

@@ -29,20 +29,25 @@ var (
 	mainRunning atomic.Bool
 )
 
-// RunMain runs the tests of a package that opens real windows (RunLive) and
-// exits with their result. Call it from TestMain; the main thread then serves
-// OnMain while the tests run on another goroutine.
+// RunMain runs the tests of a package that opens real windows (RunLive,
+// StartLive) and exits with their result. Call it from TestMain; the main
+// thread then serves OnMain while the tests run on another goroutine. In the
+// child process of a Scenario it runs the scenario's function on the main
+// thread instead and exits.
 func RunMain(m *testing.M) {
+	runScenario() // a scenario's child process runs its function here, on the main thread, instead of the tests
 	mainRunning.Store(true)
-	done := make(chan int, 1)
-	go func() { done <- m.Run() }()
-	for {
-		select {
-		case f := <-mainQ:
-			f()
-		case code := <-done:
-			os.Exit(code)
-		}
+	// The tests end the process from their own goroutine: a function the main
+	// thread is stuck in (a callback that never returns) cannot keep the
+	// process alive after the result is in.
+	go func() { os.Exit(m.Run()) }()
+	serveMain()
+}
+
+// serveMain runs the functions OnMain hands to the main thread, for ever.
+func serveMain() {
+	for f := range mainQ {
+		f()
 	}
 }
 

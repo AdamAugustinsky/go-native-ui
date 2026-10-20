@@ -101,6 +101,10 @@ type chat struct {
 	a  *app.App
 	st base.VListState
 	o  base.VListOpts
+	// the messages are selectable text, in a scope over the list
+	sc       ui.SelectionScope
+	sel      ui.ScopeSignal
+	edgeDrag float32 // how far drags past the list's edge scrolled it, in pixels
 
 	font      text.FontKey
 	fontScale float32
@@ -292,6 +296,10 @@ func (ch *chat) Build(c *ui.Context) {
 	ch.listBox = v.Outer
 	ch.nb = 0
 	var itemNs time.Duration // wall time: the calls are far shorter than a thread-clock tick
+	t := time.Now()
+	ch.sel = c.BeginSelection(&ch.sc, ui.ScopeOpts{Items: &ch.st, View: v.Outer})
+	itemNs += time.Since(t)
+	ch.edgeDrag += ch.sel.EdgeScroll
 	for i := v.First; i < v.Last; i++ {
 		t := time.Now()
 		id := v.Item(i)
@@ -306,7 +314,8 @@ func (ch *chat) Build(c *ui.Context) {
 		}
 	}
 	ch.pinned = ch.st.AtEnd() && v.Last == v.Len && v.Len > 0
-	t := time.Now()
+	t = time.Now()
+	c.EndSelection()
 	base.EndVList(&v)
 	itemNs += time.Since(t)
 	if ch.counting && len(ch.listUs) < cap(ch.listUs) {
@@ -363,8 +372,8 @@ func (ch *chat) header(c *ui.Context) {
 }
 
 // message builds one row: a bubble on the left (theirs) or the right
-// (mine), its text wrapped, and maybe an image under it whose height is known
-// only once it has loaded.
+// (mine), its text wrapped (selectable rich text), and maybe an image under it
+// whose height is known only once it has loaded.
 func (ch *chat) message(c *ui.Context, id uint64) {
 	c.NextSize(ui.Pct(1), ui.Children(1))
 	c.NextAxis(ui.AxisX)
@@ -385,7 +394,7 @@ func (ch *chat) message(c *ui.Context, id uint64) {
 	c.NextGap(c.Pt(6))
 	c.Open(ui.DrawBackground, "bubble")
 	c.NextSize(ui.Pct(1), ui.TextSize(0))
-	c.BoxKeyed(ui.DrawText|ui.WrapText, ui.KeyN(c.ParentKey(), 0), msgText(c, id))
+	c.RichText(ui.KeyN(c.ParentKey(), 0), msgText(c, id), nil, nil, ui.RichOpts{Item: id})
 	if hasImage(id) {
 		h := float32(0)
 		if ch.loaded(id) {
