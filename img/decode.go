@@ -75,6 +75,8 @@ func (c *Cache) decodeJob(t task.Token, j job) result {
 	var r result
 	if t.Cancelled() {
 		r = result{buf: -1, err: errDecode}
+	} else if j.src.isIcon() {
+		r = w.decodeIcon(c, &j)
 	} else {
 		r = w.decode(c, &j, data)
 	}
