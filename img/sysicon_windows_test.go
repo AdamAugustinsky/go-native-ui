@@ -131,11 +131,11 @@ func TestSystemIconsWindowsConcurrent(t *testing.T) {
 	wg.Wait()
 }
 
-// TestSystemIconsWindowsAlphaKinds checks what shellPixels is told about the
-// shell's alpha: the bitmap IShellItemImageFactory renders is premultiplied
-// (no channel above its alpha), the colour bitmap of an icon is straight (an
-// antialiased edge with a channel above its alpha).
-func TestSystemIconsWindowsAlphaKinds(t *testing.T) {
+// TestSystemIconsWindowsAlphaIsStraight checks what shellPixels assumes:
+// both the bitmap IShellItemImageFactory renders and the colour bitmap of an
+// icon carry straight alpha: translucent pixels with a channel above their
+// alpha, which premultiplied data cannot have.
+func TestSystemIconsWindowsAlphaIsStraight(t *testing.T) {
 	sysIconEnv(t)
 	wk := new(worker)
 	dir := t.TempDir()
@@ -163,8 +163,8 @@ func TestSystemIconsWindowsAlphaKinds(t *testing.T) {
 	}
 	n, partial := over(px)
 	t.Logf("item bitmap: %d of %d pixels have a channel above their alpha, %d translucent", n, len(px)/4, partial)
-	if n != 0 {
-		t.Errorf("IShellItemImageFactory's bitmap is not premultiplied: %d pixels have a channel above their alpha", n)
+	if partial == 0 || n == 0 {
+		t.Errorf("IShellItemImageFactory's bitmap is not straight alpha: %d translucent pixels, %d with a channel above their alpha", partial, n)
 	}
 	var iconN, iconPartial int
 	iconRawHook = func(px []byte) { iconN, iconPartial = over(px) }
@@ -175,7 +175,7 @@ func TestSystemIconsWindowsAlphaKinds(t *testing.T) {
 	}
 	t.Logf("folder icon bitmap: %d pixels with a channel above their alpha, %d translucent", iconN, iconPartial)
 	if iconPartial == 0 || iconN == 0 {
-		t.Errorf("an icon's colour bitmap is not straight alpha: %d translucent pixels, %d of them with a channel above their alpha", iconPartial, iconN)
+		t.Errorf("an icon's colour bitmap is not straight alpha: %d translucent pixels, %d with a channel above their alpha", iconPartial, iconN)
 	}
 }
 

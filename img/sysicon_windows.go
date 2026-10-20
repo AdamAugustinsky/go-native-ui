@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"gonativeui/internal/win32"
@@ -212,7 +213,7 @@ func (w *worker) fileIcon(path string, side int32) (*image.RGBA, uint8) {
 	if px == nil {
 		return nil, code
 	}
-	shellPixels(px, nil, false) // the shell's bitmaps are premultiplied
+	shellPixels(px, nil)
 	return &image.RGBA{Pix: px, Stride: bw * 4, Rect: image.Rect(0, 0, bw, bh)}, errNone
 }
 
@@ -302,9 +303,18 @@ func (w *worker) typeIcon(src *Source, side int32) (*image.RGBA, uint8) {
 	}
 	imageList := ic.ptr
 	defer win32.Release(imageList)
-	if hr := win32.HR(win32.Com(imageList, imageListGetIcon, uintptr(uint32(idx)), ildTransparent, uintptr(unsafe.Pointer(&ic.hicon)))); hr < 0 || ic.hicon == 0 {
+	// The list can answer S_OK with no icon while the system is still
+	// loading it (seen on a burst of concurrent requests): ask again.
+	for try := 0; ; try++ {
+		hr := win32.HR(win32.Com(imageList, imageListGetIcon, uintptr(uint32(idx)), ildTransparent, uintptr(unsafe.Pointer(&ic.hicon))))
+		if hr >= 0 && ic.hicon != 0 {
+			break
+		}
 		trace("IImageList.GetIcon", uintptr(uint32(hr)))
-		return nil, errUnsupported
+		if hr < 0 || try == 9 {
+			return nil, errUnsupported
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 	hicon := ic.hicon
 	defer win32.Call(shell.destroyIcon, hicon)
@@ -321,7 +331,7 @@ func (w *worker) iconImage(hicon uintptr) (*image.RGBA, uint8) {
 	if iconRawHook != nil {
 		iconRawHook(px)
 	}
-	shellPixels(px, mpx, true) // an icon's own bitmap has straight alpha
+	shellPixels(px, mpx)
 	return &image.RGBA{Pix: px, Stride: bw * 4, Rect: image.Rect(0, 0, bw, bh)}, errNone
 }
 

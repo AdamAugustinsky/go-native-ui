@@ -35,13 +35,14 @@ func (w *worker) iconFromImage(c *Cache, m image.Image, side int32) result {
 }
 
 // shellPixels turns top-down BGRA pixels the shell gave into premultiplied
-// RGBA, in place. Whether the colour is already multiplied by alpha is
-// known from where the pixels came from, not guessed from them: straight is
-// true for an icon's own bitmap (icons store straight alpha), false for the
-// bitmap IShellItemImageFactory renders (premultiplied, for AlphaBlend). A
-// bitmap with no alpha anywhere is opaque, except where the icon's mask (1
-// where transparent; nil if it has none) says otherwise.
-func shellPixels(px, mask []byte, straight bool) {
+// RGBA, in place. Both of the shell's sources give straight alpha, which was
+// measured, not assumed: on the Windows runners the bitmap
+// IShellItemImageFactory renders for a folder has pixels with a channel
+// above their alpha (65 of 16384 at 128 pixels), and so has an icon's colour
+// bitmap (137 of 65536 at 256). A bitmap with no alpha anywhere is opaque,
+// except where the icon's mask (1 where transparent; nil if it has none)
+// says otherwise.
+func shellPixels(px, mask []byte) {
 	hasAlpha := false
 	for i := 3; i < len(px); i += 4 {
 		if px[i] != 0 {
@@ -51,13 +52,12 @@ func shellPixels(px, mask []byte, straight bool) {
 	}
 	for i := 0; i < len(px); i += 4 {
 		b, g, r, a := px[i], px[i+1], px[i+2], px[i+3]
-		switch {
-		case !hasAlpha:
+		if !hasAlpha {
 			a = 255
 			if mask != nil && mask[i] != 0 {
 				a, r, g, b = 0, 0, 0, 0
 			}
-		case straight:
+		} else {
 			r, g, b = premul(r, uint32(a)), premul(g, uint32(a)), premul(b, uint32(a))
 		}
 		px[i], px[i+1], px[i+2], px[i+3] = r, g, b, a

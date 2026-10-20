@@ -111,6 +111,7 @@ Type=Scalable
 	icon("share/icons/Fancy/48x48/mimetypes/application-pdf.png", 48)
 	write("config/gtk-3.0/settings.ini", "[Settings]\ngtk-icon-theme-name=Fancy\n")
 	t.Setenv("HOME", filepath.Join(root, "home"))
+	t.Setenv("USERPROFILE", filepath.Join(root, "home")) // Windows' os.UserHomeDir
 	t.Setenv("XDG_DATA_HOME", filepath.Join(root, "datahome"))
 	t.Setenv("XDG_DATA_DIRS", filepath.Join(root, "share"))
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "config"))
@@ -203,6 +204,7 @@ func TestXDGLookup(t *testing.T) {
 func TestXDGWithoutDatabase(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("HOME", root)
+	t.Setenv("USERPROFILE", root)
 	t.Setenv("XDG_DATA_HOME", filepath.Join(root, "a"))
 	t.Setenv("XDG_DATA_DIRS", filepath.Join(root, "b"))
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "c"))

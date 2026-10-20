@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"image"
 	"runtime"
-	"slices"
 	"testing"
 	"time"
 )
@@ -214,29 +213,23 @@ func TestSystemIconsZeroAlloc(t *testing.T) {
 	t.Errorf("500 frames of 50 cached icons: %d mallocs, %d bytes (sink %v)", mallocs, bytes, sink)
 }
 
-// TestShellPixels: BGRA from the shell becomes premultiplied RGBA by what
-// the source says it is, not by the values: a dark translucent pixel is the
+// TestShellPixels: BGRA from the shell is straight alpha and becomes
+// premultiplied RGBA whatever the values: a dark translucent pixel is the
 // case a guess from the channels gets wrong.
 func TestShellPixels(t *testing.T) {
 	// B, G, R, A.
 	dark := []byte{40, 40, 40, 128, 0, 0, 0, 0, 255, 255, 255, 255}
-	premultiplied := slices.Clone(dark)
-	shellPixels(premultiplied, nil, false)
-	if want := []byte{40, 40, 40, 128, 0, 0, 0, 0, 255, 255, 255, 255}; string(premultiplied) != string(want) {
-		t.Errorf("premultiplied input: %v, want %v", premultiplied, want)
-	}
-	straight := slices.Clone(dark)
-	shellPixels(straight, nil, true)
-	if want := []byte{20, 20, 20, 128, 0, 0, 0, 0, 255, 255, 255, 255}; string(straight) != string(want) {
-		t.Errorf("straight input {40,40,40,128}: %v, want %v", straight, want)
+	shellPixels(dark, nil)
+	if want := []byte{20, 20, 20, 128, 0, 0, 0, 0, 255, 255, 255, 255}; string(dark) != string(want) {
+		t.Errorf("{40,40,40,128}: %v, want %v", dark, want)
 	}
 	bright := []byte{200, 100, 50, 128}
-	shellPixels(bright, nil, true)
+	shellPixels(bright, nil)
 	if want := []byte{25, 50, 100, 128}; string(bright) != string(want) {
-		t.Errorf("straight bright input: %v, want %v", bright, want)
+		t.Errorf("bright: %v, want %v", bright, want)
 	}
 	opaque := []byte{1, 2, 3, 0, 4, 5, 6, 0}
-	shellPixels(opaque, []byte{0, 0, 0, 0, 255, 255, 255, 255}, true) // the second pixel is masked out
+	shellPixels(opaque, []byte{0, 0, 0, 0, 255, 255, 255, 255}) // the second pixel is masked out
 	if want := []byte{3, 2, 1, 255, 0, 0, 0, 0}; string(opaque) != string(want) {
 		t.Errorf("opaque input with a mask: %v, want %v", opaque, want)
 	}
