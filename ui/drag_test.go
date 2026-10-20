@@ -168,7 +168,7 @@ func TestDropTargetStates(t *testing.T) {
 	if r.cardSig.Over || r.listSig.Over {
 		t.Errorf("a target under a popup took the drag: %+v %+v", r.cardSig, r.listSig)
 	}
-	if op, _ := r.c.DropAt(80, 70, DropFiles, DropAllOps); op != DropNone {
+	if op, _, _ := r.c.DropAt(80, 70, DropFiles, DropAllOps); op != DropNone {
 		t.Errorf("DropAt through a popup answered %v", op)
 	}
 	r.popup = false
@@ -193,20 +193,131 @@ func TestDropTargetStates(t *testing.T) {
 	}
 }
 
+func TestDropSignalChecksTheTargetIsEligibleInThisFrame(t *testing.T) {
+	r := newDropRig(t)
+	r.over(80, 80, DropFiles, DropAllOps)
+	if !r.cardSig.Over {
+		t.Fatal("setup")
+	}
+	// The drag was resolved from the last frame's layout: the card is Over in
+	// it. A card that is disabled in this frame is not.
+	r.disableCard = true
+	r.frame(r.build)
+	if r.cardSig.Over {
+		t.Errorf("a target disabled this frame reported Over: %+v", r.cardSig)
+	}
+	r.disableCard = false
+	r.settle()
+
+	// One that does not declare AcceptDrop this frame is not either.
+	r.over(300, 60, DropText, DropAllOps)
+	if !r.sideSig.Over {
+		t.Fatal("setup")
+	}
+	r.hideSideBox = true
+	r.frame(r.build)
+	if r.sideSig.Over {
+		t.Errorf("a box that did not declare AcceptDrop this frame reported Over: %+v", r.sideSig)
+	}
+
+	// The same for a drop.
+	r.hideSideBox = false
+	r.settle()
+	r.in.Drop.SetDrop(DropText, []byte("x"), 300, 60, 1, true)
+	r.hideSideBox = true
+	r.frame(r.build)
+	if r.sideSig.Dropped {
+		t.Errorf("a box that did not declare AcceptDrop this frame reported Dropped: %+v", r.sideSig)
+	}
+	r.hideSideBox = false
+	r.settle()
+	r.in.Drop.SetDrop(DropFiles, []byte("/a\x00"), 80, 80, 1, true)
+	r.disableCard = true
+	r.frame(r.build)
+	if r.cardSig.Dropped {
+		t.Errorf("a target disabled this frame reported Dropped: %+v", r.cardSig)
+	}
+}
+
+func TestDropGoesToTheTargetThatAcceptedIt(t *testing.T) {
+	r := newDropRig(t)
+	_, _, card := r.c.DropAt(80, 80, DropFiles, DropAllOps)
+	_, _, list := r.c.DropAt(80, 80, DropText, DropAllOps)
+	_, _, side := r.c.DropAt(300, 60, DropText, DropAllOps)
+	if card == 0 || list == 0 || side == 0 || card == list {
+		t.Fatalf("targets %v %v %v", card, list, side)
+	}
+
+	// The list accepted this drop. The data came later, and the pointer is
+	// over the card now: it is the list's, not the card's.
+	r.in.Drop.SetDrop(DropFiles, []byte("/a\x00"), 80, 80, 1, true)
+	r.in.Drop.Target = list
+	r.frame(r.build)
+	if !r.listSig.Dropped || r.cardSig.Dropped {
+		t.Errorf("list %+v card %+v", r.listSig, r.cardSig)
+	}
+
+	// The target is gone by the time the data arrives: the drop is discarded,
+	// not given to whatever is under the pointer.
+	r.hideSideBox = true
+	r.frame(r.build)
+	r.in.Drop.SetDrop(DropText, []byte("late"), 80, 80, 1, true)
+	r.in.Drop.Target = side
+	r.frame(r.build)
+	if r.listSig.Dropped || r.sideSig.Dropped || r.c.Drop().Kind != 0 {
+		t.Errorf("a drop for a vanished target was delivered: %+v %+v %+v", r.listSig, r.sideSig, r.c.Drop())
+	}
+
+	// Disabled in the meantime, or under a modal: discarded too.
+	r.hideSideBox = false
+	r.settle()
+	r.disableCard = true
+	r.frame(r.build)
+	r.in.Drop.SetDrop(DropFiles, []byte("/c\x00"), 80, 80, 1, true)
+	r.in.Drop.Target = card
+	r.frame(r.build)
+	if r.cardSig.Dropped || r.c.Drop().Kind != 0 {
+		t.Errorf("a drop for a disabled target was delivered: %+v", r.cardSig)
+	}
+	r.disableCard = false
+	r.settle()
+	r.modal = true
+	r.settle()
+	r.in.Drop.SetDrop(DropFiles, []byte("/d\x00"), 80, 80, 1, true)
+	r.in.Drop.Target = card
+	r.frame(r.build)
+	if r.cardSig.Dropped || r.c.Drop().Kind != 0 {
+		t.Errorf("a drop for a target under a modal was delivered: %+v", r.cardSig)
+	}
+}
+
+func TestSetDropRefusesMoreThanItKeeps(t *testing.T) {
+	var in Input
+	in.Drop.SetDrop(DropText, make([]byte, MaxKeptPaste+1), 1, 1, 1, true)
+	if !in.Drop.Has || !in.Drop.Failed || len(in.Drop.Data) != 0 || cap(in.Drop.Data) > MaxKeptPaste {
+		t.Errorf("an oversized drop: failed %v, %d bytes", in.Drop.Failed, len(in.Drop.Data))
+	}
+	in.ClearFrame()
+	in.Drop.SetDrop(DropText, make([]byte, MaxKeptPaste), 1, 1, 1, true)
+	if in.Drop.Failed || len(in.Drop.Data) != MaxKeptPaste {
+		t.Errorf("a drop of exactly the limit: failed %v, %d bytes", in.Drop.Failed, len(in.Drop.Data))
+	}
+}
+
 func TestDropAtBetweenFrames(t *testing.T) {
 	r := newDropRig(t)
 	// What the platform handler asks, with no frame in between.
-	if op, accept := r.c.DropAt(80, 80, DropFiles, DropAllOps); op != DropCopy || accept != DropFiles {
+	if op, accept, _ := r.c.DropAt(80, 80, DropFiles, DropAllOps); op != DropCopy || accept != DropFiles {
 		t.Errorf("card: %v %v", op, accept)
 	}
-	if op, accept := r.c.DropAt(80, 80, DropImage, DropAllOps); op != DropCopy || accept != DropAny {
+	if op, accept, _ := r.c.DropAt(80, 80, DropImage, DropAllOps); op != DropCopy || accept != DropAny {
 		t.Errorf("image over the card falls to the list: %v %v", op, accept)
 	}
-	if op, accept := r.c.DropAt(80, 80, DropFiles, DropMove); op != DropNone || accept != DropFiles {
+	if op, accept, _ := r.c.DropAt(80, 80, DropFiles, DropMove); op != DropNone || accept != DropFiles {
 		// the card copies only: nothing to answer a move-only source
 		t.Errorf("move-only source: %v %v", op, accept)
 	}
-	if op, accept := r.c.DropAt(390, 290, DropAny, DropAllOps); op != DropNone || accept != 0 {
+	if op, accept, _ := r.c.DropAt(390, 290, DropAny, DropAllOps); op != DropNone || accept != 0 {
 		t.Errorf("outside: %v %v", op, accept)
 	}
 	if k := r.c.DropKinds(); k != DropAny {
@@ -217,7 +328,7 @@ func TestDropAtBetweenFrames(t *testing.T) {
 	if k := r.c.DropKinds(); k != 0 {
 		t.Errorf("kinds after a frame with no targets: %v", k)
 	}
-	if op, _ := r.c.DropAt(80, 80, DropFiles, DropAllOps); op != DropNone {
+	if op, _, _ := r.c.DropAt(80, 80, DropFiles, DropAllOps); op != DropNone {
 		t.Errorf("stale target answered %v", op)
 	}
 }

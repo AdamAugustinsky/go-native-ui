@@ -21,16 +21,21 @@ import (
 // popup, a hidden box or outside a clip is not found. Declared boxes need no
 // hit flags, and a disabled one takes nothing.
 //
-// A drop is delivered to the box that was the target at the pointer:
-// DropSignal(id).Dropped is true for one frame, and Context.Drop returns the
-// data (valid for that frame). The data is bounded like a paste
+// A drop is delivered to the box that was the target at the pointer when the
+// drop was accepted (its key goes with the drop: data that arrives later, an
+// image that needed converting, still goes to that box, and to no other; if
+// the box is gone by then, the drop is discarded): DropSignal(id).Dropped is
+// true for one frame, and Context.Drop returns the data (valid for that
+// frame). A box reports Over or Dropped only if it declared AcceptDrop in the
+// frame that asks and is still eligible (not disabled, hidden or under a
+// modal). The data is bounded like a paste
 // (MaxKeptPaste) and kept in the Input between frames without allocating once
 // its storage has grown.
 //
 // Drag out. StartDrag is called from a box's build once DragExceeded says the
 // press became a drag (the system's drag threshold). The app takes the
-// request after the frame (TakeDragStart) and starts the system drag, with a
-// snapshot of the box as its picture unless the spec has one. The system
+// request after the frame (TakeDragStart) and starts the system drag, with the
+// spec's picture, or else the system's icon for the first item. The system
 // takes the mouse then, so the press is cancelled: no Released, Clicked or
 // DoubleClicked follows. DragEnd tells when the drag is over and what was done.
 //
@@ -122,6 +127,9 @@ type DropInput struct {
 	X, Y   float32
 	Items  int
 	Data   []byte
+	// Target is the key of the box that accepted the drop (DropAt's answer);
+	// zero: the box under X, Y. Set it after SetDrop.
+	Target Key
 	// Ended: the drag this app started ended this frame, with operation
 	// EndOp (DropNone: cancelled); set it with EndDrag.
 	Ended bool
@@ -138,10 +146,11 @@ func (d *DropInput) ClearDragOver() { d.Drag = DragState{} }
 
 // SetDrop records a drop, which ends the drag over the window. The data is
 // copied into Data, reusing its capacity; ok false is a drop whose data could
-// not be read.
+// not be read. Data over MaxKeptPaste is no drop's data: the drop fails, empty.
 func (d *DropInput) SetDrop(kind DropKinds, b []byte, x, y float32, items int, ok bool) {
 	d.Drag = DragState{}
-	d.Has, d.Failed, d.Kind, d.X, d.Y, d.Items = true, !ok, kind, x, y, items
+	ok = ok && len(b) <= MaxKeptPaste
+	d.Has, d.Failed, d.Kind, d.X, d.Y, d.Items, d.Target = true, !ok, kind, x, y, items, 0
 	if !ok {
 		d.Data = d.Data[:0]
 		return
@@ -154,7 +163,7 @@ func (d *DropInput) EndDrag(op DropOp) { d.Ended, d.EndOp = true, op }
 
 // clearFrame clears the per-frame parts (ClearFrame).
 func (d *DropInput) clearFrame() {
-	d.Has, d.Failed, d.Ended = false, false, false
+	d.Has, d.Failed, d.Ended, d.Target = false, false, false, 0
 	if cap(d.Data) > MaxKeptPaste { // do not hold on to more than a supported drop
 		d.Data = nil
 	}
@@ -231,7 +240,9 @@ type DragSpec struct {
 	// Ops are the operations the source allows; zero is copy.
 	Ops DropOp
 	// Preview is a PNG picture dragged along with the pointer; nil makes the
-	// app use a snapshot of the box. Its pixels are at the window's scale.
+	// system draw the icon of the first item (a file's icon, a text clipping,
+	// the image itself, the icon of a promised file's type). Its pixels are
+	// at the window's scale.
 	Preview []byte
 }
 
@@ -313,15 +324,16 @@ func (c *Context) DropKinds() DropKinds {
 // DropAt is the answer to a drag over the window at (x, y), pixels from the
 // top left, that offers the kinds in offered and whose source allows the
 // operations in allowed: the topmost target of the last finished frame that
-// takes any of the kinds. Op is DropNone, with no Accept, when there is none.
-// It is what the platform's drag handler calls; between frames, allocation
-// free.
-func (c *Context) DropAt(x, y float32, offered DropKinds, allowed DropOp) (op DropOp, accept DropKinds) {
+// takes any of the kinds. Op is DropNone, with no accept and no target, when
+// there is none; target is the key of the box, which goes with the drop
+// (DropInput.Target). It is what the platform's drag handler calls; between
+// frames, allocation free.
+func (c *Context) DropAt(x, y float32, offered DropKinds, allowed DropOp) (op DropOp, accept DropKinds, target Key) {
 	r := c.dropFind(x, y, offered, false)
 	if r == nil {
-		return DropNone, 0
+		return DropNone, 0, 0
 	}
-	return platform.Pick(r.ops, allowed), r.kinds
+	return platform.Pick(r.ops, allowed), r.kinds, r.key
 }
 
 // dropFind finds the topmost target at (x, y) that takes one of the kinds
@@ -346,10 +358,10 @@ func (c *Context) dropFind(x, y float32, offered DropKinds, atBegin bool) *dropR
 		if r.kinds&offered == 0 || int(r.id) >= len(c.boxes) {
 			continue
 		}
-		b := &c.boxes[r.id]
-		if b.key != r.key || b.flags&Disabled != 0 || c.hiddenByLayout(r.id) {
+		if !c.dropUsable(r) {
 			continue
 		}
+		b := &c.boxes[r.id]
 		if cr := c.clippedRect(r.id); x < cr[0] || x >= cr[2] || y < cr[1] || y >= cr[3] {
 			continue
 		}
@@ -363,6 +375,16 @@ func (c *Context) dropFind(x, y float32, offered DropKinds, atBegin bool) *dropR
 		}
 	}
 	return best
+}
+
+// dropUsable: the box of r is still the one that declared it, and takes no
+// drag if it is disabled or hidden.
+func (c *Context) dropUsable(r *dropRec) bool {
+	if int(r.id) >= len(c.boxes) {
+		return false
+	}
+	b := &c.boxes[r.id]
+	return b.key == r.key && b.flags&Disabled == 0 && !c.hiddenByLayout(r.id)
 }
 
 // dropCovered reports whether an overlay above layer ovl (0: the main tree,
@@ -393,7 +415,15 @@ func (c *Context) dropBegin() {
 	}
 	switch {
 	case in.Has:
-		if r := c.dropFind(in.X, in.Y, in.Kind, true); r != nil {
+		// The target that accepted the drop gets it (a drop that waited for
+		// its data has the key); with none named, the box at the position.
+		var r *dropRec
+		if in.Target != 0 {
+			r = c.dropTarget(in.Target, in.Kind)
+		} else {
+			r = c.dropFind(in.X, in.Y, in.Kind, true)
+		}
+		if r != nil {
 			d.hit = r.key
 			d.hitPos = c.dropRel(r, in.X, in.Y)
 			d.data = DropData{Kind: in.Kind, Data: in.Data, Failed: in.Failed, Items: in.Items, Pos: [2]float32{in.X, in.Y}}
@@ -404,6 +434,33 @@ func (c *Context) dropBegin() {
 			d.overPos = c.dropRel(r, in.Drag.X, in.Drag.Y)
 		}
 	}
+}
+
+// dropTarget finds the target with the key among those of the finished frame,
+// if it still takes one of the kinds and no modal covers it: nil when it is
+// gone.
+func (c *Context) dropTarget(key Key, kind DropKinds) *dropRec {
+	d := &c.drop
+	if d.stamp != c.frame-1 || c.root == 0 {
+		return nil
+	}
+	for i := range d.recs {
+		r := &d.recs[i]
+		if r.key == key && r.kinds&kind != 0 && c.dropUsable(r) && !dropModal(&c.ovPrev, c.nOvPrev, c.boxes[r.id].ovl) {
+			return r
+		}
+	}
+	return nil
+}
+
+// dropModal reports whether a modal overlay is above layer ovl.
+func dropModal(ovs *[maxOverlays]overlay, n int, ovl uint8) bool {
+	for i := int(ovl); i < n; i++ {
+		if ovs[i].kind == OverlayModal {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Context) dropRel(r *dropRec, x, y float32) [2]float32 {
@@ -420,6 +477,9 @@ func (c *Context) DropSignal(id ID) DropSignal {
 		return s
 	}
 	k := c.boxes[id].key
+	if k != d.over && k != d.hit || !c.dropEligible(id, k) {
+		return s
+	}
 	switch k {
 	case d.over:
 		s = DropSignal{Over: true, Op: d.overOp, Offered: d.overOffered, Pos: d.overPos}
@@ -427,6 +487,22 @@ func (c *Context) DropSignal(id ID) DropSignal {
 		s = DropSignal{Dropped: true, Pos: d.hitPos}
 	}
 	return s
+}
+
+// dropEligible: box id declared AcceptDrop in this frame, and is not disabled,
+// hidden or under a modal (that of the last frame, or one already built in
+// this).
+func (c *Context) dropEligible(id ID, key Key) bool {
+	d := &c.drop
+	if d.stamp != c.frame {
+		return false
+	}
+	for i := range d.recs {
+		if r := &d.recs[i]; r.id == id && r.key == key {
+			return c.dropUsable(r) && !dropModal(&c.ovPrev, c.nOvPrev, c.boxes[id].ovl) && !dropModal(&c.ovs, c.nOvs, c.boxes[id].ovl)
+		}
+	}
+	return false
 }
 
 // Drop is the data of the drop of this frame (see DropSignal.Dropped). It is
