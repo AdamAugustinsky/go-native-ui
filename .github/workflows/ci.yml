@@ -135,17 +135,6 @@ jobs:
         run: |
           go vet -tags gnui_publicapi $(go list ./... | grep -v -E "$PKGS_EXCLUDE")
           go test -tags gnui_publicapi -count=1 ./platform ./app
-      - name: vet the F3 tests (gnui_f3)
-        # The widgettest flows that need F3's application events sit behind the
-        # gnui_f3 tag until F3 is on main. This vets them as soon as
-        # platform.AppEvent exists, so the merge that brings F3 cannot leave
-        # them uncompiled; taking the tag off is part of that merge.
-        run: |
-          if grep -rq '^type AppEvent ' platform/; then
-            go vet -tags gnui_f3 ./widget/widgettest/...
-          else
-            echo "F3 (platform.AppEvent) is not on this branch: the gnui_f3 tests are not vetted yet"
-          fi
       - name: test internal/ffi and clib (amd64 under Rosetta)
         run: |
           softwareupdate --install-rosetta --agree-to-license >/dev/null 2>&1 || true
@@ -183,6 +172,14 @@ jobs:
           ./bin/gallery -o gallery-macos.png -o-dark gallery-macos-dark.png
           ./bin/gallery -bench -gate -allow-unpaced -timeout 150s | tee gallery-macos.json
           { echo '```json'; cat gallery-macos.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: gallery with the debug overlay on (windowed bench with the allocation gate)
+        if: ${{ !cancelled() }}
+        run: |
+          GNUI_DEBUG=overlay ./bin/gallery -bench -gate -allow-unpaced -timeout 150s | tee gallery-overlay-macos.json
+          { echo '```json'; cat gallery-overlay-macos.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: a release build has no debug chord, menu or inspector panel (gnui_release)
+        if: ${{ !cancelled() }}
+        run: go test -tags gnui_release ./app -run 'Release' -count=1
       - name: notes example (windowed bench with the allocation gate)
         if: ${{ !cancelled() }}
         run: |

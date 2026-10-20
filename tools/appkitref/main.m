@@ -8,6 +8,7 @@
 //	AppKitRef -o DIR [-AppleAccentColor 4]   render + measure into DIR
 //	AppKitRef -sheet MANIFEST.json OUT.png   compose a side-by-side sheet
 //	AppKitRef -live NAMES.txt [-mode dark]   show samples in a window briefly
+//	AppKitRef -machine FILE                  write where this runs (alone, or beside the others)
 //
 // Except with -live it never shows a window: the activation policy is
 // Prohibited, and every window it makes is created deferred and never ordered
@@ -15,8 +16,10 @@
 // state is simulated (see ARWindow) because an app that is never active has no
 // key window; each sample says which state it was drawn in.
 #import <AppKit/AppKit.h>
+#import <objc/runtime.h>
 #import <CoreText/CoreText.h>
 #include <math.h>
+#import "machine.h"
 
 #pragma mark - Simulated key/main window state
 
@@ -414,6 +417,11 @@ static NSImage *sym(NSString *n) { return [NSImage imageWithSystemSymbolName:n a
 // listScrollers is the scroller style of the lists' scroll views: overlay in
 // the offscreen renders (AppKit's at rest, hidden), the system's in -live.
 static BOOL gLiveLists;
+static BOOL gFlash; // -live -flash: overlay scrollers are flashed again and again, so that a capture shows their knobs
+static void flashScrollViews(NSView *v) {
+	if ([v isKindOfClass:NSScrollView.class]) [(NSScrollView *)v flashScrollers];
+	for (NSView *sub in v.subviews) flashScrollViews(sub);
+}
 static NSScrollerStyle listScrollers(void) { return gLiveLists ? NSScroller.preferredScrollerStyle : NSScrollerStyleOverlay; }
 
 static NSScrollView *tableIn(NSTableViewStyle style, BOOL alternating, NSSize size, BOOL emph, BOOL fit) {
@@ -529,6 +537,150 @@ static NSScrollView *textScroll(NSScrollerStyle st, NSSize size, BOOL lines) {
 	tv.selectedRange = NSMakeRange(10, 40);
 	sv.documentView = tv;
 	return sv;
+}
+
+#pragma mark - D3b: forms and sheets
+
+// layouts are the frames of a sample's named subviews, in points from the
+// sample's top left, written to metrics.json as "layouts"; rexui's form test
+// compares our rows with them. sheets holds the sheet-style panel's numbers.
+static NSMutableDictionary *d3bLayouts;
+
+static void d3bRecord(NSString *sample, NSView *root, NSDictionary<NSString *, NSView *> *named) {
+	if (!d3bLayouts) d3bLayouts = [NSMutableDictionary dictionary];
+	[root layoutSubtreeIfNeeded];
+	NSMutableDictionary *out = [NSMutableDictionary dictionary];
+	for (NSString *k in named) {
+		NSView *v = named[k];
+		NSRect r = [root convertRect:v.bounds fromView:v];
+		CGFloat y = root.isFlipped ? r.origin.y : root.bounds.size.height - NSMaxY(r);
+		out[k] = @{@"x" : num(r.origin.x), @"y" : num(y), @"w" : num(r.size.width), @"h" : num(r.size.height)};
+	}
+	d3bLayouts[sample] = out;
+}
+
+// a settings row as tools/appkitscenes lays it out (liquid-glass-reference.md):
+// 40 pt at least, the label 10 pt from the leading edge, the control 10 from
+// the trailing one, 12 pt at least between them.
+static NSView *d3bFormRow(NSString *title, NSView *control, NSTextField **labelOut) {
+	NSView *row = [NSView new];
+	NSTextField *t = [NSTextField labelWithString:title];
+	t.translatesAutoresizingMaskIntoConstraints = NO;
+	[row addSubview:t];
+	control.translatesAutoresizingMaskIntoConstraints = NO;
+	[row addSubview:control];
+	[NSLayoutConstraint activateConstraints:@[
+		[row.heightAnchor constraintGreaterThanOrEqualToConstant:40], [t.leadingAnchor constraintEqualToAnchor:row.leadingAnchor constant:10],
+		[t.centerYAnchor constraintEqualToAnchor:row.centerYAnchor], [control.trailingAnchor constraintEqualToAnchor:row.trailingAnchor constant:-10],
+		[control.centerYAnchor constraintEqualToAnchor:row.centerYAnchor], [t.trailingAnchor constraintLessThanOrEqualToAnchor:control.leadingAnchor constant:-12]
+	]];
+	if (labelOut) *labelOut = t;
+	return row;
+}
+
+static void defineFormSamples(void) {
+	// a grouped form section: an NSBox (primary, no title) of rows with NSBox
+	// separators, as System Settings draws it
+	Sample *fg = add(@"form", @"form-group", ^{
+		NSBox *box = [NSBox new];
+		box.boxType = NSBoxPrimary;
+		box.titlePosition = NSNoTitle;
+		box.contentViewMargins = NSZeroSize;
+		NSStackView *st = [NSStackView new];
+		st.orientation = NSUserInterfaceLayoutOrientationVertical;
+		st.spacing = 0;
+		st.alignment = NSLayoutAttributeWidth;
+		NSPopUpButton *pop = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
+		[pop addItemsWithTitles:@[ @"Auto", @"Light", @"Dark" ]];
+		NSSwitch *sw = [NSSwitch new];
+		sw.state = NSControlStateValueOn;
+		NSSlider *sl = [NSSlider sliderWithValue:0.4 minValue:0 maxValue:1 target:nil action:nil];
+		[sl.widthAnchor constraintEqualToConstant:120].active = YES;
+		NSTextField *l0, *l1, *l2;
+		NSView *r0 = d3bFormRow(@"Appearance", pop, &l0), *r1 = d3bFormRow(@"Wi-Fi", sw, &l1), *r2 = d3bFormRow(@"Brightness", sl, &l2);
+		NSMutableArray *seps = [NSMutableArray array];
+		NSArray *rows = @[ r0, r1, r2 ];
+		for (NSUInteger i = 0; i < rows.count; i++) {
+			if (i > 0) {
+				NSBox *sep = [NSBox new];
+				sep.boxType = NSBoxSeparator;
+				[st addArrangedSubview:sep];
+				[seps addObject:sep];
+			}
+			[st addArrangedSubview:rows[i]];
+		}
+		box.contentView = st;
+		[box.widthAnchor constraintEqualToConstant:360].active = YES;
+		keep = keep ?: [NSMutableArray array];
+		box.identifier = @"form-group";
+		// the frames are read once the sample is laid out (renderSample calls after)
+		d3bLayouts = d3bLayouts ?: [NSMutableDictionary dictionary];
+		objc_setAssociatedObject(box, "d3b", @{@"rows" : rows, @"labels" : @[ l0, l1, l2 ], @"controls" : @[ pop, sw, sl ], @"seps" : seps}, OBJC_ASSOCIATION_RETAIN);
+		return box;
+	});
+	fg.size = NSMakeSize(360, 0);
+	fg.after = ^(NSView *v, NSWindow *w) {
+		NSDictionary *d = objc_getAssociatedObject(v, "d3b");
+		NSMutableDictionary *named = [NSMutableDictionary dictionary];
+		[v setFrameSize:NSMakeSize(360, v.fittingSize.height)];
+		[v layoutSubtreeIfNeeded];
+		for (NSUInteger i = 0; i < 3; i++) {
+			named[[NSString stringWithFormat:@"row%lu", (unsigned long)i]] = d[@"rows"][i];
+			named[[NSString stringWithFormat:@"label%lu", (unsigned long)i]] = d[@"labels"][i];
+			named[[NSString stringWithFormat:@"control%lu", (unsigned long)i]] = d[@"controls"][i];
+		}
+		NSArray *seps = d[@"seps"];
+		for (NSUInteger i = 0; i < seps.count; i++) named[[NSString stringWithFormat:@"separator%lu", (unsigned long)i]] = [seps[i] subviews].firstObject ?: seps[i];
+		named[@"box"] = v;
+		d3bRecord(@"form-group", v, named);
+	};
+
+	// a two-column form as NSGridView lays it out: the labels trailing-aligned
+	// in a column of their own, the controls leading-aligned, with the grid's
+	// default spacing
+	Sample *gf = add(@"form", @"form-grid", ^{
+		NSTextField *name = [NSTextField textFieldWithString:@""], *email = [NSTextField textFieldWithString:@""];
+		for (NSTextField *f in @[ name, email ]) [f.widthAnchor constraintEqualToConstant:200].active = YES;
+		NSButton *chk = [NSButton checkboxWithTitle:@"Send me updates" target:nil action:nil];
+		NSTextField *ln = [NSTextField labelWithString:@"Name:"], *le = [NSTextField labelWithString:@"Email address:"];
+		NSGridView *gv = [NSGridView gridViewWithViews:@[ @[ ln, name ], @[ le, email ], @[ [NSTextField labelWithString:@"Notifications:"], chk ] ]];
+		gv.columnSpacing = gv.columnSpacing; // keep the grid's default
+		[gv columnAtIndex:0].xPlacement = NSGridCellPlacementTrailing;
+		[gv columnAtIndex:1].xPlacement = NSGridCellPlacementLeading;
+		gv.rowAlignment = NSGridRowAlignmentFirstBaseline;
+		objc_setAssociatedObject(gv, "d3b", @{@"cells" : @[ ln, name, le, email, [gv cellAtColumnIndex:0 rowIndex:2].contentView, chk ]}, OBJC_ASSOCIATION_RETAIN);
+		return gv;
+	});
+	gf.noShape = YES;
+	gf.after = ^(NSView *v, NSWindow *w) {
+		NSGridView *gv = (NSGridView *)v;
+		[v setFrameSize:v.fittingSize];
+		[v layoutSubtreeIfNeeded];
+		NSArray *c = objc_getAssociatedObject(v, "d3b")[@"cells"];
+		d3bRecord(@"form-grid", v, @{@"label0" : c[0], @"field0" : c[1], @"label1" : c[2], @"field1" : c[3], @"label2" : c[4], @"check2" : c[5], @"grid" : v});
+		d3bLayouts[@"form-grid"] = [d3bLayouts[@"form-grid"] mutableCopy];
+		((NSMutableDictionary *)d3bLayouts[@"form-grid"])[@"spacing"] = @{@"row" : num(gv.rowSpacing), @"column" : num(gv.columnSpacing)};
+	};
+}
+
+// sheetTable records what offscreen AppKit says of sheets: the corner radius
+// of an alert's panel (a glass content frame) and of a plain titled window
+// attached as a sheet, and the alert's frame. Windows are never shown.
+static NSDictionary *sheetTable(void) {
+	SEL cr = NSSelectorFromString(@"_cornerRadius");
+	CGFloat (*rad)(id, SEL) = (void *)[NSWindow instanceMethodForSelector:cr];
+	NSMutableDictionary *out = [NSMutableDictionary dictionary];
+	NSAlert *a = [NSAlert new];
+	a.messageText = @"Sheet";
+	[a addButtonWithTitle:@"OK"];
+	[a layout];
+	out[@"alertPanelCornerRadius"] = num(rad(a.window, cr));
+	out[@"alertPanelClass"] = NSStringFromClass(a.window.class);
+	out[@"alertPanelContentFrameClass"] = NSStringFromClass(a.window.contentView.superview.class);
+	NSPanel *plain = [[NSPanel alloc] initWithContentRect:NSMakeRect(0, 0, 420, 200) styleMask:NSWindowStyleMaskTitled backing:NSBackingStoreBuffered defer:YES];
+	out[@"plainTitledPanelCornerRadius"] = num(rad(plain, cr));
+	[plain close];
+	return out;
 }
 
 static void defineSamples(void) {
@@ -667,6 +819,9 @@ static void defineSamples(void) {
 		{@"checkbox-on-focused", NSControlStateValueOn, YES, YES, NO, NSControlSizeRegular},
 		{@"checkbox-on-small", NSControlStateValueOn, YES, NO, NO, NSControlSizeSmall},
 		{@"checkbox-on-large", NSControlStateValueOn, YES, NO, NO, NSControlSizeLarge},
+		{@"checkbox-on-inactive", NSControlStateValueOn, YES, NO, NO, NSControlSizeRegular},
+		{@"checkbox-mixed-inactive", NSControlStateValueMixed, YES, NO, NO, NSControlSizeRegular},
+		{@"checkbox-off-inactive", NSControlStateValueOff, YES, NO, NO, NSControlSizeRegular},
 	};
 	for (size_t i = 0; i < sizeof checks / sizeof checks[0]; i++) {
 		__auto_type c = checks[i];
@@ -680,6 +835,7 @@ static void defineSamples(void) {
 			return b;
 		});
 		s.focus = c.focus, s.pressed = c.pressed, s.probe = 4;
+		s.inactive = [c.n hasSuffix:@"-inactive"];
 	}
 	struct {
 		NSString *n;
@@ -690,6 +846,7 @@ static void defineSamples(void) {
 		{@"radio-on", NSControlStateValueOn, YES, NO},
 		{@"radio-on-disabled", NSControlStateValueOn, NO, NO},
 		{@"radio-on-focused", NSControlStateValueOn, YES, YES},
+		{@"radio-on-inactive", NSControlStateValueOn, YES, NO},
 	};
 	for (size_t i = 0; i < sizeof radios / sizeof radios[0]; i++) {
 		__auto_type c = radios[i];
@@ -700,6 +857,7 @@ static void defineSamples(void) {
 			return b;
 		});
 		s.focus = c.focus, s.probe = 4;
+		s.inactive = [c.n hasSuffix:@"-inactive"];
 	}
 	struct {
 		NSString *n;
@@ -714,6 +872,8 @@ static void defineSamples(void) {
 		{@"switch-on-small", NSControlStateValueOn, YES, NO, NSControlSizeSmall},
 		{@"switch-on-mini", NSControlStateValueOn, YES, NO, NSControlSizeMini},
 		{@"switch-on-large", NSControlStateValueOn, YES, NO, NSControlSizeLarge},
+		{@"switch-on-inactive", NSControlStateValueOn, YES, NO, NSControlSizeRegular},
+		{@"switch-off-inactive", NSControlStateValueOff, YES, NO, NSControlSizeRegular},
 	};
 	for (size_t i = 0; i < sizeof switches / sizeof switches[0]; i++) {
 		__auto_type c = switches[i];
@@ -725,6 +885,7 @@ static void defineSamples(void) {
 			return w;
 		});
 		s.focus = c.focus;
+		s.inactive = [c.n hasSuffix:@"-inactive"];
 	}
 
 	// menus and selection
@@ -767,6 +928,11 @@ static void defineSamples(void) {
 		s.selectedSegment = 0;
 		return s;
 	});
+	add(@"select", @"segmented-inactive", ^{
+		NSSegmentedControl *s = [NSSegmentedControl segmentedControlWithLabels:@[ @"One", @"Two", @"Three" ] trackingMode:NSSegmentSwitchTrackingSelectOne target:nil action:nil];
+		s.selectedSegment = 0;
+		return s;
+	}).inactive = YES;
 	add(@"select", @"segmented-small", ^{
 		NSSegmentedControl *s = [NSSegmentedControl segmentedControlWithLabels:@[ @"One", @"Two", @"Three" ] trackingMode:NSSegmentSwitchTrackingSelectOne target:nil action:nil];
 		s.controlSize = NSControlSizeSmall;
@@ -801,6 +967,7 @@ static void defineSamples(void) {
 		{@"slider-small", 0, YES, NO, NSControlSizeSmall},
 		{@"slider-disabled", 0, NO, NO, NSControlSizeRegular},
 		{@"slider-focused", 0, YES, YES, NSControlSizeRegular},
+		{@"slider-inactive", 0, YES, NO, NSControlSizeRegular},
 	};
 	for (size_t i = 0; i < sizeof sliders / sizeof sliders[0]; i++) {
 		__auto_type c = sliders[i];
@@ -812,14 +979,30 @@ static void defineSamples(void) {
 			return sl;
 		});
 		s.size = NSMakeSize(200, 0), s.focus = c.focus;
+		s.inactive = [c.n hasSuffix:@"-inactive"];
 	}
 	add(@"select", @"stepper", ^{
 		NSStepper *st = [NSStepper new];
 		return st;
 	});
+	add(@"select", @"stepper-inactive", ^{
+		NSStepper *st = [NSStepper new];
+		return st;
+	}).inactive = YES;
 	add(@"select", @"color-well", ^{
 		NSColorWell *w = [NSColorWell colorWellWithStyle:NSColorWellStyleDefault];
 		w.color = NSColor.systemTealColor;
+		return w;
+	});
+	add(@"select", @"color-well-swatch", ^{ // the swatch of "color-well"
+		NSColorWell *w = [NSColorWell colorWellWithStyle:NSColorWellStyleDefault];
+		w.color = NSColor.systemTealColor;
+		return w;
+	});
+	add(@"select", @"color-well-disabled", ^{
+		NSColorWell *w = [NSColorWell colorWellWithStyle:NSColorWellStyleDefault];
+		w.color = NSColor.systemTealColor;
+		w.enabled = NO;
 		return w;
 	});
 	add(@"select", @"date-picker", ^{
@@ -883,6 +1066,43 @@ static void defineSamples(void) {
 	add(@"field", @"textview", ^{
 		return textScroll(NSScrollerStyleOverlay, NSMakeSize(320, 110), NO);
 	}).size = NSMakeSize(320, 110);
+
+	// D7a: the states of the combo box, token field and colour well that
+	// rexui's samples (rexui/catalog/d7a.go) are set against, each under its
+	// own name; the "-chip", "-button" and "-swatch" ones are the same control
+	// as "token", "combo" and "color-well", measured at the part they name.
+	struct {
+		NSString *n;
+		BOOL token, en, focus;
+	} d7a[] = {
+		{@"combo-focused", NO, YES, YES},
+		{@"combo-disabled", NO, NO, NO},
+		{@"combo-button", NO, YES, NO},
+		{@"token-focused", YES, YES, YES},
+		{@"token-disabled", YES, NO, NO},
+		{@"token-chip", YES, YES, NO},
+	};
+	for (size_t i = 0; i < sizeof d7a / sizeof d7a[0]; i++) {
+		__auto_type c = d7a[i];
+		Sample *s = add(@"field", c.n, ^NSView * {
+			NSTextField *f;
+			if (c.token) {
+				NSTokenField *t = [NSTokenField new];
+				t.objectValue = @[ @"Alpha", @"Beta" ];
+				f = t;
+			} else {
+				NSComboBox *cb = [NSComboBox new];
+				[cb addItemsWithObjectValues:@[ @"Combo", @"Other" ]];
+				cb.stringValue = @"Combo";
+				f = cb;
+			}
+			f.font = [NSFont systemFontOfSize:[NSFont systemFontSizeForControlSize:NSControlSizeRegular]];
+			f.placeholderString = @"Placeholder";
+			f.enabled = c.en;
+			return f;
+		});
+		s.size = NSMakeSize(c.token ? 200 : 160, 0), s.focus = c.focus;
+	}
 
 	// lists
 	Sample *t;
@@ -1021,6 +1241,29 @@ static void defineSamples(void) {
 		p.doubleValue = 40;
 		return p;
 	}).size = NSMakeSize(200, 0);
+	Sample *pbi = add(@"progress", @"progress-bar-inactive", ^{
+		NSProgressIndicator *p = [NSProgressIndicator new];
+		p.style = NSProgressIndicatorStyleBar;
+		p.indeterminate = NO;
+		p.doubleValue = 40;
+		return p;
+	});
+	pbi.size = NSMakeSize(200, 0), pbi.inactive = YES;
+	Sample *pii = add(@"progress", @"progress-indeterminate-inactive", ^{
+		NSProgressIndicator *p = [NSProgressIndicator new];
+		p.style = NSProgressIndicatorStyleBar;
+		p.indeterminate = YES;
+		[p startAnimation:nil];
+		return p;
+	});
+	pii.size = NSMakeSize(200, 0), pii.inactive = YES;
+	Sample *lvi = add(@"progress", @"level-inactive", ^{
+		NSLevelIndicator *l = [NSLevelIndicator new];
+		l.levelIndicatorStyle = NSLevelIndicatorStyleContinuousCapacity;
+		l.maxValue = 10, l.doubleValue = 6;
+		return l;
+	});
+	lvi.size = NSMakeSize(160, 0), lvi.inactive = YES;
 	add(@"progress", @"progress-indeterminate", ^{
 		NSProgressIndicator *p = [NSProgressIndicator new];
 		p.style = NSProgressIndicatorStyleBar;
@@ -1132,6 +1375,7 @@ static void defineSamples(void) {
 		}
 		return st;
 	}).noShape = YES;
+	defineFormSamples();
 }
 
 #pragma mark - Rendering one sample
@@ -1936,6 +2180,13 @@ static int runLive(NSString *namesPath, NSString *apName, double seconds, CGFloa
 			                                  savePNG(rep, dump);
 		                                  }];
 	}
+	if (gFlash) {
+		[NSTimer scheduledTimerWithTimeInterval:0.25
+		                                repeats:YES
+		                                  block:^(NSTimer *t) {
+			                                  flashScrollViews(root);
+		                                  }];
+	}
 	[NSTimer scheduledTimerWithTimeInterval:seconds
 	                                repeats:NO
 	                                  block:^(NSTimer *t) {
@@ -1954,17 +2205,24 @@ int main(int argc, const char **argv) {
 		[ARApp sharedApplication];
 		[NSApp setActivationPolicy:NSApplicationActivationPolicyProhibited];
 		keep = [NSMutableArray array];
-		NSString *outDir = nil, *live = nil, *liveAp = NSAppearanceNameAqua, *dump = nil;
+		NSString *outDir = nil, *live = nil, *liveAp = NSAppearanceNameAqua, *dump = nil, *machinePath = nil;
 		double seconds = 8, maxW = 1440;
 		for (int i = 1; i < argc; i++) {
 			if (!strcmp(argv[i], "-o") && i + 1 < argc) outDir = [NSString stringWithUTF8String:argv[++i]];
 			else if (!strcmp(argv[i], "-sheet") && i + 2 < argc)
 				return pairSheet([NSString stringWithUTF8String:argv[i + 1]], [NSString stringWithUTF8String:argv[i + 2]]);
 			else if (!strcmp(argv[i], "-live") && i + 1 < argc) live = [NSString stringWithUTF8String:argv[++i]], gLiveLists = YES;
+			else if (!strcmp(argv[i], "-flash")) gFlash = YES;
 			else if (!strcmp(argv[i], "-mode") && i + 1 < argc) liveAp = strcmp(argv[++i], "dark") ? NSAppearanceNameAqua : NSAppearanceNameDarkAqua;
 			else if (!strcmp(argv[i], "-seconds") && i + 1 < argc) seconds = atof(argv[++i]);
 			else if (!strcmp(argv[i], "-width") && i + 1 < argc) maxW = atof(argv[++i]);
 			else if (!strcmp(argv[i], "-dump") && i + 1 < argc) dump = [NSString stringWithUTF8String:argv[++i]];
+			else if (!strcmp(argv[i], "-machine") && i + 1 < argc) machinePath = [NSString stringWithUTF8String:argv[++i]];
+		}
+		if (machinePath) { // where this runs, for captures that have no metrics.json of their own (live.sh)
+			NSData *m = [NSJSONSerialization dataWithJSONObject:@{@"machine" : machineInfo()} options:NSJSONWritingPrettyPrinted | NSJSONWritingSortedKeys error:nil];
+			[m writeToFile:machinePath.stringByStandardizingPath atomically:YES];
+			if (!live && !outDir) return 0;
 		}
 		if (live) return runLive(live, liveAp, seconds, maxW, dump);
 		if (!outDir) {
@@ -2027,6 +2285,9 @@ int main(int argc, const char **argv) {
 			savePNG(flowSheet(title, cells, bg, fg, fg2, 1500), [NSString stringWithFormat:@"%@/contact-%@.png", outDir, apShort]);
 		}
 		metricsOut[@"controls"] = controls;
+		metricsOut[@"layouts"] = d3bLayouts ?: @{};
+		metricsOut[@"sheets"] = sheetTable();
+		metricsOut[@"machine"] = machineInfo(); // after the renders: it spins the run loop (machine.h)
 		NSData *js = [NSJSONSerialization dataWithJSONObject:metricsOut options:NSJSONWritingPrettyPrinted | NSJSONWritingSortedKeys error:nil];
 		[js writeToFile:[outDir stringByAppendingPathComponent:@"metrics.json"] atomically:YES];
 		printf("%lu samples x 2 appearances -> %s\n", (unsigned long)samples.count, outDir.UTF8String);

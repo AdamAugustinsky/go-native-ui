@@ -398,7 +398,7 @@ func TestListFollowsScrollerStyle(t *testing.T) {
 			if q.Mode != gpu.ModeShape || q.Color[0]&0xFF == 0 {
 				continue
 			}
-			if c := q.Color[0] >> 8; c == r.Pal.ScrollThumb>>8 || c == rexui.ListLook.LegacyKnob.RGBA(r)>>8 {
+			if c := q.Color[0] >> 8; c == rexui.ListLook.OverlayKnob.RGBA(r)>>8 || c == rexui.ListLook.LegacyKnob.RGBA(r)>>8 {
 				bar = true
 			}
 		}
@@ -611,6 +611,56 @@ func TestOutlineCollapseReportsTheSelectionChange(t *testing.T) {
 		}
 		if !v.changed {
 			t.Fatalf("%s: the selection changed, and Changed never said so", how)
+		}
+	}
+}
+
+// A list's scroll knob is AppKit's, in both scroller styles and both modes:
+// the legacy knob over its slot over the list's background, and the overlay
+// knob, drawn while the view scrolls, over the background (measured live,
+// macOS 27.2 26B5101f: legacy #7A7A7A on white and #9F9F9F on #1E1E1E,
+// overlay #808080 and #9A9A9A).
+func TestListScrollKnobMatchesAppKit(t *testing.T) {
+	for _, tc := range []struct {
+		mode   theme.Mode
+		legacy bool
+		want   uint32
+	}{
+		{theme.Light, true, 0x7A7A7A}, {theme.Dark, true, 0x9F9F9F},
+		{theme.Light, false, 0x808080}, {theme.Dark, false, 0x9A9A9A},
+	} {
+		v := &listView{n: 40, style: rexui.ListFullWidth}
+		v.st.Sel.Reserve(v.n)
+		sys := &theme.SystemValues{Known: true}
+		if tc.legacy {
+			sys.Settings.Scroller = theme.ScrollerLegacy
+		}
+		g := newRig(t, tc.mode, sys, v.build)
+		g.in.MouseX, g.in.MouseY = 200, 200
+		g.in.AddScroll(0, -3, true)
+		g.frame()
+		g.frame()
+		r := g.k.Theme()
+		bg := r.Colors[theme.ControlBackground]
+		var knob, under uint32
+		if tc.legacy {
+			knob = rexui.ListLook.LegacyKnob.RGBA(r)
+			under = theme.Over(rexui.ListLook.LegacySlot.RGBA(r), bg)
+		} else {
+			knob, under = rexui.ListLook.OverlayKnob.RGBA(r), bg
+		}
+		drawn := false
+		for _, q := range g.list.Quads {
+			drawn = drawn || q.Mode == gpu.ModeShape && q.Color[0] == knob
+		}
+		if !drawn {
+			t.Fatalf("mode %v legacy %v: no knob of colour %08X in the frame", tc.mode, tc.legacy, knob)
+		}
+		got := theme.Over(knob, under) >> 8
+		for sh := uint(0); sh < 24; sh += 8 {
+			if d := int(got>>sh&0xFF) - int(tc.want>>sh&0xFF); d < -2 || d > 2 {
+				t.Fatalf("mode %v legacy %v: the knob shows #%06X, AppKit's is #%06X", tc.mode, tc.legacy, got, tc.want)
+			}
 		}
 	}
 }

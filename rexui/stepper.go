@@ -40,9 +40,12 @@ type StepperRecipe struct {
 	// Up and Down are the arrows' centrelines in points from the top left,
 	// Width their stroke's (1.45, fitted to the renders' ink); Ink colours them
 	// (labelColor, measured) and InkDisabled disables them.
-	Up, Down         Chevron
-	Width            float32
-	Ink, InkDisabled Tint
+	Up, Down Chevron
+	Width    float32
+	// InkInactive colours them in a window that is not the key window:
+	// secondaryLabelColor (#767676 over #EBEBEB, #A1A1A1 over #303030
+	// measured). The fill does not change.
+	Ink, InkDisabled, InkInactive Tint
 	// RepeatDelay and RepeatInterval are the autorepeat of a held half, in
 	// seconds: the delay before the first repeat and the time between
 	// repeats. They are the system's key repeat as AppKitRef reads it
@@ -62,7 +65,7 @@ var StepperLook = StepperRecipe{
 	DividerX: 3, DividerY: 12, DividerW: 14, DividerH: 1,
 	Up:    Chevron{A: [2]float32{4.7, 9.1}, Apex: [2]float32{9.7, 3.7}, B: [2]float32{14.7, 9.1}},
 	Down:  Chevron{A: [2]float32{4.7, 15.9}, Apex: [2]float32{9.7, 21.3}, B: [2]float32{14.7, 15.9}},
-	Width: 1.45, Ink: Of(theme.Label), InkDisabled: Of(theme.TextDisabled),
+	Width: 1.45, Ink: Of(theme.Label), InkDisabled: Of(theme.TextDisabled), InkInactive: Of(theme.Label2),
 	RepeatDelay: 0.25, RepeatInterval: 0.02,
 	FieldGap: 4, FieldWidth: 60,
 }
@@ -127,6 +130,8 @@ func Stepper(k *base.Kit, label string, v *float32, lo, hi, step float32, o Step
 	fill, ink0 := rc.Fill.RGBA(r), rc.Ink.RGBA(r)
 	if p.Disabled {
 		fill, ink0 = rc.FillDisabled.RGBA(r), rc.InkDisabled.RGBA(r)
+	} else if p.Inactive {
+		ink0 = rc.InkInactive.RGBA(r)
 	}
 	under := o.Backdrop.RGBA(r)
 	if under == 0 {

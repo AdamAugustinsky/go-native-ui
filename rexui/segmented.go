@@ -34,6 +34,10 @@ type SegmentedRecipe struct {
 	// Selected fills the chosen segment, SelectedDisabled when disabled;
 	// SelectedLabel colours its label.
 	Selected, SelectedDisabled, SelectedLabel Tint
+	// SelectedInactive replaces Selected in a window that is not the key
+	// window: labelColor at 12.8 % over the track (#CDCDCD, #4A4A4A
+	// measured), with the label in Label, as the others.
+	SelectedInactive Tint
 	// Label, LabelDisabled colour the other segments' labels; Pressed fills
 	// a pressed segment.
 	Label, LabelDisabled, Pressed Tint
@@ -49,7 +53,8 @@ type SegmentedRecipe struct {
 var SegmentedLook = SegmentedRecipe{
 	Track: Of(theme.Fill2), TrackDisabled: Of(theme.FillDisabled),
 	Selected: Of(theme.Accent), SelectedDisabled: Of(theme.Fill2), SelectedLabel: Of(theme.OnAccent),
-	Label: Of(theme.Label), LabelDisabled: Of(theme.TextDisabled), Pressed: Of(theme.FillPressed),
+	SelectedInactive: OfAlpha(theme.Label, 0.128, 0.126),
+	Label:            Of(theme.Label), LabelDisabled: Of(theme.TextDisabled), Pressed: Of(theme.FillPressed),
 	Divider: Of(theme.Label3), DividerW: 1,
 	DividerH: [theme.NumSizes]float32{theme.SizeRegular: 12, theme.SizeMini: 8, theme.SizeSmall: 10, theme.SizeLarge: 14, theme.SizeXLarge: 16},
 }
@@ -99,6 +104,8 @@ func SegmentedControl(k *base.Kit, label string, sel *int, options []string, o S
 		switch {
 		case it.On && disabled:
 			fill, lc = rc.SelectedDisabled.RGBA(r), rc.LabelDisabled.RGBA(r)
+		case it.On && it.Inactive:
+			fill = rc.SelectedInactive.RGBA(r)
 		case it.On:
 			fill, lc = rc.Selected.RGBA(r), rc.SelectedLabel.RGBA(r)
 		case disabled:

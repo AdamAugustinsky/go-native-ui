@@ -32,8 +32,10 @@ go-text's own tests and test data are not copied.
 - `font/glyphs.go`, `font/renderer.go`, `font/font.go`: `Face.GlyphDataOutline` for glyf outlines extracts into scratch storage on the `Face` (points per nesting depth, loop guard, segments), so a glyph the engine rasterizes for the first time, or at a new subpixel offset, allocates nothing once the storage has grown. The returned segments are valid until the next extraction on the same `Face`. CFF outlines still allocate. The regression test is `text/glyph_alloc_test.go`.
 - `font/opentype/tables/ot_layout.go`: `parseValueRecord` reads into a 16-element stack array. Sixteen because the size counts every format bit, reserved ones included; the regression test is `font/opentype/tables/zeroalloc_test.go`, which CI runs.
 
+`forgetface.patch` (C9, 2026-10-20) adds two methods to `harfbuzz.Buffer`, `ForgetFace` and `CachedFaces`. Upstream's plan cache keeps every face it has shaped with alive; our text engine releases a zoom level's faces (`ReleaseScale` in `text/engine.go`) and drops their plans with `ForgetFace`. `TestEngineReleaseScaleBoundsThePlanCache` checks it.
+
 ## Updating
 
 1. Copy the same package set from the new upstream version.
-2. Re-apply `zeroalloc.patch`.
+2. Re-apply `zeroalloc.patch` and `forgetface.patch`.
 3. Run `go test -tags textengine ./text/`. Its exact zero-allocation test (`TestEngineMissAllocsAreHarfbuzzsAlone`) and the reference-pipeline tests in `text/shape_test.go` must pass.

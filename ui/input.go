@@ -342,6 +342,15 @@ type Input struct {
 	PasteTag Key
 	HasPaste bool
 
+	// ColorPick is the colour (0xRRGGBBAA, sRGB) the user chose in the system
+	// colour panel, when HasColorPick, in the frame it arrives in; ColorClosed
+	// is set for the frame in which the user closed the panel (SetColorPick,
+	// SetColorClosed; Context.ColorPanel and TakeColorPick).
+	ColorPick uint32
+	// ColorFailed is set for the frame after the app found the platform has no
+	// colour panel to show (SetColorFailed).
+	HasColorPick, ColorClosed, ColorFailed bool
+
 	// MenuIndex is the option the user chose in the native list menu that
 	// the box MenuOwner requested (Context.RequestMenu), for the frame
 	// HasMenuChoice is set in, among the options identified by MenuRev
@@ -350,6 +359,11 @@ type Input struct {
 	MenuIndex     int32
 	MenuRev       uint64
 	HasMenuChoice bool
+
+	// Drop is the drag and drop part of the input: a drag from another
+	// application over the window, a drop, the end of a drag this app started
+	// (drag.go).
+	Drop DropInput
 }
 
 // PushEdit queues an edit action for the focused text field; it reports false
@@ -384,6 +398,17 @@ func (in *Input) PushAction(r SemRequest) bool {
 	in.NActions++
 	return true
 }
+
+// SetColorPick records a colour chosen in the system colour panel (0xRRGGBBAA,
+// sRGB); a later one in the same frame replaces it.
+func (in *Input) SetColorPick(rgba uint32) { in.ColorPick, in.HasColorPick = rgba, true }
+
+// SetColorFailed records that the platform could not show the colour panel
+// (it has none): the box that asked uses its own picker.
+func (in *Input) SetColorFailed() { in.ColorFailed = true }
+
+// SetColorClosed records that the user closed the system colour panel.
+func (in *Input) SetColorClosed() { in.ColorClosed = true }
 
 // SetPaste records the answer to a paste request made by the field with key
 // tag: ok is false when the clipboard had no text (nothing is delivered). The
@@ -442,24 +467,29 @@ func (in *Input) AddScroll(dx, dy float32, precise bool) {
 // two can, e is not kept and AddScrollEvent reports false (app keeps it for
 // the next frame instead).
 func (in *Input) AddScrollEvent(e ScrollEvent) bool {
-	if in.NScrolls == MaxScrolls {
+	return addScrollEvent(&in.Scrolls, &in.NScrolls, e)
+}
+
+// addScrollEvent is AddScrollEvent over any list of scroll events.
+func addScrollEvent(buf *[MaxScrolls]ScrollEvent, n *int, e ScrollEvent) bool {
+	if *n == MaxScrolls {
 		i := 0
-		for i < in.NScrolls-1 && !scrollMergeable(&in.Scrolls[i], &in.Scrolls[i+1]) {
+		for i < *n-1 && !scrollMergeable(&buf[i], &buf[i+1]) {
 			i++
 		}
-		if i == in.NScrolls-1 {
-			if !scrollMergeable(&in.Scrolls[i], &e) {
+		if i == *n-1 {
+			if !scrollMergeable(&buf[i], &e) {
 				return false
 			}
-			mergeScroll(&in.Scrolls[i], &e)
+			mergeScroll(&buf[i], &e)
 			return true
 		}
-		mergeScroll(&in.Scrolls[i], &in.Scrolls[i+1])
-		copy(in.Scrolls[i+1:in.NScrolls], in.Scrolls[i+2:in.NScrolls])
-		in.NScrolls--
+		mergeScroll(&buf[i], &buf[i+1])
+		copy(buf[i+1:*n], buf[i+2:*n])
+		*n--
 	}
-	in.Scrolls[in.NScrolls] = e
-	in.NScrolls++
+	buf[*n] = e
+	*n++
 	return true
 }
 
@@ -564,6 +594,8 @@ func (in *Input) ClearFrame() {
 	in.NEdit, in.NCommands, in.NActions, in.NGestures = 0, 0, 0, 0
 	in.HasPaste, in.HasReplace, in.ReplaceN = false, false, 0
 	in.HasMenuChoice = false
+	in.HasColorPick, in.ColorClosed, in.ColorFailed = false, false, false
+	in.Drop.clearFrame()
 	if cap(in.Paste) > MaxKeptPaste { // do not hold on to more than a supported paste
 		in.Paste = nil
 	}

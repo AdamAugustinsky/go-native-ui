@@ -34,11 +34,13 @@ type buttonsSource interface{ SystemButtons() [4]float32 }
 // It reads cached values and allocates nothing.
 func (a *App) syncWindow() {
 	if a.Win != nil { // a nil *platform.Window in the interface would not be nil
-		a.syncWindowFrom(a.Win)
+		a.syncWindowFrom(a.Win, a.buttons)
 	}
 }
 
-func (a *App) syncWindowFrom(win windowSource) {
+// syncWindowFrom is syncWindow on win; b is win's buttonsSource, nil when it
+// has none.
+func (a *App) syncWindowFrom(win windowSource, b buttonsSource) {
 	switch a.UI.TakeWindowAction() {
 	case ui.ActionClose:
 		win.RequestClose()
@@ -47,12 +49,13 @@ func (a *App) syncWindowFrom(win windowSource) {
 	case ui.ActionToggleMaximise:
 		win.ToggleMaximize()
 	}
+	a.syncTitlebar(win)
 	a.UI.SetDecorations(ui.Decorations{Client: win.ClientDecorations(), Maximized: win.Maximized()})
 	a.UI.SetWindowTitle(a.cfg.Title)
 	var r [4]float32
-	if b, ok := win.(buttonsSource); ok {
+	if b != nil {
 		p := b.SystemButtons()
 		r = [4]float32{p[0] * a.scale, p[1] * a.scale, p[2] * a.scale, p[3] * a.scale}
 	}
-	a.UI.SetSystemButtons(r)
+	a.UI.SetSystemButtons(r) // after syncTitlebar: where the buttons are now
 }

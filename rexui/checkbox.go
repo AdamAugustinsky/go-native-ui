@@ -14,23 +14,21 @@ type CheckboxOpts struct {
 }
 
 // CheckboxRecipe is the look of checkboxes (and of radio buttons' circles).
+// The box's side and corner radius are the theme's (theme.SizeSpec's Check
+// and CheckRadius: 16, 14 and 18 pt with circular radii of 5.5, 4.5 and 6.25
+// at regular, small and large, as macOS 27.2 draws them).
 type CheckboxRecipe struct {
-	// Box is the side of the box per size, in points. macOS 27.2 draws 16 pt
-	// at regular size, 14 small and 18 large (tools/appkitref; theme's
-	// SizeSpec.Check says 14, 12 and 16, which is the box of macOS 15).
-	Box [theme.NumSizes]float32
-	// Radius is the box's corner radius per size, in points. AppKit draws a
-	// continuous (squircle) corner; a circular corner of the same uncovered
-	// area, measured 5.6, 4.3 and 6.3 pt at the three sizes
-	// (tools/appkitref/measure), matches it best. theme's Radii.Checkbox
-	// (3.5) is visibly squarer.
-	Radius [theme.NumSizes]float32
 	// Off, OffPressed and OffDisabled fill an unchecked box: systemFill,
 	// #00000030 measured pressed (FillPressed), tertiarySystemFill disabled.
 	Off, OffPressed, OffDisabled Tint
 	// On, OnPressed and OnDisabled fill a checked or mixed box: the accent,
 	// darker pressed, and secondarySystemFill disabled.
 	On, OnPressed, OnDisabled Tint
+	// OnInactive and MarkInactive replace On and Mark in a window that is
+	// not the key window: AppKit greys the checked box (labelColor at 14 %,
+	// #DBDBDB over white and #3E3E3E over #1E1E1E measured) and draws the
+	// check in labelColor over it. An unchecked box does not change.
+	OnInactive, MarkInactive Tint
 	// Mark and MarkDisabled colour the check and the dash.
 	Mark, MarkDisabled Tint
 	// Label and LabelDisabled colour the label.
@@ -42,12 +40,11 @@ type CheckboxRecipe struct {
 
 // CheckboxLook is the checkboxes' recipe.
 var CheckboxLook = CheckboxRecipe{
-	Box:    [theme.NumSizes]float32{theme.SizeRegular: 16, theme.SizeMini: 12, theme.SizeSmall: 14, theme.SizeLarge: 18, theme.SizeXLarge: 18},
-	Radius: [theme.NumSizes]float32{theme.SizeRegular: 5.5, theme.SizeMini: 4, theme.SizeSmall: 4.5, theme.SizeLarge: 6.25, theme.SizeXLarge: 6.25},
-	Off:    Of(theme.Fill1), OffPressed: Of(theme.FillPressed), OffDisabled: Of(theme.Fill3),
+	Off: Of(theme.Fill1), OffPressed: Of(theme.FillPressed), OffDisabled: Of(theme.Fill3),
 	On: Of(theme.Accent), OnPressed: Of(theme.AccentPressed), OnDisabled: Of(theme.Fill2),
 	Mark: Of(theme.OnAccent), MarkDisabled: Of(theme.Label3),
-	Label: Of(theme.Label), LabelDisabled: Of(theme.TextDisabled),
+	OnInactive: OfAlpha(theme.Label, 0.141, 0.142), MarkInactive: Of(theme.Label),
+	Label: Of(theme.ControlText), LabelDisabled: Of(theme.TextDisabled),
 	DashW: 7, DashH: 1.75,
 }
 
@@ -75,8 +72,8 @@ func CheckboxTri(k *base.Kit, label string, st *base.CheckState, o CheckboxOpts)
 	s := &r.Sizes[size]
 	t := k.ToggleState(label, st, base.HoverOff)
 	on := t.State != base.Unchecked
-	box := pt(k.Scale(), rc.Box[size])
-	radius := k.Pt(rc.Radius[size])
+	box := theme.Snap(s.Check)
+	radius := s.CheckRadius
 
 	fill, mark, lc := rc.Off.RGBA(r), rc.Mark.RGBA(r), rc.Label.RGBA(r)
 	switch {
@@ -84,6 +81,8 @@ func CheckboxTri(k *base.Kit, label string, st *base.CheckState, o CheckboxOpts)
 		fill, mark, lc = rc.OnDisabled.RGBA(r), rc.MarkDisabled.RGBA(r), rc.LabelDisabled.RGBA(r)
 	case t.Disabled:
 		fill, lc = rc.OffDisabled.RGBA(r), rc.LabelDisabled.RGBA(r)
+	case on && t.Inactive:
+		fill, mark = rc.OnInactive.RGBA(r), rc.MarkInactive.RGBA(r)
 	case on:
 		fill = mix(rc.On.RGBA(r), rc.OnPressed.RGBA(r), t.Down)
 	default:
@@ -92,7 +91,7 @@ func CheckboxTri(k *base.Kit, label string, st *base.CheckState, o CheckboxOpts)
 
 	c.NextAxis(ui.AxisX)
 	c.NextCross(ui.CrossCenter)
-	c.NextGap(s.Gap)
+	c.NextGap(s.CheckGap)
 	k.BeginToggle(&t, ui.RoleCheckbox, ui.Children(1), ui.Px(box), 0)
 	c.NextSize(ui.Px(box), ui.Px(box))
 	c.NextBG(fill)
@@ -106,7 +105,7 @@ func CheckboxTri(k *base.Kit, label string, st *base.CheckState, o CheckboxOpts)
 			c.BoxKeyed(f, ui.KeyN(t.Key, 2), disp)
 		}
 	case base.Mixed:
-		f := box / pt(k.Scale(), rc.Box[theme.SizeRegular])
+		f := box / theme.Snap(r.Sizes[theme.SizeRegular].Check)
 		dw, dh := theme.Snap(k.Pt(rc.DashW)*f), theme.Snap(k.Pt(rc.DashH)*f)
 		theme.At(c, theme.Snap((box-dw)/2), theme.Snap((box-dh)/2), dw, dh)
 		c.NextBG(mark)

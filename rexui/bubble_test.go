@@ -1,0 +1,219 @@
+package rexui_test
+
+import (
+	"fmt"
+	"strings"
+	"testing"
+
+	"gonativeui/gpu"
+	"gonativeui/internal/fakeui"
+	"gonativeui/rexui"
+	"gonativeui/text"
+	"gonativeui/theme"
+	"gonativeui/theme/rex"
+	"gonativeui/ui"
+	"gonativeui/widget/base"
+)
+
+// layText is the fake text system with a paragraph layouter, as rich text
+// needs.
+type layText struct {
+	*fakeui.Text
+	*text.BasicLayouter
+}
+
+// chatRig is a list of message bubbles in a virtual list under one selection
+// scope (C4): the transcript of a chat.
+type chatRig struct {
+	t     *testing.T
+	c     *ui.Context
+	k     *base.Kit
+	in    ui.Input
+	dl    gpu.DrawList
+	st    base.VListState
+	v     base.VList
+	sc    ui.SelectionScope
+	sig   ui.ScopeSignal
+	msgs  map[uint64][]byte
+	texts map[uint64]ui.ID
+	clip  string
+	time  int64
+	style ui.RichStyles
+}
+
+func newChatRig(t *testing.T, n int) *chatRig {
+	ft := fakeui.New()
+	l := text.NewBasicLayouter(ft)
+	l.ReserveParas(text.ParaBudget{Paras: 1024, Glyphs: 1 << 16, Text: 1 << 16})
+	ts := layText{ft, l}
+	g := &chatRig{t: t, c: ui.New(ts), msgs: map[uint64][]byte{}, texts: map[uint64]ui.ID{}}
+	g.c.Reserve(4096)
+	g.c.AtlasSync(&fakeui.Uploader{})
+	g.k = base.NewKit(g.c, ts, rex.Theme())
+	g.k.SetMode(theme.Light)
+	g.k.ReduceMotion = true
+	g.c.ClipboardSet = func(b []byte) { g.clip = string(b) }
+	g.in.Inside, g.in.Focused = true, true
+	g.in.MouseX, g.in.MouseY = -100, -100
+	g.dl.Quads = make([]gpu.Quad, 0, 1<<13)
+	ids := make([]uint64, n)
+	for i := range ids {
+		ids[i] = uint64(1000 + i)
+		g.msgs[ids[i]] = []byte(fmt.Sprintf("message %d", i) + strings.Repeat(" lorem ipsum", i%5))
+	}
+	g.st.Reserve(n + 10)
+	g.st.Append(ids)
+	g.frames(4)
+	return g
+}
+
+// AppendSelected is the model's text of a copy.
+func (g *chatRig) AppendSelected(dst []byte, id uint64, fp uint16, fo uint32, tp uint16, to uint32) []byte {
+	return append(dst, ui.SelectedBytes(g.msgs[id], 0, fp, fo, tp, to)...)
+}
+
+func (g *chatRig) frame() {
+	g.time += 16_666_667
+	g.in.Time = g.time
+	c, k := g.c, g.k
+	c.Begin(&g.in, 500, 400, 2, 1.0/60)
+	k.Begin(c)
+	clear(g.texts)
+	g.v = base.BeginVList(c, "transcript", &g.st, base.VListOpts{Estimate: 40})
+	g.sig = c.BeginSelection(&g.sc, ui.ScopeOpts{Items: &g.st, View: g.v.Outer, Text: g})
+	for i := g.v.First; i < g.v.Last; i++ {
+		id := g.v.Item(i)
+		v := rexui.BubbleIncoming
+		if i%2 == 1 {
+			v = rexui.BubbleOutgoing
+		}
+		rexui.BubbleRichStyles(k, v, &g.style)
+		sig := rexui.MessageBubble(k, ui.KeyN(c.ParentKey(), 0), g.msgs[id], nil, rexui.MessageOpts{
+			BubbleOpts: rexui.BubbleOpts{Variant: v, ColumnW: 240}, Styles: &g.style, Item: id,
+		})
+		g.texts[id] = sig.Text.ID
+	}
+	c.EndSelection()
+	base.EndVList(&g.v)
+	k.End()
+	c.End(&g.dl)
+	g.in.ClearFrame()
+}
+
+func (g *chatRig) frames(n int) {
+	for range n {
+		g.frame()
+	}
+}
+
+// A drag from one bubble's text to another's, in a virtual list, selects the
+// texts between them and copies their plain text; a bubble keeps its own
+// shape (the message is the rich text inside it).
+func TestMessageBubblesSelectAcrossAVirtualList(t *testing.T) {
+	g := newChatRig(t, 200)
+	var ids []uint64
+	for i := g.v.First; i < g.v.Last; i++ {
+		if id := g.st.ID(i); g.c.Rect(g.texts[id])[1] >= 0 {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) < 4 {
+		t.Fatalf("only %d bubbles in view", len(ids))
+	}
+	a, b := ids[1], ids[3] // consecutive ids: ids[2] lies between them
+	ra, rb := g.c.Rect(g.texts[a]), g.c.Rect(g.texts[b])
+	g.in.MouseX, g.in.MouseY = ra[0]+3, ra[1]+3
+	g.frame()
+	g.in.SetButton(ui.ButtonLeft, true, 1)
+	g.frame()
+	g.in.MouseX, g.in.MouseY = rb[0]+30, rb[1]+3
+	g.frame()
+	g.in.SetButton(ui.ButtonLeft, false, 0)
+	g.frame()
+	from, to, ok := g.sc.Selected()
+	if !ok || from.Item != a || to.Item != b {
+		t.Fatalf("selected %v to %v (%v), want items %d to %d", from, to, ok, a, b)
+	}
+	g.in.PushKey(ui.KeyEvent{Code: 'C', Mods: ui.PrimaryMod(), Down: true})
+	g.frame()
+	got := g.clip
+	if want := string(g.msgs[a+1]); !strings.Contains(got, want) || !strings.HasPrefix(got, "message") {
+		t.Fatalf("the copy %q lacks the bubble between them (%q)", got, want)
+	}
+}
+
+// A selection that spans bubbles survives the list recycling its rows: scroll
+// until the bubbles at both ends are out of the built range, and the selection
+// is still those items and copies all of their text, from the model.
+func TestBubbleSelectionSurvivesRecycling(t *testing.T) {
+	g := newChatRig(t, 200)
+	var ids []uint64
+	for i := g.v.First; i < g.v.Last; i++ {
+		if id := g.st.ID(i); g.c.Rect(g.texts[id])[1] >= 0 {
+			ids = append(ids, id)
+		}
+	}
+	a, b := ids[1], ids[3]
+	ra, rb := g.c.Rect(g.texts[a]), g.c.Rect(g.texts[b])
+	g.in.MouseX, g.in.MouseY = ra[0]+3, ra[1]+3
+	g.frame()
+	g.in.SetButton(ui.ButtonLeft, true, 1)
+	g.frame()
+	g.in.MouseX, g.in.MouseY = rb[0]+30, rb[1]+3
+	g.frame()
+	g.in.SetButton(ui.ButtonLeft, false, 0)
+	g.frame()
+	if from, to, ok := g.sc.Selected(); !ok || from.Item != a || to.Item != b {
+		t.Fatalf("selected %v to %v (%v), want items %d to %d", from, to, ok, a, b)
+	}
+	// the wheel carries the transcript far away: the selected bubbles are recycled
+	g.in.MouseX, g.in.MouseY = 250, 200
+	g.frame()
+	built := func(id uint64) bool {
+		for i := g.v.First; i < g.v.Last; i++ {
+			if g.st.ID(i) == id {
+				return true
+			}
+		}
+		return false
+	}
+	for i := 0; i < 80 && (built(a) || built(b)); i++ {
+		g.in.ScrollY = -600
+		g.frame()
+	}
+	g.frames(3)
+	if built(a) || built(b) {
+		t.Fatal("the selected bubbles were never recycled")
+	}
+	from, to, ok := g.sc.Selected()
+	if !ok || from.Item != a || to.Item != b {
+		t.Fatalf("after recycling: selected %v to %v (%v), want items %d to %d", from, to, ok, a, b)
+	}
+	g.in.PushKey(ui.KeyEvent{Code: 'C', Mods: ui.PrimaryMod(), Down: true})
+	g.frame()
+	if want := string(g.msgs[a+1]); !strings.Contains(g.clip, want) || strings.Count(g.clip, "message") < 2 {
+		t.Fatalf("the copy after recycling %q lacks the text between the ends", g.clip)
+	}
+}
+
+// An emoji-only message is drawn large with no bubble; a system message has
+// none either; the failed one carries a badge and its status in the tree.
+func TestMessageBubbleVariants(t *testing.T) {
+	g := newRig(t, theme.Light, nil, column(func(g *rig) {
+		k := g.k
+		var st ui.RichStyles
+		rexui.BubbleRichStyles(k, rexui.BubbleOutgoing, &st)
+		bo := rexui.BubbleOpts{Variant: rexui.BubbleOutgoing, ColumnW: 300}
+		rexui.MessageBubble(k, ui.KeyN(k.Context().ParentKey(), 1), []byte("Hello there"), nil, rexui.MessageOpts{BubbleOpts: bo, Styles: &st})
+		bo.Status = rexui.BubbleFailed
+		bo.Name = "Me, 10:42"
+		rexui.MessageBubble(k, ui.KeyN(k.Context().ParentKey(), 2), []byte("Not sent"), nil, rexui.MessageOpts{BubbleOpts: bo, Styles: &st})
+	}))
+	g.h = 800
+	n := g.node(ui.RoleGroup, "Me, 10:42")
+	if string(g.sem.Text(n.Value)) != "Not delivered" {
+		t.Fatalf("the failed message's value is %q", g.sem.Text(n.Value))
+	}
+	g.node(ui.RoleLabel, "Not delivered")
+	g.node(ui.RoleGroup, "Sent message")
+}

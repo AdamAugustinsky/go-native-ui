@@ -46,7 +46,7 @@ const maxSide = 16384
 
 // maxPixels bounds the source images the decoders accept (a decompression
 // bomb is refused from its header, before any pixel is decoded).
-const maxPixels = 100 << 20
+const maxPixels = platform.MaxImagePixels
 
 // Who owns a job's resources (its inline copy, its lease, its output): the
 // cache's jobs table holds one of these per entry, moved by compare-and-swap
@@ -93,6 +93,8 @@ func (c *Cache) decodeJob(t task.Token, j job) result {
 		r = result{buf: -1, err: errDecode}
 	case j.kind == jobFrame:
 		r = w.decodeFrame(c, &j)
+	case j.src.isIcon():
+		r = w.decodeIcon(c, &j)
 	default:
 		handled := false
 		if j.flags&Animate != 0 {

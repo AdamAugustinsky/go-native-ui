@@ -1,11 +1,34 @@
 {
-	"source": "tools/appkitref/measure -ref macbook-blue (AppKitRef, Version 27.2 (Build 26B5091g))",
+	"machine": {
+		"model": "Mac15,6",
+		"macOS": {
+			"version": "27.2",
+			"build": "26B5091g"
+		},
+		"display": {
+			"name": "Built-in Liquid Retina XDR Display",
+			"widthPt": 1512,
+			"heightPt": 982,
+			"backingScale": 2,
+			"widthPx": 3024,
+			"heightPx": 1964,
+			"refreshHz": 120
+		},
+		"appearance": "dark",
+		"accent": "pink",
+		"accentRendered": "blue",
+		"scrollerStyle": "overlay",
+		"date": "2026-10-18",
+		"note": "MacBook Pro 14\" (M3 Pro). Recorded afterwards from docs/measurements/phase1-macos.md, GnuiShot's display dump and the run's own metrics (macOS build, scroller style); the tool did not write it."
+	},
+	"source": "tools/appkitref/measure -ref ref-blue-merged (AppKitRef, Version 27.2 (Build 26B5091g))",
 	"scale": 2,
 	"system": {
 		"dark": {
 			"alternateSelectedControlTextColor": "#FFFFFFFF",
 			"controlAccentColor": "#007AFFFF",
 			"controlBackgroundColor": "#1E1E1EFF",
+			"controlTextColor": "#FFFFFFD8",
 			"disabledControlTextColor": "#FFFFFF3F",
 			"findHighlightColor": "#FFFF00FF",
 			"gridColor": "#1A1A1AFF",
@@ -52,6 +75,7 @@
 			"alternateSelectedControlTextColor": "#FFFFFFFF",
 			"controlAccentColor": "#007AFFFF",
 			"controlBackgroundColor": "#FFFFFFFF",
+			"controlTextColor": "#000000D8",
 			"disabledControlTextColor": "#0000003F",
 			"findHighlightColor": "#FFFF00FF",
 			"gridColor": "#E6E6E6FF",
@@ -252,6 +276,108 @@
 				"radius": 4.2,
 				"fill": "#0078F9",
 				"label": "#272727"
+			}
+		},
+		"color-well": {
+			"dark": {
+				"w": 48,
+				"h": 24,
+				"radius": 12.01,
+				"fill": "#343434"
+			},
+			"light": {
+				"w": 48,
+				"h": 24,
+				"radius": 12.01,
+				"fill": "#E6E6E6"
+			}
+		},
+		"color-well-disabled": {
+			"dark": {
+				"w": 48,
+				"h": 24,
+				"radius": 12.06,
+				"fill": "#292929"
+			},
+			"light": {
+				"w": 48,
+				"h": 24,
+				"radius": 12.07,
+				"fill": "#F2F2F2"
+			}
+		},
+		"color-well-swatch": {
+			"dark": {
+				"w": 42.01,
+				"h": 18,
+				"radius": 8.74
+			},
+			"light": {
+				"w": 42.01,
+				"h": 18,
+				"radius": 8.5
+			}
+		},
+		"combo": {
+			"dark": {
+				"w": 162,
+				"h": 26,
+				"radius": 6.86,
+				"fill": "#171717"
+			},
+			"light": {
+				"w": 162,
+				"h": 26,
+				"radius": 6.85,
+				"fill": "#FFFFFF"
+			}
+		},
+		"combo-button": {
+			"dark": {
+				"w": 23.5,
+				"h": 17.21,
+				"radius": 3.93,
+				"fill": "#2C2C2C"
+			},
+			"light": {
+				"w": 23.5,
+				"h": 17.5,
+				"radius": 4.35,
+				"fill": "#E9E9E9"
+			}
+		},
+		"combo-disabled": {
+			"dark": {
+				"w": 162,
+				"h": 26,
+				"radius": 6.86,
+				"fill": "#171717"
+			},
+			"light": {
+				"w": 162,
+				"h": 26,
+				"radius": 6.85,
+				"fill": "#FFFFFF"
+			}
+		},
+		"combo-focused": {
+			"dark": {
+				"w": 166,
+				"h": 30,
+				"radius": 9.01,
+				"fill": "#171717",
+				"ring": "#1C638E",
+				"ringOutset": 2.97,
+				"ringWidth": 3.49
+			},
+			"light": {
+				"w": 166,
+				"h": 30,
+				"radius": 9.01,
+				"fill": "#FFFFFF",
+				"ring": "#80B3FA",
+				"ringOutset": 2.95,
+				"ringWidth": 3.49
 			}
 		},
 		"disclosure-closed": {
@@ -1261,6 +1387,400 @@
 				"fill": "#DFDFDF",
 				"label": "#2A2A2A"
 			}
+		},
+		"token": {
+			"dark": {
+				"w": 202,
+				"h": 26,
+				"radius": 6.86,
+				"fill": "#171717"
+			},
+			"light": {
+				"w": 202,
+				"h": 26,
+				"radius": 6.85,
+				"fill": "#FFFFFF"
+			}
+		},
+		"token-chip": {
+			"dark": {
+				"w": 66,
+				"h": 15,
+				"radius": 1.75,
+				"fill": "#0F3F63",
+				"label": "#DEE5EA"
+			},
+			"light": {
+				"w": 66,
+				"h": 15,
+				"radius": 1.75,
+				"fill": "#ABD8FF",
+				"label": "#171D23"
+			}
+		},
+		"token-disabled": {
+			"dark": {
+				"w": 202,
+				"h": 26,
+				"radius": 6.86,
+				"fill": "#171717"
+			},
+			"light": {
+				"w": 202,
+				"h": 26,
+				"radius": 6.85,
+				"fill": "#FFFFFF"
+			}
+		},
+		"token-focused": {
+			"dark": {
+				"w": 206,
+				"h": 30,
+				"radius": 9.01,
+				"fill": "#171717",
+				"ring": "#1C638E",
+				"ringOutset": 2.96,
+				"ringWidth": 3.49
+			},
+			"light": {
+				"w": 206,
+				"h": 30,
+				"radius": 9.01,
+				"fill": "#FFFFFF",
+				"ring": "#80B3FA",
+				"ringOutset": 2.94,
+				"ringWidth": 3.49
+			}
+		},
+		"form-group": {
+			"dark": {
+				"w": 360,
+				"h": 122,
+				"radius": 12.06,
+				"fill": "#252525"
+			},
+			"light": {
+				"w": 360,
+				"h": 122,
+				"radius": 12.1,
+				"fill": "#F7F7F7"
+			}
+		},
+		"checkbox-on-inactive": {
+			"dark": {
+				"w": 16,
+				"h": 16,
+				"radius": 5.38,
+				"fill": "#3E3E3E",
+				"label": "#DDDDDD"
+			},
+			"light": {
+				"w": 16,
+				"h": 16,
+				"radius": 5.39,
+				"fill": "#DBDBDB",
+				"label": "#272727"
+			}
+		},
+		"checkbox-mixed-inactive": {
+			"dark": {
+				"w": 16,
+				"h": 16,
+				"radius": 5.38,
+				"fill": "#3E3E3E",
+				"label": "#DDDDDD"
+			},
+			"light": {
+				"w": 16,
+				"h": 16,
+				"radius": 5.39,
+				"fill": "#DBDBDB",
+				"label": "#272727"
+			}
+		},
+		"checkbox-off-inactive": {
+			"dark": {
+				"w": 16,
+				"h": 16,
+				"radius": 5.39,
+				"fill": "#343434",
+				"label": "#DDDDDD"
+			},
+			"light": {
+				"w": 16,
+				"h": 16,
+				"radius": 5.4,
+				"fill": "#E6E6E6",
+				"label": "#272727"
+			}
+		},
+		"radio-on-inactive": {
+			"dark": {
+				"w": 16,
+				"h": 16,
+				"radius": 7.91,
+				"fill": "#3E3E3E",
+				"label": "#DDDDDD"
+			},
+			"light": {
+				"w": 16,
+				"h": 16,
+				"radius": 7.88,
+				"fill": "#DBDBDB",
+				"label": "#272727"
+			}
+		},
+		"switch-on-inactive": {
+			"dark": {
+				"w": 54,
+				"h": 24,
+				"radius": 11.98,
+				"fill": "#3E3E3E"
+			},
+			"light": {
+				"w": 54.03,
+				"h": 24.05,
+				"radius": 11.99,
+				"fill": "#DBDBDB"
+			}
+		},
+		"switch-off-inactive": {
+			"dark": {
+				"w": 54,
+				"h": 24,
+				"fill": "#343434"
+			},
+			"light": {
+				"w": 54.04,
+				"h": 24.07,
+				"fill": "#E6E6E6"
+			}
+		},
+		"segmented-inactive": {
+			"dark": {
+				"h": 24,
+				"radius": 5.82,
+				"fill": "#4A4A4A"
+			},
+			"light": {
+				"h": 24,
+				"radius": 5.87,
+				"fill": "#CDCDCD"
+			}
+		},
+		"slider-inactive": {
+			"dark": {
+				"w": 200,
+				"h": 6,
+				"radius": 2.8,
+				"fill": "#515151"
+			},
+			"light": {
+				"w": 200,
+				"h": 6,
+				"radius": 2.8,
+				"fill": "#C5C5C5"
+			}
+		},
+		"stepper-inactive": {
+			"dark": {
+				"w": 20,
+				"h": 24,
+				"radius": 5.8,
+				"fill": "#303030"
+			},
+			"light": {
+				"w": 20,
+				"h": 24,
+				"radius": 5.8,
+				"fill": "#EBEBEB"
+			}
+		},
+		"progress-bar-inactive": {
+			"dark": {
+				"w": 200,
+				"h": 8,
+				"radius": 3.72,
+				"fill": "#AAAAAA"
+			},
+			"light": {
+				"w": 200,
+				"h": 8,
+				"radius": 3.65,
+				"fill": "#AAAAAA"
+			}
+		},
+		"progress-indeterminate-inactive": {
+			"dark": {
+				"w": 200,
+				"h": 8,
+				"fill": "#AAAAAA"
+			},
+			"light": {
+				"w": 200,
+				"h": 8,
+				"fill": "#AAAAAA"
+			}
+		},
+		"level-inactive": {
+			"dark": {
+				"w": 160,
+				"h": 16,
+				"fill": "#30D158"
+			},
+			"light": {
+				"w": 160,
+				"h": 16,
+				"fill": "#34C759"
+			}
 		}
+	},
+	"layouts": {
+		"form-grid": {
+			"check2": {
+				"h": 16,
+				"w": 128,
+				"x": 94,
+				"y": 60
+			},
+			"field0": {
+				"h": 24,
+				"w": 200,
+				"x": 94,
+				"y": 0
+			},
+			"field1": {
+				"h": 24,
+				"w": 200,
+				"x": 94,
+				"y": 30
+			},
+			"grid": {
+				"h": 76,
+				"w": 294,
+				"x": 0,
+				"y": 0
+			},
+			"label0": {
+				"h": 16,
+				"w": 44,
+				"x": 46,
+				"y": 4
+			},
+			"label1": {
+				"h": 16,
+				"w": 92,
+				"x": -2,
+				"y": 34
+			},
+			"label2": {
+				"h": 16,
+				"w": 85,
+				"x": 5,
+				"y": 60
+			},
+			"spacing": {
+				"column": 6,
+				"row": 6
+			}
+		},
+		"form-group": {
+			"box": {
+				"h": 122,
+				"w": 360,
+				"x": 0,
+				"y": 0
+			},
+			"control0": {
+				"h": 24,
+				"w": 79,
+				"x": 271,
+				"y": 8
+			},
+			"control1": {
+				"h": 24,
+				"w": 54,
+				"x": 296,
+				"y": 49
+			},
+			"control2": {
+				"h": 16,
+				"w": 120,
+				"x": 230,
+				"y": 94
+			},
+			"label0": {
+				"h": 16,
+				"w": 77,
+				"x": 8,
+				"y": 12
+			},
+			"label1": {
+				"h": 16,
+				"w": 37,
+				"x": 8,
+				"y": 53
+			},
+			"label2": {
+				"h": 16,
+				"w": 69,
+				"x": 8,
+				"y": 94
+			},
+			"row0": {
+				"h": 40,
+				"w": 360,
+				"x": 0,
+				"y": 0
+			},
+			"row1": {
+				"h": 40,
+				"w": 360,
+				"x": 0,
+				"y": 41
+			},
+			"row2": {
+				"h": 40,
+				"w": 360,
+				"x": 0,
+				"y": 82
+			},
+			"separator0": {
+				"h": 1,
+				"w": 360,
+				"x": 0,
+				"y": 39.5
+			},
+			"separator1": {
+				"h": 1,
+				"w": 360,
+				"x": 0,
+				"y": 80.5
+			}
+		}
+	},
+	"sheets": {
+		"alertPanelClass": "_NSAlertPanel",
+		"alertPanelContentFrameClass": "NSGlassContentFrameView",
+		"alertPanelCornerRadius": 26,
+		"plainTitledPanelCornerRadius": 16
+	},
+	"borrowed": {
+		"from": "Mac16,10, macOS 27.2 26B5101f (the Mac mini)",
+		"samples": [
+			"checkbox-on-inactive",
+			"checkbox-mixed-inactive",
+			"checkbox-off-inactive",
+			"radio-on-inactive",
+			"switch-on-inactive",
+			"switch-off-inactive",
+			"segmented-inactive",
+			"slider-inactive",
+			"stepper-inactive",
+			"progress-bar-inactive",
+			"progress-indeterminate-inactive",
+			"level-inactive"
+		],
+		"note": "The window-inactive samples of the accent-filled controls were measured on the Mac mini (offscreen AppKitRef, accent rendered blue) and not on this MacBook, which was not used for them. Their colours come from labelColor alphas that the two Macs agree on in every sample measured on both (push-default-inactive, toggle-on-inactive, switch-on, slider, checkbox-on). Re-measure here when the MacBook is next used."
 	}
 }

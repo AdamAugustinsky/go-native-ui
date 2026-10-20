@@ -10,6 +10,7 @@ import (
 
 	"gonativeui/app"
 	"gonativeui/internal/objc"
+	"gonativeui/internal/testlock"
 	"gonativeui/platform"
 	"gonativeui/ui"
 	"gonativeui/widget/widgettest"
@@ -121,7 +122,18 @@ func TestMenuItemThroughAppKit(t *testing.T) {
 // Other windows of the process: they count as windows, take the key, and
 // closing them leaves the app running.
 func TestOtherWindows(t *testing.T) {
+	testlock.Hold(t, "activation") // another window takes the key: the app's focus is AppKit's
 	l, p := startProbe(t)
+	l.RealFocus()
+	var own objc.ID
+	l.Do(func(a *app.App) {
+		own = objc.ID(a.Win.Native().NSWindow)
+		objc.Send1(widgettest.NSApp(), objc.Sel("activateIgnoringOtherApps:"), 1)
+		objc.Send1(own, objc.Sel("makeKeyAndOrderFront:"), 0)
+	})
+	l.Until("the app's window is really key and the app sees it", 120, func() bool {
+		return p.focused && objc.SendBool(own, objc.Sel("isKeyWindow"))
+	})
 	l.Frames(3)
 	var plain widgettest.PlainWindow
 	var n0 int
@@ -148,9 +160,10 @@ func TestOtherWindows(t *testing.T) {
 	l.Frames(3)
 	var key bool
 	l.Do(func(a *app.App) { key = objc.SendBool(plain.Window, objc.Sel("isKeyWindow")) })
-	if key { // the application could be activated: the app's window lost the key
-		l.Until("the app's window sees it lost the focus", 120, func() bool { return !p.focused })
+	if !key {
+		t.Fatal("the other window did not take the key from the active app")
 	}
+	l.Until("the app's window sees it lost the focus", 120, func() bool { return !p.focused })
 	l.Do(func(a *app.App) { plain.Close() })
 	l.Frames(3)
 	l.Do(func(a *app.App) {

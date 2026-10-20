@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -79,6 +80,11 @@ type LiveOptions struct {
 	Stall time.Duration
 	// Wait is the cap on one wait in wall time, whatever the frames do (10 min).
 	Wait time.Duration
+	// Idle is how long a call may wait for a main thread that sits in the
+	// platform's event wait and does not serve it (60 s). AppKit can leave a
+	// new window's loop unserved for seconds under load, with nothing the
+	// harness can do; a thread blocked anywhere else is not given this time.
+	Idle time.Duration
 
 	snap func(*app.App) envSnapshot // test seam: what a look at the environment reads (snapshotEnv)
 }
@@ -94,6 +100,7 @@ func (o LiveOptions) withDefaults() LiveOptions {
 	set(&o.Close, 30*time.Second)
 	set(&o.Stall, 60*time.Second)
 	set(&o.Wait, 10*time.Minute)
+	set(&o.Idle, 60*time.Second)
 	return o
 }
 
@@ -101,10 +108,12 @@ func (o LiveOptions) withDefaults() LiveOptions {
 // waiters after each, and keeps a frame coming while one is open.
 type sessionBuilder struct {
 	app.Builder
-	ap    atomic.Pointer[app.App]
-	built atomic.Int64
-	hold  atomic.Bool   // test seam: frames are built but not counted, as if none were delivered
-	first chan struct{} // closed after the first frame
+	t          testing.TB
+	restoreKey func() // ends the window's DebugAssumeKey (RealFocus)
+	ap         atomic.Pointer[app.App]
+	built      atomic.Int64
+	hold       atomic.Bool   // test seam: frames are built but not counted, as if none were delivered
+	first      chan struct{} // closed after the first frame
 
 	mu    sync.Mutex
 	waits []*waiter
@@ -119,6 +128,11 @@ type waiter struct {
 
 func (b *sessionBuilder) Init(a *app.App) error {
 	b.ap.Store(a)
+	// The input the test posts is a key window's, whether or not the system
+	// activated the test binary (platform.DebugAssumeKey); from Init, so the
+	// first frame is drawn key too.
+	b.restoreKey = platform.DebugAssumeKey(a.Win)
+	b.t.Cleanup(b.restoreKey)
 	initDo()
 	if in, ok := b.Builder.(app.Initer); ok {
 		return in.Init(a)
@@ -176,7 +190,7 @@ func StartLiveWith(t testing.TB, cfg app.Config, b app.Builder, o LiveOptions) *
 	if !liveActive.CompareAndSwap(false, true) {
 		t.Fatal("widgettest: a LiveApp is already running (the platform has one window), or an earlier one could not be closed")
 	}
-	l := &LiveApp{t: t, lim: o.withDefaults(), end: make(chan struct{}), sb: &sessionBuilder{Builder: b, first: make(chan struct{})}}
+	l := &LiveApp{t: t, lim: o.withDefaults(), end: make(chan struct{}), sb: &sessionBuilder{Builder: b, t: t, first: make(chan struct{})}}
 	go func() {
 		defer close(l.end)
 		OnMain(func() { _, l.err = app.RunWith(cfg, l.sb, app.RunOptions{}) })
@@ -197,8 +211,30 @@ func StartLiveWith(t testing.TB, cfg app.Config, b app.Builder, o LiveOptions) *
 	case <-timer.C:
 		l.startTimeout()
 	}
+	// The first frame is drawn. A new window is not yet shown, though: for
+	// seconds (about 5.5 s on a loaded Mac) it is occluded and the main thread
+	// sits in its event wait, taking no call that is posted to it and serving
+	// all of them at once when the window is shown. A thread in that wait is
+	// alive (call waits for it, see mainInEventWait), but the first thing a
+	// test does would wait it out, under limits made for a shown window. The
+	// harness takes the wait here, once: it looks at the window until it is
+	// visible, or for settleCap (a window that stays hidden is a test's to
+	// deal with: the stall rules).
+	for deadline := time.Now().Add(settleCap); ; time.Sleep(20 * time.Millisecond) {
+		var visible bool
+		res := l.call(func(a *app.App) { visible = a.Win.DebugState().Visible }, l.lim.Call)
+		if res.timeout != "" || res.ended {
+			t.Fatalf("widgettest: the main thread does not take up calls after the window's first frame: %s", describe(res))
+		}
+		if visible || !time.Now().Before(deadline) {
+			break
+		}
+	}
 	return l
 }
+
+// settleCap bounds the wait in StartLiveWith for a new window to be shown.
+const settleCap = 10 * time.Second
 
 // startTimeout handles a start that drew no frame within the limit: the same
 // look at the environment as a stalled wait, which skips or fails the test and
@@ -206,6 +242,17 @@ func StartLiveWith(t testing.TB, cfg app.Config, b app.Builder, o LiveOptions) *
 func (l *LiveApp) startTimeout() {
 	l.t.Helper()
 	l.stall("the first frame", l.lim.Start) // ends the test unless the frame came while it looked
+}
+
+// RealFocus makes the window's focus AppKit's from now on, for a test of the
+// focus itself: StartLive has the window count as key whatever AppKit says
+// (platform.DebugAssumeKey), so that the input a test posts is a key
+// window's. After it the window loses the focus when another window or app
+// takes it. A test that needs the app really active holds
+// testlock.Hold(t, "activation").
+func (l *LiveApp) RealFocus() {
+	l.t.Helper()
+	l.Do(func(*app.App) { l.sb.restoreKey() })
 }
 
 // App is the running app. Use it only inside Do (it belongs to the main thread).
@@ -303,12 +350,19 @@ type callResult struct {
 	goexit   bool   // f ended its goroutine (t.Fatal, t.Skip, runtime.Goexit)
 	ended    bool   // the app ended first
 	timeout  string // set when the main thread did not take it up or finish it in time: what happened
+	idle     bool   // ... and it sat in the platform's event wait: alive, but AppKit did not serve the call
 }
 
 // call is Do that reports instead of failing the test. The completion is
 // always sent: by the main thread when f returns, panics or ends its
 // goroutine, and by the caller's timeout when the main thread does not.
 func (l *LiveApp) call(f func(a *app.App), limit time.Duration) (res callResult) {
+	return l.callIdle(f, limit, l.lim.Idle)
+}
+
+// callIdle is call with the time a call may wait for a main thread that is in
+// its event wait (see LiveOptions.Idle) given.
+func (l *LiveApp) callIdle(f func(a *app.App), limit, idle time.Duration) (res callResult) {
 	c := &mainCall{f: f, done: make(chan callResult, 1)}
 	if l.dead.Load() { // an earlier call timed out: do not queue behind it
 		return callResult{timeout: "the main thread did not answer an earlier call; it is blocked"}
@@ -330,31 +384,80 @@ func (l *LiveApp) call(f func(a *app.App), limit time.Duration) (res callResult)
 	})
 	doMu.Unlock()
 	postDo()
+	begin := time.Now()
 	timer := time.NewTimer(limit)
 	defer timer.Stop()
-	select {
-	case res = <-c.done:
-		return res
-	case <-l.end:
-		select { // the closure may have run just before the end
+	for {
+		select {
 		case res = <-c.done:
 			return res
-		default:
+		case <-l.end:
+			select { // the closure may have run just before the end
+			case res = <-c.done:
+				return res
+			default:
+			}
+			return callResult{ended: true}
+		case <-timer.C:
 		}
-		return callResult{ended: true}
-	case <-timer.C:
 		select {
 		case res = <-c.done:
 			return res
 		default:
+		}
+		// Not served in time. A main thread that is in the platform's event wait
+		// is alive, not blocked: AppKit may not hand it work for seconds (a
+		// window it is slow to show, a loaded machine). Keep waiting, up to
+		// Idle; a thread that is anywhere else (a callback that does not
+		// return, an Init that blocks) has used up its time.
+		if !c.started.Load() && time.Since(begin) < idle && mainInEventWait() {
+			timer.Reset(limit)
+			continue
 		}
 		c.abandoned.Store(true)
 		l.dead.Store(true)
 		if c.started.Load() {
 			return callResult{timeout: fmt.Sprintf("the function was still running on the main thread %v after it started: it is blocked (waiting on the test goroutine, a lock, or AppKit)", limit)}
 		}
+		if mainInEventWait() {
+			l.dead.Store(false) // it is not blocked: the next call may be served
+			return callResult{idle: true, timeout: fmt.Sprintf("the main thread sits in the platform's event wait and did not take up the call within %v: AppKit is not serving it", time.Since(begin).Round(time.Second))}
+		}
 		return callResult{timeout: fmt.Sprintf("the main thread did not take up the call within %v: it is busy or blocked in an earlier callback", limit)}
 	}
+}
+
+// mainInEventWait reports whether the main goroutine is waiting in the
+// platform's nextEvent with no callback of ours above it: the thread is alive
+// and idle, waiting for AppKit, not busy and not blocked in a callback. It
+// reads the goroutine's stack (the main goroutine is goroutine 1).
+func mainInEventWait() bool {
+	buf := make([]byte, 1<<16)
+	for {
+		n := runtime.Stack(buf, true)
+		if n < len(buf) {
+			return inEventWait(string(buf[:n]))
+		}
+		buf = make([]byte, 2*len(buf))
+	}
+}
+
+// inEventWait is mainInEventWait on a dump of all goroutines' stacks.
+func inEventWait(dump string) bool {
+	i := strings.Index(dump, "goroutine 1 [")
+	if i < 0 {
+		return false
+	}
+	g := dump[i:]
+	if j := strings.Index(g, "\n\n"); j >= 0 {
+		g = g[:j]
+	}
+	k := strings.Index(g, "platform.(*Window).nextEvent")
+	if k < 0 {
+		return false
+	}
+	above := g[:k] // the frames inside nextEvent, innermost first: only the call into AppKit
+	return !strings.Contains(above, "cbDispatch") && !strings.Contains(above, "cgocallback")
 }
 
 // Until waits, in frame time, until cond is true. cond is evaluated on the

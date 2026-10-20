@@ -24,8 +24,8 @@ var (
 	typeText = widgettest.Type
 )
 
-// session is the benchmark's session. It ends where it began: the same three
-// notes, the dialog and the menu closed.
+// session is the benchmark's session. It ends where it began: the same ten
+// notes with the newest open, the dialog and the menu closed.
 func session() []step {
 	prim, shift := ui.PrimaryMod(), ui.ModShift
 	return []step{
@@ -34,22 +34,28 @@ func session() []step {
 		click(ui.RoleTextField, "New note"), typeText("oops"), idle(2), key('Z', prim), idle(2),
 		typeText("Water the plants"), idle(2), key(ui.KeyEnter, 0), idle(2),
 		typeText("Book a table"), idle(2), click(ui.RoleButton, "Add"), idle(2),
-		// walk the list with the keyboard and select all
-		click(ui.RoleListItem, "").Nth(0), key(ui.KeyDown, 0), idle(1), key(ui.KeyDown, 0), idle(1), key(ui.KeyUp, 0), idle(1),
-		key(ui.KeyEnd, 0), idle(1), key(ui.KeyHome, 0), idle(1), key('A', prim), idle(2),
+		// walk the list with the keyboard
+		click(ui.RoleListItem, "Launch meeting"), key(ui.KeyDown, 0), idle(1), key(ui.KeyDown, 0), idle(1), key(ui.KeyUp, 0), idle(1),
 		// the switch, there and back
 		click(ui.RoleSwitch, "Newest first"), settle(), click(ui.RoleSwitch, "Newest first"), settle(),
-		// select the two new notes with the keyboard, and cancel the dialog
-		click(ui.RoleListItem, "").Nth(3), key(ui.KeyDown, shift), idle(2),
+		// the search narrows the list, Escape clears it; the sidebar goes and comes back
+		click(ui.RoleSearchField, "Search"), typeText("book"), idle(3), key(ui.KeyEscape, 0), idle(3),
+		click(ui.RoleButton, "Sidebar"), settle(), click(ui.RoleButton, "Sidebar"), settle(),
+		// ask to remove the open note, and cancel
+		click(ui.RoleListItem, "Book a table"),
 		click(ui.RoleButton, "Remove…"), waitFor(ui.RoleDialog, ""), settle(),
 		key(ui.KeyEscape, 0), waitGone(ui.RoleDialog, ""), settle(),
 		// a menu from the bar
 		click(ui.RoleMenuItem, "Note"), waitFor(ui.RoleMenuItem, "New Note"), idle(3),
 		key(ui.KeyEscape, 0), waitGone(ui.RoleMenuItem, "New Note"), idle(2),
-		// the shortcuts: a command with a chord, and the one that asks to remove
+		// the shortcuts: a command with a chord, and the one that asks to remove, twice
 		key('N', prim|shift), settle(), key('N', prim|shift), settle(),
 		key(ui.KeyBackspace, prim), waitFor(ui.RoleDialog, ""), settle(),
 		click(ui.RoleButton, "Remove"), waitGone(ui.RoleDialog, ""), settle(),
+		click(ui.RoleListItem, "Water the plants"),
+		key(ui.KeyBackspace, prim), waitFor(ui.RoleDialog, ""), settle(),
+		click(ui.RoleButton, "Remove"), waitGone(ui.RoleDialog, ""), settle(),
+		click(ui.RoleListItem, "Launch meeting"),
 		key('N', prim), idle(300), // and a rest, which a window with nothing to do still draws
 	}
 }
@@ -73,6 +79,7 @@ func NewBench() (*Bench, error) {
 	if err != nil {
 		return nil, err
 	}
+	n.drawnOnly = true // the session's confirmation is the drawn dialog: nobody answers a system alert
 	return &Bench{Notes: n, p: widgettest.NewPlayer(n, session(), widgettest.Options{Loop: true})}, nil
 }
 

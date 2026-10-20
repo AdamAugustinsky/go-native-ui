@@ -111,7 +111,7 @@ func TestScriptsExercise(t *testing.T) {
 			animating++
 		}
 		for i := 0; i < x.nTabs; i++ {
-			if h.c.HotTOf(tabKey(x.tabs[i].uid)) > 0 {
+			if h.c.HotTOf(x.tabKey(x.tabs[i].uid)) > 0 {
 				hovered++
 				break
 			}

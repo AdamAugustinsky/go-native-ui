@@ -23,6 +23,7 @@ import (
 	"strings"
 
 	"gonativeui/app"
+	"gonativeui/platform"
 	"gonativeui/rexui/catalog"
 	"gonativeui/text"
 	"gonativeui/theme"
@@ -75,7 +76,7 @@ func (r *runner) Build(c *ui.Context) {
 
 func main() {
 	out := flag.String("o", "", "output directory")
-	ref := flag.String("ref", "", "AppKitRef metrics.json whose colours the System roles take")
+	ref := flag.String("ref", "", "AppKitRef metrics.json whose colours the System roles take (\"auto\": this host's reference set, GNUI_APPKIT_REF overrides)")
 	only := flag.String("only", "", "render only the samples whose names contain this")
 	flag.Parse()
 	if *out == "" {
@@ -98,7 +99,7 @@ func main() {
 		}
 		bg := theme.Measured[m][theme.Window]
 		if sys != nil {
-			bg = sys.Colors[m][theme.Window]
+			bg = sys.Colors[m][platform.ColorWindowBackground]
 		}
 		cfg := app.Config{Title: "ours", Width: canvasW, Height: canvasH,
 			Clear: [4]float32{float32(bg>>24&255) / 255, float32(bg>>16&255) / 255, float32(bg>>8&255) / 255, 1}}

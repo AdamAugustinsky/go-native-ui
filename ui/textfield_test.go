@@ -18,6 +18,11 @@ type fieldRig struct {
 	now  int64
 	// pastes counts the requests the fake platform answered with clip.
 	pastes int
+	// cmdr, with seps, is offered to the field each frame (NextFieldCommander).
+	cmdr FieldCommander
+	seps string
+	// extra builds more after the field (another stop for the focus).
+	extra func(c *Context)
 }
 
 const (
@@ -52,7 +57,13 @@ func (r *fieldRig) step(dtMs int64) {
 		c.NextSize(Px(200), Px(24))
 		c.NextPad(rigPad)
 		c.NextTextColor(0x00FF00FF)
+		if r.cmdr != nil {
+			c.NextFieldCommander(r.cmdr, r.seps)
+		}
 		r.res = c.TextField("f", &r.buf)
+		if r.extra != nil {
+			r.extra(c)
+		}
 	})
 	// The platform answers a paste request with the clipboard text; the answer
 	// reaches the next frame.

@@ -47,6 +47,9 @@ type translator struct {
 	// commitNow: apply is applying a commit's text.
 	commitNow bool
 
+	// drops waits for the frames of the drops behind the one in the input (drag.go).
+	drops dropQueue
+
 	// refed: endFrame fed deferred events into the input, which wait for the
 	// frame that follows (cleared by take).
 	refed bool
@@ -214,6 +217,7 @@ func (t *translator) conflicts(e *platform.Event) bool {
 // input of the next frame (which may defer some of them once more).
 func (t *translator) endFrame() {
 	t.in.ClearFrame()
+	t.nextDrop()
 	if len(t.carry) == 0 {
 		return
 	}
@@ -330,6 +334,12 @@ func (t *translator) apply(e *platform.Event, txt []byte) bool {
 		// (ui drops it unless that field has the focus). A failed paste still
 		// counts as input: the frame that follows may be the one that learns it.
 		in.SetPaste(ui.Key(e.Tag), txt, e.Flags&platform.FlagFailed == 0)
+	case platform.EvColor: // the system colour panel (colorpanel.go)
+		if e.Code == 1 {
+			in.SetColorClosed()
+		} else {
+			in.SetColorPick(rgbaOf(e.X, e.Y, e.DX, e.DY))
+		}
 	case platform.EvCommand: // a native button or menu item (platform.Options.Buttons, menus.go)
 		if e.Flags&platform.FlagStandard != 0 { // a standard Edit item without a command: the focused field's
 			if a := standardEdit(platform.MenuAction(e.Tag)); a == 0 || !in.PushEdit(a) {

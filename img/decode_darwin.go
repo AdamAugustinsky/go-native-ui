@@ -27,6 +27,7 @@ type osDecoder struct {
 	keys, vals [4]uintptr
 	i32        int32
 	f64        float64
+	rect       [4]float64 // an NSRect passed by reference (system icons)
 	head       [4096]byte
 }
 

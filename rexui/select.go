@@ -127,7 +127,7 @@ func Select(k *base.Kit, label string, sel *int, options []string, o SelectOpts)
 	c.NextSize(ui.Px(max(w-padX-cx-cw/2, 0)), ui.Px(h))
 	c.NextFont(s.Font.Font)
 	c.NextTextColor(fg)
-	c.BoxKeyed(ui.DrawText|ui.FadeOverflowX, ui.KeyN(p.Key, 1), base.StrBytes(shown))
+	c.BoxKeyed(ui.DrawText|ui.EllipsisOverflowX, ui.KeyN(p.Key, 1), base.StrBytes(shown))
 	if f, disp := k.Icons().Prepare(c, chev, fg); f != 0 {
 		_, ch := k.IconSize(chev)
 		theme.At(c, theme.Snap(w-cx-cw/2), theme.Snap((h-ch)/2), cw, ch)

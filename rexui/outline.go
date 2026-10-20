@@ -129,14 +129,16 @@ func (ol *Outline) CloseRow() {
 }
 
 // TextBytes builds the row's text: one line of body text in the row's colour,
-// fading out where it does not fit.
+// fading out where it does not fit. It is the row's accessible name, unless Row
+// gave it one.
 func (ol *Outline) TextBytes(b []byte) {
 	k := ol.Kit()
 	c := k.Context()
+	ol.List.NameRow(b)
 	c.NextSize(ui.Pct(1), ui.Pct(1))
 	c.NextFont(k.Theme().Styles[theme.StyleBody].Font)
 	c.NextTextColor(ol.TextColor())
-	c.BoxKeyed(ui.DrawText|ui.FadeOverflowX, ui.KeyN(c.ParentKey(), 1), b)
+	c.BoxKeyed(ui.DrawText|ui.EllipsisOverflowX, ui.KeyN(c.ParentKey(), 1), b)
 }
 
 // EndOutline ends the outline: the stripes below the rows, the rows, the

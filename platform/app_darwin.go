@@ -3,10 +3,6 @@
 package platform
 
 import (
-	"runtime"
-	"sync"
-
-	"gonativeui/internal/ffi"
 	"gonativeui/internal/objc"
 )
 
@@ -45,6 +41,8 @@ func (w *Window) Wait(timeoutNs int64) []Event {
 		w.handle(ev)
 	}
 	w.reapDialogs()
+	w.reapDrags() // images converted on workers, promised files asked for (drag_darwin.go)
+	w.reapPaste() // a pasted TIFF converted on a worker (paste_darwin.go)
 	F.Call1(objc.PoolPop, pool)
 	w.returned, w.nOut = true, len(w.q.ev)
 	return w.q.ev
@@ -135,26 +133,4 @@ func (w *Window) Pending() []Event {
 		w.returned = false
 	}
 	return w.q.takePending()
-}
-
-var (
-	wakeMu    sync.Mutex
-	wakeFrame = new(ffi.Frame)
-)
-
-// osWake posts the reusable application-defined event; postEvent:atStart:
-// may be called from any thread.
-func osWake() {
-	w := theWindow.Load()
-	if w == nil {
-		return
-	}
-	// Autorelease pools are per thread: stay on one OS thread from push to pop.
-	runtime.LockOSThread()
-	wakeMu.Lock()
-	pool := wakeFrame.Call0(objc.PoolPush)
-	wakeFrame.Call4(objc.MsgSend, uintptr(w.app), uintptr(selPostEvent), uintptr(w.wakeEv), 0)
-	wakeFrame.Call1(objc.PoolPop, pool)
-	wakeMu.Unlock()
-	runtime.UnlockOSThread()
 }

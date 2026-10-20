@@ -24,6 +24,9 @@ type SliderRecipe struct {
 	// FilledDisabled that part when disabled (black or white at 15 %,
 	// measured #00000025).
 	Rest, Filled, FilledDisabled Tint
+	// FilledInactive replaces Filled in a window that is not the key window:
+	// labelColor at 22.7 % (#C5C5C5 over white, #515151 over #1E1E1E measured).
+	FilledInactive Tint
 	// Knob is the knob's colour and KnobShadow its shadow's, KnobShadowY
 	// points down with KnobShadowBlur points of blur: AppKit's knob floats
 	// in a soft shadow in light and has none in dark.
@@ -38,7 +41,8 @@ var SliderLook = SliderRecipe{
 	KnobW:  [theme.NumSizes]float32{theme.SizeRegular: 20, theme.SizeMini: 15, theme.SizeSmall: 17.5, theme.SizeLarge: 20, theme.SizeXLarge: 20},
 	KnobH:  [theme.NumSizes]float32{theme.SizeRegular: 16, theme.SizeMini: 12, theme.SizeSmall: 14, theme.SizeLarge: 16, theme.SizeXLarge: 16},
 	Rest:   Of(theme.Fill1), Filled: Of(theme.Accent), FilledDisabled: OfAlpha(theme.Label, 0.15, 0.15),
-	Knob: Of(theme.OnAccent), KnobShadow: OfAlpha(theme.Shadow, 0.25, 0),
+	FilledInactive: OfAlpha(theme.Label, 0.227, 0.227),
+	Knob:           Of(theme.Knob), KnobShadow: OfAlpha(theme.Shadow, 0.25, 0),
 	KnobShadowY: 0.5, KnobShadowBlur: 2,
 }
 
@@ -67,6 +71,8 @@ func Slider(k *base.Kit, label string, v *float32, lo, hi, step float32, o Slide
 	filled := rc.Filled.RGBA(r)
 	if rg.Disabled {
 		filled = rc.FilledDisabled.RGBA(r)
+	} else if rg.Inactive {
+		filled = rc.FilledInactive.RGBA(r)
 	}
 	ty := theme.Snap((h - th) / 2)
 	kx := theme.Snap(rg.Frac * (w - kw))

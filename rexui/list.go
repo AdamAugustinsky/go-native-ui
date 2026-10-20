@@ -99,8 +99,10 @@ type ListRecipe struct {
 	Stripe Tint
 	// Label colours a row's text, Label2 its secondary text (a date, a
 	// size), LabelDisabled both in a disabled list, and OnSelection text
-	// and glyphs on an emphasised selection.
-	Label, Label2, LabelDisabled, OnSelection Tint
+	// and glyphs on an emphasised selection; OnSelection2 is the secondary
+	// text there (measured white at 0.7: #B3D1F6 on #0064E1, Finder's
+	// dates and sizes).
+	Label, Label2, LabelDisabled, OnSelection, OnSelection2 Tint
 	// Inset is the room at the sides of the rows, PadY above the first row
 	// and below the last without a header and HeaderPadY with one, per
 	// style, in points (NSTableView's row rectangles: inset tables start
@@ -109,12 +111,16 @@ type ListRecipe struct {
 	// Rounded says the selection and the stripes have the theme's selection
 	// radius (Radii.Selection, 8), per style.
 	Rounded [NumListStyles]bool
-	// LegacyKnob colours a legacy scroll bar's knob, an opaque grey on the
-	// list's background (measured #7A7A7A on white, #9F9F9F on #1E1E1E), and
-	// LegacySlot the rounded slot it moves in, as wide and as far from the
-	// track's sides and ends (theme.Lines.ScrollerKnobInset; measured
-	// #F3F3F3 on white, #292929 on #1E1E1E).
-	LegacyKnob, LegacySlot Tint
+	// LegacyKnob colours a legacy scroll bar's knob, laid over its slot
+	// (measured #7A7A7A on white, #9F9F9F on #1E1E1E: labelColor-black at
+	// 49.8 % and white at 55.1 % over the slot), and LegacySlot the rounded
+	// slot it moves in, as wide and as far from the track's sides and ends
+	// (theme.Lines.ScrollerKnobInset; measured #F3F3F3 on white, #292929 on
+	// #1E1E1E). OverlayKnob colours an overlay scroll bar's knob (the same
+	// 49.8 % and 55.1 % over the view: #808080 on white, #9A9A9A on #1E1E1E,
+	// #7B7B7B on an alternating row; AppKitRef -live -flash, macOS 27.2
+	// 26B5101f), which fades with Show.
+	LegacyKnob, LegacySlot, OverlayKnob Tint
 }
 
 // ListLook is the recipe of lists, tables and outlines.
@@ -124,11 +130,13 @@ var ListLook = ListRecipe{
 	Divider: Of(theme.SelectionDivider), DividerUnemph: OfAlpha(theme.Text, 0.05, 0.05), DividerInset: 6,
 	Stripe: Of(theme.AltRow),
 	Label:  Of(theme.Label), Label2: Of(theme.Label2), LabelDisabled: Of(theme.TextDisabled), OnSelection: Of(theme.OnSelection),
-	Inset:      [NumListStyles]float32{ListFullWidth: 0, ListInset: 10},
-	PadY:       [NumListStyles]float32{ListFullWidth: 0, ListInset: 10},
-	HeaderPadY: [NumListStyles]float32{ListFullWidth: 0, ListInset: 5},
-	Rounded:    [NumListStyles]bool{ListInset: true},
-	LegacyKnob: OfAlpha(theme.Text, 0.52, 0.58), LegacySlot: OfAlpha(theme.Text, 0.047, 0.047),
+	OnSelection2: OfAlpha(theme.OnSelection, 0.7, 0.7),
+	Inset:        [NumListStyles]float32{ListFullWidth: 0, ListInset: 10},
+	PadY:         [NumListStyles]float32{ListFullWidth: 0, ListInset: 10},
+	HeaderPadY:   [NumListStyles]float32{ListFullWidth: 0, ListInset: 5},
+	Rounded:      [NumListStyles]bool{ListInset: true},
+	LegacyKnob:   OfAlpha(theme.Text, 0.498, 0.551), LegacySlot: OfAlpha(theme.Text, 0.047, 0.047),
+	OverlayKnob: OfAlpha(theme.Text, 0.498, 0.551),
 }
 
 // List is an open list: base's List and the look of its rows.
@@ -224,7 +232,7 @@ func (lk *rowLook) begin(l *base.List, ol *base.Outline, rs *base.RowState, name
 	case rs.Disabled:
 		lk.fgTint, lk.fg2 = rc.LabelDisabled, rc.LabelDisabled.RGBA(r)
 	case lk.emph:
-		lk.fgTint, lk.fg2 = rc.OnSelection, rc.OnSelection.RGBA(r)
+		lk.fgTint, lk.fg2 = rc.OnSelection, rc.OnSelection2.RGBA(r)
 	default:
 		lk.fgTint, lk.fg2 = rc.Label, rc.Label2.RGBA(r)
 	}
@@ -366,7 +374,7 @@ func ScrollBars(k *base.Kit, v *base.ScrollView) {
 		// inset each side, over its slot
 		tw := theme.Snap(px.ScrollThumbW * (1 + b.Hot))
 		in := theme.Snap(px.BorderW * 2)
-		col := theme.WithAlpha(r.Pal.ScrollThumb, b.Show)
+		col := theme.WithAlpha(ListLook.OverlayKnob.RGBA(r), b.Show)
 		if b.Legacy {
 			in = theme.Snap(r.Lines.ScrollerKnobInset)
 			tw = max(bw-2*in, theme.Snap(px.ScrollThumbW))

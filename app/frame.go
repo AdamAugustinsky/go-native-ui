@@ -14,9 +14,22 @@ const maxLatencyNs = int64(5e9)
 func (a *App) build(w, h int, dt float32) {
 	a.settle = a.settle || a.resized
 	a.resized = false
-	a.UI.Begin(&a.tr.in, w, h, a.scale, dt)
+	if a.dbg != nil {
+		a.debugBuildStart()
+	}
+	a.useFontScale() // zoom.go
+	a.ax.building = true
+	a.UI.Begin(&a.tr.in, w, h, a.EffectiveScale(), dt)
 	a.b.Build(a.UI)
+	if a.dbg != nil {
+		a.debugBuild()
+	}
 	a.UI.End(&a.list)
+	a.ax.building = false
+	if a.dbg != nil {
+		a.dbg.mark(PhaseLayout)
+	}
+	a.applyMenuZoom() // zoom.go
 	a.tr.endFrame()
 }
 
@@ -124,6 +137,10 @@ func (a *App) drawFrame(inHandler bool, passes int) bool {
 		return false
 	}
 	a.inFrame = true
+	platform.HoldApp(true) // no app-wide event is delivered inside the frame
+	if a.dbg != nil {
+		a.debugFrameStart()
+	}
 	// What the app's code autoreleases during the frame is drained at its end
 	// (macOS). The token lives on this stack, not in shared state: a nested
 	// run loop that the app's code runs nests its own pools inside this one.
@@ -155,7 +172,9 @@ func (a *App) drawFrame(inHandler bool, passes int) bool {
 	}
 	a.syncRegions()
 	a.syncShell()
+	a.syncAX()
 	a.syncText(a.Win, m.start)
+	a.syncColorPanel(a.Win)
 	a.syncChrome(a.Win)
 	if metered {
 		m.cpu2 = sysinfo.ThreadCPUNs()
@@ -163,14 +182,24 @@ func (a *App) drawFrame(inHandler bool, passes int) bool {
 
 	animating := a.UI.Animating()
 	why := a.arm(inHandler, animating, dirty, m.start)
+	if a.dbg != nil {
+		a.debugOwed(why)
+	}
 	a.R.Encode(a.fr.CmdBuf, a.fr.Target, a.fr.W, a.fr.H, a.cfg.Clear, &a.list)
+	if a.dbg != nil {
+		a.dbg.mark(PhaseEncode)
+	}
 	a.Surf.EndFrame(&a.fr) // applies the shell changes syncShell staged, in the present's transaction
 	a.Win.FlushShell()     // (nothing is left; a safety net), inside the frame's pool
 	framePoolPop(pool)
 	a.inFrame = false
+	platform.HoldApp(false)
 	m.commit = platform.Now()
 	if metered {
 		m.cpu3 = sysinfo.ThreadCPUNs()
+	}
+	if a.dbg != nil {
+		a.debugFrameEnd()
 	}
 
 	a.owedWhy = why
@@ -194,6 +223,8 @@ func (a *App) abandonFrame(pool uintptr) {
 		return
 	}
 	a.inFrame = false
+	a.ax.building = false // a Build that panicked never reached End
+	platform.HoldApp(false)
 	abandonSurfaceFrame(a.Surf, &a.fr)
 	framePoolPop(pool)
 }

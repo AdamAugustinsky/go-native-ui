@@ -23,7 +23,9 @@ var clipEmpty [1]byte // a non-nil pointer for empty text
 // SetClipboardText replaces the system clipboard with a copy of the plain
 // text b (UTF-8; invalid sequences become U+FFFD). b may be reused after the
 // call. Main thread.
-func SetClipboardText(b []byte) {
+func SetClipboardText(b []byte) { setClipboardText(b, false) }
+
+func setClipboardText(b []byte, concealed bool) {
 	pbInit()
 	if !utf8.Valid(b) {
 		clipScratch = appendValidUTF8(clipScratch[:0], b)
@@ -42,6 +44,10 @@ func SetClipboardText(b []byte) {
 			objc.Send(pb, selClearContents)
 			objc.Send2(pb, selSetStrFT, uintptr(str), uintptr(pbType))
 			objc.Release(str)
+			if concealed {
+				pbImageInit()
+				pbMarkConcealed(pb)
+			}
 		}
 	}
 	objc.F.Call1(objc.PoolPop, pool)
@@ -50,39 +56,57 @@ func SetClipboardText(b []byte) {
 
 // RequestPaste asks for the plain text on the clipboard. The answer arrives as
 // one EvPaste event on w's queue with Tag set to tag: its Text, or FlagFailed.
-// On macOS it is on the queue when RequestPaste returns, so the next Wait or
-// Poll delivers it. A newer request replaces a pending one, whose answer then
-// never arrives. The Text of an EvPaste stays valid like that of EvText: until
-// the next Wait or Poll. Main thread. Text over MaxPaste bytes is measured,
-// not copied.
-func (w *Window) RequestPaste(tag uint64) {
-	pbInit()
+// The pasteboard is read on a worker (pasteboard_worker_darwin.go), so the
+// answer comes with a later Wait or Poll, never during the call. A newer
+// request replaces a pending one, whose answer then never arrives. The Text of
+// an EvPaste stays valid like that of EvText: until the next Wait or Poll. Main
+// thread. Text over MaxPaste bytes is measured, not copied.
+func (w *Window) RequestPaste(tag uint64) { w.RequestPasteKinds(tag, WantText) }
+
+// RequestPasteKinds asks for the first of files, image and text, of the
+// requested kinds, that the clipboard holds (see paste.go). The general
+// pasteboard is read on the pasteboard worker, which waits for the owner of the
+// data if it is slow (a slow owner no longer freezes the window), and converts
+// an image that is only there as a TIFF to PNG with ImageIO; the answer arrives
+// in a later Wait. A kind that cannot be delivered (over MaxPaste, or a TIFF
+// that does not convert) is passed over for the next requested kind.
+//
+// Files are the file URLs of the pasteboard's items (public.file-url, on this
+// machine, or the NSFilenamesPboardType list older programs write). Nothing of a
+// pasteboard over MaxPaste is copied: it is measured first. Main thread.
+func (w *Window) RequestPasteKinds(tag uint64, kinds PasteKinds) {
+	pbImageInit()
 	q := &w.q
 	from := 0
 	if w.returned {
 		from = w.nOut // the events before it are already with the app
 	}
 	q.dropQueuedPaste(from)
-	off := len(q.text)
-	pool := objc.F.Call0(objc.PoolPush)
-	if pb := objc.Send(clsPasteboard, selGeneralPB); pb != 0 {
-		// The size is asked for before any byte is copied, so an oversized
-		// clipboard costs the scan and nothing on the Go heap.
-		if str := objc.Send1(pb, selStringForType, uintptr(pbType)); str != 0 {
-			if n := int(objc.Send1(str, selLenBytes, 4 /* NSUTF8StringEncoding */)); n > 0 && n <= MaxPaste {
-				q.text = objc.AppendUTF8(q.text, str)
-			}
+	rd := pasteboardReader()
+	var pb objc.ID
+	if kinds&(WantText|WantImage|WantFiles) != 0 {
+		pool := objc.F.Call0(objc.PoolPush)
+		if pb = objc.Send(clsPasteboard, selGeneralPB); pb != 0 {
+			rd.submit(w, pb, tag, kinds) // retains it
 		}
+		objc.F.Call1(objc.PoolPop, pool)
 	}
-	objc.F.Call1(objc.PoolPop, pool)
-	n := len(q.text) - off
-	if n == 0 || n > MaxPaste {
-		q.text = q.text[:off]
+	if pb == 0 {
+		rd.cancel()
 		q.push(Event{Kind: EvPaste, Flags: FlagFailed, Tag: tag, Time: Now()})
-		return
 	}
-	q.push(Event{Kind: EvPaste, Text: TextRef{uint32(off), uint32(n)}, Tag: tag, Time: Now()})
 }
+
+// reapPaste turns a finished read into the EvPaste of its request. Wait calls
+// it after the AppKit events; main thread.
+func (w *Window) reapPaste() {
+	if r := pbShared.Load(); r != nil { // (no reader, no read: Wait does not start the worker)
+		r.take(w)
+	}
+}
+
+// pastePending reports whether a read is running or waits to be taken.
+func pastePending() bool { return pasteboardReader().pending() }
 
 // dropQueuedPaste removes the EvPaste events at index from on: the answer to
 // an older request that has not been delivered.

@@ -555,3 +555,56 @@ func TestTextWithATabIsKeptInTheFrameOfATabKey(t *testing.T) {
 		t.Fatalf("the field holds %q, want %q", r.text(), "a b")
 	}
 }
+
+// A chord with more modifiers than the field's is not the field's: ⇧⌘C (Show
+// Colors), ⇧⌘A, ⇧⌘X, ⇧⌘V and ⌥⌘V are commands of the app's or the system's,
+// so the field neither claims them (the commands see them) nor copies, cuts,
+// selects or pastes. ⌘C, ⌘A and ⇧⌘Z (redo) stay the field's.
+func TestFieldLeavesChordsWithMoreModifiersToTheCommands(t *testing.T) {
+	r := newRig(t, true)
+	r.typ("hello")
+	r.key('A', ModSuper)
+	if lo, hi := r.buf.Selection(); lo != 0 || hi != 5 {
+		t.Fatalf("⌘A selected %d..%d", lo, hi)
+	}
+	var copied []string
+	r.c.ClipboardSet = func(b []byte) { copied = append(copied, string(b)) }
+	r.c.SetFocus(r.c.focusKey)
+
+	for _, k := range []struct {
+		code KeyCode
+		mods Mods
+		mine bool
+	}{
+		{'C', ModSuper, true},
+		{'C', ModSuper | ModShift, false},
+		{'C', ModSuper | ModAlt, false},
+		{'X', ModSuper | ModShift, false},
+		{'V', ModSuper | ModShift, false},
+		{'V', ModSuper | ModAlt | ModShift, false},
+		{'A', ModSuper | ModShift, false},
+		{'Z', ModSuper | ModShift, true},
+		{'Z', ModSuper | ModAlt, false},
+	} {
+		e := KeyEvent{Code: k.code, Mods: k.mods, Down: true}
+		if got := r.c.FieldClaims(e); got != k.mine {
+			t.Errorf("FieldClaims(%c %v) = %v, want %v", rune(k.code), k.mods, got, k.mine)
+		}
+		r.in.PushKey(e)
+		var claimed bool
+		r.harness.frame(func(c *Context) {
+			_, claimed = c.KeyAt(0)
+			c.NextSize(Px(200), Px(24))
+			c.TextField("f", &r.buf)
+		})
+		if claimed != k.mine {
+			t.Errorf("key %c %v claimed=%v, want %v", rune(k.code), k.mods, claimed, k.mine)
+		}
+		if !k.mine && r.text() != "hello" {
+			t.Errorf("%c %v changed the text to %q", rune(k.code), k.mods, r.text())
+		}
+	}
+	if len(copied) != 1 {
+		t.Errorf("the clipboard was set %d times, want one (⌘C only)", len(copied))
+	}
+}

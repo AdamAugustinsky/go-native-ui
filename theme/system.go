@@ -13,9 +13,10 @@ type SystemValues struct {
 	// does not follow the system appearance); the theme's values apply.
 	Known bool
 	// Colors are the System roles' colours in the light (0) and the dark (1)
-	// mode, 0xRRGGBBAA, indexed by Role (below NumSystemRoles). A 0 keeps the
-	// theme's value (a colour the system does not have).
-	Colors [2][NumSystemRoles]uint32
+	// mode, 0xRRGGBBAA, indexed by platform.SystemColor (the System role it
+	// feeds is systemColorRole's). A 0 keeps the theme's value (a colour the
+	// system does not have).
+	Colors [2][platform.NumSystemColors]uint32
 	// Settings are the accessibility and scroller settings.
 	Settings Settings
 }

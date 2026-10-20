@@ -138,7 +138,7 @@ func (r *Rex) drawPanes(c *ui.Context) {
 	c.PushOpacity(fade)
 	// All shadows first, so no pane's shadow lands on a neighbour's fill.
 	for _, slot := range ord[:n] {
-		r.th.Chrome.SurfaceShadow(c, &r.th, r.surface(t, slot, ft[slot], opa[slot]))
+		r.th.Chrome.SurfaceShadow(c, r.th, r.surface(t, slot, ft[slot], opa[slot]))
 	}
 	for _, slot := range ord[:n] {
 		r.drawPane(c, t, slot, r.disp[slot], ft[slot], opa[slot])
@@ -165,7 +165,7 @@ func (r *Rex) drawPane(c *ui.Context, t *tab, slot int8, d [4]float32, ft, opa f
 	key := paneKey(p.uid)
 
 	s := r.surface(t, slot, ft, opa)
-	kg := r.th.Chrome.BeginSurface(c, &r.th, s)
+	kg := r.th.Chrome.BeginSurface(c, r.th, s)
 
 	// Header: process icon and title; the buttons only on the focused pane.
 	hc := 36.5 * k
@@ -174,11 +174,11 @@ func (r *Rex) drawPane(c *ui.Context, t *tab, slot int8, d [4]float32, ft, opa f
 	r.IconAt(c, &kg, pt.icon, 39*k, hc, titleCol)
 	avail := w - 62*k - theme.Lerp(20*k, 206*k, ft)
 	if avail > 4 {
-		adv := r.Width(r.th.Font.UISemi, pt.title)
+		adv := r.Width(r.th.Styles[theme.StylePaneTitle].Font, pt.title)
 		if adv > avail {
-			r.Put(c, &kg, r.th.Font.UISemi, pt.title, 62*k, 47*k, titleCol, avail, ui.FadeOverflowX)
+			r.Put(c, &kg, r.th.Styles[theme.StylePaneTitle].Font, pt.title, 62*k, 47*k, titleCol, avail, ui.FadeOverflowX)
 		} else {
-			r.Put(c, &kg, r.th.Font.UISemi, pt.title, 62*k, 47*k, titleCol, adv+2, 0)
+			r.Put(c, &kg, r.th.Styles[theme.StylePaneTitle].Font, pt.title, 62*k, 47*k, titleCol, adv+2, 0)
 		}
 	}
 	if ft > 0.02 {
@@ -193,7 +193,7 @@ func (r *Rex) drawPane(c *ui.Context, t *tab, slot int8, d [4]float32, ft, opa f
 			case btnClose:
 				enabled = enabled && r.canClose()
 			}
-			r.IconButton(c, btnKey(p.uid, b), icons[b], w-dx[b]*k, hc+k, 28*k, r.tone(0x96999B, 0x8A8EA1), r.tone(0x3F4246, 0xECEDF3), enabled)
+			r.HeaderButton(c, holderKey(p.uid, b), icons[b], headerButtons[b], w-dx[b]*k, hc+k, 28*k, enabled)
 		}
 		c.PopOpacity()
 	}
@@ -213,7 +213,7 @@ func (r *Rex) drawPane(c *ui.Context, t *tab, slot int8, d [4]float32, ft, opa f
 		g.shell()
 	}
 
-	r.th.Chrome.EndSurface(c, &r.th, s, kg)
+	r.th.Chrome.EndSurface(c, r.th, s, kg)
 }
 
 // drawDividers builds the grab areas of the gutters between panes (theme.Chrome.Divider).
@@ -223,6 +223,6 @@ func (r *Rex) drawDividers(c *ui.Context, t *tab) {
 		if !n.used || n.leaf {
 			continue
 		}
-		r.th.Chrome.Divider(c, &r.th, divKey(n.uid), n.axis, n.rect, n.gut)
+		r.th.Chrome.Divider(c, r.th, divKey(n.uid), n.axis, n.rect, n.gut)
 	}
 }

@@ -14,6 +14,7 @@ import (
 
 	"gonativeui/internal/ffi"
 	"gonativeui/internal/objc"
+	"gonativeui/internal/testlock"
 	"gonativeui/platform"
 )
 
@@ -43,6 +44,7 @@ import (
 // the transition although the button was there, enabled and clicked, or
 // every attempt was interfered with.
 func TestGreenButtonFullScreen(t *testing.T) {
+	testlock.Hold(t, "activation") // it makes the app active: one process at a time
 	if testing.Short() {
 		t.Skip("opens a window and goes full screen")
 	}

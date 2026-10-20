@@ -33,6 +33,15 @@ type rig struct {
 // own) that builds build each frame, and runs three frames.
 func newRig(t *testing.T, m theme.Mode, sys *theme.SystemValues, build func(g *rig)) *rig {
 	t.Helper()
+	g := openRig(t, m, sys, build)
+	g.frames(3)
+	return g
+}
+
+// openRig is newRig before its first frame: icons can still be added to the
+// kit (Kit.AddIcon).
+func openRig(t *testing.T, m theme.Mode, sys *theme.SystemValues, build func(g *rig)) *rig {
+	t.Helper()
 	// the icon atlas rasterises symbols through AppKit on macOS, which wants a
 	// thread of its own
 	runtime.LockOSThread()
@@ -51,7 +60,6 @@ func newRig(t *testing.T, m theme.Mode, sys *theme.SystemValues, build func(g *r
 	g.in.MouseX, g.in.MouseY = -100, -100
 	g.list.Quads = make([]gpu.Quad, 0, 1<<13)
 	g.sem.Reserve(4096, 1<<16)
-	g.frames(3)
 	return g
 }
 
