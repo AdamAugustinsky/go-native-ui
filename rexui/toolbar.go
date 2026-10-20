@@ -113,10 +113,11 @@ type ToolbarRecipe struct {
 	// BeginShared) the first is EdgePad[0] wider and the last EdgePad[0]
 	// and then EdgePad[1] (after the minimum). Measured on the Mac mini's
 	// 27.2 (26B5101f) with 21 symbols in lone items, 3-item groups and
-	// 2-item groups (tools/appkitscenes' toolbar probe): compact = width +
-	// 8.3 within half a point (trash 18.24 → 27, textformat 22.78 → 31.5,
-	// checklist 22.38 → 31 in the middle of Notes' group), unified 4 more;
-	// first +4, last +5 (unified: max(36, w+4)+1).
+	// 2-item groups (tools/appkitscenes/toolbarprobe.m): compact = width +
+	// 8.43 (their mean; each within half a point, no formula fits all:
+	// trash 18.24 → 27, textformat 22.78 → 31.5, checklist 22.38 → 31 in
+	// the middle of Notes' group), unified 4 more; first +4, last +5
+	// (unified: max(36, w+4)+1).
 	GroupPad [2]float32
 	EdgePad  [2]float32
 	// Deprecated: ItemPad is unused; GroupPad sizes every item.

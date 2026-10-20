@@ -217,8 +217,8 @@ marks it (sidebar, inspector, each capsule; the band over the content is an
 opaque `AreaTitlebar` region of the bar's or the content's colour, since the
 capsules lie below the window's pixels). Offscreen, under Reduce
 Transparency and off macOS the measured fallbacks are drawn. The rows of a
-sidebar and the content scroll below the band, clipped there, where AppKit
-fades them under it.
+sidebar scroll below the band, clipped there; the content pane's run under it
+(D4b, below).
 
 On the theme's values from D3b forms (2026-10-20): toolbar symbols
 `CapsuleSpec.Glyph`, items at least the style's `ItemW`, menus
@@ -227,11 +227,9 @@ On the theme's values from D3b forms (2026-10-20): toolbar symbols
 Against the Mac mini's Finder (`captures-macmini`, 27.2 26B5101f, AppKit's
 frames from its tree) every capsule is within 0.5: WideGap next to a menu
 or a group as well as a picker (8.5 there; 4.5 on 26B5091g), the inspector
-pane's items half a point past its edge (`ToolbarRecipe.InspectorEdge`),
-Group and Share 0.5 wider than AppKit's (our symbols' widths are whole
-pixels). Notes' search field is 167 there (166 on 26B5091g); its checklist
-item is 31 there (35.5 ours, 36 on 26B5091g), so the format group is 4.5
-wider and New Note 2 left of AppKit's 477.
+pane's items half a point past its edge (`ToolbarRecipe.InspectorEdge`).
+Notes' search field is 167 there (166 on 26B5091g). Since D4b Notes'
+items are within 0.5 too (below).
 
 With legacy scrollers (the system's style, followed live; a mouse on the
 Mac mini) every scroll view's content leaves the bar's 17 pt beside it and
@@ -258,6 +256,57 @@ with the rest of the pane, into a » overflow menu at the band's end, as
 NSToolbar's do (`Toolbar.End` reports them; with native menus a choice
 comes back as the item's Clicked); the collapsed picker opens for Show Menu
 and Expand, and back and forward show the focus ring.
+
+### Toolbar symbols, the scroll edge, the row disclosure (D4b)
+
+Measured on the Mac mini (27.2, 26B5101f), 2026-10-20, with
+`tools/appkitscenes/toolbarprobe.m` (any toolbar of symbols offscreen: 21
+symbols alone, in 3-item and 2-item groups, compact and unified) and the
+scene tool's `-width`, `-selectAll` and `-nested`:
+
+- Toolbar symbols draw at AppKit's large scale (`CapsuleSpec.GlyphScale`,
+  `ToolbarSymbol`: 13 pt; sidebar.left's image 24 × 18, not 18 × 14). An
+  item is the symbol's exact alignment width at that scale
+  (`icon.Atlas.AlignWidth`, measured 64× larger, since AppKit reports it
+  rounded to half points) and 8.43 (`GroupPad`, the mean over the 21
+  symbols; each is within half a point, no formula found fits all exactly),
+  4 more unified, at least 36 unified; in a capsule of several items the
+  first part is 4 wider and the last 5 (`EdgePad`). So Notes' Checklist is
+  31 as the middle of its group, not a rounding (it is 35 first and 36
+  last). Menus are their medium-scale image width and 27.5
+  (`IconMediumWidth`); 8.5 next to a menu or a group (`MenuGap`; 4.5 on
+  26B5091g); a flexible space keeps 3.5 after a compact item (`FlexAfter`).
+  Finder's and Notes' capsules are within 0.5 of AppKit's tree, and the
+  parts of Notes' groups within 0.5 wide (`TestNotesToolbarMatchesAppKitTree`,
+  `TestToolbarItemWidthsMatchAppKit`; macOS 27 only, the symbols' widths
+  differ elsewhere).
+- The scroll edge (NSScrollPocket) is flat: over a selection the whole pocket
+  deep the content shows through at 18% (light, 15% inactive) and 22% (dark,
+  21% inactive) from the band's top to the pocket's end, no gradient, the
+  same with legacy and overlay scrollers. A content pane's scroll view runs
+  under the band (`base.Kit.NextScrollInset`; a table's
+  `TableOpts.TopInset`, its header pinned below the band over the rows) and
+  `ScrollBars` draws the bar (`ScrollEdgeLook`) while content is under it or
+  the window is inactive, always above a table's header, with the hairline
+  unless the header ends it. The toolbar leaves that band clear
+  (`ToolbarOpts.ContentEdge`) and then draws its capsules, filled as the
+  system's glass measured over the band (`EdgeFill`). Static at rest, no
+  allocation per frame. AppKit also blurs what is under the band; this does
+  not: text under the band is sharp, and its ink differs from AppKit's
+  blurred one (ΔE up to 4.6 between lines).
+- A sidebar row's disclosure: once any row has children every row's content
+  moves 9 right (`DisclosureRoom`); the disclosure is a 13-wide box at 12 pt,
+  13 more per level (`DisclosureX`), its chevron 1 below the middle,
+  secondaryLabelColor (`RowChevron`); Finder's `-nested` sidebar within half
+  a point (`chromedemo -nested`).
+
+Live captures (`Chrome D4`, the Mac mini, legacy and overlay scrollers,
+light and dark, key and inactive, at the top and scrolled: 48) against
+`captures-macmini` and `captures-macmini-overlay` at the probe points: fills
+within ΔE 2, but the sidebar search field in dark (2.1 key, 2.4 inactive,
+the D4 field) and the blurred text under the band. The scrolled phases are
+AppKit's offsets (Finder 130; Notes 114 with legacy bars, 98 overlay: our
+note keeps NSTextView's empty line after its last newline).
 
 ### Left to the eye, and why
 
@@ -309,21 +358,22 @@ Still in recipe fields:
   - Pop-up chevron: centred 14 from the end (borderless 10, pull-down 13.25); borderless label pad 8.
   - Box: title band 12, title x 10.
 - Window chrome (D4):
-  - Toolbar symbols are 13 pt in both styles (AppKit's images: 15–20 wide);
-    `CapsuleSpec.Glyph` says 16.
-  - A one-symbol item is its symbol and 12 (`ToolbarRecipe.ItemPad`), at
-    least 24 compact and 36 unified; inside a group, the symbol and 17
-    (compact) or 21 (unified). `ToolbarSpec.ItemW` 28 is too wide for
-    compact (27 measured for trash).
-  - A menu item is its symbol and 27.5, at least 44.5 (44.5 and 47.5
-    measured); `CapsuleSpec.MenuW` is one 46.
+  - Toolbar symbols are 13 pt at the large scale (`CapsuleSpec.GlyphScale`).
+  - A one-symbol item is its symbol's alignment width and 8.43 compact,
+    12.43 unified (`ToolbarRecipe.GroupPad`), at least 36 unified, the ends
+    of a capsule of several 4 and 5 wider (`EdgePad`); `ToolbarSpec.ItemW`
+    sets only the unified minimum.
+  - A menu item is its symbol's medium image and 27.5, at least 44.5 (44.5
+    and 47.5 measured); `CapsuleSpec.MenuW` is one 46.
   - Toolbar symbols are labelColor made opaque by the vibrancy (#000000,
     #FFFFFF; `SidebarLabel`'s value) and #A6A6A6 / #666666 inactive, lighter
     than `TitleTextInactive`.
   - The scroll edge's bar and hairline cover the content pane only (the
     sidebar's and inspector's glass run to the top), the hairline lies just
     below the band (y 52–52.5), and under a table header pinned below the
-    toolbar the pocket's bar covers the header (`ToolbarOpts.Pocket`).
+    toolbar the pocket's bar covers the header (`ToolbarOpts.Pocket`, or
+    the table's own with `TableOpts.TopInset`); the bar lets 18% (light) /
+    22% (dark) of the content through (`ScrollEdgeLook`).
   - Sidebar symbols are 16 pt; the title's field starts 4 after the
     symbol's own width (not a 20-pt column) and draws its text 2 in, as
     the headers' (`SidebarRecipe.FieldInset`).
@@ -338,9 +388,9 @@ Still in recipe fields:
   - Single-line labels end in "…" (`ui.EllipsisOverflowX`: sidebar rows,
     table cells and headers, pop-ups, the path bar); tabs keep their fade.
     A row's text ends 22 before the sidebar's edge (`SidebarRecipe.TextEnd`).
-  - A disclosure in a sidebar row lies between the selection's edge and
-    the symbol; no AppKit capture has a nested source-list row, so this
-    place is not measured.
+  - A sidebar row's disclosure is at 12 pt, 13 more per level, and moves
+    every row's content 9 right (`SidebarRecipe.DisclosureRoom`,
+    `DisclosureX`, `DisclosureDY`, `RowChevron`; D4b).
   - Lists: inset 10, rows 10 pt below the top (5 below a header), block
     divider inset 6; header 28 with 1 × 16 column separators; cell padding
     10, 8 at the outer sides; disclosure x 2, width 13, content at 15 + 13
