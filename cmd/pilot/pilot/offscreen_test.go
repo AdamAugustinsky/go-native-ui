@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 
 	"gonativeui/app"
 	"gonativeui/fs"
@@ -20,12 +21,18 @@ func newOffscreen(t testing.TB, b app.Builder) *app.Offscreen {
 	t.Helper()
 	o, err := app.NewOffscreen(Config(), tw, th, 1, b)
 	if err != nil {
+		if c, ok := b.(interface{ Close() }); ok {
+			c.Close()
+		}
 		if os.Getenv("CI") != "" {
 			t.Fatalf("offscreen rendering on CI: %v", err)
 		}
 		t.Skipf("offscreen rendering: %v", err)
 	}
 	t.Cleanup(o.Close)
+	if c, ok := b.(interface{ Close() }); ok {
+		t.Cleanup(c.Close) // (after the window's: first, so the icons' textures are freed while the renderer is there)
+	}
 	return o
 }
 
@@ -265,5 +272,55 @@ func TestFollowsTheSystemMode(t *testing.T) {
 	}
 	if dark, _ := o.UI.ChromeDark(); dark {
 		t.Error("the chrome is still declared dark")
+	}
+}
+
+// openFiles counts the process's open file descriptors (-1: not known here).
+func openFiles() int {
+	for _, dir := range []string{"/dev/fd", "/proc/self/fd"} {
+		if es, err := os.ReadDir(dir); err == nil {
+			return len(es)
+		}
+	}
+	return -1
+}
+
+// Rendering the scene again and again leaves nothing behind: the Pilot of each
+// run is closed with its window, so its icon workers end and their handles
+// are released.
+func TestOffscreenRunsLeaveNoWorkersOrHandles(t *testing.T) {
+	dir := t.TempDir()
+	run := func() {
+		if _, _, err := RenderShot(filepath.Join(dir, "pilot.png"), 600, 380, 1, false); err != nil {
+			if os.Getenv("CI") != "" {
+				t.Fatal(err)
+			}
+			t.Skipf("offscreen rendering: %v", err)
+		}
+	}
+	settled := func(g0, f0 int) (g, f int) {
+		for n := 0; n < 200; n++ {
+			if g, f = runtime.NumGoroutine(), openFiles(); g <= g0 && f <= f0 {
+				return
+			}
+			runtime.GC()
+			time.Sleep(10 * time.Millisecond)
+		}
+		return
+	}
+	run() // (warm: the runtime's and the renderer's own threads and handles)
+	time.Sleep(100 * time.Millisecond)
+	runtime.GC()
+	g0, f0 := runtime.NumGoroutine(), openFiles()
+	const runs = 6
+	for i := 0; i < runs; i++ {
+		run()
+	}
+	g, f := settled(g0, f0)
+	if g > g0 {
+		t.Errorf("%d goroutines after %d runs, %d before: the workers were not stopped", g, runs, g0)
+	}
+	if f > f0 {
+		t.Errorf("%d open files after %d runs, %d before", f, runs, f0)
 	}
 }

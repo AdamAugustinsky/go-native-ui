@@ -19,7 +19,7 @@ func TestAccessibleNames(t *testing.T) {
 		}
 		t.Skipf("offscreen rendering: %v", err)
 	}
-	defer o.Close()
+	defer closeScene(pl, o)
 	settle := func() {
 		for n := 0; n < 600; n++ {
 			o.Frame()

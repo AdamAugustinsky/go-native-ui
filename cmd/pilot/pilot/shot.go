@@ -250,7 +250,7 @@ func shoot(pl *Pilot, path string, w, h int, scale float32, corners bool, look L
 	if err != nil {
 		return 0, 0, err
 	}
-	defer o.Close()
+	defer closeScene(pl, o)
 	face := "system"
 	if look.Mono {
 		face = monoFace()
@@ -268,12 +268,22 @@ func shoot(pl *Pilot, path string, w, h int, scale float32, corners bool, look L
 	return len(o.Quads()), o.R.DrawCalls(), nil
 }
 
+// closeScene closes what renderScene returned: the Pilot (its workers, while
+// the window's renderer is still there to free the icons' textures), then the
+// window.
+func closeScene(pl *Pilot, o *app.Offscreen) {
+	pl.Close()
+	o.Close()
+}
+
 // renderScene runs pl offscreen until it is at rest, after setup and post,
-// and returns the window, still open, with its last frame.
+// and returns the window, still open, with its last frame. It owns pl: on an
+// error both are closed, otherwise the caller closes them (closeScene).
 func renderScene(pl *Pilot, w, h int, scale float32, look Look, setup, post func()) (*app.Offscreen, *image.RGBA, error) {
 	sa := &shotApp{Pilot: pl, sys: look.System, inactive: look.Inactive}
 	o, err := app.NewOffscreen(Config(), w, h, scale, sa)
 	if err != nil {
+		pl.Close()
 		return nil, nil, err
 	}
 	settle := func() error {
@@ -293,14 +303,14 @@ func renderScene(pl *Pilot, w, h int, scale float32, look Look, setup, post func
 		setup()
 	}
 	if err := settle(); err != nil {
-		o.Close()
+		closeScene(pl, o)
 		return nil, nil, err
 	}
 	if post != nil {
 		post()
 	}
 	if err := settle(); err != nil {
-		o.Close()
+		closeScene(pl, o)
 		return nil, nil, err
 	}
 	img, _ := o.Frame()
@@ -325,7 +335,7 @@ func Measure(w, h int, scale float32, look Look) ([]Node, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer o.Close()
+	defer closeScene(pl, o)
 	var t ui.SemTree
 	pl.a.UI.Semantics(&t)
 	var out []Node

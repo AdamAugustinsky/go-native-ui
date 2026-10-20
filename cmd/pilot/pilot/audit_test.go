@@ -36,7 +36,7 @@ func scene(t *testing.T, look Look) (*Pilot, *app.Offscreen) {
 		}
 		t.Skipf("offscreen rendering: %v", err)
 	}
-	t.Cleanup(o.Close)
+	t.Cleanup(func() { closeScene(pl, o) })
 	return pl, o
 }
 
