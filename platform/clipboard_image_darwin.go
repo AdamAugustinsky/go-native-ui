@@ -39,11 +39,11 @@ var (
 	pbPNG, pbTIFF, pbFileURL, pbFilenames, pbConcealed, pbTransient objc.ID
 	clsPBNSData, clsPBNSURL, clsPBArray, clsPBString, clsPBItem     objc.ID
 	// selectors
-	selPBDataForType, selPBSetDataFT, selPBDataWithBytes, selPBNSDataEmpty     objc.SEL
-	selPBBytes, selPBLength, selPBItems, selPBCount, selPBObjectAt             objc.SEL
-	selPBURLWithString, selPBFilePathURL, selPBPath, selPBPropListForType      objc.SEL
-	selPBTypes, selPBIsKind, selPBIsFileURL, selPBHost, selPBUTF8              objc.SEL
-	selPBGeneral, selPBStringForType, selPBLenBytes, selPBRetain, selPBRelease objc.SEL
+	selPBDataForType, selPBSetDataFT, selPBDataWithBytes, selPBNSDataEmpty                       objc.SEL
+	selPBBytes, selPBLength, selPBItems, selPBCount, selPBObjectAt                               objc.SEL
+	selPBURLWithString, selPBFilePathURL, selPBPath, selPBPropListForType                        objc.SEL
+	selPBTypes, selPBIsKind, selPBIsFileURL, selPBHost, selPBUTF8                                objc.SEL
+	selPBGeneral, selPBStringForType, selPBLenBytes, selPBRetain, selPBRelease, selPBChangeCount objc.SEL
 )
 
 func pbImageInit() {
@@ -64,6 +64,7 @@ func pbImageInit() {
 		selPBHost, selPBUTF8 = objc.Sel("host"), objc.Sel("UTF8String")
 		selPBGeneral, selPBStringForType, selPBLenBytes = objc.Sel("generalPasteboard"), objc.Sel("stringForType:"), objc.Sel("lengthOfBytesUsingEncoding:")
 		selPBRetain, selPBRelease = objc.Sel("retain"), objc.Sel("release")
+		selPBChangeCount = objc.Sel("changeCount")
 	})
 }
 

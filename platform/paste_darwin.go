@@ -99,7 +99,11 @@ func (w *Window) RequestPasteKinds(tag uint64, kinds PasteKinds) {
 
 // reapPaste turns a finished read into the EvPaste of its request. Wait calls
 // it after the AppKit events; main thread.
-func (w *Window) reapPaste() { pasteboardReader().take(w) }
+func (w *Window) reapPaste() {
+	if r := pbShared.Load(); r != nil { // (no reader, no read: Wait does not start the worker)
+		r.take(w)
+	}
+}
 
 // pastePending reports whether a read is running or waits to be taken.
 func pastePending() bool { return pasteboardReader().pending() }

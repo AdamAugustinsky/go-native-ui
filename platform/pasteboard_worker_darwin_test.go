@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 	"unsafe"
+	"weak"
 
 	"gonativeui/internal/ffi"
 	"gonativeui/internal/objc"
@@ -73,11 +74,12 @@ func runSlowOwner() {
 	objc.Send1(loop, selRun, uintptr(date))
 }
 
-// A pasteboard whose owner answers in 1.5 s does not hold up the thread that
-// asked: the request returns at once, the loop goes on, and the image arrives
-// when the owner has it.
+// A pasteboard whose owner answers in 1.5 s does not hold up the main loop: a
+// real window's event loop (Window.Wait, on the process's main thread) goes on
+// handling other events while the provider sleeps, and the paste comes out of
+// Wait when the owner has the data.
 func TestPasteboardSlowOwnerDoesNotBlock(t *testing.T) {
-	r := newPasteRig(t)
+	newPasteRig(t)
 	cmd := exec.Command(os.Args[0])
 	cmd.Env = append(os.Environ(), "GNUI_PB_SLOW=1500ms")
 	out, err := cmd.StdoutPipe()
@@ -99,35 +101,291 @@ func TestPasteboardSlowOwnerDoesNotBlock(t *testing.T) {
 		t.Skip("the slow owner did not start")
 	}
 
-	start := time.Now()
+	var res struct {
+		err      error
+		request  time.Duration // how long RequestPasteKinds took
+		took     time.Duration // until the paste came out of Wait
+		wakes    int           // other events (EvWake, from a goroutine) handled before it
+		maxGap   time.Duration // the longest time between two of them
+		pastes   int
+		ev       Event
+		data     []byte
+		timedOut bool
+	}
+	onMain(func() {
+		w, err := Open(Options{Title: "paste", Width: 200, Height: 150, Hidden: true})
+		if err != nil {
+			res.err = err
+			return
+		}
+		defer w.Close()
+		w.Wait(0)
+		stop := make(chan struct{})
+		defer close(stop)
+		go func() { // another source of events: the loop must handle them while the owner is slow
+			for {
+				select {
+				case <-stop:
+					return
+				case <-time.After(20 * time.Millisecond):
+					Wake()
+				}
+			}
+		}()
+		start := time.Now()
+		w.RequestPasteKinds(1, WantImage)
+		res.request = time.Since(start)
+		last := start
+		for res.pastes == 0 {
+			if time.Since(start) > 20*time.Second {
+				res.timedOut = true
+				return
+			}
+			for _, e := range w.Wait(int64(500 * time.Millisecond)) {
+				switch e.Kind {
+				case EvWake:
+					now := time.Now()
+					res.wakes++
+					res.maxGap = max(res.maxGap, now.Sub(last))
+					last = now
+				case EvPaste:
+					res.pastes++
+					res.ev = e
+					res.data = bytes.Clone(w.q.textOf(e.Text))
+				}
+			}
+		}
+		res.took = time.Since(start)
+	})
+	switch {
+	case res.err != nil:
+		t.Skipf("no window: %v", res.err)
+	case res.timedOut:
+		t.Fatal("no paste came out of Wait")
+	}
+	if res.request > 150*time.Millisecond {
+		t.Errorf("RequestPasteKinds blocked for %v while the owner was preparing the data", res.request)
+	}
+	if res.ev.Flags != 0 || res.ev.Paste != PasteImage || res.ev.Tag != 1 || !bytes.Equal(res.data, slowPNG()) {
+		t.Fatalf("answer %+v, %d bytes", res.ev, len(res.data))
+	}
+	if res.took < 1200*time.Millisecond {
+		t.Errorf("the image arrived after %v: the owner's delay was not on the path", res.took)
+	}
+	if res.wakes < 30 || res.maxGap > 150*time.Millisecond {
+		t.Errorf("the main loop handled %d other events (longest gap %v) while the owner was slow; want it to keep running", res.wakes, res.maxGap)
+	}
+}
+
+// ---- closing a window ----
+
+// canaryWindow makes a window as the tests use them, and a weak pointer to see
+// when it is collected.
+func canaryWindow() weak.Pointer[Window] {
+	w := &Window{q: newEventQueue()}
+	return weak.Make(w)
+}
+
+func collected(wp weak.Pointer[Window]) bool {
+	for i := 0; i < 100; i++ {
+		runtime.GC()
+		if wp.Value() == nil {
+			return true
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return false
+}
+
+// holdWorker makes the worker's next request block until the returned release is
+// called, as a read of a slow owner does; started is signalled when it is inside.
+func holdWorker(t *testing.T) (started <-chan struct{}, release func()) {
+	st, rel := make(chan struct{}, 1), make(chan struct{})
+	hook := func() {
+		select {
+		case st <- struct{}{}:
+		default:
+		}
+		<-rel
+	}
+	pbServeHook.Store(&hook)
+	var once sync.Once
+	release = func() { once.Do(func() { pbServeHook.Store(nil); close(rel) }) }
+	t.Cleanup(release)
+	return st, release
+}
+
+func idle(t *testing.T) {
+	t.Helper()
+	for end := time.Now().Add(10 * time.Second); pastePending() && time.Now().Before(end); time.Sleep(time.Millisecond) {
+	}
+	if pastePending() {
+		t.Fatal("the pasteboard worker did not go idle")
+	}
+}
+
+// A window closed while its read is slow gets no answer, and the worker does not
+// keep it alive: the request and the answer hold it weakly, and the records of a
+// consumed request are cleared.
+func TestPasteboardClosedWindowIsDroppedAndNotRetained(t *testing.T) {
+	r := newPasteRig(t)
+	SetClipboardText([]byte("hello"))
+
+	// Closed during a slow read: the answer is dropped.
+	started, release := holdWorker(t)
 	r.w.q.reset()
-	r.w.RequestPasteKinds(1, WantImage)
-	if d := time.Since(start); d > 150*time.Millisecond {
-		t.Fatalf("RequestPasteKinds blocked for %v while the owner was preparing the data", d)
+	r.w.RequestPasteKinds(1, WantText)
+	<-started
+	forgetPaste(r.w) // what Window.Close does
+	release()
+	idle(t)
+	r.w.reapPaste()
+	if len(r.w.q.ev) != 0 {
+		t.Errorf("the closed window got %+v", r.w.q.ev)
 	}
-	var ticks int
-	var maxGap time.Duration
-	last := time.Now()
-	for len(r.w.q.ev) == 0 && time.Since(start) < 20*time.Second {
-		time.Sleep(5 * time.Millisecond) // the main loop's work
-		now := time.Now()
-		ticks++
-		maxGap = max(maxGap, now.Sub(last))
-		last = now
-		r.w.reapPaste()
+
+	// ... and it does not hold up a newer request of another window, which gets its answer.
+	started, release = holdWorker(t)
+	r.w.RequestPasteKinds(2, WantText)
+	<-started
+	other := &Window{q: newEventQueue()}
+	other.RequestPasteKinds(3, WantText) // replaces the running one's slot
+	forgetPaste(r.w)
+	release()
+	awaitPaste(t, other, false)
+	if len(other.q.ev) != 1 || other.q.ev[0].Tag != 3 || string(other.q.textOf(other.q.ev[0].Text)) != "hello" {
+		t.Errorf("another window's answer after a close: %+v", other.q.ev)
 	}
-	if len(r.w.q.ev) != 1 {
-		t.Fatalf("events %+v", r.w.q.ev)
+
+	// The window of a read still in progress can be collected.
+	started, release = holdWorker(t)
+	wp := func() weak.Pointer[Window] {
+		w := &Window{q: newEventQueue()}
+		w.RequestPasteKinds(4, WantText)
+		<-started
+		forgetPaste(w)
+		return weak.Make(w)
+	}()
+	if !collected(wp) {
+		t.Error("a window closed during a read is kept alive by the worker")
 	}
-	e := r.w.q.ev[0]
-	if e.Flags != 0 || e.Paste != PasteImage || !bytes.Equal(r.w.q.textOf(e.Text), slowPNG()) {
-		t.Fatalf("answer %+v, %d bytes", e, e.Text.Len)
+	release()
+	idle(t)
+
+	// The window of a request whose answer was taken can be collected too.
+	wp = func() weak.Pointer[Window] {
+		w := &Window{q: newEventQueue()}
+		w.RequestPasteKinds(5, WantText)
+		awaitPaste(t, w, false)
+		return weak.Make(w)
+	}()
+	if !collected(wp) {
+		t.Error("a window whose paste was delivered is kept alive by the worker's records")
 	}
-	if took := time.Since(start); took < 1200*time.Millisecond {
-		t.Errorf("the image arrived after %v: the owner's delay was not on the path", took)
+	// ... as is one whose request was replaced before it ran.
+	started, release = holdWorker(t)
+	r.w.RequestPasteKinds(6, WantText)
+	<-started
+	wp = func() weak.Pointer[Window] {
+		w := &Window{q: newEventQueue()}
+		w.RequestPasteKinds(7, WantText) // waits behind the held one
+		return weak.Make(w)
+	}()
+	r.w.RequestPasteKinds(8, WantText) // replaces the waiting one
+	if !collected(wp) {
+		t.Error("a window whose request was replaced is kept alive")
 	}
-	if ticks < 100 || maxGap > 120*time.Millisecond {
-		t.Errorf("the loop ran %d times with a longest gap of %v while the owner was slow", ticks, maxGap)
+	release()
+	r.w.q.reset()
+	awaitPaste(t, r.w, false)
+	if len(r.w.q.ev) != 1 || r.w.q.ev[0].Tag != 8 {
+		t.Errorf("after the replacements: %+v", r.w.q.ev)
+	}
+}
+
+// ---- the owner changes during a read ----
+
+// Items that answer like a pasteboard whose owner changes while they are read:
+// the first asks for the change (changeCount moves), and for as long as the
+// change is under way the others have nothing.
+var (
+	fakeItemOnce sync.Once
+	fakeItemCls  objc.ID
+	fakeCC       atomic.Uintptr
+	fakeBumps    atomic.Int32 // changes still to make: the first item's next questions move changeCount
+	fakeStale    atomic.Int32 // questions of the first item that find the pasteboard in the middle of a change
+	fakeInChange atomic.Bool
+	fakeFirst    atomic.Uintptr
+	fakeItemURLs sync.Map // item -> its NSString
+)
+
+func newFakeFileItems(urls ...string) []uintptr {
+	pbImageInit()
+	fakeItemOnce.Do(func() {
+		d := objc.Define("GNUIFakeItem", objc.Cls("NSPasteboardItem"), nil)
+		d.Method(objc.Sel("stringForType:"), "@@:@", func(c *ffi.CB) {
+			self := c.Int(0)
+			if self == fakeFirst.Load() {
+				fakeInChange.Store(false)
+				if fakeStale.Load() > 0 {
+					fakeStale.Add(-1)
+					fakeInChange.Store(true)
+					if fakeBumps.Load() > 0 {
+						fakeBumps.Add(-1)
+						fakeCC.Add(1)
+					}
+				}
+			} else if fakeInChange.Load() {
+				c.Ret(0)
+				return
+			}
+			v, _ := fakeItemURLs.Load(uintptr(self))
+			s, _ := v.(uintptr)
+			c.Ret(s)
+		})
+		fakeItemCls = d.Register()
+	})
+	items := make([]uintptr, len(urls))
+	for i, u := range urls {
+		items[i] = uintptr(objc.Send(objc.Send(fakeItemCls, objc.Sel("alloc")), objc.Sel("init")))
+		fakeItemURLs.Store(items[i], nsStringBytes([]byte(u)))
+	}
+	fakeFirst.Store(items[0])
+	return items
+}
+
+// A new owner in the middle of the enumeration of the files must not leave a
+// partial list: the read is made again against the new contents, once, and fails
+// when they change again.
+func TestPasteFilesOwnerChangesDuringRead(t *testing.T) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	pbImageInit()
+	pool := objc.F.Call0(objc.PoolPush)
+	defer objc.F.Call1(objc.PoolPop, pool)
+	pb := newFakePB()
+	items := newFakeFileItems("file:///tmp/a", "file:///tmp/b")
+	fakeItems.Store(nsArray(items...))
+	defer fakeBumps.Store(0)
+	defer fakeStale.Store(0)
+	rd := &pbReader{fr: new(ffi.Frame)}
+	serve := func() pbOut { return rd.serve(&pbReq{pb: pb, kinds: WantFiles}) }
+
+	// Steady: both.
+	if o := serve(); o.flags != 0 || o.files != 2 || string(rd.buf[:o.n]) != "/tmp/a\x00/tmp/b\x00" {
+		t.Fatalf("no change: %+v %q", o, rd.buf)
+	}
+	// One change, during the first pass: the second pass finds the new contents, whole.
+	fakeBumps.Store(1)
+	fakeStale.Store(2) // the measuring and the copying of the first attempt see a half-changed pasteboard
+	if o := serve(); o.flags != 0 || o.files != 2 || string(rd.buf[:o.n]) != "/tmp/a\x00/tmp/b\x00" {
+		t.Errorf("one change: %+v %q, want the complete list", o, rd.buf[:o.n])
+	}
+	// It keeps changing: a clean failure, not what half of it gave.
+	fakeBumps.Store(1000)
+	fakeStale.Store(1000)
+	if o := serve(); o.flags != FlagFailed || o.n != 0 || len(rd.buf) != 0 {
+		t.Errorf("a pasteboard that never settles: %+v %q", o, rd.buf)
 	}
 }
 
@@ -246,6 +504,7 @@ func newFakePB() uintptr {
 	fakePBOnce.Do(func() {
 		d := objc.Define("GNUIFakePasteboard", objc.Cls("NSObject"), nil)
 		d.Method(objc.Sel("pasteboardItems"), "@@:", func(c *ffi.CB) { c.Ret(fakeItems.Load()) })
+		d.Method(objc.Sel("changeCount"), "q@:", func(c *ffi.CB) { c.Ret(fakeCC.Load()) })
 		d.Method(objc.Sel("propertyListForType:"), "@@:@", func(c *ffi.CB) { c.Ret(fakeList.Load()) })
 		d.Method(objc.Sel("dataForType:"), "@@:@", func(c *ffi.CB) { c.Ret(0) })
 		d.Method(objc.Sel("stringForType:"), "@@:@", func(c *ffi.CB) { c.Ret(0) })
