@@ -163,8 +163,12 @@ type Lines struct {
 	MenuItemH, MenuPadY, MenuSeparatorH float32
 	// Scroller is a regular scroller's width (17 overlay and legacy);
 	// ScrollerSmall a small overlay one's (15); ScrollerSmallLegacy a small
-	// legacy one's (13).
+	// or mini legacy one's (13).
 	Scroller, ScrollerSmall, ScrollerSmallLegacy float32
+	// ScrollerKnobInset is the room between a legacy scroller's knob (and
+	// the slot it moves in) and its track's sides and ends (3 at every
+	// size: an 11-pt knob in a 17-pt scroller, 7 in 13).
+	ScrollerKnobInset float32
 }
 
 // MacLines are AppKit's on macOS 27.2.
@@ -172,11 +176,11 @@ var MacLines = Lines{
 	Hairline: 0.5, FocusOutset: 3, FocusWidth: 3.5,
 	RowH: 24, HeaderH: 28, Indent: 13,
 	MenuItemH: 24, MenuPadY: 5, MenuSeparatorH: 11,
-	Scroller: 17, ScrollerSmall: 15, ScrollerSmallLegacy: 13,
+	Scroller: 17, ScrollerSmall: 15, ScrollerSmallLegacy: 13, ScrollerKnobInset: 3,
 }
 
 func (l Lines) scaled(k float32) Lines {
-	for _, p := range [...]*float32{&l.FocusOutset, &l.FocusWidth, &l.RowH, &l.HeaderH, &l.Indent, &l.MenuItemH, &l.MenuPadY, &l.MenuSeparatorH, &l.Scroller, &l.ScrollerSmall, &l.ScrollerSmallLegacy} {
+	for _, p := range [...]*float32{&l.FocusOutset, &l.FocusWidth, &l.RowH, &l.HeaderH, &l.Indent, &l.MenuItemH, &l.MenuPadY, &l.MenuSeparatorH, &l.Scroller, &l.ScrollerSmall, &l.ScrollerSmallLegacy, &l.ScrollerKnobInset} {
 		*p *= k
 	}
 	l.Hairline = 1
