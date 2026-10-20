@@ -105,7 +105,7 @@ const (
 	EvPreedit                 // Text: input-method composition (marked text), empty when it ended; SelStart, SelLen: caret/selection inside it
 	EvWake                    // a goroutine called Wake
 	EvFrame                   // the frame slot armed by RequestFrame is available
-	EvPaste                   // the answer to RequestPaste: Text (plain text), Tag; FlagFailed when there is none
+	EvPaste                   // the answer to RequestPaste or RequestPasteKinds: Paste (the kind), Text (plain text, PNG bytes or NUL-separated paths), Tag; FlagFailed when there is none (FlagTooBig too when it was over MaxPaste)
 	EvCommand                 // a native button or menu item was chosen: Tag is its command id (NativeButton.ID, HostOptions.Command, MenuItem.ID); with FlagStandard, a MenuAction
 	EvHostFocus               // the keyboard focus moved to a host (Tag: its HostID) or back to the app's own view (Tag 0)
 	EvHostCommand             // a focused host handed back Tab, Shift+Tab, Escape or Enter: Tag is the HostID, Key and Mods the key
@@ -119,10 +119,11 @@ const (
 	FlagDown     Flags = 1 << iota // key/button pressed, focus gained, became visible
 	FlagRepeat                     // key auto-repeat
 	FlagPrecise                    // scroll deltas are precise pixels (trackpad)
-	FlagFailed                     // EvPaste: no text (empty, not text, over MaxPaste, or the transfer failed)
+	FlagFailed                     // EvPaste: nothing of the requested kinds (empty, another kind, over MaxPaste, or the transfer failed)
 	FlagStandard                   // EvCommand: Tag is the MenuAction of a standard edit item without a command (menu.go)
 	FlagInverted                   // EvScroll: the device's direction is inverted ("natural" scrolling); DX, DY already move the content
 	FlagPos                        // EvScroll: X, Y are where the pointer was at the event (a scroll goes to the box under it, not under a later move)
+	FlagTooBig                     // EvPaste, with FlagFailed: the clipboard holds a requested kind, but over MaxPaste (an image's PNG, a file list, text); nothing of it was copied
 )
 
 // ScrollPhase is the phase of a trackpad scroll gesture (Event.Phase) or of
@@ -272,12 +273,15 @@ type Event struct {
 	// text; the text field converts with its own buffer.
 	SelStart, SelLen int32
 	Time             int64  // OS event time in Now() nanoseconds; 0 if unknown
-	Tag              uint64 // EvPaste: the tag given to RequestPaste
+	Tag              uint64 // EvPaste: the tag given to RequestPaste or RequestPasteKinds
 	// Phase and Momentum are an EvScroll's gesture phase and momentum phase
 	// (at most one is not PhaseNone); see ScrollPhase for what each system
 	// reports. Without FlagPrecise, DX and DY are wheel lines converted to
 	// pixels (on macOS 10 points a line, NSScrollView's line scroll).
 	Phase, Momentum ScrollPhase
+	// Paste is which kind of data an EvPaste carries in Text (PasteText,
+	// the zero value, for every other event too). See RequestPasteKinds.
+	Paste PasteKind
 }
 
 // Options configure Open.

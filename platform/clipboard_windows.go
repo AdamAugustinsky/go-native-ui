@@ -13,7 +13,10 @@ import (
 )
 
 const (
+	cfDIB         = 8
 	cfUnicodeText = 13
+	cfHDrop       = 15
+	cfDIBV5       = 17
 	gmemMoveable  = 0x0002
 )
 
@@ -30,6 +33,7 @@ var (
 	pGlobalLock                 = win32.Proc(kernel32, "GlobalLock")
 	pGlobalUnlock               = win32.Proc(kernel32, "GlobalUnlock")
 	pGlobalSize                 = win32.Proc(kernel32, "GlobalSize")
+	pRegisterClipboardFormatW   = win32.Proc(user32, "RegisterClipboardFormatW")
 
 	clipClassName = mustUTF16("STATIC") // the clipboard worker's window: a system class, so no window procedure of ours runs on its thread
 )
