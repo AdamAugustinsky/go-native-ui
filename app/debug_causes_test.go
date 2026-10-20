@@ -8,7 +8,7 @@ import (
 	"gonativeui/ui"
 )
 
-const tick = int64(16e6)
+const stepNs = int64(16e6)
 
 // settleSteps steps the loop until it has nothing owed and returns how many
 // frames that drew.
@@ -16,7 +16,7 @@ func settleSteps(t *testing.T, o *Offscreen) int {
 	t.Helper()
 	n := 0
 	for i := 0; i < 400; i++ {
-		if !o.Step(tick) {
+		if !o.Step(stepNs) {
 			return n
 		}
 		n++
@@ -77,14 +77,14 @@ func mustHave(t *testing.T, o *Offscreen, k Cause) RepaintCause {
 func TestIdleAppRecordsNoFrames(t *testing.T) {
 	o := newOverlayRig(t, &scene{}, 400, 300, 1)
 	o.EnableDebug(true)
-	if !o.Step(tick) {
+	if !o.Step(stepNs) {
 		t.Fatal("the first frame was not drawn")
 	}
 	mustHave(t, o, CauseFirst)
 	settleSteps(t, o)
 	n := o.DebugFrames()
 	for i := 0; i < 300; i++ {
-		if o.Step(tick) {
+		if o.Step(stepNs) {
 			t.Fatalf("an idle app drew a frame (step %d)", i)
 		}
 	}
@@ -102,7 +102,7 @@ func TestInputRecordsItsCauseAndTheHoverThatFollows(t *testing.T) {
 		t.Fatal("a pointer move drew no frame")
 	}
 	mustHave(t, o, CauseInput)
-	if !o.Step(tick) {
+	if !o.Step(stepNs) {
 		t.Fatal("the hover frame that follows input with the pointer inside was not drawn")
 	}
 	mustHave(t, o, CauseHover)
@@ -117,7 +117,7 @@ func TestResizeRecordsItsCauseAndTheSettleFrame(t *testing.T) {
 		t.Fatal("a resize drew no frame")
 	}
 	mustHave(t, o, CauseResize)
-	if !o.Step(tick) {
+	if !o.Step(stepNs) {
 		t.Fatal("the settle frame after a resize was not drawn")
 	}
 	mustHave(t, o, CauseSettle)
@@ -164,7 +164,7 @@ func TestAnimationRecordsTheBoxKey(t *testing.T) {
 	o.Step(0, move(100, 80))
 	drew := 0
 	for i := 0; i < 400; i++ {
-		if !o.Step(tick) {
+		if !o.Step(stepNs) {
 			break
 		}
 		drew++
@@ -194,7 +194,7 @@ func TestRequestFrameRecordsTheCaller(t *testing.T) {
 	o.Step(0, move(100, 80))
 	var c RepaintCause
 	for i := 0; i < 10 && c.NCallers == 0; i++ {
-		o.Step(tick)
+		o.Step(stepNs)
 		c, _ = has(causesOf(t, o), CauseAnimation)
 	}
 	if c.Kind != CauseAnimation || c.NCallers == 0 {
@@ -263,7 +263,7 @@ func TestDeadlineRecordsItsKey(t *testing.T) {
 func TestAFrameWithNoCauseIsCalledOut(t *testing.T) {
 	o := newStepper(t, &scene{})
 	o.p.invalidate() // the pacer asked for a frame and nobody noted why
-	if !o.Step(tick) {
+	if !o.Step(stepNs) {
 		t.Fatal("no frame")
 	}
 	r, _ := o.DebugFrame(0)
