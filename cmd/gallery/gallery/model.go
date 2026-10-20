@@ -22,10 +22,11 @@ const (
 	cmdPaste
 	cmdSelectAll
 	cmdCycleAppearance
-	cmdRowNumbers
 	cmdRowOpen
 	cmdRowCopyPath
 	cmdRowInfo
+	cmdBack
+	cmdForward
 )
 
 // Menu indices in the model.
@@ -33,11 +34,12 @@ const (
 	menuFile = iota
 	menuEdit
 	menuView
+	menuGo
 	menuRecent
 	menuRow // the context menu of the table rows; not in the bar
 )
 
-// newModel builds the command and menu model: a File, Edit and View menu in
+// newModel builds the command and menu model: a File, Edit, View and Go menu in
 // the bar, and the table's row menu.
 func newModel() (*menu.Model, error) {
 	cmd := func(id menu.ID, title string, key ui.KeyCode, symbol string) menu.Command {
@@ -61,10 +63,11 @@ func newModel() (*menu.Model, error) {
 		{ID: cmdPaste, Role: menu.RolePaste, Shortcut: menu.Shortcut{Key: 'V', Primary: true}},
 		{ID: cmdSelectAll, Role: menu.RoleSelectAll, Shortcut: menu.Shortcut{Key: 'A', Primary: true}},
 		{ID: cmdCycleAppearance, Title: "Cycle Appearance", Shortcut: menu.Shortcut{Key: 'D', Primary: true, Mods: shift}, Symbol: "circle.lefthalf.filled"},
-		cmd(cmdRowNumbers, "Show Row Numbers", 0, ""),
 		cmd(cmdRowOpen, "Open", 0, "arrow.up.forward.app"),
 		cmd(cmdRowCopyPath, "Copy Path", 0, "doc.on.doc"),
 		cmd(cmdRowInfo, "Show Info", 0, "info.circle"),
+		cmd(cmdBack, "Back", '[', "chevron.left"),
+		cmd(cmdForward, "Forward", ']', "chevron.right"),
 	}
 	item := func(id menu.ID) menu.Item { return menu.Item{Kind: menu.ItemCommand, Command: id} }
 	sep := menu.Item{Kind: menu.ItemSeparator}
@@ -73,9 +76,10 @@ func newModel() (*menu.Model, error) {
 			{Kind: menu.ItemSubmenu, Submenu: menuRecent, Title: "Open Recent"}, sep, item(cmdPrint)}},
 		menuEdit: {Title: "Edit", Items: []menu.Item{item(cmdUndo), item(cmdRedo), sep, item(cmdCut), item(cmdCopy),
 			item(cmdPaste), item(cmdSelectAll)}},
-		menuView:   {Title: "View", Items: []menu.Item{item(cmdCycleAppearance), item(cmdRowNumbers)}},
+		menuView:   {Title: "View", Items: []menu.Item{item(cmdCycleAppearance)}},
+		menuGo:     {Title: "Go", Items: []menu.Item{item(cmdBack), item(cmdForward)}},
 		menuRecent: {Title: "Open Recent", Items: []menu.Item{item(cmdRecent1), item(cmdRecent2), item(cmdRecent3)}},
 		menuRow:    {Title: "Row", Items: []menu.Item{item(cmdRowOpen), item(cmdRowCopyPath), sep, item(cmdRowInfo)}},
 	}
-	return menu.NewModel(cmds, menus, []int{menuFile, menuEdit, menuView})
+	return menu.NewModel(cmds, menus, []int{menuFile, menuEdit, menuView, menuGo})
 }

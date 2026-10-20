@@ -83,14 +83,24 @@ func (s *AppKit) Build(c *ui.Context) {
 	theme.At(c, 0, 0, float32(w), float32(h))
 	c.NextBG(r.Colors[theme.UnderPage])
 	page := c.Box(ui.DrawBackground|theme.Floating, "page")
-	pk := c.KeyOf(page)
 	c.Push(page)
-	theme.At(c, k.Pt(catalog.GridMargin), k.Pt(catalog.GridMargin), k.Pt(s.w-2*catalog.GridMargin), k.Pt(catalog.GridTitleH))
+	buildGrid(k, s.st, s.cells, s.w, c.KeyOf(page))
+	c.Pop()
+	k.End()
+}
+
+// buildGrid draws the page's grid into the current parent, the page box whose
+// key is pk: the title, and each sample in its cell with its caption under it.
+// The cells are floating boxes at the grid's coordinates in points from the
+// page's top left, so the page looks the same wherever its box is.
+func buildGrid(k *base.Kit, st *catalog.State, cells []catalog.Cell, w float32, pk ui.Key) {
+	c, r := k.Context(), k.Theme()
+	theme.At(c, k.Pt(catalog.GridMargin), k.Pt(catalog.GridMargin), k.Pt(w-2*catalog.GridMargin), k.Pt(catalog.GridTitleH))
 	c.Push(c.Box(theme.Floating, "title"))
 	rexui.Label(k, "rexui — macOS 27.2 samples (tools/appkitref)", rexui.LabelOpts{Style: rexui.TextHeadline})
 	c.Pop()
-	for i := range s.cells {
-		cl := &s.cells[i]
+	for i := range cells {
+		cl := &cells[i]
 		sm := &catalog.Samples[cl.Sample]
 		theme.At(c, k.Pt(cl.X), k.Pt(cl.Y), k.Pt(cl.W), k.Pt(cl.H))
 		c.NextBG(r.Colors[theme.Window])
@@ -106,7 +116,7 @@ func (s *AppKit) Build(c *ui.Context) {
 		k.NextGap(0)
 		c.NextAuditExempt(ui.AuditOverflow.Mask())
 		k.Column("col")
-		s.st.Build(k, cl.Sample)
+		st.Build(k, cl.Sample)
 		k.EndColumn()
 		c.Pop()
 		c.Pop()
@@ -118,8 +128,30 @@ func (s *AppKit) Build(c *ui.Context) {
 		rexui.Caption(k, sm.Name)
 		c.Pop()
 	}
+}
+
+// catalogueScene hosts page p of the AppKit catalogue in the detail pane (the
+// current parent), w by h pixels: the page's grid in a scroll view, laid out
+// exactly as the standalone appkit scene lays it out.
+func (g *Gallery) catalogueScene(w, h float32, p int) {
+	k := g.k
+	c, r := k.Context(), k.Theme()
+	sc := scCatalogue + p
+	pg := &g.pages[p]
+	k.NextSize(ui.Px(w), ui.Px(h))
+	v := k.BeginScroll(defs[sc].title, &g.scroll[sc], base.ScrollBoth)
+	g.scrollStart(v.Inner)
+	_, sy := c.Scroll(v.Inner)
+	g.under = sy > 0.5
+	c.NextSize(ui.Px(k.Pt(pg.w)), ui.Px(k.Pt(pg.h)))
+	c.NextBG(r.Colors[theme.UnderPage])
+	page := c.Box(ui.DrawBackground, AppKitPages[p])
+	c.Push(page)
+	buildGrid(k, g.st, pg.cells, pg.w, c.KeyOf(page))
 	c.Pop()
-	k.End()
+	k.CloseScrollContent(&v)
+	rexui.ScrollBars(k, &v)
+	k.CloseScroll(&v)
 }
 
 // AppKitShot renders page p offscreen at scale in the mode pref, with the

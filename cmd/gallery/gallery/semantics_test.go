@@ -48,18 +48,24 @@ func golden(t *testing.T, name, got string) {
 	}
 }
 
-// The semantic tree of the window as it opens, and with the dialog open over
-// four selected rows. The rows are named by their first cell, so that a person
-// using assistive technology, and a test, find "row 3" by its text.
+// The semantic tree of the window as it opens (the Playground, with the
+// sidebar of scenes and the toolbar), of the Table scene, and of the window
+// with the dialog open after four rows were selected. The table's rows are
+// named by their first cell, so that a person using assistive technology, and
+// a test, find "row 3" by its text.
 func TestSemanticsGolden(t *testing.T) {
 	r := newRig(t, Options{Still: true})
 	r.Frames(5)
 	golden(t, "semantics-main.txt", widgettest.Dump(r.Tree()))
+
+	r.goTo(scTable)
+	r.Play(click(rowRole, "").Nth(3), click(rowRole, "").Nth(6).With(modShift), idle(2))
 	if n, ok := r.Find(ui.RoleRow, "3"); !ok || n.Pos != [2]int32{3, 1_000_000} {
 		t.Errorf("the table row named 3: found %v, at %v", ok, n.Pos)
 	}
+	golden(t, "semantics-table.txt", widgettest.Dump(r.Tree()))
 
-	r.Play(click(rowRole, "").Nth(3), click(rowRole, "").Nth(6).With(modShift),
-		click(roleButton, "Delete…"), waitFor(ui.RoleDialog, ""), settle(), idle(2))
+	r.goTo(scPlayground)
+	r.Play(click(roleButton, "Delete…"), waitFor(ui.RoleDialog, ""), settle(), idle(2))
 	golden(t, "semantics-dialog.txt", widgettest.Dump(r.Tree()))
 }
