@@ -152,6 +152,9 @@ var (
 	curPhase   atomic.Int32 // bench phase, for the -timeout message
 	silentAt   atomic.Int64 // when the frame source went silent, 0 while it delivers (for the -timeout message)
 	stallCount atomic.Int32
+	// stallExt is how much longer -timeout allows: the time the frame
+	// source was silent while the main loop kept turning (stallExtension).
+	stallExt   atomic.Int64
 	colorIndex atomic.Uint32
 )
 
@@ -173,14 +176,19 @@ func main() {
 	deadline := flag.Duration("timeout", 0, "abort with exit status 2 if the run has not finished after this long (0: never)")
 	flag.Parse()
 	if *deadline > 0 {
-		time.AfterFunc(*deadline, func() {
+		go func() {
+			start := time.Now()
+			for time.Since(start) < *deadline+time.Duration(stallExt.Load()) {
+				time.Sleep(100 * time.Millisecond)
+			}
 			msg := ""
 			if t := silentAt.Load(); t != 0 {
 				msg = fmt.Sprintf("; the frame events stopped %.1f s ago (%d earlier stalls)", float64(platform.Now()-t)/1e9, stallCount.Load())
 			}
-			fmt.Fprintf(os.Stderr, "spike: timed out after %v in bench phase %d%s\n", *deadline, curPhase.Load(), msg)
+			fmt.Fprintf(os.Stderr, "spike: timed out after %v (%v of it display stalls) in bench phase %d%s\n",
+				time.Since(start).Round(time.Second), time.Duration(stallExt.Load()).Round(time.Second), curPhase.Load(), msg)
 			os.Exit(2)
-		})
+		}()
 	}
 
 	ms := func(ns int64) float64 { return float64(ns) / 1e6 }
@@ -287,7 +295,14 @@ func main() {
 	}
 
 	tLoop0, tWait0 := platform.Now(), int64(0)
+	lastTurn := int64(0)
 	for phase != phaseDone {
+		if now := platform.Now(); lastTurn != 0 && silence != 0 {
+			stallExt.Add(stallExtension(stallExt.Load(), now-lastTurn))
+			lastTurn = now
+		} else {
+			lastTurn = now
+		}
 		timeout := int64(-1)
 		if waitRet != 0 {
 			now := platform.Now()

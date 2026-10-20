@@ -2,6 +2,7 @@ package main
 
 import (
 	"testing"
+	"time"
 
 	"gonativeui/platform"
 )
@@ -80,5 +81,28 @@ func TestDisplayStallsRestartAtMostMaxRestarts(t *testing.T) {
 	}
 	if l.end(causeUnknown, 3000, true) {
 		t.Error("a stall without evidence restarted")
+	}
+}
+
+// A silence extends -timeout while the main loop keeps turning, by its
+// length, up to maxStallExtension; a turn longer than the heartbeat (the
+// program stopped) extends nothing.
+func TestStallExtension(t *testing.T) {
+	ms := int64(time.Millisecond)
+	ext := int64(0)
+	for range 50_000 { // 50,000 turns of 16 ms: 800 s of a silent display
+		ext += stallExtension(ext, 16*ms)
+	}
+	if ext != maxStallExtension {
+		t.Errorf("a long silence with the loop turning extended -timeout by %v, want the cap %v", time.Duration(ext), time.Duration(maxStallExtension))
+	}
+	if d := stallExtension(0, 16*ms); d != 16*ms {
+		t.Errorf("a 16 ms turn extended by %v", time.Duration(d))
+	}
+	if d := stallExtension(0, (mainBusyLimitMs+1)*ms); d != 0 {
+		t.Errorf("a turn longer than the heartbeat extended by %v", time.Duration(d))
+	}
+	if 43_000+59_000+53_000 > maxStallExtension/ms {
+		t.Errorf("the cap %v does not cover CI's three stalls of 43, 59 and 53 s", time.Duration(maxStallExtension))
 	}
 }

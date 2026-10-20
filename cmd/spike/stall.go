@@ -1,6 +1,10 @@
 package main
 
-import "gonativeui/platform"
+import (
+	"time"
+
+	"gonativeui/platform"
+)
 
 // Causes of a silence of the frame source. Only some are excused: a restart
 // of the measured frames needs independent evidence that the environment
@@ -58,6 +62,23 @@ func appBug(cause string) bool {
 	}
 	return false
 }
+
+// stallExtension is how much a loop turn dt after the previous one, during
+// a silence of the frame source, extends -timeout, given the extension ext
+// so far: all of it while the main loop keeps turning (dt within
+// mainBusyLimitMs, its heartbeat), nothing for a longer turn (the program
+// stopped, not the display), and at most maxStallExtension in all. CI's
+// display stalls for 20-60 s, up to three in a run (maxRestarts of them
+// restart the measured frames), and a timeout that counted them failed
+// runs whose every stall was excused (43, 59 and 53 s of a 180 s timeout).
+func stallExtension(ext, dt int64) int64 {
+	if dt <= 0 || dt > mainBusyLimitMs*int64(time.Millisecond) {
+		return 0
+	}
+	return max(min(dt, maxStallExtension-ext), 0)
+}
+
+const maxStallExtension = maxRestarts * 60 * int64(time.Second)
 
 // excused reports whether a cause is evidence that the environment stopped
 // the frames, so that the measured frames may start over without them.
