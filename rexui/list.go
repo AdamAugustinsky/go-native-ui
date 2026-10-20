@@ -99,8 +99,10 @@ type ListRecipe struct {
 	Stripe Tint
 	// Label colours a row's text, Label2 its secondary text (a date, a
 	// size), LabelDisabled both in a disabled list, and OnSelection text
-	// and glyphs on an emphasised selection.
-	Label, Label2, LabelDisabled, OnSelection Tint
+	// and glyphs on an emphasised selection; OnSelection2 is the secondary
+	// text there (measured white at 0.7: #B3D1F6 on #0064E1, Finder's
+	// dates and sizes).
+	Label, Label2, LabelDisabled, OnSelection, OnSelection2 Tint
 	// Inset is the room at the sides of the rows, PadY above the first row
 	// and below the last without a header and HeaderPadY with one, per
 	// style, in points (NSTableView's row rectangles: inset tables start
@@ -124,11 +126,12 @@ var ListLook = ListRecipe{
 	Divider: Of(theme.SelectionDivider), DividerUnemph: OfAlpha(theme.Text, 0.05, 0.05), DividerInset: 6,
 	Stripe: Of(theme.AltRow),
 	Label:  Of(theme.Label), Label2: Of(theme.Label2), LabelDisabled: Of(theme.TextDisabled), OnSelection: Of(theme.OnSelection),
-	Inset:      [NumListStyles]float32{ListFullWidth: 0, ListInset: 10},
-	PadY:       [NumListStyles]float32{ListFullWidth: 0, ListInset: 10},
-	HeaderPadY: [NumListStyles]float32{ListFullWidth: 0, ListInset: 5},
-	Rounded:    [NumListStyles]bool{ListInset: true},
-	LegacyKnob: OfAlpha(theme.Text, 0.52, 0.58), LegacySlot: OfAlpha(theme.Text, 0.047, 0.047),
+	OnSelection2: OfAlpha(theme.OnSelection, 0.7, 0.7),
+	Inset:        [NumListStyles]float32{ListFullWidth: 0, ListInset: 10},
+	PadY:         [NumListStyles]float32{ListFullWidth: 0, ListInset: 10},
+	HeaderPadY:   [NumListStyles]float32{ListFullWidth: 0, ListInset: 5},
+	Rounded:      [NumListStyles]bool{ListInset: true},
+	LegacyKnob:   OfAlpha(theme.Text, 0.52, 0.58), LegacySlot: OfAlpha(theme.Text, 0.047, 0.047),
 }
 
 // List is an open list: base's List and the look of its rows.
@@ -224,7 +227,7 @@ func (lk *rowLook) begin(l *base.List, ol *base.Outline, rs *base.RowState, name
 	case rs.Disabled:
 		lk.fgTint, lk.fg2 = rc.LabelDisabled, rc.LabelDisabled.RGBA(r)
 	case lk.emph:
-		lk.fgTint, lk.fg2 = rc.OnSelection, rc.OnSelection.RGBA(r)
+		lk.fgTint, lk.fg2 = rc.OnSelection, rc.OnSelection2.RGBA(r)
 	default:
 		lk.fgTint, lk.fg2 = rc.Label, rc.Label2.RGBA(r)
 	}

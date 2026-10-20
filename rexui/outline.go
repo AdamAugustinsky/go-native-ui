@@ -136,7 +136,7 @@ func (ol *Outline) TextBytes(b []byte) {
 	c.NextSize(ui.Pct(1), ui.Pct(1))
 	c.NextFont(k.Theme().Styles[theme.StyleBody].Font)
 	c.NextTextColor(ol.TextColor())
-	c.BoxKeyed(ui.DrawText|ui.FadeOverflowX, ui.KeyN(c.ParentKey(), 1), b)
+	c.BoxKeyed(ui.DrawText|ui.EllipsisOverflowX, ui.KeyN(c.ParentKey(), 1), b)
 }
 
 // EndOutline ends the outline: the stripes below the rows, the rows, the

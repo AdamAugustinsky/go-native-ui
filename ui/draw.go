@@ -395,9 +395,12 @@ func (c *Context) emitText(l *gpu.DrawList, b *box, clip [4]float32) {
 	}
 	baseline := snap(y0 + ((y1-y0)-(fi.ascent+fi.descent))/2 + fi.ascent)
 
+	if over && b.flags&EllipsisOverflowX != 0 && c.emitTruncated(l, b, x0, x1, baseline, clip, col) {
+		return
+	}
 	tclip := clip
 	var fade [2]float32
-	if over && b.flags&FadeOverflowX != 0 {
+	if over && b.flags&(FadeOverflowX|EllipsisOverflowX) != 0 {
 		tclip[0], tclip[2] = max(clip[0], x0), min(clip[2], x1)
 		fade = [2]float32{x1 - 1.5*(fi.ascent+fi.descent), x1}
 		if fade[0] < x0 {
@@ -409,6 +412,77 @@ func (c *Context) emitText(l *gpu.DrawList, b *box, clip [4]float32) {
 	}
 
 	c.emitGlyphs(l, b, v, x, baseline, tclip, fade, col)
+}
+
+// ellipsisText is what EllipsisOverflowX ends a cut line with.
+var ellipsisText = []byte("…")
+
+// emitTruncated draws b's one line of text, too wide for x0..x1, cut at the
+// tail and ended with an ellipsis (EllipsisOverflowX). It reports false,
+// drawing nothing, for text it cannot cut so (right-to-left, no clusters).
+func (c *Context) emitTruncated(l *gpu.DrawList, b *box, x0, x1, baseline float32, clip [4]float32, col uint32) bool {
+	er := c.sh.Shape(b.font, ellipsisText)
+	if c.sh.RunGeneration() != b.runGen { // shaping the ellipsis evicted b's run
+		b.run = c.sh.Shape(b.font, c.fr.Cur().Bytes(b.txt))
+		b.runGen = c.sh.RunGeneration()
+		er = c.sh.Shape(b.font, ellipsisText)
+	}
+	ev := c.sh.Run(er)
+	eAdv := ev.Advance
+	v := c.sh.Run(b.run)
+	if len(v.Clusters) != len(v.Glyphs) || len(ev.Glyphs) == 0 {
+		return false
+	}
+	for _, cl := range v.Clusters {
+		if cl&text.ClusterRTL != 0 {
+			return false
+		}
+	}
+	// the glyphs [0, n) that leave room for the ellipsis, without a cluster
+	// cut in two (a glyph of the same cluster as the next stays with it)
+	n := 0
+	for n < len(v.Glyphs) && glyphEnd(v, n)+eAdv <= x1-x0+0.01 {
+		n++
+	}
+	for n > 0 && n < len(v.Glyphs) && v.Clusters[n] == v.Clusters[n-1] {
+		n--
+	}
+	for n > 0 {
+		off := int(v.Clusters[n-1])
+		if off >= len(v.Text) || (v.Text[off] != ' ' && v.Text[off] != '\t') {
+			break
+		}
+		n--
+	}
+	tclip := intersect(clip, [4]float32{x0, clip[1], x1, clip[3]})
+	if empty(tclip) {
+		return true
+	}
+	var smooth uint8
+	if b.flags&NoFontSmoothing == 0 {
+		smooth = text.SmoothLevel(col)
+	}
+	for i := 0; i < n; i++ {
+		c.emitGlyphFade(l, v.Faces[i], v.Glyphs[i], x0+v.X[i], baseline, tclip, [2]float32{}, col, smooth)
+	}
+	end := x0
+	if n > 0 {
+		end = x0 + glyphEnd(v, n-1)
+	}
+	ev = c.sh.Run(er)
+	for i, gid := range ev.Glyphs {
+		c.emitGlyphFade(l, ev.Faces[i], gid, end+ev.X[i], baseline, tclip, [2]float32{}, col, smooth)
+	}
+	return true
+}
+
+// glyphEnd is where glyph i of v ends: the next glyph's pen, or the run's
+// advance after the last.
+func glyphEnd(v text.RunView, i int) float32 {
+	if i+1 < len(v.X) {
+		return v.X[i+1]
+	}
+	return v.Advance
 }
 
 // emitGlyphs draws the glyphs of v with the pen starting at (x, baseline).

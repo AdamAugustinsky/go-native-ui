@@ -763,7 +763,7 @@ func TestTitlebarAndIconsMatchTheme(t *testing.T) {
 		t.Errorf("TitlebarPt = %d, the Rex theme's titlebar is %v pt", TitlebarPt, got)
 	}
 	h := newHarness(t, WindowWidthPt, WindowHeightPt, 2)
-	ic := h.x.icons
+	ic := h.x.k.Icons()
 	if ic.Len() != int(icon.NumStandard)+numIcons {
 		t.Fatalf("%d icons in the atlas, want %d", ic.Len(), int(icon.NumStandard)+numIcons)
 	}
