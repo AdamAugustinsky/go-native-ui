@@ -153,9 +153,10 @@ func (pl *Pilot) draw(c *ui.Context) {
 		c.Pop()
 	}
 	pl.drawToolbar(c, sbW)
+	// (no fill: the lists paint their own rows, below their headers in the
+	// toolbar's pocket, and the bars at their foot theirs)
 	theme.At(c, sbW, tbH, W-sbW, H-tbH)
-	c.NextBG(r.Colors[theme.ControlBackground])
-	area := c.BoxKeyed(ui.DrawBackground|fl, keyArea, nil)
+	area := c.BoxKeyed(fl, keyArea, nil)
 	c.Push(area)
 	under := pl.under
 	pl.drawPanes(c, r, sbW, tbH)
