@@ -275,8 +275,10 @@ type TabBar struct {
 	fit       bool                // the tabs fitted (no scroll)
 	scroll    float32             // overflow scroll, pixels
 	revealSel bool                // scroll the chosen tab into view
+	selID     uint64              // the chosen tab's id last frame (a change reveals it)
 
 	press    uint64     // the tab the left button went down on
+	pressIdx int        // its index then: Escape during the drag puts it back
 	pressAt  [2]float32 // where, window pixels
 	grab     float32    // the pointer's x in the pressed tab, pixels
 	dragging bool
@@ -353,12 +355,15 @@ func (b *TabBar) Update(k *base.Kit, tabs []Tab, sel int) TabsEvents {
 			if b.focusable && s.Pressed { // the pressed tab takes the focus, as a pressed control does
 				c.SetFocus(b.TabKey(id))
 			}
-			b.press, b.pressAt, b.dragging = id, [2]float32{in.MouseX, in.MouseY}, false
-			if i < b.n && b.ids[i] == id {
-				b.grab = in.MouseX - b.rects[i][0]
+			b.press, b.pressIdx, b.pressAt, b.dragging = id, i, [2]float32{in.MouseX, in.MouseY}, false
+			for j := 0; j < b.n; j++ { // where it was shown, wherever it is in tabs now
+				if b.ids[j] == id {
+					b.grab = in.MouseX - b.rects[j][0]
+					break
+				}
 			}
 		}
-		if !tabs[i].NoClose && c.PeekSignal(b.closeKey(id)).Clicked {
+		if !tabs[i].NoClose && k.PressedBefore(b.closeKey(id)) {
 			ev.Close = i
 		}
 	}
@@ -387,6 +392,15 @@ func (b *TabBar) Update(k *base.Kit, tabs []Tab, sel int) TabsEvents {
 			b.press, b.dragging = 0, false
 		case !b.dragging && !b.noDrag && n > 1 && abs32(in.MouseX-b.pressAt[0]) >= k.Pt(rc.DragStart):
 			b.dragging = true
+		}
+		if b.dragging && i >= 0 && c.TakeKey(ui.KeyEscape, 0) {
+			// cancelled: back to where it started, settling from where it is
+			b.drop, b.dropAt = b.press, b.dragSlot(n)
+			b.dropGen++
+			if to := min(b.pressIdx, n-1); to != i && to >= 0 {
+				ev.MoveFrom, ev.MoveTo = i, to
+			}
+			b.press, b.dragging = 0, false
 		}
 		if b.dragging && i >= 0 {
 			b.dragX = in.MouseX
@@ -551,11 +565,13 @@ func Tabs(k *base.Kit, label string, b *TabBar, tabs []Tab, sel *int, o TabsOpts
 	if ev.Select >= 0 {
 		*sel = ev.Select
 	}
+	// this frame shows tabs in their order before the move the app makes
+	// after this call; *sel follows the chosen tab to its new place
+	shown := *sel
 	if ev.MoveFrom >= 0 {
-		// the app moves the tab after this call; show the new order now
 		*sel = movedIndex(*sel, ev.MoveFrom, ev.MoveTo)
 	}
-	t := b.Begin(k, label, tabs, *sel, o)
+	t := b.Begin(k, label, tabs, shown, o)
 	for i := 0; i < t.N(); i++ {
 		cell := t.BeginTab(i)
 		t.Glyph(&cell)
@@ -605,12 +621,22 @@ func (b *TabBar) Begin(k *base.Kit, label string, tabs []Tab, sel int, o TabsOpt
 	if !k.Inactive() {
 		keyTgt = 1
 	}
-	t.kw = c.AnimateValue(ui.KeyN(b.key, 1), keyTgt, rc.KeyRate)
+	keyRate, slideRate, chooseRate := rc.KeyRate, rc.SlideRate, rc.ChooseRate
+	if reduced(k) { // Reduce Motion: every change at once
+		keyRate, slideRate, chooseRate = theme.Instant, theme.Instant, theme.Instant
+	}
+	t.kw = c.AnimateValue(ui.KeyN(b.key, 1), keyTgt, keyRate)
+
+	// a tab chosen by the app, or at the start, comes into view as one
+	// chosen with the pointer or the keyboard does
+	if sel >= 0 && sel < n && tabs[sel].ID != b.selID {
+		b.revealSel = true
+	}
 
 	// geometry: the tabs share the room equally, within their limits; the
 	// count animates, so a close or a new tab widens or narrows the others
 	// smoothly while a resize follows the window exactly
-	nAnim := c.AnimateValue(ui.KeyN(b.key, 2), float32(n), rc.SlideRate)
+	nAnim := c.AnimateValue(ui.KeyN(b.key, 2), float32(n), slideRate)
 	if n == 0 {
 		nAnim = 0
 	}
@@ -659,11 +685,11 @@ func (b *TabBar) Begin(k *base.Kit, label string, tabs []Tab, sel int, o TabsOpt
 		switch {
 		case b.dragging && id == b.press:
 			p = b.dragSlot(n)
-			c.AnimateValueFrom(ui.KeyN(ui.KeyN(ui.KeyN(b.key, 3), id), b.dropGen+1), p, p, rc.SlideRate)
+			c.AnimateValueFrom(ui.KeyN(ui.KeyN(ui.KeyN(b.key, 3), id), b.dropGen+1), p, p, slideRate)
 		case id == b.drop:
-			p = c.AnimateValueFrom(ui.KeyN(ui.KeyN(ui.KeyN(b.key, 3), id), b.dropGen), b.dropAt, float32(i), rc.SlideRate)
+			p = c.AnimateValueFrom(ui.KeyN(ui.KeyN(ui.KeyN(b.key, 3), id), b.dropGen), b.dropAt, float32(i), slideRate)
 		default:
-			p = c.AnimateValue(ui.KeyN(ui.KeyN(b.key, 4), id), float32(i), rc.SlideRate)
+			p = c.AnimateValue(ui.KeyN(ui.KeyN(b.key, 4), id), float32(i), slideRate)
 		}
 		t.pos[i] = x0 + p*slot
 	}
@@ -675,7 +701,7 @@ func (b *TabBar) Begin(k *base.Kit, label string, tabs []Tab, sel int, o TabsOpt
 		if i == sel {
 			tgt = 1
 		}
-		t.act[i] = c.AnimateValue(ui.KeyN(ui.KeyN(b.key, 5), tabs[i].ID), tgt, rc.ChooseRate)
+		t.act[i] = c.AnimateValue(ui.KeyN(ui.KeyN(b.key, 5), tabs[i].ID), tgt, chooseRate)
 		sw += t.act[i]
 		sx0 += t.act[i] * theme.Snap(t.pos[i])
 		sx1 += t.act[i] * theme.Snap(t.pos[i]+slot)
@@ -688,6 +714,10 @@ func (b *TabBar) Begin(k *base.Kit, label string, tabs []Tab, sel int, o TabsOpt
 		t.wox, t.woy = pr[0], pr[1]
 	}
 	b.n, b.sel, b.slot = n, sel, slot
+	b.selID = 0
+	if sel >= 0 && sel < n {
+		b.selID = tabs[sel].ID
+	}
 	b.strip = [2]float32{t.wox + o.X0 + ix, t.wox + o.X0 + ix + full}
 	b.capRect = [4]float32{t.wox + capsule[0], t.woy + capsule[1], t.wox + capsule[2], t.woy + capsule[3]}
 	for i := 0; i < n; i++ {
@@ -795,6 +825,9 @@ func (t *TabsBuild) BeginTab(j int) TabCell {
 	if b.focusable && i == t.sel {
 		flags |= ui.Focusable | ui.FocusAnimation
 	}
+	if t.k.Disabled() { // no presses, and disabled to assistive technologies
+		flags = ui.DrawBackground | ui.Clip | ui.Disabled | base.Floating
+	}
 	id := c.BoxKeyed(flags, key, nil)
 	c.Push(id)
 	cell := TabCell{Index: i, ID: id, Rect: [4]float32{rc0[0] + t.ox, t.tabY0, rc0[2] + t.ox, t.tabY1}, X: t.pos[i], Chosen: act, Hot: hot, KeyW: t.kw, Backdrop: r.Backdrop}
@@ -809,7 +842,7 @@ func (t *TabsBuild) BeginTab(j int) TabCell {
 	}
 	if b.focusable && i == t.sel {
 		v := t.k.VisualOf(key, base.HoverOff)
-		if v.Ring > 0.01 {
+		if v.Ring > 0.01 && !v.Inactive && !t.k.Disabled() { // no ring while another window has the keyboard
 			theme.At(c, 0, 0, rc0[2]-rc0[0], rc0[3]-rc0[1])
 			c.NextBorder(theme.WithAlpha(r.Colors[theme.FocusRing], v.Ring), base.FocusRingWidthPt*s)
 			c.NextRadius(rc.PillRadius * s)
@@ -884,7 +917,9 @@ func (t *TabsBuild) EndTab(cell *TabCell) {
 		}
 	}
 
-	if show > 0.004 {
+	// the button is there whenever the tab can close, shown or not: an
+	// assistive technology presses it without the pointer
+	if !tab.NoClose && !b.dragging {
 		w := cell.Rect[2] - cell.Rect[0]
 		side := theme.Snap(rc.Close * s)
 		cx := w - rc.CloseRight*s
@@ -892,14 +927,23 @@ func (t *TabsBuild) EndTab(cell *TabCell) {
 		hot, down := c.HotTOf(ck), c.ActiveTOf(ck)
 		cf := rc.CloseFill
 		theme.At(c, theme.Snap(cx-side/2), theme.Snap(cy-side/2), side, side)
-		c.NextBG(theme.ColA(theme.MixRGB(cf.Light, cf.Dark, r.T), (theme.Lerp(cf.Alpha[0], cf.Alpha[1], r.T)*hot+0.07*down)*show))
-		c.NextRadius(side / 2)
+		flags := ui.Clickable | ui.HotAnimation | ui.ActiveAnimation | base.Floating
+		if t.k.Disabled() {
+			flags = ui.Disabled | base.Floating
+		}
+		if show > 0.004 {
+			c.NextBG(theme.ColA(theme.MixRGB(cf.Light, cf.Dark, r.T), (theme.Lerp(cf.Alpha[0], cf.Alpha[1], r.T)*hot+0.07*down)*show))
+			c.NextRadius(side / 2)
+			flags |= ui.DrawBackground
+		}
 		c.NextRole(ui.RoleButton)
 		c.NextSemName("Close Tab")
-		cb := c.BoxKeyed(ui.DrawBackground|ui.Clickable|ui.HotAnimation|ui.ActiveAnimation|base.Floating, ck, nil)
+		cb := c.BoxKeyed(flags, ck, nil)
 		c.Push(cb)
-		if f, disp := t.k.Icons().Prepare(c, icon.Close, theme.WithAlpha(nameCol, show)); f != 0 {
-			c.BoxKeyed(f, ui.KeyN(ck, 1), disp)
+		if show > 0.004 {
+			if f, disp := t.k.Icons().Prepare(c, icon.Close, theme.WithAlpha(nameCol, show)); f != 0 {
+				c.BoxKeyed(f, ui.KeyN(ck, 1), disp)
+			}
 		}
 		c.Pop()
 	}

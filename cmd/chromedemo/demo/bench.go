@@ -85,9 +85,9 @@ func benchSteps(s Scene) []widgettest.Step {
 			move(button, "Share"), idle(3))
 	case Tabs:
 		add(move(ui.RoleTab, "Roadmap"), idle(3), click(ui.RoleTab, "Roadmap"), idle(10),
-			move(ui.RoleTab, "Release notes"), idle(6), move(button, "Close Tab"), idle(3),
+			move(ui.RoleTab, "Release notes"), idle(6), move(button, "Close Tab").Nth(2), idle(3),
 			drag(ui.RoleTab, "Inbox", 12, 25), idle(20), drag(ui.RoleTab, "Inbox", -12, 25), idle(20),
-			click(button, "New Tab"), idle(20), move(ui.RoleTab, "Untitled"), idle(6), click(button, "Close Tab"), idle(20),
+			click(button, "New Tab"), idle(20), move(ui.RoleTab, "Untitled"), idle(6), click(button, "Close Tab").Nth(5), idle(20),
 			key(ui.KeyTab, ui.ModCtrl), idle(10), key(ui.KeyTab, ui.ModCtrl|ui.ModShift), idle(10),
 			click(ui.RoleTab, "Activity"), idle(6), key(ui.KeyRight, 0), idle(6), click(ui.RoleTab, "Overview"), idle(6),
 			click(ui.RoleTab, "Inbox"), idle(10))

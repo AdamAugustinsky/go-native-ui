@@ -205,8 +205,10 @@ func Sidebar(k *base.Kit, label string, st *SidebarState, items []SidebarItem, o
 	emph := focused && !k.Inactive()
 
 	// the keyboard, before the rows show the selection
+	var changed, keyed bool
 	if focused {
-		res.Changed, res.Toggled = sidebarKeys(c, st, items)
+		changed, res.Toggled = sidebarKeys(c, st, items)
+		keyed = changed
 	}
 
 	k.NextSize(ui.Pct(1), ui.Pct(1))
@@ -215,7 +217,8 @@ func Sidebar(k *base.Kit, label string, st *SidebarState, items []SidebarItem, o
 	res.Under = sy > 0.5
 
 	headers := 0
-	hide := -1 // rows deeper than this level are hidden (a closed row's children); -2 to the next header
+	y := float32(0) // the content's height so far: where the next row starts in it
+	hide := -1      // rows deeper than this level are hidden (a closed row's children); -2 to the next header
 	for i := range items {
 		it := &items[i]
 		if it.Header {
@@ -229,20 +232,27 @@ func Sidebar(k *base.Kit, label string, st *SidebarState, items []SidebarItem, o
 			if headers > 0 {
 				c.NextSize(ui.Pct(1), ui.Px(theme.Snap(sp.GroupGap)))
 				c.BoxKeyed(0, ui.KeyN(key, 2<<32|uint64(it.ID)), nil)
+				y += theme.Snap(sp.GroupGap)
 			}
 			headers++
-			if t := sidebarHeader(k, key, it, rc, &o); t {
+			hh, t := sidebarHeader(k, key, it, rc, &o)
+			if t {
 				res.Toggled = it.ID
 			}
+			y += hh
 			if it.Open != nil && !*it.Open {
 				hide = -2
 			}
 			continue
 		}
-		pressed, toggled := sidebarRow(k, key, it, st.Sel == it.ID, emph, rc, &o)
+		pressed, toggled, rh := sidebarRow(k, key, it, st.Sel == it.ID, emph, rc, &o)
 		if pressed && st.Sel != it.ID {
-			st.Sel, res.Changed = it.ID, true
+			st.Sel, changed = it.ID, true
 		}
+		if keyed && st.Sel == it.ID { // a row the keyboard selected comes into view
+			c.ScrollIntoView(v.Inner, [4]float32{0, y, 1, y + rh})
+		}
+		y += rh
 		if toggled {
 			res.Toggled = it.ID
 		}
@@ -256,6 +266,7 @@ func Sidebar(k *base.Kit, label string, st *SidebarState, items []SidebarItem, o
 	c.Pop()
 	res.Signal = k.SignalOf(root)
 	res.Focused = focused
+	res.Changed = changed
 	return res
 }
 
@@ -280,7 +291,7 @@ func SidebarSearch(k *base.Kit, label string, buf *ui.TextBuffer, placeholder st
 	c.NextAxis(ui.AxisX)
 	c.NextCross(ui.CrossCenter)
 	_, ident := ui.SplitLabel(label)
-	capKey := ui.HashString(c.ParentKey(), ident+" capsule")
+	capKey := ui.KeyN(ui.HashString(c.ParentKey(), ident), 0xCA95)
 	cp := c.BoxKeyed(ui.DrawBackground, capKey, nil)
 	c.Push(cp)
 	rr := c.Rect(cp)
@@ -323,7 +334,7 @@ func SidebarSearch(k *base.Kit, label string, buf *ui.TextBuffer, placeholder st
 
 // sidebarRow builds one row; it reports a press on it and a click on its
 // disclosure.
-func sidebarRow(k *base.Kit, key ui.Key, it *SidebarItem, sel, emph bool, rc *SidebarRecipe, o *SidebarOpts) (pressed, toggled bool) {
+func sidebarRow(k *base.Kit, key ui.Key, it *SidebarItem, sel, emph bool, rc *SidebarRecipe, o *SidebarOpts) (pressed, toggled bool, h float32) {
 	c, r := k.Context(), k.Theme()
 	sp := &r.Window.Sidebar
 	rkey := ui.KeyN(key, 1<<32|uint64(it.ID))
@@ -332,7 +343,7 @@ func sidebarRow(k *base.Kit, key ui.Key, it *SidebarItem, sel, emph bool, rc *Si
 	if pressed {
 		sel = true
 	}
-	h := theme.Snap(sp.RowH)
+	h = theme.Snap(sp.RowH)
 	if o.RowH > 0 {
 		h = theme.Snap(k.Pt(o.RowH))
 	}
@@ -379,7 +390,7 @@ func sidebarRow(k *base.Kit, key ui.Key, it *SidebarItem, sel, emph bool, rc *Si
 		// inside the selection, between its edge and the symbol
 		side := theme.Snap(k.Pt(DisclosureLook.Box))
 		mid := (theme.Snap(r.Window.Selection.Inset) + sp.IconX) / 2
-		toggled = sidebarChevron(k, rkey, it.Open, theme.Snap(mid+indent-side/2), h, textCol, false)
+		toggled = sidebarChevron(k, rkey, key, it.Open, theme.Snap(mid+indent-side/2), h, textCol, false)
 	}
 	textX := k.Pt(rc.PlainTextX+rc.FieldInset) + indent
 	if id, ok := it.Glyph.ID(); ok && it.Tile != 0 {
@@ -445,7 +456,7 @@ func sidebarRow(k *base.Kit, key ui.Key, it *SidebarItem, sel, emph bool, rc *Si
 		c.BoxKeyed(ui.DrawText|ui.EllipsisOverflowX|base.Floating, ui.KeyN(rkey, 4), base.StrBytes(it.Detail))
 	}
 	c.Pop()
-	return pressed, toggled
+	return pressed, toggled, h
 }
 
 // sidebarSelection draws the selection behind a row of width w and height h
@@ -470,13 +481,14 @@ func sidebarSelection(k *base.Kit, rkey ui.Key, w, h float32, emph bool) {
 	c.BoxKeyed(ui.DrawBackground|base.Floating, ui.KeyN(rkey, 3), nil)
 }
 
-// sidebarHeader builds a group header; it reports a click on its
-// disclosure, which shows under the pointer.
-func sidebarHeader(k *base.Kit, key ui.Key, it *SidebarItem, rc *SidebarRecipe, o *SidebarOpts) (toggled bool) {
+// sidebarHeader builds a group header of height h; it reports a press on its
+// disclosure, which shows under the pointer and while it has the focus (Tab
+// reaches it; Space toggles it, as an assistive technology's press does).
+func sidebarHeader(k *base.Kit, key ui.Key, it *SidebarItem, rc *SidebarRecipe, o *SidebarOpts) (h float32, toggled bool) {
 	c, r := k.Context(), k.Theme()
 	sp := &r.Window.Sidebar
 	hkey := ui.KeyN(key, 3<<32|uint64(it.ID))
-	h := theme.Snap(sp.HeaderH)
+	h = theme.Snap(sp.HeaderH)
 	if o.HeaderH > 0 {
 		h = theme.Snap(k.Pt(o.HeaderH))
 	}
@@ -501,27 +513,34 @@ func sidebarHeader(k *base.Kit, key ui.Key, it *SidebarItem, rc *SidebarRecipe, 
 	c.NextTextColor(col)
 	c.BoxKeyed(ui.DrawText|ui.EllipsisOverflowX|base.Floating, ui.KeyN(hkey, 1), base.StrBytes(it.Title))
 	if it.Open != nil {
-		show := max(c.HotTOf(hkey), c.HotTOf(ui.KeyN(hkey, 9)))
+		ckey := ui.KeyN(hkey, 9)
+		show := max(c.HotTOf(hkey), c.HotTOf(ckey), c.FocusTOf(ckey))
 		if !*it.Open {
 			show = 1 // a hidden group keeps its chevron, as AppKit's does
 		}
-		if show > 0.004 {
-			toggled = sidebarChevron(k, hkey, it.Open, theme.Snap(w-k.Pt(rc.HeaderChevronRight)-k.Pt(6.5)), h, theme.WithAlpha(rc.Chevron.RGBA(r)|0xFF, show), true)
-		}
+		// built while hidden too: the keyboard and assistive technologies
+		// reach it
+		toggled = sidebarChevron(k, hkey, key, it.Open, theme.Snap(w-k.Pt(rc.HeaderChevronRight)-k.Pt(6.5)), h, theme.WithAlpha(rc.Chevron.RGBA(r)|0xFF, show), true)
 	}
 	c.Pop()
-	return toggled
+	return h, toggled
 }
 
 // sidebarChevron builds the disclosure chevron of a row or header at x in a
 // row of height h, which turns over the Standard duration, and toggles *open
-// on a click.
-func sidebarChevron(k *base.Kit, rkey ui.Key, open *bool, x, h float32, col uint32, header bool) bool {
+// on a click or an assistive technology's press. A header's takes the focus
+// from the keyboard (Tab; Space or Enter toggles it); a click on it leaves
+// the focus with the sidebar (root).
+func sidebarChevron(k *base.Kit, rkey, root ui.Key, open *bool, x, h float32, col uint32, header bool) bool {
 	c, r := k.Context(), k.Theme()
 	ckey := ui.KeyN(rkey, 9)
-	toggled := c.PeekSignal(ckey).Clicked && !k.Disabled()
+	ps := c.PeekSignal(ckey)
+	toggled := k.PressedBefore(ckey)
 	if toggled {
 		*open = !*open
+		if header && ps.Clicked && !ps.Activated {
+			c.SetFocus(root)
+		}
 	}
 	tgt := float32(0)
 	if *open {
@@ -545,11 +564,21 @@ func sidebarChevron(k *base.Kit, rkey ui.Key, open *bool, x, h float32, col uint
 		state = ui.SemExpanded
 	}
 	c.NextSemState(state)
-	cb := c.BoxKeyed(ui.Clickable|ui.HotAnimation|ui.ActiveAnimation|base.Floating, ckey, nil)
+	flags := ui.Clickable | ui.HotAnimation | ui.ActiveAnimation | base.Floating
+	if header {
+		flags |= ui.Focusable | ui.FocusAnimation
+	}
+	if k.Disabled() {
+		flags = ui.Disabled | base.Floating
+	}
+	cb := c.BoxKeyed(flags, ckey, nil)
 	c.Push(cb)
 	// over the sidebar's glass: the chevron in the colour it composites to
 	under := glassFallback(k, GlassSidebar)
 	chevron(c, ckey, 100, &DisclosureLook.Closed, t*DisclosureLook.Open, DisclosureLook.Width, k.Scale(), ink(col, under))
+	if header {
+		k.FocusRing(cb, k.VisualOf(ckey, base.HoverOn), side/2)
+	}
 	c.Pop()
 	return toggled
 }

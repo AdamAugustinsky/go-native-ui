@@ -76,7 +76,7 @@ func TestTabsChooseCloseAndMiddleClick(t *testing.T) {
 	r := m.bar.TabRect(1)
 	g.in.MouseX, g.in.MouseY = (r[0]+r[2])/2, (r[1]+r[3])/2
 	g.settle()
-	cl := g.node(ui.RoleButton, "Close Tab")
+	cl := g.closeIn(r)
 	g.click(centre(cl))
 	if len(m.closed) != 1 || m.closed[0] != 101 || len(m.tabs) != 3 {
 		t.Fatalf("the close button closed %v, %d tabs left", m.closed, len(m.tabs))
@@ -265,4 +265,18 @@ func TestTabsInContentTakeKeysWhenFocused(t *testing.T) {
 	if m.sel != 1 {
 		t.Fatalf("Left with the focus chose %d, want 1", m.sel)
 	}
+}
+
+// closeIn is the Close Tab button inside the tab rectangle r (window pixels):
+// every tab that can close has one, shown or not.
+func (g *rig) closeIn(r [4]float32) ui.SemNode {
+	g.t.Helper()
+	g.c.Semantics(&g.sem)
+	for _, n := range g.sem.Nodes {
+		if n.Role == ui.RoleButton && string(g.sem.Text(n.Name)) == "Close Tab" && n.Bounds[0] >= r[0] && n.Bounds[2] <= r[2] {
+			return n
+		}
+	}
+	g.t.Fatalf("no Close Tab in %v", r)
+	return ui.SemNode{}
 }
