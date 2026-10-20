@@ -188,7 +188,7 @@ func (c *Context) Audit(dst []Finding) []Finding {
 			continue
 		}
 		// (a) an alignment without text
-		if b.alignNext && b.align != AlignLeft && b.first != 0 && b.flags&DrawText == 0 && !b.exempt(AuditAlign) {
+		if b.alignNext && b.align != AlignLeft && b.first != 0 && (b.flags&DrawText == 0 || b.txt.Len == 0) && !b.exempt(AuditAlign) {
 			dst = c.report(dst, AuditAlign, id, 0, 0)
 		}
 		if p := b.parent; p != 0 {
@@ -331,7 +331,7 @@ func (c *Context) auditCovers(dst []Finding, p ID, tol float32) []Finding {
 			}
 			if before || mat || !boxes[s].floatingDraw() {
 				var found bool
-				if dst, found = c.coveredIn(dst, s, f, cover, all, false, mat, tol); found {
+				if dst, found = c.coveredIn(dst, s, f, cover, all, scrollsPast(&boxes[p], &boxes[s], fb), mat, tol); found {
 					break // one finding per floating box
 				}
 			}
@@ -340,31 +340,37 @@ func (c *Context) auditCovers(dst []Finding, p ID, tol float32) []Finding {
 	return dst
 }
 
+// scrollsPast reports whether s, a child of p, moves under its floating
+// sibling f when p scrolls: p scrolls on an axis on which f stays put
+// (floating) and s does not.
+func scrollsPast(p, s, f *box) bool {
+	for a := 0; a < 2; a++ {
+		if p.scrollOn(a) && f.floatingOn(a) && !s.floatingOn(a) {
+			return true
+		}
+	}
+	return false
+}
+
 // material reports whether b is a material region (Context.Material), which
 // the system draws behind the window's pixels.
 func (c *Context) material(b *box) bool { return b.mat != 0 }
 
 // coveredIn reports the first box of id's subtree, clipped by clip, that
-// draws under cover f, and whether there was one. Content is text and images,
-// and backgrounds and borders that scroll (scrolled: below a scrolling box):
-// shapes that do not move and are covered on purpose, such as layered
-// backgrounds or the petals of a spinner, are not reported. Under a material
-// (mat), content that lies inside it is its own and is not reported either.
+// draws under cover f, and whether there was one. Content is text (each line,
+// as the renderer clips it) and images (where their fit puts them), and
+// backgrounds and borders that scroll (scrolled: they move under f when an
+// ancestor scrolls): shapes that do not move and are covered on purpose, such
+// as layered backgrounds or the petals of a spinner, are not reported. Under a
+// material (mat), content that lies inside it is its own and is not reported
+// either.
 func (c *Context) coveredIn(dst []Finding, id, f ID, cover, clip [4]float32, scrolled, mat bool, tol float32) ([]Finding, bool) {
 	b := &c.boxes[id]
 	if b.hid || b.exempt(AuditCovered) {
 		return dst, false
 	}
 	vis := intersect(b.urect(), clip)
-	area := vis // what it draws: the glyph or image box of text and images
-	content := scrolled && b.draws()
-	if _, ink, ok := c.textInk(b); ok {
-		area, content = intersect(ink, clip), true
-	} else if ink, ok := c.iconInk(b); ok {
-		area, content = intersect(ink, clip), true
-	}
-	hit := intersect(area, cover)
-	if content && hit[2]-hit[0] > tol && hit[3]-hit[1] > tol && (!mat || hit != area) {
+	if hit, ok := c.contentUnder(b, clip, cover, scrolled, mat, tol); ok {
 		return c.report(dst, AuditCovered, id, f, min(hit[2]-hit[0], hit[3]-hit[1])), true
 	}
 	if b.flags&Clip != 0 {
@@ -381,6 +387,77 @@ func (c *Context) coveredIn(dst []Finding, id, f ID, cover, clip [4]float32, scr
 		}
 	}
 	return dst, false
+}
+
+// contentUnder is the part under cover of the first piece of b's own content
+// that reaches under it by more than tol on both axes, and whether there is
+// one. The pieces are its text, line by line, where the renderer draws it and
+// clipped as it clips it; its image where its fit places it; and, when
+// scrolled, its background and border. Each is clipped by clip. Under a
+// material (mat) a piece that lies wholly inside cover does not count.
+func (c *Context) contentUnder(b *box, clip, cover [4]float32, scrolled, mat bool, tol float32) (hit [4]float32, ok bool) {
+	under := func(r [4]float32) bool {
+		r = intersect(r, clip)
+		h := intersect(r, cover)
+		if h[2]-h[0] > tol && h[3]-h[1] > tol && (!mat || h != r) {
+			hit, ok = h, true
+		}
+		return ok
+	}
+	if b.flags&DrawText != 0 && b.txt.Len > 0 {
+		r := b.rect
+		x0, x1, y0 := r[0]+b.pad[0], r[2]-b.pad[2], r[1]+b.pad[1]
+		if rec := c.recOf(b); rec != nil { // as emitRich
+			pv := c.richView(b, rec)
+			w := max(r[2]-r[0]-b.padSum(0), 0)
+			for i := range pv.Lines {
+				ln := &pv.Lines[i]
+				if ln.G1 == ln.G0 {
+					continue
+				}
+				ox := x0 + lineOrigin(&pv, i, w, b.align)
+				if under([4]float32{ox, y0 + ln.Top, ox + ln.Width, y0 + ln.Top + ln.Height}) {
+					return hit, true
+				}
+			}
+		} else if b.flags&WrapText != 0 { // as emitWrapped
+			if b.lnN > 0 {
+				pv := c.wrapView(b)
+				fi := c.fontInfo(b.font)
+				for i := range pv.Lines {
+					ln := &pv.Lines[i]
+					if ln.G1 == ln.G0 {
+						continue
+					}
+					x := x0
+					if avail := x1 - x0; ln.Width <= avail+0.01 {
+						switch b.align {
+						case AlignCenter:
+							x = x0 + (avail-ln.Width)/2
+						case AlignRight:
+							x = x1 - ln.Width
+						}
+					}
+					top := y0 + float32(i)*fi.lh
+					baseline := snap(top + (fi.lh-(fi.ascent+fi.descent))/2 + fi.ascent)
+					if under([4]float32{x, baseline - fi.ascent, x + ln.Width, baseline + fi.descent}) {
+						return hit, true
+					}
+				}
+			}
+		} else if _, ink, ok := c.textInk(b); ok { // as emitText
+			if under(ink) {
+				return hit, true
+			}
+		}
+	}
+	if r, ok := c.imageRect(b); ok && under(r) {
+		return hit, true
+	}
+	if scrolled && b.flags&(DrawBackground|DrawBorder) != 0 && b.draws() && under(b.urect()) {
+		return hit, true
+	}
+	return hit, false
 }
 
 // auditCentre is check (f) for box p.
@@ -458,17 +535,8 @@ func abs32(v float32) float32 {
 // iconInk is the image or glyph box of b when b shows an icon: an image, or
 // display text of one glyph.
 func (c *Context) iconInk(b *box) ([4]float32, bool) {
-	if b.flags&DrawImage != 0 && b.img.Tex != 0 {
-		r := b.rect
-		if b.img.Fit != FitNatural {
-			return [4]float32{r[0] + b.pad[0], r[1] + b.pad[1], r[2] - b.pad[2], r[3] - b.pad[3]}, true
-		}
-		uv := b.img.UV
-		w, h := uv[2]-uv[0], uv[3]-uv[1]
-		cx := (r[0] + b.pad[0] + r[2] - b.pad[2]) / 2
-		cy := (r[1] + b.pad[1] + r[3] - b.pad[3]) / 2
-		x0, y0 := snap(cx-w/2), snap(cy-h/2)
-		return [4]float32{x0, y0, x0 + w, y0 + h}, true
+	if r, ok := c.imageRect(b); ok {
+		return r, true
 	}
 	if n, ink, ok := c.textInk(b); ok && n == 1 {
 		return ink, true
@@ -476,11 +544,43 @@ func (c *Context) iconInk(b *box) ([4]float32, bool) {
 	return [4]float32{}, false
 }
 
+// imageRect is where emitImage draws b's image, and whether b draws one: its
+// texel rectangle centred in the padded box (FitNatural), or the rectangle
+// its fit gives it (emitFitted).
+func (c *Context) imageRect(b *box) ([4]float32, bool) {
+	if b.flags&DrawImage == 0 || b.img.Tex == 0 {
+		return [4]float32{}, false
+	}
+	r := b.rect
+	x0, y0, x1, y1 := r[0]+b.pad[0], r[1]+b.pad[1], r[2]-b.pad[2], r[3]-b.pad[3]
+	uv := b.img.UV
+	iw, ih := uv[2]-uv[0], uv[3]-uv[1]
+	switch b.img.Fit {
+	case FitNatural:
+		ix, iy := snap((x0+x1)/2-iw/2), snap((y0+y1)/2-ih/2)
+		return [4]float32{ix, iy, ix + iw, iy + ih}, true
+	case FitContain:
+		bw, bh := x1-x0, y1-y0
+		if iw <= 0 || ih <= 0 || bw <= 0 || bh <= 0 {
+			return [4]float32{}, false
+		}
+		s := min(bw/iw, bh/ih)
+		dw, dh := iw*s, ih*s
+		rx, ry := snap(x0+(bw-dw)/2), snap(y0+(bh-dh)/2)
+		return [4]float32{rx, ry, rx + snap(dw), ry + snap(dh)}, true
+	case FitCenter:
+		ix, iy := snap(x0+(x1-x0-iw)/2), snap(y0+(y1-y0-ih)/2)
+		return [4]float32{max(ix, x0), max(iy, y0), min(ix+iw, x1), min(iy+ih, y1)}, true
+	}
+	return [4]float32{x0, y0, x1, y1}, true // FitFill
+}
+
 // textInk is the glyph box of b's one line of display text where emitText
 // draws it, without the spaces at either end: from the pen position of the
 // first glyph that is not a space to the advance of the last, by the font's
-// ascent and descent. n is the number of glyphs inside it. ok is false for a
-// box without such text (none, wrapped or rich).
+// ascent and descent, clipped to the padded box as emitText clips text that
+// overflows with FadeOverflowX. n is the number of glyphs inside it. ok is
+// false for a box without such text (none, wrapped or rich).
 func (c *Context) textInk(b *box) (n int, ink [4]float32, ok bool) {
 	if b.flags&DrawText == 0 || b.flags&WrapText != 0 || b.txt.Len == 0 || c.recOf(b) != nil {
 		return 0, ink, false
@@ -518,16 +618,24 @@ func (c *Context) textInk(b *box) (n int, ink [4]float32, ok bool) {
 	x0, x1 := r[0]+b.pad[0], r[2]-b.pad[2]
 	y0, y1 := r[1]+b.pad[1], r[3]-b.pad[3]
 	x := x0
-	if avail := x1 - x0; v.Advance <= avail+0.01 {
+	over := v.Advance > x1-x0+0.01
+	if !over {
 		switch b.align {
 		case AlignCenter:
-			x = x0 + (avail-v.Advance)/2
+			x = x0 + (x1-x0-v.Advance)/2
 		case AlignRight:
 			x = x1 - v.Advance
 		}
 	}
 	baseline := snap(y0 + ((y1-y0)-(fi.ascent+fi.descent))/2 + fi.ascent)
-	return i1 - i0 + 1, [4]float32{x + v.X[i0], baseline - fi.ascent, x + end, baseline + fi.descent}, true
+	ink = [4]float32{x + v.X[i0], baseline - fi.ascent, x + end, baseline + fi.descent}
+	if over && b.flags&FadeOverflowX != 0 { // emitText clips it to the padded box
+		ink[0], ink[2] = max(ink[0], x0), min(ink[2], x1)
+		if ink[2] <= ink[0] {
+			return 0, ink, false
+		}
+	}
+	return i1 - i0 + 1, ink, true
 }
 
 // maxAuditCols bounds what the column check remembers: the headers of this

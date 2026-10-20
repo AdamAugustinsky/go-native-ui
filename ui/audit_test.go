@@ -329,3 +329,144 @@ func TestAuditAllocatesOnlyToReport(t *testing.T) {
 		t.Errorf("an audit that finds nothing allocates %v times", n)
 	}
 }
+
+// coveredBy builds parent, a 200×100 box with build's content in it, and an
+// opaque floating pane over (x, y, w, h) inside it, and returns the coverage
+// findings.
+func coveredBy(t *testing.T, x, y, w, h float32, build func(c *Context)) []Finding {
+	hs := newWrapHarness(t, 800, 600)
+	m, _ := hs.audit(func(c *Context) {
+		c.NextSize(Px(200), Px(100))
+		c.Open(0, "parent")
+		build(c)
+		c.NextFlags(FloatingX | FloatingY)
+		c.NextPos(x, y)
+		c.NextSize(Px(w), Px(h))
+		c.NextBG(0x202020FF)
+		c.Box(DrawBackground, "pane")
+		c.Close()
+	})
+	return m[AuditCovered]
+}
+
+// Wrapped and rich text are checked line by line, and only what a viewport
+// lets through.
+func TestAuditCoveredWrappedAndRich(t *testing.T) {
+	wrapped := func(c *Context) {
+		c.NextWidth(Px(40)) // five characters a line: four lines, 14 px each
+		c.NextHeight(TextSize(0))
+		c.Box(DrawText|WrapText, "aaaa bbbb cccc dddd")
+	}
+	if fs := coveredBy(t, 0, 30, 100, 10, wrapped); len(fs) != 1 || !strings.Contains(fs[0].Where, "aaaa") {
+		t.Errorf("a wrapped label's third line under the pane: %v", fs)
+	}
+	if fs := coveredBy(t, 100, 30, 100, 10, wrapped); len(fs) != 0 {
+		t.Errorf("a pane beside a wrapped label: %v", fs)
+	}
+	clipped := func(c *Context) {
+		c.NextSize(Px(100), Px(20)) // the viewport shows the first line only
+		c.Open(Clip, "viewport")
+		wrapped(c)
+		c.Close()
+	}
+	if fs := coveredBy(t, 0, 30, 100, 10, clipped); len(fs) != 0 {
+		t.Errorf("a wrapped label clipped above the pane: %v", fs)
+	}
+	rich := func(c *Context) {
+		c.RichText(HashString(0, "rich"), []byte("iiii jjjj kkkk"), nil, nil, RichOpts{MaxW: 40})
+	}
+	if fs := coveredBy(t, 0, 16, 100, 10, rich); len(fs) != 1 {
+		t.Errorf("rich text's second line under the pane: %v", fs)
+	}
+}
+
+// Text that overflows its box with FadeOverflowX is cut at the box, as
+// emitText cuts it: a pane beside the box hides nothing.
+func TestAuditCoveredFadedText(t *testing.T) {
+	label := func(fade Flags) func(c *Context) {
+		return func(c *Context) {
+			c.NextSize(Px(40), Px(20)) // 27 characters: 216 px of text
+			c.Box(DrawText|fade, "a long label that overflows")
+		}
+	}
+	if fs := coveredBy(t, 60, 0, 40, 20, label(FadeOverflowX)); len(fs) != 0 {
+		t.Errorf("faded text cut before the pane: %v", fs)
+	}
+	if fs := coveredBy(t, 60, 0, 40, 20, label(0)); len(fs) != 1 {
+		t.Errorf("text drawn past its box, under the pane: %v", fs)
+	}
+}
+
+// Rows directly inside the scroll box, under a header floating in it: their
+// backgrounds scroll under it. In a box that does not scroll they are
+// layered on purpose.
+func TestAuditCoveredRowsInScroller(t *testing.T) {
+	for _, scroll := range []bool{true, false} {
+		h := newHarness(t, 800, 600)
+		m, fs := h.audit(func(c *Context) {
+			c.NextSize(Px(300), Px(200))
+			var f Flags
+			if scroll {
+				f = ScrollY | Clip
+			}
+			sc := c.Open(f, "rows")
+			if scroll {
+				c.SetScroll(sc, 0, 30)
+			}
+			for i := 0; i < 20; i++ {
+				c.NextSize(Pct(1), Px(20))
+				c.NextBG(0xEEEEEEFF)
+				c.BoxKeyed(DrawBackground, KeyN(c.ParentKey(), uint64(i)), nil)
+			}
+			c.NextFlags(FloatingX | FloatingY)
+			c.NextPos(0, 0)
+			c.NextSize(Pct(1), Px(28))
+			c.NextBG(0xFFFFFFFF)
+			c.Box(DrawBackground, "header")
+			c.Close()
+		})
+		if want := map[bool]int{true: 1, false: 0}[scroll]; len(m[AuditCovered]) != want {
+			t.Errorf("scrolling %v: covered findings %v, want %d", scroll, fs, want)
+		}
+	}
+}
+
+// A fitted image covers only the rectangle its fit gives it.
+func TestAuditCoveredFittedImage(t *testing.T) {
+	for _, tc := range []struct {
+		fit ImageFit
+		uv  [4]float32
+	}{
+		{FitContain, [4]float32{0, 0, 100, 10}}, // drawn over y 45 to 55
+		{FitCenter, [4]float32{0, 0, 20, 20}},   // drawn over y 40 to 60
+	} {
+		img := func(c *Context) {
+			c.NextSize(Px(100), Px(100))
+			c.NextImageFit(1, tc.uv, tc.fit)
+			c.Box(DrawImage, "img")
+		}
+		if fs := coveredBy(t, 0, 0, 100, 20, img); len(fs) != 0 {
+			t.Errorf("fit %d: a pane above the image: %v", tc.fit, fs)
+		}
+		if fs := coveredBy(t, 0, 40, 100, 20, img); len(fs) != 1 {
+			t.Errorf("fit %d: a pane over the image: %v", tc.fit, fs)
+		}
+	}
+}
+
+// An alignment on a DrawText box without text, laid out with children, is
+// the trap too.
+func TestAuditAlignEmptyText(t *testing.T) {
+	h := newHarness(t, 800, 600)
+	m, fs := h.audit(func(c *Context) {
+		c.NextSize(Px(60), Px(30))
+		c.NextAxis(AxisX)
+		c.NextAlign(AlignCenter)
+		c.Push(c.BoxKeyed(DrawText, HashString(0, "empty"), nil))
+		c.Label("x")
+		c.Pop()
+	})
+	if len(m[AuditAlign]) != 1 {
+		t.Fatalf("align findings %v, want the empty text box", fs)
+	}
+}

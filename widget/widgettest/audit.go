@@ -9,7 +9,8 @@ import (
 
 // Allow is a finding of the layout audit that a test accepts, with the reason.
 // It matches a finding of its Check whose Where contains Where (and, when it
-// is set, whose OtherWhere contains Other).
+// is set, whose OtherWhere contains Other) and, when Within is set, whose
+// rectangle has its centre inside Within.
 type Allow struct {
 	// Check is the check of the findings it accepts.
 	Check ui.AuditCheck
@@ -17,11 +18,21 @@ type Allow struct {
 	Where string
 	// Other, when set, is text that the finding's OtherWhere contains.
 	Other string
+	// Within, when set, is the region (x0, y0, x1, y1 in pixels) that the
+	// centre of the finding's Rect lies in: a part of the window, such as one
+	// sample of a page of them.
+	Within [4]float32
 	// Reason says why the finding is right as it is.
 	Reason string
 }
 
 func (a Allow) matches(f ui.Finding) bool {
+	if a.Within != ([4]float32{}) {
+		cx, cy := (f.Rect[0]+f.Rect[2])/2, (f.Rect[1]+f.Rect[3])/2
+		if cx < a.Within[0] || cx >= a.Within[2] || cy < a.Within[1] || cy >= a.Within[3] {
+			return false
+		}
+	}
 	return a.Check == f.Check && strings.Contains(f.Where, a.Where) &&
 		(a.Other == "" || strings.Contains(f.OtherWhere, a.Other))
 }
