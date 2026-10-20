@@ -57,9 +57,8 @@ func newGestureView(w, h float64) objc.ID {
 
 // What AppKit delivers of the synthetic scroll and gesture events to a view
 // that covers the window. Scrolls reach it (the app's own scroll tests rely on
-// it). Whether magnify and rotate do depends on the window being key, which a
-// runner's session may not allow: the test records what it saw, and fails only
-// when the window was key and nothing arrived.
+// it), and so does smart magnify once the window is key. Magnify and rotate
+// are recorded, not required: the runner does not deliver them.
 func TestSyntheticGesturesReachAView(t *testing.T) {
 	l, _ := startProbe(t)
 	l.Frames(3)
@@ -102,9 +101,14 @@ func TestSyntheticGesturesReachAView(t *testing.T) {
 	if count("scroll") == 0 {
 		t.Error("a scroll event did not reach the view")
 	}
-	if key && count("magnify") == 0 {
-		t.Error("the window is key and no magnify event reached the view")
+	// Measured on the macOS 15 runner (key window, active app): scroll and
+	// smart magnify arrive; magnify and rotate, posted as gesture CGEvents,
+	// do not come out of [NSApp sendEvent:] as view messages. Tests of
+	// pinch or rotate handling must call the handler directly.
+	if key && count("smart") == 0 {
+		t.Error("the window is key and no smart-magnify event reached the view")
 	}
+	t.Logf("magnify delivered: %v, rotate delivered: %v", count("magnify") > 0, count("rotate") > 0)
 	if !key {
 		t.Logf("the window is not key here (the session cannot activate the app): gesture delivery is not checked")
 	}
