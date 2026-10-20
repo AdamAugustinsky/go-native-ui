@@ -99,3 +99,43 @@ func TestImageIOAcceptsAPNGWithPartialFirstFrame(t *testing.T) {
 		}
 	}
 }
+
+// TestAutoplayNotificationDuringClose: a notification whose list of caches
+// was taken before Close does not wake the closed cache.
+func TestAutoplayNotificationDuringClose(t *testing.T) {
+	data := animgen.GIF(16, 16, animgen.Sheet(16, 16, 3, 50), 0)
+	var wakes atomic.Int32
+	c, _ := newTestCache(t, Options{Wake: func() { wakes.Add(1) }})
+	key := Key{Hash: HashBytes(data), W: 16, H: 16, Flags: Animate}
+	var h Handle
+	settle(t, c, func() { h, _ = c.Request(key, Bytes(data)) })
+	if !c.Animated(h) {
+		t.Fatalf("not animated: %v", c.State(h))
+	}
+	axSnapshotHook = func() { c.Close(time.Second) }
+	defer func() { axSnapshotHook = nil }()
+	n := wakes.Load()
+	axChanged()
+	if wakes.Load() != n {
+		t.Error("a cache closed during the notification was woken")
+	}
+}
+
+// TestAutoplayUnwatchClearsReference: the list of watched caches does not
+// keep a closed cache reachable.
+func TestAutoplayUnwatchClearsReference(t *testing.T) {
+	a, _ := newTestCache(t, Options{})
+	b, _ := newTestCache(t, Options{})
+	watchAutoplay(a)
+	watchAutoplay(b)
+	unwatchAutoplay(b)
+	ax.mu.Lock()
+	defer ax.mu.Unlock()
+	for _, c := range ax.caches[:cap(ax.caches)] {
+		if c == b {
+			t.Error("the closed cache is still in the list's backing array")
+		}
+	}
+	ax.caches = nil
+	a.watching = false
+}

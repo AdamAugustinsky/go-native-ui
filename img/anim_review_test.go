@@ -456,3 +456,116 @@ func TestAPNGValidation(t *testing.T) {
 		})
 	}
 }
+
+// ---- no buffer for a frame ---------------------------------------------------------
+
+// hogBuffers takes every buffer record the cache's pool has left.
+func hogBuffers(c *Cache) (hogs []int32) {
+	for {
+		b := c.bufs.get(16, c.fr)
+		if b < 0 {
+			return hogs
+		}
+		hogs = append(hogs, b)
+	}
+}
+
+// tickAnim is one cache frame for the animation of h at clock now.
+func tickAnim(c *Cache, h Handle, now int64) (wake int64) {
+	for a := c.animOf(h); a.inflight; {
+		c.pollFrames()
+		runtime.Gosched()
+	}
+	c.Poll()
+	_, _, _, wake = c.UseAnimated(h, Present{Now: now, Visible: true})
+	return wake
+}
+
+func secondAnim(t *testing.T, r *rig) Handle {
+	k := fakeKey
+	k.Hash = 2
+	var h Handle
+	settle(t, r.c, func() { h, _ = r.c.Request(k, Bytes([]byte("FAKE"))) })
+	if !r.c.Animated(h) {
+		t.Fatal("the second animation did not start")
+	}
+	return h
+}
+
+// TestAnimNoBufferTakesHiddenRings: when every buffer record is held, an
+// animation in view takes the frames decoded ahead for one nobody sees.
+func TestAnimNoBufferTakesHiddenRings(t *testing.T) {
+	useFake(t, uniform(10, 100, 0))
+	r := newRig(t, Options{})
+	r.start()
+	h2 := secondAnim(t, r)
+	now := 1_000 * ms
+	for i := 0; i < 4 && r.anim().nring < 2; i++ { // the first one fills its ring, then is out of view
+		r.frame(now, Present{Visible: true})
+		now += 100 * ms
+	}
+	r.waitFrame()
+	if r.anim().nring == 0 {
+		t.Fatal("the hidden animation holds no frames")
+	}
+	for i := 0; i < 3; i++ {
+		r.c.Poll()
+	}
+	hogs := hogBuffers(r.c)
+	for i := 0; i < 20; i++ {
+		tickAnim(r.c, h2, now)
+		now += 100 * ms
+	}
+	if cur := r.c.animOf(h2).cur; cur < 2 {
+		t.Errorf("the animation in view is at frame %d: it got no buffer", cur)
+	}
+	if n := r.anim().nring; n != 0 {
+		t.Errorf("the hidden animation still holds %d frames", n)
+	}
+	for _, b := range hogs {
+		r.c.bufs.put(b, r.c.fr)
+	}
+}
+
+// TestAnimNoBufferWaitsWithoutWakes: with nothing to take, an animation
+// waits for a buffer to be returned and asks for no wake meanwhile; the
+// return wakes the app once and it plays.
+func TestAnimNoBufferWaitsWithoutWakes(t *testing.T) {
+	useFake(t, uniform(10, 100, 0))
+	r := newRig(t, Options{})
+	r.start()
+	now := 1_000 * ms
+	r.waitFrame()
+	hogs := hogBuffers(r.c)
+	for i := 0; i < 5; i++ { // the failed decode, settled
+		tickAnim(r.c, r.h, now)
+		now += 100 * ms
+	}
+	wakes := r.wake.Load()
+	for i := 0; i < 100; i++ {
+		if w := tickAnim(r.c, r.h, now); w != 0 {
+			t.Fatalf("tick %d: wake %d ms while no buffer is free", i, w/ms)
+		}
+		now += 100 * ms
+	}
+	if r.wake.Load() != wakes {
+		t.Errorf("%d wakes while no buffer is free", r.wake.Load()-wakes)
+	}
+	if r.anim().cur != 0 {
+		t.Fatalf("at frame %d without a buffer", r.anim().cur)
+	}
+	r.c.bufs.put(hogs[0], r.c.fr) // one comes back
+	if r.wake.Load() != wakes+1 {
+		t.Errorf("%d wakes for the buffer returned, want 1", r.wake.Load()-wakes)
+	}
+	for i := 0; i < 20; i++ {
+		tickAnim(r.c, r.h, now)
+		now += 100 * ms
+	}
+	if r.anim().cur < 2 {
+		t.Errorf("did not play once a buffer was free: frame %d", r.anim().cur)
+	}
+	for _, b := range hogs[1:] {
+		r.c.bufs.put(b, r.c.fr)
+	}
+}

@@ -262,6 +262,9 @@ type anim struct {
 	limit int64  // frames in all plays (0: no end)
 	due   int64  // clock time the showing frame's time is up
 	epoch uint32 // counts seeks: a decode of an older epoch is stale
+	// putsAtSubmit is the cache's count of returned buffers when the frame
+	// in flight was asked for; blockedAt that of a frame that found none.
+	putsAtSubmit, blockedAt uint64
 
 	lastNow  int64 // the clock at the last UseAnimated while shown
 	lastWake int64 // what it asked to be woken in
@@ -275,6 +278,7 @@ type anim struct {
 	forced   bool // Play was called: the setting does not hold it
 	done     bool
 	broken   bool // a frame failed to decode: no more are asked for
+	blocked  bool // no buffer was free for the next frame: it is asked for again when one is returned
 	reduce   bool // the last Present's ReduceMotion
 }
 
@@ -402,6 +406,10 @@ func (c *Cache) animTick(i int32, a *anim, p Present) (wake int64) {
 		return 0
 	}
 	c.animSubmit(i, a)
+	if a.stalled && a.blocked {
+		a.lastWake = 0 // the wake comes from a buffer returned
+		return 0
+	}
 	if a.stalled {
 		a.lastWake = starveRetry
 	} else {
@@ -428,6 +436,12 @@ func (c *Cache) showFrame(e *entry, buf int32) {
 
 // animSubmit asks a worker for the next frame when the ring has room.
 func (c *Cache) animSubmit(i int32, a *anim) {
+	if a.blocked {
+		if c.bufs.puts.Load() == a.blockedAt {
+			return // still no buffer: nothing asks again until one is returned
+		}
+		c.unblock(a)
+	}
 	if a.inflight || a.broken || c.closed || a.nring+1 > c.ringCap {
 		return
 	}
@@ -435,6 +449,7 @@ func (c *Cache) animSubmit(i int32, a *anim) {
 		return
 	}
 	e := &c.ents[i]
+	putsAt := c.bufs.puts.Load()
 	j := job{ent: i, kind: jobFrame, anim: a, frame: int32(mod(a.next, int64(a.frames))), seq: a.next, epoch: a.epoch, copy: -1}
 	c.jobs[i].Store(jobQueued)
 	c.jobCopy[i] = -1
@@ -442,7 +457,7 @@ func (c *Cache) animSubmit(i int32, a *anim) {
 		c.jobs[i].Store(jobIdle) // the queue is full: the next frame tries again
 		return
 	}
-	a.inflight = true
+	a.inflight, a.putsAtSubmit = true, putsAt
 	a.next++
 }
 
@@ -479,6 +494,12 @@ func (c *Cache) finishFrame(r *taskResult) {
 			c.st.AnimErrors++
 		case out.epoch == a.epoch && out.seq < a.next:
 			a.next = out.seq // no buffer was free: the frame is asked for again, not skipped
+			// Frames decoded ahead for animations nobody sees are expendable:
+			// one in view takes their buffers. When there are none to take,
+			// it waits for a buffer to be returned (no timer asks again).
+			if c.reclaimHidden(a) == 0 {
+				c.block(a)
+			}
 		}
 		return
 	}
@@ -489,6 +510,42 @@ func (c *Cache) finishFrame(r *taskResult) {
 	a.ring[a.nring] = ringSlot{out.buf, out.seq}
 	a.nring++
 	c.cpuUsed += a.bytes
+}
+
+// reclaimHidden returns the buffers of the frames waiting in the rings of
+// animations that were not shown in the last frame, other than keep, and
+// reports how many. Each such animation decodes those frames again when it is
+// shown.
+func (c *Cache) reclaimHidden(keep *anim) (n int) {
+	for _, j := range c.animList {
+		b := c.anims[j]
+		if b == keep || b.nring == 0 || b.lastTick+1 >= c.frame {
+			continue
+		}
+		n += b.nring
+		b.next = b.ring[0].seq // (a frame in flight is of the epoch before: stale)
+		b.epoch++
+		c.dropRing(b)
+		if b.blocked {
+			c.unblock(b)
+		}
+	}
+	return n
+}
+
+// block makes a wait for the next buffer returned to the cache.
+func (c *Cache) block(a *anim) {
+	if !a.blocked {
+		a.blocked, a.blockedAt = true, a.putsAtSubmit
+		c.bufs.waiters.Add(1)
+	}
+}
+
+func (c *Cache) unblock(a *anim) {
+	if a.blocked {
+		a.blocked = false
+		c.bufs.waiters.Add(-1)
+	}
 }
 
 // startAnim takes over the animation a worker built for entry i, once its
@@ -512,6 +569,7 @@ func (c *Cache) removeAnim(i int32) {
 		return
 	}
 	c.dropRing(a)
+	c.unblock(a)
 	a.dec.close(c.fr)
 	c.cpuUsed -= a.mem
 	c.anims[i] = nil

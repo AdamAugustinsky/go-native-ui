@@ -1,6 +1,7 @@
 package img
 
 import (
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -59,6 +60,8 @@ type Cache struct {
 	autoVal, autoKnown             bool
 	wake                           func() // wakes the UI loop (Options.Wake)
 	watching                       bool   // registered for the autoplay setting's change notification
+	wakeMu                         sync.Mutex
+	wakeShut                       bool // Close ran: wakeApp does nothing
 	bufs                           *bufPool
 	fr                             *cframe // the owner's C call frame (C memory on macOS)
 	wmu                            core.Mutex
@@ -151,7 +154,19 @@ func NewCache(o Options) *Cache {
 	// Buffer records: every entry's pixels, and per job a source copy and
 	// its output, plus the free list.
 	c.bufs = newBufPool(n+2*(queue+cap(c.workers))+maxFreeBufs+256*o.AnimRing, 16<<20)
+	c.bufs.wake = c.wakeApp
 	return c
+}
+
+// wakeApp calls Options.Wake from any goroutine, and never once Close has
+// returned (a notification that was on its way when the cache closed finds
+// nothing to wake).
+func (c *Cache) wakeApp() {
+	c.wakeMu.Lock()
+	defer c.wakeMu.Unlock()
+	if !c.wakeShut && c.wake != nil {
+		c.wake()
+	}
 }
 
 // Request returns the handle and state of the image key, and starts decoding
@@ -642,6 +657,9 @@ func (c *Cache) Close(wait time.Duration) {
 	}
 	c.closed = true
 	unwatchAutoplay(c)
+	c.wakeMu.Lock()
+	c.wakeShut = true
+	c.wakeMu.Unlock()
 	c.refs.Store(1) // Close's own, dropped at the end
 	// Take every job that is not running; mark the running ones, to be
 	// settled after the wait.

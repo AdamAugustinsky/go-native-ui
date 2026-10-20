@@ -70,15 +70,20 @@ func axLoad() {
 	})
 }
 
+// axSnapshotHook, if set, runs in axChanged between the list of caches and
+// the wakes (tests close a cache there).
+var axSnapshotHook func()
+
 // axChanged wakes the caches' loops.
 func axChanged() {
 	ax.mu.Lock()
 	cs := append([]*Cache(nil), ax.caches...)
 	ax.mu.Unlock()
+	if axSnapshotHook != nil {
+		axSnapshotHook()
+	}
 	for _, c := range cs {
-		if c.wake != nil {
-			c.wake()
-		}
+		c.wakeApp()
 	}
 }
 
@@ -102,7 +107,10 @@ func unwatchAutoplay(c *Cache) {
 	ax.mu.Lock()
 	for k, o := range ax.caches {
 		if o == c {
-			ax.caches = append(ax.caches[:k], ax.caches[k+1:]...)
+			last := len(ax.caches) - 1
+			copy(ax.caches[k:], ax.caches[k+1:])
+			ax.caches[last] = nil // (the backing array must not keep a closed cache alive)
+			ax.caches = ax.caches[:last]
 			break
 		}
 	}

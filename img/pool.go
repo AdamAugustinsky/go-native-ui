@@ -1,6 +1,7 @@
 package img
 
 import (
+	"sync/atomic"
 	"unsafe"
 
 	"gonativeui/core"
@@ -26,6 +27,13 @@ type bufPool struct {
 	freeBytes int64
 	maxFree   int64
 	inUse     int64 // bytes handed out
+
+	// puts counts the buffers returned. An animation that found no buffer
+	// waits for it to change (waiters counts them) instead of asking again
+	// on a timer: put then calls wake, once, to start a frame that notices.
+	puts    atomic.Uint64
+	waiters atomic.Int32
+	wake    func()
 }
 
 const maxFreeBufs = 64
@@ -62,6 +70,22 @@ func (p *bufPool) get(n int, fr *cframe) int32 {
 		p.inUse += int64(p.bufs[i].size)
 		p.mu.Unlock()
 		return i
+	}
+	if len(p.unused) == 0 && len(p.free) > 0 { // none fits, but a free buffer's record can be used again
+		big := 0
+		for k, j := range p.free {
+			if p.bufs[j].size > p.bufs[p.free[big]].size {
+				big = k
+			}
+		}
+		j := p.free[big]
+		p.free[big] = p.free[len(p.free)-1]
+		p.free = p.free[:len(p.free)-1]
+		d := &p.bufs[j]
+		p.freeBytes -= int64(d.size)
+		freeMem(d.mem, fr)
+		*d = pixbuf{}
+		p.unused = append(p.unused, j)
 	}
 	if len(p.unused) == 0 {
 		p.mu.Unlock()
@@ -107,6 +131,10 @@ func (p *bufPool) put(i int32, fr *cframe) {
 		p.unused = append(p.unused, j)
 	}
 	p.mu.Unlock()
+	p.puts.Add(1)
+	if p.waiters.Load() > 0 && p.wake != nil {
+		p.wake()
+	}
 }
 
 // held is the number of buffers that hold memory (C memory on macOS),
