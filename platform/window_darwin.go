@@ -71,6 +71,7 @@ func Open(o Options) (*Window, error) {
 	defer F.Call1(objc.PoolPop, pool)
 
 	w := &Window{q: newEventQueue(), scale: 1, linkPaused: true, visible: -1, marked: make([]byte, 0, 256), tmp: make([]byte, 0, 256)}
+	skipStateRestoration()
 	w.app = objc.Send(objc.Cls("NSApplication"), selSharedApplication)
 	objc.Send1(w.app, selSetActivation, 0) // NSApplicationActivationPolicyRegular
 	loadCursors()
