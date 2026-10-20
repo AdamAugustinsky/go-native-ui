@@ -21,7 +21,8 @@ func TestAccessibilitySnapshot(t *testing.T) {
 	r.AssertAX("ax-dialog")
 }
 
-// Every interactive element of every scene has an accessible name.
+// Every interactive element of every scene, and of every appkit page in
+// light and dark, has an accessible name.
 func TestAccessibleNames(t *testing.T) {
 	for _, name := range SceneNames() {
 		off, err := runScene(ShotOptions{Scene: name})
@@ -37,13 +38,18 @@ func TestAccessibleNames(t *testing.T) {
 		off.Close()
 	}
 	for p, name := range AppKitPages {
-		off, err := runAppKit(p, theme.ForceLight, 2, nil)
-		if err != nil {
-			t.Fatal(err)
+		for _, pref := range []theme.Preference{theme.ForceLight, theme.ForceDark} {
+			off, err := runAppKit(p, pref, 2, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var tree ui.SemTree
+			off.UI.Semantics(&tree)
+			if pref == theme.ForceDark {
+				name += " dark"
+			}
+			widgettest.LintNames(t, name, &tree)
+			off.Close()
 		}
-		var tree ui.SemTree
-		off.UI.Semantics(&tree)
-		widgettest.LintNames(t, name, &tree)
-		off.Close()
 	}
 }

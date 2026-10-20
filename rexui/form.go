@@ -107,6 +107,16 @@ type Form struct {
 	label    ui.ID
 	rowLabel string // the open row's label, which names its first unnamed control
 	mark     int    // where the open row's semantics start (ui.Context.SemMark)
+	spaces   int    // the form's spaces so far (space)
+}
+
+// space builds pt points of room down the form's column, each with a key of
+// its own (base.Kit.Space keys them all alike).
+func (f *Form) space(k *base.Kit, pt float32) {
+	c := k.Context()
+	f.spaces++
+	c.NextSize(ui.Px(0), k.Fixed(pt))
+	c.BoxKeyed(0, ui.KeyN(f.key, 3000+uint64(f.spaces)), nil)
 }
 
 // BeginForm starts a form and makes it the parent: a column as wide as its
@@ -178,11 +188,11 @@ func (f *Form) Section(k *base.Kit, header string) {
 	if f.sections > 0 {
 		switch {
 		case f.footer:
-			k.Space(rc.FooterBelow)
+			f.space(k, rc.FooterBelow)
 		case header != "":
-			k.Space(rc.HeaderGap)
+			f.space(k, rc.HeaderGap)
 		default:
-			k.Space(rc.SectionGap)
+			f.space(k, rc.SectionGap)
 		}
 	}
 	f.footer = false
@@ -195,7 +205,7 @@ func (f *Form) Section(k *base.Kit, header string) {
 		c.Push(c.BoxKeyed(0, ui.KeyN(key, 1), nil))
 		Label(k, header, LabelOpts{Style: rc.HeaderStyle, Color: rc.Header})
 		c.Pop()
-		k.Space(rc.HeaderBelow)
+		f.space(k, rc.HeaderBelow)
 	}
 	f.card = BeginCard(k, header, CardOpts{Variant: CardInset})
 	f.inCard = true
@@ -214,7 +224,7 @@ func (f *Form) EndSection(k *base.Kit, footer string) {
 		return
 	}
 	f.footer = true
-	k.Space(rc.FooterGap)
+	f.space(k, rc.FooterGap)
 	c.NextPadding(k.Pt(rc.TextX), 0, k.Pt(rc.TextX), 0)
 	c.NextSize(ui.Pct(1), ui.Children(1))
 	c.Push(c.BoxKeyed(0, ui.KeyN(f.key, 2000+uint64(f.sections)), nil))
@@ -234,7 +244,7 @@ func (f *Form) Row(k *base.Kit, label string, o RowOpts) ui.ID {
 	f.rowLabel, f.mark = label, k.Context().SemMark()
 	if f.variant == FormAligned {
 		if f.rows > 1 {
-			k.Space(rc.RowGap)
+			f.space(k, rc.RowGap)
 		}
 		k.NextGap(rc.ColumnGap)
 		if o.Height > 0 {
