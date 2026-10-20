@@ -20,10 +20,11 @@ func TestFinderRowsUnderTheBand(t *testing.T) {
 		{theme.ForceLight, false, [3]uint8{210, 230, 255}}, {theme.ForceLight, true, [3]uint8{250, 250, 250}},
 		{theme.ForceDark, false, [3]uint8{31, 49, 75}}, {theme.ForceDark, true, [3]uint8{45, 45, 45}},
 	} {
-		off, _, img, err := render(ShotOptions{Scene: Finder, Preference: c.pref, Inactive: c.inactive, Scrolled: true})
+		off, dm, img, err := render(ShotOptions{Scene: Finder, Preference: c.pref, Inactive: c.inactive, Scrolled: true})
 		if err != nil {
 			t.Fatal(err)
 		}
+		dm.Close() // the file icons' cache
 		off.Close()
 		p := img.PixOffset(880, 80)
 		got := [3]uint8{img.Pix[p], img.Pix[p+1], img.Pix[p+2]}
@@ -48,10 +49,11 @@ func TestFinderHeaderInThePocket(t *testing.T) {
 		{theme.ForceDark, [3]uint8{38, 38, 38}, [3]uint8{64, 64, 64}},
 	} {
 		for _, legacy := range []bool{false, true} {
-			off, _, img, err := render(ShotOptions{Scene: Finder, Preference: c.pref, Legacy: legacy})
+			off, dm, img, err := render(ShotOptions{Scene: Finder, Preference: c.pref, Legacy: legacy})
 			if err != nil {
 				t.Fatal(err)
 			}
+			dm.Close() // the file icons' cache
 			off.Close()
 			for _, p := range []struct {
 				y    int

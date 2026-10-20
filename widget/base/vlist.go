@@ -304,7 +304,7 @@ func BeginVList(c *ui.Context, label string, st *VListState, o VListOpts) VList 
 	c.NextPadding(0, 0, 0, 0)
 	c.NextRole(ui.RoleList)
 	c.NextSemName(label)
-	v.Body = c.BoxKeyed(ui.ScrollY|ui.Focusable, bkey, nil)
+	v.Body = c.BoxKeyed(ui.ScrollY|ui.Focusable|ui.FocusList, bkey, nil)
 
 	// The body scrolls over a content of the estimated total, declared as
 	// 1/256-pixel virtual rows (ui.Context.ListRange) so that the first item
