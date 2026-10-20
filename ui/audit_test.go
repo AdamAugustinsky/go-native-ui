@@ -172,6 +172,28 @@ func TestAuditCovered(t *testing.T) {
 	}
 }
 
+// A material region is a cover even though the app draws nothing in it: the
+// content of a sibling that runs into it is reported, its own is not.
+func TestAuditCoveredMaterial(t *testing.T) {
+	h := newHarness(t, 800, 600)
+	m, fs := h.audit(func(c *Context) {
+		c.NextSize(Px(400), Px(100))
+		c.Open(0, "pane")
+		c.Label("a label that runs under the glass")
+		c.NextFlags(FloatingX | FloatingY)
+		c.NextPos(60, 0)
+		c.NextSize(Px(100), Px(40))
+		glass := c.Open(0, "glass")
+		c.Label("own")
+		c.Close()
+		c.Material(glass, AreaSidebar, 1, 0)
+		c.Close()
+	})
+	if len(m[AuditCovered]) != 1 || !strings.Contains(m[AuditCovered][0].Where, "runs under") {
+		t.Fatalf("covered findings: %v", fs)
+	}
+}
+
 func TestAuditColumns(t *testing.T) {
 	h := newHarness(t, 800, 600)
 	build := func(headerX float32, pushRow int) func(c *Context) {

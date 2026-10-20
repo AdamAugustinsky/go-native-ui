@@ -340,10 +340,9 @@ func (c *Context) auditCovers(dst []Finding, p ID, tol float32) []Finding {
 	return dst
 }
 
-// material reports whether b is a material region, which the system draws
-// behind the window's pixels. ui has no materials yet; the branch that adds
-// them (Context.Material) answers here.
-func (c *Context) material(b *box) bool { return false }
+// material reports whether b is a material region (Context.Material), which
+// the system draws behind the window's pixels.
+func (c *Context) material(b *box) bool { return b.mat != 0 }
 
 // coveredIn reports the first box of id's subtree, clipped by clip, that
 // draws under cover f, and whether there was one. Content is text and images,
