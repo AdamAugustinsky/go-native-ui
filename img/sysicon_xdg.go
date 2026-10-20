@@ -1,8 +1,10 @@
 package img
 
 import (
+	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -105,6 +107,38 @@ func xdgSystem() *xdgDB {
 	return xdgCache.db
 }
 
+// Limits on what the lookup reads from the system's files, which it does not
+// trust to be well formed: a file over its byte limit is ignored as a whole,
+// and a parser keeps no more than its record limit.
+const (
+	maxGlobsBytes    = 4 << 20
+	maxGlobRecords   = 100000
+	maxSubclassBytes = 1 << 20
+	maxSubclassLines = 20000
+	maxParentsOf     = 16 // parents kept per type
+	maxGenericBytes  = 1 << 20
+	maxGenericLines  = 20000
+	maxThemeBytes    = 1 << 20
+	maxThemeDirs     = 2000
+	maxSettingsBytes = 64 << 10
+	maxMimeWalk      = 64 // types visited when expanding one type's ancestry
+)
+
+// readLimited reads the file at path, or nothing if it is missing or larger
+// than max bytes.
+func readLimited(path string, max int64) ([]byte, bool) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, false
+	}
+	defer f.Close()
+	b, err := io.ReadAll(io.LimitReader(f, max+1))
+	if err != nil || int64(len(b)) > max {
+		return nil, false
+	}
+	return b, true
+}
+
 func newXDG(sig, home, dataHome string, dataDirs []string, configHome string) *xdgDB {
 	db := &xdgDB{sig: sig, home: home, themes: map[string]*xdgTheme{}}
 	db.data = append(db.data, dataHome)
@@ -121,13 +155,13 @@ func newXDG(sig, home, dataHome string, dataDirs []string, configHome string) *x
 	db.generic = map[string]string{}
 	db.parent = map[string][]string{}
 	for _, d := range db.data {
-		if b, err := os.ReadFile(filepath.Join(d, "mime", "globs2")); err == nil {
+		if b, ok := readLimited(filepath.Join(d, "mime", "globs2"), maxGlobsBytes); ok {
 			db.globs = parseGlobs2(db.globs, string(b))
 		}
-		if b, err := os.ReadFile(filepath.Join(d, "mime", "generic-icons")); err == nil {
+		if b, ok := readLimited(filepath.Join(d, "mime", "generic-icons"), maxGenericBytes); ok {
 			parseGenericIcons(db.generic, string(b))
 		}
-		if b, err := os.ReadFile(filepath.Join(d, "mime", "subclasses")); err == nil {
+		if b, ok := readLimited(filepath.Join(d, "mime", "subclasses"), maxSubclassBytes); ok {
 			parseSubclasses(db.parent, string(b))
 		}
 	}
@@ -162,13 +196,19 @@ func parseGlobs2(dst []xdgGlob, s string) []xdgGlob {
 		if g.pattern == "" {
 			continue
 		}
+		if len(dst) >= maxGlobRecords {
+			break
+		}
 		dst = append(dst, g)
 	}
 	return dst
 }
 
 func parseGenericIcons(dst map[string]string, s string) {
-	for _, line := range strings.Split(s, "\n") {
+	for i, line := range strings.Split(s, "\n") {
+		if i >= maxGenericLines {
+			break
+		}
 		if mime, icon, ok := strings.Cut(line, ":"); ok && line[0] != '#' {
 			if _, have := dst[mime]; !have {
 				dst[mime] = icon
@@ -178,52 +218,62 @@ func parseGenericIcons(dst map[string]string, s string) {
 }
 
 func parseSubclasses(dst map[string][]string, s string) {
-	for _, line := range strings.Split(s, "\n") {
-		if child, parent, ok := strings.Cut(line, " "); ok && line[0] != '#' {
-			dst[child] = append(dst[child], strings.TrimSpace(parent))
+	for i, line := range strings.Split(s, "\n") {
+		if i >= maxSubclassLines {
+			break
 		}
+		child, parent, ok := strings.Cut(line, " ")
+		parent = strings.TrimSpace(parent)
+		if !ok || line[0] == '#' || parent == "" || parent == child {
+			continue
+		}
+		have := dst[child]
+		if len(have) >= maxParentsOf || slices.Contains(have, parent) {
+			continue
+		}
+		dst[child] = append(have, parent)
 	}
 }
 
-// mimeFor is the MIME type of a file named name (a base name), or "".
+// mimeFor is the MIME type of a file named name (a base name), or "". As
+// shared-mime-info orders them: a literal name beats any suffix, then the
+// heavier glob wins, then the longer suffix; of equals the earlier (the
+// user's directory before the system's).
 func (db *xdgDB) mimeFor(name string) string {
 	lower := strings.ToLower(name)
-	best, bestScore, bestWeight := "", -1, -1
+	best, bestLiteral, bestWeight, bestLen := "", false, -1, -1
 	for i := range db.globs {
 		g := &db.globs[i]
 		n, p := name, g.pattern
 		if !g.cs {
 			n, p = lower, strings.ToLower(p)
 		}
-		score := 1 << 20 // a literal name beats any suffix
-		if g.literal {
-			if n != p {
-				continue
-			}
-		} else {
-			if !strings.HasSuffix(n, p) {
-				continue
-			}
-			score = len(p) // the longest suffix wins
+		if g.literal && n != p || !g.literal && !strings.HasSuffix(n, p) {
+			continue
 		}
-		if score > bestScore || score == bestScore && g.weight > bestWeight {
-			best, bestScore, bestWeight = g.mime, score, g.weight
+		l := len(p)
+		better := best == "" ||
+			g.literal != bestLiteral && g.literal ||
+			g.literal == bestLiteral && (g.weight > bestWeight || g.weight == bestWeight && l > bestLen)
+		if better {
+			best, bestLiteral, bestWeight, bestLen = g.mime, g.literal, g.weight, l
 		}
 	}
 	return best
 }
 
-// iconNames are the icon names to try for a MIME type, most specific first.
+// iconNames are the icon names to try for a MIME type, most specific first:
+// the type, its generic icon, then its ancestors' (breadth first, to five
+// generations, each type once, at most maxMimeWalk types: a subclasses file
+// with cycles or a fan of edges costs no more than that).
 func (db *xdgDB) iconNames(mime string) []string {
 	var names []string
 	add := func(n string) {
-		for _, have := range names {
-			if have == n {
-				return
-			}
+		if !slices.Contains(names, n) {
+			names = append(names, n)
 		}
-		names = append(names, n)
 	}
+	visited := []string{mime}
 	queue := []string{mime}
 	for depth := 0; len(queue) > 0 && depth < 5; depth++ {
 		var next []string
@@ -232,7 +282,15 @@ func (db *xdgDB) iconNames(mime string) []string {
 			if g := db.generic[m]; g != "" {
 				add(g)
 			}
-			next = append(next, db.parent[m]...)
+			for _, p := range db.parent[m] {
+				if len(visited) >= maxMimeWalk {
+					break
+				}
+				if !slices.Contains(visited, p) {
+					visited = append(visited, p)
+					next = append(next, p)
+				}
+			}
 		}
 		queue = next
 	}
@@ -281,7 +339,7 @@ func parseTheme(name, index string) *xdgTheme {
 	}
 	t := &xdgTheme{name: name}
 	for _, n := range strings.Split(head["Inherits"], ",") {
-		if n = strings.TrimSpace(n); n != "" {
+		if n = strings.TrimSpace(n); n != "" && len(t.inherits) < 16 {
 			t.inherits = append(t.inherits, n)
 		}
 	}
@@ -289,15 +347,16 @@ func parseTheme(name, index string) *xdgTheme {
 		for _, d := range strings.Split(list, ",") {
 			d = strings.TrimSpace(d)
 			s := sec[d]
-			if d == "" || s == nil {
+			if d == "" || s == nil || !filepath.IsLocal(d) || len(t.dirs) >= maxThemeDirs {
 				continue
 			}
 			size := atoiOr(s["Size"], 0)
-			if size <= 0 {
+			scale := atoiOr(s["Scale"], 1)
+			if size <= 0 || size > 8192 || scale < 1 || scale > 8 {
 				continue
 			}
-			x := xdgDir{path: d, size: size, scale: max(atoiOr(s["Scale"], 1), 1), threshold: atoiOr(s["Threshold"], 2)}
-			x.minSize, x.maxSize = atoiOr(s["MinSize"], size), atoiOr(s["MaxSize"], size)
+			x := xdgDir{path: d, size: size, scale: scale, threshold: min(max(atoiOr(s["Threshold"], 2), 0), 8192)}
+			x.minSize, x.maxSize = min(max(atoiOr(s["MinSize"], size), 0), 8192), min(max(atoiOr(s["MaxSize"], size), 0), 8192)
 			switch s["Type"] {
 			case "Fixed":
 				x.fixed = true
@@ -341,7 +400,11 @@ func (d *xdgDir) distance(size int) int {
 	return 0
 }
 
-// theme returns the named theme (nil if no base directory has it).
+// theme returns the named theme (nil if no base directory has it). The
+// first index.theme found describes it; its directories are then searched in
+// every base directory that has a directory of the theme's name, whether or
+// not that one has an index of its own (the specification lets a user add
+// icons to a system theme from ~/.icons).
 func (db *xdgDB) theme(name string) *xdgTheme {
 	db.mu.Lock()
 	defer db.mu.Unlock()
@@ -349,17 +412,23 @@ func (db *xdgDB) theme(name string) *xdgTheme {
 		return t
 	}
 	var t *xdgTheme
-	for _, base := range db.icons {
-		b, err := os.ReadFile(filepath.Join(base, name, "index.theme"))
-		if err != nil {
-			continue
-		}
-		if t == nil {
-			if t = parseTheme(name, string(b)); t == nil {
+	var bases []string
+	if filepath.IsLocal(name) && !strings.ContainsAny(name, `/\`) {
+		for _, base := range db.icons {
+			dir := filepath.Join(base, name)
+			if st, err := os.Stat(dir); err != nil || !st.IsDir() {
 				continue
 			}
+			bases = append(bases, base)
+			if t == nil {
+				if b, ok := readLimited(filepath.Join(dir, "index.theme"), maxThemeBytes); ok {
+					t = parseTheme(name, string(b))
+				}
+			}
 		}
-		t.bases = append(t.bases, base)
+	}
+	if t != nil {
+		t.bases = bases
 	}
 	db.themes[name] = t
 	return t
@@ -377,7 +446,7 @@ func (db *xdgDB) themeChain() []string {
 	db.mu.Unlock()
 	var roots []string
 	for _, f := range db.config {
-		if b, err := os.ReadFile(f); err == nil {
+		if b, ok := readLimited(f, maxSettingsBytes); ok {
 			if n := iniSections(string(b))["Settings"]["gtk-icon-theme-name"]; n != "" {
 				roots = append(roots, strings.Trim(n, `"'`))
 				break
@@ -393,6 +462,9 @@ func (db *xdgDB) themeChain() []string {
 			return
 		}
 		seen[name] = true
+		if len(seen) > 32 {
+			return
+		}
 		t := db.theme(name)
 		if t == nil {
 			return

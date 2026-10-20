@@ -6,8 +6,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"testing"
+
+	"gonativeui/internal/win32"
 )
 
 // sysIconEnv records where decodes fail, and shows it if the test does.
@@ -126,4 +129,79 @@ func TestSystemIconsWindowsConcurrent(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+// TestSystemIconsWindowsAlphaKinds checks what shellPixels is told about the
+// shell's alpha: the bitmap IShellItemImageFactory renders is premultiplied
+// (no channel above its alpha), the colour bitmap of an icon is straight (an
+// antialiased edge with a channel above its alpha).
+func TestSystemIconsWindowsAlphaKinds(t *testing.T) {
+	sysIconEnv(t)
+	wk := new(worker)
+	dir := t.TempDir()
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	if !loadShell() || win32.HR(win32.Call(shell.coInit, 0, coApartment|coNoOle1DDE)) < 0 {
+		t.Fatal("no shell")
+	}
+	defer win32.Call(shell.coUninit)
+	over := func(px []byte) (n, partial int) {
+		for i := 0; i < len(px); i += 4 {
+			a := px[i+3]
+			if a != 0 && a != 255 {
+				partial++
+			}
+			if px[i] > a || px[i+1] > a || px[i+2] > a {
+				n++
+			}
+		}
+		return
+	}
+	px, _, _, code := wk.itemPixels(dir, 128)
+	if px == nil {
+		t.Fatalf("item bitmap: error %d", code)
+	}
+	n, partial := over(px)
+	t.Logf("item bitmap: %d of %d pixels have a channel above their alpha, %d translucent", n, len(px)/4, partial)
+	if n != 0 {
+		t.Errorf("IShellItemImageFactory's bitmap is not premultiplied: %d pixels have a channel above their alpha", n)
+	}
+	var iconN, iconPartial int
+	iconRawHook = func(px []byte) { iconN, iconPartial = over(px) }
+	defer func() { iconRawHook = nil }()
+	m, code := wk.typeIcon(&Source{kind: srcIconFolder}, 256)
+	if m == nil {
+		t.Fatalf("folder icon: error %d", code)
+	}
+	t.Logf("folder icon bitmap: %d pixels with a channel above their alpha, %d translucent", iconN, iconPartial)
+	if iconPartial == 0 || iconN == 0 {
+		t.Errorf("an icon's colour bitmap is not straight alpha: %d translucent pixels, %d of them with a channel above their alpha", iconPartial, iconN)
+	}
+}
+
+// TestSystemIconsWindowsScratchIsBounded: a large icon does not leave a
+// decoded-size buffer behind in the worker.
+func TestSystemIconsWindowsScratchIsBounded(t *testing.T) {
+	sysIconEnv(t)
+	c, _ := newTestCache(t, Options{})
+	wk := new(worker)
+	j := job{src: FileIcon(t.TempDir()), copy: -1, w: 1024, h: 1024}
+	r := wk.decodeIcon(c, &j)
+	if r.buf < 0 {
+		t.Fatalf("a 1024 pixel icon failed: %v", errOf(r.err))
+	}
+	c.bufs.put(r.buf, c.fr)
+	if n := cap(wk.icon.color) + cap(wk.icon.mask); n > 2*maxIconScratch {
+		t.Errorf("the worker keeps %d bytes of scratch after a 1024 pixel icon (limit %d each)", n, maxIconScratch)
+	}
+	// A small icon's scratch is kept for the next one.
+	j.w, j.h = 32, 32
+	r = wk.decodeIcon(c, &j)
+	if r.buf < 0 {
+		t.Fatal("a 32 pixel icon failed")
+	}
+	c.bufs.put(r.buf, c.fr)
+	if cap(wk.icon.color) == 0 {
+		t.Error("a small icon's scratch was dropped")
+	}
 }

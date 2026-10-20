@@ -2,7 +2,9 @@ package img
 
 import (
 	"fmt"
+	"image"
 	"runtime"
+	"slices"
 	"testing"
 	"time"
 )
@@ -212,25 +214,68 @@ func TestSystemIconsZeroAlloc(t *testing.T) {
 	t.Errorf("500 frames of 50 cached icons: %d mallocs, %d bytes (sink %v)", mallocs, bytes, sink)
 }
 
-// TestShellPixels: BGRA from the shell becomes premultiplied RGBA whether it
-// came premultiplied (a shell bitmap), straight (an icon) or without alpha
-// (an old icon, shaped by its mask).
+// TestShellPixels: BGRA from the shell becomes premultiplied RGBA by what
+// the source says it is, not by the values: a dark translucent pixel is the
+// case a guess from the channels gets wrong.
 func TestShellPixels(t *testing.T) {
 	// B, G, R, A.
-	premultiplied := []byte{10, 20, 40, 100, 0, 0, 0, 0, 255, 255, 255, 255}
-	shellPixels(premultiplied, nil)
-	if want := []byte{40, 20, 10, 100, 0, 0, 0, 0, 255, 255, 255, 255}; string(premultiplied) != string(want) {
+	dark := []byte{40, 40, 40, 128, 0, 0, 0, 0, 255, 255, 255, 255}
+	premultiplied := slices.Clone(dark)
+	shellPixels(premultiplied, nil, false)
+	if want := []byte{40, 40, 40, 128, 0, 0, 0, 0, 255, 255, 255, 255}; string(premultiplied) != string(want) {
 		t.Errorf("premultiplied input: %v, want %v", premultiplied, want)
 	}
-	straight := []byte{200, 100, 50, 128, 255, 255, 255, 0, 10, 10, 10, 255} // 200 > 128: straight
-	shellPixels(straight, nil)
-	if want := []byte{25, 50, 100, 128, 0, 0, 0, 0, 10, 10, 10, 255}; string(straight) != string(want) {
-		t.Errorf("straight input: %v, want %v", straight, want)
+	straight := slices.Clone(dark)
+	shellPixels(straight, nil, true)
+	if want := []byte{20, 20, 20, 128, 0, 0, 0, 0, 255, 255, 255, 255}; string(straight) != string(want) {
+		t.Errorf("straight input {40,40,40,128}: %v, want %v", straight, want)
+	}
+	bright := []byte{200, 100, 50, 128}
+	shellPixels(bright, nil, true)
+	if want := []byte{25, 50, 100, 128}; string(bright) != string(want) {
+		t.Errorf("straight bright input: %v, want %v", bright, want)
 	}
 	opaque := []byte{1, 2, 3, 0, 4, 5, 6, 0}
-	shellPixels(opaque, []byte{0, 0, 0, 0, 255, 255, 255, 255}) // the second pixel is masked out
+	shellPixels(opaque, []byte{0, 0, 0, 0, 255, 255, 255, 255}, true) // the second pixel is masked out
 	if want := []byte{3, 2, 1, 255, 0, 0, 0, 0}; string(opaque) != string(want) {
 		t.Errorf("opaque input with a mask: %v, want %v", opaque, want)
+	}
+}
+
+// TestIconFromImageIsSquare: the result is side×side whatever the artwork's
+// shape, the artwork centred with its aspect kept and the rest transparent.
+func TestIconFromImageIsSquare(t *testing.T) {
+	c, _ := newTestCache(t, Options{})
+	wide := image.NewNRGBA(image.Rect(0, 0, 48, 24))
+	for i := 0; i < len(wide.Pix); i += 4 {
+		wide.Pix[i], wide.Pix[i+1], wide.Pix[i+3] = 255, 128, 255
+	}
+	r := new(worker).iconFromImage(c, wide, 64)
+	if r.buf < 0 || r.w != 64 || r.h != 64 {
+		t.Fatalf("result %dx%d (buffer %d): want 64×64", r.w, r.h, r.buf)
+	}
+	bw := int(r.w + 2*r.pad)
+	all := c.bufs.bytes(r.buf, bw*bw*4)
+	alpha := func(x, y int) byte { return all[((y+int(r.pad))*bw+x+int(r.pad))*4+3] }
+	for y := 0; y < 64; y++ {
+		want := y >= 16 && y < 48 // 64×32, centred
+		for _, x := range []int{0, 31, 63} {
+			if got := alpha(x, y) == 255; got != want || !want && alpha(x, y) != 0 {
+				t.Errorf("pixel (%d, %d) has alpha %d; the artwork covers rows 16 to 47", x, y, alpha(x, y))
+				return
+			}
+		}
+	}
+	c.bufs.put(r.buf, c.fr)
+	// Square art stays square and fills the box.
+	sq := image.NewNRGBA(image.Rect(0, 0, 10, 10))
+	for i := range sq.Pix {
+		sq.Pix[i] = 255
+	}
+	if r := new(worker).iconFromImage(c, sq, 33); r.w != 33 || r.h != 33 {
+		t.Errorf("square art: %d×%d", r.w, r.h)
+	} else {
+		c.bufs.put(r.buf, c.fr)
 	}
 }
 

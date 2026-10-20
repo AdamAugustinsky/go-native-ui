@@ -25,12 +25,24 @@ import (
 //     HashTypeIcon(ext), or one hash for FolderIcon. All files of the type
 //     share one cache entry, so a list of ten thousand PDFs costs one icon.
 //   - The icon of a file depends on the file: its path and its modification
-//     time, for custom icons, badges, application bundles and volume labels
-//     change (HashFileIcon(path, modTime, variant)). When the file changes, its new
+//     time, for custom icons, application bundles and volume labels change
+//     (HashFileIcon(path, modTime, variant)). When the file changes, its new
 //     hash is a new image and the old one ages out of the cache. Use
 //     FileIcon only where the icon can differ from the type's (applications,
-//     folders with a custom icon, volumes, documents with a thumbnail-like
-//     icon); use ExtensionIcon for the rest.
+//     folders with a custom icon, volumes); use ExtensionIcon for the rest.
+//
+// The modification time is not the whole truth, and the cache cannot see
+// what it does not name. Some changes leave the file's modification time
+// alone: a badge or custom icon set through an extended attribute or the
+// shell, a changed file association (the program that gives a type its icon),
+// an app that is updated in place, and the user's icon style for application
+// icons (Default, Dark, Clear, Tinted). The variant is for these: it is the
+// app's own revision counter for the icons it has cached. Keep one number,
+// fold IconStyle() into it where application icons show, and bump it
+// whenever the app learns of such a change (a file system event, the
+// appearance changing, the user asking for a refresh): every icon is then
+// requested again under a new key and the old images age out. Until then, an
+// icon already cached is what it was when it was decoded.
 //
 // W and H are the size in pixels, as for every image (points × scale), so
 // that a 2× display gets a sharp icon. An icon is square: it is drawn
@@ -54,11 +66,8 @@ import (
 // Automatic the system's light or dark): the icons of Calculator, Terminal
 // and Finder differ between the styles (AppleIconAppearanceTheme
 // RegularLight, RegularDark, TintedDark). NSWorkspace reads that setting, not
-// the window's appearance. So a type icon needs no appearance in its key; the
-// FileIcon of an application should have one, as HashFileIcon's variant: the
-// window's appearance (0 or 1), or a counter the app bumps when the system's
-// appearance changes, so that the icon is requested again and the old one
-// ages out of the cache.
+// the window's appearance. So a type icon needs no appearance in its key;
+// the FileIcon of an application should have IconStyle() in its variant.
 //
 // # Platforms
 //
@@ -136,11 +145,11 @@ const (
 func HashTypeIcon(typ string) uint64 { return fnvString(hashSeedType, typ) }
 
 // HashFileIcon is a Key.Hash for the icon of the file at path last modified
-// at mod: a new modification time (a changed custom icon, a rewritten
-// bundle) is a new image. Pass the zero time for an icon that does not
-// change while the path stays. variant is 0, or what else the icon depends
-// on, for the app's own use: the appearance for application icons (see
-// Appearance).
+// at mod: a new modification time (a rewritten bundle) is a new image. Pass
+// the zero time for an icon that does not change while the path stays.
+// variant is the app's revision counter for its cached icons (0 until it
+// first needs a refresh), which it also keys on IconStyle() for application
+// icons: see Keys, which lists what a modification time does not catch.
 func HashFileIcon(path string, mod time.Time, variant uint64) uint64 {
 	h := fnvString(hashSeedFile, path)
 	ns := uint64(0)

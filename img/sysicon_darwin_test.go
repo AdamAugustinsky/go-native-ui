@@ -4,10 +4,13 @@ package img
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 )
@@ -249,4 +252,86 @@ func TestSystemIconsConcurrent(t *testing.T) {
 		}(g)
 	}
 	wg.Wait()
+}
+
+// TestSystemIconPoolsStayOnOneThread: an autorelease pool is popped on the
+// thread that pushed it. Every pool of the package comes from pushPool, which
+// locks the thread first (the initialisation's pool used to be pushed before
+// the lock, so the goroutine could move and pop another thread's pool). The
+// hook runs between push and pop while other goroutines compete for the
+// threads, on the initialisation path and on a decode, and the thread must
+// not change; the hook must run on both paths.
+func TestSystemIconPoolsStayOnOneThread(t *testing.T) {
+	lib, err := dlopen("/usr/lib/libSystem.B.dylib")
+	if err != nil {
+		t.Fatal(err)
+	}
+	self, err := dlsym(lib, "pthread_self")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fired, moved atomic.Int32
+	poolHook = func() {
+		fr := new(cframe)
+		before := fr.Call0(self)
+		for i := 0; i < 3000; i++ {
+			runtime.Gosched()
+		}
+		if fr.Call0(self) != before {
+			moved.Add(1)
+		}
+		fired.Add(1)
+	}
+	defer func() { poolHook = nil }()
+	stop := make(chan struct{})
+	defer close(stop)
+	for i := 0; i < 2*runtime.GOMAXPROCS(0); i++ {
+		go func() {
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					runtime.Gosched()
+				}
+			}
+		}()
+	}
+	if err := loadAppKit(); err != nil {
+		t.Fatal(err)
+	}
+	base := fired.Load()                // the once's own pool, if this test ran it
+	if err := makeHints(); err != nil { // the initialisation's pool, again
+		t.Fatal(err)
+	}
+	if fired.Load() != base+1 {
+		t.Errorf("the initialisation pool came from pushPool %d times, want 1", fired.Load()-base)
+	}
+	base = fired.Load()
+	c, _ := newTestCache(t, Options{})
+	if d := iconNow(t, c, FolderIcon(), 32, 32, 0); d.r.buf < 0 {
+		t.Fatalf("decode failed: %v", errOf(d.r.err))
+	}
+	if fired.Load() != base+1 {
+		t.Errorf("a decode's pool came from pushPool %d times, want 1", fired.Load()-base)
+	}
+	if moved.Load() != 0 {
+		t.Errorf("the goroutine moved to another thread between a pool's push and its pop %d times", moved.Load())
+	}
+}
+
+// TestIconStyle: IconStyle is a hash of the AppleIconAppearanceTheme
+// preference as `defaults` reads it, and 0 where it is not set.
+func TestIconStyle(t *testing.T) {
+	out, err := exec.Command("/usr/bin/defaults", "read", "-g", "AppleIconAppearanceTheme").Output()
+	want := uint64(0)
+	if err == nil {
+		want = HashString(strings.TrimSpace(string(out)))
+	}
+	if got := IconStyle(); got != want {
+		t.Errorf("IconStyle() = %#x, want %#x (defaults: %q, %v)", got, want, out, err)
+	}
+	if IconStyle() != IconStyle() {
+		t.Error("IconStyle is not stable")
+	}
 }

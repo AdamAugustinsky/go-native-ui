@@ -1,14 +1,17 @@
 package img
 
 import (
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // xdgTree makes a data directory with a MIME database and icon themes, and
@@ -209,5 +212,147 @@ func TestXDGWithoutDatabase(t *testing.T) {
 	}
 	if _, code := db.iconPNG(FolderIcon(), 48); code != errUnsupported {
 		t.Errorf("no theme: code %d, want unsupported", code)
+	}
+}
+
+// TestXDGGlobPrecedence: a literal name beats a suffix; then the heavier glob
+// wins even against a longer suffix; then the longer suffix; of equals the
+// earlier line (the user's directory is read first).
+func TestXDGGlobPrecedence(t *testing.T) {
+	db := &xdgDB{globs: parseGlobs2(nil, `50:application/gzip:*.gz
+60:application/x-compressed-tar:*.tar.gz
+80:application/x-user-gz:*.gz
+50:text/x-literal:Makefile.gz
+10:text/plain:*.txt
+10:text/x-long:*.long.txt
+10:text/x-first:*.dup
+10:text/x-second:*.dup
+`)}
+	for name, want := range map[string]string{
+		"x.gz":        "application/x-user-gz", // weight 80 over 50
+		"x.tar.gz":    "application/x-user-gz", // weight 80 over the longer suffix at 60
+		"Makefile.gz": "text/x-literal",        // a literal beats any suffix, whatever its weight
+		"a.long.txt":  "text/x-long",           // equal weight: the longer suffix
+		"a.txt":       "text/plain",
+		"a.dup":       "text/x-first",
+	} {
+		if got := db.mimeFor(name); got != want {
+			t.Errorf("mimeFor(%q) = %q, want %q", name, got, want)
+		}
+	}
+}
+
+// TestXDGMimeAncestryBounded: a subclasses file with self edges, repeats,
+// cycles and fans costs bounded work: repeats and self edges are dropped on
+// reading, and the expansion visits each type once, to a fixed limit.
+func TestXDGMimeAncestryBounded(t *testing.T) {
+	var b strings.Builder
+	for i := 0; i < 100; i++ {
+		b.WriteString("a/a a/a\n") // a self edge, 100 times
+		b.WriteString("a/a b/b\n") // a repeated edge
+		b.WriteString("b/b a/a\n") // a cycle
+	}
+	for i := 0; i < 5000; i++ {
+		fmt.Fprintf(&b, "a/a fan/%d\nfan/%d a/a\n", i, i)
+	}
+	parent := map[string][]string{}
+	parseSubclasses(parent, b.String())
+	if got := parent["a/a"]; len(got) > maxParentsOf || slices.Contains(got, "a/a") || len(slices.Compact(slices.Clone(got))) != len(got) {
+		t.Errorf("parents of a/a after reading: %d entries (limit %d), self or repeats kept", len(got), maxParentsOf)
+	}
+	// Even a database built without the reader's care stays bounded.
+	hostile := &xdgDB{generic: map[string]string{}, parent: map[string][]string{}}
+	for i := 0; i < 2000; i++ {
+		hostile.parent["a/a"] = append(hostile.parent["a/a"], "a/a", fmt.Sprintf("fan/%d", i))
+		hostile.parent[fmt.Sprintf("fan/%d", i)] = []string{"a/a", "b/b", fmt.Sprintf("fan/%d", (i+1)%2000)}
+	}
+	done := make(chan []string, 1)
+	go func() { done <- hostile.iconNames("a/a") }()
+	select {
+	case names := <-done:
+		if len(names) > 2*maxMimeWalk+2 {
+			t.Errorf("%d icon names from a hostile subclasses graph, want at most %d", len(names), 2*maxMimeWalk+2)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("iconNames did not finish on a hostile subclasses graph")
+	}
+}
+
+// TestXDGLimits: files over their byte limits are ignored whole and parsers
+// keep no more than their record limits.
+func TestXDGLimits(t *testing.T) {
+	root := xdgTree(t)
+	pad := strings.Repeat("#", 1<<10) + "\n"
+	big := func(rel string, size int, head string) {
+		p := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(head+strings.Repeat(pad, size/len(pad)+1)), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The user's directory first: an oversized globs2 there must not hide
+	// the system's, and an oversized subclasses is not read at all.
+	t.Setenv("XDG_DATA_HOME", filepath.Join(root, "userdata"))
+	big("userdata/mime/globs2", maxGlobsBytes, "99:text/x-evil:*.txt\n")
+	big("userdata/mime/subclasses", maxSubclassBytes, "text/x-evil text/x-worse\n")
+	big("userdata/mime/generic-icons", maxGenericBytes, "text/x-evil:evil\n")
+	db := xdgSystem()
+	if got := db.mimeFor("a.txt"); got != "text/plain" {
+		t.Errorf("an oversized globs2 was read: a.txt is %q", got)
+	}
+	if _, ok := db.parent["text/x-evil"]; ok {
+		t.Error("an oversized subclasses file was read")
+	}
+	if _, ok := db.generic["text/x-evil"]; ok {
+		t.Error("an oversized generic-icons file was read")
+	}
+	if n := len(parseGlobs2(nil, strings.Repeat("1:a/b:*.x\n", maxGlobRecords+10))); n != maxGlobRecords {
+		t.Errorf("%d glob records kept, want %d", n, maxGlobRecords)
+	}
+	// An oversized index.theme is no theme; an oversized settings.ini is no setting.
+	big("share/icons/Huge/index.theme", maxThemeBytes, "[Icon Theme]\nDirectories=a\n[a]\nSize=48\n")
+	if db.theme("Huge") != nil {
+		t.Error("an oversized index.theme was read")
+	}
+	big("config/gtk-3.0/settings.ini", maxSettingsBytes, "[Settings]\ngtk-icon-theme-name=Huge\n")
+	if chain := xdgSystem().themeChain(); slices.Contains(chain, "Fancy") {
+		t.Errorf("an oversized settings.ini was read: chain %v", chain)
+	}
+	// Hostile index.theme values are dropped.
+	th := parseTheme("T", "[Icon Theme]\nDirectories=../../etc,ok,huge,scaled\n[../../etc]\nSize=48\n[ok]\nSize=48\n[huge]\nSize=999999999\n[scaled]\nSize=48\nScale=99999\n")
+	if th == nil || len(th.dirs) != 1 || th.dirs[0].path != "ok" {
+		t.Errorf("hostile directories kept: %+v", th)
+	}
+	if db.theme("../share") != nil {
+		t.Error("a theme name that leaves the icon directories was resolved")
+	}
+}
+
+// TestXDGThemeFragmentsInOtherBases: the first index.theme describes the
+// theme, and its directories are searched in every base directory that has
+// the theme's directory: a user's ~/.icons/hicolor with icons and no index.
+func TestXDGThemeFragmentsInOtherBases(t *testing.T) {
+	root := xdgTree(t)
+	frag := filepath.Join(root, "home", ".icons", "hicolor", "48x48", "mimetypes", "x-user-only.png")
+	if err := os.MkdirAll(filepath.Dir(frag), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	m := image.NewNRGBA(image.Rect(0, 0, 48, 48))
+	f, err := os.Create(frag)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := png.Encode(f, m); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	db := xdgSystem()
+	if got := db.findPNG("x-user-only", 48); got != frag {
+		t.Errorf("an icon in ~/.icons/hicolor (no index there): %q, want %q", got, frag)
+	}
+	if got := db.findPNG("x-nowhere", 48); got != "" {
+		t.Errorf("a missing icon: %q", got)
 	}
 }

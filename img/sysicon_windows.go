@@ -41,6 +41,21 @@ type iconDecoder struct {
 	mask  []byte
 }
 
+// maxIconScratch is the most pixel scratch a worker keeps between icons (a
+// 512 × 512 bitmap): the cache budgets decoded images, and a big one-off
+// icon must not leave a decoded-size buffer behind in every worker.
+const maxIconScratch = 1 << 20
+
+// trim drops scratch that grew past maxIconScratch.
+func (ic *iconDecoder) trim() {
+	if cap(ic.color) > maxIconScratch {
+		ic.color = nil
+	}
+	if cap(ic.mask) > maxIconScratch {
+		ic.mask = nil
+	}
+}
+
 // Structures of the Win32 API as laid out on 64-bit Windows (amd64 and
 // arm64): wingdi.h BITMAP, BITMAPINFOHEADER; winuser.h ICONINFO; shellapi.h
 // SHFILEINFOW.
@@ -116,6 +131,10 @@ var (
 // HRESULT or result.
 var iconTrace func(step string, code uintptr)
 
+// iconRawHook, when set (tests), sees an icon's BGRA pixels as the shell gave
+// them.
+var iconRawHook func(px []byte)
+
 func trace(step string, code uintptr) {
 	if f := iconTrace; f != nil {
 		f(step, code)
@@ -174,6 +193,7 @@ func (w *worker) decodeIcon(c *Cache, j *job) result {
 	if win32.HR(win32.Call(shell.coInit, 0, coApartment|coNoOle1DDE)) >= 0 { // S_OK or S_FALSE: balance it
 		defer win32.Call(shell.coUninit)
 	}
+	defer w.icon.trim()
 	var m *image.RGBA
 	if j.src.kind == srcIconFile {
 		m, code = w.fileIcon(j.src.path, side)
@@ -188,9 +208,20 @@ func (w *worker) decodeIcon(c *Cache, j *job) result {
 
 // fileIcon is the icon of the item at path, at side pixels.
 func (w *worker) fileIcon(path string, side int32) (*image.RGBA, uint8) {
+	px, bw, bh, code := w.itemPixels(path, side)
+	if px == nil {
+		return nil, code
+	}
+	shellPixels(px, nil, false) // the shell's bitmaps are premultiplied
+	return &image.RGBA{Pix: px, Stride: bw * 4, Rect: image.Rect(0, 0, bw, bh)}, errNone
+}
+
+// itemPixels is the BGRA bitmap IShellItemImageFactory renders for the item
+// at path, in the worker's scratch.
+func (w *worker) itemPixels(path string, side int32) (px []byte, bw, bh int, code uint8) {
 	p, err := syscall.UTF16PtrFromString(path)
 	if err != nil {
-		return nil, errRead
+		return nil, 0, 0, errRead
 	}
 	ic := &w.icon
 	ic.ptr, ic.hbm = 0, 0
@@ -198,7 +229,7 @@ func (w *worker) fileIcon(path string, side int32) (*image.RGBA, uint8) {
 	runtime.KeepAlive(p)
 	if hr < 0 || ic.ptr == 0 {
 		trace("SHCreateItemFromParsingName", uintptr(uint32(hr)))
-		return nil, errRead
+		return nil, 0, 0, errRead
 	}
 	factory := ic.ptr
 	defer win32.Release(factory)
@@ -207,17 +238,16 @@ func (w *worker) fileIcon(path string, side int32) (*image.RGBA, uint8) {
 	hr = win32.HR(win32.Com(factory, shellItemGetImage, size, siigbfIconOnly, uintptr(unsafe.Pointer(&ic.hbm))))
 	if hr < 0 || ic.hbm == 0 {
 		trace("IShellItemImageFactory.GetImage", uintptr(uint32(hr)))
-		return nil, errDecode
+		return nil, 0, 0, errDecode
 	}
 	hbm := ic.hbm
 	defer win32.Call(shell.deleteObject, hbm)
-	w32, h32, px, ok := w.bitmapPixels(hbm, &ic.color)
+	bw, bh, px, ok := w.bitmapPixels(hbm, &ic.color)
 	if !ok {
 		trace("bitmapPixels (item)", 0)
-		return nil, errDecode
+		return nil, 0, 0, errDecode
 	}
-	shellPixels(px, nil)
-	return &image.RGBA{Pix: px, Stride: w32 * 4, Rect: image.Rect(0, 0, w32, h32)}, errNone
+	return px, bw, bh, errNone
 }
 
 // typeIcon is the icon of a type without a file, from the system image
@@ -284,11 +314,25 @@ func (w *worker) typeIcon(src *Source, side int32) (*image.RGBA, uint8) {
 // iconImage reads an icon's pixels: the colour bitmap with its alpha, or,
 // for an icon of the old kind with no alpha channel, the AND mask.
 func (w *worker) iconImage(hicon uintptr) (*image.RGBA, uint8) {
+	px, mpx, bw, bh, code := w.iconPixels(hicon)
+	if px == nil {
+		return nil, code
+	}
+	if iconRawHook != nil {
+		iconRawHook(px)
+	}
+	shellPixels(px, mpx, true) // an icon's own bitmap has straight alpha
+	return &image.RGBA{Pix: px, Stride: bw * 4, Rect: image.Rect(0, 0, bw, bh)}, errNone
+}
+
+// iconPixels is the BGRA colour bitmap of an icon and, if it has one of the
+// same size, its mask, in the worker's scratch.
+func (w *worker) iconPixels(hicon uintptr) (px, mpx []byte, bw, bh int, code uint8) {
 	ic := &w.icon
 	ic.ii = iconInfo{}
 	if !win32.Bool(win32.Call(shell.getIconInfo, hicon, uintptr(unsafe.Pointer(&ic.ii)))) {
 		trace("GetIconInfo", 0)
-		return nil, errDecode
+		return nil, nil, 0, 0, errDecode
 	}
 	mask, color := ic.ii.Mask, ic.ii.Color
 	if mask != 0 {
@@ -299,21 +343,19 @@ func (w *worker) iconImage(hicon uintptr) (*image.RGBA, uint8) {
 	}
 	if color == 0 {
 		trace("no colour bitmap", 0)
-		return nil, errDecode
+		return nil, nil, 0, 0, errDecode
 	}
-	w32, h32, px, ok := w.bitmapPixels(color, &ic.color)
+	bw, bh, px, ok := w.bitmapPixels(color, &ic.color)
 	if !ok {
 		trace("bitmapPixels (icon)", 0)
-		return nil, errDecode
+		return nil, nil, 0, 0, errDecode
 	}
-	var mpx []byte
 	if mask != 0 {
-		if mw, mh, p, ok := w.bitmapPixels(mask, &ic.mask); ok && mw == w32 && mh == h32 {
+		if mw, mh, p, ok := w.bitmapPixels(mask, &ic.mask); ok && mw == bw && mh == bh {
 			mpx = p
 		}
 	}
-	shellPixels(px, mpx)
-	return &image.RGBA{Pix: px, Stride: w32 * 4, Rect: image.Rect(0, 0, w32, h32)}, errNone
+	return px, mpx, bw, bh, errNone
 }
 
 // bitmapPixels reads bitmap hbm as top-down 32-bit BGRA into *buf (grown as

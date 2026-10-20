@@ -46,7 +46,7 @@ var appkit struct {
 	once sync.Once
 	err  error
 
-	getClass, selReg uintptr
+	getClass, selReg, appKitLib uintptr
 
 	clsWorkspace, clsString, clsUTType objc.ID
 
@@ -78,6 +78,7 @@ func loadAppKit() error {
 			fail(err)
 			return
 		}
+		appkit.appKitLib = appKitLib
 		if _, err := dlopen("/System/Library/Frameworks/UniformTypeIdentifiers.framework/UniformTypeIdentifiers"); err != nil {
 			fail(err)
 			return
@@ -91,15 +92,13 @@ func loadAppKit() error {
 			return
 		}
 		cls := func(name string) objc.ID {
-			id := objc.ID(new(cframe).Call1(appkit.getClass, cstrAddr(name)))
+			id := appkitCls(name)
 			if id == 0 {
 				fail(errors.New("img: missing class " + name))
 			}
 			return id
 		}
-		sel := func(name string) objc.SEL {
-			return objc.SEL(new(cframe).Call1(appkit.selReg, cstrAddr(name)))
-		}
+		sel := appkitSel
 		appkit.clsWorkspace, appkit.clsString, appkit.clsUTType = cls("NSWorkspace"), cls("NSString"), cls("UTType")
 		appkit.selShared, appkit.selIconForFile, appkit.selIconForType = sel("sharedWorkspace"), sel("iconForFile:"), sel("iconForContentType:")
 		appkit.selAlloc, appkit.selInitBytes, appkit.selAutorelease = sel("alloc"), sel("initWithBytes:length:encoding:"), sel("autorelease")
@@ -109,29 +108,63 @@ func loadAppKit() error {
 			return
 		}
 
-		// Without a hint AppKit picks the artwork for the main screen's
-		// scale (a 64 pixel request gets the 128 pixel art on a 2× Mac); an
-		// identity CTM makes the rectangle mean pixels, so the result does
-		// not depend on the screens. Both objects are immutable from here
-		// on and shared by every worker.
-		ctmKey, err := dlsym(appKitLib, "NSImageHintCTM")
-		if err != nil {
+		if err := makeHints(); err != nil {
 			fail(err)
-			return
-		}
-		fr := new(cframe)
-		pool := fr.Call0(objc.PoolPush)
-		defer fr.Call1(objc.PoolPop, pool)
-		key := *(*uintptr)(ffi.PtrFromC(ctmKey))
-		ctm := fr.Reset().Arg(uintptr(cls("NSAffineTransform"))).Arg(uintptr(sel("transform"))).Call(objc.MsgSend).R0()
-		ctm = fr.Reset().Arg(ctm).Arg(uintptr(sel("retain"))).Call(objc.MsgSend).R0()
-		dict := fr.Reset().Arg(uintptr(cls("NSDictionary"))).Arg(uintptr(sel("dictionaryWithObject:forKey:"))).Arg(ctm).Arg(key).Call(objc.MsgSend).R0()
-		appkit.hints = fr.Reset().Arg(dict).Arg(uintptr(sel("retain"))).Call(objc.MsgSend).R0()
-		if ctm == 0 || appkit.hints == 0 {
-			fail(errors.New("img: no image hints"))
 		}
 	})
 	return appkit.err
+}
+
+func appkitCls(name string) objc.ID {
+	return objc.ID(new(cframe).Call1(appkit.getClass, cstrAddr(name)))
+}
+
+func appkitSel(name string) objc.SEL {
+	return objc.SEL(new(cframe).Call1(appkit.selReg, cstrAddr(name)))
+}
+
+// makeHints makes the hint dictionary every worker shares. Without a hint
+// AppKit picks the artwork for the main screen's scale (a 64 pixel request
+// gets the 128 pixel art on a 2× Mac); an identity CTM makes the rectangle
+// mean pixels, so the result does not depend on the screens. Both objects
+// are immutable from here on.
+func makeHints() error {
+	ctmKey, err := dlsym(appkit.appKitLib, "NSImageHintCTM")
+	if err != nil {
+		return err
+	}
+	fr := new(cframe)
+	defer pushPool(fr)()
+	key := *(*uintptr)(ffi.PtrFromC(ctmKey))
+	ctm := fr.Reset().Arg(uintptr(appkitCls("NSAffineTransform"))).Arg(uintptr(appkitSel("transform"))).Call(objc.MsgSend).R0()
+	ctm = fr.Reset().Arg(ctm).Arg(uintptr(appkitSel("retain"))).Call(objc.MsgSend).R0()
+	dict := fr.Reset().Arg(uintptr(appkitCls("NSDictionary"))).Arg(uintptr(appkitSel("dictionaryWithObject:forKey:"))).Arg(ctm).Arg(key).Call(objc.MsgSend).R0()
+	hints := fr.Reset().Arg(dict).Arg(uintptr(appkitSel("retain"))).Call(objc.MsgSend).R0()
+	if ctm == 0 || hints == 0 {
+		return errors.New("img: no image hints")
+	}
+	appkit.hints = hints
+	return nil
+}
+
+// poolHook, when set (tests), runs between a pool's push and its pop.
+var poolHook func()
+
+// pushPool locks the goroutine to its OS thread, then pushes an autorelease
+// pool on it, and returns what pops the pool and unlocks. An autorelease
+// pool belongs to the thread that pushed it: the lock comes first, so that
+// the goroutine cannot move between the push and the pop (and pop another
+// thread's pool). Every pool of this package comes from here.
+func pushPool(fr *cframe) (pop func()) {
+	runtime.LockOSThread()
+	pool := fr.Call0(objc.PoolPush)
+	if poolHook != nil {
+		poolHook()
+	}
+	return func() {
+		fr.Call1(objc.PoolPop, pool)
+		runtime.UnlockOSThread()
+	}
 }
 
 // cstrAddr is the address of the NUL-terminated copy of s that stays for the
@@ -184,10 +217,7 @@ func (w *worker) decodeIcon(c *Cache, j *job) result {
 		}
 	}
 	fr := &w.fr
-	runtime.LockOSThread() // the autorelease pool belongs to this thread
-	defer runtime.UnlockOSThread()
-	pool := fr.Call0(objc.PoolPush)
-	defer fr.Call1(objc.PoolPop, pool)
+	defer pushPool(fr)()
 
 	cg, code := w.iconCGImage(j, side)
 	if cg == 0 {
