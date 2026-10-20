@@ -257,7 +257,7 @@ jobs:
   windows:
     name: Windows ${{ matrix.arch }} (D3D11, WARP on runners)
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 25
+    timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
