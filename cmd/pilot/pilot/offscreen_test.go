@@ -291,7 +291,7 @@ func openFiles() int {
 func TestOffscreenRunsLeaveNoWorkersOrHandles(t *testing.T) {
 	dir := t.TempDir()
 	run := func() {
-		if _, _, err := RenderShot(filepath.Join(dir, "pilot.png"), 600, 380, 1, false); err != nil {
+		if _, _, err := RenderShot(filepath.Join(dir, "pilot.png"), 1200, 760, 1, false); err != nil {
 			if os.Getenv("CI") != "" {
 				t.Fatal(err)
 			}
