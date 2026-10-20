@@ -26,6 +26,7 @@ import (
 	"gonativeui/app"
 	"gonativeui/internal/objc"
 	"gonativeui/menu"
+	"gonativeui/platform"
 	"gonativeui/ui"
 	"gonativeui/widget/widgettest"
 )
@@ -250,6 +251,39 @@ func init() {
 		}
 		app.Main(app.AppConfig{KeepRunning: true}, h)
 	})
+
+	// f3-fakes: the app-event fakes reach a Handler as the real ones do.
+	widgettest.RegisterScenario("f3-fakes", func() {
+		var seen []string
+		h := &flowHandler{}
+		h.start = func(a *app.App) error {
+			widgettest.After(300*time.Millisecond, func() {
+				widgettest.FakeNotificationResponse(a, 9, 2, "hello")
+				widgettest.FakeOpenURLs(a, "gnui-test://a", "gnui-test://b")
+				widgettest.FakeReopen(a, false)
+				widgettest.Say("seen=%v", len(seen))
+				for i, s := range seen {
+					widgettest.Say("e%d=%s", i, s)
+				}
+				a.Quit()
+			})
+			return nil
+		}
+		h.event = func(a *app.App, e *app.Event) bool {
+			switch e.Kind {
+			case app.EvService:
+				seen = append(seen, fmt.Sprintf("service:%d:%d:%d:%s", e.Source, e.ID, e.A, e.Data()))
+			case app.EvOpenURLs:
+				seen = append(seen, fmt.Sprintf("urls:%d:%s", e.A, strings.Join(e.Strings(), "|")))
+			case app.EvReopen:
+				seen = append(seen, fmt.Sprintf("reopen:%d", e.A))
+			default:
+				return false
+			}
+			return true
+		}
+		app.Main(app.AppConfig{KeepRunning: true}, h)
+	})
 }
 
 // dockClick calls the application delegate's reopen method as AppKit does
@@ -306,6 +340,16 @@ func TestF3MenuCommandWithNoWindow(t *testing.T) {
 	t.Parallel()
 	r := widgettest.Scenario(t, "f3-menucmd", 60*time.Second)
 	if r.Code != 0 || r.Int("windows") != 0 || r.Get("item") != "true" || r.Get("enabled") != "true" || r.Int("command") != 5 || r.Get("timeout") != "" {
+		t.Fatalf("exit %d, report %v\n%s", r.Code, r.KV, r.Out)
+	}
+}
+
+// The fakes of app events reach the Handler with their data.
+func TestF3FakeAppEvents(t *testing.T) {
+	t.Parallel()
+	r := widgettest.Scenario(t, "f3-fakes", 60*time.Second)
+	if r.Code != 0 || r.Int("seen") != 3 || r.Get("e0") != fmt.Sprintf("service:%d:9:2:hello", int(platform.SourceNotifyResponse)) ||
+		r.Get("e1") != "urls:2:gnui-test://a|gnui-test://b" || r.Get("e2") != "reopen:0" {
 		t.Fatalf("exit %d, report %v\n%s", r.Code, r.KV, r.Out)
 	}
 }
