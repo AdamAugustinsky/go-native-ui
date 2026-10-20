@@ -87,7 +87,10 @@ type MaterialRegion struct {
 	// Rect is x0, y0, x1, y1 in physical pixels.
 	Rect [4]float32
 	// Radii are the corner radii in pixels: top left, top right, bottom
-	// right, bottom left. A capsule has half its height.
+	// right, bottom left. A capsule has half its height. The corners with a
+	// radius share one (a native view's layer has one radius): where the
+	// non-zero radii differ, each corner that has one takes the largest,
+	// clamped to half the shorter side, and the others stay square.
 	Radii [4]float32
 	// Solid is the opaque colour (0xRRGGBBAA, straight) shown instead of the
 	// material under Reduce Transparency; 0 takes the window's background
