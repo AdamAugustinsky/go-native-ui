@@ -62,6 +62,14 @@ The build is deterministic here: rebuilding unchanged source with the same
 toolchain gave the same CDHash (checked twice), so an unchanged rebuild should
 not need a new grant. Any edit to `main.m`, `Info.plist` or the compiler flags
 changes it. Update the line above whenever the app is deliberately rebuilt.
+
+**Granted copies on the test Macs.** Each grant belongs to the bundle as it is installed. Don't rebuild, re-sign or replace an installed `~/gnui-test/GnuiShot.app`: Adam would have to grant it again at the keyboard.
+
+| Test Mac | Signed with | CDHash | Granted |
+|---|---|---|---|
+| Mac mini (macOS 27.2, 26B5101f; LG UltraGear 5K at 2×) | `gnui-dev` | `b000e88b4f0342d2a8d2a88870fab6aa4621a2a0` | 2026-10-20 |
+
+On the Mac mini the bundle is also write-protected (`chmod -R a-w`), so a stray copy fails instead of replacing it. Undo with `chmod -R u+w` only for a deliberate, re-granted replacement.
 For a grant that survives rebuilds sign with a real identity:
 `SIGN_IDENTITY="Apple Development: Name (TEAMID)" bash tools/gnuishot/build.sh`.
 
