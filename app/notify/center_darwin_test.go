@@ -274,6 +274,50 @@ func TestNativeDelegateKeepsTheHandlerUntilStored(t *testing.T) {
 	}
 }
 
+// The last drain (platform.FlushApp, which runs before EvWillTerminate)
+// stores and delivers a response waiting for a record, and answers the
+// system; one arriving after it can never be stored, and its handler is
+// released unanswered. No kept block and no retry goroutine is left.
+func TestNativeLastDrainEndsParking(t *testing.T) {
+	f, s := fresh(t, Options{})
+	standIns(t)
+	for i, k := range fillSlots(t, f, MaxResponses, "") {
+		if !stored(k, ActionClick, nil, nil) {
+			t.Fatal(i)
+		}
+	}
+	for i := range nSpare {
+		if !stored(uint64(1)<<40|uint64(i+1), ActionClick, nil, nil) {
+			t.Fatal(i)
+		}
+	}
+	base, acks := objc.Leaks().KeptBlocks, stand.acks.Load()
+	stand.info.Store(info(uint64(1)<<41, []byte("at the end")))
+	stand.action.Store(nsString(actionPrefix + "1"))
+	stand.reply.Store(nsString("bye"))
+	onMain(func() { objc.Send3(objc.ID(un.delegate), sel.didReceive, 0, stand.text, stand.ack) })
+	if objc.Leaks().KeptBlocks != base+1 || stand.acks.Load() != acks {
+		t.Fatal("the response was not parked")
+	}
+	s.reset()
+	platform.FlushApp()
+	var found bool
+	for _, r := range s.responses() {
+		found = found || string(r.UserData) == "at the end" && string(r.Reply) == "bye"
+	}
+	if !found || stand.acks.Load() != acks+1 || objc.Leaks().KeptBlocks != base || retrying() {
+		t.Fatalf("after the last drain: delivered %v, handler called %d times, kept blocks %+d, retrying %v",
+			found, stand.acks.Load()-acks, objc.Leaks().KeptBlocks-base, retrying())
+	}
+
+	stand.info.Store(info(uint64(1)<<41|1, []byte("too late")))
+	onMain(func() { objc.Send3(objc.ID(un.delegate), sel.didReceive, 0, stand.text, stand.ack) })
+	if stand.acks.Load() != acks+1 || objc.Leaks().KeptBlocks != base || retrying() {
+		t.Fatalf("a response after the last drain: handler called %d times, kept blocks %+d, retrying %v",
+			stand.acks.Load()-acks-1, objc.Leaks().KeptBlocks-base, retrying())
+	}
+}
+
 // The application becoming active (NSApplicationDidBecomeActiveNotification)
 // starts a reconciliation: the pending notes, then the shown ones, are
 // listed.

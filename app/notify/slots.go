@@ -65,7 +65,7 @@ var slots struct {
 	spares    *platform.Tickets // responses that find no slot
 	s         [MaxResponses]slot
 
-	withoutActions, evicted, stored, late, plain, reconciled, superseded atomic.Uint64
+	withoutActions, evicted, stored, late, plain, reconciled, superseded, lostAtExit atomic.Uint64
 
 	// answered are the keys of the responses that arrived while the
 	// launch's restore runs (svc.restoring): its listing may still show a
@@ -82,22 +82,64 @@ func initSlots() {
 		slots.responses = platform.NewTickets(platform.SourceNotifyResponse, MaxResponses, MaxReply+MaxUserData)
 		slots.spares = platform.NewTickets(platform.SourceNotifyResponse, nSpare, MaxReply+MaxUserData)
 		pends.free.Store(^uint64(0))
+		platform.OnLastDrain(lastDrain)
 	})
 }
 
 // ---- The post side's bookkeeping (svc.mu) ----
 
-// entry is what the post side knows of a note ID: its latest Post (the one
-// the system should end up showing), the latest removal covering it, and what
-// is in flight. An idle entry is dropped (tidy), except while a listing whose
-// snapshot may be older than a later post of the ID is outstanding (the
-// launch's restore, a RemoveThread): it must see that post.
+// entry is what the post side knows of a note ID. Its posts (attempts) and
+// the notes the system was sent are kept apart: only the latest post may be
+// sent (latest, cut), and the note the system shows for the ID is the latest
+// one sent and not refused (notes), whatever happened to later attempts. An
+// idle entry is dropped (tidy), except while a listing whose snapshot may be
+// older than a later post of the ID is outstanding (the launch's restore, a
+// RemoveThread): it must see that post.
 type entry struct {
-	post     uint64 // the generation of its latest Post, 0 for none this run
-	cut      uint64 // its posts up to this generation were removed (Remove, RemoveThread, EvictOldest)
+	latest   uint64 // the generation of its latest Post, 0 for none this run
+	cut      uint64 // its posts up to this generation were removed before they were sent
 	thread   string // the latest Post's thread
+	notes    []note // what the system has for the ID, or is being sent, oldest first
+	removed  bool   // removed from the system this run (Remove, RemoveThread, EvictOldest)
 	inflight int    // posts not yet sent or dropped
 	slots    int    // live slots of its notes
+}
+
+// note is a post sent to the system, or (generation 0) a note of an earlier
+// run that got its slot back.
+type note struct {
+	gen    uint64
+	thread string
+	taken  bool // the system took it
+}
+
+// current is the note the system shows for the ID (or will, once it takes
+// it), as far as this run knows.
+func (e *entry) current() (note, bool) {
+	if len(e.notes) == 0 {
+		return note{}, false
+	}
+	return e.notes[len(e.notes)-1], true
+}
+
+// took records that the system took note gen: it replaced the ones before.
+func (e *entry) took(gen uint64) {
+	if i := slices.IndexFunc(e.notes, func(n note) bool { return n.gen == gen }); i >= 0 {
+		e.notes[i].taken = true
+		e.notes = slices.Delete(e.notes, 0, i)
+	}
+}
+
+// lost records that the system refused note gen, or no longer has it.
+func (e *entry) lost(gen uint64) {
+	e.notes = slices.DeleteFunc(e.notes, func(n note) bool { return n.gen == gen })
+}
+
+// gone records that the ID's notes were removed from the system.
+func (e *entry) gone() { e.notes, e.removed = nil, true }
+
+func (e *entry) idle() bool {
+	return e.inflight == 0 && e.slots == 0 && !slices.ContainsFunc(e.notes, func(n note) bool { return !n.taken })
 }
 
 func entryOf(id string) *entry {
@@ -111,7 +153,7 @@ func entryOf(id string) *entry {
 
 // tidy drops the entry of id if it is idle and no listing holds entries.
 func tidy(id string) {
-	if e := svc.ids[id]; e != nil && e.inflight == 0 && e.slots == 0 && svc.listings == 0 {
+	if e := svc.ids[id]; e != nil && e.idle() && svc.listings == 0 {
 		delete(svc.ids, id)
 	}
 }
@@ -123,7 +165,7 @@ func endListing() {
 		return
 	}
 	for id, e := range svc.ids {
-		if e.inflight == 0 && e.slots == 0 {
+		if e.idle() {
 			delete(svc.ids, id)
 		}
 	}
@@ -196,9 +238,9 @@ func slotOfKey(key uint64) int {
 }
 
 // victimSlot is the slot EvictOldest takes for a post of id: the oldest
-// still awaiting a response, of another ID, and holding that ID's latest
-// post (the system removes by ID: removing an older post's note would remove
-// the latest one too); -1 for none.
+// still awaiting a response, of another ID, and holding the note the system
+// shows for that ID (it removes by ID: removing a replaced note would remove
+// its replacement too); -1 for none.
 func victimSlot(id string) int {
 	best := -1
 	for i := range slots.s {
@@ -206,7 +248,9 @@ func victimSlot(id string) int {
 		if !s.live || s.key.Load() == 0 || s.id == id {
 			continue
 		}
-		if e := svc.ids[s.id]; e == nil || e.post != s.gen {
+		if e := svc.ids[s.id]; e == nil {
+			continue
+		} else if c, ok := e.current(); !ok || c.gen != s.gen {
 			continue
 		}
 		if best < 0 || s.seq < slots.s[best].seq {
@@ -226,12 +270,9 @@ func evictFor(id string) (Ticket, []string) {
 		if v < 0 {
 			return 0, ids
 		}
-		s := &slots.s[v]
-		vid := s.id
-		if e := svc.ids[vid]; e != nil {
-			e.cut = max(e.cut, e.post)
-		}
-		releaseSlot(v, s.k)
+		vid := slots.s[v].id
+		svc.ids[vid].gone()
+		releaseID(vid, math.MaxUint64)
 		ids = append(ids, vid)
 		slots.evicted.Add(1)
 		if tk, err := slots.responses.Reserve(0); err == nil {
@@ -294,7 +335,8 @@ var testHookStoring func()
 // It returns nil once the response is stored, or for a plain note: the
 // delegate answers the system then. Otherwise the response is parked, with a
 // copy of its data: the delegate sets its ack, which answers the system, and
-// calls wait, and must not answer itself. It allocates only to park.
+// its drop, which releases what ack would have used, calls wait, and must
+// not answer itself. It allocates only to park.
 func respond(key uint64, action int64, reply, data []byte) *parked {
 	if key == 0 {
 		slots.plain.Add(1)
@@ -315,7 +357,7 @@ func respond(key uint64, action int64, reply, data []byte) *parked {
 			slots.stored.Add(1)
 			return nil
 		}
-		slots.responses.Cancel(tk) // the app's last delivery has begun: kept for a later run
+		slots.responses.Cancel(tk) // the app's last delivery has begun: parked, then given up
 	} else if store(action, reply, data) {
 		slots.stored.Add(1)
 		slots.late.Add(1)
@@ -384,68 +426,135 @@ type parked struct {
 	action int64
 	n      int    // the UserData's length, at the end of data
 	data   []byte // the reply, then the UserData
-	ack    func() // answers the system (the delegate sets it before wait)
+	ack    func() // answers the system (the delegate sets ack and drop before wait)
+	drop   func() // gives the system's handler up unanswered (the app has ended)
 }
 
-var parking struct {
+// parking holds the parked responses. A goroutine retries them while any is
+// held; the app's last drain stores them while records free and gives up
+// those it cannot (lastDrain), and from then on a response that cannot be
+// stored is given up at once (Stats.LostAtExit).
+var parking = struct {
 	mu      sync.Mutex
 	list    []*parked
-	running bool
-}
+	running bool          // the retry goroutine runs
+	wake    chan struct{} // makes it try at once
+	ended   chan struct{} // closed when it has ended
+}{wake: make(chan struct{}, 1)}
 
 func park(action int64, reply, data []byte) *parked {
 	buf := make([]byte, 0, len(reply)+len(data))
 	return &parked{action: action, n: len(data), data: append(append(buf, reply...), data...)}
 }
 
-// wait queues p: it is stored once a record frees, and then answered.
+// wait queues p: it is stored once a record frees, and then answered. After
+// the app's last drain has begun it can never be stored: it is given up.
 func (p *parked) wait() {
 	parking.mu.Lock()
-	defer parking.mu.Unlock()
+	if platform.AppClosed() {
+		parking.mu.Unlock()
+		giveUp([]*parked{p})
+		return
+	}
 	parking.list = append(parking.list, p)
 	if !parking.running {
 		parking.running = true
-		go retryParked()
+		parking.ended = make(chan struct{})
+		go retryParked(parking.ended)
+	}
+	parking.mu.Unlock()
+}
+
+// storeParked stores the parked responses that fit, in order, and returns
+// them; with final set, or once the last drain has begun, it also returns
+// the others, which can never be stored. parking.mu is held.
+func storeParked(final bool) (done, lost []*parked) {
+	n := 0
+	for _, p := range parking.list {
+		k := len(p.data) - p.n
+		if !store(p.action, p.data[:k], p.data[k:]) {
+			break
+		}
+		n++
+	}
+	done = slices.Clone(parking.list[:n])
+	parking.list = slices.Delete(parking.list, 0, n)
+	if final || platform.AppClosed() {
+		lost, parking.list = parking.list, nil
+	}
+	return done, lost
+}
+
+// answer answers the system for the responses stored, and gives up the lost.
+func answer(done, lost []*parked) {
+	for _, p := range done {
+		slots.stored.Add(1)
+		slots.late.Add(1)
+		p.ack()
+	}
+	giveUp(lost)
+}
+
+func giveUp(lost []*parked) {
+	for _, p := range lost {
+		slots.lostAtExit.Add(1)
+		p.drop()
 	}
 }
 
-// retryParked stores the parked responses, in order, as records free (they
-// free as the dispatcher delivers): it tries after 1 ms, backing off to
-// 100 ms while nothing frees, and ends when none is left.
-func retryParked() {
+// retryParked stores the parked responses as records free (they free as the
+// dispatcher delivers): it tries after 1 ms, backing off to 100 ms while
+// nothing frees, and ends when none is left.
+func retryParked(ended chan struct{}) {
+	defer close(ended)
 	d := time.Millisecond
+	t := time.NewTimer(d)
+	defer t.Stop()
 	for {
-		time.Sleep(d)
-		parking.mu.Lock()
-		n := 0
-		for _, p := range parking.list {
-			k := len(p.data) - p.n
-			if !store(p.action, p.data[:k], p.data[k:]) {
-				break
-			}
-			n++
+		select {
+		case <-t.C:
+		case <-parking.wake:
 		}
-		done := slices.Clone(parking.list[:n])
-		parking.list = slices.Delete(parking.list, 0, n)
+		parking.mu.Lock()
+		done, lost := storeParked(false)
 		empty := len(parking.list) == 0
 		if empty {
 			parking.running = false
 		}
 		parking.mu.Unlock()
-		for _, p := range done {
-			slots.stored.Add(1)
-			slots.late.Add(1)
-			p.ack()
-		}
+		answer(done, lost)
 		if empty {
 			return
 		}
-		if n > 0 {
+		if len(done) > 0 {
 			d = time.Millisecond
 		} else {
 			d = min(2*d, 100*time.Millisecond)
 		}
+		t.Reset(d)
 	}
+}
+
+// lastDrain is the parked responses' part of the app's last drain
+// (platform.OnLastDrain): while the gate is open they are stored as the
+// drain frees records, so they are delivered before EvWillTerminate; once it
+// has closed (final) those left are given up, and the retry goroutine is
+// stopped and waited for. It reports whether any is still parked.
+func lastDrain(final bool) bool {
+	parking.mu.Lock()
+	done, lost := storeParked(final)
+	left := len(parking.list) > 0
+	running, ended := parking.running, parking.ended
+	parking.mu.Unlock()
+	answer(done, lost)
+	if final && running {
+		select {
+		case parking.wake <- struct{}{}:
+		default:
+		}
+		<-ended
+	}
+	return left
 }
 
 // presentInForeground is what the delegate tells the system for a note
@@ -585,6 +694,7 @@ func added(ctx int, code int64, msg []byte) {
 		return
 	}
 	svc.mu.Lock()
+	e := svc.ids[p.id]
 	if code == 0 {
 		svc.accepts++
 		if p.slot >= 0 {
@@ -592,9 +702,17 @@ func added(ctx int, code int64, msg []byte) {
 				s.accepted = svc.accepts
 			}
 		}
+		if e != nil {
+			e.took(p.gen)
+		}
 		releaseID(p.id, p.gen-1)
-	} else if p.slot >= 0 {
-		releaseSlot(p.slot, p.key)
+	} else {
+		if e != nil {
+			e.lost(p.gen)
+		}
+		if p.slot >= 0 {
+			releaseSlot(p.slot, p.key)
+		}
 	}
 	tidy(p.id)
 	svc.mu.Unlock()
@@ -648,16 +766,22 @@ func listed(ctx int, list []deliveredNote) {
 var testHookRestoring func(key uint64)
 
 // restore gives the notes of earlier runs their slots back, newest first,
-// and reports how many did and which did not fit. It skips the notes this
-// run knows of (posted, replaced or removed since Setup: the listing may be
-// older), those of a thread removed since, and those answered since.
+// and reports how many did and which did not fit. It skips those this run
+// replaced (a note of the ID the system took) or removed since Setup (the
+// listing may be older), those of a thread removed since, and those answered
+// since. One whose ID only has posts that failed or are still on their way
+// is still shown: it gets its slot, older than those posts' (a post the
+// system takes then frees it).
 func restore(tk Ticket, list []deliveredNote) {
 	slices.SortStableFunc(list, func(a, b deliveredNote) int { return cmp.Compare(b.date, a.date) })
 	var over []byte
 	n, nOver := 0, 0
 	svc.mu.Lock()
 	for _, d := range list {
-		if d.key == 0 || svc.ids[d.id] != nil || slotOfKey(d.key) >= 0 || threadCut(d) {
+		if d.key == 0 || slotOfKey(d.key) >= 0 || threadCut(d) {
+			continue
+		}
+		if e := svc.ids[d.id]; e != nil && (e.removed || slices.ContainsFunc(e.notes, func(n note) bool { return n.taken })) {
 			continue
 		}
 		yes, unknown := wasAnswered(d.key)
@@ -697,10 +821,9 @@ func restoreOne(d deliveredNote) (answered bool) {
 	if testHookRestoring != nil {
 		testHookRestoring(d.key)
 	}
-	svc.gen++
 	e := entryOf(d.id)
-	e.post, e.thread = svc.gen, d.thread
-	i := takeSlot(tk, d.key, d.id, d.thread, d.date, svc.gen)
+	e.notes = slices.Insert(e.notes, 0, note{thread: d.thread, taken: true})
+	i := takeSlot(tk, d.key, d.id, d.thread, d.date, 0)
 	if i < 0 {
 		return false
 	}
@@ -708,6 +831,7 @@ func restoreOne(d deliveredNote) (answered bool) {
 	slots.s[i].accepted = svc.accepts
 	yes, unknown := wasAnswered(d.key)
 	if yes || unknown {
+		e.lost(0)
 		releaseSlot(i, d.key)
 	}
 	return yes
@@ -725,9 +849,10 @@ func threadCut(d deliveredNote) bool {
 }
 
 // removeListed removes the listed notes of RemoveThread's thread delivered
-// before the call, except those whose ID was posted again since or whose
-// latest post is in another thread. The check and the removal are ordered
-// with the posts (svc.order), so a post after the check is not removed.
+// before the call, except those whose ID the system was sent a note for
+// since, or has a note of another thread for. The check and the removal are
+// ordered with the posts (svc.order), so a post sent after the check is not
+// removed.
 func removeListed(p pending, list []deliveredNote) {
 	var ids []string
 	svc.order.Lock()
@@ -738,10 +863,10 @@ func removeListed(p pending, list []deliveredNote) {
 			continue
 		}
 		if e := svc.ids[d.id]; e != nil {
-			if e.post > p.gen || (e.post > 0 && e.thread != p.thread) {
+			if c, ok := e.current(); ok && (c.gen > p.gen || c.thread != p.thread) {
 				continue
 			}
-			e.cut = max(e.cut, p.gen)
+			e.gone()
 			releaseID(d.id, p.gen)
 		}
 		ids = append(ids, d.id)
@@ -804,6 +929,9 @@ func reconcile(seq uint64, list []deliveredNote) {
 	for i := range slots.s {
 		s := &slots.s[i]
 		if s.live && s.key.Load() != 0 && s.accepted != 0 && s.accepted <= seq && !has[s.k] {
+			if e := svc.ids[s.id]; e != nil {
+				e.lost(s.gen)
+			}
 			releaseSlot(i, s.k)
 			slots.reconciled.Add(1)
 		}

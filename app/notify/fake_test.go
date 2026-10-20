@@ -432,7 +432,7 @@ func relaunch(t *testing.T, o Options, manual bool) (*fakeCenter, *sink) {
 	svc.mu.Unlock()
 	slots.nAnswered.Store(0)
 	stageFile, testHookStoring, testHookRestoring = stageAttachment, nil, nil
-	for _, c := range []*atomic.Uint64{&slots.withoutActions, &slots.evicted, &slots.stored, &slots.late, &slots.plain, &slots.reconciled, &slots.superseded} {
+	for _, c := range []*atomic.Uint64{&slots.withoutActions, &slots.evicted, &slots.stored, &slots.late, &slots.plain, &slots.reconciled, &slots.superseded, &slots.lostAtExit} {
 		c.Store(0)
 	}
 	if err := Setup(o); err != nil {
@@ -469,6 +469,35 @@ func fillSlots(t *testing.T, f *fakeCenter, n int, thread string) []uint64 {
 	}
 	drain()
 	return keys
+}
+
+// retrying reports whether a goroutine retries parked responses.
+func retrying() bool {
+	parking.mu.Lock()
+	defer parking.mu.Unlock()
+	return parking.running
+}
+
+// parkOne parks a response with no record free (every slot's record holds
+// a response, every spare too) and counts its answers and give-ups.
+func parkOne(t *testing.T, f *fakeCenter, key uint64, ud string, acks, drops *atomic.Int32) {
+	t.Helper()
+	for i, k := range fillSlots(t, f, MaxResponses, "") {
+		if !stored(k, ActionClick, nil, nil) {
+			t.Fatal(i)
+		}
+	}
+	for i := range nSpare {
+		if !stored(uint64(1)<<40|uint64(i+1), ActionClick, nil, nil) {
+			t.Fatal(i)
+		}
+	}
+	p := respond(key, 1, []byte("reply"), []byte(ud))
+	if p == nil {
+		t.Fatal("stored with every record taken")
+	}
+	p.ack, p.drop = func() { acks.Add(1) }, func() { drops.Add(1) }
+	p.wait()
 }
 
 // stored reports whether respond stored the response at once.

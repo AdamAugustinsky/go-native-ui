@@ -773,6 +773,10 @@ type Stats struct {
 	Late uint64
 	// Plain counts responses to plain notes (nothing is delivered).
 	Plain uint64
+	// LostAtExit counts the responses given up because the app's last
+	// delivery began before a record freed for them (or they arrived after
+	// it): the system's handler was released without being answered.
+	LostAtExit uint64
 }
 
 // ReadStats returns the counts.
@@ -785,6 +789,7 @@ func ReadStats() Stats {
 		Stored:         slots.stored.Load(),
 		Late:           slots.late.Load(),
 		Plain:          slots.plain.Load(),
+		LostAtExit:     slots.lostAtExit.Load(),
 	}
 	if slots.responses != nil {
 		st.Reserved = slots.responses.Outstanding()

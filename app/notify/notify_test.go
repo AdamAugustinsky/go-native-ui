@@ -330,6 +330,7 @@ func TestResponseWaitsForARecord(t *testing.T) {
 		storedAtAck.Store(slots.stored.Load())
 		acks.Add(1)
 	}
+	p.drop = func() { t.Error("given up") }
 	p.wait()
 	time.Sleep(20 * time.Millisecond)
 	if acks.Load() != 0 || ReadStats().Parked != 1 {
@@ -1245,5 +1246,192 @@ func TestWithoutACenter(t *testing.T) {
 		if _, err := Post(Note{Title: "x"}); !errors.Is(err, errors.ErrUnsupported) {
 			t.Fatalf("Post: %v", err)
 		}
+	}
+}
+
+// A post that fails leaves the note the system still shows for its ID as it
+// was: the launch's restore gives an earlier run's note its slot back when
+// this run's posts of the ID failed (before they were sent, or refused), and
+// when one is still on its way (the slot goes if the system takes it).
+func TestFailedPostKeepsRestore(t *testing.T) {
+	f, s := relaunch(t, Options{}, true)
+	launch := f.takeList(t)
+	stageFile = func(string) (string, error) { return "", errors.New("no such file") }
+	mustPost(t, Note{ID: "x", Thread: "t2", Title: "a picture", UserData: []byte("x"), Attachment: "/no/such.png"})
+	f.set(func(f *fakeCenter) { f.prepareErr = fmt.Errorf("%w: refused", ErrInvalid) })
+	if _, err := Post(Note{ID: "y", Title: "refused", UserData: []byte("y")}); err == nil {
+		t.Fatal("posted")
+	}
+	f.set(func(f *fakeCenter) { f.prepareErr = nil; f.addCode = 1 })
+	mustPost(t, Note{ID: "z", Title: "not allowed", UserData: []byte("z")})
+	f.set(func(f *fakeCenter) { f.addCode = 0; f.syncAdd = false })
+	mustPost(t, Note{ID: "w", Title: "on its way", UserData: []byte("w")}) // answered after the listing
+	mustPost(t, Note{ID: "v", Title: "on its way, refused", UserData: []byte("v")})
+	waitUntil(t, "x's and z's results", func() bool { return len(s.results()) == 2 })
+	old := func(i uint64) uint64 { return 1<<40 | i }
+	now := time.Now().UnixNano()
+	listed(launch.ctx, []deliveredNote{
+		{id: "x", thread: "t1", key: old(1), date: now - 5}, {id: "y", key: old(2), date: now - 4},
+		{id: "z", key: old(3), date: now - 3}, {id: "w", key: old(4), date: now - 2}, {id: "v", key: old(5), date: now - 1},
+	})
+	drain()
+	for i := uint64(1); i <= 5; i++ {
+		if !holding(old(i)) {
+			t.Fatalf("the earlier run's note %d got no slot back", i)
+		}
+	}
+	f.mu.Lock()
+	sent := f.unanswered
+	f.unanswered = nil
+	f.mu.Unlock()
+	for _, a := range sent {
+		if a.id == "v" {
+			f.set(func(f *fakeCenter) { f.addCode = 1 })
+		}
+		f.answerAdd(a)
+		f.set(func(f *fakeCenter) { f.addCode = 0 })
+	}
+	if holding(old(4)) || !holding(old(5)) {
+		t.Fatalf("after w was taken and v refused: w's old note held %v, v's %v", holding(old(4)), holding(old(5)))
+	}
+}
+
+// After a note in thread t1 was replaced by a post (in t2) that failed,
+// RemoveThread(t1) removes the note still shown.
+func TestRemoveThreadAfterFailedReplacement(t *testing.T) {
+	f, _ := fresh(t, Options{})
+	for _, fail := range []string{"refused", "attachment"} {
+		id := "x-" + fail
+		mustPost(t, Note{ID: id, Thread: "t1", Title: "shown", UserData: []byte("1")})
+		k := f.lastAdd().key
+		drain()
+		switch fail {
+		case "refused":
+			f.set(func(f *fakeCenter) { f.addCode = 1 })
+			mustPost(t, Note{ID: id, Thread: "t2", Title: "not allowed", UserData: []byte("2")})
+			f.set(func(f *fakeCenter) { f.addCode = 0 })
+		case "attachment":
+			stageFile = func(string) (string, error) { return "", errors.New("no such file") }
+			mustPost(t, Note{ID: id, Thread: "t2", Title: "a picture", UserData: []byte("2"), Attachment: "/no/such.png"})
+			workers.Wait()
+			stageFile = stageAttachment
+		}
+		drain()
+		f.set(func(f *fakeCenter) { f.removed = nil; f.manual = true })
+		if err := RemoveThread("t1"); err != nil {
+			t.Fatal(err)
+		}
+		if removed := f.removedList(); !slices.Equal(removed, []string{id}) || holding(k) {
+			t.Fatalf("%s: removed %v at once, slot held %v", fail, removed, holding(k))
+		}
+		listed(f.takeList(t).ctx, nil)
+		workers.Wait()
+		f.set(func(f *fakeCenter) { f.manual = false })
+	}
+}
+
+// After a post replacing the oldest note failed, EvictOldest still takes
+// that note's slot.
+func TestEvictionAfterFailedReplacement(t *testing.T) {
+	f, s := fresh(t, Options{EvictOldest: true})
+	mustPost(t, Note{ID: "x", Title: "the oldest", UserData: []byte("x")})
+	for i := range MaxResponses - 1 {
+		mustPost(t, Note{ID: fmt.Sprintf("n%d", i), Title: "t", UserData: []byte("u")})
+		if i%16 == 15 {
+			drain()
+		}
+	}
+	drain()
+	f.set(func(f *fakeCenter) { f.prepareErr = fmt.Errorf("%w: refused", ErrInvalid) })
+	r := mustPost(t, Note{ID: "x", Title: "refused", UserData: []byte("x2")}) // waits for the reconciliation: fails then
+	waitResult(t, s, r.Request)
+	f.set(func(f *fakeCenter) { f.prepareErr = nil; f.removed = nil })
+	r = mustPost(t, Note{ID: "q", Title: "q", UserData: []byte("q")})
+	if res := waitResult(t, s, r.Request); res.Evicted != "x" {
+		t.Fatalf("evicted %q (removed %v), want x", res.Evicted, f.removedList())
+	}
+}
+
+// A post that waits for the reconciliation has its own copy of the UserData:
+// the caller may reuse the buffer once Post returns.
+func TestDeferredPostOwnsItsUserData(t *testing.T) {
+	f, s := fresh(t, Options{})
+	fillSlots(t, f, MaxResponses, "")
+	f.clear("n0")
+	f.set(func(f *fakeCenter) { f.manual = true })
+	buf := []byte("original")
+	r := mustPost(t, Note{ID: "late", Title: "late", UserData: buf})
+	if r.Reservation != Pending {
+		t.Fatalf("%+v, want Pending", r)
+	}
+	copy(buf, "MUTATED!")
+	listed(f.takeList(t).ctx, nil)
+	listed(f.takeList(t).ctx, f.shownList())
+	res := waitResult(t, s, r.Request)
+	if a := f.lastAdd(); a.id != "late" || string(a.userData) != "original" || res.Reservation != Reserved {
+		t.Fatalf("sent %q with UserData %q (result %+v), want %q", a.id, a.userData, res, "original")
+	}
+}
+
+// The app's last drain (platform.FlushApp, before EvWillTerminate) stores a
+// parked response while it frees records, delivers it and answers the
+// system; a response arriving after it can never be stored, and is given up
+// at once (its handler released, counted). No retry goroutine is left.
+func TestLastDrainEndsParking(t *testing.T) {
+	f, s := fresh(t, Options{})
+	var acks, drops atomic.Int32
+	parkOne(t, f, uint64(1)<<41, "at the end", &acks, &drops)
+	s.reset()
+	platform.FlushApp()
+	var found bool
+	for _, r := range s.responses() {
+		found = found || string(r.UserData) == "at the end"
+	}
+	if st := ReadStats(); !found || acks.Load() != 1 || drops.Load() != 0 || st.Parked != 0 || st.LostAtExit != 0 || retrying() {
+		t.Fatalf("after the last drain: delivered %v, answered %d, given up %d, retrying %v, stats %+v", found, acks.Load(), drops.Load(), retrying(), st)
+	}
+	p := respond(uint64(1)<<41|1, 1, nil, []byte("too late"))
+	if p == nil {
+		t.Fatal("stored after the last drain")
+	}
+	p.ack, p.drop = func() { acks.Add(1) }, func() { drops.Add(1) }
+	p.wait()
+	if st := ReadStats(); acks.Load() != 1 || drops.Load() != 1 || st.LostAtExit != 1 || st.Parked != 0 || retrying() {
+		t.Fatalf("after it: answered %d, given up %d, retrying %v, stats %+v", acks.Load(), drops.Load(), retrying(), st)
+	}
+}
+
+// A parked response that cannot be stored even in the last drain (no record
+// frees before its time is up) is given up when the gate closes, once; the
+// retry goroutine is stopped.
+func TestLastDrainGivesUpWhatCannotBeStored(t *testing.T) {
+	f, _ := fresh(t, Options{})
+	fillSlots(t, f, MaxResponses, "") // every slot's record reserved for a note
+	var held []Ticket
+	for range nSpare { // and every spare, by something that never completes
+		tk, err := slots.spares.Reserve(0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		held = append(held, tk)
+	}
+	defer func() {
+		for _, tk := range held {
+			slots.spares.Cancel(tk)
+		}
+	}()
+	p := respond(uint64(1)<<41, 1, nil, []byte("never"))
+	if p == nil {
+		t.Fatal("stored with every record taken")
+	}
+	var acks, drops atomic.Int32
+	p.ack, p.drop = func() { acks.Add(1) }, func() { drops.Add(1) }
+	p.wait()
+	if !retrying() {
+		t.Fatal("no retries")
+	}
+	platform.FlushApp()
+	if st := ReadStats(); acks.Load() != 0 || drops.Load() != 1 || st.LostAtExit != 1 || st.Parked != 0 || retrying() {
+		t.Fatalf("answered %d, given up %d, retrying %v, stats %+v", acks.Load(), drops.Load(), retrying(), st)
 	}
 }

@@ -404,6 +404,20 @@ func CallKeptBlock(f *ffi.Frame, k *KeptBlock, args ...uintptr) bool {
 	return true
 }
 
+// ReleaseKeptBlock releases the block k holds without calling it, and
+// empties k: the call that gave it is never answered (the process is
+// ending). It reports false if k was empty, so a kept block is called or
+// released once, whichever of the two comes first.
+func ReleaseKeptBlock(f *ffi.Frame, k *KeptBlock) bool {
+	b := k.b.Swap(0)
+	if b == 0 {
+		return false
+	}
+	f.Call1(blockRelease, b)
+	keptBlocks.Add(-1)
+	return true
+}
+
 // Held reports whether k holds a block.
 func (k *KeptBlock) Held() bool { return k.b.Load() != 0 }
 

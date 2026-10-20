@@ -81,16 +81,16 @@ func Post(n Note) (PostResult, error) {
 		id = "gnui-" + strconv.FormatUint(uint64(svc.nonce), 36) + "-" + strconv.FormatUint(svc.idSeq.Add(1), 36)
 	}
 	p := &post{n: n, id: id, tk: tk, pi: pi, want: n.Category != "" || len(n.UserData) > 0}
+	p.n.UserData = bytes.Clone(n.UserData) // the caller may reuse it once Post returns, before p is sent
 	svc.mu.Lock()
 	svc.gen++
 	p.gen = svc.gen
 	e := entryOf(id)
-	e.post, e.thread = p.gen, n.Thread
+	e.latest, e.thread = p.gen, n.Thread
 	e.inflight++
 	svc.mu.Unlock()
 	later := PostResult{ID: id, Request: tk, Reservation: Pending}
 	if n.Attachment != "" {
-		p.n.UserData = bytes.Clone(n.UserData)
 		spawn(p.stage)
 		return later, nil
 	}
@@ -146,7 +146,7 @@ func (p *post) resume() {
 // alive reports whether p is its ID's latest post and not removed. svc.mu.
 func (p *post) alive() bool {
 	e := svc.ids[p.id]
-	return e != nil && e.post == p.gen && p.gen > e.cut
+	return e != nil && e.latest == p.gen && p.gen > e.cut
 }
 
 // submit decides what p reserves, makes its request and sends it, unless p
@@ -240,7 +240,9 @@ func (p *post) submit() (res PostResult, wait bool, err error) {
 	if len(evicted) > 0 {
 		res.Evicted = evicted[0]
 	}
-	svc.ids[p.id].inflight--
+	e := svc.ids[p.id]
+	e.inflight--
+	e.notes = append(e.notes, note{gen: p.gen, thread: p.n.Thread})
 	setPending(p.pi, pending{kind: pendPost, ticket: p.tk, id: p.id, gen: p.gen, slot: si, key: p.key, res: res})
 	svc.mu.Unlock()
 	if len(evicted) > 0 {
@@ -331,7 +333,9 @@ func Remove(ids ...string) error {
 	defer svc.order.Unlock()
 	svc.mu.Lock()
 	for _, id := range ids {
-		entryOf(id).cut = svc.gen
+		e := entryOf(id)
+		e.cut = svc.gen
+		e.gone()
 		releaseID(id, svc.gen)
 		tidy(id)
 	}
@@ -341,10 +345,11 @@ func Remove(ids ...string) error {
 }
 
 // RemoveThread removes the notes of a thread (Note.Thread) posted so far,
-// freeing their response slots: the IDs whose latest post is in the thread
-// at once, and every other note of the thread in Notification Center (plain
-// notes, earlier runs') once the system has listed them. A note posted after
-// the call is kept, even with the ID of one removed.
+// freeing their response slots: at once those this run sent (and a post of
+// the thread not sent yet is not sent), and every other note of the thread
+// in Notification Center (plain notes, earlier runs') once the system has
+// listed them. A note posted after the call is kept, even with the ID of one
+// removed.
 func RemoveThread(thread string) error {
 	b, err := ready()
 	if err != nil {
@@ -360,10 +365,13 @@ func RemoveThread(thread string) error {
 	now, cut := time.Now().UnixNano(), svc.gen
 	svc.listings++ // the entries stay until the listing arrives
 	for id, e := range svc.ids {
-		if e.thread == thread && e.post > e.cut {
-			e.cut = cut
+		if c, ok := e.current(); ok && c.thread == thread {
+			e.gone()
 			releaseID(id, cut)
 			ids = append(ids, id)
+		}
+		if e.thread == thread && e.inflight > 0 {
+			e.cut = max(e.cut, e.latest)
 		}
 	}
 	if svc.restoring.Load() {

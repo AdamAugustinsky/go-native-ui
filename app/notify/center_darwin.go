@@ -295,7 +295,8 @@ func observeActivation() {
 // didReceive is userNotificationCenter:didReceiveNotificationResponse:
 // withCompletionHandler:. The response is stored before the completion
 // handler tells the system it was handled: at once, or, for one that waits
-// for a free record, the handler is kept and called once it is stored.
+// for a free record, the handler is kept and called once it is stored (or
+// released unanswered if the app ends first).
 func didReceive(c *ffi.CB) {
 	fr := c.Frame()
 	traced(fr, "didReceiveResponse")
@@ -315,7 +316,7 @@ func didReceive(c *ffi.CB) {
 			objc.CallBlock(fr, objc.ID(handler))
 		}
 	case handler == 0:
-		p.ack = func() {}
+		p.ack, p.drop = func() {}, func() {}
 		p.wait()
 	default:
 		kept := new(objc.KeptBlock)
@@ -323,6 +324,11 @@ func didReceive(c *ffi.CB) {
 		p.ack = func() {
 			fr := cf.Acquire()
 			objc.CallKeptBlock(fr, kept)
+			cf.Release(fr)
+		}
+		p.drop = func() {
+			fr := cf.Acquire()
+			objc.ReleaseKeptBlock(fr, kept)
 			cf.Release(fr)
 		}
 		p.wait()
