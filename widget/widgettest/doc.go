@@ -40,4 +40,65 @@
 // never returns false, so a test plays as many lists of steps as it likes; a
 // Player used on its own as a Scripter does return false when its steps are
 // done, unless it loops.
+//
+// # Real windows (macOS)
+//
+// Offscreen frames take the platform out of the picture. RunLive opens the real
+// window for a few frames and reads what the system says about it. StartLive
+// keeps it open: a LiveApp runs the app's loop on the main thread (the test
+// package calls RunMain from TestMain) while the test goroutine drives it:
+//
+//	l := widgettest.StartLive(t, cfg, builder)
+//	l.Click(ui.RoleButton, "Press")                 // real NSEvents, through the pump
+//	l.Type("hello")                                 // key events, the view's keyDown:, the input method
+//	l.Scroll(x, y, 0, -125)                         // a trackpad scroll, built from a CGEvent
+//	l.Magnify(x, y, 0.5, 3)                         // a pinch, begun, changed, ended
+//	l.Until("the dialog is answered", 120, cond)    // frame time, never wall time
+//	l.Do(func(a *app.App) { ... AppKit ... })       // on the main thread, between frames
+//
+// Waits count frames, not seconds, because a runner's display can stall for
+// half a minute. Every hand-off to the main thread is bounded in wall time
+// (LiveOptions): a callback that never returns, a main thread that never
+// answers and a window that never draws end in a failure that says which. A
+// function given to Do runs on the main thread: it must not call t.Fatal or
+// t.Skip (the failure is reported, naming the mistake). A wait that sees no
+// frame looks at the environment and skips only with evidence that it cannot
+// draw (a locked screen, a hidden or covered window, a display that does not
+// tick while the run loop is alive); otherwise it fails, with the app's state
+// line.
+//
+// The input helpers are also functions of Win (NativeWindow): MouseEvent,
+// KeyEvent, Key (the US layout; KeyIn takes another, NamedKeyLayout reads one
+// without selecting it), ScrollEvent (whole points: a precise scroll event
+// has no fractions), ScrollLinesEvent (a wheel's fractional lines),
+// MagnifyEvent, RotateEvent, SmartMagnifyEvent, each building an NSEvent that
+// AppKit itself says is aimed at a pixel of the content. Post, Send and
+// SendToWindow hand an event to AppKit, and Dispatch picks the way that works
+// for its kind (a gesture goes to the window: [NSApp sendEvent:] does not hand
+// a synthetic one on to a view). TextClient calls the NSTextInputClient methods
+// of a view (setMarkedText, insertText, unmarkText, firstRect…) as an input
+// method does; ViewString and SetViewString read and set the text of a hosted
+// native view. Windows, FindMenuItem, Sheet, SetAppAppearance, OpenPlainWindow,
+// SendQuitEvent and PressCmdQ are the AppKit state and the app-level flows (the
+// quit, a menu item, an alert sheet, another window, the appearance).
+//
+// A flow that ends the process (an allowed quit) is a Scenario: the test binary
+// runs again as a child, RegisterScenario's function on its main thread, and
+// reports with Say. The flows of the application object (reopen, quit with no
+// window, delayed replies, a menu command with no window) are in
+// live/appflows_f3_darwin_test.go behind the gnui_f3 tag until F3 is merged.
+//
+// # Golden files, captures and fakes
+//
+// AssertTree and AssertImage compare with files in testdata, rewrite them with
+// -update (DefineUpdateFlag) and leave what the test got in testdata/failed;
+// images are compared in CIELAB with a perceptual Tolerance that is strict by
+// default (a control that moved by one pixel is seen; AssertImageRect compares
+// the control, not the window around it) and Exact compares raw pixels, alpha
+// included. ViewImage draws an NSView as AppKit does. Capture takes a
+// picture of the real window with GnuiShot when GNUI_GNUISHOT names its
+// script. The fakes of native surfaces: FakeDialogs answers an app's alerts and
+// panels, and the steps Command, Edit, Appearance and Do deliver a menu
+// command, an Edit action, a change of the system's appearance and any
+// function at an exact frame.
 package widgettest
