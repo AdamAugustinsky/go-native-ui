@@ -50,8 +50,8 @@ type ToolbarOpts struct {
 	// tracking separators do.
 	Panes [2]float32
 	// ContentUnder says content is scrolled under the toolbar: the band shows
-	// its bar and hairline (the scroll-edge effect), as it always does while
-	// the window is inactive.
+	// its bar and hairline (the scroll-edge effect) over the content pane
+	// (between Panes), as it always does while the window is inactive.
 	ContentUnder bool
 	// Pocket is how far below the toolbar, in pixels, the scroll edge
 	// reaches: a table's header pinned under the toolbar is in it (§4: the
@@ -196,29 +196,32 @@ func BeginToolbar(k *base.Kit, label string, o ToolbarOpts) Toolbar {
 	tb.w = float32(w)
 	h := theme.Snap(tb.spec.Height)
 
-	// the band: clear while nothing is under it in an active window, the
-	// scroll edge's bar and hairline otherwise; it moves the window
+	// the band moves the window; it is clear while nothing is under it in an
+	// active window, and otherwise shows the scroll edge's bar and hairline
+	// over the content pane (each pane has its own pocket: the sidebar's and
+	// the inspector's glass run to the top without one)
 	bar := o.Style != theme.ToolbarRex && theme.ScrollEdgeVisible(o.ContentUnder, !k.Inactive())
-	flags := ui.WindowDrag | base.Floating
-	if bar {
-		c.NextBG(GlassFill(k, GlassTitlebar))
-		flags |= ui.DrawBackground
-	}
 	theme.At(c, 0, 0, tb.w, h)
 	c.NextRole(ui.RoleGroup)
 	c.NextSemName(label)
-	tb.band = c.BoxKeyed(flags, tb.key, nil)
+	tb.band = c.BoxKeyed(ui.WindowDrag|base.Floating, tb.key, nil)
 	c.Push(tb.band)
 	if bar {
-		// the pocket's bar under a pinned header, and the hairline just below
-		// the pocket (y 52..52.5 measured: the line is outside the band)
-		pk := theme.Snap(max(o.Pocket, 0))
-		if pk > 0 {
-			theme.At(c, 0, h, tb.w, pk)
-			c.NextBG(GlassFill(k, GlassTitlebar))
-			c.BoxKeyed(ui.DrawBackground|base.Floating, ui.KeyN(tb.key, 2), nil)
+		bx0, bx1 := float32(0), tb.w
+		if o.Panes[0] > 0 {
+			bx0 = o.Panes[0]
 		}
-		theme.At(c, 0, h+pk, tb.w, r.Window.ScrollEdge.Line)
+		if o.Panes[1] > 0 {
+			bx1 = o.Panes[1]
+		}
+		// the bar down to the pocket's end (a header pinned under the
+		// toolbar), and the hairline just below it (y 52..52.5 measured: the
+		// line is outside the band)
+		pk := theme.Snap(max(o.Pocket, 0))
+		theme.At(c, bx0, 0, max(bx1-bx0, 0), h+pk)
+		c.NextBG(GlassFill(k, GlassTitlebar))
+		c.BoxKeyed(ui.DrawBackground|base.Floating, ui.KeyN(tb.key, 2), nil)
+		theme.At(c, bx0, h+pk, max(bx1-bx0, 0), r.Window.ScrollEdge.Line)
 		c.NextBG(r.Colors[theme.ScrollEdgeLine])
 		c.BoxKeyed(ui.DrawBackground|base.Floating, ui.KeyN(tb.key, 1), nil)
 	}

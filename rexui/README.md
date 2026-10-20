@@ -156,6 +156,10 @@ sidebar search fill 0, toolbar capsule ≤ 1.5, scroll-edge bar over the
 header ≤ 1.2; ink of the title, headers, rows, details, selected rows, toolbar
 symbols and the search placeholder ≤ 3 (2.9 at worst, most 0).
 
+Live windows on the MacBook (`Chrome D4`, light and dark, key and not key)
+give the same numbers: fills ΔE ≤ 1.5, ink ≤ 1.9, traffic lights at the
+scenes' centres (26, 26 and 19, 20).
+
 Until the hosted materials (N3) land, the chrome draws each material's
 measured fallback; every piece asks for its material through `GlassFill`
 (`glass.go`), the one place the native materials take over.
@@ -207,9 +211,10 @@ are reported against `theme/` (D1), not changed there:
   - Toolbar symbols are labelColor made opaque by the vibrancy (#000000,
     #FFFFFF; `SidebarLabel`'s value) and #A6A6A6 / #666666 inactive, lighter
     than `TitleTextInactive`.
-  - The scroll edge's hairline lies just below the band (y 52–52.5), and
-    under a table header pinned below the toolbar the pocket's bar covers
-    the header (`ToolbarOpts.Pocket`).
+  - The scroll edge's bar and hairline cover the content pane only (the
+    sidebar's and inspector's glass run to the top), the hairline lies just
+    below the band (y 52–52.5), and under a table header pinned below the
+    toolbar the pocket's bar covers the header (`ToolbarOpts.Pocket`).
   - Sidebar symbols are 16 pt; the title's field starts 4 after the
     symbol's own width (not a 20-pt column) and draws its text 2 in, as
     the headers' (`SidebarRecipe.FieldInset`).
