@@ -339,16 +339,7 @@ func TestEditorUndoRedo(t *testing.T) {
 	l.Type("hello")
 	l.Until("typed", 120, textIs(p, "hello"))
 	undo := func() { pressIn(l, ui.KeyCode('Z'), ui.ModSuper) }
-	// ⇧⌘Z made up as an NSEvent does not match Redo's key equivalent
-	// through the pump (⌘Z does match Undo's): redo is chosen in the menu.
-	redo := func() {
-		l.Do(func(*app.App) {
-			if it, ok := widgettest.FindMenuItem("Edit", "Redo"); !ok || !it.Perform() {
-				t.Error("Edit ▸ Redo is missing or disabled")
-			}
-		})
-		l.Frames(2)
-	}
+	redo := func() { pressIn(l, ui.KeyCode('Z'), ui.ModSuper|ui.ModShift) } // a real ⇧⌘Z: Redo's key equivalent
 	undo()
 	l.Until("typing undone", 120, textIs(p, ""))
 	redo()
