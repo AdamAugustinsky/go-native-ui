@@ -478,6 +478,11 @@ func (w *Window) FocusHost(id HostID) {
 			return
 		}
 		target = s.view
+		if objc.SendBool1(target, selIsKindOfClass, uintptr(clsScrollView())) { // a scroll view's document view takes the keyboard (an Editor)
+			if d := objc.Send(target, selDocumentView); d != 0 {
+				target = d
+			}
+		}
 		if s.kind == HostGlass {
 			if f := objc.Send(objc.Send(s.content, selSubviews), selFirstObject); f != 0 {
 				target = f
@@ -504,7 +509,14 @@ func (w *Window) hostOf(v objc.ID) int {
 	return 0
 }
 
-var nsViewCls objc.ID
+var nsViewCls, nsScrollViewCls objc.ID
+
+func clsScrollView() objc.ID {
+	if nsScrollViewCls == 0 {
+		nsScrollViewCls = objc.Cls("NSScrollView")
+	}
+	return nsScrollViewCls
+}
 
 func nsViewClass() objc.ID {
 	if nsViewCls == 0 {

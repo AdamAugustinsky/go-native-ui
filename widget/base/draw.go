@@ -142,3 +142,11 @@ func (k *Kit) Icon(id icon.ID, color uint32) ui.ID {
 
 // IconSize is the size in pixels of the box Icon builds for id.
 func (k *Kit) IconSize(id icon.ID) (w, h float32) { return k.icons.Size(id) }
+
+// IconAlignWidth is the exact width in pixels of icon id's content, as
+// layouts measure it (icon.Atlas.AlignWidth).
+func (k *Kit) IconAlignWidth(id icon.ID) float32 { return k.icons.AlignWidth(id) }
+
+// IconMediumWidth is the exact width in pixels of icon id's image at the
+// medium symbol scale (icon.Atlas.MediumWidth).
+func (k *Kit) IconMediumWidth(id icon.ID) float32 { return k.icons.MediumWidth(id) }
