@@ -16,6 +16,7 @@ import (
 // the theme's Follower takes them from the context. An Offscreen app never
 // calls this, so its themes keep their own values.
 func (a *App) syncAppearance() {
+	a.UI.SetTabReachesControls(platform.TabReachesControls()) // the Keyboard navigation setting on macOS; every control elsewhere
 	s := platform.SystemAppearance()
 	a.UI.SetSystemAppearance(ui.Appearance{Dark: s.Dark, Accent: s.Accent, Known: s.Known})
 	serial := platform.AppearanceSerial() // before the read: a change during it is read next frame

@@ -3,6 +3,7 @@ package app
 import (
 	"testing"
 
+	"gonativeui/platform"
 	"gonativeui/ui"
 )
 
@@ -38,5 +39,19 @@ func TestChromeFollowsTheDeclaredModeOncePerChange(t *testing.T) {
 	}
 	if n := testing.AllocsPerRun(100, func() { a.UI.SetChromeDark(true); a.syncChrome(&w) }); n != 0 {
 		t.Fatalf("%v allocations per frame", n)
+	}
+}
+
+// Each frame hands the UI what Tab reaches on this system (macOS: the
+// Keyboard navigation setting; elsewhere every control).
+func TestFrameHandsTheUITheTabConvention(t *testing.T) {
+	a := &App{UI: ui.New(nil)}
+	want := platform.TabReachesControls()
+	for _, start := range []bool{true, false} {
+		a.UI.SetTabReachesControls(start)
+		a.syncAppearance()
+		if got := a.UI.TabReachesControls(); got != want {
+			t.Errorf("UI started with %v: after syncAppearance %v, the platform says %v", start, got, want)
+		}
 	}
 }

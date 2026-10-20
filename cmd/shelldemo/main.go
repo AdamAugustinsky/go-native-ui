@@ -584,7 +584,7 @@ func (d *demo) inspectorView(c *ui.Context, p palette, w float32) {
 	c.NextFlags(theme.Floating)
 	c.NextPos(x, pt(toolbarH+58))
 	c.NextSize(ui.Px(pt(inspectorW-32)), ui.Px(pt(22)))
-	c.Host(uint32(d.field), ui.HashString(0, "field"), ui.HostFocusable)
+	c.Host(uint32(d.field), ui.HashString(0, "field"), ui.HostFocusable|ui.HostTextEntry)
 	c.NextFlags(theme.Floating)
 	c.NextPos(x, pt(toolbarH+96))
 	c.NextSize(ui.Px(pt(28)), ui.Px(pt(28)))

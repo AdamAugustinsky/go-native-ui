@@ -435,7 +435,7 @@ func (t *TableHead) BeginHeaderCell(hc *HeaderCell, flags ui.Flags) ui.ID {
 			state = ui.SemSortDescending
 		}
 	}
-	f := ui.Focusable | ui.KeepFocus | ui.FocusAnimation
+	f := ui.Focusable | ui.KeepFocus | ui.FocusAnimation // (a column header is a control; the table's body is the list)
 	acts := ui.ActFocus | ui.ActIncrement | ui.ActDecrement
 	if hc.Col.Sortable {
 		f |= ui.Clickable | ui.HotAnimation

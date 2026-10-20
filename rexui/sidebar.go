@@ -202,7 +202,7 @@ func Sidebar(k *base.Kit, label string, st *SidebarState, items []SidebarItem, o
 	c.NextRole(ui.RoleList)
 	c.NextSemName(label)
 	c.NextPadding(0, o.Top+theme.Snap(k.Pt(o.Pad)), 0, 0)
-	flags := ui.DrawBackground | ui.Clip | ui.Focusable
+	flags := ui.DrawBackground | ui.Clip | ui.Focusable | ui.FocusList
 	if k.Disabled() {
 		flags = ui.DrawBackground | ui.Clip | ui.Disabled
 	}
