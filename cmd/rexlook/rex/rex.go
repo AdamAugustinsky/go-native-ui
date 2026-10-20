@@ -34,11 +34,12 @@
 package rex
 
 import (
-	"gonativeui/icon"
+	"gonativeui/rexui"
 	"gonativeui/text"
 	"gonativeui/theme"
 	rextheme "gonativeui/theme/rex"
 	"gonativeui/ui"
+	"gonativeui/widget/base"
 )
 
 // WindowPt is the window size of the reference in points; TitlebarPt the
@@ -75,13 +76,20 @@ type Rex struct {
 	Scale float32 // pixels per point
 	K     float32 // pixels per reference pixel (the reference is 2×)
 
-	// The Rex theme resolved for this window (fonts, metrics, palette and the
-	// chrome that draws the background, panes, dividers and titlebar), the
-	// monospace cell grid of the terminal content, and the icons.
-	th    theme.Resolved
+	// The component kit of the window (widget/base): the Rex theme resolved
+	// for it (fonts, metrics, palette and the chrome that draws the
+	// background, panes, dividers and titlebar), which follows the system's
+	// light or dark mode and accent unless a preference says otherwise, and
+	// the icons. th is the kit's theme. cells is the monospace cell grid of
+	// the terminal content.
+	k     *base.Kit
+	th    *theme.Resolved
 	cells rextheme.Grid
-	icons *icon.Atlas
-	fol   theme.Follower // light or dark, and the accent: the system's unless a preference says otherwise
+
+	// The tabs are rexui's Tabs (Rex's capsule): bar is their state, tabList
+	// what the bar is told each frame.
+	bar     rexui.TabBar
+	tabList [maxTabs]rexui.Tab
 
 	tabs    [maxTabs]tab
 	nTabs   int
@@ -122,26 +130,41 @@ func New(ts TextSystem, scale float32) *Rex {
 // NewApp returns a Rex that the window loop (package app) finishes in Init,
 // once the text system and the renderer exist; set Traffic before that if the
 // scene draws the traffic lights itself.
-func NewApp() *Rex { return &Rex{nextUID: 1} }
+func NewApp() *Rex {
+	r := &Rex{nextUID: 1}
+	r.k = base.NewKit(nil, nil, rextheme.Theme()) // holds the preference until Init makes the real one
+	return r
+}
 
 func (r *Rex) init(ts TextSystem, scale float32) {
 	r.ts = ts
-	r.icons = icon.New(ts, iconSpecs[:]...)
+	pref := r.k.Preference()
+	r.k = base.NewKit(nil, ts, rextheme.Theme())
+	r.k.SetPreference(pref)
+	for i := range iconSpecs {
+		r.k.AddIcon(iconSpecs[i]) // the scene's icons follow the standard ones, as iconID says
+	}
+	r.th = r.k.Theme()
+	r.bar.Mod = ui.ModSuper // Rex's tab shortcuts are ⌘ on every system
 	r.SetScale(scale)
 	r.initTabs()
 }
 
 // AttachRenderer gives the icon atlas a texture on u (the renderer) and
-// uploads it. Call it before the first frame and again when the renderer is
-// recreated; symbol icons draw nothing until it has been called.
-func (r *Rex) AttachRenderer(u ui.Uploader) { r.icons.Attach(u) }
+// uploads it, when the renderer is recreated. The first frame attaches it to
+// the ui context's uploader (ui.Context.AtlasSync) itself.
+func (r *Rex) AttachRenderer(u ui.Uploader) {
+	if a := r.k.Icons(); a != nil {
+		a.Attach(u)
+	}
+}
 
 // SetPreference sets which mode the scene shows: the system's (the default),
 // or light or dark whatever the system does. A change crossfades.
-func (r *Rex) SetPreference(p theme.Preference) { r.fol.SetPreference(p) }
+func (r *Rex) SetPreference(p theme.Preference) { r.k.SetPreference(p) }
 
 // Preference is the preference set with SetPreference.
-func (r *Rex) Preference() theme.Preference { return r.fol.Preference() }
+func (r *Rex) Preference() theme.Preference { return r.k.Preference() }
 
 func (r *Rex) uid() uint32 {
 	r.nextUID++
@@ -157,12 +180,12 @@ var (
 	keyCmd   = ui.HashString(keyRoot, "cmd")
 	keyBG    = ui.HashString(keyRoot, "bg")
 	keyBar   = ui.HashString(keyRoot, "titlebar")
+	keyTabs  = "tabs"
 	keyAnim  = ui.HashString(keyRoot, "anim")
 	keyFade  = ui.HashString(keyAnim, "fade")
 	keyFocus = ui.HashString(keyAnim, "focus")
 	keyMaxT  = ui.HashString(keyAnim, "max")
 	keyAnyT  = ui.HashString(keyAnim, "maxany")
-	keyTabT  = ui.HashString(keyAnim, "tab")
 	keyGlide = ui.HashString(keyAnim, "glide")
 	keyKeyW  = ui.HashString(keyAnim, "keywindow")
 )
@@ -174,7 +197,9 @@ func (r *Rex) TabRectPt(i int) [4]float32 {
 	return [4]float32{t[0] / r.Scale, t[1] / r.Scale, t[2] / r.Scale, t[3] / r.Scale}
 }
 
-func tabKey(uid uint32) ui.Key  { return ui.KeyN(keyTab, uint64(uid)) }
+// tabKey is the key of the box of the tab with the uid (rexui.TabBar.TabKey).
+func (r *Rex) tabKey(uid uint32) ui.Key { return r.bar.TabKey(uint64(uid)) }
+
 func paneKey(uid uint32) ui.Key { return ui.KeyN(keyPane, uint64(uid)) }
 func divKey(uid uint32) ui.Key  { return ui.KeyN(keyDiv, uint64(uid)) }
 
@@ -199,7 +224,7 @@ func (r *Rex) Build(c *ui.Context) {
 	if s := c.Scale(); s != r.Scale {
 		r.SetScale(s)
 	}
-	r.fol.Update(c, &r.th)
+	r.k.Begin(c) // the fonts and icons at this scale, and the mode and accent of the frame
 	r.th.Backdrop = r.backdrop
 	if w != r.lastW || h != r.lastH {
 		r.glide = false // a resize follows the window exactly
@@ -208,4 +233,5 @@ func (r *Rex) Build(c *ui.Context) {
 
 	r.update(c)
 	r.draw(c)
+	r.k.End()
 }

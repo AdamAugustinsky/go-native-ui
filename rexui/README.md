@@ -38,6 +38,10 @@ directly with `k.Kit`, or copies a component and owns it.
 | `BeginDialog` / `Action` / `EndDialog` | — | — | A sheet drawn by us, for custom content: radius 26, 20 pt padding, large capsule buttons with the default last, Return is the default, Escape is Cancel, Tab stays inside, the window behind is inert and does not dim, as behind a macOS sheet. See "Dialogs, alerts and tooltips". |
 | `Tooltip` | — | — | The system's tooltip on macOS (a region AppKit shows after its own delay); a drawn one elsewhere. |
 | `Label`, `LabelBytes`, `Caption` | the macOS text styles × colour roles | — | Zero value: body text in labelColor. |
+| `Tabs` (`TabBar`) | Rex, Neutral | — | Rex's tab capsule (rexlook's titlebar), in a titlebar band or in content: a press chooses, × on hover and a middle click close, a drag reorders live while the others slide, the strip scrolls when the tabs do not fit, ⌃Tab/⌃⇧Tab, ⌘⇧[ ], ⌘1…9 (keys or `TabCommands` menu commands). Tab-list and tab roles. Not AppKit's window tabs. |
+| `BeginToolbar` … `End` | Plain 32, Compact 40, Unified 52, Rex 46 | — | Items (`Item`, `Nav`, `Picker`, `Menu`, groups, `Search`/`SearchButton`, `Title`, `Flexible`, `Space`, `BeginCustom`) in glass capsules laid out per pane (`Panes`, `NextPane`). The band's empty parts drag the window. `TitlebarFor(style)` gives `app.Config.Titlebar` and `TrafficLights`. |
+| `Sidebar`, `SidebarSearch` | one-line and two-line (`Detail`) rows | medium rows; `RowH`/`HeaderH` | Source list on glass: headers, symbols, disclosure (13 per level), the selection inset 10 / radius 8 in the accent, grey or inactive grey. Up/Down, Left/Right, list and list-item roles. |
+| `PathBar` | — | control sizes | NSPathControl's standard style: symbol and name per component, chevrons; the middle names drop out when it is narrow. |
 | `BeginList` / `EndList` | Inset (default), FullWidth; striped | — | NSTableView's selection: selectedContentBackgroundColor with white text while the list has focus in the key window, unemphasised (label-coloured text) otherwise. Selected neighbours merge into one block (inset: rounded at its ends, a 1 pt divider between rows). No hover, no per-row focus ring. |
 | `BeginTable` / `TableHeader` / `EndTable` | as `List` | — | 28 pt header with 1 × 16 pt column separators and sort chevrons; cells padded 10 pt, 8 pt at the outer sides. |
 | `BeginOutline` / `EndOutline` | as `List` | — | NSOutlineView: disclosure chevrons, 13 pt per level, Left/Right collapse and expand (Option: the subtree). Virtualised over a pre-order `base.Tree`. |
@@ -157,6 +161,104 @@ sizes, and a toolbar toggle. `progress-indeterminate`, `level` radius and
 toggle widths (the fake text system measures differently) are left out of the
 comparison.
 
+### Window chrome (D4)
+
+`cmd/chromedemo` builds the Finder, Settings and Notes scenes of
+`tools/appkitscenes` (same window sizes, panes, items and symbols) from
+`Toolbar`, `Sidebar`, `Table`, `PathBar` and `Tabs`, plus a window of Rex's
+tabs, with the scenes' contents (`tools/appkitscenes/main.m`: the 48 files,
+the inspector, the settings form, the note) so that the pictures compare side
+by side. `-plain` opens a striped backdrop window for glass captures and
+`-drawn` turns the system's materials off. The layout audit
+(`demo/audit_test.go`) runs on every scene, light and dark, at the top and
+scrolled, and with a settings pop-up menu open.
+`chromedemo -scene NAME -measure` prints the chrome's frames in points and
+the toolbar's capsules beside AppKit's platters in the reference set for
+this host (`internal/appkitref.Select`: the Mac mini's here);
+`-o` renders the scene offscreen. Compared with the D0 dumps and captures
+(`appkit-ref/scenes/captures`, macOS 27.2), 2026-10-19:
+
+| Scene | Within ±0.5 pt | Off |
+|---|---|---|
+| finder | sidebar toggle 96, back/forward 188–274, title 284, collapsed picker 599.5–645.5, Group menu 653.5–701.5, share/tags group 705.5–789.5 (items 8 apart), Action 793.5–838, search 846–882, inspector toggle 898; sidebar rows and headers (52, 71 … 263, 276), row text ink 9 of 10 rows | Shared's text 2.5 right (AppKit puts it 1 after its 26-wide image, not 4) |
+| settings | back/forward 223–309, title 319, sidebar search 10, 56, 195 × 24, rows 86, 105 … 425 | — |
+| notes | sidebar toggle 91.5 (31 wide vs 31.5), Delete 137 (14.5 after the toggle, `SidebarGap`), title 250, format group 517, Media and Share one capsule 644.5–716 (`BeginShared`, 2 apart), search field 726–892, rows 40, 64 … 450 (52 tall), headers 24 | New Note 480 vs 477 (AppKit's viewer there is 40 wide around a 28.5 platter; the rule is not found) |
+
+Colours at the same points, ΔE2000, light/dark × key/inactive: sidebar and
+inspector glass ≤ 1.3, selections (emphasised, unemphasised, inactive) ≤ 0.7,
+sidebar search fill 0, toolbar capsule ≤ 1.5, scroll-edge bar over the
+header ≤ 1.2; ink of the title, headers, rows, details, selected rows, toolbar
+symbols and the search placeholder ≤ 3 (2.9 at worst, most 0).
+
+Live windows on the MacBook (`Chrome D4`, light and dark, key and not key)
+give the same numbers: fills ΔE ≤ 1.5, ink ≤ 1.9, traffic lights at the
+scenes' centres (26, 26 and 19, 20).
+
+With the system's glass, live on the Mac mini (2026-10-20, 16 captures, the
+same points): the drawn fills within ΔE 2; the toolbar capsules, now the
+system's glass, 2.3–3.6 darker-than-AppKit greys in dark mode (the glass
+adapts to what is behind the window, which differs between the machines).
+Over a striped window (`-plain`) nothing shows through the content; the
+sidebar's glass takes the tint of what is behind it at its edge, as AppKit's
+does (wallpaper tinting).
+
+Second pass (2026-10-20), offscreen against the same captures: the window
+titles' ink within 0.5 (their text 2 into the title field, `TitleTextX`);
+Finder's file list is `rexui.Table` (header in the pocket, `ClearHeader`;
+Size right-aligned under its title; no separator after the filling Kind
+column; secondary text on the emphasised selection white at 0.7, measured
+#B3D1F6 on #0064E1); the settings tiles 20 × 20, radius 5, 11-pt white
+symbols, half opaque in an inactive window; pop-ups as wide as their widest
+option and 47.5, at the row's end; tags 16-pt circles (17 measured).
+
+The glass is the system's in a window (`base.Kit.Materials`, set from
+`Window.HasMaterials`): `GlassFill` leaves the box clear and `GlassRegion`
+marks it (sidebar, inspector, each capsule; the band over the content is an
+opaque `AreaTitlebar` region of the bar's or the content's colour, since the
+capsules lie below the window's pixels). Offscreen, under Reduce
+Transparency and off macOS the measured fallbacks are drawn. The rows of a
+sidebar and the content scroll below the band, clipped there, where AppKit
+fades them under it.
+
+On the theme's values from D3b forms (2026-10-20): toolbar symbols
+`CapsuleSpec.Glyph`, items at least the style's `ItemW`, menus
+`CapsuleSpec.MenuItemW`, and the roles `ToolbarSymbolInactive`,
+`SelectedRowTextInactive`, `SidebarDetail`, `SidebarSearchFill(Inactive)`.
+Against the Mac mini's Finder (`captures-macmini`, 27.2 26B5101f, AppKit's
+frames from its tree) every capsule is within 0.5: WideGap next to a menu
+or a group as well as a picker (8.5 there; 4.5 on 26B5091g), the inspector
+pane's items half a point past its edge (`ToolbarRecipe.InspectorEdge`),
+Group and Share 0.5 wider than AppKit's (our symbols' widths are whole
+pixels). Notes' search field is 167 there (166 on 26B5091g); its checklist
+item is 31 there (35.5 ours, 36 on 26B5091g), so the format group is 4.5
+wider and New Note 2 left of AppKit's 477.
+
+With legacy scrollers (the system's style, followed live; a mouse on the
+Mac mini) every scroll view's content leaves the bar's 17 pt beside it and
+the bar is the legacy one: the sidebar's an opaque knob, 11 pt wide and 3 in,
+in its slot (#A5A5A5 in #D8D8D8, #5A5A5A in #343434; #ABABAB in #DEDEDE,
+#585858 in #323232 inactive); the settings form's boxes end 20 before it (its lines between rows lie
+half a point up, on the rows' boundary, 111.5–112.5 as AppKit's).
+In the frame the style changes the bar is at the view's edge already
+(`base.ScrollBars`). `chromedemo -legacy` renders them offscreen, which is
+overlay otherwise; against `captures-macmini` the bars, knobs and the boxes'
+ends are within 0.5 pt, the content knob #747474 / #A5A5A5 against
+#7A7A7A / #9F9F9F (`ListLook.LegacyKnob`, D3b's).
+
+Without the pointer (review fixes, 2026-10-20): a sidebar group's Show or
+Hide is a tab stop (Space toggles it; a click leaves the focus with the
+list), and an assistive technology's press works on it and on a row's
+disclosure; a row the keyboard selects scrolls into view. Every tab that
+can close has its Close Tab button in the tree, shown on hover; disabled
+tabs take no press and say so; tabs follow Reduce Motion and show no focus
+ring in an inactive window; a tab the app chooses comes into view; Escape
+during a drag puts the tab back where it started, as browsers do. The path
+bar's components are tab stops. Toolbar items that do not fit their pane go,
+with the rest of the pane, into a » overflow menu at the band's end, as
+NSToolbar's do (`Toolbar.End` reports them; with native menus a choice
+comes back as the item's Clicked); the collapsed picker opens for Show Menu
+and Expand, and back and forward show the focus ring.
+
 ### Left to the eye, and why
 
 - `push-glass` offscreen: AppKitRef's `cacheDisplay` renders Liquid Glass as
@@ -206,6 +308,39 @@ Still in recipe fields:
   - Search: magnifier centred at 13.75, text at 24, clear button centred 12 from the end.
   - Pop-up chevron: centred 14 from the end (borderless 10, pull-down 13.25); borderless label pad 8.
   - Box: title band 12, title x 10.
+- Window chrome (D4):
+  - Toolbar symbols are 13 pt in both styles (AppKit's images: 15–20 wide);
+    `CapsuleSpec.Glyph` says 16.
+  - A one-symbol item is its symbol and 12 (`ToolbarRecipe.ItemPad`), at
+    least 24 compact and 36 unified; inside a group, the symbol and 17
+    (compact) or 21 (unified). `ToolbarSpec.ItemW` 28 is too wide for
+    compact (27 measured for trash).
+  - A menu item is its symbol and 27.5, at least 44.5 (44.5 and 47.5
+    measured); `CapsuleSpec.MenuW` is one 46.
+  - Toolbar symbols are labelColor made opaque by the vibrancy (#000000,
+    #FFFFFF; `SidebarLabel`'s value) and #A6A6A6 / #666666 inactive, lighter
+    than `TitleTextInactive`.
+  - The scroll edge's bar and hairline cover the content pane only (the
+    sidebar's and inspector's glass run to the top), the hairline lies just
+    below the band (y 52–52.5), and under a table header pinned below the
+    toolbar the pocket's bar covers the header (`ToolbarOpts.Pocket`).
+  - Sidebar symbols are 16 pt; the title's field starts 4 after the
+    symbol's own width (not a 20-pt column) and draws its text 2 in, as
+    the headers' (`SidebarRecipe.FieldInset`).
+  - A selected row in an inactive window is #676767 / #999999; a row's
+    detail line black 43 % / white 36 % (0.7 white on the accent); a
+    two-line row's title is semibold.
+  - The sidebar's search field is a filled capsule: #EAEAEA / #4E4E4E,
+    #E5E5E5 / #464646 inactive; in a key window a #FFFFFF / #727272 rim
+    inside its edge and a #F4F4F4 / #565656 glow fading into the fill
+    towards the middle, with a hairline just outside it (#D8D8D8 / #8C8C8C;
+    #CDCDCD / #181818 inactive).
+  - Single-line labels end in "…" (`ui.EllipsisOverflowX`: sidebar rows,
+    table cells and headers, pop-ups, the path bar); tabs keep their fade.
+    A row's text ends 22 before the sidebar's edge (`SidebarRecipe.TextEnd`).
+  - A disclosure in a sidebar row lies between the selection's edge and
+    the symbol; no AppKit capture has a nested source-list row, so this
+    place is not measured.
   - Lists: inset 10, rows 10 pt below the top (5 below a header), block
     divider inset 6; header 28 with 1 × 16 column separators; cell padding
     10, 8 at the outer sides; disclosure x 2, width 13, content at 15 + 13
