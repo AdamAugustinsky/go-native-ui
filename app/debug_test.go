@@ -317,7 +317,7 @@ func TestInspectHostReceivesTheSnapshot(t *testing.T) {
 		t.Errorf("clip %v, want the window", in.Clip)
 	}
 	// the panel is right-aligned; with a host it is not drawn
-	if n := diffIn(withPanel, img, image.Rect(220, 0, 400, 100)); n < 300 {
+	if n := diffIn(withPanel, img, image.Rect(220, 0, 400, 100)); devBuild && n < 300 { // a release build has no panel
 		t.Errorf("the panel did not leave the window (%d pixels differ)", n)
 	}
 }
