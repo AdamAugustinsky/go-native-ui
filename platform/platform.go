@@ -33,6 +33,9 @@
 //	                                      native alert and file panel sheets (macOS; ErrUnsupported elsewhere); the answer is an EvDialog, see dialog.go
 //	(*Window).SetTooltipRegions(r)        native tooltips by content rectangle (macOS; no-op elsewhere); diffed, cheap to call every frame
 //	(*Window).SetTooltipText(f)           where the tooltip text comes from, asked for on demand when the system shows one
+//	(*Window).SetDropKinds(k), SetDragHandler(h), StartDrag(spec)
+//	                                      drag and drop in and out (macOS; ErrDragUnsupported elsewhere), see drag.go
+//	DragThreshold() float32               how far a press moves before it is a drag, in logical units
 //	(*Window).Close()
 //	SetSecureInput(on bool)               macOS: bracket EnableSecureEventInput for a password field (balanced, released while the app is inactive); no-op elsewhere
 //	Clipboard() string                    plain UTF-8 text of the system clipboard; main thread
@@ -131,6 +134,11 @@ const (
 	EvMagnify                 // a pinch: Amount is the change in scale (0.1 = grow by 10 %), Phase its phase (PhaseNone: a device without phases), X, Y where it is; see Gestures
 	EvSmartMagnify            // the two-finger double tap (smart zoom): X, Y where it happened
 	EvRotate                  // a two-finger rotation: Amount in degrees, counterclockwise positive as the user sees it, Phase, X, Y
+	EvDragEnter               // a drag came over the window (drag.go): X, Y, Code the kinds offered, SelStart the operations allowed, SelLen the items, Tag the drag's number
+	EvDragMove                // the pointer moved in a drag over the window: as EvDragEnter
+	EvDragLeave               // the drag left the window or was cancelled: Tag
+	EvDrop                    // the drag was dropped: Code the kind delivered, Text its data, X, Y, Tag; FlagFailed when it could not be read
+	EvDragEnd                 // a drag out ended: Tag is its DragTicket, Code the operation performed (DragOpNone: cancelled)
 	EvHostEdit                // a hosted editor (Editor, N4) has signals or completion commands to take: Tag is its HostID; the app draws a frame
 )
 

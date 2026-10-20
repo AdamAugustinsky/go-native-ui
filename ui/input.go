@@ -350,6 +350,11 @@ type Input struct {
 	MenuIndex     int32
 	MenuRev       uint64
 	HasMenuChoice bool
+
+	// Drop is the drag and drop part of the input: a drag from another
+	// application over the window, a drop, the end of a drag this app started
+	// (drag.go).
+	Drop DropInput
 }
 
 // PushEdit queues an edit action for the focused text field; it reports false
@@ -564,6 +569,7 @@ func (in *Input) ClearFrame() {
 	in.NEdit, in.NCommands, in.NActions, in.NGestures = 0, 0, 0, 0
 	in.HasPaste, in.HasReplace, in.ReplaceN = false, false, 0
 	in.HasMenuChoice = false
+	in.Drop.clearFrame()
 	if cap(in.Paste) > MaxKeptPaste { // do not hold on to more than a supported paste
 		in.Paste = nil
 	}
