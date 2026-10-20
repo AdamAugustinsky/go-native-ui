@@ -130,6 +130,7 @@ type State struct {
 	icons [numIcons]icon.ID
 
 	lists listState // the lists' samples (lists.go)
+	d7a   d7aState  // the D7a samples (d7a.go)
 }
 
 // The glyphs of AppKitRef's icon buttons: SF Symbols at AppKit's default
@@ -581,6 +582,7 @@ var Pages = [...][]string{
 	{}, // every sample but those of the later pages
 	{"label-styles"},
 	listPage, // lists.go
+	d7aPage,  // d7a.go
 }
 
 // Page is the samples of page p (Pages) in catalogue order.

@@ -822,6 +822,17 @@ static void defineSamples(void) {
 		w.color = NSColor.systemTealColor;
 		return w;
 	});
+	add(@"select", @"color-well-swatch", ^{ // the swatch of "color-well"
+		NSColorWell *w = [NSColorWell colorWellWithStyle:NSColorWellStyleDefault];
+		w.color = NSColor.systemTealColor;
+		return w;
+	});
+	add(@"select", @"color-well-disabled", ^{
+		NSColorWell *w = [NSColorWell colorWellWithStyle:NSColorWellStyleDefault];
+		w.color = NSColor.systemTealColor;
+		w.enabled = NO;
+		return w;
+	});
 	add(@"select", @"date-picker", ^{
 		NSDatePicker *d = [NSDatePicker new];
 		d.datePickerElements = NSDatePickerElementFlagYearMonthDay;
@@ -883,6 +894,43 @@ static void defineSamples(void) {
 	add(@"field", @"textview", ^{
 		return textScroll(NSScrollerStyleOverlay, NSMakeSize(320, 110), NO);
 	}).size = NSMakeSize(320, 110);
+
+	// D7a: the states of the combo box, token field and colour well that
+	// rexui's samples (rexui/catalog/d7a.go) are set against, each under its
+	// own name; the "-chip", "-button" and "-swatch" ones are the same control
+	// as "token", "combo" and "color-well", measured at the part they name.
+	struct {
+		NSString *n;
+		BOOL token, en, focus;
+	} d7a[] = {
+		{@"combo-focused", NO, YES, YES},
+		{@"combo-disabled", NO, NO, NO},
+		{@"combo-button", NO, YES, NO},
+		{@"token-focused", YES, YES, YES},
+		{@"token-disabled", YES, NO, NO},
+		{@"token-chip", YES, YES, NO},
+	};
+	for (size_t i = 0; i < sizeof d7a / sizeof d7a[0]; i++) {
+		__auto_type c = d7a[i];
+		Sample *s = add(@"field", c.n, ^NSView * {
+			NSTextField *f;
+			if (c.token) {
+				NSTokenField *t = [NSTokenField new];
+				t.objectValue = @[ @"Alpha", @"Beta" ];
+				f = t;
+			} else {
+				NSComboBox *cb = [NSComboBox new];
+				[cb addItemsWithObjectValues:@[ @"Combo", @"Other" ]];
+				cb.stringValue = @"Combo";
+				f = cb;
+			}
+			f.font = [NSFont systemFontOfSize:[NSFont systemFontSizeForControlSize:NSControlSizeRegular]];
+			f.placeholderString = @"Placeholder";
+			f.enabled = c.en;
+			return f;
+		});
+		s.size = NSMakeSize(c.token ? 200 : 160, 0), s.focus = c.focus;
+	}
 
 	// lists
 	Sample *t;
