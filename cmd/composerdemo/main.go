@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"gonativeui/app"
+	"gonativeui/menu"
 	"gonativeui/platform"
 	"gonativeui/theme/rex"
 	"gonativeui/ui"
@@ -103,6 +104,9 @@ func (d *demo) Init(a *app.App) error {
 	d.a = a
 	d.k = widget.NewKit(a.UI, a.Text, rex.Theme())
 	a.UI.Reserve(256)
+	if err := d.editMenu(a); err != nil {
+		return err
+	}
 	ed, err := base.NewNativeEditor(a.Win, platform.EditorOptions{Placeholder: "Message", MaxLen: 4000, InsetX: 4, InsetY: 6})
 	if err != nil {
 		return err
@@ -112,6 +116,31 @@ func (d *demo) Init(a *app.App) error {
 	}
 	d.ed = ed
 	d.spans = make([]platform.TextSpan, 0, 64)
+	return nil
+}
+
+// editMenu gives the window the standard Edit menu (N1's roles reach the
+// text view: Undo, Cut, Copy, Paste, Select All, and AppKit's Writing Tools,
+// Dictation and Emoji & Symbols items).
+func (d *demo) editMenu(a *app.App) error {
+	cmds := []menu.Command{
+		{ID: 1, Title: "Undo", Role: menu.RoleUndo, Shortcut: menu.Shortcut{Key: 'Z', Primary: true}},
+		{ID: 2, Title: "Redo", Role: menu.RoleRedo, Shortcut: menu.Shortcut{Key: 'Z', Primary: true, Mods: ui.ModShift}},
+		{ID: 3, Title: "Cut", Role: menu.RoleCut, Shortcut: menu.Shortcut{Key: 'X', Primary: true}},
+		{ID: 4, Title: "Copy", Role: menu.RoleCopy, Shortcut: menu.Shortcut{Key: 'C', Primary: true}},
+		{ID: 5, Title: "Paste", Role: menu.RolePaste, Shortcut: menu.Shortcut{Key: 'V', Primary: true}},
+		{ID: 6, Title: "Select All", Role: menu.RoleSelectAll, Shortcut: menu.Shortcut{Key: 'A', Primary: true}},
+	}
+	items := make([]menu.Item, len(cmds))
+	for i, c := range cmds {
+		items[i] = menu.Item{Kind: menu.ItemCommand, Command: c.ID}
+	}
+	m, err := menu.NewModel(cmds, []menu.Menu{{Title: "Edit", Items: items}}, []int{0})
+	if err != nil {
+		return err
+	}
+	d.k.SetMenu(m)
+	a.SetMenu(m)
 	return nil
 }
 
