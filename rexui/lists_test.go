@@ -201,10 +201,11 @@ func TestStretchedOutline(t *testing.T) {
 // listView is a list of n rows with rows 1 and 2 selected, in style s, in a
 // 300 × 240 pt box at the window's top left.
 type listView struct {
-	st    base.ListState
-	style rexui.ListStyle
-	n     int
-	key   ui.Key // the list's, as of the last frame
+	st      base.ListState
+	style   rexui.ListStyle
+	striped bool
+	n       int
+	key     ui.Key // the list's, as of the last frame
 }
 
 func (v *listView) build(g *rig) {
@@ -212,7 +213,7 @@ func (v *listView) build(g *rig) {
 	c := k.Context()
 	c.NextSize(ui.Px(k.Pt(300)), ui.Px(k.Pt(240)))
 	c.Push(c.Box(0, "frame"))
-	l := rexui.BeginList(k, "Notes", &v.st, v.n, rexui.ListOpts{Style: v.style})
+	l := rexui.BeginList(k, "Notes", &v.st, v.n, rexui.ListOpts{Style: v.style, Striped: v.striped})
 	for r := l.First; r < l.Last; r++ {
 		l.Row(r, v.st.Item(r), nil)
 		rexui.LabelBytes(k, []byte("note"), rexui.LabelOpts{Color: l.Text()})
@@ -410,5 +411,43 @@ func TestListFollowsScrollerStyle(t *testing.T) {
 	}
 	if bw := theme.Snap(g.k.Theme().Px.ScrollbarW); wo-wl != bw {
 		t.Fatalf("the rows are %v wide beside a legacy bar and %v without, want %v less", wl, wo, bw)
+	}
+}
+
+// The stripes below the last row of a striped list are not content: an empty
+// (or short) list is not scrollable, has no scroll bar even with legacy
+// scrollers, and still shows its stripes.
+func TestFillerStripesAreNotContent(t *testing.T) {
+	for _, n := range []int{0, 3} {
+		v := &listView{n: n, striped: true}
+		v.st.Sel.Reserve(max(n, 1))
+		legacy := theme.SystemValues{Known: true, Settings: theme.Settings{Scroller: theme.ScrollerLegacy}}
+		g := newRig(t, theme.Light, &legacy, v.build)
+		g.settle()
+		id, ok := g.c.BoxOf(v.key)
+		if !ok {
+			t.Fatal("no list box")
+		}
+		content, view := g.c.ScrollExtent(id)
+		if content[1] > view[1] {
+			t.Fatalf("%d rows: %v px of content in a %v px view: the stripes scroll", n, content[1], view[1])
+		}
+		r := g.k.Theme()
+		stripe, knob := rexui.ListLook.Stripe.RGBA(r)>>8, rexui.ListLook.LegacyKnob.RGBA(r)>>8
+		stripes := 0
+		for _, q := range g.list.Quads {
+			if q.Mode != gpu.ModeShape || q.Color[0]&0xFF == 0 {
+				continue
+			}
+			switch q.Color[0] >> 8 {
+			case knob:
+				t.Fatalf("%d rows: a scroll bar", n)
+			case stripe:
+				stripes++
+			}
+		}
+		if stripes < 3 {
+			t.Fatalf("%d rows: %d stripes in a 240 pt list", n, stripes)
+		}
 	}
 }

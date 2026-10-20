@@ -284,18 +284,20 @@ func (lk *rowLook) filler(l *base.List) {
 	k := l.Kit()
 	c, r := k.Context(), k.Theme()
 	rc := &ListLook
+	// floating, at the rows' places: the stripes are not content and never
+	// make the list scrollable, with no rows at all either
+	sr := c.Rect(l.ScrollView().Inner)
+	w := sr[2] - sr[0] - 2*l.PadX()
 	for i := 0; i < n; i++ {
-		row := l.Rows + i
-		var flags ui.Flags
-		if row&1 == 1 {
-			flags = ui.DrawBackground
-			c.NextBG(rc.Stripe.RGBA(r))
-			if rc.Rounded[lk.style] {
-				c.NextRadius(r.Radii.Selection)
-			}
+		if (l.Rows+i)&1 == 0 { // the even rows are not striped
+			continue
 		}
-		c.NextSize(ui.Pct(1), ui.Px(l.RowH()))
-		c.BoxKeyed(flags, ui.KeyN(l.BoxKey(), 3<<32|uint64(i)), nil)
+		c.NextBG(rc.Stripe.RGBA(r))
+		if rc.Rounded[lk.style] {
+			c.NextRadius(r.Radii.Selection)
+		}
+		theme.At(c, l.PadX(), l.FillerTop(i), w, l.RowH())
+		c.BoxKeyed(ui.DrawBackground|base.Floating, ui.KeyN(l.BoxKey(), 3<<32|uint64(i)), nil)
 	}
 }
 

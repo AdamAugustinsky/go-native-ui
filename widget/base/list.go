@@ -721,6 +721,14 @@ func (l *List) FillerRows() int {
 	return int(math.Ceil(float64((view - used) / l.rowH)))
 }
 
+// FillerTop is where the ith row of the room below the last row
+// (FillerRows) shows, in pixels from the top of the list's scrolling box,
+// stretch included. A recipe places those rows there as floating boxes, so
+// that they are not content: they never make the list scrollable.
+func (l *List) FillerTop(i int) float32 {
+	return l.padT + float32(l.Rows+i)*l.rowH - float32(l.st.disp)
+}
+
 // BoxKey is the key of the list's outer box; the recipe keys its own boxes in
 // the list (an empty-list message) from it.
 func (l *List) BoxKey() ui.Key { return l.key }
