@@ -83,7 +83,10 @@ Results on 2026-10-19 (MacBook, macOS 27.2, build 26B5091g):
 | Offscreen, the machine's pink accent | 484 of 484 |
 | Live window captures, light and dark | 392 of 402 |
 
-The 484 are the 476 of the first run and the 8 of the form-group sample (D3b).
+The 484 are the 476 of the first run and the 8 of the form-group sample (D3b);
+the form samples are page 3 (`appkit-forms`: `form-group`, `form-grid`). After
+the merge with the controls and lists, `TestRecipesMatchAppKit` makes 682
+comparisons, all within tolerance.
 The form samples, the form layouts and the sheet's radius were read from a later
 AppKitRef run on the same MacBook, whose main screen was 1× by then: its text
 ink is drawn differently at 1× and its labels no longer matched, so the earlier
