@@ -85,7 +85,7 @@ func (s *AppKit) Build(c *ui.Context) {
 	page := c.Box(ui.DrawBackground|theme.Floating, "page")
 	pk := c.KeyOf(page)
 	c.Push(page)
-	theme.At(c, k.Pt(catalog.GridMargin), k.Pt(catalog.GridMargin), k.Pt(s.w), k.Pt(catalog.GridTitleH))
+	theme.At(c, k.Pt(catalog.GridMargin), k.Pt(catalog.GridMargin), k.Pt(s.w-2*catalog.GridMargin), k.Pt(catalog.GridTitleH))
 	c.Push(c.Box(theme.Floating, "title"))
 	rexui.Label(k, "rexui — macOS 27.2 samples (tools/appkitref)", rexui.LabelOpts{Style: rexui.TextHeadline})
 	c.Pop()
@@ -97,8 +97,14 @@ func (s *AppKit) Build(c *ui.Context) {
 		c.Push(c.Box(ui.DrawBackground|theme.Floating, sm.Name))
 		m := k.Pt(catalog.Margin)
 		theme.At(c, m, m, k.Pt(sm.W), k.Pt(sm.H))
+		// The frame is AppKit's, measured: a control of ours that differs
+		// from it is the recipes' business (TestRecipesMatchAppKit), not a
+		// layout fault of the page, so the layout audit lets the sample
+		// overflow it.
+		c.NextAuditExempt(ui.AuditOverflow.Mask())
 		c.Push(c.Box(theme.Floating, "frame"))
 		k.NextGap(0)
+		c.NextAuditExempt(ui.AuditOverflow.Mask())
 		k.Column("col")
 		s.st.Build(k, cl.Sample)
 		k.EndColumn()
@@ -106,6 +112,9 @@ func (s *AppKit) Build(c *ui.Context) {
 		c.Pop()
 		theme.At(c, k.Pt(cl.X), k.Pt(cl.Y+cl.H+1), k.Pt(cl.W), k.Pt(catalog.GridCaptionH))
 		c.Push(c.BoxKeyed(theme.Floating, ui.KeyN(pk, uint64(1+i)), nil))
+		// as on AppKitRef's sheet, a name longer than its cell runs past it,
+		// and under the next cell when that one is taller
+		c.NextAuditExempt(ui.AuditOverflow.Mask() | ui.AuditCovered.Mask())
 		rexui.Caption(k, sm.Name)
 		c.Pop()
 	}
@@ -116,23 +125,11 @@ func (s *AppKit) Build(c *ui.Context) {
 // AppKitShot renders page p offscreen at scale in the mode pref, with the
 // System roles pinned to sys when it is not nil, and writes the PNG to path.
 func AppKitShot(path string, p int, pref theme.Preference, scale float32, sys *theme.SystemValues) error {
-	s := NewAppKit(p, pref)
-	s.sys = sys
-	cfg := s.Config()
-	off, err := app.NewOffscreen(cfg, int(cfg.Width*scale), int(cfg.Height*scale), scale, s)
+	off, err := runAppKit(p, pref, scale, sys)
 	if err != nil {
 		return err
 	}
 	defer off.Close()
-	for range 8 {
-		off.Frame()
-	}
-	for n := 0; off.UI.Animating(); n++ {
-		if n > 600 {
-			return errors.New("gallery: the appkit scene did not settle")
-		}
-		off.Frame()
-	}
 	img, _ := off.Frame()
 	f, err := os.Create(path)
 	if err != nil {
@@ -143,4 +140,27 @@ func AppKitShot(path string, p int, pref theme.Preference, scale float32, sys *t
 		return fmt.Errorf("gallery: write %s: %w", path, err)
 	}
 	return f.Close()
+}
+
+// runAppKit opens the offscreen window of AppKitShot and lets it settle; the
+// caller closes the window.
+func runAppKit(p int, pref theme.Preference, scale float32, sys *theme.SystemValues) (*app.Offscreen, error) {
+	s := NewAppKit(p, pref)
+	s.sys = sys
+	cfg := s.Config()
+	off, err := app.NewOffscreen(cfg, int(cfg.Width*scale), int(cfg.Height*scale), scale, s)
+	if err != nil {
+		return nil, err
+	}
+	for range 8 {
+		off.Frame()
+	}
+	for n := 0; off.UI.Animating(); n++ {
+		if n > 600 {
+			off.Close()
+			return nil, errors.New("gallery: the appkit scene did not settle")
+		}
+		off.Frame()
+	}
+	return off, nil
 }

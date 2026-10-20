@@ -168,12 +168,17 @@ func (l *listApp) header(c *ui.Context) {
 	c.PushTextColor(colDim)
 	c.NextSize(ui.Px(c.Pt(16)), ui.Pct(1))
 	c.Box(0, "hi")
+	// the titles are column headers and the rows' texts cells, so the layout
+	// audit checks that each title is over its column
 	c.NextSize(ui.Pct(1), ui.Pct(1))
+	c.NextRole(ui.RoleColumnHeader)
 	c.Box(ui.DrawText, "Name")
 	c.NextSize(ui.Px(c.Pt(90)), ui.Pct(1))
 	c.NextAlign(ui.AlignRight)
+	c.NextRole(ui.RoleColumnHeader)
 	c.Box(ui.DrawText, "Size")
 	c.NextSize(ui.Px(c.Pt(150)), ui.Pct(1))
+	c.NextRole(ui.RoleColumnHeader)
 	c.Box(ui.DrawText, "Modified")
 	c.PopTextColor()
 	c.Close()
@@ -192,6 +197,7 @@ func (l *listApp) row(c *ui.Context, listKey ui.Key, row int, rh float32) {
 	case row&1 == 1:
 		c.NextBG(colAlt)
 	}
+	c.NextRole(ui.RoleRow)
 	id := c.BoxKeyed(ui.Clickable|ui.DrawBackground|ui.HotAnimation|ui.DrawHotEffects, ui.KeyN(listKey, uint64(row)), nil)
 	if c.Signal(id).Pressed {
 		l.selected = row
@@ -208,15 +214,18 @@ func (l *listApp) row(c *ui.Context, listKey ui.Key, row int, rh float32) {
 	c.Close()
 
 	c.NextSize(ui.Pct(1), ui.Pct(1))
+	c.NextRole(ui.RoleCell)
 	c.BoxKeyed(ui.DrawText|ui.FadeOverflowX, ui.KeyN(c.ParentKey(), 0), rowName(c, row))
 
 	c.NextSize(ui.Px(c.Pt(90)), ui.Pct(1))
 	c.NextAlign(ui.AlignRight)
 	c.NextTextColor(dim)
+	c.NextRole(ui.RoleCell)
 	c.BoxKeyed(ui.DrawText, ui.KeyN(c.ParentKey(), 1), rowSize(c, row))
 
 	c.NextSize(ui.Px(c.Pt(150)), ui.Pct(1))
 	c.NextTextColor(dim)
+	c.NextRole(ui.RoleCell)
 	c.BoxKeyed(ui.DrawText, ui.KeyN(c.ParentKey(), 2), rowDate(c, row))
 	c.Pop()
 }

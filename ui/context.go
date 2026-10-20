@@ -65,8 +65,11 @@ type box struct {
 	opacity     float32
 	font        text.FontKey
 	align       Align
+	alignNext   bool // the alignment came from NextAlign (Audit)
 	axis        Axis
 	cross       Cross
+	justify     Justify
+	auditOff    AuditMask  // the checks of Audit the box is exempt from (NextAuditExempt)
 	pad         [4]float32 // l, t, r, b
 	gap         float32
 	pref        [2]Size
@@ -155,6 +158,7 @@ type Context struct {
 	sGap     stack[float32]
 	sAxis    stack[Axis]
 	sCross   stack[Cross]
+	sJustify stack[Justify]
 	sW, sH   stack[Size]
 	sOpacity stack[float32]
 	sTint    stack[Tint]
@@ -162,6 +166,7 @@ type Context struct {
 	nextPos    [2]float32
 	hasNextPos bool
 	nextFlags  Flags
+	nextAudit  AuditMask // the exemptions of the next box (NextAuditExempt)
 
 	flowHidden bool // a flow hid children this layout (flow.go)
 
@@ -327,6 +332,7 @@ func New(sh Shaper) *Context {
 	c.sGap.init(0)
 	c.sAxis.init(AxisY)
 	c.sCross.init(CrossStart)
+	c.sJustify.init(JustifyStart)
 	c.sW.init(Size{})
 	c.sH.init(Size{})
 	c.sOpacity.init(1)
@@ -473,12 +479,14 @@ func (c *Context) resetStyles() {
 	c.sGap.reset()
 	c.sAxis.reset()
 	c.sCross.reset()
+	c.sJustify.reset()
 	c.sW.reset()
 	c.sH.reset()
 	c.sOpacity.reset()
 	c.sTint.reset()
 	c.hasNextPos = false
 	c.nextFlags = 0
+	c.nextAudit = 0
 	c.nextEscClr = false
 	c.nextStill = false
 	c.semNext = semNext{}
@@ -624,9 +632,12 @@ func (c *Context) newBox(flags Flags, key Key) ID {
 	b.tint = c.sTint.take()
 	b.opacity = c.sOpacity.take()
 	b.font = c.sFont.take()
+	b.alignNext = c.sAlign.hasNext
 	b.align = c.sAlign.take()
 	b.axis = c.sAxis.take()
 	b.cross = c.sCross.take()
+	b.justify = c.sJustify.take()
+	b.auditOff, c.nextAudit = c.nextAudit, 0
 	b.pad = c.sPad.take()
 	b.gap = c.sGap.take()
 	b.pref = [2]Size{c.sW.take(), c.sH.take()}
