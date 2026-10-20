@@ -31,6 +31,11 @@ go test ./examples/notes/...                  # the tests of the example
 | `examples/notes/notes/script.go` | a scripted session (`widget/widgettest` steps) that gives the app the input a person would |
 | `examples/notes/notes/notes_test.go` | the tests: render, interaction, zero allocations |
 | `examples/notes/live/` | the tests that open a real window: the system's menus, alert and input |
+| `examples/notes/live/` | the tests that open a real window: the system's menus, alert and input |
+| `examples/notes/live/` | the tests that open a real window: the system's menus, alert and input |
+| `examples/notes/live/` | the tests that open a real window: the system's menus, alert and input |
+| `examples/notes/live/` | the tests that open a real window: the system's menus, alert and input |
+| `examples/notes/live/` | the tests that open a real window: the system's menus, alert and input |
 
 ## 1. The model
 
@@ -157,17 +162,19 @@ points (`r.Window.Toolbars`) and the app's own constants, times the scale, and
 		n.sidebar(tbH)
 		c.Pop()
 	}
-	theme.At(c, sbW, tbH, W-sbW, H-tbH)
+	theme.At(c, sbW, 0, W-sbW, H)
 	c.NextBG(r.Colors[theme.TextBackground])
 	c.Push(c.Box(base.Floating|ui.DrawBackground, "content"))
-	n.content(W-sbW, H-tbH)
+	n.content(W-sbW, H, tbH)
 	c.Pop()
 	n.toolbar(tbH, sbW)
 ```
 
-- **The toolbar is built last**, so that it draws over the panes. The content's
-  scroll state (`n.under`) is the previous frame's: the toolbar's band shows
-  its bar and hairline only while the note is scrolled under it.
+- **The toolbar is built last**, so that it draws over the panes. The content
+  pane is as tall as the window: its scroll view is inset by the band
+  (`Kit.NextScrollInset`, `ToolbarOpts.ContentEdge`), so the note starts below
+  the band and scrolls up under it, where `rexui.ScrollBars` draws the scroll
+  edge. The content's scroll state (`n.under`) is the previous frame's.
 - **Inside the panes** the widgets flow: `Row`, `Column` and `Container` stack
   children along an axis with the theme's gap and padding, `NextWidth` and
   `NextSize` set one property of the next widget only (`widget.Fill` takes the
@@ -344,8 +351,24 @@ and the scroll bars of the system's style (legacy, taking room, or overlay).
 
 ```go examples/notes/notes/notes.go
 	c.NextSize(ui.Pct(1), ui.Children(1))
-	c.NextPadding(px, py, px, py)
-	c.Push(c.Box(0, "page"))
+	// the text ends in a newline: NSTextView lays out the empty line after it
+	// (its extra line fragment), a body line more below the text
+	c.NextPadding(px, py, px, py+r.Styles[theme.StyleBody].Line)
+	page := c.Box(0, "page")
+	if n.Scrolled && n.textID != 0 { // keep the end of the note, as the Notes scene's picture has it
+		if pr := c.Rect(page); pr[3] > pr[1] {
+			end := float64(max(top+pr[3]-pr[1]-h, 0))
+			switch {
+			case n.pinned != 0 && math.Abs(sy-n.pinned) > 0.5: // somebody scrolled it
+				n.Scrolled = false
+			case math.Abs(sy-end) > 0.5: // the layout changed (the scroll bars' style)
+				c.SetScroll(v.Inner, 0, end)
+				n.pinned = end
+				c.RequestFrame()
+			}
+		}
+	}
+	c.Push(page)
 	if i := n.find(n.side.Sel); i >= 0 {
 		n.setText(&n.notes[i])
 		c.NextSize(ui.Pct(1), ui.TextSize(0))
@@ -380,7 +403,7 @@ func (n *Notes) toolbar(tbH, sbW float32) {
 	k := n.k
 	r := k.Theme()
 	o := rexui.ToolbarOpts{Style: theme.ToolbarCompact, Title: "Notes", Panes: [2]float32{sbW, 0},
-		ContentUnder: n.under, Traffic: n.Traffic, BandFill: r.Colors[theme.TextBackground]}
+		ContentUnder: n.under, Traffic: n.Traffic, BandFill: r.Colors[theme.TextBackground], ContentEdge: true}
 	tb := rexui.BeginToolbar(k.Kit, "Toolbar", o)
 	if tb.Item(n.ic.sidebar, "Sidebar").Clicked {
 		n.hidden = !n.hidden

@@ -11,6 +11,7 @@
 package notes
 
 import (
+	"math"
 	"time"
 	"unsafe"
 
@@ -99,7 +100,9 @@ type Notes struct {
 	// Mode is the mode the window shows: the system's (the zero value), or
 	// light or dark whatever the system says.
 	Mode theme.Preference
-	// Scrolled starts the open note scrolled under the toolbar (pictures).
+	// Scrolled starts the open note scrolled to its end, as far as the Notes
+	// scene's text view scrolls (114 pt with legacy scrollers, 98 with overlay
+	// ones), under the toolbar (pictures).
 	Scrolled bool
 
 	a     *app.App
@@ -128,6 +131,7 @@ type Notes struct {
 	newest   bool    // the Switch: show the newest note first
 	hidden   bool    // the sidebar is collapsed
 	toTop    bool    // the open note changed: scroll it to its top
+	pinned   float64 // where Scrolled put the note
 
 	confirm   bool                  // the drawn dialog is open
 	ticket    platform.DialogTicket // the system alert asked for, not answered yet
@@ -240,12 +244,12 @@ func (n *Notes) Init(a *app.App) error {
 	return nil
 }
 
-// addIcons adds the toolbar's symbols, at the size AppKit's toolbars draw them.
+// addIcons adds the toolbar's symbols, at the size and scale AppKit's toolbars
+// draw them.
 func (n *Notes) addIcons() {
-	pt := theme.MacWindow.Capsule.Glyph
-	n.ic.sidebar = n.k.AddIcon(icon.Spec{Symbol: "sidebar.left", Fallback: '▤', Pt: pt})
-	n.ic.trash = n.k.AddIcon(icon.Spec{Symbol: "trash", Fallback: '⌫', Pt: pt})
-	n.ic.compose = n.k.AddIcon(icon.Spec{Symbol: "square.and.pencil", Fallback: '✎', Pt: pt})
+	n.ic.sidebar = n.k.AddIcon(rexui.ToolbarSymbol("sidebar.left", '▤'))
+	n.ic.trash = n.k.AddIcon(rexui.ToolbarSymbol("trash", '⌫'))
+	n.ic.compose = n.k.AddIcon(rexui.ToolbarSymbol("square.and.pencil", '✎'))
 }
 
 // Context is the window's ui context, which the tests and the scripted
@@ -410,7 +414,8 @@ func (n *Notes) Build(c *ui.Context) {
 	c.Push(c.Box(base.Floating, "panes"))
 	H -= barH
 
-	// The panes' glass, the content below the toolbar's band, and the toolbar
+	// The panes' glass, the content running under the toolbar's band (its
+	// scroll view is inset by it: ToolbarOpts.ContentEdge), and the toolbar
 	// over them.
 	if sbW > 0 {
 		theme.At(c, 0, 0, sbW, H)
@@ -418,10 +423,10 @@ func (n *Notes) Build(c *ui.Context) {
 		n.sidebar(tbH)
 		c.Pop()
 	}
-	theme.At(c, sbW, tbH, W-sbW, H-tbH)
+	theme.At(c, sbW, 0, W-sbW, H)
 	c.NextBG(r.Colors[theme.TextBackground])
 	c.Push(c.Box(base.Floating|ui.DrawBackground, "content"))
-	n.content(W-sbW, H-tbH)
+	n.content(W-sbW, H, tbH)
 	c.Pop()
 	n.toolbar(tbH, sbW)
 	c.Pop()
@@ -517,30 +522,44 @@ func (n *Notes) sidebar(tbH float32) {
 // 12) and its line fragment padding (5).
 const editorInsetX, editorInsetY = 24 + 5, 12
 
-// content builds the content pane (the current parent) of w by h pixels: the
-// open note in a scroll view, and below it the bar that adds a note.
-func (n *Notes) content(w, h float32) {
+// content builds the content pane (the current parent) of w by h pixels, which
+// runs under the toolbar's band of top pixels: the open note in a scroll view
+// inset by the band, and below it the bar that adds a note.
+func (n *Notes) content(w, h, top float32) {
 	k := n.k
 	c, r := k.Context(), k.Theme()
 	s := r.Scale
 	barH := theme.Snap(addBarH * s)
 
 	k.NextSize(ui.Px(w), ui.Px(h-barH))
+	k.NextScrollInset(top)
 	v := k.BeginScroll("Note", &n.editor, base.ScrollVertical)
 	if n.toTop {
 		c.SetScroll(v.Inner, 0, 0)
 		n.toTop = false
 	}
-	if n.Scrolled && n.textID != 0 {
-		c.SetScroll(v.Inner, 0, float64(theme.Snap(160*s)))
-		n.Scrolled = false
-	}
 	_, sy := c.Scroll(v.Inner)
 	n.under = sy > 0.5
 	px, py := theme.Snap(editorInsetX*s), theme.Snap(editorInsetY*s)
 	c.NextSize(ui.Pct(1), ui.Children(1))
-	c.NextPadding(px, py, px, py)
-	c.Push(c.Box(0, "page"))
+	// the text ends in a newline: NSTextView lays out the empty line after it
+	// (its extra line fragment), a body line more below the text
+	c.NextPadding(px, py, px, py+r.Styles[theme.StyleBody].Line)
+	page := c.Box(0, "page")
+	if n.Scrolled && n.textID != 0 { // keep the end of the note, as the Notes scene's picture has it
+		if pr := c.Rect(page); pr[3] > pr[1] {
+			end := float64(max(top+pr[3]-pr[1]-h, 0))
+			switch {
+			case n.pinned != 0 && math.Abs(sy-n.pinned) > 0.5: // somebody scrolled it
+				n.Scrolled = false
+			case math.Abs(sy-end) > 0.5: // the layout changed (the scroll bars' style)
+				c.SetScroll(v.Inner, 0, end)
+				n.pinned = end
+				c.RequestFrame()
+			}
+		}
+	}
+	c.Push(page)
 	if i := n.find(n.side.Sel); i >= 0 {
 		n.setText(&n.notes[i])
 		c.NextSize(ui.Pct(1), ui.TextSize(0))
@@ -587,7 +606,7 @@ func (n *Notes) toolbar(tbH, sbW float32) {
 	k := n.k
 	r := k.Theme()
 	o := rexui.ToolbarOpts{Style: theme.ToolbarCompact, Title: "Notes", Panes: [2]float32{sbW, 0},
-		ContentUnder: n.under, Traffic: n.Traffic, BandFill: r.Colors[theme.TextBackground]}
+		ContentUnder: n.under, Traffic: n.Traffic, BandFill: r.Colors[theme.TextBackground], ContentEdge: true}
 	tb := rexui.BeginToolbar(k.Kit, "Toolbar", o)
 	if tb.Item(n.ic.sidebar, "Sidebar").Clicked {
 		n.hidden = !n.hidden
