@@ -132,6 +132,31 @@ func lightsSetup() {
 // AppKit makes to the buttons (lights_darwin.go). Main thread only.
 func (w *Window) SystemButtons() [4]float32 { return w.sysButtons }
 
+// SetTitlebar changes the custom titlebar's metrics after Open: its height and
+// the close button's centre, in the units of Options.Titlebar and
+// Options.TrafficLights. An app that zooms its whole window (the band is
+// drawn larger) calls it with the zoomed band, so that the buttons, which stay
+// at the system's size, stay centred in it. It does what a resize does: has
+// AppKit take the new height and offset and measure the buttons again
+// (SystemButtons) at once, and the group's hover areas on the run loop's next
+// turn; in full screen when the window leaves it. Only a
+// window opened with Options.Titlebar > 0 has metrics to change, and a
+// height of 0 or less changes nothing. Where the buttons stay at AppKit's
+// default place (PublicAPIOnly, the gnui_publicapi build, no titlebar metrics)
+// only SystemButtons follows. The drag map is the app's and is not touched.
+// Main thread only.
+func (w *Window) SetTitlebar(height float32, lights [2]float32) {
+	if w.titlebar == 0 || height <= 0 || w.tb.closed {
+		return
+	}
+	if float64(height) == w.titlebar && lights == w.lights {
+		return
+	}
+	w.titlebar, w.lights = float64(height), lights
+	w.tb.calibrated = false
+	w.layoutChromeSoon() // and again on the next turn: the group's hover areas follow only then
+}
+
 // layoutChrome has AppKit put the window buttons' centres where
 // Options.TrafficLights says (see the top of this file) and records where
 // they are (SystemButtons). It runs at open and show, on resize, after every

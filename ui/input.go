@@ -447,24 +447,29 @@ func (in *Input) AddScroll(dx, dy float32, precise bool) {
 // two can, e is not kept and AddScrollEvent reports false (app keeps it for
 // the next frame instead).
 func (in *Input) AddScrollEvent(e ScrollEvent) bool {
-	if in.NScrolls == MaxScrolls {
+	return addScrollEvent(&in.Scrolls, &in.NScrolls, e)
+}
+
+// addScrollEvent is AddScrollEvent over any list of scroll events.
+func addScrollEvent(buf *[MaxScrolls]ScrollEvent, n *int, e ScrollEvent) bool {
+	if *n == MaxScrolls {
 		i := 0
-		for i < in.NScrolls-1 && !scrollMergeable(&in.Scrolls[i], &in.Scrolls[i+1]) {
+		for i < *n-1 && !scrollMergeable(&buf[i], &buf[i+1]) {
 			i++
 		}
-		if i == in.NScrolls-1 {
-			if !scrollMergeable(&in.Scrolls[i], &e) {
+		if i == *n-1 {
+			if !scrollMergeable(&buf[i], &e) {
 				return false
 			}
-			mergeScroll(&in.Scrolls[i], &e)
+			mergeScroll(&buf[i], &e)
 			return true
 		}
-		mergeScroll(&in.Scrolls[i], &in.Scrolls[i+1])
-		copy(in.Scrolls[i+1:in.NScrolls], in.Scrolls[i+2:in.NScrolls])
-		in.NScrolls--
+		mergeScroll(&buf[i], &buf[i+1])
+		copy(buf[i+1:*n], buf[i+2:*n])
+		*n--
 	}
-	in.Scrolls[in.NScrolls] = e
-	in.NScrolls++
+	buf[*n] = e
+	*n++
 	return true
 }
 
