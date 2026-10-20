@@ -88,6 +88,15 @@ const vlSliceNs = int64(time.Millisecond)
 // vlChunk is the work between two looks at the clock.
 const vlChunk = 4096
 
+// vlRandomChunk is the most items a phase that reaches into the id table at
+// random (indexing, reconciling heights) does between two looks: each item
+// may touch a page of its own, and a page the system compressed while the
+// back buffer sat idle costs tens of microseconds to fault back. On a hosted
+// macOS runner (7 GB, a busy compressor) 4096 of them took 5-60 ms, so a
+// 1 ms slice ran a frame long by that. 64 costs a rebuild about 7% more
+// frames (BenchmarkVListRebuild1M: 12.1 frames against 11.0-11.3).
+const vlRandomChunk = 64
+
 // vlSliceUnits, when positive, replaces the clock: each Sync does that many
 // units of work (tests use it to make the number of frames exact).
 var vlSliceUnits int
@@ -293,7 +302,7 @@ func (st *VListState) work(n, room int, fresh bool) int {
 		}
 		return max(did, 1)
 	case phIndex:
-		e := min(j.i+n, j.nNew)
+		e := min(j.i+min(n, vlRandomChunk), j.nNew)
 		for i := j.i; i < e; i++ {
 			p := b.lo + i
 			id := b.ids[p]
@@ -352,7 +361,7 @@ func (st *VListState) work(n, room int, fresh bool) int {
 		}
 		return max(did, 1)
 	case phRecon:
-		e := min(j.i+n, b.n)
+		e := min(j.i+min(n, vlRandomChunk), b.n)
 		for i := j.i; i < e; i++ {
 			if fi, ok := f.index(b.ids[b.lo+i]); ok {
 				if h := f.hs[f.lo+fi]; b.hs[b.lo+i] != h {
