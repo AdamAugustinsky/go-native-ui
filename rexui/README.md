@@ -49,14 +49,15 @@ directly with `k.Kit`, or copies a component and owns it.
 | `EmptyState` | — | — | Glyph, Title 3, message, action, centred in its parent. |
 | `TokenField` | — | small … large | NSTokenField: tokens of the blue at 33 %, wrapped onto lines; Enter or a comma ends a token, Backspace selects and removes the last. |
 | `Combobox` | — | small … large | NSComboBox: a text field and a 23.5 × 17.5 button holding a chevron; a `CompletionList` below it, Down opens it and Up/Down/Enter/Escape drive it. |
-| `ColorWell` | drawn picker, or `Panel` for the system's colour panel | — | NSColorWell's 48 × 24 bezel and inset swatch; a popover of the system colours and a hex field. |
+| `ColorWell` | the system's colour panel, or `Drawn` for its own picker | — | NSColorWell's 48 × 24 bezel and inset swatch; a popover of the system colours and a hex field. |
 | `MessageBubble`, `BeginBubble` / `EndBubble` | incoming, outgoing, system; sent, sending, failed | — | C2 rich text in a bubble, emoji-only messages large and bubble-less, selectable across bubbles in a `VList` under one selection scope (C4). |
 | `ChatListRow`, `DateDivider`, `TypingIndicator` | compact; pill; inline | — | A 56 pt conversation row (avatar, title, two-line preview, time, unread count); a hairline-flanked date; three dots that pulse only while visible. |
 | `CompletionList`, `CompletionState` | — | — | The completion popup of a text box: the contract N4 writes the composer against (its doc comment). |
 
 Every component is keyboard-operable and records its semantics. Its focus
-ring sits outside the shape, shows for keyboard focus only (text fields:
-whenever focused), and never shows in an inactive window. Disabled is a
+ring sits outside the shape, shows for keyboard focus only (the text-entry
+controls, text, search, combo box and token field, whenever focused, as AppKit
+does: `base.Visual.TextEntry`), and never shows in an inactive window. Disabled is a
 colour, not an opacity. Building a frame allocates nothing (the
 `TestNoAllocationsPerFrame` test builds every sample).
 
@@ -241,16 +242,18 @@ and what the caller must do.
 (`OverlayOpts.NoFocus`): the focus, a hosted native view's first responder
 included, stays where it is when they open and close.
 
-**The colour well drives the real colour panel** with `ColorWellOpts{Panel:
-platform.NativeColorPanel}`: pressing it opens the shared `NSColorPanel` with
-its colour, the colour set there (continuous, sRGB) is its colour, a colour the
-app sets moves the panel, and the panel closes when the user closes it, when
-another well takes it, when the well is disabled or no longer built. The path is
-`ui.Context.ColorPanel` (a request per frame) → `app` (`syncColorPanel`) →
-`platform.Window.ShowColorPanel/SetColorPanelColor/CloseColorPanel` and
-`platform.EvColor` back; elsewhere the platform returns `ErrUnsupported` and the
-drawn picker stays (`Panel` off). `rexui/live` drives it, and the combo box and
-the token field, with real AppKit events.
+**The colour well drives the real colour panel** by default: pressing it opens
+the shared `NSColorPanel` with its colour, the colour set there (continuous,
+sRGB) is its colour, a colour the app sets moves the panel, and the panel closes
+when the user closes it, when another well takes it, when the well is disabled
+or no longer built. The path is `ui.Context.ColorPanel` (a request per frame) →
+`app` (`syncColorPanel`) → `platform.Window.ShowColorPanel/SetColorPanelColor/
+CloseColorPanel` and `platform.EvColor` back. The drawn picker is the fallback
+where the platform has no panel (`platform.NativeColorPanel` is false, or
+`ShowColorPanel` returns `ErrUnsupported`: the app tells the well with
+`Input.SetColorFailed`) and what `ColorWellOpts{Drawn: true}` asks for.
+Offscreen renders open no panel. `rexui/live` drives the panel, the combo box
+and the token field with real AppKit events.
 
 ### Left to the eye, and why
 

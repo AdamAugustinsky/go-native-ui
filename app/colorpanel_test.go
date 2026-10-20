@@ -1,6 +1,7 @@
 package app
 
 import (
+	"errors"
 	"reflect"
 	"testing"
 
@@ -8,11 +9,14 @@ import (
 	"gonativeui/ui"
 )
 
-type fakeColor struct{ calls []string }
+type fakeColor struct {
+	calls []string
+	err   error // what ShowColorPanel returns
+}
 
 func (f *fakeColor) ShowColorPanel(r, g, b, a float32) error {
 	f.calls = append(f.calls, "show")
-	return nil
+	return f.err
 }
 func (f *fakeColor) SetColorPanelColor(r, g, b, a float32) error {
 	f.calls = append(f.calls, "set")
@@ -27,6 +31,7 @@ type colorApp struct {
 	color  uint32
 	picked int
 	closed bool
+	failed bool
 }
 
 func (b *colorApp) Build(c *ui.Context) {
@@ -37,6 +42,9 @@ func (b *colorApp) Build(c *ui.Context) {
 	}
 	if c.ColorPanelClosed(owner) {
 		b.closed, b.on = true, false
+	}
+	if c.ColorPanelFailed(owner) {
+		b.failed, b.on = true, false
 	}
 	if b.on {
 		c.ColorPanel(owner, b.color, false)
@@ -102,4 +110,26 @@ func TestColorPanelFollowsTheWell(t *testing.T) {
 	b.on = false
 	frame()
 	expect("the well stopped asking", "show", "set", "show", "close")
+}
+
+// A platform with no panel (ShowColorPanel fails) tells the box that asked, in
+// the next frame, and the panel is not asked for again.
+func TestColorPanelUnavailableIsReported(t *testing.T) {
+	b := &colorApp{on: true, color: 0xFF0000FF}
+	o, err := NewOffscreen(Config{Width: 200, Height: 100}, 400, 200, 2, b)
+	if err != nil {
+		skipOrFail(t, "offscreen renderer", err)
+	}
+	defer o.Close()
+	f := fakeColor{err: errors.ErrUnsupported}
+	frame := func() { o.Frame(); o.syncColorPanel(&f) }
+	frame()
+	frame()
+	if !b.failed || b.on {
+		t.Fatalf("the box was not told: %+v", b)
+	}
+	frame()
+	if len(f.calls) != 1 {
+		t.Fatalf("calls %v: the panel was asked for again", f.calls)
+	}
 }

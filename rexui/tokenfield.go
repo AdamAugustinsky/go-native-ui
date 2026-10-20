@@ -246,12 +246,7 @@ func TokenField(k *base.Kit, label string, st *TokenFieldState, tokens *[]string
 		st.HasSel = false
 	}
 
-	// the ring: the keyboard's, in a key window
-	ring := vis
-	if vis.Inactive {
-		ring.Ring = 0
-	}
-	k.FocusRing(wrap, ring, radius)
+	k.FocusRing(wrap, vis.TextEntry(), radius) // (a text-entry control rings however it got the focus)
 	return out
 }
 

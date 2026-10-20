@@ -8,6 +8,7 @@ import (
 
 	"gonativeui/gpu"
 
+	"gonativeui/platform"
 	"gonativeui/rexui"
 	"gonativeui/theme"
 	"gonativeui/ui"
@@ -333,7 +334,7 @@ func TestColorWellPicker(t *testing.T) {
 	col := uint32(0x336699FF)
 	var sig rexui.ColorWellSignal
 	g := newRig(t, theme.Light, nil, column(func(g *rig) {
-		sig = rexui.ColorWell(g.k, "Accent", &st, &col, rexui.ColorWellOpts{})
+		sig = rexui.ColorWell(g.k, "Accent", &st, &col, rexui.ColorWellOpts{Drawn: true})
 	}))
 	g.h = 800
 	n := g.node(ui.RoleButton, "Accent")
@@ -364,17 +365,20 @@ func TestColorWellPicker(t *testing.T) {
 	}
 }
 
-// With Panel the well drives the system colour panel through ui: a click asks
+// By default the well drives the system colour panel through ui: a click asks
 // for it with the well's colour, what the user sets there is the well's colour,
 // a colour the app sets is asked again, closing the panel ends it, and a
 // second well that claims the panel ends the first.
 func TestColorWellPanel(t *testing.T) {
+	if !platform.NativeColorPanel {
+		t.Skip("this system has no colour panel: the well uses its picker")
+	}
 	var st, st2 rexui.ColorWellState
 	col, col2 := uint32(0x336699FF), uint32(0x112233FF)
 	var sig rexui.ColorWellSignal
 	g := newRig(t, theme.Light, nil, column(func(g *rig) {
-		sig = rexui.ColorWell(g.k, "Accent", &st, &col, rexui.ColorWellOpts{Panel: true})
-		rexui.ColorWell(g.k, "Other", &st2, &col2, rexui.ColorWellOpts{Panel: true})
+		sig = rexui.ColorWell(g.k, "Accent", &st, &col, rexui.ColorWellOpts{})
+		rexui.ColorWell(g.k, "Other", &st2, &col2, rexui.ColorWellOpts{})
 	}))
 	g.click(centre(g.node(ui.RoleButton, "Accent")))
 	owner, rgba, ok := g.c.ColorPanelRequest()
@@ -414,6 +418,30 @@ func TestColorWellPanel(t *testing.T) {
 	}
 	if _, _, ok := g.c.ColorPanelRequest(); ok {
 		t.Error("nothing should ask for the panel now")
+	}
+}
+
+// Where the platform cannot show the colour panel (the app says so), the well
+// opens its own picker in its place.
+func TestColorWellFallsBackToThePicker(t *testing.T) {
+	if !platform.NativeColorPanel {
+		t.Skip("this system has no colour panel: the well always uses its picker")
+	}
+	var st rexui.ColorWellState
+	col := uint32(0x336699FF)
+	g := newRig(t, theme.Light, nil, column(func(g *rig) {
+		rexui.ColorWell(g.k, "Accent", &st, &col, rexui.ColorWellOpts{})
+	}))
+	g.h = 800
+	g.click(centre(g.node(ui.RoleButton, "Accent")))
+	if _, _, ok := g.c.ColorPanelRequest(); !ok {
+		t.Fatal("the well did not ask for the panel")
+	}
+	g.in.SetColorFailed() // what the app does when ShowColorPanel returns ErrUnsupported
+	g.frames(3)
+	g.node(ui.RoleRadio, "Orange") // the picker's swatches are there
+	if _, _, ok := g.c.ColorPanelRequest(); ok {
+		t.Error("the well still asks for the panel")
 	}
 }
 
@@ -665,28 +693,36 @@ func countRings(g *rig) int {
 	return n
 }
 
-// The focus ring of the new controls shows for keyboard focus only: not after a
-// click, not in a window that is not key.
-func TestFocusRingIsKeyboardOnly(t *testing.T) {
+// The focus ring by class of control, as AppKit does it: a text-entry control
+// (text field, search field, combo box, token field) rings whenever it has the
+// focus, a click included; any other control (colour well, chat row, button)
+// only for keyboard focus; and none rings in a window that is not key.
+func TestFocusRingByClassOfControl(t *testing.T) {
 	var well rexui.ColorWellState
 	col := uint32(0x336699FF)
 	var cb rexui.ComboState
-	var cbuf ui.TextBuffer
+	var cbuf, tbuf, sbuf ui.TextBuffer
 	var tf rexui.TokenFieldState
 	var toks []string
 	for _, tc := range []struct {
-		name  string
-		role  ui.Role
-		label string
-		build func(g *rig)
+		name      string
+		role      ui.Role
+		label     string
+		textEntry bool
+		build     func(g *rig)
 	}{
-		{"color well", ui.RoleButton, "Accent", func(g *rig) { rexui.ColorWell(g.k, "Accent", &well, &col, rexui.ColorWellOpts{}) }},
-		{"chat row", ui.RoleListItem, "", func(g *rig) {
+		{"text field", ui.RoleTextField, "Name", true, func(g *rig) { rexui.TextField(g.k, "Name", &tbuf, "", rexui.FieldOpts{}) }},
+		{"search field", ui.RoleSearchField, "Find", true, func(g *rig) { rexui.SearchField(g.k, "Find", &sbuf, "", rexui.FieldOpts{}) }},
+		{"combo box", ui.RoleComboBox, "Font", true, func(g *rig) { rexui.Combobox(g.k, "Font", &cb, &cbuf, []string{"a"}, rexui.ComboOpts{}) }},
+		{"token field", ui.RoleTextField, "Tokens", true, func(g *rig) { rexui.TokenField(g.k, "Tokens", &tf, &toks, rexui.TokenFieldOpts{}) }},
+		{"color well", ui.RoleButton, "Accent", false, func(g *rig) {
+			rexui.ColorWell(g.k, "Accent", &well, &col, rexui.ColorWellOpts{Drawn: true})
+		}},
+		{"chat row", ui.RoleListItem, "Ada", false, func(g *rig) {
 			g.k.NextWidth(g.k.Fixed(260))
 			rexui.ChatListRow(g.k, "r1", "Ada", "Hello", "10:42", rexui.ChatRowOpts{})
 		}},
-		{"combo box", ui.RoleComboBox, "Font", func(g *rig) { rexui.Combobox(g.k, "Font", &cb, &cbuf, []string{"a"}, rexui.ComboOpts{}) }},
-		{"token field", ui.RoleTextField, "Tokens", func(g *rig) { rexui.TokenField(g.k, "Tokens", &tf, &toks, rexui.TokenFieldOpts{}) }},
+		{"button", ui.RoleButton, "Go", false, func(g *rig) { rexui.Button(g.k, "Go", rexui.ButtonOpts{}) }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			g := newRig(t, theme.Light, nil, column(tc.build))
@@ -695,46 +731,33 @@ func TestFocusRingIsKeyboardOnly(t *testing.T) {
 			if n := countRings(g); n != 0 {
 				t.Fatalf("%d rings without focus", n)
 			}
+			// the keyboard: every class rings
 			g.key(ui.KeyTab, 0)
 			g.settle()
 			if countRings(g) == 0 {
 				t.Fatal("keyboard focus shows no ring")
 			}
+			// the window stops being key: no ring
 			g.in.Focused = false
 			g.settle()
 			if n := countRings(g); n != 0 {
 				t.Fatalf("%d rings in an inactive window", n)
 			}
+			g.in.Focused = true
+			// a click: a text-entry control rings, the others do not
+			g2 := newRig(t, theme.Light, nil, column(tc.build))
+			g2.h = 800
+			g2.click(centre(g2.node(tc.role, tc.label)))
+			g2.settle()
+			if got := countRings(g2) > 0; got != tc.textEntry {
+				t.Fatalf("after a click the ring shows %v, want %v", got, tc.textEntry)
+			}
+			g2.in.Focused = false
+			g2.settle()
+			if n := countRings(g2); n != 0 {
+				t.Fatalf("%d rings in an inactive window after a click", n)
+			}
 		})
-	}
-	// a pointer press does not show the ring on the colour well
-	g := newRig(t, theme.Light, nil, column(func(g *rig) { rexui.ColorWell(g.k, "Accent", &well, &col, rexui.ColorWellOpts{}) }))
-	g.h = 800
-	g.click(centre(g.node(ui.RoleButton, "Accent")))
-	well.Open = false
-	g.settle()
-	if n := countRings(g); n != 0 {
-		t.Fatalf("a click left %d rings on the colour well", n)
-	}
-	// nor on the combo box or the token field: they are text, but the ring is the keyboard's
-	for _, tc := range []struct {
-		name, label string
-		role        ui.Role
-		build       func(g *rig)
-	}{
-		{"combo box", "Font", ui.RoleComboBox, func(g *rig) { rexui.Combobox(g.k, "Font", &cb, &cbuf, []string{"a"}, rexui.ComboOpts{}) }},
-		{"token field", "Tokens", ui.RoleTextField, func(g *rig) { rexui.TokenField(g.k, "Tokens", &tf, &toks, rexui.TokenFieldOpts{}) }},
-	} {
-		g := newRig(t, theme.Light, nil, column(tc.build))
-		g.h = 800
-		g.click(centre(g.node(tc.role, tc.label)))
-		g.settle()
-		if !g.c.TextFieldFocused() {
-			t.Fatalf("%s: the click did not focus the field", tc.name)
-		}
-		if n := countRings(g); n != 0 {
-			t.Fatalf("%s: pointer focus left %d rings", tc.name, n)
-		}
 	}
 }
 

@@ -64,6 +64,9 @@ func (a *App) syncColorPanel(win colorTarget) {
 		r, g, b, al := rgbaParts(rgba)
 		if win.ShowColorPanel(r, g, b, al) == nil {
 			cp.shown, cp.owner, cp.rgba = true, owner, rgba
+		} else { // no panel here: the well opens its own picker in the next frame
+			a.tr.in.SetColorFailed()
+			a.UI.RequestFrame()
 		}
 	case rgba != cp.rgba:
 		r, g, b, al := rgbaParts(rgba)

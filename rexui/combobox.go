@@ -171,12 +171,7 @@ func Combobox(k *base.Kit, label string, st *ComboState, buf *ui.TextBuffer, ite
 			}
 		}
 	}
-	// the focus ring: the keyboard's, in a key window
-	ring := ti.Visual
-	if ti.Inactive {
-		ring.Ring = 0
-	}
-	k.FocusRing(res.ID, ring, radius)
+	k.FocusRing(res.ID, ti.Visual.TextEntry(), radius) // (a text-entry control rings however it got the focus)
 	k.EndTextInput(&ti)
 
 	// typing moves the highlight to the first choice that begins with the text

@@ -48,7 +48,7 @@ func (p *lab) Build(c *ui.Context) {
 		p.chosen = cs.Chosen
 	}
 	rexui.TokenField(k, "To", &p.tokens, &p.toks, rexui.TokenFieldOpts{})
-	if rexui.ColorWell(k, "Accent", &p.well, &p.color, rexui.ColorWellOpts{Panel: true}).Changed {
+	if rexui.ColorWell(k, "Accent", &p.well, &p.color, rexui.ColorWellOpts{}).Changed {
 		p.changed++
 	}
 	rexui.Button(k, "After", rexui.ButtonOpts{})

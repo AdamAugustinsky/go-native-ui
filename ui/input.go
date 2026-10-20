@@ -346,8 +346,10 @@ type Input struct {
 	// colour panel, when HasColorPick, in the frame it arrives in; ColorClosed
 	// is set for the frame in which the user closed the panel (SetColorPick,
 	// SetColorClosed; Context.ColorPanel and TakeColorPick).
-	ColorPick                 uint32
-	HasColorPick, ColorClosed bool
+	ColorPick uint32
+	// ColorFailed is set for the frame after the app found the platform has no
+	// colour panel to show (SetColorFailed).
+	HasColorPick, ColorClosed, ColorFailed bool
 
 	// MenuIndex is the option the user chose in the native list menu that
 	// the box MenuOwner requested (Context.RequestMenu), for the frame
@@ -400,6 +402,10 @@ func (in *Input) PushAction(r SemRequest) bool {
 // SetColorPick records a colour chosen in the system colour panel (0xRRGGBBAA,
 // sRGB); a later one in the same frame replaces it.
 func (in *Input) SetColorPick(rgba uint32) { in.ColorPick, in.HasColorPick = rgba, true }
+
+// SetColorFailed records that the platform could not show the colour panel
+// (it has none): the box that asked uses its own picker.
+func (in *Input) SetColorFailed() { in.ColorFailed = true }
 
 // SetColorClosed records that the user closed the system colour panel.
 func (in *Input) SetColorClosed() { in.ColorClosed = true }
@@ -583,7 +589,7 @@ func (in *Input) ClearFrame() {
 	in.NEdit, in.NCommands, in.NActions, in.NGestures = 0, 0, 0, 0
 	in.HasPaste, in.HasReplace, in.ReplaceN = false, false, 0
 	in.HasMenuChoice = false
-	in.HasColorPick, in.ColorClosed = false, false
+	in.HasColorPick, in.ColorClosed, in.ColorFailed = false, false, false
 	in.Drop.clearFrame()
 	if cap(in.Paste) > MaxKeptPaste { // do not hold on to more than a supported paste
 		in.Paste = nil

@@ -49,6 +49,12 @@ func (c *Context) ColorPanelClosed(owner Key) bool {
 	return c.in.ColorClosed && c.cpLast.owner == owner && c.cpLast.on
 }
 
+// ColorPanelFailed reports that the platform has no colour panel to show, if
+// the panel was asked for by owner: it should open its own picker.
+func (c *Context) ColorPanelFailed(owner Key) bool {
+	return c.in.ColorFailed && c.cpLast.owner == owner && c.cpLast.on
+}
+
 // colorReq is a frame's colour panel request.
 type colorReq struct {
 	owner Key

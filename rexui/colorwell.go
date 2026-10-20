@@ -1,6 +1,7 @@
 package rexui
 
 import (
+	"gonativeui/platform"
 	"gonativeui/theme"
 	"gonativeui/ui"
 	"gonativeui/widget/base"
@@ -13,20 +14,24 @@ type ColorWellState struct {
 	// Hex is the picker's hex field. Call Hex.Reserve(16) once to make typing
 	// in it allocation-free.
 	Hex ui.TextBuffer
+
+	drawn bool // the platform could not show the panel: this well uses its picker
 }
 
 // ColorWellOpts are a colour well's options, passed by value.
 type ColorWellOpts struct {
-	// Panel makes the well use the system's colour panel (NSColorPanel on
-	// macOS; platform.NativeColorPanel says whether there is one) instead of
-	// its own picker. Pressing the well opens the panel with the well's
-	// colour; the colour the user sets there, continuously, is the well's
-	// (Changed); a colour the app sets moves the panel; the panel closes when
-	// the user closes it, when another well takes it, when the well is
-	// disabled and when it is no longer built. The app drives the panel
-	// (package app does it from ui.Context.ColorPanel); without it, or on
-	// a system with no panel, leave Panel off: the drawn picker is complete.
-	Panel bool
+	// Drawn makes the well use its own picker (a popover of the system
+	// colours with a hex field) instead of the system's colour panel. By
+	// default the well uses the panel (NSColorPanel on macOS): pressing it
+	// opens the panel with the well's colour, the colour the user sets there,
+	// continuously, is the well's (Changed), a colour the app sets moves the
+	// panel, and the panel closes when the user closes it, when another well
+	// takes it, when the well is disabled and when it is no longer built. The
+	// picker is also what the well uses where the platform has no panel
+	// (platform.NativeColorPanel is false, or the app finds the platform
+	// cannot show one: ErrUnsupported). Where no app drives the panel (an
+	// offscreen render) a pressed well shows nothing.
+	Drawn bool
 }
 
 // ColorWellRecipe is the look of colour wells (NSColorWell with the default
@@ -78,8 +83,7 @@ var pickerColors = [...]struct {
 // ColorWellSignal is what a colour well reports.
 type ColorWellSignal struct {
 	base.Signal
-	// Open: the drawn picker, or with ColorWellOpts.Panel the system's colour
-	// panel, is showing.
+	// Open: the system's colour panel, or the drawn picker, is showing.
 	Open bool
 }
 
@@ -135,6 +139,11 @@ func ColorWell(k *base.Kit, label string, st *ColorWellState, rgba *uint32, o Co
 	k.FocusRing(id, p.Visual, radius)
 	sig := ColorWellSignal{Signal: k.EndPress(&p)}
 
+	panel := !o.Drawn && platform.NativeColorPanel && !st.drawn
+	if panel && st.Open && c.ColorPanelFailed(p.Key) { // the platform has no panel: the picker
+		st.drawn, panel = true, false
+		st.Hex.SetBytes(hexBytes(c, *rgba))
+	}
 	claim := false
 	if !p.Disabled && sig.Clicked {
 		switch {
@@ -142,16 +151,16 @@ func ColorWell(k *base.Kit, label string, st *ColorWellState, rgba *uint32, o Co
 			st.Open = false
 		default:
 			st.Open = true
-			claim = o.Panel
-			if !o.Panel {
+			claim = panel
+			if !panel {
 				st.Hex.SetBytes(hexBytes(c, *rgba))
 			}
 		}
 	}
-	if o.Panel {
+	if panel {
 		sig.Changed = colorPanelSync(c, p.Key, st, rgba, claim, p.Disabled) || sig.Changed
 	}
-	if st.Open && !o.Panel && !p.Disabled {
+	if st.Open && !panel && !p.Disabled {
 		anchor := c.Rect(id)
 		pop := BeginPopover(k, "picker", anchor, PopoverOpts{Width: rc.Width, Label: "Colour"})
 		if colorPicker(k, st, rgba) {
