@@ -46,6 +46,7 @@ var (
 	edTVClass, edDelClass  objc.ID
 	edTVDef, edDelDef      *objc.ClassDef
 	edEmpty                objc.ID           // @""
+	edApp                  objc.ID           // NSApp
 	edTable                [MaxHosts]*Editor // index+1 is in the views' Index ivar
 	edStret                uintptr
 	edImageTypes           objc.ID // NSArray of the image types a paste routes to the app
@@ -189,6 +190,7 @@ func registerEditorClasses() {
 
 	clsNSScrollView, clsNSColor, clsNSFont = objc.Cls("NSScrollView"), objc.Cls("NSColor"), objc.Cls("NSFont")
 	clsNSUndoManager, clsEdString, clsNSNote = objc.Cls("NSUndoManager"), objc.Cls("NSString"), objc.Cls("NSNotificationCenter")
+	edApp = objc.Send(objc.Cls("NSApplication"), selSharedApplication)
 	edEmpty = objc.Retain(objc.Str(""))
 	edPlainType = objc.Retain(objc.Str("public.utf8-plain-text"))
 	edFgAttr, edBgAttr = objc.Retain(objc.Str("NSColor")), objc.Retain(objc.Str("NSBackgroundColor")) // NSForegroundColorAttributeName, NSBackgroundColorAttributeName
@@ -649,14 +651,12 @@ func edFrameChanged(c *ffi.CB) {
 
 // currentMods are the modifiers of the event AppKit is handling.
 func currentMods() Mods {
-	ev := objc.Send(objc.Send(clsNSApp(), selSharedApplication), selCurrentEvent)
+	ev := objc.Send(edApp, selCurrentEvent)
 	if ev == 0 {
 		return 0
 	}
 	return mods(uintptr(objc.Send(ev, selModifierFlags)))
 }
-
-func clsNSApp() objc.ID { return objc.Cls("NSApplication") }
 
 // command is the editor's part of doCommandBySelector:: true if it took sel.
 func (e *Editor) command(sel objc.SEL) bool {
