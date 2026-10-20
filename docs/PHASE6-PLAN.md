@@ -861,6 +861,15 @@ wave 5  fixes from both checkpoints' findings                               ║ 
      - closing the last window and clicking the Dock icon;
      - Dock → Quit with no window open;
      - pinch and rotate on the trackpad over the gallery's image scene, if F5 could not test gestures on the live path.
+   - **Added from the items' reports** (2026-10-19 and 20; each needs a real pointer, trackpad or system service):
+     - **gestures (F5, T2):** a real pinch and rotate over the gallery's image scene, including the rotation's direction; Windows touchpad pinch on Windows hardware;
+     - **keys (F5):** switch the keyboard layout while an app runs and check that shortcuts follow; secure input in a password field against the system's real state;
+     - **scrolling (N3fix):** a scroll gesture continued after the window loses focus mid-gesture is dropped; check that it feels right;
+     - **hidden windows (D3b fixes):** with a spinner showing, lock and unlock the screen and cover and uncover the window; it draws correctly each time;
+     - **zoom (C9):** ⌘+, ⌘=, ⌘− and ⌘0 from the keyboard and the View menu; rexlook (custom titlebar) zoomed to 150 % and back, with the lights, their hover symbols and the tabs;
+     - **drag and drop (N5):** a Finder file and text from another app onto a drop target (hover highlight, copy or not-allowed cursor, the data delivered); a PNG from Safari or Preview; a box dragged out to Finder as a file; a promised file to the Desktop, then the same cancelled with Esc (nothing written); a drag from a toolbar button (the window doesn't move); a drag over a hosted native view; a drop from our own window into itself; a slow source (a large image from an app that renders lazily), noting any main-thread hold;
+     - **clipboard (S6):** paste an image from Preview and files from Finder; a concealed copy that a clipboard manager doesn't record;
+     - **selection (C4):** select across a long chat, copy, and paste into TextEdit; double- and triple-click; a selection drag over a link doesn't open it.
 
    Your findings are fixed before wave 5 ends.
 2. **ZapFast at parity.** See the phase-7 plan. You see ZapFast for the first time there, at full parity (D33). Before it, you run N4's hand checklist (a real Japanese or Chinese input method, dictation, Writing Tools) and one real login with "Open at login" on, to confirm the app starts hidden; everything else in the editor matrix is automated and run by the N4 agent.
