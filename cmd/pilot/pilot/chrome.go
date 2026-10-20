@@ -194,10 +194,8 @@ func (pl *Pilot) drawSidebar(tbH float32) {
 func (pl *Pilot) drawToolbar(c *ui.Context, sbW float32) {
 	k := pl.bk
 	a := pl.panes[pl.active]
-	o := rexui.ToolbarOpts{Style: toolbarStyle, Title: a.base, Panes: [2]float32{sbW, 0}, ContentUnder: pl.under,
-		Traffic: pl.Traffic, BandFill: k.Theme().Colors[theme.ControlBackground]}
-	// the lists' headers are in the toolbar's pocket
-	o.ContentUnder, o.Pocket = true, theme.Snap(k.Theme().Lines.HeaderH)
+	o := rexui.ToolbarOpts{Style: toolbarStyle, Title: a.base, Panes: [2]float32{sbW, 0}, Traffic: pl.Traffic, ContentEdge: true,
+		BandFill: k.Theme().Colors[theme.ControlBackground]}
 	tb := rexui.BeginToolbar(k, "Toolbar", o)
 	if tb.Item(pl.sym.sidebar, "Sidebar").Clicked {
 		pl.sidebar = !pl.sidebar

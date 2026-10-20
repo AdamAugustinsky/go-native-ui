@@ -144,8 +144,8 @@ type Pilot struct {
 	items      []rexui.SidebarItem
 	open       [2]bool
 	sideFor    string
-	sideKey    ui.Key // the sidebar's box, as of the last frame: a stop of Tab's loop
-	under      bool
+	sideKey    ui.Key  // the sidebar's box, as of the last frame: a stop of Tab's loop
+	tbH        float32 // the toolbar's height in pixels, as of the last frame
 	rootTitle  string
 
 	init     [2]<-chan Ready

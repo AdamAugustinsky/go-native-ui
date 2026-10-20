@@ -58,11 +58,11 @@ func TestFollowsTheSystemAccent(t *testing.T) {
 }
 
 // Reduce Transparency makes the glass opaque: the window marks regions for the
-// system's materials (macOS, with materials in the window) and under the
-// setting only the toolbar's bar is left, with the fallback colours drawn
-// for the rest.
+// system's materials (macOS, with materials in the window: the sidebar; the
+// toolbar's capsules are drawn, over the lists that run under the band) and
+// under the setting marks none, drawing the fallback colours.
 func TestReduceTransparencyTakesTheMaterialsAway(t *testing.T) {
-	count := func(rt bool) (side, bar int) {
+	count := func(rt bool) (side, caps int) {
 		pl := New(SceneOptions())
 		o := newOffscreen(t, pl)
 		pl.bk.PinSystem(&theme.SystemValues{Known: true, Settings: theme.Settings{ReduceTransparency: rt}})
@@ -74,18 +74,18 @@ func TestReduceTransparencyTakesTheMaterialsAway(t *testing.T) {
 			switch r.Area {
 			case ui.AreaSidebar:
 				side++
-			case ui.AreaTitlebar:
-				bar++
+			case ui.AreaToolbarCapsule:
+				caps++
 			}
 		}
 		return
 	}
-	side, bar := count(false)
-	if runtime.GOOS == "darwin" && side != 1 || bar != 1 {
-		t.Errorf("materials on: %d sidebar regions, %d titlebar regions (darwin wants 1 and 1)", side, bar)
+	side, caps := count(false)
+	if runtime.GOOS == "darwin" && side != 1 {
+		t.Errorf("materials on: %d sidebar regions, %d capsules (darwin wants 1 sidebar; the capsules are drawn over the lists)", side, caps)
 	}
-	if side, bar = count(true); side != 0 || bar != 1 {
-		t.Errorf("Reduce Transparency: %d sidebar regions, %d titlebar regions, want 0 and 1", side, bar)
+	if side, caps = count(true); side != 0 || caps != 0 {
+		t.Errorf("Reduce Transparency: %d sidebar regions, %d capsules, want none", side, caps)
 	}
 }
 

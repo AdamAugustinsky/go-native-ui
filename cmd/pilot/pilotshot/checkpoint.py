@@ -158,8 +158,8 @@ def rows_for(setname, mode, inactive, scrolled):
     nxt = [n for n in nodes if n['Role'] == 'ListItem' and n['Frame'][0] < 5][1]
     geo('sidebar row pitch', nxt['Frame'][1] - first['Frame'][1], side_a['rows'][2]['rect']['y'] - row1_a['y'])
     t_o = node(nodes, 'Table', 'files')
-    geo('table x', t_o[0], tbl_a['frame']['x']); geo('table header y', t_o[1], tbl_a['header']['y'])
-    nh = node(nodes, 'ColumnHeader', 'Name')
+    geo('table x', t_o[0], tbl_a['frame']['x']); nh = node(nodes, 'ColumnHeader', 'Name')
+    geo('table header y', nh[1], tbl_a['header']['y'])
     geo('table header h', nh[3], tbl_a['header']['h'])
     rows_o = [n for n in nodes if n['Role'] == 'Row' and n['Frame'][0] < 400]
     r0 = tbl_a['rows'][0]['rect']
@@ -188,7 +188,7 @@ def rows_for(setname, mode, inactive, scrolled):
     # (scrolled: AppKit's selected rows are under the toolbar's glass and the header's line shows what is under it)
     if not scrolled:
         sel_a = next(r for r in tbl_a['rows'] if r.get('selected'))
-        sel_o = next(n for n in rows_o if n['Name'] == 'ui')  # the scene selects latest, ui and .gitignore
+        sel_o = rows_o[3]  # the scene selects rows 3 and 4, as the finder scene does
         name = 'selected row fill (emphasised: key window, list focused)' if not inactive else 'selected row fill (unemphasised)'
         col(name, probe_row(oi, t_o[0] + 300, sel_o['Frame'][1]), probe_row(ai, tbl_a['frame']['x'] + 300, sel_a['rect']['y']))
         # the line under the header
@@ -230,7 +230,12 @@ if __name__ == '__main__':
     ap.add_argument('--set', default='both')
     A = ap.parse_args()
     OUT = A.out
-    md = '# Pilot against AppKit\'s finder scene\n\nElement, ours, AppKit, delta. Points for geometry (±0.5), ΔE2000 for fills (≤ 2).\n\n'
+    def sh(*a):
+        try: return subprocess.run(a, capture_output=True, text=True, cwd=REPO).stdout.strip()
+        except Exception: return '?'
+    import datetime
+    machine = '%s, %s, macOS %s (%s), %s' % (sh('hostname', '-s'), sh('sysctl', '-n', 'machdep.cpu.brand_string'), sh('sw_vers', '-productVersion'), sh('sw_vers', '-buildVersion'), sh('sysctl', '-n', 'hw.model'))
+    md = '# Pilot against AppKit\'s finder scene\n\nRecorded %s on %s; Pilot at %s (%s). Live captures: GnuiShot, Pilot D6.app, fixture folders (not ~/Documents), 1120x640 pt at 2x; AppKit references: appkitscenes captures-macmini (legacy) and captures-macmini-overlay (overlay) of macOS 27.2.\n\nElement, ours, AppKit, delta. Points for geometry (±0.5), ΔE2000 for fills (≤ 2). The live captures have no selection and a pink accent; the offscreen ones (measured here) have the AppKit scene\'s selection.\n\n' % (datetime.date.today(), machine, sh('git', 'rev-parse', '--short', 'HEAD'), sh('git', 'rev-parse', '--abbrev-ref', 'HEAD'))
     for sname in (['legacy', 'overlay'] if A.set == 'both' else [A.set]):
         for mode in ('light', 'dark'):
             for inactive in (False, True):

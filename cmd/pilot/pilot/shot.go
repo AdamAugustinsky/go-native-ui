@@ -19,7 +19,7 @@ import (
 
 // The offscreen scene: two folders with fixed names (some not ASCII, with an
 // emoji), sizes and modification times in UTC; the left pane has the keyboard,
-// shows hidden files and a selection of three rows, the right pane has a filter.
+// shows hidden files and a selection of two rows, the right pane has a filter.
 
 type item struct {
 	name  string
@@ -133,7 +133,7 @@ func longer(items []item, n int) []item {
 }
 
 // SceneSetup puts the offscreen scene in its state: the left pane shows hidden
-// files with three rows selected, the right pane filters for "re". Call it
+// files with two rows selected, the right pane filters for "re". Call it
 // before the first frame; ScenePost finishes it once the rows exist.
 func (pl *Pilot) SceneSetup() {
 	l, r := pl.panes[0], pl.panes[1]
@@ -145,15 +145,16 @@ func (pl *Pilot) SceneSetup() {
 	pl.active = 0
 }
 
-// ScenePost selects rows 5..7 of the left pane (the cursor on the last) and
-// shows the keyboard cursor, as the left pane has the keyboard. In the
+// ScenePost selects rows 3 and 4 of the left pane (the cursor on the last, as
+// the finder scene's selection is) and shows the keyboard cursor, as the left
+// pane has the keyboard. In the
 // scrolled scene the left list is scrolled 130 pt, under the toolbar.
 func (pl *Pilot) ScenePost() {
 	v := &pl.panes[0].v
 	if v.nRows() > 8 {
-		v.selectOnly(v.entryAt(5))
-		v.ts.Sel.SelectRange(v.order(), 5, 7)
-		pl.panes[0].reveal = 7
+		v.selectOnly(v.entryAt(3))
+		v.ts.Sel.SelectRange(v.order(), 3, 4)
+		pl.panes[0].reveal = 4
 	}
 	if pl.opt.ScrollLeft {
 		pl.panes[0].reveal = -1

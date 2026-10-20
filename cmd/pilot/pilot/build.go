@@ -106,7 +106,7 @@ func (pl *Pilot) applyScroll() {
 	if !pl.opt.ScrollLeft || pl.scrollDone {
 		return
 	}
-	if v := &pl.panes[0].v; v.nRows() > 8 {
+	if v := &pl.panes[0].v; v.nRows() > 8 && v.ts.RowPx() > 0 { // the row height is known from the first frame on
 		top := float32(130-5) / 24
 		v.ts.SetTopRow(int(top), top-float32(int(top)))
 		pl.scrollDone = true
@@ -135,9 +135,9 @@ func (pl *Pilot) workLeft(c *ui.Context) {
 }
 
 // draw builds the window as the finder scene has it: the sidebar's glass full
-// height at the left, the lists to its right below the toolbar, and the
-// toolbar over both. The lists' headers lie in the toolbar's pocket, so the
-// toolbar comes first and the lists draw over it.
+// height at the left, the lists to its right running under the toolbar, and the
+// toolbar over them with its band clear (the lists draw the scroll edge, and
+// their headers lie in its pocket).
 func (pl *Pilot) draw(c *ui.Context) {
 	k := pl.bk
 	r := k.Theme()
@@ -152,19 +152,16 @@ func (pl *Pilot) draw(c *ui.Context) {
 		pl.drawSidebar(tbH)
 		c.Pop()
 	}
-	pl.drawToolbar(c, sbW)
-	// (no fill: the lists paint their own rows, below their headers in the
-	// toolbar's pocket, and the bars at their foot theirs)
-	theme.At(c, sbW, tbH, W-sbW, H-tbH)
+	// The lists run under the toolbar's band, their scroll views inset by it
+	// (TableOpts.TopInset), and draw the scroll edge themselves: the toolbar
+	// comes after them, over them, with its band clear (ContentEdge).
+	pl.tbH = tbH
+	theme.At(c, sbW, 0, W-sbW, H)
 	area := c.BoxKeyed(fl, keyArea, nil)
 	c.Push(area)
-	under := pl.under
 	pl.drawPanes(c, r, sbW, tbH)
-	pl.under = pl.panes[0].under || pl.panes[1].under
-	if pl.under != under { // the toolbar of this frame used the last one's
-		c.RequestFrame()
-	}
 	c.Pop()
+	pl.drawToolbar(c, sbW)
 }
 
 func b2f(b bool) float32 {
@@ -181,7 +178,7 @@ func (pl *Pilot) drawPanes(c *ui.Context, r *theme.Resolved, ox, oy float32) {
 	pl.frameRows = 0
 	for i := range pl.panes {
 		pr := sp.PaneRect(i)
-		pl.geo[i].rect = [4]float32{ox + pr[0], oy + pr[1], ox + pr[2], oy + pr[3]}
+		pl.geo[i].rect = [4]float32{ox + pr[0], max(pr[1], oy), ox + pr[2], pr[3]} // below the band: the toolbar's presses are not the pane's
 		sp.Pane(i)
 		pl.drawPane(c, r, i, pr[2]-pr[0], pr[3]-pr[1])
 		sp.EndPane()
@@ -203,18 +200,19 @@ func (pl *Pilot) drawPanes(c *ui.Context, r *theme.Resolved, ox, oy float32) {
 func (pl *Pilot) drawDivider(c *ui.Context, r *theme.Resolved, sp *base.Splitter, i int) {
 	k := pl.bk
 	d := sp.Divider(i)
-	theme.At(c, d.Gutter[0], 0, d.Gutter[2]-d.Gutter[0], d.Bounds[3])
+	top := pl.tbH
+	theme.At(c, d.Gutter[0], top, d.Gutter[2]-d.Gutter[0], d.Bounds[3]-top)
 	c.NextBG(r.Colors[theme.Separator])
 	c.BoxKeyed(ui.DrawBackground|fl, ui.KeyN(d.Key, 9101), nil)
 	gx := (d.Gutter[0] + d.Gutter[2]) / 2
 	gw := theme.Snap(grabPt * r.Scale)
-	theme.At(c, theme.Snap(gx-gw/2), 0, gw, d.Bounds[3])
+	theme.At(c, theme.Snap(gx-gw/2), top, gw, d.Bounds[3]-top)
 	k.NextDivider(sp, &d)
 	c.NextCursor(ui.CursorResizeEW)
 	c.BoxKeyed(ui.Clickable|ui.HotAnimation|ui.ActiveAnimation|fl, d.Key, nil)
 	if d.Ring > 0.004 {
 		lw := theme.Snap(r.Px.FocusRingW)
-		theme.At(c, theme.Snap(gx-lw/2), 0, lw, d.Bounds[3])
+		theme.At(c, theme.Snap(gx-lw/2), top, lw, d.Bounds[3]-top)
 		c.NextBG(theme.WithAlpha(r.Colors[theme.FocusRing], d.Ring))
 		c.BoxKeyed(ui.DrawBackground|fl, ui.KeyN(d.Key, 9100), nil)
 	}
@@ -334,7 +332,7 @@ func (pl *Pilot) drawList(c *ui.Context, r *theme.Resolved, i int, p *pane, pane
 
 	cols := pl.columns(p, paneW)
 	k.NextSize(ui.Px(paneW), ui.Px(h))
-	t := rexui.BeginTable(k, "files", &v.ts, cols, nRows, rexui.TableOpts{Striped: true, ClearHeader: true})
+	t := rexui.BeginTable(k, "files", &v.ts, cols, nRows, rexui.TableOpts{Striped: true, ClearHeader: true, TopInset: pl.tbH})
 	if t.SortChanged {
 		p.sortBy(sortKeyOf(t.Sort.Column))
 		pl.setActive(c, i)
@@ -345,10 +343,13 @@ func (pl *Pilot) drawList(c *ui.Context, r *theme.Resolved, i int, p *pane, pane
 	}
 	g.rowPx = v.ts.RowPx()
 	lr := c.RectOf(t.Key())
-	g.list, g.hdr = lr, c.RectOf(t.HeaderKey())
+	g.list, g.hdr = lr, c.RectOf(t.HeaderKey()) // the header is built in EndTable: the last frame's
+	if g.hdr[2] <= g.hdr[0] {
+		g.hdr = [4]float32{lr[0], lr[1] + pl.tbH, lr[2], lr[1] + pl.tbH + theme.Snap(r.Lines.HeaderH)}
+	}
 	g.visRows = 0
 	if g.rowPx > 0 {
-		g.visRows = int((lr[3] - lr[1]) / g.rowPx)
+		g.visRows = int((lr[3] - g.hdr[1]) / g.rowPx) // the header's top to the foot: what a page of rows is
 	}
 	g.cols = [3][2]float32{}
 	x := g.hdr[0]
@@ -427,8 +428,6 @@ func (pl *Pilot) drawList(c *ui.Context, r *theme.Resolved, i int, p *pane, pane
 		msg = emptyTx
 	}
 	t.Empty(msg)
-	_, sy := c.Scroll(t.ScrollView().Inner)
-	p.under = sy > 0.5
 	rexui.EndTable(k, &t)
 
 	// the cursor row of the pane that was just built: what Build keeps for the model

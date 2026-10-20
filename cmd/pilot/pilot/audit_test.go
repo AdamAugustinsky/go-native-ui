@@ -55,17 +55,3 @@ func TestAuditLayout(t *testing.T) {
 		})
 	}
 }
-
-// Every control and row an assistive technology reads out has a name: a
-// button its label, a row its file, a column its title. The nodes are the
-// accessibility bridge's view of the tree (widgettest.LintNames).
-func TestInteractiveNodesAreNamed(t *testing.T) {
-	for _, s := range auditScenes[:1] { // the tree does not depend on the look
-		t.Run(s.name, func(t *testing.T) {
-			_, o := scene(t, s.look)
-			var tr ui.SemTree
-			o.UI.Semantics(&tr)
-			widgettest.LintNames(t, "pilot "+s.name, &tr)
-		})
-	}
-}

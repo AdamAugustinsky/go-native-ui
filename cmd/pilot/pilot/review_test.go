@@ -489,7 +489,7 @@ func TestClickingTheOtherPaneLeavesTheTextField(t *testing.T) {
 	}
 
 	// a column header of the other pane does the same from the left filter
-	r.at(pl.geo[0].list[0]+30, pl.geo[0].list[1]+20)
+	r.at(pl.geo[0].list[0]+30, pl.geo[0].hdr[3]+30) // a row, below the toolbar's band and the header
 	r.click(0)
 	r.text("m")
 	if r.o.UI.FocusKey() != filterKey(0) {

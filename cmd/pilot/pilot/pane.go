@@ -92,7 +92,6 @@ type pane struct {
 	crumbItem []rexui.PathItem
 	pathEdit  bool
 	rootTitle string
-	under     bool // rows are scrolled under the toolbar (the last frame's)
 }
 
 // crumb is one component of the path bar: its name and the folder it opens.
