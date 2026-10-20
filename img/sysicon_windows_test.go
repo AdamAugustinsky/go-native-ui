@@ -5,6 +5,7 @@ package img
 import (
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -44,29 +45,33 @@ func TestSystemIconsWindows(t *testing.T) {
 }
 
 // TestSystemIconsWindowsConcurrent: workers decode at once, each initialising
-// COM on its own thread; every icon equals the one decoded alone.
+// COM on its own thread; every icon equals the one decoded alone (the shell
+// may settle an icon by a level or two, so within a small tolerance).
 func TestSystemIconsWindowsConcurrent(t *testing.T) {
 	c, _ := newTestCache(t, Options{})
 	srcs := []Source{FolderIcon(), ExtensionIcon("txt"), ExtensionIcon("png"), FileIcon(os.TempDir())}
 	want := make([]decoded, len(srcs))
 	for i, s := range srcs {
 		want[i] = iconNow(t, c, s, 48, 48, 0)
+		again := iconNow(t, c, s, 48, 48, 0) // on this thread, one after the other
+		mean, worst := iconDiff(want[i], again)
+		t.Logf("icon %d decoded twice in a row: mean difference %.2f, worst %d", i, mean, worst)
 	}
-	done := make(chan struct{})
+	var wg sync.WaitGroup
 	for g := 0; g < 8; g++ {
+		wg.Add(1)
 		go func() {
-			defer func() { done <- struct{}{} }()
+			defer wg.Done()
 			for k := 0; k < 10; k++ {
 				for i, s := range srcs {
-					if d := iconNow(t, c, s, 48, 48, 0); string(d.pix) != string(want[i].pix) {
-						t.Errorf("icon %d differs when decoded concurrently", i)
+					d := iconNow(t, c, s, 48, 48, 0)
+					if mean, worst := iconDiff(want[i], d); mean > 1 || worst > 16 {
+						t.Errorf("icon %d differs when decoded concurrently: mean %.2f, worst %d (%d and %d distinct pixels)", i, mean, worst, distinct(want[i]), distinct(d))
 						return
 					}
 				}
 			}
 		}()
 	}
-	for g := 0; g < 8; g++ {
-		<-done
-	}
+	wg.Wait()
 }

@@ -69,6 +69,21 @@ func validIcon(t testing.TB, what string, d decoded, side int) {
 	}
 }
 
+// iconDiff is the mean and largest absolute channel difference of two
+// decodes of the same size.
+func iconDiff(a, b decoded) (mean float64, worst int) {
+	sum := 0
+	for i := range a.pix {
+		d := int(a.pix[i]) - int(b.pix[i])
+		if d < 0 {
+			d = -d
+		}
+		sum += d
+		worst = max(worst, d)
+	}
+	return float64(sum) / float64(len(a.pix)), worst
+}
+
 // distinct is the number of different pixels.
 func distinct(d decoded) int {
 	seen := map[[4]byte]struct{}{}

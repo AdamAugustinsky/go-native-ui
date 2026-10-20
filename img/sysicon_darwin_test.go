@@ -90,7 +90,7 @@ func TestSystemIconsDarwin(t *testing.T) {
 			continue
 		}
 		up := scaleNearest(pair[0], 64, 64)
-		mean, _ := diff(pair[1], up)
+		mean, _ := iconDiff(pair[1], up)
 		d32, d64 := distinct(pair[0]), distinct(pair[1])
 		t.Logf("%-14s 32: %4d colours; 64: %4d colours, mean difference from the 32 enlarged %.1f", s.name, d32, d64, mean)
 		if d64 <= d32 || mean < 1.5 {
@@ -241,7 +241,7 @@ func TestSystemIconsConcurrent(t *testing.T) {
 					t.Errorf("goroutine %d: icon %d at %d failed: %v", g, i, side, errOf(d.r.err))
 					return
 				}
-				if mean, worst := diff(want[[2]int{i, int(side)}], d); mean > 0.5 || worst > 8 {
+				if mean, worst := iconDiff(want[[2]int{i, int(side)}], d); mean > 0.5 || worst > 8 {
 					t.Errorf("goroutine %d: icon %d at %d differs from the one decoded alone: mean %.2f, worst %d", g, i, side, mean, worst)
 					return
 				}
