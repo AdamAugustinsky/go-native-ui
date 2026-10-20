@@ -174,11 +174,11 @@ func (r *Rex) drawPane(c *ui.Context, t *tab, slot int8, d [4]float32, ft, opa f
 	r.IconAt(c, &kg, pt.icon, 39*k, hc, titleCol)
 	avail := w - 62*k - theme.Lerp(20*k, 206*k, ft)
 	if avail > 4 {
-		adv := r.Width(r.th.Font.UISemi, pt.title)
+		adv := r.Width(r.th.Styles[theme.StylePaneTitle].Font, pt.title)
 		if adv > avail {
-			r.Put(c, &kg, r.th.Font.UISemi, pt.title, 62*k, 47*k, titleCol, avail, ui.FadeOverflowX)
+			r.Put(c, &kg, r.th.Styles[theme.StylePaneTitle].Font, pt.title, 62*k, 47*k, titleCol, avail, ui.FadeOverflowX)
 		} else {
-			r.Put(c, &kg, r.th.Font.UISemi, pt.title, 62*k, 47*k, titleCol, adv+2, 0)
+			r.Put(c, &kg, r.th.Styles[theme.StylePaneTitle].Font, pt.title, 62*k, 47*k, titleCol, adv+2, 0)
 		}
 	}
 	if ft > 0.02 {
@@ -193,7 +193,7 @@ func (r *Rex) drawPane(c *ui.Context, t *tab, slot int8, d [4]float32, ft, opa f
 			case btnClose:
 				enabled = enabled && r.canClose()
 			}
-			r.IconButton(c, btnKey(p.uid, b), icons[b], w-dx[b]*k, hc+k, 28*k, r.tone(0x96999B, 0x8A8EA1), r.tone(0x3F4246, 0xECEDF3), enabled)
+			r.HeaderButton(c, holderKey(p.uid, b), icons[b], headerButtons[b], w-dx[b]*k, hc+k, 28*k, enabled)
 		}
 		c.PopOpacity()
 	}
