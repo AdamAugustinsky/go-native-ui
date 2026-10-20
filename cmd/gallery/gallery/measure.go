@@ -14,8 +14,8 @@ type Node struct {
 }
 
 // Measure renders the scene at rest and returns the frames, in points, of
-// its elements: groups, controls, labels, the sidebar's rows and the toolbar's
-// items.
+// its elements: groups, controls, labels, the sidebar's rows, the toolbar's
+// items, and a table's header and rows.
 func Measure(o ShotOptions) ([]Node, error) {
 	if o.Scale <= 0 {
 		o.Scale = 2
@@ -33,7 +33,7 @@ func Measure(o ShotOptions) ([]Node, error) {
 		switch n.Role {
 		case ui.RoleButton, ui.RoleGroup, ui.RoleRadioGroup, ui.RoleRadio, ui.RoleComboBox, ui.RoleSearchField, ui.RoleSwitch,
 			ui.RoleSlider, ui.RoleCheckbox, ui.RoleTextField, ui.RoleLabel, ui.RoleListItem, ui.RoleTab, ui.RoleTabList, ui.RoleList,
-			ui.RoleScrollArea, ui.RoleScrollBar:
+			ui.RoleScrollArea, ui.RoleScrollBar, ui.RoleColumnHeader, ui.RoleRow, ui.RoleTable:
 		default:
 			continue
 		}
