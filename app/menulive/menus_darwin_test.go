@@ -3,6 +3,7 @@
 package menulive
 
 import (
+	"fmt"
 	"os"
 	"runtime"
 	"sync/atomic"
@@ -223,6 +224,13 @@ type selectApp struct {
 	drew     bool // the display link ran the frame handler while it was
 	shown    []string
 	quit     atomic.Bool
+
+	// Evidence for an environment that stopped the test (see needNested,
+	// runSelect): the frame source around DebugMenu.Frame's wait, and
+	// whether the window was key when it took the focus and when the key
+	// was posted.
+	link0, link1         platform.DebugState
+	keyAtFocus, keyAtKey bool
 }
 
 func (s *selectApp) Init(a *app.App) error {
@@ -250,6 +258,7 @@ func (s *selectApp) Build(c *ui.Context) {
 	sig := k.Select("Format", &s.sel, s.opts)
 	if s.mode == "repaint" && s.frame == 3 {
 		k.Focus(c.KeyOf(sig.ID))
+		s.keyAtFocus = s.a.Win.DebugState().Key
 	}
 	d := k.BeginDialog("blocking", "Blocking", &s.dialog)
 	k.EndDialog(&d)
@@ -259,6 +268,7 @@ func (s *selectApp) Build(c *ui.Context) {
 		// focus has settled, and then nothing asks for a frame but the
 		// choice (no pointer, no animation).
 		if s.frame == settleFrames {
+			s.keyAtKey = s.a.Win.DebugState().Key
 			postKey(objc.ID(s.a.Win.Native().NSWindow), "\uF701", 0, 0x7D)
 			s.clicked = s.frame
 		}
@@ -291,11 +301,15 @@ func (s *selectApp) onMenuOpen(m platform.DebugMenu) {
 	switch s.mode {
 	case "reorder":
 		s.opts = []string{"B", "A"} // the next frame shows them so
+		s.link0 = s.a.Win.DebugState()
 		s.drew = m.Frame() && m.Frame()
+		s.link1 = s.a.Win.DebugState()
 		m.Choose(1) // "B" as the menu showed it
 	case "modal":
 		s.dialog = true
+		s.link0 = s.a.Win.DebugState()
 		s.drew = m.Frame() && m.Frame()
+		s.link1 = s.a.Win.DebugState()
 		m.Choose(1)
 	case "repaint":
 		m.Choose(1)
@@ -317,23 +331,74 @@ func runSelect(t *testing.T, mode string) *selectApp {
 	t.Logf("%s: %d frames; clicked at %d, menu open at %d; handler ran while open %v, frames built %d; sel %d; timed out %v",
 		mode, s.frame, s.clicked, s.opened, s.drew, s.nested, s.sel, timedOut.Load())
 	if s.clicked == 0 || s.opened == 0 {
-		t.Fatalf("the select was clicked at frame %d, its menu opened at %d", s.clicked, s.opened)
+		// A posted key goes to the key window. One that was key when it took
+		// the focus and is not when the key is posted lost it to another
+		// app: the environment's (CI: the menu never opened, once).
+		if mode == "repaint" && s.clicked != 0 && s.keyAtFocus && !s.keyAtKey {
+			t.Skipf("the window was key at frame 3 and no longer at frame %d, when the key was posted: another app took the keyboard", s.clicked)
+		}
+		t.Fatalf("the select was clicked at frame %d, its menu opened at %d (window key at the focus %v, at the key %v)", s.clicked, s.opened, s.keyAtFocus, s.keyAtKey)
 	}
 	return s
 }
 
 // needNested ends the test where no frame could be drawn while the menu was
-// open: the display link does not tick where the display sleeps (a locked
-// screen), so nothing changes during the tracking. CI's runners have a
-// display that ticks.
+// open because the display link did not tick: a frame was owed, the link
+// was not paused by us, and it delivered no tick in the second
+// DebugMenu.Frame waits (a display asleep, a locked screen; a hosted
+// runner's display stalls, which CI saw also outside menus). A link that
+// ticked without the handler running, or a handler that built no frame,
+// fails.
 func needNested(t *testing.T, s *selectApp) {
 	t.Helper()
+	switch skip, fail := nestedVerdict(s.drew, s.nested, s.link0, s.link1); {
+	case skip != "":
+		t.Skip(skip)
+	case fail != "":
+		t.Fatal(fail)
+	}
+}
+
+// nestedVerdict is needNested's judgement: neither string when frames were
+// built while the menu was open, a reason to skip when the display link was
+// silent, a failure otherwise.
+func nestedVerdict(drew bool, nested int, b, e platform.DebugState) (skip, fail string) {
 	switch {
-	case s.drew && s.nested > 0:
-	case os.Getenv("CI") == "" && !s.drew:
-		t.Skip("the display link does not tick here (display asleep): no frame while the menu is open")
-	default:
-		t.Fatalf("frames while the menu was open: handler ran %v, built %d", s.drew, s.nested)
+	case drew && nested > 0:
+		return "", ""
+	case !drew && b.Valid && e.Valid && e.Ticks == b.Ticks && (b.FrameArmed || e.FrameArmed) &&
+		!b.LinkPaused && !e.LinkPaused && e.Now-b.Now >= 9e8:
+		return fmt.Sprintf("the display link did not tick for %.1f s while a frame was owed and the menu open (ticks %d, visible %v, occlusion %d): no frame could be drawn",
+			float64(e.Now-b.Now)/1e9, e.Ticks, e.Visible, e.Occlusion), ""
+	}
+	return "", fmt.Sprintf("frames while the menu was open: handler ran %v, built %d; link ticks %d -> %d, armed %v/%v, paused %v/%v, over %.2f s",
+		drew, nested, b.Ticks, e.Ticks, b.FrameArmed, e.FrameArmed, b.LinkPaused, e.LinkPaused, float64(e.Now-b.Now)/1e9)
+}
+
+// A silent display link excuses the missing frames; a link that ticked, one
+// we paused, or a handler that built nothing does not.
+func TestNestedVerdict(t *testing.T) {
+	at := func(now int64, ticks uint64, armed, paused bool) platform.DebugState {
+		return platform.DebugState{Valid: true, Now: now, Ticks: ticks, FrameArmed: armed, LinkPaused: paused}
+	}
+	for _, c := range []struct {
+		name       string
+		drew       bool
+		nested     int
+		b, e       platform.DebugState
+		skip, fail bool
+	}{
+		{"frames built", true, 2, at(0, 10, true, false), at(2e9, 130, false, false), false, false},
+		{"link silent, a frame owed", false, 0, at(0, 10, true, false), at(2e9, 10, true, false), true, false},
+		{"link ticked, no handler", false, 0, at(0, 10, true, false), at(2e9, 130, true, false), false, true},
+		{"link paused by us", false, 0, at(0, 10, true, true), at(2e9, 10, true, true), false, true},
+		{"no frame owed", false, 0, at(0, 10, false, false), at(2e9, 10, false, false), false, true},
+		{"handler ran, nothing built", true, 0, at(0, 10, true, false), at(2e9, 12, true, false), false, true},
+	} {
+		skip, fail := nestedVerdict(c.drew, c.nested, c.b, c.e)
+		if (skip != "") != c.skip || (fail != "") != c.fail {
+			t.Errorf("%s: skip %q, fail %q", c.name, skip, fail)
+		}
 	}
 }
 
