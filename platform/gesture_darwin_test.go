@@ -208,11 +208,14 @@ func TestGestureEventsThroughAppKitsRouting(t *testing.T) {
 	}
 }
 
-// TestGestureEventsThroughNSAppSendEvent is the live check: [NSApp sendEvent:]
-// delivers a synthetic gesture only while the application is active, so
-// where it is not (a runner whose window is not key) the test is skipped, and
-// the checkpoint-1 hand list carries the line "pinch and rotate on the
-// trackpad over the gallery's image scene".
+// TestGestureEventsThroughNSAppSendEvent: [NSApp sendEvent:] on an active
+// application. AppKit drops a synthetic phased gesture there (only a real
+// trackpad's stream, which arrives through the event queue as in
+// TestGestureEventsThroughTheQueue, starts one), so what is checked is that the
+// one-shot smart zoom still gets through with its point, and that nothing wrong
+// comes out. Inactive (a runner whose window is not key) it is skipped; the
+// phased pinch and rotation on a real trackpad are on the checkpoint-1 hand
+// list ("pinch and rotate on the trackpad over the gallery's image scene").
 func TestGestureEventsThroughNSAppSendEvent(t *testing.T) {
 	g := newCGGesture(t)
 	var evs []Event
@@ -250,5 +253,26 @@ func TestGestureEventsThroughNSAppSendEvent(t *testing.T) {
 	if !active {
 		t.Skip("the application cannot become active here: [NSApp sendEvent:] drops gestures then; see the checkpoint-1 hand list")
 	}
-	checkGestures(t, "NSApp sendEvent:", evs, scale, offY)
+	// Every event that came is one of the sequence's, in order; the smart
+	// zoom is among them.
+	next, smart := 0, false
+	for _, e := range evs {
+		if e.Kind != EvMagnify && e.Kind != EvRotate && e.Kind != EvSmartMagnify {
+			continue
+		}
+		found := false
+		for ; next < len(gestureWant) && !found; next++ {
+			w := gestureWant[next]
+			x, y := w.x*float64(scale), (w.y-offY)*float64(scale)
+			found = e.Kind == w.kind && e.Phase == w.phase && e.Amount == w.amount &&
+				math.Abs(float64(e.X)-x) <= 0.5 && math.Abs(float64(e.Y)-y) <= 0.5
+		}
+		if !found {
+			t.Errorf("NSApp sendEvent: unexpected gesture event %+v", e)
+		}
+		smart = smart || e.Kind == EvSmartMagnify
+	}
+	if !smart {
+		t.Errorf("NSApp sendEvent: the smart zoom did not arrive: %+v", evs)
+	}
 }
