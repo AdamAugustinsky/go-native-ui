@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf16"
 	"unsafe"
 
@@ -410,17 +411,20 @@ func TestEditorAutocorrect(t *testing.T) {
 	focusEditor(t, l, p)
 	// Mid-sentence (the first word may be capitalised by the user's setting);
 	// the space after a pause, as a person types: the text view checks the
-	// word as it is typed and corrects it when the space ends it.
+	// word as it is typed and corrects it when the space ends it. The pause
+	// is wall time, not frames: on macOS 15 the correction bubble
+	// (NSCorrectionPanel) runs a nested event loop until the next key, and
+	// the app draws no frame meanwhile.
 	typeSentence := func() {
 		l.Type("i saw teh")
 		l.Until("typed", 120, func() bool { return strings.HasSuffix(string(p.ed.Text()), "teh") })
-		l.Frames(60)
+		time.Sleep(1500 * time.Millisecond)
 		l.Type(" ")
 		l.Frames(2)
 	}
 	l.Do(func(*app.App) { p.ed.SetAutocorrect(false) })
 	typeSentence()
-	l.Frames(60)
+	l.Frames(30)
 	if got := string(p.ed.Text()); !strings.HasSuffix(got, "saw teh ") {
 		t.Fatalf("autocorrect off changed the text to %q", got)
 	}
