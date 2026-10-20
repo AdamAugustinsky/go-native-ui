@@ -201,10 +201,17 @@ func (c *Context) PopFont() { c.sFont.pop() }
 
 // Horizontal text alignment.
 
-// NextAlign sets the horizontal text alignment of the next box only.
+// NextAlign sets the horizontal alignment of the next box's own display text
+// (DrawText) only. It does not move the box's children: on a box that draws no
+// text it does nothing. To place children, use NextJustify (along the layout
+// axis) and NextCross (across it): a capsule that centres its icon is
+// NextJustify(JustifyCenter) with NextCross(CrossCenter). Context.Audit
+// reports a NextAlign on a box that has children and no text.
 func (c *Context) NextAlign(a Align) { c.sAlign.set(a) }
 
-// PushAlign pushes the horizontal text alignment until PopAlign.
+// PushAlign pushes the horizontal text alignment until PopAlign. Like
+// NextAlign it applies to the display text of the boxes built meanwhile, not to
+// their children.
 func (c *Context) PushAlign(a Align) { c.sAlign.push(a) }
 
 // PopAlign pops the alignment pushed by PushAlign.
@@ -269,6 +276,20 @@ func (c *Context) PushCross(a Cross) { c.sCross.push(a) }
 
 // PopCross pops the placement pushed by PushCross.
 func (c *Context) PopCross() { c.sCross.pop() }
+
+// Main-axis placement of the children.
+
+// NextJustify sets where the next box places its flow children along its
+// layout axis, in the free space its padded area has left (JustifyStart by
+// default). See Justify for how it meets percentages, overflow, scrolling and
+// flows.
+func (c *Context) NextJustify(j Justify) { c.sJustify.set(j) }
+
+// PushJustify pushes the main-axis placement until PopJustify.
+func (c *Context) PushJustify(j Justify) { c.sJustify.push(j) }
+
+// PopJustify pops the placement pushed by PushJustify.
+func (c *Context) PopJustify() { c.sJustify.pop() }
 
 // Preferred sizes per axis.
 

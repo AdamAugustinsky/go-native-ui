@@ -182,3 +182,35 @@ func TestDialogsPresentAfterTheFrame(t *testing.T) {
 		t.Error("an invalid spec was queued")
 	}
 }
+
+type recordingHandler struct {
+	DefaultHandler
+	got []Event
+}
+
+func (h *recordingHandler) Event(a *App, e *Event) { h.got = append(h.got, *e) }
+
+// A sheet a test's dialog target ended (DebugDialogEnded) reaches the app as
+// a native one does: the result under the app's ticket for TakeDialog, and
+// EvService from SourceDialog with that ticket to the Handler.
+func TestDebugDialogEndedReachesTheHandler(t *testing.T) {
+	f := &fakeDialogs{}
+	h := &recordingHandler{}
+	a := &App{UI: ui.New(fakeui.New()), dlgT: f, handler: h}
+	tk, err := a.Alert(platform.AlertSpec{Message: "m", Buttons: []string{"Delete", "Cancel"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.flushDialogs()
+	a.DebugDialogEnded(platform.DialogResult{Ticket: 100, Kind: platform.DialogAlert, Outcome: platform.DialogAnswered, Button: 1}) // the fake's ticket
+	if len(h.got) != 1 || h.got[0].Kind != EvService || h.got[0].Source != platform.SourceDialog || h.got[0].ID != uint64(tk) {
+		t.Fatalf("the handler got %+v, want EvService from SourceDialog with ID %d", h.got, tk)
+	}
+	if r, ok := a.TakeDialog(); !ok || r.Ticket != tk || r.Button != 1 {
+		t.Fatalf("TakeDialog: %+v (ok %v)", r, ok)
+	}
+	a.DebugDialogEnded(platform.DialogResult{Ticket: 100, Kind: platform.DialogAlert}) // ended already: dropped
+	if len(h.got) != 1 {
+		t.Fatalf("a result for a dialog not on screen was delivered: %+v", h.got)
+	}
+}

@@ -154,6 +154,11 @@ button of different heights sit on one line (`NextCross` changes that).
   container, and are then forgotten.
 - **Sizes.** A child fits its content by default. `widget.Fill` takes the room
   its siblings leave, and `Kit.Fixed(pt)` is a fixed size.
+- **Placing children.** `NextJustify` places the children of the next row or
+  column along its axis, in the room they leave (`ui.JustifyEnd` puts a row of
+  buttons at the right, `ui.JustifyCenter` centres an icon in a capsule), and
+  `NextCross` places them across it. `NextAlign` is different: it aligns a
+  box's own text and never moves children.
 - **Units.** The widget API takes points (`NextPad(10)`); boxes are in
   pixels, as everywhere in `ui`.
 - **Absolute placement** stays available. The background and the window's
@@ -500,6 +505,14 @@ a `widgettest.Rig` is a window the tests drive: `Open` runs the app offscreen on
 real text system and renderer, `NewRig` on a fake text system without a GPU. `Play`
 runs lists of steps one after another (the rig keeps scripting going between them),
 and `Find`, `Must`, `Tree` and `Dump` look into the semantic tree.
+
+`widgettest.AuditLayout` (or `Rig.AuditLayout`) runs `ui.Context.Audit` on the last
+frame and fails the test for what it finds: a `NextAlign` on a box without text,
+a child outside its parent, overlapping siblings, content under an opaque floating
+box, a cell off its column header's edge, an icon off the centre of its capsule. A
+deliberate case is marked with `NextAuditExempt` where it is built, or accepted in
+the test with a `widgettest.Allow` that says why. The example, the gallery's scenes
+and the other apps run it on their offscreen frames.
 
 `script.go` holds the example's session. The tests run pieces of it, and the
 benchmark loops the whole of it.

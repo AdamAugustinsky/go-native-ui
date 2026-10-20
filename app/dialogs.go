@@ -181,7 +181,15 @@ func (a *App) pushDialog(r platform.DialogResult) {
 // hands it to the Handler as an EvService with that ticket. A dialog the app
 // withdrew has none to deliver.
 func (a *App) onDialog(pe *platform.AppEvent, data []byte) {
-	r := platform.DialogResultOf(pe, data)
+	a.dialogEnded(platform.DialogResultOf(pe, data), pe, data)
+}
+
+// dialogEnded takes r, the result of the dialog with the platform's ticket
+// r.Ticket, under the app's ticket for TakeDialog, and tells the Handler with
+// pe (EvService from SourceDialog), whose ID becomes the app's ticket. A
+// result for a dialog that is not on screen is dropped, as a withdrawn
+// dialog's is.
+func (a *App) dialogEnded(r platform.DialogResult, pe *platform.AppEvent, data []byte) {
 	for i, s := range a.dlgShown {
 		if s.plat == r.Ticket {
 			r.Ticket = s.app

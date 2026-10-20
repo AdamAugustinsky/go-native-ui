@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"gonativeui/app"
+	"gonativeui/ui"
 )
 
 // The window is small so that offscreen frames (with their readback) are cheap.
@@ -45,6 +46,12 @@ func TestTimelineSession(t *testing.T) {
 	}
 	if ch.jumps != 0 || ch.unpinned != 0 {
 		t.Fatalf("first session: %d jumps, %d frames unpinned", ch.jumps, ch.unpinned)
+	}
+	// the session selects the whole list (and drags a selection past the top)
+	if from, to, ok := ch.sc.Selected(); !ok || ch.edgeDrag >= 0 {
+		t.Fatalf("selection %v to %v (%v), the drag scrolled %v px", from, to, ok, ch.edgeDrag)
+	} else if i, _ := ch.st.IndexOf(from.Item); i != 0 || to.Part != ui.PartEnd {
+		t.Fatalf("the selection is %v to %v, not everything", from, to)
 	}
 	var mallocs, bytes uint64
 	for a := 0; a < 5; a++ {

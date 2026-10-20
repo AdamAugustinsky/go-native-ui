@@ -394,7 +394,7 @@ func (w *Window) x11Event() {
 		if kc >= 8 {
 			evdev = kc - 8
 		}
-		ev := Event{Kind: EvKey, Key: linuxKey(evdev, uint32(x.keysym)), Code: evdev, Mods: mods, Time: now}
+		ev := Event{Kind: EvKey, Key: linuxKey(evdev, uint32(x.keysym)), Char: keysymChar(uint32(x.keysym)), Code: evdev, Mods: mods, Time: now}
 		bit := uint8(1) << (kc & 7)
 		if down {
 			ev.Flags = FlagDown
@@ -404,6 +404,22 @@ func (w *Window) x11Event() {
 			x.keyDown[kc>>3&31] |= bit
 		} else {
 			x.keyDown[kc>>3&31] &^= bit
+		}
+		if sym := uint32(x.keysym); keysymIsModifier(sym) {
+			// A modifier on its own is EvModifiers. The event's state is from
+			// before the key, so apply the key to it (a sibling key still held
+			// is corrected by the next event's state).
+			after := mods
+			if bit := keysymMod(sym); down {
+				after |= bit
+			} else {
+				after &^= bit
+			}
+			if after != w.mods {
+				w.mods = after
+				w.q.push(Event{Kind: EvModifiers, Mods: after, Code: evdev, Time: now})
+			}
+			return
 		}
 		w.q.push(ev)
 		if down {
