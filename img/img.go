@@ -24,7 +24,10 @@
 // A Source says where the encoded bytes are: a file, inline bytes (copied at
 // the first request that needs them, for small images such as WhatsApp's
 // inline JPEG thumbnails), or a Lease of bytes the app owns, which the cache
-// releases once the decoder has read them.
+// releases once the decoder has read them. A Source can also be a system icon
+// (FileIcon, ExtensionIcon, TypeIcon, FolderIcon): what the file manager shows
+// for a file, folder, volume or type, decoded at the size shown; see
+// sysicon.go for how to key them.
 //
 // # Decoding
 //
