@@ -268,7 +268,9 @@ func (pl *Pilot) pathSignals(c *ui.Context, i int, p *pane, f widget.FieldSignal
 	if f.Focused && f.Pressed && pl.prevFocus != pathKey(i) { // a click that brought focus here selects all
 		p.path.SelectAll()
 	}
-	if pl.prevFocus == pathKey(i) && c.FocusKey() != pathKey(i) { // left the field
+	if pl.prevFocus == pathKey(i) && c.FocusKey() != pathKey(i) && p.pathEdit { // left the field (Tab): the edit is dropped, as Esc does
+		p.path.SetString(p.dir)
+		p.pathErr = ""
 		p.pathEdit = false
 	}
 }

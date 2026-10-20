@@ -176,7 +176,6 @@ func (pl *Pilot) drawSidebar(tbH float32) {
 		pl.sideFor = a.dir
 		pl.side.Sel = pl.placeFor(a.dir)
 	}
-	pl.sideKey = ui.HashString(pl.bk.Context().ParentKey(), "Sidebar") // as rexui.Sidebar keys its box
 	s := rexui.Sidebar(k, "Sidebar", &pl.side, pl.items, rexui.SidebarOpts{Top: tbH})
 	if s.Changed {
 		for i := range pl.places {

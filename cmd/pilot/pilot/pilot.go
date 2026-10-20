@@ -144,7 +144,6 @@ type Pilot struct {
 	items      []rexui.SidebarItem
 	open       [2]bool
 	sideFor    string
-	sideKey    ui.Key  // the sidebar's box, as of the last frame: a stop of Tab's loop
 	tbH        float32 // the toolbar's height in pixels, as of the last frame
 	rootTitle  string
 
@@ -153,11 +152,12 @@ type Pilot struct {
 	atInit   [2]bool // the listing was there when Init finished
 	res      []fs.Result
 
-	geo       [2]geometry
-	lastW     int
-	lastH     int
-	prevFocus ui.Key // the focus key at the end of the previous frame
-	composing bool   // an input method was composing in the previous frame
+	geo         [2]geometry
+	lastW       int
+	lastH       int
+	prevFocus   ui.Key // the focus key at the end of the previous frame
+	syncedFocus ui.Key // the focus key syncFocus last saw: a change into a pane's list or field makes it active
+	composing   bool   // an input method was composing in the previous frame
 
 	// What the last Build did, for the script and the tests.
 	counting                       bool

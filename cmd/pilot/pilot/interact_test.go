@@ -387,6 +387,7 @@ func TestRegainingFocusRelistsBothPanes(t *testing.T) {
 // the last stop of the loop, to the sidebar, and the edited path is dropped.
 func TestTabInATextFieldLeavesIt(t *testing.T) {
 	r := newDrive(t)
+	r.o.UI.SetTabReachesControls(false) // Keyboard navigation off
 	pl := r.d.Pilot
 	a, b := pl.panes[0], pl.panes[1]
 
@@ -403,6 +404,7 @@ func TestTabInATextFieldLeavesIt(t *testing.T) {
 		// one that does: app's TestTabCharacterIsNotText), so Tab is only a key.
 		in.PushKey(ui.KeyEvent{Code: ui.KeyTab, Down: true})
 	})
+	r.frames(1) // the pane the focus went to becomes the active one in the next frame
 	if pl.active != 1 || r.o.UI.FocusKey() != listKey(1) {
 		t.Errorf("Tab in the filter: active %d focus %v", pl.active, r.o.UI.FocusKey())
 	}
@@ -420,19 +422,33 @@ func TestTabInATextFieldLeavesIt(t *testing.T) {
 		in.MouseX, in.MouseY = r.x, r.y
 		in.PushKey(ui.KeyEvent{Code: ui.KeyTab, Down: true})
 	})
-	if r.o.UI.FocusKey() != pl.sideKey || b.pathEdit {
-		t.Errorf("Tab in the path field: focus %v (sidebar %v), path edit %v", r.o.UI.FocusKey(), pl.sideKey, b.pathEdit)
+	r.frames(1) // the field leaves with the focus, in the next frame
+	if side := sidebarKey(r.o.UI); side == 0 || r.o.UI.FocusKey() != side || b.pathEdit {
+		t.Errorf("Tab in the path field: focus %v (sidebar %v), path edit %v", r.o.UI.FocusKey(), side, b.pathEdit)
 	}
 	if b.path.String() != b.dir || b.pathErr != "" {
 		t.Errorf("the edited path stays after Tab: %q (dir %q)", b.path.String(), b.dir)
 	}
 }
 
-// Tab's loop with the setting for keyboard navigation off (as it is by
-// default): the sidebar, each pane's table, and a pane's filter or path field
-// while shown, in that order, wrapping, and back with Shift+Tab. Toolbar
-// buttons and column headers are never in it, however many times it is
-// walked.
+// sidebarKey is the key of the sidebar's box, from the semantic tree.
+func sidebarKey(c *ui.Context) ui.Key {
+	var tr ui.SemTree
+	c.Semantics(&tr)
+	for _, n := range tr.Nodes {
+		if string(tr.Text(n.Name)) == "Sidebar" {
+			return n.Key
+		}
+	}
+	return 0
+}
+
+// Tab's loop is ui's (focus classes: the sidebar and the tables are lists, the
+// filter and path fields text), with the setting for keyboard navigation off,
+// as it is by default: the sidebar, each pane's table, and a pane's filter or
+// path field while shown, in build order, wrapping, and back with Shift+Tab.
+// Toolbar buttons and column headers are never in it, however many times it is
+// walked; the pane that gets the focus becomes the active one.
 func TestTabLoop(t *testing.T) {
 	r := newDrive(t)
 	pl := r.d.Pilot
@@ -463,10 +479,11 @@ func TestTabLoop(t *testing.T) {
 			}
 		}
 	}
+	r.o.UI.SetTabReachesControls(false) // Keyboard navigation off, macOS's default (the app sets it from the system)
 	r.frames(2)
 	pl.focusList(r.o.UI)
 	r.frames(1)
-	sb, l0, l1 := pl.sideKey, listKey(0), listKey(1)
+	sb, l0, l1 := sidebarKey(r.o.UI), listKey(0), listKey(1)
 	if r.o.UI.FocusKey() != l0 || sb == 0 {
 		t.Fatalf("setup: focus %v, sidebar key %v", r.o.UI.FocusKey(), sb)
 	}
@@ -490,4 +507,36 @@ func TestTabLoop(t *testing.T) {
 	pl.focusList(r.o.UI)
 	r.frames(1)
 	check("no sidebar", walk(0, 3), l1, l0, l1)
+}
+
+// With Keyboard navigation on, Tab reaches the toolbar's buttons too (ui's
+// rule), and still every table, the sidebar and the fields; a pane the focus
+// moves to becomes the active one.
+func TestTabReachesTheToolbarWithKeyboardNavigation(t *testing.T) {
+	r := newDrive(t)
+	pl := r.d.Pilot
+	r.o.UI.SetTabReachesControls(true)
+	r.frames(2)
+	pl.focusList(r.o.UI)
+	r.frames(1)
+	seen := map[string]bool{}
+	for i := 0; i < 40; i++ {
+		r.key(ui.KeyTab, 0)
+		r.frames(1)
+		var tr ui.SemTree
+		r.o.UI.Semantics(&tr)
+		for _, n := range tr.Nodes {
+			if n.State&ui.SemFocused != 0 {
+				seen[widgettest.RoleName(n.Role)+" "+string(tr.Text(n.Name))] = true
+			}
+		}
+		if fk := r.o.UI.FocusKey(); fk == listKey(1) && pl.active != 1 {
+			t.Fatalf("the focus is in the right table, the active pane is %d", pl.active)
+		}
+	}
+	for _, want := range []string{"Button Sidebar", "Button Enclosing Folder", "Button Filter"} {
+		if !seen[want] {
+			t.Errorf("Tab never reached %q; reached %v", want, seen)
+		}
+	}
 }
