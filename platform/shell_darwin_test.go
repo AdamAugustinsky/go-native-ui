@@ -3,6 +3,7 @@
 package platform
 
 import (
+	"math"
 	"testing"
 	"unsafe"
 
@@ -58,7 +59,7 @@ func TestNativeShell(t *testing.T) {
 		}
 		r.opaqueWindow = objc.SendBool(w.win, objc.Sel("isOpaque"))
 		plus := w.buttons[1].obj
-		r.plusX = objc.SendRect(plus, selFrame).X
+		r.plusX = objc.SendRect(w.hosts.slot(w.buttons[1].host).clip, selFrame).X
 
 		w.q.reset()
 		delegate := objc.Send(w.win, objc.Sel("delegate"))
@@ -79,7 +80,7 @@ func TestNativeShell(t *testing.T) {
 	if r.backdrop == BackdropNone || !r.transparent || r.opaqueWindow {
 		t.Errorf("backdrop %d, surface transparent %v, window opaque %v: want a backdrop, a transparent surface, a non-opaque window", r.backdrop, r.transparent, r.opaqueWindow)
 	}
-	if len(r.order) != 4 || r.viewIndex != 1 || !r.hasButtons {
+	if len(r.order) != 4 || r.viewIndex != 1 || !r.hasButtons || r.order[2] != "NSButton" || r.order[3] != "NSButton" {
 		t.Errorf("container holds %v with our view at %d: want the effect view, ours, then the two buttons", r.order, r.viewIndex)
 	}
 	if r.plusX != 400-23-14 {
@@ -154,7 +155,8 @@ func TestShellFreedOnClose(t *testing.T) {
 				return
 			}
 			opened = true
-			refs := newWeakRefs(t, w.effect, w.content, w.buttons[0].obj, w.buttons[1].obj)
+			refs := newWeakRefs(t, w.effect, w.content, w.buttons[0].obj, w.buttons[1].obj,
+				w.hosts.slot(w.buttons[0].host).clip, w.hosts.slot(w.buttons[1].host).clip)
 			w.Close()
 			objc.F.Call1(objc.PoolPop, pool)
 			alive[cycle] = refs.alive()
@@ -166,7 +168,7 @@ func TestShellFreedOnClose(t *testing.T) {
 	}
 	for i, n := range alive {
 		if n != 0 {
-			t.Errorf("cycle %d: %d of the effect view, container and two buttons outlive Close", i, n)
+			t.Errorf("cycle %d: %d of the effect view, container, two buttons and their clips outlive Close", i, n)
 		}
 	}
 	if after.Delegates != before.Delegates || after.Blocks != before.Blocks || after.Observers != before.Observers {
@@ -215,7 +217,11 @@ func TestGlassCornersFullScreen(t *testing.T) {
 	case !responds:
 		t.Fatal("the window delegate takes no full-screen notifications")
 	}
-	if r0 <= 0 || rFull != 0 || rBack != r0 || rFail != r0 {
+	if !privateAPIBuild { // the window's radius is private: square throughout
+		if r0 != 0 || rFull != 0 || rBack != 0 || rFail != 0 {
+			t.Errorf("glass radius %v windowed, %v in full screen, %v after, %v after a failed entry without private API: want 0", r0, rFull, rBack, rFail)
+		}
+	} else if r0 <= 0 || rFull != 0 || rBack != r0 || rFail != r0 {
 		t.Errorf("glass radius %v windowed, %v in full screen, %v after, %v after a failed entry: want >0, 0, %v, %v", r0, rFull, rBack, rFail, r0, r0)
 	}
 }
@@ -293,8 +299,9 @@ func TestButtonsRefuseFocus(t *testing.T) {
 		w.q.reset()
 		r := &imeRig{w: w, view: w.view}
 		r.setMarked("にほ", 2, 0)
-		f := objc.SendRect(w.buttons[1].obj, selFrame)
-		x, y := f.X+f.W/2, f.Y+f.H/2
+		f := objc.SendRect(w.buttons[1].obj, selBounds)
+		objc.F.Reset().Arg(uintptr(w.buttons[1].obj)).Arg(uintptr(selConvertPointToView)).ArgPoint(f.W/2, f.H/2).Arg(0).Call(objc.MsgSend)
+		x, y := objc.F.F64(0), objc.F.F64(1) // the button's centre in window coordinates
 		num := objc.Send(w.win, objc.Sel("windowNumber"))
 		uptime := objc.SendF64(objc.Send(objc.Cls("NSProcessInfo"), objc.Sel("processInfo")), objc.Sel("systemUptime"))
 		evCls, evSel := objc.Cls("NSEvent"), objc.Sel("mouseEventWithType:location:modifierFlags:timestamp:windowNumber:context:eventNumber:clickCount:pressure:")
@@ -435,5 +442,40 @@ func TestButtonsAccessible(t *testing.T) {
 	}
 	if len(cmds) != 2 || cmds[0] != 2 || cmds[1] != 7 {
 		t.Errorf("AXPress on ⌘ and + delivered %v, want [2 7]", cmds)
+	}
+}
+
+// The spike's pinned buttons stay where they belong as the window resizes:
+// + at the right edge, ⌘ at the left, in the flipped container.
+func TestPinnedButtonsFollowResize(t *testing.T) {
+	var opened bool
+	var plus, cmd [4]float64
+	onMain(func() {
+		w, err := Open(Options{
+			Title: "pinned", Width: 400, Height: 300, Hidden: true, Titlebar: 46,
+			Buttons: []NativeButton{{ID: 1, Symbol: "command", X: 40, Y: 23}, {ID: 2, Symbol: "plus", X: -23, Y: 23}},
+		})
+		if err != nil {
+			return
+		}
+		defer w.Close()
+		opened = true
+		objc.F.Reset().Arg(uintptr(w.win)).Arg(uintptr(selSetContentSize)).ArgPoint(600, 500).Call(objc.MsgSend)
+		cmd = frameOf(w.hosts.slot(w.buttons[0].host).clip)
+		plus = frameOf(w.hosts.slot(w.buttons[1].host).clip)
+	})
+	if !opened {
+		t.Skip("cannot open a window here")
+	}
+	near := func(a, b [4]float64) bool {
+		for i := range a {
+			if math.Abs(a[i]-b[i]) > 1e-9 {
+				return false
+			}
+		}
+		return true
+	}
+	if !near(cmd, [4]float64{26, 9, 28, 28}) || !near(plus, [4]float64{600 - 23 - 14, 9, 28, 28}) {
+		t.Errorf("after a resize to 600×500 ⌘ is at %v and + at %v: want 26,9 and %d,9 (28×28)", cmd, plus, 600-23-14)
 	}
 }

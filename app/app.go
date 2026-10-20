@@ -101,6 +101,14 @@ type Config struct {
 	// buttons' ids; App.Win.SetButtonEnabled enables and disables them.
 	Backdrop platform.Backdrop
 	Buttons  []platform.NativeButton
+
+	// Materials makes the window show material regions (macOS): the
+	// builder marks boxes with ui.Context.Material and paints nothing in
+	// them, and the frame clears to transparent instead of Clear, so the
+	// system's window background shows wherever the builder paints nothing
+	// and the materials show in their regions. Hosted native views
+	// (App.Win.NewHost, ui.Context.Host) need nothing here.
+	Materials bool
 }
 
 // App is the running application: the window, the GPU objects and the ui
@@ -137,6 +145,8 @@ type App struct {
 	dlgShown []shownDialog           // dialogs on screen
 	dlgSeq   platform.DialogTicket   // the last ticket given
 	dlgT     dialogTarget            // the window's dialogs; tests set a fake
+
+	sh shellSync // material and host regions handed to the window (shell.go)
 
 	wakeAt      int64 // platform.Now at which the UI wants a frame although nothing animates (ui.Context.WakeAfter); 0 = none
 	chromeDark  bool  // the mode last given to Win.SetDarkChrome
@@ -292,13 +302,13 @@ func openWindowed(cfg Config, b Builder, st *StartupReport, nativeMenus bool) (*
 		Title: cfg.Title, Width: int(cfg.Width + 0.5), Height: int(cfg.Height + 0.5), Hidden: true,
 		MinWidth: int(cfg.MinWidth + 0.5), MinHeight: int(cfg.MinHeight + 0.5),
 		Titlebar: cfg.Titlebar, TrafficLights: cfg.TrafficLights, PublicAPIOnly: cfg.PublicAPIOnly,
-		Backdrop: cfg.Backdrop, Buttons: cfg.Buttons,
+		Backdrop: cfg.Backdrop, Buttons: cfg.Buttons, Materials: cfg.Materials,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("app: open window: %w", err)
 	}
-	if win.Backdrop() != platform.BackdropNone {
-		a.cfg.Clear = [4]float32{} // premultiplied transparent: the backdrop shows
+	if win.HasMaterials() {
+		a.cfg.Clear = [4]float32{} // premultiplied transparent: the backdrop or the materials show
 	}
 	a.Win, a.req = win, win
 	t0 := platform.Now()
@@ -483,6 +493,13 @@ func (a *App) onEvent(e *platform.Event) {
 		a.frameEvents++
 		a.lastFrameEv = platform.Now()
 		a.p.frameEvent()
+	case platform.EvHostFocus:
+		a.hostFocus(uint32(e.Tag))
+		a.p.invalidate()
+	case platform.EvHostCommand:
+		if a.hostCommand(e) {
+			a.p.invalidate()
+		}
 	case platform.EvDialog:
 		a.onDialog(e)
 	default:

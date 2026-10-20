@@ -31,7 +31,8 @@ const (
 	// scrolls. Overlay roots have no parent and are kept inside the window by
 	// their placement. A floating box that only draws an outline and has no
 	// children (a focus ring, a bezel drawn round its control) is a
-	// decoration and is not checked.
+	// decoration and is not checked, nor is a box that draws nothing and has
+	// no children (a hit area such as a column's resize handle).
 	AuditOverflow
 	// AuditOverlap: two flow children of a linear box (AxisX or AxisY) overlap
 	// (a negative gap, say). Floating children and flows are not checked.
@@ -223,7 +224,7 @@ func (c *Context) report(dst []Finding, k AuditCheck, id, other ID, delta float3
 // auditOverflow is check (b) for box id in its parent p.
 func (c *Context) auditOverflow(dst []Finding, id, p ID, tol float32) []Finding {
 	b, pb := &c.boxes[id], &c.boxes[p]
-	if pb.flags&Clip != 0 || b.size[0] <= 0 || b.size[1] <= 0 || b.exempt(AuditOverflow) || pb.exempt(AuditOverflow) || b.outline() {
+	if pb.flags&Clip != 0 || b.size[0] <= 0 || b.size[1] <= 0 || b.exempt(AuditOverflow) || pb.exempt(AuditOverflow) || b.outline() || b.first == 0 && !b.draws() {
 		return dst
 	}
 	var worst float32

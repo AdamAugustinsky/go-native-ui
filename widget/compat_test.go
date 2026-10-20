@@ -6,6 +6,7 @@ import (
 
 	"gonativeui/gpu"
 	"gonativeui/internal/fakeui"
+	"gonativeui/theme"
 	"gonativeui/theme/rex"
 	"gonativeui/ui"
 	"gonativeui/widget"
@@ -45,6 +46,9 @@ func TestTableListIsAWidgetList(t *testing.T) {
 		in.Time += 16_666_667
 		c.Begin(&in, 400, 300, 1, 1.0/60)
 		k.Begin(c)
+		if i == 0 { // a focused table shows its selection emphasised
+			k.Focus(widget.TableKey(c.ParentKey(), "files"))
+		}
 		tb := k.BeginTable("files", &st, cols, len(names))
 		if pass%2 == 0 {
 			buildRows(&tb.List, names, &viaHelper)
@@ -68,10 +72,10 @@ func TestTableListIsAWidgetList(t *testing.T) {
 	if first != 0 || last != 3 {
 		t.Fatalf("rows %d..%d, want 0..3", first, last)
 	}
-	pal := &k.Theme().Pal
+	cs := &k.Theme().Colors
 	for _, got := range [][8]uint32{viaHelper, viaField} {
-		if got[0] != pal.Text || got[1] != pal.SelectionText || got[2] != pal.Text {
-			t.Errorf("row text colours %x, want the selection's on row 1 only", got[:3])
+		if got[0] != cs[theme.Label] || got[1] != cs[theme.OnSelection] || got[2] != cs[theme.Label] {
+			t.Errorf("row text colours %x, want the emphasised selection's on row 1 only", got[:3])
 		}
 	}
 	// the rows the helper built are the table's rows

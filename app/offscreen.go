@@ -91,6 +91,7 @@ func (o *Offscreen) Frame() (img *image.RGBA, more bool) {
 	a.tr.take()
 	a.settle = false
 	a.build(a.w, a.h, 1.0/60)
+	a.drawPlaceholders() // hosted native views have no window here
 	a.R.RenderToRGBA(a.w, a.h, a.cfg.Clear, &a.list, o.img.Pix)
 	return o.img, more
 }

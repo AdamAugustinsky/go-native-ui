@@ -62,9 +62,11 @@ func TestAuditOverflowAndOverlap(t *testing.T) {
 		c.NextAxis(AxisX)
 		c.Open(0, "row")
 		c.NextSize(Px(80), Px(10))
-		c.Box(0, "a")
+		c.Box(DrawText, "a")
 		c.NextSize(Px(80), Px(10)) // 60 px past the row's end
-		c.Box(0, "b")
+		c.Box(DrawText, "b")
+		c.NextSize(Px(80), Px(10)) // draws nothing: not checked
+		c.Box(0, "c")
 		c.Close()
 
 		c.NextSize(Px(100), Px(40))
@@ -78,7 +80,7 @@ func TestAuditOverflowAndOverlap(t *testing.T) {
 		c.NextAxis(AxisX)
 		c.Open(ScrollX, "scrolls") // scrolls on X: fine there, not on Y
 		c.NextSize(Px(180), Px(50))
-		c.Box(0, "a")
+		c.Box(DrawText, "a")
 		c.Close()
 
 		c.NextSize(Px(100), Px(40))

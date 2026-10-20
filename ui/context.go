@@ -51,6 +51,7 @@ type box struct {
 	escClears                       bool  // a text field that clears itself on Escape and has text to clear (NextEscapeClears)
 	ovRoot                          bool  // the root box of an overlay
 	ovl                             uint8 // the overlay the box belongs to, 1 + its index in the frame's overlays; 0 for the main tree
+	mat                             uint8 // 1 + the box's record in shell.mats when Material marked it (material.go)
 
 	bg          [4]uint32
 	textColor   uint32
@@ -276,6 +277,9 @@ type Context struct {
 
 	// boxes built this frame with a cursor or the WindowDrag flag (cursor.go)
 	nCursorBoxes, nDragBoxes int
+
+	// material and host boxes marked this frame (material.go, host.go)
+	shell shellRegs
 
 	// the final emit attempt of End (draw.go)
 	finalPass      bool

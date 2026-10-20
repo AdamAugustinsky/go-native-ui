@@ -4,6 +4,7 @@ package platform
 
 import (
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode/utf16"
 	"unsafe"
@@ -29,10 +30,54 @@ var (
 	pGlobalLock                 = win32.Proc(kernel32, "GlobalLock")
 	pGlobalUnlock               = win32.Proc(kernel32, "GlobalUnlock")
 	pGlobalSize                 = win32.Proc(kernel32, "GlobalSize")
+
+	clipClassName = mustUTF16("STATIC") // the clipboard worker's window: a system class, so no window procedure of ours runs on its thread
 )
 
+const hwndMessage = ^uintptr(2) // HWND_MESSAGE (-3): the parent of a message-only window
+
+// clipSession is set from a successful OpenClipboard of this process to its
+// CloseClipboard, and while the clipboard worker takes its window's messages
+// (clipWorker.pump). The process does its clipboard calls on one thread at a
+// time: the system frees the process's clipboard memory in callbacks on the
+// thread of the owner window, which must not overlap another thread's
+// GetClipboardData; a worker whose window was closed may still be inside its
+// session when the next window's worker starts; and Windows lets a second
+// thread open the clipboard with the window that already has it open, which
+// takes the first thread's session over. A session of the process in progress
+// counts as a busy clipboard. Only the worker empties or sets the clipboard
+// inside a session: EmptyClipboard sends the owner (the worker's window)
+// WM_DESTROYCLIPBOARD, which the worker answers only in its own session.
+var clipSession atomic.Bool
+
+// tryOpenClipboard opens the clipboard for owner unless it is busy (open in
+// another process, or in another thread of this one, or a closed worker's
+// window is not destroyed yet: clipRetiring). After a true result the
+// caller must call closeClipboard.
+func tryOpenClipboard(owner uintptr) bool {
+	if clipRetiring.Load() != 0 || !clipSession.CompareAndSwap(false, true) {
+		return false
+	}
+	if clipRetiring.Load() != 0 { // a worker began retiring meanwhile: its window must go first
+		clipSession.Store(false)
+		return false
+	}
+	if win32.Bool(win32.Call(pOpenClipboard, owner)) {
+		return true
+	}
+	clipSession.Store(false)
+	return false
+}
+
+// closeClipboard ends the session tryOpenClipboard began.
+func closeClipboard() {
+	win32.Call(pCloseClipboard)
+	clipSession.Store(false)
+}
+
 // openClipboard opens the clipboard for the window, retrying briefly: another
-// process (a clipboard manager) may hold it for a moment.
+// process (a clipboard manager), or the window's clipboard worker, may hold it
+// for a moment.
 func openClipboard() bool {
 	if pOpenClipboard == 0 {
 		return false
@@ -42,7 +87,7 @@ func openClipboard() bool {
 		owner = w.hwnd
 	}
 	for i := 0; i < 10; i++ {
-		if win32.Bool(win32.Call(pOpenClipboard, owner)) {
+		if tryOpenClipboard(owner) {
 			return true
 		}
 		time.Sleep(5 * time.Millisecond)
@@ -51,7 +96,8 @@ func openClipboard() bool {
 }
 
 // Clipboard returns the plain text on the system clipboard (CF_UNICODETEXT),
-// with \n line ends; "" if there is none. It reads on the calling thread, so
+// with \n line ends; "" if there is none, or if the clipboard stays busy (in
+// another process, or in the clipboard worker) for a moment. It reads on the calling thread, so
 // an owner that renders on demand and never answers blocks it: the paste path
 // (RequestPaste) reads on a worker instead, and nothing in the framework calls
 // this. There is no synchronous SetClipboard on Windows for the same reason
@@ -61,7 +107,7 @@ func Clipboard() string {
 	if !openClipboard() {
 		return ""
 	}
-	defer win32.Call(pCloseClipboard)
+	defer closeClipboard()
 	h := win32.Call(pGetClipboardData, cfUnicodeText)
 	if h == 0 {
 		return ""
