@@ -14,9 +14,11 @@ import (
 // fontWide are the catalog samples whose text lays out wider than their
 // AppKit-measured frames with Linux's and Windows' fonts, which are wider than
 // San Francisco (CI, October 2026: the Large Title line of label-styles by 36
-// to 136 px, link's "Learn more" by 3 to 8 px): only their overflow is
-// accepted there, so a layout fault anywhere else on the pages still fails.
-var fontWide = []string{"label-styles", "link"}
+// to 136 px, link's "Learn more" by 3 to 8 px, and form-grid's two field rows
+// by 16 px on Linux, because the aligned label column is as wide as its widest
+// label and the 200 pt fields move with it): only their overflow is accepted
+// there, so a layout fault anywhere else on the pages still fails.
+var fontWide = []string{"label-styles", "link", "form-grid"}
 
 // TestAuditScenes runs the layout audit on the last frame of every scene of
 // Shot and of every appkit page (all of rexui's catalog samples), on the real

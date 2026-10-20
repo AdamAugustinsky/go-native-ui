@@ -202,7 +202,7 @@ type shapeItem struct {
 // character's, like CoreText's default. Vertical glyph offsets (marks) are not
 // carried by the run format and are dropped; advance offsets are applied.
 func (s *System) Shape(f FontKey, utf8 []byte) RunRef {
-	if int(f) >= len(s.fonts) {
+	if int(f) >= len(s.fonts) || s.fonts[f].gone {
 		return 0
 	}
 	if r, ok := s.runs.lookup(f, utf8); ok {
@@ -430,7 +430,7 @@ func (s *System) shapeCovered(fe *fontEnt, src uintptr, a, b int, covered bool) 
 			if !(sc > 0) {
 				sc = 1
 			}
-			if id, ok := s.faceFromFont(font, basePx*sc); ok {
+			if id, ok := s.faceFromFont(font, basePx*sc, fe.desc.Scale); ok {
 				face = id
 			}
 			com.Release(font)
