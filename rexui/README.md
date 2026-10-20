@@ -172,7 +172,9 @@ by side. `-plain` opens a striped backdrop window for glass captures and
 `-drawn` turns the system's materials off. The layout audit
 (`demo/audit_test.go`) runs on every scene, light and dark, at the top and
 scrolled, and with a settings pop-up menu open.
-`chromedemo -scene NAME -measure` prints the chrome's frames in points;
+`chromedemo -scene NAME -measure` prints the chrome's frames in points and
+the toolbar's capsules beside AppKit's platters in the reference set for
+this host (`internal/appkitref.Select`: the Mac mini's here);
 `-o` renders the scene offscreen. Compared with the D0 dumps and captures
 (`appkit-ref/scenes/captures`, macOS 27.2), 2026-10-19:
 

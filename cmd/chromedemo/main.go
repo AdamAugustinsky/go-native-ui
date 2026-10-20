@@ -10,8 +10,10 @@
 //	                                 render the light and the dark picture
 //	chromedemo -o n.png -inactive    render the window as not key; -scrolled with the content under the toolbar
 //	chromedemo -measure              print the frames, in points, of the toolbar's items, the title, the
-//	                                 sidebar's rows and the path bar's components as JSON (for comparing with
-//	                                 the appkitscenes dumps)
+//	                                 sidebar's rows and the path bar's components as JSON, and the toolbar's
+//	                                 capsules beside AppKit's in the appkitscenes dump of the reference set
+//	                                 for this host (internal/appkitref.Select: GNUI_APPKIT_REF, else the
+//	                                 machine's own set, else the MacBook's)
 //	chromedemo -bench                the scene's scripted session on the real window, measured as whole sessions;
 //	                                 print allocation, CPU and pacing as JSON (-gate: exit with status 3 unless a
 //	                                 session allocated nothing, main-thread CPU within budget and paced frames;
@@ -32,6 +34,7 @@ import (
 
 	"gonativeui/app"
 	"gonativeui/cmd/chromedemo/demo"
+	"gonativeui/internal/appkitref"
 	"gonativeui/platform"
 	"gonativeui/theme"
 	"gonativeui/ui"
@@ -86,10 +89,7 @@ func main() {
 		case *out != "":
 			err = render(*out, *outDark, o)
 		case *measure:
-			var nodes []demo.Node
-			if nodes, err = demo.Measure(o); err == nil {
-				printJSON(nodes)
-			}
+			err = runMeasure(o)
 		case *bench:
 			err = runBench(s, pref, *gate, *allowUnpaced, *maxCPU, *timeout)
 		case *idle > 0:
@@ -271,4 +271,31 @@ func runBench(s demo.Scene, pref theme.Preference, gate, allowUnpaced bool, maxC
 func printJSON(v any) {
 	b, _ := json.MarshalIndent(v, "", "  ")
 	fmt.Println(string(b))
+}
+
+// runMeasure prints the scene's frames and its toolbar's capsules beside
+// those of AppKit's capture in the reference set Select picks.
+func runMeasure(o demo.ShotOptions) error {
+	nodes, err := demo.Measure(o)
+	if err != nil {
+		return err
+	}
+	set, err := appkitref.Select()
+	if err != nil {
+		return err
+	}
+	out := struct {
+		Ref      string         `json:"ref"`
+		Dump     string         `json:"dump"`
+		Nodes    []demo.Node    `json:"nodes"`
+		Capsules []demo.Capsule `json:"capsules,omitempty"`
+		Missing  string         `json:"missing,omitempty"`
+	}{Ref: set, Dump: demo.RefCapture(appkitref.Scenes(set), o), Nodes: nodes}
+	if caps, err := demo.CompareCapsules(nodes, out.Dump); err == nil {
+		out.Capsules = caps
+	} else {
+		out.Missing = err.Error() // no capture of this scene in the set: the frames alone
+	}
+	printJSON(out)
+	return nil
 }
