@@ -1,6 +1,10 @@
 package app
 
-import "gonativeui/platform"
+import (
+	"slices"
+
+	"gonativeui/platform"
+)
 
 // Seams for tests that stand in for the native surfaces (widget/widgettest's
 // fakes): they replace what the window answers, and change nothing for an app
@@ -30,10 +34,21 @@ func (a *App) DebugSetDialogs(t DialogTarget) {
 	a.dlgT = t
 }
 
-// DebugDialogEnded delivers the event a sheet's end posts on the window's
-// queue (platform.EvDialog with Tag the ticket the target gave): the app
-// takes the result with TakeDialog from the next frame. Main thread.
-func (a *App) DebugDialogEnded(e platform.Event) { a.onDialog(&e) }
+// DebugDialogEnded delivers the end of a sheet the target showed: r carries
+// the ticket the target gave (not the app's), and the app takes the result,
+// under its own ticket, with TakeDialog from the next frame. A result for a
+// dialog that is not on screen is dropped, as a withdrawn dialog's is. Main
+// thread.
+func (a *App) DebugDialogEnded(r platform.DialogResult) {
+	for i, s := range a.dlgShown {
+		if s.plat == r.Ticket {
+			r.Ticket = s.app
+			a.dlgShown = slices.Delete(a.dlgShown, i, i+1)
+			a.pushDialog(r)
+			return
+		}
+	}
+}
 
 // DebugFlushDialogs shows the dialogs queued so far, as the loop does after a
 // frame; an offscreen app never runs that part of the loop.

@@ -128,7 +128,7 @@ func (f *FakeDialogs) finish(r platform.DialogResult, kinds ...platform.DialogKi
 		c.Answered = true
 		r.Ticket, r.Kind = c.Ticket, c.Kind
 		f.res[c.Ticket] = r
-		f.a.DebugDialogEnded(platform.Event{Kind: platform.EvDialog, Tag: uint64(c.Ticket)})
+		f.a.DebugDialogEnded(r)
 		return nil
 	}
 	return errNoDialog
