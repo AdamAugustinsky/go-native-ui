@@ -13,6 +13,7 @@ import (
 	"gonativeui/cmd/pilot/pilot"
 	"gonativeui/fs"
 	"gonativeui/internal/objc"
+	"gonativeui/internal/testlock"
 	"gonativeui/platform"
 	"gonativeui/ui"
 	"gonativeui/widget/widgettest"
@@ -65,13 +66,14 @@ func startPilot(t *testing.T, o pilot.Options) (*widgettest.LiveApp, *pilot.Pilo
 	t.Cleanup(pl.Close)
 	l := widgettest.StartLive(t, pilot.Config(), pl)
 	l.Frames(4)
-	makeKey(t, l)
 	return l, pl
 }
 
-// makeKey makes the window the key window of an active app: a test binary
-// started from a terminal is not, and the menu bar's Edit items are validated
-// through the key window's responders.
+// makeKey makes the window AppKit's key window of the active app, for what
+// the system itself decides: the menu bar's Edit items are validated through
+// the key window's responders, and StartLive's window only counts as key. Hold
+// the "activation" lock first (testlock.Hold): another test process may take
+// the activation meanwhile.
 func makeKey(t *testing.T, l *widgettest.LiveApp) {
 	t.Helper()
 	isKey := func() (key bool) {
@@ -123,11 +125,6 @@ func filterField(l *widgettest.LiveApp) (ok bool, value string, sel [2]int32) {
 	return false, "", [2]int32{}
 }
 
-func fieldHas(l *widgettest.LiveApp, s string) bool {
-	ok, v, _ := filterField(l)
-	return ok && v == s
-}
-
 func fieldValue(t *testing.T, l *widgettest.LiveApp) string {
 	t.Helper()
 	ok, v, _ := filterField(l)
@@ -141,15 +138,12 @@ func fieldValue(t *testing.T, l *widgettest.LiveApp) string {
 func editMenu(t *testing.T, l *widgettest.LiveApp, title string) {
 	t.Helper()
 	var ok bool
-	for try := 0; try < 3 && !ok; try++ { // the key may have gone to another app since the last step
-		makeKey(t, l)
-		l.Do(func(a *app.App) {
-			it, found := widgettest.FindMenuItem("Edit", title)
-			if found && it.Enabled {
-				ok = it.Perform()
-			}
-		})
-	}
+	l.Do(func(a *app.App) {
+		it, found := widgettest.FindMenuItem("Edit", title)
+		if found && it.Enabled {
+			ok = it.Perform()
+		}
+	})
 	if !ok {
 		t.Fatalf("Edit ▸ %s is missing, disabled or did not run", title)
 	}
@@ -160,15 +154,14 @@ func editMenu(t *testing.T, l *widgettest.LiveApp, title string) {
 // the Edit menu's item. A paste that arrived twice, a cut that copied
 // nothing or an undo that took two steps would show here.
 func TestEditCommandsActOnceFromTheKeyAndTheMenu(t *testing.T) {
+	testlock.Hold(t, "activation")
 	l, _ := startPilot(t, pilot.Options{})
+	makeKey(t, l)
 	orig := clip(l)
 	t.Cleanup(func() { setClip(l, orig) }) // the user's pasteboard is put back
 	setClip(l, "sentinel")
-	for try := 0; try < 4 && !fieldHas(l, "alpha"); try++ { // another app may take the key meanwhile
-		makeKey(t, l)
-		l.Press(ui.KeyCode('F'), ui.ModSuper)
-		l.Type("alpha")
-	}
+	l.Press(ui.KeyCode('F'), ui.ModSuper)
+	l.Type("alpha")
 	if got := fieldValue(t, l); got != "alpha" {
 		t.Fatalf("typed alpha, the filter holds %q", got)
 	}
@@ -261,7 +254,6 @@ func ringBecomes(t *testing.T, l *widgettest.LiveApp, role ui.Role, name string,
 
 func clickRow(t *testing.T, l *widgettest.LiveApp, name string) {
 	t.Helper()
-	makeKey(t, l)
 	l.Click(ui.RoleRow, name)
 }
 
@@ -275,23 +267,19 @@ func TestFocusRingsComeFromTheKeyboardExceptTextEntry(t *testing.T) {
 	if v, _ := focusState(t, l, ui.RoleRow, "alpha.txt"); v {
 		t.Error("a click on a row shows the keyboard focus")
 	}
-	makeKey(t, l)
 	l.Click(ui.RoleButton, "Sidebar")
 	l.Frames(12)
 	if v, ring := focusState(t, l, ui.RoleButton, "Sidebar"); v || ring {
 		t.Errorf("a click on the toolbar's Sidebar button: focus shown %v, ring %v", v, ring)
 	}
-	makeKey(t, l)
 	l.Click(ui.RoleButton, "Sidebar") // back
 	l.Frames(12)
-	makeKey(t, l)
 	l.Click(ui.RoleListItem, "Macintosh HD")
 	l.Frames(12)
 	if v, ring := focusState(t, l, ui.RoleListItem, "Macintosh HD"); v || ring {
 		t.Errorf("a click on a sidebar row: focus shown %v, ring %v", v, ring)
 	}
 	// Tab goes to the other pane's list with the focus shown
-	makeKey(t, l)
 	l.Press(ui.KeyTab, 0)
 	l.Frames(12)
 	if v, _ := focusState(t, l, ui.RoleRow, "one.txt"); !v {
@@ -303,7 +291,6 @@ func TestFocusRingsComeFromTheKeyboardExceptTextEntry(t *testing.T) {
 		t.Error("a click on a row after Tab still shows the keyboard focus")
 	}
 	// the toolbar's Filter button puts the focus in the field, which shows its ring
-	makeKey(t, l)
 	l.Click(ui.RoleButton, "Filter")
 	l.Frames(12)
 	if !ringBecomes(t, l, ui.RoleSearchField, "filter", true) {
@@ -317,7 +304,6 @@ func TestFocusRingsComeFromTheKeyboardExceptTextEntry(t *testing.T) {
 	// a click in the field shows it
 	n := l.Must(ui.RoleSearchField, "filter")
 	x, y := widgettest.Centre(n)
-	makeKey(t, l)
 	l.ClickAt(x, y, 0)
 	if !ringBecomes(t, l, ui.RoleSearchField, "filter", true) {
 		t.Error("a click in the filter field shows no ring")
@@ -461,7 +447,10 @@ func TestIdleDrawsNoFrames(t *testing.T) {
 // Another window of the process takes the key: Pilot is inactive, and active
 // again when the window is gone.
 func TestInactiveWhenAnotherWindowHasTheKey(t *testing.T) {
+	testlock.Hold(t, "activation")
 	l, _ := startPilot(t, pilot.Options{})
+	l.RealFocus() // the focus is AppKit's from here, which this test is about
+	makeKey(t, l)
 	var c *ui.Context
 	l.Do(func(a *app.App) { c = a.UI })
 	l.Until("Pilot has the key", 120, func() bool { return c.Input().Focused })

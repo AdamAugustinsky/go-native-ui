@@ -57,37 +57,15 @@ func TestAuditLayout(t *testing.T) {
 }
 
 // Every control and row an assistive technology reads out has a name: a
-// button its label, a row its file, a column its title.
-//
-// (widgettest.LintNames asks the accessibility bridge for the same; this
-// checks the semantic tree itself until that lands on main.)
+// button its label, a row its file, a column its title. The nodes are the
+// accessibility bridge's view of the tree (widgettest.LintNames).
 func TestInteractiveNodesAreNamed(t *testing.T) {
-	_, o := scene(t, Look{Preference: theme.ForceLight})
-	var tr ui.SemTree
-	o.UI.Semantics(&tr)
-	var named func(i int) bool
-	named = func(i int) bool {
-		if len(tr.Text(tr.Nodes[i].Name)) > 0 {
-			return true
-		}
-		for j := int(tr.Nodes[i].FirstChild); j > 0; j = int(tr.Nodes[j].NextSibling) {
-			if named(j) {
-				return true
-			}
-		}
-		return false
-	}
-	n := 0
-	for i := 1; i < len(tr.Nodes); i++ {
-		switch r := tr.Nodes[i].Role; r {
-		case ui.RoleButton, ui.RoleTextField, ui.RoleSearchField, ui.RoleListItem, ui.RoleRow, ui.RoleColumnHeader:
-			n++
-			if !named(i) {
-				t.Errorf("a %s at %v has no name", widgettest.RoleName(r), tr.Nodes[i].Bounds)
-			}
-		}
-	}
-	if n < 40 {
-		t.Errorf("only %d interactive nodes: the scene is not what it should be", n)
+	for _, s := range auditScenes[:1] { // the tree does not depend on the look
+		t.Run(s.name, func(t *testing.T) {
+			_, o := scene(t, s.look)
+			var tr ui.SemTree
+			o.UI.Semantics(&tr)
+			widgettest.LintNames(t, "pilot "+s.name, &tr)
+		})
 	}
 }
