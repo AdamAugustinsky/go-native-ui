@@ -1,4 +1,26 @@
 {
+	"machine": {
+		"model": "Mac15,6",
+		"macOS": {
+			"version": "27.2",
+			"build": "26B5091g"
+		},
+		"display": {
+			"name": "Built-in Liquid Retina XDR Display",
+			"widthPt": 1512,
+			"heightPt": 982,
+			"backingScale": 2,
+			"widthPx": 3024,
+			"heightPx": 1964,
+			"refreshHz": 120
+		},
+		"appearance": "dark",
+		"accent": "pink",
+		"accentRendered": "blue",
+		"scrollerStyle": "overlay",
+		"date": "2026-10-18",
+		"note": "MacBook Pro 14\" (M3 Pro). Recorded afterwards from docs/measurements/phase1-macos.md, GnuiShot's display dump and the run's own metrics (macOS build, scroller style); the tool did not write it."
+	},
 	"source": "tools/appkitref/measure -ref macbook-blue (AppKitRef, Version 27.2 (Build 26B5091g))",
 	"scale": 2,
 	"system": {

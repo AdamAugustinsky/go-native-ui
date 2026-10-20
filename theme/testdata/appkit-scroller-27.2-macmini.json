@@ -1,0 +1,155 @@
+{
+  "machine" : {
+    "accent" : "pink",
+    "accentRendered" : "pink",
+    "appearance" : "dark",
+    "date" : "2026-10-20",
+    "display" : {
+      "backingScale" : 2,
+      "heightPt" : 1440,
+      "heightPx" : 2880,
+      "name" : "LG ULTRAGEAR+",
+      "refreshHz" : 120,
+      "widthPt" : 2560,
+      "widthPx" : 5120
+    },
+    "macOS" : {
+      "build" : "26B5101f",
+      "version" : "27.2"
+    },
+    "model" : "Mac16,10",
+    "scrollerStyle" : "overlay"
+  },
+  "mini-legacy" : {
+    "contentWidth" : 287,
+    "frame" : {
+      "h" : 200,
+      "w" : 13,
+      "x" : 287,
+      "y" : 0
+    },
+    "knob" : {
+      "h" : 38.5,
+      "w" : 7,
+      "x" : 3,
+      "y" : 3
+    },
+    "slot" : {
+      "h" : 194,
+      "w" : 7,
+      "x" : 3,
+      "y" : 3
+    },
+    "width" : 13
+  },
+  "mini-overlay" : {
+    "contentWidth" : 300,
+    "frame" : {
+      "h" : 200,
+      "w" : 15,
+      "x" : 285,
+      "y" : 0
+    },
+    "knob" : {
+      "h" : 38.5,
+      "w" : 4,
+      "x" : 8,
+      "y" : 3
+    },
+    "slot" : {
+      "h" : 194,
+      "w" : 4,
+      "x" : 8,
+      "y" : 3
+    },
+    "width" : 15
+  },
+  "regular-legacy" : {
+    "contentWidth" : 283,
+    "frame" : {
+      "h" : 200,
+      "w" : 17,
+      "x" : 283,
+      "y" : 0
+    },
+    "knob" : {
+      "h" : 38.5,
+      "w" : 11,
+      "x" : 3,
+      "y" : 3
+    },
+    "slot" : {
+      "h" : 194,
+      "w" : 11,
+      "x" : 3,
+      "y" : 3
+    },
+    "width" : 17
+  },
+  "regular-overlay" : {
+    "contentWidth" : 300,
+    "frame" : {
+      "h" : 200,
+      "w" : 17,
+      "x" : 283,
+      "y" : 0
+    },
+    "knob" : {
+      "h" : 38.5,
+      "w" : 6,
+      "x" : 8,
+      "y" : 3
+    },
+    "slot" : {
+      "h" : 194,
+      "w" : 6,
+      "x" : 8,
+      "y" : 3
+    },
+    "width" : 17
+  },
+  "small-legacy" : {
+    "contentWidth" : 287,
+    "frame" : {
+      "h" : 200,
+      "w" : 13,
+      "x" : 287,
+      "y" : 0
+    },
+    "knob" : {
+      "h" : 38.5,
+      "w" : 7,
+      "x" : 3,
+      "y" : 3
+    },
+    "slot" : {
+      "h" : 194,
+      "w" : 7,
+      "x" : 3,
+      "y" : 3
+    },
+    "width" : 13
+  },
+  "small-overlay" : {
+    "contentWidth" : 300,
+    "frame" : {
+      "h" : 200,
+      "w" : 15,
+      "x" : 285,
+      "y" : 0
+    },
+    "knob" : {
+      "h" : 38.5,
+      "w" : 4,
+      "x" : 8,
+      "y" : 3
+    },
+    "slot" : {
+      "h" : 194,
+      "w" : 4,
+      "x" : 8,
+      "y" : 3
+    },
+    "width" : 15
+  }
+}

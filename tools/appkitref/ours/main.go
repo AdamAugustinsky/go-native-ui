@@ -75,7 +75,7 @@ func (r *runner) Build(c *ui.Context) {
 
 func main() {
 	out := flag.String("o", "", "output directory")
-	ref := flag.String("ref", "", "AppKitRef metrics.json whose colours the System roles take")
+	ref := flag.String("ref", "", "AppKitRef metrics.json whose colours the System roles take (\"auto\": this host's reference set, GNUI_APPKIT_REF overrides)")
 	only := flag.String("only", "", "render only the samples whose names contain this")
 	flag.Parse()
 	if *out == "" {

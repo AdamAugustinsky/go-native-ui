@@ -8,6 +8,7 @@
 //	AppKitRef -o DIR [-AppleAccentColor 4]   render + measure into DIR
 //	AppKitRef -sheet MANIFEST.json OUT.png   compose a side-by-side sheet
 //	AppKitRef -live NAMES.txt [-mode dark]   show samples in a window briefly
+//	AppKitRef -machine FILE                  write where this runs (alone, or beside the others)
 //
 // Except with -live it never shows a window: the activation policy is
 // Prohibited, and every window it makes is created deferred and never ordered
@@ -17,6 +18,7 @@
 #import <AppKit/AppKit.h>
 #import <CoreText/CoreText.h>
 #include <math.h>
+#import "machine.h"
 
 #pragma mark - Simulated key/main window state
 
@@ -1954,7 +1956,7 @@ int main(int argc, const char **argv) {
 		[ARApp sharedApplication];
 		[NSApp setActivationPolicy:NSApplicationActivationPolicyProhibited];
 		keep = [NSMutableArray array];
-		NSString *outDir = nil, *live = nil, *liveAp = NSAppearanceNameAqua, *dump = nil;
+		NSString *outDir = nil, *live = nil, *liveAp = NSAppearanceNameAqua, *dump = nil, *machinePath = nil;
 		double seconds = 8, maxW = 1440;
 		for (int i = 1; i < argc; i++) {
 			if (!strcmp(argv[i], "-o") && i + 1 < argc) outDir = [NSString stringWithUTF8String:argv[++i]];
@@ -1965,6 +1967,12 @@ int main(int argc, const char **argv) {
 			else if (!strcmp(argv[i], "-seconds") && i + 1 < argc) seconds = atof(argv[++i]);
 			else if (!strcmp(argv[i], "-width") && i + 1 < argc) maxW = atof(argv[++i]);
 			else if (!strcmp(argv[i], "-dump") && i + 1 < argc) dump = [NSString stringWithUTF8String:argv[++i]];
+			else if (!strcmp(argv[i], "-machine") && i + 1 < argc) machinePath = [NSString stringWithUTF8String:argv[++i]];
+		}
+		if (machinePath) { // where this runs, for captures that have no metrics.json of their own (live.sh)
+			NSData *m = [NSJSONSerialization dataWithJSONObject:@{@"machine" : machineInfo()} options:NSJSONWritingPrettyPrinted | NSJSONWritingSortedKeys error:nil];
+			[m writeToFile:machinePath.stringByStandardizingPath atomically:YES];
+			if (!live && !outDir) return 0;
 		}
 		if (live) return runLive(live, liveAp, seconds, maxW, dump);
 		if (!outDir) {
@@ -1983,6 +1991,7 @@ int main(int argc, const char **argv) {
 			@"renderScale" : @2,
 			@"keyWindowSimulated" : @"ARWindow/ARApp report key, main and active; samples marked 'inactive' report not",
 		};
+		metricsOut[@"machine"] = machineInfo();
 		metricsOut[@"behaviour"] = behaviourTable();
 		metricsOut[@"fonts"] = fontTable();
 		metricsOut[@"colors"] = colorTable();

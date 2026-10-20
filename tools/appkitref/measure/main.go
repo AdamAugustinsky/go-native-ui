@@ -18,6 +18,12 @@
 //	go run ./tools/appkitref/measure -names 0 > names.txt   # for AppKitRef -live
 //	go run ./tools/appkitref/measure -cut capture.png -page 0 -o DIR/light
 //	go run ./tools/appkitref/measure -live -ref APPKIT_CELLS -ours OUR_CELLS
+//	go run ./tools/appkitref/measure -set                   # which reference set this host uses
+//	go run ./tools/appkitref/measure -set-name              # the set to record on this host (for the scripts)
+//	go run ./tools/appkitref/measure -diff macbook macmini  # Markdown report of two sets (repository root)
+//
+// "-ref auto" is the metrics.json run of the set -set names (GNUI_APPKIT_REF
+// overrides the host's choice; package internal/appkitref).
 //
 // Both renders are at 2× with AppKit's frame at 14 pt from the top left, as
 // AppKitRef and ours write them.
@@ -37,6 +43,7 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"gonativeui/internal/appkitref"
 	"gonativeui/internal/cielab"
 	"gonativeui/platform"
 	"gonativeui/rexui/catalog"
@@ -73,8 +80,10 @@ type Result struct {
 	RingWidth  float64 `json:"ringWidth,omitempty"`
 }
 
-// File is what -write records.
+// File is what -write records. Machine is the "machine" object of the run's
+// metrics.json: where the numbers were taken.
 type File struct {
+	Machine json.RawMessage              `json:"machine,omitempty"`
 	Source  string                       `json:"source"`
 	Scale   int                          `json:"scale"`
 	System  map[string]map[string]string `json:"system"`
@@ -91,8 +100,39 @@ func main() {
 	cutFrom := flag.String("cut", "", "cut this 2× capture of a grid page into one PNG per sample in -o, and exit")
 	page := flag.Int("page", 0, "with -cut: the grid page the capture shows")
 	cutTo := flag.String("o", "", "with -cut: the output directory")
+	diff := flag.Bool("diff", false, "compare two reference sets (macbook, macmini) and print a Markdown report: measure -diff macbook macmini")
+	set := flag.Bool("set", false, "print the reference set this host's comparisons use (GNUI_APPKIT_REF, else the set measured on this model and build) and its files, and exit")
+	setName := flag.Bool("set-name", false, "print only the name of the set to RECORD on this host (GNUI_APPKIT_REF, else the host's own); exit 1 on an unknown machine")
 	live := flag.Bool("live", false, "the -ref cells are cut from AppKitRef -live captures: leave out the samples one key window cannot show (focused, inactive)")
 	flag.Parse()
+	if *set {
+		if err := printSet(); err != nil {
+			fail(err)
+		}
+		return
+	}
+	if *setName {
+		name, ok, err := appkitref.FromEnv()
+		if err == nil && !ok {
+			name, ok = appkitref.Host()
+		}
+		if err != nil || !ok {
+			fmt.Fprintln(os.Stderr, "measure: unknown machine: set", appkitref.EnvVar, "to macbook or macmini to record into that set")
+			os.Exit(1)
+		}
+		fmt.Println(name)
+		return
+	}
+	if *diff {
+		if flag.NArg() != 2 {
+			fmt.Fprintln(os.Stderr, "usage: measure -diff SET SET   (macbook, macmini; from the repository root)")
+			os.Exit(2)
+		}
+		if err := diffSets(flag.Arg(0), flag.Arg(1)); err != nil {
+			fail(err)
+		}
+		return
+	}
 	if *cutFrom != "" {
 		if *cutTo == "" || *page < 0 || *page >= len(catalog.Pages) {
 			fmt.Fprintln(os.Stderr, "usage: measure -cut CAPTURE.png -page N -o DIR")
@@ -110,8 +150,15 @@ func main() {
 		return
 	}
 	if *ref == "" {
-		fmt.Fprintln(os.Stderr, "usage: measure -ref DIR [-ours DIR] [-write FILE]")
+		fmt.Fprintln(os.Stderr, "usage: measure -ref DIR|auto [-ours DIR] [-write FILE]   |   -diff SET SET   |   -set")
 		os.Exit(2)
+	}
+	if *ref == "auto" { // this host's reference set (-set)
+		name, err := appkitref.Select()
+		if err != nil {
+			fail(err)
+		}
+		*ref = filepath.Dir(appkitref.Metrics(name))
 	}
 	meta, err := loadMetrics(filepath.Join(*ref, "metrics.json"))
 	if err != nil && (*write != "" || !os.IsNotExist(err)) {
@@ -121,6 +168,7 @@ func main() {
 		meta = &metrics{}
 	}
 	out := File{
+		Machine: meta.Machine,
 		Source:  "tools/appkitref/measure -ref " + filepath.Base(*ref) + " (AppKitRef, " + meta.System.OS + ")",
 		Scale:   scale,
 		System:  map[string]map[string]string{},
@@ -539,7 +587,8 @@ func parseHex(s string) [3]int {
 
 // metrics is the part of AppKitRef's metrics.json the tool reads.
 type metrics struct {
-	System struct {
+	Machine json.RawMessage `json:"machine"`
+	System  struct {
 		OS string `json:"osBuild"`
 	} `json:"system"`
 	Colors   map[string]map[string]json.RawMessage `json:"colors"`
@@ -581,4 +630,26 @@ func clamp01(v float64) float64 { return clamp(v, 0, 1) }
 func fail(err error) {
 	fmt.Fprintln(os.Stderr, "measure:", err)
 	os.Exit(1)
+}
+
+// printSet prints the reference set this host's live comparisons use and the
+// files it consists of.
+func printSet() error {
+	name, err := appkitref.Select()
+	if err != nil {
+		return err
+	}
+	_, forced, _ := appkitref.FromEnv()
+	why := "this host's model and macOS build"
+	if forced {
+		why = appkitref.EnvVar
+	} else if name == appkitref.Default {
+		why = "default (no set was measured on this host)"
+	}
+	fmt.Printf("set %s (%s)\n", name, why)
+	fmt.Println("metrics ", appkitref.Metrics(name))
+	fmt.Println("scenes  ", appkitref.Scenes(name))
+	fmt.Println("recipes ", appkitref.File(name, "rexui/testdata/appkit-27.2.json"))
+	fmt.Println("scroller", appkitref.File(name, "theme/testdata/appkit-scroller-27.2.json"))
+	return nil
 }
