@@ -106,12 +106,10 @@ func TestFramePeakOnEitherTurn(t *testing.T) {
 	f.Swap()                  // a small frame on the other's turn
 	f.Swap()
 	f.Swap() // the peak again, on the other arena's turn
-	var m0, m1 runtime.MemStats
-	runtime.ReadMemStats(&m0)
+	before := unsafe.SliceData(f.Cur().buf)
 	f.Cur().AppendBytes(peak)
-	runtime.ReadMemStats(&m1)
-	if n := m1.Mallocs - m0.Mallocs; n != 0 {
-		t.Errorf("the peak on the other arena's turn allocated %d times", n)
+	if unsafe.SliceData(f.Cur().buf) != before {
+		t.Error("the peak on the other arena's turn grew its arena")
 	}
 	c0, c1 := cap(f.a[0].buf), cap(f.a[1].buf)
 	for range 10 {

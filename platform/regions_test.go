@@ -2,8 +2,8 @@ package platform
 
 import (
 	"math/rand"
-	"runtime"
 	"testing"
+	"unsafe"
 )
 
 func TestCursorMapAt(t *testing.T) {
@@ -252,14 +252,19 @@ func TestRegionListsGrowWithRoom(t *testing.T) {
 	m.setHoles(holes[:n])
 	d.set(drags[:n])
 	tm.set(tips[:n])
-	var m0, m1 runtime.MemStats
-	runtime.ReadMemStats(&m0)
+	// The storage each keeps (not the process's malloc count, which other
+	// goroutines move: on Linux the appearance follower talks to the bus).
+	type store struct{ c, h, d, t unsafe.Pointer }
+	at := func() store {
+		return store{unsafe.Pointer(unsafe.SliceData(m.regs)), unsafe.Pointer(unsafe.SliceData(m.holes)),
+			unsafe.Pointer(unsafe.SliceData(d.regs)), unsafe.Pointer(unsafe.SliceData(tm.regs))}
+	}
+	before := at()
 	m.setRegions(curs)
 	m.setHoles(holes)
 	d.set(drags)
 	tm.set(tips)
-	runtime.ReadMemStats(&m1)
-	if a := m1.Mallocs - m0.Mallocs; a != 0 {
-		t.Errorf("lists grown from %d to %d entries allocated %d times", n, n+n/2, a)
+	if after := at(); after != before {
+		t.Errorf("lists grown from %d to %d entries got new storage: %v, then %v", n, n+n/2, before, after)
 	}
 }
