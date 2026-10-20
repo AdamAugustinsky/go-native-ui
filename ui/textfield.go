@@ -319,10 +319,17 @@ func (c *Context) TextField(label string, buf *TextBuffer) TextFieldSignal {
 			}
 		}
 		if !composing && !orphan {
-			touched = c.editKeys(buf, &res) || touched
+			// Keys and edit actions in the order they arrived: Left, then
+			// select all, is not select all, then Left.
+			from := 0
 			for i := 0; i < in.NEdit; i++ {
+				to := min(int(in.EditAfter[i]), in.NKeys)
+				touched = c.editKeys(buf, &res, from, to) || touched
+				from = max(from, to)
 				c.applyEdit(buf, in.Edit[i])
+				touched = true // a handled command is activity: the caret blink restarts
 			}
+			touched = c.editKeys(buf, &res, from, in.NKeys) || touched
 		}
 	}
 	switch {
@@ -542,15 +549,15 @@ func (c *Context) mouseDrag(buf *TextBuffer, font text.FontKey, x float32) {
 	}
 }
 
-// editKeys applies the frame's key events to buf and reports whether any key
-// went down.
-func (c *Context) editKeys(buf *TextBuffer, res *TextFieldSignal) (pressed bool) {
+// editKeys applies the frame's key events from..to-1 to buf and reports whether
+// any key went down.
+func (c *Context) editKeys(buf *TextBuffer, res *TextFieldSignal, from, to int) (pressed bool) {
 	in := &c.in
 	primaryMod, wordMod := ModCtrl, ModCtrl
 	if macKeys {
 		primaryMod, wordMod = ModSuper, ModAlt
 	}
-	for i := 0; i < in.NKeys; i++ {
+	for i := from; i < to; i++ {
 		e := in.Keys[i]
 		if !e.Down || (c.fieldKeys|c.fieldPeek)&(1<<uint(i)) == 0 { // only the keys claimed for the field
 			continue

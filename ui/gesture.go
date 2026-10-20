@@ -8,9 +8,14 @@ import "math"
 // at the gesture's first event (Began) receives all of it, until it ends,
 // wherever the fingers go, and so do its ancestors. The box must be
 // hit-testable (Hoverable, Clickable, Focusable …); a pinch over nothing is
-// lost. A device without gesture phases (a Windows touchpad's pinch) sends
-// events with PhaseNone, each of which goes to the box under its own point.
-// Signal.Magnify, Signal.Rotate and Signal.SmartMagnify report what a box got.
+// lost. A Changed, Ended or Cancelled whose Began ui never saw is ignored (the
+// platform gives a gesture that began over a native view to that view). A
+// latched box that disappears, or a window that loses the keyboard focus, ends
+// the gesture: the boxes that still exist and had it are told it was cancelled
+// (Signal.GestureEnded and GestureCancelled). A device without gesture phases
+// (a Windows touchpad's pinch) sends events with PhaseNone, each of which goes
+// to the box under its own point. Signal.Magnify, Signal.Rotate and
+// Signal.SmartMagnify report what a box got.
 
 // GestureKind says what a GestureEvent is.
 type GestureKind uint8
@@ -66,6 +71,8 @@ type gestRec struct {
 	mag, rot     float32
 	smart        bool
 	began, ended bool
+	cancelled    bool // the gesture was cancelled, or ended by losing its box or the focus
+	fixed        bool // chain is set already (the box is gone: the one the gesture last had)
 	x, y         float32
 }
 
@@ -73,6 +80,11 @@ type gestRec struct {
 type gestureState struct {
 	latch  [2]Key  // the box a pinch (0) and a rotation (1) latched to
 	active [2]bool // between Began and Ended
+	// what the gesture last had, to end it if its box goes: the box's chain in
+	// the last tree it was in, and where the gesture was
+	chain  [2][maxAncestry]Key
+	nChain [2]int
+	lastAt [2][2]float32
 	recs   [MaxGestures]gestRec
 	n      int
 	// the hit-testable box under the last point hotAt walked to this frame
@@ -87,15 +99,46 @@ func (c *Context) gestureInput() {
 	gs := &c.gs
 	gs.n, gs.aimOK = 0, false
 	in := &c.in
+	// A latched box that is no longer in the tree cannot be told the gesture
+	// went on: the ones above it, which had it, are told it is over.
+	for i := range gs.latch {
+		if !gs.active[i] || gs.latch[i] == 0 {
+			continue
+		}
+		if _, ok := c.table.Get(uint64(gs.latch[i])); ok {
+			gs.nChain[i] = c.chainOf(gs.latch[i], gs.chain[i][:])
+		} else {
+			c.gestureLost(i)
+		}
+	}
 	for i := 0; i < in.NGestures; i++ {
 		c.gestureEvent(&in.Gestures[i])
 	}
-	if !in.Focused {
+	if !in.Focused { // the window stopped listening: the gesture is over
+		for i := range gs.latch {
+			if gs.active[i] && gs.latch[i] != 0 {
+				c.gestureLost(i)
+			}
+		}
 		gs.latch, gs.active = [2]Key{}, [2]bool{}
 	}
 	for i := 0; i < gs.n; i++ {
-		c.gestureChain(&gs.recs[i])
+		if !gs.recs[i].fixed {
+			c.gestureChain(&gs.recs[i])
+		}
 	}
+}
+
+// gestureLost ends latch i's gesture without its end: its record, as the
+// gesture last had it, is ended and cancelled.
+func (c *Context) gestureLost(i int) {
+	gs := &c.gs
+	r := c.gestureRec(gs.latch[i], &GestureEvent{X: gs.lastAt[i][0], Y: gs.lastAt[i][1]})
+	r.ended, r.cancelled = true, true
+	if _, ok := c.table.Get(uint64(gs.latch[i])); !ok && !r.fixed {
+		r.chain, r.nChain, r.fixed = gs.chain[i], gs.nChain[i], true
+	}
+	gs.latch[i], gs.active[i] = 0, false
 }
 
 func (c *Context) gestureEvent(e *GestureEvent) {
@@ -116,12 +159,18 @@ func (c *Context) gestureEvent(e *GestureEvent) {
 		k = c.hotAt(e.X, e.Y)
 	case PhaseBegan:
 		gs.latch[i], gs.active[i] = c.hotAt(e.X, e.Y), true
+		gs.lastAt[i] = [2]float32{e.X, e.Y}
 		k = gs.latch[i]
+		gs.nChain[i] = 0
+		if k != 0 {
+			gs.nChain[i] = c.chainOf(k, gs.chain[i][:])
+		}
 	case PhaseChanged, PhaseStationary, PhaseEnded, PhaseCancelled:
-		if !gs.active[i] { // its Began came while the window was not listening: this is where it starts
-			gs.latch[i], gs.active[i] = c.hotAt(e.X, e.Y), true
+		if !gs.active[i] {
+			return // its Began never came (or it ended already): nobody has this gesture
 		}
 		k = gs.latch[i]
+		gs.lastAt[i] = [2]float32{e.X, e.Y}
 	default: // MayBegin: fingers resting
 		return
 	}
@@ -135,6 +184,7 @@ func (c *Context) gestureEvent(e *GestureEvent) {
 		}
 		r.began = r.began || e.Phase == PhaseBegan
 		r.ended = r.ended || e.Phase == PhaseEnded || e.Phase == PhaseCancelled
+		r.cancelled = r.cancelled || e.Phase == PhaseCancelled
 	}
 	if e.Phase == PhaseEnded || e.Phase == PhaseCancelled {
 		gs.latch[i], gs.active[i] = 0, false
@@ -164,15 +214,23 @@ func (c *Context) gestureRec(k Key, e *GestureEvent) *gestRec {
 // gestureChain fills in the keys of the latched box and its ancestors, from
 // the tree of the previous frame.
 func (c *Context) gestureChain(r *gestRec) {
-	r.chain[0], r.nChain = r.key, 1
-	v, ok := c.table.Get(uint64(r.key))
+	r.nChain = c.chainOf(r.key, r.chain[:])
+}
+
+// chainOf fills dst with key and its ancestors in the previous frame's tree
+// and returns how many.
+func (c *Context) chainOf(key Key, dst []Key) int {
+	dst[0] = key
+	n := 1
+	v, ok := c.table.Get(uint64(key))
 	if !ok {
-		return
+		return n
 	}
-	for id := c.boxes[v].parent; id != 0 && r.nChain < maxAncestry; id = c.boxes[id].parent {
-		r.chain[r.nChain] = c.boxes[id].key
-		r.nChain++
+	for id := c.boxes[v].parent; id != 0 && n < len(dst); id = c.boxes[id].parent {
+		dst[n] = c.boxes[id].key
+		n++
 	}
+	return n
 }
 
 // hotAt is the key of the hit-testable box under the point (x, y) in the last
@@ -220,6 +278,7 @@ func (c *Context) gestureOf(b *box, s *Signal) {
 		s.SmartMagnify = s.SmartMagnify || r.smart
 		s.GestureBegan = s.GestureBegan || r.began
 		s.GestureEnded = s.GestureEnded || r.ended
+		s.GestureCancelled = s.GestureCancelled || r.cancelled
 		s.GestureAt = [2]float32{r.x, r.y}
 	}
 }

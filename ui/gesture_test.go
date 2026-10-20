@@ -169,31 +169,103 @@ func TestPinchOverNothingIsLost(t *testing.T) {
 	}
 }
 
-// TestPinchMissingItsBeganLatchesAtTheFirstEvent: the window was not
-// listening when the gesture began.
-func TestPinchMissingItsBeganLatchesAtTheFirstEvent(t *testing.T) {
+// TestPinchMissingItsBeganIsIgnored: a Changed whose Began ui never saw (the
+// gesture began over a native view, or while the window was not listening)
+// goes to nobody: it does not start a latch under whatever the fingers are
+// over. The next pinch, with its Began, does.
+func TestPinchMissingItsBeganIsIgnored(t *testing.T) {
 	s := newGestureScene(t)
 	s.gesture(GestureMagnify, PhaseChanged, 0.1, 250, 150)
 	s.gesture(GestureMagnify, PhaseChanged, 0.1, 150, 150)
+	s.gesture(GestureMagnify, PhaseEnded, 0, 150, 150)
 	s.step()
-	if g := s.got["b"]; !near(g.Magnify, 0.2) {
-		t.Errorf("b: %v, want 0.2", g.Magnify)
+	for _, k := range []string{"a", "b", "btn"} {
+		if g := s.got[k]; g.Magnify != 0 || g.GestureEnded {
+			t.Errorf("%s: %+v from a pinch whose Began was never seen", k, g)
+		}
+	}
+	s.gesture(GestureMagnify, PhaseBegan, 0.3, 250, 150)
+	s.step()
+	if g := s.got["b"]; !near(g.Magnify, 0.3) {
+		t.Errorf("b: %v after a new pinch began over it, want 0.3", g.Magnify)
 	}
 }
 
 // TestLosingTheKeyboardFocusEndsAGesture: the pinch does not stay latched
-// across a window that stopped listening.
+// across a window that stopped listening, and the box that had it is told it
+// was cancelled; what comes after, without a Began, is nobody's.
 func TestLosingTheKeyboardFocusEndsAGesture(t *testing.T) {
 	s := newGestureScene(t)
 	s.gesture(GestureMagnify, PhaseBegan, 0.1, 150, 150)
 	s.step()
 	s.in.Focused = false
 	s.step()
-	s.in.Focused = true
-	s.gesture(GestureMagnify, PhaseChanged, 0.1, 250, 150) // a Changed from a new pinch
+	if g := s.got["a"]; !g.GestureEnded || !g.GestureCancelled {
+		t.Errorf("a on losing the focus: ended %v cancelled %v, want both", g.GestureEnded, g.GestureCancelled)
+	}
 	s.step()
-	if g := s.got["b"]; !near(g.Magnify, 0.1) {
-		t.Errorf("b: %v after focus returned, want a fresh latch at the new pinch", g.Magnify)
+	if g := s.got["a"]; g.GestureEnded || g.GestureCancelled {
+		t.Errorf("a was told again: %+v", g)
+	}
+	s.in.Focused = true
+	s.gesture(GestureMagnify, PhaseChanged, 0.1, 250, 150) // the rest of the old pinch
+	s.step()
+	if g := s.got["b"]; g.Magnify != 0 {
+		t.Errorf("b: %v from the rest of a pinch that ended with the focus", g.Magnify)
+	}
+	s.gesture(GestureMagnify, PhaseBegan, 0.2, 250, 150) // a new pinch
+	s.step()
+	if g := s.got["b"]; !near(g.Magnify, 0.2) || g.GestureCancelled {
+		t.Errorf("b: %+v after a new pinch, want a fresh latch", g)
+	}
+}
+
+// TestGestureTargetThatDisappearsIsCancelled: the box a pinch is latched to
+// goes away mid-gesture; the boxes that had it above it are told it ended,
+// cancelled, once, and the rest of the gesture goes nowhere.
+func TestGestureTargetThatDisappearsIsCancelled(t *testing.T) {
+	s := newGestureScene(t)
+	s.move(20, 20) // over btn
+	s.gesture(GestureMagnify, PhaseBegan, 0.1, 20, 20)
+	s.gesture(GestureRotate, PhaseBegan, 0.5, 20, 20)
+	s.step()
+	if !s.got["a"].GestureBegan || s.got["a"].GestureCancelled {
+		t.Fatalf("a: %+v at the start", s.got["a"])
+	}
+	// The next frame builds the scene without btn; the frame after it finds
+	// btn gone from the tree and ends the gestures.
+	without := func(c *Context) {
+		c.NextSize(Px(400), Px(200))
+		c.NextAxis(AxisX)
+		c.Open(0, "row")
+		{
+			c.NextSize(Px(200), Px(200))
+			s.a = c.Open(Hoverable, "a")
+			c.Close()
+			c.NextSize(Px(200), Px(200))
+			s.b = c.Open(Hoverable, "b")
+			c.Close()
+		}
+		c.Close()
+		s.got["a"], s.got["b"] = c.Signal(s.a), c.Signal(s.b)
+	}
+	s.gesture(GestureMagnify, PhaseChanged, 0.1, 20, 20)
+	s.frame(without)
+	s.gesture(GestureMagnify, PhaseChanged, 0.1, 150, 150) // the pinch goes on; nobody has it
+	s.frame(without)
+	if g := s.got["a"]; !g.GestureEnded || !g.GestureCancelled {
+		t.Errorf("a (the viewer above the vanished button): ended %v cancelled %v, want both", g.GestureEnded, g.GestureCancelled)
+	}
+	if g := s.got["a"]; g.Magnify != 0 || g.Rotate != 0 {
+		t.Errorf("a got %v and %v from a gesture whose box is gone", g.Magnify, g.Rotate)
+	}
+	if g := s.got["b"]; g.GestureEnded || g.Magnify != 0 {
+		t.Errorf("b: %+v", g)
+	}
+	s.gesture(GestureMagnify, PhaseChanged, 0.1, 150, 150)
+	s.frame(without)
+	if g := s.got["a"]; g.GestureEnded || g.Magnify != 0 {
+		t.Errorf("a was told again, or got the rest: %+v", g)
 	}
 }
 

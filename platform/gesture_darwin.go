@@ -37,8 +37,8 @@ func viewSmartMagnify(c *ffi.CB) { viewGesture(c, EvSmartMagnify) }
 // declined (the loop queues the others itself, gestureEvent).
 func viewGesture(c *ffi.CB, kind EventKind) {
 	w := theWindow.Load()
-	if w == nil || w.view != objc.ID(c.Int(0)) {
-		return
+	if w == nil || w.view != objc.ID(c.Int(0)) || w.dialogOpen() {
+		return // (a sheet owns the window's input)
 	}
 	ev := objc.ID(c.Int(2))
 	w.q.push(w.gestureOf(ev, kind, int64(objc.SendF64(ev, selTimestamp)*1e9)))
@@ -46,14 +46,15 @@ func viewGesture(c *ffi.CB, kind EventKind) {
 
 // gestureEvent queues the gesture NSEvent ev (typ is its NSEventType: 18
 // rotate, 30 magnify, 32 smart magnify) and reports that it did. A gesture
-// over a native host is left to AppKit, which gives it to the host's view
-// (and to ours if the host hands it up, viewGesture); so is one for another
-// window.
+// that belongs to a native host is left to AppKit, which gives it to the host's
+// view (and to ours if the host hands it up, viewGesture); so is one for
+// another window. Who owns a pinch or rotation is decided where it begins
+// (pinchToHost), as for a scroll gesture.
 func (w *Window) gestureEvent(ev objc.ID, typ uintptr, t int64) bool {
 	if win := objc.Send(ev, selWindow); win != 0 && win != w.win {
 		return false
 	}
-	if w.hosts.nVis != 0 && w.overHost(w.locate(ev)) {
+	if w.pinchToHost(ev, typ) {
 		return false
 	}
 	kind := EvMagnify

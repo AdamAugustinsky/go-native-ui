@@ -302,11 +302,17 @@ type Event struct {
 	Mods Mods
 	// Key is the key of an EvKey.
 	Key Key
-	// Char is, for an EvKey, the character the key types on the current
-	// layout with no modifier but Shift, lower-cased (0: the key types none,
-	// or the OS does not say). Key is the physical key; Char is what shortcuts
-	// match by (the app's translator, ui.KeyEvent.Code), so that a shortcut
-	// sits where the user's layout puts its letter.
+	// Char is, for an EvKey, the character the key names in a shortcut on
+	// the current layout: printable ASCII, lower-cased, and never the shifted
+	// one (Shift is a modifier of the shortcut of its own: ⌘⇧ and the key that
+	// types [ is Char '[', not '{'). On macOS it is what the layout types with
+	// ⌘ held, as AppKit matches key equivalents (so "Dvorak – QWERTY ⌘" gives
+	// QWERTY's letters); 0 when that is not ASCII (a layout of another script
+	// without a Latin ⌘ table: the shortcut is then the physical key), when
+	// the key types none, or when the OS does not say. Key is the physical
+	// key; Char is what shortcuts match by (the app's translator,
+	// ui.KeyEvent.Code), so that a shortcut sits where the user's layout puts
+	// its letter.
 	Char   rune
 	Code   uint32  // raw OS key code (macOS keyCode, Windows scancode, evdev/X11 keycode)
 	X, Y   float32 // pointer position, physical pixels, origin at the content's top-left

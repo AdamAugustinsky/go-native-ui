@@ -312,8 +312,11 @@ type Input struct {
 
 	// Edit[:NEdit] are this frame's edit actions for the focused text field
 	// (PushEdit).
-	Edit  [MaxEdit]EditAction
-	NEdit int
+	// EditAfter[i] is how many of this frame's keys came before Edit[i]: the
+	// field applies keys and edit actions in the order they arrived.
+	Edit      [MaxEdit]EditAction
+	EditAfter [MaxEdit]uint16
+	NEdit     int
 	// Gestures[:NGestures] are this frame's trackpad gesture events in order
 	// (AddGesture); ui latches each gesture to a box (gesture.go) and reports
 	// it through Signal.Magnify and Signal.Rotate.
@@ -355,7 +358,7 @@ func (in *Input) PushEdit(a EditAction) bool {
 	if in.NEdit >= MaxEdit {
 		return false
 	}
-	in.Edit[in.NEdit] = a
+	in.Edit[in.NEdit], in.EditAfter[in.NEdit] = a, uint16(in.NKeys)
 	in.NEdit++
 	return true
 }
@@ -607,12 +610,15 @@ type Signal struct {
 	// rotation, in radians, positive counterclockwise as the user sees it.
 	// SmartMagnify is a two-finger double tap on the box (smart zoom).
 	// GestureBegan and GestureEnded say that this frame had the start or the end
-	// (or cancel) of a pinch or rotation; GestureAt is where the gesture's last
+	// (or cancel) of a pinch or rotation; GestureCancelled that it was
+	// cancelled, or cut short by its box going away or the window losing the
+	// keyboard focus (the box that went away is told nothing); GestureAt is where the gesture's last
 	// event this frame was (pixels, like Mouse's window coordinates).
-	Magnify, Rotate float32
-	SmartMagnify    bool
-	GestureBegan    bool
-	GestureEnded    bool
-	GestureAt       [2]float32
-	Mouse           [2]float32 // pointer position relative to the box's top-left corner (previous frame's rectangle)
+	Magnify, Rotate  float32
+	SmartMagnify     bool
+	GestureBegan     bool
+	GestureEnded     bool
+	GestureCancelled bool
+	GestureAt        [2]float32
+	Mouse            [2]float32 // pointer position relative to the box's top-left corner (previous frame's rectangle)
 }

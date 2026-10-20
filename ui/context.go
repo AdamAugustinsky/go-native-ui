@@ -201,6 +201,8 @@ type Context struct {
 	sp scrollPhys   // trackpad gestures, latching and rubber bands (scrollphys.go)
 	gs gestureState // pinch and rotation latching (gesture.go)
 
+	swapBuf []byte // scratch for EditTranspose (keymoves.go): kept, so a swap of long clusters allocates only while it grows
+
 	// animation (see anim.go)
 	animating             bool
 	rHot, rActive, rFocus float32

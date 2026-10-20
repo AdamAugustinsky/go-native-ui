@@ -355,6 +355,7 @@ func (t *translator) apply(e *platform.Event, txt []byte) bool {
 		in.Focused = down
 		in.FocusGained = down
 		if !down { // a release that happens in another window never arrives: cancel, not click
+			in.Mods = 0 // nor does a modifier's; the platform reports the ones held when focus returns
 			for b := range in.Down {
 				in.Cancel(b)
 			}

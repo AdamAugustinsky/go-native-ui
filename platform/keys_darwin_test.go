@@ -166,8 +166,24 @@ func TestKeyClassesThroughAppKit(t *testing.T) {
 		// A layout puts letters elsewhere: the physical key is what is under
 		// the finger, Char what it types. AZERTY has Z where QWERTY has W.
 		{"AZERTY Z at the W position, ⌘Z", "z", "z", flagCommand, 0x0D, KeyA + 'W' - 'A', 'z', ModSuper},
-		{"Dvorak semicolon at the W position", ";", ";", flagCommand, 0x0D, KeyA + 'W' - 'A', ';', ModSuper},
-		{"a Cyrillic ⌘С at the C position", "с", "с", flagCommand, 0x08, KeyA + 'C' - 'A', 'с', ModSuper},
+		{"Dvorak quote at the Q position", "'", "'", flagCommand, 0x0C, KeyA + 'Q' - 'A', '\'', ModSuper},
+		{"Dvorak – QWERTY ⌘ keeps W at the W position", "w", "w", flagCommand, 0x0D, KeyA + 'W' - 'A', 'w', ModSuper},
+		{"a Russian ⌘С at the C position: the layout types c with ⌘", "с", "с", flagCommand, 0x08, KeyA + 'C' - 'A', 'c', ModSuper},
+		// Shifted punctuation keeps the layout's identity: AppKit's
+		// charactersIgnoringModifiers keeps Shift ({ and ?), the character
+		// for a shortcut does not.
+		{"Dvorak ⌘⇧ at the minus position (the [ key)", "{", "{", flagCommand | flagShift, 0x1B, KeyMinus, '[', ModSuper | ModShift},
+		{"AZERTY ⌘⇧ at the M position (the , key)", "?", "?", flagCommand | flagShift, 0x2E, KeyA + 'M' - 'A', ',', ModSuper | ModShift},
+	}
+	// The character comes from the selected layout, so the table runs on the
+	// US layout unless a case names another, whatever the machine has set.
+	layouts := map[string]string{
+		"AZERTY Z at the W position, ⌘Z":                            "com.apple.keylayout.French",
+		"Dvorak ⌘⇧ at the minus position (the [ key)":               "com.apple.keylayout.Dvorak",
+		"AZERTY ⌘⇧ at the M position (the , key)":                   "com.apple.keylayout.French",
+		"Dvorak quote at the Q position":                            "com.apple.keylayout.Dvorak",
+		"Dvorak – QWERTY ⌘ keeps W at the W position":               "com.apple.keylayout.DVORAK-QWERTYCMD",
+		"a Russian ⌘С at the C position: the layout types c with ⌘": "com.apple.keylayout.Russian",
 	}
 	var got []keyOut
 	var why string
@@ -181,8 +197,18 @@ func TestKeyClassesThroughAppKit(t *testing.T) {
 		pool := objc.F.Call0(objc.PoolPush)
 		defer objc.F.Call1(objc.PoolPop, pool)
 		for _, c := range cases {
+			id := layouts[c.name]
+			if id == "" {
+				id = "com.apple.keylayout.US"
+			}
+			restore, ok := pinLayout(id)
+			if !ok {
+				why = "layout " + id + " is not installed"
+				return
+			}
 			w.q.reset()
 			w.handle(nsKey(w, 10, c.chars, c.ignored, c.flags, c.code, 1))
+			restore()
 			got = append(got, collect(w.q.ev))
 			w.q.reset()
 		}
@@ -545,4 +571,79 @@ func TestKeyEquivalentsMatchByCharacter(t *testing.T) {
 	if other.keys != 0 || len(other.cmds) != 1 || other.cmds[0] != tcSave {
 		t.Errorf("⌘S on US: %d keys and commands %v", other.keys, other.cmds)
 	}
+}
+
+// flagsChanged is a modifier-key event of the window with the NSEvent modifier flags.
+func flagsChanged(w *Window, flags uintptr) objc.ID {
+	sel := objc.Sel("keyEventWithType:location:modifierFlags:timestamp:windowNumber:context:characters:charactersIgnoringModifiers:isARepeat:keyCode:")
+	num := objc.Send(w.win, objc.Sel("windowNumber"))
+	s := nsStr("")
+	return objc.ID(objc.F.Reset().Arg(uintptr(objc.Cls("NSEvent"))).Arg(uintptr(sel)).Arg(12).ArgPoint(0, 0).Arg(flags).ArgF64(0).
+		Arg(uintptr(num)).Arg(0).Arg(uintptr(s)).Arg(uintptr(s)).ArgBool(false).Arg(55).Call(objc.MsgSend).R0())
+}
+
+// TestModifiersAcrossFocusLoss: ⌘ held, the window loses key, ⌘ is released in
+// another app (no flagsChanged reaches us), the window returns: the app was
+// told ⌘ was released when focus went, and is not left with it held; a modifier
+// pressed meanwhile is reported on return.
+func TestModifiersAcrossFocusLoss(t *testing.T) {
+	var evs []Event
+	var skip string
+	onMain(func() {
+		w, y := openKeyRig()
+		if y != "" {
+			skip = y
+			return
+		}
+		defer w.Close()
+		pool := objc.F.Call0(objc.PoolPush)
+		defer objc.F.Call1(objc.PoolPop, pool)
+		old := sampleMods
+		defer func() { sampleMods = old }()
+		w.q.reset()
+		w.handle(flagsChanged(w, 1<<20)) // ⌘ pressed
+		windowFocus(false)
+		sampleMods = func() Mods { return 0 } // released in the other app
+		windowFocus(true)
+		sampleMods = func() Mods { return ModShift } // ⇧ pressed in the other app
+		windowFocus(false)
+		windowFocus(true)
+		evs = append(evs, w.q.ev...)
+	})
+	if skip != "" {
+		t.Skip("cannot open a window here: " + skip)
+	}
+	var got []string
+	for _, e := range evs {
+		switch e.Kind {
+		case EvModifiers:
+			got = append(got, "mods "+modString(e.Mods))
+		case EvFocus:
+			got = append(got, "focus")
+		}
+	}
+	want := []string{"mods ⌘", "focus", "mods -", "focus", "focus", "focus", "mods ⇧"}
+	if len(got) != len(want) {
+		t.Fatalf("events %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("events %v, want %v", got, want)
+			break
+		}
+	}
+}
+
+func modString(m Mods) string {
+	s := ""
+	if m&ModSuper != 0 {
+		s += "⌘"
+	}
+	if m&ModShift != 0 {
+		s += "⇧"
+	}
+	if s == "" {
+		return "-"
+	}
+	return s
 }

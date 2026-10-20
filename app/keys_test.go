@@ -234,3 +234,33 @@ func TestSystemClickCount(t *testing.T) {
 		t.Errorf("no system count, a second click 100 ms later: %d", n)
 	}
 }
+
+// TestFocusLossReleasesModifiers: a modifier held when the window loses focus
+// is not held for the app afterwards (its release goes to another window).
+func TestFocusLossReleasesModifiers(t *testing.T) {
+	tr := newTranslator()
+	tr.event(ev(platform.EvModifiers, func(e *platform.Event) { e.Mods = platform.ModSuper }), nil)
+	if tr.in.Mods != ui.ModSuper {
+		t.Fatalf("⌘ not held: %v", tr.in.Mods)
+	}
+	tr.event(ev(platform.EvFocus, func(*platform.Event) {}), nil)
+	if tr.in.Mods != 0 {
+		t.Errorf("modifiers after the focus loss: %v, want none", tr.in.Mods)
+	}
+}
+
+// TestKeysAndEditsKeepTheirOrderThroughTheTranslator: an edit command knows
+// how many keys came before it in the frame.
+func TestKeysAndEditsKeepTheirOrderThroughTheTranslator(t *testing.T) {
+	tr := newTranslator()
+	edit := func() *platform.Event {
+		return ev(platform.EvEdit, func(e *platform.Event) { e.Tag = uint64(platform.EditMoveLineStart) })
+	}
+	tr.event(edit(), nil)
+	tr.event(keyEv(platform.KeyLeft, 0, 0), nil)
+	tr.event(keyEv(platform.KeyRight, 0, 0), nil)
+	tr.event(edit(), nil)
+	if tr.in.NEdit != 2 || tr.in.NKeys != 2 || tr.in.EditAfter[0] != 0 || tr.in.EditAfter[1] != 2 {
+		t.Errorf("edits after %d and %d keys (%d edits, %d keys), want after 0 and 2", tr.in.EditAfter[0], tr.in.EditAfter[1], tr.in.NEdit, tr.in.NKeys)
+	}
+}

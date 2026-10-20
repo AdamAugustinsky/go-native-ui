@@ -86,9 +86,9 @@ func (c *Context) transpose(buf *TextBuffer) {
 		}
 	}
 	lo, hi := text.PrevGrapheme(b, at), text.NextGrapheme(b, at)
-	var tmp [32]byte
-	swapped := append(tmp[:0], b[at:hi]...)
+	swapped := append(c.swapBuf[:0], b[at:hi]...) // (buf.replace edits b: the new text must not alias it)
 	swapped = append(swapped, b[lo:at]...)
+	c.swapBuf = swapped
 	buf.breakRun()
 	buf.replace(lo, hi, swapped)
 	buf.breakRun()

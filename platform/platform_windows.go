@@ -749,10 +749,14 @@ func wndProc(hwnd, m, wp, lp uintptr) uintptr {
 		return 0
 
 	case wmSetFocus:
-		w.q.push(Event{Kind: EvFocus, Flags: FlagDown, Time: Now()})
+		t := Now()
+		w.q.push(Event{Kind: EvFocus, Flags: FlagDown, Time: t})
+		focusModifiers(&w.q, &w.lastMods, currentMods(), t) // keys pressed while another window had the focus
 		return 0
 	case wmKillFocus:
-		w.q.push(Event{Kind: EvFocus, Time: Now()})
+		t := Now()
+		w.q.push(Event{Kind: EvFocus, Time: t})
+		focusModifiers(&w.q, &w.lastMods, 0, t) // a release elsewhere never arrives
 		return 0
 
 	case wmKeyDown, wmKeyUp, wmSysKeyDown, wmSysKeyUp:
@@ -779,6 +783,7 @@ func wndProc(hwnd, m, wp, lp uintptr) uintptr {
 				mapped = uint32(win32.Call(pMapVirtualKeyW, wp, 2 /* MAPVK_VK_TO_CHAR */))
 			}
 			w.q.push(Event{Kind: EvKey, Key: k, Char: winChar(wp, mapped), Code: code, Mods: cur, Flags: f, Time: Now()})
+			w.lastMods = cur // (EvModifiers reports changes against what the app last saw)
 		}
 		if m == wmSysKeyDown || m == wmSysKeyUp {
 			return defProc(hwnd, m, wp, lp) // keeps Alt+F4 and Alt+Space working

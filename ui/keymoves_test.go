@@ -168,3 +168,90 @@ func TestKeyBindingsAllocateNothing(t *testing.T) {
 		t.Errorf("a frame with commands allocates %.1f times", n)
 	}
 }
+
+// TestKeysAndEditCommandsKeepArrivalOrder: one frame's keys and edit commands
+// apply in the order they arrived, whichever kind came first.
+func TestKeysAndEditCommandsKeepArrivalOrder(t *testing.T) {
+	left := KeyEvent{Code: KeyLeft, Down: true}
+	right := KeyEvent{Code: KeyRight, Down: true}
+	type step struct {
+		key  *KeyEvent
+		edit EditAction
+	}
+	cases := []struct {
+		name          string
+		anchor, caret int
+		steps         []step
+		want          string
+	}{
+		{"Left, then select all", 4, 4, []step{{key: &left}, {edit: EditSelectAll}}, "<abcd>|"},
+		{"select all, then Left", 4, 4, []step{{edit: EditSelectAll}, {key: &left}}, "|abcd"},
+		{"select all, then Right", 0, 0, []step{{edit: EditSelectAll}, {key: &right}}, "abcd|"},
+		{"command, key, command", 2, 2, []step{{edit: EditMoveLineStart}, {key: &right}, {edit: EditMoveRight.Extend()}}, "a<b>|cd"},
+		{"key, command, key", 2, 2, []step{{key: &left}, {edit: EditMoveLineEnd}, {key: &left}}, "abc|d"},
+	}
+	for _, c := range cases {
+		r := newRig(t, true)
+		r.put("abcd", c.anchor, c.caret)
+		for _, s := range c.steps {
+			if s.key != nil {
+				r.in.PushKey(*s.key)
+			} else {
+				r.in.PushEdit(s.edit)
+			}
+		}
+		r.frame()
+		if got := r.state(); got != c.want {
+			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+// TestEditCommandsRestartTheCaretBlink: a command from the system's key
+// bindings is activity, as the key it replaces was: after the blink has timed
+// out, it brings the solid caret and the blink back.
+func TestEditCommandsRestartTheCaretBlink(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		a    EditAction
+	}{{"arrow", EditMoveLeft}, {"word move", EditMoveWordLeft}, {"deletion", EditDeleteBackward}, {"select all", EditSelectAll}} {
+		r := newRig(t, true)
+		r.put("one two", 7, 7)
+		r.step(10500) // the blink timed out
+		if r.c.WakeAfter() != 0 {
+			t.Fatalf("%s: still blinking after the timeout", c.name)
+		}
+		r.edit(c.a)
+		if w := r.c.WakeAfter(); w < 480e6 || w > 500e6 {
+			t.Errorf("%s: WakeAfter = %d ns after the command, want the blink to restart (about 500 ms)", c.name, w)
+		}
+	}
+}
+
+// TestTransposeLongClustersAllocatesNothing: swapping two long grapheme
+// clusters (family emoji, 25 bytes each) really swaps them and, once the
+// scratch has grown, allocates nothing.
+func TestTransposeLongClustersAllocatesNothing(t *testing.T) {
+	const a, b = "👨‍👩‍👧‍👦", "👩‍👩‍👧"
+	r := newRig(t, true)
+	r.put(a+b, len(a), len(a))
+	if len(a) < 25 || len(a)+len(b) <= 32 {
+		t.Fatalf("the clusters are %d and %d bytes: not long", len(a), len(b))
+	}
+	r.edit(EditTranspose)
+	if got := string(r.buf.b); got != b+a {
+		t.Fatalf("transpose gave %q, want %q", got, b+a)
+	}
+	n := testing.AllocsPerRun(40, func() {
+		r.in.PushEdit(EditTranspose)
+		r.frame()
+		r.in.PushEdit(EditUndo)
+		r.frame()
+	})
+	if n != 0 {
+		t.Errorf("transposing long clusters allocates %.1f times per frame pair", n)
+	}
+	if got := string(r.buf.b); got != b+a && got != a+b {
+		t.Errorf("the text is %q after the runs", got)
+	}
+}

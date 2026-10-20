@@ -3,7 +3,6 @@
 package platform
 
 import (
-	"unicode"
 	"unicode/utf8"
 
 	"gonativeui/internal/ffi"
@@ -68,7 +67,8 @@ func (w *Window) keyEvent(ev objc.ID, typ uintptr, t int64) (keyIdx int) {
 	keyIdx = -1
 	code := uint32(objc.Send(ev, selKeyCode)) & 0xFFFF
 	m := mods(uintptr(objc.Send(ev, selModifierFlags)))
-	e := Event{Kind: EvKey, Key: macKey(code), Code: code, Mods: m, Time: t, Char: w.keyChar(ev)}
+	e := Event{Kind: EvKey, Key: macKey(code), Code: code, Mods: m, Time: t, Char: w.keyChar(ev, code)}
+	w.lastMods = m // (EvModifiers reports changes against what the app last saw)
 	if typ == 10 {
 		e.Flags = FlagDown
 		if objc.SendBool(ev, selIsARepeat) {
@@ -84,21 +84,26 @@ func (w *Window) keyEvent(ev objc.ID, typ uintptr, t int64) (keyIdx int) {
 	return keyIdx
 }
 
-// keyChar is the character a key-down or key-up event types with no modifier
-// but Shift (charactersIgnoringModifiers), lower-cased; 0 when it types none
-// (AppKit's private-use characters for the function and arrow keys, control
-// characters) or on an event without characters.
-func (w *Window) keyChar(ev objc.ID) rune {
+// keyChar is the character a key-down or key-up event types for a shortcut:
+// the key's character on the selected layout with ⌘ held and no Shift
+// (layoutChar), lower-cased; 0 when it types none in ASCII (AppKit's
+// private-use characters for the function and arrow keys, control characters,
+// another script's letters). Without layout data it is what the event says it
+// types ignoring the modifiers but Shift.
+func (w *Window) keyChar(ev objc.ID, code uint32) rune {
+	if r, ok := layoutChar(code); ok {
+		return r
+	}
 	str := objc.Send(ev, selCharsNoMods)
 	if str == 0 {
 		return 0
 	}
 	w.tmp = objc.AppendUTF8(w.tmp[:0], str)
 	r, _ := utf8.DecodeRune(w.tmp)
-	if r == utf8.RuneError || r < 0x20 || r == 0x7F || (r >= 0xF700 && r <= 0xF8FF) {
+	if r == utf8.RuneError || (r >= 0xF700 && r <= 0xF8FF) {
 		return 0
 	}
-	return unicode.ToLower(r)
+	return shortcutRune(r)
 }
 
 // modifiersEvent queues EvModifiers for a flagsChanged: event (a modifier
@@ -111,6 +116,20 @@ func (w *Window) modifiersEvent(ev objc.ID, t int64) {
 	}
 	w.lastMods = m
 	w.q.push(Event{Kind: EvModifiers, Mods: m, Code: uint32(objc.Send(ev, selKeyCode)) & 0xFFFF, Time: t})
+}
+
+// sampleMods is the modifiers held right now (+[NSEvent modifierFlags]); a
+// variable so a test can stand in for the keyboard.
+var sampleMods = func() Mods { return mods(uintptr(objc.Send(objc.Cls("NSEvent"), selModifierFlags))) }
+
+// focusMods keeps EvModifiers true across a change of key window (see
+// focusModifiers); held is sampled only on gaining focus.
+func (w *Window) focusMods(gained bool, t int64) {
+	var held Mods
+	if gained {
+		held = sampleMods()
+	}
+	focusModifiers(&w.q, &w.lastMods, held, t)
 }
 
 func mods(flags uintptr) Mods {

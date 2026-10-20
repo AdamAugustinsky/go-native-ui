@@ -1,6 +1,7 @@
 package platform
 
 import (
+	"fmt"
 	"math"
 	"testing"
 
@@ -274,5 +275,80 @@ func TestGestureEventsThroughNSAppSendEvent(t *testing.T) {
 	}
 	if !smart {
 		t.Errorf("NSApp sendEvent: the smart zoom did not arrive: %+v", evs)
+	}
+}
+
+// TestPinchOwnershipIsDecidedAtBegan: a pinch that began over a native host
+// stays the host's wherever the pointer goes, and one that began over ui stays
+// ui's when it crosses a host (the same rule as a scroll gesture); the next
+// pinch decides again.
+func TestPinchOwnershipIsDecidedAtBegan(t *testing.T) {
+	g := newCGGesture(t)
+	type step struct {
+		phase int
+		x, y  float64 // content points; the host covers 100,100 to 220,124
+	}
+	over, off := step{x: 150, y: 110}, step{x: 30, y: 30}
+	pinch := func(phases ...int) []step {
+		var s []step
+		for _, p := range phases {
+			s = append(s, step{phase: p})
+		}
+		return s
+	}
+	cases := []struct {
+		name string
+		from []step // pointer position per phase
+		pos  []step
+		toUI bool
+	}{
+		{"ui to host", pinch(cgPhaseBegan, cgPhaseChanged, cgPhaseChanged, cgPhaseEnded), []step{off, off, over, over}, true},
+		{"host to ui", pinch(cgPhaseBegan, cgPhaseChanged, cgPhaseChanged, cgPhaseEnded), []step{over, over, off, off}, false},
+		{"cancelled over the host", pinch(cgPhaseBegan, cgPhaseChanged, cgPhaseCancelled), []step{over, off, off}, false},
+	}
+	var errs []string
+	var skip string
+	onMain(func() {
+		r, err := openHostRig()
+		if err != nil {
+			skip = err.Error()
+			return
+		}
+		defer r.w.Close()
+		pool := objc.F.Call0(objc.PoolPush)
+		defer objc.F.Call1(objc.PoolPop, pool)
+		w := r.w
+		offY := objc.SendRect(w.win, objc.Sel("frame")).H - w.hPt
+		for _, kind := range []int{cgGestureMagnify, cgGestureRotate} {
+			for _, c := range cases {
+				w.q.reset()
+				var queued, left int
+				for i, st := range c.from {
+					ev := g.event(w, kind, st.phase, 0.1, c.pos[i].x, c.pos[i].y+offY)
+					typ := uintptr(30)
+					if kind == cgGestureRotate {
+						typ = 18
+					}
+					if w.gestureEvent(ev, typ, 1) {
+						queued++
+					} else {
+						left++
+					}
+				}
+				want := len(c.from)
+				if !c.toUI {
+					want = 0
+				}
+				if queued != want || len(w.q.ev) != want {
+					errs = append(errs, fmt.Sprintf("%s (gesture %d): %d queued and %d left to AppKit, want %d queued", c.name, kind, queued, left, want))
+				}
+			}
+		}
+	})
+	if skip != "" {
+		t.Skip("cannot open a window here: " + skip)
+	}
+	for _, e := range errs {
+		t.Error(e)
 	}
 }

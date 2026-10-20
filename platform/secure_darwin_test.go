@@ -106,6 +106,57 @@ func TestSecureInputBracketsEnableAndDisable(t *testing.T) {
 	}
 }
 
+// TestSecureInputEndsWithTheWindow: closing the window that wanted secure
+// input releases it, and the next activation (or a window opened afterwards)
+// does not bring it back.
+func TestSecureInputEndsWithTheWindow(t *testing.T) {
+	loadFramework("/System/Library/Frameworks/AppKit.framework/AppKit")
+	owner := secureOwner(t)
+	pid := os.Getpid()
+	var steps []string
+	var skip string
+	onMain(func() {
+		pool := objc.F.Call0(objc.PoolPush)
+		defer objc.F.Call1(objc.PoolPop, pool)
+		other := owner() != 0 && owner() != pid
+		check := func(what string) {
+			if SecureInputEnabled() || (!other && owner() == pid) {
+				steps = append(steps, what+": secure input is still on (ours "+boolStr(SecureInputEnabled())+", the system's owner "+itoa(owner())+")")
+			}
+		}
+		SetSecureInput(false)
+		postAppNotification("NSApplicationDidBecomeActiveNotification")
+		w, err := Open(Options{Title: "secure", Width: 200, Height: 100, Hidden: true})
+		if err != nil {
+			skip = err.Error()
+			return
+		}
+		SetSecureInput(true)
+		if !SecureInputEnabled() {
+			steps = append(steps, "SetSecureInput(true) did not turn it on")
+		}
+		w.Close()
+		check("after Close")
+		postAppNotification("NSApplicationDidResignActiveNotification")
+		postAppNotification("NSApplicationDidBecomeActiveNotification")
+		check("after the next activation")
+		w2, err := Open(Options{Title: "secure 2", Width: 200, Height: 100, Hidden: true})
+		if err != nil {
+			steps = append(steps, "reopen: "+err.Error())
+			return
+		}
+		postAppNotification("NSApplicationDidBecomeActiveNotification")
+		check("in the reopened window")
+		w2.Close()
+	})
+	if skip != "" {
+		t.Skip("cannot open a window here: " + skip)
+	}
+	for _, s := range steps {
+		t.Error(s)
+	}
+}
+
 func itoa(n int) string {
 	if n == 0 {
 		return "none"
