@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 )
 
 const developerIDPrefix = "Developer ID Application:"
@@ -299,7 +300,7 @@ func buildDMG(c *Config, app, outDir string, plan signingPlan, timestamp, notari
 	}
 	dmg := filepath.Join(outDir, fmt.Sprintf("%s-%s.dmg", strings.ReplaceAll(c.Name, " ", ""), c.Version))
 	os.Remove(dmg)
-	if _, err := runOut("hdiutil", "create", "-volname", c.Name, "-srcfolder", stage, "-ov", "-format", "UDZO", dmg); err != nil {
+	if _, err := hdiutil("create", "-volname", c.Name, "-srcfolder", stage, "-ov", "-format", "UDZO", dmg); err != nil {
 		return "", err
 	}
 	if plan.Developer {
@@ -361,3 +362,22 @@ func cmdSign(args []string, stdout, stderr io.Writer) error {
 	fmt.Fprintf(stdout, "signed %s with %s\ndesignated requirement: %s\n", app, spec.Label, dr)
 	return nil
 }
+
+// hdiutil runs hdiutil, and again while it fails with EAGAIN ("Resource
+// temporarily unavailable": the disk image service is busy with another
+// image; CI saw it on a verify), up to 4 more times 0.5, 1, 2 and 4 s apart.
+// Any other failure is returned at once.
+func hdiutil(args ...string) (string, error) {
+	wait := 500 * time.Millisecond
+	for try := 0; ; try++ {
+		out, err := hdiutilRun("hdiutil", args...)
+		if err == nil || try == 4 || !strings.Contains(err.Error(), "Resource temporarily unavailable") {
+			return out, err
+		}
+		time.Sleep(wait)
+		wait *= 2
+	}
+}
+
+// hdiutilRun runs the tool (a test replaces it).
+var hdiutilRun = runOut
