@@ -354,14 +354,14 @@ func TestEditorUndoRedo(t *testing.T) {
 	redo()
 	l.Until("typing redone", 120, textIs(p, "hello"))
 
-	l.Type(" @pa")
+	l.Type("@pa") // no space: a typed space may capitalise the first word
 	l.Until("the completion opens", 120, func() bool { return p.popup && p.ed.CompletionActive() })
 	pressIn(l, ui.KeyEnter, 0)
-	l.Until("accepted", 120, textIs(p, "hello @Paolo "))
+	l.Until("accepted", 120, textIs(p, "hello@Paolo "))
 	undo()
-	l.Until("the completion undone in one step", 120, textIs(p, "hello @pa"))
+	l.Until("the completion undone in one step", 120, textIs(p, "hello@pa"))
 	redo()
-	l.Until("the completion redone", 120, textIs(p, "hello @Paolo "))
+	l.Until("the completion redone", 120, textIs(p, "hello@Paolo "))
 	if p.replaceErr != nil {
 		t.Errorf("Replace: %v", p.replaceErr)
 	}
@@ -371,11 +371,11 @@ func TestEditorUndoRedo(t *testing.T) {
 	defer l.Do(func(*app.App) { objc.Send(pb, objc.Sel("releaseGlobally")) })
 	l.Do(func(*app.App) { setPBString(pb, "world") })
 	l.Do(func(*app.App) { readFromPasteboard(tv(p), pb) })
-	l.Until("pasted", 120, textIs(p, "hello @Paolo world"))
+	l.Until("pasted", 120, textIs(p, "hello@Paolo world"))
 	undo()
-	l.Until("the paste undone", 120, textIs(p, "hello @Paolo "))
+	l.Until("the paste undone", 120, textIs(p, "hello@Paolo "))
 	redo()
-	l.Until("the paste redone", 120, textIs(p, "hello @Paolo world"))
+	l.Until("the paste redone", 120, textIs(p, "hello@Paolo world"))
 }
 
 // Paste of text, of an image (routed to PastedImage, nothing inserted) and
@@ -487,7 +487,7 @@ func spellServerCorrects() bool {
 func TestEditorCompletion(t *testing.T) {
 	l, p := startEditor(t, platform.EditorOptions{})
 	focusEditor(t, l, p)
-	l.Type("hi @pa")
+	l.Type("1 @pa") // a digit first: no capital for the sentence's first word
 	l.Until("the completion opens", 120, func() bool { return p.popup && p.ed.CompletionActive() })
 	var caret widgettest.Range
 	l.Do(func(*app.App) {
@@ -507,7 +507,7 @@ func TestEditorCompletion(t *testing.T) {
 		t.Errorf("commands %v, want %v", p.cmds, want)
 	}
 	l.Do(func(*app.App) {
-		if got := string(p.ed.Text()); got != "hi @pa" {
+		if got := string(p.ed.Text()); got != "1 @pa" {
 			t.Errorf("the commands changed the text: %q", got)
 		}
 		if r := widgettest.TextInput(tv(p)).SelectedRange(); r != caret {
@@ -521,18 +521,18 @@ func TestEditorCompletion(t *testing.T) {
 		t.Errorf("the popup's row %d, want 1", p.index)
 	}
 	pressIn(l, ui.KeyEnter, 0)
-	l.Until("accepted", 120, textIs(p, "hi @Paolo "))
+	l.Until("accepted", 120, textIs(p, "1 @Paolo "))
 	l.Until("the spans follow Changed", 120, func() bool { return len(p.spans) == 1 })
 	l.Do(func(*app.App) {
-		if s := p.ed.Selection(); s != (platform.TextSelection{Anchor: 10, Focus: 10}) {
-			t.Errorf("caret after the completion %+v, want 10", s)
+		if s := p.ed.Selection(); s != (platform.TextSelection{Anchor: 9, Focus: 9}) {
+			t.Errorf("caret after the completion %+v, want 9", s)
 		}
-		if r := widgettest.TextInput(tv(p)).SelectedRange(); r != (widgettest.Range{Loc: 10}) {
+		if r := widgettest.TextInput(tv(p)).SelectedRange(); r != (widgettest.Range{Loc: 9}) {
 			t.Errorf("the view's caret %v", r)
 		}
-		lo, hi, ok := tempColorRange(tv(p), 4)
-		if !ok || lo != 3 || hi != 9 {
-			t.Errorf("mention colour over [%d, %d) (%v), want [3, 9)", lo, hi, ok)
+		lo, hi, ok := tempColorRange(tv(p), 3)
+		if !ok || lo != 2 || hi != 8 {
+			t.Errorf("mention colour over [%d, %d) (%v), want [2, 8)", lo, hi, ok)
 		}
 	})
 	if len(p.submitted) != 0 {
@@ -543,12 +543,12 @@ func TestEditorCompletion(t *testing.T) {
 	l.Until("the completion opens again", 120, func() bool { return p.popup })
 	pressIn(l, ui.KeyEscape, 0)
 	l.Until("cancelled", 120, func() bool { return !p.popup && !p.ed.CompletionActive() })
-	if got := string(p.ed.Text()); got != "hi @Paolo @pa" {
+	if got := string(p.ed.Text()); got != "1 @Paolo @pa" {
 		t.Errorf("Escape changed the text: %q", got)
 	}
 	pressIn(l, ui.KeyEnter, 0)
 	l.Until("the next Enter sends", 120, func() bool { return len(p.submitted) == 1 })
-	if p.submitted[0] != "hi @Paolo @pa" {
+	if p.submitted[0] != "1 @Paolo @pa" {
 		t.Errorf("sent %q", p.submitted[0])
 	}
 
@@ -576,8 +576,8 @@ func TestEditorEditMenu(t *testing.T) {
 	var saved []pbItem
 	l.Do(func(*app.App) { saved = savePB(generalPB()) })
 	defer l.Do(func(*app.App) { restorePB(generalPB(), saved) })
-	l.Type("one two")
-	l.Until("typed", 120, textIs(p, "one two"))
+	l.Type("one-two")
+	l.Until("typed", 120, textIs(p, "one-two"))
 	perform := func(title string) {
 		t.Helper()
 		var ok bool
@@ -593,24 +593,24 @@ func TestEditorEditMenu(t *testing.T) {
 	perform("Select All")
 	l.Until("all selected", 120, func() bool { return p.ed.Selection().Range() == platform.TextRange{Start: 0, End: 7} })
 	perform("Copy")
-	if got := generalPBString(l); got != "one two" {
+	if got := generalPBString(l); got != "one-two" {
 		t.Errorf("Copy put %q on the pasteboard", got)
 	}
 	l.Do(func(*app.App) { p.ed.SetSelection(platform.TextSelection{Anchor: 7, Focus: 7}) })
 	perform("Paste")
-	l.Until("pasted once", 120, textIs(p, "one twoone two"))
+	l.Until("pasted once", 120, textIs(p, "one-twoone-two"))
 	l.Do(func(*app.App) { p.ed.SetSelection(platform.TextSelection{Anchor: 0, Focus: 4}) })
 	perform("Cut")
-	l.Until("cut once", 120, textIs(p, "twoone two"))
-	if got := generalPBString(l); got != "one " {
+	l.Until("cut once", 120, textIs(p, "twoone-two"))
+	if got := generalPBString(l); got != "one-" {
 		t.Errorf("Cut put %q on the pasteboard", got)
 	}
 	perform("Undo")
-	l.Until("undone once", 120, textIs(p, "one twoone two"))
+	l.Until("undone once", 120, textIs(p, "one-twoone-two"))
 	perform("Undo")
-	l.Until("the paste undone", 120, textIs(p, "one two"))
+	l.Until("the paste undone", 120, textIs(p, "one-two"))
 	perform("Redo")
-	l.Until("redone once", 120, textIs(p, "one twoone two"))
+	l.Until("redone once", 120, textIs(p, "one-twoone-two"))
 }
 
 // Focus: Tab into the editor and out, Shift+Tab back; an alert sheet opened
