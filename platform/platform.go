@@ -34,6 +34,7 @@
 //	(*Window).SetTooltipRegions(r)        native tooltips by content rectangle (macOS; no-op elsewhere); diffed, cheap to call every frame
 //	(*Window).SetTooltipText(f)           where the tooltip text comes from, asked for on demand when the system shows one
 //	(*Window).Close()
+//	SetSecureInput(on bool)               macOS: bracket EnableSecureEventInput for a password field (balanced, released while the app is inactive); no-op elsewhere
 //	Clipboard() string                    plain UTF-8 text of the system clipboard; main thread
 //	SetClipboard(text string)             replace the clipboard with plain text; main thread
 //	Wake()                                any goroutine; coalesced
@@ -51,6 +52,21 @@
 // window. An input method that is active composes whether or not the app has a
 // field to show it in: an app without one focused sees EvPreedit and no EvKey
 // for the keys the input method took, and should focus a field then.
+//
+// Key bindings. While a text field has focus (SetTextInput), the keys the
+// system binds to text editing arrive as EvEdit with the EditCmd instead of
+// as EvKey (macOS: the doCommandBySelector: selectors, which follow the user's
+// DefaultKeyBinding.dict; see edit.go). Without a focused field every key is an
+// EvKey, as ever. Key is the physical key; Char is what it types on the user's
+// layout, which shortcuts match by. EvModifiers reports a modifier pressed or
+// released on its own.
+//
+// Gestures. A trackpad's pinch (EvMagnify), two-finger rotation (EvRotate) and
+// two-finger double tap (EvSmartMagnify) arrive where the OS has them: macOS
+// from the trackpad (with phases), Wayland from the pointer-gestures protocol
+// (pinch and rotate, with phases), Windows from a precision touchpad's pinch
+// (without phases: PhaseNone). X11 has none. The app's ui latches a gesture
+// to the box under its first event, as it does a scroll gesture.
 //
 // Clipboard text is plain UTF-8 with \n line ends. macOS and Windows use the
 // system clipboard. Linux keeps it in the process (clipboard_linux.go): copy
@@ -110,6 +126,11 @@ const (
 	EvHostFocus               // the keyboard focus moved to a host (Tag: its HostID) or back to the app's own view (Tag 0)
 	EvHostCommand             // a focused host handed back Tab, Shift+Tab, Escape or Enter: Tag is the HostID, Key and Mods the key
 	EvDialog                  // an alert or file panel ended: Tag is its DialogTicket; decode with Window.DialogResult (dialog.go)
+	EvModifiers               // the modifier keys changed (a modifier pressed or released on its own): Mods are the new state, Code the raw code of the key that moved when the OS says
+	EvEdit                    // the system's key bindings turned a key into a text edit command while a text field has focus (SetTextInput): Tag is the EditCmd; the key's own EvKey is not sent (macOS: doCommandBySelector:)
+	EvMagnify                 // a pinch: Amount is the change in scale (0.1 = grow by 10 %), Phase its phase (PhaseNone: a device without phases), X, Y where it is; see Gestures
+	EvSmartMagnify            // the two-finger double tap (smart zoom): X, Y where it happened
+	EvRotate                  // a two-finger rotation: Amount in degrees, counterclockwise positive as the user sees it, Phase, X, Y
 )
 
 // Flags qualify an Event.
@@ -123,6 +144,7 @@ const (
 	FlagStandard                   // EvCommand: Tag is the MenuAction of a standard edit item without a command (menu.go)
 	FlagInverted                   // EvScroll: the device's direction is inverted ("natural" scrolling); DX, DY already move the content
 	FlagPos                        // EvScroll: X, Y are where the pointer was at the event (a scroll goes to the box under it, not under a later move)
+	FlagSelect                     // EvEdit: the command extends the selection instead of moving the caret (macOS: the ...AndModifySelection: selectors)
 )
 
 // ScrollPhase is the phase of a trackpad scroll gesture (Event.Phase) or of
@@ -223,6 +245,31 @@ const (
 	KeyLeftBracket  = Key9 + 1 // [
 	KeyRightBracket = Key9 + 2 // ]
 	KeyPeriod       = Key9 + 3 // .
+
+	// More punctuation keys, by physical (US) position.
+	KeyComma     = Key9 + 4  // ,
+	KeyEqual     = Key9 + 5  // =
+	KeyMinus     = Key9 + 6  // -
+	KeySlash     = Key9 + 7  // /
+	KeySemicolon = Key9 + 8  // ;
+	KeyQuote     = Key9 + 9  // '
+	KeyBackslash = Key9 + 10 // \
+	KeyGrave     = Key9 + 11 // `
+
+	// The numeric keypad: KeyNum0..KeyNum9 are contiguous. KeypadEnter is KeyEnter (Code tells them apart).
+	KeyNum0        = Key9 + 12
+	KeyNum9        = KeyNum0 + 9
+	KeyNumDecimal  = KeyNum9 + 1
+	KeyNumAdd      = KeyNum9 + 2
+	KeyNumSubtract = KeyNum9 + 3
+	KeyNumMultiply = KeyNum9 + 4
+	KeyNumDivide   = KeyNum9 + 5
+	KeyNumEqual    = KeyNum9 + 6
+	KeyNumClear    = KeyNum9 + 7 // Clear (NumLock on a PC)
+
+	// KeyF13..KeyF20 are contiguous (F1..F12 are above).
+	KeyF13 = KeyNum9 + 8
+	KeyF20 = KeyF13 + 7
 )
 
 // Cursor is a pointer shape.
@@ -254,7 +301,13 @@ type Event struct {
 	// Mods are the modifier keys held at the event.
 	Mods Mods
 	// Key is the key of an EvKey.
-	Key    Key
+	Key Key
+	// Char is, for an EvKey, the character the key types on the current
+	// layout with no modifier but Shift, lower-cased (0: the key types none,
+	// or the OS does not say). Key is the physical key; Char is what shortcuts
+	// match by (the app's translator, ui.KeyEvent.Code), so that a shortcut
+	// sits where the user's layout puts its letter.
+	Char   rune
 	Code   uint32  // raw OS key code (macOS keyCode, Windows scancode, evdev/X11 keycode)
 	X, Y   float32 // pointer position, physical pixels, origin at the content's top-left
 	DX, DY float32 // scroll delta, physical pixels, positive = content moves right/down
@@ -278,6 +331,15 @@ type Event struct {
 	// reports. Without FlagPrecise, DX and DY are wheel lines converted to
 	// pixels (on macOS 10 points a line, NSScrollView's line scroll).
 	Phase, Momentum ScrollPhase
+	// Clicks is the system's click count of an EvPointerButton press (1,
+	// 2 for a double click, ...), as the OS counts it with the user's
+	// double-click interval; 0 when the OS does not say (the app counts).
+	Clicks uint8
+	// Amount is the size of an EvMagnify (the change in scale: 0.1 grows by
+	// 10 %, negative shrinks) or EvRotate (degrees, counterclockwise positive
+	// as the user sees it). The Phase of both is Began, Changed, Ended or
+	// Cancelled, or PhaseNone from a device without phases.
+	Amount float32
 }
 
 // Options configure Open.

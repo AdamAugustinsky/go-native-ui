@@ -113,8 +113,12 @@ func (c *Context) IMECancel() bool { return c.imeCancel }
 // Typed text is applied before the frame's keys, so a Backspace in the same
 // frame as the letters it follows deletes the last of them.
 //
+// On macOS the system's key bindings (the standard ones, the Emacs keys ⌃A,
+// ⌃E, ⌃K, ⌃T … and the user's DefaultKeyBinding.dict) arrive as edit actions
+// (EditMoveWordLeft … EditTranspose, keymoves.go) instead of keys.
+//
 // Not implemented: bidirectional visual caret movement (← and →
-// move logically), and the macOS Emacs bindings (Ctrl+A/E/K...).
+// move logically), and a kill ring (⌃Y).
 //
 // # Keys, edit actions and the clipboard
 //
@@ -678,5 +682,7 @@ func (c *Context) applyEdit(buf *TextBuffer, a EditAction) {
 		buf.breakRun()
 		buf.deleteSelection()
 		buf.breakRun()
+	default:
+		c.applyBinding(buf, a) // the system's key bindings (keymoves.go)
 	}
 }
