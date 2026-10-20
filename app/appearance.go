@@ -16,7 +16,7 @@ import (
 // the theme's Follower takes them from the context. An Offscreen app never
 // calls this, so its themes keep their own values.
 func (a *App) syncAppearance() {
-	a.UI.SetTabReachesControls(platform.TabReachesControls()) // the Keyboard navigation setting on macOS; every control elsewhere
+	a.syncTab()
 	s := platform.SystemAppearance()
 	a.UI.SetSystemAppearance(ui.Appearance{Dark: s.Dark, Accent: s.Accent, Known: s.Known})
 	serial := platform.AppearanceSerial() // before the read: a change during it is read next frame
@@ -42,3 +42,11 @@ func (a *App) syncChrome(win chromeTarget) {
 	a.chromeDark, a.chromeSet = dark, true
 	win.SetDarkChrome(dark)
 }
+
+// tabReachesControls is platform.TabReachesControls; a variable so a test can
+// check the handoff without AppKit, which wants the main thread.
+var tabReachesControls = platform.TabReachesControls
+
+// syncTab tells the UI what Tab reaches on this system: the Keyboard
+// navigation setting on macOS, every control elsewhere.
+func (a *App) syncTab() { a.UI.SetTabReachesControls(tabReachesControls()) }

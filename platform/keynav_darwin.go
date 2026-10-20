@@ -21,12 +21,32 @@ import (
 
 var (
 	selFullKeyboardAccess = objc.Sel("isFullKeyboardAccessEnabled")
-	// readFullKeyboardAccess asks the system; a variable so a test can stand in
-	// for the setting, which a program must not change.
-	readFullKeyboardAccess = func() bool {
-		return objc.SendBool(objc.Send(objc.Cls("NSApplication"), selSharedApplication), selFullKeyboardAccess)
-	}
+	// readFullKeyboardAccess asks the system, and says whether it could: ok is
+	// false while there is no NSApplication yet (AppKit is not loaded before
+	// Open or the first appearance read), and then the answer is no answer. A
+	// variable so a test can stand in for the setting, which a program must not
+	// change.
+	readFullKeyboardAccess = askFullKeyboardAccess
 )
+
+// keynavApp is the shared NSApplication, found once: a read per Tab key-down
+// must not look the class up again (objc.Cls keeps a C string for good).
+var keynavApp objc.ID
+
+func askFullKeyboardAccess() (on, ok bool) {
+	if keynavApp == 0 {
+		loadFramework("/System/Library/Frameworks/AppKit.framework/AppKit")
+		cls := objc.Cls("NSApplication")
+		if cls == 0 {
+			return false, false
+		}
+		keynavApp = objc.Send(cls, selSharedApplication)
+		if keynavApp == 0 {
+			return false, false
+		}
+	}
+	return objc.SendBool(keynavApp, selFullKeyboardAccess), true
+}
 
 var keynav struct {
 	inited    bool // all has been read
@@ -44,8 +64,12 @@ func TabReachesControls() bool {
 }
 
 func initKeynav() {
+	on, ok := readFullKeyboardAccess()
+	if !ok {
+		return // not cached: the next call reads again, and a false from no application is not the setting
+	}
 	keynav.inited = true
-	keynav.all = readFullKeyboardAccess()
+	keynav.all = on
 	if keynav.observing {
 		return
 	}
@@ -62,6 +86,8 @@ func initKeynav() {
 // refreshKeynav reads the setting again, if anyone has asked for it yet.
 func refreshKeynav() {
 	if keynav.inited {
-		keynav.all = readFullKeyboardAccess()
+		if on, ok := readFullKeyboardAccess(); ok {
+			keynav.all = on
+		}
 	}
 }

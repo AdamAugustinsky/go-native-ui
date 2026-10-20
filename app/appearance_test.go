@@ -3,7 +3,6 @@ package app
 import (
 	"testing"
 
-	"gonativeui/platform"
 	"gonativeui/ui"
 )
 
@@ -42,16 +41,18 @@ func TestChromeFollowsTheDeclaredModeOncePerChange(t *testing.T) {
 	}
 }
 
-// Each frame hands the UI what Tab reaches on this system (macOS: the
-// Keyboard navigation setting; elsewhere every control).
+// Each frame hands the UI what Tab reaches on this system. The platform's
+// answer is a fake here: the real one is AppKit's, which wants the main thread
+// (platform's own tests cover it).
 func TestFrameHandsTheUITheTabConvention(t *testing.T) {
+	old := tabReachesControls
+	defer func() { tabReachesControls = old }()
 	a := &App{UI: ui.New(nil)}
-	want := platform.TabReachesControls()
-	for _, start := range []bool{true, false} {
-		a.UI.SetTabReachesControls(start)
-		a.syncAppearance()
+	for _, want := range []bool{false, true, false} {
+		tabReachesControls = func() bool { return want }
+		a.syncTab()
 		if got := a.UI.TabReachesControls(); got != want {
-			t.Errorf("UI started with %v: after syncAppearance %v, the platform says %v", start, got, want)
+			t.Errorf("the platform says %v, the UI has %v", want, got)
 		}
 	}
 }
