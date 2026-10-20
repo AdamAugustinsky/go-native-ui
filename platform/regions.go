@@ -35,6 +35,17 @@ type cursorMap struct {
 	regs     []CursorRegion
 	override Cursor
 	flat     []CursorRegion // flatten's output, reused
+	holes    [][4]float32   // rectangles left out of every region: hosted native views, which have their own cursors
+}
+
+// setHoles sets the rectangles flatten leaves out of the regions (copied) and
+// reports whether they changed.
+func (m *cursorMap) setHoles(h [][4]float32) bool {
+	if slices.Equal(m.holes, h) {
+		return false
+	}
+	m.holes = append(m.holes[:0], h...)
+	return true
 }
 
 func (m *cursorMap) setRegions(r []CursorRegion) bool {
@@ -99,55 +110,19 @@ const maxFlat = 512
 // cursor at every point: each region keeps only what no later (higher) region
 // covers. AppKit's behaviour for overlapping cursor rects of one view is not
 // specified, so none are handed to it. Empty results are dropped; if the pieces
-// would exceed maxFlat the remaining regions are added whole. The result is
-// owned by the map and valid until the next call.
+// would exceed maxFlat the remaining regions are added whole, except that no
+// piece is ever left over a hole: one that would have to be split is dropped.
+// The result is owned by the map and valid until the next call.
 func (m *cursorMap) flatten() []CursorRegion {
 	m.flat = m.flat[:0]
 	for i, r := range m.regs {
 		start := len(m.flat)
 		m.flat = append(m.flat, r)
 		for _, hi := range m.regs[i+1:] {
-			// Cut hi out of every piece of r so far.
-			for p := start; p < len(m.flat); p++ {
-				if len(m.flat) >= maxFlat {
-					break
-				}
-				piece := m.flat[p].Rect
-				if !overlaps(piece, hi.Rect) {
-					continue
-				}
-				// The piece is replaced by its part above hi and appended with
-				// the parts left, right and below hi.
-				cut := hi.Rect
-				c := r.Cursor
-				var keep [4][4]float32
-				n := 0
-				if piece[1] < cut[1] { // above
-					keep[n] = [4]float32{piece[0], piece[1], piece[2], cut[1]}
-					n++
-				}
-				if piece[3] > cut[3] { // below
-					keep[n] = [4]float32{piece[0], cut[3], piece[2], piece[3]}
-					n++
-				}
-				y0, y1 := max(piece[1], cut[1]), min(piece[3], cut[3])
-				if piece[0] < cut[0] { // left of the cut, between its top and bottom
-					keep[n] = [4]float32{piece[0], y0, cut[0], y1}
-					n++
-				}
-				if piece[2] > cut[2] { // right
-					keep[n] = [4]float32{cut[2], y0, piece[2], y1}
-					n++
-				}
-				if n == 0 {
-					m.flat[p].Rect = [4]float32{} // fully covered
-					continue
-				}
-				m.flat[p].Rect = keep[0]
-				for _, k := range keep[1:n] {
-					m.flat = append(m.flat, CursorRegion{Rect: k, Cursor: c})
-				}
-			}
+			m.cut(start, r.Cursor, hi.Rect, false)
+		}
+		for _, h := range m.holes {
+			m.cut(start, r.Cursor, h, true)
 		}
 	}
 	// Drop what was covered completely.
@@ -159,6 +134,54 @@ func (m *cursorMap) flatten() []CursorRegion {
 	}
 	m.flat = out
 	return out
+}
+
+// cut removes rectangle cut from the pieces flat[start:] (of one region, with
+// cursor c): each piece it overlaps is replaced by what is left of it above,
+// below, left and right of cut. Past maxFlat pieces it stops, leaving the
+// rest overlapping cut, unless the cut is mandatory (a hole): then a piece
+// that overlaps it is dropped.
+func (m *cursorMap) cut(start int, c Cursor, cut [4]float32, mandatory bool) {
+	for p := start; p < len(m.flat); p++ {
+		piece := m.flat[p].Rect
+		if !overlaps(piece, cut) {
+			continue
+		}
+		if len(m.flat) >= maxFlat {
+			if !mandatory {
+				break
+			}
+			m.flat[p].Rect = [4]float32{} // no room to split it
+			continue
+		}
+		var keep [4][4]float32
+		n := 0
+		if piece[1] < cut[1] { // above
+			keep[n] = [4]float32{piece[0], piece[1], piece[2], cut[1]}
+			n++
+		}
+		if piece[3] > cut[3] { // below
+			keep[n] = [4]float32{piece[0], cut[3], piece[2], piece[3]}
+			n++
+		}
+		y0, y1 := max(piece[1], cut[1]), min(piece[3], cut[3])
+		if piece[0] < cut[0] { // left of the cut, between its top and bottom
+			keep[n] = [4]float32{piece[0], y0, cut[0], y1}
+			n++
+		}
+		if piece[2] > cut[2] { // right
+			keep[n] = [4]float32{cut[2], y0, piece[2], y1}
+			n++
+		}
+		if n == 0 {
+			m.flat[p].Rect = [4]float32{} // fully covered
+			continue
+		}
+		m.flat[p].Rect = keep[0]
+		for _, k := range keep[1:n] {
+			m.flat = append(m.flat, CursorRegion{Rect: k, Cursor: c})
+		}
+	}
 }
 
 func overlaps(a, b [4]float32) bool {

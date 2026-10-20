@@ -27,8 +27,10 @@ type Column struct {
 	MinWidth float32
 	// Align aligns the text of the column's cells and its header.
 	Align ui.Align
-	// Fill makes the column take the room the others leave, when there is
-	// any; Width is then its least width.
+	// Fill makes the column take the room the others leave, as AppKit's
+	// last-column autoresizing does: wider than Width when the table has
+	// room, narrower (down to MinWidth) when it has less, so that the
+	// columns end at the rows' edge, beside a legacy scroll bar too.
 	Fill bool
 	// Sortable makes a click on the header report a sort change.
 	Sortable bool
@@ -96,9 +98,34 @@ type TableHead struct {
 	hkey  ui.Key
 	label string
 	hh    float32
-	pad   float32 // the padding at the sides of a cell
+	pad   float32    // the padding at the sides of a cell
+	edge  [2]float32 // the padding at the outer sides of the first and last cells
+	inset float32    // the room at the sides of the header and the rows
 	avail float32
 	hx    float32 // where the next header cell starts
+	// corner is the width of the legacy scroll bar beside the rows, which the
+	// header leaves to the corner above it (0: none); strip is set while the
+	// box that holds the header row and the corner is open.
+	corner float32
+	strip  bool
+}
+
+// TableOpts are a table's metrics, for BeginTableHeaderOpts, in points. With
+// Set they replace BeginTableHeader's (a zero HeaderH keeps its height).
+type TableOpts struct {
+	// Inset is the room at the left and right of the header and the rows:
+	// the list's side padding (ListOpts.Pad[0]), which BeginTableBody
+	// takes from here.
+	Inset float32
+	// HeaderH is the header row's height.
+	HeaderH float32
+	// CellPad is the padding at the sides of a cell; EdgePad is the
+	// padding at the left of the first column's cells (EdgePad[0]) and at
+	// the right of the last's (EdgePad[1]).
+	CellPad float32
+	EdgePad [2]float32
+	// Set says the fields hold the metrics.
+	Set bool
 }
 
 // TableKey is the key of the list box of the table built with label inside the
@@ -116,8 +143,31 @@ func (t *TableHead) HeaderKey() ui.Key { return t.hkey }
 // HeaderHeight is the height in pixels of the header row.
 func (t *TableHead) HeaderHeight() float32 { return t.hh }
 
+// Corner is the width in pixels of the corner at the right of the header,
+// above the rows' legacy scroll bar, as AppKit's table has a corner view
+// there: the header stops short of it. 0 without a legacy bar (overlay bars
+// are over the rows, and the header runs over them too).
+func (t *TableHead) Corner() float32 { return t.corner }
+
 // CellPad is the padding in pixels at the sides of a cell.
 func (t *TableHead) CellPad() float32 { return t.pad }
+
+// CellPads is the padding in pixels at the left and right of column col's
+// cells and header (TableOpts.CellPad, and EdgePad at the table's sides).
+func (t *TableHead) CellPads(col int) (l, r float32) {
+	l, r = t.pad, t.pad
+	if col == 0 {
+		l = t.edge[0]
+	}
+	if col == len(t.cols)-1 {
+		r = t.edge[1]
+	}
+	return l, r
+}
+
+// Inset is the room in pixels at the sides of the header and the rows
+// (TableOpts.Inset).
+func (t *TableHead) Inset() float32 { return t.inset }
 
 // Columns are the columns shown (at most MaxColumns).
 func (t *TableHead) Columns() []Column { return t.cols }
@@ -130,6 +180,11 @@ func (t *TableHead) ColumnWidth(col int) float32 { return t.ts.colPx[col] }
 // says otherwise), the columns' widths, and the sorting and resizing the
 // header's input of the previous frame asks for.
 func (k *Kit) BeginTableHeader(label string, st *TableState, cols []Column) TableHead {
+	return k.BeginTableHeaderOpts(label, st, cols, TableOpts{})
+}
+
+// BeginTableHeaderOpts is BeginTableHeader with the table's metrics.
+func (k *Kit) BeginTableHeaderOpts(label string, st *TableState, cols []Column, o TableOpts) TableHead {
 	c := k.c
 	px := &k.r.Px
 	if len(cols) > MaxColumns {
@@ -142,6 +197,14 @@ func (k *Kit) BeginTableHeader(label string, st *TableState, cols []Column) Tabl
 	if pt := k.PeekRowHeight(); pt > 0 { // compact rows keep a header a little taller than themselves, and the cells close
 		t.hh, t.pad = theme.Snap(k.Pt(pt+4)), px.GapSmall
 	}
+	t.edge, t.inset = [2]float32{t.pad, t.pad}, theme.Snap(px.GapSmall)
+	if o.Set {
+		if o.HeaderH > 0 {
+			t.hh = theme.Snap(k.Pt(o.HeaderH))
+		}
+		t.pad, t.inset = k.Pt(o.CellPad), theme.Snap(k.Pt(o.Inset))
+		t.edge = [2]float32{k.Pt(o.EdgePad[0]), k.Pt(o.EdgePad[1])}
+	}
 	t.hkey = ui.KeyN(t.tkey, 2)
 
 	k.ApplySize(ui.Pct(1), ui.Pct(1))
@@ -152,16 +215,31 @@ func (k *Kit) BeginTableHeader(label string, st *TableState, cols []Column) Tabl
 	c.Push(t.root)
 
 	// the width the columns share: the list's, from the last frame
-	body := c.RectOf(ui.KeyN(ui.HashString(t.tkey, ident), 1))
-	t.avail = body[2] - body[0] - 2*theme.Snap(px.GapSmall)
+	bkey := ui.KeyN(ui.HashString(t.tkey, ident), 1)
+	body := c.RectOf(bkey)
+	t.avail = body[2] - body[0] - 2*t.inset
 	t.layoutColumns(t.avail)
 	t.headerInput()
+	// A legacy bar beside the rows leaves a corner above it: the header row
+	// and the corner share a strip (EndHeaderRow builds the corner).
+	if t.corner = k.legacyReserve(bkey, ScrollVertical, st.Scroll.Size)[0]; t.corner > 0 {
+		c.NextSize(ui.Pct(1), ui.Px(t.hh))
+		c.NextAxis(ui.AxisX)
+		c.Push(c.BoxKeyed(0, ui.KeyN(t.tkey, 3), nil))
+		t.strip = true
+	}
 	return t
 }
 
 // BeginTableBody starts the rows of the table, after its header: a List of
-// rows rows, built as a list's are (RowState, BeginRow), with cells.
+// rows rows, built as a list's are (RowState, BeginRow), with cells. With
+// ListOpts.OwnPad the padding at the sides of the rows is the table's
+// (TableOpts.Inset), so that the cells stay under their headers.
 func (k *Kit) BeginTableBody(t *TableHead, rows int, o ListOpts) List {
+	t.closeStrip() // a header without its row
+	if o.OwnPad {
+		o.Pad[0] = t.inset / k.scale
+	}
 	t.layoutColumns(t.avail) // a resize in the header
 	return k.beginList(t.label, &t.ts.ListState, rows, true, o)
 }
@@ -192,8 +270,9 @@ func (t *TableHead) layoutColumns(avail float32) {
 			fill = i
 		}
 	}
-	if fill >= 0 && avail > sum {
-		t.ts.colPx[fill] += theme.Snap(avail - sum)
+	if fill >= 0 && avail > 0 {
+		least := theme.Snap(k.Pt(t.minWidth(fill)))
+		t.ts.colPx[fill] = max(t.ts.colPx[fill]+theme.Snap(avail-sum), least)
 	}
 }
 
@@ -273,18 +352,35 @@ func (t *TableHead) headerInput() {
 // EndHeaderRow after the cells.
 func (t *TableHead) BeginHeaderRow(flags ui.Flags) ui.ID {
 	c := t.tk.c
-	inset := theme.Snap(t.tk.r.Px.GapSmall)
 	c.NextSize(ui.Pct(1), ui.Px(t.hh))
 	c.NextAxis(ui.AxisX)
-	c.NextPadding(inset, 0, inset, 0)
+	c.NextPadding(t.inset, 0, t.inset, 0)
 	t.hx = 0
 	id := c.BoxKeyed(flags, t.hkey, nil)
 	c.Push(id)
 	return id
 }
 
-// EndHeaderRow ends the header row.
-func (t *TableHead) EndHeaderRow() { t.tk.c.Pop() }
+// EndHeaderRow ends the header row. Beside a legacy scroll bar (Corner) it
+// builds the corner above the bar after it, as high as the header, in the
+// style the recipe set with ui's Next calls and with DrawBackground.
+func (t *TableHead) EndHeaderRow() {
+	c := t.tk.c
+	c.Pop()
+	if t.strip {
+		c.NextSize(ui.Px(t.corner), ui.Px(t.hh))
+		c.BoxKeyed(ui.DrawBackground, ui.KeyN(t.tkey, 4), nil)
+		t.closeStrip()
+	}
+}
+
+// closeStrip closes the box of the header row and the corner, if open.
+func (t *TableHead) closeStrip() {
+	if t.strip {
+		t.strip = false
+		t.tk.c.Pop()
+	}
+}
 
 // HeaderCell is the state of the header cell of a column, as a recipe draws
 // it.
@@ -351,7 +447,8 @@ func (t *TableHead) BeginHeaderCell(hc *HeaderCell, flags ui.Flags) ui.ID {
 	c.NextSize(ui.Px(hc.W), ui.Px(t.hh))
 	c.NextAxis(ui.AxisX)
 	c.NextGap(k.r.Px.GapSmall)
-	c.NextPadding(t.pad, 0, t.pad, 0)
+	pl, pr := t.CellPads(hc.Index)
+	c.NextPadding(pl, 0, pr, 0)
 	c.NextRole(ui.RoleColumnHeader)
 	c.NextSemName(hc.Col.Title)
 	c.NextSemState(state)
@@ -368,9 +465,8 @@ func (t *TableHead) EndHeaderCell(hc *HeaderCell) {
 	c := k.c
 	c.Pop()
 	t.hx += hc.W
-	inset := theme.Snap(k.r.Px.GapSmall)
 	grab := theme.Snap(k.Pt(8))
-	theme.At(c, inset+t.hx-grab/2, 0, grab, t.hh)
+	theme.At(c, t.inset+t.hx-grab/2, 0, grab, t.hh)
 	c.NextCursor(ui.CursorResizeEW)
 	rflags := ui.Clickable | Floating
 	if k.Disabled() {
@@ -387,7 +483,8 @@ func (t *TableHead) BeginCell(l *List, col int) ui.ID {
 	c.NextSize(ui.Px(t.ts.colPx[col]), ui.Pct(1))
 	c.NextAxis(ui.AxisX)
 	c.NextGap(t.tk.r.Px.GapSmall)
-	c.NextPadding(t.pad, 0, t.pad, 0)
+	pl, pr := t.CellPads(col)
+	c.NextPadding(pl, 0, pr, 0)
 	c.NextRole(ui.RoleCell)
 	id := c.BoxKeyed(ui.Clip, ui.KeyN(l.rowKey, uint64(col)), nil)
 	c.Push(id)
@@ -405,7 +502,8 @@ func (t *TableHead) EndCell() { t.tk.c.Pop() }
 func (t *TableHead) TextCell(l *List, col int, b []byte, flags ui.Flags) {
 	c := t.tk.c
 	c.NextSize(ui.Px(t.ts.colPx[col]), ui.Pct(1))
-	c.NextPadding(t.pad, 0, t.pad, 0)
+	pl, pr := t.CellPads(col)
+	c.NextPadding(pl, 0, pr, 0)
 	c.NextRole(ui.RoleCell)
 	c.NextSemNameBytes(b)
 	c.BoxKeyed(flags|ui.Clip, ui.KeyN(l.rowKey, uint64(col)), b)

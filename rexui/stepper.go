@@ -97,9 +97,9 @@ func Stepper(k *base.Kit, label string, v *float32, lo, hi, step float32, o Step
 		su, sd := c.PeekSignal(upKey), c.PeekSignal(downKey)
 		switch {
 		case su.Pressed || su.Dragging && su.Hovering:
-			n = repeats(rc, holdMs(c, ui.KeyN(p.Key, 13)), c.DT())
+			n = repeats(c, rc, ui.KeyN(p.Key, 15), holdMs(c, ui.KeyN(p.Key, 13)))
 		case sd.Pressed || sd.Dragging && sd.Hovering:
-			n = -repeats(rc, holdMs(c, ui.KeyN(p.Key, 13)), c.DT())
+			n = -repeats(c, rc, ui.KeyN(p.Key, 15), holdMs(c, ui.KeyN(p.Key, 13)))
 		}
 		if c.FocusKey() == p.Key {
 			for c.TakeKey(ui.KeyUp, 0) {
@@ -188,22 +188,20 @@ func holdMs(c *ui.Context, key ui.Key) float32 {
 	return float32((now - int64(t0)) & (clockMod - 1))
 }
 
-// repeats is how many steps a half held for e milliseconds, in a frame that
-// lasted dt seconds, is due: one when it went down, one more after the delay
-// and then one per interval.
-func repeats(rc *StepperRecipe, e, dt float32) int {
+// repeats is how many steps a half held for e milliseconds is due in this
+// frame: one when it went down, one more after the delay and then one per
+// interval, less those already made in this hold, which it keeps under key
+// (ui.Context.KeepValue). Counting what was made, rather than what was due a
+// frame's dt earlier, counts each step once whatever the frame times and
+// the clock's rounding to milliseconds.
+func repeats(c *ui.Context, rc *StepperRecipe, key ui.Key, e float32) int {
 	delay, every := rc.RepeatDelay*1000, max(rc.RepeatInterval*1000, 1)
-	count := func(t float32) int {
-		if t < 0 {
-			return 0
-		}
-		n := 1
-		if t >= delay {
-			n += 1 + int((t-delay)/every)
-		}
-		return n
+	n := 1
+	if e >= delay {
+		n += 1 + int((e-delay)/every)
 	}
-	return count(e) - count(e-dt*1000)
+	made := int(c.KeepValue(key, 0, float32(n)))
+	return max(n-made, 0)
 }
 
 // stepBy moves v by n steps of step within lo..hi, onto the grid of steps from

@@ -39,6 +39,9 @@ directly with `k.Kit`, or copies a component and owns it.
 | `BeginToolbar` … `End` | Plain 32, Compact 40, Unified 52, Rex 46 | — | Items (`Item`, `Nav`, `Picker`, `Menu`, groups, `Search`/`SearchButton`, `Title`, `Flexible`, `Space`, `BeginCustom`) in glass capsules laid out per pane (`Panes`, `NextPane`). The band's empty parts drag the window. `TitlebarFor(style)` gives `app.Config.Titlebar` and `TrafficLights`. |
 | `Sidebar`, `SidebarSearch` | one-line and two-line (`Detail`) rows | medium rows; `RowH`/`HeaderH` | Source list on glass: headers, symbols, disclosure (13 per level), the selection inset 10 / radius 8 in the accent, grey or inactive grey. Up/Down, Left/Right, list and list-item roles. |
 | `PathBar` | — | control sizes | NSPathControl's standard style: symbol and name per component, chevrons; the middle names drop out when it is narrow. |
+| `BeginList` / `EndList` | Inset (default), FullWidth; striped | — | NSTableView's selection: selectedContentBackgroundColor with white text while the list has focus in the key window, unemphasised (label-coloured text) otherwise. Selected neighbours merge into one block (inset: rounded at its ends, a 1 pt divider between rows). No hover, no per-row focus ring. |
+| `BeginTable` / `TableHeader` / `EndTable` | as `List` | — | 28 pt header with 1 × 16 pt column separators and sort chevrons; cells padded 10 pt, 8 pt at the outer sides. |
+| `BeginOutline` / `EndOutline` | as `List` | — | NSOutlineView: disclosure chevrons, 13 pt per level, Left/Right collapse and expand (Option: the subtree). Virtualised over a pre-order `base.Tree`. |
 
 Every component is keyboard-operable and records its semantics. Its focus
 ring sits outside the shape, shows for keyboard focus only (text fields:
@@ -91,6 +94,15 @@ The live misses, all under the eye's threshold at 1×:
 
 Live AppKit cannot show focus rings or inactive samples in one key window, so
 `-live` leaves those to the offscreen comparison.
+
+The lists' samples (page 2, `appkit-lists`; tables, outlines) on 2026-10-19:
+86 of 86 offscreen in blue and in pink; 66 of 66 live with the Mac's
+scroller style (overlay). The lists follow the system's scroller style as
+AppKit does; with legacy scroll bars (both apps run with
+`-AppleShowScrollBars Always`, for those processes only) 54 of 66: every
+miss is a selection 5 pt wider than AppKit's, as base reserves 12 pt
+(`Px.ScrollbarW`) for a legacy bar where AppKit's scroller takes 17. The
+unemphasised labels, left out offscreen (below), are within ΔE 1.2 live.
 
 ### Controls (D3b)
 
@@ -173,6 +185,11 @@ measured fallback; every piece asks for its material through `GlassFill`
 - `popup-borderless`, `label-styles`: `cacheDisplay` draws labels twice
   (labelColor reads #060606); live captures match labelColor.
 - `box` radius: the title crosses the top-left corner.
+- Unemphasised list labels offscreen: `cacheDisplay`'s double draw again
+  (#050505 for labelColor's #222222 over the block); checked live.
+- `table-inset-emphasized`'s shape: AppKit's columns overflow the view and it
+  draws that selection full width; the inset shape is measured on
+  `table-inset-fit-*`, whose columns fit.
 
 ### Measured values the tokens lack or get wrong
 
@@ -223,6 +240,10 @@ are reported against `theme/` (D1), not changed there:
     two-line row's title is semibold.
   - The sidebar's search field is a filled capsule: #EAEAEA / #4E4E4E,
     #E5E5E5 / #464646 inactive.
+  - Lists: inset 10, rows 10 pt below the top (5 below a header), block
+    divider inset 6; header 28 with 1 × 16 column separators; cell padding
+    10, 8 at the outer sides; disclosure x 2, width 13, content at 15 + 13
+    per level. No role for the unemphasised block divider (Text at 5 %).
 
 ## Owning a component
 

@@ -581,6 +581,15 @@ go run ./examples/notes -exit-first -v                 # startup: exec → first
 - **Startup:** the budget is 150 ms from process start to the first complete frame on the
   display (D21). On macOS the first launch of a new binary also pays Gatekeeper's scan,
   so measure from the second.
+- **macOS materials and native views.** With `app.Config.Materials`, a box marked with
+  `c.Material` (sidebar, inspector, toolbar capsule, ...) shows the system's live glass or
+  material where the app paints nothing; under Reduce Transparency it is an opaque fill
+  of the colour you give. `c.Host` places a native view the app made with
+  `App.Win.NewHost`. Native views lie above everything the app draws, so a host is hidden
+  while a drawn popup or tooltip overlaps it and while any modal is open: place popups
+  that belong to a host beside it, not over it. Materials lie below the app's pixels and
+  cannot blur them. Offscreen renders show hosts as grey placeholders. Elsewhere these
+  calls do nothing and `NewHost` returns `platform.ErrNoHosts`.
 
 ## 13. Where next
 

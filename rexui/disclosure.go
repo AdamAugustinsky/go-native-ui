@@ -74,7 +74,7 @@ var DisclosureLook = DisclosureRecipe{
 // Disclosure builds a disclosure triangle or push disclosure button that
 // edits *open. A click, or Enter or Space with the focus, toggles it; the
 // chevron turns over the theme's Standard duration (at once under Reduce
-// Motion). The label is the accessible name; the control reports expanded to
+// Motion, in a hidden window and out of view). The label is the accessible name; the control reports expanded to
 // assistive technologies. Changed is set in the frame *open changed.
 //
 //	if rexui.Disclosure(k, "Advanced", &v.advanced, rexui.DisclosureOpts{}).Changed { … }
@@ -88,7 +88,7 @@ func Disclosure(k *base.Kit, label string, open *bool, o DisclosureOpts) base.Si
 		target = 1
 	}
 	rate := RateFor(r.Motion.Standard)
-	if reduced(k) {
+	if reduced(k) || !shown(k, tg.Key) { // a turn nobody would see: at once
 		rate = theme.Instant
 	}
 	t := c.AnimateValue(ui.KeyN(tg.Key, 5), target, rate)

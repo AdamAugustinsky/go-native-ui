@@ -101,6 +101,14 @@ type Config struct {
 	// buttons' ids; App.Win.SetButtonEnabled enables and disables them.
 	Backdrop platform.Backdrop
 	Buttons  []platform.NativeButton
+
+	// Materials makes the window show material regions (macOS): the
+	// builder marks boxes with ui.Context.Material and paints nothing in
+	// them, and the frame clears to transparent instead of Clear, so the
+	// system's window background shows wherever the builder paints nothing
+	// and the materials show in their regions. Hosted native views
+	// (App.Win.NewHost, ui.Context.Host) need nothing here.
+	Materials bool
 }
 
 // App is the running application: the window, the GPU objects and the ui
@@ -137,6 +145,8 @@ type App struct {
 	dlgShown []shownDialog           // dialogs on screen
 	dlgSeq   platform.DialogTicket   // the last ticket given
 	dlgT     dialogTarget            // the window's dialogs; tests set a fake
+
+	sh shellSync // material and host regions handed to the window (shell.go)
 
 	wakeAt      int64 // platform.Now at which the UI wants a frame although nothing animates (ui.Context.WakeAfter); 0 = none
 	chromeDark  bool  // the mode last given to Win.SetDarkChrome
@@ -292,13 +302,13 @@ func openWindowed(cfg Config, b Builder, st *StartupReport, nativeMenus bool) (*
 		Title: cfg.Title, Width: int(cfg.Width + 0.5), Height: int(cfg.Height + 0.5), Hidden: true,
 		MinWidth: int(cfg.MinWidth + 0.5), MinHeight: int(cfg.MinHeight + 0.5),
 		Titlebar: cfg.Titlebar, TrafficLights: cfg.TrafficLights, PublicAPIOnly: cfg.PublicAPIOnly,
-		Backdrop: cfg.Backdrop, Buttons: cfg.Buttons,
+		Backdrop: cfg.Backdrop, Buttons: cfg.Buttons, Materials: cfg.Materials,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("app: open window: %w", err)
 	}
-	if win.Backdrop() != platform.BackdropNone {
-		a.cfg.Clear = [4]float32{} // premultiplied transparent: the backdrop shows
+	if win.HasMaterials() {
+		a.cfg.Clear = [4]float32{} // premultiplied transparent: the backdrop or the materials show
 	}
 	a.Win, a.req = win, win
 	t0 := platform.Now()
@@ -412,20 +422,7 @@ func (a *App) loop() error {
 		if a.done {
 			break
 		}
-		now = platform.Now()
-		if a.wakeAt != 0 && now >= a.wakeAt {
-			a.wakeAt = 0
-			a.p.invalidate() // a text field's caret blink is due
-		}
-		if a.verbose {
-			a.dumpIfStalled(now)
-		}
-		draw, request := a.p.poll(now)
-		if request {
-			a.Win.RequestFrame()
-			a.p.requested(now)
-		}
-		if draw {
+		if a.turn(platform.Now()) {
 			a.present(false, 1)
 		}
 		a.popUpMenus()
@@ -440,10 +437,31 @@ func (a *App) loop() error {
 	return nil
 }
 
+// turn is the loop's step after Wait's events were handled, at now: a due
+// wake (held while the window is hidden), then the pacer's verdict. It requests a frame if the pacer says so
+// and reports whether to draw now.
+func (a *App) turn(now int64) (draw bool) {
+	if a.wakeAt != 0 && now >= a.wakeAt && !a.p.hidden {
+		a.wakeAt = 0
+		a.p.invalidate() // a text field's caret blink is due
+	}
+	if a.verbose {
+		a.dumpIfStalled(now)
+	}
+	draw, request := a.p.poll(now)
+	if request {
+		a.req.RequestFrame()
+		a.p.requested(now)
+	}
+	return draw
+}
+
 // timeout is the Wait timeout; a bench also wakes in time for its deadline.
+// A hidden window does not wake for the UI's timed requests (a caret blink,
+// a spinner's next step): nothing would be drawn.
 func (a *App) timeout(now int64) int64 {
 	t := a.p.timeout(now)
-	if a.wakeAt != 0 { // the UI asked for a frame at a time (WakeAfter)
+	if a.wakeAt != 0 && !a.p.hidden { // the UI asked for a frame at a time (WakeAfter)
 		if d := max(a.wakeAt-now, 0); t < 0 || d < t {
 			t = d
 		}
@@ -474,8 +492,13 @@ func (a *App) onEvent(e *platform.Event) {
 		}
 	case platform.EvVisible:
 		a.tr.in.Hidden = e.Flags&platform.FlagDown == 0
-		if e.Flags&platform.FlagDown != 0 {
-			a.p.invalidate() // shown again: what was skipped while hidden is owed
+		// Hidden, timed wakes wait and a failed attempt parks the loop
+		// (pacer); shown again, what was skipped is owed. A bench draws
+		// regardless: it measures frames, and a machine with its display
+		// asleep reports the window covered.
+		a.p.hide(a.tr.in.Hidden && a.bench == nil)
+		if !a.tr.in.Hidden {
+			a.p.invalidate()
 		}
 	case platform.EvWake:
 		a.p.invalidate() // a worker published something
@@ -483,6 +506,13 @@ func (a *App) onEvent(e *platform.Event) {
 		a.frameEvents++
 		a.lastFrameEv = platform.Now()
 		a.p.frameEvent()
+	case platform.EvHostFocus:
+		a.hostFocus(uint32(e.Tag))
+		a.p.invalidate()
+	case platform.EvHostCommand:
+		if a.hostCommand(e) {
+			a.p.invalidate()
+		}
 	case platform.EvDialog:
 		a.onDialog(e)
 	default:
@@ -546,7 +576,7 @@ func (a *App) present(inHandler bool, passes int) bool {
 	// Nothing was painted: the repaint is still owed, and so is the frame
 	// request that will bring the slot to draw it in.
 	a.p.failed(now)
-	a.Win.RequestFrame()
+	a.req.RequestFrame()
 	a.p.requested(now)
 	return false
 }

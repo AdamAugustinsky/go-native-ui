@@ -149,6 +149,9 @@ type List struct {
 	// Focused: the list has the keyboard focus.
 	Focused bool
 
+	// Emphasised: the selection shows emphasised this frame (RowState.Emphasised).
+	Emphasised bool
+
 	k       *Kit
 	st      *ListState
 	hoverOn bool
@@ -157,6 +160,7 @@ type List struct {
 	skey    ui.Key
 	rowH    float32
 	padT    float32
+	padX    float32
 	inRow   bool
 	hover   int // display row under the pointer, -1
 	cursor  uint32
@@ -164,6 +168,7 @@ type List struct {
 	ring    bool
 	axes    ScrollAxes
 	table   bool
+	tree    bool // an outline's: rows export their level
 	off     bool // built in a disabled region: the rows are disabled too
 
 	// the row being built
@@ -179,6 +184,17 @@ type ListOpts struct {
 	// Hover makes the row under the pointer report RowState.Hover (HoverOn).
 	// macOS tables and lists do not react to hover: the default is off.
 	Hover Hover
+	// Pad is the room inside the list's box around its rows, in points: at
+	// the left and right (Pad[0]) and above the first row and below the last
+	// (Pad[1]). It applies with OwnPad; without, the list keeps the theme's
+	// small gap all round.
+	Pad [2]float32
+	// OwnPad says Pad holds the padding, zero included.
+	OwnPad bool
+	// Flags are drawing flags of the list's outer box, in the style the
+	// recipe set with ui's Next calls before BeginList (DrawBackground and
+	// NextBG for the list's own fill).
+	Flags ui.Flags
 }
 
 // BeginList starts a list of rows rows of the theme's row height (NextRowHeight
@@ -221,15 +237,19 @@ func (k *Kit) beginList(label string, st *ListState, rows int, table bool, o Lis
 
 	k.ApplySize(ui.Pct(1), ui.Pct(1))
 	skey := ui.KeyN(okey, 1)
-	if pad := k.legacyReserve(skey, ScrollVertical); pad != [2]float32{} {
+	if pad := k.legacyReserve(skey, ScrollVertical, st.Scroll.Size); pad != [2]float32{} {
 		c.NextPadding(0, 0, pad[0], pad[1]) // room for a legacy scroll bar
 	}
-	l.o = c.BoxKeyed(ui.Clip, okey, nil)
+	l.o = c.BoxKeyed(ui.Clip|o.Flags, okey, nil)
 	c.Push(l.o)
 	k.ScrollInput(okey, skey, &st.Scroll, ScrollVertical)
 
 	l.padT = theme.Snap(px.GapSmall)
 	inset := theme.Snap(px.GapSmall)
+	if o.OwnPad {
+		inset, l.padT = theme.Snap(k.Pt(o.Pad[0])), theme.Snap(k.Pt(o.Pad[1]))
+	}
+	l.padX = inset
 	c.NextSize(ui.Pct(1), ui.Pct(1))
 	c.NextPadding(inset, l.padT, inset, l.padT)
 	if !table { // a table's root is its node: the header and the rows are its children
@@ -247,6 +267,10 @@ func (k *Kit) beginList(label string, st *ListState, rows int, table bool, o Lis
 	c.Push(l.s)
 	l.Focused = c.Focused(l.s) && !k.Disabled()
 	l.ring = l.Focused && c.FocusVisible()
+	// the selection is emphasised while the list has the focus in the key
+	// window (a forced look shows it so without either)
+	f := k.TakeForce()
+	l.Emphasised = (l.Focused || f&LookFocused != 0) && !k.Inactive() && f&LookInactive == 0 && !l.off
 
 	st.rowPx, st.padPx = rowH, l.padT
 	l.scrollRequests()
@@ -553,6 +577,10 @@ type RowState struct {
 	Key  ui.Key
 	// Selected: the item is selected.
 	Selected bool
+	// PrevSelected and NextSelected: the display rows above and below are
+	// selected too. A run of selected rows is one block, as in AppKit, whose
+	// ends are where these are false.
+	PrevSelected, NextSelected bool
 	// Emphasised: the selection shows emphasised (the accent block and white
 	// text): the list has the keyboard focus in the key window. Otherwise a
 	// selected row shows the unemphasised selection.
@@ -567,19 +595,30 @@ type RowState struct {
 	Ring bool
 	// Disabled: the list is in a disabled region.
 	Disabled bool
+	// Level, Expandable and Expanded are an outline row's depth in its tree
+	// and whether it has children and shows them (OutlineRowState); a
+	// list's rows are at level 0 and not expandable.
+	Level                int
+	Expandable, Expanded bool
 }
 
 // RowState ends the row before (if one is open) and reads the state of display
 // row r, which shows item (the app's stable id).
 func (l *List) RowState(r int, item uint32) RowState {
 	l.CloseRow()
-	sel := l.st.Sel.Has(item)
-	return RowState{
+	st := l.st
+	sel := st.Sel.Has(item)
+	rs := RowState{
 		Row: r, Item: item, Key: ui.KeyN(l.key, 1<<32|uint64(item)),
-		Selected: sel, Emphasised: l.Focused && !l.k.Inactive(),
+		Selected: sel, Emphasised: l.Emphasised,
 		Hover: l.hoverOn && r == l.hover, Cursor: l.hasCur && l.cursor == item,
 		Ring: l.ring && l.hasCur && l.cursor == item, Disabled: l.off,
 	}
+	if sel {
+		rs.PrevSelected = r > 0 && r-1 < l.Rows && st.Sel.Has(st.Item(r-1))
+		rs.NextSelected = r+1 < l.Rows && st.Sel.Has(st.Item(r+1))
+	}
+	return rs
 }
 
 // BeginRow builds the box of the row rs and pushes it: as high as a row and as
@@ -598,6 +637,9 @@ func (l *List) BeginRow(rs *RowState, name []byte, flags ui.Flags) ui.ID {
 	if rs.Selected {
 		state = ui.SemSelected
 	}
+	if rs.Expanded {
+		state |= ui.SemExpanded
+	}
 	role := ui.RoleListItem
 	if l.table {
 		role = ui.RoleRow
@@ -606,7 +648,13 @@ func (l *List) BeginRow(rs *RowState, name []byte, flags ui.Flags) ui.ID {
 	c.NextAxis(ui.AxisX)
 	c.NextRole(role)
 	c.NextSemState(state)
+	if rs.Expandable {
+		c.NextSemActions(ui.ActPress | ui.ActFocus | ui.ActScrollIntoView | ui.ActExpand | ui.ActCollapse)
+	}
 	c.NextSemPos(rs.Row, l.Rows)
+	if l.tree {
+		c.NextSemLevel(rs.Level + 1)
+	}
 	if name != nil {
 		c.NextSemNameBytes(name)
 	}
@@ -651,6 +699,39 @@ func (l *List) CloseRow() {
 
 // RowH is the height of a row in pixels.
 func (l *List) RowH() float32 { return l.rowH }
+
+// PadX and PadY are the room in pixels inside the list's box at the sides of
+// the rows and above the first row (ListOpts.Pad).
+func (l *List) PadX() float32 { return l.padX }
+
+// PadY is the room in pixels above the first row and below the last.
+func (l *List) PadY() float32 { return l.padT }
+
+// FillerRows is how many rows' worth of room the view shows below the last
+// row, as of the last frame: none unless the last row is built in this
+// frame. A recipe that stripes its rows, as AppKit's alternating rows do,
+// stripes this room too, building as many row-high boxes after the last row.
+// A trackpad's stretch past the bottom shows more of it.
+func (l *List) FillerRows() int {
+	if l.Last < l.Rows || l.rowH <= 0 {
+		return 0
+	}
+	r := l.k.c.Rect(l.s)
+	view := r[3] - r[1] - l.padT
+	used := float32(l.Rows)*l.rowH - float32(l.st.disp)
+	if view <= used {
+		return 0
+	}
+	return int(math.Ceil(float64((view - used) / l.rowH)))
+}
+
+// FillerTop is where the ith row of the room below the last row
+// (FillerRows) shows, in pixels from the top of the list's scrolling box,
+// stretch included. A recipe places those rows there as floating boxes, so
+// that they are not content: they never make the list scrollable.
+func (l *List) FillerTop(i int) float32 {
+	return l.padT + float32(l.Rows+i)*l.rowH - float32(l.st.disp)
+}
 
 // BoxKey is the key of the list's outer box; the recipe keys its own boxes in
 // the list (an empty-list message) from it.

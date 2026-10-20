@@ -3,36 +3,43 @@
 package platform
 
 import (
+	"math"
 	"os"
 	"strconv"
+	"sync/atomic"
 
 	"gonativeui/internal/ffi"
 	"gonativeui/internal/objc"
 )
 
-// The native shell (experimental, the phase 6 native-shell spike): a system
-// material behind the content (Options.Backdrop) and native buttons above it
-// (Options.Buttons), with the app's own pixels in between.
+// The native shell (D41, D52; shell.go has the overview): material views
+// below the app's view (material_darwin.go), hosted native views above it
+// (host_darwin.go), and the two cases the spike introduced:
 //
-// Either makes the content view a plain layer-backed container holding
-// GNUIView. A backdrop puts the effect view (NSGlassEffectView on macOS 26
-// and later, else an NSVisualEffectView blurring what is behind the window)
-// below GNUIView, whose CAMetalLayer is then non-opaque (Native.Transparent).
-// The window is non-opaque with a background of white at alpha 0.001, which
-// keeps its shadow and its clicks where the app paints nothing. The effect
-// views follow the window's appearance by themselves (SetDarkChrome).
+//   - Options.Backdrop is a material region of AreaWindow made at Open
+//     (NSGlassEffectView on macOS 26 and later, else an NSVisualEffectView
+//     blurring what is behind the window), pinned under everything and sized
+//     with the window by AppKit. The window is non-opaque with a background
+//     of white at alpha 0.001, which keeps its shadow and its clicks where
+//     the app paints nothing.
+//   - Options.Buttons are HostButton hosts made at Open, pinned at their
+//     positions by autoresizing: AppKit's hit test gives them their presses
+//     (pointerEvent then queues nothing for ui) and everything else still
+//     reaches GNUIView, so a custom titlebar band keeps its drag map and its
+//     double click.
 //
-// Buttons are NSButtons above GNUIView: AppKit's hit test gives them their
-// presses (pointerEvent then queues nothing for ui) and everything else still
-// reaches GNUIView, so a custom titlebar band keeps its drag map and its
-// double click. Their target is GNUIWindowDelegate, so they take no ffi
-// callback of their own: the action shares the delegate class's dispatcher.
-// A click arrives on the main thread, inside sendEvent, as EvCommand.
+// Either, or Options.Materials, or the first NewHost, makes the content view
+// a flipped layer-backed container (GNUIContainer) holding GNUIView. The
+// shell's views follow the window's appearance by themselves (SetDarkChrome).
+// Buttons' target is GNUIWindowDelegate, so they take no ffi callback of
+// their own: the action shares the delegate class's dispatcher. A click
+// arrives on the main thread, inside sendEvent, as EvCommand.
 //
 // GNUI_BACKDROP_MATERIAL=n (experiments only) replaces the backdrop by an
 // NSVisualEffectView with material n.
 
 var (
+	selSetFrame              = objc.Sel("setFrame:")
 	selSetOpaqueWin          = objc.Sel("setOpaque:")
 	selSetBGColor            = objc.Sel("setBackgroundColor:")
 	selColorWhiteAlpha       = objc.Sel("colorWithWhite:alpha:")
@@ -45,7 +52,6 @@ var (
 	selSetEffectState        = objc.Sel("setState:")
 	selSetGlassStyle         = objc.Sel("setStyle:")
 	selSetCornerRadius       = objc.Sel("setCornerRadius:")
-	selWinCornerRadius       = objc.Sel("_cornerRadius")
 	selSetImage              = objc.Sel("setImage:")
 	selSetImagePosition      = objc.Sel("setImagePosition:")
 	selSetBezelStyle         = objc.Sel("setBezelStyle:")
@@ -70,6 +76,31 @@ var (
 	nsImageClass  objc.ID
 	glassMaterial = map[Backdrop]uintptr{BackdropGlass: 0, BackdropGlassClear: 1}
 )
+
+// shell is the window's native shell state (embedded in Window).
+type shell struct {
+	effect      objc.ID // the backdrop's effect view (Options.Backdrop), 0 without one
+	backdrop    Backdrop
+	buttons     []nativeButton // Options.Buttons, each a pinned host
+	glassRadius float64        // the backdrop glass's corner radius as last set (fitBackdrop), -1 before
+	fullScreen  bool           // between windowWillEnterFullScreen: and its exit
+	materials   bool           // Options.Materials: the surface is transparent over an opaque window
+	delegate    objc.ID        // the window delegate, the native buttons' target
+
+	mat   matState  // material regions (material_darwin.go)
+	hosts hostState // hosted views (host_darwin.go)
+}
+
+// Live native shell objects in the process, and applies (ShellObjects).
+var liveHosts, liveMaterials, shellApplies, shellSynced atomic.Int64
+
+// ShellObjects counts the native shell objects alive in the process (hosts
+// created and not released, and material views) and how their changes were
+// applied. The leak gate checks that the objects return to where they were
+// after windows open and close.
+func ShellObjects() ShellCounts {
+	return ShellCounts{Hosts: liveHosts.Load(), Materials: liveMaterials.Load(), Applies: shellApplies.Load(), Synced: shellSynced.Load()}
+}
 
 // registerShell adds the native buttons' action and the full-screen
 // notifications (the glass's corners) to GNUIWindowDelegate.
@@ -99,11 +130,11 @@ func windowDidLeaveFullScreen(*ffi.CB) {
 	}
 }
 
-// nativeButton is one button of Options.Buttons and its NSButton.
+// nativeButton is one button of Options.Buttons and its host.
 type nativeButton struct {
 	NativeButton
-	obj     objc.ID
-	enabled bool
+	host HostID
+	obj  objc.ID // the NSButton
 }
 
 // Backdrop is the material the window got (Options.Backdrop): BackdropWindow
@@ -115,30 +146,46 @@ func (w *Window) Backdrop() Backdrop { return w.backdrop }
 // (Options.Buttons). Experimental.
 func (w *Window) HasButtons() bool { return len(w.buttons) > 0 }
 
-// makeBackdrop puts the effect view under GNUIView (in the container) and
-// makes the window transparent. Without an effect view nothing changes.
-func (w *Window) makeBackdrop(kind Backdrop, width, height float64) {
-	F := objc.F
-	newView := func(cls objc.ID) objc.ID {
-		if cls == 0 {
-			return 0
-		}
-		v := objc.Send(cls, selAlloc)
-		return objc.ID(F.Reset().Arg(uintptr(v)).Arg(uintptr(selInitWithFrame)).ArgRect(0, 0, width, height).Call(objc.MsgSend).R0())
+// HasMaterials reports whether the window shows material regions: it was
+// opened with Options.Materials (or a backdrop) and its surface is
+// transparent.
+func (w *Window) HasMaterials() bool { return w.materials || w.backdrop != BackdropNone }
+
+// openShell builds what Options asks of the shell, at Open, before the
+// content view is set.
+func (w *Window) openShell(o *Options, delegate objc.ID, width, height float64) {
+	w.delegate = delegate
+	if o.Backdrop != BackdropNone {
+		w.makeBackdrop(o.Backdrop, width, height)
+		markOpen("backdrop")
 	}
+	if o.Materials {
+		w.makeContainer(width, height)
+		w.materials = true
+	}
+	if len(o.Buttons) > 0 {
+		w.makeButtons(o.Buttons, width, height)
+		markOpen("buttons")
+	}
+}
+
+// makeBackdrop puts the effect view under GNUIView (in the container) and
+// makes the window transparent. Without an effect view nothing changes. The
+// backdrop is the pinned bottom material, outside the region list.
+func (w *Window) makeBackdrop(kind Backdrop, width, height float64) {
 	got, material := kind, uintptr(21) // NSVisualEffectMaterialUnderWindowBackground
 	if m, err := strconv.Atoi(os.Getenv("GNUI_BACKDROP_MATERIAL")); err == nil {
 		got, material = BackdropWindow, uintptr(m)
 	}
 	var effect objc.ID
 	if style, glass := glassMaterial[got]; glass {
-		if effect = newView(objc.Cls("NSGlassEffectView")); effect != 0 {
+		if effect = newViewOf(objc.Cls("NSGlassEffectView"), 0, 0, width, height); effect != 0 {
 			objc.Send1(effect, selSetGlassStyle, style)
 		}
 	}
 	if effect == 0 {
 		got = BackdropWindow
-		if effect = newView(objc.Cls("NSVisualEffectView")); effect == 0 {
+		if effect = newViewOf(objc.Cls("NSVisualEffectView"), 0, 0, width, height); effect == 0 {
 			return
 		}
 		objc.Send1(effect, selSetMaterial, material)
@@ -147,18 +194,31 @@ func (w *Window) makeBackdrop(kind Backdrop, width, height float64) {
 	}
 	w.makeContainer(width, height)
 	objc.Send1(effect, selSetAutoresizing, 2|16) // NSViewWidthSizable | NSViewHeightSizable
-	F.Reset().Arg(uintptr(w.content)).Arg(uintptr(selAddSubviewPos)).Arg(uintptr(effect)).Arg(^uintptr(0) /* NSWindowBelow */).Arg(uintptr(w.view)).Call(objc.MsgSend)
+	objc.F.Reset().Arg(uintptr(w.content)).Arg(uintptr(selAddSubviewPos)).Arg(uintptr(effect)).Arg(^uintptr(0) /* NSWindowBelow */).Arg(uintptr(w.view)).Call(objc.MsgSend)
 	objc.Send(effect, selReleaseObj) // the container owns it now; w.effect does not
+	liveMaterials.Add(1)
 	objc.Send1(w.win, selSetOpaqueWin, 0)
-	clear := F.Reset().Arg(uintptr(objc.Cls("NSColor"))).Arg(uintptr(selColorWhiteAlpha)).ArgF64(1).ArgF64(0.001).Call(objc.MsgSend).R0()
+	clear := objc.F.Reset().Arg(uintptr(objc.Cls("NSColor"))).Arg(uintptr(selColorWhiteAlpha)).ArgF64(1).ArgF64(0.001).Call(objc.MsgSend).R0()
 	objc.Send1(w.win, selSetBGColor, clear)
 	w.effect, w.backdrop = effect, got
+	w.glassRadius = -1 // not set yet: the glass view's own default is not the window's
+}
+
+// newViewOf is [[cls alloc] initWithFrame:] (a +1 reference), 0 for a class
+// the system does not have.
+func newViewOf(cls objc.ID, x, y, width, height float64) objc.ID {
+	if cls == 0 {
+		return 0
+	}
+	v := objc.Send(cls, selAlloc)
+	return objc.ID(objc.F.Reset().Arg(uintptr(v)).Arg(uintptr(selInitWithFrame)).ArgRect(x, y, width, height).Call(objc.MsgSend).R0())
 }
 
 // fitBackdrop gives Liquid Glass the window's corner radius, so that its rim
 // follows the window's edge: 0 in full screen, which has no corners.
-// _cornerRadius is private (Ghostty reads it the same way); without it the
-// glass keeps square corners, which the window's own mask rounds. It runs at
+// The radius is private (windowCornerRadius); without it (Window.privateAPI
+// false) the glass keeps square corners, which the window's own
+// mask rounds. It runs at
 // Open, on every resize and around full screen, and sends nothing while the
 // radius is unchanged.
 func (w *Window) fitBackdrop() {
@@ -166,9 +226,10 @@ func (w *Window) fitBackdrop() {
 		return
 	}
 	r := 0.0
-	if !w.fullScreen && objc.Send(w.win, selStyleMask)&(1<<14) == 0 && // NSWindowStyleMaskFullScreen
-		objc.SendBool1(w.win, selRespondsTo, uintptr(selWinCornerRadius)) {
-		r = max(objc.SendF64(w.win, selWinCornerRadius), 0)
+	if !w.fullScreen && w.privateAPI() && objc.Send(w.win, selStyleMask)&(1<<14) == 0 { // NSWindowStyleMaskFullScreen
+		if v, ok := windowCornerRadius(w.win); ok {
+			r = max(v, 0)
+		}
 	}
 	if r == w.glassRadius {
 		return
@@ -177,20 +238,19 @@ func (w *Window) fitBackdrop() {
 	objc.F.Reset().Arg(uintptr(w.effect)).Arg(uintptr(selSetCornerRadius)).ArgF64(r).Call(objc.MsgSend)
 }
 
-// closeShell takes the shell apart (Close, and Open's failure path): the
-// buttons drop their target, the delegate, and leave the container with the
-// effect view, which frees both; the container leaves the window and goes
-// with its creation reference, so it frees our view's hold too. GNUIView
-// itself stays w.view's (Close does not free it).
+// closeShell takes the shell apart (Close, and Open's failure path): every
+// host is released (the buttons drop their target), the material views and
+// the backdrop leave the container, which frees them; the container leaves
+// the window and goes with its creation reference, so it frees our view's
+// hold too. GNUIView itself stays w.view's (Close does not free it).
 func (w *Window) closeShell() {
-	for i := range w.buttons {
-		objc.Send1(w.buttons[i].obj, selSetTarget, 0)
-		objc.Send(w.buttons[i].obj, selRemoveFromSuper)
-	}
+	w.releaseAllHosts()
 	w.buttons = nil
+	w.closeMaterials()
 	if w.effect != 0 {
 		objc.Send(w.effect, selRemoveFromSuper)
 		w.effect = 0
+		liveMaterials.Add(-1)
 	}
 	if w.content != w.view {
 		if objc.Send(w.win, selContentView) == w.content {
@@ -201,72 +261,83 @@ func (w *Window) closeShell() {
 	}
 }
 
-// makeContainer makes the content view a plain layer-backed container
-// holding view, for the native views that go below it (the backdrop) and
-// above it (the buttons). Apple says a layer-hosting view such as ours must
-// not have subviews, so they are its siblings.
+// makeContainer makes the content view a flipped layer-backed container
+// (GNUIContainer) holding view, for the native views that go below it (the
+// materials) and above it (the hosts). Apple says a layer-hosting view such
+// as ours must not have subviews, so they are its siblings. Before the
+// content view is set (Open) it only builds the container; later (the first
+// NewHost of a window without one) it also swaps it in.
 func (w *Window) makeContainer(width, height float64) {
 	if w.content != w.view {
 		return
 	}
-	c := objc.Send(objc.Cls("NSView"), selAlloc)
-	c = objc.ID(objc.F.Reset().Arg(uintptr(c)).Arg(uintptr(selInitWithFrame)).ArgRect(0, 0, width, height).Call(objc.MsgSend).R0())
+	c := newViewOf(containerClass, 0, 0, width, height)
 	objc.Send1(c, selSetWantsLayerV, 1)
 	objc.Send1(w.view, selSetAutoresizing, 2|16) // NSViewWidthSizable | NSViewHeightSizable
-	objc.Send1(c, selAddSubview, uintptr(w.view))
+	if objc.Send(w.win, selContentView) == w.view {
+		objc.Retain(w.view) // setContentView: below drops the window's hold
+		objc.Send1(w.win, selSetContentView, uintptr(c))
+		objc.F.Reset().Arg(uintptr(w.view)).Arg(uintptr(selSetFrame)).ArgRect(0, 0, width, height).Call(objc.MsgSend)
+		objc.Send1(c, selAddSubview, uintptr(w.view))
+		objc.Send(w.view, selReleaseObj)
+		objc.Send1(w.win, selMakeFirstResp, uintptr(w.view))
+	} else {
+		objc.Send1(c, selAddSubview, uintptr(w.view))
+	}
 	w.content = c
 }
 
-// makeButtons puts the native buttons above view, in the container.
-// Liquid Glass circles on macOS 26 and later (ButtonGlass), borderless
+// makeButtons puts Options.Buttons above view, in the container, as pinned
+// hosts: Liquid Glass circles on macOS 26 and later (ButtonGlass), borderless
 // symbol buttons otherwise and for ButtonPlain; both highlight on hover and
 // press as AppKit's do and follow the window's key state and appearance.
-func (w *Window) makeButtons(bs []NativeButton, delegate objc.ID, width, height float64) {
+func (w *Window) makeButtons(bs []NativeButton, width, height float64) {
 	w.makeContainer(width, height)
-	glass := objc.Cls("NSGlassEffectView") != 0 // macOS 26: NSBezelStyleGlass exists too
-	nsImageClass = objc.Cls("NSImage")
-	for i, b := range bs {
+	for _, b := range bs {
+		mask := uintptr(4 | 32) // NSViewMaxXMargin | NSViewMaxYMargin (the container is flipped): stays at the top left
+		if b.X < 0 {
+			mask = 1 | 32 // NSViewMinXMargin: stays at the right edge
+		}
+		id, err := w.newHost(HostButton, HostOptions{Symbol: b.Symbol, Label: b.Label, Style: b.Style, Command: b.ID, Disabled: b.Disabled}, true)
+		if err != nil {
+			continue
+		}
+		s := w.hosts.slot(id)
+		s.pinned = true
+		objc.Send1(s.clip, selSetAutoresizing, mask)
+		objc.Send1(s.clip, selSetHidden, 0)
+		s.shown = true
+		w.buttons = append(w.buttons, nativeButton{NativeButton: b, host: id, obj: s.view})
+	}
+	w.fitButtons()
+}
+
+// fitButtons places the pinned buttons at their exact, possibly fractional
+// frames (rexlook's are), directly in the container as the spike's buttons
+// were in its unflipped one, so AppKit draws them and Core Animation aligns
+// them to the same pixels at any scale. (Inside a clip view they are not
+// aligned and blur at 1x.) A top edge exactly between two pixels rounds
+// downward in the flipped container and upward in an unflipped one, so the
+// top is nudged by one ulp toward the spike's rounding. It runs at Open;
+// autoresizing keeps the buttons in place after that.
+func (w *Window) fitButtons() {
+	bounds := objc.SendRect(w.content, selBounds)
+	for i := range w.buttons {
+		b := &w.buttons[i]
+		s := w.hosts.slot(b.host)
+		if s == nil {
+			continue
+		}
 		size := float64(b.Size)
 		if size <= 0 {
 			size = 28
 		}
 		cx := float64(b.X)
-		mask := uintptr(4 | 8) // NSViewMaxXMargin | NSViewMinYMargin: stays at the top left
 		if cx < 0 {
-			cx, mask = width+cx, 1|8 // NSViewMinXMargin: stays at the right edge
+			cx += bounds.W
 		}
-		x, y := cx-size/2, height-float64(b.Y)-size/2 // the container is not flipped
-		o := objc.Send(objc.Cls("NSButton"), selAlloc)
-		o = objc.ID(objc.F.Reset().Arg(uintptr(o)).Arg(uintptr(selInitWithFrame)).ArgRect(x, y, size, size).Call(objc.MsgSend).R0())
-		objc.Send1(o, selSetTitle, uintptr(objc.Str("")))
-		if img := symbolImage(b.Symbol, b.Label); img != 0 {
-			objc.Send1(o, selSetImage, uintptr(img))
-		}
-		objc.Send1(o, selSetImagePosition, 1) // NSImageOnly
-		if glass && b.Style == ButtonGlass {
-			objc.Send1(o, selSetBezelStyle, 16) // NSBezelStyleGlass
-			objc.Send1(o, selSetBorderShape, 3) // NSControlBorderShapeCircle
-		} else {
-			objc.Send1(o, selSetBordered, 0)
-			objc.Send1(o, selSetShowsBorderOnHover, 1) // AppKit's hover highlight for a borderless button (macOS 26), ignored before
-		}
-		if b.Label != "" {
-			objc.Send1(o, selSetToolTip, uintptr(objc.Str(b.Label)))
-		}
-		objc.Send1(o, selSetTarget, uintptr(delegate))
-		objc.Send1(o, selSetAction, uintptr(selButtonAction))
-		objc.Send1(o, selSetTag, uintptr(i))
-		objc.Send1(o, selSetAutoresizing, mask)
-		if b.Disabled {
-			objc.Send1(o, selSetEnabled, 0)
-		}
-		// Titlebar controls never take the keyboard, even with full keyboard
-		// access on: Tab stays with the content, and a click does not move
-		// the first responder (nor end an input method's composition).
-		objc.Send1(o, selSetRefusesFirstResp, 1)
-		objc.Send1(w.content, selAddSubview, uintptr(o)) // above view
-		objc.Send(o, selReleaseObj)                      // the container owns it now; w.buttons does not
-		w.buttons = append(w.buttons, nativeButton{NativeButton: b, obj: o, enabled: !b.Disabled})
+		top := math.Nextafter(float64(b.Y)-size/2, math.Inf(-1))
+		objc.F.Reset().Arg(uintptr(s.clip)).Arg(uintptr(selSetFrame)).ArgRect(cx-size/2, top, size, size).Call(objc.MsgSend)
 	}
 }
 
@@ -276,6 +347,9 @@ func symbolImage(name, label string) objc.ID {
 	if name == "" {
 		return 0
 	}
+	if nsImageClass == 0 {
+		nsImageClass = objc.Cls("NSImage")
+	}
 	var desc uintptr
 	if label != "" {
 		desc = uintptr(objc.Str(label))
@@ -283,34 +357,94 @@ func symbolImage(name, label string) objc.ID {
 	return objc.Send2(nsImageClass, selSymbolImage, uintptr(objc.Str(name)), desc)
 }
 
-// buttonAction is gnuiButtonAction:, the action of every native button
-// (sender: the NSButton, whose tag is its index). It queues EvCommand.
+// buttonAction is gnuiButtonAction:, the action of every HostButton (sender:
+// the NSButton, whose tag is its host slot). It queues EvCommand.
 func buttonAction(c *ffi.CB) {
 	w := theWindow.Load()
 	if w == nil {
 		return
 	}
 	i := int(objc.Send(objc.ID(c.Int(2)), selTag))
-	if i < 0 || i >= len(w.buttons) {
+	if i < 0 || i >= MaxHosts || !w.hosts.slots[i].live {
 		return
 	}
-	w.q.push(Event{Kind: EvCommand, Tag: uint64(w.buttons[i].ID), Time: Now()})
+	w.q.push(Event{Kind: EvCommand, Tag: uint64(w.hosts.slots[i].command), Time: Now()})
 }
 
-// SetButtonEnabled enables or disables the native button id. Main thread;
-// nothing happens when it is unchanged, so it can be called every frame.
+// SetButtonEnabled enables or disables the native button id
+// (Options.Buttons; the command of a HostButton). Main thread; nothing
+// happens when it is unchanged, so it can be called every frame.
 // Experimental.
 func (w *Window) SetButtonEnabled(id uint16, enabled bool) {
-	for i := range w.buttons {
-		b := &w.buttons[i]
-		if b.ID != id || b.enabled == enabled {
+	for i := range w.hosts.slots {
+		s := &w.hosts.slots[i]
+		if !s.live || s.kind != HostButton || s.command != id || s.enabled == enabled {
 			continue
 		}
-		b.enabled = enabled
+		s.enabled = enabled
 		var on uintptr
 		if enabled {
 			on = 1
 		}
-		objc.Send1(b.obj, selSetEnabled, on)
+		objc.Send1(s.view, selSetEnabled, on)
 	}
+}
+
+// ShellPending reports whether the window has staged material or host
+// changes for the next present (gpu.Surface then presents in step with
+// them). Main thread.
+func ShellPending() bool {
+	w := theWindow.Load()
+	return w != nil && (w.mat.dirty || w.hosts.dirty)
+}
+
+// ApplyShell applies the staged material and host changes. gpu.Surface
+// calls it inside the Core Animation transaction that presents the frame
+// (with actions disabled and presentsWithTransaction on), so the native
+// views move together with the pixels drawn for them. Main thread.
+func ApplyShell() {
+	if w := theWindow.Load(); w != nil {
+		w.applyShell()
+	}
+}
+
+// FlushShell applies whatever is still staged (a frame that was not
+// presented through the GPU surface); nothing when nothing is. Main thread.
+func (w *Window) FlushShell() {
+	if w.mat.dirty || w.hosts.dirty {
+		objc.Send(clsCATransaction(), selBegin)
+		objc.Send1(clsCATransaction(), selSetDisableActions, 1)
+		w.applyShell()
+		objc.Send(clsCATransaction(), selCommit)
+	}
+}
+
+func (w *Window) applyShell() {
+	shellApplies.Add(1)
+	if objc.SendBool(clsCATransaction(), selDisableActions) && objc.SendBool(objc.Send(w.view, selLayerOf), selPresentsWithTx) {
+		shellSynced.Add(1)
+	}
+	if w.mat.dirty {
+		w.applyMaterials()
+	}
+	if w.hosts.dirty {
+		w.applyHosts()
+	}
+}
+
+var (
+	selBegin             = objc.Sel("begin")
+	selCommit            = objc.Sel("commit")
+	selSetDisableActions = objc.Sel("setDisableActions:")
+	selDisableActions    = objc.Sel("disableActions")
+	selPresentsWithTx    = objc.Sel("presentsWithTransaction")
+	selSetHidden         = objc.Sel("setHidden:")
+	caTransaction        objc.ID
+)
+
+func clsCATransaction() objc.ID {
+	if caTransaction == 0 {
+		caTransaction = objc.Cls("CATransaction")
+	}
+	return caTransaction
 }

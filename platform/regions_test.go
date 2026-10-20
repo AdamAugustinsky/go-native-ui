@@ -206,3 +206,26 @@ func TestPointerShapeUsesTheCurrentPosition(t *testing.T) {
 		t.Errorf("override: %v", got)
 	}
 }
+
+// Past the budget of pieces, regions overlap one another, but none reaches
+// into a hole (a hosted view keeps its own cursor).
+func TestFlattenOverBudgetKeepsHoles(t *testing.T) {
+	var m cursorMap
+	regs := []CursorRegion{{[4]float32{0, 0, 1000, 1000}, CursorPointer}}
+	for i := 0; i < 400; i++ {
+		x, y := float32(i%20*50+10), float32(i/20*50+10)
+		regs = append(regs, CursorRegion{[4]float32{x, y, x + 4, y + 4}, CursorText})
+	}
+	m.setRegions(regs)
+	hole := [4]float32{400, 400, 600, 600}
+	m.setHoles([][4]float32{hole})
+	flat := m.flatten()
+	if len(flat) < maxFlat {
+		t.Fatalf("%d pieces: the budget was not reached", len(flat))
+	}
+	for _, r := range flat {
+		if overlaps(r.Rect, hole) {
+			t.Fatalf("piece %v over the hole %v", r, hole)
+		}
+	}
+}
