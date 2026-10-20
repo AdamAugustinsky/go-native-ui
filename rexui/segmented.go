@@ -123,6 +123,7 @@ func SegmentedControl(k *base.Kit, label string, sel *int, options []string, o S
 			if sw := rr[2] - rr[0]; sw > 0 {
 				theme.At(c, sw-dw/2, theme.Snap((h-dh)/2), dw, dh)
 				c.NextBG(rc.Divider.RGBA(r))
+				c.NextAuditExempt(ui.AuditOverflow.Mask()) // it straddles the seam with the next segment
 				c.BoxKeyed(ui.DrawBackground|base.Floating, ui.KeyN(it.Key, 1), nil)
 			}
 		}

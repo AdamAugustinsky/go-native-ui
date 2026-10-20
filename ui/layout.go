@@ -90,6 +90,12 @@ func (c *Context) layout() {
 			off[1] += c.stretchOf(p, 1)
 		}
 		cur := p.pad[la] + float32(lead-off[la])
+		var between float32 // the free space each gap takes on top of the gap (Justify)
+		if p.justify != JustifyStart {
+			var first float32
+			first, between = c.justifyOffsets(p, la)
+			cur += first
+		}
 		flow := false
 		for ch := p.first; ch != 0; ch = boxes[ch].next {
 			cb := &boxes[ch]
@@ -100,7 +106,7 @@ func (c *Context) layout() {
 					rel = cb.fixed[a]
 				case a == la:
 					if flow {
-						cur += p.gap
+						cur += p.gap + between
 					}
 					rel = cur
 					cur += cb.size[a]
@@ -120,6 +126,41 @@ func (c *Context) layout() {
 		}
 	}
 	c.propagateHidden()
+}
+
+// justifyOffsets is where the Justify of linear box p puts its flow children
+// along its layout axis la: the offset of the first from the leading edge of
+// the padded area, and the extra space after each gap. Both are 0 when the
+// children leave no free space (see Justify). p.content is set.
+func (c *Context) justifyOffsets(p *box, la int) (first, between float32) {
+	free := p.size[la] - float32(p.content[la])
+	if free <= 0.001 {
+		return 0, 0
+	}
+	switch p.justify {
+	case JustifyCenter:
+		return snap(free / 2), 0
+	case JustifyEnd:
+		return free, 0
+	}
+	n := 0
+	for ch := p.first; ch != 0; ch = c.boxes[ch].next {
+		if !c.boxes[ch].floatingOn(la) {
+			n++
+		}
+	}
+	switch p.justify {
+	case JustifySpaceBetween:
+		if n > 1 {
+			return 0, free / float32(n-1)
+		}
+	case JustifySpaceEvenly:
+		if n > 0 {
+			e := free / float32(n+1)
+			return e, e
+		}
+	}
+	return 0, 0
 }
 
 // sizeAxis runs the size stages 1 to 4 of layout for axis a (0 = x, 1 = y).

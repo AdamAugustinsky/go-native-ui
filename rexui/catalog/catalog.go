@@ -232,6 +232,7 @@ func toggle(on bool, size theme.Size, look base.Look, disabled bool) func(s *Sta
 		fw, fh := k.Pt(54), k.Pt(24)
 		c.NextSize(ui.Px(fw), ui.Px(fh))
 		c.NextPadding(theme.Snap((fw-sz.SwitchW)/2), theme.Snap((fh-sz.SwitchH)/2), 0, 0)
+		c.NextAuditExempt(ui.AuditOverflow.Mask()) // AppKit's frame: a switch of ours that differs is the recipes' business
 		frame := c.Box(0, "frame")
 		c.Push(frame)
 		rexui.Switch(k, "", &s.b, rexui.SwitchOpts{Size: size})
