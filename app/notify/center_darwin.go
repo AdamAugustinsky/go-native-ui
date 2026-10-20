@@ -5,7 +5,6 @@ package notify
 import (
 	"cmp"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -19,6 +18,7 @@ import (
 	"gonativeui/internal/cf"
 	"gonativeui/internal/ffi"
 	"gonativeui/internal/objc"
+	"gonativeui/platform"
 )
 
 // macOS: UNUserNotificationCenter.
@@ -28,7 +28,10 @@ import (
 // its methods use their callback's frame (D36), no lock and no Go
 // allocation: they read the response, store it in its reserved slot
 // (respond), and only then call the completion handler the system gave them,
-// before returning (they never keep it).
+// before returning. Only a response that must wait for a free record keeps
+// the handler (objc.KeepBlock), to call it once the response is stored. The
+// delegate also observes the application becoming active (a
+// reconciliation).
 //
 // Requests (permission, settings, posting, listing) are made from any
 // goroutine through internal/cf (a frame and an autorelease pool of their
@@ -45,6 +48,11 @@ type nativeCenter struct{}
 
 func (nativeCenter) supported() bool { return true }
 
+// launched: the app object has started, and so finished launching
+// (platform.StartApp sets its delegate just before finishLaunching, on the
+// main thread, which Setup runs on too).
+func (nativeCenter) launched() bool { return platform.AppDelegate() != 0 }
+
 // The user info keys of a note that wants a response.
 const (
 	keyKName = "gnui.k" // NSNumber: the response key
@@ -55,8 +63,8 @@ var un struct {
 	availOnce sync.Once
 	avail     bool
 
-	regOnce sync.Once
-	center  uintptr // retained
+	regOnce, observeOnce sync.Once
+	center               uintptr // retained
 
 	delegate   uintptr
 	keyK, keyD uintptr // NSString, kept
@@ -64,7 +72,7 @@ var un struct {
 	clsCenter, clsContent, clsRequest, clsSound, clsCategory, clsAction, clsTextAction uintptr
 	clsAttachment, clsArray, clsSet, clsNumber, clsData                                uintptr
 
-	auth, settings, add, list *objc.BlockKind
+	auth, settings, add, list, listPending *objc.BlockKind
 
 	trace      bool    // GNUI_NOTIFY_TRACE: report each call from the system and its thread
 	isMainFunc uintptr // pthread_main_np
@@ -81,16 +89,16 @@ func traced(fr *ffi.Frame, what string) {
 
 // Selectors, resolved by register on the main thread; read only after.
 var sel struct {
-	alloc, init, release                                                              objc.SEL
-	currentCenter, setDelegate, requestAuth, getSettings, authStatus                  objc.SEL
-	setCategories, categoryWith, actionWith, textActionWith, setWithArray             objc.SEL
-	setTitle, setSubtitle, setBody, setThread, setCategory, setUserInfo, setSound     objc.SEL
-	setAttachments, defaultSound, soundNamed, attachmentWith, requestWith, addRequest objc.SEL
-	removeDelivered, removePending, getDelivered, arrayWith, numberWithULL            objc.SEL
-	count, objectAt, request, identifier, content, threadIdentifier, userInfo, date   objc.SEL
-	since1970, objectForKey, ulongValue, bytes, length, isKindOfClass, respondsTo     objc.SEL
-	notification, actionIdentifier, userText, utf8String, lengthOfBytes, code, desc   objc.SEL
-	willPresent, didReceive                                                           objc.SEL
+	alloc, init, release, retain, appActive                                            objc.SEL
+	currentCenter, setDelegate, requestAuth, getSettings, authStatus                   objc.SEL
+	setCategories, categoryWith, actionWith, textActionWith, setWithArray              objc.SEL
+	setTitle, setSubtitle, setBody, setThread, setCategory, setUserInfo, setSound      objc.SEL
+	setAttachments, defaultSound, soundNamed, attachmentWith, requestWith, addRequest  objc.SEL
+	removeDelivered, removePending, getDelivered, getPending, arrayWith, numberWithULL objc.SEL
+	count, objectAt, request, identifier, content, threadIdentifier, userInfo, date    objc.SEL
+	since1970, objectForKey, ulongValue, bytes, length, isKindOfClass, respondsTo      objc.SEL
+	notification, actionIdentifier, userText, utf8String, lengthOfBytes, code, desc    objc.SEL
+	willPresent, didReceive                                                            objc.SEL
 }
 
 // available: the main bundle is an application bundle with an identifier,
@@ -130,7 +138,8 @@ func register() {
 			p    *objc.SEL
 			name string
 		}{
-			{&sel.alloc, "alloc"}, {&sel.init, "init"}, {&sel.release, "release"},
+			{&sel.alloc, "alloc"}, {&sel.init, "init"}, {&sel.release, "release"}, {&sel.retain, "retain"},
+			{&sel.appActive, "gnuiAppActive:"},
 			{&sel.currentCenter, "currentNotificationCenter"}, {&sel.setDelegate, "setDelegate:"},
 			{&sel.requestAuth, "requestAuthorizationWithOptions:completionHandler:"},
 			{&sel.getSettings, "getNotificationSettingsWithCompletionHandler:"}, {&sel.authStatus, "authorizationStatus"},
@@ -149,6 +158,7 @@ func register() {
 			{&sel.removeDelivered, "removeDeliveredNotificationsWithIdentifiers:"},
 			{&sel.removePending, "removePendingNotificationRequestsWithIdentifiers:"},
 			{&sel.getDelivered, "getDeliveredNotificationsWithCompletionHandler:"},
+			{&sel.getPending, "getPendingNotificationRequestsWithCompletionHandler:"},
 			{&sel.arrayWith, "arrayWithObjects:count:"}, {&sel.numberWithULL, "numberWithUnsignedLongLong:"},
 			{&sel.count, "count"}, {&sel.objectAt, "objectAtIndex:"}, {&sel.request, "request"},
 			{&sel.identifier, "identifier"}, {&sel.content, "content"}, {&sel.threadIdentifier, "threadIdentifier"},
@@ -197,6 +207,10 @@ func register() {
 		d := objc.Define("GNUINotificationDelegate", objc.Cls("NSObject"), []string{"UNUserNotificationCenterDelegate"})
 		d.Method(sel.willPresent, "v@:@@@?", willPresent)
 		d.Method(sel.didReceive, "v@:@@@?", didReceive)
+		d.Method(sel.appActive, "v@:@", func(c *ffi.CB) {
+			traced(c.Frame(), "appActive")
+			appActive()
+		})
 		cls := d.Register()
 		un.delegate = uintptr(objc.Send(objc.Send(cls, sel.alloc), sel.init)) // kept for the process
 
@@ -235,7 +249,15 @@ func register() {
 			fr := c.Frame()
 			traced(fr, "delivered")
 			pool := fr.Call0(objc.PoolPush)
-			list := readDelivered(fr, c.Int(1))
+			list := readDelivered(fr, c.Int(1), false)
+			fr.Call1(objc.PoolPop, pool)
+			listed(int(ctx), list)
+		}, nil)
+		un.listPending = objc.NewBlockKind("v16@?0@8", true, func(ctx uintptr, c *ffi.CB) {
+			fr := c.Frame()
+			traced(fr, "pending")
+			pool := fr.Call0(objc.PoolPush)
+			list := readDelivered(fr, c.Int(1), true)
 			fr.Call1(objc.PoolPop, pool)
 			listed(int(ctx), list)
 		}, nil)
@@ -253,14 +275,27 @@ func (nativeCenter) start() error {
 	}
 	un.center = uintptr(objc.Retain(c))
 	objc.Send1(c, sel.setDelegate, un.delegate)
+	observeActivation()
 	return nil
+}
+
+// observeActivation has the delegate told when the application becomes
+// active (by name: AppKit may not be loaded yet). Main thread.
+func observeActivation() {
+	un.observeOnce.Do(func() {
+		pool := objc.F.Call0(objc.PoolPush)
+		defer objc.F.Call1(objc.PoolPop, pool)
+		nc := objc.Send(objc.Cls("NSNotificationCenter"), objc.Sel("defaultCenter"))
+		objc.AddObserver(nc, objc.ID(un.delegate), sel.appActive, objc.Str("NSApplicationDidBecomeActiveNotification"), 0)
+	})
 }
 
 // ---- The delegate (any thread; no lock, no Go allocation) ----
 
 // didReceive is userNotificationCenter:didReceiveNotificationResponse:
-// withCompletionHandler:. The response is stored in its slot before the
-// completion handler tells the system it was handled.
+// withCompletionHandler:. The response is stored before the completion
+// handler tells the system it was handled: at once, or, for one that waits
+// for a free record, the handler is kept and called once it is stored.
 func didReceive(c *ffi.CB) {
 	fr := c.Frame()
 	traced(fr, "didReceiveResponse")
@@ -272,10 +307,25 @@ func didReceive(c *ffi.CB) {
 	if resp != 0 && fr.Reset().Arg(resp).Arg(uintptr(sel.respondsTo)).Arg(uintptr(sel.userText)).Call(objc.MsgSend).Bool() {
 		reply = utf8Of(fr, send0(fr, resp, sel.userText))
 	}
-	respond(key, action, reply, data)
+	p := respond(key, action, reply, data) // a parked response has its own copy
 	fr.Call1(objc.PoolPop, pool)
-	if handler != 0 {
-		objc.CallBlock(fr, objc.ID(handler))
+	switch {
+	case p == nil:
+		if handler != 0 {
+			objc.CallBlock(fr, objc.ID(handler))
+		}
+	case handler == 0:
+		p.ack = func() {}
+		p.wait()
+	default:
+		kept := new(objc.KeptBlock)
+		objc.KeepBlock(fr, kept, objc.ID(handler))
+		p.ack = func() {
+			fr := cf.Acquire()
+			objc.CallKeptBlock(fr, kept)
+			cf.Release(fr)
+		}
+		p.wait()
 	}
 }
 
@@ -359,22 +409,28 @@ func errText(fr *ffi.Frame, e uintptr) []byte {
 	return utf8Of(fr, send0(fr, e, sel.desc))
 }
 
-// readDelivered lists an NSArray of UNNotification (it allocates: once per
-// listing).
-func readDelivered(fr *ffi.Frame, arr uintptr) []deliveredNote {
+// readDelivered lists an NSArray of UNNotification, or of
+// UNNotificationRequest (requests: the pending ones). It allocates: once per
+// listing.
+func readDelivered(fr *ffi.Frame, arr uintptr, requests bool) []deliveredNote {
 	n := int(send0(fr, arr, sel.count))
 	list := make([]deliveredNote, 0, n)
 	for i := 0; i < n; i++ {
 		note := send1(fr, arr, sel.objectAt, uintptr(i))
-		req := send0(fr, note, sel.request)
+		req := note
+		if !requests {
+			req = send0(fr, note, sel.request)
+		}
 		content := send0(fr, req, sel.content)
 		d := deliveredNote{
 			id:     string(utf8Of(fr, send0(fr, req, sel.identifier))),
 			thread: string(utf8Of(fr, send0(fr, content, sel.threadIdentifier))),
 		}
 		d.key, _ = userInfoOf(fr, send0(fr, content, sel.userInfo))
-		if date := send0(fr, note, sel.date); date != 0 {
-			d.date = int64(fr.Reset().Arg(date).Arg(uintptr(sel.since1970)).Call(objc.MsgSend).F64(0) * 1e9)
+		if !requests { // a request not shown yet has no date
+			if date := send0(fr, note, sel.date); date != 0 {
+				d.date = int64(fr.Reset().Arg(date).Arg(uintptr(sel.since1970)).Call(objc.MsgSend).F64(0) * 1e9)
+			}
 		}
 		list = append(list, d)
 	}
@@ -510,15 +566,16 @@ func (nativeCenter) categories(cats []Category) error {
 	})
 }
 
-func (nativeCenter) add(n *Note, id string, key uint64, ctx int) error {
-	var att string
-	if n.Attachment != "" {
-		var err error
-		if att, err = copyAttachment(n.Attachment); err != nil {
-			return fmt.Errorf("%w: attachment: %v", ErrInvalid, err)
-		}
-	}
-	return call(func(fr *ffi.Frame) error {
+// nativeRequest is a prepared UNNotificationRequest (retained) and the block
+// its result comes back through.
+type nativeRequest struct {
+	req uintptr
+	blk objc.Request
+}
+
+func (nativeCenter) prepare(n *Note, id string, key uint64, att string, ctx int) (prepared, error) {
+	var r nativeRequest
+	err := call(func(fr *ffi.Frame) error {
 		content := send(fr, send(fr, un.clsContent, sel.alloc), sel.init)
 		if content == 0 {
 			return ErrUnavailable
@@ -558,8 +615,7 @@ func (nativeCenter) add(n *Note, id string, key uint64, ctx int) error {
 			cf.CFRelease(fr, aid)
 			cf.CFRelease(fr, url)
 			if a == 0 {
-				os.Remove(att)
-				return fmt.Errorf("%w: attachment: %s", ErrInvalid, errText(fr, nserr))
+				return fmt.Errorf("%w: the system refused it: %s", errAttachment, errText(fr, nserr))
 			}
 			send(fr, content, sel.setAttachments, nsArray(fr, []uintptr{a}))
 		}
@@ -573,34 +629,33 @@ func (nativeCenter) add(n *Note, id string, key uint64, ctx int) error {
 		if err != nil {
 			return fmt.Errorf("%w: %v", ErrBusy, err)
 		}
-		send(fr, un.center, sel.addRequest, req, uintptr(blk.Block()))
-		blk.Sent()
+		r = nativeRequest{req: send(fr, req, sel.retain), blk: blk}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &r, nil
+}
+
+func (nativeCenter) send(p prepared) {
+	r := p.(*nativeRequest)
+	call(func(fr *ffi.Frame) error {
+		send(fr, un.center, sel.addRequest, r.req, uintptr(r.blk.Block()))
+		r.blk.Sent()
+		send(fr, r.req, sel.release)
 		return nil
 	})
 }
 
-// copyAttachment copies the file into the temporary directory: the system
-// moves the file it is given into its own store.
-func copyAttachment(path string) (string, error) {
-	src, err := os.Open(path)
-	if err != nil {
-		return "", err
-	}
-	defer src.Close()
-	dir := filepath.Join(os.TempDir(), "gnui-notify")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", err
-	}
-	dst, err := os.CreateTemp(dir, "*"+filepath.Ext(path))
-	if err != nil {
-		return "", err
-	}
-	if _, err := io.Copy(dst, src); err != nil {
-		dst.Close()
-		os.Remove(dst.Name())
-		return "", err
-	}
-	return dst.Name(), dst.Close()
+func (nativeCenter) discard(p prepared) {
+	r := p.(*nativeRequest)
+	r.blk.Cancel()
+	r.blk.Sent()
+	call(func(fr *ffi.Frame) error {
+		send(fr, r.req, sel.release)
+		return nil
+	})
 }
 
 func (nativeCenter) remove(ids []string) {
@@ -619,13 +674,18 @@ func (nativeCenter) remove(ids []string) {
 	})
 }
 
-func (nativeCenter) delivered(ctx int) error {
+func (nativeCenter) delivered(ctx int) error { return list(un.list, sel.getDelivered, ctx) }
+func (nativeCenter) pending(ctx int) error   { return list(un.listPending, sel.getPending, ctx) }
+
+// list asks the center for a listing (s) whose result comes back through a
+// block of kind k.
+func list(k *objc.BlockKind, s objc.SEL, ctx int) error {
 	return call(func(fr *ffi.Frame) error {
-		blk, err := un.list.New(uintptr(ctx))
+		blk, err := k.New(uintptr(ctx))
 		if err != nil {
 			return fmt.Errorf("%w: %v", ErrBusy, err)
 		}
-		send(fr, un.center, sel.getDelivered, uintptr(blk.Block()))
+		send(fr, un.center, s, uintptr(blk.Block()))
 		blk.Sent()
 		return nil
 	})

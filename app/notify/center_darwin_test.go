@@ -10,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 	"unsafe"
 
 	"github.com/ebitengine/purego"
@@ -229,6 +230,66 @@ func TestNativeDelegateStoresBeforeAnswering(t *testing.T) {
 	drain()
 	if len(s.responses()) != 0 || slots.plain.Load() != plain+1 || stand.acks.Load() != acks+1 {
 		t.Fatal("a plain note's click was delivered or not answered")
+	}
+}
+
+// A response with no slot and no free record: the delegate keeps the
+// system's completion handler, and it is called only once the response has
+// been stored (after the dispatcher freed a record).
+func TestNativeDelegateKeepsTheHandlerUntilStored(t *testing.T) {
+	f, s := fresh(t, Options{})
+	standIns(t)
+	keys := fillSlots(t, f, MaxResponses, "")
+	for i, k := range keys {
+		if !stored(k, ActionClick, nil, nil) {
+			t.Fatal(i)
+		}
+	}
+	for i := range nSpare {
+		if !stored(uint64(1)<<40|uint64(i+1), ActionClick, nil, nil) {
+			t.Fatal(i)
+		}
+	}
+	stand.info.Store(info(uint64(1)<<41, []byte("kept")))
+	stand.action.Store(nsString(actionPrefix + "1"))
+	stand.reply.Store(nsString("later"))
+	acks, kept := stand.acks.Load(), objc.Leaks().KeptBlocks
+	onMain(func() { objc.Send3(objc.ID(un.delegate), sel.didReceive, 0, stand.text, stand.ack) })
+	time.Sleep(20 * time.Millisecond)
+	if stand.acks.Load() != acks || objc.Leaks().KeptBlocks != kept+1 {
+		t.Fatalf("handler called %d times before the response was stored (kept blocks %d)", stand.acks.Load()-acks, objc.Leaks().KeptBlocks-kept)
+	}
+	s.reset()
+	want := slots.stored.Load() + 1
+	waitUntil(t, "the handler", func() bool { return stand.acks.Load() == acks+1 })
+	if stand.ackStored.Load() != want || objc.Leaks().KeptBlocks != kept {
+		t.Fatalf("handler called with %d responses stored, want %d (kept blocks %d)", stand.ackStored.Load(), want, objc.Leaks().KeptBlocks-kept)
+	}
+	var found bool
+	for _, r := range s.responses() {
+		found = found || string(r.UserData) == "kept" && string(r.Reply) == "later"
+	}
+	if !found {
+		t.Fatal("the kept response was not delivered")
+	}
+}
+
+// The application becoming active (NSApplicationDidBecomeActiveNotification)
+// starts a reconciliation: the pending notes, then the shown ones, are
+// listed.
+func TestNativeActivationReconciles(t *testing.T) {
+	f, _ := fresh(t, Options{})
+	standIns(t)
+	onMain(observeActivation)
+	lists := f.nLists
+	onMain(func() {
+		pool := objc.F.Call0(objc.PoolPush)
+		defer objc.F.Call1(objc.PoolPop, pool)
+		nc := objc.Send(objc.Cls("NSNotificationCenter"), objc.Sel("defaultCenter"))
+		objc.Send2(nc, objc.Sel("postNotificationName:object:"), uintptr(objc.Str("NSApplicationDidBecomeActiveNotification")), 0)
+	})
+	if f.nLists != lists+2 {
+		t.Fatalf("%d listings after the app became active, want 2", f.nLists-lists)
 	}
 }
 

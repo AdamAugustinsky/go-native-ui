@@ -35,61 +35,92 @@
 // No call waits for the system. A call that the system answers later (Post,
 // RequestPermission, Status) takes a ticket first, from a table of
 // platform.MaxTickets; with all of them waiting for delivery it fails with
-// ErrBusy and nothing is sent (so does a burst of more than that many posts
-// from one event handler, whose results cannot be delivered before it
+// ErrBusy and nothing is sent. Results are delivered between the app's event
+// handler calls, so a handler that posts more notes than that at once gets
+// ErrBusy too: it should keep the rest and post them as results arrive, never
+// retry in a loop inside the handler (nothing is delivered until it
 // returns). The answer arrives as an app.EvService from platform.SourceNotify
 // whose ID is the ticket; ResultOf decodes it. One ResultRestored result also
 // arrives after Setup (below).
 //
 // # Responses and their slots
 //
-// A note with UserData or a Category (actions, a reply field) reserves a
-// response slot when it is posted, from a table of MaxResponses. When the
-// user clicks it, picks an action or sends a reply, the delegate stores the
-// action, the reply text (up to MaxReply bytes) and the note's UserData in
-// that slot before it tells the system the response was handled, so a reply
-// the system considers delivered cannot be lost on its way to the app. It
-// arrives as an app.EvService from platform.SourceNotifyResponse whose ID is
-// the slot's ticket (PostResult.Response); ResponseOf decodes it. Nothing the
-// app does (app.Post, other requests) can take the room a response needs.
+// A note with UserData or a Category reserves a response slot when it is
+// sent, from a table of MaxResponses. When the user clicks it, picks an
+// action or sends a reply, the delegate stores the action, the reply text (up
+// to MaxReply bytes) and the note's UserData in that slot before it tells the
+// system the response was handled, so a reply the system considers delivered
+// cannot be lost on its way to the app. Nothing the app does (app.Post, other
+// requests) can take the room a response needs. A response to a note that
+// holds no slot (one removed or evicted just before the user answered, one
+// of an earlier run that got none back) takes a spare record, or any free
+// one; with none free, the delegate keeps the system's completion handler and
+// answers the system only once a record has freed and the response is
+// stored.
+//
+// A response arrives as an app.EvService from platform.SourceNotifyResponse,
+// which ResponseOf decodes: its ID is the ticket of the slot it came through
+// (PostResult.Response), A is the action, an int64 (ActionClick,
+// ActionDismiss, ActionOther or the chosen Action.ID, which the system knows
+// as "gnui.action.<ID>"), B is the length of the UserData, and the data is
+// the reply text followed by the UserData.
 //
 // A slot is freed when its response has been delivered, or when its note is
-// removed (Remove, RemoveThread, a later note with the same ID replacing it,
-// EvictOldest). A note the user clears from Notification Center without a
-// response keeps its slot (unless its category has NotifyDismiss, which
-// turns the clearing into an ActionDismiss response) until one of those, or
-// until the app quits.
+// gone: removed (Remove, RemoveThread, EvictOldest), replaced by a later note
+// with the same ID (once the system has taken that one), or cleared by the
+// user from Notification Center. The system does not report a clearing
+// (unless the note's category has NotifyDismiss, which makes it an
+// ActionDismiss response); the service asks the system which notes it still
+// has when the app becomes active and when a post finds every slot taken, and
+// frees the slots of the notes it took before asking and no longer has
+// (Stats.Reconciled). It never polls.
 //
-// When every slot is taken, the note is posted as a plain banner, without
-// its actions, reply field and UserData, whose click only brings the app
-// forward, and Post reports PostedWithoutActions. With Options.EvictOldest
-// the oldest note holding a slot is removed from Notification Center instead,
-// and the new note gets its slot (PostResult.Evicted names the one removed).
+// When every slot is taken even so, the note is posted as a plain banner,
+// without its actions, reply field and UserData, whose click only brings the
+// app forward: PostedWithoutActions. With Options.EvictOldest the oldest
+// note holding a slot is removed from Notification Center instead, and the
+// new note gets its slot (PostResult.Evicted names the one removed). A post
+// that fails before it is sent (its attachment, say) evicts nothing; one the
+// system refuses later does not bring the evicted note back.
 //
 // A note without UserData or a Category is plain from the start
 // (NoResponse): clicking it brings the app forward and delivers nothing.
 //
+// Post knows the reservation when it returns, except for a note with an
+// Attachment (the file is copied first, off the caller's goroutine) and one
+// posted with every slot taken (the service first asks the system which
+// notes it still has). Its Reservation is Pending then, and the ResultPost
+// says what the note got; every ResultPost says it. A post superseded before
+// it could be sent, by a later Post or a Remove of its ID, is not sent: its
+// ResultPost has CodeSuperseded.
+//
 // # Launches
 //
-// Setup installs the system delegate. Called before app.Main, it is in place
-// before the application finishes launching, so the click that launched the
-// app arrives (after Handler.Start returns). Notes posted by an earlier run
-// and still in Notification Center get their slots back at Setup, newest
-// first; the ResultRestored result says how many, and names the ones that
-// did not fit, which the app may Remove. A response to one of those is still
-// delivered if a slot is free when it arrives.
+// Setup installs the system delegate, and it must be called before app.Main:
+// the click that launched the app reaches the delegate while the application
+// finishes launching (and the app after Handler.Start returns). Called once
+// launching has finished (from Handler.Start, say), Setup returns ErrTooLate
+// and does nothing; after a successful Setup, a later call only changes the
+// options. Notes posted by an earlier run and still in Notification Center
+// get their slots back when Setup's listing arrives, newest first; the
+// ResultRestored result says how many, and names the ones that did not get
+// one, which the app may Remove. A response to one of those is still
+// delivered.
 //
 // # Threads and cost
 //
-// Setup must be called on the main thread (before app.Main, or from the
-// Handler). It opens UserNotifications and connects to the system's center
-// before the first frame, the one framework the app object loads early for
-// an app that opts in: 3 to 10 ms on a Mac mini (macOS 27.2). The other
-// functions may be called from any goroutine; Post with an Attachment copies
-// the file. The delegate costs nothing while idle: the system calls it only
+// Setup must be called on the main thread. It opens UserNotifications and
+// connects to the system's center before the first frame, the one framework
+// the app object loads early for an app that opts in: 3 to 10 ms on a Mac
+// mini (macOS 27.2). It also makes the response tables, kept for the
+// process: MaxResponses records of MaxReply+MaxUserData bytes and 16 spare
+// ones, about 1.2 MiB of buffers without pointers, which nothing writes
+// until a response is stored there (0.2 to 0.45 MiB of it resident after
+// Setup, on that Mac). The other functions may be called from any
+// goroutine. The delegate costs nothing while idle: the system calls it only
 // for a note that is shown or answered, on a thread of its own, and it only
-// copies into the reserved slot. Delivering a response allocates nothing
-// once the slots are warm.
+// copies into the reserved record. Delivering a response allocates nothing
+// once the slots are warm, unless it has to wait for a record.
 //
 // # What each OS does
 //
@@ -108,10 +139,8 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"slices"
-	"strconv"
 	"sync"
 	"sync/atomic"
-	"time"
 	"unicode/utf8"
 
 	"gonativeui/app"
@@ -155,15 +184,31 @@ var (
 	// this process, which is not a bundled app (a .app with a bundle
 	// identifier).
 	ErrUnavailable = errors.New("notify: unavailable (the app is not a bundle with an identifier)")
+	// ErrTooLate: Setup was called after the application finished launching
+	// (call it before app.Main); nothing was set up.
+	ErrTooLate = errors.New("notify: Setup after the application finished launching (call it before app.Main)")
 	// ErrNotSetUp: Setup has not succeeded yet.
 	ErrNotSetUp = errors.New("notify: Setup has not been called")
 	// ErrBusy: every request ticket is waiting for its result to be
-	// delivered; nothing was sent. Try again after the results are
-	// delivered.
+	// delivered; nothing was sent. Try again after results are delivered,
+	// not in a loop inside an event handler.
 	ErrBusy = fmt.Errorf("notify: %w", platform.ErrBusy)
 	// ErrInvalid: a note, category or action the system cannot take (the
 	// error says what).
 	ErrInvalid = errors.New("notify: invalid")
+)
+
+// The ErrCode of a ResultPost for a note that failed before the system had
+// it. The system's own codes are positive.
+const (
+	// CodeSuperseded: a later Post of the note's ID, or a Remove of it, came
+	// before the note could be sent; it was not sent.
+	CodeSuperseded int64 = -2
+	// CodeAttachment: the Attachment could not be copied, or the system
+	// refused it.
+	CodeAttachment int64 = -3
+	// CodeInvalid: the system could not make the note (Err says why).
+	CodeInvalid int64 = -4
 )
 
 // Options configure the service (Setup).
@@ -256,7 +301,8 @@ type Note struct {
 	// app's bundle.
 	Sound string
 	// Attachment is the path of an image, audio or video file shown with the
-	// note; Post copies it (the system takes the file it is given).
+	// note; it is copied (the system takes the file it is given), off the
+	// caller's goroutine.
 	Attachment string
 	// Category names a registered category whose actions the note shows.
 	Category string
@@ -265,7 +311,7 @@ type Note struct {
 	UserData []byte
 }
 
-// Reservation says what Post reserved for the note's response.
+// Reservation says what a post reserved for the note's response.
 type Reservation uint8
 
 // The reservations.
@@ -278,6 +324,9 @@ const (
 	// PostedWithoutActions: every slot was taken, so the note went out plain:
 	// without its actions, reply field and UserData.
 	PostedWithoutActions
+	// Pending: decided when the note is sent, after its Attachment is copied
+	// or the system has said which notes it still has; the ResultPost says.
+	Pending
 )
 
 // PostResult is what Post did.
@@ -305,8 +354,9 @@ const (
 	ResultPermission ResultKind = iota + 1
 	// ResultStatus answers Status: Status.
 	ResultStatus
-	// ResultPost answers Post: Err and ErrCode, empty when the system took
-	// the note.
+	// ResultPost answers Post: Reservation, Response and Evicted (what the
+	// note got), and ErrCode and Err, 0 and "" when the system took the
+	// note. A note that failed holds no slot.
 	ResultPost
 	// ResultRestored arrives once after Setup: Restored notes of earlier runs
 	// got their slots back, Overflow did not (OverflowIDs).
@@ -323,24 +373,33 @@ type Result struct {
 	Granted bool
 	// Status is the app's authorization (ResultStatus).
 	Status AuthStatus
-	// ErrCode and Err are the system's error code and message, 0 and "" for
-	// none.
+	// Reservation, Response and Evicted are what a post reserved, as in
+	// PostResult (ResultPost); Response and Evicted are empty for a post
+	// that failed.
+	Reservation Reservation
+	// Response is the ticket of the note's slot.
+	Response Ticket
+	// Evicted is the ID of the note EvictOldest removed for it.
+	Evicted string
+	// ErrCode and Err are the error's code and message, 0 and "" for none:
+	// the system's code, or one of the Code constants.
 	ErrCode int64
-	// Err is the system's error message.
+	// Err is the error's message.
 	Err string
 	// Restored and Overflow count the notes of earlier runs that got their
 	// slots back and that did not (ResultRestored).
 	Restored, Overflow int
-	// OverflowIDs are the IDs of the notes that did not fit.
+	// OverflowIDs are the IDs of the notes that did not get one.
 	OverflowIDs []string
 }
 
 // Response is the user's response to a note (ResponseOf). Its byte slices
 // are the event's data: valid during the Handler.Event call only.
 type Response struct {
-	// Ticket identifies the slot the response came through: the note's
+	// Ticket identifies the record the response came through: the note's
 	// PostResult.Response while the note held its slot; another ticket for a
-	// note of an earlier run, or one removed just before the user answered.
+	// note that held none (of an earlier run, or removed just before the
+	// user answered).
 	Ticket Ticket
 	// Action is ActionClick, ActionDismiss, ActionOther or the chosen
 	// Action.ID.
@@ -386,6 +445,8 @@ func ResultOf(e *app.Event) (Result, bool) {
 	return decodeResult(e.ID, e.A, e.B, e.Data()), true
 }
 
+// decodeResult decodes a result: a is the kind (ResultPost: the reservation
+// in bits 8 to 15, postFailed), b and the data depend on it.
 func decodeResult(id uint64, a, b int64, data []byte) Result {
 	r := Result{Kind: ResultKind(a), Ticket: Ticket(id)}
 	switch r.Kind {
@@ -395,7 +456,12 @@ func decodeResult(id uint64, a, b int64, data []byte) Result {
 	case ResultStatus:
 		r.Status = AuthStatus(b)
 	case ResultPost:
-		r.ErrCode, r.Err = b, string(data)
+		r.Reservation = Reservation(a >> 8)
+		if a&postFailed != 0 {
+			r.ErrCode, r.Err = b, string(data)
+		} else {
+			r.Response, r.Evicted = Ticket(b), string(data)
+		}
 	case ResultRestored:
 		r.Restored, r.Overflow = int(b&0xFFFFFFFF), int(b>>32)
 		for len(data) > 0 {
@@ -420,19 +486,30 @@ type backend interface {
 	supported() bool
 	// available: this process can use it.
 	available() bool
+	// launched: the application has finished launching (Setup is too late).
+	launched() bool
 	// start installs the delegate (main thread).
 	start() error
 	authorize(tk Ticket, p Permission) error
 	settings(tk Ticket) error
 	categories(cats []Category) error
-	// add posts n as id; with key it carries the response key, its category
-	// and UserData, without it is plain. Its result calls added(ctx, …).
-	add(n *Note, id string, key uint64, ctx int) error
+	// prepare makes the request posting n as id, with the attachment file
+	// att ("" for none): with key it carries the key, n's category and
+	// UserData, without it is plain. Nothing is sent: send sends it (its
+	// result calls added(ctx, …)), discard drops it.
+	prepare(n *Note, id string, key uint64, att string, ctx int) (prepared, error)
+	send(r prepared)
+	discard(r prepared)
 	// remove removes delivered and pending notes.
 	remove(ids []string)
-	// delivered lists the notes in Notification Center: listed(ctx, …).
+	// pending lists the notes not shown yet, delivered those in
+	// Notification Center: listed(ctx, …).
+	pending(ctx int) error
 	delivered(ctx int) error
 }
+
+// prepared is a backend's request, made and not sent.
+type prepared any
 
 var svc struct {
 	setupMu sync.Mutex // Setup
@@ -440,15 +517,27 @@ var svc struct {
 	on      atomic.Bool // Setup succeeded
 
 	foreground atomic.Bool
+	restoring  atomic.Bool // the launch's restore has not run yet
 
-	mu   sync.Mutex // the post side: the slots' bookkeeping, the options
-	opts Options
+	// order: a native change (sending, removing) with the bookkeeping it
+	// follows from. Taken before mu.
+	order sync.Mutex
+
+	mu          sync.Mutex // the post side: the slots' bookkeeping, the options
+	opts        Options
+	ids         map[string]*entry
+	gen         uint64 // the last post's generation
+	accepts     uint64 // the notes the system took
+	listings    int    // listings that hold the entries (restore, RemoveThread)
+	threadCuts  []threadCutAt
+	reconciling bool
+	waiting     []*post // posts waiting for the reconciliation
 
 	catMu sync.Mutex // the registered categories, in order
 	cats  []Category
 
-	nonce uint32
-	seq   atomic.Uint64 // generated IDs and keys
+	nonce uint32        // generated IDs: "gnui-<nonce>-<n>"
+	idSeq atomic.Uint64 // their n
 }
 
 // osBackend is the system's center (tests replace svc.b).
@@ -474,10 +563,11 @@ func currentBackend() backend {
 // responses and shows notes, and gives the response slots back to the notes
 // of earlier runs still in Notification Center (a ResultRestored result
 // follows). Call it on the main thread before app.Main, so that a click that
-// launched the app is delivered; called later it works the same, but such a
-// click may be lost. A later call only changes the options. It returns
-// ErrUnsupported on an OS without notifications here and ErrUnavailable
-// when the process is not a bundled app.
+// launched the app is delivered: once the application has finished
+// launching it returns ErrTooLate and sets nothing up. After a successful
+// Setup a later call only changes the options. It returns ErrUnsupported on
+// an OS without notifications here and ErrUnavailable when the process is
+// not a bundled app.
 func Setup(o Options) error {
 	b := currentBackend()
 	if !b.supported() {
@@ -488,6 +578,9 @@ func Setup(o Options) error {
 	}
 	svc.setupMu.Lock()
 	defer svc.setupMu.Unlock()
+	if !svc.on.Load() && b.launched() {
+		return ErrTooLate
+	}
 	svc.mu.Lock()
 	svc.opts = o
 	svc.mu.Unlock()
@@ -496,10 +589,18 @@ func Setup(o Options) error {
 		return nil
 	}
 	initSlots()
-	if svc.nonce == 0 {
-		svc.nonce = rand.Uint32() | 1
+	svc.mu.Lock()
+	if svc.ids == nil {
+		svc.ids = map[string]*entry{}
 	}
+	if svc.nonce == 0 {
+		svc.nonce, keys.base = rand.Uint32()|1, rand.Uint64()
+	}
+	svc.listings++ // the restore's
+	svc.mu.Unlock()
+	svc.restoring.Store(true) // before the delegate can be called
 	if err := b.start(); err != nil {
+		endRestore()
 		return err
 	}
 	svc.on.Store(true)
@@ -513,19 +614,35 @@ func Setup(o Options) error {
 func restoreAtLaunch() {
 	tk, err := slots.requests.Reserve(0)
 	if err != nil {
+		endRestore()
 		return
 	}
 	pi, ok := takePending()
 	if !ok {
 		slots.requests.Cancel(tk)
+		endRestore()
 		return
 	}
 	setPending(pi, pending{kind: pendRestore, ticket: tk, slot: -1})
 	if err := svc.b.delivered(pi); err != nil {
-		freePending(pi)
-		slots.requests.Complete(tk, int64(ResultRestored), 0, nil)
+		if _, ok := endPending(pi); ok {
+			endRestore()
+			slots.requests.Complete(tk, int64(ResultRestored), 0, nil)
+		}
 	}
 }
+
+// endRestore ends a restore that will not run.
+func endRestore() {
+	svc.mu.Lock()
+	svc.restoring.Store(false)
+	svc.threadCuts = nil
+	endListing()
+	svc.mu.Unlock()
+}
+
+// appActive is the app becoming active: the user may have cleared notes.
+func appActive() { reconcileSoon() }
 
 // ready returns the backend once Setup has succeeded.
 func ready() (backend, error) {
@@ -632,161 +749,30 @@ func registered(id string) bool {
 	return slices.ContainsFunc(svc.cats, func(c Category) bool { return c.ID == id })
 }
 
-// Post posts a note. A note with UserData or a Category reserves a response
-// slot (see the package comment); PostResult says whether it got one. The
-// system's acceptance arrives as ResultPost. It fails with ErrBusy when every
-// request ticket is waiting for delivery, and with ErrInvalid for UserData
-// over MaxUserData or a Category not registered.
-func Post(n Note) (PostResult, error) {
-	b, err := ready()
-	if err != nil {
-		return PostResult{}, err
-	}
-	if len(n.UserData) > MaxUserData {
-		return PostResult{}, fmt.Errorf("%w: UserData is %d bytes, more than %d", ErrInvalid, len(n.UserData), MaxUserData)
-	}
-	if n.Category != "" && !registered(n.Category) {
-		return PostResult{}, fmt.Errorf("%w: category %q is not registered", ErrInvalid, n.Category)
-	}
-	ptk, err := slots.requests.Reserve(0)
-	if err != nil {
-		return PostResult{}, ErrBusy
-	}
-	pi, ok := takePending()
-	if !ok {
-		slots.requests.Cancel(ptk)
-		return PostResult{}, ErrBusy
-	}
-	id := n.ID
-	if id == "" {
-		id = "gnui-" + strconv.FormatUint(uint64(svc.nonce), 36) + "-" + strconv.FormatUint(svc.seq.Add(1), 36)
-	}
-	res := PostResult{ID: id, Request: ptk}
-	si, key, evicted := reserveFor(&n, id, &res)
-	if len(evicted) > 0 {
-		res.Evicted = evicted[0]
-		b.remove(evicted)
-	}
-	setPending(pi, pending{kind: pendPost, ticket: ptk, slot: si, key: key})
-	if err := b.add(&n, id, key, pi); err != nil {
-		freePending(pi)
-		slots.requests.Cancel(ptk)
-		if si >= 0 {
-			svc.mu.Lock()
-			releaseSlot(si, key)
-			svc.mu.Unlock()
-		}
-		return PostResult{}, err
-	}
-	return res, nil
-}
-
-// reserveFor frees the slot of a note n replaces and reserves one for n if it
-// wants a response: the slot and its key (-1, 0 for none) and the IDs of the
-// notes evicted for it.
-func reserveFor(n *Note, id string, res *PostResult) (si int, key uint64, evicted []string) {
-	svc.mu.Lock()
-	defer svc.mu.Unlock()
-	releaseID(id) // the system replaces the note shown with this ID
-	if n.Category == "" && len(n.UserData) == 0 {
-		return -1, 0, nil
-	}
-	tk, err := slots.responses.Reserve(0)
-	for err != nil && svc.opts.EvictOldest {
-		v := oldestSlot()
-		if v < 0 {
-			break
-		}
-		s := &slots.s[v]
-		if vid := s.id; releaseSlot(v, s.k) {
-			evicted = append(evicted, vid)
-			slots.evicted.Add(1)
-		}
-		tk, err = slots.responses.Reserve(0)
-	}
-	if err == nil {
-		key = uint64(svc.nonce)<<32 | uint64(uint32(svc.seq.Add(1))) // never 0: the nonce is odd
-		if si = takeSlot(tk, key, id, n.Thread, time.Now().UnixNano()); si >= 0 {
-			res.Reservation, res.Response = Reserved, tk
-			return si, key, evicted
-		}
-	}
-	slots.withoutActions.Add(1)
-	res.Reservation = PostedWithoutActions
-	return -1, 0, evicted
-}
-
-// Remove removes notes from Notification Center (and those not shown yet),
-// freeing their response slots.
-func Remove(ids ...string) error {
-	b, err := ready()
-	if err != nil {
-		return err
-	}
-	if len(ids) == 0 {
-		return nil
-	}
-	svc.mu.Lock()
-	for _, id := range ids {
-		releaseID(id)
-	}
-	svc.mu.Unlock()
-	b.remove(ids)
-	return nil
-}
-
-// RemoveThread removes the notes of a thread (Note.Thread) shown so far,
-// freeing their response slots: those of this run at once, and every other
-// note of the thread in Notification Center (plain notes, earlier runs')
-// once the system has listed them. A note posted after the call is kept.
-func RemoveThread(thread string) error {
-	b, err := ready()
-	if err != nil {
-		return err
-	}
-	now := time.Now().UnixNano()
-	var ids []string
-	svc.mu.Lock()
-	for i := range slots.s {
-		if s := &slots.s[i]; s.live && s.thread == thread && s.seq <= now {
-			id := s.id
-			if releaseSlot(i, s.k) {
-				ids = append(ids, id)
-			}
-		}
-	}
-	svc.mu.Unlock()
-	if len(ids) > 0 {
-		b.remove(ids)
-	}
-	pi, ok := takePending()
-	if !ok {
-		return ErrBusy
-	}
-	setPending(pi, pending{kind: pendThread, slot: -1, thread: thread, before: now})
-	if err := b.delivered(pi); err != nil {
-		freePending(pi)
-		return err
-	}
-	return nil
-}
-
 // Stats counts what the service did, for tests and diagnostics.
 type Stats struct {
-	// Reserved is the response slots held now.
+	// Reserved is the slot records held now: for notes, and for responses
+	// not delivered yet.
 	Reserved int
+	// Parked is the responses waiting for a free record now.
+	Parked int
 	// WithoutActions counts notes posted plain because every slot was taken.
 	WithoutActions uint64
 	// Evicted counts notes removed to free a slot (EvictOldest).
 	Evicted uint64
-	// Stored counts responses stored in their slot.
+	// Reconciled counts slots freed because the system no longer had their
+	// note (the user cleared it).
+	Reconciled uint64
+	// Superseded counts posts not sent because a later Post or a Remove of
+	// their ID came first.
+	Superseded uint64
+	// Stored counts responses stored.
 	Stored uint64
+	// Late counts the responses stored without their note's slot (a spare
+	// or another free record), parked ones included.
+	Late uint64
 	// Plain counts responses to plain notes (nothing is delivered).
 	Plain uint64
-	// Lost counts responses that found no slot and no free record (a note of
-	// an earlier run that did not fit), or arrived after the app's last
-	// delivery.
-	Lost uint64
 }
 
 // ReadStats returns the counts.
@@ -794,12 +780,17 @@ func ReadStats() Stats {
 	st := Stats{
 		WithoutActions: slots.withoutActions.Load(),
 		Evicted:        slots.evicted.Load(),
+		Reconciled:     slots.reconciled.Load(),
+		Superseded:     slots.superseded.Load(),
 		Stored:         slots.stored.Load(),
+		Late:           slots.late.Load(),
 		Plain:          slots.plain.Load(),
-		Lost:           slots.lost.Load(),
 	}
 	if slots.responses != nil {
 		st.Reserved = slots.responses.Outstanding()
 	}
+	parking.mu.Lock()
+	st.Parked = len(parking.list)
+	parking.mu.Unlock()
 	return st
 }

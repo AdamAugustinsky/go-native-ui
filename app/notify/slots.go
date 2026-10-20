@@ -2,11 +2,12 @@ package notify
 
 import (
 	"cmp"
+	"math"
 	"math/bits"
-	"runtime"
 	"slices"
 	"sync"
 	"sync/atomic"
+	"time"
 	"unicode/utf8"
 
 	"gonativeui/platform"
@@ -14,24 +15,33 @@ import (
 
 // The response slots (D37 class 2). A note that wants a response gets a key,
 // carried in its user info, and a slot holding the key and a ticket of
-// slots.responses reserved at Post. The delegate finds the slot by the key
-// with atomic loads only, claims it (the key goes to 0, once), and completes
-// the ticket with the response before it answers the system: the record was
-// reserved, so the completion needs no room anywhere. The record goes back to
-// the table when the dispatcher has delivered it.
+// slots.responses reserved when the note is sent. The delegate finds the
+// slot by the key with atomic loads only, claims it (the key goes to 0,
+// once), and completes the ticket with the response before it answers the
+// system: the record was reserved, so the completion needs no room anywhere.
+// The record goes back to the table when the dispatcher has delivered it.
 //
-// The post side (Post, Remove, RemoveThread, the launch's restore, a failed
-// post) keeps the rest of a slot's bookkeeping under svc.mu. It releases a
-// slot by taking its key (the same compare-and-swap) and cancelling the
-// ticket, so for every note exactly one of the delegate's completion and the
-// post side's cancellation happens. A slot the delegate claimed is free for
-// the post side at once; its record is not until delivered, and a slot is
-// only taken once its record was reserved, so a free slot always exists for
-// a reserved record.
+// A response that finds no slot (its note was evicted, removed or replaced
+// just before, or an earlier run posted it and it got no slot back) takes a
+// spare record (slots.spares, which posts never take) or any free record of
+// the slots. With none free it is parked: the delegate keeps the system's
+// completion handler and a copy of the response, and a goroutine, running
+// only while something is parked, stores it once a record frees and only
+// then calls the handler. The system never hears that a response was handled
+// before it was stored.
+//
+// The post side keeps the rest of a slot's bookkeeping under svc.mu. It
+// releases a slot by taking its key (the same compare-and-swap) and
+// cancelling the ticket, so for every note exactly one of the delegate's
+// completion and the post side's cancellation happens. A slot the delegate
+// claimed is free for the post side at once; its record is not until
+// delivered, and a slot is only taken once its record was reserved, so a free
+// slot always exists for a reserved record.
 
 const (
-	nScratch   = 4  // responses being copied at once without waiting
-	maxPending = 64 // native requests whose completions are outstanding (posts, listings)
+	nSpare      = 16  // records for responses that find no slot
+	maxPending  = 64  // native requests whose completions are outstanding (posts, listings)
+	maxAnswered = 256 // responses remembered while the launch's restore runs
 )
 
 type slot struct {
@@ -39,25 +49,29 @@ type slot struct {
 	ticket atomic.Uint64 // its record in slots.responses (written before key)
 
 	// The post side's (svc.mu):
-	live   bool   // held for a note (its response may have been claimed since)
-	k      uint64 // the key it was given
-	id     string // the note's ID
-	thread string
-	seq    int64 // when the note was posted (ns since 1970): EvictOldest removes the smallest
+	live     bool   // held for a note (its response may have been claimed since)
+	k        uint64 // the key it was given
+	id       string // the note's ID
+	thread   string
+	seq      int64  // when the note was posted (ns since 1970): EvictOldest removes the smallest
+	gen      uint64 // the post it was given to
+	accepted uint64 // svc.accepts when the system took the note; 0 until then
 }
 
 var slots struct {
 	once      sync.Once
 	requests  *platform.Tickets // results: permission, status, post, restore
 	responses *platform.Tickets // one record per slot
+	spares    *platform.Tickets // responses that find no slot
 	s         [MaxResponses]slot
 
-	withoutActions, evicted, stored, plain, lost atomic.Uint64
+	withoutActions, evicted, stored, late, plain, reconciled, superseded atomic.Uint64
 
-	// answered are the keys of the last responses stored: the launch's
-	// listing may still show a note the user answered before it arrived (the
-	// click that launched the app), which must not get a slot again.
-	answered  [16]atomic.Uint64
+	// answered are the keys of the responses that arrived while the
+	// launch's restore runs (svc.restoring): its listing may still show a
+	// note the user answered meanwhile (the click that launched the app),
+	// which must not get a slot again. Past maxAnswered some were not kept.
+	answered  [maxAnswered]atomic.Uint64
 	nAnswered atomic.Uint32
 }
 
@@ -66,23 +80,69 @@ func initSlots() {
 	slots.once.Do(func() {
 		slots.requests = platform.NewTickets(platform.SourceNotify, platform.MaxTickets, 256)
 		slots.responses = platform.NewTickets(platform.SourceNotifyResponse, MaxResponses, MaxReply+MaxUserData)
-		for i := range scratch.buf {
-			scratch.buf[i] = make([]byte, 0, MaxReply+MaxUserData)
-		}
+		slots.spares = platform.NewTickets(platform.SourceNotifyResponse, nSpare, MaxReply+MaxUserData)
 		pends.free.Store(^uint64(0))
 	})
 }
 
-// takeSlot gives a free slot to a note: the record tk, its key, its ID and
-// thread, and when it was posted. svc.mu is held. It returns -1, cancelling
-// tk, if no slot is free (it cannot happen: see the overview).
-func takeSlot(tk Ticket, key uint64, id, thread string, seq int64) int {
+// ---- The post side's bookkeeping (svc.mu) ----
+
+// entry is what the post side knows of a note ID: its latest Post (the one
+// the system should end up showing), the latest removal covering it, and what
+// is in flight. An idle entry is dropped (tidy), except while a listing whose
+// snapshot may be older than a later post of the ID is outstanding (the
+// launch's restore, a RemoveThread): it must see that post.
+type entry struct {
+	post     uint64 // the generation of its latest Post, 0 for none this run
+	cut      uint64 // its posts up to this generation were removed (Remove, RemoveThread, EvictOldest)
+	thread   string // the latest Post's thread
+	inflight int    // posts not yet sent or dropped
+	slots    int    // live slots of its notes
+}
+
+func entryOf(id string) *entry {
+	e := svc.ids[id]
+	if e == nil {
+		e = &entry{}
+		svc.ids[id] = e
+	}
+	return e
+}
+
+// tidy drops the entry of id if it is idle and no listing holds entries.
+func tidy(id string) {
+	if e := svc.ids[id]; e != nil && e.inflight == 0 && e.slots == 0 && svc.listings == 0 {
+		delete(svc.ids, id)
+	}
+}
+
+// endListing ends a listing that holds the entries; after the last one the
+// idle entries are dropped.
+func endListing() {
+	if svc.listings--; svc.listings > 0 {
+		return
+	}
+	for id, e := range svc.ids {
+		if e.inflight == 0 && e.slots == 0 {
+			delete(svc.ids, id)
+		}
+	}
+}
+
+// takeSlot gives a free slot to post gen of id: the record tk and its key,
+// the thread and when it was posted. It returns -1, cancelling tk, if no
+// slot is free (it cannot happen: see the overview).
+func takeSlot(tk Ticket, key uint64, id, thread string, seq int64, gen uint64) int {
 	for i := range slots.s {
 		s := &slots.s[i]
 		if s.live && s.key.Load() != 0 {
 			continue
 		}
-		s.live, s.k, s.id, s.thread, s.seq = true, key, id, thread, seq
+		if s.live { // claimed: the response is the delegate's
+			dropSlot(s)
+		}
+		s.live, s.k, s.id, s.thread, s.seq, s.gen, s.accepted = true, key, id, thread, seq, gen, 0
+		entryOf(id).slots++
 		s.ticket.Store(uint64(tk))
 		s.key.Store(key) // published: the delegate may find it from here on
 		return i
@@ -91,9 +151,19 @@ func takeSlot(tk Ticket, key uint64, id, thread string, seq int64) int {
 	return -1
 }
 
+// dropSlot ends the post side's bookkeeping of s.
+func dropSlot(s *slot) {
+	id := s.id
+	s.live, s.k, s.id, s.thread = false, 0, "", ""
+	if e := svc.ids[id]; e != nil {
+		e.slots--
+		tidy(id)
+	}
+}
+
 // releaseSlot frees slot i if it still holds the note with key: its record
-// too, unless the delegate claimed it first (that response is delivered).
-// svc.mu is held. It reports whether the slot was that note's.
+// too, unless the delegate claimed it first (that response is delivered). It
+// reports whether the slot was that note's.
 func releaseSlot(i int, key uint64) bool {
 	s := &slots.s[i]
 	if !s.live || s.k != key {
@@ -102,20 +172,20 @@ func releaseSlot(i int, key uint64) bool {
 	if s.key.CompareAndSwap(key, 0) {
 		slots.responses.Cancel(Ticket(s.ticket.Load()))
 	}
-	s.live, s.k, s.id, s.thread = false, 0, "", ""
+	dropSlot(s)
 	return true
 }
 
-// releaseID frees the slot of the note with ID id, if any. svc.mu is held.
-func releaseID(id string) {
+// releaseID frees the slots of the posts of id up to generation gen.
+func releaseID(id string, gen uint64) {
 	for i := range slots.s {
-		if s := &slots.s[i]; s.live && s.id == id {
+		if s := &slots.s[i]; s.live && s.id == id && s.gen <= gen {
 			releaseSlot(i, s.k)
 		}
 	}
 }
 
-// slotOfKey is the slot given key, -1 for none. svc.mu is held.
+// slotOfKey is the slot given key, -1 for none.
 func slotOfKey(key uint64) int {
 	for i := range slots.s {
 		if s := &slots.s[i]; s.live && s.k == key {
@@ -125,17 +195,71 @@ func slotOfKey(key uint64) int {
 	return -1
 }
 
-// oldestSlot is the slot still awaiting a response whose note is the
-// oldest, -1 for none. svc.mu is held.
-func oldestSlot() int {
+// victimSlot is the slot EvictOldest takes for a post of id: the oldest
+// still awaiting a response, of another ID, and holding that ID's latest
+// post (the system removes by ID: removing an older post's note would remove
+// the latest one too); -1 for none.
+func victimSlot(id string) int {
 	best := -1
 	for i := range slots.s {
 		s := &slots.s[i]
-		if s.live && s.key.Load() != 0 && (best < 0 || s.seq < slots.s[best].seq) {
+		if !s.live || s.key.Load() == 0 || s.id == id {
+			continue
+		}
+		if e := svc.ids[s.id]; e == nil || e.post != s.gen {
+			continue
+		}
+		if best < 0 || s.seq < slots.s[best].seq {
 			best = i
 		}
 	}
 	return best
+}
+
+// evictFor frees slots for a post of id by evicting the oldest notes until a
+// record is free: the record (0 if none could be had) and the IDs to remove
+// from Notification Center.
+func evictFor(id string) (Ticket, []string) {
+	var ids []string
+	for {
+		v := victimSlot(id)
+		if v < 0 {
+			return 0, ids
+		}
+		s := &slots.s[v]
+		vid := s.id
+		if e := svc.ids[vid]; e != nil {
+			e.cut = max(e.cut, e.post)
+		}
+		releaseSlot(v, s.k)
+		ids = append(ids, vid)
+		slots.evicted.Add(1)
+		if tk, err := slots.responses.Reserve(0); err == nil {
+			return tk, ids
+		}
+	}
+}
+
+// keys makes the response keys: base+1, base+2, … (skipping 0), never one
+// twice in a process; after 2^64 keys there are no more, and notes go out
+// without actions. The base is random, so an earlier run's keys (still in
+// Notification Center) are not this run's. svc.mu.
+var keys struct {
+	base, n uint64
+	spent   bool
+}
+
+func nextKey() uint64 {
+	for !keys.spent {
+		if keys.n++; keys.n == 0 {
+			keys.spent = true
+			break
+		}
+		if k := keys.base + keys.n; k != 0 {
+			return k
+		}
+	}
+	return 0
 }
 
 // ---- The delegate's side: any thread, no locks, no allocation ----
@@ -157,42 +281,68 @@ func claim(key uint64) (Ticket, bool) {
 	return 0, false
 }
 
+// testHookStoring runs while a response is being stored (tests: responses
+// paused there).
+var testHookStoring func()
+
 // respond stores the user's response to the note with key (0: a plain note)
-// in its slot and queues its delivery: action, the reply text (cut to
-// MaxReply at a character boundary) and the note's UserData. The delegate
-// calls it before it tells the system the response was handled. A note of
-// an earlier run that has no slot gets a record if one is free. It reports
-// whether the response was stored.
-func respond(key uint64, action int64, reply, data []byte) bool {
+// and queues its delivery: action, the reply text (cut to MaxReply at a
+// character boundary) and the note's UserData. The delegate calls it before
+// it answers the system. A response whose note holds no slot takes a free
+// record (store).
+//
+// It returns nil once the response is stored, or for a plain note: the
+// delegate answers the system then. Otherwise the response is parked, with a
+// copy of its data: the delegate sets its ack, which answers the system, and
+// calls wait, and must not answer itself. It allocates only to park.
+func respond(key uint64, action int64, reply, data []byte) *parked {
 	if key == 0 {
 		slots.plain.Add(1)
-		return false
-	}
-	slots.answered[slots.nAnswered.Add(1)%uint32(len(slots.answered))].Store(key)
-	tk, ok := claim(key)
-	if !ok {
-		var err error
-		if tk, err = slots.responses.Reserve(0); err != nil {
-			slots.lost.Add(1)
-			return false
-		}
+		return nil
 	}
 	reply = cutUTF8(reply, MaxReply)
 	if len(data) > MaxUserData {
 		data = data[:MaxUserData]
 	}
-	i := takeScratch()
-	buf := append(append(scratch.buf[i][:0], reply...), data...)
-	stored := slots.responses.Complete(tk, action, int64(len(data)), buf)
-	scratch.buf[i] = buf[:0]
-	scratch.busy.And(^uint32(1 << i))
-	if !stored { // the app's last delivery has begun
-		slots.responses.Cancel(tk)
-		slots.lost.Add(1)
+	if svc.restoring.Load() {
+		noteAnswered(key) // before the slots are searched (restore)
+	}
+	if tk, ok := claim(key); ok {
+		if testHookStoring != nil {
+			testHookStoring()
+		}
+		if slots.responses.CompleteParts(tk, action, int64(len(data)), reply, data) {
+			slots.stored.Add(1)
+			return nil
+		}
+		slots.responses.Cancel(tk) // the app's last delivery has begun: kept for a later run
+	} else if store(action, reply, data) {
+		slots.stored.Add(1)
+		slots.late.Add(1)
+		return nil
+	}
+	return park(action, reply, data)
+}
+
+// store stores a response without a slot in a free record: a spare, or one of
+// the slots'. It reports false when none is free or the app's last delivery
+// has begun.
+func store(action int64, reply, data []byte) bool {
+	for _, t := range [...]*platform.Tickets{slots.spares, slots.responses} {
+		tk, err := t.Reserve(0)
+		if err != nil {
+			continue
+		}
+		if testHookStoring != nil {
+			testHookStoring()
+		}
+		if t.CompleteParts(tk, action, int64(len(data)), reply, data) {
+			return true
+		}
+		t.Cancel(tk)
 		return false
 	}
-	slots.stored.Add(1)
-	return true
+	return false
 }
 
 // cutUTF8 cuts b to at most n bytes without splitting a character.
@@ -207,24 +357,93 @@ func cutUTF8(b []byte, n int) []byte {
 	return b[:c]
 }
 
-// scratch holds a response's reply and UserData together while the record is
-// written: a few buffers, each taken by one response at a time.
-var scratch struct {
-	busy atomic.Uint32
-	buf  [nScratch][]byte
+// noteAnswered remembers that a response to the note with key arrived.
+func noteAnswered(key uint64) {
+	if i := slots.nAnswered.Add(1) - 1; i < maxAnswered {
+		slots.answered[i].Store(key)
+	}
 }
 
-func takeScratch() int {
-	for {
-		b := scratch.busy.Load()
-		free := ^b & (1<<nScratch - 1)
-		if free == 0 {
-			runtime.Gosched() // another response is copying: microseconds
-			continue
+// wasAnswered reports whether a response to the note with key arrived while
+// the restore runs; unknown when more arrived than were kept.
+func wasAnswered(key uint64) (yes, unknown bool) {
+	n := slots.nAnswered.Load()
+	if n > maxAnswered {
+		return false, true
+	}
+	for i := range n {
+		if slots.answered[i].Load() == key {
+			return true, false
 		}
-		i := bits.TrailingZeros32(free)
-		if scratch.busy.CompareAndSwap(b, b|1<<i) {
-			return i
+	}
+	return false, false
+}
+
+// parked is a response waiting for a free record.
+type parked struct {
+	action int64
+	n      int    // the UserData's length, at the end of data
+	data   []byte // the reply, then the UserData
+	ack    func() // answers the system (the delegate sets it before wait)
+}
+
+var parking struct {
+	mu      sync.Mutex
+	list    []*parked
+	running bool
+}
+
+func park(action int64, reply, data []byte) *parked {
+	buf := make([]byte, 0, len(reply)+len(data))
+	return &parked{action: action, n: len(data), data: append(append(buf, reply...), data...)}
+}
+
+// wait queues p: it is stored once a record frees, and then answered.
+func (p *parked) wait() {
+	parking.mu.Lock()
+	defer parking.mu.Unlock()
+	parking.list = append(parking.list, p)
+	if !parking.running {
+		parking.running = true
+		go retryParked()
+	}
+}
+
+// retryParked stores the parked responses, in order, as records free (they
+// free as the dispatcher delivers): it tries after 1 ms, backing off to
+// 100 ms while nothing frees, and ends when none is left.
+func retryParked() {
+	d := time.Millisecond
+	for {
+		time.Sleep(d)
+		parking.mu.Lock()
+		n := 0
+		for _, p := range parking.list {
+			k := len(p.data) - p.n
+			if !store(p.action, p.data[:k], p.data[k:]) {
+				break
+			}
+			n++
+		}
+		done := slices.Clone(parking.list[:n])
+		parking.list = slices.Delete(parking.list, 0, n)
+		empty := len(parking.list) == 0
+		if empty {
+			parking.running = false
+		}
+		parking.mu.Unlock()
+		for _, p := range done {
+			slots.stored.Add(1)
+			slots.late.Add(1)
+			p.ack()
+		}
+		if empty {
+			return
+		}
+		if n > 0 {
+			d = time.Millisecond
+		} else {
+			d = min(2*d, 100*time.Millisecond)
 		}
 	}
 }
@@ -251,20 +470,20 @@ func actionOf(id []byte) int64 {
 		return ActionClick
 	case string(id) == dismissActionID:
 		return ActionDismiss
-	case len(id) <= len(actionPrefix) || string(id[:len(actionPrefix)]) != actionPrefix || len(id)-len(actionPrefix) > 18:
+	case len(id) <= len(actionPrefix) || string(id[:len(actionPrefix)]) != actionPrefix || len(id)-len(actionPrefix) > 19:
 		return ActionOther
 	}
-	var n int64
+	var n uint64 // 19 digits fit
 	for _, c := range id[len(actionPrefix):] {
 		if c < '0' || c > '9' {
 			return ActionOther
 		}
-		n = n*10 + int64(c-'0')
+		n = n*10 + uint64(c-'0')
 	}
-	if n <= 0 {
+	if n == 0 || n > math.MaxInt64 {
 		return ActionOther
 	}
-	return n
+	return int64(n)
 }
 
 // ---- Native requests in flight ----
@@ -276,15 +495,29 @@ const (
 	pendPost = iota + 1
 	pendRestore
 	pendThread
+	pendReconcile
 )
 
 type pending struct {
 	kind   uint8
 	ticket Ticket // pendPost, pendRestore: the result's ticket
-	slot   int    // pendPost: the note's slot, -1 for none
-	key    uint64 // pendPost: its key
-	thread string // pendThread: the thread to remove
-	before int64  // pendThread: notes delivered after this are kept
+
+	// pendPost: the post, its slot (-1 for none) and key, what it reserved
+	id   string
+	gen  uint64 // pendThread: the generation at the call
+	slot int
+	key  uint64
+	res  PostResult
+
+	// pendThread: the thread, and when the call was made
+	thread string
+	before int64
+
+	// pendReconcile: the notes taken before the listing began (svc.accepts),
+	// whether the delivered notes are listed next, the pending ones listed
+	seq   uint64
+	next  bool
+	first []deliveredNote
 }
 
 var pends struct {
@@ -344,28 +577,53 @@ func completeStatus(tk Ticket, status int64) {
 }
 
 // added is a post's result: code 0 when the system took the note. A note
-// the system refused frees its slot.
+// taken frees the slots of the posts of its ID before it (it replaced them);
+// one refused frees its own and leaves those.
 func added(ctx int, code int64, msg []byte) {
 	p, ok := endPending(ctx)
 	if !ok {
 		return
 	}
-	if code != 0 && p.slot >= 0 {
-		svc.mu.Lock()
+	svc.mu.Lock()
+	if code == 0 {
+		svc.accepts++
+		if p.slot >= 0 {
+			if s := &slots.s[p.slot]; s.live && s.k == p.key {
+				s.accepted = svc.accepts
+			}
+		}
+		releaseID(p.id, p.gen-1)
+	} else if p.slot >= 0 {
 		releaseSlot(p.slot, p.key)
-		svc.mu.Unlock()
 	}
-	slots.requests.Complete(p.ticket, int64(ResultPost), code, msg)
+	tidy(p.id)
+	svc.mu.Unlock()
+	completePost(p.ticket, p.res, code, msg)
 }
 
-// deliveredNote is one note in Notification Center.
+// postFailed marks the result of a post that failed (ResultPost's A).
+const postFailed = 1 << 16
+
+// completePost delivers a post's result: what it reserved, and code and msg
+// when it failed (code 0: the system took the note).
+func completePost(tk Ticket, res PostResult, code int64, msg []byte) {
+	a := int64(ResultPost) | int64(res.Reservation)<<8
+	if code != 0 {
+		slots.requests.Complete(tk, a|postFailed, code, msg)
+		return
+	}
+	slots.requests.Complete(tk, a, int64(res.Response), []byte(res.Evicted))
+}
+
+// deliveredNote is one note the system has: in Notification Center, or not
+// shown yet.
 type deliveredNote struct {
 	id, thread string
 	key        uint64 // its response key, 0 for a plain note
-	date       int64  // when it was delivered (ns since 1970)
+	date       int64  // when it was delivered (ns since 1970), 0 if not yet
 }
 
-// listed takes the notes in Notification Center for the request in entry ctx.
+// listed takes the notes the system has for the request in entry ctx.
 func listed(ctx int, list []deliveredNote) {
 	p, ok := endPending(ctx)
 	if !ok {
@@ -375,22 +633,41 @@ func listed(ctx int, list []deliveredNote) {
 	case pendRestore:
 		restore(p.ticket, list)
 	case pendThread:
-		removeListed(p.thread, p.before, list)
+		spawn(func() { removeListed(p, list) }) // it waits for svc.order: never on the system's thread
+	case pendReconcile:
+		if p.next {
+			listDelivered(p.seq, list)
+		} else {
+			reconcile(p.seq, append(p.first, list...))
+		}
 	}
 }
 
+// testHookRestoring runs in restore before a note's slot is published
+// (tests: a response arriving there).
+var testHookRestoring func(key uint64)
+
 // restore gives the notes of earlier runs their slots back, newest first,
-// and reports how many did and which did not fit.
+// and reports how many did and which did not fit. It skips the notes this
+// run knows of (posted, replaced or removed since Setup: the listing may be
+// older), those of a thread removed since, and those answered since.
 func restore(tk Ticket, list []deliveredNote) {
 	slices.SortStableFunc(list, func(a, b deliveredNote) int { return cmp.Compare(b.date, a.date) })
 	var over []byte
 	n, nOver := 0, 0
 	svc.mu.Lock()
 	for _, d := range list {
-		if d.key == 0 || slotOfKey(d.key) >= 0 || wasAnswered(d.key) {
+		if d.key == 0 || svc.ids[d.id] != nil || slotOfKey(d.key) >= 0 || threadCut(d) {
 			continue
 		}
-		if rtk, err := slots.responses.Reserve(0); err == nil && takeSlot(rtk, d.key, d.id, d.thread, d.date) >= 0 {
+		yes, unknown := wasAnswered(d.key)
+		if !unknown && !yes {
+			yes = restoreOne(d)
+		}
+		switch {
+		case yes:
+			continue
+		case slotOfKey(d.key) >= 0:
 			n++
 			continue
 		}
@@ -400,36 +677,154 @@ func restore(tk Ticket, list []deliveredNote) {
 		over = append(over, d.id...)
 		nOver++
 	}
+	svc.restoring.Store(false)
+	svc.threadCuts = nil
+	endListing()
 	svc.mu.Unlock()
 	slots.requests.Complete(tk, int64(ResultRestored), int64(n)|int64(nOver)<<32, over)
 }
 
-// wasAnswered reports whether a response to the note with key was stored
-// lately.
-func wasAnswered(key uint64) bool {
-	for i := range slots.answered {
-		if slots.answered[i].Load() == key {
+// restoreOne gives note d a slot, unless none is free. A response to it may
+// have arrived before the slot was published, and found none: the slot is
+// then taken back, and it reports answered (the answered keys are written
+// before a response looks for its slot, and read here after the slot is
+// published, so one of the two sees the other).
+func restoreOne(d deliveredNote) (answered bool) {
+	tk, err := slots.responses.Reserve(0)
+	if err != nil {
+		return false
+	}
+	if testHookRestoring != nil {
+		testHookRestoring(d.key)
+	}
+	svc.gen++
+	e := entryOf(d.id)
+	e.post, e.thread = svc.gen, d.thread
+	i := takeSlot(tk, d.key, d.id, d.thread, d.date, svc.gen)
+	if i < 0 {
+		return false
+	}
+	svc.accepts++
+	slots.s[i].accepted = svc.accepts
+	yes, unknown := wasAnswered(d.key)
+	if yes || unknown {
+		releaseSlot(i, d.key)
+	}
+	return yes
+}
+
+// threadCut reports whether d is in a thread removed (RemoveThread) after it
+// was delivered.
+func threadCut(d deliveredNote) bool {
+	for _, c := range svc.threadCuts {
+		if c.thread == d.thread && d.date <= c.before {
 			return true
 		}
 	}
 	return false
 }
 
-// removeListed removes the listed notes of thread delivered before the call.
-func removeListed(thread string, before int64, list []deliveredNote) {
+// removeListed removes the listed notes of RemoveThread's thread delivered
+// before the call, except those whose ID was posted again since or whose
+// latest post is in another thread. The check and the removal are ordered
+// with the posts (svc.order), so a post after the check is not removed.
+func removeListed(p pending, list []deliveredNote) {
 	var ids []string
+	svc.order.Lock()
+	defer svc.order.Unlock()
 	svc.mu.Lock()
 	for _, d := range list {
-		if d.thread != thread || d.date > before {
+		if d.thread != p.thread || d.date > p.before {
 			continue
 		}
-		ids = append(ids, d.id)
-		if i := slotOfKey(d.key); d.key != 0 && i >= 0 {
-			releaseSlot(i, d.key)
+		if e := svc.ids[d.id]; e != nil {
+			if e.post > p.gen || (e.post > 0 && e.thread != p.thread) {
+				continue
+			}
+			e.cut = max(e.cut, p.gen)
+			releaseID(d.id, p.gen)
 		}
+		ids = append(ids, d.id)
 	}
+	endListing()
 	svc.mu.Unlock()
 	if len(ids) > 0 {
 		svc.b.remove(ids)
+	}
+}
+
+// ---- Reconciliation ----
+
+// reconcileSoon starts a reconciliation unless one is running: the system
+// lists the notes it has (those not shown yet, then those shown), and the
+// slots of the notes it took before the listing began and no longer has
+// (the user cleared them) are freed. The posts waiting for it resume when it
+// ends. It runs when the app becomes active and when a post finds every slot
+// taken; never on a timer.
+func reconcileSoon() {
+	svc.mu.Lock()
+	if svc.reconciling || !svc.on.Load() {
+		svc.mu.Unlock()
+		return
+	}
+	svc.reconciling = true
+	seq := svc.accepts
+	svc.mu.Unlock()
+	if pi, ok := takePending(); ok {
+		setPending(pi, pending{kind: pendReconcile, seq: seq, next: true})
+		if svc.b.pending(pi) == nil {
+			return
+		}
+		freePending(pi)
+	}
+	endReconcile()
+}
+
+// listDelivered lists the delivered notes after the pending ones.
+func listDelivered(seq uint64, first []deliveredNote) {
+	if pi, ok := takePending(); ok {
+		setPending(pi, pending{kind: pendReconcile, seq: seq, first: first})
+		if svc.b.delivered(pi) == nil {
+			return
+		}
+		freePending(pi)
+	}
+	endReconcile()
+}
+
+// reconcile frees the slots of the notes taken by the system up to accept
+// seq that it no longer has. A note taken later is kept: the listing may be
+// older than it.
+func reconcile(seq uint64, list []deliveredNote) {
+	has := make(map[uint64]bool, len(list))
+	for _, d := range list {
+		has[d.key] = true
+	}
+	svc.mu.Lock()
+	for i := range slots.s {
+		s := &slots.s[i]
+		if s.live && s.key.Load() != 0 && s.accepted != 0 && s.accepted <= seq && !has[s.k] {
+			releaseSlot(i, s.k)
+			slots.reconciled.Add(1)
+		}
+	}
+	svc.mu.Unlock()
+	endReconcile()
+}
+
+// endReconcile ends a reconciliation and resumes the posts waiting for it,
+// in order, on a goroutine (they wait for svc.order: never on the system's
+// thread).
+func endReconcile() {
+	svc.mu.Lock()
+	waiting := svc.waiting
+	svc.waiting, svc.reconciling = nil, false
+	svc.mu.Unlock()
+	if len(waiting) > 0 {
+		spawn(func() {
+			for _, p := range waiting {
+				p.resume()
+			}
+		})
 	}
 }

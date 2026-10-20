@@ -433,6 +433,24 @@ func (k *Tickets) Complete(tk Ticket, a, b int64, data []byte) bool {
 	return true
 }
 
+// CompleteParts is Complete with the data in two parts, head then tail,
+// copied into the record one after the other: no buffer joins them first.
+func (k *Tickets) CompleteParts(tk Ticket, a, b int64, head, tail []byte) bool {
+	if !enterGate() {
+		return false
+	}
+	defer leaveGate()
+	r, i, gen, ok := k.record(tk)
+	if !ok || !r.word.CompareAndSwap(uint64(gen)<<32|stReserved, uint64(gen)<<32|stWriting) {
+		return false
+	}
+	k.t.accepted.Add(1)
+	// The record is ours while stWriting; fill then copies r.data onto itself.
+	r.data = append(append(r.data[:0], head...), tail...)
+	k.t.fill(i, gen, AppEvent{Kind: AppEvService, Source: k.t.source, Window: r.ev.Window, ID: uint64(tk), A: a, B: b}, r.data)
+	return true
+}
+
 // Cancel withdraws ticket tk: no event is delivered for it, and its record
 // is free again (at once if not completed, after the dispatcher skips it if
 // already completed). It reports whether the ticket was outstanding.
