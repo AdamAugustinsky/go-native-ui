@@ -335,9 +335,9 @@ func TestSaveIsDebounced(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	// Drop out the store from this process and read the file fresh.
-	r, _ := load(t, dir, Options{})
+	r, err := load(t, dir, Options{})
 	if got := r.State().Frame.X; got != 50 {
-		t.Errorf("the file has x = %v, want the last of the burst (50)", got)
+		t.Errorf("the file has x = %v, want the last of the burst (50) (load: %v)", got, err)
 	}
 	if err := s.Close(); err != nil {
 		t.Fatal(err)

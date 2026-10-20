@@ -377,3 +377,45 @@ func TestReopenedUnchangedValueIsNotRewritten(t *testing.T) {
 		t.Errorf("a changed value was not written:\n%s", got)
 	}
 }
+
+// Open reads a file that another process holds for a moment (Windows refuses
+// the open while a scanner looks at a file just renamed into place) by trying
+// again, as rename does; a missing file is not retried, and where nothing
+// refuses a read for a while (retryBusy off) an error is final. Before, Open
+// returned the defaults and the error at the first refusal (winstate CI on
+// Windows: a window's state read back as the zero state).
+func TestOpenRetriesARefusedRead(t *testing.T) {
+	type cfg struct{ N int }
+	p := filepath.Join(t.TempDir(), "p.json")
+	if err := os.WriteFile(p, []byte(`{"N":7}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	oldRead, oldRetry := readFileFn, retryBusy
+	t.Cleanup(func() { readFileFn, retryBusy = oldRead, oldRetry })
+	var calls int
+	refuse := func(n int) {
+		calls = 0
+		readFileFn = func(path string) ([]byte, error) {
+			if calls++; calls <= n {
+				return nil, &os.PathError{Op: "open", Path: path, Err: syscall.Errno(32)} // ERROR_SHARING_VIOLATION
+			}
+			return os.ReadFile(path)
+		}
+	}
+	retryBusy = true
+	refuse(3)
+	s, err := Open(p, cfg{}, Options{})
+	if err != nil || s.Get().N != 7 || calls != 4 {
+		t.Errorf("refused 3 times: err %v, N %d, %d reads; want the file's 7 after 4", err, s.Get().N, calls)
+	}
+	s.Close()
+	refuse(0)
+	if s, err := Open(filepath.Join(t.TempDir(), "missing.json"), cfg{N: 1}, Options{}); err != nil || s.Get().N != 1 || calls != 1 {
+		t.Errorf("a missing file: err %v, %d reads; want the defaults after one", err, calls)
+	}
+	retryBusy = false
+	refuse(1)
+	if _, err := Open(p, cfg{}, Options{}); err == nil || calls != 1 {
+		t.Errorf("without retries: err %v, %d reads; want the error after one", err, calls)
+	}
+}
