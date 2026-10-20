@@ -1006,7 +1006,7 @@ Running. **Checkpoint 1 is the priority:** D4 (matching D0's scenes, with N3's g
   - **Keeping the display awake:** it sleeps after 10 minutes and gives no frames while asleep. Wrap every live run in `caffeinate -d`. The coordinator also holds a 12-hour `caffeinate -d` for the session.
   - **Why it works here now:** Adam turned off the lock-screen password, so the session stays unlocked after Screen Sharing disconnects. `cmd/spike -bench -gate` passes live: 600 frames paced, p50 8.33 ms, p99 8.97 ms, 0 allocations, 0 idle presents, ExecToOnGlass 136 ms. Before that change it re-locked on every disconnect, and a locked session gives no frames.
   - **The display:** an LG UltraGear 5K at 2× (looks like 2560×1440), 120 Hz, on macOS 27.2 (26B5101f).
-  - **GnuiShot** is at `~/gnui-test/` here, signed with `gnui-dev`. If it fails on permission, that's reported, and Adam grants Screen Recording.
+  - **GnuiShot** is at `~/gnui-test/` here, signed with `gnui-dev`, with Screen Recording granted on 2026-10-20 (CDHash `b000e88b…`, recorded in `tools/gnuishot/README.md`). Never rebuild or replace that bundle: it is write-protected, and a new one needs Adam to grant it again.
   - **The AppKit references are re-measured here** (`p6-refmini`), with the machine recorded in each measurement file. The MacBook's numbers (26B5091g) are kept.
   - **The MacBook is reserved** for the final exit-criteria numbers and Adam's hand tests. An ssh guard on the Mac mini (`~/.ssh/config`) refuses agent connections to it.
 - **Captures:** every capture is looked at before anything is called matching, and agents quit every app they open.
@@ -1033,7 +1033,7 @@ Running. **Checkpoint 1 is the priority:** D4 (matching D0's scenes, with N3's g
 | N5 drag and drop | `p6-n5` | fixes done; scoped re-review of its two high fixes |
 | T2 live-window harness | `p6-t2` | review fixes done, CI green; waiting for the integrator |
 | T3 debug overlay | `p6-t3` | building |
-| AppKit references on the Mac mini | `p6-refmini` | re-measuring: offscreen first, then live once GnuiShot has Screen Recording here |
+| AppKit references on the Mac mini | `p6-refmini` | re-measuring, offscreen and live |
 | System file icons | `p6-sysicon` | building: real system icons as an `img` source, for D4 and Pilot |
 | CI flakes, round 2 | `p6-flakes` | review fixes, and the new macOS timing failures; `gpu` `TestFirstFrameIsContent` on Windows is treated as a possible real white flash |
 
@@ -1044,7 +1044,6 @@ Running. **Checkpoint 1 is the priority:** D4 (matching D0's scenes, with N3's g
 **Follow-up issues:** #1–#6 (`follow-up` label).
 
 **Waiting on you:**
-- the Screen Recording grant for GnuiShot on the Mac mini (it is already listed in System Settings);
 - creating a macOS test user on the MacBook for F3's logout test (the steps are in `app/applive/logout_darwin_test.go`);
 - Rex public-test access, to measure Rex directly.
 
