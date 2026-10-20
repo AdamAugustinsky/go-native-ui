@@ -28,6 +28,12 @@ type ShotOptions struct {
 	Scene string
 	// Rows is the table's row count (DefaultRows when zero).
 	Rows int
+	// Legacy renders legacy scroll bars (overlay ones otherwise).
+	Legacy bool
+	// Inactive renders the window as not key.
+	Inactive bool
+	// Scrolled renders the content scrolled under the toolbar.
+	Scrolled bool
 }
 
 // SceneNames lists the scenes Shot renders: the whole window, each kind of
@@ -84,12 +90,12 @@ func runScene(o ShotOptions) (*app.Offscreen, error) {
 	if sc == nil {
 		return nil, fmt.Errorf("gallery: no scene %q (have %v)", o.Scene, SceneNames())
 	}
-	g, err := New(Options{Rows: o.Rows, Preference: o.Preference, Traffic: true, Still: true, Synthetic: true})
+	g, err := New(Options{Rows: o.Rows, Preference: o.Preference, Traffic: true, Still: true, Synthetic: true, Legacy: o.Legacy, Scrolled: o.Scrolled})
 	if err != nil {
 		return nil, err
 	}
 	pl := widgettest.NewPlayer(g, sc.steps(), widgettest.Options{Synthetic: true})
-	b := &scripted{Gallery: g, p: pl, sys: o.System}
+	b := &scripted{Gallery: g, p: pl, sys: o.System, inactive: o.Inactive}
 	off, err := app.NewOffscreen(Config(), o.Width, o.Height, o.Scale, b)
 	if err != nil {
 		return nil, err
@@ -118,11 +124,16 @@ func runScene(o ShotOptions) (*app.Offscreen, error) {
 // scripted is a Gallery with a script.
 type scripted struct {
 	*Gallery
-	p   *widgettest.Player
-	sys ui.Appearance // what the system says, in every frame (an offscreen run has no system)
+	p        *widgettest.Player
+	sys      ui.Appearance // what the system says, in every frame (an offscreen run has no system)
+	inactive bool          // the window is not key
 }
 
 func (s *scripted) Script(frame int, in *ui.Input) bool {
 	s.Gallery.c.SetSystemAppearance(s.sys)
-	return s.p.Script(frame, in)
+	more := s.p.Script(frame, in)
+	if s.inactive {
+		in.Focused = false
+	}
+	return more
 }

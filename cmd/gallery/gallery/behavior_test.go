@@ -22,7 +22,7 @@ func (r *rig) rowNodes() []ui.SemNode {
 // and each reports its place in the whole.
 func TestVirtualRowsReportTheirPosition(t *testing.T) {
 	r := newRig(t, Options{Still: true})
-	r.Frames(5)
+	r.goTo(scTable)
 	rows := r.rowNodes()
 	if len(rows) < 10 || len(rows) > 80 {
 		t.Fatalf("%d row nodes in a table of a million rows, want only the visible ones", len(rows))
@@ -62,7 +62,7 @@ func TestVirtualRowsReportTheirPosition(t *testing.T) {
 // the rows under it.
 func TestTableSelectionAndSortAreExported(t *testing.T) {
 	r := newRig(t, Options{Still: true})
-	r.Frames(5)
+	r.goTo(scTable)
 	r.Play(click(rowRole, "").Nth(2), click(rowRole, "").Nth(4).With(modShift), idle(2))
 	var sel []int32
 	for _, n := range r.rowNodes() {
@@ -137,14 +137,16 @@ func TestControlsExportTheirValuesAndStates(t *testing.T) {
 	if _, ok := r.Find(ui.RoleLabel, "What happened to it."); !ok {
 		t.Error("the History tab's text is not shown")
 	}
-	// disabled widgets say so
+	// disabled widgets say so: the Disabled column of the state matrix, one
+	// widget per row
+	r.goTo(scStates)
 	disabled := 0
 	for _, nd := range r.Tree().Nodes {
-		if nd.State&ui.SemDisabled != 0 {
+		if nd.State&ui.SemDisabled != 0 && string(r.Tree().Text(nd.Name)) != "Forward" { // nothing lies ahead of the first scene
 			disabled++
 		}
 	}
-	if disabled != 11 { // the Disabled column of the state matrix: one widget per row
+	if disabled != 11 {
 		t.Errorf("%d disabled nodes, want the 11 of the matrix's Disabled column", disabled)
 	}
 }
@@ -155,10 +157,12 @@ func TestDialogIsModalAndItsActionsReachTheApp(t *testing.T) {
 	r.Frames(5)
 	g := r.g
 	selectRows := func() {
+		r.goTo(scTable)
 		r.Play(click(rowRole, "").Nth(2), click(rowRole, "").Nth(4).With(modShift), idle(2))
 		if g.table.Sel.Count() != 3 {
 			t.Fatalf("%d rows selected, want 3", g.table.Sel.Count())
 		}
+		r.goTo(scPlayground)
 	}
 	open := func() {
 		r.Play(click(roleButton, "Delete…"), waitFor(ui.RoleDialog, ""), settle(), idle(2))
@@ -225,7 +229,7 @@ func TestDialogIsModalAndItsActionsReachTheApp(t *testing.T) {
 // app's command.
 func TestRowContextMenu(t *testing.T) {
 	r := newRig(t, Options{Still: true})
-	r.Frames(5)
+	r.goTo(scTable)
 	r.Play(rclick(rowRole, "").Nth(2), waitFor(ui.RoleMenuItem, "Copy Path"), idle(2))
 	if r.g.table.Sel.Count() != 1 {
 		t.Errorf("a right-click selected %d rows, want the one under the pointer", r.g.table.Sel.Count())
@@ -285,10 +289,16 @@ func TestSteadyFramesAllocateNothing(t *testing.T) {
 	r.press(ui.KeyEscape, 0)
 	r.Play(move(roleButton, "Open…"), waitFor(ui.RoleTooltip, ""), idle(2))
 	check("tooltip showing")
-	r.Play(move(roleButton, "Save"), idle(2), click(rowRole, "").Nth(3), click(rowRole, "").Nth(6).With(modShift), idle(2))
-	check("rows selected")
 	r.Play(click(roleButton, "Delete…"), waitFor(ui.RoleDialog, ""), settle(), idle(2))
 	check("dialog open")
+	r.press(ui.KeyEscape, 0)
+	r.Frames(30)
+	for _, sc := range []int{scStates, scAppearance, scDialogs, scCatalogue, scCatalogue + 2, scCatalogue + 3, scTable} {
+		r.goTo(sc)
+		check(defs[sc].title)
+	}
+	r.Play(move(roleButton, "Back"), click(rowRole, "").Nth(3), click(rowRole, "").Nth(6).With(modShift), idle(2))
+	check("rows selected")
 }
 
 // With native menus (macOS) the gallery draws no menu bar, and its frames

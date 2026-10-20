@@ -22,7 +22,8 @@ func TestBenchSessionDrivesTheGallery(t *testing.T) {
 	g := b.Gallery
 
 	var seen struct {
-		tooltip, typed, cut, undone, pasted, select_, scrolled, end, selectedMany, desc, dialog, deleted, context, dark, activity, menu, divider bool
+		tooltip, typed, cut, undone, pasted, select_, scrolled, end, selectedMany, desc, dialog, deleted, context, dark, activity, menu, search, back bool
+		scenes                                                                                                                                        [numScenes]bool
 	}
 	notes0 := ""
 	var first struct {
@@ -66,7 +67,9 @@ func TestBenchSessionDrivesTheGallery(t *testing.T) {
 		seen.context = seen.context || string(g.status) == "Chose “Copy Path”"
 		seen.dark = seen.dark || g.Mode() == theme.Dark
 		seen.activity = seen.activity || g.working
-		seen.divider = seen.divider || g.split.Ratio[0] > 0.45
+		seen.scenes[g.scene()] = true
+		seen.search = seen.search || g.query.Len() > 0
+		seen.back = seen.back || g.histAt+1 < g.histN
 	}
 	if err := b.Err(); err != nil {
 		t.Fatal(err)
@@ -79,7 +82,7 @@ func TestBenchSessionDrivesTheGallery(t *testing.T) {
 		"a choice in the Select": seen.select_, "scrolling the table": seen.scrolled, "the table's last row": seen.end,
 		"a selection of many rows": seen.selectedMany, "a descending sort": seen.desc, "the modal dialog": seen.dialog,
 		"the dialog's action": seen.deleted, "the context menu's command": seen.context, "the dark mode": seen.dark,
-		"the activity bar": seen.activity, "a dragged divider": seen.divider, "the Edit menu": seen.menu,
+		"the activity bar": seen.activity, "the sidebar search": seen.search, "going back": seen.back, "the Edit menu": seen.menu,
 	} {
 		if !ok {
 			t.Errorf("the session never showed %s", name)
@@ -99,8 +102,13 @@ func TestBenchSessionDrivesTheGallery(t *testing.T) {
 	if g.table.Order != nil {
 		t.Error("the table ends sorted descending")
 	}
-	if d := g.split.Ratio[0] - 0.42; d < -0.003 || d > 0.003 {
-		t.Errorf("the divider ends at %v, began at 0.42", g.split.Ratio[0])
+	for sc, ok := range seen.scenes {
+		if !ok {
+			t.Errorf("the session never showed the %s scene", defs[sc].title)
+		}
+	}
+	if g.scene() != scPlayground || g.query.Len() != 0 {
+		t.Errorf("the session ends in the %s scene with the search %q, began in the Playground with none", defs[g.scene()].title, g.query.Bytes())
 	}
 }
 
