@@ -113,8 +113,9 @@ func NewKit(c *ui.Context, ts TextSystem, th *theme.Theme) *Kit {
 
 // AddIcon adds an icon of the app's own to the kit's atlas and returns its ID
 // (the standard icons come first). Call it when the icon is wanted, not every
-// frame: before the first Begin it costs nothing, and after it the atlas is
-// rasterised again once (icon.Atlas.Add). Main thread.
+// frame: it costs a slice append, whenever it is called. The icon is
+// rasterised when a frame first uses it (icon.Atlas.Add), in that frame.
+// Main thread.
 func (k *Kit) AddIcon(s icon.Spec) icon.ID {
 	k.extra = append(k.extra, s)
 	if k.icons != nil {

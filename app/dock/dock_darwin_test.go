@@ -77,6 +77,22 @@ func scenarioDock() {
 		dock.SetBadge("")
 		check("tile after SetBadge(\"\")", tileBadge(), "")
 
+		// SetBadge allocates nothing when the label is the one shown, and
+		// little when it changes.
+		dock.SetBadge("5")
+		unchanged := testing.AllocsPerRun(100, func() { dock.SetBadge("5") })
+		on := false
+		changed := testing.AllocsPerRun(100, func() {
+			on = !on
+			if on {
+				dock.SetBadge("6")
+			} else {
+				dock.SetBadge("7")
+			}
+		})
+		childapp.Say("allocs_unchanged=%v allocs_changed=%v", unchanged, changed)
+		dock.SetBadge("")
+
 		// A bounce: the system makes one only for an inactive app, and then
 		// the request has an id; for an active one the id is 0.
 		active := objc.SendBool(nsApp(), objc.Sel("isActive"))
@@ -110,6 +126,10 @@ func scenarioDock() {
 
 func TestLiveDock(t *testing.T) {
 	r := childapp.Run(t, "dock", 60*time.Second)
+	if r.KV["allocs_unchanged"] != "0" {
+		t.Errorf("SetBadge with the label already shown allocates %s times, want 0", r.KV["allocs_unchanged"])
+	}
+	t.Logf("SetBadge allocations: unchanged %s, changed %s", r.KV["allocs_unchanged"], r.KV["allocs_changed"])
 	if r.KV["done"] != "1" {
 		t.Fatalf("the scenario did not finish\n%s", r.Out)
 	}
