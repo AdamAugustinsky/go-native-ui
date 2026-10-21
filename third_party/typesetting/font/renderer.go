@@ -359,11 +359,11 @@ var (
 	errNoCFF2Table error = errors.New("no CFF2 table")
 )
 
-func (f *Font) glyphDataFromCFF1(glyph gID) (GlyphOutline, error) {
+func (f *Face) glyphDataFromCFF1(glyph gID) (GlyphOutline, error) {
 	if f.cff == nil {
 		return GlyphOutline{}, errNoCFFTable
 	}
-	segments, _, err := f.cff.LoadGlyph(glyph)
+	segments, _, err := f.cff.LoadGlyphInto(glyph, &f.cffScratch)
 	if err != nil {
 		return GlyphOutline{}, err
 	}
@@ -440,9 +440,10 @@ func (f *Face) GlyphData(gid GID) GlyphData {
 // It is a bit faster than calling [Face.GlyphData] and may be used for instance
 // when rendering colored glyphs (from the 'COLR' table).
 //
-// For a glyf outline the Segments are in storage owned by the Face and valid
-// until the next call of GlyphDataOutline (or any extraction of glyph points)
-// on it: extracting allocates nothing once that storage has grown.
+// For a glyf or CFF outline the Segments are in storage owned by the Face and
+// valid until the next call of GlyphDataOutline (or any extraction of glyph
+// points or CFF extents) on it: extracting allocates nothing once that
+// storage has grown. CFF2 outlines still allocate.
 func (f *Face) GlyphDataOutline(gid GID) (GlyphOutline, bool) {
 	g := gID(gid)
 	out, err := f.glyphDataFromCFF1(g)

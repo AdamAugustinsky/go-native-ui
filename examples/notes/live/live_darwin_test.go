@@ -137,6 +137,12 @@ func TestEditMenuActsOnce(t *testing.T) {
 		}
 		if !l.Within("the field holds "+want, 240, func() bool { return field() == want }) {
 			t.Errorf("after %s the field holds %q, want %q", after, fieldText(l), want)
+			return
+		}
+		// Then nothing more lands (the menu item and the key act once).
+		l.Frames(6)
+		if got := fieldText(l); got != want {
+			t.Errorf("after %s the field holds %q, want %q", after, got, want)
 		}
 	}
 	holds("typing", "hello")

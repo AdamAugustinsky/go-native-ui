@@ -63,7 +63,9 @@ func main() {
 	timeout := flag.Duration("timeout", 60*time.Second, "with -bench: give up after this long")
 	sites := flag.Bool("allocsites", false, "with -bench: profile every allocation and print the call stacks of those inside the measured frames")
 	exitFirst := flag.Bool("exit-first", false, "print the startup timeline as JSON and exit once the first frame is on glass")
+	budgetScale := flag.Float64("budget-scale", 1, "with -gate: multiply the time budgets by this (3: the coarse, catastrophic check of a shared CI runner)")
 	flag.Parse()
+	*maxCPU *= *budgetScale
 
 	l := newListApp(max(*rows, 1))
 	var err error
@@ -121,10 +123,7 @@ func runBench(l *listApp, gate, allowUnpaced, sites bool, maxCPU float64, timeou
 	// own recurs in every window, as the script repeats its events in each.
 	l.script = l.benchScript(warmFrames, measFrames, warmFrames+maxWindows*measFrames+30)
 	o := app.BenchOptions{Warm: warmFrames, Frames: measFrames, Windows: maxWindows, Timeout: timeout}
-	var as allocSites
-	if sites {
-		o.WindowStart, o.WindowEnd = as.start, as.end
-	}
+	o.PrintAllocSites = sites
 	br, err := app.RunBench(config, l, o)
 	if err != nil {
 		return err
@@ -151,6 +150,9 @@ func gateFailures(r report, allowUnpaced bool, maxCPU float64) []string {
 	}
 	if r.Mallocs != 0 || r.TotalAlloc != 0 {
 		f = append(f, fmt.Sprintf("%d mallocs / %d bytes allocated over the measured frames", r.Mallocs, r.TotalAlloc))
+	}
+	if msg := r.OwnAllocFailure(); msg != "" {
+		f = append(f, msg)
 	}
 	if maxCPU > 0 && r.MainThreadCPUus > maxCPU {
 		f = append(f, fmt.Sprintf("main-thread CPU %.0f µs/frame, budget %.0f", r.MainThreadCPUus, maxCPU))

@@ -368,3 +368,69 @@ func TestFirstFrameIsContent(t *testing.T) {
 		t.Error("the frame never reached the window or the screen")
 	}
 }
+
+var pFillRect = win32.Proc(user32, "FillRect")
+
+// A window that has presented nothing shows nothing of its own: no surface
+// of the window's (the GDI redirection surface) reaches the screen, so the
+// first thing of the window there can only be its first frame. With one,
+// DWM showed that surface, white, for one pass before it had taken in the
+// first frame (TestFirstFrameIsContent, about 1 in 100 under load). Here the
+// test paints it blue through GDI and uncloaks without a present: the
+// screen must stay the desktop.
+func TestNoWindowSurfaceBeforeTheFirstFrame(t *testing.T) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	if pDwmGet == 0 || pDwmSet == 0 {
+		t.Skip("no DWM")
+	}
+	win, err := platform.Open(platform.Options{Title: "gnui surface test", Width: 400, Height: 300, Hidden: true})
+	if err != nil {
+		t.Skipf("no window: %v", err)
+	}
+	defer win.Close()
+	hwnd := win.Native().HWND
+	if !cloaked(hwnd) {
+		t.Skip("DWM does not cloak windows here (composition off?)")
+	}
+	off := new(uint32)
+	*off = 1
+	win32.Call(pDwmSet, hwnd, dwmaTransitionsOff, uintptr(unsafe.Pointer(off)), 4)
+	bd := newBackdrop(t, green)
+	defer bd.destroy()
+	win32.Call(pSetPos, hwnd, hwndTopmost, 0, 0, 0, 0, swpNoMove|swpNoSize|swpNoActivate)
+	pump := func(d time.Duration) {
+		for end := time.Now().Add(d); time.Now().Before(end); {
+			win.Wait(int64(time.Millisecond))
+		}
+	}
+	pump(300 * time.Millisecond)
+	w, h, _ := win.Size()
+	pt := &screenPt{w / 2, h / 2}
+	win32.Call(pClient, hwnd, uintptr(unsafe.Pointer(pt)))
+	smp := startSampler(pt.x, pt.y)
+	pump(100 * time.Millisecond)
+	if c := smp.seen.Load(); !colourNear(c, green) {
+		smp.finish()
+		t.Skipf("the screen cannot be read here (centre pixel %06x, want the backdrop %06x)", c, green)
+	}
+	const blue = 0x00FF0000
+	brush := win32.Call(pBrush, blue)
+	defer win32.Call(pDelObj, brush)
+	rect := [4]int32{0, 0, w, h}
+	dc := win32.Call(pGetDC, hwnd)
+	win32.Call(pFillRect, dc, uintptr(unsafe.Pointer(&rect)), brush)
+	win32.Call(pRelDC, hwnd, dc)
+	win.Show()
+	pump(500 * time.Millisecond)
+	samples := smp.finish()
+	seen := map[uint32]int{}
+	for _, s := range samples {
+		seen[s.colour]++
+	}
+	for c, n := range seen {
+		if !colourNear(c, green) {
+			t.Errorf("colour %06x was on the screen %d times before the window presented anything (want only the desktop, %06x)", c, n, green)
+		}
+	}
+}

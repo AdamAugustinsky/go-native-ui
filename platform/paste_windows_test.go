@@ -1082,11 +1082,32 @@ func TestRequestPasteLooksAgainAtAClipboardWithoutText(t *testing.T) {
 	}
 }
 
-// powershell runs a script in Windows PowerShell, the other process of the
+// psShell is the PowerShell the round trips run in, the other process: pwsh
+// (PowerShell 7) when it is installed, else Windows PowerShell. On the arm64
+// runner Windows PowerShell 5.1 is an x64 program under emulation and Defender
+// (on there) scans a script that names the clipboard for about 42 s before
+// it runs, longer under the test suite's load (3 minutes and more: "did not
+// reach ready1"); pwsh, an arm64 program, runs the same script in half a
+// second, and the scripts use only what both have. Measured on the runners
+// without any program of ours (2026-10-20): Windows PowerShell 0.7 s for a
+// trivial script, 42 s for Set-Clipboard -Path alone; pwsh 0.5 s with the
+// WinForms clipboard; windows-2025 (Defender off) 0.3-0.5 s for all.
+func psShell(t *testing.T) string {
+	t.Helper()
+	for _, name := range []string{"pwsh.exe", "powershell.exe"} {
+		if p, err := exec.LookPath(name); err == nil {
+			return p
+		}
+	}
+	t.Skip("no PowerShell")
+	return ""
+}
+
+// powershell runs a script in PowerShell (psShell), the other process of the
 // round trips.
 func powershell(t *testing.T, script string, env ...string) {
 	t.Helper()
-	cmd := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script)
+	cmd := exec.Command(psShell(t), "-NoProfile", "-NonInteractive", "-Command", script)
 	cmd.Env = append(os.Environ(), env...)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("powershell: %v\n%s", err, out)
@@ -1095,12 +1116,9 @@ func powershell(t *testing.T, script string, env ...string) {
 
 // What SetClipboardText puts on the clipboard another process reads, and what
 // another process puts there RequestPaste answers with: UTF-16, line ends. One
-// PowerShell run does both, because starting it is slow (a minute on the
-// arm64 runner).
+// PowerShell run does both (Windows PowerShell can take a minute: psShell).
 func TestClipboardWithPowerShell(t *testing.T) {
-	if _, err := exec.LookPath("powershell.exe"); err != nil {
-		t.Skip("no powershell.exe")
-	}
+	psShell(t)
 	w := openTestWindow(t)
 	dir := t.TempDir()
 	in, out := filepath.Join(dir, "in.txt"), filepath.Join(dir, "out.txt")

@@ -472,13 +472,14 @@ type aatApplyContext struct {
 	machineClassCache aatClassCache // readonly
 }
 
+// newAatApplyContext returns the buffer's apply context, reset, keeping the
+// storage of its glyph set: one call shapes with one context at a time, and
+// a context made afresh (and its glyph set) allocated on every shape of a
+// font with a kern, kerx, morx or trak table.
 func newAatApplyContext(plan *otShapePlan, font *Font, buffer *Buffer) *aatApplyContext {
-	var out aatApplyContext
-	out.plan = plan
-	out.font = font
-	out.face = font.face
-	out.buffer = buffer
-	return &out
+	c := &buffer.aatCtx
+	*c = aatApplyContext{plan: plan, font: font, face: font.face, buffer: buffer, bufferGlyphSet: c.bufferGlyphSet[:0]}
+	return c
 }
 
 func (c *aatApplyContext) reverseBuffer() {

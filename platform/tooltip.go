@@ -41,7 +41,7 @@ func (m *tooltipMap) set(r []TooltipRegion) bool {
 	if slices.Equal(m.regs, r) {
 		return false
 	}
-	m.regs = append(m.regs[:0], r...)
+	m.regs = copyRegions(m.regs, r)
 	return true
 }
 

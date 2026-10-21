@@ -111,7 +111,11 @@ jobs:
           cat "$gsum" "$nsum" >> "$GITHUB_STEP_SUMMARY"
           exit $fail
       - name: patched go-text (third_party/typesetting) tests
-        run: cd third_party/typesetting && go test -count=1 ./font/opentype/tables/
+        # harfbuzz imports font (golang.org/x/image), whose sums are the root
+        # module's: its test runs from here, through the replace.
+        run: |
+          (cd third_party/typesetting && go test -count=1 ./font/opentype/tables/)
+          go test -count=1 github.com/go-text/typesetting/harfbuzz
       - uses: actions/upload-artifact@v4
         with:
           name: spike-binaries
@@ -155,6 +159,7 @@ jobs:
       - name: test (arm64)
         run: |
           GNUI_FS_REPORT=$RUNNER_TEMP/fs-report.txt go test -count=1 -skip "$QUARANTINE" $(go list $PKGS | grep -v -E "$PKGS_EXCLUDE")
+          go test -count=1 github.com/go-text/typesetting/font # vendored: CFF outline extraction allocates nothing (a system CFF font)
           { echo '```'; cat $RUNNER_TEMP/fs-report.txt || true; echo '```'; } | tee -a "$GITHUB_STEP_SUMMARY"
       - name: public-API build (gnui_publicapi, DECISIONS.md D53)
         run: |
@@ -169,15 +174,24 @@ jobs:
           # The first launch of a new binary pays the Gatekeeper/XProtect scan.
           ./bin/spike -exit-first -timeout 60s >/dev/null || true
           STALL='bench stalled|bench timed out|no frame callbacks|spike: timed out after|[0-9]+ measured frames, want'
-          bash "$RUNNER_TEMP/stallgate.sh" "$STALL" ./bin/spike -bench -idle 5s -gate -allocsites -timeout 120s | tee spike-macos.json
+          bash "$RUNNER_TEMP/stallgate.sh" "$STALL" ./bin/spike -bench -idle 5s -gate -allocsites -timeout 180s | tee spike-macos.json
           { echo '```json'; cat spike-macos.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          # The runner's display link sometimes stops for 20-60 s; the spike
+          # restarts its measured frames after such a stall and says so.
+          jq -r 'select(.FrameSourceStalls > 0) | "::warning title=spike: frame source stalled::\(.FrameSourceStalls) stall(s), longest \(.LongestStallMs / 1000 | floor) s: \(.StallCause); measured frames restarted \(.MeasureRestarts) time(s)"' spike-macos.json
+          # The gate must not excuse a stall of our own making: a main thread
+          # blocked for 1.5 s in a frame, with a frame requested, fails it.
+          if ./bin/spike -bench -idle 1s -gate -test-block 1500ms -timeout 180s > spike-blocked.json 2> spike-blocked.err; then
+            echo "::error::the spike gate passed a main thread blocked for 1.5 s"; exit 1
+          fi
+          grep -q "main thread was out of its run loop" spike-blocked.err || { cat spike-blocked.err; exit 1; }
       - name: listbench + rex (offscreen PNGs, windowed bench with the allocation gate)
         run: |
           go build -trimpath -ldflags="-s -w" -o bin/listbench ./cmd/listbench
           go run ./cmd/rexlook/rex/rexshot -o rex-macos.png -o-dark rex-macos-dark.png
           ./bin/listbench -o listbench-macos.png
           ./bin/listbench -exit-first -timeout 60s >/dev/null || true
-          bash "$RUNNER_TEMP/stallgate.sh" 'bench stalled|bench timed out|no frame callbacks|spike: timed out after|[0-9]+ measured frames, want' ./bin/listbench -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 120s | tee listbench-macos.json
+          bash "$RUNNER_TEMP/stallgate.sh" 'bench stalled|bench timed out|no frame callbacks|spike: timed out after|[0-9]+ measured frames, want' ./bin/listbench -bench -gate -allow-unpaced -budget-scale 3 -timeout 120s | tee listbench-macos.json
           { echo '```json'; cat listbench-macos.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - name: pilot (offscreen PNG, windowed bench with the allocation gate)
         run: |
@@ -185,8 +199,8 @@ jobs:
           ./bin/pilot -o pilot-macos.png
           ./bin/pilot -exit-first -v -timeout 60s >/dev/null || true
           STALL='bench stalled|bench timed out|no frame callbacks|spike: timed out after|[0-9]+ measured frames, want'
-          bash "$RUNNER_TEMP/stallgate.sh" "$STALL" ./bin/pilot -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 150s | tee pilot-macos.json
-          bash "$RUNNER_TEMP/stallgate.sh" "$STALL" ./bin/pilot -bench -rows 1000000 -gate -allow-unpaced -max-cpu-us 0 -timeout 150s | tee pilot-1m-macos.json
+          bash "$RUNNER_TEMP/stallgate.sh" "$STALL" ./bin/pilot -bench -gate -allow-unpaced -budget-scale 3 -timeout 150s | tee pilot-macos.json
+          bash "$RUNNER_TEMP/stallgate.sh" "$STALL" ./bin/pilot -bench -rows 1000000 -gate -allow-unpaced -budget-scale 3 -timeout 150s | tee pilot-1m-macos.json
           { echo '```json'; cat pilot-macos.json pilot-1m-macos.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - name: gallery (offscreen PNGs in light and dark, windowed bench with the allocation gate)
         if: ${{ !cancelled() }} # a stalled pilot bench of the runner must not hide the gallery's result
@@ -209,6 +223,31 @@ jobs:
           go build -trimpath -ldflags="-s -w" -o bin/notes ./examples/notes
           bash "$RUNNER_TEMP/stallgate.sh" 'bench stalled|bench timed out|no frame callbacks|spike: timed out after|[0-9]+ measured frames, want' ./bin/notes -bench -gate -allow-unpaced -timeout 150s | tee notes-macos.json
           { echo '```json'; cat notes-macos.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: rexlook (windowed bench with the allocation gate; native shell, then drawn)
+        if: ${{ !cancelled() }}
+        # The CPU budget (1000 µs/frame) is checked at 3x on the shared
+        # runner (-budget-scale 3): -drawn takes ~970 µs/frame even on an
+        # idle M-series Mac; only a catastrophic regression fails here.
+        run: |
+          go build -trimpath -ldflags="-s -w" -o bin/rexlook ./cmd/rexlook
+          ./bin/rexlook -bench -gate -allow-unpaced -budget-scale 3 -allocsites -timeout 240s | tee rexlook-macos.json
+          ./bin/rexlook -bench -gate -allow-unpaced -budget-scale 3 -allocsites -drawn -timeout 240s | tee rexlook-drawn-macos.json
+          { echo '```json'; cat rexlook-macos.json rexlook-drawn-macos.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          # D27: an allocation of ours that misses some windows (one every
+          # 1800 frames, windows of 900) fails although a window is clean.
+          if ./bin/rexlook -bench -gate -allow-unpaced -budget-scale 3 -test-alloc-every 1800 -timeout 240s > rexlook-planted.json 2> rexlook-planted.err; then
+            echo "::error::rexlook's gate passed an allocation of ours every 1800 frames"; exit 1
+          fi
+          grep -q "of our code in the measured windows" rexlook-planted.err || { cat rexlook-planted.err; exit 1; }
+      - name: vlistbench (windowed bench with the allocation gate; the offscreen session runs in go test)
+        if: ${{ !cancelled() }}
+        # The list and edit time budgets (P99 and maximum) are checked at 3x
+        # on the shared runner (-budget-scale 3): the edit budget is missed
+        # now and then even on an idle Mac.
+        run: |
+          go build -trimpath -ldflags="-s -w" -o bin/vlistbench ./cmd/vlistbench
+          ./bin/vlistbench -bench -gate -allow-unpaced -budget-scale 3 -allocsites -timeout 240s | tee vlistbench-macos.json
+          { echo '```json'; cat vlistbench-macos.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - name: imgbench (windowed image-grid bench with the allocation gate)
         if: ${{ !cancelled() }}
         run: |
@@ -275,6 +314,9 @@ jobs:
             gallery-macos.png
             gallery-macos-dark.png
             notes-macos.json
+            rexlook-macos.json
+            rexlook-drawn-macos.json
+            vlistbench-macos.json
           if-no-files-found: ignore
 
   windows:
@@ -324,20 +366,20 @@ jobs:
       - name: spike bench + gates
         run: |
           # The one-object / 16-byte allocation of the animated frames is quarantined too.
-          bash "$RUNNER_TEMP/stallgate.sh" 'bench stalled|bench timed out|no frame callbacks|spike: timed out after|[0-9]+ measured frames, want|animated frames allocated 1 objects / 16 bytes' ./bin/spike.exe -bench -idle 5s -gate -allocsites -timeout 120s | tee spike-windows-${{ matrix.arch }}.json
+          bash "$RUNNER_TEMP/stallgate.sh" 'bench stalled|bench timed out|no frame callbacks|spike: timed out after|[0-9]+ measured frames, want|animated frames allocated 1 objects / 16 bytes' ./bin/spike.exe -bench -idle 5s -gate -allocsites -timeout 180s | tee spike-windows-${{ matrix.arch }}.json
           { echo '```json'; cat spike-windows-${{ matrix.arch }}.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - name: listbench + rex (offscreen PNGs, windowed bench with the allocation gate)
         run: |
           go build -trimpath -ldflags="-s -w" -o bin/listbench.exe ./cmd/listbench
           go run ./cmd/rexlook/rex/rexshot -o rex-windows-${{ matrix.arch }}.png -o-dark rex-windows-${{ matrix.arch }}-dark.png
           ./bin/listbench.exe -o listbench-windows-${{ matrix.arch }}.png
-          ./bin/listbench.exe -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 120s | tee listbench-windows-${{ matrix.arch }}.json
+          ./bin/listbench.exe -bench -gate -allow-unpaced -budget-scale 3 -timeout 120s | tee listbench-windows-${{ matrix.arch }}.json
           { echo '```json'; cat listbench-windows-${{ matrix.arch }}.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - name: pilot (offscreen PNG, windowed bench with the allocation gate)
         run: |
           go build -trimpath -ldflags="-s -w" -o bin/pilot.exe ./cmd/pilot
           ./bin/pilot.exe -o pilot-windows-${{ matrix.arch }}.png
-          ./bin/pilot.exe -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 420s | tee pilot-windows-${{ matrix.arch }}.json
+          ./bin/pilot.exe -bench -gate -allow-unpaced -budget-scale 3 -timeout 420s | tee pilot-windows-${{ matrix.arch }}.json
           { echo '```json'; cat pilot-windows-${{ matrix.arch }}.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - name: gallery (offscreen PNGs in light and dark, windowed bench with the allocation gate)
         run: |
@@ -418,6 +460,7 @@ jobs:
       - name: test
         run: |
           GNUI_FS_REPORT=$RUNNER_TEMP/fs-report.txt go test -count=1 -skip "$QUARANTINE" $(go list $PKGS | grep -v -E "$PKGS_EXCLUDE")
+          go test -count=1 github.com/go-text/typesetting/font # vendored: CFF outline extraction allocates nothing (a system CFF font)
           { echo '```'; cat $RUNNER_TEMP/fs-report.txt || true; echo '```'; } | tee -a "$GITHUB_STEP_SUMMARY"
       - name: platform tests (X11 on Xvfb - clipboard, cursors, content-first startup)
         if: matrix.backend == 'x11'
@@ -441,13 +484,13 @@ jobs:
         if: matrix.backend == 'x11'
         run: |
           xvfb-run -a -s "-screen 0 1280x800x24" \
-            bash "$RUNNER_TEMP/stallgate.sh" 'bench stalled|bench timed out|no frame callbacks|spike: timed out after|[0-9]+ measured frames, want' ./bin/spike -bench -idle 5s -gate -allocsites -timeout 120s | tee spike-linux-${{ matrix.arch }}-x11.json
+            bash "$RUNNER_TEMP/stallgate.sh" 'bench stalled|bench timed out|no frame callbacks|spike: timed out after|[0-9]+ measured frames, want' ./bin/spike -bench -idle 5s -gate -allocsites -timeout 180s | tee spike-linux-${{ matrix.arch }}-x11.json
           go build -trimpath -ldflags="-s -w" -o bin/listbench ./cmd/listbench
           xvfb-run -a -s "-screen 0 1280x800x24" \
-            ./bin/listbench -bench -gate -allocsites -allow-unpaced -max-cpu-us 0 -timeout 120s | tee listbench-linux-${{ matrix.arch }}-x11.json
+            ./bin/listbench -bench -gate -allocsites -allow-unpaced -budget-scale 3 -timeout 120s | tee listbench-linux-${{ matrix.arch }}-x11.json
           go build -trimpath -ldflags="-s -w" -o bin/pilot ./cmd/pilot
           xvfb-run -a -s "-screen 0 1280x800x24" \
-            ./bin/pilot -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 420s | tee pilot-linux-${{ matrix.arch }}-x11.json
+            ./bin/pilot -bench -gate -allow-unpaced -budget-scale 3 -timeout 420s | tee pilot-linux-${{ matrix.arch }}-x11.json
           go build -trimpath -ldflags="-s -w" -o bin/gallery ./cmd/gallery
           xvfb-run -a -s "-screen 0 1280x800x24" \
             ./bin/gallery -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 420s | tee gallery-linux-${{ matrix.arch }}-x11.json
@@ -463,11 +506,11 @@ jobs:
             > weston.log 2>&1 &
           for _ in $(seq 100); do [ -S "$XDG_RUNTIME_DIR/wayland-ci" ] && break; sleep 0.1; done
           [ -S "$XDG_RUNTIME_DIR/wayland-ci" ] || { cat weston.log; exit 1; }
-          WAYLAND_DISPLAY=wayland-ci bash "$RUNNER_TEMP/stallgate.sh" 'bench stalled|bench timed out|no frame callbacks|spike: timed out after|[0-9]+ measured frames, want' ./bin/spike -bench -idle 5s -gate -allocsites -timeout 120s | tee spike-linux-${{ matrix.arch }}-wayland.json
+          WAYLAND_DISPLAY=wayland-ci bash "$RUNNER_TEMP/stallgate.sh" 'bench stalled|bench timed out|no frame callbacks|spike: timed out after|[0-9]+ measured frames, want' ./bin/spike -bench -idle 5s -gate -allocsites -timeout 180s | tee spike-linux-${{ matrix.arch }}-wayland.json
           go build -trimpath -ldflags="-s -w" -o bin/listbench ./cmd/listbench
-          WAYLAND_DISPLAY=wayland-ci ./bin/listbench -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 120s | tee listbench-linux-${{ matrix.arch }}-wayland.json
+          WAYLAND_DISPLAY=wayland-ci ./bin/listbench -bench -gate -allow-unpaced -budget-scale 3 -timeout 120s | tee listbench-linux-${{ matrix.arch }}-wayland.json
           go build -trimpath -ldflags="-s -w" -o bin/pilot ./cmd/pilot
-          WAYLAND_DISPLAY=wayland-ci ./bin/pilot -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 420s | tee pilot-linux-${{ matrix.arch }}-wayland.json
+          WAYLAND_DISPLAY=wayland-ci ./bin/pilot -bench -gate -allow-unpaced -budget-scale 3 -timeout 420s | tee pilot-linux-${{ matrix.arch }}-wayland.json
           go build -trimpath -ldflags="-s -w" -o bin/gallery ./cmd/gallery
           WAYLAND_DISPLAY=wayland-ci ./bin/gallery -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 420s | tee gallery-linux-${{ matrix.arch }}-wayland.json
           go build -trimpath -ldflags="-s -w" -o bin/notes ./examples/notes

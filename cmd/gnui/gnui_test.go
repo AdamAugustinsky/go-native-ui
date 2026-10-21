@@ -5,6 +5,7 @@ import (
 	"debug/macho"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"image"
 	"image/color"
 	"image/png"
@@ -473,4 +474,35 @@ func plistToJSON(t *testing.T, plist []byte) map[string]any {
 		t.Fatal(err)
 	}
 	return m
+}
+
+// hdiutil tries again while the disk image service is busy (EAGAIN), and
+// only then.
+func TestHdiutilRetriesOnlyABusyService(t *testing.T) {
+	defer func(f func(string, ...string) (string, error)) { hdiutilRun = f }(hdiutilRun)
+	busy := errors.New("hdiutil verify x.dmg: hdiutil: verify failed - Resource temporarily unavailable")
+	var calls int
+	hdiutilRun = func(string, ...string) (string, error) {
+		if calls++; calls < 3 {
+			return "", busy
+		}
+		return "ok", nil
+	}
+	if out, err := hdiutil("verify", "x.dmg"); err != nil || out != "ok" || calls != 3 {
+		t.Errorf("busy twice: %q %v after %d calls, want ok after 3", out, err, calls)
+	}
+	// EBUSY: XProtect holding a new image (CI, on a create).
+	calls = 0
+	busy = errors.New("hdiutil create -ov x.dmg: hdiutil: create failed - Resource busy")
+	if out, err := hdiutil("create", "-ov", "x.dmg"); err != nil || out != "ok" || calls != 3 {
+		t.Errorf("EBUSY twice: %q %v after %d calls, want ok after 3", out, err, calls)
+	}
+	calls = 0
+	hdiutilRun = func(string, ...string) (string, error) {
+		calls++
+		return "", errors.New("hdiutil: verify failed - image not recognized")
+	}
+	if _, err := hdiutil("verify", "x.dmg"); err == nil || calls != 1 {
+		t.Errorf("another failure: %v after %d calls, want it after 1", err, calls)
+	}
 }

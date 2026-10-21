@@ -150,13 +150,21 @@ type chat struct {
 	// BeginVList (with a rebuild's slice), the Item calls and EndVList; the
 	// items' contents, layout and drawing are the frame's (BenchReport).
 	listUs []float64
+	editUs []float64 // per counted frame, the edits and BeginVList in µs (main-thread CPU)
+	// The most of a frame's list work and of its edits in the current
+	// window (windowStart, windowEnd), the maxima of each window, and the
+	// worst edit frame's parts.
+	winList, winEdit     float64
+	listMaxes, editMaxes []float64
+	worst                worstEdit
 
 	script func(frame int, in *ui.Input) bool
 	pre    func(c *chat) // the script's edits, run in Build before the list
 }
 
 func newChat(n int) *chat {
-	ch := &chat{n: n, jumpTo: -1, listUs: make([]float64, 0, maxListSamples)}
+	ch := &chat{n: n, jumpTo: -1, listUs: make([]float64, 0, maxListSamples), editUs: make([]float64, 0, maxListSamples),
+		listMaxes: make([]float64, 0, maxWindows), editMaxes: make([]float64, 0, maxWindows)}
 	ch.o = base.VListOpts{Estimate: estPt, StickToBottom: true}
 	ch.st.Reserve(n + n/2)
 	ids := make([]uint64, n)
@@ -255,7 +263,7 @@ func (ch *chat) Build(c *ui.Context) {
 	c.Open(ui.DrawBackground, "root")
 	ch.header(c)
 
-	t0 := sysinfo.ThreadCPUNs()
+	t0, w0 := sysinfo.ThreadCPUNs(), time.Now()
 	if p := ch.pre; p != nil {
 		ch.pre = nil
 		p(ch)
@@ -287,11 +295,20 @@ func (ch *chat) Build(c *ui.Context) {
 	c.NextAxis(ui.AxisX)
 	c.Open(0, "body")
 	c.NextSize(ui.Pct(1), ui.Pct(1))
+	t1, pend := sysinfo.ThreadCPUNs(), ch.st.Pending()
 	v := base.BeginVList(c, "transcript", &ch.st, ch.o)
 	el := time.Duration(sysinfo.ThreadCPUNs() - t0)
+	if ch.counting && el > ch.editMax {
+		ch.worst = worstEdit{Frame: int(ch.frame), EditsUs: float64(t1-t0) / 1e3, BeginVListUs: float64(el.Nanoseconds()-(t1-t0)) / 1e3,
+			WallUs: float64(time.Since(w0).Nanoseconds()) / 1e3, Rebuilding: pend}
+	}
 	if ch.counting {
+		ch.winEdit = max(ch.winEdit, float64(el.Nanoseconds())/1e3)
 		ch.editMax = max(ch.editMax, el)
 		ch.editSum += el
+		if len(ch.editUs) < cap(ch.editUs) {
+			ch.editUs = append(ch.editUs, float64(el.Nanoseconds())/1e3)
+		}
 	}
 	ch.listBox = v.Outer
 	ch.nb = 0
@@ -318,8 +335,12 @@ func (ch *chat) Build(c *ui.Context) {
 	c.EndSelection()
 	base.EndVList(&v)
 	itemNs += time.Since(t)
-	if ch.counting && len(ch.listUs) < cap(ch.listUs) {
-		ch.listUs = append(ch.listUs, float64((el+itemNs).Nanoseconds())/1e3)
+	if ch.counting {
+		lw := float64((el + itemNs).Nanoseconds()) / 1e3
+		ch.winList = max(ch.winList, lw)
+		if len(ch.listUs) < cap(ch.listUs) {
+			ch.listUs = append(ch.listUs, lw)
+		}
 	}
 	ch.v = v
 	ch.scrollbar(c, v)
@@ -451,5 +472,28 @@ func (ch *chat) warmRebuild() {
 		for f := uint32(1); ch.st.Pending(); f++ {
 			ch.st.Sync(1<<31 + f)
 		}
+	}
+}
+
+// worstEdit is the frame that spent the most in edits and BeginVList: its
+// parts in main-thread CPU (the script's edits, history loads and jumps;
+// BeginVList with a rebuild's slice), the wall time of both, and whether a
+// rebuild was running.
+type worstEdit struct {
+	Frame                 int
+	EditsUs, BeginVListUs float64
+	WallUs                float64
+	Rebuilding            bool
+}
+
+// windowStart and windowEnd bracket a measured window (BenchOptions): they
+// keep each window's most list work and edits in a frame. They allocate
+// nothing (the storage is made up front).
+func (ch *chat) windowStart() { ch.winList, ch.winEdit = 0, 0 }
+
+func (ch *chat) windowEnd() {
+	if len(ch.listMaxes) < cap(ch.listMaxes) {
+		ch.listMaxes = append(ch.listMaxes, ch.winList)
+		ch.editMaxes = append(ch.editMaxes, ch.winEdit)
 	}
 }

@@ -22,6 +22,17 @@ type DragRegion struct {
 	Block bool
 }
 
+// copyRegions copies src into dst's storage. Storage that is too small is
+// replaced by one twice the size: a copy made by append is exactly as large
+// as src, and a list one entry longer the next frame would allocate again
+// (vlistbench's allocation gate caught it in a measured window).
+func copyRegions[T any](dst, src []T) []T {
+	if cap(dst) < len(src) {
+		dst = make([]T, 0, 2*len(src))
+	}
+	return append(dst[:0], src...)
+}
+
 func inRect(r [4]float32, x, y float32) bool {
 	return x >= r[0] && x < r[2] && y >= r[1] && y < r[3]
 }
@@ -44,7 +55,7 @@ func (m *cursorMap) setHoles(h [][4]float32) bool {
 	if slices.Equal(m.holes, h) {
 		return false
 	}
-	m.holes = append(m.holes[:0], h...)
+	m.holes = copyRegions(m.holes, h)
 	return true
 }
 
@@ -52,7 +63,7 @@ func (m *cursorMap) setRegions(r []CursorRegion) bool {
 	if slices.Equal(m.regs, r) {
 		return false
 	}
-	m.regs = append(m.regs[:0], r...)
+	m.regs = copyRegions(m.regs, r)
 	return true
 }
 
@@ -88,7 +99,7 @@ func (m *dragMap) set(r []DragRegion) bool {
 	if slices.Equal(m.regs, r) {
 		return false
 	}
-	m.regs = append(m.regs[:0], r...)
+	m.regs = copyRegions(m.regs, r)
 	return true
 }
 

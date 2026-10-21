@@ -3,6 +3,7 @@ package log
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"log/slog"
@@ -12,6 +13,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -266,28 +268,39 @@ func TestCrashHelper(t *testing.T) {
 		io.Copy(io.Discard, os.Stdin)
 		panic("boom after being held")
 	case "fatal":
-		m := map[int]int{}
-		var wg sync.WaitGroup
-		for i := 0; i < 8; i++ {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				for j := 0; j < 1e6; j++ {
-					m[j] = j
-				}
-			}()
-		}
-		wg.Wait()
+		// A runtime fatal error, which no recover or deferred call sees.
+		// Unlocking an unlocked mutex is one every time; concurrent map
+		// writes, which this used, are only detected by chance and can
+		// corrupt the map instead (a child that never ended, CI).
+		var mu sync.Mutex
+		mu.Unlock()
 	default:
 		panic("boom from the helper")
 	}
 }
 
+// crashChildTimeout bounds a helper's run: it dies within milliseconds.
+const crashChildTimeout = time.Minute
+
 func crashChild(t *testing.T, dir, kind string) {
 	t.Helper()
-	cmd := exec.Command(os.Args[0], "-test.run=^TestCrashHelper$")
+	ctx, cancel := context.WithTimeout(context.Background(), crashChildTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestCrashHelper$")
 	cmd.Env = append(os.Environ(), crashEnv+"="+dir, "GNUI_LOG_CRASH_KIND="+kind)
+	// At the deadline, SIGQUIT makes the Go runtime print every goroutine of
+	// the helper (Windows has no SIGQUIT: it is killed); then it is killed.
+	cmd.Cancel = func() error {
+		if err := cmd.Process.Signal(syscall.SIGQUIT); err != nil {
+			return cmd.Process.Kill()
+		}
+		return nil
+	}
+	cmd.WaitDelay = 5 * time.Second
 	out, err := cmd.CombinedOutput()
+	if ctx.Err() != nil {
+		t.Fatalf("the %s helper did not end in %v; its output and stacks:\n%s", kind, crashChildTimeout, out)
+	}
 	if err == nil {
 		t.Fatalf("the helper exited cleanly:\n%s", out)
 	}
@@ -300,7 +313,7 @@ func TestCrashIsCapturedAndReportedNextRun(t *testing.T) {
 	for _, tc := range []struct{ kind, want string }{
 		{"panic", "boom from the helper"},
 		{"goroutine", "boom from a goroutine"},
-		{"fatal", "maps.fatal"},
+		{"fatal", "sync.fatal"},
 	} {
 		t.Run(tc.kind, func(t *testing.T) {
 			dir := t.TempDir()

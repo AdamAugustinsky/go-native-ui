@@ -14,15 +14,29 @@ import (
 // LoadGlyph parses the glyph charstring to compute segments and path bounds.
 // It returns an error if the glyph is invalid or if decoding the charstring fails.
 func (f *CFF) LoadGlyph(glyph tables.GlyphID) ([]ot.Segment, ps.PathBounds, error) {
+	var s LoadScratch
+	return f.LoadGlyphInto(glyph, &s)
+}
+
+// LoadScratch is the working storage of LoadGlyphInto: the interpreter, the
+// handler and the segments. A caller that keeps one and passes it to every
+// extraction allocates nothing once the segments have grown to its largest
+// glyph. The zero value is ready to use.
+type LoadScratch struct {
+	psi    ps.Machine
+	loader type2CharstringHandler
+}
+
+// LoadGlyphInto is LoadGlyph with its working storage in s. The segments
+// returned are s's: valid until s is used again.
+func (f *CFF) LoadGlyphInto(glyph tables.GlyphID, s *LoadScratch) ([]ot.Segment, ps.PathBounds, error) {
 	if int(glyph) >= len(f.Charstrings) {
 		return nil, ps.PathBounds{}, errGlyph
 	}
 
 	var (
-		psi    ps.Machine
-		loader type2CharstringHandler
-		index  byte = 0
-		err    error
+		index byte = 0
+		err   error
 	)
 	if f.fdSelect != nil {
 		index, err = f.fdSelect.fontDictIndex(glyph)
@@ -31,9 +45,10 @@ func (f *CFF) LoadGlyph(glyph tables.GlyphID) ([]ot.Segment, ps.PathBounds, erro
 		}
 	}
 
+	s.loader = type2CharstringHandler{cs: ps.CharstringReader{Segments: s.loader.cs.Segments[:0]}}
 	subrs := f.localSubrs[index]
-	err = psi.Run(f.Charstrings[glyph], subrs, f.globalSubrs, &loader)
-	return loader.cs.Segments, loader.cs.Bounds, err
+	err = s.psi.Run(f.Charstrings[glyph], subrs, f.globalSubrs, &s.loader)
+	return s.loader.cs.Segments, s.loader.cs.Bounds, err
 }
 
 // type2CharstringHandler implements operators needed to fetch Type2 charstring metrics

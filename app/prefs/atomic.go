@@ -32,12 +32,24 @@ func WriteAtomic(path string, data []byte, perm os.FileMode) error {
 	return writeAtomic(path, data, perm, false)
 }
 
-// The flushes and the move are variables so that tests can fail them.
+// The flushes, the move and the read are variables so that tests can fail
+// them.
 var (
 	syncFileFn = syncFile
 	syncDirFn  = syncDir
 	moveFileFn = moveFile
+	readFileFn = os.ReadFile
 )
+
+// retryBusy says whether a refused move or read is tried again: on Windows,
+// where another process holding the file refuses it for a while (a variable
+// so that tests can have it elsewhere).
+var retryBusy = runtime.GOOS == "windows"
+
+// busyTries and busyWait pace those retries: about 0.8 s in all.
+const busyTries = 20
+
+func busyWait(i int) time.Duration { return time.Duration(min(i+1, 10)) * 5 * time.Millisecond }
 
 // fsyncUnsupported reports whether err says the file system cannot do this
 // flush at all (as opposed to failing to do it): the one case where falling
@@ -122,14 +134,30 @@ func writeAtomic(path string, data []byte, perm os.FileMode, full bool) (err err
 // open, usually for a few milliseconds, so it retries briefly.
 func rename(tmp, path string) error {
 	var err error
-	for i := 0; i < 20; i++ {
-		if err = moveFileFn(tmp, path); err == nil || runtime.GOOS != "windows" {
+	for i := 0; i < busyTries; i++ {
+		if err = moveFileFn(tmp, path); err == nil || !retryBusy {
 			break
 		}
-		time.Sleep(time.Duration(min(i+1, 10)) * 5 * time.Millisecond)
+		time.Sleep(busyWait(i))
 	}
 	if err != nil {
 		return fmt.Errorf("prefs: replacing %s: %w", filepath.Base(path), err)
 	}
 	return nil
+}
+
+// readFile reads path. On Windows a process that holds the file (a virus
+// scanner looking at the one just renamed into place) can refuse the open for
+// a few milliseconds, as it refuses rename: readFile tries again as rename
+// does. A missing file is not retried.
+func readFile(path string) ([]byte, error) {
+	var data []byte
+	var err error
+	for i := 0; i < busyTries; i++ {
+		if data, err = readFileFn(path); err == nil || !retryBusy || errors.Is(err, os.ErrNotExist) {
+			break
+		}
+		time.Sleep(busyWait(i))
+	}
+	return data, err
 }

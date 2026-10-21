@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -133,6 +134,7 @@ func TestFailedDecodeDoesNotTouchDefaults(t *testing.T) {
 	if !errors.Is(err, ErrCorrupt) {
 		t.Fatalf("err %v, want ErrCorrupt", err)
 	}
+	defer s.Close() // its Update below schedules a save: not after this test
 	if len(defaults.M) != 1 || defaults.M["a"] != 1 || defaults.S[0] != "x" || defaults.P.A != 1 || defaults.Deep["k"][0] != 1 || len(defaults.Deep["k"]) != 1 {
 		t.Errorf("the caller's defaults were modified: %+v", defaults)
 	}
@@ -313,9 +315,20 @@ func TestSyncDirReportsErrors(t *testing.T) {
 // 12. A directory WriteAtomic creates is made durable in its parent.
 func TestNewParentDirectoriesAreSynced(t *testing.T) {
 	root := t.TempDir()
+	// Only this test's directories: a store an earlier test left open may
+	// still save in the background, and its directory is synced through
+	// the same hook (CI saw TestFailedDecodeDoesNotTouchDefaults's here).
+	var mu sync.Mutex
 	var synced []string
 	old := syncDirFn
-	syncDirFn = func(d string) error { synced = append(synced, d); return nil }
+	syncDirFn = func(d string) error {
+		if d == root || strings.HasPrefix(d, root+string(filepath.Separator)) {
+			mu.Lock()
+			synced = append(synced, d)
+			mu.Unlock()
+		}
+		return nil
+	}
 	defer func() { syncDirFn = old }()
 	if err := WriteAtomic(filepath.Join(root, "a", "b", "c", "f.json"), []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
@@ -330,8 +343,12 @@ func TestNewParentDirectoriesAreSynced(t *testing.T) {
 		}
 	}
 	// An existing directory costs one flush, not a walk up the tree.
+	mu.Lock()
 	synced = nil
+	mu.Unlock()
 	WriteAtomic(filepath.Join(root, "a", "b", "c", "f.json"), []byte("y"), 0o600)
+	mu.Lock()
+	defer mu.Unlock()
 	if len(synced) != 1 {
 		t.Errorf("rewriting in an existing directory synced %v", synced)
 	}
@@ -358,5 +375,47 @@ func TestReopenedUnchangedValueIsNotRewritten(t *testing.T) {
 	s.Flush()
 	if got := read(t, p); !strings.Contains(got, `"Zoom": 2`) {
 		t.Errorf("a changed value was not written:\n%s", got)
+	}
+}
+
+// Open reads a file that another process holds for a moment (Windows refuses
+// the open while a scanner looks at a file just renamed into place) by trying
+// again, as rename does; a missing file is not retried, and where nothing
+// refuses a read for a while (retryBusy off) an error is final. Before, Open
+// returned the defaults and the error at the first refusal (winstate CI on
+// Windows: a window's state read back as the zero state).
+func TestOpenRetriesARefusedRead(t *testing.T) {
+	type cfg struct{ N int }
+	p := filepath.Join(t.TempDir(), "p.json")
+	if err := os.WriteFile(p, []byte(`{"N":7}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	oldRead, oldRetry := readFileFn, retryBusy
+	t.Cleanup(func() { readFileFn, retryBusy = oldRead, oldRetry })
+	var calls int
+	refuse := func(n int) {
+		calls = 0
+		readFileFn = func(path string) ([]byte, error) {
+			if calls++; calls <= n {
+				return nil, &os.PathError{Op: "open", Path: path, Err: syscall.Errno(32)} // ERROR_SHARING_VIOLATION
+			}
+			return os.ReadFile(path)
+		}
+	}
+	retryBusy = true
+	refuse(3)
+	s, err := Open(p, cfg{}, Options{})
+	if err != nil || s.Get().N != 7 || calls != 4 {
+		t.Errorf("refused 3 times: err %v, N %d, %d reads; want the file's 7 after 4", err, s.Get().N, calls)
+	}
+	s.Close()
+	refuse(0)
+	if s, err := Open(filepath.Join(t.TempDir(), "missing.json"), cfg{N: 1}, Options{}); err != nil || s.Get().N != 1 || calls != 1 {
+		t.Errorf("a missing file: err %v, %d reads; want the defaults after one", err, calls)
+	}
+	retryBusy = false
+	refuse(1)
+	if _, err := Open(p, cfg{}, Options{}); err == nil || calls != 1 {
+		t.Errorf("without retries: err %v, %d reads; want the error after one", err, calls)
 	}
 }

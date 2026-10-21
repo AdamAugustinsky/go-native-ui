@@ -430,8 +430,12 @@ func TestCloseIsBounded(t *testing.T) {
 	if rs := p.Poll(nil); len(rs) != 0 {
 		t.Errorf("results after Close: %+v", rs)
 	}
-	if !p.Close(time.Millisecond) {
-		t.Error("a second Close failed")
+	// The workers have all returned: a second Close says so whatever its
+	// wait, even none (it once raced a 1 ms timer and lost on a busy runner).
+	for range 100 {
+		if !p.Close(0) {
+			t.Fatal("a second Close failed")
+		}
 	}
 	if got := g.ranList(); len(got) != 1 {
 		t.Errorf("a queued job ran after Close: %v", got)

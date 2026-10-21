@@ -380,12 +380,12 @@ func TestPasteKindsZeroAllocs(t *testing.T) {
 
 // What SetClipboardImage puts on the clipboard another process reads as an
 // image, and an image another process puts there is pasted as PNG; files too.
-// One PowerShell run, kept waiting between the steps, because starting it is
-// slow.
+// One PowerShell run (psShell), kept waiting between the steps, because a
+// run can be slow. The script uses the WinForms clipboard, which Windows
+// PowerShell's Get-Clipboard -Format Image and Set-Clipboard -Path are made
+// of and which pwsh has too.
 func TestImageAndFilesWithPowerShell(t *testing.T) {
-	if _, err := exec.LookPath("powershell.exe"); err != nil {
-		t.Skip("no powershell.exe")
-	}
+	shell := psShell(t)
 	w := openTestWindow(t)
 	dir := t.TempDir()
 	out, go2, ready1, ready2 := filepath.Join(dir, "out.txt"), filepath.Join(dir, "go2"), filepath.Join(dir, "ready1"), filepath.Join(dir, "ready2")
@@ -401,13 +401,14 @@ func TestImageAndFilesWithPowerShell(t *testing.T) {
 	}
 	settleCopy(w)
 	script := `Add-Type -AssemblyName System.Windows.Forms,System.Drawing;` +
-		`$i = Get-Clipboard -Format Image; [IO.File]::WriteAllText($env:GNUI_OUT, "$($i.Width)x$($i.Height)");` +
+		`$i = [System.Windows.Forms.Clipboard]::GetImage(); [IO.File]::WriteAllText($env:GNUI_OUT, "$($i.Width)x$($i.Height)");` +
 		`$b = New-Object System.Drawing.Bitmap 32,20; $g = [System.Drawing.Graphics]::FromImage($b); $g.Clear([System.Drawing.Color]::Red);` +
 		`[System.Windows.Forms.Clipboard]::SetImage($b); [IO.File]::WriteAllText($env:GNUI_READY1, "x");` +
 		`for ($n = 0; $n -lt 1200 -and -not (Test-Path $env:GNUI_GO2); $n++) { Start-Sleep -Milliseconds 50 };` +
-		`Set-Clipboard -Path $env:GNUI_F1, $env:GNUI_F2; [IO.File]::WriteAllText($env:GNUI_READY2, "x");` +
+		`$f = New-Object System.Collections.Specialized.StringCollection; [void]$f.Add($env:GNUI_F1); [void]$f.Add($env:GNUI_F2);` +
+		`[System.Windows.Forms.Clipboard]::SetFileDropList($f); [IO.File]::WriteAllText($env:GNUI_READY2, "x");` +
 		`Start-Sleep -Seconds 1`
-	cmd := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-STA", "-Command", script)
+	cmd := exec.Command(shell, "-NoProfile", "-NonInteractive", "-STA", "-Command", script)
 	cmd.Env = append(os.Environ(), "GNUI_OUT="+out, "GNUI_GO2="+go2, "GNUI_READY1="+ready1, "GNUI_READY2="+ready2, "GNUI_F1="+f1, "GNUI_F2="+f2)
 	var log bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &log, &log
@@ -435,7 +436,7 @@ func TestImageAndFilesWithPowerShell(t *testing.T) {
 
 	waitFile(ready1)
 	if got, err := os.ReadFile(out); err != nil || string(got) != "30x20" {
-		t.Errorf("Get-Clipboard -Format Image read %q (%v), want 30x20\n%s", got, err, log.String())
+		t.Errorf("Clipboard.GetImage in %s read %q (%v), want 30x20\n%s", filepath.Base(shell), got, err, log.String())
 	}
 	e, got := pasteKindsOf(t, w, 1, WantImage, 10*time.Second)
 	if e.Flags != 0 || e.Paste != PasteImage {
@@ -450,7 +451,7 @@ func TestImageAndFilesWithPowerShell(t *testing.T) {
 	waitFile(ready2)
 	e, got = pasteKindsOf(t, w, 2, WantFiles, 10*time.Second)
 	if want := []string{f1, f2}; e.Flags != 0 || e.Paste != PasteFiles || !slices.Equal(PasteFilePaths(got), want) {
-		t.Errorf("files from Set-Clipboard -Path: flags %v: %q, want %q", e.Flags, PasteFilePaths(got), want)
+		t.Errorf("files from Clipboard.SetFileDropList in %s: flags %v: %q, want %q", filepath.Base(shell), e.Flags, PasteFilePaths(got), want)
 	}
 }
 

@@ -105,7 +105,7 @@ func Open[T any](path string, defaults T, opt Options) (*Store[T], error) {
 	s := &Store[T]{path: path, opt: opt, v: clone(defaults), flat: !hasRefs(reflect.TypeFor[T]())}
 	s.timer = time.AfterFunc(time.Hour, s.fire)
 	s.timer.Stop()
-	data, err := os.ReadFile(path)
+	data, err := readFile(path)
 	switch {
 	case errors.Is(err, os.ErrNotExist):
 		return s, nil

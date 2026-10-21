@@ -514,8 +514,11 @@ func (a *App) loop() error {
 			w.syncMenuBar()
 		}
 		now := platform.Now()
-		if a.bench != nil && now > a.bench.deadline {
-			return a.benchTimeout(now)
+		if a.bench != nil {
+			a.bench.loopTurn(now, a.lastDrawT)
+			if now > a.bench.deadline {
+				return a.benchTimeout(now)
+			}
 		}
 		a.pumping = true
 		a.pump(a.waitTimeout(now)) // pump_*.go

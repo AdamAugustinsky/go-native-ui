@@ -259,6 +259,10 @@ func runBench(d *demo, gate bool) error {
 		fmt.Fprintf(os.Stderr, "shelldemo: gate: %d allocations in %d measured frames\n", r.Mallocs, r.Frames)
 		os.Exit(3)
 	}
+	if msg := r.OwnAllocFailure(); gate && msg != "" { // D27: a clean window passes over the runtime's one-offs only
+		fmt.Fprintln(os.Stderr, "shelldemo: gate:", msg)
+		os.Exit(3)
+	}
 	return nil
 }
 

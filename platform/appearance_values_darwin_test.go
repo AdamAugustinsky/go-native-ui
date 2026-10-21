@@ -59,6 +59,13 @@ func channelsWithin(a, b uint32, tol int) bool {
 	return true
 }
 
+// The comparison holds after a test that ran the app (-shuffle=on put one
+// first and the dark colours read as light).
+func TestSystemValuesMatchNSColorAfterADialog(t *testing.T) {
+	t.Run("dialog", TestPanelPathsMarshal)
+	t.Run("values", TestSystemValuesMatchNSColor)
+}
+
 // The live values equal NSColor's, in both appearances, read another way.
 func TestSystemValuesMatchNSColor(t *testing.T) {
 	var v SystemValues
@@ -70,8 +77,15 @@ func TestSystemValuesMatchNSColor(t *testing.T) {
 		pool := objc.F.Call0(objc.PoolPush)
 		defer objc.F.Call1(objc.PoolPop, pool)
 		defer objc.Send1(apApp, selSetAppearance, 0)
+		defer objc.Send1(apClsAppearance, selSetCurrentApp, 0)
 		for d := range 2 {
 			objc.Send1(apApp, selSetAppearance, uintptr(svNames[d]))
+			// Resolve as NSApp's appearance, explicitly. Once the app has
+			// run (a dialog test before this one, in a shuffled order), the
+			// thread's current-appearance fallback no longer follows a
+			// change of NSApp's appearance until the run loop turns: it
+			// stayed light, and the dark reference read light.
+			objc.Send1(apClsAppearance, selSetCurrentApp, uintptr(objc.Send(apApp, selEffectiveAppearance)))
 			for i := range NumSystemColors {
 				want[d][i], ok[d][i] = nsColorIndependent(i)
 			}
