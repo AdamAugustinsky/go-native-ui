@@ -59,6 +59,10 @@ func (pl *Pilot) addSymbols() {
 	k := pl.bk
 	pt := theme.MacWindow.Capsule.Glyph // AppKit's toolbar symbols
 	s := &pl.sym
+	// A row whose system icon failed to decode draws the kit's file or folder
+	// symbol; whether that happens, and when, is up to the system and the
+	// scheduler, so they are prepared ahead of the frames that may need them.
+	k.KeepIcons(icon.File, icon.Folder)
 	s.sidebar = k.AddIcon(icon.Spec{Symbol: "sidebar.left", Fallback: '▤', Pt: pt})
 	s.back = k.AddIcon(icon.Spec{Symbol: "chevron.left", Fallback: '‹', Pt: pt, Weight: 0.23})
 	s.forward = k.AddIcon(icon.Spec{Symbol: "chevron.right", Fallback: '›', Pt: pt, Weight: 0.23})

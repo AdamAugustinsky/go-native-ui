@@ -356,3 +356,21 @@ func TestScaleChangeRasterisesWhatIsUsed(t *testing.T) {
 		t.Error("an icon draws no ink in the first frame after the scale change")
 	}
 }
+
+// Rasterising a symbol for the first time allocates nothing on the Go heap
+// once the scratch buffers have grown: the cost is AppKit's.
+func TestFirstUseOfSymbolsAllocatesNothing(t *testing.T) {
+	specs := symbolSpecs(t, 40, 17)
+	a := New(newText(t), specs...)
+	a.Raster(2)
+	use := func() {
+		a.Raster(2)
+		for id := ID(0); id < ID(a.Len()); id++ {
+			a.Size(id)
+		}
+	}
+	use() // the scratch buffers, the atlas's growth
+	if n := testing.AllocsPerRun(5, use); n != 0 {
+		t.Errorf("preparing %d icons for the first time allocates %v times", a.Len(), n)
+	}
+}

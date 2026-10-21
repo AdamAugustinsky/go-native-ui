@@ -375,3 +375,56 @@ func TestOnlyUsedIconsArePrepared(t *testing.T) {
 		t.Error("an unknown id was prepared")
 	}
 }
+
+// Preparing an icon for the first time allocates nothing on the Go heap once
+// the text system has its fonts and glyph runs: a frame that happens to be the
+// first to use an icon must not be the one that allocates.
+func TestFirstUseAllocatesNothing(t *testing.T) {
+	ts := newText(t)
+	extra := make([]Spec, 12)
+	for i := range extra {
+		extra[i] = Spec{Fallback: rune('A' + i), Pt: 12}
+	}
+	a := New(ts, extra...)
+	a.Raster(2)
+	use := func() {
+		a.Raster(2) // forgets every icon: the next asks are first uses
+		for i := range extra {
+			a.Size(NumStandard + ID(i))
+		}
+		for id := ID(0); id < NumStandard; id++ {
+			a.Size(id)
+		}
+	}
+	use() // the fonts and runs of the text system
+	if n := testing.AllocsPerRun(20, use); n != 0 {
+		t.Errorf("preparing %d icons for the first time allocates %v times", len(extra)+int(NumStandard), n)
+	}
+}
+
+// Kept icons are prepared by Raster, at every scale; the others wait for their
+// first use.
+func TestKeptIconsArePreparedAtRaster(t *testing.T) {
+	ts := newText(t)
+	a := New(ts, Spec{Fallback: 'a', Pt: 12}, Spec{Fallback: 'b', Pt: 12}, Spec{Fallback: 'c', Pt: 12})
+	x := ID(NumStandard)
+	a.Keep(x+1, ID(60000)) // before Raster: nothing yet; an unknown id is ignored
+	if a.resolved != 0 {
+		t.Fatalf("%d icons prepared before Raster", a.resolved)
+	}
+	a.Raster(1)
+	if a.resolved != 1 || !a.ents[x+1].done || a.ents[x].done {
+		t.Errorf("after Raster: %d prepared, kept %v, other %v", a.resolved, a.ents[x+1].done, a.ents[x].done)
+	}
+	a.Keep(x + 2) // after Raster: at once
+	if a.resolved != 2 || !a.ents[x+2].done {
+		t.Errorf("Keep after Raster: %d prepared", a.resolved)
+	}
+	a.Raster(2)
+	if a.resolved != 2 || !a.ents[x+1].done || !a.ents[x+2].done || a.ents[x].done {
+		t.Errorf("after a new scale: %d prepared", a.resolved)
+	}
+	if w1, _ := a.Size(x + 1); w1 <= 0 {
+		t.Error("a kept icon has no size")
+	}
+}
