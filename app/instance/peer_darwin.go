@@ -4,7 +4,7 @@ package instance
 
 import (
 	"errors"
-	"net"
+	"os"
 	"sync"
 	"unsafe"
 
@@ -21,9 +21,9 @@ var peerSym struct {
 
 // peerUID returns the user id of the process on the other end of a Unix-domain
 // connection (getpeereid). ok is false where the system cannot say.
-func peerUID(c net.Conn) (uid uint32, ok bool, err error) {
-	uc, isUnix := c.(*net.UnixConn)
-	if !isUnix {
+func peerUID(c conn) (uid uint32, ok bool, err error) {
+	uc, isSocket := c.(*os.File)
+	if !isSocket {
 		return 0, false, nil
 	}
 	peerSym.once.Do(func() {

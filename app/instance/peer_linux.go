@@ -10,7 +10,7 @@ import (
 
 // peerUID returns the user id of the process on the other end of a Unix-domain
 // connection (SO_PEERCRED). ok is false where the system cannot say.
-func peerUID(c net.Conn) (uid uint32, ok bool, err error) {
+func peerUID(c conn) (uid uint32, ok bool, err error) {
 	uc, isUnix := c.(*net.UnixConn)
 	if !isUnix {
 		return 0, false, nil
