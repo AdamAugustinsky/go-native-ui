@@ -210,10 +210,11 @@ type windowMenus struct {
 // SetWindowMenus gives the window its menu bar and the function that enables
 // and checks the items of its menus: its bar's while that bar is installed,
 // and its popped-up menus' (PopUpMenu) always. The installed bar is the key
-// window's: this one's is installed now if the window is key, owns the bar
-// already (a new spec: the bar is built again) or no open window owns it,
-// and otherwise the moment the window becomes key, before any later event,
-// so that a key equivalent or a menu item always acts on the key window.
+// window's: this one's is installed now if the window is key (or became key
+// before it had menus), owns the bar already (a new spec: the bar is built
+// again) or no open window owns it, and otherwise the moment the window
+// becomes key, before any later event, so that a key equivalent or a menu
+// item always acts on the key window.
 // Windows with the same model (a pointer, nil for none) share the bar built
 // for it: taking it over switches its commands and state only. When the
 // window that owns the bar closes, the next key window's bar is installed.
@@ -221,7 +222,7 @@ type windowMenus struct {
 // when it changes. Main thread, at a safe point: building a bar allocates.
 func (w *Window) SetWindowMenus(spec *MenuSpec, state MenuState, model any) {
 	w.menus = windowMenus{spec, state, model}
-	if o := nativeMenus.owner; o == w || o == nil || !o.registered || objc.SendBool(w.win, selIsKeyWindow) {
+	if o := nativeMenus.owner; o == w || o == nil || !o.registered || reg.lastKey == w || objc.SendBool(w.win, selIsKeyWindow) {
 		w.installMenus(o == w)
 	}
 }

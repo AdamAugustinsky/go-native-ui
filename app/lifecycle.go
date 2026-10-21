@@ -333,6 +333,10 @@ func (a *App) openWindowNow(cfg WindowConfig, b Builder, w *Win) error {
 		return err
 	}
 	t.Win.SetFrameHandler(t.frameHandler)
+	// Its menus before anything else in this turn of the loop: a window
+	// opened at a safe point of the pump may be key already, and the keys
+	// the pump takes next are its (menus).
+	t.syncMenuBar()
 	return nil
 }
 
@@ -407,6 +411,7 @@ type appObject struct {
 	opening     int         // OpenWindow is opening a window (its Init runs)
 	queuedOpens int         // OpenWindow calls waiting for a safe point
 	barModel    *menu.Model // the model of the last window bar given to the platform (menus.go)
+	stdBar      *byte       // the identity of the standard bar, the one of every window without a model (menus.go)
 
 	dlgSeq    platform.DialogTicket // the last dialog ticket given (dialogs.go): one numbering for the app
 	closedDlg []closedDialog        // the dialogs of closed windows whose answer has not arrived (closedDialog)

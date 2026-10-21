@@ -271,6 +271,7 @@ func (a *App) useFontScale() {
 	}
 	s := a.EffectiveScale()
 	if len(a.scales) > 0 && a.scales[0] == s {
+		a.trimFontScales() // windows at the other scales may have closed or zoomed since
 		return
 	}
 	i := slices.Index(a.scales, s)
@@ -294,8 +295,13 @@ func (a *App) useFontScale() {
 	}
 	copy(a.scales[1:i+1], a.scales[:i])
 	a.scales[0] = s
-	// More than fontScales were kept for windows at as many scales: the ones
-	// no window is at any more go, the least recent first.
+	a.trimFontScales()
+}
+
+// trimFontScales releases, the least recent first, the scales no open window
+// is at beyond fontScales: more were kept while windows were at as many
+// scales. The current one (the first) stays.
+func (a *App) trimFontScales() {
 	for j := len(a.scales) - 1; j > 0 && len(a.scales) > fontScales; j-- {
 		if !a.scaleInUse(a.scales[j]) {
 			a.Text.ReleaseScale(a.scales[j])
