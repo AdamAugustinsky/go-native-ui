@@ -195,7 +195,8 @@ type App struct {
 	fieldKeysFn platform.FieldKeys
 	listSpec    platform.MenuSpec // the options of a select, reused
 	listItems   []platform.MenuItem
-	demo        *menuDemo // GNUI_MENU_DEMO (menudemo.go)
+	ctxSpec     platform.MenuSpec // the menu a widget described (ui.Context.ContextMenu), reused
+	demo        *menuDemo         // GNUI_MENU_DEMO (menudemo.go)
 
 	*appObject // the application object, shared by the app's windows: Main's handler, app events, the quit policy, the windows (lifecycle.go)
 	winState   // this window's part of it (window.go)

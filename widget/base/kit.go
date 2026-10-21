@@ -55,6 +55,7 @@ type Kit struct {
 	target theme.Mode // what the follower aimed for in the last Begin
 
 	menu  *menu.Model
+	ctx   []ui.MenuItem // OnContextMenu's items, reused
 	imgs  *img.Cache
 	pend  [pendingCommands]menu.ID // commands drawn menus chose, delivered at the next Begin
 	npend int
@@ -130,6 +131,14 @@ func (k *Kit) TextSystem() TextSystem { return k.ts }
 // the one of its latest Begin. It stays valid after End, so that a driver, a
 // test or a command handler can reach the window's context through the kit.
 func (k *Kit) Context() *ui.Context { return k.c }
+
+// MenuScratch is the kit's reusable buffer for the items of a context menu,
+// emptied: append the items to it and pass it to ui.Context.ContextMenu. It
+// is valid until the next call.
+func (k *Kit) MenuScratch() *[]ui.MenuItem {
+	k.ctx = k.ctx[:0]
+	return &k.ctx
+}
 
 // Focus gives the keyboard focus to the box with the key, in the next frame
 // that builds it: the key of a text field (FieldSignal.Key, FieldKey), of a

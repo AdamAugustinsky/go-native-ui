@@ -80,6 +80,11 @@ var (
 	selTargetForAction     = objc.Sel("targetForAction:to:from:")
 	selSendActionTo        = objc.Sel("sendAction:to:from:")
 	selValidateUIItem      = objc.Sel("validateUserInterfaceItem:")
+	selSetAutoenables      = objc.Sel("setAutoenablesItems:")
+	selSetAttrTitle        = objc.Sel("setAttributedTitle:")
+	selInitAttrString      = objc.Sel("initWithString:attributes:")
+	selDictWithObject      = objc.Sel("dictionaryWithObject:forKey:")
+	selSystemRedColor      = objc.Sel("systemRedColor")
 
 	// the selectors of the standard actions, by MenuAction
 	actionSel = [...]objc.SEL{
@@ -122,6 +127,8 @@ var nativeMenus struct {
 	owner    *Window // the window whose bar is installed (SetMenuBar): the bar's commands are its; nil: the app's
 	model    any     // the model the installed bar was built from (SetWindowMenus), nil: none known
 	popup    *Window // the window PopUpMenu shows a menu over, while it does
+	picked   bool    // an item without a command was chosen in this PopUpMenu,
+	choice   int     // and its tag
 }
 
 // popupMenu is a cached menu tree for PopUpMenu: the tree built for menu idx
@@ -373,9 +380,11 @@ func (w *Window) PopUpMenu(p *Popup) int {
 		x, y = x0-listInsetX+listTextX, w.hPt-(y0+y1)/2+listItemH/2
 	}
 	nativeMenus.chosen, nativeMenus.root, nativeMenus.popup = -1, m, w
+	nativeMenus.picked, nativeMenus.choice = false, 0
 	depth := nativeMenus.depth
 	objc.F.Reset().Arg(uintptr(m)).Arg(uintptr(selPopUpMenu)).Arg(uintptr(item)).ArgPoint(x, y).Arg(uintptr(w.view)).Call(objc.MsgSend)
 	nativeMenus.root, nativeMenus.popup = 0, nil
+	p.Picked, p.Choice = nativeMenus.picked, nativeMenus.choice
 	// The tracking is over: a menu cancelled as it opened gets no
 	// menuDidClose:, and must not leave the app in a native loop.
 	nativeMenus.depth = min(nativeMenus.depth, depth)
@@ -515,6 +524,9 @@ func buildMenu(spec *MenuSpec, idx, depth int, record *[]Menu) objc.ID {
 	menu = objc.Send1(menu, selInitWithTitle, uintptr(t))
 	objc.Release(t)
 	objc.Send1(menu, selSetDelegate, uintptr(nativeMenus.target))
+	if m.Dynamic {
+		objc.Send1(menu, selSetAutoenables, 0) // enabled as the items say, not as validateMenuItem: would
+	}
 	if record != nil {
 		*record = append(*record, Menu{Title: m.Title, Role: m.Role, Items: append([]MenuItem(nil), m.Items...)})
 	}
@@ -544,10 +556,37 @@ func buildMenu(spec *MenuSpec, idx, depth int, record *[]Menu) objc.ID {
 		default:
 			item = actionItem(it)
 		}
+		if m.Dynamic && it.Kind != MenuItemSeparator {
+			dynamicItem(item, it)
+		}
 		objc.Send1(menu, selAddItem, uintptr(item))
 		objc.Release(item)
 	}
 	return menu
+}
+
+// dynamicItem applies what the items of a Dynamic menu add: the choice in the
+// tag, enabled and the mark, the red title.
+func dynamicItem(item objc.ID, it *MenuItem) {
+	if it.Kind == MenuItemAction {
+		objc.Send1(item, selSetTag, uintptr(it.Choice))
+	}
+	if it.Disabled {
+		objc.Send1(item, selSetEnabled, 0)
+	}
+	if it.Mixed {
+		objc.Send1(item, selSetState, ^uintptr(0)) // NSControlStateValueMixed
+	}
+	if it.Destructive {
+		title := newNSString(it.Title)
+		key := objc.Str("NSColor") // NSForegroundColorAttributeName
+		red := objc.Send(objc.Cls("NSColor"), selSystemRedColor)
+		dict := objc.Send2(objc.Cls("NSDictionary"), selDictWithObject, uintptr(red), uintptr(key))
+		as := objc.Send2(objc.Send(objc.Cls("NSAttributedString"), selAlloc), selInitAttrString, uintptr(title), uintptr(dict))
+		objc.Send1(item, selSetAttrTitle, uintptr(as))
+		objc.Release(as)
+		objc.Release(title)
+	}
 }
 
 // actionItem makes the NSMenuItem of an action item, retained.
@@ -787,7 +826,11 @@ func menuCommand(c *ffi.CB) {
 
 // menuChoose is gnuiChoose:, the action of an item without a command (a list
 // popup's option): PopUpMenu returns its index.
-func menuChoose(c *ffi.CB) { chose(objc.ID(c.Int(2))) }
+func menuChoose(c *ffi.CB) {
+	sender := objc.ID(c.Int(2))
+	chose(sender)
+	nativeMenus.picked, nativeMenus.choice = true, int(itemTag(sender))
+}
 
 // menuQuit is gnuiQuit: (MenuQuit): the application object's quit request
 // (QuitMenu), as AppKit's own terminate: would be (appobj_darwin.go).
