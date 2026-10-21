@@ -222,7 +222,9 @@ func init() {
 // bridge's goroutines are the same at the start and the end (a timer or a poll
 // would add or churn them). On a Mac at rest it also holds the wakeups to the
 // budget of one a second (ARCHITECTURE §3) and to no more than the run without
-// the bridge. What it does not prove on a hosted runner: wakeups there are tens
+// the bridge (a second more package-idle wakeups, fifteen more interrupt wakeups:
+// those are the system's on a Mac in use, 6 to 23 a second were seen with the
+// bridge off, so a tighter bound fails for no fault of the bridge). What it does not prove on a hosted runner: wakeups there are tens
 // a second with the bridge off as well, so they are logged, not asserted; a
 // ticker in the bridge would be caught there only by the goroutine count, and a
 // goroutine that sleeps and wakes (time.Sleep in a loop) keeps the same count, so
@@ -280,7 +282,7 @@ func TestIdleWithTheBridgeOn(t *testing.T) {
 			t.Errorf("GNUI_INSPECT %s: %.2f package-idle wakeups/s, budget 1", name, v)
 		}
 	}
-	if num(on, "wakeups_per_s") > num(off, "wakeups_per_s")+1 || num(on, "int_wakeups_per_s") > num(off, "int_wakeups_per_s")+5 {
+	if num(on, "wakeups_per_s") > num(off, "wakeups_per_s")+1 || num(on, "int_wakeups_per_s") > num(off, "int_wakeups_per_s")+15 {
 		t.Errorf("the bridge adds wakeups: %s/s (%s interrupt) against %s/s (%s)",
 			on.Get("wakeups_per_s"), on.Get("int_wakeups_per_s"), off.Get("wakeups_per_s"), off.Get("int_wakeups_per_s"))
 	}

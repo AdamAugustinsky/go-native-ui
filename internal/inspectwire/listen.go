@@ -3,6 +3,7 @@ package inspectwire
 import (
 	"net"
 	"os"
+	"sync"
 )
 
 // Listener is the bridge's socket: a Unix domain socket that only its owner
@@ -12,6 +13,9 @@ type Listener struct {
 	path string
 	id   os.FileInfo // the socket's file as published, to know it again at Close
 	lock *os.File    // the flock that says this bridge is alive, held until Close
+
+	closeOnce sync.Once
+	closeErr  error
 }
 
 // Path is the socket's path, with symbolic links in its directory resolved.
@@ -24,12 +28,16 @@ func (l *Listener) Path() string { return l.path }
 // released (its file stays), so a bridge waiting to take over never has its new
 // socket removed by this one. Close may be called more than once.
 func (l *Listener) Close() error {
-	err := l.ln.Close() // the listener does not unlink: Listen turned that off
-	if fi, e := os.Lstat(l.path); e == nil && l.id != nil && os.SameFile(fi, l.id) {
-		os.Remove(l.path)
-	}
-	if l.lock != nil {
-		l.lock.Close()
-	}
-	return err
+	// Once: after the lock is let go a successor may have published its own
+	// socket, which an inode number reused from this one's could pass for it.
+	l.closeOnce.Do(func() {
+		l.closeErr = l.ln.Close() // the listener does not unlink: Listen turned that off
+		if fi, e := os.Lstat(l.path); e == nil && l.id != nil && os.SameFile(fi, l.id) {
+			os.Remove(l.path)
+		}
+		if l.lock != nil {
+			l.lock.Close()
+		}
+	})
+	return l.closeErr
 }
