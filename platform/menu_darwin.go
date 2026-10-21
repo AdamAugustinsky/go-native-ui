@@ -17,7 +17,8 @@ import (
 // App commands target GNUIMenuTarget's gnuiCommand:, with the command id in
 // the item's tag. The edit actions are nil-targeted standard selectors
 // (copy:, paste: …) that GNUIView implements, so they travel the responder
-// chain. The other standard actions keep AppKit's selectors (hide:,
+// chain (with no key window, to a window that DebugAssumeKey made key for the
+// app: assumekey_darwin.go). The other standard actions keep AppKit's selectors (hide:,
 // performMiniaturize: …), so that AppKit knows the items for what they are,
 // but target GNUIMenuTarget, which validates them with the app's MenuState
 // and AppKit's own target for the action (the window, the application) and
@@ -88,22 +89,23 @@ var (
 
 	// the selectors of the standard actions, by MenuAction
 	actionSel = [...]objc.SEL{
-		MenuAbout:           objc.Sel("orderFrontStandardAboutPanel:"),
-		MenuHide:            objc.Sel("hide:"),
-		MenuHideOthers:      objc.Sel("hideOtherApplications:"),
-		MenuShowAll:         objc.Sel("unhideAllApplications:"),
-		MenuQuit:            selGnuiQuit,
-		MenuUndo:            objc.Sel("undo:"),
-		MenuRedo:            objc.Sel("redo:"),
-		MenuCut:             objc.Sel("cut:"),
-		MenuCopy:            objc.Sel("copy:"),
-		MenuPaste:           objc.Sel("paste:"),
-		MenuDelete:          objc.Sel("delete:"),
-		MenuSelectAll:       objc.Sel("selectAll:"),
-		MenuMinimize:        objc.Sel("performMiniaturize:"),
-		MenuZoom:            objc.Sel("performZoom:"),
-		MenuClose:           objc.Sel("performClose:"),
-		MenuBringAllToFront: objc.Sel("arrangeInFront:"),
+		MenuAbout:              objc.Sel("orderFrontStandardAboutPanel:"),
+		MenuHide:               objc.Sel("hide:"),
+		MenuHideOthers:         objc.Sel("hideOtherApplications:"),
+		MenuShowAll:            objc.Sel("unhideAllApplications:"),
+		MenuQuit:               selGnuiQuit,
+		MenuUndo:               objc.Sel("undo:"),
+		MenuRedo:               objc.Sel("redo:"),
+		MenuCut:                objc.Sel("cut:"),
+		MenuCopy:               objc.Sel("copy:"),
+		MenuPaste:              objc.Sel("paste:"),
+		MenuPasteAndMatchStyle: objc.Sel("pasteAsPlainText:"),
+		MenuDelete:             objc.Sel("delete:"),
+		MenuSelectAll:          objc.Sel("selectAll:"),
+		MenuMinimize:           objc.Sel("performMiniaturize:"),
+		MenuZoom:               objc.Sel("performZoom:"),
+		MenuClose:              objc.Sel("performClose:"),
+		MenuBringAllToFront:    objc.Sel("arrangeInFront:"),
 	}
 
 	menuTargetClass                                      objc.ID
@@ -720,6 +722,8 @@ func standardTitle(a MenuAction) string {
 		return "Copy"
 	case MenuPaste:
 		return "Paste"
+	case MenuPasteAndMatchStyle:
+		return "Paste and Match Style"
 	case MenuDelete:
 		return "Delete"
 	case MenuSelectAll:
@@ -755,6 +759,8 @@ func standardKey(a MenuAction) (rune, Mods) {
 		return 'c', ModSuper
 	case MenuPaste:
 		return 'v', ModSuper
+	case MenuPasteAndMatchStyle:
+		return 'v', ModSuper | ModShift | ModAlt
 	case MenuSelectAll:
 		return 'a', ModSuper
 	case MenuMinimize:
@@ -876,9 +882,9 @@ func systemValid(item objc.ID, sel objc.SEL) bool {
 	return true
 }
 
-// viewEditAction is GNUIView's undo:, redo:, cut:, copy:, paste:, delete:
-// and selectAll:: EvCommand with the item's command, or with FlagStandard and
-// the action for an item without one.
+// viewEditAction is GNUIView's undo:, redo:, cut:, copy:, paste:,
+// pasteAsPlainText:, delete: and selectAll:: EvCommand with the item's
+// command, or with FlagStandard and the action for an item without one.
 func viewEditAction(c *ffi.CB) {
 	sender := objc.ID(c.Int(2))
 	act := editActionOf(objc.SEL(c.Int(1)))

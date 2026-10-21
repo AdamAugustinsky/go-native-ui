@@ -142,13 +142,16 @@ const (
 	// MenuQuit asks to quit: EvClose, as the window's close button does.
 	MenuQuit
 	// MenuUndo … MenuSelectAll are the edit actions, sent through the
-	// responder chain (undo:, redo:, cut:, copy:, paste:, delete:, selectAll:)
-	// to the view with the keyboard focus.
+	// responder chain (undo:, redo:, cut:, copy:, paste:, pasteAsPlainText:,
+	// delete:, selectAll:) to the view with the keyboard focus.
+	// MenuPasteAndMatchStyle is Paste and Match Style: the text without its
+	// style, in the style around it.
 	MenuUndo
 	MenuRedo
 	MenuCut
 	MenuCopy
 	MenuPaste
+	MenuPasteAndMatchStyle
 	MenuDelete
 	MenuSelectAll
 	// MenuMinimize, MenuZoom and MenuClose act on the key window

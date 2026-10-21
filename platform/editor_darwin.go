@@ -31,8 +31,14 @@ import (
 //     broken before and after, so the replacement is one undo step of its own.
 //   - Each editor has its own NSUndoManager (undoManagerForTextView:), so
 //     SetText can clear it without touching the window's.
-//   - A paste with an image and no plain text is the app's
-//     (readSelectionFromPasteboard:): EditorPastedImage, nothing inserted.
+//   - A paste with files (a Finder copy, which has their names as text
+//     too) is the app's (readSelectionFromPasteboard:, and
+//     pasteAsPlainText:, which does not call it): EditorPastedFiles, nothing
+//     inserted; so is one with an image and no plain text:
+//     EditorPastedImage.
+//   - With SetEdgeArrows on, doCommandBySelector: reports moveUp: on the
+//     first line and moveDown: on the last (EditorEdgeUp, EditorEdgeDown)
+//     and lets the text view move the caret.
 //   - Mentions are temporary attributes of the layout manager, display-only.
 //   - TextKit 1 (initUsingTextLayoutManager: NO) because the contract's
 //     height (usedRectForTextContainer:) and styling (temporary attributes)
@@ -47,6 +53,7 @@ var (
 	edPHClass              objc.ID           // GNUIEditorPlaceholder
 	edTable                [MaxHosts]*Editor // index+1 is in the views' Index ivar
 	edImageTypes           objc.ID           // NSArray of the image types a paste routes to the app
+	edFileTypes            objc.ID           // NSArray of the file types a paste routes to the app
 	edPlainType            objc.ID
 	edFgAttr, edBgAttr     objc.ID
 	edFrameNote            objc.ID
@@ -145,6 +152,10 @@ var (
 	selSizeToFit           = objc.Sel("sizeToFit")
 	selLineFragPadding     = objc.Sel("lineFragmentPadding")
 	selHitTestEd           = objc.Sel("hitTest:")
+	selSetStringValueEd    = objc.Sel("setStringValue:")
+	selNumberOfGlyphs      = objc.Sel("numberOfGlyphs")
+	selGlyphIndexForChar   = objc.Sel("glyphIndexForCharacterAtIndex:")
+	selLineFragForGlyph    = objc.Sel("lineFragmentRectForGlyphAtIndex:effectiveRange:")
 )
 
 // editorNative is the macOS half of an Editor.
@@ -170,6 +181,8 @@ type editorNative struct {
 	inKey    bool // keyDown: is running
 	keyMark  bool // the key being handled came while marked text was there
 	released bool
+	font     objc.ID    // the text's font (+1)
+	lineRng  [2]uintptr // lineFragmentRectForGlyphAtIndex:effectiveRange:'s range (heap: AppKit writes it)
 }
 
 func registerEditorClasses() {
@@ -177,6 +190,7 @@ func registerEditorClasses() {
 	tv.Method(selDoCommand, "v@::", edDoCommand)
 	tv.Method(selKeyDown, "v@:@", edKeyDown)
 	tv.Method(selReadSelectionPB, "c@:@", edReadSelection)
+	tv.Method(actionSel[MenuPasteAndMatchStyle], "v@:@", edPastePlain)
 	tv.Method(selReadablePBTypes, "@@:", edReadableTypes)
 	tv.Method(selResignFirstResp, "c@:", edResign)
 	tv.Method(selUnmarkText, "v@:", edUnmark)
@@ -209,6 +223,9 @@ func registerEditorClasses() {
 	types := &[...]objc.ID{objc.Str("public.png"), objc.Str("public.tiff"), objc.Str("public.jpeg"), objc.Str("public.heic")} // on the heap
 	edImageTypes = objc.Retain(objc.ID(objc.F.Reset().Arg(uintptr(clsNSArray)).Arg(uintptr(selArrayWithObjects)).
 		ArgPtr(unsafe.Pointer(&types[0])).Arg(uintptr(len(types))).Call(objc.MsgSend).R0()))
+	files := &[...]objc.ID{objc.Str("public.file-url"), objc.Str("NSFilenamesPboardType")}
+	edFileTypes = objc.Retain(objc.ID(objc.F.Reset().Arg(uintptr(clsNSArray)).Arg(uintptr(selArrayWithObjects)).
+		ArgPtr(unsafe.Pointer(&files[0])).Arg(uintptr(len(files))).Call(objc.MsgSend).R0()))
 }
 
 // NewEditor creates a native multi-line editor as a host of the window
@@ -230,15 +247,12 @@ func (w *Window) NewEditor(o EditorOptions) (*Editor, error) {
 	}
 	e := &Editor{}
 	e.w, e.slot, e.maxLen, e.enter = w, slot, o.MaxLen, o.Enter
+	e.opts = o
 	e.maxLines = o.MaxLines
 	if e.maxLines <= 0 {
 		e.maxLines = 6
 	}
 	e.insetX, e.insetY = float64(o.InsetX), float64(o.InsetY)
-	size := float64(o.FontSize)
-	if size <= 0 {
-		size = 13
-	}
 
 	tv := objc.Send(edTVClass, selAlloc)
 	if objc.SendBool1(tv, selRespondsTo, uintptr(selInitUsingTLM)) {
@@ -249,7 +263,8 @@ func (w *Window) NewEditor(o EditorOptions) (*Editor, error) {
 	e.tv = tv
 	edTVDef.Index().Set(tv, uintptr(slot+1))
 	e.lm, e.tc = objc.Send(tv, selLayoutManager), objc.Send(tv, selTextContainer)
-	font := objc.ID(objc.F.Reset().Arg(uintptr(clsNSFont)).Arg(uintptr(selSystemFontOfSize)).ArgF64(size).Call(objc.MsgSend).R0())
+	font := edFont(o.FontSize)
+	e.font = font
 	objc.Send1(tv, selSetFont, uintptr(font))
 	objc.Send1(tv, selSetTextColor, uintptr(objc.Send(clsNSColor, selTextColor)))
 	objc.Send1(tv, selSetRichText, 0)
@@ -266,9 +281,7 @@ func (w *Window) NewEditor(o EditorOptions) (*Editor, error) {
 	objc.Send1(e.tc, selSetWidthTracks, 1)
 	objc.F.Reset().Arg(uintptr(e.tc)).Arg(uintptr(selSetContainerSize)).ArgPoint(fltMax, fltMax).Call(objc.MsgSend)
 	e.lineH = objc.F.Reset().Arg(uintptr(e.lm)).Arg(uintptr(selDefaultLineHeight)).Arg(uintptr(font)).Call(objc.MsgSend).F64(0)
-	if o.Placeholder != "" {
-		e.setPlaceholder(o.Placeholder, font)
-	}
+	e.setPlaceholder(o.Placeholder)
 
 	e.undo = objc.Send(objc.Send(clsNSUndoManager, selAlloc), selInitPlain)
 	e.del = objc.Send(objc.Send(edDelClass, selAlloc), selInitPlain)
@@ -294,6 +307,7 @@ func (w *Window) NewEditor(o EditorOptions) (*Editor, error) {
 		objc.Release(tv)
 		objc.Release(e.del)
 		objc.Release(e.undo)
+		objc.Release(e.font)
 		return nil, err
 	}
 	e.host = id
@@ -309,23 +323,101 @@ func (w *Window) NewEditor(o EditorOptions) (*Editor, error) {
 
 const fltMax = 3.4028234663852886e38
 
-// setPlaceholder gives the text view its placeholder, through public API: a
-// label in the placeholder colour and the text's font, under the text view's
-// own drawing (its first subview, below the caret), where the first line's
-// text starts, shown while the text is empty (with no composition), passing
-// every click to the text view; and the accessibility placeholder value.
-func (e *Editor) setPlaceholder(s string, font objc.ID) {
-	str := objc.Str(s)
-	l := objc.Send1(edPHClass, selLabelWithString, uintptr(str))
-	objc.Send1(l, selSetFont, uintptr(font))
-	objc.Send1(l, selSetTextColor, uintptr(objc.Send(clsNSColor, selPlaceholderColor)))
-	objc.Send1(l, selSetLineBreakMode, 4) // NSLineBreakByTruncatingTail
-	objc.Send1(l, selSetAXElement, 0)     // the text view reports it (placeholder value)
-	objc.Send(l, selSizeToFit)
-	objc.Send3(e.tv, selAddSubviewRel, uintptr(l), uintptr(^uintptr(0)) /* NSWindowBelow */, 0)
+// edFont is the system font of size points (0: 13), retained.
+func edFont(size float32) objc.ID {
+	if size <= 0 {
+		size = 13
+	}
+	return objc.Retain(objc.ID(objc.F.Reset().Arg(uintptr(clsNSFont)).Arg(uintptr(selSystemFontOfSize)).ArgF64(float64(size)).Call(objc.MsgSend).R0()))
+}
+
+// setPlaceholder gives the text view placeholder s ("" none), through public
+// API: a label in the placeholder colour and the text's font, under the text
+// view's own drawing (its first subview, below the caret), where the first
+// line's text starts, shown while the text is empty (with no composition),
+// passing every click to the text view; and the accessibility placeholder
+// value.
+func (e *Editor) setPlaceholder(s string) {
+	if s == "" {
+		if e.ph != 0 {
+			objc.Send(e.ph, selRemoveFromSuper) // the text view held the label
+			e.ph, e.phShown = 0, false
+		}
+		objc.Send1(e.tv, selSetAXPlaceholder, 0)
+		return
+	}
+	str := edNSString([]byte(s))
+	defer objc.Release(str)
+	if e.ph == 0 {
+		l := objc.Send1(edPHClass, selLabelWithString, uintptr(str))
+		objc.Send1(l, selSetTextColor, uintptr(objc.Send(clsNSColor, selPlaceholderColor)))
+		objc.Send1(l, selSetLineBreakMode, 4) // NSLineBreakByTruncatingTail
+		objc.Send1(l, selSetAXElement, 0)     // the text view reports it (placeholder value)
+		objc.Send3(e.tv, selAddSubviewRel, uintptr(l), uintptr(^uintptr(0)) /* NSWindowBelow */, 0)
+		e.ph, e.phShown = l, true
+	} else {
+		objc.Send1(e.ph, selSetStringValueEd, uintptr(str))
+	}
+	objc.Send1(e.ph, selSetFont, uintptr(e.font))
+	objc.Send(e.ph, selSizeToFit)
 	objc.Send1(e.tv, selSetAXPlaceholder, uintptr(str))
-	e.ph, e.phShown = l, true
 	e.layoutPlaceholder()
+	if e.host != 0 {
+		e.showPlaceholder() // a label made while there is text starts hidden
+	}
+}
+
+// SetOptions changes the options NewEditor was given, while the editor runs:
+// the placeholder, the maximum length (text already longer stays; edits that
+// would make it longer are refused), the Enter policy, the most lines, the
+// font size and the insets. What the text view shows follows at once, and a
+// new height comes with EditorHeightChanged. The text, the selection, the
+// undo stack and the spans stay. At a safe point, main thread; a change of the
+// placeholder or the font allocates.
+func (e *Editor) SetOptions(o EditorOptions) {
+	if e.released {
+		return
+	}
+	pool := objc.F.Call0(objc.PoolPush)
+	defer objc.F.Call1(objc.PoolPop, pool)
+	was := e.opts
+	e.opts = o
+	e.maxLen, e.enter = o.MaxLen, o.Enter
+	if e.maxLines = o.MaxLines; e.maxLines <= 0 {
+		e.maxLines = 6
+	}
+	relayout := o.MaxLines != was.MaxLines
+	if o.FontSize != was.FontSize {
+		objc.Release(e.font)
+		e.font = edFont(o.FontSize)
+		objc.Send1(e.tv, selSetFont, uintptr(e.font))
+		e.lineH = objc.F.Reset().Arg(uintptr(e.lm)).Arg(uintptr(selDefaultLineHeight)).Arg(uintptr(e.font)).Call(objc.MsgSend).F64(0)
+		relayout = true
+	}
+	if o.InsetX != was.InsetX || o.InsetY != was.InsetY {
+		e.insetX, e.insetY = float64(o.InsetX), float64(o.InsetY)
+		objc.F.Reset().Arg(uintptr(e.tv)).Arg(uintptr(selSetContainerInset)).ArgPoint(e.insetX, e.insetY).Call(objc.MsgSend)
+		relayout = true
+	}
+	if o.Placeholder != was.Placeholder || o.FontSize != was.FontSize {
+		e.setPlaceholder(o.Placeholder)
+	} else if relayout {
+		e.layoutPlaceholder()
+	}
+	if relayout {
+		e.dirtyH = true
+		e.wake()
+	}
+}
+
+// SetPlaceholder changes the placeholder ("" none): SetOptions with only the
+// placeholder changed.
+func (e *Editor) SetPlaceholder(s string) {
+	if s != e.opts.Placeholder {
+		o := e.opts
+		o.Placeholder = s
+		e.SetOptions(o)
+	}
 }
 
 // labelInset is the space an NSTextField label keeps between its frame and
@@ -379,6 +471,7 @@ func (e *Editor) Release() {
 	objc.Release(e.tv)
 	objc.Release(e.del)
 	objc.Release(e.undo)
+	objc.Release(e.font)
 	edTable[e.slot] = nil
 }
 
@@ -785,16 +878,59 @@ func (e *Editor) command(sel objc.SEL) bool {
 		}
 		return true
 	case selMoveUp, selMoveDown:
-		if e.compl && !composed {
+		switch {
+		case composed:
+		case e.compl:
 			if sel == selMoveUp {
 				e.toApp(CmdUp)
 			} else {
 				e.toApp(CmdDown)
 			}
 			return true
+		case e.edges && e.atEdge(sel == selMoveUp):
+			if sel == selMoveUp {
+				e.pend |= EditorEdgeUp
+			} else {
+				e.pend |= EditorEdgeDown
+			}
+			e.wake() // and the text view moves the caret as it would
 		}
 	}
 	return false
+}
+
+// atEdge reports whether the caret, with nothing selected, is on the text's
+// first line (up) or its last (down), as laid out: the line of a wrapped
+// paragraph, and after a final line break the empty line that follows it.
+// An empty text is both.
+func (e *Editor) atEdge(up bool) bool {
+	objc.F.Reset().Arg(uintptr(e.tv)).Arg(uintptr(selSelectedRange)).Call(objc.MsgSend)
+	loc, n := int(objc.F.R0()), int(objc.F.R1())
+	if n != 0 {
+		return false
+	}
+	total := int(objc.Send(objc.Send(e.tv, selTextStorage), selLengthEd))
+	if total == 0 {
+		return true
+	}
+	nl := len(e.text) > 0 && e.text[len(e.text)-1] == '\n'
+	if loc >= total { // the end: on the empty line after a final break, or the last glyph's
+		if nl {
+			return !up
+		}
+		if !up {
+			return true
+		}
+		loc = total - 1
+	}
+	g := int(objc.Send1(e.lm, selGlyphIndexForChar, uintptr(loc)))
+	glyphs := int(objc.Send(e.lm, selNumberOfGlyphs))
+	e.lineRng = [2]uintptr{}
+	objc.F.Reset().Arg(uintptr(e.lm)).Arg(uintptr(selLineFragForGlyph)).Arg(uintptr(g)).ArgPtr(unsafe.Pointer(&e.lineRng)).Call(objc.MsgSend)
+	if up {
+		return e.lineRng[0] == 0
+	}
+	return !nl && int(e.lineRng[0]+e.lineRng[1]) >= glyphs
 }
 
 // sends reports whether Enter with modifiers m submits.
@@ -855,29 +991,57 @@ func edKeyDown(c *ffi.CB) {
 // key: where an input method acts on it.
 var edKeyHook func(e *Editor)
 
-// edReadSelection is GNUITextView's readSelectionFromPasteboard:: an image
-// with no plain text is the app's; anything else is NSTextView's (plain
-// text only: the view is not rich).
+// edReadSelection is GNUITextView's readSelectionFromPasteboard:, which
+// Paste calls: files are the app's (their names,
+// which a Finder copy has as text too, are not inserted), and so is an image
+// with no plain text; anything else is NSTextView's (plain text only: the
+// view is not rich).
 func edReadSelection(c *ffi.CB) {
 	self, pb := objc.ID(c.Int(0)), objc.ID(c.Int(2))
-	if e := editorOf(self); e != nil {
-		types := objc.Send(pb, selTypes)
-		if objc.Send1(types, selFirstObjectCommon, uintptr(edImageTypes)) != 0 && !objc.SendBool1(types, selContainsObject, uintptr(edPlainType)) {
-			e.pend |= EditorPastedImage
-			e.wake()
-			c.RetBool(true)
-			return
-		}
+	if e := editorOf(self); e != nil && e.pasteToApp(pb) {
+		c.RetBool(true)
+		return
 	}
 	c.RetBool(objc.SuperFrame(c.Frame(), edTVDef.Superclass(), self, selReadSelectionPB).Arg(uintptr(pb)).Call(objc.MsgSendSuper).Bool())
 }
 
-// edReadableTypes is GNUITextView's readablePasteboardTypes: NSTextView's and
-// the image types, so that Paste is enabled for an image.
+// edPastePlain is GNUITextView's pasteAsPlainText: (Paste and Match Style),
+// which reads the general pasteboard without readSelectionFromPasteboard::
+// files and an image without text are the app's as for Paste.
+func edPastePlain(c *ffi.CB) {
+	self := objc.ID(c.Int(0))
+	if e := editorOf(self); e != nil {
+		pbInit()
+		if e.pasteToApp(objc.Send(clsPasteboard, selGeneralPB)) {
+			return
+		}
+	}
+	objc.SuperFrame(c.Frame(), edTVDef.Superclass(), self, actionSel[MenuPasteAndMatchStyle]).Arg(c.Int(2)).Call(objc.MsgSendSuper)
+}
+
+// pasteToApp signals a paste of pasteboard pb that is the app's (files, an
+// image without text) and reports whether it was.
+func (e *Editor) pasteToApp(pb objc.ID) bool {
+	types := objc.Send(pb, selTypes)
+	switch {
+	case objc.Send1(types, selFirstObjectCommon, uintptr(edFileTypes)) != 0:
+		e.pend |= EditorPastedFiles
+	case objc.Send1(types, selFirstObjectCommon, uintptr(edImageTypes)) != 0 && !objc.SendBool1(types, selContainsObject, uintptr(edPlainType)):
+		e.pend |= EditorPastedImage
+	default:
+		return false
+	}
+	e.wake()
+	return true
+}
+
+// edReadableTypes is GNUITextView's readablePasteboardTypes: NSTextView's,
+// the image types and the file types, so that Paste is enabled for an image
+// and for files.
 func edReadableTypes(c *ffi.CB) {
 	self := objc.ID(c.Int(0))
 	sup := objc.ID(objc.SuperFrame(c.Frame(), edTVDef.Superclass(), self, selReadablePBTypes).Call(objc.MsgSendSuper).R0())
-	c.Ret(uintptr(objc.Send1(sup, selArrayByAdding, uintptr(edImageTypes))))
+	c.Ret(uintptr(objc.Send1(objc.Send1(sup, selArrayByAdding, uintptr(edImageTypes)), selArrayByAdding, uintptr(edFileTypes))))
 }
 
 // edResign is GNUITextView's resignFirstResponder: losing the keyboard

@@ -414,6 +414,12 @@ The design is `gpui-ghostty.md` §3, adopted with these rules:
 - **Programmatic styling:** style ranges (mentions) from app spans, as temporary attributes, so styling never enters the undo stack.
 - **The OS brings** spell check, autocorrect, text replacement, dictation, the emoji palette, Writing Tools, Services, undo and VoiceOver (`gpui-ghostty.md` §2, "Multi-line editor").
 - **Pasting images.** An `NSTextView` subclass overrides `readSelectionFromPasteboard:` to route images to the app.
+- **The app's hooks (ZapFast, 2026-10-21).**
+  - *Files:* a paste with files on the pasteboard (`public.file-url`, `NSFilenamesPboardType`; a Finder copy, which carries the names as text too) inserts nothing and fires `PastedFiles`; the app takes the paths with `RequestPasteKinds(WantFiles)`. Paste and Match Style (`pasteAsPlainText:`, which skips `readSelectionFromPasteboard:`) routes files and images the same way.
+  - *Edge arrows:* with `SetEdgeArrows(true)`, `doCommandBySelector:` reports `moveUp:` on the first laid-out line (or in an empty editor) and `moveDown:` on the last as `EdgeUp`/`EdgeDown` ("Up edits the last message"), and lets the text view move the caret. A selection, a completion and marked text keep the keys.
+  - *Options at runtime:* `SetOptions` (and `SetPlaceholder`) change the placeholder, the maximum length, the Enter policy, the most lines, the font size and the insets without making the editor again.
+  - *The Edit menu:* the edit items are nil-targeted, so the hosted view's own `undo:`, `copy:`, `paste:`, `pasteAsPlainText:` and `selectAll:` act and validate through the responder chain in a key window. Paste and Match Style is a standard edit action (`MenuPasteAndMatchStyle`, `menu.RolePasteAndMatchStyle`; a drawn field pastes). A window that `DebugAssumeKey` makes key while AppKit has none (a live test the system did not activate) gets the same: `GNUIAppDelegate`, the end of the chain, passes the items on to that window's first responder.
+  - *`rexui.Composer`:* `SetPlaceholder`, `SetEnter`, `SetEdgeArrows`, the signals `PastedFiles`, `EdgeUp` and `EdgeDown`, and `ComposerOpts.Accessory`, the app's control in the send button's place (the microphone of an empty composer).
 - **Tested on a real hosted view** (N4's live matrix, below): completion navigation and acceptance, Edit-menu editing on the hosted view, focus traversal in and out, IME acceptance through the `NSTextInputClient` calls, and byte/UTF-16 mapping over emoji, combining marks and RTL text.
 
 ### Accessibility (`platform`, `app`, `ui`; N7)
