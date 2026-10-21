@@ -20,19 +20,21 @@ import (
 type opKind uint8
 
 const (
-	opIdle    opKind = iota // n frames without input
-	opWait                  // until nothing is loading (at most n frames, at least 2)
-	opWheel                 // pane a: pointer over its list, b pixels of trackpad scroll per frame, n frames
-	opHover                 // pane a: the pointer goes down the list one row per frame from visible row b, n frames
-	opClick                 // pane a, visible row b: press, then release a frame later
-	opKey                   // key a with modifiers m, once
-	opKeys                  // key a with modifiers m on each of n frames
-	opText                  // typed text scriptTexts[a]
-	opHeader                // click the header of column a of pane b
-	opRefresh               // pane a is listed again (a changed directory when synthetic)
-	opDrag                  // drag the divider b pixels per frame for n frames and let go
-	opToggle                // toggle hidden files in pane a (a key press)
-	opPaste                 // paste (primary V) into the active pane's filter and wait, at most n frames, for the text to arrive
+	opIdle     opKind = iota // n frames without input
+	opWait                   // until nothing is loading (at most n frames, at least 2)
+	opWheel                  // pane a: pointer over its list, b pixels of trackpad scroll per frame, n frames
+	opHover                  // pane a: the pointer goes down the list one row per frame from visible row b, n frames
+	opClick                  // pane a, visible row b: press, then release a frame later
+	opKey                    // key a with modifiers m, once
+	opKeys                   // key a with modifiers m on each of n frames
+	opText                   // typed text scriptTexts[a]
+	opHeader                 // click the header of column a of pane b
+	opRefresh                // pane a is listed again (a changed directory when synthetic)
+	opDrag                   // drag the divider b pixels per frame for n frames and let go
+	opToggle                 // toggle hidden files in pane a (a key press)
+	opActivate               // the window is activated (focus gained): both folders are looked at again
+	opFocus                  // the keyboard goes to pane a's list (what Tab does, whatever the system's Keyboard navigation)
+	opPaste                  // paste (primary V) into the active pane's filter and wait, at most n frames, for the text to arrive
 )
 
 // modifiers of a step; modPrim is ⌘ on macOS and Ctrl elsewhere.
@@ -107,8 +109,8 @@ var benchSteps = [...]step{
 	{op: opWait, n: 200},
 	{op: opKey, a: int(ui.KeyEscape)},
 	{op: opWait, n: 200},
-	// the other pane
-	{op: opKey, a: int(ui.KeyTab)},
+	// the other pane, and back
+	{op: opFocus, a: 1},
 	{op: opWheel, a: 1, b: -30, n: 30},
 	{op: opClick, a: 1, b: 4},
 	{op: opIdle, n: 2},
@@ -118,7 +120,7 @@ var benchSteps = [...]step{
 	{op: opIdle, n: 3},
 	{op: opKey, a: int(ui.KeyEscape)},
 	{op: opIdle, n: 3},
-	{op: opKey, a: int(ui.KeyTab)},
+	{op: opFocus, a: 0},
 	// sort by each column, then by name again
 	{op: opHeader, a: 1, b: 0},
 	{op: opWait, n: 400},
@@ -137,6 +139,13 @@ var benchSteps = [...]step{
 	{op: opRefresh, a: 0},
 	{op: opWait, n: 600},
 	{op: opRefresh, a: 1},
+	{op: opWait, n: 600},
+	// coming back to the window, again and again
+	{op: opActivate},
+	{op: opWait, n: 600},
+	{op: opActivate},
+	{op: opWait, n: 600},
+	{op: opActivate},
 	{op: opWait, n: 600},
 	// hidden files
 	{op: opKey, a: hiddenKey, m: modPrim | modShift},
@@ -267,6 +276,11 @@ func (s *script) frame(in *ui.Input) {
 			in.Mods = 0
 			done = true
 		}
+	case opFocus:
+		c := pl.bk.Context()
+		c.SetFocus(listKey(st.a))
+		c.SetFocusVisible(true)
+		done = true
 	case opKey, opKeys:
 		code, m := ui.KeyCode(st.a), st.m
 		if st.a == hiddenKey {
@@ -306,6 +320,9 @@ func (s *script) frame(in *ui.Input) {
 			in.SetButton(ui.ButtonLeft, false, 0)
 			done = true
 		}
+	case opActivate:
+		in.FocusGained = true
+		done = true
 	case opRefresh:
 		pl.Refresh(st.a, s.synth)
 		done = true

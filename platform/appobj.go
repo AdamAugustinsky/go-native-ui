@@ -433,6 +433,24 @@ func (k *Tickets) Complete(tk Ticket, a, b int64, data []byte) bool {
 	return true
 }
 
+// CompleteParts is Complete with the data in two parts, head then tail,
+// copied into the record one after the other: no buffer joins them first.
+func (k *Tickets) CompleteParts(tk Ticket, a, b int64, head, tail []byte) bool {
+	if !enterGate() {
+		return false
+	}
+	defer leaveGate()
+	r, i, gen, ok := k.record(tk)
+	if !ok || !r.word.CompareAndSwap(uint64(gen)<<32|stReserved, uint64(gen)<<32|stWriting) {
+		return false
+	}
+	k.t.accepted.Add(1)
+	// The record is ours while stWriting; fill then copies r.data onto itself.
+	r.data = append(append(r.data[:0], head...), tail...)
+	k.t.fill(i, gen, AppEvent{Kind: AppEvService, Source: k.t.source, Window: r.ev.Window, ID: uint64(tk), A: a, B: b}, r.data)
+	return true
+}
+
 // Cancel withdraws ticket tk: no event is delivered for it, and its record
 // is free again (at once if not completed, after the dispatcher skips it if
 // already completed). It reports whether the ticket was outstanding.
@@ -841,7 +859,8 @@ type nativeEv struct {
 }
 
 // FlushApp is the last delivery, before the process ends or Main returns:
-// it closes the producers' gate (Post refuses from then on), waits for the
+// first the services that hold completions back store them (OnLastDrain),
+// then it closes the producers' gate (Post refuses from then on), waits for the
 // producers inside it to publish (at most flushWait) and delivers everything
 // they and the others queued, also while a frame holds dispatch, without the
 // safe-point work. An unpublished head is not taken for an empty queue: the
@@ -853,9 +872,22 @@ func FlushApp() {
 	if dispatch.running || s == nil {
 		return
 	}
-	gate.closed.Store(true)
 	dispatch.running = true
+	lastDrain.mu.Lock()
+	hooks := lastDrain.hooks
+	lastDrain.mu.Unlock()
 	deadline := time.Now().Add(flushWait)
+	for _, h := range hooks {
+		for h(false) && time.Now().Before(deadline) {
+			deliverReady(s)
+			time.Sleep(50 * time.Microsecond)
+		}
+	}
+	gate.closed.Store(true)
+	for _, h := range hooks {
+		h(true)
+	}
+	deadline = time.Now().Add(flushWait)
 	for {
 		deliverReady(s)
 		if gate.inflight.Load() == 0 && ready.pending() == 0 && len(natives.evs) == 0 {
@@ -868,6 +900,30 @@ func FlushApp() {
 	}
 	dispatch.running = false
 }
+
+// lastDrain holds the hooks of the last drain (OnLastDrain).
+var lastDrain struct {
+	mu    sync.Mutex
+	hooks []func(final bool) bool
+}
+
+// OnLastDrain registers f with every last drain (FlushApp), for a service
+// that holds completions back until a record frees (a notification response
+// waiting for one). On the main thread, while the producers' gate is still
+// open, f is called between deliveries until it reports that it holds
+// nothing more, or flushWait passes, so what it stores then is delivered
+// with the rest; once the gate has closed it is called once more with final
+// set, and must give up what it still holds and stop what it runs. Any
+// thread; once per service.
+func OnLastDrain(f func(final bool) (holding bool)) {
+	lastDrain.mu.Lock()
+	lastDrain.hooks = append(lastDrain.hooks, f)
+	lastDrain.mu.Unlock()
+}
+
+// AppClosed reports whether the producers' gate is closed: the last drain
+// has begun, and nothing is accepted until a sink is set again. Any thread.
+func AppClosed() bool { return gate.closed.Load() }
 
 // EndApp ends the application object's part before Main returns: the quit
 // state is settled (on macOS every suspended quit Apple event is answered, a

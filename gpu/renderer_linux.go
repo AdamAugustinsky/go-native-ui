@@ -612,9 +612,9 @@ func (r *Renderer) subImage(x, y, w, h int, format uintptr, p unsafe.Pointer) {
 		Arg32(uint32(format)).Arg32(glUnsignedByte).ArgPtr(p).Call(glx.texSubImage2D)
 }
 
-// uploadInstances copies quads into slot s: orphan the old storage, map the
-// new, copy, unmap.
-func (r *Renderer) uploadInstances(s *ringSlot, quads []Quad) {
+// uploadInstances copies quads, list's, into slot s: orphan the old storage,
+// map the new, copy (the backdrops as shapes: backdropsAsShapes), unmap.
+func (r *Renderer) uploadInstances(s *ringSlot, quads []Quad, list *DrawList) {
 	for s.quads < len(quads) {
 		s.quads *= 2
 	}
@@ -627,12 +627,15 @@ func (r *Renderer) uploadInstances(s *ringSlot, quads []Quad) {
 	p := fr.Reset().Arg32(glArrayBuffer).Arg(0).Arg(uintptr(n)).Arg32(glMapWriteBit | glMapInvalidateBuffer).
 		Call(glx.mapBufferRange).R0()
 	if p != 0 {
-		copy(unsafe.Slice((*Quad)(ffi.PtrFromC(p)), len(quads)), quads)
+		dst := unsafe.Slice((*Quad)(ffi.PtrFromC(p)), len(quads))
+		copy(dst, quads)
+		backdropsAsShapes(dst, list)
 		fr.Call1(glx.unmapBuffer, glArrayBuffer)
 		return
 	}
 	// Mapping failed (should not happen): upload from a heap staging copy.
 	r.stage = append(r.stage[:0], quads...)
+	backdropsAsShapes(r.stage, list)
 	fr.Reset().Arg32(glArrayBuffer).Arg(0).Arg(uintptr(n)).ArgPtr(unsafe.Pointer(&r.stage[0])).Call(glx.bufferSubData)
 }
 
@@ -687,7 +690,7 @@ func (r *Renderer) Encode(cmdBuf, target uintptr, width, height int, clear [4]fl
 		return
 	}
 
-	r.uploadInstances(s, quads)
+	r.uploadInstances(s, quads, list)
 	fr.Call1(glx.useProgram, uintptr(r.prog))
 	fr.Call1(glx.bindVertexArray, uintptr(r.vao))
 	fr.Reset().Arg32(uint32(r.locView)).ArgF32(float32(width)).ArgF32(float32(height)).Call(glx.uniform2f)
@@ -703,7 +706,7 @@ func (r *Renderer) Encode(cmdBuf, target uintptr, width, height int, clear [4]fl
 	runStart := 0
 	for i := range quads {
 		q := &quads[i]
-		if q.Mode == ModeShape || q.Tex == bound {
+		if q.Mode == ModeShape || q.Mode == ModeBackdrop || q.Tex == bound {
 			continue
 		}
 		if i > runStart {
@@ -722,6 +725,10 @@ func (r *Renderer) Encode(cmdBuf, target uintptr, width, height int, clear [4]fl
 	}
 	fr.Call2(glx.bindFramebuffer, glFramebuffer, 0)
 }
+
+// Backdrops reports whether the renderer blurs ModeBackdrop quads: OpenGL
+// does not yet, and draws their fallback colour.
+func (r *Renderer) Backdrops() bool { return false }
 
 // draw issues one instanced triangle-strip draw of count quads starting at
 // instance first: the attributes are pointed at record `first` of the bound

@@ -4,6 +4,7 @@ package objc
 
 import (
 	"errors"
+	"sync"
 	"sync/atomic"
 	"unsafe"
 
@@ -324,7 +325,10 @@ type globalBlock struct {
 	sig  []byte
 }
 
-var globals []*globalBlock // kept for the process lifetime
+var (
+	globalsMu sync.Mutex
+	globals   []*globalBlock // kept for the process lifetime
+)
 
 // NewGlobalBlock makes a process-lifetime block with signature sig whose
 // invoke function runs h (argument 0 is the block). It is a global block:
@@ -341,7 +345,9 @@ func NewGlobalBlock(sig string, h func(*ffi.CB)) ID {
 		invoke: ffi.NewCallback(h),
 		desc:   uintptr(unsafe.Pointer(&g.desc)),
 	}
+	globalsMu.Lock()
 	globals = append(globals, g)
+	globalsMu.Unlock()
 	return ID(unsafe.Pointer(&g.lit))
 }
 
@@ -398,6 +404,20 @@ func CallKeptBlock(f *ffi.Frame, k *KeptBlock, args ...uintptr) bool {
 	return true
 }
 
+// ReleaseKeptBlock releases the block k holds without calling it, and
+// empties k: the call that gave it is never answered (the process is
+// ending). It reports false if k was empty, so a kept block is called or
+// released once, whichever of the two comes first.
+func ReleaseKeptBlock(f *ffi.Frame, k *KeptBlock) bool {
+	b := k.b.Swap(0)
+	if b == 0 {
+		return false
+	}
+	f.Call1(blockRelease, b)
+	keptBlocks.Add(-1)
+	return true
+}
+
 // Held reports whether k holds a block.
 func (k *KeptBlock) Held() bool { return k.b.Load() != 0 }
 
@@ -427,13 +447,19 @@ func Leaks() Counts {
 	return Counts{
 		Blocks:       liveBlocks.Load(),
 		KeptBlocks:   keptBlocks.Load(),
-		GlobalBlocks: int64(len(globals)),
+		GlobalBlocks: globalBlocks(),
 		Delegates:    delegates.Load(),
 		Observers:    observers.Load(),
 		StaleCalls:   staleCalls.Load(),
 		Refused:      refused.Load(),
 		RetiredSlots: retiredSlots.Load(),
 	}
+}
+
+func globalBlocks() int64 {
+	globalsMu.Lock()
+	defer globalsMu.Unlock()
+	return int64(len(globals))
 }
 
 var selAddObserver, selRemoveObserver SEL

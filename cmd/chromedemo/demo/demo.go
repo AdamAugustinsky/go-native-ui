@@ -9,8 +9,11 @@
 package demo
 
 import (
+	"time"
+
 	"gonativeui/app"
 	"gonativeui/icon"
+	"gonativeui/img"
 	"gonativeui/rexui"
 	"gonativeui/text"
 	"gonativeui/theme"
@@ -125,10 +128,12 @@ type Demo struct {
 	search   bool // the finder's search is expanded
 	path     []rexui.PathItem
 
-	files  []file
-	table  base.TableState
-	cols   [4]base.Column
-	glyphs rexui.ListGlyphs
+	files        []file
+	imgs         *img.Cache // the system's file icons (nil under a test's fake text system)
+	iconsPending bool       // an icon was loading in the last frame
+	table        base.TableState
+	cols         [4]base.Column
+	glyphs       rexui.ListGlyphs
 
 	content  base.ScrollState // the settings form's and the note's scroll views
 	pops     [len(settingsPopups)]int
@@ -183,6 +188,10 @@ var (
 func (d *Demo) Init(a *app.App) error {
 	d.Attach(a.UI, a.Text)
 	d.k.Materials = a.Win != nil && a.Win.HasMaterials()
+	if a.R != nil && d.opt.Scene == Finder { // the files' icons: a few dozen small images
+		d.imgs = img.NewCache(img.Options{Renderer: a.R, GPUBytes: 8 << 20, CPUBytes: 8 << 20, Workers: 2, Entries: 64})
+		d.k.SetImages(d.imgs)
+	}
 	a.UI.Reserve(8192)
 	return nil
 }
@@ -202,6 +211,15 @@ func (d *Demo) Attach(c *ui.Context, ts base.TextSystem) {
 	d.views = [4]icon.ID{d.ic.grid, d.ic.list, d.ic.columns, d.ic.gallery}
 	d.view = 1 // as List, as the finder scene
 	d.model()
+}
+
+// Close stops the image cache's workers (Init's); the window's renderer
+// outlives it.
+func (d *Demo) Close() {
+	if d.imgs != nil {
+		d.imgs.Close(time.Second)
+		d.imgs = nil
+	}
 }
 
 // Context is the window's ui context (widgettest.Host).
@@ -265,6 +283,10 @@ func (d *Demo) Build(c *ui.Context) {
 		return
 	}
 	d.winW, d.winH, d.winScale = w, h, c.Scale()
+	if d.imgs != nil && d.imgs.Poll() {
+		c.RequestFrame()
+	}
+	d.iconsPending = false
 	k := d.k
 	d.wk.Begin(c)
 	r := k.Theme()

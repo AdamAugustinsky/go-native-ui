@@ -56,7 +56,8 @@ directly with `k.Kit`, or copies a component and owns it.
 | `ColorWell` | the system's colour panel, or `Drawn` for its own picker | — | NSColorWell's 48 × 24 bezel and inset swatch; a popover of the system colours and a hex field. |
 | `MessageBubble`, `BeginBubble` / `EndBubble` | incoming, outgoing, system; sent, sending, failed | — | C2 rich text in a bubble, emoji-only messages large and bubble-less, selectable across bubbles in a `VList` under one selection scope (C4). |
 | `ChatListRow`, `DateDivider`, `TypingIndicator` | compact; pill; inline | — | A 56 pt conversation row (avatar, title, two-line preview, time, unread count); a hairline-flanked date; three dots that pulse only while visible. |
-| `CompletionList`, `CompletionState` | — | — | The completion popup of a text box: the contract N4 writes the composer against (its doc comment). |
+| `CompletionList`, `CompletionState` | — | — | The completion popup of a text box: the contract the composer and the combo box share (its doc comment). |
+| `Composer`, `NewComposer` | default (1 → 6 lines), expanded (3 → 8) | empty, typing, attachments, sending, disabled | The chat composer (D7b): a rounded field (the text field's fill and outline) holding an attachments row, the text and a 28 pt send button. The text is a hosted `NSTextView` on macOS (spell check, autocorrect, dictation, emoji palette, Writing Tools) that grows with its `Height` signal, and a drawn single-line field elsewhere and offscreen. The send button needs text or an attachment and no send in flight; the list is a `CompletionList` above the field, never over the hosted view. |
 
 Every component is keyboard-operable and records its semantics. Its focus
 ring sits outside the shape, shows for keyboard focus only (the text-entry
@@ -327,9 +328,49 @@ scene tool's `-width`, `-selectAll` and `-nested`:
   unless the header ends it. The toolbar leaves that band clear
   (`ToolbarOpts.ContentEdge`) and then draws its capsules, filled as the
   system's glass measured over the band (`EdgeFill`). Static at rest, no
-  allocation per frame. AppKit also blurs what is under the band; this does
-  not: text under the band is sharp, and its ink differs from AppKit's
-  blurred one (ΔE up to 4.6 between lines).
+  allocation per frame.
+- While content is under it the scroll edge blurs it as AppKit does (D54,
+  issue #25): `ui.Context.NextBackdrop` with AppKit's recipes read from its
+  layers on the Mac mini's 27.2 (`docs/research/glass-over-metal.md`).
+  A table's, whose header is in the pocket, is the Hard pocket
+  (`ScrollEdgeLook.Hard`): the content at a quarter of the backing scale
+  under a 6-pt Gaussian plus 0.03, and the control background plus 0.03 at
+  82.45 % over it. A plain scroll view's is the thin film
+  (`ScrollEdgeLook.Thin`): the control background mixed into the blur at
+  50 % / 60 % at half scale, saturation 1.25, plus 0.03; AppKit's blur
+  there falls off toward the hairline, which this does not model. An
+  inactive window's recipes are the same (`HardInactive`, `ThinInactive`;
+  AppKit's bands measured ΔE 0.00 apart). Drawn against AppKit's over
+  GlassProbe's rows (ΔE2000, mean / p99): Hard 0.07 / 0.83 light and
+  0.20 / 1.15 dark over text, 0.28 / 1.07 and 0.56 / 1.11 over a blue
+  selection; thin film 0.36 / 1.66 and 0.95 / 2.38. Finder scrolled
+  against `captures-macmini` finder-*-scrolled, per row of the pocket:
+  0.13 (light) and 0.25 (dark) inactive, 0.84 and 1.12 key over its blue
+  selection, which AppKit's dark blur saturates a little more. The blur
+  costs 0.07–0.10 ms of GPU a frame, a 5K window at 2x included, and
+  nothing at rest. At rest, nothing under it, the bar is as before.
+- The toolbar's own band (`ContentUnder` without `ContentEdge`) is the Hard
+  pocket too: a blur of whatever is drawn under it, built before the
+  toolbar, its `gpu.Backdrop.Base` the content pane's colour (`BandFill`,
+  else the control background), which the blur sees where nothing is drawn
+  instead of the window's clear colour (white in dark mode would blur to
+  #4C4C4C). With the content below the band, nothing is under it, and every
+  renderer draws it flat without blurring: the pocket over that colour,
+  #FFFFFF in light and #262626 over #1E1E1E in dark. A pane whose scroll
+  view runs under the band (`ContentEdge`) draws the band's blur itself and
+  the toolbar adds none: one blur per region.
+- Where there is no blur, under Reduce Transparency and where the renderer
+  has none (Direct3D 11, OpenGL: `gpu.Renderer.Backdrops`), the scroll edge
+  over content is the colour AppKit's blurred pocket averages to, opaque
+  (`ScrollEdgeLook.Under`, `UnderInactive`): #FCFCFC and #2B2B2B over rows
+  of text, key and inactive, over the band and a header alike (Mac mini
+  27.2: Settings, Notes, Finder, legacy and overlay scrollers,
+  #FAFAFA–#FEFEFE and #2A2A2A–#2D2D2D). A list's selected rows under it
+  tint it as the blur does, by their share of the inset at the share the
+  bar lets through: Finder's two selected rows give #E0EBF9 against
+  AppKit's #E4F0FF over the pocket (#273343 against #232E3D in dark).
+  Without the blur the bar alone left the rows under the band and behind a
+  header in the pocket legible; with this fill their text no longer shows.
 - A sidebar row's disclosure: once any row has children every row's content
   moves 9 right (`DisclosureRoom`); the disclosure is a 13-wide box at 12 pt,
   13 more per level (`DisclosureX`), its chevron 1 below the middle,
@@ -345,7 +386,9 @@ scene tool's `-width`, `-selectAll` and `-nested`:
   (`ui.Context.SetObscured`), so `ScrollIntoView`, the keyboard's moves and
   an assistive technology's `ActScrollIntoView` bring a row below it; a
   list's Page Up and Down count the rows below it.
-- Under Reduce Transparency the scroll edge is `MatScrollEdge`'s opaque fill.
+- Under Reduce Transparency the scroll edge is opaque and not blurred:
+  `MatScrollEdge`'s fill at rest, `ScrollEdgeLook.Under` with content
+  under it (the toolbar's own band too).
 - Back and forward's divider: 1 × 20 pt from the capsule's middle, the
   separator's colour at 21 % (light) and 26.5 % (dark): #C8C8C8 on
   #FCFCFC, #707070 on #3C3C3C.
@@ -425,7 +468,10 @@ at the place it is typed. On macOS the arrows and Backspace arrive as edit
 actions (`doCommandBySelector:`), not keys, and the commander sees them the same.
 `CompletionList`'s doc comment is the contract for an editor that is not ours
 (a native `NSTextView` sends the same commands): units, the exclusion rectangle
-and what the caller must do.
+and what the caller must do. The composer is that editor: the hosted view's
+keys (`platform.EditorCommand`) become the same commands (`base.FieldCommandOf`)
+and go to the same commander (`CompletionState`) as a drawn field's, so one list
+serves both.
 
 **The completion list and the combo box's list take no focus**
 (`OverlayOpts.NoFocus`): the focus, a hosted native view's first responder
@@ -508,8 +554,10 @@ Still in recipe fields:
     sidebar's and inspector's glass run to the top), the hairline lies just
     below the band (y 52–52.5), and under a table header pinned below the
     toolbar the pocket's bar covers the header (`ToolbarOpts.Pocket`, or
-    the table's own with `TableOpts.TopInset`); the bar lets 18% (light) /
-    22% (dark) of the content through (`ScrollEdgeLook`).
+    the table's own with `TableOpts.TopInset`); at rest the bar lets 18%
+    (light) / 22% (dark) of the content through; over content it is
+    AppKit's blur (`ScrollEdgeLook.Hard`, `Thin`), and without one opaque,
+    AppKit's blurred mean (`ScrollEdgeLook.Under`).
   - Sidebar symbols are 16 pt; the title's field starts 4 after the
     symbol's own width (not a 20-pt column) and draws its text 2 in, as
     the headers' (`SidebarRecipe.FieldInset`).

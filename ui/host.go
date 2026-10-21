@@ -25,6 +25,11 @@ const (
 	// HostFocusable makes the host's box focusable: Tab reaches the native
 	// view through it.
 	HostFocusable HostFlags = 1 << iota
+	// HostTextEntry and HostList say what a focusable host is, for Tab
+	// traversal (FocusText, FocusList): a native text field or text view, or a
+	// list, table or outline. A focusable host with neither is a control.
+	HostTextEntry
+	HostList
 )
 
 // HostRegion is where a host is in the finished frame.
@@ -59,6 +64,12 @@ func (c *Context) Host(host uint32, key Key, flags HostFlags) ID {
 	f := Hoverable
 	if flags&HostFocusable != 0 {
 		f |= Focusable
+		if flags&HostTextEntry != 0 {
+			f |= FocusText
+		}
+		if flags&HostList != 0 {
+			f |= FocusList
+		}
 	}
 	id := c.BoxKeyed(f, key, nil)
 	c.shellFrame()

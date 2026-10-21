@@ -52,6 +52,7 @@ type box struct {
 	ovRoot                          bool  // the root box of an overlay
 	ovl                             uint8 // the overlay the box belongs to, 1 + its index in the frame's overlays; 0 for the main tree
 	mat                             uint8 // 1 + the box's record in shell.mats when Material marked it (material.go)
+	bdrop                           uint8 // 1 + the box's recipe in Context.bd.recs when it is a backdrop (NextBackdrop)
 
 	bg          [4]uint32
 	textColor   uint32
@@ -170,6 +171,7 @@ type Context struct {
 	hasNextPos bool
 	nextFlags  Flags
 	nextAudit  AuditMask // the exemptions of the next box (NextAuditExempt)
+	bd         backdrops // this frame's backdrops and the next box's (NextBackdrop)
 
 	flowHidden bool // a flow hid children this layout (flow.go)
 
@@ -205,6 +207,7 @@ type Context struct {
 	relClicks         [2]uint8
 	focusKey          Key
 	focusVisible      bool // focus came from the keyboard (FocusVisible)
+	textOnlyTab       bool // Tab skips the controls (focus classes, focus.go): SetTabReachesControls(false)
 	scrollSet         bool // ScrollTo was called this frame (End decides whether the scroll is still moving)
 
 	sp scrollPhys   // trackpad gestures, latching and rubber bands (scrollphys.go)
@@ -224,6 +227,8 @@ type Context struct {
 	// again (ns from the frame start, 0 = none), and the input-method
 	// rectangle of the focused field.
 	wakeNs int64
+
+	shownWatch []shownWatch // WatchShown's boxes of this frame, checked after layout
 	// deadlines (deadline.go) are the named one-shot deadlines in force.
 	deadlines []deadline
 	imeRect   [4]float32
@@ -595,6 +600,7 @@ func (c *Context) resetStyles() {
 	c.hasNextPos = false
 	c.nextFlags = 0
 	c.nextAudit = 0
+	c.bd.n, c.bd.hasNext = 0, false
 	c.nextEscClr = false
 	c.nextStill = false
 	c.nextCmdr, c.nextSeps = nil, ""
@@ -751,6 +757,7 @@ func (c *Context) newBox(flags Flags, key Key) ID {
 	b.cross = c.sCross.take()
 	b.justify = c.sJustify.take()
 	b.auditOff, c.nextAudit = c.nextAudit, 0
+	c.takeBackdrop(b)
 	b.pad = c.sPad.take()
 	b.gap = c.sGap.take()
 	b.pref = [2]Size{c.sW.take(), c.sH.take()}

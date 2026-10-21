@@ -43,6 +43,7 @@ type Step struct {
 	dx   float32
 	text string
 	fn   func()
+	thru bool // the target may be covered: the pointer goes to its centre anyway
 	id   uint16
 	edit ui.EditAction
 }
@@ -136,6 +137,12 @@ func (s Step) Nth(i int) Step { s.nth = i; return s }
 // With holds the modifiers during a pointer step: Click(…).With(ui.ModShift) is
 // a Shift-click.
 func (s Step) With(m ui.Mods) Step { s.mods = m; return s }
+
+// Through lets a pointer step act on a target that something is drawn over
+// (a modal dialog, a toolbar band) instead of clearing it first or failing:
+// the pointer goes to the target's centre and the click lands on whatever is
+// there. It is for tests of what the covering box does with the click.
+func (s Step) Through() Step { s.thru = true; return s }
 
 // Within limits a wait (WaitFor, WaitGone, Settle) to ms milliseconds of clock
 // time in place of DefaultWaitMs.

@@ -39,53 +39,71 @@ func (r *rig) state(role ui.Role, name string) ui.SemState {
 	return r.Must(role, name).State
 }
 
-// Every kind of widget of the gallery can be reached with Tab, and so can each
-// of the live controls; the tab order closes into a ring.
+// goTo shows scene sc and lets the frames after it run.
+func (r *rig) goTo(sc int) {
+	r.t.Helper()
+	r.g.Go(sc)
+	r.Frames(4)
+}
+
+// Every kind of widget of the gallery can be reached with Tab, in each of its
+// scenes; the tab order closes into a ring.
 func TestEveryWidgetIsReachableByTab(t *testing.T) {
-	r := newRig(t, Options{Still: true})
-	r.Frames(5)
 	type id struct {
 		role ui.Role
 		name string
 	}
-	want := map[id]bool{}
-	for _, n := range []id{
-		{ui.RoleMenuItem, "File"}, {ui.RoleMenuItem, "Edit"}, {ui.RoleMenuItem, "View"},
-		// one of each kind of the state matrix
-		{ui.RoleButton, "Button"}, {ui.RoleButton, "Primary"}, {ui.RoleButton, "Plain"}, {ui.RoleButton, "Add"},
-		{ui.RoleCheckbox, "Check"}, {ui.RoleCheckbox, "Mixed"}, {ui.RoleSwitch, "On"}, {ui.RoleRadio, "Radio"},
-		{ui.RoleSlider, "Slider"}, {ui.RoleTextField, "Field"}, {ui.RoleComboBox, "Choice"},
-		// the live controls
-		{ui.RoleTextField, "Notes"}, {ui.RoleSearchField, "Filter"}, {ui.RoleCheckbox, "Enable feature"},
-		{ui.RoleCheckbox, "All options"}, {ui.RoleSwitch, "Notifications"}, {ui.RoleRadio, "One"},
-		{ui.RoleSlider, "Volume"}, {ui.RoleComboBox, "Format"}, {ui.RoleButton, "Open…"}, {ui.RoleButton, "Save"},
-		{ui.RoleButton, "More"}, {ui.RoleButton, "Remove"}, {ui.RoleButton, "Add item"}, {ui.RoleButton, "Menu"},
-		{ui.RoleButton, "Delete…"}, {ui.RoleComboBox, "Appearance"}, {ui.RoleSwitch, "Show activity"},
-		{ui.RoleTab, "Overview"}, {ui.RoleList, "items"}, {ui.RoleSearchField, "Search rows"}, {ui.RoleTable, "rows"},
-		{ui.RoleSplitter, "Divider"},
+	for _, tc := range []struct {
+		scene int
+		want  []id
+	}{
+		{scPlayground, []id{
+			{ui.RoleMenuItem, "File"}, {ui.RoleMenuItem, "Edit"}, {ui.RoleMenuItem, "View"}, {ui.RoleMenuItem, "Go"},
+			{ui.RoleSearchField, "Search"},
+			{ui.RoleTextField, "Notes"}, {ui.RoleSearchField, "Filter"}, {ui.RoleCheckbox, "Enable feature"},
+			{ui.RoleCheckbox, "All options"}, {ui.RoleSwitch, "Notifications"}, {ui.RoleRadio, "One"},
+			{ui.RoleSlider, "Volume"}, {ui.RoleComboBox, "Format"}, {ui.RoleButton, "Open…"}, {ui.RoleButton, "Save"},
+			{ui.RoleButton, "More"}, {ui.RoleButton, "Remove"}, {ui.RoleButton, "Add item"}, {ui.RoleButton, "Menu"},
+			{ui.RoleButton, "Delete…"}, {ui.RoleTab, "Overview"}, {ui.RoleList, "items"},
+		}},
+		{scStates, []id{ // one of each kind of the state matrix
+			{ui.RoleButton, "Button"}, {ui.RoleButton, "Primary"}, {ui.RoleButton, "Plain"}, {ui.RoleButton, "Add"},
+			{ui.RoleCheckbox, "Check"}, {ui.RoleCheckbox, "Mixed"}, {ui.RoleSwitch, "On"}, {ui.RoleRadio, "Radio"},
+			{ui.RoleSlider, "Slider"}, {ui.RoleTextField, "Field"}, {ui.RoleComboBox, "Choice"},
+		}},
+		{scTable, []id{{ui.RoleSearchField, "Search rows"}, {ui.RoleTable, "rows"}, {ui.RoleColumnHeader, "ID"}}},
+		{scAppearance, []id{{ui.RoleComboBox, "Appearance"}, {ui.RoleSwitch, "Show activity"}}},
+		{scDialogs, []id{{ui.RoleButton, "Show Alert…"}, {ui.RoleButton, "Delete…"}, {ui.RoleButton, "Save…"}, {ui.RoleButton, "Open…"}}},
 	} {
-		want[n] = true
-	}
-	var first ui.Key
-	ringed := false
-	for i := 0; i < 400 && !ringed; i++ {
-		r.press(ui.KeyTab, 0)
-		n, ok := r.Focused()
-		if !ok {
-			continue
-		}
-		if first == 0 {
-			first = n.Key
-		} else if n.Key == first {
-			ringed = true
-		}
-		delete(want, id{n.Role, string(r.Tree().Text(n.Name))})
-	}
-	if !ringed {
-		t.Error("Tab never came back to the first stop")
-	}
-	for n := range want {
-		t.Errorf("Tab never reached the node with role %d named %q", n.role, n.name)
+		t.Run(defs[tc.scene].title, func(t *testing.T) {
+			r := newRig(t, Options{Still: true})
+			r.goTo(tc.scene)
+			want := map[id]bool{}
+			for _, n := range tc.want {
+				want[n] = true
+			}
+			var first ui.Key
+			ringed := false
+			for i := 0; i < 400 && !ringed; i++ {
+				r.press(ui.KeyTab, 0)
+				n, ok := r.Focused()
+				if !ok {
+					continue
+				}
+				if first == 0 {
+					first = n.Key
+				} else if n.Key == first {
+					ringed = true
+				}
+				delete(want, id{n.Role, string(r.Tree().Text(n.Name))})
+			}
+			if !ringed {
+				t.Error("Tab never came back to the first stop")
+			}
+			for n := range want {
+				t.Errorf("Tab never reached the node with role %d named %q", n.role, n.name)
+			}
+		})
 	}
 }
 
@@ -238,6 +256,8 @@ func TestKeyboardOnlyOperation(t *testing.T) {
 		}
 	})
 	t.Run("appearance select", func(t *testing.T) {
+		r.goTo(scAppearance)
+		defer r.goTo(scPlayground)
 		r.focusOn(ui.RoleComboBox, "Appearance")
 		if v := r.value(ui.RoleComboBox, "Appearance"); v != "System" {
 			t.Fatalf("Appearance starts as %q, want System", v)
@@ -296,6 +316,8 @@ func TestKeyboardOnlyOperation(t *testing.T) {
 		}
 	})
 	t.Run("table", func(t *testing.T) {
+		r.goTo(scTable)
+		defer r.goTo(scPlayground)
 		r.focusOn(ui.RoleTable, "rows")
 		r.press(ui.KeyDown, 0)
 		r.press(ui.KeyDown, shiftMod)

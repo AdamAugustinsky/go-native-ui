@@ -733,6 +733,7 @@ func (r *Renderer) Encode(cmdBuf, target uintptr, width, height int, clear [4]fl
 		}
 		dst := unsafe.Slice((*Quad)(unsafe.Add(win32.Ptr(r.mapped.Data), r.head*quadSize)), n)
 		copy(dst, quads)
+		backdropsAsShapes(dst, list)
 		win32.Com(ctx, vtContextUnmap, r.vb, 0)
 		base = r.head
 		r.head += n
@@ -768,7 +769,7 @@ func (r *Renderer) Encode(cmdBuf, target uintptr, width, height int, clear [4]fl
 	runStart := 0
 	for i := range quads {
 		q := &quads[i]
-		if q.Mode == ModeShape || q.Tex == bound {
+		if q.Mode == ModeShape || q.Mode == ModeBackdrop || q.Tex == bound {
 			continue
 		}
 		if i > runStart {
@@ -784,6 +785,10 @@ func (r *Renderer) Encode(cmdBuf, target uintptr, width, height int, clear [4]fl
 	r.fence()
 	runtime.KeepAlive(r)
 }
+
+// Backdrops reports whether the renderer blurs ModeBackdrop quads: Direct3D
+// 11 does not yet, and draws their fallback colour.
+func (r *Renderer) Backdrops() bool { return false }
 
 // bindTexture binds texture t; a freed or unknown id binds the empty texture.
 func (r *Renderer) bindTexture(ctx uintptr, t TextureID) {

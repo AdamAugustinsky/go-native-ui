@@ -1,12 +1,14 @@
 package pilot
 
 import (
+	"bytes"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
 
 	"gonativeui/fs"
+	"gonativeui/rexui"
 	"gonativeui/ui"
 	"gonativeui/widget"
 )
@@ -41,7 +43,9 @@ type pane struct {
 	q          []byte        // the query the rows were built for
 	fver       uint32        // counts changes of q and hideHidden
 
-	pathErr string // shown in the path field: why Enter did not navigate
+	pathErr string // shown under the path field (in the status line): why Enter did not navigate
+	pathReq uint64 // the request the path field's Enter made, while its listing is awaited
+	pathOK  bool   // a folder was shown while the path field was open: the field goes away
 	msg     string // status line: an error or a note
 	msgErr  bool
 
@@ -81,8 +85,19 @@ type pane struct {
 	scrollRow int // row to put at the top at the next build (after a swap), -1 none
 	scrollOff float32
 
-	cols [3]widget.Column // the table's columns: Name, Size, Modified (the user can resize them)
+	cols [3]widget.Column // the table's columns: Name, Date Modified, Size (the user can resize them)
+
+	// the path bar: the components of dir from the root, and the bar's items
+	// (symbols set when it is drawn); pathEdit shows the path field in its
+	// place (⌘L) until it is left
+	crumbs    []crumb
+	crumbItem []rexui.PathItem
+	pathEdit  bool
+	rootTitle string
 }
+
+// crumb is one component of the path bar: its name and the folder it opens.
+type crumb struct{ title, path string }
 
 func newPane(id uint32, src Source, home string) *pane {
 	p := &pane{id: id, src: src, home: home, hideHidden: true, pendSel: -1, topEntry: -1, reveal: -1, scrollRow: -1}
@@ -97,6 +112,38 @@ func (p *pane) setDir(dir string) {
 	p.base = filepath.Base(dir)
 	if p.base == "." || p.base == string(filepath.Separator) {
 		p.base = dir
+		if p.rootTitle != "" && dir == p.parent {
+			p.base = p.rootTitle
+		}
+	}
+	p.setCrumbs()
+}
+
+// setCrumbs makes the path bar's components: the folders from the root to
+// dir, the root named by the volume's name.
+func (p *pane) setCrumbs() {
+	p.crumbs = p.crumbs[:0]
+	for d := p.dir; d != ""; {
+		title := filepath.Base(d)
+		parent := parentPath(d)
+		if parent == d {
+			title = d
+			if p.rootTitle != "" {
+				title = p.rootTitle
+			}
+		}
+		p.crumbs = append(p.crumbs, crumb{title, d})
+		if parent == d {
+			break
+		}
+		d = parent
+	}
+	for i, j := 0, len(p.crumbs)-1; i < j; i, j = i+1, j-1 {
+		p.crumbs[i], p.crumbs[j] = p.crumbs[j], p.crumbs[i]
+	}
+	p.crumbItem = p.crumbItem[:0]
+	for _, c := range p.crumbs {
+		p.crumbItem = append(p.crumbItem, rexui.PathItem{Title: c.title})
 	}
 }
 
@@ -150,6 +197,29 @@ func (p *pane) relist() {
 	}
 	p.floor = p.src.List(p.id, p.dir, p.sortKey, p.desc)
 	p.relPending = true
+}
+
+// dropPathEdit ends the path field without going anywhere: the text goes back
+// to the folder shown, and the reason it was refused with it.
+func (p *pane) dropPathEdit() {
+	p.path.SetString(p.dir)
+	p.clearPathErr()
+	p.pathEdit = false
+	// The navigation the field asked for goes with it: its listing, when it
+	// comes, is nobody's (another navigation, started since, is left alone).
+	if p.nav.pending && p.pathReq != 0 && p.nav.req == p.pathReq {
+		p.nav.pending = false
+	}
+	p.pathReq = 0
+}
+
+// clearPathErr takes away the reason the path was refused, in the status line
+// as well (a failed navigation sets both).
+func (p *pane) clearPathErr() {
+	if p.msg == p.pathErr {
+		p.msg = ""
+	}
+	p.pathErr = ""
 }
 
 func (p *pane) setMsg(s string, isErr bool) { p.msg, p.msgErr = s, isErr }
@@ -276,6 +346,7 @@ func (p *pane) install(dir string, l *fs.Listing, lease uint32, sel string) {
 	p.v.ts.Sel.Reserve(withSlack(len(l.Entries)))
 	p.path.SetString(dir)
 	p.pathErr, p.msg = "", ""
+	p.pathOK = p.pathEdit // the path field, if open, has done its work
 	p.filter.Reset()
 	p.filterOpen = false
 	p.q = p.q[:0]
@@ -419,7 +490,11 @@ func (p *pane) setQuery() {
 	if !p.filterOpen {
 		q = nil
 	}
+	changed := !bytes.Equal(p.q, q)
 	p.q = append(p.q[:0], q...)
+	if changed { // a new search starts at the top, as results do; a view left far down would otherwise stripe rows that are not there
+		p.scrollRow, p.scrollOff = 0, 0
+	}
 	if p.v.l != nil {
 		p.startRows()
 	}

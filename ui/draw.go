@@ -71,6 +71,7 @@ func (c *Context) End(list *gpu.DrawList) {
 	}
 	c.cpLast, c.cpNow = c.cpNow, colorReq{} // (the colour panel request of this frame, for the app and the next frame)
 	c.layout()
+	c.checkShownWatch()
 	c.semScroll()
 	c.traverseFocus()
 	c.animateBoxes()
@@ -214,10 +215,20 @@ func (c *Context) emit(l *gpu.DrawList, id ID, clip [4]float32) {
 	}
 
 	if sized && !empty(intersect(r, clip)) {
+		bdrop := int(b.bdrop) - 1
+		if bdrop >= 0 && bdrop < c.bd.n { // the blur, its background the fallback (NextBackdrop)
+			q := gpu.Quad{Rect: r, Clip: clip, Radii: b.radii}
+			if b.flags&DrawBackground != 0 {
+				for i, bg := range b.bg {
+					q.Color[i] = b.col(bg)
+				}
+			}
+			l.AddBackdrop(q, c.bd.recs[bdrop])
+		}
 		if b.flags&(DrawBackground|DrawBorder) != 0 {
 			q := gpu.Quad{Rect: r, Clip: clip, Radii: b.radii}
 			draw := false
-			if b.flags&DrawBackground != 0 {
+			if b.flags&DrawBackground != 0 && bdrop < 0 {
 				for i, bg := range b.bg {
 					q.Color[i] = b.col(bg)
 					draw = draw || bg&255 != 0
