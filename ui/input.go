@@ -593,6 +593,8 @@ func (in *Input) ClearFrame() {
 	in.Cancelled = [numButtons]bool{}
 	in.Clicks = [numButtons]uint8{}
 	in.ScrollX, in.ScrollY, in.NScrolls = 0, 0, 0
+	clear(in.Text[:in.NText]) // typed and pasted text (a password) does not outlive its frame
+	clear(in.Paste)
 	in.NKeys, in.NText = 0, 0
 	in.CommitOff, in.CommitLen = 0, 0
 	in.FocusGained = false

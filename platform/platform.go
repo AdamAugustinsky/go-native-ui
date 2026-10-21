@@ -22,6 +22,7 @@
 //	(*Window).SetDragRegions(r)           custom-titlebar areas that move the window (macOS; no-op elsewhere)
 //	(*Window).SetIMERect(x, y, w, h)      where the text caret or composition is (window pixels), for input-method candidate windows; copied, cheap to call every frame
 //	(*Window).SetTextInput(active)        whether a text field has focus; losing it cancels a composition in progress
+//	(*Window).SetSecureTextInput(on)      whether that field is a secure (password) one: macOS secure event input and Roman input only while any window says so; no-op elsewhere
 //	(*Window).DiscardComposition()        cancel a composition in progress without committing it (EvPreedit with no text follows)
 //	(*Window).Backdrop() Backdrop         the system material behind the content (Options.Backdrop), BackdropNone without; experimental
 //	(*Window).HasButtons() bool           whether native buttons are over the content (Options.Buttons); experimental
@@ -492,6 +493,7 @@ func newEventQueue() eventQueue {
 // (the previous slice is dead by then) or by reset.
 func (q *eventQueue) takePending() []Event {
 	if len(q.ev) == 0 {
+		clear(q.text) // typed and pasted text (a password) does not outlive its events
 		q.text = q.text[:0]
 		q.pend = q.pend[:0]
 		return q.pend

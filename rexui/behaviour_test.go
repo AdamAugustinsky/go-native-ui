@@ -1,6 +1,7 @@
 package rexui_test
 
 import (
+	"bytes"
 	"testing"
 
 	"gonativeui/gpu"
@@ -170,6 +171,35 @@ func TestFieldsEditAndClear(t *testing.T) {
 	g.frame()
 	if query.Len() != 0 {
 		t.Fatalf("Escape left %q", query.String())
+	}
+}
+
+// A secure field (FieldOpts.Secure) in the bezel: it edits its buffer, shows
+// its placeholder while empty, reports the secure role with bullets for a
+// value, and nothing of the text reaches the frame's semantics.
+func TestSecureFieldInTheBezel(t *testing.T) {
+	var pw ui.TextBuffer
+	g := newRig(t, theme.Light, nil, column(func(g *rig) {
+		g.k.NextWidth(g.k.Fixed(200))
+		rexui.TextField(g.k, "Password", &pw, "Required", rexui.FieldOpts{Secure: true})
+	}))
+	g.click(centre(g.node(ui.RoleTextField, "Password")))
+	if !g.c.SecureFieldFocused() {
+		t.Fatal("the focused secure field is not reported")
+	}
+	g.typeText("s3cret")
+	g.frame()
+	n := g.node(ui.RoleTextField, "Password")
+	if pw.String() != "s3cret" || n.State&ui.SemSecure == 0 || string(g.sem.Text(n.Value)) != "••••••" {
+		t.Fatalf("text %q, state %b, value %q", pw.String(), n.State, g.sem.Text(n.Value))
+	}
+	if bytes.Contains(g.sem.Bytes, []byte("s3cret")) {
+		t.Error("the semantic tree holds the text")
+	}
+	pw.Wipe()
+	g.frame()
+	if n := g.node(ui.RoleTextField, "Password"); n.Value[1] != 0 {
+		t.Errorf("after Wipe: value %q", g.sem.Text(n.Value))
 	}
 }
 
