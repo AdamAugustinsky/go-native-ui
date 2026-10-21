@@ -139,6 +139,11 @@ func (p *pings) open(a *app.App) error {
 	if f := p.place.Frame; p.place.Restored && p.place.HasPosition {
 		win.SetFrame(f.X, f.Y, f.W, f.H)
 	}
+	if p.place.Fullscreen {
+		win.ToggleFullscreen()
+	} else if p.place.Maximised {
+		win.SetZoomed(true)
+	}
 	return nil
 }
 
@@ -210,6 +215,7 @@ func (p *pings) Build(c *ui.Context) {
 	p.drain()
 	p.keepFrame()
 	k := p.k
+	win := p.a.Window()
 	k.Begin(c)
 	k.BeginWindow()
 	k.BeginCard("services")
@@ -234,12 +240,12 @@ func (p *pings) Build(c *ui.Context) {
 	k.Row("keychain")
 	if k.Button("Save token").Clicked {
 		name := p.name.String()
-		go func() { p.finish(result{text: "token saved"}, p.sys.StoreToken([]byte("token-for-"+name))) }()
+		go func() { p.finish(win, result{text: "token saved"}, p.sys.StoreToken([]byte("token-for-"+name))) }()
 	}
 	if k.Button("Read token").Clicked {
 		go func() {
 			b, err := p.sys.LoadToken()
-			p.finish(result{text: "token: " + string(b)}, err)
+			p.finish(win, result{text: "token: " + string(b)}, err)
 		}()
 	}
 	k.EndRow()
@@ -255,7 +261,7 @@ func (p *pings) Build(c *ui.Context) {
 		on := p.atLogin
 		go func() {
 			st, err := p.sys.SetLogin(on)
-			p.finish(result{text: "login item: " + st.String(), login: st == login.Enabled}, err)
+			p.finish(win, result{text: "login item: " + st.String(), login: st == login.Enabled}, err)
 		}()
 	}
 	k.LabelStyle(p.line, widget.TextMuted)
@@ -279,15 +285,16 @@ func (p *pings) notify() {
 }
 
 // finish hands the result of a blocking call to the window, from its
-// goroutine: it fills the result's text and wakes the window.
-func (p *pings) finish(r result, err error) {
+// goroutine, and wakes the window: win is the handle Build took on the main
+// thread.
+func (p *pings) finish(win *app.Win, r result, err error) {
 	if err != nil {
 		r = result{text: describe(err), failed: true}
 	}
 	select {
 	case p.results <- r:
-		if w := p.a.Window(); w != nil {
-			w.Wake()
+		if win != nil { // nil offscreen
+			win.Wake() // any goroutine may
 		}
 	default:
 	}
@@ -315,6 +322,8 @@ func describe(err error) string {
 		return "not available on this OS yet"
 	case errors.Is(err, notify.ErrNotSetUp), errors.Is(err, notify.ErrUnavailable), errors.Is(err, login.ErrUnavailable):
 		return "needs a signed bundle (gnui run)"
+	case errors.Is(err, login.ErrNotFound):
+		return "this bundle has no \"hidden\" launch agent (see gnui.json)"
 	}
 	return err.Error()
 }

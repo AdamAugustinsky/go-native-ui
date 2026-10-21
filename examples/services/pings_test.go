@@ -73,6 +73,7 @@ func open(t *testing.T, dir string, rec *recorder) (*pings, *widgettest.Rig) {
 		t.Fatal(err)
 	}
 	p.sys = rec
+	t.Cleanup(func() { p.prefs.Close(); p.state.Close() })
 	cfg := p.config()
 	r := widgettest.Open(t, cfg, int(cfg.Width), int(cfg.Height), 1, p)
 	r.Frames(4)
@@ -140,6 +141,7 @@ func TestUnavailableServicesAreReported(t *testing.T) {
 		{notify.ErrUnsupported, "not available on this OS yet"},
 		{notify.ErrNotSetUp, "needs a signed bundle (gnui run)"},
 		{login.ErrUnavailable, "needs a signed bundle (gnui run)"},
+		{login.ErrNotFound, "this bundle has no \"hidden\" launch agent (see gnui.json)"},
 	} {
 		rec := &recorder{err: c.err}
 		p, r := open(t, t.TempDir(), rec)
@@ -177,6 +179,7 @@ func TestPreferencesAndWindowStateSurviveARestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { q.prefs.Close(); q.state.Close() })
 	if got := q.prefs.Get().Name; got != "Bruno" || q.name.String() != "Bruno" {
 		t.Errorf("the preference is %q, the field %q", got, q.name.String())
 	}

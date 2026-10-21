@@ -57,12 +57,14 @@ func (s *system) SetStatusTitle(title string) {
 func (s *system) StoreToken(token []byte) error { return s.vault.Set(account, token) }
 func (s *system) LoadToken() ([]byte, error)    { return s.vault.Get(account) }
 
-// SetLogin makes the app start at login, or not. It blocks too.
+// SetLogin makes the app start at login, or not. It uses the launch agent that
+// gnui.json declares, which starts the app with --start-hidden: no window, no
+// Dock jump. It blocks, like the Keychain.
 func (s *system) SetLogin(on bool) (login.State, error) {
 	if on {
-		return login.Enable()
+		return login.Agent("hidden").Enable()
 	}
-	return login.Disable()
+	return login.Agent("hidden").Disable()
 }
 
 // newStatusItem makes the status item and its menu: a template symbol, a
