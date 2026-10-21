@@ -103,3 +103,46 @@ func onCanvas(m image.Image, w, h int, gif []byte) image.Image {
 	draw.Draw(out, r, m, r.Min, draw.Over)
 	return out
 }
+
+// decodeImage is Decode off macOS: the first frame of data through the
+// standard library, scaled by area averaging to fit limit×limit (0: full
+// size), with a JPEG's EXIF orientation applied.
+func decodeImage(data []byte, limit int32) (*image.RGBA, uint8) {
+	format := sniff(data)
+	if format == "webp" || format == "heif" {
+		return nil, errUnsupported
+	}
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		if errors.Is(err, image.ErrFormat) {
+			return nil, errUnsupported
+		}
+		return nil, errDecode
+	}
+	if cfg.Width <= 0 || cfg.Height <= 0 || int64(cfg.Width)*int64(cfg.Height) > maxPixels {
+		return nil, errTooLarge
+	}
+	m, _, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		return nil, errDecode
+	}
+	orient := 1
+	switch format {
+	case "jpeg":
+		orient = Orientation(data)
+	case "gif":
+		m = onCanvas(m, cfg.Width, cfg.Height, data)
+	}
+	sw, sh := int32(m.Bounds().Dx()), int32(m.Bounds().Dy())
+	ow, oh := sw, sh
+	if orient >= 5 {
+		ow, oh = sh, sw
+	}
+	tw, th := scaled(ow, oh, fitScale(ow, oh, limit, limit, false))
+	if tw > maxSide || th > maxSide {
+		return nil, errTooLarge
+	}
+	out := image.NewRGBA(image.Rect(0, 0, int(tw), int(th)))
+	resample(out.Pix, out.Stride, int(tw), int(th), m, orient)
+	return out, errNone
+}

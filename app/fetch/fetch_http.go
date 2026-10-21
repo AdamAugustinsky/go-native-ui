@@ -19,7 +19,9 @@ func get(ctx context.Context, u *url.URL, s *sink, opt Options) (Response, error
 		DisableKeepAlives: true,
 		Proxy:             http.ProxyFromEnvironment,
 	}
-	if p := opt.Proxy; p != nil {
+	if p := opt.Proxy; p != nil && p.kind() == ProxyNone {
+		tr.Proxy = nil
+	} else if p != nil {
 		pu := &url.URL{Host: net.JoinHostPort(p.Host, strconv.Itoa(p.Port))}
 		switch p.kind() {
 		case ProxyHTTP:

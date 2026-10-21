@@ -4,6 +4,7 @@ package img
 
 import (
 	"errors"
+	"image"
 	"io"
 	"math"
 	"os"
@@ -433,4 +434,104 @@ func (w *worker) header(j *job, data []byte) []byte {
 	defer f.Close()
 	n, _ := io.ReadFull(f, w.head[:])
 	return w.head[:n]
+}
+
+// decodeImage is Decode on macOS: the first frame of data through ImageIO's
+// thumbnail at the size that fits limit×limit (0: full size), drawn into a
+// new image and turned to its EXIF orientation, on a frame and scratch of
+// its own.
+func decodeImage(data []byte, limit int32) (*image.RGBA, uint8) {
+	if err := loadImageIO(); err != nil {
+		return nil, errUnsupported
+	}
+	w := new(worker)
+	fr := &w.fr
+	cfd := fr.Reset().Arg(0).ArgPtr(unsafe.Pointer(&data[0])).Arg(uintptr(len(data))).Arg(iio.allocNull).Call(iio.cfDataNoCopy).R0()
+	if cfd == 0 {
+		return nil, errDecode
+	}
+	src := fr.Call2(iio.srcWithData, cfd, 0) // retains the data
+	fr.Call1(iio.cfRelease, cfd)
+	if src == 0 {
+		return nil, errDecode
+	}
+	defer runtime.KeepAlive(data) // ImageIO reads it until src is released
+	defer fr.Call1(iio.cfRelease, src)
+	if fr.Call1(iio.srcType, src) == 0 {
+		return nil, errUnsupported
+	}
+	if fr.Call1(iio.srcCount, src) == 0 {
+		return nil, errDecode
+	}
+	props := fr.Call3(iio.srcProps, src, 0, 0)
+	if props == 0 {
+		return nil, errDecode
+	}
+	pw, okW := w.int32Prop(fr, props, iio.propW)
+	ph, okH := w.int32Prop(fr, props, iio.propH)
+	orient, ok := w.int32Prop(fr, props, iio.propOrient)
+	if !ok || orient < 1 || orient > 8 {
+		orient = 1
+	}
+	fr.Call1(iio.cfRelease, props)
+	if !okW || !okH || pw <= 0 || ph <= 0 {
+		return nil, errDecode
+	}
+	if int64(pw)*int64(ph) > maxPixels {
+		return nil, errTooLarge
+	}
+	ow, oh := pw, ph
+	if orient >= 5 {
+		ow, oh = ph, pw
+	}
+	tw, th := scaled(ow, oh, fitScale(ow, oh, limit, limit, false))
+	if tw > maxSide || th > maxSide {
+		return nil, errTooLarge
+	}
+	w.i32 = max(tw, th)
+	num := fr.Reset().Arg(0).Arg(cfNumberSInt32).ArgPtr(unsafe.Pointer(&w.i32)).Call(iio.cfNumCreate).R0()
+	w.keys = [4]uintptr{iio.optFromAlways, iio.optMaxSize, iio.optCacheNow}
+	w.vals = [4]uintptr{iio.boolTrue, num, iio.boolTrue}
+	opts := fr.Reset().Arg(0).ArgPtr(unsafe.Pointer(&w.keys[0])).ArgPtr(unsafe.Pointer(&w.vals[0])).Arg(3).
+		Arg(iio.dictKeyCB).Arg(iio.dictValCB).Call(iio.cfDictCreate).R0()
+	fr.Call1(iio.cfRelease, num)
+	thumb := fr.Call3(iio.srcThumb, src, 0, opts)
+	fr.Call1(iio.cfRelease, opts)
+	if thumb == 0 {
+		return nil, errDecode
+	}
+	defer fr.Call1(iio.imgRelease, thumb)
+	sw, sh := int32(fr.Call1(iio.imgW, thumb)), int32(fr.Call1(iio.imgH, thumb))
+	if sw <= 0 || sh <= 0 {
+		return nil, errDecode
+	}
+	stw, sth := tw, th // the target as stored
+	if orient >= 5 {
+		stw, sth = th, tw
+	}
+	sw, sh = min(sw, stw), min(sh, sth)
+	iw, ih := sw, sh // as shown
+	if orient >= 5 {
+		iw, ih = sh, sw
+	}
+	m := image.NewRGBA(image.Rect(0, 0, int(iw), int(ih)))
+	if orient == 1 {
+		if !w.draw(fr, thumb, m.Pix, int(iw), int(ih), 0, sw, sh) {
+			return nil, errDecode
+		}
+	} else {
+		stored := make([]byte, int(sw)*int(sh)*4)
+		if !w.draw(fr, thumb, stored, int(sw), int(sh), 0, sw, sh) {
+			return nil, errDecode
+		}
+		orientInto(m.Pix, m.Stride, stored, int(sw), int(sh), int(orient))
+		runtime.KeepAlive(stored)
+	}
+	runtime.KeepAlive(m.Pix)
+	if sniff(data) == "gif" { // ImageIO leaves the screen around a partial first frame transparent
+		if bg, ok := gifBackground(data); ok {
+			overBackground(m.Pix, m.Stride, 0, 0, int(iw), int(ih), bg)
+		}
+	}
+	return m, errNone
 }

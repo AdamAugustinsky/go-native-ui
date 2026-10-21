@@ -23,7 +23,8 @@ const (
 	// Backdrops[Tex]: add it with DrawList.AddBackdrop. Rect, Clip, Radii and
 	// FadeX place it as they place a shape; the blur sees only what lies
 	// under Rect and inside Clip and the target (its edges are normalised,
-	// nothing beyond them leaks in), and the result is opaque. Color is the
+	// nothing beyond them leaks in), and the result is opaque, but where its
+	// recipe fades it out (Backdrop.Fade). Color is the
 	// fallback: a renderer that cannot read back its target (Direct3D 11 and
 	// OpenGL today, a Metal target without shader-read usage) fills the quad
 	// with it as a shape instead (Renderer.Backdrops). UV, Border,
@@ -75,10 +76,72 @@ type Backdrop struct {
 	// before the backdrop drew nothing this frame, instead of the target's
 	// clear colour (a window's white in dark mode, or transparent where the
 	// system's materials show): the renderer fills the backdrop's rectangle
-	// (inside its clip) with it, opaque, before the frame's first quad. Where
-	// no quad before the backdrop reaches its rectangle at all, every
-	// renderer draws it flat, Over(Base), without blurring.
+	// (inside its clip) with it, opaque, before the frame's first quad (a
+	// fading one's fill fades out with it). Where no quad before the
+	// backdrop reaches its rectangle at all, every renderer draws it flat,
+	// Over(Base), without blurring.
 	Base uint32
+	// Fade, if above 0, makes the backdrop fade out over the last Fade
+	// target pixels of its rectangle towards FadeEdge, as macOS 26's soft
+	// scroll edge does under a toolbar: along a smoothstep from where the
+	// fade begins, the blur's radius (Sigma), the tint's Mix, Saturation's
+	// distance from 1 and Add ease off to nothing, and over the fade's
+	// outer half the result also mixes into the sharp content under it, so
+	// that at FadeEdge the backdrop is that content, with no band or edge.
+	// The fade spans the rectangle's whole width. A renderer without the
+	// blur fades its fallback colour out over the same pixels, square.
+	Fade     float32
+	FadeEdge FadeEdge
+}
+
+// FadeEdge is the edge of a backdrop's rectangle at which it fades out
+// (Backdrop.Fade).
+type FadeEdge uint8
+
+const (
+	// FadeBottom fades out at the bottom edge: a band under a toolbar, the
+	// content scrolling up under it.
+	FadeBottom FadeEdge = iota
+	// FadeTop fades out at the top edge: a band over a bar at the bottom.
+	FadeTop
+)
+
+// fadeSpan is where backdrop q of recipe b fades: from y = from, where it
+// starts to fade, to y = to, its FadeEdge, where it is gone (to < from for
+// FadeTop); ok is false if it does not fade.
+func fadeSpan(q *Quad, b *Backdrop) (from, to float32, ok bool) {
+	if !(b.Fade > 0) {
+		return 0, 0, false
+	}
+	if b.FadeEdge == FadeTop {
+		return q.Rect[1] + b.Fade, q.Rect[1], true
+	}
+	return q.Rect[3] - b.Fade, q.Rect[3], true
+}
+
+// fadeShape makes shape q (a fading backdrop's fallback, or its Base's
+// fill) fade out from y = from to y = to: a shadow (Soft) of a rectangle
+// whose edge is halfway between them and whose other sides lie far
+// outside q's rectangle, cut to that rectangle (and q's clip) by its clip,
+// so that the shadow's falloff (±3 sigma, sigma a sixth of the fade) is the
+// fade. Its corner radii are dropped.
+func fadeShape(q *Quad, from, to float32) {
+	r := q.Rect
+	if c := q.Clip; c != [4]float32{} {
+		r = [4]float32{max(r[0], c[0]), max(r[1], c[1]), min(r[2], c[2]), min(r[3], c[3])}
+	}
+	if !(r[0] < r[2] && r[1] < r[3]) {
+		q.Color, q.Mode = [4]uint32{}, ModeShape // nothing to draw (an all-zero clip would be none)
+		return
+	}
+	sigma := max(from-to, to-from) / 6
+	pad := 3*sigma + 2
+	mid := (from + to) / 2
+	s := [4]float32{r[0] - pad, min(r[1], from) - pad, r[2] + pad, mid}
+	if to < from {
+		s = [4]float32{r[0] - pad, mid, r[2] + pad, max(r[3], from) + pad}
+	}
+	q.Rect, q.Clip, q.Radii, q.Soft, q.Border, q.Mode = s, r, [4]float32{}, sigma, 0, ModeShape
 }
 
 // Over is the colour b draws over the uniform opaque colour c (0xRRGGBBAA,
@@ -195,14 +258,19 @@ func backdropsAsShapes(dst []Quad, l *DrawList) {
 
 // backdropShape turns backdrop dst[i] (dst a renderer's copy of l's quads)
 // into a shape: of its fallback colour, or of Over(Base) where it has a Base
-// and nothing before it reaches it (Backdrop.Base).
+// and nothing before it reaches it (Backdrop.Base), fading out as the
+// backdrop does (Backdrop.Fade).
 func backdropShape(dst []Quad, i int, l *DrawList) {
 	q := &dst[i]
-	if b, ok := l.backdropOf(q); ok && b.Base&0xFF != 0 && backdropOverNothing(l.Quads, i) {
+	b, ok := l.backdropOf(q)
+	if ok && b.Base&0xFF != 0 && backdropOverNothing(l.Quads, i) {
 		c := b.Over(b.Base)
 		q.Color = [4]uint32{c, c, c, c}
 	}
 	q.Mode = ModeShape
+	if from, to, fades := fadeSpan(q, &b); ok && fades {
+		fadeShape(q, from, to)
+	}
 }
 
 // backdropOverNothing reports whether no quad before quads[i], a backdrop,

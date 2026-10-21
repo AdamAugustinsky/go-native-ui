@@ -47,6 +47,9 @@
 //     Animated GIFs and APNGs (frame chunks rebuilt into one-frame PNGs for
 //     the PNG decoder) play with the Animate flag.
 //
+// Decode decodes one image the same way outside the cache, into an
+// *image.RGBA the app owns (a cropper's source, say).
+//
 // An image whose header gives it more than 100 megapixels fails with
 // ErrTooLarge before any pixel is decoded. A GIF without the Animate flag
 // decodes its first frame, on the image's logical screen; Info reports the
