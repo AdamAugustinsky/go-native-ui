@@ -25,14 +25,19 @@ var (
 	selSetFrameLatency  = objc.Sel("setPreferredFrameLatency:")
 	selUpdateDrawable   = objc.Sel("drawable")
 	selAutorelease      = objc.Sel("autorelease")
+	selTrimDrawables    = objc.Sel("gnuiTrimDrawables")
+	selDrawableSize     = objc.Sel("drawableSize")
+	selSetDrawableSize  = objc.Sel("setDrawableSize:")
+	selCancelPerformSel = objc.Sel("cancelPreviousPerformRequestsWithTarget:selector:object:")
 )
 
-var clsMetalLink, clsRunLoop objc.ID // set by registerClasses
+var clsMetalLink, clsRunLoop, clsNSObject objc.ID // set by registerClasses
 
 func registerViewDraw(v *objc.ClassDef) {
 	v.Method(selViewBacking, "v@:", windowBackingChanged)
 	v.Method(selDisplayLinkFired, "v@:@", viewDisplayLinkFired)
 	v.Method(selMetalLinkUpdate, "v@:@@", viewMetalLinkUpdate)
+	v.Method(selTrimDrawables, "v@:", viewTrimDrawables)
 }
 
 // windowBackingChanged is viewDidChangeBackingProperties and the window
@@ -123,7 +128,76 @@ func (w *Window) linkTick(c *ffi.CB, metal bool) {
 		objc.Send1(w.link, selSetPaused, 1)
 		w.linkPaused = true
 		w.pauses++
+		if w.metalLink {
+			w.scheduleTrim(trimAfter)
+		}
 	}
+}
+
+// An idle window's drawables. A CAMetalDisplayLink keeps as many drawables
+// as its frames have in flight, whatever the layer's maximumDrawableCount:
+// four window-sized ones at 120 Hz, three at 60 Hz, all in turn (the view's
+// link with nextDrawable keeps the layer's two). The link needs them while
+// frames come at the display's rate; an idle window needs only the one it
+// shows. So trimAfterNs after the last frame, trimDrawables sets the layer's
+// drawableSize to another size and back: the layer lets go of the drawables
+// not in use (the one on screen stays), and the link makes new ones when
+// frames come again. Not at each pause: drawables made again after every
+// pause (typing, a short scroll) made frames late.
+const trimAfterNs = int64(5e9)
+
+// trimAfter is trimAfterNs, or a test's (DebugTrimAfter).
+var trimAfter = trimAfterNs
+
+// scheduleTrim asks for trimDrawables d from now, unless a request is
+// pending (it looks again when it runs).
+func (w *Window) scheduleTrim(d int64) {
+	if w.trimDue {
+		return
+	}
+	w.trimDue = true
+	objc.F.Reset().Arg(uintptr(w.view)).Arg(uintptr(selPerformAfterDelay)).Arg(uintptr(selTrimDrawables)).Arg(0).ArgF64(float64(d) / 1e9).Call(objc.MsgSend)
+}
+
+// viewTrimDrawables is gnuiTrimDrawables, scheduleTrim's request.
+func viewTrimDrawables(c *ffi.CB) {
+	if w := viewWindow(objc.ID(c.Int(0))); w != nil {
+		w.trimDrawables()
+	}
+}
+
+// trimDrawables gives back the drawables of a window idle for trimAfterNs
+// (see trimAfterNs). A window drawing again, or not driven by a metal link,
+// keeps them: its next pause asks again.
+func (w *Window) trimDrawables() {
+	w.trimDue = false
+	if !w.metalLink || !w.linkPaused || w.live || w.frameLayer == 0 {
+		return
+	}
+	if left := trimAfter - (Now() - w.lastFrameT); left > 0 {
+		w.scheduleTrim(left) // it drew since the request
+		return
+	}
+	pool := objc.F.Call0(objc.PoolPush)
+	defer objc.F.Call1(objc.PoolPop, pool)
+	f := objc.F.Reset().Arg(uintptr(w.frameLayer)).Arg(uintptr(selDrawableSize)).Call(objc.MsgSend)
+	dw, dh := f.F64(0), f.F64(1)
+	other := 1.0
+	if dw == 1 && dh == 1 {
+		other = 2
+	}
+	objc.F.Reset().Arg(uintptr(w.frameLayer)).Arg(uintptr(selSetDrawableSize)).ArgPoint(other, other).Call(objc.MsgSend)
+	objc.F.Reset().Arg(uintptr(w.frameLayer)).Arg(uintptr(selSetDrawableSize)).ArgPoint(dw, dh).Call(objc.MsgSend)
+	w.trims++
+}
+
+// cancelTrim drops a pending trimDrawables request (the window closes).
+func (w *Window) cancelTrim() {
+	if !w.trimDue {
+		return
+	}
+	w.trimDue = false
+	objc.F.Reset().Arg(uintptr(clsNSObject)).Arg(uintptr(selCancelPerformSel)).Arg(uintptr(w.view)).Arg(uintptr(selTrimDrawables)).Arg(0).Call(objc.MsgSend)
 }
 
 // makeViewLink creates the view's CADisplayLink, retained, paused and added

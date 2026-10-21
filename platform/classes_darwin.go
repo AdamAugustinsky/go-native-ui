@@ -39,5 +39,5 @@ func registerClasses() {
 	registerMenuTarget()
 	clsNSArray, clsNSAttributedString = objc.Cls("NSArray"), objc.Cls("NSAttributedString")
 	clsMetalLink = objc.Cls("CAMetalDisplayLink") // macOS 14+
-	clsRunLoop = objc.Cls("NSRunLoop")
+	clsRunLoop, clsNSObject = objc.Cls("NSRunLoop"), objc.Cls("NSObject")
 }

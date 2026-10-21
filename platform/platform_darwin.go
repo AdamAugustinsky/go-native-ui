@@ -76,6 +76,8 @@ type Window struct {
 	visibleT                       int64
 	restarts                       uint64 // stopped links replaced (restartLink)
 	restartT                       int64
+	trims                          uint64 // idle drawables given back (trimDrawables)
+	trimDue                        bool   // a trimDrawables request is pending
 
 	// Live resize (SetFrameHandler). AppKit runs its own loop inside
 	// sendEvent while the user drags a window edge; between

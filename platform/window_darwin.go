@@ -226,6 +226,7 @@ func (w *Window) Close() {
 	objc.Send(w.link, selInvalidate)
 	objc.Send(w.link, selReleaseObj) // Open retained the view link; attachMetalLink owns its link
 	w.link = 0
+	w.cancelTrim() // its request holds the view
 	if w.drawable != 0 {
 		objc.Send(w.drawable, selReleaseObj)
 		w.drawable = 0
