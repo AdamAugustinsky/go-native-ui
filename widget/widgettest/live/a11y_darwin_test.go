@@ -39,7 +39,10 @@ func axFind(o objc.ID, role, label string, depth int) objc.ID {
 // typing shows in the field's value, an unchanged frame's sync allocates
 // nothing, and an idle app draws nothing.
 func TestAccessibilityBridgeLive(t *testing.T) {
-	l, p := startProbe(t)
+	wantOverlay(t, true)
+	p := &probe{}
+	fl := &frameLog{Builder: p}
+	l := widgettest.StartLive(t, probeConfig(), fl)
 	defer l.Close()
 	l.Frames(3)
 	var active bool
@@ -105,11 +108,11 @@ func TestAccessibilityBridgeLive(t *testing.T) {
 	if !settled {
 		t.Fatal("the app did not settle in 3 s")
 	}
-	before := l.Built()
+	before := fl.count()
 	time.Sleep(500 * time.Millisecond)
-	if d := l.Built() - before; d != 0 {
-		t.Errorf("an idle app drew %d frames with the bridge active", d)
-	}
+	frames := fl.finish(l)
+	report(t, "unexplained AX idle frames", attribute(frames, before, 0), 0)
+	t.Logf("AX idle: %d frames", len(frames)-before)
 }
 
 var selSelectedRange = objc.Sel("accessibilitySelectedTextRange")
