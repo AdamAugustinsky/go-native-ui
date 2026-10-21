@@ -105,6 +105,46 @@ func videoFrames(plain, turned string) (errs []string) {
 		}
 		return true
 	}
+	// seekPaused seeks while paused and waits for the frame of that time.
+	seekPaused := func(at time.Duration) {
+		v.Pause()
+		v.Seek(at)
+		until(fmt.Sprintf("the frame at %v", at), 5*time.Second, func() bool { // a loaded Mac took over 2 s
+			s := frameOf(r, v, 160, 96)
+			return s.next == 0 && closeTo(s.at(40, 48), colourAt(at.Seconds()), 40)
+		})
+	}
+	// rateOf measures the rate v plays at from what it reports: its
+	// position's advance over at least 500 ms from when it is first seen to
+	// move (Play's start-up is not playing at any rate), against the time
+	// between the two readings, each taken with its position.
+	var s shot
+	rateOf := func() float64 {
+		held := v.Position()
+		if !until("the position to move", 2*time.Second, func() bool {
+			s = frameOf(r, v, 160, 96)
+			return v.Position() != held
+		}) {
+			return 0
+		}
+		p0, t0 := v.Position(), time.Now()
+		for time.Since(t0) < 500*time.Millisecond {
+			pump(5 * time.Millisecond)
+			s = frameOf(r, v, 160, 96)
+		}
+		return float64(v.Position()-p0) / float64(time.Since(t0))
+	}
+	// playsAt checks a rate from rateOf against lo-hi; a miss is measured
+	// once more with again (a loaded runner can stall one window; a wrong
+	// rate misses twice).
+	playsAt := func(what string, got, lo, hi float64, again func() float64) {
+		if got >= lo && got <= hi {
+			return
+		}
+		if got = again(); got < lo || got > hi {
+			fail("%s: %.2f× (and before that too), want %.1f× to %.1f×", what, got, lo, hi)
+		}
+	}
 	if !until("ready", 10*time.Second, func() bool { return v.State() != VideoLoading }) || v.State() != VideoReady {
 		return append(errs, fmt.Sprintf("state %d: %v", v.State(), v.Err()))
 	}
@@ -116,7 +156,7 @@ func videoFrames(plain, turned string) (errs []string) {
 	}
 
 	// The poster, before it plays: the first second's colour, then white.
-	s := frameOf(r, v, 160, 96)
+	s = frameOf(r, v, 160, 96)
 	if s.tex == 0 || s.next != 0 {
 		fail("poster: texture %d, next %d", s.tex, s.next)
 	} else if !closeTo(s.at(40, 48), colourAt(0), 40) || !closeTo(s.at(120, 48), white, 40) {
@@ -151,23 +191,18 @@ func videoFrames(plain, turned string) (errs []string) {
 		fail("a playing frame: %v allocations", n)
 	}
 
-	// At 2× it plays twice as fast and asks for frames twice as often; the
-	// rate is clamped to 0.5–2. From 500 ms: the loop above can take a second
-	// on a loaded runner, and the clip must not end meanwhile.
-	v.Seek(500 * time.Millisecond)
-	until("the seek to 500 ms", 2*time.Second, func() bool {
-		frameOf(r, v, 160, 96)
-		return v.Position() < time.Second
-	})
-	v.SetRate(2)
-	p0, t0 := v.Position(), time.Now()
-	for time.Since(t0) < 300*time.Millisecond {
-		pump(5 * time.Millisecond)
-		s = frameOf(r, v, 160, 96)
+	// At 2× (set while playing) it plays twice as fast and asks for frames
+	// twice as often; the rate is clamped to 0.5–2. From 500 ms: the loop
+	// above can take a second on a loaded runner, and the clip must not end
+	// meanwhile.
+	at2 := func() float64 {
+		seekPaused(500 * time.Millisecond)
+		v.SetRate(1)
+		v.Play()
+		v.SetRate(2)
+		return rateOf()
 	}
-	if got, wall := v.Position()-p0, time.Since(t0); got < wall*3/2 || got > wall*5/2 {
-		fail("at 2×: %v played in %v", got, wall)
-	}
+	playsAt("at 2×", at2(), 1.5, 2.5, at2)
 	if s.next <= 0 || s.next > int64(12*time.Millisecond) {
 		fail("at 2×: next frame in %d ns, want about 8.7 ms", s.next)
 	}
@@ -182,7 +217,7 @@ func videoFrames(plain, turned string) (errs []string) {
 	// new rate waits for the next Play.
 	v.Pause()
 	v.SetRate(1.5)
-	p0 = v.Position()
+	p0 := v.Position()
 	for t0 := time.Now(); time.Since(t0) < 300*time.Millisecond; {
 		pump(10 * time.Millisecond)
 		s = frameOf(r, v, 160, 96)
@@ -193,7 +228,9 @@ func videoFrames(plain, turned string) (errs []string) {
 	if s.next != 0 {
 		fail("paused: next frame in %d ns, want none", s.next)
 	}
-	if want := colourAt(p0.Seconds()); !closeTo(s.at(40, 48), want, 40) {
+	// It holds the frame showing (Pause), which at 2× can be the one of up
+	// to a frame before the position (a new second's colour may not show).
+	if want, before := colourAt(p0.Seconds()), colourAt((p0 - 70*time.Millisecond).Seconds()); !closeTo(s.at(40, 48), want, 40) && !closeTo(s.at(40, 48), before, 40) {
 		fail("paused at %v: left %v, want %v", p0, s.at(40, 48), want)
 	}
 	// The renderer's lease on the frame's buffer: one retain while imported,
@@ -218,23 +255,13 @@ func videoFrames(plain, turned string) (errs []string) {
 		}
 	}
 
-	// Play plays at the rate set while paused: measured from when the
-	// position first moves, as Play's start-up (about 90 ms on CI) is not
-	// playing at any rate.
-	held := v.Position()
+	// Play plays at the rate set while paused.
 	v.Play()
-	until("the position to move after Play", 2*time.Second, func() bool {
-		frameOf(r, v, 160, 96)
-		return v.Position() != held
+	playsAt("at 1.5× from Play", rateOf(), 1.2, 1.8, func() float64 {
+		seekPaused(500 * time.Millisecond)
+		v.Play()
+		return rateOf()
 	})
-	p0, t0 = v.Position(), time.Now()
-	for time.Since(t0) < 400*time.Millisecond {
-		pump(5 * time.Millisecond)
-		frameOf(r, v, 160, 96)
-	}
-	if got, wall := v.Position()-p0, time.Since(t0); got < wall*6/5 || got > wall*9/5 {
-		fail("at 1.5× from Play: %v played in %v", got, wall)
-	}
 	v.Pause()
 
 	// The end: a media Ended event with the video's ID, and it stops.
