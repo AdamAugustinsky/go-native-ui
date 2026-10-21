@@ -10,6 +10,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"testing"
 	"unsafe"
@@ -207,6 +208,10 @@ func TestBackdropMatchesModel(t *testing.T) {
 		{"no blur, full scale", Backdrop{Down: 1, Saturation: 0.5}, 2},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			// t.Run starts another goroutine: the parent's thread lock does
+			// not keep this goroutine's autorelease pools on one OS thread.
+			runtime.LockOSThread()
+			defer runtime.UnlockOSThread()
 			card := pattern(w, h)
 			under := renderList(r, w, h, black, &DrawList{Quads: card})
 			q := solid(13, 7, 203, 81, 0x00FF00FF)
