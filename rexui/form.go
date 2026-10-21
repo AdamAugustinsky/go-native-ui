@@ -41,9 +41,11 @@ type FormOpts struct {
 
 // RowOpts are a form row's options, passed by value.
 type RowOpts struct {
-	// Height is the row's height in points, for a control taller than the
-	// layout's row (0: FormLook's, a grouped row's 40 pt; an aligned row is
-	// as high as its tallest control).
+	// Height is the row's least height in points, for a control taller than
+	// the layout's row (0: FormLook's, a grouped row's 40 pt; an aligned row
+	// is as high as its tallest control). A label too long for its column
+	// wraps onto more lines and the row grows with them, as in System
+	// Settings.
 	Height float32
 	// Detail is a secondary text under the row's label, as System Settings'
 	// rows have: smaller text in the secondary colour. A grouped row's label
@@ -275,7 +277,7 @@ func (f *Form) Row(k *base.Kit, label string, o RowOpts) ui.ID {
 		f.row = k.Row(label)
 		k.NextWidth(ui.Px(f.labelW))
 		k.NextAlign(ui.AlignRight)
-		f.label = formLabel(k, label)
+		f.label = formLabel(k, label, false) // its column is as wide as the labels
 		return f.row
 	}
 	if !f.inCard { // rows without a section: one anonymous section
@@ -292,20 +294,39 @@ func (f *Form) Row(k *base.Kit, label string, o RowOpts) ui.ID {
 		f.label = formLabelDetail(k, label, o.Detail, o.MaxLines)
 		return f.row
 	}
-	k.NextGap(rc.LabelGap / 2) // either side of the spacer
-	k.Context().NextRole(ui.RoleGroup)
-	k.Context().NextSemName(label)
-	f.row = f.card.row(k, label, o.Height)
-	f.label = formLabel(k, label)
-	k.Spacer()
+	// The label column fills what the controls leave and wraps to it; the
+	// row is a row's height, or the lines' if they are higher. The label's
+	// own padding is what makes the one-line height (centring its line in
+	// it, as the row centred the label) and keeps half the gap to the
+	// controls, which the spacer of a row with a short label used to hold.
+	c, r := k.Context(), k.Theme()
+	h := CardLook.RowH
+	if o.Height > 0 {
+		h = o.Height
+	}
+	m := k.TextSystem().Metrics(r.Styles[TextStyles[TextBody]].Font) // the line the box lays its text in
+	lh := m.LineHeight
+	if lh <= 0 {
+		lh = m.Ascent + m.Descent + m.LineGap
+	}
+	padY := max((k.Fixed(h).Value-lh)/2, 0)
+	k.NextGap(rc.LabelGap / 2) // between the controls
+	c.NextRole(ui.RoleGroup)
+	c.NextSemName(label)
+	f.row = f.card.rowFit(k, label, CardLook.RowPadY)
+	c.NextPadding(0, padY, k.Pt(rc.LabelGap/2), padY)
+	f.label = formLabel(k, label, true)
 	return f.row
 }
 
-// formLabel builds a row's label. Its key does not come from its text: a
-// control in the row is often named after its label, and two boxes of one
-// parent with one key are one box to the framework.
-func formLabel(k *base.Kit, label string) ui.ID {
-	return LabelBytes(k, base.StrBytes(label), LabelOpts{Color: FormLook.Label})
+// formLabel builds a row's label. A grouped row's wraps at the width its box
+// is given, as System Settings' row titles do, so a long title in a narrow
+// window or a language of long words takes more lines and the row grows. Its
+// key does not come from its text: a control in the row is often named after
+// its label, and two boxes of one parent with one key are one box to the
+// framework.
+func formLabel(k *base.Kit, label string, wrap bool) ui.ID {
+	return LabelBytes(k, base.StrBytes(label), LabelOpts{Color: FormLook.Label, Wrap: wrap})
 }
 
 // formLabelDetail builds a row's label with its description under it, in a
@@ -318,7 +339,7 @@ func formLabelDetail(k *base.Kit, label, detail string, maxLines int) ui.ID {
 	k.NextGap(0)
 	k.BeginContainer(ui.AxisY, ui.CrossStart, "label", ui.Pct(1), ui.Children(1), 0)
 	k.NextWidth(ui.Pct(1))
-	l := formLabel(k, label)
+	l := formLabel(k, label, true)
 	col := rc.Detail.RGBA(r)
 	if k.Disabled() {
 		col = r.Colors[theme.TextDisabled]
