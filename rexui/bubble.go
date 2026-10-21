@@ -1,6 +1,8 @@
 package rexui
 
 import (
+	"math"
+
 	"gonativeui/gpu"
 	"gonativeui/text"
 	"gonativeui/theme"
@@ -291,11 +293,13 @@ func beginBubble(k *base.Kit, key ui.Key, o BubbleOpts, plain bool) Bubble {
 }
 
 // The curled tail (BubbleTailPath) in points: its box, of which curlOverlap
-// lies over the bubble's squared corner and curlReach beyond its side.
+// lies over the bubble's squared corner (of radius curlCorner) and curlReach
+// beyond its side.
 const (
 	curlW, curlH = 14, 16
 	curlOverlap  = 6
 	curlReach    = curlW - curlOverlap
+	curlCorner   = 5
 )
 
 // curlPath is the scratch the tails are built in (main thread).
@@ -303,26 +307,39 @@ var curlPath gpu.Path
 
 // BubbleTailPath builds into p Messages' curled tail of a bubble at scale
 // (pixels per point), for the bubble's bottom right corner (left: its bottom
-// left), and returns its size in pixels: a box whose top left lies 6 pt
-// inside the bubble's side and 16 pt above its bottom (the tail's top runs
-// along the side, curls out to a tip 8 pt beyond it at the bottom and comes
-// back under the bubble). Fill it in the bubble's colour (ui.Context.NextPath)
-// over a bubble whose corner there is squared (BubbleOpts.Tail).
+// left), and returns the size of its box in pixels: the box's bottom is the
+// bubble's, and its side lies 6 pt (in whole pixels) inside the bubble's
+// side. The tail leaves the side 16 pt above the bottom, curls out to a tip
+// 8 pt beyond it at the bottom and comes back under the bubble to fill what
+// the bubble's squared corner (BubbleOpts.Tail: BubbleLook's 5 pt radius)
+// leaves out, overlapping the bubble by a pixel at most, so a bubble with a
+// gradient shows no seam. Fill it in the bubble's bottom colour
+// (ui.Context.NextPath).
 func BubbleTailPath(p *gpu.Path, scale float32, left bool) (w, h float32) {
-	s := scale
-	w, h = theme.Snap(curlW*s), theme.Snap(curlH*s)
+	ov := theme.Snap(curlOverlap * scale)
+	h = theme.Snap(curlH * scale)
+	sx, sy := ov/curlOverlap, h/curlH // the side and the bottom on whole pixels
+	w = float32(math.Ceil(float64(curlW * sx)))
 	x := func(v float32) float32 {
 		if left {
-			return w - v*s
+			return w - v*sx
 		}
-		return v * s
+		return v * sx
 	}
+	// the bubble's squared corner: its arc, centred (cx, cy) in pixels, of
+	// radius r; the tail covers what the arc leaves out and a pixel inside it
+	// (no seam where the two edges meet)
+	r := theme.Snap(curlCorner * scale)
+	cx, cy, ri := ov-r, h-r, max(r-1, 0)
+	const k = 0.5523 // a quarter circle's cubic
 	p.Reset()
-	p.MoveTo(x(0), 0)
-	p.LineTo(x(curlOverlap), 0)
-	p.CubeTo(x(6), 9*s, x(8), 14*s, x(14), 16*s) // the outer edge curls out to the tip
-	p.CubeTo(x(9), 16.4*s, x(5), 14.4*s, x(0), 16*s)
+	p.MoveTo(x(curlOverlap), 0)
+	p.CubeTo(x(curlOverlap), 9*sy, x(8), 14*sy, x(curlW), h) // out to the tip
+	p.CubeTo(x(10), h, x(6), 14.4*sy, x(cx/sx), h)           // back under the bubble
+	p.LineTo(x(cx/sx), cy+ri)
+	p.CubeTo(x((cx+k*ri)/sx), cy+ri, x((cx+ri)/sx), cy+k*ri, x((cx+ri)/sx), cy) // round the corner
 	p.Close()
+	p.MoveTo(w, h) // (the mask is the box: w×h)
 	return w, h
 }
 
