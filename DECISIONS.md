@@ -1022,7 +1022,7 @@ The whole UI is rewritten in Go on the framework with the Rex design system, mac
 
 **Alternatives:** a `ModeYUV` with per-quad colour information (the `ui` image path and every backend change, and the `Quad` has no room for a matrix); imports that persist until replaced, retired through `FreeTexture`'s list (unbounded, against D44's 48); copying pixel buffers to RGBA (a CPU pass per frame).
 
-## D57. `media.Video`: frames pulled in Build, idle when paused or hidden (phase 6, 2026-10-20)
+## D58. `media.Video`: frames pulled in Build, idle when paused or hidden (phase 6, 2026-10-20)
 
 **Decision.** Refines D46 (S8). `media.Video` is an `AVPlayer` whose item has an `AVPlayerItemVideoOutput` (biplanar `420v`, Metal-compatible). There is no frame callback:
 - **Pulled in Build.** While its box shows (`Kit.ImageShown`), the app calls `Video.Frame`, which asks the output for the pixel buffer of the time the frame will show (`itemTimeForHostTime:` at the frame's time plus 8 ms, `hasNewPixelBufferForItemTime:`, `copyPixelBufferForItemTime:`), keeps it as the current frame, imports it (D56) and returns the delay to the next frame. The app passes that to `WakeIn`.
