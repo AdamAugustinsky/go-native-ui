@@ -4,7 +4,7 @@
 // plus notarytool and stapler from the Command Line Tools.
 //
 //	gnui package [-c gnui.json] [-o dir] [-identity id] [-dev-cert]
-//	             [-no-hardened] [-notarize -notary-profile name] [-dmg] [-tags list]
+//	             [-no-hardened] [-notarize -notary-profile name] [-dmg] [-zip] [-tags list]
 //	gnui run     [-c gnui.json] [-env KEY=VAL] [-detach] [-adhoc] [-tags list] [-- app arguments]
 //	gnui sign    [-identity id|-dev|-adhoc] [-hardened] [-entitlements file] path.app
 //	gnui doctor  [-c gnui.json] [-setup-dev-cert]

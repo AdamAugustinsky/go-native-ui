@@ -32,6 +32,7 @@ func cmdPackage(args []string, stdout, stderr io.Writer) error {
 	notarize := fs.Bool("notarize", false, "notarize and staple (needs a Developer ID identity and -notary-profile)")
 	profile := fs.String("notary-profile", os.Getenv("GNUI_NOTARY_PROFILE"), "notarytool keychain profile (xcrun notarytool store-credentials); default $GNUI_NOTARY_PROFILE")
 	dmg := fs.Bool("dmg", false, "also build a .dmg (signed and notarized when the identity allows)")
+	zipUpdate := fs.Bool("zip", false, "also write <Name>-<version>.zip, the update archive app/selfupdate installs (ditto -c -k --keepParent, after stapling)")
 	tags := fs.String("tags", "", "go build -tags (gnui_release is always added)")
 	ldflags := fs.String("ldflags", "", `extra go build -ldflags ("-s -w" is always added)`)
 	if err := parseFlags(fs, args); err != nil {
@@ -100,6 +101,14 @@ func cmdPackage(args []string, stdout, stderr io.Writer) error {
 		skipped = append(skipped, "notarize and staple: not requested (add -notarize -notary-profile <name>)")
 	} else {
 		skipped = append(skipped, "notarize and staple: needs a Developer ID Application identity and notarytool credentials")
+	}
+
+	if *zipUpdate {
+		path, err := writeUpdateZip(c, app, *outDir)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "update zip: %s\n", path)
 	}
 
 	if *dmg {
@@ -271,6 +280,18 @@ func notarizeAndStaple(path, profile string, out io.Writer) error {
 	}
 	fmt.Fprintf(out, "stapled %s\n", filepath.Base(path))
 	return nil
+}
+
+// writeUpdateZip writes <Name>-<version>.zip next to the app: the bundle as
+// ditto -c -k --keepParent archives it (symbolic links, modes and extended
+// attributes kept), the form app/selfupdate's Prepare takes.
+func writeUpdateZip(c *Config, app, outDir string) (string, error) {
+	zip := filepath.Join(outDir, fmt.Sprintf("%s-%s.zip", strings.ReplaceAll(c.Name, " ", ""), c.Version))
+	os.Remove(zip)
+	if _, err := runOut("/usr/bin/ditto", "-c", "-k", "--keepParent", app, zip); err != nil {
+		return "", err
+	}
+	return zip, nil
 }
 
 // buildDMG writes <Name>-<version>.dmg next to the app with the app and an

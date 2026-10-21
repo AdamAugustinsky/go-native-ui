@@ -42,6 +42,8 @@ the user's Apple identity (Developer ID certificate, notarytool credentials).
 -notary-profile name  notarytool keychain profile ($GNUI_NOTARY_PROFILE)
 -dmg                  also build a .dmg (signed, and notarized and stapled with -notarize,
                       when the identity is a Developer ID)
+-zip                  also write dist/<Name>-<version>.zip, the update archive app/selfupdate
+                      installs (ditto -c -k --keepParent, after stapling)
 -tags list            go build -tags
 -ldflags flags        extra go build -ldflags
 ```

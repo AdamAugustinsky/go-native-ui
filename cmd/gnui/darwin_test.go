@@ -1,6 +1,7 @@
 package main
 
 import (
+	"archive/zip"
 	"bytes"
 	"fmt"
 	"os"
@@ -184,7 +185,7 @@ func TestPackageWithoutAppleIdentity(t *testing.T) {
 		t.Error("a bundle was built before the missing identity was reported")
 	}
 
-	so = mustGnui(t, "package", "-c", helloConfig, "-o", out, "-identity", "-", "-dmg")
+	so = mustGnui(t, "package", "-c", helloConfig, "-o", out, "-identity", "-", "-dmg", "-zip")
 	for _, want := range []string{"skipped: notarize", "dmg signature and notarization"} {
 		if !strings.Contains(so, want) {
 			t.Errorf("output does not report %q:\n%s", want, so)
@@ -197,6 +198,24 @@ func TestPackageWithoutAppleIdentity(t *testing.T) {
 	dmg := filepath.Join(out, "HelloApp-2.3.4.dmg")
 	if _, err := hdiutil("verify", dmg); err != nil {
 		t.Errorf("the dmg does not verify: %v", err)
+	}
+	// The update archive holds the one bundle, which unpacks signed as built.
+	zr, err := zip.OpenReader(filepath.Join(out, "HelloApp-2.3.4.zip"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range zr.File {
+		if !strings.HasPrefix(f.Name, "Hello App.app/") {
+			t.Errorf("the update zip holds %q", f.Name)
+		}
+	}
+	zr.Close()
+	x := t.TempDir()
+	if _, err := runOut("/usr/bin/ditto", "-x", "-k", filepath.Join(out, "HelloApp-2.3.4.zip"), x); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runOut("codesign", "--verify", "--deep", "--strict", filepath.Join(x, "Hello App.app")); err != nil {
+		t.Errorf("the unpacked update does not verify: %v", err)
 	}
 }
 
