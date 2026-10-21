@@ -5,6 +5,7 @@ package widgettest
 import (
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -49,6 +50,8 @@ type envSnapshot struct {
 	NSVisible   bool // [NSWindow isVisible]
 	Win         platform.DebugState
 	Line        string // app.StateLine
+	Main        string // where the main thread is (platform.DebugMainLoop)
+	GoStack     string // the main goroutine's stack: the Go frames under a native loop
 }
 
 // snapshotEnv reads the environment. Main thread.
@@ -150,7 +153,12 @@ func (l *LiveApp) diagnose(what string, after time.Duration) stallReport {
 		if l.lim.snap != nil {
 			snap = l.lim.snap
 		}
-		res := l.callIdle(func(a *app.App) { *s = snap(a) }, limit, limit)
+		res := l.callIdle(func(a *app.App) {
+			*s = snap(a)
+			s.Main = platform.DebugMainLoop()
+			buf := make([]byte, 64<<10)
+			s.GoStack = string(buf[:runtime.Stack(buf, false)])
+		}, limit, limit)
 		if res.idle {
 			r.unserved = describe(res)
 			return false
@@ -216,6 +224,16 @@ func (l *LiveApp) finish(what string, after time.Duration, frames int64, s1, s2 
 	}
 	if s2.LockedKnown || s1.LockedKnown {
 		fmt.Fprintf(&b, "  screen locked: %v\n", s2.Locked || s1.Locked)
+	}
+	if s := s2; s.Main != "" || s1.Main != "" {
+		if s.Main == "" {
+			s = s1
+		}
+		fmt.Fprintf(&b, "  main thread: %s (first look: %s)\n", s.Main, s1.Main)
+		b.WriteString("  main goroutine's stack:\n")
+		for f := range strings.SplitSeq(strings.TrimSpace(s.GoStack), "\n") {
+			fmt.Fprintf(&b, "    %s\n", f)
+		}
 	}
 	switch {
 	case r.resumed:

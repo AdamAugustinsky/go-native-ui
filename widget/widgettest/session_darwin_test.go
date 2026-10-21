@@ -163,6 +163,12 @@ func TestStallAfterSomeFramesWithoutEvidenceFails(t *testing.T) {
 	if r.Get("outcome") != "fatal" || !strings.Contains(r.Out, "a regression in frame delivery") || !strings.Contains(r.Out, "state: app{") {
 		t.Errorf("want a failure that says regression and prints the state line")
 	}
+	// and where the main thread was: its run loop's mode and the Go frames
+	for _, want := range []string{"main thread: main{mode=", "main goroutine's stack:", "platform.pump"} {
+		if !strings.Contains(r.Out, want) {
+			t.Errorf("the report lacks %q:\n%s", want, r.Out)
+		}
+	}
 }
 
 func TestStallOfAHiddenWindowSkipsAndSaysWhy(t *testing.T) {

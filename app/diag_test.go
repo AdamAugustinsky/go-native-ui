@@ -21,7 +21,7 @@ func TestStateLineFormatAndNoAllocs(t *testing.T) {
 	buf := make([]byte, 0, 2048)
 	line := string(a.StateLine(buf, now))
 	for _, want := range []string{
-		"app{frames=410 warm=1000/1000 meas=410/900 needdraw=1 ready=1 paced=1 requested=119.8s-ago",
+		"app{frames=410 warm=1000/1000 meas=410/900 needdraw=1 ready=1 paced=1 parked=0 hidden=0 requested=119.8s-ago",
 		"lastevframe=never lastdraw=119.9s-ago beginfail=3/consec=1 owed=SB",
 		"textdrop=0 pending=0} win{none}",
 	} {
