@@ -21,9 +21,15 @@ var _ Uploader = (*gpu.Renderer)(nil)
 // the shaper reports dirty are uploaded. End calls the same sync after
 // emitting, so the textures are current when the app encodes the draw list;
 // call AtlasSync once up front (before the first End that draws text, since
-// glyph quads need their page's texture id) and again if the renderer is
-// recreated. Atlas resets mark every page dirty, so they are re-uploaded by
-// the next sync.
+// glyph quads need their page's texture id). Atlas resets mark every page
+// dirty, so they are re-uploaded by the next sync.
+//
+// This is not a renderer-recovery API: switching u creates textures but does
+// not restore clean pages, and later partial updates do not restore their
+// untouched glyphs. A replacement renderer needs a fresh Context and shaper
+// atlas. To reuse an existing renderer's text textures in another Context,
+// use ShareAtlas with the existing SharedAtlas instead. The app package
+// does not replace a live Context's renderer on resize or scale changes.
 func (c *Context) AtlasSync(u Uploader) {
 	if c.shared != nil && c.shared.up != u {
 		c.shared, c.up = nil, nil
@@ -53,6 +59,8 @@ func NewSharedAtlas(u Uploader) *SharedAtlas { return &SharedAtlas{up: u} }
 // ShareAtlas makes c draw its text with the page textures of s (instead of
 // textures of its own) and syncs now: AtlasSync for contexts that share a
 // text system and a renderer. All of them must use the same text system.
+// Reuse their existing s: a new SharedAtlas cannot restore pages whose dirty
+// regions were already consumed (see AtlasSync).
 func (c *Context) ShareAtlas(s *SharedAtlas) {
 	c.shared, c.up = s, s.up
 	c.pageTex = c.pageTex[:0]

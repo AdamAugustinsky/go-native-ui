@@ -84,7 +84,9 @@ type Cache struct {
 }
 
 // NewCache starts a cache and its decoding workers. Setup allocates: the
-// tables are sized by Options.Entries and never grow.
+// tables are sized by Options.Entries and never grow. The cache is bound to
+// Options.Renderer for its entire lifetime; replacing the renderer requires
+// a new cache, not reuse of the old cache's texture IDs or handles.
 func NewCache(o Options) *Cache {
 	if o.Renderer == nil {
 		panic("img: Options.Renderer is nil")
