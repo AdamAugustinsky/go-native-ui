@@ -1,0 +1,9 @@
+{
+	"id": "dev.gonativeui.services",
+	"name": "Pings",
+	"version": "0.1.0",
+	"build": "1",
+	"category": "public.app-category.social-networking",
+	"minimumSystem": "14.0",
+	"loginAgents": [{"name": "hidden", "arguments": ["--start-hidden"]}]
+}

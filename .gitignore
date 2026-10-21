@@ -15,3 +15,34 @@
 # gnui run: development bundles, logs
 .gnui/
 **/testdata/failed/
+
+# binaries that `go build ./cmd/x` (or ./examples/x, ./tools/x) leaves at the
+# repo root: one per command, example and tool, so a `git add -A` cannot take
+# them. (tools/rexui is not listed: /rexui is the component package.)
+/appkitref
+/appkitscenes
+/bouncerec
+/chromedemo
+/composerdemo
+/doccheck
+/fsbench
+/gallery
+/genbidi
+/gnui
+/gnuishot
+/gpushot
+/images
+/imgbench
+/listbench
+/n2demo
+/notes
+/pilot
+/rexcompare
+/rexlook
+/richtext
+/services
+/shelldemo
+/spike
+/textshot
+/vlistbench
+/windowsdemo

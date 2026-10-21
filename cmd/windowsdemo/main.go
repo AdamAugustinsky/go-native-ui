@@ -116,7 +116,10 @@ type window struct {
 	status  string
 	edited  bool
 	renames int
+	wins    []*app.Win // the open windows, reused by every frame
 }
+
+var choices = []string{"Red", "Green", "Blue"}
 
 func (w *window) Init(a *app.App) error {
 	w.a = a
@@ -148,7 +151,12 @@ func (w *window) CloseRequested(*app.App) bool {
 }
 
 func (w *window) Build(c *ui.Context) {
-	win := w.a.Window()
+	win := w.a.Window() // nil offscreen, in the test
+	var id uint32
+	if win != nil {
+		id = win.ID()
+	}
+	w.wins = w.a.Windows(w.wins[:0])
 	for r, ok := w.a.TakeDialog(); ok; r, ok = w.a.TakeDialog() {
 		w.status = fmt.Sprintf("sheet answered: button %d", r.Button)
 	}
@@ -172,9 +180,9 @@ func (w *window) Build(c *ui.Context) {
 	k.BeginWindow()
 	k.NextHeight(widget.Fill)
 	k.BeginCard("card")
-	k.LabelStyle(fmt.Sprintf("Window %d (id %d) of %d open", w.n, win.ID(), len(w.a.Windows(nil))), widget.TextSemi)
+	k.LabelBytesStyle(c.Fmt().Str("Window ").Int(w.n).Str(" (id ").Int(int(id)).Str(") of ").Int(len(w.wins)).Str(" open").Bytes(), widget.TextSemi)
 	k.TextField("Text", &w.field, "Type here: keys go to the key window")
-	k.Select("Choice", &w.sel, []string{"Red", "Green", "Blue"})
+	k.Select("Choice", &w.sel, choices)
 
 	k.Row("frame")
 	if k.Button("Animate").Clicked {
@@ -227,14 +235,16 @@ func (w *window) Build(c *ui.Context) {
 	if k.Button("Edited").Clicked {
 		w.edited = !w.edited
 	}
-	win.SetDocumentEdited(w.edited) // unchanged, it does nothing
+	if win != nil {
+		win.SetDocumentEdited(w.edited) // unchanged, it does nothing
+	}
 	if k.Button("Close").Clicked {
 		win.Close()
 	}
 	k.EndRow()
 	k.LabelStyle(w.status, widget.TextMuted)
 	if w.d.last != "" {
-		k.LabelStyle("OpenWindow: "+w.d.last, widget.TextMuted)
+		k.LabelBytesStyle(c.Fmt().Str("OpenWindow: ").Str(w.d.last).Bytes(), widget.TextMuted)
 	}
 	k.EndCard()
 	k.EndWindow()

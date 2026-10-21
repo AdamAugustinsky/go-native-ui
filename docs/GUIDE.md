@@ -16,6 +16,25 @@ prose names the function, and a line `// …` marks lines left out. A test
 so the guide cannot drift from code that compiles and is tested. The API is
 not stable yet and the project name is a placeholder.
 
+The guide has chapters of its own for what the notes app does not need. Their
+blocks are checked excerpts too, of programs that exist: three new examples (images,
+rich text and services), each tested and allocating nothing in a steady frame, and the
+demos that were already here (`cmd/windowsdemo`, `cmd/gallery`, `cmd/chromedemo`,
+`cmd/imgbench`):
+
+- [The app object](guide/app-object.md): `app.Main`, the handler, windows, quitting and
+  threads (`cmd/windowsdemo`).
+- [rexui](guide/rexui.md): the component library, forms, lists, system menus and
+  owning a component (`cmd/gallery`).
+- [Images](guide/images.md): the decoding cache, system icons and animations
+  (`examples/images`).
+- [Rich text](guide/richtext.md): spans, links, mentions and selection
+  (`examples/richtext`).
+- [Services](guide/services.md): notifications, the Dock, a status item, the
+  Keychain, preferences, login items and window state (`examples/services`).
+- [Packaging](guide/packaging.md): `gnui.json`, `gnui run`, `gnui package` and
+  `gnui doctor`.
+
 ```sh
 export PATH=$HOME/sdk/go1.27.1/bin:$PATH      # Go 1.27
 export CGO_ENABLED=0
@@ -30,11 +49,6 @@ go test ./examples/notes/...                  # the tests of the example
 | `examples/notes/notes/notes.go` | the app: state, `Build`, menu model |
 | `examples/notes/notes/script.go` | a scripted session (`widget/widgettest` steps) that gives the app the input a person would |
 | `examples/notes/notes/notes_test.go` | the tests: render, interaction, zero allocations |
-| `examples/notes/live/` | the tests that open a real window: the system's menus, alert and input |
-| `examples/notes/live/` | the tests that open a real window: the system's menus, alert and input |
-| `examples/notes/live/` | the tests that open a real window: the system's menus, alert and input |
-| `examples/notes/live/` | the tests that open a real window: the system's menus, alert and input |
-| `examples/notes/live/` | the tests that open a real window: the system's menus, alert and input |
 | `examples/notes/live/` | the tests that open a real window: the system's menus, alert and input |
 
 ## 1. The model
@@ -145,6 +159,10 @@ func (n *Notes) Build(c *ui.Context) {
 The first frame is built and drawn before the window is shown, so the window
 appears with its content (D21).
 
+`Run` is one window. An app that opens more than one, that stays when its last
+window closes, that is asked to quit by the system or answers a click on its Dock
+icon is run with `app.Main` and a `Handler`: see [the app object](guide/app-object.md).
+
 ## 3. Layout
 
 This window places its panes itself: the sidebar's glass runs to the top of the
@@ -191,7 +209,9 @@ points (`r.Window.Toolbars`) and the app's own constants, times the scale, and
 The window's content is the rexui components the pane is made of:
 `rexui.Toolbar`, `rexui.Sidebar` and `rexui.ScrollBars` are built from `base`'s
 primitives and the theme's measured recipes, so that the window matches AppKit's
-Notes scene (docs/design/liquid-glass-reference.md).
+Notes scene (docs/design/liquid-glass-reference.md). The other components, the
+forms and lists, and how to restyle a component or copy it into your own package are
+in [the rexui chapter](guide/rexui.md).
 
 ## 4. State, a text field and a button
 
@@ -348,6 +368,8 @@ in 15-pt semibold, the rest in body type, as the Notes scene's text view sets
 them. `setText` makes it from the note when the note changes, into buffers the
 app reserved in `New`; `BeginScroll` and `rexui.ScrollBars` are the scroll view
 and the scroll bars of the system's style (legacy, taking room, or overlay).
+Links, mentions, selection across paragraphs and the rest of the rich text are in
+[the rich text chapter](guide/richtext.md).
 
 ```go examples/notes/notes/notes.go
 	c.NextSize(ui.Pct(1), ui.Children(1))
@@ -542,6 +564,10 @@ command is `InModal`. On Windows and Linux `Kit.MenuBar`
 draws the bar inside the window. Commands with edit roles (`menu.RoleCopy` and
 the like) go in an app's own Edit menu, where it wants one; they act on the
 focused field, or reach the app when no field has the focus.
+
+A native menu is also what `MenuButton`, `Select` and a context menu open on macOS
+([rexui](guide/rexui.md#6-system-menus)); with more than one window each window sets its
+own model and the bar follows the key window ([the app object](guide/app-object.md#6-one-menu-per-window)).
 
 ## 9. Light and dark
 
@@ -776,6 +802,10 @@ message; a request over 64 KiB is refused. The protocol is in
 - **Startup:** the budget is 150 ms from process start to the first complete frame on the
   display (D21). On macOS the first launch of a new binary also pays Gatekeeper's scan,
   so measure from the second.
+- **A macOS bundle** is what notifications and login items need, and what you ship. `gnui run`
+  builds, signs and launches one for development and `gnui package` makes the release:
+  [packaging](guide/packaging.md). What an app asks of the system once it has one is
+  [services](guide/services.md).
 - **macOS materials and native views.** With `app.Config.Materials`, a box marked with
   `c.Material` (sidebar, inspector, toolbar capsule, ...) shows the system's live glass or
   material where the app paints nothing; under Reduce Transparency it is an opaque fill
@@ -788,6 +818,9 @@ message; a request over 64 KiB is refused. The protocol is in
 
 ## 13. Where next
 
+- The chapters of `docs/guide/`: [the app object](guide/app-object.md), [rexui](guide/rexui.md),
+  [images](guide/images.md), [rich text](guide/richtext.md), [services](guide/services.md) and
+  [packaging](guide/packaging.md). Their code is excerpted from programs that are tested.
 - `cmd/gallery` shows every widget in every state, in light and dark: tables of a million
   rows, a splitter, tabs, selects, tooltips, context menus, and a custom titlebar. Its
   `gallery` package is the most complete consumer of the API.
