@@ -95,6 +95,37 @@ func TestLegacyBarsReserveTheirWidth(t *testing.T) {
 	}
 }
 
+// TestLegacyStyleChangeSettlesAtOnce: when the system's scroller style turns
+// legacy (AppKit posts it some time after launch on a Mac with a mouse), the
+// bar shows at once and nothing animates: the overlay bar's fade, which a
+// legacy bar does not use, kept an idle app drawing for half a second, and for
+// seconds behind another window. The fade out is still there if the style
+// changes back.
+func TestLegacyStyleChangeSettlesAtOnce(t *testing.T) {
+	g, bars, _ := scrollRig(t)
+	g.frames(90)
+	if g.c.Animating() {
+		t.Fatal("the overlay view does not settle")
+	}
+	g.k.fol.PinSystem(&theme.SystemValues{Known: true, Settings: theme.Settings{Scroller: theme.ScrollerLegacy}})
+	n := 0
+	for g.frame(); g.c.Animating() && n < 200; n++ {
+		g.frame()
+	}
+	if b := &bars[1]; n > 1 || !b.Legacy || b.Show != 1 {
+		t.Fatalf("after the style turned legacy: %d more frames animating, bar %+v", n, *b)
+	}
+	g.k.fol.PinSystem(&theme.SystemValues{Known: true})
+	g.frame()
+	if b := &bars[1]; b.Legacy || b.Show <= 0 || b.Show >= 1 || !g.c.Animating() {
+		t.Fatalf("back to overlay bars: %+v, animating %v; want the bar fading out", *b, g.c.Animating())
+	}
+	g.frames(90)
+	if b := &bars[1]; b.Visible || g.c.Animating() {
+		t.Fatalf("the overlay bar did not fade out: %+v", *b)
+	}
+}
+
 // TestHiddenBarsReserveNothing: a view whose app hides its bars
 // (ScrollState.HideBars) keeps its whole width under legacy scrollers and
 // reports no bar; a view that does not, keeps reserving the bar's width.

@@ -59,3 +59,7 @@ func BundleID() string { return "" }
 // NativeLoop reports whether the OS runs a modal loop of its own now; the
 // frame handler covers those here without the application object.
 func NativeLoop() bool { return false }
+
+// ArmOnWake reports whether what reaches the app outside its loop asks for
+// the frame that draws it; here only inside a native loop (NativeLoop).
+func ArmOnWake() bool { return NativeLoop() }

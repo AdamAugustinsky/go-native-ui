@@ -13,11 +13,12 @@ import (
 // (platform.DebugState; macOS only, "win{valid=0}" elsewhere). now is
 // platform.Now(). Format (one line, key=value, ages are "N.Ns-ago"):
 //
-//	app{frames=410 warm=1000/1000 meas=410/900 needdraw=1 ready=0 paced=1 requested=119.8s-ago retry=0 evframes=412 lastevframe=119.9s-ago lastdraw=119.9s-ago beginfail=3/consec=3 owed=B settle=0 pending=0 inhandler=0} win{valid=1 occ=0(hidden) lastvis=hidden@118.2s-ago key=0 active=0 mini=0 link=metal paused=1/1 armed=1@119.8s-ago drawable=0 live=0 relink=0 ticks=1234 sinceframe=0 lasttick=119.9s-ago lastframe=119.9s-ago pauses=2 idle=4}
+//	app{frames=410 warm=1000/1000 meas=410/900 needdraw=1 ready=0 paced=1 parked=1 hidden=1 requested=119.8s-ago retry=0 evframes=412 lastevframe=119.9s-ago lastdraw=119.9s-ago beginfail=3/consec=3 owed=B settle=0 pending=0 inhandler=0} win{valid=1 occ=0(hidden) lastvis=hidden@118.2s-ago key=0 active=0 mini=0 link=metal paused=1/1 armed=1@119.8s-ago drawable=0 live=0 relink=0 ticks=1234 sinceframe=0 lasttick=119.9s-ago lastframe=119.9s-ago pauses=2 idle=4}
 //
-// owed lists why another frame is owed: A animating, H input with the pointer
-// inside, S resize settling, I events waiting, B bench (- = nothing). It
-// allocates nothing when b has room.
+// parked: hidden, a draw found no frame, and the loop waits for an event
+// (pacer). owed lists why another frame is owed: A animating, H input with
+// the pointer inside, S resize settling, I events waiting, B bench (- =
+// nothing). It allocates nothing when b has room.
 func (a *App) StateLine(b []byte, now int64) []byte {
 	b = append(b, "app{frames="...)
 	b = strconv.AppendInt(b, int64(a.frames), 10)
@@ -37,6 +38,10 @@ func (a *App) StateLine(b []byte, now int64) []byte {
 	b = appendBool(b, a.p.frameReady)
 	b = append(b, " paced="...)
 	b = appendBool(b, a.p.paced)
+	b = append(b, " parked="...)
+	b = appendBool(b, a.p.parked)
+	b = append(b, " hidden="...)
+	b = appendBool(b, a.p.hidden)
 	b = append(b, " requested="...)
 	b = appendAge(b, now, a.p.requestedAt)
 	b = append(b, " retry="...)

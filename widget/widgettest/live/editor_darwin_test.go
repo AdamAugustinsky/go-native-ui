@@ -1156,6 +1156,67 @@ func TestEditorCompletionShowsUnforced(t *testing.T) {
 	}
 }
 
+// A wake (a worker's result, a test's wait, Quit) or an app event (another
+// app taking the activation) while a nested loop of AppKit's runs that
+// NativeLoop does not know (NSCorrectionPanel's, until the next key) is drawn,
+// also once the window went idle and its display link paused: the change arms
+// a frame, whose tick finds the app's loop suspended and draws through the
+// frame handler. Only the editor's own changes armed one: under the
+// correction bubble on CI the composer's wait saw no frame for 60 s, and the
+// app did not end after Quit.
+func TestNestedLoopDrawsAWakeAndAnAppEvent(t *testing.T) {
+	p := &edApp{}
+	l := startEdApp(t, p, false)
+	l.Frames(5)
+	for _, c := range []struct {
+		name   string
+		change func()
+	}{
+		{"a wake", platform.Wake},
+		{"an app event", func() { app.Post(app.Event{}, nil) }},
+	} {
+		var sent bool
+		var b0, b1 int64
+		l.Do(func(a *app.App) {
+			var at time.Duration
+			nestedLoop(1500*time.Millisecond, func(el time.Duration) {
+				if !sent && a.Win.DebugState().LinkPaused {
+					sent, at, b0 = true, el, p.builds.Load()
+					go c.change()
+				}
+			})
+			if sent && 1500*time.Millisecond-at < time.Second {
+				t.Errorf("%s: the display link paused only %v into the nested loop", c.name, at)
+			}
+			b1 = p.builds.Load()
+		})
+		if !sent {
+			t.Fatalf("%s: the display link did not pause in the nested loop", c.name)
+		}
+		if b1 == b0 {
+			t.Errorf("%s in a nested loop drew no frame", c.name)
+		}
+	}
+}
+
+// nestedLoop runs a nested event loop for d, as AppKit's own do: it takes the
+// events of the default mode and sends them, until d has passed. step is
+// called on each turn with the time since the start. Main thread.
+func nestedLoop(d time.Duration, step func(el time.Duration)) {
+	app_ := widgettest.NSApp()
+	selNext := objc.Sel("nextEventMatchingMask:untilDate:inMode:dequeue:")
+	selSend, selDate := objc.Sel("sendEvent:"), objc.Sel("dateWithTimeIntervalSinceNow:")
+	clsDate, mode := objc.Cls("NSDate"), objc.Str("kCFRunLoopDefaultMode")
+	start := time.Now()
+	for el := time.Duration(0); el < d; el = time.Since(start) {
+		step(el)
+		until := objc.ID(objc.F.Reset().Arg(uintptr(clsDate)).Arg(uintptr(selDate)).ArgF64(0.02).Call(objc.MsgSend).R0())
+		if ev := objc.Send4(app_, selNext, ^uintptr(0), uintptr(until), uintptr(mode), 1); ev != 0 {
+			objc.Send1(app_, selSend, uintptr(ev))
+		}
+	}
+}
+
 // While a nested event loop runs (as NSCorrectionPanel's does on macOS 15,
 // until the next key), keys it dispatches reach the editor and frames are
 // drawn for them: the text, the caret and the completion follow; with

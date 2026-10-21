@@ -186,6 +186,37 @@ func DebugPumpState() string {
 	return string(append(b, '}'))
 }
 
+// DebugMainLoop describes where the main thread is, for a test whose app
+// stopped drawing while the main thread still answers: the main run loop's
+// mode (AppKit's own loops run in theirs: event tracking, a modal panel),
+// how many pumps run, what NativeLoop sees, whether a window's ticks found the
+// app's loop suspended (nested), a modal window and the event AppKit is
+// handling. It only reads; it does not run the run loop. Main thread.
+func DebugMainLoop() string {
+	b := []byte("main{mode=")
+	if m := objc.Send(objc.Send(objc.Cls("NSRunLoop"), objc.Sel("currentRunLoop")), objc.Sel("currentMode")); m != 0 {
+		b = objc.AppendUTF8(b, m)
+	} else {
+		b = append(b, "none"...)
+	}
+	b = append(b, fmt.Sprintf(" depth=%d", pumpDepth)...)
+	b = appendFlag(b, " native", NativeLoop())
+	b = appendFlag(b, " quitwait", quitWaitNative())
+	b = append(b, fmt.Sprintf(" menus=%d", nativeMenus.depth)...)
+	for _, w := range openWindows() {
+		b = append(b, fmt.Sprintf(" w%d{live=%v drag=%v nested=%v frameout=%v}", w.slot, w.live, w.drag.active, w.nested, w.frameOut)...)
+	}
+	b = appendFlag(b, " dispatching", dispatch.running)
+	b = appendFlag(b, " held", dispatch.held)
+	b = appendFlag(b, " modal", objc.Send(appObj.app, objc.Sel("modalWindow")) != 0)
+	if ev := objc.Send(appObj.app, objc.Sel("currentEvent")); ev != 0 {
+		b = append(b, fmt.Sprintf(" event=type%d", objc.Send(ev, selType))...)
+	} else {
+		b = append(b, " event=none"...)
+	}
+	return string(append(b, '}'))
+}
+
 func appendFlag(b []byte, name string, v bool) []byte {
 	b = append(b, name...)
 	if v {
