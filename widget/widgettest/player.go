@@ -62,6 +62,7 @@ type Player struct {
 	revFrames int
 	x, y      float32 // the pointer
 	base      []byte  // the value a WaitChange step started from
+	modsHeld  bool    // a step set the modifiers for one frame only: the next clears them
 	tips      []ui.TooltipRegion
 	tipText   []byte
 }
@@ -117,6 +118,9 @@ func (p *Player) Script(frame int, in *ui.Input) bool {
 	in.Inside, in.Focused = true, true
 	if p.opt.Synthetic {
 		in.Time = p.now()
+	}
+	if p.modsHeld {
+		in.Mods, p.modsHeld = 0, false
 	}
 	if p.idx >= len(p.steps) {
 		if !p.opt.Loop {
@@ -369,7 +373,11 @@ func (p *Player) exists(role ui.Role, name string) bool {
 // resolve finds the target of a step that has one.
 func (p *Player) resolve(st *Step) {
 	switch st.op {
-	case opMove, opClick, opRClick, opDown, opWheel, opSweep, opDrag:
+	case opMove, opClick, opRClick, opDown, opWheel, opSweep, opDrag, opMagnify, opSmartMagnify:
+		if st.at {
+			p.ok, p.rect = true, [4]float32{st.px, st.py, st.px, st.py}
+			return
+		}
 		i := p.find(st.role, st.name, st.nth)
 		p.ok = i >= 0
 		switch {
@@ -386,6 +394,14 @@ func (p *Player) resolve(st *Step) {
 		default:
 			p.rect = p.sem.Nodes[i].Bounds
 		}
+	}
+}
+
+// holdMods sets the step's modifiers for the frame, if it has any; the next
+// frame clears them.
+func (p *Player) holdMods(in *ui.Input, st *Step) {
+	if st.mods != 0 {
+		in.Mods, p.modsHeld = st.mods, true
 	}
 }
 
@@ -453,6 +469,9 @@ func (p *Player) run(st *Step, in *ui.Input) bool {
 			p.fail("the value of the node with role %d named %q did not change in %d ms", st.role, st.name, within(st))
 			return true
 		}
+	case opMoveTo:
+		p.goTo(in, st.px, st.py)
+		return true
 	case opMove:
 		if p.ok {
 			x, y := p.centre()
@@ -485,22 +504,26 @@ func (p *Player) run(st *Step, in *ui.Input) bool {
 		switch {
 		case p.t == 0:
 			p.goTo(in, cx, cy)
+			in.Mods = st.mods
 			in.SetButton(ui.ButtonLeft, true, 1)
 		case p.t <= st.n:
 			p.goTo(in, cx+st.dx*float32(p.t), cy)
 		default:
 			in.SetButton(ui.ButtonLeft, false, 0)
+			in.Mods = 0
 			return true
 		}
 	case opDown:
 		if p.ok {
 			x, y := p.centre()
 			p.goTo(in, x, y)
+			in.Mods = st.mods
 			in.SetButton(ui.ButtonLeft, true, 1)
 		}
 		return true
 	case opUp:
 		in.SetButton(ui.ButtonLeft, false, 0)
+		in.Mods = 0
 		return true
 	case opKey, opKeys:
 		in.Mods = st.mods
@@ -525,6 +548,7 @@ func (p *Player) run(st *Step, in *ui.Input) bool {
 		c.SetSystemAppearance(a)
 		return true
 	case opDo:
+		p.holdMods(in, st)
 		st.fn()
 		return true
 	case opWheel:
@@ -535,8 +559,44 @@ func (p *Player) run(st *Step, in *ui.Input) bool {
 			x, y := p.centre()
 			p.goTo(in, x, y)
 		}
+		p.holdMods(in, st)
 		in.AddScroll(0, st.dy, true)
 		return p.t+1 >= st.n
+	case opMagnify:
+		if !p.ok {
+			return true
+		}
+		x, y := p.centre()
+		if p.t == 0 {
+			p.goTo(in, x, y)
+		}
+		p.holdMods(in, st)
+		g := ui.GestureEvent{Kind: ui.GestureMagnify, Phase: ui.PhaseChanged, X: x, Y: y, Time: p.now()}
+		n := max(st.n, 1)
+		switch {
+		case p.t == 0:
+			g.Phase = ui.PhaseBegan
+		case p.t > n:
+			g.Phase = ui.PhaseEnded
+		default:
+			g.Amount = st.amt / float32(n)
+		}
+		if !in.AddGesture(g) {
+			p.fail("the frame's gesture queue is full")
+			return true
+		}
+		return p.t > n
+	case opSmartMagnify:
+		if !p.ok {
+			return true
+		}
+		x, y := p.centre()
+		p.goTo(in, x, y)
+		p.holdMods(in, st)
+		if !in.AddGesture(ui.GestureEvent{Kind: ui.GestureSmartMagnify, X: x, Y: y, Time: p.now()}) {
+			p.fail("the frame's gesture queue is full")
+		}
+		return true
 	case opSweep:
 		if !p.ok {
 			return true

@@ -102,13 +102,16 @@ func (l *LiveApp) Type(s string) {
 
 // Scroll sends a trackpad scroll of (dx, dy) points over (x, y) pixels as a
 // begin, a change and an end, a frame between.
-func (l *LiveApp) Scroll(x, y, dx, dy float32) {
+func (l *LiveApp) Scroll(x, y, dx, dy float32) { l.t.Helper(); l.ScrollWith(x, y, dx, dy, 0) }
+
+// ScrollWith is Scroll with the modifiers held: a Shift-wheel or ⌘-scroll.
+func (l *LiveApp) ScrollWith(x, y, dx, dy float32, mods ui.Mods) {
 	l.t.Helper()
 	for _, p := range [3]ScrollPhase{ScrollBegan, ScrollChanged, ScrollEnded} {
 		var err error
 		l.Native(func(w Win) {
 			var ev objc.ID
-			if ev, err = w.ScrollEvent(x, y, dx, dy, p, ScrollNone, 0); err == nil {
+			if ev, err = w.ScrollEvent(x, y, dx, dy, p, ScrollNone, mods); err == nil {
 				Dispatch(ev)
 			}
 		})
@@ -126,6 +129,22 @@ func (l *LiveApp) Scroll(x, y, dx, dy float32) {
 func (l *LiveApp) Magnify(x, y float32, total float64, steps int) {
 	l.t.Helper()
 	l.gesture(x, y, steps, func(w Win, p GesturePhase, per float64) (objc.ID, error) { return w.MagnifyEvent(x, y, per, p) }, total)
+}
+
+// SmartMagnify sends the two-finger double tap over (x, y) pixels.
+func (l *LiveApp) SmartMagnify(x, y float32) {
+	l.t.Helper()
+	var err error
+	l.Native(func(w Win) {
+		var ev objc.ID
+		if ev, err = w.SmartMagnifyEvent(x, y); err == nil {
+			Dispatch(ev)
+		}
+	})
+	if err != nil {
+		l.t.Fatalf("widgettest: %v", err)
+	}
+	l.Frames(2)
 }
 
 // Rotate sends a rotation over (x, y) pixels: steps events that add up to

@@ -5,27 +5,30 @@ import "gonativeui/ui"
 type opKind uint8
 
 const (
-	opIdle       opKind = iota // n frames without input
-	opPause                    // ms of clock time (at least 2 frames)
-	opSettle                   // until nothing animates (at most ms of clock time)
-	opWaitFor                  // until a node with the role and name exists (at most ms)
-	opWaitGone                 // until no such node exists (at most ms)
-	opWaitChange               // until the value of the node differs from what it was when the step began (at most ms)
-	opMove                     // the pointer to the target
-	opClick                    // the target: move and press, release a frame later
-	opRClick                   // the same with the right button
-	opDown                     // move to the target and press the left button
-	opUp                       // release the left button
-	opKey                      // key code with modifiers, once
-	opKeys                     // key code with modifiers on each of n frames
-	opText                     // type text
-	opWheel                    // over the target: dy pixels of trackpad scroll on each of n frames
-	opSweep                    // the pointer down the target, top to bottom, over n frames
-	opDrag                     // press on the target, move dx pixels along x on each of n frames, let go
-	opCommand                  // a native menu command, by id
-	opEdit                     // an Edit menu action
-	opAppearance               // the system appearance changes
-	opDo                       // a function, run in the frame before it is built
+	opIdle         opKind = iota // n frames without input
+	opPause                      // ms of clock time (at least 2 frames)
+	opSettle                     // until nothing animates (at most ms of clock time)
+	opWaitFor                    // until a node with the role and name exists (at most ms)
+	opWaitGone                   // until no such node exists (at most ms)
+	opWaitChange                 // until the value of the node differs from what it was when the step began (at most ms)
+	opMove                       // the pointer to the target
+	opClick                      // the target: move and press, release a frame later
+	opRClick                     // the same with the right button
+	opDown                       // move to the target and press the left button
+	opUp                         // release the left button
+	opKey                        // key code with modifiers, once
+	opKeys                       // key code with modifiers on each of n frames
+	opText                       // type text
+	opWheel                      // over the target: dy pixels of trackpad scroll on each of n frames
+	opSweep                      // the pointer down the target, top to bottom, over n frames
+	opDrag                       // press on the target, move dx pixels along x on each of n frames, let go
+	opCommand                    // a native menu command, by id
+	opEdit                       // an Edit menu action
+	opAppearance                 // the system appearance changes
+	opDo                         // a function, run in the frame before it is built
+	opMoveTo                     // the pointer to a point
+	opMagnify                    // a pinch over the target: amount in total over n frames
+	opSmartMagnify               // a two-finger double tap over the target
 )
 
 // Step is one thing a person does: move the pointer to a node, click it, press a
@@ -46,6 +49,10 @@ type Step struct {
 	thru bool // the target may be covered: the pointer goes to its centre anyway
 	id   uint16
 	edit ui.EditAction
+	at   bool    // the target is the point (px, py), not a node
+	px   float32 // that point, in pixels
+	py   float32
+	amt  float32 // the pinch's total change in scale
 }
 
 // DefaultWaitMs is how long a wait (WaitFor, WaitGone, Settle) lasts at most,
@@ -85,6 +92,10 @@ func WaitChange(role ui.Role, name string) Step {
 // Move moves the pointer to the centre of the node with the role and name.
 func Move(role ui.Role, name string) Step { return Step{op: opMove, role: role, name: name} }
 
+// MoveTo moves the pointer to the point (x, y), in pixels, wherever it is: on
+// no node, at a node's edge, outside the window.
+func MoveTo(x, y float32) Step { return Step{op: opMoveTo, px: x, py: y} }
+
 // Click moves the pointer to the centre of the node with the role and name,
 // presses the left button, and releases it a frame later. A node that is
 // outside the window or scrolled out of its scroll area is scrolled into view
@@ -115,6 +126,7 @@ func Keys(code ui.KeyCode, mods ui.Mods, n int) Step {
 func Type(text string) Step { return Step{op: opText, text: text} }
 
 // Wheel scrolls over the node: dy pixels of trackpad scroll on each of n frames.
+// With holds modifiers during it: Wheel(…).With(ui.ModShift) is a Shift-wheel.
 func Wheel(role ui.Role, name string, dy float32, n int) Step {
 	return Step{op: opWheel, role: role, name: name, dy: dy, n: n}
 }
@@ -130,12 +142,35 @@ func Sweep(role ui.Role, name string, n int) Step {
 	return Step{op: opSweep, role: role, name: name, n: n}
 }
 
+// Magnify pinches over the centre of the node: the scale changes by amount
+// (0.5 is half again) in total, in n steps of one frame each, begun and ended
+// as a real gesture is. With holds modifiers during it.
+func Magnify(role ui.Role, name string, amount float32, n int) Step {
+	return Step{op: opMagnify, role: role, name: name, amt: amount, n: n}
+}
+
+// MagnifyAt is Magnify over the point (x, y), in pixels.
+func MagnifyAt(x, y, amount float32, n int) Step {
+	return Step{op: opMagnify, at: true, px: x, py: y, amt: amount, n: n}
+}
+
+// SmartMagnify is the two-finger double tap over the centre of the node.
+func SmartMagnify(role ui.Role, name string) Step {
+	return Step{op: opSmartMagnify, role: role, name: name}
+}
+
+// SmartMagnifyAt is SmartMagnify over the point (x, y), in pixels.
+func SmartMagnifyAt(x, y float32) Step {
+	return Step{op: opSmartMagnify, at: true, px: x, py: y}
+}
+
 // Nth makes the step act on the i-th (from 0) node with its role and name, in
 // the tree's order: Click(ui.RoleListItem, "").Nth(3) is the fourth row.
 func (s Step) Nth(i int) Step { s.nth = i; return s }
 
-// With holds the modifiers during a pointer step: Click(…).With(ui.ModShift) is
-// a Shift-click.
+// With holds the modifiers during a pointer step (Click, Down, Drag, Wheel,
+// Magnify …) or a Do: Click(…).With(ui.ModShift) is a Shift-click, and
+// Down(…).With(ui.PrimaryMod) holds them until Up.
 func (s Step) With(m ui.Mods) Step { s.mods = m; return s }
 
 // Through lets a pointer step act on a target that something is drawn over
@@ -179,5 +214,6 @@ func b2u(b bool) uint16 {
 
 // Do runs f in the frame, on the thread of the frame, before it is built: it
 // is how a script delivers something that is not input at an exact point (a
-// fake dialog's answer, a text set into a host).
+// fake dialog's answer, a text set into a host). With holds modifiers in the
+// frame f runs in, which is built with them.
 func Do(f func()) Step { return Step{op: opDo, fn: f} }
