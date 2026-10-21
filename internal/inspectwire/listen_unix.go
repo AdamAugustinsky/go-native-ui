@@ -137,7 +137,8 @@ func clearStale(path string) error {
 	if !errors.Is(err, syscall.ECONNREFUSED) {
 		return fmt.Errorf("inspect: cannot tell whether the socket %s is stale (%v); refusing to replace it", path, err)
 	}
-	if again, err := os.Lstat(path); err != nil || !os.SameFile(fi, again) {
+	// (a socket, and the same one: an inode number can be reused by the file that replaced it)
+	if again, err := os.Lstat(path); err != nil || again.Mode()&os.ModeSocket == 0 || !os.SameFile(fi, again) {
 		return fmt.Errorf("inspect: %s changed while it was being checked; refusing to replace it", path)
 	}
 	if err := os.Remove(path); err != nil {
