@@ -571,15 +571,29 @@ func (c *Context) emitGlyphFade(l *gpu.DrawList, face text.FaceID, gid uint16, p
 	if e.Color {
 		mode = gpu.ModeRGBA
 	}
-	l.Add(gpu.Quad{
-		Rect:  gr,
-		Clip:  tclip,
-		UV:    [4]float32{float32(e.X), float32(e.Y), float32(e.X) + float32(e.W), float32(e.Y) + float32(e.H)},
-		Color: [4]uint32{col, col, col, col},
-		FadeX: fade,
-		Mode:  mode,
-		Tex:   c.pageTexture(int(e.Page)),
-	})
+	var tex gpu.TextureID
+	if p := int(e.Page); c.shared == nil && p < len(c.pageTex) {
+		tex = c.pageTex[p]
+	} else {
+		tex = c.pageTexture(p)
+	}
+	n := len(l.Quads)
+	if n < cap(l.Quads) {
+		l.Quads = l.Quads[:n+1]
+	} else {
+		l.Quads = append(l.Quads, gpu.Quad{})
+	}
+	q := &l.Quads[n]
+	q.Rect = gr
+	q.Clip = tclip
+	q.UV = [4]float32{float32(e.X), float32(e.Y), float32(e.X) + float32(e.W), float32(e.Y) + float32(e.H)}
+	q.Color = [4]uint32{col, col, col, col}
+	// Reused slots may have held shapes or shadows in the previous frame.
+	q.Radii = [4]float32{}
+	q.Border, q.BorderColor, q.Soft = 0, 0, 0
+	q.FadeX = fade
+	q.Mode = mode
+	q.Tex = tex
 	if c.finalPass {
 		c.glyphQuads = append(c.glyphQuads, int32(len(l.Quads)-1))
 	}
