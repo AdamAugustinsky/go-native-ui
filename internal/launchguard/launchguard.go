@@ -26,6 +26,10 @@ func isTestName(arg0 string) bool {
 	return strings.HasSuffix(strings.TrimSuffix(filepath.Base(arg0), ".exe"), ".test")
 }
 
+// TestBinary reports whether the process is a Go test binary, by its name
+// (pkg.test). app/selfupdate honours its test-only options only then.
+func TestBinary() bool { return testBinary }
+
 // Refusing reports whether Check refuses now (a test binary without
 // GNUI_ALLOW_OPEN=1), without logging.
 func Refusing() bool { return testBinary && os.Getenv(Env) != "1" }
