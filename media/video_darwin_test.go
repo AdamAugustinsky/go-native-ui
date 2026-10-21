@@ -218,15 +218,22 @@ func videoFrames(plain, turned string) (errs []string) {
 		}
 	}
 
-	// Play plays at the rate set while paused.
+	// Play plays at the rate set while paused. Wait for the position to
+	// advance before measuring, so AVPlayer's startup latency is excluded.
+	p0 = v.Position()
 	v.Play()
-	p0, t0 = v.Position(), time.Now()
-	for time.Since(t0) < 300*time.Millisecond {
-		pump(5 * time.Millisecond)
+	if until("position advancing after Play", 5*time.Second, func() bool {
 		frameOf(r, v, 160, 96)
-	}
-	if got, wall := v.Position()-p0, time.Since(t0); got < wall*6/5 || got > wall*9/5 {
-		fail("at 1.5× from Play: %v played in %v", got, wall)
+		return v.Position() > p0
+	}) {
+		p0, t0 = v.Position(), time.Now()
+		for time.Since(t0) < 300*time.Millisecond {
+			pump(5 * time.Millisecond)
+			frameOf(r, v, 160, 96)
+		}
+		if got, wall := v.Position()-p0, time.Since(t0); got < wall*6/5 || got > wall*9/5 {
+			fail("at 1.5× from Play: %v played in %v", got, wall)
+		}
 	}
 	v.Pause()
 
