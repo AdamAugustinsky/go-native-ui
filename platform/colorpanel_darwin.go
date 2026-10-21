@@ -22,6 +22,7 @@ var colorPanel struct {
 	target  objc.ID // the GNUIColorTarget instance
 	setting bool    // setColor: is running: the action it may fire is not the user's
 	shown   bool
+	owner   *Window // the window that showed the panel: its changes are that window's
 
 	selShared, selSetTarget, selSetAction, selSetContinuous, selSetShowsAlpha, selSetColor objc.SEL
 	selColor, selOrderFront, selMakeKey, selClose, selVisible                              objc.SEL
@@ -52,7 +53,7 @@ func colorPanelInit() {
 // colorPanelChanged is the panel's action: the user moved to a colour.
 func colorPanelChanged(c *ffi.CB) {
 	cp := &colorPanel
-	w := theWindow.Load()
+	w := cp.owner
 	if w == nil || cp.setting || cp.panel == 0 {
 		return
 	}
@@ -71,7 +72,7 @@ func colorPanelClosed(c *ffi.CB) {
 		return
 	}
 	cp.shown = false
-	if w := theWindow.Load(); w != nil {
+	if w := cp.owner; w != nil {
 		w.q.push(Event{Kind: EvColor, Code: 1, Time: Now()})
 	}
 }
@@ -115,7 +116,7 @@ func (w *Window) ShowColorPanel(r, g, b, a float32) error {
 	objc.Send1(cp.panel, cp.selSetContinuous, 1)
 	objc.Send1(cp.panel, cp.selSetShowsAlpha, 1)
 	setPanelColor(r, g, b, a)
-	cp.shown = true
+	cp.shown, cp.owner = true, w
 	objc.Send1(cp.panel, cp.selOrderFront, 0)
 	return nil
 }

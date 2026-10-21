@@ -106,20 +106,30 @@ func lightsSetup() {
 	lightsCenter = objc.Send(objc.Cls("NSNotificationCenter"), objc.Sel("defaultCenter"))
 	lightsNSObject = objc.Cls("NSObject")
 	def := objc.Define("GNUITitlebarObserver", lightsNSObject, nil)
-	def.Method(selTitlebarFrameChanged, "v@:@", func(*ffi.CB) {
-		if w := theWindow.Load(); w != nil && !w.tb.busy {
+	def.Method(selTitlebarFrameChanged, "v@:@", func(c *ffi.CB) {
+		if w := lightsWindow(objc.ID(c.Int(0))); w != nil && !w.tb.busy {
 			w.tb.inNote = true
 			w.layoutChrome()
 			w.tb.inNote = false
 		}
 	})
-	def.Method(selLayoutChromeLater, "v@:@", func(*ffi.CB) {
-		if w := theWindow.Load(); w != nil {
+	def.Method(selLayoutChromeLater, "v@:@", func(c *ffi.CB) {
+		if w := lightsWindow(objc.ID(c.Int(0))); w != nil {
 			w.layoutChrome()
 			w.refreshButtonTracking()
 		}
 	})
 	lightsObserverClass = def.Register()
+}
+
+// lightsWindow is the open window whose GNUITitlebarObserver is observer.
+func lightsWindow(observer objc.ID) *Window {
+	for _, w := range openWindows() {
+		if w.tb.observer == observer {
+			return w
+		}
+	}
+	return nil
 }
 
 // SystemButtons is where the OS draws the window buttons (close, minimise,

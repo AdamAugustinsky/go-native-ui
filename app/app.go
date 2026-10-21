@@ -111,13 +111,16 @@ type Config struct {
 	Materials bool
 }
 
-// App is the running application: the window, the GPU objects and the ui
-// context, for the Builder to use from Init and Build.
+// App is the running application as one window sees it: the window, the GPU
+// objects and the ui context, for the Builder to use from Init and Build.
+// Every window has its own App (Win.App); R and Text are the app's, shared by
+// all of them (DECISIONS D30), and the methods of the application object
+// (OpenWindow, Quit, AtSafePoint …) act for the whole app from any of them.
 type App struct {
 	Win  *platform.Window // nil in RenderOffscreen
 	Surf *gpu.Surface     // nil in RenderOffscreen
-	R    *gpu.Renderer
-	Text *text.System
+	R    *gpu.Renderer    // the app's, shared by its windows
+	Text *text.System     // the app's, shared by its windows
 	UI   *ui.Context
 
 	cfg    Config
@@ -129,12 +132,10 @@ type App struct {
 	list gpu.DrawList
 	fr   gpu.Frame
 
-	w, h    int                 // surface size in pixels
-	scale   float32             // pixels per point (the backing scale; zoom.go has the zoom)
-	zoom    float32             // the app zoom, 0 = 1 (zoom.go)
-	tbZoom  float32             // the zoom the window's titlebar metrics were last set for, 0 = 1 (zoom.go)
-	scales  [fontScales]float32 // the scales whose fonts are alive, latest first (zoom.go)
-	nScales int
+	w, h   int     // surface size in pixels
+	scale  float32 // pixels per point (the backing scale; zoom.go has the zoom)
+	zoom   float32 // the app zoom, 0 = 1 (zoom.go)
+	tbZoom float32 // the zoom the window's titlebar metrics were last set for, 0 = 1 (zoom.go)
 
 	// Cursor regions and the titlebar drag map handed to the window after
 	// every frame (regions.go); the buffers are reused.
@@ -147,7 +148,6 @@ type App struct {
 	dlg       []platform.DialogResult // dialog results not taken yet (dialogs.go)
 	dlgQ      []pendingDialog         // dialogs queued for the end of the frame
 	dlgShown  []shownDialog           // dialogs on screen
-	dlgSeq    platform.DialogTicket   // the last ticket given
 	dlgT      dialogTarget            // the window's dialogs; tests set a fake
 	dragT     dragTarget              // the window's drags; tests set a fake (drag.go)
 	dlgFailed []platform.DialogResult // results of dialogs that ended without being shown, to deliver
@@ -164,8 +164,7 @@ type App struct {
 	chromeSet   bool  // SetDarkChrome was called
 	resized     bool  // a resize since the last build
 	settle      bool  // the frame being built is the first after a resize (see owed)
-	done        bool
-	more        bool // the last frame left a repaint owed (animation, input to settle)
+	more        bool  // the last frame left a repaint owed (animation, input to settle)
 	scriptFrame int
 	scriptDone  bool
 
@@ -198,7 +197,8 @@ type App struct {
 	listItems   []platform.MenuItem
 	demo        *menuDemo // GNUI_MENU_DEMO (menudemo.go)
 
-	appObject // the application object: Main's handler, app events, the quit policy (lifecycle.go)
+	*appObject // the application object, shared by the app's windows: Main's handler, app events, the quit policy, the windows (lifecycle.go)
+	winState   // this window's part of it (window.go)
 
 	// Diagnostics (diag.go).
 	owedWhy     owedMask // why the last frame left another owed
@@ -210,7 +210,7 @@ type App struct {
 	verbose     bool
 	diagBuf     []byte
 
-	barOn bool        // the native menu bar is installed (menus.go)
+	barOn bool        // the window has given the platform its menu bar (menus.go)
 	dbg   *debugState // the debug overlay (debug.go); nil off
 	step  stepState   // Offscreen.Step (debugstep.go)
 }
@@ -288,7 +288,7 @@ func RunWith(cfg Config, b Builder, o RunOptions) (RunResult, error) {
 	if err != nil {
 		return res, err
 	}
-	defer a.close()
+	defer a.closeAll() // the windows OpenWindow opened too
 	a.verbose = o.Verbose
 	if !o.ExitFirst {
 		a.Win.SetFrameHandler(a.frameHandler)
@@ -328,6 +328,8 @@ func openWindowed(cfg Config, b Builder, st *StartupReport, nativeMenus bool) (*
 // tEntry is when the opening started (the startup report's origin) and age
 // the process's age then (-1 unknown).
 func (a *App) openWin(cfg Config, b Builder, st *StartupReport, nativeMenus bool, tEntry, age int64) error {
+	pool := framePoolPush() // Init and the setup may create native views outside any frame
+	defer framePoolPop(pool)
 	execNs := int64(-1)
 	st.ExecToMainMs, st.ExecToOnGlassMs, st.ExecToFirstPresentMs = -1, -1, -1
 	if age >= 0 {
@@ -336,9 +338,7 @@ func (a *App) openWin(cfg Config, b Builder, st *StartupReport, nativeMenus bool
 	}
 
 	a.cfg, a.b = cfg, b
-	if a.started { // a window again, after the last one closed (KeepRunning)
-		a.tr, a.p, a.frames, a.menuDirty = newTranslator(), newPacer(), 0, true
-	}
+	a.held = true
 	a.lastDrawT = tEntry
 	if cfg.Width <= 0 || cfg.Height <= 0 {
 		return errors.New("app: Config.Width and Height must be positive")
@@ -356,16 +356,20 @@ func (a *App) openWin(cfg Config, b Builder, st *StartupReport, nativeMenus bool
 		a.cfg.Clear = [4]float32{} // premultiplied transparent: the backdrop or the materials show
 	}
 	a.Win, a.req = win, win
+	if a.handle != nil && a.handle.a == a && a.handle.id == a.winID {
+		a.handle.pw.Store(win) // the handle OpenWindow gave the window, for Init and the first Build (Window)
+	}
 	t0 := platform.Now()
 	st.OpenMs = ms(t0 - tEntry)
 
 	w, h, scale := win.Size()
 	a.w, a.h, a.scale = int(w), int(h), scale
 	a.tr.scale = scale
-	surf, err := gpu.NewSurface(win.Native(), w, h, scale)
+	surf, err := a.newSurface(win.Native(), w, h, scale) // on the app's device (window.go)
 	if err != nil {
 		win.Close()
 		a.Win, a.req = nil, nil
+		a.releaseShared()
 		return fmt.Errorf("app: surface: %w", err)
 	}
 	a.Surf = surf
@@ -376,14 +380,14 @@ func (a *App) openWin(cfg Config, b Builder, st *StartupReport, nativeMenus bool
 	t1 := platform.Now()
 	st.SurfaceMs = ms(t1 - t0)
 
-	if a.R, err = gpu.NewRenderer(surf.Device(), surf.Queue()); err != nil {
+	if a.R, err = a.sharedRenderer(surf); err != nil { // the app's, made with its first window
 		a.closeWin()
 		return fmt.Errorf("app: renderer: %w", err)
 	}
 	t2 := platform.Now()
 	st.RendererMs = ms(t2 - t1)
 
-	if a.Text, err = text.New(); err != nil {
+	if a.Text, err = a.sharedText(); err != nil {
 		a.closeWin()
 		return fmt.Errorf("app: text: %w", err)
 	}
@@ -414,6 +418,7 @@ func (a *App) openWin(cfg Config, b Builder, st *StartupReport, nativeMenus bool
 		st.ExecToFirstPresentMs = ms(t5 - execNs)
 	}
 	a.execNs = execNs
+	a.wins = append(a.wins, a) // open: the loop serves it from now on
 	return nil
 }
 
@@ -422,7 +427,13 @@ func (a *App) initUI() error {
 	a.UI = ui.New(a.Text)
 	uiDefaults(a.UI)
 	a.UI.ClipboardSet = platform.SetClipboardText
-	a.UI.AtlasSync(a.R)
+	if a.appObject != nil && a.atlas != nil {
+		a.UI.ShareAtlas(a.atlas) // the app's glyph pages, uploaded once for every window (D30)
+		a.ownTex = &winUploader{r: a.R}
+		a.UI.SetWidgetUploader(a.ownTex) // what the window's widgets make goes with it (window.go)
+	} else {
+		a.UI.AtlasSync(a.R)
+	}
 	a.debugInit()
 	if a.Win != nil { // a window shows tooltips for the regions it is given; offscreen renders draw them
 		a.UI.SetNativeTooltips(platform.NativeTooltips)
@@ -454,10 +465,24 @@ func (a *App) close() {
 	}
 }
 
-// closeWin releases the window and its GPU and text objects.
+// closeWin releases the window and its surface. The renderer, the text
+// system and the GPU device are the app's: they go with its last window
+// (releaseShared), the renderer before that window's surface, as it waits
+// for the frames in flight.
 func (a *App) closeWin() {
-	if a.R != nil {
+	pool := framePoolPush() // what releasing the window's objects autoreleases
+	defer framePoolPop(pool)
+	a.forget() // out of the app's windows (window.go)
+	last := len(a.wins) == 0
+	if a.ownTex != nil {
+		if !last {
+			a.ownTex.free() // the last window's go with the renderer
+		}
+		a.ownTex = nil
+	}
+	if last && a.R != nil {
 		a.R.Destroy()
+		a.r = nil
 	}
 	if a.Surf != nil {
 		a.Surf.Destroy()
@@ -465,59 +490,96 @@ func (a *App) closeWin() {
 	if a.Win != nil {
 		a.Win.Close()
 	}
-	if a.Text != nil {
-		a.Text.Close()
+	if last {
+		a.releaseShared()
 	}
 	a.R, a.Surf, a.Win, a.Text = nil, nil, nil, nil
 	a.buttons = nil
 }
 
-// loop is the event loop. See pacer for the frame rules. With no window open
-// it is the application object's pump (idleTurn).
+// loop is the event loop of the app and all its windows (D30). See pacer for
+// the frame rules, which each window follows on its own: one pump waits on
+// all of them, each window's events are dispatched to it, and each draws
+// only when it owes a frame. With no window open it is the application
+// object's pump (idleTurn).
 func (a *App) loop() error {
 	a.launch()
 	for !a.done {
-		if a.Win == nil {
+		if len(a.wins) == 0 {
 			a.idleTurn()
 			continue
 		}
-		a.syncMenuBar()
+		for _, w := range a.wins {
+			w.syncMenuBar()
+		}
 		now := platform.Now()
 		if a.bench != nil && now > a.bench.deadline {
 			return a.benchTimeout(now)
 		}
 		a.pumping = true
-		evs := a.Win.Wait(a.timeout(now))
+		a.pump(a.waitTimeout(now)) // pump_*.go
 		a.pumping = false
-		a.tr.wheelStep = a.UI.WheelStep
-		for i := range evs {
-			a.dispatch(&evs[i])
+		for _, w := range a.wins {
+			if a.done {
+				break
+			}
+			w.tr.wheelStep = w.UI.WheelStep
+			evs := w.windowEvents()
+			for i := range evs {
+				w.dispatch(&evs[i])
+			}
 		}
 		if a.done {
 			break
 		}
-		if a.turn(platform.Now()) {
-			a.present(false, 1)
+		for _, w := range a.wins {
+			if w.turn(platform.Now()) {
+				w.present(false, 1)
+			}
 		}
 		a.pumping = true
-		a.popUpMenus()
+		for _, w := range a.wins {
+			w.popUpMenus()
+		}
 		a.pumping = false
-		if a.dbg != nil {
-			a.debugSweep(CauseMenu)
+		for _, w := range a.wins {
+			if w.dbg != nil {
+				w.debugSweep(CauseMenu)
+			}
 		}
 		if a.demo != nil {
 			a.demo.run(a)
 		}
-		a.flushDialogs() // dialogs asked for outside a frame (an event handler, a hook)
+		for _, w := range a.wins {
+			w.flushDialogs() // dialogs asked for outside a frame (an event handler, a hook)
+		}
 		if a.hook != nil {
 			a.hook()
 		}
 		a.appTurn()
-		if a.dbg != nil {
-			a.debugSweep(CauseUnknown)
+		for _, w := range a.wins {
+			if w.dbg != nil {
+				w.debugSweep(CauseUnknown)
+			}
 		}
 	}
 	return nil
+}
+
+// waitTimeout is the pump's timeout: the soonest any window wants to wake.
+func (a *App) waitTimeout(now int64) int64 {
+	t := int64(-1)
+	for _, w := range a.wins {
+		if d := w.timeout(now); d >= 0 && (t < 0 || d < t) {
+			t = d
+		}
+	}
+	if a.bench != nil && a.Win == nil { // (a bench's window is the root's: its timeout has the deadline)
+		if d := max(a.bench.deadline-now, 0); t < 0 || d < t {
+			t = d
+		}
+	}
+	return t
 }
 
 // turn is the loop's step after Wait's events were handled, at now: a due
@@ -645,7 +707,7 @@ func (a *App) onEvent(e *platform.Event) {
 // cleared by the inner one). What it would have handled stays queued, and
 // the next Wait delivers it.
 func (a *App) frameHandler() {
-	if a.inFrame {
+	if a.inFrame || a.framing > 0 { // this window's frame, or another's (D30: Build is never re-entered)
 		a.reentries++
 		return
 	}

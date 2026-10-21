@@ -197,6 +197,9 @@ type AppOptions struct {
 	// ending the process at once; a second one while the first is unanswered
 	// ends it.
 	Signals bool
+	// WindowTabbing lets macOS group the app's windows into tabs (its
+	// automatic window tabbing, the View menu's tab items); off by default.
+	WindowTabbing bool
 }
 
 // AppSink receives the application object's events, on the main thread. The
@@ -822,7 +825,10 @@ func DispatchApp() {
 		signalApp()
 	}
 	if got {
-		Wake() // the app's loop runs a turn: what the events changed may want a frame
+		// The app's loop runs a turn: the events' sink asked the windows they
+		// changed for their frames (a Wake would hand every window an EvWake,
+		// and each would draw).
+		WakeLoop()
 	}
 }
 

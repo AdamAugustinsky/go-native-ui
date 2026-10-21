@@ -253,7 +253,7 @@ func TestTextFieldThroughTranslator(t *testing.T) {
 }
 
 func TestWakeAtShortensTheWait(t *testing.T) {
-	a := &App{p: newPacer()}
+	a := &App{appObject: &appObject{}, p: newPacer()}
 	a.p.drawn(false) // idle: Wait would block
 	if got := a.timeout(1000); got != -1 {
 		t.Fatalf("idle timeout %d", got)

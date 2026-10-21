@@ -602,12 +602,12 @@ func TestModifiersAcrossFocusLoss(t *testing.T) {
 		defer func() { sampleMods = old }()
 		w.q.reset()
 		w.handle(flagsChanged(w, 1<<20)) // ⌘ pressed
-		windowFocus(false)
+		w.focus(false)
 		sampleMods = func() Mods { return 0 } // released in the other app
-		windowFocus(true)
+		w.focus(true)
 		sampleMods = func() Mods { return ModShift } // ⇧ pressed in the other app
-		windowFocus(false)
-		windowFocus(true)
+		w.focus(false)
+		w.focus(true)
 		evs = append(evs, w.q.ev...)
 	})
 	if skip != "" {

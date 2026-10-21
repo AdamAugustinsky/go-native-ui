@@ -51,7 +51,7 @@ func NewOffscreen(cfg Config, wPx, hPx int, scale float32, b Builder) (*Offscree
 		return nil, errors.New("app: offscreen size and scale must be positive")
 	}
 	runtime.LockOSThread() // the renderer pushes autorelease pools, which are per thread
-	a := &App{cfg: cfg, b: b, tr: newTranslator(), w: wPx, h: hPx, scale: scale}
+	a := &App{appObject: &appObject{}, cfg: cfg, b: b, tr: newTranslator(), w: wPx, h: hPx, scale: scale}
 	a.tr.scale = scale
 	if s, ok := b.(Scripter); ok {
 		a.script = s

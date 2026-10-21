@@ -502,10 +502,25 @@ func (w *Window) closeDrag() {
 
 // ---- the source ----
 
+// dragOutWindow is the window whose drag out is in progress (AppKit runs one
+// dragging session at a time, from the one GNUIDragSource), else the first
+// window.
+func dragOutWindow() *Window {
+	for _, w := range openWindows() {
+		if w.drag.active {
+			return w
+		}
+	}
+	if reg.n > 0 {
+		return reg.open[0]
+	}
+	return nil
+}
+
 // sourceMask is draggingSession:sourceOperationMaskForDraggingContext:.
 func sourceMask(c *ffi.CB) {
 	var m uintptr
-	if w := theWindow.Load(); w != nil {
+	if w := dragOutWindow(); w != nil {
 		ops := w.drag.ops
 		if ops&DragOpCopy != 0 {
 			m |= nsOpCopy
@@ -522,7 +537,7 @@ func sourceMask(c *ffi.CB) {
 
 // sourceEnded is draggingSession:endedAtPoint:operation:.
 func sourceEnded(c *ffi.CB) {
-	w := theWindow.Load()
+	w := dragOutWindow()
 	if w == nil {
 		return
 	}

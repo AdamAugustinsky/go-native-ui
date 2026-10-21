@@ -35,6 +35,7 @@ type DebugState struct {
 	LastFrameT      int64 // the last EvFrame
 	Pauses          uint64
 	IdleTicks       int
+	Restarts        uint64 // display links that stopped calling back and were replaced (macOS)
 }
 
 func appendAge(b []byte, now, t int64) []byte {
@@ -120,5 +121,9 @@ func (s *DebugState) Append(b []byte) []byte {
 	b = strconv.AppendUint(b, s.Pauses, 10)
 	b = append(b, " idle="...)
 	b = strconv.AppendInt(b, int64(s.IdleTicks), 10)
+	if s.Restarts > 0 {
+		b = append(b, " restarts="...)
+		b = strconv.AppendUint(b, s.Restarts, 10)
+	}
 	return append(b, '}')
 }

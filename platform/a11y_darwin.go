@@ -55,8 +55,8 @@ var (
 	selAXObjectAt      = objc.Sel("objectAtIndex:")
 )
 
-// axDarwin is the bridge's state. There is one window (Open refuses a
-// second), so it is the package's, tied to the window it serves.
+// axDarwin is the bridge's state. It is the package's, tied to the one
+// window it serves (SetAXSource: the first that sets its source).
 type axDarwin struct {
 	core    axCore
 	w       *Window
@@ -101,8 +101,16 @@ func registerContainerA11y(c *objc.ClassDef) {
 }
 
 // SetAXSource gives the window the app's side of the bridge. Main thread.
+//
+// The bridge serves one window at a time (D30 leaves the per-window bridge
+// for later): the first window that sets its source keeps it while it is
+// open, and a later window's SetAXSource does nothing then (its view answers
+// as a plain NSView).
 func (w *Window) SetAXSource(s AXSource) error {
 	if ax.w != w {
+		if ax.w != nil && ax.w.registered && ax.src != nil {
+			return nil
+		}
 		axReset()
 		ax.w = w
 	}
@@ -130,8 +138,8 @@ func (w *Window) SyncAX() {
 // axActivate activates the bridge, if it is not yet, from an assistive
 // technology's first question.
 func axActivate() *Window {
-	w := theWindow.Load()
-	if w == nil || ax.w != w || ax.src == nil {
+	w := ax.w
+	if w == nil || !w.registered || ax.src == nil {
 		return nil
 	}
 	if !ax.core.active {
@@ -242,7 +250,7 @@ func (b *axDarwin) element(s int32) objc.ID {
 
 // elemSlot is the slot of element self, -1 when it is stale.
 func elemSlot(self objc.ID) int32 {
-	if ax.elemDef == nil || theWindow.Load() != ax.w || ax.w == nil {
+	if ax.elemDef == nil || ax.w == nil || !ax.w.registered {
 		return -1
 	}
 	v := ax.elemDef.Index().Get(self)
@@ -434,8 +442,8 @@ func (b *axDarwin) focused() objc.ID {
 // container class also backs a glass host's content and other native
 // containers, which keep NSView's own answers (their native subviews).
 func axOurs(self objc.ID) bool {
-	w := theWindow.Load()
-	return w != nil && (self == w.view || self == w.content)
+	w := ax.w
+	return w != nil && w.registered && (self == w.view || self == w.content)
 }
 
 func viewAXChildren(c *ffi.CB) {

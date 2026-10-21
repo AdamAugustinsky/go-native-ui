@@ -335,10 +335,12 @@ func TestInEventWait(t *testing.T) {
 	const wait = `goroutine 1 [syscall, locked to thread]:
 gonativeui/internal/ffi.(*Frame).Call(0x1)
 	ffi.go:270 +0x3c
-gonativeui/platform.(*Window).nextEvent(...)
-	app_darwin.go:54
-gonativeui/platform.(*Window).Wait(0x1, 0xffffffffffffffff)
-	app_darwin.go:44 +0x1c8
+gonativeui/platform.appNextEvent(...)
+	appobj_darwin.go:718
+gonativeui/platform.pump(0xffffffffffffffff)
+	windows_darwin.go:245 +0x1c8
+gonativeui/platform.Pump(0xffffffffffffffff)
+	windows_darwin.go:224 +0x9c
 gonativeui/app.(*App).loop(0x1)
 	app.go:417 +0x74
 `

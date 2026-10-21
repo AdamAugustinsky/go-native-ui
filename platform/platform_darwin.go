@@ -31,6 +31,8 @@ type Native struct {
 	// (Options.Backdrop, Options.Materials): the Metal layer must be
 	// non-opaque, its pixels premultiplied.
 	Transparent bool
+
+	w *Window // the window these are of (Window.Native); nil if made by hand
 }
 
 // Window is an AppKit window driven by our own event loop
@@ -72,6 +74,8 @@ type Window struct {
 	armedT, lastTickT, lastFrameT  int64
 	visible                        int8 // last EvVisible: 1, 0, or -1 before any
 	visibleT                       int64
+	restarts                       uint64 // stopped links replaced (restartLink)
+	restartT                       int64
 
 	// Live resize (SetFrameHandler). AppKit runs its own loop inside
 	// sendEvent while the user drags a window edge; between
@@ -113,14 +117,20 @@ type Window struct {
 	menuActed   bool      // a native menu item acted during this event's sendEvent (menu_darwin.go)
 	fieldKey    bool      // the key-down being sent is the focused field's: no menu item acts on it
 	fieldKeys   FieldKeys
-	handlerRuns int // calls of the frame handler (DebugMenu.Frame)
+	menus       windowMenus // the window's bar and the state of its menus (SetWindowMenus, menu_darwin.go)
+	handlerRuns int         // calls of the frame handler (DebugMenu.Frame)
+
+	// The registry (windows_darwin.go).
+	slot       int         // the window's slot in the registry (windows_darwin.go)
+	gen        uint32      // its generation: no other window has it
+	registered bool        // open: in the registry
+	buried     bool        // closed: Open's references are handed to the next Pump
+	wakeMark   atomic.Bool // Wake: this window has something new from another goroutine
 }
 
 const wakeSubtype = 0x4E55 // our NSEventTypeApplicationDefined subtype
 
 var (
-	theWindow atomic.Pointer[Window]
-
 	defaultMode, commonModes objc.ID
 
 	clsNSArray, clsNSAttributedString objc.ID

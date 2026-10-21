@@ -6,9 +6,8 @@ import (
 
 // The inspector of the debug overlay (phase 6, T3).
 //
-// The plan puts it in a second window. That needs more than one window (the
-// app object, p6-f3, and several windows, p6-f4), so for now it is a panel
-// inside the window, drawn by the overlay. What the panel shows is an
+// The plan puts it in a second window (OpenWindow, p6-f4); for now it is a
+// panel inside the window, drawn by the overlay. What the panel shows is an
 // InspectSnapshot, plain fixed-size data filled once per frame, and an
 // InspectHost is what receives it: the day a second window exists, a host
 // that owns that window's ui.Context draws the same snapshot there, and

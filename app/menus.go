@@ -38,10 +38,16 @@ func (a *App) SetMenu(m *menu.Model) {
 	a.syncZoomMenu()
 }
 
-// syncMenuBar installs the menu bar when it is due: once after the first
-// present, and again when SetMenu changed the model.
+// syncMenuBar gives the window its menu bar when it is due: once after its
+// first present, so that startup does not pay for it (OpenWindow: before it
+// returns), and again when SetMenu changed the model. The platform installs
+// the key window's bar, the moment a window becomes key
+// (platform.Window.SetWindowMenus): a key equivalent that follows a focus
+// change in the same turn acts on the new key window. Windows with the same
+// model share one built bar, and so do the windows without one (the
+// standard bar).
 func (a *App) syncMenuBar() {
-	if !a.menuDirty || a.Win == nil || a.frames == 0 || !platform.HasNativeMenus() {
+	if a.Win == nil || a.frames == 0 || !platform.HasNativeMenus() || (a.barOn && !a.menuDirty) {
 		return
 	}
 	a.menuDirty = false
@@ -49,9 +55,20 @@ func (a *App) syncMenuBar() {
 	if a.menuStateFn == nil {
 		a.menuStateFn, a.fieldKeysFn = a.menuState, a.fieldTakesKey
 	}
-	a.Win.SetMenuBar(&a.menuSpec, a.menuStateFn)
-	a.barOn = true
 	a.Win.SetFieldKeys(a.fieldKeysFn)
+	var model any
+	switch s := a.appObject; {
+	case a.menu != nil:
+		model = a.menu
+	case s != nil:
+		if s.stdBar == nil {
+			s.stdBar = new(byte) // not zero-sized: its address is its own
+		}
+		model = s.stdBar
+	}
+	a.Win.SetWindowMenus(&a.menuSpec, a.menuStateFn, model)
+	a.barOn = true
+	a.barModel = a.menu
 }
 
 // menuState is the platform's MenuState: a command's item is enabled as the

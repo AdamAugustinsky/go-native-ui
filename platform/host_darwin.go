@@ -72,6 +72,7 @@ func registerShellClasses() {
 	wd.Method(selMakeFirstResp, "c@:@", windowMakeFirstResponder)
 	wd.Method(selSelectFollowing, "v@:@", windowSelectFollowing)
 	wd.Method(selSelectPreceding, "v@:@", windowSelectPreceding)
+	live.windowMark = countInstances(wd, &live.windows) // the open/close leak gate (windows_darwin.go)
 	windowClass, windowDef = wd.Register(), wd
 }
 
@@ -530,7 +531,7 @@ func nsViewClass() objc.ID {
 func windowMakeFirstResponder(c *ffi.CB) {
 	self, resp := objc.ID(c.Int(0)), c.Int(2)
 	ok := objc.SuperFrame(c.Frame(), windowDef.Superclass(), self, selMakeFirstResp).Arg(resp).Call(objc.MsgSendSuper).Bool()
-	if w := theWindow.Load(); ok && w != nil && w.win == self {
+	if w := nsWindowWindow(self); ok && w != nil {
 		w.firstResponderChanged()
 	}
 	c.RetBool(ok)
@@ -560,7 +561,7 @@ func windowSelectPreceding(c *ffi.CB) { windowSelectKeyView(c, selSelectPrecedin
 
 func windowSelectKeyView(c *ffi.CB, sel objc.SEL, m Mods) {
 	self, v := objc.ID(c.Int(0)), objc.ID(c.Int(2))
-	if w := theWindow.Load(); w != nil && w.win == self {
+	if w := nsWindowWindow(self); w != nil {
 		if f := w.hostOf(v); f != 0 {
 			w.hostCommand(f-1, KeyTab, m)
 			return
@@ -576,15 +577,16 @@ func (w *Window) hostCommand(i int, k Key, m Mods) {
 
 // clipHost is the window and slot of the GNUIHostClip self, or nil.
 func clipHost(self objc.ID) (*Window, int) {
-	w := theWindow.Load()
-	if w == nil {
-		return nil, 0
-	}
 	i := int(hostClipDef.Index().Get(self))
-	if i < 0 || i >= MaxHosts || w.hosts.slots[i].clip != self {
+	if i < 0 || i >= MaxHosts {
 		return nil, 0
 	}
-	return w, i
+	for _, w := range openWindows() {
+		if w.hosts.slots[i].clip == self {
+			return w, i
+		}
+	}
+	return nil, 0
 }
 
 // Each scroll event reaches ui at most once per delivery, and not when a
@@ -628,7 +630,7 @@ func hostScrollWheel(c *ffi.CB) {
 // the event loop left to a host (a gesture that began over ui, now over the
 // host); it goes to ui, unless it belongs to a gesture a host owns.
 func viewScrollWheel(c *ffi.CB) {
-	if w := theWindow.Load(); w != nil && w.view == objc.ID(c.Int(0)) {
+	if w := viewWindow(objc.ID(c.Int(0))); w != nil {
 		if ev := objc.ID(c.Int(2)); !w.hostOwnsGesture(ev) {
 			w.queueHandedScroll(ev)
 		}

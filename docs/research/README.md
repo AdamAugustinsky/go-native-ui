@@ -13,6 +13,7 @@ code was copied.
 | [electron-tauri.md](electron-tauri.md) | App infrastructure: lifecycle, notifications, tray, updates, packaging, signing, notarization |
 | [go-and-others.md](go-and-others.md) | Gio, Fyne, Wails, Slint, Iced |
 | [glass-over-metal.md](glass-over-metal.md) | Issue #25 probe (2026-10-20): native glass/pocket over our Metal layer vs a drawn scroll edge; captures, costs, sync, recommendation (`probes/glass/`) |
+| [displaylink-stall.md](displaylink-stall.md) | A macOS display link that stops calling back on CI: the evidence, two leads, the recovery |
 
 The design measurements are in `docs/design/native-audit.md` and
 `docs/design/rex-design-system.md` (AppKit reference: `tools/appkitref`).

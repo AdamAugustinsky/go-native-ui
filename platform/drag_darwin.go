@@ -354,7 +354,7 @@ func viewNoPeriodic(c *ffi.CB)  { c.RetBool(false) } // updates when the pointer
 // dragUpdate handles draggingEntered: and draggingUpdated: and returns the
 // NSDragOperation.
 func dragUpdate(c *ffi.CB, enter bool) uintptr {
-	w := theWindow.Load()
+	w := viewWindow(objc.ID(c.Int(0)))
 	if w == nil || w.drag.kinds == 0 {
 		return 0
 	}
@@ -380,11 +380,12 @@ func (w *Window) dragMoved(info objc.ID, enter bool) uintptr {
 	w.q.push(Event{Kind: kind, X: x, Y: y, Code: uint32(offered), SelStart: int32(allowed), SelLen: int32(items),
 		Mods: mods(uintptr(objc.Send(clsNSEvent, selModifierFlags))), Tag: d.seq, Time: Now()})
 	w.nudge()
-	if d.active {
-		// AppKit runs our own drag session in a loop of its own, where Wait does
-		// not return: ask for a frame, which the display link's tick hands to the
-		// frame handler (linkTick), so that a target of ours highlights as the
-		// drag moves over it.
+	if NativeLoop() {
+		// AppKit runs our own drag session (from this window or another of
+		// ours) in a loop of its own, where the app's pump does not return:
+		// ask for a frame, which the display link's tick hands to the frame
+		// handler (linkTick), so that a target of ours highlights as the drag
+		// moves over it.
 		w.RequestFrame()
 	}
 	return opToNS(ans.Op)
@@ -399,13 +400,13 @@ func (w *Window) dragLeft() {
 	d.inside = false
 	w.q.push(Event{Kind: EvDragLeave, Tag: d.seq, Time: Now()})
 	w.nudge()
-	if d.active {
+	if NativeLoop() {
 		w.RequestFrame() // our own session: a frame that clears the highlight (see dragMoved)
 	}
 }
 
-func viewDragExited(*ffi.CB) {
-	if w := theWindow.Load(); w != nil {
+func viewDragExited(c *ffi.CB) {
+	if w := viewWindow(objc.ID(c.Int(0))); w != nil {
 		w.dragLeft()
 	}
 }
@@ -413,7 +414,7 @@ func viewDragExited(*ffi.CB) {
 // viewPrepareDrag is prepareForDragOperation:: yes if the handler takes the
 // drag where it is.
 func viewPrepareDrag(c *ffi.CB) {
-	w := theWindow.Load()
+	w := viewWindow(objc.ID(c.Int(0)))
 	if w == nil || w.drag.kinds == 0 {
 		c.RetBool(false)
 		return
@@ -429,14 +430,14 @@ func viewConcludeDrag(*ffi.CB) {}
 
 // viewDragEnded is draggingEnded:, sent when the drag session is over for
 // this destination, whether it was dropped or not.
-func viewDragEnded(*ffi.CB) {
-	if w := theWindow.Load(); w != nil {
+func viewDragEnded(c *ffi.CB) {
+	if w := viewWindow(objc.ID(c.Int(0))); w != nil {
 		w.dragLeft()
 	}
 }
 
 func viewPerformDrag(c *ffi.CB) {
-	w := theWindow.Load()
+	w := viewWindow(objc.ID(c.Int(0)))
 	if w == nil || w.drag.kinds == 0 {
 		c.RetBool(false)
 		return

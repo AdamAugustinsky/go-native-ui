@@ -37,8 +37,8 @@ func registerViewDraw(v *objc.ClassDef) {
 
 // windowBackingChanged is viewDidChangeBackingProperties and the window
 // delegate's windowDidChangeBackingProperties:.
-func windowBackingChanged(*ffi.CB) {
-	if w := theWindow.Load(); w != nil {
+func windowBackingChanged(c *ffi.CB) {
+	if w := viewOrDelegateWindow(objc.ID(c.Int(0))); w != nil {
 		w.backingChanged()
 	}
 }
@@ -53,14 +53,14 @@ func (w *Window) backingChanged() {
 
 // viewDisplayLinkFired is gnuiDisplayLink: (the CADisplayLink of the view).
 func viewDisplayLinkFired(c *ffi.CB) {
-	if w := theWindow.Load(); w != nil {
+	if w := viewWindow(objc.ID(c.Int(0))); w != nil {
 		w.linkTick(c, false)
 	}
 }
 
 // viewMetalLinkUpdate is metalDisplayLink:needsUpdate: (link, update).
 func viewMetalLinkUpdate(c *ffi.CB) {
-	if w := theWindow.Load(); w != nil {
+	if w := viewWindow(objc.ID(c.Int(0))); w != nil {
 		w.linkTick(c, true)
 	}
 }
@@ -97,8 +97,13 @@ func (w *Window) linkTick(c *ffi.CB, metal bool) {
 			w.frameOut, w.frameOutT = true, now
 		}
 		objc.Send2(w.app, selPostEvent, uintptr(w.wakeEv), 0) // unblock nextEventMatchingMask
-		if w.live || menuTracking() || quitWaitNative() || w.drag.active || w.nested {
-			w.runHandlerFrom(true) // a requested frame (animation, input) while AppKit's resize, menu tracking, drag session or another nested loop runs, or its wait for a quit answer
+		if NativeLoop() || w.nested {
+			// A requested frame (animation, input, a worker's result) while
+			// AppKit runs a loop of its own, for this window or another (a
+			// live resize, menu tracking, a drag session, its wait for a quit
+			// answer), or another nested loop runs: the app's pump is
+			// suspended, so the window's frame handler draws (D30).
+			w.runHandlerFrom(true)
 		}
 		return
 	}
@@ -196,17 +201,90 @@ const metalLinkLatency = 1
 // that a CAMetalDisplayLink drives the layer: then a 0 drawable means no
 // frame is ready (one is requested), and the caller must not call
 // nextDrawable (the layer throws). Main thread only.
+//
+// It is the first window's (a one-window app's); a surface of any window
+// uses its Native's TakeDrawable.
 func TakeMetalDrawable() (drawable uintptr, linked bool) {
-	w := theWindow.Load()
-	if w == nil {
+	if reg.n == 0 {
 		return 0, false
 	}
+	return reg.open[0].takeDrawable()
+}
+
+// TakeDrawable is TakeMetalDrawable for the window n belongs to (each window
+// has its own display link and drawables). Main thread only.
+func (n Native) TakeDrawable() (drawable uintptr, linked bool) {
+	if w := n.window(); w != nil {
+		return w.takeDrawable()
+	}
+	return 0, false
+}
+
+// window is the open window n belongs to, nil if it is closed (or n was made
+// by hand).
+func (n Native) window() *Window {
+	if w := n.w; w != nil && w.registered {
+		return w
+	}
+	for _, w := range openWindows() {
+		if uintptr(w.view) == n.NSView {
+			return w
+		}
+	}
+	return nil
+}
+
+func (w *Window) takeDrawable() (drawable uintptr, linked bool) {
 	d := w.drawable
 	w.drawable = 0
 	if d == 0 && w.metalLink {
+		if w.linkStopped() && w.restartLink() {
+			return 0, false // this frame takes the layer's nextDrawable, as the first one does
+		}
 		w.RequestFrame() // no frame is ready: the caller draws on the EvFrame that follows
 	}
 	return uintptr(d), w.metalLink
+}
+
+// linkStopNs is how long a running CAMetalDisplayLink may leave an armed
+// frame of a visible window without a tick before it counts as stopped.
+const linkStopNs = int64(1e9)
+
+// linkStopped reports a CAMetalDisplayLink that stopped calling back: a frame
+// has been armed for linkStopNs, the link runs, no tick came since, and the
+// window can be seen (a covered or miniaturized window gets no ticks, and
+// nextDrawable would block for it). The app's loop asks for a drawable
+// without a tick only after such a silence (its unpaced fallback, app/pacer.go),
+// and a linked layer has none to give: without a restart the window would
+// never draw again. Seen on CI's virtual display: a window's link stopped
+// after it was paused and resumed while another window of the app had just
+// drawn.
+func (w *Window) linkStopped() bool {
+	now := Now()
+	return w.frameArmed && !w.linkPaused && !w.live &&
+		now-w.armedT >= linkStopNs && now-w.lastTickT >= linkStopNs && now-w.restartT >= linkStopNs &&
+		uintptr(objc.Send(w.win, selOcclusionState))&2 != 0 && !objc.SendBool(w.win, selIsMini)
+}
+
+// restartLink replaces a stopped CAMetalDisplayLink by a view CADisplayLink,
+// as at startup: the caller draws with the layer's nextDrawable, and the view
+// link's first tick attaches a new CAMetalDisplayLink (linkTick).
+func (w *Window) restartLink() bool {
+	link := w.makeViewLink()
+	if link == 0 {
+		return false
+	}
+	now := Now()
+	// Once per restart (docs/research/displaylink-stall.md): the stall is not
+	// understood yet, and each one is evidence.
+	println("gnui: display link of window", w.slot, "stopped calling back: armed", (now-w.armedT)/1e6, "ms ago, last tick", (now-w.lastTickT)/1e6, "ms ago, ticks", w.ticks, "pauses", w.pauses, "windows open", reg.n, "; replaced (restart", w.restarts+1, ")")
+	objc.Send(w.link, selInvalidate)
+	objc.Send(w.link, selReleaseObj)
+	w.link, w.metalLink, w.metalLayer = link, false, w.frameLayer
+	w.restarts, w.restartT = w.restarts+1, now
+	objc.Send1(w.link, selSetPaused, 0) // a frame is armed
+	w.linkPaused = false
+	return true
 }
 
 func (w *Window) setRateRange(link objc.ID) {

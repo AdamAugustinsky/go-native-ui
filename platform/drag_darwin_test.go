@@ -91,7 +91,7 @@ func newDragRig(t *testing.T) *dragRig {
 	t.Helper()
 	runtime.LockOSThread()
 	t.Cleanup(runtime.UnlockOSThread)
-	if theWindow.Load() != nil {
+	if reg.n > 0 {
 		t.Skip("a window is open")
 	}
 	loadFramework("/System/Library/Frameworks/AppKit.framework/AppKit")
@@ -104,7 +104,7 @@ func newDragRig(t *testing.T) *dragRig {
 		t.Skip("cannot create a view")
 	}
 	w := &Window{q: newEventQueue(), view: v, win: v, scale: 2, wPt: 100, hPt: 100}
-	theWindow.Store(w)
+	remove := testInstall(w)
 	pb := objc.Retain(objc.Send(clsPasteboard, selUniquePB))
 	if pb == 0 {
 		t.Skip("no private pasteboard here")
@@ -113,7 +113,7 @@ func newDragRig(t *testing.T) *dragRig {
 	r := &dragRig{t: t, w: w, view: v, pb: pb}
 	t.Cleanup(func() {
 		w.closeDrag()
-		theWindow.Store(nil)
+		remove()
 		objc.Send(pb, selReleaseGlobal)
 		objc.Release(pb)
 	})
@@ -1856,5 +1856,37 @@ func TestLeavingOurWindowDuringOurSessionPresentsAFrame(t *testing.T) {
 	tick()
 	if leaves != 1 {
 		t.Errorf("the frame handler saw %d leaves", leaves)
+	}
+}
+
+// A drag session of another window of ours over an idle window: AppKit's
+// drag loop runs, the app's pump does not return, so the window under the
+// drag asks for frames itself (its link paused, nothing else would wake it):
+// on entering, moving and leaving, and the tick draws them through its frame
+// handler.
+func TestADragFromAnotherWindowOfOursDrawsTheTarget(t *testing.T) {
+	r := newDragRig(t)
+	r.answer(DragAnswer{Op: DragOpCopy, Accept: DragText})
+	r.w.SetDropKinds(DragText)
+	r.put(map[string][]byte{"public.utf8-plain-text": []byte("x")})
+	r.at(10, 80)
+	source := &Window{q: newEventQueue()} // the window whose session it is
+	remove := testInstall(source)
+	defer remove()
+	calls := 0
+	r.w.SetFrameHandler(func() { calls++ })
+
+	source.drag.active = true
+	defer func() { source.drag.active = false }()
+	for i, sel := range []objc.SEL{selDragEntered, selDragUpdated, selDragExited} {
+		r.w.frameArmed = false
+		r.send(sel)
+		if !r.w.frameArmed {
+			t.Fatalf("event %d of a drag from another window's session asked for no frame", i)
+		}
+		r.w.linkTick(nil, false)
+		if calls != i+1 {
+			t.Fatalf("event %d: the tick ran the frame handler %d times, want %d", i, calls, i+1)
+		}
 	}
 }

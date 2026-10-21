@@ -114,6 +114,7 @@ var appObj struct {
 	dockState MenuState // the Dock menu's commands' state, nil for none
 
 	wakeEv, distantPast, distantFuture objc.ID
+	tabbing                            bool // AppOptions.WindowTabbing
 
 	source   atomic.Uintptr // the CFRunLoopSource, 0 before StartApp
 	mainLoop uintptr
@@ -175,6 +176,11 @@ func StartApp(o AppOptions) error {
 	objc.Send1(appObj.app, selSetActivation, uintptr(o.Policy))
 	appObj.delegate = objc.Send(objc.Send(appDelegateClass, selAlloc), selInitPlain)
 	objc.Send1(appObj.app, selSetDelegate, uintptr(appObj.delegate)) // NSApp keeps a weak reference: ours is never released
+	// Automatic window tabbing groups an app's windows into tabs and adds
+	// the tab items to the View menu: off unless the app opts in (each window
+	// is also opened with tabbing disallowed, Open).
+	appObj.tabbing = o.WindowTabbing
+	objc.Send1(objc.Cls("NSWindow"), selSetAllowsTabbing, b2u(o.WindowTabbing))
 
 	// One reusable application-defined event that unblocks the pump.
 	clsNSDate = objc.Cls("NSDate")
@@ -326,7 +332,7 @@ func appQuitEvent(c *ffi.CB) {
 	case dispatch.sink == nil:
 		// No application object (a window opened with Open alone): the
 		// window's owner decides, as with its close button.
-		if w := theWindow.Load(); w != nil {
+		if w := fallbackWindow(); w != nil {
 			w.q.push(Event{Kind: EvClose, Time: Now()})
 			refuseQuitEvent(reply)
 			return
@@ -505,7 +511,7 @@ func shouldTerminate() int {
 	if dispatch.sink == nil {
 		// No application object receives the request (a window opened with
 		// Open alone): the window's owner decides, as with its close button.
-		if w := theWindow.Load(); w != nil {
+		if w := fallbackWindow(); w != nil {
 			w.q.push(Event{Kind: EvClose, Time: Now()})
 			return terminateCancel
 		}
@@ -540,7 +546,7 @@ func appleEventQuitReason() QuitReason {
 // delivered, so EvWillTerminate is the last thing the app sees.
 func appWillTerminate(*ffi.CB) {
 	pool := objc.F.Call0(objc.PoolPush)
-	if w := theWindow.Load(); w != nil {
+	for _, w := range openWindows() {
 		w.abortDialogs()
 	}
 	endSheets()
@@ -627,20 +633,20 @@ func deliverScratch(kind AppEventKind, count int64, buf []byte) {
 // pending Wake is handed to the window and the pump, then the app's events
 // are dispatched.
 func appPerform(*ffi.CB) {
-	if takeWake() {
+	pumpStats.performs++
+	if giveWakes() {
 		pushWake()
 	}
 	DispatchApp()
 }
 
-// pushWake gives a wake to the window (EvWake) and unblocks the pump: the
-// application-defined event makes nextEventMatchingMask return. If a native
-// loop dequeues that event instead, our pump was not blocked anyway.
+// pushWake unblocks the pump after a wake was given to the windows (EvWake,
+// giveWakes): the application-defined event makes nextEventMatchingMask
+// return. If a native loop dequeues that event instead, our pump was not
+// blocked anyway.
 func pushWake() {
+	pumpStats.pushes++
 	appObj.woke = true
-	if w := theWindow.Load(); w != nil {
-		w.q.push(Event{Kind: EvWake, Time: Now()})
-	}
 	objc.Send2(appObj.app, selPostEvent, uintptr(appObj.wakeEv), 0)
 }
 
@@ -685,6 +691,9 @@ func osWake() { osSignalApp() }
 // has (menus, key equivalents, Apple events), and reports whether a wake
 // arrived. Main thread; not with a window open (its Wait is the pump then).
 func WaitApp(timeoutNs int64) bool {
+	reap() // the last window's objects (windows_darwin.go)
+	pumpDepth++
+	defer func() { pumpDepth-- }()
 	F := objc.F
 	pool := F.Call0(objc.PoolPush)
 	until := appObj.distantFuture
@@ -697,7 +706,7 @@ func WaitApp(timeoutNs int64) bool {
 	}
 	for ev := appNextEvent(until); ev != 0; ev = appNextEvent(appObj.distantPast) {
 		if uintptr(objc.Send(ev, selType)) == 15 && uintptr(objc.Send(ev, selSubtype))&0xFFFF == wakeSubtype {
-			if takeWake() {
+			if giveWakes() {
 				appObj.woke = true
 			}
 			continue
@@ -766,7 +775,7 @@ func quitWithoutTerminate(reason QuitReason) {
 	if dispatch.sink == nil {
 		// No application object (a window opened with Open alone): the
 		// window's owner decides, as with its close button.
-		if w := theWindow.Load(); w != nil {
+		if w := fallbackWindow(); w != nil {
 			w.q.push(Event{Kind: EvClose, Time: Now()})
 			return
 		}
@@ -854,7 +863,7 @@ func osEndApp() {
 	if waiting {
 		objc.Send1(appObj.app, selReplyTerminate, 0)
 	}
-	if w := theWindow.Load(); w != nil {
+	for _, w := range openWindows() {
 		w.abortDialogs()
 	}
 	if appObj.started {
@@ -948,11 +957,19 @@ func BundleID() string {
 }
 
 // NativeLoop reports whether AppKit runs a loop of its own on the main
-// thread now (a live resize, menu tracking, the wait for a quit answer), so
-// the app's loop is suspended and the frame handler draws. Main thread.
+// thread now (a live resize of any window, menu tracking, a drag session, the
+// wait for a quit answer), so the app's loop is suspended and every window's
+// frame handler draws. Main thread.
 func NativeLoop() bool {
-	w := theWindow.Load()
-	return quitWaitNative() || menuTracking() || (w != nil && w.live)
+	if quitWaitNative() || menuTracking() {
+		return true
+	}
+	for _, w := range openWindows() {
+		if w.live || w.drag.active {
+			return true
+		}
+	}
+	return false
 }
 
 // quitWaitNative reports whether AppKit runs its own loop waiting for a quit

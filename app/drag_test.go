@@ -43,7 +43,7 @@ type dragApp struct {
 }
 
 func newDragApp() *dragApp {
-	d := &dragApp{App: &App{UI: ui.New(fakeui.New()), tr: newTranslator(), p: newPacer()}}
+	d := &dragApp{App: &App{appObject: &appObject{}, UI: ui.New(fakeui.New()), tr: newTranslator(), p: newPacer()}}
 	d.tr.in.Inside = false
 	return d
 }

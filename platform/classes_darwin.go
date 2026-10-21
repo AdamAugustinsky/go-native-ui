@@ -10,7 +10,8 @@ import (
 
 var classesOnce sync.Once
 var viewClass, delegateClass objc.ID
-var viewDef *objc.ClassDef // GNUIView, for calls to its superclass
+var viewDef *objc.ClassDef // GNUIView, for calls to its superclass and its window's slot (windows_darwin.go)
+var delegateDef *objc.ClassDef
 
 // registerClasses defines GNUIView and GNUIWindowDelegate. Each concern adds
 // its own methods in its registerXxx function; the classes are created once,
@@ -27,11 +28,13 @@ func registerClasses() {
 	registerViewEdit(view)
 	registerViewDrag(view)
 	registerViewA11y(view)
+	live.viewMark = countInstances(view, &live.views)
 	viewClass = view.Register()
 	delegate := objc.Define("GNUIWindowDelegate", objc.Cls("NSObject"), []string{"NSWindowDelegate"})
 	registerWindowDelegate(delegate)
 	registerShell(delegate)
-	delegateClass = delegate.Register()
+	live.delegateMark = countInstances(delegate, &live.delegates)
+	delegateClass, delegateDef = delegate.Register(), delegate
 	registerShellClasses() // GNUIContainer, GNUIHostClip, GNUIWindow (host_darwin.go)
 	registerMenuTarget()
 	clsNSArray, clsNSAttributedString = objc.Cls("NSArray"), objc.Cls("NSAttributedString")

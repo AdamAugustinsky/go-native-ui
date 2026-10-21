@@ -319,7 +319,10 @@ type Context struct {
 
 	up      Uploader
 	pageTex []gpu.TextureID
+	shared  *SharedAtlas // the page textures shared with other contexts (ShareAtlas), nil: pageTex
 	texOK   []bool
+
+	widgetUp Uploader // what Uploader gives the widgets, nil: up (SetWidgetUploader)
 }
 
 // New returns a Context drawing text through sh.

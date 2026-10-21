@@ -7,3 +7,6 @@ package platform
 // anyway. Callers then keep a saved window size and leave the position to the
 // compositor (winstate does).
 func Screens() []ScreenInfo { return nil }
+
+// ScreensInto returns dst unchanged on Linux (Screens).
+func ScreensInto(dst []ScreenInfo) []ScreenInfo { return dst }

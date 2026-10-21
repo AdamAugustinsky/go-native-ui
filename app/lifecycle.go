@@ -7,9 +7,12 @@ import (
 	"runtime"
 	"time"
 
+	"gonativeui/gpu"
 	"gonativeui/internal/sysinfo"
 	"gonativeui/menu"
 	"gonativeui/platform"
+	"gonativeui/text"
+	"gonativeui/ui"
 )
 
 // The application object (DECISIONS D37): Main, the Handler, the quit policy
@@ -69,25 +72,43 @@ type CloseRequester interface {
 
 // DefaultEvent is the default handling of e: a quit request is allowed when
 // every window agrees to close (CloseRequester) and refused otherwise; a
-// reopen with no visible window shows the window. Other events need nothing.
+// reopen with no visible window shows the most recently opened of the
+// windows that are hidden or in the Dock. With no window open (KeepRunning)
+// a reopen does nothing here: which window to open is the app's to decide,
+// and its Handler opens one (OpenWindow) on EvReopen. Other events need
+// nothing.
 func (a *App) DefaultEvent(e *Event) {
 	switch e.Kind {
 	case EvQuitRequested:
 		a.ReplyQuit(e.ID, a.windowsAgreeToClose())
 	case EvReopen:
-		if e.A == 0 && a.Win != nil {
-			a.Win.Show()
+		if e.A != 0 {
+			return
+		}
+		if w := a.reopenWindow(); w != nil {
+			w.Win.Activate()
 		}
 	}
 }
 
-// windowsAgreeToClose asks every window's builder whether it may close.
-func (a *App) windowsAgreeToClose() bool {
-	if a.Win == nil {
-		return true
+// reopenWindow is the window a reopen shows: the most recently opened of the
+// open windows that are hidden or in the Dock; nil when none is.
+func (a *App) reopenWindow() *App {
+	for i := len(a.wins) - 1; i >= 0; i-- {
+		if w := a.wins[i]; w.Win != nil && !w.closing && (!w.Win.Visible() || w.Win.Miniaturized()) {
+			return w
+		}
 	}
-	if cr, ok := a.b.(CloseRequester); ok {
-		return cr.CloseRequested(a)
+	return nil
+}
+
+// windowsAgreeToClose asks the builder of every open window, in the order
+// they opened, whether it may close; the first refusal stops there.
+func (a *App) windowsAgreeToClose() bool {
+	for _, w := range a.wins {
+		if cr, ok := w.b.(CloseRequester); ok && !cr.CloseRequested(w) {
+			return false
+		}
 	}
 	return true
 }
@@ -114,6 +135,10 @@ type AppConfig struct {
 	// Policy is the activation policy: PolicyRegular (a Dock icon) or
 	// PolicyAccessory (none).
 	Policy Policy
+	// WindowTabbing lets macOS group the app's windows into tabs (its
+	// automatic window tabbing and the View menu's tab items). Off by
+	// default: the app's windows stay windows.
+	WindowTabbing bool
 }
 
 // Main runs the application: it creates the application object, calls
@@ -140,7 +165,7 @@ func Main(cfg AppConfig, h Handler) error {
 	}
 	defer a.unbindApp()
 	if err := h.Start(a); err != nil {
-		a.close()
+		a.closeAll() // the windows Start opened
 		return err
 	}
 	a.started = true
@@ -150,11 +175,19 @@ func Main(cfg AppConfig, h Handler) error {
 	return err
 }
 
-// newApp makes an App with no window yet. Post's storage is made here, so
-// that no Post allocates or waits for it.
+// newApp makes the application object and its first App (the root: the
+// Handler's, which holds the first window), with no window yet. Post's
+// storage is made here, so that no Post allocates or waits for it.
 func newApp() *App {
 	platform.PreparePosts()
-	return &App{tr: newTranslator(), p: newPacer(), lat: newSampler(8192), diagBuf: make([]byte, 0, 2048), menuDirty: true}
+	a := newWindowApp(&appObject{})
+	a.root = a
+	return a
+}
+
+// newWindowApp makes an App for a window of the application object s.
+func newWindowApp(s *appObject) *App {
+	return &App{appObject: s, tr: newTranslator(), p: newPacer(), lat: newSampler(8192), diagBuf: make([]byte, 0, 2048), menuDirty: true}
 }
 
 // bindApp makes a the receiver of the application object's events, then
@@ -168,7 +201,7 @@ func (a *App) bindApp(signals bool) error {
 	err := platform.StartApp(platform.AppOptions{
 		Policy:       a.appCfg.Policy,
 		QuitDeadline: a.appCfg.QuitDeadline, QuitDeadlineAction: a.appCfg.QuitDeadlineAction,
-		Signals: signals,
+		Signals: signals, WindowTabbing: a.appCfg.WindowTabbing,
 	})
 	if err != nil {
 		platform.SetAppSink(nil)
@@ -187,9 +220,20 @@ func (a *App) unbindApp() { platform.SetAppSink(nil) }
 func (a *App) finish() {
 	if !a.terminated {
 		platform.EndApp()
-		a.cancelQueuedDialogs()
+		for _, w := range a.wins {
+			w.cancelQueuedDialogs()
+		}
 		a.terminated = true
 		a.deliver(&platform.AppEvent{Kind: platform.AppEvWillTerminate}, nil)
+	}
+	a.closeAll()
+}
+
+// closeAll closes every window, the last one opened first, and then, for a
+// Run, the application object.
+func (a *App) closeAll() {
+	for len(a.wins) > 0 {
+		a.wins[len(a.wins)-1].closeWin()
 	}
 	a.close()
 }
@@ -226,56 +270,33 @@ func (a *App) RequestQuit() { platform.RequestQuit(platform.QuitApp) }
 // WindowConfig describes a window (OpenWindow).
 type WindowConfig = Config
 
-// ErrOneWindow is OpenWindow's error while a window is open: more than one
-// window comes with phase 6's F4.
+// ErrOneWindow is OpenWindow's error for a second window where the OS has
+// one window per app in this phase (Windows and Linux; macOS has any number,
+// DECISIONS D30). It satisfies errors.Is(err, errors.ErrUnsupported).
 var ErrOneWindow = fmt.Errorf("app: a second window: %w", errors.ErrUnsupported)
 
-// Win is a window the app opened (OpenWindow).
-type Win struct {
-	a   *App
-	id  uint32
-	err error
-}
-
-// Err is the error that kept a window asked for during an event from opening
-// at its safe point (OpenWindow), nil otherwise.
-func (w *Win) Err() error { return w.err }
-
-// ID is the window's id (Event.Window); never 0.
-func (w *Win) ID() uint32 { return w.id }
-
-// Open reports whether the window is still open.
-func (w *Win) Open() bool { return w.a.Win != nil && w.a.winID == w.id }
-
-// Show shows the window and activates the app.
-func (w *Win) Show() {
-	if w.Open() {
-		w.a.Win.Show()
-	}
-}
-
-// Close closes the window at the next safe point, without asking its
-// CloseRequester: between frames, at the loop's turn or the application
-// object's dispatch (which also runs while a quit answer is pending).
-func (w *Win) Close() {
-	if w.Open() {
-		w.a.closing = true
-		platform.Wake()
-	}
-}
+// manyWindows is whether the OS has more than one window per app.
+const manyWindows = runtime.GOOS == "darwin"
 
 // OpenWindow opens a window with builder b and draws its first frame
 // (content-first: it appears with that frame, unless the app starts hidden).
-// From Start or a safe point it opens at once; asked for during an event, it
-// opens at the next safe point, and a failure then is reported by Win.Err.
-// One window at a time for now (ErrOneWindow).
+// The window has its own App (Win.App), surface, ui context and frame pacing;
+// the renderer, the text system and the glyph atlas are the app's. From
+// Start or a safe point it opens at once; asked for during an event, a frame
+// (Build) or another window's opening, it opens at the next safe point, and a
+// failure then is reported by Win.Err. On Windows and Linux a second window
+// is refused (ErrOneWindow).
 func (a *App) OpenWindow(cfg WindowConfig, b Builder) (*Win, error) {
-	if a.Win != nil {
+	if !manyWindows && (len(a.wins) > 0 || a.queuedOpens > 0) {
 		return nil, ErrOneWindow
 	}
-	w := &Win{a: a}
-	if a.evDepth > 0 {
-		a.AtSafePoint(func() { w.err = a.openWindowNow(cfg, b, w) })
+	w := &Win{}
+	if a.evDepth > 0 || a.framing > 0 || a.opening > 0 {
+		a.queuedOpens++
+		a.AtSafePoint(func() {
+			a.queuedOpens--
+			w.err = a.openWindowNow(cfg, b, w)
+		})
 		return w, nil
 	}
 	if err := a.openWindowNow(cfg, b, w); err != nil {
@@ -284,35 +305,84 @@ func (a *App) OpenWindow(cfg WindowConfig, b Builder) (*Win, error) {
 	return w, nil
 }
 
+// openWindowNow opens the window of handle w: into the root App while it
+// holds no window (so that the Handler's App is the first window's, as a
+// one-window app expects), else into an App of its own.
 func (a *App) openWindowNow(cfg WindowConfig, b Builder, w *Win) error {
-	if a.Win != nil {
+	if !manyWindows && len(a.wins) > 0 {
 		return ErrOneWindow
 	}
+	t := a.root
+	if t == nil || t.Win != nil || t.opening > 0 {
+		t = newWindowApp(a.appObject)
+	} else if t.held {
+		t.renew() // the root's window closed: its place goes to this one, with nothing of the closed one
+	}
+	// The window's identity comes first: Init and the first Build that ask
+	// for it (App.Window) get the handle OpenWindow returns.
+	a.nextWinID++
+	t.winID, t.handle = a.nextWinID, w
+	w.a, w.id = t, a.nextWinID
 	var st StartupReport
-	if err := a.openWin(cfg, b, &st, true, platform.Now(), sysinfo.ProcessAgeNs()); err != nil {
+	a.opening++
+	err := t.openWin(cfg, b, &st, true, platform.Now(), sysinfo.ProcessAgeNs())
+	a.opening--
+	if err != nil {
+		t.winID, t.handle, w.a = 0, nil, nil
+		w.pw.Store(nil)
 		return err
 	}
-	a.Win.SetFrameHandler(a.frameHandler)
-	a.nextWinID++
-	a.winID, w.id = a.nextWinID, a.nextWinID
+	t.Win.SetFrameHandler(t.frameHandler)
+	// Its menus before anything else in this turn of the loop: a window
+	// opened at a safe point of the pump may be key already, and the keys
+	// the pump takes next are its (menus).
+	t.syncMenuBar()
 	return nil
 }
 
+// renew readies the root App, whose window closed, for the next window it
+// holds: everything of the closed window starts afresh, as in a new window's
+// App (its input, pacing and frame counts, dialogs and their results, timed
+// wakes, regions, menus, debug state, id and commands), so that nothing meant
+// for the closed window (a late dialog answer, a WakeIn that comes due, a
+// command of its stale Win) reaches the new one; the closed window's Win
+// handle stays closed (its id is not the new one's). What the run set up
+// stays: a bench and its script, a test's hook and dialog and drag targets,
+// the verbose flag and the menu demo, the process's start time.
+func (a *App) renew() {
+	old := *a
+	*a = *newWindowApp(old.appObject)
+	a.bench, a.script, a.hook, a.verbose, a.demo, a.execNs = old.bench, old.script, old.hook, old.verbose, old.demo, old.execNs
+	a.dlgT, a.dragT = old.dlgT, old.dragT
+}
+
 // closeRequested is the window's close button (EvClose): its CloseRequester
-// may refuse; the window closes, and the app ends with it unless it keeps
-// running.
+// may refuse; the window closes at the next safe point, and the app ends
+// with its last window unless it keeps running.
 func (a *App) closeRequested() {
 	if cr, ok := a.b.(CloseRequester); ok && !cr.CloseRequested(a) {
 		return
 	}
-	if a.mainApp && a.appCfg.KeepRunning && runtime.GOOS == "darwin" {
-		a.closing = true // at the turn's safe point
+	if a.lastOpen() && !(a.mainApp && a.appCfg.KeepRunning && manyWindows) {
+		a.done = true
 		return
 	}
-	a.done = true
+	a.closing = true // at the turn's safe point
+	platform.WakeLoop()
 }
 
-// appObject is the application object's part of App.
+// lastOpen reports whether a is the only open window not closing already.
+func (a *App) lastOpen() bool {
+	for _, w := range a.wins {
+		if w != a && !w.closing {
+			return false
+		}
+	}
+	return true
+}
+
+// appObject is the application object: what an app's windows share. Each
+// window's App points at it.
 type appObject struct {
 	handler     Handler
 	appCfg      AppConfig
@@ -321,10 +391,9 @@ type appObject struct {
 	launched    bool // the late setup ran (AppLaunched)
 	terminated  bool // EvWillTerminate was delivered
 	startHidden bool
-	closing     bool // the window closes at the next safe point
-	pumping     bool // the loop is inside the window's Wait or a popped-up menu: the window stays open under it
+	pumping     bool // the loop is inside the pump or a popped-up menu: no window closes under it
 	inSafe      bool
-	winID       uint32
+	done        bool // the loop ends after this turn (Quit, the last window closing)
 	nextWinID   uint32
 
 	evs        [8]Event // the events being delivered, by nesting depth
@@ -334,19 +403,43 @@ type appObject struct {
 	safeSpare  []func()
 	appStateFn platform.MenuState
 	dockSpec   platform.MenuSpec
+
+	// The windows (D30).
+	root        *App        // the first App (Main's or Run's): the Handler's, and the first window's
+	wins        []*App      // the open windows, in the order they opened
+	framing     int         // windows between BeginFrame and EndFrame: no frame handler draws and no safe point runs
+	opening     int         // OpenWindow is opening a window (its Init runs)
+	queuedOpens int         // OpenWindow calls waiting for a safe point
+	barModel    *menu.Model // the model of the last window bar given to the platform (menus.go)
+	stdBar      *byte       // the identity of the standard bar, the one of every window without a model (menus.go)
+
+	dlgSeq    platform.DialogTicket // the last dialog ticket given (dialogs.go): one numbering for the app
+	closedDlg []closedDialog        // the dialogs of closed windows whose answer has not arrived (closedDialog)
+
+	// What the windows draw with, made with the first window and released
+	// with the last (window.go).
+	dev    *gpu.Device // the GPU device and queue, where the OS shares one (macOS)
+	noDev  bool        // the OS has no shared device: a surface makes its own
+	r      *gpu.Renderer
+	text   *text.System
+	atlas  *ui.SharedAtlas
+	scales []float32 // the scales whose fonts are alive, latest first (zoom.go)
 }
 
-// closeWindow closes the window at a safe point; the app ends with it unless
-// it keeps running.
+// closeWindow closes the window at a safe point; the app ends with its last
+// one unless it keeps running.
 func (a *App) closeWindow() {
 	a.closing = false
 	if a.Win == nil {
 		return
 	}
-	a.close()
+	a.cancelQueuedDialogs() // its dialogs not shown yet end as cancelled
+	a.keepClosedDialogs()
+	a.closeWin()
 	a.UI = nil
 	a.menuDirty = true // the app's bar, without the window's state
-	if !a.appCfg.KeepRunning || runtime.GOOS != "darwin" {
+	a.markMenus()
+	if len(a.wins) == 0 && (!a.appCfg.KeepRunning || !manyWindows) {
 		a.done = true
 	}
 }
@@ -378,18 +471,29 @@ func (a *App) appTurn() {
 
 // safePoint is the work that waits for a safe point, from the loop's turn and
 // from the application object's dispatch alike: the queued functions, the
-// dialogs asked for, a window to close. Not inside a frame or an event. The
-// window is not closed under the loop's own call into it (its Wait, a
-// popped-up menu), where the dispatcher may run too: Close wakes the loop,
-// whose turn closes it right after.
+// dialogs asked for, the windows' commands (window.go), the windows to close.
+// Not inside any window's frame or an event. A window is not closed under the
+// loop's own call into the windows (the pump, a popped-up menu), where the
+// dispatcher may run too: Close wakes the loop, whose turn closes it right
+// after.
 func (a *App) safePoint() {
-	if a.inFrame || a.evDepth > 0 {
+	if a.framing > 0 || a.evDepth > 0 {
 		return
 	}
 	a.runSafePoints()
-	a.flushDialogs()
-	if a.closing && !a.pumping {
-		a.closeWindow()
+	for _, w := range a.wins {
+		w.flushDialogs()
+		w.applyCommands()
+	}
+	if a.pumping {
+		return
+	}
+	for i := 0; i < len(a.wins); {
+		if w := a.wins[i]; w.closing {
+			w.closeWindow() // takes it out of wins
+			continue
+		}
+		i++
 	}
 }
 
@@ -407,12 +511,21 @@ func (a *App) idleTurn() {
 // syncAppMenuBar installs the app's menu bar while no window is open: the
 // standard menus and the model's, every command enabled.
 func (a *App) syncAppMenuBar() {
-	if !a.menuDirty || a.Win != nil || !platform.HasNativeMenus() || !a.started {
+	if !a.menuDirty || len(a.wins) > 0 || !platform.HasNativeMenus() || !a.started {
 		return
 	}
 	a.menuDirty = false
-	a.menuSpec = nativeMenuSpec(a.menu)
+	a.menuSpec = nativeMenuSpec(a.appModel())
 	platform.SetAppMenuBar(&a.menuSpec, a.appStateFn)
+}
+
+// appModel is the menu model of the app's bar with no window open: the main
+// window's (the root's), else the last bar's.
+func (a *App) appModel() *menu.Model {
+	if r := a.root; r != nil && r.menu != nil {
+		return r.menu
+	}
+	return a.barModel
 }
 
 // appMenuState is the menu state with no window: there is no focus or modal,
@@ -422,10 +535,11 @@ func (a *App) appMenuState(id uint16, act platform.MenuAction) (enabled, checked
 	if id == 0 {
 		return act != platform.MenuNone && !act.IsEdit(), false
 	}
-	if a.menu == nil {
+	m := a.appModel()
+	if m == nil {
 		return false, false
 	}
-	return a.menu.Enabled(menu.ID(id)), a.menu.Checked(menu.ID(id))
+	return m.Enabled(menu.ID(id)), m.Checked(menu.ID(id))
 }
 
 // SetDockMenu makes menu idx of model m the Dock menu (macOS), from the next

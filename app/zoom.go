@@ -2,6 +2,7 @@ package app
 
 import (
 	"math"
+	"slices"
 
 	"gonativeui/menu"
 )
@@ -239,47 +240,72 @@ func (a *App) syncTitlebar(win any) {
 	a.tbZoom = z
 }
 
-// fontScales is how many effective scales keep their fonts alive. The current
-// one is always among them. Four cover the common back-and-forth (100 %, a
-// step either way, and one more) without a re-creation, and bound the font
-// memory to four sets whatever the zoom does.
+// fontScales is how many effective scales keep their fonts alive when no
+// open window is at them: the scales open windows are at now are kept
+// whatever their number (D30), and the others at most up to fontScales in
+// all. The current one is always among them. Four cover the common
+// back-and-forth (100 %, a step either way, and one more) without a
+// re-creation, and bound the font memory to four sets whatever the zoom does
+// (one window).
 const fontScales = 4
 
-// useFontScale keeps the fonts of at most fontScales scales alive. It runs at
-// the start of every build, before the kit asks for the fonts of the frame's
-// scale: when that scale is new and fontScales are already in use, the one
-// used longest ago is released (text.System.ReleaseScale: the CTFonts,
-// DirectWrite faces or Go font faces, and the keys and ids they held).
+// useFontScale keeps the fonts of the scales that open windows are at, and of
+// the most recent others up to fontScales scales in all. It runs at the start
+// of every build, before the kit asks for the fonts of the frame's scale:
+// when that scale is new and fontScales are already alive, the one used
+// longest ago that no open window is at is released (text.System.ReleaseScale:
+// the CTFonts, DirectWrite faces or Go font faces, and the keys and ids they
+// held); with every one of them in use, one more is kept. A scale a window is
+// at is never released: its kit holds the ids of its fonts.
 //
-// That scale is safe to release. It is the fifth most recent, so at least four
-// frames at other scales have been built since a frame used it, and the
-// renderer has at most three frames in flight (and they hold atlas pages and
-// draw lists, never fonts: nothing of the CPU-side fonts is read after
-// Build). The glyph images stay in the atlas until its next reset, so the
-// frames in flight and the scales kept are not disturbed.
+// A released scale is safe to release. No window is at it, and it is at
+// least the fifth most recent, so at least four frames at other scales have
+// been built since a frame used it, and the renderer has at most three frames
+// in flight (and they hold atlas pages and draw lists, never fonts: nothing of
+// the CPU-side fonts is read after Build). The glyph images stay in the atlas
+// until its next reset, so the frames in flight and the scales kept are not
+// disturbed.
 func (a *App) useFontScale() {
 	if a.Text == nil {
 		return
 	}
 	s := a.EffectiveScale()
-	if a.nScales > 0 && a.scales[0] == s {
+	if len(a.scales) > 0 && a.scales[0] == s {
+		a.trimFontScales() // windows at the other scales may have closed or zoomed since
 		return
 	}
-	i := -1
-	for j := 0; j < a.nScales; j++ {
-		if a.scales[j] == s {
-			i = j
-			break
-		}
-	}
+	i := slices.Index(a.scales, s)
 	if i < 0 {
-		if a.nScales < fontScales {
-			a.nScales++
-		} else {
-			a.Text.ReleaseScale(a.scales[a.nScales-1]) // the least recently used
+		i = len(a.scales)
+		if len(a.scales) >= fontScales {
+			for j := len(a.scales) - 1; j >= 0; j-- { // the least recently used that no window is at
+				if !a.scaleInUse(a.scales[j]) {
+					a.Text.ReleaseScale(a.scales[j])
+					i = j
+					break
+				}
+			}
 		}
-		i = a.nScales - 1
+		if i == len(a.scales) {
+			if a.scales == nil {
+				a.scales = make([]float32, 0, fontScales)
+			}
+			a.scales = append(a.scales, 0) // every scale kept is in use: one more
+		}
 	}
 	copy(a.scales[1:i+1], a.scales[:i])
 	a.scales[0] = s
+	a.trimFontScales()
+}
+
+// trimFontScales releases, the least recent first, the scales no open window
+// is at beyond fontScales: more were kept while windows were at as many
+// scales. The current one (the first) stays.
+func (a *App) trimFontScales() {
+	for j := len(a.scales) - 1; j > 0 && len(a.scales) > fontScales; j-- {
+		if !a.scaleInUse(a.scales[j]) {
+			a.Text.ReleaseScale(a.scales[j])
+			a.scales = slices.Delete(a.scales, j, j+1)
+		}
+	}
 }
