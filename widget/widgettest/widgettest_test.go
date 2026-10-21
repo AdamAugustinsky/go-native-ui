@@ -345,13 +345,15 @@ type probeFrame struct {
 	scrollY  float32
 	precise  bool
 	pressed  bool
+	released bool
+	keys     int
 	clicks   uint8
 	gestures []ui.GestureEvent
 }
 
 func (p *probe) Build(c *ui.Context) {
 	in := c.Input()
-	f := probeFrame{mods: in.Mods, x: in.MouseX, y: in.MouseY, scrollY: in.ScrollY, precise: in.Precise, pressed: in.Pressed[ui.ButtonLeft], clicks: in.Clicks[ui.ButtonLeft]}
+	f := probeFrame{mods: in.Mods, x: in.MouseX, y: in.MouseY, scrollY: in.ScrollY, precise: in.Precise, pressed: in.Pressed[ui.ButtonLeft], released: in.Released[ui.ButtonLeft] || in.Released[ui.ButtonRight], keys: in.NKeys, clicks: in.Clicks[ui.ButtonLeft]}
 	f.gestures = append(f.gestures, in.Gestures[:in.NGestures]...)
 	p.frames = append(p.frames, f)
 	c.NextSize(ui.Px(200), ui.Px(100))
@@ -410,6 +412,53 @@ func TestStepsCarryModifiers(t *testing.T) {
 		if f.scrollY == 0 && !f.pressed && i > 0 && p.frames[i-1].scrollY != 0 && f.mods != 0 {
 			t.Errorf("frame %d after a wheel frame still holds %v", i, f.mods)
 		}
+	}
+}
+
+// An app reads a click on its release, so the release frame of Click, RClick,
+// DoubleClick, Drag and Up (and the frame of a Key) carries the step's
+// modifiers, and the frame after clears them.
+func TestReleaseCarriesModifiers(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		steps []widgettest.Step
+	}{
+		{"Click", []widgettest.Step{widgettest.Click(ui.RoleGroup, "pad").With(ui.ModShift)}},
+		{"RClick", []widgettest.Step{widgettest.RClick(ui.RoleGroup, "pad").With(ui.ModShift)}},
+		{"DoubleClick", []widgettest.Step{widgettest.DoubleClick(ui.RoleGroup, "pad").With(ui.ModShift)}},
+		{"Drag", []widgettest.Step{widgettest.Drag(ui.RoleGroup, "pad", 5, 2).With(ui.ModShift)}},
+		{"Down/Up", []widgettest.Step{widgettest.Down(ui.RoleGroup, "pad").With(ui.ModShift), widgettest.Idle(1), widgettest.Up()}},
+		{"Down/Wheel/Up", []widgettest.Step{widgettest.Down(ui.RoleGroup, "pad").With(ui.ModShift), widgettest.Wheel(ui.RoleGroup, "pad", 10, 1).With(ui.PrimaryMod()), widgettest.Up()}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r, p := newProbe(t)
+			r.Play(append(tc.steps, widgettest.Idle(2))...)
+			rel := 0
+			for i, f := range p.frames {
+				if f.released {
+					rel++
+					if f.mods&ui.ModShift == 0 {
+						t.Errorf("release in frame %d has mods %v, want Shift", i, f.mods)
+					}
+				}
+			}
+			if rel == 0 {
+				t.Fatal("no release frame")
+			}
+			if last := p.frames[len(p.frames)-1]; last.mods != 0 {
+				t.Errorf("mods %v still held after the steps", last.mods)
+			}
+		})
+	}
+	r, p := newProbe(t)
+	r.Play(widgettest.Key(ui.KeyEnter, ui.ModShift), widgettest.Idle(1))
+	for i, f := range p.frames {
+		if f.keys > 0 && f.mods != ui.ModShift {
+			t.Errorf("key frame %d has mods %v, want Shift", i, f.mods)
+		}
+	}
+	if last := p.frames[len(p.frames)-1]; last.mods != 0 {
+		t.Errorf("mods %v still held after the key", last.mods)
 	}
 }
 
