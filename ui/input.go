@@ -359,6 +359,11 @@ type Input struct {
 	MenuIndex     int32
 	MenuRev       uint64
 	HasMenuChoice bool
+	// MenuOutcome is how the menu that box MenuOwner popped up with
+	// Context.ContextMenu ended, for the frame it is set in (SetMenuResult),
+	// and MenuItemID the chosen item's ID.
+	MenuOutcome MenuOutcome
+	MenuItemID  int64
 
 	// Drop is the drag and drop part of the input: a drag from another
 	// application over the window, a drop, the end of a drag this app started
@@ -593,7 +598,7 @@ func (in *Input) ClearFrame() {
 	in.FocusGained = false
 	in.NEdit, in.NCommands, in.NActions, in.NGestures = 0, 0, 0, 0
 	in.HasPaste, in.HasReplace, in.ReplaceN = false, false, 0
-	in.HasMenuChoice = false
+	in.HasMenuChoice, in.MenuOutcome = false, MenuPending
 	in.HasColorPick, in.ColorClosed, in.ColorFailed = false, false, false
 	in.Drop.clearFrame()
 	if cap(in.Paste) > MaxKeptPaste { // do not hold on to more than a supported paste

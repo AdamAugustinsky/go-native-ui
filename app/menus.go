@@ -138,15 +138,60 @@ func (a *App) popUpMenus() {
 		a.listItems = items
 		a.listSpec.Menus = append(a.listSpec.Menus, platform.Menu{Items: items})
 		p.Spec, p.Menu, p.Kind, p.Selected = &a.listSpec, 0, platform.PopupList, r.Selected
+	case ui.MenuItems:
+		a.ctxSpec.Menus = a.ctxSpec.Menus[:0]
+		a.addDynamicMenu(r.Items)
+		p.Spec, p.Menu, p.Kind = &a.ctxSpec, 0, platform.PopupContext
 	default:
 		return
 	}
 	i := a.Win.PopUpMenu(&p)
-	if r.Kind == ui.MenuList && i >= 0 {
+	switch {
+	case r.Kind == ui.MenuList && i >= 0:
 		a.tr.in.SetMenuChoice(r.Owner, i, r.Rev)
-		a.tr.dirty = true
-		a.p.invalidate()
+	case r.Kind == ui.MenuItems && p.Picked:
+		a.tr.in.SetMenuResult(r.Owner, p.Choice, ui.MenuChosen)
+	case r.Kind == ui.MenuItems:
+		a.tr.in.SetMenuResult(r.Owner, 0, ui.MenuDismissed)
+	default:
+		return
 	}
+	a.tr.dirty = true
+	a.p.invalidate()
+}
+
+// maxDynamicMenus bounds the menus (the root and its submenus) of one
+// described menu.
+const maxDynamicMenus = 64
+
+// addDynamicMenu appends the menu of items to a.ctxSpec, and the menus of
+// its submenus after it, and returns its index. Items and menus are kept
+// from one use to the next.
+func (a *App) addDynamicMenu(items []ui.MenuItem) int {
+	s := &a.ctxSpec
+	idx := len(s.Menus)
+	if idx < cap(s.Menus) {
+		s.Menus = s.Menus[:idx+1]
+	} else {
+		s.Menus = append(s.Menus, platform.Menu{})
+	}
+	s.Menus[idx].Dynamic = true
+	s.Menus[idx].Items = s.Menus[idx].Items[:0]
+	for i := range items {
+		it := &items[i]
+		pi := platform.MenuItem{Kind: platform.MenuItemAction, Title: it.Title, Symbol: it.Symbol, Choice: it.ID,
+			Disabled: it.Disabled, Destructive: it.Destructive, Checked: it.Mark == ui.MarkOn, Mixed: it.Mark == ui.MarkMixed}
+		pi.Key, pi.Mods = keyEquivalent(menu.Shortcut{Key: it.Key, Mods: it.Mods})
+		switch {
+		case it.Separator:
+			pi = platform.MenuItem{Kind: platform.MenuItemSeparator}
+		case len(it.Sub) > 0 && len(s.Menus) < maxDynamicMenus:
+			pi.Kind = platform.MenuItemSubmenu
+			pi.Submenu = a.addDynamicMenu(it.Sub)
+		}
+		s.Menus[idx].Items = append(s.Menus[idx].Items, pi)
+	}
+	return idx
 }
 
 // nativeMenuSpec composes the macOS menu bar of model m (nil: the standard
