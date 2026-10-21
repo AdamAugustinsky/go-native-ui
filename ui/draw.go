@@ -244,6 +244,20 @@ func scaleAlpha(c uint32, f float32) uint32 {
 	return c&^255 | uint32(float32(c&255)*f+0.5)
 }
 
+// quad appends a cleared slot. Grow before taking its address: a reused slot
+// can hold any kind of quad from the previous frame.
+func quad(l *gpu.DrawList) *gpu.Quad {
+	n := len(l.Quads)
+	if n < cap(l.Quads) {
+		l.Quads = l.Quads[:n+1]
+	} else {
+		l.Quads = append(l.Quads, gpu.Quad{})
+	}
+	q := &l.Quads[n]
+	*q = gpu.Quad{}
+	return q
+}
+
 // emit draws box id and its subtree in tree order (RAD): shadows,
 // background and border, hover/press overlay, text, then the children, the
 // floating ones after their siblings.
@@ -267,7 +281,8 @@ func (c *Context) emit(l *gpu.DrawList, id ID, clip [4]float32) {
 				continue
 			}
 			col := b.col(s.Color)
-			l.Add(gpu.Quad{Rect: sr, Clip: clip, Color: [4]uint32{col, col, col, col}, Radii: b.radii, Soft: s.Sigma})
+			q := quad(l)
+			q.Rect, q.Clip, q.Color, q.Radii, q.Soft = sr, clip, [4]uint32{col, col, col, col}, b.radii, s.Sigma
 		}
 	}
 
@@ -283,25 +298,30 @@ func (c *Context) emit(l *gpu.DrawList, id ID, clip [4]float32) {
 			l.AddBackdrop(q, c.bd.recs[bdrop])
 		}
 		if b.flags&(DrawBackground|DrawBorder) != 0 {
-			q := gpu.Quad{Rect: r, Clip: clip, Radii: b.radii}
+			var colors [4]uint32
+			var border float32
 			draw := false
 			if b.flags&DrawBackground != 0 && bdrop < 0 {
 				for i, bg := range b.bg {
-					q.Color[i] = b.col(bg)
+					colors[i] = b.col(bg)
 					draw = draw || bg&255 != 0
 				}
 			}
 			partial := false
 			if b.flags&DrawBorder != 0 && b.bd.Width > 0 && b.bd.Color&255 != 0 {
 				if b.sides == SidesAll {
-					q.Border, q.BorderColor = b.bd.Width, b.col(b.bd.Color)
+					border = b.bd.Width
 					draw = true
 				} else {
 					partial = b.sides&SidesAll != 0
 				}
 			}
 			if draw {
-				l.Add(q)
+				q := quad(l)
+				q.Rect, q.Clip, q.Radii, q.Color = r, clip, b.radii, colors
+				if border > 0 {
+					q.Border, q.BorderColor = border, b.col(b.bd.Color)
+				}
 			}
 			if partial {
 				c.emitSides(l, b, clip)
@@ -347,17 +367,16 @@ func (c *Context) emit(l *gpu.DrawList, id ID, clip [4]float32) {
 func (c *Context) emitSides(l *gpu.DrawList, b *box, clip [4]float32) {
 	r := b.rect
 	bw := b.bd.Width
-	ring := gpu.Quad{Rect: r, Radii: b.radii, Border: bw, BorderColor: b.col(b.bd.Color)}
 	wl := max(b.radii[0], b.radii[3], bw)
 	wr := max(b.radii[1], b.radii[2], bw)
 	ht := max(b.radii[0], b.radii[1], bw)
 	hb := max(b.radii[3], b.radii[2], bw)
 	left, right := b.sides&SideLeft != 0, b.sides&SideRight != 0
 	if left {
-		strip(l, &ring, intersect([4]float32{r[0] - 1, r[1] - 1, r[0] + wl, r[3] + 1}, clip))
+		strip(l, b, intersect([4]float32{r[0] - 1, r[1] - 1, r[0] + wl, r[3] + 1}, clip))
 	}
 	if right {
-		strip(l, &ring, intersect([4]float32{r[2] - wr, r[1] - 1, r[2] + 1, r[3] + 1}, clip))
+		strip(l, b, intersect([4]float32{r[2] - wr, r[1] - 1, r[2] + 1, r[3] + 1}, clip))
 	}
 	xa, xb := r[0]-1, r[2]+1
 	if left {
@@ -367,20 +386,20 @@ func (c *Context) emitSides(l *gpu.DrawList, b *box, clip [4]float32) {
 		xb = r[2] - wr
 	}
 	if b.sides&SideTop != 0 {
-		strip(l, &ring, intersect([4]float32{xa, r[1] - 1, xb, r[1] + ht}, clip))
+		strip(l, b, intersect([4]float32{xa, r[1] - 1, xb, r[1] + ht}, clip))
 	}
 	if b.sides&SideBottom != 0 {
-		strip(l, &ring, intersect([4]float32{xa, r[3] - hb, xb, r[3] + 1}, clip))
+		strip(l, b, intersect([4]float32{xa, r[3] - hb, xb, r[3] + 1}, clip))
 	}
 }
 
-func strip(l *gpu.DrawList, ring *gpu.Quad, clip [4]float32) {
+func strip(l *gpu.DrawList, b *box, clip [4]float32) {
 	if empty(clip) {
 		return
 	}
-	q := *ring
-	q.Clip = clip
-	l.Add(q)
+	q := quad(l)
+	q.Rect, q.Clip, q.Radii = b.rect, clip, b.radii
+	q.Border, q.BorderColor = b.bd.Width, b.col(b.bd.Color)
 }
 
 // emitImage draws b's image centred in the padded rectangle (or placed by
@@ -403,14 +422,9 @@ func (c *Context) emitImage(l *gpu.DrawList, b *box, clip [4]float32) {
 	if col&255 == 0 {
 		return
 	}
-	l.Add(gpu.Quad{
-		Rect:  [4]float32{x0, y0, x0 + w, y0 + h},
-		Clip:  clip,
-		UV:    uv,
-		Color: [4]uint32{col, col, col, col},
-		Mode:  b.img.Mode,
-		Tex:   b.img.Tex,
-	})
+	q := quad(l)
+	q.Rect, q.Clip, q.UV = [4]float32{x0, y0, x0 + w, y0 + h}, clip, uv
+	q.Color, q.Mode, q.Tex = [4]uint32{col, col, col, col}, b.img.Mode, b.img.Tex
 }
 
 func (c *Context) overlay(l *gpu.DrawList, b *box, clip [4]float32, color uint32, t float32) {
@@ -418,7 +432,8 @@ func (c *Context) overlay(l *gpu.DrawList, b *box, clip [4]float32, color uint32
 		return
 	}
 	col := b.col(scaleAlpha(color, t))
-	l.Add(gpu.Quad{Rect: b.rect, Clip: clip, Color: [4]uint32{col, col, col, col}, Radii: b.radii})
+	q := quad(l)
+	q.Rect, q.Clip, q.Color, q.Radii = b.rect, clip, [4]uint32{col, col, col, col}, b.radii
 }
 
 // emitText draws the display text of b inside its padded rectangle.

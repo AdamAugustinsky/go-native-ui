@@ -58,13 +58,7 @@ func (c *Context) emitFitted(l *gpu.DrawList, b *box, clip [4]float32) {
 	if empty(intersect(rect, clip)) {
 		return
 	}
-	l.Add(gpu.Quad{
-		Rect:  rect,
-		Clip:  clip,
-		UV:    uv,
-		Color: [4]uint32{col, col, col, col},
-		Radii: b.radii,
-		Mode:  gpu.ModeRGBA,
-		Tex:   im.Tex,
-	})
+	q := quad(l)
+	q.Rect, q.Clip, q.UV, q.Radii = rect, clip, uv, b.radii
+	q.Color, q.Mode, q.Tex = [4]uint32{col, col, col, col}, gpu.ModeRGBA, im.Tex
 }
