@@ -58,7 +58,8 @@
 //
 // Without Options.Proxy, macOS uses the system's proxy settings and the
 // other systems the HTTP_PROXY, HTTPS_PROXY and NO_PROXY environment
-// variables. Options.Proxy overrides that, also for loopback addresses. On
+// variables. Options.Proxy overrides that, also for loopback addresses, and a
+// Proxy of Kind ProxyNone connects directly whatever those say. On
 // macOS the credentials of an HTTP proxy (Proxy.User) answer the proxy's 407
 // for https URLs, which go through CONNECT; the system does not turn a 407
 // for a plain http URL into a request for credentials, so that transfer
@@ -102,7 +103,7 @@ type Options struct {
 	// when the server did not say.
 	Progress func(received, total int64)
 	// Proxy, if set, routes the transfer through that proxy instead of the
-	// system's.
+	// system's, or with Kind ProxyNone, through none.
 	Proxy *Proxy
 }
 
@@ -120,6 +121,10 @@ const (
 	ProxyHTTPS
 	// ProxySOCKS5 is a SOCKS5 proxy; names are resolved by the proxy.
 	ProxySOCKS5
+	// ProxyNone is no proxy: the transfer connects to the server directly,
+	// whatever the system's settings or the environment name (a host on the
+	// app's own no-proxy list). It takes no Host, Port or credentials.
+	ProxyNone
 )
 
 // Proxy names one proxy server.
@@ -232,6 +237,12 @@ func parseURL(raw string) (*url.URL, error) {
 }
 
 func (p *Proxy) check() error {
+	if p.Kind == ProxyNone {
+		if p.Host != "" || p.Port != 0 || p.User != "" || p.Password != "" {
+			return errors.New("fetch: ProxyNone takes no host, port or credentials")
+		}
+		return nil
+	}
 	if p.Host == "" || p.Port <= 0 || p.Port > 65535 {
 		return errors.New("fetch: proxy needs a host and a port")
 	}

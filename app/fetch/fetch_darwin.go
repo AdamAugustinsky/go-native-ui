@@ -429,7 +429,8 @@ func start(fr *ffi.Frame, t *transfer, u *url.URL, opt Options) (delegate, queue
 
 // proxyDict makes the connectionProxyDictionary for p (owned). An HTTP proxy
 // carries both http and https URLs; its credentials go through onChallenge,
-// since the dictionary has no place for them.
+// since the dictionary has no place for them. ProxyNone's is empty: no proxy
+// is enabled, where a nil dictionary would mean the system's settings.
 func proxyDict(fr *ffi.Frame, p *Proxy) (uintptr, error) {
 	key := func(name string) uintptr { return cf.Const(sys.cfnet, name) }
 	d := cf.Dict(fr)
