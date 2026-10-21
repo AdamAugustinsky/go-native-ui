@@ -31,6 +31,7 @@ func (c *Context) AtlasSync(u Uploader) {
 	if c.up != u {
 		c.up = u
 		c.pageTex = c.pageTex[:0]
+		c.pageUploaded = c.pageUploaded[:0]
 	}
 	c.syncAtlas()
 }
@@ -41,8 +42,9 @@ func (c *Context) AtlasSync(u Uploader) {
 // so a dirty region is uploaded once, by whichever context syncs first, and
 // clearing it consumes nothing another context still needs.
 type SharedAtlas struct {
-	up  Uploader
-	tex []gpu.TextureID
+	up       Uploader
+	tex      []gpu.TextureID
+	uploaded []bool
 }
 
 // NewSharedAtlas returns the shared page textures on u, none created yet.
@@ -54,6 +56,7 @@ func NewSharedAtlas(u Uploader) *SharedAtlas { return &SharedAtlas{up: u} }
 func (c *Context) ShareAtlas(s *SharedAtlas) {
 	c.shared, c.up = s, s.up
 	c.pageTex = c.pageTex[:0]
+	c.pageUploaded = c.pageUploaded[:0]
 	c.syncAtlas()
 }
 
@@ -64,8 +67,10 @@ func (c *Context) pageTexture(p int) gpu.TextureID {
 		return 0
 	}
 	tex := &c.pageTex
+	uploaded := &c.pageUploaded
 	if c.shared != nil {
 		tex = &c.shared.tex
+		uploaded = &c.shared.uploaded
 	}
 	for len(*tex) <= p {
 		w, h, color := c.sh.PageInfo(len(*tex))
@@ -74,6 +79,7 @@ func (c *Context) pageTexture(p int) gpu.TextureID {
 			kind = gpu.TexRGBA8
 		}
 		*tex = append(*tex, c.up.NewTexture(kind, w, h))
+		*uploaded = append(*uploaded, false)
 	}
 	return (*tex)[p]
 }
@@ -82,10 +88,22 @@ func (c *Context) syncAtlas() {
 	if c.up == nil {
 		return
 	}
+	stager, canStage := c.up.(interface {
+		Stage(gpu.TextureID, int, int, int, int, []byte, int)
+	})
 	for p := 0; p < c.sh.Pages(); p++ {
 		t := c.pageTexture(p)
 		if x, y, w, h, pix, stride, ok := c.sh.Dirty(p); ok {
-			c.up.Upload(t, x, y, w, h, pix, stride)
+			uploaded := c.pageUploaded
+			if c.shared != nil {
+				uploaded = c.shared.uploaded
+			}
+			if canStage && uploaded[p] {
+				stager.Stage(t, x, y, w, h, pix, stride)
+			} else {
+				c.up.Upload(t, x, y, w, h, pix, stride)
+			}
+			uploaded[p] = true
 			c.sh.ClearDirty(p)
 		}
 	}

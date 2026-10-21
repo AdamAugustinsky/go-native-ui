@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"testing"
 
 	"gonativeui/gpu"
@@ -165,5 +166,60 @@ func TestAtlasSyncLeavesTheSharedAtlas(t *testing.T) {
 	}
 	if shared.made != 1 || shared.total() != 1 {
 		t.Errorf("the shared textures changed after the context left: %d made, %d uploads", shared.made, shared.total())
+	}
+}
+
+type stagingUploader struct {
+	texUploader
+	stages int
+}
+
+func (u *stagingUploader) Stage(gpu.TextureID, int, int, int, int, []byte, int) {
+	u.stages++
+}
+
+func TestAtlasStagesOnlyInitializedPages(t *testing.T) {
+	for _, shared := range []bool{false, true} {
+		t.Run(fmt.Sprint(shared), func(t *testing.T) {
+			sh := &pagedShaper{fakeShaper: newFake(), seen: map[uint16]bool{}}
+			up := &stagingUploader{texUploader: texUploader{uploads: map[gpu.TextureID]int{}}}
+			c, other := New(sh), New(sh)
+			if shared {
+				s := NewSharedAtlas(up)
+				c.ShareAtlas(s)
+				other.ShareAtlas(s)
+			} else {
+				c.AtlasSync(up)
+				other = c
+			}
+			frame := func(c *Context, s string) {
+				var in Input
+				var list gpu.DrawList
+				c.Begin(&in, 400, 100, 1, .016)
+				c.NextSize(Px(300), Px(30))
+				c.Box(DrawText, s)
+				c.End(&list)
+			}
+			// Both pages are created by emission, before syncAtlas sees them.
+			frame(c, "aé")
+			if up.total() != 2 || up.stages != 0 {
+				t.Fatalf("fresh pages: uploads=%d stages=%d", up.total(), up.stages)
+			}
+			frame(other, "bé")
+			if up.total() != 2 || up.stages != 1 {
+				t.Fatalf("new glyph: uploads=%d stages=%d", up.total(), up.stages)
+			}
+			sh.reset()
+			frame(other, "bé")
+			if up.total() != 2 || up.stages != 3 {
+				t.Fatalf("reset: uploads=%d stages=%d", up.total(), up.stages)
+			}
+			replacement := &stagingUploader{texUploader: texUploader{uploads: map[gpu.TextureID]int{}}}
+			sh.reset()
+			c.AtlasSync(replacement)
+			if replacement.total() != 2 || replacement.stages != 0 {
+				t.Fatalf("replacement: uploads=%d stages=%d", replacement.total(), replacement.stages)
+			}
+		})
 	}
 }
