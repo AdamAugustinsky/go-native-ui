@@ -1,6 +1,9 @@
 package text
 
-import "unicode/utf8"
+import (
+	"math"
+	"unicode/utf8"
+)
 
 // The basic paragraph layout: lines broken at the opportunities of UAX #14
 // (LineBreaker) and measured with Shape, for the Windows and Linux backends
@@ -53,6 +56,7 @@ type BasicLayouter struct {
 type measRun struct {
 	off, n, textLen int
 	adv             float32
+	simple          bool // one ASCII byte per glyph, with monotone finite carets
 }
 
 // ellipsis is the text that ends a line cut short (Para.Ellipsis).
@@ -126,6 +130,18 @@ func (l *BasicLayouter) shapeRuns(p *Para) {
 		l.mx = append(l.mx, v.X...)
 		if len(v.Clusters) == len(v.Glyphs) && len(v.X) == len(v.Glyphs) {
 			l.mc = append(l.mc, v.Clusters...)
+			m.simple = m.n > 0 && m.n == len(v.Text) && m.textLen == m.n
+			if m.simple {
+				last := float32(0)
+				for i, ch := range v.Text {
+					if ch >= 0x80 || v.Clusters[i] != uint32(i) || !(v.X[i] >= last) || i > 0 && ch == '\n' && v.Text[i-1] == '\r' {
+						m.simple = false
+						break
+					}
+					last = v.X[i]
+				}
+				m.simple = m.simple && m.adv >= last && m.adv <= math.MaxFloat32
+			}
 		} else {
 			// No cluster information: nothing to measure with, so no
 			// wrapping (see layout).
@@ -156,6 +172,21 @@ func (l *BasicLayouter) measure(a, b int) float32 {
 	var w float32
 	for k := runAt(l.runs, a); k < len(l.runs) && l.runs[k].start < b; k++ {
 		r := &l.runs[k]
+		if m := &l.meas[k]; m.simple {
+			lo, hi := max(a, r.start)-r.start, min(b, r.end)-r.start
+			// Preserve stopX's float32 rounding at the final caret.
+			last := l.mx[m.off+m.n-1]
+			end := last + (m.adv - last)
+			x0, x1 := end, end
+			if lo < m.n {
+				x0 = l.mx[m.off+lo]
+			}
+			if hi < m.n {
+				x1 = l.mx[m.off+hi]
+			}
+			w += x1 - x0
+			continue
+		}
 		v := l.measView(k)
 		d := v.CaretX(min(b, r.end)-r.start) - v.CaretX(max(a, r.start)-r.start)
 		w += max(d, -d)

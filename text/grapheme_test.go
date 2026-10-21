@@ -36,6 +36,19 @@ func ourBoundaries(s string) []int {
 	}
 }
 
+func TestGraphemeASCIIPairs(t *testing.T) {
+	var seg segmenter.Segmenter
+	for a := 0; a < 128; a++ {
+		for b := 0; b < 128; b++ {
+			pair := []byte{byte(a), byte(b)}
+			want := slices.Contains(gtBoundaries(t, &seg, string(pair)), 1)
+			if got := IsGraphemeBoundary(pair, 1); got != want {
+				t.Fatalf("ASCII %d,%d: boundary %v, Unicode reference %v", a, b, got, want)
+			}
+		}
+	}
+}
+
 // The boundaries must be those of go-text's segmenter (the reference
 // implementation of UAX #29 the tables come from) over text built from
 // every kind of character the rules distinguish.
