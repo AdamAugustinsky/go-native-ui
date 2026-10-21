@@ -45,8 +45,21 @@ struct BU {
 	float add;
 	float last;     // 1: the last pass, which applies the recipe
 	float under;    // 1: the tint is mixed in before the colour adjustments
-	float pad;
+	float fades;    // 1: the backdrop fades out (Backdrop.Fade)
+	float2 fade;    // where: from y = fade.x (the full recipe) to fade.y (none), target pixels
+	float2 pad;
 };
+
+// strength is how much of the recipe applies on the reduced region's row
+// i: 1, or along a fade, 1 less the smoothstep of the way through it (at
+// the row's centre in the target).
+static float strength(constant BU& u, int i) {
+	if (u.fades < 0.5) {
+		return 1.0;
+	}
+	float y = u.src.y + (float(i) + 0.5) * u.down;
+	return 1.0 - smoothstep(0.0, 1.0, (y - u.fade.x) / (u.fade.y - u.fade.x));
+}
 
 // A quad over the region and one more column and row, which repeat its edge.
 vertex float4 bd_vs(uint vid [[vertex_id]], constant BU& u [[buffer(0)]]) {
@@ -75,14 +88,18 @@ fragment float4 bd_down(float4 pos [[position]], constant BU& u [[buffer(0)]],
 }
 
 // One direction of the Gaussian, its edges normalised: taps outside the
-// region are dropped and the others' weights renormalised.
+// region are dropped and the others' weights renormalised. Along a fade its
+// sigma is the row's strength of the recipe's (both directions take the
+// output row's: a variable blur, as AppKit's ThinFilm edge has).
 fragment float4 bd_blur(float4 pos [[position]], constant BU& u [[buffer(0)]],
                         texture2d<float> t [[texture(0)]]) {
 	int2 n = int2(u.n);
 	int2 i = min(int2(pos.xy), n - 1);
 	int2 d = int2(u.dir);
-	int r = int(u.radius);
-	float k = -0.5 / max(u.sigma * u.sigma, 1e-6);
+	float st = strength(u, i.y);
+	float sigma = u.sigma * st;
+	int r = min(int(ceil(3.0 * sigma)), int(u.radius));
+	float k = -0.5 / max(sigma * sigma, 1e-6);
 	float4 acc = 0.0;
 	float ws = 0.0;
 	for (int j = -r; j <= r; j++) {
@@ -99,13 +116,14 @@ fragment float4 bd_blur(float4 pos [[position]], constant BU& u [[buffer(0)]],
 		return c;
 	}
 	float3 m = c.rgb;
+	float mx = u.tint.a * st, sat = 1.0 + (u.sat - 1.0) * st, add = u.add * st;
 	if (u.under > 0.5) {
-		m = mix(m, u.tint.rgb, u.tint.a);
+		m = mix(m, u.tint.rgb, mx);
 	}
 	float l = dot(m, float3(0.2126, 0.7152, 0.0722));
-	m = clamp(l + u.sat * (m - l) + u.add, 0.0, 1.0);
+	m = clamp(l + sat * (m - l) + add, 0.0, 1.0);
 	if (u.under < 0.5) {
-		m = mix(m, clamp(u.tint.rgb + u.add, 0.0, 1.0), u.tint.a);
+		m = mix(m, clamp(u.tint.rgb + add, 0.0, 1.0), mx);
 	}
 	return float4(m, 1.0);
 }
@@ -119,7 +137,7 @@ var (
 	errBackdropMSL = errors.New("gpu: backdrop shader entry points missing")
 )
 
-// bdUniforms mirrors backdropMSL's BU (96 bytes).
+// bdUniforms mirrors backdropMSL's BU (112 bytes).
 type bdUniforms struct {
 	src     [4]float32
 	tint    [4]float32
@@ -134,10 +152,12 @@ type bdUniforms struct {
 	add     float32
 	last    float32
 	under   float32
-	_       float32
+	fades   float32
+	fade    [2]float32
+	_       [2]float32
 }
 
-var _ = [1]struct{}{}[unsafe.Sizeof(bdUniforms{})-96]
+var _ = [1]struct{}{}[unsafe.Sizeof(bdUniforms{})-112]
 
 // backdropKit is the renderer's backdrop state.
 type backdropKit struct {
@@ -270,6 +290,9 @@ func (r *Renderer) prepareBackdrops(target uintptr, w, h int, list *DrawList, in
 			x0, y0, x1, y1, _ := backdropRegion(q, w, h)
 			c := b.Base | 0xFF
 			pre[n] = Quad{Rect: [4]float32{float32(x0), float32(y0), float32(x1), float32(y1)}, Color: [4]uint32{c, c, c, c}}
+			if from, to, ok := fadeSpan(q, &b); ok {
+				fadeShape(&pre[n], from, to) // no edge where it ends and nothing is drawn
+			}
 			n++
 		}
 	}
@@ -332,6 +355,14 @@ func (r *Renderer) encodeBackdrop(cmdBuf objc.ID, target uintptr, w, h int, q *Q
 		sat:     b.Saturation,
 		add:     b.Add,
 		under:   b2f(b.TintUnder),
+	}
+	// a fade: the passes ease the recipe off along it, and the composite
+	// (mode 3 of quadMSL) mixes into what is under it, reading where from the
+	// ring copy's Border and Soft (unused by a backdrop)
+	inst.Border, inst.Soft = 0, 0
+	if from, to, ok := fadeSpan(q, b); ok {
+		u.fades, u.fade = 1, [2]float32{from, to}
+		inst.Border, inst.Soft = from, to
 	}
 	r.backdropPass(cmdBuf, bd.tex[0], bd.down, objc.ID(target))
 	u.dir = [2]float32{1, 0}

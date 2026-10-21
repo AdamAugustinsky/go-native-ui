@@ -212,8 +212,16 @@ fragment float4 fs_main(VOut in [[stage_in]],
 			? yuv_sample(texel, yuv, tex, tex1, tex2, smp)
 			: tex.sample(smp, texel / float2(tex.get_width(), tex.get_height()));
 		// mode 3: a backdrop, its blurred region (uv: the texels the
-		// renderer put it at; backdrop_darwin.go), opaque
-		res = (mode == 1u ? col * s.r : mode == 3u ? float4(s.rgb, 1.0) : s * col.a) * cov;
+		// renderer put it at; backdrop_darwin.go), opaque; but along a fade
+		// from y = border to y = soft (set by the renderer), where the
+		// recipe's strength falls from 1 to 0 along a smoothstep, it mixes
+		// into what is under it over the fade's outer half
+		float a = 1.0;
+		if (mode == 3u && border != soft) {
+			float st = 1.0 - smoothstep(0.0, 1.0, (p.y - border) / (soft - border));
+			a = smoothstep(0.0, 0.5, st);
+		}
+		res = (mode == 1u ? col * s.r : mode == 3u ? float4(s.rgb, 1.0) * a : s * col.a) * cov;
 	}
 
 	if (any(clip != 0.0)) {

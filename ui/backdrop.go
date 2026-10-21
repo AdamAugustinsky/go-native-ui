@@ -29,6 +29,14 @@ type backdrops struct {
 // blur's mean over typical content. The box's opacity and tint transform
 // apply to the fallback only. A frame has at most 16 backdrops; the boxes
 // past them draw their fallback.
+//
+// A recipe with a Fade fades out at an edge instead of ending there, as
+// macOS 26's soft scroll edge does under a toolbar: one box over the bar and
+// the tail below it, its blur and tint easing off over the tail into the
+// content under it,
+//
+//	b.Fade, b.FadeEdge = tailPx, gpu.FadeBottom
+//	c.NextBackdrop(b)
 func (c *Context) NextBackdrop(b gpu.Backdrop) { c.bd.next, c.bd.hasNext = b, true }
 
 // takeBackdrop gives the box being built (b) the next backdrop, if one was
