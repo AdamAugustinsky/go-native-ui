@@ -386,21 +386,18 @@ func (w *Window) Wake() {
 }
 
 // giveWakes turns the pending wakes into EvWake events: the app-wide Wake
-// for every window, a window's own Wake for it. Inside a native loop (a live
-// resize, menu tracking, the wait for a quit answer) the woken windows ask
-// for a frame, so that their frame handler takes the wake: the pump that
-// would is suspended. It reports whether any wake was pending.
+// for every window, a window's own Wake for it. The woken windows ask for a
+// frame (ArmOnWake): inside a loop of AppKit's the pump that would take the
+// wake is suspended, and the frame's tick draws it through the frame handler.
+// It reports whether any wake was pending.
 func giveWakes() bool {
 	all := takeWake()
 	any := loopWake.Swap(false) || all
-	native := NativeLoop()
 	for _, w := range openWindows() {
 		if w.wakeMark.Swap(false) || all {
 			any = true
 			w.q.push(Event{Kind: EvWake, Time: Now()})
-			if native {
-				w.RequestFrame()
-			}
+			w.RequestFrame()
 		}
 	}
 	return any

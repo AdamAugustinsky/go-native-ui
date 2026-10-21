@@ -326,9 +326,9 @@ func (a *App) deliver(pe *platform.AppEvent, data []byte) {
 	delivering.data[d], delivering.seq[d] = prevData, prevSeq
 	a.evDepth--
 	// What the event changed is drawn, by the loop, or by the frame handler
-	// inside a native loop: in the window the event is for (Event.Window),
-	// else in every window.
-	native := len(a.wins) > 0 && platform.NativeLoop()
+	// inside a loop of the OS's, whose frame is asked for here (ArmOnWake):
+	// in the window the event is for (Event.Window), else in every window.
+	arm := len(a.wins) > 0 && platform.ArmOnWake()
 	only := a.windowOf(pe.Window)
 	if only == nil && pe.Window != 0 {
 		return // for a window that has closed: none draws
@@ -345,7 +345,7 @@ func (a *App) deliver(pe *platform.AppEvent, data []byte) {
 				w.dbg.note(CauseApp, uint8(pe.Kind), 0, nil)
 			}
 		}
-		if native {
+		if arm && w.Win != nil { // an offscreen App has no window to ask
 			w.Win.RequestFrame()
 		}
 	}

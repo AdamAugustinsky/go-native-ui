@@ -988,6 +988,14 @@ func NativeLoop() bool {
 	return false
 }
 
+// ArmOnWake reports whether what reaches the app outside its loop (an app
+// event; a wake, which the platform arms itself) asks for the frame that draws
+// it (Window.RequestFrame), rather than leaving that to the loop. On macOS
+// always: AppKit runs nested loops NativeLoop cannot see (NSCorrectionPanel's
+// runs until the next key), and only a frame's tick finds the app's loop
+// suspended and draws through the frame handler (linkTick). Main thread.
+func ArmOnWake() bool { return true }
+
 // quitWaitNative reports whether AppKit runs its own loop waiting for a quit
 // answer (NSTerminateLater): not for a quit decided without terminate:,
 // during which the app's loop runs on.
