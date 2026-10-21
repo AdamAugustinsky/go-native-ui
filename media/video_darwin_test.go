@@ -218,8 +218,14 @@ func videoFrames(plain, turned string) (errs []string) {
 		}
 	}
 
-	// Play plays at the rate set while paused.
+	// Play plays at the rate set while paused. The window starts when the
+	// position starts moving: Play's start latency (about 90 ms on a loaded
+	// runner) is not the rate, so it must not count against it.
 	v.Play()
+	pStart := v.Position()
+	until("moving from Play", 2*time.Second, func() bool {
+		return v.Position() > pStart
+	})
 	p0, t0 = v.Position(), time.Now()
 	for time.Since(t0) < 300*time.Millisecond {
 		pump(5 * time.Millisecond)
