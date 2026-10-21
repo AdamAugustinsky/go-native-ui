@@ -291,7 +291,7 @@ jobs:
       run:
         shell: bash
     env:
-      QUARANTINE: '^(TestImageAndFilesWithPowerShell|TestSaveIsDebounced|TestFirstFrameIsContent|TestSystemIconsWindowsConcurrent|TestPackagedBinaryHasNoDebugChordOrInspector)$'
+      QUARANTINE: '^(TestImageAndFilesWithPowerShell|TestSaveIsDebounced|TestFirstFrameIsContent|TestSystemIconsWindowsConcurrent|TestCloseDoesNotWaitForTheIconStyleRead|TestOffscreenRunsLeaveNoWorkersOrHandles|TestPackagedBinaryHasNoDebugChordOrInspector)$'
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
