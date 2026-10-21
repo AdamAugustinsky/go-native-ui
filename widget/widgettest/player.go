@@ -47,11 +47,18 @@ type Player struct {
 	sem  ui.SemTree
 	rect [4]float32 // the current step's target
 	ok   bool
-	// reveal: the target is in a scroll area but out of view (a window smaller
-	// than the scene's): the wheel scrolls the area (revKey) until it shows
+	// reveal: the target is in a scrolling container but out of view (a window
+	// smaller than the scene's): the wheel scrolls the containers around it,
+	// innermost first, until it shows. revLast is the container scrolled last
+	// frame; when the target does not move under it (revStill frames from revPos,
+	// the target's centre) it is at its end and goes into revDone.
 	begun     bool // the current step has been resolved
 	reveal    bool
-	revKey    ui.Key
+	revLast   ui.Key
+	revDone   []ui.Key
+	revRects  [16][4]float32 // scratch for the containers' rectangles: revealing allocates nothing
+	revStill  int
+	revPos    [2]float32
 	revFrames int
 	x, y      float32 // the pointer
 	base      []byte  // the value a WaitChange step started from
@@ -195,21 +202,53 @@ func scrolls(r ui.Role) bool {
 	return r == ui.RoleScrollArea || r == ui.RoleList || r == ui.RoleTable
 }
 
-// scrollAncestor is the index of the nearest scrolling container around node
-// i, or -1.
-func (p *Player) scrollAncestor(i int) int {
+// scrollAncestors appends to dst the indices of the scrolling containers
+// around node i, innermost first.
+func (p *Player) scrollAncestors(dst []int, i int) []int {
 	t := &p.sem
 	for a := t.Nodes[i].Parent; a >= 0; a = t.Nodes[a].Parent {
 		if scrolls(t.Nodes[a].Role) {
-			return int(a)
+			dst = append(dst, int(a))
 		}
 	}
-	return -1
+	return dst
 }
 
-// revealFrame scrolls the scroll area around the target by one wheel step
+// wheelPoint is a point of container b where the wheel scrolls b and not a
+// container inside it: in b and in the window, in every rectangle of outer (the
+// containers b sits in), outside every rectangle of inner, where a click would
+// reach b (nothing covers it: a band, a dialog).
+func (p *Player) wheelPoint(b [4]float32, key ui.Key, inner, outer [][4]float32) (x, y float32, ok bool) {
+	c := p.h.Context()
+	w, h := c.Size()
+	for _, fy := range [...]float32{0.5, 0.25, 0.75, 0.1, 0.9} {
+		for _, fx := range [...]float32{0.5, 0.03, 0.97, 0.25, 0.75} {
+			x, y = b[0]+(b[2]-b[0])*fx, b[1]+(b[3]-b[1])*fy
+			if x < 0 || y < 0 || x >= float32(w) || y >= float32(h) {
+				continue
+			}
+			in := false
+			for _, r := range inner {
+				in = in || (x >= r[0] && x < r[2] && y >= r[1] && y < r[3])
+			}
+			for _, r := range outer {
+				in = in || x < r[0] || x >= r[2] || y < r[1] || y >= r[3]
+			}
+			if !in && c.HitReaches(x, y, key) {
+				return x, y, true
+			}
+		}
+	}
+	return 0, 0, false
+}
+
+// revealFrame scrolls the containers around the target by one wheel step
 // towards it, and reports whether the target is in view now (the step then
-// carries on in the same frame).
+// carries on in the same frame). As AppKit's scrollRectToVisible: does up the
+// view chain, it is the innermost container that does not show the target's
+// centre that moves; when the target is inside all of them and still covered
+// (a toolbar band), the innermost one moves. A container that stops moving the
+// target (its end) is given up on for the next one out.
 func (p *Player) revealFrame(st *Step, in *ui.Input) bool {
 	i := p.find(st.role, st.name, st.nth)
 	if i < 0 {
@@ -222,27 +261,88 @@ func (p *Player) revealFrame(st *Step, in *ui.Input) bool {
 		p.rect = p.sem.Nodes[i].Bounds
 		return true
 	}
-	if p.revFrames++; p.revFrames > 200 {
+	if p.revFrames++; p.revFrames > 400 {
 		p.reveal = false
-		p.fail("the %d named %q (#%d) did not come into view in 200 frames", st.role, st.name, st.nth)
+		p.fail("the %d named %q (#%d) did not come into view in 400 frames", st.role, st.name, st.nth)
 		return false
 	}
 	t := &p.sem
-	var b [4]float32
-	for k := range t.Nodes {
-		if t.Nodes[k].Key == p.revKey && scrolls(t.Nodes[k].Role) {
-			b = t.Nodes[k].Bounds
+	r := t.Nodes[i].Bounds
+	tx, ty := (r[0]+r[2])/2, (r[1]+r[3])/2
+	if p.revFrames > 1 && [2]float32{tx, ty} == p.revPos {
+		if p.revStill++; p.revStill >= 6 {
+			if p.revLast != 0 {
+				p.revDone = append(p.revDone, p.revLast)
+			}
+			p.revLast, p.revStill = 0, 0
+		}
+	} else {
+		p.revStill = 0
+	}
+	p.revPos = [2]float32{tx, ty}
+	var buf [8]int
+	anc := p.scrollAncestors(buf[:0], i)
+	done := func(k int) bool {
+		for _, d := range p.revDone {
+			if d == t.Nodes[anc[k]].Key {
+				return true
+			}
+		}
+		return false
+	}
+	// The innermost container that does not show the target's centre moves (the
+	// innermost of all, when it is inside them all and covered), if the wheel
+	// can reach it (a list below the fold of its form cannot: the form moves
+	// first); else the next one out. A container at its end is passed over.
+	from := -1
+	for k := range anc {
+		if done(k) {
+			continue
+		}
+		if b := t.Nodes[anc[k]].Bounds; tx < b[0] || tx >= b[2] || ty < b[1] || ty >= b[3] {
+			from = k
+			break
+		} else if from < 0 {
+			from = k
 		}
 	}
-	// Toward the start, unless the target is below the middle of the area: past
-	// its end, or covered by something at the bottom (it is scrolled out from
-	// under a band at the top by moving the content down).
-	dy := float32(60)
-	if ty := (t.Nodes[i].Bounds[1] + t.Nodes[i].Bounds[3]) / 2; ty >= (b[1]+b[3])/2 {
-		dy = -60
+	inner := p.revRects[:0:8]
+	for k := range anc {
+		if from < 0 || k >= from {
+			break
+		}
+		inner = append(inner, t.Nodes[anc[k]].Bounds)
 	}
-	p.goTo(in, (b[0]+b[2])/2, (b[1]+b[3])/2)
-	in.AddScroll(0, dy, true)
+	for k := max(from, 0); from >= 0 && k < len(anc); k++ {
+		n := &t.Nodes[anc[k]]
+		b := n.Bounds
+		if done(k) {
+			inner = append(inner, b)
+			continue
+		}
+		outer := p.revRects[8:8]
+		for _, o := range anc[k+1:] {
+			outer = append(outer, t.Nodes[o].Bounds)
+		}
+		x, y, ok := p.wheelPoint(b, n.Key, inner, outer)
+		if !ok {
+			inner = append(inner, b)
+			continue
+		}
+		// Toward the start, unless the target is below the middle of the area:
+		// past its end, or covered by something at the bottom (it is scrolled
+		// out from under a band at the top by moving the content down).
+		dy := float32(60)
+		if ty >= (b[1]+b[3])/2 {
+			dy = -60
+		}
+		p.goTo(in, x, y)
+		in.AddScroll(0, dy, true)
+		p.revLast = n.Key
+		return false
+	}
+	p.reveal = false
+	p.fail("the node with role %d named %q (#%d) is out of view or covered, and the wheel reaches none of the containers around it", st.role, st.name, st.nth)
 	return false
 }
 
@@ -277,8 +377,9 @@ func (p *Player) resolve(st *Step) {
 			p.fail("no node with role %d named %q (#%d) in the semantic tree", st.role, st.name, st.nth)
 		case !p.visible(i, st):
 			p.ok = false
-			if a := p.scrollAncestor(i); a >= 0 {
-				p.reveal, p.revKey, p.revFrames = true, p.sem.Nodes[a].Key, 0
+			var buf [8]int
+			if len(p.scrollAncestors(buf[:0], i)) > 0 {
+				p.reveal, p.revLast, p.revDone, p.revStill, p.revFrames = true, 0, p.revDone[:0], 0, 0
 			} else {
 				p.fail("the node with role %d named %q (#%d) is outside the window or covered by another box, and no scroll area around it can bring it clear", st.role, st.name, st.nth)
 			}
