@@ -900,6 +900,12 @@ func SetDockMenu(spec *MenuSpec, idx int, state MenuState) {
 // retargetDock points the command items of a Dock menu (and its submenus) at
 // the app delegate, so their commands are the app's, not a window's.
 func retargetDock(m objc.ID, depth int) {
+	retargetMenu(m, appObj.delegate, selDockCommand, depth)
+}
+
+// retargetMenu points the command items of menu m (and its submenus) at
+// target's action.
+func retargetMenu(m, target objc.ID, action objc.SEL, depth int) {
 	if depth > maxMenuDepth {
 		return
 	}
@@ -907,12 +913,12 @@ func retargetDock(m objc.ID, depth int) {
 	for i := 0; i < n; i++ {
 		it := objc.Send1(m, selDockItemAt, uintptr(i))
 		if objc.SendBool(it, selHasSubmenu) {
-			retargetDock(objc.Send(it, selSubmenu), depth+1)
+			retargetMenu(objc.Send(it, selSubmenu), target, action, depth+1)
 			continue
 		}
 		if objc.SEL(objc.Send(it, selDockAction)) == selGnuiCommand {
-			objc.Send1(it, selDockSetTarget, uintptr(appObj.delegate))
-			objc.Send1(it, selDockSetAction, uintptr(selDockCommand))
+			objc.Send1(it, selDockSetTarget, uintptr(target))
+			objc.Send1(it, selDockSetAction, uintptr(action))
 		}
 	}
 }
