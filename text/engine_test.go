@@ -114,7 +114,7 @@ func glyphPixels(t *testing.T, s *goSystem, e GlyphEntry) []byte {
 	p := s.atlas.pages[e.Page]
 	var out []byte
 	for r := 0; r < int(e.H); r++ {
-		o := ((int(e.Y)+r)*PageSize + int(e.X)) * p.bpp
+		o := ((int(e.Y)+r)*p.pack.w + int(e.X)) * p.bpp
 		out = append(out, p.pix[o:o+int(e.W)*p.bpp]...)
 	}
 	return out
@@ -339,7 +339,7 @@ func TestEngineRasterA(t *testing.T) {
 	}
 	p := s.atlas.pages[e.Page]
 	for x := int(e.X) - 1; x <= int(e.X)+int(e.W); x++ {
-		if p.pix[(int(e.Y)-1)*PageSize+x] != 0 || p.pix[(int(e.Y)+int(e.H))*PageSize+x] != 0 {
+		if p.pix[(int(e.Y)-1)*p.pack.w+x] != 0 || p.pix[(int(e.Y)+int(e.H))*p.pack.w+x] != 0 {
 			t.Fatal("atlas padding row is not empty")
 		}
 	}

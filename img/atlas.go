@@ -23,6 +23,7 @@ type shelf struct {
 
 type page struct {
 	tex    gpu.TextureID
+	dim    int32 // actual texture size; later pages do not relocate this one's UVs
 	shelf  [maxShelf]shelf
 	n      int   // shelves in use (shelf[:n])
 	top    int32 // first row above the shelves
@@ -44,13 +45,16 @@ func heightClass(h int32) int32 {
 // alloc finds room for a w×h region; it returns the region's origin and
 // shelf, or false.
 func (p *page) alloc(w, h int32) (x, y int32, sh int, ok bool) {
+	if w <= 0 || h <= 0 || w > p.dim || h > p.dim {
+		return 0, 0, 0, false
+	}
 	cols := int((w + colW - 1) / colW)
 	hc := heightClass(h)
 	reuse := -1
 	for i := 0; i < p.n; i++ {
 		s := &p.shelf[i]
 		if s.h == hc {
-			if c := s.find(cols); c >= 0 {
+			if c := s.find(cols, int(p.dim/colW)); c >= 0 {
 				s.mark(c, cols, true)
 				p.images++
 				return int32(c * colW), s.y, i, true
@@ -59,7 +63,7 @@ func (p *page) alloc(w, h int32) (x, y int32, sh int, ok bool) {
 			reuse = i // an empty shelf a little taller than needed
 		}
 	}
-	if reuse < 0 && p.top+hc <= pageSize && p.n < maxShelf {
+	if reuse < 0 && p.top+hc <= p.dim && p.n < maxShelf {
 		reuse = p.n
 		p.shelf[p.n] = shelf{y: p.top, h: hc}
 		p.n++
@@ -95,9 +99,9 @@ func (s *shelf) empty() bool {
 }
 
 // find returns the first column of a run of n free columns, or -1.
-func (s *shelf) find(n int) int {
+func (s *shelf) find(n, columns int) int {
 	run := 0
-	for c := 0; c < pageCols; c++ {
+	for c := 0; c < columns; c++ {
 		if s.used[c/64]&(1<<uint(c%64)) != 0 {
 			run = 0
 			continue

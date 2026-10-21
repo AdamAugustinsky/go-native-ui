@@ -337,10 +337,11 @@ type Context struct {
 
 	dbg *debugState // the recording of EnableDebug (debug.go); nil off
 
-	up      Uploader
-	pageTex []gpu.TextureID
-	shared  *SharedAtlas // the page textures shared with other contexts (ShareAtlas), nil: pageTex
-	texOK   []bool
+	up           Uploader
+	pageTex      []gpu.TextureID
+	pageUploaded []bool       // first upload is immediate; subsequent changes are staged
+	shared       *SharedAtlas // the page textures shared with other contexts (ShareAtlas), nil: pageTex
+	texOK        []bool
 
 	widgetUp Uploader // what Uploader gives the widgets, nil: up (SetWidgetUploader)
 }

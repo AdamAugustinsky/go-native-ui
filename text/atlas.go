@@ -70,7 +70,7 @@ const glyphPad = 1 // transparent pixels around every glyph
 
 // atlas owns the pages and the glyph cache that points into them.
 //
-// When no page of the needed kind has room and the page cap is reached the
+// When no page of the needed kind has room and its byte budget is reached the
 // whole atlas is reset: every page is cleared, the glyph cache emptied and
 // the generation bumped. Previously returned GlyphEntries are then stale and
 // the caller (the renderer) re-looks-up its glyphs and re-uploads the pages
@@ -86,7 +86,7 @@ type atlas struct {
 
 func newAtlas() *atlas { return &atlas{maxPer: maxPagesPerKind, pageDim: PageSize} }
 
-func (a *atlas) newPage(color bool) *page {
+func (a *atlas) newPage(color bool, dim int) *page {
 	bpp := 1
 	if color {
 		bpp = 4
@@ -95,17 +95,17 @@ func (a *atlas) newPage(color bool) *page {
 	// contents, and the transparent padding between glyphs must reach them.
 	return &page{
 		color: color, bpp: bpp,
-		pix:   make([]byte, a.pageDim*a.pageDim*bpp),
-		pack:  packer{w: a.pageDim, h: a.pageDim, shelves: make([]shelf, 0, 64)}, // 64: a page fills up before a growth
-		dirty: true, dx1: a.pageDim, dy1: a.pageDim,
+		pix:   make([]byte, dim*dim*bpp),
+		pack:  packer{w: dim, h: dim, shelves: make([]shelf, 0, 64)},
+		dirty: true, dx1: dim, dy1: dim,
 	}
 }
 
-func (a *atlas) countKind(color bool) int {
+func (a *atlas) pixelsKind(color bool) int {
 	n := 0
 	for _, p := range a.pages {
 		if p.color == color {
-			n++
+			n += p.pack.w * p.pack.h
 		}
 	}
 	return n
@@ -119,7 +119,7 @@ func (a *atlas) reset() {
 		// Upload the cleared page whole: old glyph pixels in the GPU texture
 		// would otherwise show through the new glyphs' padding.
 		p.dirty = true
-		p.dx0, p.dy0, p.dx1, p.dy1 = 0, 0, a.pageDim, a.pageDim
+		p.dx0, p.dy0, p.dx1, p.dy1 = 0, 0, p.pack.w, p.pack.h
 		p.usedPixels = 0
 	}
 	a.glyphs.clear()
@@ -145,8 +145,23 @@ func (a *atlas) alloc(color bool, w, h int) (pg, x, y int, ok bool) {
 				return i, px + glyphPad, py + glyphPad, true
 			}
 		}
-		if a.countKind(color) < a.maxPer {
-			a.pages = append(a.pages, a.newPage(color))
+		used := a.pixelsKind(color)
+		left := a.maxPer*a.pageDim*a.pageDim - used
+		dim := a.pageDim
+		// Start colour small, but leave room for a maximum-sized glyph.
+		// Later pages are large; the tail uses smaller size classes to use
+		// the original byte budget in full, without relocating live glyphs.
+		if color && used == 0 && a.maxPer > 1 {
+			dim = min(256, a.pageDim)
+			for dim < pw || dim < ph {
+				dim = min(dim*2, a.pageDim)
+			}
+		}
+		for dim > 0 && dim*dim > left {
+			dim /= 2
+		}
+		if dim >= pw && dim >= ph && dim > 0 {
+			a.pages = append(a.pages, a.newPage(color, dim))
 			p := a.pages[len(a.pages)-1]
 			if px, py, ok := p.pack.alloc(pw, ph); ok {
 				p.usedPixels += pw * ph
@@ -164,7 +179,7 @@ func (a *atlas) write(pg, x, y, w, h int, src []byte, stride int) {
 	p := a.pages[pg]
 	row := w * p.bpp
 	for r := 0; r < h; r++ {
-		d := ((y+r)*a.pageDim + x) * p.bpp
+		d := ((y+r)*p.pack.w + x) * p.bpp
 		copy(p.pix[d:d+row], src[r*stride:r*stride+row])
 	}
 	if !p.dirty {
@@ -180,7 +195,8 @@ func (a *atlas) pageInfo(i int) (w, h int, color bool) {
 	if i < 0 || i >= len(a.pages) {
 		return 0, 0, false
 	}
-	return a.pageDim, a.pageDim, a.pages[i].color
+	p := a.pages[i]
+	return p.pack.w, p.pack.h, p.color
 }
 
 // dirtyRegion returns the changed region of page i. pixels starts at the
@@ -191,7 +207,7 @@ func (a *atlas) dirtyRegion(i int) (x, y, w, h int, pixels []byte, stride int, o
 		return
 	}
 	p := a.pages[i]
-	stride = a.pageDim * p.bpp
+	stride = p.pack.w * p.bpp
 	x, y, w, h = p.dx0, p.dy0, p.dx1-p.dx0, p.dy1-p.dy0
 	start := y*stride + x*p.bpp
 	end := (y+h-1)*stride + (x+w)*p.bpp

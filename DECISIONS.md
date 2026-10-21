@@ -237,6 +237,15 @@ Deferred:
 
 Shaped-run and glyph caches are shared above the backend (ARCHITECTURE §7).
 
+**Atlas sizing refinement (2026-10-21):** `text.PageSize` is the maximum
+page dimension, not every page's dimension. Colour pages start at 256²
+(larger glyphs select a larger size class); later pages use up to 1024².
+Each kind retains its original byte budget: four full-size pages' pixels.
+`PageInfo` supplies real dimensions, `Dirty` supplies the real stride, and
+glyph UVs remain texel coordinates. Pages never resize or relocate live
+glyphs. Grayscale pages remain 1024²; reducing them would introduce texture
+switches in common text-heavy scenes and is not part of this colour-page fix.
+
 **Evidence (M:6, plus the Gio/go-text research report):**
 
 | Criterion | CoreText (measured) | DirectWrite | FreeType+HarfBuzz+fontconfig | go-text + Go raster (measured) |

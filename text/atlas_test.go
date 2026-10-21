@@ -1,10 +1,58 @@
 package text
 
 import (
+	"bytes"
 	"fmt"
 	"math/rand"
 	"testing"
 )
+
+func TestColorAtlasDimensionsAndBudget(t *testing.T) {
+	a := newAtlas()
+	pg, x, y, ok := a.alloc(true, 30, 30)
+	w, h, color := a.pageInfo(pg)
+	if !ok || !color || w != 256 || h != 256 {
+		t.Fatalf("first colour page: %dx%d color=%v ok=%v", w, h, color, ok)
+	}
+	ink := bytes.Repeat([]byte{127}, 30*30*4)
+	a.clearDirty(pg)
+	a.write(pg, x, y, 30, 30, ink, 30*4)
+	_, _, _, _, pix, stride, _ := a.dirtyRegion(pg)
+	if stride != w*4 {
+		t.Fatalf("stride=%d, width=%d", stride, w)
+	}
+	for row := 0; row < 30; row++ {
+		if !bytes.Equal(pix[row*stride:row*stride+120], ink[:120]) {
+			t.Fatal("colour row corrupted")
+		}
+	}
+	// Oversized emoji gets a new large page, without moving the first glyph.
+	big, _, _, ok := a.alloc(true, PageSize-2, PageSize-2)
+	if bw, bh, _ := a.pageInfo(big); !ok || big == pg || bw != PageSize || bh != PageSize || a.gen != 0 {
+		t.Fatalf("large glyph: page=%d %dx%d gen=%d ok=%v", big, bw, bh, a.gen, ok)
+	}
+	// Fill all remaining space with small glyphs: capacity is byte-bounded,
+	// not a cap of four small pages. The next allocation must reset.
+	for n := 0; a.gen == 0; n++ {
+		if _, _, _, ok := a.alloc(true, 126, 126); !ok || n > 300 {
+			t.Fatal("overflow did not recover")
+		}
+	}
+	var total int
+	for i, p := range a.pages {
+		total += len(p.pix)
+		dx, dy, dw, dh, data, stride, dirty := a.dirtyRegion(i)
+		if !dirty || dx != 0 || dy != 0 || dw != p.pack.w || dh != p.pack.h || stride != dw*4 || len(data) != len(p.pix) || !bytes.Equal(data, make([]byte, len(data))) {
+			t.Fatalf("reset page %d not cleared/dirtied at its real dimensions", i)
+		}
+	}
+	if total != maxPagesPerKind*PageSize*PageSize*4 {
+		t.Fatalf("colour capacity=%d, want full byte budget", total)
+	}
+	if _, _, _, ok := a.alloc(true, PageSize-2, PageSize-2); !ok {
+		t.Fatal("huge glyph failed after reset")
+	}
+}
 
 type rect struct{ x, y, w, h int }
 

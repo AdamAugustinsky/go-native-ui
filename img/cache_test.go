@@ -7,6 +7,67 @@ import (
 	"time"
 )
 
+func TestAtlasSmallFirstPageAndStableRegions(t *testing.T) {
+	c, g := newTestCache(t, Options{})
+	keys, data := thumbs(t, 120, 48, 48)
+	hs := make([]Handle, len(keys))
+	view := func(n int) {
+		for i := 0; i < n; i++ {
+			hs[i], _ = c.Request(keys[i], Bytes(data[i]))
+		}
+	}
+	settle(t, c, func() { view(10) })
+	if n, used := g.live(); n != 1 || used != 512*512*4 || c.Stats().GPUBytes != used {
+		t.Fatalf("ten icons: textures=%d bytes=%d stats=%+v", n, used, c.Stats())
+	}
+	tex, uv, _ := c.Use(hs[0])
+	settle(t, c, func() { view(len(hs)) })
+	if n, used := g.live(); n != 2 || used != (512*512+1024*1024)*4 || c.Stats().GPUBytes != used {
+		t.Fatalf("growth: textures=%d bytes=%d stats=%+v", n, used, c.Stats())
+	}
+	if gotTex, gotUV, _ := c.Use(hs[0]); gotTex != tex || gotUV != uv {
+		t.Fatalf("live region relocated: %v %v -> %v %v", tex, uv, gotTex, gotUV)
+	}
+	for _, h := range hs {
+		c.evictGPU(h.index())
+	}
+	if n, used := g.live(); n != 0 || used != 0 || c.Stats().GPUBytes != 0 {
+		t.Fatalf("evicted pages: textures=%d bytes=%d stats=%+v", n, used, c.Stats())
+	}
+}
+
+func TestSmallAtlasPageBounds(t *testing.T) {
+	p := page{dim: 512}
+	for n := 0; n < 100; n++ {
+		x, y, _, ok := p.alloc(250, 250)
+		if !ok {
+			if n != 4 {
+				t.Fatalf("packed %d regions, want 4", n)
+			}
+			return
+		}
+		if x < 0 || y < 0 || x+250 > 512 || y+250 > 512 {
+			t.Fatalf("region outside small texture: %d,%d", x, y)
+		}
+	}
+	t.Fatal("page never filled")
+}
+
+func TestSmallFirstPagePreservesBudgetCapacity(t *testing.T) {
+	const budget = 16 << 20
+	c, g := newTestCache(t, Options{GPUBytes: budget})
+	// Four full-size pages fit 672 of these padded thumbnails. Starting
+	// small must not strand the budget's final 3 MiB and churn this set.
+	for n := 0; n < 600; n++ {
+		if _, _, _, _, ok := c.atlasAlloc(-1, 66, 66); !ok {
+			t.Fatalf("thumbnail %d did not fit", n)
+		}
+	}
+	if _, used := g.live(); used > budget || c.Stats().OverBudget != 0 {
+		t.Fatalf("600 thumbnails: %d bytes, stats=%+v", used, c.Stats())
+	}
+}
+
 // thumbs makes n distinct w×h PNGs (inline sources) and their keys at that
 // size.
 func thumbs(t testing.TB, n, w, h int) ([]Key, [][]byte) {
@@ -172,8 +233,8 @@ func TestUploadBudgetPerFrame(t *testing.T) {
 // TestAtlasReuse: atlas regions freed by evictions are reused and an empty
 // page is freed.
 func TestAtlasReuse(t *testing.T) {
-	c, g := newTestCache(t, Options{GPUBytes: pageBytes, CPUBytes: 1})
-	keys, data := thumbs(t, 300, 100, 100) // 102×102 regions: 90 to a page
+	c, g := newTestCache(t, Options{GPUBytes: 512 * 512 * 4, CPUBytes: 1})
+	keys, data := thumbs(t, 300, 100, 100) // one small page: repeatedly reuse its regions
 	for i := range keys {
 		for {
 			c.Poll()
