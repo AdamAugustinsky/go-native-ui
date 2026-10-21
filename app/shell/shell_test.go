@@ -20,6 +20,48 @@ func (r *recorder) openPath(p string) error { r.opened = append(r.opened, p); re
 func (r *recorder) reveal(p []string) error { r.revealed = append(r.revealed, p); return nil }
 func (r *recorder) trash(p string) error    { r.trashed = append(r.trashed, p); return nil }
 
+// In a test binary the system in use refuses to launch; with GNUI_ALLOW_OPEN=1
+// the calls reach the system behind the guard (a recorder here, so nothing
+// opens either way).
+func TestTestBinaryLaunchesNothing(t *testing.T) {
+	if _, ok := sys.(guarded); !ok {
+		t.Fatalf("the default system is %T, not guarded", sys)
+	}
+	dir := t.TempDir()
+	r := &recorder{}
+	old := sys
+	sys = guarded{r}
+	t.Cleanup(func() { sys = old })
+
+	t.Setenv("GNUI_ALLOW_OPEN", "")
+	if err := OpenURL("https://example.com"); !errors.Is(err, ErrTestBinary) {
+		t.Errorf("OpenURL = %v, want ErrTestBinary", err)
+	}
+	if err := OpenPath(dir); !errors.Is(err, ErrTestBinary) {
+		t.Errorf("OpenPath = %v, want ErrTestBinary", err)
+	}
+	if err := Reveal([]string{dir}); !errors.Is(err, ErrTestBinary) {
+		t.Errorf("Reveal = %v, want ErrTestBinary", err)
+	}
+	if len(r.urls)+len(r.opened)+len(r.revealed) != 0 {
+		t.Fatalf("the guard let calls through: %+v", r)
+	}
+
+	t.Setenv("GNUI_ALLOW_OPEN", "1")
+	if err := OpenURL("https://example.com"); err != nil {
+		t.Errorf("OpenURL with GNUI_ALLOW_OPEN=1 = %v", err)
+	}
+	if err := OpenPath(dir); err != nil {
+		t.Errorf("OpenPath with GNUI_ALLOW_OPEN=1 = %v", err)
+	}
+	if err := Reveal([]string{dir}); err != nil {
+		t.Errorf("Reveal with GNUI_ALLOW_OPEN=1 = %v", err)
+	}
+	if len(r.urls) != 1 || len(r.opened) != 1 || len(r.revealed) != 1 {
+		t.Errorf("with GNUI_ALLOW_OPEN=1 the calls did not reach the system: %+v", r)
+	}
+}
+
 func fake(t *testing.T) *recorder {
 	t.Helper()
 	r := &recorder{}
