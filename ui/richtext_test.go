@@ -568,3 +568,34 @@ func TestRichTextAllocatesNothingWhenWarm(t *testing.T) {
 		t.Fatalf("%v allocations per frame with rich text", n)
 	}
 }
+
+// LayoutText is the layout the box draws: the same lines, the last line's
+// width included, for a wrapped string of mixed styles, and a cache hit
+// allocates nothing.
+func TestLayoutTextIsTheLayoutTheBoxDraws(t *testing.T) {
+	body := "hello brave world, code here and a link to more words after it"
+	spans := []Span{spanOf(body, "brave", 1, SpanLink, 1), spanOf(body, "code here", 2, 0, 0), spanOf(body, "more", 3, 0, 0)}
+	for _, w := range []float32{90, 150, 233, 400} {
+		r := newRich(t, body, spans, RichOpts{MaxW: w})
+		r.step()
+		drawn, _, _, cw, ok := r.c.RichLayout(r.sig.ID)
+		if !ok || len(drawn.Lines) < 2 && w < 400 {
+			t.Fatalf("w=%v: not laid out as wrapped text (%d lines)", w, len(drawn.Lines))
+		}
+		got := r.c.LayoutText([]byte(body), spans, r.st, cw, r.o)
+		if len(got.Lines) != len(drawn.Lines) || got.Width != drawn.Width || got.Height != drawn.Height {
+			t.Fatalf("w=%v: %d lines %vx%v, drawn %d lines %vx%v", w, len(got.Lines), got.Width, got.Height, len(drawn.Lines), drawn.Width, drawn.Height)
+		}
+		for i := range got.Lines {
+			if got.Lines[i].Width != drawn.Lines[i].Width || got.Lines[i].Start != drawn.Lines[i].Start || got.Lines[i].End != drawn.Lines[i].End {
+				t.Errorf("w=%v line %d: %+v, drawn %+v", w, i, got.Lines[i], drawn.Lines[i])
+			}
+		}
+	}
+	r := newRich(t, body, spans, RichOpts{MaxW: 150})
+	r.step()
+	b := []byte(body)
+	if n := testing.AllocsPerRun(50, func() { r.c.LayoutText(b, spans, r.st, 150, r.o) }); n != 0 {
+		t.Errorf("%v allocations per LayoutText", n)
+	}
+}

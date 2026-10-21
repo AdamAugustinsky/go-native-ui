@@ -182,7 +182,8 @@ type Context struct {
 	lay        Layouter
 	wrapRuns   uint64
 	oneFont    [1]text.FontKey
-	para       text.Para // the input of the layout in progress
+	para       text.Para                   // the input of the layout in progress
+	layFonts   [MaxRichStyles]text.FontKey // LayoutText's fonts
 	rects      [][4]float32
 	rich       []richRec
 	richSpans  []Span

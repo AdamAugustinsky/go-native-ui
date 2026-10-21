@@ -453,3 +453,63 @@ func TestFormRowDetailWraps(t *testing.T) {
 		t.Errorf("rows with a wrapping detail allocate %v per frame", n)
 	}
 }
+
+// A grouped row's label wraps to the room the controls leave instead of
+// fading out, and the row grows with its lines; a short label's row stays a
+// row's 40 pt. The layout audit finds nothing overflowing at any width, and
+// building the rows allocates nothing.
+func TestFormRowLabelWraps(t *testing.T) {
+	const long = "Wiederholte Benachrichtigungen begrenzen, damit sie nicht stören"
+	var on bool
+	var width float32 = 440
+	var form rexui.Form
+	var rows [2]ui.ID
+	var labels [2]ui.ID
+	g := newRig(t, theme.Light, nil, func(g *rig) {
+		k := g.k
+		k.NextPad(14)
+		k.Column("col")
+		k.NextWidth(k.Fixed(width))
+		form = rexui.BeginForm(k, "form", rexui.FormOpts{})
+		form.Section(k, "")
+		rows[0] = form.Row(k, "Short", rexui.RowOpts{})
+		labels[0] = form.Label()
+		rexui.Switch(k, "", &on, rexui.SwitchOpts{})
+		form.EndRow(k)
+		rows[1] = form.Row(k, long, rexui.RowOpts{})
+		labels[1] = form.Label()
+		rexui.Switch(k, "", &on, rexui.SwitchOpts{})
+		form.EndRow(k)
+		rexui.EndForm(k, &form)
+		k.EndColumn()
+	})
+	g.h = 2000 // the narrowest column is taller than the window
+	for _, w := range []float32{440, 300, 200, 120} {
+		width = w
+		g.settle()
+		short, wrapped := g.c.Rect(rows[0]), g.c.Rect(rows[1])
+		if h := (short[3] - short[1]) / g.scale; h != 40 {
+			t.Errorf("%v pt wide: the short label's row is %v pt high, want 40", w, h)
+		}
+		lab, sw := g.c.Rect(labels[1]), g.node(ui.RoleSwitch, long)
+		if lab[2] > sw.Bounds[0]+0.01 {
+			t.Errorf("%v pt wide: the label reaches %v, over the switch at %v", w, lab[2], sw.Bounds[0])
+		}
+		if lab[1] < wrapped[1]-0.01 || lab[3] > wrapped[3]+0.01 {
+			t.Errorf("%v pt wide: the label %v is outside its row %v", w, lab, wrapped)
+		}
+		for _, f := range g.c.Audit(nil) {
+			if f.Check == ui.AuditOverflow {
+				t.Errorf("%v pt wide: %v overflows %v by %v px", w, f.Rect, f.OtherRect, f.Delta)
+			}
+		}
+		if w == 200 && wrapped[3]-wrapped[1] <= short[3]-short[1] {
+			t.Errorf("at %v pt the long label did not wrap: the row is %v px, the short one's %v", w, wrapped[3]-wrapped[1], short[3]-short[1])
+		}
+	}
+	width = 200
+	g.settle()
+	if n := testing.AllocsPerRun(50, g.frame); n != 0 {
+		t.Errorf("rows with a wrapping label allocate %v per frame", n)
+	}
+}

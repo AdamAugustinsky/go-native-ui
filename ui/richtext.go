@@ -396,6 +396,51 @@ func (c *Context) richSpanAt(pv *text.ParaView, rp richPrev, x, y float32) int {
 	return pv.SpanAt(x-alignDX(pv, i, rp.w, rp.align), y, rp.w)
 }
 
+// LayoutText lays body out as RichText lays out a box of content width width
+// with the same spans, styles and options (Dir, MaxLines, Ellipsis, and
+// EmojiLarge with JumboFont), and returns the paragraph the box will draw:
+// the lines (ParaView.Lines, the last line's Width beside it), the widest
+// line's ParaView.Width and ParaView.Height. It is the layouter's own cached
+// layout, the one RichText hits, so measuring text before it is built costs a
+// hash and allocates nothing once the paragraph is cached; build the box with
+// the same body and a content width of width (its width less its padding) and
+// they agree. A width below 1 breaks at newlines only. A nil st is style 0
+// in the font the next box would take (NextFont, PushFont).
+//
+// The view's slices alias the layouter's cache: use it before the next layout
+// and do not keep it. Not part of the frame's boxes; callable at any time
+// between Begin and End.
+func (c *Context) LayoutText(body []byte, spans []Span, st *RichStyles, width float32, o RichOpts) text.ParaView {
+	n := 0
+	if st != nil {
+		n = min(max(st.N, 0), MaxRichStyles)
+	}
+	if n == 0 {
+		c.layFonts[0], n = c.sFont.peek(), 1
+	} else {
+		for i := 0; i < n; i++ {
+			c.layFonts[i] = st.Styles[i].Font
+		}
+	}
+	if o.EmojiLarge {
+		if e := text.EmojiOnly(body); e > 0 && e <= text.MaxJumboEmoji {
+			for i := 0; i < n; i++ {
+				c.layFonts[i] = o.JumboFont
+			}
+		}
+	}
+	if width < 1 {
+		width = 0
+	}
+	c.para = text.Para{
+		Text: body, Spans: spans, Fonts: c.layFonts[:n], Width: width,
+		Dir: o.Dir, MaxLines: max(o.MaxLines, 0), Ellipsis: o.Ellipsis,
+	}
+	pv := c.lay.Paragraph(c.lay.Layout(&c.para))
+	c.para.Text, c.para.Spans = nil, nil
+	return pv
+}
+
 // richPara sets c.para to the layout input of the RichText box b at width w.
 func (c *Context) richPara(b *box, r *richRec, w float32) {
 	c.para = text.Para{
