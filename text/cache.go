@@ -150,7 +150,7 @@ func (c *runCache) insert(font FontKey, b []byte, glyphs []uint16, xs []float32,
 	}
 	h := hashRun(font, b)
 	e := runEnt{
-		hash: h, font: font, ref: true,
+		hash: h, font: font,
 		textOff: uint32(len(c.text)), textLen: uint32(len(b)),
 		off: uint32(len(c.glyph)), n: uint32(len(glyphs)),
 		advance: advance,

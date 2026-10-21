@@ -245,7 +245,9 @@ func TestRunCacheEvictAllWhenAllReferenced(t *testing.T) {
 	c := newRunCache()
 	c.maxRuns = 8
 	for i := 0; i < 8; i++ {
-		insertStr(c, 0, fmt.Sprintf("s%d", i)) // all inserted with ref set
+		s := fmt.Sprintf("s%d", i)
+		insertStr(c, 0, s)
+		checkStr(t, c, 0, s) // a lookup, not insertion, marks the entry reused
 	}
 	insertStr(c, 0, "overflow")
 	if len(c.ents) > 1+c.maxRuns/2 {
