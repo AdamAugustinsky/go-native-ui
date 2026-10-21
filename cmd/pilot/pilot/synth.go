@@ -1,6 +1,7 @@
 package pilot
 
 import (
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -50,6 +51,11 @@ func (s *SynthSource) List(path string, l *fs.Listing) error {
 // FillSynth appends n synthetic entries to l (variant 0) or a changed version of them.
 // Once l's buffers have grown it allocates nothing.
 func FillSynth(l *fs.Listing, n, variant int) {
+	extra := max(n, 0)
+	if variant > 0 {
+		extra += 5 // the variant's new files, in addition to surviving entries
+	}
+	l.Entries = slices.Grow(l.Entries, extra)
 	base := time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC).UnixNano()
 	skip := -1
 	if variant > 0 {

@@ -14,6 +14,9 @@
 //	pilot -bench -bench-dir DIR the same session on a real directory through the real file system service
 //	pilot -bench -gate          also exit with status 3 unless 0 allocations, main-thread CPU within budget
 //	                            and frames were paced
+//	pilot -memory 3s -rows N    idle synthetic application view, without benchmark prewarming; report
+//	                            post-GC Go heap after 3s, keeping the window open for OS footprint tools
+//	pilot -memory 3s -bench     the same idle view with the benchmark fixture's prewarm, labelled separately
 //	pilot -o out.png            render the offscreen scene (fixed names, sizes and UTC times; a selection
 //	                            and a filter) at 2400×1520 px (-w -h -scale) with traffic lights and corners
 //	pilot -o out.png LEFT [RIGHT]
@@ -80,7 +83,8 @@ func main() {
 	scale := flag.Float64("scale", 2, "with -o: pixels per point")
 	exitFirst := flag.Bool("exit-first", false, "print the startup timeline as JSON and exit once the first frame is on glass")
 	bench := flag.Bool("bench", false, "scripted session; print allocation, CPU, pacing and latency as JSON")
-	rows := flag.Int("rows", defaultRows, "with -bench: entries of the synthetic directory in the left pane (up to 1M and beyond)")
+	memory := flag.Duration("memory", 0, "idle synthetic view: report post-GC Go heap after this delay; add -bench for the prewarmed fixture (no script)")
+	rows := flag.Int("rows", defaultRows, "with -bench or -memory: entries of the synthetic directory in the left pane (up to 1M and beyond)")
 	benchDir := flag.String("bench-dir", "", "with -bench: run on this real directory (both panes, real service, watch on) instead of synthetic ones")
 	gate := flag.Bool("gate", false, "with -bench: exit with status 3 unless there were 0 allocations, main-thread CPU within budget and frames were paced")
 	allowUnpaced := flag.Bool("allow-unpaced", false, "with -gate: accept unpaced frames (no frame events: display asleep)")
@@ -97,6 +101,10 @@ func main() {
 	verbose := flag.Bool("v", false, "print the startup timeline and listing times to stderr; in a window or bench also a state line every second while frames stop coming")
 	budgetScale := flag.Float64("budget-scale", 1, "with -gate: multiply the time budgets by this (3: the coarse, catastrophic check of a shared CI runner)")
 	flag.Parse()
+	if *memory < 0 || *memory > 0 && (*gate || *out != "" || *benchDir != "" || *exitFirst || *resizeTest || flag.NArg() != 0) {
+		fmt.Fprintln(os.Stderr, "pilot: -memory requires a positive delay and cannot combine with -gate, -o, -bench-dir, -exit-first, -live-resize-test or directory arguments")
+		os.Exit(2)
+	}
 	*maxCPU *= *budgetScale
 
 	m := *mode
@@ -120,6 +128,8 @@ func main() {
 		}
 	}
 	switch {
+	case *memory > 0:
+		err = runMemory(*rows, *bench, *memory)
 	case *out != "" && flag.NArg() > 0:
 		err = renderDirsPNG(*out, *w, *h, float32(*scale), flag.Args(), look)
 	case *out != "":
