@@ -72,6 +72,9 @@ var (
 	selSetVolume    = objc.Sel("setVolume:")
 	selAtEnd        = objc.Sel("setActionAtItemEnd:")
 	selNoStall      = objc.Sel("setAutomaticallyWaitsToMinimizeStalling:")
+	selSetRate      = objc.Sel("setRate:")
+	selDefaultRate  = objc.Sel("setDefaultRate:")
+	selPitchAlgo    = objc.Sel("setAudioTimePitchAlgorithm:")
 	selSeek         = objc.Sel("seekToTime:toleranceBefore:toleranceAfter:")
 	selCurrentTime  = objc.Sel("currentTime")
 	selDuration     = objc.Sel("duration")
@@ -104,7 +107,7 @@ var vav struct {
 	obsCls                                                     objc.ID
 	obsDef                                                     *objc.ClassDef
 
-	mediaVideo, endNote        uintptr // NSStrings
+	mediaVideo, endNote, pitch uintptr // NSStrings (pitch: AVAudioTimePitchAlgorithmSpectral)
 	pixFmtKey, metalKey, ioKey uintptr // CFStrings
 	zero                       cmTime  // kCMTimeZero
 	timeMake                   uintptr // CMTimeMakeWithSeconds
@@ -163,6 +166,7 @@ func loadVideoAV() error {
 		}
 		vav.mediaVideo = val(avf, "AVMediaTypeVideo")
 		vav.endNote = val(avf, "AVPlayerItemDidPlayToEndTimeNotification")
+		vav.pitch = val(avf, "AVAudioTimePitchAlgorithmSpectral")
 		vav.pixFmtKey = val(cv, "kCVPixelBufferPixelFormatTypeKey")
 		vav.metalKey = val(cv, "kCVPixelBufferMetalCompatibilityKey")
 		vav.ioKey = val(cv, "kCVPixelBufferIOSurfacePropertiesKey")
@@ -249,6 +253,7 @@ type Video struct {
 	atEnd   bool
 	muted   bool
 	volume  float32
+	rate    float32
 	pullTo  int64         // pull frames until then (platform.Now): a seek's frame while paused
 	seekTo  time.Duration // where the last seek went
 	cur     uintptr       // the current frame's CVPixelBuffer (retained)
@@ -284,7 +289,7 @@ func OpenVideo(path string, o VideoOptions) (*Video, error) {
 	runtime.KeepAlive(b)
 	url := objc.Send1(vav.clsURL, selFileURL, str)
 	objc.Release(objc.ID(str))
-	v := &Video{id: nextID(), slot: slot, volume: o.Volume}
+	v := &Video{id: nextID(), slot: slot, volume: o.Volume, rate: 1}
 	if v.volume <= 0 || v.volume > 1 {
 		v.volume = 1
 	}
@@ -292,6 +297,7 @@ func OpenVideo(path string, o VideoOptions) (*Video, error) {
 	v.loop.Store(o.Loop)
 	v.asset = objc.Retain(objc.Send2(vav.clsAsset, selAssetWithURL, uintptr(url), 0))
 	v.item = objc.Retain(objc.Send1(vav.clsItem, selItemWith, uintptr(v.asset)))
+	objc.Send1(v.item, selPitchAlgo, vav.pitch) // the pitch kept at other rates
 	attrs := objc.Send(vav.clsMDict, selDict)
 	objc.Send2(attrs, selSetObject, uintptr(objc.Send1(vav.clsNumber, selNumberInt, pixFmt420v)), vav.pixFmtKey)
 	objc.Send2(attrs, selSetObject, uintptr(objc.Send1(vav.clsNumber, selNumberBool, 1)), vav.metalKey)
@@ -476,8 +482,9 @@ func cmDuration(t *cmTime) time.Duration {
 }
 
 // Play plays the video from where it is (from its start once it has
-// ended). The next frame that draws it pulls its frames (ask for one if no
-// frame is coming).
+// ended), at its rate (SetRate). Called while it was not playing, it wakes
+// the app's windows (platform.Wake), so that a frame draws it and pulls its
+// frames even when Play came from outside a frame or an event.
 func (v *Video) Play() {
 	if v.closed.Load() {
 		return
@@ -485,7 +492,10 @@ func (v *Video) Play() {
 	if v.atEnd {
 		v.Seek(0)
 	}
-	objc.Send(v.player, selPlay)
+	objc.Send(v.player, selPlay) // at the player's defaultRate, v.rate
+	if !v.playing {
+		platform.Wake()
+	}
 	v.playing, v.pullTo = true, 0 // playing, it pulls anyway
 }
 
@@ -561,12 +571,34 @@ func (v *Video) SetLoop(l bool) {
 // Loop reports whether the video loops.
 func (v *Video) Loop() bool { return v.loop.Load() }
 
+// SetRate sets the playing speed, from 0.5 to 2 (1 is normal; outside the
+// range it is clamped), with the sound's pitch kept. A playing video changes
+// speed at once, and Frame asks for frames at the faster rate; a paused one
+// plays at it from the next Play.
+func (v *Video) SetRate(r float32) {
+	if r != r { // NaN
+		r = 1
+	}
+	v.rate = min(max(r, 0.5), 2)
+	if v.closed.Load() {
+		return
+	}
+	objc.F.Reset().Arg(uintptr(v.player)).Arg(uintptr(selDefaultRate)).ArgF32(v.rate).Call(objc.MsgSend)
+	if v.playing {
+		objc.F.Reset().Arg(uintptr(v.player)).Arg(uintptr(selSetRate)).ArgF32(v.rate).Call(objc.MsgSend)
+	}
+}
+
+// Rate is the playing speed (SetRate); 1 at first.
+func (v *Video) Rate() float32 { return v.rate }
+
 // interval is how long after a frame the next is asked for: the time
-// between the video's frames less lead, so that the display tick it lands
-// on is the one its frame is due at, not the one after (a request at the
-// full interval often misses that tick: 24 of 30 frames drawn, measured).
+// between the video's frames at its rate, less lead, so that the display
+// tick it lands on is the one its frame is due at, not the one after (a
+// request at the full interval often misses that tick: 24 of 30 frames
+// drawn, measured).
 func (v *Video) interval() int64 {
-	return max(int64(1e9/float64(v.frameRate()))-lead, int64(time.Millisecond))
+	return max(int64(1e9/float64(v.frameRate()*v.rate))-lead, int64(time.Millisecond))
 }
 
 // frameRate is the video track's nominal frame rate, or defaultFPS.

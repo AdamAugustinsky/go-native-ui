@@ -5,12 +5,15 @@ package media
 import (
 	"fmt"
 	"os"
+	"runtime"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"gonativeui/app"
 	"gonativeui/gpu"
+	"gonativeui/internal/ffi"
+	"gonativeui/internal/objc"
 	"gonativeui/platform"
 	"gonativeui/theme"
 	"gonativeui/theme/rex"
@@ -117,6 +120,25 @@ func (b *videoWin) tooFew(t *testing.T, l *widgettest.LiveApp, since int64, msg 
 	t.Error(msg)
 }
 
+// playLater makes v play from the main run loop, outside any frame, event
+// or Do (each of which ends by drawing): performSelectorOnMainThread: of a
+// method that calls Play, posted from the test's goroutine. Only Play's own
+// wake can then start the frames.
+func playLater(l *widgettest.LiveApp, v *Video) {
+	var target objc.ID
+	var perform, play objc.SEL
+	l.Do(func(*app.App) {
+		play, perform = objc.Sel("gnuiTestPlay:"), objc.Sel("performSelectorOnMainThread:withObject:waitUntilDone:")
+		d := objc.Define("GnuiTestVideoPlay", objc.Cls("NSObject"), nil)
+		d.Method(play, "v@:@", func(*ffi.CB) { v.Play() })
+		target = objc.Send(objc.Send(d.Register(), objc.Sel("alloc")), objc.Sel("init"))
+	})
+	time.Sleep(300 * time.Millisecond) // the frame Do asked for has come and gone
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	new(ffi.Frame).Arg(uintptr(target)).Arg(uintptr(perform)).Arg(uintptr(play)).Arg(0).ArgBool(false).Call(objc.MsgSend)
+}
+
 // TestVideoInWindow: in a real window, a paused video draws no frame, a
 // playing one draws at its own rate (30 fps here, not the display's), one
 // scrolled out of view draws none; and the pixel-buffer leases come back to
@@ -159,18 +181,19 @@ func TestVideoInWindow(t *testing.T) {
 		}
 	}
 
-	// Playing: frames at the video's 30 fps.
+	// Playing, from a run-loop callback: frames at the video's 30 fps.
 	since := platform.Now()
-	l.Do(func(*app.App) { v.Play() })
+	playLater(l, v)
 	time.Sleep(300 * time.Millisecond)
 	// At most the video's rate, never the display's. The floor holds only on a
 	// real display: CI's virtual one drops display-link ticks (5 a second
-	// seen, with the display link restarted).
+	// seen, with the display link restarted), and there the frames need only
+	// come within a few seconds.
 	n := b.buildsIn(time.Second)
 	t.Logf("playing: %d frames in a second", n)
 	if n > 45 {
 		t.Errorf("playing: %d frames in a second, want about 30", n)
-	} else if n < 12 && os.Getenv("CI") == "" {
+	} else if n < 12 && (os.Getenv("CI") == "" || !b.resumes(5*time.Second)) {
 		b.tooFew(t, l, since, fmt.Sprintf("playing: %d frames in a second, want about 30", n))
 	}
 	if !v.Playing() || v.Position() < 300*time.Millisecond {

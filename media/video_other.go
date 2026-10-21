@@ -67,6 +67,12 @@ func (v *Video) SetLoop(l bool) {}
 // Loop is false here.
 func (v *Video) Loop() bool { return false }
 
+// SetRate does nothing here.
+func (v *Video) SetRate(r float32) {}
+
+// Rate is 1 here.
+func (v *Video) Rate() float32 { return 1 }
+
 // Frame is nothing here.
 func (v *Video) Frame(r *gpu.Renderer, now int64) (tex gpu.TextureID, w, h int, next int64) {
 	return 0, 0, 0, 0

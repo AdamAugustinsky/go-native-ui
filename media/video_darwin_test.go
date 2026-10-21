@@ -9,6 +9,7 @@ import (
 
 	"gonativeui/gpu"
 	"gonativeui/internal/cf"
+	"gonativeui/internal/objc"
 	"gonativeui/platform"
 )
 
@@ -151,9 +152,35 @@ func videoFrames(plain, turned string) (errs []string) {
 		fail("a playing frame: %v allocations", n)
 	}
 
-	// Paused, it holds: the position stays, no frame is asked for.
+	// At 2× it plays twice as fast, its pitch kept, and asks for frames
+	// twice as often; the rate is clamped to 0.5–2.
+	if !objc.SendBool1(objc.Send(v.item, objc.Sel("audioTimePitchAlgorithm")), objc.Sel("isEqualToString:"), vav.pitch) {
+		fail("the item's pitch algorithm is not Spectral")
+	}
+	v.SetRate(2)
+	p0, t0 := v.Position(), time.Now()
+	for time.Since(t0) < 300*time.Millisecond {
+		pump(5 * time.Millisecond)
+		s = frameOf(r, v, 160, 96)
+	}
+	if got, wall := v.Position()-p0, time.Since(t0); got < wall*3/2 || got > wall*5/2 {
+		fail("at 2×: %v played in %v", got, wall)
+	}
+	if s.next <= 0 || s.next > int64(12*time.Millisecond) {
+		fail("at 2×: next frame in %d ns, want about 8.7 ms", s.next)
+	}
+	if v.SetRate(9); v.Rate() != 2 {
+		fail("SetRate(9): rate %v", v.Rate())
+	}
+	if v.SetRate(0.1); v.Rate() != 0.5 {
+		fail("SetRate(0.1): rate %v", v.Rate())
+	}
+
+	// Paused, it holds: the position stays, no frame is asked for, and a
+	// new rate waits for the next Play.
 	v.Pause()
-	p0 := v.Position()
+	v.SetRate(1.5)
+	p0 = v.Position()
 	for t0 := time.Now(); time.Since(t0) < 300*time.Millisecond; {
 		pump(10 * time.Millisecond)
 		s = frameOf(r, v, 160, 96)
@@ -188,6 +215,18 @@ func videoFrames(plain, turned string) (errs []string) {
 			fail("seeking to %v: at %v, next frame in %d ns, left %v", at, v.Position(), s.next, s.at(40, 48))
 		}
 	}
+
+	// Play plays at the rate set while paused.
+	v.Play()
+	p0, t0 = v.Position(), time.Now()
+	for time.Since(t0) < 300*time.Millisecond {
+		pump(5 * time.Millisecond)
+		frameOf(r, v, 160, 96)
+	}
+	if got, wall := v.Position()-p0, time.Since(t0); got < wall*6/5 || got > wall*9/5 {
+		fail("at 1.5× from Play: %v played in %v", got, wall)
+	}
+	v.Pause()
 
 	// The end: a media Ended event with the video's ID, and it stops.
 	ends := func() (n int) { // waiting up to a second for the first

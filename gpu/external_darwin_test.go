@@ -99,6 +99,45 @@ func TestStageYUV(t *testing.T) {
 	near(t, "plain after YUV", m.at(0, 0), [4]int{10, 200, 30, 255}, 1)
 }
 
+// TestStageI420LikeAFrame: an odd-sized I420 image laid out as ZapFast's
+// core hands one out (zf_frame: one buffer, the Y, U and V planes one after
+// the other, each with its own padded stride; U and V have (h+1)/2 rows of
+// (w+1)/2 samples) stages from slices of that buffer and its strides, and
+// the padding, which would draw magenta, is never read.
+func TestStageI420LikeAFrame(t *testing.T) {
+	const w, h = 23, 5
+	stride := [3]int{32, 16, 20}
+	cw, ch := chromaSize(w, h)
+	tight := stripes(YUVI420, BT601Video, w, h)
+	px := make([]byte, stride[0]*h+(stride[1]+stride[2])*ch)
+	for i := range px {
+		px[i] = 0xFF // luma white, chroma at its extremes: magenta if read
+	}
+	uOff, vOff := stride[0]*h, stride[0]*h+stride[1]*ch
+	for y := 0; y < h; y++ {
+		copy(px[y*stride[0]:], tight.Y[y*w:(y+1)*w])
+	}
+	for y := 0; y < ch; y++ {
+		copy(px[uOff+y*stride[1]:], tight.U[y*cw:(y+1)*cw])
+		copy(px[vOff+y*stride[2]:], tight.V[y*cw:(y+1)*cw])
+	}
+	r := newTestRenderer(t)
+	tex, err := r.NewYUVTexture(YUVI420, w, h, BT601Video)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.StageYUV(tex, &YUVImage{
+		Y: px[:uOff], U: px[uOff:vOff], V: px[vOff:],
+		YStride: stride[0], UStride: stride[1], VStride: stride[2],
+	})
+	m := render(r, w, h, black, yuvQuad(tex, w, h, w, h)) // a texel a pixel
+	for _, y := range []int{0, h / 2, h - 1} {
+		near(t, "left", m.at(3, y), red, 3)
+		near(t, "middle", m.at(w/2, y), green, 3)
+		near(t, "right edge", m.at(w-1, y), blue, 3)
+	}
+}
+
 // TestYUVTurns: a quarter turn clockwise draws the left of the image at the
 // top, and three at the bottom.
 func TestYUVTurns(t *testing.T) {
