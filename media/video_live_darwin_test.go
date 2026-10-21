@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -108,8 +109,8 @@ func (b *videoWin) covered(l *widgettest.LiveApp, since int64) string {
 }
 
 // tooFew reports a frame rate, measured since since, below its floor: an
-// error in a window that showed all along; in one covered meanwhile, a note,
-// and the test is skipped at its end (its rates went unchecked).
+// error in a window that showed all along; in one covered meanwhile, a note
+// (a covered window draws what it must, which the test checks still).
 func (b *videoWin) tooFew(t *testing.T, l *widgettest.LiveApp, since int64, msg string) {
 	t.Helper()
 	if st := b.covered(l, since); st != "" {
@@ -120,19 +121,30 @@ func (b *videoWin) tooFew(t *testing.T, l *widgettest.LiveApp, since int64, msg 
 	t.Error(msg)
 }
 
+var (
+	later struct {
+		once          sync.Once
+		target        objc.ID
+		perform, play objc.SEL
+	}
+	laterVideo atomic.Pointer[Video]
+)
+
 // playLater makes v play from the main run loop, outside any frame, event
 // or Do (each of which ends by drawing): performSelectorOnMainThread: of a
 // method that calls Play, posted from the test's goroutine. Only Play's own
 // wake can then start the frames.
 func playLater(l *widgettest.LiveApp, v *Video) {
-	var target objc.ID
-	var perform, play objc.SEL
+	laterVideo.Store(v)
 	l.Do(func(*app.App) {
-		play, perform = objc.Sel("gnuiTestPlay:"), objc.Sel("performSelectorOnMainThread:withObject:waitUntilDone:")
-		d := objc.Define("GnuiTestVideoPlay", objc.Cls("NSObject"), nil)
-		d.Method(play, "v@:@", func(*ffi.CB) { v.Play() })
-		target = objc.Send(objc.Send(d.Register(), objc.Sel("alloc")), objc.Sel("init"))
+		later.once.Do(func() { // the class once per process (-count)
+			later.play, later.perform = objc.Sel("gnuiTestPlay:"), objc.Sel("performSelectorOnMainThread:withObject:waitUntilDone:")
+			d := objc.Define("GnuiTestVideoPlay", objc.Cls("NSObject"), nil)
+			d.Method(later.play, "v@:@", func(*ffi.CB) { laterVideo.Load().Play() })
+			later.target = objc.Send(objc.Send(d.Register(), objc.Sel("alloc")), objc.Sel("init"))
+		})
 	})
+	target, perform, play := later.target, later.perform, later.play
 	time.Sleep(300 * time.Millisecond) // the frame Do asked for has come and gone
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
@@ -143,7 +155,9 @@ func playLater(l *widgettest.LiveApp, v *Video) {
 // playing one draws at its own rate (30 fps here, not the display's), one
 // scrolled out of view draws none; and the pixel-buffer leases come back to
 // zero after the video scrolls away, after live resizes, and when its window
-// closes in the middle of playing. A covered window skips it (tooFew).
+// closes in the middle of playing. A covered window (another process's test
+// window, on CI) has only what a covered window must checked: no frame
+// faster than the video's, the leases back to zero, the videos' counts.
 func TestVideoInWindow(t *testing.T) {
 	plain, _ := testClips(t, widgettest.OnMain)
 	b := newVideoWin()
@@ -163,13 +177,22 @@ func TestVideoInWindow(t *testing.T) {
 	defer l.Do(func(*app.App) { v.Close() })
 	l.Until("the poster", 600, func() bool { return b.drawn.Load() > 0 })
 
+	// The leases come back to zero without a frame: the GPU's completion of
+	// the last one gives the dispatcher a turn. Within 3 s: CI's virtual GPU
+	// can take more than 300 ms to complete a frame of a covered window.
 	leases := func(what string) {
 		t.Helper()
 		var pending, leased int
-		l.Do(func(a *app.App) { pending, leased = a.R.ExternalCounts() })
-		if pending != 0 || leased != 0 {
-			t.Errorf("%s: %d imports pending, %d leased (want 0, 0)", what, pending, leased)
+		for t0 := time.Now(); ; time.Sleep(20 * time.Millisecond) {
+			l.Do(func(a *app.App) { pending, leased = a.R.ExternalCounts() })
+			if pending == 0 && leased == 0 {
+				return
+			}
+			if time.Since(t0) > 3*time.Second {
+				break
+			}
 		}
+		t.Errorf("%s: %d imports pending, %d leased 3 s on (want 0, 0); window: %s", what, pending, leased, b.covered(l, platform.Now()))
 	}
 
 	// Paused: no frames at all.
@@ -252,18 +275,22 @@ func TestVideoInWindow(t *testing.T) {
 	v2 := b2.v.Load()
 	// It plays when it has drawn a few frames and holds a pixel buffer of its
 	// own (CI's virtual display gives a window about 2 frames a second).
+	// A covered one may draw none: then only its closing is checked.
 	held := func() int { _, h := VideoCounts(); return h }
+	shown := true
 	for deadline := time.Now().Add(10 * time.Second); b2.drawn.Load() < 3 || held() < held1+1; time.Sleep(10 * time.Millisecond) {
 		if time.Now().After(deadline) {
 			st := b2.covered(l, platform.Now()-int64(2*time.Second)) // 2 s shown are 60 frames
-			l.Do(func(*app.App) { w2.Close(); v2.Close() })
-			if st != "" {
-				t.Skipf("the second window drew %d frames of its video (%d pixel buffers held, %d before it), but it is covered: %s", b2.drawn.Load(), held(), held1, st)
+			if st == "" {
+				l.Do(func(*app.App) { w2.Close(); v2.Close() })
+				t.Fatalf("the second window drew %d frames of its video, %d pixel buffers held (%d before it)", b2.drawn.Load(), held(), held1)
 			}
-			t.Fatalf("the second window drew %d frames of its video, %d pixel buffers held (%d before it)", b2.drawn.Load(), held(), held1)
+			t.Logf("the second window drew %d frames of its video (%d pixel buffers held, %d before it), but it is covered: %s", b2.drawn.Load(), held(), held1, st)
+			shown = false
+			break
 		}
 	}
-	if videos, held := VideoCounts(); videos != 2 || held != held1+1 {
+	if videos, held := VideoCounts(); videos != 2 || (shown && held != held1+1) {
 		t.Errorf("two videos playing: %d open, %d buffers held", videos, held)
 	}
 	l.Do(func(*app.App) { w2.Close() })
@@ -278,6 +305,6 @@ func TestVideoInWindow(t *testing.T) {
 		t.Errorf("all closed: %d open, %d buffers held", videos, held)
 	}
 	if b.unchecked {
-		t.Skip("the window was covered: a frame rate went unchecked")
+		t.Log("the window was covered: a frame rate's floor went unchecked")
 	}
 }

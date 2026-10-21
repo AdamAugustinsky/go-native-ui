@@ -93,18 +93,18 @@ func near(got, want, tol time.Duration) bool { return got >= want-tol && got <= 
 // after the clip's, by the output's latency: 90-145 ms on the CI runner, about
 // 120 ms on a Mac mini, about 200 ms for a process's first play; our delivery
 // adds under a millisecond (measured, 168 plays). A miss is measured once
-// more with again, which plays the same way and returns its took: a loaded
-// runner delays one end now and then (264-480 ms late), and a real fault
-// (a wrong rate, an end that is not delivered at once) misses twice. It
-// reports whether it played again.
-func endedOnTime(t *testing.T, what string, took, want time.Duration, again func() time.Duration) bool {
+// more with again, which plays the same way and returns its took and want: a
+// loaded runner delays one end now and then (264-490 ms late), and a real
+// fault (a wrong rate, a seek that does not seek, an end that is not
+// delivered at once) misses twice. It reports whether it played again.
+func endedOnTime(t *testing.T, what string, took, want time.Duration, again func() (took, want time.Duration)) bool {
 	t.Helper()
-	ok := func(d time.Duration) bool { return d >= want-50*time.Millisecond && d <= want+300*time.Millisecond }
-	if ok(took) {
+	ok := func(d, w time.Duration) bool { return d >= w-50*time.Millisecond && d <= w+300*time.Millisecond }
+	if ok(took, want) {
 		return false
 	}
 	t.Logf("%s ended after %v, want about %v; measured once more", what, took, want)
-	if took = again(); !ok(took) {
+	if took, want = again(); !ok(took, want) {
 		t.Errorf("%s ended after %v, want about %v (and before that too)", what, took, want)
 	}
 	return true
@@ -116,6 +116,13 @@ func playToEnd(t *testing.T, p *Player) time.Duration {
 	t.Helper()
 	n := len(eventsFor(p.ID()))
 	start := play(t, p)
+	return endAfter(t, p, n, start)
+}
+
+// endAfter waits for p's event n+1, an Ended, and returns how long after
+// start it was delivered.
+func endAfter(t *testing.T, p *Player, n int, start time.Time) time.Duration {
+	t.Helper()
 	got := waitEvents(p.ID(), n+1, 3*time.Second)
 	if len(got) != n+1 || got[n].ev.Kind != Ended {
 		t.Fatalf("events: %+v, want one more Ended", got)
@@ -123,30 +130,79 @@ func playToEnd(t *testing.T, p *Player) time.Duration {
 	return got[n].at.Sub(start)
 }
 
+// sample reads p's position and the time, together on the main thread.
+func sample(p *Player) (d time.Duration, at time.Time) {
+	onMain(func() { d, at = p.Position(), time.Now() })
+	return d, at
+}
+
+// moving returns once p's position has moved (Play's start-up, the output's,
+// is not playing at any rate), with the reading that saw it move.
+func moving(t *testing.T, p *Player) (time.Duration, time.Time) {
+	t.Helper()
+	p0, t0 := sample(p)
+	for {
+		time.Sleep(5 * time.Millisecond)
+		p1, t1 := sample(p)
+		if p1 != p0 {
+			return p1, t1
+		}
+		if t1.Sub(t0) > 2*time.Second {
+			t.Fatalf("the position stayed at %v for 2 s", p0)
+		}
+	}
+}
+
+// rateOf measures the rate p plays at from what it reports: its position's
+// advance over at least 500 ms from when it is first seen to move, against
+// the time between the two readings (each taken with its position, so a late
+// wake-up only lengthens the window).
+func rateOf(t *testing.T, p *Player) float64 {
+	t.Helper()
+	p0, t0 := moving(t, p)
+	time.Sleep(500 * time.Millisecond)
+	p1, t1 := sample(p)
+	return float64(p1-p0) / float64(t1.Sub(t0))
+}
+
+// playsAt checks a rate measured by rateOf against want, within 20 % (1× for
+// 1.5× is 33 % slow). A miss is measured once more with again: a runner that
+// stalls the output for a moment slows one window, a wrong rate both.
+func playsAt(t *testing.T, what string, got float64, want float32, again func() float64) {
+	t.Helper()
+	ok := func(r float64) bool { return r >= float64(want)*0.8 && r <= float64(want)*1.2 }
+	if ok(got) {
+		return
+	}
+	t.Logf("%s at %.2f×, want %v×; measured once more", what, got, want)
+	if got = again(); !ok(got) {
+		t.Errorf("%s at %.2f×, want %v× (and before that too)", what, got, want)
+	}
+}
+
 func TestPlayerPlaysToTheEnd(t *testing.T) {
 	Warm()
 	Warm()
 	f := Format{48000, 1, Int16}
-	p := openPlayer(t, sine(f, time.Second, 440), f)
-	if p.Duration() != time.Second {
+	const length = 2 * time.Second // room for a rate's 500 ms after a slow start
+	p := openPlayer(t, sine(f, length, 440), f)
+	if p.Duration() != length {
 		t.Fatalf("Duration = %v", p.Duration())
 	}
 	start := play(t, p)
-	time.Sleep(300 * time.Millisecond)
-	p1 := position(p)
-	time.Sleep(300 * time.Millisecond)
-	p2 := position(p)
-	if !near(p1, 300*time.Millisecond, 150*time.Millisecond) || !near(p2-p1, 300*time.Millisecond, 100*time.Millisecond) {
-		t.Errorf("positions %v then %v, 300 ms apart: want about 300 ms, advancing at 1×", p1, p2)
-	}
-	got := waitEvents(p.ID(), 1, 3*time.Second)
-	if len(got) != 1 || got[0].ev.Kind != Ended {
-		t.Fatalf("events: %+v, want one Ended", got)
-	}
+	rate := rateOf(t, p)
 	plays := 1
-	if endedOnTime(t, "a 1 s clip", got[0].at.Sub(start), time.Second, func() time.Duration { return playToEnd(t, p) }) {
+	if endedOnTime(t, "a 2 s clip", endAfter(t, p, 0, start), length, func() (time.Duration, time.Duration) { return playToEnd(t, p), length }) {
 		plays++
 	}
+	playsAt(t, "a 2 s clip played", rate, 1, func() float64 {
+		n := len(eventsFor(p.ID()))
+		start := play(t, p)
+		r := rateOf(t, p)
+		endAfter(t, p, n, start)
+		plays++
+		return r
+	})
 	time.Sleep(300 * time.Millisecond)
 	if n := len(eventsFor(p.ID())); n != plays {
 		t.Errorf("%d events for %d playbacks", n, plays)
@@ -159,8 +215,9 @@ func TestPlayerPlaysToTheEnd(t *testing.T) {
 	}
 
 	// Play again: from the start, and another Ended.
-	again := func() time.Duration { return playToEnd(t, p) }
-	endedOnTime(t, "played again, it", again(), time.Second, again)
+	again := func() (time.Duration, time.Duration) { return playToEnd(t, p), length }
+	took, want := again()
+	endedOnTime(t, "played again, it", took, want, again)
 }
 
 // TestEndIsDeliveredAtOnce: the system's end call (the delegate's
@@ -188,48 +245,47 @@ func TestEndIsDeliveredAtOnce(t *testing.T) {
 
 func TestPlayerRates(t *testing.T) {
 	f := Format{48000, 1, Int16}
+	const length = 2 * time.Second // at 2×, 500 ms of measuring take 1 s of it
 	for _, tc := range []struct {
-		name      string
-		rate      float32
-		switchAt  time.Duration // set the rate this far in, at 1× before
-		wantTotal time.Duration
+		name     string
+		rate     float32
+		switchAt time.Duration // set the rate this far in, at 1× before
 	}{
-		{"2x", 2, 0, 500 * time.Millisecond},
-		{"1.5x", 1.5, 0, 667 * time.Millisecond},
-		{"2x from 300 ms", 2, 300 * time.Millisecond, 300*time.Millisecond + 350*time.Millisecond},
+		{"2x", 2, 0},
+		{"1.5x", 1.5, 0},
+		{"2x from 300 ms", 2, 300 * time.Millisecond},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			p := openPlayer(t, sine(f, time.Second, 440), f)
-			if tc.switchAt == 0 {
-				onMain(func() { p.SetRate(tc.rate) })
-			}
-			start := play(t, p)
-			if tc.switchAt > 0 {
-				time.Sleep(tc.switchAt)
-				onMain(func() { p.SetRate(tc.rate) })
-			} else {
-				time.Sleep(200 * time.Millisecond)
-				if d := position(p); !near(d, time.Duration(float32(200*time.Millisecond)*tc.rate), 120*time.Millisecond) {
-					t.Errorf("200 ms in at %v×: position %v", tc.rate, d)
-				}
-			}
-			got := waitEvents(p.ID(), 1, 3*time.Second)
-			if len(got) != 1 || got[0].ev.Kind != Ended {
-				t.Fatalf("events: %+v", got)
-			}
-			endedOnTime(t, fmt.Sprintf("a 1 s clip at %v×", tc.rate), got[0].at.Sub(start), tc.wantTotal, func() time.Duration {
-				if tc.switchAt == 0 {
-					return playToEnd(t, p)
-				}
+			p := openPlayer(t, sine(f, length, 440), f)
+			// One play: its rate (measured from the position) and its end,
+			// after the rest of the clip at the rate from when it was set.
+			playOnce := func() (rate float64, took, want time.Duration) {
 				n := len(eventsFor(p.ID()))
 				onMain(func() { p.SetRate(1) })
-				start := play(t, p)
-				time.Sleep(tc.switchAt)
-				onMain(func() { p.SetRate(tc.rate) })
-				if got := waitEvents(p.ID(), n+1, 3*time.Second); len(got) == n+1 {
-					return got[n].at.Sub(start)
+				if tc.switchAt == 0 {
+					onMain(func() { p.SetRate(tc.rate) })
 				}
-				return 3 * time.Second
+				start := play(t, p)
+				want = time.Duration(float32(length) / tc.rate)
+				if tc.switchAt > 0 {
+					time.Sleep(tc.switchAt)
+					var at time.Duration
+					var when time.Time
+					onMain(func() { p.SetRate(tc.rate); at, when = p.Position(), time.Now() })
+					want = when.Sub(start) + time.Duration(float32(length-at)/tc.rate)
+				}
+				rate = rateOf(t, p)
+				return rate, endAfter(t, p, n, start), want
+			}
+			rate, took, want := playOnce()
+			what := fmt.Sprintf("a 2 s clip at %v×", tc.rate)
+			endedOnTime(t, what, took, want, func() (time.Duration, time.Duration) {
+				_, took, want := playOnce()
+				return took, want
+			})
+			playsAt(t, what, rate, tc.rate, func() float64 {
+				rate, _, _ := playOnce()
+				return rate
 			})
 			if p.Rate() != tc.rate {
 				t.Errorf("Rate = %v", p.Rate())
@@ -255,13 +311,18 @@ func TestPlayerSeekAndPause(t *testing.T) {
 	if !near(at, 600*time.Millisecond, 2*time.Millisecond) {
 		t.Errorf("after Seek(600 ms): %v", at)
 	}
-	play(t, p)
-	time.Sleep(150 * time.Millisecond)
+	// Paused once it has played a little (from when it moves: the output's
+	// start-up is not playing): past the seek's time, no further than it
+	// could have played since Play, and there it holds.
+	played := play(t, p)
+	moving(t, p)
+	time.Sleep(100 * time.Millisecond)
 	var held time.Duration
 	var playing bool
-	onMain(func() { p.Pause(); held, playing = p.Position(), p.Playing() })
-	if playing || !near(held, 750*time.Millisecond, 100*time.Millisecond) {
-		t.Errorf("paused 150 ms after a seek to 600 ms: playing %v at %v", playing, held)
+	var pausedAt time.Time
+	onMain(func() { p.Pause(); held, playing, pausedAt = p.Position(), p.Playing(), time.Now() })
+	if playing || held <= 600*time.Millisecond || held > 600*time.Millisecond+pausedAt.Sub(played)+50*time.Millisecond {
+		t.Errorf("paused %v after Play from a seek to 600 ms: playing %v at %v", pausedAt.Sub(played), playing, held)
 	}
 	time.Sleep(300 * time.Millisecond)
 	if d := position(p); !near(d, held, 2*time.Millisecond) {
@@ -270,14 +331,13 @@ func TestPlayerSeekAndPause(t *testing.T) {
 	if got := eventsFor(p.ID()); len(got) != 0 {
 		t.Errorf("events while paused: %+v", got)
 	}
+	// Played on, it ends after the rest of the clip.
 	resumed := play(t, p)
-	got := waitEvents(p.ID(), 1, 2*time.Second)
-	if len(got) != 1 {
-		t.Fatalf("events: %+v", got)
-	}
-	if took := got[0].at.Sub(resumed); !near(took, time.Second-held, 200*time.Millisecond) {
-		t.Errorf("resumed at %v of a 1 s clip, it ended after %v", held, took)
-	}
+	endedOnTime(t, fmt.Sprintf("resumed at %v of a 1 s clip, it", held), endAfter(t, p, 0, resumed), time.Second-held, func() (time.Duration, time.Duration) {
+		n := len(eventsFor(p.ID()))
+		onMain(func() { p.Seek(held) })
+		return endAfter(t, p, n, play(t, p)), time.Second - held
+	})
 
 	// Seeking clamps to the clip, also while playing.
 	onMain(func() { p.Seek(5 * time.Second); at = p.Position() })
@@ -288,15 +348,17 @@ func TestPlayerSeekAndPause(t *testing.T) {
 	if at != 0 {
 		t.Errorf("Seek before the start: %v", at)
 	}
-	play(t, p)
-	time.Sleep(100 * time.Millisecond)
-	onMain(func() { p.Seek(900 * time.Millisecond) })
-	start := time.Now()
-	if got := waitEvents(p.ID(), 2, 2*time.Second); len(got) != 2 {
-		t.Fatalf("events after a seek while playing: %+v", got)
-	} else if took := got[1].at.Sub(start); !near(took, 100*time.Millisecond, 150*time.Millisecond) {
-		t.Errorf("seeked to 900 ms while playing, it ended after %v", took)
+	// A seek while playing to 100 ms before the end: it ends after those.
+	seekPlaying := func() (time.Duration, time.Duration) {
+		n := len(eventsFor(p.ID()))
+		play(t, p)
+		time.Sleep(100 * time.Millisecond)
+		var start time.Time
+		onMain(func() { p.Seek(900 * time.Millisecond); start = time.Now() })
+		return endAfter(t, p, n, start), 100 * time.Millisecond
 	}
+	took, want := seekPlaying()
+	endedOnTime(t, "seeked to 900 ms while playing, it", took, want, seekPlaying)
 }
 
 func TestPlayerCloseSendsNoEnd(t *testing.T) {
@@ -327,8 +389,9 @@ func TestPlayerFloatStereo(t *testing.T) {
 	if p.Duration() != 400*time.Millisecond {
 		t.Fatalf("Duration = %v", p.Duration())
 	}
-	again := func() time.Duration { return playToEnd(t, p) }
-	endedOnTime(t, "a 400 ms float clip", again(), 400*time.Millisecond, again)
+	again := func() (time.Duration, time.Duration) { return playToEnd(t, p), 400 * time.Millisecond }
+	took, want := again()
+	endedOnTime(t, "a 400 ms float clip", took, want, again)
 }
 
 // Position and Playing are read every frame while playing (DECISIONS D27).
