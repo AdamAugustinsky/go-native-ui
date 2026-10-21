@@ -160,6 +160,9 @@ func Main(cfg AppConfig, h Handler) error {
 			a.startHidden = true
 		}
 	}
+	if !a.startHidden {
+		gpu.Prewarm() // the renderer's shaders build while the app starts and Start opens its window
+	}
 	if err := a.bindApp(true); err != nil {
 		return err
 	}

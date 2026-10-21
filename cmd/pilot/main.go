@@ -46,6 +46,7 @@ import (
 	"gonativeui/app"
 	"gonativeui/cmd/pilot/pilot"
 	"gonativeui/fs"
+	"gonativeui/gpu"
 	"gonativeui/internal/sysinfo"
 	"gonativeui/platform"
 	"gonativeui/theme"
@@ -71,6 +72,7 @@ const (
 func main() {
 	t0 := platform.Now() // before anything else
 	age := sysinfo.ProcessAgeNs()
+	gpu.Prewarm() // the renderer's shaders build while the program starts
 
 	out := flag.String("o", "", "render the offscreen scene into this PNG and exit")
 	w := flag.Int("w", 2400, "with -o: width in pixels")

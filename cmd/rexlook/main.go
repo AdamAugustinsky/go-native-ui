@@ -53,6 +53,7 @@ import (
 
 	"gonativeui/app"
 	"gonativeui/cmd/rexlook/rex"
+	"gonativeui/gpu"
 	"gonativeui/platform"
 	"gonativeui/theme"
 	"gonativeui/ui"
@@ -80,6 +81,7 @@ const (
 )
 
 func main() {
+	gpu.Prewarm() // the renderer's shaders build while the program starts
 	out := flag.String("o", "", "render offscreen at 2114×1278 px into this PNG and exit")
 	outDark := flag.String("o-dark", "", "with -o: also render the dark mode into this PNG")
 	mode := flag.String("mode", "system", "system (follow the system's light or dark mode and accent: the default), light or dark; with -o the default is light")

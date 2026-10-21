@@ -203,36 +203,17 @@ func NewRenderer(device, queue uintptr) (*Renderer, error) {
 
 	r := &Renderer{device: objc.ID(device), queue: objc.ID(queue)}
 
-	nsErrorOut = 0
-	lib := objc.Send3(r.device, rsNewLibrary, uintptr(objc.Str(quadMSL)), 0, uintptr(unsafe.Pointer(&nsErrorOut)))
-	if lib == 0 {
-		return nil, fmt.Errorf("gpu: compiling shaders: %s", nsErrorText())
-	}
-	defer objc.Release(lib)
-	vs := objc.Send1(lib, rsNewFunction, uintptr(objc.Str("vs_main")))
-	fs := objc.Send1(lib, rsNewFunction, uintptr(objc.Str("fs_main")))
-	if vs == 0 || fs == 0 {
-		return nil, errors.New("gpu: shader entry points missing")
-	}
-	defer objc.Release(vs)
-	defer objc.Release(fs)
-
-	pd := objc.Send(objc.Send(clsPipelineDesc, rsAlloc), rsInit)
-	defer objc.Release(pd)
-	objc.Send1(pd, rsSetVertexFn, uintptr(vs))
-	objc.Send1(pd, rsSetFragFn, uintptr(fs))
-	ca := objc.Send1(objc.Send(pd, rsColorAttach), rsObjectAt, 0)
-	objc.Send1(ca, rsSetPixelFmt, mtlBGRA8Unorm)
-	objc.Send1(ca, rsSetBlendOn, 1)
-	// Premultiplied alpha: src + dst × (1 − src.a), for colour and alpha.
-	objc.Send1(ca, rsSetSrcRGB, 1)   // One
-	objc.Send1(ca, rsSetDstRGB, 5)   // OneMinusSourceAlpha
-	objc.Send1(ca, rsSetSrcAlpha, 1) // One
-	objc.Send1(ca, rsSetDstAlpha, 5) // OneMinusSourceAlpha
-	nsErrorOut = 0
-	r.pipeline = objc.Send2(r.device, rsNewPipeline, uintptr(pd), uintptr(unsafe.Pointer(&nsErrorOut)))
-	if r.pipeline == 0 {
-		return nil, fmt.Errorf("gpu: creating pipeline: %s", nsErrorText())
+	// the quad pipeline: Prewarm's, or built here
+	if r.pipeline = warmPipeline(r.device); r.pipeline == 0 {
+		var fail buildFail
+		switch r.pipeline, fail = quadPipeline(F, r.device, &nsErrorOut); fail {
+		case buildCompile:
+			return nil, fmt.Errorf("gpu: compiling shaders: %s", nsErrorText())
+		case buildEntry:
+			return nil, errors.New("gpu: shader entry points missing")
+		case buildPipeline:
+			return nil, fmt.Errorf("gpu: creating pipeline: %s", nsErrorText())
+		}
 	}
 
 	sd := objc.Send(objc.Send(clsSamplerDesc, rsAlloc), rsInit)
