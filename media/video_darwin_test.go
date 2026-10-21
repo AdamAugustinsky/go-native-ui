@@ -152,7 +152,13 @@ func videoFrames(plain, turned string) (errs []string) {
 	}
 
 	// At 2× it plays twice as fast and asks for frames twice as often; the
-	// rate is clamped to 0.5–2.
+	// rate is clamped to 0.5–2. From 500 ms: the loop above can take a second
+	// on a loaded runner, and the clip must not end meanwhile.
+	v.Seek(500 * time.Millisecond)
+	until("the seek to 500 ms", 2*time.Second, func() bool {
+		frameOf(r, v, 160, 96)
+		return v.Position() < time.Second
+	})
 	v.SetRate(2)
 	p0, t0 := v.Position(), time.Now()
 	for time.Since(t0) < 300*time.Millisecond {

@@ -230,7 +230,9 @@ func TestVideoInWindow(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 	leases("after resizes, paused")
 
-	// A second window playing a video closes in the middle of it.
+	// A second window playing a video closes in the middle of it. The first
+	// holds a frame if its window ever showed one (a covered window drew none).
+	_, held1 := VideoCounts()
 	b2 := newVideoWin()
 	var w2 *app.Win
 	l.Do(func(a *app.App) {
@@ -258,14 +260,14 @@ func TestVideoInWindow(t *testing.T) {
 			t.Fatalf("the second window drew %d frames of its video", b2.drawn.Load())
 		}
 	}
-	if videos, held := VideoCounts(); videos != 2 || held != 2 {
+	if videos, held := VideoCounts(); videos != 2 || held != held1+1 {
 		t.Errorf("two videos playing: %d open, %d buffers held", videos, held)
 	}
 	l.Do(func(*app.App) { w2.Close() })
 	time.Sleep(300 * time.Millisecond)
 	leases("the second window closed mid-playback")
 	l.Do(func(*app.App) { v2.Close() })
-	if videos, held := VideoCounts(); videos != 1 || held != 1 {
+	if videos, held := VideoCounts(); videos != 1 || held != held1 {
 		t.Errorf("one video left: %d open, %d buffers held", videos, held)
 	}
 	l.Do(func(*app.App) { v.Close() })
