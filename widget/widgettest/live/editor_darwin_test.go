@@ -17,6 +17,7 @@ import (
 
 	"gonativeui/app"
 	"gonativeui/internal/objc"
+	"gonativeui/internal/testlock"
 	"gonativeui/menu"
 	"gonativeui/platform"
 	"gonativeui/theme/rex"
@@ -40,6 +41,8 @@ const (
 	cmdEdCopy
 	cmdEdPaste
 	cmdEdSelectAll
+	cmdEdPastePlain
+	cmdEdNothing
 )
 
 // edApp is a composer: a field before, the editor, a field after, and a
@@ -69,6 +72,10 @@ type edApp struct {
 	spans      []platform.TextSpan
 	builds     atomic.Int64 // frames built
 	popupBuilt bool         // the last frame built the completion's row
+	edgeUp     int
+	edgeDown   int
+	files      int  // PastedFiles
+	stdEdit    bool // the model has no Edit menu: the app's standard one
 }
 
 func (p *edApp) Init(a *app.App) error {
@@ -80,12 +87,17 @@ func (p *edApp) Init(a *app.App) error {
 		{ID: cmdEdCopy, Title: "Copy", Role: menu.RoleCopy, Shortcut: menu.Shortcut{Key: 'C', Primary: true}},
 		{ID: cmdEdPaste, Title: "Paste", Role: menu.RolePaste, Shortcut: menu.Shortcut{Key: 'V', Primary: true}},
 		{ID: cmdEdSelectAll, Title: "Select All", Role: menu.RoleSelectAll, Shortcut: menu.Shortcut{Key: 'A', Primary: true}},
+		{ID: cmdEdPastePlain, Title: "Paste and Match Style", Role: menu.RolePasteAndMatchStyle, Shortcut: menu.Shortcut{Key: 'V', Primary: true, Mods: ui.ModShift | ui.ModAlt}},
+	}
+	title := "Edit"
+	if p.stdEdit {
+		cmds, title = []menu.Command{{ID: cmdEdNothing, Title: "Nothing"}}, "File"
 	}
 	items := make([]menu.Item, 0, len(cmds))
 	for _, c := range cmds {
 		items = append(items, menu.Item{Kind: menu.ItemCommand, Command: c.ID})
 	}
-	m, err := menu.NewModel(cmds, []menu.Menu{{Title: "Edit", Items: items}}, []int{0})
+	m, err := menu.NewModel(cmds, []menu.Menu{{Title: title, Items: items}}, []int{0})
 	if err != nil {
 		return err
 	}
@@ -128,7 +140,16 @@ func (p *edApp) Build(c *ui.Context) {
 // the submissions. It reports whether it took any.
 func (p *edApp) take(s base.NativeEditorSignal) (took bool) {
 	ed := p.ed
-	took = s.Changed || s.Selected || s.Submitted || s.Cancelled || s.PastedImage || s.HeightChanged
+	took = s.Changed || s.Selected || s.Submitted || s.Cancelled || s.PastedImage || s.HeightChanged || s.PastedFiles || s.EdgeUp || s.EdgeDown
+	if s.EdgeUp {
+		p.edgeUp++
+	}
+	if s.EdgeDown {
+		p.edgeDown++
+	}
+	if s.PastedFiles {
+		p.files++
+	}
 	if s.Changed {
 		p.changed++
 		if s.Composing {
@@ -212,11 +233,23 @@ func (p *edApp) complete() {
 func startEditor(t *testing.T, o platform.EditorOptions) (*widgettest.LiveApp, *edApp) {
 	t.Helper()
 	p := &edApp{opt: o}
+	return startEdApp(t, p, true), p
+}
+
+// startEdApp starts p. With makeKey, the window is made key (the test is
+// skipped if it cannot be); without, it only counts as key for the app
+// (StartLive's DebugAssumeKey) while AppKit may have no key window, as for a
+// test binary the system did not activate.
+func startEdApp(t *testing.T, p *edApp, makeKey bool) *widgettest.LiveApp {
+	t.Helper()
 	l := widgettest.StartLive(t, app.Config{Title: "composer", Width: 480, Height: 320}, p)
 	l.Frames(3)
 	t.Cleanup(func() { l.Do(func(*app.App) { p.ed.Release() }) })
-	// The Edit menu's nil-targeted items and the focus hand-off need the
-	// key window: a test process started from a shell is not active.
+	if !makeKey {
+		return l
+	}
+	// The focus hand-off needs the key window: a test process started from
+	// a shell is not active.
 	var win objc.ID
 	l.Do(func(a *app.App) {
 		win = objc.ID(a.Win.Native().NSWindow)
@@ -232,7 +265,7 @@ func startEditor(t *testing.T, o platform.EditorOptions) (*widgettest.LiveApp, *
 		})
 		t.Skipf("the window cannot become key here: NSApp isActive=%v, keyWindow=%#x after activateIgnoringOtherApps: and makeKeyAndOrderFront:", active, key)
 	}
-	return l, p
+	return l
 }
 
 // focusEditor gives the editor the keyboard and waits for the hand-off.
@@ -562,6 +595,7 @@ func TestEditorCompletion(t *testing.T) {
 // The Edit menu on the hosted view: Copy, Cut, Paste, Select All and Undo
 // through the menu items (N1's nil-targeted actions), each acting once.
 func TestEditorEditMenu(t *testing.T) {
+	testlock.Hold(t, "pasteboard") // the general pasteboard is the system's: other tests write it too
 	l, p := startEditor(t, platform.EditorOptions{})
 	focusEditor(t, l, p)
 	var saved []pbItem

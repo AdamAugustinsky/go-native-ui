@@ -286,7 +286,8 @@ func registerAppDelegate() {
 			}
 		}
 	})
-	d.Method(objc.Sel("validateMenuItem:"), "c@:@", dockValidate)
+	d.Method(objc.Sel("validateMenuItem:"), "c@:@", appValidate)
+	registerAssumedEdit(d)
 	appDelegateDef = d
 	appDelegateClass = d.Register()
 }
@@ -900,6 +901,12 @@ func SetDockMenu(spec *MenuSpec, idx int, state MenuState) {
 // retargetDock points the command items of a Dock menu (and its submenus) at
 // the app delegate, so their commands are the app's, not a window's.
 func retargetDock(m objc.ID, depth int) {
+	retargetMenu(m, appObj.delegate, selDockCommand, depth)
+}
+
+// retargetMenu points the command items of menu m (and its submenus) at
+// target's action.
+func retargetMenu(m, target objc.ID, action objc.SEL, depth int) {
 	if depth > maxMenuDepth {
 		return
 	}
@@ -907,19 +914,28 @@ func retargetDock(m objc.ID, depth int) {
 	for i := 0; i < n; i++ {
 		it := objc.Send1(m, selDockItemAt, uintptr(i))
 		if objc.SendBool(it, selHasSubmenu) {
-			retargetDock(objc.Send(it, selSubmenu), depth+1)
+			retargetMenu(objc.Send(it, selSubmenu), target, action, depth+1)
 			continue
 		}
 		if objc.SEL(objc.Send(it, selDockAction)) == selGnuiCommand {
-			objc.Send1(it, selDockSetTarget, uintptr(appObj.delegate))
-			objc.Send1(it, selDockSetAction, uintptr(selDockCommand))
+			objc.Send1(it, selDockSetTarget, uintptr(target))
+			objc.Send1(it, selDockSetAction, uintptr(action))
 		}
 	}
 }
 
-// dockValidate is the delegate's validateMenuItem: for the Dock menu's
-// commands (the delegate is their target): the state SetDockMenu was given
-// enables and checks them.
+// appValidate is the delegate's validateMenuItem:: an edit item that reached
+// the delegate (assumedEditValid), else a Dock menu command.
+func appValidate(c *ffi.CB) {
+	if v, ok := assumedEditValid(objc.ID(c.Int(2))); ok {
+		c.RetBool(v)
+		return
+	}
+	dockValidate(c)
+}
+
+// dockValidate validates the Dock menu's commands (the delegate is their
+// target): the state SetDockMenu was given enables and checks them.
 func dockValidate(c *ffi.CB) {
 	item := objc.ID(c.Int(2))
 	if appObj.dockState == nil || item == 0 {

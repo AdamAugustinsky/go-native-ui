@@ -5,6 +5,7 @@ package platform
 import (
 	"fmt"
 	"math"
+	"slices"
 	"testing"
 	"time"
 
@@ -17,7 +18,7 @@ type lightsSeen struct {
 	centre   [3][2]float64
 	union    [4]float64   // the three buttons' frames: x0, y0, x1, y1
 	sys      [4]float32   // SystemButtons
-	hover    [][4]float64 // the button group's hover areas (the theme frame's; macOS 15 also the titlebar view's)
+	hover    [][4]float64 // the button group's hover areas, each place once (the theme frame's; macOS 15 also the titlebar view's)
 	hoverOK  bool         // all active whether or not the window is key
 	zoomArea [2]float64   // centre of the zoom button's own tracking area (its tiling menu)
 	hit      [3]bool      // AppKit's hit test at each centre finds the button
@@ -73,7 +74,14 @@ func seeLights(w *Window) (s lightsSeen) {
 			opts, owner := uintptr(objc.Send(a, selTrackOptions)), objc.Send(a, selTrackOwner)
 			switch {
 			case owner == v && opts&0x01 != 0 && opts&0x4000 == 0: // EnteredAndExited, not an edge-resize area: the group's hover
-				s.hover = append(s.hover, rect)
+				// The titlebar view adds one over the theme frame's, at the
+				// same place, at its first tracking update after the
+				// window opened (AppKit's own: the pointer passing over
+				// the buttons does it in a bare NSWindow); one place counts
+				// once.
+				if !slices.Contains(s.hover, rect) {
+					s.hover = append(s.hover, rect)
+				}
 				s.hoverOK = s.hoverOK && opts&0x80 != 0 // NSTrackingActiveAlways: inactive windows show the glyphs too
 			case owner == objc.Send(btn[2], selCell):
 				s.zoomArea = [2]float64{(rect[0] + rect[2]) / 2, (rect[1] + rect[3]) / 2}
@@ -437,5 +445,42 @@ func TestWindowButtonsPublicAPIOnly(t *testing.T) {
 	}
 	for _, f := range fails {
 		t.Error(f)
+	}
+}
+
+// The button group's hover areas are counted by place: once the titlebar
+// view has updated its tracking (AppKit does it when the pointer first
+// passes over the buttons), it holds an area at the place of the theme
+// frame's, and the window is still AppKit's default (TestWindowButtons*
+// compared counts, and failed where the pointer had crossed the buttons).
+func TestHoverAreasCountedByPlace(t *testing.T) {
+	var opened bool
+	var before, after lightsSeen
+	var raw [2]int
+	onMain(func() {
+		lightsForceDefault = true
+		defer func() { lightsForceDefault = false }()
+		w, err := Open(lightsTestOptions)
+		if err != nil {
+			return
+		}
+		opened = true
+		defer w.Close()
+		tv := objc.Send(objc.Send1(w.win, selStdButton, 0), selSuperview)
+		count := func() int { return int(objc.Send(objc.Send(tv, selTrackingAreas), selTestCount)) }
+		pumpFor(w, 100*time.Millisecond)
+		before, raw[0] = seeLights(w), count()
+		objc.Send(tv, selUpdateTrackingAreas)
+		pumpFor(w, 50*time.Millisecond)
+		after, raw[1] = seeLights(w), count()
+	})
+	if !opened {
+		t.Skip("cannot open a window here")
+	}
+	if raw[1] == raw[0] {
+		t.Skipf("the titlebar view kept %d tracking areas: AppKit adds none here", raw[0])
+	}
+	if len(before.hover) == 0 || !slices.Equal(after.hover, before.hover) {
+		t.Errorf("hover areas %v, then %v once the titlebar view had updated its tracking", before.hover, after.hover)
 	}
 }

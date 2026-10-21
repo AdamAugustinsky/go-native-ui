@@ -197,6 +197,9 @@ func gateFailures(r report, allowUnpaced bool, maxCPU float64) []string {
 	if r.Mallocs != 0 || r.TotalAlloc != 0 {
 		f = append(f, fmt.Sprintf("every one of %d whole sessions allocated (fewest: %d mallocs / %d bytes)", len(r.Windows), r.Mallocs, r.TotalAlloc))
 	}
+	if msg := r.OwnAllocFailure(); msg != "" {
+		f = append(f, msg)
+	}
 	if maxCPU > 0 && r.MainThreadCPUus > maxCPU {
 		f = append(f, fmt.Sprintf("main-thread CPU %.0f µs/frame, budget %.0f", r.MainThreadCPUus, maxCPU))
 	}

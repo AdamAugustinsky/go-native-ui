@@ -54,6 +54,11 @@ type Menu struct {
 	Items []MenuItem
 	// Role gives the menu its system place and contents.
 	Role MenuRole
+	// Dynamic marks a menu the app made up when it opened it (a context
+	// menu for what was clicked): its items are enabled as their Disabled
+	// says, never asked of MenuState, and an item that is chosen reports its
+	// Choice (Popup.Choice) instead of delivering an ID.
+	Dynamic bool
 }
 
 // MenuRole is the system place of a menu.
@@ -109,6 +114,16 @@ type MenuItem struct {
 	// Checked shows the item checked when it is built (list popups); MenuState
 	// decides it for items with an ID.
 	Checked bool
+	// Mixed shows the dash mark instead of the check (Dynamic menus).
+	Mixed bool
+	// Disabled greys the item out and keeps it from being chosen (Dynamic
+	// menus).
+	Disabled bool
+	// Destructive draws the title in the system's red (Dynamic menus).
+	Destructive bool
+	// Choice is what a chosen item of a Dynamic menu reports (Popup.Choice),
+	// also when it sits in a submenu.
+	Choice int
 }
 
 // MenuAction is the standard action of a menu item.
@@ -127,13 +142,16 @@ const (
 	// MenuQuit asks to quit: EvClose, as the window's close button does.
 	MenuQuit
 	// MenuUndo … MenuSelectAll are the edit actions, sent through the
-	// responder chain (undo:, redo:, cut:, copy:, paste:, delete:, selectAll:)
-	// to the view with the keyboard focus.
+	// responder chain (undo:, redo:, cut:, copy:, paste:, pasteAsPlainText:,
+	// delete:, selectAll:) to the view with the keyboard focus.
+	// MenuPasteAndMatchStyle is Paste and Match Style: the text without its
+	// style, in the style around it.
 	MenuUndo
 	MenuRedo
 	MenuCut
 	MenuCopy
 	MenuPaste
+	MenuPasteAndMatchStyle
 	MenuDelete
 	MenuSelectAll
 	// MenuMinimize, MenuZoom and MenuClose act on the key window
@@ -206,4 +224,9 @@ type Popup struct {
 	X0, Y0, X1, Y1 float32
 	// Selected is the item placed over the anchor (PopupList), -1 none.
 	Selected int
+	// Picked and Choice are set by PopUpMenu: Picked when an item without an
+	// ID was chosen (an option of a list, an item of a Dynamic menu, in a
+	// submenu or not), Choice its Choice (0 for a list's).
+	Picked bool
+	Choice int
 }

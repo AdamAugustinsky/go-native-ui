@@ -43,6 +43,11 @@ type RowOpts struct {
 	// layout's row (0: FormLook's, a grouped row's 40 pt; an aligned row is
 	// as high as its tallest control).
 	Height float32
+	// Detail is a secondary line under the row's label, as System Settings'
+	// rows have: smaller text in the secondary colour. A grouped row with a
+	// Detail is as high as the two lines need if that is more than Height
+	// (or the layout's row). An aligned form's rows ignore it.
+	Detail string
 }
 
 // FormRecipe is the look of forms. Lengths are points.
@@ -77,6 +82,14 @@ type FormRecipe struct {
 	LabelW float32
 	// Label is a row's label (labelColor).
 	Label Tint
+	// DetailStyle and Detail are a row's description line under its label
+	// (RowOpts.Detail): 11 pt, secondaryLabelColor.
+	DetailStyle TextStyle
+	Detail      Tint
+	// DetailPadY is the space above and below the two lines of a row with a
+	// description (10; designed, System Settings' rows with one are about
+	// 50 pt high).
+	DetailPadY float32
 }
 
 // FormLook is the forms' recipe.
@@ -88,7 +101,8 @@ var FormLook = FormRecipe{
 	Header: Of(theme.Label), Footer: Of(theme.Label2),
 	LabelGap:  12,
 	ColumnGap: 6, RowGap: 6, LabelW: 120,
-	Label: Of(theme.Label),
+	Label:       Of(theme.Label),
+	DetailStyle: TextSubheadline, Detail: Of(theme.Label2), DetailPadY: 10,
 }
 
 // Form is a form being built: BeginForm returns it, Row adds a row, Section
@@ -265,8 +279,18 @@ func (f *Form) Row(k *base.Kit, label string, o RowOpts) ui.ID {
 	k.NextGap(rc.LabelGap / 2) // either side of the spacer
 	k.Context().NextRole(ui.RoleGroup)
 	k.Context().NextSemName(label)
-	f.row = f.card.row(k, label, o.Height)
-	f.label = formLabel(k, label)
+	h := o.Height
+	if o.Detail != "" { // room for both lines
+		r := k.Theme()
+		lines := r.Styles[theme.StyleBody].Line + r.Styles[TextStyles[rc.DetailStyle%NumTextStyles]].Line
+		h = max(h, CardLook.RowH, lines/k.Scale()+2*rc.DetailPadY)
+	}
+	f.row = f.card.row(k, label, h)
+	if o.Detail == "" {
+		f.label = formLabel(k, label)
+	} else {
+		f.label = formLabelDetail(k, label, o.Detail)
+	}
 	k.Spacer()
 	return f.row
 }
@@ -276,6 +300,18 @@ func (f *Form) Row(k *base.Kit, label string, o RowOpts) ui.ID {
 // parent with one key are one box to the framework.
 func formLabel(k *base.Kit, label string) ui.ID {
 	return LabelBytes(k, base.StrBytes(label), LabelOpts{Color: FormLook.Label})
+}
+
+// formLabelDetail builds a row's label with its description under it, in a
+// column that the row centres vertically.
+func formLabelDetail(k *base.Kit, label, detail string) ui.ID {
+	rc := &FormLook
+	k.NextGap(0)
+	k.BeginContainer(ui.AxisY, ui.CrossStart, "label", ui.Children(1), ui.Children(1), 0)
+	l := formLabel(k, label)
+	LabelBytes(k, base.StrBytes(detail), LabelOpts{Style: rc.DetailStyle, Color: rc.Detail})
+	k.EndContainer()
+	return l
 }
 
 // Label is the box of the current row's label.

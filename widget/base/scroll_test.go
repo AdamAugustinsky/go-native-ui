@@ -95,6 +95,25 @@ func TestLegacyBarsReserveTheirWidth(t *testing.T) {
 	}
 }
 
+// TestHiddenBarsReserveNothing: a view whose app hides its bars
+// (ScrollState.HideBars) keeps its whole width under legacy scrollers and
+// reports no bar; a view that does not, keeps reserving the bar's width.
+func TestHiddenBarsReserveNothing(t *testing.T) {
+	legacy := theme.SystemValues{Known: true, Settings: theme.Settings{Scroller: theme.ScrollerLegacy}}
+	for _, hide := range []bool{false, true} {
+		g, bars, inner := scrollRigOf(t, &ScrollState{HideBars: hide})
+		g.k.fol.PinSystem(&legacy)
+		g.frames(90)
+		w := g.c.Rect(*inner)[2] - g.c.Rect(*inner)[0]
+		switch {
+		case hide && (w != 400 || bars[1].On):
+			t.Errorf("hidden bars: content %v wide, bar on %v; want 400 and none", w, bars[1].On)
+		case !hide && (w >= 400 || !bars[1].On):
+			t.Errorf("shown bars: content %v wide, bar on %v; want it narrower than 400", w, bars[1].On)
+		}
+	}
+}
+
 // TestLegacyThumbDragsToTheEnds: dragging a legacy knob to the end of its
 // slot scrolls to the end, and back to its start to the top.
 func TestLegacyThumbDragsToTheEnds(t *testing.T) {

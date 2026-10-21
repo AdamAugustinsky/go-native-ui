@@ -37,6 +37,7 @@ type TextBuffer struct {
 	activity  int64   // Input.Time of the last interaction (caret blink origin)
 	focused   bool    // the field had keyboard focus in the window's active state last frame
 	composing bool    // an input-method composition was shown last frame
+	secure    bool    // a secure field edits it (NextSecureField): no history, no words, old storage zeroed
 	preHash   uint64  // identifies that composition (text and caret), to notice changes
 	drag      dragKind
 	dragLo    int // the word a word-drag started on
@@ -66,6 +67,9 @@ func (t *TextBuffer) Rev() uint32 { return t.rev }
 // Reset empties the text.
 func (t *TextBuffer) Reset() {
 	t.undo.clear()
+	if t.secure {
+		clear(t.b)
+	}
 	t.b = t.b[:0]
 	t.caret, t.anchor, t.scroll = 0, 0, 0
 	t.rev++
@@ -84,9 +88,13 @@ func (t *TextBuffer) SetBytes(p []byte) {
 		room = t.Max
 	}
 	t.tmp = cleanText(t.tmp[:0], p, room)
+	if t.secure && len(t.tmp) > cap(t.b) {
+		clear(t.b[:cap(t.b)]) // append moves the text: the old storage holds no copy of it
+	}
 	t.b = append(t.b[:0], t.tmp...)
 	t.caret, t.anchor, t.scroll = len(t.b), len(t.b), 0
 	t.rev++
+	t.scrub()
 }
 
 // Caret is the byte offset of the caret (the moving end of the selection).
@@ -142,6 +150,7 @@ func (t *TextBuffer) Insert(p []byte) {
 		return
 	}
 	t.replace(lo, hi, t.tmp)
+	t.scrub()
 }
 
 // insertSealed is Insert as a step of its own (a paste): it neither continues
@@ -177,6 +186,7 @@ func (t *TextBuffer) ReplaceUTF16(start, units int, p []byte) {
 	t.breakRun()
 	t.replace(lo, hi, t.tmp)
 	t.breakRun()
+	t.scrub()
 }
 
 // moveUnits returns the byte offset that is units UTF-16 units from byte offset
@@ -259,12 +269,18 @@ func (t *TextBuffer) splice(lo, hi int, ins []byte) {
 	if n > cap(t.b) {
 		nb := make([]byte, old, n+n/2+16)
 		copy(nb, t.b)
+		if t.secure {
+			clear(t.b[:cap(t.b)]) // the old storage holds no copy of the text
+		}
 		t.b = nb
 	}
 	t.b = t.b[:max(n, old)]
 	copy(t.b[lo+len(ins):], t.b[hi:old])
 	copy(t.b[lo:], ins)
 	t.b = t.b[:n]
+	if t.secure && n < old {
+		clear(t.b[n:old]) // what the text moved out of
+	}
 	at := lo + len(ins)
 	if len(ins) > 0 {
 		at = snapUp(t.b, at)

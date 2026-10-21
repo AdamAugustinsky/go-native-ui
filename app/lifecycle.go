@@ -435,11 +435,16 @@ func (a *App) closeWindow() {
 	}
 	a.cancelQueuedDialogs() // its dialogs not shown yet end as cancelled
 	a.keepClosedDialogs()
+	id := a.winID
 	a.closeWin()
 	a.UI = nil
 	a.menuDirty = true // the app's bar, without the window's state
 	a.markMenus()
-	if len(a.wins) == 0 && (!a.appCfg.KeepRunning || !manyWindows) {
+	if a.started && a.told != id {
+		a.told = id
+		a.deliver(&platform.AppEvent{Kind: platform.AppEvWindowClosed, Window: id}, nil)
+	}
+	if len(a.wins) == 0 && a.queuedOpens == 0 && (!a.appCfg.KeepRunning || !manyWindows) {
 		a.done = true
 	}
 }

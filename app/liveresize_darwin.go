@@ -51,6 +51,7 @@ func RunLiveResizeTest(cfg Config, b Builder, sizes [][2]float64) (LiveResizeRep
 	rep.PacedWanted = pacedWanted
 	phase, start := 0, platform.Now()
 	var eventsAtPhase, lastFrames int
+	var lastPass, silentNs int64
 	a.hook = func() {
 		if phase == 2 && a.frames > lastFrames { // frames drawn since the last pass: on a frame event or by the fallback
 			if a.p.paced {
@@ -84,7 +85,20 @@ func RunLiveResizeTest(cfg Config, b Builder, sizes [][2]float64) (LiveResizeRep
 			lastFrames = a.frames
 			a.p.invalidate()
 		case 2: // frames after the drag must be paced again (the metal link is back)
-			if rep.PacedFramesAfter >= pacedWanted || platform.Now()-start > int64(3e9) {
+			// Time in which the display link did not tick at all, with a frame
+			// requested, the window visible and the link not paused by us, is
+			// the display's stall (CI runners stop for 20-60 s at times), not
+			// the reattached link's failure: it does not count against the
+			// 3 s, up to a minute. A link that was not reattached also stays
+			// silent, and still fails, a minute later.
+			now := platform.Now()
+			if st := a.Win.DebugState(); rep.FrameEventsBefore > 0 && st.Valid && st.FrameArmed && st.Visible &&
+				!st.LinkPaused && st.LastTickT != 0 && now-st.LastTickT > silenceNs && lastPass != 0 {
+				silentNs += now - lastPass
+			}
+			lastPass = now
+			rep.LinkSilentMs = float64(silentNs) / 1e6
+			if rep.PacedFramesAfter >= pacedWanted || now-start-min(silentNs, int64(60e9)) > int64(3e9) {
 				rep.FrameEventsAfter = a.frameEvents - eventsAtPhase
 				a.done = true
 				break

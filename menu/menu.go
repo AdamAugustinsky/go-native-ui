@@ -91,6 +91,10 @@ const (
 	RoleZoomIn
 	RoleZoomOut
 	RoleActualSize
+	// RolePasteAndMatchStyle is the standard Paste and Match Style command
+	// (⌥⇧⌘V on macOS): a hosted native text view pastes the text without its
+	// style; the focused drawn text field, all plain, pastes.
+	RolePasteAndMatchStyle
 
 	roleEnd // one past the last role
 )
@@ -106,7 +110,7 @@ func (r Role) editAction() ui.EditAction {
 		return ui.EditCut
 	case RoleCopy:
 		return ui.EditCopy
-	case RolePaste:
+	case RolePaste, RolePasteAndMatchStyle:
 		return ui.EditPaste
 	case RoleSelectAll:
 		return ui.EditSelectAll

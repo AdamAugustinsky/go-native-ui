@@ -190,6 +190,11 @@ func (t *TextBuffer) Reserve(n int) {
 	if n > 0 && t.Max > 0 {
 		n = min(n, t.Max)
 	}
+	if t.secure && cap(t.b) < n {
+		nb := growCap(t.b, n)
+		clear(t.b[:cap(t.b)]) // the old storage holds no copy of the text
+		t.b = nb
+	}
 	t.b = growCap(t.b, n)
 	t.tmp = growCap(t.tmp, n)
 	u := &t.undo
@@ -228,7 +233,7 @@ func (t *TextBuffer) breakRun() { t.undo.open = false }
 func (t *TextBuffer) record(lo, hi int, ins []byte) {
 	u := &t.undo
 	steps, maxBytes := u.limits()
-	if steps <= 0 || maxBytes <= 0 {
+	if steps <= 0 || maxBytes <= 0 || t.secure {
 		return
 	}
 	del := t.b[lo:hi]

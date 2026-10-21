@@ -3,6 +3,7 @@ package platform
 import (
 	"math/rand"
 	"testing"
+	"unsafe"
 )
 
 func TestCursorMapAt(t *testing.T) {
@@ -227,5 +228,43 @@ func TestFlattenOverBudgetKeepsHoles(t *testing.T) {
 		if overlaps(r.Rect, hole) {
 			t.Fatalf("piece %v over the hole %v", r, hole)
 		}
+	}
+}
+
+// A region list that grows a little from one frame to the next does not
+// allocate each time: the storage it is copied into keeps room to grow
+// (vlistbench's gate caught the cursor list growing by a few entries in a
+// measured window).
+func TestRegionListsGrowWithRoom(t *testing.T) {
+	const n = 100
+	curs := make([]CursorRegion, n+n/2)
+	holes := make([][4]float32, n+n/2)
+	drags := make([]DragRegion, n+n/2)
+	tips := make([]TooltipRegion, n+n/2)
+	for i := range curs {
+		curs[i].Rect = [4]float32{float32(i), 0, float32(i + 1), 1}
+		holes[i], drags[i].Rect, tips[i].Rect = curs[i].Rect, curs[i].Rect, curs[i].Rect
+	}
+	var m cursorMap
+	var d dragMap
+	var tm tooltipMap
+	m.setRegions(curs[:n])
+	m.setHoles(holes[:n])
+	d.set(drags[:n])
+	tm.set(tips[:n])
+	// The storage each keeps (not the process's malloc count, which other
+	// goroutines move: on Linux the appearance follower talks to the bus).
+	type store struct{ c, h, d, t unsafe.Pointer }
+	at := func() store {
+		return store{unsafe.Pointer(unsafe.SliceData(m.regs)), unsafe.Pointer(unsafe.SliceData(m.holes)),
+			unsafe.Pointer(unsafe.SliceData(d.regs)), unsafe.Pointer(unsafe.SliceData(tm.regs))}
+	}
+	before := at()
+	m.setRegions(curs)
+	m.setHoles(holes)
+	d.set(drags)
+	tm.set(tips)
+	if after := at(); after != before {
+		t.Errorf("lists grown from %d to %d entries got new storage: %v, then %v", n, n+n/2, before, after)
 	}
 }

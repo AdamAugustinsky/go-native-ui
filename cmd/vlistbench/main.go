@@ -25,6 +25,7 @@ import (
 	"image/png"
 	"os"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
@@ -37,7 +38,13 @@ const (
 	pngW, pngH = 420, 640 // points; the PNG is at 2×
 	warmFrames = 120
 	measFrames = 600 // one session of the script
-	maxWindows = 3
+	// maxWindows: the allocation gate passes on the first clean window
+	// (D27); the runtime's type-assertion cache fills on a random call
+	// (48 B). Five windows, as the offscreen TestTimelineSession.
+	maxWindows = 5
+	// minWindows: the time maxima are compared across sessions (see
+	// gateFailures), so at least three run.
+	minWindows = 3
 
 	defaultMaxListUs = 4000 // ARCHITECTURE §11: the list's work in any frame
 	defaultMaxEditUs = 2000 // D43: the most a frame spends applying edits
@@ -61,13 +68,20 @@ type report struct {
 	// in wall time. Its P99 and Max are gated; the whole frame is FrameCPUus.
 	ListWorkUs app.Stats
 	// EditFrameMaxUs is the most main-thread CPU a counted frame spent in the
-	// edits and BeginVList, EditFrameMeanUs the mean.
+	// edits and BeginVList, EditFrameMeanUs the mean; EditFrameUs is their
+	// distribution (its P99 and Max are gated).
 	EditFrameMaxUs, EditFrameMeanUs float64
-	Arrivals, HistoryLoads          int
-	Rebuilds                        int      // edits rebuilt in slices
-	Jumps                           int      // edits above the view that moved it
-	Unpinned                        int      // frames stuck to the bottom that did not end at it
-	GateFailures                    []string `json:",omitempty"`
+	EditFrameUs                     app.Stats
+	// ListWorkMaxUs and EditFrameMaxUsByWindow are the most list work and
+	// edits in a frame of each measured window (a session each); the gate
+	// takes the least of them as the maximum (see gateFailures).
+	ListWorkMaxUs, EditFrameMaxUsByWindow []float64
+	WorstEditFrame                        worstEdit
+	Arrivals, HistoryLoads                int
+	Rebuilds                              int      // edits rebuilt in slices
+	Jumps                                 int      // edits above the view that moved it
+	Unpinned                              int      // frames stuck to the bottom that did not end at it
+	GateFailures                          []string `json:",omitempty"`
 }
 
 func main() {
@@ -80,7 +94,10 @@ func main() {
 	maxEdit := flag.Float64("max-edit-us", defaultMaxEditUs, "with -gate: the most a frame may spend in edits and BeginVList, in µs (0: do not gate)")
 	timeout := flag.Duration("timeout", 90*time.Second, "with -bench: give up after this long")
 	sites := flag.Bool("allocsites", false, "with -bench: profile every allocation and print the call stacks of those inside the measured frames")
+	budgetScale := flag.Float64("budget-scale", 1, "with -gate: multiply the time budgets by this (3: the coarse, catastrophic check of a shared CI runner)")
 	flag.Parse()
+	*maxList *= *budgetScale
+	*maxEdit *= *budgetScale
 
 	ch := newChat(max(*items, 1))
 	var err error
@@ -123,13 +140,15 @@ func renderPNG(ch *chat, path string) error {
 }
 
 func runBench(ch *chat, gate, allowUnpaced, sites bool, maxList, maxEdit float64, timeout time.Duration) error {
-	ch.script = ch.benchScript(warmFrames, measFrames, warmFrames+maxWindows*measFrames+30)
+	// The warm-up plays one whole session first: its peak frame grows the
+	// draw list once (147456 bytes), which is a warm-up and not the
+	// session's allocation; a measured window must not see it (D27).
+	warm := warmFrames + measFrames
+	ch.script = ch.benchScript(warm, measFrames, warm+maxWindows*measFrames+30)
 	ch.warmRebuild()
-	o := app.BenchOptions{Warm: warmFrames, Frames: measFrames, Windows: maxWindows, Timeout: timeout}
-	var as allocSites
-	if sites {
-		o.WindowStart, o.WindowEnd = as.start, as.end
-	}
+	o := app.BenchOptions{Warm: warm, Frames: measFrames, Windows: maxWindows, MinWindows: minWindows, Timeout: timeout,
+		WindowStart: ch.windowStart, WindowEnd: ch.windowEnd}
+	o.PrintAllocSites = sites
 	br, err := app.RunBench(config, ch, o)
 	if err != nil {
 		return err
@@ -150,8 +169,9 @@ func (ch *chat) report(br app.BenchReport) report {
 	rep := report{
 		OS: runtime.GOOS, Arch: runtime.GOARCH, Items: ch.st.Len(), BenchReport: br,
 		ItemsBuiltMax: ch.builtMax, ListWorkUs: app.Summarize(ch.listUs),
-		EditFrameMaxUs: float64(ch.editMax.Nanoseconds()) / 1e3,
-		Arrivals:       ch.arrivals, HistoryLoads: ch.histLoads, Rebuilds: ch.rebuilds,
+		EditFrameMaxUs: float64(ch.editMax.Nanoseconds()) / 1e3, EditFrameUs: app.Summarize(ch.editUs),
+		ListWorkMaxUs: ch.listMaxes, EditFrameMaxUsByWindow: ch.editMaxes, WorstEditFrame: ch.worst,
+		Arrivals: ch.arrivals, HistoryLoads: ch.histLoads, Rebuilds: ch.rebuilds,
 		Jumps: ch.jumps, Unpinned: ch.unpinned,
 	}
 	if ch.buildCalls > 0 {
@@ -169,14 +189,25 @@ func gateFailures(r report, allowUnpaced bool, maxList, maxEdit float64) []strin
 	if r.Mallocs != 0 || r.TotalAlloc != 0 {
 		f = append(f, fmt.Sprintf("%d mallocs / %d bytes allocated over the measured frames", r.Mallocs, r.TotalAlloc))
 	}
+	if msg := r.OwnAllocFailure(); msg != "" {
+		f = append(f, msg)
+	}
 	if maxList > 0 && r.ListWorkUs.P99 > maxList {
 		f = append(f, fmt.Sprintf("the list's work per frame has a P99 of %.0f µs, budget %.0f", r.ListWorkUs.P99, maxList))
 	}
-	if maxList > 0 && r.ListWorkUs.Max > maxList {
-		f = append(f, fmt.Sprintf("a frame spent %.0f µs in the list's work, budget %.0f", r.ListWorkUs.Max, maxList))
+	// The maxima: every window is a whole session, so a frame of the
+	// program's that is too slow is in each of them, while a one-off of the
+	// host's (the vCPU taken away: thread CPU time includes it on a virtual
+	// machine) is in one. The gate fails when every window had a frame over
+	// the budget.
+	if lm := leastOf(r.ListWorkMaxUs, r.ListWorkUs.Max); maxList > 0 && lm > maxList {
+		f = append(f, fmt.Sprintf("a frame spent over %.0f µs in the list's work in each of %d sessions (%.0f µs at most), budget %.0f", lm, max(len(r.ListWorkMaxUs), 1), r.ListWorkUs.Max, maxList))
 	}
-	if maxEdit > 0 && r.EditFrameMaxUs > maxEdit {
-		f = append(f, fmt.Sprintf("a frame spent %.0f µs in edits and BeginVList, budget %.0f", r.EditFrameMaxUs, maxEdit))
+	if maxEdit > 0 && r.EditFrameUs.P99 > maxEdit {
+		f = append(f, fmt.Sprintf("the edits and BeginVList per frame have a P99 of %.0f µs, budget %.0f", r.EditFrameUs.P99, maxEdit))
+	}
+	if em := leastOf(r.EditFrameMaxUsByWindow, r.EditFrameMaxUs); maxEdit > 0 && em > maxEdit {
+		f = append(f, fmt.Sprintf("a frame spent over %.0f µs in edits and BeginVList in each of %d sessions (%.0f µs at most), budget %.0f", em, max(len(r.EditFrameMaxUsByWindow), 1), r.EditFrameMaxUs, maxEdit))
 	}
 	if !r.Paced && !allowUnpaced {
 		f = append(f, fmt.Sprintf("%d frames were not paced (no frame events); -allow-unpaced accepts a sleeping display", r.UnpacedFrames))
@@ -196,4 +227,12 @@ func gateFailures(r report, allowUnpaced bool, maxList, maxEdit float64) []strin
 func printJSON(v any) {
 	b, _ := json.MarshalIndent(v, "", "  ")
 	fmt.Println(string(b))
+}
+
+// leastOf is the least of the windows' maxima, or all if there were none.
+func leastOf(windows []float64, all float64) float64 {
+	if len(windows) == 0 {
+		return all
+	}
+	return slices.Min(windows)
 }

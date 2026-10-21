@@ -88,6 +88,7 @@ func (c *Context) traverseFocus() {
 	c.focusKey = c.boxes[to].key
 	c.focusVisible = true
 	c.animating = true // the focus ring animates in the frame that follows
+	c.secureOn = c.boxes[to].secure && c.in.Focused
 }
 
 // dropFieldOutputs withdraws what the focused text field gave the app this
@@ -99,6 +100,7 @@ func (c *Context) traverseFocus() {
 // responder changes, and asks the app to discard the platform's (IMECancel);
 // asking now would discard the text before it was committed.
 func (c *Context) dropFieldOutputs() {
+	c.secureOn = false
 	if c.imeOK {
 		c.imeOK, c.imeRect, c.wakeNs = false, [4]float32{}, 0
 	}

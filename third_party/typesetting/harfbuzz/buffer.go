@@ -55,6 +55,7 @@ const (
 // and output glyphs and their information after shaping.
 type Buffer struct {
 	normCtx otNormalizeContext
+	aatCtx  aatApplyContext // the AAT and kern apply context, reused (newAatApplyContext)
 	// Info is used as internal storage during the shaping,
 	// and also exposes the result: the glyph to display
 	// and its original Cluster value.

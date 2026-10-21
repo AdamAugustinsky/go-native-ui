@@ -43,7 +43,7 @@ var wr struct {
 
 func loadWriter() error {
 	wr.once.Do(func() {
-		if err := loadAV(); err != nil {
+		if err := loadVideoAV(); err != nil {
 			wr.err = err
 			return
 		}
@@ -73,7 +73,7 @@ func loadWriter() error {
 		wr.pbBase, wr.pbBPR, wr.pbRel = sym(cv, "CVPixelBufferGetBaseAddress"), sym(cv, "CVPixelBufferGetBytesPerRow"), sym(cv, "CVPixelBufferRelease")
 		wr.ioKey = val(cv, "kCVPixelBufferIOSurfacePropertiesKey")
 		wr.timeMake = sym(cm, "CMTimeMake")
-		wr.zero = av.zero
+		wr.zero = vav.zero
 		wr.clsWriter, wr.clsInput, wr.clsAdaptor = objc.Cls("AVAssetWriter"), objc.Cls("AVAssetWriterInput"), objc.Cls("AVAssetWriterInputPixelBufferAdaptor")
 		wr.writerWith = objc.Sel("assetWriterWithURL:fileType:error:")
 		wr.inputWith = objc.Sel("assetWriterInputWithMediaType:outputSettings:")
@@ -95,20 +95,20 @@ func writeClip(path string, w, h, fps, secs int, turned bool) error {
 	defer F.Call1(objc.PoolPop, pool)
 	os.Remove(path)
 	b := []byte(path)
-	str := F.Reset().Arg(uintptr(objc.Send(av.clsString, selAlloc))).Arg(uintptr(selStrInit)).
+	str := F.Reset().Arg(uintptr(objc.Send(vav.clsString, selAlloc))).Arg(uintptr(selStrInit)).
 		Arg(uintptr(unsafe.Pointer(&b[0]))).Arg(uintptr(len(b))).Arg(4).Call(objc.MsgSend).R0()
-	url := objc.Send1(av.clsURL, selFileURL, str)
+	url := objc.Send1(vav.clsURL, selFileURL, str)
 	objc.Release(objc.ID(str))
 	wr.errOut = 0
 	writer := objc.Send3(wr.clsWriter, wr.writerWith, uintptr(url), wr.fileType, uintptr(unsafe.Pointer(&wr.errOut)))
 	if writer == 0 {
 		return errors.New("no AVAssetWriter")
 	}
-	settings := objc.Send(av.clsMDict, selDict)
+	settings := objc.Send(vav.clsMDict, selDict)
 	objc.Send2(settings, selSetObject, wr.h264, wr.codecKey)
-	objc.Send2(settings, selSetObject, uintptr(objc.Send1(av.clsNumber, selNumberInt, uintptr(w))), wr.widthKey)
-	objc.Send2(settings, selSetObject, uintptr(objc.Send1(av.clsNumber, selNumberInt, uintptr(h))), wr.heightKey)
-	input := objc.Send2(wr.clsInput, wr.inputWith, av.mediaVideo, uintptr(settings))
+	objc.Send2(settings, selSetObject, uintptr(objc.Send1(vav.clsNumber, selNumberInt, uintptr(w))), wr.widthKey)
+	objc.Send2(settings, selSetObject, uintptr(objc.Send1(vav.clsNumber, selNumberInt, uintptr(h))), wr.heightKey)
+	input := objc.Send2(wr.clsInput, wr.inputWith, vav.mediaVideo, uintptr(settings))
 	objc.Send1(input, objc.Sel("setExpectsMediaDataInRealTime:"), 0)
 	if turned {
 		wr.transform = [6]float64{0, 1, -1, 0, float64(h), 0}
@@ -121,8 +121,8 @@ func writeClip(path string, w, h, fps, secs int, turned bool) error {
 	}
 	wr.t = wr.zero
 	objc.Send1(writer, objc.Sel("startSessionAtSourceTime:"), uintptr(unsafe.Pointer(&wr.t)))
-	attrs := objc.Send(av.clsMDict, selDict)
-	objc.Send2(attrs, selSetObject, uintptr(objc.Send(av.clsDict, selDict)), wr.ioKey)
+	attrs := objc.Send(vav.clsMDict, selDict)
+	objc.Send2(attrs, selSetObject, uintptr(objc.Send(vav.clsDict, selDict)), wr.ioKey)
 	ready, appendSel := objc.Sel("isReadyForMoreMediaData"), objc.Sel("appendPixelBuffer:withPresentationTime:")
 	for i := 0; i < fps*secs; i++ {
 		for deadline := time.Now().Add(5 * time.Second); objc.Send(input, ready)&0xFF == 0; {

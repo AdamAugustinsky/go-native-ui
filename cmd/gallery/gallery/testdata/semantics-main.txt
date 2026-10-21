@@ -35,6 +35,9 @@ Window
       Group "Notes"
         Label "Notes"
         TextField "Notes" value="Hello, gallery" [editable]
+      Group "Password"
+        Label "Password"
+        TextField "Password" [editable secure]
       Group "Filter"
         Label "Filter"
         SearchField "Filter" [editable]

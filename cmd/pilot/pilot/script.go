@@ -7,6 +7,8 @@ import (
 
 	"gonativeui/fs"
 	"gonativeui/platform"
+	"gonativeui/text"
+	"gonativeui/theme"
 	"gonativeui/ui"
 )
 
@@ -377,6 +379,8 @@ type Bench struct {
 	ctx     *ui.Context
 	clip    []byte
 	clipSet func([]byte)
+
+	primed theme.FontKeys // the fonts primeNames last shaped the names in
 }
 
 // Build implements app.Builder: the Pilot's, and the Bench's clipboard.
@@ -386,6 +390,30 @@ func (b *Bench) Build(c *ui.Context) {
 		c.ClipboardSet = b.clipSet
 	}
 	b.Pilot.Build(c)
+	// A synthetic session shapes every name it can show, in each font of
+	// the theme, as soon as the theme's fonts are made (the kit's first
+	// frame, a new scale). On the Go text engine (Linux) a script's first
+	// shape in a face builds the shaper's plan, which allocates, and which
+	// non-ASCII names scroll into view before the measured windows depends
+	// on the machine's speed: on CI the warm-up met no Greek name in 4 runs
+	// of 4, and one run met its first in the first window (29 objects of
+	// harfbuzz's otMapBuilder, none in the second window).
+	if f := b.k.Theme().Font; b.s.synth != nil && f != b.primed {
+		b.primed = f
+		primeNames(b.a.Text, f)
+	}
+}
+
+// primeNames shapes each synthetic name in each font, with every digit and
+// character a row adds to it.
+func primeNames(ts *text.System, f theme.FontKeys) {
+	var buf []byte
+	for _, k := range [...]text.FontKey{f.UI, f.UISemi, f.Small, f.Mono, f.MonoBold} {
+		for _, n := range synthNames {
+			buf = append(append(buf[:0], n...), "_0123456789.txt"...)
+			ts.Shape(k, buf)
+		}
+	}
 }
 
 // UsePlatformClipboard makes the session copy to and paste from the system

@@ -213,7 +213,7 @@ const (
 	// MaxActions is the number of accessibility action requests per frame.
 	MaxActions = 4
 	// MaxText is the number of bytes of typed text per frame.
-	MaxText = 64
+	MaxText = 1024
 	// MaxPreedit is the number of bytes of input-method composition text.
 	MaxPreedit = 256
 )
@@ -359,6 +359,11 @@ type Input struct {
 	MenuIndex     int32
 	MenuRev       uint64
 	HasMenuChoice bool
+	// MenuOutcome is how the menu that box MenuOwner popped up with
+	// Context.ContextMenu ended, for the frame it is set in (SetMenuResult),
+	// and MenuItemID the chosen item's ID.
+	MenuOutcome MenuOutcome
+	MenuItemID  int64
 
 	// Drop is the drag and drop part of the input: a drag from another
 	// application over the window, a drop, the end of a drag this app started
@@ -557,14 +562,17 @@ func (in *Input) ReplaceText(start, units int32, s []byte) bool {
 	return true
 }
 
-// AppendText queues typed text, dropping what does not fit (whole characters
-// only: a character that would be cut is dropped with the rest).
-func (in *Input) AppendText(s string) {
-	n := min(len(s), len(in.Text)-in.NText)
+// AppendText queues typed text and returns how many bytes of s it took: all
+// of them unless the frame's MaxText bytes are full, then the whole characters
+// that fit (a character that would be cut is left out with the rest). The
+// caller keeps s[n:] for the next frame; nothing is dropped silently.
+func (in *Input) AppendText(s string) (n int) {
+	n = min(len(s), len(in.Text)-in.NText)
 	for n < len(s) && n > 0 && !utf8.RuneStart(s[n]) {
 		n--
 	}
 	in.NText += copy(in.Text[in.NText:], s[:n])
+	return n
 }
 
 // SetPreedit sets the composition text and the caret or selection inside it
@@ -588,12 +596,14 @@ func (in *Input) ClearFrame() {
 	in.Cancelled = [numButtons]bool{}
 	in.Clicks = [numButtons]uint8{}
 	in.ScrollX, in.ScrollY, in.NScrolls = 0, 0, 0
+	clear(in.Text[:in.NText]) // typed and pasted text (a password) does not outlive its frame
+	clear(in.Paste)
 	in.NKeys, in.NText = 0, 0
 	in.CommitOff, in.CommitLen = 0, 0
 	in.FocusGained = false
 	in.NEdit, in.NCommands, in.NActions, in.NGestures = 0, 0, 0, 0
 	in.HasPaste, in.HasReplace, in.ReplaceN = false, false, 0
-	in.HasMenuChoice = false
+	in.HasMenuChoice, in.MenuOutcome = false, MenuPending
 	in.HasColorPick, in.ColorClosed, in.ColorFailed = false, false, false
 	in.Drop.clearFrame()
 	if cap(in.Paste) > MaxKeptPaste { // do not hold on to more than a supported paste

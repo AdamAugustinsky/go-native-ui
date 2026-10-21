@@ -155,6 +155,7 @@ type Gallery struct {
 
 	// widgets with state
 	notes     ui.TextBuffer
+	password  ui.TextBuffer
 	filter    ui.TextBuffer
 	check     bool
 	tri       widget.CheckState

@@ -2,6 +2,7 @@ package platform
 
 import (
 	"os"
+	"strings"
 	"testing"
 	"unsafe"
 
@@ -153,6 +154,105 @@ func TestSecureInputEndsWithTheWindow(t *testing.T) {
 		postAppNotification("NSApplicationDidBecomeActiveNotification")
 		check("in the reopened window")
 		w2.Close()
+	})
+	if skip != "" {
+		t.Skip("cannot open a window here: " + skip)
+	}
+	for _, s := range steps {
+		t.Error(s)
+	}
+}
+
+// allowedLocales is the view's input context's allowedInputSourceLocales, as
+// strings ("" for none).
+func allowedLocales(w *Window) []string {
+	selAllowed, selCount, selAt := objc.Sel("allowedInputSourceLocales"), objc.Sel("count"), objc.Sel("objectAtIndex:")
+	ctx := objc.Send(w.view, selInputContext)
+	arr := objc.Send(ctx, selAllowed)
+	if arr == 0 {
+		return nil
+	}
+	var out []string
+	for i := uintptr(0); i < uintptr(objc.Send(arr, selCount)); i++ {
+		out = append(out, string(objc.AppendUTF8(nil, objc.Send1(arr, selAt, i))))
+	}
+	return out
+}
+
+// TestSecureTextInputFollowsTheWindows: a window whose focused field is
+// secure turns secure event input on (the system names this process, and
+// Carbon's IsSecureEventInputEnabled agrees) and restricts its input context
+// to Roman input sources; it stays on while any window wants it, and goes with
+// the last of them: blur, or the window closing.
+func TestSecureTextInputFollowsTheWindows(t *testing.T) {
+	appKit, _ := loadFramework("/System/Library/Frameworks/AppKit.framework/AppKit")
+	roman := string(objc.AppendUTF8(nil, stringConstant(appKit, "NSAllRomanInputSourcesLocaleIdentifier")))
+	carbon, err := purego.Dlopen("/System/Library/Frameworks/Carbon.framework/Carbon", purego.RTLD_NOW|purego.RTLD_GLOBAL)
+	if err != nil {
+		t.Skip("no Carbon:", err)
+	}
+	isOn, err := purego.Dlsym(carbon, "IsSecureEventInputEnabled")
+	if err != nil {
+		t.Skip("no IsSecureEventInputEnabled:", err)
+	}
+	owner := secureOwner(t)
+	pid := os.Getpid()
+	var steps []string
+	var skip string
+	onMain(func() {
+		pool := objc.F.Call0(objc.PoolPush)
+		defer objc.F.Call1(objc.PoolPop, pool)
+		other := func() bool { o := owner(); return o != 0 && o != pid }
+		check := func(what string, want bool) {
+			sys := objc.F.Call0(isOn)&0xFF != 0
+			if SecureInputEnabled() != want || (!other() && ((owner() == pid) != want || sys != want)) {
+				steps = append(steps, what+": ours "+boolStr(SecureInputEnabled())+", system owner "+itoa(owner())+", IsSecureEventInputEnabled "+boolStr(sys)+", want "+boolStr(want))
+			}
+		}
+		a, err := Open(Options{Title: "secure a", Width: 200, Height: 100, Hidden: true})
+		if err != nil {
+			skip = err.Error()
+			return
+		}
+		b, err := Open(Options{Title: "secure b", Width: 200, Height: 100, Hidden: true})
+		if err != nil {
+			a.Close()
+			skip = err.Error()
+			return
+		}
+		a.SetSecureTextInput(false) // (the activation observers exist from here on)
+		postAppNotification("NSApplicationDidBecomeActiveNotification")
+		check("idle", false)
+		a.SetSecureTextInput(true)
+		check("a's field secure", true)
+		if got := allowedLocales(a); len(got) != 1 || got[0] != roman {
+			steps = append(steps, "a's input sources: "+strings.Join(got, ",")+", want "+roman)
+		}
+		if got := allowedLocales(b); len(got) != 0 {
+			steps = append(steps, "b's input sources restricted: "+strings.Join(got, ","))
+		}
+		b.SetSecureTextInput(false) // another window, not focused, says no every frame
+		a.SetSecureTextInput(true)
+		check("b says no", true)
+		b.SetSecureTextInput(true)
+		a.SetSecureTextInput(false)
+		check("b's field now", true)
+		if got := allowedLocales(a); len(got) != 0 {
+			steps = append(steps, "a's input sources still restricted after blur: "+strings.Join(got, ","))
+		}
+		b.SetSecureTextInput(false)
+		check("both blurred", false)
+		postAppNotification("NSApplicationDidResignActiveNotification")
+		a.SetSecureTextInput(true)
+		check("inactive app", false)
+		postAppNotification("NSApplicationDidBecomeActiveNotification")
+		check("active again", true)
+		a.Close()
+		check("a closed", false)
+		postAppNotification("NSApplicationDidResignActiveNotification")
+		postAppNotification("NSApplicationDidBecomeActiveNotification")
+		check("after the next activation", false)
+		b.Close()
 	})
 	if skip != "" {
 		t.Skip("cannot open a window here: " + skip)

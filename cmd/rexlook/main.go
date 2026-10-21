@@ -12,8 +12,10 @@
 //	rexlook -bench             scripted pointer run (hover across the tabs, focus switching, both dividers
 //	                           dragged back and forth): 1000 warm-up + 900 measured frames; print allocation,
 //	                           CPU split, pacing and latency as JSON
-//	rexlook -bench -gate       also exit with status 3 unless 0 allocations, main-thread CPU ≤ 1000 µs/frame
-//	                           and frames were paced (-allow-unpaced accepts a sleeping display)
+//	rexlook -bench -gate       also exit with status 3 unless a window of the script had 0 allocations
+//	                           (up to 12 tries), main-thread CPU ≤ 1000 µs/frame and frames were paced
+//	                           (-allow-unpaced accepts a sleeping display); -allocsites prints the
+//	                           allocating call stacks
 //	rexlook -live-resize-test  drag the window size through the frame handler (macOS) and print
 //	                           frame counts and allocations as JSON
 //	rexlook -idle 3s           show the window, let it settle for a second, then count the frames drawn while
@@ -65,6 +67,15 @@ const (
 	warmFrames = 1000
 	measFrames = 900
 
+	// The allocation gate (DECISIONS D27): up to maxWindows measured windows
+	// of measFrames, after a collection and postGCWarm frames; it passes on the
+	// first window with no allocation at all. Each window is one whole cycle
+	// of the script, so an allocation of the session recurs in every one; a
+	// one-off of the process (a new OS thread, the scavenger's timer heap, a
+	// type-assertion cache the runtime fills on a random call) misses most.
+	postGCWarm = 300
+	maxWindows = 12
+
 	defaultMaxCPUus = 1000 // main-thread CPU per frame (docs/PHASE2-PLAN.md: the rexlook frame)
 )
 
@@ -80,6 +91,8 @@ func main() {
 	timeout := flag.Duration("timeout", 120*time.Second, "with -bench: give up after this long")
 	resizeTest := flag.Bool("live-resize-test", false, "macOS: drag the window size through the frame handler and print the result as JSON")
 	probe := flag.Bool("probe-titlebar", false, "macOS: print the titlebar hit-test and drag-map probe as JSON and exit")
+	sites := flag.Bool("allocsites", false, "with -bench: print the call stacks of the allocations attributed over the measured windows")
+	testAlloc := flag.Int("test-alloc-every", 0, "with -bench: a test of the allocation gate: the bench allocates every this many frames, and the gate must fail")
 	drawn := flag.Bool("drawn", false, "macOS: draw the field and the ⌘ and + buttons instead of the native shell (backdrop and native buttons)")
 	glassButtons := flag.Bool("glass-buttons", false, "macOS: native ⌘ and + as Liquid Glass circles instead of borderless symbols")
 	native := flag.Bool("native", false, "with -o: render the native shell's content (no field, no ⌘ and +)")
@@ -87,7 +100,9 @@ func main() {
 	poseTab := flag.Int("pose-tab", 1, "with -pose: the tab, from 0")
 	idle := flag.Duration("idle", 0, "show the window, wait a second, count the frames drawn over this long while nothing happens, print them as JSON and exit")
 	verbose := flag.Bool("v", false, "print the startup timeline to stderr; with -bench or in a window, also a state line every second while frames stop coming")
+	budgetScale := flag.Float64("budget-scale", 1, "with -gate: multiply the time budgets by this (3: the coarse, catastrophic check of a shared CI runner)")
 	flag.Parse()
+	*maxCPU *= *budgetScale
 
 	if *drawn {
 		config = rex.Config
@@ -105,7 +120,7 @@ func main() {
 			}
 			err = renderPNG(*out, *outDark, pref, *native)
 		case *bench:
-			err = runBench(pref, *gate, *allowUnpaced, *maxCPU, *timeout, *verbose)
+			err = runBench(pref, *gate, *allowUnpaced, *sites, *maxCPU, *timeout, *verbose, *testAlloc)
 		case *resizeTest:
 			err = runResizeTest(pref)
 		case *probe:
@@ -273,9 +288,12 @@ type report struct {
 	GateFailures  []string `json:",omitempty"`
 }
 
-func runBench(pref theme.Preference, gate, allowUnpaced bool, maxCPU float64, timeout time.Duration, verbose bool) error {
+func runBench(pref theme.Preference, gate, allowUnpaced, sites bool, maxCPU float64, timeout time.Duration, verbose bool, testAlloc int) error {
 	x := newScene(pref)
-	br, err := app.RunBench(config(), rex.NewBench(x), app.BenchOptions{Warm: warmFrames, Frames: measFrames, Timeout: timeout, Verbose: verbose})
+	opt := app.BenchOptions{Warm: warmFrames, Frames: measFrames, Timeout: timeout, Verbose: verbose,
+		PostGCWarm: postGCWarm, Windows: maxWindows}
+	opt.PrintAllocSites, opt.TestAllocEvery = sites, testAlloc
+	br, err := app.RunBench(config(), rex.NewBench(x), opt)
 	if err != nil {
 		return err
 	}
@@ -298,7 +316,10 @@ func gateFailures(r report, allowUnpaced bool, maxCPU float64) []string {
 		f = append(f, fmt.Sprintf("%d measured frames, want at least 600", r.Frames))
 	}
 	if r.Mallocs != 0 || r.TotalAlloc != 0 {
-		f = append(f, fmt.Sprintf("%d mallocs / %d bytes allocated over the measured frames", r.Mallocs, r.TotalAlloc))
+		f = append(f, fmt.Sprintf("every one of %d measured windows allocated (fewest: %d mallocs / %d bytes)", len(r.Windows), r.Mallocs, r.TotalAlloc))
+	}
+	if msg := r.OwnAllocFailure(); msg != "" {
+		f = append(f, msg)
 	}
 	if maxCPU > 0 && r.MainThreadCPUus > maxCPU {
 		f = append(f, fmt.Sprintf("main-thread CPU %.0f µs/frame, budget %.0f", r.MainThreadCPUus, maxCPU))

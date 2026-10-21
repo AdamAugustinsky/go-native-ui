@@ -195,7 +195,7 @@ func TestPackageWithoutAppleIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	dmg := filepath.Join(out, "HelloApp-2.3.4.dmg")
-	if _, err := runOut("hdiutil", "verify", dmg); err != nil {
+	if _, err := hdiutil("verify", dmg); err != nil {
 		t.Errorf("the dmg does not verify: %v", err)
 	}
 }

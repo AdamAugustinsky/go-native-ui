@@ -1,6 +1,7 @@
 package core
 
 import (
+	"fmt"
 	"runtime"
 	"strings"
 	"sync"
@@ -19,6 +20,62 @@ func within(t *testing.T, d time.Duration, what string, f func()) {
 	case <-time.After(d):
 		t.Fatalf("%s did not finish within %v", what, d)
 	}
+}
+
+// stallLimit is how long a test that passes wakes around waits without any
+// progress before it calls a wake-up lost. A round takes microseconds, or a
+// millisecond where a wake is a thread switch on a busy virtual machine (the
+// Windows runners take 12-30 s for the tests of this file), so a slow machine
+// keeps advancing, and a lost wake-up stops for good.
+const stallLimit = 10 * time.Second
+
+// progress waits until done is closed. It fails the test, printing dump() and
+// the stacks of every goroutine, when count (the work done so far) has not
+// advanced for stallLimit, or when the deadline of the test binary (go test
+// -timeout) is close, so that the failure is this one with its state and not
+// the binary's panic.
+func progress(t *testing.T, what string, done <-chan struct{}, count func() int64, dump func() string) {
+	t.Helper()
+	start := time.Now()
+	end, hasEnd := t.Deadline()
+	last, lastAt := count(), start
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		select {
+		case <-done:
+			return
+		case now := <-tick.C:
+			n := count()
+			if n != last {
+				last, lastAt = n, now
+			}
+			var why string
+			switch {
+			case now.Sub(lastAt) >= stallLimit:
+				why = fmt.Sprintf("made no progress for %v", now.Sub(lastAt).Round(time.Millisecond))
+			case hasEnd && end.Sub(now) < 10*time.Second:
+				why = "is still running at the test deadline"
+			default:
+				continue
+			}
+			el := now.Sub(start)
+			t.Fatalf("%s %s: %d done in %v (%.0f/s)\n%s\n%s", what, why, n, el.Round(time.Millisecond),
+				float64(n)/el.Seconds(), dump(), stacks())
+		}
+	}
+}
+
+// stacks returns the stacks of every goroutine.
+func stacks() string {
+	buf := make([]byte, 1<<20)
+	return string(buf[:runtime.Stack(buf, true)])
+}
+
+// parkerState describes a Parker for a failure message.
+func parkerState(p *Parker) string {
+	return fmt.Sprintf("{token pending %d, closed %v, fallback %v (%d buffered), sys %+v}",
+		p.state.Load(), p.closed.Load(), p.ch != nil, len(p.ch), &p.sys)
 }
 
 // parkers returns a pipe-backed Parker and the channel fallback, so the
@@ -85,22 +142,27 @@ func TestParkerNoLostWakeups(t *testing.T) {
 					}
 				}()
 			}
-			var seen, wakes int64
-			within(t, 30*time.Second, "waiter", func() {
-				for seen < wakers*per {
-					if n := posted.Load(); n > seen {
-						seen = n
+			var seen, wakes atomic.Int64
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				for seen.Load() < wakers*per {
+					if n := posted.Load(); n > seen.Load() {
+						seen.Store(n)
 						continue
 					}
 					if !p.Park() {
 						t.Error("Park returned false")
 						return
 					}
-					wakes++
+					wakes.Add(1)
 				}
+			}()
+			progress(t, "waiter", done, seen.Load, func() string {
+				return fmt.Sprintf("seen %d of %d posts (%d posted), %d wakes; %s", seen.Load(), wakers*per, posted.Load(), wakes.Load(), parkerState(p))
 			})
 			wg.Wait()
-			t.Logf("%d posts, %d wakes", seen, wakes)
+			t.Logf("%d posts, %d wakes", seen.Load(), wakes.Load())
 		})
 	}
 }
@@ -121,7 +183,9 @@ func TestParkerPingPong(t *testing.T) {
 				defer wg.Done()
 				for i := int64(0); i < rounds; i++ {
 					for turn.Load()%2 != parity {
-						me.Park()
+						if !me.Park() {
+							return // closed: the test failed
+						}
 					}
 					turn.Add(1)
 					other.Unpark()
@@ -130,7 +194,11 @@ func TestParkerPingPong(t *testing.T) {
 			wg.Add(2)
 			go play(a, b, 0)
 			go play(b, a, 1)
-			within(t, 30*time.Second, "ping-pong", wg.Wait)
+			done := make(chan struct{})
+			go func() { wg.Wait(); close(done) }()
+			progress(t, "ping-pong", done, turn.Load, func() string {
+				return fmt.Sprintf("turn %d of %d (even: a's); a %s; b %s", turn.Load(), 2*rounds, parkerState(a), parkerState(b))
+			})
 			if got := turn.Load(); got != 2*rounds {
 				t.Fatalf("%d turns, want %d", got, 2*rounds)
 			}
@@ -255,12 +323,21 @@ func zeroAllocRing(t *testing.T, mk func() *Parker) {
 		wg.Add(1)
 		go play(i)
 	}
+	// waitTurns polls (progress would allocate inside the measured windows)
+	// and fails the same way when the turns stop.
 	waitTurns := func(n int64) {
-		deadline := time.Now().Add(30 * time.Second)
+		last, lastAt := turn.Load(), time.Now()
 		for turn.Load() < n {
-			if time.Now().After(deadline) {
+			if now := time.Now(); turn.Load() != last {
+				last, lastAt = turn.Load(), now
+			} else if now.Sub(lastAt) >= stallLimit {
 				stop.Store(1)
-				t.Fatalf("stalled at turn %d of %d", turn.Load(), n)
+				var b strings.Builder
+				for i, p := range ps {
+					fmt.Fprintf(&b, "player %d %s\n", i, parkerState(p))
+				}
+				t.Fatalf("the ring made no progress for %v at turn %d of %d (player %d's)\n%s%s",
+					now.Sub(lastAt).Round(time.Millisecond), last, n, last%players, b.String(), stacks())
 			}
 			time.Sleep(200 * time.Microsecond) // not Gosched: that makes the runtime start threads
 		}

@@ -101,6 +101,7 @@ func main() {
 	away := flag.Bool("away", false, "with -idle -anim: scroll past the animated samples first: they are out of view and the app must draw 0 frames")
 	idle := flag.Duration("idle", 0, "show the window, wait for the view to load, count the frames drawn over this long, print them as JSON")
 	timeout := flag.Duration("timeout", 120*time.Second, "with -bench: give up after this long")
+	sites := flag.Bool("allocsites", false, "with -bench: print the call stacks of the allocations attributed over the measured windows")
 	flag.Parse()
 
 	var err error
@@ -108,7 +109,7 @@ func main() {
 	case *out != "":
 		err = renderPNG(*items, *out)
 	case *bench:
-		err = runBench(*items, *gate, *allowUnpaced, *maxPoll, *timeout, *anim)
+		err = runBench(*items, *gate, *allowUnpaced, *sites, *maxPoll, *timeout, *anim)
 	case *idle > 0:
 		err = runIdle(*items, *idle, *anim, *away)
 	default:
@@ -262,10 +263,10 @@ func (b *benchGrid) Build(c *ui.Context) {
 // sessions of cached images.
 func (b *benchGrid) AtCycleStart() bool { return b.s.phase == phSession && b.s.next == 0 }
 
-func runBench(items int, gate, allowUnpaced bool, maxPoll float64, timeout time.Duration, anim bool) error {
+func runBench(items int, gate, allowUnpaced, sites bool, maxPoll float64, timeout time.Duration, anim bool) error {
 	b := newBenchGrid(items)
 	b.anim = anim
-	br, err := app.RunBench(config, b, app.BenchOptions{Warm: 1, Windows: maxWindows, Timeout: timeout})
+	br, err := app.RunBench(config, b, app.BenchOptions{Warm: 1, Windows: maxWindows, Timeout: timeout, PrintAllocSites: sites})
 	if err != nil {
 		return err
 	}
@@ -317,6 +318,9 @@ func gateFailures(r report, period int, allowUnpaced bool, maxPoll float64) []st
 	}
 	if r.Mallocs != 0 || r.TotalAlloc != 0 {
 		f = append(f, fmt.Sprintf("%d mallocs / %d bytes allocated over the measured frames", r.Mallocs, r.TotalAlloc))
+	}
+	if msg := r.OwnAllocFailure(); msg != "" {
+		f = append(f, msg)
 	}
 	if r.VisibleMean < 150 {
 		f = append(f, fmt.Sprintf("%.0f images in view per frame, want about 200", r.VisibleMean))

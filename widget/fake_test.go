@@ -7,6 +7,7 @@ import (
 	"gonativeui/gpu"
 	"gonativeui/internal/fakeui"
 	"gonativeui/menu"
+	"gonativeui/theme"
 	"gonativeui/theme/rex"
 	"gonativeui/ui"
 )
@@ -28,6 +29,13 @@ type rig struct {
 
 func newRig(t *testing.T, w, h int, build func(k *Kit)) *rig {
 	t.Helper()
+	return newRigThemed(t, w, h, build, nil)
+}
+
+// newRigThemed is newRig with SetTheme(th) called before the first frame, if
+// th is not nil.
+func newRigThemed(t *testing.T, w, h int, build func(k *Kit), th *theme.Theme) *rig {
+	t.Helper()
 	// the icon atlas rasterises symbols through AppKit on macOS, which wants a
 	// thread of its own (as the tests of package icon give it)
 	runtime.LockOSThread()
@@ -38,6 +46,9 @@ func newRig(t *testing.T, w, h int, build func(k *Kit)) *rig {
 	c.AtlasSync(&fakeui.Uploader{})
 	g := &rig{t: t, ts: ts, c: c, w: w, h: h, scale: 1, build: build}
 	g.k = NewKit(c, ts, rex.Theme())
+	if th != nil {
+		g.k.SetTheme(th)
+	}
 	g.in.Inside, g.in.Focused = true, true
 	g.in.MouseX, g.in.MouseY = -100, -100
 	g.list.Quads = make([]gpu.Quad, 0, 1<<13)

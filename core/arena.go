@@ -165,9 +165,20 @@ type Frame struct {
 // Swap starts a new frame: the current arena becomes the previous one and a
 // fresh (reset) arena becomes current. The arena that was "previous" is
 // recycled, so its data is gone.
+//
+// The two arenas take turns, so a frame that needs more than either held
+// grows only its own: the other is given the same capacity here, at the
+// next frame, and does not grow on its turn (the gallery's allocation gate
+// caught that: a peak in the warm-up grew one arena, and the same peak on
+// the other's turn grew it in a measured window). The capacity is matched
+// exactly, so the two do not outgrow each other.
 func (f *Frame) Swap() {
 	f.i ^= 1
-	f.a[f.i].Reset()
+	a := &f.a[f.i]
+	a.Reset()
+	if c := cap(f.a[f.i^1].buf); cap(a.buf) < c {
+		a.buf = make([]byte, 0, c)
+	}
 }
 
 // Cur is the arena of the current frame.

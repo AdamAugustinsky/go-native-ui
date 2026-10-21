@@ -230,7 +230,7 @@ func (k *Kit) BeginTableHeaderOpts(label string, st *TableState, cols []Column, 
 	t.headerInput()
 	// A legacy bar beside the rows leaves a corner above it: the header row
 	// and the corner share a strip (EndHeaderRow builds the corner).
-	if t.corner = k.legacyReserve(bkey, ScrollVertical, st.Scroll.Size)[0]; t.corner > 0 && t.top == 0 {
+	if t.corner = k.legacyReserve(bkey, ScrollVertical, &st.Scroll)[0]; t.corner > 0 && t.top == 0 {
 		c.NextSize(ui.Pct(1), ui.Px(t.hh))
 		c.NextAxis(ui.AxisX)
 		c.Push(c.BoxKeyed(0, ui.KeyN(t.tkey, 3), nil))

@@ -75,7 +75,8 @@ func (a *App) syncMenuBar() {
 // model's State says, given the last frame's modal and focus, the system's
 // actions included (a disabled RoleZoom does not zoom; Quit waits for the
 // modal unless its command is InModal). A standard item without a command
-// (id 0): an edit item when a text field has the focus; a system item (Hide,
+// (id 0): an edit item when a text field has the focus (not Copy or Cut when
+// it is a secure field); a system item (Hide,
 // Quit, Minimize …) unless a modal is open, as a command not marked InModal.
 func (a *App) menuState(id uint16, act platform.MenuAction) (enabled, checked bool) {
 	if devBuild && id >= debugCmdBase {
@@ -85,7 +86,7 @@ func (a *App) menuState(id uint16, act platform.MenuAction) (enabled, checked bo
 	}
 	if id == 0 {
 		if act.IsEdit() {
-			return a.UI.TextFieldFocused(), false
+			return a.UI.TextFieldFocused() && !(a.UI.SecureFieldFocused() && (act == platform.MenuCopy || act == platform.MenuCut)), false
 		}
 		return act != platform.MenuNone && !a.UI.ModalOpen(), false
 	}
@@ -138,15 +139,60 @@ func (a *App) popUpMenus() {
 		a.listItems = items
 		a.listSpec.Menus = append(a.listSpec.Menus, platform.Menu{Items: items})
 		p.Spec, p.Menu, p.Kind, p.Selected = &a.listSpec, 0, platform.PopupList, r.Selected
+	case ui.MenuItems:
+		a.ctxSpec.Menus = a.ctxSpec.Menus[:0]
+		a.addDynamicMenu(r.Items)
+		p.Spec, p.Menu, p.Kind = &a.ctxSpec, 0, platform.PopupContext
 	default:
 		return
 	}
 	i := a.Win.PopUpMenu(&p)
-	if r.Kind == ui.MenuList && i >= 0 {
+	switch {
+	case r.Kind == ui.MenuList && i >= 0:
 		a.tr.in.SetMenuChoice(r.Owner, i, r.Rev)
-		a.tr.dirty = true
-		a.p.invalidate()
+	case r.Kind == ui.MenuItems && p.Picked:
+		a.tr.in.SetMenuResult(r.Owner, p.Choice, ui.MenuChosen)
+	case r.Kind == ui.MenuItems:
+		a.tr.in.SetMenuResult(r.Owner, 0, ui.MenuDismissed)
+	default:
+		return
 	}
+	a.tr.dirty = true
+	a.p.invalidate()
+}
+
+// maxDynamicMenus bounds the menus (the root and its submenus) of one
+// described menu.
+const maxDynamicMenus = 64
+
+// addDynamicMenu appends the menu of items to a.ctxSpec, and the menus of
+// its submenus after it, and returns its index. Items and menus are kept
+// from one use to the next.
+func (a *App) addDynamicMenu(items []ui.MenuItem) int {
+	s := &a.ctxSpec
+	idx := len(s.Menus)
+	if idx < cap(s.Menus) {
+		s.Menus = s.Menus[:idx+1]
+	} else {
+		s.Menus = append(s.Menus, platform.Menu{})
+	}
+	s.Menus[idx].Dynamic = true
+	s.Menus[idx].Items = s.Menus[idx].Items[:0]
+	for i := range items {
+		it := &items[i]
+		pi := platform.MenuItem{Kind: platform.MenuItemAction, Title: it.Title, Symbol: it.Symbol, Choice: it.ID,
+			Disabled: it.Disabled, Destructive: it.Destructive, Checked: it.Mark == ui.MarkOn, Mixed: it.Mark == ui.MarkMixed}
+		pi.Key, pi.Mods = keyEquivalent(menu.Shortcut{Key: it.Key, Mods: it.Mods})
+		switch {
+		case it.Separator:
+			pi = platform.MenuItem{Kind: platform.MenuItemSeparator}
+		case len(it.Sub) > 0 && len(s.Menus) < maxDynamicMenus:
+			pi.Kind = platform.MenuItemSubmenu
+			pi.Submenu = a.addDynamicMenu(it.Sub)
+		}
+		s.Menus[idx].Items = append(s.Menus[idx].Items, pi)
+	}
+	return idx
 }
 
 // nativeMenuSpec composes the macOS menu bar of model m (nil: the standard
@@ -223,7 +269,7 @@ func nativeMenuSpec(m *menu.Model) platform.MenuSpec {
 	edit := -1
 	if !hasEdit {
 		edit = add(platform.Menu{Title: "Edit", Items: []platform.MenuItem{act(platform.MenuUndo), act(platform.MenuRedo), sep,
-			act(platform.MenuCut), act(platform.MenuCopy), act(platform.MenuPaste), act(platform.MenuDelete), act(platform.MenuSelectAll)}})
+			act(platform.MenuCut), act(platform.MenuCopy), act(platform.MenuPaste), act(platform.MenuPasteAndMatchStyle), act(platform.MenuDelete), act(platform.MenuSelectAll)}})
 	}
 	for k, bi := range bar {
 		s.Bar = append(s.Bar, bi)
@@ -325,6 +371,8 @@ func commandItem(cmd *menu.Command) platform.MenuItem {
 		it.Action = platform.MenuCopy
 	case menu.RolePaste:
 		it.Action = platform.MenuPaste
+	case menu.RolePasteAndMatchStyle:
+		it.Action = platform.MenuPasteAndMatchStyle
 	case menu.RoleDelete:
 		it.Action = platform.MenuDelete
 	case menu.RoleSelectAll:
@@ -400,7 +448,7 @@ func standardEdit(a platform.MenuAction) ui.EditAction {
 		return ui.EditCut
 	case platform.MenuCopy:
 		return ui.EditCopy
-	case platform.MenuPaste:
+	case platform.MenuPaste, platform.MenuPasteAndMatchStyle:
 		return ui.EditPaste
 	case platform.MenuDelete:
 		return ui.EditDelete

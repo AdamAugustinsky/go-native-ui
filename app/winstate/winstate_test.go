@@ -335,18 +335,26 @@ func TestSaveIsDebounced(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	// Drop out the store from this process and read the file fresh.
-	r, _ := load(t, dir, Options{})
+	r, err := load(t, dir, Options{})
 	if got := r.State().Frame.X; got != 50 {
-		t.Errorf("the file has x = %v, want the last of the burst (50)", got)
+		t.Errorf("the file has x = %v, want the last of the burst (50) (load: %v)", got, err)
 	}
-	// A pending save is written by Close at once.
-	s.Save(State{Frame: Rect{777, 10, 800, 600}})
-	start := time.Now()
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if time.Since(start) > 200*time.Millisecond {
-		t.Errorf("Close took %v: it should write at once", time.Since(start))
+	// A pending save is written by Close at once, not after the debounce. The
+	// debounce is an hour here so that the difference does not depend on the
+	// disk: Windows flushes the file and retries the rename while a scanner
+	// holds it (CI: Close took 240 ms against a 250 ms debounce and a 200 ms
+	// bound).
+	s2, _ := load(t, dir, Options{Debounce: time.Hour})
+	s2.Save(State{Frame: Rect{777, 10, 800, 600}})
+	start := time.Now()
+	if err := s2.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if d := time.Since(start); d > time.Minute {
+		t.Errorf("Close took %v: it should write at once, not after the debounce (1 h)", d)
 	}
 	r2, _ := load(t, dir, Options{})
 	if got := r2.State().Frame.X; got != 777 {

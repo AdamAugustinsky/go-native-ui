@@ -92,6 +92,9 @@ const (
 	AppEvService
 	// AppEvPost: an event the app posted from one of its goroutines (PostApp).
 	AppEvPost
+	// AppEvWindowClosed: a window closed, however it was closed; Window is
+	// its id.
+	AppEvWindowClosed
 )
 
 // AppEvent is one application event: a fixed-size, pointer-free record. Its
@@ -136,6 +139,8 @@ const (
 	SourceMedia
 	// SourceTask is task pools that report to the app object.
 	SourceTask
+	// SourceTray is a status item's click (app/tray).
+	SourceTray
 	// SourceApp is the first source free for the app's own producers.
 	SourceApp Source = 256
 )

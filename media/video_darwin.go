@@ -95,7 +95,7 @@ var (
 	selCopyImage    = objc.Sel("copyCGImageAtTime:actualTime:error:")
 )
 
-var av struct {
+var vav struct {
 	once sync.Once
 	err  error
 
@@ -120,7 +120,6 @@ var (
 	slots     [maxVideos]atomic.Pointer[Video] // by observer index - 1
 	freeSlots []int32                          // main thread
 	nextSlot  int32
-	nextID    atomic.Uint64
 
 	liveVideos, heldBuffers atomic.Int64
 
@@ -129,30 +128,30 @@ var (
 	observers                         [maxVideos]objc.ID // by slot, kept for the process (a late notification may still reach one)
 )
 
-func loadAV() error {
-	av.once.Do(func() {
+func loadVideoAV() error {
+	vav.once.Do(func() {
 		open := func(path string) uintptr {
 			h, err := purego.Dlopen(path, purego.RTLD_NOW|purego.RTLD_GLOBAL)
-			if err != nil && av.err == nil {
-				av.err = err
+			if err != nil && vav.err == nil {
+				vav.err = err
 			}
 			return h
 		}
-		// AppKit first: AVFoundation loaded without it (a player made before
-		// the app starts) sets up layers that later break every NSView's
-		// (-[NSViewBackingLayer NS_setView:] unrecognized, macOS 27.2).
-		open("/System/Library/Frameworks/AppKit.framework/AppKit")
-		avf := open("/System/Library/Frameworks/AVFoundation.framework/AVFoundation")
+		avf, err := openAVFoundation()
+		if err != nil {
+			vav.err = err
+			return
+		}
 		cm := open("/System/Library/Frameworks/CoreMedia.framework/CoreMedia")
 		cv := open("/System/Library/Frameworks/CoreVideo.framework/CoreVideo")
 		cg := open("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")
-		if av.err != nil {
+		if vav.err != nil {
 			return
 		}
 		sym := func(h uintptr, name string) uintptr {
 			p, err := purego.Dlsym(h, name)
-			if err != nil && av.err == nil {
-				av.err = err
+			if err != nil && vav.err == nil {
+				vav.err = err
 			}
 			return p
 		}
@@ -162,42 +161,42 @@ func loadAV() error {
 			}
 			return 0
 		}
-		av.mediaVideo = val(avf, "AVMediaTypeVideo")
-		av.endNote = val(avf, "AVPlayerItemDidPlayToEndTimeNotification")
-		av.pixFmtKey = val(cv, "kCVPixelBufferPixelFormatTypeKey")
-		av.metalKey = val(cv, "kCVPixelBufferMetalCompatibilityKey")
-		av.ioKey = val(cv, "kCVPixelBufferIOSurfacePropertiesKey")
-		av.pbRelease, av.pbW, av.pbH = sym(cv, "CVPixelBufferRelease"), sym(cv, "CVPixelBufferGetWidth"), sym(cv, "CVPixelBufferGetHeight")
+		vav.mediaVideo = val(avf, "AVMediaTypeVideo")
+		vav.endNote = val(avf, "AVPlayerItemDidPlayToEndTimeNotification")
+		vav.pixFmtKey = val(cv, "kCVPixelBufferPixelFormatTypeKey")
+		vav.metalKey = val(cv, "kCVPixelBufferMetalCompatibilityKey")
+		vav.ioKey = val(cv, "kCVPixelBufferIOSurfacePropertiesKey")
+		vav.pbRelease, vav.pbW, vav.pbH = sym(cv, "CVPixelBufferRelease"), sym(cv, "CVPixelBufferGetWidth"), sym(cv, "CVPixelBufferGetHeight")
 		if p := sym(cm, "kCMTimeZero"); p != 0 {
-			av.zero = *(*cmTime)(ffi.PtrFromC(p))
+			vav.zero = *(*cmTime)(ffi.PtrFromC(p))
 		}
-		av.timeMake = sym(cm, "CMTimeMakeWithSeconds")
-		av.imgW, av.imgH, av.imgRelease = sym(cg, "CGImageGetWidth"), sym(cg, "CGImageGetHeight"), sym(cg, "CGImageRelease")
-		av.csCreate, av.csRelease, av.srgb = sym(cg, "CGColorSpaceCreateWithName"), sym(cg, "CGColorSpaceRelease"), val(cg, "kCGColorSpaceSRGB")
-		av.bmCreate, av.ctxDraw, av.ctxFree = sym(cg, "CGBitmapContextCreate"), sym(cg, "CGContextDrawImage"), sym(cg, "CGContextRelease")
-		if av.err != nil {
+		vav.timeMake = sym(cm, "CMTimeMakeWithSeconds")
+		vav.imgW, vav.imgH, vav.imgRelease = sym(cg, "CGImageGetWidth"), sym(cg, "CGImageGetHeight"), sym(cg, "CGImageRelease")
+		vav.csCreate, vav.csRelease, vav.srgb = sym(cg, "CGColorSpaceCreateWithName"), sym(cg, "CGColorSpaceRelease"), val(cg, "kCGColorSpaceSRGB")
+		vav.bmCreate, vav.ctxDraw, vav.ctxFree = sym(cg, "CGBitmapContextCreate"), sym(cg, "CGContextDrawImage"), sym(cg, "CGContextRelease")
+		if vav.err != nil {
 			return
 		}
-		av.clsString, av.clsURL, av.clsAsset = objc.Cls("NSString"), objc.Cls("NSURL"), objc.Cls("AVURLAsset")
-		av.clsItem, av.clsPlayer, av.clsOutput = objc.Cls("AVPlayerItem"), objc.Cls("AVPlayer"), objc.Cls("AVPlayerItemVideoOutput")
-		av.clsGen, av.clsCenter = objc.Cls("AVAssetImageGenerator"), objc.Cls("NSNotificationCenter")
-		av.clsMDict, av.clsDict, av.clsNumber = objc.Cls("NSMutableDictionary"), objc.Cls("NSDictionary"), objc.Cls("NSNumber")
-		if av.clsPlayer == 0 || av.clsOutput == 0 {
-			av.err = errors.New("media: AVFoundation's player classes are missing")
+		vav.clsString, vav.clsURL, vav.clsAsset = objc.Cls("NSString"), objc.Cls("NSURL"), objc.Cls("AVURLAsset")
+		vav.clsItem, vav.clsPlayer, vav.clsOutput = objc.Cls("AVPlayerItem"), objc.Cls("AVPlayer"), objc.Cls("AVPlayerItemVideoOutput")
+		vav.clsGen, vav.clsCenter = objc.Cls("AVAssetImageGenerator"), objc.Cls("NSNotificationCenter")
+		vav.clsMDict, vav.clsDict, vav.clsNumber = objc.Cls("NSMutableDictionary"), objc.Cls("NSDictionary"), objc.Cls("NSNumber")
+		if vav.clsPlayer == 0 || vav.clsOutput == 0 {
+			vav.err = errors.New("media: AVFoundation's player classes are missing")
 			return
 		}
 		d := objc.Define("GnuiVideoObserver", objc.Cls("NSObject"), nil)
 		d.Method(selEnded, "v@:@", videoEnded)
-		av.obsDef, av.obsCls = d, d.Register()
-		av.ring = platform.NewRing(platform.SourceMedia, 64, 0)
+		vav.obsDef, vav.obsCls = d, d.Register()
+		vav.ring = platform.NewRing(platform.SourceMedia, 64, 0)
 	})
-	return av.err
+	return vav.err
 }
 
 // videoEnded is the observer's handler of
 // AVPlayerItemDidPlayToEndTimeNotification, on whatever thread posted it.
 func videoEnded(c *ffi.CB) {
-	i := int(av.obsDef.Index().Get(objc.ID(c.Int(0))))
+	i := int(vav.obsDef.Index().Get(objc.ID(c.Int(0))))
 	if i <= 0 || i > maxVideos {
 		return
 	}
@@ -207,7 +206,7 @@ func videoEnded(c *ffi.CB) {
 	}
 	v.ended.Store(true)
 	if !v.loop.Load() {
-		av.ring.Offer(int64(v.id), VideoEnded, nil)
+		vav.ring.Offer(int64(Ended), int64(v.id), nil)
 	}
 }
 
@@ -261,7 +260,7 @@ type Video struct {
 // loading on a goroutine (State is VideoLoading until its size and poster are
 // known; the app is woken then). Close it when done.
 func OpenVideo(path string, o VideoOptions) (*Video, error) {
-	if err := loadAV(); err != nil {
+	if err := loadVideoAV(); err != nil {
 		return nil, err
 	}
 	slot := int32(-1)
@@ -280,37 +279,37 @@ func OpenVideo(path string, o VideoOptions) (*Video, error) {
 	if len(b) == 0 {
 		b = []byte{0}
 	}
-	str := F.Reset().Arg(uintptr(objc.Send(av.clsString, selAlloc))).Arg(uintptr(selStrInit)).
+	str := F.Reset().Arg(uintptr(objc.Send(vav.clsString, selAlloc))).Arg(uintptr(selStrInit)).
 		Arg(uintptr(unsafe.Pointer(&b[0]))).Arg(uintptr(len(path))).Arg(4).Call(objc.MsgSend).R0() // NSUTF8StringEncoding
 	runtime.KeepAlive(b)
-	url := objc.Send1(av.clsURL, selFileURL, str)
+	url := objc.Send1(vav.clsURL, selFileURL, str)
 	objc.Release(objc.ID(str))
-	v := &Video{id: nextID.Add(1), slot: slot, volume: o.Volume}
+	v := &Video{id: nextID(), slot: slot, volume: o.Volume}
 	if v.volume <= 0 || v.volume > 1 {
 		v.volume = 1
 	}
 	v.muted = o.Muted
 	v.loop.Store(o.Loop)
-	v.asset = objc.Retain(objc.Send2(av.clsAsset, selAssetWithURL, uintptr(url), 0))
-	v.item = objc.Retain(objc.Send1(av.clsItem, selItemWith, uintptr(v.asset)))
-	attrs := objc.Send(av.clsMDict, selDict)
-	objc.Send2(attrs, selSetObject, uintptr(objc.Send1(av.clsNumber, selNumberInt, pixFmt420v)), av.pixFmtKey)
-	objc.Send2(attrs, selSetObject, uintptr(objc.Send1(av.clsNumber, selNumberBool, 1)), av.metalKey)
-	objc.Send2(attrs, selSetObject, uintptr(objc.Send(av.clsDict, selDict)), av.ioKey)
-	v.output = objc.Send1(objc.Send(av.clsOutput, selAlloc), selOutputInit, uintptr(attrs))
+	v.asset = objc.Retain(objc.Send2(vav.clsAsset, selAssetWithURL, uintptr(url), 0))
+	v.item = objc.Retain(objc.Send1(vav.clsItem, selItemWith, uintptr(v.asset)))
+	attrs := objc.Send(vav.clsMDict, selDict)
+	objc.Send2(attrs, selSetObject, uintptr(objc.Send1(vav.clsNumber, selNumberInt, pixFmt420v)), vav.pixFmtKey)
+	objc.Send2(attrs, selSetObject, uintptr(objc.Send1(vav.clsNumber, selNumberBool, 1)), vav.metalKey)
+	objc.Send2(attrs, selSetObject, uintptr(objc.Send(vav.clsDict, selDict)), vav.ioKey)
+	v.output = objc.Send1(objc.Send(vav.clsOutput, selAlloc), selOutputInit, uintptr(attrs))
 	objc.Send1(v.item, selAddOutput, uintptr(v.output))
-	v.player = objc.Retain(objc.Send1(av.clsPlayer, selPlayerWith, uintptr(v.item)))
+	v.player = objc.Retain(objc.Send1(vav.clsPlayer, selPlayerWith, uintptr(v.item)))
 	objc.Send1(v.player, selNoStall, 0)
 	v.setAtEnd()
 	v.SetMuted(v.muted)
 	v.SetVolume(v.volume)
 	if observers[slot] == 0 {
-		observers[slot] = objc.Send(objc.Send(av.obsCls, selAlloc), selInit)
-		av.obsDef.Index().Set(observers[slot], uintptr(slot+1))
+		observers[slot] = objc.Send(objc.Send(vav.obsCls, selAlloc), selInit)
+		vav.obsDef.Index().Set(observers[slot], uintptr(slot+1))
 	}
 	v.observer = observers[slot]
 	slots[slot].Store(v)
-	objc.AddObserver(objc.Send(av.clsCenter, selDefault), v.observer, selEnded, objc.ID(av.endNote), v.item)
+	objc.AddObserver(objc.Send(vav.clsCenter, selDefault), v.observer, selEnded, objc.ID(vav.endNote), v.item)
 	liveVideos.Add(1)
 	posterMax := o.PosterSize
 	if posterMax <= 0 {
@@ -371,7 +370,7 @@ func (v *Video) load(asset objc.ID, posterMax int) {
 
 func (v *Video) loadTrack(s *loadScratch, send func(objc.ID, objc.SEL, ...uintptr) uintptr, asset objc.ID, posterMax int) error {
 	f := &s.f
-	tracks := objc.ID(send(asset, selTracks, av.mediaVideo))
+	tracks := objc.ID(send(asset, selTracks, vav.mediaVideo))
 	if tracks == 0 || send(tracks, selCount) == 0 {
 		return errors.New("media: the file has no video track")
 	}
@@ -394,37 +393,37 @@ func (v *Video) loadTrack(s *loadScratch, send func(objc.ID, objc.SEL, ...uintpt
 	v.natW, v.natH = int(math.Round(w)), int(math.Round(h))
 
 	// The poster: the first frame, turned, at most posterMax on its longest side.
-	gen := objc.ID(send(av.clsGen, selGenWith, uintptr(asset)))
+	gen := objc.ID(send(vav.clsGen, selGenWith, uintptr(asset)))
 	if gen == 0 {
 		return nil
 	}
 	send(gen, selApplyTurn, 1)
 	s.maxW, s.maxH = float64(posterMax), float64(posterMax)
 	f.Reset().Arg(uintptr(gen)).Arg(uintptr(selMaxSize)).ArgPoint(s.maxW, s.maxH).Call(objc.MsgSend)
-	s.at = av.zero
+	s.at = vav.zero
 	send(gen, selTolBefore, uintptr(unsafe.Pointer(&s.at)))
-	s.at = av.zero
+	s.at = vav.zero
 	send(gen, selTolAfter, uintptr(unsafe.Pointer(&s.at)))
-	s.at, s.err = av.zero, 0
+	s.at, s.err = vav.zero, 0
 	img := send(gen, selCopyImage, uintptr(unsafe.Pointer(&s.at)), 0, uintptr(unsafe.Pointer(&s.err)))
 	if img == 0 {
 		return nil // no poster: the first frame shows when it plays
 	}
-	pw, ph := int(f.Call1(av.imgW, img)), int(f.Call1(av.imgH, img))
+	pw, ph := int(f.Call1(vav.imgW, img)), int(f.Call1(vav.imgH, img))
 	if pw > 0 && ph > 0 {
 		px := make([]byte, pw*ph*4)
-		cs := f.Call1(av.csCreate, av.srgb)
+		cs := f.Call1(vav.csCreate, vav.srgb)
 		ctx := f.Reset().Arg(uintptr(unsafe.Pointer(&px[0]))).Arg(uintptr(pw)).Arg(uintptr(ph)).Arg(8).Arg(uintptr(pw * 4)).
-			Arg(cs).Arg(1 | 4<<12).Call(av.bmCreate).R0() // kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big: RGBA
+			Arg(cs).Arg(1 | 4<<12).Call(vav.bmCreate).R0() // kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big: RGBA
 		if ctx != 0 {
-			f.Reset().Arg(ctx).ArgRect(0, 0, float64(pw), float64(ph)).Arg(img).Call(av.ctxDraw)
-			f.Call1(av.ctxFree, ctx)
+			f.Reset().Arg(ctx).ArgRect(0, 0, float64(pw), float64(ph)).Arg(img).Call(vav.ctxDraw)
+			f.Call1(vav.ctxFree, ctx)
 			v.poster, v.posW, v.posH = px, pw, ph
 		}
-		f.Call1(av.csRelease, cs)
+		f.Call1(vav.csRelease, cs)
 		runtime.KeepAlive(px)
 	}
-	f.Call1(av.imgRelease, img)
+	f.Call1(vav.imgRelease, img)
 	return nil
 }
 
@@ -512,8 +511,8 @@ func (v *Video) Seek(d time.Duration) {
 	if v.closed.Load() {
 		return
 	}
-	objc.F.Reset().SetIndirectResult(unsafe.Pointer(&tSeek)).ArgF64(d.Seconds()).Arg32(600).Call(av.timeMake)
-	tTol1, tTol2 = av.zero, av.zero // copies: the callee owns what a by-reference struct points to
+	objc.F.Reset().SetIndirectResult(unsafe.Pointer(&tSeek)).ArgF64(d.Seconds()).Arg32(600).Call(vav.timeMake)
+	tTol1, tTol2 = vav.zero, vav.zero // copies: the callee owns what a by-reference struct points to
 	objc.F.Reset().Arg(uintptr(v.player)).Arg(uintptr(selSeek)).Arg(uintptr(unsafe.Pointer(&tSeek))).
 		Arg(uintptr(unsafe.Pointer(&tTol1))).Arg(uintptr(unsafe.Pointer(&tTol2))).Call(objc.MsgSend)
 	v.atEnd = false
@@ -613,7 +612,7 @@ func (v *Video) Frame(r *gpu.Renderer, now int64) (tex gpu.TextureID, w, h int, 
 	}
 	if v.cur != 0 {
 		if t, err := r.ImportPixelBuffer(v.cur, v.turns); err == nil {
-			w, h = int(objc.F.Call1(av.pbW, v.cur)), int(objc.F.Call1(av.pbH, v.cur))
+			w, h = int(objc.F.Call1(vav.pbW, v.cur)), int(objc.F.Call1(vav.pbH, v.cur))
 			if v.turns%2 == 1 {
 				w, h = h, w
 			}
@@ -644,7 +643,7 @@ func (v *Video) pull(now int64) {
 		return
 	}
 	if v.cur != 0 {
-		F.Call1(av.pbRelease, v.cur)
+		F.Call1(vav.pbRelease, v.cur)
 	} else {
 		heldBuffers.Add(1)
 	}
@@ -669,7 +668,7 @@ func (v *Video) Close() {
 	F := objc.F
 	pool := F.Call0(objc.PoolPush)
 	defer F.Call1(objc.PoolPop, pool)
-	objc.RemoveObserver(objc.Send(av.clsCenter, selDefault), v.observer, objc.ID(av.endNote), v.item)
+	objc.RemoveObserver(objc.Send(vav.clsCenter, selDefault), v.observer, objc.ID(vav.endNote), v.item)
 	slots[v.slot].Store(nil)
 	freeSlots = append(freeSlots, v.slot)
 	objc.Send(v.player, selPause)
@@ -679,7 +678,7 @@ func (v *Video) Close() {
 	}
 	v.player, v.output, v.item, v.asset, v.observer = 0, 0, 0, 0, 0
 	if v.cur != 0 {
-		F.Call1(av.pbRelease, v.cur)
+		F.Call1(vav.pbRelease, v.cur)
 		v.cur = 0
 		heldBuffers.Add(-1)
 	}

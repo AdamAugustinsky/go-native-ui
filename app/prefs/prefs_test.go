@@ -185,12 +185,18 @@ func TestDebounceSavesInTheBackgroundAndDoesNotStarve(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "p.json")
 	s, _ := Open(p, defaults, Options{Debounce: 40 * time.Millisecond})
 	defer s.Close()
-	// A change every 5 ms for 400 ms: the wait does not restart, so the file
-	// appears while changes are still arriving.
-	end := time.Now().Add(400 * time.Millisecond)
+	// A change every 5 ms, far more often than the 40 ms wait: the wait does
+	// not restart, so the file appears while changes are still arriving. A
+	// wait that restarted would never save while they arrive, so the stream
+	// goes on until the file is there, up to a deadline far above a save on
+	// a busy runner (a save took over 360 ms on Windows arm64 CI).
+	t0 := time.Now()
+	end := t0.Add(10 * time.Second)
 	var seen bool
+	changes := 0
 	for i := 0; time.Now().Before(end); i++ {
 		s.Update(func(v *settings) { v.Zoom = float64(i + 2) })
+		changes++
 		if _, err := os.Stat(p); err == nil {
 			seen = true
 			break
@@ -198,8 +204,9 @@ func TestDebounceSavesInTheBackgroundAndDoesNotStarve(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	if !seen {
-		t.Fatal("no save during a stream of changes")
+		t.Fatalf("no save during %v of changes (%d of them)", time.Since(t0).Round(time.Millisecond), changes)
 	}
+	t.Logf("saved %v into a stream of changes (%d changes)", time.Since(t0).Round(time.Millisecond), changes)
 	s.Set(settings{Theme: "final"})
 	waitFile(t, p, func(b []byte) bool { return strings.Contains(string(b), `"final"`) })
 }

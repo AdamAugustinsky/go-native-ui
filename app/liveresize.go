@@ -30,6 +30,10 @@ type LiveResizeReport struct {
 	FallbackFramesAfter int // frames drawn by the unpaced fallback after the drag
 	PacedWanted         int
 	Pacing              string // PacingResumed, PacingFailed or PacingInconclusive
+	// LinkSilentMs is the time after the drag in which the display link did
+	// not tick at all although a frame was requested (the display stalled);
+	// it is not counted in the 3 s the frames have to resume in.
+	LinkSilentMs float64
 }
 
 // Pacing verdicts of a LiveResizeReport.

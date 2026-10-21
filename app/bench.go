@@ -2,9 +2,12 @@ package app
 
 import (
 	"errors"
+	"fmt"
+	"os"
 	"runtime"
 	"time"
 
+	"gonativeui/internal/allocsite"
 	"gonativeui/internal/sysinfo"
 	"gonativeui/platform"
 )
@@ -32,6 +35,11 @@ type BenchOptions struct {
 	// that miss most windows.
 	Windows int
 
+	// MinWindows is how many windows run at least, clean or not (default
+	// 1), for a caller that compares their timings: a slow frame of every
+	// window is the program's, one of a single window may be the host's.
+	MinWindows int
+
 	// WindowStart runs just before a measured window's baselines are taken
 	// and WindowEnd just after its end values are read, so a caller can
 	// snapshot an allocation profile around exactly the measured frames.
@@ -40,6 +48,14 @@ type BenchOptions struct {
 	// Verbose prints the state dump (StateLine) to stderr while frames stop
 	// coming, as RunOptions.Verbose does. A timeout always prints it.
 	Verbose bool
+
+	// PrintAllocSites prints the call stacks of the allocations attributed
+	// over the measured windows (BenchReport.AllocSites) to stderr.
+	PrintAllocSites bool
+
+	// TestAllocEvery, if positive, makes the bench itself allocate every
+	// that many frames: a test of the allocation gate, which must fail.
+	TestAllocEvery int
 }
 
 // CycleAligned is optionally implemented by a Builder whose Scripter repeats a
@@ -104,6 +120,34 @@ type BenchReport struct {
 	// Windows lists every measured window, in order; the fields above are those
 	// of the one with the fewest allocations (the first of equals).
 	Windows []BenchWindow
+
+	// DisplayStallMs is how long frames stopped coming while the main loop
+	// kept running (it does not count against Timeout; see benchRun.loopTurn).
+	DisplayStallMs float64
+
+	// AllocSites attributes the allocations of the run, from the collection
+	// before the first window to the end of the last, when any window
+	// allocated (DECISIONS D27). OwnAllocObjects is how many were made by
+	// our code; an allocation gate fails on any, even if a later window was
+	// clean (OwnAllocFailure).
+	AllocSites      []allocsite.Site `json:",omitempty"`
+	OwnAllocObjects int64
+}
+
+// OwnAllocFailure is the allocation gate's failure for allocations made by
+// our code in the measured windows, or "" if there were none (D27: a clean
+// window passes only over the runtime's own one-offs).
+func (r *BenchReport) OwnAllocFailure() string {
+	if r.OwnAllocObjects == 0 {
+		return ""
+	}
+	for _, s := range r.AllocSites {
+		if s.Class == allocsite.Ours {
+			return fmt.Sprintf("%d allocation(s) of our code in the measured windows, first %s (%d objects, %d bytes); -allocsites prints them",
+				r.OwnAllocObjects, s.Func, s.Objects, s.Bytes)
+		}
+	}
+	return fmt.Sprintf("%d allocation(s) of our code in the measured windows", r.OwnAllocObjects)
 }
 
 // RunBench opens a real window and runs the Builder through warm-up and
@@ -146,6 +190,7 @@ func RunBench(cfg Config, b Builder, o BenchOptions) (BenchReport, error) {
 		n = maxCycleFrames // a session's frames are not known beforehand
 	}
 	bn.frameCPU, bn.intervals, bn.lat = make([]float64, 0, n), make([]float64, 0, n), make([]float64, 0, n)
+	bn.scratch = make([]float64, 0, n)
 	bn.windows = make([]BenchWindow, 0, o.Windows)
 	a.bench = bn
 	a.p.invalidate()
@@ -169,6 +214,10 @@ type benchRun struct {
 	o        BenchOptions
 	cyc      CycleAligned
 	deadline int64
+	// stalled is how long frames stopped while the loop kept running (the
+	// display refused them), lastLoop when the loop last came round: see
+	// loopTurn.
+	stalled, lastLoop int64
 
 	presented int // frames drawn since the bench started
 	gcDone    bool
@@ -186,16 +235,22 @@ type benchRun struct {
 	quads       int
 	boxes       int
 	frameCPU    []float64
+	scratch     []float64 // the samples sorted for a window's report, so it allocates nothing between windows
 	intervals   []float64
 	lat         []float64
 	quadsMax    int
 	boxesMax    int
 
 	windows []BenchWindow
-	best    BenchReport
-	bestIdx int
-	report  BenchReport
-	_       [0]func() // not comparable
+	// The allocation profile from the collection before the first window
+	// (s0) and after the last (s1); restore puts back the profiling rate.
+	s0, s1   allocsite.Snapshot
+	s0Allocs uint64 // Mallocs when s0 was taken
+	restore  func()
+	best     BenchReport
+	bestIdx  int
+	report   BenchReport
+	_        [0]func() // not comparable
 }
 
 func (b *benchRun) measured() int { return b.measuredN }
@@ -209,7 +264,13 @@ func (b *benchRun) before(a *App) {
 		return
 	}
 	if !b.gcDone {
+		b.restore = allocsite.Enable()
+		b.s0.Take() // makes the storage, before the collection
+		b.s1.Take()
 		runtime.GC()
+		b.s0.Take()
+		runtime.ReadMemStats(&b.mem0)
+		b.s0Allocs = b.mem0.Mallocs
 		b.gcDone, b.gcAt = true, b.presented
 	}
 	if b.presented-b.gcAt < b.o.PostGCWarm || (b.cyc != nil && !b.cyc.AtCycleStart()) {
@@ -227,6 +288,14 @@ func (b *benchRun) begin(a *App) {
 	b.quadsMax, b.boxesMax = 0, 0
 	b.frameCPU, b.intervals, b.lat = b.frameCPU[:0], b.intervals[:0], b.lat[:0]
 	runtime.ReadMemStats(&b.mem0)
+	if len(b.windows) == 0 && b.mem0.Mallocs != b.s0Allocs {
+		// The warm-up after the collection allocated (a listing still
+		// reconciling, say): those are not the windows', so the profile
+		// starts again here, after another collection.
+		runtime.GC()
+		b.s0.Take()
+		runtime.ReadMemStats(&b.mem0)
+	}
 	b.cpu0, b.tcpu0 = sysinfo.CPUNs(), sysinfo.ThreadCPUNs()
 	b.measuring = true
 }
@@ -242,6 +311,9 @@ func sample(s []float64, v float64) []float64 {
 // after accounts a drawn frame and closes the window when it is complete.
 func (b *benchRun) after(a *App) {
 	b.presented++
+	if b.o.TestAllocEvery > 0 && b.presented%b.o.TestAllocEvery == 0 {
+		benchTestSink = new([4]uint64)
+	}
 	m := &a.fm
 	if b.measuring {
 		b.measuredN++
@@ -283,6 +355,7 @@ func (b *benchRun) endWindow(a *App) {
 	if !b.measuring {
 		b.finished = true
 		a.done = true // the script ended during warm-up: nothing was measured
+		b.endProfiling(false)
 		return
 	}
 	runtime.ReadMemStats(&b.mem1)
@@ -304,10 +377,10 @@ func (b *benchRun) endWindow(a *App) {
 		MainThreadCPUus: float64(tcpu1-b.tcpu0) / 1e3 / n,
 		BuildCPUus:      float64(b.sumBuild) / 1e3 / n,
 		EncodeCPUus:     float64(b.sumEnc) / 1e3 / n,
-		FrameCPUus:      Summarize(b.frameCPU),
+		FrameCPUus:      b.summarize(b.frameCPU),
 		ProcessCPUus:    float64(cpu1-b.cpu0) / 1e3 / n,
-		FrameIntervalMs: Summarize(b.intervals),
-		InputToCommitMs: Summarize(b.lat),
+		FrameIntervalMs: b.summarize(b.intervals),
+		InputToCommitMs: b.summarize(b.lat),
 		Quads:           b.quads, QuadsMax: b.quadsMax,
 		DrawCalls: a.R.DrawCalls(),
 		Boxes:     b.boxes, BoxesMax: b.boxesMax,
@@ -317,12 +390,82 @@ func (b *benchRun) endWindow(a *App) {
 		(w.Mallocs == b.windows[b.bestIdx].Mallocs && w.TotalAlloc < b.windows[b.bestIdx].TotalAlloc) {
 		b.best, b.bestIdx = rep, len(b.windows)-1
 	}
-	if (w.Mallocs == 0 && w.TotalAlloc == 0) || len(b.windows) >= b.o.Windows || a.scriptDone {
+	clean := w.Mallocs == 0 && w.TotalAlloc == 0
+	if (clean && len(b.windows) >= b.o.MinWindows) || len(b.windows) >= b.o.Windows || a.scriptDone {
 		b.finished = true
 		b.report = b.best
 		b.report.Windows = b.windows
+		b.report.DisplayStallMs = float64(b.stalled) / 1e6
 		a.done = true
+		b.endProfiling(true)
 		return
 	}
 	b.begin(a) // the next window follows directly
+}
+
+// benchTestSink keeps BenchOptions.TestAllocEvery's allocations.
+var benchTestSink *[4]uint64
+
+// endProfiling attributes the run's allocations if a window allocated, and
+// puts back the profiling rate.
+func (b *benchRun) endProfiling(measured bool) {
+	if b.restore == nil {
+		return
+	}
+	defer func() { b.restore(); b.restore = nil }()
+	dirty := false
+	for _, w := range b.windows {
+		dirty = dirty || w.Mallocs != 0 || w.TotalAlloc != 0
+	}
+	if !measured || !dirty {
+		return
+	}
+	runtime.GC()
+	b.s1.Take()
+	sites := allocsite.Diff(&b.s0, &b.s1)
+	b.report.AllocSites = sites
+	b.report.OwnAllocObjects = allocsite.Objects(sites, allocsite.Ours)
+	if b.o.PrintAllocSites && len(sites) > 0 {
+		fmt.Fprintln(os.Stderr, "app: allocations from the collection before the first measured window to the end of the last:")
+		allocsite.Write(os.Stderr, sites)
+	}
+}
+
+// summarize is Summarize of xs in the scratch storage (allocation-free while
+// it fits: the windows follow each other, so this runs between two).
+func (b *benchRun) summarize(xs []float64) Stats {
+	b.scratch = append(b.scratch[:0], xs...)
+	return summarizeIn(b.scratch)
+}
+
+// A frame source can stop for tens of seconds on a hosted Mac runner while
+// the window is visible: the display link stops ticking and the layer
+// refuses drawables (CI: 17 s of beginfail with drawable=0, after 1,599
+// refusals earlier in a 1M-row Pilot run, and it timed out). Time like that
+// is the display's, not the bench's, so it extends the deadline, up to
+// maxStallExtension. Only while the main loop keeps coming round (each turn
+// at most heartbeatGap after the previous one): a main thread blocked in a
+// frame gets no time. Extending only gives the frames time to come; it
+// excuses nothing they measure.
+const (
+	heartbeatGap      = int64(250 * time.Millisecond)
+	stallAfter        = int64(time.Second) // no frame drawn for this long
+	maxStallExtension = int64(90 * time.Second)
+)
+
+// loopTurn is called each time the event loop comes round, with the time of
+// the last frame drawn; it extends the deadline over a display stall.
+func (b *benchRun) loopTurn(now, lastDraw int64) {
+	prev := b.lastLoop
+	b.lastLoop = now
+	if prev == 0 || b.finished {
+		return
+	}
+	dt := now - prev
+	if dt > heartbeatGap || now-lastDraw < stallAfter || b.stalled >= maxStallExtension {
+		return
+	}
+	dt = min(dt, maxStallExtension-b.stalled)
+	b.stalled += dt
+	b.deadline += dt
 }

@@ -93,7 +93,9 @@ func main() {
 	size := flag.String("size", "", "the window's size in points, WIDTHxHEIGHT (the default is 1200x760; the finder scene is 1120x640)")
 	mono := flag.Bool("mono", false, "set the file lists in Menlo (the theme's monospace font off macOS), in 7.5 pt cells")
 	verbose := flag.Bool("v", false, "print the startup timeline and listing times to stderr; in a window or bench also a state line every second while frames stop coming")
+	budgetScale := flag.Float64("budget-scale", 1, "with -gate: multiply the time budgets by this (3: the coarse, catastrophic check of a shared CI runner)")
 	flag.Parse()
+	*maxCPU *= *budgetScale
 
 	m := *mode
 	if m == "" {
@@ -330,10 +332,7 @@ func runBench(rows int, dir string, gate, allowUnpaced, sites bool, maxCPU float
 	b.UsePlatformClipboard()
 	b.StartCounting()
 	opt := app.BenchOptions{Warm: warmFrames, PostGCWarm: postGCWarm, Windows: maxWindows, Timeout: timeout, Verbose: verbose}
-	var as allocSites
-	if sites {
-		opt.WindowStart, opt.WindowEnd = as.start, as.end
-	}
+	opt.PrintAllocSites = sites
 	br, err := app.RunBench(pilot.Config(), b, opt)
 	if err != nil {
 		return err
@@ -365,6 +364,9 @@ func gateFailures(r report, allowUnpaced bool, maxCPU float64) []string {
 	}
 	if r.Mallocs != 0 || r.TotalAlloc != 0 {
 		f = append(f, fmt.Sprintf("every one of %d whole sessions allocated (fewest: %d mallocs / %d bytes)", len(r.Windows), r.Mallocs, r.TotalAlloc))
+	}
+	if msg := r.OwnAllocFailure(); msg != "" {
+		f = append(f, msg)
 	}
 	if maxCPU > 0 && r.MainThreadCPUus > maxCPU {
 		f = append(f, fmt.Sprintf("main-thread CPU %.0f µs/frame, budget %.0f", r.MainThreadCPUus, maxCPU))

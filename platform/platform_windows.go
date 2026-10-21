@@ -63,17 +63,18 @@ const (
 	sizeRestored  = 0
 	sizeMinimized = 1
 
-	wsOverlappedWindow = 0x00CF0000
-	cwUseDefault       = 0x80000000
-	swShowNormal       = 1
-	idcArrow           = 32512
-	idcIBeam           = 32513
-	idcSizeWE          = 32644
-	idcSizeNS          = 32645
-	idcHand            = 32649
-	htClient           = 1
-	sizeMoveTimerID    = 1
-	sizeMoveTimerMs    = 16 // USER_TIMER_MINIMUM is 10; ~60 Hz is plenty for requested frames
+	wsOverlappedWindow      = 0x00CF0000
+	wsExNoRedirectionBitmap = 0x00200000
+	cwUseDefault            = 0x80000000
+	swShowNormal            = 1
+	idcArrow                = 32512
+	idcIBeam                = 32513
+	idcSizeWE               = 32644
+	idcSizeNS               = 32645
+	idcHand                 = 32649
+	htClient                = 1
+	sizeMoveTimerID         = 1
+	sizeMoveTimerMs         = 16 // USER_TIMER_MINIMUM is 10; ~60 Hz is plenty for requested frames
 
 	swpNoMove     = 0x0002
 	swpNoZOrder   = 0x0004
@@ -335,8 +336,15 @@ func Open(o Options) (*Window, error) {
 		dpi = uint32(win32.Call(pGetDpiForSystem))
 	}
 	ow, oh := w.outerSize(o.Width, o.Height, dpi)
+	// WS_EX_NOREDIRECTIONBITMAP: the window has no GDI surface of its own
+	// (what it shows is the swap chain's, and DWM's frame). With one, DWM
+	// could compose the uncloaked window once with that surface, never
+	// painted, before it had taken in the first frame: a white client area
+	// on the screen for one pass (TestFirstFrameIsContent on the runners,
+	// about 1 in 100 fresh processes under load; a probe that painted the
+	// surface blue saw blue there instead). Nothing here draws with GDI.
 	w.hwnd = win32.Call(pCreateWindowExW,
-		0, uintptr(unsafe.Pointer(classNameUTF16)), uintptr(unsafe.Pointer(title)), uintptr(w.style),
+		wsExNoRedirectionBitmap, uintptr(unsafe.Pointer(classNameUTF16)), uintptr(unsafe.Pointer(title)), uintptr(w.style),
 		cwUseDefault, cwUseDefault, uintptr(ow), uintptr(oh), 0, 0, w.hinst, 0)
 	runtime.KeepAlive(title)
 	if w.hwnd == 0 {

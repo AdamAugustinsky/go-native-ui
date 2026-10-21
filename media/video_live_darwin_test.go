@@ -125,6 +125,7 @@ func (b *videoWin) tooFew(t *testing.T, l *widgettest.LiveApp, since int64, msg 
 func TestVideoInWindow(t *testing.T) {
 	plain, _ := testClips(t, widgettest.OnMain)
 	b := newVideoWin()
+	t.Cleanup(func() { platform.SetAppSink(testSink{}) }) // after the app's end unbinds it
 	l := widgettest.StartLive(t, app.Config{Title: "video", Width: 360, Height: 240}, b)
 	var err error
 	l.Do(func(a *app.App) {

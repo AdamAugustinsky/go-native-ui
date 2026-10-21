@@ -6,6 +6,8 @@ import (
 	"runtime"
 	"slices"
 	"testing"
+
+	"gonativeui/internal/allocsite"
 )
 
 // refList is the plain model the state is checked against: the ids in order
@@ -355,14 +357,57 @@ func TestVListQueuedEditsAreSliced(t *testing.T) {
 }
 
 // mallocs counts the heap allocations f makes.
+// mallocs returns the allocations f made: those of the process during f,
+// less the Go runtime's own (a new thread, its timers), which land wherever
+// they happen and which the gates pass over too (DECISIONS D27).
 func mallocs(f func()) uint64 {
+	mallocsRuntime = nil
+	defer allocsite.Enable()()
+	var s0, s1 allocsite.Snapshot
+	s0.Take() // the storage, before the collection
+	s1.Take()
 	runtime.GC()
+	s0.Take()
 	var m0, m1 runtime.MemStats
 	runtime.ReadMemStats(&m0)
 	f()
 	runtime.ReadMemStats(&m1)
-	return m1.Mallocs - m0.Mallocs
+	n := m1.Mallocs - m0.Mallocs
+	if n == 0 {
+		return 0
+	}
+	// The profile between the two collections holds f's allocations and
+	// the runtime's, during f and around it; none of anyone else's.
+	runtime.GC()
+	s1.Take()
+	sites := allocsite.Diff(&s0, &s1)
+	for _, s := range sites {
+		if s.Class == allocsite.Runtime {
+			mallocsRuntime = append(mallocsRuntime, s)
+		}
+	}
+	return uint64(allocsite.Objects(sites, allocsite.Ours) + allocsite.Objects(sites, allocsite.Other))
 }
+
+// mallocsRuntime holds the sites of the latest mallocs call that the runtime
+// allocated in, for a test to log.
+var mallocsRuntime []allocsite.Site
+
+// The runtime's own allocations during f are not f's.
+func TestMallocsLeavesOutTheRuntime(t *testing.T) {
+	mallocsProcs++ // the runtime makes a P the first time there are this many
+	if n := mallocs(func() { runtime.GOMAXPROCS(runtime.GOMAXPROCS(runtime.GOMAXPROCS(0) + mallocsProcs)) }); n != 0 {
+		t.Errorf("a new P of the runtime counted as %d allocations of f", n)
+	}
+	if n := mallocs(func() { mallocsSink = make([]byte, 64) }); n != 1 {
+		t.Errorf("one allocation of f counted as %d", n)
+	}
+}
+
+var (
+	mallocsProcs int
+	mallocsSink  []byte
+)
 
 // Reserve covers both buffers: once the back buffer exists, a long edit with
 // an append queued meanwhile, and growth up to the reservation after the
@@ -413,6 +458,9 @@ func TestVListReserveCoversRebuilds(t *testing.T) {
 	})
 	if got != 0 {
 		t.Fatalf("%d allocations within Reserve", got)
+	}
+	for _, s := range mallocsRuntime {
+		t.Logf("the runtime's (passed over): %d object(s) in %s", s.Objects, s.Func)
 	}
 	if st.Len() <= n-len(page) {
 		t.Fatalf("Len %d: the appends did not reach the reservation", st.Len())

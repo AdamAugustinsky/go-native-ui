@@ -99,18 +99,20 @@ type Window struct {
 	// sendEvent, whether the input method took the key (setMarkedText,
 	// unmarkText, a commit while composing) and whether it handed it back as a
 	// command (doCommandBySelector:).
-	marked      []byte
-	tmp         []byte // scratch for decoding NSStrings
-	markedSel   [2]int32
-	markedSel16 [2]uintptr
-	marked16    uintptr
-	imeRect     [4]float32 // caret/composition rectangle, window pixels (SetIMERect)
-	textInput   bool
-	imeUsed     bool
-	cmdCalled   bool
-	editTaken   bool // the key-down being sent became an EvEdit command (doCommandBySelector:): its EvKey goes
-	lastMods    Mods // the modifiers EvModifiers last reported
-	ctrlClick   bool // the left button is held as a secondary click (ctrl-click)
+	marked         []byte
+	tmp            []byte // scratch for decoding NSStrings
+	markedSel      [2]int32
+	markedSel16    [2]uintptr
+	marked16       uintptr
+	imeRect        [4]float32 // caret/composition rectangle, window pixels (SetIMERect)
+	textInput      bool
+	secureText     bool    // the focused text field is a secure one (SetSecureTextInput)
+	keyboardBefore objc.ID // the input source selected before secureText restricted it, retained
+	imeUsed        bool
+	cmdCalled      bool
+	editTaken      bool // the key-down being sent became an EvEdit command (doCommandBySelector:): its EvKey goes
+	lastMods       Mods // the modifiers EvModifiers last reported
+	ctrlClick      bool // the left button is held as a secondary click (ctrl-click)
 
 	aux         nativeAux // native dialogs and tooltips (dialog_darwin.go, tooltip_darwin.go)
 	drag        dragState // drag and drop in and out (drag_darwin.go)

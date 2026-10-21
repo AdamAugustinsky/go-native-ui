@@ -93,6 +93,7 @@ const (
 	AXSortAscending
 	AXSortDescending
 	AXLive
+	AXSecure // a secure text field: the subrole AXSecureTextField; its value is bullets
 )
 
 // AXAction are the actions a node supports; the values are ui.SemAction's.
@@ -698,6 +699,7 @@ const (
 	nameSortButton
 	nameTabButton
 	nameApplicationDialog
+	nameSecureTextField
 	numAXNames
 )
 
@@ -707,6 +709,7 @@ var axNames = [numAXNames]string{
 	"AXScrollBar", "AXSplitter", "AXTabGroup", "AXMenuBar", "AXMenuBarItem", "AXMenu", "AXMenuItem",
 	"AXHelpTag", "AXProgressIndicator", "AXLink", "AXHeading", "AXToolbar", "AXSheet",
 	"AXSwitch", "AXSearchField", "AXTableRow", "AXOutlineRow", "AXSortButton", "AXTabButton", "AXApplicationDialog",
+	"AXSecureTextField",
 }
 
 // axRoleOf maps node i to its role and subrole.
@@ -732,6 +735,9 @@ func axRoleOf(t *AXTree, i int32) (role, sub axName) {
 	case AXRoleSlider:
 		return nameSlider, 0
 	case AXRoleTextField:
+		if n.State&AXSecure != 0 {
+			return nameTextField, nameSecureTextField
+		}
 		return nameTextField, 0
 	case AXRoleSearchField:
 		return nameTextField, nameSearchField

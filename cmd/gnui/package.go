@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 )
 
 const developerIDPrefix = "Developer ID Application:"
@@ -289,7 +290,7 @@ func buildDMG(c *Config, app, outDir string, plan signingPlan, timestamp, notari
 	}
 	dmg := filepath.Join(outDir, fmt.Sprintf("%s-%s.dmg", strings.ReplaceAll(c.Name, " ", ""), c.Version))
 	os.Remove(dmg)
-	if _, err := runOut("hdiutil", "create", "-volname", c.Name, "-srcfolder", stage, "-ov", "-format", "UDZO", dmg); err != nil {
+	if _, err := hdiutil("create", "-volname", c.Name, "-srcfolder", stage, "-ov", "-format", "UDZO", dmg); err != nil {
 		return "", err
 	}
 	if plan.Developer {
@@ -351,3 +352,31 @@ func cmdSign(args []string, stdout, stderr io.Writer) error {
 	fmt.Fprintf(stdout, "signed %s with %s\ndesignated requirement: %s\n", app, spec.Label, dr)
 	return nil
 }
+
+// hdiutil runs hdiutil, and again while it fails because something holds
+// the image for a moment, up to 7 more times 0.5, 1, 2, then 4 s apart (about
+// 20 s): EAGAIN ("Resource temporarily unavailable": the disk image service
+// is busy with another image; CI saw it on a verify) and EBUSY ("Resource
+// busy", error 49168: XProtect's behavior service locks a new image while it
+// looks at it; CI saw it on a create, and actions/runner-images#7522 has it
+// on every macOS since 13, with a retry as the cure). Any other failure is
+// returned at once.
+func hdiutil(args ...string) (string, error) {
+	wait := 500 * time.Millisecond
+	for try := 0; ; try++ {
+		out, err := hdiutilRun("hdiutil", args...)
+		if err == nil || try == 7 || !hdiutilBusy(err) {
+			return out, err
+		}
+		time.Sleep(wait)
+		wait = min(2*wait, 4*time.Second)
+	}
+}
+
+func hdiutilBusy(err error) bool {
+	m := err.Error()
+	return strings.Contains(m, "Resource temporarily unavailable") || strings.Contains(m, "Resource busy")
+}
+
+// hdiutilRun runs the tool (a test replaces it).
+var hdiutilRun = runOut

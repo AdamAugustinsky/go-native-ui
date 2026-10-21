@@ -1,6 +1,9 @@
 package app
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // cycler is a CycleAligned session of n frames.
 type cycler struct{ n, frame int }
@@ -39,6 +42,7 @@ func newBenchRig(t *testing.T, o BenchOptions, cy *cycler) (*benchRun, *App) {
 	a.p = newPacer()
 	bn := &benchRun{o: o, cyc: cy}
 	bn.frameCPU, bn.intervals, bn.lat = make([]float64, 0, 64), make([]float64, 0, 64), make([]float64, 0, 64)
+	bn.scratch = make([]float64, 0, 64)
 	bn.windows = make([]BenchWindow, 0, o.Windows)
 	a.bench = bn
 	return bn, a
@@ -74,6 +78,10 @@ func TestBenchWindowsAreWholeSessions(t *testing.T) {
 		if bn.report.Mallocs != 0 || bn.report.TotalAlloc != 0 || bn.report.Frames != 10 {
 			t.Errorf("report is of the clean window: %+v", bn.report)
 		}
+		// The clean window does not excuse it: the allocation was ours.
+		if bn.report.OwnAllocObjects == 0 || bn.report.OwnAllocFailure() == "" {
+			t.Errorf("the allocation of ours in window 1 was not attributed: %d objects, sites %+v", bn.report.OwnAllocObjects, bn.report.AllocSites)
+		}
 	})
 	t.Run("every session", func(t *testing.T) {
 		cy := &cycler{n: 10}
@@ -107,4 +115,70 @@ func TestBenchWindowsAreWholeSessions(t *testing.T) {
 			t.Errorf("the window began at frame %d, want the next boundary (10)", starts)
 		}
 	})
+}
+
+// D27's amendment: an allocation of ours that misses some windows (here every
+// other one, as rexlook's 900-frame cycles against TestAllocEvery 1800) fails
+// the gate although a window is clean.
+func TestBenchSparseAllocationOfOursFails(t *testing.T) {
+	cy := &cycler{n: 10}
+	bn, a := newBenchRig(t, BenchOptions{Warm: 5, PostGCWarm: 5, Windows: 6, TestAllocEvery: 20}, cy)
+	driveBench(t, bn, a, cy, func(w, f int) bool { return false })
+	r := bn.report
+	if len(r.Windows) < 2 || r.Mallocs != 0 {
+		t.Fatalf("want a dirty window, then a clean one: %+v", r.Windows)
+	}
+	msg := r.OwnAllocFailure()
+	if msg == "" || !strings.Contains(msg, "gonativeui/app.(*benchRun).after") {
+		t.Fatalf("gate message %q; sites %+v", msg, r.AllocSites)
+	}
+	t.Log(msg)
+}
+
+// A display stall (no frames while the loop keeps coming round) extends the
+// deadline, up to maxStallExtension; a main thread that blocks gets nothing,
+// nor does a loop that draws.
+func TestBenchDeadlineOverDisplayStalls(t *testing.T) {
+	const ms = int64(1e6)
+	turns := func(b *benchRun, from, to, step, lastDraw int64) {
+		for now := from; now <= to; now += step {
+			b.loopTurn(now, lastDraw)
+		}
+	}
+	b := &benchRun{deadline: 60_000 * ms}
+	turns(b, 1000*ms, 21_000*ms, 50*ms, 0) // 20 s without a frame, the loop turning every 50 ms
+	if got := b.deadline - 60_000*ms; got < 18_900*ms || got > 20_000*ms {
+		t.Errorf("a 20 s display stall extended the deadline by %d ms", got/ms)
+	}
+	b = &benchRun{deadline: 60_000 * ms}
+	turns(b, 1000*ms, 21_000*ms, 1500*ms, 0) // the main thread out for 1.5 s at a time
+	if b.deadline != 60_000*ms {
+		t.Errorf("a blocked main thread extended the deadline by %d ms", (b.deadline-60_000*ms)/ms)
+	}
+	b = &benchRun{deadline: 60_000 * ms}
+	for now := int64(1000 * ms); now <= 21_000*ms; now += 16 * ms {
+		b.loopTurn(now, now) // drawing
+	}
+	if b.deadline != 60_000*ms {
+		t.Errorf("a loop that draws extended the deadline")
+	}
+	b = &benchRun{deadline: 60_000 * ms}
+	turns(b, 1000*ms, 400_000*ms, 100*ms, 0)
+	if got := b.deadline - 60_000*ms; got != maxStallExtension {
+		t.Errorf("extension %d ms, want the cap %d", got/ms, maxStallExtension/ms)
+	}
+}
+
+// MinWindows runs that many windows although the first is clean, and the
+// report is still the first clean one.
+func TestBenchMinWindows(t *testing.T) {
+	cy := &cycler{n: 10}
+	bn, a := newBenchRig(t, BenchOptions{Warm: 5, PostGCWarm: 5, Windows: 6, MinWindows: 3}, cy)
+	driveBench(t, bn, a, cy, func(w, f int) bool { return false })
+	if n := len(bn.report.Windows); n != 3 {
+		t.Fatalf("%d windows, want 3", n)
+	}
+	if bn.bestIdx != 0 {
+		t.Errorf("the report is of window %d, want the first clean one", bn.bestIdx)
+	}
 }

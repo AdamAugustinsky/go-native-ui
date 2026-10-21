@@ -55,6 +55,8 @@ func roleTitle(r menu.Role) string {
 		return "Copy"
 	case menu.RolePaste:
 		return "Paste"
+	case menu.RolePasteAndMatchStyle:
+		return "Paste and Match Style"
 	case menu.RoleSelectAll:
 		return "Select All"
 	case menu.RoleDelete:

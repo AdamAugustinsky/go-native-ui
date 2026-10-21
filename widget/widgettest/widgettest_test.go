@@ -143,6 +143,60 @@ func TestPlayerAsAScripter(t *testing.T) {
 	}
 }
 
+// animator asks for frames for its next n frames: an animation that takes a
+// number of frames, whatever the clock does between them (n < 0: forever).
+type animator struct{ n int }
+
+func (a *animator) Build(c *ui.Context) {
+	if a.n != 0 {
+		a.n--
+		c.RequestFrame()
+	}
+}
+
+// A wait counts frame time. Frames that stop for longer than the wait (a
+// display that stops delivering them) do not run it out; an animation that
+// never ends still fails it after DefaultWaitMs of frames, and says how the
+// frames came.
+func TestWaitsCountFrameTimeNotStalls(t *testing.T) {
+	r := widgettest.NewRig(t, widgettest.FakeOptions{Width: 200, Height: 100})
+	a := &animator{n: 30}
+	r.Run(a)
+	var now int64 = 1e9
+	p := widgettest.NewPlayer(r, []widgettest.Step{widgettest.Settle()}, widgettest.Options{})
+	widgettest.SetClock(p, func() int64 { return now })
+	r.Use(p)
+	for i := 0; i < 100 && !p.Done() && p.Err() == nil; i++ {
+		now += 16_666_667
+		if i == 3 {
+			now += 20e9 // the frames stop for 20 s in the middle of the wait
+		}
+		r.Frame()
+	}
+	if err := p.Err(); err != nil || !p.Done() {
+		t.Fatalf("a 20 s gap between frames of a 30-frame animation: error %v, done %v", err, p.Done())
+	}
+
+	a.n = -1
+	p.Load(widgettest.Settle())
+	frames := 0
+	for ; frames < 1000 && p.Err() == nil; frames++ {
+		now += 16_666_667
+		if frames%50 == 10 {
+			now += 30e9
+		}
+		r.Frame()
+	}
+	err := p.Err()
+	if err == nil || !strings.Contains(err.Error(), "still animating after 4000 ms of frame time") ||
+		!strings.Contains(err.Error(), "longest gap between frames 30016 ms") {
+		t.Fatalf("an animation that never ends gave %v", err)
+	}
+	if frames < 4000/widgettest.MaxFrameGapMs {
+		t.Errorf("the wait ran out after %d frames: the gaps counted for more than %d ms each", frames, widgettest.MaxFrameGapMs)
+	}
+}
+
 // Dump writes roles, names and states without geometry.
 func TestDump(t *testing.T) {
 	r, _ := newCounter(t)
@@ -278,5 +332,138 @@ func TestRenderedImagesCompare(t *testing.T) {
 	img3, _ := o.Frame()
 	if c := widgettest.CompareImages(&first, img3, widgettest.Tolerance{}); c.OK || c.Different < 60*40/2 {
 		t.Errorf("a square of another colour: ok %v, %d pixels differ", c.OK, c.Different)
+	}
+}
+
+// probe is an application that records the input of every frame it is built
+// with: what the steps deliver, as the app sees it.
+type probe struct{ frames []probeFrame }
+
+type probeFrame struct {
+	mods     ui.Mods
+	x, y     float32
+	scrollY  float32
+	pressed  bool
+	gestures []ui.GestureEvent
+}
+
+func (p *probe) Build(c *ui.Context) {
+	in := c.Input()
+	f := probeFrame{mods: in.Mods, x: in.MouseX, y: in.MouseY, scrollY: in.ScrollY, pressed: in.Pressed[ui.ButtonLeft]}
+	f.gestures = append(f.gestures, in.Gestures[:in.NGestures]...)
+	p.frames = append(p.frames, f)
+	c.NextSize(ui.Px(200), ui.Px(100))
+	c.NextRole(ui.RoleGroup)
+	c.NextSemName("pad")
+	c.Box(ui.Hoverable, "pad")
+}
+
+func newProbe(t *testing.T) (*widgettest.Rig, *probe) {
+	r := widgettest.NewRig(t, widgettest.FakeOptions{Width: 400, Height: 300})
+	p := &probe{}
+	r.Run(p)
+	p.frames = nil
+	return r, p
+}
+
+// Wheel, Do and Down carry the modifiers of With in the frames they act in and
+// not after them (Down holds them until Up, as a held button does).
+func TestStepsCarryModifiers(t *testing.T) {
+	r, p := newProbe(t)
+	doFrame := -1
+	r.Play(
+		widgettest.Wheel(ui.RoleGroup, "pad", 30, 2).With(ui.ModShift),
+		widgettest.Idle(1),
+		widgettest.Do(func() { doFrame = len(p.frames) }).With(ui.PrimaryMod()),
+		widgettest.Idle(1),
+		widgettest.Down(ui.RoleGroup, "pad").With(ui.PrimaryMod()),
+		widgettest.Idle(1),
+		widgettest.Up(),
+		widgettest.Idle(1),
+	)
+	var wheel, press []ui.Mods
+	for _, f := range p.frames {
+		if f.scrollY != 0 {
+			wheel = append(wheel, f.mods)
+		}
+		if f.pressed {
+			press = append(press, f.mods)
+		}
+	}
+	if len(wheel) != 2 || wheel[0] != ui.ModShift || wheel[1] != ui.ModShift {
+		t.Errorf("the mods of the wheel frames: %v, want two Shifts", wheel)
+	}
+	if doFrame < 0 || p.frames[doFrame].mods != ui.PrimaryMod() {
+		t.Errorf("the frame Do ran in has the mods of frame %d: %+v, want the primary modifier", doFrame, p.frames)
+	}
+	if len(press) != 1 || press[0] != ui.PrimaryMod() {
+		t.Errorf("the mods of the press: %v, want the primary modifier", press)
+	}
+	// nothing is held after the steps
+	last := p.frames[len(p.frames)-1]
+	if last.mods != 0 {
+		t.Errorf("modifiers %v still held after Up", last.mods)
+	}
+	for i, f := range p.frames {
+		if f.scrollY == 0 && !f.pressed && i > 0 && p.frames[i-1].scrollY != 0 && f.mods != 0 {
+			t.Errorf("frame %d after a wheel frame still holds %v", i, f.mods)
+		}
+	}
+}
+
+// MoveTo puts the pointer on a point that is no node's centre, and MagnifyAt
+// and SmartMagnifyAt pinch and double-tap at a point; Magnify does so over a
+// node's centre, with a Began, the changes that add up to the total, and an Ended.
+func TestPointerAndGestureSteps(t *testing.T) {
+	r, p := newProbe(t)
+	r.Play(widgettest.MoveTo(17, 233), widgettest.Idle(1))
+	if f := p.frames[len(p.frames)-1]; f.x != 17 || f.y != 233 {
+		t.Errorf("the pointer is at (%v, %v), want (17, 233)", f.x, f.y)
+	}
+	p.frames = nil
+	r.Play(widgettest.MagnifyAt(30, 40, 0.5, 4).With(ui.ModShift), widgettest.SmartMagnifyAt(31, 41), widgettest.Magnify(ui.RoleGroup, "pad", -0.2, 1), widgettest.SmartMagnify(ui.RoleGroup, "pad"))
+	var evs []ui.GestureEvent
+	for _, f := range p.frames {
+		evs = append(evs, f.gestures...)
+	}
+	if len(evs) != 6+1+3+1 {
+		t.Fatalf("%d gesture events, want 11: %+v", len(evs), evs)
+	}
+	pinch := evs[:6]
+	var total float32
+	for i, e := range pinch {
+		want := ui.PhaseChanged
+		switch i {
+		case 0:
+			want = ui.PhaseBegan
+		case 5:
+			want = ui.PhaseEnded
+		}
+		if e.Kind != ui.GestureMagnify || e.Phase != want || e.X != 30 || e.Y != 40 {
+			t.Errorf("pinch event %d: %+v, want %v at (30, 40)", i, e, want)
+		}
+		total += e.Amount
+	}
+	if total < 0.499 || total > 0.501 {
+		t.Errorf("the pinch adds up to %v, want 0.5", total)
+	}
+	if e := evs[6]; e.Kind != ui.GestureSmartMagnify || e.X != 31 || e.Y != 41 {
+		t.Errorf("smart magnify event %+v", e)
+	}
+	n := r.Must(ui.RoleGroup, "pad")
+	cx, cy := (n.Bounds[0]+n.Bounds[2])/2, (n.Bounds[1]+n.Bounds[3])/2
+	for _, e := range evs[7:] {
+		if e.X != cx || e.Y != cy {
+			t.Errorf("a gesture over the node at (%v, %v), want its centre (%v, %v)", e.X, e.Y, cx, cy)
+		}
+	}
+	if e := evs[len(evs)-1]; e.Kind != ui.GestureSmartMagnify {
+		t.Errorf("the last event %+v, want the node's smart magnify", e)
+	}
+	// the pinch's frames carried the modifiers
+	for _, f := range p.frames {
+		if len(f.gestures) > 0 && f.gestures[0].X == 30 && f.mods != ui.ModShift {
+			t.Errorf("a pinch frame has mods %v, want Shift", f.mods)
+		}
 	}
 }

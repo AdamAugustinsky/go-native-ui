@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"gonativeui/fs"
+	"gonativeui/internal/allocsite"
 	"gonativeui/ui"
 )
 
@@ -647,6 +648,15 @@ func TestRefreshOfAGrowingDirectoryAllocatesNothing(t *testing.T) {
 		settle(t, p)
 	}
 	bigger := mk(1003)
+	// The counters are the process's: the runtime's own allocations (CI: one
+	// of 48 bytes, the size of a type-assertion cache) do not count (D27);
+	// anyone else's does.
+	defer allocsite.Enable()()
+	var s0, s1 allocsite.Snapshot
+	s0.Take() // the storage, before the collection
+	s1.Take()
+	runtime.GC()
+	s0.Take()
 	var m0, m1 runtime.MemStats
 	runtime.ReadMemStats(&m0)
 	deliver(p, bigger)
@@ -656,7 +666,16 @@ func TestRefreshOfAGrowingDirectoryAllocatesNothing(t *testing.T) {
 		t.Fatalf("refresh did not land: %d entries, %d selected", p.v.nEntries(), p.v.nSel())
 	}
 	if n := m1.Mallocs - m0.Mallocs; n != 0 {
-		t.Errorf("a refresh with 3 more entries allocated %d times (%d bytes)", n, m1.TotalAlloc-m0.TotalAlloc)
+		runtime.GC()
+		s1.Take()
+		sites := allocsite.Diff(&s0, &s1)
+		var b strings.Builder
+		allocsite.Write(&b, sites)
+		if allocsite.Objects(sites, allocsite.Ours)+allocsite.Objects(sites, allocsite.Other) != 0 {
+			t.Errorf("a refresh with 3 more entries allocated %d times (%d bytes):\n%s", n, m1.TotalAlloc-m0.TotalAlloc, b.String())
+		} else {
+			t.Logf("the runtime allocated %d times during the refresh:\n%s", n, b.String())
+		}
 	}
 }
 

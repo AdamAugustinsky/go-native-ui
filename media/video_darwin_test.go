@@ -7,41 +7,22 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ebitengine/purego"
-
 	"gonativeui/gpu"
-	"gonativeui/internal/ffi"
+	"gonativeui/internal/cf"
 	"gonativeui/platform"
-	"gonativeui/widget/widgettest"
 )
 
-func TestMain(m *testing.M) { widgettest.RunMain(m) }
-
-var runLoop struct{ run, mode uintptr }
-
 // pump runs the main thread's run loop for d, so that what AVFoundation
-// queues on the main queue (the end notification) is delivered. Main thread.
+// queues on the main queue (the end notification) is delivered, then the app
+// object's dispatcher (the test sink's events). Main thread.
 func pump(d time.Duration) {
-	if runLoop.run == 0 {
-		cf, _ := purego.Dlopen("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation", purego.RTLD_NOW|purego.RTLD_GLOBAL)
-		runLoop.run, _ = purego.Dlsym(cf, "CFRunLoopRunInMode")
-		p, _ := purego.Dlsym(cf, "kCFRunLoopDefaultMode")
-		runLoop.mode = *(*uintptr)(ffi.PtrFromC(p))
-	}
-	pumpFrame.Reset().Arg(runLoop.mode).ArgF64(d.Seconds()).Arg(0).Call(runLoop.run)
+	runLoop.fr.Reset().Arg(runLoop.mode).ArgF64(d.Seconds()).ArgBool(false).Call(runLoop.fn)
+	platform.DispatchApp()
 }
 
-var pumpFrame = new(ffi.Frame)
-
-var cfRetainCount uintptr
-
-// retainCount is CFGetRetainCount(pb).
+// retainCount is CFGetRetainCount(pb). Main thread.
 func retainCount(pb uintptr) int {
-	if cfRetainCount == 0 {
-		cf, _ := purego.Dlopen("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation", purego.RTLD_NOW|purego.RTLD_GLOBAL)
-		cfRetainCount, _ = purego.Dlsym(cf, "CFGetRetainCount")
-	}
-	return int(pumpFrame.Call1(cfRetainCount, pb))
+	return int(runLoop.fr.Call1(cf.Sym(cf.CoreFoundation(), "CFGetRetainCount"), pb))
 }
 
 // shot is one offscreen frame of a video: what Frame returned and the
@@ -94,9 +75,9 @@ var white = [3]int{255, 255, 255}
 // the time it is at after a seek, reports its end, loops, and turns a
 // phone's upright video. Offscreen, on the main thread.
 func TestVideoFrames(t *testing.T) {
-	plain, turned := testClips(t, widgettest.OnMain)
+	plain, turned := testClips(t, onMain)
 	var errs []string
-	widgettest.OnMain(func() { errs = videoFrames(plain, turned) })
+	onMain(func() { errs = videoFrames(plain, turned) })
 	for _, e := range errs {
 		t.Error(e)
 	}
@@ -208,16 +189,27 @@ func videoFrames(plain, turned string) (errs []string) {
 		}
 	}
 
-	// The end: an application event, and it stops.
-	acc0 := av.ring.Accepted()
+	// The end: a media Ended event with the video's ID, and it stops.
+	ends := func() (n int) { // waiting up to a second for the first
+		for t0 := time.Now(); len(eventsFor(v.ID())) == 0 && time.Since(t0) < time.Second; {
+			pump(5 * time.Millisecond)
+		}
+		for _, e := range eventsFor(v.ID()) {
+			if e.ev.Kind != Ended {
+				fail("an event of kind %d for the video", e.ev.Kind)
+			}
+			n++
+		}
+		return n
+	}
 	v.Seek(2800 * time.Millisecond)
 	v.Play()
 	until("the end", 3*time.Second, func() bool {
 		frameOf(r, v, 160, 96)
 		return v.Ended()
 	})
-	if v.Playing() || av.ring.Accepted() != acc0+1 {
-		fail("ended: playing %v, %d end events posted", v.Playing(), av.ring.Accepted()-acc0)
+	if n := ends(); v.Playing() || n != 1 {
+		fail("ended: playing %v, %d end events", v.Playing(), n)
 	}
 	if s = frameOf(r, v, 160, 96); s.next != 0 {
 		fail("ended: next frame in %d ns", s.next)
@@ -232,8 +224,8 @@ func videoFrames(plain, turned string) (errs []string) {
 		p := v.Position()
 		return p > 100*time.Millisecond && p < time.Second
 	})
-	if !v.Playing() || v.Ended() || av.ring.Accepted() != acc0+1 {
-		fail("looping: playing %v, ended %v, %d end events", v.Playing(), v.Ended(), av.ring.Accepted()-acc0)
+	if n := ends(); !v.Playing() || v.Ended() || n != 1 {
+		fail("looping: playing %v, ended %v, %d end events", v.Playing(), v.Ended(), n)
 	}
 	v.Close()
 	r.CollectLeases()

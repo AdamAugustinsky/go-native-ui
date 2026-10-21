@@ -108,6 +108,7 @@ const (
 	SemSortAscending                       // a column header the table is sorted by, ascending
 	SemSortDescending                      // a column header the table is sorted by, descending
 	SemLive                                // a live region: a change of its name or value is announced
+	SemSecure                              // a secure text field (NextSecureField): its value is bullets, never the text
 )
 
 // SemAction are the actions a node supports (SemNode.Actions) and that an

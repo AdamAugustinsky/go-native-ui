@@ -60,7 +60,7 @@ func TestEveryWidgetIsReachableByTab(t *testing.T) {
 		{scPlayground, []id{
 			{ui.RoleMenuItem, "File"}, {ui.RoleMenuItem, "Edit"}, {ui.RoleMenuItem, "View"}, {ui.RoleMenuItem, "Go"},
 			{ui.RoleSearchField, "Search"},
-			{ui.RoleTextField, "Notes"}, {ui.RoleSearchField, "Filter"}, {ui.RoleCheckbox, "Enable feature"},
+			{ui.RoleTextField, "Notes"}, {ui.RoleTextField, "Password"}, {ui.RoleSearchField, "Filter"}, {ui.RoleCheckbox, "Enable feature"},
 			{ui.RoleCheckbox, "All options"}, {ui.RoleSwitch, "Notifications"}, {ui.RoleRadio, "One"},
 			{ui.RoleSlider, "Volume"}, {ui.RoleComboBox, "Format"}, {ui.RoleButton, "Open…"}, {ui.RoleButton, "Save"},
 			{ui.RoleButton, "More"}, {ui.RoleButton, "Remove"}, {ui.RoleButton, "Add item"}, {ui.RoleButton, "Menu"},

@@ -5,6 +5,7 @@ import (
 	"runtime"
 	"unicode/utf8"
 
+	"gonativeui/core"
 	"gonativeui/text"
 )
 
@@ -184,6 +185,13 @@ func (c *Context) IMECancel() bool { return c.imeCancel }
 // AltGr (Ctrl+Alt on Windows) types characters and is neither the primary nor
 // the word modifier.
 //
+// # Secure fields
+//
+// After NextSecureField the field is a password field (NSSecureTextField):
+// it draws, shapes and exports a bullet for each character cluster and never
+// the text, copies and cuts nothing, keeps no undo history and treats the
+// text as one word; see NextSecureField (textsecure.go).
+//
 // # Caret blink and the idle budget
 //
 // A focused field in an active window blinks its caret with half-period
@@ -196,8 +204,8 @@ func (c *Context) IMECancel() bool { return c.imeCancel }
 // 1 s (a 2 s blink period) or BlinkTimeoutNs to 0 (a solid caret).
 func (c *Context) TextField(label string, buf *TextBuffer) TextFieldSignal {
 	font, pad, textColor := c.sFont.peek(), c.sPad.peek(), c.sText.peek()
-	escClears, still := c.nextEscClr, c.nextStill // (a box resets the styles)
-	c.nextEscClr, c.nextStill = false, false
+	escClears, still, secure := c.nextEscClr, c.nextStill, c.nextSecure // (a box resets the styles)
+	c.nextEscClr, c.nextStill, c.nextSecure = false, false, false
 	cmdr, seps := c.nextCmdr, c.nextSeps
 	c.nextCmdr, c.nextSeps = nil, ""
 	fi := c.fontInfo(font)
@@ -218,7 +226,8 @@ func (c *Context) TextField(label string, buf *TextBuffer) TextFieldSignal {
 	}
 	id := c.Box(flags, label)
 	b := &c.boxes[id]
-	b.field = true
+	b.field, b.secure = true, secure
+	buf.setSecure(secure)
 	key := b.key
 	sig := c.Signal(id)
 	disabled := b.flags&Disabled != 0
@@ -227,6 +236,9 @@ func (c *Context) TextField(label string, buf *TextBuffer) TextFieldSignal {
 	focused := c.focusKey == key && !disabled && !c.blocked(b) && !c.wasHidden(b) // (beneath a modal overlay a field takes no input)
 	active := focused && in.Focused
 	res.Focused = focused
+	if active && secure {
+		c.secureOn = true
+	}
 	// Input ownership is fixed at Begin (fieldOwner: the field that had the
 	// focus then) and does not follow the focus during the build: this frame's
 	// keys, edit actions, typed text, replacement and paste all belong to that
@@ -306,6 +318,9 @@ func (c *Context) TextField(label string, buf *TextBuffer) TextFieldSignal {
 	// focused or not (the focus may have moved in the same frame).
 	if c.nCommit > 0 && c.commitOwner == key {
 		buf.Insert(c.commit[:c.nCommit])
+		if secure {
+			clear(c.commit[:c.nCommit])
+		}
 		touched = touched || active
 	}
 
@@ -397,49 +412,71 @@ func (c *Context) TextField(label string, buf *TextBuffer) TextFieldSignal {
 	res.Changed = buf.rev != rev0
 	b.escClears = escClears && buf.Len() > 0 // (what the next Begin reads: the text as this frame leaves it)
 	if rec := c.semOf(id); rec != nil {      // the value and the selection, for assistive technologies
-		n := min(len(buf.b), maxSemValue)
-		for n < len(buf.b) && n > 0 && !utf8.RuneStart(buf.b[n]) {
-			n--
-		}
 		rec.state |= SemEditable
-		rec.value = c.semA.AppendBytes(buf.b[:n])
-		rec.sel = [2]int32{int32(min(buf.anchor, n)), int32(min(buf.caret, n))}
+		if secure { // bullets: what shows, never the text
+			rec.state |= SemSecure
+			start := c.semA.Len()
+			appendMasked(&c.semA, buf.b)
+			n := min(c.semA.Len()-start, maxSemValue/len(bullet)*len(bullet))
+			rec.value = core.Span{Off: uint32(start), Len: uint32(n)}
+			rec.sel = [2]int32{int32(min(maskedOff(true, buf.b, buf.anchor), n)), int32(min(maskedOff(true, buf.b, buf.caret), n))}
+		} else {
+			n := min(len(buf.b), maxSemValue)
+			for n < len(buf.b) && n > 0 && !utf8.RuneStart(buf.b[n]) {
+				n--
+			}
+			rec.value = c.semA.AppendBytes(buf.b[:n])
+			rec.sel = [2]int32{int32(min(buf.anchor, n)), int32(min(buf.caret, n))}
+		}
 	}
 
 	// What is shown: the text with the composition in place of the selection
 	// (or at the caret). The buffer itself is not touched until the
 	// composition is committed, so cancelling it leaves the selection as it was.
+	// A secure field shows bullets for both (textsecure.go), and the offsets
+	// below are the bullets'.
 	preText := in.Preedit[:in.NPreedit]
 	disp := buf.b
-	pos := buf.caret
+	lo, end := buf.caret, buf.caret // where the composition shows
 	if composing {
-		var end int
-		pos, end = buf.Selection()
+		lo, end = buf.Selection()
+	}
+	if composing || secure {
 		start := c.fmtA.Len()
-		c.fmtA.AppendBytes(buf.b[:pos])
-		c.fmtA.AppendBytes(preText)
-		c.fmtA.AppendBytes(buf.b[end:])
+		if secure {
+			appendMasked(&c.fmtA, buf.b[:lo])
+			if composing {
+				appendMasked(&c.fmtA, preText)
+			}
+			appendMasked(&c.fmtA, buf.b[end:])
+		} else {
+			c.fmtA.AppendBytes(buf.b[:lo])
+			c.fmtA.AppendBytes(preText)
+			c.fmtA.AppendBytes(buf.b[end:])
+		}
 		disp = c.fmtA.Tail(start)
 	}
+	pos := maskedOff(secure, buf.b, lo)
 	v := c.sh.Run(c.sh.Shape(font, disp))
 	textW := v.Advance
 	caretOff := pos
 	if composing {
-		caretOff = pos + in.PreeditSel[0]
+		caretOff = pos + maskedOff(secure, preText, in.PreeditSel[0])
 	}
 	cx := v.CaretX(caretOff)
 	var sx0, sx1, px0, px1, ph0, ph1 float32
 	hasSel := active && !composing && buf.HasSelection()
 	if hasSel {
 		lo, hi := buf.Selection()
-		sx0, sx1 = v.CaretX(lo), v.CaretX(hi)
+		sx0, sx1 = v.CaretX(maskedOff(secure, buf.b, lo)), v.CaretX(maskedOff(secure, buf.b, hi))
 		if sx0 > sx1 {
 			sx0, sx1 = sx1, sx0
 		}
 	}
 	if composing {
-		px0, px1 = v.CaretX(pos), v.CaretX(pos+len(preText))
-		ph0, ph1 = v.CaretX(pos+in.PreeditSel[0]), v.CaretX(pos+in.PreeditSel[0]+in.PreeditSel[1])
+		ps0, ps1 := in.PreeditSel[0], in.PreeditSel[0]+in.PreeditSel[1]
+		px0, px1 = v.CaretX(pos), v.CaretX(pos+maskedOff(secure, preText, len(preText)))
+		ph0, ph1 = v.CaretX(pos+maskedOff(secure, preText, ps0)), v.CaretX(pos+maskedOff(secure, preText, ps1))
 	}
 
 	// Scroll to keep the caret in view.
@@ -552,6 +589,11 @@ func preeditHash(p []byte, sel [2]int) uint64 {
 // hitText returns the byte offset of the caret stop at x (pixels from the start
 // of the text).
 func (c *Context) hitText(font text.FontKey, buf *TextBuffer, x float32) int {
+	if buf.secure { // the bullets that show, never the text
+		start := c.fmtA.Len()
+		appendMasked(&c.fmtA, buf.b)
+		return unmaskOff(buf.b, c.sh.Run(c.sh.Shape(font, c.fmtA.Tail(start))).HitByte(x))
+	}
 	return c.sh.Run(c.sh.Shape(font, buf.b)).HitByte(x)
 }
 
@@ -563,7 +605,7 @@ func (c *Context) mousePress(buf *TextBuffer, font text.FontKey, x float32) {
 		buf.SelectAll()
 		buf.drag = dragNone
 	case n == 2:
-		lo, hi := wordBounds(buf.b, h)
+		lo, hi := buf.wordBounds(h)
 		buf.anchor, buf.caret = lo, hi
 		buf.drag, buf.dragLo, buf.dragHi = dragWord, lo, hi
 	default:
@@ -578,7 +620,7 @@ func (c *Context) mouseDrag(buf *TextBuffer, font text.FontKey, x float32) {
 		buf.caret = h
 		return
 	}
-	lo, hi := wordBounds(buf.b, h)
+	lo, hi := buf.wordBounds(h)
 	if h < buf.dragLo {
 		buf.anchor, buf.caret = buf.dragHi, lo
 	} else {
@@ -628,9 +670,9 @@ func (c *Context) editKeys(buf *TextBuffer, res *TextFieldSignal, from, to int) 
 					to = len(b)
 				}
 			case word && fwd:
-				to = wordRight(b, buf.caret, !macKeys)
+				to = buf.wordRight(buf.caret, !macKeys)
 			case word:
-				to = wordLeft(b, buf.caret)
+				to = buf.wordLeft(buf.caret)
 			case buf.HasSelection() && !shift:
 				lo, hi := buf.Selection()
 				to = lo
@@ -661,7 +703,7 @@ func (c *Context) editKeys(buf *TextBuffer, res *TextFieldSignal, from, to int) 
 				case line:
 					buf.deleteRange(0, buf.caret)
 				case word:
-					buf.deleteRange(wordLeft(b, buf.caret), buf.caret)
+					buf.deleteRange(buf.wordLeft(buf.caret), buf.caret)
 				default:
 					buf.deleteRange(text.PrevGrapheme(b, buf.caret), buf.caret)
 				}
@@ -669,7 +711,7 @@ func (c *Context) editKeys(buf *TextBuffer, res *TextFieldSignal, from, to int) 
 		case KeyDelete:
 			if !buf.deleteSelection() {
 				if word {
-					buf.deleteRange(buf.caret, wordRight(b, buf.caret, false))
+					buf.deleteRange(buf.caret, buf.wordRight(buf.caret, false))
 				} else {
 					buf.deleteRange(buf.caret, text.NextGrapheme(b, buf.caret))
 				}
@@ -716,7 +758,7 @@ func (c *Context) applyEdit(buf *TextBuffer, a EditAction) {
 	case EditSelectAll:
 		buf.SelectAll()
 	case EditCopy, EditCut:
-		if !buf.HasSelection() || c.ClipboardSet == nil {
+		if !buf.HasSelection() || c.ClipboardSet == nil || buf.secure { // a secure field's text never leaves it
 			return
 		}
 		c.ClipboardSet(buf.Selected())

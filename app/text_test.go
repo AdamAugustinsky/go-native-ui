@@ -78,7 +78,7 @@ func TestPreeditTranslation(t *testing.T) {
 // next frames, in order and cut between characters only.
 func TestTextOverflowCarries(t *testing.T) {
 	tr := newTranslator()
-	want := strings.Repeat("héllo wörld 日本語 ", 12) // ~230 bytes
+	want := strings.Repeat("héllo wörld 日本語 ", 120) // ~2300 bytes
 	tr.event(ev(platform.EvText, nil), []byte(want))
 	var got strings.Builder
 	frames := 0
@@ -102,7 +102,7 @@ func TestTextOverflowCarries(t *testing.T) {
 	}
 	// Order with a later event: the composition change waits behind the text.
 	tr = newTranslator()
-	tr.event(ev(platform.EvText, nil), []byte(strings.Repeat("x", 100)))
+	tr.event(ev(platform.EvText, nil), []byte(strings.Repeat("x", ui.MaxText+36)))
 	e, b := preedit("あ", 0, 0)
 	tr.event(e, b)
 	if tr.in.NPreedit != 0 {
@@ -123,22 +123,25 @@ type fakeText struct {
 	inputs   int
 	discards int
 	pastes   []uint64
+	secure   bool
 }
 
 func (f *fakeText) SetIMERect(x, y, w, h float32) {
 	f.rect, f.rects = [4]float32{x, y, w, h}, f.rects+1
 }
-func (f *fakeText) SetTextInput(a bool)     { f.input, f.inputs = a, f.inputs+1 }
-func (f *fakeText) DiscardComposition()     { f.discards++ }
-func (f *fakeText) RequestPaste(tag uint64) { f.pastes = append(f.pastes, tag) }
+func (f *fakeText) SetTextInput(a bool)        { f.input, f.inputs = a, f.inputs+1 }
+func (f *fakeText) SetSecureTextInput(on bool) { f.secure = on }
+func (f *fakeText) DiscardComposition()        { f.discards++ }
+func (f *fakeText) RequestPaste(tag uint64)    { f.pastes = append(f.pastes, tag) }
 
 // fieldApp is a Builder with one text field.
 type fieldApp struct {
-	a     *App
-	font  text.FontKey
-	buf   ui.TextBuffer
-	focus bool
-	res   ui.TextFieldSignal
+	a      *App
+	font   text.FontKey
+	buf    ui.TextBuffer
+	focus  bool
+	secure bool
+	res    ui.TextFieldSignal
 }
 
 func (b *fieldApp) Init(a *App) error { b.a = a; return nil }
@@ -150,6 +153,9 @@ func (b *fieldApp) Build(c *ui.Context) {
 	c.PushFont(b.font)
 	c.NextSize(ui.Px(300), ui.Px(40))
 	c.NextPad(8)
+	if b.secure {
+		c.NextSecureField()
+	}
 	b.res = c.TextField("field", &b.buf)
 	if b.focus {
 		c.SetFocus(c.KeyOf(b.res.ID))
@@ -249,6 +255,51 @@ func TestTextFieldThroughTranslator(t *testing.T) {
 	// The clipboard hooks are the platform's.
 	if o.UI.ClipboardSet == nil {
 		t.Error("clipboard not wired")
+	}
+}
+
+// TestSecureFieldThroughSyncText: while a secure field has the focus the
+// window is told (the system's secure keyboard entry), and the standard Edit
+// menu's Copy and Cut are off; neither outlives the focus.
+func TestSecureFieldThroughSyncText(t *testing.T) {
+	b := &fieldApp{focus: true, secure: true}
+	o, err := NewOffscreen(Config{Width: 400, Height: 200}, 800, 400, 2, b)
+	if err != nil {
+		skipOrFail(t, "offscreen renderer", err)
+	}
+	defer o.Close()
+	o.Frame()
+	o.Frame()
+	var sink fakeText
+	o.syncText(&sink, 0)
+	if !sink.secure || !sink.input {
+		t.Fatalf("focused secure field: %+v", sink)
+	}
+	for _, act := range []platform.MenuAction{platform.MenuCopy, platform.MenuCut} {
+		if on, _ := o.menuState(0, act); on {
+			t.Errorf("menu action %d enabled in a secure field", act)
+		}
+	}
+	for _, act := range []platform.MenuAction{platform.MenuPaste, platform.MenuSelectAll} {
+		if on, _ := o.menuState(0, act); !on {
+			t.Errorf("menu action %d disabled in a secure field", act)
+		}
+	}
+	o.UI.SetFocus(0)
+	o.Frame()
+	o.syncText(&sink, 0)
+	if sink.secure {
+		t.Errorf("secure input outlived the focus: %+v", sink)
+	}
+	b.secure, b.focus = false, true
+	o.Frame()
+	o.Frame()
+	o.syncText(&sink, 0)
+	if sink.secure || !sink.input {
+		t.Errorf("a plain field asked for secure input: %+v", sink)
+	}
+	if on, _ := o.menuState(0, platform.MenuCopy); !on {
+		t.Error("Copy disabled in a plain field")
 	}
 }
 

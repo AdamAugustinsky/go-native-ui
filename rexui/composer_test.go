@@ -7,6 +7,7 @@ import (
 	"gonativeui/rexui"
 	"gonativeui/theme"
 	"gonativeui/ui"
+	"gonativeui/widget/base"
 )
 
 // composerRig is a composer 380 pt wide, with the signals it reported and
@@ -925,5 +926,118 @@ func TestComposerDrawnReplaceAllocatesNothing(t *testing.T) {
 	}
 	if n := testing.AllocsPerRun(200, do); n != 0 {
 		t.Fatalf("Replace allocates %.1f times per pair", n)
+	}
+}
+
+// The edge arrows on the drawn field, one line: off, Up and Down report
+// nothing; on, each without a selection is at an edge, and the field still
+// takes the key (the caret moves); one that collapses a selection, and
+// Shift+Up, report nothing.
+func TestComposerDrawnEdgeArrows(t *testing.T) {
+	cr := newComposerRig(t, 0, rexui.ComposerSetup{Placeholder: "Message"})
+	cr.focus()
+	cr.typeText("hello")
+	cr.key(ui.KeyUp, 0)
+	if cr.sig.EdgeUp || cr.sig.EdgeDown {
+		t.Fatal("an edge with the edge arrows off")
+	}
+	cr.st.SetEdgeArrows(true)
+	cr.key(ui.KeyDown, 0)
+	if !cr.sig.EdgeDown || cr.sig.EdgeUp {
+		t.Errorf("Down: up %v, down %v; want down", cr.sig.EdgeUp, cr.sig.EdgeDown)
+	}
+	cr.key(ui.KeyUp, 0)
+	if !cr.sig.EdgeUp || cr.sig.EdgeDown {
+		t.Errorf("Up: up %v, down %v; want up", cr.sig.EdgeUp, cr.sig.EdgeDown)
+	}
+	cr.frame()
+	if cr.sig.EdgeUp {
+		t.Error("the edge is reported again in the next frame")
+	}
+	cr.key(ui.KeyUp, ui.ModShift)
+	if cr.sig.EdgeUp {
+		t.Error("Shift+Up reported an edge")
+	}
+	cr.key(ui.KeyCode('A'), ui.PrimaryMod())
+	cr.key(ui.KeyUp, 0)
+	if cr.sig.EdgeUp {
+		t.Error("Up that collapses a selection reported an edge")
+	}
+	if cr.submits != 0 || string(cr.st.Text()) != "hello" {
+		t.Errorf("the arrows sent %d times or changed the text to %q", cr.submits, cr.st.Text())
+	}
+	cr.st.SetEdgeArrows(false)
+	cr.key(ui.KeyUp, 0)
+	if cr.sig.EdgeUp {
+		t.Error("an edge with the edge arrows off again")
+	}
+}
+
+// The accessory takes the send button's place (the microphone of an empty
+// composer) and is the app's: its press is its own, and Enter still sends;
+// without it the send button is back.
+func TestComposerAccessoryReplacesSend(t *testing.T) {
+	cr := newComposerRig(t, 0, rexui.ComposerSetup{Placeholder: "Message"})
+	recorded := 0
+	mic := func(k *base.Kit) {
+		if rexui.Button(k, "Record", rexui.ButtonOpts{}).Clicked {
+			recorded++
+		}
+	}
+	has := func(name string) bool {
+		cr.c.Semantics(&cr.sem)
+		for _, n := range cr.sem.Nodes {
+			if n.Role == ui.RoleButton && string(cr.sem.Text(n.Name)) == name {
+				return true
+			}
+		}
+		return false
+	}
+	cr.o.Accessory = mic
+	cr.settle()
+	if !has("Record") || has("Send") {
+		t.Fatalf("with the accessory: Record %v, Send %v", has("Record"), has("Send"))
+	}
+	field, rec := cr.node(ui.RoleGroup, "Message"), cr.node(ui.RoleButton, "Record")
+	if rec.Bounds[2] > field.Bounds[2] || rec.Bounds[0] < field.Bounds[0] || rec.Bounds[3] > field.Bounds[3] {
+		t.Errorf("the accessory %v is not inside the field %v", rec.Bounds, field.Bounds)
+	}
+	cr.click(centre(rec))
+	if recorded != 1 || cr.submits != 0 {
+		t.Errorf("a press on the accessory: %d records, %d sends", recorded, cr.submits)
+	}
+	cr.focus()
+	cr.typeText("hi")
+	cr.key(ui.KeyEnter, 0)
+	if cr.submits != 1 {
+		t.Errorf("Enter with the accessory: %d sends", cr.submits)
+	}
+	cr.o.Accessory = nil
+	cr.settle()
+	if has("Record") || !has("Send") {
+		t.Errorf("without the accessory: Record %v, Send %v", has("Record"), has("Send"))
+	}
+}
+
+// The placeholder and the Enter policy change on a running composer; the
+// drawn field draws the new placeholder (and none for ""), and is one line,
+// which always sends with Enter.
+func TestComposerSetPlaceholder(t *testing.T) {
+	cr := newComposerRig(t, 0, rexui.ComposerSetup{Placeholder: "Message"})
+	quads := func(p string) int {
+		cr.st.SetPlaceholder(p)
+		cr.settle()
+		return len(cr.list.Quads)
+	}
+	long, short, none := quads("Message"), quads("Reply"), quads("")
+	if !(none < short && short < long) {
+		t.Errorf("quads drawn: %d with no placeholder, %d with Reply, %d with Message", none, short, long)
+	}
+	cr.st.SetEnter(platform.CmdEnterSends)
+	cr.focus()
+	cr.typeText("hi")
+	cr.key(ui.KeyEnter, 0)
+	if cr.submits != 1 {
+		t.Errorf("the drawn field sent %d times with Enter", cr.submits)
 	}
 }

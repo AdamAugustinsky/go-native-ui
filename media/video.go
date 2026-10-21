@@ -1,5 +1,3 @@
-// Package media plays and records media for apps: video files drawn into
-// the window's frames (Video).
 package media
 
 import (
@@ -35,11 +33,6 @@ type VideoOptions struct {
 	// until the first frame plays (default 1280).
 	PosterSize int
 }
-
-// VideoEnded is the B of the application event (platform.AppEvService from
-// platform.SourceMedia) a Video posts when it plays to its end and does not
-// loop; A is the video's ID.
-const VideoEnded = 1
 
 // ErrVideoUnsupported is returned by OpenVideo where video is not
 // implemented yet (Windows and Linux).

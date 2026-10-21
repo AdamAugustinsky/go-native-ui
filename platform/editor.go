@@ -17,7 +17,8 @@ import (
 // each change also queues one EvHostEdit, so an idle app draws a frame for it.
 // While the app holds a completion (SetCompletionActive), the keys that move
 // in a completion list come to the app as EditorCommands (TakeCommand), and
-// the text view does nothing with them.
+// the text view does nothing with them. The options NewEditor was given can
+// change while the editor runs (SetOptions).
 
 // TextRange is a range of bytes [Start, End) in an editor's UTF-8 text.
 type TextRange struct {
@@ -99,6 +100,15 @@ const (
 	// inserted nothing: the app takes the image (RequestPasteKinds with
 	// WantImage, which converts it to PNG off the main thread).
 	EditorPastedImage
+	// EditorEdgeUp and EditorEdgeDown: with SetEdgeArrows on, Up went down
+	// with the caret on the text's first line (or the text empty), Down with
+	// it on the last line.
+	EditorEdgeUp
+	EditorEdgeDown
+	// EditorPastedFiles: a paste found files on the pasteboard (a copy in the
+	// Finder) and inserted nothing, not even their names: the app takes their
+	// paths (RequestPasteKinds with WantFiles).
+	EditorPastedFiles
 )
 
 // EditorCommand is a key the editor handed to the app's completion instead of
@@ -173,6 +183,8 @@ type editorState struct {
 	cHead  int
 	cN     int
 	compl  bool
+	edges  bool // SetEdgeArrows
+	opts   EditorOptions
 	height float32 // points
 }
 
@@ -210,6 +222,19 @@ func (e *Editor) SetCompletionActive(on bool) {
 		e.cHead, e.cN = 0, 0
 	}
 }
+
+// SetEdgeArrows turns the edge arrows on or off (off when made): with them
+// on, Up with the caret on the text's first line or in an empty editor, and
+// Down with it on the last line, are reported as EditorEdgeUp and
+// EditorEdgeDown (an app's "Up edits the last message"). The text view still
+// moves the caret as it does (to the start or the end of the text); a
+// selection, a completion (SetCompletionActive) or marked text keeps the keys
+// to itself, and Shift+Up and Shift+Down extend the selection as ever.
+func (e *Editor) SetEdgeArrows(on bool) { e.edges = on }
+
+// Options are the editor's options: NewEditor's, as SetOptions last changed
+// them.
+func (e *Editor) Options() EditorOptions { return e.opts }
 
 // TakeSignals returns what happened since the last call and clears it. A
 // widget calls it once per frame.

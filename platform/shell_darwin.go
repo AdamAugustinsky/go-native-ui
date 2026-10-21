@@ -442,7 +442,12 @@ func (w *Window) FlushShell() {
 
 func (w *Window) applyShell() {
 	shellApplies.Add(1)
-	if objc.SendBool(clsCATransaction(), selDisableActions) && objc.SendBool(objc.Send(w.view, selLayerOf), selPresentsWithTx) {
+	// The view's layer is the surface's CAMetalLayer, or none; but a window
+	// without a surface whose hosts asked for layers has an ordinary backing
+	// layer, which does not know presentsWithTransaction (AppKit threw, and
+	// the process aborted: TestKeyEquivalentWithHostFocused with -count=3).
+	if l := objc.Send(w.view, selLayerOf); objc.SendBool(clsCATransaction(), selDisableActions) &&
+		objc.SendBool1(l, selRespondsTo, uintptr(selPresentsWithTx)) && objc.SendBool(l, selPresentsWithTx) {
 		shellSynced.Add(1)
 	}
 	if w.mat.dirty {

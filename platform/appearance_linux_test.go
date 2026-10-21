@@ -128,12 +128,20 @@ func TestPortalReadsColorSchemeAndAccent(t *testing.T) {
 				startFakePortal(t, b, map[string]dbus.Variant{"color-scheme": colorScheme(c.scheme), "accent-color": accentColor(0.2, 0.4, 0.6)},
 					func(p *fakePortal) { p.version1 = c.version1 })
 				f := startFollower(b)
-				t0 := time.Now()
-				got := f.get()
-				if got != c.want {
+				// What the portal says, not how fast: the first answer can
+				// miss get's firstWait on a loaded runner (a fresh
+				// dbus-daemon, 26 ms once), and get then rightly says
+				// unknown. TestPortalAnswerTime checks the time, and
+				// TestPortalSlowAnswer the late answer.
+				select {
+				case <-f.ready:
+				case <-time.After(5 * time.Second):
+					t.Fatalf("no first answer in 5 s (cache %#x)", f.cache.Load())
+				}
+				if got := f.get(); got != c.want {
 					t.Errorf("got %+v, want %+v", got, c.want)
 				}
-				t.Logf("first call took %v; connect + subscribe + read took %v", time.Since(t0), time.Duration(f.answered.Load()))
+				t.Logf("connect + subscribe + read took %v", time.Duration(f.answered.Load()))
 				if f.serial.Load() != 0 {
 					t.Error("an answer that arrived before the first call bumped the serial")
 				}

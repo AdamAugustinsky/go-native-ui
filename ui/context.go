@@ -49,6 +49,7 @@ type box struct {
 	parent, first, last, next, prev ID
 	field                           bool  // a text field (TextField): it takes the keys of keys.go when focused
 	escClears                       bool  // a text field that clears itself on Escape and has text to clear (NextEscapeClears)
+	secure                          bool  // a secure text field (NextSecureField): it shows bullets
 	ovRoot                          bool  // the root box of an overlay
 	ovl                             uint8 // the overlay the box belongs to, 1 + its index in the frame's overlays; 0 for the main tree
 	mat                             uint8 // 1 + the box's record in shell.mats when Material marked it (material.go)
@@ -267,6 +268,8 @@ type Context struct {
 	fieldKeys  uint16         // bit i: key event i was claimed for the focused text field
 	nextEscClr bool           // the next TextField clears itself on Escape (NextEscapeClears)
 	nextStill  bool           // the next TextField does not animate hover (NextFieldNoHover)
+	nextSecure bool           // the next TextField is a secure field (NextSecureField)
+	secureOn   bool           // a secure field has the focus in the focused window, as this frame built it (SecureFieldFocused)
 	nextCmdr   FieldCommander // the next TextField offers its commands to this (NextFieldCommander)
 	nextSeps   string         // ... and its separator characters
 	cpNow      colorReq       // the colour panel request of the frame being built (ColorPanel)
@@ -444,7 +447,7 @@ func (c *Context) Begin(in *Input, widthPx, heightPx int, scale, dt float32) {
 	}
 	c.holdScroll(changed)
 	c.animating, c.scrollSet = c.nHeld > 0, false // (held input needs the next frame)
-	c.wakeNs, c.imeOK, c.imeCancel = 0, false, false
+	c.wakeNs, c.imeOK, c.imeCancel, c.secureOn = 0, false, false, false
 	c.takeCommit()
 	c.rich, c.richSpans, c.richStyles = c.rich[:0], c.richSpans[:0], c.richStyles[:0]
 	c.ovPrev, c.nOvPrev = c.ovs, c.nOvs
@@ -606,6 +609,7 @@ func (c *Context) resetStyles() {
 	c.bd.n, c.bd.hasNext = 0, false
 	c.nextEscClr = false
 	c.nextStill = false
+	c.nextSecure = false
 	c.nextCmdr, c.nextSeps = nil, ""
 	c.nextOvl = OverlayOpts{}
 	c.semNext = semNext{}

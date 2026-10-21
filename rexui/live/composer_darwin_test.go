@@ -65,6 +65,8 @@ type cmpLab struct {
 	watchHidden bool                     // count the frames the hosted view was hidden while the list was open
 	hidden      int
 	shift       float32 // space under the composer, in points (a parent moving it)
+
+	edgeUp, edgeDown, files int
 }
 
 func (p *cmpLab) Init(a *app.App) error {
@@ -144,6 +146,15 @@ func (p *cmpLab) take(s rexui.ComposerSignal) {
 	st := p.st
 	if s.HeightChanged {
 		p.heights++
+	}
+	if s.EdgeUp {
+		p.edgeUp++
+	}
+	if s.EdgeDown {
+		p.edgeDown++
+	}
+	if s.PastedFiles {
+		p.files++
 	}
 	if s.Chosen >= 0 {
 		p.chosen = s.Chosen
