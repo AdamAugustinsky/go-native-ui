@@ -311,6 +311,7 @@ func RunWith(cfg Config, b Builder, o RunOptions) (RunResult, error) {
 // the native menu bar.
 func openWindowed(cfg Config, b Builder, st *StartupReport, nativeMenus bool) (*App, error) {
 	tEntry, age := platform.Now(), sysinfo.ProcessAgeNs()
+	gpu.Prewarm() // the renderer's shaders build while the window opens
 	a := newApp()
 	a.handler = DefaultHandler{}
 	if err := a.bindApp(false); err != nil {
@@ -329,6 +330,7 @@ func openWindowed(cfg Config, b Builder, st *StartupReport, nativeMenus bool) (*
 // tEntry is when the opening started (the startup report's origin) and age
 // the process's age then (-1 unknown).
 func (a *App) openWin(cfg Config, b Builder, st *StartupReport, nativeMenus bool, tEntry, age int64) error {
+	gpu.Prewarm()
 	pool := framePoolPush() // Init and the setup may create native views outside any frame
 	defer framePoolPop(pool)
 	execNs := int64(-1)

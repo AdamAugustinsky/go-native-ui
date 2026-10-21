@@ -193,43 +193,17 @@ func (r *Renderer) initBackdrops() bool {
 
 func (r *Renderer) buildBackdrops() error {
 	bd := &r.bd
-	nsErrorOut = 0
-	lib := objc.Send3(r.device, rsNewLibrary, uintptr(objc.Str(backdropMSL)), 0, uintptr(unsafe.Pointer(&nsErrorOut)))
-	if lib == 0 {
-		return fmt.Errorf("gpu: compiling the backdrop shaders: %s", nsErrorText())
-	}
-	defer objc.Release(lib)
-	vs := objc.Send1(lib, rsNewFunction, uintptr(objc.Str("bd_vs")))
-	fd := objc.Send1(lib, rsNewFunction, uintptr(objc.Str("bd_down")))
-	fb := objc.Send1(lib, rsNewFunction, uintptr(objc.Str("bd_blur")))
-	for _, f := range []objc.ID{vs, fd, fb} {
-		if f != 0 {
-			defer objc.Release(f)
+	// the pipelines: Prewarm's, or built here
+	if bd.down, bd.blur = warmBackdrops(r.device); bd.down == 0 {
+		var fail buildFail
+		switch bd.down, bd.blur, fail = backdropPipelines(objc.F, r.device, &nsErrorOut); fail {
+		case buildCompile:
+			return fmt.Errorf("gpu: compiling the backdrop shaders: %s", nsErrorText())
+		case buildEntry:
+			return errBackdropMSL
+		case buildPipeline:
+			return fmt.Errorf("gpu: creating a backdrop pipeline: %s", nsErrorText())
 		}
-	}
-	if vs == 0 || fd == 0 || fb == 0 {
-		return errBackdropMSL
-	}
-	pipe := func(fs objc.ID) (objc.ID, error) {
-		pd := objc.Send(objc.Send(clsPipelineDesc, rsAlloc), rsInit)
-		defer objc.Release(pd)
-		objc.Send1(pd, rsSetVertexFn, uintptr(vs))
-		objc.Send1(pd, rsSetFragFn, uintptr(fs))
-		ca := objc.Send1(objc.Send(pd, rsColorAttach), rsObjectAt, 0)
-		objc.Send1(ca, rsSetPixelFmt, mtlBGRA8Unorm)
-		nsErrorOut = 0
-		p := objc.Send2(r.device, rsNewPipeline, uintptr(pd), uintptr(unsafe.Pointer(&nsErrorOut)))
-		if p == 0 {
-			return 0, fmt.Errorf("gpu: creating a backdrop pipeline: %s", nsErrorText())
-		}
-		return p, nil
-	}
-	var err error
-	if bd.down, err = pipe(fd); err != nil {
-		return err
-	}
-	if bd.blur, err = pipe(fb); err != nil {
-		return err
 	}
 	bd.rpd = objc.Retain(objc.Send(clsRPD, rsRPD))
 	bd.color0 = objc.Send1(objc.Send(bd.rpd, rsColorAttach), rsObjectAt, 0)
