@@ -218,10 +218,17 @@ func videoFrames(plain, turned string) (errs []string) {
 		}
 	}
 
-	// Play plays at the rate set while paused.
+	// Play plays at the rate set while paused: measured from when the
+	// position first moves, as Play's start-up (about 90 ms on CI) is not
+	// playing at any rate.
+	held := v.Position()
 	v.Play()
+	until("the position to move after Play", 2*time.Second, func() bool {
+		frameOf(r, v, 160, 96)
+		return v.Position() != held
+	})
 	p0, t0 = v.Position(), time.Now()
-	for time.Since(t0) < 300*time.Millisecond {
+	for time.Since(t0) < 400*time.Millisecond {
 		pump(5 * time.Millisecond)
 		frameOf(r, v, 160, 96)
 	}
