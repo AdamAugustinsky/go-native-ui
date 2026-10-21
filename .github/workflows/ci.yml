@@ -122,7 +122,7 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 25
     env:
-      QUARANTINE: '^(TestIdleAppDrawsNothingAfterOneSecondButTheSystemsNews|TestIdleAppDrawsNothingBetweenWaits|TestCloseIsBounded|TestDragTypesDoNotReachHosts|TestEditorNestedLoopDraws|TestEditorUndoRedo|TestMixFollowsAndDoesNotAllocate|TestStallOfAHiddenWindowSkipsAndSaysWhy|TestRunKeepsDesignatedRequirement|TestScrollEventsThroughTheQueue|TestWindowButtonsSignatureMismatch|TestVListEditFrameBudget|TestPackagedBinaryHasNoDebugChordOrInspector)$'
+      QUARANTINE: '^(TestIdleAppDrawsNothingAfterOneSecondButTheSystemsNews|TestIdleAppDrawsNothingBetweenWaits|TestCloseIsBounded|TestDragTypesDoNotReachHosts|TestEditorNestedLoopDraws|TestEditorUndoRedo|TestEditorMarkedTextSubmission|TestMixFollowsAndDoesNotAllocate|TestStallOfAHiddenWindowSkipsAndSaysWhy|TestRunKeepsDesignatedRequirement|TestScrollEventsThroughTheQueue|TestWindowButtonsSignatureMismatch|TestVListEditFrameBudget|TestPackagedBinaryHasNoDebugChordOrInspector)$'
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6

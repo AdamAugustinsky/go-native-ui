@@ -33,7 +33,7 @@ How it works, in `.github/workflows/ci.yml`:
 | macOS arm64 | `TestIdleAppDrawsNothingBetweenWaits` (widgettest/live) | `kept drawing 1 frames after the wait ended`; possibly a real wake problem | [#34](https://github.com/AdamAugustinsky/go-native-ui/issues/34) |
 | macOS arm64 | `TestCloseIsBounded` (task) | `a second Close failed` | [#34](https://github.com/AdamAugustinsky/go-native-ui/issues/34) |
 | macOS arm64 | `TestDragTypesDoNotReachHosts` (platform) | `host under the view: false`, about 1 in 5 | [#34](https://github.com/AdamAugustinsky/go-native-ui/issues/34) |
-| macOS arm64 | `TestEditorNestedLoopDraws`, `TestEditorUndoRedo` (widgettest/live) | fail under contention, pass alone | [#34](https://github.com/AdamAugustinsky/go-native-ui/issues/34) |
+| macOS arm64 | `TestEditorNestedLoopDraws`, `TestEditorUndoRedo`, `TestEditorMarkedTextSubmission` (widgettest/live) | fail under contention, pass alone (MarkedTextSubmission added after it failed on run 39531272169) | [#34](https://github.com/AdamAugustinsky/go-native-ui/issues/34) |
 | macOS arm64 | `TestMixFollowsAndDoesNotAllocate` (theme) | one-off allocation | [#34](https://github.com/AdamAugustinsky/go-native-ui/issues/34) |
 | macOS arm64 | `TestStallOfAHiddenWindowSkipsAndSaysWhy` (widgettest) | intermittent failure on the macOS runner | [#34](https://github.com/AdamAugustinsky/go-native-ui/issues/34) |
 | macOS arm64 | `TestRunKeepsDesignatedRequirement` (cmd/gnui) | intermittent failure on the macOS runner | [#34](https://github.com/AdamAugustinsky/go-native-ui/issues/34) |
