@@ -5,6 +5,7 @@ package media
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -14,6 +15,7 @@ import (
 	"gonativeui/app/perm"
 	"gonativeui/internal/cf"
 	"gonativeui/internal/ffi"
+	"gonativeui/internal/objc"
 	"gonativeui/internal/testlock"
 )
 
@@ -85,6 +87,42 @@ func position(p *Player) (d time.Duration) {
 
 func near(got, want, tol time.Duration) bool { return got >= want-tol && got <= want+tol }
 
+// endedOnTime checks that a play that should last want (the clip's length at
+// its rate) had its Ended event delivered took after Play: no earlier than
+// want less 50 ms, and no later than want plus 300 ms. The system's end comes
+// after the clip's, by the output's latency: 90-145 ms on the CI runner, about
+// 120 ms on a Mac mini, about 200 ms for a process's first play; our delivery
+// adds under a millisecond (measured, 168 plays). A miss is measured once
+// more with again, which plays the same way and returns its took: a loaded
+// runner delays one end now and then (264-480 ms late), and a real fault
+// (a wrong rate, an end that is not delivered at once) misses twice. It
+// reports whether it played again.
+func endedOnTime(t *testing.T, what string, took, want time.Duration, again func() time.Duration) bool {
+	t.Helper()
+	ok := func(d time.Duration) bool { return d >= want-50*time.Millisecond && d <= want+300*time.Millisecond }
+	if ok(took) {
+		return false
+	}
+	t.Logf("%s ended after %v, want about %v; measured once more", what, took, want)
+	if took = again(); !ok(took) {
+		t.Errorf("%s ended after %v, want about %v (and before that too)", what, took, want)
+	}
+	return true
+}
+
+// playToEnd plays p and returns how long after Play its next Ended event was
+// delivered.
+func playToEnd(t *testing.T, p *Player) time.Duration {
+	t.Helper()
+	n := len(eventsFor(p.ID()))
+	start := play(t, p)
+	got := waitEvents(p.ID(), n+1, 3*time.Second)
+	if len(got) != n+1 || got[n].ev.Kind != Ended {
+		t.Fatalf("events: %+v, want one more Ended", got)
+	}
+	return got[n].at.Sub(start)
+}
+
 func TestPlayerPlaysToTheEnd(t *testing.T) {
 	Warm()
 	Warm()
@@ -105,12 +143,13 @@ func TestPlayerPlaysToTheEnd(t *testing.T) {
 	if len(got) != 1 || got[0].ev.Kind != Ended {
 		t.Fatalf("events: %+v, want one Ended", got)
 	}
-	if took := got[0].at.Sub(start); !near(took, time.Second, 250*time.Millisecond) {
-		t.Errorf("a 1 s clip ended after %v", took)
+	plays := 1
+	if endedOnTime(t, "a 1 s clip", got[0].at.Sub(start), time.Second, func() time.Duration { return playToEnd(t, p) }) {
+		plays++
 	}
 	time.Sleep(300 * time.Millisecond)
-	if n := len(eventsFor(p.ID())); n != 1 {
-		t.Errorf("%d events for one playback", n)
+	if n := len(eventsFor(p.ID())); n != plays {
+		t.Errorf("%d events for %d playbacks", n, plays)
 	}
 	var playing bool
 	var pos time.Duration
@@ -119,14 +158,31 @@ func TestPlayerPlaysToTheEnd(t *testing.T) {
 		t.Errorf("after the end: playing %v at %v; want stopped at 0", playing, pos)
 	}
 
-	// Play again: from the start, and a second Ended.
-	start = play(t, p)
-	got = waitEvents(p.ID(), 2, 3*time.Second)
-	if len(got) != 2 || got[1].ev.Kind != Ended {
-		t.Fatalf("events after playing again: %+v", got)
+	// Play again: from the start, and another Ended.
+	again := func() time.Duration { return playToEnd(t, p) }
+	endedOnTime(t, "played again, it", again(), time.Second, again)
+}
+
+// TestEndIsDeliveredAtOnce: the system's end call (the delegate's
+// audioPlayerDidFinishPlaying:successfully:, made here on the main thread as
+// AVFoundation makes it) reaches the app as one Ended event within a turn of
+// the main thread. This is the part of an end's latency that is ours; the
+// system's own is endedOnTime's.
+func TestEndIsDeliveredAtOnce(t *testing.T) {
+	f := Format{48000, 1, Int16}
+	p := openPlayer(t, sine(f, 5*time.Second, 440), f)
+	play(t, p)
+	var at time.Time
+	onMain(func() {
+		at = time.Now()
+		objc.F.Reset().Arg(uintptr(players.del[p.n.slot])).Arg(uintptr(sel.didFinish)).Arg(uintptr(p.n.obj)).ArgBool(true).Call(objc.MsgSend)
+	})
+	got := waitEvents(p.ID(), 1, time.Second)
+	if len(got) != 1 || got[0].ev.Kind != Ended {
+		t.Fatalf("events: %+v, want one Ended", got)
 	}
-	if took := got[1].at.Sub(start); !near(took, time.Second, 250*time.Millisecond) {
-		t.Errorf("played again, it ended after %v", took)
+	if took := got[0].at.Sub(at); took > 200*time.Millisecond {
+		t.Errorf("the end was delivered %v after the system's call, want within a turn (2 ms here)", took)
 	}
 }
 
@@ -161,9 +217,20 @@ func TestPlayerRates(t *testing.T) {
 			if len(got) != 1 || got[0].ev.Kind != Ended {
 				t.Fatalf("events: %+v", got)
 			}
-			if took := got[0].at.Sub(start); !near(took, tc.wantTotal, 200*time.Millisecond) {
-				t.Errorf("a 1 s clip at %v× ended after %v, want about %v", tc.rate, took, tc.wantTotal)
-			}
+			endedOnTime(t, fmt.Sprintf("a 1 s clip at %v×", tc.rate), got[0].at.Sub(start), tc.wantTotal, func() time.Duration {
+				if tc.switchAt == 0 {
+					return playToEnd(t, p)
+				}
+				n := len(eventsFor(p.ID()))
+				onMain(func() { p.SetRate(1) })
+				start := play(t, p)
+				time.Sleep(tc.switchAt)
+				onMain(func() { p.SetRate(tc.rate) })
+				if got := waitEvents(p.ID(), n+1, 3*time.Second); len(got) == n+1 {
+					return got[n].at.Sub(start)
+				}
+				return 3 * time.Second
+			})
 			if p.Rate() != tc.rate {
 				t.Errorf("Rate = %v", p.Rate())
 			}
@@ -260,14 +327,8 @@ func TestPlayerFloatStereo(t *testing.T) {
 	if p.Duration() != 400*time.Millisecond {
 		t.Fatalf("Duration = %v", p.Duration())
 	}
-	start := play(t, p)
-	got := waitEvents(p.ID(), 1, 2*time.Second)
-	if len(got) != 1 || got[0].ev.Kind != Ended {
-		t.Fatalf("events: %+v", got)
-	}
-	if took := got[0].at.Sub(start); !near(took, 400*time.Millisecond, 200*time.Millisecond) {
-		t.Errorf("a 400 ms float clip ended after %v", took)
-	}
+	again := func() time.Duration { return playToEnd(t, p) }
+	endedOnTime(t, "a 400 ms float clip", again(), 400*time.Millisecond, again)
 }
 
 // Position and Playing are read every frame while playing (DECISIONS D27).
