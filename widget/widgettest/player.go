@@ -56,6 +56,7 @@ type Player struct {
 	reveal    bool
 	revLast   ui.Key
 	revDone   []ui.Key
+	revRects  [16][4]float32 // scratch for the containers' rectangles: revealing allocates nothing
 	revStill  int
 	revPos    [2]float32
 	revFrames int
@@ -305,7 +306,7 @@ func (p *Player) revealFrame(st *Step, in *ui.Input) bool {
 			from = k
 		}
 	}
-	var inner [][4]float32
+	inner := p.revRects[:0:8]
 	for k := range anc {
 		if from < 0 || k >= from {
 			break
@@ -319,7 +320,7 @@ func (p *Player) revealFrame(st *Step, in *ui.Input) bool {
 			inner = append(inner, b)
 			continue
 		}
-		var outer [][4]float32
+		outer := p.revRects[8:8]
 		for _, o := range anc[k+1:] {
 			outer = append(outer, t.Nodes[o].Bounds)
 		}
