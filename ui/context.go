@@ -159,8 +159,9 @@ type Context struct {
 	parents  [maxDepth]ID
 	nparents int
 
-	cur          style // the tops of the style stacks
-	hasNextStyle bool  // at least one style stack has a next value
+	cur          style    // the tops of the style stacks
+	hasNextStyle bool     // at least one style stack has a next value
+	styleOwner   *Context // the address the stack mirrors are bound to
 
 	sBG      stack[[4]uint32]
 	sText    stack[uint32]
@@ -370,25 +371,26 @@ func New(sh Shaper) *Context {
 	c.avPool.Alloc()
 	c.av = make([]animEnt, 1, 16)
 	c.fmt.a = &c.fmtA
-	c.sBG.init([4]uint32{}, &c.cur.bg, &c.hasNextStyle)
-	c.sText.init(0xFFFFFFFF, &c.cur.textColor, &c.hasNextStyle)
-	c.sBorder.init(border{}, &c.cur.bd, &c.hasNextStyle)
-	c.sSides.init(SidesAll, &c.cur.sides, &c.hasNextStyle)
-	c.sCursor.init(CursorArrow, &c.cur.cursor, &c.hasNextStyle)
-	c.sImage.init(Image{}, &c.cur.img, &c.hasNextStyle)
-	c.sRadii.init([4]float32{}, &c.cur.radii, &c.hasNextStyle)
-	c.sShadow.init([2]Shadow{}, &c.cur.shadow, &c.hasNextStyle)
-	c.sFont.init(0, &c.cur.font, &c.hasNextStyle)
-	c.sAlign.init(AlignLeft, &c.cur.align, &c.hasNextStyle)
-	c.sPad.init([4]float32{}, &c.cur.pad, &c.hasNextStyle)
-	c.sGap.init(0, &c.cur.gap, &c.hasNextStyle)
-	c.sAxis.init(AxisY, &c.cur.axis, &c.hasNextStyle)
-	c.sCross.init(CrossStart, &c.cur.cross, &c.hasNextStyle)
-	c.sJustify.init(JustifyStart, &c.cur.justify, &c.hasNextStyle)
-	c.sW.init(Size{}, &c.cur.pref[0], &c.hasNextStyle)
-	c.sH.init(Size{}, &c.cur.pref[1], &c.hasNextStyle)
-	c.sOpacity.init(1, &c.cur.opacity, &c.hasNextStyle)
-	c.sTint.init(Tint{}, &c.cur.tint, &c.hasNextStyle)
+	c.sBG.init([4]uint32{})
+	c.sText.init(0xFFFFFFFF)
+	c.sBorder.init(border{})
+	c.sSides.init(SidesAll)
+	c.sCursor.init(CursorArrow)
+	c.sImage.init(Image{})
+	c.sRadii.init([4]float32{})
+	c.sShadow.init([2]Shadow{})
+	c.sFont.init(0)
+	c.sAlign.init(AlignLeft)
+	c.sPad.init([4]float32{})
+	c.sGap.init(0)
+	c.sAxis.init(AxisY)
+	c.sCross.init(CrossStart)
+	c.sJustify.init(JustifyStart)
+	c.sW.init(Size{})
+	c.sH.init(Size{})
+	c.sOpacity.init(1)
+	c.sTint.init(Tint{})
+	c.bindStyles()
 	return c
 }
 
@@ -497,6 +499,9 @@ func (c *Context) Begin(in *Input, widthPx, heightPx int, scale, dt float32) {
 	c.stepScroll()
 
 	c.nparents = 0
+	if c.styleOwner != c {
+		c.bindStyles()
+	}
 	c.resetStyles()
 	c.sems = c.sems[:0]
 	c.semA.Reset()
@@ -601,6 +606,30 @@ func (c *Context) takeCommit() {
 	c.commitOwner = owner
 	copy(in.Text[off:], in.Text[off+n:in.NText])
 	in.NText -= n
+}
+
+// bindStyles repairs the internal pointers when a Context is initialized by value.
+func (c *Context) bindStyles() {
+	c.sBG.bind(&c.cur.bg, &c.hasNextStyle)
+	c.sText.bind(&c.cur.textColor, &c.hasNextStyle)
+	c.sBorder.bind(&c.cur.bd, &c.hasNextStyle)
+	c.sSides.bind(&c.cur.sides, &c.hasNextStyle)
+	c.sCursor.bind(&c.cur.cursor, &c.hasNextStyle)
+	c.sImage.bind(&c.cur.img, &c.hasNextStyle)
+	c.sRadii.bind(&c.cur.radii, &c.hasNextStyle)
+	c.sShadow.bind(&c.cur.shadow, &c.hasNextStyle)
+	c.sFont.bind(&c.cur.font, &c.hasNextStyle)
+	c.sAlign.bind(&c.cur.align, &c.hasNextStyle)
+	c.sPad.bind(&c.cur.pad, &c.hasNextStyle)
+	c.sGap.bind(&c.cur.gap, &c.hasNextStyle)
+	c.sAxis.bind(&c.cur.axis, &c.hasNextStyle)
+	c.sCross.bind(&c.cur.cross, &c.hasNextStyle)
+	c.sJustify.bind(&c.cur.justify, &c.hasNextStyle)
+	c.sW.bind(&c.cur.pref[0], &c.hasNextStyle)
+	c.sH.bind(&c.cur.pref[1], &c.hasNextStyle)
+	c.sOpacity.bind(&c.cur.opacity, &c.hasNextStyle)
+	c.sTint.bind(&c.cur.tint, &c.hasNextStyle)
+	c.styleOwner = c
 }
 
 func (c *Context) resetStyles() {

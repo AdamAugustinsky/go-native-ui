@@ -19,10 +19,11 @@ type stack[T any] struct {
 	pending *bool // Context.hasNextStyle
 }
 
-func (s *stack[T]) init(def T, cur *T, pending *bool) {
-	s.v[0], s.n, s.hasNext = def, 0, false
+func (s *stack[T]) init(def T) { s.v[0], s.n, s.hasNext = def, 0, false }
+
+func (s *stack[T]) bind(cur *T, pending *bool) {
 	s.cur, s.pending = cur, pending
-	*cur = def
+	*cur = s.v[s.n]
 }
 
 func (s *stack[T]) reset() { s.n, s.hasNext = 0, false; *s.cur = s.v[0] }
