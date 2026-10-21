@@ -26,3 +26,6 @@ func dirHasACL(dir string) (bool, error) {
 	}
 	return false, err
 }
+
+// aclGrantsMutation is false on Linux: an access ACL shows in the group bits.
+func aclGrantsMutation(string) (bool, error) { return false, nil }

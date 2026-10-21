@@ -700,13 +700,26 @@ no goroutine and no per-frame cost, and a release build (`gnui package`, tag
 The socket must be in a directory you own and keep private: it is refused if the
 directory is writable by its group or others, has an ACL, or sits under a directory
 that others could rename it away in (every ancestor must be yours or root's, and
-closed to others unless sticky). `/tmp` itself is therefore always refused: make a
+closed to others unless sticky, and on macOS must carry no ACL that allows anyone
+to write, add, delete or change ownership; a deny-only ACL such as the "everyone deny
+delete" on home folders is fine). `/tmp` itself is therefore always refused: make a
 directory of your own first (`mktemp -d` gives a `0700` one under `$TMPDIR`). The
-socket is made mode 0600 and published atomically. A shot may be written anywhere
-else you can write, but not into the socket's directory, so keep one directory for
-the socket and another for the pictures. The bridge works on macOS and Linux;
-on Windows it is off for now and says so in the log (`errors.ErrUnsupported`), and
-`shot` of a live window is not supported on Linux yet.
+socket is made mode 0600 and published atomically, and a lock file `<socket>.lock`
+next to it, held for as long as the app runs, tells a running app from a dead one's
+leftover: a second app on the same path is refused while the first lives, and a
+socket left by an app that died is replaced. A shot may be written only into a
+directory that passes the same checks (`mktemp -d` does), and not into the socket's
+directory, so keep one directory for the socket and another for the pictures. The
+bridge works on macOS and Linux; on Windows it is off for now and says so in the log
+(`errors.ErrUnsupported`), and `shot` of a live window is not supported on Linux yet.
+
+What it defends against is other local users and what a client sends; it assumes
+nobody but you can change the socket and shot directories. It does not defend against
+your own processes, which could replace the socket anyway. And it is a development
+tool, not made for a person to use the window while an agent drives it: a real Shift
+pressed while a synthetic one is held, or the real pointer entering or leaving during
+a `do`, can be overridden when the steps end (modifiers, pointer and focus are put
+back as they were) until your next real event corrects it.
 
 ```sh
 SOCK=$(mktemp -d)/notes.sock          # a private directory, and the socket in it

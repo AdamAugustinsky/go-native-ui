@@ -19,12 +19,15 @@ type ShotDest struct {
 }
 
 // OpenShotDest checks the path a client asked a shot to be written to and
-// opens its directory. The path must be absolute, name a file (not a
-// directory) in an existing directory, and that directory must not be the
-// socket's directory or inside it: the client could otherwise replace the
-// socket. That is checked by identity (os.SameFile) on the directory and each
-// of its ancestors, so a link or a case-insensitive alias of the socket's
-// directory does not get past it. The caller closes the ShotDest.
+// opens its directory. The path must be absolute and name a file (not a
+// directory) in an existing directory that is as private as the socket's
+// (CheckDir: owned by the user, closed to the group and others, no ACL, every
+// ancestor safe), so nobody else can swap it between the check and the write.
+// The directory must also not be the socket's directory or inside it: the
+// client could otherwise replace the socket. That is checked by identity
+// (os.SameFile) on the open directory and each of its ancestors, so a link or a
+// case-insensitive alias of the socket's directory does not get past it, and
+// any failure to look at one refuses. The caller closes the ShotDest.
 func OpenShotDest(socket, path string) (*ShotDest, error) {
 	if !filepath.IsAbs(path) {
 		return nil, fmt.Errorf("the path %q is not absolute", path)
@@ -34,9 +37,9 @@ func OpenShotDest(socket, path string) (*ShotDest, error) {
 	if name == "." || name == ".." || name == string(filepath.Separator) {
 		return nil, fmt.Errorf("%q does not name a file", path)
 	}
-	dir, err := filepath.EvalSymlinks(filepath.Dir(path))
+	dir, err := CheckDir(filepath.Dir(path))
 	if err != nil {
-		return nil, fmt.Errorf("the directory of %q: %w", path, err)
+		return nil, fmt.Errorf("the directory of %q is not fit for a shot: %w", path, err)
 	}
 	root, err := os.OpenRoot(dir)
 	if err != nil {
@@ -54,18 +57,25 @@ func OpenShotDest(socket, path string) (*ShotDest, error) {
 	if err != nil {
 		return nil, err
 	}
-	if pfi, err := os.Stat(dir); err != nil || !os.SameFile(rfi, pfi) {
+	if pfi, err := statDir(dir); err != nil || !os.SameFile(rfi, pfi) {
 		return nil, fmt.Errorf("%q changed while it was being checked", dir)
 	}
 	if fi, err := root.Lstat(name); err == nil && fi.IsDir() {
 		return nil, fmt.Errorf("%q is a directory", path)
 	}
-	sfi, err := os.Stat(filepath.Dir(socket))
+	sfi, err := statDir(filepath.Dir(socket))
 	if err != nil {
 		return nil, fmt.Errorf("the socket's directory: %w", err)
 	}
+	if os.SameFile(rfi, sfi) { // the directory held open, not a path that could name another by now
+		return nil, fmt.Errorf("%q is in the socket's directory %q; write elsewhere", path, filepath.Dir(socket))
+	}
 	for d := dir; ; d = filepath.Dir(d) {
-		if fi, err := os.Stat(d); err == nil && os.SameFile(fi, sfi) {
+		fi, err := statDir(d)
+		if err != nil {
+			return nil, fmt.Errorf("cannot look at %q to see whether it is the socket's directory: %w", d, err)
+		}
+		if os.SameFile(fi, sfi) {
 			return nil, fmt.Errorf("%q is in the socket's directory %q; write elsewhere", path, filepath.Dir(socket))
 		}
 		if d == filepath.Dir(d) {
@@ -75,6 +85,9 @@ func OpenShotDest(socket, path string) (*ShotDest, error) {
 	ok = true
 	return &ShotDest{Path: filepath.Join(dir, name), Name: name, root: root}, nil
 }
+
+// statDir is os.Stat (a variable for the tests).
+var statDir = os.Stat
 
 // Close closes the directory. It may be called more than once.
 func (d *ShotDest) Close() { d.root.Close() }

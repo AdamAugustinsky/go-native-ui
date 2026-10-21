@@ -37,12 +37,24 @@ import (
 // window for its steps (the player of widget/script, as benchmarks and tests
 // use), the window draws frames until the steps are applied and one frame
 // more has been built, and only then is the request answered.
+//
+// Threat model: other local users, and what a client sends; the socket and shot
+// directories are assumed to be changed by nobody but the user, whose own
+// processes could replace the socket anyway. Limitation: the steps share the
+// window's input with a person using it. A real Shift pressed while a synthetic
+// one is held, or the real pointer entering or leaving during a "do", can be
+// overridden when the steps end (the window's modifiers, pointer and focus are
+// put back as they were) until the next real event corrects it; there is no
+// tracking of which input is whose.
 
 const (
-	inspectWait     = 30 * time.Second  // how long a request waits for the main thread, and a "do" for its steps, by default
 	inspectMaxDo    = 120 * time.Second // the longest a "do" may be given
 	inspectTailFrms = 2                 // frames after the last step's before the answer: two built from its result, without input
 )
+
+// inspectWait is how long a request waits for the main thread, and a "do" for
+// its steps, by default (a variable for the tests).
+var inspectWait = 30 * time.Second
 
 // inspectGrace is how much longer than the steps' own limit the handler waits
 // for their answer (a variable for the tests).
@@ -121,7 +133,9 @@ func (in *inspector) stopNow() {
 	in.q = nil
 	in.mu.Unlock()
 	for _, j := range q {
-		j.closeShot()
+		if j.claim() {
+			j.closeShot()
+		}
 	}
 	for _, s := range append([]*stepper(nil), in.active...) {
 		s.abort()
@@ -136,6 +150,31 @@ type inspJob struct {
 	wait      time.Duration
 	done      chan *inspectwire.Response // buffered: the main thread never waits for a handler
 	cancelled atomic.Bool                // the handler gave up: do not start it, stop it
+	state     atomic.Int32               // jobQueued, then jobClaimed by the main thread or jobCancelled by the handler
+}
+
+// A job is queued until one side takes it: the main thread claims it to run it
+// (or to drop it as the bridge stops), the handler cancels it when it gives up.
+// Whichever wins the compare-and-swap closes the shot's directory, once: a shot
+// that timed out frees its descriptor at once, without waiting for a main
+// thread that may be stalled.
+const (
+	jobQueued int32 = iota
+	jobClaimed
+	jobCancelled
+)
+
+// claim reports whether the caller now owns the job (and its shot directory).
+func (j *inspJob) claim() bool { return j.state.CompareAndSwap(jobQueued, jobClaimed) }
+
+// cancel is the handler giving up on the job. A job still queued is dropped
+// here and its directory closed; one the main thread has claimed is its to
+// finish (a running "do" sees cancelled and stops).
+func (j *inspJob) cancel() {
+	j.cancelled.Store(true)
+	if j.state.CompareAndSwap(jobQueued, jobCancelled) {
+		j.closeShot()
+	}
 }
 
 // closeShot closes the shot's directory, if the job has one.
@@ -191,10 +230,10 @@ func (in *inspector) Handle(req *inspectwire.Request) *inspectwire.Response {
 	case r := <-job.done:
 		return r
 	case <-in.quit:
-		job.cancelled.Store(true)
+		job.cancel()
 		return inspectwire.Fail(req.ID, inspectwire.ErrShuttingDown, "the app is ending")
 	case <-t.C:
-		job.cancelled.Store(true)
+		job.cancel()
 		return inspectwire.Fail(req.ID, inspectwire.ErrTimeout,
 			"the app did not answer in "+job.wait.String()+"; a window that is hidden, covered or on a locked screen draws no frames, and a request waits for one")
 	}
@@ -213,8 +252,7 @@ func (in *inspector) drain() {
 	in.q = nil
 	in.mu.Unlock()
 	for _, j := range q {
-		if j.cancelled.Load() {
-			j.closeShot()
+		if !j.claim() { // the handler gave up and has closed what it held
 			continue
 		}
 		if r := in.run(j); r != nil { // a "do" answers later, from its stepper

@@ -65,3 +65,33 @@ func TestShotTempFileSwappedForALinkChangesNothingElsewhere(t *testing.T) {
 		t.Errorf("left in the output directory: %v", ents)
 	}
 }
+
+// A directory that cannot be looked at cannot be shown not to be the socket's:
+// the shot is refused, not let through.
+func TestOpenShotDestFailsClosedWhenAnAncestorCannotBeStated(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no bridge on Windows")
+	}
+	d := tmpDir(t)
+	sockDir := filepath.Join(d, "run")
+	os.Mkdir(sockDir, 0o700)
+	out := filepath.Join(d, "out")
+	os.Mkdir(out, 0o700)
+	dest, err := OpenShotDest(filepath.Join(sockDir, "s"), filepath.Join(out, "a.png"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dest.Close()
+	old := statDir
+	defer func() { statDir = old }()
+	statDir = func(name string) (os.FileInfo, error) {
+		if name == filepath.Dir(out) {
+			return nil, os.ErrPermission
+		}
+		return os.Stat(name)
+	}
+	if dest, err := OpenShotDest(filepath.Join(sockDir, "s"), filepath.Join(out, "a.png")); err == nil {
+		dest.Close()
+		t.Error("a shot was allowed although an ancestor could not be looked at")
+	}
+}

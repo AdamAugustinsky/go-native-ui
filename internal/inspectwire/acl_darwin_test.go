@@ -99,3 +99,117 @@ func TestPublishStripsTheInheritedACL(t *testing.T) {
 		t.Errorf("the staging directory was left: %v", ents)
 	}
 }
+
+// addACL puts an ACL entry on path with chmod(1).
+func addACL(t *testing.T, path, entry string) {
+	t.Helper()
+	if out, err := exec.Command("/bin/chmod", "+a", entry, path).CombinedOutput(); err != nil {
+		t.Skipf("cannot set an ACL here: %v %s", err, out)
+	}
+}
+
+// Above the socket's directory an ACL matters when it allows someone to change
+// what is in the directory (delete or rename its children) though the mode bits
+// are closed; one that only denies, or only allows reading, does not.
+func TestCheckDirReadsTheACLsOfAncestors(t *testing.T) {
+	root := tmpDir(t)
+	chain := func(name, entry string) string {
+		a := filepath.Join(root, name)
+		if err := os.Mkdir(a, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		addACL(t, a, entry)
+		c := filepath.Join(a, "c")
+		if err := os.Mkdir(c, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	for _, entry := range []string{
+		"everyone allow delete_child",
+		"everyone allow delete",
+		"everyone allow write",
+		"everyone allow add_file",
+		"everyone allow append",
+		"everyone allow add_subdirectory",
+		"everyone allow writesecurity",
+		"everyone allow chown",
+		"everyone allow writeattr",
+		"everyone allow writeextattr",
+		"everyone allow list,search,delete_child",
+	} {
+		c := chain(strings.ReplaceAll(entry, " ", "_"), entry)
+		if _, err := CheckDir(c); err == nil || !strings.Contains(err.Error(), "ACL") {
+			t.Errorf("an ancestor with %q: %v", entry, err)
+		}
+		if bad, err := aclGrantsMutation(filepath.Dir(c)); err != nil || !bad {
+			t.Errorf("%q: grants mutation %v %v", entry, bad, err)
+		}
+	}
+	for _, entry := range []string{
+		"everyone deny delete",
+		"everyone deny delete_child,write,chown",
+		"everyone allow list,search,readattr,readextattr,readsecurity",
+	} {
+		c := chain(strings.ReplaceAll(entry, " ", "_"), entry)
+		if _, err := CheckDir(c); err != nil {
+			t.Errorf("an ancestor with %q refused: %v", entry, err)
+		}
+		if bad, err := aclGrantsMutation(filepath.Dir(c)); err != nil || bad {
+			t.Errorf("%q: grants mutation %v %v", entry, bad, err)
+		}
+	}
+	// a deny first and an allow after it: the allow is what counts
+	c := chain("mixed", "everyone deny delete")
+	addACL(t, filepath.Dir(c), "everyone allow delete_child")
+	if _, err := CheckDir(c); err == nil {
+		t.Error("an ancestor with a deny and an allow of delete_child was accepted")
+	}
+}
+
+// What the real directories of this Mac carry, and that they pass: the chain
+// under $TMPDIR has no ACL anywhere; the home folder and Library and Caches carry
+// "everyone deny delete", which only denies.
+func TestCheckDirAcceptsTheRealTempAndCachesChains(t *testing.T) {
+	show := func(p string) {
+		for ; ; p = filepath.Dir(p) {
+			out, _ := exec.Command("/bin/ls", "-led", p).CombinedOutput()
+			t.Logf("%s", strings.ReplaceAll(strings.TrimSpace(string(out)), "\n", " | "))
+			if p == "/" {
+				return
+			}
+		}
+	}
+	tmp, err := os.MkdirTemp("", "gi")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmp)
+	t.Log("the chain of $TMPDIR:")
+	show(tmp)
+	if _, err := CheckDir(tmp); err != nil {
+		t.Errorf("a directory in $TMPDIR refused: %v", err)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip(err)
+	}
+	caches := filepath.Join(home, "Library", "Caches")
+	if _, err := os.Stat(caches); err != nil {
+		t.Skip(err)
+	}
+	sub, err := os.MkdirTemp(caches, "gi")
+	if err != nil {
+		t.Skip(err)
+	}
+	defer os.RemoveAll(sub)
+	t.Log("the chain of ~/Library/Caches:")
+	show(sub)
+	if _, err := CheckDir(sub); err != nil {
+		t.Errorf("a directory in ~/Library/Caches refused: %v", err)
+	}
+	// Caches itself carries an ACL, so it is not accepted as the socket's own directory
+	if _, err := CheckDir(caches); err == nil {
+		t.Log("~/Library/Caches has no ACL here, so it passes as a socket directory too")
+	}
+}

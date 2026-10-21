@@ -202,8 +202,15 @@ func (p *Player) setMods(in *ui.Input, m ui.Mods) {
 // again after the last step, whose modifiers are held for one frame more: a button it pressed and has not released is cancelled (a release would
 // click whatever is under it), and the modifiers it set go back to base, the
 // ones that were held before it began. Input that came from elsewhere since is
-// left alone: a button that is up already stays as it is, and modifiers that
-// are not what the player last set are the system's now.
+// left alone where it can be told: a button that is up already stays as it is,
+// and modifiers that are not what the player last set are the system's now.
+//
+// Limitation: the player cannot tell real input from its own for everything. A
+// real Shift pressed while a synthetic one is held, or a real pointer entering
+// or leaving the window during the steps, can be overridden by what Unwind (and
+// the caller's restoring of the pointer and focus) puts back, until the next
+// real event corrects it. For a development tool driving a window nobody else
+// is using that is accepted.
 func (p *Player) Unwind(in *ui.Input, base ui.Mods) {
 	for b := 0; b < 8; b++ {
 		if p.pressed&(1<<b) != 0 {

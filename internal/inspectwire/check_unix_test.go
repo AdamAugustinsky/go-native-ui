@@ -101,3 +101,29 @@ func TestCheckDirRefusesAWritableAncestor(t *testing.T) {
 		}
 	}
 }
+
+// The directory a shot goes to is held to the rule of the socket's: one under a
+// directory others can write and rename in, with no sticky bit, is refused.
+func TestOpenShotDestRefusesAnUnsafeDirectory(t *testing.T) {
+	d := shortDir(t)
+	sockDir := filepath.Join(d, "run")
+	os.Mkdir(sockDir, 0o700)
+	p := filepath.Join(d, "open")
+	os.Mkdir(p, 0o700)
+	os.Chmod(p, 0o777)
+	out := filepath.Join(p, "out")
+	os.Mkdir(out, 0o700)
+	if dest, err := inspectwire.OpenShotDest(filepath.Join(sockDir, "s"), filepath.Join(out, "a.png")); err == nil {
+		dest.Close()
+		t.Error("an output directory under a world-writable non-sticky parent was accepted")
+	} else if !strings.Contains(err.Error(), "not fit for a shot") {
+		t.Errorf("the refusal: %v", err)
+	}
+	loose := filepath.Join(d, "loose")
+	os.Mkdir(loose, 0o700)
+	os.Chmod(loose, 0o777)
+	if dest, err := inspectwire.OpenShotDest(filepath.Join(sockDir, "s"), filepath.Join(loose, "a.png")); err == nil {
+		dest.Close()
+		t.Error("a world-writable output directory was accepted")
+	}
+}

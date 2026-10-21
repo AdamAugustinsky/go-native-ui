@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -271,5 +272,52 @@ func TestBridgeCancelsAClickThatIsInterrupted(t *testing.T) {
 	in.stop()
 	if ai.Cancelled[ui.ButtonLeft] {
 		t.Error("a button that was up already was cancelled")
+	}
+}
+
+// openFDs counts the process's open file descriptors.
+func openFDs(t *testing.T) int {
+	t.Helper()
+	for _, d := range []string{"/dev/fd", "/proc/self/fd"} {
+		if ents, err := os.ReadDir(d); err == nil {
+			return len(ents)
+		}
+	}
+	t.Skip("no way to count file descriptors here")
+	return 0
+}
+
+// A shot that times out gives its output directory back at once, not when the
+// main thread next drains: with the safe point withheld the descriptors would
+// otherwise pile up one per request.
+func TestBridgeTimedOutShotsCloseTheirDirectoryAtOnce(t *testing.T) {
+	oldW, oldG := inspectWait, inspectGrace
+	inspectWait, inspectGrace = time.Millisecond, 5*time.Millisecond
+	defer func() { inspectWait, inspectGrace = oldW, oldG }()
+	_, in := newBridgeOffscreen(t)
+	out := shortTemp(t)
+	base := openFDs(t)
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			r := in.Handle(&inspectwire.Request{Op: "shot", Path: filepath.Join(out, "a.png")})
+			if r.OK || r.Error.Code != inspectwire.ErrTimeout {
+				t.Errorf("%+v", r)
+			}
+		}()
+	}
+	wg.Wait()
+	if n := openFDs(t); n > base+3 {
+		t.Errorf("%d descriptors open after 50 timed-out shots (%d before): their directories were kept for the main thread", n, base)
+	}
+	// the main thread then finds them cancelled and runs nothing
+	in.root.safePoint()
+	if ents, _ := os.ReadDir(out); len(ents) != 0 {
+		t.Errorf("a shot nobody waited for was written: %v", ents)
+	}
+	if n := openFDs(t); n > base+3 {
+		t.Errorf("%d descriptors open after the drain (%d before)", n, base)
 	}
 }

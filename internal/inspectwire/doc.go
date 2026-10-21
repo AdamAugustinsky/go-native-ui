@@ -24,8 +24,19 @@
 // # The socket
 //
 // Listen creates a Unix domain socket (never TCP) with mode 0600 in a
-// directory the user owns that neither the group nor others can write. It
-// removes a stale socket only if it is a socket the user owns that nobody
-// answers on, and it removes its own on Close. On Windows, where files have no
-// owner or mode to read, the directory must be inside the user's profile.
+// directory the user owns that neither the group nor others can write, with no
+// ACL, under ancestors that others cannot rename it away in (CheckDir). A lock
+// file next to the socket, flocked for the bridge's life, is what tells a live
+// bridge from a dead one's leftover: a socket is removed as stale only when the
+// lock can be taken, and the bridge's own is removed on Close. Shots are written
+// only into a directory held to the same rule (OpenShotDest). Listen is off on
+// Windows for now (errors.ErrUnsupported).
+//
+// # Threat model
+//
+// The bridge defends against other local users and against what a client
+// sends. It assumes the socket directory and the shot directory cannot be
+// modified by anyone but the user. It does not defend against races by the
+// user's own processes, which can already delete or replace the socket, the
+// lock file or the shots.
 package inspectwire
