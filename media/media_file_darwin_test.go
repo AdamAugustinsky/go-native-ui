@@ -4,6 +4,7 @@ package media
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"math"
 	"os"
@@ -115,7 +116,8 @@ func skipIfNoAudio(t *testing.T, p *Player) {
 
 func TestOpenPlayerM4A(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "clip.m4a")
-	writeM4A(t, path, time.Second)
+	const length = 2 * time.Second // room for a rate's 500 ms at 2×
+	writeM4A(t, path, length)
 
 	testlock.Hold(t, "audio")
 	var p *Player
@@ -146,45 +148,38 @@ func TestOpenPlayerM4A(t *testing.T) {
 		t.Fatalf("event %v (%v), want Opened", got[0].ev.Kind, p.Err())
 	}
 	ready, dur, err := state(p)
-	if !ready || err != nil || !near(dur, time.Second, 60*time.Millisecond) {
-		t.Fatalf("after Opened: ready %v, duration %v, err %v; want a 1 s clip", ready, dur, err)
+	if !ready || err != nil || !near(dur, length, 60*time.Millisecond) {
+		t.Fatalf("after Opened: ready %v, duration %v, err %v; want a %v clip", ready, dur, err, length)
 	}
 
-	start := play(t, p)
+	// At 1×, then at 2× (pitch kept), from the start each time: the rate
+	// from the position (rateOf), the end (endedOnTime), and one Ended for
+	// each playback.
+	plays := 0
+	for _, rate := range []float32{1, 2} {
+		onMain(func() { p.SetRate(rate) })
+		playOnce := func() (float64, time.Duration) {
+			n := len(eventsFor(p.ID()))
+			start := play(t, p)
+			r := rateOf(t, p)
+			plays++
+			return r, endAfter(t, p, n, start)
+		}
+		what := fmt.Sprintf("a %v M4A at %v×", length, rate)
+		want := time.Duration(float32(dur) / rate)
+		got, took := playOnce()
+		endedOnTime(t, what, took, want, func() (time.Duration, time.Duration) { _, took := playOnce(); return took, want })
+		playsAt(t, what, got, rate, func() float64 { r, _ := playOnce(); return r })
+	}
 	time.Sleep(300 * time.Millisecond)
-	p1 := position(p)
-	time.Sleep(300 * time.Millisecond)
-	p2 := position(p)
-	if !near(p1, 300*time.Millisecond, 150*time.Millisecond) || !near(p2-p1, 300*time.Millisecond, 100*time.Millisecond) {
-		t.Errorf("positions %v then %v, 300 ms apart: want about 300 ms at 1×", p1, p2)
-	}
-	got = waitEvents(p.ID(), 2, 3*time.Second)
-	if len(got) != 2 || got[1].ev.Kind != Ended {
-		t.Fatalf("events: %+v, want Opened then one Ended", got)
-	}
-	if took := got[1].at.Sub(start); !near(took, time.Second, 250*time.Millisecond) {
-		t.Errorf("a 1 s M4A ended after %v", took)
-	}
-	time.Sleep(300 * time.Millisecond)
-	if n := len(eventsFor(p.ID())); n != 2 {
-		t.Errorf("%d events for one open and one playback", n)
-	}
-
-	// Rate 2×, pitch kept, from the start again.
-	onMain(func() { p.SetRate(2) })
-	start = play(t, p)
-	got = waitEvents(p.ID(), 3, 3*time.Second)
-	if len(got) != 3 || got[2].ev.Kind != Ended {
-		t.Fatalf("events at 2×: %+v", got)
-	}
-	if took := got[2].at.Sub(start); !near(took, 500*time.Millisecond, 200*time.Millisecond) {
-		t.Errorf("a 1 s M4A at 2× ended after %v, want about 500 ms", took)
+	if n := len(eventsFor(p.ID())); n != 1+plays {
+		t.Errorf("%d events for one open and %d playbacks", n, plays)
 	}
 }
 
 func TestOpenPlayerKeepsRateAndVolumeSetWhileOpening(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "clip.m4a")
-	writeM4A(t, path, 600*time.Millisecond)
+	writeM4A(t, path, 2*time.Second) // room for a rate's 500 ms at 2×
 	testlock.Hold(t, "audio")
 	var p *Player
 	onMain(func() {
@@ -197,25 +192,29 @@ func TestOpenPlayerKeepsRateAndVolumeSetWhileOpening(t *testing.T) {
 		skipIfNoAudio(t, p)
 		t.Fatalf("events: %+v", got)
 	}
-	var playErr error
-	var at time.Duration
-	onMain(func() {
-		p.Ready() // attaches
-		p.Seek(300 * time.Millisecond)
-		at = p.Position()
-		playErr = p.Play()
-	})
-	if playErr != nil || !near(at, 300*time.Millisecond, 5*time.Millisecond) {
-		t.Fatalf("Play %v, Seek(300 ms) gave %v", playErr, at)
+	// From 300 ms: the rate from the position (rateOf), and the end after
+	// the rest of the clip at 2×.
+	playOnce := func() (rate float64, took, want time.Duration) {
+		n := len(eventsFor(p.ID()))
+		var playErr error
+		var at, dur time.Duration
+		var start time.Time
+		onMain(func() {
+			p.Ready() // attaches
+			p.Seek(300 * time.Millisecond)
+			at, dur = p.Position(), p.Duration()
+			start, playErr = time.Now(), p.Play()
+		})
+		if playErr != nil || !near(at, 300*time.Millisecond, 5*time.Millisecond) {
+			t.Fatalf("Play %v, Seek(300 ms) gave %v", playErr, at)
+		}
+		rate = rateOf(t, p)
+		return rate, endAfter(t, p, n, start), (dur - at) / 2
 	}
-	start := time.Now()
-	got := waitEvents(p.ID(), 2, 2*time.Second)
-	if len(got) != 2 || got[1].ev.Kind != Ended {
-		t.Fatalf("events: %+v", got)
-	}
-	if took := got[1].at.Sub(start); !near(took, 150*time.Millisecond, 150*time.Millisecond) {
-		t.Errorf("300 ms left at 2× (set before the file was ready) ended after %v", took)
-	}
+	const what = "the rest from 300 ms at 2× (set before the file was ready)"
+	rate, took, want := playOnce()
+	endedOnTime(t, what, took, want, func() (time.Duration, time.Duration) { _, took, want := playOnce(); return took, want })
+	playsAt(t, what, rate, 2, func() float64 { rate, _, _ := playOnce(); return rate })
 	if p.Rate() != 2 || p.Volume() != 0.05 {
 		t.Errorf("rate %v, volume %v", p.Rate(), p.Volume())
 	}
@@ -235,14 +234,9 @@ func TestOpenPlayerSystemSound(t *testing.T) {
 	if dur < 100*time.Millisecond || dur > 3*time.Second {
 		t.Fatalf("Tink lasts %v?", dur)
 	}
-	start := play(t, p)
-	got := waitEvents(p.ID(), 2, 4*time.Second)
-	if len(got) != 2 || got[1].ev.Kind != Ended {
-		t.Fatalf("events: %+v, want Opened then Ended", got)
-	}
-	if took := got[1].at.Sub(start); !near(took, dur, 300*time.Millisecond) {
-		t.Errorf("Tink (%v) ended after %v", dur, took)
-	}
+	again := func() (time.Duration, time.Duration) { return playToEnd(t, p), dur }
+	took, want := again()
+	endedOnTime(t, "Tink", took, want, again)
 }
 
 func TestOpenPlayerErrors(t *testing.T) {
@@ -311,9 +305,12 @@ func TestOpenPlayerCloseWhileOpening(t *testing.T) {
 			}
 		})
 	}
-	time.Sleep(300 * time.Millisecond) // the goroutines finish
+	// The goroutines finish (3 s at most: a loaded runner's are slow).
+	for t0 := time.Now(); events().Outstanding() != 0 && time.Since(t0) < 3*time.Second; {
+		time.Sleep(10 * time.Millisecond)
+	}
 	if n := events().Outstanding(); n != 0 {
-		t.Errorf("%d event records left reserved", n)
+		t.Errorf("%d event records left reserved 3 s on", n)
 	}
 	// Every slot came back.
 	var ps []*Player
@@ -377,7 +374,7 @@ func TestOpenPlayerPerFrameAllocs(t *testing.T) {
 		t.Fatalf("event %v", kind)
 	}
 	play(t, p)
-	time.Sleep(100 * time.Millisecond)
+	moving(t, p) // measured while it plays
 	var n float64
 	var playing bool
 	var at time.Duration

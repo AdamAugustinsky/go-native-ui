@@ -361,13 +361,16 @@ func TestPlayerSeekAndPause(t *testing.T) {
 	endedOnTime(t, "seeked to 900 ms while playing, it", took, want, seekPlaying)
 }
 
+// TestPlayerCloseSendsNoEnd: closed while it plays (once its position
+// moves, well before the end of a 1 s clip), a Player sends no Ended, also
+// not when the clip's end has passed.
 func TestPlayerCloseSendsNoEnd(t *testing.T) {
 	f := Format{48000, 1, Int16}
-	p := openPlayer(t, sine(f, 300*time.Millisecond, 440), f)
+	p := openPlayer(t, sine(f, time.Second, 440), f)
 	play(t, p)
-	time.Sleep(100 * time.Millisecond)
+	moving(t, p)
 	onMain(p.Close)
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(1500 * time.Millisecond)
 	if got := eventsFor(p.ID()); len(got) != 0 {
 		t.Errorf("events after Close: %+v", got)
 	}
@@ -399,7 +402,7 @@ func TestPlayerPerFrameAllocs(t *testing.T) {
 	f := Format{48000, 1, Int16}
 	p := openPlayer(t, sine(f, time.Second, 440), f)
 	play(t, p)
-	time.Sleep(100 * time.Millisecond)
+	moving(t, p) // measured while it plays
 	var n float64
 	var playing bool
 	var at time.Duration
