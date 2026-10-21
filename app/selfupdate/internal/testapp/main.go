@@ -1,4 +1,7 @@
 // Command testapp is the executable of the bundles the selfupdate tests build.
+// The tests name it testapp.test, which internal/launchguard takes for a Go
+// test binary, so that its test-only Options.Requirement is honoured; under
+// another name it runs as a shipped app would.
 // It configures the package the way the tests ask (environment variables),
 // writes a report of what it saw, and then behaves as its bundle says
 // (Contents/Resources/behavior):
@@ -15,6 +18,7 @@
 //	SUTEST_HEALTH_TIMEOUT  selfupdate.Options.HealthTimeout
 //	SUTEST_REQUIREMENT     the code requirement; "self" for the app's own
 //	                       designated requirement; unset for the tests' identifier
+//	SUTEST_ALLOW_DOWNGRADE "1": selfupdate.Options.AllowDowngrade
 package main
 
 import (
@@ -54,7 +58,8 @@ func main() {
 		req = ""
 	}
 	timeout, _ := time.ParseDuration(os.Getenv("SUTEST_HEALTH_TIMEOUT"))
-	selfupdate.Configure(selfupdate.Options{Requirement: req, HealthTimeout: timeout, Launcher: launch})
+	selfupdate.Configure(selfupdate.Options{Requirement: req, HealthTimeout: timeout, Launcher: launch,
+		AllowDowngrade: os.Getenv("SUTEST_ALLOW_DOWNGRADE") == "1"})
 	r := report{Pid: os.Getpid(), Args: os.Args[1:], Version: resource("version"), Behavior: resource("behavior")}
 	write(r, "start")
 	selfupdate.RunHelperIfAsked()
@@ -104,9 +109,13 @@ func update(r *report, zip string) error {
 }
 
 // launch runs the bundle's executable directly: the tests never go through
-// Launch Services.
+// Launch Services. The helper's copy has the executable's name.
 func launch(bundle string, args []string) (int, error) {
-	cmd := exec.Command(filepath.Join(bundle, "Contents", "MacOS", "testapp"), args...)
+	exe, err := os.Executable()
+	if err != nil {
+		return 0, err
+	}
+	cmd := exec.Command(filepath.Join(bundle, "Contents", "MacOS", filepath.Base(exe)), args...)
 	if err := cmd.Start(); err != nil {
 		return 0, err
 	}

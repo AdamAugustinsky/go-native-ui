@@ -264,7 +264,8 @@ func loadJob(jobPath string) (job, error) {
 		return j, err
 	}
 	switch {
-	case filepath.Dir(exe) != j.Staging || jdir != j.Staging || !isStaging(j.Staging):
+	case filepath.Dir(filepath.Dir(exe)) != j.Staging || filepath.Base(filepath.Dir(exe)) != "helper" ||
+		jdir != j.Staging || !isStaging(j.Staging):
 		return j, errors.New("the job is not in this helper's staging folder")
 	case filepath.Dir(filepath.Dir(j.Staged)) != j.Staging || filepath.Base(filepath.Dir(j.Staged)) != "new" ||
 		!strings.HasSuffix(j.Staged, ".app"):
@@ -346,7 +347,8 @@ func (h *helper) run() {
 		h.fail("the app was moved or replaced before the update could be installed", false)
 		return
 	}
-	if cur, err := readInfo(j.Bundle); err != nil || cur.id != j.ID {
+	cur, err := readInfo(j.Bundle)
+	if err != nil || cur.id != j.ID {
 		h.fail("the bundle to replace is not the app that staged the update", false)
 		return
 	}
@@ -357,6 +359,9 @@ func (h *helper) run() {
 	}
 	if err == nil && (info.exe == "" || info.exe == "." || info.exe == ".." || strings.ContainsRune(info.exe, '/')) {
 		err = fmt.Errorf("%w: CFBundleExecutable %q", ErrRejected, info.exe)
+	}
+	if err == nil && !j.AnyVersion {
+		err = checkNewer(info.version, info.build, cur.version, cur.build)
 	}
 	if err != nil {
 		h.fail("the staged update no longer verifies: "+err.Error(), true)

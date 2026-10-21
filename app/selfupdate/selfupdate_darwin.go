@@ -150,10 +150,10 @@ func Prepare(archive string) (*Staged, error) {
 	if err != nil {
 		return nil, err
 	}
-	return prepare(s, req, archive, o.Logger)
+	return prepare(s, req, o.AllowDowngrade, archive, o.Logger)
 }
 
-func prepare(s self, req, archive string, lg *slog.Logger) (*Staged, error) {
+func prepare(s self, req string, anyVersion bool, archive string, lg *slog.Logger) (*Staged, error) {
 	f, err := os.Open(archive)
 	if err != nil {
 		return nil, err
@@ -197,13 +197,16 @@ func prepare(s self, req, archive string, lg *slog.Logger) (*Staged, error) {
 		return nil, err
 	}
 	info, err := verifyStaged(s.id, app, req)
+	if err == nil && !anyVersion {
+		err = checkNewer(info.version, info.build, s.version, s.build)
+	}
 	if err != nil {
 		lg.Warn("selfupdate: staged bundle refused", "err", err)
 		return nil, err
 	}
 	ok = true
 	lg.Info("selfupdate: staged and verified the update", "version", info.version, "build", info.build, "path", app)
-	return &Staged{dir: dir, app: app, version: info.version, build: info.build, self: s, lock: lock}, nil
+	return &Staged{dir: dir, app: app, version: info.version, build: info.build, self: s, lock: lock, anyVer: anyVersion}, nil
 }
 
 // verifyStaged checks the staged bundle's signature against req, then that it
@@ -479,6 +482,7 @@ type job struct {
 	HealthTimeout time.Duration `json:"healthTimeout"`
 	QuitTimeout   time.Duration `json:"quitTimeout"`
 	Nonce         string        `json:"nonce"`
+	AnyVersion    bool          `json:"anyVersion"` // Options.AllowDowngrade, as Prepare used it
 }
 
 // InstallAndRelaunch hands the staged update to the helper and returns; the
@@ -509,8 +513,15 @@ func (s *Staged) InstallAndRelaunch(args []string) error {
 	if err != nil {
 		return err
 	}
-	helper := filepath.Join(s.dir, "helper")
+	// The copy keeps the executable's name (what Activity Monitor shows, and
+	// what tells a test binary's copy for one, internal/launchguard).
+	helperDir := filepath.Join(s.dir, "helper")
+	if err := os.Mkdir(helperDir, 0o700); err != nil {
+		return fmt.Errorf("selfupdate: cannot copy the helper: %w", err)
+	}
+	helper := filepath.Join(helperDir, filepath.Base(cur.exe))
 	if err := copyExecutable(cur.exe, helper); err != nil {
+		os.Remove(helperDir)
 		return fmt.Errorf("selfupdate: cannot copy the helper: %w", err)
 	}
 	nonce := make([]byte, 16)
@@ -521,7 +532,7 @@ func (s *Staged) InstallAndRelaunch(args []string) error {
 		Parent: os.Getpid(), Bundle: cur.bundle, Dev: dev, Ino: ino,
 		Staging: s.dir, Staged: s.app, ID: cur.id, From: cur.version, To: s.version,
 		Args: append([]string(nil), args...), HealthTimeout: o.HealthTimeout, QuitTimeout: o.QuitTimeout,
-		Nonce: hex.EncodeToString(nonce),
+		Nonce: hex.EncodeToString(nonce), AnyVersion: s.anyVer,
 	}
 	jobPath := filepath.Join(s.dir, "job.json")
 	b, err := json.Marshal(j)
@@ -529,7 +540,7 @@ func (s *Staged) InstallAndRelaunch(args []string) error {
 		return err
 	}
 	if err := writeNew(jobPath, b); err != nil {
-		os.Remove(helper)
+		os.RemoveAll(helperDir)
 		return err
 	}
 	cmd := exec.Command(helper, helperFlag, jobPath)
@@ -537,7 +548,7 @@ func (s *Staged) InstallAndRelaunch(args []string) error {
 	cmd.ExtraFiles = []*os.File{s.lock}                  // fd 3: the staging folder's lock, held from Prepare to the helper's end
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true} // outlives the app's terminal session, if any
 	if err := cmd.Start(); err != nil {
-		os.Remove(helper)
+		os.RemoveAll(helperDir)
 		os.Remove(jobPath)
 		return fmt.Errorf("selfupdate: cannot start the helper: %w", err)
 	}

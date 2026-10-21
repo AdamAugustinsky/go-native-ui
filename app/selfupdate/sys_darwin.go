@@ -16,6 +16,7 @@ import (
 
 	"gonativeui/internal/cf"
 	"gonativeui/internal/ffi"
+	"gonativeui/internal/launchguard"
 	"gonativeui/internal/objc"
 )
 
@@ -439,6 +440,9 @@ func loadWorkspace() {
 // starts it the way the Dock or the Finder would and reports its process id.
 // The pid is 0 when Launch Services has not answered within 10 s.
 func launchServices(bundle string, args []string) (int, error) {
+	if err := launchguard.Check("open application " + bundle); err != nil {
+		return 0, fmt.Errorf("selfupdate: %w", err)
+	}
 	ws.once.Do(loadWorkspace)
 	if ws.err != nil {
 		return 0, fmt.Errorf("selfupdate: Launch Services: %w", ws.err)

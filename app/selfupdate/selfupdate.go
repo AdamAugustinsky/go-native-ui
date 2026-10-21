@@ -64,9 +64,13 @@
 // names its identifier and its team, so only the same publisher's build of
 // the same app is accepted. Every rejection matches ErrRejected.
 //
-// Prepare does not compare versions: an older build signed by the same
-// publisher passes. The app decides what is newer (Staged.Version) before it
-// installs.
+// The staged bundle must also be newer than the running app: its
+// CFBundleShortVersionString, then its CFBundleVersion, compared as
+// period-separated decimal integers (Apple's documented form; 1.2 is 1.2.0).
+// An older or equal version, or one not in that form, is refused (ErrNotNewer,
+// or ErrRejected when the versions cannot be compared) unless
+// Options.AllowDowngrade is set, for a rollback the user asked for. The helper
+// applies the same rule again before the swap.
 //
 // The staged copy carries no quarantine, so Gatekeeper does not assess it
 // when it first opens (as with Sparkle): the publisher's signature over the
@@ -74,13 +78,14 @@
 //
 // # The helper
 //
-// InstallAndRelaunch copies the running executable into the staging folder
-// and starts the copy with a private argument, then returns so that the app
-// can quit. The copy, outside the bundle it replaces, is the helper. It
+// InstallAndRelaunch copies the running executable into the staging folder,
+// under its own name, and starts the copy with a private argument, then
+// returns so that the app can quit. The copy, outside the bundle it replaces,
+// is the helper. It
 //
 //  1. waits for the app to exit (Options.QuitTimeout, default 60 s);
 //  2. checks that the bundle is still the one the app ran from, and verifies
-//     the staged copy again;
+//     the staged copy again (signature, identifier and version);
 //  3. swaps the staged bundle into place in one step (renamex_np with
 //     RENAME_SWAP; on a file system without it, two renames that put the old
 //     bundle back if the second fails), keeping the old bundle as a backup;
@@ -89,7 +94,8 @@
 //     new instance, activated, with its Dock icon, like any app the user
 //     opens, and with no system alert: a refusal comes back as an error);
 //     when Launch Services gives no process id, the helper finds the process
-//     by its executable (proc_pidpath);
+//     by its executable (proc_pidpath); a Go test binary opens nothing this
+//     way (internal/launchguard);
 //  5. waits for it to call Started (Options.HealthTimeout, default 30 s);
 //  6. on success removes the backup and the staging folder; otherwise it
 //     stops the new version (by its process id: SIGTERM, then SIGKILL after
@@ -134,7 +140,10 @@ import (
 	"log/slog"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
+
+	"gonativeui/internal/launchguard"
 )
 
 var (
@@ -160,6 +169,9 @@ var (
 	// ErrRejected: Prepare (or the helper, before the swap) refused the
 	// archive or the bundle in it.
 	ErrRejected = errors.New("selfupdate: the update was rejected")
+	// ErrNotNewer: the staged bundle is not newer than the running app (and
+	// Options.AllowDowngrade is not set). It matches ErrRejected too.
+	ErrNotNewer = fmt.Errorf("%w: it is not newer than the running app", ErrRejected)
 )
 
 // Options configures the package; the zero value is the release behaviour.
@@ -168,8 +180,14 @@ type Options struct {
 	// as the code requirement (csreq(1)'s language) a staged bundle must
 	// satisfy, and turns off Supported's signature check. It is for tests,
 	// whose ad-hoc signatures have designated requirements that name a single
-	// build. Leave it empty in a release.
+	// build, and is honoured only in a Go test binary (an executable named
+	// pkg.test, internal/launchguard). Anywhere else it is ignored, with one
+	// warning in the log, and the app's own designated requirement applies.
 	Requirement string
+	// AllowDowngrade lets Prepare stage, and the helper install, a bundle that
+	// is not newer than the running app (a rollback the user asked for). The
+	// signature rules still apply.
+	AllowDowngrade bool
 	// HealthTimeout is how long the helper waits for the new version to call
 	// Started before it rolls back. 0 means 30 s.
 	HealthTimeout time.Duration
@@ -193,6 +211,8 @@ var config struct {
 
 // Configure sets the options. An app that configures the package does so
 // before RunHelperIfAsked, so that its helper runs with the same options.
+// Options.AllowDowngrade is the exception: it is read by Prepare, and the
+// helper takes it from the staged update.
 func Configure(o Options) {
 	config.Lock()
 	config.o = o
@@ -212,8 +232,21 @@ func options() Options {
 	if o.Logger == nil {
 		o.Logger = slog.Default()
 	}
+	if o.Requirement != "" && !isTestBinary() {
+		// Dropped here, where every use reads it, rather than refused by
+		// Configure: an error nobody checked would leave the override in.
+		if requirementWarned.CompareAndSwap(false, true) {
+			o.Logger.Warn("selfupdate: Options.Requirement is ignored outside a Go test binary; the app's own designated requirement applies")
+		}
+		o.Requirement = ""
+	}
 	return o
 }
+
+// isTestBinary is launchguard.TestBinary; a test replaces it.
+var isTestBinary = launchguard.TestBinary
+
+var requirementWarned atomic.Bool
 
 // Status is the outcome of the update that led to this run.
 type Status uint8
@@ -265,6 +298,7 @@ type Staged struct {
 	used    bool
 	self    self
 	lock    *os.File // holds the staging folder's lock until the helper has it
+	anyVer  bool     // staged with Options.AllowDowngrade
 }
 
 // Path is the staged bundle.

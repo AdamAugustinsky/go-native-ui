@@ -16,11 +16,14 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"gonativeui/internal/launchguard"
 )
 
 const (
 	testID  = "dev.gonativeui.selfupdatetest"
 	testReq = `identifier "dev.gonativeui.selfupdatetest"`
+	testExe = "testapp.test" // a test binary's name: internal/launchguard
 )
 
 var quiet = slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -93,6 +96,17 @@ func run(t *testing.T, name string, args ...string) {
 // when sign is set.
 func makeBundle(t *testing.T, parent, id, version, behavior string, sign bool) string {
 	t.Helper()
+	return makeBundleOf(t, parent, bundleSpec{id: id, version: version, build: version, behavior: behavior, exe: testExe, sign: sign})
+}
+
+type bundleSpec struct {
+	id, version, build, behavior, exe string
+	sign                              bool
+}
+
+func makeBundleOf(t *testing.T, parent string, sp bundleSpec) string {
+	t.Helper()
+	id, version, behavior, sign := sp.id, sp.version, sp.behavior, sp.sign
 	b := filepath.Join(parent, "SUTest.app")
 	for _, d := range []string{"Contents/MacOS", "Contents/Resources"} {
 		if err := os.MkdirAll(filepath.Join(b, d), 0o755); err != nil {
@@ -106,17 +120,17 @@ func makeBundle(t *testing.T, parent, id, version, behavior string, sign bool) s
 	plist := `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-	<key>CFBundleExecutable</key><string>testapp</string>
+	<key>CFBundleExecutable</key><string>` + sp.exe + `</string>
 	<key>CFBundleIdentifier</key><string>` + id + `</string>
 	<key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
 	<key>CFBundleName</key><string>SUTest</string>
 	<key>CFBundlePackageType</key><string>APPL</string>
 	<key>CFBundleShortVersionString</key><string>` + version + `</string>
-	<key>CFBundleVersion</key><string>` + version + `</string>
+	<key>CFBundleVersion</key><string>` + sp.build + `</string>
 </dict></plist>
 `
 	for name, data := range map[string]string{
-		"Contents/MacOS/testapp":       string(bin),
+		"Contents/MacOS/" + sp.exe:     string(bin),
 		"Contents/Info.plist":          plist,
 		"Contents/Resources/version":   version + "\n",
 		"Contents/Resources/behavior":  behavior + "\n",
@@ -148,7 +162,7 @@ func fakeSelf(t *testing.T, root string) self {
 	t.Helper()
 	t.Setenv("HOME", filepath.Join(root, "home")) // the cache and data folders
 	b := makeBundle(t, filepath.Join(root, "Applications"), testID, "1.0", "healthy", true)
-	s, err := selfAt(filepath.Join(b, "Contents", "MacOS", "testapp"))
+	s, err := selfAt(filepath.Join(b, "Contents", "MacOS", testExe))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +173,7 @@ func TestPrepareStagesAndVerifies(t *testing.T) {
 	root := realTemp(t)
 	s := fakeSelf(t, root)
 	zip := zipApp(t, makeBundle(t, filepath.Join(root, "build"), testID, "2.0", "healthy", true), filepath.Join(root, "u.zip"))
-	st, err := prepare(s, testReq, zip, quiet)
+	st, err := prepare(s, testReq, false, zip, quiet)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,7 +196,7 @@ func TestPrepareStagesAndVerifies(t *testing.T) {
 
 	// While a Staged holds its folder, another Prepare leaves it alone; once
 	// nothing holds it (the app quit), the next Prepare removes it.
-	st2, err := prepare(s, testReq, zip, quiet)
+	st2, err := prepare(s, testReq, false, zip, quiet)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,7 +204,7 @@ func TestPrepareStagesAndVerifies(t *testing.T) {
 		t.Fatalf("a second Prepare removed a held staging folder: %v", err)
 	}
 	st.lock.Close()
-	st3, err := prepare(s, testReq, zip, quiet)
+	st3, err := prepare(s, testReq, false, zip, quiet)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,7 +268,7 @@ func TestPrepareRejects(t *testing.T) {
 		}, testReq, "does not match its contents"},
 		{"unsigned", func(t *testing.T) string {
 			return bundleZip(t, testID, false, func(b string) {
-				run(t, "/usr/bin/codesign", "--remove-signature", filepath.Join(b, "Contents/MacOS/testapp"))
+				run(t, "/usr/bin/codesign", "--remove-signature", filepath.Join(b, "Contents/MacOS/"+testExe))
 			})
 		}, testReq, "not signed"},
 		{"another app", func(t *testing.T) string { return bundleZip(t, "dev.gonativeui.other", true, nil) },
@@ -270,7 +284,7 @@ func TestPrepareRejects(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			zip := c.zip(t)
-			st, err := prepare(s, c.req, zip, quiet)
+			st, err := prepare(s, c.req, false, zip, quiet)
 			if err == nil {
 				st.Discard()
 				t.Fatal("Prepare accepted it")
@@ -284,6 +298,88 @@ func TestPrepareRejects(t *testing.T) {
 		if _, err := os.Lstat(p); err == nil {
 			t.Errorf("%s was written", p)
 		}
+	}
+}
+
+func TestPrepareRejectsDowngrades(t *testing.T) {
+	root := realTemp(t)
+	s := fakeSelf(t, root) // 1.0, build 1.0
+	for i, c := range []struct {
+		version, build string
+		allow          bool
+		want           error // nil, ErrNotNewer, or ErrRejected alone
+	}{
+		{"0.9", "0.9", false, ErrNotNewer},
+		{"1.0", "1.0", false, ErrNotNewer},
+		{"1.0", "1.0.1", false, nil},
+		{"1.0b1", "1", false, ErrRejected},
+		{"0.9", "0.9", true, nil},
+		{"1.0", "1.0", true, nil},
+	} {
+		d := filepath.Join(root, "builds", fmt.Sprint(i))
+		b := makeBundleOf(t, d, bundleSpec{id: testID, version: c.version, build: c.build, behavior: "healthy", exe: testExe, sign: true})
+		st, err := prepare(s, testReq, c.allow, zipApp(t, b, filepath.Join(d, "u.zip")), quiet)
+		if st != nil {
+			st.Discard()
+		}
+		switch {
+		case c.want == nil && err != nil,
+			c.want == ErrNotNewer && !errors.Is(err, ErrNotNewer),
+			c.want == ErrRejected && (!errors.Is(err, ErrRejected) || errors.Is(err, ErrNotNewer)):
+			t.Errorf("%s (%s) over 1.0 (1.0), AllowDowngrade %v: %v, want %v", c.version, c.build, c.allow, err, c.want)
+		}
+	}
+}
+
+// Options.Requirement works in a Go test binary and nowhere else.
+func TestRequirementOnlyInATestBinary(t *testing.T) {
+	var log strings.Builder
+	t.Cleanup(func() {
+		Configure(Options{})
+		isTestBinary = launchguard.TestBinary
+		requirementWarned.Store(false)
+	})
+	Configure(Options{Requirement: testReq, Logger: slog.New(slog.NewTextHandler(&log, nil))})
+	if !launchguard.TestBinary() || options().Requirement != testReq {
+		t.Fatal("the requirement is not honoured in this test binary")
+	}
+	isTestBinary = func() bool { return false }
+	requirementWarned.Store(false)
+	for range 3 {
+		if o := options(); o.Requirement != "" {
+			t.Fatalf("a shipped app keeps the requirement %q", o.Requirement)
+		}
+	}
+	if n := strings.Count(log.String(), "ignored outside a Go test binary"); n != 1 {
+		t.Errorf("%d warnings, want 1:\n%s", n, log.String())
+	}
+	if r, err := requirementFor(options()); err != nil || r == testReq {
+		t.Errorf("requirementFor = %q, %v; want the app's own", r, err)
+	}
+}
+
+// The same bundle, its executable not named like a test binary, is a shipped
+// app: the injected requirement is ignored, so its ad-hoc signature cannot be
+// updated.
+func TestRequirementIgnoredInAShippedApp(t *testing.T) {
+	w := newWorld(t, 3*time.Second)
+	app := makeBundleOf(t, filepath.Join(w.root, "Shipped"), bundleSpec{id: testID, version: "1.0", build: "1.0", behavior: "healthy", exe: "testapp", sign: true})
+	zip := zipApp(t, makeBundle(t, filepath.Join(w.root, "build"), testID, "2.0", "healthy", true), filepath.Join(w.root, "u.zip"))
+	cmd := exec.Command(filepath.Join(app, "Contents/MacOS/testapp"), "update", zip)
+	cmd.Env = w.env
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("the shipped app updated itself:\n%s", out)
+	}
+	r := w.wait(t, 5*time.Second, "the refusal", func(r report) bool { return r.Event == "failed" })
+	if !strings.Contains(r.Err, ErrNotSigned.Error()) {
+		t.Errorf("the shipped app reported %q, want ErrNotSigned", r.Err)
+	}
+	if !strings.Contains(string(out), "ignored outside a Go test binary") {
+		t.Errorf("no warning in the app's log:\n%s", out)
+	}
+	if v, _ := os.ReadFile(filepath.Join(app, "Contents/Resources/version")); string(v) != "1.0\n" {
+		t.Errorf("the shipped app's version is now %q", v)
 	}
 }
 
@@ -303,7 +399,7 @@ func TestSupported(t *testing.T) {
 		t.Errorf("a .dev identifier: %v, want ErrDevBundle", err)
 	}
 	tr := filepath.Join(root, "AppTranslocation", "6B1C", "d")
-	trs, err := selfAt(filepath.Join(makeBundle(t, tr, testID, "1.0", "healthy", false), "Contents/MacOS/testapp"))
+	trs, err := selfAt(filepath.Join(makeBundle(t, tr, testID, "1.0", "healthy", false), "Contents/MacOS/"+testExe))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -314,7 +410,7 @@ func TestSupported(t *testing.T) {
 		t.Errorf("/usr/bin/true: %v, want ErrNotBundled", err)
 	}
 	nested := makeBundle(t, filepath.Join(root, "Outer.app", "Contents", "Helpers"), testID, "1.0", "healthy", false)
-	if _, err := selfAt(filepath.Join(nested, "Contents/MacOS/testapp")); !errors.Is(err, ErrNotBundled) {
+	if _, err := selfAt(filepath.Join(nested, "Contents/MacOS/"+testExe)); !errors.Is(err, ErrNotBundled) {
 		t.Errorf("a bundle inside a bundle: %v, want ErrNotBundled", err)
 	}
 
@@ -549,7 +645,7 @@ func (w *world) dump(t *testing.T) {
 // folder.
 func (w *world) update(t *testing.T, zip string) (helperPid int, staging string) {
 	t.Helper()
-	cmd := exec.Command(filepath.Join(w.app, "Contents/MacOS/testapp"), "update", zip)
+	cmd := exec.Command(filepath.Join(w.app, "Contents/MacOS/"+testExe), "update", zip)
 	cmd.Env = w.env
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -614,6 +710,10 @@ func TestLiveLaunchServices(t *testing.T) {
 	t.Cleanup(func() {
 		exec.Command("/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister", "-u", b).Run()
 	})
+	// Only a signed bundle that exists is opened (a missing one is refused
+	// before Launch Services), and with no system alerts: nothing is left on
+	// the screen.
+	t.Setenv(launchguard.Env, "1")
 	reports := filepath.Join(root, "reports with spaces")
 	os.Mkdir(reports, 0o755)
 	t0 := time.Now()
@@ -633,7 +733,7 @@ func TestLiveLaunchServices(t *testing.T) {
 	if d := time.Since(t0); d > 15*time.Second {
 		t.Errorf("the launch took %v", d)
 	}
-	if ps := processesOf(filepath.Join(b, "Contents/MacOS/testapp")); len(ps) != 1 || ps[0] != r.Pid {
+	if ps := processesOf(filepath.Join(b, "Contents/MacOS/"+testExe)); len(ps) != 1 || ps[0] != r.Pid {
 		t.Errorf("processesOf found %v, want [%d]", ps, r.Pid)
 	}
 	if _, err := launchServices(filepath.Join(root, "Missing.app"), nil); err == nil {
@@ -669,6 +769,24 @@ func TestUpdateIsInstalledAndKept(t *testing.T) {
 		if !strings.Contains(string(log), step) {
 			t.Errorf("selfupdate.log has no %q line:\n%s", step, log)
 		}
+	}
+}
+
+// An app that allows a downgrade passes the choice to its helper, which
+// checks the versions again before the swap.
+func TestDowngradeAllowedByTheApp(t *testing.T) {
+	w := newWorld(t, 20*time.Second)
+	zip := zipApp(t, makeBundle(t, filepath.Join(w.root, "build"), testID, "0.9", "healthy", true), filepath.Join(w.root, "u.zip"))
+	w.env = append(w.env, "SUTEST_ALLOW_DOWNGRADE=1")
+	helper, _ := w.update(t, zip)
+	r := w.wait(t, 20*time.Second, "the older version starting", func(r report) bool { return r.Version == "0.9" && r.Event == "started" })
+	if r.Status != "updated" || r.From != "1.0" || r.To != "0.9" {
+		t.Errorf("the older version saw %+v", r)
+	}
+	waitGone(t, helper, 20*time.Second)
+	if v := w.installed(t); v != "0.9" {
+		w.dump(t)
+		t.Fatalf("installed version %q, want 0.9", v)
 	}
 }
 
