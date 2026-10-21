@@ -1021,3 +1021,16 @@ The whole UI is rewritten in Go on the framework with the Rex design system, mac
 - **macOS only for now.** On Windows and Linux `NewYUVTexture` reports `ErrUnsupported`.
 
 **Alternatives:** a `ModeYUV` with per-quad colour information (the `ui` image path and every backend change, and the `Quad` has no room for a matrix); imports that persist until replaced, retired through `FreeTexture`'s list (unbounded, against D44's 48); copying pixel buffers to RGBA (a CPU pass per frame).
+
+## D57. `media.Video`: frames pulled in Build, idle when paused or hidden (phase 6, 2026-10-20)
+
+**Decision.** Refines D46 (S8). `media.Video` is an `AVPlayer` whose item has an `AVPlayerItemVideoOutput` (biplanar `420v`, Metal-compatible). There is no frame callback:
+- **Pulled in Build.** While its box shows (`Kit.ImageShown`), the app calls `Video.Frame`, which asks the output for the pixel buffer of the time the frame will show (`itemTimeForHostTime:` at the frame's time plus 8 ms, `hasNewPixelBufferForItemTime:`, `copyPixelBufferForItemTime:`), keeps it as the current frame, imports it (D56) and returns the delay to the next frame. The app passes that to `WakeIn`.
+- **The rate.** That delay is the frame interval less 8 ms, so the display tick it lands on is the one the frame is due at. Waking at the full interval missed that tick about one time in five: 24 frames drawn per second for a 30 fps clip, against 30 with the lead (Mac mini, 60 Hz).
+- **Idle.** Paused, ended or hidden, `Frame` asks for nothing, so the window draws nothing (0 frames a second, measured). A seek while paused pulls its frame for up to 0.5 s.
+- **Off the main thread.** The track's size, turn (from `preferredTransform`, in quarter turns) and rate, and the poster frame (`AVAssetImageGenerator`), are read on a goroutine, which then wakes the app.
+- **The end.** `AVPlayerItemDidPlayToEndTimeNotification` reaches a per-slot observer object, kept for the process because a late notification may still arrive. It sets a flag and, without a loop, posts an application event (`SourceMedia`, A the video's ID, B `VideoEnded`). Looping is done by the next `Frame`.
+- **AppKit before AVFoundation.** AVFoundation loaded without AppKit, as when a player is made before the app starts, breaks every later `NSView` layer (`-[NSViewBackingLayer NS_setView:]` unrecognized, macOS 27.2). `media` loads AppKit first.
+- Windows and Linux report `ErrVideoUnsupported`.
+
+**Alternatives:** a display-link or `requestNotificationOfMediaDataChangeWithAdvanceInterval:` callback per video, rejected because it wakes for videos that do not show; an `AVPlayerLayer` hosted over our layer (D46 rejects it: no rounded clipping, z-order or offscreen render).
