@@ -155,6 +155,7 @@ func editMenu(t *testing.T, l *widgettest.LiveApp, title string) {
 // nothing or an undo that took two steps would show here.
 func TestEditCommandsActOnceFromTheKeyAndTheMenu(t *testing.T) {
 	testlock.Hold(t, "activation")
+	testlock.Hold(t, "pasteboard") // the general pasteboard is the system's: other tests, in other processes too, write it; after "activation", the order everywhere
 	l, _ := startPilot(t, pilot.Options{})
 	makeKey(t, l)
 	orig := clip(l)

@@ -3,6 +3,7 @@
 package live
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -31,12 +32,37 @@ func logKeyWindow(t *testing.T, l *widgettest.LiveApp) {
 	}
 }
 
+// untilEd is l.Until that, on failure, says what AppKit and the editor were
+// like: which window was key, whether the app was active, who had the first
+// responder, what the text view and the editor held.
+func untilEd(t *testing.T, l *widgettest.LiveApp, p *edApp, what string, cond func() bool) {
+	t.Helper()
+	if l.Within(what, 120, cond) {
+		return
+	}
+	var st string
+	l.Do(func(a *app.App) {
+		win := objc.ID(a.Win.Native().NSWindow)
+		fr := objc.Send(win, objc.Sel("firstResponder"))
+		st = fmt.Sprintf("app active %v, key window %#x (ours %#x, key %v, main %v), first responder %#x (the editor's %#x), editor focused %v, text %q, text view %q",
+			objc.SendBool(widgettest.NSApp(), objc.Sel("isActive")), objc.Send(widgettest.NSApp(), objc.Sel("keyWindow")), win,
+			objc.SendBool(win, objc.Sel("isKeyWindow")), objc.SendBool(win, objc.Sel("isMainWindow")), fr, tv(p),
+			p.ed.Focused(), p.ed.Text(), widgettest.ViewString(tv(p)))
+	})
+	t.Fatalf("widgettest: %s: not true within 120 frames; %s", what, st)
+}
+
 // editMenuItem finds Edit ▸ title and validates it as AppKit does when the
 // menu opens.
 func editMenuItem(l *widgettest.LiveApp, title string) (it widgettest.MenuItem, found bool) {
 	l.Do(func(*app.App) { it, found = widgettest.FindMenuItem("Edit", title) })
 	return it, found
 }
+
+// sample is what the Edit menu test types: digits, which the text view's
+// automatic capitalisation and correction leave alone (a letter typed first is
+// capitalised when the checker answers, which under load is at any step).
+const sample = "1234567"
 
 // The Edit menu while the hosted NSTextView has the keyboard: its items
 // validate as the text view says (Copy and Cut with a selection, Undo with
@@ -97,45 +123,45 @@ func TestEditorEditMenuValidatesAndActs(t *testing.T) {
 			}
 
 			want("empty", map[string]bool{"Undo": false, "Cut": false, "Copy": false, "Paste": true, "Paste and Match Style": true})
-			l.Type("one-two")
-			l.Until("typed", 120, textIs(p, "one-two"))
+			l.Type(sample)
+			untilEd(t, l, p, "typed", textIs(p, sample))
 			want("typed, caret at the end", map[string]bool{"Undo": true, "Redo": false, "Cut": false, "Copy": false, "Paste": true, "Select All": true})
 
 			// by the menu
 			perform("Select All")
-			l.Until("all selected", 120, func() bool { return p.ed.Selection().Range() == platform.TextRange{Start: 0, End: 7} })
+			untilEd(t, l, p, "all selected", func() bool { return p.ed.Selection().Range() == platform.TextRange{Start: 0, End: 7} })
 			want("all selected", map[string]bool{"Cut": true, "Copy": true})
 			perform("Copy")
-			if got := generalPBString(l); got != "one-two" {
+			if got := generalPBString(l); got != sample {
 				t.Errorf("Copy put %q on the pasteboard", got)
 			}
 			l.Do(func(*app.App) { p.ed.SetSelection(platform.TextSelection{Anchor: 7, Focus: 7}) })
 			perform("Paste")
-			l.Until("pasted once", 120, textIs(p, "one-twoone-two"))
+			untilEd(t, l, p, "pasted once", textIs(p, sample+sample))
 			perform("Undo")
-			l.Until("undone once", 120, textIs(p, "one-two"))
+			untilEd(t, l, p, "undone once", textIs(p, sample))
 			perform("Paste and Match Style")
-			l.Until("pasted as plain text once", 120, textIs(p, "one-twoone-two"))
+			untilEd(t, l, p, "pasted as plain text once", textIs(p, sample+sample))
 			perform("Undo")
-			l.Until("undone again", 120, textIs(p, "one-two"))
+			untilEd(t, l, p, "undone again", textIs(p, sample))
 
 			// by the key equivalents, as AppKit matches them
 			pressIn(l, ui.KeyCode('A'), ui.ModSuper)
-			l.Until("⌘A selects all", 120, func() bool { return p.ed.Selection().Range() == platform.TextRange{Start: 0, End: 7} })
+			untilEd(t, l, p, "⌘A selects all", func() bool { return p.ed.Selection().Range() == platform.TextRange{Start: 0, End: 7} })
 			l.Do(func(*app.App) { setPBString(generalPB(), "clip") })
 			pressIn(l, ui.KeyCode('C'), ui.ModSuper)
-			if got := generalPBString(l); got != "one-two" {
+			if got := generalPBString(l); got != sample {
 				t.Errorf("⌘C put %q on the pasteboard", got)
 			}
 			l.Do(func(*app.App) { p.ed.SetSelection(platform.TextSelection{Anchor: 0, Focus: 0}) })
 			pressIn(l, ui.KeyCode('V'), ui.ModSuper)
-			l.Until("⌘V pastes once", 120, textIs(p, "one-twoone-two"))
+			untilEd(t, l, p, "⌘V pastes once", textIs(p, sample+sample))
 			pressIn(l, ui.KeyCode('Z'), ui.ModSuper)
-			l.Until("⌘Z undoes once", 120, textIs(p, "one-two"))
+			untilEd(t, l, p, "⌘Z undoes once", textIs(p, sample))
 			pressIn(l, ui.KeyCode('Z'), ui.ModSuper|ui.ModShift)
-			l.Until("⇧⌘Z redoes once", 120, textIs(p, "one-twoone-two"))
+			untilEd(t, l, p, "⇧⌘Z redoes once", textIs(p, sample+sample))
 			pressIn(l, ui.KeyCode('V'), ui.ModSuper|ui.ModShift|ui.ModAlt)
-			l.Until("⌥⇧⌘V pastes as plain text once", 120, textIs(p, "one-twoone-twoone-two"))
+			untilEd(t, l, p, "⌥⇧⌘V pastes as plain text once", textIs(p, sample+sample+sample))
 			// the menu's own performKeyEquivalent:, directly
 			var took bool
 			l.Do(func(a *app.App) {
@@ -144,7 +170,7 @@ func TestEditorEditMenuValidatesAndActs(t *testing.T) {
 				ev := widgettest.NativeWindow(a).Key(true, ui.KeyCode('C'), ui.ModSuper)
 				took = objc.SendBool1(objc.Send(widgettest.NSApp(), objc.Sel("mainMenu")), objc.Sel("performKeyEquivalent:"), uintptr(ev))
 			})
-			if got := generalPBString(l); !took || got != "one-twoone-twoone-two" {
+			if got := generalPBString(l); !took || got != sample+sample+sample {
 				t.Errorf("the main menu's performKeyEquivalent: of ⌘C: took %v, pasteboard %q", took, got)
 			}
 			if len(p.submitted) != 0 {

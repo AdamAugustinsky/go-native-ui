@@ -75,6 +75,7 @@ func menuItem(t *testing.T, l *widgettest.LiveApp, path ...string) {
 // Cut, Paste, Copy and Paste again change the text by exactly one command each.
 func TestLiveEditMenuActsOnce(t *testing.T) {
 	l := startRealGallery(t)
+	testlock.Hold(t, "pasteboard") // the general pasteboard is the system's: other tests, in other processes too, write it; after "activation", the order everywhere
 	l.Click(ui.RoleTextField, "Notes")
 	l.Frames(5)
 	menuItem(t, l, "Edit", "Select All")

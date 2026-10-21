@@ -367,6 +367,7 @@ func TestEditorMarkedTextSubmission(t *testing.T) {
 // Undo and redo after typing, after Replace (a completion is one undo step)
 // and after a paste, by ⌘Z and ⇧⌘Z through the Edit menu.
 func TestEditorUndoRedo(t *testing.T) {
+	testlock.Hold(t, "pasteboard") // the general pasteboard is the system's: other tests, in other processes too, write it
 	l, p := startEditor(t, platform.EditorOptions{})
 	focusEditor(t, l, p)
 	l.Type("hello")
@@ -406,6 +407,7 @@ func TestEditorUndoRedo(t *testing.T) {
 // of rich text (its plain text kept), through the text view's
 // readSelectionFromPasteboard:, which Paste calls.
 func TestEditorPaste(t *testing.T) {
+	testlock.Hold(t, "pasteboard") // the general pasteboard is the system's: other tests, in other processes too, write it
 	l, p := startEditor(t, platform.EditorOptions{})
 	focusEditor(t, l, p)
 	var pb objc.ID
@@ -979,6 +981,7 @@ func restorePB(pb objc.ID, items []pbItem) {
 // The clipboard helpers keep every item and every type: a test leaves the
 // user's clipboard as it found it, rich text, images and all.
 func TestPasteboardSaveRestore(t *testing.T) {
+	testlock.Hold(t, "pasteboard") // the general pasteboard is the system's: other tests, in other processes too, write it
 	if _, err := purego.Dlopen("/System/Library/Frameworks/AppKit.framework/AppKit", purego.RTLD_NOW|purego.RTLD_GLOBAL); err != nil {
 		t.Fatal(err) // no app runs in this test: NSPasteboard comes with AppKit
 	}
