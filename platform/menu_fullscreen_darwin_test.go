@@ -70,7 +70,7 @@ func TestFullScreenItemTitleFollowsTheWindow(t *testing.T) {
 		Bar: []int{0, 1},
 	}
 	var why string
-	var entered, left bool
+	var entered, left, keyIn, keyAfter bool
 	var before, inside, after string
 	onMain(func() {
 		rig, w := openMenuRig(spec, false)
@@ -95,12 +95,13 @@ func TestFullScreenItemTitleFollowsTheWindow(t *testing.T) {
 			return
 		}
 		pumpFor(win, 1500*time.Millisecond)
+		keyIn = objc.SendBool(win.win, objc.Sel("isKeyWindow"))
 		inside = title()
 		win.DebugToggleFullScreen()
 		left = pumpUntil(win, 8*time.Second, func() bool { return !fullScreen() })
 		pumpFor(win, 1500*time.Millisecond)
 		win.Activate() // an app that is not active has no key window to ask
-		pumpUntil(win, 2*time.Second, func() bool { return objc.SendBool(win.win, objc.Sel("isKeyWindow")) })
+		keyAfter = pumpUntil(win, 2*time.Second, func() bool { return objc.SendBool(win.win, objc.Sel("isKeyWindow")) })
 		after = title()
 	})
 	if why != "" {
@@ -109,7 +110,19 @@ func TestFullScreenItemTitleFollowsTheWindow(t *testing.T) {
 	if !entered || !left {
 		t.Skipf("the window did not go full screen and back here (entered %v, left %v)", entered, left)
 	}
-	if before != "Enter Full Screen" || inside != "Exit Full Screen" || after != "Enter Full Screen" {
-		t.Errorf("titles %q, in full screen %q, out of it %q", before, inside, after)
+	// With no key window (an inactive app, as on a CI runner) AppKit has no
+	// target to validate the item, which keeps its last title.
+	if before != "Enter Full Screen" {
+		t.Errorf("title %q before full screen", before)
+	}
+	if !keyIn {
+		t.Logf("the window is not key in full screen: the title %q is not checked", inside)
+	} else if inside != "Exit Full Screen" {
+		t.Errorf("title %q in full screen, want %q", inside, "Exit Full Screen")
+	}
+	if !keyAfter {
+		t.Logf("the window is not key after the exit: the title %q is not checked", after)
+	} else if after != "Enter Full Screen" {
+		t.Errorf("title %q out of full screen, want %q", after, "Enter Full Screen")
 	}
 }
