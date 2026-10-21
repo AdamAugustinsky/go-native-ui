@@ -3,6 +3,7 @@
 package media
 
 import (
+	"fmt"
 	"os"
 	"sync/atomic"
 	"testing"
@@ -10,6 +11,7 @@ import (
 
 	"gonativeui/app"
 	"gonativeui/gpu"
+	"gonativeui/platform"
 	"gonativeui/theme"
 	"gonativeui/theme/rex"
 	"gonativeui/ui"
@@ -27,6 +29,8 @@ type videoWin struct {
 	clipH  atomic.Int32
 	builds atomic.Int64
 	drawn  atomic.Int64 // frames that drew a frame of the video
+
+	unchecked bool // a frame rate went unchecked: the window was covered
 }
 
 func newVideoWin() *videoWin {
@@ -75,11 +79,49 @@ func (b *videoWin) buildsIn(d time.Duration) int64 {
 	return b.builds.Load() - n
 }
 
+// resumes reports whether b builds 3 frames within d by itself.
+func (b *videoWin) resumes(d time.Duration) bool {
+	start := b.builds.Load()
+	for deadline := time.Now().Add(d); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
+		if b.builds.Load()-start >= 3 {
+			return true
+		}
+	}
+	return false
+}
+
+// covered is the state line of b's window if it is covered or hidden, or was
+// at some time since since (platform.Now), "" if it showed all along. A
+// covered window rightly draws nothing (another process's test window can
+// cover it, locally and on CI), so a frame rate is checked only in one that
+// shows, as widgettest's waits skip a test whose window is covered.
+func (b *videoWin) covered(l *widgettest.LiveApp, since int64) string {
+	var st platform.DebugState
+	l.Do(func(*app.App) { st = b.a.Win.DebugState() })
+	if st.Visible && st.LastVisibleT < since {
+		return ""
+	}
+	return string(st.Append(nil))
+}
+
+// tooFew reports a frame rate, measured since since, below its floor: an
+// error in a window that showed all along; in one covered meanwhile, a note,
+// and the test is skipped at its end (its rates went unchecked).
+func (b *videoWin) tooFew(t *testing.T, l *widgettest.LiveApp, since int64, msg string) {
+	t.Helper()
+	if st := b.covered(l, since); st != "" {
+		t.Logf("%s, but the window is covered: %s", msg, st)
+		b.unchecked = true
+		return
+	}
+	t.Error(msg)
+}
+
 // TestVideoInWindow: in a real window, a paused video draws no frame, a
 // playing one draws at its own rate (30 fps here, not the display's), one
 // scrolled out of view draws none; and the pixel-buffer leases come back to
 // zero after the video scrolls away, after live resizes, and when its window
-// closes in the middle of playing.
+// closes in the middle of playing. A covered window skips it (tooFew).
 func TestVideoInWindow(t *testing.T) {
 	plain, _ := testClips(t, widgettest.OnMain)
 	b := newVideoWin()
@@ -117,6 +159,7 @@ func TestVideoInWindow(t *testing.T) {
 	}
 
 	// Playing: frames at the video's 30 fps.
+	since := platform.Now()
 	l.Do(func(*app.App) { v.Play() })
 	time.Sleep(300 * time.Millisecond)
 	// At most the video's rate, never the display's. The floor holds only on a
@@ -124,8 +167,10 @@ func TestVideoInWindow(t *testing.T) {
 	// seen, with the display link restarted).
 	n := b.buildsIn(time.Second)
 	t.Logf("playing: %d frames in a second", n)
-	if n > 45 || (n < 12 && os.Getenv("CI") == "") {
+	if n > 45 {
 		t.Errorf("playing: %d frames in a second, want about 30", n)
+	} else if n < 12 && os.Getenv("CI") == "" {
+		b.tooFew(t, l, since, fmt.Sprintf("playing: %d frames in a second, want about 30", n))
 	}
 	if !v.Playing() || v.Position() < 300*time.Millisecond {
 		t.Errorf("playing: %v at %v", v.Playing(), v.Position())
@@ -142,12 +187,14 @@ func TestVideoInWindow(t *testing.T) {
 	}
 	leases("scrolled away")
 
-	// Back in view, then live resizes while it plays.
+	// Back in view, then live resizes while it plays. On CI, frames need only
+	// come back by themselves within a few seconds (the ticks it drops).
+	since = platform.Now()
 	b.clipH.Store(192)
 	l.Do(func(*app.App) {})
 	time.Sleep(300 * time.Millisecond)
-	if n := b.buildsIn(500 * time.Millisecond); n < 1 || (n < 5 && os.Getenv("CI") == "") {
-		t.Errorf("back in view: %d frames in half a second", n)
+	if n := b.buildsIn(500 * time.Millisecond); n < 5 && (os.Getenv("CI") == "" || !b.resumes(5*time.Second)) {
+		b.tooFew(t, l, since, fmt.Sprintf("back in view: %d frames in half a second", n))
 	}
 	var main *app.Win
 	l.Do(func(a *app.App) { main = a.Windows(nil)[0] })
@@ -179,6 +226,11 @@ func TestVideoInWindow(t *testing.T) {
 	v2 := b2.v.Load()
 	for deadline := time.Now().Add(10 * time.Second); b2.drawn.Load() < 20; time.Sleep(10 * time.Millisecond) {
 		if time.Now().After(deadline) {
+			st := b2.covered(l, platform.Now()-int64(2*time.Second)) // 2 s shown are 60 frames
+			l.Do(func(*app.App) { w2.Close(); v2.Close() })
+			if st != "" {
+				t.Skipf("the second window drew %d frames of its video, but it is covered: %s", b2.drawn.Load(), st)
+			}
 			t.Fatalf("the second window drew %d frames of its video", b2.drawn.Load())
 		}
 	}
@@ -195,5 +247,8 @@ func TestVideoInWindow(t *testing.T) {
 	l.Do(func(*app.App) { v.Close() })
 	if videos, held := VideoCounts(); videos != 0 || held != 0 {
 		t.Errorf("all closed: %d open, %d buffers held", videos, held)
+	}
+	if b.unchecked {
+		t.Skip("the window was covered: a frame rate went unchecked")
 	}
 }

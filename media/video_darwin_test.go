@@ -200,10 +200,12 @@ func videoFrames(plain, turned string) (errs []string) {
 	// A seek while paused shows the frame of the time it went to.
 	for _, at := range []time.Duration{2500 * time.Millisecond, 500 * time.Millisecond} {
 		v.Seek(at)
-		until(fmt.Sprintf("the frame at %v", at), 2*time.Second, func() bool {
+		if !until(fmt.Sprintf("the frame at %v", at), 5*time.Second, func() bool { // a loaded Mac took over 2 s
 			s = frameOf(r, v, 160, 96)
 			return s.next == 0 && closeTo(s.at(40, 48), colourAt(at.Seconds()), 40)
-		})
+		}) {
+			fail("seeking to %v: at %v, next frame in %d ns, left %v", at, v.Position(), s.next, s.at(40, 48))
+		}
 	}
 
 	// The end: an application event, and it stops.

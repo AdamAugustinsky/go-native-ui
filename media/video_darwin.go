@@ -47,8 +47,8 @@ const (
 	pixFmt420v   = 0x34323076 // kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
 	maxVideos    = 1024       // open at once
 	defaultFPS   = 30
-	seekSettleNs = int64(500 * time.Millisecond) // how long a seek while paused pulls for its frame
-	lead         = int64(8 * time.Millisecond)   // half a 60 Hz display tick: a frame built now shows about this much later
+	seekSettleNs = int64(3 * time.Second)      // how long, at most, a seek while paused pulls for its frame
+	lead         = int64(8 * time.Millisecond) // half a 60 Hz display tick: a frame built now shows about this much later
 )
 
 var (
@@ -125,8 +125,8 @@ var (
 	liveVideos, heldBuffers atomic.Int64
 
 	// main-thread scratch C reads or writes by pointer
-	tNow, tSeek, tTol1, tTol2 cmTime
-	observers                 [maxVideos]objc.ID // by slot, kept for the process (a late notification may still reach one)
+	tNow, tSeek, tTol1, tTol2, tShown cmTime
+	observers                         [maxVideos]objc.ID // by slot, kept for the process (a late notification may still reach one)
 )
 
 func loadAV() error {
@@ -250,8 +250,9 @@ type Video struct {
 	atEnd   bool
 	muted   bool
 	volume  float32
-	pullTo  int64   // pull frames until then (platform.Now): a seek's frame while paused
-	cur     uintptr // the current frame's CVPixelBuffer (retained)
+	pullTo  int64         // pull frames until then (platform.Now): a seek's frame while paused
+	seekTo  time.Duration // where the last seek went
+	cur     uintptr       // the current frame's CVPixelBuffer (retained)
 	r       *gpu.Renderer
 	posTex  gpu.TextureID
 }
@@ -486,7 +487,7 @@ func (v *Video) Play() {
 		v.Seek(0)
 	}
 	objc.Send(v.player, selPlay)
-	v.playing = true
+	v.playing, v.pullTo = true, 0 // playing, it pulls anyway
 }
 
 // Pause holds the video on the frame showing: it then asks for no frames.
@@ -506,7 +507,7 @@ func (v *Video) Playing() bool { return v.playing }
 func (v *Video) Ended() bool { return v.atEnd }
 
 // Seek moves the video to d, exactly (no tolerance). Paused, the frames that
-// draw it in the next half second pull the frame at d.
+// draw it pull the frame at d, until it comes (3 s at most).
 func (v *Video) Seek(d time.Duration) {
 	if v.closed.Load() {
 		return
@@ -518,6 +519,10 @@ func (v *Video) Seek(d time.Duration) {
 	v.atEnd = false
 	v.ended.Store(false)
 	v.pullTo = platform.Now() + seekSettleNs
+	v.seekTo = max(d, 0)
+	if dur := v.Duration(); dur > 0 {
+		v.seekTo = min(v.seekTo, dur) // past the end, the last frame
+	}
 }
 
 // SetMuted mutes or unmutes the video's sound.
@@ -562,11 +567,15 @@ func (v *Video) Loop() bool { return v.loop.Load() }
 // on is the one its frame is due at, not the one after (a request at the
 // full interval often misses that tick: 24 of 30 frames drawn, measured).
 func (v *Video) interval() int64 {
-	fps := v.fps
-	if fps <= 0 {
-		fps = defaultFPS
+	return max(int64(1e9/float64(v.frameRate()))-lead, int64(time.Millisecond))
+}
+
+// frameRate is the video track's nominal frame rate, or defaultFPS.
+func (v *Video) frameRate() float32 {
+	if v.fps <= 0 {
+		return defaultFPS
 	}
-	return max(int64(1e9/float64(fps))-lead, int64(time.Millisecond))
+	return v.fps
 }
 
 // Frame is the video's picture for the frame being drawn on r at now (the
@@ -593,6 +602,7 @@ func (v *Video) Frame(r *gpu.Renderer, now int64) (tex gpu.TextureID, w, h int, 
 		if v.loop.Load() {
 			v.Seek(0)
 			objc.Send(v.player, selPlay)
+			v.pullTo = 0
 		} else {
 			v.playing, v.atEnd, v.pullTo = false, true, 0
 		}
@@ -629,7 +639,7 @@ func (v *Video) pull(now int64) {
 	if F.Reset().Arg(uintptr(v.output)).Arg(uintptr(selHasNew)).Arg(uintptr(unsafe.Pointer(&tNow))).Call(objc.MsgSend).R0()&0xFF == 0 {
 		return
 	}
-	pb := F.Reset().Arg(uintptr(v.output)).Arg(uintptr(selCopyPB)).Arg(uintptr(unsafe.Pointer(&tNow))).Arg(0).Call(objc.MsgSend).R0()
+	pb := F.Reset().Arg(uintptr(v.output)).Arg(uintptr(selCopyPB)).Arg(uintptr(unsafe.Pointer(&tNow))).Arg(uintptr(unsafe.Pointer(&tShown))).Call(objc.MsgSend).R0()
 	if pb == 0 {
 		return
 	}
@@ -639,8 +649,13 @@ func (v *Video) pull(now int64) {
 		heldBuffers.Add(1)
 	}
 	v.cur = pb
+	// A frame from before the seek can still come first: the seek's own is
+	// the one of the time it went to (the frame at or just before it).
 	if !v.playing {
-		v.pullTo = 0 // the seek's frame came
+		f := time.Duration(1e9 / float64(v.frameRate()))
+		if t := cmDuration(&tShown); t >= v.seekTo-2*f && t <= v.seekTo+f {
+			v.pullTo = 0 // the seek's frame came
+		}
 	}
 }
 
