@@ -1011,3 +1011,25 @@ The whole UI is rewritten in Go on the framework with the Rex design system, mac
 **Decision (Adam, 2026-10-20: "literally don't care about intel macs, we can literally strip support, and also not worry about it going forwards").** The framework and its apps support macOS on Apple silicon (darwin/arm64) only. darwin/amd64 code paths, build targets, universal binaries and CI checks are removed, and building for darwin/amd64 fails with a message naming this decision. `gnui package` builds arm64. Windows and Linux keep amd64 and arm64.
 
 **Reasoning:** macOS 26 is the last release for Intel Macs, and macOS 27, the reference system here, does not run on them; GitHub's last Intel Mac runner goes in August 2027; and the Intel-only paths (struct returns, `NSRange` passing, Rosetta for local checks) cost testing time with no users to serve.
+
+## D57. Voice-note audio: the system's player and recorder, no Go on audio threads (phase 6, 2026-10-20)
+
+**Decision (S7, refines D46).** macOS first (D34); on Windows and Linux `NewPlayer`, `Recorder.Start` and `app/perm` return `ErrUnsupported`.
+- **Playback.** `media.Player` is an `AVAudioPlayer` over an in-memory WAV that we build around the app's PCM: int16 or float32, mono or stereo, 8–192 kHz, copied once into malloc'd memory that the `NSData` frees. With `enableRate` set before `prepareToPlay`, the rate runs from 0.5× to 2× with the pitch kept. `Position` and `Playing` are one message each and allocate nothing, so the progress bar reads them every frame. The end comes from the delegate's `audioPlayerDidFinishPlaying:successfully:`, which the system calls on the main thread. It completes a ticket reserved at `Play` (D37, class 2): one `Ended` per playback, and none after `Close`.
+- **Recording.** `media.Recorder` is an `AVAudioRecorder` that writes 16-bit LPCM WAV (48 kHz mono by default) to a temporary file, with metering on. `Elapsed` and `Level` (`updateMeters`, then `averagePowerForChannel:` and `peakPowerForChannel:`) allocate nothing. `Stop` reserves a ticket, then reads, parses and deletes the file on a goroutine, and the `Recorded` event follows. `Take` hands the PCM to the app, which encodes Opus in its core. `Start` reads `app/perm` first and never touches the microphone unless access is authorized.
+- **Permissions.** `app/perm` uses `AVCaptureDevice` (`authorizationStatusForMediaType:`, `requestAccessForMediaType:completionHandler:`). The completion block runs on a system queue and only completes the request's ticket. `Request` refuses with `ErrNoUsageDescription` when the main bundle has no usage string, because macOS would end the process instead of asking.
+- **No Go code runs on a real-time audio thread.** The system's player and recorder do all the real-time work. Our only callbacks are the player delegate (on the main thread) and the permission completion (a system queue), and each only completes a record it reserved earlier.
+
+**Alternatives.** D46's AVAudioEngine, with an `AVAudioPlayerNode`, an `AVAudioUnitTimePitch` and an input tap into a ring. Deferred: its buffer-completion and tap blocks run Go on AVAudio's queues (D46's stated risk), and the graph must be scheduled and managed, while `AVAudioPlayer` already keeps the pitch at 1.5× and 2× and reports its own position. Revisit when an app needs streaming, effects, or more than clip playback; calls stay in ZapFast's core (D33).
+
+**Costs** (Mac mini, macOS 27.2 26B5101f):
+- `NewPlayer` takes about 8 ms on the main thread (`prepareToPlay`). The process's first takes about 60 ms, because it starts the audio stack, unless `media.Warm` did that earlier on a goroutine. Opening AVFoundation itself takes 0.5 ms.
+- Recording goes through a temporary file, about 5.8 MB a minute at 48 kHz mono.
+
+**Evidence** (the `media` tests on that Mac, through the real `AVAudioPlayer`):
+- a 1 s sine ends after about 1 s, at 2× after about 0.5 s, and at 1.5× after about 0.67 s;
+- seeking moves the position, pausing holds it, and there is one `Ended` per playback and none after `Close`;
+- the per-frame reads allocate 0 bytes;
+- WAV files from AudioToolbox's writer (which `AVAudioRecorder` uses) parse back exactly.
+
+Live microphone capture was not run: access cannot be granted headlessly, so that test skips unless the process is authorized.
