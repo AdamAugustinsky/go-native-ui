@@ -20,6 +20,11 @@
 //
 // # Pieces
 //
+// Step and Player live in package widget/script, which an application can link
+// (a demo tour in a release build) without the test kit's testing, regexp,
+// flag and os/exec; this package re-exports them, so a test imports one
+// package.
+//
 // Step, built by Click, Key, Type, WaitFor and the other constructors, is one
 // thing a person does. Player runs a list of steps one frame at a time and
 // implements app.Scripter, so a benchmark (app.RunBench) or a screenshot scene

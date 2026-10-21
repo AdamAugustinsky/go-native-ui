@@ -29,7 +29,7 @@ import (
 	"gonativeui/examples/notes/notes"
 	"gonativeui/theme"
 	"gonativeui/ui"
-	"gonativeui/widget/widgettest"
+	"gonativeui/widget/script"
 )
 
 func main() {
@@ -151,7 +151,7 @@ func runMeasure(dark, scrolled bool) error {
 	for i := range t.Nodes {
 		sn := &t.Nodes[i]
 		b := sn.Bounds
-		out = append(out, node{widgettest.RoleName(sn.Role), string(t.Text(sn.Name)), [4]float32{b[0] / 2, b[1] / 2, (b[2] - b[0]) / 2, (b[3] - b[1]) / 2}})
+		out = append(out, node{script.RoleName(sn.Role), string(t.Text(sn.Name)), [4]float32{b[0] / 2, b[1] / 2, (b[2] - b[0]) / 2, (b[3] - b[1]) / 2}})
 	}
 	printJSON(out)
 	return nil

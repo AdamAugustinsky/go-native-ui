@@ -1,4 +1,4 @@
-package widgettest
+package script
 
 import (
 	"bytes"
@@ -67,6 +67,7 @@ type Player struct {
 	x, y      float32 // the pointer
 	base      []byte  // the value a WaitChange step started from
 	modsHeld  bool    // a step set the modifiers for one frame only: the next clears them
+	down      ui.Mods // the modifiers a Down holds until Up
 	tips      []ui.TooltipRegion
 	tipText   []byte
 }
@@ -94,6 +95,10 @@ func (p *Player) Done() bool { return !p.opt.Loop && p.idx >= len(p.steps) }
 // did not measure the session it claims to.
 func (p *Player) Err() error { return p.err }
 
+// Index is the number of the current step (the first is 0; the count of steps
+// when they are done).
+func (p *Player) Index() int { return p.idx }
+
 // Cycles is how many times a looping Player has run through its steps.
 func (p *Player) Cycles() int { return p.cycles }
 
@@ -106,6 +111,11 @@ func (p *Player) AtStart() bool {
 // Clock is the time in ns that frame number frame has, in a window without a
 // clock: 1/60 s a frame from a start well after zero.
 func Clock(frame int) int64 { return 1_000_000_000 + int64(frame)*16_666_667 }
+
+// SetClock makes the Player read its clock (in ns) from f in place of
+// platform.Now; nil restores it. A test that must not wait for real time sets
+// one. Synthetic overrides it.
+func (p *Player) SetClock(f func() int64) { p.clock = f }
 
 // now is the clock in ns.
 func (p *Player) now() int64 {
@@ -127,7 +137,7 @@ func (p *Player) Script(frame int, in *ui.Input) bool {
 		in.Time = p.now()
 	}
 	if p.modsHeld {
-		in.Mods, p.modsHeld = 0, false
+		in.Mods, p.modsHeld = p.down, false
 	}
 	if p.idx >= len(p.steps) {
 		if !p.opt.Loop {
@@ -165,7 +175,7 @@ func (p *Player) Script(frame int, in *ui.Input) bool {
 
 func (p *Player) fail(format string, args ...any) {
 	if p.err == nil {
-		p.err = fmt.Errorf("widgettest: step %d: "+format, append([]any{p.idx}, args...)...)
+		p.err = fmt.Errorf("script: step %d: "+format, append([]any{p.idx}, args...)...)
 	}
 }
 
@@ -424,10 +434,12 @@ func (p *Player) resolve(st *Step) {
 }
 
 // holdMods sets the step's modifiers for the frame, if it has any; the next
-// frame clears them.
+// frame clears them (to those a Down holds). An app reads a click on its
+// release, so the release frame of Click, Drag and Up and the frame of a Key
+// carry the modifiers too.
 func (p *Player) holdMods(in *ui.Input, st *Step) {
 	if st.mods != 0 {
-		in.Mods, p.modsHeld = st.mods, true
+		in.Mods, p.modsHeld = st.mods|p.down, true
 	}
 }
 
@@ -523,12 +535,12 @@ func (p *Player) run(st *Step, in *ui.Input) bool {
 			}
 			x, y := aim(p.rect, st)
 			p.goTo(in, x, y)
-			in.Mods = st.mods
+			in.Mods = st.mods | p.down
 			in.SetButton(b, true, uint8(p.t/2+1))
 			return false
 		}
 		in.SetButton(b, false, 0)
-		in.Mods = 0
+		p.holdMods(in, st)
 		return p.t/2+1 >= clicks
 	case opDrag:
 		if !p.ok {
@@ -538,31 +550,33 @@ func (p *Player) run(st *Step, in *ui.Input) bool {
 		switch {
 		case p.t == 0:
 			p.goTo(in, cx, cy)
-			in.Mods = st.mods
+			in.Mods = st.mods | p.down
 			in.SetButton(ui.ButtonLeft, true, 1)
 		case p.t <= st.n:
 			p.goTo(in, cx+st.dx*float32(p.t), cy)
 		default:
 			in.SetButton(ui.ButtonLeft, false, 0)
-			in.Mods = 0
+			p.holdMods(in, st)
 			return true
 		}
 	case opDown:
 		if p.ok {
 			x, y := p.centre()
 			p.goTo(in, x, y)
-			in.Mods = st.mods
+			in.Mods, p.down = st.mods, st.mods
 			in.SetButton(ui.ButtonLeft, true, 1)
 		}
 		return true
 	case opUp:
+		// the release carries what Down held (and the step's own), cleared by
+		// the next frame
 		in.SetButton(ui.ButtonLeft, false, 0)
-		in.Mods = 0
+		in.Mods, p.modsHeld = p.down|st.mods, true
+		p.down = 0
 		return true
 	case opKey, opKeys:
-		in.Mods = st.mods
+		p.holdMods(in, st)
 		in.PushKey(ui.KeyEvent{Code: st.code, Mods: st.mods, Down: true})
-		in.Mods = 0
 		return st.op == opKey || p.t+1 >= st.n
 	case opText:
 		in.AppendText(st.text)

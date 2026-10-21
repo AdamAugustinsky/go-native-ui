@@ -3,25 +3,26 @@ package notes
 import (
 	"gonativeui/app"
 	"gonativeui/ui"
-	"gonativeui/widget/widgettest"
+	"gonativeui/widget/script"
 )
 
 // The scripted session gives the application the input a person would, with
-// widgettest: each step finds its target by role and name in the semantic tree
-// of the last frame. The benchmark loops the session; the tests play pieces of
-// it. Waits are on conditions, never on frame counts, because a window with a
-// sleeping display draws as fast as it can while a paced one draws at 60 Hz.
+// package script: each step finds its target by role and name in the semantic
+// tree of the last frame. The benchmark loops the session; the tests play
+// pieces of it. Waits are on conditions, never on frame counts, because a
+// window with a sleeping display draws as fast as it can while a paced one
+// draws at 60 Hz.
 
-type step = widgettest.Step
+type step = script.Step
 
 var (
-	idle     = widgettest.Idle
-	settle   = widgettest.Settle
-	waitFor  = widgettest.WaitFor
-	waitGone = widgettest.WaitGone
-	click    = widgettest.Click
-	key      = widgettest.Key
-	typeText = widgettest.Type
+	idle     = script.Idle
+	settle   = script.Settle
+	waitFor  = script.WaitFor
+	waitGone = script.WaitGone
+	click    = script.Click
+	key      = script.Key
+	typeText = script.Type
 )
 
 // session is the benchmark's session. It ends where it began: the same ten
@@ -64,7 +65,7 @@ func session() []step {
 // session runs over and over.
 type Bench struct {
 	*Notes
-	p *widgettest.Player
+	p *script.Player
 }
 
 var (
@@ -80,7 +81,7 @@ func NewBench() (*Bench, error) {
 		return nil, err
 	}
 	n.drawnOnly = true // the session's confirmation is the drawn dialog: nobody answers a system alert
-	return &Bench{Notes: n, p: widgettest.NewPlayer(n, session(), widgettest.Options{Loop: true})}, nil
+	return &Bench{Notes: n, p: script.NewPlayer(n, session(), script.Options{Loop: true})}, nil
 }
 
 // Script implements app.Scripter.

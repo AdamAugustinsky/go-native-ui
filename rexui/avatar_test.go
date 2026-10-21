@@ -10,6 +10,7 @@ import (
 	"gonativeui/gpu"
 	"gonativeui/img"
 	"gonativeui/rexui"
+	"gonativeui/text"
 	"gonativeui/theme"
 	"gonativeui/ui"
 )
@@ -36,10 +37,17 @@ func TestAvatarInitials(t *testing.T) {
 		{"王小明", "王"},
 		{"محمد علي", "مع"},
 		{"김 민수", "김민"},
-		{"नमस्ते दुनिया", "नदु"}, // (the vowel sign is part of the grapheme)
-		{"ნინო ბერიძე", "ნბ"},    // Georgian has no title case of its own: unchanged
-		{"", ""},
-		{"   ", ""},
+		{"नमस्ते दुनिया", "नदु"},    // (the vowel sign is part of the grapheme)
+		{"ნინო ბერიძე", "ნბ"},       // Georgian has no title case of its own: unchanged
+		{"Ada Lovelace-King", "AK"}, // a hyphen ends a word, as a space does
+		{"Ada-Lovelace", "AL"},
+		{"Mary-Jane", "MJ"},
+		{"Ada – Lovelace", "AL"}, // an en dash too
+		{"-Ada", "A"},
+		{"Ada-", "A"},
+		{"", "#"}, // a blank name shows BlankInitial
+		{"   ", "#"},
+		{"\t\n \u00a0", "#"},
 		{"(You)", "Y"},
 	} {
 		if got := string(rexui.Initials(nil, tc.name)); got != tc.want {
@@ -49,6 +57,80 @@ func TestAvatarInitials(t *testing.T) {
 	var buf [16]byte
 	if n := testing.AllocsPerRun(50, func() { rexui.Initials(buf[:0], "Name (You)") }); n != 0 {
 		t.Errorf("Initials allocates %v times", n)
+	}
+}
+
+// A blank name draws the hash sign, not an empty disc.
+func TestAvatarBlankNameShowsHash(t *testing.T) {
+	var id ui.ID
+	g := newRig(t, theme.Light, nil, column(func(g *rig) {
+		id = rexui.Avatar(g.k, "  ", rexui.AvatarOpts{})
+	}))
+	r := g.c.Rect(id)
+	glyphs := 0
+	for _, q := range g.list.Quads {
+		if q.Mode == gpu.ModeMaskR8 && q.Rect[0] >= r[0] && q.Rect[2] <= r[2] && q.Rect[1] >= r[1] && q.Rect[3] <= r[3] {
+			glyphs++
+		}
+	}
+	if glyphs != 1 {
+		t.Errorf("%d glyphs in the avatar of a blank name, want the one hash sign", glyphs)
+	}
+	if rexui.BlankInitial != "#" {
+		t.Errorf("BlankInitial is %q", rexui.BlankInitial)
+	}
+}
+
+// hasFont reports whether the text system has made a font of d already (the
+// fake hands out keys in order, so a font not made yet gets the next key).
+func hasFont(g *rig, d text.FontDesc) bool {
+	ts := g.k.TextSystem()
+	fresh := ts.Font(text.FontDesc{SizePt: 91.37, Weight: 100, Scale: g.scale})
+	return ts.Font(d) < fresh
+}
+
+// InitialsScale and InitialsWeight set the initials' font from the avatar's
+// diameter; both zero keep the size's text style, and a frame allocates nothing.
+func TestAvatarInitialsStyle(t *testing.T) {
+	semi := func(pt float32) text.FontDesc {
+		return text.FontDesc{SizePt: pt, Weight: theme.WeightSemibold, Scale: 2}
+	}
+	build := func(o rexui.AvatarOpts, stack bool) func(g *rig) {
+		return func(g *rig) {
+			if stack {
+				rexui.AvatarStack(g.k, "Members", []string{"Ada Lovelace", "Bea"}, 4, o)
+				return
+			}
+			rexui.Avatar(g.k, "Ada Lovelace", o)
+		}
+	}
+	for _, stack := range []bool{false, true} {
+		const size = 40
+		want := semi(0.38 * size)
+		g := newRig(t, theme.Light, nil, column(build(rexui.AvatarOpts{Size: size}, stack)))
+		if hasFont(g, want) {
+			t.Fatalf("stack %v: the default initials are already 0.38 of the diameter, semibold", stack)
+		}
+		def := text.FontDesc{SizePt: theme.MacText[theme.StyleHeadline].Size, Weight: theme.MacText[theme.StyleHeadline].Weight, Scale: 2}
+		if !hasFont(g, def) {
+			t.Errorf("stack %v: the default initials are not the headline style", stack)
+		}
+		g = newRig(t, theme.Light, nil, column(build(rexui.AvatarOpts{Size: size, InitialsScale: 0.38, InitialsWeight: theme.WeightSemibold}, stack)))
+		if !hasFont(g, want) {
+			t.Errorf("stack %v: the initials are not semibold at 0.38 of the diameter", stack)
+		}
+		if n := testing.AllocsPerRun(20, g.frame); n != 0 {
+			t.Errorf("stack %v: a frame with the initials' style allocates %v times", stack, n)
+		}
+		// one of the two set: the other is the text style's
+		g = newRig(t, theme.Light, nil, column(build(rexui.AvatarOpts{Size: size, InitialsWeight: theme.WeightSemibold}, stack)))
+		if !hasFont(g, semi(def.SizePt)) {
+			t.Errorf("stack %v: InitialsWeight alone changed the size", stack)
+		}
+		g = newRig(t, theme.Light, nil, column(build(rexui.AvatarOpts{Size: size, InitialsScale: 0.5}, stack)))
+		if !hasFont(g, text.FontDesc{SizePt: 0.5 * size, Weight: def.Weight, Scale: 2}) {
+			t.Errorf("stack %v: InitialsScale alone changed the weight", stack)
+		}
 	}
 }
 

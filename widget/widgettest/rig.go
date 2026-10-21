@@ -263,7 +263,7 @@ func (r *Rig) Play(steps ...Step) {
 	r.p.Load(steps...)
 	for i := 0; !r.p.Done() && r.p.Err() == nil; i++ {
 		if i > 100000 {
-			r.t.Fatalf("widgettest: step %d did not end", r.p.idx)
+			r.t.Fatalf("widgettest: step %d did not end", r.p.Index())
 		}
 		r.Frame()
 	}

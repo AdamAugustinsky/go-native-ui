@@ -1,4 +1,4 @@
-package widgettest
+package script
 
 import "gonativeui/ui"
 

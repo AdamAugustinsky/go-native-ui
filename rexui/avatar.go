@@ -51,6 +51,15 @@ type AvatarOpts struct {
 	// RoleButton. Read the press with k.SignalOf(id).Clicked on the ID Avatar
 	// returns. An avatar of AvatarStack is never pressable.
 	Pressable bool
+	// InitialsScale is the initials' point size as a share of the avatar's
+	// diameter (0.38 is what chat apps draw); 0 takes the size of the text
+	// style the avatar's size picks. InitialsWeight is their weight, CSS-like
+	// (theme.WeightSemibold is 600); 0 takes that text style's weight. Set
+	// either and the initials use a font of their own; the other then falls
+	// back to that style's (theme.MacText), and both zero leave the look
+	// unchanged. AvatarStack's initials follow the same two.
+	InitialsScale  float32
+	InitialsWeight int
 	// Presence is the dot at the bottom right corner.
 	Presence AvatarPresence
 	// Backdrop is the colour the dot's ring and a stack's overlaps are cut
@@ -94,14 +103,22 @@ func initialsOf(f *ui.Fmt, name string) {
 	}
 }
 
+// BlankInitial is what an avatar shows for a name that is empty or only white
+// space: a hash sign, as chat apps do (Initials returns it). A person symbol
+// would need an icon drawn in every avatar; the sign is text, so it takes the
+// avatar's colour, weight and size like any initials.
+const BlankInitial = "#"
+
 // Initials appends to dst the initials an avatar shows for name: the first
 // letter or digit of its first and last words, title-cased ("Ada Lovelace" is
-// "AL", "Ada" is "A"). A word is what lies between white space, and its
+// "AL", "Ada" is "A"). A word is what lies between white space or a hyphen or
+// dash, so "Ada Lovelace-King" is "AK" and "Ada-Lovelace" is "AL"; its
 // initial is its first letter or digit wherever it is in it ("Name (You)" is
 // "NY", "@ada" is "A"), in any script, with what makes one grapheme with it
 // (combining marks: "e\u0301" stays whole); a word with none (an emoji) has
 // no initial. A name with no letter or digit at all gives its first grapheme
-// ("🎉 🎂" is "🎉"). It allocates nothing beyond dst's growth.
+// ("🎉 🎂" is "🎉"), and a name that is empty or only white space gives
+// BlankInitial ("#"). It allocates nothing beyond dst's growth.
 func Initials(dst []byte, name string) []byte {
 	b := base.StrBytes(name)
 	first, last := -1, -1
@@ -109,7 +126,7 @@ func Initials(dst []byte, name string) []byte {
 	for i := 0; i < len(b); {
 		r, n := utf8.DecodeRune(b[i:])
 		switch {
-		case unicode.IsSpace(r):
+		case unicode.IsSpace(r) || unicode.Is(unicode.Pd, r):
 			found = false
 		case !found && (unicode.IsLetter(r) || unicode.IsDigit(r)):
 			if first < 0 {
@@ -133,11 +150,11 @@ func Initials(dst []byte, name string) []byte {
 			r, n := utf8.DecodeRune(b[i:])
 			if !unicode.IsSpace(r) {
 				put(i)
-				break
+				return dst
 			}
 			i += n
 		}
-		return dst
+		return append(dst, BlankInitial...)
 	}
 	put(first)
 	if last != first {
@@ -221,7 +238,7 @@ func avatarInitials(k *base.Kit, key ui.Key, name string, side, size float32, o 
 	if k.Disabled() {
 		fill, fg = r.Colors[theme.Fill1], r.Colors[theme.TextDisabled]
 	}
-	st := avatarStyle(r, size)
+	st := avatarStyle(k, size, o)
 	theme.At(c, 0, 0, side, side)
 	c.NextBG(fill)
 	c.NextRadius(side / 2)
@@ -243,19 +260,43 @@ func avatarInitials(k *base.Kit, key ui.Key, name string, side, size float32, o 
 	c.Pop()
 }
 
-// avatarStyle is the text style of the initials at a side of size points.
-func avatarStyle(r *theme.Resolved, size float32) *theme.StyleFont {
+// avatarStyleIndex is the text style of the initials at a side of size points.
+func avatarStyleIndex(size float32) theme.TextStyle {
 	switch {
 	case size <= 20:
-		return &r.Styles[theme.StyleCaption2]
+		return theme.StyleCaption2
 	case size <= 28:
-		return &r.Styles[theme.StyleSubheadline]
+		return theme.StyleSubheadline
 	case size <= 44:
-		return &r.Styles[theme.StyleHeadline]
+		return theme.StyleHeadline
 	case size <= 72:
-		return &r.Styles[theme.StyleTitle3]
+		return theme.StyleTitle3
 	}
-	return &r.Styles[theme.StyleTitle2]
+	return theme.StyleTitle2
+}
+
+// avatarStyle is the font and line of the initials at a side of size points:
+// the text style the size picks, or, when o sets InitialsScale or
+// InitialsWeight, a font of their own (the style's own value for the one not
+// set) in a line box of that font.
+func avatarStyle(k *base.Kit, size float32, o *AvatarOpts) theme.StyleFont {
+	idx := avatarStyleIndex(size)
+	st := k.Theme().Styles[idx]
+	if o.InitialsScale <= 0 && o.InitialsWeight <= 0 {
+		return st
+	}
+	spec := theme.MacText[idx]
+	pts, weight := spec.Size, spec.Weight
+	if o.InitialsScale > 0 {
+		pts = o.InitialsScale * size
+	}
+	if o.InitialsWeight > 0 {
+		weight = o.InitialsWeight
+	}
+	ts := k.TextSystem()
+	f := ts.Font(text.FontDesc{SizePt: pts, Weight: weight, Scale: k.Scale()})
+	lb := theme.LineBox(ts.Metrics(f))
+	return theme.StyleFont{Font: f, Line: lb.H, Baseline: lb.Off}
 }
 
 // avatarDot draws the presence dot with its ring.
@@ -330,7 +371,7 @@ func AvatarStack(k *base.Kit, label string, names []string, max int, o AvatarOpt
 	if o.Backdrop == (Tint{}) {
 		back = r.Colors[theme.Window]
 	}
-	st := avatarStyle(r, size)
+	st := avatarStyle(k, size, &o)
 	for i := 0; i < n; i++ {
 		x := float32(i) * step
 		// the cut: a disc of the backdrop, a ring wider than the avatar
