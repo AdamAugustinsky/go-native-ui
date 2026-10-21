@@ -192,8 +192,9 @@ type Renderer struct {
 	destroyed         bool
 }
 
-// NewRenderer builds the pipeline and instance rings on an existing device
-// and command queue, which the caller keeps owning. Setup allocates.
+// NewRenderer builds the pipeline on an existing device and command queue,
+// which the caller keeps owning. Instance ring slots allocate on their first
+// non-empty frame. Setup allocates.
 func NewRenderer(device, queue uintptr) (*Renderer, error) {
 	if err := loadMetal(); err != nil {
 		return nil, err
@@ -233,12 +234,6 @@ func NewRenderer(device, queue uintptr) (*Renderer, error) {
 	objc.Send1(r.color0, rsSetLoad, 2)  // Clear
 	objc.Send1(r.color0, rsSetStore, 1) // Store
 
-	for i := range r.slots {
-		if err := r.growSlot(&r.slots[i], initialQuads); err != nil {
-			r.Destroy()
-			return nil, err
-		}
-	}
 	// Texture 0: 1×1 white RGBA texel that shape quads bind.
 	t0 := r.NewTexture(TexRGBA8, 1, 1)
 	r.Upload(t0, 0, 0, 1, 1, []byte{255, 255, 255, 255}, 4)
