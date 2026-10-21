@@ -92,6 +92,9 @@ const (
 	AppEvService
 	// AppEvPost: an event the app posted from one of its goroutines (PostApp).
 	AppEvPost
+	// AppEvWindowClosed: a window closed, however it was closed; Window is
+	// its id.
+	AppEvWindowClosed
 )
 
 // AppEvent is one application event: a fixed-size, pointer-free record. Its

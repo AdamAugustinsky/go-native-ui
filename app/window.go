@@ -180,6 +180,7 @@ const (
 type winState struct {
 	handle  *Win   // the window's handle (OpenWindow; Window)
 	closing bool   // the window closes at the next safe point
+	told    uint32 // the id whose EvWindowClosed was delivered (announceClosed)
 	winID   uint32 // its id, 0 before it opened
 
 	waited []platform.Event // the window's events from the last pump, where the pump is its Wait (pump_other.go)
