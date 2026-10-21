@@ -354,6 +354,11 @@ func (u *winUploader) Upload(t gpu.TextureID, x, y, w, h int, pixels []byte, str
 	u.r.Upload(t, x, y, w, h, pixels, stride)
 }
 
+// Stage is Renderer.Stage, for an icon atlas that fills as icons are first used.
+func (u *winUploader) Stage(t gpu.TextureID, x, y, w, h int, pixels []byte, stride int) {
+	u.r.Stage(t, x, y, w, h, pixels, stride)
+}
+
 // FreeTexture frees a texture the window made, for an icon atlas that grew
 // into a new one.
 func (u *winUploader) FreeTexture(t gpu.TextureID) {

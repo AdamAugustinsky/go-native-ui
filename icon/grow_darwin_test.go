@@ -119,6 +119,12 @@ func TestManySymbolsGrowTheAtlas(t *testing.T) {
 	a := New(g.ts, specs...)
 	a.Raster(2)
 	a.Attach(g.r)
+	// nothing is drawn from the atlas until it is asked for: the first frame
+	// that shows them all prepares them, grows the atlas as it goes and draws
+	// them in that same frame
+	s := &sheet{a: a, ids: allIDs(a), color: 0xCC1100FF, cell: 40, cols: 20}
+	g.frame(s, 2)
+	pix := g.pixels()
 	if a.w*a.h <= atlasW*atlasH || a.w > maxAtlas || a.h > maxAtlas {
 		t.Fatalf("atlas is %d×%d for 300 symbols", a.w, a.h)
 	}
@@ -128,16 +134,12 @@ func TestManySymbolsGrowTheAtlas(t *testing.T) {
 			t.Errorf("standard icon %d draws nothing", id)
 		}
 	}
-	s := &sheet{a: a, ids: allIDs(a), color: 0xCC1100FF, cell: 40, cols: 20}
-	g.frame(s, 2)
-	g.frame(s, 2)
-	pix := g.pixels()
 	for i, id := range s.ids {
 		if a.Source(id) != SourceImage {
 			continue
 		}
 		if n, _, _ := inkIn(g, pix, s, i); n == 0 {
-			t.Errorf("icon %d (%s) draws no ink", id, a.specs[id].Symbol)
+			t.Errorf("icon %d (%s) draws no ink in its first frame", id, a.specs[id].Symbol)
 		}
 	}
 }
@@ -153,6 +155,9 @@ func TestAddGrowsTheAtlasKeepingIDs(t *testing.T) {
 	up := &recorder{}
 	a.Attach(up)
 	first := ID(NumStandard)
+	for i := range specs[:20] {
+		a.Source(first + ID(i))
+	}
 	before := make([]entry, 20)
 	copy(before, a.ents[first:])
 	w0, h0 := a.w, a.h
@@ -160,6 +165,7 @@ func TestAddGrowsTheAtlasKeepingIDs(t *testing.T) {
 		if id := a.Add(specs[i]); id != first+ID(i) {
 			t.Fatalf("Add returned id %d, want %d", id, first+ID(i))
 		}
+		a.Source(first + ID(i)) // first use
 	}
 	if a.w == w0 && a.h == h0 {
 		t.Fatalf("the atlas did not grow from %d×%d", w0, h0)
@@ -170,17 +176,11 @@ func TestAddGrowsTheAtlasKeepingIDs(t *testing.T) {
 		}
 	}
 	checkAtlas(t, a, specs, first)
-	live := 0
-	for _, tx := range up.tex {
-		if tx != nil {
-			live++
-			if tx.w != a.w || tx.h != a.h || !bytes.Equal(tx.pix, a.pix) {
-				t.Errorf("the texture (%d×%d) differs from the atlas (%d×%d)", tx.w, tx.h, a.w, a.h)
-			}
-		}
+	if tx := up.tex[a.tex-1]; tx.w != a.w || tx.h != a.h || !bytes.Equal(tx.pix, a.pix) {
+		t.Errorf("the texture (%d×%d) differs from the atlas (%d×%d)", tx.w, tx.h, a.w, a.h)
 	}
-	if live != 1 || up.frees != up.newTextures-1 {
-		t.Errorf("%d textures live, %d made and %d freed: want one live, the others freed", live, up.newTextures, up.frees)
+	if len(a.retired) != up.newTextures-1 || up.frees != 0 { // freed with the next frame, not under the one being built
+		t.Errorf("%d textures made, %d retired and %d freed", up.newTextures, len(a.retired), up.frees)
 	}
 
 	// and the ids draw on the real renderer after the growth
@@ -209,10 +209,8 @@ func TestScaleChangeFitsTheAtlas(t *testing.T) {
 		a.Raster(sc)
 		checkAtlas(t, a, specs, NumStandard)
 		area[int(sc)] = a.w * a.h
-		for _, tx := range up.tex {
-			if tx != nil && (tx.w != a.w || tx.h != a.h || !bytes.Equal(tx.pix, a.pix)) {
-				t.Fatalf("scale %v: the texture (%d×%d) differs from the atlas (%d×%d)", sc, tx.w, tx.h, a.w, a.h)
-			}
+		if tx := up.tex[a.tex-1]; tx.w != a.w || tx.h != a.h || !bytes.Equal(tx.pix, a.pix) {
+			t.Fatalf("scale %v: the texture (%d×%d) differs from the atlas (%d×%d)", sc, tx.w, tx.h, a.w, a.h)
 		}
 	}
 	if !(area[1] < area[2] && area[2] <= area[3]) || area[1] > 2*atlasW*atlasH*4 {
@@ -230,12 +228,12 @@ func TestGrownAtlasFramesAllocateNothing(t *testing.T) {
 	for _, sp := range specs[10:] {
 		a.Add(sp)
 	}
-	if a.w*a.h <= atlasW*atlasH {
-		t.Fatal("the atlas did not grow")
-	}
 	s := &sheet{a: a, ids: allIDs(a), color: 0x000000FF, cell: 40, cols: 20}
 	for i := 0; i < 3; i++ {
 		g.frame(s, 2)
+	}
+	if a.w*a.h <= atlasW*atlasH {
+		t.Fatal("the atlas did not grow")
 	}
 	if n := testing.AllocsPerRun(50, func() { g.frame(s, 2) }); n != 0 {
 		t.Errorf("a frame of %d icons allocates %v times", a.Len(), n)
@@ -273,5 +271,88 @@ func TestFullAtlasFallsBackAndLogsOnce(t *testing.T) {
 	a.Add(Spec{Symbol: specs[0].Symbol + ".nonexistent", Fallback: 'x', Pt: 17}, specs[len(specs)-1])
 	if n := strings.Count(buf.String(), "atlas is full"); n > 1 {
 		t.Errorf("logged %d times after Add", n)
+	}
+}
+
+// counting is a renderer that counts the textures freed through it.
+type counting struct {
+	*gpu.Renderer
+	frees int
+}
+
+func (c *counting) FreeTexture(t gpu.TextureID) { c.frees++; c.Renderer.FreeTexture(t) }
+
+// An icon first used in a later frame is drawn in that frame, even when
+// preparing it (and the ones before it) grows the atlas under boxes the frame
+// has already built; the texture it outgrew is freed one frame later.
+func TestIconFirstUsedLaterDrawsInThatFrame(t *testing.T) {
+	specs := symbolSpecs(t, 300, 17)
+	g := newRig(t, 20*40, 17*40)
+	a := New(g.ts, specs...)
+	a.Raster(2)
+	r := &counting{Renderer: g.r}
+	a.Attach(r)
+	all := allIDs(a)
+	few := &sheet{a: a, ids: all[NumStandard : NumStandard+5], color: 0xCC1100FF, cell: 40, cols: 20}
+	g.frame(few, 2)
+	if a.resolved != 5 {
+		t.Fatalf("%d icons prepared for a frame of 5", a.resolved)
+	}
+	if n, _, _ := inkIn(g, g.pixels(), few, 4); n == 0 {
+		t.Error("an icon draws no ink in its first frame")
+	}
+	w0, h0 := a.w, a.h
+	// frame 2: the 5, then 295 more in the cells after them: the atlas grows
+	// part-way through the frame
+	more := &sheet{a: a, ids: all[NumStandard:], color: 0xCC1100FF, cell: 40, cols: 20}
+	g.frame(more, 2)
+	if a.w == w0 && a.h == h0 {
+		t.Fatal("the atlas did not grow")
+	}
+	pix := g.pixels()
+	for i, id := range more.ids {
+		if n, _, _ := inkIn(g, pix, more, i); n == 0 {
+			t.Errorf("icon %d (%s) draws no ink in the frame that first uses it", id, a.specs[id].Symbol)
+		}
+	}
+	if r.frees != 0 || len(a.retired) == 0 {
+		t.Errorf("the outgrown texture was freed under the frame (%d freed, %d retired)", r.frees, len(a.retired))
+	}
+	g.frame(more, 2)
+	if r.frees == 0 || len(a.retired) != 0 {
+		t.Errorf("the outgrown texture is still there a frame later (%d freed, %d retired)", r.frees, len(a.retired))
+	}
+	pix = g.pixels()
+	for i := range more.ids {
+		if n, _, _ := inkIn(g, pix, more, i); n == 0 {
+			t.Errorf("icon %d draws no ink in the frame after", more.ids[i])
+		}
+	}
+}
+
+// A scale change prepares again only the icons that are used.
+func TestScaleChangeRasterisesWhatIsUsed(t *testing.T) {
+	specs := symbolSpecs(t, 300, 17)
+	g := newRig(t, 20*40, 4*40)
+	a := New(g.ts, specs...)
+	a.Raster(1)
+	a.Attach(g.r)
+	ids := allIDs(a)[NumStandard : NumStandard+5]
+	s := &sheet{a: a, ids: ids, color: 0xCC1100FF, cell: 40, cols: 20}
+	g.frame(s, 1)
+	w1, _ := a.Size(ids[0])
+	a.Raster(2)
+	if a.resolved != 0 {
+		t.Fatalf("%d icons prepared by the scale change", a.resolved)
+	}
+	g.frame(&sheet{a: a, ids: ids[:3], color: 0xCC1100FF, cell: 40, cols: 20}, 2)
+	if a.resolved != 3 {
+		t.Errorf("%d icons prepared for a frame of 3", a.resolved)
+	}
+	if w2, _ := a.Size(ids[0]); w2 < 1.6*w1 {
+		t.Errorf("the icon is %v wide at 1× and %v at 2×", w1, w2)
+	}
+	if n, _, _ := inkIn(g, g.pixels(), &sheet{a: a, ids: ids, color: 0xCC1100FF, cell: 40, cols: 20}, 2); n == 0 {
+		t.Error("an icon draws no ink in the first frame after the scale change")
 	}
 }

@@ -344,3 +344,34 @@ func TestPNG(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Adding icons prepares none; an icon is prepared the first time it is asked
+// about, and only then.
+func TestOnlyUsedIconsArePrepared(t *testing.T) {
+	g := newRig(t, 6*40, 4*40)
+	extra := make([]Spec, 300)
+	for i := range extra {
+		extra[i] = Spec{Symbol: "star", Fallback: rune('A' + i%26), Pt: 12}
+	}
+	a := New(g.ts, extra...)
+	a.Raster(2)
+	a.Attach(g.r)
+	if a.resolved != 0 {
+		t.Fatalf("%d icons prepared before any is used", a.resolved)
+	}
+	a.Add(Spec{Fallback: 'Z', Pt: 12})
+	ids := []ID{NumStandard, NumStandard + 7, NumStandard + 100, NumStandard + 299, NumStandard + 300}
+	s := &sheet{a: a, ids: ids, color: 0x000000FF, cell: 40, cols: 6}
+	g.frame(s, 2)
+	g.frame(s, 2)
+	if a.resolved != 5 {
+		t.Errorf("%d icons prepared for 5 used", a.resolved)
+	}
+	a.Size(NumStandard + 7) // used again: not prepared again
+	if a.resolved != 5 {
+		t.Errorf("%d icons prepared after asking again", a.resolved)
+	}
+	if a.Source(ID(60000)) != SourceNone || a.resolved != 5 {
+		t.Error("an unknown id was prepared")
+	}
+}

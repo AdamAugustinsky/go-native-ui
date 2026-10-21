@@ -3,6 +3,8 @@
 package dock
 
 import (
+	"unsafe"
+
 	"gonativeui/app"
 	"gonativeui/internal/objc"
 	"gonativeui/platform"
@@ -17,6 +19,8 @@ const (
 var (
 	selDockTile      = objc.Sel("dockTile")
 	selSetBadgeLabel = objc.Sel("setBadgeLabel:")
+	selStringUTF8    = objc.Sel("stringWithUTF8String:")
+	selSharedApp     = objc.Sel("sharedApplication")
 	selBadgeLabel    = objc.Sel("badgeLabel")
 	selRequestAttn   = objc.Sel("requestUserAttention:")
 	selCancelAttn    = objc.Sel("cancelUserAttentionRequest:")
@@ -30,7 +34,23 @@ func nsApp() objc.ID {
 	if !platform.AppStarted() {
 		return 0
 	}
-	return objc.Send(objc.Cls("NSApplication"), objc.Sel("sharedApplication"))
+	if shared == 0 {
+		shared = objc.Cls("NSApplication")
+	}
+	return objc.Send(shared, selSharedApp)
+}
+
+// shared is the NSApplication class, once looked up.
+var shared objc.ID
+
+// badge is what SetBadge last put on the tile, so that setting the same label
+// again does nothing. Main thread only, as the calls are.
+var badge struct {
+	tile  objc.ID // NSApp.dockTile, once
+	str   objc.ID // the NSString class
+	label string
+	set   bool   // label is known
+	buf   []byte // label as a C string: the bridge copies it, the bytes stay on the heap
 }
 
 func osSetBadge(label string) error {
@@ -38,13 +58,22 @@ func osSetBadge(label string) error {
 	if a == 0 {
 		return ErrNotStarted
 	}
+	b := &badge
+	if b.set && b.label == label {
+		return nil
+	}
 	pool := objc.F.Call0(objc.PoolPush)
 	defer objc.F.Call1(objc.PoolPop, pool)
+	if b.tile == 0 {
+		b.tile, b.str = objc.Send(a, selDockTile), objc.Cls("NSString")
+	}
 	var s objc.ID // nil removes the badge
 	if label != "" {
-		s = objc.Str(label)
+		b.buf = append(append(b.buf[:0], label...), 0)
+		s = objc.Send1(b.str, selStringUTF8, uintptr(unsafe.Pointer(&b.buf[0])))
 	}
-	objc.Send1(objc.Send(a, selDockTile), selSetBadgeLabel, uintptr(s))
+	objc.Send1(b.tile, selSetBadgeLabel, uintptr(s))
+	b.label, b.set = label, true
 	return nil
 }
 
