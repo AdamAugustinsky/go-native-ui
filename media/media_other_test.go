@@ -11,6 +11,11 @@ import (
 func runLoopOnce() {}
 
 func TestUnsupported(t *testing.T) {
+	if err := LoadVideoPoster("clip.mp4", 80, func([]byte, int, int, error) {
+		t.Error("unsupported poster called done")
+	}); !errors.Is(err, errors.ErrUnsupported) {
+		t.Errorf("LoadVideoPoster = %v; want ErrUnsupported", err)
+	}
 	f := Format{48000, 1, Int16}
 	if p, err := NewPlayer(sine(f, 10*time.Millisecond, 440), f); !errors.Is(err, errors.ErrUnsupported) || p != nil {
 		t.Errorf("NewPlayer = %v, %v; want ErrUnsupported", p, err)

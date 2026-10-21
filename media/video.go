@@ -34,6 +34,6 @@ type VideoOptions struct {
 	PosterSize int
 }
 
-// ErrVideoUnsupported is returned by OpenVideo where video is not
+// ErrVideoUnsupported is returned by OpenVideo and LoadVideoPoster where video is not
 // implemented yet (Windows and Linux).
 var ErrVideoUnsupported = fmt.Errorf("media: video on %s: %w", runtime.GOOS, errors.ErrUnsupported)
