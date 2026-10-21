@@ -142,6 +142,21 @@ func newAtlas(ts TextSystem, specs []Spec) *Atlas {
 	return &Atlas{ts: ts, specs: specs, ents: make([]entry, len(specs)), pix: make([]byte, atlasW*atlasH)}
 }
 
+// Add appends icons after the existing ones and returns the ID of the first
+// (the others follow). Once Raster has run the atlas is rasterised again at
+// the same scale, which costs like a change of scale and happens once per Add:
+// call it when an icon is wanted, not every frame. The IDs already given stay
+// valid. Main thread, as Raster.
+func (a *Atlas) Add(specs ...Spec) ID {
+	first := ID(len(a.specs))
+	a.specs = append(a.specs, specs...)
+	a.ents = append(a.ents, make([]entry, len(specs))...)
+	if a.scale != 0 && len(specs) > 0 {
+		a.Raster(a.scale)
+	}
+	return first
+}
+
 // Len is the number of icons.
 func (a *Atlas) Len() int { return len(a.specs) }
 

@@ -51,6 +51,7 @@ type Kit struct {
 
 	scale  float32
 	ready  bool
+	newTh  bool // SetTheme: the next Begin resolves the new theme
 	fol    theme.Follower
 	target theme.Mode // what the follower aimed for in the last Begin
 
@@ -110,10 +111,26 @@ func NewKit(c *ui.Context, ts TextSystem, th *theme.Theme) *Kit {
 }
 
 // AddIcon adds an icon of the app's own to the kit's atlas and returns its ID
-// (the standard icons come first). Call it before the first Begin.
+// (the standard icons come first). Call it when the icon is wanted, not every
+// frame: before the first Begin it costs nothing, and after it the atlas is
+// rasterised again once (icon.Atlas.Add). Main thread.
 func (k *Kit) AddIcon(s icon.Spec) icon.ID {
 	k.extra = append(k.extra, s)
+	if k.icons != nil {
+		k.icons.Add(s)
+	}
 	return icon.NumStandard + icon.ID(len(k.extra)-1)
+}
+
+// SetTheme replaces the theme the kit resolves (the one given to NewKit):
+// the next Begin resolves th at the current scale, keeping the light/dark mix
+// the window is at, and every later scale change resolves it again. It may be
+// called before the first Begin or at any time after. The resolved theme
+// (Theme) keeps its pointer. A nil th changes nothing.
+func (k *Kit) SetTheme(th *theme.Theme) {
+	if th != nil {
+		k.th, k.newTh = th, true
+	}
 }
 
 // Theme is the resolved theme of the window: pixel metrics, fonts and the
@@ -203,7 +220,7 @@ func (k *Kit) Menu() *menu.Model { return k.menu }
 // matches the shortcuts of the menu model, claiming the keys that fire commands.
 func (k *Kit) Begin(c *ui.Context) {
 	k.c = c
-	if s := c.Scale(); !k.ready || s != k.scale {
+	if s := c.Scale(); !k.ready || s != k.scale || k.newTh {
 		k.resolve(s)
 	}
 	k.nDis, k.nOff, k.force = 0, 0, 0
@@ -232,7 +249,7 @@ func (k *Kit) Begin(c *ui.Context) {
 
 // resolve makes the theme, the fonts and the icons for scale s.
 func (k *Kit) resolve(s float32) {
-	k.scale = s
+	k.scale, k.newTh = s, false
 	mode := k.fol.Target(k.c)
 	if k.ready { // a new scale: keep the mix the window is at
 		mode = theme.Light

@@ -30,6 +30,12 @@ type ScrollState struct {
 	// controlSize): a legacy bar is 17 pt wide at SizeRegular (the default)
 	// and 13 at SizeSmall and SizeMini. Overlay bars do not change.
 	Size theme.Size
+	// HideBars says the view's bars are not drawn (the app hides them):
+	// BeginScroll, a list and a table then leave no room for legacy bars
+	// beside their content, ScrollBars reports none, and the thumbs cannot be
+	// dragged. Overlay bars never take room, hidden or not. Off by default, so
+	// a view that draws its bars keeps its layout.
+	HideBars bool
 
 	grab    float32
 	lastT   int64
@@ -88,7 +94,7 @@ func (k *Kit) BeginScroll(label string, st *ScrollState, axes ScrollAxes) Scroll
 	_, ident := ui.SplitLabel(label)
 	okey := ui.HashString(c.ParentKey(), ident)
 	k.ApplySize(ui.Pct(1), ui.Pct(1))
-	if pad := k.legacyReserve(ui.KeyN(okey, 1), axes, st.Size); pad != [2]float32{} {
+	if pad := k.legacyReserve(ui.KeyN(okey, 1), axes, st); pad != [2]float32{} {
 		c.NextPadding(0, 0, pad[0], pad[1])
 	}
 	c.NextRole(ui.RoleScrollArea)
@@ -122,15 +128,16 @@ func (k *Kit) CloseScrollContent(v *ScrollView) { k.c.Pop() }
 // CloseScroll ends the view.
 func (k *Kit) CloseScroll(v *ScrollView) { k.c.Pop() }
 
-// legacyReserve is the room legacy scroll bars of control size size take
+// legacyReserve is the room legacy scroll bars of the control size of st take
 // beside the content of the view whose inner box has key skey: the bar's
 // width on the right when the content overflows vertically (in the last
 // layout), its height at the bottom when it overflows horizontally. Overlay
-// bars take none.
-func (k *Kit) legacyReserve(skey ui.Key, axes ScrollAxes, size theme.Size) (pad [2]float32) {
-	if !k.legacyBars() {
+// bars take none, nor do the bars of a view that hides them (HideBars).
+func (k *Kit) legacyReserve(skey ui.Key, axes ScrollAxes, st *ScrollState) (pad [2]float32) {
+	if !k.legacyBars() || st.HideBars {
 		return
 	}
+	size := st.Size
 	sid, ok := k.c.BoxOf(skey)
 	if !ok {
 		return
@@ -224,7 +231,7 @@ func (k *Kit) ScrollBars(v *ScrollView) [2]ScrollBar {
 	var bars [2]ScrollBar
 	onBar := false
 	for a := 0; a < 2; a++ {
-		if !hasAxis(axes, a) {
+		if !hasAxis(axes, a) || st.HideBars {
 			continue
 		}
 		// past an edge the content is longer by the stretch, and the thumb is at that end

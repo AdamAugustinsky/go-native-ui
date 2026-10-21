@@ -59,7 +59,7 @@ func TestInputHelpers(t *testing.T) {
 		t.Fatal("queue overflow accepted")
 	}
 	in.AppendText("héllo")
-	in.AppendText(string(make([]byte, 100)))
+	in.AppendText(string(make([]byte, MaxText)))
 	if in.NText != MaxText || string(in.Text[:6]) != "héllo" {
 		t.Fatalf("text %d %q", in.NText, in.Text[:6])
 	}

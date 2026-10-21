@@ -78,7 +78,7 @@ func TestPreeditTranslation(t *testing.T) {
 // next frames, in order and cut between characters only.
 func TestTextOverflowCarries(t *testing.T) {
 	tr := newTranslator()
-	want := strings.Repeat("héllo wörld 日本語 ", 12) // ~230 bytes
+	want := strings.Repeat("héllo wörld 日本語 ", 120) // ~2300 bytes
 	tr.event(ev(platform.EvText, nil), []byte(want))
 	var got strings.Builder
 	frames := 0
@@ -102,7 +102,7 @@ func TestTextOverflowCarries(t *testing.T) {
 	}
 	// Order with a later event: the composition change waits behind the text.
 	tr = newTranslator()
-	tr.event(ev(platform.EvText, nil), []byte(strings.Repeat("x", 100)))
+	tr.event(ev(platform.EvText, nil), []byte(strings.Repeat("x", ui.MaxText+36)))
 	e, b := preedit("あ", 0, 0)
 	tr.event(e, b)
 	if tr.in.NPreedit != 0 {

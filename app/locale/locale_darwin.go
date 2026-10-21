@@ -89,8 +89,34 @@ func read() Info {
 	pat := cf.Msg(fr, cf.Cls(fr, "NSDateFormatter"), cf.Sel(fr, "dateFormatFromTemplate:options:locale:"), tmpl, 0, loc)
 	cf.CFRelease(fr, tmpl)
 	info.Hour24, _ = hour24FromPattern(cf.GoString(fr, pat))
+	if h24, forced := forcedHourCycle(fr); forced { // System Settings' 24-hour switch, read afresh: a running process's locale caches it
+		info.Hour24 = h24
+	}
 	if info.Region == "" && len(info.Languages) > 0 {
 		info.Region = regionOf(info.Languages[0])
 	}
 	return info
+}
+
+// forcedHourCycle reads the 24-hour switch of System Settings (Language &
+// Region), which it stores as AppleICUForce24HourTime and
+// AppleICUForce12HourTime in the global domain. forced is false when the user
+// has not forced either.
+func forcedHourCycle(fr *ffi.Frame) (h24, forced bool) {
+	defs := cf.Msg(fr, cf.Cls(fr, "NSUserDefaults"), cf.Sel(fr, "standardUserDefaults"))
+	if defs == 0 {
+		return false, false
+	}
+	flag := func(name string) bool {
+		key := cf.String(fr, name)
+		defer cf.CFRelease(fr, key)
+		return cf.MsgBool(fr, defs, cf.Sel(fr, "boolForKey:"), key)
+	}
+	switch {
+	case flag("AppleICUForce24HourTime"):
+		return true, true
+	case flag("AppleICUForce12HourTime"):
+		return false, true
+	}
+	return false, false
 }

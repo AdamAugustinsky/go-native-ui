@@ -91,6 +91,13 @@ const (
 	EvService = EventKind(platform.AppEvService)
 	// EvPost is an event the app posted with Post.
 	EvPost = EventKind(platform.AppEvPost)
+	// EvWindowClosed: a window has closed, whichever way (its close button,
+	// Win.Close, the app quitting); Window is its id (Win.ID). It arrives
+	// once per window, when the window is gone (its Win.Open is false), so an
+	// app need not poll Win.Open. When the app ends it arrives for each
+	// window still open just before EvWillTerminate, which stays the last
+	// event.
+	EvWindowClosed = EventKind(platform.AppEvWindowClosed)
 )
 
 // Source identifies the producer of an EvService (platform.SourceDialog,
@@ -297,6 +304,9 @@ func (a *App) deliver(pe *platform.AppEvent, data []byte) {
 	if a.handler == nil {
 		return
 	}
+	if pe.Kind == platform.AppEvWillTerminate {
+		a.announceOpenClosed()
+	}
 	d := min(a.evDepth, len(a.evs)-1)
 	a.evDepth++
 	delivering.next++
@@ -330,6 +340,19 @@ func (a *App) deliver(pe *platform.AppEvent, data []byte) {
 		w.p.invalidate()
 		if native {
 			w.Win.RequestFrame()
+		}
+	}
+}
+
+// announceOpenClosed delivers EvWindowClosed for the windows still open as
+// the app ends, the last opened first, before EvWillTerminate.
+func (a *App) announceOpenClosed() {
+	open := slices.Clone(a.wins)
+	slices.Reverse(open)
+	for _, w := range open {
+		if id := w.winID; id != 0 && w.told != id {
+			w.told = id
+			a.deliver(&platform.AppEvent{Kind: platform.AppEvWindowClosed, Window: id}, nil)
 		}
 	}
 }

@@ -61,3 +61,37 @@ func TestDarwinNotification(t *testing.T) {
 		t.Error("Current after a change has no languages")
 	}
 }
+
+// The 24-hour switch of System Settings decides the clock, read afresh by a
+// process that has already read the locale. The test registers the keys in
+// the process's own (in-memory) defaults, as the system's write them in the
+// global domain.
+func TestDarwinForcedHourCycle(t *testing.T) {
+	fr := cf.Acquire()
+	defer cf.Release(fr)
+	defer cf.Pool(fr)()
+	if _, forced := forcedHourCycle(fr); forced {
+		t.Skip("this user forces the hour cycle in System Settings")
+	}
+	defs := cf.Msg(fr, cf.Cls(fr, "NSUserDefaults"), cf.Sel(fr, "standardUserDefaults"))
+	register := func(key string, on bool) {
+		yes := uintptr(0)
+		if on {
+			yes = 1
+		}
+		d := cf.Dict(fr)
+		k := cf.String(fr, key)
+		cf.DictSet(fr, d, k, cf.Msg(fr, cf.Cls(fr, "NSNumber"), cf.Sel(fr, "numberWithBool:"), yes))
+		cf.Msg(fr, defs, cf.Sel(fr, "registerDefaults:"), d)
+	}
+	Current() // the process has read the locale before the setting changes
+	register("AppleICUForce12HourTime", true)
+	if got := read(); got.Hour24 {
+		t.Errorf("12-hour clock forced: Hour24 = true")
+	}
+	register("AppleICUForce12HourTime", false)
+	register("AppleICUForce24HourTime", true)
+	if got := read(); !got.Hour24 {
+		t.Errorf("24-hour clock forced: Hour24 = false")
+	}
+}

@@ -36,6 +36,11 @@ type AvatarOpts struct {
 	// Color is the initials' backdrop; the zero Tint takes one of
 	// AvatarLook.Palette by a hash of the name, so a person keeps their colour.
 	Color Tint
+	// Pressable makes the avatar a button: it takes the keyboard focus (with
+	// the focus ring), clicks, Enter and Space activate it, and its role is
+	// RoleButton. Read the press with k.SignalOf(id).Clicked on the ID Avatar
+	// returns. An avatar of AvatarStack is never pressable.
+	Pressable bool
 	// Presence is the dot at the bottom right corner.
 	Presence AvatarPresence
 	// Backdrop is the colour the dot's ring and a stack's overlaps are cut
@@ -116,7 +121,8 @@ func hashName(name string) uint32 {
 // as a circle, or their initials on a colour until it is ready (and if it
 // never is), with an optional presence dot. It is a square of Size points
 // (the kit's NextSize replaces it, and the circle follows the smaller side).
-// The name is the accessible name.
+// The name is the accessible name. With Pressable it is a button, and the
+// press is k.SignalOf(id).Clicked.
 //
 //	rexui.Avatar(k, "Ada Lovelace", rexui.AvatarOpts{Image: v.photo[row], Presence: rexui.PresenceOnline})
 func Avatar(k *base.Kit, name string, o AvatarOpts) ui.ID {
@@ -130,13 +136,19 @@ func Avatar(k *base.Kit, name string, o AvatarOpts) ui.ID {
 	side := pt(sc, size)
 	key := ui.HashString(c.ParentKey(), "avatar") // avatars of one parent are told apart by their order
 	k.ApplySize(ui.Px(side), ui.Px(side))
-	c.NextRole(ui.RoleImage)
+	role, flags := ui.RoleImage, disabledFlag(k)
+	var vis base.Visual
+	if o.Pressable {
+		role, flags = ui.RoleButton, k.InteractFlags(base.HoverOff)
+		vis = k.VisualOf(key, base.HoverOff)
+	}
+	c.NextRole(role)
 	c.NextSemName(name)
 	if o.Presence != PresenceNone && o.Presence < numPresence {
 		c.NextSemValueBytes(base.StrBytes([...]string{"", "Online", "Away", "Busy"}[o.Presence]))
 	}
 	c.NextAuditExempt(ui.AuditOverflow.Mask() | ui.AuditCovered.Mask()) // the ring and the cut lie over their neighbour on purpose // the presence dot sits on the corner
-	id := c.BoxKeyed(disabledFlag(k), key, nil)
+	id := c.BoxKeyed(flags, key, nil)
 	c.Push(id)
 	if o.Image != 0 && k.ImageState(o.Image) == img.Ready {
 		k.NextSize(ui.Px(side), ui.Px(side))
@@ -146,6 +158,9 @@ func Avatar(k *base.Kit, name string, o AvatarOpts) ui.ID {
 	}
 	if o.Presence != PresenceNone && o.Presence < numPresence {
 		avatarDot(k, key, side, &o)
+	}
+	if o.Pressable {
+		k.FocusRing(id, vis, side/2)
 	}
 	c.Pop()
 	return id
