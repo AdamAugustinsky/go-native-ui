@@ -253,6 +253,28 @@ func TestPrimaryProcessReceivesFromThisOne(t *testing.T) {
 	}
 }
 
+// Options.Notify runs when a second process's request has been accepted, with
+// the request already there to poll: the app can post an event from it.
+func TestNotifyOnRequestFromSecondProcess(t *testing.T) {
+	dir := newDir(t)
+	notified := make(chan int, 4)
+	var pp atomic.Pointer[Primary]
+	p, _ := acquire(t, dir, Options{Notify: func() { notified <- len(pp.Load().Poll(nil)) }})
+	pp.Store(p)
+	c := startChild(t, "send", dir, "open", "x")
+	if line := c.line(t); line != "sent" {
+		t.Fatalf("helper said %q", line)
+	}
+	select {
+	case n := <-notified:
+		if n != 1 {
+			t.Errorf("the request was not stored when Notify ran: %d polled", n)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Notify was not called")
+	}
+}
+
 func TestBusyAndRejectedRequestsAreNeverSeen(t *testing.T) {
 	dir := newDir(t)
 	p, _ := acquire(t, dir, Options{Queue: 2, Timeout: 300 * time.Millisecond})

@@ -40,7 +40,9 @@
 //
 // Until the application object (F3) exists, the primary collects requests with
 // Poll, and each accepted request calls platform.Wake so that an idle loop
-// notices. Serial counts accepted requests. With F3 the ring is the "outside
+// notices, and Options.Notify (when set) is called, so that an app can post an
+// event of its own (app.Post) and have its handler run with no window open.
+// Serial counts accepted requests. With F3 the ring is the "outside
 // requests" class (D37 class 3), accepted into the same reserved ring and
 // delivered as an event; Poll stays as the poll form.
 //
@@ -164,6 +166,12 @@ type Options struct {
 	// 0 means 2 s; more than 15 s is taken as 15 s (the primary remembers a
 	// request's ID for 30).
 	Timeout time.Duration
+	// Notify, when not nil, is called on the goroutine that accepted a request,
+	// right after it is stored, with no window needed. Use it to bring the
+	// request to the app's handler at once instead of polling: the usual body is
+	// app.Post of an event of the app's own, and the handler then calls Poll.
+	// It must not block, and may run on several goroutines at once.
+	Notify func()
 }
 
 // Request is one accepted request from a secondary instance.
@@ -266,7 +274,7 @@ func AcquireWith(id string, o Options) (*Primary, *Secondary, error) {
 		lk.release()
 		return nil, nil, fmt.Errorf("instance: listening on %s: %w", addr, err)
 	}
-	p := &Primary{ln: ln, lk: lk, addr: addr, ring: make([]Request, 0, o.Queue), limit: o.Queue,
+	p := &Primary{ln: ln, lk: lk, addr: addr, notify: o.Notify, ring: make([]Request, 0, o.Queue), limit: o.Queue,
 		seen: make(map[string]*seenEntry, dedupSize)}
 	p.wg.Add(1)
 	go p.serve()
@@ -278,6 +286,8 @@ type Primary struct {
 	ln   listener
 	lk   lock
 	addr string
+	// notify is Options.Notify.
+	notify func()
 
 	mu     sync.Mutex
 	ring   []Request    // accepted, not yet polled; never grows past limit
@@ -412,6 +422,9 @@ func (p *Primary) offer(id string, r Request) byte {
 	p.mu.Unlock()
 	p.serial.Add(1)
 	wake()
+	if p.notify != nil {
+		p.notify()
+	}
 	return replyAccepted
 }
 

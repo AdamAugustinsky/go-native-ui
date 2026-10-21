@@ -3,6 +3,7 @@ package rexui_test
 import (
 	"encoding/json"
 	"math"
+	"strings"
 	"testing"
 
 	"gonativeui/gpu"
@@ -387,5 +388,68 @@ func TestFormRowDetailLine(t *testing.T) {
 	}
 	if dr.H >= l.H {
 		t.Errorf("the detail line (%v pt) is not smaller than the label's (%v pt)", dr.H, l.H)
+	}
+}
+
+// A Detail wraps to the width the row's controls leave, up to MaxLines lines
+// (3 by default), and the row grows with the lines. Building the rows once
+// warm allocates nothing.
+func TestFormRowDetailWraps(t *testing.T) {
+	const words = "keeps this device awake while it is plugged in, so that downloads, backups and syncing carry on when the display is off and nobody is using it. "
+	long := func(n string) string { return n + " " + words + words + words }
+	one, two, def := long("one"), long("two"), long("default")
+	var on bool
+	var form rexui.Form
+	var rows [3]ui.ID
+	g := newRig(t, theme.Light, nil, func(g *rig) {
+		k := g.k
+		k.NextPad(14)
+		k.Column("col")
+		k.NextWidth(k.Fixed(360))
+		form = rexui.BeginForm(k, "form", rexui.FormOpts{})
+		form.Section(k, "")
+		rows[0] = form.Row(k, "One", rexui.RowOpts{Detail: one, MaxLines: 1})
+		rexui.Switch(k, "", &on, rexui.SwitchOpts{})
+		form.EndRow(k)
+		rows[1] = form.Row(k, "Two", rexui.RowOpts{Detail: two, MaxLines: 2})
+		rexui.Switch(k, "", &on, rexui.SwitchOpts{})
+		form.EndRow(k)
+		rows[2] = form.Row(k, "Default", rexui.RowOpts{Detail: def})
+		rexui.Switch(k, "", &on, rexui.SwitchOpts{})
+		form.EndRow(k)
+		rexui.EndForm(k, &form)
+		k.EndColumn()
+	})
+	g.settle()
+	detail := func(name string) [4]float32 {
+		g.c.Semantics(&g.sem)
+		for _, n := range g.sem.Nodes {
+			if n.Role == ui.RoleLabel && strings.HasPrefix(string(g.sem.Text(n.Name)), name) {
+				return n.Bounds
+			}
+		}
+		t.Fatalf("no label starting %q", name)
+		return [4]float32{}
+	}
+	h := func(name string) float32 { b := detail(name); return (b[3] - b[1]) / g.scale }
+	h1, h2, h3 := h("one "), h("two "), h("default ")
+	if !(h1 > 0 && math.Abs(float64(h2-2*h1)) < 2 && math.Abs(float64(h3-3*h1)) < 3) {
+		t.Errorf("detail heights for 1, 2 and the default lines: %.1f, %.1f, %.1f pt", h1, h2, h3)
+	}
+	for i, name := range []string{"one ", "two ", "default "} {
+		d, r := detail(name), g.c.Rect(rows[i])
+		if d[3] > r[3] || d[1] < r[1] {
+			t.Errorf("row %d: detail %v is not inside the row %v", i, d, r)
+		}
+	}
+	sw := g.node(ui.RoleSwitch, "One")
+	if d := detail("one "); d[2] > sw.Bounds[0] {
+		t.Errorf("the detail reaches %v, over the switch at %v", d[2], sw.Bounds[0])
+	}
+	if r1, r3 := g.c.Rect(rows[0]), g.c.Rect(rows[2]); r3[3]-r3[1] <= r1[3]-r1[1] {
+		t.Errorf("the 3-line row (%v) is not taller than the 1-line row (%v)", r3[3]-r3[1], r1[3]-r1[1])
+	}
+	if n := testing.AllocsPerRun(50, g.frame); n != 0 {
+		t.Errorf("rows with a wrapping detail allocate %v per frame", n)
 	}
 }

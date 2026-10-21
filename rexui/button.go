@@ -147,7 +147,8 @@ var ButtonRecipes = [NumButtonVariants]ButtonRecipe{
 // (Clicked on a click, Enter or Space with the focus, or an accessibility
 // press). The label follows ui's rules ("Name###id" shows Name). It is as
 // wide as its label and the size's padding unless the kit's NextSize says
-// otherwise.
+// otherwise. A row of buttons that wraps onto further lines is buttons built
+// between k.Context().BeginFlow and EndFlow (ui.FlowOpts sets the gaps).
 //
 //	if rexui.Button(k, "Save", rexui.ButtonOpts{Variant: rexui.ButtonPrimary}).Clicked {
 //		save()

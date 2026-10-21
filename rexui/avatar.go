@@ -27,6 +27,10 @@ const (
 
 // AvatarOpts are an avatar's options, passed by value.
 type AvatarOpts struct {
+	// Label, when not empty, is the accessible name in place of the name
+	// Avatar was given ("Ada Lovelace, online, 3 unread"); the name still
+	// makes the initials and the colour.
+	Label string
 	// Size is the side in points (0: AvatarLook.Size, 36).
 	Size float32
 	// Image is the picture (an img.Handle from the kit's image cache, see
@@ -121,7 +125,7 @@ func hashName(name string) uint32 {
 // as a circle, or their initials on a colour until it is ready (and if it
 // never is), with an optional presence dot. It is a square of Size points
 // (the kit's NextSize replaces it, and the circle follows the smaller side).
-// The name is the accessible name. With Pressable it is a button, and the
+// The name is the accessible name unless AvatarOpts.Label is set. With Pressable it is a button, and the
 // press is k.SignalOf(id).Clicked.
 //
 //	rexui.Avatar(k, "Ada Lovelace", rexui.AvatarOpts{Image: v.photo[row], Presence: rexui.PresenceOnline})
@@ -143,7 +147,11 @@ func Avatar(k *base.Kit, name string, o AvatarOpts) ui.ID {
 		vis = k.VisualOf(key, base.HoverOff)
 	}
 	c.NextRole(role)
-	c.NextSemName(name)
+	if o.Label != "" {
+		c.NextSemName(o.Label)
+	} else {
+		c.NextSemName(name)
+	}
 	if o.Presence != PresenceNone && o.Presence < numPresence {
 		c.NextSemValueBytes(base.StrBytes([...]string{"", "Online", "Away", "Busy"}[o.Presence]))
 	}

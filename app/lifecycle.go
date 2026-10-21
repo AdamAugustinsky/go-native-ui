@@ -356,6 +356,12 @@ func (a *App) renew() {
 	a.dlgT, a.dragT = old.dlgT, old.dragT
 }
 
+// SetKeepRunning changes AppConfig.KeepRunning while the app runs: from now on
+// the app does (true) or does not (false) keep running when its last window
+// closes. It does not end an app that has no window open at the time. Call it
+// on the main thread, from the Handler or a window's Build or event method.
+func (a *App) SetKeepRunning(keep bool) { a.appCfg.KeepRunning = keep }
+
 // closeRequested is the window's close button (EvClose): its CloseRequester
 // may refuse; the window closes at the next safe point, and the app ends
 // with its last window unless it keeps running.
