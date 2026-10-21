@@ -354,6 +354,18 @@ func (u *winUploader) Upload(t gpu.TextureID, x, y, w, h int, pixels []byte, str
 	u.r.Upload(t, x, y, w, h, pixels, stride)
 }
 
+// FreeTexture frees a texture the window made, for an icon atlas that grew
+// into a new one.
+func (u *winUploader) FreeTexture(t gpu.TextureID) {
+	u.r.FreeTexture(t)
+	for i, m := range u.made {
+		if m == t {
+			u.made = append(u.made[:i], u.made[i+1:]...)
+			break
+		}
+	}
+}
+
 // free frees the window's textures (the frames in flight that sample them
 // keep them until they finish: Renderer.FreeTexture).
 func (u *winUploader) free() {

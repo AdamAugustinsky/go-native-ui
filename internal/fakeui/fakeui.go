@@ -137,3 +137,4 @@ func (u *Uploader) NewTexture(kind gpu.TextureKind, w, h int) gpu.TextureID {
 	return gpu.TextureID(u.n)
 }
 func (u *Uploader) Upload(t gpu.TextureID, x, y, w, h int, pixels []byte, stride int) {}
+func (u *Uploader) FreeTexture(t gpu.TextureID)                                       {}

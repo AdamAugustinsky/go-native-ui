@@ -35,8 +35,8 @@ func TestJPEGOrientations(t *testing.T) {
 	base := encJPEG(t, quadrants(64, 32), 95)
 	for o := 1; o <= 8; o++ {
 		data := withOrientation(base, o)
-		if got := exifOrientation(data); got != o {
-			t.Fatalf("exifOrientation = %d, want %d", got, o)
+		if got := Orientation(data); got != o {
+			t.Fatalf("Orientation = %d, want %d", got, o)
 		}
 		ow, oh := 64, 32
 		if o >= 5 {

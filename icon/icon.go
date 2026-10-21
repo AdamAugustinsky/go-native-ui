@@ -42,6 +42,7 @@
 package icon
 
 import (
+	"log"
 	"math"
 
 	"gonativeui/gpu"
@@ -99,10 +100,21 @@ type TextSystem interface {
 
 var _ TextSystem = (*text.System)(nil)
 
+// The atlas starts at atlasW×atlasH texels and grows when it fills: see
+// Atlas.grow.
 const (
 	atlasW = 512
 	atlasH = 256
 )
+
+// maxAtlas is the largest side the atlas grows to, in texels: a size every
+// GPU the renderers target creates (Metal, Direct3D 11 and OpenGL all go
+// beyond it). A variable so that a test can reach it.
+var maxAtlas = 4096
+
+// freer is what an Uploader may also offer: freeing a texture. An atlas that
+// grows makes a new texture and frees the old one if its uploader can.
+type freer interface{ FreeTexture(gpu.TextureID) }
 
 // entry is one icon's resolved source and size.
 type entry struct {
@@ -127,9 +139,16 @@ type Atlas struct {
 	family  string // the symbol font in use, "" if none
 	checked bool   // family has been looked for
 
-	pix []byte // atlas, R8
-	tex gpu.TextureID
-	up  ui.Uploader
+	pix  []byte // atlas, R8, w×h
+	w, h int    // its size in texels: it grows (grow)
+	// the shelf the next symbol goes on: its start, its top, the tallest
+	// symbol on it
+	cx, cy, rowH int
+	dirty        [4]int // what the texture lacks: x0, y0, x1, y1 (empty if x1 <= x0)
+	warned       bool   // an overflow has been logged
+	tex          gpu.TextureID
+	texW, texH   int // the size of tex
+	up           ui.Uploader
 }
 
 // New returns an Atlas of the standard icons followed by extra; Raster
@@ -139,20 +158,25 @@ func New(ts TextSystem, extra ...Spec) *Atlas {
 }
 
 func newAtlas(ts TextSystem, specs []Spec) *Atlas {
-	return &Atlas{ts: ts, specs: specs, ents: make([]entry, len(specs)), pix: make([]byte, atlasW*atlasH)}
+	return &Atlas{ts: ts, specs: specs, ents: make([]entry, len(specs)), pix: make([]byte, atlasW*atlasH), w: atlasW, h: atlasH}
 }
 
 // Add appends icons after the existing ones and returns the ID of the first
-// (the others follow). Once Raster has run the atlas is rasterised again at
-// the same scale, which costs like a change of scale and happens once per Add:
-// call it when an icon is wanted, not every frame. The IDs already given stay
-// valid. Main thread, as Raster.
+// (the others follow). Once Raster has run the new icons are rasterised at the
+// same scale and added to the atlas (the icons already there keep their place
+// unless the atlas has to grow, and then only its texture changes); the
+// atlas is uploaded again. Call it when an icon is wanted, not every frame:
+// a box built earlier in the frame that grew the atlas shows nothing until
+// the next frame. The IDs already given stay valid. Main thread, as Raster.
 func (a *Atlas) Add(specs ...Spec) ID {
 	first := ID(len(a.specs))
 	a.specs = append(a.specs, specs...)
 	a.ents = append(a.ents, make([]entry, len(specs))...)
 	if a.scale != 0 && len(specs) > 0 {
-		a.Raster(a.scale)
+		for i := int(first); i < len(a.specs); i++ {
+			a.rasterOne(i)
+		}
+		a.upload()
 	}
 	return first
 }
@@ -195,45 +219,121 @@ func (a *Atlas) Raster(scale float32) {
 		a.family, a.checked = a.findFamily(symbolFamilies), true
 	}
 	a.scale = scale
-	clear(a.pix)
-	x, y, rowH := 0, 0, 0
-	for i, sp := range a.specs {
-		e := &a.ents[i]
-		*e = entry{}
-		if sp.Symbol != "" {
-			pix, w, h, ok := rasterSymbol(sp.Symbol, float64(sp.Pt)*float64(scale), float64(sp.Weight), sp.Scale)
-			// Shelf-pack with a 1 px gutter.
-			if ok && w <= atlasW && h <= atlasH {
-				if x+w > atlasW {
-					x, y, rowH = 0, y+rowH+1, 0
-				}
-				if y+h <= atlasH {
-					for r := 0; r < h; r++ {
-						copy(a.pix[(y+r)*atlasW+x:(y+r)*atlasW+x+w], pix[r*w:(r+1)*w])
-					}
-					*e = entry{src: SourceImage, w: float32(w), h: float32(h), x: x, y: y, iw: w, ih: h}
-					// measured at the point size, as AppKit lays out
-					// (its sizes are whole or half points there), then scaled
-					if aw, _, ok := symbolWidths(sp.Symbol, float64(sp.Pt), float64(sp.Weight), sp.Scale); ok {
-						e.aw = float32(aw) * scale
-					}
-					if _, mw, ok := symbolWidths(sp.Symbol, float64(sp.Pt), float64(sp.Weight), ScaleMedium); ok {
-						e.mw = float32(mw) * scale
-					}
-					x += w + 1
-					rowH = max(rowH, h)
-					continue
-				}
-			}
-		}
-		if sp.Segoe != 0 && a.family != "" && a.textEntry(e, SourceSymbolFont, a.family, sp.Segoe, sp.Pt*scaleFactor(sp.Scale)) {
-			continue
-		}
-		if sp.Fallback != 0 {
-			a.textEntry(e, SourceFallback, "", sp.Fallback, sp.Pt*scaleFactor(sp.Scale))
-		}
+	a.reset()
+	for i := range a.specs {
+		a.rasterOne(i)
 	}
 	a.upload()
+}
+
+// reset empties the atlas at its initial size, for a new scale.
+func (a *Atlas) reset() {
+	if len(a.pix) == atlasW*atlasH {
+		clear(a.pix)
+	} else {
+		a.pix = make([]byte, atlasW*atlasH)
+	}
+	a.w, a.h = atlasW, atlasH
+	a.cx, a.cy, a.rowH = 0, 0, 0
+	a.dirty = [4]int{0, 0, a.w, a.h}
+}
+
+// rasterOne resolves icon i at the current scale: a symbol goes in the atlas
+// (which grows to hold it), a text icon gets its font.
+func (a *Atlas) rasterOne(i int) {
+	sp := a.specs[i]
+	scale := a.scale
+	e := &a.ents[i]
+	*e = entry{}
+	if sp.Symbol != "" {
+		if pix, w, h, ok := rasterSymbol(sp.Symbol, float64(sp.Pt)*float64(scale), float64(sp.Weight), sp.Scale); ok {
+			if x, y, fit := a.place(w, h); fit {
+				for r := 0; r < h; r++ {
+					copy(a.pix[(y+r)*a.w+x:(y+r)*a.w+x+w], pix[r*w:(r+1)*w])
+				}
+				a.markDirty(x, y, w, h)
+				*e = entry{src: SourceImage, w: float32(w), h: float32(h), x: x, y: y, iw: w, ih: h}
+				// measured at the point size, as AppKit lays out
+				// (its sizes are whole or half points there), then scaled
+				if aw, _, ok := symbolWidths(sp.Symbol, float64(sp.Pt), float64(sp.Weight), sp.Scale); ok {
+					e.aw = float32(aw) * scale
+				}
+				if _, mw, ok := symbolWidths(sp.Symbol, float64(sp.Pt), float64(sp.Weight), ScaleMedium); ok {
+					e.mw = float32(mw) * scale
+				}
+				return
+			}
+			if !a.warned {
+				a.warned = true
+				log.Printf("icon: the atlas is full at %d×%d texels: symbol %q (%d×%d) and any that follow fall back to text", a.w, a.h, sp.Symbol, w, h)
+			}
+		}
+	}
+	if sp.Segoe != 0 && a.family != "" && a.textEntry(e, SourceSymbolFont, a.family, sp.Segoe, sp.Pt*scaleFactor(sp.Scale)) {
+		return
+	}
+	if sp.Fallback != 0 {
+		a.textEntry(e, SourceFallback, "", sp.Fallback, sp.Pt*scaleFactor(sp.Scale))
+	}
+}
+
+// place finds room for a w×h symbol with a 1 px gutter, growing the atlas
+// while there is none and it can. The symbols already placed never move.
+func (a *Atlas) place(w, h int) (x, y int, ok bool) {
+	for {
+		x, y = a.cx, a.cy
+		if x > 0 && x+w > a.w { // the next shelf
+			x, y = 0, y+a.rowH+1
+		}
+		if x+w <= a.w && y+h <= a.h {
+			if y != a.cy {
+				a.rowH = 0
+			}
+			a.cx, a.cy, a.rowH = x+w+1, y, max(a.rowH, h)
+			return x, y, true
+		}
+		if !a.grow() {
+			return 0, 0, false
+		}
+	}
+}
+
+// grow doubles the atlas, its height first and then its width, up to maxAtlas,
+// and reports whether it could. The pixels keep their coordinates, so the icons
+// already in it keep their texel rectangles; the texture is made anew by
+// upload.
+func (a *Atlas) grow() bool {
+	nw, nh := a.w, a.h
+	if a.h < a.w {
+		nh *= 2
+	} else {
+		nw *= 2
+	}
+	if nw > maxAtlas || nh > maxAtlas {
+		return false
+	}
+	if nw == a.w {
+		a.pix = append(a.pix, make([]byte, a.w*(nh-a.h))...)
+	} else {
+		pix := make([]byte, nw*nh)
+		for r := 0; r < a.h; r++ {
+			copy(pix[r*nw:], a.pix[r*a.w:(r+1)*a.w])
+		}
+		a.pix = pix
+	}
+	a.w, a.h = nw, nh
+	a.dirty = [4]int{0, 0, nw, nh}
+	return true
+}
+
+// markDirty adds a rectangle to what the texture lacks.
+func (a *Atlas) markDirty(x, y, w, h int) {
+	d := &a.dirty
+	if d[2] <= d[0] {
+		*d = [4]int{x, y, x + w, y + h}
+		return
+	}
+	d[0], d[1], d[2], d[3] = min(d[0], x), min(d[1], y), max(d[2], x+w), max(d[3], y+h)
 }
 
 // textEntry makes e the glyph r set in family (the system UI font if empty),
@@ -265,6 +365,7 @@ func (a *Atlas) Attach(u ui.Uploader) {
 		return
 	}
 	a.up, a.tex = u, 0
+	a.dirty = [4]int{0, 0, a.w, a.h}
 	a.upload()
 }
 
@@ -272,10 +373,20 @@ func (a *Atlas) upload() {
 	if a.up == nil {
 		return
 	}
-	if a.tex == 0 {
-		a.tex = a.up.NewTexture(gpu.TexR8, atlasW, atlasH)
+	if a.tex == 0 || a.texW != a.w || a.texH != a.h { // a texture of the atlas's size
+		if f, ok := a.up.(freer); ok && a.tex != 0 {
+			f.FreeTexture(a.tex)
+		}
+		a.tex = a.up.NewTexture(gpu.TexR8, a.w, a.h)
+		a.texW, a.texH = a.w, a.h
+		a.dirty = [4]int{0, 0, a.w, a.h}
 	}
-	a.up.Upload(a.tex, 0, 0, atlasW, atlasH, a.pix, atlasW)
+	d := a.dirty
+	if d[2] <= d[0] || d[3] <= d[1] {
+		return
+	}
+	a.up.Upload(a.tex, d[0], d[1], d[2]-d[0], d[3]-d[1], a.pix[d[1]*a.w+d[0]:], a.w)
+	a.dirty = [4]int{}
 }
 
 // Source says what icon id is drawn from (SourceNone for an unknown id).

@@ -58,7 +58,7 @@ func (w *worker) decode(c *Cache, j *job, data []byte) result {
 	orient := 1
 	switch format {
 	case "jpeg":
-		orient = exifOrientation(data)
+		orient = Orientation(data)
 	case "gif":
 		frames, delay = gifFrames(data)
 		m = onCanvas(m, cfg.Width, cfg.Height, data)

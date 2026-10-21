@@ -27,7 +27,7 @@ func stdDecode(t *testing.T, data []byte, w, h int32, flags Flags) decoded {
 	}
 	orient := 1
 	if format == "jpeg" {
-		orient = exifOrientation(data)
+		orient = Orientation(data)
 	}
 	src := image.NewRGBA(m.Bounds())
 	draw.Draw(src, src.Rect, m, m.Bounds().Min, draw.Src)
