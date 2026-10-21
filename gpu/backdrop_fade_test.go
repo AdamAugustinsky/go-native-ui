@@ -84,8 +84,9 @@ func TestBackdropFade(t *testing.T) {
 		{"hard", Backdrop{Sigma: 12, Down: 4, Tint: 0xFFFFFFFF, Mix: 0.8245, Saturation: 1, Add: 0.03}},
 	} {
 		for _, edge := range []FadeEdge{FadeBottom, FadeTop} {
+			// no subtests: the renderer belongs to this goroutine's thread
 			name := fmt.Sprintf("%s, %s", c.name, map[FadeEdge]string{FadeBottom: "bottom", FadeTop: "top"}[edge])
-			t.Run(name, func(t *testing.T) {
+			func() {
 				b := c.b
 				b.Fade, b.FadeEdge = fade, edge
 				// the region: rows 10..110 (bottom) or 10..110 (top), the
@@ -107,12 +108,12 @@ func TestBackdropFade(t *testing.T) {
 					return 1 - rowSpread(m, y, 0, w)/rowSpread(under, y, 0, w)
 				}
 				if !r.Backdrops() {
-					fallbackFade(t, m, under, row, fade)
+					fallbackFade(t, name, m, under, row, fade)
 					return
 				}
 				full := strength(row(0))
 				if full < 0.9 {
-					t.Errorf("the full recipe takes %.3f of the contrast, want at least 0.9", full)
+					t.Errorf("%s: the full recipe takes %.3f of the contrast, want at least 0.9", name, full)
 				}
 				prev, worst, at := full, 0.0, 0
 				var prof []string
@@ -120,10 +121,10 @@ func TestBackdropFade(t *testing.T) {
 					y := row(i)
 					s := strength(y)
 					if i < 100-fade && math.Abs(s-full) > 0.02 {
-						t.Errorf("row %d, before the fade: strength %.3f, want %.3f", y, s, full)
+						t.Errorf("%s, row %d, before the fade: strength %.3f, want %.3f", name, y, s, full)
 					}
 					if s > prev+0.005 {
-						t.Errorf("row %d: strength rises from %.3f to %.3f", y, prev, s)
+						t.Errorf("%s, row %d: strength rises from %.3f to %.3f", name, y, prev, s)
 					}
 					if d := prev - s; d > worst {
 						worst, at = d, y
@@ -135,18 +136,18 @@ func TestBackdropFade(t *testing.T) {
 				}
 				t.Logf("%s: strength every 4 rows %v; the largest step %.4f at row %d (limit %.4f)", name, prof, worst, at, 4.5/fade)
 				if worst > 4.5/fade {
-					t.Errorf("the strength falls by %.4f at row %d, want at most %.4f a row", worst, at, 4.5/fade)
+					t.Errorf("%s: the strength falls by %.4f at row %d, want at most %.4f a row", name, worst, at, 4.5/fade)
 				}
 				for i := 99; i < 110; i++ { // the faded edge and beyond it
 					y := row(i)
 					for x := 0; x < w; x++ {
-						near(t, fmt.Sprintf("at the faded edge (%d, %d)", x, y), m.at(x, y), under.at(x, y), 1)
+						near(t, fmt.Sprintf("%s, at the faded edge (%d, %d)", name, x, y), m.at(x, y), under.at(x, y), 1)
 					}
 				}
 				if n := testing.AllocsPerRun(10, func() { r.RenderToRGBA(w, h, black, list, m.pix) }); n != 0 {
-					t.Errorf("%.1f allocations per frame with a fading backdrop", n)
+					t.Errorf("%s: %.1f allocations per frame with a fading backdrop", name, n)
 				}
-			})
+			}()
 		}
 	}
 }
@@ -156,7 +157,7 @@ func TestBackdropFade(t *testing.T) {
 // the fade (row(0) .. row(100-fade-1)), the content at the faded edge
 // (row(99)) and beyond, and the colour's share falling monotonically
 // between.
-func fallbackFade(t *testing.T, m, under img, row func(int) int, fade int) {
+func fallbackFade(t *testing.T, name string, m, under img, row func(int) int, fade int) {
 	t.Helper()
 	share := func(y int) float64 { // the fallback's share of a white cell's pixel
 		for x := 0; x < m.w; x++ {
@@ -171,13 +172,13 @@ func fallbackFade(t *testing.T, m, under img, row func(int) int, fade int) {
 		y := row(i)
 		s := share(y)
 		if i < 100-fade && s < 0.995 {
-			t.Errorf("row %d, before the fade: the fallback's share %.3f, want 1", y, s)
+			t.Errorf("%s, row %d, before the fade: the fallback's share %.3f, want 1", name, y, s)
 		}
 		if i >= 99 && s > 0.005 {
-			t.Errorf("row %d, at the faded edge or beyond: the fallback's share %.3f, want 0", y, s)
+			t.Errorf("%s, row %d, at the faded edge or beyond: the fallback's share %.3f, want 0", name, y, s)
 		}
 		if s > prev+0.005 {
-			t.Errorf("row %d: the fallback's share rises from %.3f to %.3f", y, prev, s)
+			t.Errorf("%s, row %d: the fallback's share rises from %.3f to %.3f", name, y, prev, s)
 		}
 		prev = s
 	}

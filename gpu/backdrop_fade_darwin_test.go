@@ -45,7 +45,7 @@ func TestBackdropFadeFallback(t *testing.T) {
 			}
 			return 10 + i
 		}
-		fallbackFade(t, draw(list), under, row, fade)
+		fallbackFade(t, map[FadeEdge]string{FadeBottom: "bottom", FadeTop: "top"}[edge], draw(list), under, row, fade)
 	}
 	// over nothing, with a Base: Over(Base) fades out into the clear colour
 	b := Backdrop{Sigma: 12, Down: 2, Tint: 0x808080FF, Mix: 1, Saturation: 1, Base: 0x808080FF, Fade: fade}
