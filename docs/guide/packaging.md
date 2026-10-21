@@ -185,6 +185,39 @@ What is in the result:
 - **A verified signature.** `gnui package` runs `codesign --verify --deep --strict`
   and fails if it does not pass.
 
+### Keep diagnostics out of release builds
+
+Keep diagnostics in a dev-only file; release builds drop them. The notes example
+keeps its existing flags, offscreen PNG export, JSON measurements and benchmarks
+in `diag_dev.go`, headed by `//go:build !gnui_release`. Its `main_release.go` has the
+opposite constraint, `//go:build gnui_release`, and starts the same app directly:
+
+```go examples/notes/main_release.go
+func main() {
+	n, err := notes.New()
+	if err == nil {
+		err = app.Run(notes.Config(), n)
+	}
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "notes:", err)
+		os.Exit(1)
+	}
+}
+```
+
+For an app whose model lives in `main.go`, images and richtext show the same
+boundary with a small `run` function: `diag_dev.go` parses the flags, while
+`diag_release.go` only runs the window. Keep diagnostic imports on the dev side
+too, so `flag`, JSON reporting and unused export code cannot enlarge the shipped
+binary. An app that needs JSON for real work should of course keep it.
+
+Use a plain `go build` or `gnui run` for all the documented diagnostic flags.
+`gnui package`, or `go build -tags gnui_release -trimpath -ldflags="-s -w"`,
+selects the release path, without those flags. Build the package, not an
+individual `.go` file, so Go selects the matching entrypoint.
+
+### Signing identity
+
 The identity is, in this order: `-identity` (a name, a part of one that matches
 exactly one identity, a SHA-1, or `-` for ad-hoc), `$GNUI_SIGN_IDENTITY`, a valid
 "Developer ID Application" identity from your keychains, and ad-hoc. `-dev-cert`

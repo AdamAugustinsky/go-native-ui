@@ -42,7 +42,7 @@ which stops the workers and frees the textures:
 
 ```go examples/images/main.go
 		g := newGallery()
-		err = app.Run(cfg, g)
+err := app.Run(cfg, g)
 		g.cache.Close(time.Second) // after the window: stops the workers and frees the textures
 ```
 

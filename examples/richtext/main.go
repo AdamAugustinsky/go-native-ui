@@ -8,10 +8,7 @@
 package main
 
 import (
-	"bytes"
-	"flag"
 	"fmt"
-	"image/png"
 	"os"
 	"strings"
 
@@ -158,34 +155,10 @@ func tagName(tag uint32) string {
 }
 
 func main() {
-	out := flag.String("o", "", "render the window offscreen into this PNG and exit")
-	flag.Parse()
 	cfg := app.Config{Title: "Rich text", Width: 680, Height: 300, MinWidth: 360, MinHeight: 260, Clear: [4]float32{1, 1, 1, 1}}
-	var err error
-	if *out != "" {
-		err = render(cfg, *out)
-	} else {
-		err = app.Run(cfg, newDoc())
-	}
+	err := run(cfg)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "richtext:", err)
 		os.Exit(1)
 	}
-}
-
-func render(cfg app.Config, path string) error {
-	o, err := app.NewOffscreen(cfg, int(cfg.Width)*2, int(cfg.Height)*2, 2, newDoc())
-	if err != nil {
-		return err
-	}
-	defer o.Close()
-	for range 4 {
-		o.Frame()
-	}
-	im, _ := o.Frame()
-	var buf bytes.Buffer
-	if err := png.Encode(&buf, im); err != nil {
-		return err
-	}
-	return os.WriteFile(path, buf.Bytes(), 0o644)
 }

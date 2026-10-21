@@ -45,7 +45,8 @@ go test ./examples/notes/...                  # the tests of the example
 
 | File | What it is |
 |---|---|
-| `examples/notes/main.go` | the command: window, offscreen render, `-bench`, `-exit-first` |
+| `examples/notes/main_release.go` | the release command: a direct `app.Run` |
+| `examples/notes/diag_dev.go` | the development command: window, offscreen render, `-bench`, `-exit-first` |
 | `examples/notes/notes/notes.go` | the app: state, `Build`, menu model |
 | `examples/notes/notes/script.go` | a scripted session (`widget/widgettest` steps) that gives the app the input a person would |
 | `examples/notes/notes/notes_test.go` | the tests: render, interaction, zero allocations |
@@ -86,11 +87,11 @@ on the main thread.
 
 ## 2. An empty window
 
-`main.go`, function `runWindow`. `app.Run(cfg, b)` is `app.RunWith(cfg, b,
+`diag_dev.go`, function `runWindow`. `app.Run(cfg, b)` is `app.RunWith(cfg, b,
 app.RunOptions{})` without the result; the example uses `RunWith` so that
 `-exit-first` can print the startup timeline.
 
-```go examples/notes/main.go
+```go examples/notes/diag_dev.go
 func runWindow(exitFirst, verbose bool, pref theme.Preference, scrolled bool) error {
 	n, err := notes.New()
 	if err != nil {
@@ -789,14 +790,20 @@ message; a request over 64 KiB is refused. The protocol is in
 - **Cross-compiling works from any host**, with no SDK:
 
   ```sh
-  CGO_ENABLED=0 GOOS=windows GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o notes.exe ./examples/notes
-  CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o notes-linux ./examples/notes
-  CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o notes-mac ./examples/notes
+  CGO_ENABLED=0 GOOS=windows GOARCH=arm64 go build -tags gnui_release -trimpath -ldflags="-s -w" -o notes.exe ./examples/notes
+  CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -tags gnui_release -trimpath -ldflags="-s -w" -o notes-linux ./examples/notes
+  CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -tags gnui_release -trimpath -ldflags="-s -w" -o notes-mac ./examples/notes
   ```
 
-- **Release builds** use `-trimpath -ldflags="-s -w"`. CI builds the example this way for
-  five targets (darwin/arm64, and windows and linux on amd64 and arm64) and fails if any
-  binary is over 10 MB. A build for darwin/amd64 stops with an error naming D55.
+- **Release builds** use `-tags gnui_release -trimpath -ldflags="-s -w"`, as
+  `gnui package` does. Keep diagnostics in a dev-only file; release builds drop
+  them. Notes puts its unchanged CLI in `diag_dev.go` (`//go:build !gnui_release`)
+  and its direct `app.Run` entrypoint in `main_release.go` (`//go:build gnui_release`).
+  Plain builds retain `-o`, `-measure`, `-bench`, `-gate` and startup diagnostics;
+  tagged builds have no diagnostic flags. See [packaging](guide/packaging.md).
+  CI also checks stripped development binaries for five targets (darwin/arm64,
+  and windows and linux on amd64 and arm64), including their diagnostics, against
+  10 MB. A build for darwin/amd64 stops with an error naming D55.
 - **Linux backend:** Wayland when `WAYLAND_DISPLAY` is set and the connection works, X11
   otherwise; `GNUI_BACKEND=wayland` or `x11` forces one.
 - **Startup:** the budget is 150 ms from process start to the first complete frame on the

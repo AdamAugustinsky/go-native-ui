@@ -1,3 +1,5 @@
+//go:build !gnui_release
+
 // Command notes is the example application of the guide (docs/GUIDE.md).
 //
 //	notes                  open the window, in the system's light or dark mode, which it follows

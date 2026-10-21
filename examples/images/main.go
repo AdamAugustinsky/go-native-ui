@@ -9,7 +9,6 @@ package main
 
 import (
 	"bytes"
-	"flag"
 	"fmt"
 	"image"
 	"image/color"
@@ -113,40 +112,17 @@ func (g *gallery) Build(c *ui.Context) {
 }
 
 func main() {
-	out := flag.String("o", "", "render the window offscreen into this PNG and exit")
-	flag.Parse()
 	cfg := app.Config{Title: "Images", Width: 360, Height: 300, MinWidth: 300, MinHeight: 240, Clear: [4]float32{1, 1, 1, 1}}
-	var err error
-	if *out != "" {
-		err = render(cfg, *out)
-	} else {
-		g := newGallery()
-		err = app.Run(cfg, g)
-		g.cache.Close(time.Second) // after the window: stops the workers and frees the textures
-	}
+	err := run(cfg)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "images:", err)
 		os.Exit(1)
 	}
 }
 
-// render draws the window once every picture has decoded.
-func render(cfg app.Config, path string) error {
+func runWindow(cfg app.Config) error {
 	g := newGallery()
-	o, err := app.NewOffscreen(cfg, int(cfg.Width)*2, int(cfg.Height)*2, 2, g)
-	if err != nil {
-		return err
-	}
-	defer o.Close()
-	defer g.cache.Close(time.Second)
-	for i := 0; i < 500 && (i < 4 || g.ready < tiles); i++ {
-		o.Frame()
-		time.Sleep(2 * time.Millisecond)
-	}
-	im, _ := o.Frame()
-	var buf bytes.Buffer
-	if err := png.Encode(&buf, im); err != nil {
-		return err
-	}
-	return os.WriteFile(path, buf.Bytes(), 0o644)
+	err := app.Run(cfg, g)
+	g.cache.Close(time.Second) // after the window: stops the workers and frees the textures
+	return err
 }
