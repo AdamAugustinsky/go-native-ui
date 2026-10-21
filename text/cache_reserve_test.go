@@ -155,6 +155,7 @@ func TestRunCacheEvictionIsAllocFree(t *testing.T) {
 		return func() {
 			for i := range more {
 				more[i].insert(c2)
+				c2.lookup(1, more[i].b) // exercise the all-referenced drop path
 			}
 		}
 	})

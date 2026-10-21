@@ -99,6 +99,13 @@ func (c *runCache) reserve(runs, glyphs, textBytes int) {
 }
 
 func hashRun(font FontKey, b []byte) uint64 {
+	if len(b) >= 16 {
+		return hashBytes(b, uint64(14695981039346656037)^uint64(font))
+	}
+	return hashRunShort(font, b)
+}
+
+func hashRunShort(font FontKey, b []byte) uint64 {
 	h := uint64(14695981039346656037) ^ uint64(font)
 	h *= 1099511628211
 	for _, c := range b {
@@ -110,7 +117,14 @@ func hashRun(font FontKey, b []byte) uint64 {
 
 // lookup returns the cached run for (font, b). It does not allocate.
 func (c *runCache) lookup(font FontKey, b []byte) (RunRef, bool) {
-	h := hashRun(font, b)
+	// Keep the tiny-key loop inline: the call to hashBytes makes hashRun
+	// exceed the inliner's budget, adding a call even for empty labels.
+	var h uint64
+	if len(b) < 16 {
+		h = hashRunShort(font, b)
+	} else {
+		h = hashRun(font, b)
+	}
 	mask := uint64(len(c.table) - 1)
 	for i := h & mask; ; i = (i + 1) & mask {
 		t := c.table[i]
@@ -136,7 +150,7 @@ func (c *runCache) insert(font FontKey, b []byte, glyphs []uint16, xs []float32,
 	}
 	h := hashRun(font, b)
 	e := runEnt{
-		hash: h, font: font, ref: true,
+		hash: h, font: font,
 		textOff: uint32(len(c.text)), textLen: uint32(len(b)),
 		off: uint32(len(c.glyph)), n: uint32(len(glyphs)),
 		advance: advance,

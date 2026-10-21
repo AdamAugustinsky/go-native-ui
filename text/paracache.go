@@ -174,7 +174,7 @@ func grow[T any](s *[]T, n int) {
 // add appends the layout b of p and returns its entry.
 func (s *paraSlabs) add(p *Para, h uint64, b *paraBuild) paraEnt {
 	e := paraEnt{
-		hash: h, ref: true, dir: p.Dir, ellipsis: p.Ellipsis, truncated: b.truncated,
+		hash: h, dir: p.Dir, ellipsis: p.Ellipsis, truncated: b.truncated,
 		maxLines: int32(p.MaxLines), width: p.Width, lineH: p.LineHeight, outW: b.width, outH: b.height,
 		textOff: uint32(len(s.text)), textLen: uint32(len(p.Text)),
 		spanOff: uint32(len(s.spans)), spanN: uint32(len(p.Spans)),
