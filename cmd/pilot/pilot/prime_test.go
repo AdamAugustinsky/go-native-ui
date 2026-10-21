@@ -32,7 +32,13 @@ func TestPrimeNamesBuildsEveryPlan(t *testing.T) {
 	buf := make([]byte, 0, 64)
 	shapeNames := func(ts *text.System, r *theme.Resolved) {
 		f := r.Font
-		for _, k := range [...]text.FontKey{f.UI, f.UISemi, f.Small, f.Mono, f.MonoBold, r.Styles[theme.StyleBody].Font} {
+		var fonts [theme.NumTextStyles + 5]text.FontKey
+		n := copy(fonts[:], []text.FontKey{f.UI, f.UISemi, f.Small, f.Mono, f.MonoBold})
+		for i := range r.Styles { // any text style may be a row's, a cell's or a header's
+			fonts[n] = r.Styles[i].Font
+			n++
+		}
+		for _, k := range fonts[:n] {
 			for _, n := range synthNames {
 				// other strings than primeNames' (new to the run cache), of
 				// the same characters

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -35,5 +36,31 @@ func TestListDirTooLarge(t *testing.T) {
 	arenaLimit = 1 // more entries than indices
 	if err := ListDir(dir, l); !errors.Is(err, ErrTooLarge) {
 		t.Errorf("entry count: %v", err)
+	}
+}
+
+// A service has the scratch of its workers ready, with path buffers that fit
+// any path: listings and stats that overlap for the first time allocate no
+// 264 KiB buffer, and none grows its path (D27: the Pilot bench gate met both
+// in a measured window).
+func TestServicePrewarmsScratch(t *testing.T) {
+	scratchMu.Lock()
+	scratchFree = nil
+	scratchMu.Unlock()
+	prewarmScratch(numWorkers + 1)
+	n := numWorkers + 1
+	long, name := strings.Repeat("d", scratchPath-1), strings.Repeat("n", maxName)
+	got := make([]*bulkScratch, n)
+	if a := testing.AllocsPerRun(10, func() {
+		for i := range got {
+			got[i] = getScratch()
+		}
+		for _, s := range got {
+			s.path = append(append(s.path[:0], long...), 0)
+			s.link = append(append(append(append(s.link[:0], long...), '/'), name...), 0)
+			putScratch(s)
+		}
+	}); a != 0 {
+		t.Errorf("%d scratches used at once allocate %v times after prewarmScratch", n, a)
 	}
 }
