@@ -39,8 +39,11 @@ How it works, in `.github/workflows/ci.yml`:
 | macOS arm64 | `TestScrollEventsThroughTheQueue` (platform) | SIGTRAP inside AppKit | [#34](https://github.com/AdamAugustinsky/go-native-ui/issues/34) |
 | macOS arm64 | benches: spike, listbench, pilot (both), gallery (both), notes, imgbench | `bench stalled` / `bench timed out` / `no frame callbacks` (display-link stall, `drawable=0`); warns instead of failing. Allocation and CPU gates stay blocking | [#34](https://github.com/AdamAugustinsky/go-native-ui/issues/34) |
 
-Not quarantined: `cmd/vlistbench -bench -gate` is not run by `ci.yml` (only its
-package tests are), so its 2 ms edit budget cannot fail CI.
+Not quarantined: `cmd/vlistbench -bench -gate` runs in the macOS job (step
+"vlistbench", `-allow-unpaced -budget-scale 3`), outside the stall-warning
+wrapper, so all its gates block, including the list and edit budgets at 3x and
+the check that the session exercised the list (`history loads 0` failed it on
+p7-perf-fsmem's CI 39656311756).
 
 To un-quarantine a test, delete its name from the job's `QUARANTINE` regexp in
 `.github/workflows/ci.yml` (and its row here).
