@@ -338,6 +338,13 @@ func (a *App) deliver(pe *platform.AppEvent, data []byte) {
 			continue
 		}
 		w.p.invalidate()
+		if w.dbg != nil {
+			if pe.Kind == platform.AppEvCommand {
+				w.dbg.note(CauseMenu, 0, 0, nil)
+			} else {
+				w.dbg.note(CauseApp, uint8(pe.Kind), 0, nil)
+			}
+		}
 		if native {
 			w.Win.RequestFrame()
 		}

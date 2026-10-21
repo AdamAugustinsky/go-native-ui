@@ -107,12 +107,25 @@ const (
 	// CauseDebug: the overlay, its inspector or its audit was turned on or off,
 	// or the audit ran.
 	CauseDebug
+	// CauseApp: an app event reached the Handler, and the windows it concerns
+	// draw what the Handler may have changed (D37): the app was activated or
+	// deactivated (another app took the activation or gave it back), the
+	// screens changed, the system slept or woke, a service's result, a Post.
+	// Sub is the EventKind.
+	CauseApp
 
 	numCauses
 )
 
 var causeNames = [numCauses]string{"NO CAUSE", "first", "input", "resize", "visible", "wake", "appearance",
-	"anim", "timer", "hover", "settle", "backlog", "bench", "host", "dialog", "menu", "driver", "debug"}
+	"anim", "timer", "hover", "settle", "backlog", "bench", "host", "dialog", "menu", "driver", "debug", "app"}
+
+// appEventNames name the EventKind of a CauseApp.
+var appEventNames = [...]string{EvReopen: "reopen", EvActivated: "activated", EvDeactivated: "deactivated",
+	EvQuitRequested: "quit", EvQuitDeadline: "quit deadline", EvOpenURLs: "urls", EvOpenFiles: "files",
+	EvWillSleep: "sleep", EvDidWake: "woke", EvScreensChanged: "screens", EvSessionActive: "session",
+	EvWillTerminate: "terminate", EvCommand: "command", EvService: "service", EvPost: "post",
+	EvWindowClosed: "window closed"}
 
 // String is the short name of the cause.
 func (c Cause) String() string {
@@ -121,6 +134,10 @@ func (c Cause) String() string {
 	}
 	return "cause" + strconv.Itoa(int(c))
 }
+
+// String is the cause as the log shows it ("timer(deadline) #abc x3",
+// "app(deactivated)"), without its callers. It allocates.
+func (c RepaintCause) String() string { return string(appendCause(nil, &c)) }
 
 const (
 	maxCauses = 6 // distinct causes kept per frame
@@ -627,6 +644,15 @@ func appendCause(b []byte, c *RepaintCause) []byte {
 		case ui.DebugWakeIn:
 			b = append(b, "(WakeIn)"...)
 		}
+	}
+	if c.Kind == CauseApp {
+		b = append(b, '(')
+		if int(c.Sub) < len(appEventNames) && appEventNames[c.Sub] != "" {
+			b = append(b, appEventNames[c.Sub]...)
+		} else {
+			b = strconv.AppendUint(b, uint64(c.Sub), 10)
+		}
+		b = append(b, ')')
 	}
 	if c.Key != 0 {
 		b = append(b, " #"...)

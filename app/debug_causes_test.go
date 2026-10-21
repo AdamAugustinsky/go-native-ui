@@ -153,6 +153,27 @@ func TestTaskWakeAndAppearanceRecordTheirCauses(t *testing.T) {
 	mustHave(t, o, CauseWake)
 }
 
+// An app event draws the windows it concerns (the Handler may have changed
+// what they show), and the frame names the event: another app taking the
+// activation is one, and was recorded as a menu or as no cause.
+func TestAppEventRecordsItsKind(t *testing.T) {
+	o := newStepper(t, &scene{})
+	o.handler, o.started = DefaultHandler{}, true
+	o.wins = append(o.wins, o.App)
+	t.Cleanup(func() { o.wins = nil })
+	o.AppEvent(&platform.AppEvent{Kind: platform.AppEvDeactivated}, nil)
+	if !o.Step(0) {
+		t.Fatal("the app's deactivation drew no frame")
+	}
+	c := mustHave(t, o, CauseApp)
+	if EventKind(c.Sub) != EvDeactivated || c.String() != "app(deactivated)" {
+		t.Errorf("the cause is %q (sub %d), want app(deactivated)", c.String(), c.Sub)
+	}
+	if settleSteps(t, o) != 0 {
+		t.Error("frames after the app event's")
+	}
+}
+
 // A box that animates names itself as the cause, with its key, for as long as
 // it moves, and the frames stop when it arrives.
 func TestAnimationRecordsTheBoxKey(t *testing.T) {
