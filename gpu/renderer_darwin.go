@@ -468,7 +468,7 @@ func (r *Renderer) stage(t TextureID, plane uint8, x, y, w, h int, pixels []byte
 // growStage gives slot s a staging buffer of at least n bytes, keeping what
 // is staged in it. The slot is retired: no GPU work reads the old one.
 func (r *Renderer) growStage(s *ringSlot, n int) {
-	size := max(n, 2*s.stageCap, 1<<20)
+	size := max(n, 2*s.stageCap, 64<<10)                       // glyph updates are small; large uploads still grow directly
 	buf := objc.Send2(r.device, rsNewBuffer, uintptr(size), 0) // MTLResourceStorageModeShared
 	if buf == 0 {
 		panic("gpu: staging buffer allocation failed")

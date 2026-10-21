@@ -590,3 +590,47 @@ func TestStageSurvivesUncommittedFrame(t *testing.T) {
 	F.Call1(objc.PoolPop, pool) // never committed
 	near(t, "after an uncommitted frame", render(r, 1, 1, black, rgbaQuad(0, tex)).at(0, 0), [4]int{0, 200, 0, 255}, 1)
 }
+
+func TestStageSingleGlyphCapacity(t *testing.T) {
+	r := newTestRenderer(t)
+	tex := r.NewTexture(TexR8, 32, 32)
+	r.Stage(tex, 0, 0, 32, 32, make([]byte, 32*32), 32)
+	s := &r.slots[r.next]
+	if s.stageCap < s.stageLen || s.stageCap > 64<<10 {
+		t.Fatalf("single glyph: staging capacity %d, used %d; want at most 64 KiB", s.stageCap, s.stageLen)
+	}
+}
+
+func TestStageBurstReusesCapacity(t *testing.T) {
+	r := newTestRenderer(t)
+	tex := r.NewTexture(TexR8, 64, 32)
+	pix := make([]byte, 32*32)
+	for i := range pix {
+		pix[i] = 200
+	}
+	q := Quad{Rect: [4]float32{0, 0, 64, 32}, UV: [4]float32{0, 0, 64, 32}, Mode: ModeMaskR8, Tex: tex,
+		Color: [4]uint32{0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff}}
+	list, out := &DrawList{Quads: []Quad{q}}, make([]byte, 64*32*4)
+	frame := func() {
+		r.Stage(tex, 0, 0, 32, 32, pix, 32)
+		for range 255 {
+			r.Stage(tex, 32, 0, 32, 32, pix, 32)
+		}
+		r.RenderToRGBA(64, 32, black, list, out)
+	}
+	var buffers [ringSlots]objc.ID
+	for i := range ringSlots {
+		frame()
+		buffers[i] = r.slots[i].stage
+	}
+	near(t, "first copy survives growth", (img{64, 32, out}).at(8, 8), [4]int{200, 200, 200, 255}, 1)
+	near(t, "last copy survives growth", (img{64, 32, out}).at(48, 8), [4]int{200, 200, 200, 255}, 1)
+	if got := testing.AllocsPerRun(30, frame); got != 0 {
+		t.Errorf("warm burst: %g Go allocations/frame, want zero", got)
+	}
+	for i := range ringSlots {
+		if r.slots[i].stage != buffers[i] {
+			t.Errorf("warm burst replaced slot %d's Metal buffer", i)
+		}
+	}
+}
