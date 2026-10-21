@@ -381,6 +381,12 @@ type ComposerSignal struct {
 	// space, or an attachment) and no send in flight. The app sends, clears
 	// the text (SetText(nil)) and sets Sending.
 	Submitted bool
+	// SendKey: Enter sent by the Enter policy (not a newline, not a
+	// completion's accept), whether or not the composer could send (nothing
+	// to send, a send in flight): with Submitted false the app may do
+	// something else with it (send a voice message it holds, retry one that
+	// was refused).
+	SendKey bool
 	// Cancelled: Escape with no completion showing, or the editor ended the
 	// app's completion (it lost the keyboard focus, or an input method began
 	// composing).
@@ -738,6 +744,7 @@ func Composer(k *base.Kit, label string, st *ComposerState, o ComposerOpts) Comp
 	}
 
 	// a send needs something to send
+	sig.SendKey = submit
 	sig.Submitted = (submit || pressed) && canSend
 	if pressed && canSend {
 		st.Focus(k) // the caret stays in the text after the button (the press took the keyboard)

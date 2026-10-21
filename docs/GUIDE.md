@@ -599,6 +599,13 @@ proves it twice, offscreen in a test and in a window with the benchmark
 7. **Animations ask for frames.** `Context.Animating` is what keeps the loop
    running; when nothing animates the app sleeps. The ordinary widgets handle it. If
    you animate a value of your own, call `Context.RequestFrame` while it moves.
+8. **Read the last layout through the context.** `Rect`, `RectOf`,
+   `ScrollExtent`, `ShownRect` and `ListRange` give the previous frame's layout.
+   When the frame's own layout changes what they gave (content that grew in
+   that frame), `End` asks for one more frame, at most two in a row
+   (`Context.Settling`), so the window never rests on a stale layout. A
+   rectangle you copy into your own state and use later is not seen: read it
+   again in the next `Build`, or call `RequestFrame` when it changes.
 
 ## 11. Testing and benchmarking
 

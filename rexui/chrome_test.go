@@ -632,3 +632,47 @@ func TestSidebarDisclosurePlace(t *testing.T) {
 		t.Errorf("Documents' symbol at %v with a nested row, %v without: want 9 apart", nested, flat)
 	}
 }
+
+// The Rex band's items are borderless symbols, or, with Glass, the glass
+// capsules of macOS 26's toolbar items: the material's colour, its rim, a
+// capsule's radius; a group shares one.
+func TestToolbarRexGlassItems(t *testing.T) {
+	for _, glass := range []bool{false, true} {
+		g := openRig(t, theme.Light, nil, func(*rig) {})
+		ic := addChromeIcons(g)
+		g.build = func(g *rig) {
+			tb := rexui.BeginToolbar(g.k, "Toolbar", rexui.ToolbarOpts{Style: theme.ToolbarRex, Glass: glass})
+			tb.Item(ic.sidebar, "Sidebar")
+			tb.BeginGroup("share-tag")
+			tb.Item(ic.share, "Share")
+			tb.Item(ic.tag, "Tags")
+			tb.EndGroup()
+			tb.End()
+		}
+		g.settle()
+		sb := g.node(ui.RoleButton, "Sidebar").Bounds
+		h := sb[3] - sb[1]
+		capsule := false
+		for _, q := range g.list.Quads {
+			if q.Mode == gpu.ModeShape && q.Rect == sb && q.Border > 0 && q.Radii[0] == h/2 && q.Color[0]&0xFF != 0 {
+				capsule = true
+			}
+		}
+		if capsule != glass {
+			t.Errorf("glass %v: the item is a glass capsule: %v", glass, capsule)
+		}
+		if nearPt(h/g.scale, 28) != true {
+			t.Errorf("glass %v: the item is %v pt high, want Rex's 28", glass, h/g.scale)
+		}
+		grouped := false
+		g.c.Semantics(&g.sem)
+		for _, n := range g.sem.Nodes {
+			if n.Role == ui.RoleGroup && string(g.sem.Text(n.Name)) == "share-tag" {
+				grouped = true
+			}
+		}
+		if grouped != glass {
+			t.Errorf("glass %v: the group has a capsule: %v", glass, grouped)
+		}
+	}
+}

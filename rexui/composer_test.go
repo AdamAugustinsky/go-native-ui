@@ -1041,3 +1041,40 @@ func TestComposerSetPlaceholder(t *testing.T) {
 		t.Errorf("the drawn field sent %d times with Enter", cr.submits)
 	}
 }
+
+// Enter by the Enter policy is reported as SendKey whether or not there is
+// anything to send; Submitted only when there is. The send button is not a
+// send key.
+func TestComposerSendKeyWithNothingToSend(t *testing.T) {
+	cr := newComposerRig(t, 0, rexui.ComposerSetup{Placeholder: "Message"})
+	keys := 0
+	build := cr.build
+	cr.build = func(g *rig) {
+		build(g)
+		if cr.sig.SendKey {
+			keys++
+		}
+	}
+	cr.focus()
+	cr.key(ui.KeyEnter, 0)
+	if keys != 1 || cr.submits != 0 {
+		t.Fatalf("Enter in an empty composer: %d send keys, %d sends; want 1, 0", keys, cr.submits)
+	}
+	cr.o.Sending = true
+	cr.typeText("hi")
+	cr.key(ui.KeyEnter, 0)
+	if keys != 2 || cr.submits != 0 {
+		t.Fatalf("Enter while a send is in flight: %d send keys, %d sends; want 2, 0", keys, cr.submits)
+	}
+	cr.o.Sending = false
+	cr.settle()
+	cr.key(ui.KeyEnter, 0)
+	if keys != 3 || cr.submits != 1 {
+		t.Fatalf("Enter with text: %d send keys, %d sends; want 3, 1", keys, cr.submits)
+	}
+	cr.typeText("again")
+	cr.click(centre(cr.node(ui.RoleButton, "Send")))
+	if keys != 3 || cr.submits != 2 {
+		t.Errorf("the send button: %d send keys, %d sends; want 3, 2", keys, cr.submits)
+	}
+}

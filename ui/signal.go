@@ -348,7 +348,9 @@ func (c *Context) scrollPending() bool {
 // content − view on each axis. Both are zero for a box that was not laid out.
 func (c *Context) ScrollExtent(id ID) (content, view [2]float32) {
 	b := &c.boxes[id]
-	return [2]float32{float32(b.content[0]), float32(b.content[1])}, b.size
+	content = [2]float32{float32(b.content[0]), float32(b.content[1])}
+	c.noteRead(id, readExtent, [4]float32{content[0], content[1], b.size[0], b.size[1]})
+	return content, b.size
 }
 
 // ScrollIntoView scrolls box id by the smallest amount that shows the
@@ -430,6 +432,7 @@ func (c *Context) ListRange(id ID, rows int, rowHeightPx float32, overscan int) 
 		b.listRows, b.listFirst = 0, 0
 		return 0, 0
 	}
+	c.noteRead(id, readRect, b.rect)
 	viewH := float64(b.rect[3] - b.rect[1] - b.padSum(1))
 	if viewH <= 0 {
 		viewH = float64(c.h)

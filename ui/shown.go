@@ -8,12 +8,12 @@ package ui
 // rectangle is empty for a row scrolled out of its scroll area although it is
 // inside the window.
 func (c *Context) ShownRect(id ID) [4]float32 {
-	if c.wasHidden(&c.boxes[id]) {
-		return [4]float32{}
+	var r [4]float32
+	if !c.wasHidden(&c.boxes[id]) {
+		if r = c.clippedRect(id); empty(r) {
+			r = [4]float32{}
+		}
 	}
-	r := c.clippedRect(id)
-	if empty(r) {
-		return [4]float32{}
-	}
+	c.noteRead(id, readShown, r)
 	return r
 }

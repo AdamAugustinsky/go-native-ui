@@ -229,6 +229,8 @@ type Context struct {
 	// rectangle of the focused field.
 	wakeNs int64
 
+	st settleState // the build's reads of the previous layout (settle.go)
+
 	shownWatch []shownWatch // WatchShown's boxes of this frame, checked after layout
 	// deadlines (deadline.go) are the named one-shot deadlines in force.
 	deadlines []deadline
@@ -392,6 +394,9 @@ func (c *Context) Reserve(n int) {
 	if cap(c.prevOrder) < n {
 		c.prevOrder = append(make([]ID, 0, n), c.prevOrder...)
 	}
+	if cap(c.st.reads) < n/4 { // (a build reads the last layout of a few of its boxes)
+		c.st.reads = append(make([]layoutRead, 0, n/4), c.st.reads...)
+	}
 }
 
 // Scale is the pixels-per-point factor passed to Begin; Pt converts points.
@@ -488,6 +493,7 @@ func (c *Context) Begin(in *Input, widthPx, heightPx int, scale, dt float32) {
 	c.root = root
 	c.parents[0] = root
 	c.nparents = 1
+	c.st.reads, c.st.building = c.st.reads[:0], true
 }
 
 // rescaleScroll keeps every scrolled box at the same place in its content
@@ -831,8 +837,13 @@ func (c *Context) fontInfo(f text.FontKey) fontInfo {
 func (c *Context) KeyOf(id ID) Key { return c.boxes[id].key }
 
 // Rect is the screen rectangle (x0, y0, x1, y1) box id had after the last
-// layout; during a build that is the previous frame's.
-func (c *Context) Rect(id ID) [4]float32 { return c.boxes[id].rect }
+// layout; during a build that is the previous frame's (End asks for a frame
+// to settle when this frame's layout changes it, see Settling).
+func (c *Context) Rect(id ID) [4]float32 {
+	r := c.boxes[id].rect
+	c.noteRead(id, readRect, r)
+	return r
+}
 
 func rate(k, dt float32) float32 {
 	if k <= 0 || dt <= 0 {

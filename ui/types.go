@@ -8,6 +8,13 @@
 // the previous frame's layout, so a widget learns it was clicked while it is
 // being built.
 //
+// A build that reads the previous layout (Rect, RectOf, ScrollExtent,
+// ShownRect, ListRange) and lays boxes out from it is a frame late when the
+// frame itself changes what it read. End notices and asks for one more frame,
+// at most two in a row (Settling), so a window never rests on a stale layout
+// and an idle one still draws nothing. A value kept from a layout any other
+// way needs its own RequestFrame.
+//
 // # Frame
 //
 //	c.Begin(&in, widthPx, heightPx, scale, dt)  // hit test + input

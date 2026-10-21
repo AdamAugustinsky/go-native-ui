@@ -43,7 +43,10 @@ func (c *Context) DT() float32 { return c.dt }
 // before building.
 func (c *Context) RectOf(k Key) [4]float32 {
 	if v, ok := c.table.Get(uint64(k)); ok {
-		return c.boxes[v].rect
+		return c.Rect(ID(v))
+	}
+	if c.st.building && k != 0 {
+		c.st.reads = append(c.st.reads, layoutRead{key: k, kind: readRect}) // none yet: settle when this frame lays one out
 	}
 	return [4]float32{}
 }

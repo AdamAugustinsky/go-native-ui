@@ -99,6 +99,7 @@ func (c *Context) End(list *gpu.DrawList) {
 		panic("ui: unbalanced Push/Pop or BeginOverlay/EndOverlay at End")
 	}
 	c.cpLast, c.cpNow = c.cpNow, colorReq{} // (the colour panel request of this frame, for the app and the next frame)
+	c.st.building = false
 	c.layout()
 	c.checkShownWatch()
 	c.semScroll()
@@ -108,6 +109,7 @@ func (c *Context) End(list *gpu.DrawList) {
 		c.animating = true
 	}
 	c.prune()
+	c.settle()
 
 	list.Reset()
 	win := [4]float32{0, 0, float32(c.w), float32(c.h)}

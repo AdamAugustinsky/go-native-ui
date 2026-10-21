@@ -154,6 +154,25 @@ func (c *Context) NextImageFit(t gpu.TextureID, uv [4]float32, fit ImageFit) {
 // PopImage pops the image pushed by PushImage.
 func (c *Context) PopImage() { c.sImage.pop() }
 
+// NextPath makes the next box's image (DrawImage) path p filled, through m
+// (gpu.PathMask, which keeps the texture while p stays the same), in the
+// box's text colour, at the path's own size and centred in the box: a box
+// as large as the path (its furthest point) shows it at the box's top left.
+// It returns the path's size in pixels; with no uploader yet (Uploader) it
+// sets nothing and returns zeros.
+func (c *Context) NextPath(m *gpu.PathMask, p *gpu.Path) (w, h float32) {
+	u := c.Uploader()
+	if u == nil {
+		return 0, 0
+	}
+	tex, tw, th := m.Mask(u, p)
+	if tex == 0 {
+		return 0, 0
+	}
+	c.NextImage(tex, [4]float32{0, 0, float32(tw), float32(th)}, gpu.ModeMaskR8)
+	return float32(tw), float32(th)
+}
+
 // Corner radii (TL, TR, BR, BL), pixels.
 
 // NextRadius sets the same corner radius r (pixels) on all corners of the next box.

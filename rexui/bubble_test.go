@@ -217,3 +217,125 @@ func TestMessageBubbleVariants(t *testing.T) {
 	g.node(ui.RoleLabel, "Not delivered")
 	g.node(ui.RoleGroup, "Sent message")
 }
+
+// fillRig is one bubble in a column with options o; id is its box.
+type fillRig struct {
+	*rig
+	o  rexui.BubbleOpts
+	id ui.ID
+}
+
+func newFillRig(t *testing.T) *fillRig {
+	f := &fillRig{}
+	f.rig = newRig(t, theme.Light, nil, column(func(g *rig) {
+		g.k.NextWidth(g.k.Fixed(300))
+		g.k.Column("chat")
+		b := rexui.BeginBubble(g.k, ui.KeyN(g.c.ParentKey(), 1), f.o)
+		rexui.Label(g.k, "Hello there", rexui.LabelOpts{})
+		rexui.EndBubble(g.k, &b)
+		f.id = b.ID
+		g.k.EndColumn()
+	}))
+	return f
+}
+
+// fill is the colours (TL, TR, BL, BR) of the bubble's background quad.
+func (f *fillRig) fill() [4]uint32 {
+	f.t.Helper()
+	f.settle()
+	r := f.c.Rect(f.id)
+	for _, q := range f.list.Quads {
+		if q.Mode == gpu.ModeShape && q.Rect == r && q.Soft == 0 && q.Border == 0 {
+			return q.Color
+		}
+	}
+	f.t.Fatalf("no background quad at %v", r)
+	return [4]uint32{}
+}
+
+// A bubble takes the app's fill, as a colour or a vertical gradient, and
+// a highlight mixes into it by the look's FindMix or the call's.
+func TestBubbleCustomFill(t *testing.T) {
+	f := newFillRig(t)
+	r := f.k.Theme()
+	if got := f.fill(); got[0] != got[3] || got[0] == 0 {
+		t.Fatalf("the incoming fill is %#v", got)
+	}
+
+	f.o.Fill = 0x25D366FF
+	if got := f.fill(); got != [4]uint32{0x25D366FF, 0x25D366FF, 0x25D366FF, 0x25D366FF} {
+		t.Errorf("a custom fill draws %#x", got)
+	}
+	f.o.FillBottom = 0x128C7EFF
+	if got := f.fill(); got != [4]uint32{0x25D366FF, 0x25D366FF, 0x128C7EFF, 0x128C7EFF} {
+		t.Errorf("a gradient draws %#x, want the top colour above the bottom one", got)
+	}
+
+	f.o.FillBottom = 0
+	f.o.Highlighted = true
+	find := rexui.BubbleLook.Find.RGBA(r)
+	if got, want := f.fill()[0], theme.MixRGBA(0x25D366FF, find, rexui.BubbleLook.FindMix); got != want {
+		t.Errorf("highlighted by the look: %#x, want %#x", got, want)
+	}
+	f.o.FindMix = 0.1
+	if got, want := f.fill()[0], theme.MixRGBA(0x25D366FF, find, 0.1); got != want {
+		t.Errorf("highlighted by the call's FindMix: %#x, want %#x", got, want)
+	}
+	if rexui.BubbleLook.FindMix == 0.1 {
+		t.Error("the call changed the look")
+	}
+
+	// a look of the app's own
+	own := rexui.BubbleLook
+	own.FindMix = 1
+	f.o.FindMix, f.o.Look = 0, &own
+	if got := f.fill()[0]; got != find {
+		t.Errorf("highlighted by the app's look (FindMix 1): %#x, want the find colour %#x", got, find)
+	}
+}
+
+// With a mask, a tail bubble shows the curled tail (gpu.PathMask) at its
+// bottom corner on the sender's side, in the bubble's colour, outside the
+// bubble; the row leaves room for it.
+func TestBubbleCurledTail(t *testing.T) {
+	var masks [2]gpu.PathMask
+	f := newFillRig(t)
+	f.o = rexui.BubbleOpts{Variant: rexui.BubbleOutgoing, Tail: true, Curl: &masks[1], Fill: 0x25D366FF, FillBottom: 0x128C7EFF}
+	f.settle()
+	if f.c.Animating() {
+		t.Fatal("the curled tail keeps the window animating")
+	}
+	b := f.c.Rect(f.id)
+	var tail *gpu.Quad
+	for i := range f.list.Quads {
+		if q := &f.list.Quads[i]; q.Mode == gpu.ModeMaskR8 && q.Rect[0] > b[0] && q.Rect[3] == b[3] {
+			tail = q
+		}
+	}
+	if tail == nil {
+		t.Fatalf("no tail quad at the bubble %v", b)
+	}
+	if tail.Rect[2] <= b[2] || tail.Rect[0] >= b[2] {
+		t.Errorf("the tail %v does not cross the bubble's right side %v", tail.Rect, b[2])
+	}
+	if tail.Color[0] != 0x128C7EFF {
+		t.Errorf("the tail is %#x, want the bubble's bottom colour", tail.Color[0])
+	}
+
+	// incoming: at the bottom left, mirrored
+	f.o.Variant, f.o.Curl = rexui.BubbleIncoming, &masks[0]
+	f.settle()
+	b = f.c.Rect(f.id)
+	tail = nil
+	for i := range f.list.Quads {
+		if q := &f.list.Quads[i]; q.Mode == gpu.ModeMaskR8 && q.Rect[3] == b[3] && q.Rect[0] < b[0] {
+			tail = q
+		}
+	}
+	if tail == nil {
+		t.Fatalf("no tail quad at the incoming bubble's left %v", b)
+	}
+	if n := testing.AllocsPerRun(20, f.frame); n != 0 {
+		t.Errorf("a frame with curled tails allocates %v times", n)
+	}
+}
