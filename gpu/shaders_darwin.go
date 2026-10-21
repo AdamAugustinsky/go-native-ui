@@ -64,8 +64,14 @@ vertex VOut vs_main(uint vid [[vertex_id]],
 	} else if (any(radii > 0.0)) {
 		pad = 1.0;
 	}
+	// Outside this half-pixel fringe, clip/fade coverage is exactly zero.
+	float2 lo = rect.xy - pad, hi = rect.zw + pad;
+	float4 clip = quads[iid].clip;
+	float2 fadeX = quads[iid].fadeX;
+	if (any(clip != 0.0)) { lo = max(lo, clip.xy - 0.5); hi = min(hi, clip.zw + 0.5); }
+	if (any(fadeX != 0.0)) { hi.x = min(hi.x, fadeX.y + 0.5); }
 	float2 c = float2(float(vid & 1u), float(vid >> 1));
-	float2 p = mix(rect.xy - pad, rect.zw + pad, c);
+	float2 p = mix(lo, max(hi, lo), c);
 	VOut o;
 	o.pos = float4(p / viewport * float2(2.0, -2.0) + float2(-1.0, 1.0), 0.0, 1.0);
 	o.inst = iid;
@@ -168,6 +174,7 @@ fragment float4 fs_main(VOut in [[stage_in]],
                         texture2d<float> tex [[texture(0)]],
                         texture2d<float> tex1 [[texture(1)]],
                         texture2d<float> tex2 [[texture(2)]],
+                        array<texture2d<float>, 8> texs [[texture(3)]],
                         sampler smp [[sampler(0)]]) {
 	float4 rect = quads[in.inst].rect;
 	float4 clip = quads[in.inst].clip;
@@ -182,11 +189,17 @@ fragment float4 fs_main(VOut in [[stage_in]],
 	// Four-corner colour, interpolated premultiplied.
 	float2 size = max(rect.zw - rect.xy, 1e-3);
 	float2 t = clamp((p - rect.xy) / size, 0.0, 1.0);
-	float4 cTL = premul(unpack_rgba(quads[in.inst].color[0]));
-	float4 cTR = premul(unpack_rgba(quads[in.inst].color[1]));
-	float4 cBL = premul(unpack_rgba(quads[in.inst].color[2]));
-	float4 cBR = premul(unpack_rgba(quads[in.inst].color[3]));
-	float4 col = mix(mix(cTL, cTR, t.x), mix(cBL, cBR, t.x), t.y);
+	uint4 cw = uint4(quads[in.inst].color);
+	float4 col;
+	if (all(cw == cw.xxxx)) {
+		col = premul(unpack_rgba(cw.x));
+	} else {
+		float4 cTL = premul(unpack_rgba(cw.x));
+		float4 cTR = premul(unpack_rgba(cw.y));
+		float4 cBL = premul(unpack_rgba(cw.z));
+		float4 cBR = premul(unpack_rgba(cw.w));
+		col = mix(mix(cTL, cTR, t.x), mix(cBL, cBR, t.x), t.y);
+	}
 
 	float4 res;
 	if (mode == 0u) {
@@ -208,9 +221,15 @@ fragment float4 fs_main(VOut in [[stage_in]],
 			cov = clamp(0.5 - rrect_sdf(p, rect, radii), 0.0, 1.0);
 		}
 		float2 texel = uv.xy + (p - rect.xy) * ((uv.zw - uv.xy) / size);
-		float4 s = mode == 2u && yuv.planes != 0u
-			? yuv_sample(texel, yuv, tex, tex1, tex2, smp)
-			: tex.sample(smp, texel / float2(tex.get_width(), tex.get_height()));
+		float4 s;
+		if (mode == 2u && yuv.planes != 0u) {
+			s = yuv_sample(texel, yuv, tex, tex1, tex2, smp);
+		} else if (mode == 3u) {
+			s = tex.sample(smp, texel / float2(tex.get_width(), tex.get_height()));
+		} else {
+			uint slot = quads[in.inst].tex;
+			s = texs[slot].sample(smp, texel / float2(texs[slot].get_width(), texs[slot].get_height()));
+		}
 		// mode 3: a backdrop, its blurred region (uv: the texels the
 		// renderer put it at; backdrop_darwin.go), opaque; but along a fade
 		// from y = border to y = soft (set by the renderer), where the

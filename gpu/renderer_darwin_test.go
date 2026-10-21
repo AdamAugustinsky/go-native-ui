@@ -329,10 +329,10 @@ func TestBatching(t *testing.T) {
 		{"empty", nil, 0},
 		{"shapes only", []Quad{shape(0), shape(1), shape(2)}, 1},
 		{"one texture", []Quad{glyph(0, a, red), glyph(1, a, red), glyph(2, a, red)}, 1},
-		{"two textures", []Quad{glyph(0, a, red), glyph(1, b, green)}, 2},
-		{"alternating", []Quad{glyph(0, a, red), glyph(1, b, green), glyph(2, a, red)}, 3},
+		{"two textures", []Quad{glyph(0, a, red), glyph(1, b, green)}, 1},
+		{"alternating", []Quad{glyph(0, a, red), glyph(1, b, green), glyph(2, a, red)}, 1},
 		{"shape joins open run", []Quad{glyph(0, a, red), shape(1), glyph(2, a, red)}, 1},
-		{"shape first", []Quad{shape(0), glyph(1, a, red), shape(2), glyph(3, b, green), glyph(4, a, red)}, 4},
+		{"shape first", []Quad{shape(0), glyph(1, a, red), shape(2), glyph(3, b, green), glyph(4, a, red)}, 1},
 	}
 	for _, c := range cases {
 		out := make([]byte, 5*1*4)
