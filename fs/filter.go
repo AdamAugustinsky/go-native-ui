@@ -24,7 +24,7 @@ func Filter(l *Listing, query []byte, dst []uint32) []uint32 {
 			q[i] = foldTable[c]
 		}
 		qb := q[:len(query)]
-		allASCII := isASCII(l.Names) // the common case: no per-name check at all
+		// Order may be a small chunk of a much larger arena; only inspect its names.
 		for _, idx := range l.Order {
 			e := &l.Entries[idx]
 			name := l.Names[e.NameOff : e.NameOff+uint32(e.NameLen)]
@@ -32,7 +32,7 @@ func Filter(l *Listing, query []byte, dst []uint32) []uint32 {
 			// fold to ASCII (U+212A KELVIN SIGN lowercases to 'k'), which a byte
 			// comparison cannot see.
 			var ok bool
-			if allASCII || isASCII(name) {
+			if isASCII(name) {
 				ok = containsFoldASCII(name, qb)
 			} else {
 				ok = containsFoldRunes(name, qb)
