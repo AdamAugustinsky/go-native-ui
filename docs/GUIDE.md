@@ -688,6 +688,43 @@ go run ./examples/notes -bench -gate -allow-unpaced    # the same on a machine w
 go run ./examples/notes -exit-first -v                 # startup: exec → first frame on glass
 ```
 
+### Driving a running app from outside: the agent bridge
+
+A coding agent, or a script, can drive and inspect the running app without screen
+recording or synthetic system events. Start a development build with
+`GNUI_INSPECT=<socket>`; the app listens on a Unix socket at that path (mode 0600, in
+a directory you own that the group and others cannot write; never TCP) and answers
+one JSON request per line. With the variable unset there is no listener, no goroutine
+and no per-frame cost, and a release build (`gnui package`, tag `gnui_release`)
+does not contain the bridge at all. It works on macOS and Linux, and on Windows
+inside the user's profile; `shot` of a live window is not supported on Linux yet.
+
+```sh
+GNUI_INSPECT=/tmp/notes.sock go run ./examples/notes &      # the app
+gnui inspect /tmp/notes.sock windows                        # window 1 "Notes" 1800x1200 px at 2x, frame 4
+gnui inspect /tmp/notes.sock tree -role Button              # [22] Button "Add" [disabled] (1544,1124,1640,1172) …
+gnui inspect /tmp/notes.sock do focus TextField "New note"  # a step by role and name
+gnui inspect /tmp/notes.sock do type "Water the plants"
+gnui inspect /tmp/notes.sock do click Button Add            # ok: 1 step(s) applied in 4 frame(s)
+gnui inspect /tmp/notes.sock do key cmd+shift+n
+gnui inspect /tmp/notes.sock shot ~/shots/notes.png         # the current frame, offscreen; not inside the socket's directory
+```
+
+`tree` prints each node's id, role, name, value, states (`focused`, `selected`,
+`disabled` …) and bounds in window pixels, indented by depth; `-role` and `-name`
+filter it, `-json` prints the raw response. `do` takes the steps of `widgettest`:
+`click`, `double_click`, `right_click`, `move`, `focus`, `type`, `key`
+(`enter`, `cmd+shift+n`, `primary+z`), `scroll`, `wait_for`, `wait_gone` and `settle`,
+with `-nth` for the second of two buttons of one name, and `-steps '<json list>'` for
+several in one request. A step is queued to the main thread and plays at a frame
+safe point, as the benchmark's script does; the reply comes once the steps have
+been applied and two more frames built from their result, so the next `tree` shows
+what they did. A step that cannot do what it says (no such node, a wait that ran
+out) answers with an error that names the step. Errors are JSON with a `code`
+(`bad_request`, `too_large`, `step_failed`, `timeout`, `bad_path`, `busy` …) and a
+message; a request over 64 KiB is refused. The protocol is in
+`internal/inspectwire`; `gnui inspect -h` lists the commands.
+
 ## 12. Building, shipping and platforms
 
 | OS | Minimum | Graphics | Needs at run time |

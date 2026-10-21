@@ -80,6 +80,12 @@ func ClickAt(role ui.Role, name string, dx, dy float32) Step {
 // RClick is script.RClick.
 func RClick(role ui.Role, name string) Step { return script.RClick(role, name) }
 
+// Focus gives the node the keyboard focus, as an assistive technology does.
+func Focus(role ui.Role, name string) Step { return script.Focus(role, name) }
+
+// ParseRole is the role that RoleName names, compared without regard to case.
+func ParseRole(name string) (ui.Role, bool) { return script.ParseRole(name) }
+
 // Down is script.Down.
 func Down(role ui.Role, name string) Step { return script.Down(role, name) }
 

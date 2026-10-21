@@ -410,6 +410,7 @@ type appObject struct {
 	startup    []startupEvent
 	safe       []func()
 	safeSpare  []func()
+	inspDrain  func() // the agent bridge's work for the main thread (bridge_dev.go); nil unless GNUI_INSPECT is set
 	appStateFn platform.MenuState
 	dockSpec   platform.MenuSpec
 
@@ -498,6 +499,9 @@ func (a *App) safePoint() {
 		a.r.CollectLeases() // the pixel buffers of finished frames (a GPU completion gave the dispatcher this turn)
 	}
 	a.runSafePoints()
+	if a.inspDrain != nil {
+		a.inspDrain()
+	}
 	for _, w := range a.wins {
 		w.flushDialogs()
 		w.applyCommands()

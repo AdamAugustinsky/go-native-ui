@@ -8,6 +8,7 @@
 //	gnui run     [-c gnui.json] [-env KEY=VAL] [-detach] [-adhoc] [-tags list] [-- app arguments]
 //	gnui sign    [-identity id|-dev|-adhoc] [-hardened] [-entitlements file] path.app
 //	gnui doctor  [-c gnui.json] [-setup-dev-cert]
+//	gnui inspect [-json] [-timeout d] <socket> windows|tree|do|shot ...
 //
 // package builds a release bundle: an arm64 binary (macOS means Apple
 // silicon, DECISIONS.md D55), Info.plist, an .icns icon, resources, nested
@@ -21,6 +22,11 @@
 //
 // doctor checks the toolchain and the gnui-dev identity; -setup-dev-cert
 // creates the identity.
+//
+// inspect talks to the agent bridge of a development build started with
+// GNUI_INSPECT=<socket>: it lists the windows and the semantic tree, plays
+// steps by role and name, and renders the current frame to a PNG. It works on
+// every OS the bridge does.
 //
 // See cmd/gnui/README.md for the gnui.json schema and the signing scheme.
 package main
@@ -40,6 +46,8 @@ usage:
                           build a development bundle, sign it with gnui-dev, launch it
   gnui sign [flags] app   sign an existing bundle (the tool apps) with gnui-dev or another identity
   gnui doctor [flags]     check the toolchain and the signing identities
+  gnui inspect <socket> windows|tree|do|shot
+                          drive and inspect a development build run with GNUI_INSPECT=<socket>
 
 Every command reads -c gnui.json (default: ./gnui.json) where it needs one.
 Run "gnui <command> -h" for the flags.
@@ -67,6 +75,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		err = cmdSign(args[1:], stdout, stderr)
 	case "doctor":
 		err = cmdDoctor(args[1:], stdout, stderr)
+	case "inspect":
+		err = cmdInspect(args[1:], stdout, stderr)
 	case "-h", "-help", "--help", "help":
 		fmt.Fprint(stdout, usage)
 		return 0

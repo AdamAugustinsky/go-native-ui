@@ -3,8 +3,10 @@ package main
 import (
 	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -41,7 +43,7 @@ func TestPackagedBinaryHasNoDebugChordOrInspector(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	needles := []string{"Toggle Overlay", "Run Layout Audit", "inspectLines", "chordCommand", "debugCommand"}
+	needles := []string{"Toggle Overlay", "Run Layout Audit", "inspectLines", "chordCommand", "debugCommand", "startInspector", "GNUI_INSPECT"}
 	build := func(o buildOptions) []byte {
 		t.Helper()
 		out := filepath.Join(t.TempDir(), "probe")
@@ -65,5 +67,26 @@ func TestPackagedBinaryHasNoDebugChordOrInspector(t *testing.T) {
 		if bytes.Contains(rel, []byte(n)) {
 			t.Errorf("a packaged binary contains %q", n)
 		}
+	}
+}
+
+// The agent bridge (GNUI_INSPECT) is development only: a packaged binary does
+// not link it, a development build does. Checked on the dependency lists, so
+// it needs no build, and then on the binaries.
+func TestReleaseBuildDoesNotLinkTheAgentBridge(t *testing.T) {
+	deps := func(tags string) string {
+		t.Helper()
+		out, err := exec.Command("go", "list", "-deps", "-tags", tags, "gonativeui/app").Output()
+		if err != nil {
+			t.Fatalf("go list: %v", err)
+		}
+		return string(out)
+	}
+	const wire = "gonativeui/internal/inspectwire"
+	if !strings.Contains(deps("gnui_dev_probe"), wire) {
+		t.Fatalf("a development build of package app does not depend on %s: the check below proves nothing", wire)
+	}
+	if strings.Contains(deps("gnui_release"), wire) {
+		t.Errorf("package app depends on %s in a release build", wire)
 	}
 }
