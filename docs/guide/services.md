@@ -39,6 +39,15 @@ go test ./examples/services                              # every service replace
 - **The Keychain does not ask for a bundle,** but an item is readable without a
   prompt only by the program that created it, so a rebuilt program, signed
   differently, may be asked by the user. A `gnui run` bundle keeps its signature.
+- **The example's files and Keychain items are shared by its development and release
+  bundles.** `paths.Config(id)`, `secret.Open(service)` and `winstate.Load(id)` key by
+  the string you pass, and Pings passes one constant, while `gnui run` gives the
+  bundle the id `….dev` (the notification grant and the login agent are keyed by that
+  bundle id and are separate). `App.ID()` is `AppConfig.ID` or, when that is empty,
+  the running bundle's id, so an app that wants them apart leaves `ID` empty and
+  passes `a.ID()` from `Start`. That is empty outside a bundle (`go run`, Windows,
+  Linux), where the app needs a constant of its own: the framework has no
+  development/release split there.
 - **The Dock and the status item** are exercised without a bundle by their packages'
   own tests, and work from a bare `go run`.
 - Only macOS has a native version of the first three. The others are marked "not
