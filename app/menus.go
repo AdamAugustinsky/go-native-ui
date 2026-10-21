@@ -75,7 +75,8 @@ func (a *App) syncMenuBar() {
 // model's State says, given the last frame's modal and focus, the system's
 // actions included (a disabled RoleZoom does not zoom; Quit waits for the
 // modal unless its command is InModal). A standard item without a command
-// (id 0): an edit item when a text field has the focus; a system item (Hide,
+// (id 0): an edit item when a text field has the focus (not Copy or Cut when
+// it is a secure field); a system item (Hide,
 // Quit, Minimize …) unless a modal is open, as a command not marked InModal.
 func (a *App) menuState(id uint16, act platform.MenuAction) (enabled, checked bool) {
 	if devBuild && id >= debugCmdBase {
@@ -85,7 +86,7 @@ func (a *App) menuState(id uint16, act platform.MenuAction) (enabled, checked bo
 	}
 	if id == 0 {
 		if act.IsEdit() {
-			return a.UI.TextFieldFocused(), false
+			return a.UI.TextFieldFocused() && !(a.UI.SecureFieldFocused() && (act == platform.MenuCopy || act == platform.MenuCut)), false
 		}
 		return act != platform.MenuNone && !a.UI.ModalOpen(), false
 	}

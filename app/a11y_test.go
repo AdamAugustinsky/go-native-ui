@@ -48,7 +48,7 @@ func TestAXEnumsMatchUI(t *testing.T) {
 		{uint16(ui.SemDisabled), uint16(platform.AXDisabled)}, {uint16(ui.SemFocused), uint16(platform.AXFocused)},
 		{uint16(ui.SemEditable), uint16(platform.AXEditable)}, {uint16(ui.SemModal), uint16(platform.AXModal)},
 		{uint16(ui.SemSortAscending), uint16(platform.AXSortAscending)}, {uint16(ui.SemSortDescending), uint16(platform.AXSortDescending)},
-		{uint16(ui.SemLive), uint16(platform.AXLive)},
+		{uint16(ui.SemLive), uint16(platform.AXLive)}, {uint16(ui.SemSecure), uint16(platform.AXSecure)},
 		{uint16(ui.ActPress), uint16(platform.AXPress)}, {uint16(ui.ActFocus), uint16(platform.AXFocus)},
 		{uint16(ui.ActIncrement), uint16(platform.AXIncrement)}, {uint16(ui.ActDecrement), uint16(platform.AXDecrement)},
 		{uint16(ui.ActExpand), uint16(platform.AXExpand)}, {uint16(ui.ActCollapse), uint16(platform.AXCollapse)},

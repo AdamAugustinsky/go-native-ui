@@ -64,14 +64,16 @@ func platformCursor(c ui.Cursor) platform.Cursor { return platform.Cursor(c) }
 type textTarget interface {
 	SetIMERect(x, y, w, h float32)
 	SetTextInput(active bool)
+	SetSecureTextInput(on bool)
 	DiscardComposition()
 	RequestPaste(tag uint64)
 }
 
 // syncText hands the focused text field's state to the window: where its caret
-// or composition is (for the input method's candidate window) and whether a
-// field has focus at all, and arms the wake-up for the field's next caret
-// blink. The platform compares, so calling it every frame changes nothing when
+// or composition is (for the input method's candidate window), whether a
+// field has focus at all and whether it is a secure field (the system's
+// secure keyboard entry, Roman input only), and arms the wake-up for the
+// field's next caret blink. The platform compares, so calling it every frame changes nothing when
 // nothing moved; start is the platform time the frame began at.
 //
 // When ui reports the input method's composition orphaned (IMECancel: its field
@@ -88,6 +90,7 @@ func (a *App) syncText(win textTarget, start int64) {
 		win.SetIMERect(r[0], r[1], r[2], r[3])
 	}
 	win.SetTextInput(ok)
+	win.SetSecureTextInput(a.UI.SecureFieldFocused())
 	if tag, ok := a.UI.PasteRequest(); ok {
 		win.RequestPaste(uint64(tag))
 	}

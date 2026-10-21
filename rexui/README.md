@@ -21,7 +21,7 @@ directly with `k.Kit`, or copies a component and owns it.
 | `Switch` | — | mini … large | The knob slides over the Standard duration and floats on a two-layer shadow in light. |
 | `Slider` | — | regular, small | 6 pt (small 4 pt) track, 20 × 16 knob. |
 | `SegmentedControl` | radio group or tab list role | regular, small | Accent pill, Label3 dividers between unselected segments. |
-| `TextField` | Default, Mono, Borderless | small … large | 1 pt outline outside the frame. The ring shows whenever focused. |
+| `TextField` | Default, Mono, Borderless | small … large | 1 pt outline outside the frame. The ring shows whenever focused. `FieldOpts.Secure`: a password field (NSSecureTextField): bullets only, no copy or cut, no undo history, secure keyboard entry and Roman input while focused, `AXSecureTextField`; `TextBuffer.Wipe` zeroes the text. |
 | `SearchField` | — | small … large | Capsule outline, magnifier, filled-circle clear button, Escape clears. |
 | `Select` | pop-up, borderless, pull-down | regular, small | With native menus (macOS) the options are the system's pop-up menu (`RequestMenu`, `MenuChoice`); otherwise `widget.Kit.Select` draws the open list. |
 | `Stepper`, `StepperField` | — | regular measured, others scaled | NSStepper: 20 × 24 body, two chevrons on a divider. Press and hold repeats at the system key-repeat timing; Up/Down arrows when focused. `StepperField` pairs it with a `TextField` over a `*float32`. |

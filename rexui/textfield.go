@@ -31,6 +31,14 @@ type FieldOpts struct {
 	Variant FieldVariant
 	// Size is the control size (theme.SizeSpec's FieldHeight and FieldRadius).
 	Size theme.Size
+	// Secure makes a password field (NSSecureTextField): it shows a bullet for
+	// each character and never the text, copies and cuts nothing, keeps no
+	// undo history, takes Roman input only with the system's secure keyboard
+	// entry on while it has the focus, and reports the secure-text-field role
+	// with bullets for a value (ui.Context.NextSecureField). The text is in
+	// the buffer as ever; TextBuffer.Wipe zeroes it once used. Turning it off
+	// shows the text (a show-password toggle).
+	Secure bool
 }
 
 // FieldRecipe is the look of text and search fields (NSTextField and
@@ -66,10 +74,14 @@ var FieldLook = FieldRecipe{
 // ui.Context.TextField (caret, selection, mouse, copy, cut, paste, undo and
 // input methods) in macOS's bezel; its focus ring shows whenever it has the
 // focus, as AppKit's does. It fills the parent's width unless the kit's
-// NextWidth says otherwise.
+// NextWidth says otherwise. FieldOpts.Secure makes it a password field.
 //
 //	if rexui.TextField(k, "Name", &v.name, "Untitled", rexui.FieldOpts{}).Submitted {
 //		v.rename()
+//	}
+//	if rexui.TextField(k, "Password", &v.pw, "", rexui.FieldOpts{Secure: true}).Submitted {
+//		v.unlock(v.pw.Bytes())
+//		v.pw.Wipe()
 //	}
 func TextField(k *base.Kit, label string, buf *ui.TextBuffer, placeholder string, o FieldOpts) base.FieldSignal {
 	return field(k, label, buf, placeholder, o, false)
@@ -119,6 +131,9 @@ func field(k *base.Kit, label string, buf *ui.TextBuffer, placeholder string, o 
 	role := ui.RoleTextField
 	if search {
 		role = ui.RoleSearchField
+	}
+	if o.Secure {
+		c.NextSecureField()
 	}
 	res := k.TextInput(&ti, buf, role, search)
 

@@ -362,6 +362,41 @@ func TestFiredAndNextDeliverOnceInOrder(t *testing.T) {
 	})
 }
 
+// Copy is off while a secure field has the focus, and the native Edit → Copy
+// still goes to the field (which copies nothing), not to the app.
+func TestCopyIsOffInASecureField(t *testing.T) {
+	r := newRig(t)
+	var buf ui.TextBuffer
+	var copied []byte
+	r.c.ClipboardSet = func(b []byte) { copied = append(copied[:0], b...) }
+	var key ui.Key
+	field := func(c *ui.Context) {
+		c.NextSize(ui.Px(200), ui.Px(24))
+		c.NextSecureField()
+		key = c.KeyOf(c.TextField("f", &buf).ID)
+	}
+	buf.SetString("hunter2")
+	buf.SelectAll()
+	r.frame(field)
+	r.c.SetFocus(key)
+	r.frame(field)
+	if on, _ := r.m.State(r.c, cmdCopy); on {
+		t.Error("Copy enabled in a secure field")
+	}
+	if on, _ := r.m.State(r.c, cmdPaste); !on {
+		t.Error("Paste disabled in a secure field")
+	}
+	r.in.PushCommand(uint16(cmdCopy))
+	if got := r.fired(field); len(got) != 0 || copied != nil {
+		t.Fatalf("Edit → Copy: fired %v, copied %q", got, copied)
+	}
+	r.c.SetFocus(0)
+	r.frame(field)
+	if on, _ := r.m.State(r.c, cmdCopy); !on {
+		t.Error("Copy still off once the field lost the focus")
+	}
+}
+
 func TestEditRolesActOnTheFocusedField(t *testing.T) {
 	r := newRig(t)
 	var buf ui.TextBuffer

@@ -35,6 +35,9 @@ AXWindow
       AXGroup "Notes"
         AXStaticText value="Notes"
         AXTextField "Notes" value="Hello, gallery" sel=14+0
+      AXGroup "Password"
+        AXStaticText value="Password"
+        AXTextField/AXSecureTextField "Password" sel=0+0
       AXGroup "Filter"
         AXStaticText value="Filter"
         AXTextField/AXSearchField "Filter" sel=0+0

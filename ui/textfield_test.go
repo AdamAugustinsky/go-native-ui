@@ -23,6 +23,8 @@ type fieldRig struct {
 	seps string
 	// extra builds more after the field (another stop for the focus).
 	extra func(c *Context)
+	// secure makes the field a secure one (NextSecureField).
+	secure bool
 }
 
 const (
@@ -59,6 +61,10 @@ func (r *fieldRig) step(dtMs int64) {
 		c.NextTextColor(0x00FF00FF)
 		if r.cmdr != nil {
 			c.NextFieldCommander(r.cmdr, r.seps)
+		}
+		if r.secure {
+			c.NextSecureField()
+			c.NextSemName("Password")
 		}
 		r.res = c.TextField("f", &r.buf)
 		if r.extra != nil {

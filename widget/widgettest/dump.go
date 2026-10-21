@@ -35,7 +35,7 @@ var semStateNames = [...]struct {
 }{
 	{ui.SemChecked, "checked"}, {ui.SemMixed, "mixed"}, {ui.SemSelected, "selected"},
 	{ui.SemExpanded, "expanded"}, {ui.SemDisabled, "disabled"}, {ui.SemFocused, "focused"},
-	{ui.SemEditable, "editable"}, {ui.SemModal, "modal"}, {ui.SemLive, "live"},
+	{ui.SemEditable, "editable"}, {ui.SemModal, "modal"}, {ui.SemLive, "live"}, {ui.SemSecure, "secure"},
 }
 
 // Dump writes the semantic tree as indented text: roles, names, values, states,

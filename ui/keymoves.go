@@ -31,9 +31,9 @@ func (c *Context) applyBinding(buf *TextBuffer, a EditAction) {
 			to = text.PrevGrapheme(b, buf.caret)
 		}
 	case EditMoveWordLeft:
-		to = wordLeft(b, buf.caret)
+		to = buf.wordLeft(buf.caret)
 	case EditMoveWordRight:
-		to = wordRight(b, buf.caret, !macKeys)
+		to = buf.wordRight(buf.caret, !macKeys)
 	case EditMoveLineStart, EditMoveParagraphStart, EditMoveDocumentStart, EditMoveUp:
 		to = 0
 	case EditMoveLineEnd, EditMoveParagraphEnd, EditMoveDocumentEnd, EditMoveDown:
@@ -56,9 +56,9 @@ func (c *Context) applyBinding(buf *TextBuffer, a EditAction) {
 		case EditDeleteForward:
 			hi = text.NextGrapheme(b, buf.caret)
 		case EditDeleteWordBackward:
-			lo = wordLeft(b, buf.caret)
+			lo = buf.wordLeft(buf.caret)
 		case EditDeleteWordForward:
-			hi = wordRight(b, buf.caret, false)
+			hi = buf.wordRight(buf.caret, false)
 		case EditDeleteToLineStart, EditDeleteToParagraphStart:
 			lo = 0
 		default:
@@ -92,4 +92,7 @@ func (c *Context) transpose(buf *TextBuffer) {
 	buf.breakRun()
 	buf.replace(lo, hi, swapped)
 	buf.breakRun()
+	if buf.secure {
+		clear(swapped) // no copy of a secure field's text stays behind
+	}
 }

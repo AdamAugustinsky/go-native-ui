@@ -238,6 +238,9 @@ func TestAXDumpMapsRoles(t *testing.T) {
 	b.add(0, 8, AXRoleHost, "").Host = 0x101
 	b.add(0, 9, AXRoleMenuBar, "")
 	b.add(b.idx(9), 10, AXRoleMenuItem, "File")
+	pw := b.add(0, 11, AXRoleTextField, "Password")
+	b.value(pw, "•••")
+	pw.State, pw.Text, pw.TextSel = AXEditable|AXSecure, AXTextField, [2]int32{9, 9}
 	want := `AXWindow
   AXCheckBox/AXSwitch "Wi-Fi" value=1 {Press}
   AXSlider "Volume" value=4 {Increment,Decrement}
@@ -249,6 +252,7 @@ func TestAXDumpMapsRoles(t *testing.T) {
   Host #257
   AXMenuBar
     AXMenuBarItem "File"
+  AXTextField/AXSecureTextField "Password" value="•••" sel=3+0
 `
 	if got := AXDump(&b.t); got != want {
 		t.Errorf("dump:\n%s\nwant:\n%s", got, want)

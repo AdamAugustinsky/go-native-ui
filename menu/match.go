@@ -74,8 +74,15 @@ func (m *Model) State(c *ui.Context, id ID) (enabled, checked bool) {
 	if !ok {
 		return false, false
 	}
-	enabled = !hasBit(m.off, i) && !hasBit(m.lim, i) && (!c.ModalOpen() || m.inModal(c, i))
+	enabled = !hasBit(m.off, i) && !hasBit(m.lim, i) && (!c.ModalOpen() || m.inModal(c, i)) && !secureCopy(c, m.cmds[i].Role.editAction())
 	return enabled, hasBit(m.check, i)
+}
+
+// secureCopy reports whether edit action a would copy the text of a secure
+// field (ui.Context.NextSecureField), which never leaves it: Copy and Cut are
+// off while one has the focus.
+func secureCopy(c *ui.Context, a ui.EditAction) bool {
+	return (a == ui.EditCopy || a == ui.EditCut) && c.SecureFieldFocused()
 }
 
 // inModal reports whether command i may act while a modal overlay is open: it
