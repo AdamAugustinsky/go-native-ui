@@ -117,8 +117,8 @@ func TestRemoveIsARealAlert(t *testing.T) {
 // The Edit menu acts once on the field that has the keyboard: Select All, Cut,
 // Paste and Undo through the menu, and ⌘V through the window.
 func TestEditMenuActsOnce(t *testing.T) {
-	testlock.Hold(t, "pasteboard") // the general pasteboard is the system's: Cut and Paste must see each other's
 	l, n := startReal(t)
+	testlock.Hold(t, "pasteboard") // the general pasteboard is the system's: other tests, in other processes too, write it; after "activation", the order everywhere
 	l.Click(ui.RoleTextField, "New note")
 	l.Type("hello")
 	// A paste is answered by the pasteboard worker in a later frame: the field

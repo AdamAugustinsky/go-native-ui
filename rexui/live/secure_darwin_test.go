@@ -12,6 +12,7 @@ import (
 
 	"gonativeui/app"
 	"gonativeui/internal/objc"
+	"gonativeui/internal/testlock"
 	"gonativeui/platform"
 	"gonativeui/rexui"
 	"gonativeui/theme/rex"
@@ -101,6 +102,7 @@ func romanOnly(v objc.ID) bool {
 // works, an input method's marked text never reaches the text before its
 // commit, and closing the window ends secure input.
 func TestLiveSecureField(t *testing.T) {
+	testlock.Hold(t, "pasteboard") // the general pasteboard is the system's: other tests, in other processes too, write it; after "activation", the order everywhere
 	sys := secureSystem(t)
 	p := &pwLab{}
 	l := widgettest.StartLive(t, app.Config{Title: "app lock", Width: 420, Height: 220}, p)
