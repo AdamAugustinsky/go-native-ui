@@ -5,8 +5,15 @@
 // counts as documented by the group's comment; a field, by a comment on its
 // line. A comment that heads an unbroken run of fields or of constants (no
 // blank line between them) documents the whole run, as godoc shows it above
-// them; functions, methods and types each need their own. It exits 1 when it
-// finds any.
+// them; functions, methods and types each need their own.
+//
+// It also reports every package with exported API and no Example function in
+// its test files (phase 6 exit criterion 9): an Example is compiled with the
+// tests, so it cannot drift from the API, and godoc shows it. A package with
+// no exported identifier (a doc.go that holds live tests) needs none; neither
+// does package main.
+//
+// It exits 1 when it finds any.
 //
 //	go run ./tools/doccheck [dir ...]
 //
@@ -24,6 +31,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode"
 )
 
 func main() {
@@ -31,16 +39,26 @@ func main() {
 	if len(dirs) == 0 {
 		dirs = publicDirs(".")
 	}
-	var missing []string
+	var missing, noExample []string
 	for _, d := range dirs {
 		missing = append(missing, checkDir(d)...)
+		noExample = append(noExample, checkExamples(d)...)
 	}
 	sort.Strings(missing)
+	sort.Strings(noExample)
 	for _, m := range missing {
+		fmt.Println(m)
+	}
+	for _, m := range noExample {
 		fmt.Println(m)
 	}
 	if len(missing) > 0 {
 		fmt.Fprintf(os.Stderr, "doccheck: %d exported identifiers without a doc comment\n", len(missing))
+	}
+	if len(noExample) > 0 {
+		fmt.Fprintf(os.Stderr, "doccheck: %d packages without an Example function\n", len(noExample))
+	}
+	if len(missing)+len(noExample) > 0 {
 		os.Exit(1)
 	}
 }
@@ -151,6 +169,70 @@ func checkDir(dir string) []string {
 		}
 	}
 	return out
+}
+
+// checkExamples reports dir when its package exports something and none of
+// its test files, internal or external, declares an Example function.
+func checkExamples(dir string) []string {
+	fset := token.NewFileSet()
+	isTest := func(fi fs.FileInfo) bool { return strings.HasSuffix(fi.Name(), "_test.go") }
+	pkgs, err := parser.ParseDir(fset, dir, func(fi fs.FileInfo) bool { return !isTest(fi) }, 0)
+	if err != nil {
+		return []string{fmt.Sprintf("%s: %v", dir, err)}
+	}
+	exported := false
+	for name, pkg := range pkgs {
+		if name == "main" {
+			continue
+		}
+		for _, f := range pkg.Files {
+			for _, decl := range f.Decls {
+				switch d := decl.(type) {
+				case *ast.FuncDecl:
+					exported = exported || (d.Recv == nil && d.Name.IsExported())
+				case *ast.GenDecl:
+					for _, spec := range d.Specs {
+						switch s := spec.(type) {
+						case *ast.TypeSpec:
+							exported = exported || s.Name.IsExported()
+						case *ast.ValueSpec:
+							for _, n := range s.Names {
+								exported = exported || n.IsExported()
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	if !exported {
+		return nil
+	}
+	tests, err := parser.ParseDir(fset, dir, isTest, 0)
+	if err != nil {
+		return []string{fmt.Sprintf("%s: %v", dir, err)}
+	}
+	for _, pkg := range tests {
+		for _, f := range pkg.Files {
+			for _, decl := range f.Decls {
+				if d, ok := decl.(*ast.FuncDecl); ok && d.Recv == nil && isExample(d.Name.Name) {
+					return nil
+				}
+			}
+		}
+	}
+	return []string{dir + ": package has no Example function in its test files"}
+}
+
+// isExample reports whether name is an Example function's name as go test
+// takes it: Example, or Example followed by something that does not start with
+// a lower-case letter.
+func isExample(name string) bool {
+	rest, ok := strings.CutPrefix(name, "Example")
+	if !ok {
+		return false
+	}
+	return rest == "" || !unicode.IsLower([]rune(rest)[0])
 }
 
 func recvType(fl *ast.FieldList) string {
