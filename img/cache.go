@@ -465,16 +465,27 @@ func (c *Cache) upload(i int32) bool {
 // atlasAlloc finds a bw×bh region in a page: an existing page first, then a
 // new page within the budget, evicting images not in use to make room.
 func (c *Cache) atlasAlloc(i, bw, bh int32) (p int, x, y int32, sh int, ok bool) {
+	var dim int32
 	for {
+		dim = 512
+		if bw > dim || bh > dim {
+			dim = pageSize
+		}
 		for k, pg := range c.pages {
 			if pg == nil {
 				continue
 			}
+			dim = pageSize // add full-size pages once the small first page fills
 			if x, y, sh, ok := pg.alloc(bw, bh); ok {
 				return k, x, y, sh, true
 			}
 		}
-		if c.gpuUsed+pageBytes <= c.gpuBudget {
+		// Use the budget's tail rather than evicting a working set that
+		// would fit: a small first page leaves a non-page-sized remainder.
+		if c.gpuUsed+pageBytes > c.gpuBudget && bw <= 512 && heightClass(bh) <= 512 {
+			dim = 512
+		}
+		if c.gpuUsed+int64(dim)*int64(dim)*4 <= c.gpuBudget {
 			break
 		}
 		if !c.evictOne(i) {
@@ -489,15 +500,15 @@ func (c *Cache) atlasAlloc(i, bw, bh int32) (p int, x, y int32, sh int, ok bool)
 			break
 		}
 	}
-	pg := new(page) // a setup path: a new page is 4 MiB of GPU memory anyway
-	pg.tex = c.r.NewTexture(gpu.TexRGBA8, pageSize, pageSize)
+	pg := &page{dim: dim}
+	pg.tex = c.r.NewTexture(gpu.TexRGBA8, int(dim), int(dim))
 	if k < 0 {
 		k = len(c.pages)
 		c.pages = append(c.pages, pg)
 	} else {
 		c.pages[k] = pg
 	}
-	c.gpuUsed += pageBytes
+	c.gpuUsed += int64(dim) * int64(dim) * 4
 	x, y, sh, ok = pg.alloc(bw, bh)
 	return k, x, y, sh, ok
 }
@@ -543,7 +554,7 @@ func (c *Cache) evictGPU(i int32) {
 		if pg.images == 0 {
 			c.r.FreeTexture(pg.tex)
 			c.pages[e.page] = nil
-			c.gpuUsed -= pageBytes
+			c.gpuUsed -= int64(pg.dim) * int64(pg.dim) * 4
 		}
 	} else {
 		c.r.FreeTexture(e.tex)
