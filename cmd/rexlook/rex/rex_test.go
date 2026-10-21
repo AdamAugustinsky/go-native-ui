@@ -123,7 +123,7 @@ func TestLayoutAnySize(t *testing.T) {
 		for _, sz := range [][2]int{{600, 400}, {700, 450}, {1057, 639}, {1600, 1000}, {3000, 1800}, {900, 1200}, {600, 400}} {
 			h.w, h.h = int(float32(sz[0])*scale), int(float32(sz[1])*scale)
 			h.frame()
-			if h.c.Animating() {
+			if h.c.Animating() && !h.c.Settling() { // (a frame reads the new layout, as the app's owed settle frame after a resize does)
 				t.Errorf("%v@%v: animating on the resize frame", sz, scale)
 			}
 			h.checkLayout(sz[0], sz[1], scale)

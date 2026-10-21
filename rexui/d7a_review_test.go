@@ -396,7 +396,7 @@ func TestToastFadeIsScheduledOnlyWhenSeen(t *testing.T) {
 		g.in.Hidden = tc.hidden
 		g.settle()
 		*show = true
-		g.frames(2) // (the first frames lay the toast out)
+		g.frames(3) // (the first frames lay the toast out, and settle it at the bottom)
 		if got := g.c.Animating(); got != tc.animates {
 			t.Errorf("%s: Animating = %v, want %v", tc.name, got, tc.animates)
 		}
