@@ -4,6 +4,7 @@ package platform
 
 import (
 	"fmt"
+	"time"
 
 	"gonativeui/internal/objc"
 )
@@ -102,7 +103,7 @@ func (w *Window) DebugState() DebugState {
 		FrameArmed: w.frameArmed, ArmedT: w.armedT,
 		Drawable: w.drawable != 0, Live: w.live, Relink: w.relink,
 		Ticks: w.ticks, TicksSinceFrame: w.ticksSinceFrame, LastTickT: w.lastTickT, LastFrameT: w.lastFrameT,
-		Pauses: w.pauses, IdleTicks: w.idleTicks, Restarts: w.restarts,
+		Pauses: w.pauses, IdleTicks: w.idleTicks, Restarts: w.restarts, Trims: w.trims,
 	}
 	if w.link != 0 {
 		s.LinkPausedOS = objc.SendBool(w.link, selIsPausedLink)
@@ -144,6 +145,16 @@ func (w *Window) DebugStopLink() bool {
 	objc.Send1(w.link, selSetPaused, 1)
 	w.linkPaused = false
 	return true
+}
+
+// DebugTrimAfter is a test hook (macOS only): how long a window driven by a
+// CAMetalDisplayLink stays idle before it gives back its spare drawables
+// (trimAfterNs); 0 restores the default. Main thread.
+func DebugTrimAfter(d time.Duration) {
+	trimAfter = int64(d)
+	if d <= 0 {
+		trimAfter = trimAfterNs
+	}
 }
 
 // DebugToggleFullScreen is a test hook (macOS only): toggleFullScreen:, as
