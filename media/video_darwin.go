@@ -681,10 +681,17 @@ func (v *Video) pull(now int64) {
 	}
 	v.cur = pb
 	// A frame from before the seek can still come first: the seek's own is
-	// the one of the time it went to (the frame at or just before it).
-	if !v.playing {
+	// the one of the time it went to (the frame at or just before it; while
+	// playing, one of the few after it). Until it comes, a pause keeps
+	// pulling (a seek while playing, then a pause, would else ask for frames
+	// for seekSettleNs).
+	if v.pullTo != 0 {
 		f := time.Duration(1e9 / float64(v.frameRate()))
-		if t := cmDuration(&tShown); t >= v.seekTo-2*f && t <= v.seekTo+f {
+		hi := v.seekTo + f
+		if v.playing {
+			hi = v.seekTo + 4*f
+		}
+		if t := cmDuration(&tShown); t >= v.seekTo-2*f && t <= hi {
 			v.pullTo = 0 // the seek's frame came
 		}
 	}
