@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"math"
 	"slices"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -46,15 +47,20 @@ type sorter struct {
 }
 
 var (
-	sorterMu   core.Mutex
-	sorterFree []*sorter
+	sorterMu      core.Mutex
+	sorterFree    []*sorter
+	sorterTimer   *time.Timer
+	sorterLastPut time.Time
 )
+
+const sorterIdle = 30 * time.Second
 
 func getSorter() *sorter {
 	sorterMu.Lock()
 	defer sorterMu.Unlock()
 	if n := len(sorterFree); n > 0 {
 		s := sorterFree[n-1]
+		sorterFree[n-1] = nil
 		sorterFree = sorterFree[:n-1]
 		return s
 	}
@@ -64,7 +70,25 @@ func getSorter() *sorter {
 func putSorter(s *sorter) {
 	sorterMu.Lock()
 	sorterFree = append(sorterFree, s)
+	sorterLastPut = time.Now()
+	if sorterTimer == nil {
+		sorterTimer = time.AfterFunc(sorterIdle, trimSorters)
+	} else {
+		sorterTimer.Reset(sorterIdle)
+	}
 	sorterMu.Unlock()
+}
+
+func trimSorters() {
+	sorterMu.Lock()
+	defer sorterMu.Unlock()
+	if idle := time.Since(sorterLastPut); idle < sorterIdle {
+		// A callback already running when putSorter reset the timer must not
+		// discard newly returned, hot scratch.
+		sorterTimer.Reset(sorterIdle - idle)
+		return
+	}
+	sorterFree = nil
 }
 
 // Sort fills l.Order with a permutation of the entry indices in the
@@ -77,8 +101,9 @@ func putSorter(s *sorter) {
 //	SortKind:     files by extension (ASCII case-insensitive), then name;
 //	              directories by name
 //
-// It allocates nothing once l.Order and the shared scratch have grown. It
-// may be called from any goroutine on a Listing it owns.
+// It allocates nothing once l.Order and the shared scratch have grown.
+// Unused scratch is released after 30 seconds idle; a later call warms it again.
+// It may be called from any goroutine on a Listing it owns.
 func Sort(l *Listing, key SortKey, desc bool) {
 	s := getSorter()
 	s.sort(l, key, desc)
