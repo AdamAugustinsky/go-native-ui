@@ -685,7 +685,7 @@ go run ./examples/notes -exit-first -v                 # startup: exec → first
 
 | OS | Minimum | Graphics | Needs at run time |
 |---|---|---|---|
-| macOS | 14 | Metal | nothing beyond the system frameworks |
+| macOS | 14 on Apple silicon (arm64; Intel Macs are not supported, D55) | Metal | nothing beyond the system frameworks |
 | Windows | 10 (amd64, arm64) | Direct3D 11 (WARP without a GPU) | nothing beyond the system DLLs |
 | Linux | glibc (amd64, arm64); Wayland or X11 | EGL with GL or GLES | `libEGL`, `libGL` or `libOpenGL`, `libxkbcommon`, `libwayland-client` and `libwayland-egl` (Wayland) or `libX11` (X11), `libfontconfig` with at least one font; optional `libwayland-cursor`, `libXcursor` |
 
@@ -701,7 +701,8 @@ go run ./examples/notes -exit-first -v                 # startup: exec → first
   ```
 
 - **Release builds** use `-trimpath -ldflags="-s -w"`. CI builds the example this way for
-  six targets and fails if any binary is over 10 MB.
+  five targets (darwin/arm64, and windows and linux on amd64 and arm64) and fails if any
+  binary is over 10 MB. A build for darwin/amd64 stops with an error naming D55.
 - **Linux backend:** Wayland when `WAYLAND_DISPLAY` is set and the connection works, X11
   otherwise; `GNUI_BACKEND=wayland` or `x11` forces one.
 - **Startup:** the budget is 150 ms from process start to the first complete frame on the

@@ -14,14 +14,17 @@ import (
 
 // buildOptions say how buildBundle assembles an application bundle.
 type buildOptions struct {
-	Dev     bool     // development variant: bundle id plus ".dev", symbols kept
-	Archs   []string // GOARCH values to build; two make a universal binary
-	Tags    string   // go build -tags
-	Ldflags string   // extra go build -ldflags, e.g. "-X main.version=1.2"
-	Out     string   // path of the .app to write (replaced if it exists)
+	Dev     bool   // development variant: bundle id plus ".dev", symbols kept
+	Tags    string // go build -tags
+	Ldflags string // extra go build -ldflags, e.g. "-X main.version=1.2"
+	Out     string // path of the .app to write (replaced if it exists)
 	Log     io.Writer
 	Verbose bool
 }
+
+// darwinArch is the one architecture gnui builds: macOS means Apple silicon
+// (DECISIONS.md D55).
+const darwinArch = "arm64"
 
 // goTool returns the go command: $GNUI_GO, or go from PATH.
 func goTool() (string, error) {
@@ -70,8 +73,8 @@ func hasTag(list, tag string) bool {
 	return false
 }
 
-// buildExecutable builds the main package for darwin/<arch> with cgo off.
-func buildExecutable(c *Config, arch, out string, o buildOptions) error {
+// buildExecutable builds the main package for darwin/arm64 with cgo off.
+func buildExecutable(c *Config, out string, o buildOptions) error {
 	goBin, err := goTool()
 	if err != nil {
 		return fmt.Errorf("go not found: put the Go toolchain on PATH or set GNUI_GO (%w)", err)
@@ -79,9 +82,9 @@ func buildExecutable(c *Config, arch, out string, o buildOptions) error {
 	args := buildArgs(c, out, o)
 	cmd := exec.Command(goBin, args...)
 	cmd.Dir = c.dir
-	cmd.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS=darwin", "GOARCH="+arch)
+	cmd.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS=darwin", "GOARCH="+darwinArch)
 	if outp, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("go build (darwin/%s) failed:\n%s", arch, strings.TrimSpace(string(outp)))
+		return fmt.Errorf("go build (darwin/%s) failed:\n%s", darwinArch, strings.TrimSpace(string(outp)))
 	}
 	return nil
 }
@@ -96,9 +99,6 @@ func buildBundle(c *Config, o buildOptions) (entitlements string, cleanup func()
 		if o.Log != nil {
 			fmt.Fprintf(o.Log, f+"\n", a...)
 		}
-	}
-	if len(o.Archs) == 0 {
-		return "", cleanup, fmt.Errorf("no architectures to build")
 	}
 	if err := os.RemoveAll(o.Out); err != nil {
 		return "", cleanup, err
@@ -123,28 +123,13 @@ func buildBundle(c *Config, o buildOptions) (entitlements string, cleanup func()
 		}
 	}()
 
-	// 1. executable(s)
-	var slices []machoSlice
-	for _, arch := range o.Archs {
-		thin := filepath.Join(tmp, "exe-"+arch)
-		logf("building darwin/%s", arch)
-		if err := buildExecutable(c, arch, thin, o); err != nil {
-			return "", cleanup, err
-		}
-		data, err := os.ReadFile(thin)
-		if err != nil {
-			return "", cleanup, err
-		}
-		slices = append(slices, machoSlice{data})
+	// 1. executable
+	logf("building darwin/%s", darwinArch)
+	exe, err := filepath.Abs(filepath.Join(macos, c.Executable)) // go build runs in the config's directory
+	if err != nil {
+		return "", cleanup, err
 	}
-	exe := slices[0].data
-	if len(slices) > 1 {
-		logf("merging %d slices into a universal binary", len(slices))
-		if exe, err = makeUniversal(slices); err != nil {
-			return "", cleanup, err
-		}
-	}
-	if err := os.WriteFile(filepath.Join(macos, c.Executable), exe, 0o755); err != nil {
+	if err := buildExecutable(c, exe, o); err != nil {
 		return "", cleanup, err
 	}
 

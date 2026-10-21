@@ -76,7 +76,7 @@ jobs:
             echo "|---|---:|---:|"
           } > "$nsum"
           fail=0
-          for t in darwin/arm64 darwin/amd64 windows/amd64 windows/arm64 linux/amd64 linux/arm64; do
+          for t in darwin/arm64 windows/amd64 windows/arm64 linux/amd64 linux/arm64; do
             os=${t%/*}; arch=${t#*/}
             GOOS=$os GOARCH=$arch go vet $(GOOS=$os GOARCH=$arch go list $PKGS | grep -v -E "$PKGS_EXCLUDE")
             ext=""; [ "$os" = windows ] && ext=.exe
@@ -160,12 +160,6 @@ jobs:
         run: |
           go vet -tags gnui_publicapi $(go list ./... | grep -v -E "$PKGS_EXCLUDE")
           go test -tags gnui_publicapi -count=1 -skip "$QUARANTINE" ./platform ./app
-      - name: test internal/ffi and clib (amd64 under Rosetta)
-        run: |
-          softwareupdate --install-rosetta --agree-to-license >/dev/null 2>&1 || true
-          GOARCH=amd64 go test -count=1 ./internal/ffi ./clib
-          # NSRange arguments by value past the fifth integer word (the stack on amd64)
-          GOARCH=amd64 go test -count=1 -run 'TestEditorEscape|TestEditorSetTextOver|TestIME' ./platform
       - name: ffi benchmarks
         run: go test -run '^$' -bench . -benchmem ./internal/ffi
       - name: build spike

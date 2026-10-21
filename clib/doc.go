@@ -96,8 +96,8 @@
 //
 // # Platforms
 //
-// macOS and Linux on arm64 and amd64. On other systems, Windows included,
-// [Open] returns [ErrUnsupported].
+// macOS on Apple silicon (arm64), and Linux on arm64 and amd64. On other
+// systems, Windows and Intel Macs included, [Open] returns [ErrUnsupported].
 //
 // # Lifetime
 //

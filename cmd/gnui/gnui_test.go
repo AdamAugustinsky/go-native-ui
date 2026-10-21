@@ -270,40 +270,6 @@ func thinMachO(cpu macho.Cpu, sub uint32, payload byte) []byte {
 	return b
 }
 
-func TestUniversalBinary(t *testing.T) {
-	arm := thinMachO(macho.CpuArm64, 0, 0xA1)
-	amd := thinMachO(macho.CpuAmd64, 3, 0xB2)
-	fat, err := makeUniversal([]machoSlice{{arm}, {amd}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	ff, err := macho.NewFatFile(bytes.NewReader(fat))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(ff.Arches) != 2 {
-		t.Fatalf("%d arches", len(ff.Arches))
-	}
-	want := map[macho.Cpu][]byte{macho.CpuArm64: arm, macho.CpuAmd64: amd}
-	hdr := binary.BigEndian.Uint32(fat[8+20*0+8:]) // offset of first slice
-	if hdr%(1<<14) != 0 {
-		t.Errorf("arm64 slice at %d is not 16 KiB aligned", hdr)
-	}
-	for i, a := range ff.Arches {
-		off := binary.BigEndian.Uint32(fat[8+20*i+8:])
-		size := binary.BigEndian.Uint32(fat[8+20*i+12:])
-		if !bytes.Equal(fat[off:off+size], want[a.Cpu]) {
-			t.Errorf("slice %v differs from its input", a.Cpu)
-		}
-	}
-	if _, err := makeUniversal([]machoSlice{{arm}, {arm}}); err == nil {
-		t.Error("two slices of one cpu accepted")
-	}
-	if _, err := makeUniversal([]machoSlice{{[]byte("not macho")}}); err == nil {
-		t.Error("garbage accepted")
-	}
-}
-
 func TestNestedCodeOrder(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symbolic links")
@@ -484,8 +450,8 @@ func TestUsageErrors(t *testing.T) {
 	if code := run([]string{"frobnicate"}, &out, &errb); code != 2 {
 		t.Errorf("unknown command: exit %d", code)
 	}
-	if code := run([]string{"package", "-arch", "ppc"}, &out, &errb); code != 2 {
-		t.Errorf("bad -arch: exit %d", code)
+	if code := run([]string{"package", "stray"}, &out, &errb); code != 2 {
+		t.Errorf("stray argument: exit %d", code)
 	}
 	if code := run([]string{"help"}, &out, &errb); code != 0 || !strings.Contains(out.String(), "gnui package") {
 		t.Errorf("help: exit %d", code)

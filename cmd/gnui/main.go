@@ -3,16 +3,17 @@
 // only tools that ship with macOS (codesign, security, plutil, hdiutil, spctl)
 // plus notarytool and stapler from the Command Line Tools.
 //
-//	gnui package [-c gnui.json] [-o dir] [-arch universal|arm64|amd64] [-identity id]
-//	             [-dev-cert] [-no-hardened] [-notarize -notary-profile name] [-dmg] [-tags list]
+//	gnui package [-c gnui.json] [-o dir] [-identity id] [-dev-cert]
+//	             [-no-hardened] [-notarize -notary-profile name] [-dmg] [-tags list]
 //	gnui run     [-c gnui.json] [-env KEY=VAL] [-detach] [-adhoc] [-tags list] [-- app arguments]
 //	gnui sign    [-identity id|-dev|-adhoc] [-hardened] [-entitlements file] path.app
 //	gnui doctor  [-c gnui.json] [-setup-dev-cert]
 //
-// package builds a release bundle: a universal binary, Info.plist, an .icns
-// icon, resources, nested frameworks signed inside out, generated entitlements
-// and the hardened runtime; notarizing, stapling and the signed disk image
-// need a Developer ID identity and say so when they do not have one.
+// package builds a release bundle: an arm64 binary (macOS means Apple
+// silicon, DECISIONS.md D55), Info.plist, an .icns icon, resources, nested
+// frameworks signed inside out, generated entitlements and the hardened
+// runtime; notarizing, stapling and the signed disk image need a Developer ID
+// identity and say so when they do not have one.
 //
 // run builds a development bundle (bundle id plus ".dev") at
 // .gnui/dev/<Name>.app, signs it with the stable gnui-dev identity, launches

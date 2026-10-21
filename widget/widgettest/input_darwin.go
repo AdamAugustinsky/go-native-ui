@@ -4,7 +4,6 @@ package widgettest
 
 import (
 	"fmt"
-	"runtime"
 
 	"gonativeui/app"
 	"gonativeui/internal/objc"
@@ -399,11 +398,7 @@ func keyEventRaw(down bool, chars, plain string, vk uint16, flags uintptr, win i
 	if repeat {
 		rep = 1
 	}
-	if runtime.GOARCH == "arm64" {
-		f.Arg32(uint32(vk)<<16 | rep) // isARepeat at byte 0, the keyCode at byte 2 of the packed stack
-	} else {
-		f.Arg(uintptr(rep)).Arg(uintptr(vk))
-	}
+	f.Arg32(uint32(vk)<<16 | rep) // isARepeat at byte 0, the keyCode at byte 2 of the packed stack
 	return objc.ID(f.Call(objc.MsgSend).R0())
 }
 

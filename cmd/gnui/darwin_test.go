@@ -144,9 +144,8 @@ func TestPackageHelloBundle(t *testing.T) {
 			t.Errorf("bundle is missing %v", err)
 		}
 	}
-	archs, err := runOut("lipo", "-archs", exe)
-	if err != nil || !strings.Contains(archs, "arm64") || !strings.Contains(archs, "x86_64") {
-		t.Errorf("executable is not universal: %q %v", archs, err)
+	if archs, err := runOut("lipo", "-archs", exe); err != nil || strings.TrimSpace(archs) != "arm64" {
+		t.Errorf("executable is not thin arm64: %q %v", archs, err)
 	}
 	if _, err := runOut("iconutil", "-c", "iconset", filepath.Join(app, "Contents", "Resources", "AppIcon.icns"), "-o", filepath.Join(t.TempDir(), "i.iconset")); err != nil {
 		t.Errorf("the icon is not a valid icns: %v", err)
@@ -177,7 +176,7 @@ func TestPackageWithoutAppleIdentity(t *testing.T) {
 	needMac(t)
 	out := t.TempDir()
 	// -identity - is ad-hoc: no Developer ID, whatever this machine's keychains hold.
-	code, so, se := gnui(t, "package", "-c", helloConfig, "-o", out, "-arch", runtime.GOARCH, "-identity", "-", "-notarize", "-notary-profile", "x")
+	code, so, se := gnui(t, "package", "-c", helloConfig, "-o", out, "-identity", "-", "-notarize", "-notary-profile", "x")
 	if code != 3 || !strings.Contains(se, "Developer ID Application") {
 		t.Errorf("-notarize without an identity: exit %d\n%s\n%s", code, so, se)
 	}
@@ -185,7 +184,7 @@ func TestPackageWithoutAppleIdentity(t *testing.T) {
 		t.Error("a bundle was built before the missing identity was reported")
 	}
 
-	so = mustGnui(t, "package", "-c", helloConfig, "-o", out, "-arch", runtime.GOARCH, "-identity", "-", "-dmg")
+	so = mustGnui(t, "package", "-c", helloConfig, "-o", out, "-identity", "-", "-dmg")
 	for _, want := range []string{"skipped: notarize", "dmg signature and notarization"} {
 		if !strings.Contains(so, want) {
 			t.Errorf("output does not report %q:\n%s", want, so)
@@ -305,7 +304,7 @@ func TestNestedFrameworksSignedInsideOut(t *testing.T) {
 	c := loadHello(t)
 	c.Frameworks = []string{fw, dylib}
 	app := filepath.Join(tmp, "out", "Hello App.app")
-	ent, cleanup, err := buildBundle(c, buildOptions{Archs: []string{runtime.GOARCH}, Out: app})
+	ent, cleanup, err := buildBundle(c, buildOptions{Out: app})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -334,19 +333,19 @@ func TestNestedFrameworksSignedInsideOut(t *testing.T) {
 	}
 }
 
-// TestPackageGallery packages the real gallery application as a universal,
-// signed bundle.
+// TestPackageGallery packages the real gallery application as a signed
+// arm64 bundle.
 func TestPackageGallery(t *testing.T) {
 	if testing.Short() {
-		t.Skip("builds the gallery twice")
+		t.Skip("builds the gallery")
 	}
 	needMac(t)
 	out := t.TempDir()
 	mustGnui(t, "package", "-c", filepath.Join("..", "gallery", "gnui.json"), "-o", out, "-dev-cert")
 	app := filepath.Join(out, "Gallery.app")
 	exe := filepath.Join(app, "Contents", "MacOS", "Gallery")
-	if archs, err := runOut("lipo", "-archs", exe); err != nil || !strings.Contains(archs, "arm64") || !strings.Contains(archs, "x86_64") {
-		t.Errorf("not universal: %q %v", archs, err)
+	if archs, err := runOut("lipo", "-archs", exe); err != nil || strings.TrimSpace(archs) != "arm64" {
+		t.Errorf("not thin arm64: %q %v", archs, err)
 	}
 	if _, err := runOut("codesign", "--verify", "--deep", "--strict", app); err != nil {
 		t.Fatal(err)
@@ -494,7 +493,7 @@ func TestNestedEntitlementsSurviveSigning(t *testing.T) {
 	c := loadHello(t) // its entitlement: disable-library-validation
 	c.Frameworks = []string{helper}
 	app := filepath.Join(tmp, "out", "Hello App.app")
-	ent, cleanup, err := buildBundle(c, buildOptions{Archs: []string{runtime.GOARCH}, Out: app})
+	ent, cleanup, err := buildBundle(c, buildOptions{Out: app})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -548,7 +547,7 @@ func TestExportedTypeMapsExtension(t *testing.T) {
 	c.ExportedTypes = []TypeDeclaration{{Identifier: uti, Description: "Test", ConformsTo: []string{"public.data"}, Extensions: []string{ext}}}
 	c.DocumentTypes = []DocumentType{{Name: "Test", Extensions: []string{ext}, UTIs: []string{uti}}}
 	app := filepath.Join(tmp, "T.app")
-	_, cleanup, err := buildBundle(c, buildOptions{Dev: true, Archs: []string{runtime.GOARCH}, Out: app})
+	_, cleanup, err := buildBundle(c, buildOptions{Dev: true, Out: app})
 	if err != nil {
 		t.Fatal(err)
 	}

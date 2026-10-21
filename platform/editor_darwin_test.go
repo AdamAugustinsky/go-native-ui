@@ -121,15 +121,14 @@ func withEditorIn(t *testing.T, hidden bool, o EditorOptions, f func(e *Editor))
 }
 
 // sendSetMarked is setMarkedText:selectedRange:replacementRange: as an input
-// method sends it, the replacement range by value as each ABI wants it.
+// method sends it, the replacement range by value.
 func sendSetMarked(v objc.ID, s string, sl, sn, rl, rn uintptr) {
 	str := objc.Str(s) // before the call is assembled: it uses the same frame
-	argRangeAfter5(objc.F.Reset().Arg(uintptr(v)).Arg(uintptr(selSetMarkedText)).Arg(uintptr(str)).Arg(sl).Arg(sn), rl, rn).Call(objc.MsgSend)
+	objc.F.Reset().Arg(uintptr(v)).Arg(uintptr(selSetMarkedText)).Arg(uintptr(str)).Arg(sl).Arg(sn).Arg(rl).Arg(rn).Call(objc.MsgSend)
 }
 
 // Escape during a composition abandons it and leaves the text as it was. The
-// editor sends setMarkedText:@"" with a replacement range of NSNotFound: on
-// amd64 that range is on the stack (the amd64 job runs this under Rosetta).
+// editor sends setMarkedText:@"" with a replacement range of NSNotFound.
 func TestEditorEscapeAbandonsComposition(t *testing.T) {
 	withEditor(t, EditorOptions{}, func(e *Editor) {
 		if err := e.SetText([]byte("ab")); err != nil {

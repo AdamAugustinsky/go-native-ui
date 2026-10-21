@@ -35,8 +35,7 @@ var Trace bool
 // class; it finds the handler of the selector by binary search in a slice
 // sorted when the class is registered. A call allocates nothing and creates no
 // closure, and costs a handful of comparisons. The ffi callback table has
-// ffi.MaxCallbacks entries for the whole process; a class takes one, and each
-// MethodIMP takes one more.
+// ffi.MaxCallbacks entries for the whole process; a class takes one.
 //
 // Instance state. Every class gets one uintptr instance variable, Index,
 // meant to hold an index into a Go-side table (windows, hosts, delegates),
@@ -77,10 +76,9 @@ func (v *Ivar) at(obj ID) unsafe.Pointer {
 const indexIvar = "gnuiIndex"
 
 type method struct {
-	sel    SEL
-	types  string
-	h      Handler
-	direct bool // MethodIMP: h is its own ffi callback, not dispatched by selector
+	sel   SEL
+	types string
+	h     Handler
 }
 
 // Define starts the definition of a class named name that inherits from super
@@ -119,18 +117,7 @@ func (d *ClassDef) Superclass() ID { return d.super }
 // Method adds the instance method sel to the class. types is its Objective-C
 // type encoding ("v@:@": void, self, _cmd, an object). h receives the call
 // as described at Handler. A selector can be added once per class.
-func (d *ClassDef) Method(sel SEL, types string, h Handler) { d.add(sel, types, h, false) }
-
-// MethodIMP adds an instance method that gets an ffi callback of its own
-// instead of the class's shared one, for a method whose arguments or result
-// do not follow the usual register layout, so that argument 1 is not _cmd. A
-// CGRect result on amd64 is returned through a hidden pointer that comes
-// first and shifts self and _cmd by one (ffi.CB.IndirectResult); on arm64 it
-// is an HFA in d0-d3. h is the whole implementation; it cannot rely on
-// argument 1 being the selector.
-func (d *ClassDef) MethodIMP(sel SEL, types string, h Handler) { d.add(sel, types, h, true) }
-
-func (d *ClassDef) add(sel SEL, types string, h Handler, direct bool) {
+func (d *ClassDef) Method(sel SEL, types string, h Handler) {
 	switch {
 	case d.registered:
 		panic("objc: method added to " + d.name + " after Register")
@@ -142,7 +129,7 @@ func (d *ClassDef) add(sel SEL, types string, h Handler, direct bool) {
 			panic("objc: " + d.name + " defines " + SelName(sel) + " twice")
 		}
 	}
-	d.methods = append(d.methods, method{sel, types, h, direct})
+	d.methods = append(d.methods, method{sel, types, h})
 }
 
 // Register creates and registers the class, with its protocols and every
@@ -172,9 +159,7 @@ func (d *ClassDef) Register() ID {
 	}
 	var table []entry
 	for _, m := range d.methods {
-		if !m.direct {
-			table = append(table, entry{m.sel, m.h})
-		}
+		table = append(table, entry{m.sel, m.h})
 	}
 	slices.SortFunc(table, func(a, b entry) int {
 		if a.sel < b.sel {
@@ -187,11 +172,7 @@ func (d *ClassDef) Register() ID {
 		shared = ffi.NewCallback((&dispatcher{table}).dispatch)
 	}
 	for _, m := range d.methods {
-		imp := shared
-		if m.direct {
-			imp = ffi.NewCallback(m.h)
-		}
-		F.Call4(addMethod, uintptr(cls), uintptr(m.sel), imp, uintptr(unsafe.Pointer(CString(m.types))))
+		F.Call4(addMethod, uintptr(cls), uintptr(m.sel), shared, uintptr(unsafe.Pointer(CString(m.types))))
 	}
 	F.Call1(registerPair, uintptr(cls))
 	for _, v := range d.ivars {
