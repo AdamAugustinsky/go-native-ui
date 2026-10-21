@@ -14,6 +14,7 @@ import (
 	"github.com/ebitengine/purego"
 
 	"gonativeui/gpu"
+	"gonativeui/internal/cf"
 	"gonativeui/internal/ffi"
 	"gonativeui/internal/objc"
 	"gonativeui/platform"
@@ -32,7 +33,8 @@ import (
 // The file is read on a goroutine: the track's size, turn and rate, and a
 // poster frame (AVAssetImageGenerator), shown until a frame plays. The end
 // of playback arrives as AVPlayerItemDidPlayToEndTimeNotification on an
-// observer object; its handler only sets a flag and posts the app event.
+// observer object; its handler sets a flag, posts the app event and asks the
+// main thread to act on it (takeEnd), which a hidden video's frames never do.
 
 // cmTime mirrors CMTime (24 bytes: by reference as an argument on arm64,
 // returned through x8).
@@ -85,6 +87,8 @@ var (
 	selReplaceItem  = objc.Sel("replaceCurrentItemWithPlayerItem:")
 	selDefault      = objc.Sel("defaultCenter")
 	selEnded        = objc.Sel("gnuiVideoEnded:")
+	selEndedOnMain  = objc.Sel("gnuiVideoEndedOnMain:")
+	selPerformMain  = objc.Sel("performSelectorOnMainThread:withObject:waitUntilDone:")
 	selTracks       = objc.Sel("tracksWithMediaType:")
 	selCount        = objc.Sel("count")
 	selObjectAt     = objc.Sel("objectAtIndex:")
@@ -192,6 +196,7 @@ func loadVideoAV() error {
 		}
 		d := objc.Define("GnuiVideoObserver", objc.Cls("NSObject"), nil)
 		d.Method(selEnded, "v@:@", videoEnded)
+		d.Method(selEndedOnMain, "v@:@", videoEndedOnMain)
 		vav.obsDef, vav.obsCls = d, d.Register()
 		vav.ring = platform.NewRing(platform.SourceMedia, 64, 0)
 	})
@@ -212,6 +217,42 @@ func videoEnded(c *ffi.CB) {
 	v.ended.Store(true)
 	if !v.loop.Load() {
 		vav.ring.Offer(int64(Ended), int64(v.id), nil)
+	}
+	// The main thread acts on it at once, also while no frame draws the video
+	// (its window hidden): a loop starts again, with its sound.
+	fr := cf.Acquire()
+	fr.Reset().Arg(uintptr(c.Int(0))).Arg(uintptr(selPerformMain)).Arg(uintptr(selEndedOnMain)).Arg(0).ArgBool(false).Call(objc.MsgSend)
+	cf.Release(fr)
+}
+
+// videoEndedOnMain is the observer's gnuiVideoEndedOnMain:, which videoEnded
+// has the main thread perform.
+func videoEndedOnMain(c *ffi.CB) {
+	i := int(vav.obsDef.Index().Get(objc.ID(c.Int(0))))
+	if i <= 0 || i > maxVideos {
+		return
+	}
+	if v := slots[i-1].Load(); v != nil {
+		v.takeEnd()
+	}
+}
+
+// takeEnd acts on the end notification (main thread), from
+// videoEndedOnMain or Frame, whichever comes first: a looping video starts
+// again from its start (playing on unless paused meanwhile), another stops
+// at its end.
+func (v *Video) takeEnd() {
+	if !v.ended.Swap(false) {
+		return
+	}
+	if v.loop.Load() {
+		v.Seek(0)
+		if v.playing {
+			objc.Send(v.player, selPlay)
+		}
+		v.pullTo = 0
+	} else {
+		v.playing, v.atEnd, v.pullTo = false, true, 0
 	}
 }
 
@@ -314,7 +355,7 @@ func OpenVideo(path string, o VideoOptions) (*Video, error) {
 }
 
 // setAtEnd sets what the player does at the item's end: nothing when the
-// video loops (Frame starts it again from the start), else pause.
+// video loops (takeEnd starts it again from the start), else pause.
 func (v *Video) setAtEnd() {
 	var a uintptr = 1 // AVPlayerActionAtItemEndPause
 	if v.loop.Load() {
@@ -629,15 +670,7 @@ func (v *Video) Frame(r *gpu.Renderer, now int64) (tex gpu.TextureID, w, h int, 
 	if v.State() != VideoReady {
 		return 0, 0, 0, 0 // the loader wakes the app when it is
 	}
-	if v.ended.Swap(false) {
-		if v.loop.Load() {
-			v.Seek(0)
-			objc.Send(v.player, selPlay)
-			v.pullTo = 0
-		} else {
-			v.playing, v.atEnd, v.pullTo = false, true, 0
-		}
-	}
+	v.takeEnd()
 	if v.playing || now < v.pullTo {
 		v.pull(now)
 		next = v.interval()
