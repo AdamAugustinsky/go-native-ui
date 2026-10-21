@@ -84,6 +84,29 @@ func TestEmitFloatingAfterSiblings(t *testing.T) {
 	}
 }
 
+func TestGlyphReusesShapeSlot(t *testing.T) {
+	h := newHarness(t, 400, 300)
+	emit := func(l *gpu.DrawList) {
+		h.c.emitGlyphFade(l, 0, 'a', 10, 20, [4]float32{0, 0, 400, 300}, [2]float32{80, 100}, 0xCCDDEEFF, 0)
+	}
+	var fresh gpu.DrawList
+	emit(&fresh)
+	if len(fresh.Quads) != 1 {
+		t.Fatal("expected one glyph")
+	}
+	reused := gpu.DrawList{Quads: []gpu.Quad{{
+		Rect: [4]float32{1, 2, 3, 4}, Clip: [4]float32{5, 6, 7, 8},
+		UV: [4]float32{9, 10, 11, 12}, Color: [4]uint32{1, 2, 3, 4},
+		Radii: [4]float32{1, 2, 3, 4}, Border: 3, BorderColor: 0x112233FF, Soft: 7,
+		FadeX: [2]float32{5, 6}, Mode: gpu.ModeRGBA, Tex: 123,
+	}}}
+	reused.Reset()
+	emit(&reused)
+	if len(reused.Quads) != 1 || reused.Quads[0] != fresh.Quads[0] {
+		t.Fatalf("reused glyph differs from fresh: %+v, want %+v", reused.Quads, fresh.Quads)
+	}
+}
+
 func TestEmitText(t *testing.T) {
 	h := newHarness(t, 400, 300)
 	var box ID

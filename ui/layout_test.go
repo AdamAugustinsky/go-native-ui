@@ -317,6 +317,26 @@ func TestSnapping(t *testing.T) {
 	}
 }
 
+func TestChildrenSizeDoesNotAccumulatePreviousPercent(t *testing.T) {
+	h := newHarness(t, 400, 300)
+	var parent ID
+	for range 3 {
+		h.frame(func(c *Context) {
+			c.NextSize(Children(1), Px(20))
+			c.NextAxis(AxisX)
+			parent = c.Open(ScrollX, "parent")
+			c.NextSize(Px(20), Px(20))
+			c.Box(0, "fixed")
+			c.NextSize(Pct(0.5), Px(20))
+			c.Box(0, "percentage")
+			c.Close()
+		})
+		if got := h.rect(parent); got != [4]float32{0, 0, 20, 20} {
+			t.Fatalf("children-sized parent accumulated a previous percentage: %v", got)
+		}
+	}
+}
+
 func TestPassOrderChildrenOfPercent(t *testing.T) {
 	// A column sized by its children, holding a fixed box and a text label.
 	h := newHarness(t, 800, 600)
