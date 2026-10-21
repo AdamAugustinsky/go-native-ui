@@ -368,9 +368,10 @@ type ComposerOpts struct {
 // ComposerSignal is what a composer reports in a frame.
 type ComposerSignal struct {
 	// ID is the field's box, Editor the box of the text (the hosted view's)
-	// and Key the key that takes the keyboard focus.
-	ID, Editor ui.ID
-	Key        ui.Key
+	// and Key the key that takes the keyboard focus. Send is the send
+	// button's box, for the app's Tab order (0 when Accessory replaces it).
+	ID, Editor, Send ui.ID
+	Key              ui.Key
 	// Changed: the text changed (typing, a paste, an input method, undo,
 	// Replace; not SetText). Composing: it still holds marked text, which
 	// the app must not rewrite (Changed fires again without it at the
@@ -652,7 +653,7 @@ func Composer(k *base.Kit, label string, st *ComposerState, o ComposerOpts) Comp
 	if o.Accessory != nil {
 		o.Accessory(k)
 	} else {
-		pressed = composerSend(k, o, rc, canSend)
+		pressed, sig.Send = composerSend(k, o, rc, canSend)
 	}
 	k.EndRow()
 	if !disabled && c.Signal(field).Clicked && !pressed && !sig.Focused {
@@ -1079,9 +1080,10 @@ func composerAttachments(k *base.Kit, fieldKey ui.Key, list []ComposerAttachment
 	return removed
 }
 
-// composerSend builds the send button and reports whether it was pressed. It
-// is inert unless canSend; a send in flight shows a spinner on it.
-func composerSend(k *base.Kit, o ComposerOpts, rc *ComposerRecipe, canSend bool) (pressed bool) {
+// composerSend builds the send button and reports whether it was pressed,
+// and its box. It is inert unless canSend; a send in flight shows a spinner
+// on it.
+func composerSend(k *base.Kit, o ComposerOpts, rc *ComposerRecipe, canSend bool) (pressed bool, id ui.ID) {
 	c, r := k.Context(), k.Theme()
 	sc := k.Scale()
 	prc := &ButtonRecipes[ButtonPrimary]
@@ -1115,5 +1117,5 @@ func composerSend(k *base.Kit, o ComposerOpts, rc *ComposerRecipe, canSend bool)
 	k.FocusRing(p.ID, p.Visual, side/2)
 	pressed = k.EndPress(&p).Clicked
 	k.EndDisabled()
-	return pressed
+	return pressed, p.ID
 }
