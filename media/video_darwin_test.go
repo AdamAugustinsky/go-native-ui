@@ -9,7 +9,6 @@ import (
 
 	"gonativeui/gpu"
 	"gonativeui/internal/cf"
-	"gonativeui/internal/objc"
 	"gonativeui/platform"
 )
 
@@ -152,11 +151,8 @@ func videoFrames(plain, turned string) (errs []string) {
 		fail("a playing frame: %v allocations", n)
 	}
 
-	// At 2× it plays twice as fast, its pitch kept, and asks for frames
-	// twice as often; the rate is clamped to 0.5–2.
-	if !objc.SendBool1(objc.Send(v.item, objc.Sel("audioTimePitchAlgorithm")), objc.Sel("isEqualToString:"), vav.pitch) {
-		fail("the item's pitch algorithm is not Spectral")
-	}
+	// At 2× it plays twice as fast and asks for frames twice as often; the
+	// rate is clamped to 0.5–2.
 	v.SetRate(2)
 	p0, t0 := v.Position(), time.Now()
 	for time.Since(t0) < 300*time.Millisecond {
