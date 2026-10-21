@@ -153,10 +153,10 @@ func TestBackdropFade(t *testing.T) {
 }
 
 // fallbackFade checks a fading backdrop drawn as its fallback colour
-// (#808080) over the checkerboard: the colour itself on the rows before
-// the fade (row(0) .. row(100-fade-1)), the content at the faded edge
-// (row(99)) and beyond, and the colour's share falling monotonically
-// between.
+// (#808080) over the checkerboard, to a level (the shadow that draws it
+// reaches 99.87 %): the colour itself on the rows before the fade (row(0) ..
+// row(100-fade-1)), the content at the faded edge (row(99)) and beyond, and
+// the colour's share falling monotonically between.
 func fallbackFade(t *testing.T, name string, m, under img, row func(int) int, fade int) {
 	t.Helper()
 	share := func(y int) float64 { // the fallback's share of a white cell's pixel
@@ -167,17 +167,18 @@ func fallbackFade(t *testing.T, name string, m, under img, row func(int) int, fa
 		}
 		return 0
 	}
+	const level = 1.5 / (255 - 128)
 	prev := 1.0
 	for i := 0; i < 110; i++ {
 		y := row(i)
 		s := share(y)
-		if i < 100-fade && s < 0.995 {
+		if i < 100-fade && s < 1-level {
 			t.Errorf("%s, row %d, before the fade: the fallback's share %.3f, want 1", name, y, s)
 		}
-		if i >= 99 && s > 0.005 {
+		if i >= 99 && s > level {
 			t.Errorf("%s, row %d, at the faded edge or beyond: the fallback's share %.3f, want 0", name, y, s)
 		}
-		if s > prev+0.005 {
+		if s > prev+level {
 			t.Errorf("%s, row %d: the fallback's share rises from %.3f to %.3f", name, y, prev, s)
 		}
 		prev = s
