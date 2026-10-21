@@ -1071,6 +1071,8 @@ Live microphone capture was not run: access cannot be granted headlessly, so tha
 
 **Alternatives:** a display-link or `requestNotificationOfMediaDataChangeWithAdvanceInterval:` callback per video, rejected because it wakes for videos that do not show; an `AVPlayerLayer` hosted over our layer (D46 rejects it: no rounded clipping, z-order or offscreen render).
 
+**Refinement (2026-10-21): a poster without a player.** `media.LoadVideoPoster(path, maxSide, done)` produces only the poster frame, for a list that shows many clips it isn't playing (ZapFast's downloaded clips without a thumbnail). It shares `Video`'s asset construction and `AVAssetImageGenerator` call; it creates no `AVPlayer` or item. It reads the asset on a worker (a locked OS thread with its own call frame and autorelease pool, as `Video`'s load) and calls `done` there once, with premultiplied sRGB RGBA that the caller owns. A callback, not an app event, because the result is a one-shot transfer with no handle or lifetime to track. `Video`'s behaviour is unchanged; its poster and this one match byte for byte. Windows and Linux return `ErrVideoUnsupported`.
+
 ## D59. `media.OpenPlayer`: files through the system's decoders, opened off the main thread (phase 6, 2026-10-21)
 
 **Decision.** `media.OpenPlayer(path)` makes the same `Player` (Play, Pause, Seek, Position, Duration, rate with the pitch kept, volume, `Ended`, Close, the `MaxPlayers` cap) over an `AVAudioPlayer` `initWithContentsOfURL:error:`, so ZapFast plays what its core cannot decode (MP3, AAC, M4A), the user's notification sounds and system sounds, with no `afplay`. Windows and Linux return `ErrUnsupported`, as the rest of `media`.
