@@ -297,6 +297,9 @@ type SemTree struct {
 	// Context.Announce), so that the same text asked for again in the next
 	// frame is announced again, and a tree exported twice is announced once.
 	AnnounceSeq uint32
+	// AnnouncePolite is set when the announcement waits for the screen reader
+	// to finish (Context.AnnouncePolite) rather than interrupting it.
+	AnnouncePolite bool
 }
 
 // Reserve makes room for the given numbers of nodes and text bytes, so that

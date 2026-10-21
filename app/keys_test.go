@@ -215,7 +215,7 @@ func TestSystemClickCount(t *testing.T) {
 	tr := newTranslator()
 	p := func(clicks uint8, tm int64) uint8 {
 		tr.in.ClearFrame()
-		tr.in.Down = [3]bool{}
+		clear(tr.in.Down[:])
 		tr.event(ev(platform.EvPointerButton, func(e *platform.Event) {
 			e.Button, e.Flags, e.X, e.Y, e.Time, e.Clicks = platform.ButtonLeft, platform.FlagDown, 5, 5, tm, clicks
 		}), nil)

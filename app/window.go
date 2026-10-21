@@ -95,6 +95,21 @@ func (w *Win) ToggleFullscreen() { w.command(cmdFullscreen) }
 // Fullscreen reports whether the window is in full screen (or entering it).
 func (w *Win) Fullscreen() bool { return w.Open() && w.a.Win.FullScreen() }
 
+// Zoomed reports whether the window is zoomed (macOS: NSWindow's isZoomed,
+// the state a maximized window restores at launch). False where the OS has no
+// such state for the app to read.
+func (w *Win) Zoomed() bool { return w.Open() && w.a.Win.Zoomed() }
+
+// SetZoomed zooms the window or returns it to its user size (macOS: zoom:).
+// It zooms only when the state differs, so it can be called every frame.
+func (w *Win) SetZoomed(on bool) {
+	if !w.Open() || (w.a.cmd&cmdZoom == 0 && w.a.Win.Zoomed() == on) {
+		return
+	}
+	w.a.zoomWant = on
+	w.command(cmdZoom)
+}
+
 // SetTitle sets the window's title (the title bar, the Window menu, Mission
 // Control, and ui.Context's window title for a drawn titlebar).
 func (w *Win) SetTitle(title string) {
@@ -174,6 +189,7 @@ const (
 	cmdFocus
 	cmdMiniaturize
 	cmdFullscreen
+	cmdZoom
 )
 
 // winState is a window's part of the application object, in its App.
@@ -188,6 +204,7 @@ type winState struct {
 	cmd       cmdMask    // window commands waiting for the safe point
 	frameWant [4]float64 // SetFrame's frame
 	edited    bool       // SetDocumentEdited's state
+	zoomWant  bool       // SetZoomed's state
 
 	ownTex *winUploader // the textures the window's widgets made on the shared renderer
 
@@ -241,6 +258,9 @@ func (a *App) applyCommands() {
 	}
 	if c&cmdFullscreen != 0 {
 		win.ToggleFullScreen()
+	}
+	if c&cmdZoom != 0 && win.Zoomed() != a.zoomWant {
+		win.Zoom()
 	}
 	a.p.invalidate() // a title or a frame changes what the window shows
 }

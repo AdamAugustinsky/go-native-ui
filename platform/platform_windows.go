@@ -69,8 +69,11 @@ const (
 	swShowNormal            = 1
 	idcArrow                = 32512
 	idcIBeam                = 32513
+	idcSizeNWSE             = 32642
+	idcSizeNESW             = 32643
 	idcSizeWE               = 32644
 	idcSizeNS               = 32645
+	idcSizeAll              = 32646
 	idcHand                 = 32649
 	htClient                = 1
 	sizeMoveTimerID         = 1
@@ -313,11 +316,15 @@ func Open(o Options) (*Window, error) {
 	theWindow = w // WndProc runs inside CreateWindowExW
 
 	w.cursors = [numCursors]uintptr{
-		CursorArrow:    win32.Call(pLoadCursorW, 0, idcArrow),
-		CursorPointer:  win32.Call(pLoadCursorW, 0, idcHand),
-		CursorText:     win32.Call(pLoadCursorW, 0, idcIBeam),
-		CursorResizeEW: win32.Call(pLoadCursorW, 0, idcSizeWE),
-		CursorResizeNS: win32.Call(pLoadCursorW, 0, idcSizeNS),
+		CursorArrow:      win32.Call(pLoadCursorW, 0, idcArrow),
+		CursorPointer:    win32.Call(pLoadCursorW, 0, idcHand),
+		CursorText:       win32.Call(pLoadCursorW, 0, idcIBeam),
+		CursorResizeEW:   win32.Call(pLoadCursorW, 0, idcSizeWE),
+		CursorResizeNS:   win32.Call(pLoadCursorW, 0, idcSizeNS),
+		CursorResizeNWSE: win32.Call(pLoadCursorW, 0, idcSizeNWSE),
+		CursorResizeNESW: win32.Call(pLoadCursorW, 0, idcSizeNESW),
+		CursorGrab:       win32.Call(pLoadCursorW, 0, idcHand), // Windows has no hand that grabs
+		CursorGrabbing:   win32.Call(pLoadCursorW, 0, idcSizeAll),
 	}
 	w.wc = wndClassEx{
 		size:      uint32(unsafe.Sizeof(w.wc)),

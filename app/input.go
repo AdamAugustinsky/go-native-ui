@@ -25,7 +25,7 @@ type translator struct {
 	scale     float32 // pixels per point, for the multi-click distance
 	wheelStep float32 // pixels one wheel notch scrolls (ui.Context.WheelStep)
 
-	last [3]clickState // per ui button
+	last [5]clickState // per ui button
 
 	// Events that would change the meaning of the transition already in this
 	// frame's batch wait here, in order, with the bytes of their text, for the
@@ -418,29 +418,33 @@ func (t *translator) scroll(e *platform.Event) {
 	if step <= 0 {
 		step = 48
 	}
+	dx, dy := e.DX, e.DY
+	if !precise && e.Mods&platform.ModShift != 0 && abs(dy) > abs(dx) {
+		dx, dy = dy, 0 // a wheel with Shift held scrolls sideways, as NSScrollView does (a trackpad's pixel deltas do not)
+	}
 	pending := in.ScrollX != 0 || in.ScrollY != 0
 	switch {
 	case precise && pending && !in.Precise: // notches so far: convert them
-		in.ScrollX = in.ScrollX*step + e.DX
-		in.ScrollY = in.ScrollY*step + e.DY
+		in.ScrollX = in.ScrollX*step + dx
+		in.ScrollY = in.ScrollY*step + dy
 		in.Precise = true
 	case precise || (pending && in.Precise):
-		in.ScrollX += e.DX
-		in.ScrollY += e.DY
+		in.ScrollX += dx
+		in.ScrollY += dy
 		in.Precise = true
 	default:
-		in.ScrollX += e.DX / step
-		in.ScrollY += e.DY / step
+		in.ScrollX += dx / step
+		in.ScrollY += dy / step
 		in.Precise = false
 	}
-	r := ui.ScrollEvent{DX: e.DX, DY: e.DY, Precise: precise, Inverted: e.Flags&platform.FlagInverted != 0,
+	r := ui.ScrollEvent{DX: dx, DY: dy, Precise: precise, Inverted: e.Flags&platform.FlagInverted != 0,
 		Phase: ui.ScrollPhase(e.Phase), Momentum: ui.ScrollPhase(e.Momentum), Time: e.Time,
 		X: in.MouseX, Y: in.MouseY, Pos: in.Inside} // where the pointer is now: a later move must not redirect it
 	if e.Flags&platform.FlagPos != 0 { // where the event says it happened (a scroll bubbled from a native host, say)
 		r.X, r.Y, r.Pos = e.X, e.Y, true
 	}
 	if !precise {
-		r.DX, r.DY = e.DX/step, e.DY/step
+		r.DX, r.DY = dx/step, dy/step
 	}
 	in.AddScrollEvent(r)
 }
@@ -460,8 +464,12 @@ func button(b platform.Button) (int, bool) {
 		return ui.ButtonRight, true
 	case platform.ButtonMiddle:
 		return ui.ButtonMiddle, true
+	case platform.ButtonBack:
+		return ui.ButtonBack, true
+	case platform.ButtonForward:
+		return ui.ButtonForward, true
 	}
-	return 0, false // back/forward: ui has no such buttons
+	return 0, false
 }
 
 func mods(m platform.Mods) ui.Mods {

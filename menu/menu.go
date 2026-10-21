@@ -95,6 +95,11 @@ const (
 	// (⌥⇧⌘V on macOS): a hosted native text view pastes the text without its
 	// style; the focused drawn text field, all plain, pastes.
 	RolePasteAndMatchStyle
+	// RoleFullScreen is the standard full screen command of the View menu
+	// (⌃⌘F on macOS): "Enter Full Screen", which AppKit retitles "Exit Full
+	// Screen" while the window is in full screen. Elsewhere it is the app's
+	// to act on.
+	RoleFullScreen
 
 	roleEnd // one past the last role
 )

@@ -35,7 +35,7 @@ func (b *axBridge) AXExport(dst *platform.AXTree) bool {
 // bits and actions have the same values on both sides.
 func ExportAX(src *ui.SemTree, dst *platform.AXTree) {
 	dst.Bytes = append(dst.Bytes[:0], src.Bytes...)
-	dst.Announce, dst.AnnounceSeq = src.Announce, src.AnnounceSeq
+	dst.Announce, dst.AnnounceSeq, dst.AnnouncePolite = src.Announce, src.AnnounceSeq, src.AnnouncePolite
 	dst.Nodes = dst.Nodes[:0]
 	for i := range src.Nodes {
 		n := &src.Nodes[i]

@@ -40,12 +40,20 @@ func TestStartHidden(t *testing.T) {
 }
 
 func TestAgentNames(t *testing.T) {
-	for _, name := range []string{"", "a b", "../x", "-x", "a.b"} {
+	for _, name := range []string{"", "a b", "../x", "-x", "a.b", "a\n", "é", "-"} {
 		if _, err := login.Agent(name).Status(); !errors.Is(err, login.ErrInvalid) {
 			t.Errorf("Agent(%q).Status() = %v, want ErrInvalid", name, err)
 		}
 		if _, err := login.Agent(name).Enable(); !errors.Is(err, login.ErrInvalid) {
 			t.Errorf("Agent(%q).Enable() = %v, want ErrInvalid", name, err)
+		}
+	}
+}
+
+func TestValidAgentNamesAreNotInvalid(t *testing.T) {
+	for _, name := range []string{"a", "A9", "my-app", "a-", "9-lives", "Zapfast-Helper-2"} {
+		if _, err := login.Agent(name).Status(); errors.Is(err, login.ErrInvalid) {
+			t.Errorf("Agent(%q).Status() = %v, want a valid name", name, err)
 		}
 	}
 }

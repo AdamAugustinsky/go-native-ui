@@ -81,8 +81,8 @@ func TestButtonEdges(t *testing.T) {
 	}
 
 	// Buttons ui does not have are ignored and do not repaint.
-	if tr.event(press(1, 1, 1, platform.ButtonBack), nil) {
-		t.Fatal("the back button repaints")
+	if tr.event(press(1, 1, 1, platform.ButtonNone), nil) {
+		t.Fatal("an unknown button repaints")
 	}
 }
 
@@ -434,5 +434,53 @@ func TestScrollUsesTheEventsPosition(t *testing.T) {
 	}
 	if r := in.Scrolls[1]; !r.Pos || r.X != 10 || r.Y != 20 {
 		t.Fatalf("the other is recorded at %v,%v (pos %v)", r.X, r.Y, r.Pos)
+	}
+}
+
+// Shift turns a wheel's vertical notches sideways, as NSScrollView does; a
+// trackpad's pixels (measured: NSScrollView leaves them) and a horizontal
+// wheel stay as they are.
+func TestShiftWheelScrollsSideways(t *testing.T) {
+	scroll := func(dx, dy float32, flags platform.Flags) *platform.Event {
+		return ev(platform.EvScroll, func(e *platform.Event) { e.DX, e.DY, e.Flags, e.Mods = dx, dy, flags, platform.ModShift })
+	}
+	for _, c := range []struct {
+		name         string
+		dx, dy       float32
+		flags        platform.Flags
+		wantX, wantY float32
+	}{
+		{"wheel", 0, 96, 0, 2, 0},
+		{"wheel, mostly vertical", 10, -96, 0, -2, 0},
+		{"horizontal wheel", 96, 0, 0, 2, 0},
+		{"trackpad", 3, 30, platform.FlagPrecise, 3, 30},
+	} {
+		tr := newTranslator()
+		tr.wheelStep = 48
+		tr.event(scroll(c.dx, c.dy, c.flags), nil)
+		if tr.in.ScrollX != c.wantX || tr.in.ScrollY != c.wantY {
+			t.Errorf("%s: scrolled (%v, %v), want (%v, %v)", c.name, tr.in.ScrollX, tr.in.ScrollY, c.wantX, c.wantY)
+		}
+	}
+}
+
+// The mouse's side buttons reach ui as Back and Forward, as edges only: they
+// click nothing by themselves.
+func TestSideButtons(t *testing.T) {
+	tr := newTranslator()
+	tr.event(press(5, 6, 100, platform.ButtonBack), nil)
+	in := &tr.in
+	if !in.Down[ui.ButtonBack] || !in.Pressed[ui.ButtonBack] || in.Down[ui.ButtonForward] || in.Down[ui.ButtonLeft] {
+		t.Fatalf("after a back press: down %v pressed %v", in.Down, in.Pressed)
+	}
+	tr.endFrame()
+	tr.event(release(5, 6, 200, platform.ButtonBack), nil)
+	if in.Down[ui.ButtonBack] || !in.Released[ui.ButtonBack] {
+		t.Fatalf("after back's release: down %v released %v", in.Down, in.Released)
+	}
+	tr.endFrame()
+	tr.event(press(5, 6, 300, platform.ButtonForward), nil)
+	if !in.Pressed[ui.ButtonForward] || !in.Down[ui.ButtonForward] || in.Pressed[ui.ButtonBack] {
+		t.Fatalf("after forward's press: down %v pressed %v", in.Down, in.Pressed)
 	}
 }

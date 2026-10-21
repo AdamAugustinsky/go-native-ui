@@ -196,7 +196,7 @@ func (p *Player) find(role ui.Role, name string, nth int) int {
 func (p *Player) visible(i int, st *Step) bool {
 	t := &p.sem
 	r := t.Nodes[i].Bounds
-	x, y := (r[0]+r[2])/2, (r[1]+r[3])/2
+	x, y := aim(r, st)
 	w, h := p.h.Context().Size()
 	if x < 0 || y < 0 || x >= float32(w) || y >= float32(h) {
 		return false
@@ -210,7 +210,20 @@ func (p *Player) visible(i int, st *Step) bool {
 			}
 		}
 	}
-	return st.thru || p.h.Context().HitReaches(x, y, t.Nodes[i].Key)
+	key := t.Nodes[i].Key
+	if n := &t.Nodes[i]; n.Role == ui.RoleLink && n.Parent >= 0 {
+		key = t.Nodes[n.Parent].Key // a link is a span of its text box: that box takes the click
+	}
+	return st.thru || p.h.Context().HitReaches(x, y, key)
+}
+
+// aim is where a pointer step on a target with bounds r lands: the centre, or
+// the offset ClickAt gives from the top-left.
+func aim(r [4]float32, st *Step) (x, y float32) {
+	if st.off {
+		return r[0] + st.ox, r[1] + st.oy
+	}
+	return (r[0] + r[2]) / 2, (r[1] + r[3]) / 2
 }
 
 // scrolls reports whether a node of this role scrolls its content: a scroll
@@ -503,19 +516,20 @@ func (p *Player) run(st *Step, in *ui.Input) bool {
 		if st.op == opRClick {
 			b = ui.ButtonRight
 		}
-		if p.t == 0 {
+		clicks := max(st.n, 1) // a press, then its release a frame later, for each
+		if p.t%2 == 0 {
 			if !p.ok {
 				return true
 			}
-			x, y := p.centre()
+			x, y := aim(p.rect, st)
 			p.goTo(in, x, y)
 			in.Mods = st.mods
-			in.SetButton(b, true, 1)
+			in.SetButton(b, true, uint8(p.t/2+1))
 			return false
 		}
 		in.SetButton(b, false, 0)
 		in.Mods = 0
-		return true
+		return p.t/2+1 >= clicks
 	case opDrag:
 		if !p.ok {
 			return true
@@ -580,7 +594,7 @@ func (p *Player) run(st *Step, in *ui.Input) bool {
 			p.goTo(in, x, y)
 		}
 		p.holdMods(in, st)
-		in.AddScroll(0, st.dy, true)
+		in.AddScroll(0, st.dy, !st.step)
 		return p.t+1 >= st.n
 	case opMagnify:
 		if !p.ok {

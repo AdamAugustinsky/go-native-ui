@@ -14,6 +14,7 @@ type semExtra struct {
 	annFrame uint32
 	announce core.Span // in semA
 	seq      uint32    // Announce calls so far
+	polite   bool      // the last call was AnnouncePolite
 }
 
 // Announce asks assistive technologies to read text out now (a message sent,
@@ -24,15 +25,24 @@ type semExtra struct {
 // better announced by a SemLive node, whose new name or value is read when it
 // changes.
 func (c *Context) Announce(text string) {
-	c.semX.annFrame, c.semX.announce = c.frame, c.semA.AppendString(text)
+	c.semX.annFrame, c.semX.announce, c.semX.polite = c.frame, c.semA.AppendString(text), false
 	c.semX.seq++
+}
+
+// AnnouncePolite is Announce for news that can wait: a message that arrived
+// in the open chat. The screen reader finishes what it is reading first
+// (macOS: NSAccessibilityPriorityMedium) instead of cutting it off, as
+// Announce does (high priority).
+func (c *Context) AnnouncePolite(text string) {
+	c.Announce(text)
+	c.semX.polite = true
 }
 
 // semAnnounce exports the frame's announcement.
 func (c *Context) semAnnounce(dst *SemTree) {
 	if c.semX.annFrame == c.frame && c.semX.announce.Len > 0 {
 		dst.Announce = c.semText(dst, c.semX.announce)
-		dst.AnnounceSeq = c.semX.seq
+		dst.AnnounceSeq, dst.AnnouncePolite = c.semX.seq, c.semX.polite
 	}
 }
 

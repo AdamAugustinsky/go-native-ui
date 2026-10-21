@@ -216,9 +216,32 @@ func loadCursors() {
 		CursorText:     "IBeamCursor",
 		CursorResizeEW: "resizeLeftRightCursor",
 		CursorResizeNS: "resizeUpDownCursor",
+		CursorGrab:     "openHandCursor",
+		CursorGrabbing: "closedHandCursor",
 	} {
-		cursorObjs[c] = objc.Retain(objc.Send(clsCursor, objc.Sel(name)))
+		if name != "" {
+			cursorObjs[c] = objc.Retain(objc.Send(clsCursor, objc.Sel(name)))
+		}
 	}
+	cursorObjs[CursorResizeNWSE] = diagonalCursor(clsCursor, 1<<0|1<<1, "_windowResizeNorthWestSouthEastCursor") // top left
+	cursorObjs[CursorResizeNESW] = diagonalCursor(clsCursor, 1<<0|1<<3, "_windowResizeNorthEastSouthWestCursor") // top right
+}
+
+// diagonalCursor is the diagonal resize cursor of a window's corner: AppKit's
+// public frame-resize cursor (macOS 15), else the private one every browser
+// uses (AppKit has no public diagonal before 15), else the arrow. Retained.
+func diagonalCursor(cls objc.ID, corner uintptr, private string) objc.ID {
+	if sel := objc.Sel("frameResizeCursorFromPosition:inDirections:"); objc.SendBool1(cls, selRespondsTo, uintptr(sel)) {
+		if c := objc.Send2(cls, sel, corner, 3); c != 0 { // NSCursorFrameResizeDirectionsAll
+			return objc.Retain(c)
+		}
+	}
+	if sel := objc.Sel(private); objc.SendBool1(cls, selRespondsTo, uintptr(sel)) {
+		if c := objc.Send(cls, sel); c != 0 {
+			return objc.Retain(c)
+		}
+	}
+	return objc.Retain(objc.Send(cls, objc.Sel("arrowCursor")))
 }
 
 // SetCursorRegions sets the cursor regions: where in the content the pointer

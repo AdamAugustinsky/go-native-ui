@@ -543,7 +543,11 @@ func (b *axDarwin) post() {
 			}
 		case noteLive:
 			if e.slot < 0 {
-				b.announce(t.Text(t.Announce), 90) // NSAccessibilityPriorityHigh
+				priority := 90 // NSAccessibilityPriorityHigh: interrupts
+				if t.AnnouncePolite {
+					priority = 50 // NSAccessibilityPriorityMedium: after what is being read
+				}
+				b.announce(t.Text(t.Announce), float64(priority))
 			} else if n, ok := b.core.node(e.slot); ok {
 				b.announce(axString(t, n), 50) // NSAccessibilityPriorityMedium
 				if l := axLabel(t, n); len(l) > 0 && n.Value[1] == 0 {

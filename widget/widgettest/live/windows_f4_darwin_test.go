@@ -900,5 +900,43 @@ func TestWindowCommandsAndScreens(t *testing.T) {
 	}
 }
 
+// SetZoomed zooms the window only when its state differs, and Zoomed reads
+// AppKit's isZoomed: the maximized window an app restores at launch.
+func TestWindowZoomed(t *testing.T) {
+	l := widgettest.StartLive(t, mwConfig("zoomed"), &mwPane{})
+	type state struct{ zoomed, native bool }
+	read := func() (s state) {
+		l.Do(func(a *app.App) {
+			s = state{a.Window().Zoomed(), objc.SendBool(objc.ID(a.Win.Native().NSWindow), objc.Sel("isZoomed"))}
+		})
+		return s
+	}
+	if s := read(); s.zoomed || s.native {
+		t.Fatalf("a new window is zoomed: %+v", s)
+	}
+	l.Do(func(a *app.App) { a.Window().SetZoomed(false) }) // unchanged: nothing happens
+	settle()
+	if s := read(); s.zoomed {
+		t.Errorf("SetZoomed(false) of a window that is not zoomed zoomed it: %+v", s)
+	}
+	l.Do(func(a *app.App) { a.Window().SetZoomed(true) })
+	var s state
+	if !waitFor(5*time.Second, func() bool { s = read(); return s.native }) {
+		t.Fatal("SetZoomed(true) did not zoom the window")
+	}
+	if !s.zoomed {
+		t.Errorf("Zoomed() is false for a zoomed window: %+v", s)
+	}
+	l.Do(func(a *app.App) { a.Window().SetZoomed(true) }) // unchanged: it must not toggle back
+	settle()
+	if s = read(); !s.native {
+		t.Errorf("SetZoomed(true) of a zoomed window zoomed it back: %+v", s)
+	}
+	l.Do(func(a *app.App) { a.Window().SetZoomed(false) })
+	if !waitFor(5*time.Second, func() bool { s = read(); return !s.native }) {
+		t.Fatal("SetZoomed(false) did not restore the window")
+	}
+}
+
 // nsString is the Go string of an NSString. Main thread.
 func nsString(s objc.ID) string { return string(objc.AppendUTF8(nil, s)) }

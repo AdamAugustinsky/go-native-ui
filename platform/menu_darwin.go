@@ -106,6 +106,7 @@ var (
 		MenuZoom:               objc.Sel("performZoom:"),
 		MenuClose:              objc.Sel("performClose:"),
 		MenuBringAllToFront:    objc.Sel("arrangeInFront:"),
+		MenuFullScreen:         objc.Sel("toggleFullScreen:"),
 	}
 
 	menuTargetClass                                      objc.ID
@@ -736,6 +737,8 @@ func standardTitle(a MenuAction) string {
 		return "Close"
 	case MenuBringAllToFront:
 		return "Bring All to Front"
+	case MenuFullScreen:
+		return "Enter Full Screen"
 	}
 	return ""
 }
@@ -767,6 +770,8 @@ func standardKey(a MenuAction) (rune, Mods) {
 		return 'm', ModSuper
 	case MenuClose:
 		return 'w', ModSuper
+	case MenuFullScreen:
+		return 'f', ModSuper | ModCtrl
 	}
 	return 0, 0
 }

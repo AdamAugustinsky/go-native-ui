@@ -272,3 +272,12 @@ func TestKeyEquivalent(t *testing.T) {
 		}
 	}
 }
+
+// A full screen command is AppKit's toggleFullScreen:, keeping its command so
+// that the model decides whether it is enabled.
+func TestFullScreenRoleIsTheStandardAction(t *testing.T) {
+	it := commandItem(&menu.Command{ID: 9, Role: menu.RoleFullScreen})
+	if it.Action != platform.MenuFullScreen || it.ID != 9 {
+		t.Errorf("%+v", it)
+	}
+}

@@ -53,6 +53,10 @@ type Step struct {
 	px   float32 // that point, in pixels
 	py   float32
 	amt  float32 // the pinch's total change in scale
+	off  bool    // the click lands at (ox, oy) from the target's top-left, not at its centre
+	ox   float32
+	oy   float32
+	step bool // the wheel turns in notches (a mouse wheel), not in pixels (a trackpad)
 }
 
 // DefaultWaitMs is how long a wait (WaitFor, WaitGone, WaitChange, Settle)
@@ -111,6 +115,20 @@ func MoveTo(x, y float32) Step { return Step{op: opMoveTo, px: x, py: y} }
 // with the wheel first; if there is no such node the run fails.
 func Click(role ui.Role, name string) Step { return Step{op: opClick, role: role, name: name} }
 
+// DoubleClick is Click twice: the second press has a click count of 2, as the
+// system counts a double click (ui.Signal.DoubleClicked).
+func DoubleClick(role ui.Role, name string) Step {
+	return Step{op: opClick, role: role, name: name, n: 2}
+}
+
+// ClickAt is Click at the point dx, dy pixels from the top-left of the node
+// instead of at its centre: a click on a link inside a text box, on one end of
+// a slider or row. The point must reach the node (Through lets it land on
+// whatever covers it).
+func ClickAt(role ui.Role, name string, dx, dy float32) Step {
+	return Step{op: opClick, role: role, name: name, off: true, ox: dx, oy: dy}
+}
+
 // RClick is Click with the right button.
 func RClick(role ui.Role, name string) Step { return Step{op: opRClick, role: role, name: name} }
 
@@ -138,6 +156,14 @@ func Type(text string) Step { return Step{op: opText, text: text} }
 // With holds modifiers during it: Wheel(…).With(ui.ModShift) is a Shift-wheel.
 func Wheel(role ui.Role, name string, dy float32, n int) Step {
 	return Step{op: opWheel, role: role, name: name, dy: dy, n: n}
+}
+
+// WheelNotch scrolls over the node by a mouse wheel's notches: dy lines on each
+// of n frames, discrete as a wheel's are (a trackpad's pixels are Wheel), so
+// that ui's smooth wheel scrolling applies. Positive dy scrolls toward the
+// start of the content, as for Wheel.
+func WheelNotch(role ui.Role, name string, dy float32, n int) Step {
+	return Step{op: opWheel, role: role, name: name, dy: dy, n: n, step: true}
 }
 
 // Drag presses on the node, moves dx pixels along x on each of n frames, and

@@ -26,21 +26,23 @@ var shapeInfo = [numShapes]struct {
 	theme []string // names in the cursor theme, in order of preference
 	glyph uint32   // X core cursor font glyph
 }{
-	shArrow:   {1, []string{"left_ptr", "default", "arrow"}, 68},
-	shPointer: {4, []string{"pointer", "hand2", "hand1", "hand"}, 60},
-	shText:    {9, []string{"text", "xterm", "ibeam"}, 152},
-	shEW:      {26, []string{"ew-resize", "sb_h_double_arrow", "h_double_arrow", "col-resize"}, 108},
-	shNS:      {27, []string{"ns-resize", "sb_v_double_arrow", "v_double_arrow", "row-resize"}, 116},
-	shNWSE:    {29, []string{"nwse-resize", "bd_double_arrow", "size_fdiag"}, 14},
-	shNESW:    {28, []string{"nesw-resize", "fd_double_arrow", "size_bdiag"}, 12},
-	shEdgeN:   {19, []string{"n-resize", "top_side"}, 138},
-	shEdgeS:   {22, []string{"s-resize", "bottom_side"}, 16},
-	shEdgeE:   {18, []string{"e-resize", "right_side"}, 96},
-	shEdgeW:   {25, []string{"w-resize", "left_side"}, 70},
-	shEdgeNE:  {20, []string{"ne-resize", "top_right_corner"}, 136},
-	shEdgeNW:  {21, []string{"nw-resize", "top_left_corner"}, 134},
-	shEdgeSE:  {23, []string{"se-resize", "bottom_right_corner"}, 14},
-	shEdgeSW:  {24, []string{"sw-resize", "bottom_left_corner"}, 12},
+	shArrow:    {1, []string{"left_ptr", "default", "arrow"}, 68},
+	shPointer:  {4, []string{"pointer", "hand2", "hand1", "hand"}, 60},
+	shText:     {9, []string{"text", "xterm", "ibeam"}, 152},
+	shEW:       {26, []string{"ew-resize", "sb_h_double_arrow", "h_double_arrow", "col-resize"}, 108},
+	shNS:       {27, []string{"ns-resize", "sb_v_double_arrow", "v_double_arrow", "row-resize"}, 116},
+	shGrab:     {16, []string{"grab", "openhand", "hand1", "pointer"}, 58},
+	shGrabbing: {17, []string{"grabbing", "closedhand", "fleur", "pointer"}, 52},
+	shNWSE:     {29, []string{"nwse-resize", "bd_double_arrow", "size_fdiag"}, 14},
+	shNESW:     {28, []string{"nesw-resize", "fd_double_arrow", "size_bdiag"}, 12},
+	shEdgeN:    {19, []string{"n-resize", "top_side"}, 138},
+	shEdgeS:    {22, []string{"s-resize", "bottom_side"}, 16},
+	shEdgeE:    {18, []string{"e-resize", "right_side"}, 96},
+	shEdgeW:    {25, []string{"w-resize", "left_side"}, 70},
+	shEdgeNE:   {20, []string{"ne-resize", "top_right_corner"}, 136},
+	shEdgeNW:   {21, []string{"nw-resize", "top_left_corner"}, 134},
+	shEdgeSE:   {23, []string{"se-resize", "bottom_right_corner"}, 14},
+	shEdgeSW:   {24, []string{"sw-resize", "bottom_left_corner"}, 12},
 }
 
 // SetCursorRegions sets the pointer shapes by content rectangle (later entries
