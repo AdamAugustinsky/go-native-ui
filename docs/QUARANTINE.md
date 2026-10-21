@@ -18,6 +18,7 @@ How it works, in `.github/workflows/ci.yml`:
 
 | Job | Test or gate | Symptom | Issue |
 |---|---|---|---|
+| Windows (amd64, arm64) | `TestEvictionSkipsReplacedNotes` (app/notify) | `evicted n0,x, want n0,n1`; 4 times across branches on Windows amd64 and arm64 (e.g. p6-c7 39551142037, main 39583048063) | [#34](https://github.com/AdamAugustinsky/go-native-ui/issues/34) |
 | Windows (amd64, arm64) | `TestSystemIconsWindowsConcurrent` (img) | `icon 3 failed when decoded concurrently`; possibly a real COM concurrency bug | [#34](https://github.com/AdamAugustinsky/go-native-ui/issues/34) |
 | Windows (amd64, arm64) | `TestCloseDoesNotWaitForTheIconStyleRead`, `TestOffscreenRunsLeaveNoWorkersOrHandles` (cmd/pilot/pilot) | timing assertions fail on the loaded arm64 runner (`a read that returned after Close published 7 (want 0)`; the package takes 270-310 s there) | [#34](https://github.com/AdamAugustinsky/go-native-ui/issues/34) |
 | Windows (amd64, arm64) | `TestPackagedBinaryHasNoDebugChordOrInspector` (cmd/gnui) | `go build` cannot fetch modules from proxy.golang.org (needs the network) | [#34](https://github.com/AdamAugustinsky/go-native-ui/issues/34) |

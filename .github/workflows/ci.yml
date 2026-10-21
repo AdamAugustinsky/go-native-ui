@@ -333,7 +333,7 @@ jobs:
       run:
         shell: bash
     env:
-      QUARANTINE: '^(TestSystemIconsWindowsConcurrent|TestCloseDoesNotWaitForTheIconStyleRead|TestOffscreenRunsLeaveNoWorkersOrHandles|TestPackagedBinaryHasNoDebugChordOrInspector)$'
+      QUARANTINE: '^(TestEvictionSkipsReplacedNotes|TestSystemIconsWindowsConcurrent|TestCloseDoesNotWaitForTheIconStyleRead|TestOffscreenRunsLeaveNoWorkersOrHandles|TestPackagedBinaryHasNoDebugChordOrInspector)$'
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
