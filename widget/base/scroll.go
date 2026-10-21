@@ -294,9 +294,14 @@ func (k *Kit) ScrollBars(v *ScrollView) [2]ScrollBar {
 		if !b.On {
 			continue
 		}
-		b.Show = c.AnimateValue(ui.KeyN(okey, uint64(5010+a)), target, k.r.Motion.Fade)
-		if legacy {
+		if show := ui.KeyN(okey, uint64(5010+a)); legacy {
+			// Always shown. The value waits at 1, without the fade to it, which
+			// nobody would see and which would keep the app drawing: overlay
+			// bars, if the style changes back, fade from there.
+			c.KeepValue(show, 1, 1)
 			b.Show = 1
+		} else {
+			b.Show = c.AnimateValue(show, target, k.r.Motion.Fade)
 		}
 		b.Visible = b.Show > 0
 		b.Hot = max(c.HotTOf(b.Key), c.ActiveTOf(b.Key))
