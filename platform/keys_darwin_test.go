@@ -1,7 +1,6 @@
 package platform
 
 import (
-	"runtime"
 	"testing"
 
 	"gonativeui/internal/ffi"
@@ -73,11 +72,7 @@ func nsKey(w *Window, typ uintptr, chars, ignoring string, flags uintptr, code u
 	cls := objc.Cls("NSEvent")
 	sel := objc.Sel("keyEventWithType:location:modifierFlags:timestamp:windowNumber:context:characters:charactersIgnoringModifiers:isARepeat:keyCode:")
 	f := objc.F.Reset().Arg(uintptr(cls)).Arg(uintptr(sel)).Arg(typ).ArgPoint(10, 10).Arg(flags).ArgF64(ts).Arg(uintptr(num)).Arg(0).Arg(uintptr(s)).Arg(uintptr(si))
-	if runtime.GOARCH == "arm64" {
-		f.Arg32(uint32(code) << 16)
-	} else {
-		f.Arg(0).Arg(uintptr(code))
-	}
+	f.Arg32(uint32(code) << 16) // isARepeat (NO) at byte 0, the keyCode at byte 2 of the packed stack
 	return objc.ID(f.Call(objc.MsgSend).R0())
 }
 

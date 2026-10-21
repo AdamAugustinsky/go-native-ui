@@ -257,7 +257,6 @@ type System struct {
 	gid   [1]uint16
 	pt    [2]float64
 	rect  [4]float64 // bounding rect out
-	ret   [4]float64 // amd64 hidden CGRect return, unused
 	three [3]float64 // ascent/descent/leading out
 
 	closed bool
@@ -903,10 +902,9 @@ func (s *System) rasterize(face FaceID, gid uint16, sub, smooth uint8) GlyphEntr
 	defer s.poolPop(pool)
 	fc := &s.faces[face]
 	s.gid[0] = gid
-	// CGRect result: arm64 returns it in d0-d3, amd64 through a hidden
-	// pointer. Both also fill rect[] (the per-glyph out array), which is what
-	// we read.
-	s.fr.Reset().SetIndirectResult(unsafe.Pointer(&s.ret[0])).Arg(fc.font).Arg32(0).
+	// The CGRect result (d0-d3) is ignored: the call also fills rect[] (the
+	// per-glyph out array), which is what we read.
+	s.fr.Reset().Arg(fc.font).Arg32(0).
 		ArgPtr(unsafe.Pointer(&s.gid[0])).ArgPtr(unsafe.Pointer(&s.rect[0])).Arg(1).
 		Call(sy.ctFontGetBoundingRectsForGlyphs)
 	// The face is point-sized and drawn through a scale CTM: the bounds in

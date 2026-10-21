@@ -1,4 +1,4 @@
-//go:build (darwin || linux) && (arm64 || amd64)
+//go:build (darwin && arm64) || (linux && (arm64 || amd64))
 
 package clib
 
@@ -51,19 +51,12 @@ func buildFixture() {
 	}
 	args := []string{"-shared", "-O2", "-Wall", "-Werror", "-o"}
 	if runtime.GOOS == "darwin" {
-		arch := map[string]string{"arm64": "arm64", "amd64": "x86_64"}[runtime.GOARCH]
-		args = append(args, filepath.Join(fx.dir, "libfixture.dylib"), "-arch", arch)
+		args = append(args, filepath.Join(fx.dir, "libfixture.dylib"), "-arch", "arm64")
 	} else {
 		args = append(args, filepath.Join(fx.dir, "libfixture.so"), "-fPIC", "-pthread")
 	}
 	out := args[5]
 	args = append([]string{cc}, append(args, filepath.Join("testdata", "fixture.c"))...)
-	if runtime.GOOS == "darwin" {
-		// Run the compiler natively even when this test runs under Rosetta,
-		// where a universal cc would start as x86_64 and its toolchain
-		// libraries are arm64-only. arch tries the architectures in order.
-		args = append([]string{"/usr/bin/arch", "-arm64", "-x86_64"}, args...)
-	}
 	cmd := exec.Command(args[0], args[1:]...)
 	if b, err := cmd.CombinedOutput(); err != nil {
 		fx.err = fmt.Errorf("building the fixture library: %v\n%s", err, b)

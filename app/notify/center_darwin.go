@@ -214,11 +214,8 @@ func register() {
 		cls := d.Register()
 		un.delegate = uintptr(objc.Send(objc.Send(cls, sel.alloc), sel.init)) // kept for the process
 
-		authSig := "v20@?0B8@12" // void (^)(BOOL, NSError *)
-		if runtime.GOARCH == "amd64" {
-			authSig = "v20@?0c8@12"
-		}
-		un.auth = objc.NewBlockKind(authSig, true, func(ctx uintptr, c *ffi.CB) {
+		// void (^)(BOOL, NSError *)
+		un.auth = objc.NewBlockKind("v20@?0B8@12", true, func(ctx uintptr, c *ffi.CB) {
 			fr := c.Frame()
 			traced(fr, "permission")
 			pool := fr.Call0(objc.PoolPush)

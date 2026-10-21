@@ -41,9 +41,6 @@ type akStyle struct {
 // container wptPt points wide and returns its line fragments.
 func appKitLayout(t *testing.T, s *System, str string, base FontDesc, spans []akStyle, wPt float64) []akLine {
 	t.Helper()
-	if runtime.GOARCH != "arm64" {
-		t.Skip("the NSRect and NSRange returns are read from arm64 registers")
-	}
 	pool := s.poolPush()
 	defer s.poolPop(pool)
 	fr := s.fr

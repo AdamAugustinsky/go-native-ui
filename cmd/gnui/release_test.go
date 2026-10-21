@@ -45,7 +45,7 @@ func TestPackagedBinaryHasNoDebugChordOrInspector(t *testing.T) {
 	build := func(o buildOptions) []byte {
 		t.Helper()
 		out := filepath.Join(t.TempDir(), "probe")
-		if err := buildExecutable(c, "arm64", out, o); err != nil {
+		if err := buildExecutable(c, out, o); err != nil {
 			t.Fatal(err)
 		}
 		b, err := os.ReadFile(out)

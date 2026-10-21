@@ -3,8 +3,6 @@
 package platform
 
 import (
-	"runtime"
-
 	"gonativeui/internal/ffi"
 	"gonativeui/internal/objc"
 )
@@ -630,39 +628,27 @@ func elemRangeForIndex(c *ffi.CB) {
 
 // ---- frames ----
 
-// retRect returns r from a CGRect-returning IMP (see firstRectIMP).
+// retRect returns r from a CGRect-returning method: an HFA in d0-d3.
 func retRect(c *ffi.CB, r objc.Rect) {
-	if runtime.GOARCH == "amd64" {
-		*(*objc.Rect)(c.IndirectResult()) = r
-		return
-	}
 	c.RetF64(0, r.X)
 	c.RetF64(1, r.Y)
 	c.RetF64(2, r.W)
 	c.RetF64(3, r.H)
 }
 
-// imp args: on amd64 the hidden result pointer comes first.
-func impArg(c *ffi.CB, i int) uintptr {
-	if runtime.GOARCH == "amd64" {
-		return c.Int(i + 1)
-	}
-	return c.Int(i)
-}
-
-func elemFrameIMP(c *ffi.CB) {
+func elemFrame(c *ffi.CB) {
 	var r objc.Rect
-	if n, _, ok := elemNode(objc.ID(impArg(c, 0))); ok {
+	if n, _, ok := elemNode(self(c)); ok {
 		r = ax.w.axScreenRect(n.Bounds)
 	}
 	retRect(c, r)
 }
 
-func elemFrameForRangeIMP(c *ffi.CB) {
+func elemFrameForRange(c *ffi.CB) {
 	var r objc.Rect
-	if n, _, ok := elemNode(objc.ID(impArg(c, 0))); ok && reqText.meets(nil, n, 0) {
+	if n, _, ok := elemNode(self(c)); ok && reqText.meets(nil, n, 0) {
 		txt := axTextFor(n)
-		lo, hi := byteRange(txt, impArg(c, 2), impArg(c, 3))
+		lo, hi := byteRange(txt, c.Int(2), c.Int(3))
 		b := n.Bounds
 		if n.Text != AXTextNone && ax.src != nil {
 			if q, ok := ax.src.AXBounds(n.Key, lo, hi); ok {
