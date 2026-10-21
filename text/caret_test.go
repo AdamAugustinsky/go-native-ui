@@ -128,6 +128,33 @@ func TestCaretAllocs(t *testing.T) {
 	}
 }
 
+// Adjacent logical groups may lie on either side in visual order. Ligatures
+// and bidi boundaries may instead need the nonadjacent logical successor.
+func TestCaretGroupLogicalEnd(t *testing.T) {
+	r := uint32(ClusterRTL)
+	for _, v := range []RunView{
+		longView(8),
+		view("affib", 3, []uint32{0, 1, 4}, []float32{0, 10, 40}, 50),
+		view("e\u0301x", 3, []uint32{0, 1, 3}, []float32{0, -4, 10}, 20),
+		view("אבג", 3, []uint32{4 | r, 2 | r, 0 | r}, []float32{-10, 0, 10}, 20),
+		view("aבגb", 4, []uint32{0, 3 | r, 1 | r, 5}, []float32{0, 10, 20, 30}, 40),
+		view("a\r\nb", 4, []uint32{0, 1, 2, 3}, []float32{0, 10, 10, 10}, 20),
+	} {
+		for j := range v.Glyphs {
+			g := v.groupAt(j)
+			want := len(v.Text)
+			for k := range v.Glyphs {
+				if c := v.clusterOf(k); c > g.start && c < want {
+					want = c
+				}
+			}
+			if g.end != want {
+				t.Fatalf("%q glyph %d: logical end %d, want %d", v.Text, j, g.end, want)
+			}
+		}
+	}
+}
+
 // longView is n glyphs of one character each, 10 px apart.
 func longView(n int) RunView {
 	txt := make([]byte, n)

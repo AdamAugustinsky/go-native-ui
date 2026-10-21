@@ -61,11 +61,7 @@ func (v *RunView) groupAt(j int) glyphGroup {
 	}
 	g := glyphGroup{lo: lo, hi: hi, start: s, end: len(v.Text), rtl: v.Clusters[j]&ClusterRTL != 0}
 	g.xl, g.xr = v.cellStart(lo), v.cellStart(hi)
-	for k := range v.Glyphs {
-		if c := v.clusterOf(k); c > s && c < g.end {
-			g.end = c
-		}
-	}
+	g.end = v.groupEnd(lo, hi, s)
 	return g
 }
 
