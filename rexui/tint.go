@@ -9,6 +9,11 @@ import (
 // NoRole is the Role of a Tint that draws nothing.
 const NoRole theme.Role = 255
 
+// LitRole is the Role of a Tint that is a colour of the app's own (OfRGBA).
+const LitRole theme.Role = 254
+
+var _ [LitRole - theme.NumRoles]struct{} // the roles stay below LitRole
+
 // Tint is a colour a recipe names: a colour role, optionally at an opacity of
 // its own in light and dark. Recipes hold Tints, not colours, so a light/dark
 // crossfade and the system's live colours cost nothing extra.
@@ -19,11 +24,13 @@ const NoRole theme.Role = 255
 // documented in its recipe. A colour several recipes share gets a role of its
 // own (theme.Knob, theme.FieldOutline).
 type Tint struct {
-	// Role is the colour role (NoRole: nothing).
+	// Role is the colour role (NoRole: nothing; LitRole: Lit).
 	Role theme.Role
 	// Alpha is the opacity in light (0) and dark (1), 0 to 1; both zero keep
 	// the role's own, one zero is transparent in that mode.
 	Alpha [2]float32
+	// Lit is the colour (0xRRGGBBAA) of a Tint whose Role is LitRole.
+	Lit uint32
 }
 
 // Of is the Tint of role as it is.
@@ -34,16 +41,26 @@ func OfAlpha(role theme.Role, light, dark float32) Tint {
 	return Tint{Role: role, Alpha: [2]float32{light, dark}}
 }
 
+// OfRGBA is a colour of the app's own (0xRRGGBBAA), the same in light and
+// dark: a contact's colour, a brand's. Recipes keep roles; an option that
+// takes a Tint (AvatarOpts.Color) takes one of these too.
+func OfRGBA(rgba uint32) Tint { return Tint{Role: LitRole, Lit: rgba} }
+
 // None draws nothing.
 var None = Tint{Role: NoRole}
 
 // RGBA is the tint's colour in r, 0xRRGGBBAA at r's light/dark mix; 0 for
 // None.
 func (t Tint) RGBA(r *theme.Resolved) uint32 {
-	if t.Role >= theme.NumRoles {
+	var c uint32
+	switch {
+	case t.Role == LitRole:
+		c = t.Lit
+	case t.Role >= theme.NumRoles:
 		return 0
+	default:
+		c = r.Colors[t.Role]
 	}
-	c := r.Colors[t.Role]
 	if t.Alpha == ([2]float32{}) {
 		return c
 	}

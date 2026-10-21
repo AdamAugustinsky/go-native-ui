@@ -1,9 +1,11 @@
 package rexui
 
 import (
+	"unicode"
 	"unicode/utf8"
 
 	"gonativeui/img"
+	"gonativeui/text"
 	"gonativeui/theme"
 	"gonativeui/ui"
 	"gonativeui/widget/base"
@@ -37,9 +39,13 @@ type AvatarOpts struct {
 	// base.Kit.SetImages), shown as a circle once it is ready; until then, and
 	// if it fails, the initials show. The zero handle is none.
 	Image img.Handle
-	// Color is the initials' backdrop; the zero Tint takes one of
-	// AvatarLook.Palette by a hash of the name, so a person keeps their colour.
+	// Color is the initials' backdrop: a role, or a colour of the app's own
+	// (OfRGBA); the zero Tint takes one of AvatarLook.Palette by a hash of the
+	// name, so a person keeps their colour.
 	Color Tint
+	// Images are AvatarStack's pictures, by the index of the names: one that
+	// is set and ready shows in place of that name's initials.
+	Images []img.Handle
 	// Pressable makes the avatar a button: it takes the keyboard focus (with
 	// the focus ring), clicks, Enter and Space activate it, and its role is
 	// RoleButton. Read the press with k.SignalOf(id).Clicked on the ID Avatar
@@ -80,36 +86,64 @@ var AvatarLook = AvatarRecipe{
 	Overlap: 0.3, StackRing: 2,
 }
 
-// initialsOf appends the initials of name to f: the first letter of its first
-// and last words, upper-cased where that is ASCII ("Ada Lovelace" is "AL",
-// "Ada" is "A").
+// initialsOf appends the initials of name (Initials) to f.
 func initialsOf(f *ui.Fmt, name string) {
+	var buf [64]byte
+	for _, c := range Initials(buf[:0], name) {
+		f.Byte(c)
+	}
+}
+
+// Initials appends to dst the initials an avatar shows for name: the first
+// letter or digit of its first and last words, title-cased ("Ada Lovelace" is
+// "AL", "Ada" is "A"). A word is what lies between white space, and its
+// initial is its first letter or digit wherever it is in it ("Name (You)" is
+// "NY", "@ada" is "A"), in any script, with what makes one grapheme with it
+// (combining marks: "e\u0301" stays whole); a word with none (an emoji) has
+// no initial. A name with no letter or digit at all gives its first grapheme
+// ("🎉 🎂" is "🎉"). It allocates nothing beyond dst's growth.
+func Initials(dst []byte, name string) []byte {
+	b := base.StrBytes(name)
 	first, last := -1, -1
-	inWord := false
-	for i, r := range name {
-		sp := r == ' ' || r == '\t' || r == '\n'
-		if !sp && !inWord {
+	found := false // the word has its initial
+	for i := 0; i < len(b); {
+		r, n := utf8.DecodeRune(b[i:])
+		switch {
+		case unicode.IsSpace(r):
+			found = false
+		case !found && (unicode.IsLetter(r) || unicode.IsDigit(r)):
 			if first < 0 {
 				first = i
 			}
-			last = i
+			last, found = i, true
 		}
-		inWord = !sp
+		i += n
 	}
 	put := func(i int) {
-		r, n := utf8.DecodeRuneInString(name[i:])
-		if r >= 'a' && r <= 'z' {
-			f.Byte(byte(r - 'a' + 'A'))
-		} else {
-			f.Str(name[i : i+n])
+		end := text.NextGrapheme(b, i)
+		r, n := utf8.DecodeRune(b[i:])
+		if u := unicode.ToTitle(r); u != r && r != utf8.RuneError {
+			dst = utf8.AppendRune(dst, u)
+			i += n
 		}
+		dst = append(dst, b[i:end]...)
 	}
-	if first >= 0 {
-		put(first)
-		if last != first {
-			put(last)
+	if first < 0 { // no letter or digit: the first grapheme that is not white space
+		for i := 0; i < len(b); {
+			r, n := utf8.DecodeRune(b[i:])
+			if !unicode.IsSpace(r) {
+				put(i)
+				break
+			}
+			i += n
 		}
+		return dst
 	}
+	put(first)
+	if last != first {
+		put(last)
+	}
+	return dst
 }
 
 // hashName is FNV-1a over name.
@@ -254,11 +288,12 @@ func avatarDot(k *base.Kit, key ui.Key, side float32, o *AvatarOpts) {
 }
 
 // AvatarStack builds a row of avatars that overlap, for the members of a
-// group: the first max of names (at most 8; 0: 4) as initials discs, then, if
-// there are more, a "+N" disc. label is the accessible name of the group
-// ("3 members").
+// group: the first max of names (at most 8; 0: 4) as their pictures
+// (AvatarOpts.Images, by the same index) or initials discs, then, if there
+// are more, a "+N" disc. label is the accessible name of the group ("3
+// members").
 //
-//	rexui.AvatarStack(k, "Members", names, 4, rexui.AvatarOpts{Size: 28})
+//	rexui.AvatarStack(k, "Members", names, 4, rexui.AvatarOpts{Size: 28, Images: photos})
 func AvatarStack(k *base.Kit, label string, names []string, max int, o AvatarOpts) ui.ID {
 	c, r := k.Context(), k.Theme()
 	rc := &AvatarLook
@@ -304,6 +339,13 @@ func AvatarStack(k *base.Kit, label string, names []string, max int, o AvatarOpt
 		c.NextRadius(side/2 + ring)
 		c.NextAuditExempt(ui.AuditOverflow.Mask() | ui.AuditCovered.Mask()) // the ring and the cut lie over their neighbour on purpose
 		c.BoxKeyed(ui.DrawBackground|base.Floating, ui.KeyN(key, uint64(10*i)), nil)
+		if i < shown && i < len(o.Images) && o.Images[i] != 0 && k.ImageState(o.Images[i]) == img.Ready {
+			theme.At(c, x, 0, side, side)
+			c.NextFlags(base.Floating)
+			c.NextAuditExempt(ui.AuditCovered.Mask()) // each lies over the one before, on purpose
+			k.Image(uint64(i), o.Images[i], ui.FitFill, side/2, "")
+			continue
+		}
 		fill, fg := Of(rc.Palette[0]), r.Colors[theme.OnAccent]
 		var name string
 		if i < shown {
