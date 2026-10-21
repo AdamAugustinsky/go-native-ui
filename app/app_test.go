@@ -277,3 +277,29 @@ func TestOffscreenStopsAskingAScripterThatSaidFalse(t *testing.T) {
 		t.Errorf("the Scripter was asked %d times (want 3), more = %v: only the frame where it said false reports the end", calls, more)
 	}
 }
+
+// SetKeepRunning decides at the next last-window close, as AppConfig.KeepRunning
+// does at launch (macOS; elsewhere the app always ends with its last window).
+func TestSetKeepRunningChangesWhatTheLastCloseDoes(t *testing.T) {
+	if !manyWindows {
+		t.Skip("KeepRunning applies where an app can have no window")
+	}
+	mk := func() *App {
+		a := &App{appObject: &appObject{mainApp: true}}
+		a.wins = []*App{a}
+		return a
+	}
+	a := mk()
+	a.SetKeepRunning(true)
+	a.closeRequested()
+	if a.done || !a.closing {
+		t.Errorf("kept running: done %v, closing %v, want the window to close and the app to stay", a.done, a.closing)
+	}
+	a = mk()
+	a.SetKeepRunning(true)
+	a.SetKeepRunning(false)
+	a.closeRequested()
+	if !a.done {
+		t.Error("after SetKeepRunning(false) the last window's close did not end the app")
+	}
+}

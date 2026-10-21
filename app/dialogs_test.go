@@ -80,6 +80,33 @@ func TestTakeDialog(t *testing.T) {
 	}
 }
 
+// TakeDialogFor gives each owner only the result of its own dialog, whichever
+// ended first or is read first; TakeDialog still reads the oldest of the rest.
+func TestTakeDialogFor(t *testing.T) {
+	for _, order := range [][2]platform.DialogTicket{{1, 2}, {2, 1}} {
+		a := &App{appObject: &appObject{}}
+		a.dlg = []platform.DialogResult{{Ticket: 1, Button: 10}, {Ticket: 2, Button: 20}}
+		if _, ok := a.TakeDialogFor(3); ok {
+			t.Fatal("a result for a ticket that has none")
+		}
+		for _, tk := range order {
+			r, ok := a.TakeDialogFor(tk)
+			if !ok || r.Ticket != tk || r.Button != int(tk)*10 {
+				t.Fatalf("order %v: TakeDialogFor(%d) = %+v (ok %v)", order, tk, r, ok)
+			}
+			if _, again := a.TakeDialogFor(tk); again {
+				t.Errorf("order %v: result %d was read twice", order, tk)
+			}
+		}
+	}
+	a := &App{appObject: &appObject{}}
+	a.dlg = []platform.DialogResult{{Ticket: 1}, {Ticket: 2}}
+	a.TakeDialogFor(1)
+	if r, ok := a.TakeDialog(); !ok || r.Ticket != 2 {
+		t.Errorf("TakeDialog after TakeDialogFor(1): %+v (ok %v), want ticket 2", r, ok)
+	}
+}
+
 // fakeDialogs records what reaches the window's dialog calls.
 type fakeDialogs struct {
 	calls   []string

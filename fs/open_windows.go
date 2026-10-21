@@ -53,7 +53,7 @@ const (
 	winCoApartment  = 0x2 // COINIT_APARTMENTTHREADED
 	winCoNoOle1DDE  = 0x4 // COINIT_DISABLE_OLE1DDE
 
-	// winOpenWait bounds how long openPath waits for ShellExecuteExW. The
+	// winOpenWait bounds how long osOpenPath waits for ShellExecuteExW. The
 	// call normally returns once the handler process is created; a handler
 	// that hangs (a stuck DDE server, an unreachable share) must not hang the
 	// caller forever, so past this the request is reported as timed out and
@@ -78,13 +78,13 @@ func winLoadShell() {
 	winShellLoadFailed = pCoInitializeEx == 0 || pCoUninitialize == 0 || pShellExecuteExW == 0
 }
 
-// openPath opens path with its default application (a folder in Explorer)
+// osOpenPath opens path with its default application (a folder in Explorer)
 // via ShellExecuteExW "open". It may block (it runs on a Service worker, not
 // the UI thread). The call runs on a dedicated locked thread with its own COM
 // apartment (shell verbs can need an STA) and returns the real error of
 // ShellExecuteExW; if it takes longer than winOpenWait it returns a timeout
 // error and the thread finishes the call on its own.
-func openPath(path string) error {
+func osOpenPath(path string) error {
 	winShellOnce.Do(winLoadShell)
 	if winShellLoadFailed {
 		return winPathErr("open", path, winErrNotSupported)

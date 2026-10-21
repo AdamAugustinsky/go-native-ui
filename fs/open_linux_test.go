@@ -13,6 +13,7 @@ import (
 // openPath starts xdg-open with the absolute path as its single argument.
 // A stand-in xdg-open on PATH records what it was given.
 func TestLinuxOpenPath(t *testing.T) {
+	t.Setenv("GNUI_ALLOW_OPEN", "1") // past the test-binary guard to the stand-in xdg-open: nothing opens
 	bin := t.TempDir()
 	out := filepath.Join(bin, "args.txt")
 	script := "#!/bin/sh\nprintf '%s\\n' \"$#\" \"$1\" > '" + out + ".tmp' && /bin/mv '" + out + ".tmp' '" + out + "'\n"
@@ -50,6 +51,7 @@ func TestLinuxOpenPath(t *testing.T) {
 }
 
 func TestLinuxOpenPathErrors(t *testing.T) {
+	t.Setenv("GNUI_ALLOW_OPEN", "1") // past the guard: a missing path and a missing xdg-open launch nothing
 	if err := openPath(filepath.Join(t.TempDir(), "missing")); !os.IsNotExist(err) {
 		t.Errorf("missing path: %v", err)
 	}

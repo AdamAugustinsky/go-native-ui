@@ -281,3 +281,41 @@ func TestNoAllocationsPerFrame(t *testing.T) {
 		}
 	}
 }
+
+// Buttons built inside a ui flow keep their label widths and wrap onto further
+// lines when the next one does not fit: a row of buttons that wraps needs
+// nothing but BeginFlow around them.
+func TestButtonsInAFlowWrap(t *testing.T) {
+	labels := []string{"Reply", "Forward", "Mark as unread", "Archive", "Move to…", "Report spam"}
+	g := newRig(t, theme.Light, nil, func(g *rig) {
+		c := g.c
+		theme.At(c, 20, 20, 260, 300)
+		c.Push(c.Box(theme.Floating, "root"))
+		c.NextSize(ui.Px(260), ui.Children(0))
+		c.BeginFlow("actions", ui.FlowOpts{GapX: 8, GapY: 8})
+		for _, l := range labels {
+			rexui.Button(g.k, l, rexui.ButtonOpts{})
+		}
+		c.EndFlow()
+		c.Pop()
+	})
+	g.frames(2)
+	var tops []float32
+	var maxRight float32
+	for i, l := range labels {
+		b := g.node(ui.RoleButton, l).Bounds
+		if b[2]-b[0] < 20 {
+			t.Errorf("%q is %v wide: not its label's width", l, b[2]-b[0])
+		}
+		if i == 0 || b[1] != tops[len(tops)-1] {
+			tops = append(tops, b[1])
+		}
+		maxRight = max(maxRight, b[2])
+	}
+	if len(tops) < 2 {
+		t.Errorf("the buttons stayed on one line (%d lines)", len(tops))
+	}
+	if maxRight > 280.5 {
+		t.Errorf("a button reaches %v, past the flow's right edge at 280", maxRight)
+	}
+}

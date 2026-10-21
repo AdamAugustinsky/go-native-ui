@@ -1,5 +1,5 @@
 // Package selfupdate replaces the running app with a newer copy of itself and
-// undoes the change if the new copy does not start (DECISIONS.md D60).
+// undoes the change if the new copy does not start (DECISIONS.md D61).
 //
 // Downloading and checking the archive against the publisher's own signature
 // is the app's job. This package takes the archive from there:

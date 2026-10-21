@@ -39,6 +39,14 @@
 // schemes http, https and mailto unless the caller allows more (OpenURLWith),
 // never file, javascript, data, vbscript or a one-letter scheme, and it still
 // hands the URL to whatever application handles its scheme.
+//
+// # Testing
+//
+// In a Go test binary (its name ends in .test) OpenURL, OpenURLWith, OpenPath
+// and Reveal launch nothing: they log one line and return ErrTestBinary, so no
+// app's tests can open a browser, a document or a Finder window by accident.
+// A test that must really launch something sets GNUI_ALLOW_OPEN=1 and says
+// why. Trash is not affected.
 package shell
 
 import (
@@ -48,6 +56,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"gonativeui/internal/launchguard"
 )
 
 // ErrInvalid is returned for an argument that cannot be a URL or a path of the
@@ -57,6 +67,10 @@ var ErrInvalid = errors.New("shell: invalid URL or path")
 // ErrUnavailable is returned when the system has nothing to ask: no
 // xdg-open on a Linux desktop, a system library that is missing.
 var ErrUnavailable = errors.New("shell: not available on this system")
+
+// ErrTestBinary is returned by OpenURL, OpenURLWith, OpenPath and Reveal in a
+// Go test binary, where nothing is launched unless GNUI_ALLOW_OPEN=1 is set.
+var ErrTestBinary = launchguard.ErrTestBinary
 
 // system is the part that talks to the OS. The package's functions check their
 // arguments and call it; tests replace it so that nothing launches.
@@ -68,7 +82,32 @@ type system interface {
 }
 
 // sys is the system in use.
-var sys system = osSystem{}
+var sys system = guarded{osSystem{}}
+
+// guarded refuses to launch anything from a Go test binary (see Testing).
+// Trash launches nothing and is passed on.
+type guarded struct{ system }
+
+func (g guarded) openURL(u string) error {
+	if err := launchguard.Check("open URL " + u); err != nil {
+		return err
+	}
+	return g.system.openURL(u)
+}
+
+func (g guarded) openPath(p string) error {
+	if err := launchguard.Check("open " + p); err != nil {
+		return &os.PathError{Op: "open", Path: p, Err: err}
+	}
+	return g.system.openPath(p)
+}
+
+func (g guarded) reveal(paths []string) error {
+	if err := launchguard.Check("reveal " + strings.Join(paths, ", ")); err != nil {
+		return err
+	}
+	return g.system.reveal(paths)
+}
 
 // maxURL is the longest URL accepted, in bytes.
 const maxURL = 8192
