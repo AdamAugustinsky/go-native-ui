@@ -250,14 +250,17 @@ func TestVideoInWindow(t *testing.T) {
 		t.Fatal(err)
 	}
 	v2 := b2.v.Load()
-	for deadline := time.Now().Add(10 * time.Second); b2.drawn.Load() < 20; time.Sleep(10 * time.Millisecond) {
+	// It plays when it has drawn a few frames and holds a pixel buffer of its
+	// own (CI's virtual display gives a window about 2 frames a second).
+	held := func() int { _, h := VideoCounts(); return h }
+	for deadline := time.Now().Add(10 * time.Second); b2.drawn.Load() < 3 || held() < held1+1; time.Sleep(10 * time.Millisecond) {
 		if time.Now().After(deadline) {
 			st := b2.covered(l, platform.Now()-int64(2*time.Second)) // 2 s shown are 60 frames
 			l.Do(func(*app.App) { w2.Close(); v2.Close() })
 			if st != "" {
-				t.Skipf("the second window drew %d frames of its video, but it is covered: %s", b2.drawn.Load(), st)
+				t.Skipf("the second window drew %d frames of its video (%d pixel buffers held, %d before it), but it is covered: %s", b2.drawn.Load(), held(), held1, st)
 			}
-			t.Fatalf("the second window drew %d frames of its video", b2.drawn.Load())
+			t.Fatalf("the second window drew %d frames of its video, %d pixel buffers held (%d before it)", b2.drawn.Load(), held(), held1)
 		}
 	}
 	if videos, held := VideoCounts(); videos != 2 || held != held1+1 {
