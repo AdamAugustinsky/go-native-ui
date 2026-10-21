@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -135,6 +136,19 @@ func lxGetScratch() *lxScratch {
 		return s
 	}
 	return new(lxScratch)
+}
+
+// prewarmScratch has n scratches on the free list, so that the first listings
+// and stats, which can run at once on the service's workers, find them there
+// instead of each allocating 72 KiB the first time two of them overlap: when
+// that happens is the scheduler's, and a measured window must not be it.
+func prewarmScratch(n int) {
+	lxScratchMu.Lock()
+	defer lxScratchMu.Unlock()
+	lxScratchFree = slices.Grow(lxScratchFree, n)
+	for len(lxScratchFree) < n {
+		lxScratchFree = append(lxScratchFree, new(lxScratch))
+	}
 }
 
 func lxPutScratch(s *lxScratch) {

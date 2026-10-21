@@ -198,6 +198,7 @@ func newService(wake func(), list func(string, *Listing) error, nw func(func()) 
 	for i := range s.parks {
 		s.parks[i] = core.NewParker()
 	}
+	prewarmScratch(numWorkers + 1) // the workers and the watcher's stats may overlap
 	s.ctlPark = core.NewParker()
 	s.timer = time.AfterFunc(time.Hour, wake)
 	s.timer.Stop()
