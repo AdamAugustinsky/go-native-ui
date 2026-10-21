@@ -26,8 +26,6 @@ How it works, in `.github/workflows/ci.yml`:
 | Linux (all 4 jobs) | `TestMixFollowsAndDoesNotAllocate` (theme) | `Mix allocates 1 times`, a one-off allocation; 200/200 locally | [#34](https://github.com/AdamAugustinsky/go-native-ui/issues/34) |
 | Linux (all 4 jobs) | `TestPackagedBinaryHasNoDebugChordOrInspector` (cmd/gnui) | needs the network (module proxy) | [#34](https://github.com/AdamAugustinsky/go-native-ui/issues/34) |
 | Linux (all 4 jobs) | spike gate: vsync pacing (`no frame callbacks`) and stalls | warns instead of failing | [#34](https://github.com/AdamAugustinsky/go-native-ui/issues/34) |
-| macOS arm64 | `TestIdleAppDrawsNothingAfterOneSecondButTheSystemsNews` (widgettest/live) | unexplained frames seconds after the wait; possibly a real wake problem | [#34](https://github.com/AdamAugustinsky/go-native-ui/issues/34) |
-| macOS arm64 | `TestIdleAppDrawsNothingBetweenWaits` (widgettest/live) | `kept drawing 1 frames after the wait ended`; possibly a real wake problem | [#34](https://github.com/AdamAugustinsky/go-native-ui/issues/34) |
 | macOS arm64 | `TestDragTypesDoNotReachHosts` (platform) | `host under the view: false`, about 1 in 5 | [#34](https://github.com/AdamAugustinsky/go-native-ui/issues/34) |
 | macOS arm64 | `TestEditorNestedLoopDraws`, `TestEditorUndoRedo`, `TestEditorMarkedTextSubmission` (widgettest/live) | fail under contention, pass alone (MarkedTextSubmission added after it failed on run 39531272169) | [#34](https://github.com/AdamAugustinsky/go-native-ui/issues/34) |
 | macOS arm64 | `TestMixFollowsAndDoesNotAllocate` (theme) | one-off allocation | [#34](https://github.com/AdamAugustinsky/go-native-ui/issues/34) |

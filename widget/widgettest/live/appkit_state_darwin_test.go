@@ -241,14 +241,21 @@ func TestCaptureOfTheLiveWindow(t *testing.T) {
 	}
 }
 
-// The harness leaves an idle app idle: with no wait open, a harness call that
-// changes nothing draws no frame, and a wait asks for frames only while it is
-// open. The first seconds of a window's life may draw frames of the system's
-// making (activation, occlusion), so the test first waits for the app to go
-// quiet; an app that never does is a failure only if its window is on screen.
+// The harness leaves an idle app idle: a wait asks for frames only while it is
+// open, and the app draws nothing between waits. The first seconds of a
+// window's life may draw frames of the system's making, so the test first
+// waits for the app to go quiet; an app that never does is a failure only if
+// its window is on screen. A frame in the half second before the wait or the
+// 0.3 s after it is attributed to the causes the debug overlay recorded (it is
+// turned on here), and fails the test unless the system or another app made
+// it (outsideCause): above all another process taking the activation, which
+// side by side test runs do all the time.
 func TestIdleAppDrawsNothingBetweenWaits(t *testing.T) {
-	l, _ := startProbe(t)
+	wantOverlay(t, false)
+	fl := &frameLog{Builder: &probe{}}
+	l := widgettest.StartLive(t, probeConfig(), fl)
 	l.Frames(30)
+	k := fl.count()
 	quiet := false
 	for try := 0; try < 40 && !quiet; try++ {
 		n := l.Built()
@@ -263,20 +270,21 @@ func TestIdleAppDrawsNothingBetweenWaits(t *testing.T) {
 		if !visible {
 			t.Skip("the window is occluded here and the app keeps drawing: the pacer's fallback for a window that cannot be seen")
 		}
-		t.Fatal("the app kept drawing for 10 s with nothing to do")
+		if report(t, "the app kept drawing for 10 s with nothing to do", attribute(fl.finish(l), k, 0), 0) == 0 {
+			t.Skip("the system and other apps kept the window drawing for 10 s")
+		}
+		t.FailNow()
 	}
-	n0 := l.Built()
+	n0, k0 := l.Built(), fl.count()
 	time.Sleep(500 * time.Millisecond)
-	if n := l.Built(); n != n0 {
-		t.Errorf("the idle app built %d frames in half a second", n-n0)
-	}
+	k0end := fl.count()
 	l.Frames(3)
 	if n := l.Built(); n < n0+3 {
 		t.Errorf("a wait for 3 frames drew %d", n-n0)
 	}
-	n1 := l.Built()
+	k1 := fl.count()
 	time.Sleep(300 * time.Millisecond)
-	if n := l.Built(); n != n1 {
-		t.Errorf("the app kept drawing %d frames after the wait ended", n-n1)
-	}
+	frames := fl.finish(l)
+	report(t, "frames of the idle app in the half second before the wait", attribute(frames[:k0end], k0, 0), 0)
+	report(t, "frames after the wait ended", attribute(frames, k1, 0), 0)
 }
