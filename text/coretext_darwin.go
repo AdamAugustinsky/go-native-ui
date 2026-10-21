@@ -110,6 +110,11 @@ func loadSyms() error {
 			}
 			return h
 		}
+		// AppKit before any CTFont exists: CTFonts created before
+		// UIFoundation registers its NSFont bridge poison NSFont's instance
+		// cache, and the process's first window then raises inside
+		// +systemFontOfSize: (an offscreen rig, then a live window).
+		open("/System/Library/Frameworks/AppKit.framework/AppKit")
 		cf := open("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
 		ct := open("/System/Library/Frameworks/CoreText.framework/CoreText")
 		cg := open("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")
