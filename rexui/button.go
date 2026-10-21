@@ -42,6 +42,12 @@ type ButtonOpts struct {
 	// Size is the control size (theme.SizeRegular: 24 pt, 13 pt type; large
 	// and extra large are capsules).
 	Size theme.Size
+	// Recipe, when set, replaces the variant's recipe in this call: the
+	// colours, rim, shadow, shape flags and hover policy. The size still sets
+	// the height, padding and type. Keep the pointee (a ButtonRecipes entry must not be
+	// modified): passing a pointer to a recipe kept by the caller allocates
+	// nothing per frame.
+	Recipe *ButtonRecipe
 }
 
 // ButtonRecipe is the look of one button variant: the Tints of each state.
@@ -165,6 +171,9 @@ func ButtonIcon(k *base.Kit, ic icon.ID, label string, o ButtonOpts) base.Signal
 func button(k *base.Kit, label string, ic icon.ID, withIcon bool, o ButtonOpts) base.Signal {
 	c, r := k.Context(), k.Theme()
 	rc := &ButtonRecipes[o.Variant%NumButtonVariants]
+	if o.Recipe != nil {
+		rc = o.Recipe
+	}
 	s := &r.Sizes[o.Size%theme.NumSizes]
 	p := k.PressState(label, rc.Hover)
 	fill, fg, rim := rc.Colors(r, p.Visual)

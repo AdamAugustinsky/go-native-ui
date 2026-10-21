@@ -37,6 +37,13 @@ type IconButtonOpts struct {
 	Variant IconButtonVariant
 	// Size is the control size.
 	Size theme.Size
+	// Recipe, when set, replaces the variant's recipe in this call: the
+	// colours and the hover policy (a call-site look, say a call button that
+	// stays solid in an inactive window). The variant still sets the size,
+	// geometry and glyph treatment. Keep the pointee (an IconButtonRecipes
+	// entry must not be modified): passing a pointer to a recipe kept by the
+	// caller allocates nothing per frame.
+	Recipe *ButtonRecipe
 }
 
 // IconButtonRecipes are the variants' recipes (ButtonRecipe's fields; the
@@ -70,6 +77,9 @@ func IconButton(k *base.Kit, ic icon.ID, name string, o IconButtonOpts) base.Sig
 	c, r := k.Context(), k.Theme()
 	v := o.Variant % NumIconButtonVariants
 	rc := &IconButtonRecipes[v]
+	if o.Recipe != nil {
+		rc = o.Recipe
+	}
 	s := &r.Sizes[o.Size%theme.NumSizes]
 	p := k.PressState(name, rc.Hover)
 	fill, fg, rim := rc.Colors(r, p.Visual)
