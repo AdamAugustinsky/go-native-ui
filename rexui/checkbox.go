@@ -11,6 +11,14 @@ import (
 type CheckboxOpts struct {
 	// Size is the control size.
 	Size theme.Size
+	// Wrap lets a long label break into lines beside the box instead of
+	// running on in one: the checkbox then fills the width it is given
+	// (the parent's, or the kit's NextSize) and is as high as the label's
+	// lines, with the box beside the first. It stays one control: the box
+	// is named by the label, a click on any line of it toggles it, and the
+	// box shows the hover and the press while the pointer is over the
+	// label.
+	Wrap bool
 }
 
 // CheckboxRecipe is the look of checkboxes (and of radio buttons' circles).
@@ -90,9 +98,13 @@ func CheckboxTri(k *base.Kit, label string, st *base.CheckState, o CheckboxOpts)
 	}
 
 	c.NextAxis(ui.AxisX)
-	c.NextCross(ui.CrossCenter)
 	c.NextGap(s.CheckGap)
-	k.BeginToggle(&t, ui.RoleCheckbox, ui.Children(1), ui.Px(box), 0)
+	if o.Wrap {
+		k.BeginToggle(&t, ui.RoleCheckbox, ui.Pct(1), ui.Children(1), 0)
+	} else {
+		c.NextCross(ui.CrossCenter)
+		k.BeginToggle(&t, ui.RoleCheckbox, ui.Children(1), ui.Px(box), 0)
+	}
 	c.NextSize(ui.Px(box), ui.Px(box))
 	c.NextBG(fill)
 	c.NextRadius(radius)
@@ -113,7 +125,18 @@ func CheckboxTri(k *base.Kit, label string, st *base.CheckState, o CheckboxOpts)
 		c.BoxKeyed(ui.DrawBackground|base.Floating, ui.KeyN(t.Key, 3), nil)
 	}
 	c.Pop()
-	k.Text(4, t.Name, s.Font.Font, lc, ui.AlignLeft, box)
+	switch {
+	case o.Wrap && t.Name != "":
+		// the label takes the room the box leaves; its first line is
+		// centred on the box
+		c.NextSize(ui.Pct(1), ui.TextSize(0))
+		c.NextPadding(0, max(0, theme.Snap((box-s.Font.Line)/2)), 0, 0)
+		c.NextFont(s.Font.Font)
+		c.NextTextColor(lc)
+		c.BoxKeyed(ui.DrawText|ui.WrapText, ui.KeyN(t.Key, 9024), base.StrBytes(t.Name))
+	default:
+		k.Text(4, t.Name, s.Font.Font, lc, ui.AlignLeft, box)
+	}
 	k.FocusRing(bx, t.Visual, radius)
 	return k.EndToggle(&t)
 }

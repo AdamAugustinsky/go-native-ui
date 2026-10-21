@@ -8,6 +8,7 @@ import (
 
 	"gonativeui/gpu"
 
+	"gonativeui/icon"
 	"gonativeui/platform"
 	"gonativeui/rexui"
 	"gonativeui/theme"
@@ -845,6 +846,55 @@ func TestPopoverArrowOnEverySide(t *testing.T) {
 		}
 		if math.Abs(gap/2-2) > 0.5 || math.Abs(height/2-11) > 0.5 || math.Abs(mid-centre) > 1.5 {
 			t.Errorf("edge %d: gap %.1f pt, arrow height %.1f pt, centre off by %.1f px (want 2, 11, 0)", edge, gap/2, height/2, mid-centre)
+		}
+	}
+}
+
+// A toast's action can be an icon: a button named for assistive technologies,
+// reported as Action, and beside a text action if both are asked for; an icon
+// without a name is no action.
+func TestToastIconAction(t *testing.T) {
+	for _, tc := range []struct {
+		name, text string
+		buttons    []string
+	}{
+		{"icon only", "", []string{"Copy details"}},
+		{"icon and text", "Retry", []string{"Retry", "Copy details"}},
+		{"unnamed icon", "Retry", []string{"Retry"}},
+	} {
+		actions := 0
+		var ic icon.ID
+		g := openRig(t, theme.Light, nil, func(g *rig) {
+			g.k.NextSize(g.k.Fixed(500), g.k.Fixed(300))
+			g.k.Column("host")
+			o := rexui.BannerOpts{Level: rexui.BannerError, Message: "Too large.", Action: tc.text, ActionIcon: ic}
+			if tc.name != "unnamed icon" {
+				o.ActionIconName = "Copy details"
+			}
+			if rexui.Toast(g.k, "Upload failed", rexui.ToastOpts{Duration: -1, BannerOpts: o}).Action {
+				actions++
+			}
+			g.k.EndColumn()
+		})
+		ic = g.k.AddIcon(icon.Spec{Symbol: "doc.on.doc", Fallback: 'C', Pt: 14})
+		g.h = 700
+		g.frames(4)
+		g.c.Semantics(&g.sem)
+		var got []string
+		for _, nd := range g.sem.Nodes {
+			if name := string(g.sem.Text(nd.Name)); nd.Role == ui.RoleButton && name != "Dismiss" { // a toast always has its close button
+				got = append(got, name)
+			}
+		}
+		if len(got) != len(tc.buttons) {
+			t.Fatalf("%s: buttons %q, want %q", tc.name, got, tc.buttons)
+		}
+		for _, name := range tc.buttons {
+			before := actions
+			g.click(centre(g.node(ui.RoleButton, name)))
+			if actions != before+1 {
+				t.Errorf("%s: a click on %q gave %d actions", tc.name, name, actions-before)
+			}
 		}
 	}
 }

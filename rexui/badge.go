@@ -143,7 +143,12 @@ func badge(k *base.Kit, txt []byte, o BadgeOpts) ui.ID {
 		return id
 	}
 	c.Push(id)
-	c.NextSize(ui.TextSize(base.LabelSlack), ui.Px(st.Line))
+	// The text box is the whole capsule with the text centred in it, on both
+	// axes by the text's own rule. A box of the text's width plus LabelSlack
+	// and the font's line height, centred, leaves the text up to a pixel off:
+	// half a slack pixel to the left, and a snapped box a half pixel low.
+	c.NextSize(ui.Px(w), ui.Px(h))
+	c.NextAlign(ui.AlignCenter)
 	c.NextFont(st.Font)
 	c.NextTextColor(fg.RGBA(r))
 	c.BoxKeyed(ui.DrawText, ui.KeyN(key, 1), txt)

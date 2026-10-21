@@ -212,6 +212,11 @@ const (
 	// MenuHelp is the Help menu. On macOS the system adds its search field;
 	// without one the bar gets an empty Help menu that has it.
 	MenuHelp
+	// MenuServices names the application menu's Services submenu on macOS (its
+	// Title; the system fills it). It is not shown by itself: keep it out of
+	// the bar and of every item. Without one, or with an empty Title, the
+	// submenu is called "Services".
+	MenuServices
 )
 
 // Model is the validated commands and menus plus the commands' mutable state.
@@ -318,7 +323,7 @@ func NewModel(commands []Command, menus []Menu, bar []int) (*Model, error) {
 	menuRoles := make(map[MenuRole]int)
 	for mi := range m.menus {
 		switch r := m.menus[mi].Role; {
-		case r > MenuHelp:
+		case r > MenuServices:
 			return nil, fmt.Errorf("menu: menu %d has an unknown role %d", mi, r)
 		case r != MenuPlain:
 			if other, dup := menuRoles[r]; dup {
