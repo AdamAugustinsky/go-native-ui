@@ -1,6 +1,7 @@
 package rexui
 
 import (
+	"gonativeui/gpu"
 	"gonativeui/text"
 	"gonativeui/theme"
 	"gonativeui/ui"
@@ -59,6 +60,32 @@ type BubbleOpts struct {
 	// Name is the accessible name of the message ("Paolo, 10:42"); empty
 	// takes "Message" or "Sent message".
 	Name string
+	// Fill, when its alpha is not 0, replaces the variant's fill (0xRRGGBBAA,
+	// opaque as theirs are: an app's own palette); with FillBottom's alpha
+	// not 0 too, the bubble is a vertical gradient from Fill at its top to
+	// FillBottom at its bottom. Sending and Highlighted mix into it as into
+	// the variant's.
+	Fill, FillBottom uint32
+	// FindMix, above 0, is how far Highlighted moves the fill toward the find
+	// colour in place of the look's BubbleRecipe.FindMix (a highlight that
+	// fades out).
+	FindMix float32
+	// Look is the recipe, nil for BubbleLook.
+	Look *BubbleRecipe
+	// Curl, when set, gives a Tail bubble Messages' curled tail at its
+	// squared corner (BubbleTailPath), filled through this mask (keep one
+	// per window and side: gpu.PathMask keeps its texture while the shape
+	// stays the same). The row leaves room for the curl on the sender's side,
+	// so pass it for every bubble of a column, and they line up.
+	Curl *gpu.PathMask
+}
+
+// look is o's recipe.
+func (o *BubbleOpts) look() *BubbleRecipe {
+	if o.Look != nil {
+		return o.Look
+	}
+	return &BubbleLook
 }
 
 // BubbleRecipe is the look of message bubbles: Messages' after §3.4 of the
@@ -148,7 +175,7 @@ type BubbleSignal struct {
 // the column, less the padding.
 func bubbleMaxW(k *base.Kit, o *BubbleOpts) float32 {
 	c := k.Context()
-	rc := &BubbleLook
+	rc := o.look()
 	sc := k.Scale()
 	col := pt(sc, o.ColumnW)
 	if o.ColumnW <= 0 {
@@ -181,7 +208,7 @@ func BeginBubble(k *base.Kit, key ui.Key, o BubbleOpts) Bubble {
 // alone, for the jumbo emoji of a message that has no bubble).
 func beginBubble(k *base.Kit, key ui.Key, o BubbleOpts, plain bool) Bubble {
 	c, r := k.Context(), k.Theme()
-	rc := &BubbleLook
+	rc := o.look()
 	sc := k.Scale()
 	v := o.Variant % NumBubbleVariants
 	b := Bubble{opts: o, key: key, plain: plain || v == BubbleSystem}
@@ -200,7 +227,15 @@ func beginBubble(k *base.Kit, key ui.Key, o BubbleOpts, plain bool) Bubble {
 	c.NextCross(ui.CrossEnd) // the failed badge and the bubble's bottom line up
 	c.NextJustify(just)
 	c.NextGap(pt(sc, 6))
-	c.NextPadding(0, pt(sc, rc.RowGap/2), 0, pt(sc, rc.RowGap/2))
+	var padL, padR float32
+	if o.Curl != nil && v != BubbleSystem {
+		if v == BubbleOutgoing {
+			padR = pt(sc, curlReach)
+		} else {
+			padL = pt(sc, curlReach)
+		}
+	}
+	c.NextPadding(padL, pt(sc, rc.RowGap/2), padR, pt(sc, rc.RowGap/2))
 	b.Row = c.BoxKeyed(0, ui.KeyN(key, 0), nil)
 	c.Push(b.Row)
 	if v == BubbleOutgoing && o.Status == BubbleFailed {
@@ -210,7 +245,7 @@ func beginBubble(k *base.Kit, key ui.Key, o BubbleOpts, plain bool) Bubble {
 		return b
 	}
 
-	fill := bubbleFill(r, &o)
+	fill, bottom := bubbleFill(r, &o)
 	radius := pt(sc, rc.Radius)
 	tail := pt(sc, rc.TailRadius)
 	tl, tr, br, bl := radius, radius, radius, radius
@@ -224,7 +259,7 @@ func beginBubble(k *base.Kit, key ui.Key, o BubbleOpts, plain bool) Bubble {
 	if o.Selected {
 		c.NextBorder(rc.Ring.RGBA(r), pt(sc, rc.RingW))
 	}
-	c.NextBG(fill)
+	c.NextBG4(fill, fill, bottom, bottom)
 	c.NextRadii(tl, tr, br, bl)
 	c.NextPadding(pt(sc, rc.PadX), pt(sc, rc.PadY), pt(sc, rc.PadX), pt(sc, rc.PadY))
 	c.NextAxis(ui.AxisY)
@@ -249,27 +284,106 @@ func beginBubble(k *base.Kit, key ui.Key, o BubbleOpts, plain bool) Bubble {
 	}
 	b.ID = c.BoxKeyed(flags, ui.KeyN(key, 1), nil)
 	c.Push(b.ID)
+	if o.Tail && o.Curl != nil {
+		bubbleCurl(k, &b, bottom)
+	}
 	return b
 }
 
-// bubbleFill is the bubble's fill: opaque, from the variant, status and
-// highlight.
-func bubbleFill(r *theme.Resolved, o *BubbleOpts) uint32 {
-	rc := &BubbleLook
-	surface := r.Colors[theme.Pane] | 0xFF
-	var fill uint32
-	if o.Variant == BubbleOutgoing {
-		fill = rc.Outgoing.RGBA(r)
-		if o.Status == BubbleSending {
-			fill = theme.MixRGBA(fill, surface, rc.SendingMix)
+// The curled tail (BubbleTailPath) in points: its box, of which curlOverlap
+// lies over the bubble's squared corner and curlReach beyond its side.
+const (
+	curlW, curlH = 14, 16
+	curlOverlap  = 6
+	curlReach    = curlW - curlOverlap
+)
+
+// curlPath is the scratch the tails are built in (main thread).
+var curlPath gpu.Path
+
+// BubbleTailPath builds into p Messages' curled tail of a bubble at scale
+// (pixels per point), for the bubble's bottom right corner (left: its bottom
+// left), and returns its size in pixels: a box whose top left lies 6 pt
+// inside the bubble's side and 16 pt above its bottom (the tail's top runs
+// along the side, curls out to a tip 8 pt beyond it at the bottom and comes
+// back under the bubble). Fill it in the bubble's colour (ui.Context.NextPath)
+// over a bubble whose corner there is squared (BubbleOpts.Tail).
+func BubbleTailPath(p *gpu.Path, scale float32, left bool) (w, h float32) {
+	s := scale
+	w, h = theme.Snap(curlW*s), theme.Snap(curlH*s)
+	x := func(v float32) float32 {
+		if left {
+			return w - v*s
 		}
-	} else {
-		fill = theme.Over(rc.Incoming.RGBA(r), surface)
+		return v * s
+	}
+	p.Reset()
+	p.MoveTo(x(0), 0)
+	p.LineTo(x(curlOverlap), 0)
+	p.CubeTo(x(6), 9*s, x(8), 14*s, x(14), 16*s) // the outer edge curls out to the tip
+	p.CubeTo(x(9), 16.4*s, x(5), 14.4*s, x(0), 16*s)
+	p.Close()
+	return w, h
+}
+
+// bubbleCurl builds the curled tail of bubble b, in fill, at its bottom
+// corner on the sender's side: a floating child placed from the bubble's
+// size in the previous layout (a new bubble shows it from its second frame,
+// which ui settles by itself).
+func bubbleCurl(k *base.Kit, b *Bubble, fill uint32) {
+	c := k.Context()
+	sc := k.Scale()
+	r := c.Rect(b.ID)
+	w, h := r[2]-r[0], r[3]-r[1]
+	if w <= 0 || h <= 0 {
+		return
+	}
+	left := b.opts.Variant != BubbleOutgoing
+	BubbleTailPath(&curlPath, sc, left)
+	tw, th := c.NextPath(b.opts.Curl, &curlPath)
+	if tw == 0 {
+		return
+	}
+	x := w - pt(sc, curlOverlap)
+	if left {
+		x = pt(sc, curlOverlap) - tw
+	}
+	theme.At(c, x, h-th, tw, th)
+	c.NextTextColor(fill)
+	c.NextAuditExempt(ui.AuditOverflow.Mask() | ui.AuditCovered.Mask()) // it lies outside the bubble, over its corner, on purpose
+	c.BoxKeyed(ui.DrawImage|base.Floating, ui.KeyN(b.key, 7), nil)
+}
+
+// bubbleFill is the bubble's fill at its top and its bottom: opaque, from
+// the variant or the app's Fill, the status and the highlight.
+func bubbleFill(r *theme.Resolved, o *BubbleOpts) (top, bottom uint32) {
+	rc := o.look()
+	surface := r.Colors[theme.Pane] | 0xFF
+	switch {
+	case o.Fill&0xFF != 0:
+		top, bottom = o.Fill, o.Fill
+		if o.FillBottom&0xFF != 0 {
+			bottom = o.FillBottom
+		}
+	case o.Variant == BubbleOutgoing:
+		top = rc.Outgoing.RGBA(r)
+		bottom = top
+	default:
+		top = theme.Over(rc.Incoming.RGBA(r), surface)
+		bottom = top
+	}
+	if o.Variant == BubbleOutgoing && o.Status == BubbleSending {
+		top, bottom = theme.MixRGBA(top, surface, rc.SendingMix), theme.MixRGBA(bottom, surface, rc.SendingMix)
 	}
 	if o.Highlighted {
-		fill = theme.MixRGBA(fill, rc.Find.RGBA(r), rc.FindMix)
+		mix := rc.FindMix
+		if o.FindMix > 0 {
+			mix = o.FindMix
+		}
+		find := rc.Find.RGBA(r)
+		top, bottom = theme.MixRGBA(top, find, mix), theme.MixRGBA(bottom, find, mix)
 	}
-	return fill
+	return top, bottom
 }
 
 // EndBubble ends the bubble BeginBubble started.
@@ -320,7 +434,7 @@ type MessageSignal struct {
 //	if sig.Text.Clicked != 0 { v.open(sig.Text.Clicked) }
 func MessageBubble(k *base.Kit, key ui.Key, body []byte, spans []ui.Span, o MessageOpts) MessageSignal {
 	c, r := k.Context(), k.Theme()
-	rc := &BubbleLook
+	rc := o.look()
 	sc := k.Scale()
 	v := o.Variant % NumBubbleVariants
 	jumbo := v != BubbleSystem && !o.Code && text.EmojiOnly(body) > 0 && text.EmojiOnly(body) <= text.MaxJumboEmoji
