@@ -3,7 +3,6 @@ package winstate
 import (
 	"fmt"
 	"path/filepath"
-	"regexp"
 	"time"
 
 	"gonativeui/app/paths"
@@ -33,7 +32,21 @@ type Options struct {
 	Debounce time.Duration
 }
 
-var nameRE = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+// validName reports whether s is a window name: one to 64 of the letters and
+// digits of ASCII, '-' and '_'.
+func validName(s string) bool {
+	if len(s) == 0 || len(s) > 64 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		switch c := s[i]; {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '_', c == '-':
+		default:
+			return false
+		}
+	}
+	return true
+}
 
 // Store is a window's saved state. State, Save, Flush and Close may be called
 // from any goroutine; Save never touches the disk.
@@ -56,7 +69,7 @@ func LoadWith(id string, o Options) (*Store, error) {
 	if name == "" {
 		name = "main"
 	}
-	if !nameRE.MatchString(name) {
+	if !validName(name) {
 		return nil, fmt.Errorf("winstate: invalid window name %q", name)
 	}
 	dir := o.Dir

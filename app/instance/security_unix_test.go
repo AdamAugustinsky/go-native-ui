@@ -298,7 +298,7 @@ func TestPeerUIDIsTheCaller(t *testing.T) {
 	got := make(chan uint32, 1)
 	var supported atomic.Bool
 	setPeer(t, func(c conn) error {
-		uid, ok, err := peerUID(c.(net.Conn))
+		uid, ok, err := peerUID(c)
 		supported.Store(ok)
 		if err != nil {
 			t.Errorf("peerUID: %v", err)
@@ -345,14 +345,14 @@ func TestPeerOfAnotherUserIsRefusedByTheRealCheck(t *testing.T) {
 	}
 }
 
-func mustDialUnix(t *testing.T, dir string) net.Conn {
+func mustDialUnix(t *testing.T, dir string) conn {
 	t.Helper()
 	lk, addr, err := setup("x", Options{Dir: dir})
 	_ = lk
 	if err != nil {
 		t.Fatal(err)
 	}
-	c, err := net.Dial("unix", addr)
+	c, err := dial(addr, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}

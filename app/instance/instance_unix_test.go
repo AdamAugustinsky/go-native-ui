@@ -13,7 +13,7 @@ import (
 )
 
 // rawDial connects without any check on the other end.
-func rawDial(addr string) (conn, error) { return net.DialTimeout("unix", addr, time.Second) }
+func rawDial(addr string) (conn, error) { return dial(addr, time.Second) }
 
 // Only the user can reach the socket, the lock and their directory.
 func TestPermissions(t *testing.T) {
