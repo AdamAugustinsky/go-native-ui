@@ -792,6 +792,13 @@ func signalApp() {
 	}
 }
 
+// SignalDispatch gives the dispatcher a turn, from any thread: it runs the
+// app's safe-point work and wakes no window (Wake hands each an EvWake, and
+// each draws). The GPU's completion handler calls it so that the safe point
+// releases what a finished frame held (gpu.Renderer.CollectLeases). On
+// macOS; elsewhere the dispatcher runs with the loop's Wake.
+func SignalDispatch() { signalApp() }
+
 // DispatchApp delivers the ready events, in the order they became ready, then
 // runs the app's safe-point work. Main thread. The run-loop source calls it
 // on macOS; the app's loop calls it after every Wait on every OS. It is not

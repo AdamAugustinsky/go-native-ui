@@ -480,6 +480,9 @@ func (a *App) safePoint() {
 	if a.framing > 0 || a.evDepth > 0 {
 		return
 	}
+	if a.r != nil {
+		a.r.CollectLeases() // the pixel buffers of finished frames (a GPU completion gave the dispatcher this turn)
+	}
 	a.runSafePoints()
 	for _, w := range a.wins {
 		w.flushDialogs()

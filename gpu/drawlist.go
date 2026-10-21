@@ -14,7 +14,8 @@ const (
 	// (grayscale text, symbol icons).
 	ModeMaskR8
 	// ModeRGBA samples a premultiplied RGBA texture and multiplies it by the
-	// alpha of Color (colour emoji, images).
+	// alpha of Color (colour emoji, images). A YUV texture (yuv.go: video
+	// frames) is converted to opaque RGB as it is sampled.
 	ModeRGBA
 	// ModeBackdrop blurs what the quads before it drew under Rect and draws
 	// that, tinted, in its place (a backdrop: the scroll edge over content

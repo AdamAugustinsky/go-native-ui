@@ -12,4 +12,4 @@ func framePoolPop(uintptr) {}
 
 // abandonSurfaceFrame lets go of a frame that will not be presented: the
 // frame holds no references here.
-func abandonSurfaceFrame(_ *gpu.Surface, f *gpu.Frame) { *f = gpu.Frame{} }
+func abandonSurfaceFrame(_ *gpu.Surface, _ *gpu.Renderer, f *gpu.Frame) { *f = gpu.Frame{} }
