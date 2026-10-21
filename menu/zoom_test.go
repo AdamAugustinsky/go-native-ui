@@ -188,3 +188,18 @@ func TestLimitedCommandsAreStillDelivered(t *testing.T) {
 		t.Errorf("a disabled command was delivered: %v", got)
 	}
 }
+
+func TestStandardFullScreenCommand(t *testing.T) {
+	c := StandardCommand(5, RoleFullScreen)
+	if c.Title != "Enter Full Screen" || c.Role != RoleFullScreen || c.Shortcut.IsZero() {
+		t.Fatalf("%+v", c)
+	}
+	if ui.PrimaryMod() == ui.ModSuper {
+		if got := string(c.Shortcut.AppendLabel(nil)); got != "⌃⌘F" {
+			t.Errorf("shows %q, want ⌃⌘F", got)
+		}
+	}
+	if _, err := NewModel([]Command{c}, nil, nil); err != nil {
+		t.Errorf("a model with the command: %v", err)
+	}
+}

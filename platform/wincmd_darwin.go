@@ -18,6 +18,7 @@ var (
 	selCancelAttention   = objc.Sel("cancelUserAttentionRequest:")
 	selDeminiaturize     = objc.Sel("deminiaturize:")
 	selScreens           = objc.Sel("screens")
+	selIsZoomed          = objc.Sel("isZoomed")
 )
 
 // primaryTop is the top edge of the primary display in AppKit's space (y up
@@ -76,6 +77,14 @@ func (w *Window) Miniaturize() { objc.Send1(w.win, selMiniaturize, 0) }
 
 // Miniaturized reports whether the window is in the Dock.
 func (w *Window) Miniaturized() bool { return objc.SendBool(w.win, selIsMiniaturized) }
+
+// Zoom toggles the window between the user size and the size that fits its
+// content on the screen (zoom:, the green button's option-click and the
+// Window menu's Zoom). Main thread.
+func (w *Window) Zoom() { objc.Send1(w.win, selZoom, 0) }
+
+// Zoomed reports whether the window is zoomed (isZoomed).
+func (w *Window) Zoomed() bool { return objc.SendBool(w.win, selIsZoomed) }
 
 // Activate brings the window to the front, out of the Dock if it is there,
 // makes it the key window and activates the app. Main thread.

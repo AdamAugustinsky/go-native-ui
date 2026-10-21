@@ -55,7 +55,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"regexp"
 )
 
 var (
@@ -139,13 +138,25 @@ func App() Item { return Item{} }
 // Agent is the bundled launch agent that gnui.json's loginAgents declares
 // under name. An invalid name gives an Item whose calls fail with ErrInvalid.
 func Agent(name string) Item {
-	if !reAgent.MatchString(name) {
+	if !validAgent(name) {
 		return Item{agent: "\x00" + name}
 	}
 	return Item{agent: name}
 }
 
-var reAgent = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]*$`)
+// validAgent reports whether name is ASCII letters, digits and hyphens, not
+// starting with a hyphen (and not empty). Plain code: regexp would add its
+// weight to every binary.
+func validAgent(name string) bool {
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		if c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-' && i > 0 {
+			continue
+		}
+		return false
+	}
+	return name != ""
+}
 
 func (i Item) check() error {
 	if len(i.agent) > 0 && i.agent[0] == 0 {

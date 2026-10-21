@@ -11,6 +11,8 @@ const (
 	ButtonLeft = iota
 	ButtonRight
 	ButtonMiddle
+	ButtonBack    // the mouse's side button for back (button 3)
+	ButtonForward // the mouse's side button for forward (button 4)
 	numButtons
 )
 

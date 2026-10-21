@@ -159,6 +159,9 @@ type AXTree struct {
 	// AnnounceSeq numbers the announcement (ui.SemTree.AnnounceSeq): one is
 	// posted once, and a new one also when its text is the last one's.
 	AnnounceSeq uint32
+	// AnnouncePolite makes the announcement wait for the assistive technology
+	// to finish what it is saying (ui.SemTree.AnnouncePolite).
+	AnnouncePolite bool
 }
 
 // Text returns the bytes of a span of t.
@@ -180,7 +183,7 @@ func (t *AXTree) text(n *AXNode) []byte {
 
 // Equal reports whether t and u are the same tree.
 func (t *AXTree) Equal(u *AXTree) bool {
-	if len(t.Nodes) != len(u.Nodes) || string(t.Bytes) != string(u.Bytes) || t.Announce != u.Announce || t.AnnounceSeq != u.AnnounceSeq {
+	if len(t.Nodes) != len(u.Nodes) || string(t.Bytes) != string(u.Bytes) || t.Announce != u.Announce || t.AnnounceSeq != u.AnnounceSeq || t.AnnouncePolite != u.AnnouncePolite {
 		return false
 	}
 	for i := range t.Nodes {

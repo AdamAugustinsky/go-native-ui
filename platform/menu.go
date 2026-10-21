@@ -161,6 +161,10 @@ const (
 	MenuZoom
 	MenuClose
 	MenuBringAllToFront
+	// MenuFullScreen enters full screen or leaves it (toggleFullScreen:,
+	// ⌃⌘F). Its title, "Enter Full Screen", becomes "Exit Full Screen" in full
+	// screen: AppKit's validation of the key window does that.
+	MenuFullScreen
 )
 
 // IsEdit reports whether a is one of the edit actions, MenuUndo to

@@ -5,11 +5,15 @@ package ui
 type Cursor uint8
 
 const (
-	CursorArrow    Cursor = iota // the default arrow: a box with it marks no region
-	CursorPointer                // pointing hand (links, tabs, buttons)
-	CursorText                   // I-beam
-	CursorResizeEW               // horizontal resize (left-right arrows)
-	CursorResizeNS               // vertical resize (up-down arrows)
+	CursorArrow      Cursor = iota // the default arrow: a box with it marks no region
+	CursorPointer                  // pointing hand (links, tabs, buttons)
+	CursorText                     // I-beam
+	CursorResizeEW                 // horizontal resize (left-right arrows)
+	CursorResizeNS                 // vertical resize (up-down arrows)
+	CursorResizeNWSE               // diagonal resize, top-left to bottom-right
+	CursorResizeNESW               // diagonal resize, top-right to bottom-left
+	CursorGrab                     // open hand: something can be dragged (Windows: the pointing hand)
+	CursorGrabbing                 // closed hand: it is being dragged (Windows: the four-way move arrows)
 )
 
 // CursorRegion is a screen rectangle (x0, y0, x1, y1 in pixels, origin top

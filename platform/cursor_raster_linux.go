@@ -8,22 +8,24 @@ import "math"
 // cursor theme: black shapes with a white outline, drawn from geometric
 // primitives on a 24-unit design grid and sampled 4x4 per pixel.
 
-// shape is a cursor image: the five Cursor values plus the diagonal and
-// window-edge resizes that client-side decorations need.
+// shape is a cursor image: the Cursor values plus the window-edge resizes
+// that client-side decorations need.
 type shape uint8
 
 const (
-	shArrow   = shape(CursorArrow)
-	shPointer = shape(CursorPointer)
-	shText    = shape(CursorText)
-	shEW      = shape(CursorResizeEW)
-	shNS      = shape(CursorResizeNS)
+	shArrow    = shape(CursorArrow)
+	shPointer  = shape(CursorPointer)
+	shText     = shape(CursorText)
+	shEW       = shape(CursorResizeEW)
+	shNS       = shape(CursorResizeNS)
+	shNWSE     = shape(CursorResizeNWSE)
+	shNESW     = shape(CursorResizeNESW)
+	shGrab     = shape(CursorGrab)
+	shGrabbing = shape(CursorGrabbing)
 )
 
 const (
-	shNWSE  = shape(numCursors) + iota // diagonal resize, top-left to bottom-right
-	shNESW                             // diagonal resize, top-right to bottom-left
-	shEdgeN                            // window edge resizes
+	shEdgeN = shape(numCursors) + iota // window edge resizes
 	shEdgeS
 	shEdgeE
 	shEdgeW
@@ -37,6 +39,8 @@ const (
 // rasterLook maps an edge shape to the drawing that stands for it.
 func (s shape) rasterLook() shape {
 	switch s {
+	case shGrab, shGrabbing:
+		return shPointer
 	case shEdgeN, shEdgeS:
 		return shNS
 	case shEdgeE, shEdgeW:

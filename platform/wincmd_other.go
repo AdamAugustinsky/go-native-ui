@@ -28,6 +28,12 @@ func (w *Window) Miniaturize() { w.Minimize() }
 // Miniaturized reports false here.
 func (w *Window) Miniaturized() bool { return false }
 
+// Zoom does nothing here yet.
+func (w *Window) Zoom() {}
+
+// Zoomed reports false here.
+func (w *Window) Zoomed() bool { return false }
+
 // Activate does nothing here yet.
 func (w *Window) Activate() {}
 

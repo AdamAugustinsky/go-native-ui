@@ -343,13 +343,15 @@ type probeFrame struct {
 	mods     ui.Mods
 	x, y     float32
 	scrollY  float32
+	precise  bool
 	pressed  bool
+	clicks   uint8
 	gestures []ui.GestureEvent
 }
 
 func (p *probe) Build(c *ui.Context) {
 	in := c.Input()
-	f := probeFrame{mods: in.Mods, x: in.MouseX, y: in.MouseY, scrollY: in.ScrollY, pressed: in.Pressed[ui.ButtonLeft]}
+	f := probeFrame{mods: in.Mods, x: in.MouseX, y: in.MouseY, scrollY: in.ScrollY, precise: in.Precise, pressed: in.Pressed[ui.ButtonLeft], clicks: in.Clicks[ui.ButtonLeft]}
 	f.gestures = append(f.gestures, in.Gestures[:in.NGestures]...)
 	p.frames = append(p.frames, f)
 	c.NextSize(ui.Px(200), ui.Px(100))
@@ -465,5 +467,79 @@ func TestPointerAndGestureSteps(t *testing.T) {
 		if len(f.gestures) > 0 && f.gestures[0].X == 30 && f.mods != ui.ModShift {
 			t.Errorf("a pinch frame has mods %v, want Shift", f.mods)
 		}
+	}
+}
+
+// DoubleClick presses twice with click counts 1 and 2, ClickAt lands at an
+// offset from the node's top-left instead of its centre, and WheelNotch
+// scrolls in notches, not pixels.
+func TestDoubleClickClickAtAndWheelNotch(t *testing.T) {
+	r, p := newProbe(t)
+	pad := r.Must(ui.RoleGroup, "pad")
+	r.Play(widgettest.DoubleClick(ui.RoleGroup, "pad"))
+	var counts []uint8
+	for _, f := range p.frames {
+		if f.pressed {
+			counts = append(counts, f.clicks)
+		}
+	}
+	if len(counts) != 2 || counts[0] != 1 || counts[1] != 2 {
+		t.Errorf("click counts of the presses: %v, want [1 2]", counts)
+	}
+	p.frames = nil
+	r.Play(widgettest.ClickAt(ui.RoleGroup, "pad", 7, 11))
+	var at *probeFrame
+	for i, f := range p.frames {
+		if f.pressed {
+			at = &p.frames[i]
+		}
+	}
+	if at == nil || at.x != pad.Bounds[0]+7 || at.y != pad.Bounds[1]+11 || at.clicks != 1 {
+		t.Errorf("ClickAt(7, 11): %+v, want a press at (%v, %v)", at, pad.Bounds[0]+7, pad.Bounds[1]+11)
+	}
+	p.frames = nil
+	r.Play(widgettest.WheelNotch(ui.RoleGroup, "pad", 3, 2), widgettest.Wheel(ui.RoleGroup, "pad", 30, 1))
+	var notch, pixels []probeFrame
+	for _, f := range p.frames {
+		switch {
+		case f.scrollY != 0 && f.precise:
+			pixels = append(pixels, f)
+		case f.scrollY != 0:
+			notch = append(notch, f)
+		}
+	}
+	if len(notch) != 2 || notch[0].scrollY != 3 || len(pixels) != 1 || pixels[0].scrollY != 30 {
+		t.Errorf("notch frames %+v, pixel frames %+v; want two notches of 3 and one scroll of 30 pixels", notch, pixels)
+	}
+}
+
+// linkApp is a text box with a link in it and a record of the links pressed.
+type linkApp struct {
+	body    string
+	spans   []ui.Span
+	st      ui.RichStyles
+	clicked []uint32
+}
+
+func (a *linkApp) Build(c *ui.Context) {
+	sig := c.RichText(ui.HashString(0, "msg"), []byte(a.body), a.spans, &a.st, ui.RichOpts{MaxW: 300})
+	if sig.Clicked != 0 {
+		a.clicked = append(a.clicked, sig.Clicked)
+	}
+}
+
+// A link inside a text box is clicked by its name, like any node: the box
+// takes the click it is the link of, so nothing needs Through.
+func TestClickALinkInATextBox(t *testing.T) {
+	r := widgettest.NewRig(t, widgettest.FakeOptions{Width: 400, Height: 300})
+	a := &linkApp{body: "read the docs now"}
+	a.st.Set(0, ui.RichStyle{})
+	a.st.Set(1, ui.RichStyle{Color: 0x3080FFFF})
+	a.spans = []ui.Span{{Off: uint32(strings.Index(a.body, "docs")), Len: 4, Style: 1, Flags: ui.SpanLink, Tag: 42}}
+	r.Run(a)
+	r.Play(widgettest.Click(ui.RoleLink, "docs"))
+	r.Frames(2)
+	if len(a.clicked) != 1 || a.clicked[0] != 42 {
+		t.Errorf("links clicked: %v, want [42]", a.clicked)
 	}
 }

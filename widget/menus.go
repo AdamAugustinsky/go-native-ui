@@ -67,6 +67,8 @@ func roleTitle(r menu.Role) string {
 		return "Zoom"
 	case menu.RoleCloseWindow:
 		return "Close Window"
+	case menu.RoleFullScreen:
+		return "Enter Full Screen"
 	case menu.RoleSettings:
 		return "Settings…"
 	}

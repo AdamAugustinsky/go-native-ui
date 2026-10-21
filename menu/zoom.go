@@ -57,13 +57,16 @@ func (m *Model) RoleID(r Role) (ID, bool) {
 }
 
 // StandardCommand returns the command with id and role r as the View menu has
-// it, with its standard title and shortcuts, for the zoom roles:
+// it, with its standard title and shortcuts, for the zoom roles and
+// RoleFullScreen:
 //
 //   - RoleZoomIn: "Zoom In", ⌘+ with ⌘= as its Alias on macOS, so that the key
 //     without Shift zooms in too, as in browsers; Ctrl+= with Ctrl+Shift+=
 //     (Ctrl++ on a US layout) elsewhere;
 //   - RoleZoomOut: "Zoom Out", ⌘−;
-//   - RoleActualSize: "Actual Size", ⌘0.
+//   - RoleActualSize: "Actual Size", ⌘0;
+//   - RoleFullScreen: "Enter Full Screen", ⌃⌘F on macOS (AppKit retitles it
+//     "Exit Full Screen" in full screen), F11 elsewhere.
 //
 // The shortcuts are the characters' ASCII values (ui.KeyCode), which the
 // platform layer reports for the physical keys on a US layout. For any other
@@ -86,6 +89,13 @@ func StandardCommand(id ID, r Role) Command {
 	case RoleActualSize:
 		c.Title = "Actual Size"
 		c.Shortcut = Shortcut{Key: '0', Primary: true}
+	case RoleFullScreen:
+		c.Title = "Enter Full Screen"
+		if ui.PrimaryMod() == ui.ModSuper {
+			c.Shortcut = Shortcut{Key: 'F', Primary: true, Mods: ui.ModCtrl}
+		} else {
+			c.Shortcut = Shortcut{Key: ui.KeyF11}
+		}
 	}
 	return c
 }

@@ -292,11 +292,15 @@ const (
 type Cursor uint8
 
 const (
-	CursorArrow    Cursor = iota // the default arrow
-	CursorPointer                // pointing hand (links, tabs, buttons)
-	CursorText                   // I-beam
-	CursorResizeEW               // horizontal resize (left-right arrows)
-	CursorResizeNS               // vertical resize (up-down arrows)
+	CursorArrow      Cursor = iota // the default arrow
+	CursorPointer                  // pointing hand (links, tabs, buttons)
+	CursorText                     // I-beam
+	CursorResizeEW                 // horizontal resize (left-right arrows)
+	CursorResizeNS                 // vertical resize (up-down arrows)
+	CursorResizeNWSE               // diagonal resize, top-left to bottom-right
+	CursorResizeNESW               // diagonal resize, top-right to bottom-left
+	CursorGrab                     // open hand
+	CursorGrabbing                 // closed hand
 	numCursors
 )
 

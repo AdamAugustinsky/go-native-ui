@@ -190,7 +190,7 @@ func TestFlushDragRegistersKindsAndStartsDrags(t *testing.T) {
 	d.tr.in.SetButton(ui.ButtonLeft, true, 1)
 	d.start = &ui.DragSpec{Text: "t"}
 	d.frame()
-	d.tr.in.Cancelled = [3]bool{}
+	clear(d.tr.in.Cancelled[:])
 	d.flushDrag()
 	if len(win.specs) != 2 || d.UI.DragRunning() || d.tr.in.Cancelled[ui.ButtonLeft] || !d.tr.in.Down[ui.ButtonLeft] {
 		t.Errorf("refused drag: specs %d running %v in %+v", len(win.specs), d.UI.DragRunning(), d.tr.in.Cancelled)

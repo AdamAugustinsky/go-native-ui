@@ -361,6 +361,8 @@ func commandItem(cmd *menu.Command) platform.MenuItem {
 		it.Action = platform.MenuZoom
 	case menu.RoleCloseWindow:
 		it.Action = platform.MenuClose
+	case menu.RoleFullScreen:
+		it.Action = platform.MenuFullScreen
 	case menu.RoleUndo:
 		it.Action = platform.MenuUndo
 	case menu.RoleRedo:

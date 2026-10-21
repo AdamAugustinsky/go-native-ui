@@ -190,6 +190,28 @@ func TestSemanticsAnnouncementsAreCounted(t *testing.T) {
 	}
 }
 
+// AnnouncePolite waits for the screen reader; the last call of a frame decides,
+// and a plain Announce after it interrupts again.
+func TestSemanticsPoliteAnnouncements(t *testing.T) {
+	h := newHarness(t, 300, 200)
+	var polite, urgent, last SemTree
+	h.frame(func(c *Context) { c.AnnouncePolite("Ada: hello") })
+	h.c.Semantics(&polite)
+	h.frame(func(c *Context) { c.Announce("Sent") })
+	h.c.Semantics(&urgent)
+	h.frame(func(c *Context) { c.AnnouncePolite("Ada: hi"); c.Announce("Failed") })
+	h.c.Semantics(&last)
+	if got := string(polite.Text(polite.Announce)); got != "Ada: hello" || !polite.AnnouncePolite {
+		t.Errorf("polite: %q, polite %v", got, polite.AnnouncePolite)
+	}
+	if got := string(urgent.Text(urgent.Announce)); got != "Sent" || urgent.AnnouncePolite {
+		t.Errorf("urgent: %q, polite %v", got, urgent.AnnouncePolite)
+	}
+	if got := string(last.Text(last.Announce)); got != "Failed" || last.AnnouncePolite {
+		t.Errorf("last call wins: %q, polite %v", got, last.AnnouncePolite)
+	}
+}
+
 // The visible range is what shows: the characters between a scrolled field's
 // edges, the lines of a paragraph inside its clip.
 func TestSemanticsVisibleText(t *testing.T) {
