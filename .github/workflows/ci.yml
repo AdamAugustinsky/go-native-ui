@@ -126,7 +126,7 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 25
     env:
-      QUARANTINE: '^(TestIdleAppDrawsNothingAfterOneSecondButTheSystemsNews|TestIdleAppDrawsNothingBetweenWaits|TestCloseIsBounded|TestDragTypesDoNotReachHosts|TestEditorNestedLoopDraws|TestEditorUndoRedo|TestEditorMarkedTextSubmission|TestMixFollowsAndDoesNotAllocate|TestStallOfAHiddenWindowSkipsAndSaysWhy|TestRunKeepsDesignatedRequirement|TestScrollEventsThroughTheQueue|TestWindowButtonsSignatureMismatch|TestVListEditFrameBudget|TestPackagedBinaryHasNoDebugChordOrInspector)$'
+      QUARANTINE: '^(TestIdleAppDrawsNothingAfterOneSecondButTheSystemsNews|TestIdleAppDrawsNothingBetweenWaits|TestDragTypesDoNotReachHosts|TestEditorNestedLoopDraws|TestEditorUndoRedo|TestEditorMarkedTextSubmission|TestMixFollowsAndDoesNotAllocate|TestStallOfAHiddenWindowSkipsAndSaysWhy|TestRunKeepsDesignatedRequirement|TestScrollEventsThroughTheQueue|TestPackagedBinaryHasNoDebugChordOrInspector)$'
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
@@ -333,7 +333,7 @@ jobs:
       run:
         shell: bash
     env:
-      QUARANTINE: '^(TestImageAndFilesWithPowerShell|TestSaveIsDebounced|TestFirstFrameIsContent|TestSystemIconsWindowsConcurrent|TestCloseDoesNotWaitForTheIconStyleRead|TestOffscreenRunsLeaveNoWorkersOrHandles|TestPackagedBinaryHasNoDebugChordOrInspector)$'
+      QUARANTINE: '^(TestSystemIconsWindowsConcurrent|TestCloseDoesNotWaitForTheIconStyleRead|TestOffscreenRunsLeaveNoWorkersOrHandles|TestPackagedBinaryHasNoDebugChordOrInspector)$'
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
@@ -365,8 +365,7 @@ jobs:
         run: go build -trimpath -ldflags="-s -w" -o bin/spike.exe ./cmd/spike
       - name: spike bench + gates
         run: |
-          # The one-object / 16-byte allocation of the animated frames is quarantined too.
-          bash "$RUNNER_TEMP/stallgate.sh" 'bench stalled|bench timed out|no frame callbacks|spike: timed out after|[0-9]+ measured frames, want|animated frames allocated 1 objects / 16 bytes' ./bin/spike.exe -bench -idle 5s -gate -allocsites -timeout 180s | tee spike-windows-${{ matrix.arch }}.json
+          bash "$RUNNER_TEMP/stallgate.sh" 'bench stalled|bench timed out|no frame callbacks|spike: timed out after|[0-9]+ measured frames, want' ./bin/spike.exe -bench -idle 5s -gate -allocsites -timeout 180s | tee spike-windows-${{ matrix.arch }}.json
           { echo '```json'; cat spike-windows-${{ matrix.arch }}.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - name: listbench + rex (offscreen PNGs, windowed bench with the allocation gate)
         run: |
@@ -425,7 +424,7 @@ jobs:
     env:
       GNUI_BACKEND: ${{ matrix.backend }}
       LIBGL_ALWAYS_SOFTWARE: "1"
-      QUARANTINE: '^(TestLastDrainEndsParking|TestCloseIsBounded|TestMixFollowsAndDoesNotAllocate|TestPackagedBinaryHasNoDebugChordOrInspector)$'
+      QUARANTINE: '^(TestLastDrainEndsParking|TestMixFollowsAndDoesNotAllocate|TestPackagedBinaryHasNoDebugChordOrInspector)$'
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
