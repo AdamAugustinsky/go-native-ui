@@ -33,6 +33,7 @@ How it works, in `.github/workflows/ci.yml`:
 | macOS arm64 | `TestMixFollowsAndDoesNotAllocate` (theme) | one-off allocation | [#34](https://github.com/AdamAugustinsky/go-native-ui/issues/34) |
 | macOS arm64 | `TestStallOfAHiddenWindowSkipsAndSaysWhy` (widgettest) | intermittent failure on the macOS runner | [#34](https://github.com/AdamAugustinsky/go-native-ui/issues/34) |
 | macOS arm64 | `TestRunKeepsDesignatedRequirement` (cmd/gnui) | intermittent failure on the macOS runner | [#34](https://github.com/AdamAugustinsky/go-native-ui/issues/34) |
+| macOS arm64 | `TestOtherWindows` (widgettest/live) | `the other window did not take the key from the active app` (CI 39531083904 on main, 39542658745 on p6-editorfix); the failure **leaves its other window open**, which broke the next test (`TestEditorEditMenuValidatesAndActs`: `typed: not true within 120 frames`) | [#34](https://github.com/AdamAugustinsky/go-native-ui/issues/34) |
 | macOS arm64 | `TestScrollEventsThroughTheQueue` (platform) | SIGTRAP inside AppKit | [#34](https://github.com/AdamAugustinsky/go-native-ui/issues/34) |
 | macOS arm64 | benches: spike, listbench, pilot (both), gallery (both), notes, imgbench | `bench stalled` / `bench timed out` / `no frame callbacks` (display-link stall, `drawable=0`); warns instead of failing. Allocation and CPU gates stay blocking | [#34](https://github.com/AdamAugustinsky/go-native-ui/issues/34) |
 
