@@ -99,10 +99,10 @@ import (
 // same as for an image file.
 
 const (
-	srcIconFile   uint8 = iota + srcLease + 1 // the icon of the file at path
-	srcIconType                               // the icon of the UTI in path
-	srcIconExt                                // the icon of the file extension in path
-	srcIconFolder                             // the generic folder icon
+	srcIconFile   uint8 = iota + srcVideoPoster + 1 // the icon of the file at path
+	srcIconType                                     // the icon of the UTI in path
+	srcIconExt                                      // the icon of the file extension in path
+	srcIconFolder                                   // the generic folder icon
 )
 
 // isIcon reports whether the source is a system icon.

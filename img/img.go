@@ -27,7 +27,11 @@
 // releases once the decoder has read them. A Source can also be a system icon
 // (FileIcon, ExtensionIcon, TypeIcon, FolderIcon): what the file manager shows
 // for a file, folder, volume or type, decoded at the size shown; see
-// sysicon.go for how to key them.
+// sysicon.go for how to key them. VideoPoster(path) reads a local video's first
+// frame on a cache worker, with its preferred rotation and the same decode box
+// and Cover rules as a still image. It creates no player. On Windows and Linux
+// it fails normally (Cache.Err wraps errors.ErrUnsupported), so apps can show
+// their fallback.
 //
 // # Decoding
 //
@@ -197,7 +201,8 @@ type Lease interface {
 	Release()
 }
 
-// Source says where an image's encoded bytes are.
+// Source names encoded image bytes (File, Bytes, Leased), a system icon, or a
+// local video's first frame (VideoPoster). The cache decodes it on its workers.
 type Source struct {
 	path  string
 	bytes []byte
@@ -210,6 +215,7 @@ const (
 	srcFile
 	srcBytes
 	srcLease
+	srcVideoPoster
 )
 
 // File is the image file at path.
@@ -282,6 +288,7 @@ const (
 	errDecode
 	errRead
 	errTooLarge
+	errVideo
 )
 
 func errOf(code uint8) error {
@@ -294,6 +301,8 @@ func errOf(code uint8) error {
 		return ErrRead
 	case errTooLarge:
 		return ErrTooLarge
+	case errVideo:
+		return errVideoUnsupported
 	}
 	return nil
 }
