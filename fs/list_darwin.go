@@ -5,6 +5,7 @@ package fs
 import (
 	"encoding/binary"
 	"os"
+	"slices"
 	"syscall"
 	"unsafe"
 
@@ -75,6 +76,26 @@ func getScratch() *bulkScratch {
 	}
 	return new(bulkScratch)
 }
+
+// prewarmScratch has n scratches, their path buffers sized for any path, on
+// the free list, so that the first listings and stats, which run at once on
+// the service's workers, find them there instead of each allocating 264 KiB
+// and growing its path buffer the first time two of them overlap: when that
+// happens is the scheduler's, and a measured window must not be it.
+func prewarmScratch(n int) {
+	scratchMu.Lock()
+	defer scratchMu.Unlock()
+	scratchFree = slices.Grow(scratchFree, n)
+	for len(scratchFree) < n {
+		scratchFree = append(scratchFree, &bulkScratch{path: make([]byte, 0, scratchPath), link: make([]byte, 0, scratchPath+maxName+2)})
+	}
+}
+
+// scratchPath is PATH_MAX; maxName is NAME_MAX.
+const (
+	scratchPath = 1024
+	maxName     = 255
+)
 
 func putScratch(s *bulkScratch) {
 	scratchMu.Lock()
