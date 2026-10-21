@@ -19,12 +19,6 @@ type persist struct {
 	hotT      float32
 	activeT   float32
 	focusT    float32
-	scroll    [2]float64 // current offset, pixels
-	scrollTgt [2]float64
-	rect      [4]float32 // snapped screen rectangle
-	size      [2]float32
-	origin    [2]float32 // unsnapped top-left
-	content   [2]float64 // extent of the children incl. padding (virtual extent for lists)
 	// savedFocus is, for an overlay root, the focus when it opened.
 	savedFocus Key
 	// wrap is what the line breaking of a WrapText box was computed for.
@@ -38,6 +32,14 @@ type persist struct {
 	// the span its press began on.
 	rp        richPrev
 	pressSpan int32
+
+	// The layout results sit next to the frame's layout inputs.
+	scroll    [2]float64 // current offset, pixels
+	scrollTgt [2]float64
+	content   [2]float64 // extent of the children incl. padding (virtual extent for lists)
+	rect      [4]float32 // snapped screen rectangle
+	size      [2]float32
+	origin    [2]float32 // unsnapped top-left
 }
 
 // box is one record of the pointer-free box pool. Everything after persist
@@ -59,6 +61,14 @@ type boxFrame struct {
 	mat                             uint8 // 1 + the box's record in shell.mats when Material marked it (material.go)
 	bdrop                           uint8 // 1 + the box's recipe in Context.bd.recs when it is a backdrop (NextBackdrop)
 
+	pref        [2]Size
+	pad         [4]float32 // l, t, r, b
+	gap         float32
+	axis        Axis
+	cross       Cross
+	justify     Justify
+	align       Align
+	font        text.FontKey
 	bg          [4]uint32
 	textColor   uint32
 	borderColor uint32
@@ -70,18 +80,10 @@ type boxFrame struct {
 	shadow      [2]Shadow
 	tint        Tint
 	opacity     float32
-	font        text.FontKey
-	align       Align
-	alignNext   bool // the alignment came from NextAlign (Audit)
-	axis        Axis
-	cross       Cross
-	justify     Justify
+	alignNext   bool       // the alignment came from NextAlign (Audit)
 	auditOff    AuditMask  // the checks of Audit the box is exempt from (NextAuditExempt)
-	pad         [4]float32 // l, t, r, b
 	obscured    [2]float32 // a scroll box's view covered at its top and bottom (SetObscured)
 	stopWheel   bool       // the wheel over the box scrolls nothing beneath it (StopWheel)
-	gap         float32
-	pref        [2]Size
 	fixed       [2]float32
 
 	txt    core.Span // display text in the current frame's arena
