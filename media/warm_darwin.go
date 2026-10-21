@@ -21,7 +21,7 @@ func osWarm() {
 			if cf.Init() != nil {
 				return
 			}
-			if _, err := cf.Framework("AVFoundation"); err != nil {
+			if _, err := openAVFoundation(); err != nil {
 				return
 			}
 			fr := cf.Acquire()

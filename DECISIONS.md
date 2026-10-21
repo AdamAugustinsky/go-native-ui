@@ -1014,6 +1014,16 @@ The whole UI is rewritten in Go on the framework with the Rex design system, mac
 
 **Reasoning:** macOS 26 is the last release for Intel Macs, and macOS 27, the reference system here, does not run on them; GitHub's last Intel Mac runner goes in August 2027; and the Intel-only paths (struct returns, `NSRange` passing, Rosetta for local checks) cost testing time with no users to serve.
 
+## D56. Video frames on the GPU: YUV textures and per-frame imports (phase 6, 2026-10-20)
+
+**Decision.** Refines D44's external textures (C7):
+- **One quad mode.** A YUV texture is drawn by an ordinary `ModeRGBA` quad. The renderer binds its chroma planes (textures 1 and 2) and its conversion (fragment buffer 1: the BT.601 or BT.709 matrix for video or full range, the plane count, quarter turns) with the run of quads that binds it, and the shader converts as it samples; a plain texture's run binds "no conversion". The `Quad` layout, `ui`'s image placement (fit, radius, clip) and the other backends are unchanged, and `k.ExternalImage` is `k.Image` with the app's texture.
+- **Two sources.** `NewYUVTexture` and `StageYUV` hold frames from memory (a call's I420, or NV12), staged in GPU order without waiting, like atlas pages. `ImportPixelBuffer` wraps a `420v`/`420f` `CVPixelBuffer` with no copy, for the frame being built only: its id stops resolving at that frame's `Encode`. Imports reuse 16 table indices reserved with the first, so they do not churn the texture table; their generations wrap, so an import id kept for 4,096 frames may name a later import.
+- **The completion turn wakes no window.** The completion block of a command buffer with leases calls `platform.SignalDispatch`, which gives the dispatcher a turn without `Wake`'s `EvWake` (every window would redraw, re-import its paused video and complete again, for ever). The safe point calls `Renderer.CollectLeases`, which reads the slots' status without waiting.
+- **macOS only for now.** On Windows and Linux `NewYUVTexture` reports `ErrUnsupported`.
+
+**Alternatives:** a `ModeYUV` with per-quad colour information (the `ui` image path and every backend change, and the `Quad` has no room for a matrix); imports that persist until replaced, retired through `FreeTexture`'s list (unbounded, against D44's 48); copying pixel buffers to RGBA (a CPU pass per frame).
+
 ## D57. Voice-note audio: the system's player and recorder, no Go on audio threads (phase 6, 2026-10-20)
 
 **Decision (S7, refines D46).** macOS first (D34); on Windows and Linux `NewPlayer`, `Recorder.Start` and `app/perm` return `ErrUnsupported`.
@@ -1035,6 +1045,21 @@ The whole UI is rewritten in Go on the framework with the Rex design system, mac
 - WAV files from AudioToolbox's writer (which `AVAudioRecorder` uses) parse back exactly.
 
 Live microphone capture was not run: access cannot be granted headlessly, so that test skips unless the process is authorized.
+
+## D58. `media.Video`: frames pulled in Build, idle when paused or hidden (phase 6, 2026-10-20)
+
+**Decision.** Refines D46 (S8). `media.Video` is an `AVPlayer` whose item has an `AVPlayerItemVideoOutput` (biplanar `420v`, Metal-compatible). There is no frame callback:
+- **Pulled in Build.** While its box shows (`Kit.ImageShown`), the app calls `Video.Frame`, which asks the output for the pixel buffer of the time the frame will show (`itemTimeForHostTime:` at the frame's time plus 8 ms, `hasNewPixelBufferForItemTime:`, `copyPixelBufferForItemTime:`), keeps it as the current frame, imports it (D56) and returns the delay to the next frame. The app passes that to `WakeIn`.
+- **The rate.** That delay is the frame interval less 8 ms, so the display tick it lands on is the one the frame is due at. Waking at the full interval missed that tick about one time in five: 24 frames drawn per second for a 30 fps clip, against 30 with the lead (Mac mini, 60 Hz).
+- **Idle.** Paused, ended or hidden, `Frame` asks for nothing, so the window draws nothing (0 frames a second, measured). A seek while paused pulls until the frame of the time it went to comes (one from before the seek can come first), 3 s at most.
+- **Speed.** `SetRate` (0.5–2) sets the player's `defaultRate`, and its `rate` while it plays; the item's `audioTimePitchAlgorithm` is set to Spectral, which keeps the pitch (the tests check the speed, not the sound: their clips have no audio track, and macOS 15 reads the property back differently). `Frame`'s delay divides by the rate.
+- **`Play` wakes.** `Play` on a video that was not playing calls `platform.Wake`, so every window draws a frame and the one showing it starts pulling. Without it, `Play` from outside a frame or an event (a run-loop callback) drew nothing until other input came (0 frames a second, measured).
+- **Off the main thread.** The track's size, turn (from `preferredTransform`, in quarter turns) and rate, and the poster frame (`AVAssetImageGenerator`), are read on a goroutine, which then wakes the app.
+- **The end.** `AVPlayerItemDidPlayToEndTimeNotification` reaches a per-slot observer object, kept for the process because a late notification may still arrive. It sets a flag and, without a loop, offers D57's `Ended` event (`EventOf`: A the kind, B the video's ID, from the Players' and Recorders' numbering) to a ring of the videos' own, 64 records: unlike a Player's reserved ticket, a video left paused holds no record the players need. Looping is done by the next `Frame`.
+- **AppKit before AVFoundation.** AVFoundation loaded without AppKit, as when a video plays offscreen before the app starts, breaks every later `NSView` layer (`-[NSViewBackingLayer NS_setView:]` unrecognized, macOS 27.2; reproduced with the video tests, not with D57's `AVAudioPlayer` or `Warm`). `media` opens AVFoundation through one function that loads AppKit first, for videos, players, recorders and `Warm`.
+- Windows and Linux report `ErrVideoUnsupported`.
+
+**Alternatives:** a display-link or `requestNotificationOfMediaDataChangeWithAdvanceInterval:` callback per video, rejected because it wakes for videos that do not show; an `AVPlayerLayer` hosted over our layer (D46 rejects it: no rounded clipping, z-order or offscreen render).
 
 ## D60. HTTP(S) downloads: the system's NSURLSession on macOS, net/http elsewhere (phase 6, 2026-10-21)
 

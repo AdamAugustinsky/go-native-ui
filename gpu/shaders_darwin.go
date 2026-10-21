@@ -35,6 +35,20 @@ struct VOut {
 	uint   inst [[flat]];
 };
 
+// The YUV conversion of the run's texture (external_darwin.go, yuvRun):
+// rgb = (dot(r, v), dot(g, v), dot(b, v)) for v = (y, cb, cr, 1); planes is
+// 0 for a plain texture, 2 for NV12 (CbCr in tex1), 3 for I420 (Cb in tex1,
+// Cr in tex2); turns rotates the image clockwise by quarter turns.
+struct YUVRun {
+	packed_float4 r;
+	packed_float4 g;
+	packed_float4 b;
+	uint planes;
+	uint turns;
+	uint pad0;
+	uint pad1;
+};
+
 vertex VOut vs_main(uint vid [[vertex_id]],
                     uint iid [[instance_id]],
                     device const Quad* quads [[buffer(0)]],
@@ -121,9 +135,39 @@ static float rrect_shadow(float2 p, float4 rect, float4 radii, float sigma) {
 	return clamp(v, 0.0, 1.0);
 }
 
+// yuv_sample samples the YUV texture of the run at texel (in the turned
+// image's luma texels) and converts it to opaque RGB.
+static float4 yuv_sample(float2 texel, constant YUVRun& yuv, texture2d<float> tex,
+                         texture2d<float> tex1, texture2d<float> tex2, sampler smp) {
+	float2 dsz = float2(tex.get_width(), tex.get_height());
+	if ((yuv.turns & 1u) != 0u) {
+		dsz = dsz.yx;
+	}
+	float2 n = texel / dsz;
+	if (yuv.turns == 1u) {
+		n = float2(n.y, 1.0 - n.x);
+	} else if (yuv.turns == 2u) {
+		n = 1.0 - n;
+	} else if (yuv.turns == 3u) {
+		n = float2(1.0 - n.y, n.x);
+	}
+	float4 v = float4(tex.sample(smp, n).r, 0.0, 0.0, 1.0);
+	if (yuv.planes == 2u) {
+		v.yz = tex1.sample(smp, n).rg;
+	} else {
+		v.y = tex1.sample(smp, n).r;
+		v.z = tex2.sample(smp, n).r;
+	}
+	float3 rgb = float3(dot(float4(yuv.r), v), dot(float4(yuv.g), v), dot(float4(yuv.b), v));
+	return float4(clamp(rgb, 0.0, 1.0), 1.0);
+}
+
 fragment float4 fs_main(VOut in [[stage_in]],
                         device const Quad* quads [[buffer(0)]],
+                        constant YUVRun& yuv [[buffer(1)]],
                         texture2d<float> tex [[texture(0)]],
+                        texture2d<float> tex1 [[texture(1)]],
+                        texture2d<float> tex2 [[texture(2)]],
                         sampler smp [[sampler(0)]]) {
 	float4 rect = quads[in.inst].rect;
 	float4 clip = quads[in.inst].clip;
@@ -164,7 +208,9 @@ fragment float4 fs_main(VOut in [[stage_in]],
 			cov = clamp(0.5 - rrect_sdf(p, rect, radii), 0.0, 1.0);
 		}
 		float2 texel = uv.xy + (p - rect.xy) * ((uv.zw - uv.xy) / size);
-		float4 s = tex.sample(smp, texel / float2(tex.get_width(), tex.get_height()));
+		float4 s = mode == 2u && yuv.planes != 0u
+			? yuv_sample(texel, yuv, tex, tex1, tex2, smp)
+			: tex.sample(smp, texel / float2(tex.get_width(), tex.get_height()));
 		// mode 3: a backdrop, its blurred region (uv: the texels the
 		// renderer put it at; backdrop_darwin.go), opaque
 		res = (mode == 1u ? col * s.r : mode == 3u ? float4(s.rgb, 1.0) : s * col.a) * cov;

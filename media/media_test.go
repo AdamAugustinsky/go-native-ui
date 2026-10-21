@@ -14,16 +14,17 @@ import (
 	"gonativeui/app"
 	"gonativeui/app/perm"
 	"gonativeui/platform"
+	"gonativeui/widget/widgettest"
 )
 
-// The main goroutine stays on the main thread: it runs what tests hand to
-// onMain (Players are main-thread objects on macOS), the main run loop (where
-// the system calls the players' delegate) and the app object's dispatcher, as
-// the app's loop does. The sink keeps the media events it delivers.
+// The main goroutine stays on the main thread (widgettest.RunMain, which the
+// video tests' live window needs too): it runs what tests hand to onMain
+// (Players are main-thread objects on macOS) and, every 2 ms, the main run
+// loop (where the system calls the players' delegate) and the app object's
+// dispatcher, as the app's loop does. The sink keeps the media events it
+// delivers.
 
 func init() { runtime.LockOSThread() }
-
-var mainQ = make(chan func())
 
 type gotEvent struct {
 	ev Event
@@ -50,32 +51,39 @@ func (testSink) AppSafePoint() {}
 
 func TestMain(m *testing.M) {
 	platform.SetAppSink(testSink{})
-	done := make(chan int, 1)
-	go func() { done <- m.Run() }()
-	tick := time.NewTicker(2 * time.Millisecond)
-	for {
-		select {
-		case f := <-mainQ:
-			f()
-		case <-tick.C:
-			runLoopOnce()
-			platform.DispatchApp()
-		case code := <-done:
-			os.Exit(code)
-		}
-	}
+	widgettest.RunMain(m)
+}
+
+var turns sync.Once
+
+// startTurns starts the main thread's turn every 2 ms (the run loop's
+// pending work, then the app object's dispatcher), from a test: RunMain
+// serves the main thread by then. A live window's app takes the main thread
+// meanwhile, and the turns wait for it to end.
+func startTurns() {
+	turns.Do(func() {
+		go func() {
+			for range time.Tick(2 * time.Millisecond) {
+				widgettest.OnMain(func() {
+					runLoopOnce()
+					platform.DispatchApp()
+				})
+			}
+		}()
+	})
 }
 
 // onMain runs f on the main thread and waits for it. f must not call
 // t.Fatal or t.Skip.
 func onMain(f func()) {
-	d := make(chan struct{})
-	mainQ <- func() { defer close(d); f() }
-	<-d
+	startTurns()
+	widgettest.OnMain(f)
 }
 
-// eventsFor returns the events delivered so far for the Player or Recorder id.
+// eventsFor returns the events delivered so far for the Player, Recorder or
+// Video id.
 func eventsFor(id uint64) []gotEvent {
+	startTurns()
 	sink.mu.Lock()
 	defer sink.mu.Unlock()
 	var out []gotEvent

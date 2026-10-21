@@ -139,11 +139,17 @@ type ringSlot struct {
 	stageLen int
 	copies   []stagedCopy
 	ucb      objc.ID
+
+	// The pixel-buffer imports its frame drew (external_darwin.go), released
+	// once its command buffer has completed or is known never to run.
+	leases  [MaxImports]lease
+	nLeases int
 }
 
 // stagedCopy is one Stage call waiting for the next Encode.
 type stagedCopy struct {
 	tex             TextureID
+	plane           uint8 // 0, or a YUV texture's chroma plane 1 or 2
 	off, bpr        int
 	x, y, w, h, bpp int
 }
@@ -170,6 +176,8 @@ type Renderer struct {
 	textures          []objc.ID     // by index
 	kinds             []TextureKind // by index
 	lastUse           []uint64      // by index: serial of the last frame that bound it (0 = none)
+	xtex              []xtex        // by index: a YUV texture's planes (external_darwin.go)
+	ext               extKit        // pixel-buffer imports
 	retiring          []retiredTex
 	empty             objc.ID // 1×1 transparent texture bound for a freed id
 	draws, totalDraws int
@@ -300,14 +308,7 @@ const (
 // once, so creating textures in the frame path allocates on the Go heap only
 // then (Metal allocates its own memory).
 func (r *Renderer) NewTexture(kind TextureKind, w, h int) TextureID {
-	tex := r.newMTLTexture(kind, w, h)
-	i, id := r.ids.add()
-	if i == len(r.textures) {
-		r.textures = append(r.textures, 0)
-		r.kinds = append(r.kinds, 0)
-		r.lastUse = append(r.lastUse, 0)
-	}
-	r.textures[i], r.kinds[i], r.lastUse[i] = tex, kind, 0
+	_, id := r.addTexture(r.newMTLTexture(kind, w, h), kind)
 	return id
 }
 
@@ -334,21 +335,29 @@ func (r *Renderer) newMTLTexture(kind TextureKind, w, h int) objc.ID {
 // an unknown id or an id already freed does nothing.
 // An index is reused under 4096 generations and then retired for good, so a
 // renderer can create about 4.29 billion textures (2^20 indices × 4096) in its
-// life; C7's external textures should revisit the id's width if they churn.
+// life. Pixel-buffer imports do not churn it: they reuse MaxImports indices
+// (external_darwin.go).
 func (r *Renderer) FreeTexture(t TextureID) {
 	i, ok := r.ids.lookup(t)
-	if !ok || i == 0 {
+	if !ok || i == 0 || (r.kinds[i] == texYUV && !r.xtex[i].owned) { // an import is the renderer's to end
 		return
 	}
 	r.retiring = append(r.retiring, retiredTex{r.textures[i], r.serial})
-	r.textures[i] = 0
+	for _, p := range r.xtex[i].planes {
+		if p != 0 {
+			r.retiring = append(r.retiring, retiredTex{p, r.serial})
+		}
+	}
+	r.textures[i], r.xtex[i] = 0, xtex{}
 	r.ids.remove(i)
 	r.collect()
 }
 
 // TextureCounts reports the live textures (texture 0 included) and the freed
 // ones whose release still waits for the GPU.
-func (r *Renderer) TextureCounts() (live, retiring int) { return r.ids.n, len(r.retiring) }
+func (r *Renderer) TextureCounts() (live, retiring int) {
+	return r.ids.n - r.ext.reserved, len(r.retiring)
+}
 
 // collect retires the ring slots whose command buffers have completed,
 // without waiting, and releases the freed textures no unfinished frame may
@@ -366,6 +375,7 @@ func (r *Renderer) collect() {
 		if s.cb != 0 && objc.Send(s.cb, rsStatus) >= 4 {
 			objc.Release(s.cb)
 			s.cb = 0
+			r.releaseLeases(s)
 		}
 		if s.cb != 0 || s.ucb != 0 {
 			pending = min(pending, s.serial)
@@ -393,13 +403,14 @@ func argRegion(f *ffi.Frame, x, y, w, h int) *ffi.Frame {
 
 // Upload copies a w×h block of pixels into texture t at (x, y). pixels[0] is
 // the block's first texel and stride is the byte distance between rows. An
-// id that was freed is ignored.
+// id that was freed, or names a YUV texture (StageYUV fills those), is
+// ignored.
 func (r *Renderer) Upload(t TextureID, x, y, w, h int, pixels []byte, stride int) {
 	if w <= 0 || h <= 0 {
 		return
 	}
 	i, ok := r.ids.lookup(t)
-	if !ok {
+	if !ok || r.kinds[i] == texYUV {
 		return
 	}
 	bpp := 1
@@ -434,23 +445,30 @@ func (r *Renderer) Upload(t TextureID, x, y, w, h int, pixels []byte, stride int
 // the old contents and that frame and every later one see the new. Use it to
 // fill part of a texture that frames in flight sample (an atlas page);
 // Upload, which waits for those frames, suits a texture no frame has used.
-// An id freed before the next Encode is skipped. The staging buffer grows to
-// the most bytes staged for one frame (one per ring slot); it is Metal
-// memory, not Go heap.
+// An id freed before the next Encode is skipped, and a YUV texture's is
+// ignored (StageYUV fills those). The staging buffer grows to the most bytes
+// staged for one frame (one per ring slot); it is Metal memory, not Go heap.
 func (r *Renderer) Stage(t TextureID, x, y, w, h int, pixels []byte, stride int) {
 	if w <= 0 || h <= 0 {
 		return
 	}
 	i, ok := r.ids.lookup(t)
-	if !ok {
+	if !ok || r.kinds[i] == texYUV {
 		return
 	}
 	bpp := 1
 	if r.kinds[i] == TexRGBA8 {
 		bpp = 4
 	}
+	r.stage(t, 0, x, y, w, h, pixels, stride, bpp, "gpu: Stage: pixels too short for region")
+}
+
+// stage is Stage into plane plane of texture t (a YUV texture's chroma
+// planes are 1 and 2), bpp bytes per texel; it panics with short if pixels
+// is too short for the region.
+func (r *Renderer) stage(t TextureID, plane uint8, x, y, w, h int, pixels []byte, stride, bpp int, short string) {
 	if stride < w*bpp || len(pixels) < (h-1)*stride+w*bpp {
-		panic("gpu: Stage: pixels too short for region")
+		panic(short)
 	}
 	s := &r.slots[r.next]
 	r.retire(s) // the slot's last frame and upload are done with its staging buffer (Encode waits for the same)
@@ -464,7 +482,7 @@ func (r *Renderer) Stage(t TextureID, x, y, w, h int, pixels []byte, stride int)
 		copy(dst[y*row:(y+1)*row], pixels[y*stride:])
 	}
 	s.stageLen = off + row*h
-	s.copies = append(s.copies, stagedCopy{t, off, row, x, y, w, h, bpp})
+	s.copies = append(s.copies, stagedCopy{t, plane, off, row, x, y, w, h, bpp})
 }
 
 // growStage gives slot s a staging buffer of at least n bytes, keeping what
@@ -501,11 +519,15 @@ func (r *Renderer) flushStaged(s *ringSlot) {
 			continue // freed since it was staged
 		}
 		r.use(s, k) // an Upload into it waits for this blit
+		dst := r.textures[k]
+		if c.plane > 0 {
+			dst = r.xtex[k].planes[c.plane-1]
+		}
 		F.Reset().Arg(uintptr(blit)).Arg(uintptr(rsCopyBufTex)).Arg(uintptr(s.stage)).Arg(uintptr(c.off)).
 			Arg(uintptr(c.bpr)).Arg(uintptr(c.bpr * c.h))
 		// MTLSize and MTLOrigin (24 bytes) by reference
 		copySize, copyOrigin = [3]uintptr{uintptr(c.w), uintptr(c.h), 1}, [3]uintptr{uintptr(c.x), uintptr(c.y), 0}
-		F.Arg(uintptr(unsafe.Pointer(&copySize))).Arg(uintptr(r.textures[k])).Arg(0).Arg(0).
+		F.Arg(uintptr(unsafe.Pointer(&copySize))).Arg(uintptr(dst)).Arg(0).Arg(0).
 			Arg(uintptr(unsafe.Pointer(&copyOrigin))).Call(objc.MsgSend)
 	}
 	objc.Send(blit, rsEndEncoding)
@@ -586,14 +608,14 @@ func (r *Renderer) retire(s *ringSlot) {
 		s.ucb = 0
 		s.stageLen = 0
 	}
-	if s.cb == 0 {
-		return
+	if s.cb != 0 {
+		if st := objc.Send(s.cb, rsStatus); st >= 2 && st < 4 { // Committed, Scheduled
+			objc.Send(s.cb, rsWait)
+		}
+		objc.Release(s.cb)
+		s.cb = 0
 	}
-	if st := objc.Send(s.cb, rsStatus); st >= 2 && st < 4 { // Committed, Scheduled
-		objc.Send(s.cb, rsWait)
-	}
-	objc.Release(s.cb)
-	s.cb = 0
+	r.releaseLeases(s)
 }
 
 // Encode records one render pass into cmdBuf: it clears target (an
@@ -613,6 +635,7 @@ func (r *Renderer) retire(s *ringSlot) {
 func (r *Renderer) Encode(cmdBuf, target uintptr, width, height int, clear [4]float32, list *DrawList) {
 	r.draws = 0
 	if width <= 0 || height <= 0 {
+		r.dropPending() // never encoded: nothing will sample them
 		return
 	}
 	F := objc.F
@@ -667,7 +690,7 @@ func (r *Renderer) Encode(cmdBuf, target uintptr, width, height int, clear [4]fl
 
 	// Shape quads don't read the bound texture, so they join whatever run is
 	// open; only a texture quad with a different texture ends it.
-	bound := TextureID(0)
+	bound, yuv := TextureID(0), false
 	objc.Send2(enc, rsSetFTexture, uintptr(r.textures[0]), 0)
 	r.use(s, 0)
 	if pre > 0 {
@@ -690,7 +713,7 @@ func (r *Renderer) Encode(cmdBuf, target uintptr, width, height int, clear [4]fl
 			enc = r.beginPass(cmdBuf, r.bd.load, s)
 			objc.Send2(enc, rsSetFTexture, uintptr(r.bd.tex[0]), 0)
 			r.draw(enc, i, 1)
-			bound = 0
+			bound, yuv = 0, false
 			objc.Send2(enc, rsSetFTexture, uintptr(r.textures[0]), 0)
 			runStart = i + 1
 			continue
@@ -703,12 +726,7 @@ func (r *Renderer) Encode(cmdBuf, target uintptr, width, height int, clear [4]fl
 		}
 		runStart = i
 		bound = q.Tex
-		tex := r.empty // a freed or unknown id draws nothing
-		if k, ok := r.ids.lookup(bound); ok {
-			tex = r.textures[k]
-			r.use(s, k)
-		}
-		objc.Send2(enc, rsSetFTexture, uintptr(tex), 0)
+		r.bindRun(enc, s, bound, &yuv)
 	}
 	if len(quads) > runStart {
 		r.draw(enc, runStart, len(quads)-runStart)
@@ -717,6 +735,9 @@ func (r *Renderer) Encode(cmdBuf, target uintptr, width, height int, clear [4]fl
 	objc.Send1(r.color0, rsSetTexture, 0)
 	if blur {
 		objc.Send1(r.bd.loadCol0, rsSetTexture, 0)
+	}
+	if r.ext.nPending > 0 {
+		r.leaseImports(s, cmdBuf)
 	}
 	F.Call1(objc.PoolPop, pool)
 }
@@ -730,6 +751,7 @@ func (r *Renderer) beginPass(cmdBuf uintptr, rpd objc.ID, s *ringSlot) objc.ID {
 	objc.Send3(enc, rsSetFBuffer, uintptr(s.buf), 0, 0)
 	objc.Send3(enc, rsSetVBytes, uintptr(unsafe.Pointer(&viewportArg)), 8, 1)
 	objc.Send2(enc, rsSetFSampler, uintptr(r.sampler), 0)
+	r.beginYUV(enc)
 	return enc
 }
 
@@ -822,6 +844,7 @@ func (r *Renderer) Destroy() {
 		}
 		s.copies = nil
 	}
+	r.destroyExternal()
 	for _, t := range r.textures {
 		if t != 0 {
 			objc.Release(t)
