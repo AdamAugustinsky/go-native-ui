@@ -95,6 +95,8 @@ func (c *Cache) decodeJob(t task.Token, j job) result {
 		r = w.decodeFrame(c, &j)
 	case j.src.isIcon():
 		r = w.decodeIcon(c, &j)
+	case j.src.kind == srcVideoPoster:
+		r = w.decodeVideoPoster(c, &j)
 	default:
 		handled := false
 		if j.flags&Animate != 0 {

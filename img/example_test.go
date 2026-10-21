@@ -39,6 +39,15 @@ func Example() {
 	// Output: 100 50
 }
 
+func ExampleVideoPoster() {
+	var cache *img.Cache // made once with the window's renderer
+	path := "clips/preview.mov"
+	key := img.Key{Hash: img.HashString(path + ":revision-1:poster"), W: 640}
+	// In Build, after cache.Poll; draw h when Ready, a fallback when Failed.
+	h, state := cache.Request(key, img.VideoPoster(path))
+	_, _ = h, state
+}
+
 // gallery shows the images in a message list: the window's image cache is made
 // once in Init and given to the kit, Poll runs at the start of every Build, and
 // Request for what is in view names an image by a content hash and the size it

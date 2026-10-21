@@ -17,6 +17,7 @@ import (
 	"gonativeui/internal/cf"
 	"gonativeui/internal/ffi"
 	"gonativeui/internal/objc"
+	"gonativeui/internal/videoframe"
 	"gonativeui/platform"
 )
 
@@ -95,12 +96,6 @@ var (
 	selNatSize      = objc.Sel("naturalSize")
 	selTransform    = objc.Sel("preferredTransform")
 	selFrameRate    = objc.Sel("nominalFrameRate")
-	selGenWith      = objc.Sel("assetImageGeneratorWithAsset:")
-	selApplyTurn    = objc.Sel("setAppliesPreferredTrackTransform:")
-	selMaxSize      = objc.Sel("setMaximumSize:")
-	selTolBefore    = objc.Sel("setRequestedTimeToleranceBefore:")
-	selTolAfter     = objc.Sel("setRequestedTimeToleranceAfter:")
-	selCopyImage    = objc.Sel("copyCGImageAtTime:actualTime:error:")
 )
 
 var vav struct {
@@ -108,7 +103,7 @@ var vav struct {
 	err  error
 
 	clsString, clsURL, clsAsset, clsItem, clsPlayer, clsOutput objc.ID
-	clsGen, clsCenter, clsMDict, clsDict, clsNumber            objc.ID
+	clsCenter, clsMDict, clsDict, clsNumber                    objc.ID
 	obsCls                                                     objc.ID
 	obsDef                                                     *objc.ClassDef
 
@@ -117,9 +112,6 @@ var vav struct {
 	zero                       cmTime  // kCMTimeZero
 	timeMake                   uintptr // CMTimeMakeWithSeconds
 	pbRelease, pbW, pbH        uintptr
-	imgW, imgH, imgRelease     uintptr
-	csCreate, csRelease, srgb  uintptr
-	bmCreate, ctxDraw, ctxFree uintptr
 
 	ring *platform.Ring // the end events
 }
@@ -150,9 +142,11 @@ func loadVideoAV() error {
 			vav.err = err
 			return
 		}
+		if vav.err = videoframe.Load(); vav.err != nil {
+			return
+		}
 		cm := open("/System/Library/Frameworks/CoreMedia.framework/CoreMedia")
 		cv := open("/System/Library/Frameworks/CoreVideo.framework/CoreVideo")
-		cg := open("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")
 		if vav.err != nil {
 			return
 		}
@@ -180,15 +174,12 @@ func loadVideoAV() error {
 			vav.zero = *(*cmTime)(ffi.PtrFromC(p))
 		}
 		vav.timeMake = sym(cm, "CMTimeMakeWithSeconds")
-		vav.imgW, vav.imgH, vav.imgRelease = sym(cg, "CGImageGetWidth"), sym(cg, "CGImageGetHeight"), sym(cg, "CGImageRelease")
-		vav.csCreate, vav.csRelease, vav.srgb = sym(cg, "CGColorSpaceCreateWithName"), sym(cg, "CGColorSpaceRelease"), val(cg, "kCGColorSpaceSRGB")
-		vav.bmCreate, vav.ctxDraw, vav.ctxFree = sym(cg, "CGBitmapContextCreate"), sym(cg, "CGContextDrawImage"), sym(cg, "CGContextRelease")
 		if vav.err != nil {
 			return
 		}
 		vav.clsString, vav.clsURL, vav.clsAsset = objc.Cls("NSString"), objc.Cls("NSURL"), objc.Cls("AVURLAsset")
 		vav.clsItem, vav.clsPlayer, vav.clsOutput = objc.Cls("AVPlayerItem"), objc.Cls("AVPlayer"), objc.Cls("AVPlayerItemVideoOutput")
-		vav.clsGen, vav.clsCenter = objc.Cls("AVAssetImageGenerator"), objc.Cls("NSNotificationCenter")
+		vav.clsCenter = objc.Cls("NSNotificationCenter")
 		vav.clsMDict, vav.clsDict, vav.clsNumber = objc.Cls("NSMutableDictionary"), objc.Cls("NSDictionary"), objc.Cls("NSNumber")
 		if vav.clsPlayer == 0 || vav.clsOutput == 0 {
 			vav.err = errors.New("media: AVFoundation's player classes are missing")
@@ -328,7 +319,7 @@ func OpenVideo(path string, o VideoOptions) (*Video, error) {
 	}
 	v.muted = o.Muted
 	v.loop.Store(o.Loop)
-	v.asset = videoAsset(F, path)
+	v.asset = videoframe.Asset(F, path)
 	v.item = objc.Retain(objc.Send1(vav.clsItem, selItemWith, uintptr(v.asset)))
 	objc.Send1(v.item, selPitchAlgo, vav.pitch) // the pitch kept at other rates
 	attrs := objc.Send(vav.clsMDict, selDict)
@@ -366,11 +357,9 @@ func (v *Video) setAtEnd() {
 
 // loadScratch is what the loader's C calls read and write by pointer.
 type loadScratch struct {
-	f          ffi.Frame
-	transform  [6]float64
-	dur, at    cmTime
-	err        uintptr
-	maxW, maxH float64
+	f         ffi.Frame
+	transform [6]float64
+	dur       cmTime
 }
 
 func (s *loadScratch) send(id objc.ID, sel objc.SEL, args ...uintptr) uintptr {
@@ -430,48 +419,8 @@ func (v *Video) loadTrack(s *loadScratch, send func(objc.ID, objc.SEL, ...uintpt
 	}
 	v.natW, v.natH = int(math.Round(w)), int(math.Round(h))
 
-	v.poster, v.posW, v.posH = videoPoster(s, asset, posterMax)
+	v.poster, v.posW, v.posH = videoframe.Poster(asset, posterMax)
 	return nil
-}
-
-func videoPoster(s *loadScratch, asset objc.ID, posterMax int) (pix []byte, w, h int) {
-	f, send := &s.f, s.send
-	if posterMax <= 0 {
-		posterMax = 1280
-	}
-	// The poster: the first frame, turned, at most posterMax on its longest side.
-	gen := objc.ID(send(vav.clsGen, selGenWith, uintptr(asset)))
-	if gen == 0 {
-		return
-	}
-	send(gen, selApplyTurn, 1)
-	s.maxW, s.maxH = float64(posterMax), float64(posterMax)
-	f.Reset().Arg(uintptr(gen)).Arg(uintptr(selMaxSize)).ArgPoint(s.maxW, s.maxH).Call(objc.MsgSend)
-	s.at = vav.zero
-	send(gen, selTolBefore, uintptr(unsafe.Pointer(&s.at)))
-	s.at = vav.zero
-	send(gen, selTolAfter, uintptr(unsafe.Pointer(&s.at)))
-	s.at, s.err = vav.zero, 0
-	img := send(gen, selCopyImage, uintptr(unsafe.Pointer(&s.at)), 0, uintptr(unsafe.Pointer(&s.err)))
-	if img == 0 {
-		return // no poster: the first frame shows when it plays
-	}
-	pw, ph := int(f.Call1(vav.imgW, img)), int(f.Call1(vav.imgH, img))
-	if pw > 0 && ph > 0 {
-		px := make([]byte, pw*ph*4)
-		cs := f.Call1(vav.csCreate, vav.srgb)
-		ctx := f.Reset().Arg(uintptr(unsafe.Pointer(&px[0]))).Arg(uintptr(pw)).Arg(uintptr(ph)).Arg(8).Arg(uintptr(pw * 4)).
-			Arg(cs).Arg(1 | 4<<12).Call(vav.bmCreate).R0() // kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big: RGBA
-		if ctx != 0 {
-			f.Reset().Arg(ctx).ArgRect(0, 0, float64(pw), float64(ph)).Arg(img).Call(vav.ctxDraw)
-			f.Call1(vav.ctxFree, ctx)
-			pix, w, h = px, pw, ph
-		}
-		f.Call1(vav.csRelease, cs)
-		runtime.KeepAlive(px)
-	}
-	f.Call1(vav.imgRelease, img)
-	return
 }
 
 // ID is the video's number, the A of its application events.
