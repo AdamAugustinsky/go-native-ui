@@ -3,6 +3,7 @@
 package app
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -56,6 +57,9 @@ func newBridgeOffscreen(t *testing.T) (*Offscreen, *inspector) {
 		o.Frame()
 	}
 	in, err := o.App.startInspector(filepath.Join(shortTemp(t), "s"))
+	if errors.Is(err, errors.ErrUnsupported) {
+		t.Skipf("no agent bridge here: %v", err)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,4 +174,102 @@ func TestBridgeUnsetCostsNothing(t *testing.T) {
 	}
 	stop()
 	o.PumpBridge() // a safe point with no bridge does nothing
+}
+
+// serveUntil pumps the bridge and draws frames until done reports true.
+func serveUntil(t *testing.T, o *Offscreen, what string, done func() bool) {
+	t.Helper()
+	for i := 0; i < 2000; i++ {
+		if done() {
+			return
+		}
+		o.PumpBridge()
+		o.Frame()
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("never: %s", what)
+}
+
+// After the steps, whatever a last step left held is let go: the modifiers of
+// a final shift+left or cmd+shift+n are not still down. (The player is not
+// called again once its steps are done, so its own reset of them never ran.)
+func TestBridgeReleasesTheModifiersOfAFinalKeyStep(t *testing.T) {
+	o, in := newBridgeOffscreen(t)
+	mods := ui.ModSuper | ui.ModShift
+	o.App.tr.in.Mods = ui.ModAlt // what the system holds when the steps begin
+	got := make(chan *inspectwire.Response, 1)
+	go func() {
+		got <- in.Handle(&inspectwire.Request{Op: "do", Steps: []inspectwire.Step{{Action: "key", Key: "cmd+shift+n"}}})
+	}()
+	var resp *inspectwire.Response
+	serveUntil(t, o, "the answer", func() bool {
+		select {
+		case resp = <-got:
+		default:
+		}
+		return resp != nil
+	})
+	if !resp.OK {
+		t.Fatal(resp.Error)
+	}
+	o.Frame()
+	if m := o.App.tr.in.Mods; m != ui.ModAlt {
+		t.Errorf("after the steps the modifiers are %v, want what was held before them (%v; the key had %v)", m, ui.ModAlt, mods)
+	}
+}
+
+// A click interrupted between its press and its release leaves the button
+// down; the steps let it go however they end: a timeout, the bridge stopping.
+func TestBridgeCancelsAClickThatIsInterrupted(t *testing.T) {
+	for _, how := range []string{"timeout", "stop", "cancelled by the client"} {
+		t.Run(how, func(t *testing.T) {
+			o, in := newBridgeOffscreen(t)
+			got := make(chan *inspectwire.Response, 1)
+			go func() {
+				got <- in.Handle(&inspectwire.Request{Op: "do", TimeoutMs: 60, Steps: []inspectwire.Step{
+					{Action: "click", Role: "Button", Name: "Save"}, {Action: "settle"},
+				}})
+			}()
+			ai := &o.App.tr.in
+			serveUntil(t, o, "the press", func() bool { return ai.Down[ui.ButtonLeft] })
+			switch how {
+			case "timeout":
+				time.Sleep(80 * time.Millisecond)
+				o.PumpBridge()
+				o.Frame()
+			case "stop":
+				in.stop()
+			case "cancelled by the client":
+				// the handler gives up (its own wait ran out): the next frame ends the steps
+				for _, s := range in.active {
+					s.job.cancelled.Store(true)
+				}
+				o.Frame()
+			}
+			if ai.Down[ui.ButtonLeft] {
+				t.Errorf("the button is still down after the steps ended (%s)", how)
+			}
+			if o.App.script != nil {
+				t.Errorf("the steps are still on the window")
+			}
+			select {
+			case r := <-got:
+				if r.OK {
+					t.Errorf("an interrupted do answered ok")
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("no answer")
+			}
+		})
+	}
+	// input that came from elsewhere is not undone: a button the system has let go already
+	o, in := newBridgeOffscreen(t)
+	go in.Handle(&inspectwire.Request{Op: "do", Step: inspectwire.Step{Action: "click", Role: "Button", Name: "Save"}})
+	ai := &o.App.tr.in
+	serveUntil(t, o, "the press", func() bool { return ai.Down[ui.ButtonLeft] })
+	ai.Down[ui.ButtonLeft] = false // a real release
+	in.stop()
+	if ai.Cancelled[ui.ButtonLeft] {
+		t.Error("a button that was up already was cancelled")
+	}
 }

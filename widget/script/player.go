@@ -68,6 +68,10 @@ type Player struct {
 	base      []byte  // the value a WaitChange step started from
 	modsHeld  bool    // a step set the modifiers for one frame only: the next clears them
 	down      ui.Mods // the modifiers a Down holds until Up
+	pressed   uint8   // buttons (bit per ui.Button) the player pressed and has not released
+	wrote     bool    // the player has written in.Mods ...
+	set       ui.Mods // ... and this is what it wrote last
+	typed     int     // bytes of the current Type step already delivered
 	tips      []ui.TooltipRegion
 	tipText   []byte
 }
@@ -139,7 +143,8 @@ func (p *Player) Script(frame int, in *ui.Input) bool {
 		in.Time = p.now()
 	}
 	if p.modsHeld {
-		in.Mods, p.modsHeld = p.down, false
+		p.setMods(in, p.down)
+		p.modsHeld = false
 	}
 	if p.idx >= len(p.steps) {
 		if !p.opt.Loop {
@@ -158,6 +163,7 @@ func (p *Player) Script(frame int, in *ui.Input) bool {
 	if !p.begun {
 		p.begun = true
 		p.t0, p.ran, p.gap = now, 0, 0
+		p.typed = 0
 		p.resolve(st)
 	} else {
 		p.ran += min(d, MaxFrameGapMs*1_000_000)
@@ -173,6 +179,42 @@ func (p *Player) Script(frame int, in *ui.Input) bool {
 		p.t++
 	}
 	return true
+}
+
+// press, release and setMods are how the player changes the input, so that
+// Unwind knows what it holds.
+func (p *Player) press(in *ui.Input, b int, clicks uint8) {
+	in.SetButton(b, true, clicks)
+	p.pressed |= 1 << b
+}
+
+func (p *Player) release(in *ui.Input, b int) {
+	in.SetButton(b, false, 0)
+	p.pressed &^= 1 << b
+}
+
+func (p *Player) setMods(in *ui.Input, m ui.Mods) {
+	in.Mods, p.wrote, p.set = m, true, m
+}
+
+// Unwind lets go of what the player holds in in, for a caller that stops
+// playing before the steps have run to their end, or that does not call Script
+// again after the last step, whose modifiers are held for one frame more: a button it pressed and has not released is cancelled (a release would
+// click whatever is under it), and the modifiers it set go back to base, the
+// ones that were held before it began. Input that came from elsewhere since is
+// left alone: a button that is up already stays as it is, and modifiers that
+// are not what the player last set are the system's now.
+func (p *Player) Unwind(in *ui.Input, base ui.Mods) {
+	for b := 0; b < 8; b++ {
+		if p.pressed&(1<<b) != 0 {
+			in.Cancel(b)
+		}
+	}
+	p.pressed = 0
+	if p.wrote && in.Mods == p.set {
+		in.Mods = base
+	}
+	p.wrote, p.modsHeld, p.down = false, false, 0
 }
 
 func (p *Player) fail(format string, args ...any) {
@@ -442,7 +484,8 @@ func (p *Player) resolve(st *Step) {
 // carry the modifiers too.
 func (p *Player) holdMods(in *ui.Input, st *Step) {
 	if st.mods != 0 {
-		in.Mods, p.modsHeld = st.mods|p.down, true
+		p.setMods(in, st.mods|p.down)
+		p.modsHeld = true
 	}
 }
 
@@ -565,11 +608,11 @@ func (p *Player) run(st *Step, in *ui.Input) bool {
 			}
 			x, y := aim(p.rect, st)
 			p.goTo(in, x, y)
-			in.Mods = st.mods | p.down
-			in.SetButton(b, true, uint8(p.t/2+1))
+			p.setMods(in, st.mods|p.down)
+			p.press(in, b, uint8(p.t/2+1))
 			return false
 		}
-		in.SetButton(b, false, 0)
+		p.release(in, b)
 		p.holdMods(in, st)
 		return p.t/2+1 >= clicks
 	case opDrag:
@@ -580,12 +623,12 @@ func (p *Player) run(st *Step, in *ui.Input) bool {
 		switch {
 		case p.t == 0:
 			p.goTo(in, cx, cy)
-			in.Mods = st.mods | p.down
-			in.SetButton(ui.ButtonLeft, true, 1)
+			p.setMods(in, st.mods|p.down)
+			p.press(in, ui.ButtonLeft, 1)
 		case p.t <= st.n:
 			p.goTo(in, cx+st.dx*float32(p.t), cy)
 		default:
-			in.SetButton(ui.ButtonLeft, false, 0)
+			p.release(in, ui.ButtonLeft)
 			p.holdMods(in, st)
 			return true
 		}
@@ -593,15 +636,17 @@ func (p *Player) run(st *Step, in *ui.Input) bool {
 		if p.ok {
 			x, y := p.centre()
 			p.goTo(in, x, y)
-			in.Mods, p.down = st.mods, st.mods
-			in.SetButton(ui.ButtonLeft, true, 1)
+			p.setMods(in, st.mods)
+			p.down = st.mods
+			p.press(in, ui.ButtonLeft, 1)
 		}
 		return true
 	case opUp:
 		// the release carries what Down held (and the step's own), cleared by
 		// the next frame
-		in.SetButton(ui.ButtonLeft, false, 0)
-		in.Mods, p.modsHeld = p.down|st.mods, true
+		p.release(in, ui.ButtonLeft)
+		p.setMods(in, p.down|st.mods)
+		p.modsHeld = true
 		p.down = 0
 		return true
 	case opKey, opKeys:
@@ -609,8 +654,10 @@ func (p *Player) run(st *Step, in *ui.Input) bool {
 		in.PushKey(ui.KeyEvent{Code: st.code, Mods: st.mods, Down: true})
 		return st.op == opKey || p.t+1 >= st.n
 	case opText:
-		in.AppendText(st.text)
-		return true
+		// A frame's text buffer holds ui.MaxText bytes: what does not fit (and a
+		// character that would be cut) waits for the next frame.
+		p.typed += in.AppendText(st.text[p.typed:])
+		return p.typed >= len(st.text)
 	case opCommand:
 		if !in.PushCommand(st.id) {
 			p.fail("the frame's command queue is full")

@@ -103,8 +103,9 @@ func Dispatch(h Handler, line []byte) (resp *Response) {
 	if err := dec.Decode(&req); err != nil {
 		return Fail("", ErrBadRequest, "not a request: "+err.Error())
 	}
-	if dec.More() {
-		return Fail(req.ID, ErrBadRequest, "more than one JSON value on the line; send one request per line")
+	var extra json.RawMessage
+	if err := dec.Decode(&extra); err != io.EOF { // anything after the request, a second value or junk
+		return Fail(req.ID, ErrBadRequest, "something follows the request on the line; send one JSON object per line and nothing else")
 	}
 	defer func() {
 		if p := recover(); p != nil {

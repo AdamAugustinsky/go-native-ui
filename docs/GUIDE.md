@@ -692,22 +692,33 @@ go run ./examples/notes -exit-first -v                 # startup: exec → first
 
 A coding agent, or a script, can drive and inspect the running app without screen
 recording or synthetic system events. Start a development build with
-`GNUI_INSPECT=<socket>`; the app listens on a Unix socket at that path (mode 0600, in
-a directory you own that the group and others cannot write; never TCP) and answers
-one JSON request per line. With the variable unset there is no listener, no goroutine
-and no per-frame cost, and a release build (`gnui package`, tag `gnui_release`)
-does not contain the bridge at all. It works on macOS and Linux, and on Windows
-inside the user's profile; `shot` of a live window is not supported on Linux yet.
+`GNUI_INSPECT=<socket>`; the app listens on a Unix socket at that path (never TCP)
+and answers one JSON request per line. With the variable unset there is no listener,
+no goroutine and no per-frame cost, and a release build (`gnui package`, tag
+`gnui_release`) does not contain the bridge at all.
+
+The socket must be in a directory you own and keep private: it is refused if the
+directory is writable by its group or others, has an ACL, or sits under a directory
+that others could rename it away in (every ancestor must be yours or root's, and
+closed to others unless sticky). `/tmp` itself is therefore always refused: make a
+directory of your own first (`mktemp -d` gives a `0700` one under `$TMPDIR`). The
+socket is made mode 0600 and published atomically. A shot may be written anywhere
+else you can write, but not into the socket's directory, so keep one directory for
+the socket and another for the pictures. The bridge works on macOS and Linux;
+on Windows it is off for now and says so in the log (`errors.ErrUnsupported`), and
+`shot` of a live window is not supported on Linux yet.
 
 ```sh
-GNUI_INSPECT=/tmp/notes.sock go run ./examples/notes &      # the app
-gnui inspect /tmp/notes.sock windows                        # window 1 "Notes" 1800x1200 px at 2x, frame 4
-gnui inspect /tmp/notes.sock tree -role Button              # [22] Button "Add" [disabled] (1544,1124,1640,1172) …
-gnui inspect /tmp/notes.sock do focus TextField "New note"  # a step by role and name
-gnui inspect /tmp/notes.sock do type "Water the plants"
-gnui inspect /tmp/notes.sock do click Button Add            # ok: 1 step(s) applied in 4 frame(s)
-gnui inspect /tmp/notes.sock do key cmd+shift+n
-gnui inspect /tmp/notes.sock shot ~/shots/notes.png         # the current frame, offscreen; not inside the socket's directory
+SOCK=$(mktemp -d)/notes.sock          # a private directory, and the socket in it
+OUT=$(mktemp -d)                      # and another for the shots
+GNUI_INSPECT=$SOCK go run ./examples/notes &                 # the app
+gnui inspect $SOCK windows                                   # window 1 "Notes" 1800x1200 px at 2x, frame 4
+gnui inspect $SOCK tree -role Button                         # [22] Button "Add" [disabled] (1544,1124,1640,1172) …
+gnui inspect $SOCK do focus TextField "New note"             # a step by role and name
+gnui inspect $SOCK do type "Water the plants"
+gnui inspect $SOCK do click Button Add                       # ok: 1 step(s) applied in 4 frame(s)
+gnui inspect $SOCK do key cmd+shift+n
+gnui inspect $SOCK shot $OUT/notes.png                       # the current frame, offscreen
 ```
 
 `tree` prints each node's id, role, name, value, states (`focused`, `selected`,

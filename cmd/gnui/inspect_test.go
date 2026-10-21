@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -48,6 +49,9 @@ func startFake(t *testing.T) (string, *fakeBridge) {
 	t.Cleanup(func() { os.RemoveAll(d) })
 	sock := filepath.Join(d, "s")
 	ln, err := inspectwire.Listen(sock)
+	if errors.Is(err, errors.ErrUnsupported) {
+		t.Skipf("no agent bridge here: %v", err)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}

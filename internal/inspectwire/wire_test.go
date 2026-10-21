@@ -16,6 +16,14 @@ import (
 	"gonativeui/internal/inspectwire"
 )
 
+// needSocket skips a test of the socket where the bridge has none (Windows).
+func needSocket(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("the agent bridge is not supported on Windows")
+	}
+}
+
 // shortDir is a directory of the user's with a short path (a socket path is
 // limited to about 100 bytes, which t.TempDir's names exceed on macOS).
 func shortDir(t *testing.T) string {
@@ -127,6 +135,7 @@ func TestReadLineHonoursTheLimit(t *testing.T) {
 // serve starts a listener in a fresh directory and returns its path.
 func serve(t *testing.T, h inspectwire.Handler) string {
 	t.Helper()
+	needSocket(t)
 	sock := filepath.Join(shortDir(t), "s")
 	ln, err := inspectwire.Listen(sock)
 	if err != nil {
@@ -237,7 +246,7 @@ func TestConnectionsAreCapped(t *testing.T) {
 	}
 }
 
-func TestShotPath(t *testing.T) {
+func TestOpenShotDest(t *testing.T) {
 	d := shortDir(t)
 	sockDir := filepath.Join(d, "run")
 	os.Mkdir(sockDir, 0o700)
@@ -250,9 +259,22 @@ func TestShotPath(t *testing.T) {
 		t.Logf("no symbolic links here: %v", err)
 		link = ""
 	}
-	good, err := inspectwire.ShotPath(sock, filepath.Join(out, "a.png"))
-	if err != nil || good != filepath.Join(out, "a.png") {
-		t.Errorf("a good path: %q %v", good, err)
+	good, err := inspectwire.OpenShotDest(sock, filepath.Join(out, "a.png"))
+	if err != nil || good.Path != filepath.Join(out, "a.png") {
+		t.Fatalf("a good path: %v %v", good, err)
+	}
+	if err := good.Write([]byte("png")); err != nil {
+		t.Fatal(err)
+	}
+	good.Close()
+	if b, err := os.ReadFile(filepath.Join(out, "a.png")); err != nil || string(b) != "png" {
+		t.Errorf("the file: %q %v", b, err)
+	}
+	if fi, _ := os.Stat(filepath.Join(out, "a.png")); runtime.GOOS != "windows" && fi.Mode().Perm() != 0o644 {
+		t.Errorf("the file's mode is %v", fi.Mode().Perm())
+	}
+	if ents, _ := os.ReadDir(out); len(ents) != 1 {
+		t.Errorf("a temporary file is left: %v", ents)
 	}
 	bad := map[string]string{
 		"relative":          "a.png",
@@ -262,75 +284,76 @@ func TestShotPath(t *testing.T) {
 		"by dot-dot":        filepath.Join(out, "..", "run", "a.png"),
 		"missing directory": filepath.Join(out, "nope", "a.png"),
 		"a directory":       out,
+		"dot":               filepath.Join(out, "."),
 	}
 	if link != "" {
 		bad["through a link"] = filepath.Join(link, "a.png")
 	}
+	// the same directory under another spelling of its name, where the volume
+	// does not tell the cases apart (macOS's default)
+	if _, err := os.Stat(filepath.Join(d, "RUN")); err == nil {
+		bad["case alias of the socket dir"] = filepath.Join(d, "RUN", "a.png")
+		bad["case alias, below it"] = filepath.Join(d, "Run", "sub", "a.png")
+	} else {
+		t.Log("the volume is case-sensitive: no case alias to try")
+	}
 	for name, p := range bad {
-		if got, err := inspectwire.ShotPath(sock, p); err == nil {
-			t.Errorf("%s: %q was accepted as %q", name, p, got)
+		if got, err := inspectwire.OpenShotDest(sock, p); err == nil {
+			got.Close()
+			t.Errorf("%s: %q was accepted as %q", name, p, got.Path)
 		}
 	}
 }
 
-func TestCheckDir(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		d := shortDir(t)
-		if _, err := inspectwire.CheckDir(d); err != nil {
-			t.Errorf("a directory in the profile: %v", err)
-		}
-		if _, err := inspectwire.CheckDir(filepath.Join(d, "missing")); err == nil {
-			t.Error("a missing directory was accepted")
-		}
-		return
-	}
+// The directory is held open from the check to the write: swapping it for a
+// link to the socket's directory in between does not make the write land there.
+func TestShotDestWritesToTheDirectoryItChecked(t *testing.T) {
+	needSocket(t)
 	d := shortDir(t)
-	mk := func(name string, mode os.FileMode) string {
-		p := filepath.Join(d, name)
-		if err := os.Mkdir(p, 0o700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Chmod(p, mode); err != nil {
-			t.Fatal(err)
-		}
-		return p
+	sockDir := filepath.Join(d, "run")
+	os.Mkdir(sockDir, 0o700)
+	sock := filepath.Join(sockDir, "s")
+	ln, err := inspectwire.Listen(sock)
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, mode := range []os.FileMode{0o700, 0o755, 0o750, 0o500} {
-		if _, err := inspectwire.CheckDir(mk(mode.String(), mode)); err != nil {
-			t.Errorf("mode %v refused: %v", mode, err)
-		}
+	go ln.Serve(&echo{})
+	defer ln.Close()
+	out := filepath.Join(d, "out")
+	os.Mkdir(out, 0o755)
+	dest, err := inspectwire.OpenShotDest(sock, filepath.Join(out, "s"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, mode := range []os.FileMode{0o770, 0o707, 0o777, 0o720, 0o702} {
-		_, err := inspectwire.CheckDir(mk("bad"+mode.String(), mode))
-		if err == nil || !strings.Contains(err.Error(), "writable") {
-			t.Errorf("mode %v: %v", mode, err)
-		}
+	defer dest.Close()
+	// after the check: the directory moves away and a link to the socket's takes its name
+	if err := os.Rename(out, filepath.Join(d, "moved")); err != nil {
+		t.Fatal(err)
 	}
-	f := filepath.Join(d, "file")
-	os.WriteFile(f, nil, 0o600)
-	if _, err := inspectwire.CheckDir(f); err == nil {
-		t.Error("a file was accepted as a directory")
+	if err := os.Symlink(sockDir, out); err != nil {
+		t.Skipf("no symbolic links: %v", err)
 	}
-	if _, err := inspectwire.CheckDir(filepath.Join(d, "missing")); err == nil {
-		t.Error("a missing directory was accepted")
+	if err := dest.Write([]byte("png")); err != nil {
+		t.Fatal(err)
 	}
-	if os.Geteuid() != 0 {
-		// Somebody else's directory, whatever its mode: the system's own.
-		for _, other := range []string{"/", "/usr", "/etc"} {
-			if _, err := inspectwire.CheckDir(other); err == nil || !strings.Contains(err.Error(), "not owned") {
-				t.Errorf("%s: %v", other, err)
-			}
-		}
+	if fi, err := os.Lstat(sock); err != nil || fi.Mode()&os.ModeSocket == 0 {
+		t.Fatalf("the socket was replaced: %v %v", fi, err)
+	}
+	if c, err := inspectwire.Dial(sock, time.Second); err != nil {
+		t.Errorf("the socket does not answer any more: %v", err)
+	} else {
+		c.Close()
+	}
+	if b, err := os.ReadFile(filepath.Join(d, "moved", "s")); err != nil || string(b) != "png" {
+		t.Errorf("the file went somewhere else: %q %v", b, err)
 	}
 }
 
 func TestListenRefusesAnUnsafeDirectoryAndARelativePath(t *testing.T) {
+	needSocket(t)
 	d := shortDir(t)
 	if _, err := inspectwire.Listen("s"); err == nil {
 		t.Error("a relative socket path was accepted")
-	}
-	if runtime.GOOS == "windows" {
-		return
 	}
 	os.Chmod(d, 0o777)
 	if _, err := inspectwire.Listen(filepath.Join(d, "s")); err == nil {
@@ -345,7 +368,18 @@ func TestListenRefusesAnUnsafeDirectoryAndARelativePath(t *testing.T) {
 	}
 }
 
+func TestListenIsUnsupportedOnWindows(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("windows only")
+	}
+	_, err := inspectwire.Listen(filepath.Join(shortDir(t), "s"))
+	if !errors.Is(err, errors.ErrUnsupported) || !strings.Contains(err.Error(), "Windows") {
+		t.Errorf("Listen on Windows: %v", err)
+	}
+}
+
 func TestSocketIsPrivateAndRemovedOnClose(t *testing.T) {
+	needSocket(t)
 	d := shortDir(t)
 	sock := filepath.Join(d, "s")
 	ln, err := inspectwire.Listen(sock)
@@ -356,17 +390,46 @@ func TestSocketIsPrivateAndRemovedOnClose(t *testing.T) {
 	if err != nil || fi.Mode()&os.ModeSocket == 0 {
 		t.Fatalf("no socket: %v %v", fi, err)
 	}
-	if runtime.GOOS != "windows" && fi.Mode().Perm() != 0o600 {
+	if fi.Mode().Perm() != 0o600 {
 		t.Errorf("the socket's mode is %v, want 0600", fi.Mode().Perm())
 	}
+	if ents, _ := os.ReadDir(d); len(ents) != 1 {
+		t.Errorf("the staging directory was left behind: %v", ents)
+	}
 	go ln.Serve(&echo{})
+	if c, err := inspectwire.Dial(sock, time.Second); err != nil { // the renamed socket accepts
+		t.Errorf("connecting to the published socket: %v", err)
+	} else {
+		c.Close()
+	}
 	ln.Close()
 	if _, err := os.Lstat(sock); !os.IsNotExist(err) {
 		t.Errorf("the socket file remains after Close: %v", err)
 	}
 }
 
+// Close removes the path only if it is still this socket.
+func TestCloseLeavesWhatReplacedTheSocket(t *testing.T) {
+	needSocket(t)
+	d := shortDir(t)
+	sock := filepath.Join(d, "s")
+	ln, err := inspectwire.Listen(sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go ln.Serve(&echo{})
+	os.Remove(sock)
+	if err := os.WriteFile(sock, []byte("precious"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ln.Close()
+	if b, err := os.ReadFile(sock); err != nil || string(b) != "precious" {
+		t.Errorf("a file that replaced the socket did not survive Close: %q %v", b, err)
+	}
+}
+
 func TestStaleSocketsAreReplacedAndOtherFilesAreNot(t *testing.T) {
+	needSocket(t)
 	d := shortDir(t)
 	sock := filepath.Join(d, "s")
 
@@ -378,7 +441,7 @@ func TestStaleSocketsAreReplacedAndOtherFilesAreNot(t *testing.T) {
 	l.SetUnlinkOnClose(false)
 	l.Close()
 	if fi, err := os.Lstat(sock); err != nil || fi.Mode()&os.ModeSocket == 0 {
-		t.Skipf("this system does not report a leftover socket file as a socket (%v, %v): stale sockets are not recognised here", fi, err)
+		t.Fatalf("the test needs a stale socket: %v %v", fi, err)
 	}
 	ln, err := inspectwire.Listen(sock)
 	if err != nil {
@@ -418,5 +481,42 @@ func TestStaleSocketsAreReplacedAndOtherFilesAreNot(t *testing.T) {
 		if _, err := os.Lstat(p); err != nil {
 			t.Errorf("the %s was removed: %v", name, err)
 		}
+	}
+}
+
+// A socket the user cannot connect to (no permission) is not proven stale by
+// that: it may be alive.
+func TestASocketThatRefusesPermissionIsNotRemoved(t *testing.T) {
+	needSocket(t)
+	if os.Geteuid() == 0 {
+		t.Skip("root connects whatever the mode")
+	}
+	d := shortDir(t)
+	sock := filepath.Join(d, "s")
+	live, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer live.Close()
+	go func() {
+		for {
+			c, err := live.Accept()
+			if err != nil {
+				return
+			}
+			c.Close()
+		}
+	}()
+	if err := os.Chmod(sock, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := inspectwire.Listen(sock); err == nil {
+		t.Fatal("a socket that could not be asked was taken over")
+	}
+	os.Chmod(sock, 0o600)
+	if c, err := net.Dial("unix", sock); err != nil {
+		t.Errorf("the live socket was removed: %v", err)
+	} else {
+		c.Close()
 	}
 }

@@ -10,7 +10,6 @@ import (
 	"image/png"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -61,7 +60,11 @@ func (a *App) inspectStart() func() {
 	}
 	in, err := a.startInspector(path)
 	if err != nil {
-		slog.Error("inspect: the agent bridge is off", "err", err)
+		if errors.Is(err, errors.ErrUnsupported) {
+			slog.Warn("inspect: GNUI_INSPECT is set, but the agent bridge is off on this system", "err", err)
+		} else {
+			slog.Error("inspect: the agent bridge is off", "err", err)
+		}
 		return noInspect
 	}
 	slog.Info("inspect: the agent bridge listens", "socket", in.ln.Path())
@@ -113,20 +116,33 @@ func (in *inspector) stopNow() {
 	in.ln.Close()
 	<-in.done
 	in.root.inspDrain = nil
-	for _, s := range in.active {
-		s.detach()
+	in.mu.Lock()
+	q := in.q
+	in.q = nil
+	in.mu.Unlock()
+	for _, j := range q {
+		j.closeShot()
 	}
-	in.active = nil
+	for _, s := range append([]*stepper(nil), in.active...) {
+		s.abort()
+	}
 }
 
 // inspJob is a request on its way to the main thread.
 type inspJob struct {
 	req       *inspectwire.Request
 	steps     []script.Step
-	shotPath  string
+	shot      *inspectwire.ShotDest // where a shot goes: the directory, held open since the request was checked
 	wait      time.Duration
 	done      chan *inspectwire.Response // buffered: the main thread never waits for a handler
 	cancelled atomic.Bool                // the handler gave up: do not start it, stop it
+}
+
+// closeShot closes the shot's directory, if the job has one.
+func (j *inspJob) closeShot() {
+	if j.shot != nil {
+		j.shot.Close()
+	}
 }
 
 // Handle implements inspectwire.Handler: it checks what it can without the
@@ -152,17 +168,18 @@ func (in *inspector) Handle(req *inspectwire.Request) *inspectwire.Response {
 			job.wait = time.Duration(req.TimeoutMs) * time.Millisecond
 		}
 	case inspectwire.OpShot:
-		p, err := inspectwire.ShotPath(in.ln.Path(), req.Path)
+		d, err := inspectwire.OpenShotDest(in.ln.Path(), req.Path)
 		if err != nil {
 			return inspectwire.Fail(req.ID, inspectwire.ErrBadPath, "shot: "+err.Error())
 		}
-		job.shotPath = p
+		job.shot = d
 	default:
 		return inspectwire.Fail(req.ID, inspectwire.ErrUnknownOp, fmt.Sprintf("unknown op %q; use windows, tree, do or shot", req.Op))
 	}
 	in.mu.Lock()
 	if in.stopped {
 		in.mu.Unlock()
+		job.closeShot()
 		return inspectwire.Fail(req.ID, inspectwire.ErrShuttingDown, "the app is ending")
 	}
 	in.q = append(in.q, job)
@@ -197,6 +214,7 @@ func (in *inspector) drain() {
 	in.mu.Unlock()
 	for _, j := range q {
 		if j.cancelled.Load() {
+			j.closeShot()
 			continue
 		}
 		if r := in.run(j); r != nil { // a "do" answers later, from its stepper
@@ -221,7 +239,8 @@ func (in *inspector) run(j *inspJob) (resp *inspectwire.Response) {
 	case inspectwire.OpTree:
 		return in.treeResp(req)
 	case inspectwire.OpShot:
-		return in.shotResp(req, j.shotPath)
+		defer j.closeShot()
+		return in.shotResp(req, j.shot)
 	}
 	return in.startDo(j)
 }
@@ -351,7 +370,7 @@ func windowTree(w *App, sel treeSel) inspectwire.Tree {
 }
 
 // shotResp renders the window's last frame offscreen into a PNG at path.
-func (in *inspector) shotResp(req *inspectwire.Request, path string) *inspectwire.Response {
+func (in *inspector) shotResp(req *inspectwire.Request, dest *inspectwire.ShotDest) *inspectwire.Response {
 	w, e := in.pick(req.Window)
 	if e != nil {
 		return &inspectwire.Response{Error: e}
@@ -367,39 +386,14 @@ func (in *inspector) shotResp(req *inspectwire.Request, path string) *inspectwir
 	}
 	img := image.NewRGBA(image.Rect(0, 0, pw, ph))
 	w.R.RenderToRGBA(pw, ph, w.cfg.Clear, &w.list, img.Pix)
-	if err := writePNG(path, img); err != nil {
-		return inspectwire.Fail(req.ID, inspectwire.ErrShotFailed, err.Error())
-	}
-	return &inspectwire.Response{OK: true, Shot: &inspectwire.Shot{Path: path, Width: pw, Height: ph, Scale: w.EffectiveScale()}}
-}
-
-// writePNG writes img to path through a temporary file in the same directory
-// renamed over it, so that a symbolic link at path is replaced, not followed,
-// and a reader never sees half a file.
-func writePNG(path string, img image.Image) error {
 	var buf bytes.Buffer
 	if err := png.Encode(&buf, img); err != nil {
-		return err
+		return inspectwire.Fail(req.ID, inspectwire.ErrShotFailed, err.Error())
 	}
-	f, err := os.CreateTemp(filepath.Dir(path), ".gnui-shot-*.png")
-	if err != nil {
-		return err
+	if err := dest.Write(buf.Bytes()); err != nil {
+		return inspectwire.Fail(req.ID, inspectwire.ErrShotFailed, err.Error())
 	}
-	tmp := f.Name()
-	_, err = f.Write(buf.Bytes())
-	if cerr := f.Close(); err == nil {
-		err = cerr
-	}
-	if err == nil {
-		err = os.Chmod(tmp, 0o644)
-	}
-	if err == nil {
-		err = os.Rename(tmp, path)
-	}
-	if err != nil {
-		os.Remove(tmp)
-	}
-	return err
+	return &inspectwire.Response{OK: true, Shot: &inspectwire.Shot{Path: dest.Path, Width: pw, Height: ph, Scale: w.EffectiveScale()}}
 }
 
 // buildSteps turns the steps of a "do" request into the player's.
@@ -524,7 +518,8 @@ type stepper struct {
 	end   int64
 	begun bool
 
-	focused, inside bool // the window's input state before the steps, restored after
+	focused, inside bool    // the window's input state before the steps, restored after
+	mods            ui.Mods // the modifiers held before them
 	finished        bool
 }
 
@@ -552,14 +547,17 @@ func (in *inspector) startDo(j *inspJob) *inspectwire.Response {
 func (s *stepper) Script(frame int, in *ui.Input) bool {
 	if !s.begun {
 		s.begun = true
-		s.focused, s.inside = in.Focused, in.Inside
+		s.focused, s.inside, s.mods = in.Focused, in.Inside, in.Mods
 	}
 	switch {
 	case s.job.cancelled.Load():
-		s.finish(nil, inspectwire.ErrTimeout, "the request was given up on")
+		s.finish(in, inspectwire.ErrTimeout, "the request was given up on")
 	case platform.Now() > s.end:
-		s.finish(nil, inspectwire.ErrTimeout, fmt.Sprintf("the steps did not finish in %v (step %d of %d was running); a hidden or covered window draws no frames", s.job.wait, s.p.Index()+1, s.n))
+		s.finish(in, inspectwire.ErrTimeout, fmt.Sprintf("the steps did not finish in %v (step %d of %d was running); a hidden or covered window draws no frames", s.job.wait, s.p.Index()+1, s.n))
 	case s.p.Done() && s.p.Err() == nil:
+		// The player is not called again: what its last step left held (a
+		// modifier for the frame that follows it) is let go here.
+		s.unwind(in)
 		if s.tail--; s.tail < 0 {
 			s.finish(in, "", "")
 		}
@@ -579,8 +577,8 @@ func (s *stepper) finish(in *ui.Input, code, msg string) {
 		return
 	}
 	s.finished = true
-	if in != nil { // the player set the pointer inside and the window focused; the window's own state returns
-		in.Focused, in.Inside = s.focused, s.inside
+	if in != nil {
+		s.unwind(in)
 	}
 	s.detach()
 	r := &inspectwire.Response{ID: s.job.req.ID, OK: code == "", Steps: s.n, Frames: s.frame}
@@ -593,6 +591,36 @@ func (s *stepper) finish(in *ui.Input, code, msg string) {
 		r.Error, r.Steps = e, 0
 	}
 	s.job.done <- r
+}
+
+// unwind gives the window's input back: a button the steps pressed and have not
+// released is cancelled, the modifiers they set go back to what they were, and
+// the pointer is no longer inside and the window no longer focused, unless it
+// was before (a live window's focus is read from the system again). Input that
+// came from elsewhere since is not undone (Player.Unwind).
+func (s *stepper) unwind(in *ui.Input) {
+	s.p.Unwind(in, s.mods)
+	in.Inside = s.inside
+	in.Focused = s.focused
+	if s.w.Win != nil {
+		in.Focused = s.w.Win.Focused()
+	}
+}
+
+// abort takes the stepper off a window that goes on without it (the bridge
+// stops): whatever the steps hold in the window's input is let go, outside a
+// frame, and the request is answered.
+func (s *stepper) abort() {
+	if s.finished {
+		return
+	}
+	s.finished = true
+	if s.w.UI != nil {
+		s.unwind(&s.w.tr.in)
+		s.w.p.invalidate()
+	}
+	s.detach()
+	s.job.done <- inspectwire.Fail(s.job.req.ID, inspectwire.ErrShuttingDown, "the app is ending")
 }
 
 // detach takes the stepper off the window.

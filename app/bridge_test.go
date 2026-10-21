@@ -3,6 +3,7 @@
 package app_test
 
 import (
+	"errors"
 	"image/png"
 	"os"
 	"path/filepath"
@@ -13,6 +14,9 @@ import (
 	"gonativeui/app"
 	"gonativeui/examples/notes/notes"
 	"gonativeui/internal/inspectwire"
+	"gonativeui/theme/rex"
+	"gonativeui/ui"
+	"gonativeui/widget"
 )
 
 // bridgeRig is the notes example in an offscreen window with the agent bridge
@@ -35,7 +39,13 @@ func newBridgeRig(t *testing.T) *bridgeRig {
 	}
 	n.Traffic = true // an offscreen window has no system traffic lights
 	cfg := notes.Config()
-	o, err := app.NewOffscreen(cfg, int(cfg.Width), int(cfg.Height), 1, n)
+	return newBridgeRigFor(t, n, cfg)
+}
+
+// newBridgeRigFor is newBridgeRig for another application.
+func newBridgeRigFor(t *testing.T, b app.Builder, cfg app.Config) *bridgeRig {
+	t.Helper()
+	o, err := app.NewOffscreen(cfg, int(cfg.Width), int(cfg.Height), 1, b)
 	if err != nil {
 		if os.Getenv("CI") != "" {
 			t.Fatalf("offscreen rendering on CI: %v", err)
@@ -56,6 +66,9 @@ func newBridgeRig(t *testing.T) *bridgeRig {
 		o.Frame()
 	}
 	stop, err := o.StartBridge(r.sock)
+	if errors.Is(err, errors.ErrUnsupported) {
+		t.Skipf("no agent bridge here: %v", err)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -288,6 +301,23 @@ func TestBridgeErrorsAreStructured(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(r.dir, "shot.png")); err == nil {
 		t.Error("a shot was written into the socket's directory")
 	}
+	// the socket's directory under another spelling of its name (macOS's volumes
+	// do not tell the cases apart), and through a link
+	if alias := filepath.Join(filepath.Dir(r.dir), strings.ToUpper(filepath.Base(r.dir))); alias != r.dir {
+		if _, err := os.Stat(alias); err == nil {
+			if c, _ := code(inspectwire.Request{Op: "shot", Path: filepath.Join(alias, "shot.png")}); c != inspectwire.ErrBadPath {
+				t.Errorf("a case alias of the socket's directory: %s, want bad_path", c)
+			}
+		} else {
+			t.Log("the volume is case-sensitive: no alias to try")
+		}
+	}
+	link := filepath.Join(out, "link")
+	if err := os.Symlink(r.dir, link); err == nil {
+		if c, _ := code(inspectwire.Request{Op: "shot", Path: filepath.Join(link, "shot.png")}); c != inspectwire.ErrBadPath {
+			t.Errorf("a link to the socket's directory: %s, want bad_path", c)
+		}
+	}
 }
 
 // A shot replaces a file, or a link at its path, without following the link.
@@ -333,6 +363,9 @@ func TestIdleBridgeDrawsNothingAndAllocatesNothing(t *testing.T) {
 	}
 	defer os.RemoveAll(dir)
 	stop, err := o.StartBridge(filepath.Join(dir, "s"))
+	if errors.Is(err, errors.ErrUnsupported) {
+		t.Skipf("no agent bridge here: %v", err)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -360,5 +393,54 @@ func TestIdleBridgeDrawsNothingAndAllocatesNothing(t *testing.T) {
 	}
 	if a := testing.AllocsPerRun(100, func() { o.PumpBridge(); o.Frame() }); a != 0 {
 		t.Errorf("a steady frame with the bridge on allocates %v times", a)
+	}
+}
+
+// bigField is an application with one text field that holds a lot.
+type bigField struct {
+	k   *widget.Kit
+	buf ui.TextBuffer
+}
+
+func (b *bigField) Init(a *app.App) error {
+	b.k = widget.NewKit(a.UI, a.Text, rex.Theme())
+	b.buf.Reserve(16384)
+	return nil
+}
+
+func (b *bigField) Build(c *ui.Context) {
+	b.k.Begin(c)
+	b.k.BeginWindow()
+	b.k.TextField("Big", &b.buf, "")
+	b.k.EndWindow()
+	b.k.End()
+}
+
+// Typing is not cut at one frame's text buffer (ui.MaxText, 1024 bytes) and
+// reported as done: all of it arrives, over as many frames as it takes, and
+// never cut inside a character.
+func TestTypingLongerThanOneFrameArrivesInFull(t *testing.T) {
+	for name, text := range map[string]string{
+		"ascii":   strings.Repeat("0123456789", 200),
+		"astride": strings.Repeat("a", ui.MaxText-1) + "日本語" + strings.Repeat("é", 600),
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newBridgeRigFor(t, &bigField{}, app.Config{Title: "big", Width: 400, Height: 200, Clear: [4]float32{1, 1, 1, 1}})
+			resp := r.ok(inspectwire.Request{Op: "do", Steps: []inspectwire.Step{
+				{Action: "focus", Role: "TextField", Name: "Big"},
+				{Action: "type", Text: text},
+			}})
+			if resp.Frames < 5 {
+				t.Errorf("%d bytes typed in %d frames", len(text), resp.Frames)
+			}
+			f := r.find("TextField", "Big")
+			if len(f) != 1 || f[0].Value != text {
+				got := ""
+				if len(f) == 1 {
+					got = f[0].Value
+				}
+				t.Fatalf("the field holds %d bytes of the %d typed", len(got), len(text))
+			}
+		})
 	}
 }
