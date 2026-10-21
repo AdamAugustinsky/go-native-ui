@@ -9,12 +9,15 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"gonativeui/internal/testlock"
 )
 
 // The clipboard round trip through the real general pasteboard. It restores
 // what was on the clipboard, and skips where the pasteboard cannot be
 // reached (a sandboxed or locked session, a headless runner).
 func TestClipboardRoundTrip(t *testing.T) {
+	testlock.Hold(t, "pasteboard") // the general pasteboard is the system's: other tests write it too
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	orig := Clipboard()
@@ -100,6 +103,7 @@ func (r *pasteRig) paste(tag uint64) (Event, string) {
 }
 
 func TestSetClipboardTextAndRequestPaste(t *testing.T) {
+	testlock.Hold(t, "pasteboard")
 	r := newPasteRig(t)
 	for _, s := range []string{
 		"h\u00e9llo w\u00f6rld\n\u65e5\u672c\u8a9e \U0001F468\u200D\U0001F469\u200D\U0001F467\tend",
@@ -128,6 +132,7 @@ func TestSetClipboardTextAndRequestPaste(t *testing.T) {
 
 // The text goes to and comes from other processes, not just this one.
 func TestClipboardWithOtherProcesses(t *testing.T) {
+	testlock.Hold(t, "pasteboard")
 	r := newPasteRig(t)
 	want := "from gonativeui \u00e9\u65e5\n2nd line"
 	SetClipboardText([]byte(want))
@@ -150,6 +155,7 @@ func TestClipboardWithOtherProcesses(t *testing.T) {
 }
 
 func TestRequestPasteNewerReplacesPending(t *testing.T) {
+	testlock.Hold(t, "pasteboard")
 	r := newPasteRig(t)
 	q := &r.w.q
 	SetClipboardText([]byte("one"))
@@ -187,6 +193,7 @@ func TestRequestPasteNewerReplacesPending(t *testing.T) {
 // into the Go heap (17 MiB would otherwise be allocated on the main thread
 // just to be thrown away).
 func TestRequestPasteOverMaxFails(t *testing.T) {
+	testlock.Hold(t, "pasteboard")
 	r := newPasteRig(t)
 	big := make([]byte, MaxPaste+1<<20)
 	for i := range big {
@@ -218,6 +225,7 @@ func TestRequestPasteOverMaxFails(t *testing.T) {
 // Copy and paste allocate nothing on the Go heap once the buffers are warm,
 // with valid and with invalid text.
 func TestClipboardZeroAllocs(t *testing.T) {
+	testlock.Hold(t, "pasteboard")
 	r := newPasteRig(t)
 	valid := []byte(strings.Repeat("h\u00e9llo \u65e5\u672c ", 400))
 	invalid := append([]byte("bad \xff\xfe bytes "), valid...)

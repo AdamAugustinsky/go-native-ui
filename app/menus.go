@@ -223,7 +223,7 @@ func nativeMenuSpec(m *menu.Model) platform.MenuSpec {
 	edit := -1
 	if !hasEdit {
 		edit = add(platform.Menu{Title: "Edit", Items: []platform.MenuItem{act(platform.MenuUndo), act(platform.MenuRedo), sep,
-			act(platform.MenuCut), act(platform.MenuCopy), act(platform.MenuPaste), act(platform.MenuDelete), act(platform.MenuSelectAll)}})
+			act(platform.MenuCut), act(platform.MenuCopy), act(platform.MenuPaste), act(platform.MenuPasteAndMatchStyle), act(platform.MenuDelete), act(platform.MenuSelectAll)}})
 	}
 	for k, bi := range bar {
 		s.Bar = append(s.Bar, bi)
@@ -325,6 +325,8 @@ func commandItem(cmd *menu.Command) platform.MenuItem {
 		it.Action = platform.MenuCopy
 	case menu.RolePaste:
 		it.Action = platform.MenuPaste
+	case menu.RolePasteAndMatchStyle:
+		it.Action = platform.MenuPasteAndMatchStyle
 	case menu.RoleDelete:
 		it.Action = platform.MenuDelete
 	case menu.RoleSelectAll:
@@ -400,7 +402,7 @@ func standardEdit(a platform.MenuAction) ui.EditAction {
 		return ui.EditCut
 	case platform.MenuCopy:
 		return ui.EditCopy
-	case platform.MenuPaste:
+	case platform.MenuPaste, platform.MenuPasteAndMatchStyle:
 		return ui.EditPaste
 	case platform.MenuDelete:
 		return ui.EditDelete

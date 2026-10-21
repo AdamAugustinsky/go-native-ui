@@ -39,6 +39,12 @@ func (e *Editor) Replace(TextRange, []byte, TextRange) error { return ErrNoHosts
 // SetSpans styles ranges of the text.
 func (e *Editor) SetSpans([]TextSpan) error { return ErrNoHosts }
 
+// SetOptions changes the editor's options.
+func (e *Editor) SetOptions(EditorOptions) {}
+
+// SetPlaceholder changes the placeholder.
+func (e *Editor) SetPlaceholder(string) {}
+
 // SetAutocorrect turns automatic spelling correction on or off.
 func (e *Editor) SetAutocorrect(bool) {}
 

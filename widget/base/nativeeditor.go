@@ -123,6 +123,14 @@ type NativeEditorSignal struct {
 	// PastedImage: a paste brought an image, which the app takes from the
 	// clipboard; nothing was inserted.
 	PastedImage bool
+	// PastedFiles: a paste brought files (a copy in the Finder), whose paths
+	// the app takes from the clipboard (RequestPasteKinds with WantFiles);
+	// nothing was inserted, not even their names.
+	PastedFiles bool
+	// EdgeUp and EdgeDown: with the editor's edge arrows on
+	// (SetEdgeArrows), Up went down on the first line or in an empty editor,
+	// Down on the last line.
+	EdgeUp, EdgeDown bool
 	// Focused: the text view holds the keyboard focus.
 	Focused bool
 }
@@ -164,6 +172,9 @@ func (k *Kit) NativeEditor(ed *NativeEditor, label string) NativeEditorSignal {
 		Cancelled:     s&platform.EditorCancelled != 0,
 		HeightChanged: s&platform.EditorHeightChanged != 0,
 		PastedImage:   s&platform.EditorPastedImage != 0,
+		PastedFiles:   s&platform.EditorPastedFiles != 0,
+		EdgeUp:        s&platform.EditorEdgeUp != 0,
+		EdgeDown:      s&platform.EditorEdgeDown != 0,
 	}
 	if ed.Editor != nil {
 		sig.Focused = ed.Focused()

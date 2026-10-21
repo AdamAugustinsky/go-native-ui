@@ -100,6 +100,10 @@ type ComposerState struct {
 	// left button went down on the list.
 	frame, pressFrame uint32
 	made              ui.TextBuffer // Replace's scratch: the text it would make
+	// edges: SetEdgeArrows; edgeUp and edgeDown are what the drawn field's
+	// Up and Down did in the frame being built
+	edges            bool
+	edgeUp, edgeDown bool
 }
 
 // pendingKey is a completion key of the hosted editor not processed yet.
@@ -267,6 +271,40 @@ func (s *ComposerState) SetSpans(spans []platform.TextSpan) error {
 	return nil
 }
 
+// SetPlaceholder changes the placeholder, which shows while the text is
+// empty.
+func (s *ComposerState) SetPlaceholder(p string) {
+	s.hint = p
+	if s.ed != nil && s.ed.Editor != nil {
+		s.ed.SetPlaceholder(p)
+	}
+}
+
+// SetEnter changes the Enter policy (ComposerSetup.Enter). The drawn field is
+// one line and always sends with Enter.
+func (s *ComposerState) SetEnter(p platform.EnterPolicy) {
+	s.enter = p
+	if s.ed != nil && s.ed.Editor != nil {
+		o := s.ed.Options()
+		o.Enter = p
+		s.ed.SetOptions(o)
+	}
+}
+
+// SetEdgeArrows turns the edge arrows on or off (off at first): with them
+// on, Up with the caret on the first line of the text or in an empty
+// composer, and Down with it on the last line, are reported as
+// ComposerSignal.EdgeUp and EdgeDown (Up edits the last message). The caret
+// still moves as the key moves it; a selection, a completion list or an input
+// method's composition keeps the keys. The drawn field is one line: each Up
+// and Down without a selection is at an edge.
+func (s *ComposerState) SetEdgeArrows(on bool) {
+	s.edges = on
+	if s.ed != nil && s.ed.Editor != nil {
+		s.ed.SetEdgeArrows(on)
+	}
+}
+
 // Focus gives the composer the keyboard. A hosted editor takes it now; the
 // drawn field at the next frame.
 func (s *ComposerState) Focus(k *base.Kit) {
@@ -304,6 +342,14 @@ type ComposerOpts struct {
 	// (arrow.up) with Kit.AddIcon.
 	SendIcon    icon.ID
 	HasSendIcon bool
+
+	// Accessory, when set, builds the control at the end of the text's last
+	// line in place of the send button: the app's own (the microphone of an
+	// empty composer), a button as high as the send button
+	// (ComposerLook.SendSize points), whose signals are its own. Enter
+	// still sends by the Enter policy. Keep the func (a method value made
+	// once), so that building it allocates nothing.
+	Accessory func(k *base.Kit)
 
 	// Completion is the state of the completion list the app shows, nil
 	// while there is none; Items are its rows. While it shows, the composer
@@ -344,6 +390,15 @@ type ComposerSignal struct {
 	// PastedImage: a paste brought an image, which the app takes from the
 	// clipboard; nothing was inserted (hosted editor only).
 	PastedImage bool
+	// PastedFiles: a paste brought files (a copy in the Finder), whose paths
+	// the app takes from the clipboard (Window.RequestPasteKinds with
+	// platform.WantFiles) and makes attachments of; nothing was inserted, not
+	// even their names (hosted editor only).
+	PastedFiles bool
+	// EdgeUp and EdgeDown: with the edge arrows on (SetEdgeArrows), Up went
+	// down on the text's first line or in an empty composer, Down on its last
+	// line.
+	EdgeUp, EdgeDown bool
 	// HeightChanged: the text grew or shrank a line, and the field with it.
 	HeightChanged bool
 	// Removed is the attachment whose remove button was pressed, -1 for none.
@@ -532,6 +587,7 @@ func Composer(k *base.Kit, label string, st *ComposerState, o ComposerOpts) Comp
 		sig.Composing = ns.Composing || marked // the editor's state, not the one frame it said so in
 		sig.Changed, sig.Selected = ns.Changed, ns.Selected
 		sig.Cancelled, sig.PastedImage, sig.HeightChanged = ns.Cancelled, ns.PastedImage, ns.HeightChanged
+		sig.PastedFiles, sig.EdgeUp, sig.EdgeDown = ns.PastedFiles, ns.EdgeUp, ns.EdgeDown
 		sig.Focused = ns.Focused
 		in := c.Input()
 		if in.Pressed[ui.ButtonLeft] && !notKey && inside(in.MouseX, in.MouseY, st.list) {
@@ -573,7 +629,9 @@ func Composer(k *base.Kit, label string, st *ComposerState, o ComposerOpts) Comp
 		sig.Editor = composerStatic(k, st, rc)
 		ringVisual = base.Visual{Inactive: inactive, Disabled: true}
 	default:
+		st.edgeUp, st.edgeDown = false, false
 		sig.Editor, drawn, ti = composerField(k, st, label, look, cc)
+		sig.EdgeUp, sig.EdgeDown = st.edgeUp, st.edgeDown
 		sig.Changed, sig.Focused = drawn.Changed, drawn.Focused
 		sig.Composing = k.Composing(drawn)
 		sig.Cancelled = drawn.Cancelled
@@ -590,7 +648,12 @@ func Composer(k *base.Kit, label string, st *ComposerState, o ComposerOpts) Comp
 	text := st.Text()
 	canSend := !disabled && !o.Sending && (hasContent(text) || attached)
 	k.Force(look & base.LookInactive)
-	pressed := composerSend(k, o, rc, canSend)
+	var pressed bool
+	if o.Accessory != nil {
+		o.Accessory(k)
+	} else {
+		pressed = composerSend(k, o, rc, canSend)
+	}
 	k.EndRow()
 	if !disabled && c.Signal(field).Clicked && !pressed && !sig.Focused {
 		st.Focus(k) // a press on the field's padding puts the caret in the text
@@ -669,7 +732,7 @@ func Composer(k *base.Kit, label string, st *ComposerState, o ComposerOpts) Comp
 		if want != st.ed.CompletionActive() {
 			st.ed.SetCompletionActive(want)
 		}
-		if sig.Changed || sig.Selected || sig.Cancelled || sig.HeightChanged || sig.PastedImage || submit {
+		if sig.Changed || sig.Selected || sig.Cancelled || sig.HeightChanged || sig.PastedImage || sig.PastedFiles || sig.EdgeUp || sig.EdgeDown || submit {
 			c.RequestFrame() // what the app does with these is drawn in the next frame
 		}
 	}
@@ -876,8 +939,12 @@ func composerField(k *base.Kit, st *ComposerState, label string, look base.Look,
 	c.NextPadding(padL, 0, padL, 0)
 	c.NextFont(font)
 	c.NextTextColor(tc)
-	if cc != nil && !ti.Disabled {
+	switch {
+	case ti.Disabled:
+	case cc != nil:
 		c.NextFieldCommander(cc, "") // the list's keys, as the hosted editor's are offered
+	case st.edges:
+		c.NextFieldCommander((*composerEdges)(st), "")
 	}
 	res := k.TextInput(&ti, &st.buf, ui.RoleTextField, false)
 	if st.buf.Len() == 0 && !k.Composing(res) && st.hint != "" {
@@ -893,6 +960,25 @@ func composerField(k *base.Kit, st *ComposerState, label string, look base.Look,
 	}
 	k.EndTextInput(&ti)
 	return ti.Wrap, res, ti
+}
+
+// composerEdges notes the drawn field's Up and Down for the edge arrows and
+// leaves them to the field: it is one line, so each is at an edge unless it
+// collapses a selection.
+type composerEdges ComposerState
+
+// FieldCommand implements ui.FieldCommander.
+func (e *composerEdges) FieldCommand(cmd ui.FieldCommand, _ rune) bool {
+	if e.buf.HasSelection() {
+		return false
+	}
+	switch cmd {
+	case ui.FieldMoveUp:
+		e.edgeUp = true
+	case ui.FieldMoveDown:
+		e.edgeDown = true
+	}
+	return false
 }
 
 // composerStatic draws the text of a disabled hosted composer, which is not

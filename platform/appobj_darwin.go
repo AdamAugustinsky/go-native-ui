@@ -286,7 +286,8 @@ func registerAppDelegate() {
 			}
 		}
 	})
-	d.Method(objc.Sel("validateMenuItem:"), "c@:@", dockValidate)
+	d.Method(objc.Sel("validateMenuItem:"), "c@:@", appValidate)
+	registerAssumedEdit(d)
 	appDelegateDef = d
 	appDelegateClass = d.Register()
 }
@@ -923,9 +924,18 @@ func retargetMenu(m, target objc.ID, action objc.SEL, depth int) {
 	}
 }
 
-// dockValidate is the delegate's validateMenuItem: for the Dock menu's
-// commands (the delegate is their target): the state SetDockMenu was given
-// enables and checks them.
+// appValidate is the delegate's validateMenuItem:: an edit item that reached
+// the delegate (assumedEditValid), else a Dock menu command.
+func appValidate(c *ffi.CB) {
+	if v, ok := assumedEditValid(objc.ID(c.Int(2))); ok {
+		c.RetBool(v)
+		return
+	}
+	dockValidate(c)
+}
+
+// dockValidate validates the Dock menu's commands (the delegate is their
+// target): the state SetDockMenu was given enables and checks them.
 func dockValidate(c *ffi.CB) {
 	item := objc.ID(c.Int(2))
 	if appObj.dockState == nil || item == 0 {

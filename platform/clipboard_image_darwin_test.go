@@ -16,6 +16,7 @@ import (
 	"unsafe"
 
 	"gonativeui/internal/objc"
+	"gonativeui/internal/testlock"
 )
 
 // pbTypes returns the type names on the general pasteboard.
@@ -127,6 +128,7 @@ func (r *pasteRig) request(tag uint64, kinds PasteKinds) Event {
 }
 
 func TestClipboardImageRoundTrip(t *testing.T) {
+	testlock.Hold(t, "pasteboard") // the general pasteboard is the system's: other tests write it too
 	r := newPasteRig(t)
 	src, _ := testPNG(t, 40, 30)
 	if err := SetClipboardImage(src); err != nil {
@@ -163,6 +165,7 @@ func TestClipboardImageRoundTrip(t *testing.T) {
 }
 
 func TestClipboardConcealed(t *testing.T) {
+	testlock.Hold(t, "pasteboard")
 	r := newPasteRig(t)
 	_ = r
 	has := func(ts []string) (c, tr bool) {
@@ -194,6 +197,7 @@ func TestClipboardConcealed(t *testing.T) {
 }
 
 func TestPasteFilesFromPasteboard(t *testing.T) {
+	testlock.Hold(t, "pasteboard")
 	r := newPasteRig(t)
 	dir := t.TempDir()
 	a, b := filepath.Join(dir, "a file.txt"), filepath.Join(dir, "b\u00e9.png")
@@ -235,6 +239,7 @@ func TestPasteFilesFromPasteboard(t *testing.T) {
 }
 
 func TestPasteTIFFConvertedOnWorker(t *testing.T) {
+	testlock.Hold(t, "pasteboard")
 	r := newPasteRig(t)
 	const w, h = 16, 9
 	px := make([]byte, 3*w*h)
@@ -283,6 +288,7 @@ func TestPasteTIFFConvertedOnWorker(t *testing.T) {
 }
 
 func TestPasteTIFFRefusals(t *testing.T) {
+	testlock.Hold(t, "pasteboard")
 	r := newPasteRig(t)
 	// A small file that declares 100 million pixels is not decoded.
 	pbPutData("public.tiff", tiffRGB(10000, 10000, make([]byte, 30)))
@@ -316,6 +322,7 @@ func TestPasteTIFFRefusals(t *testing.T) {
 // A PNG over MaxPaste on the pasteboard is refused by its size; none of it is
 // copied into the Go heap.
 func TestPasteImageOverMaxIsRefused(t *testing.T) {
+	testlock.Hold(t, "pasteboard")
 	r := newPasteRig(t)
 	big := make([]byte, MaxPaste+1<<20)
 	copy(big, pngSig[:])
@@ -341,6 +348,7 @@ func TestPasteImageOverMaxIsRefused(t *testing.T) {
 
 // The paste poll allocates nothing in steady state for any kind.
 func TestPasteKindsZeroAllocs(t *testing.T) {
+	testlock.Hold(t, "pasteboard")
 	r := newPasteRig(t)
 	dir := t.TempDir()
 	f := filepath.Join(dir, "f.txt")
