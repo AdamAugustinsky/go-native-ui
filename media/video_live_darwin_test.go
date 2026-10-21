@@ -123,12 +123,38 @@ func (b *videoWin) tooFew(t *testing.T, l *widgettest.LiveApp, since int64, msg 
 
 var (
 	later struct {
-		once          sync.Once
-		target        objc.ID
-		perform, play objc.SEL
+		once              sync.Once
+		target            objc.ID
+		perform, play, do objc.SEL
 	}
 	laterVideo atomic.Pointer[Video]
+	laterDo    atomic.Pointer[func()]
 )
+
+// defineLater defines the class of playLater and atRunLoop, once per process
+// (-count).
+func defineLater(l *widgettest.LiveApp) {
+	l.Do(func(*app.App) {
+		later.once.Do(func() {
+			later.play, later.do = objc.Sel("gnuiTestPlay:"), objc.Sel("gnuiTestDo:")
+			later.perform = objc.Sel("performSelectorOnMainThread:withObject:waitUntilDone:")
+			d := objc.Define("GnuiTestVideoPlay", objc.Cls("NSObject"), nil)
+			d.Method(later.play, "v@:@", func(*ffi.CB) { laterVideo.Load().Play() })
+			d.Method(later.do, "v@:@", func(*ffi.CB) { (*laterDo.Load())() })
+			later.target = objc.Send(objc.Send(d.Register(), objc.Sel("alloc")), objc.Sel("init"))
+		})
+	})
+}
+
+// atRunLoop runs f on the main thread from its run loop and waits for it:
+// unlike a Do, it asks for no frame (a hidden window's could block in
+// nextDrawable). defineLater must have run.
+func atRunLoop(f func()) {
+	laterDo.Store(&f)
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	new(ffi.Frame).Arg(uintptr(later.target)).Arg(uintptr(later.perform)).Arg(uintptr(later.do)).Arg(0).ArgBool(true).Call(objc.MsgSend)
+}
 
 // playLater makes v play from the main run loop, outside any frame, event
 // or Do (each of which ends by drawing): performSelectorOnMainThread: of a
@@ -136,14 +162,7 @@ var (
 // wake can then start the frames.
 func playLater(l *widgettest.LiveApp, v *Video) {
 	laterVideo.Store(v)
-	l.Do(func(*app.App) {
-		later.once.Do(func() { // the class once per process (-count)
-			later.play, later.perform = objc.Sel("gnuiTestPlay:"), objc.Sel("performSelectorOnMainThread:withObject:waitUntilDone:")
-			d := objc.Define("GnuiTestVideoPlay", objc.Cls("NSObject"), nil)
-			d.Method(later.play, "v@:@", func(*ffi.CB) { laterVideo.Load().Play() })
-			later.target = objc.Send(objc.Send(d.Register(), objc.Sel("alloc")), objc.Sel("init"))
-		})
-	})
+	defineLater(l)
 	target, perform, play := later.target, later.perform, later.play
 	time.Sleep(300 * time.Millisecond) // the frame Do asked for has come and gone
 	runtime.LockOSThread()
@@ -219,8 +238,15 @@ func TestVideoInWindow(t *testing.T) {
 	} else if n < 12 && (os.Getenv("CI") == "" || !b.resumes(5*time.Second)) {
 		b.tooFew(t, l, since, fmt.Sprintf("playing: %d frames in a second, want about 30", n))
 	}
-	if !v.Playing() || v.Position() < 300*time.Millisecond {
-		t.Errorf("playing: %v at %v", v.Playing(), v.Position())
+	// It plays at 1× (round its 3 s loop), read on the main thread.
+	var p0, p1 time.Duration
+	var t0, t1 time.Time
+	var playing bool
+	atRunLoop(func() { p0, t0 = v.Position(), time.Now() })
+	time.Sleep(400 * time.Millisecond)
+	atRunLoop(func() { p1, t1, playing = v.Position(), time.Now(), v.Playing() })
+	if d, el := (p1-p0+v.Duration())%v.Duration(), t1.Sub(t0); !playing || d < el*4/5 || d > el*6/5 {
+		t.Errorf("playing: %v, at %v then %v, %v apart", playing, p0, p1, el)
 	}
 
 	// Scrolled out of view: no frames, and the leases drain without one.
@@ -306,5 +332,102 @@ func TestVideoInWindow(t *testing.T) {
 	}
 	if b.unchecked {
 		t.Log("the window was covered: a frame rate's floor went unchecked")
+	}
+}
+
+// loopLag is how far behind el (the time since Play) a looping video of
+// length d is when it is at p, either way round its loop (each restart
+// costs a moment).
+func loopLag(el, p, d time.Duration) time.Duration {
+	lag := (el - p) % d
+	if lag > d/2 {
+		lag -= d
+	}
+	return max(lag, -lag)
+}
+
+// TestVideoPlaysOnInAHiddenWindow: a playing video's clock runs on while its
+// window is hidden, a looping one starts again at its end (with its sound)
+// and another stops there, with no frame drawn or pulled meanwhile; shown
+// again, the looping one draws from where it has got to.
+func TestVideoPlaysOnInAHiddenWindow(t *testing.T) {
+	plain, _ := testClips(t, widgettest.OnMain) // 3 s
+	b := newVideoWin()
+	t.Cleanup(func() { platform.SetAppSink(testSink{}) }) // after the app's end unbinds it
+	l := widgettest.StartLive(t, app.Config{Title: "video hidden", Width: 360, Height: 240}, b)
+	defineLater(l)
+	var err, err1 error
+	var w *app.Win
+	var once *Video // not looping, and drawn by no frame
+	l.Do(func(a *app.App) {
+		w = a.Windows(nil)[0]
+		var v *Video
+		if v, err = OpenVideo(plain, VideoOptions{Muted: true, Loop: true}); err == nil {
+			b.v.Store(v)
+		}
+		once, err1 = OpenVideo(plain, VideoOptions{Muted: true})
+	})
+	if err != nil || err1 != nil {
+		t.Fatal(err, err1)
+	}
+	v := b.v.Load()
+	defer l.Do(func(*app.App) { v.Close(); once.Close() })
+	l.Until("the poster", 600, func() bool { return b.drawn.Load() > 0 })
+
+	l.Do(func(*app.App) { w.Hide() })
+	visible := func() (vis bool) { atRunLoop(func() { vis = b.a.Win.DebugState().Visible }); return }
+	for t0 := time.Now(); visible(); time.Sleep(20 * time.Millisecond) {
+		if time.Since(t0) > 3*time.Second {
+			t.Fatal("the window still shows 3 s after Hide")
+		}
+	}
+	time.Sleep(300 * time.Millisecond) // what Hide drew has come and gone
+	pos := func() (d time.Duration, at time.Time, playing bool) {
+		atRunLoop(func() { d, at, playing = v.Position(), time.Now(), v.Playing() })
+		return
+	}
+	builds, pulled := b.builds.Load(), b.drawn.Load()
+	_, held := VideoCounts() // pixel buffers pulled and kept
+	for t0 := time.Now(); once.State() == VideoLoading; time.Sleep(10 * time.Millisecond) {
+		if time.Since(t0) > 10*time.Second {
+			t.Fatal("the second video did not load in 10 s")
+		}
+	}
+	var started time.Time
+	atRunLoop(func() { v.Play(); once.Play(); started = time.Now() })
+
+	// The clock runs while hidden: 1.5 s in, it is about 1.5 s in.
+	time.Sleep(1500 * time.Millisecond)
+	p1, t1, _ := pos()
+	if el := t1.Sub(started); p1 < el-400*time.Millisecond || p1 > el+50*time.Millisecond {
+		t.Errorf("hidden, %v after Play: at %v", el, p1)
+	}
+	// Past the 3 s end it has started again, and plays on.
+	time.Sleep(2500 * time.Millisecond)
+	p2, t2, _ := pos()
+	time.Sleep(500 * time.Millisecond)
+	p3, t3, playing := pos()
+	if d, el := p3-p2, t3.Sub(t2); !playing || p2 > 2500*time.Millisecond || d < el*4/5 || d > el*6/5 {
+		t.Errorf("hidden, %v and %v after Play (past the end of a 3 s loop): at %v, then %v (playing %v); want about %v and %v",
+			t2.Sub(started), t3.Sub(started), p2, p3, playing, t2.Sub(started)-3*time.Second, t3.Sub(started)-3*time.Second)
+	}
+	var oncePlaying, onceEnded bool
+	atRunLoop(func() { oncePlaying, onceEnded = once.Playing(), once.Ended() })
+	if oncePlaying || !onceEnded {
+		t.Errorf("not looping, %v after Play: playing %v, ended %v; want stopped at its end", time.Since(started), oncePlaying, onceEnded)
+	}
+	// Idle while hidden: no frame drawn, none pulled.
+	if n, m := b.builds.Load()-builds, b.drawn.Load()-pulled; n > 2 || m > 0 {
+		t.Errorf("hidden and playing: %d frames built, %d drew the video; want none", n, m)
+	}
+	if _, h := VideoCounts(); h != held {
+		t.Errorf("hidden and playing: %d pixel buffers held, %d before; want none pulled", h, held)
+	}
+
+	// Shown again, it draws from where it is.
+	l.Do(func(*app.App) { w.Show() })
+	l.Until("a frame of the video", 600, func() bool { return b.drawn.Load() > pulled })
+	if p, at, _ := pos(); loopLag(at.Sub(started), p, v.Duration()) > 400*time.Millisecond {
+		t.Errorf("shown again %v after Play: at %v; want about %v (no jump)", at.Sub(started), p, at.Sub(started)%v.Duration())
 	}
 }
