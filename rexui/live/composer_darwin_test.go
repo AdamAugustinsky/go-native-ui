@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"gonativeui/app"
 	"gonativeui/internal/objc"
@@ -332,6 +333,24 @@ func TestLiveComposerGrowsThenScrolls(t *testing.T) {
 	if b := p.boxes(l); b.field[3]-b.field[1] != fieldH[1] {
 		t.Errorf("after clearing the field is %v px, was %v at one line", b.field[3]-b.field[1], fieldH[1])
 	}
+}
+
+// Under the correction bubble (autocorrect on, a misspelling, a pause: on
+// macOS 15 NSCorrectionPanel runs a nested loop until the next key), the
+// composer draws the frames a wait asks for, and the app ends after Quit with
+// the bubble still up. Before, such a wait saw no frame for 60 s and the app
+// did not end (TestLiveComposerGrowsThenScrolls on CI).
+func TestLiveComposerDrawsAndQuitsUnderTheCorrectionBubble(t *testing.T) {
+	l, p := startComposer(t, rexui.ComposerSetup{Placeholder: "Message"}, 480, 420)
+	p.focus(t, l)
+	l.Do(func(*app.App) { p.st.Editor().SetAutocorrect(true) })
+	l.Type("i saw teh")
+	l.Until("typed", 120, func() bool { return strings.HasSuffix(string(p.st.Text()), "teh") })
+	time.Sleep(1500 * time.Millisecond) // the bubble comes after a pause, as a person types
+	l.Frames(3)
+	var where string
+	l.Do(func(*app.App) { where = platform.DebugMainLoop() })
+	t.Logf("under the bubble: %s", where) // and the cleanup's Quit must end the app
 }
 
 func abs32(f float32) float32 {
