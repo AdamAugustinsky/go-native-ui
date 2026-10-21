@@ -136,6 +136,8 @@ const (
 	SourceMedia
 	// SourceTask is task pools that report to the app object.
 	SourceTask
+	// SourceTray is a status item's click (app/tray).
+	SourceTray
 	// SourceApp is the first source free for the app's own producers.
 	SourceApp Source = 256
 )

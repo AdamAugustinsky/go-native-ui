@@ -1,0 +1,7 @@
+{
+	"id": "dev.gonativeui.logindemo",
+	"name": "Login Demo",
+	"version": "1.0.0",
+	"build": "1",
+	"loginAgents": [{"name": "hidden", "arguments": ["--start-hidden"]}]
+}
