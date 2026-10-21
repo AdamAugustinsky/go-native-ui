@@ -81,6 +81,11 @@ type ToolbarOpts struct {
 	// Traffic draws the traffic lights at the style's place (offscreen
 	// renders; in a window the system draws them).
 	Traffic bool
+	// Glass gives the Rex band's items (Style ToolbarRex: Item, BeginGroup
+	// and BeginShared) the glass capsules of the other styles, macOS 26's
+	// toolbar items (a RexHit-high capsule, the system's material where the
+	// window hosts it), in place of borderless symbols.
+	Glass bool
 	// BandFill is the colour of the content pane's top under the band while
 	// nothing is scrolled under it (the content's background, 0: none). The
 	// content lies below the band, which shows it: with hosted materials the
@@ -307,7 +312,7 @@ func BeginToolbar(k *base.Kit, label string, o ToolbarOpts) Toolbar {
 	tb := Toolbar{k: k, o: o, rc: &ToolbarLook, spec: r.Window.Toolbars[o.Style], open: true}
 	// a pane's content under the band is the layer's own pixels, over the
 	// system's glass: the capsules are drawn then, over it
-	tb.native = o.Style != theme.ToolbarRex && !o.ContentEdge && GlassNative(k, GlassToolbarCapsule)
+	tb.native = (o.Style != theme.ToolbarRex || o.Glass) && !o.ContentEdge && GlassNative(k, GlassToolbarCapsule)
 	_, ident := ui.SplitLabel(label)
 	tb.key = ui.HashString(c.ParentKey(), ident)
 	tb.ovKey, tb.pick = ui.KeyN(tb.key, 6000), -1
@@ -679,7 +684,7 @@ func (tb *Toolbar) symbol(key ui.Key, ic icon.ID, col uint32) {
 // a part of the group's), a borderless symbol in the Rex band. name is its
 // accessible name and tooltip text.
 func (tb *Toolbar) Item(ic icon.ID, name string) base.Signal {
-	if tb.o.Style == theme.ToolbarRex {
+	if tb.o.Style == theme.ToolbarRex && !tb.o.Glass {
 		tb.gap(tbCapsule)
 		return tb.rexItem(ic, name)
 	}
@@ -760,7 +765,7 @@ func (tb *Toolbar) BeginGroup(name string) { tb.beginGroup(name, false) }
 func (tb *Toolbar) BeginShared(name string) { tb.beginGroup(name, true) }
 
 func (tb *Toolbar) beginGroup(name string, shared bool) {
-	if tb.inGroup || tb.o.Style == theme.ToolbarRex {
+	if tb.inGroup || tb.o.Style == theme.ToolbarRex && !tb.o.Glass {
 		return
 	}
 	k := tb.k
