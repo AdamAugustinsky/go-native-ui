@@ -80,6 +80,9 @@ func IsGraphemeBoundary(b []byte, off int) bool {
 	if off <= 0 || off >= len(b) {
 		return off == 0 || off == len(b)
 	}
+	if b[off-1] < 0x80 && b[off] < 0x80 {
+		return b[off-1] != '\r' || b[off] != '\n'
+	}
 	if !runeBoundary(b, off) {
 		return false
 	}
