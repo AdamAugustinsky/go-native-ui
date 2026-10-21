@@ -1035,3 +1035,33 @@ The whole UI is rewritten in Go on the framework with the Rex design system, mac
 - WAV files from AudioToolbox's writer (which `AVAudioRecorder` uses) parse back exactly.
 
 Live microphone capture was not run: access cannot be granted headlessly, so that test skips unless the process is authorized.
+
+## D59. HTTP(S) downloads: the system's NSURLSession on macOS, net/http elsewhere (phase 6, 2026-10-21)
+
+**Decision (Adam's speed-mode fast lane for ZapFast's self-updater).** `app/fetch` is a small streaming HTTP(S) client: `Get(ctx, url, w, Options)` writes the body of a GET to `w`, and `Bytes(ctx, url, limit, Options)` returns a small body. Options: extra headers, an overall timeout, `MaxBytes`, `Progress(received, total)` and a `Proxy` (HTTP, HTTPS or SOCKS5, with optional user and password). A status outside 2xx is a `*StatusError`; a longer body than `MaxBytes` is `ErrTooLarge`. On macOS it uses `NSURLSession` (an ephemeral session, no cookies or cache, a delegate queue of its own); on Windows and Linux it uses `net/http`. A program that imports `app/fetch` on macOS links neither `net/http` nor `crypto/tls`.
+
+**Why:**
+- **Size.** `net/http` and `crypto/tls` pull about 4 MB of Go code (network stack, TLS, X.509, HTTP/2) into a binary whose budget is under 10 MB. The system already has all of it.
+- **The system's trust store and proxies.** `NSURLSession` uses the keychain's roots and the user's proxy settings (System Settings, PAC files, per-network rules) with no code from us, and it gets the OS's TLS fixes without a new release of the app.
+- **The cost** is that the two paths behave alike only where the API reaches (see the package documentation), and the macOS path is our code on foreign threads, which `net/http` is not.
+
+**How it works on macOS:**
+- The delegate is a class made at first use with the runtime's functions and a call frame of its own (`internal/objc`'s class builder is for the main thread). Its callbacks run on a serial `NSOperationQueue` the call creates, never on the main thread. They copy what arrives into a bounded channel; the calling goroutine does the writing and calls `Progress`. A full channel holds the delegate queue back, and through TCP, the server.
+- Cancelling the context cancels the task and returns at once, without waiting for the queue. The response completion handler cancels the task for a non-2xx status or a length over `MaxBytes`, so such a body is not downloaded.
+- `Accept-Encoding: identity` is sent by default on every platform, so an archive arrives as the server stored it, with the length the server announced.
+- A set `Proxy` goes in `connectionProxyDictionary` (`kCFNetworkProxiesHTTP*`, `kCFNetworkProxiesHTTPS*`, `kCFNetworkProxiesSOCKS*`, `kCFStreamPropertySOCKSUser` and `Password`). An HTTP proxy carries http and, through CONNECT, https. Its user and password answer the 407 in the task delegate's challenge method.
+
+**App Transport Security** (measured with a test program on macOS 27, bare and in a signed bundle):
+- A bare executable (go run, go test) is not subject to it: plain http works everywhere.
+- In a bundle, plain http works to loopback, private and link-local addresses, `localhost`, names with no dots and `.local` names. Any other plain http host (a dotted name, a public IP address) fails with `-1022`, which the package returns as `ErrInsecure`, unless the Info.plist has `NSAppTransportSecurity` with `NSAllowsArbitraryLoads` or an `NSExceptionDomains` entry with `NSExceptionAllowsInsecureHTTPLoads` for that host. So ZapFast's local test feeds work without an Info.plist key, and real feeds are https.
+
+**Limits we accepted:**
+- An HTTP proxy's credentials work for https URLs (CONNECT) but not for plain http URLs on macOS: the system returns the 407 without a challenge (the same with the credential storage, the session-level challenge method and the proxy dictionary tried); the call fails with a `*StatusError` 407. SOCKS5 credentials work for both.
+- A TLS-secured proxy (`ProxyHTTPS`) is `errors.ErrUnsupported` on macOS: `connectionProxyDictionary` has no such proxy. (`proxyConfigurations` on macOS 14 and later could carry one; it needs the Network framework's C API and a trusted proxy certificate to test, so it waits for a use.)
+- Without `Timeout`, a stalled macOS transfer is cut after 24 hours, not the system's 60 seconds; the context is the limit, as with `net/http`. CFNetwork may hold back a very small body chunk (a few bytes) until more arrives or the response ends.
+- On Windows and Linux, `net/http` reads the proxy from the environment (HTTP_PROXY, HTTPS_PROXY, NO_PROXY), not from the system's settings.
+
+**Evidence** (Mac mini, macOS 27, darwin/arm64, `-trimpath -ldflags="-s -w"`):
+- hello world: 1.57 MB. Hello world that calls `fetch.Bytes`: 2.18 MB (+0.61 MB: the FFI layer, the Foundation calls and the delegate). Hello world with `net/http`'s `http.Get`: 5.58 MB (+4.0 MB).
+- `go list -deps` of the `fetch` program lists neither `net/http`, `crypto/tls`, `crypto/x509` nor `net`; `go tool nm` finds no `net/http.` or `crypto/tls.` symbol in it (998 in the `net/http` program).
+- The `app/fetch` tests run on loopback servers against the real `NSURLSession`: a 12 MB body with progress, an unknown length, cancelling mid-transfer (returns in milliseconds, the server sees the connection close), a 404, redirects, `MaxBytes` (announced and unannounced), timeouts (before and during the body), headers, no decompression, `Bytes`, an untrusted certificate, 72 concurrent transfers, a slow writer, an HTTP proxy that sees the request, proxy credentials, a SOCKS5 server with and without a password.
