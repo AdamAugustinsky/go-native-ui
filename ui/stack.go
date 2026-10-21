@@ -15,11 +15,17 @@ type stack[T any] struct {
 	n       int
 	next    T
 	hasNext bool
+	cur     *T    // the top's mirror in Context.cur
+	pending *bool // Context.hasNextStyle
 }
 
-func (s *stack[T]) init(def T) { s.v[0], s.n, s.hasNext = def, 0, false }
+func (s *stack[T]) init(def T, cur *T, pending *bool) {
+	s.v[0], s.n, s.hasNext = def, 0, false
+	s.cur, s.pending = cur, pending
+	*cur = def
+}
 
-func (s *stack[T]) reset() { s.n, s.hasNext = 0, false }
+func (s *stack[T]) reset() { s.n, s.hasNext = 0, false; *s.cur = s.v[0] }
 
 func (s *stack[T]) top() T { return s.v[s.n] }
 
@@ -29,6 +35,7 @@ func (s *stack[T]) push(x T) {
 	}
 	s.n++
 	s.v[s.n] = x
+	*s.cur = x
 }
 
 func (s *stack[T]) pop() {
@@ -36,6 +43,7 @@ func (s *stack[T]) pop() {
 		panic("ui: style stack underflow")
 	}
 	s.n--
+	*s.cur = s.v[s.n]
 }
 
 // peek is the value the next box would take, without taking it.
@@ -46,14 +54,13 @@ func (s *stack[T]) peek() T {
 	return s.v[s.n]
 }
 
-func (s *stack[T]) set(x T) { s.next, s.hasNext = x, true }
+func (s *stack[T]) set(x T) { s.next, s.hasNext = x, true; *s.pending = true }
 
-func (s *stack[T]) take() T {
+// takeInto stores the next value in *dst, if one was set, and consumes it.
+func (s *stack[T]) takeInto(dst *T) {
 	if s.hasNext {
-		s.hasNext = false
-		return s.next
+		*dst, s.hasNext = s.next, false
 	}
-	return s.v[s.n]
 }
 
 type border struct {

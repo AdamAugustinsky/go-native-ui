@@ -61,30 +61,12 @@ type boxFrame struct {
 	mat                             uint8 // 1 + the box's record in shell.mats when Material marked it (material.go)
 	bdrop                           uint8 // 1 + the box's recipe in Context.bd.recs when it is a backdrop (NextBackdrop)
 
-	pref        [2]Size
-	pad         [4]float32 // l, t, r, b
-	gap         float32
-	axis        Axis
-	cross       Cross
-	justify     Justify
-	align       Align
-	font        text.FontKey
-	bg          [4]uint32
-	textColor   uint32
-	borderColor uint32
-	borderW     float32
-	sides       Sides
-	cursor      Cursor
-	img         Image
-	radii       [4]float32
-	shadow      [2]Shadow
-	tint        Tint
-	opacity     float32
-	alignNext   bool       // the alignment came from NextAlign (Audit)
-	auditOff    AuditMask  // the checks of Audit the box is exempt from (NextAuditExempt)
-	obscured    [2]float32 // a scroll box's view covered at its top and bottom (SetObscured)
-	stopWheel   bool       // the wheel over the box scrolls nothing beneath it (StopWheel)
-	fixed       [2]float32
+	style
+	alignNext bool       // the alignment came from NextAlign (Audit)
+	auditOff  AuditMask  // the checks of Audit the box is exempt from (NextAuditExempt)
+	obscured  [2]float32 // a scroll box's view covered at its top and bottom (SetObscured)
+	stopWheel bool       // the wheel over the box scrolls nothing beneath it (StopWheel)
+	fixed     [2]float32
 
 	txt    core.Span // display text in the current frame's arena
 	run    text.RunRef
@@ -107,6 +89,28 @@ type boxFrame struct {
 	paraGen uint32
 	paraW   float32
 	rich    int32 // 1 + the index of its record in Context.rich, 0 for other boxes
+}
+
+// style is copied from the mirrored stack tops when a box is built.
+type style struct {
+	pref      [2]Size
+	pad       [4]float32 // l, t, r, b
+	gap       float32
+	axis      Axis
+	cross     Cross
+	justify   Justify
+	align     Align
+	font      text.FontKey
+	bg        [4]uint32
+	textColor uint32
+	bd        border
+	sides     Sides
+	cursor    Cursor
+	img       Image
+	radii     [4]float32
+	shadow    [2]Shadow
+	tint      Tint
+	opacity   float32
 }
 
 type fontInfo struct {
@@ -154,6 +158,9 @@ type Context struct {
 
 	parents  [maxDepth]ID
 	nparents int
+
+	cur          style // the tops of the style stacks
+	hasNextStyle bool  // at least one style stack has a next value
 
 	sBG      stack[[4]uint32]
 	sText    stack[uint32]
@@ -363,25 +370,25 @@ func New(sh Shaper) *Context {
 	c.avPool.Alloc()
 	c.av = make([]animEnt, 1, 16)
 	c.fmt.a = &c.fmtA
-	c.sBG.init([4]uint32{})
-	c.sText.init(0xFFFFFFFF)
-	c.sBorder.init(border{})
-	c.sSides.init(SidesAll)
-	c.sCursor.init(CursorArrow)
-	c.sImage.init(Image{})
-	c.sRadii.init([4]float32{})
-	c.sShadow.init([2]Shadow{})
-	c.sFont.init(0)
-	c.sAlign.init(AlignLeft)
-	c.sPad.init([4]float32{})
-	c.sGap.init(0)
-	c.sAxis.init(AxisY)
-	c.sCross.init(CrossStart)
-	c.sJustify.init(JustifyStart)
-	c.sW.init(Size{})
-	c.sH.init(Size{})
-	c.sOpacity.init(1)
-	c.sTint.init(Tint{})
+	c.sBG.init([4]uint32{}, &c.cur.bg, &c.hasNextStyle)
+	c.sText.init(0xFFFFFFFF, &c.cur.textColor, &c.hasNextStyle)
+	c.sBorder.init(border{}, &c.cur.bd, &c.hasNextStyle)
+	c.sSides.init(SidesAll, &c.cur.sides, &c.hasNextStyle)
+	c.sCursor.init(CursorArrow, &c.cur.cursor, &c.hasNextStyle)
+	c.sImage.init(Image{}, &c.cur.img, &c.hasNextStyle)
+	c.sRadii.init([4]float32{}, &c.cur.radii, &c.hasNextStyle)
+	c.sShadow.init([2]Shadow{}, &c.cur.shadow, &c.hasNextStyle)
+	c.sFont.init(0, &c.cur.font, &c.hasNextStyle)
+	c.sAlign.init(AlignLeft, &c.cur.align, &c.hasNextStyle)
+	c.sPad.init([4]float32{}, &c.cur.pad, &c.hasNextStyle)
+	c.sGap.init(0, &c.cur.gap, &c.hasNextStyle)
+	c.sAxis.init(AxisY, &c.cur.axis, &c.hasNextStyle)
+	c.sCross.init(CrossStart, &c.cur.cross, &c.hasNextStyle)
+	c.sJustify.init(JustifyStart, &c.cur.justify, &c.hasNextStyle)
+	c.sW.init(Size{}, &c.cur.pref[0], &c.hasNextStyle)
+	c.sH.init(Size{}, &c.cur.pref[1], &c.hasNextStyle)
+	c.sOpacity.init(1, &c.cur.opacity, &c.hasNextStyle)
+	c.sTint.init(Tint{}, &c.cur.tint, &c.hasNextStyle)
 	return c
 }
 
@@ -616,6 +623,7 @@ func (c *Context) resetStyles() {
 	c.sH.reset()
 	c.sOpacity.reset()
 	c.sTint.reset()
+	c.hasNextStyle = false
 	c.hasNextPos = false
 	c.nextFlags = 0
 	c.nextAudit = 0
@@ -752,34 +760,18 @@ func (c *Context) newBox(flags Flags, key Key) ID {
 		b.ovl = c.boxes[parent].ovl
 	}
 
-	b.bg = c.sBG.take()
-	b.textColor = c.sText.take()
-	bd := c.sBorder.take()
-	b.borderColor, b.borderW = bd.Color, bd.Width
-	b.sides = c.sSides.take()
-	b.cursor = c.sCursor.take()
+	b.style = c.cur
+	if c.hasNextStyle {
+		c.takeNext(b)
+	}
 	if b.cursor != CursorArrow {
 		c.nCursorBoxes++
 	}
 	if flags&WindowDrag != 0 {
 		c.nDragBoxes++
 	}
-	b.img = c.sImage.take()
-	b.radii = c.sRadii.take()
-	b.shadow = c.sShadow.take()
-	b.tint = c.sTint.take()
-	b.opacity = c.sOpacity.take()
-	b.font = c.sFont.take()
-	b.alignNext = c.sAlign.hasNext
-	b.align = c.sAlign.take()
-	b.axis = c.sAxis.take()
-	b.cross = c.sCross.take()
-	b.justify = c.sJustify.take()
 	b.auditOff, c.nextAudit = c.nextAudit, 0
 	c.takeBackdrop(b)
-	b.pad = c.sPad.take()
-	b.gap = c.sGap.take()
-	b.pref = [2]Size{c.sW.take(), c.sH.take()}
 	if c.hasNextPos {
 		b.fixed = c.nextPos
 		c.hasNextPos = false
@@ -791,6 +783,31 @@ func (c *Context) newBox(flags Flags, key Key) ID {
 	}
 	c.semNext = semNext{}
 	return id
+}
+
+// takeNext applies and consumes the styles set for the next box only.
+func (c *Context) takeNext(b *box) {
+	c.hasNextStyle = false
+	b.alignNext = c.sAlign.hasNext
+	c.sBG.takeInto(&b.bg)
+	c.sText.takeInto(&b.textColor)
+	c.sBorder.takeInto(&b.bd)
+	c.sSides.takeInto(&b.sides)
+	c.sCursor.takeInto(&b.cursor)
+	c.sImage.takeInto(&b.img)
+	c.sRadii.takeInto(&b.radii)
+	c.sShadow.takeInto(&b.shadow)
+	c.sFont.takeInto(&b.font)
+	c.sAlign.takeInto(&b.align)
+	c.sPad.takeInto(&b.pad)
+	c.sGap.takeInto(&b.gap)
+	c.sAxis.takeInto(&b.axis)
+	c.sCross.takeInto(&b.cross)
+	c.sJustify.takeInto(&b.justify)
+	c.sW.takeInto(&b.pref[0])
+	c.sH.takeInto(&b.pref[1])
+	c.sOpacity.takeInto(&b.opacity)
+	c.sTint.takeInto(&b.tint)
 }
 
 // setText stores the display span and shapes it (a WrapText box is laid out

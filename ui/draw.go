@@ -266,9 +266,9 @@ func (c *Context) emit(l *gpu.DrawList, id ID, clip [4]float32) {
 				}
 			}
 			partial := false
-			if b.flags&DrawBorder != 0 && b.borderW > 0 && b.borderColor&255 != 0 {
+			if b.flags&DrawBorder != 0 && b.bd.Width > 0 && b.bd.Color&255 != 0 {
 				if b.sides == SidesAll {
-					q.Border, q.BorderColor = b.borderW, b.col(b.borderColor)
+					q.Border, q.BorderColor = b.bd.Width, b.col(b.bd.Color)
 					draw = true
 				} else {
 					partial = b.sides&SidesAll != 0
@@ -320,8 +320,8 @@ func (c *Context) emit(l *gpu.DrawList, id ID, clip [4]float32) {
 // along the top and bottom cover only what the side strips leave.
 func (c *Context) emitSides(l *gpu.DrawList, b *box, clip [4]float32) {
 	r := b.rect
-	bw := b.borderW
-	ring := gpu.Quad{Rect: r, Radii: b.radii, Border: bw, BorderColor: b.col(b.borderColor)}
+	bw := b.bd.Width
+	ring := gpu.Quad{Rect: r, Radii: b.radii, Border: bw, BorderColor: b.col(b.bd.Color)}
 	wl := max(b.radii[0], b.radii[3], bw)
 	wr := max(b.radii[1], b.radii[2], bw)
 	ht := max(b.radii[0], b.radii[1], bw)
