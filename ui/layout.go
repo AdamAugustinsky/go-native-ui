@@ -57,10 +57,6 @@ func (c *Context) layout() {
 		// Content extent and scroll clamping first: they set the offsets.
 		if p.axis == AxisFlow {
 			c.flowContent(p)
-		} else {
-			for a := 0; a < 2; a++ {
-				p.content[a] = float64(c.childExtent(p, a) + p.padSum(a))
-			}
 		}
 		var lead float64
 		if p.listRows > 0 && la == 1 {
@@ -256,36 +252,44 @@ func (c *Context) sizeAxis(a int) {
 	// 4. violations, parents first so a shrunk parent shrinks its children in turn
 	for _, id := range order {
 		p := &boxes[id]
+		p.content[a] = float64(p.padSum(a))
 		if p.first == 0 {
 			continue
 		}
 		la := p.layoutAxis()
 		inner := max(0, p.size[a]-p.padSum(a))
-		// Percentages follow the parent's final size.
+		// Percentages follow the parent's final size. Accumulate the final
+		// extent in sibling order; across the axis, shrink in this walk too.
+		var total float32
+		n := 0
 		for ch := p.first; ch != 0; ch = boxes[ch].next {
-			if cb := &boxes[ch]; cb.pref[a].Kind == SizeParentPct {
+			cb := &boxes[ch]
+			if cb.pref[a].Kind == SizeParentPct {
 				cb.size[a] = inner * cb.pref[a].Value
+			}
+			if p.axis == AxisFlow || cb.floatingOn(a) {
+				continue
+			}
+			if a == la {
+				total += cb.size[a]
+				n++
+			} else {
+				if excess := cb.size[a] - inner; !p.scrollOn(a) && excess > 0 {
+					cb.size[a] -= min(excess, cb.size[a]*(1-clamp01(cb.pref[a].Strictness)))
+				}
+				total = max(total, cb.size[a])
 			}
 		}
 		if p.axis == AxisFlow {
 			c.flowShrink(p, a, inner)
 			continue
 		}
-		if p.scrollOn(a) {
-			continue // overflow scrolls
+		var gaps float32
+		if n > 1 {
+			gaps = p.gap * float32(n-1)
 		}
-		if a == la {
-			var total float32
-			n := 0
-			for ch := p.first; ch != 0; ch = boxes[ch].next {
-				if cb := &boxes[ch]; !cb.floatingOn(a) {
-					total += cb.size[a]
-					n++
-				}
-			}
-			if n > 1 {
-				total += p.gap * float32(n-1)
-			}
+		total += gaps
+		if a == la && !p.scrollOn(a) {
 			if excess := total - inner; excess > 0.001 {
 				var fix float32
 				for ch := p.first; ch != 0; ch = boxes[ch].next {
@@ -295,24 +299,20 @@ func (c *Context) sizeAxis(a int) {
 				}
 				if fix > 0 {
 					take := min(excess, fix)
+					total = 0
 					for ch := p.first; ch != 0; ch = boxes[ch].next {
 						if cb := &boxes[ch]; !cb.floatingOn(a) {
 							cb.size[a] -= take * cb.size[a] * (1 - clamp01(cb.pref[a].Strictness)) / fix
+							total += cb.size[a]
 						}
 					}
-				}
-			}
-		} else {
-			for ch := p.first; ch != 0; ch = boxes[ch].next {
-				cb := &boxes[ch]
-				if cb.floatingOn(a) {
-					continue
-				}
-				if excess := cb.size[a] - inner; excess > 0 {
-					cb.size[a] -= min(excess, cb.size[a]*(1-clamp01(cb.pref[a].Strictness)))
+					total += gaps
 				}
 			}
 		}
+		// Later parents-first visits only resize descendants, not these
+		// children. Positioning can reuse this extent without another walk.
+		p.content[a] = float64(total + p.padSum(a))
 	}
 }
 

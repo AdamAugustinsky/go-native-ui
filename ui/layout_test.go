@@ -2,6 +2,51 @@ package ui
 
 import "testing"
 
+func TestFinalChildExtentAndParentFirstShrink(t *testing.T) {
+	h := newHarness(t, 100, 100)
+	var row, child, grandchild ID
+	h.frame(func(c *Context) {
+		c.NextSize(Px(100), Px(50))
+		c.NextAxis(AxisX)
+		row = c.Open(0, "row")
+		c.NextSize(Pct(1), Px(30))
+		child = c.Open(0, "child")
+		c.NextSize(Pct(1), Pct(1))
+		grandchild = c.Box(0, "grandchild")
+		c.Close()
+		c.NextSize(Pct(1), Px(80).Strict(0))
+		c.Box(0, "sibling")
+		c.Close()
+	})
+	if got := h.c.boxes[grandchild].size; got != [2]float32{50, 30} {
+		t.Fatalf("grandchild sized before its parent's shrink: %v", got)
+	}
+	if got := h.c.boxes[row].content; got != [2]float64{100, 50} {
+		t.Fatalf("extent before shrink: %v", got)
+	}
+	if got := h.c.boxes[child].content; got != [2]float64{50, 30} {
+		t.Fatalf("nested extent: %v", got)
+	}
+}
+
+func TestChildExtentKeepsForwardSumOrder(t *testing.T) {
+	h := newHarness(t, 100, 100)
+	var row ID
+	h.frame(func(c *Context) {
+		c.NextSize(Px(100), Px(50))
+		c.NextAxis(AxisX)
+		row = c.Open(ScrollX, "row")
+		for i, w := range []float32{1 << 24, 1, 1} {
+			c.NextSize(Px(w), Px(10))
+			c.BoxKeyed(0, Key(i+1), nil)
+		}
+		c.Close()
+	})
+	if got := h.c.boxes[row].content[0]; got != 1<<24 {
+		t.Fatalf("float32 sum changed order: %v", got)
+	}
+}
+
 func TestKeysAndLabels(t *testing.T) {
 	for _, c := range []struct{ in, disp, ident string }{
 		{"plain", "plain", "plain"},
