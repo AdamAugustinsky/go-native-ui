@@ -191,6 +191,15 @@ func (cd *Card) row(k *base.Kit, label string, pt float32) ui.ID {
 	return k.Row(label)
 }
 
+// rowFit is row for a row as high as its children need, padded padY points
+// above and below: a row with text that wraps.
+func (cd *Card) rowFit(k *base.Kit, label string, padY float32) ui.ID {
+	rc := &CardLook
+	cd.rows++
+	k.NextPadding(rc.RowPadX, padY, rc.RowPadX, padY)
+	return k.Row(label)
+}
+
 // ID is the card's outermost box.
 func (cd *Card) ID() ui.ID { return cd.outer }
 

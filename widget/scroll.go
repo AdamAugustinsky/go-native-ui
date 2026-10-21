@@ -39,6 +39,20 @@ func (k *Kit) EndScroll(v ScrollView) {
 	k.CloseScroll(&v)
 }
 
+// ScrollUpTo builds a scroll view as high as its content, up to maxH points,
+// and scrolling past that: body builds the content, which lays out like a
+// Column's. A vertical view is the usual use (a menu of choices, a list in a
+// popover); see base.Kit.NextScrollMaxHeight for how the height follows the
+// content.
+//
+//	k.ScrollUpTo("choices", &st, widget.ScrollVertical, 240, func() { … })
+func (k *Kit) ScrollUpTo(label string, st *ScrollState, axes ScrollAxes, maxH float32, body func()) {
+	k.NextScrollMaxHeight(maxH)
+	v := k.BeginScroll(label, st, axes)
+	body()
+	k.EndScroll(v)
+}
+
 // scrollBars builds the bars of the view whose outer box is the current
 // parent: with legacy scrollers AppKit's (rexui.ScrollBars), otherwise the
 // classic overlay bars, a thin thumb that thickens under the pointer.
