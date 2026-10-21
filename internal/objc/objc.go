@@ -9,15 +9,23 @@
 // Other threads, and callbacks on any thread, use a frame of their own: a
 // callback's ffi.CB.Frame, with MsgSend or the helpers that take a frame.
 //
-// The lookup rule. Classes and selectors are looked up at setup, on the main
-// thread (Cls, Sel), and kept in variables; a handler on another thread
-// never looks anything up.
+// The lookup rule. Cls and Sel remember every name, so a repeat call is a
+// map lookup that allocates nothing, and they are safe from any goroutine;
+// still, a handler on another thread should find its classes and selectors
+// at setup and keep them in variables.
 //
-// Setup helpers (Cls, Sel, Str, Define and its builder, NewBlockKind,
-// NewGlobalBlock) allocate and are meant for startup.
+// Str creates an autoreleased NSString without keeping or allocating
+// anything, so it is fine per call on the main thread. CString keeps its
+// copy for ever (once per distinct string): for names fixed at setup only.
+// Define and its builder, NewBlockKind and NewGlobalBlock allocate and are
+// meant for startup.
 package objc
 
 import (
+	"runtime"
+	"strings"
+	"sync"
+	"unicode/utf8"
 	"unsafe"
 
 	"github.com/ebitengine/purego"
@@ -75,6 +83,8 @@ func init() {
 		panic(err)
 	}
 	selRetain, selRelease = Sel("retain"), Sel("release")
+	clsNSString = Cls("NSString")
+	selAlloc, selInitBytes, selAutorel = Sel("alloc"), Sel("initWithBytes:length:encoding:"), Sel("autorelease")
 	selUTF8String, selLength = Sel("UTF8String"), Sel("lengthOfBytesUsingEncoding:")
 	selAddObserver, selRemoveObserver = Sel("addObserver:selector:name:object:"), Sel("removeObserver:name:object:")
 }
@@ -91,33 +101,119 @@ func SelName(s SEL) string {
 	return string(unsafe.Slice((*byte)(p), n))
 }
 
-// keep holds C strings handed to the Objective-C runtime for the process lifetime.
-var keep []*byte
+// The intern tables. Each distinct name costs one C string, one class
+// lookup and one selector registration for the life of the process; a repeat
+// is a read-locked map lookup that allocates nothing. They are guarded by
+// internMu, so Cls, Sel and CString are safe from any goroutine; a miss runs
+// its C call on missFrame under the write lock, never on F.
+var (
+	internMu  sync.RWMutex
+	cstrs     = map[string]*byte{}
+	classes   = map[string]ID{}
+	sels      = map[string]SEL{}
+	missFrame = new(ffi.Frame)
+)
 
 // CString returns a NUL-terminated copy of s on the heap that is never freed
-// (setup use).
+// and is the same pointer for every call with the same s, so the memory held
+// is bounded by the number of distinct strings. Use it for strings the
+// Objective-C runtime may keep (class_addMethod type strings, names given to
+// objc_allocateClassPair), which are fixed at setup; never for values that
+// vary at run time. It is safe from any goroutine.
 func CString(s string) *byte {
+	internMu.RLock()
+	p := cstrs[s]
+	internMu.RUnlock()
+	if p != nil {
+		return p
+	}
+	internMu.Lock()
+	defer internMu.Unlock()
+	return cstringLocked(s)
+}
+
+// cstringLocked is CString with internMu held for writing.
+func cstringLocked(s string) *byte {
+	if p := cstrs[s]; p != nil {
+		return p
+	}
 	b := make([]byte, len(s)+1)
 	copy(b, s)
-	keep = append(keep, &b[0])
-	return &b[0]
+	p := &b[0]
+	cstrs[unsafe.String(p, len(s))] = p // the key shares the C string's bytes
+	return p
 }
 
-// Cls looks up a class by name (setup, main thread).
+// Cls looks up a class by name. A class found is remembered, so a repeat
+// call costs a map lookup and allocates nothing. A class that does not exist
+// (yet) returns 0 and is looked up again next time. Safe from any goroutine.
 func Cls(name string) ID {
-	checkMain()
-	return ID(F.Call1(getClass, uintptr(unsafe.Pointer(CString(name)))))
+	internMu.RLock()
+	c, ok := classes[name]
+	internMu.RUnlock()
+	if ok {
+		return c
+	}
+	internMu.Lock()
+	defer internMu.Unlock()
+	if c, ok = classes[name]; ok {
+		return c
+	}
+	c = ID(missFrame.Call1(getClass, uintptr(unsafe.Pointer(cstringLocked(name)))))
+	if c != 0 {
+		classes[unsafe.String(cstringLocked(name), len(name))] = c
+	}
+	return c
 }
 
-// Sel registers a selector (setup, main thread).
+// Sel registers a selector. A repeat call costs a map lookup and allocates
+// nothing. Safe from any goroutine.
 func Sel(name string) SEL {
-	checkMain()
-	return SEL(F.Call1(selRegister, uintptr(unsafe.Pointer(CString(name)))))
+	internMu.RLock()
+	s, ok := sels[name]
+	internMu.RUnlock()
+	if ok {
+		return s
+	}
+	internMu.Lock()
+	defer internMu.Unlock()
+	if s, ok = sels[name]; ok {
+		return s
+	}
+	p := cstringLocked(name)
+	s = SEL(missFrame.Call1(selRegister, uintptr(unsafe.Pointer(p))))
+	sels[unsafe.String(p, len(name))] = s
+	return s
 }
 
-// Str creates an autoreleased NSString from s (setup use).
+var (
+	clsNSString                        ID
+	selAlloc, selInitBytes, selAutorel SEL
+	strEmpty                           byte // a valid address for the bytes of ""
+)
+
+// Str creates an autoreleased NSString from s. It allocates nothing in Go
+// and keeps nothing: the string is built from s's own bytes
+// (-initWithBytes:length:encoding:) and autoreleased, so it lives until the
+// current autorelease pool drains; retain it to keep it longer. Main thread
+// (it uses F).
+//
+// s is UTF-8. Invalid sequences become U+FFFD, as Go's conversions do
+// (stringWithUTF8String: returned nil for them). A NUL is kept as a
+// character, where stringWithUTF8String: stopped at it; C code that reads
+// the result through -UTF8String still stops there, and AppendUTF8 returns
+// every byte.
 func Str(s string) ID {
-	return Send1(Cls("NSString"), Sel("stringWithUTF8String:"), uintptr(unsafe.Pointer(CString(s))))
+	if !utf8.ValidString(s) {
+		s = strings.ToValidUTF8(s, "\uFFFD")
+	}
+	p := &strEmpty
+	if len(s) > 0 {
+		p = unsafe.StringData(s)
+	}
+	o := Send3(Send(clsNSString, selAlloc), selInitBytes, uintptr(unsafe.Pointer(p)), uintptr(len(s)), 4 /* NSUTF8StringEncoding */)
+	runtime.KeepAlive(s)
+	return Send(o, selAutorel)
 }
 
 // Retain sends -retain and returns the object.
