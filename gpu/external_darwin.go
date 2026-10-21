@@ -457,8 +457,8 @@ func (r *Renderer) beginYUV(enc objc.ID) {
 // bindRun binds texture id for the run of quads that starts with it: its
 // Metal texture, and a YUV texture's planes and conversion. yuv says
 // whether the conversion is bound (so that a later plain texture unbinds
-// it).
-func (r *Renderer) bindRun(enc objc.ID, s *ringSlot, id TextureID, yuv *bool) {
+// it). Plain textures bind into the run's table; YUV uses slot 0.
+func (r *Renderer) bindRun(enc objc.ID, s *ringSlot, id TextureID, yuv *bool, slot uintptr) {
 	tex := r.empty // a freed or unknown id draws nothing
 	var x *xtex
 	if k, ok := r.ids.lookup(id); ok && r.textures[k] != 0 {
@@ -483,7 +483,7 @@ func (r *Renderer) bindRun(enc objc.ID, s *ringSlot, id TextureID, yuv *bool) {
 		objc.Send3(enc, rsSetFBytes, uintptr(unsafe.Pointer(&yuvOff)), unsafe.Sizeof(yuvOff), 1)
 		*yuv = false
 	}
-	objc.Send2(enc, rsSetFTexture, uintptr(tex), 0)
+	objc.Send2(enc, rsSetFTexture, uintptr(tex), slot)
 }
 
 // destroyExternal releases the imports and the YUV planes (Destroy, after

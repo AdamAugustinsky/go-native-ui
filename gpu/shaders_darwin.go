@@ -174,6 +174,7 @@ fragment float4 fs_main(VOut in [[stage_in]],
                         texture2d<float> tex [[texture(0)]],
                         texture2d<float> tex1 [[texture(1)]],
                         texture2d<float> tex2 [[texture(2)]],
+                        array<texture2d<float>, 8> texs [[texture(3)]],
                         sampler smp [[sampler(0)]]) {
 	float4 rect = quads[in.inst].rect;
 	float4 clip = quads[in.inst].clip;
@@ -220,9 +221,15 @@ fragment float4 fs_main(VOut in [[stage_in]],
 			cov = clamp(0.5 - rrect_sdf(p, rect, radii), 0.0, 1.0);
 		}
 		float2 texel = uv.xy + (p - rect.xy) * ((uv.zw - uv.xy) / size);
-		float4 s = mode == 2u && yuv.planes != 0u
-			? yuv_sample(texel, yuv, tex, tex1, tex2, smp)
-			: tex.sample(smp, texel / float2(tex.get_width(), tex.get_height()));
+		float4 s;
+		if (mode == 2u && yuv.planes != 0u) {
+			s = yuv_sample(texel, yuv, tex, tex1, tex2, smp);
+		} else if (mode == 3u) {
+			s = tex.sample(smp, texel / float2(tex.get_width(), tex.get_height()));
+		} else {
+			uint slot = quads[in.inst].tex;
+			s = texs[slot].sample(smp, texel / float2(texs[slot].get_width(), texs[slot].get_height()));
+		}
 		// mode 3: a backdrop, its blurred region (uv: the texels the
 		// renderer put it at; backdrop_darwin.go), opaque; but along a fade
 		// from y = border to y = soft (set by the renderer), where the
