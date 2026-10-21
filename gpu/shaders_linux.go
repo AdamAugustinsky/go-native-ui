@@ -55,6 +55,7 @@ flat out vec4 vC3;
 flat out vec4 vBorderColor;
 flat out vec4 vParams;   // border, soft, fadeX.x, fadeX.y
 flat out uint vMode;
+flat out uint vUniformColor;
 
 vec4 unpackRGBA(uint c) {
 	return vec4(float((c >> 24) & 255u), float((c >> 16) & 255u),
@@ -90,6 +91,7 @@ void main() {
 	vBorderColor = premul(unpackRGBA(aBorderColor));
 	vParams = vec4(aBorder, aSoft, aFadeX.x, aFadeX.y);
 	vMode = aMode;
+	vUniformColor = all(equal(aColor, aColor.xxxx)) ? 1u : 0u;
 }
 `
 
@@ -105,6 +107,7 @@ flat in vec4 vC3;
 flat in vec4 vBorderColor;
 flat in vec4 vParams;
 flat in uint vMode;
+flat in uint vUniformColor;
 
 uniform vec2 uViewport;
 uniform sampler2D uTex;
@@ -181,7 +184,10 @@ void main() {
 	// Four-corner colour, interpolated premultiplied.
 	vec2 size = max(rect.zw - rect.xy, vec2(1e-3));
 	vec2 t = clamp((p - rect.xy) / size, 0.0, 1.0);
-	vec4 col = mix(mix(vC0, vC1, t.x), mix(vC2, vC3, t.x), t.y);
+	vec4 col = vC0;
+	if (vUniformColor == 0u) {
+		col = mix(mix(vC0, vC1, t.x), mix(vC2, vC3, t.x), t.y);
+	}
 
 	vec4 res;
 	if (vMode == 0u) {

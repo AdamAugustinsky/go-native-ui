@@ -167,11 +167,16 @@ float4 ps_main(VOut i) : SV_Target {
 	// Four-corner colour, interpolated premultiplied.
 	float2 size = max(rect.zw - rect.xy, 1e-3);
 	float2 t = clamp((p - rect.xy) / size, 0.0, 1.0);
-	float4 cTL = premul(unpack_rgba(i.color.x));
-	float4 cTR = premul(unpack_rgba(i.color.y));
-	float4 cBL = premul(unpack_rgba(i.color.z));
-	float4 cBR = premul(unpack_rgba(i.color.w));
-	float4 col = lerp(lerp(cTL, cTR, t.x), lerp(cBL, cBR, t.x), t.y);
+	float4 col;
+	if (all(i.color == i.color.xxxx)) {
+		col = premul(unpack_rgba(i.color.x));
+	} else {
+		float4 cTL = premul(unpack_rgba(i.color.x));
+		float4 cTR = premul(unpack_rgba(i.color.y));
+		float4 cBL = premul(unpack_rgba(i.color.z));
+		float4 cBR = premul(unpack_rgba(i.color.w));
+		col = lerp(lerp(cTL, cTR, t.x), lerp(cBL, cBR, t.x), t.y);
+	}
 
 	float4 res;
 	if (mode == 0u) {

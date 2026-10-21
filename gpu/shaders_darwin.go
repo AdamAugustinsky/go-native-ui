@@ -188,11 +188,17 @@ fragment float4 fs_main(VOut in [[stage_in]],
 	// Four-corner colour, interpolated premultiplied.
 	float2 size = max(rect.zw - rect.xy, 1e-3);
 	float2 t = clamp((p - rect.xy) / size, 0.0, 1.0);
-	float4 cTL = premul(unpack_rgba(quads[in.inst].color[0]));
-	float4 cTR = premul(unpack_rgba(quads[in.inst].color[1]));
-	float4 cBL = premul(unpack_rgba(quads[in.inst].color[2]));
-	float4 cBR = premul(unpack_rgba(quads[in.inst].color[3]));
-	float4 col = mix(mix(cTL, cTR, t.x), mix(cBL, cBR, t.x), t.y);
+	uint4 cw = uint4(quads[in.inst].color);
+	float4 col;
+	if (all(cw == cw.xxxx)) {
+		col = premul(unpack_rgba(cw.x));
+	} else {
+		float4 cTL = premul(unpack_rgba(cw.x));
+		float4 cTR = premul(unpack_rgba(cw.y));
+		float4 cBL = premul(unpack_rgba(cw.z));
+		float4 cBR = premul(unpack_rgba(cw.w));
+		col = mix(mix(cTL, cTR, t.x), mix(cBL, cBR, t.x), t.y);
+	}
 
 	float4 res;
 	if (mode == 0u) {
