@@ -1,5 +1,3 @@
-//go:build linux
-
 package pilot
 
 import (
@@ -13,12 +11,15 @@ import (
 )
 
 // After primeNames, the synthetic names shape without an allocation of ours
-// in any font of the theme. On the Go text engine a script's first shape in a
-// face builds a plan; a measured window must not be where that happens (D27:
-// CI saw a Greek name's in Pilot's first window). Without the priming the
-// same shapes allocate, which shows the test sees a missing plan.
+// in the fonts the rows are drawn in (the theme's fonts, the body style's, the
+// list's mono one). On the Go text engine a script's first shape in a face
+// builds a plan, and on macOS the first name that needs a fallback font makes
+// its face; a measured window must not be where either happens (D27: CI saw a
+// Greek name's plan in Pilot's first window, and a face in a later one).
+// Without the priming the same shapes allocate, which shows the test sees a
+// missing plan or face.
 func TestPrimeNamesBuildsEveryPlan(t *testing.T) {
-	fresh := func() (*text.System, theme.FontKeys) {
+	fresh := func() (*text.System, *theme.Resolved) {
 		ts, err := text.New()
 		if err != nil {
 			t.Skip(err)
@@ -26,11 +27,12 @@ func TestPrimeNamesBuildsEveryPlan(t *testing.T) {
 		t.Cleanup(ts.Close)
 		ts.ReserveRuns(text.MaxCachedRuns, text.MaxCachedGlyphs, text.MaxCachedTextBytes)
 		r := look(false).Resolve(ts, 2, theme.Light)
-		return ts, r.Font
+		return ts, &r
 	}
 	buf := make([]byte, 0, 64)
-	shapeNames := func(ts *text.System, f theme.FontKeys) {
-		for _, k := range [...]text.FontKey{f.UI, f.UISemi, f.Small, f.Mono, f.MonoBold} {
+	shapeNames := func(ts *text.System, r *theme.Resolved) {
+		f := r.Font
+		for _, k := range [...]text.FontKey{f.UI, f.UISemi, f.Small, f.Mono, f.MonoBold, r.Styles[theme.StyleBody].Font} {
 			for _, n := range synthNames {
 				// other strings than primeNames' (new to the run cache), of
 				// the same characters
@@ -40,13 +42,13 @@ func TestPrimeNamesBuildsEveryPlan(t *testing.T) {
 		}
 	}
 
-	ts, f := fresh()
-	if n, _ := oursDuring(func() { shapeNames(ts, f) }); n == 0 {
+	ts, r := fresh()
+	if n, _ := oursDuring(func() { shapeNames(ts, r) }); n == 0 {
 		t.Fatal("the names shaped afresh allocated nothing: the test cannot see a missing plan")
 	}
-	ts, f = fresh()
-	primeNames(ts, f)
-	if n, sites := oursDuring(func() { shapeNames(ts, f) }); n != 0 {
+	ts, r = fresh()
+	primeNames(ts, r)
+	if n, sites := oursDuring(func() { shapeNames(ts, r) }); n != 0 {
 		t.Fatalf("%d allocations of ours shaping the names after primeNames:\n%s", n, sites)
 	}
 }

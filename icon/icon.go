@@ -48,6 +48,8 @@ package icon
 import (
 	"log"
 	"math"
+	"slices"
+	"unicode/utf8"
 
 	"gonativeui/gpu"
 	"gonativeui/text"
@@ -143,8 +145,9 @@ type entry struct {
 	// SourceImage: the texel rectangle in the atlas.
 	x, y, iw, ih int
 	// text sources: the font and the UTF-8 of the glyph.
-	font text.FontKey
-	utf8 []byte
+	font  text.FontKey
+	glyph [utf8.UTFMax]byte
+	gn    uint8
 }
 
 // Atlas holds the icons of one window: the rasterised symbols and the fonts of
@@ -164,9 +167,12 @@ type Atlas struct {
 	cx, cy, rowH int
 	dirty        [4]int // what the texture lacks: x0, y0, x1, y1 (empty if x1 <= x0)
 	warned       bool   // an overflow has been logged
+	rb           [utf8.UTFMax]byte
+	scratch      []byte // a symbol's coverage before it is copied into pix
 	resolved     int    // icons resolved since the last Raster
 	frame        uint32 // the frame Prepare last saw
 	retired      []retiredTex
+	keep         []ID // prepared at every Raster (Keep)
 	tex          gpu.TextureID
 	texW, texH   int // the size of tex
 	up           ui.Uploader
@@ -201,7 +207,7 @@ const probeRune = 0xE700
 
 // hasGlyph reports whether shaping r in font f finds a glyph.
 func (a *Atlas) hasGlyph(f text.FontKey, r rune) bool {
-	run := a.ts.Run(a.ts.Shape(f, []byte(string(r))))
+	run := a.ts.Run(a.ts.Shape(f, utf8.AppendRune(a.rb[:0], r)))
 	return len(run.Glyphs) > 0 && run.Glyphs[0] != 0
 }
 
@@ -235,7 +241,29 @@ func (a *Atlas) Raster(scale float32) {
 	a.reset()
 	clear(a.ents)
 	a.resolved = 0
+	for _, id := range a.keep {
+		a.resolve(int(id))
+	}
 	a.upload()
+}
+
+// Keep makes icons ids prepared ahead of use: now if Raster has run, and at
+// every Raster after it (a new scale), instead of when a frame first needs
+// them. Use it for the icons that a frame may need for the first time at a
+// moment the app does not choose (a fallback shown when a system icon fails to
+// decode, an error mark): preparing one costs a little work, and allocates on
+// the way (shaping a glyph, rasterising a symbol), which a frame that is
+// meant to run steady should not take by chance. The cost is that of
+// preparing them at Raster, as every icon was before first use. Unknown ids
+// are ignored. Main thread.
+func (a *Atlas) Keep(ids ...ID) {
+	for _, id := range ids {
+		if int(id) >= len(a.specs) || slices.Contains(a.keep, id) {
+			continue
+		}
+		a.keep = append(a.keep, id)
+		a.ent(id)
+	}
 }
 
 // resolve prepares icon i for the current scale and gets it to the renderer:
@@ -245,7 +273,6 @@ func (a *Atlas) resolve(i int) {
 	a.rasterOne(i)
 	a.ents[i].done = true
 	a.resolved++
-	a.upload()
 }
 
 // ent returns icon id's entry, resolving it if it is the first use at this
@@ -258,6 +285,7 @@ func (a *Atlas) ent(id ID) *entry {
 		return e
 	}
 	a.resolve(int(id))
+	a.upload()
 	return &a.ents[id]
 }
 
@@ -281,7 +309,8 @@ func (a *Atlas) rasterOne(i int) {
 	e := &a.ents[i]
 	*e = entry{}
 	if sp.Symbol != "" {
-		if pix, w, h, ok := rasterSymbol(sp.Symbol, float64(sp.Pt)*float64(scale), float64(sp.Weight), sp.Scale); ok {
+		if pix, w, h, ok := rasterSymbolInto(a.scratch, sp.Symbol, float64(sp.Pt)*float64(scale), float64(sp.Weight), sp.Scale); ok {
+			a.scratch = pix[:0]
 			if x, y, fit := a.place(w, h); fit {
 				for r := 0; r < h; r++ {
 					copy(a.pix[(y+r)*a.w+x:(y+r)*a.w+x+w], pix[r*w:(r+1)*w])
@@ -378,17 +407,15 @@ func (a *Atlas) textEntry(e *entry, src Source, family string, r rune, pt float3
 	if !a.hasGlyph(f, r) {
 		return false
 	}
-	utf8 := []byte(string(r))
 	m := a.ts.Metrics(f)
 	lh := m.LineHeight
 	if lh <= 0 {
 		lh = m.Ascent + m.Descent + m.LineGap
 	}
-	*e = entry{
-		src: src, font: f, utf8: utf8,
-		w: a.ts.Run(a.ts.Shape(f, utf8)).Advance,
-		h: float32(math.Ceil(float64(max(lh, m.Ascent+m.Descent)))),
-	}
+	*e = entry{src: src, font: f}
+	e.gn = uint8(utf8.EncodeRune(e.glyph[:], r))
+	e.w = a.ts.Run(a.ts.Shape(f, e.glyph[:e.gn])).Advance
+	e.h = float32(math.Ceil(float64(max(lh, m.Ascent+m.Descent))))
 	return true
 }
 
@@ -532,7 +559,7 @@ func (a *Atlas) Prepare(c *ui.Context, id ID, color uint32) (ui.Flags, []byte) {
 		c.NextAlign(ui.AlignCenter)
 		c.NextTextColor(color)
 		c.NextSize(ui.Px(e.w), ui.Px(e.h))
-		return ui.DrawText, e.utf8
+		return ui.DrawText, e.glyph[:e.gn]
 	}
 	return 0, nil
 }

@@ -400,17 +400,37 @@ func (b *Bench) Build(c *ui.Context) {
 	// harfbuzz's otMapBuilder, none in the second window).
 	if f := b.k.Theme().Font; b.s.synth != nil && f != b.primed {
 		b.primed = f
-		primeNames(b.a.Text, f)
+		primeNames(b.a.Text, b.k.Theme())
 	}
 }
 
-// primeNames shapes each synthetic name in each font, with every digit and
-// character a row adds to it.
-func primeNames(ts *text.System, f theme.FontKeys) {
-	var buf []byte
+// primeNames shapes each synthetic name in each font the rows may be drawn
+// in (the theme's fonts and those of its text styles: the list's body font is a
+// style's, not one of the five), with every digit and character a row adds to
+// it.
+func primeNames(ts *text.System, r *theme.Resolved) {
+	var fonts [theme.NumTextStyles + 6]text.FontKey
+	n := 0
+	add := func(k text.FontKey) {
+		for _, f := range fonts[:n] {
+			if f == k {
+				return
+			}
+		}
+		fonts[n] = k
+		n++
+	}
+	f := r.Font
 	for _, k := range [...]text.FontKey{f.UI, f.UISemi, f.Small, f.Mono, f.MonoBold} {
-		for _, n := range synthNames {
-			buf = append(append(buf[:0], n...), "_0123456789.txt"...)
+		add(k)
+	}
+	for i := range r.Styles {
+		add(r.Styles[i].Font)
+	}
+	var buf []byte
+	for _, k := range fonts[:n] {
+		for _, name := range synthNames {
+			buf = append(append(buf[:0], name...), "_0123456789.txt"...)
 			ts.Shape(k, buf)
 		}
 	}

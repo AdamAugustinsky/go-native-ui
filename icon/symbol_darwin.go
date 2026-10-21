@@ -20,7 +20,15 @@ import (
 // through AppKit and returns its coverage (alpha) as w×h bytes with a 1 px
 // margin. ok is false if the symbol does not exist on this macOS.
 func rasterSymbol(name string, sizePx, weight float64, scale Scale) (pix []byte, w, h int, ok bool) {
-	return rasterConfigured(name, func() objc.ID {
+	return rasterSymbolInto(nil, name, sizePx, weight, scale)
+}
+
+// rasterSymbolInto is rasterSymbol with the coverage written into dst's
+// memory (grown if it is too small): the result aliases dst, so it is valid
+// until dst is used again, and nothing is allocated on the Go heap once dst
+// and the raster's scratch are large enough.
+func rasterSymbolInto(dst []byte, name string, sizePx, weight float64, scale Scale) (pix []byte, w, h int, ok bool) {
+	return rasterConfiguredInto(dst, name, func() objc.ID {
 		return objc.ID(objc.F.Reset().Arg(uintptr(clsSymbolConfig)).Arg(uintptr(selConfigPt)).ArgF64(sizePx).ArgF64(weight).Arg(uintptr(symbolScale(scale))).Call(objc.MsgSend).R0())
 	})
 }
@@ -28,6 +36,14 @@ func rasterSymbol(name string, sizePx, weight float64, scale Scale) (pix []byte,
 // rasterConfigured is rasterSymbol with the NSImageSymbolConfiguration made
 // by config (inside the autorelease pool, once the classes are loaded).
 func rasterConfigured(name string, config func() objc.ID) (pix []byte, w, h int, ok bool) {
+	return rasterConfiguredInto(nil, name, config)
+}
+
+// rgba is the bitmap the symbol is drawn into before its coverage is kept; it
+// grows to the largest symbol and is reused (main thread, as AppKit).
+var rgba []byte
+
+func rasterConfiguredInto(dst []byte, name string, config func() objc.ID) (pix []byte, w, h int, ok bool) {
 	if err := loadSyms(); err != nil {
 		warnOnce(err.Error())
 		return nil, 0, 0, false
@@ -52,7 +68,11 @@ func rasterConfigured(name string, config func() objc.ID) (pix []byte, w, h int,
 	}
 	sw, sh := objc.SendPoint(img, selSize)
 	w, h = int(math.Ceil(sw))+2, int(math.Ceil(sh))+2
-	buf := make([]byte, w*h*4)
+	if cap(rgba) < w*h*4 {
+		rgba = make([]byte, w*h*4)
+	}
+	buf := rgba[:w*h*4]
+	clear(buf)
 	cs := F.Call0(cg.colorSpaceRGB)
 	ctx := F.Reset().ArgPtr(unsafe.Pointer(&buf[0])).Arg(uintptr(w)).Arg(uintptr(h)).Arg(8).Arg(uintptr(w * 4)).Arg(cs).
 		Arg32(1 /* kCGImageAlphaPremultipliedLast */).Call(cg.bitmapContextCreate).R0()
@@ -68,7 +88,10 @@ func rasterConfigured(name string, config func() objc.ID) (pix []byte, w, h int,
 	F.Call1(cg.contextRelease, ctx)
 	F.Call1(cg.colorSpaceRelease, cs)
 
-	pix = make([]byte, w*h)
+	if cap(dst) < w*h {
+		dst = make([]byte, w*h)
+	}
+	pix = dst[:w*h]
 	for i := range pix {
 		pix[i] = buf[i*4+3]
 	}

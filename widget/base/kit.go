@@ -47,6 +47,7 @@ type Kit struct {
 	th    *theme.Theme
 	r     theme.Resolved
 	icons *icon.Atlas
+	keep  []icon.ID // KeepIcons, until the atlas exists
 	extra []icon.Spec
 
 	scale  float32
@@ -122,6 +123,17 @@ func (k *Kit) AddIcon(s icon.Spec) icon.ID {
 		k.icons.Add(s)
 	}
 	return icon.NumStandard + icon.ID(len(k.extra)-1)
+}
+
+// KeepIcons has the atlas prepare icons ids ahead of use and again at every
+// scale, instead of when a frame first draws them (icon.Atlas.Keep): for the
+// icons a steady frame may first need at a moment the app does not choose.
+// Before the first Begin it takes effect at the first Begin. Main thread.
+func (k *Kit) KeepIcons(ids ...icon.ID) {
+	k.keep = append(k.keep, ids...)
+	if k.icons != nil {
+		k.icons.Keep(ids...)
+	}
 }
 
 // SetTheme replaces the theme the kit resolves (the one given to NewKit):
@@ -264,6 +276,7 @@ func (k *Kit) resolve(s float32) {
 	k.fol.Invalidate()
 	if k.icons == nil {
 		k.icons = icon.New(k.ts, k.extra...)
+		k.icons.Keep(k.keep...)
 	}
 	k.icons.Raster(s)
 	k.icons.Attach(k.c.Uploader())

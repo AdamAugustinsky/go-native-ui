@@ -362,3 +362,24 @@ func BenchmarkLinuxList100k(b *testing.B) {
 		})
 	}
 }
+
+// A service has the scratch of its workers (and the watcher's stat) ready, so
+// that listings which overlap for the first time allocate no 72 KiB buffer.
+func TestServicePrewarmsScratch(t *testing.T) {
+	lxScratchMu.Lock()
+	lxScratchFree = nil
+	lxScratchMu.Unlock()
+	prewarmScratch(numWorkers + 1)
+	n := numWorkers + 1
+	got := make([]*lxScratch, n)
+	if a := testing.AllocsPerRun(10, func() {
+		for i := range got {
+			got[i] = lxGetScratch()
+		}
+		for _, s := range got {
+			lxPutScratch(s)
+		}
+	}); a != 0 {
+		t.Errorf("%d scratches taken at once allocate %v times after prewarmScratch", n, a)
+	}
+}
