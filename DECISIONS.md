@@ -1035,3 +1035,15 @@ The whole UI is rewritten in Go on the framework with the Rex design system, mac
 - WAV files from AudioToolbox's writer (which `AVAudioRecorder` uses) parse back exactly.
 
 Live microphone capture was not run: access cannot be granted headlessly, so that test skips unless the process is authorized.
+
+## D59. `media.OpenPlayer`: files through the system's decoders, opened off the main thread (phase 6, 2026-10-21)
+
+**Decision.** `media.OpenPlayer(path)` makes the same `Player` (Play, Pause, Seek, Position, Duration, rate with the pitch kept, volume, `Ended`, Close, the `MaxPlayers` cap) over an `AVAudioPlayer` `initWithContentsOfURL:error:`, so ZapFast plays what its core cannot decode (MP3, AAC, M4A), the user's notification sounds and system sounds, with no `afplay`. Windows and Linux return `ErrUnsupported`, as the rest of `media`.
+- **Async open (framework rule: no blocking I/O on the main thread).** `NewPlayer` is 8 ms of `prepareToPlay` on the main thread, but opening a file reads it (a slow or network volume, an MP3 scanned for its length). So `OpenPlayer` takes a slot and an event record (D37, class 2) and returns at once; a goroutine stats the file, makes the `AVAudioPlayer` through `internal/cf` (the way `Warm` does), enables rate, prepares it, reads `duration`, and completes the record: `Opened`, or `Failed` with the error in `Player.Err`. Before that, `Ready` is false, `Duration` and `Position` are 0, `Play` returns `ErrState`; `SetRate` and `SetVolume` are kept and applied on attach.
+- **Attach on the main thread.** The object, not Go code, is handed over: the first `Player` method that finds the job done sets the slot's delegate (the one `Ended` uses) and applies rate and volume. `Ready`, `Duration`, `Position` and `Playing` stay allocation-free.
+- **Close while opening.** A job's state (opening, done, cancelled) is compare-and-swapped by the goroutine and by `Close`: whoever loses frees nothing twice, and the loser of the race that holds the object releases it. The slot and record go back at `Close` (a failed open gives its slot back at once).
+- **Errors.** A missing file wraps the file system's error (`fs.ErrNotExist`); a file that is not audio, empty, or a directory is `ErrFormat` with the system's description.
+
+**Alternatives.** A synchronous `OpenPlayer` on the main thread: simpler, but blocks on I/O. Reading the file on a goroutine and handing the bytes to `initWithData:`: copies the whole file and loses streaming decode of long files. A Player that blocks `Play` until ready: hides the wait but needs a lock on the main thread.
+
+**Evidence** (the `media` tests on a Mac mini, through the real `AVAudioPlayer`): an AAC/M4A made with `AVAudioFile` opens, lasts 1 s, advances, ends once after about 1 s, and after about 0.5 s at 2×; `/System/Library/Sounds/Tink.aiff` opens and plays to its end; a missing file, text named `.mp3`, an empty file and a directory give `Failed` with the error; 40 opens closed at staggered times leave no record or slot; the `MaxPlayers` cap holds; the per-frame reads allocate 0 bytes.
