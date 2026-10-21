@@ -44,7 +44,11 @@ type persist struct {
 // is rebuilt each frame by the builder.
 type box struct {
 	persist
+	boxFrame
+}
 
+// boxFrame is the part of a box record rebuilt every frame.
+type boxFrame struct {
 	flags                           Flags
 	parent, first, last, next, prev ID
 	field                           bool  // a text field (TextField): it takes the keys of keys.go when focused
@@ -721,9 +725,8 @@ func (c *Context) newBox(flags Flags, key Key) ID {
 		c.boxes[id].persist = persist{key: key}
 	}
 	b := &c.boxes[id]
-	p := b.persist
-	*b = box{persist: p}
-	b.prevHid, b.hid = p.hid, false
+	b.boxFrame = boxFrame{}
+	b.prevHid, b.hid = b.hid, false
 	b.lastFrame = c.frame
 	b.flags = flags
 
