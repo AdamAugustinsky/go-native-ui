@@ -8,10 +8,14 @@ import (
 	"gonativeui/app"
 	"gonativeui/examples/notes/notes"
 	"gonativeui/internal/objc"
+	"gonativeui/internal/testlock"
 	"gonativeui/ui"
 	"gonativeui/widget/widgettest"
 )
 
+// start opens the window as widgettest's StartLive does: it counts as the key
+// window whatever AppKit says, so the input a test posts is a key window's.
+// The tests whose subject is AppKit's own focus use startReal.
 func start(t *testing.T) (*widgettest.LiveApp, *notes.Notes) {
 	t.Helper()
 	n, err := notes.New()
@@ -20,20 +24,26 @@ func start(t *testing.T) (*widgettest.LiveApp, *notes.Notes) {
 	}
 	l := widgettest.StartLive(t, notes.Config(), n)
 	l.Frames(6)
-	// the window is the key one, as a person's is: the Edit menu's standard
-	// items act through the key window's responder chain
+	return l, n
+}
+
+// startReal is start for a test of what AppKit does with a key window: the
+// window's focus is AppKit's, which the test makes active and key, holding
+// the activation, which the system gives one process at a time.
+func startReal(t *testing.T) (*widgettest.LiveApp, *notes.Notes) {
+	t.Helper()
+	testlock.Hold(t, "activation")
+	l, n := start(t)
+	l.RealFocus()
+	var win objc.ID
 	l.Do(func(a *app.App) {
+		win = objc.ID(a.Win.Native().NSWindow)
 		objc.Send1(widgettest.NSApp(), objc.Sel("activateIgnoringOtherApps:"), 1)
-		objc.Send1(objc.ID(a.Win.Native().NSWindow), objc.Sel("makeKeyAndOrderFront:"), 0)
+		objc.Send1(win, objc.Sel("makeKeyAndOrderFront:"), 0)
 	})
-	var key bool
-	for i := 0; i < 60 && !key; i++ {
-		l.Frames(4)
-		l.Do(func(a *app.App) { key = objc.SendBool(objc.ID(a.Win.Native().NSWindow), objc.Sel("isKeyWindow")) })
-	}
-	if !key {
-		t.Skip("the window cannot become the key window here (no active session)")
-	}
+	l.Until("the window is AppKit's key window", 240, func() (key bool) {
+		return objc.SendBool(win, objc.Sel("isKeyWindow"))
+	})
 	return l, n
 }
 
@@ -67,7 +77,7 @@ func TestWindowOnGlassWithContent(t *testing.T) {
 // Remove asks the window for a real NSAlert sheet: Cancel keeps the note, the
 // default button Remove removes it, and nothing is drawn by the app.
 func TestRemoveIsARealAlert(t *testing.T) {
-	l, n := start(t)
+	l, n := startReal(t)
 	l.Click(ui.RoleListItem, "Grocery list")
 	l.Click(ui.RoleButton, "Remove…")
 	var sheet widgettest.Sheet
@@ -107,12 +117,29 @@ func TestRemoveIsARealAlert(t *testing.T) {
 // The Edit menu acts once on the field that has the keyboard: Select All, Cut,
 // Paste and Undo through the menu, and ⌘V through the window.
 func TestEditMenuActsOnce(t *testing.T) {
-	l, _ := start(t)
+	testlock.Hold(t, "pasteboard") // the general pasteboard is the system's: Cut and Paste must see each other's
+	l, n := startReal(t)
 	l.Click(ui.RoleTextField, "New note")
 	l.Type("hello")
-	if got := fieldText(l); got != "hello" {
-		t.Fatalf("the field holds %q after typing", got)
+	// A paste is answered by the pasteboard worker in a later frame: the field
+	// is read once it holds what the step should have made it hold.
+	holds := func(after, want string) {
+		t.Helper()
+		var tr ui.SemTree // the condition runs on the main thread, where the tree is read directly
+		field := func() string {
+			n.Context().Semantics(&tr)
+			for i := range tr.Nodes {
+				if nd := &tr.Nodes[i]; nd.Role == ui.RoleTextField && string(tr.Text(nd.Name)) == "New note" {
+					return string(tr.Text(nd.Value))
+				}
+			}
+			return "<no field>"
+		}
+		if !l.Within("the field holds "+want, 240, func() bool { return field() == want }) {
+			t.Errorf("after %s the field holds %q, want %q", after, fieldText(l), want)
+		}
 	}
+	holds("typing", "hello")
 	choose := func(item string) {
 		t.Helper()
 		var ok bool
@@ -123,25 +150,16 @@ func TestEditMenuActsOnce(t *testing.T) {
 		if !ok {
 			t.Fatalf("no enabled Edit ▸ %s", item)
 		}
-		l.Frames(4)
 	}
 	choose("Select All")
 	choose("Cut")
-	if got := fieldText(l); got != "" {
-		t.Errorf("after Cut the field holds %q", got)
-	}
+	holds("Cut", "")
 	choose("Paste")
-	if got := fieldText(l); got != "hello" {
-		t.Errorf("after one Paste the field holds %q, want hello once", got)
-	}
+	holds("one Paste", "hello")
 	l.Press(ui.KeyCode('V'), ui.ModSuper)
-	if got := fieldText(l); got != "hellohello" {
-		t.Errorf("after ⌘V the field holds %q, want hello twice", got)
-	}
+	holds("⌘V", "hellohello")
 	choose("Undo")
-	if got := fieldText(l); got != "hello" {
-		t.Errorf("after Undo the field holds %q, want one paste undone", got)
-	}
+	holds("Undo", "hello")
 }
 
 // The keyboard focus ring follows Tab, not the mouse: a click on the switch
