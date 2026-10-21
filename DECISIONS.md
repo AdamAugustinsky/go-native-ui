@@ -15,7 +15,7 @@ updates are marked "Phase 1:".
 - Go 1.27.x, module `gonativeui` (placeholder; final name needs your approval).
 - `CGO_ENABLED=0` on every target. Every target cross-compiles from any host.
 - Targets:
-  - darwin/arm64 + amd64, **macOS 14+** (decided at the phase-0 review). Go 1.27's floor is 13; we raise it so `NSView` `CADisplayLink` is always available and no `CVDisplayLink` fallback is needed
+  - darwin/arm64 + amd64, **macOS 14+** (decided at the phase-0 review). Go 1.27's floor is 13; we raise it so `NSView` `CADisplayLink` is always available and no `CVDisplayLink` fallback is needed. Phase 6: darwin/amd64 is dropped (D55)
   - windows/amd64 + arm64, Windows 10+ (Go's floor since 1.21)
   - linux/amd64 + arm64 with glibc. purego makes Linux binaries dynamically linked against `libc.so.6`/`libdl.so.2`, so musl is not supported out of the box.
 - Release builds use `-trimpath -ldflags="-s -w"`. CI records the stripped size per target.
@@ -1005,3 +1005,9 @@ The whole UI is rewritten in Go on the framework with the Rex design system, mac
 - **Native glass capsules over a drawn pocket,** with a foreground layer for the glyphs (effort L). Possible later, decided by eye once the drawn band ships, but it costs the second drawable, the ~1.4 ms wait, and AppKit's own press response.
 - **Hosting an `NSToolbar`.** Rejected: it takes the band's clicks.
 - **A transparent `NSScrollView` over our layer, to borrow its pocket.** Rejected: the colour is wrong, and it relies on behaviour AppKit doesn't promise.
+
+## D55. macOS means Apple silicon (phase 6, 2026-10-20)
+
+**Decision (Adam, 2026-10-20: "literally don't care about intel macs, we can literally strip support, and also not worry about it going forwards").** The framework and its apps support macOS on Apple silicon (darwin/arm64) only. darwin/amd64 code paths, build targets, universal binaries and CI checks are removed, and building for darwin/amd64 fails with a message naming this decision. `gnui package` builds arm64. Windows and Linux keep amd64 and arm64.
+
+**Reasoning:** macOS 26 is the last release for Intel Macs, and macOS 27, the reference system here, does not run on them; GitHub's last Intel Mac runner goes in August 2027; and the Intel-only paths (struct returns, `NSRange` passing, Rosetta for local checks) cost testing time with no users to serve.

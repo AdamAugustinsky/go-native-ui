@@ -18,7 +18,6 @@
 package objc
 
 import (
-	"runtime"
 	"unsafe"
 
 	"github.com/ebitengine/purego"
@@ -39,7 +38,6 @@ var F = new(ffi.Frame)
 var (
 	MsgSend      uintptr // objc_msgSend
 	MsgSendSuper uintptr // objc_msgSendSuper
-	msgSendStret uintptr // objc_msgSend_stret (amd64 only)
 	getClass     uintptr
 	selRegister  uintptr
 	allocPair    uintptr
@@ -65,9 +63,6 @@ func init() {
 		return p
 	}
 	MsgSend = sym("objc_msgSend")
-	if runtime.GOARCH == "amd64" {
-		msgSendStret = sym("objc_msgSend_stret")
-	}
 	getClass, selRegister = sym("objc_getClass"), sym("sel_registerName")
 	allocPair, registerPair = sym("objc_allocateClassPair"), sym("objc_registerClassPair")
 	addMethod, addProtocol, getProtocol = sym("class_addMethod"), sym("class_addProtocol"), sym("objc_getProtocol")
@@ -167,14 +162,13 @@ func SendBool1(id ID, s SEL, a uintptr) bool {
 	return F.Reset().Arg(uintptr(id)).Arg(uintptr(s)).Arg(a).Call(MsgSend).Bool()
 }
 
-// SendF64 sends a message returning double (d0 / xmm0).
+// SendF64 sends a message returning double (d0).
 func SendF64(id ID, s SEL) float64 {
 	checkMain()
 	return F.Reset().Arg(uintptr(id)).Arg(uintptr(s)).Call(MsgSend).F64(0)
 }
 
-// SendPoint sends a message returning NSPoint/NSSize (HFA d0,d1 on arm64;
-// two SSE eightbytes xmm0,xmm1 on amd64).
+// SendPoint sends a message returning NSPoint/NSSize (an HFA in d0,d1).
 func SendPoint(id ID, s SEL) (x, y float64) {
 	checkMain()
 	F.Reset().Arg(uintptr(id)).Arg(uintptr(s)).Call(MsgSend)
@@ -188,9 +182,6 @@ func SendPoint(id ID, s SEL) (x, y float64) {
 // method's arguments and call MsgSendSuper:
 //
 //	ok := objc.SuperFrame(c.Frame(), def.Superclass(), self, sel).Arg(responder).Call(objc.MsgSendSuper).Bool()
-//
-// Methods returning a struct in memory (objc_msgSendSuper_stret on amd64)
-// are not supported.
 func SuperFrame(f *ffi.Frame, superclass, self ID, sel SEL) *ffi.Frame {
 	sup := f.Scratch()
 	sup[0], sup[1] = uintptr(self), uintptr(superclass) // struct objc_super { id receiver; Class super_class; }
@@ -210,18 +201,11 @@ func SendSuper(f *ffi.Frame, superclass, self ID, sel SEL, args ...uintptr) uint
 // Rect is NSRect/CGRect.
 type Rect struct{ X, Y, W, H float64 }
 
-var rectOut = new(Rect)
-
-// SendRect sends a message returning NSRect: d0..d3 on arm64, a hidden
-// result pointer through objc_msgSend_stret on amd64.
+// SendRect sends a message returning NSRect (an HFA in d0..d3).
 func SendRect(id ID, s SEL) Rect {
 	checkMain()
-	if runtime.GOARCH == "arm64" {
-		F.Reset().Arg(uintptr(id)).Arg(uintptr(s)).Call(MsgSend)
-		return Rect{F.F64(0), F.F64(1), F.F64(2), F.F64(3)}
-	}
-	F.Reset().SetIndirectResult(unsafe.Pointer(rectOut)).Arg(uintptr(id)).Arg(uintptr(s)).Call(msgSendStret)
-	return *rectOut
+	F.Reset().Arg(uintptr(id)).Arg(uintptr(s)).Call(MsgSend)
+	return Rect{F.F64(0), F.F64(1), F.F64(2), F.F64(3)}
 }
 
 // AppendUTF8 appends the UTF-8 bytes of an NSString to dst.

@@ -594,7 +594,7 @@ k.EndVList(&v)
 
 - **`gnui.json`.** The standard library has JSON (`electron-tauri.md` §4): id, name, version, build, category, minimum system, icon, resources, frameworks (nested dylibs), URL schemes, document types, usage strings, entitlements, login agents (`loginAgents`: name and arguments; the label and program are derived from the id), extra plist.
 - **`gnui package`:**
-  - builds darwin/arm64 and amd64 with `-trimpath -ldflags="-s -w"` and writes a universal Mach-O in Go;
+  - builds darwin/arm64 with `-trimpath -ldflags="-s -w"` (macOS means Apple silicon, D55);
   - assembles the `.app`, with a pure-Go `.icns` from a 1024 px PNG;
   - writes and lints `Info.plist`;
   - signs inside out with `codesign --options runtime --timestamp` and generated entitlements, nested frameworks first;
@@ -961,7 +961,7 @@ wave 5  fixes from both checkpoints' findings                               ║ 
    - the guide's new chapters are checked excerpts;
    - `go run ./tools/rexui add` copies a component into a scratch app that builds.
 10. **`gnui`:**
-    - `gnui package` produces a universal, hardened, signed bundle that passes `codesign --verify --deep --strict`. Notarization and stapling are verified once you have an identity, and listed as untested until then;
+    - `gnui package` produces an arm64, hardened, signed bundle that passes `codesign --verify --deep --strict`. Notarization and stapling are verified once you have an identity, and listed as untested until then;
     - `gnui run` keeps a notification grant across two rebuilds.
 11. **Numbers:** Windows and Linux numbers come only from CI. Anything not exercised is listed as untested, not claimed: GnuiShot in CI, Writing Tools on our view, VoiceOver with the bridge active in CI.
 12. **You:** checkpoint 1 is passed and its findings are closed.
@@ -1040,7 +1040,7 @@ Running. **Checkpoint 1 is the priority:** the three D6 apps are nearly final (g
 - **A process with no bundle identifier** (a test binary, `go run`) got no events for about 5.5 s after its window opened: AppKit's launch-time window restoration waits with nowhere to look. A pure AppKit program does the same, and bundled apps launched with `open` don't (0.14–0.19 s). `p6-occluded` turns restoration off, in memory, for processes without a bundle identifier (`platform/restore_darwin.go`); first-frame and startup numbers were never affected, since the first frame is drawn before the wait. The live harness also waits for visibility instead of calling it a blocked main thread (`p6-stallfix`).
 - **Build 26B5101f vs the MacBook's 26B5091g:** the selected sidebar row is regular weight here and semibold there. We keep semibold, since the MacBook is the reference. The dark `separatorColor` differs slightly; it is read live.
 - **The external SSD** (Go's cache and temp dirs) stopped answering on 2026-10-20. macOS first asked whether OpenCode.app may access a removable volume (Adam allowed it), but the real cause is that macOS's file-permission checks are stuck system-wide. The kernel logs "watchdog expired for approval entry", and anything under `~/Desktop`, `~/Documents`, `~/Downloads` or `/Volumes/SSD` waits 6–20 s, then fails with EINTR. Restarting the per-user `tccd` didn't help, so the fix needs Adam: `sudo killall -9 sandboxd tccd`, or a restart. Until then Go uses one shared cache in the opencode temp dir on the main disk; a watchdog trims it below 7 GB free and removes private caches below 4 GB. Agents keep tests and demos away from those folders.
-- **Rosetta:** x86_64 processes hung, unkillable, while Rosetta's updater waited behind a SecurityAgent password dialog. They cleared when the dialog closed. Agents never run amd64 binaries on this Mac; Intel builds are cross-compiled and vetted in CI. Whether to add a CI job on GitHub's Intel Mac runner (`macos-15-intel`, available until August 2027), or to drop Intel Macs, is with Adam.
+- **Rosetta:** x86_64 processes hung, unkillable, while Rosetta's updater waited behind a SecurityAgent password dialog. They cleared when the dialog closed. Agents never run amd64 binaries on this Mac. Intel Macs are no longer supported (D55), so nothing needs Rosetta.
 - **CI time limits** were raised to 25 minutes for macOS and Linux and 35 for Windows (`p6-citimeout`), as the suite grew past 15. Cutting the time is #30.
 
 **Merged on `main`:**
@@ -1090,7 +1090,7 @@ Running. **Checkpoint 1 is the priority:** the three D6 apps are nearly final (g
 
 **Queued:**
 - **Checkpoint 1:** one independent review across the three D6 apps once Pilot's round ends; the apps merge `main` for the opaque pocket, then D4c's blur; package and copy them to the MacBook; the hand list below.
-- **Next:** S4, C7, T4, T5, N6, N3b (on F4), ZapFast Z2 when its inputs land; an Intel Mac CI job if Adam wants one.
+- **Next:** S4, C7, T4, T5, N6, N3b (on F4), ZapFast Z2 when its inputs land.
 
 **Parked until an app needs them:** S7 audio and S8 video (not started).
 
@@ -1110,6 +1110,7 @@ Running. **Checkpoint 1 is the priority:** the three D6 apps are nearly final (g
 - **Blur over our own content is drawn by our renderer (D54)**, from the glass probe's measurements (`docs/research/glass-over-metal.md`). The opaque measured fill is the fallback.
 - **Notifications:** `notify.Setup` runs before `app.Main` and returns `ErrTooLate` after launch. Slots of notes the user cleared are reclaimed on activation, and when the table fills, against a snapshot. A response is always stored before the system is told, waiting for a record if it must.
 - **Review rounds:** when a scoped re-review still finds highs, the agent fixes them with tests that fail first, and the coordinator checks the fixes; there is no third review. The rest become `follow-up` issues.
+- **macOS means Apple silicon (D55):** darwin/amd64 is stripped (`p6-noamd64mac`): no Intel code paths, universal binaries or Rosetta CI checks, and a build for darwin/amd64 stops with an error naming D55. `gnui package` builds arm64. Windows and Linux keep amd64 and arm64.
 
 **Follow-up issues:** #1–#32 (`follow-up` label). New today: #29 Pilot's 1M-row filter runs at half speed in a real window; #30 CI duration; #31 hidden-but-built animations not evicted; #32 `WatchShown`'s 64 limit.
 
@@ -1129,7 +1130,6 @@ Running. **Checkpoint 1 is the priority:** the three D6 apps are nearly final (g
 **Waiting on you:**
 - **On the Mac mini:** the stuck permission checks, by `sudo killall -9 sandboxd tccd` in Terminal or a restart. They block the SSD, and also Hermes's MindYoung ads script, Raycast and the Contacts helper.
 - **The macOS 27.2 RC** is scheduled to install on the Mac mini tonight. Postpone it, or let it install, and then update the MacBook to the same build?
-- **Intel Macs:** a CI job on GitHub's Intel Mac runner, compile-only as now, or drop them?
 - **Logout test user:** creating a macOS test user on the MacBook for F3's logout test (the steps are in `app/applive/logout_darwin_test.go`).
 - **Rex public-test access,** to measure Rex directly.
 

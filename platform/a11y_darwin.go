@@ -193,8 +193,8 @@ func axSetup() {
 	for _, m := range axElementMethods {
 		d.Method(m.s, m.types, m.h)
 	}
-	d.MethodIMP(objc.Sel("accessibilityFrame"), "{CGRect={CGPoint=dd}{CGSize=dd}}@:", elemFrameIMP)
-	d.MethodIMP(objc.Sel("accessibilityFrameForRange:"), "{CGRect={CGPoint=dd}{CGSize=dd}}@:{_NSRange=QQ}", elemFrameForRangeIMP)
+	d.Method(objc.Sel("accessibilityFrame"), "{CGRect={CGPoint=dd}{CGSize=dd}}@:", elemFrame)
+	d.Method(objc.Sel("accessibilityFrameForRange:"), "{CGRect={CGPoint=dd}{CGSize=dd}}@:{_NSRange=QQ}", elemFrameForRange)
 	ax.elemDef, ax.elem = d, d.Register()
 }
 

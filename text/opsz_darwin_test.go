@@ -230,7 +230,7 @@ func inkVsOutline(s *System, face FaceID, gid uint16, e GlyphEntry) (past, short
 	l, r := float64(e.BearingX)+float64(c0), float64(e.BearingX)+float64(c1+1)
 	top, bot := float64(e.BearingY)-float64(r0), float64(e.BearingY)-float64(r1+1)
 	s.gid[0] = gid
-	s.fr.Reset().SetIndirectResult(unsafe.Pointer(&s.ret[0])).Arg(s.faces[face].font).Arg32(0).
+	s.fr.Reset().Arg(s.faces[face].font).Arg32(0).
 		ArgPtr(unsafe.Pointer(&s.gid[0])).ArgPtr(unsafe.Pointer(&s.rect[0])).Arg(1).Call(sy.ctFontGetBoundingRectsForGlyphs)
 	k := float64(s.faces[face].scale)
 	rl, rb, rr, rt := s.rect[0]*k, s.rect[1]*k, (s.rect[0]+s.rect[2])*k, (s.rect[1]+s.rect[3])*k

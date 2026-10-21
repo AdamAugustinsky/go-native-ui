@@ -10,7 +10,9 @@ responsive input. A dual-pane file browser will prove it.
 - [docs/measurements/](docs/measurements/): raw numbers per phase and machine
 - `probes/`: throwaway phase-0 experiments (each file header has its command)
 
-Toolchain: Go 1.27 with `CGO_ENABLED=0` on every target.
+Toolchain: Go 1.27 with `CGO_ENABLED=0` on every target. Targets: macOS on
+Apple silicon (darwin/arm64 only; Intel Macs are not supported, D55), Windows
+and Linux on amd64 and arm64.
 
 ## Phase 1 spike
 

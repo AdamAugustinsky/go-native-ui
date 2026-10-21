@@ -315,11 +315,7 @@ func cmdQ(win uintptr) objc.ID {
 	ts := objc.SendF64(objc.Send(objc.Cls("NSProcessInfo"), objc.Sel("processInfo")), objc.Sel("systemUptime"))
 	f := objc.F.Reset().Arg(uintptr(cls)).Arg(uintptr(sel)).Arg(10).ArgPoint(10, 10).Arg(1 << 20).ArgF64(ts).Arg(win).Arg(0).Arg(uintptr(s)).Arg(uintptr(s))
 	const code = 0x0C
-	if runtime.GOARCH == "arm64" {
-		f.Arg32(uint32(code) << 16) // isARepeat (NO) at byte 0, the keyCode at byte 2 of the packed stack
-	} else {
-		f.Arg(0).Arg(code)
-	}
+	f.Arg32(uint32(code) << 16) // isARepeat (NO) at byte 0, the keyCode at byte 2 of the packed stack
 	return objc.ID(f.Call(objc.MsgSend).R0())
 }
 

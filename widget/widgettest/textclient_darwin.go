@@ -3,12 +3,8 @@
 package widgettest
 
 import (
-	"runtime"
-	"sync"
 	"unicode/utf16"
 	"unsafe"
-
-	"github.com/ebitengine/purego"
 
 	"gonativeui/internal/objc"
 	"gonativeui/ui"
@@ -51,14 +47,9 @@ func TextInput(v objc.ID) TextClient { return TextClient{View: v} }
 // replaces (NoRange for none).
 func (c TextClient) SetMarkedText(s string, sel, repl Range) {
 	str, m := objc.Str(s), objc.Sel("setMarkedText:selectedRange:replacementRange:") // before the call is assembled: they use the same frame
-	f := objc.F.Reset().Arg(uintptr(c.View)).Arg(uintptr(m)).
-		Arg(uintptr(str)).Arg(uintptr(sel.Loc)).Arg(uintptr(sel.Len))
-	if runtime.GOARCH == "amd64" {
-		// SysV: after five integer arguments the replacement NSRange does not
-		// fit in the one register left (r9), so it is wholly on the stack.
-		f.Arg(0)
-	}
-	f.Arg(uintptr(repl.Loc)).Arg(uintptr(repl.Len)).Call(objc.MsgSend)
+	objc.F.Reset().Arg(uintptr(c.View)).Arg(uintptr(m)).
+		Arg(uintptr(str)).Arg(uintptr(sel.Loc)).Arg(uintptr(sel.Len)).
+		Arg(uintptr(repl.Loc)).Arg(uintptr(repl.Len)).Call(objc.MsgSend)
 }
 
 // InsertText is insertText:replacementRange: with s; repl is the range it
@@ -116,9 +107,6 @@ func (c TextClient) CharacterIndex(x, y float64) uint {
 	return uint(objc.F.Reset().Arg(uintptr(c.View)).Arg(uintptr(sel)).ArgPoint(x, y).Call(objc.MsgSend).R0())
 }
 
-var stretOnce sync.Once
-var msgSendStret uintptr
-
 // FirstRect is firstRectForCharacterRange:actualRange: in screen points (x, y
 // up from the bottom of the main screen, width, height): where an input
 // method puts its candidate window. It also returns the range the client
@@ -126,19 +114,8 @@ var msgSendStret uintptr
 func (c TextClient) FirstRect(r Range) (rect [4]float64, actual Range) {
 	act := new([2]uintptr) // on the heap: the call may call back into Go, which can move a stack
 	sel := objc.Sel("firstRectForCharacterRange:actualRange:")
-	if runtime.GOARCH == "arm64" {
-		objc.F.Reset().Arg(uintptr(c.View)).Arg(uintptr(sel)).Arg(uintptr(r.Loc)).Arg(uintptr(r.Len)).ArgPtr(unsafe.Pointer(act)).Call(objc.MsgSend)
-		return [4]float64{objc.F.F64(0), objc.F.F64(1), objc.F.F64(2), objc.F.F64(3)}, Range{uint(act[0]), uint(act[1])}
-	}
-	stretOnce.Do(func() {
-		if h, err := purego.Dlopen("/usr/lib/libobjc.A.dylib", purego.RTLD_NOW|purego.RTLD_GLOBAL); err == nil {
-			msgSendStret, _ = purego.Dlsym(h, "objc_msgSend_stret")
-		}
-	})
-	out := new(objc.Rect)
-	objc.F.Reset().SetIndirectResult(unsafe.Pointer(out)).Arg(uintptr(c.View)).Arg(uintptr(sel)).Arg(uintptr(r.Loc)).Arg(uintptr(r.Len)).
-		ArgPtr(unsafe.Pointer(act)).Call(msgSendStret)
-	return [4]float64{out.X, out.Y, out.W, out.H}, Range{uint(act[0]), uint(act[1])}
+	objc.F.Reset().Arg(uintptr(c.View)).Arg(uintptr(sel)).Arg(uintptr(r.Loc)).Arg(uintptr(r.Len)).ArgPtr(unsafe.Pointer(act)).Call(objc.MsgSend)
+	return [4]float64{objc.F.F64(0), objc.F.F64(1), objc.F.F64(2), objc.F.F64(3)}, Range{uint(act[0]), uint(act[1])}
 }
 
 // ValidAttributes is validAttributesForMarkedText: the attribute names the

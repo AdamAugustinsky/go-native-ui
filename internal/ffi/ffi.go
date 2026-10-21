@@ -1,4 +1,4 @@
-//go:build (darwin || linux) && (arm64 || amd64)
+//go:build (darwin && arm64) || (linux && (arm64 || amd64))
 
 // Package ffi calls C functions and receives C callbacks without cgo and
 // without heap allocation.
@@ -233,8 +233,8 @@ func (f *Frame) argHFA(v ...float64) *Frame {
 }
 
 // SetIndirectResult sets the hidden pointer for large struct returns: x8 on
-// arm64. On amd64 the pointer is the first integer argument, so callers must
-// pass it with Arg before any other argument (objc_msgSend_stret convention).
+// arm64. On amd64 (SysV) the pointer is the first integer argument, so
+// callers must pass it with Arg before any other argument.
 func (f *Frame) SetIndirectResult(p unsafe.Pointer) *Frame {
 	if runtime.GOARCH == "arm64" {
 		f.r8 = uintptr(p)

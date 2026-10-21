@@ -15,7 +15,7 @@ cd cmd/gallery && go run ../gnui package      # release bundle in ./dist
 
 | command | what it does |
 |---|---|
-| `gnui package` | release `.app` from `gnui.json`: built with `-tags gnui_release` (no debug overlay Debug menu, chords or inspector; a plain `go build` and `gnui run` stay development builds), universal binary, `Info.plist`, `.icns`, resources, nested frameworks signed inside out, generated entitlements, hardened runtime; optional notarize + staple and `.dmg` |
+| `gnui package` | release `.app` from `gnui.json`: built with `-tags gnui_release` (no debug overlay Debug menu, chords or inspector; a plain `go build` and `gnui run` stay development builds), arm64 binary, `Info.plist`, `.icns`, resources, nested frameworks signed inside out, generated entitlements, hardened runtime; optional notarize + staple and `.dmg` |
 | `gnui run` | development bundle `.gnui/dev/<Name>.app` (bundle id + `.dev`), signed with `gnui-dev`, launched through LaunchServices; output streamed |
 | `gnui sign app.app` | signs an existing bundle, nested code first (the tool apps) |
 | `gnui doctor` | checks the toolchain, `gnui.json`, the `gnui-dev` identity (trust, validity, a real signing round trip) and release identities |
@@ -28,8 +28,6 @@ the user's Apple identity (Developer ID certificate, notarytool credentials).
 ```
 -c gnui.json          configuration (default ./gnui.json)
 -o dir                output directory (default dist) -> dist/<Name>.app, dist/<Name>-<version>.dmg
--arch universal|arm64|amd64   default universal: darwin/arm64 and darwin/amd64 built with
-                      -trimpath -ldflags "-s -w", merged into one Mach-O in Go
 -identity id          signing identity or "-" for ad-hoc. A name, a part of one that matches
                       exactly one identity, or a SHA-1, resolved against
                       `security find-identity -v -p codesigning`; whether it can be notarized
@@ -54,6 +52,9 @@ skipped (notarize and staple, the dmg's signature and notarization) with the
 three steps to get an identity. `-notarize` without one stops *before*
 building, with exit status 3.
 
+The executable is darwin/arm64, built with `-trimpath -ldflags "-s -w"`: macOS
+means Apple silicon (DECISIONS.md D55), so there is no universal binary.
+
 What it does not do: Mac App Store packaging, provisioning profiles and
 sandbox container setup (the entitlements you list are written as they are).
 
@@ -68,7 +69,7 @@ sandbox container setup (the entitlements you list are written as they are).
 -- args          passed to the app
 ```
 
-The bundle is built for this Mac's architecture only, with symbols kept, no
+The bundle is built for darwin/arm64, with symbols kept, no
 hardened runtime (a nested dylib loads without a Team ID) and no timestamp (no
 network). Entitlements from `gnui.json` are applied, so a sandboxed app is
 tested sandboxed. The app is started with `open -n -W` (LaunchServices: Dock,
@@ -212,7 +213,7 @@ Dock tiles). That is deliberate.
 ## Tests
 
 `go test ./cmd/gnui` packages `testdata/hello` and the real gallery as signed
-universal bundles, checks the structure, `Info.plist`, `.icns`, login-agent
+arm64 bundles, checks the structure, `Info.plist`, `.icns`, login-agent
 plist, `codesign --verify --deep --strict`, the entitlements and the hardened
 runtime flag in the signature, runs `gnui run` twice with different binaries
 and checks that the designated requirement is the same (and that an ad-hoc

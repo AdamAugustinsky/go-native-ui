@@ -4,7 +4,6 @@ package platform
 
 import (
 	"math"
-	"runtime"
 
 	"gonativeui/internal/ffi"
 	"gonativeui/internal/objc"
@@ -46,9 +45,7 @@ func registerViewTextInput(v *objc.ClassDef) {
 	v.Method(selValidAttrs, "@@:", viewValidAttributes)
 	v.Method(selAttrSubstring, "@@:{_NSRange=QQ}^{_NSRange=QQ}", viewAttributedSubstring)
 	v.Method(selCharIndexForPoint, "Q@:{CGPoint=dd}", viewCharacterIndexForPoint)
-	// Returns a CGRect: through a hidden pointer on amd64, which shifts
-	// self/_cmd by one argument, so it gets its own IMP.
-	v.MethodIMP(selFirstRect, "{CGRect={CGPoint=dd}{CGSize=dd}}@:{_NSRange=QQ}^{_NSRange=QQ}", firstRectIMP)
+	v.Method(selFirstRect, "{CGRect={CGPoint=dd}{CGSize=dd}}@:{_NSRange=QQ}^{_NSRange=QQ}", viewFirstRect)
 }
 
 // viewSetMarkedText is setMarkedText:selectedRange:replacementRange: — the
@@ -74,7 +71,7 @@ func viewSetMarkedText(c *ffi.CB) {
 	}
 	n = min(n, total-loc)
 	w.imeUsed = true
-	if rs, rn, ok := w.replacement(rangeAfter5(c)); ok {
+	if rs, rn, ok := w.replacement(c.Int(5), c.Int(6)); ok {
 		w.q.push(Event{Kind: EvText, SelStart: rs, SelLen: rn, Time: Now()})
 	}
 	w.setMarkedFrom(b, loc, n, total)
@@ -150,20 +147,15 @@ func (w *Window) dropConsumedKey(keyIdx int, markedBefore bool) {
 	}
 }
 
-// firstRectIMP implements firstRectForCharacterRange:actualRange: (the IME
+// viewFirstRect implements firstRectForCharacterRange:actualRange: (the IME
 // candidate-window anchor): the rectangle the app gave SetIMERect, in screen
 // coordinates. The range asked about is ignored: the app reports the caret or
-// the composition, which is all an input method asks for.
-// amd64: argument 0 is the hidden result pointer, which the trampoline also
-// returns in rax. arm64: CGRect is an HFA returned in d0-d3.
-func firstRectIMP(c *ffi.CB) {
+// the composition, which is all an input method asks for. The CGRect is an
+// HFA returned in d0-d3.
+func viewFirstRect(c *ffi.CB) {
 	var r objc.Rect
 	if w := theWindow.Load(); w != nil {
 		r = w.imeScreenRect()
-	}
-	if runtime.GOARCH == "amd64" {
-		*(*objc.Rect)(c.IndirectResult()) = r
-		return
 	}
 	c.RetF64(0, r.X)
 	c.RetF64(1, r.Y)

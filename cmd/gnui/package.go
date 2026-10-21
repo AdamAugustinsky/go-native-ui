@@ -24,7 +24,6 @@ func cmdPackage(args []string, stdout, stderr io.Writer) error {
 	fs := newFlagSet("package", stderr)
 	cfgPath := fs.String("c", "gnui.json", "path of the gnui.json")
 	outDir := fs.String("o", "dist", "output directory")
-	arch := fs.String("arch", "universal", "universal, arm64 or amd64")
 	identity := fs.String("identity", "", `signing identity (name or SHA-1), or "-" for ad-hoc; default $GNUI_SIGN_IDENTITY, then a "Developer ID Application" identity from the keychains, then ad-hoc`)
 	devCert := fs.Bool("dev-cert", false, "sign with the gnui-dev identity instead (a bundle for this Mac and the Macs that were given the same certificate)")
 	noHardened := fs.Bool("no-hardened", false, "do not enable the hardened runtime")
@@ -39,15 +38,6 @@ func cmdPackage(args []string, stdout, stderr io.Writer) error {
 	}
 	if fs.NArg() != 0 {
 		return usageError{fmt.Errorf("unexpected argument %q", fs.Arg(0))}
-	}
-	var archs []string
-	switch *arch {
-	case "universal":
-		archs = []string{"arm64", "amd64"}
-	case "arm64", "amd64":
-		archs = []string{*arch}
-	default:
-		return usageError{fmt.Errorf("-arch %q must be universal, arm64 or amd64", *arch)}
 	}
 	if runtime.GOOS != "darwin" {
 		return errors.New("packaging and signing need macOS")
@@ -71,7 +61,7 @@ func cmdPackage(args []string, stdout, stderr io.Writer) error {
 
 	app := filepath.Join(*outDir, c.Name+".app")
 	fmt.Fprintf(stdout, "packaging %s %s (%s) -> %s\n", c.Name, c.Version, c.ID, app)
-	ent, cleanup, err := buildBundle(c, buildOptions{Archs: archs, Tags: *tags, Ldflags: *ldflags, Out: app, Log: stdout})
+	ent, cleanup, err := buildBundle(c, buildOptions{Tags: *tags, Ldflags: *ldflags, Out: app, Log: stdout})
 	if err != nil {
 		return err
 	}

@@ -3,12 +3,9 @@
 package platform
 
 import (
-	"runtime"
 	"sync"
 	"unicode/utf8"
 	"unsafe"
-
-	"github.com/ebitengine/purego"
 
 	"gonativeui/internal/ffi"
 	"gonativeui/internal/objc"
@@ -49,8 +46,7 @@ var (
 	edApp                  objc.ID           // NSApp
 	edPHClass              objc.ID           // GNUIEditorPlaceholder
 	edTable                [MaxHosts]*Editor // index+1 is in the views' Index ivar
-	edStret                uintptr
-	edImageTypes           objc.ID // NSArray of the image types a paste routes to the app
+	edImageTypes           objc.ID           // NSArray of the image types a paste routes to the app
 	edPlainType            objc.ID
 	edFgAttr, edBgAttr     objc.ID
 	edFrameNote            objc.ID
@@ -213,11 +209,6 @@ func registerEditorClasses() {
 	types := &[...]objc.ID{objc.Str("public.png"), objc.Str("public.tiff"), objc.Str("public.jpeg"), objc.Str("public.heic")} // on the heap
 	edImageTypes = objc.Retain(objc.ID(objc.F.Reset().Arg(uintptr(clsNSArray)).Arg(uintptr(selArrayWithObjects)).
 		ArgPtr(unsafe.Pointer(&types[0])).Arg(uintptr(len(types))).Call(objc.MsgSend).R0()))
-	if runtime.GOARCH == "amd64" {
-		if h, err := purego.Dlopen("/usr/lib/libobjc.A.dylib", purego.RTLD_NOW|purego.RTLD_GLOBAL); err == nil {
-			edStret, _ = purego.Dlsym(h, "objc_msgSend_stret")
-		}
-	}
 }
 
 // NewEditor creates a native multi-line editor as a host of the window
@@ -568,21 +559,11 @@ func (e *Editor) CaretRect() ([4]float32, bool) {
 	return [4]float32{float32(r.X * s), float32(r.Y * s), float32((r.X + r.W) * s), float32((r.Y + r.H) * s)}, true
 }
 
-var edRectOut = new(objc.Rect)
-
-// rectCall sends the message args builds, which returns an NSRect: in d0-d3
-// on arm64, through objc_msgSend_stret's hidden pointer on amd64. Not on a
-// per-frame path (args is a closure).
+// rectCall sends the message args builds, which returns an NSRect in d0-d3.
+// Not on a per-frame path (args is a closure).
 func (e *Editor) rectCall(args func(f *ffi.Frame) *ffi.Frame) objc.Rect {
-	if runtime.GOARCH == "arm64" {
-		f := args(objc.F.Reset()).Call(objc.MsgSend)
-		return objc.Rect{X: f.F64(0), Y: f.F64(1), W: f.F64(2), H: f.F64(3)}
-	}
-	if edStret == 0 {
-		return objc.Rect{}
-	}
-	args(objc.F.Reset().SetIndirectResult(unsafe.Pointer(edRectOut))).Call(edStret)
-	return *edRectOut
+	f := args(objc.F.Reset()).Call(objc.MsgSend)
+	return objc.Rect{X: f.F64(0), Y: f.F64(1), W: f.F64(2), H: f.F64(3)}
 }
 
 // sync measures the height again when the text or the width changed.
@@ -791,8 +772,8 @@ func (e *Editor) command(sel objc.SEL) bool {
 	case selCancelOperation, selComplete:
 		switch {
 		case marked: // Escape abandons the composition
-			argRangeAfter5(objc.F.Reset().Arg(uintptr(e.tv)).Arg(uintptr(selSetMarkedText)).Arg(uintptr(edEmpty)).
-				Arg(0).Arg(0), uintptr(nsNotFound), 0).Call(objc.MsgSend)
+			objc.F.Reset().Arg(uintptr(e.tv)).Arg(uintptr(selSetMarkedText)).Arg(uintptr(edEmpty)).
+				Arg(0).Arg(0).Arg(uintptr(nsNotFound)).Arg(0).Call(objc.MsgSend)
 			objc.Send(e.tv, selUnmarkText)
 		case composed: // the input method ended it already
 		case e.compl:
@@ -930,10 +911,8 @@ func edUnmark(c *ffi.CB) {
 // composition changed, which NSTextView reports with no textDidChange:.
 func edSetMarked(c *ffi.CB) {
 	self := objc.ID(c.Int(0))
-	str, sl, sn := c.Int(2), c.Int(3), c.Int(4)
-	rl, rn := rangeAfter5(c)
-	f := objc.SuperFrame(c.Frame(), edTVDef.Superclass(), self, selSetMarkedText).Arg(str).Arg(sl).Arg(sn)
-	argRangeAfter5(f, rl, rn).Call(objc.MsgSendSuper)
+	str, sl, sn, rl, rn := c.Int(2), c.Int(3), c.Int(4), c.Int(5), c.Int(6)
+	objc.SuperFrame(c.Frame(), edTVDef.Superclass(), self, selSetMarkedText).Arg(str).Arg(sl).Arg(sn).Arg(rl).Arg(rn).Call(objc.MsgSendSuper)
 	if e := editorOf(self); e != nil {
 		e.compositionChanged()
 	}

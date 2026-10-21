@@ -350,7 +350,7 @@ func (s *Surface) Present(r, g, b, a float32) bool {
 		return false
 	}
 	objc.Send1(s.color0, selSetTexture, f.Target)
-	// MTLClearColor is 4 doubles: an HFA on arm64, MEMORY class on amd64 (ArgRect handles both).
+	// MTLClearColor is 4 doubles, an HFA like CGRect.
 	objc.F.Reset().Arg(uintptr(s.color0)).Arg(uintptr(selSetClearColor)).
 		ArgRect(float64(r), float64(g), float64(b), float64(a)).Call(objc.MsgSend)
 	enc := objc.Send1(objc.ID(f.CmdBuf), selRenderEncoder, uintptr(s.rpd)) // autoreleased

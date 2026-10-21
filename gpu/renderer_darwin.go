@@ -5,7 +5,6 @@ package gpu
 import (
 	"errors"
 	"fmt"
-	"math"
 	"runtime"
 	"slices"
 	"sync"
@@ -386,18 +385,10 @@ func (r *Renderer) collect() {
 }
 
 // argRegion appends an MTLRegion (origin x, y, 0; size w, h, 1) by value.
-// The struct is 48 bytes: on arm64 it is passed by reference; on amd64 SysV
-// it is MEMORY class and is copied to the stack word by word (ArgRect pushes
-// raw 8-byte words, so integers are smuggled through as float64 bit
-// patterns).
+// The struct is 48 bytes, so arm64 passes it by reference.
 func argRegion(f *ffi.Frame, x, y, w, h int) *ffi.Frame {
-	if runtime.GOARCH == "arm64" {
-		regionWords = [6]uintptr{uintptr(x), uintptr(y), 0, uintptr(w), uintptr(h), 1}
-		return f.Arg(uintptr(unsafe.Pointer(&regionWords)))
-	}
-	bits := func(v uint64) float64 { return math.Float64frombits(v) }
-	return f.ArgRect(bits(uint64(x)), bits(uint64(y)), bits(0), bits(uint64(w))).
-		ArgRect(bits(uint64(h)), bits(1), 0, 0) // the last two words are padding the callee never reads
+	regionWords = [6]uintptr{uintptr(x), uintptr(y), 0, uintptr(w), uintptr(h), 1}
+	return f.Arg(uintptr(unsafe.Pointer(&regionWords)))
 }
 
 // Upload copies a w×h block of pixels into texture t at (x, y). pixels[0] is
@@ -512,15 +503,10 @@ func (r *Renderer) flushStaged(s *ringSlot) {
 		r.use(s, k) // an Upload into it waits for this blit
 		F.Reset().Arg(uintptr(blit)).Arg(uintptr(rsCopyBufTex)).Arg(uintptr(s.stage)).Arg(uintptr(c.off)).
 			Arg(uintptr(c.bpr)).Arg(uintptr(c.bpr * c.h))
-		if runtime.GOARCH == "arm64" { // MTLSize and MTLOrigin (24 bytes) by reference
-			copySize, copyOrigin = [3]uintptr{uintptr(c.w), uintptr(c.h), 1}, [3]uintptr{uintptr(c.x), uintptr(c.y), 0}
-			F.Arg(uintptr(unsafe.Pointer(&copySize))).Arg(uintptr(r.textures[k])).Arg(0).Arg(0).
-				Arg(uintptr(unsafe.Pointer(&copyOrigin)))
-		} else { // amd64: the integer registers are used up, so every word goes to the stack in order
-			F.Arg(uintptr(c.w)).Arg(uintptr(c.h)).Arg(1).Arg(uintptr(r.textures[k])).Arg(0).Arg(0).
-				Arg(uintptr(c.x)).Arg(uintptr(c.y)).Arg(0)
-		}
-		F.Call(objc.MsgSend)
+		// MTLSize and MTLOrigin (24 bytes) by reference
+		copySize, copyOrigin = [3]uintptr{uintptr(c.w), uintptr(c.h), 1}, [3]uintptr{uintptr(c.x), uintptr(c.y), 0}
+		F.Arg(uintptr(unsafe.Pointer(&copySize))).Arg(uintptr(r.textures[k])).Arg(0).Arg(0).
+			Arg(uintptr(unsafe.Pointer(&copyOrigin))).Call(objc.MsgSend)
 	}
 	objc.Send(blit, rsEndEncoding)
 	objc.Send(ucb, rsCommit)

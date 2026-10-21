@@ -135,24 +135,6 @@ func TestClassesKeepTheirOwnTables(t *testing.T) {
 	}
 }
 
-// MethodIMP's handler is the implementation itself (own callback, no lookup),
-// and a class with only such methods works as well.
-func TestMethodIMPHasItsOwnCallback(t *testing.T) {
-	runtime.LockOSThread()
-	t.Cleanup(runtime.UnlockOSThread)
-
-	d := Define(className("GNUITestDirect"), Cls("NSObject"), nil)
-	d.MethodIMP(Sel("gnuiDirect:"), "Q@:Q", func(c *ffi.CB) { c.Ret(c.Int(2) + 100) })
-	d.Method(Sel("gnuiShared:"), "Q@:Q", func(c *ffi.CB) { c.Ret(c.Int(2) + 200) })
-	o := newObject(d.Register())
-	if got := Send1(o, Sel("gnuiDirect:"), 1); got != 101 {
-		t.Errorf("direct = %d, want 101", got)
-	}
-	if got := Send1(o, Sel("gnuiShared:"), 1); got != 201 {
-		t.Errorf("shared = %d, want 201", got)
-	}
-}
-
 func TestDefinitionErrorsPanic(t *testing.T) {
 	runtime.LockOSThread()
 	t.Cleanup(runtime.UnlockOSThread)
@@ -168,9 +150,6 @@ func TestDefinitionErrorsPanic(t *testing.T) {
 	d.Method(Sel("gnuiTwice"), "v@:", h)
 	if !panics(func() { d.Method(Sel("gnuiTwice"), "v@:", h) }) {
 		t.Error("a selector defined twice did not panic")
-	}
-	if !panics(func() { d.MethodIMP(Sel("gnuiTwice"), "v@:", h) }) {
-		t.Error("a selector defined twice (MethodIMP) did not panic")
 	}
 	if !panics(func() { d.Method(Sel("gnuiNil"), "v@:", nil) }) {
 		t.Error("a nil handler did not panic")

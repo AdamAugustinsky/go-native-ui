@@ -12,8 +12,8 @@ available this session.
 
 ## 1. Goal and the bar
 
-A native desktop UI stack in Go for macOS, Windows and Linux that meets
-File Pilot's engineering bar: it starts instantly, uses little memory, burns
+A native desktop UI stack in Go for macOS (Apple silicon only, D55), Windows
+and Linux that meets File Pilot's engineering bar: it starts instantly, uses little memory, burns
 no CPU when idle, and responds to input immediately. The proof is a
 reference app, a dual-pane file browser.
 
@@ -51,7 +51,7 @@ platform              Window, events, DPI, keyboard/IME, clipboard, cursors, tim
 fs                    directory listing, watching, icons/thumbnails (per OS)
 core                  arenas, frame scratch, pointer-free tables, handle pools, MPSC queue
 clib                  public: an app's own native library, dlopen + zero-alloc plain C calls on internal/ffi, no callbacks (D35; darwin, linux)
-internal/ffi          zero-alloc C call + callback trampolines (darwin, linux; arm64, amd64)
+internal/ffi          zero-alloc C call + callback trampolines (darwin/arm64; linux/arm64, amd64)
 internal/objc         Objective-C messaging on ffi (darwin)
 internal/com          COM vtable call helpers (windows)
 internal/wl, x11, egl Wayland/X11/EGL bindings via dlopen (linux)
@@ -387,7 +387,7 @@ Linux targets stay at the brief's values until we have machines.
 ## 12. Testing and CI
 
 - GitHub Actions matrix (`.github/workflows/ci.yml`; not pushed, since pushing needs approval):
-  - `macos-15` (arm64; amd64 ffi tests under Rosetta)
+  - `macos-15` (arm64; macOS means Apple silicon, D55)
   - `windows-2025` (D3D11, WARP when there is no GPU)
   - `ubuntu-24.04` + Xvfb + Mesa llvmpipe (X11)
   - `ubuntu-24.04` + headless Weston (Wayland; Weston lacks fractional-scale-v1, so integer scale only)
