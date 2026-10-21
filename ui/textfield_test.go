@@ -185,9 +185,28 @@ func TestTextFieldMaxAndBytes(t *testing.T) {
 	var in Input
 	in.AppendText("héllo")
 	in.NText = 0
-	in.AppendText(strings.Repeat("x", MaxText-1) + "é") // the é would be cut: dropped whole
-	if in.NText != MaxText-1 {
-		t.Errorf("AppendText kept %d bytes", in.NText)
+	text := strings.Repeat("x", MaxText-1) + "é" // the é would be cut: left out whole
+	if n := in.AppendText(text); in.NText != MaxText-1 || n != MaxText-1 {
+		t.Errorf("AppendText kept %d bytes, returned %d", in.NText, n)
+	}
+}
+
+// A frame takes far more typed text than one keystroke (fast typing, an input
+// method's commit), and what it cannot take is reported to the caller, which
+// keeps it for the next frame.
+func TestAppendTextTakesALongBurstAndReportsWhatDidNotFit(t *testing.T) {
+	var in Input
+	burst := strings.Repeat("é", 200) // 400 bytes
+	if n := in.AppendText(burst); n != len(burst) || in.NText != len(burst) || string(in.Text[:in.NText]) != burst {
+		t.Fatalf("a %d-byte burst: took %d, NText %d", len(burst), n, in.NText)
+	}
+	more := strings.Repeat("ab", MaxText)
+	n := in.AppendText(more)
+	if in.NText != len(burst)+n || n != MaxText-len(burst) {
+		t.Fatalf("overflow: took %d, NText %d", n, in.NText)
+	}
+	if rest := more[n:]; len(rest) != len(more)-n {
+		t.Fatalf("the caller's rest is %d bytes", len(rest))
 	}
 }
 

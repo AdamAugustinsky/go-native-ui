@@ -235,7 +235,7 @@ func TestKeysAndText(t *testing.T) {
 	if got := string(in.Text[:in.NText]); got != "héllo wörld" {
 		t.Fatalf("text %q", got)
 	}
-	long := make([]byte, 100)
+	long := make([]byte, ui.MaxText+100)
 	for i := range long {
 		long[i] = 'x'
 	}

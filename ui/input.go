@@ -213,7 +213,7 @@ const (
 	// MaxActions is the number of accessibility action requests per frame.
 	MaxActions = 4
 	// MaxText is the number of bytes of typed text per frame.
-	MaxText = 64
+	MaxText = 1024
 	// MaxPreedit is the number of bytes of input-method composition text.
 	MaxPreedit = 256
 )
@@ -557,14 +557,17 @@ func (in *Input) ReplaceText(start, units int32, s []byte) bool {
 	return true
 }
 
-// AppendText queues typed text, dropping what does not fit (whole characters
-// only: a character that would be cut is dropped with the rest).
-func (in *Input) AppendText(s string) {
-	n := min(len(s), len(in.Text)-in.NText)
+// AppendText queues typed text and returns how many bytes of s it took: all
+// of them unless the frame's MaxText bytes are full, then the whole characters
+// that fit (a character that would be cut is left out with the rest). The
+// caller keeps s[n:] for the next frame; nothing is dropped silently.
+func (in *Input) AppendText(s string) (n int) {
+	n = min(len(s), len(in.Text)-in.NText)
 	for n < len(s) && n > 0 && !utf8.RuneStart(s[n]) {
 		n--
 	}
 	in.NText += copy(in.Text[in.NText:], s[:n])
+	return n
 }
 
 // SetPreedit sets the composition text and the caret or selection inside it
