@@ -2,6 +2,8 @@ package script
 
 import (
 	"fmt"
+	"strconv"
+	"strings"
 
 	"gonativeui/ui"
 )
@@ -26,4 +28,21 @@ func RoleName(r ui.Role) string {
 		return n
 	}
 	return fmt.Sprintf("Role%d", r)
+}
+
+// ParseRole is the role that RoleName writes under the name, compared without
+// regard to case ("button", "ListItem", "textfield"); ok is false for a name
+// no role has. It reads the "Role<n>" form of a role RoleName has no name for.
+func ParseRole(name string) (r ui.Role, ok bool) {
+	for role, n := range roleNames {
+		if strings.EqualFold(n, name) {
+			return role, true
+		}
+	}
+	if v, found := strings.CutPrefix(name, "Role"); found {
+		if n, err := strconv.ParseUint(v, 10, 8); err == nil && n != 0 && roleNames[ui.Role(n)] == "" {
+			return ui.Role(n), true
+		}
+	}
+	return ui.RoleNone, false
 }

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 
-	"gonativeui/app"
 	"gonativeui/platform"
 	"gonativeui/ui"
 )
@@ -47,6 +46,7 @@ type Player struct {
 	frame  int
 	cycles int
 	err    error
+	errAt  int // the step err is about
 
 	sem  ui.SemTree
 	rect [4]float32 // the current step's target
@@ -68,11 +68,13 @@ type Player struct {
 	base      []byte  // the value a WaitChange step started from
 	modsHeld  bool    // a step set the modifiers for one frame only: the next clears them
 	down      ui.Mods // the modifiers a Down holds until Up
+	pressed   uint8   // buttons (bit per ui.Button) the player pressed and has not released
+	wrote     bool    // the player has written in.Mods ...
+	set       ui.Mods // ... and this is what it wrote last
+	typed     int     // bytes of the current Type step already delivered
 	tips      []ui.TooltipRegion
 	tipText   []byte
 }
-
-var _ app.Scripter = (*Player)(nil)
 
 // NewPlayer returns a Player of steps in the window of h.
 func NewPlayer(h Host, steps []Step, o Options) *Player {
@@ -94,6 +96,10 @@ func (p *Player) Done() bool { return !p.opt.Loop && p.idx >= len(p.steps) }
 // exist, a wait that ran out), nil if every step did. A benchmark with an Err
 // did not measure the session it claims to.
 func (p *Player) Err() error { return p.err }
+
+// FailedStep is the number of the step Err is about (the first is 0); it means
+// nothing while Err is nil.
+func (p *Player) FailedStep() int { return p.errAt }
 
 // Index is the number of the current step (the first is 0; the count of steps
 // when they are done).
@@ -137,7 +143,8 @@ func (p *Player) Script(frame int, in *ui.Input) bool {
 		in.Time = p.now()
 	}
 	if p.modsHeld {
-		in.Mods, p.modsHeld = p.down, false
+		p.setMods(in, p.down)
+		p.modsHeld = false
 	}
 	if p.idx >= len(p.steps) {
 		if !p.opt.Loop {
@@ -156,6 +163,7 @@ func (p *Player) Script(frame int, in *ui.Input) bool {
 	if !p.begun {
 		p.begun = true
 		p.t0, p.ran, p.gap = now, 0, 0
+		p.typed = 0
 		p.resolve(st)
 	} else {
 		p.ran += min(d, MaxFrameGapMs*1_000_000)
@@ -173,8 +181,52 @@ func (p *Player) Script(frame int, in *ui.Input) bool {
 	return true
 }
 
+// press, release and setMods are how the player changes the input, so that
+// Unwind knows what it holds.
+func (p *Player) press(in *ui.Input, b int, clicks uint8) {
+	in.SetButton(b, true, clicks)
+	p.pressed |= 1 << b
+}
+
+func (p *Player) release(in *ui.Input, b int) {
+	in.SetButton(b, false, 0)
+	p.pressed &^= 1 << b
+}
+
+func (p *Player) setMods(in *ui.Input, m ui.Mods) {
+	in.Mods, p.wrote, p.set = m, true, m
+}
+
+// Unwind lets go of what the player holds in in, for a caller that stops
+// playing before the steps have run to their end, or that does not call Script
+// again after the last step, whose modifiers are held for one frame more: a button it pressed and has not released is cancelled (a release would
+// click whatever is under it), and the modifiers it set go back to base, the
+// ones that were held before it began. Input that came from elsewhere since is
+// left alone where it can be told: a button that is up already stays as it is,
+// and modifiers that are not what the player last set are the system's now.
+//
+// Limitation: the player cannot tell real input from its own for everything. A
+// real Shift pressed while a synthetic one is held, or a real pointer entering
+// or leaving the window during the steps, can be overridden by what Unwind (and
+// the caller's restoring of the pointer and focus) puts back, until the next
+// real event corrects it. For a development tool driving a window nobody else
+// is using that is accepted.
+func (p *Player) Unwind(in *ui.Input, base ui.Mods) {
+	for b := 0; b < 8; b++ {
+		if p.pressed&(1<<b) != 0 {
+			in.Cancel(b)
+		}
+	}
+	p.pressed = 0
+	if p.wrote && in.Mods == p.set {
+		in.Mods = base
+	}
+	p.wrote, p.modsHeld, p.down = false, false, 0
+}
+
 func (p *Player) fail(format string, args ...any) {
 	if p.err == nil {
+		p.errAt = p.idx
 		p.err = fmt.Errorf("script: step %d: "+format, append([]any{p.idx}, args...)...)
 	}
 }
@@ -382,7 +434,7 @@ func (p *Player) revealFrame(st *Step, in *ui.Input) bool {
 		return false
 	}
 	p.reveal = false
-	p.fail("the node with role %d named %q (#%d) is out of view or covered, and the wheel reaches none of the containers around it", st.role, st.name, st.nth)
+	p.fail("the node with role %s named %q (#%d) is out of view or covered, and the wheel reaches none of the containers around it", RoleName(st.role), st.name, st.nth)
 	return false
 }
 
@@ -418,14 +470,14 @@ func (p *Player) resolve(st *Step) {
 		p.ok = i >= 0
 		switch {
 		case !p.ok:
-			p.fail("no node with role %d named %q (#%d) in the semantic tree", st.role, st.name, st.nth)
+			p.fail("no node with role %s named %q (#%d) in the semantic tree", RoleName(st.role), st.name, st.nth)
 		case !p.visible(i, st):
 			p.ok = false
 			var buf [8]int
 			if len(p.scrollAncestors(buf[:0], i)) > 0 {
 				p.reveal, p.revLast, p.revDone, p.revStill, p.revFrames = true, 0, p.revDone[:0], 0, 0
 			} else {
-				p.fail("the node with role %d named %q (#%d) is outside the window or covered by another box, and no scroll area around it can bring it clear", st.role, st.name, st.nth)
+				p.fail("the node with role %s named %q (#%d) is outside the window or covered by another box, and no scroll area around it can bring it clear", RoleName(st.role), st.name, st.nth)
 			}
 		default:
 			p.rect = p.sem.Nodes[i].Bounds
@@ -439,7 +491,8 @@ func (p *Player) resolve(st *Step) {
 // carry the modifiers too.
 func (p *Player) holdMods(in *ui.Input, st *Step) {
 	if st.mods != 0 {
-		in.Mods, p.modsHeld = st.mods|p.down, true
+		p.setMods(in, st.mods|p.down)
+		p.modsHeld = true
 	}
 }
 
@@ -487,7 +540,7 @@ func (p *Player) run(st *Step, in *ui.Input) bool {
 			return true
 		}
 		if timedOut() {
-			p.fail("no node with role %d named %q after %d ms%s", st.role, st.name, within(st), p.timing())
+			p.fail("no node with role %s named %q after %d ms%s", RoleName(st.role), st.name, within(st), p.timing())
 			return true
 		}
 	case opWaitGone:
@@ -495,13 +548,13 @@ func (p *Player) run(st *Step, in *ui.Input) bool {
 			return true
 		}
 		if timedOut() {
-			p.fail("a node with role %d named %q is still there after %d ms%s", st.role, st.name, within(st), p.timing())
+			p.fail("a node with role %s named %q is still there after %d ms%s", RoleName(st.role), st.name, within(st), p.timing())
 			return true
 		}
 	case opWaitChange:
 		i := p.find(st.role, st.name, st.nth)
 		if i < 0 {
-			p.fail("no node with role %d named %q (#%d) in the semantic tree", st.role, st.name, st.nth)
+			p.fail("no node with role %s named %q (#%d) in the semantic tree", RoleName(st.role), st.name, st.nth)
 			return true
 		}
 		v := p.sem.Text(p.sem.Nodes[i].Value)
@@ -511,11 +564,38 @@ func (p *Player) run(st *Step, in *ui.Input) bool {
 		case !bytes.Equal(v, p.base):
 			return true
 		case timedOut():
-			p.fail("the value of the node with role %d named %q did not change in %d ms%s", st.role, st.name, within(st), p.timing())
+			p.fail("the value of the node with role %s named %q did not change in %d ms%s", RoleName(st.role), st.name, within(st), p.timing())
 			return true
 		}
 	case opMoveTo:
 		p.goTo(in, st.px, st.py)
+		return true
+	case opFocus:
+		i := p.find(st.role, st.name, st.nth)
+		if i < 0 {
+			p.fail("no node with role %s named %q (#%d) in the semantic tree", RoleName(st.role), st.name, st.nth)
+			return true
+		}
+		if p.t == 0 {
+			if !in.PushAction(ui.SemRequest{Key: p.sem.Nodes[i].Key, Action: ui.ActFocus}) {
+				p.fail("the frame's action queue is full")
+				return true
+			}
+			return false
+		}
+		// The request was applied at the start of the last frame: the focus is
+		// on the node, or on a node inside it (a widget whose inner box takes it).
+		for f := range p.sem.Nodes {
+			if p.sem.Nodes[f].State&ui.SemFocused == 0 {
+				continue
+			}
+			for a := int32(f); a >= 0; a = p.sem.Nodes[a].Parent {
+				if int(a) == i {
+					return true
+				}
+			}
+		}
+		p.fail("the node with role %s named %q (#%d) did not take the focus (disabled, hidden, covered or not focusable)", RoleName(st.role), st.name, st.nth)
 		return true
 	case opMove:
 		if p.ok {
@@ -535,11 +615,11 @@ func (p *Player) run(st *Step, in *ui.Input) bool {
 			}
 			x, y := aim(p.rect, st)
 			p.goTo(in, x, y)
-			in.Mods = st.mods | p.down
-			in.SetButton(b, true, uint8(p.t/2+1))
+			p.setMods(in, st.mods|p.down)
+			p.press(in, b, uint8(p.t/2+1))
 			return false
 		}
-		in.SetButton(b, false, 0)
+		p.release(in, b)
 		p.holdMods(in, st)
 		return p.t/2+1 >= clicks
 	case opDrag:
@@ -550,12 +630,12 @@ func (p *Player) run(st *Step, in *ui.Input) bool {
 		switch {
 		case p.t == 0:
 			p.goTo(in, cx, cy)
-			in.Mods = st.mods | p.down
-			in.SetButton(ui.ButtonLeft, true, 1)
+			p.setMods(in, st.mods|p.down)
+			p.press(in, ui.ButtonLeft, 1)
 		case p.t <= st.n:
 			p.goTo(in, cx+st.dx*float32(p.t), cy)
 		default:
-			in.SetButton(ui.ButtonLeft, false, 0)
+			p.release(in, ui.ButtonLeft)
 			p.holdMods(in, st)
 			return true
 		}
@@ -563,15 +643,17 @@ func (p *Player) run(st *Step, in *ui.Input) bool {
 		if p.ok {
 			x, y := p.centre()
 			p.goTo(in, x, y)
-			in.Mods, p.down = st.mods, st.mods
-			in.SetButton(ui.ButtonLeft, true, 1)
+			p.setMods(in, st.mods)
+			p.down = st.mods
+			p.press(in, ui.ButtonLeft, 1)
 		}
 		return true
 	case opUp:
 		// the release carries what Down held (and the step's own), cleared by
 		// the next frame
-		in.SetButton(ui.ButtonLeft, false, 0)
-		in.Mods, p.modsHeld = p.down|st.mods, true
+		p.release(in, ui.ButtonLeft)
+		p.setMods(in, p.down|st.mods)
+		p.modsHeld = true
 		p.down = 0
 		return true
 	case opKey, opKeys:
@@ -579,8 +661,10 @@ func (p *Player) run(st *Step, in *ui.Input) bool {
 		in.PushKey(ui.KeyEvent{Code: st.code, Mods: st.mods, Down: true})
 		return st.op == opKey || p.t+1 >= st.n
 	case opText:
-		in.AppendText(st.text)
-		return true
+		// A frame's text buffer holds ui.MaxText bytes: what does not fit (and a
+		// character that would be cut) waits for the next frame.
+		p.typed += in.AppendText(st.text[p.typed:])
+		return p.typed >= len(st.text)
 	case opCommand:
 		if !in.PushCommand(st.id) {
 			p.fail("the frame's command queue is full")

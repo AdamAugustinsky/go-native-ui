@@ -29,6 +29,7 @@ const (
 	opMoveTo                     // the pointer to a point
 	opMagnify                    // a pinch over the target: amount in total over n frames
 	opSmartMagnify               // a two-finger double tap over the target
+	opFocus                      // the keyboard focus to the target, as an assistive technology asks for it
 )
 
 // Step is one thing a person does: move the pointer to a node, click it, press a
@@ -131,6 +132,12 @@ func ClickAt(role ui.Role, name string, dx, dy float32) Step {
 
 // RClick is Click with the right button.
 func RClick(role ui.Role, name string) Step { return Step{op: opRClick, role: role, name: name} }
+
+// Focus gives the node with the role and name the keyboard focus, as an
+// assistive technology's focus action does (ui.ActFocus): no pointer moves and
+// nothing is clicked. The run fails if there is no such node or it cannot take
+// the focus (it is disabled, hidden or not focusable).
+func Focus(role ui.Role, name string) Step { return Step{op: opFocus, role: role, name: name} }
 
 // Down moves the pointer to the node and presses the left button, which stays
 // down until Up.

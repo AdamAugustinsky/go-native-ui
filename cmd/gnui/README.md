@@ -18,6 +18,7 @@ cd cmd/gallery && go run ../gnui package      # release bundle in ./dist
 | `gnui package` | release `.app` from `gnui.json`: built with `-tags gnui_release` (no debug overlay Debug menu, chords or inspector; a plain `go build` and `gnui run` stay development builds), arm64 binary, `Info.plist`, `.icns`, resources, nested frameworks signed inside out, generated entitlements, hardened runtime; optional notarize + staple and `.dmg` |
 | `gnui run` | development bundle `.gnui/dev/<Name>.app` (bundle id + `.dev`), signed with `gnui-dev`, launched through LaunchServices; output streamed |
 | `gnui sign app.app` | signs an existing bundle, nested code first (the tool apps) |
+| `gnui inspect <socket> windows\|tree\|do\|shot` | talks to the agent bridge of a development build started with `GNUI_INSPECT=<socket>`: windows, the semantic tree, steps by role and name, a PNG of the current frame (docs/GUIDE.md §11; any OS) |
 | `gnui doctor` | checks the toolchain, `gnui.json`, the `gnui-dev` identity (trust, validity, a real signing round trip) and release identities |
 
 Exit status: `0` ok, `1` failure, `2` bad command line, `3` a step that needs
@@ -82,6 +83,16 @@ activation and TCC attribute it as an app); Ctrl-C quits it.
 `gnui sign [-identity id | -adhoc] [-hardened] [-entitlements file] path.app`.
 Default identity: `gnui-dev`. `tools/resign-tools.sh` builds GnuiShot,
 BounceRec and AppKitRef and signs them this way.
+
+### `gnui inspect`
+
+`gnui inspect [-json] [-timeout 30s] <socket> <command>`; `-h` lists the commands
+(`windows`, `tree [-window N] [-role R] [-name S]`, `do <action> …`,
+`do -steps '<json>'`, `shot <file.png>`). Output is text an agent can read
+(`-json` prints the response as it came); a failure exits with status 1 and a
+`code: message` on standard error, a bad command line with 2. The socket is the
+app's: a development build with `GNUI_INSPECT=<socket>` listens on it (mode 0600,
+user-owned directory, never TCP); a `gnui package` build does not contain the bridge.
 
 ## `gnui.json`
 

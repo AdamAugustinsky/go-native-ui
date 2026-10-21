@@ -688,6 +688,67 @@ go run ./examples/notes -bench -gate -allow-unpaced    # the same on a machine w
 go run ./examples/notes -exit-first -v                 # startup: exec → first frame on glass
 ```
 
+### Driving a running app from outside: the agent bridge
+
+A coding agent, or a script, can drive and inspect the running app without screen
+recording or synthetic system events. Start a development build with
+`GNUI_INSPECT=<socket>`; the app listens on a Unix socket at that path (never TCP)
+and answers one JSON request per line. With the variable unset there is no listener,
+no goroutine and no per-frame cost, and a release build (`gnui package`, tag
+`gnui_release`) does not contain the bridge at all.
+
+The socket must be in a directory you own and keep private: it is refused if the
+directory is writable by its group or others, has an ACL, or sits under a directory
+that others could rename it away in (every ancestor must be yours or root's, and
+closed to others unless sticky, and on macOS must carry no ACL that allows anyone
+to write, add, delete or change ownership; a deny-only ACL such as the "everyone deny
+delete" on home folders is fine). `/tmp` itself is therefore always refused: make a
+directory of your own first (`mktemp -d` gives a `0700` one under `$TMPDIR`). The
+socket is made mode 0600 and published atomically, and a lock file `<socket>.lock`
+next to it, held for as long as the app runs, tells a running app from a dead one's
+leftover: a second app on the same path is refused while the first lives, and a
+socket left by an app that died is replaced. A shot may be written only into a
+directory that passes the same checks (`mktemp -d` does), and not into the socket's
+directory, so keep one directory for the socket and another for the pictures. The
+bridge works on macOS and Linux; on Windows it is off for now and says so in the log
+(`errors.ErrUnsupported`), and `shot` of a live window is not supported on Linux yet.
+
+What it defends against is other local users and what a client sends; it assumes
+nobody but you can change the socket and shot directories. It does not defend against
+your own processes, which could replace the socket anyway. And it is a development
+tool, not made for a person to use the window while an agent drives it: a real Shift
+pressed while a synthetic one is held, or the real pointer entering or leaving during
+a `do`, can be overridden when the steps end (modifiers, pointer and focus are put
+back as they were) until your next real event corrects it.
+
+```sh
+SOCK=$(mktemp -d)/notes.sock          # a private directory, and the socket in it
+OUT=$(mktemp -d)                      # and another for the shots
+GNUI_INSPECT=$SOCK go run ./examples/notes &                 # the app
+gnui inspect $SOCK windows                                   # window 1 "Notes" 1800x1200 px at 2x, frame 4
+gnui inspect $SOCK tree -role Button                         # [22] Button "Add" [disabled] (1544,1124,1640,1172) …
+gnui inspect $SOCK do focus TextField "New note"             # a step by role and name
+gnui inspect $SOCK do type "Water the plants"
+gnui inspect $SOCK do click Button Add                       # ok: 1 step(s) applied in 4 frame(s)
+gnui inspect $SOCK do key cmd+shift+n
+gnui inspect $SOCK shot $OUT/notes.png                       # the current frame, offscreen
+```
+
+`tree` prints each node's id, role, name, value, states (`focused`, `selected`,
+`disabled` …) and bounds in window pixels, indented by depth; `-role` and `-name`
+filter it, `-json` prints the raw response. `do` takes the steps of `widgettest`:
+`click`, `double_click`, `right_click`, `move`, `focus`, `type`, `key`
+(`enter`, `cmd+shift+n`, `primary+z`), `scroll`, `wait_for`, `wait_gone` and `settle`,
+with `-nth` for the second of two buttons of one name, and `-steps '<json list>'` for
+several in one request. A step is queued to the main thread and plays at a frame
+safe point, as the benchmark's script does; the reply comes once the steps have
+been applied and two more frames built from their result, so the next `tree` shows
+what they did. A step that cannot do what it says (no such node, a wait that ran
+out) answers with an error that names the step. Errors are JSON with a `code`
+(`bad_request`, `too_large`, `step_failed`, `timeout`, `bad_path`, `busy` …) and a
+message; a request over 64 KiB is refused. The protocol is in
+`internal/inspectwire`; `gnui inspect -h` lists the commands.
+
 ## 12. Building, shipping and platforms
 
 | OS | Minimum | Graphics | Needs at run time |

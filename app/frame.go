@@ -75,7 +75,7 @@ func (a *App) owedReasons(animating, dirty bool) owedMask {
 	if a.tr.pending() {
 		m |= owedInput
 	}
-	if a.bench != nil && !a.scriptDone {
+	if (a.bench != nil || a.script != nil) && !a.scriptDone { // a script (a benchmark's, or the agent bridge's steps in a live window) plays a frame at a time
 		m |= owedBench
 	}
 	return m

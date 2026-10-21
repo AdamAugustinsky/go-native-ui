@@ -68,7 +68,8 @@ type Initer interface{ Init(a *App) error }
 
 // Scripter is optionally implemented by a Builder, for benchmarks and tests.
 // Script runs before Build in every frame of RunBench and RenderOffscreen
-// (never in Run). It fills in with synthetic input exactly as translated
+// (never in Run, except for the steps of the agent bridge's "do", which a
+// development build with GNUI_INSPECT set plays on a live window). It fills in with synthetic input exactly as translated
 // platform events would (pointer position and Inside, SetButton, AddScroll,
 // PushKey...); the pending per-frame parts are cleared after each frame.
 // frame counts the frames drawn so far from 0. Returning false means the
@@ -507,6 +508,7 @@ func (a *App) closeWin() {
 // object's pump (idleTurn).
 func (a *App) loop() error {
 	a.launch()
+	defer a.inspectStart()() // the agent bridge, with GNUI_INSPECT set in a development build (bridge_dev.go)
 	for !a.done {
 		if len(a.wins) == 0 {
 			a.idleTurn()
