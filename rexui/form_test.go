@@ -349,3 +349,43 @@ func TestFormRowNamesAllocateNothing(t *testing.T) {
 		t.Errorf("a form row with an unnamed switch allocates %v per frame", n)
 	}
 }
+
+// A grouped row with a Detail holds a secondary line under its label: both
+// inside the row, the row taller than a plain one, the line in smaller text,
+// and the rows without one unchanged.
+func TestFormRowDetailLine(t *testing.T) {
+	var on bool
+	var form rexui.Form
+	var plain, rich, label ui.ID
+	g := newRig(t, theme.Light, nil, func(g *rig) {
+		k := g.k
+		k.NextPad(14)
+		k.Column("col")
+		k.NextWidth(k.Fixed(360))
+		form = rexui.BeginForm(k, "form", rexui.FormOpts{})
+		form.Section(k, "")
+		plain = form.Row(k, "Plain", rexui.RowOpts{})
+		form.EndRow(k)
+		rich = form.Row(k, "Notifications", rexui.RowOpts{Detail: "Show alerts for new messages"})
+		label = form.Label()
+		rexui.Switch(k, "", &on, rexui.SwitchOpts{})
+		form.EndRow(k)
+		rexui.EndForm(k, &form)
+		k.EndColumn()
+	})
+	g.settle()
+	o := g.c.Rect(form.ID())
+	p, r := ourRect(g, plain, o[0], o[1]), ourRect(g, rich, o[0], o[1])
+	if p.H != 40 || r.H <= 40 {
+		t.Errorf("row heights: plain %v, with a detail %v; want 40 and more", p.H, r.H)
+	}
+	d := g.node(ui.RoleLabel, "Show alerts for new messages")
+	l := ourRect(g, label, o[0], o[1])
+	dr := rectPt{float64(d.Bounds[0]-o[0]) / float64(g.scale), float64(d.Bounds[1]-o[1]) / float64(g.scale), float64(d.Bounds[2]-d.Bounds[0]) / float64(g.scale), float64(d.Bounds[3]-d.Bounds[1]) / float64(g.scale)}
+	if dr.Y < l.Y+l.H-0.5 || dr.Y+dr.H > r.Y+r.H+0.5 || dr.X != l.X {
+		t.Errorf("the detail at %+v is not under the label %+v inside the row %+v", dr, l, r)
+	}
+	if dr.H >= l.H {
+		t.Errorf("the detail line (%v pt) is not smaller than the label's (%v pt)", dr.H, l.H)
+	}
+}
