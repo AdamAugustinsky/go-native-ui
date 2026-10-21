@@ -434,7 +434,10 @@ func TestStaleSocketsAreReplacedAndOtherFilesAreNot(t *testing.T) {
 	d := shortDir(t)
 	sock := filepath.Join(d, "s")
 
-	// a stale socket: bound, then abandoned without removing the file
+	// a stale socket of a bridge that died: its lock file is still there
+	if err := os.WriteFile(sock+".lock", nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	l, err := net.ListenUnix("unix", &net.UnixAddr{Name: sock, Net: "unix"})
 	if err != nil {
 		t.Fatal(err)

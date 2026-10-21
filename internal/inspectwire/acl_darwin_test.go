@@ -213,3 +213,22 @@ func TestCheckDirAcceptsTheRealTempAndCachesChains(t *testing.T) {
 		t.Log("~/Library/Caches has no ACL here, so it passes as a socket directory too")
 	}
 }
+
+// A lock file with an ACL that lets others read it is refused like one with
+// group or other bits.
+func TestAnExistingLockFileWithAnACLIsRefused(t *testing.T) {
+	d := tmpDir(t)
+	sock := filepath.Join(d, "s")
+	if err := os.WriteFile(sock+".lock", nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	addACL(t, sock+".lock", "everyone allow read")
+	l, err := Listen(sock)
+	if err == nil {
+		l.Close()
+		t.Fatal("a lock file with an ACL was used")
+	}
+	if !strings.Contains(err.Error(), "remove "+sock+".lock, or make it 0600") {
+		t.Errorf("the refusal: %v", err)
+	}
+}

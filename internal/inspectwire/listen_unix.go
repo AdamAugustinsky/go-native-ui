@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 )
 
 // Listen creates the socket at path. The path must be absolute and its
@@ -18,11 +19,13 @@ import (
 // A lock file, <path>.lock in that directory, is the proof that a bridge is
 // alive: Listen takes an exclusive flock on it, which the system releases when
 // the process dies, and holds it until Close. If another bridge holds it,
-// Listen refuses and does not touch the socket. If Listen gets it, whatever
-// socket is at the path was left by a dead owner and is removed (anything that
-// is not a socket of the user's is refused). Asking the socket instead would not
-// do: on macOS a live listener whose accept queue is full refuses connections
-// like a dead one.
+// Listen refuses and does not touch the socket. A free lock proves the previous
+// owner is dead, not that a socket at the path was its: a socket is removed only
+// if the lock file existed before (a bridge used the path), and nothing answers
+// when it is dialed once; a socket found when Listen had to create the lock file
+// is another program's and is refused. An existing lock file must be private
+// (mode, ACL). Asking the socket alone would not do: on macOS a live listener
+// whose accept queue is full refuses connections like a dead one.
 //
 // The socket is not visible to others while it is made: it is bound inside a
 // fresh 0700 directory next to its final place, stripped of any ACL, set to
@@ -43,11 +46,14 @@ func Listen(path string) (*Listener, error) {
 		return nil, err
 	}
 	final := filepath.Join(dir, filepath.Base(path))
-	lock, err := lockFile(final + ".lock")
+	lock, created, err := lockFile(final + ".lock")
 	if err != nil {
 		return nil, err
 	}
-	if err := removeStale(final); err != nil {
+	if err := removeStale(final, created); err != nil {
+		if created {
+			os.Remove(final + ".lock") // it proved nothing: the next start must not take it for a bridge's
+		}
 		lock.Close()
 		return nil, err
 	}
@@ -60,32 +66,65 @@ func Listen(path string) (*Listener, error) {
 	return l, nil
 }
 
-// lockFile opens (creating it, never following a link) and flocks the lock
-// file. EWOULDBLOCK means another bridge holds it.
-func lockFile(path string) (*os.File, error) {
-	fd, err := syscall.Open(path, syscall.O_CREAT|syscall.O_RDWR|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0o600)
-	if err != nil {
-		return nil, fmt.Errorf("inspect: lock file %s: %w", path, err)
+// lockFile opens the lock file and flocks it. It is created here, with O_EXCL,
+// if it is not there (created is true then): a lock file that was there before
+// is the sign that a bridge has used this path. One that was there must be
+// private to the user (no group or other permission bits, no ACL): the mode of
+// a file is only applied when it is made, and a file others can open for
+// reading is one they can flock, which would keep the bridge from ever
+// starting. Nothing follows a link. EWOULDBLOCK means another bridge holds it.
+func lockFile(path string) (f *os.File, created bool, err error) {
+	const flags = syscall.O_RDWR | syscall.O_NOFOLLOW | syscall.O_CLOEXEC
+	fd, err := syscall.Open(path, flags|syscall.O_CREAT|syscall.O_EXCL, 0o600)
+	created = err == nil
+	if errors.Is(err, syscall.EEXIST) {
+		fd, err = syscall.Open(path, flags, 0)
 	}
-	f := os.NewFile(uintptr(fd), path)
+	if err != nil {
+		return nil, false, fmt.Errorf("inspect: lock file %s: %w", path, err)
+	}
+	f = os.NewFile(uintptr(fd), path)
+	fail := func(format string, a ...any) (*os.File, bool, error) {
+		f.Close()
+		if created {
+			os.Remove(path)
+		}
+		return nil, false, fmt.Errorf(format, a...)
+	}
 	fi, err := f.Stat()
 	if err != nil || !fi.Mode().IsRegular() || !ownedByUser(fi) {
-		f.Close()
-		return nil, fmt.Errorf("inspect: %s is not a regular file of yours; refusing to use it as the lock", path)
+		return fail("inspect: %s is not a regular file of yours; remove %s, or make it 0600", path, path)
+	}
+	if !created {
+		if fi.Mode().Perm()&0o077 != 0 {
+			return fail("inspect: the lock file %s has mode %04o, so others could hold its lock; remove %s, or make it 0600", path, fi.Mode().Perm(), path)
+		}
+		if has, err := hasACL(path); err != nil || has {
+			return fail("inspect: the lock file %s has an access control list (or it could not be read: %v), so others could hold its lock; remove %s, or make it 0600 without one", path, err, path)
+		}
 	}
 	if err := syscall.Flock(fd, syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		f.Close()
 		if errors.Is(err, syscall.EWOULDBLOCK) {
-			return nil, fmt.Errorf("inspect: the socket %s is in use by a running process (it holds %s)", strings.TrimSuffix(path, ".lock"), path)
+			return nil, false, fmt.Errorf("inspect: the socket %s is in use by a running process (it holds %s)", strings.TrimSuffix(path, ".lock"), path)
 		}
-		return nil, fmt.Errorf("inspect: lock %s: %w", path, err)
+		return nil, false, fmt.Errorf("inspect: lock %s: %w", path, err)
 	}
-	return f, nil
+	return f, created, nil
 }
 
+// dialStale is how removeStale asks whether anything answers on a socket (a
+// variable for the tests).
+var dialStale = func(path string) (net.Conn, error) { return net.DialTimeout("unix", path, 250*time.Millisecond) }
+
 // removeStale removes what is at path, which no live bridge owns (the caller
-// holds the lock): a socket of the user's. Anything else is refused.
-func removeStale(path string) error {
+// holds the lock). That the lock is free does not make the socket a bridge's: a
+// socket of another program, put there by a wrong path, has no lock file. So a
+// socket is removed only if the lock file was there before (created is false: a
+// bridge used this path and died, and the system released its lock) and nothing
+// answers on the socket (a refused connection or no file, not a timeout or any
+// other error). A file that is not a socket of the user's is never removed.
+func removeStale(path string, created bool) error {
 	fi, err := os.Lstat(path)
 	switch {
 	case errors.Is(err, os.ErrNotExist):
@@ -96,6 +135,19 @@ func removeStale(path string) error {
 		return fmt.Errorf("inspect: %s exists and is not a socket; refusing to replace it", path)
 	case !ownedByUser(fi):
 		return fmt.Errorf("inspect: %s is a socket of another user; refusing to replace it", path)
+	case created:
+		return fmt.Errorf("inspect: a socket that is not a gonativeui bridge's is at %s (no bridge has used this path before); refusing to replace it", path)
+	}
+	c, err := dialStale(path)
+	if err == nil {
+		c.Close()
+		return fmt.Errorf("inspect: the socket %s is in use by another program; refusing to replace it", path)
+	}
+	if !errors.Is(err, syscall.ECONNREFUSED) && !errors.Is(err, syscall.ENOENT) {
+		return fmt.Errorf("inspect: cannot tell whether the socket %s is in use (%v); refusing to replace it", path, err)
+	}
+	if again, err := os.Lstat(path); err != nil || again.Mode()&os.ModeSocket == 0 || !os.SameFile(fi, again) {
+		return fmt.Errorf("inspect: %s changed while it was being checked; refusing to replace it", path)
 	}
 	if err := os.Remove(path); err != nil {
 		return fmt.Errorf("inspect: remove the stale socket: %w", err)

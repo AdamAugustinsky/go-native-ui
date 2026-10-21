@@ -220,3 +220,115 @@ func TestCloseNeverRemovesASuccessorsSocket(t *testing.T) {
 		l.Close()
 	}
 }
+
+// listenForeign starts an ordinary Unix listener, not a bridge, that answers
+// every connection.
+func listenForeign(t *testing.T, sock string) *net.UnixListener {
+	t.Helper()
+	l, err := net.ListenUnix("unix", &net.UnixAddr{Name: sock, Net: "unix"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { l.Close() })
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			c.Close()
+		}
+	}()
+	return l
+}
+
+func answers(sock string) bool {
+	c, err := net.DialTimeout("unix", sock, time.Second)
+	if err == nil {
+		c.Close()
+	}
+	return err == nil
+}
+
+// A free lock proves that no bridge is alive, not that a socket at the path was
+// a bridge's: the live socket of another program (a wrong path) is not removed,
+// with or without a lock file left from earlier.
+func TestAForeignLiveSocketIsNotTakenOver(t *testing.T) {
+	for _, withLock := range []bool{false, true} {
+		d := shortDir(t)
+		sock := filepath.Join(d, "s")
+		if withLock {
+			if err := os.WriteFile(sock+".lock", nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		listenForeign(t, sock)
+		l, err := inspectwire.Listen(sock)
+		if err == nil {
+			l.Close()
+			t.Fatalf("lock file present %v: the live socket of another program was replaced", withLock)
+		}
+		if withLock && !strings.Contains(err.Error(), "another program") || !withLock && !strings.Contains(err.Error(), "not a gonativeui bridge") {
+			t.Errorf("lock file present %v: the refusal: %v", withLock, err)
+		}
+		if !answers(sock) {
+			t.Errorf("lock file present %v: the other program's socket was disturbed", withLock)
+		}
+		_, lerr := os.Lstat(sock + ".lock")
+		if !withLock && lerr == nil {
+			t.Error("the lock file made for a refused start was left: the next start would take it for a bridge's")
+		}
+	}
+}
+
+// A dead program's socket with no lock file is not a bridge's either: nothing
+// shows the path was ever a bridge's, so it is refused and left.
+func TestAForeignStaleSocketWithoutALockFileIsRefused(t *testing.T) {
+	sock := filepath.Join(shortDir(t), "s")
+	l, err := net.ListenUnix("unix", &net.UnixAddr{Name: sock, Net: "unix"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.SetUnlinkOnClose(false)
+	l.Close()
+	if ln, err := inspectwire.Listen(sock); err == nil {
+		ln.Close()
+		t.Fatal("a stale socket with no lock file was replaced")
+	} else if !strings.Contains(err.Error(), "not a gonativeui bridge") {
+		t.Errorf("the refusal: %v", err)
+	}
+	if fi, err := os.Lstat(sock); err != nil || fi.Mode()&os.ModeSocket == 0 {
+		t.Errorf("the socket was removed: %v", err)
+	}
+}
+
+// A lock file that is already there is the owner's alone: one others can open
+// they can also flock, and the bridge would never start. It is refused, with
+// what to do about it; a private one is used.
+func TestAnExistingLockFileMustBePrivate(t *testing.T) {
+	for _, mode := range []os.FileMode{0o644, 0o640, 0o604, 0o660, 0o666} {
+		sock := filepath.Join(shortDir(t), "s")
+		if err := os.WriteFile(sock+".lock", nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(sock+".lock", mode); err != nil {
+			t.Fatal(err)
+		}
+		l, err := inspectwire.Listen(sock)
+		if err == nil {
+			l.Close()
+			t.Fatalf("a lock file of mode %04o was used", mode)
+		}
+		if !strings.Contains(err.Error(), "remove "+sock+".lock, or make it 0600") {
+			t.Errorf("mode %04o: the refusal does not say what to do: %v", mode, err)
+		}
+	}
+	sock := filepath.Join(shortDir(t), "s")
+	os.WriteFile(sock+".lock", nil, 0o600)
+	os.Chmod(sock+".lock", 0o600)
+	l, err := inspectwire.Listen(sock)
+	if err != nil {
+		t.Fatalf("a private lock file was refused: %v", err)
+	}
+	l.Close()
+}
