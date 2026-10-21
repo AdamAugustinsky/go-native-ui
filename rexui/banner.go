@@ -34,6 +34,14 @@ type BannerOpts struct {
 	Message string
 	// Action is the label of a button at the end ("Retry", "Undo").
 	Action string
+	// ActionIcon and ActionIconName make the action an icon button, before
+	// the close button, named ActionIconName for assistive technologies
+	// ("Copy details"): a toast's copy icon. ActionIcon is any icon of the
+	// kit (the standard ones, or k.AddIcon's); it is used only when
+	// ActionIconName is not empty. Its clicks are reported as Action, as
+	// the text action's are; with both set, either one reports it.
+	ActionIcon     icon.ID
+	ActionIconName string
 	// Dismissible adds a close button.
 	Dismissible bool
 }
@@ -227,6 +235,11 @@ func banner(k *base.Kit, title string, o BannerOpts, floating bool, tkey ui.Key)
 	c.Pop()
 	if o.Action != "" {
 		sig.Action = Button(k, o.Action, ButtonOpts{Size: theme.SizeSmall}).Clicked
+	}
+	if o.ActionIconName != "" {
+		if IconButton(k, o.ActionIcon, o.ActionIconName, IconButtonOpts{Variant: IconBorderless}).Clicked {
+			sig.Action = true
+		}
 	}
 	if o.Dismissible || floating {
 		if IconButton(k, icon.Close, "Dismiss", IconButtonOpts{Variant: IconBorderless}).Clicked {

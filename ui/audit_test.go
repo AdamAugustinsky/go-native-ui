@@ -3,6 +3,9 @@ package ui
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
+
+	"gonativeui/text"
 )
 
 // audit runs one frame of build and returns what Audit finds, by check.
@@ -530,5 +533,34 @@ func TestAuditAlignEmptyText(t *testing.T) {
 	})
 	if len(m[AuditAlign]) != 1 {
 		t.Fatalf("align findings %v, want the empty text box", fs)
+	}
+}
+
+// A long name is cut between characters, not between the bytes of one.
+func TestClip32CutsAtAGraphemeBoundary(t *testing.T) {
+	for _, s := range []string{
+		"Написать сообщение всем участникам",
+		"ASCII only name that is longer than thirty-two bytes",
+		"👨‍👩‍👧‍👦 family emoji cluster at the cut: 👨‍👩‍👧‍👦👨‍👩‍👧‍👦",
+		"éééééééééééééééééééééééééé",                                                    // 52 bytes, é = 2
+		"e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301", // combining accent clusters
+	} {
+		got := clip32(s)
+		if !utf8.ValidString(got) {
+			t.Errorf("clip32(%q) = %q: not valid UTF-8", s, got)
+		}
+		if len(got) > 32+len("…") {
+			t.Errorf("clip32(%q) = %q: %d bytes", s, got, len(got))
+		}
+		if len(s) > 32 && !strings.HasSuffix(got, "…") {
+			t.Errorf("clip32(%q) = %q: no ellipsis", s, got)
+		}
+		cut := strings.TrimSuffix(got, "…")
+		if !strings.HasPrefix(s, cut) || !text.IsGraphemeBoundary([]byte(s), len(cut)) {
+			t.Errorf("clip32(%q) = %q: cut at %d is not a grapheme boundary", s, got, len(cut))
+		}
+	}
+	if got := clip32("short"); got != "short" {
+		t.Errorf("clip32(short) = %q", got)
 	}
 }

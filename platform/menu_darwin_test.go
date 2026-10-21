@@ -879,3 +879,102 @@ func TestTheMenuBarFollowsTheKeyWindowAtOnce(t *testing.T) {
 		t.Errorf("the closed windows' state was asked about %v", r.asked)
 	}
 }
+
+// A status item's own window is not listed in the Window menu: after the bar
+// is rebuilt (an app that replaces its menu model) with a status item in the
+// menu bar, the menu holds the app's windows only, as it did at launch.
+func TestWindowMenuSkipsStatusItemWindow(t *testing.T) {
+	var r struct {
+		why      string
+		statusWn bool // the status item has a window of its own in [NSApp windows]
+		targets  []objc.ID
+		win      objc.ID
+	}
+	onMain(func() {
+		rig, why := openMenuRig(testMenuSpec(), false)
+		if why != "" {
+			r.why = why
+			return
+		}
+		defer rig.w.Close()
+		w := rig.w
+		pool := objc.F.Call0(objc.PoolPush)
+		defer objc.F.Call1(objc.PoolPop, pool)
+		bar := objc.Send(objc.Cls("NSStatusBar"), objc.Sel("systemStatusBar"))
+		si := objc.ID(objc.F.Reset().Arg(uintptr(bar)).Arg(uintptr(objc.Sel("statusItemWithLength:"))).ArgF64(-1).Call(objc.MsgSend).R0())
+		if si == 0 {
+			r.why = "no status item"
+			return
+		}
+		objc.Retain(si)
+		defer func() {
+			objc.Send1(bar, objc.Sel("removeStatusItem:"), uintptr(si))
+			objc.Release(si)
+		}()
+		button := objc.Send(si, objc.Sel("button"))
+		t := newNSString("T")
+		objc.Send1(button, objc.Sel("setTitle:"), uintptr(t))
+		objc.Release(t)
+		wins := objc.Send(w.app, selWindows)
+		for i := 0; i < int(objc.Send(wins, selArrCount)); i++ {
+			if objc.Send1(wins, selArrAt, uintptr(i)) != w.win {
+				r.statusWn = true
+			}
+		}
+		w.SetMenuBar(testMenuSpec(), rig.state) // the rebuild
+		main := objc.Send(w.app, objc.Sel("mainMenu"))
+		windows := objc.Send(itemAt(main, 3), objc.Sel("submenu"))
+		for i := 0; i < int(objc.Send(windows, selNumberOfItems)); i++ {
+			it := itemAt(windows, i)
+			if objc.SEL(objc.Send(it, selAction)) == objc.Sel("makeKeyAndOrderFront:") {
+				r.targets = append(r.targets, objc.Send(it, objc.Sel("target")))
+			}
+		}
+		r.win = w.win
+	})
+	if r.why != "" {
+		t.Skipf("cannot open a window here: %s", r.why)
+	}
+	if !r.statusWn {
+		t.Skip("the status item has no window of its own here")
+	}
+	if len(r.targets) != 1 || r.targets[0] != r.win {
+		t.Errorf("the Window menu lists windows %#x, want only the app's window %#x", r.targets, r.win)
+	}
+}
+
+// An application menu item with a title of its own (an app's translation)
+// shows it; one without keeps the English default.
+func TestApplicationMenuItemTitles(t *testing.T) {
+	var r struct {
+		why    string
+		titles []string
+	}
+	onMain(func() {
+		spec := testMenuSpec()
+		app := spec.Menus[0].Items
+		app[0].Title = "Über Test"       // About
+		app[6].Title = "Test ausblenden" // Hide
+		app[7].Title = "Test beenden"    // Quit
+		spec.Menus[5].Title = "Dienste"
+		rig, why := openMenuRig(spec, true)
+		if why != "" {
+			r.why = why
+			return
+		}
+		defer rig.w.Close()
+		pool := objc.F.Call0(objc.PoolPush)
+		defer objc.F.Call1(objc.PoolPop, pool)
+		main := objc.Send(rig.w.app, objc.Sel("mainMenu"))
+		appMenu := objc.Send(itemAt(main, 0), objc.Sel("submenu"))
+		for _, i := range []int{0, 4, 6, 7} {
+			r.titles = append(r.titles, titleOf(itemAt(appMenu, i)))
+		}
+	})
+	if r.why != "" {
+		t.Skipf("cannot open a window here: %s", r.why)
+	}
+	if want := []string{"Über Test", "Dienste", "Test ausblenden", "Test beenden"}; !equalStrings(r.titles, want) {
+		t.Errorf("application menu titles %q, want %q", r.titles, want)
+	}
+}

@@ -208,6 +208,7 @@ func nativeMenuSpec(m *menu.Model) platform.MenuSpec {
 	var settings *menu.Command
 	var appCmds [platform.MenuQuit + 1]*menu.Command // the model's commands of the application menu's standard items
 	hasEdit, hasWindow, hasHelp := false, false, false
+	servicesTitle := "Services"
 	for i := range menus {
 		s.Menus = append(s.Menus, platform.Menu{Title: menus[i].Title, Items: nativeItems(m, menus[i].Items)})
 		switch menus[i].Role {
@@ -215,6 +216,10 @@ func nativeMenuSpec(m *menu.Model) platform.MenuSpec {
 			s.Menus[i].Role, hasWindow = platform.MenuRoleWindow, true
 		case menu.MenuHelp:
 			s.Menus[i].Role, hasHelp = platform.MenuRoleHelp, true
+		case menu.MenuServices:
+			if menus[i].Title != "" {
+				servicesTitle = menus[i].Title
+			}
 		}
 	}
 	if m != nil {
@@ -240,17 +245,18 @@ func nativeMenuSpec(m *menu.Model) platform.MenuSpec {
 	act := func(a platform.MenuAction) platform.MenuItem { return platform.MenuItem{Action: a} }
 	sep := platform.MenuItem{Kind: platform.MenuItemSeparator}
 	// An application menu item is the system's standard one (title and key
-	// equivalent as macOS has them), deciding with the model's command of its
-	// role, if there is one (enabled, InModal).
+	// equivalent as macOS has them, unless the command has a title: the app's
+	// translation wins), deciding with the model's command of its role, if
+	// there is one (enabled, InModal).
 	appAct := func(a platform.MenuAction) platform.MenuItem {
 		it := act(a)
 		if c := appCmds[a]; c != nil {
-			it.ID = uint16(c.ID)
+			it.ID, it.Title = uint16(c.ID), c.Title
 		}
 		return it
 	}
 
-	services := add(platform.Menu{Title: "Services", Role: platform.MenuRoleServices})
+	services := add(platform.Menu{Title: servicesTitle, Role: platform.MenuRoleServices})
 	appItems := []platform.MenuItem{appAct(platform.MenuAbout), sep}
 	if settings != nil {
 		it := commandItem(settings)

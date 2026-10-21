@@ -925,9 +925,11 @@ func appendKind(dst []byte, f Flags) []byte {
 	return dst
 }
 
+// clip32 shortens s to at most 32 bytes, cut at a grapheme boundary (never in
+// the middle of a character), and marks the cut with an ellipsis.
 func clip32(s string) string {
 	if len(s) > 32 {
-		return s[:32] + "…"
+		return s[:text.GraphemeStart([]byte(s), 32)] + "…"
 	}
 	return s
 }

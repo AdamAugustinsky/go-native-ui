@@ -319,3 +319,81 @@ func TestButtonsInAFlowWrap(t *testing.T) {
 		t.Errorf("a button reaches %v, past the flow's right edge at 280", maxRight)
 	}
 }
+
+// A checkbox with Wrap breaks a long label into lines beside the box, and is
+// still one control: one accessibility element named by the label, a click
+// on any line of the label toggles it, the box shows the press while the
+// pointer is held on the label, and a frame allocates nothing.
+func TestCheckboxWrapsItsLabel(t *testing.T) {
+	const label = "Send me product updates and news about new features by email, at most once a month"
+	on := false
+	build := func(wrap bool) func(g *rig) {
+		return column(func(g *rig) {
+			rexui.Checkbox(g.k, label, &on, rexui.CheckboxOpts{Wrap: wrap})
+			rexui.Checkbox(g.k, "After", &on, rexui.CheckboxOpts{})
+		})
+	}
+	oneLine := openRig(t, theme.Light, nil, build(false))
+	oneLine.w = 360
+	oneLine.frames(3)
+	flat := oneLine.node(ui.RoleCheckbox, label).Bounds
+
+	g := openRig(t, theme.Light, nil, build(true))
+	g.w = 360 // 180 pt: the label needs several lines
+	g.frames(3)
+	n := g.node(ui.RoleCheckbox, label)
+	h := n.Bounds[3] - n.Bounds[1]
+	if w := n.Bounds[2]; w > 360-40+1 {
+		t.Errorf("the wrapped checkbox ends at %v px, beyond its column", w)
+	}
+	if h < 3*(flat[3]-flat[1]) {
+		t.Errorf("the wrapped checkbox is %v px high (one line: %v): the label did not wrap", h, flat[3]-flat[1])
+	}
+	if after := g.node(ui.RoleCheckbox, "After").Bounds; after[1] < n.Bounds[3] {
+		t.Errorf("the next control starts at %v, inside the wrapped checkbox that ends at %v", after[1], n.Bounds[3])
+	}
+
+	// one element: the label is not a node of its own
+	g.c.Semantics(&g.sem)
+	named := 0
+	for _, nd := range g.sem.Nodes {
+		if bytes.Contains(g.sem.Text(nd.Name), []byte("product updates")) {
+			named++
+		}
+	}
+	if named != 1 {
+		t.Errorf("%d accessibility elements carry the label, want the checkbox alone", named)
+	}
+
+	// the box: the one square quad at the left of the control
+	boxFill := func() uint32 {
+		for _, q := range g.list.Quads {
+			if q.Mode == gpu.ModeShape && q.Rect[0] >= n.Bounds[0] && q.Rect[0] < n.Bounds[0]+1 && q.Rect[2]-q.Rect[0] == q.Rect[3]-q.Rect[1] {
+				return q.Color[0]
+			}
+		}
+		t.Fatal("no box quad")
+		return 0
+	}
+	idle := boxFill()
+
+	// pressing on the last line of the label shows on the box
+	x, y := n.Bounds[2]-30, n.Bounds[3]-4
+	g.in.MouseX, g.in.MouseY = x, y
+	g.frame()
+	g.in.SetButton(ui.ButtonLeft, true, 1)
+	g.frames(3)
+	if pressed := boxFill(); pressed == idle {
+		t.Errorf("the box is %#x with the pointer pressed on the label, as at rest", pressed)
+	}
+	g.in.SetButton(ui.ButtonLeft, false, 0)
+	g.frames(3)
+	if !on {
+		t.Fatal("a click on the last line of the label did not toggle the checkbox")
+	}
+	g.in.MouseX, g.in.MouseY = -100, -100
+	g.settle()
+	if n := testing.AllocsPerRun(50, g.frame); n != 0 {
+		t.Errorf("a frame with a wrapped checkbox allocates %v times", n)
+	}
+}

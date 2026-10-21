@@ -62,6 +62,7 @@ var (
 	selArrAt               = objc.Sel("objectAtIndex:")
 	selExcludedFromWinMenu = objc.Sel("isExcludedFromWindowsMenu")
 	selIsVisible           = objc.Sel("isVisible")
+	selCanBecomeMain       = objc.Sel("canBecomeMainWindow")
 	selIsMiniaturized      = objc.Sel("isMiniaturized")
 	selAddWindowsItem      = objc.Sel("addWindowsItem:title:filename:")
 	selSetMinWidth         = objc.Sel("setMinimumWidth:")
@@ -497,12 +498,16 @@ func servicesMenu(title string) objc.ID {
 // installed: AppKit adds a window to it when the window is ordered in or
 // retitled, so the windows already on screen (the app's own, shown before
 // its first frame installs the bar) would be missing from it, and from every
-// rebuilt one, until they change.
+// rebuilt one, until they change. Only the windows AppKit itself would list:
+// visible or minimized, able to become the main window and not excluded (so
+// not a panel nor a status item's window, which an app that has one owns by
+// the time the bar is rebuilt).
 func listWindows(app objc.ID) {
 	wins := objc.Send(app, selWindows)
 	for i := 0; i < int(objc.Send(wins, selArrCount)); i++ {
 		win := objc.Send1(wins, selArrAt, uintptr(i))
-		if objc.SendBool(win, selExcludedFromWinMenu) || !(objc.SendBool(win, selIsVisible) || objc.SendBool(win, selIsMiniaturized)) {
+		if objc.SendBool(win, selExcludedFromWinMenu) || !objc.SendBool(win, selCanBecomeMain) ||
+			!(objc.SendBool(win, selIsVisible) || objc.SendBool(win, selIsMiniaturized)) {
 			continue
 		}
 		objc.Send3(app, selAddWindowsItem, uintptr(win), uintptr(objc.Send(win, selWinTitle)), 0)

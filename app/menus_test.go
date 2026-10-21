@@ -121,8 +121,9 @@ func TestNativeMenuSpec(t *testing.T) {
 		t.Errorf("Settings %+v", settings)
 	}
 	// The system's items keep the model's command of their role, so that the
-	// model decides them; their title and key equivalent are macOS's.
-	if quit.ID != uint16(mcQuit) || quit.Title != "" || quit.Key != 0 || about.ID != uint16(mcAbout) || hide.ID != 0 {
+	// model decides them; the model's title wins when it has one, and the
+	// key equivalent is macOS's.
+	if quit.ID != uint16(mcQuit) || quit.Title != "Exit" || quit.Key != 0 || about.ID != uint16(mcAbout) || about.Title != "About" || hide.ID != 0 || hide.Title != "" {
 		t.Errorf("Quit %+v, About %+v, Hide (no command) %+v", quit, about, hide)
 	}
 	file := s.Menus[0]
@@ -279,5 +280,55 @@ func TestFullScreenRoleIsTheStandardAction(t *testing.T) {
 	it := commandItem(&menu.Command{ID: 9, Role: menu.RoleFullScreen})
 	if it.Action != platform.MenuFullScreen || it.ID != 9 {
 		t.Errorf("%+v", it)
+	}
+}
+
+// An app that translates its menu model gets its own titles in the
+// application menu (About, Hide, Hide Others, Show All, Quit and the Services
+// submenu); an item without a title keeps the system's.
+func TestApplicationMenuTitlesAreTheModels(t *testing.T) {
+	const (
+		cAbout menu.ID = iota + 1
+		cHide
+		cOthers
+		cAll
+		cQuit
+	)
+	cmds := []menu.Command{
+		{ID: cAbout, Title: "Über ZapFast", Role: menu.RoleAbout},
+		{ID: cHide, Title: "ZapFast ausblenden", Role: menu.RoleHide},
+		{ID: cOthers, Title: "Andere ausblenden", Role: menu.RoleHideOthers},
+		{ID: cAll, Role: menu.RoleShowAll}, // no title: the system's
+		{ID: cQuit, Title: "ZapFast beenden", Role: menu.RoleQuit},
+	}
+	menus := []menu.Menu{{Title: "Datei"}, {Title: "Dienste", Role: menu.MenuServices}}
+	m, err := menu.NewModel(cmds, menus, []int{0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := nativeMenuSpec(m)
+	app := s.Menus[s.Bar[0]]
+	got := map[platform.MenuAction]string{}
+	services := ""
+	for _, it := range app.Items {
+		switch it.Kind {
+		case platform.MenuItemAction:
+			got[it.Action] = it.Title
+		case platform.MenuItemSubmenu:
+			services = s.Menus[it.Submenu].Title
+		}
+	}
+	want := map[platform.MenuAction]string{platform.MenuAbout: "Über ZapFast", platform.MenuHide: "ZapFast ausblenden",
+		platform.MenuHideOthers: "Andere ausblenden", platform.MenuShowAll: "", platform.MenuQuit: "ZapFast beenden"}
+	for a, w := range want {
+		if got[a] != w {
+			t.Errorf("action %d titled %q, want %q", a, got[a], w)
+		}
+	}
+	if services != "Dienste" {
+		t.Errorf("Services submenu titled %q, want Dienste", services)
+	}
+	if s := nativeMenuSpec(nil); s.Menus[s.Bar[0]].Items[0].Title != "" {
+		t.Errorf("without a model the About item has a title: %+v", s.Menus[s.Bar[0]].Items[0])
 	}
 }
