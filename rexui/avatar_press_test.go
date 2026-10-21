@@ -46,3 +46,21 @@ func TestPressableAvatarIsAButton(t *testing.T) {
 		}
 	}
 }
+
+// AvatarOpts.Label names the avatar for assistive technologies in place of
+// the name that makes its initials; without it the name is the accessible name.
+func TestAvatarLabelOverridesTheAccessibleName(t *testing.T) {
+	g := newRig(t, theme.Light, nil, func(g *rig) {
+		k := g.k
+		c := k.Context()
+		theme.At(c, 40, 40, 300, 100)
+		c.Push(c.Box(theme.Floating, "root"))
+		k.Row("row")
+		rexui.Avatar(k, "Ada Lovelace", rexui.AvatarOpts{Label: "Ada Lovelace, 3 unread"})
+		rexui.Avatar(k, "Alan Turing", rexui.AvatarOpts{})
+		k.EndRow()
+		c.Pop()
+	})
+	g.node(ui.RoleImage, "Ada Lovelace, 3 unread")
+	g.node(ui.RoleImage, "Alan Turing")
+}

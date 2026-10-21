@@ -302,3 +302,48 @@ func TestTitlebarGlyphsComeFromTheIconAtlas(t *testing.T) {
 	g.k.End()
 	g.c.End(&g.list)
 }
+
+// ScrollUpTo is as high as its content up to the maximum, then it scrolls; it
+// follows the content when that changes.
+func TestScrollUpToIsContentHighUpToTheMaximum(t *testing.T) {
+	var st ScrollState
+	rows := 3
+	g := newRig(t, 300, 400, func(k *Kit) {
+		k.Column("root")
+		k.ScrollUpTo("area", &st, ScrollVertical, 120, func() {
+			k.Column("content")
+			for i := 0; i < rows; i++ {
+				k.Label("line")
+			}
+			k.EndColumn()
+		})
+		k.Label("below")
+		k.EndColumn()
+	})
+	height := func() float32 {
+		b := g.must(ui.RoleScrollArea, "area").Bounds
+		return b[3] - b[1]
+	}
+	g.frames(4)
+	few := height()
+	line := g.must(ui.RoleLabel, "below").Bounds
+	if few <= 0 || few >= 120 {
+		t.Fatalf("3 rows: the view is %v high, want their height, under 120", few)
+	}
+	if gap := line[1] - g.must(ui.RoleScrollArea, "area").Bounds[3]; gap > 8 {
+		t.Errorf("the next sibling starts %v below the view: the view is not content high", gap)
+	}
+	rows = 60
+	g.frames(4)
+	if h := height(); h != 120 {
+		t.Errorf("60 rows: the view is %v high, want the maximum 120", h)
+	}
+	if bar := g.must(ui.RoleScrollBar, "Vertical scroll bar"); bar.Range[1] <= 0 {
+		t.Errorf("the view that hit its maximum does not scroll: %v", bar.Range)
+	}
+	rows = 3
+	g.frames(4)
+	if h := height(); h != few {
+		t.Errorf("back to 3 rows: the view is %v high, want %v", h, few)
+	}
+}

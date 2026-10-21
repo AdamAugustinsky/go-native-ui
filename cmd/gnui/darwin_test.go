@@ -206,6 +206,9 @@ func TestPackageWithoutAppleIdentity(t *testing.T) {
 // an ad-hoc build's requirement is its code hash and changes.
 func TestRunKeepsDesignatedRequirement(t *testing.T) {
 	needMac(t)
+	// gnui run launches the hello bundle it has just built (open -n -W, the
+	// test's own fixture, which exits at once): that launch is what it tests.
+	t.Setenv("GNUI_ALLOW_OPEN", "1")
 	dir := t.TempDir()
 	build := func(n string, flags ...string) (app, dr string) {
 		args := append([]string{"run", "-c", helloConfig, "-o", dir, "-ldflags", "-X main.build=" + n, "-env", "GNUI_TEST_MARK=m" + n}, flags...)

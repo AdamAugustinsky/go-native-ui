@@ -1,9 +1,11 @@
-// Package media plays and records audio clips held in memory: voice notes
-// (DECISIONS D46, D57).
+// Package media plays audio clips held in memory or in files, records voice
+// notes, and plays video files into the window's frames (DECISIONS D46, D57,
+// D58, D59).
 //
 // A Player plays PCM the app has decoded (an Opus voice note, say) at 1×,
 // 1.5× or 2× with the pitch kept; a Recorder captures the microphone into
-// PCM the app encodes.
+// PCM the app encodes; a Video plays a file, its frames drawn with
+// Kit.ExternalImage without a copy.
 //
 //	p, err := media.NewPlayer(pcm, media.Format{SampleRate: 48000, Channels: 1, Sample: media.Int16})
 //	p.SetRate(1.5)
@@ -19,41 +21,65 @@
 //		a.DefaultEvent(e)
 //	}
 //
+//	// a file the core cannot decode (MP3, AAC, M4A), or a system sound:
+//	f, err := media.OpenPlayer("/System/Library/Sounds/Tink.aiff") // returns at once
+//	// media.Opened (or media.Failed, f.Err()) arrives in Event; then f.Play()
+//
 //	r := media.NewRecorder(media.RecorderOptions{}) // 48 kHz mono int16
 //	err := r.Start()     // needs perm.Authorized for perm.Microphone
 //	r.Elapsed(), r.Level() // every frame: no allocation
 //	r.Stop()             // then a Recorded event, and
 //	pcm, err := r.Take() // the PCM in r.Format()
 //
+//	v, err := media.OpenVideo(path, media.VideoOptions{Muted: true})
+//	v.Play()
+//
+//	// in Build, while its box shows: no allocation
+//	if k.ImageShown(1) {
+//		tex, w, h, next = v.Frame(a.R, c.Input().Time)
+//		if next > 0 {
+//			c.WakeIn(next) // the video's next frame
+//		}
+//	}
+//	k.ExternalImage(1, tex, w, h, ui.FitFill, 12, "Video")
+//
 // # Events
 //
-// An ended playback and a finished recording arrive as an app.EvService from
-// platform.SourceMedia, which EventOf decodes: its Kind, and the ID of the
-// Player or Recorder. Each is a completion reserved in advance (DECISIONS
-// D37, class 2): a Player reserves one when it starts to play, a Recorder
-// when it stops, so the event cannot be lost to a full queue, and comes once.
-// An event can still arrive for a Player or Recorder closed after it was
-// sent: compare the ID.
+// An ended playback, a finished recording and an opened file arrive as an
+// app.EvService from platform.SourceMedia, which EventOf decodes: its Kind,
+// and the ID of the Player, Recorder or Video (one numbering: IDs never repeat
+// across them). A Player's and a Recorder's are completions reserved in
+// advance (DECISIONS D37, class 2): a Player reserves one when it starts to
+// play and one when OpenPlayer starts to open, a Recorder when it stops, so
+// the event cannot be lost to a full queue, and comes once.
+// A Video's end is offered to a ring of its own (64 records, refused only
+// while 64 ends wait undelivered), so videos left paused hold no record the
+// players need. An event can still arrive for one closed after it was sent:
+// compare the ID.
 //
 // # Threads and cost
 //
-// Players and Recorders are used on the main thread (Build and the event
-// handlers run there). Position, Playing, Elapsed and Level are a message or
+// Players, Recorders and Videos are used on the main thread (Build and the
+// event handlers run there). Position, Playing, Elapsed and Level are a message or
 // two to the system and allocate nothing, so they can be read every frame.
 // NewPlayer copies the PCM once, into memory the system frees when the
 // Player is closed, and prepares the system's player: about 8 ms on a Mac
 // mini (macOS 27), and about 60 ms for the process's first one, which starts
-// the audio stack, unless Warm did that earlier on a goroutine. No Go code
+// the audio stack, unless Warm did that earlier on a goroutine. OpenPlayer
+// does the file's I/O and decoding set-up on a goroutine, never on the main
+// thread, and tells the app with an Opened event. No Go code
 // runs on an audio thread: the system's own player and recorder do the
 // real-time work, the player's delegate only completes a reserved event, and
 // Stop reads the recording on a goroutine of its own.
 //
 // # What each OS does
 //
-//   - macOS: AVAudioPlayer over an in-memory WAV (its rate keeps the pitch),
-//     and AVAudioRecorder into a temporary WAV file, deleted once read.
-//   - Windows and Linux: not yet; NewPlayer and Start return ErrUnsupported
-//     (errors.Is errors.ErrUnsupported).
+//   - macOS: AVAudioPlayer over an in-memory WAV or over a file (its rate
+//     keeps the pitch), AVAudioRecorder into a temporary WAV file, deleted
+//     once read, and AVPlayer with an AVPlayerItemVideoOutput for video.
+//   - Windows and Linux: not yet; NewPlayer, OpenPlayer and Start return
+//     ErrUnsupported, and OpenVideo ErrVideoUnsupported (errors.Is
+//     errors.ErrUnsupported).
 package media
 
 import (
@@ -144,6 +170,8 @@ var (
 	// ErrNotAuthorized: the user has not authorized the microphone (the
 	// error names perm's state); ask with perm.Request first.
 	ErrNotAuthorized = errors.New("media: microphone access is not authorized")
+	// ErrFormat: a file the system cannot decode as audio (Player.Err).
+	ErrFormat = errors.New("media: not audio the system can decode")
 	// ErrSystem: the system's player or recorder refused (the error says
 	// what it reported).
 	ErrSystem = errors.New("media: the system refused")
@@ -154,13 +182,18 @@ type EventKind uint8
 
 // The media events.
 const (
-	// Ended: a Player played to its end. Its position is back at 0.
+	// Ended: a Player played to its end (its position is back at 0), or a
+	// Video that does not loop did (it holds its last frame; Play starts it
+	// again from the start).
 	Ended EventKind = iota + 1
-	// Failed: a Player stopped on a decoding error.
+	// Failed: a Player stopped on a decoding error, or OpenPlayer's file
+	// did not open (Player.Err).
 	Failed
 	// Recorded: a Recorder's capture has been read; Take returns it (or its
 	// error).
 	Recorded
+	// Opened: a Player from OpenPlayer has opened its file and is Ready.
+	Opened
 )
 
 // Event is a decoded media event.

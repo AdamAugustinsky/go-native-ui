@@ -73,6 +73,22 @@ func (k *Kit) takeScrollInset() float32 {
 	return t
 }
 
+// NextScrollMaxHeight makes the next scroll view (BeginScroll) as high as its
+// content, up to pt points, and scroll past that. It sets the view's height
+// (replacing NextSize's). The content's height is the previous layout's, so a
+// view whose content has just changed shows it a frame late; the kit asks for
+// that frame itself (Context.RequestFrame), and the first one shows the view
+// pt high.
+func (k *Kit) NextScrollMaxHeight(pt float32) { k.scrollMaxH = max(k.Pt(pt), 0) }
+
+// takeScrollMaxHeight returns the maximum NextScrollMaxHeight set, in pixels,
+// and clears it.
+func (k *Kit) takeScrollMaxHeight() float32 {
+	m := k.scrollMaxH
+	k.scrollMaxH = 0
+	return m
+}
+
 // barView is the content and view extents bar geometry works on: a vertical
 // bar's track runs below the view's top inset.
 func barView(content, view [2]float32, top float32) ([2]float32, [2]float32) {
@@ -93,8 +109,13 @@ func (k *Kit) BeginScroll(label string, st *ScrollState, axes ScrollAxes) Scroll
 	c := k.c
 	_, ident := ui.SplitLabel(label)
 	okey := ui.HashString(c.ParentKey(), ident)
+	maxH := k.takeScrollMaxHeight()
+	pad := k.legacyReserve(ui.KeyN(okey, 1), axes, st)
+	if maxH > 0 {
+		k.NextHeight(ui.Px(k.fitScrollHeight(ui.KeyN(okey, 1), maxH, pad[1])))
+	}
 	k.ApplySize(ui.Pct(1), ui.Pct(1))
-	if pad := k.legacyReserve(ui.KeyN(okey, 1), axes, st); pad != [2]float32{} {
+	if pad != [2]float32{} {
 		c.NextPadding(0, 0, pad[0], pad[1])
 	}
 	c.NextRole(ui.RoleScrollArea)
@@ -127,6 +148,25 @@ func (k *Kit) CloseScrollContent(v *ScrollView) { k.c.Pop() }
 
 // CloseScroll ends the view.
 func (k *Kit) CloseScroll(v *ScrollView) { k.c.Pop() }
+
+// fitScrollHeight is the height in pixels of the outer box of the scroll view
+// whose inner box has key skey, padded padY below: its content's height from
+// the last layout, at most maxH. It asks for another frame while the height
+// differs from the one the last layout gave the view, and when there is no
+// last layout.
+func (k *Kit) fitScrollHeight(skey ui.Key, maxH, padY float32) float32 {
+	sid, ok := k.c.BoxOf(skey)
+	if !ok {
+		k.c.RequestFrame()
+		return theme.Snap(maxH)
+	}
+	content, view := k.c.ScrollExtent(sid)
+	h := min(content[1], max(maxH-padY, 0))
+	if h < view[1]-0.5 || h > view[1]+0.5 {
+		k.c.RequestFrame()
+	}
+	return theme.Snap(h + padY)
+}
 
 // legacyReserve is the room legacy scroll bars of the control size of st take
 // beside the content of the view whose inner box has key skey: the bar's

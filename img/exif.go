@@ -2,10 +2,15 @@ package img
 
 import "encoding/binary"
 
-// exifOrientation returns the EXIF orientation (1 to 8) of a JPEG file, 1 if
-// it has none. It walks the markers up to the start of the scan and reads
+// Orientation returns the EXIF orientation (1 to 8) of a JPEG file, 1 if
+// it has none or data is not a JPEG: 1 shows the image as stored, 2 mirrors it
+// horizontally, 3 rotates it 180°, 4 mirrors it vertically, 5 transposes it,
+// 6 shows it rotated 90° clockwise, 7 transverses it and 8 shows it rotated
+// 90° counter-clockwise. Orient applies the value to a decoded image. The
+// cache applies it to the JPEGs it decodes; use Orientation for an image you
+// decode yourself (a cropper). It walks the markers up to the start of the scan and reads
 // tag 0x0112 of IFD0 in the first APP1 "Exif" segment: no pixel is decoded.
-func exifOrientation(b []byte) int {
+func Orientation(b []byte) int {
 	if len(b) < 4 || b[0] != 0xFF || b[1] != 0xD8 {
 		return 1
 	}

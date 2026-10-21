@@ -15,7 +15,7 @@ import (
 	"gonativeui/internal/ffi"
 )
 
-// openPath opens path through Launch Services (LSOpenCFURLRef), on whatever
+// osOpenPath opens path through Launch Services (LSOpenCFURLRef), on whatever
 // goroutine calls it. NSWorkspace through internal/objc would tie it to the
 // main thread: objc's helpers share one call frame and Cls/Sel are not
 // goroutine-safe, and an off-thread message send also needs an autorelease
@@ -24,7 +24,7 @@ import (
 // a call Frame of our own per call. (LSOpenCFURLRef is deprecated in favour
 // of NSWorkspace but present on every supported system; it opens a folder
 // in Finder and a document in its default app, like openURL:.)
-func openPath(path string) error {
+func osOpenPath(path string) error {
 	fi, err := os.Stat(path) // may block on a dead mount: we are on a worker
 	if err != nil {
 		return err

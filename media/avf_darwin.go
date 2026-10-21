@@ -38,13 +38,24 @@ var sel struct {
 // delIndex is the delegate class's index variable: the player slot.
 var delIndex *objc.Ivar
 
+// openAVFoundation opens AVFoundation, AppKit first: AVFoundation loaded
+// without AppKit (a player made, or Warm run, before the app starts) sets up
+// layers that later break every NSView's (-[NSViewBackingLayer NS_setView:]
+// unrecognized, macOS 27.2; DECISIONS D58). Any thread.
+func openAVFoundation() (uintptr, error) {
+	if _, err := cf.Framework("AppKit"); err != nil {
+		return 0, err
+	}
+	return cf.Framework("AVFoundation")
+}
+
 // errOut receives an NSError from an init…error: call (main thread).
 var errOut = new(uintptr)
 
 // loadAV opens AVFoundation and looks everything up. Main thread.
 func loadAV() error {
 	av.once.Do(func() {
-		lib, err := cf.Framework("AVFoundation")
+		lib, err := openAVFoundation()
 		if err != nil {
 			av.err = ErrUnavailable
 			return

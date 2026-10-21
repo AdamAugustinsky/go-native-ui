@@ -132,11 +132,11 @@ type watcher interface {
 	close()
 }
 
-// openPath opens path with the OS default application (a folder in the
-// file manager). Implemented per OS and exposed as Open and, for the UI,
-// as Service.Open:
+// osOpenPath opens path with the OS default application (a folder in the
+// file manager). Implemented per OS and exposed, behind the test-binary guard
+// (openPath, open.go), as Open and, for the UI, as Service.Open:
 //
-//	openPath(path string) error
+//	osOpenPath(path string) error
 //
 // It is called on a goroutine of its own, never on the UI thread, so it may
 // block (checking the path on a dead network mount, waiting for the shell).

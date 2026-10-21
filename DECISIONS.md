@@ -1014,6 +1014,16 @@ The whole UI is rewritten in Go on the framework with the Rex design system, mac
 
 **Reasoning:** macOS 26 is the last release for Intel Macs, and macOS 27, the reference system here, does not run on them; GitHub's last Intel Mac runner goes in August 2027; and the Intel-only paths (struct returns, `NSRange` passing, Rosetta for local checks) cost testing time with no users to serve.
 
+## D56. Video frames on the GPU: YUV textures and per-frame imports (phase 6, 2026-10-20)
+
+**Decision.** Refines D44's external textures (C7):
+- **One quad mode.** A YUV texture is drawn by an ordinary `ModeRGBA` quad. The renderer binds its chroma planes (textures 1 and 2) and its conversion (fragment buffer 1: the BT.601 or BT.709 matrix for video or full range, the plane count, quarter turns) with the run of quads that binds it, and the shader converts as it samples; a plain texture's run binds "no conversion". The `Quad` layout, `ui`'s image placement (fit, radius, clip) and the other backends are unchanged, and `k.ExternalImage` is `k.Image` with the app's texture.
+- **Two sources.** `NewYUVTexture` and `StageYUV` hold frames from memory (a call's I420, or NV12), staged in GPU order without waiting, like atlas pages. `ImportPixelBuffer` wraps a `420v`/`420f` `CVPixelBuffer` with no copy, for the frame being built only: its id stops resolving at that frame's `Encode`. Imports reuse 16 table indices reserved with the first, so they do not churn the texture table; their generations wrap, so an import id kept for 4,096 frames may name a later import.
+- **The completion turn wakes no window.** The completion block of a command buffer with leases calls `platform.SignalDispatch`, which gives the dispatcher a turn without `Wake`'s `EvWake` (every window would redraw, re-import its paused video and complete again, for ever). The safe point calls `Renderer.CollectLeases`, which reads the slots' status without waiting.
+- **macOS only for now.** On Windows and Linux `NewYUVTexture` reports `ErrUnsupported`.
+
+**Alternatives:** a `ModeYUV` with per-quad colour information (the `ui` image path and every backend change, and the `Quad` has no room for a matrix); imports that persist until replaced, retired through `FreeTexture`'s list (unbounded, against D44's 48); copying pixel buffers to RGBA (a CPU pass per frame).
+
 ## D57. Voice-note audio: the system's player and recorder, no Go on audio threads (phase 6, 2026-10-20)
 
 **Decision (S7, refines D46).** macOS first (D34); on Windows and Linux `NewPlayer`, `Recorder.Start` and `app/perm` return `ErrUnsupported`.
@@ -1035,3 +1045,60 @@ The whole UI is rewritten in Go on the framework with the Rex design system, mac
 - WAV files from AudioToolbox's writer (which `AVAudioRecorder` uses) parse back exactly.
 
 Live microphone capture was not run: access cannot be granted headlessly, so that test skips unless the process is authorized.
+
+## D58. `media.Video`: frames pulled in Build, idle when paused or hidden (phase 6, 2026-10-20)
+
+**Decision.** Refines D46 (S8). `media.Video` is an `AVPlayer` whose item has an `AVPlayerItemVideoOutput` (biplanar `420v`, Metal-compatible). There is no frame callback:
+- **Pulled in Build.** While its box shows (`Kit.ImageShown`), the app calls `Video.Frame`, which asks the output for the pixel buffer of the time the frame will show (`itemTimeForHostTime:` at the frame's time plus 8 ms, `hasNewPixelBufferForItemTime:`, `copyPixelBufferForItemTime:`), keeps it as the current frame, imports it (D56) and returns the delay to the next frame. The app passes that to `WakeIn`.
+- **The rate.** That delay is the frame interval less 8 ms, so the display tick it lands on is the one the frame is due at. Waking at the full interval missed that tick about one time in five: 24 frames drawn per second for a 30 fps clip, against 30 with the lead (Mac mini, 60 Hz).
+- **Idle.** Paused, ended or hidden, `Frame` asks for nothing, so the window draws nothing (0 frames a second, measured). A seek while paused pulls until the frame of the time it went to comes (one from before the seek can come first), 3 s at most.
+- **Speed.** `SetRate` (0.5–2) sets the player's `defaultRate`, and its `rate` while it plays; the item's `audioTimePitchAlgorithm` is set to Spectral, which keeps the pitch (the tests check the speed, not the sound: their clips have no audio track, and macOS 15 reads the property back differently). `Frame`'s delay divides by the rate.
+- **`Play` wakes.** `Play` on a video that was not playing calls `platform.Wake`, so every window draws a frame and the one showing it starts pulling. Without it, `Play` from outside a frame or an event (a run-loop callback) drew nothing until other input came (0 frames a second, measured).
+- **Off the main thread.** The track's size, turn (from `preferredTransform`, in quarter turns) and rate, and the poster frame (`AVAssetImageGenerator`), are read on a goroutine, which then wakes the app.
+- **The end.** `AVPlayerItemDidPlayToEndTimeNotification` reaches a per-slot observer object, kept for the process because a late notification may still arrive. It sets a flag and, without a loop, offers D57's `Ended` event (`EventOf`: A the kind, B the video's ID, from the Players' and Recorders' numbering) to a ring of the videos' own, 64 records: unlike a Player's reserved ticket, a video left paused holds no record the players need. Looping is done by the next `Frame`.
+- **AppKit before AVFoundation.** AVFoundation loaded without AppKit, as when a video plays offscreen before the app starts, breaks every later `NSView` layer (`-[NSViewBackingLayer NS_setView:]` unrecognized, macOS 27.2; reproduced with the video tests, not with D57's `AVAudioPlayer` or `Warm`). `media` opens AVFoundation through one function that loads AppKit first, for videos, players, recorders and `Warm`.
+- Windows and Linux report `ErrVideoUnsupported`.
+
+**Alternatives:** a display-link or `requestNotificationOfMediaDataChangeWithAdvanceInterval:` callback per video, rejected because it wakes for videos that do not show; an `AVPlayerLayer` hosted over our layer (D46 rejects it: no rounded clipping, z-order or offscreen render).
+
+## D59. `media.OpenPlayer`: files through the system's decoders, opened off the main thread (phase 6, 2026-10-21)
+
+**Decision.** `media.OpenPlayer(path)` makes the same `Player` (Play, Pause, Seek, Position, Duration, rate with the pitch kept, volume, `Ended`, Close, the `MaxPlayers` cap) over an `AVAudioPlayer` `initWithContentsOfURL:error:`, so ZapFast plays what its core cannot decode (MP3, AAC, M4A), the user's notification sounds and system sounds, with no `afplay`. Windows and Linux return `ErrUnsupported`, as the rest of `media`.
+- **Async open (framework rule: no blocking I/O on the main thread).** `NewPlayer` is 8 ms of `prepareToPlay` on the main thread, but opening a file reads it (a slow or network volume, an MP3 scanned for its length). So `OpenPlayer` takes a slot and an event record (D37, class 2) and returns at once; a goroutine stats the file, makes the `AVAudioPlayer` through `internal/cf` (the way `Warm` does), enables rate, prepares it, reads `duration`, and completes the record: `Opened`, or `Failed` with the error in `Player.Err`. Before that, `Ready` is false, `Duration` and `Position` are 0, `Play` returns `ErrState`; `SetRate` and `SetVolume` are kept and applied on attach.
+- **Attach on the main thread.** The object, not Go code, is handed over: the first `Player` method that finds the job done sets the slot's delegate (the one `Ended` uses) and applies rate and volume. `Ready`, `Duration`, `Position` and `Playing` stay allocation-free.
+- **Close while opening.** A job's state (opening, done, cancelled) is compare-and-swapped by the goroutine and by `Close`: whoever loses frees nothing twice, and the loser of the race that holds the object releases it. The slot and record go back at `Close` (a failed open gives its slot back at once).
+- **Errors.** A missing file wraps the file system's error (`fs.ErrNotExist`); a file that is not audio, empty, or a directory is `ErrFormat` with the system's description.
+
+**Alternatives.** A synchronous `OpenPlayer` on the main thread: simpler, but blocks on I/O. Reading the file on a goroutine and handing the bytes to `initWithData:`: copies the whole file and loses streaming decode of long files. A Player that blocks `Play` until ready: hides the wait but needs a lock on the main thread.
+
+**Evidence** (the `media` tests on a Mac mini, through the real `AVAudioPlayer`): an AAC/M4A made with `AVAudioFile` opens, lasts 1 s, advances, ends once after about 1 s, and after about 0.5 s at 2×; `/System/Library/Sounds/Tink.aiff` opens and plays to its end; a missing file, text named `.mp3`, an empty file and a directory give `Failed` with the error; 40 opens closed at staggered times leave no record or slot; the `MaxPlayers` cap holds; the per-frame reads allocate 0 bytes.
+
+## D60. HTTP(S) downloads: the system's NSURLSession on macOS, net/http elsewhere (phase 6, 2026-10-21)
+
+**Decision (Adam's speed-mode fast lane for ZapFast's self-updater).** `app/fetch` is a small streaming HTTP(S) client: `Get(ctx, url, w, Options)` writes the body of a GET to `w`, and `Bytes(ctx, url, limit, Options)` returns a small body. Options: extra headers, an overall timeout, `MaxBytes`, `Progress(received, total)` and a `Proxy` (HTTP, HTTPS or SOCKS5, with optional user and password). A status outside 2xx is a `*StatusError`; a longer body than `MaxBytes` is `ErrTooLarge`. On macOS it uses `NSURLSession` (an ephemeral session, no cookies or cache, a delegate queue of its own); on Windows and Linux it uses `net/http`. A program that imports `app/fetch` on macOS links neither `net/http` nor `crypto/tls`.
+
+**Why:**
+- **Size.** `net/http` and `crypto/tls` pull about 4 MB of Go code (network stack, TLS, X.509, HTTP/2) into a binary whose budget is under 10 MB. The system already has all of it.
+- **The system's trust store and proxies.** `NSURLSession` uses the keychain's roots and the user's proxy settings (System Settings, PAC files, per-network rules) with no code from us, and it gets the OS's TLS fixes without a new release of the app.
+- **The cost** is that the two paths behave alike only where the API reaches (see the package documentation), and the macOS path is our code on foreign threads, which `net/http` is not.
+
+**How it works on macOS:**
+- The delegate is a class made at first use with the runtime's functions and a call frame of its own (`internal/objc`'s class builder is for the main thread). Its callbacks run on a serial `NSOperationQueue` the call creates, never on the main thread. They copy what arrives into a bounded channel; the calling goroutine does the writing and calls `Progress`. A full channel holds the delegate queue back, and through TCP, the server.
+- Cancelling the context cancels the task and returns at once, without waiting for the queue. The response completion handler cancels the task for a non-2xx status or a length over `MaxBytes`, so such a body is not downloaded.
+- `Accept-Encoding: identity` is sent by default on every platform, so an archive arrives as the server stored it, with the length the server announced.
+- A set `Proxy` goes in `connectionProxyDictionary` (`kCFNetworkProxiesHTTP*`, `kCFNetworkProxiesHTTPS*`, `kCFNetworkProxiesSOCKS*`, `kCFStreamPropertySOCKSUser` and `Password`). An HTTP proxy carries http and, through CONNECT, https. Its user and password answer the 407 in the task delegate's challenge method.
+
+**App Transport Security** (measured with a test program on macOS 27, bare and in a signed bundle):
+- A bare executable (go run, go test) is not subject to it: plain http works everywhere.
+- In a bundle, plain http works to loopback, private and link-local addresses, `localhost`, names with no dots and `.local` names. Any other plain http host (a dotted name, a public IP address) fails with `-1022`, which the package returns as `ErrInsecure`, unless the Info.plist has `NSAppTransportSecurity` with `NSAllowsArbitraryLoads` or an `NSExceptionDomains` entry with `NSExceptionAllowsInsecureHTTPLoads` for that host. So ZapFast's local test feeds work without an Info.plist key, and real feeds are https.
+
+**Limits we accepted:**
+- An HTTP proxy's credentials work for https URLs (CONNECT) but not for plain http URLs on macOS: the system returns the 407 without a challenge (the same with the credential storage, the session-level challenge method and the proxy dictionary tried); the call fails with a `*StatusError` 407. SOCKS5 credentials work for both.
+- A TLS-secured proxy (`ProxyHTTPS`) is `errors.ErrUnsupported` on macOS: `connectionProxyDictionary` has no such proxy. (`proxyConfigurations` on macOS 14 and later could carry one; it needs the Network framework's C API and a trusted proxy certificate to test, so it waits for a use.)
+- Without `Timeout`, a stalled macOS transfer is cut after 24 hours, not the system's 60 seconds; the context is the limit, as with `net/http`. CFNetwork may hold back a very small body chunk (a few bytes) until more arrives or the response ends.
+- On Windows and Linux, `net/http` reads the proxy from the environment (HTTP_PROXY, HTTPS_PROXY, NO_PROXY), not from the system's settings.
+
+**Evidence** (Mac mini, macOS 27, darwin/arm64, `-trimpath -ldflags="-s -w"`):
+- hello world: 1.57 MB. Hello world that calls `fetch.Bytes`: 2.18 MB (+0.61 MB: the FFI layer, the Foundation calls and the delegate). Hello world with `net/http`'s `http.Get`: 5.58 MB (+4.0 MB).
+- `go list -deps` of the `fetch` program lists neither `net/http`, `crypto/tls`, `crypto/x509` nor `net`; `go tool nm` finds no `net/http.` or `crypto/tls.` symbol in it (998 in the `net/http` program).
+- The `app/fetch` tests run on loopback servers against the real `NSURLSession`: a 12 MB body with progress, an unknown length, cancelling mid-transfer (returns in milliseconds, the server sees the connection close), a 404, redirects, `MaxBytes` (announced and unannounced), timeouts (before and during the body), headers, no decompression, `Bytes`, an untrusted certificate, 72 concurrent transfers, a slow writer, an HTTP proxy that sees the request, proxy credentials, a SOCKS5 server with and without a password.

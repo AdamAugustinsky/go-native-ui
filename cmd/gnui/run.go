@@ -14,6 +14,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"gonativeui/internal/launchguard"
 )
 
 // envFlags collects repeated -env KEY=VAL flags.
@@ -99,6 +101,9 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 	if fs.NArg() > 0 {
 		openArgs = append(openArgs, "--args")
 		openArgs = append(openArgs, fs.Args()...)
+	}
+	if err := launchguard.Check("launch " + absApp); err != nil {
+		return err
 	}
 	if *detach {
 		if _, err := runOut("open", openArgs...); err != nil {

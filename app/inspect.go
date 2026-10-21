@@ -90,10 +90,12 @@ type InspectSnapshot struct {
 
 	// AtlasPages and AtlasBytes are the text atlas; TexLive and TexRetiring
 	// the renderer's textures (TexBytes when the renderer reports them, else
-	// -1).
+	// -1). Imports and Leases are the pixel buffers imported for the frame
+	// being built and those the frames in flight hold (gpu.Renderer.ExternalCounts).
 	AtlasPages, AtlasBytes int
 	TexLive, TexRetiring   int
 	TexBytes               int64
+	Imports, Leases        int
 
 	// Dups[:NDups] are the duplicate keys seen (ui.Context.DebugDups), DupsMore
 	// the number that did not fit.
@@ -231,9 +233,10 @@ func (a *App) fillSnapshot() {
 			s.AtlasBytes += w * h * px
 		}
 	}
-	s.TexLive, s.TexRetiring, s.TexBytes = 0, 0, -1
+	s.TexLive, s.TexRetiring, s.TexBytes, s.Imports, s.Leases = 0, 0, -1, 0, 0
 	if a.R != nil {
 		s.TexLive, s.TexRetiring = a.R.TextureCounts()
+		s.Imports, s.Leases = a.R.ExternalCounts()
 		if d.texBytes != nil {
 			s.TexBytes = d.texBytes()
 		}

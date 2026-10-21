@@ -228,6 +228,6 @@ func (a *App) abandonFrame(pool uintptr) {
 	a.framing--
 	a.ax.building = false // a Build that panicked never reached End
 	platform.HoldApp(a.framing > 0)
-	abandonSurfaceFrame(a.Surf, &a.fr)
+	abandonSurfaceFrame(a.Surf, a.R, &a.fr)
 	framePoolPop(pool)
 }

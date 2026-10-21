@@ -183,7 +183,8 @@ func (a *App) deliverFailedDialogs() {
 }
 
 // TakeDialog returns the oldest dialog result not read yet, and false when
-// there is none. A result carries the ticket its call returned.
+// there is none. A result carries the ticket its call returned. When several
+// owners ask for dialogs, each reads its own with TakeDialogFor.
 func (a *App) TakeDialog() (platform.DialogResult, bool) {
 	if len(a.dlg) == 0 {
 		return platform.DialogResult{}, false
@@ -191,6 +192,19 @@ func (a *App) TakeDialog() (platform.DialogResult, bool) {
 	r := a.dlg[0]
 	a.dlg = a.dlg[:copy(a.dlg, a.dlg[1:])]
 	return r, true
+}
+
+// TakeDialogFor returns the result of the dialog with ticket t, and false when
+// that dialog has not ended or its result was read. Other results stay queued
+// for their owners, so independent callers do not take each other's answers.
+func (a *App) TakeDialogFor(t platform.DialogTicket) (platform.DialogResult, bool) {
+	for i, r := range a.dlg {
+		if r.Ticket == t {
+			a.dlg = slices.Delete(a.dlg, i, i+1)
+			return r, true
+		}
+	}
+	return platform.DialogResult{}, false
 }
 
 // pushDialog queues a result and asks for a frame to show it.

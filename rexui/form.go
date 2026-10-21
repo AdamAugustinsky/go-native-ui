@@ -1,6 +1,8 @@
 package rexui
 
 import (
+	"cmp"
+
 	"gonativeui/theme"
 	"gonativeui/ui"
 	"gonativeui/widget/base"
@@ -43,11 +45,15 @@ type RowOpts struct {
 	// layout's row (0: FormLook's, a grouped row's 40 pt; an aligned row is
 	// as high as its tallest control).
 	Height float32
-	// Detail is a secondary line under the row's label, as System Settings'
-	// rows have: smaller text in the secondary colour. A grouped row with a
-	// Detail is as high as the two lines need if that is more than Height
-	// (or the layout's row). An aligned form's rows ignore it.
+	// Detail is a secondary text under the row's label, as System Settings'
+	// rows have: smaller text in the secondary colour. A grouped row's label
+	// column takes the width the row's controls leave and Detail wraps to it,
+	// up to MaxLines lines (the last ends in "…" when text is left out); the
+	// row is as high as its label column and controls need, so Height does
+	// not apply to a row with a Detail. An aligned form's rows ignore it.
 	Detail string
+	// MaxLines is the most lines Detail takes (0: 3).
+	MaxLines int
 }
 
 // FormRecipe is the look of forms. Lengths are points.
@@ -86,7 +92,7 @@ type FormRecipe struct {
 	// (RowOpts.Detail): 11 pt, secondaryLabelColor.
 	DetailStyle TextStyle
 	Detail      Tint
-	// DetailPadY is the space above and below the two lines of a row with a
+	// DetailPadY is the space above and below the lines of a row with a
 	// description (10; designed, System Settings' rows with one are about
 	// 50 pt high).
 	DetailPadY float32
@@ -275,22 +281,22 @@ func (f *Form) Row(k *base.Kit, label string, o RowOpts) ui.ID {
 	if !f.inCard { // rows without a section: one anonymous section
 		f.Section(k, "")
 	}
-	f.card.separate(k)         // its own settings come after: they are the row's
+	f.card.separate(k) // its own settings come after: they are the row's
+	if o.Detail != "" {
+		// The label column fills what the controls leave and the row grows
+		// with the wrapped lines, so there is no spacer to share the room.
+		k.NextGap(rc.LabelGap)
+		k.Context().NextRole(ui.RoleGroup)
+		k.Context().NextSemName(label)
+		f.row = f.card.rowFit(k, label, rc.DetailPadY)
+		f.label = formLabelDetail(k, label, o.Detail, o.MaxLines)
+		return f.row
+	}
 	k.NextGap(rc.LabelGap / 2) // either side of the spacer
 	k.Context().NextRole(ui.RoleGroup)
 	k.Context().NextSemName(label)
-	h := o.Height
-	if o.Detail != "" { // room for both lines
-		r := k.Theme()
-		lines := r.Styles[theme.StyleBody].Line + r.Styles[TextStyles[rc.DetailStyle%NumTextStyles]].Line
-		h = max(h, CardLook.RowH, lines/k.Scale()+2*rc.DetailPadY)
-	}
-	f.row = f.card.row(k, label, h)
-	if o.Detail == "" {
-		f.label = formLabel(k, label)
-	} else {
-		f.label = formLabelDetail(k, label, o.Detail)
-	}
+	f.row = f.card.row(k, label, o.Height)
+	f.label = formLabel(k, label)
 	k.Spacer()
 	return f.row
 }
@@ -303,13 +309,26 @@ func formLabel(k *base.Kit, label string) ui.ID {
 }
 
 // formLabelDetail builds a row's label with its description under it, in a
-// column that the row centres vertically.
-func formLabelDetail(k *base.Kit, label, detail string) ui.ID {
+// column that fills the row's width left of the controls. The description
+// wraps to the column's width, up to maxLines lines (0: 3). The column is as
+// high as the lines, and the row follows it.
+func formLabelDetail(k *base.Kit, label, detail string, maxLines int) ui.ID {
 	rc := &FormLook
+	c, r := k.Context(), k.Theme()
 	k.NextGap(0)
-	k.BeginContainer(ui.AxisY, ui.CrossStart, "label", ui.Children(1), ui.Children(1), 0)
+	k.BeginContainer(ui.AxisY, ui.CrossStart, "label", ui.Pct(1), ui.Children(1), 0)
+	k.NextWidth(ui.Pct(1))
 	l := formLabel(k, label)
-	LabelBytes(k, base.StrBytes(detail), LabelOpts{Style: rc.DetailStyle, Color: rc.Detail})
+	col := rc.Detail.RGBA(r)
+	if k.Disabled() {
+		col = r.Colors[theme.TextDisabled]
+	}
+	c.NextSize(ui.Pct(1), ui.TextSize(0))
+	c.NextFont(r.Styles[TextStyles[rc.DetailStyle%NumTextStyles]].Font)
+	c.NextTextColor(col)
+	c.NextAlign(ui.AlignLeft)
+	c.RichText(ui.HashString(c.ParentKey(), "detail"), base.StrBytes(detail), nil, nil,
+		ui.RichOpts{MaxLines: cmp.Or(maxLines, 3), Ellipsis: true})
 	k.EndContainer()
 	return l
 }
