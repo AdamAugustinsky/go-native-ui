@@ -71,8 +71,12 @@ void main() {
 	} else if (any(greaterThan(aRadii, vec4(0.0)))) {
 		pad = 1.0;
 	}
+	// Outside this half-pixel fringe, clip/fade coverage is exactly zero.
+	vec2 lo = aRect.xy - pad, hi = aRect.zw + pad;
+	if (any(notEqual(aClip, vec4(0.0)))) { lo = max(lo, aClip.xy - 0.5); hi = min(hi, aClip.zw + 0.5); }
+	if (any(notEqual(aFadeX, vec2(0.0)))) { hi.x = min(hi.x, aFadeX.y + 0.5); }
 	vec2 c = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1));
-	vec2 p = mix(aRect.xy - pad, aRect.zw + pad, c);
+	vec2 p = mix(lo, max(hi, lo), c);
 	gl_Position = vec4(p / uViewport * vec2(2.0, -2.0) + vec2(-1.0, 1.0), 0.0, 1.0);
 
 	vRect = aRect;

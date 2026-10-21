@@ -64,8 +64,14 @@ vertex VOut vs_main(uint vid [[vertex_id]],
 	} else if (any(radii > 0.0)) {
 		pad = 1.0;
 	}
+	// Outside this half-pixel fringe, clip/fade coverage is exactly zero.
+	float2 lo = rect.xy - pad, hi = rect.zw + pad;
+	float4 clip = quads[iid].clip;
+	float2 fadeX = quads[iid].fadeX;
+	if (any(clip != 0.0)) { lo = max(lo, clip.xy - 0.5); hi = min(hi, clip.zw + 0.5); }
+	if (any(fadeX != 0.0)) { hi.x = min(hi.x, fadeX.y + 0.5); }
 	float2 c = float2(float(vid & 1u), float(vid >> 1));
-	float2 p = mix(rect.xy - pad, rect.zw + pad, c);
+	float2 p = mix(lo, max(hi, lo), c);
 	VOut o;
 	o.pos = float4(p / viewport * float2(2.0, -2.0) + float2(-1.0, 1.0), 0.0, 1.0);
 	o.inst = iid;

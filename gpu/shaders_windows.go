@@ -69,8 +69,12 @@ VOut vs_main(VIn i) {
 	} else if (any(i.radii > 0.0)) {
 		pad = 1.0;
 	}
+	// Outside this half-pixel fringe, clip/fade coverage is exactly zero.
+	float2 lo = i.rect.xy - pad, hi = i.rect.zw + pad;
+	if (any(i.clip != 0.0)) { lo = max(lo, i.clip.xy - 0.5); hi = min(hi, i.clip.zw + 0.5); }
+	if (any(i.fadeX != 0.0)) { hi.x = min(hi.x, i.fadeX.y + 0.5); }
 	float2 c = float2(float(i.vid & 1u), float(i.vid >> 1u));
-	float2 p = lerp(i.rect.xy - pad, i.rect.zw + pad, c);
+	float2 p = lerp(lo, max(hi, lo), c);
 	VOut o;
 	o.pos = float4(p / viewport * float2(2.0, -2.0) + float2(-1.0, 1.0), 0.0, 1.0);
 	o.rect = i.rect;
