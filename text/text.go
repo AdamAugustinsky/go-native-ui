@@ -9,7 +9,7 @@
 //   - The run cache (cache.go) stores shaped runs in pointer-free slabs keyed
 //     by (font, bytes). A hit allocates nothing.
 //   - The glyph cache and atlas (cache.go, atlas.go) store rasterized glyphs
-//     in 1024×1024 pages (R8 coverage, RGBA premultiplied for colour glyphs)
+//     in pages up to 1024×1024 (R8 coverage, RGBA premultiplied for colour glyphs)
 //     and track the region changed since the last upload.
 //   - Paragraph layout (para.go, D42) breaks styled text (Para: the text,
 //     pointer-free Spans and a font per style) into lines at a width. On
@@ -141,9 +141,11 @@ type GlyphEntry struct {
 }
 
 const (
-	// PageSize is the width and height of every atlas page in pixels.
+	// PageSize is the maximum atlas page width and height in pixels, and the
+	// default for grayscale pages. Colour pages may be smaller; PageInfo
+	// returns each page's actual dimensions and Dirty its byte stride.
 	PageSize = 1024
-	// maxPagesPerKind caps the number of R8 pages and of RGBA pages.
+	// maxPagesPerKind bounds each kind's pixels to this many full-size pages.
 	maxPagesPerKind = 4
 )
 

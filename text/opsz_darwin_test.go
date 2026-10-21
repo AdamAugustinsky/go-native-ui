@@ -219,7 +219,7 @@ func inkVsOutline(s *System, face FaceID, gid uint16, e GlyphEntry) (past, short
 	c0, c1, r0, r1 := 1<<30, -1, 1<<30, -1
 	for y := 0; y < int(e.H); y++ {
 		for x := 0; x < int(e.W); x++ {
-			if pg.pix[((int(e.Y)+y)*PageSize+int(e.X)+x)*pg.bpp+pg.bpp-1] > 0 {
+			if pg.pix[((int(e.Y)+y)*pg.pack.w+int(e.X)+x)*pg.bpp+pg.bpp-1] > 0 {
 				c0, c1, r0, r1 = min(c0, x), max(c1, x), min(r0, y), max(r1, y)
 			}
 		}
@@ -278,7 +278,7 @@ func TestRasterMatchesAppKitLine(t *testing.T) {
 			for r := 0; r < int(e.H); r++ {
 				for c := 0; c < int(e.W); c++ {
 					o := &ours[(gy+r)*W+gx+c]
-					*o = byte(min(255, int(*o)+int(pg.pix[(int(e.Y)+r)*PageSize+int(e.X)+c])))
+					*o = byte(min(255, int(*o)+int(pg.pix[(int(e.Y)+r)*pg.pack.w+int(e.X)+c])))
 				}
 			}
 		}

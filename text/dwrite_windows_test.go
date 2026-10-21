@@ -326,13 +326,13 @@ func TestInvalidUTF8AndEmpty(t *testing.T) {
 func pixels(t *testing.T, s *System, e GlyphEntry) []byte {
 	t.Helper()
 	w, _, color := s.PageInfo(int(e.Page))
-	if w != PageSize || color != e.Color {
+	p := s.atlas.pages[e.Page]
+	if w != p.pack.w || color != e.Color {
 		t.Fatalf("page info (%d, %v) for entry %+v", w, color, e)
 	}
-	p := s.atlas.pages[e.Page]
 	var out []byte
 	for r := 0; r < int(e.H); r++ {
-		o := ((int(e.Y)+r)*PageSize + int(e.X)) * p.bpp
+		o := ((int(e.Y)+r)*p.pack.w + int(e.X)) * p.bpp
 		out = append(out, p.pix[o:o+int(e.W)*p.bpp]...)
 	}
 	return out
@@ -378,12 +378,12 @@ func TestRasterA(t *testing.T) {
 	// The atlas padding around the rect in the page is untouched.
 	p := s.atlas.pages[e.Page]
 	for x := int(e.X) - 1; x <= int(e.X)+int(e.W); x++ {
-		if p.pix[(int(e.Y)-1)*PageSize+x] != 0 || p.pix[(int(e.Y)+int(e.H))*PageSize+x] != 0 {
+		if p.pix[(int(e.Y)-1)*p.pack.w+x] != 0 || p.pix[(int(e.Y)+int(e.H))*p.pack.w+x] != 0 {
 			t.Fatal("atlas padding row is not empty")
 		}
 	}
 	for y := int(e.Y) - 1; y <= int(e.Y)+int(e.H); y++ {
-		if p.pix[y*PageSize+int(e.X)-1] != 0 || p.pix[y*PageSize+int(e.X)+int(e.W)] != 0 {
+		if p.pix[y*p.pack.w+int(e.X)-1] != 0 || p.pix[y*p.pack.w+int(e.X)+int(e.W)] != 0 {
 			t.Fatal("atlas padding column is not empty")
 		}
 	}
