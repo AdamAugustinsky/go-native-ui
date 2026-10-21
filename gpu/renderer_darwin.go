@@ -34,6 +34,10 @@ const ringSlots = 3
 // initialQuads is the starting instance capacity of every ring slot.
 const initialQuads = 4096
 
+// runTextures matches quadMSL's table at texture slots 3..10. Slots 0..2
+// remain the backdrop/YUV bindings, whose runs cannot share conversions.
+const runTextures = 8
+
 var (
 	rsNewBuffer    = objc.Sel("newBufferWithLength:options:")
 	rsContents     = objc.Sel("contents")
@@ -188,8 +192,9 @@ type Renderer struct {
 	destroyed         bool
 }
 
-// NewRenderer builds the pipeline and instance rings on an existing device
-// and command queue, which the caller keeps owning. Setup allocates.
+// NewRenderer builds the pipeline on an existing device and command queue,
+// which the caller keeps owning. Instance ring slots allocate on their first
+// non-empty frame. Setup allocates.
 func NewRenderer(device, queue uintptr) (*Renderer, error) {
 	if err := loadMetal(); err != nil {
 		return nil, err
@@ -229,12 +234,6 @@ func NewRenderer(device, queue uintptr) (*Renderer, error) {
 	objc.Send1(r.color0, rsSetLoad, 2)  // Clear
 	objc.Send1(r.color0, rsSetStore, 1) // Store
 
-	for i := range r.slots {
-		if err := r.growSlot(&r.slots[i], initialQuads); err != nil {
-			r.Destroy()
-			return nil, err
-		}
-	}
 	// Texture 0: 1×1 white RGBA texel that shape quads bind.
 	t0 := r.NewTexture(TexRGBA8, 1, 1)
 	r.Upload(t0, 0, 0, 1, 1, []byte{255, 255, 255, 255}, 4)
@@ -657,7 +656,7 @@ func (r *Renderer) Encode(cmdBuf, target uintptr, width, height int, clear [4]fl
 	// without the blur, are drawn as shapes of their fallback colour. Their
 	// regions' fills (Backdrop.Base) are drawn first, after the list's quads
 	// in the slot.
-	var inst []Quad
+	inst := unsafe.Slice((*Quad)(s.mem), len(quads))
 	blur, pre := false, 0
 	if extra > 0 {
 		all := unsafe.Slice((*Quad)(s.mem), len(quads)+extra)
@@ -669,8 +668,10 @@ func (r *Renderer) Encode(cmdBuf, target uintptr, width, height int, clear [4]fl
 		ArgRect(float64(clear[0]), float64(clear[1]), float64(clear[2]), float64(clear[3])).Call(objc.MsgSend)
 	enc := r.beginPass(cmdBuf, r.rpd, s)
 
-	// Shape quads don't read the bound texture, so they join whatever run is
-	// open; only a texture quad with a different texture ends it.
+	// Shape quads join the open run. Plain textures share a small table;
+	// only table overflow, YUV conversion changes and backdrops end a run.
+	var table [runTextures]TextureID
+	ntex := 0
 	bound, yuv := TextureID(0), false
 	objc.Send2(enc, rsSetFTexture, uintptr(r.textures[0]), 0)
 	r.use(s, 0)
@@ -678,6 +679,7 @@ func (r *Renderer) Encode(cmdBuf, target uintptr, width, height int, clear [4]fl
 		r.draw(enc, len(quads), pre)
 	}
 	runStart := 0
+nextQuad:
 	for i := range quads {
 		q := &quads[i]
 		if q.Mode == ModeBackdrop {
@@ -695,19 +697,39 @@ func (r *Renderer) Encode(cmdBuf, target uintptr, width, height int, clear [4]fl
 			objc.Send2(enc, rsSetFTexture, uintptr(r.bd.tex[0]), 0)
 			r.draw(enc, i, 1)
 			bound, yuv = 0, false
+			ntex = 0
 			objc.Send2(enc, rsSetFTexture, uintptr(r.textures[0]), 0)
 			runStart = i + 1
 			continue
 		}
-		if q.Mode == ModeShape || q.Tex == bound {
+		if q.Mode == ModeShape || yuv && q.Tex == bound {
 			continue
 		}
-		if i > runStart {
-			r.draw(enc, runStart, i-runStart)
+		if !yuv {
+			for slot := range ntex {
+				if table[slot] == q.Tex {
+					inst[i].Tex = TextureID(slot)
+					continue nextQuad
+				}
+			}
 		}
-		runStart = i
-		bound = q.Tex
-		r.bindRun(enc, s, bound, &yuv)
+		k, ok := r.ids.lookup(q.Tex)
+		isYUV := ok && r.xtex[k].format != 0
+		if yuv || isYUV || ntex == len(table) {
+			if i > runStart {
+				r.draw(enc, runStart, i-runStart)
+			}
+			runStart, ntex = i, 0
+		}
+		if isYUV {
+			bound = q.Tex
+			r.bindRun(enc, s, bound, &yuv, 0)
+		} else {
+			inst[i].Tex = TextureID(ntex) // only our ring copy, never list.Quads
+			table[ntex] = q.Tex
+			r.bindRun(enc, s, q.Tex, &yuv, uintptr(3+ntex))
+			ntex++
+		}
 	}
 	if len(quads) > runStart {
 		r.draw(enc, runStart, len(quads)-runStart)
@@ -733,6 +755,9 @@ func (r *Renderer) beginPass(cmdBuf uintptr, rpd objc.ID, s *ringSlot) objc.ID {
 	objc.Send3(enc, rsSetVBytes, uintptr(unsafe.Pointer(&viewportArg)), 8, 1)
 	objc.Send2(enc, rsSetFSampler, uintptr(r.sampler), 0)
 	r.beginYUV(enc)
+	for slot := range runTextures {
+		objc.Send2(enc, rsSetFTexture, uintptr(r.empty), uintptr(3+slot))
+	}
 	return enc
 }
 
