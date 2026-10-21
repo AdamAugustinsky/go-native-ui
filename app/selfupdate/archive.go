@@ -195,9 +195,12 @@ func checkLink(top, name, target string) error {
 // normalizing Unicode form) gets the same key. ASCII components are
 // lowercased. The few non-ASCII letters that fold or decompose to ASCII (the
 // Kelvin sign, the long s, the dotted and dotless i, the Greek question mark
-// and the Greek varia) are mapped to it. Any other component with a non-ASCII
-// character becomes one shared key, so all such components match each other:
-// a false match only refuses an archive, a missed one could not be allowed.
+// and the Greek varia) are mapped to it. The code points that HFS+ skips when
+// it compares names (hfsIgnorable) are dropped, anywhere in a component, on
+// every volume: APFS skips none, so this only ever matches more. Any other
+// component with a non-ASCII character becomes one shared key, so all such
+// components match each other: a false match only refuses an archive, a
+// missed one could not be allowed.
 func foldKey(p string) string {
 	var b strings.Builder
 	b.Grow(len(p))
@@ -229,10 +232,25 @@ func foldComponent(c string) string {
 			r = ';'
 		case r == '\u1FEF': // GREEK VARIA, canonically `
 			r = '`'
+		case hfsIgnorable(r):
+			continue
 		default:
 			return "\x00"
 		}
 		b.WriteRune(r)
 	}
 	return b.String()
+}
+
+// hfsIgnorable reports whether HFS+ (and case-insensitive HFSX) skips r when
+// it compares names, so that "a" and "a\u200c" are one name there (TN1150,
+// "Case-Insensitive String Comparison Algorithm": ignorable characters map to
+// zero in its folding table, which the note does not print). The set is the
+// formatting characters U+200C-U+200F (zero-width non-joiner and joiner, the
+// two direction marks), U+202A-U+202E (embeddings and overrides), U+206A-U+206F
+// (the deprecated format characters) and U+FEFF (the byte order mark). It was
+// measured, not recalled: TestFoldKeyIgnoresWhatHFSPlusIgnores looks up every
+// code point on a real HFS+ volume.
+func hfsIgnorable(r rune) bool {
+	return r >= 0x200C && r <= 0x200F || r >= 0x202A && r <= 0x202E || r >= 0x206A && r <= 0x206F || r == 0xFEFF
 }

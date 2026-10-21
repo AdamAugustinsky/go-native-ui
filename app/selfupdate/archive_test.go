@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"errors"
+	"fmt"
 	"io/fs"
 	"strings"
 	"testing"
@@ -142,5 +143,75 @@ func TestFoldKey(t *testing.T) {
 	}
 	if foldKey("x/a") == foldKey("x/b") || foldKey("x/\u00e9") == foldKey("x/e") {
 		t.Error("foldKey matches names that differ")
+	}
+}
+
+// The code points HFS+ skips when it compares names, one by one (measured on a
+// real volume by TestFoldKeyIgnoresWhatHFSPlusIgnores on macOS).
+var hfsIgnored = []rune{
+	0x200C, 0x200D, 0x200E, 0x200F, // zero-width non-joiner and joiner, left-to-right and right-to-left marks
+	0x202A, 0x202B, 0x202C, 0x202D, 0x202E, // embeddings and overrides
+	0x206A, 0x206B, 0x206C, 0x206D, 0x206E, 0x206F, // deprecated format characters
+	0xFEFF, // byte order mark
+}
+
+// Look-alikes and neighbours that HFS+ does not skip: they must still tell
+// names apart, or the key would match things the volume keeps distinct.
+var hfsNotIgnored = []rune{0x200B, 0x2060, 0x00AD, 0x180E, 0x034F, 0x202F, 0x2065, 0xFFFE}
+
+func TestFoldKeyDropsWhatHFSPlusIgnores(t *testing.T) {
+	for _, r := range hfsIgnored {
+		c := string(r)
+		for _, p := range []struct{ where, a, b string }{
+			{"at the end", "a" + c, "a"},
+			{"in the middle", "a" + c + "b", "ab"},
+			{"at the start", c + "a", "a"},
+			{"alone", c, ""},
+			{"several", c + "a" + c + c + "b" + c, "ab"},
+			{"after a non-ASCII letter", "\u00e9" + c, "\u00e9"},
+			{"in a folder name", "x/a" + c + "/y", "x/a/y"},
+			{"upper case", "A" + c, "a"},
+		} {
+			if foldKey(p.a) != foldKey(p.b) {
+				t.Errorf("U+%04X %s: foldKey(%q) = %q, foldKey(%q) = %q", r, p.where, p.a, foldKey(p.a), p.b, foldKey(p.b))
+			}
+		}
+	}
+	for _, r := range hfsNotIgnored {
+		if c := string(r); foldKey("a"+c) == foldKey("a") || foldKey("a"+c+"b") == foldKey("ab") {
+			t.Errorf("U+%04X is not ignored by HFS+, yet foldKey drops it", r)
+		}
+	}
+}
+
+// An entry whose name differs from a link's only by a code point HFS+ skips is
+// the link there: written through it, or over it. It is refused as the plain
+// name is, wherever the code point stands and on whichever side it is.
+func TestArchiveRejectsHFSPlusAliasesOfALink(t *testing.T) {
+	const dir = "SUTest.app/Contents/"
+	for _, r := range hfsIgnored {
+		c := string(r)
+		for _, p := range []struct{ where, link, entry, want string }{
+			{"at the end", "a", "a" + c + "/x", "through the link"},
+			{"in the middle", "ab", "a" + c + "b/x", "through the link"},
+			{"at the start", "a", c + "a/x", "through the link"},
+			{"deeper", "a", "a" + c + "/d/e/x", "through the link"},
+			{"in the link's name", "a" + c, "a/x", "through the link"},
+			{"a file over the link", "a", "a" + c, "shares its name"},
+			{"a link over a file", "a" + c, "a", "shares its name"},
+		} {
+			t.Run(fmt.Sprintf("U+%04X %s", r, p.where), func(t *testing.T) {
+				r := mkzip(t, bundle(link(dir+p.link, "Resources"), file(dir+p.entry, "x"))...)
+				_, err := checkArchive(r, r.Size())
+				if !errors.Is(err, ErrRejected) || !strings.Contains(err.Error(), p.want) {
+					t.Fatalf("checkArchive = %v, want ErrRejected mentioning %q", err, p.want)
+				}
+			})
+		}
+	}
+	// Control: a neighbour HFS+ does not skip is another name, and passes.
+	r := mkzip(t, bundle(link(dir+"a", "Resources"), file(dir+"a\u200b/x", "x"))...)
+	if _, err := checkArchive(r, r.Size()); err != nil {
+		t.Errorf("a name with U+200B, which HFS+ keeps, was refused: %v", err)
 	}
 }
