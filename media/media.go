@@ -43,6 +43,11 @@
 //	}
 //	k.ExternalImage(1, tex, w, h, ui.FitFill, 12, "Video")
 //
+// LoadVideoPoster reads just a file's first frame, without a player or player
+// item. Call it on the main thread; it returns without waiting for decoding.
+// Its callback runs on a worker and owns the premultiplied RGBA bytes (or gets
+// an error). Dispatch UI work back to the app; no media event is posted.
+//
 // # Events
 //
 // An ended playback, a finished recording and an opened file arrive as an
@@ -78,7 +83,7 @@
 //     keeps the pitch), AVAudioRecorder into a temporary WAV file, deleted
 //     once read, and AVPlayer with an AVPlayerItemVideoOutput for video.
 //   - Windows and Linux: not yet; NewPlayer, OpenPlayer and Start return
-//     ErrUnsupported, and OpenVideo ErrVideoUnsupported (errors.Is
+//     ErrUnsupported, and OpenVideo and LoadVideoPoster ErrVideoUnsupported (errors.Is
 //     errors.ErrUnsupported).
 package media
 

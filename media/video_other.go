@@ -16,6 +16,11 @@ type Video struct{}
 // OpenVideo reports ErrVideoUnsupported here.
 func OpenVideo(path string, o VideoOptions) (*Video, error) { return nil, ErrVideoUnsupported }
 
+// LoadVideoPoster reports ErrVideoUnsupported here; done is not called.
+func LoadVideoPoster(path string, maxSide int, done func(pix []byte, w, h int, err error)) error {
+	return ErrVideoUnsupported
+}
+
 // ID is 0 here.
 func (v *Video) ID() uint64 { return 0 }
 

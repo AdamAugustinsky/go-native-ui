@@ -55,6 +55,7 @@ var (
 	selAlloc        = objc.Sel("alloc")
 	selInit         = objc.Sel("init")
 	selRelease      = objc.Sel("release")
+	selRetain       = objc.Sel("retain")
 	selStrInit      = objc.Sel("initWithBytes:length:encoding:")
 	selFileURL      = objc.Sel("fileURLWithPath:")
 	selAssetWithURL = objc.Sel("URLAssetWithURL:options:")
@@ -280,22 +281,13 @@ func OpenVideo(path string, o VideoOptions) (*Video, error) {
 	F := objc.F
 	pool := F.Call0(objc.PoolPush)
 	defer F.Call1(objc.PoolPop, pool)
-	b := []byte(path)
-	if len(b) == 0 {
-		b = []byte{0}
-	}
-	str := F.Reset().Arg(uintptr(objc.Send(vav.clsString, selAlloc))).Arg(uintptr(selStrInit)).
-		Arg(uintptr(unsafe.Pointer(&b[0]))).Arg(uintptr(len(path))).Arg(4).Call(objc.MsgSend).R0() // NSUTF8StringEncoding
-	runtime.KeepAlive(b)
-	url := objc.Send1(vav.clsURL, selFileURL, str)
-	objc.Release(objc.ID(str))
 	v := &Video{id: nextID(), slot: slot, volume: o.Volume, rate: 1}
 	if v.volume <= 0 || v.volume > 1 {
 		v.volume = 1
 	}
 	v.muted = o.Muted
 	v.loop.Store(o.Loop)
-	v.asset = objc.Retain(objc.Send2(vav.clsAsset, selAssetWithURL, uintptr(url), 0))
+	v.asset = videoAsset(F, path)
 	v.item = objc.Retain(objc.Send1(vav.clsItem, selItemWith, uintptr(v.asset)))
 	objc.Send1(v.item, selPitchAlgo, vav.pitch) // the pitch kept at other rates
 	attrs := objc.Send(vav.clsMDict, selDict)
@@ -317,11 +309,7 @@ func OpenVideo(path string, o VideoOptions) (*Video, error) {
 	slots[slot].Store(v)
 	objc.AddObserver(objc.Send(vav.clsCenter, selDefault), v.observer, selEnded, objc.ID(vav.endNote), v.item)
 	liveVideos.Add(1)
-	posterMax := o.PosterSize
-	if posterMax <= 0 {
-		posterMax = 1280
-	}
-	go v.load(objc.Retain(v.asset), posterMax)
+	go v.load(objc.Retain(v.asset), o.PosterSize)
 	return v, nil
 }
 
@@ -344,6 +332,15 @@ type loadScratch struct {
 	maxW, maxH float64
 }
 
+func (s *loadScratch) send(id objc.ID, sel objc.SEL, args ...uintptr) uintptr {
+	f := &s.f
+	f.Reset().Arg(uintptr(id)).Arg(uintptr(sel))
+	for _, a := range args {
+		f.Arg(a)
+	}
+	return f.Call(objc.MsgSend).R0()
+}
+
 // load reads the video track's size, turn and frame rate and makes the
 // poster frame, on its own thread and frame, then wakes the app.
 func (v *Video) load(asset objc.ID, posterMax int) {
@@ -351,13 +348,7 @@ func (v *Video) load(asset objc.ID, posterMax int) {
 	defer runtime.UnlockOSThread()
 	s := new(loadScratch)
 	f := &s.f
-	send := func(id objc.ID, sel objc.SEL, args ...uintptr) uintptr {
-		f.Reset().Arg(uintptr(id)).Arg(uintptr(sel))
-		for _, a := range args {
-			f.Arg(a)
-		}
-		return f.Call(objc.MsgSend).R0()
-	}
+	send := s.send
 	pool := f.Call0(objc.PoolPush)
 	err := v.loadTrack(s, send, asset, posterMax)
 	f.Call1(objc.PoolPop, pool)
@@ -398,10 +389,19 @@ func (v *Video) loadTrack(s *loadScratch, send func(objc.ID, objc.SEL, ...uintpt
 	}
 	v.natW, v.natH = int(math.Round(w)), int(math.Round(h))
 
+	v.poster, v.posW, v.posH = videoPoster(s, asset, posterMax)
+	return nil
+}
+
+func videoPoster(s *loadScratch, asset objc.ID, posterMax int) (pix []byte, w, h int) {
+	f, send := &s.f, s.send
+	if posterMax <= 0 {
+		posterMax = 1280
+	}
 	// The poster: the first frame, turned, at most posterMax on its longest side.
 	gen := objc.ID(send(vav.clsGen, selGenWith, uintptr(asset)))
 	if gen == 0 {
-		return nil
+		return
 	}
 	send(gen, selApplyTurn, 1)
 	s.maxW, s.maxH = float64(posterMax), float64(posterMax)
@@ -413,7 +413,7 @@ func (v *Video) loadTrack(s *loadScratch, send func(objc.ID, objc.SEL, ...uintpt
 	s.at, s.err = vav.zero, 0
 	img := send(gen, selCopyImage, uintptr(unsafe.Pointer(&s.at)), 0, uintptr(unsafe.Pointer(&s.err)))
 	if img == 0 {
-		return nil // no poster: the first frame shows when it plays
+		return // no poster: the first frame shows when it plays
 	}
 	pw, ph := int(f.Call1(vav.imgW, img)), int(f.Call1(vav.imgH, img))
 	if pw > 0 && ph > 0 {
@@ -424,13 +424,13 @@ func (v *Video) loadTrack(s *loadScratch, send func(objc.ID, objc.SEL, ...uintpt
 		if ctx != 0 {
 			f.Reset().Arg(ctx).ArgRect(0, 0, float64(pw), float64(ph)).Arg(img).Call(vav.ctxDraw)
 			f.Call1(vav.ctxFree, ctx)
-			v.poster, v.posW, v.posH = px, pw, ph
+			pix, w, h = px, pw, ph
 		}
 		f.Call1(vav.csRelease, cs)
 		runtime.KeepAlive(px)
 	}
 	f.Call1(vav.imgRelease, img)
-	return nil
+	return
 }
 
 // ID is the video's number, the A of its application events.
