@@ -51,6 +51,29 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+      - name: stock runtime exact-zero stress and relevant checks
+        env:
+          GNUI_BACKEND: wayland
+        run: |
+          go vet ./app
+          go vet -tags gnui_publicapi ./app
+          go test -tags gnui_publicapi ./app -run 'TestTitlebarCapabilityIsBoundOnce|TestZoomGivesTheWindowTheZoomedTitlebar|TestNativeZoomItems' -count=100
+          go test -c -o "$RUNNER_TEMP/titlebar-stock.test" ./app
+          mkdir probe-results
+          python3 - <<'PY'
+          import concurrent.futures, os, pathlib, subprocess
+          binary = os.environ['RUNNER_TEMP'] + '/titlebar-stock.test'
+          def run(i):
+              p = subprocess.run([binary, '-test.run=^TestTitlebarCapabilityIsBoundOnce$'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+              if p.returncode:
+                  pathlib.Path(f'probe-results/stock-{i}.log').write_bytes(p.stdout)
+              return p.returncode != 0
+          with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+              failures = sum(pool.map(run, range(2000)))
+          pathlib.Path('probe-results/stock-summary.txt').write_text(f'{failures}/2000 failed\n')
+          print(f'{failures}/2000 stock runtime failures')
+          assert failures == 0
+          PY
       - name: frame-scoped runtime allocator probe
         env:
           GNUI_BACKEND: wayland
@@ -80,15 +103,15 @@ jobs:
           p.write_text(s.replace(signature, hook, 1))
           p = pathlib.Path('app/zoom_menu_test.go')
           s = p.read_text().replace('"runtime"', '"runtime"\n"sync/atomic"')
+          s = s.replace('if out, err := cmd.CombinedOutput(); err != nil {', 'out, err := cmd.CombinedOutput()\nprint(string(out))\nif err != nil {')
           s = s.replace('runtime.ReadMemStats(&before)', 'runtime.ReadMemStats(&before)\natomic.StoreUint32(&runtime.TitlebarProbe, 1)')
           s = s.replace('runtime.ReadMemStats(&after)', 'runtime.ReadMemStats(&after)\natomic.StoreUint32(&runtime.TitlebarProbe, 0)')
           p.write_text(s)
           PY
           go test -c -o "$RUNNER_TEMP/titlebar.test" ./app
-          mkdir probe-results
           python3 - <<'PY'
           import concurrent.futures, os, pathlib, subprocess
-          env = dict(os.environ, GNUI_TITLEBAR_ALLOC_CHILD='1', DBUS_SESSION_BUS_ADDRESS='disabled:', GOTRACEBACK='system')
+          env = dict(os.environ, GODEBUG='memprofilerate=1', GOTRACEBACK='system')
           binary = os.environ['RUNNER_TEMP'] + '/titlebar.test'
           def run(i):
               p = subprocess.run([binary, '-test.run=^TestTitlebarCapabilityIsBoundOnce$', '-test.memprofilerate=1'], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
@@ -99,7 +122,22 @@ jobs:
               failures = sum(pool.map(run, range(2000)))
           print(f'{failures}/2000 failed, all retained (no retry or averaging)')
           pathlib.Path('probe-results/summary.txt').write_text(f'{failures}/2000 failed\n')
+          assert failures == 0
           PY
+          python3 - <<'PY'
+          import pathlib
+          p = pathlib.Path('app/zoom.go')
+          s = p.read_text()
+          old = 'if a.tbWin != win {\n\t\ta.tbWin = win\n\t\ta.tbSet, _ = win.(titlebarSetter)\n\t}'
+          assert old in s
+          p.write_text(s.replace(old, 'a.tbSet, _ = win.(titlebarSetter)'))
+          PY
+          go test -c -o "$RUNNER_TEMP/titlebar-fault.test" ./app
+          if GODEBUG=memprofilerate=1 GOTRACEBACK=system "$RUNNER_TEMP/titlebar-fault.test" -test.run='^TestTitlebarCapabilityIsBoundOnce$' > probe-results/fault.log 2>&1; then
+            echo "The gate accepted the deliberately restored hot assertion"; exit 1
+          fi
+          grep 'allocations while syncing' probe-results/fault.log
+          grep 'runtime.buildTypeAssertCache' probe-results/fault.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:
