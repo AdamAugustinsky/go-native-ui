@@ -1,0 +1,27 @@
+# Packages the Linux CI jobs install (.github/workflows/ci.yml, "install display
+# server, Mesa and fonts"). The job caches their .deb files keyed on this file.
+xvfb
+xauth
+weston
+xclip
+wl-clipboard
+sway
+wtype
+x11-utils
+libegl1
+libegl-mesa0
+libgl1
+libopengl0
+libgles2
+libgl1-mesa-dri
+libwayland-client0
+libwayland-cursor0
+libwayland-egl1
+libxkbcommon0
+libx11-6
+libxfixes3
+libxcursor1
+fontconfig
+fonts-dejavu-core
+fonts-noto-cjk
+fonts-noto-color-emoji

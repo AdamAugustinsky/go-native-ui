@@ -433,31 +433,58 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+      # The .deb files are cached (keyed on the package list), so a slow Ubuntu
+      # mirror only costs the run that fills the cache.
+      - name: restore the apt download cache
+        id: aptcache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/apt-cache
+          key: apt-${{ matrix.runner }}-${{ hashFiles('.github/apt-packages.txt') }}
       - name: install display server, Mesa and fonts
-        # The install normally takes under a minute. A slow mirror once took the
-        # whole job's 25 minutes (runs 39827769971, 39855392539), so each try is
-        # bounded at 4 minutes and a retry switches the amd64 runners from the
-        # Azure mirror to archive.ubuntu.com (what was already downloaded stays in
-        # apt's cache). Three tries at most, then the step fails.
+        # The install normally takes under a minute. A slow Azure mirror took the
+        # whole job's 25 minutes (runs 39827769971, 39855392539, 39859276903). The
+        # runners pick mirrors from /etc/apt/apt-mirrors.txt (mirror+file:), so
+        # archive.ubuntu.com goes first there, Azure last. Each try is bounded at
+        # 4 minutes, three tries at most; downloads land in ~/apt-cache.
         timeout-minutes: 13
         run: |
-          apt_opts=(-q -o Acquire::Retries=3 -o Acquire::http::Timeout=30)
+          if [ -f /etc/apt/apt-mirrors.txt ]; then
+            cat /etc/apt/apt-mirrors.txt
+            # mirror URLs only, archive.ubuntu.com first and Azure last, with
+            # priorities renumbered in that order (apt sorts by priority)
+            { echo http://archive.ubuntu.com/ubuntu/
+              awk '$1 !~ /azure/ {print $1}' /etc/apt/apt-mirrors.txt
+              awk '$1 ~ /azure/ {print $1}' /etc/apt/apt-mirrors.txt
+            } | awk 'NF && !seen[$1]++ {printf "%s\tpriority:%d\n", $1, ++n}' > "$RUNNER_TEMP/apt-mirrors.txt"
+            sudo cp "$RUNNER_TEMP/apt-mirrors.txt" /etc/apt/apt-mirrors.txt
+            echo "--- now:"; cat /etc/apt/apt-mirrors.txt
+          fi
+          mkdir -p ~/apt-cache/partial
+          ls ~/apt-cache/*.deb 2>/dev/null | wc -l | xargs echo "cached .deb files:"
+          apt_opts=(-q -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Dir::Cache::Archives="$HOME/apt-cache/" -o APT::Keep-Downloaded-Packages=true)
+          mapfile -t pkgs < <(grep -v -e '^#' -e '^$' .github/apt-packages.txt)
+          ok=0
           for try in 1 2 3; do
             if [ "$try" -gt 1 ]; then
               echo "::warning::apt try $try: the previous one did not finish in 4 minutes"
-              sudo sed -i 's|azure\.archive\.ubuntu\.com|archive.ubuntu.com|g' /etc/apt/sources.list.d/*.sources /etc/apt/sources.list 2>/dev/null || true
               sudo dpkg --configure -a || true # in case a try was stopped while unpacking
             fi
             if timeout 240 sudo apt-get "${apt_opts[@]}" update &&
-              timeout 240 sudo apt-get "${apt_opts[@]}" install -y --no-install-recommends \
-                xvfb xauth weston xclip wl-clipboard sway wtype x11-utils \
-                libegl1 libegl-mesa0 libgl1 libopengl0 libgles2 libgl1-mesa-dri \
-                libwayland-client0 libwayland-cursor0 libwayland-egl1 libxkbcommon0 libx11-6 libxfixes3 libxcursor1 \
-                fontconfig fonts-dejavu-core fonts-noto-cjk fonts-noto-color-emoji; then
-              exit 0
+              timeout 240 sudo apt-get "${apt_opts[@]}" install -y --no-install-recommends "${pkgs[@]}"; then
+              ok=1
+              break
             fi
           done
-          exit 1
+          sudo chown -R "$(id -u):$(id -g)" ~/apt-cache
+          rm -rf ~/apt-cache/partial ~/apt-cache/lock
+          [ "$ok" = 1 ]
+      - name: save the apt download cache
+        if: steps.aptcache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/apt-cache
+          key: apt-${{ matrix.runner }}-${{ hashFiles('.github/apt-packages.txt') }}
       - name: stall gate wrapper (display-link stalls warn instead of failing, docs/QUARANTINE.md)
         run: |
           # stallgate.sh <regexp> command...: runs the command; when it fails and
