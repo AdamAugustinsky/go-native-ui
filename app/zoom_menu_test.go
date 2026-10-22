@@ -14,9 +14,9 @@ import (
 func TestTitlebarCapabilityIsBoundOnce(t *testing.T) {
 	if os.Getenv("GNUI_TITLEBAR_ALLOC_CHILD") == "" {
 		cmd := exec.Command(os.Args[0], "-test.run=^TestTitlebarCapabilityIsBoundOnce$")
-		// Serialize from process startup: T.Run's parent can otherwise still
-		// allocate its channel waiter and scheduler threads during our loop.
-		// Keep the exact counters; do not warm or average the measured loop.
+		// ReadMemStats can restart other Ps and create threads after sampling;
+		// T.Run's parent may also still allocate its channel waiter. Serialize
+		// from startup, keeping the measured loop and exact counters unchanged.
 		cmd.Env = append(os.Environ(), "GNUI_TITLEBAR_ALLOC_CHILD=1", "DBUS_SESSION_BUS_ADDRESS=disabled:", "GOMAXPROCS=1")
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("%v\n%s", err, out)
