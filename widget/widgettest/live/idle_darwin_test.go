@@ -125,6 +125,8 @@ func wantOverlay(t *testing.T, log bool) {
 //     may have changed). Other processes' windows do it all the time where
 //     tests run side by side; until the overlay recorded app events these
 //     frames showed as "menu" or "NO CAUSE".
+//   - CauseApp with EvScreensChanged: AppKit reported screen-parameter changes
+//     (including a hosted runner's virtual display reconfiguration).
 //   - CauseVisible: another window covered or uncovered this one. A change
 //     waits for the loop's next wake, so it comes with one of the above.
 func outsideCause(c app.RepaintCause) (string, bool) {
@@ -134,6 +136,9 @@ func outsideCause(c app.RepaintCause) (string, bool) {
 	case app.CauseVisible:
 		return "another window covered or uncovered this one", true
 	case app.CauseApp:
+		if app.EventKind(c.Sub) == app.EvScreensChanged {
+			return "the system's screen parameters changed", true
+		}
 		if k := app.EventKind(c.Sub); k == app.EvActivated || k == app.EvDeactivated {
 			return "another app took the activation or gave it back", true
 		}
@@ -260,6 +265,10 @@ func TestFramesAreAttributedToTheirCauses(t *testing.T) {
 		want = append(want, true)
 	}
 	want = append(want, false) // an animation that does not settle
+	add(15*time.Second, c(app.CauseApp, app.EvScreensChanged))
+	add(15*time.Second, anim)
+	add(16*time.Second, c(app.CauseApp, app.EvScreensChanged), c(app.CauseWake, 0))
+	want = append(want, true, true, false) // a screen change cannot excuse a worker wake
 	vs := attribute(frames, 0, time.Second)
 	for i, v := range vs {
 		if v.ok != want[i] {
