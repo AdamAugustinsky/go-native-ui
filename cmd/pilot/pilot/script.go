@@ -404,7 +404,7 @@ func (b *Bench) Build(c *ui.Context) {
 	}
 }
 
-// primeNames shapes each synthetic name in each font the rows may be drawn
+// primeNames shapes and rasterizes each synthetic name in each font the rows may be drawn
 // in (the theme's fonts and those of its text styles: the list's body font is a
 // style's, not one of the five), with every digit and character a row adds to
 // it.
@@ -431,7 +431,12 @@ func primeNames(ts *text.System, r *theme.Resolved) {
 	for _, k := range fonts[:n] {
 		for _, name := range synthNames {
 			buf = append(append(buf[:0], name...), "_0123456789.txt"...)
-			ts.Shape(k, buf)
+			v := ts.Run(ts.Shape(k, buf))
+			for i, gid := range v.Glyphs {
+				for sub := uint8(0); sub < 4; sub++ {
+					ts.Glyph(v.Faces[i], gid, sub)
+				}
+			}
 		}
 	}
 }

@@ -640,17 +640,19 @@ func TestRefreshOfAGrowingDirectoryAllocatesNothing(t *testing.T) {
 		}
 		return listing(fs.SortName, false, items...)
 	}
-	p := newTestPane(t, &fakeSrc{}, nativePath("/d"), mk(1000))
+	src := &fakeSrc{}
+	p := newTestPane(t, src, nativePath("/d"), mk(1000))
 	p.v.selectOnly(p.v.entryAt(5))
 	lists := [...]*fs.Listing{mk(1000), mk(1000), mk(1000)}
 	for _, l := range lists[:2] { // warm: the pane's two row buffers and the reconcile tables
 		deliver(p, l)
 		settle(t, p)
 	}
-	bigger := mk(1003)
-	// The counters are the process's: the runtime's own allocations (CI: one
-	// of 48 bytes, the size of a type-assertion cache) do not count (D27);
-	// anyone else's does.
+	// Prepare the source's result before measurement, as Poll does in
+	// production. deliver's test-only capability assertion can allocate its
+	// runtime cache; the pane's acceptance, reconciliation and releases stay
+	// inside the measured interval.
+	bigger := src.refresh(p.id, mk(1003))
 	defer allocsite.Enable()()
 	var s0, s1 allocsite.Snapshot
 	s0.Take() // the storage, before the collection
@@ -659,7 +661,7 @@ func TestRefreshOfAGrowingDirectoryAllocatesNothing(t *testing.T) {
 	s0.Take()
 	var m0, m1 runtime.MemStats
 	runtime.ReadMemStats(&m0)
-	deliver(p, bigger)
+	p.onResult(&bigger)
 	settle(t, p)
 	runtime.ReadMemStats(&m1)
 	if p.v.nEntries() != 1003 || p.v.nSel() != 1 {

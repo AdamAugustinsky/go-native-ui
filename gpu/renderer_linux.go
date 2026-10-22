@@ -335,6 +335,9 @@ func NewRenderer(device, queue uintptr) (*Renderer, error) {
 }
 
 func (r *Renderer) init() error {
+	r.ids = newTexTable()
+	r.tex = make([]uint32, 0, initialTextures)
+	r.kinds = make([]TextureKind, 0, initialTextures)
 	if err := loadGLFuncs(); err != nil {
 		return err
 	}

@@ -389,6 +389,12 @@ func NewOffscreenRenderer() (*Renderer, error) {
 }
 
 func (r *Renderer) init() error {
+	r.ids = newTexTable()
+	r.textures = make([]uintptr, 0, initialTextures)
+	r.srvs = make([]uintptr, 0, initialTextures)
+	r.kinds = make([]TextureKind, 0, initialTextures)
+	r.texW = make([]int, 0, initialTextures)
+	r.texH = make([]int, 0, initialTextures)
 	if compilerDLL == 0 {
 		compilerDLL = win32.LoadSystem("d3dcompiler_47.dll")
 		pD3DCompile = win32.Proc(compilerDLL, "D3DCompile")
