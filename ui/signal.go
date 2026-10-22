@@ -211,18 +211,28 @@ func (c *Context) Signal(id ID) Signal {
 		s.Scroll = c.appliedTo(k)
 	}
 	if c.focusKey == k && b.flags&Focusable != 0 {
-		if c.activated == k {
-			s.Activated = true // taken by an earlier call this frame
-		}
-		for i := 0; i < c.in.NKeys && !s.Activated; i++ {
-			if e := &c.in.Keys[i]; e.Down && !e.Repeat && (e.Code == KeyEnter || e.Code == KeySpace) && c.claimed&(1<<uint(i)) == 0 {
-				c.claimed |= 1 << uint(i)
-				c.activated = k
-				s.Activated = true
-			}
-		}
+		s.Activated = s.Activated || c.keyActivated(k)
 	}
 	return s
+}
+
+// keyActivated is shared by box controls and RichText's span targets. Callers
+// apply their visibility, disabled and overlay guards before claiming input.
+func (c *Context) keyActivated(k Key) bool {
+	if c.focusKey != k {
+		return false
+	}
+	if c.activated == k {
+		return true
+	}
+	for i := 0; i < c.in.NKeys; i++ {
+		if e := &c.in.Keys[i]; e.Down && !e.Repeat && (e.Code == KeyEnter || e.Code == KeySpace) && c.claimed&(1<<uint(i)) == 0 {
+			c.claimed |= 1 << uint(i)
+			c.activated = k
+			return true
+		}
+	}
+	return false
 }
 
 // PeekSignal is Signal for the box with key k as the previous frame left it,

@@ -202,7 +202,8 @@ type Context struct {
 	rich       []richRec
 	richSpans  []Span
 	richStyles []RichStyle
-	sel        selState // selection scopes (selection.go)
+	richFocus  []richFocus // span targets; retained through Begin's AX requests
+	sel        selState    // selection scopes (selection.go)
 
 	// semantics (semantics.go): the setters for the next box, and the records
 	// of this frame's boxes that have a role
@@ -498,6 +499,7 @@ func (c *Context) Begin(in *Input, widthPx, heightPx int, scale, dt float32) {
 	c.claimFieldKeys()
 	c.overlayEscape()
 	c.semActions()
+	c.richFocus = c.richFocus[:0]
 	c.stepScroll()
 
 	c.nparents = 0

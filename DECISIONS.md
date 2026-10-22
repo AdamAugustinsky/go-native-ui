@@ -889,6 +889,25 @@ The whole UI is rewritten in Go on the framework with the Rex design system, mac
 - A fresh screen of 24 wrapped messages (`ui/freshscreen_darwin_test.go`, vlistbench's shape) takes 364/583/639 µs (P50/P99/max), against 1302/2789/3100 µs with the old wrap. vlistbench on p6-vlist with this merged: fresh-screen frames are P99 1.8–2.0 ms and max 1.9–3.4 ms, against 3.8–4.2 ms and 6.3–9.7 ms.
 - On Windows and Linux, `text.BasicLayouter` applies to spans. Each style run is shaped on its own, runs are placed left to right, and right-to-left paragraphs are right-aligned.
 
+**SH-016 keyboard links (2026-10-22):** `ui.RichLinkKey(boxKey, spanIndex)`
+exports the existing `richLinkKey` derivation unchanged. Link/mention spans
+participate in the existing build-order focus traversal and overlay scope,
+including the macOS text-only Tab preference, AX focus and overlay focus
+restoration. Enter/Space uses the controls' existing claimed-key activation
+mechanism and reports through `RichSignal.Clicked`; pointer hit/selection
+boxes are unchanged. A keyboard-visible ring is drawn on the paragraph's
+actual range rectangles, not their bounding union. Disabled, hidden, fully
+clipped, truncated-away and removed targets are withdrawn at End.
+
+Cost: one reused pointer-free 32-byte target per link on 64-bit systems,
+plus 24 bytes per rich-text record; per-frame range-rectangle visibility
+checks and a linear span-key lookup for explicit/AX/overlay focus. No extra
+layout boxes, timers, native views, maps or warm-frame allocations. Existing
+text layout caches and shared rectangle scratch are reused. Index identity
+is deliberately unchanged (reordering spans requires application care);
+automatic scroll-to-focus is not added. See `ui/richtext_focus*_test.go`
+and [the rich-text guide](docs/guide/richtext.md#keyboard-focus).
+
 ## D43. Variable-height lists (phase 6, 2026-10-18)
 
 **Decision.** `VList`: a position held as (anchor item id, offset), measured heights with estimates, and a Fenwick tree for totals and lookups. The state keeps the app's item ids with an id→index table, and changes only with the app's model: `Splice(at, removed, inserted)` (prepend and append are special cases), `Move(from, n, to)` with heights travelling with their items, and `Reset(ids)`. Edits above the anchor shift its index and keep the view still; deleting the anchor item moves the anchor to the next survivor at offset 0; a move keeps the anchor on its item; a reset keeps it if the id survives. Stick-to-bottom and jump-to-item as before. The fixed-pitch `List`/`Table` remain the fast path.

@@ -118,6 +118,42 @@ assistive technology would find them, and never opens a URL.
 the tag of the span the left button went down on, for an app that wants a
 pressed look. Hit testing uses the previous frame's layout, like all of `ui`'s.
 
+### Keyboard focus
+
+Visible link and mention spans are Tab stops in span order at the box's place
+in build order. Shift+Tab reverses that order; popup/modal traversal stays in
+its existing scope. With `SetTabReachesControls(false)` (macOS Keyboard
+navigation off), Tab skips them like other non-text controls. Explicit focus
+and assistive-technology focus still work.
+
+`ui.RichLinkKey(boxKey, spanIndex)` exposes the **existing semantic identity**
+of a link. The index is its position in the complete `spans` slice, not its
+`Tag` or its ordinal among links. Keep the box key and indices stable while
+the same links are displayed. A changed/reordered span at the same index is
+the same identity; if the content is a different entity, use a different box
+key. The API does not infer identity from a URL, phone number, or tag.
+
+An application-controlled Tab order can register this derived key alongside
+ordinary control keys. Call `c.SetFocus(ui.RichLinkKey(boxKey, i))`, then
+`c.SetFocusVisible(true)` for a keyboard-origin move. Compare `c.FocusKey()`
+with the derived key to locate the current stop. Use `c.KeyOf(sig.ID)` if the
+effective RichText key was derived by the surrounding builder.
+
+Enter or Space on the focused span reports its current `Tag` and span index
+through **the same `RichSignal.Clicked` / `ClickedSpan` path** as a pointer
+click. Key repeats, key-up events and already-claimed keys do not activate it.
+No URL is opened. The keyboard-visible ring follows every actual text range
+rectangle, including wrapped and bidi fragments; `RichOpts.FocusColor` can
+override its default span text colour. Programmatic focus alone does not
+make a ring visible, and pointer/selection handling is unchanged.
+
+Disabled, layout-hidden, fully clipped, truncated-away and removed spans lose
+focus at End. Partially visible spans remain reachable and their ring is
+clipped normally. Input uses the previous layout, so focus/activation of a
+newly introduced span waits until it has a layout. An application must not
+register unbuilt/virtualized spans as reachable stops. There is no automatic
+scroll-to-focus or application-specific ordering policy.
+
 ## 4. Selecting across paragraphs
 
 A **selection scope** makes the texts built inside it selectable together, in

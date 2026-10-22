@@ -253,7 +253,7 @@ func TestRichTextLinkCursorAndSemantics(t *testing.T) {
 	ln := tree.Nodes[link]
 	if string(tree.Text(tree.Nodes[label].Name)) != "go to example now" || string(tree.Text(ln.Name)) != "example" ||
 		ln.Parent != int32(label) || tree.Nodes[label].FirstChild != int32(link) || ln.Bounds != [4]float32{48, 0, 104, 14} ||
-		ln.Actions != ActPress {
+		ln.Actions != ActPress|ActFocus {
 		t.Fatalf("label %+v link %+v", tree.Nodes[label], ln)
 	}
 	// Pressing the link node clicks it.
@@ -330,7 +330,7 @@ func TestRichTextDisabledOrBlockedLinksAreInert(t *testing.T) {
 	modal = false
 	r.frame(build)
 	r.frame(build)
-	if n, ok := linkNode(r.c); !ok || n.State&SemDisabled != 0 || n.Actions != ActPress {
+	if n, ok := linkNode(r.c); !ok || n.State&SemDisabled != 0 || n.Actions != ActPress|ActFocus {
 		t.Errorf("enabled link node %+v", n)
 	}
 	if got := press(); got != 42 {

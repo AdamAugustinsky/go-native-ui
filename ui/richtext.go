@@ -132,6 +132,9 @@ type RichOpts struct {
 	// Palette holds the colours of RichStyle.Role and BGRole (read during
 	// RichText, not kept).
 	Palette []uint32
+	// FocusColor is the keyboard focus ring colour; 0 uses the span's text
+	// colour. The box's palette transform and opacity apply as usual.
+	FocusColor uint32
 	// Item and Part place the box in the selection scope it is built in
 	// (BeginSelection): the app's id of its item and which text of the item
 	// it is (0 for the body; parts are in order within an item). Outside a
@@ -140,8 +143,8 @@ type RichOpts struct {
 	Part uint16
 }
 
-// RichSignal is what the pointer and assistive technologies did to a RichText
-// box this frame.
+// RichSignal is what the pointer, keyboard and assistive technologies did to a
+// RichText box this frame.
 type RichSignal struct {
 	// Box is the box's own signal (hover, press and click anywhere on it; a
 	// box without link or mention spans takes no pointer input).
@@ -155,8 +158,8 @@ type RichSignal struct {
 	// Pressed is the Tag of the span the left button went down on this frame.
 	Pressed uint32
 	// Clicked is the Tag of the span clicked this frame (released on the span
-	// it was pressed on) or pressed by an assistive technology; ClickedSpan
-	// its index, -1 for none.
+	// it was pressed on), activated with Enter/Space, or pressed by an
+	// assistive technology; ClickedSpan its index, -1 for none.
 	Clicked     uint32
 	ClickedSpan int
 	// Jumbo reports that the body was drawn large (RichOpts.EmojiLarge).
@@ -191,6 +194,8 @@ type richRec struct {
 	selScope         int32 // 1 + the index of its selection scope in Context.sel.scopes, 0 none
 	part             uint16
 	item             uint64
+	focusOff, focusN int
+	focusColor       uint32
 }
 
 // richPrev is what a RichText box keeps of its last layout, for the hit
@@ -288,6 +293,14 @@ func (c *Context) RichText(key Key, body []byte, spans []Span, st *RichStyles, o
 	}
 	c.rich = append(c.rich, rec)
 	b.rich = int32(len(c.rich))
+	c.rich[len(c.rich)-1].focusOff = len(c.richFocus)
+	c.rich[len(c.rich)-1].focusColor = o.FocusColor
+	for i := range spans {
+		if spans[i].Flags&spanHit != 0 {
+			c.richFocus = append(c.richFocus, richFocus{key: RichLinkKey(b.key, i), id: id, span: i})
+			c.rich[len(c.rich)-1].focusN++
+		}
+	}
 
 	for a := 0; a < 2; a++ {
 		if b.pref[a].Kind == SizeAuto {
@@ -332,13 +345,24 @@ func (c *Context) RichText(key Key, body []byte, spans []Span, st *RichStyles, o
 	if b.flags&Disabled != 0 || c.blocked(b) || c.wasHidden(b) {
 		return sig
 	}
+	if pv, ok := c.prevRich(b); ok {
+		for j := range spans {
+			if spans[j].Flags&spanHit == 0 || c.focusKey != RichLinkKey(b.key, j) || j >= len(pv.Spans) || spans[j].Off != pv.Spans[j].Off || spans[j].Len != pv.Spans[j].Len {
+				continue
+			}
+			c.linkRects(b, &pv, j)
+			if c.richLinkShown(id) && c.in.Focused && c.keyActivated(RichLinkKey(b.key, j)) {
+				sig.Clicked, sig.ClickedSpan = spans[j].Tag, j
+			}
+		}
+	}
 	for i := 0; i < c.in.NActions; i++ {
 		a := &c.in.Actions[i]
 		if a.Action&ActPress == 0 {
 			continue
 		}
 		for j := range spans {
-			if spans[j].Flags&spanHit != 0 && a.Key == richLinkKey(b.key, j) {
+			if spans[j].Flags&spanHit != 0 && a.Key == RichLinkKey(b.key, j) {
 				sig.Clicked, sig.ClickedSpan = spans[j].Tag, j
 			}
 		}
@@ -346,8 +370,13 @@ func (c *Context) RichText(key Key, body []byte, spans []Span, st *RichStyles, o
 	return sig
 }
 
-// richLinkKey is the key of the semantic node of span i of the RichText box k.
-func richLinkKey(k Key, i int) Key { return KeyN(KeyN(k, 0x6c696e6b), uint64(i)) }
+// RichLinkKey returns the focus and accessibility key of span i (its index,
+// not Tag) in RichText box k. Pass it to SetFocus or compare it with FocusKey.
+// Keep k and span indices stable across builds to preserve identity. Only
+// visible SpanLink/SpanMention spans are focus targets; Tag remains the
+// application activation payload in RichSignal.Clicked. SetFocus does not
+// change FocusVisible; keyboard handlers may also SetFocusVisible(true).
+func RichLinkKey(k Key, i int) Key { return KeyN(KeyN(k, 0x6c696e6b), uint64(i)) }
 
 // recOf is the RichText record of b, nil for other boxes.
 func (c *Context) recOf(b *box) *richRec {
@@ -626,6 +655,26 @@ func (c *Context) emitRich(l *gpu.DrawList, b *box, r *richRec, clip [4]float32)
 			}
 		}
 	}
+	if c.focusVisible && c.in.Focused && b.flags&Disabled == 0 && !c.blocked(b) {
+		for i := range pv.Spans {
+			sp := &pv.Spans[i]
+			if sp.Flags&spanHit == 0 || c.focusKey != RichLinkKey(b.key, i) {
+				continue
+			}
+			col := r.focusColor
+			if col == 0 {
+				col = colOf(sp.Style)
+			} else {
+				col = b.col(col)
+			}
+			c.rects = pv.RangeRects(int(sp.Off), int(sp.Off+sp.Len), w, c.rects[:0])
+			for _, rc := range c.rects {
+				dx := x0 + alignDX(&pv, pv.LineAt(rc[1]+0.5), w, b.align)
+				rc = [4]float32{rc[0] + dx, rc[1] + y0, rc[2] + dx, rc[3] + y0}
+				l.Add(gpu.Quad{Rect: rc, Clip: clip, Border: max(c.scale, 1), BorderColor: col})
+			}
+		}
+	}
 }
 
 // emitRichBG draws the span backgrounds of line i of the RichText box b (the
@@ -804,10 +853,13 @@ func (c *Context) semLinks(dst *SemTree, b *box, rec *semRec) {
 				bounds = [4]float32{min(bounds[0], q[0]), min(bounds[1], q[1]), max(bounds[2], q[2]), max(bounds[3], q[3])}
 			}
 		}
-		n := SemNode{Key: richLinkKey(b.key, i), Role: RoleLink, Actions: ActPress, Bounds: bounds,
+		n := SemNode{Key: RichLinkKey(b.key, i), Role: RoleLink, Actions: ActPress | ActFocus, Bounds: bounds,
 			Parent: rec.node, FirstChild: -1, NextSibling: -1}
 		if b.flags&Disabled != 0 {
 			n.State, n.Actions = SemDisabled, 0
+		}
+		if c.focusKey == n.Key {
+			n.State |= SemFocused
 		}
 		if e := min(int(sp.Off+sp.Len), len(pv.Text)); int(sp.Off) < e && len(dst.Bytes)+e-int(sp.Off) <= MaxSemBytes {
 			n.Name = [2]uint32{uint32(len(dst.Bytes)), uint32(e - int(sp.Off))}
