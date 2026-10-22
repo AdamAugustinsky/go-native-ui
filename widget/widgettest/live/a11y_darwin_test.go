@@ -3,6 +3,7 @@
 package live
 
 import (
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -39,6 +40,14 @@ func axFind(o objc.ID, role, label string, depth int) objc.ID {
 // typing shows in the field's value, an unchanged frame's sync allocates
 // nothing, and an idle app draws nothing.
 func TestAccessibilityBridgeLive(t *testing.T) {
+	testAccessibilityBridgeLive(t, false)
+}
+
+func TestAccessibilityBridgeScreenNotification(t *testing.T) {
+	testAccessibilityBridgeLive(t, true)
+}
+
+func testAccessibilityBridgeLive(t *testing.T, screens bool) {
 	wantOverlay(t, true)
 	p := &probe{}
 	fl := &frameLog{Builder: p}
@@ -99,6 +108,25 @@ func TestAccessibilityBridgeLive(t *testing.T) {
 	// through the bridge).
 	l.Do(func(*app.App) { objc.Send1(button, objc.Sel("setAccessibilityFocused:"), 1) })
 	l.Frames(2)
+	var notify atomic.Bool
+	if screens {
+		var timer objc.ID
+		l.Do(func(*app.App) {
+			timer = axIdleTimer(func() {
+				if notify.CompareAndSwap(true, false) {
+					center := objc.Send(objc.Cls("NSNotificationCenter"), objc.Sel("defaultCenter"))
+					name := objc.Str("NSApplicationDidChangeScreenParametersNotification")
+					application := objc.Send(objc.Cls("NSApplication"), objc.Sel("sharedApplication"))
+					objc.Send2(center, objc.Sel("postNotificationName:object:"), uintptr(name), uintptr(application))
+				}
+			})
+		})
+		defer l.Do(func(*app.App) {
+			objc.Send(timer, objc.Sel("invalidate"))
+			objc.Release(timer)
+			axIdleTick = nil
+		})
+	}
 	settled := false
 	for i := 0; i < 12 && !settled; i++ { // the focus ring's move animates for a few frames
 		b0 := l.Built()
@@ -109,8 +137,20 @@ func TestAccessibilityBridgeLive(t *testing.T) {
 		t.Fatal("the app did not settle in 3 s")
 	}
 	before := fl.count()
+	notify.Store(screens) // the native timer posts during idle, without Do's own wake
 	time.Sleep(500 * time.Millisecond)
 	frames := fl.finish(l)
+	if screens {
+		seen := false
+		for _, f := range frames[before:] {
+			for _, c := range f.causes {
+				seen = seen || c.Kind == app.CauseApp && app.EventKind(c.Sub) == app.EvScreensChanged
+			}
+		}
+		if !seen {
+			t.Error("the screen notification did not produce an app(screens) frame")
+		}
+	}
 	report(t, "unexplained AX idle frames", attribute(frames, before, 0), 0)
 	t.Logf("AX idle: %d frames", len(frames)-before)
 }
