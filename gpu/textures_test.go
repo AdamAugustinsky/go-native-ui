@@ -2,6 +2,20 @@ package gpu
 
 import "testing"
 
+func TestNewTexturesAfterWarmupAllocateNothing(t *testing.T) {
+	r := newTestRenderer(t)
+	render(r, 1, 1, black)
+	// Keep the textures live: reusing a freed index would hide table growth.
+	// AllocsPerRun first warms 16 textures, then measures the next 16.
+	if n := testing.AllocsPerRun(1, func() {
+		for i := 0; i < 16; i++ {
+			r.NewTexture(TextureKind(i%2), 1, 1)
+		}
+	}); n != 0 {
+		t.Fatalf("new textures after warm-up: %g Go allocations", n)
+	}
+}
+
 // rgbaQuad draws the whole of a 1×1 RGBA texture t over (x, 0)-(x+1, 1).
 func rgbaQuad(x float32, t TextureID) Quad {
 	return Quad{Rect: [4]float32{x, 0, x + 1, 1}, UV: [4]float32{0, 0, 1, 1}, Mode: ModeRGBA, Tex: t,

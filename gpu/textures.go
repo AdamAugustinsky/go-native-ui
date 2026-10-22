@@ -33,9 +33,11 @@ package gpu
 // by TextureCounts. Destroy releases everything after its own wait.
 
 const (
-	texIndexBits = 20
-	texIndexMask = 1<<texIndexBits - 1
-	texGenMask   = 1<<(32-texIndexBits) - 1
+	// Reserve metadata, not GPU textures, for late atlas pages and imports.
+	initialTextures = 64
+	texIndexBits    = 20
+	texIndexMask    = 1<<texIndexBits - 1
+	texGenMask      = 1<<(32-texIndexBits) - 1
 )
 
 func (t TextureID) index() int  { return int(uint32(t) & texIndexMask) }
@@ -48,6 +50,10 @@ type texTable struct {
 	live []bool
 	free []int32 // freed indices, reused last-in first-out
 	n    int     // live textures
+}
+
+func newTexTable() texTable {
+	return texTable{gen: make([]uint32, 0, initialTextures), live: make([]bool, 0, initialTextures), free: make([]int32, 0, initialTextures)}
 }
 
 // add takes an index for a new texture (a setup path: the table may grow)

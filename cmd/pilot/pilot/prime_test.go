@@ -10,7 +10,7 @@ import (
 	"gonativeui/theme"
 )
 
-// After primeNames, the synthetic names shape without an allocation of ours
+// After primeNames, the synthetic names shape and rasterize without an allocation of ours
 // in the fonts the rows are drawn in (the theme's fonts, the body style's, the
 // list's mono one). On the Go text engine a script's first shape in a face
 // builds a plan, and on macOS the first name that needs a fallback font makes
@@ -43,7 +43,12 @@ func TestPrimeNamesBuildsEveryPlan(t *testing.T) {
 				// other strings than primeNames' (new to the run cache), of
 				// the same characters
 				buf = append(append(buf[:0], n...), "_9876543210.txt"...)
-				ts.Shape(k, buf)
+				v := ts.Run(ts.Shape(k, buf))
+				for i, gid := range v.Glyphs {
+					for sub := uint8(0); sub < 4; sub++ {
+						ts.Glyph(v.Faces[i], gid, sub)
+					}
+				}
 			}
 		}
 	}
@@ -55,7 +60,7 @@ func TestPrimeNamesBuildsEveryPlan(t *testing.T) {
 	ts, r = fresh()
 	primeNames(ts, r)
 	if n, sites := oursDuring(func() { shapeNames(ts, r) }); n != 0 {
-		t.Fatalf("%d allocations of ours shaping the names after primeNames:\n%s", n, sites)
+		t.Fatalf("%d allocations of ours shaping/rasterizing the names after primeNames:\n%s", n, sites)
 	}
 }
 

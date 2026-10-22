@@ -207,6 +207,11 @@ func NewRenderer(device, queue uintptr) (*Renderer, error) {
 	defer F.Call1(objc.PoolPop, pool)
 
 	r := &Renderer{device: objc.ID(device), queue: objc.ID(queue)}
+	r.ids = newTexTable()
+	r.textures = make([]objc.ID, 0, initialTextures)
+	r.kinds = make([]TextureKind, 0, initialTextures)
+	r.lastUse = make([]uint64, 0, initialTextures)
+	r.xtex = make([]xtex, 0, initialTextures)
 
 	// the quad pipeline: Prewarm's, or built here
 	if r.pipeline = warmPipeline(r.device); r.pipeline == 0 {
