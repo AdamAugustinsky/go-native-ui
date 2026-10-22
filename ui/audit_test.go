@@ -260,6 +260,43 @@ func TestAuditColumns(t *testing.T) {
 	}
 }
 
+func TestAuditColumnsAfterPlainToRich(t *testing.T) {
+	build := func(rich bool) func(*Context) {
+		return func(c *Context) {
+			c.NextRole(RoleTable)
+			c.Open(0, "table")
+			c.NextRole(RoleColumnHeader)
+			c.Box(DrawText, "Name")
+			c.NextRole(RoleRow)
+			c.Open(0, "row")
+			c.NextRole(RoleCell)
+			c.Open(0, "cell")
+			c.NextSize(Px(100), Px(20))
+			c.NextAlign(AlignRight)
+			if rich {
+				c.RichText(42, []byte("X"), nil, nil, RichOpts{})
+			} else {
+				c.BoxKeyed(DrawText, 42, []byte("long plain label"))
+			}
+			c.Box(DrawText, "value")
+			c.Close()
+			c.Close()
+			c.Close()
+		}
+	}
+	fresh := newWrapHarness(t, 400, 300)
+	want, _ := fresh.audit(build(true))
+	if len(want[AuditColumn]) != 0 {
+		t.Fatalf("fresh rich table is not aligned: %v", want[AuditColumn])
+	}
+	h := newWrapHarness(t, 400, 300)
+	h.frame(build(false))
+	got, _ := h.audit(build(true))
+	if len(got[AuditColumn]) != len(want[AuditColumn]) {
+		t.Fatalf("plain-to-rich changed column audit: %v; fresh: %v", got[AuditColumn], want[AuditColumn])
+	}
+}
+
 // A cell and its header narrower than their text, a right-aligned Size
 // column of 20 px for 32 and 40 px of text: what the renderer cuts at the
 // box (ellipsis, fade, or an ancestor's Clip) is not ink outside it; text
