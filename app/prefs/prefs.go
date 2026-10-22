@@ -9,7 +9,7 @@
 //	}
 //	dir, _ := paths.Config(appID)
 //	s, err := prefs.Open(filepath.Join(dir, "settings.json"), Settings{Theme: "system", Zoom: 1}, prefs.Options{})
-//	// err reports a file that was unreadable or corrupt; s still works, on the defaults.
+//	// err reports an unreadable or corrupt file; s uses defaults, but may refuse saves.
 //	cur := s.Get()                      // any thread, per frame if you like: no I/O
 //	s.Update(func(v *Settings) { v.Zoom = 1.25 }) // schedules a save
 //	defer s.Close()                     // at quit: writes what is still pending
@@ -33,8 +33,13 @@ import (
 // ErrCorrupt wraps the error Open returns for a file that is not valid JSON for
 // the type. The file is moved aside to <path>.corrupt (replacing an older such
 // file), so the next save does not destroy it, and the store starts on the
-// defaults.
+// defaults. With Options.KeepCorrupt, the file stays in place and the store
+// refuses saves with ErrNotLoaded instead.
 var ErrCorrupt = errors.New("prefs: corrupt preferences file")
+
+// ErrNotLoaded means the store cannot save because Open could not safely load
+// the file. Changes stay in memory; recovery requires a new, successful Open.
+var ErrNotLoaded = errors.New("prefs: preferences file not loaded; reopen before saving")
 
 // Options configures a Store. The zero value is usable.
 type Options struct {
@@ -49,10 +54,15 @@ type Options struct {
 	// macOS (slow, but the data is on the drive and not in its cache). Other
 	// systems always use fsync.
 	FullSync bool
+	// KeepCorrupt leaves a malformed file in place instead of moving it to
+	// <path>.corrupt. Open returns ErrCorrupt and a store that refuses saves
+	// with ErrNotLoaded; fix the file and Open it again to resume saving.
+	KeepCorrupt bool
 	// OnError, when non-nil, is called from the saving goroutine with each
 	// failed save (a full disk, a read-only directory). No lock of the store is
 	// held, so it may call the store. The save is retried at the next change or
-	// Flush; Err keeps the latest error until a save works.
+	// Flush; Err keeps the latest error until a save works. A store that cannot
+	// save after Open reports ErrNotLoaded here on attempted saves too.
 	OnError func(error)
 }
 
@@ -60,9 +70,10 @@ type Options struct {
 // be called from any goroutine. Get, Set and Update never touch the disk and
 // never wait for a save: a save works on a private copy of the value.
 type Store[T any] struct {
-	path string
-	opt  Options
-	flat bool // T holds no pointers, maps or slices: a plain copy is a snapshot
+	path      string
+	opt       Options
+	flat      bool // T holds no pointers, maps or slices: a plain copy is a snapshot
+	notLoaded bool // fixed by Open: the original file must not be overwritten
 
 	mu     sync.Mutex // guards v, dirty, closed, armed, err, last; never held across encoding or I/O
 	v      T
@@ -92,9 +103,13 @@ func encode[T any](v *T) ([]byte, error) {
 //
 // A missing file is not an error; the store holds defaults and the file is
 // created by the first change. If the file cannot be read or is corrupt, Open
-// returns a working Store on the defaults together with the error (ErrCorrupt
-// for bad JSON or a value of the wrong type): the caller may report it and carry
-// on.
+// returns a Store on the defaults together with the error (ErrCorrupt for bad
+// JSON or a value of the wrong type). After a read error other than os.ErrNotExist,
+// the store refuses saves with ErrNotLoaded, even if the read problem goes away:
+// recovery requires opening a new store. By default a corrupt file is moved to
+// <path>.corrupt and the defaults are writable. KeepCorrupt instead leaves the
+// file untouched and also refuses saves. In either refusal case, Set and Update
+// still change memory; Err, Flush, Close and OnError report ErrNotLoaded.
 func Open[T any](path string, defaults T, opt Options) (*Store[T], error) {
 	if opt.Debounce <= 0 {
 		opt.Debounce = 500 * time.Millisecond
@@ -110,10 +125,15 @@ func Open[T any](path string, defaults T, opt Options) (*Store[T], error) {
 	case errors.Is(err, os.ErrNotExist):
 		return s, nil
 	case err != nil:
+		s.notLoaded, s.err = true, ErrNotLoaded
 		return s, fmt.Errorf("prefs: %w", err)
 	}
 	v := clone(defaults) // decoded into storage of its own; s.v stays untouched if this fails half way
 	if err := json.Unmarshal(data, &v); err != nil {
+		if opt.KeepCorrupt {
+			s.notLoaded, s.err = true, ErrNotLoaded
+			return s, fmt.Errorf("%w: %s: %v (kept in place)", ErrCorrupt, path, err)
+		}
 		aside := path + ".corrupt"
 		os.Remove(aside)
 		if rerr := os.Rename(path, aside); rerr != nil {
@@ -145,7 +165,8 @@ func (s *Store[T]) Get() T {
 }
 
 // Set replaces the preferences and schedules a save. It does not allocate or
-// touch the disk. After Close the value changes in memory only.
+// touch the disk. After Close, or when Err is ErrNotLoaded, the value changes in
+// memory only; see Open for error reporting and recovery.
 func (s *Store[T]) Set(v T) {
 	s.mu.Lock()
 	s.v = v
@@ -154,7 +175,8 @@ func (s *Store[T]) Set(v T) {
 }
 
 // Update calls f on the current preferences, under the store's lock, and
-// schedules a save. f must be quick and must not call the store.
+// schedules a save. f must be quick and must not call the store. Like Set, it
+// changes memory only after Close or when Err is ErrNotLoaded.
 func (s *Store[T]) Update(f func(*T)) {
 	s.mu.Lock()
 	f(&s.v)
@@ -204,6 +226,10 @@ func (s *Store[T]) saveLocked(force bool) (err error, report bool) {
 		s.mu.Unlock()
 		return err, false
 	}
+	if s.notLoaded {
+		s.mu.Unlock()
+		return ErrNotLoaded, true
+	}
 	s.dirty = false
 	snap := s.v
 	if !s.flat {
@@ -236,7 +262,8 @@ func (s *Store[T]) lastBytes() []byte {
 
 // Flush writes any pending change now and returns the error of the write. It
 // blocks on the disk: call it at quit or from a worker, not from the UI loop. On
-// a closed store it writes nothing.
+// a closed store it writes nothing. It returns ErrNotLoaded without writing if
+// Open could not safely load the file; recovery requires opening a new store.
 func (s *Store[T]) Flush() error {
 	s.mu.Lock()
 	if s.armed {
@@ -248,6 +275,7 @@ func (s *Store[T]) Flush() error {
 }
 
 // Err is the error of the latest save, nil if it succeeded (or none happened).
+// It is ErrNotLoaded from Open onward if the store cannot safely save the file.
 func (s *Store[T]) Err() error {
 	s.mu.Lock()
 	err := s.err
@@ -258,7 +286,8 @@ func (s *Store[T]) Err() error {
 // Close stops the store and writes any pending change: once it returns, no save
 // is running or will start, and later changes stay in memory. A save that was
 // already running finishes first. It blocks on the disk, like Flush. Calling it
-// again waits for the first and returns the same result.
+// again waits for the first and returns the same result. A store with
+// ErrNotLoaded writes nothing and returns that error.
 func (s *Store[T]) Close() error {
 	s.mu.Lock()
 	if s.closed {

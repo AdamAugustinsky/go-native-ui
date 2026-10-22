@@ -248,13 +248,125 @@ func TestUnreadableFileReportsErrorAndWorks(t *testing.T) {
 	}
 }
 
+func TestReadFailureNeverOverwritesUnreadFile(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "p.json")
+	original := []byte(`{"Theme":"saved","Zoom":3}`)
+	if err := os.WriteFile(p, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	oldRead, oldRetry := readFileFn, retryBusy
+	t.Cleanup(func() { readFileFn, retryBusy = oldRead, oldRetry })
+	readFileFn = func(path string) ([]byte, error) {
+		return nil, &os.PathError{Op: "read", Path: path, Err: os.ErrPermission}
+	}
+	retryBusy = false
+	reported := make(chan error, 8)
+	s, err := Open(p, defaults, Options{Debounce: time.Millisecond, OnError: func(err error) { reported <- err }})
+	if !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("Open = %v, want read failure", err)
+	}
+	defer s.Close()
+	readFileFn = oldRead // the transient fault goes away before the change
+	checkNotLoaded(t, s, p, original, reported)
+	again, err := Open(p, defaults, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer again.Close()
+	if got := again.Get(); got.Theme != "saved" || got.Zoom != 3 {
+		t.Fatalf("reopen did not recover original: %+v", got)
+	}
+	again.Update(func(v *settings) { v.Theme = "recovered" })
+	if err := again.Flush(); err != nil {
+		t.Fatalf("reopened store cannot save: %v", err)
+	}
+}
+
+func TestKeepCorruptLeavesFileInPlaceUntilReopen(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "p.json")
+	original := []byte(`{"Theme": `)
+	if err := os.WriteFile(p, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	reported := make(chan error, 8)
+	s, err := Open(p, defaults, Options{KeepCorrupt: true, Debounce: time.Millisecond, OnError: func(err error) { reported <- err }})
+	if !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("Open = %v, want ErrCorrupt", err)
+	}
+	defer s.Close()
+	if got, err := os.ReadFile(p); err != nil || !bytes.Equal(got, original) {
+		t.Fatalf("corrupt file moved or changed: %q, %v", got, err)
+	}
+	if _, err := os.Stat(p + ".corrupt"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("KeepCorrupt created a backup: %v", err)
+	}
+	checkNotLoaded(t, s, p, original, reported)
+	if err := os.WriteFile(p, []byte(`{"Theme":"fixed"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	again, err := Open(p, defaults, Options{KeepCorrupt: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer again.Close()
+	if again.Get().Theme != "fixed" {
+		t.Fatalf("reopen did not load repaired file: %+v", again.Get())
+	}
+	again.Set(settings{Theme: "saved"})
+	if err := again.Flush(); err != nil {
+		t.Fatalf("reopened store cannot save: %v", err)
+	}
+	if got := read(t, p); !strings.Contains(got, `"Theme": "saved"`) {
+		t.Fatalf("reopened store did not write: %s", got)
+	}
+}
+
+func checkNotLoaded(t *testing.T, s *Store[settings], p string, original []byte, reported <-chan error) {
+	t.Helper()
+	unchanged := func() {
+		t.Helper()
+		if got, err := os.ReadFile(p); err != nil || !bytes.Equal(got, original) {
+			t.Fatalf("unloaded file changed: %q, %v", got, err)
+		}
+	}
+	if s.Get().Theme != defaults.Theme {
+		t.Fatal("store did not start on defaults")
+	}
+	s.Update(func(v *settings) { v.Theme = "memory" })
+	if s.Get().Theme != "memory" || !errors.Is(s.Err(), ErrNotLoaded) {
+		t.Fatalf("Update: value %+v, error %v", s.Get(), s.Err())
+	}
+	select {
+	case err := <-reported:
+		if !errors.Is(err, ErrNotLoaded) {
+			t.Fatalf("OnError = %v, want ErrNotLoaded", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("background save did not report ErrNotLoaded")
+	}
+	unchanged()
+	s.Set(settings{Theme: "set in memory"})
+	if s.Get().Theme != "set in memory" || !errors.Is(s.Err(), ErrNotLoaded) {
+		t.Fatalf("Set: value %+v, error %v", s.Get(), s.Err())
+	}
+	if err := s.Flush(); !errors.Is(err, ErrNotLoaded) {
+		t.Fatalf("Flush = %v, want ErrNotLoaded", err)
+	}
+	unchanged()
+	s.Update(func(v *settings) { v.Zoom = 4 })
+	if err := s.Close(); !errors.Is(err, ErrNotLoaded) {
+		t.Fatalf("Close = %v, want ErrNotLoaded", err)
+	}
+	unchanged()
+}
+
 func TestSaveErrorIsReportedAndRetried(t *testing.T) {
 	dir := t.TempDir()
 	blocker := filepath.Join(dir, "blocker")
-	os.WriteFile(blocker, []byte("a file"), 0o600)
 	p := filepath.Join(blocker, "p.json") // its parent is a file: cannot be written
 	var calls atomic.Int32
 	s, _ := Open(p, defaults, Options{Debounce: time.Millisecond, OnError: func(error) { calls.Add(1) }})
+	os.WriteFile(blocker, []byte("a file"), 0o600) // fails only the save, not the initial read
 	s.Update(func(v *settings) { v.Theme = "dark" })
 	deadline := time.Now().Add(5 * time.Second)
 	for s.Err() == nil {
