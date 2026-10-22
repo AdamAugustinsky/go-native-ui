@@ -505,8 +505,8 @@ func (c *Context) semActions() {
 		if r.Action&ActFocus == 0 {
 			continue
 		}
-		if v, ok := c.table.Get(uint64(r.Key)); ok {
-			if b := &c.boxes[v]; b.lastFrame == c.frame-1 && b.flags&(Focusable|Disabled) == Focusable && !b.hid && !c.blocked(b) {
+		if v := c.focusBox(r.Key); v != 0 {
+			if b := &c.boxes[v]; b.lastFrame == c.frame-1 && (b.flags&Focusable != 0 || r.Key != b.key) && b.flags&Disabled == 0 && !b.hid && !c.blocked(b) {
 				c.focusKey = r.Key
 				c.focusVisible = true
 			}

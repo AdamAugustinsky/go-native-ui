@@ -421,17 +421,32 @@ func (c *Context) overlayFocus() {
 		if !ov.opened || ov.kind == OverlayTooltip || ov.opts.NoFocus {
 			continue
 		}
-		if v, ok := c.table.Get(uint64(c.focusKey)); ok && c.boxes[v].lastFrame == c.frame && int(c.boxes[v].ovl) == i+1 {
+		if v := c.focusBox(c.focusKey); v != 0 && c.boxes[v].lastFrame == c.frame && int(c.boxes[v].ovl) == i+1 {
 			continue // the owner already put the focus inside
 		}
-		to := ov.id
+		to := c.boxes[ov.id].key
 		for _, id := range c.order {
-			if b := &c.boxes[id]; int(b.ovl) == i+1 && !b.ovRoot && b.flags&(Focusable|Disabled) == Focusable {
-				to = id
+			b := &c.boxes[id]
+			if int(b.ovl) != i+1 || b.ovRoot || b.hid || b.flags&Disabled != 0 {
+				continue
+			}
+			if b.flags&Focusable != 0 {
+				to = b.key
 				break
 			}
+			if r := c.recOf(b); r != nil {
+				for _, f := range c.richFocus[r.focusOff : r.focusOff+r.focusN] {
+					if f.shown {
+						to = f.key
+						break
+					}
+				}
+				if to != c.boxes[ov.id].key {
+					break
+				}
+			}
 		}
-		c.focusKey = c.boxes[to].key
+		c.focusKey = to
 		c.animating = true
 	}
 }
@@ -441,8 +456,8 @@ func (c *Context) builtThisFrame(k Key) bool {
 	if k == 0 {
 		return false
 	}
-	v, ok := c.table.Get(uint64(k))
-	return ok && c.boxes[v].lastFrame == c.frame
+	v := c.focusBox(k)
+	return v != 0 && c.boxes[v].lastFrame == c.frame
 }
 
 // cancelBeneathModal drops the mouse captures (drags) of boxes beneath a modal
