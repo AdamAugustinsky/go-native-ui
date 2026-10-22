@@ -62,6 +62,50 @@ func TestRichLinkClaimedActivationAndRemovedBox(t *testing.T) {
 	}
 }
 
+// Pilot builds its pane before the toolbar that opens its filter. The opener
+// focuses a field that will first exist on the following frame. Rich-link
+// lifecycle checks must not cancel this ordinary deferred-focus request.
+func TestRichLinkCleanupPreservesDeferredFieldFocus(t *testing.T) {
+	r := linkHarness(t)
+	r.c.SetFocus(RichLinkKey(r.c.KeyOf(r.sig.ID), 0))
+	r.step()
+	var buf TextBuffer
+	var field TextFieldSignal
+	var fieldKey, openerKey Key
+	show := false
+	build := func(c *Context) {
+		r.build(c)
+		fieldKey = HashString(c.ParentKey(), "deferred-field")
+		field = TextFieldSignal{}
+		if show {
+			field = c.TextField("deferred-field", &buf)
+		}
+		c.NextSize(Px(80), Px(20))
+		opener := c.Box(Clickable|Focusable, "open-field")
+		openerKey = c.KeyOf(opener)
+		if c.Signal(opener).Activated {
+			show = true
+			c.SetFocus(fieldKey)
+			c.RequestFrame()
+		}
+	}
+	r.frame(build)
+	r.in.PushAction(SemRequest{Key: openerKey, Action: ActPress})
+	r.frame(build)
+	if !show || field.ID != 0 || r.c.FocusKey() != fieldKey {
+		t.Fatalf("opener frame: show %v, field %d, focus %x, want pending %x", show, field.ID, r.c.FocusKey(), fieldKey)
+	}
+	r.frame(build)
+	if !field.Focused || r.c.KeyOf(field.ID) != fieldKey {
+		t.Fatal("deferred field did not receive focus on its first build")
+	}
+	r.in.AppendText("x")
+	r.frame(build)
+	if string(buf.Bytes()) != "x" {
+		t.Fatalf("deferred field lost keyboard input: %q", buf.Bytes())
+	}
+}
+
 func TestRichLinkBuildOrderAndTextOnlyTab(t *testing.T) {
 	r := linkHarness(t)
 	r.body = "first and second"

@@ -223,6 +223,7 @@ type Context struct {
 	relPos            [2][2]float32 // the origin and click count of the press that this frame's release ended
 	relClicks         [2]uint8
 	focusKey          Key
+	richFocusKey      Key  // last focus key known to name a rich span, not a pending box
 	focusVisible      bool // focus came from the keyboard (FocusVisible)
 	textOnlyTab       bool // Tab skips the controls (focus classes, focus.go): SetTabReachesControls(false)
 	scrollSet         bool // ScrollTo was called this frame (End decides whether the scroll is still moving)
@@ -499,6 +500,7 @@ func (c *Context) Begin(in *Input, widthPx, heightPx int, scale, dt float32) {
 	c.claimFieldKeys()
 	c.overlayEscape()
 	c.semActions()
+	c.rememberRichFocus()
 	c.richFocus = c.richFocus[:0]
 	c.stepScroll()
 

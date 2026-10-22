@@ -61,6 +61,20 @@ func (c *Context) focusBox(k Key) ID {
 	return 0
 }
 
+// Remember span identity before rebuilding can remove it. Unknown box keys
+// must remain pending: an opener may focus a field built on the next frame.
+func (c *Context) rememberRichFocus() {
+	if c.focusKey == 0 || c.focusKey == c.richFocusKey {
+		return
+	}
+	for _, f := range c.richFocus {
+		if f.key == c.focusKey {
+			c.richFocusKey = f.key
+			return
+		}
+	}
+}
+
 func (c *Context) prepareRichFocus() {
 	for i := range c.richFocus {
 		f := &c.richFocus[i]
@@ -83,6 +97,7 @@ func (c *Context) prepareRichFocus() {
 // traverseFocus handles Tab and Shift+Tab after the frame was built, and drops
 // the focus from a box that became disabled.
 func (c *Context) traverseFocus() {
+	c.rememberRichFocus()
 	c.prepareRichFocus()
 	c.overlayFocus()
 	c.cancelBeneathModal()
@@ -93,7 +108,7 @@ func (c *Context) traverseFocus() {
 				c.animating = true
 				c.dropFieldOutputs()
 			}
-		} else {
+		} else if c.focusKey == c.richFocusKey {
 			c.focusKey = 0
 			c.animating = true
 			c.dropFieldOutputs()

@@ -83,8 +83,8 @@ reference screenshot is ignored by Git and was read from the main checkout.
 
 ## Costs and limits
 
-Production adds one reused pointer-free **32-byte target per link** and
-**24 bytes per RichText record** on 64-bit targets, using the existing box
+Production adds one reused pointer-free **32-byte target per link**,
+**24 bytes per RichText record** and **8 bytes per Context** on 64-bit targets, using the existing box
 tree, traversal, overlay scope and claimed-key activation. No new layout
 boxes, native views, timers or per-frame maps. Visibility checks walk the
 span's range rectangles each End; span-key resolution is linear in built
@@ -96,3 +96,40 @@ There is no automatic scroll-to-focus, stable identity across arbitrary span
 reordering, or application-specific Tab-order policy. ZapFast integration and
 its hosted composer hand-off remain the shell agent's work. This worker did
 not delegate an independent review (recursive delegation was prohibited).
+
+## Deferred ordinary focus correction
+
+Initial CI **39726955876**, head `1e04d5e`, failed: the cross-compile/vet/size
+job passed, but all seven runtime jobs failed existing Pilot field-focus
+regressions; macOS also failed
+`TestFocusRingsComeFromTheKeyboardExceptTextEntry`. These were real regressions,
+not flakes. `ui`, `widget`, `rexui` and macOS widget live tests passed but did
+not exercise Pilot's deferred first-open field sequence.
+
+Local comparison confirmed `TestFilterButtonAndSidebarToggle` passes on
+`724afd7` and fails on `1e04d5e` with `filter open true, focus 0`. The added
+`TestRichLinkCleanupPreservesDeferredFieldFocus` reproduces the sequence:
+the pane is built before an opener sets its open state and focuses the field
+that will first exist on the next frame. Before correction it failed with
+`field 0, focus 0, want pending ac5bd42217b62bd8`.
+
+The correction remembers when the focus key was actually a rich span,
+before its registry is rebuilt and during current-frame focus validation.
+Missing-target cleanup is restricted to that known rich-span identity;
+ordinary pending box/field/host keys retain their pre-existing semantics.
+Disabled/hidden/clipped/removed rich-link cleanup and all its regressions are
+unchanged. This adds one pointer-free key of history to Context; it adds no
+map, target allocation, layout box or per-frame heap allocation.
+
+Evidence (outside Git, under the artifact root above): initial CI final JSON
+and failed logs, `pilot-focus-base.log`, `pilot-focus-head.log`,
+`deferred-field-fail-before.log`, and corrected validation logs. Final CI
+status for the correction is reported in the worker hand-off, not inferred
+from the initial local results.
+
+After correction: the entire `cmd/pilot/pilot` suite passes locally (the entire
+baseline suite passes too), along with the unchanged rich-link lifecycle,
+ring, zero-allocation and affected dependent tests. The exact failing live
+Pilot test and `TestRealRichLinkFocusAndActivation` pass under the shared lock
+on the unlocked Mac mini. Rexcompare remains **40/40**, and all three
+unfocused capture hashes above are unchanged.

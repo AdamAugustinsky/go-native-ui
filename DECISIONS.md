@@ -900,7 +900,9 @@ actual range rectangles, not their bounding union. Disabled, hidden, fully
 clipped, truncated-away and removed targets are withdrawn at End.
 
 Cost: one reused pointer-free 32-byte target per link on 64-bit systems,
-plus 24 bytes per rich-text record; per-frame range-rectangle visibility
+plus 24 bytes per rich-text record and an 8-byte known rich-focus key per
+Context (ordinary deferred field/host focus requests remain pending);
+per-frame range-rectangle visibility
 checks and a linear span-key lookup for explicit/AX/overlay focus. No extra
 layout boxes, timers, native views, maps or warm-frame allocations. Existing
 text layout caches and shared rectangle scratch are reused. Index identity
