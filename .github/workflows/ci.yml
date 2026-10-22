@@ -90,7 +90,7 @@ jobs:
 
           func profilealloc(mp *m, x unsafe.Pointer, size uintptr) {
               if atomic.Load(&TitlebarProbe) != 0 {
-                  print("FRAME ALLOCATION bytes=", size, "\\n")
+                  print("FRAME ALLOCATION phase=", atomic.Load(&TitlebarProbe), " bytes=", size, "\\n")
                   gp := getg()
                   if gp != gp.m.g0 {
                       systemstack(func() { traceback(^uintptr(0), ^uintptr(0), 0, gp) })
@@ -104,8 +104,8 @@ jobs:
           p = pathlib.Path('app/zoom_menu_test.go')
           s = p.read_text().replace('"runtime"', '"runtime"\n"sync/atomic"')
           s = s.replace('if out, err := cmd.CombinedOutput(); err != nil {', 'out, err := cmd.CombinedOutput()\nprint(string(out))\nif err != nil {')
-          s = s.replace('runtime.ReadMemStats(&before)', 'runtime.ReadMemStats(&before)\natomic.StoreUint32(&runtime.TitlebarProbe, 1)')
-          s = s.replace('runtime.ReadMemStats(&after)', 'runtime.ReadMemStats(&after)\natomic.StoreUint32(&runtime.TitlebarProbe, 0)')
+          s = s.replace('runtime.ReadMemStats(&before)', 'atomic.StoreUint32(&runtime.TitlebarProbe, 1)\nruntime.ReadMemStats(&before)\natomic.StoreUint32(&runtime.TitlebarProbe, 2)')
+          s = s.replace('runtime.ReadMemStats(&after)', 'atomic.StoreUint32(&runtime.TitlebarProbe, 3)\nruntime.ReadMemStats(&after)\natomic.StoreUint32(&runtime.TitlebarProbe, 0)')
           p.write_text(s)
           PY
           go test -c -o "$RUNNER_TEMP/titlebar.test" ./app
@@ -123,6 +123,29 @@ jobs:
           print(f'{failures}/2000 failed, all retained (no retry or averaging)')
           pathlib.Path('probe-results/summary.txt').write_text(f'{failures}/2000 failed\n')
           assert failures == 0
+          PY
+          python3 - <<'PY'
+          import pathlib
+          p = pathlib.Path('app/zoom_menu_test.go')
+          p.write_text(p.read_text().replace(', "GOMAXPROCS=1"', ''))
+          PY
+          go test -c -o "$RUNNER_TEMP/titlebar-before.test" ./app
+          python3 - <<'PY'
+          import concurrent.futures, os, pathlib, subprocess
+          env = dict(os.environ, GODEBUG='memprofilerate=1', GOTRACEBACK='system')
+          binary = os.environ['RUNNER_TEMP'] + '/titlebar-before.test'
+          def run(i):
+              p = subprocess.run([binary, '-test.run=^TestTitlebarCapabilityIsBoundOnce$'], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+              if p.returncode or b'FRAME ALLOCATION' in p.stdout:
+                  pathlib.Path(f'probe-results/before-{i}.log').write_bytes(p.stdout)
+              return p.returncode != 0
+          with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+              failures = sum(pool.map(run, range(2000)))
+          pathlib.Path('probe-results/before-summary.txt').write_text(f'{failures}/2000 failed\n')
+          print(f'{failures}/2000 failures with only the setup fix removed')
+          assert failures > 0
+          p = pathlib.Path('app/zoom_menu_test.go')
+          p.write_text(p.read_text().replace('"DBUS_SESSION_BUS_ADDRESS=disabled:"', '"DBUS_SESSION_BUS_ADDRESS=disabled:", "GOMAXPROCS=1"'))
           PY
           python3 - <<'PY'
           import pathlib
