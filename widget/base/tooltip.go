@@ -20,21 +20,26 @@ var TooltipKeyBase = ui.HashString(KeyRoot, "tooltip")
 // frame: the pointer has rested on it for TooltipDelayNs, no button is down and
 // no popup is open. Until then it asks to be woken when the delay passes. id
 // must have been built in this frame and take pointer input. key is id's key,
-// which keys the tooltip's overlay.
+// which keys the tooltip's overlay. Disabled components show tooltips too,
+// without becoming hot or taking input.
 func (k *Kit) TooltipDue(id ui.ID) (key ui.Key, due bool) {
 	c := k.c
-	if id == 0 || k.Disabled() {
+	if id == 0 {
 		return 0, false
 	}
 	key = c.KeyOf(id)
 	now := c.Input().Time
-	if !c.Hot(id) {
+	if !c.TooltipHovered(id) {
 		if k.tip.key == key {
 			k.tip.key = 0
 		}
 		return key, false
 	}
-	if c.ActiveKey() != 0 || k.pop.IsOpen() { // pressed, or a menu is open: start over
+	pressed := false
+	for i, down := range c.Input().Down {
+		pressed = pressed || down || c.Input().Pressed[i]
+	}
+	if pressed || c.ActiveKey() != 0 || k.pop.IsOpen() { // pressed, or a menu is open: start over
 		k.tip.key, k.tip.since = key, now
 		return key, false
 	}

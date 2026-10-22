@@ -45,15 +45,15 @@ var tooltipKeyBase = ui.HashString(base.KeyRoot, "rexui/tooltip")
 // including past the window's edge. Elsewhere the tooltip is drawn here as an
 // overlay: it appears once the pointer has rested on the component for
 // Kit.TooltipDelayNs, fades in, takes no input and never the focus, and goes
-// when the pointer leaves or a button is pressed. A disabled component has no
-// tooltip either way.
+// when the pointer leaves or a button is pressed. Disabled components show
+// tooltips too, without becoming hot or taking input.
 func Tooltip(k *base.Kit, id ui.ID, text string) {
 	c, r := k.Context(), k.Theme()
 	if text == "" {
 		return
 	}
 	if c.NativeTooltips() {
-		if id != 0 && !k.Disabled() {
+		if id != 0 {
 			c.NativeTooltip(id, text)
 		}
 		return
