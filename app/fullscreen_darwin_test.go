@@ -40,9 +40,9 @@ import (
 //     stalls after such interference is run again, up to fsAttempts times.
 //
 // It skips only on evidence that this environment cannot go full screen:
-// the screen is locked, the window was never visible, AppKit never began
-// the transition although the button was there, enabled and clicked, or
-// every attempt was interfered with.
+// the screen is locked, the window was never visible, or every attempt was
+// interfered with. A ready, enabled button whose click does not start the
+// transition fails within the existing frame/clock deadlines.
 func TestGreenButtonFullScreen(t *testing.T) {
 	testlock.Hold(t, "activation") // it makes the app active: one process at a time
 	if testing.Short() {
@@ -62,6 +62,11 @@ func TestGreenButtonFullScreen(t *testing.T) {
 			t.Skipf("in each of %d attempts another app took the front during the transition, and AppKit did not finish it", fsAttempts)
 		}
 	}
+}
+
+func TestGreenButtonWaitsForNativeReadiness(t *testing.T) {
+	t.Setenv("GNUI_TEST_DELAY_FULLSCREEN_READY", "1")
+	TestGreenButtonFullScreen(t)
 }
 
 // greenButtonAttempt runs the case in a child process; ok is false when the
@@ -91,6 +96,9 @@ func greenButtonAttempt(t *testing.T) (r fsReport, ok bool) {
 	}
 	t.Log(l)
 	r.timeline = line("timeline: ")
+	if strings.Contains(r.timeline, "clicked before native readiness") {
+		t.Error(r.timeline)
+	}
 	if _, err := fmt.Sscanf(l, fsReportFormat, r.fields()...); err != nil {
 		t.Fatalf("cannot read %q: %v", l, err)
 	}
@@ -114,7 +122,7 @@ func checkGreenButton(t *testing.T, r fsReport) {
 	case !r.buttonEnabled:
 		t.Fatal("the window's green button is not enabled for full screen")
 	case !r.started:
-		t.Skipf("AppKit never began the transition (no windowWillEnterFullScreen) in %d ms of frame time, %d ms of clock", r.frameTimeMs, r.wallMs)
+		t.Fatalf("AppKit never began the transition (no windowWillEnterFullScreen) in %d ms of frame time, %d ms of clock", r.frameTimeMs, r.wallMs)
 	}
 	if !r.entered || !r.exited || !r.windowed {
 		t.Errorf("want the window into full screen and back out of it (stalled in phase %d; %d ms of frame time, %d ms of clock, longest gap between frames %d ms)", r.stuck, r.frameTimeMs, r.wallMs, r.maxGapMs)
@@ -213,9 +221,19 @@ func runGreenButtonChild(a *App, b *nestedBuilder) {
 		}
 	}()
 	locked := screenLocked()
+	activateAt := fs.t0
+	if os.Getenv("GNUI_TEST_DELAY_FULLSCREEN_READY") != "" {
+		a.Win.Hide()
+		activateAt += int64(2 * time.Second)
+	}
 	a.hook = func() {
 		fsSample()
 		now := platform.Now()
+		if activateAt != 0 && now >= activateAt {
+			objc.Send1(objc.Send(objc.Cls("NSApplication"), objc.Sel("sharedApplication")), objc.Sel("activateIgnoringOtherApps:"), 1)
+			a.Win.Activate()
+			activateAt = 0
+		}
 		switch {
 		case locked:
 			fsLog("the screen is locked")
@@ -242,8 +260,8 @@ func runGreenButtonChild(a *App, b *nestedBuilder) {
 	fmt.Println("timeline: " + strings.Join(fs.ev, "; "))
 }
 
-// greenFrame is the case's Build: it counts frame time, and clicks the
-// green button in the third frame (the window is on screen by then).
+// greenFrame counts frame time. Three frames do not imply that AppKit has
+// made the window visible, active and key; wait for that before clicking.
 func greenFrame(a *App, win objc.ID) {
 	now := platform.Now()
 	if fs.last != 0 {
@@ -256,7 +274,11 @@ func greenFrame(a *App, win objc.ID) {
 	}
 	fs.last = now
 	fs.frames[fs.phase]++
-	if fs.n++; fs.n == 3 {
+	if fs.n++; fs.n >= 3 && !fs.clicked {
+		s := a.Win.DebugState()
+		if !s.Visible || !s.AppActive || !s.Key {
+			return
+		}
 		fs.enabled = objc.Send(fs.zoom, objc.Sel("isEnabled")) != 0
 		fsClick(0)
 		fs.clicked = true
@@ -267,6 +289,12 @@ func greenFrame(a *App, win objc.ID) {
 // as a user does: the app comes to the front, and performClick: runs in a
 // run-loop turn of its own, not in a frame.
 func fsClick(delay float64) {
+	if fs.phase == fsWindowed {
+		s := fs.a.Win.DebugState()
+		if !s.Visible || !s.AppActive || !s.Key {
+			fsLog("clicked before native readiness: visible %v active %v key %v", s.Visible, s.AppActive, s.Key)
+		}
+	}
 	fsLog("click after %.1f s", delay)
 	app := objc.Send(objc.Cls("NSApplication"), objc.Sel("sharedApplication"))
 	objc.Send1(app, objc.Sel("activateIgnoringOtherApps:"), 1)
