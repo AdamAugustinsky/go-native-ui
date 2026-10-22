@@ -289,7 +289,10 @@ func (n *nativePlayer) play(*Player) error {
 	return nil
 }
 
-func (n *nativePlayer) pause() { objc.Send(n.obj, sel.pause) }
+// Near the end, AVAudioPlayer.pause can reset the position after returning
+// and leave a resumed player without an end. stop preserves currentTime
+// but tears down playback resources, avoiding that transition.
+func (n *nativePlayer) pause() { objc.Send(n.obj, sel.stop) }
 
 func (n *nativePlayer) playing() bool { return objc.SendBool(n.obj, sel.isPlaying) }
 
