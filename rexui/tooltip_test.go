@@ -4,8 +4,11 @@ import (
 	"slices"
 	"testing"
 
+	"gonativeui/internal/fakeui"
 	"gonativeui/rexui"
+	"gonativeui/text"
 	"gonativeui/theme"
+	"gonativeui/theme/rex"
 	"gonativeui/ui"
 	"gonativeui/widget/base"
 )
@@ -18,6 +21,104 @@ func hasTooltip(g *rig, text string) bool {
 		}
 	}
 	return false
+}
+
+func TestTooltipOverNestedLabel(t *testing.T) {
+	for order, name := range []string{"child-first", "parent-before-child", "parent-after-child"} {
+		t.Run(name, func(t *testing.T) {
+			var parent, label ui.ID
+			var scope ui.SelectionScope
+			var styles ui.RichStyles
+			inner, ownTip, cover, clip := false, false, 0, false
+			g := openRig(t, theme.Light, nil, column(func(g *rig) {
+				c, k := g.c, g.k
+				c.BeginSelection(&scope, ui.ScopeOpts{})
+				k.BeginDisabled(true)
+				p := k.PressState("Call us", base.HoverOn)
+				c.NextPad(12)
+				parent = k.BeginPress(&p, ui.RoleButton, ui.Px(240), ui.Px(80), ui.Clip, nil)
+				k.EndDisabled()
+				if order == 1 {
+					rexui.Tooltip(k, parent, "Parent tip")
+				}
+				if inner {
+					label = rexui.Button(k, "Inner", rexui.ButtonOpts{}).ID
+					if ownTip && order != 2 {
+						rexui.Tooltip(k, label, "Inner tip")
+					}
+				} else {
+					c.NextSize(ui.Px(120), ui.Px(30))
+					if clip {
+						c.NextPos(300, 0)
+						c.NextFlags(ui.FloatingX | ui.FloatingY)
+					}
+					label = c.RichText(ui.KeyN(p.Key, 1), []byte("Call us"), nil, &styles, ui.RichOpts{}).ID
+				}
+				k.EndPress(&p)
+				if order != 1 {
+					rexui.Tooltip(k, parent, "Parent tip")
+				}
+				if ownTip && order == 2 {
+					rexui.Tooltip(k, label, "Inner tip")
+				}
+				c.EndSelection()
+				if cover != 0 {
+					c.NextSize(ui.Px(300), ui.Px(100))
+					if cover == 1 {
+						c.BeginOverlay(42, ui.OverlayPopup, c.Rect(parent), ui.PlaceCenter)
+						c.EndOverlay()
+					} else {
+						c.NextPos(0, 0)
+						c.Box(ui.Hoverable|ui.FloatingX|ui.FloatingY, "cover")
+					}
+				}
+			}))
+			ft := fakeui.New()
+			ts := layText{ft, text.NewBasicLayouter(ft)}
+			g.c = ui.New(ts)
+			g.c.AtlasSync(&fakeui.Uploader{})
+			g.k = base.NewKit(g.c, ts, rex.Theme())
+			g.k.ReduceMotion = true
+			g.frames(3)
+			hoverLabel := func() {
+				r := g.c.Rect(label)
+				g.hover((r[0]+r[2])/2, (r[1]+r[3])/2)
+				g.frames(90)
+			}
+			hoverLabel()
+			if !g.c.Hot(label) || g.c.Hot(parent) || !g.c.TooltipHovered(parent) || !hasTooltip(g, "Parent tip") {
+				t.Fatal("nested RichText hit did not show the disabled parent's tooltip")
+			}
+			if a := testing.AllocsPerRun(100, g.frame); a != 0 {
+				t.Fatalf("nested tooltip: %v allocations", a)
+			}
+			for _, kind := range []int{1, 2} {
+				cover = kind
+				g.frames(90)
+				if hasTooltip(g, "Parent tip") {
+					t.Fatalf("tooltip visible through cover %d", kind)
+				}
+			}
+			cover, clip = 0, true
+			g.frames(3)
+			hoverLabel()
+			if hasTooltip(g, "Parent tip") {
+				t.Fatal("clipped-out descendant showed a tooltip")
+			}
+			clip, inner, ownTip = false, true, true
+			g.frames(3)
+			hoverLabel()
+			if !hasTooltip(g, "Inner tip") || hasTooltip(g, "Parent tip") {
+				t.Fatal("innermost tooltip did not win")
+			}
+			ownTip = false
+			g.frames(3)
+			hoverLabel()
+			if !hasTooltip(g, "Parent tip") {
+				t.Fatal("parent tooltip did not recover when the inner tooltip was removed")
+			}
+		})
+	}
 }
 
 func (g *rig) hover(x, y float32) {

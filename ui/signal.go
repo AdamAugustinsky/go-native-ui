@@ -283,11 +283,35 @@ func (c *Context) tOf(k Key, which int) float32 {
 // Hot reports whether id is the box under the pointer (ignoring captures).
 func (c *Context) Hot(id ID) bool { return id != 0 && c.hotKey == c.boxes[id].key }
 
-// TooltipHovered reports whether id is under the pointer for a tooltip,
-// including disabled boxes, with the same clipping and draw order as Hot.
+// TooltipHovered reports whether id or a descendant is under the pointer for
+// a tooltip, including disabled boxes, with the same clipping and draw order as Hot.
 // It does not make the box hot, pressable or focusable.
 func (c *Context) TooltipHovered(id ID) bool {
-	return id != 0 && c.tooltipKey == c.boxes[id].key
+	for hit, ok := c.BoxOf(c.tooltipKey); ok && hit != 0; hit = c.boxes[hit].parent {
+		if hit == id {
+			return true
+		}
+	}
+	return false
+}
+
+// TooltipTarget declares id as a drawn-tooltip owner this frame and reports
+// whether it is the innermost declared owner above the pointer's winning hit.
+// Like hit testing, declarations from the previous frame remain effective
+// during this build; removing an inner tooltip lets its parent win next frame.
+// id must have been built in this frame. This changes no interactive state.
+func (c *Context) TooltipTarget(id ID) bool {
+	if id == 0 {
+		return false
+	}
+	c.boxes[id].tooltip = true
+	for hit, ok := c.BoxOf(c.tooltipKey); ok && hit != 0; hit = c.boxes[hit].parent {
+		b := &c.boxes[hit]
+		if b.tooltip || b.lastFrame == c.frame && b.prevTooltip {
+			return hit == id
+		}
+	}
+	return false
 }
 
 // HotKey is the key of the hit-testable box under the pointer, 0 if none.

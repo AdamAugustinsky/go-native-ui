@@ -21,7 +21,8 @@ var TooltipKeyBase = ui.HashString(KeyRoot, "tooltip")
 // no popup is open. Until then it asks to be woken when the delay passes. id
 // must have been built in this frame and take pointer input. key is id's key,
 // which keys the tooltip's overlay. Disabled components show tooltips too,
-// without becoming hot or taking input.
+// without becoming hot or taking input. A hovered descendant counts too;
+// when tooltips nest, the innermost declared tooltip wins.
 func (k *Kit) TooltipDue(id ui.ID) (key ui.Key, due bool) {
 	c := k.c
 	if id == 0 {
@@ -29,7 +30,7 @@ func (k *Kit) TooltipDue(id ui.ID) (key ui.Key, due bool) {
 	}
 	key = c.KeyOf(id)
 	now := c.Input().Time
-	if !c.TooltipHovered(id) {
+	if !c.TooltipTarget(id) {
 		if k.tip.key == key {
 			k.tip.key = 0
 		}
