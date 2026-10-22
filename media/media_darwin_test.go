@@ -303,6 +303,46 @@ func TestPlayerRates(t *testing.T) {
 	}
 }
 
+func TestPlayerPauseNearEnd(t *testing.T) {
+	f := Format{48000, 1, Int16}
+	p := openPlayer(t, sine(f, time.Second, 440), f)
+	onMain(func() { p.Seek(600 * time.Millisecond) })
+	start := play(t, p)
+	var before, held time.Duration
+	var playing bool
+	onMain(func() {
+		// Delay Pause into the final output buffer, without a handoff between
+		// observing that position and pausing. Never wait past two seconds.
+		deadline := time.Now().Add(2 * time.Second)
+		for p.Position() < 970*time.Millisecond && time.Now().Before(deadline) {
+			time.Sleep(time.Millisecond)
+		}
+		before = p.Position()
+		p.Pause()
+		held, playing = p.Position(), p.Playing()
+	})
+	t.Logf("Pause after %v: before=%v held=%v playing=%v", time.Since(start), before, held, playing)
+	if before < 970*time.Millisecond || held >= time.Second || !near(held, before, 2*time.Millisecond) || playing {
+		t.Fatal("did not pause before the end")
+	}
+	time.Sleep(300 * time.Millisecond)
+	onMain(func() { before, playing = p.Position(), p.Playing() })
+	got := eventsFor(p.ID())
+	if !near(before, held, 2*time.Millisecond) || playing || len(got) != 0 {
+		t.Fatalf("paused at %v, 300 ms later position=%v playing=%v events=%+v", held, before, playing, got)
+	}
+	resumed := play(t, p)
+	took := endAfter(t, p, 0, resumed)
+	if want := time.Second - held; took < want-50*time.Millisecond || took > want+300*time.Millisecond {
+		t.Errorf("resumed at %v: ended after %v, want about %v", held, took, want)
+	}
+	time.Sleep(300 * time.Millisecond)
+	onMain(func() { before, playing = p.Position(), p.Playing() })
+	if got = eventsFor(p.ID()); len(got) != 1 || got[0].ev.Kind != Ended || playing || before != 0 {
+		t.Fatalf("after end: position=%v playing=%v events=%+v", before, playing, got)
+	}
+}
+
 func TestPlayerSeekAndPause(t *testing.T) {
 	f := Format{48000, 1, Int16}
 	p := openPlayer(t, sine(f, time.Second, 440), f)
