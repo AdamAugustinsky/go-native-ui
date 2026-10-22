@@ -107,6 +107,56 @@ func TestGlyphReusesShapeSlot(t *testing.T) {
 	}
 }
 
+func TestShapesReuseQuadSlots(t *testing.T) {
+	h := newHarness(t, 400, 300)
+	h.frame(func(c *Context) {
+		c.NextSize(Px(100), Px(60))
+		c.NextBG(0x123456FF)
+		c.NextBorder(0xABCDEF80, 2)
+		c.NextRadius(4)
+		c.Box(0, "shape")
+	})
+	b := &h.c.boxes[h.c.order[1]]
+	b.shadow[0] = Shadow{Sigma: 3, Color: 0x11223380}
+	b.img = Image{Tex: 7, UV: [4]float32{1, 2, 21, 32}, Mode: gpu.ModeRGBA}
+	b.hotT, b.activeT = 1, 1
+	poison := gpu.Quad{
+		Rect: [4]float32{1, 2, 3, 4}, Clip: [4]float32{5, 6, 7, 8},
+		UV: [4]float32{9, 10, 11, 12}, Color: [4]uint32{1, 2, 3, 4},
+		Radii: [4]float32{1, 2, 3, 4}, Border: 3, BorderColor: 123, Soft: 7,
+		FadeX: [2]float32{5, 6}, Mode: gpu.ModeRGBA, Tex: 123,
+	}
+	for _, flags := range []Flags{DrawShadow, DrawBackground, DrawBorder, DrawHotEffects, DrawImage} {
+		for _, sides := range []Sides{SidesAll, SideLeft | SideTop} {
+			b.flags, b.sides = flags, sides
+			for _, fit := range []ImageFit{FitNatural, FitFill, FitContain, FitCenter} {
+				b.img.Fit = fit
+				var fresh gpu.DrawList
+				h.c.emit(&fresh, h.c.order[1], [4]float32{0, 0, 400, 300})
+				if len(fresh.Quads) == 0 {
+					t.Fatal("expected shapes")
+				}
+				for _, capacity := range []int{0, 1, 8} {
+					reused := gpu.DrawList{Quads: make([]gpu.Quad, capacity)}
+					for i := range reused.Quads {
+						reused.Quads[i] = poison
+					}
+					reused.Reset()
+					h.c.emit(&reused, h.c.order[1], [4]float32{0, 0, 400, 300})
+					if len(reused.Quads) != len(fresh.Quads) {
+						t.Fatal("quad count changed")
+					}
+					for i, q := range reused.Quads {
+						if q != fresh.Quads[i] {
+							t.Fatalf("flags %v fit %v capacity %d quad %d: %+v want %+v", flags, fit, capacity, i, q, fresh.Quads[i])
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
 func TestEmitText(t *testing.T) {
 	h := newHarness(t, 400, 300)
 	var box ID
