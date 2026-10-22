@@ -54,11 +54,17 @@ func testInstall(w *Window) (remove func()) {
 // again.
 func TestWindowsOpenCascaded(t *testing.T) {
 	var (
-		err    error
-		frames [4][4]float64 // x, y (top-left space), width, height
+		err     error
+		frames  [4][4]float64 // x, y (top-left space), width, height
+		centres [2][4]float64
 	)
 	onMain(func() {
 		Pump(0)
+		centre := func(w *Window) [4]float64 {
+			objc.Send(w.win, selCenter)
+			x, y, wd, h := w.FrameRect()
+			return [4]float64{x, y, wd, h}
+		}
 		var ws [3]*Window
 		for i := range ws {
 			if ws[i], err = Open(Options{Title: fmt.Sprint("cascade ", i), Width: 300, Height: 200, Hidden: true}); err != nil {
@@ -66,6 +72,9 @@ func TestWindowsOpenCascaded(t *testing.T) {
 			}
 			x, y, wd, h := ws[i].FrameRect()
 			frames[i] = [4]float64{x, y, wd, h}
+			if i == 0 {
+				centres[0] = centre(ws[i])
+			}
 		}
 		for _, w := range ws {
 			w.Close()
@@ -77,6 +86,7 @@ func TestWindowsOpenCascaded(t *testing.T) {
 		}
 		x, y, wd, h := w.FrameRect()
 		frames[3] = [4]float64{x, y, wd, h}
+		centres[1] = centre(w)
 		w.Close()
 		Pump(0)
 	})
@@ -93,8 +103,12 @@ func TestWindowsOpenCascaded(t *testing.T) {
 			t.Errorf("window %d is %vx%v, want the size it asked for, %vx%v", i, cur[2], cur[3], prev[2], prev[3])
 		}
 	}
-	if frames[3] != frames[0] {
-		t.Errorf("a window opened with none open is at %v, want the centre the first one had, %v", frames[3], frames[0])
+	// AppKit's centre follows the current screen/visible frame (including
+	// menu-bar and Dock changes), not the coordinates of a previous window.
+	for n, i := range []int{0, 3} {
+		if frames[i] != centres[n] {
+			t.Errorf("window %d opened with none open is at %v, want its current AppKit centre %v", i, frames[i], centres[n])
+		}
 	}
 }
 
