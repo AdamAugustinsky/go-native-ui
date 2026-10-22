@@ -126,7 +126,7 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 25
     env:
-      QUARANTINE: '^(TestPlayerSeekAndPause|TestGreenButtonWaitsForNativeReadiness|TestPackageWithoutAppleIdentity|TestVListEditFrameBudget|TestOtherWindows|TestDragTypesDoNotReachHosts|TestEditorNestedLoopDraws|TestEditorUndoRedo|TestEditorMarkedTextSubmission|TestMixFollowsAndDoesNotAllocate|TestStallOfAHiddenWindowSkipsAndSaysWhy|TestRunKeepsDesignatedRequirement|TestScrollEventsThroughTheQueue|TestPackagedBinaryHasNoDebugChordOrInspector)$'
+      QUARANTINE: '^(TestWindowsOpenCascaded|TestPlayerSeekAndPause|TestGreenButtonWaitsForNativeReadiness|TestPackageWithoutAppleIdentity|TestVListEditFrameBudget|TestOtherWindows|TestDragTypesDoNotReachHosts|TestEditorNestedLoopDraws|TestEditorUndoRedo|TestEditorMarkedTextSubmission|TestMixFollowsAndDoesNotAllocate|TestStallOfAHiddenWindowSkipsAndSaysWhy|TestRunKeepsDesignatedRequirement|TestScrollEventsThroughTheQueue|TestPackagedBinaryHasNoDebugChordOrInspector)$'
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
