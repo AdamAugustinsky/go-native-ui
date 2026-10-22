@@ -51,12 +51,15 @@ func TestAccessibilityClientIdle(t *testing.T) {
 		}
 	}()
 	copy := func(o uintptr, attr objc.ID) uintptr {
-		var value uintptr
-		code := int32(f.Reset().Arg(o).Arg(uintptr(attr)).ArgPtr(unsafe.Pointer(&value)).Call(copyAttr).R0())
+		// AX can call back into Go and grow its stack. Keep the C out-parameter
+		// in the heap frame, not a stack local whose address would then move.
+		value := &f.Scratch()[0]
+		*value = 0
+		code := int32(f.Reset().Arg(o).Arg(uintptr(attr)).ArgPtr(unsafe.Pointer(value)).Call(copyAttr).R0())
 		if code != 0 && code != -25205 && code != -25212 {
 			t.Errorf("AX read: %d", code)
 		}
-		return value
+		return *value
 	}
 	var walk func(uintptr, int) bool
 	walk = func(o uintptr, depth int) bool {
