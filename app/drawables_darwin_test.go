@@ -24,49 +24,44 @@ import (
 // whatever maximumDrawableCount says): once idle it holds at most two,
 // among them the last frame's, which stays on screen. Frames come again
 // after that, and the same holds after a live resize, at the new size only.
-// The child process counts its own drawables with vmmap. A failed attempt
-// runs once more (it times bursts and idle periods on a shared machine: 1
-// failure in about 50 runs here, its output not kept); both must fail.
+// The child process counts its own drawables with vmmap. The main thread
+// samples the IDs and last frame together, between frames: reading the last
+// ID after vmmap on a worker compared different frames when a wake, trim or
+// display-link restart happened during the sample.
 func TestIdleWindowGivesBackDrawables(t *testing.T) {
 	if testing.Short() {
 		t.Skip("opens a window")
 	}
-	for attempt := 1; ; attempt++ {
-		cmd := exec.Command(os.Args[0])
-		cmd.Env = append(os.Environ(), nestedChild+"=drawables")
-		out, err := cmd.CombinedOutput()
-		s := string(out)
-		if i := strings.Index(s, "SKIP:"); i >= 0 {
-			t.Skip(strings.TrimSpace(s[i+5:]))
+	cmd := exec.Command(os.Args[0])
+	cmd.Env = append(os.Environ(), nestedChild+"=drawables")
+	out, err := cmd.CombinedOutput()
+	s := string(out)
+	if i := strings.Index(s, "SKIP:"); i >= 0 {
+		t.Skip(strings.TrimSpace(s[i+5:]))
+	}
+	var fails []string
+	for _, l := range strings.Split(s, "\n") {
+		if f, ok := strings.CutPrefix(l, "FAIL: "); ok {
+			fails = append(fails, f)
 		}
-		var fails []string
-		for _, l := range strings.Split(s, "\n") {
-			if f, ok := strings.CutPrefix(l, "FAIL: "); ok {
-				fails = append(fails, f)
-			}
+	}
+	if err != nil || !strings.Contains(s, "drawables: done") && len(fails) == 0 {
+		fails = append(fails, fmt.Sprintf("the child failed (%v)", err))
+	}
+	if len(fails) > 0 {
+		if len(s) > 3000 {
+			s = s[len(s)-3000:]
 		}
-		if err != nil || !strings.Contains(s, "drawables: done") && len(fails) == 0 {
-			fails = append(fails, fmt.Sprintf("the child failed (%v)", err))
-		}
-		if len(fails) > 0 {
-			if len(s) > 3000 {
-				s = s[len(s)-3000:]
-			}
-			t.Logf("attempt %d: the child's output:\n%s", attempt, s)
-			if attempt < 2 {
-				continue
-			}
-			for _, f := range fails {
-				t.Error(f)
-			}
-			return
-		}
-		for _, l := range strings.Split(s, "\n") {
-			if strings.HasPrefix(l, "drawables: ") {
-				t.Log(l)
-			}
+		t.Logf("the child's output:\n%s", s)
+		for _, f := range fails {
+			t.Error(f)
 		}
 		return
+	}
+	for _, l := range strings.Split(s, "\n") {
+		if strings.HasPrefix(l, "drawables: ") {
+			t.Log(l)
+		}
 	}
 }
 
@@ -140,18 +135,26 @@ func runDrawablesChild() {
 		return
 	}
 	a.Win.SetFrameHandler(a.frameHandler)
-	var resize, quit, ask atomic.Bool
-	state := make(chan platform.DebugState, 1)
+	var resize, quit atomic.Bool
+	main := make(chan func(), 1)
 	a.hook = func() {
 		if resize.Swap(false) {
 			a.Win.SimulateLiveResize([][2]float64{{420, 320}, {460, 340}, {480, 360}})
 		}
-		if ask.Swap(false) {
-			state <- a.Win.DebugState()
+		select {
+		case f := <-main:
+			f()
+		default:
 		}
 		if quit.Load() {
 			a.done = true
 		}
+	}
+	onMain := func(f func()) {
+		done := make(chan struct{})
+		main <- func() { f(); close(done) }
+		platform.WakeLoop() // inspecting must not ask the window to draw
+		<-done
 	}
 	// frames asks for n paced frames and waits for them. A display that
 	// delivers none (asleep, or the window covered) skips the test the first
@@ -179,21 +182,51 @@ func runDrawablesChild() {
 		}
 		return false
 	}
-	// snapshot is the window's state, read on the main thread (asking wakes
-	// the loop, which draws a frame: the last one, as far as the count goes).
+	// snapshot reads state without drawing another frame.
 	snapshot := func() platform.DebugState {
-		ask.Store(true)
-		platform.Wake()
-		return <-state
+		var st platform.DebugState
+		onMain(func() { st = a.Win.DebugState() })
+		return st
 	}
 	var before platform.DebugState // at the end of the last burst
 	count := func(what string, wantMax int, size string) bool {
-		ids, sizes, err := drawableSurfaces()
+		var ids []uint32
+		var sizes []string
+		var err error
+		var last uint32
+		var st platform.DebugState
+		// Wait for the idle/trim state, not an arbitrary interval after the
+		// burst. OS events can request another frame in that interval.
+		ready := false
+		for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); {
+			onMain(func() {
+				st = a.Win.DebugState()
+				ready = wantMax == 0 || st.LinkPaused && !st.FrameArmed &&
+					st.Trims > before.Trims && st.Now-st.LastFrameT >= int64(idle)
+				if ready {
+					ids, sizes, err = drawableSurfaces()
+					last = b.last.Load()
+				}
+			})
+			if ready {
+				break
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		if !ready {
+			fmt.Printf("FAIL: %s: never reached idle after a trim: %+v\n", what, st)
+			return false
+		}
 		if err != nil {
 			fmt.Println("SKIP: vmmap:", err)
 			return false
 		}
-		last := b.last.Load()
+		// Regression: advance the window after collecting the sample but
+		// before judging it. The sampled ID must not become the newer frame's
+		// ID (the old worker-side read falsely reported lost content here).
+		if wantMax > 0 && !frames(30, false, "after the resident sample") {
+			return false
+		}
 		fmt.Printf("drawables: %s: %d %v %#x (the last frame's %#x)\n", what, len(ids), sizes, ids, last)
 		if wantMax == 0 {
 			if len(ids) == 0 {
@@ -202,12 +235,7 @@ func runDrawablesChild() {
 			}
 			return true
 		}
-		st := snapshot()
 		fmt.Printf("drawables: %s: trims %d → %d, link pauses %d → %d\n", what, before.Trims, st.Trims, before.Pauses, st.Pauses)
-		if len(ids) > wantMax && st.Pauses == before.Pauses {
-			fmt.Println("SKIP: the display link did not pause after the burst (no ticks: the display stalled)")
-			return false
-		}
 		has := false
 		for i, id := range ids {
 			has = has || id == last
@@ -219,7 +247,7 @@ func runDrawablesChild() {
 			fmt.Printf("FAIL: %s: %d drawables, want at most %d\n", what, len(ids), wantMax)
 		}
 		if !has {
-			fmt.Printf("FAIL: %s: the last frame's drawable (%#x) is not kept: the window would show nothing\n", what, last)
+			fmt.Printf("FAIL: %s: the last frame's drawable (%#x) is absent from the idle snapshot\n", what, last)
 		}
 		return true
 	}
@@ -235,7 +263,24 @@ func runDrawablesChild() {
 		}
 		before = snapshot()
 		time.Sleep(idle + time.Second)
-		if !count("idle", 2, "") || !frames(240, false, "after the drawables were given back") {
+		if !count("idle", 2, "") {
+			return
+		}
+		var stopped bool
+		onMain(func() { stopped = a.Win.DebugStopLink() })
+		if !stopped {
+			fmt.Println("FAIL: no metal display link to stop")
+			return
+		}
+		if !frames(240, false, "after the display link stopped") {
+			return
+		}
+		st := snapshot()
+		if st.Restarts <= before.Restarts {
+			fmt.Println("FAIL: the stopped display link was not replaced")
+		}
+		before = st
+		if !count("idle after a display-link restart", 2, "") {
 			return
 		}
 		resize.Store(true)
@@ -246,7 +291,8 @@ func runDrawablesChild() {
 		}
 		before = snapshot()
 		time.Sleep(idle + time.Second)
-		w, h, _ := a.Win.Size()
+		var w, h int32
+		onMain(func() { w, h, _ = a.Win.Size() })
 		if count("idle after a live resize", 2, fmt.Sprintf("%dx%d", w, h)) {
 			fmt.Println("drawables: done")
 		}
