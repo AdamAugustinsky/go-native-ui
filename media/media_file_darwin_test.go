@@ -366,14 +366,47 @@ func TestOpenPlayerMaxPlayers(t *testing.T) {
 
 // Position and Playing stay allocation-free on a file Player.
 func TestOpenPlayerPerFrameAllocs(t *testing.T) {
+	testOpenPlayerPerFrameAllocs(t, false)
+}
+
+func TestOpenPlayerPerFrameAllocsDelayedHandoff(t *testing.T) {
+	testOpenPlayerPerFrameAllocs(t, true)
+}
+
+func testOpenPlayerPerFrameAllocs(t *testing.T, delayed bool) {
+	t.Helper()
 	path := filepath.Join(t.TempDir(), "clip.m4a")
-	writeM4A(t, path, time.Second)
+	// Cover moving's two-second progress bound, with another second for
+	// sampling and the measured reads. The readiness wait stays unchanged.
+	writeM4A(t, path, 3*time.Second)
 	p, kind := openFilePlayer(t, path)
 	if kind != Opened {
 		skipIfNoAudio(t, p)
 		t.Fatalf("event %v", kind)
 	}
-	play(t, p)
+	start := play(t, p)
+	defer func() {
+		if !t.Failed() {
+			return
+		}
+		var ready, playing bool
+		var at, dur, elapsed, handoff time.Duration
+		var err error
+		queued := time.Now()
+		onMain(func() {
+			handoff, elapsed = time.Since(queued), time.Since(start)
+			ready, playing, at, dur, err = p.Ready(), p.Playing(), p.Position(), p.Duration(), p.Err()
+		})
+		t.Logf("failure state on main: since Play=%v handoff=%v ready=%v playing=%v position=%v duration=%v err=%v", elapsed, handoff, ready, playing, at, dur, err)
+		for _, e := range eventsFor(p.ID()) {
+			t.Logf("player event: kind=%v ended=%v failed=%v since Play=%v", e.ev.Kind, e.ev.Kind == Ended, e.ev.Kind == Failed, e.at.Sub(start))
+		}
+	}()
+	if delayed {
+		// Reproduce a delayed first sample, not a playback-readiness wait:
+		// a one-second fixture finishes and resets to zero during this turn.
+		onMain(func() { time.Sleep(1200 * time.Millisecond) })
+	}
 	moving(t, p) // measured while it plays
 	var n float64
 	var playing bool
