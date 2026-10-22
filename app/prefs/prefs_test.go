@@ -235,6 +235,38 @@ func TestCorruptFileIsKeptAsideAndStoreStillWorks(t *testing.T) {
 	}
 }
 
+func TestCorruptRenameFailureRefusesWrites(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "p.json")
+	original := []byte(`{"Theme": `)
+	if err := os.WriteFile(p, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// A nonempty directory cannot be removed or replaced by the corrupt file,
+	// even when running as root or on Windows.
+	aside := p + ".corrupt"
+	if err := os.Mkdir(aside, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	blocker := filepath.Join(aside, "keep")
+	if err := os.WriteFile(blocker, []byte("block rename"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	reported := make(chan error, 8)
+	s, err := Open(p, defaults, Options{Debounce: time.Millisecond, OnError: func(err error) { reported <- err }})
+	if !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("Open = %v, want ErrCorrupt", err)
+	}
+	defer s.Close()
+	if err := os.Remove(blocker); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(aside); err != nil {
+		t.Fatal(err)
+	}
+	// Removing the obstruction must not let the old store overwrite the file.
+	checkNotLoaded(t, s, p, original, reported)
+}
+
 func TestUnreadableFileReportsErrorAndWorks(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "p.json")

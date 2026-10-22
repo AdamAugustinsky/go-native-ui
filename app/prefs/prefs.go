@@ -33,8 +33,8 @@ import (
 // ErrCorrupt wraps the error Open returns for a file that is not valid JSON for
 // the type. The file is moved aside to <path>.corrupt (replacing an older such
 // file), so the next save does not destroy it, and the store starts on the
-// defaults. With Options.KeepCorrupt, the file stays in place and the store
-// refuses saves with ErrNotLoaded instead.
+// defaults. With Options.KeepCorrupt, or if moving the file aside fails, the
+// file stays in place and the store refuses saves with ErrNotLoaded instead.
 var ErrCorrupt = errors.New("prefs: corrupt preferences file")
 
 // ErrNotLoaded means the store cannot save because Open could not safely load
@@ -107,9 +107,10 @@ func encode[T any](v *T) ([]byte, error) {
 // JSON or a value of the wrong type). After a read error other than os.ErrNotExist,
 // the store refuses saves with ErrNotLoaded, even if the read problem goes away:
 // recovery requires opening a new store. By default a corrupt file is moved to
-// <path>.corrupt and the defaults are writable. KeepCorrupt instead leaves the
-// file untouched and also refuses saves. In either refusal case, Set and Update
-// still change memory; Err, Flush, Close and OnError report ErrNotLoaded.
+// <path>.corrupt and the defaults are writable. If the move fails, or KeepCorrupt
+// is set, the file stays in place and saves are refused. In all refusal cases,
+// Set and Update still change memory; Err, Flush, Close and OnError report
+// ErrNotLoaded.
 func Open[T any](path string, defaults T, opt Options) (*Store[T], error) {
 	if opt.Debounce <= 0 {
 		opt.Debounce = 500 * time.Millisecond
@@ -137,6 +138,7 @@ func Open[T any](path string, defaults T, opt Options) (*Store[T], error) {
 		aside := path + ".corrupt"
 		os.Remove(aside)
 		if rerr := os.Rename(path, aside); rerr != nil {
+			s.notLoaded, s.err = true, ErrNotLoaded
 			return s, fmt.Errorf("%w: %s: %v (and could not move it aside: %v)", ErrCorrupt, path, err, rerr)
 		}
 		return s, fmt.Errorf("%w: %s: %v (kept as %s)", ErrCorrupt, path, err, aside)
