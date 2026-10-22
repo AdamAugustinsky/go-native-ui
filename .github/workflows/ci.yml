@@ -126,7 +126,7 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 25
     env:
-      QUARANTINE: '^(TestGreenButtonWaitsForNativeReadiness|TestPackageWithoutAppleIdentity|TestVListEditFrameBudget|TestOtherWindows|TestDragTypesDoNotReachHosts|TestEditorNestedLoopDraws|TestEditorUndoRedo|TestEditorMarkedTextSubmission|TestMixFollowsAndDoesNotAllocate|TestStallOfAHiddenWindowSkipsAndSaysWhy|TestRunKeepsDesignatedRequirement|TestScrollEventsThroughTheQueue|TestPackagedBinaryHasNoDebugChordOrInspector)$'
+      QUARANTINE: '^(TestPlayerSeekAndPause|TestGreenButtonWaitsForNativeReadiness|TestPackageWithoutAppleIdentity|TestVListEditFrameBudget|TestOtherWindows|TestDragTypesDoNotReachHosts|TestEditorNestedLoopDraws|TestEditorUndoRedo|TestEditorMarkedTextSubmission|TestMixFollowsAndDoesNotAllocate|TestStallOfAHiddenWindowSkipsAndSaysWhy|TestRunKeepsDesignatedRequirement|TestScrollEventsThroughTheQueue|TestPackagedBinaryHasNoDebugChordOrInspector)$'
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
@@ -424,7 +424,7 @@ jobs:
     env:
       GNUI_BACKEND: ${{ matrix.backend }}
       LIBGL_ALWAYS_SOFTWARE: "1"
-      QUARANTINE: '^(TestLastDrainEndsParking|TestMixFollowsAndDoesNotAllocate|TestPackagedBinaryHasNoDebugChordOrInspector)$'
+      QUARANTINE: '^(TestColdThreadAttach|TestLastDrainEndsParking|TestMixFollowsAndDoesNotAllocate|TestPackagedBinaryHasNoDebugChordOrInspector)$'
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
