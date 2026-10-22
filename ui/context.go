@@ -28,6 +28,9 @@ type persist struct {
 	// hid is whether the last layout hid the box (flow.go); newBox moves it to
 	// the box's prevHid and clears it for the frame being laid out.
 	hid bool
+	// prevTooltip keeps the last declaration when this box is rebuilt, so
+	// nested tooltip priority does not depend on declaration order.
+	prevTooltip bool
 	// rp is the last layout of a RichText box (hit testing), pressSpan 1 +
 	// the span its press began on.
 	rp        richPrev
@@ -60,6 +63,7 @@ type boxFrame struct {
 	ovl                             uint8 // the overlay the box belongs to, 1 + its index in the frame's overlays; 0 for the main tree
 	mat                             uint8 // 1 + the box's record in shell.mats when Material marked it (material.go)
 	bdrop                           uint8 // 1 + the box's recipe in Context.bd.recs when it is a backdrop (NextBackdrop)
+	tooltip                         bool  // declared as a drawn-tooltip owner this frame
 
 	style
 	alignNext bool       // the alignment came from NextAlign (Audit)
@@ -772,6 +776,7 @@ func (c *Context) newBox(flags Flags, key Key) ID {
 		c.boxes[id].persist = persist{key: key}
 	}
 	b := &c.boxes[id]
+	b.prevTooltip = b.tooltip && found && b.lastFrame == c.frame-1
 	b.boxFrame = boxFrame{}
 	b.prevHid, b.hid = b.hid, false
 	b.lastFrame = c.frame
