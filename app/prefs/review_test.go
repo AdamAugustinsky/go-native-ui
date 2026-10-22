@@ -214,7 +214,6 @@ func TestCloseQuiescesSaves(t *testing.T) {
 func TestOnErrorMayCallTheStore(t *testing.T) {
 	dir := t.TempDir()
 	blocker := filepath.Join(dir, "blocker")
-	os.WriteFile(blocker, []byte("a file"), 0o600)
 	var calls atomic.Int32
 	var s *Store[settings]
 	s, _ = Open(filepath.Join(blocker, "p.json"), defaults, Options{Debounce: time.Millisecond, OnError: func(err error) {
@@ -224,6 +223,7 @@ func TestOnErrorMayCallTheStore(t *testing.T) {
 			s.Get()
 		}
 	}})
+	os.WriteFile(blocker, []byte("a file"), 0o600) // fails only the save, not the initial read
 	s.Update(func(v *settings) { v.Theme = "dark" })
 	within(t, 5*time.Second, "a save whose OnError calls Flush", func() {
 		for calls.Load() < 2 { // the save and the nested Flush both fail

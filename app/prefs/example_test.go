@@ -31,7 +31,7 @@ func Example() {
 
 	s, err := prefs.Open(path, Settings{Theme: "system", Zoom: 1}, prefs.Options{})
 	if err != nil {
-		// the file was unreadable or corrupt: s still works, on the defaults
+		// The store uses defaults; unreadable files also block saves until reopen.
 		fmt.Println("warning:", err)
 	}
 	fmt.Println(s.Get().Theme, s.Get().Zoom)
