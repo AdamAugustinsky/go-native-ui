@@ -461,7 +461,7 @@ jobs:
             echo "--- now:"; cat /etc/apt/apt-mirrors.txt
           fi
           mkdir -p ~/apt-cache/partial
-          ls ~/apt-cache/*.deb 2>/dev/null | wc -l | xargs echo "cached .deb files:"
+          echo "cached .deb files: $(find ~/apt-cache -maxdepth 1 -name "*.deb" | wc -l)"
           apt_opts=(-q -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Dir::Cache::Archives="$HOME/apt-cache/" -o APT::Keep-Downloaded-Packages=true)
           mapfile -t pkgs < <(grep -v -e '^#' -e '^$' .github/apt-packages.txt)
           ok=0
