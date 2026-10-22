@@ -16,6 +16,10 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      titlebar_probe:
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -38,7 +42,71 @@ env:
   MAX_BINARY_BYTES: "10485760"
 
 jobs:
+  titlebar-probe:
+    if: ${{ inputs.titlebar_probe }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: frame-scoped runtime allocator probe
+        env:
+          GNUI_BACKEND: wayland
+        run: |
+          cp -a "$(go env GOROOT)" "$RUNNER_TEMP/go-probe"
+          export GOROOT="$RUNNER_TEMP/go-probe"
+          export PATH="$GOROOT/bin:$PATH"
+          python3 - <<'PY'
+          import os, pathlib
+          p = pathlib.Path(os.environ['GOROOT']) / 'src/runtime/malloc.go'
+          s = p.read_text()
+          signature = 'func profilealloc(mp *m, x unsafe.Pointer, size uintptr) {'
+          hook = '''var TitlebarProbe uint32
+
+          func profilealloc(mp *m, x unsafe.Pointer, size uintptr) {
+              if atomic.Load(&TitlebarProbe) != 0 {
+                  print("FRAME ALLOCATION bytes=", size, "\\n")
+                  gp := getg()
+                  if gp != gp.m.g0 {
+                      systemstack(func() { traceback(^uintptr(0), ^uintptr(0), 0, gp) })
+                  } else {
+                      traceback(sys.GetCallerPC(), sys.GetCallerSP(), 0, gp)
+                  }
+              }
+          '''
+          assert signature in s
+          p.write_text(s.replace(signature, hook, 1))
+          p = pathlib.Path('app/zoom_menu_test.go')
+          s = p.read_text().replace('"runtime"', '"runtime"\n"sync/atomic"')
+          s = s.replace('runtime.ReadMemStats(&before)', 'runtime.ReadMemStats(&before)\natomic.StoreUint32(&runtime.TitlebarProbe, 1)')
+          s = s.replace('runtime.ReadMemStats(&after)', 'runtime.ReadMemStats(&after)\natomic.StoreUint32(&runtime.TitlebarProbe, 0)')
+          p.write_text(s)
+          PY
+          go test -c -o "$RUNNER_TEMP/titlebar.test" ./app
+          mkdir probe-results
+          python3 - <<'PY'
+          import concurrent.futures, os, pathlib, subprocess
+          env = dict(os.environ, GNUI_TITLEBAR_ALLOC_CHILD='1', DBUS_SESSION_BUS_ADDRESS='disabled:', GOTRACEBACK='system')
+          binary = os.environ['RUNNER_TEMP'] + '/titlebar.test'
+          def run(i):
+              p = subprocess.run([binary, '-test.run=^TestTitlebarCapabilityIsBoundOnce$', '-test.memprofilerate=1'], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+              if p.returncode or b'FRAME ALLOCATION' in p.stdout:
+                  pathlib.Path(f'probe-results/{i}.log').write_bytes(p.stdout)
+              return p.returncode != 0
+          with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+              failures = sum(pool.map(run, range(2000)))
+          print(f'{failures}/2000 failed, all retained (no retry or averaging)')
+          pathlib.Path('probe-results/summary.txt').write_text(f'{failures}/2000 failed\n')
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: titlebar-probe
+          path: probe-results
   cross:
+    if: ${{ !inputs.titlebar_probe }}
     name: cross-compile, vet, binary size
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -122,6 +190,7 @@ jobs:
           path: dist/
 
   macos:
+    if: ${{ !inputs.titlebar_probe }}
     name: macOS arm64 (Metal)
     runs-on: macos-15
     timeout-minutes: 25
@@ -320,6 +389,7 @@ jobs:
           if-no-files-found: ignore
 
   windows:
+    if: ${{ !inputs.titlebar_probe }}
     name: Windows ${{ matrix.arch }} (D3D11, WARP on runners)
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 35
@@ -410,6 +480,7 @@ jobs:
           if-no-files-found: ignore
 
   linux:
+    if: ${{ !inputs.titlebar_probe }}
     name: Linux ${{ matrix.arch }} ${{ matrix.backend }} (EGL, Mesa llvmpipe)
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 25
