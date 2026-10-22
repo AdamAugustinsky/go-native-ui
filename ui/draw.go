@@ -16,6 +16,10 @@ type Uploader interface {
 
 var _ Uploader = (*gpu.Renderer)(nil)
 
+type atlasStager interface {
+	Stage(gpu.TextureID, int, int, int, int, []byte, int)
+}
+
 // AtlasSync registers u as the texture uploader of the text atlas and syncs
 // now: textures are created for atlas pages that have none and the regions
 // the shaper reports dirty are uploaded. End calls the same sync after
@@ -32,10 +36,11 @@ var _ Uploader = (*gpu.Renderer)(nil)
 // does not replace a live Context's renderer on resize or scale changes.
 func (c *Context) AtlasSync(u Uploader) {
 	if c.shared != nil && c.shared.up != u {
-		c.shared, c.up = nil, nil
+		c.shared, c.up, c.stager = nil, nil, nil
 	}
 	if c.up != u {
 		c.up = u
+		c.stager, _ = u.(atlasStager)
 		c.pageTex = c.pageTex[:0]
 		c.pageUploaded = c.pageUploaded[:0]
 	}
@@ -62,6 +67,9 @@ func NewSharedAtlas(u Uploader) *SharedAtlas { return &SharedAtlas{up: u} }
 // Reuse their existing s: a new SharedAtlas cannot restore pages whose dirty
 // regions were already consumed (see AtlasSync).
 func (c *Context) ShareAtlas(s *SharedAtlas) {
+	if c.up != s.up {
+		c.stager, _ = s.up.(atlasStager)
+	}
 	c.shared, c.up = s, s.up
 	c.pageTex = c.pageTex[:0]
 	c.pageUploaded = c.pageUploaded[:0]
@@ -96,9 +104,6 @@ func (c *Context) syncAtlas() {
 	if c.up == nil {
 		return
 	}
-	stager, canStage := c.up.(interface {
-		Stage(gpu.TextureID, int, int, int, int, []byte, int)
-	})
 	for p := 0; p < c.sh.Pages(); p++ {
 		t := c.pageTexture(p)
 		if x, y, w, h, pix, stride, ok := c.sh.Dirty(p); ok {
@@ -106,8 +111,8 @@ func (c *Context) syncAtlas() {
 			if c.shared != nil {
 				uploaded = c.shared.uploaded
 			}
-			if canStage && uploaded[p] {
-				stager.Stage(t, x, y, w, h, pix, stride)
+			if c.stager != nil && uploaded[p] {
+				c.stager.Stage(t, x, y, w, h, pix, stride)
 			} else {
 				c.up.Upload(t, x, y, w, h, pix, stride)
 			}

@@ -1,11 +1,69 @@
 package allocsite_test
 
 import (
+	"os"
+	"os/exec"
 	"runtime"
 	"testing"
 
 	"gonativeui/internal/allocsite"
 )
+
+type assertionSource interface{ String() string }
+type assertionTarget interface{ Target() }
+type assertionOther interface{ Other() }
+type assertedValue struct{}
+
+func (assertedValue) String() string { return "" }
+func (assertedValue) Target()        {}
+
+var asserted assertionTarget
+
+//go:noinline
+func assertPerFrame(v assertionSource) { asserted, _ = v.(assertionTarget) }
+
+//go:noinline
+func switchPerFrame(v assertionSource) {
+	switch v := v.(type) {
+	case assertionTarget:
+		asserted = v
+	case assertionOther:
+		v.Other()
+	}
+}
+
+func TestAssertionCacheIsOurs(t *testing.T) {
+	if os.Getenv("GNUI_ASSERT_ALLOC_CHILD") == "" {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestAssertionCacheIsOurs$")
+		cmd.Env = append(os.Environ(), "GNUI_ASSERT_ALLOC_CHILD=1")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%v\n%s", err, out)
+		}
+		return
+	}
+	defer allocsite.Enable()()
+	var before, after allocsite.Snapshot
+	before.Take()
+	after.Take()
+	runtime.GC()
+	before.Take()
+	for range 50000 {
+		assertPerFrame(assertedValue{})
+		switchPerFrame(assertedValue{})
+	}
+	runtime.GC()
+	after.Take()
+	foundAssert, foundSwitch := false, false
+	for _, site := range allocsite.Diff(&before, &after) {
+		if site.Class == allocsite.Ours && site.Objects > 0 {
+			foundAssert = foundAssert || site.Func == "gonativeui/internal/allocsite_test.assertPerFrame"
+			foundSwitch = foundSwitch || site.Func == "gonativeui/internal/allocsite_test.switchPerFrame"
+		}
+	}
+	if !foundAssert || !foundSwitch {
+		t.Fatalf("assertion/switch cache not attributed to caller: %+v", allocsite.Diff(&before, &after))
+	}
+}
 
 var (
 	sink       []*[3]uint64

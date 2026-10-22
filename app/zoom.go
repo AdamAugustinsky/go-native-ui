@@ -231,12 +231,15 @@ func (a *App) syncTitlebar(win any) {
 	if z == was {
 		return
 	}
-	set, ok := win.(titlebarSetter)
-	if !ok {
+	if a.tbWin != win {
+		a.tbWin = win
+		a.tbSet, _ = win.(titlebarSetter)
+	}
+	if a.tbSet == nil {
 		return
 	}
 	l := a.cfg.TrafficLights
-	set.SetTitlebar(a.cfg.Titlebar*z, [2]float32{l[0], l[1] * z})
+	a.tbSet.SetTitlebar(a.cfg.Titlebar*z, [2]float32{l[0], l[1] * z})
 	a.tbZoom = z
 }
 
