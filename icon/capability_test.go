@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"gonativeui/gpu"
+	"gonativeui/platform"
 	"gonativeui/ui"
 )
 
@@ -30,11 +31,14 @@ func (u *capableUploader) FreeTexture(gpu.TextureID) { u.frees++ }
 func TestAttachChangesCapabilities(t *testing.T) {
 	if os.Getenv("GNUI_ICON_ALLOC_CHILD") == "" {
 		cmd := exec.Command(os.Args[0], "-test.run=^TestAttachChangesCapabilities$")
-		cmd.Env = append(os.Environ(), "GNUI_ICON_ALLOC_CHILD=1")
+		cmd.Env = append(os.Environ(), "GNUI_ICON_ALLOC_CHILD=1", "DBUS_SESSION_BUS_ADDRESS=disabled:")
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("%v\n%s", err, out)
 		}
 		return
+	}
+	if runtime.GOOS == "linux" { // settle the init-time portal before counting
+		platform.SystemAppearance()
 	}
 	a := newAtlas(nil, nil)
 	st, plain := &capableUploader{}, &plainUploader{}

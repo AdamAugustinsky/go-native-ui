@@ -14,11 +14,14 @@ import (
 func TestTitlebarCapabilityIsBoundOnce(t *testing.T) {
 	if os.Getenv("GNUI_TITLEBAR_ALLOC_CHILD") == "" {
 		cmd := exec.Command(os.Args[0], "-test.run=^TestTitlebarCapabilityIsBoundOnce$")
-		cmd.Env = append(os.Environ(), "GNUI_TITLEBAR_ALLOC_CHILD=1")
+		cmd.Env = append(os.Environ(), "GNUI_TITLEBAR_ALLOC_CHILD=1", "DBUS_SESSION_BUS_ADDRESS=disabled:")
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("%v\n%s", err, out)
 		}
 		return
+	}
+	if runtime.GOOS == "linux" { // settle the init-time portal before counting
+		platform.SystemAppearance()
 	}
 	a := &App{cfg: Config{Titlebar: 46}, zoom: 1.5}
 	plain, capable := &fakeWindow{}, &titlebarWindow{}

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"gonativeui/gpu"
+	"gonativeui/platform"
 )
 
 func TestAtlasSteadyFramesAllocateNothing(t *testing.T) {
@@ -16,7 +17,7 @@ func TestAtlasSteadyFramesAllocateNothing(t *testing.T) {
 		// per-frame assertion's cache before we start counting.
 		for range 3 {
 			cmd := exec.Command(os.Args[0], "-test.run=^TestAtlasSteadyFramesAllocateNothing$")
-			cmd.Env = append(os.Environ(), "GNUI_ATLAS_ALLOC_CHILD=1")
+			cmd.Env = append(os.Environ(), "GNUI_ATLAS_ALLOC_CHILD=1", "DBUS_SESSION_BUS_ADDRESS=disabled:")
 			if out, err := cmd.CombinedOutput(); err != nil {
 				t.Fatalf("%v\n%s", err, out)
 			}
@@ -24,6 +25,9 @@ func TestAtlasSteadyFramesAllocateNothing(t *testing.T) {
 		return
 	}
 	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
+	if runtime.GOOS == "linux" { // settle the init-time portal, not a frame dependency
+		platform.SystemAppearance()
+	}
 	c := New(newFake())
 	c.AtlasSync(&stagingUploader{texUploader: texUploader{uploads: map[gpu.TextureID]int{}}})
 	var in Input
