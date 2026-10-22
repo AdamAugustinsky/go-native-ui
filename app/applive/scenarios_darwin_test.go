@@ -666,7 +666,9 @@ func servicesScenario() {
 			fail("model: %v", err)
 		}
 		a.SetDockMenu(m, 0)
-		after(300*time.Millisecond, 1)
+		// SetDockMenu is deferred to a safe point. A timer can fire before
+		// that point on a busy runner; signal readiness after the queued work.
+		a.AtSafePoint(func() { postEvent(1, "") })
 		return nil
 	}
 	h.event = func(a *app.App, e *app.Event) bool {

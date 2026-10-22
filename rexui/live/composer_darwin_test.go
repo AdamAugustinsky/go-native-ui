@@ -886,6 +886,10 @@ func TestLiveComposerWindowDeactivationEndsTheCompletion(t *testing.T) {
 // settled before the text is drawn.
 func TestLiveComposerDisablingSettlesTheEditor(t *testing.T) {
 	l, p := startComposer(t, rexui.ComposerSetup{Placeholder: "Message"}, 480, 420)
+	// The editor normally follows the user's correction setting. AppKit can
+	// capitalise "hi" asynchronously (also without disabling or marked text).
+	// This tests settling, not correction: keep the exact-text assertion local.
+	l.Do(func(*app.App) { p.st.Editor().SetAutocorrect(false) })
 	p.focus(t, l)
 	l.Type("hi")
 	l.Until("typed", 120, func() bool { return p.text() == "hi" })
