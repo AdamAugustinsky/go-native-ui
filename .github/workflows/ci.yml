@@ -424,7 +424,10 @@ jobs:
     env:
       GNUI_BACKEND: ${{ matrix.backend }}
       LIBGL_ALWAYS_SOFTWARE: "1"
-      QUARANTINE: '^(TestColdThreadAttach|TestLastDrainEndsParking|TestMixFollowsAndDoesNotAllocate|TestPackagedBinaryHasNoDebugChordOrInspector)$'
+      # internal/ffi's tests run on their own: TestZeroAlloc is also the name of
+      # ui's, clib's and rexlook's zero-allocation tests, which keep running.
+      QUARANTINE_FFI: '^(TestColdThreadAttach|TestZeroAlloc)$'
+      QUARANTINE: '^(TestLastDrainEndsParking|TestMixFollowsAndDoesNotAllocate|TestPackagedBinaryHasNoDebugChordOrInspector)$'
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
@@ -475,7 +478,8 @@ jobs:
           EOF
       - name: test
         run: |
-          GNUI_FS_REPORT=$RUNNER_TEMP/fs-report.txt go test -count=1 -skip "$QUARANTINE" $(go list $PKGS | grep -v -E "$PKGS_EXCLUDE")
+          GNUI_FS_REPORT=$RUNNER_TEMP/fs-report.txt go test -count=1 -skip "$QUARANTINE" $(go list $PKGS | grep -v -E "$PKGS_EXCLUDE" | grep -v -x gonativeui/internal/ffi)
+          go test -count=1 -skip "$QUARANTINE_FFI" ./internal/ffi
           go test -count=1 github.com/go-text/typesetting/font # vendored: CFF outline extraction allocates nothing (a system CFF font)
           { echo '```'; cat $RUNNER_TEMP/fs-report.txt || true; echo '```'; } | tee -a "$GITHUB_STEP_SUMMARY"
       - name: platform tests (X11 on Xvfb - clipboard, cursors, content-first startup)
