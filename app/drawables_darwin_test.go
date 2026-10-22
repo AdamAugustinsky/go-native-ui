@@ -68,11 +68,12 @@ func TestIdleWindowGivesBackDrawables(t *testing.T) {
 // drawablesBuilder draws the frames its driver asks for and records the
 // IOSurface of the last frame drawn.
 type drawablesBuilder struct {
-	a     *App
-	start atomic.Int32  // frames the driver asks for
-	want  int           // frames left of the current burst
-	last  atomic.Uint32 // the last frame's IOSurface ID
-	done  chan struct{} // a burst is drawn
+	a           *App
+	start       atomic.Int32  // frames the driver asks for
+	want        int           // frames left of the current burst
+	last        atomic.Uint32 // the last frame's IOSurface ID
+	done        chan struct{} // a burst is drawn
+	trimAtFrame uint64        // trim generation when the latest frame was built (main thread)
 }
 
 var ioSurfaceGetID uintptr
@@ -80,6 +81,7 @@ var ioSurfaceGetID uintptr
 func (b *drawablesBuilder) Init(a *App) error { b.a = a; return nil }
 
 func (b *drawablesBuilder) Build(c *ui.Context) {
+	b.trimAtFrame = b.a.Win.DebugState().Trims
 	if t := b.a.fr.Target; t != 0 && ioSurfaceGetID != 0 { // every frame's, a burst's or not (a resize, a wake)
 		b.last.Store(uint32(objc.F.Call1(ioSurfaceGetID, uintptr(objc.Send(objc.ID(t), objc.Sel("iosurface"))))))
 	}
@@ -195,15 +197,24 @@ func runDrawablesChild() {
 		var err error
 		var last uint32
 		var st platform.DebugState
-		// Wait for the idle/trim state, not an arbitrary interval after the
-		// burst. OS events can request another frame in that interval.
+		var frameTrim, seenTrims uint64
+		var seenFrames int
+		var settledAt, quiet int64
+		// A trim before a newer frame says nothing about its new drawable
+		// pool. Require a trim after the latest Build and an observed idle
+		// interval with no new committed frame, trim, or running link.
 		ready := false
 		for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); {
 			onMain(func() {
 				st = a.Win.DebugState()
-				ready = wantMax == 0 || st.LinkPaused && !st.FrameArmed &&
-					st.Trims > before.Trims && st.Now-st.LastFrameT >= int64(idle)
+				paused := st.LinkPaused && st.LinkPausedOS && !st.FrameArmed
+				if settledAt == 0 || a.frames != seenFrames || st.Trims != seenTrims || !paused {
+					seenFrames, seenTrims, settledAt = a.frames, st.Trims, st.Now
+				}
+				quiet = st.Now - max(settledAt, a.lastDrawT)
+				ready = wantMax == 0 || paused && st.Trims > b.trimAtFrame && quiet >= int64(idle)
 				if ready {
+					frameTrim = b.trimAtFrame
 					ids, sizes, err = drawableSurfaces()
 					last = b.last.Load()
 				}
@@ -235,7 +246,7 @@ func runDrawablesChild() {
 			}
 			return true
 		}
-		fmt.Printf("drawables: %s: trims %d → %d, link pauses %d → %d\n", what, before.Trims, st.Trims, before.Pauses, st.Pauses)
+		fmt.Printf("drawables: %s: trims %d → %d, latest frame at trim %d, settled %d ms, link pauses %d → %d\n", what, before.Trims, st.Trims, frameTrim, quiet/1e6, before.Pauses, st.Pauses)
 		has := false
 		for i, id := range ids {
 			has = has || id == last
@@ -262,10 +273,17 @@ func runDrawablesChild() {
 			return
 		}
 		before = snapshot()
-		time.Sleep(idle + time.Second)
+		// Leave a deterministic gap between the two trims. count draws a
+		// fresh burst after its sample; the next count must await that burst's
+		// trim, not accept the earlier one just because it is newer than before.
+		onMain(func() { platform.DebugTrimAfter(2 * time.Second) })
 		if !count("idle", 2, "") {
 			return
 		}
+		if !count("idle after a frame following an earlier trim", 2, "") {
+			return
+		}
+		onMain(func() { platform.DebugTrimAfter(idle) })
 		var stopped bool
 		onMain(func() { stopped = a.Win.DebugStopLink() })
 		if !stopped {
