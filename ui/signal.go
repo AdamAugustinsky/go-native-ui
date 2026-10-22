@@ -17,10 +17,14 @@ import "math"
 // box there instead (scrollAt).
 func (c *Context) hitTest() {
 	c.hotID, c.hotKey, c.scrollKey, c.sp.hit = 0, 0, 0, 0
+	c.tooltipID, c.tooltipKey = 0, 0
 	if c.root == 0 || !c.in.Inside {
 		return
 	}
 	c.hitAll(c.in.MouseX, c.in.MouseY)
+	if c.tooltipID != 0 {
+		c.tooltipKey = c.boxes[c.tooltipID].key
+	}
 	if c.hotID != 0 {
 		c.hotKey = c.boxes[c.hotID].key
 	}
@@ -46,6 +50,9 @@ func (c *Context) hitWalk(id ID, x, y float32) {
 	}
 	inside := x >= b.rect[0] && x < b.rect[2] && y >= b.rect[1] && y < b.rect[3]
 	if inside {
+		if b.flags&(hitMask|Disabled) != 0 {
+			c.tooltipID = id
+		}
 		if b.flags&hitMask != 0 && b.flags&Disabled == 0 {
 			c.hotID = id
 		}
@@ -265,6 +272,13 @@ func (c *Context) tOf(k Key, which int) float32 {
 
 // Hot reports whether id is the box under the pointer (ignoring captures).
 func (c *Context) Hot(id ID) bool { return id != 0 && c.hotKey == c.boxes[id].key }
+
+// TooltipHovered reports whether id is under the pointer for a tooltip,
+// including disabled boxes, with the same clipping and draw order as Hot.
+// It does not make the box hot, pressable or focusable.
+func (c *Context) TooltipHovered(id ID) bool {
+	return id != 0 && c.tooltipKey == c.boxes[id].key
+}
 
 // HotKey is the key of the hit-testable box under the pointer, 0 if none.
 func (c *Context) HotKey() Key { return c.hotKey }

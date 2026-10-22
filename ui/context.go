@@ -214,6 +214,8 @@ type Context struct {
 	// interaction (see signal.go)
 	hotKey, scrollKey Key
 	hotID             ID
+	tooltipKey        Key // pointer hit including disabled boxes; never drives interaction
+	tooltipID         ID  // scratch of hitWalk; only hitTest publishes tooltipKey
 	active            [2]Key
 	pressedKey        [2]Key
 	releasedKey       [2]Key

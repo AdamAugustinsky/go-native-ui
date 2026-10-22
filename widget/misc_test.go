@@ -45,7 +45,7 @@ func TestTooltipAppearsAfterTheDelay(t *testing.T) {
 
 // Where the system shows tooltips, the widget draws none: it declares the text
 // and the region, whether or not the pointer is there, and a disabled widget
-// declares nothing.
+// declares its region too.
 func TestTooltipNativeDeclaresInsteadOfDrawing(t *testing.T) {
 	disabled := false
 	g := newRig(t, 300, 200, func(k *Kit) {
@@ -83,8 +83,24 @@ func TestTooltipNativeDeclaresInsteadOfDrawing(t *testing.T) {
 	}
 	disabled = true
 	g.frames(2)
-	if regs = g.c.TooltipRegions(regs[:0]); len(regs) != 1 {
-		t.Errorf("%d regions with the second button disabled, want 1", len(regs))
+	if regs = g.c.TooltipRegions(regs[:0]); len(regs) != 2 {
+		t.Errorf("%d regions with the second button disabled, want 2", len(regs))
+	}
+}
+
+func TestDisabledTooltip(t *testing.T) {
+	g := newRig(t, 300, 200, func(k *Kit) {
+		k.Column("root")
+		k.BeginDisabled(true)
+		k.Tooltip(k.Button("Save").ID, "Save it")
+		k.EndDisabled()
+		k.EndColumn()
+	})
+	x, y := centre(g.must(ui.RoleButton, "Save"))
+	g.move(x, y)
+	g.frames(90)
+	if _, ok := g.find(ui.RoleTooltip, "Save it"); !ok {
+		t.Fatal("disabled tooltip missing after 90 frames")
 	}
 }
 

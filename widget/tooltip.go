@@ -19,14 +19,15 @@ const DefaultTooltipDelayNs = base.DefaultTooltipDelayNs
 //
 // Where the window system shows tooltips itself (macOS: ui.Context.NativeTooltips)
 // nothing is drawn: the text is declared for the frame, and the system owns the
-// delay, the look and the placement. A disabled widget has none either way.
+// delay, the look and the placement. Disabled widgets show tooltips too,
+// without becoming hot or taking input.
 func (k *Kit) Tooltip(id ui.ID, text string) {
 	c := k.c
 	if text == "" {
 		return
 	}
 	if c.NativeTooltips() {
-		if id != 0 && !k.Disabled() {
+		if id != 0 {
 			c.NativeTooltip(id, text)
 		}
 		return
