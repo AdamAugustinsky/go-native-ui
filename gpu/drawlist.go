@@ -216,8 +216,16 @@ type DrawList struct {
 	Backdrops []Backdrop
 }
 
-// Reset empties the list and keeps its capacity.
-func (l *DrawList) Reset() { l.Quads, l.Backdrops = l.Quads[:0], l.Backdrops[:0] }
+// Reset empties the list and keeps its capacity, reserving space for a few
+// backdrops even before any are drawn.
+func (l *DrawList) Reset() {
+	l.Quads, l.Backdrops = l.Quads[:0], l.Backdrops[:0]
+	// Scroll edges can first appear together well after warm-up. Reserve
+	// eight recipes (320 bytes); larger lists still grow normally.
+	if cap(l.Backdrops) < 8 {
+		l.Backdrops = make([]Backdrop, 0, 8)
+	}
+}
 
 // Add appends a quad.
 func (l *DrawList) Add(q Quad) { l.Quads = append(l.Quads, q) }
