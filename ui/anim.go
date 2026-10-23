@@ -109,6 +109,12 @@ func approach(v *float32, target, rate float32) bool {
 func (c *Context) animateBoxes() {
 	for _, id := range c.order {
 		b := &c.boxes[id]
+		if b.prevTooltip && !b.tooltip {
+			// The previous declaration could suppress a parent's tooltip
+			// during this build. Give it one turn without that declaration,
+			// even when no hover animation or tooltip timer is running.
+			c.animating = true
+		}
 		if b.flags&(HotAnimation|ActiveAnimation|FocusAnimation) == 0 {
 			continue
 		}
@@ -152,6 +158,12 @@ func (c *Context) animateBoxes() {
 func (c *Context) prune() {
 	for _, id := range c.prevOrder {
 		if b := &c.boxes[id]; b.lastFrame != c.frame {
+			if b.tooltip {
+				// Like a removed declaration on a retained box, this may
+				// have suppressed a parent. One follow-up, even unhovered;
+				// the freed box is absent from the next prevOrder.
+				c.animating = true
+			}
 			c.table.Delete(uint64(b.key))
 			c.pool.FreeIndex(uint32(id))
 		}
