@@ -28,16 +28,19 @@ func hasTooltip(g *rig, text string) bool {
 // Drive only startup, input/model changes and frames the context requests:
 // forced settling frames would hide a lost wake after a declaration disappears.
 func TestTooltipParentRecoveryRequestedFrames(t *testing.T) {
-	for _, api := range []string{"rexui", "widget"} {
+	for _, tc := range []struct{ api, removal string }{
+		{"rexui", "declaration"}, {"rexui", "box"},
+		{"widget", "declaration"}, {"widget", "box"},
+	} {
 		for _, order := range []string{"child-first", "parent-before-child", "parent-after-child"} {
-			t.Run(api+"/"+order, func(t *testing.T) {
+			t.Run(tc.api+"/"+order+"/"+tc.removal, func(t *testing.T) {
 				ts := fakeui.New()
 				c := ui.New(ts)
 				c.AtlasSync(&fakeui.Uploader{})
 				k := widget.NewKit(c, ts, rex.Theme())
 				k.ReduceMotion = true
 				tip := k.Tooltip
-				if api == "rexui" {
+				if tc.api == "rexui" {
 					tip = func(id ui.ID, text string) { rexui.Tooltip(k.Kit, id, text) }
 				}
 				var list gpu.DrawList
@@ -54,8 +57,11 @@ func TestTooltipParentRecoveryRequestedFrames(t *testing.T) {
 					if order == "parent-before-child" {
 						tip(parent, "Parent tip")
 					}
-					c.NextSize(ui.Px(120), ui.Px(30))
-					child = c.Box(ui.Hoverable, "child")
+					child = 0
+					if ownTip || tc.removal == "declaration" {
+						c.NextSize(ui.Px(120), ui.Px(30))
+						child = c.Box(ui.Hoverable, "child")
+					}
 					if ownTip && order != "parent-after-child" {
 						tip(child, "Inner tip")
 					}
@@ -110,10 +116,14 @@ func TestTooltipParentRecoveryRequestedFrames(t *testing.T) {
 				drain()
 				wantTip("Inner tip")
 				ownTip = false
-				frame(tick) // model change: the child box itself stays
+				frame(tick) // model change: remove the declaration or its whole box
 				n := drain()
 				wantTip("Parent tip")
-				if !c.Hot(child) || c.Hot(parent) || c.ActiveKey() != 0 || c.FocusKey() != 0 {
+				hot := child
+				if tc.removal == "box" {
+					hot = parent
+				}
+				if !c.Hot(hot) || c.ActiveKey() != 0 || c.FocusKey() != 0 {
 					t.Fatal("tooltip recovery changed interactive state")
 				}
 				if extra := drain(); extra != 0 {

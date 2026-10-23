@@ -158,6 +158,12 @@ func (c *Context) animateBoxes() {
 func (c *Context) prune() {
 	for _, id := range c.prevOrder {
 		if b := &c.boxes[id]; b.lastFrame != c.frame {
+			if b.tooltip {
+				// Like a removed declaration on a retained box, this may
+				// have suppressed a parent. One follow-up, even unhovered;
+				// the freed box is absent from the next prevOrder.
+				c.animating = true
+			}
 			c.table.Delete(uint64(b.key))
 			c.pool.FreeIndex(uint32(id))
 		}
