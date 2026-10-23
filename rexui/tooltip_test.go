@@ -4,12 +4,14 @@ import (
 	"slices"
 	"testing"
 
+	"gonativeui/gpu"
 	"gonativeui/internal/fakeui"
 	"gonativeui/rexui"
 	"gonativeui/text"
 	"gonativeui/theme"
 	"gonativeui/theme/rex"
 	"gonativeui/ui"
+	"gonativeui/widget"
 	"gonativeui/widget/base"
 )
 
@@ -21,6 +23,109 @@ func hasTooltip(g *rig, text string) bool {
 		}
 	}
 	return false
+}
+
+// Drive only startup, input/model changes and frames the context requests:
+// forced settling frames would hide a lost wake after a declaration disappears.
+func TestTooltipParentRecoveryRequestedFrames(t *testing.T) {
+	for _, api := range []string{"rexui", "widget"} {
+		for _, order := range []string{"child-first", "parent-before-child", "parent-after-child"} {
+			t.Run(api+"/"+order, func(t *testing.T) {
+				ts := fakeui.New()
+				c := ui.New(ts)
+				c.AtlasSync(&fakeui.Uploader{})
+				k := widget.NewKit(c, ts, rex.Theme())
+				k.ReduceMotion = true
+				tip := k.Tooltip
+				if api == "rexui" {
+					tip = func(id ui.ID, text string) { rexui.Tooltip(k.Kit, id, text) }
+				}
+				var list gpu.DrawList
+				var sem ui.SemTree
+				var parent, child ui.ID
+				ownTip := true
+				in := ui.Input{Inside: true, Focused: true, MouseX: -100, MouseY: -100}
+				frame := func(dt int64) {
+					in.Time += dt
+					c.Begin(&in, 400, 300, 1, float32(dt)/1e9)
+					k.Begin(c)
+					c.NextSize(ui.Px(240), ui.Px(80))
+					parent = c.Open(ui.Hoverable|ui.Clip, "parent")
+					if order == "parent-before-child" {
+						tip(parent, "Parent tip")
+					}
+					c.NextSize(ui.Px(120), ui.Px(30))
+					child = c.Box(ui.Hoverable, "child")
+					if ownTip && order != "parent-after-child" {
+						tip(child, "Inner tip")
+					}
+					c.Close()
+					if order != "parent-before-child" {
+						tip(parent, "Parent tip")
+					}
+					if ownTip && order == "parent-after-child" {
+						tip(child, "Inner tip")
+					}
+					k.End()
+					c.End(&list)
+					in.ClearFrame()
+				}
+				const tick = 16_666_667
+				drain := func() int {
+					t.Helper()
+					for n := 0; ; n++ {
+						delay := c.WakeAfter()
+						if !c.Animating() && delay == 0 {
+							return n
+						}
+						if n == 10 {
+							t.Fatal("tooltip did not settle to zero requested frames")
+						}
+						if c.Animating() {
+							delay = tick
+						}
+						frame(delay)
+					}
+				}
+				wantTip := func(want string) {
+					t.Helper()
+					c.Semantics(&sem)
+					n := 0
+					for _, node := range sem.Nodes {
+						if node.Role == ui.RoleTooltip {
+							n++
+							if got := string(sem.Text(node.Name)); got != want {
+								t.Fatalf("tooltip = %q, want %q", got, want)
+							}
+						}
+					}
+					if n != 1 {
+						t.Fatalf("got %d tooltips, want only %q", n, want)
+					}
+				}
+				frame(tick) // startup
+				drain()
+				in.MouseX, in.MouseY = 10, 10
+				frame(tick) // pointer enters child
+				drain()
+				wantTip("Inner tip")
+				ownTip = false
+				frame(tick) // model change: the child box itself stays
+				n := drain()
+				wantTip("Parent tip")
+				if !c.Hot(child) || c.Hot(parent) || c.ActiveKey() != 0 || c.FocusKey() != 0 {
+					t.Fatal("tooltip recovery changed interactive state")
+				}
+				if extra := drain(); extra != 0 {
+					t.Fatalf("idle requested %d extra frames", extra)
+				}
+				if a := testing.AllocsPerRun(100, func() { frame(tick) }); a != 0 {
+					t.Fatalf("settled tooltip: %v allocations", a)
+				}
+				t.Logf("parent recovered and became idle after %d requested frames", n)
+			})
+		}
+	}
 }
 
 func TestTooltipOverNestedLabel(t *testing.T) {

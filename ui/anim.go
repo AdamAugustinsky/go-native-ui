@@ -109,6 +109,12 @@ func approach(v *float32, target, rate float32) bool {
 func (c *Context) animateBoxes() {
 	for _, id := range c.order {
 		b := &c.boxes[id]
+		if b.prevTooltip && !b.tooltip {
+			// The previous declaration could suppress a parent's tooltip
+			// during this build. Give it one turn without that declaration,
+			// even when no hover animation or tooltip timer is running.
+			c.animating = true
+		}
 		if b.flags&(HotAnimation|ActiveAnimation|FocusAnimation) == 0 {
 			continue
 		}
