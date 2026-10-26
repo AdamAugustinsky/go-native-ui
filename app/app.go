@@ -144,8 +144,6 @@ type App struct {
 	scale  float32 // pixels per point (the backing scale; zoom.go has the zoom)
 	zoom   float32 // the app zoom, 0 = 1 (zoom.go)
 	tbZoom float32 // the zoom the window's titlebar metrics were last set for, 0 = 1 (zoom.go)
-	tbWin  any
-	tbSet  titlebarSetter // optional window capability; nil is cached too
 
 	// Cursor regions and the titlebar drag map handed to the window after
 	// every frame (regions.go); the buffers are reused.

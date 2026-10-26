@@ -1,7 +1,7 @@
 // Package allocsite attributes the heap allocations of a stretch of a
 // program to the code that made them, for the allocation gates (DECISIONS
 // D27): an allocation the Go runtime makes for itself (a new thread, the
-// scavenger's timer heap) is a one-off that a gate
+// scavenger's timer heap, the type-assertion cache) is a one-off that a gate
 // may pass over; one made by our code is not, whichever window it lands in.
 //
 // Enable profiles every allocation. A Snapshot taken after a runtime.GC holds
@@ -178,8 +178,7 @@ func pkgOf(fn string) string {
 // allocHelper reports whether fn allocates on behalf of its caller, so the
 // allocation is the caller's: the allocator itself, and the runtime's
 // conversions, slices, maps, strings, closures, defers and goroutines that
-// compiled code calls, including probabilistically built assertion/switch
-// caches. Timer heaps are not helpers: a scavenger-owned timer stays runtime.
+// compiled code calls.
 func allocHelper(fn string) bool {
 	if strings.HasPrefix(fn, "internal/runtime/maps.") || strings.HasPrefix(fn, "reflect.") && strings.Contains(fn, "unsafe_New") {
 		return true
@@ -195,7 +194,6 @@ func allocHelper(fn string) bool {
 		"convT", "newproc", "malg", "newdefer", "deferproc", "makechan",
 		"mapclone", "growWork", "hashGrow", "reflect_unsafe_New", "unsafe_New",
 		"profilealloc", "mProf_Malloc", "heapSetType", "nextFreeFast",
-		"typeAssert", "buildTypeAssertCache", "interfaceSwitch", "buildInterfaceSwitchCache",
 	} {
 		if strings.HasPrefix(name, p) {
 			return true
