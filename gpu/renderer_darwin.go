@@ -34,6 +34,14 @@ const ringSlots = 3
 // initialQuads is the starting instance capacity of every ring slot.
 const initialQuads = 4096
 
+// stageFloor is the smallest staging buffer: glyph updates are small.
+const stageFloor = 64 << 10
+
+// stageCalmFrames is how many frames in a row a slot must stage at most a
+// quarter of its staging buffer before the buffer shrinks (each slot has
+// every third frame: about three seconds at 60 Hz).
+const stageCalmFrames = 60
+
 // runTextures matches quadMSL's table at texture slots 3..10. Slots 0..2
 // remain the backdrop/YUV bindings, whose runs cannot share conversions.
 const runTextures = 8
@@ -143,6 +151,11 @@ type ringSlot struct {
 	stageLen int
 	copies   []stagedCopy
 	ucb      objc.ID
+	// The staging buffer's recent demand (noteStage): the most a frame of
+	// the slot staged while every one staged at most a quarter of the
+	// buffer, for calm frames in a row; shrink, when not 0, is the size it
+	// goes down to once its upload has completed (retire).
+	stagePeak, stageCalm, stageShrink int
 
 	// The pixel-buffer imports its frame drew (external_darwin.go), released
 	// once its command buffer has completed or is known never to run.
@@ -473,7 +486,33 @@ func (r *Renderer) stage(t TextureID, plane uint8, x, y, w, h int, pixels []byte
 // growStage gives slot s a staging buffer of at least n bytes, keeping what
 // is staged in it. The slot is retired: no GPU work reads the old one.
 func (r *Renderer) growStage(s *ringSlot, n int) {
-	size := max(n, 2*s.stageCap, 64<<10)                       // glyph updates are small; large uploads still grow directly
+	r.newStage(s, max(n, 2*s.stageCap, stageFloor)) // glyph updates are small; large uploads still grow directly
+	s.stagePeak, s.stageCalm, s.stageShrink = 0, 0, 0
+}
+
+// noteStage records the bytes slot s stages for the frame being encoded.
+// After stageCalmFrames frames of the slot that each staged at most a
+// quarter of its buffer, the buffer is marked to shrink to twice the most
+// they staged (stageFloor at least): demand would have to double to grow it
+// again, so a steady load does not churn it.
+func (r *Renderer) noteStage(s *ringSlot) {
+	if s.stageCap <= stageFloor || s.stageShrink > 0 {
+		return
+	}
+	if s.stageLen*4 > s.stageCap {
+		s.stagePeak, s.stageCalm = 0, 0
+		return
+	}
+	s.stagePeak = max(s.stagePeak, s.stageLen)
+	if s.stageCalm++; s.stageCalm >= stageCalmFrames {
+		s.stageShrink = max(stageFloor, (2*s.stagePeak+stageFloor-1)/stageFloor*stageFloor)
+		s.stagePeak, s.stageCalm = 0, 0
+	}
+}
+
+// newStage replaces slot s's staging buffer with one of size bytes, keeping
+// what is staged in it (which must fit). No GPU work may read the old one.
+func (r *Renderer) newStage(s *ringSlot, size int) {
 	buf := objc.Send2(r.device, rsNewBuffer, uintptr(size), 0) // MTLResourceStorageModeShared
 	if buf == 0 {
 		panic("gpu: staging buffer allocation failed")
@@ -601,6 +640,12 @@ func (r *Renderer) retire(s *ringSlot) {
 		s.cb = 0
 	}
 	r.releaseLeases(s)
+	if s.stageShrink > 0 && s.stageLen == 0 { // its upload is done and nothing is staged
+		if s.stageShrink < s.stageCap {
+			r.newStage(s, s.stageShrink)
+		}
+		s.stageShrink = 0
+	}
 }
 
 // Encode records one render pass into cmdBuf: it clears target (an
@@ -635,6 +680,7 @@ func (r *Renderer) Encode(cmdBuf, target uintptr, width, height int, clear [4]fl
 	if len(r.retiring) > 0 {
 		r.collect()
 	}
+	r.noteStage(s)
 	r.flushStaged(s)
 	var quads []Quad
 	extra := 0 // room after them for the backdrops' fills (Backdrop.Base)

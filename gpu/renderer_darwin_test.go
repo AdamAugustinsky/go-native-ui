@@ -601,6 +601,40 @@ func TestStageSingleGlyphCapacity(t *testing.T) {
 	}
 }
 
+// A slot's staging buffer that grew for a burst shrinks back once its
+// frames stage little for a while, and then stays put under that load.
+func TestStageShrinksAfterSustainedLowDemand(t *testing.T) {
+	r := newTestRenderer(t)
+	tex := r.NewTexture(TexRGBA8, 1024, 1024)
+	list, out := &DrawList{}, make([]byte, 4*4*4)
+	slot := r.next
+	r.Stage(tex, 0, 0, 1024, 1024, make([]byte, 1024*1024*4), 1024*4)
+	r.RenderToRGBA(4, 4, black, list, out)
+	grown := r.slots[slot].stageCap
+	if grown < 4<<20 {
+		t.Fatalf("a 4 MiB upload staged into %d bytes", grown)
+	}
+	small := make([]byte, 32*32*4)
+	frame := func() {
+		r.Stage(tex, 0, 0, 32, 32, small, 32*4)
+		r.RenderToRGBA(4, 4, black, list, out)
+	}
+	for range ringSlots * (stageCalmFrames + 2) {
+		frame()
+	}
+	shrunk := r.slots[slot].stageCap
+	if shrunk != stageFloor {
+		t.Fatalf("after %d calm frames the slot keeps %d bytes (it grew to %d), want %d", stageCalmFrames, shrunk, grown, stageFloor)
+	}
+	buf := r.slots[slot].stage
+	for range ringSlots * (stageCalmFrames + 2) {
+		frame()
+	}
+	if r.slots[slot].stage != buf {
+		t.Error("a steady small load replaced the shrunk staging buffer")
+	}
+}
+
 func TestStageBurstReusesCapacity(t *testing.T) {
 	r := newTestRenderer(t)
 	tex := r.NewTexture(TexR8, 64, 32)
