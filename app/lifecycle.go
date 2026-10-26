@@ -496,7 +496,7 @@ func (a *App) safePoint() {
 		return
 	}
 	if a.r != nil {
-		a.r.CollectLeases() // the pixel buffers of finished frames (a GPU completion gave the dispatcher this turn)
+		a.r.Collect() // what finished frames held: imports' pixel buffers, freed textures (a GPU completion gave the dispatcher this turn)
 	}
 	a.runSafePoints()
 	if a.inspDrain != nil {

@@ -668,3 +668,46 @@ func TestStageBurstReusesCapacity(t *testing.T) {
 		}
 	}
 }
+
+// A texture freed while a committed frame may still sample it goes once
+// that frame has finished, with no other frame: Collect (the safe point)
+// arranges one completion wake, and no more once nothing waits.
+func TestAFreedTextureGoesWithoutAnotherFrame(t *testing.T) {
+	r := newTestRenderer(t)
+	tex := texel(r, 0, 200, 0, 255)
+	// Hold the GPU: a command buffer that waits for an event the test signals.
+	ev := objc.Send(r.device, objc.Sel("newSharedEvent"))
+	defer objc.Release(ev)
+	F := objc.F
+	pool := F.Call0(objc.PoolPush)
+	gate := objc.Send(r.queue, rsCommandBuf)
+	objc.Send2(gate, objc.Sel("encodeWaitForEvent:value:"), uintptr(ev), 1)
+	objc.Send(gate, rsCommit)
+	F.Call1(objc.PoolPop, pool)
+	cb := encodeFrame(r, 4, 4, &DrawList{Quads: []Quad{rgbaQuad(0, tex)}})
+	objc.Send(cb, rsCommit)
+	objc.Release(cb)
+
+	r.FreeTexture(tex)
+	before := wakeCompletions.Load()
+	r.Collect()
+	if _, retiring := r.TextureCounts(); retiring != 1 || r.waker == 0 {
+		t.Fatalf("while its frame runs: %d retiring, waker %v; want 1 and a wake arranged", retiring, r.waker != 0)
+	}
+	r.Collect() // the safe point runs again before the GPU finishes: one wake is enough
+	objc.Send1(ev, objc.Sel("setSignaledValue:"), 1)
+	for deadline := time.Now().Add(5 * time.Second); wakeCompletions.Load() == before; {
+		if time.Now().After(deadline) {
+			t.Fatal("the frame finished but no completion woke the dispatcher")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	r.Collect() // the turn the completion gave the dispatcher
+	if _, retiring := r.TextureCounts(); retiring != 0 || r.waker != 0 {
+		t.Fatalf("after the frame finished: %d retiring, waker %v; want none", retiring, r.waker != 0)
+	}
+	time.Sleep(20 * time.Millisecond)
+	if n := wakeCompletions.Load() - before; n != 1 {
+		t.Errorf("%d completion wakes for one freed texture, want 1", n)
+	}
+}
