@@ -57,7 +57,7 @@ func (k *Kit) ScrollUpTo(label string, st *ScrollState, axes ScrollAxes, maxH fl
 // parent: with legacy scrollers AppKit's (rexui.ScrollBars), otherwise the
 // classic overlay bars, a thin thumb that thickens under the pointer.
 func (k *Kit) scrollBars(v *base.ScrollView) {
-	if k.r.Settings.Scroller == theme.ScrollerLegacy {
+	if k.r.Settings.Scroller == theme.ScrollerLegacy && !v.State.Overlay {
 		// legacy bars are the system's, whatever the kit's theme: AppKit's
 		// track, slot and knob, drawn in one place (rexui)
 		rexui.ScrollBars(k.Kit, v)
