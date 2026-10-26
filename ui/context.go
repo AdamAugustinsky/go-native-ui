@@ -346,7 +346,6 @@ type Context struct {
 	dbg *debugState // the recording of EnableDebug (debug.go); nil off
 
 	up           Uploader
-	stager       atlasStager // optional capability, resolved only when binding up
 	pageTex      []gpu.TextureID
 	pageUploaded []bool       // first upload is immediate; subsequent changes are staged
 	shared       *SharedAtlas // the page textures shared with other contexts (ShareAtlas), nil: pageTex
