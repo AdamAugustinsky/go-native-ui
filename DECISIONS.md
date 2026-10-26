@@ -899,16 +899,13 @@ boxes are unchanged. A keyboard-visible ring is drawn on the paragraph's
 actual range rectangles, not their bounding union. Disabled, hidden, fully
 clipped, truncated-away and removed targets are withdrawn at End.
 
-Cost: one reused pointer-free 32-byte target per link on 64-bit systems,
-plus 24 bytes per rich-text record and an 8-byte known rich-focus key per
-Context (ordinary deferred field/host focus requests remain pending);
-per-frame range-rectangle visibility
-checks and a linear span-key lookup for explicit/AX/overlay focus. No extra
-layout boxes, timers, native views, maps or warm-frame allocations. Existing
-text layout caches and shared rectangle scratch are reused. Index identity
-is deliberately unchanged (reordering spans requires application care);
-automatic scroll-to-focus is not added. See `ui/richtext_focus*_test.go`
-and [the rich-text guide](docs/guide/richtext.md#keyboard-focus).
+Cost (64-bit): a reused 32-byte pointer-free target per link, 24 bytes per
+rich-text record and 8 per Context; no layout boxes, timers, native views,
+maps or warm-frame allocations. Visibility walks a span's range rectangles
+each frame; span-key lookup is linear. Identity is the span index, so
+reordering spans needs the app's care; no automatic scroll-to-focus. See
+`ui/richtext_focus*_test.go` and
+[the rich-text guide](docs/guide/richtext.md#keyboard-focus).
 
 ## D43. Variable-height lists (phase 6, 2026-10-18)
 
