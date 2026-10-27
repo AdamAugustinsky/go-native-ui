@@ -89,7 +89,7 @@ var aliases = map[string]Lang{
 }
 
 // LangOf names the language of a fence's info string ("ts", "golang",
-// "python {linenos}": the first word) or a file name 
+// "python {linenos}": the first word) or a file name
 // "Makefile"), case-insensitively; Plain when it is not one of ours.
 func LangOf(name string) Lang {
 	name = strings.TrimSpace(name)

@@ -239,8 +239,11 @@ type Modes struct {
 	FocusEvents bool
 }
 
-// Pos is a cell position: Y from -Scrollback() (the oldest line) to rows-1.
-type Pos struct{ X, Y int }
+// Pos is a cell position.
+type Pos struct {
+	// X is the column; Y the line, from -Scrollback() (the oldest) to rows-1.
+	X, Y int
+}
 
 // Terminal is one terminal's state.
 type Terminal struct {
