@@ -45,6 +45,17 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+      # windows-11-arm starts with a full-screen "Microsoft account" prompt
+      # (WWAHost.exe, a Windows.UI.Core.CoreWindow) in the foreground, which
+      # covers the probes' windows (P2 found it at its sample point, P7 as the
+      # foreground). Stop it so the probes see the desktop; a no-op on amd64.
+      - name: close the sign-in prompt over the desktop
+        shell: pwsh
+        run: |
+          $p = Get-Process WWAHost -ErrorAction SilentlyContinue
+          if ($p) { $p | ForEach-Object { "stopping WWAHost $($_.Id) '$($_.MainWindowTitle)'"; Stop-Process -Id $_.Id -Force }; Start-Sleep -Seconds 3 } else { "no WWAHost running" }
+          $again = Get-Process WWAHost -ErrorAction SilentlyContinue
+          "WWAHost after: $(@($again).Count)"
       - name: run the probes
         run: |
           mkdir -p probe-out
