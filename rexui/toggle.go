@@ -45,12 +45,16 @@ func ToggleButton(k *base.Kit, label string, on *bool, o ToggleOpts) base.Signal
 	}
 	fill, fg, _ := rc.Colors(r, tg.Visual)
 	h := theme.Snap(s.Height)
+	radius := s.Radius
+	if rc.Capsule { // the recipe of the state shown: off or on
+		radius = h / 2
+	}
 	var flags ui.Flags
 	if fill&0xFF != 0 {
 		flags |= ui.DrawBackground
 	}
 	c.NextBG(fill)
-	c.NextRadius(s.Radius)
+	c.NextRadius(radius)
 	c.NextFont(s.Font.Font)
 	c.NextTextColor(fg)
 	c.NextAlign(k.TakeAlign(ui.AlignCenter))
@@ -58,6 +62,6 @@ func ToggleButton(k *base.Kit, label string, on *bool, o ToggleOpts) base.Signal
 		c.NextSemState(ui.SemChecked)
 	}
 	k.BeginPress(&tg.Press, ui.RoleCheckbox, ui.TextSize(2*s.PadX), ui.Px(h), flags|ui.DrawText, base.StrBytes(tg.Name))
-	k.FocusRing(tg.ID, tg.Visual, s.Radius)
+	k.FocusRing(tg.ID, tg.Visual, radius)
 	return k.EndToggle(&tg)
 }
