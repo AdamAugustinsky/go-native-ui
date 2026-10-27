@@ -40,8 +40,12 @@
 //   - Windows: RegisterHotKey on the app's hidden window with MOD_NOREPEAT;
 //     WM_HOTKEY becomes the press. A press grants the app the foreground, so
 //     a panel shown from it comes to the front.
-//   - Until W7 lands, and on Linux (D63): Register returns ErrUnsupported
-//     (errors.Is errors.ErrUnsupported).
+//   - Until W7 lands on Windows, and on Linux (D63): Register returns
+//     ErrUnsupported (errors.Is errors.ErrUnsupported).
+//
+// The chord is a physical key: Carbon and RegisterHotKey name keys by
+// position, so on macOS a letter is the key at that letter's place on a US
+// keyboard. Shortcut.AppendLabel writes the chord as the OS shows it.
 package hotkey
 
 import (
@@ -62,6 +66,8 @@ var (
 	// before app.Main).
 	ErrNotStarted = errors.New("hotkey: the app has not started (call from Handler.Start or later)")
 	// ErrTaken: another app (or this one, under another ID) holds the chord.
+	// macOS reports only this app's own chords: Carbon registers a chord
+	// another process holds without an error (the phase 8 plan's W7 note).
 	ErrTaken = errors.New("hotkey: the shortcut is taken by another app")
 	// ErrInvalid: the shortcut has no key, a key the OS cannot register, or
 	// no modifier (a bare key would take the key from every app).
@@ -108,6 +114,14 @@ func UnregisterAll() { osUnregisterAll() }
 
 // Registered reports the shortcut of hotkey id, if it is registered.
 func Registered(id ID) (Shortcut, bool) { return osRegistered(id) }
+
+// Simulate delivers a press of hotkey id through the OS's own path, as a
+// real press does, for tests and measurements: on macOS a synthetic
+// kEventHotKeyPressed sent to the application's event target, which reaches
+// the app before Simulate returns (or at the end of the frame, from Build).
+// No permission is needed. It fails for an id that is not registered, and
+// with ErrUnsupported where there are no hotkeys. Main thread.
+func Simulate(id ID) error { return osSimulate(id) }
 
 // Pressed decodes a hotkey press (an app.EvService from
 // platform.SourceHotkey, whose ID is the hotkey's). It allocates nothing.
