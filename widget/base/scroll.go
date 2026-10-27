@@ -207,6 +207,15 @@ func (k *Kit) legacyW(size theme.Size) float32 {
 	return theme.Snap(k.r.Lines.Scroller)
 }
 
+// VListBarRoom is VListOpts.BarRoom for the list BeginVList(label) builds
+// next in the current parent, whose bars are drawn with st: a legacy bar's
+// width while the system's scrollers are legacy and the list overflowed in
+// the last layout, as BeginScroll and a List leave; 0 otherwise.
+func (k *Kit) VListBarRoom(label string, st *ScrollState) float32 {
+	_, ident := ui.SplitLabel(label)
+	return k.legacyReserve(ui.KeyN(ui.HashString(k.c.ParentKey(), ident), 1), ScrollVertical, st)[0]
+}
+
 // legacyBars reports whether scroll bars are the legacy kind, always shown
 // beside the content, rather than overlay ones shown over it while scrolling.
 // It follows the system's setting live (theme.Settings.Scroller), unless the
