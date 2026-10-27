@@ -16,16 +16,25 @@
 // RICHEDIT50W (MSFTEDIT_CLASS) multi-line control in a top-level window,
 // then:
 //
-//   - emoji: sets "A😀B" at 24 pt (WM_SETTEXT, EM_SETCHARFORMAT), reads the
-//     emoji's font back (EM_GETCHARFORMAT with CHARFORMAT2W: font binding
-//     should pick Segoe UI Emoji), asks for advanced typography
-//     (EM_SETTYPOGRAPHYOPTIONS) and reads EM_GETEDITSTYLEEX, and counts
-//     coloured (non-grey) pixels in the emoji's cell from PrintWindow. No
-//     public EM_SETEDITSTYLEEX flag is known to switch a windowed RichEdit to
-//     Direct2D rendering, so the pixel count is the answer to "colour emoji";
-//   - IME: ImmGetContext on the control, then WM_IME_STARTCOMPOSITION,
-//     WM_IME_COMPOSITION (GCS_RESULTSTR), WM_IME_ENDCOMPOSITION and a
-//     WM_IME_CHAR of U+3042 sent to it, with the text before and after;
+//   - emoji: "A😀B☺C" at 24 pt with B red, measured three ways: the
+//     default font binding, the emoji's face set to Segoe UI Emoji, and that
+//     plus EM_SETTYPOGRAPHYOPTIONS(TO_ADVANCEDTYPOGRAPHY |
+//     TO_DEFAULTCOLOREMOJI | TO_DISPLAYFONTCOLOR). Each reads the control's
+//     pixels (PrintWindow of the host with PW_RENDERFULLCONTENT, else of the
+//     control, else a screen BitBlt; the first run's PrintWindow of the
+//     child alone read nothing) and counts the emoji's yellow pixels, the
+//     red B (the read sees colour) and the one-colour ☺ (ClearType's
+//     fringes). A child process (-d2d-child) also sends EM_SWITCHTOD2D, an
+//     Office RichEdit message, to a fresh control. See emoji_windows.go for
+//     why a windowed msftedit control is expected to draw emoji in one
+//     colour;
+//   - IME: the messages alone (WM_IME_STARTCOMPOSITION, WM_IME_COMPOSITION
+//     with GCS_RESULTSTR, WM_IME_ENDCOMPOSITION carry no text without an
+//     input method composing; WM_IME_CHAR of U+3042), the keyboard layouts
+//     that are input methods, and a real IMM composition: Microsoft's
+//     Japanese IME loaded (00000411), opened on the control's context, a
+//     composition string set (ImmSetCompositionStringW) and completed
+//     (ImmNotifyIME), with an explicit answer;
 //   - undo: EM_GETOLEINTERFACE → IRichEditOle → ITextDocument; with
 //     BeginEditCollection/EndEditCollection around two EM_REPLACESELs, does
 //     one EM_UNDO revert both? The same without the collection, for a
@@ -48,10 +57,11 @@
 //
 // # Output
 //
-// One JSON object on stdout: ole_initialize (HRESULT), richedit_version
-// (msftedit.dll found), emoji (face, charset, typography_accepted,
-// edit_style_ex, coloured_pixels, cell), ime (context, the text after each
-// message), undo (collection_hr, grouped_text_after_undo, grouped,
+// One JSON object on stdout: ole_initialize (HRESULT), emoji
+// (default_binding, segoe_ui_emoji, colour_typography: each with face,
+// read, emoji / control_red_b / baseline_mono_symbol pixel counts,
+// reader_sees_colour, colour_emoji; switch_to_d2d; colour_emoji_windowed),
+// ime (messages_only, layouts, imm_composition, ime_installed, answer), undo (collection_hr, grouped_text_after_undo, grouped,
 // baseline_text_after_undo), resize_heights (lines → requested height in
 // pixels), caret (x, y, line_height), spellcheck (set_result,
 // options_after, accepted), ole_callback (set, query_accept_calls,

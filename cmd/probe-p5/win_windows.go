@@ -50,6 +50,16 @@ var (
 	pOleInitialize      = win32.Proc(ole32, "OleInitialize")
 	pImmGetContext      = win32.Proc(imm32, "ImmGetContext")
 	pImmReleaseContext  = win32.Proc(imm32, "ImmReleaseContext")
+	pImmIsIME           = win32.Proc(imm32, "ImmIsIME")
+	pImmGetOpenStatus   = win32.Proc(imm32, "ImmGetOpenStatus")
+	pImmSetOpenStatus   = win32.Proc(imm32, "ImmSetOpenStatus")
+	pImmSetCompString   = win32.Proc(imm32, "ImmSetCompositionStringW")
+	pImmNotifyIME       = win32.Proc(imm32, "ImmNotifyIME")
+	pGetKeyboardLayout  = win32.Proc(user32, "GetKeyboardLayout")
+	pGetKbdLayoutList   = win32.Proc(user32, "GetKeyboardLayoutList")
+	pLoadKeyboardLayout = win32.Proc(user32, "LoadKeyboardLayoutW")
+	pActivateKbdLayout  = win32.Proc(user32, "ActivateKeyboardLayout")
+	pGetFocus           = win32.Proc(user32, "GetFocus")
 
 	wndProcCB = syscall.NewCallback(wndProc)
 )
@@ -73,7 +83,7 @@ const (
 	hostH      = 420
 	editW      = 480
 	editH      = 300
-	dibW, dibH = editW, editH
+	dibW, dibH = hostW, hostH // reads cover the host's client area
 )
 
 type wndClassEx struct {
@@ -222,40 +232,4 @@ func putClipboard(s string) bool {
 	copy(unsafe.Slice((*uint16)(win32.Ptr(p)), len(u)), u)
 	call(pGlobalUnlock, h)
 	return call(pSetClipboardData, cfUnicode, h) != 0
-}
-
-// grab reads the control's client area through PrintWindow into the DIB.
-func grab() bool {
-	if wins.memDC == 0 {
-		screen := call(pGetDC, 0)
-		wins.memDC = call(pCreateCompatibleDC, screen)
-		call(pReleaseDC, 0, screen)
-		wins.bmi = bitmapInfo{width: dibW, height: -dibH, planes: 1, bits: 32}
-		wins.bmi.size = 40
-		wins.dib = call(pCreateDIBSection, wins.memDC, uintptr(unsafe.Pointer(&wins.bmi)), 0, uintptr(unsafe.Pointer(&wins.bits)), 0, 0)
-		if wins.dib == 0 || wins.bits == 0 {
-			return false
-		}
-		call(pSelectObject, wins.memDC, wins.dib)
-	}
-	ok := win32.Bool(call(pPrintWindow, wins.edit, wins.memDC, pwClient))
-	call(pGdiFlush)
-	return ok
-}
-
-// colouredPixels counts the pixels in [x0,x1)×[y0,y1) whose channels differ
-// by more than 60 (not black, white or grey anti-aliasing).
-func colouredPixels(x0, y0, x1, y1 int) int {
-	p := unsafe.Slice((*byte)(win32.Ptr(wins.bits)), dibW*dibH*4)
-	n := 0
-	for y := max(y0, 0); y < min(y1, dibH); y++ {
-		for x := max(x0, 0); x < min(x1, dibW); x++ {
-			i := (y*dibW + x) * 4
-			b, g, r := int(p[i]), int(p[i+1]), int(p[i+2])
-			if max(r, g, b)-min(r, g, b) > 60 {
-				n++
-			}
-		}
-	}
-	return n
 }

@@ -9,7 +9,6 @@ import (
 	"os"
 	"runtime"
 	"strings"
-	"syscall"
 	"time"
 	"unsafe"
 
@@ -82,13 +81,17 @@ type report struct {
 }
 
 var (
-	timeout = flag.Duration("timeout", 30*time.Second, "give up (exit 1) after this long")
+	timeout = flag.Duration("timeout", 60*time.Second, "give up (exit 1) after this long")
 	cf      charFormat2
 	pt      [2]int32 // POINTL
 )
 
 func main() {
+	flag.BoolVar(&d2dChild, "d2d-child", false, "internal: the EM_SWITCHTOD2D child process")
 	flag.Parse()
+	if d2dChild {
+		d2dChildMain()
+	}
 	time.AfterFunc(*timeout, func() {
 		fmt.Fprintf(os.Stderr, "probe-p5: timed out after %v\n", *timeout)
 		os.Exit(1)
@@ -102,6 +105,9 @@ func main() {
 		fail("msftedit.dll did not load from System32")
 	}
 	if err := makeWindows(); err != nil {
+		fail(err.Error())
+	}
+	if err := makeDIB(); err != nil {
 		fail(err.Error())
 	}
 
@@ -132,52 +138,79 @@ func posFromChar(cp int) (int, int) {
 	return int(pt[0]), int(pt[1])
 }
 
-func emoji() map[string]any {
-	res := map[string]any{}
-	setText("A\U0001F600B")
-	send(emSetSel, 0, ^uintptr(0)) // all
-	cf = charFormat2{mask: cfmSize, height: 480}
-	cf.size = uint32(unsafe.Sizeof(cf))
-	res["set_size"] = send(emSetCharFormat, scfAll, uintptr(unsafe.Pointer(&cf))) != 0
-	res["typography_accepted"] = send(emSetTypographyOpts, toAdvancedTypography, toAdvancedTypography) != 0
-	res["edit_style_ex"] = fmt.Sprintf("%#x", send(emGetEditStyleEx, 0, 0))
-	send(emSetSel, 1, 3) // the emoji: two UTF-16 units
-	cf = charFormat2{mask: cfmFace | cfmCharset}
-	cf.size = uint32(unsafe.Sizeof(cf))
-	send(emGetCharFormat, scfSelection, uintptr(unsafe.Pointer(&cf)))
-	res["face"] = syscall.UTF16ToString(cf.face[:])
-	res["charset"] = cf.charset
-	send(emSetSel, 0, 0) // no selection highlight in the read
-	pump()
-	x0, y0 := posFromChar(1)
-	x1, _ := posFromChar(3)
-	h := 40 // 24 pt is 32 px at 96 dpi, with a margin
-	res["cell"] = []int{x0, y0, x1, y0 + h}
-	if grab() {
-		res["coloured_pixels"] = colouredPixels(x0, y0, x1, y0+h)
-	} else {
-		res["coloured_pixels"] = -1
-	}
-	return res
-}
-
 func ime() map[string]any {
 	res := map[string]any{}
+	hex := func(v uintptr) string { return fmt.Sprintf("%#x", v) }
+
+	// 1. The messages alone, as the first run sent them: with no input
+	// method composing, WM_IME_STARTCOMPOSITION/COMPOSITION/ENDCOMPOSITION
+	// carry no string (the control reads it from the IME), so they change
+	// nothing; WM_IME_CHAR carries its character and inserts it.
 	setText("")
-	h := call(pImmGetContext, wins.edit)
-	res["context"] = h != 0
-	if h != 0 {
-		call(pImmReleaseContext, wins.edit, h)
-	}
-	res["start_composition_result"] = send(wmImeStartComposition, 0, 0)
-	res["text_after_start"] = text()
-	res["composition_result"] = send(wmImeComposition, 0, gcsResultStr)
-	res["text_after_composition"] = text()
-	res["end_composition_result"] = send(wmImeEndComposition, 0, 0)
+	m := map[string]any{}
+	m["start_composition_result"] = send(wmImeStartComposition, 0, 0)
+	m["composition_result"] = send(wmImeComposition, 0, gcsResultStr)
+	m["end_composition_result"] = send(wmImeEndComposition, 0, 0)
+	m["text_after_composition_messages"] = text()
 	send(wmImeChar, 0x3042, 1)
 	pump()
-	res["text_after_ime_char"] = text()
-	res["ime_char_inserted"] = strings.Contains(text(), "あ")
+	m["text_after_ime_char"] = text()
+	m["ime_char_inserted"] = strings.Contains(text(), "あ")
+	res["messages_only"] = m
+
+	// 2. Which keyboard layouts are input methods on this machine.
+	var hkls [32]uintptr
+	n := int(call(pGetKbdLayoutList, uintptr(len(hkls)), uintptr(unsafe.Pointer(&hkls[0]))))
+	var layouts []string
+	imeInstalled := false
+	for _, h := range hkls[:min(n, len(hkls))] {
+		isIME := win32.Bool(call(pImmIsIME, h))
+		imeInstalled = imeInstalled || isIME
+		layouts = append(layouts, fmt.Sprintf("%s ime=%v", hex(h), isIME))
+	}
+	res["layouts"] = layouts
+
+	// 3. A real composition through IMM: load Microsoft's Japanese IME
+	// (layout 00000411), open it on the control's context and set a
+	// composition string, then complete it (ImmSetCompositionStringW
+	// SCS_SETSTR, ImmNotifyIME NI_COMPOSITIONSTR CPS_COMPLETE). TSF input
+	// methods answer IMM through Windows' IMM-on-TSF layer. Without the
+	// Japanese language feature the layout is not an IME and this is moot.
+	before := call(pGetKeyboardLayout, 0)
+	ja := call(pLoadKeyboardLayout, uintptr(unsafe.Pointer(&utf16z("00000411")[0])), 1) // KLF_ACTIVATE
+	c := map[string]any{"hkl": hex(ja), "is_ime": ja != 0 && win32.Bool(call(pImmIsIME, ja))}
+	c["focus_is_edit"] = call(pGetFocus) == wins.edit
+	c["foreground_is_host"] = call(pGetForeground) == wins.top
+	setText("")
+	h := call(pImmGetContext, wins.edit)
+	c["context"] = h != 0
+	if h != 0 {
+		c["open_before"] = win32.Bool(call(pImmGetOpenStatus, h))
+		c["set_open"] = win32.Bool(call(pImmSetOpenStatus, h, 1))
+		comp := utf16z("あ")
+		c["set_composition"] = win32.Bool(call(pImmSetCompString, h, 9, uintptr(unsafe.Pointer(&comp[0])), 2, 0, 0)) // SCS_SETSTR
+		pump()
+		c["text_while_composing"] = text()
+		c["notify_complete"] = win32.Bool(call(pImmNotifyIME, h, 0x15, 1, 0)) // NI_COMPOSITIONSTR, CPS_COMPLETE
+		pump()
+		c["text_after_complete"] = text()
+		call(pImmSetOpenStatus, h, 0)
+		call(pImmReleaseContext, wins.edit, h)
+	}
+	c["committed"] = strings.Contains(text(), "あ")
+	res["imm_composition"] = c
+	call(pActivateKbdLayout, before, 0)
+
+	committed, _ := c["committed"].(bool)
+	switch {
+	case committed:
+		res["answer"] = "an IMM composition set on the control's context was committed into RichEdit on this runner"
+	case !imeInstalled && !c["is_ime"].(bool):
+		res["answer"] = "no input method is installed on this runner: composition cannot be driven in CI; WM_IME_CHAR inserts text; marked text and IMEs stay on the VM/hand checklist"
+	default:
+		res["answer"] = "an input method is present but the IMM composition did not reach RichEdit (see imm_composition); IMEs stay on the VM/hand checklist"
+	}
+	res["ime_installed"] = imeInstalled || c["is_ime"].(bool)
 	return res
 }
 
