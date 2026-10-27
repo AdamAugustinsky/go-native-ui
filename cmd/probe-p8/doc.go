@@ -42,8 +42,8 @@
 //	websocket       {upgrade_ms, status, text_ok, text_rtt_ms, binary_ok,
 //	                big_ok, big_bytes, big_fragments, big_ms, big, server_got_pong,
 //	                close_status, close_reason, close_err, err}; big lists
-//	                four 32 MiB round trips (sent as one message, then as
-//	                1 MiB fragments, twice) with what the server received and
+//	                the 32 MiB round trips (-ws-big-trips, 10 by default,
+//	                alternating one send and 1 MiB fragments) with what the server received and
 //	                echoed, the receive pieces and the first differing byte
 //	worked          every section ok
 //	timed_out       true when -timeout fired (exit status 3)

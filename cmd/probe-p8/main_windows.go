@@ -121,7 +121,8 @@ type report struct {
 		BigMs        float64 `json:"big_ms"`
 		// Big is every large-message round trip: sent as one
 		// WinHttpWebSocketSend ("single") or as 1 MiB BinaryFragment sends
-		// ending with a BinaryMessage ("fragmented"), twice each.
+		// ending with a BinaryMessage ("fragmented"), alternating, -ws-big-trips
+		// times.
 		Big           []bigTrip `json:"big"`
 		ServerGotPong bool      `json:"server_got_pong"`
 		CloseStatus   uint16    `json:"close_status"`
@@ -479,7 +480,7 @@ func bigRoundTrip(ws uintptr, srv *wsServer, big, buf []byte, fragmented bool) (
 	return
 }
 
-func webSocket(ses uintptr, srv *wsServer, bigMiB int) {
+func webSocket(ses uintptr, srv *wsServer, bigMiB, trips int) {
 	w := &res.WebSocket
 	fail := func(err error) {
 		mu.Lock()
@@ -556,8 +557,8 @@ func webSocket(ses uintptr, srv *wsServer, bigMiB int) {
 		big[i] = byte(i*31 + i>>16)
 	}
 	allOK := true
-	for _, frag := range []bool{false, true, false, true} {
-		b := bigRoundTrip(ws, srv, big, buf, frag)
+	for i := range trips {
+		b := bigRoundTrip(ws, srv, big, buf, i%2 == 1)
 		allOK = allOK && b.OK
 		mu.Lock()
 		w.Big = append(w.Big, b)
@@ -596,6 +597,7 @@ func main() {
 	timeout := flag.Duration("timeout", 180*time.Second, "give up after this long (exit status 3)")
 	uploadMiB := flag.Int("upload-mib", 64, "size of each streamed upload, MiB")
 	bigMiB := flag.Int("ws-big-mib", 32, "size of the large WebSocket message, MiB")
+	bigTrips := flag.Int("ws-big-trips", 10, "large-message round trips, alternating one send and 1 MiB fragments")
 	flag.Parse()
 	time.AfterFunc(*timeout, func() {
 		mu.Lock()
@@ -646,7 +648,7 @@ func main() {
 	res.StreamLines, res.StreamLinesReadData = sl, slr
 	mu.Unlock()
 	cancelUpload(ses, port)
-	webSocket(ses, srv, *bigMiB)
+	webSocket(ses, srv, *bigMiB, *bigTrips)
 
 	mu.Lock()
 	res.Worked = res.UploadKnown.OK && res.UploadChunked.OK && res.StreamLines.OK && res.Cancel.OK && res.WebSocket.OK
