@@ -231,7 +231,7 @@ func (r *Rex) Build(c *ui.Context) {
 		r.SetScale(s)
 	}
 	r.k.Begin(c) // the fonts and icons at this scale, and the mode and accent of the frame
-	r.th.Backdrop = r.backdrop
+	r.th.SetBackdrop(r.backdrop)
 	if w != r.lastW || h != r.lastH {
 		r.glide = false // a resize follows the window exactly
 		r.lastW, r.lastH = w, h

@@ -899,16 +899,13 @@ boxes are unchanged. A keyboard-visible ring is drawn on the paragraph's
 actual range rectangles, not their bounding union. Disabled, hidden, fully
 clipped, truncated-away and removed targets are withdrawn at End.
 
-Cost: one reused pointer-free 32-byte target per link on 64-bit systems,
-plus 24 bytes per rich-text record and an 8-byte known rich-focus key per
-Context (ordinary deferred field/host focus requests remain pending);
-per-frame range-rectangle visibility
-checks and a linear span-key lookup for explicit/AX/overlay focus. No extra
-layout boxes, timers, native views, maps or warm-frame allocations. Existing
-text layout caches and shared rectangle scratch are reused. Index identity
-is deliberately unchanged (reordering spans requires application care);
-automatic scroll-to-focus is not added. See `ui/richtext_focus*_test.go`
-and [the rich-text guide](docs/guide/richtext.md#keyboard-focus).
+Cost (64-bit): a reused 32-byte pointer-free target per link, 24 bytes per
+rich-text record and 8 per Context; no layout boxes, timers, native views,
+maps or warm-frame allocations. Visibility walks a span's range rectangles
+each frame; span-key lookup is linear. Identity is the span index, so
+reordering spans needs the app's care; no automatic scroll-to-focus. See
+`ui/richtext_focus*_test.go` and
+[the rich-text guide](docs/guide/richtext.md#keyboard-focus).
 
 ## D43. Variable-height lists (phase 6, 2026-10-18)
 
@@ -1175,3 +1172,19 @@ Live microphone capture was not run: access cannot be granted headlessly, so tha
 - Another user running the same bundle keeps running from the backup until it is removed.
 
 **Evidence** (`go test ./app/selfupdate`, Mac mini, macOS 27.2 26B5101f): ad-hoc test bundles of `internal/testapp` with the requirement `identifier "dev.gonativeui.selfupdatetest"` and a launcher that runs the executable directly: a good update is swapped in, reports healthy and its backup is removed; a build that hangs or exits without `Started` is rolled back and the old build reports why; tampered, unsigned, other-identifier, other-signer, older and same-version bundles and `..` or escaping-link archives are rejected, and an allowed downgrade installs; the same bundle under a name that is not a test binary's ignores the injected requirement and refuses to update; an unwritable folder, translocation, `.dev` and ad-hoc running code are reported by `Supported`; the copied executable derives the same designated requirement. `GNUI_LIVE_SELFUPDATE=1` opens a test bundle through Launch Services.
+
+## D62. Rex dark fitted to the reference's dark screenshot (2026-10-26)
+
+**Decision.** Rex's dark look is fitted to Superlogical's dark screenshot (`rex-screenshot-dark@2x.webp`, public since the testing announcement), as the light look is to the light one: the field runs from a warm plum (`#3A3238` at the top) through a quiet warm ink (`#262122`) to umber (`#27221C`), with rosier and more amber edges; the unfocused glass is `#362F32` at 50 %; the focused surface is `#2B2527`; the tab capsule, pill and labels and the terminal's text greys are warmed to match. The accent and the terminal's hues are unchanged.
+
+**Reasoning:** the dark look was designed before a dark reference existed, as a violet ink (`#2A2C3A` panes, `#17181E` gutters), and read cool and blue beside the real product, whose inks are low-saturation plum and umber (gutters `#2C2220`, panes `#332A2B` to `#222020`). ZapFast Go takes the Rex look as its only one, so the dark has to be Rex's.
+
+**Kept:** the roles' macOS-neutral dark surfaces (D39: `Pane` `#1E1E1E`) for the native components; an app that wants warm ones sets them (ZapFast's theme does). Contrast floors hold: the dimmed terminal's Dim, Blue and Purple were lifted to stay at 4.5:1 on the lighter warm glass.
+
+## D79. Rex's controls are the default; AppKit's look is the opt-in (2026-10-27)
+
+**Decision.** `rexui`'s push buttons (Default, Primary, Destructive, Plain), bordered icon buttons, toggle buttons and segmented controls are capsules at every size by default, and a toggle that is on or a chosen segment is a quiet tint of the accent (14 % in light, 24 % in dark) under the label's colour. AppKit's rounded rectangles and blocks of the accent, the shapes `tools/appkitref` measured, stay one call away: `rexui.UseAppKitControls()`. `theme.Resolved.SetBackdrop` sets the theme's Backdrop and turns it off under Reduce Transparency. The rules an app follows in Rex are a guide chapter, `docs/guide/rex.md`.
+
+**Reasoning:** ZapFast's move to Rex (Zap) set exactly these recipes in the app, and every one was a correction Adam asked for: controls that read as an older macOS beside Rex's tabs and dialogs, a toggle shouting in the accent. A framework whose components default to AppKit's look makes each app repeat that work, and the next app repeats the mistakes first. Rex is the look the framework is for (D17, D40); the measurements still hold for the colours and sizes, and `TestRecipesMatchAppKit` checks them under the opt-in.
+
+**Kept:** the toolbar's and Liquid Glass buttons' recipes, which were already capsules or AppKit's glass; the colours of every recipe.

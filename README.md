@@ -7,6 +7,7 @@ responsive input. A dual-pane file browser will prove it.
 - [ARCHITECTURE.md](ARCHITECTURE.md): the design and the evidence behind it
 - [DECISIONS.md](DECISIONS.md): decisions, dependencies, the cgo policy and open questions
 - [docs/GUIDE.md](docs/GUIDE.md): the developer guide: build a small app step by step ([examples/notes](examples/notes))
+- [docs/guide/rex.md](docs/guide/rex.md): Rex, the default look, and the rules a new app follows in it
 - [docs/measurements/](docs/measurements/): raw numbers per phase and machine
 - `probes/`: throwaway phase-0 experiments (each file header has its command)
 

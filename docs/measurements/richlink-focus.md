@@ -1,75 +1,40 @@
 # SH-016: RichText span focus (2026-10-22)
 
-Branch `p6-richlink-focus`, based on fetched `origin/main` **724afd7**.
-This closes the framework portion of ZapFast shell SH-016; it does not
-change ZapFast or claim its application-controlled phone-link order is wired.
+Branch `p6-richlink-focus` on `origin/main` **724afd7**: the framework part
+of ZapFast shell SH-016 (keyboard focus on link spans). Decision and cost:
+DECISIONS.md, "SH-016 keyboard links".
 
-## Contract and integration
+## Contract
 
-- `ui.RichLinkKey(boxKey, spanIndex)` exports the original semantic-key
-  formula unchanged. Use the full spans-slice index, **not Tag** or a link
-  ordinal. Derive from `c.KeyOf(sig.ID)` when the builder derives the box key.
-- Register those keys in the shell's existing `Env.TabStopKey` order. Its
-  keyboard handler calls `SetFocus(key)` and `SetFocusVisible(true)`; read
-  `FocusKey()` to find the current stop. Do not register unbuilt or invisible
-  links. Leave macOS keyboard-navigation-off handling with the framework.
-- Handle `RichSignal.Clicked` exactly as today. Enter/Space and AX press
-  deliver the current tag there, without opening anything. No app-specific
-  phone logic or secondary activation channel was added.
-- Keep box key and span indices stable for the same content entity. Removed
-  or fully clipped targets lose focus at End. Reordering a span at the same
-  index reuses its identity, deliberately preserving the existing AX contract.
-- `RichOpts.FocusColor` optionally overrides the span text colour for the
-  keyboard-visible ring. Geometry comes from actual line/bidi range rectangles.
+- `ui.RichLinkKey(boxKey, spanIndex)` is the existing semantic-key formula,
+  by the full spans-slice index (not Tag, not a link ordinal). Derive the box
+  key from `c.KeyOf(sig.ID)` when the builder derives it.
+- The shell registers those keys in its `Env.TabStopKey` order, focuses with
+  `SetFocus(key)` and `SetFocusVisible(true)`, and reads `FocusKey()`. Only
+  built, visible links are registered.
+- Enter/Space and AX press deliver the current tag through
+  `RichSignal.Clicked`, as a click does.
+- Box key and span indices stay stable per content entity; removed or fully
+  clipped targets lose focus at End. `RichOpts.FocusColor` overrides the
+  ring's colour.
 
-See [the guide](../guide/richtext.md#keyboard-focus) for lifecycle details.
+See [the guide](../guide/richtext.md#keyboard-focus) for the lifecycle.
 
-## Regression evidence
+## Evidence
 
-Before production edits, `TestRichLinkTabAndActivation` derived the existing
-private semantic key and failed on the baseline:
+`TestRichLinkTabAndActivation` failed on the baseline (`Tab focus 0, want
+span 237297a7c2cdcb2d`) and passes through the public key. The tests cover
+Tab order and wrapping, the macOS text-only preference, Enter/Space once,
+disabled/removed/clipped/hidden/truncated spans, AX focus, modal scope,
+per-line LTR/RTL rings, CoreText multiline layout, Metal ring pixels, and a
+real macOS window (`TestRealRichLinkFocusAndActivation`). Focused frames
+allocate **0 once warm**.
 
-```text
-Tab focus 0, want span 237297a7c2cdcb2d
-FAIL gonativeui/ui
-```
-
-The same behavior now passes through the public key API. Added tests cover:
-
-- mixed box/span build order, wrapping Tab/Shift+Tab, a non-link span between
-  link targets, the macOS text-only preference, explicit focus, claimed Tab;
-- Enter/Space exactly once, no repeat/key-up/idle-frame activation, activation
-  keys claimed against other handlers, inactive-window suppression;
-- disabled, removed, plain, clipped, flow-hidden and truncated-away spans;
-- AX focus and focused semantics, modal confinement/occlusion/restoration;
-- per-line LTR/RTL rings, no drawing change for non-visible programmatic
-  focus, no ring in inactive windows, zero warm-frame allocations;
-- CoreText Arabic/mixed-direction multiline layout, Metal ring pixels, and
-  byte-identical pixels after clearing focus;
-- a real synthetic macOS window: native Tab/Shift+Tab, Enter/Space,
-  explicit span-key focus and unchanged pointer activation.
-
-The existing rich-text pointer, cursor, AX press and selection regressions
-remain in the full `ui` run; existing disabled semantic-node expectations
-remain unchanged, while enabled link actions now include `ActFocus`.
-
-## Local validation
-
-Mac mini, Go **1.27.1**, `CGO_ENABLED=0`; build/cache/tmp outputs on SSD.
-Window tests run under `caffeinate -d` and the shared
-`opencode/perf/live.lock`, one test executable per hold, checking
-`IOConsoleLocked = No` **inside** the hold. No external application, real
-customer data or URL opening is involved.
-
-Passed: `ui`, `widget`, `widget/base`, `widget/script`, `widget/widgettest`,
+Validation (Mac mini, Go 1.27.1, `CGO_ENABLED=0`): `ui`, `widget/...`,
 `rexui`, `examples/richtext`, `examples/notes/notes`, `cmd/rexlook/rex`,
-`tools/rexcompare`; real-window `TestRealRichLinkFocusAndActivation`.
-Module-wide vet/build passed for darwin/arm64, windows/amd64,
-windows/arm64, linux/amd64 and linux/arm64 (excluding probes and vendored
-packages, as CI does); darwin `gnui_publicapi` vet and exported doccheck passed.
-
-`rexcompare` against the original reference: **40 passed, 0 failed**.
-Baseline/candidate offscreen PNGs are byte-identical:
+`tools/rexcompare` pass; vet/build for darwin, windows and linux targets.
+`rexcompare` **40/40**; unfocused captures are byte-identical to the
+baseline:
 
 | Capture | SHA-256 |
 |---|---|
@@ -77,59 +42,21 @@ Baseline/candidate offscreen PNGs are byte-identical:
 | Rex dark | `e8539c51bca8d39ef451194edd84ac064338c3fea0fc9c13a808bbeb866cf0d7` |
 | Rich-text example, unfocused | `e9ef386e2e016fdf894391ffaa198b2f4ad15d848571ea1676fbdb13eb20bce6` |
 
-Local artifacts: `/Volumes/SSD/dev-toolchains/build/richlink-focus/` (logs,
-test executables, captures including `focused-rtl.png`/`unfocused.png`). The
-reference screenshot is ignored by Git and was read from the main checkout.
+Artifacts: `/Volumes/SSD/dev-toolchains/build/richlink-focus/`.
 
-## Costs and limits
+## Deferred field focus
 
-Production adds one reused pointer-free **32-byte target per link**,
-**24 bytes per RichText record** and **8 bytes per Context** on 64-bit targets, using the existing box
-tree, traversal, overlay scope and claimed-key activation. No new layout
-boxes, native views, timers or per-frame maps. Visibility checks walk the
-span's range rectangles each End; span-key resolution is linear in built
-links. The rectangle scratch and target slice may grow when a new high-water
-mark is reached. Both synthetic and real CoreText focused-frame tests measure
-**0 allocations/frame once warm**. No new CPU/startup claim is made.
+CI **39726955876** (`1e04d5e`) failed Pilot's deferred first-open field focus
+(`TestFilterButtonAndSidebarToggle`: `filter open true, focus 0`) and
+`TestFocusRingsComeFromTheKeyboardExceptTextEntry`: the missing-target
+cleanup dropped a focus key whose field is built on the next frame.
+`TestRichLinkCleanupPreservesDeferredFieldFocus` reproduces it. The cleanup
+now applies only to a key known to be a rich span (one key of history on
+Context); other pending keys keep their old semantics. The Pilot suite, the
+live Pilot test and `TestRealRichLinkFocusAndActivation` pass; rexcompare
+stays 40/40 with the same hashes.
 
-There is no automatic scroll-to-focus, stable identity across arbitrary span
-reordering, or application-specific Tab-order policy. ZapFast integration and
-its hosted composer hand-off remain the shell agent's work. This worker did
-not delegate an independent review (recursive delegation was prohibited).
+## Limits
 
-## Deferred ordinary focus correction
-
-Initial CI **39726955876**, head `1e04d5e`, failed: the cross-compile/vet/size
-job passed, but all seven runtime jobs failed existing Pilot field-focus
-regressions; macOS also failed
-`TestFocusRingsComeFromTheKeyboardExceptTextEntry`. These were real regressions,
-not flakes. `ui`, `widget`, `rexui` and macOS widget live tests passed but did
-not exercise Pilot's deferred first-open field sequence.
-
-Local comparison confirmed `TestFilterButtonAndSidebarToggle` passes on
-`724afd7` and fails on `1e04d5e` with `filter open true, focus 0`. The added
-`TestRichLinkCleanupPreservesDeferredFieldFocus` reproduces the sequence:
-the pane is built before an opener sets its open state and focuses the field
-that will first exist on the next frame. Before correction it failed with
-`field 0, focus 0, want pending ac5bd42217b62bd8`.
-
-The correction remembers when the focus key was actually a rich span,
-before its registry is rebuilt and during current-frame focus validation.
-Missing-target cleanup is restricted to that known rich-span identity;
-ordinary pending box/field/host keys retain their pre-existing semantics.
-Disabled/hidden/clipped/removed rich-link cleanup and all its regressions are
-unchanged. This adds one pointer-free key of history to Context; it adds no
-map, target allocation, layout box or per-frame heap allocation.
-
-Evidence (outside Git, under the artifact root above): initial CI final JSON
-and failed logs, `pilot-focus-base.log`, `pilot-focus-head.log`,
-`deferred-field-fail-before.log`, and corrected validation logs. Final CI
-status for the correction is reported in the worker hand-off, not inferred
-from the initial local results.
-
-After correction: the entire `cmd/pilot/pilot` suite passes locally (the entire
-baseline suite passes too), along with the unchanged rich-link lifecycle,
-ring, zero-allocation and affected dependent tests. The exact failing live
-Pilot test and `TestRealRichLinkFocusAndActivation` pass under the shared lock
-on the unlocked Mac mini. Rexcompare remains **40/40**, and all three
-unfocused capture hashes above are unchanged.
+No scroll-to-focus, no identity across span reordering, no app Tab-order
+policy. ZapFast's wiring is the shell's.

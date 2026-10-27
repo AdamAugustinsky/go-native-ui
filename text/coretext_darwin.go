@@ -1024,8 +1024,11 @@ func (s *System) Dirty(p int) (x, y, w, h int, pixels []byte, stride int, ok boo
 // ClearDirty marks page p as uploaded.
 func (s *System) ClearDirty(p int) { s.atlas.clearDirty(p) }
 
-// Close releases every CoreText/CoreGraphics object. The System must not be
-// used afterwards.
+// Close releases every CoreText/CoreGraphics object and the CPU caches: the
+// glyph atlas pages, the run and paragraph caches and the scratch, which a
+// closed System's last holders would otherwise keep (empty caches remain, so
+// a late Pages or Dirty finds nothing). The System must not be used
+// afterwards.
 func (s *System) Close() {
 	if s.closed {
 		return
@@ -1039,7 +1042,10 @@ func (s *System) Close() {
 		s.release(f.font)
 	}
 	s.closePara()
-	s.fonts, s.faces = nil, nil
+	s.fonts, s.faces, s.faceByName = nil, nil, nil
 	s.freeBitmap(&s.gray)
 	s.freeBitmap(&s.rgba)
+	s.runs, s.atlas, s.paras, s.pl = newRunCache(), newAtlas(), newParaCache(), ctPara{}
+	s.tmp, s.name, s.gbuf, s.xbuf, s.fbuf, s.cbuf = nil, nil, nil, nil, nil, nil
+	s.pos, s.idx, s.u16b, s.san = nil, nil, nil, nil
 }

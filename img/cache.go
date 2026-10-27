@@ -155,10 +155,15 @@ func NewCache(o Options) *Cache {
 	c.results = make([]task.Result[result], 0, queue)
 	// Buffer records: every entry's pixels, and per job a source copy and
 	// its output, plus the free list.
-	c.bufs = newBufPool(n+2*(queue+cap(c.workers))+maxFreeBufs+256*o.AnimRing, 16<<20)
+	c.bufs = newBufPool(n+2*(queue+cap(c.workers))+maxFreeBufs+256*o.AnimRing, spareFor(o.CPUBytes))
 	c.bufs.wake = c.wakeApp
 	return c
 }
+
+// spareFor is how many bytes of free decode buffers a cache with CPU budget
+// cpu keeps for reuse: a quarter of the budget, at most 16 MiB. They count
+// against the budget (trimCPU).
+func spareFor(cpu int64) int64 { return min(cpu/4, 16<<20) }
 
 // wakeApp calls Options.Wake from any goroutine, and never once Close has
 // returned (a notification that was on its way when the cache closed finds
@@ -310,7 +315,7 @@ func (c *Cache) Info(h Handle) (Info, bool) {
 // Stats returns the cache's counters.
 func (c *Cache) Stats() Stats {
 	s := c.st
-	s.GPUBytes, s.CPUBytes, s.Pages = c.gpuUsed, c.cpuUsed, 0
+	s.GPUBytes, s.CPUBytes, s.SpareBytes, s.Pages = c.gpuUsed, c.cpuUsed, c.bufs.spare(), 0
 	for _, p := range c.pages {
 		if p != nil {
 			s.Pages++
@@ -431,7 +436,7 @@ func (c *Cache) finish(r *task.Result[result]) {
 	}
 	e.stage, e.buf = stCPU, out.buf
 	e.w, e.h, e.pad, e.frames, e.dlay = out.w, out.h, out.pad, out.frames, out.dlay
-	c.cpuUsed += e.cpuBytes()
+	c.cpuUsed += c.bufs.size(e.buf) // what the buffer holds, which can be more than the pixels
 	if a != nil {
 		c.startAnim(i, a)
 	}
@@ -573,7 +578,8 @@ func (c *Cache) evictGPU(i int32) {
 
 // trimCPU drops the pixels kept in memory beyond the CPU budget, least
 // recently used first: those of images already on the GPU, and images not
-// in use that only have their pixels (they go).
+// in use that only have their pixels (they go). The free buffers kept for
+// reuse get what the budget has left.
 func (c *Cache) trimCPU() {
 	for i := c.tail; i >= 0 && c.cpuUsed > c.cpuBudget; {
 		prev := c.ents[i].prev
@@ -596,11 +602,12 @@ func (c *Cache) trimCPU() {
 		}
 		i = prev
 	}
+	c.bufs.trim(c.cpuBudget-c.cpuUsed, c.fr)
 }
 
 func (c *Cache) dropPixels(i int32) {
 	e := &c.ents[i]
-	c.cpuUsed -= e.cpuBytes()
+	c.cpuUsed -= c.bufs.size(e.buf)
 	c.bufs.put(e.buf, c.fr)
 	e.buf = -1
 }
