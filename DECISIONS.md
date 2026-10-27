@@ -1181,7 +1181,7 @@ Live microphone capture was not run: access cannot be granted headlessly, so tha
 
 **Kept:** the roles' macOS-neutral dark surfaces (D39: `Pane` `#1E1E1E`) for the native components; an app that wants warm ones sets them (ZapFast's theme does). Contrast floors hold: the dimmed terminal's Dim, Blue and Purple were lifted to stay at 4.5:1 on the lighter warm glass.
 
-## D63. Rex's controls are the default; AppKit's look is the opt-in (2026-10-27)
+## D79. Rex's controls are the default; AppKit's look is the opt-in (2026-10-27)
 
 **Decision.** `rexui`'s push buttons (Default, Primary, Destructive, Plain), bordered icon buttons, toggle buttons and segmented controls are capsules at every size by default, and a toggle that is on or a chosen segment is a quiet tint of the accent (14 % in light, 24 % in dark) under the label's colour. AppKit's rounded rectangles and blocks of the accent, the shapes `tools/appkitref` measured, stay one call away: `rexui.UseAppKitControls()`. `theme.Resolved.SetBackdrop` sets the theme's Backdrop and turns it off under Reduce Transparency. The rules an app follows in Rex are a guide chapter, `docs/guide/rex.md`.
 
