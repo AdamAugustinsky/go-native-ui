@@ -173,6 +173,7 @@ func (p *panel) Build(c *ui.Context) {
 	// would square the panel's corners, so only -noglass paints its shape.
 	k.Theme().SetBackdrop(p.glass && p.a.Win != nil && p.a.Win.Backdrop() != platform.BackdropNone)
 	if !p.glass {
+		c.NextFlags(ui.DrawBackground) // a Row or Column draws no background of its own
 		c.NextBG(k.Theme().Role(theme.Window))
 		c.NextRadius(p.radius)
 	}
