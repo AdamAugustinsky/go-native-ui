@@ -601,6 +601,40 @@ func TestStageSingleGlyphCapacity(t *testing.T) {
 	}
 }
 
+// A slot's staging buffer that grew for a burst shrinks back once its
+// frames stage little for a while, and then stays put under that load.
+func TestStageShrinksAfterSustainedLowDemand(t *testing.T) {
+	r := newTestRenderer(t)
+	tex := r.NewTexture(TexRGBA8, 1024, 1024)
+	list, out := &DrawList{}, make([]byte, 4*4*4)
+	slot := r.next
+	r.Stage(tex, 0, 0, 1024, 1024, make([]byte, 1024*1024*4), 1024*4)
+	r.RenderToRGBA(4, 4, black, list, out)
+	grown := r.slots[slot].stageCap
+	if grown < 4<<20 {
+		t.Fatalf("a 4 MiB upload staged into %d bytes", grown)
+	}
+	small := make([]byte, 32*32*4)
+	frame := func() {
+		r.Stage(tex, 0, 0, 32, 32, small, 32*4)
+		r.RenderToRGBA(4, 4, black, list, out)
+	}
+	for range ringSlots * (stageCalmFrames + 2) {
+		frame()
+	}
+	shrunk := r.slots[slot].stageCap
+	if shrunk != stageFloor {
+		t.Fatalf("after %d calm frames the slot keeps %d bytes (it grew to %d), want %d", stageCalmFrames, shrunk, grown, stageFloor)
+	}
+	buf := r.slots[slot].stage
+	for range ringSlots * (stageCalmFrames + 2) {
+		frame()
+	}
+	if r.slots[slot].stage != buf {
+		t.Error("a steady small load replaced the shrunk staging buffer")
+	}
+}
+
 func TestStageBurstReusesCapacity(t *testing.T) {
 	r := newTestRenderer(t)
 	tex := r.NewTexture(TexR8, 64, 32)
@@ -632,5 +666,48 @@ func TestStageBurstReusesCapacity(t *testing.T) {
 		if r.slots[i].stage != buffers[i] {
 			t.Errorf("warm burst replaced slot %d's Metal buffer", i)
 		}
+	}
+}
+
+// A texture freed while a committed frame may still sample it goes once
+// that frame has finished, with no other frame: Collect (the safe point)
+// arranges one completion wake, and no more once nothing waits.
+func TestAFreedTextureGoesWithoutAnotherFrame(t *testing.T) {
+	r := newTestRenderer(t)
+	tex := texel(r, 0, 200, 0, 255)
+	// Hold the GPU: a command buffer that waits for an event the test signals.
+	ev := objc.Send(r.device, objc.Sel("newSharedEvent"))
+	defer objc.Release(ev)
+	F := objc.F
+	pool := F.Call0(objc.PoolPush)
+	gate := objc.Send(r.queue, rsCommandBuf)
+	objc.Send2(gate, objc.Sel("encodeWaitForEvent:value:"), uintptr(ev), 1)
+	objc.Send(gate, rsCommit)
+	F.Call1(objc.PoolPop, pool)
+	cb := encodeFrame(r, 4, 4, &DrawList{Quads: []Quad{rgbaQuad(0, tex)}})
+	objc.Send(cb, rsCommit)
+	objc.Release(cb)
+
+	r.FreeTexture(tex)
+	before := wakeCompletions.Load()
+	r.Collect()
+	if _, retiring := r.TextureCounts(); retiring != 1 || r.waker == 0 {
+		t.Fatalf("while its frame runs: %d retiring, waker %v; want 1 and a wake arranged", retiring, r.waker != 0)
+	}
+	r.Collect() // the safe point runs again before the GPU finishes: one wake is enough
+	objc.Send1(ev, objc.Sel("setSignaledValue:"), 1)
+	for deadline := time.Now().Add(5 * time.Second); wakeCompletions.Load() == before; {
+		if time.Now().After(deadline) {
+			t.Fatal("the frame finished but no completion woke the dispatcher")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	r.Collect() // the turn the completion gave the dispatcher
+	if _, retiring := r.TextureCounts(); retiring != 0 || r.waker != 0 {
+		t.Fatalf("after the frame finished: %d retiring, waker %v; want none", retiring, r.waker != 0)
+	}
+	time.Sleep(20 * time.Millisecond)
+	if n := wakeCompletions.Load() - before; n != 1 {
+		t.Errorf("%d completion wakes for one freed texture, want 1", n)
 	}
 }

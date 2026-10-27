@@ -676,3 +676,31 @@ func TestToolbarRexGlassItems(t *testing.T) {
 		}
 	}
 }
+
+// A header toolbar is a pane's title row: its items lie in its rectangle,
+// and a press on it does not move the window.
+func TestToolbarHeaderInAPane(t *testing.T) {
+	g := openRig(t, theme.Light, nil, func(*rig) {})
+	ic := addChromeIcons(g)
+	hd := [4]float32{300, 200, 900, 280}
+	g.build = func(g *rig) {
+		tb := rexui.BeginToolbar(g.k, "Header", rexui.ToolbarOpts{Style: theme.ToolbarRex, Title: "Pane", Header: hd})
+		tb.Title()
+		tb.Flexible()
+		tb.Item(ic.share, "Share")
+		tb.End()
+	}
+	g.settle()
+	b := g.node(ui.RoleButton, "Share").Bounds
+	if b[0] < hd[0] || b[2] > hd[2] || b[1] < hd[1] || b[3] > hd[3] {
+		t.Errorf("the item at %v is outside the header %v", b, hd)
+	}
+	if hd[2]-b[2] > 2*g.scale*8 {
+		t.Errorf("the item at %v does not end the row %v", b, hd)
+	}
+	for _, r := range g.c.DragRegions(nil) {
+		if !r.Block && r.Rect[0] < hd[2] && r.Rect[2] > hd[0] && r.Rect[1] < hd[3] && r.Rect[3] > hd[1] {
+			t.Errorf("the header moves the window: %v", r.Rect)
+		}
+	}
+}

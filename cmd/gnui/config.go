@@ -22,6 +22,17 @@ type Config struct {
 	ID string `json:"id"`
 	// Name is the application's name: CFBundleName, the .app's file name.
 	Name string `json:"name"`
+	// DisplayName, when set, is the name the system shows in Name's place
+	// (CFBundleName and CFBundleDisplayName: the menu bar, the About panel,
+	// permission prompts), while the files keep Name: a renamed app whose
+	// .app, update archive and disk image keep the names installed copies
+	// and package managers look for.
+	DisplayName string `json:"displayName"`
+	// BundleName, when set, is the .app's file name in Name's place (the
+	// Dock's tooltip, Finder and app switchers show it), while the update
+	// archive and the disk image keep Name: installed copies' updaters look
+	// for those, and accept any .app inside.
+	BundleName string `json:"bundleName"`
 	// Main is the Go package to build, relative to gnui.json (default ".").
 	Main string `json:"main"`
 	// Executable is the file name under Contents/MacOS (default: Name without spaces).
@@ -244,6 +255,9 @@ func (c *Config) Validate() error {
 	if badName(c.Name) {
 		return fmt.Errorf("name %q must be a plain file name (no slash or colon, not starting with a dot)", c.Name)
 	}
+	if c.BundleName != "" && badName(c.BundleName) {
+		return fmt.Errorf("bundleName %q must be a plain file name (no slash or colon, not starting with a dot)", c.BundleName)
+	}
 	if badName(c.Executable) {
 		return fmt.Errorf("executable %q must be a plain file name", c.Executable)
 	}
@@ -392,4 +406,20 @@ func sortedKeys[V any](m map[string]V) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+// AppFile is the .app's file name: BundleName, or Name, with ".app".
+func (c *Config) AppFile() string {
+	if c.BundleName != "" {
+		return c.BundleName + ".app"
+	}
+	return c.Name + ".app"
+}
+
+// ShownName is the name the system shows: DisplayName, or Name.
+func (c *Config) ShownName() string {
+	if c.DisplayName != "" {
+		return c.DisplayName
+	}
+	return c.Name
 }

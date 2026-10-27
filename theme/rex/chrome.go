@@ -57,7 +57,8 @@ func (ch *chrome) Background(c *ui.Context, r *theme.Resolved) {
 	if r.Backdrop {
 		w, h := c.Size()
 		theme.At(c, 0, 0, float32(w), float32(h))
-		c.NextBG(tone(r, scrimLight, scrimDark, scrimAlphaLight, scrimAlphaDark, 1))
+		sc := ch.fld.colors().scrim
+		c.NextBG(tone(r, sc[0], sc[1], scrimAlphaLight, scrimAlphaDark, 1))
 		c.BoxKeyed(ui.DrawBackground|fl, ui.KeyN(keyBG, 1<<20), nil)
 		return
 	}

@@ -101,6 +101,10 @@ func (p *bufPool) get(n int, fr *cframe) int32 {
 	return i
 }
 
+// size is buffer i's capacity: what it holds in memory, which can be up to
+// twice what was asked for (get). Its owner reads it without the lock.
+func (p *bufPool) size(i int32) int64 { return int64(p.bufs[i].size) }
+
 // bytes is buffer i's memory, n bytes long.
 func (p *bufPool) bytes(i int32, n int) []byte {
 	return unsafe.Slice((*byte)(p.bufs[i].mem), n)
@@ -114,7 +118,18 @@ func (p *bufPool) put(i int32, fr *cframe) {
 	p.inUse -= int64(b.size)
 	p.free = append(p.free, i)
 	p.freeBytes += int64(b.size)
-	for len(p.free) > 0 && (p.freeBytes > p.maxFree || len(p.free) > maxFreeBufs) {
+	p.release(p.maxFree, fr)
+	p.mu.Unlock()
+	p.puts.Add(1)
+	if p.waiters.Load() > 0 && p.wake != nil {
+		p.wake()
+	}
+}
+
+// release frees free buffers, largest first, until they hold at most limit
+// bytes and there are at most maxFreeBufs of them. The lock is held.
+func (p *bufPool) release(limit int64, fr *cframe) {
+	for len(p.free) > 0 && (p.freeBytes > limit || len(p.free) > maxFreeBufs) {
 		big := 0
 		for k, j := range p.free {
 			if p.bufs[j].size > p.bufs[p.free[big]].size {
@@ -130,11 +145,22 @@ func (p *bufPool) put(i int32, fr *cframe) {
 		*d = pixbuf{}
 		p.unused = append(p.unused, j)
 	}
+}
+
+// trim frees free buffers, largest first, until they hold at most limit
+// bytes (and never more than the pool's own limit).
+func (p *bufPool) trim(limit int64, fr *cframe) {
+	p.mu.Lock()
+	p.release(min(max(limit, 0), p.maxFree), fr)
 	p.mu.Unlock()
-	p.puts.Add(1)
-	if p.waiters.Load() > 0 && p.wake != nil {
-		p.wake()
-	}
+}
+
+// spare is the bytes the free buffers hold.
+func (p *bufPool) spare() int64 {
+	p.mu.Lock()
+	n := p.freeBytes
+	p.mu.Unlock()
+	return n
 }
 
 // held is the number of buffers that hold memory (C memory on macOS),

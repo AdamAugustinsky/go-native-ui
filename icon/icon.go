@@ -176,8 +176,6 @@ type Atlas struct {
 	tex          gpu.TextureID
 	texW, texH   int // the size of tex
 	up           ui.Uploader
-	stager       stager
-	freer        freer
 }
 
 // New returns an Atlas of the standard icons followed by extra; Raster
@@ -429,8 +427,6 @@ func (a *Atlas) Attach(u ui.Uploader) {
 		return
 	}
 	a.up, a.tex = u, 0
-	a.stager, _ = u.(stager)
-	a.freer, _ = u.(freer)
 	a.retired = a.retired[:0] // the old renderer's
 	a.dirty = [4]int{0, 0, a.w, a.h}
 	a.upload()
@@ -454,8 +450,8 @@ func (a *Atlas) upload() {
 		return
 	}
 	pix := a.pix[d[1]*a.w+d[0]:]
-	if a.stager != nil && !fresh {
-		a.stager.Stage(a.tex, d[0], d[1], d[2]-d[0], d[3]-d[1], pix, a.w)
+	if st, ok := a.up.(stager); ok && !fresh {
+		st.Stage(a.tex, d[0], d[1], d[2]-d[0], d[3]-d[1], pix, a.w)
 	} else {
 		a.up.Upload(a.tex, d[0], d[1], d[2]-d[0], d[3]-d[1], pix, a.w)
 	}
@@ -465,20 +461,21 @@ func (a *Atlas) upload() {
 // retire keeps texture t, which boxes of the frame being built may name, until
 // the next frame (reap); at once if the uploader cannot free textures.
 func (a *Atlas) retire(t gpu.TextureID) {
-	if a.freer != nil {
+	if _, ok := a.up.(freer); ok {
 		a.retired = append(a.retired, retiredTex{t, a.frame})
 	}
 }
 
 // reap frees the retired textures of frames before the current one.
 func (a *Atlas) reap() {
+	f := a.up.(freer)
 	k := 0
 	for _, r := range a.retired {
 		if r.frame == a.frame {
 			a.retired[k] = r
 			k++
 		} else {
-			a.freer.FreeTexture(r.tex)
+			f.FreeTexture(r.tex)
 		}
 	}
 	a.retired = a.retired[:k]

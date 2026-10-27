@@ -8,12 +8,14 @@ import (
 	"runtime"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"unsafe"
 
 	"github.com/ebitengine/purego"
 
 	"gonativeui/internal/ffi"
 	"gonativeui/internal/objc"
+	"gonativeui/platform"
 )
 
 // TextureKind is the pixel format of a renderer texture.
@@ -33,6 +35,14 @@ const ringSlots = 3
 
 // initialQuads is the starting instance capacity of every ring slot.
 const initialQuads = 4096
+
+// stageFloor is the smallest staging buffer: glyph updates are small.
+const stageFloor = 64 << 10
+
+// stageCalmFrames is how many frames in a row a slot must stage at most a
+// quarter of its staging buffer before the buffer shrinks (each slot has
+// every third frame: about three seconds at 60 Hz).
+const stageCalmFrames = 60
 
 // runTextures matches quadMSL's table at texture slots 3..10. Slots 0..2
 // remain the backdrop/YUV bindings, whose runs cannot share conversions.
@@ -143,6 +153,11 @@ type ringSlot struct {
 	stageLen int
 	copies   []stagedCopy
 	ucb      objc.ID
+	// The staging buffer's recent demand (noteStage): the most a frame of
+	// the slot staged while every one staged at most a quarter of the
+	// buffer, for calm frames in a row; shrink, when not 0, is the size it
+	// goes down to once its upload has completed (retire).
+	stagePeak, stageCalm, stageShrink int
 
 	// The pixel-buffer imports its frame drew (external_darwin.go), released
 	// once its command buffer has completed or is known never to run.
@@ -183,6 +198,7 @@ type Renderer struct {
 	xtex              []xtex        // by index: a YUV texture's planes (external_darwin.go)
 	ext               extKit        // pixel-buffer imports
 	retiring          []retiredTex
+	waker             objc.ID // an empty command buffer whose completion gives the dispatcher a turn (Collect), 0 for none
 	empty             objc.ID // 1×1 transparent texture bound for a freed id
 	draws, totalDraws int
 	offscreen         objc.ID
@@ -366,6 +382,10 @@ func (r *Renderer) collect() {
 			pending = min(pending, s.serial)
 		}
 	}
+	if r.waker != 0 && objc.Send(r.waker, rsStatus) >= 4 {
+		objc.Release(r.waker)
+		r.waker = 0
+	}
 	n := 0
 	for _, x := range r.retiring {
 		if x.serial < pending {
@@ -377,6 +397,66 @@ func (r *Renderer) collect() {
 	}
 	clear(r.retiring[n:])
 	r.retiring = r.retiring[:n]
+}
+
+// Collect releases, without waiting, what finished frames held: the leases
+// of their pixel-buffer imports and the textures freed while they might
+// sample them. The app's safe point calls it. While freed textures wait for
+// frames committed to the GPU, it arranges one wake for when those have
+// finished: an empty command buffer, which the queue completes after them,
+// whose completion handler gives the dispatcher a turn (and so this safe
+// point), so they go even if no other frame follows. Frames not committed
+// yet keep theirs until Encode reuses their slot. Nothing polls or redraws.
+func (r *Renderer) Collect() {
+	if r.ext.leased == 0 && len(r.retiring) == 0 && r.waker == 0 {
+		return
+	}
+	r.collect()
+	if len(r.retiring) > 0 && r.waker == 0 && r.committedInFlight() {
+		r.armWake()
+	}
+}
+
+// committedInFlight reports whether a ring slot's frame or staged upload is
+// committed to the GPU and has not completed.
+func (r *Renderer) committedInFlight() bool {
+	for i := range r.slots {
+		for _, cb := range [2]objc.ID{r.slots[i].cb, r.slots[i].ucb} {
+			if cb != 0 {
+				if st := objc.Send(cb, rsStatus); st >= 2 && st < 4 { // Committed, Scheduled
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+var (
+	// wakeBlock is the completion handler of Renderer.waker:
+	// void (^)(id<MTLCommandBuffer>). It only gives the dispatcher a turn.
+	wakeBlock     objc.ID
+	wakeBlockOnce sync.Once
+	// wakeCompletions counts the handler's calls (tests).
+	wakeCompletions atomic.Int64
+)
+
+// armWake commits an empty command buffer whose completion, after every
+// command buffer committed before it, wakes the dispatcher.
+func (r *Renderer) armWake() {
+	wakeBlockOnce.Do(func() {
+		wakeBlock = objc.NewGlobalBlock("v16@?0@8", func(*ffi.CB) {
+			wakeCompletions.Add(1)
+			platform.SignalDispatch() // the safe point collects (Collect); no window redraws for it
+		})
+	})
+	F := objc.F
+	pool := F.Call0(objc.PoolPush)
+	cb := objc.Retain(objc.Send(r.queue, rsCommandBuf))
+	objc.Send1(cb, rsAddCompleted, uintptr(wakeBlock))
+	objc.Send(cb, rsCommit)
+	F.Call1(objc.PoolPop, pool)
+	r.waker = cb
 }
 
 // argRegion appends an MTLRegion (origin x, y, 0; size w, h, 1) by value.
@@ -473,7 +553,33 @@ func (r *Renderer) stage(t TextureID, plane uint8, x, y, w, h int, pixels []byte
 // growStage gives slot s a staging buffer of at least n bytes, keeping what
 // is staged in it. The slot is retired: no GPU work reads the old one.
 func (r *Renderer) growStage(s *ringSlot, n int) {
-	size := max(n, 2*s.stageCap, 64<<10)                       // glyph updates are small; large uploads still grow directly
+	r.newStage(s, max(n, 2*s.stageCap, stageFloor)) // glyph updates are small; large uploads still grow directly
+	s.stagePeak, s.stageCalm, s.stageShrink = 0, 0, 0
+}
+
+// noteStage records the bytes slot s stages for the frame being encoded.
+// After stageCalmFrames frames of the slot that each staged at most a
+// quarter of its buffer, the buffer is marked to shrink to twice the most
+// they staged (stageFloor at least): demand would have to double to grow it
+// again, so a steady load does not churn it.
+func (r *Renderer) noteStage(s *ringSlot) {
+	if s.stageCap <= stageFloor || s.stageShrink > 0 {
+		return
+	}
+	if s.stageLen*4 > s.stageCap {
+		s.stagePeak, s.stageCalm = 0, 0
+		return
+	}
+	s.stagePeak = max(s.stagePeak, s.stageLen)
+	if s.stageCalm++; s.stageCalm >= stageCalmFrames {
+		s.stageShrink = max(stageFloor, (2*s.stagePeak+stageFloor-1)/stageFloor*stageFloor)
+		s.stagePeak, s.stageCalm = 0, 0
+	}
+}
+
+// newStage replaces slot s's staging buffer with one of size bytes, keeping
+// what is staged in it (which must fit). No GPU work may read the old one.
+func (r *Renderer) newStage(s *ringSlot, size int) {
 	buf := objc.Send2(r.device, rsNewBuffer, uintptr(size), 0) // MTLResourceStorageModeShared
 	if buf == 0 {
 		panic("gpu: staging buffer allocation failed")
@@ -601,6 +707,12 @@ func (r *Renderer) retire(s *ringSlot) {
 		s.cb = 0
 	}
 	r.releaseLeases(s)
+	if s.stageShrink > 0 && s.stageLen == 0 { // its upload is done and nothing is staged
+		if s.stageShrink < s.stageCap {
+			r.newStage(s, s.stageShrink)
+		}
+		s.stageShrink = 0
+	}
 }
 
 // Encode records one render pass into cmdBuf: it clears target (an
@@ -635,6 +747,7 @@ func (r *Renderer) Encode(cmdBuf, target uintptr, width, height int, clear [4]fl
 	if len(r.retiring) > 0 {
 		r.collect()
 	}
+	r.noteStage(s)
 	r.flushStaged(s)
 	var quads []Quad
 	extra := 0 // room after them for the backdrops' fills (Backdrop.Base)
@@ -854,6 +967,11 @@ func (r *Renderer) Destroy() {
 			s.stage, s.stageMem, s.stageCap, s.stageLen = 0, nil, 0, 0
 		}
 		s.copies = nil
+	}
+	if r.waker != 0 {
+		objc.Send(r.waker, rsWait)
+		objc.Release(r.waker)
+		r.waker = 0
 	}
 	r.destroyExternal()
 	for _, t := range r.textures {
