@@ -58,6 +58,7 @@ const (
 	RowIteratorFree
 	RowIteratorNext
 	RowGetMulti
+	RenderRowGet
 	RowCellsNew
 	RowCellsFree
 	RowCellsSelect
@@ -134,6 +135,7 @@ var Names = [NumFuncs]string{
 	RowIteratorFree:                "ghostty_render_state_row_iterator_free",
 	RowIteratorNext:                "ghostty_render_state_row_iterator_next",
 	RowGetMulti:                    "ghostty_render_state_row_get_multi",
+	RenderRowGet:                   "ghostty_render_state_row_get",
 	RowCellsNew:                    "ghostty_render_state_row_cells_new",
 	RowCellsFree:                   "ghostty_render_state_row_cells_free",
 	RowCellsSelect:                 "ghostty_render_state_row_cells_select",

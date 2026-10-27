@@ -1,0 +1,1 @@
+{"cols":80,"rows":24,"cmd":"git log --graph --oneline --decorate --color=always -n 60 | cat","recorded":"2026-10-27","host":"Mac mini, macOS","notes":"Plain scrolling output through the pty (no pager), 60 commits of this repo, ANSI 16-colour SGR graph. Exercises scrolling on the main screen."}
