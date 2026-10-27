@@ -406,7 +406,7 @@ func specOf(m *menu.Model) platform.MenuSpec {
 				}
 				title := cmd.Title
 				if title == "" {
-					title = roleTitle(cmd.Role)
+					title = menu.RoleTitle(cmd.Role)
 				}
 				if title == "" {
 					continue
@@ -420,17 +420,4 @@ func specOf(m *menu.Model) platform.MenuSpec {
 		spec.Menus = append(spec.Menus, platform.Menu{Title: mm.Title, Items: items})
 	}
 	return spec
-}
-
-// roleTitle is the title of a command that has a role and no title of its own.
-func roleTitle(r menu.Role) string {
-	switch r {
-	case menu.RoleAbout:
-		return "About"
-	case menu.RoleQuit:
-		return "Quit"
-	case menu.RoleSettings:
-		return "Settings…"
-	}
-	return ""
 }

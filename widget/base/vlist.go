@@ -62,6 +62,14 @@ type VListOpts struct {
 	// legacy scroll bar drawn over its outer box (Kit.VListBarRoom); 0
 	// leaves none.
 	BarRoom float32
+	// ContentW, when positive, is the width in pixels of content wider than
+	// the list (a file's longest line): the list then scrolls sideways too,
+	// all its items by one offset. Every item is at least ContentW wide, and
+	// the body scrolls on both axes, so a wheel's notches still scroll it up
+	// and down, and Shift with them, or a trackpad's sideways deltas, scroll
+	// it sideways. A styled list builds its horizontal bar from Body as its
+	// vertical one (base.ScrollBoth).
+	ContentW float32
 }
 
 // VList is an open variable-height list (BeginVList). Build the items First to
@@ -89,6 +97,7 @@ type VList struct {
 	key    ui.Key // the parent of the item keys
 	next   int
 	open   bool
+	minW   float32 // VListOpts.ContentW: the items' least width, in pixels
 	anchor int     // the anchor's index: the first item of the flow
 	bottom bool    // every item is in the pile, which ends at the view's bottom
 	short  bool    // bottom, and the list is shorter than the view (BottomAlign)
@@ -253,7 +262,7 @@ func BeginVList(c *ui.Context, label string, st *VListState, o VListOpts) VList 
 	st.stuck = o.StickToBottom && y >= maxY-0.5/sc
 	st.atEnd = y >= maxY-0.5/sc
 
-	v := VList{Len: n, Focused: focused, AtEnd: st.atEnd, c: c, st: st, okey: okey, key: ikey}
+	v := VList{Len: n, Focused: focused, AtEnd: st.atEnd, c: c, st: st, okey: okey, key: ikey, minW: max(o.ContentW, 0)}
 	if n > 0 {
 		a, top := f.find(y, est)
 		st.anchorID, st.offset = f.id(a), y-top
@@ -311,7 +320,11 @@ func BeginVList(c *ui.Context, label string, st *VListState, o VListOpts) VList 
 	c.NextPadding(0, 0, 0, 0)
 	c.NextRole(ui.RoleList)
 	c.NextSemName(label)
-	v.Body = c.BoxKeyed(ui.ScrollY|ui.Focusable|ui.FocusList, bkey, nil)
+	bf := ui.ScrollY | ui.Focusable | ui.FocusList
+	if v.minW > 0 {
+		bf |= ui.ScrollX // the items, as wide as the content, overflow it
+	}
+	v.Body = c.BoxKeyed(bf, bkey, nil)
 
 	// The body scrolls over a content of the estimated total, declared as
 	// 1/256-pixel virtual rows (ui.Context.ListRange) so that the first item
@@ -333,17 +346,17 @@ func BeginVList(c *ui.Context, label string, st *VListState, o VListOpts) VList 
 	switch {
 	case v.short:
 		s = 0
-		vlSetScroll(c, v.Body, s, explicit)
+		vlSetScroll(c, v.Body, s, explicit, v.minW > 0)
 	case v.bottom:
 		l = rows
 		s = content
-		vlSetScroll(c, v.Body, s, explicit)
+		vlSetScroll(c, v.Body, s, explicit, v.minW > 0)
 	default:
 		yPx, offPx := y*sc, st.offset*sc
 		// An explicit move always sets the offset, even one the view is at
 		// or while something animates: it lets go of a stretch.
 		if explicit || !have || (math.Abs(s-yPx) > 0.25 && !c.Animating()) || s-offPx < -1e-9 || s > max(content-view*sc, 0)+1e-9 {
-			vlSetScroll(c, v.Body, yPx, explicit)
+			vlSetScroll(c, v.Body, yPx, explicit, v.minW > 0)
 			s = yPx
 		}
 		l = int(math.Round((s - offPx) * 256))
@@ -375,10 +388,18 @@ func BeginVList(c *ui.Context, label string, st *VListState, o VListOpts) VList 
 // vlSetScroll sets the body's offset: as a jump (letting go of a trackpad's
 // stretch) when the keyboard or a ScrollTo moved the view, else as the same
 // place restated from the anchor, which keeps the stretch.
-func vlSetScroll(c *ui.Context, body ui.ID, y float64, explicit bool) {
-	if explicit {
+//
+// A list that scrolls sideways (VListOpts.ContentW) keeps its sideways
+// offset, its target and its stretch: only the vertical axis is set.
+func vlSetScroll(c *ui.Context, body ui.ID, y float64, explicit, sideways bool) {
+	switch {
+	case sideways && explicit:
+		c.SetScrollY(body, y)
+	case sideways:
+		c.AnchorScrollY(body, y)
+	case explicit:
 		c.SetScroll(body, 0, y)
-	} else {
+	default:
 		c.AnchorScroll(body, 0, y)
 	}
 }
@@ -544,6 +565,7 @@ func (v *VList) Item(i int) uint64 {
 	}
 	id := st.f.id(i)
 	c.NextSize(ui.Pct(1), ui.Children(1))
+	v.wide()
 	c.NextRole(ui.RoleListItem)
 	c.NextSemPos(i, v.Len)
 	b := c.BoxKeyed(0, ui.KeyN(v.key, id), nil)
@@ -570,6 +592,7 @@ func (v *VList) openPile() {
 	c := v.c
 	if v.short {
 		c.NextSize(ui.Pct(1), ui.Pct(1))
+		v.wide()
 		c.NextAxis(ui.AxisY)
 		c.NextGap(0)
 		c.NextPadding(0, 0, 0, 0)
@@ -583,9 +606,15 @@ func (v *VList) openPile() {
 		// body as the flow is: it ends where the anchor is shown.
 		_, stretch := c.ScrollStretch(v.Body)
 		c.NextPos(0, v.pileY-float32(stretch))
-		fl |= ui.FloatingX | ui.FloatingY
+		// A list that scrolls sideways keeps it in the flow across, where
+		// the sideways offset moves it with the items.
+		fl |= ui.FloatingY
+		if v.minW == 0 {
+			fl |= ui.FloatingX
+		}
 	}
 	c.NextSize(ui.Pct(1), ui.Px(0))
+	v.wide()
 	c.NextAxis(ui.AxisY)
 	c.NextGap(0)
 	c.NextPadding(0, 0, 0, 0)
@@ -593,6 +622,14 @@ func (v *VList) openPile() {
 	c.SetScroll(p, 0, vlPileScroll)
 	c.Push(p)
 	v.inPile = true
+}
+
+// wide gives the next box (an item, the pile) the content's width at least
+// (VListOpts.ContentW).
+func (v *VList) wide() {
+	if v.minW > 0 {
+		v.c.NextMinSize(v.minW, 0)
+	}
 }
 
 // closePile closes the pile.

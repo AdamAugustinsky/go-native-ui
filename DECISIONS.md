@@ -922,6 +922,8 @@ reordering spans needs the app's care; no automatic scroll-to-focus. See
 
 **Constraints:** 0 allocations, edits included within `Reserve`; under 4 ms of CPU per frame scrolling 1M mixed-height items.
 
+**Sideways (2026-10-27):** a list of rows wider than itself (a file or a diff as `rexui.CodeLine` rows) scrolls sideways as one: `VListOpts.ContentW` makes every item at least that wide and the body scroll on both axes, so ui's own wheel, trackpad, rubber band and bars move all rows by one offset, and a wheel's notches over it still scroll it vertically (the sideways-only rule of `scrollPlain` does not apply to a box that scrolls on Y). The pile above the anchor floats on Y only, so the offset moves it with the flow; restating the anchor sets Y alone (`ui.Context.SetScrollY`, `AnchorScrollY`). `rexui.CodeWidth(k, rexui.CodeColumns(src), opts)` is the width of a file's longest line. Rejected: a shared offset applied row by row (each row a sideways-only box would turn the wheel sideways), and a horizontal scroll view around the list (its vertical bar would scroll away).
+
 ## D44. Images (phase 6, 2026-10-18)
 
 **Decision.**

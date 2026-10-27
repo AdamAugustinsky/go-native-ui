@@ -161,6 +161,14 @@ builds the rows between `l.First` and `l.Last`:
 	rexui.EndList(k, &l)
 ```
 
+A file or a diff of thousands of lines is a `base.VList` of `rexui.CodeLine`
+rows. `VListOpts.ContentW = rexui.CodeWidth(k, rexui.CodeColumns(src), opts)`
+(once per file) makes every row as wide as the longest line, so the bands
+span it, and the list scroll sideways to its end, all rows by one offset: a
+wheel still scrolls it up and down, Shift with the wheel or a trackpad
+sideways. Its horizontal bar comes from `Body` as the vertical one does
+(`base.ScrollBoth`).
+
 ## 6. System menus
 
 On macOS a `Select`, a `MenuButton` and a context menu open the **system's**
@@ -199,8 +207,12 @@ sent message, the scroll bars) are a `rexui.Strings`, English by default.
 `rexui.SetStrings(rexui.StringsPtBR)`, before the first frame, switches them
 to Brazilian Portuguese; another language is a `Strings` of the app's own,
 whose empty fields stay English. They are read as they are each frame, at no
-cost; a label or name the app passes always wins. An app on `widget` alone
-sets the primitives' names with `base.SetStrings`.
+cost; a label or name the app passes always wins. `Strings.Menu` titles the
+standard commands and menus a command with a role and no title of its own
+gets ("Copiar", "Encerrar %s", "Editar", "Janela"), in drawn menus, the tray
+and the native menu bar, which takes them when it is next built. An app on
+`widget` alone sets the primitives' names with `base.SetStrings` and the
+menus' with `menu.SetStrings`.
 
 Rex is the default. `rexui.UseAppKitControls()`, called once before the first
 frame, gives the push, icon and toggle buttons and the segmented controls

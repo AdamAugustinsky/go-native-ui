@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"gonativeui/menu"
+	"gonativeui/rexui"
 	"gonativeui/ui"
 )
 
@@ -383,5 +384,30 @@ func TestNativeMenusAreRequested(t *testing.T) {
 	g.frames(2)
 	if !slices.Equal(v.cmds, []menu.ID{4}) {
 		t.Fatalf("the native menu's command delivered %v", v.cmds)
+	}
+}
+
+// A command with a role and no title of its own takes the title of the
+// menu.Strings in use: in Brazilian Portuguese the drawn menu reads Copiar.
+func TestDrawnMenuRoleTitleFollowsTheStrings(t *testing.T) {
+	menu.SetStrings(rexui.StringsPtBR.Menu)
+	t.Cleanup(func() { menu.SetStrings(menu.StringsEnglish) })
+	m, err := menu.NewModel(
+		[]menu.Command{{ID: 1, Role: menu.RoleCopy, Shortcut: menu.Shortcut{Key: 'C', Primary: true}}, {ID: 2, Role: menu.RoleSelectAll}},
+		[]menu.Menu{{Title: "Editar", Items: []menu.Item{{Kind: menu.ItemCommand, Command: 1}, {Kind: menu.ItemCommand, Command: 2}}}},
+		[]int{0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := &shell{}
+	g := newRig(t, 600, 500, v.build)
+	v.m = m
+	g.k.SetMenu(m)
+	g.frames(3)
+	g.clickOn(ui.RoleMenuItem, "Editar")
+	g.must(ui.RoleMenuItem, "Copiar")
+	g.must(ui.RoleMenuItem, "Selecionar Tudo")
+	if _, ok := g.find(ui.RoleMenuItem, "Copy"); ok {
+		t.Error("the drawn menu still reads Copy")
 	}
 }
