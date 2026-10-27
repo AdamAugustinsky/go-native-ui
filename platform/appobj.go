@@ -516,7 +516,13 @@ func NewRing(src Source, n, budget int) *Ring {
 // when the ring is full. Any goroutine. Accepted data allocates the first
 // time a record holds that much; the records keep their buffers between uses
 // up to the ring's byte budget in all, so a steady flow does not allocate.
-func (r *Ring) Offer(a, b int64, data []byte) bool {
+func (r *Ring) Offer(a, b int64, data []byte) bool { return r.offer(0, false, a, b, data) }
+
+// OfferID is Offer with the event's ID set to id instead of a sequence
+// number: a producer whose events name their object (a view) in the ID.
+func (r *Ring) OfferID(id uint64, a, b int64, data []byte) bool { return r.offer(id, true, a, b, data) }
+
+func (r *Ring) offer(id uint64, withID bool, a, b int64, data []byte) bool {
 	t := r.t
 	if !enterGate() {
 		t.refused.Add(1)
@@ -545,7 +551,10 @@ func (r *Ring) Offer(a, b int64, data []byte) bool {
 	rec.word.Store(uint64(gen)<<32 | stWriting)
 	rec.cost = n
 	t.accepted.Add(1)
-	t.fill(i, gen, AppEvent{Kind: AppEvService, Source: t.source, ID: t.fifo.Add(1), A: a, B: b}, data)
+	if !withID {
+		id = t.fifo.Add(1)
+	}
+	t.fill(i, gen, AppEvent{Kind: AppEvService, Source: t.source, ID: id, A: a, B: b}, data)
 	return true
 }
 

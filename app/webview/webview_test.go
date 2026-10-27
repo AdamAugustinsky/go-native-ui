@@ -2,6 +2,7 @@ package webview_test
 
 import (
 	"errors"
+	"runtime"
 	"testing"
 
 	"gonativeui/app"
@@ -18,9 +19,12 @@ func TestNewContract(t *testing.T) {
 			t.Errorf("profile %q: %v", p, err)
 		}
 	}
+	if runtime.GOOS == "darwin" {
+		return // H1: a view needs a real window (live_darwin_test.go)
+	}
 	_, err := webview.New(&platform.Window{}, webview.Options{Profile: "a3-browser"})
 	if !errors.Is(err, errors.ErrUnsupported) {
-		t.Fatalf("New = %v, want unsupported until H1/H2", err)
+		t.Fatalf("New = %v, want unsupported until H2 (Windows), and on Linux", err)
 	}
 }
 

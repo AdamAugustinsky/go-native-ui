@@ -24,7 +24,7 @@
 //			switch ev.Kind {
 //			case webview.TitleChanged: // v.State().Title
 //			case webview.NavigationBlocked: // v.Blocked(): a scheme not allowed
-//			case webview.DownloadFinished: // v.Download(ev.Download).Path
+//			case webview.DownloadEnded: // v.Download(ev.Download).Path
 //			}
 //		}
 //		a.DefaultEvent(e)
@@ -60,16 +60,24 @@
 //
 // # What each OS does
 //
-//   - macOS: WKWebView (WebKit) as a hosted view (D41), with
-//     nonPersistentDataStore or dataStoreForIdentifier: for a profile
-//     (macOS 14), its navigation, UI and download delegates (H1).
+//   - macOS: WKWebView (WebKit) as a hosted view (D41), with a fresh
+//     nonPersistentDataStore per view, or dataStoreForIdentifier: for a
+//     profile (macOS 14; the identifier is derived from the profile's name,
+//     and WebKit keeps the data under ~/Library/WebKit/<app>/), and its
+//     navigation, UI and download delegates (H1). Camera and microphone
+//     requests reach the policy only in an app whose Info.plist has
+//     NSCameraUsageDescription or NSMicrophoneUsageDescription (gnui.json's
+//     usage); without them WebKit hides navigator.mediaDevices. WebKit has no
+//     public delegate for location, web notifications or clipboard reads on
+//     macOS: they stay denied whatever Allow says. A profile's cookies reach
+//     the disk a moment (about 2 s) after they change.
 //   - Windows: WebView2 (the Evergreen runtime, a Windows component) as a
 //     child window in a host container (D66), loaded without
 //     WebView2Loader.dll (D65); InPrivate for a non-persistent session (H2).
 //     A missing runtime is ErrUnavailable, with RuntimeURL for the app to
 //     offer.
 //   - Linux: ErrUnsupported (WebKitGTK would bring GTK, D2).
-//   - Until H1 and H2 land, New returns ErrUnsupported everywhere (errors.Is
+//   - Until H2 lands, New returns ErrUnsupported on Windows too (errors.Is
 //     errors.ErrUnsupported).
 package webview
 
@@ -167,6 +175,9 @@ type Options struct {
 	// ApplicationName is appended to the engine's user agent
 	// ("a3-app/1.4").
 	ApplicationName string
+	// CornerRadius rounds the view's corners, in points, so that it sits in
+	// a rounded pane (rexui.WebView's: rexui.WebViewLook.ContentRadius).
+	CornerRadius float32
 }
 
 // State is what the view shows now. Its strings are valid until the next

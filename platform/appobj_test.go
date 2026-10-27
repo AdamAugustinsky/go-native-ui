@@ -157,6 +157,15 @@ func TestRingAcceptsOrRefuses(t *testing.T) {
 		t.Fatal("the budget was not given back on delivery")
 	}
 	drain()
+	// OfferID names the event's object instead of numbering it.
+	s.evs = s.evs[:0]
+	if !r.OfferID(7, 1, 2, nil) || !r.Offer(3, 0, nil) {
+		t.Fatal("offers refused")
+	}
+	drain()
+	if len(s.evs) != 2 || s.evs[0].ID != 7 || s.evs[0].A != 1 || s.evs[0].B != 2 || s.evs[1].ID == 7 || s.evs[1].ID == 0 {
+		t.Fatalf("OfferID then Offer delivered %+v", s.evs)
+	}
 }
 
 func TestObservationCoalesces(t *testing.T) {
