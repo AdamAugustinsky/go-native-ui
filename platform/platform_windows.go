@@ -299,6 +299,9 @@ func Open(o Options) (*Window, error) {
 	if user32 == 0 || pCreateWindowExW == 0 || pMsgWait == 0 {
 		return nil, errors.New("platform: cannot load user32.dll")
 	}
+	if err := checkPanel(&o); err != nil {
+		return nil, err
+	}
 	if theWindow != nil {
 		return nil, fmt.Errorf("platform: a second window: %w", errors.ErrUnsupported) // one window per app here so far (D30 is macOS-only in phase 6)
 	}

@@ -308,6 +308,10 @@ func (t *Item) Clicked(e *app.Event) (Click, bool) {
 	return Click{Right: e.B&1 != 0}, true
 }
 
+// Balloon shows a balloon from the icon (Windows' NIF_INFO). macOS has
+// none: it returns ErrNoBalloon; post a notification (app/notify).
+func (t *Item) Balloon(title, body string) error { return ErrNoBalloon }
+
 // Remove takes the item off the status bar and frees it. Later calls return
 // ErrRemoved; a second Remove does nothing.
 func (t *Item) Remove() {

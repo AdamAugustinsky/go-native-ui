@@ -1,0 +1,90 @@
+name: phase 8 probes
+
+# The Windows probes P1-P8 of docs/PHASE8-PLAN.md ("How Windows is
+# verified"). Each answers one question that decides a design choice, so it
+# runs when a probe or the code it rests on changes, or on demand, not on
+# every push: a probe whose answer is "no" still exits 0, and the answers
+# are the JSON artifacts. Exit 1 (could not run)
+# or a timeout marks the step failed without stopping the others.
+
+on:
+  push:
+    paths:
+      - "cmd/probe-p[1-8]/**"
+      - "internal/com/**"
+      - "internal/win32/**"
+      - ".github/workflows/probes.yml"
+  workflow_dispatch:
+    inputs:
+      probes:
+        description: probes to run (space-separated)
+        default: p1 p2 p3 p4 p5 p6 p7 p8
+
+permissions:
+  contents: read
+
+env:
+  CGO_ENABLED: "0"
+
+jobs:
+  windows:
+    name: probes on Windows ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: amd64, runner: windows-2025 }
+          - { arch: arm64, runner: windows-11-arm }
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      # windows-11-arm starts with shell surfaces over the desktop: a
+      # full-screen "Microsoft account" prompt (WWAHost.exe) in the
+      # foreground, and with it gone Start (StartMenuExperienceHost.exe) and
+      # Search (SearchHost.exe), all Windows.UI.Core.CoreWindows. They cover
+      # the probes' windows (P2 names what is at its sample point, P7 the
+      # foreground) and took SendInput and, with the prompt, the tray. Stop
+      # them and press Escape so the probes see the desktop; a no-op on amd64.
+      - name: clear the shell surfaces over the desktop
+        shell: pwsh
+        run: |
+          foreach ($n in 'WWAHost', 'SearchHost', 'StartMenuExperienceHost') {
+            $p = Get-Process $n -ErrorAction SilentlyContinue
+            if ($p) { $p | ForEach-Object { "stopping $n $($_.Id) '$($_.MainWindowTitle)'"; Stop-Process -Id $_.Id -Force } } else { "no $n running" }
+          }
+          Start-Sleep -Seconds 3
+          (New-Object -ComObject WScript.Shell).SendKeys('{ESC}')
+          Start-Sleep -Seconds 1
+          foreach ($n in 'WWAHost', 'SearchHost', 'StartMenuExperienceHost') { "$n after: $(@(Get-Process $n -ErrorAction SilentlyContinue).Count)" }
+      - name: run the probes
+        run: |
+          mkdir -p probe-out
+          fail=0
+          for p in ${{ inputs.probes || 'p1 p2 p3 p4 p5 p6 p7 p8' }}; do
+            echo "::group::probe-$p"
+            go build -o "probe-out/probe-$p.exe" "./cmd/probe-$p"
+            set +e
+            "./probe-out/probe-$p.exe" > "probe-out/$p-${{ matrix.arch }}.json" 2> "probe-out/$p-${{ matrix.arch }}.stderr"
+            st=$?
+            set -e
+            cat "probe-out/$p-${{ matrix.arch }}.json"
+            cat "probe-out/$p-${{ matrix.arch }}.stderr"
+            echo "exit status $st" | tee -a "probe-out/$p-${{ matrix.arch }}.stderr"
+            echo "::endgroup::"
+            if [ "$st" -ne 0 ]; then echo "::warning::probe-$p exited $st on ${{ matrix.arch }}"; fail=1; fi
+          done
+          exit $fail
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: phase8-probes-windows-${{ matrix.arch }}
+          path: |
+            probe-out/*.json
+            probe-out/*.stderr

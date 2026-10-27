@@ -48,6 +48,9 @@ var (
 // (MaxWindows), each with its own event queue, display link and frame
 // handler, served by one pump (Pump, Wait). Main thread only.
 func Open(o Options) (*Window, error) {
+	if err := checkPanel(&o); err != nil {
+		return nil, err
+	}
 	if reg.n >= MaxWindows {
 		return nil, errTooManyWindows
 	}

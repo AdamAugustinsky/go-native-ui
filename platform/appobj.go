@@ -141,6 +141,12 @@ const (
 	SourceTask
 	// SourceTray is a status item's click (app/tray).
 	SourceTray
+	// SourceHotkey is a global hotkey's press (app/hotkey).
+	SourceHotkey
+	// SourceCapture is screen capture's events (media/capture).
+	SourceCapture
+	// SourceWebView is a hosted browser view's events (app/webview).
+	SourceWebView
 	// SourceApp is the first source free for the app's own producers.
 	SourceApp Source = 256
 )
