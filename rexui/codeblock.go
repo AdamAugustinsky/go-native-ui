@@ -77,7 +77,8 @@ var CodeLook = CodeRecipe{
 }
 
 // CodeColor is the colour of a highlight role on the Rex code palette (the
-// terminal colours of theme/rex, focused) at the light/dark mix t.
+// terminal colours of theme/rex, focused) at the light/dark mix t; a
+// diff's insertions are SuccessText.
 func CodeColor(role highlight.Role, t float32) uint32 {
 	p := rex.TerminalAt(t, 1)
 	var c uint32
@@ -88,8 +89,10 @@ func CodeColor(role highlight.Role, t float32) uint32 {
 		c = p.Orange
 	case highlight.Function, highlight.Tag:
 		c = p.Blue
-	case highlight.String, highlight.Inserted:
+	case highlight.String:
 		c = p.Green
+	case highlight.Inserted: // a diff's added line, on its green band: the terminal green reads 3.7:1 there in light
+		return theme.MixRGBA(SuccessText.Lit, SuccessText.LitDark, t)
 	case highlight.Comment:
 		c = p.Dim
 	case highlight.Operator, highlight.Punctuation:

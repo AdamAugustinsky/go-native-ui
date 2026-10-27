@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"gonativeui/gpu"
+	"gonativeui/highlight"
 	"gonativeui/rexui"
 	"gonativeui/theme"
 	"gonativeui/ui"
@@ -632,6 +633,41 @@ func TestDisabledIndicatorsReportDisabled(t *testing.T) {
 			if got := g.node(ui.RoleProgressBar, name).State&ui.SemDisabled != 0; got != off {
 				t.Errorf("%s: SemDisabled %v, want %v", name, got, off)
 			}
+		}
+	}
+}
+
+// SuccessText and DangerText read at 4.5:1 or better, light and dark, on
+// the surfaces Rex sets text on (theme.Contrast, composited): the window, a
+// pane, the raised surface, the field and the text and control backgrounds,
+// and a code block, its added or removed line's band included. A diff's
+// insertions are SuccessText.
+func TestReadableGreenAndRed(t *testing.T) {
+	for _, m := range []theme.Mode{theme.Light, theme.Dark} {
+		g := newRig(t, m, nil, column(func(g *rig) {}))
+		g.settle()
+		r := g.k.Theme()
+		code := theme.Over(rexui.CodeLook.Fill.RGBA(r), r.Colors[theme.Pane])
+		surfaces := map[string]uint32{"code": code}
+		for _, role := range []theme.Role{theme.Window, theme.Pane, theme.Raised, theme.Field, theme.TextBackground, theme.ControlBackground} {
+			surfaces[role.String()] = theme.Over(r.Colors[role], r.Colors[theme.Window])
+		}
+		for name, tc := range map[string]struct {
+			tint rexui.Tint
+			band rexui.Tint
+		}{"SuccessText": {rexui.SuccessText, rexui.CodeLook.Added}, "DangerText": {rexui.DangerText, rexui.CodeLook.Removed}} {
+			fg := tc.tint.RGBA(r)
+			for s, bg := range surfaces {
+				if c := theme.Contrast(fg, bg); c < 4.5 {
+					t.Errorf("%v: %s %08X on %s %08X is %.2f:1", m, name, fg, s, bg, c)
+				}
+			}
+			if band := theme.Over(tc.band.RGBA(r), code); theme.Contrast(fg, band) < 4.5 {
+				t.Errorf("%v: %s on its line's band is %.2f:1", m, name, theme.Contrast(fg, band))
+			}
+		}
+		if got := rexui.CodeColor(highlight.Inserted, r.T); got != rexui.SuccessText.RGBA(r) {
+			t.Errorf("%v: an insertion is %08X, want SuccessText", m, got)
 		}
 	}
 }
