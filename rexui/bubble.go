@@ -241,7 +241,7 @@ func beginBubble(k *base.Kit, key ui.Key, o BubbleOpts, plain bool) Bubble {
 	b.Row = c.BoxKeyed(0, ui.KeyN(key, 0), nil)
 	c.Push(b.Row)
 	if v == BubbleOutgoing && o.Status == BubbleFailed {
-		Badge(k, "!", BadgeOpts{Variant: BadgeCount, Name: "Not delivered"})
+		Badge(k, "!", BadgeOpts{Variant: BadgeCount, Name: str.NotDelivered})
 	}
 	if b.plain {
 		return b
@@ -268,14 +268,14 @@ func beginBubble(k *base.Kit, key ui.Key, o BubbleOpts, plain bool) Bubble {
 	c.NextRole(ui.RoleGroup)
 	name := o.Name
 	if name == "" {
-		name = [...]string{"Message", "Sent message", ""}[v]
+		name = [...]string{str.Message, str.SentMessage, ""}[v]
 	}
 	c.NextSemName(name)
 	switch o.Status {
 	case BubbleSending:
-		c.NextSemValueBytes(base.StrBytes("Sending"))
+		c.NextSemValueBytes(base.StrBytes(str.Sending))
 	case BubbleFailed:
-		c.NextSemValueBytes(base.StrBytes("Not delivered"))
+		c.NextSemValueBytes(base.StrBytes(str.NotDelivered))
 	}
 	if o.Selected {
 		c.NextSemState(ui.SemSelected)

@@ -34,7 +34,7 @@ In scope, by package (the D28/D40 layering is unchanged; new packages are import
 | `app/webview` | a hosted OS browser view: `WKWebView`, WebView2 (D64, D65) | new |
 | `media/capture` | screen or window plus microphone and system audio to MP4, both OSes | new |
 | `term` | a terminal emulator: VT parser, screen and scrollback model, input encoding (pure Go) | new |
-| `markdown`, `highlight` | a GFM-subset parser to rich-text spans; table-driven syntax highlighters (pure Go) | new |
+| `markdown`, `highlight` | goldmark's GFM tree converted to pointer-free blocks and rich-text spans; chroma v2 tokens mapped to Rex code roles (pure Go dependencies, D75) | new |
 | `rexui` | `Terminal`, `Markdown`, `CodeBlock`, `WebView` (a host box with Rex chrome) components; the composer gains the Windows editor | changed |
 | `cmd/gnui` | `package -target windows`: icon, manifest and version resources, optional signing, a zip; the agent bridge on Windows | changed |
 | `internal/com`, `internal/win32` | COM objects implemented in Go (vtables for callbacks), WinRT activation and `HSTRING`s | changed |
@@ -260,11 +260,32 @@ Proposed here, not written to `DECISIONS.md`. Each lists the choice, the alterna
 
 **Width tables** (East Asian Width, emoji presentation) are generated from Unicode 17 data by a tool, as `tools/genbidi` does (D42).
 
-### D75. Markdown and highlighting of our own
+### D75. Markdown via goldmark, highlighting via chroma v2
 
-**Decision.** `markdown`: a parser for the GFM subset chat needs (paragraphs, headings, emphasis, strong, strikethrough, inline code, fenced and indented code, block quotes, ordered and unordered and task lists, tables, links and autolinks, thematic breaks, hard breaks; raw HTML shown as text) into pointer-free blocks and `ui.Span`s. It parses incrementally at block granularity, so a streaming message re-parses only its last open block. Tested against the CommonMark spec examples for the constructs supported. `highlight`: table-driven lexers for the languages agent transcripts show most (Go, TypeScript/JavaScript, Python, Rust, Swift, C#, shell, JSON, YAML, TOML, SQL, HTML, CSS, diff, Markdown), mapped to Rex code roles. `rexui.Markdown` and `rexui.CodeBlock` draw them, with a copy button per block.
+**Adam's direction (2026-10-27):** use proven libraries instead of re-creating these components. This replaces the earlier D75 ("markdown and highlighting of our own"): no in-house Markdown parser and no in-house lexers.
 
-**Alternatives:** `yuin/goldmark` (MIT, CommonMark-complete, but an AST of pointers per parse, and about 1 MB); `alecthomas/chroma` (MIT, 200+ languages, regex-based, several MB and allocating per token). Either would need a D2 row; the subset is small enough to own.
+**Decision.**
+- **`markdown`** parses with `github.com/yuin/goldmark` and its GFM extensions (tables, strikethrough, task lists, linkify), then converts goldmark's tree into the package's own pointer-free blocks (paragraph, heading, code with its info string, list item with depth, number and task state, table cell with alignment, rule, each with its block-quote nesting) and `ui.Span`s. Raw HTML is shown as text, links are link spans (`Tag` = link index + 1), an image is its alt text linked to its source. Parsing runs on a worker or when a message changes, never per frame; the draw path reads only the flat `Doc`, so a frame allocates nothing (D11, D27). **Streaming:** `Append` keeps everything before the last top-level block and has goldmark parse from that block's line on; a document with link reference definitions is parsed whole, because a definition can change a link before it.
+- **`highlight`** tokenises with `github.com/alecthomas/chroma/v2` into compact `Token{Off, Len, Role}` runs that never cross a line break, mapped to the Rex code roles; `rexui` colours the roles from `theme/rex`'s code palette. chroma's HTML formatters and styles are not used. **Curated lexers:** chroma's `lexers` package embeds and registers about 280 lexers; `highlight/internal/lexers` instead holds copies (MIT, with chroma's licence) of the 14 XML lexers and the Go and Markdown rules for the 16 languages of `highlight.Lang`, registered on first use. The `gnui_chroma_full` build tag links chroma's whole set instead.
+- **`rexui.Markdown` and `rexui.CodeBlock`** draw them (headings, lists with markers and task boxes, quotes, tables as a grid, code with a language label, a Copy button, sideways scrolling, an optional line-number gutter, a highlighted line and diff bands); `rexui.MarkdownView` keeps a window's style tables, the code blocks' scroll states and the worker goroutine that highlights code.
+
+**Measured (2026-10-27; timings on the Mac mini, loaded by another session's benchmarks):**
+- Size, stripped, added to the notes example: `highlight` +1.00 MB on darwin/arm64 and +1.07 MB on windows/amd64 with the curated lexers, +3.71 and +3.80 MB with chroma's full set; `markdown` (goldmark) +0.54 and +0.56 MB. Added to a bare hello-world, `highlight` costs +2.26 MB (darwin/arm64), +2.46 MB (windows/amd64) and +2.45 MB (linux/amd64) curated, +4.95, +5.19 and +5.17 MB full: most of the curated cost is chroma's core and its regexp engine (`dlclark/regexp2`), which a smaller lexer set does not remove.
+- Startup: the full set parses its XML configs at init (2.7–3.8 ms before the first frame); the curated registry is built on first use (0 ms at init, about 0.3 ms when first used).
+- Speed: goldmark plus our conversion parses a 20 KB transcript at about 40 MB/s (25 ns/byte). chroma lexes Go at about 0.7–1 MB/s, linear in the input (a 1 MB single line in about 1.4–3 s, on the worker), far below the old table-driven ≥ 20 MB/s target; the UI shows the block uncoloured (or with its previous tokens) until the worker is done.
+- Streaming: a 20 KB message in 50-byte chunks parses 1.6× its size in all (from the start each time it would be about 200×), at most 134 bytes per chunk.
+
+**Trade-off stated plainly.** We take +1.5 MB per app and a lexer about 20× slower than a table-driven one, in exchange for CommonMark/GFM correctness and 16 maintained lexers we do not write. Highlighting is off the UI thread, so the slowness costs latency to colour, not frames.
+
+**D2 rows (proposed here; `DECISIONS.md` is edited when this plan is approved):**
+
+| Dependency | Why | Size cost (stripped) | cgo | License |
+|---|---|---|---|---|
+| `github.com/yuin/goldmark` v1.8.6 | CommonMark + GFM parsing for `markdown` (D75) | +0.54 MB darwin/arm64, +0.56 MB windows/amd64 (on the notes example) | no | MIT |
+| `github.com/alecthomas/chroma/v2` v2.27.0 | lexers for `highlight` (D75); 14 XML lexers and the Go and Markdown rules copied into `highlight/internal/lexers` | with `dlclark/regexp2/v2`: +1.00 MB darwin/arm64, +1.07 MB windows/amd64 curated; +3.71 / +3.80 MB with `gnui_chroma_full` | no | MIT |
+| `github.com/dlclark/regexp2/v2` v2.2.1 | chroma's regexp engine (indirect) | included above | no | MIT |
+
+**Alternatives:** our own GFM-subset parser and table-driven lexers (the earlier D75: smaller and faster, but weeks of work to reach goldmark's correctness, and lexers to maintain); chroma's full lexer set (+2.7 MB more and 3–4 ms at init for languages `highlight.Lang` does not name).
 
 ### D76. Install, update and undocumented API on Windows
 
@@ -418,13 +439,15 @@ On both OSes, the app's own audio is excluded from the system-audio track (`excl
   - *Gate:* parsing ≥ 100 MB/s on the MacBook with 0 allocations per byte; a full 200×60 redraw ≤ 2 ms of CPU; `cat` of 50 MB keeps frames paced (rendering coalesced to the frame rate); 5,000 lines of 120 columns ≤ 6 MB. *Opus (high).* L.
   - *Wave 0 note:* `term` imports nothing from `ui` and has its own `Key` and `Mods` types, which `rexui.Terminal` maps. `Cell` is 8 bytes (tested). `Write` returns `term.ErrUnsupported` until C1.
 - **C2. `markdown`** (D75), incremental, with spans for `rexui.Markdown` (headings, lists with markers, tables as a grid, block quotes, code blocks via C3, links as link spans).
-  - *Tests:* the CommonMark spec examples for supported constructs; GFM tables and task lists; a 20 KB message streamed in 50-byte chunks re-parses only its open block (counted).
-  - *Gate:* parse ≤ 1 µs per byte on a worker; 0 allocations per frame for a transcript of 1,000 rendered messages in a `VList`. *Sonnet.* M.
+  - *Tests:* CommonMark and GFM behaviour is goldmark's; ours is the conversion: agent-transcript fixtures (headings, nested and task lists, quotes, tables, code fences, links, raw HTML, long lines) convert to the expected blocks and spans; a 20 KB message streamed in 50-byte chunks equals a fresh parse after every chunk and re-parses only its tail (counted).
+  - *Gate:* parsing off the main thread (a worker, or on change; never in Build); ≤ 1 µs per byte; 0 allocations per frame for a transcript of 1,000 rendered messages in a `VList`; the streaming re-parse counted. *Sonnet.* M.
   - *Wave 0 note:* the spans are `ui.Span` with offsets relative to the block's body (`Doc.Body`). `Span.Style` is a bit set (`Emph`, `Strong`, `CodeSpan`, `Strike`; `NumStyles` = 16 combinations), and a link is `ui.SpanLink` with `Tag` indexing `Doc.Links`. The stub is D75's raw-text fallback: the source is one plain open paragraph, and storage is reused (0 allocations on a reparse of the same size).
+  - *Done (2026-10-27, goldmark):* links also carry a `LinkStyle` bit (`NumStyles` = 32, one `ui.RichStyles` table) and `Tag` is the link's index plus one, because `RichSignal.Clicked` reports 0 for none. A parse allocates (goldmark's tree); `Doc.CopyTo` double-buffers a document for the frame without allocating once warm. Table cells index their table's alignments through `Block.Number` (`Doc.AlignOf`).
 - **C3. `highlight`** (D75) and `rexui.CodeBlock` (mono spans, a language label, copy, horizontal scroll for long lines). For a3-app's Files and Changes panes (its AF6), the block also takes an optional line-number gutter, a highlighted line, and added/removed/context line styles for diffs.
-  - *Tests:* golden token streams per language; pathological inputs (unterminated strings, 1 MB lines) stay linear.
-  - *Gate:* ≥ 20 MB/s per core. *Sonnet.* M.
+  - *Tests:* golden token runs for Go, TypeScript, Python, Rust, shell, JSON, diff and HTML; pathological inputs (unterminated strings, a 1 MB line) stay about linear and run on the worker; offscreen goldens of `rexui.Markdown` and `rexui.CodeBlock` with a diff, light and dark.
+  - *Gate:* lexing never on the main thread (`rexui.MarkdownView` runs it on a worker and the block draws uncoloured until then); 0 allocations per frame with highlighted blocks on screen. chroma's ~1 MB/s replaces the old ≥ 20 MB/s (D75). *Sonnet.* M.
   - *Wave 0 note:* `highlight.Line(lang, state, line, dst)` works line by line; `LangOf` takes fence names and file names, and `Supported` reports which languages have a lexer. Until C3 every language is Plain, one `Text` token per line. The mapping from roles to Rex code colours belongs to `rexui.CodeBlock`.
+  - *Done (2026-10-27, chroma v2):* `Line` and `State` are replaced by `Tokens(lang, src, dst)` over a whole block or file, because chroma's lexers carry a state stack across lines; tokens never cross a line break, so a renderer still cuts them per line. `rexui.CodeLine` builds one row of a long file for an app's `VList` (a3-app's AF6), with the gutter, the band and the colours `CodeBlock` uses. A wheel over a sideways-only scroll view now passes its vertical axis to the transcript (`ui`'s `scrollPlain`, as gestures already did).
 - **C4. `rexui.TextArea`**: a general multi-line field (settings, bot instructions, a3-kb's quick-add) on `platform.Editor`, sharing the composer's host but with no send policy: a fixed or growing line range, placeholder, read-only. On macOS it can start once wave 1 lands; on Windows it waits for W4. Requested by a3-app (AF4) and a3-kb. *Sonnet.* S.
   - *Wave 0 note:* `NewTextArea(w, TextAreaSetup)` and `TextArea(k, label, st, TextAreaOpts)` exist. Until C4 the field is the composer's drawn single-line fallback, with read-only shown disabled.
 - **C5. `rexui.ContextMenu`**: one call that uses `OnContextMenu` natively on macOS and opens `Kit.OpenContextMenu` drawn elsewhere, so apps write one path (a3-app AF13). *Sonnet.* S.
@@ -524,7 +547,7 @@ wave 4   H2 WebView2 (after W3)   S2 (only if asked)
 5. **Web:** `WKWebView` and WebView2 pass H1's matrix (a non-persistent session, a named persistent profile that keeps a cookie across a restart and is isolated from the app, denied permissions, downloads, blocked schemes, popups in place); a missing runtime gives the fallback.
 6. **Capture:** a 5 s recording with microphone and system audio on both OSes, with pause and resume, decodes back to the right duration and tracks.
 7. **Network:** `fetch.Do` and `app/ws` pass their suites on all three OSes; no `net/http` or `crypto/tls` in darwin or windows binaries that use them.
-8. **Content:** `term` replays the recorded TUI sessions identically in any chunking; `markdown` passes its CommonMark subset; streaming re-parses only the open block.
+8. **Content:** `term` replays the recorded TUI sessions identically in any chunking; `markdown` converts the transcript fixtures to their blocks and spans and streams to the same document as a fresh parse, re-parsing only from the last top-level block; markdown is parsed and code highlighted off the main thread, with 0 allocations per frame for 1,000 rendered messages.
 9. **Performance:** the budgets table holds where it says gated; every Windows number carries its source.
 10. **CI:** all jobs green, including Linux with the new APIs returning `ErrUnsupported`; quarantine additions each have an issue.
 11. **Docs:** every exported identifier documented, `Example`s for new packages, guide chapters for panels, hotkeys, capture, the webview, `fetch`/`ws`, the terminal and Windows packaging.

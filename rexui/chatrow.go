@@ -148,7 +148,7 @@ func ChatListRow(k *base.Kit, label, title, preview, when string, o ChatRowOpts)
 		ps := &r.Styles[theme.StyleSubheadline]
 		txt, pc := preview, previewC
 		if o.Typing {
-			txt, pc = "typing…", rc.Typing.RGBA(r)
+			txt, pc = str.Typing, rc.Typing.RGBA(r)
 			if o.Selected && active {
 				pc = previewC
 			}

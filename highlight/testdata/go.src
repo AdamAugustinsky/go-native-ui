@@ -1,0 +1,12 @@
+package main
+
+import "fmt"
+
+// Greet says hello.
+func Greet(name string) error {
+	/* a block
+	   comment */
+	n := len(name) + 0x1F
+	fmt.Printf("hi %s %d\n", name, n)
+	return nil
+}
