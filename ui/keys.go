@@ -113,6 +113,12 @@ func (c *Context) Frame() uint32 { return c.frame }
 // through Input.SetPaste with the same tag, to that field only.
 func (c *Context) PasteRequest() (tag Key, ok bool) { return c.pasteTag, c.pasteReq }
 
+// RequestPaste asks for the clipboard text for the box with key tag, as a
+// text field's paste does: PasteRequest reports it after End, and the text
+// arrives in Input.Paste with Input.PasteTag tag, for that box to take
+// (rexui.Terminal does: a terminal is not a text field).
+func (c *Context) RequestPaste(tag Key) { c.pasteTag, c.pasteReq = tag, true }
+
 // editMods returns whether the chord's modifiers include the primary
 // modifier. AltGr (Ctrl+Alt on Windows) types a character and is neither the
 // primary nor the word modifier.
