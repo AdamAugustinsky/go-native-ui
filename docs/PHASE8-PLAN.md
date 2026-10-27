@@ -457,6 +457,8 @@ wave 4   H2 WebView2 (after W3)   S2 (only if asked)
 
 ## What needs you
 
+**Adam's decisions (2026-10-27):** D64 approved (hosting the OS browser view as content; WebView2 without the bundled loader, as D65 option 1). No Intel Macs on the team, so arm64 only and no Swift/Electron bridge release. Signing by bought certificates: an Apple Developer ID (A3 Lab) and Azure Trusted Signing for Windows, which Adam enrolls; until they exist, builds stay ad-hoc/unsigned and are not released. No Windows VM yet: Windows work is verified on the CI runners only, and checkpoints K2 and K4 wait for the VM decision.
+
 - **D64** (amending D2: hosting the OS browser view as content). Without it a3-app has no browser pane and opens pages in the system browser.
 - **D65's fallback** (bundling `WebView2Loader.dll`) only if P3 or a later runtime breaks our loader. Not needed to start.
 - **D63** (Linux waits) and the rest of D66–D78, at review.
