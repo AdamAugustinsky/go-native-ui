@@ -1,0 +1,64 @@
+name: phase 8 network
+
+# N1 (fetch.Do) and N2 (app/ws) of docs/PHASE8-PLAN.md: their suites on
+# every OS, the Windows ones on both runners (WinHTTP, D73). They run when
+# the packages or the plumbing under them change, or on demand. Nothing
+# here drives input or shows a window, so the windows-11-arm shell cleanup
+# of probes.yml is not needed.
+
+on:
+  push:
+    paths:
+      - "app/fetch/**"
+      - "app/ws/**"
+      - "internal/winhttp/**"
+      - "internal/nsurl/**"
+      - ".github/workflows/network.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CGO_ENABLED: "0"
+  WS_ALLOC_REPORT: "1"
+
+jobs:
+  suites:
+    name: fetch and ws on ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: windows-amd64, runner: windows-2025 }
+          - { name: windows-arm64, runner: windows-11-arm }
+          - { name: linux-amd64, runner: ubuntu-24.04 }
+          - { name: macos-arm64, runner: macos-15 }
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: go test ./app/fetch/... ./app/ws/...
+        run: |
+          mkdir -p out
+          go test -count=1 -v -timeout 20m ./app/fetch/... ./app/ws/... 2>&1 | tee out/network-${{ matrix.name }}.txt
+      - name: summary
+        if: always()
+        run: |
+          {
+            echo "### ${{ matrix.name }}"
+            echo '```'
+            grep -E '^(--- |ok |FAIL|WS_ALLOCS)|trip [0-9]+:|known length|cancelled after|first line after|blocked write|the proxy saw|messages in' out/network-${{ matrix.name }}.txt || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: network-${{ matrix.name }}
+          path: out/
