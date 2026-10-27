@@ -75,6 +75,9 @@ tokens for nothing.
 - Colour choices (swatches) are circles.
 - Metadata (times, sizes, counts, hints) is `LabelOpts.MonoPt`, the
   monospaced face Rex sets it in.
+- Text someone needs to read (a hint, a notice, metadata) is `Label2`, never
+  `Label3`: Zap's hints in `Label3` measured under 2:1 against their pane.
+  `Label3` is for what is disabled or a placeholder.
 
 ```go rexui/appkit.go
 func UseAppKitControls() {
