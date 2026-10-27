@@ -2,12 +2,17 @@
 // the system's audio, to an MP4 file (the phase 8 plan's M1, M2 and D72):
 // a3-kb's recording bar.
 //
-//	r, err := capture.Pick(a.Win, capture.Options{Microphone: true, SystemAudio: true})
+//	// the microphone first: Pick refuses it until the user has granted it
+//	if st, _ := perm.Status(perm.Microphone); st == perm.NotDetermined {
+//		perm.Request(perm.Microphone) // and Pick when its answer arrives
+//	}
+//	r, err := capture.Pick(a.Win, capture.Options{Microphone: true, SystemAudio: true, Delay: 3 * time.Second})
 //	// the system's picker is up; the user chooses a display or a window
 //
 //	func (b *bar) Event(a *app.App, e *app.Event) {
 //		if ev, ok := capture.EventOf(e); ok && ev.Recording == r.ID() {
 //			switch ev.Kind {
+//			case capture.Chosen: // a choice: show the countdown (Options.Delay)
 //			case capture.Started: // recording: show the bar
 //			case capture.Ended:
 //				res := r.Result() // res.Path, res.Duration; res.Err is typed:
@@ -33,13 +38,22 @@
 // platform.Panel.ExcludeFromCapture (the recording bar itself) never appear
 // in the video.
 //
+// # Permissions
+//
+// With Options.Microphone, the user must have granted the microphone
+// already (app/perm): otherwise Pick and Start return ErrPermissionDenied
+// and show nothing, so the app asks with perm.Request first, or records
+// without it. On macOS, Pick's picker needs no Screen Recording permission;
+// Targets and Start do (ErrPermissionDenied), and never trigger the
+// system's prompt.
+//
 // # Events
 //
-// Started and Ended arrive as app.EvService from platform.SourceCapture,
-// which EventOf decodes. Both are completions reserved when the recording
-// is made (DECISIONS D37, class 2), so neither is lost to a full queue, and
-// Ended comes exactly once per Recording, including after a cancelled
-// picker or a failure to start.
+// Chosen, Started and Ended arrive as app.EvService from
+// platform.SourceCapture, which EventOf decodes. They are completions
+// reserved when the recording is made (DECISIONS D37, class 2), so none is
+// lost to a full queue, and Ended comes exactly once per Recording,
+// including after a cancelled picker or a failure to start.
 //
 // # Threads
 //
@@ -54,20 +68,23 @@
 //     Recording permission) or a Target from Targets (which does), an
 //     SCStream with capturesAudio, excludesCurrentProcessAudio and
 //     captureMicrophone, and SCRecordingOutput writing H.264 MP4: the system
-//     writes the file. Pause finishes a segment and Resume starts another;
-//     Stop joins them with a passthrough export (M1). macOS 14:
-//     ErrUnsupported.
+//     writes the file, and no Go runs per frame or per audio buffer. Pause
+//     finishes a segment and Resume starts another; Stop joins them with a
+//     passthrough export (AVMutableComposition, AVAssetExportSession) on a
+//     worker. Level is always 0 (no Go on the stream's audio queue). macOS
+//     14: ErrUnsupported.
 //   - Windows 10 2004 and later: Windows.Graphics.Capture, the D3D11 video
 //     processor to NV12, WASAPI microphone and loopback, and a Media
 //     Foundation sink writer with the system's H.264 and AAC encoders (M2).
+//     Until M2 lands, Pick and Start return ErrUnsupported.
 //   - Linux: ErrUnsupported (D63).
-//   - Until M1 and M2 land, Pick and Start return ErrUnsupported everywhere
-//     (errors.Is errors.ErrUnsupported).
 package capture
 
 import (
 	"errors"
 	"fmt"
+	"math"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -79,7 +96,7 @@ import (
 // in Portuguese). They arrive as Result.Err, or from Pick and Start.
 var (
 	// ErrUnsupported: no capture on this OS or version (macOS 14, Linux,
-	// and everywhere until M1 and M2). It matches errors.ErrUnsupported.
+	// and Windows until M2). It matches errors.ErrUnsupported.
 	ErrUnsupported = fmt.Errorf("capture: %w", errors.ErrUnsupported)
 	// ErrPermissionDenied: the user has not granted Screen Recording (macOS,
 	// for Targets and Start) or the microphone (app/perm asks first).
@@ -97,6 +114,9 @@ var (
 	ErrBusy = errors.New("capture: a recording is already running")
 	// ErrTargetGone: the window or display being recorded went away.
 	ErrTargetGone = errors.New("capture: the recorded window or display is gone")
+	// ErrNotRecording: Pause or Resume while the recording is not running
+	// (still in the picker, waiting out Options.Delay, stopping or ended).
+	ErrNotRecording = errors.New("capture: not recording")
 	// ErrNotStarted: the application object does not exist yet.
 	ErrNotStarted = errors.New("capture: the app has not started (call from Handler.Start or later)")
 )
@@ -128,7 +148,8 @@ type Target struct {
 
 // Options configure a recording.
 type Options struct {
-	// Microphone records the default microphone.
+	// Microphone records the default microphone. The user must have granted
+	// it already (see Permissions in the package comment).
 	Microphone bool
 	// SystemAudio records what the system plays.
 	SystemAudio bool
@@ -142,19 +163,29 @@ type Options struct {
 	// MaxWidth and MaxHeight bound the video's size in pixels, keeping the
 	// aspect ratio (0: the target's own).
 	MaxWidth, MaxHeight int
+	// Delay is the time between the choice (Chosen) and the start of the
+	// recording (Started): an app's countdown. Stop during it ends the
+	// recording with nothing recorded.
+	Delay time.Duration
 	// Path is the MP4 to write; "" makes one in the system's temporary
-	// folder.
+	// folder. A file there is replaced.
 	Path string
 }
 
 // Result is how a recording ended.
 type Result struct {
-	// Path is the MP4 ("" when discarded or nothing was recorded).
+	// Path is the MP4 ("" when discarded, nothing was recorded, or the
+	// segments could not be joined).
 	Path string
-	// Duration is the recorded time, pauses excluded.
+	// Duration is the recorded time, pauses excluded: the file's duration
+	// when it can be read, otherwise the clock's (Elapsed).
 	Duration time.Duration
-	// Discarded is a Stop(true).
+	// Discarded is a Stop(true), or a Stop before the recording started.
 	Discarded bool
+	// Segments are the segment files of a paused recording that could not
+	// be joined, in order, kept so nothing recorded is lost (macOS; Err
+	// says why). The app owns them.
+	Segments []string
 	// Err is why it ended early or never started (the typed errors above),
 	// nil after a Stop.
 	Err error
@@ -169,6 +200,9 @@ const (
 	Started EventKind = iota + 1
 	// Ended: the recording is over and its file complete (Recording.Result).
 	Ended
+	// Chosen: the user chose what to record in the picker (or Start found
+	// its target); Started follows after Options.Delay.
+	Chosen
 )
 
 // Event is a decoded capture event.
@@ -180,13 +214,13 @@ type Event struct {
 }
 
 // EventOf decodes a capture event (an app.EvService from
-// platform.SourceCapture: ID is the recording, A the kind). It allocates
-// nothing.
+// platform.SourceCapture: ID is its ticket, A the kind and B the
+// recording). It allocates nothing.
 func EventOf(e *app.Event) (Event, bool) {
 	if e == nil || e.Kind != app.EvService || e.Source != platform.SourceCapture {
 		return Event{}, false
 	}
-	return Event{Kind: EventKind(e.A), Recording: e.ID}, true
+	return Event{Kind: EventKind(e.A), Recording: uint64(e.B)}, true
 }
 
 // Recording is one recording, from the picker or the start to its Ended
@@ -195,12 +229,49 @@ type Recording struct {
 	id       uint64
 	opt      Options
 	be       backend
-	elapsed  atomic.Int64  // nanoseconds, pauses excluded
+	clock    clock
 	level    atomic.Uint32 // float32 bits, the microphone's level in [0, 1]
 	paused   atomic.Bool
 	ownAudio bool
 	result   Result
 	ended    bool
+}
+
+// clock is the recorded time: what finished segments recorded, plus the
+// running one's time since it started. Written on the main thread, read
+// anywhere; it allocates nothing.
+type clock struct {
+	mu      sync.Mutex
+	acc     time.Duration
+	since   time.Time
+	running bool
+}
+
+func (c *clock) start() {
+	c.mu.Lock()
+	if !c.running {
+		c.since, c.running = time.Now(), true
+	}
+	c.mu.Unlock()
+}
+
+func (c *clock) stop() {
+	c.mu.Lock()
+	if c.running {
+		c.acc += time.Since(c.since)
+		c.running = false
+	}
+	c.mu.Unlock()
+}
+
+func (c *clock) read() time.Duration {
+	c.mu.Lock()
+	d := c.acc
+	if c.running {
+		d += time.Since(c.since)
+	}
+	c.mu.Unlock()
+	return d
 }
 
 // backend is the OS's recording.
@@ -218,8 +289,8 @@ var lastID atomic.Uint64
 func Targets(kind TargetKind) ([]Target, error) { return osTargets(kind) }
 
 // Pick shows the system's picker over window w and records what the user
-// chooses: Started follows a choice, Ended (with ErrPickerCancelled) a
-// cancel.
+// chooses: Chosen and then Started follow a choice, Ended (with
+// ErrPickerCancelled) a cancel.
 func Pick(w *platform.Window, o Options) (*Recording, error) {
 	r := newRecording(o)
 	if err := osPick(w, r); err != nil {
@@ -228,7 +299,7 @@ func Pick(w *platform.Window, o Options) (*Recording, error) {
 	return r, nil
 }
 
-// Start records target t at once; Started follows.
+// Start records target t; Chosen and Started follow.
 func Start(t Target, o Options) (*Recording, error) {
 	r := newRecording(o)
 	if err := osStart(t, r); err != nil {
@@ -249,11 +320,11 @@ func (r *Recording) ID() uint64 { return r.id }
 
 // Elapsed is the time recorded so far, pauses excluded. Any goroutine; no
 // allocation.
-func (r *Recording) Elapsed() time.Duration { return time.Duration(r.elapsed.Load()) }
+func (r *Recording) Elapsed() time.Duration { return r.clock.read() }
 
-// Level is the microphone's level in [0, 1] (0 without a microphone). Any
-// goroutine; no allocation.
-func (r *Recording) Level() float32 { return float32frombits(r.level.Load()) }
+// Level is the microphone's level in [0, 1] (0 without a microphone, and
+// on macOS). Any goroutine; no allocation.
+func (r *Recording) Level() float32 { return math.Float32frombits(r.level.Load()) }
 
 // Paused reports whether the recording is paused.
 func (r *Recording) Paused() bool { return r.paused.Load() }
@@ -263,24 +334,26 @@ func (r *Recording) Paused() bool { return r.paused.Load() }
 // cannot exclude one process: some Windows 10 builds).
 func (r *Recording) OwnAudioExcluded() bool { return r.ownAudio }
 
-// Pause pauses the recording; Resume continues it in the same file.
+// Pause pauses the recording; Resume continues it in the same file. Pausing
+// a paused recording does nothing.
 func (r *Recording) Pause() error {
 	if r.be == nil || r.ended {
-		return ErrUnsupported
+		return ErrNotRecording
 	}
 	return r.be.pause()
 }
 
-// Resume continues a paused recording.
+// Resume continues a paused recording. Resuming a running one does nothing.
 func (r *Recording) Resume() error {
 	if r.be == nil || r.ended {
-		return ErrUnsupported
+		return ErrNotRecording
 	}
 	return r.be.resume()
 }
 
 // Stop ends the recording: the file is finished (discard false) or deleted
-// (discard true). Ended follows once the file is complete.
+// (discard true). Ended follows once the file is complete. A second Stop
+// does nothing.
 func (r *Recording) Stop(discard bool) {
 	if r.be != nil && !r.ended {
 		r.be.stop(discard)
