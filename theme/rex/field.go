@@ -132,7 +132,10 @@ var (
 // and Right at the window's edges, whose tints run in a few hundred
 // reference pixels. Colours are 0xRRGGBB.
 type FieldStop struct {
-	Y                float32
+	// Y is the stop's height in reference pixels.
+	Y float32
+	// Mid, Left and Right are the colours down the middle and at the left
+	// and right edges, 0xRRGGBB.
 	Mid, Left, Right uint32
 }
 
@@ -142,8 +145,12 @@ type FieldStop struct {
 // made of (0 keeps Rex's; the light glass is white). Rex's fitted hue
 // balance of the light glass goes with its own field only.
 type FieldColors struct {
+	// Light and Dark are the light and the dark field's stops, top to
+	// bottom; nil keeps Rex's.
 	Light, Dark []FieldStop
-	DarkGlass   uint32
+	// DarkGlass is the dark glass of an unfocused surface, 0xRRGGBB; 0 keeps
+	// Rex's.
+	DarkGlass uint32
 	// Scrim is the light and the dark tone laid over a backdrop (a system
 	// material behind the window, theme.Resolved.Backdrop) in the field's
 	// place, 0xRRGGBB; 0 keeps Rex's.
