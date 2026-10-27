@@ -1,8 +1,24 @@
-// Package fetch downloads a web resource over http or https, streaming the
-// body to a writer (DECISIONS D60). It is for an app's own small network
-// jobs: a self-updater reading release metadata and downloading an archive, a
-// feed, a manifest. It is not a general HTTP client: GET only, no cookies, no
-// cache, no connection reuse between calls.
+// Package fetch makes HTTP requests over http or https through the system's
+// client, streaming the response body to a writer (DECISIONS D60; the phase
+// 8 plan's N1 and D73). Get downloads a resource: a self-updater reading
+// release metadata and downloading an archive, a feed, a manifest. Do makes
+// any request: a method, headers, a streamed request body with upload
+// progress, and a streamed response an app can read as it arrives (server-
+// sent events are the app's: a body it reads line by line). There are no
+// cookies, no cache and no connection reuse between calls.
+//
+//	res, err := fetch.Do(ctx, fetch.Request{
+//		Method: "PUT", URL: "https://agent.example/api/upload",
+//		Body: f, BodyLength: size, // -1: unknown, sent chunked
+//	}, io.Discard, fetch.Options{
+//		Headers:        map[string]string{"Authorization": "Bearer " + token},
+//		UploadProgress: func(sent, total int64) { ... },
+//		AnyStatus:      true, // a 4xx's JSON body is the app's to read
+//	})
+//
+// Do is a contract in phase 8's wave 0: until N1 lands it serves only what
+// Get does (GET without a body) and returns ErrUnsupportedRequest for the
+// rest.
 //
 //	var buf bytes.Buffer
 //	res, err := fetch.Get(ctx, "https://example.com/app-1.2.zip", f, fetch.Options{
@@ -65,6 +81,12 @@
 // for a plain http URL into a request for credentials, so that transfer
 // fails with a *StatusError with Code 407. SOCKS5 credentials work for both.
 //
+// # The plan for Windows
+//
+// N1 moves Windows from net/http to WinHTTP (the system's TLS, trust store
+// and proxy settings), so that no darwin or windows program that imports
+// this package links net/http or crypto/tls; net/http stays on Linux.
+//
 // # Threads
 //
 // Every function may be called from any goroutine and blocks until the
@@ -105,6 +127,30 @@ type Options struct {
 	// Proxy, if set, routes the transfer through that proxy instead of the
 	// system's, or with Kind ProxyNone, through none.
 	Proxy *Proxy
+	// UploadProgress, if set, is called on the calling goroutine as Do sends
+	// a request body, with the bytes sent so far and Request.BodyLength (-1
+	// when unknown).
+	UploadProgress func(sent, total int64)
+	// AnyStatus makes Do deliver the response body whatever the status, with
+	// no *StatusError: an API's error responses carry a body the app reads.
+	// Get ignores it.
+	AnyStatus bool
+}
+
+// Request is one request for Do.
+type Request struct {
+	// Method is the HTTP method ("GET", "POST", "PUT", "PATCH", "DELETE",
+	// "HEAD", "OPTIONS"); "" is GET.
+	Method string
+	// URL is an absolute http or https URL.
+	URL string
+	// Body is the request body, read on the calling goroutine as it is sent;
+	// nil sends none. Do never closes it.
+	Body io.Reader
+	// BodyLength is the body's length in bytes, sent as Content-Length; -1
+	// when unknown, and the body is then sent chunked. A Body that ends
+	// before BodyLength bytes fails the request.
+	BodyLength int64
 }
 
 // ProxyKind is the protocol a proxy speaks.
@@ -152,6 +198,10 @@ type Response struct {
 	// it did not (the length of the body written may differ then, and also when
 	// the server's announcement was wrong).
 	ContentLength int64
+	// Headers are the final response's headers by canonical name
+	// ("Content-Type"), repeated ones joined with ", ". Do fills them; Get
+	// leaves them nil.
+	Headers map[string]string
 }
 
 // The errors Get and Bytes return can be matched with errors.Is and errors.As;
@@ -164,6 +214,12 @@ var (
 	// ErrInsecure means macOS refused plain http to this host (see "Plain http
 	// on macOS" in the package documentation).
 	ErrInsecure = errors.New("fetch: plain http refused by App Transport Security")
+	// ErrUnsupportedRequest is Do's error for a request it cannot make here
+	// yet: a method other than GET, a body, UploadProgress or AnyStatus,
+	// until N1 lands. It matches errors.ErrUnsupported.
+	ErrUnsupportedRequest = fmt.Errorf("fetch: methods other than GET and request bodies: %w", errors.ErrUnsupported)
+	// ErrBadMethod means Request.Method is not an HTTP method token.
+	ErrBadMethod = errors.New("fetch: not an HTTP method")
 )
 
 // StatusError is returned when the final response's status is not 2xx. The
@@ -226,6 +282,45 @@ func Bytes(ctx context.Context, rawURL string, limit int64, opt Options) ([]byte
 		return nil, res, err
 	}
 	return buf.Bytes(), res, nil
+}
+
+// Do makes the request req and writes the response body to w as it
+// arrives (nil w discards it). It returns when the body is complete, the
+// request fails, or ctx ends. A status outside 2xx is a *StatusError unless
+// opt.AnyStatus is set. Options.MaxBytes, Timeout, Progress, Headers and
+// Proxy mean what they mean for Get.
+func Do(ctx context.Context, req Request, w io.Writer, opt Options) (Response, error) {
+	m := req.Method
+	if m == "" {
+		m = "GET"
+	}
+	if !methodToken(m) {
+		return Response{}, fmt.Errorf("%w: %q", ErrBadMethod, req.Method)
+	}
+	if _, err := parseURL(req.URL); err != nil {
+		return Response{}, err
+	}
+	if w == nil {
+		w = io.Discard
+	}
+	if m == "GET" && req.Body == nil && opt.UploadProgress == nil && !opt.AnyStatus {
+		return Get(ctx, req.URL, w, opt)
+	}
+	return Response{}, ErrUnsupportedRequest // N1
+}
+
+// methodToken reports whether m is an HTTP token (RFC 9110 §5.6.2).
+func methodToken(m string) bool {
+	if m == "" {
+		return false
+	}
+	for i := 0; i < len(m); i++ {
+		c := m[i]
+		if c <= ' ' || c >= 0x7F || strings.IndexByte("\"(),/:;<=>?@[\\]{}", c) >= 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func parseURL(raw string) (*url.URL, error) {
