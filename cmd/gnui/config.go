@@ -22,6 +22,12 @@ type Config struct {
 	ID string `json:"id"`
 	// Name is the application's name: CFBundleName, the .app's file name.
 	Name string `json:"name"`
+	// DisplayName, when set, is the name the system shows in Name's place
+	// (CFBundleName and CFBundleDisplayName: the menu bar, the About panel,
+	// permission prompts), while the files keep Name: a renamed app whose
+	// .app, update archive and disk image keep the names installed copies
+	// and package managers look for.
+	DisplayName string `json:"displayName"`
 	// Main is the Go package to build, relative to gnui.json (default ".").
 	Main string `json:"main"`
 	// Executable is the file name under Contents/MacOS (default: Name without spaces).
@@ -381,4 +387,12 @@ func sortedKeys[V any](m map[string]V) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+// ShownName is the name the system shows: DisplayName, or Name.
+func (c *Config) ShownName() string {
+	if c.DisplayName != "" {
+		return c.DisplayName
+	}
+	return c.Name
 }

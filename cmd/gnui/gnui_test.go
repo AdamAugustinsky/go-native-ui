@@ -150,6 +150,22 @@ func TestPlistEncoding(t *testing.T) {
 	}
 }
 
+// A display name is what the system shows; the files keep the name.
+func TestInfoPlistDisplayName(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("reads the plist back with plutil")
+	}
+	c := loadHello(t)
+	c.DisplayName = "Hi"
+	data, err := encodePlist(infoPlist(c, false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := plistToJSON(t, data); m["CFBundleName"] != "Hi" || m["CFBundleDisplayName"] != "Hi" || m["CFBundleExecutable"] != "HelloApp" {
+		t.Errorf("Info.plist names: %v, %v, %v", m["CFBundleName"], m["CFBundleDisplayName"], m["CFBundleExecutable"])
+	}
+}
+
 func TestInfoPlistContent(t *testing.T) {
 	if runtime.GOOS != "darwin" {
 		t.Skip("reads the plist back with plutil")
@@ -184,6 +200,10 @@ func TestInfoPlistContent(t *testing.T) {
 		doc := m["CFBundleDocumentTypes"].([]any)[0].(map[string]any)
 		if doc["CFBundleTypeRole"] != "Editor" || doc["CFBundleTypeExtensions"].([]any)[0] != "hello" || doc["LSItemContentTypes"].([]any)[0] != "dev.gonativeui.hello" {
 			t.Errorf("document types: %v", doc)
+		}
+
+		if m["CFBundleDisplayName"] != "Hello App" {
+			t.Errorf("dev=%v: CFBundleDisplayName %v, want the name", dev, m["CFBundleDisplayName"])
 		}
 
 		ag, err := encodePlist(agentPlist(c, c.LoginAgents[0], dev))
