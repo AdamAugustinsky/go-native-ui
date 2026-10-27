@@ -119,10 +119,11 @@ var ButtonRecipes = [NumButtonVariants]ButtonRecipe{
 		Capsule: true,
 	},
 	// An alert's destructive button: systemRed at 25 % (#FFCDCE over white,
-	// #562728 over #1E1E1E) under a systemRed label.
+	// #562728 over #1E1E1E) under a red label that reads on it (DangerText;
+	// AppKit's systemRed label is 2.5:1 there in light).
 	ButtonDestructive: {
-		Fill: OfAlpha(theme.Red, 0.25, 0.25), Label: Of(theme.Red), FillInactive: OfAlpha(theme.Red, 0.25, 0.25), LabelInactive: Of(theme.Red),
-		FillHover: None, FillPressed: OfAlpha(theme.Red, 0.4, 0.4), LabelPressed: Of(theme.Red),
+		Fill: OfAlpha(theme.Red, 0.25, 0.25), Label: DangerText, FillInactive: OfAlpha(theme.Red, 0.25, 0.25), LabelInactive: DangerText,
+		FillHover: None, FillPressed: OfAlpha(theme.Red, 0.4, 0.4), LabelPressed: DangerText,
 		FillDisabled: Of(theme.FillDisabled), LabelDisabled: Of(theme.TextDisabled),
 		Rim: None, RimInactive: None, Highlight: None,
 		Capsule: true,
@@ -154,6 +155,12 @@ var ButtonRecipes = [NumButtonVariants]ButtonRecipe{
 		Shadow: OfAlpha(theme.Shadow, 0.035, 0), ShadowY: 2, ShadowBlur: 6,
 	},
 }
+
+// DangerText is red text that reads at 4.5:1 or better on a pane, on the
+// window and on a destructive button's red fill, in light (#B3141F) and dark
+// (#FF8A87): a destructive label, a missed call's name, an error. systemRed
+// itself is 3.6:1 on white.
+var DangerText = OfPair(0xB3141FFF, 0xFF8A87FF)
 
 // Button builds a push button with a text label and reports its signal
 // (Clicked on a click, Enter or Space with the focus, or an accessibility
