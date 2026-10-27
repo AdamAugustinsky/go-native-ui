@@ -1063,8 +1063,20 @@ func deliverApp(s AppSink, e *AppEvent, data []byte) {
 // loop the frame's own code runs must not run the app's handler inside
 // Build. EvWillTerminate is never held (the process ends after it).
 func deliverNow(kind AppEventKind, id uint64, a, b int64, data []byte) {
-	e := AppEvent{Kind: kind, ID: id, A: a, B: b}
-	if dispatch.held && kind != AppEvWillTerminate {
+	deliverEventNow(AppEvent{Kind: kind, ID: id, A: a, B: b}, data)
+}
+
+// DeliverService delivers an AppEvService from src synchronously, as a
+// main-thread native event (D37 class 1): a global hotkey's press, from the
+// OS's handler on the main thread. While a frame holds dispatch it is kept
+// for the frame's end, so it never reaches the app inside Build. Main
+// thread; it allocates nothing once the held list has grown.
+func DeliverService(src Source, id uint64, a, b int64) {
+	deliverEventNow(AppEvent{Kind: AppEvService, Source: src, ID: id, A: a, B: b}, nil)
+}
+
+func deliverEventNow(e AppEvent, data []byte) {
+	if dispatch.held && e.Kind != AppEvWillTerminate {
 		natives.evs = append(natives.evs, nativeEv{ev: e, off: len(natives.data), n: len(data)})
 		natives.data = append(natives.data, data...)
 		dispatch.missed = true

@@ -152,6 +152,10 @@ func runNestedChild(c string) {
 		runDrawablesChild() // drawables_darwin_test.go
 		return
 	}
+	if c == "panel" {
+		runPanelChild() // panel_darwin_test.go
+		return
+	}
 	b := &nestedBuilder{c: c}
 	var st StartupReport
 	a, err := openWindowed(Config{Title: "nested " + c, Width: 400, Height: 300}, b, &st, false)

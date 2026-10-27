@@ -73,7 +73,7 @@ func viewMetalLinkUpdate(c *ffi.CB) {
 // linkTick is one tick of the display link; metal says it is the
 // CAMetalDisplayLink's, which hands over a drawable.
 func (w *Window) linkTick(c *ffi.CB, metal bool) {
-	if !metal && w.metalLayer != 0 && !w.live {
+	if !metal && w.metalLayer != 0 && !w.live && objc.SendBool(w.win, selIsVisible) { // a link attached to an ordered-out layer never ticks (unlinkHidden)
 		layer := w.metalLayer
 		w.metalLayer = 0
 		w.attachMetalLink(layer) // its first tick delivers this frame, with a drawable
@@ -311,6 +311,11 @@ func (n Native) window() *Window {
 func (w *Window) takeDrawable() (drawable uintptr, linked bool) {
 	d := w.drawable
 	w.drawable = 0
+	if !w.metalLink && w.relinkAfterDraw && !w.live {
+		// The first frame after unlinkHidden: from the layer; the view
+		// link's next tick, after this present, attaches the metal link.
+		w.relinkAfterDraw, w.metalLayer = false, w.frameLayer
+	}
 	if d == 0 && w.metalLink {
 		if w.linkStopped() && w.restartLink() {
 			return 0, false // this frame takes the layer's nextDrawable, as the first one does
@@ -338,6 +343,33 @@ func (w *Window) linkStopped() bool {
 	return w.frameArmed && !w.linkPaused && !w.live &&
 		now-w.armedT >= linkStopNs && now-w.lastTickT >= linkStopNs && now-w.restartT >= linkStopNs &&
 		uintptr(objc.Send(w.win, selOcclusionState))&2 != 0 && !objc.SendBool(w.win, selIsMini)
+}
+
+// unlinkHidden replaces the CAMetalDisplayLink of a window ordered out
+// (Hide, or AppKit hiding a panel on deactivation) by a paused view link, as
+// at startup: a CAMetalDisplayLink whose layer left the screen does not call
+// back again once the window is back, nor does one attached in the moment
+// the window comes back, before it presents (W2's note in
+// docs/PHASE8-PLAN.md; before, linkStopped restarted it a second after the
+// window showed). Shown again, the window's first frame takes the layer's
+// nextDrawable (takeDrawable), and only then is a new CAMetalDisplayLink
+// attached, on the view link's next tick (linkTick).
+func (w *Window) unlinkHidden() {
+	if !w.metalLink || w.live || w.link == 0 {
+		return
+	}
+	link := w.makeViewLink() // paused
+	if link == 0 {
+		return
+	}
+	objc.Send(w.link, selInvalidate)
+	objc.Send(w.link, selReleaseObj)
+	if w.drawable != 0 {
+		objc.Send(w.drawable, selReleaseObj)
+		w.drawable = 0
+	}
+	w.link, w.metalLink, w.metalLayer, w.linkPaused = link, false, 0, true
+	w.relinkAfterDraw = true
 }
 
 // restartLink replaces a stopped CAMetalDisplayLink by a view CADisplayLink,
