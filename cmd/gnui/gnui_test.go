@@ -166,6 +166,26 @@ func TestInfoPlistDisplayName(t *testing.T) {
 	}
 }
 
+// A bundle name renames the .app and nothing else: the update archive keeps
+// the name installed updaters look for.
+func TestBundleNameRenamesTheAppOnly(t *testing.T) {
+	c := loadHello(t)
+	if got := c.AppFile(); got != c.Name+".app" {
+		t.Errorf("AppFile %q without a bundle name, want %q", got, c.Name+".app")
+	}
+	c.BundleName = "Hi"
+	if got := c.AppFile(); got != "Hi.app" {
+		t.Errorf("AppFile %q, want Hi.app", got)
+	}
+	if err := c.Validate(); err != nil {
+		t.Errorf("a plain bundle name is refused: %v", err)
+	}
+	c.BundleName = "a/b"
+	if c.Validate() == nil {
+		t.Error("a bundle name with a slash is accepted")
+	}
+}
+
 func TestInfoPlistContent(t *testing.T) {
 	if runtime.GOOS != "darwin" {
 		t.Skip("reads the plist back with plutil")
