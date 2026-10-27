@@ -68,6 +68,7 @@ type boxFrame struct {
 	style
 	alignNext bool       // the alignment came from NextAlign (Audit)
 	auditOff  AuditMask  // the checks of Audit the box is exempt from (NextAuditExempt)
+	fadeEnd   float32    // its children fade out over its last fadeEnd pixels (NextFadeEnd)
 	obscured  [2]float32 // a scroll box's view covered at its top and bottom (SetObscured)
 	stopWheel bool       // the wheel over the box scrolls nothing beneath it (StopWheel)
 	fixed     [2]float32
@@ -189,8 +190,10 @@ type Context struct {
 	nextPos    [2]float32
 	hasNextPos bool
 	nextFlags  Flags
-	nextAudit  AuditMask // the exemptions of the next box (NextAuditExempt)
-	bd         backdrops // this frame's backdrops and the next box's (NextBackdrop)
+	nextAudit  AuditMask  // the exemptions of the next box (NextAuditExempt)
+	nextFade   float32    // the next box's children's fade at its end (NextFadeEnd)
+	emitFade   [2]float32 // while emitting: the fade of the boxes round this one (NextFadeEnd)
+	bd         backdrops  // this frame's backdrops and the next box's (NextBackdrop)
 
 	flowHidden bool // a flow hid children this layout (flow.go)
 
@@ -667,6 +670,7 @@ func (c *Context) resetStyles() {
 	c.hasNextPos = false
 	c.nextFlags = 0
 	c.nextAudit = 0
+	c.nextFade = 0
 	c.bd.n, c.bd.hasNext = 0, false
 	c.nextEscClr = false
 	c.nextStill = false
@@ -812,6 +816,7 @@ func (c *Context) newBox(flags Flags, key Key) ID {
 		c.nDragBoxes++
 	}
 	b.auditOff, c.nextAudit = c.nextAudit, 0
+	b.fadeEnd, c.nextFade = c.nextFade, 0
 	c.takeBackdrop(b)
 	if c.hasNextPos {
 		b.fixed = c.nextPos

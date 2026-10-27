@@ -186,6 +186,21 @@ func (c *Context) NextPath(m *gpu.PathMask, p *gpu.Path) (w, h float32) {
 // NextRadius sets the same corner radius r (pixels) on all corners of the next box.
 func (c *Context) NextRadius(r float32) { c.sRadii.set([4]float32{r, r, r, r}) }
 
+// NextFadeEnd makes the next box's children fade out over its last w pixels
+// on the right, to nothing at its end: a strip that scrolls sideways fades
+// under whatever is behind it (glass included), which a gradient drawn over
+// it in a solid colour cannot do. It applies to what the children draw, not
+// to the box's own background.
+func (c *Context) NextFadeEnd(w float32) { c.nextFade = max(w, 0) }
+
+// SetFadeEnd is NextFadeEnd for box id, built this frame (a scroll view's
+// viewport, which the widget built).
+func (c *Context) SetFadeEnd(id ID, w float32) {
+	if id > 0 && int(id) < len(c.boxes) {
+		c.boxes[id].fadeEnd = max(w, 0)
+	}
+}
+
 // NextRadii sets the corner radii (pixels) of the next box: top-left, top-right, bottom-right, bottom-left.
 func (c *Context) NextRadii(tl, tr, br, bl float32) { c.sRadii.set([4]float32{tl, tr, br, bl}) }
 
