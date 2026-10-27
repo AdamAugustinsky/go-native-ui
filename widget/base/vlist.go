@@ -551,7 +551,17 @@ func (st *VListState) pileRequests(c *ui.Context, okey, ikey ui.Key, scale float
 // (its model may be ahead of the list while VListState.Pending). Styles set
 // with ui's Next calls before Item apply to the item's box, except its size.
 // Items must be built in order from First.
-func (v *VList) Item(i int) uint64 {
+func (v *VList) Item(i int) uint64 { return v.item(i, false) }
+
+// ItemFixedX is Item for an item that does not scroll sideways in a list
+// that does (VListOpts.ContentW): a diff's file header, whose name and
+// counts stay in view while the lines under it scroll. Its box is as wide
+// as the view, not the content, and stays put across while the other items
+// move by the sideways offset; it scrolls up and down with them. In a list
+// without ContentW it is Item.
+func (v *VList) ItemFixedX(i int) uint64 { return v.item(i, true) }
+
+func (v *VList) item(i int, fixed bool) uint64 {
 	v.EndItem()
 	if i != v.next || i >= v.Last {
 		panic("base: VList.Item: items must be built in order from First to Last-1")
@@ -564,11 +574,31 @@ func (v *VList) Item(i int) uint64 {
 		v.closePile()
 	}
 	id := st.f.id(i)
-	c.NextSize(ui.Pct(1), ui.Children(1))
-	v.wide()
+	var fl ui.Flags
+	switch {
+	case !fixed || v.minW == 0:
+		c.NextSize(ui.Pct(1), ui.Children(1))
+		v.wide()
+	case v.inPile:
+		// The pile moves across with the items: the item undoes its
+		// sideways offset (and stretch), as wide as the view, whose width
+		// is the last layout's (the pile is as wide as the content).
+		sx, _ := c.Scroll(v.Body)
+		tx, _ := c.ScrollStretch(v.Body)
+		r := c.Rect(v.Body)
+		fl = ui.FloatingX
+		c.NextPos(float32(sx+tx), 0)
+		c.NextSize(ui.Px(r[2]-r[0]), ui.Children(1))
+	default:
+		// In the flow, floating across puts it at the body's own left,
+		// which the sideways offset does not move.
+		fl = ui.FloatingX
+		c.NextPos(0, 0)
+		c.NextSize(ui.Pct(1), ui.Children(1))
+	}
 	c.NextRole(ui.RoleListItem)
 	c.NextSemPos(i, v.Len)
-	b := c.BoxKeyed(0, ui.KeyN(v.key, id), nil)
+	b := c.BoxKeyed(fl, ui.KeyN(v.key, id), nil)
 	c.Push(b)
 	v.open = true
 	if bl := &st.built[st.cur]; len(*bl) < cap(*bl) {

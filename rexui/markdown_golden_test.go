@@ -119,17 +119,21 @@ func TestMarkdownGolden(t *testing.T) {
 // longer than the window: ContentW (CodeWidth of the longest line) makes the
 // list scroll sideways, every row by one offset.
 type codeListScene struct {
-	k      *base.Kit
-	mode   theme.Mode
-	view   rexui.MarkdownView
-	st     base.VListState
-	lines  [][]byte
-	toks   [][]highlight.Token
-	cw     float32
-	sideX  float64 // a sideways offset to set once (0: none)
-	rows   [][4]float32
-	outer  [4]float32
-	scroll float64
+	k     *base.Kit
+	mode  theme.Mode
+	view  rexui.MarkdownView
+	st    base.VListState
+	lines [][]byte
+	toks  [][]highlight.Token
+	cw    float32
+	sideX float64 // a sideways offset to set once (0: none)
+	// headers makes every twelfth line a file's header (ItemFixedX), its
+	// name and counts staying in view while the lines scroll sideways
+	headers bool
+	heads   [][4]float32
+	rows    [][4]float32
+	outer   [4]float32
+	scroll  float64
 }
 
 func (s *codeListScene) Init(a *app.App) error {
@@ -197,8 +201,14 @@ func (s *codeListScene) Build(c *ui.Context) {
 		c.SetScroll(v.Body, s.sideX, y)
 		s.sideX = 0
 	}
-	s.rows = s.rows[:0]
+	s.rows, s.heads = s.rows[:0], s.heads[:0]
 	for i := v.First; i < v.Last; i++ {
+		if s.headers && i%12 == 0 {
+			v.ItemFixedX(i)
+			fileHeader(k, i)
+			s.heads = append(s.heads, c.Rect(c.Parent()))
+			continue
+		}
 		n := v.Item(i)
 		o.Number, o.Kind, o.Item, o.Part = int(n)+1, rexui.DiffKind(s.lines[n]), n, 0
 		rexui.CodeLine(k, ui.KeyN(c.ParentKey(), 1), s.lines[n], s.toks[n], o)
@@ -209,6 +219,25 @@ func (s *codeListScene) Build(c *ui.Context) {
 	s.scroll, _ = c.Scroll(v.Body)
 	c.Pop()
 	k.End()
+}
+
+// fileHeader is a diff's file header row: the file's name at the left and
+// its counts at the right.
+func fileHeader(k *base.Kit, i int) {
+	c, r := k.Context(), k.Theme()
+	c.NextBG(r.Colors[theme.Fill5])
+	k.NextPadding(12, 4, 12, 4)
+	k.NextGap(8)
+	k.BeginContainer(ui.AxisX, ui.CrossCenter, "head", ui.Pct(1), ui.Children(1), ui.DrawBackground)
+	name := "ui/richtext.go"
+	if i%24 != 0 {
+		name = "ui/layout_test.go"
+	}
+	rexui.Label(k, name, rexui.LabelOpts{Style: rexui.TextHeadline})
+	k.Spacer()
+	rexui.Label(k, "+8", rexui.LabelOpts{MonoPt: 11, Color: rexui.SuccessText})
+	rexui.Label(k, "−8", rexui.LabelOpts{MonoPt: 11, Color: rexui.DangerText})
+	k.EndContainer()
 }
 
 // A file's lines as CodeLine rows in a VList with ContentW: scrolled 160 px
@@ -236,6 +265,43 @@ func TestCodeLinesScrollSidewaysGolden(t *testing.T) {
 			}
 			r.AuditLayout("codelines-" + m.name)
 			r.AssertImage("codelines-"+m.name, widgettest.Tolerance{})
+		})
+	}
+}
+
+// A diff with file headers built with ItemFixedX: scrolled 160 px sideways,
+// the lines start 160 px left of the list while each header stays at its
+// left edge, as wide as the view, its counts in view at its right
+// (testdata/codelines-headers-*.png).
+func TestCodeLinesFixedHeadersGolden(t *testing.T) {
+	for _, m := range []struct {
+		name string
+		mode theme.Mode
+	}{{"light", theme.Light}, {"dark", theme.Dark}} {
+		t.Run(m.name, func(t *testing.T) {
+			s := &codeListScene{mode: m.mode, headers: true}
+			r := widgettest.Open(t, app.Config{Title: "Code lines", Width: 420, Height: 220}, 420*2, 220*2, 2, s)
+			r.Frames(4)
+			s.sideX = 160
+			r.Frames(4)
+			if s.scroll != 160 {
+				t.Fatalf("the list is %v px sideways, want 160", s.scroll)
+			}
+			if len(s.heads) == 0 {
+				t.Fatal("no header was built")
+			}
+			for i, h := range s.heads {
+				if h[0] != s.outer[0] || h[2] != s.outer[2] {
+					t.Fatalf("header %d spans x %v..%v, want the view's %v..%v", i, h[0], h[2], s.outer[0], s.outer[2])
+				}
+			}
+			for i, row := range s.rows {
+				if row[0] != s.outer[0]-160 {
+					t.Fatalf("row %d starts at x %v, want %v", i, row[0], s.outer[0]-160)
+				}
+			}
+			r.AuditLayout("codelines-headers-" + m.name)
+			r.AssertImage("codelines-headers-"+m.name, widgettest.Tolerance{})
 		})
 	}
 }

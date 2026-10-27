@@ -167,7 +167,10 @@ rows. `VListOpts.ContentW = rexui.CodeWidth(k, rexui.CodeColumns(src), opts)`
 span it, and the list scroll sideways to its end, all rows by one offset: a
 wheel still scrolls it up and down, Shift with the wheel or a trackpad
 sideways. Its horizontal bar comes from `Body` as the vertical one does
-(`base.ScrollBoth`).
+(`base.ScrollBoth`). A row that should not move sideways, a diff's file
+header with its counts at the right, is built with `v.ItemFixedX(i)` instead
+of `v.Item(i)`: as wide as the view, it stays put across while the lines
+under it scroll.
 
 ## 6. System menus
 

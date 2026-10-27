@@ -337,3 +337,71 @@ func TestVListScrollsSidewaysWithContentW(t *testing.T) {
 		}
 	}
 }
+
+// Items built with ItemFixedX in a list given ContentW (a diff's file
+// headers) stay put across while the others scroll sideways: as wide as the
+// view, at its left, in the flow and in the pile above the anchor, and
+// pinned to the end; they still scroll up and down with the rest. Building
+// them allocates nothing.
+func TestVListItemFixedXStaysPutSideways(t *testing.T) {
+	h := newVT(t, 1000, VListOpts{ContentW: 1000})
+	h.c.WheelJumps = true
+	h.fixed = func(id uint64) bool { return id%7 == 0 }
+	h.frames(3)
+	h.scrollTo(300, 7)
+	h.in.AddScroll(-120, 0, true)
+	h.frames(2)
+	xs := func(what string) {
+		t.Helper()
+		var fixedIn, moved bool
+		for id, b := range h.box {
+			r := h.c.Rect(b)
+			if h.fixed(id) {
+				if r[0] != 0 || r[2] != float32(h.w) {
+					t.Fatalf("%s: fixed item %d spans x %v..%v, want 0..%d", what, id, r[0], r[2], h.w)
+				}
+				fixedIn = fixedIn || r[1] >= 0
+				continue
+			}
+			if r[0] != -120 || r[2]-r[0] < 1000 {
+				t.Fatalf("%s: item %d spans x %v..%v, want from -120 and 1000 wide", what, id, r[0], r[2])
+			}
+			moved = true
+		}
+		if !fixedIn || !moved {
+			t.Fatalf("%s: the frame built no fixed item in view, or no other", what)
+		}
+	}
+	xs("120 px sideways")
+	if content, _ := h.c.ScrollExtent(h.v.Body); content[0] != 1000 {
+		t.Fatalf("the body's content is %v wide, want 1000", content[0])
+	}
+	id, y := h.top()
+	h.in.AddScroll(0, -1, false) // a wheel's notch down
+	h.frame()
+	if got := h.y(id); got != y-48 {
+		t.Fatalf("a wheel notch moved item %d to y %v, want %v", id, got, y-48)
+	}
+	xs("after a notch down")
+	above := false
+	for id, b := range h.box {
+		if r := h.c.Rect(b); h.fixed(id) && r[1] < 0 {
+			above = true
+		}
+	}
+	if !above {
+		t.Fatal("no fixed item in the pile above the anchor was built")
+	}
+
+	h.in.PushKey(ui.KeyEvent{Code: ui.KeyEnd, Down: true})
+	h.c.SetFocus(h.v.Key())
+	h.frames(3)
+	if !h.v.AtEnd {
+		t.Fatal("End did not reach the end")
+	}
+	xs("pinned at the end")
+
+	if n := testing.AllocsPerRun(20, h.frame); n != 0 {
+		t.Errorf("%v allocations per frame", n)
+	}
+}
