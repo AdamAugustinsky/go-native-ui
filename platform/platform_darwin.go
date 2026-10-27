@@ -61,8 +61,11 @@ type Window struct {
 	linkPaused bool
 	metalLink  bool    // w.link is a CAMetalDisplayLink (SetFrameSource)
 	metalLayer objc.ID // layer to attach a CAMetalDisplayLink to on the next view-link tick
-	drawable   objc.ID // retained drawable from the current CAMetalDisplayLink tick
-	idleTicks  int     // display-link ticks since the last frame request
+	// relinkAfterDraw: unlinkHidden replaced the metal link; the next frame
+	// drawn (from the layer) sets metalLayer again.
+	relinkAfterDraw bool
+	drawable        objc.ID // retained drawable from the current CAMetalDisplayLink tick
+	idleTicks       int     // display-link ticks since the last frame request
 	// Nested loops (an AppKit loop, or a block's, that does not return to
 	// Wait: NSCorrectionPanel's): frameOut is set while an EvFrame a tick
 	// queued (at frameOutT) has not reached the app (Wait, Pending); a tick

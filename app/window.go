@@ -285,6 +285,11 @@ func (a *App) shelve(on bool) {
 	a.p.hide(on)
 	if !on {
 		a.p.invalidate()
+		// Draw at once, as the first frame after Open: a hidden window's
+		// display link was replaced (platform.Window.Hide), so the layer
+		// gives a drawable without a tick. Where it does not, the attempt
+		// fails and the frame waits for the next tick (pacer.failed).
+		a.p.frameReady = true
 	}
 }
 
