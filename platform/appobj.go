@@ -157,7 +157,8 @@ type QuitReason int64
 const (
 	// QuitMenu is the Quit menu item or ⌘Q.
 	QuitMenu QuitReason = iota + 1
-	// QuitDock is Quit from the Dock or another app (an Apple event).
+	// QuitDock is Quit from the Dock or another app (an Apple event; on
+	// Windows WM_CLOSE sent to the app window, as taskkill without /F does).
 	QuitDock
 	// QuitLogout is a logout, restart or shutdown: answer promptly.
 	QuitLogout

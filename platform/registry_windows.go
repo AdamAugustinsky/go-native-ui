@@ -190,6 +190,7 @@ const (
 	wmShowWindow     = 0x0018
 	wmEnterMenuLoop  = 0x0211
 	wmExitMenuLoop   = 0x0212
+	wmAppGone        = 0x8000 + 3 // WM_APP+3: an app window a thread before this one made, to destroy on its own thread
 	modalTimerID     = 2
 	modalTimerMs     = 16 // the frame handler's tick inside a native modal loop
 	endSessionLogoff = 0x80000000
@@ -257,8 +258,8 @@ func ensureAppWindow() bool {
 
 // destroyAppWindow destroys the app window (a thread change in tests; the
 // process's end otherwise takes it). Only the thread that made a window may
-// destroy it: from another thread it is asked to close (WM_CLOSE), which
-// happens if that thread pumps again, and is forgotten here either way.
+// destroy it: from another thread it is posted wmAppGone, which destroys it
+// if that thread pumps again, and it is forgotten here either way.
 func destroyAppWindow() {
 	if reg.app.hwnd == 0 {
 		return
@@ -275,7 +276,7 @@ func destroyAppWindow() {
 	if owner == uint32(win32.Call(pGetCurrentThreadID)) {
 		win32.Call(pDestroyWindow, h)
 	} else {
-		win32.Call(pPostMessageW, h, wmClose, 0, 0)
+		win32.Call(pPostMessageW, h, wmAppGone, 0, 0)
 	}
 }
 
@@ -348,6 +349,19 @@ func appWndProc(hwnd, m, wp, lp uintptr) uintptr {
 			modalTick()
 			return 0
 		}
+	case wmClose:
+		// Another program asks the app to close (taskkill without /F, an
+		// installer): a quit request, decided by the app's loop. An app
+		// window a thread before made is not the app's any more.
+		if hwnd == reg.app.hwnd {
+			RequestQuit(QuitDock)
+			return 0
+		}
+	case wmAppGone:
+		if hwnd != reg.app.hwnd {
+			win32.Call(pDestroyWindow, hwnd)
+		}
+		return 0
 	case wmQueryEndSess:
 		return queryEndSession(lp)
 	case wmEndSession:
