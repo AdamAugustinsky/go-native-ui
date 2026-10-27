@@ -85,7 +85,7 @@ var _ = widgettest.DefineUpdateFlag()
 
 // The offscreen goldens of Markdown and CodeBlock, light and dark: the whole
 // scene, and the diff block on its own (testdata/markdown-*.png,
-// codeblock-diff-*.png; -update rewrites them).
+// codeblock-diff-*.png; -update rewrites them), with a clean layout audit.
 func TestMarkdownGolden(t *testing.T) {
 	for _, m := range []struct {
 		name string
