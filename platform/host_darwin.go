@@ -46,9 +46,22 @@ var (
 	selSubviews         = objc.Sel("subviews")
 	selFirstObject      = objc.Sel("firstObject")
 
-	containerClass, hostClipClass, windowClass objc.ID
-	hostClipDef, windowDef                     *objc.ClassDef
+	containerClass, hostClipClass objc.ID
+	hostClipDef                   *objc.ClassDef
+
+	// windowKind and panelKind are GNUIWindow (an NSWindow) and GNUIPanel
+	// (an NSPanel, panel_darwin.go): the two classes of Open's windows. Both
+	// have the same overrides; each has its own index ivar, mark and
+	// superclass.
+	windowKind, panelKind winClass
 )
+
+// winClass is one class of Open's NSWindows.
+type winClass struct {
+	cls  objc.ID
+	def  *objc.ClassDef
+	mark *objc.Ivar // counted by the open/close leak gate (live.windows)
+}
 
 // registerShellClasses defines GNUIContainer (the flipped content view),
 // GNUIHostClip (a host's clip view) and GNUIWindow (the window).
@@ -68,12 +81,22 @@ func registerShellClasses() {
 	h.Method(selInsertNewline, "v@:@", hostNewline)
 	hostClipClass, hostClipDef = h.Register(), h
 
-	wd := objc.Define("GNUIWindow", objc.Cls("NSWindow"), nil)
-	wd.Method(selMakeFirstResp, "c@:@", windowMakeFirstResponder)
-	wd.Method(selSelectFollowing, "v@:@", windowSelectFollowing)
-	wd.Method(selSelectPreceding, "v@:@", windowSelectPreceding)
-	live.windowMark = countInstances(wd, &live.windows) // the open/close leak gate (windows_darwin.go)
-	windowClass, windowDef = wd.Register(), wd
+	windowKind.define("GNUIWindow", "NSWindow", nil)
+	panelKind.define("GNUIPanel", "NSPanel", registerPanel)
+}
+
+// define defines and registers the class: the host focus hand-off, the
+// leak gate's count, and what more adds.
+func (k *winClass) define(name, super string, more func(*objc.ClassDef)) {
+	wd := objc.Define(name, objc.Cls(super), nil)
+	wd.Method(selMakeFirstResp, "c@:@", func(c *ffi.CB) { windowMakeFirstResponder(c, k) })
+	wd.Method(selSelectFollowing, "v@:@", func(c *ffi.CB) { windowSelectKeyView(c, k, selSelectFollowing, 0) })
+	wd.Method(selSelectPreceding, "v@:@", func(c *ffi.CB) { windowSelectKeyView(c, k, selSelectPreceding, ModShift) })
+	if more != nil {
+		more(wd)
+	}
+	k.mark = countInstances(wd, &live.windows) // the open/close leak gate (windows_darwin.go)
+	k.cls, k.def = wd.Register(), wd
 }
 
 func retYes(c *ffi.CB) { c.RetBool(true) }
@@ -526,12 +549,13 @@ func nsViewClass() objc.ID {
 	return nsViewCls
 }
 
-// windowMakeFirstResponder is GNUIWindow's makeFirstResponder:: NSWindow's,
-// then EvHostFocus when the first responder moved into a host or out of one.
-func windowMakeFirstResponder(c *ffi.CB) {
+// windowMakeFirstResponder is GNUIWindow's (and GNUIPanel's)
+// makeFirstResponder:: NSWindow's, then EvHostFocus when the first responder
+// moved into a host or out of one.
+func windowMakeFirstResponder(c *ffi.CB, k *winClass) {
 	self, resp := objc.ID(c.Int(0)), c.Int(2)
-	ok := objc.SuperFrame(c.Frame(), windowDef.Superclass(), self, selMakeFirstResp).Arg(resp).Call(objc.MsgSendSuper).Bool()
-	if w := nsWindowWindow(self); ok && w != nil {
+	ok := objc.SuperFrame(c.Frame(), k.def.Superclass(), self, selMakeFirstResp).Arg(resp).Call(objc.MsgSendSuper).Bool()
+	if w := k.window(self); ok && w != nil {
 		w.firstResponderChanged()
 	}
 	c.RetBool(ok)
@@ -552,22 +576,19 @@ func (w *Window) firstResponderChanged() {
 	w.q.push(e)
 }
 
-// windowSelectFollowing and windowSelectPreceding are GNUIWindow's
+// windowSelectKeyView is GNUIWindow's (and GNUIPanel's)
 // selectKeyViewFollowingView: and selectKeyViewPrecedingView:: from inside a
 // host, Tab and Shift+Tab go back to the app as host commands instead of
 // through AppKit's key-view loop.
-func windowSelectFollowing(c *ffi.CB) { windowSelectKeyView(c, selSelectFollowing, 0) }
-func windowSelectPreceding(c *ffi.CB) { windowSelectKeyView(c, selSelectPreceding, ModShift) }
-
-func windowSelectKeyView(c *ffi.CB, sel objc.SEL, m Mods) {
+func windowSelectKeyView(c *ffi.CB, k *winClass, sel objc.SEL, m Mods) {
 	self, v := objc.ID(c.Int(0)), objc.ID(c.Int(2))
-	if w := nsWindowWindow(self); w != nil {
+	if w := k.window(self); w != nil {
 		if f := w.hostOf(v); f != 0 {
 			w.hostCommand(f-1, KeyTab, m)
 			return
 		}
 	}
-	objc.SuperFrame(c.Frame(), windowDef.Superclass(), self, sel).Arg(uintptr(v)).Call(objc.MsgSendSuper)
+	objc.SuperFrame(c.Frame(), k.def.Superclass(), self, sel).Arg(uintptr(v)).Call(objc.MsgSendSuper)
 }
 
 // hostCommand queues EvHostCommand for slot i.

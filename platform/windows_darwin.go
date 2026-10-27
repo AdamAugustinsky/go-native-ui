@@ -57,7 +57,7 @@ func register(w *Window) error {
 	mark := w.slotMark()
 	viewDef.Index().Set(w.view, mark)
 	delegateDef.Index().Set(w.delegate, mark)
-	windowDef.Index().Set(w.win, mark)
+	w.wc.def.Index().Set(w.win, mark)
 	w.registered = true
 	return nil
 }
@@ -75,7 +75,7 @@ func unregister(w *Window) {
 	w.registered = false
 	viewDef.Index().Set(w.view, 0)
 	delegateDef.Index().Set(w.delegate, 0)
-	windowDef.Index().Set(w.win, 0)
+	w.wc.def.Index().Set(w.win, 0)
 	reg.slots[w.slot] = nil
 	for i := 0; i < reg.n; i++ {
 		if reg.open[i] == w {
@@ -132,12 +132,12 @@ func delegateWindow(self objc.ID) *Window {
 	return nil
 }
 
-// nsWindowWindow is the window of GNUIWindow self.
-func nsWindowWindow(self objc.ID) *Window {
+// window is the window of self, an instance of k (GNUIWindow or GNUIPanel).
+func (k *winClass) window(self objc.ID) *Window {
 	if self == 0 {
 		return nil
 	}
-	if w := slotWindow(windowDef.Index().Get(self)); w != nil && w.win == self {
+	if w := slotWindow(k.def.Index().Get(self)); w != nil && w.win == self {
 		return w
 	}
 	return nil
@@ -188,8 +188,8 @@ func eventWindow(ev objc.ID) *Window {
 		return w
 	}
 	if nswin != 0 {
-		if objc.SendBool1(nswin, selIsKindOfClass, uintptr(windowClass)) {
-			return nil // a GNUIWindow that is not open
+		if objc.SendBool1(nswin, selIsKindOfClass, uintptr(windowKind.cls)) || objc.SendBool1(nswin, selIsKindOfClass, uintptr(panelKind.cls)) {
+			return nil // a GNUIWindow or GNUIPanel that is not open
 		}
 		if w := findWindow(objc.Send(nswin, selSheetParent)); w != nil {
 			return w
@@ -273,7 +273,7 @@ func (w *Window) cascade() {
 	objc.F.Reset().Arg(uintptr(w.win)).Arg(uintptr(selCascade)).ArgPoint(x, y).Call(objc.MsgSend)
 }
 
-func (w *Window) cascadesFrom() bool { return !w.FullScreen() && !w.Miniaturized() }
+func (w *Window) cascadesFrom() bool { return w.panel == nil && !w.FullScreen() && !w.Miniaturized() }
 
 // Pump is the app-wide event pump with windows open (D5, D30): it blocks
 // until an event, a wake, a frame slot of any window or the timeout (ns; 0
@@ -423,7 +423,7 @@ var (
 // for the open/close leak gate: once a closed window's objects are reaped
 // (the next Pump) the counts are back where they were before it opened.
 type WindowObjects struct {
-	Windows, Views, Delegates int64 // GNUIWindow, GNUIView, GNUIWindowDelegate
+	Windows, Views, Delegates int64 // GNUIWindow and GNUIPanel, GNUIView, GNUIWindowDelegate
 	Pending                   int   // released by the next Pump
 }
 
@@ -434,8 +434,8 @@ func LiveWindowObjects() WindowObjects {
 }
 
 var live struct {
-	windows, views, delegates          atomic.Int64
-	windowMark, viewMark, delegateMark *objc.Ivar // set on the objects Open counted
+	windows, views, delegates atomic.Int64
+	viewMark, delegateMark    *objc.Ivar // set on the objects Open counted (the windows': winClass.mark)
 }
 
 // countInstances gives def a mark ivar and a dealloc that, on a marked

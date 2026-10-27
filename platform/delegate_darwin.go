@@ -92,6 +92,8 @@ func windowDidChangeOcclusion(c *ffi.CB) {
 		if uintptr(objc.Send(w.win, selOcclusionState))&2 != 0 { // NSWindowOcclusionStateVisible
 			e.Flags = FlagDown
 			w.visible = 1
+		} else if w.panel != nil && !objc.SendBool(w.win, selIsVisible) {
+			w.unlinkHidden() // AppKit ordered the panel out (hidesOnDeactivate)
 		}
 		w.q.push(e)
 	}

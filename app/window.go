@@ -249,12 +249,18 @@ func (a *App) applyCommands() {
 	}
 	if c&cmdHide != 0 {
 		win.Hide()
+		if a.cfg.Panel != nil {
+			a.shelve(true)
+		}
 	}
 	if c&cmdShow != 0 {
 		win.Show()
 	}
 	if c&cmdFocus != 0 {
 		win.Activate()
+	}
+	if c&(cmdShow|cmdFocus) != 0 && a.cfg.Panel != nil {
+		a.shelve(false)
 	}
 	if c&cmdMiniaturize != 0 {
 		win.Miniaturize()
@@ -266,6 +272,25 @@ func (a *App) applyCommands() {
 		win.Zoom()
 	}
 	a.p.invalidate() // a title or a frame changes what the window shows
+}
+
+// shelve takes a panel off the loop (on) or puts it back. A shelved panel
+// keeps everything (its ui state, its last frame in the layer) and builds
+// and draws nothing: the loop does not wake for it, whatever is owed or
+// asked for (a wake, a timed frame) waits. Put back, it is visible: what is
+// owed, and a repaint, are drawn on its next frame slot.
+func (a *App) shelve(on bool) {
+	a.shelved = on
+	a.tr.in.Hidden = on
+	a.p.hide(on)
+	if !on {
+		a.p.invalidate()
+		// Draw at once, as the first frame after Open: a hidden window's
+		// display link was replaced (platform.Window.Hide), so the layer
+		// gives a drawable without a tick. Where it does not, the attempt
+		// fails and the frame waits for the next tick (pacer.failed).
+		a.p.frameReady = true
+	}
 }
 
 // Window is this App's window handle (its Win), nil for an App without a

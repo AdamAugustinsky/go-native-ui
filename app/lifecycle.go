@@ -92,10 +92,11 @@ func (a *App) DefaultEvent(e *Event) {
 }
 
 // reopenWindow is the window a reopen shows: the most recently opened of the
-// open windows that are hidden or in the Dock; nil when none is.
+// open windows that are hidden or in the Dock, panels aside (the app shows
+// those); nil when none is.
 func (a *App) reopenWindow() *App {
 	for i := len(a.wins) - 1; i >= 0; i-- {
-		if w := a.wins[i]; w.Win != nil && !w.closing && (!w.Win.Visible() || w.Win.Miniaturized()) {
+		if w := a.wins[i]; w.Win != nil && !w.closing && w.cfg.Panel == nil && (!w.Win.Visible() || w.Win.Miniaturized()) {
 			return w
 		}
 	}
