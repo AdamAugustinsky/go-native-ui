@@ -11,7 +11,7 @@ Each app's own plan is `docs/GNUI-MIGRATION-PLAN.md` in its repo (branch `gnui-m
 
 **What phase 8 does:**
 - **Ends D34 for Windows.** The services, windows and hosts phase 6 shipped for macOS get Windows implementations: more than one window and windowless running, tray, toasts, native file dialogs, drag and drop, hosted native views as child windows, the multi-line composer, login items, self-update, URL schemes, single-instance activation, install and packaging.
-- **Adds what neither OS has yet,** on both: panel windows (the palette and the recording bar), global hotkeys, screen and audio capture to MP4, a hosted OS browser view, HTTP methods with streaming bodies, a WebSocket client, a terminal emulator widget, markdown and syntax highlighting.
+- **Adds what neither OS has yet,** on both: panel windows (the palette and the recording bar), global hotkeys, screen and audio capture to MP4, a hosted OS browser view, HTTP methods with streaming bodies, a WebSocket client, a terminal widget (on libghostty-vt, D74), markdown and syntax highlighting.
 - **Makes Windows verifiable** beyond CI: a Windows VM with a desktop, the agent bridge on Windows, and a measurement page for Windows numbers.
 
 **Linux stays where phase 6 left it** (D63): it compiles, keeps its 4 CI jobs green and returns `ErrUnsupported` for the new APIs.
@@ -33,7 +33,7 @@ In scope, by package (the D28/D40 layering is unchanged; new packages are import
 | `app/ws` | a WebSocket client: `NSURLSessionWebSocketTask`, WinHTTP's WebSocket API, and on Linux `net/http` with our own framing | new |
 | `app/webview` | a hosted OS browser view: `WKWebView`, WebView2 (D64, D65) | new |
 | `media/capture` | screen or window plus microphone and system audio to MP4, both OSes | new |
-| `term` | a terminal emulator: VT parser, screen and scrollback model, input encoding (pure Go) | new |
+| `term` | a Go binding over libghostty-vt (Ghostty's terminal library, loaded at runtime through `clib`; no cgo): terminal, render state, input encoding, selection, search, formatter | new |
 | `markdown`, `highlight` | a GFM-subset parser to rich-text spans; table-driven syntax highlighters (pure Go) | new |
 | `rexui` | `Terminal`, `Markdown`, `CodeBlock`, `WebView` (a host box with Rex chrome) components; the composer gains the Windows editor | changed |
 | `cmd/gnui` | `package -target windows`: icon, manifest and version resources, optional signing, a zip; the agent bridge on Windows | changed |
@@ -44,7 +44,7 @@ In scope, by package (the D28/D40 layering is unchanged; new packages are import
 - **Linux parity** for any of the above (D63).
 - **UI built in HTML.** D2 still excludes it; D64 allows only hosting the OS's browser view as content.
 - **UI Automation** (Windows accessibility for our drawn UI). The hosted RichEdit and WebView2 bring their own providers; the drawn UI stays unannounced to Narrator. It is a phase of its own (the N7 bridge, ported); see Risks.
-- **A local terminal** (ConPTY, `forkpty`). a3-app's terminal is remote: bytes come over the agent's WebSocket. `term` is the emulator only.
+- **A local terminal in the framework** (ConPTY, `forkpty`). a3-app's terminal is remote: bytes come over the agent's WebSocket. `term` is the emulator only; `cmd/termdemo` opens a pty itself (macOS, Linux) as a demo.
 - **DirectComposition.** Panels on Windows are opaque with DWM corners and shadow; hosts are child windows (D66). Transparent panels and visual-hosted WebView2 come with DComp later.
 - **Native glass on Windows** (Mica, Acrylic). The drawn fallbacks stay (D54).
 - **The drawn multi-line editor.** Both apps' editors on Windows are hosted RichEdit (D67); the drawn one waits for Linux.
@@ -96,7 +96,7 @@ What the two apps need, per OS: the status today on `main` (693d3b3), and the ta
 | HTTP methods, request bodies, upload progress, streaming | both (kb uploads recordings; app `PUT /api/upload` up to 20 GB) | GET only (`app/fetch/fetch.go:4,185`) | GET only, on `net/http` (`app/fetch/fetch_http.go:9`) | `fetch.Do(ctx, Request, w, Options)` (N1, D73) |
 | WebSocket client | app | none in the repo | none | `app/ws` (N2, D73) |
 | Local TCP listener for the port tunnel | app | stdlib `net` | stdlib `net` | app-side, plain Go (`net.Listen`, +0.65 MB measured); `app/ws` carries the bytes |
-| Terminal emulator widget | app | none (`theme/rex/terminal.go` is a palette for rexlook's fake panes) | none | `term` + `rexui.Terminal` (C1, D74) |
+| Terminal emulator widget | app | none (`theme/rex/terminal.go` is a palette for rexlook's fake panes) | none | `term` (libghostty-vt) + `rexui.Terminal` (C1, D74) |
 | Markdown and code in messages | app | rich text spans (D42), no markdown | spans on `BasicLayouter` (no bidi) | `markdown` + `highlight` + `rexui.Markdown` (C2, C3, D75) |
 | Secrets | both | Keychain | Credential Manager, 2,560-byte limit (`app/secret/secret_windows.go:24`) | unchanged API; values over the limit are refused today, so S2 adds DPAPI-sealed files for them |
 | Login item | kb | yes (`app/login`) | `ErrUnsupported` (`app/login/login_other.go:6`) | `login` on the `HKCU …\Run` value, reading `StartupApproved` (S3) |
@@ -232,15 +232,23 @@ Proposed here, not written to `DECISIONS.md`. Each lists the choice, the alterna
 
 **Alternatives:** `golang.org/x/net/websocket` or `nhooyr.io/websocket`/`coder/websocket` (pure Go, permissive, but on `net/http` and `crypto/tls`: the 4 MB above); keeping `net/http` on Windows (the size, and no system proxy).
 
-### D74. A terminal emulator of our own
+### D74. The terminal is libghostty-vt, loaded at runtime; we render it
 
-**Decision.** Package `term`: a VT parser written from the DEC/ANSI state machine (Paul Williams' published diagram, vt100.net, as alacritty's `vte` and others do), a screen model (grid, scrollback ring, alternate screen, tab stops, scroll regions, origin and wrap modes, SGR with 16/256/24-bit colour, underline styles, wide and combining characters, OSC 0/2 titles, OSC 8 hyperlinks, bracketed paste, mouse modes 1000/1002/1006, application cursor and keypad keys, DECSCUSR cursor shapes), reflow on resize, and an input encoder (keys, modifiers, paste, mouse) to xterm sequences. OSC 52 clipboard writes go to the app, which decides. `rexui.Terminal` draws it with `theme/rex/terminal.go`'s palette and supports selection, copy, find and scroll.
+**Decision (Adam, 2026-10-27: "just use libghostty").** The emulator is **libghostty-vt**, the terminal library of Ghostty (MIT, Mitchell Hashimoto and contributors), built from one pinned commit and loaded at runtime through `clib` (D35): `dlopen` on macOS and Linux, `LoadLibraryExW` on Windows. `CGO_ENABLED=0` stays. This replaces the emulator of our own this decision first planned, and it is Adam's approval under D2 to bundle **one** native library, libghostty-vt, with the apps that use the terminal. Nothing else is bundled.
 
-**Pointer-free and allocation-free:** cells are 8 bytes (a rune or a grapheme index, a style index, flags), rows are offsets into a ring, graphemes beyond one rune and hyperlinks live in interned side tables with budgets. Parsing allocates nothing per byte.
+- **`term`** binds the C API (`include/ghostty/vt/*.h` at the pin): the terminal (`vt_write`, resize, modes, scrollback, colours), the render state (dirty tracking per row and per frame, row IDs, raw cells decoded with the bit layout the library's own type manifest gives), key, mouse, focus and paste encoders, selection (word, line, rectangle), search, the plain/VT/HTML formatter, OSC 8 links, titles, bells, and OSC 52 clipboard writes, which go to the app to allow or not. `term`'s mirrors of the C structs are checked against `ghostty_type_json` in a test, so an API change fails a test instead of corrupting memory. Our side allocates nothing in a steady frame.
+- **Lookup:** beside the executable, then `Contents/Frameworks` in a bundle, then `GNUI_LIBGHOSTTY_VT` (a file or a directory). Missing, `term.New` returns an error wrapping `term.ErrUnavailable` and the app shows a message instead of a terminal.
+- **`rexui.Terminal`** draws the render state: one shaped run per row segment of one style (the text system caches runs by content), only dirty rows rebuilt and clean rows reused by row ID, backgrounds, underlines, selection, find highlights and cursor as quads, the Rex palette of `theme/rex/terminal.go`, `ui.NoFontSmoothing` as rexlook's panes. It owns no pty: bytes in (`Feed`, parsed under a per-frame time budget) and bytes out (`TakeInput`).
+- **The selection is the library's** (cells, wide characters, soft wraps, rectangles) drawn in the text selection colours; `ui.SelectionScope` (byte offsets into `RichText`) does not apply to a grid.
+- **Build:** `go run ./tools/libghostty` builds the five targets with Zig from a clean export of the pinned commit into `.cache/libghostty-vt/<commit>/<goos>-<goarch>/` (git-ignored, with a manifest of commit, Zig version, SHA-256 and size per file, and Ghostty's LICENSE), checks the exports `term` needs and strips Linux debug info. Artifacts are not committed; CI builds them (Zig is a download, no system install). `gnui.json`'s `nativeLibs` bundles the macOS one into `Contents/Frameworks`, signed with the app.
 
-**Why ours:** the candidates are small (MIT `danielgatis/go-vte`, `hinshun/vt10x`, `charmbracelet/x/vt`), but none is pointer-free or allocation-free per byte, and the parser is a few hundred lines of table; the screen model is where the work is, and it has to fit `ui`'s draw path. A dependency would need a D2 row and still be rewritten for D11.
+**Pin:** Ghostty `4a4fc017940bec38c93b278c10c6a18c591f3e63` (main, 2026-10-27), Zig 0.17.0 (main moved from 0.16 to 0.17 on 2026-10-20). **The C API is not stable** (Ghostty marks it so): a new pin means rerunning `TestABI`, the replay fixtures and the key tables, and reading the header diff. Moving the pin is a deliberate change, never automatic.
 
-**Width tables** (East Asian Width, emoji presentation) are generated from Unicode 17 data by a tool, as `tools/genbidi` does (D42).
+**Size**, ReleaseFast, stripped, per platform, shipped beside the executable and not counted in the Go binary's budget: darwin/arm64 2.06 MB, windows/amd64 2.35 MB, windows/arm64 1.95 MB, linux/amd64 2.26 MB, linux/arm64 2.00 MB (exact bytes in the manifest).
+
+**Limits:** the mouse encoder takes a float pair by value, which `clib` cannot pass on windows/arm64 yet (no float registers there), so mouse reporting is off on that target until it can; keys, paste, focus, selection and the wheel's scrollback work. Kitty graphics and the library's image placements are not drawn.
+
+**Why not ours:** Adam's call; libghostty-vt is a complete, fuzzed, fast emulator (the Mac mini parses 630–690 MB/s through it) with its own render state, which leaves us the drawing, the input mapping and the app's policy. The cost is a native library per platform and an unstable API, both above.
 
 ### D75. Markdown and highlighting of our own
 
@@ -359,10 +367,10 @@ On both OSes, the app's own audio is excluded from the system-audio track (`excl
 
 ### Track C: content
 
-- **C1. `term` and `rexui.Terminal`** (D74). Parser, screen, scrollback (5,000 lines default, a byte budget), reflow, input encoding, selection and copy (`ui.SelectionScope` over rows), find, hyperlinks, title; the draw path: one shaped run per row segment of one style, cached by content hash and invalidated by damage tracking, backgrounds and cursor as quads, `ui.NoFontSmoothing` as rexlook's panes.
-  - *Tests:* parser tables against the state diagram; screen fixtures recorded from xterm behaviour for the sequences `vim`, `htop`, `less`, `git log`, `tmux` and `claude`'s TUI emit (recorded with `script`, replayed byte by byte and in random chunks: the screen must be identical); fuzzed input never panics or grows past its budgets; reflow keeps content.
-  - *Gate:* parsing ≥ 100 MB/s on the MacBook with 0 allocations per byte; a full 200×60 redraw ≤ 2 ms of CPU; `cat` of 50 MB keeps frames paced (rendering coalesced to the frame rate); 5,000 lines of 120 columns ≤ 6 MB. *Opus (high).* L.
-  - *Wave 0 note:* `term` imports nothing from `ui` and has its own `Key` and `Mods` types, which `rexui.Terminal` maps. `Cell` is 8 bytes (tested). `Write` returns `term.ErrUnsupported` until C1.
+- **C1. `term` and `rexui.Terminal`** (D74): `tools/libghostty`, the `term` binding over libghostty-vt, `rexui.Terminal`, `nativeLibs` in `gnui.json`, `cmd/termdemo` (a local shell on a pty, macOS and Linux). Scrollback 5,000 lines by default under a 6 MB byte budget; selection and copy, find, hyperlinks (⌘-click), title, bells, OSC 52 by app policy.
+  - *Tests:* recorded sessions (`vim`, `nvim`, `less`, `git log`, `btop`, `claude`'s and `opencode`'s TUIs, UTF-8; recorded with `script`, scrubbed) replayed byte by byte and in random chunks: the formatter's screen is identical at every checkpoint and equals the golden; the view's cached rows equal a fresh decode after every frame, with resizes; key and mouse encodings; `TestABI` against the library's type manifest; a missing library gives `ErrUnavailable`; 0 allocations per idle frame and per frame of output.
+  - *Gate (Mac mini, CoreText, `GNUI_MEASURE=1 go test ./rexui -run TerminalGates`):* a full 200×60 redraw ≤ 2 ms (measured 0.78 ms median with runs cached, 0.86 ms with every run new); `cat` of 50 MB keeps every frame ≤ 16.7 ms (measured max 4.7 ms, 25 frames). *Reported:* parsing is the library's (630–690 MB/s here), not gated; 5,000 × 120 scrollback 4.7 MB resident (the library keeps 4,665 of 5,100 lines: it trims by whole pages under the byte budget). Done 2026-10-27; screenshots in `docs/measurements/phase8-terminal/`.
+  - *Wave 0 note (revised):* `term` imports nothing from `ui` and has its own `Key` and `Mods` types, which `rexui.Terminal` maps. `Cell` is 8 bytes (tested). With the library missing, `New` returns `ErrUnavailable`.
 - **C2. `markdown`** (D75), incremental, with spans for `rexui.Markdown` (headings, lists with markers, tables as a grid, block quotes, code blocks via C3, links as link spans).
   - *Tests:* the CommonMark spec examples for supported constructs; GFM tables and task lists; a 20 KB message streamed in 50-byte chunks re-parses only its open block (counted).
   - *Gate:* parse ≤ 1 µs per byte on a worker; 0 allocations per frame for a transcript of 1,000 rendered messages in a `VList`. *Sonnet.* M.
@@ -406,8 +414,8 @@ The framework's bar (ARCHITECTURE §11, D21, D27), applied to what these apps do
 | Memory, a3-kb idle (no window) | `phys_footprint` ≤ 30 MB on macOS; private working set ≤ 30 MB on Windows | MacBook; VM |
 | Memory, a3-app idle (one window, a 500-message transcript, a terminal) | ≤ 120 MB in our process; the browser's processes reported separately | MacBook; VM |
 | Capture CPU (our process, 1080p30) | ≤ 3 % of a core on macOS; ≤ 10 % on Windows with a hardware encoder | MacBook; VM and hardware |
-| Terminal | ≥ 100 MB/s parse, 0 allocations per byte, ≤ 2 ms full redraw, ≤ 6 MB for 5,000 × 120 scrollback | MacBook, runners |
-| Binary, stripped, per architecture | < 10 MB for each app (the CI gate), ≤ 8 MB target; no `net/http` or `crypto/tls` on darwin or windows (`go list -deps` check) | CI cross job |
+| Terminal | ≤ 2 ms full 200×60 redraw, frames paced under 50 MB of output, 0 allocations per frame on our side; parse speed is libghostty-vt's (reported); ≤ 6 MB for 5,000 × 120 scrollback (reported) | Mac mini, MacBook, runners |
+| Binary, stripped, per architecture | < 10 MB for each app (the CI gate), ≤ 8 MB target; no `net/http` or `crypto/tls` on darwin or windows (`go list -deps` check). libghostty-vt ships beside it and is counted separately (1.95–2.35 MB per platform, D74) | CI cross job |
 
 The tray budgets are new: a tray app's user-visible start is its icon, and both apps' Windows predecessors are a 30–60 MB self-extracting .NET executable (`A3KB.csproj`: `SelfContained`, `IncludeAllContentForSelfExtract`) and Electron.
 
@@ -441,7 +449,7 @@ The tray budgets are new: a tray app's user-visible start is its icon, and both 
 ```
 wave 0   contracts + stubs, probes P1–P10, VM request (me)
 wave 1   macOS for a3-kb:  W2 panels(mac)  W7 hotkeys(mac)  N1 fetch.Do(mac)  M1 capture(mac)
-         pure Go:           C1 term  C2 markdown  C3 highlight  C5 context menu  C6 WebP
+         content:           C1 term (libghostty-vt)  C2 markdown  C3 highlight  C5 context menu  C6 WebP
          macOS editor:      C4 TextArea(mac)
          Windows base:      W1 app object + windows   N1/N2 WinHTTP   T1 packaging   T2 bridge
 wave 2   macOS for a3-app:  N2 ws(mac)  H1 webview(mac)
@@ -470,18 +478,19 @@ wave 4   H2 WebView2 (after W3)   S2 (only if asked)
 5. **Web:** `WKWebView` and WebView2 pass H1's matrix (a non-persistent session, a named persistent profile that keeps a cookie across a restart and is isolated from the app, denied permissions, downloads, blocked schemes, popups in place); a missing runtime gives the fallback.
 6. **Capture:** a 5 s recording with microphone and system audio on both OSes, with pause and resume, decodes back to the right duration and tracks.
 7. **Network:** `fetch.Do` and `app/ws` pass their suites on all three OSes; no `net/http` or `crypto/tls` in darwin or windows binaries that use them.
-8. **Content:** `term` replays the recorded TUI sessions identically in any chunking; `markdown` passes its CommonMark subset; streaming re-parses only the open block.
+8. **Content:** `term` replays the recorded TUI sessions identically in any chunking and `rexui.Terminal` draws exactly the library's screen; `markdown` passes its CommonMark subset; streaming re-parses only the open block.
 9. **Performance:** the budgets table holds where it says gated; every Windows number carries its source.
 10. **CI:** all jobs green, including Linux with the new APIs returning `ErrUnsupported`; quarantine additions each have an issue.
 11. **Docs:** every exported identifier documented, `Example`s for new packages, guide chapters for panels, hotkeys, capture, the webview, `fetch`/`ws`, the terminal and Windows packaging.
 
 ## What needs you
 
-**Adam's decisions (2026-10-27):** D64 approved (hosting the OS browser view as content; WebView2 without the bundled loader, as D65 option 1). No Intel Macs on the team, so arm64 only and no Swift/Electron bridge release. Signing by bought certificates: an Apple Developer ID (A3 Lab) and Azure Trusted Signing for Windows, which Adam enrolls; until they exist, builds stay ad-hoc/unsigned and are not released. No Windows VM yet: Windows work is verified on the CI runners only, and checkpoints K2 and K4 wait for the VM decision.
+**Adam's decisions (2026-10-27):** D64 approved (hosting the OS browser view as content; WebView2 without the bundled loader, as D65 option 1). No Intel Macs on the team, so arm64 only and no Swift/Electron bridge release. Signing by bought certificates: an Apple Developer ID (A3 Lab) and Azure Trusted Signing for Windows, which Adam enrolls; until they exist, builds stay ad-hoc/unsigned and are not released. No Windows VM yet: Windows work is verified on the CI runners only, and checkpoints K2 and K4 wait for the VM decision. D74 rewritten: the terminal is libghostty-vt, loaded at runtime, the one native library bundled (approval under D2).
 
 - **D64** (amending D2: hosting the OS browser view as content). Without it a3-app has no browser pane and opens pages in the system browser.
 - **D65's fallback** (bundling `WebView2Loader.dll`) only if P3 or a later runtime breaks our loader. Not needed to start.
 - **D63** (Linux waits) and the rest of D66–D78, at review.
+- **libghostty-vt's pin** (D74): its C API is unstable, so moving to a newer Ghostty is a reviewed change; and the D2 row for it in DECISIONS.md, drafted, for your read.
 - **The Windows VM** on the a3-box, and a Windows licence after the 90-day evaluation.
 - **A Windows PC for an afternoon** per Windows checkpoint, for gated numbers and the IME, voice typing and microphone checks.
 - **A Windows code-signing identity** (an OV certificate, or Azure Trusted Signing): SmartScreen reputation for first downloads, and the same-signer update rule (D76). Until then both apps update on the unsigned path.

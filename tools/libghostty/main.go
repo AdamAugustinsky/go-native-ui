@@ -6,6 +6,7 @@
 //
 //	go run ./tools/libghostty [-src dir] [-zig path] [-out dir] [-targets list]
 //	go run ./tools/libghostty -check   # verify existing artifacts only
+//	go run ./tools/libghostty -print-commit
 //
 // The source is a checkout or an export of Ghostty at ghosttyvt.Commit
 // (default $GHOSTTY_SRC, else ~/Projects/research/ghostty-pin): a git
@@ -97,7 +98,12 @@ func main() {
 	out := flag.String("out", "", "artifact cache (default <repo>/.cache/libghostty-vt)")
 	targets := flag.String("targets", "", "comma-separated goos/goarch list (default: all five)")
 	check := flag.Bool("check", false, "verify the cached artifacts and rewrite the manifest; build nothing")
+	printCommit := flag.Bool("print-commit", false, "print the pinned Ghostty commit and exit (for CI's fetch)")
 	flag.Parse()
+	if *printCommit {
+		fmt.Println(ghosttyvt.Commit)
+		return
+	}
 	if *out == "" {
 		root, err := repoRoot()
 		if err != nil {
