@@ -47,7 +47,12 @@ type report struct {
 	ChildTrails   int            `json:"child_trails"`
 	BandTrails    int            `json:"band_trails"`
 	PresentErrors int            `json:"present_errors"`
-	Errors        []string       `json:"errors,omitempty"`
+	// TrailingValid is false when the screen read did not show our window
+	// (another window covers it): the trailing numbers are then not a
+	// measurement, and Covering names what is on top.
+	TrailingValid bool                   `json:"trailing_valid"`
+	Covering      map[string]*windowInfo `json:"covering,omitempty"`
+	Errors        []string               `json:"errors,omitempty"`
 }
 
 var (
@@ -153,6 +158,10 @@ func main() {
 	}
 	if r.CaptureOK && r.Sampled == 0 {
 		r.Errors = append(r.Errors, "no frame showed both the band and the child")
+	}
+	r.TrailingValid = r.Sampled > 0
+	if !r.Rest[0].ContainerShown || !r.TrailingValid {
+		r.Covering = covering()
 	}
 	call(pDestroyWindow, wins.top)
 	out, _ := json.MarshalIndent(r, "", "  ")

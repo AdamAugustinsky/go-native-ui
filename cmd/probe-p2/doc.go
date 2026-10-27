@@ -54,7 +54,10 @@
 // container_visible, window_from_point_is_child), capture_ok, frames,
 // sampled, offsets (frames of offset → count; negative means the child shows
 // an older position than the band, i.e. the child trails), trailing ("0",
-// "1", "2+" by absolute offset), child_trails and band_trails counts, and
-// errors. Exit status 0 when it answered (whatever the answers), 1 when it
+// "1", "2+" by absolute offset), child_trails and band_trails counts,
+// trailing_valid (false when no frame was sampled: the screen read did not
+// show our window), covering (when the screen read missed our window: the
+// top-level window at the sample point and the foreground window, by class,
+// title, process and rectangle), and errors. Exit status 0 when it answered (whatever the answers), 1 when it
 // could not run (no D3D11, no window, the timeout).
 package main
