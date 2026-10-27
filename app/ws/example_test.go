@@ -17,7 +17,7 @@ func Example() {
 		MaxMessage: 32 << 20,
 	})
 	if err != nil {
-		return // errors.Is(err, errors.ErrUnsupported) until N2
+		return // a *ws.HandshakeError, a network error, or ctx.Err()
 	}
 	defer c.Close(ws.CloseNormal, "")
 	go func() {
