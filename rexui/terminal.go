@@ -189,6 +189,7 @@ type TerminalState struct {
 	sel     []byte
 
 	rows    []termRow
+	old     []termRow // last frame's rows during capture
 	scratch term.Row
 	gen     uint32
 	matches []term.Span
@@ -308,30 +309,36 @@ func (s *TerminalState) feed(c *ui.Context, o TerminalOpts) {
 func (s *TerminalState) capture() {
 	d := s.T.Update()
 	_, n := s.T.Size()
+	all := d == term.Full
 	if len(s.rows) != n {
-		if cap(s.rows) < n {
-			s.rows = append(s.rows[:cap(s.rows)], make([]termRow, n-cap(s.rows))...)
-		}
-		s.rows = s.rows[:n]
-		for i := range s.rows {
-			s.rows[i].ok = false
-		}
+		s.rows, s.old = sized(s.rows, n), sized(s.old, n)
+		all = true
 	}
 	if gen := s.T.StyleGen(); gen != s.gen {
 		s.gen = gen
-		for i := range s.rows {
-			s.rows[i].ok = false
-		}
+		all = true
 	}
-	if d != term.Clean {
-		y := 0
-		for s.T.NextRow(&s.scratch) {
-			if y >= len(s.rows) {
-				break
-			}
+	if d != term.Clean || all {
+		// A clean row keeps its cells under its ID but may have moved (the
+		// screen scrolled): last frame's rows, in s.old after the swap, are
+		// found by ID, in order.
+		s.rows, s.old = s.old, s.rows
+		j, y := 0, 0
+		for y < n && s.T.NextRow(&s.scratch) {
 			tr := &s.rows[y]
-			sel, from, to := s.scratch.Selected, s.scratch.SelFrom, s.scratch.SelTo
-			if s.scratch.Dirty || d == term.Full || !tr.ok {
+			id, sel, from, to := s.scratch.ID, s.scratch.Selected, s.scratch.SelFrom, s.scratch.SelTo
+			reused := false
+			if !s.scratch.Dirty && !all {
+				for k := j; k < n; k++ {
+					if o := &s.old[k]; o.ok && o.row.ID == id {
+						*tr, *o = *o, *tr
+						o.ok = false
+						j, reused = k+1, true
+						break
+					}
+				}
+			}
+			if !reused {
 				// Decode into the row's own buffers.
 				tr.row.Cells, s.scratch.Cells = s.scratch.Cells, tr.row.Cells
 				s.T.DecodeRow(&s.scratch)
@@ -339,8 +346,12 @@ func (s *TerminalState) capture() {
 				s.buildRow(tr)
 				tr.ok = true
 			}
+			tr.row.Y, tr.row.ID = y, id
 			tr.row.Selected, tr.row.SelFrom, tr.row.SelTo = sel, from, to
 			y++
+		}
+		for ; y < n; y++ {
+			s.rows[y].ok = false
 		}
 		s.T.CleanFrame()
 	}
@@ -348,6 +359,18 @@ func (s *TerminalState) capture() {
 	if s.finding {
 		s.matches = s.T.AppendViewportMatches(s.matches[:0])
 	}
+}
+
+// sized is rows with n entries, none of them drawable.
+func sized(rows []termRow, n int) []termRow {
+	if cap(rows) < n {
+		rows = append(rows[:cap(rows)], make([]termRow, n-cap(rows))...)
+	}
+	rows = rows[:n]
+	for i := range rows {
+		rows[i].ok = false
+	}
+	return rows
 }
 
 // gridSafe reports whether r can share a text run with its neighbours: the

@@ -157,8 +157,9 @@ type Terminal struct {
 	rowRaw   uint64
 	rowCells ghCells
 	rowSel   ghRowSel
-	keys     [4]int32
-	vals     [4]uintptr
+	rowID    RowID
+	keys     [5]int32
+	vals     [5]uintptr
 	written  uint64
 	cps      [maxGraphemeRunes]uint32
 

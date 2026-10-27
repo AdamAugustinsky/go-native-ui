@@ -135,6 +135,7 @@ func TestABI(t *testing.T) {
 		{"GhosttyRenderStateData", "CURSOR", rsCursor}, {"GhosttyRenderStateData", "COLORS", rsColors},
 		{"GhosttyRenderStateRowData", "DIRTY", rowDirty}, {"GhosttyRenderStateRowData", "RAW", rowRaw},
 		{"GhosttyRenderStateRowData", "CELLS", rowCells}, {"GhosttyRenderStateRowData", "SELECTION", rowSelection},
+		{"GhosttyRenderStateRowData", "ID", rowID},
 		{"GhosttyRenderStateRowData", "CELLS_RAW", rowCellsRaw},
 		{"GhosttyRenderStateRowCellsData", "STYLE", cellsStyle}, {"GhosttyRenderStateRowCellsData", "GRAPHEMES_LEN", cellsGraphemesLen},
 		{"GhosttyRenderStateRowCellsData", "GRAPHEMES_BUF", cellsGraphemesBuf}, {"GhosttyRowData", "WRAP", rowDataWrap},

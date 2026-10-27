@@ -215,7 +215,9 @@ func TestTerminalViewAllocations(t *testing.T) {
 		t.Errorf("%v allocations per idle frame", n)
 	}
 	line := []byte("\x1b[32mok\x1b[0m 0123456789\r\n")
-	for range 3 { // the run cache warms up for these lines
+	// Warm up: rows keep their buffers as they move up the screen, and every
+	// buffer of the view's two frames of rows has held a line once.
+	for range 3 * sig.Rows {
 		s.Feed(line)
 		g.frame()
 	}

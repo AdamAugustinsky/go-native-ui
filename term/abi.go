@@ -61,6 +61,7 @@ const (
 	rowCells     = 3
 	rowSelection = 4
 	rowCellsRaw  = 5
+	rowID        = 7
 
 	cellsStyle        = 2
 	cellsGraphemesLen = 3
@@ -292,6 +293,9 @@ type ghMemory struct {
 	aImages                                       uint64
 }
 
+// RowID is GhosttyRenderStateRowId: a row's identity across updates.
+type RowID [2]uint64
+
 // ghClipboardWrite and ghClipboardContent are GhosttyClipboardWrite and
 // GhosttyClipboardContent, read in place in C memory by the callback.
 type ghClipboardWrite struct {
@@ -340,4 +344,5 @@ var abiStructs = map[string]uintptr{
 	"GhosttyClipboardWrite":                 unsafe.Sizeof(ghClipboardWrite{}),
 	"GhosttyClipboardContent":               unsafe.Sizeof(ghClipboardContent{}),
 	"GhosttySelectionBuffer":                unsafe.Sizeof(ghSelBuffer{}),
+	"GhosttyRenderStateRowId":               unsafe.Sizeof(RowID{}),
 }

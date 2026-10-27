@@ -155,7 +155,12 @@ type Cursor struct {
 type Row struct {
 	// Y is the row's line in the viewport, from 0.
 	Y int
-	// Dirty: the row changed since CleanFrame.
+	// ID is the row's identity: it stays with the row's content as the
+	// screen scrolls, and changes when the terminal rewrites the row.
+	ID RowID
+	// Dirty: the row changed since CleanFrame. A row that is not dirty has
+	// the cells it had under its ID, possibly at another Y (the screen
+	// scrolled): cache a row's work by ID, not by Y.
 	Dirty bool
 	// Selected: columns SelFrom to SelTo (inclusive) are selected.
 	Selected       bool
@@ -249,16 +254,17 @@ func (t *Terminal) NextRow(r *Row) bool {
 	if t.closed || !t.c().Uint(uint64(t.rows)).Do(fn(ghosttyvt.RowIteratorNext)).Bool() {
 		return false
 	}
-	t.keys = [4]int32{rowDirty, rowRaw, rowCellsRaw, rowSelection}
-	t.vals = [4]uintptr{uintptr(unsafe.Pointer(&t.rowDirty)), uintptr(unsafe.Pointer(&t.rowRaw)),
-		uintptr(unsafe.Pointer(&t.rowCells)), uintptr(unsafe.Pointer(&t.rowSel))}
+	t.keys = [5]int32{rowDirty, rowRaw, rowCellsRaw, rowID, rowSelection}
+	t.vals = [5]uintptr{uintptr(unsafe.Pointer(&t.rowDirty)), uintptr(unsafe.Pointer(&t.rowRaw)),
+		uintptr(unsafe.Pointer(&t.rowCells)), uintptr(unsafe.Pointer(&t.rowID)), uintptr(unsafe.Pointer(&t.rowSel))}
 	t.rowSel = ghRowSel{size: uint64(unsafe.Sizeof(ghRowSel{}))}
 	t.written = 0
-	res := t.c().Uint(uint64(t.rows)).Uint(4).Ptr(unsafe.Pointer(&t.keys)).Ptr(unsafe.Pointer(&t.vals)).
+	res := t.c().Uint(uint64(t.rows)).Uint(5).Ptr(unsafe.Pointer(&t.keys)).Ptr(unsafe.Pointer(&t.vals)).
 		Ptr(unsafe.Pointer(&t.written)).Do(fn(ghosttyvt.RowGetMulti)).Int32()
 	r.Y = t.rowY
 	t.rowY++
 	r.Dirty = t.rowDirty
+	r.ID = t.rowID
 	r.raw = t.rowCells
 	r.Selected = res == resSuccess
 	r.SelFrom, r.SelTo = int(t.rowSel.start), int(t.rowSel.end)
