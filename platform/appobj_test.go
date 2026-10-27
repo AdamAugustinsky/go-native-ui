@@ -621,3 +621,19 @@ func TestNativeEventsWaitForTheFrame(t *testing.T) {
 		t.Fatalf("after the frame: %+v %q", s.evs, s.data)
 	}
 }
+
+// URLs handed over from outside the process (a second instance's command
+// line, app/instance) arrive as AppEvOpenURLs, A the count and the data the
+// URLs NUL-separated, as the URLs macOS opens with the app do.
+func TestOfferedURLsArriveAsOpenURLs(t *testing.T) {
+	s := &recSink{}
+	withSink(t, s)
+	if !OfferOpenURLs([]string{"notes-dev:x", "notes-dev://y?z"}) {
+		t.Fatal("refused")
+	}
+	drain()
+	if len(s.evs) != 1 || s.evs[0].Kind != AppEvOpenURLs || s.evs[0].A != 2 || s.evs[0].Source != SourceInstance ||
+		string(s.data[0]) != "notes-dev:x\x00notes-dev://y?z" {
+		t.Fatalf("delivered %+v %q", s.evs, s.data)
+	}
+}
