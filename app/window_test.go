@@ -77,9 +77,9 @@ func TestSystemButtonsAreScaledToPixels(t *testing.T) {
 	}
 }
 
-// TestPanelUnsupported is the wave-0 contract of Config.Panel: until W2
-// lands, a panel is refused with platform.ErrNoPanels everywhere, before any
-// window is made.
+// TestPanelUnsupported is the contract of Config.Panel where the OS has no
+// panels (Windows until W2's Windows half, Linux): a panel is refused with
+// platform.ErrNoPanels, before any window is made.
 func TestPanelUnsupported(t *testing.T) {
 	if platform.PanelsSupported() {
 		t.Skip("panels are implemented here")

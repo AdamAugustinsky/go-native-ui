@@ -179,6 +179,7 @@ type App struct {
 	scriptFrame int
 	scriptDone  bool
 
+	shelved     bool  // a panel the app hid, or AppKit on deactivation: it builds and draws nothing until shown (shelve)
 	frames      int   // frames presented
 	inFrame     bool  // between BeginFrame and EndFrame (drawFrame)
 	reentries   int   // frame handler calls refused because a frame was in progress
@@ -367,8 +368,11 @@ func (a *App) openWin(cfg Config, b Builder, st *StartupReport, nativeMenus bool
 	if err != nil {
 		return fmt.Errorf("app: open window: %w", err)
 	}
-	if win.HasMaterials() {
-		a.cfg.Clear = [4]float32{} // premultiplied transparent: the backdrop or the materials show
+	if win.HasMaterials() || cfg.Panel != nil && runtime.GOOS == "darwin" {
+		// premultiplied transparent: the backdrop or the materials show, or
+		// (a panel on macOS, whose window is transparent) the desktop where
+		// the builder draws nothing: the builder draws the panel's shape
+		a.cfg.Clear = [4]float32{}
 	}
 	a.Win, a.req = win, win
 	if a.handle != nil && a.handle.a == a && a.handle.id == a.winID {
@@ -389,7 +393,7 @@ func (a *App) openWin(cfg Config, b Builder, st *StartupReport, nativeMenus bool
 	}
 	a.Surf = surf
 	win.SetFrameSource(surf.FrameSource())
-	if !a.startHidden || a.started {
+	if cfg.Panel == nil && (!a.startHidden || a.started) {
 		surf.RevealOnFirstFrame(win.Show) // content-first: the window appears with its first frame
 	}
 	t1 := platform.Now()
@@ -433,6 +437,9 @@ func (a *App) openWin(cfg Config, b Builder, st *StartupReport, nativeMenus bool
 		st.ExecToFirstPresentMs = ms(t5 - execNs)
 	}
 	a.execNs = execNs
+	if cfg.Panel != nil {
+		a.shelve(true) // a panel opens hidden, its first frame drawn: Win.Show shows it
+	}
 	a.wins = append(a.wins, a) // open: the loop serves it from now on
 	return nil
 }
@@ -605,6 +612,9 @@ func (a *App) waitTimeout(now int64) int64 {
 // wake (held while the window is hidden), then the pacer's verdict. It requests a frame if the pacer says so
 // and reports whether to draw now.
 func (a *App) turn(now int64) (draw bool) {
+	if a.shelved {
+		return false // a hidden panel builds nothing (shelve)
+	}
 	if a.wakeAt != 0 && now >= a.wakeAt && !a.p.hidden {
 		a.wakeAt = 0
 		a.p.invalidate() // a text field's caret blink is due
@@ -627,6 +637,9 @@ func (a *App) turn(now int64) (draw bool) {
 // A hidden window does not wake for the UI's timed requests (a caret blink,
 // a spinner's next step): nothing would be drawn.
 func (a *App) timeout(now int64) int64 {
+	if a.shelved && a.bench == nil {
+		return -1 // nothing to draw until Show
+	}
 	t := a.p.timeout(now)
 	if a.wakeAt != 0 && !a.p.hidden { // the UI asked for a frame at a time (WakeAfter)
 		if d := max(a.wakeAt-now, 0); t < 0 || d < t {
@@ -659,6 +672,11 @@ func (a *App) onEvent(e *platform.Event) {
 		}
 	case platform.EvVisible:
 		a.tr.in.Hidden = e.Flags&platform.FlagDown == 0
+		if a.cfg.Panel != nil && a.Win != nil {
+			// AppKit hides a HideOnDeactivate panel when the app deactivates
+			// and shows it again when the app comes back.
+			a.shelved = a.tr.in.Hidden && !a.Win.Visible()
+		}
 		// Hidden, timed wakes wait and a failed attempt parks the loop
 		// (pacer); shown again, what was skipped is owed. A bench draws
 		// regardless: it measures frames, and a machine with its display
