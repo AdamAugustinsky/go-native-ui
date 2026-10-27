@@ -423,7 +423,12 @@ func TestViewMatrix(t *testing.T) {
 			t.Errorf("the refused window's URL %q", b)
 		}
 	})
-	in := h.open(webview.Options{NewWindows: webview.NewWindowInPlace})
+	in := h.open(webview.Options{NewWindows: webview.NewWindowInPlace, CornerRadius: 9.5})
+	h.Do(func(*app.App) {
+		if r := webview.CornerRadiusOf(in); r != 9.5 {
+			t.Errorf("CornerRadius 9.5: the layer's is %v", r)
+		}
+	})
 	h.navigate(in, p.url("/popup"), "Popup")
 	h.wait("the popup loaded in place", 20*time.Second, func() bool { return in.State().Title == "Page B" })
 	h.close(in)

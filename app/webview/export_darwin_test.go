@@ -33,3 +33,8 @@ func AskMedia(v *View, typ int) int {
 	objc.F.Reset().Arg(uintptr(b.del)).Arg(uintptr(selMediaPermission)).Arg(uintptr(b.wv)).Arg(0).Arg(0).Arg(uintptr(typ)).Arg(uintptr(mediaBlock)).Call(objc.MsgSend)
 	return int(mediaDecision.Load())
 }
+
+// CornerRadiusOf is the corner radius of v's layer, in points.
+func CornerRadiusOf(v *View) float64 {
+	return objc.SendF64(objc.Send(v.be.(*view).wv, selLayer), objc.Sel("cornerRadius"))
+}

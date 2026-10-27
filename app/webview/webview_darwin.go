@@ -104,6 +104,10 @@ var (
 	selSetUIDelegate      = objc.Sel("setUIDelegate:")
 	selSetInspectable     = objc.Sel("setInspectable:")
 	selSetGestures        = objc.Sel("setAllowsBackForwardNavigationGestures:")
+	selSetWantsLayer      = objc.Sel("setWantsLayer:")
+	selLayer              = objc.Sel("layer")
+	selSetCornerRadius    = objc.Sel("setCornerRadius:")
+	selSetMasksToBounds   = objc.Sel("setMasksToBounds:")
 	selRespondsTo         = objc.Sel("respondsToSelector:")
 	selAddObserver        = objc.Sel("addObserver:forKeyPath:options:context:")
 	selRemoveObserver     = objc.Sel("removeObserver:forKeyPath:context:")
@@ -278,6 +282,12 @@ func osNew(w *platform.Window, o *Options) (backend, platform.HostID, uint32, er
 	objc.Send1(wv, selSetNavDelegate, uintptr(v.del))
 	objc.Send1(wv, selSetUIDelegate, uintptr(v.del))
 	objc.Send1(wv, selSetGestures, 1)
+	if o.CornerRadius > 0 {
+		objc.Send1(wv, selSetWantsLayer, 1)
+		layer := objc.Send(wv, selLayer)
+		objc.F.Reset().Arg(uintptr(layer)).Arg(uintptr(selSetCornerRadius)).ArgF64(float64(o.CornerRadius)).Call(objc.MsgSend)
+		objc.Send1(layer, selSetMasksToBounds, 1)
+	}
 	if objc.SendBool1(wv, selRespondsTo, uintptr(selSetInspectable)) {
 		objc.Send1(wv, selSetInspectable, uintptr(b2u(o.Inspectable)))
 	}

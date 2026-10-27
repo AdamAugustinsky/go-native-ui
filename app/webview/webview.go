@@ -175,6 +175,9 @@ type Options struct {
 	// ApplicationName is appended to the engine's user agent
 	// ("a3-app/1.4").
 	ApplicationName string
+	// CornerRadius rounds the view's corners, in points, so that it sits in
+	// a rounded pane (rexui.WebView's: rexui.WebViewLook.ContentRadius).
+	CornerRadius float32
 }
 
 // State is what the view shows now. Its strings are valid until the next
