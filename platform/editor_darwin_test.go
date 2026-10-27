@@ -294,3 +294,40 @@ func goStr(s objc.ID) string {
 	}
 	return string(objc.AppendUTF8(nil, s))
 }
+
+// A text area's options (C4): MinLines holds the height up while the text is
+// shorter and MaxLines caps it, equal values fix it; ReadOnly makes the text
+// view not editable and SetOptions turns it back; EnterNewline never submits.
+func TestEditorLinesAndReadOnly(t *testing.T) {
+	withEditor(t, EditorOptions{MinLines: 3, MaxLines: 5, Enter: EnterNewline, ReadOnly: true}, func(e *Editor) {
+		e.sync()
+		line := float32(e.lineH)
+		if h := e.Height(); h != 3*line+2*float32(e.insetY) {
+			t.Errorf("empty, MinLines 3: height %v, line %v", h, line)
+		}
+		if objc.SendBool(e.tv, objc.Sel("isEditable")) || !objc.SendBool(e.tv, objc.Sel("isSelectable")) {
+			t.Error("ReadOnly: the text view is editable or not selectable")
+		}
+		_ = e.SetText([]byte("1\n2\n3\n4\n5\n6\n7\n8"))
+		e.dirtyH = true
+		e.sync()
+		if h := e.Height(); h != 5*line+2*float32(e.insetY) {
+			t.Errorf("8 lines, MaxLines 5: height %v, want %v", h, 5*line)
+		}
+		o := e.Options()
+		o.ReadOnly, o.MinLines, o.MaxLines = false, 4, 4
+		e.SetOptions(o)
+		e.sync()
+		if !objc.SendBool(e.tv, objc.Sel("isEditable")) {
+			t.Error("SetOptions did not make the text view editable")
+		}
+		if h := e.Height(); h != 4*line+2*float32(e.insetY) {
+			t.Errorf("fixed at 4 lines: height %v", h)
+		}
+		for _, m := range []Mods{0, ModShift, ModSuper, ModAlt} {
+			if e.sends(m) {
+				t.Errorf("EnterNewline: Enter with %v sends", m)
+			}
+		}
+	})
+}
