@@ -202,7 +202,7 @@ func TestRenderDark(t *testing.T) {
 	k := x.K
 
 	agent, git := x.paneRect(kindAgent), x.paneRect(kindGit)
-	if c, want := s.at(agent[2]-30*k, agent[3]-30*k), [3]int{0x2A, 0x2C, 0x3A}; c != want {
+	if c, want := s.at(agent[2]-30*k, agent[3]-30*k), [3]int{0x2B, 0x25, 0x27}; c != want {
 		t.Errorf("focused pane at its blank corner = %v, want the dark surface %v", c, want)
 	}
 	if c := s.at(git[2]-30*k, git[3]-30*k); c[0] > 90 || c[1] > 90 || c[2] > 100 {

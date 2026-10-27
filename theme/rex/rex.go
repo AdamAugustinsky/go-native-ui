@@ -1,9 +1,9 @@
 // Package rex is the default theme: the Rex look (DECISIONS D17,
 // docs/design/rex-benchmark.md), with a light variant fitted to the reference
-// and a dark one designed in the same structure.
+// and a dark one fitted to its dark screenshot.
 //
 // The look is a smooth background field (pink-lavender over sand in light;
-// violet ink over umber in dark), glass panes with soft layered shadows and
+// warm plum over umber in dark), glass panes with soft layered shadows and
 // hairline edges that dim and turn translucent when unfocused, a slim divider
 // handle, and a titlebar band the panes start under. Fonts are the system's.
 //
@@ -33,9 +33,10 @@ func Theme() *theme.Theme {
 	}
 }
 
-// The palettes. Light is sampled from the reference (sRGB); dark is a
-// deep-ink design with the same roles. Text is at least 7:1 and TextMuted at
-// least 4.5:1 against every surface and the background in both (palette_test.go).
+// The palettes. Light is sampled from the reference (sRGB), and dark from
+// its dark screenshot: warm plum and umber inks with the same roles. Text is
+// at least 7:1 and TextMuted at least 4.5:1 against every surface and the
+// background in both (palette_test.go).
 var (
 	light = theme.Palette{
 		Background: 0xE7E3E7FF, Surface: 0xFFFFFFFF, SurfaceRaised: 0xFFFFFFFF,
@@ -50,16 +51,16 @@ var (
 		ScrollThumb: 0x6E637873,
 	}
 	dark = theme.Palette{
-		Background: 0x18191FFF, Surface: 0x2A2C3AFF, SurfaceRaised: 0x363849FF,
-		Text: 0xECEDF3FF, TextMuted: 0xA9ACBBFF, TextDisabled: 0x6B6E7EFF,
+		Background: 0x221E1FFF, Surface: 0x2B2527FF, SurfaceRaised: 0x372F32FF,
+		Text: 0xEEEAEBFF, TextMuted: 0xADA4A7FF, TextDisabled: 0x736B6EFF,
 		Accent: 0x7AA2FFFF, OnAccent: 0x0B1226FF,
-		Line: 0xFFFFFF1F, Selection: 0x7AA2FF40, SelectionText: 0xECEDF3FF, FocusRing: 0x7AA2FFE6,
+		Line: 0xFFFFFF1F, Selection: 0x7AA2FF40, SelectionText: 0xEEEAEBFF, FocusRing: 0x7AA2FFE6,
 		Danger: 0xFF7B86FF, Warning: 0xE9B25AFF, Success: 0x7BD88FFF, Info: 0x6CCDD4FF,
 		Scrim: 0x000000A6, Shadow: 0x00000052,
 		HoverOverlay: 0xFFFFFF14, PressOverlay: 0xFFFFFF26,
 		ControlFill: 0xFFFFFF14, ControlBorder: 0xFFFFFF33,
-		TrackFill: 0x454859FF, ThumbFill: 0xF4F5FAFF,
-		ScrollThumb: 0xB9B3CC80,
+		TrackFill: 0x4A4245FF, ThumbFill: 0xF7F3F4FF,
+		ScrollThumb: 0xC4B6BB80,
 	}
 )
 

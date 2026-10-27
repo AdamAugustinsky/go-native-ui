@@ -28,12 +28,12 @@ var (
 	// The dark pair keeps each colour's hue, lightened to read on ink: at least
 	// 4.5:1 on the focused surface and on the unfocused glass (palette_test.go).
 	termDarkFocused = Terminal{
-		FG: 0xE6E8EF, Dim: 0x9EA3B5, Blue: 0x7FA8FF, Teal: 0x5FD0D6, Red: 0xFF8791,
-		Green: 0x86DB8E, Bullet: 0x6FCF7C, Op: 0xB9BED2, Purple: 0xC39BFF, Orange: 0xF0B66A, Line: 0xE6E8EF,
+		FG: 0xEAE6E7, Dim: 0xA69EA1, Blue: 0x7FA8FF, Teal: 0x5FD0D6, Red: 0xFF8791,
+		Green: 0x86DB8E, Bullet: 0x6FCF7C, Op: 0xBEB6B9, Purple: 0xC39BFF, Orange: 0xF0B66A, Line: 0xEAE6E7,
 	}
 	termDarkDimmed = Terminal{
-		FG: 0xA3A7B6, Dim: 0x9096A9, Blue: 0x7596D6, Teal: 0x5FA9AD, Red: 0xE17F88,
-		Green: 0x6FAF7A, Bullet: 0x6FAF7A, Op: 0xA3A7B6, Purple: 0xA98BDB, Orange: 0xC49A5B, Line: 0xA3A7B7,
+		FG: 0xA8A0A3, Dim: 0xA39B9E, Blue: 0x80A0E0, Teal: 0x5FA9AD, Red: 0xE17F88,
+		Green: 0x6FAF7A, Bullet: 0x6FAF7A, Op: 0xA8A0A3, Purple: 0xB496E2, Orange: 0xC49A5B, Line: 0xA8A0A3,
 	}
 )
 

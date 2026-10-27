@@ -1172,3 +1172,11 @@ Live microphone capture was not run: access cannot be granted headlessly, so tha
 - Another user running the same bundle keeps running from the backup until it is removed.
 
 **Evidence** (`go test ./app/selfupdate`, Mac mini, macOS 27.2 26B5101f): ad-hoc test bundles of `internal/testapp` with the requirement `identifier "dev.gonativeui.selfupdatetest"` and a launcher that runs the executable directly: a good update is swapped in, reports healthy and its backup is removed; a build that hangs or exits without `Started` is rolled back and the old build reports why; tampered, unsigned, other-identifier, other-signer, older and same-version bundles and `..` or escaping-link archives are rejected, and an allowed downgrade installs; the same bundle under a name that is not a test binary's ignores the injected requirement and refuses to update; an unwritable folder, translocation, `.dev` and ad-hoc running code are reported by `Supported`; the copied executable derives the same designated requirement. `GNUI_LIVE_SELFUPDATE=1` opens a test bundle through Launch Services.
+
+## D62. Rex dark fitted to the reference's dark screenshot (2026-10-26)
+
+**Decision.** Rex's dark look is fitted to Superlogical's dark screenshot (`rex-screenshot-dark@2x.webp`, public since the testing announcement), as the light look is to the light one: the field runs from a warm plum (`#3A3238` at the top) through a quiet warm ink (`#262122`) to umber (`#27221C`), with rosier and more amber edges; the unfocused glass is `#362F32` at 50 %; the focused surface is `#2B2527`; the tab capsule, pill and labels and the terminal's text greys are warmed to match. The accent and the terminal's hues are unchanged.
+
+**Reasoning:** the dark look was designed before a dark reference existed, as a violet ink (`#2A2C3A` panes, `#17181E` gutters), and read cool and blue beside the real product, whose inks are low-saturation plum and umber (gutters `#2C2220`, panes `#332A2B` to `#222020`). ZapFast Go takes the Rex look as its only one, so the dark has to be Rex's.
+
+**Kept:** the roles' macOS-neutral dark surfaces (D39: `Pane` `#1E1E1E`) for the native components; an app that wants warm ones sets them (ZapFast's theme does). Contrast floors hold: the dimmed terminal's Dim, Blue and Purple were lifted to stay at 4.5:1 on the lighter warm glass.

@@ -10,7 +10,7 @@ import (
 //
 // The window background is a smooth field: a vertical multi-stop gradient
 // down the middle (pink-lavender at the top, neutral in the middle, warm
-// sand at the bottom in the light look; deep ink in the dark one) plus
+// sand at the bottom in the light look; warm plum to umber in the dark one) plus
 // warmer tints that run in from the left and right edges. It is drawn as a
 // mesh of four-corner quads whose corner colours are sampled from the model
 // below, so no texture or blur is needed. During a light/dark crossfade the
@@ -73,19 +73,20 @@ var lightStops = [nStops]bgStop{
 	{1278, hx(0xE7DEC3), hx(0xE7DAB2), hx(0xE7D6B5)},
 }
 
-// darkAnchors are the few stops the dark field is designed from: a violet
-// ink at the top that deepens to a neutral ink and then a warm umber at the
-// bottom, with the same left (violet-rose) and right (rose-amber) edge tints
-// as the light field, much quieter. init interpolates them at lightStops'
-// heights, so that both fields share one mesh.
+// darkAnchors are the few stops the dark field is fitted from, sampled from
+// the reference's dark screenshot (rex-screenshot-dark@2x): a warm plum at
+// the top that settles to a quiet warm ink and then umber at the bottom, the
+// edges a little rosier (left) and more amber (right) than the middle. init
+// interpolates them at lightStops' heights, so that both fields share one
+// mesh.
 var darkAnchors = [...]bgStop{
-	{0, hx(0x2E2A3C), hx(0x2E2A3C), hx(0x2E2A3C)},
-	{6, hx(0x221E31), hx(0x281F37), hx(0x281F31)},
-	{40, hx(0x1E1B2B), hx(0x251C33), hx(0x251C2E)},
-	{160, hx(0x1A1A25), hx(0x211A2B), hx(0x221A28)},
-	{520, hx(0x17181F), hx(0x1D1A25), hx(0x201A21)},
-	{900, hx(0x181A1E), hx(0x1F1B21), hx(0x221C1F)},
-	{1278, hx(0x1F1D1A), hx(0x241F1B), hx(0x262019)},
+	{0, hx(0x3A3238), hx(0x3B3035), hx(0x3B3036)},
+	{6, hx(0x342C33), hx(0x34292D), hx(0x332A30)},
+	{40, hx(0x30282E), hx(0x31262A), hx(0x30282E)},
+	{160, hx(0x2C2529), hx(0x2C2324), hx(0x2C2328)},
+	{520, hx(0x262122), hx(0x2C2220), hx(0x2C2220)},
+	{900, hx(0x23201F), hx(0x2B211E), hx(0x2A211D)},
+	{1278, hx(0x27221C), hx(0x2A221D), hx(0x27211A)},
 }
 
 var darkStops [nStops]bgStop
@@ -113,15 +114,16 @@ type model struct {
 }
 
 // fillAlpha is the opacity of the white glass of the light look; the dark
-// glass is lighter ink at darkAlpha.
+// glass is a lighter warm ink, darkGlass, at darkAlpha.
 const (
 	fillAlpha = 0.575
 	darkAlpha = 0.5
+	darkGlass = 0x362F32
 )
 
 var (
 	lightModel = model{stops: lightStops[:], fill: vec3{255, 255, 255}, alpha: fillAlpha, keep: 1 - fillAlpha, hueG: 0.5, hueB: 1.6, backdrop: true}
-	darkModel  = model{stops: darkStops[:], fill: hx(0x2C2E3C), alpha: darkAlpha, keep: 1 - darkAlpha, hueG: 1, hueB: 1}
+	darkModel  = model{stops: darkStops[:], fill: hx(darkGlass), alpha: darkAlpha, keep: 1 - darkAlpha, hueG: 1, hueB: 1}
 )
 
 // edgeWeight is how much of the edge tint remains at distance d (reference
