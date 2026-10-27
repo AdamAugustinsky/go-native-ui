@@ -122,12 +122,12 @@ func (w *Window) SetFrameRect(x, y, width, height float64) {
 // ToggleFullScreen covers the window's monitor with its content and no frame,
 // or brings the frame and the placement back. Main thread.
 func (w *Window) ToggleFullScreen() {
-	if w.hwnd == 0 || pSetWindowLong == 0 {
+	if w.hwnd == 0 || pSetWindowLong == 0 || pGetWindowLong == 0 {
 		return
 	}
 	if w.fullScreen {
 		w.fullScreen = false
-		win32.Call(pSetWindowLong, w.hwnd, uintptr(gwlStyleArg), uintptr(w.style))
+		win32.Call(pSetWindowLong, w.hwnd, uintptr(gwlStyleArg), w.saveStyle)
 		w.place.length = uint32(unsafe.Sizeof(w.place))
 		win32.Call(pSetWindowPlacement, w.hwnd, uintptr(unsafe.Pointer(&w.place)))
 		win32.Call(pSetWindowPos, w.hwnd, 0, 0, 0, 0, 0, swpNoMove|swpNoSize|swpNoZOrder|swpNoOwnerZOrder|swpFrameChanged)
@@ -141,7 +141,8 @@ func (w *Window) ToggleFullScreen() {
 		return
 	}
 	w.fullScreen = true
-	win32.Call(pSetWindowLong, w.hwnd, uintptr(gwlStyleArg), uintptr(w.style&^wsOverlappedWindow|wsPopup|wsVisible))
+	w.saveStyle = win32.Call(pGetWindowLong, w.hwnd, uintptr(gwlStyleArg))
+	win32.Call(pSetWindowLong, w.hwnd, uintptr(gwlStyleArg), w.saveStyle&^wsOverlappedWindow|wsPopup|wsVisible)
 	m := w.mi.monitor
 	win32.Call(pSetWindowPos, w.hwnd, hwndTop, uintptr(m.left), uintptr(m.top), uintptr(m.right-m.left), uintptr(m.bottom-m.top),
 		swpNoOwnerZOrder|swpFrameChanged)

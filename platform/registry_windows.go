@@ -74,7 +74,7 @@ type appWindow struct {
 	taskbarCreated uint32 // RegisterWindowMessageW("TaskbarCreated")
 	ending         bool   // between WM_QUERYENDSESSION allowed and WM_ENDSESSION
 	blockReason    bool   // ShutdownBlockReasonCreate is in effect
-	ole            bool   // OleInitialize succeeded on its thread
+	oleThread      uint32 // the thread OleInitialize succeeded on (0: none)
 	got            bool   // it handled something the app's loop must see: the pump returns
 	modal          int    // native modal loops running now (enterModal)
 	pumps, wakes   uint64 // PumpStats
@@ -256,7 +256,9 @@ func ensureAppWindow() bool {
 }
 
 // destroyAppWindow destroys the app window (a thread change in tests; the
-// process's end otherwise takes it).
+// process's end otherwise takes it). Only the thread that made a window may
+// destroy it: from another thread it is asked to close (WM_CLOSE), which
+// happens if that thread pumps again, and is forgotten here either way.
 func destroyAppWindow() {
 	if reg.app.hwnd == 0 {
 		return
@@ -267,10 +269,14 @@ func destroyAppWindow() {
 	if reg.app.blockReason && pShutdownBlockDestroy != 0 {
 		win32.Call(pShutdownBlockDestroy, reg.app.hwnd)
 	}
-	h := reg.app.hwnd
+	h, owner := reg.app.hwnd, reg.app.thread
 	wakeTarget.Store(0)
 	reg.app.hwnd, reg.app.thread, reg.app.modal, reg.app.blockReason, reg.app.ending = 0, 0, 0, false, false
-	win32.Call(pDestroyWindow, h)
+	if owner == uint32(win32.Call(pGetCurrentThreadID)) {
+		win32.Call(pDestroyWindow, h)
+	} else {
+		win32.Call(pPostMessageW, h, wmClose, 0, 0)
+	}
 }
 
 // AppWindow is the HWND of the hidden app window (D68), 0 before the first

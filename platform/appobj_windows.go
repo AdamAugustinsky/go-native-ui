@@ -42,13 +42,13 @@ func StartApp(o AppOptions) error {
 	if !ensureAppWindow() {
 		return errors.New("platform: cannot create the app window")
 	}
-	if !reg.app.ole {
+	if tid := uint32(win32.Call(pGetCurrentThreadID)); reg.app.oleThread != tid {
 		if ole32 == 0 {
 			ole32 = win32.LoadSystem("ole32.dll")
 			pOleInitialize = win32.Proc(ole32, "OleInitialize")
 		}
 		if pOleInitialize != 0 && win32.HR(win32.Call(pOleInitialize, 0)) >= 0 { // S_OK, or S_FALSE when already one
-			reg.app.ole = true
+			reg.app.oleThread = tid
 		}
 	}
 	return nil

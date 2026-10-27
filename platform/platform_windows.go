@@ -248,8 +248,9 @@ type Window struct {
 	wakeMark   atomic.Bool // Window.Wake: an EvWake for this window at the next pump
 
 	// Window commands (wincmd_windows.go).
-	hidden     bool // Hide took it off the screen (SW_HIDE)
-	fullScreen bool // ToggleFullScreen: covers its monitor
+	hidden     bool    // Hide took it off the screen (SW_HIDE)
+	fullScreen bool    // ToggleFullScreen: covers its monitor
+	saveStyle  uintptr // the style full screen restores
 	titleBuf   []uint16
 	place      windowPlacement // the placement full screen restores
 	mi         monitorInfo

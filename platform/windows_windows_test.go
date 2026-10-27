@@ -303,9 +303,12 @@ func TestSessionEndAskedThroughTheQuitPolicy(t *testing.T) {
 		quitState.approved.Store(false)
 		reg.app.ending = false
 		quitState.opts = AppOptions{}
+		// The test's thread goes back to the runtime: no apartment stays on it.
+		win32.Call(win32.Proc(ole32, "OleUninitialize"))
+		reg.app.oleThread = 0
 	})
-	if !reg.app.ole {
-		t.Error("OleInitialize did not run on the main thread")
+	if reg.app.oleThread != uint32(win32.Call(pGetCurrentThreadID)) {
+		t.Error("OleInitialize did not run on the app's thread")
 	}
 	h := AppWindow()
 	query := func() uintptr { return win32.Call(pSendMessageW, h, wmQueryEndSess, 0, endSessionLogoff) }
