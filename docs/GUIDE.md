@@ -198,6 +198,16 @@ points (`r.Window.Toolbars`) and the app's own constants, times the scale, and
   `NextSize` set one property of the next widget only (`widget.Fill` takes the
   room its siblings leave, `Kit.Fixed(pt)` is a fixed size), and `NextJustify`
   and `NextCross` place children along and across the axis.
+- **Things laid over others** (an icon over a round button, a badge in a
+  corner, a spinner over an image) are placed, not computed: `c.NextCenter()`
+  centres the next box in its parent at whatever size it takes, and
+  `c.NextAnchor(ui.AnchorBottomRight, x, y)` pins it to a corner or an edge
+  with insets, as CSS's `position: absolute` with `inset`; `c.NextOffset(dx, dy)`
+  nudges a box from its laid-out place without moving its siblings, as
+  `position: relative`. Arithmetic such as `theme.At(c, (d-w)/2, (d-h)/2, w, h)`
+  goes wrong as soon as `w` is not the size the box really takes; the layout
+  audit (`widgettest.AuditLayout`) reports an icon off its button's centre,
+  layered or not, and anything outside its parent.
 - **The menu bar.** Where the system draws none (Windows, Linux) the app's own
   is the window's first strip and the panes lie below it. `Kit.MenuBar` builds
   nothing on macOS.

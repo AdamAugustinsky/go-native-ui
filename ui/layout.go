@@ -113,6 +113,8 @@ func (c *Context) layout() {
 			for a := 0; a < 2; a++ {
 				var rel float32
 				switch {
+				case cb.floatingOn(a) && cb.anchor != AnchorNone:
+					rel = cb.anchor.at(a, p.size[a], cb.size[a], cb.fixed[a])
 				case cb.floatingOn(a):
 					rel = cb.fixed[a]
 				case a == la && between != 0:
@@ -144,7 +146,7 @@ func (c *Context) layout() {
 						rel += room
 					}
 				}
-				cb.origin[a] = p.origin[a] + rel
+				cb.origin[a] = p.origin[a] + rel + cb.nudge[a]
 			}
 			setRect(cb)
 		}

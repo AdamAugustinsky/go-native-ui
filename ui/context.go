@@ -72,6 +72,8 @@ type boxFrame struct {
 	obscured  [2]float32 // a scroll box's view covered at its top and bottom (SetObscured)
 	stopWheel bool       // the wheel over the box scrolls nothing beneath it (StopWheel)
 	fixed     [2]float32
+	anchor    Anchor     // NextAnchor: fixed holds the insets
+	nudge     [2]float32 // NextOffset: moved from its laid-out place
 
 	txt    core.Span // display text in the current frame's arena
 	run    text.RunRef
@@ -189,6 +191,9 @@ type Context struct {
 
 	nextPos    [2]float32
 	hasNextPos bool
+	nextAnchor Anchor
+	nextInset  [2]float32
+	nextNudge  [2]float32
 	nextFlags  Flags
 	nextAudit  AuditMask  // the exemptions of the next box (NextAuditExempt)
 	nextFade   float32    // the next box's children's fade at its end (NextFadeEnd)
@@ -668,6 +673,7 @@ func (c *Context) resetStyles() {
 	c.sTint.reset()
 	c.hasNextStyle = false
 	c.hasNextPos = false
+	c.nextAnchor, c.nextInset, c.nextNudge = AnchorNone, [2]float32{}, [2]float32{}
 	c.nextFlags = 0
 	c.nextAudit = 0
 	c.nextFade = 0
@@ -754,6 +760,9 @@ func (c *Context) Spacer(w, h Size) ID {
 func (c *Context) newBox(flags Flags, key Key) ID {
 	flags |= c.nextFlags
 	c.nextFlags = 0
+	if c.nextAnchor != AnchorNone {
+		flags |= floatingMask
+	}
 	var id ID
 	found := false
 	for n := uint64(0); ; n++ {
@@ -822,6 +831,11 @@ func (c *Context) newBox(flags Flags, key Key) ID {
 		b.fixed = c.nextPos
 		c.hasNextPos = false
 	}
+	b.anchor, b.nudge = c.nextAnchor, c.nextNudge
+	if c.nextAnchor != AnchorNone {
+		b.fixed = c.nextInset
+	}
+	c.nextAnchor, c.nextNudge = AnchorNone, [2]float32{}
 	if n := &c.semNext; n.role != RoleNone {
 		c.sems = append(c.sems, semRec{id: id, role: n.role, state: n.state, actions: n.actions, hasActions: n.hasActions,
 			name: n.name, value: n.value, rng: n.rng, hasRange: n.hasRange, pos: n.pos, hasPos: n.hasPos, level: n.level})

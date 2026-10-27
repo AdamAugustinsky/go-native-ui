@@ -235,6 +235,46 @@ const (
 	AlignRight
 )
 
+// Anchor is where NextAnchor pins a floating box in its parent: a corner, the
+// middle of an edge, or the centre. It is CSS's absolute positioning: the
+// edges are the parent's own (its padding does not count), the insets measure
+// inward from the anchored edges (top, right, bottom, left), and the centre is
+// inset: 0 with auto margins, the free room split evenly. The box's own size
+// is resolved first, so nothing is computed by hand.
+type Anchor uint8
+
+const (
+	// AnchorNone is no anchor: a floating box sits at NextPos.
+	AnchorNone Anchor = iota
+	AnchorTopLeft
+	AnchorTop
+	AnchorTopRight
+	AnchorLeft
+	AnchorCenter
+	AnchorRight
+	AnchorBottomLeft
+	AnchorBottom
+	AnchorBottomRight
+)
+
+// at is where anchor a puts a box size long on axis ax (0 x, 1 y) in a parent
+// room long: the start edge plus inset, the centre plus inset as an offset, or
+// the end edge less inset.
+func (a Anchor) at(ax int, room, size, inset float32) float32 {
+	i := int(a) - 1
+	step := i % 3
+	if ax == 1 {
+		step = i / 3
+	}
+	switch step {
+	case 0:
+		return inset
+	case 1:
+		return snap((room-size)/2) + inset
+	}
+	return room - size - inset
+}
+
 // SizeKind selects how one axis of a box is sized.
 type SizeKind uint8
 

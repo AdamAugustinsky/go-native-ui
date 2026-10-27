@@ -391,3 +391,24 @@ func (c *Context) PopTint() { c.sTint.pop() }
 // FloatingX/FloatingY. Children of the root are positioned in window
 // coordinates.
 func (c *Context) NextPos(x, y float32) { c.nextPos, c.hasNextPos = [2]float32{x, y}, true }
+
+// NextAnchor makes the next box floating and pins it in its parent once
+// both sizes are known: at corner, edge or centre a, insetX and insetY pixels
+// in from the anchored edges (for a centred axis, an offset from the centre).
+// It is CSS's position: absolute with top/right/bottom/left; see Anchor.
+//
+//	c.NextAnchor(ui.AnchorBottomRight, e.Pt(12), e.Pt(12)) // a badge in the corner
+func (c *Context) NextAnchor(a Anchor, insetX, insetY float32) {
+	c.nextAnchor, c.nextInset = a, [2]float32{insetX, insetY}
+}
+
+// NextCenter centres the next box in its parent on both axes, floating, at
+// whatever size it takes: NextAnchor(AnchorCenter, 0, 0). An icon over a
+// round button, a spinner over an image, a play glyph over a video.
+func (c *Context) NextCenter() { c.NextAnchor(AnchorCenter, 0, 0) }
+
+// NextOffset moves the next box by (dx, dy) pixels from the place layout gives
+// it, with its children, and moves nothing else: CSS's position: relative
+// with left and top. For optical corrections (a play triangle a pixel right of
+// the centre), not for layout.
+func (c *Context) NextOffset(dx, dy float32) { c.nextNudge = [2]float32{dx, dy} }
