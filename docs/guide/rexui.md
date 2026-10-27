@@ -161,6 +161,14 @@ builds the rows between `l.First` and `l.Last`:
 	rexui.EndList(k, &l)
 ```
 
+A file or a diff of thousands of lines is a `base.VList` of `rexui.CodeLine`
+rows. `VListOpts.ContentW = rexui.CodeWidth(k, rexui.CodeColumns(src), opts)`
+(once per file) makes every row as wide as the longest line, so the bands
+span it, and the list scroll sideways to its end, all rows by one offset: a
+wheel still scrolls it up and down, Shift with the wheel or a trackpad
+sideways. Its horizontal bar comes from `Body` as the vertical one does
+(`base.ScrollBoth`).
+
 ## 6. System menus
 
 On macOS a `Select`, a `MenuButton` and a context menu open the **system's**

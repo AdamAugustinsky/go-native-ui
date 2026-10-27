@@ -318,8 +318,18 @@ type CodeLineOpts struct {
 // thousands of lines in a virtual list: the same row CodeBlock builds,
 // with its gutter, band and colours. toks are the line's tokens, with
 // offsets from the start of the line (a file's tokens cut at the line, as
-// highlight.Tokens's never cross one). Give the row the width of the widest
-// line (a scroll view's content), or the band ends with the text.
+// highlight.Tokens's never cross one). The row is as wide as its parent:
+// in a base.VList whose VListOpts.ContentW is CodeWidth of the file's
+// longest line, every row is that wide, so the bands span it, and the list
+// scrolls sideways to the end of it, all rows by one offset:
+//
+//	cw := rexui.CodeWidth(k, rexui.CodeColumns(src), opts) // once per file
+//	v := base.BeginVList(c, "file", &st, base.VListOpts{Estimate: 18, ContentW: cw})
+//	for i := v.First; i < v.Last; i++ {
+//		n := v.Item(i)
+//		rexui.CodeLine(k, ui.KeyN(c.ParentKey(), 1), lines[n], toks[n], opts)
+//	}
+//	base.EndVList(&v)
 func CodeLine(k *base.Kit, key ui.Key, line []byte, toks []highlight.Token, o CodeLineOpts) {
 	v := o.View
 	if v == nil {
@@ -337,6 +347,34 @@ func CodeLine(k *base.Kit, key ui.Key, line []byte, toks []highlight.Token, o Co
 	}
 	v.lineSpans(toks, 0, line)
 	v.codeLine(k, key, line, v.spans, rc, &codeLine{kind: o.Kind, hit: o.Hit, gutter: gw, num: o.Number, item: o.Item, part: o.Part})
+}
+
+// CodeColumns is the width of the longest line of src in columns, as a code
+// block measures it: a tab counts 4, a wide character 2.
+func CodeColumns(src []byte) int { return maxColumns(src) }
+
+// CodeWidth is the width in pixels of a CodeLine row whose line is cols
+// columns wide (CodeColumns), with o's gutter (GutterDigits digits, or
+// Number's) and look, and the slack a code block leaves after its longest
+// line: VListOpts.ContentW for a file shown as a VList of CodeLine rows.
+func CodeWidth(k *base.Kit, cols int, o CodeLineOpts) float32 {
+	v := o.View
+	if v == nil {
+		v = &defaultView
+	}
+	rc := &CodeLook
+	if o.Look != nil {
+		rc = o.Look
+	}
+	v.prepare(k, rc)
+	sc := k.Scale()
+	adv := k.TextSystem().Metrics(v.mono).MonoAdvance
+	w := float32(max(cols, 0))*adv + 2*pt(sc, rc.PadX) + pt(sc, 8)
+	if o.Number > 0 || o.GutterDigits > 0 {
+		d := max(o.GutterDigits, len(strconv.Itoa(max(o.Number, 1))))
+		w += float32(d)*adv + pt(sc, rc.GutterPad)
+	}
+	return theme.Snap(w)
 }
 
 // codeLine is one line's look and place.
