@@ -322,9 +322,14 @@ func TestNestedFrameworksSignedInsideOut(t *testing.T) {
 	os.Symlink("Versions/Current/Resources", filepath.Join(fw, "Resources"))
 	dylib := filepath.Join(tmp, "libfake.dylib")
 	mach(dylib)
+	native := filepath.Join(tmp, "native")
+	mach(filepath.Join(native, "darwin-arm64", "libnative.dylib"))
+	mach(filepath.Join(native, "windows-amd64", "native.dll")) // not copied
+	os.WriteFile(filepath.Join(native, "LICENSE"), []byte("MIT\n"), 0o644)
 
 	c := loadHello(t)
 	c.Frameworks = []string{fw, dylib}
+	c.NativeLibs = []string{native}
 	app := filepath.Join(tmp, "out", "Hello App.app")
 	ent, cleanup, err := buildBundle(c, buildOptions{Out: app})
 	if err != nil {
@@ -339,7 +344,7 @@ func TestNestedFrameworksSignedInsideOut(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(nested) != 3 { // the framework's binary, the framework, the dylib
+	if len(nested) != 4 { // the framework's binary, the framework, the dylibs
 		t.Errorf("signed %d nested items: %v", len(nested), nested)
 	}
 	if err := verifyBundle(app); err != nil {
@@ -348,10 +353,17 @@ func TestNestedFrameworksSignedInsideOut(t *testing.T) {
 	for _, p := range []string{
 		filepath.Join(app, "Contents", "Frameworks", "libfake.dylib"),
 		filepath.Join(app, "Contents", "Frameworks", "Fake.framework"),
+		filepath.Join(app, "Contents", "Frameworks", "libnative.dylib"),
 	} {
 		if info := codesignInfo(t, p); !strings.Contains(info, "Authority=gnui-dev") {
 			t.Errorf("%s not signed by gnui-dev:\n%s", p, info)
 		}
+	}
+	if _, err := os.Stat(filepath.Join(app, "Contents", "Resources", "Licenses", "libnative.txt")); err != nil {
+		t.Error("native library licence:", err)
+	}
+	if _, err := os.Stat(filepath.Join(app, "Contents", "Frameworks", "native.dll")); err == nil {
+		t.Error("a Windows library was bundled")
 	}
 }
 
