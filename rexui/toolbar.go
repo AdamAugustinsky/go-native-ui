@@ -92,6 +92,13 @@ type ToolbarOpts struct {
 	// band over the content pane is the system's opaque bar (GlassTitlebar)
 	// of this colour, as the capsules are below the window's own pixels.
 	BandFill uint32
+	// Header builds the toolbar as a pane's header row instead of the
+	// window's band (a Rex pane's title row): x0, y0, x1, y1 in window
+	// pixels, its height y1 - y0 (0: the style's). The row keeps the pointer
+	// from what is under it but does not move the window; it has no traffic
+	// lights, band fill or scroll edge, and one section, whose items start
+	// WideGap from x0 (Panes and NextPane do nothing). Zero: the window's band.
+	Header [4]float32
 }
 
 // ToolbarRecipe is the toolbar's look. Lengths are in points.
@@ -321,6 +328,10 @@ func BeginToolbar(k *base.Kit, label string, o ToolbarOpts) Toolbar {
 	}
 	w, _ := c.Size()
 	tb.w = float32(w)
+	if hd := o.Header; hd[2] > hd[0] {
+		tb.header(hd, label)
+		return tb
+	}
 	h := theme.Snap(tb.spec.Height)
 
 	// the band moves the window; it is clear while nothing is under it in an
@@ -398,6 +409,24 @@ func BeginToolbar(k *base.Kit, label string, o ToolbarOpts) Toolbar {
 	}
 	tb.beginPane(0, theme.Snap(zoom+first), 0)
 	return tb
+}
+
+// header starts a pane's header row (ToolbarOpts.Header): a band of its own
+// in the pane, whose items lie in band coordinates as the window's do.
+func (tb *Toolbar) header(hd [4]float32, label string) {
+	c, r := tb.k.Context(), tb.k.Theme()
+	tb.o.Panes, tb.o.Traffic = [2]float32{}, false
+	if h := hd[3] - hd[1]; h > 0 {
+		tb.spec.Height = h
+	}
+	tb.w = hd[2] - hd[0]
+	theme.At(c, hd[0], hd[1], tb.w, theme.Snap(tb.spec.Height))
+	c.NextRole(ui.RoleGroup)
+	c.NextSemName(label)
+	tb.band = c.BoxKeyed(ui.Hoverable|base.Floating, tb.key, nil)
+	c.StopWheel(tb.band)
+	c.Push(tb.band)
+	tb.beginPane(0, r.Window.Capsule.WideGap, 0)
 }
 
 // trafficLights draws the window buttons at the style's centres.
