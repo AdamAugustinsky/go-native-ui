@@ -22,26 +22,35 @@ import (
 
 func init() { runtime.LockOSThread() } // the main goroutine stays on the main thread: the STA
 
-// Interface ids, WebView2.h (verify on first CI run).
+// Interface ids, WebView2.h (SDK 1.0.4314.35, checked 2026-10-27).
 var (
 	iidEnvCompleted  = win32.GUID{Data1: 0x4E8A3389, Data2: 0xC9D8, Data3: 0x4BD2, Data4: [8]byte{0xB6, 0xB5, 0x12, 0x4F, 0xEE, 0x6C, 0xC1, 0x4D}} // ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler
 	iidCtrlCompleted = win32.GUID{Data1: 0x6C4819F3, Data2: 0xC9B7, Data3: 0x4260, Data4: [8]byte{0x81, 0x27, 0xC9, 0xF5, 0xBD, 0xE7, 0xF6, 0x8C}} // ICoreWebView2CreateCoreWebView2ControllerCompletedHandler
 	iidNavCompleted  = win32.GUID{Data1: 0xD33A35BF, Data2: 0x1C49, Data3: 0x4F98, Data4: [8]byte{0x93, 0xAB, 0x00, 0x6E, 0x05, 0x33, 0xFE, 0x1C}} // ICoreWebView2NavigationCompletedEventHandler
+	iidEnvOptions    = win32.GUID{Data1: 0x2FDE08A8, Data2: 0x1E9A, Data3: 0x4766, Data4: [8]byte{0x8C, 0x05, 0x95, 0xA9, 0xCE, 0xB9, 0xD1, 0xC5}} // ICoreWebView2EnvironmentOptions
 )
 
-// Vtable slots, WebView2.h, counting IUnknown's 0-2.
+// Vtable slots, counting IUnknown's 0-2, read from the C vtables
+// (I…Vtbl structs) of WebView2.h in the Microsoft.Web.WebView2 NuGet
+// package 1.0.4314.35 (2026-10-27): ICoreWebView2Environment at line 44467,
+// ICoreWebView2Controller 39309, ICoreWebView2 3239,
+// ICoreWebView2NavigationCompletedEventArgs and the handlers' Invoke at 3.
+// The handlers' Invoke and ICoreWebView2EnvironmentOptions' eight accessors
+// (get/put AdditionalBrowserArguments, Language,
+// TargetCompatibleBrowserVersion, AllowSingleSignOnUsingOSPrimaryAccount,
+// slots 3-10) are the methods of the kinds below, in that order.
 const (
 	envCreateController = 3 // ICoreWebView2Environment::CreateCoreWebView2Controller(HWND, handler)
 	envBrowserVersion   = 5 // ICoreWebView2Environment::get_BrowserVersionString(LPWSTR*)
 
 	ctrlPutIsVisible = 4  // ICoreWebView2Controller::put_IsVisible(BOOL)
-	ctrlPutBounds    = 6  // ICoreWebView2Controller::put_Bounds(RECT): RECT by value (verify on first CI run)
+	ctrlPutBounds    = 6  // ICoreWebView2Controller::put_Bounds(RECT): RECT by value
 	ctrlClose        = 24 // ICoreWebView2Controller::Close()
 	ctrlCoreWebView2 = 25 // ICoreWebView2Controller::get_CoreWebView2(ICoreWebView2**)
 
 	wvNavigate              = 5  // ICoreWebView2::Navigate(LPCWSTR)
 	wvAddNavigationComplete = 15 // ICoreWebView2::add_NavigationCompleted(handler, EventRegistrationToken*)
-	wvDocumentTitle         = 48 // ICoreWebView2::get_DocumentTitle(LPWSTR*) (verify on first CI run)
+	wvDocumentTitle         = 48 // ICoreWebView2::get_DocumentTitle(LPWSTR*)
 
 	navArgsIsSuccess   = 3 // ICoreWebView2NavigationCompletedEventArgs::get_IsSuccess(BOOL*)
 	navArgsErrorStatus = 4 // ICoreWebView2NavigationCompletedEventArgs::get_WebErrorStatus(COREWEBVIEW2_WEB_ERROR_STATUS*)
@@ -67,6 +76,7 @@ var (
 	pLoadLibraryEx   = win32.Proc(kernel32, "LoadLibraryExW")
 	pOleInitialize   = win32.Proc(ole32, "OleInitialize")
 	pCoTaskMemFree   = win32.Proc(ole32, "CoTaskMemFree")
+	pCoTaskMemAlloc  = win32.Proc(ole32, "CoTaskMemAlloc")
 	pRegGetValue     = win32.Proc(advapi32, "RegGetValueW")
 )
 
@@ -109,10 +119,14 @@ type step struct {
 }
 
 type candidate struct {
-	Key       string `json:"key"`
-	EBWebView string `json:"ebwebview,omitempty"`
-	Version   string `json:"version,omitempty"`
-	Err       string `json:"err,omitempty"`
+	Key       string   `json:"key"`
+	EBWebView string   `json:"ebwebview,omitempty"` // the version folder
+	Version   string   `json:"version,omitempty"`   // Clients\{…} pv
+	FolderVer string   `json:"folder_version,omitempty"`
+	DLL       string   `json:"dll,omitempty"`
+	DLLFound  bool     `json:"dll_found"`
+	Arches    []string `json:"ebwebview_arches,omitempty"` // what EBWebView\ holds
+	Err       string   `json:"err,omitempty"`
 }
 
 type runtimeInfo struct {
@@ -124,6 +138,7 @@ type runtimeInfo struct {
 }
 
 type attempt struct {
+	Options    string `json:"options,omitempty"` // "go_object" or "null"
 	Steps      []step `json:"steps"`
 	EnvVersion string `json:"env_version,omitempty"`
 	NavSuccess bool   `json:"nav_success"`
@@ -136,14 +151,18 @@ type report struct {
 	Arch    string      `json:"arch"`
 	Runtime runtimeInfo `json:"runtime"`
 	attempt
-	Loader   *attempt `json:"loader,omitempty"`
-	TimedOut bool     `json:"timed_out"`
-	TotalMs  float64  `json:"total_ms"`
+	// NullOptions is a second try with options NULL, made only when the
+	// first (with our options object) did not work.
+	NullOptions *attempt       `json:"null_options,omitempty"`
+	OptionCalls map[string]int `json:"option_calls"` // our options object's methods the runtime called
+	Loader      *attempt       `json:"loader,omitempty"`
+	TimedOut    bool           `json:"timed_out"`
+	TotalMs     float64        `json:"total_ms"`
 }
 
 var (
 	mu    sync.Mutex
-	res   = report{Arch: runtime.GOARCH}
+	res   = report{Arch: runtime.GOARCH, OptionCalls: map[string]int{}}
 	start = time.Now()
 )
 
@@ -203,6 +222,69 @@ var (
 	}}})
 )
 
+// targetVersion is what our options object reports as
+// TargetCompatibleBrowserVersion: the oldest runtime WebView2 supports, so
+// no installed runtime is refused for being older than our SDK.
+const targetVersion = "86.0.616.0"
+
+var ePointer = uintptr(0x80004003) // E_POINTER (win32.EPointer) as a raw method result
+
+// coString is s in CoTaskMemAlloc memory, as COM getters return strings.
+func coString(s string) uintptr {
+	u, _ := syscall.UTF16FromString(s)
+	p, _ := call(pCoTaskMemAlloc, uintptr(2*len(u)))
+	if p != 0 {
+		copy(unsafe.Slice((*uint16)(win32.Ptr(p)), len(u)), u)
+	}
+	return p
+}
+
+// optionsKind is ICoreWebView2EnvironmentOptions as the SDK's
+// CoreWebView2EnvironmentOptions answers it with nothing set (strings NULL,
+// S_OK), except TargetCompatibleBrowserVersion. Setters accept and drop.
+var optionsKind = func() *com.Kind {
+	str := func(name, v string) com.Method {
+		return com.Method{N: 1, Fn: func(_ *com.Object, a com.Args) uintptr {
+			mu.Lock()
+			res.OptionCalls[name]++
+			mu.Unlock()
+			if a[0] == 0 {
+				return ePointer
+			}
+			out := uintptr(0)
+			if v != "" {
+				out = coString(v)
+			}
+			*(*uintptr)(win32.Ptr(a[0])) = out
+			return 0
+		}}
+	}
+	put := func(name string) com.Method {
+		return com.Method{N: 1, Fn: func(_ *com.Object, _ com.Args) uintptr {
+			mu.Lock()
+			res.OptionCalls[name]++
+			mu.Unlock()
+			return 0
+		}}
+	}
+	return com.NewKind("p3-options", 2, []win32.GUID{iidEnvOptions}, []com.Method{
+		str("get_AdditionalBrowserArguments", ""), put("put_AdditionalBrowserArguments"),
+		str("get_Language", ""), put("put_Language"),
+		str("get_TargetCompatibleBrowserVersion", targetVersion), put("put_TargetCompatibleBrowserVersion"),
+		{N: 1, Fn: func(_ *com.Object, a com.Args) uintptr {
+			mu.Lock()
+			res.OptionCalls["get_AllowSingleSignOnUsingOSPrimaryAccount"]++
+			mu.Unlock()
+			if a[0] == 0 {
+				return ePointer
+			}
+			*(*int32)(win32.Ptr(a[0])) = 0
+			return 0
+		}},
+		put("put_AllowSingleSignOnUsingOSPrimaryAccount"),
+	})
+}()
+
 // pump runs the message loop until *done or d passes.
 func pump(done *bool, d time.Duration) bool {
 	end := time.Now().Add(d)
@@ -238,6 +320,13 @@ func regString(root uintptr, key, value string) (string, error) {
 	return syscall.UTF16ToString(regBuf[:regLen/2]), nil
 }
 
+// findRuntime reads the Evergreen runtime's location as WebView2Loader does:
+// per machine (HKLM through the 32-bit view, KEY_WOW64_32KEY, which is
+// SOFTWARE\WOW6432Node on 64-bit Windows: EdgeUpdate is a 32-bit program),
+// then per user (HKCU). ClientState\{runtime}'s EBWebView value is the
+// version folder (…\EdgeWebView\Application\<version>); the client DLL is
+// <version folder>\EBWebView\<x64|arm64>\EmbeddedBrowserWebView.dll. The
+// native HKLM view is read too, for the record.
 func findRuntime() {
 	const hklm, hkcu = 0x80000002, 0x80000001
 	roots := []struct {
@@ -263,12 +352,26 @@ func findRuntime() {
 		if v, err := regString(r.root, r.base+`Clients\`+runtimeGUID, "pv"); err == nil {
 			c.Version = v
 		}
-		res.Runtime.Candidates = append(res.Runtime.Candidates, c)
-		if folder != "" && !res.Runtime.Found {
-			dll := filepath.Join(folder, arch, "EmbeddedBrowserWebView.dll")
-			if _, err := os.Stat(dll); err == nil {
-				res.Runtime.Found, res.Runtime.Folder, res.Runtime.Version, res.Runtime.DLL = true, folder, c.Version, dll
+		if folder != "" {
+			c.FolderVer = filepath.Base(folder)
+			c.DLL = filepath.Join(folder, "EBWebView", arch, "EmbeddedBrowserWebView.dll")
+			_, serr := os.Stat(c.DLL)
+			c.DLLFound = serr == nil
+			if serr != nil {
+				c.Err = serr.Error()
 			}
+			if ents, err := os.ReadDir(filepath.Join(folder, "EBWebView")); err == nil {
+				for _, e := range ents {
+					if e.IsDir() {
+						c.Arches = append(c.Arches, e.Name())
+					}
+				}
+			}
+		}
+		res.Runtime.Candidates = append(res.Runtime.Candidates, c)
+		if c.DLLFound && !res.Runtime.Found {
+			res.Runtime.Found, res.Runtime.Folder, res.Runtime.DLL = true, folder, c.DLL
+			res.Runtime.Version = c.FolderVer
 		}
 	}
 }
@@ -388,6 +491,22 @@ func browse(a *attempt, hwnd uintptr, url string) {
 	mu.Unlock()
 }
 
+// internal calls CreateWebViewEnvironmentWithOptionsInternal(TRUE,
+// 0 (the installed Evergreen runtime; 1 is a fixed-version folder),
+// userDataFolder, options, handler) and, if the environment arrives, browses.
+func internal(a *attempt, fn uintptr, folder string, options, hwnd uintptr, url string) {
+	t := time.Now()
+	envDone, envObj = false, 0
+	h, _, _ := envKind.New(0)
+	hr, _ := call(fn, 1, 0, uintptr(unsafe.Pointer(wide(folder))), options, h.Ptr())
+	h.Release()
+	a.add("create_environment_call", int32(hr), t, int32(hr) == 0, fmt.Sprintf("checkRunningInstance=TRUE runtimeType=0 options=%s", map[bool]string{true: "go_object", false: "NULL"}[options != 0]))
+	if int32(hr) == 0 && waitEnv(a, t) {
+		browse(a, hwnd, url)
+		win32.Release(envObj)
+	}
+}
+
 func loadDLL(path string) (uintptr, syscall.Errno) {
 	return call(pLoadLibraryEx, uintptr(unsafe.Pointer(wide(path))), 0, 0x8) // LOAD_WITH_ALTERED_SEARCH_PATH
 }
@@ -446,14 +565,18 @@ func main() {
 		fn := win32.Proc(dll, "CreateWebViewEnvironmentWithOptionsInternal")
 		res.add("find_export", 0, t, fn != 0, "CreateWebViewEnvironmentWithOptionsInternal")
 		if fn != 0 {
-			t = time.Now()
-			h, _, _ := envKind.New(0)
-			hr, _ := call(fn, 1, 0, uintptr(unsafe.Pointer(wide(filepath.Join(data, "ours")))), 0, h.Ptr())
-			h.Release()
-			res.add("create_environment_call", int32(hr), t, int32(hr) == 0, "checkRunningInstance=TRUE runtimeType=0 options=NULL")
-			if int32(hr) == 0 && waitEnv(&res.attempt, t) {
-				browse(&res.attempt, hwnd, url)
-				win32.Release(envObj)
+			// First with an options object implemented in Go, as the
+			// loader passes one; then, only if that did not work, with NULL.
+			res.Options = "go_object"
+			opts, _, _ := optionsKind.New(0)
+			internal(&res.attempt, fn, filepath.Join(data, "ours"), opts.Ptr(), hwnd, url)
+			opts.Release()
+			if !res.Worked {
+				a := &attempt{Options: "null"}
+				mu.Lock()
+				res.NullOptions = a
+				mu.Unlock()
+				internal(a, fn, filepath.Join(data, "null"), 0, hwnd, url)
 			}
 		}
 	}
