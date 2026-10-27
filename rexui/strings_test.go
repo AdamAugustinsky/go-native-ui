@@ -3,6 +3,7 @@ package rexui_test
 import (
 	"testing"
 
+	"gonativeui/menu"
 	"gonativeui/rexui"
 	"gonativeui/theme"
 	"gonativeui/ui"
@@ -48,6 +49,9 @@ func TestStringsPtBR(t *testing.T) {
 	}
 	if base.CurrentStrings().VerticalScrollBar != "Barra de rolagem vertical" {
 		t.Error("SetStrings did not set the primitives' names")
+	}
+	if menu.RoleTitle(menu.RoleQuit) != "Encerrar" || menu.CurrentStrings().QuitApp != "Encerrar %s" {
+		t.Error("SetStrings did not set the menus' titles")
 	}
 }
 

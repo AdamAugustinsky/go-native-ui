@@ -199,8 +199,12 @@ sent message, the scroll bars) are a `rexui.Strings`, English by default.
 `rexui.SetStrings(rexui.StringsPtBR)`, before the first frame, switches them
 to Brazilian Portuguese; another language is a `Strings` of the app's own,
 whose empty fields stay English. They are read as they are each frame, at no
-cost; a label or name the app passes always wins. An app on `widget` alone
-sets the primitives' names with `base.SetStrings`.
+cost; a label or name the app passes always wins. `Strings.Menu` titles the
+standard commands and menus a command with a role and no title of its own
+gets ("Copiar", "Encerrar %s", "Editar", "Janela"), in drawn menus, the tray
+and the native menu bar, which takes them when it is next built. An app on
+`widget` alone sets the primitives' names with `base.SetStrings` and the
+menus' with `menu.SetStrings`.
 
 Rex is the default. `rexui.UseAppKitControls()`, called once before the first
 frame, gives the push, icon and toggle buttons and the segmented controls
