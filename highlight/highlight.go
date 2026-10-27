@@ -1,33 +1,39 @@
 // Package highlight splits source code into tokens with roles (keyword,
 // string, comment …) for code blocks in chat and the Files and Changes
-// panes (the phase 8 plan's C3 and D75). The lexers are table-driven and
-// line-oriented: a State carries what a line leaves open (a block comment,
-// a multi-line string) into the next, so a streaming message or a long file
-// is highlighted a line at a time.
+// panes (the phase 8 plan's C3 and D75). The lexers are chroma v2's
+// (github.com/alecthomas/chroma/v2, MIT): a curated set for the languages
+// below, registered on their own so the binary does not carry chroma's
+// other 260 lexers (see Lexers and the gnui_chroma_full build tag).
 //
 //	lang := highlight.LangOf("ts") // a fence's info string or a file name
-//	var st highlight.State
-//	for _, line := range lines {
-//		toks, st = highlight.Line(lang, st, line, toks[:0])
-//		for _, t := range toks {
-//			// line[t.Off : t.Off+t.Len] in the colour of t.Role (rexui.CodeBlock maps roles to Rex code colours)
-//		}
+//	toks = highlight.Tokens(lang, src, toks[:0])
+//	for _, t := range toks {
+//		// src[t.Off : t.Off+t.Len] in the colour of t.Role (rexui.CodeBlock maps roles to Rex code colours)
 //	}
 //
+// Tokens works on a whole block or file: chroma's lexers keep a stack of
+// states across lines (a block comment, a heredoc, a template string), so a
+// line cannot be lexed on its own. It allocates (chroma's regexp engine works
+// on runes and makes a string per token), so run it on a worker, never in a
+// frame: rexui.CodeHighlighter does that and hands the tokens to the frame.
+// Each rule is anchored and chroma bounds every match to 250 ms, so a
+// pathological input (an unterminated string, a 1 MB line) stays about linear
+// in its length.
+//
 // Languages: Go, TypeScript, JavaScript, Python, Rust, Swift, C#, shell,
-// JSON, YAML, TOML, SQL, HTML, CSS, diff and Markdown. Unknown languages
-// are Plain: one Text token per line.
+// JSON, YAML, TOML, SQL, HTML, CSS, diff and Markdown. Unknown languages are
+// Plain: one Text token per line.
 //
-// Tokens are pointer-free; Line allocates nothing beyond dst's growth and
-// stays linear on pathological input (unterminated strings, 1 MB lines).
-//
-// Wave 0 of phase 8 fixes this API with the fallback for unknown languages
-// everywhere: until C3 lands, every language is highlighted as Plain.
+// Tokens are pointer-free and never cross a line break, so a renderer that
+// draws line by line cuts them without looking at the text again.
 package highlight
 
 import (
+	"bytes"
 	"path"
 	"strings"
+
+	"github.com/alecthomas/chroma/v2"
 )
 
 // Lang is a language.
@@ -59,6 +65,9 @@ const (
 
 var langNames = [NumLangs]string{"plain", "go", "typescript", "javascript", "python", "rust", "swift", "csharp", "shell", "json", "yaml", "toml", "sql", "html", "css", "diff", "markdown"}
 
+// chromaNames are the chroma lexer names of the languages.
+var chromaNames = [NumLangs]string{"", "go", "typescript", "javascript", "python", "rust", "swift", "c#", "bash", "json", "yaml", "toml", "sql", "html", "css", "diff", "markdown"}
+
 // String is the language's name ("typescript").
 func (l Lang) String() string {
 	if l < NumLangs {
@@ -89,7 +98,7 @@ var aliases = map[string]Lang{
 }
 
 // LangOf names the language of a fence's info string ("ts", "golang",
-// "python {linenos}": the first word) or a file name
+// "python {linenos}": the first word) or a file name ("src/App.tsx",
 // "Makefile"), case-insensitively; Plain when it is not one of ours.
 func LangOf(name string) Lang {
 	name = strings.TrimSpace(name)
@@ -133,7 +142,8 @@ const (
 	Attribute
 	Property
 	// Inserted and Deleted are a diff's added and removed lines; Meta its
-	// headers and hunk lines, and a shell's prompt.
+	// headers and hunk lines, a shell's prompt, a decorator and a Markdown
+	// heading.
 	Inserted
 	Deleted
 	Meta
@@ -141,28 +151,143 @@ const (
 	NumRoles
 )
 
-// Token is a run of a line with one role: bytes [Off, Off+Len).
+// Token is a run of a line with one role: bytes [Off, Off+Len) of the
+// source Tokens was given.
 type Token struct {
-	// Off and Len are the token's bytes in the line.
+	// Off and Len are the token's bytes.
 	Off, Len uint32
 	// Role is what it is.
 	Role Role
 }
 
-// State is what a line leaves open for the next (0 at the start of a
-// file).
-type State uint32
+// MaxSource is the largest source Tokens lexes; a longer one is Plain. It
+// bounds a worker's time and memory (chroma holds the source as runes, 4
+// bytes each, and a token per lexeme).
+const MaxSource = 8 << 20
 
-// Line appends the tokens of line (without its newline) in language lang,
-// starting in state st, to dst, and returns them with the state the next
-// line starts in. The tokens cover the line without gaps or overlap.
-func Line(lang Lang, st State, line []byte, dst []Token) ([]Token, State) {
-	if len(line) == 0 {
-		return dst, st
+// Supported reports whether lang has a lexer (every language but Plain).
+func Supported(lang Lang) bool { return lang != Plain && lang < NumLangs && lexerOf(lang) != nil }
+
+// Tokens appends the tokens of src in language lang to dst and returns
+// dst. The tokens are in order and cover src except its line breaks ('\n'),
+// which no token contains; runs of one role are merged. Plain, an unknown
+// language and a source over MaxSource give one Text token per non-empty
+// line. It allocates: call it on a worker.
+func Tokens(lang Lang, src []byte, dst []Token) []Token {
+	if len(src) == 0 {
+		return dst
 	}
-	return append(dst, Token{Off: 0, Len: uint32(len(line)), Role: Text}), st // wave 0: Plain for every language
+	var lx chroma.Lexer
+	if lang != Plain && lang < NumLangs && len(src) <= MaxSource {
+		lx = lexerOf(lang)
+	}
+	if lx == nil {
+		return plain(src, dst)
+	}
+	it, err := lx.Tokenise(nil, string(src))
+	if err != nil {
+		return plain(src, dst)
+	}
+	start, off := len(dst), 0
+	for t := it(); t != chroma.EOF; t = it() {
+		v := t.Value
+		if off+len(v) > len(src) { // the newline a lexer adds at the end
+			v = v[:len(src)-off]
+		}
+		if string(src[off:off+len(v)]) != v { // never seen: a lexer that rewrites text
+			return plain(src, dst[:start])
+		}
+		dst = appendRun(dst, start, uint32(off), v, roleOf(t.Type))
+		off += len(v)
+		if off == len(src) {
+			break
+		}
+	}
+	if off < len(src) { // the lexer stopped early: the rest is text
+		dst = appendRun(dst, start, uint32(off), string(src[off:]), Text)
+	}
+	return dst
 }
 
-// Supported reports whether lang has a lexer yet (false for every language
-// until C3).
-func Supported(lang Lang) bool { return false }
+// appendRun appends the token(s) of text v at off with role r, split at line
+// breaks and merged with the token before it (from start on) when that one
+// ends where it begins with the same role.
+func appendRun(dst []Token, start int, off uint32, v string, r Role) []Token {
+	for len(v) > 0 {
+		n := strings.IndexByte(v, '\n')
+		if n < 0 {
+			n = len(v)
+		}
+		if n > 0 {
+			if l := len(dst); l > start && dst[l-1].Role == r && dst[l-1].Off+dst[l-1].Len == off {
+				dst[l-1].Len += uint32(n)
+			} else {
+				dst = append(dst, Token{Off: off, Len: uint32(n), Role: r})
+			}
+		}
+		if n == len(v) {
+			break
+		}
+		off += uint32(n + 1)
+		v = v[n+1:]
+	}
+	return dst
+}
+
+// plain appends one Text token per non-empty line of src.
+func plain(src []byte, dst []Token) []Token {
+	for off := 0; off < len(src); {
+		n := bytes.IndexByte(src[off:], '\n')
+		if n < 0 {
+			n = len(src) - off
+		}
+		if n > 0 {
+			dst = append(dst, Token{Off: uint32(off), Len: uint32(n), Role: Text})
+		}
+		off += n + 1
+	}
+	return dst
+}
+
+// roleOf maps a chroma token type to a role.
+func roleOf(t chroma.TokenType) Role {
+	switch t {
+	case chroma.KeywordType, chroma.NameClass, chroma.NameException:
+		return Type
+	case chroma.KeywordConstant, chroma.NameConstant, chroma.NameEntity, chroma.LiteralStringBoolean:
+		return Constant
+	case chroma.NameBuiltin, chroma.NameBuiltinPseudo:
+		return Builtin
+	case chroma.NameFunction, chroma.NameFunctionMagic:
+		return Function
+	case chroma.NameTag:
+		return Tag
+	case chroma.NameAttribute:
+		return Attribute
+	case chroma.NameProperty:
+		return Property
+	case chroma.NameDecorator, chroma.GenericHeading, chroma.GenericSubheading, chroma.GenericPrompt:
+		return Meta
+	case chroma.GenericInserted:
+		return Inserted
+	case chroma.GenericDeleted, chroma.GenericError, chroma.GenericTraceback:
+		return Deleted
+	case chroma.OperatorWord:
+		return Keyword
+	}
+	switch {
+	case t.InCategory(chroma.Keyword):
+		return Keyword
+	case t.InSubCategory(chroma.LiteralString):
+		return String
+	case t.InSubCategory(chroma.LiteralNumber), t == chroma.LiteralDate:
+		return Number
+	case t.InCategory(chroma.Operator):
+		return Operator
+	case t.InCategory(chroma.Punctuation):
+		return Punctuation
+	case t.InCategory(chroma.Comment):
+		return Comment
+	}
+	return Text
+}
