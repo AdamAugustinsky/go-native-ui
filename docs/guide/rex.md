@@ -28,9 +28,17 @@ func ThemeWithField(fc FieldColors) *theme.Theme {
 its left, middle and right colours), the glass of unfocused panes in dark
 (`DarkGlass`), and the `Scrim` laid over the system's material when the
 window is transparent. A brand accent is the theme's accent, not paint in
-the app: set `SystemAccent = false` and `Light.WithAccent` /
-`Dark.WithAccent`, and mark the roles you replaced in `Theme.Own` so the
-system's live colours do not overwrite them. Then recolour the recipes that
+the app: `th.SetAccent(light, dark)` sets it in each mode with the roles that
+follow it: `OnAccent` (white only where white reads on it at 4.5:1, so a
+bright green takes dark text), `Link` in the accent's hue at a readable
+depth, the focus ring and the selection, all kept over the system's
+(`Theme.Own`). Pick the light accent deep enough for white text (Zap uses
+WhatsApp's #008069 in light, #00A884 in dark). `OnAccent` means "on the
+accent": text over a photo, a video or a dark plate is literal white
+(`rexui.OfRGBA(0xFFFFFFFF)`), and text on a tint of the accent is the
+label's colour. Red text someone reads (a destructive label, a missed
+call, an error) is `rexui.DangerText`, not `theme.Red`, which is 3.6:1 on
+white. Then recolour the recipes that
 carry Rex's lilac to the field's hue: `rexui.TabsRecipes[rexui.TabsRex]` (the
 capsule, its pill, the separators). Zap's `gnui/theme/rexlook.go` does all of
 this for WhatsApp's green in about a hundred lines.
