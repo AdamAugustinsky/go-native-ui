@@ -7,6 +7,7 @@ import (
 	"unicode/utf8"
 	"unsafe"
 
+	"gonativeui/icon"
 	"gonativeui/term"
 	"gonativeui/text"
 	"gonativeui/theme"
@@ -29,12 +30,26 @@ import (
 //	if sig.Resized { /* tell the pty sig.Cols × sig.Rows */ }
 //	toProgram = s.TakeInput(toProgram[:0])
 //
+// # Look
+//
+// The view paints no fill of its own: it is content for a Rex surface, a
+// pane (BeginCard with CardRex, whose Focus the app passes on as
+// TerminalOpts.Focus so the palette dims with the pane), and the program's
+// default background is that surface's colour. A program's own backgrounds,
+// inverse cells and the block cursor's character use it too, and the
+// library answers colour queries (vim's OSC 11) with it. Keep the view out
+// of scrolling boxes: the wheel scrolls its scrollback, and a scrolling
+// ancestor under the pointer would take the notches as well.
+//
 // # Drawing
 //
 // Each frame captures the library's render state and decodes only the rows
 // it marks dirty; a row is drawn as runs of cells of one style, each a text
 // box whose shaped run the text system caches by content, with backgrounds,
-// the selection, find highlights, underlines and the cursor as quads.
+// the selection, find highlights, underlines and the cursor as quads, all
+// anchored in the row's box at their columns (ui.Context.NextAnchor). While
+// the scrollback is scrolled, a round IconButton anchored in the corner goes
+// back to the bottom.
 // Characters a monospaced font may not cover at the cell's width (outside
 // ASCII, box drawing and block elements) get a box of their own at their
 // column, so the grid never drifts. A frame with nothing new allocates
@@ -87,11 +102,11 @@ func Terminal(k *base.Kit, label string, s *TerminalState, o TerminalOpts) Termi
 	focusT := c.FocusTOf(key)
 	pal := s.palette(r, max(focusT, o.Focus))
 	k.ApplySize(ui.Pct(1), ui.Pct(1))
-	c.NextBG(pal.bg)
+	c.NextPadding(pad, pad, pad, pad)
 	c.NextCursor(ui.CursorText)
 	c.NextRole(ui.RoleGroup)
 	c.NextSemName(label)
-	id := c.BoxKeyed(ui.Clickable|ui.Focusable|ui.FocusText|ui.Clip|ui.DrawBackground|ui.FocusAnimation, key, nil)
+	id := c.BoxKeyed(ui.Clickable|ui.Focusable|ui.FocusText|ui.Clip|ui.FocusAnimation, key, nil)
 	rect := c.Rect(id)
 	focused := c.Focused(id) && c.Input().Focused
 
@@ -128,7 +143,7 @@ func Terminal(k *base.Kit, label string, s *TerminalState, o TerminalOpts) Termi
 	s.capture()
 
 	c.Push(id)
-	s.draw(c, key, &pal, font, bold, pad, scale, focused, k.Inactive())
+	s.draw(k, c, key, &pal, font, bold, scale, focused, k.Inactive())
 	c.Pop()
 	return sig
 }
@@ -474,7 +489,7 @@ func (s *TerminalState) palette(r *theme.Resolved, focus float32) termPalette {
 	}
 	tp := rextheme.TerminalAt(r.T, focus)
 	dark := r.Dark()
-	p := termPalette{fg: theme.Col(tp.FG), bg: r.Role(theme.TextBackground), cursor: theme.Col(tp.FG),
+	p := termPalette{fg: theme.Col(tp.FG), bg: r.Pal.Surface | 0xFF, cursor: theme.Col(tp.FG),
 		sel: r.Role(theme.TextSelection), selUnemph: r.Role(theme.TextSelectionUnemph), find: r.Role(theme.FindHighlight)}
 	black, white := tp.FG, tp.Dim
 	if dark {
@@ -523,38 +538,70 @@ func (p *termPalette) colors(st term.Style) (fg, bg uint32) {
 	return fg, bg
 }
 
-// draw builds the boxes of the rows, the selection and the cursor.
-func (s *TerminalState) draw(c *ui.Context, key ui.Key, pal *termPalette, font, bold text.FontKey, pad, scale float32, focused, inactive bool) {
+// draw builds the grid: a column of rows, one box per row, the row's height
+// each, with its backgrounds, selection, find highlights, text runs, lines
+// and the cursor anchored in it at their columns (a terminal's grid is the
+// library's coordinates, so a column is the one position given); and the
+// scroll-to-bottom button anchored in the view's corner while the scrollback
+// is scrolled.
+func (s *TerminalState) draw(k *base.Kit, c *ui.Context, key ui.Key, pal *termPalette, font, bold text.FontKey, scale float32, focused, inactive bool) {
 	cw, ch := s.cellW, s.cellH
 	base := ui.KeyN(key, 1)
 	n := uint64(0)
 	next := func() ui.Key { n++; return ui.KeyN(base, n) }
-	quad := func(x0, y0, w, h float32, col uint32) {
+	// quad fills cells columns from column x of the current row, dy from its
+	// vertical centre and h high (0: the row's height).
+	quad := func(x, cells, dy, h float32, col uint32) {
+		if h == 0 {
+			h = ch
+		}
 		c.NextBG(col)
-		theme.At(c, x0, y0, w, h)
-		c.BoxKeyed(ui.DrawBackground|theme.Floating, next(), nil)
+		c.NextSize(ui.Px(cells*cw), ui.Px(h))
+		c.NextAnchor(ui.AnchorLeft, x*cw, dy)
+		c.BoxKeyed(ui.DrawBackground, next(), nil)
+	}
+	// text sets b from column x of the current row, cells wide, in f and
+	// col. The box starts on a whole pixel and its padding carries the
+	// column's fraction, so every run keeps the grid's exact advance.
+	text := func(x, cells float32, f text.FontKey, col uint32, b []byte) {
+		px := x * cw
+		ix := float32(math.Floor(float64(px)))
+		c.NextFont(f)
+		c.NextTextColor(col)
+		c.NextPadding(px-ix, 0, 0, 0)
+		c.NextSize(ui.Px(cells*cw+px-ix+1), ui.Px(s.met.H))
+		c.NextAnchor(ui.AnchorLeft, ix, 0)
+		c.BoxKeyed(ui.DrawText|ui.NoFontSmoothing, next(), b)
 	}
 	selCol := pal.sel
 	if !focused || inactive {
 		selCol = pal.selUnemph
 	}
-	textTop := (ch - s.met.H) / 2
+	thick := max(1, float32(math.Round(float64(scale))))
+	cur := s.cursor
+	showCur := cur.InView && cur.Visible && cur.Y < len(s.rows)
+
+	c.NextAxis(ui.AxisY)
+	c.NextSize(ui.Pct(1), ui.Pct(1))
+	c.Push(c.BoxKeyed(0, ui.KeyN(key, 2), nil))
 	for y := range s.rows {
+		c.NextSize(ui.Pct(1), ui.Px(ch))
+		c.Push(c.BoxKeyed(0, ui.KeyN(ui.KeyN(key, 3), uint64(y)), nil))
 		tr := &s.rows[y]
 		if !tr.ok {
+			c.Pop()
 			continue
 		}
-		top := pad + float32(y)*ch
 		for _, b := range tr.bgs {
 			_, bg := pal.colors(s.T.Style(b.style))
-			quad(pad+float32(b.x)*cw, top, float32(b.n)*cw, ch, bg)
+			quad(float32(b.x), float32(b.n), 0, 0, bg)
 		}
 		if tr.row.Selected && tr.row.SelTo >= tr.row.SelFrom {
-			quad(pad+float32(tr.row.SelFrom)*cw, top, float32(tr.row.SelTo-tr.row.SelFrom+1)*cw, ch, selCol)
+			quad(float32(tr.row.SelFrom), float32(tr.row.SelTo-tr.row.SelFrom+1), 0, 0, selCol)
 		}
 		for _, m := range s.matches {
 			if m.Y == y {
-				quad(pad+float32(m.From)*cw, top, float32(m.To-m.From+1)*cw, ch, pal.find)
+				quad(float32(m.From), float32(m.To-m.From+1), 0, 0, pal.find)
 			}
 		}
 		for _, rn := range tr.runs {
@@ -564,14 +611,7 @@ func (s *TerminalState) draw(c *ui.Context, key ui.Key, pal *termPalette, font, 
 			if st.Attr&term.Bold != 0 {
 				f = bold
 			}
-			x := pad + float32(rn.x)*cw
-			ix := float32(math.Floor(float64(x)))
-			c.NextFont(f)
-			c.NextTextColor(fg)
-			c.NextPos(ix, top+textTop)
-			c.NextPadding(x-ix, 0, 0, 0)
-			c.NextSize(ui.Px(float32(rn.n)*cw+x-ix+1), ui.Px(s.met.H))
-			c.BoxKeyed(ui.DrawText|ui.NoFontSmoothing|theme.Floating, next(), tr.text[rn.off:rn.off+rn.len])
+			text(float32(rn.x), float32(rn.n), f, fg, tr.text[rn.off:rn.off+rn.len])
 		}
 		for _, l := range tr.lines {
 			st := s.T.Style(l.style)
@@ -579,60 +619,70 @@ func (s *TerminalState) draw(c *ui.Context, key ui.Key, pal *termPalette, font, 
 			if st.UL != term.DefaultColor {
 				fg = pal.color(st.UL, fg)
 			}
-			lh := max(1, float32(math.Round(float64(scale))))
-			ly := top + textTop + s.met.Off + lh
-			if l.kind == 1 {
-				ly = top + ch/2
+			// An underline sits a line's width under the baseline, which is
+			// Off below the text box's top; a strike through the middle.
+			dy := float32(0)
+			if l.kind == 0 {
+				dy = float32(math.Round(float64(s.met.Off + thick - s.met.H/2)))
 			}
-			quad(pad+float32(l.x)*cw, float32(math.Round(float64(ly))), float32(l.n)*cw, lh, fg)
+			quad(float32(l.x), float32(l.n), dy, thick, fg)
+		}
+		if showCur && cur.Y == y {
+			s.drawCursor(c, tr, pal, font, bold, thick, focused && !inactive, quad, text, next)
+		}
+		c.Pop()
+	}
+	c.Pop()
+
+	// Back to the bottom from the scrollback.
+	if !s.T.AtBottom() {
+		in := k.Pt(12)
+		c.NextAnchor(ui.AnchorBottomRight, in, in)
+		if IconButton(k, icon.ChevronDown, "Scroll to bottom", IconButtonOpts{}).Clicked {
+			s.T.ScrollToBottom()
 		}
 	}
-	// The cursor.
+}
+
+// drawCursor draws the cursor in its row: a block with the character under
+// it in the background colour, a bar or an underline as the program asks,
+// and a hollow block while the view does not have the focus.
+func (s *TerminalState) drawCursor(c *ui.Context, tr *termRow, pal *termPalette, font, bold text.FontKey, thick float32, active bool,
+	quad func(x, cells, dy, h float32, col uint32), text func(x, cells float32, f text.FontKey, col uint32, b []byte), next func() ui.Key) {
 	cur := s.cursor
-	if !cur.InView || !cur.Visible || cur.Y >= len(s.rows) {
-		return
+	w := float32(1)
+	if cur.X < len(tr.row.Cells) && tr.row.Cells[cur.X].Flags&term.Wide != 0 {
+		w = 2
 	}
-	x, top := pad+float32(cur.X)*cw, pad+float32(cur.Y)*ch
-	w := cw
-	if cur.X < len(s.rows[cur.Y].row.Cells) && s.rows[cur.Y].row.Cells[cur.X].Flags&term.Wide != 0 {
-		w = 2 * cw
-	}
-	thick := max(1, float32(math.Round(float64(scale))))
+	x := float32(cur.X)
 	switch {
-	case !focused || inactive || cur.Shape == term.CursorHollow:
+	case !active || cur.Shape == term.CursorHollow:
 		c.NextBorder(pal.cursor, thick)
-		theme.At(c, x, top, w, ch)
-		c.BoxKeyed(ui.DrawBorder|theme.Floating, next(), nil)
+		c.NextSize(ui.Px(w*s.cellW), ui.Px(s.cellH))
+		c.NextAnchor(ui.AnchorLeft, x*s.cellW, 0)
+		c.BoxKeyed(ui.DrawBorder, next(), nil)
 	case cur.Shape == term.CursorBar:
-		quad(x, top, 2*thick, ch, pal.cursor)
+		quad(x, 2*thick/s.cellW, 0, 0, pal.cursor)
 	case cur.Shape == term.CursorUnderline:
-		quad(x, top+ch-2*thick, w, 2*thick, pal.cursor)
+		quad(x, w, s.cellH/2-thick, 2*thick, pal.cursor)
 	default:
-		quad(x, top, w, ch, pal.cursor)
-		// The character under a block cursor, in the background colour.
-		row := &s.rows[cur.Y]
-		for _, rn := range row.runs {
-			if cur.X >= int(rn.x) && cur.X < int(rn.x+rn.n) {
-				b := row.text[rn.off : rn.off+rn.len]
-				if rn.kind == 1 { // one byte per cell
-					b = b[cur.X-int(rn.x) : cur.X-int(rn.x)+1]
-					if b[0] >= 0x80 {
-						break
-					}
-				}
-				f := font
-				if s.T.Style(rn.style).Attr&term.Bold != 0 {
-					f = bold
-				}
-				ix := float32(math.Floor(float64(x)))
-				c.NextFont(f)
-				c.NextTextColor(pal.bg)
-				c.NextPos(ix, top+textTop)
-				c.NextPadding(x-ix, 0, 0, 0)
-				c.NextSize(ui.Px(w+x-ix+1), ui.Px(s.met.H))
-				c.BoxKeyed(ui.DrawText|ui.NoFontSmoothing|theme.Floating, next(), b)
+		quad(x, w, 0, 0, pal.cursor)
+		for _, rn := range tr.runs {
+			if cur.X < int(rn.x) || cur.X >= int(rn.x+rn.n) {
+				continue
+			}
+			b := tr.text[rn.off : rn.off+rn.len]
+			if rn.kind == 1 { // one byte per cell
+				b = b[cur.X-int(rn.x) : cur.X-int(rn.x)+1]
+			} else if rn.n > 2 {
 				break
 			}
+			f := font
+			if s.T.Style(rn.style).Attr&term.Bold != 0 {
+				f = bold
+			}
+			text(x, w, f, pal.bg, b)
+			break
 		}
 	}
 }

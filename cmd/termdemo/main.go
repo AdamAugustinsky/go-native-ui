@@ -1,11 +1,14 @@
 //go:build darwin || linux
 
 // Command termdemo is a terminal window (phase 8 C1): rexui.Terminal over
-// libghostty-vt, running a local program on a pseudo-terminal.
+// libghostty-vt, running a local program on a pseudo-terminal, in one Rex
+// pane (rexui.BeginCard, CardRex) with the program's title and the grid's
+// size, on Rex's field over the window's glass (docs/guide/rex.md).
 //
 //	termdemo                      your login shell
 //	termdemo -- vim file.go       a program
 //	termdemo -mode dark           light, dark or system (the default)
+//	termdemo -transparency=false  macOS: no desktop through the window's field
 //	termdemo -shot dir -name vim -- vim -u DEFAULTS file.go
 //	                              no window: run the program for -wait, draw the
 //	                              view offscreen in light and dark and write
@@ -30,6 +33,7 @@ import (
 	"time"
 
 	"gonativeui/app"
+	"gonativeui/platform"
 	"gonativeui/rexui"
 	"gonativeui/term"
 	"gonativeui/theme"
@@ -46,8 +50,11 @@ type demo struct {
 	s     *rexui.TerminalState
 	p     *pty
 	title string
-	win   *app.Win // nil offscreen
-	focus bool
+	size  string // the grid's size, for the header
+
+	transparency bool
+	win          *app.Win // nil offscreen
+	focus        bool
 
 	mu     sync.Mutex
 	in     []byte // read from the program, for the UI thread
@@ -63,6 +70,7 @@ type demo struct {
 
 func main() {
 	mode := flag.String("mode", "system", "system, light or dark")
+	transparency := flag.Bool("transparency", true, "macOS: show the desktop softly through the window's field")
 	shot := flag.String("shot", "", "write <dir>/<name>-light.png and -dark.png of the program offscreen, no window")
 	name := flag.String("name", "term", "with -shot: the file name's stem")
 	wait := flag.Duration("wait", 2500*time.Millisecond, "with -shot: how long the program runs before the picture")
@@ -104,14 +112,14 @@ func main() {
 		}
 		return
 	}
-	d := &demo{argv: argv}
+	d := &demo{argv: argv, transparency: *transparency}
 	switch *mode {
 	case "light":
 		d.mode = theme.ForceLight
 	case "dark":
 		d.mode = theme.ForceDark
 	}
-	if err := app.Run(app.Config{Title: "Terminal", Width: 820, Height: 520, MinWidth: 200}, d); err != nil {
+	if err := app.Run(app.Config{Title: "Terminal", Width: 820, Height: 520, MinWidth: 320, Backdrop: platform.BackdropGlass}, d); err != nil {
 		fmt.Fprintln(os.Stderr, "termdemo:", err)
 		os.Exit(1)
 	}
@@ -163,13 +171,27 @@ func (d *demo) Build(c *ui.Context) {
 	k := d.k
 	exited := d.take()
 	k.Begin(c)
-	k.NextPad(0)
+	// Rex's field shows the desktop through the window's material unless
+	// the user turned transparency off (or the system's Reduce Transparency is on).
+	k.Theme().SetBackdrop(d.transparency && d.a.Win != nil && d.a.Win.Backdrop() != platform.BackdropNone)
 	k.BeginWindow()
-	o := rexui.TerminalOpts{AllowClipboard: true, OptionAsAlt: true}
+
+	// One Rex pane: a header with the program's title and the grid's size,
+	// and the terminal in the room left.
+	focus := c.AnimateValue(ui.HashString(0, "pane focus"), boolTo1(c.Input().Focused), 20)
+	cd := rexui.BeginCard(k.Kit, "pane", rexui.CardOpts{Variant: rexui.CardRex, Focus: focus})
+	k.Row("header")
+	k.NextWidth(ui.Grow(1)) // the title takes what the size leaves, and fades if longer
+	rexui.Label(k.Kit, d.heading(), rexui.LabelOpts{Style: rexui.TextHeadline})
+	rexui.Label(k.Kit, d.size, rexui.LabelOpts{Color: rexui.Tint{Role: theme.Label2}, MonoPt: 11})
+	k.EndRow()
+	o := rexui.TerminalOpts{AllowClipboard: true, OptionAsAlt: true, Focus: focus}
 	if d.shot {
 		o.FeedBudget = time.Second // a picture: parse everything each frame
 	}
+	k.NextSize(ui.Pct(1), ui.Grow(1))
 	sig := rexui.Terminal(k.Kit, "terminal", d.s, o)
+	rexui.EndCard(k.Kit, &cd)
 	if !d.focus {
 		k.Focus(sig.Key)
 		d.focus = true
@@ -179,6 +201,7 @@ func (d *demo) Build(c *ui.Context) {
 	if sig.Resized {
 		cw, ch := d.s.CellSize()
 		d.p.resize(sig.Cols, sig.Rows, int(cw)*sig.Cols, int(ch)*sig.Rows)
+		d.size = fmt.Sprintf("%d × %d", sig.Cols, sig.Rows)
 	}
 	if len(sig.Link) > 0 {
 		openLink(string(sig.Link))
@@ -194,6 +217,21 @@ func (d *demo) Build(c *ui.Context) {
 	if exited && !d.shot && d.s.Pending() == 0 {
 		d.a.Quit()
 	}
+}
+
+// heading is the pane's title: the program's (OSC 0/2), else its name.
+func (d *demo) heading() string {
+	if t := d.s.T.Title(); t != "" {
+		return t
+	}
+	return filepath.Base(d.argv[0])
+}
+
+func boolTo1(b bool) float32 {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // take feeds what the program wrote since the last frame.

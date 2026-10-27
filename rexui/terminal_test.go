@@ -2,6 +2,7 @@ package rexui_test
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -12,6 +13,7 @@ import (
 	"gonativeui/term"
 	"gonativeui/theme"
 	"gonativeui/ui"
+	"gonativeui/widget/widgettest"
 )
 
 // The terminal tests use the library tools/libghostty built into the
@@ -223,5 +225,41 @@ func TestTerminalViewAllocations(t *testing.T) {
 	}
 	if n := testing.AllocsPerRun(50, func() { s.Feed(line); g.frame() }); n != 0 {
 		t.Errorf("%v allocations per frame of output", n)
+	}
+}
+
+// The terminal screen passes the layout audit in light and dark: a recorded
+// vim session, and the scrollback scrolled so the scroll-to-bottom button
+// shows.
+func TestTerminalViewLayoutAudit(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "term", "testdata", "sessions", "vim.vt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range []theme.Mode{theme.Light, theme.Dark} {
+		s := newTermState(t, term.Options{Scrollback: 1000})
+		var sig rexui.TerminalSignal
+		g := termRig(t, m, s, &sig)
+		s.Feed(data[:len(data)/2])
+		g.settle()
+		widgettest.AuditLayout(t, fmt.Sprintf("terminal, vim, mode %d", m), g.c)
+		s.Feed([]byte("\x1b[?1049l\x1b[2J\x1b[H"))
+		for i := range 200 {
+			s.Feed(fmt.Appendf(nil, "line %d\r\n", i))
+		}
+		g.frame()
+		g.in.MouseX, g.in.MouseY = 100, 100
+		g.in.AddScroll(0, 5, false)
+		g.settle()
+		if s.T.AtBottom() {
+			t.Fatal("the wheel did not scroll back")
+		}
+		widgettest.AuditLayout(t, fmt.Sprintf("terminal, scrolled back, mode %d", m), g.c)
+		g.c.Semantics(&g.sem)
+		b := g.node(ui.RoleButton, "Scroll to bottom")
+		g.click(centre(b))
+		if !s.T.AtBottom() {
+			t.Error("the scroll-to-bottom button did not go back")
+		}
 	}
 }
