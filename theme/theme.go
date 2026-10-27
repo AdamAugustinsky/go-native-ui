@@ -79,6 +79,10 @@ type Theme struct {
 	// platform reads them (macOS, through the Follower). The system's
 	// Settings apply either way.
 	SystemColors bool
+	// Own are System roles the theme keeps its own values for, whatever
+	// SystemColors says: an app with an identity of its own (warm surfaces)
+	// pins those and still follows the system's labels, fills and lines.
+	Own [NumRoles]bool
 	// Text are the text styles in points; zero takes MacText.
 	Text [NumTextStyles]TextSpec
 	// Sizes are the control sizes in points; zero takes MacSizes.
@@ -161,7 +165,8 @@ type Resolved struct {
 	sys       SystemValues // what SetSystem last gave
 	acc       uint32       // what SetAccent last gave
 	followSys bool
-	motion    Motion // the theme's, before Reduce Motion
+	own       [NumRoles]bool // Theme.Own
+	motion    Motion         // the theme's, before Reduce Motion
 	materials [NumMaterials]MaterialSpec
 }
 
@@ -194,7 +199,7 @@ func (t *Theme) Resolve(ts TextSystem, scale float32, mode Mode) Resolved {
 // resolveTokens fills the tokens v2 of r: the zero groups of t take the
 // macOS ones, lengths are scaled to pixels and the fonts created.
 func (t *Theme) resolveTokens(r *Resolved, ts TextSystem, scale float32) {
-	r.rolesBase, r.followSys, r.motion = t.Roles, t.SystemColors, t.Motion
+	r.rolesBase, r.followSys, r.own, r.motion = t.Roles, t.SystemColors, t.Own, t.Motion
 	if r.rolesBase[0] == (Colors{}) && r.rolesBase[1] == (Colors{}) {
 		r.rolesBase = Measured
 	}
@@ -303,8 +308,8 @@ func (r *Resolved) applyRoles() {
 		c := r.rolesBase[m]
 		if live {
 			for i, v := range r.sys.Colors[m] {
-				if v != 0 {
-					c[systemColorRole[i]] = v
+				if role := systemColorRole[i]; v != 0 && !r.own[role] {
+					c[role] = v
 				}
 			}
 		}
