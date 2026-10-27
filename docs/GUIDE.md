@@ -9,6 +9,7 @@ dark mode and accent colour: a compact toolbar over the system's glass, a sideba
 listing the notes in groups, the open note beside it, a text field to add a
 note, a switch for the order, a search, a menu with shortcuts and zoom, and a
 confirmation that is the system's alert. It allocates nothing while it runs.
+Its look is Rex, the framework's default ([Rex](guide/rex.md)).
 
 **Every code block is an excerpt of the example.** The fence names the file, the
 prose names the function, and a line `// …` marks lines left out. A test
@@ -22,6 +23,9 @@ rich text and services), each tested and allocating nothing in a steady frame, a
 demos that were already here (`cmd/windowsdemo`, `cmd/gallery`, `cmd/chromedemo`,
 `cmd/imgbench`):
 
+- [Rex](guide/rex.md): the default look, and the rules an app in it follows (the
+  theme in your colours, transparency, controls, layout, the app's name). Read
+  it before the first screen of a new app.
 - [The app object](guide/app-object.md): `app.Main`, the handler, windows, quitting and
   threads (`cmd/windowsdemo`).
 - [rexui](guide/rexui.md): the component library, forms, lists, system menus and

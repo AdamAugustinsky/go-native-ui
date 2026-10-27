@@ -12,7 +12,8 @@ type IconButtonVariant uint8
 
 const (
 	// IconBordered is a push button with an icon for its label: the
-	// secondary fill and the size's radius (AppKit's icon-rounded).
+	// secondary fill in Rex's capsule (the size's radius, AppKit's
+	// icon-rounded, under UseAppKitControls).
 	IconBordered IconButtonVariant = iota
 	// IconBorderless is a bare symbol in secondary label colour that
 	// darkens under the pointer (icon-borderless; rexlook's pane buttons).
@@ -101,6 +102,9 @@ func IconButton(k *base.Kit, ic icon.ID, name string, o IconButtonOpts) base.Sig
 		h = theme.Snap(s.Height)
 		w = theme.Snap(iw + 2*s.PadX)
 		radius = s.Radius
+		if rc.Capsule { // Rex's: round ends, a circle when the icon is square
+			radius = h / 2
+		}
 	}
 	var flags ui.Flags
 	if fill&0xFF != 0 {

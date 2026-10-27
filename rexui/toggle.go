@@ -12,21 +12,26 @@ type ToggleOpts struct {
 	Size theme.Size
 }
 
-// ToggleOnLook is the look of a toggle button that is on (an NSButton of type
-// NSButtonTypePushOnPushOff on macOS 27.2, tools/appkitref toggle-on): a push
-// button that takes the accent with a white label, as a default button does,
-// and in a window that is not key a grey (black at 12.5 % over the window,
-// #DFDFDF and #3A3A3A measured) under its label; disabled it is the accent at
-// 70 % under a label that is white at 12 %. Off, a toggle button is a
-// ButtonDefault push button (ButtonRecipes[ButtonDefault]).
+// ToggleOnLook is the look of a toggle button that is on: Rex's capsule in a
+// quiet tint of the accent (14 % in light, 24 % in dark) under the label's
+// own colour, as a chosen chip or segment is, rather than a block of the
+// accent; in a window that is not key a grey (black at 12.5 % over the
+// window, as AppKit's NSButtonTypePushOnPushOff, tools/appkitref toggle-on)
+// under its label. Off, a toggle button is a ButtonDefault push button
+// (ButtonRecipes[ButtonDefault]), a capsule too.
 var ToggleOnLook = ButtonRecipe{
-	Fill: Of(theme.Accent), Label: Of(theme.OnAccent),
+	Fill: OfAlpha(theme.Accent, quietTint, quietTintDark), Label: Of(theme.Label),
 	FillInactive: OfAlpha(theme.Label, 0.125, 0.124), LabelInactive: Of(theme.Label),
-	FillHover: None, FillPressed: Of(theme.AccentPressed), LabelPressed: Of(theme.OnAccent),
+	FillHover: None, FillPressed: OfAlpha(theme.Accent, quietTint*1.6, quietTintDark*1.4), LabelPressed: Of(theme.Label),
 	FillPressedInactive: Of(theme.FillPressed), LabelPressedInactive: Of(theme.Label),
-	FillDisabled: OfAlpha(theme.Accent, 0.7, 0.7), LabelDisabled: OfAlpha(theme.OnAccent, 0.12, 0.12),
+	FillDisabled: OfAlpha(theme.Accent, quietTint/2, quietTintDark/2), LabelDisabled: Of(theme.TextDisabled),
 	Rim: None, RimInactive: None, Highlight: None,
+	Capsule: true,
 }
+
+// How much of the accent tints a chosen toggle or segment, in light and in
+// dark (where the same share reads fainter over the darker panes).
+const quietTint, quietTintDark = 0.14, 0.24
 
 // ToggleButton builds a push button that is on or off and edits *on: a click,
 // or Enter or Space with the focus, flips it. On, it is drawn in the accent

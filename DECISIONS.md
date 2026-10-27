@@ -1180,3 +1180,11 @@ Live microphone capture was not run: access cannot be granted headlessly, so tha
 **Reasoning:** the dark look was designed before a dark reference existed, as a violet ink (`#2A2C3A` panes, `#17181E` gutters), and read cool and blue beside the real product, whose inks are low-saturation plum and umber (gutters `#2C2220`, panes `#332A2B` to `#222020`). ZapFast Go takes the Rex look as its only one, so the dark has to be Rex's.
 
 **Kept:** the roles' macOS-neutral dark surfaces (D39: `Pane` `#1E1E1E`) for the native components; an app that wants warm ones sets them (ZapFast's theme does). Contrast floors hold: the dimmed terminal's Dim, Blue and Purple were lifted to stay at 4.5:1 on the lighter warm glass.
+
+## D63. Rex's controls are the default; AppKit's look is the opt-in (2026-10-27)
+
+**Decision.** `rexui`'s push buttons (Default, Primary, Destructive, Plain), bordered icon buttons, toggle buttons and segmented controls are capsules at every size by default, and a toggle that is on or a chosen segment is a quiet tint of the accent (14 % in light, 24 % in dark) under the label's colour. AppKit's rounded rectangles and blocks of the accent, the shapes `tools/appkitref` measured, stay one call away: `rexui.UseAppKitControls()`. `theme.Resolved.SetBackdrop` sets the theme's Backdrop and turns it off under Reduce Transparency. The rules an app follows in Rex are a guide chapter, `docs/guide/rex.md`.
+
+**Reasoning:** ZapFast's move to Rex (Zap) set exactly these recipes in the app, and every one was a correction Adam asked for: controls that read as an older macOS beside Rex's tabs and dialogs, a toggle shouting in the accent. A framework whose components default to AppKit's look makes each app repeat that work, and the next app repeats the mistakes first. Rex is the look the framework is for (D17, D40); the measurements still hold for the colours and sizes, and `TestRecipesMatchAppKit` checks them under the opt-in.
+
+**Kept:** the toolbar's and Liquid Glass buttons' recipes, which were already capsules or AppKit's glass; the colours of every recipe.

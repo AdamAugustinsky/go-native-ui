@@ -149,7 +149,8 @@ type Resolved struct {
 	// window's content (app.Config.Backdrop, the window got it): Chrome then
 	// leaves the background unpainted, and surfaces that blend with the
 	// background are translucent over the material instead of mixed with a
-	// painted one. Experimental.
+	// painted one. Set it each frame with SetBackdrop, which honours the
+	// system's Reduce transparency.
 	Backdrop bool
 
 	pal          [2]Palette // light and dark, with the accent applied
@@ -251,6 +252,16 @@ func (r *Resolved) Mix(t float32) {
 
 // Dark reports whether the current mix is closer to dark.
 func (r *Resolved) Dark() bool { return r.T >= 0.5 }
+
+// SetBackdrop sets Backdrop for a frame: on when the window shows a material
+// (platform.Window.Backdrop is not BackdropNone) and the app wants it seen (a
+// Transparency setting, on by default in a Rex app), and off whatever on is
+// while the system's Reduce transparency is set. Call it after the kit's
+// Begin, which reads the system's settings.
+//
+//	k.Begin(c)
+//	k.Theme().SetBackdrop(settings.Transparency && win.Backdrop() != platform.BackdropNone)
+func (r *Resolved) SetBackdrop(on bool) { r.Backdrop = on && !r.Settings.ReduceTransparency }
 
 // SetAccent applies the system accent colour (0xRRGGBBAA) to both palettes if
 // the theme follows it; 0 returns to the theme's own accent. It does nothing

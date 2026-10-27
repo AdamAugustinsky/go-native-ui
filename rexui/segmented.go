@@ -52,14 +52,17 @@ type SegmentedRecipe struct {
 	Capsule bool
 }
 
-// SegmentedLook is the segmented controls' recipe.
+// SegmentedLook is the segmented controls' recipe: Rex's capsule track with
+// the chosen segment in a quiet tint of the accent under the label's colour
+// (ToggleOnLook's), not a block of the accent.
 var SegmentedLook = SegmentedRecipe{
 	Track: Of(theme.Fill2), TrackDisabled: Of(theme.FillDisabled),
-	Selected: Of(theme.Accent), SelectedDisabled: Of(theme.Fill2), SelectedLabel: Of(theme.OnAccent),
+	Selected: OfAlpha(theme.Accent, 0.14, 0.24), SelectedDisabled: Of(theme.Fill2), SelectedLabel: Of(theme.Label),
 	SelectedInactive: OfAlpha(theme.Label, 0.128, 0.126),
 	Label:            Of(theme.Label), LabelDisabled: Of(theme.TextDisabled), Pressed: Of(theme.FillPressed),
 	Divider: Of(theme.Label3), DividerW: 1,
 	DividerH: [theme.NumSizes]float32{theme.SizeRegular: 12, theme.SizeMini: 8, theme.SizeSmall: 10, theme.SizeLarge: 14, theme.SizeXLarge: 16},
+	Capsule:  true,
 }
 
 // SegmentedControl builds a select-one segmented control, one segment per

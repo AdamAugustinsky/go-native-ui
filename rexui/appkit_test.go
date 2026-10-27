@@ -82,6 +82,16 @@ func (f *appkitRef) systemValues(t *testing.T) *theme.SystemValues {
 	return s
 }
 
+// appKitControls switches the controls to AppKit's look (Rex's capsules and
+// quiet tints are the default) for the test, and back after it.
+func appKitControls(t *testing.T) {
+	buttons, icons, on, seg := rexui.ButtonRecipes, rexui.IconButtonRecipes, rexui.ToggleOnLook, rexui.SegmentedLook
+	rexui.UseAppKitControls()
+	t.Cleanup(func() {
+		rexui.ButtonRecipes, rexui.IconButtonRecipes, rexui.ToggleOnLook, rexui.SegmentedLook = buttons, icons, on, seg
+	})
+}
+
 // Tolerances (docs/PHASE6-PLAN.md, the native-feel gate).
 const (
 	tolLength = 0.5 // pt: widths, heights, radii, the ring's outset and width
@@ -97,6 +107,7 @@ const (
 // over what lies under it, the ring's colour, outset and width). AppKit's
 // numbers are committed; its pixels are not.
 func TestRecipesMatchAppKit(t *testing.T) {
+	appKitControls(t)
 	ref := loadAppKitRef(t)
 	sys := ref.systemValues(t)
 	for i, s := range catalog.Samples {
