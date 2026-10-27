@@ -21,6 +21,9 @@ import (
 type wsServer struct {
 	ln      net.Listener
 	gotPong atomic.Bool
+	// The last message received whole: its length and frame count, and the
+	// length echoed (one frame).
+	lastIn, lastInFrames, lastOut atomic.Int64
 }
 
 const wsGUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
@@ -56,6 +59,7 @@ func (s *wsServer) handle(c net.Conn) {
 
 	var msg []byte
 	var msgOp byte
+	var frames int64
 	for {
 		fin, op, payload, err := readFrame(br)
 		if err != nil {
@@ -75,13 +79,16 @@ func (s *wsServer) handle(c net.Conn) {
 			s.gotPong.Store(true)
 			continue
 		case 0x1, 0x2:
-			msgOp, msg = op, append(msg[:0], payload...)
+			msgOp, msg, frames = op, append(msg[:0], payload...), 1
 		case 0x0:
-			msg = append(msg, payload...)
+			msg, frames = append(msg, payload...), frames+1
 		default:
 			return
 		}
 		if fin {
+			s.lastIn.Store(int64(len(msg)))
+			s.lastInFrames.Store(frames)
+			s.lastOut.Store(int64(len(msg)))
 			writeFrame(bw, msgOp, msg)
 			if bw.Flush() != nil {
 				return

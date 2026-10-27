@@ -27,14 +27,24 @@
 //	default_proxy   WinHttpGetDefaultProxyConfiguration: {ok, access_type, proxy, bypass, err}
 //	upload_known    {bytes, server_bytes, status, ms, mb_per_s, progress: [{bytes, ms}], err}
 //	upload_chunked  the same, with Transfer-Encoding: chunked framed by the probe
-//	stream_lines    {lines, first_line_ms, total_ms, server_ms, streamed, err}:
-//	                streamed is true when the first line arrived well before the server finished
+//	stream_lines    {reader, lines, reads, first_line_ms, max_gap_ms, total_ms,
+//	                server_ms, transfer_encoding, streamed, err}: a chunked
+//	                response of 200 lines 5 ms apart, read with
+//	                WinHttpQueryDataAvailable then WinHttpReadData of that many
+//	                bytes; streamed is true when the first line came within
+//	                50 ms and no read waited over 100 ms
+//	stream_lines_readdata_only  the same read with a plain 4 KiB
+//	                WinHttpReadData loop, which waits for a full buffer
+//	                (recorded, not part of worked)
 //	cancel          {written_before_cancel, return_ms, errno, err}: how fast a
 //	                WinHttpWriteData blocked on a stalled server returns once
 //	                another goroutine closes the request handle
 //	websocket       {upgrade_ms, status, text_ok, text_rtt_ms, binary_ok,
-//	                big_ok, big_bytes, big_fragments, big_ms, server_got_pong,
-//	                close_status, close_reason, close_err, err}
+//	                big_ok, big_bytes, big_fragments, big_ms, big, server_got_pong,
+//	                close_status, close_reason, close_err, err}; big lists
+//	                four 32 MiB round trips (sent as one message, then as
+//	                1 MiB fragments, twice) with what the server received and
+//	                echoed, the receive pieces and the first differing byte
 //	worked          every section ok
 //	timed_out       true when -timeout fired (exit status 3)
 //	total_ms

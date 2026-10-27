@@ -5,6 +5,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -34,6 +35,44 @@ type upload struct {
 	Err         string   `json:"err,omitempty"`
 }
 
+// recvStats describes one wsReceive: the pieces WinHttpWebSocketReceive
+// returned.
+type recvStats struct {
+	Pieces    int    `json:"pieces"`
+	PieceMin  int    `json:"piece_min"`
+	PieceMax  int    `json:"piece_max"`
+	Types     [5]int `json:"types"` // count per WINHTTP_WEB_SOCKET_BUFFER_TYPE 0-4
+	LastPiece int    `json:"last_piece"`
+}
+
+type bigTrip struct {
+	Mode          string    `json:"mode"`
+	Sent          int       `json:"sent"`
+	ServerIn      int64     `json:"server_in"`
+	ServerFrames  int64     `json:"server_in_frames"`
+	ServerOut     int64     `json:"server_out"`
+	Received      int       `json:"received"`
+	Recv          recvStats `json:"recv"`
+	FirstMismatch int       `json:"first_mismatch"` // -1: none
+	Ms            float64   `json:"ms"`
+	OK            bool      `json:"ok"`
+	Err           string    `json:"err,omitempty"`
+}
+
+type streamResult struct {
+	Reader      string  `json:"reader"`
+	Lines       int     `json:"lines"`
+	Reads       int     `json:"reads"`
+	FirstLineMs float64 `json:"first_line_ms"`
+	MaxGapMs    float64 `json:"max_gap_ms"` // the longest wait between two reads
+	TotalMs     float64 `json:"total_ms"`
+	ServerMs    float64 `json:"server_ms"`
+	Encoding    string  `json:"transfer_encoding"`
+	Streamed    bool    `json:"streamed"`
+	OK          bool    `json:"ok"`
+	Err         string  `json:"err,omitempty"`
+}
+
 type report struct {
 	Session struct {
 		AccessType string `json:"access_type"`
@@ -56,16 +95,13 @@ type report struct {
 	} `json:"default_proxy"`
 	UploadKnown   upload `json:"upload_known"`
 	UploadChunked upload `json:"upload_chunked"`
-	StreamLines   struct {
-		Lines       int     `json:"lines"`
-		FirstLineMs float64 `json:"first_line_ms"`
-		TotalMs     float64 `json:"total_ms"`
-		ServerMs    float64 `json:"server_ms"`
-		Streamed    bool    `json:"streamed"`
-		OK          bool    `json:"ok"`
-		Err         string  `json:"err,omitempty"`
-	} `json:"stream_lines"`
-	Cancel struct {
+	// StreamLines reads a chunked response of 200 lines, one every 5 ms,
+	// as N1 will: WinHttpQueryDataAvailable, then WinHttpReadData of that
+	// many bytes. StreamLinesReadData is the first run's reader (a 4 KiB
+	// WinHttpReadData loop), kept to record what synchronous ReadData does.
+	StreamLines         streamResult `json:"stream_lines"`
+	StreamLinesReadData streamResult `json:"stream_lines_readdata_only"`
+	Cancel              struct {
 		Stalled             bool    `json:"stalled"`
 		WrittenBeforeCancel int64   `json:"written_before_cancel"`
 		ReturnMs            float64 `json:"return_ms"`
@@ -74,21 +110,25 @@ type report struct {
 		Err                 string  `json:"err,omitempty"`
 	} `json:"cancel"`
 	WebSocket struct {
-		UpgradeMs     float64 `json:"upgrade_ms"`
-		Status        int     `json:"status"`
-		TextOK        bool    `json:"text_ok"`
-		TextRTTMs     float64 `json:"text_rtt_ms"`
-		BinaryOK      bool    `json:"binary_ok"`
-		BigOK         bool    `json:"big_ok"`
-		BigBytes      int     `json:"big_bytes"`
-		BigFragments  int     `json:"big_fragments"`
-		BigMs         float64 `json:"big_ms"`
-		ServerGotPong bool    `json:"server_got_pong"`
-		CloseStatus   uint16  `json:"close_status"`
-		CloseReason   string  `json:"close_reason"`
-		CloseErr      string  `json:"close_err,omitempty"`
-		OK            bool    `json:"ok"`
-		Err           string  `json:"err,omitempty"`
+		UpgradeMs    float64 `json:"upgrade_ms"`
+		Status       int     `json:"status"`
+		TextOK       bool    `json:"text_ok"`
+		TextRTTMs    float64 `json:"text_rtt_ms"`
+		BinaryOK     bool    `json:"binary_ok"`
+		BigOK        bool    `json:"big_ok"`
+		BigBytes     int     `json:"big_bytes"`
+		BigFragments int     `json:"big_fragments"`
+		BigMs        float64 `json:"big_ms"`
+		// Big is every large-message round trip: sent as one
+		// WinHttpWebSocketSend ("single") or as 1 MiB BinaryFragment sends
+		// ending with a BinaryMessage ("fragmented"), twice each.
+		Big           []bigTrip `json:"big"`
+		ServerGotPong bool      `json:"server_got_pong"`
+		CloseStatus   uint16    `json:"close_status"`
+		CloseReason   string    `json:"close_reason"`
+		CloseErr      string    `json:"close_err,omitempty"`
+		OK            bool      `json:"ok"`
+		Err           string    `json:"err,omitempty"`
 	} `json:"websocket"`
 	Worked   bool    `json:"worked"`
 	TimedOut bool    `json:"timed_out"`
@@ -240,38 +280,60 @@ func doUpload(ses uintptr, port int, size int64, chunked bool) (u upload) {
 	return
 }
 
-func streamLines(ses uintptr, port int) {
+// streamLines reads /lines; withAvailable picks the reader.
+func streamLines(ses uintptr, port int, withAvailable bool) (s streamResult) {
+	s.Reader = "readdata_4k"
+	if withAvailable {
+		s.Reader = "query_data_available"
+	}
 	conn, req, err := request(ses, port, "GET", "/lines")
 	defer closeAll(req, conn)
+	if err == nil {
+		err = addHeader(req, "Accept-Encoding: identity")
+	}
 	t := time.Now()
-	var lines int
-	var first float64
 	if err == nil {
 		err = send(req, 0)
 	}
 	if err == nil {
 		err = receive(req)
 	}
+	if err == nil {
+		s.Encoding = header(req, "Transfer-Encoding")
+	}
 	buf := make([]byte, 4096)
+	last := t
 	for err == nil {
+		want := len(buf)
+		if withAvailable {
+			var avail int
+			if avail, err = available(req); err != nil || avail == 0 {
+				break
+			}
+			want = min(avail, len(buf))
+		}
 		var n int
-		n, err = read(req, buf)
+		n, err = read(req, buf[:want])
 		if n == 0 {
 			break
 		}
+		s.Reads++
+		s.MaxGapMs = max(s.MaxGapMs, ms(last))
+		last = time.Now()
 		c := bytes.Count(buf[:n], []byte{'\n'})
-		if lines == 0 && c > 0 {
-			first = ms(t)
+		if s.Lines == 0 && c > 0 {
+			s.FirstLineMs = ms(t)
 		}
-		lines += c
+		s.Lines += c
 	}
-	mu.Lock()
-	s := &res.StreamLines
-	s.Lines, s.FirstLineMs, s.TotalMs, s.ServerMs = lines, first, ms(t), float64(linesServerMs.Load())/1000
-	s.Streamed = lines > 0 && first < s.TotalMs/2
+	s.TotalMs, s.ServerMs = ms(t), float64(linesServerMs.Load())/1000
+	// Streamed: the first line arrived within 50 ms (the server writes one
+	// every 5 ms) and no read waited for more than 100 ms. Go's clock on
+	// Windows moves in timer ticks (up to 15.6 ms), hence the slack.
+	s.Streamed = s.Lines > 0 && s.FirstLineMs < 50 && s.MaxGapMs < 100
 	s.Err = errs(err)
-	s.OK = err == nil && lines == 200 && s.Streamed
-	mu.Unlock()
+	s.OK = err == nil && s.Lines == 200 && s.Streamed
+	return
 }
 
 // cancelUpload blocks a WinHttpWriteData on a server that never reads, then
@@ -333,6 +395,15 @@ func wsSend(ws uintptr, kind int, p []byte) error {
 
 // wsReceive reads one whole message into dst, counting its fragments.
 func wsReceive(ws uintptr, dst []byte) (n, kind, fragments int, err error) {
+	n, kind, st, err := wsReceiveStats(ws, dst)
+	return n, kind, st.Types[wsBinaryFragment] + st.Types[wsUTF8Fragment], err
+}
+
+// wsReceiveStats is wsReceive with the pieces described. Each call offers
+// at most 1 MiB of dst; a *Fragment type means more of the same message
+// follows, a *Message type ends it.
+func wsReceiveStats(ws uintptr, dst []byte) (n, kind int, st recvStats, err error) {
+	st.PieceMin = -1
 	for {
 		var got, typ uint32
 		chunk := dst[n:]
@@ -340,7 +411,7 @@ func wsReceive(ws uintptr, dst []byte) (n, kind, fragments int, err error) {
 			chunk = chunk[:1<<20]
 		}
 		if len(chunk) == 0 {
-			return n, kind, fragments, fmt.Errorf("message longer than %d bytes", len(dst))
+			return n, kind, st, fmt.Errorf("message longer than %d bytes", len(dst))
 		}
 		err = dwordCall("WinHttpWebSocketReceive", pWSReceive, ws, uintptr(unsafe.Pointer(&chunk[0])), uintptr(len(chunk)),
 			uintptr(unsafe.Pointer(&got)), uintptr(unsafe.Pointer(&typ)))
@@ -349,12 +420,63 @@ func wsReceive(ws uintptr, dst []byte) (n, kind, fragments int, err error) {
 		}
 		n += int(got)
 		kind = int(typ)
+		st.Pieces++
+		if st.PieceMin < 0 || int(got) < st.PieceMin {
+			st.PieceMin = int(got)
+		}
+		st.PieceMax = max(st.PieceMax, int(got))
+		st.LastPiece = int(got)
+		if kind >= 0 && kind < len(st.Types) {
+			st.Types[kind]++
+		}
 		if kind == wsBinaryFragment || kind == wsUTF8Fragment {
-			fragments++
 			continue
 		}
 		return
 	}
+}
+
+// bigRoundTrip sends big (as one message or in 1 MiB fragments) and reads
+// the echo into buf.
+func bigRoundTrip(ws uintptr, srv *wsServer, big, buf []byte, fragmented bool) (b bigTrip) {
+	b.Mode, b.Sent, b.FirstMismatch = "single", len(big), -1
+	srv.lastIn.Store(-1)
+	t := time.Now()
+	var err error
+	if fragmented {
+		b.Mode = "fragmented"
+		for off := 0; off < len(big) && err == nil; off += 1 << 20 {
+			end := min(off+1<<20, len(big))
+			typ := wsBinaryFragment
+			if end == len(big) {
+				typ = wsBinaryMessage
+			}
+			err = wsSend(ws, typ, big[off:end])
+		}
+	} else {
+		err = wsSend(ws, wsBinaryMessage, big)
+	}
+	if err == nil {
+		var kind int
+		b.Received, kind, b.Recv, err = wsReceiveStats(ws, buf)
+		if err == nil && kind != wsBinaryMessage {
+			err = fmt.Errorf("message ended with buffer type %d", kind)
+		}
+	}
+	b.Ms = ms(t)
+	b.ServerIn, b.ServerFrames, b.ServerOut = srv.lastIn.Load(), srv.lastInFrames.Load(), srv.lastOut.Load()
+	for i := range min(b.Received, len(big)) {
+		if buf[i] != big[i] {
+			b.FirstMismatch = i
+			break
+		}
+	}
+	if b.FirstMismatch < 0 && b.Received != len(big) {
+		b.FirstMismatch = min(b.Received, len(big))
+	}
+	b.Err = errs(err)
+	b.OK = err == nil && b.Received == len(big) && b.FirstMismatch < 0
+	return
 }
 
 func webSocket(ses uintptr, srv *wsServer, bigMiB int) {
@@ -433,21 +555,25 @@ func webSocket(ses uintptr, srv *wsServer, bigMiB int) {
 	for i := range big {
 		big[i] = byte(i*31 + i>>16)
 	}
-	t = time.Now()
-	if err := wsSend(ws, wsBinaryMessage, big); err != nil {
-		fail(err)
-		return
+	allOK := true
+	for _, frag := range []bool{false, true, false, true} {
+		b := bigRoundTrip(ws, srv, big, buf, frag)
+		allOK = allOK && b.OK
+		mu.Lock()
+		w.Big = append(w.Big, b)
+		if len(w.Big) == 1 { // the first run's fields: the first single send
+			w.BigMs, w.BigBytes, w.BigFragments = b.Ms, b.Received, b.Recv.Types[wsBinaryFragment]
+		}
+		mu.Unlock()
+		if b.Err != "" && b.Received == 0 {
+			fail(errors.New(b.Err))
+			return
+		}
 	}
-	n, kind, frags, err := wsReceive(ws, buf)
 	mu.Lock()
-	w.BigMs, w.BigBytes, w.BigFragments = ms(t), n, frags
-	w.BigOK = err == nil && kind == wsBinaryMessage && bytes.Equal(buf[:n], big)
+	w.BigOK = allOK
 	w.ServerGotPong = srv.gotPong.Load()
 	mu.Unlock()
-	if err != nil {
-		fail(err)
-		return
-	}
 
 	reason := []byte("client-bye")
 	cerr := dwordCall("WinHttpWebSocketClose", pWSClose, ws, 1000, uintptr(unsafe.Pointer(&reason[0])), uintptr(len(reason)))
@@ -514,7 +640,11 @@ func main() {
 	mu.Lock()
 	res.UploadChunked = u
 	mu.Unlock()
-	streamLines(ses, port)
+	sl := streamLines(ses, port, true)
+	slr := streamLines(ses, port, false)
+	mu.Lock()
+	res.StreamLines, res.StreamLinesReadData = sl, slr
+	mu.Unlock()
 	cancelUpload(ses, port)
 	webSocket(ses, srv, *bigMiB)
 

@@ -28,6 +28,7 @@ var (
 	pReceiveResponse    = win32.Proc(winhttp, "WinHttpReceiveResponse")
 	pQueryHeaders       = win32.Proc(winhttp, "WinHttpQueryHeaders")
 	pReadData           = win32.Proc(winhttp, "WinHttpReadData")
+	pQueryDataAvailable = win32.Proc(winhttp, "WinHttpQueryDataAvailable")
 	pCloseHandle        = win32.Proc(winhttp, "WinHttpCloseHandle")
 	pSetOption          = win32.Proc(winhttp, "WinHttpSetOption")
 	pSetTimeouts        = win32.Proc(winhttp, "WinHttpSetTimeouts")
@@ -208,10 +209,32 @@ func status(req uintptr) (int, error) {
 	return int(code), err
 }
 
+// header returns one response header, by name for the ones the probe reads
+// (WINHTTP_QUERY_* indices, winhttp.h), or "" when absent.
+func header(req uintptr, name string) string {
+	idx := map[string]uintptr{"Transfer-Encoding": 63, "Content-Encoding": 29}[name] // WINHTTP_QUERY_TRANSFER_ENCODING, _CONTENT_ENCODING
+	var buf [256]uint16
+	size := uint32(len(buf) * 2)
+	if boolCall("WinHttpQueryHeaders", pQueryHeaders, req, idx, 0, uintptr(unsafe.Pointer(&buf[0])), uintptr(unsafe.Pointer(&size)), 0) != nil {
+		return ""
+	}
+	return syscall.UTF16ToString(buf[:size/2])
+}
+
 // read reads up to len(p) bytes of the response; 0 is the end.
 func read(req uintptr, p []byte) (int, error) {
 	var n uint32
 	err := boolCall("WinHttpReadData", pReadData, req, uintptr(unsafe.Pointer(&p[0])), uintptr(len(p)), uintptr(unsafe.Pointer(&n)))
+	return int(n), err
+}
+
+// available waits until some of the response has arrived (or the end) and
+// returns how many bytes can be read without blocking; 0 is the end.
+// Synchronous WinHttpReadData waits until it has filled its buffer or the
+// response ended, so a streamed body is read as available then read(n).
+func available(req uintptr) (int, error) {
+	var n uint32
+	err := boolCall("WinHttpQueryDataAvailable", pQueryDataAvailable, req, uintptr(unsafe.Pointer(&n)))
 	return int(n), err
 }
 
