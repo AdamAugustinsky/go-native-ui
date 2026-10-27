@@ -3,6 +3,7 @@ package rexui
 import (
 	"reflect"
 
+	"gonativeui/menu"
 	"gonativeui/widget/base"
 )
 
@@ -15,6 +16,9 @@ import (
 type Strings struct {
 	// Base are the primitives' names (scroll bars, dividers).
 	Base base.Strings
+	// Menu are the titles of the standard commands and menus (Copy, Quit,
+	// Edit, Window), drawn, in the tray and native (menu.SetStrings).
+	Menu menu.Strings
 
 	// Copy is a code block's copy button; Code names the block.
 	Copy, Code string
@@ -60,6 +64,7 @@ type Strings struct {
 // StringsEnglish are the default Strings.
 var StringsEnglish = Strings{
 	Base:          base.StringsEnglish,
+	Menu:          menu.StringsEnglish,
 	Copy:          "Copy",
 	Code:          "Code",
 	ShowOrHide:    "Show or Hide",
@@ -104,6 +109,18 @@ var StringsPtBR = Strings{
 		HorizontalScrollBar: "Barra de rolagem horizontal",
 		VerticalScrollBar:   "Barra de rolagem vertical",
 		Divider:             "Divisor",
+	},
+	// macOS 27's own: AppKit's MenuCommands, Common and Services tables and
+	// the stock apps' main menus (Dicionário, Xadrez).
+	Menu: menu.Strings{
+		About: "Sobre", Hide: "Ocultar", Quit: "Encerrar",
+		AboutApp: "Sobre o %s", HideApp: "Ocultar %s", QuitApp: "Encerrar %s",
+		HideOthers: "Ocultar Outros", ShowAll: "Mostrar Tudo", Settings: "Ajustes…",
+		Undo: "Desfazer", Redo: "Refazer", Cut: "Cortar", Copy: "Copiar", Paste: "Colar",
+		PasteAndMatchStyle: "Colar com o Mesmo Estilo", Delete: "Apagar", SelectAll: "Selecionar Tudo",
+		Minimize: "Minimizar", Zoom: "Zoom", Close: "Fechar", CloseWindow: "Fechar Janela",
+		BringAllToFront: "Trazer Todas para a Frente", EnterFullScreen: "Entrar em Tela Cheia",
+		Services: "Serviços", Edit: "Editar", Window: "Janela", Help: "Ajuda",
 	},
 	Copy:          "Copiar",
 	Code:          "Código",
@@ -150,14 +167,17 @@ var (
 	sendLabels = [2]string{"Send###send", "Sending###send"}
 )
 
-// SetStrings makes s the words of every component, and s.Base those of the
-// primitives (base.SetStrings); a field left empty keeps its English. Call it
-// before the first frame, or between frames on the UI goroutine:
+// SetStrings makes s the words of every component, s.Base those of the
+// primitives (base.SetStrings) and s.Menu the standard menu titles
+// (menu.SetStrings); a field left empty keeps its English. Call it before the
+// first frame, or between frames on the UI goroutine (native menus take the
+// titles when they are next built):
 //
 //	rexui.SetStrings(rexui.StringsPtBR)
 func SetStrings(s Strings) {
 	orEnglish(reflect.ValueOf(&s).Elem(), reflect.ValueOf(StringsEnglish))
 	base.SetStrings(s.Base)
+	menu.SetStrings(s.Menu)
 	str = s
 	sendLabels = [2]string{s.Send + "###send", s.Sending + "###send"}
 }

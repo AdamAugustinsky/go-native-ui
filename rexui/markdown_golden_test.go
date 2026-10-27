@@ -1,6 +1,8 @@
 package rexui_test
 
 import (
+	"bytes"
+	"fmt"
 	"image"
 	"testing"
 	"time"
@@ -109,6 +111,131 @@ func TestMarkdownGolden(t *testing.T) {
 			r.AssertImage("markdown-"+m.name, widgettest.Tolerance{})
 			cr := s.codeRect
 			r.AssertImageRect("codeblock-diff-"+m.name, image.Rect(int(cr[0]), int(cr[1]), int(cr[2]), int(cr[3])), widgettest.Tolerance{})
+		})
+	}
+}
+
+// codeListScene is a file's diff as a VList of CodeLine rows, its lines
+// longer than the window: ContentW (CodeWidth of the longest line) makes the
+// list scroll sideways, every row by one offset.
+type codeListScene struct {
+	k      *base.Kit
+	mode   theme.Mode
+	view   rexui.MarkdownView
+	st     base.VListState
+	lines  [][]byte
+	toks   [][]highlight.Token
+	cw     float32
+	sideX  float64 // a sideways offset to set once (0: none)
+	rows   [][4]float32
+	outer  [4]float32
+	scroll float64
+}
+
+func (s *codeListScene) Init(a *app.App) error {
+	s.k = base.NewKit(a.UI, a.Text, rex.Theme())
+	s.k.SetMode(s.mode)
+	s.k.ReduceMotion = true
+	a.UI.Reserve(4096)
+	a.Text.ReserveRuns(text.MaxCachedRuns, text.MaxCachedGlyphs, text.MaxCachedTextBytes)
+	var src []byte
+	for i := range 40 {
+		switch i % 5 {
+		case 1:
+			src = fmt.Appendf(src, "-\tr := layoutGlobal(p, w) // line %d: the old global cache, shared by every window of the app\n", i)
+		case 2:
+			src = fmt.Appendf(src, "+\tr := c.lay(p, w) // line %d: the cache is per window now, so two windows never share a layout\n", i)
+		default:
+			src = fmt.Appendf(src, " \treturn r, nil // %d\n", i)
+		}
+	}
+	src = bytes.TrimSuffix(src, []byte("\n"))
+	toks := highlight.Tokens(highlight.Diff, src, nil)
+	for at := 0; at <= len(src); {
+		n := bytes.IndexByte(src[at:], '\n')
+		if n < 0 {
+			n = len(src) - at
+		}
+		var lt []highlight.Token
+		for _, t := range toks {
+			if int(t.Off) >= at && int(t.Off+t.Len) <= at+n {
+				t.Off -= uint32(at)
+				lt = append(lt, t)
+			}
+		}
+		s.lines, s.toks = append(s.lines, src[at:at+n]), append(s.toks, lt)
+		at += n + 1
+	}
+	ids := make([]uint64, len(s.lines))
+	for i := range ids {
+		ids[i] = uint64(i)
+	}
+	s.st.Append(ids)
+	s.st.ScrollToID(6, base.AlignStart)
+	return nil
+}
+
+func (s *codeListScene) Build(c *ui.Context) {
+	k := s.k
+	k.Begin(c)
+	r := k.Theme()
+	w, h := c.Size()
+	c.NextSize(ui.Px(float32(w)), ui.Px(float32(h)))
+	c.NextBG(r.Colors[theme.Pane])
+	c.Push(c.Box(ui.DrawBackground, "window"))
+	o := rexui.CodeLineOpts{GutterDigits: 2, View: &s.view}
+	if s.cw == 0 {
+		cols := 0
+		for _, l := range s.lines {
+			cols = max(cols, rexui.CodeColumns(l))
+		}
+		s.cw = rexui.CodeWidth(k, cols, o)
+	}
+	v := base.BeginVList(c, "file", &s.st, base.VListOpts{Estimate: 18, ContentW: s.cw})
+	if s.sideX > 0 {
+		_, y := c.Scroll(v.Body)
+		c.SetScroll(v.Body, s.sideX, y)
+		s.sideX = 0
+	}
+	s.rows = s.rows[:0]
+	for i := v.First; i < v.Last; i++ {
+		n := v.Item(i)
+		o.Number, o.Kind, o.Item, o.Part = int(n)+1, rexui.DiffKind(s.lines[n]), n, 0
+		rexui.CodeLine(k, ui.KeyN(c.ParentKey(), 1), s.lines[n], s.toks[n], o)
+		s.rows = append(s.rows, c.Rect(c.Parent()))
+	}
+	base.EndVList(&v)
+	s.outer = c.Rect(v.Outer)
+	s.scroll, _ = c.Scroll(v.Body)
+	c.Pop()
+	k.End()
+}
+
+// A file's lines as CodeLine rows in a VList with ContentW: scrolled 160 px
+// sideways, every row starts 160 px left of the list and is as wide as the
+// longest line, its band included (testdata/codelines-*.png), and the
+// layout audit finds nothing clipped that it should not.
+func TestCodeLinesScrollSidewaysGolden(t *testing.T) {
+	for _, m := range []struct {
+		name string
+		mode theme.Mode
+	}{{"light", theme.Light}, {"dark", theme.Dark}} {
+		t.Run(m.name, func(t *testing.T) {
+			s := &codeListScene{mode: m.mode}
+			r := widgettest.Open(t, app.Config{Title: "Code lines", Width: 420, Height: 220}, 420*2, 220*2, 2, s)
+			r.Frames(4)
+			s.sideX = 160
+			r.Frames(4)
+			if s.scroll != 160 {
+				t.Fatalf("the list is %v px sideways, want 160", s.scroll)
+			}
+			for i, row := range s.rows {
+				if row[0] != s.outer[0]-160 || row[2]-row[0] < s.cw {
+					t.Fatalf("row %d spans x %v..%v, want from %v and %v wide", i, row[0], row[2], s.outer[0]-160, s.cw)
+				}
+			}
+			r.AuditLayout("codelines-" + m.name)
+			r.AssertImage("codelines-"+m.name, widgettest.Tolerance{})
 		})
 	}
 }
