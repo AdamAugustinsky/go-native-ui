@@ -235,6 +235,46 @@ const (
 	AlignRight
 )
 
+// Anchor is where NextAnchor pins a floating box in its parent: a corner, the
+// middle of an edge, or the centre. It is CSS's absolute positioning: the
+// edges are the parent's own (its padding does not count), the insets measure
+// inward from the anchored edges (top, right, bottom, left), and the centre is
+// inset: 0 with auto margins, the free room split evenly. The box's own size
+// is resolved first, so nothing is computed by hand.
+type Anchor uint8
+
+const (
+	// AnchorNone is no anchor: a floating box sits at NextPos.
+	AnchorNone Anchor = iota
+	AnchorTopLeft
+	AnchorTop
+	AnchorTopRight
+	AnchorLeft
+	AnchorCenter
+	AnchorRight
+	AnchorBottomLeft
+	AnchorBottom
+	AnchorBottomRight
+)
+
+// at is where anchor a puts a box size long on axis ax (0 x, 1 y) in a parent
+// room long: the start edge plus inset, the centre plus inset as an offset, or
+// the end edge less inset.
+func (a Anchor) at(ax int, room, size, inset float32) float32 {
+	i := int(a) - 1
+	step := i % 3
+	if ax == 1 {
+		step = i / 3
+	}
+	switch step {
+	case 0:
+		return inset
+	case 1:
+		return snap((room-size)/2) + inset
+	}
+	return room - size - inset
+}
+
 // SizeKind selects how one axis of a box is sized.
 type SizeKind uint8
 
@@ -255,6 +295,12 @@ const (
 	// (including the child gap) or the largest child across it, plus the
 	// box's padding. Floating children don't count.
 	SizeChildren
+	// SizeGrow takes a share of the room its linear parent has left along its
+	// layout axis once the other children are sized, in proportion to Value
+	// among the growing siblings (CSS's flex-grow from a basis of 0); across
+	// the axis it fills the parent (align-self: stretch). A parent sized by
+	// its children counts it as 0.
+	SizeGrow
 )
 
 // Size is the preferred size of a box on one axis. Strictness (0..1) says how
@@ -278,6 +324,12 @@ func Pct(f float32) Size { return Size{SizeParentPct, f, 0} }
 
 // TextSize is the text extent plus the box padding plus extraPx (strictness 1).
 func TextSize(extraPx float32) Size { return Size{SizeText, extraPx, 1} }
+
+// Grow takes weight shares of the room the parent's other children leave
+// along its axis, and fills the parent across it: CSS's flex: weight. One
+// Grow(1) between fixed siblings is a spacer that pushes the next ones to the
+// end; Grow(2) beside Grow(1) is twice as wide.
+func Grow(weight float32) Size { return Size{SizeGrow, max(weight, 0), 0} }
 
 // Children is the extent of the children with the given strictness.
 func Children(strictness float32) Size { return Size{SizeChildren, 0, strictness} }

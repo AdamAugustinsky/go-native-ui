@@ -36,6 +36,10 @@ type ScrollState struct {
 	// dragged. Overlay bars never take room, hidden or not. Off by default, so
 	// a view that draws its bars keeps its layout.
 	HideBars bool
+	// Overlay makes the view's bars overlay bars whatever the system's
+	// scroller style: they take no room and show while it scrolls (a strip
+	// that keeps its height, as upstream's chip rows).
+	Overlay bool
 
 	grab    float32
 	lastT   int64
@@ -174,7 +178,7 @@ func (k *Kit) fitScrollHeight(skey ui.Key, maxH, padY float32) float32 {
 // layout), its height at the bottom when it overflows horizontally. Overlay
 // bars take none, nor do the bars of a view that hides them (HideBars).
 func (k *Kit) legacyReserve(skey ui.Key, axes ScrollAxes, st *ScrollState) (pad [2]float32) {
-	if !k.legacyBars() || st.HideBars {
+	if !k.legacyBars(st) || st.HideBars {
 		return
 	}
 	size := st.Size
@@ -203,10 +207,22 @@ func (k *Kit) legacyW(size theme.Size) float32 {
 	return theme.Snap(k.r.Lines.Scroller)
 }
 
+// VListBarRoom is VListOpts.BarRoom for the list BeginVList(label) builds
+// next in the current parent, whose bars are drawn with st: a legacy bar's
+// width while the system's scrollers are legacy and the list overflowed in
+// the last layout, as BeginScroll and a List leave; 0 otherwise.
+func (k *Kit) VListBarRoom(label string, st *ScrollState) float32 {
+	_, ident := ui.SplitLabel(label)
+	return k.legacyReserve(ui.KeyN(ui.HashString(k.c.ParentKey(), ident), 1), ScrollVertical, st)[0]
+}
+
 // legacyBars reports whether scroll bars are the legacy kind, always shown
 // beside the content, rather than overlay ones shown over it while scrolling.
-// It follows the system's setting live (theme.Settings.Scroller).
-func (k *Kit) legacyBars() bool { return k.r.Settings.Scroller == theme.ScrollerLegacy }
+// It follows the system's setting live (theme.Settings.Scroller), unless the
+// view's are Overlay.
+func (k *Kit) legacyBars(st *ScrollState) bool {
+	return k.r.Settings.Scroller == theme.ScrollerLegacy && !st.Overlay
+}
 
 // ScrollBar is the state and geometry of one bar of a scroll view, in pixels
 // relative to the view's outer box: what a recipe needs to draw it.
@@ -257,7 +273,7 @@ func (k *Kit) ScrollBars(v *ScrollView) [2]ScrollBar {
 	ex, ey := c.ScrollStretch(s)
 	stretch := [2]float64{ex, ey}
 	now := c.Input().Time
-	legacy := k.legacyBars()
+	legacy := k.legacyBars(st)
 	or := c.Rect(o)
 	outer := [2]float32{or[2] - or[0], or[3] - or[1]}
 	top := st.top
@@ -426,7 +442,7 @@ func (k *Kit) ScrollInput(okey, skey ui.Key, st *ScrollState, axes ScrollAxes) {
 		if !hasAxis(axes, a) {
 			continue
 		}
-		g, ok := k.barGeom(a, bc, bv, pos[a], both, k.legacyBars())
+		g, ok := k.barGeom(a, bc, bv, pos[a], both, k.legacyBars(st))
 		if !ok {
 			continue
 		}

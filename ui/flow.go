@@ -308,12 +308,14 @@ func (c *Context) flowPlace(p *box) {
 		for a := 0; a < 2; a++ {
 			rel := p.pad[a] - float32(p.scroll[a])
 			switch {
+			case cb.floatingOn(a) && cb.anchor != AnchorNone:
+				rel = cb.anchor.at(a, p.size[a], cb.size[a], cb.fixed[a])
 			case cb.floatingOn(a):
 				rel = cb.fixed[a]
 			case a == 0 && p.flow.rtl: // the start edge is the right one
 				rel = p.pad[0] + float32(p.scroll[0]) + inner - cb.size[0]
 			}
-			cb.origin[a] = p.origin[a] + rel
+			cb.origin[a] = p.origin[a] + rel + cb.nudge[a]
 		}
 		setRect(cb)
 	}
@@ -443,13 +445,13 @@ func (c *Context) flowRun(p *box, place bool) (height, widest float32, lines, hi
 					rx = inner - x - cb.size[0]
 				}
 				ry := y
-				if room := lh - cb.size[1]; p.cross != CrossStart && room > 0 {
-					if p.cross == CrossCenter {
+				if room, cross := lh-cb.size[1], cb.crossOf(p); cross != CrossStart && room > 0 {
+					if cross == CrossCenter {
 						room = snap(room / 2)
 					}
 					ry += room
 				}
-				cb.origin = [2]float32{left + rx, top + ry}
+				cb.origin = [2]float32{left + rx + cb.nudge[0], top + ry + cb.nudge[1]}
 				setRect(cb)
 				x += cb.size[0] + hg + extra
 			}

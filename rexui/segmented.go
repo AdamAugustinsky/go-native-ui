@@ -47,16 +47,22 @@ type SegmentedRecipe struct {
 	Divider  Tint
 	DividerW float32
 	DividerH [theme.NumSizes]float32
+	// Capsule makes the track and the chosen segment capsules at every
+	// size (Rex's tab capsule); otherwise the size's corner radius.
+	Capsule bool
 }
 
-// SegmentedLook is the segmented controls' recipe.
+// SegmentedLook is the segmented controls' recipe: Rex's capsule track with
+// the chosen segment in a quiet tint of the accent under the label's colour
+// (ToggleOnLook's), not a block of the accent.
 var SegmentedLook = SegmentedRecipe{
 	Track: Of(theme.Fill2), TrackDisabled: Of(theme.FillDisabled),
-	Selected: Of(theme.Accent), SelectedDisabled: Of(theme.Fill2), SelectedLabel: Of(theme.OnAccent),
+	Selected: OfAlpha(theme.Accent, 0.14, 0.24), SelectedDisabled: Of(theme.Fill2), SelectedLabel: Of(theme.Label),
 	SelectedInactive: OfAlpha(theme.Label, 0.128, 0.126),
 	Label:            Of(theme.Label), LabelDisabled: Of(theme.TextDisabled), Pressed: Of(theme.FillPressed),
 	Divider: Of(theme.Label3), DividerW: 1,
 	DividerH: [theme.NumSizes]float32{theme.SizeRegular: 12, theme.SizeMini: 8, theme.SizeSmall: 10, theme.SizeLarge: 14, theme.SizeXLarge: 16},
+	Capsule:  true,
 }
 
 // SegmentedControl builds a select-one segmented control, one segment per
@@ -83,11 +89,15 @@ func SegmentedControl(k *base.Kit, label string, sel *int, options []string, o S
 	if o.Role == SegmentedTabs {
 		groupRole, itemRole = ui.RoleTabList, ui.RoleTab
 	}
+	radius := s.Radius
+	if rc.Capsule {
+		radius = h / 2
+	}
 	c.NextRole(groupRole)
 	c.NextSemName(ch.Name)
 	c.NextAxis(ui.AxisX)
 	c.NextBG(track)
-	c.NextRadius(s.Radius)
+	c.NextRadius(radius)
 	k.ApplySize(ui.Children(1), ui.Px(h))
 	gid := c.BoxKeyed(ui.DrawBackground, ch.Key, nil)
 	c.Push(gid)
@@ -118,7 +128,7 @@ func SegmentedControl(k *base.Kit, label string, sel *int, options []string, o S
 			flags |= ui.DrawBackground
 		}
 		c.NextBG(fill)
-		c.NextRadius(s.Radius)
+		c.NextRadius(radius)
 		c.NextFont(s.Font.Font)
 		c.NextTextColor(lc)
 		c.NextAlign(ui.AlignCenter)
@@ -138,7 +148,7 @@ func SegmentedControl(k *base.Kit, label string, sel *int, options []string, o S
 		k.EndPress(&it.Press)
 	}
 	c.Pop()
-	k.FocusRing(gid, ring, s.Radius)
+	k.FocusRing(gid, ring, radius)
 	// a segment has the focus now, however it got it (not the ring's
 	// animation, which shows only keyboard focus and fades after it left)
 	return base.Signal{ID: gid, Changed: ch.Changed, Focused: focused}

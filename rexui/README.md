@@ -14,13 +14,13 @@ directly with `k.Kit`, or copies a component and owns it.
 
 | Component | Variants | Sizes | Notes |
 |---|---|---|---|
-| `Button`, `ButtonIcon` | Default, Primary, Destructive, Plain, Toolbar, Glass | mini … extra large | Primary is the accent in a key window and Default's look in an inactive one. Destructive is the alert style (red on red at 25 %). Toolbar is the window tokens' capsule. Glass is a live window's Liquid Glass button. |
-| `IconButton` | Bordered, Borderless, Toolbar, Primary, Destructive | mini … extra large | Toolbar is 28 × 24 (36 × 36 at extra large, the unified toolbar's item). Primary and Destructive are Bordered in those buttons' colours. |
+| `Button`, `ButtonIcon` | Default, Primary, Destructive, Plain, Toolbar, Glass | mini … extra large | Rex's capsules at every size (`UseAppKitControls` gives AppKit's rounded rectangles). Primary is the accent in a key window and Default's look in an inactive one. Destructive is the alert style (red on red at 25 %). Toolbar is the window tokens' capsule. Glass is a live window's Liquid Glass button. |
+| `IconButton` | Bordered, Borderless, Toolbar, Primary, Destructive | mini … extra large | Toolbar is 28 × 24 (36 × 36 at extra large, the unified toolbar's item). Primary and Destructive are Bordered in those buttons' colours. Bordered ones are capsules, circles when square. |
 | `Checkbox`, `CheckboxTri` | — | mini … large | Box 16/14/18 pt with continuous-corner-equivalent radii. |
 | `RadioGroup` | vertical, horizontal | mini … large | Arrow keys move the choice and the focus together. |
 | `Switch` | — | mini … large | The knob slides over the Standard duration and floats on a two-layer shadow in light. |
 | `Slider` | — | regular, small | 6 pt (small 4 pt) track, 20 × 16 knob. |
-| `SegmentedControl` | radio group or tab list role | regular, small | Accent pill, Label3 dividers between unselected segments. |
+| `SegmentedControl` | radio group or tab list role | regular, small | A capsule track; the chosen segment a quiet tint of the accent under the label's colour; Label3 dividers between unselected segments. |
 | `TextField` | Default, Mono, Borderless | small … large | 1 pt outline outside the frame. The ring shows whenever focused. `FieldOpts.Secure`: a password field (NSSecureTextField): bullets only, no copy or cut, no undo history, secure keyboard entry and Roman input while focused, `AXSecureTextField`; `TextBuffer.Wipe` zeroes the text. |
 | `SearchField` | — | small … large | Capsule outline, magnifier, filled-circle clear button, Escape clears. |
 | `Select` | pop-up, borderless, pull-down | regular, small | With native menus (macOS) the options are the system's pop-up menu (`RequestMenu`, `MenuChoice`); otherwise `widget.Kit.Select` draws the open list. |
@@ -31,7 +31,7 @@ directly with `k.Kit`, or copies a component and owns it.
 | `Disclosure` | triangle, push | — | Chevron that turns 90° (push: 180°) over the Standard duration. |
 | `HelpButton` | — | regular measured, others scaled | 24 pt circle in a push button's fill holding a "?". |
 | `Link` | — | text styles | System link colour, pointing-hand cursor, focus ring, link semantics. Reports a click; never opens a URL. |
-| `ToggleButton` | — | mini … extra large | A push button that stays pressed: Default when off, accent when on. |
+| `ToggleButton` | — | mini … extra large | A capsule push button that stays pressed: Default when off, a quiet tint of the accent when on. |
 | `Separator` | 1 pt, or a hairline | — | Horizontal in a column, vertical in a row. |
 | `BeginCard` / `EndCard` | Box, Inset (form rows), Rex pane | — | Box: radius 12, no border, optional title. |
 | `BeginForm` / `Section` / `Row` / `EndForm` | Grouped (Settings), Aligned (NSGridView) | — | Grouped: inset sections (`CardInset`) of 40 pt rows, label at the leading edge and control at the trailing one, a 1 pt line between rows, a 13 pt semibold header and an 11 pt footer. Aligned: labels right-aligned to a shared column, controls 6 pt beyond it, rows 6 pt apart. Tab order is the rows' order. |

@@ -331,8 +331,9 @@ func TestMarkdownSelectAcrossBlocks(t *testing.T) {
 	}
 }
 
-// A vertical wheel over a code block scrolls the transcript, not the block
-// (which scrolls sideways only).
+// Precise vertical deltas (a trackpad without a gesture) over a code block
+// scroll the transcript, not the block, which scrolls sideways only. A
+// mouse wheel's notches there scroll the block sideways (ui's rule).
 func TestCodeBlockPassesVerticalScroll(t *testing.T) {
 	g := newMDRig(t, 50)
 	g.settle()
@@ -343,11 +344,12 @@ func TestCodeBlockPassesVerticalScroll(t *testing.T) {
 	g.in.MouseX, g.in.MouseY = n.Bounds[0]+10, (n.Bounds[1]+n.Bounds[3])/2
 	for range 10 {
 		g.in.ScrollY = -300
+		g.in.Precise = true
 		g.frame()
 	}
 	g.frames(10)
 	if m, ok := g.node(ui.RoleLabel, "func step0"); ok && m.Bounds[1] >= n.Bounds[1]-50 {
-		t.Errorf("a vertical wheel over a code block did not scroll the transcript: the line went from %v to %v", n.Bounds[1], m.Bounds[1])
+		t.Errorf("precise vertical deltas over a code block did not scroll the transcript: the line went from %v to %v", n.Bounds[1], m.Bounds[1])
 	}
 }
 

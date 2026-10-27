@@ -61,7 +61,7 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 	if devDir == "" {
 		devDir = filepath.Join(c.dir, ".gnui", "dev")
 	}
-	app := filepath.Join(devDir, c.Name+".app")
+	app := filepath.Join(devDir, c.AppFile())
 	fmt.Fprintf(stdout, "building %s (%s) for darwin/%s\n", c.Name, c.BundleID(true), darwinArch)
 	ent, cleanup, err := buildBundle(c, buildOptions{Dev: true, Tags: *tags, Ldflags: *ldflags, Out: app, Log: nil})
 	if err != nil {
