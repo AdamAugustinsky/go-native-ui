@@ -248,6 +248,7 @@ func ensureAppWindow() bool {
 		return false
 	}
 	reg.app.hwnd, reg.app.thread = h, tid
+	wakeTarget.Store(h)
 	if wakePending.Load() || loopWake.Load() || anyWindowWake() {
 		postWake() // a wake asked for before there was a window to take it
 	}
@@ -267,6 +268,7 @@ func destroyAppWindow() {
 		win32.Call(pShutdownBlockDestroy, reg.app.hwnd)
 	}
 	h := reg.app.hwnd
+	wakeTarget.Store(0)
 	reg.app.hwnd, reg.app.thread, reg.app.modal, reg.app.blockReason, reg.app.ending = 0, 0, 0, false, false
 	win32.Call(pDestroyWindow, h)
 }
@@ -360,11 +362,15 @@ func appWndProc(hwnd, m, wp, lp uintptr) uintptr {
 // loopWake is a pending WakeLoop: the loop turns once, and no window is told.
 var loopWake atomic.Bool
 
+// wakeTarget is the app window's HWND for the wake message, read from any
+// thread (0 before it exists).
+var wakeTarget atomic.Uintptr
+
 // osWake posts the wake message to the app window; safe from any thread.
 func osWake() { postWake() }
 
 func postWake() {
-	h := reg.app.hwnd
+	h := wakeTarget.Load()
 	if h == 0 {
 		return // ensureAppWindow posts the pending wakes
 	}
