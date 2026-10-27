@@ -290,6 +290,9 @@ const manyWindows = runtime.GOOS == "darwin"
 // failure then is reported by Win.Err. On Windows and Linux a second window
 // is refused (ErrOneWindow).
 func (a *App) OpenWindow(cfg WindowConfig, b Builder) (*Win, error) {
+	if err := checkPanelConfig(cfg); err != nil {
+		return nil, err
+	}
 	if !manyWindows && (len(a.wins) > 0 || a.queuedOpens > 0) {
 		return nil, ErrOneWindow
 	}
@@ -306,6 +309,15 @@ func (a *App) OpenWindow(cfg WindowConfig, b Builder) (*Win, error) {
 		return nil, err
 	}
 	return w, nil
+}
+
+// checkPanelConfig refuses a panel where the OS has none yet, before
+// anything is opened or queued.
+func checkPanelConfig(cfg WindowConfig) error {
+	if cfg.Panel != nil && !platform.PanelsSupported() {
+		return fmt.Errorf("app: open window: %w", platform.ErrNoPanels)
+	}
+	return nil
 }
 
 // openWindowNow opens the window of handle w: into the root App while it

@@ -110,6 +110,14 @@ type Config struct {
 	// and the materials show in their regions. Hosted native views
 	// (App.Win.NewHost, ui.Context.Host) need nothing here.
 	Materials bool
+
+	// Panel makes the window a panel (platform.Panel, the phase 8 plan's
+	// D69): borderless, out of the Dock, the taskbar and the app switcher,
+	// floating, non-activating or hidden on deactivation as its fields say.
+	// Win.Show and Win.Hide show and hide it, keeping its state; a hidden
+	// panel builds nothing. OpenWindow fails with platform.ErrNoPanels where
+	// the OS has no panels yet (platform.PanelsSupported).
+	Panel *platform.Panel
 }
 
 // App is the running application as one window sees it: the window, the GPU
@@ -354,6 +362,7 @@ func (a *App) openWin(cfg Config, b Builder, st *StartupReport, nativeMenus bool
 		MinWidth: int(cfg.MinWidth + 0.5), MinHeight: int(cfg.MinHeight + 0.5),
 		Titlebar: cfg.Titlebar, TrafficLights: cfg.TrafficLights, PublicAPIOnly: cfg.PublicAPIOnly,
 		Backdrop: cfg.Backdrop, Buttons: cfg.Buttons, Materials: cfg.Materials,
+		Panel: cfg.Panel,
 	})
 	if err != nil {
 		return fmt.Errorf("app: open window: %w", err)

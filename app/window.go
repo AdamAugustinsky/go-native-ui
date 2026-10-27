@@ -71,11 +71,14 @@ func (w *Win) Close() {
 	}
 }
 
-// Show shows the window and activates the app.
+// Show shows the window and activates the app. A panel (Config.Panel) with
+// NonActivating shows without activating the app; any other panel takes the
+// keyboard, as a palette opened from a hotkey does.
 func (w *Win) Show() { w.command(cmdShow) }
 
 // Hide takes the window off the screen without closing it (Show brings it
-// back).
+// back). A hidden panel keeps its Build state and builds nothing until it is
+// shown again.
 func (w *Win) Hide() { w.command(cmdHide) }
 
 // Focus brings the window to the front, out of the Dock if it is there, and
