@@ -199,7 +199,7 @@ func (c *Context) Audit(dst []Finding) []Finding {
 		if b.first == 0 {
 			continue
 		}
-		if b.axis != AxisFlow {
+		if b.axis < AxisFlow {
 			dst = c.auditOverlap(dst, id, tol)
 		}
 		dst = c.auditCovers(dst, id, 2*ptTol)
@@ -468,7 +468,7 @@ func (c *Context) auditCentre(dst []Finding, p ID, tol float32) []Finding {
 	if pb.exempt(AuditCentre) {
 		return dst
 	}
-	if pb.justify == JustifyCenter && pb.axis != AxisFlow {
+	if pb.justify == JustifyCenter && pb.axis < AxisFlow {
 		la := pb.layoutAxis()
 		lo, hi := float32(1e9), float32(-1e9)
 		for ch := pb.first; ch != 0; ch = c.boxes[ch].next {

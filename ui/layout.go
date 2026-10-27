@@ -19,6 +19,79 @@ func (b *box) layoutAxis() int {
 
 func snap(v float32) float32 { return float32(math.Floor(float64(v) + 0.5)) }
 
+// limit keeps b's size on axis a within its NextMinSize and NextMaxSize.
+func (b *box) limit(a int) {
+	if b.hi[a] > 0 && b.size[a] > b.hi[a] {
+		b.size[a] = b.hi[a]
+	}
+	if b.size[a] < b.lo[a] {
+		b.size[a] = b.lo[a]
+	}
+}
+
+// give is how much b can shrink on axis a: its size's share that its
+// strictness lets go, no further than its NextMinSize.
+func (b *box) give(a int) float32 {
+	g := b.size[a] * (1 - clamp01(b.pref[a].Strictness))
+	if b.lo[a] > 0 {
+		g = min(g, max(0, b.size[a]-b.lo[a]))
+	}
+	return g
+}
+
+// shrinkLine takes excess pixels off the flow children of p along axis a,
+// as CSS's flex-shrink: in proportion to each one's size times its give
+// (1 - Strictness); a child that would go below its NextMinSize stays there
+// and the others share what it could not give, until the excess is gone or
+// nothing gives. It returns the children's new total, without gaps.
+func (c *Context) shrinkLine(p *box, a int, excess float32) float32 {
+	boxes := c.boxes
+	frozen := func(cb *box) bool { return cb.lo[a] > 0 && cb.size[a] <= cb.lo[a] }
+	for round := 0; round < 8 && excess > 0.001; round++ {
+		var fix float32
+		for ch := p.first; ch != 0; ch = boxes[ch].next {
+			if cb := &boxes[ch]; !cb.floatingOn(a) && !frozen(cb) {
+				fix += cb.size[a] * (1 - clamp01(cb.pref[a].Strictness))
+			}
+		}
+		if fix <= 0 {
+			break
+		}
+		take := min(excess, fix)
+		held := false // a child stopped at its minimum: the others take the rest
+		for ch := p.first; ch != 0; ch = boxes[ch].next {
+			cb := &boxes[ch]
+			if cb.floatingOn(a) || frozen(cb) {
+				continue
+			}
+			want := take * cb.size[a] * (1 - clamp01(cb.pref[a].Strictness)) / fix
+			got := min(want, cb.give(a))
+			held = held || got < want
+			cb.size[a] -= got
+			excess -= got
+		}
+		if !held {
+			break // one pass, as without minimums: a strictness gives its share once
+		}
+	}
+	var total float32
+	for ch := p.first; ch != 0; ch = boxes[ch].next {
+		if cb := &boxes[ch]; !cb.floatingOn(a) {
+			total += cb.size[a]
+		}
+	}
+	return total
+}
+
+// crossOf is how box cb sits across its parent's axis: its NextAlignSelf, or
+// the parent's NextCross.
+func (cb *box) crossOf(p *box) Cross {
+	if cb.self != 0 {
+		return cb.self - 1
+	}
+	return p.cross
+}
+
 // layout resolves sizes and positions of the boxes built this frame, one
 // pass over c.order per RAD stage. c.order lists parents before children, so
 // a forward walk visits a parent first and a backward walk a child first.
@@ -55,8 +128,11 @@ func (c *Context) layout() {
 		}
 		la := p.layoutAxis()
 		// Content extent and scroll clamping first: they set the offsets.
-		if p.axis == AxisFlow {
+		switch p.axis {
+		case AxisFlow:
 			c.flowContent(p)
+		case AxisGrid:
+			c.gridContent(p)
 		}
 		var lead float64
 		if p.listRows > 0 && la == 1 {
@@ -74,6 +150,10 @@ func (c *Context) layout() {
 		}
 		if p.axis == AxisFlow { // also without children: its results are then 0
 			c.flowPlace(p)
+			continue
+		}
+		if p.axis == AxisGrid {
+			c.gridPlace(p)
 			continue
 		}
 		if p.first == 0 {
@@ -139,8 +219,8 @@ func (c *Context) layout() {
 					flow = true
 				default:
 					rel = p.pad[a] - float32(off[a])
-					if room := p.size[a] - p.padSum(a) - cb.size[a]; p.cross != CrossStart && room > 0 {
-						if p.cross == CrossCenter {
+					if room, cross := p.size[a]-p.padSum(a)-cb.size[a], cb.crossOf(p); cross != CrossStart && room > 0 {
+						if cross == CrossCenter {
 							room = snap(room / 2)
 						}
 						rel += room
@@ -240,6 +320,7 @@ func (c *Context) sizeAxis(a int) {
 		if b.pref[a].Kind == SizeParentPct {
 			b.size[a] = max(0, pb.size[a]-pb.padSum(a)) * b.pref[a].Value
 		}
+		b.limit(a)
 	}
 
 	// 3. children sums, deepest first
@@ -249,6 +330,7 @@ func (c *Context) sizeAxis(a int) {
 			continue
 		}
 		b.size[a] = c.childExtent(b, a) + b.padSum(a)
+		b.limit(a)
 	}
 
 	// 4. violations, parents first so a shrunk parent shrinks its children in turn
@@ -262,14 +344,23 @@ func (c *Context) sizeAxis(a int) {
 		inner := max(0, p.size[a]-p.padSum(a))
 		// Percentages follow the parent's final size. Accumulate the final
 		// extent in sibling order; across the axis, shrink in this walk too.
-		var total float32
+		var total, weights float32
 		n := 0
 		for ch := p.first; ch != 0; ch = boxes[ch].next {
 			cb := &boxes[ch]
-			if cb.pref[a].Kind == SizeParentPct {
+			switch cb.pref[a].Kind {
+			case SizeParentPct:
 				cb.size[a] = inner * cb.pref[a].Value
+				cb.limit(a)
+			case SizeGrow:
+				if a == la && p.axis < AxisFlow && !cb.floatingOn(a) {
+					weights += cb.pref[a].Value
+				} else {
+					cb.size[a] = inner // stretched across, or the whole room
+				}
+				cb.limit(a)
 			}
-			if p.axis == AxisFlow || cb.floatingOn(a) {
+			if p.axis >= AxisFlow || cb.floatingOn(a) {
 				continue
 			}
 			if a == la {
@@ -277,13 +368,17 @@ func (c *Context) sizeAxis(a int) {
 				n++
 			} else {
 				if excess := cb.size[a] - inner; !p.scrollOn(a) && excess > 0 {
-					cb.size[a] -= min(excess, cb.size[a]*(1-clamp01(cb.pref[a].Strictness)))
+					cb.size[a] -= min(excess, cb.give(a))
 				}
 				total = max(total, cb.size[a])
 			}
 		}
 		if p.axis == AxisFlow {
 			c.flowShrink(p, a, inner)
+			continue
+		}
+		if p.axis == AxisGrid {
+			c.gridSize(p, a, inner)
 			continue
 		}
 		var gaps float32
@@ -293,23 +388,23 @@ func (c *Context) sizeAxis(a int) {
 		total += gaps
 		if a == la && !p.scrollOn(a) {
 			if excess := total - inner; excess > 0.001 {
-				var fix float32
+				total = c.shrinkLine(p, a, excess) + gaps
+			}
+			// the room left goes to the growing children, by weight
+			if free := inner - total; weights > 0 && free > 0 {
+				total = 0
 				for ch := p.first; ch != 0; ch = boxes[ch].next {
-					if cb := &boxes[ch]; !cb.floatingOn(a) {
-						fix += cb.size[a] * (1 - clamp01(cb.pref[a].Strictness))
+					cb := &boxes[ch]
+					if cb.floatingOn(a) {
+						continue
 					}
-				}
-				if fix > 0 {
-					take := min(excess, fix)
-					total = 0
-					for ch := p.first; ch != 0; ch = boxes[ch].next {
-						if cb := &boxes[ch]; !cb.floatingOn(a) {
-							cb.size[a] -= take * cb.size[a] * (1 - clamp01(cb.pref[a].Strictness)) / fix
-							total += cb.size[a]
-						}
+					if cb.pref[a].Kind == SizeGrow {
+						cb.size[a] = free * cb.pref[a].Value / weights
+						cb.limit(a)
 					}
-					total += gaps
+					total += cb.size[a]
 				}
+				total += gaps
 			}
 		}
 		// Later parents-first visits only resize descendants, not these
@@ -334,6 +429,12 @@ func (c *Context) childExtent(b *box, a int) float32 {
 		}
 		h, _, _, _ := c.flowRun(b, false)
 		return h
+	}
+	if b.axis == AxisGrid { // its columns along X, its rows along Y
+		if a == 0 {
+			return c.gridNatural(b)
+		}
+		return c.gridRun(b, false)
 	}
 	var sum, mx float32
 	n := 0

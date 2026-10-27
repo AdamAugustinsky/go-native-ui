@@ -198,6 +198,17 @@ points (`r.Window.Toolbars`) and the app's own constants, times the scale, and
   `NextSize` set one property of the next widget only (`widget.Fill` takes the
   room its siblings leave, `Kit.Fixed(pt)` is a fixed size), and `NextJustify`
   and `NextCross` place children along and across the axis.
+- **The CSS you would reach for** is there, with the same meaning:
+  rows and columns with `NextJustify`, `NextCross` and `NextGap` (flexbox);
+  `ui.Grow(weight)` sizes a child from the room its siblings leave
+  (`flex: weight`; one `Grow(1)` is a spacer); `NextMinSize` and
+  `NextMaxSize` bound a box (`min-width`, `max-width`); `NextAlignSelf`
+  places one child across the axis (`align-self`); `BeginFlow` wraps
+  children onto lines (`flex-wrap`); and `BeginGrid` lays them in equal
+  columns, a fixed number or as many as fit (`grid-template-columns:
+  repeat(auto-fill, minmax(min, 1fr))`), each row as tall as its tallest
+  child. A layout that needs `TextWidth` or a division by a column count is
+  usually one of these.
 - **Things laid over others** (an icon over a round button, a badge in a
   corner, a spinner over an image) are placed, not computed: `c.NextCenter()`
   centres the next box in its parent at whatever size it takes, and

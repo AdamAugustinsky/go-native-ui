@@ -445,8 +445,8 @@ func (c *Context) flowRun(p *box, place bool) (height, widest float32, lines, hi
 					rx = inner - x - cb.size[0]
 				}
 				ry := y
-				if room := lh - cb.size[1]; p.cross != CrossStart && room > 0 {
-					if p.cross == CrossCenter {
+				if room, cross := lh-cb.size[1], cb.crossOf(p); cross != CrossStart && room > 0 {
+					if cross == CrossCenter {
 						room = snap(room / 2)
 					}
 					ry += room

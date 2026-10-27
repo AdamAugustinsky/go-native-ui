@@ -407,6 +407,23 @@ func (c *Context) NextAnchor(a Anchor, insetX, insetY float32) {
 // round button, a spinner over an image, a play glyph over a video.
 func (c *Context) NextCenter() { c.NextAnchor(AnchorCenter, 0, 0) }
 
+// NextMinSize keeps the next box at least w by h pixels (0 on an axis: no
+// minimum): when its parent is too small it shrinks no further, as CSS's
+// min-width and min-height; it then overflows, and the layout audit says so.
+func (c *Context) NextMinSize(w, h float32) { c.nextLo = [2]float32{w, h} }
+
+// NextMaxSize keeps the next box at most w by h pixels (0 on an axis: no
+// maximum), whatever its size asks (a percentage, Grow, its children): CSS's
+// max-width and max-height. A readable column in a wide window:
+//
+//	c.NextMaxSize(e.Pt(680), 0)
+func (c *Context) NextMaxSize(w, h float32) { c.nextHi = [2]float32{w, h} }
+
+// NextAlignSelf places the next box across its parent's axis as a, in place
+// of the parent's NextCross for its children: CSS's align-self. One child at
+// the end of a row whose others are centred, without a wrapper box.
+func (c *Context) NextAlignSelf(a Cross) { c.nextSelf = a + 1 }
+
 // NextOffset moves the next box by (dx, dy) pixels from the place layout gives
 // it, with its children, and moves nothing else: CSS's position: relative
 // with left and top. For optical corrections (a play triangle a pixel right of

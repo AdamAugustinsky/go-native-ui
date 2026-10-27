@@ -73,6 +73,8 @@ type boxFrame struct {
 	stopWheel bool       // the wheel over the box scrolls nothing beneath it (StopWheel)
 	fixed     [2]float32
 	anchor    Anchor     // NextAnchor: fixed holds the insets
+	lo, hi    [2]float32 // NextMinSize, NextMaxSize (0: none)
+	self      Cross      // NextAlignSelf: 1 + the Cross, 0 the parent's
 	nudge     [2]float32 // NextOffset: moved from its laid-out place
 
 	txt    core.Span // display text in the current frame's arena
@@ -87,6 +89,7 @@ type boxFrame struct {
 	sem int32 // 1 + the index of its record in Context.sems, 0 without a role
 
 	flow    flowSpec // the options of a flow box (AxisFlow, flow.go)
+	grid    gridSpec // the options of a grid box (AxisGrid, grid.go)
 	prevHid bool     // the previous layout's hid: what the input checks of the build see (wasHidden)
 
 	// the paragraph of a WrapText or RichText box: lnN lines, laid out at
@@ -194,6 +197,9 @@ type Context struct {
 	nextAnchor Anchor
 	nextInset  [2]float32
 	nextNudge  [2]float32
+	nextLo     [2]float32
+	nextHi     [2]float32
+	nextSelf   Cross // 1 + the Cross; 0 none
 	nextFlags  Flags
 	nextAudit  AuditMask  // the exemptions of the next box (NextAuditExempt)
 	nextFade   float32    // the next box's children's fade at its end (NextFadeEnd)
@@ -674,6 +680,7 @@ func (c *Context) resetStyles() {
 	c.hasNextStyle = false
 	c.hasNextPos = false
 	c.nextAnchor, c.nextInset, c.nextNudge = AnchorNone, [2]float32{}, [2]float32{}
+	c.nextLo, c.nextHi, c.nextSelf = [2]float32{}, [2]float32{}, 0
 	c.nextFlags = 0
 	c.nextAudit = 0
 	c.nextFade = 0
@@ -836,6 +843,8 @@ func (c *Context) newBox(flags Flags, key Key) ID {
 		b.fixed = c.nextInset
 	}
 	c.nextAnchor, c.nextNudge = AnchorNone, [2]float32{}
+	b.lo, b.hi, b.self = c.nextLo, c.nextHi, c.nextSelf
+	c.nextLo, c.nextHi, c.nextSelf = [2]float32{}, [2]float32{}, 0
 	if n := &c.semNext; n.role != RoleNone {
 		c.sems = append(c.sems, semRec{id: id, role: n.role, state: n.state, actions: n.actions, hasActions: n.hasActions,
 			name: n.name, value: n.value, rng: n.rng, hasRange: n.hasRange, pos: n.pos, hasPos: n.hasPos, level: n.level})

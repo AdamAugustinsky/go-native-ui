@@ -295,6 +295,12 @@ const (
 	// (including the child gap) or the largest child across it, plus the
 	// box's padding. Floating children don't count.
 	SizeChildren
+	// SizeGrow takes a share of the room its linear parent has left along its
+	// layout axis once the other children are sized, in proportion to Value
+	// among the growing siblings (CSS's flex-grow from a basis of 0); across
+	// the axis it fills the parent (align-self: stretch). A parent sized by
+	// its children counts it as 0.
+	SizeGrow
 )
 
 // Size is the preferred size of a box on one axis. Strictness (0..1) says how
@@ -318,6 +324,12 @@ func Pct(f float32) Size { return Size{SizeParentPct, f, 0} }
 
 // TextSize is the text extent plus the box padding plus extraPx (strictness 1).
 func TextSize(extraPx float32) Size { return Size{SizeText, extraPx, 1} }
+
+// Grow takes weight shares of the room the parent's other children leave
+// along its axis, and fills the parent across it: CSS's flex: weight. One
+// Grow(1) between fixed siblings is a spacer that pushes the next ones to the
+// end; Grow(2) beside Grow(1) is twice as wide.
+func Grow(weight float32) Size { return Size{SizeGrow, max(weight, 0), 0} }
 
 // Children is the extent of the children with the given strictness.
 func Children(strictness float32) Size { return Size{SizeChildren, 0, strictness} }
