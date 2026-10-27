@@ -1,6 +1,7 @@
 package app
 
 import (
+	"gonativeui/internal/ffi"
 	"gonativeui/internal/sysinfo"
 	"gonativeui/platform"
 )
@@ -131,6 +132,7 @@ func (a *App) drawFrame(inHandler bool, passes int) bool {
 	metered := a.bench != nil && a.bench.measuring
 	m := frameMeasure{}
 	if metered {
+		m.c0 = ffi.ProbeCalls
 		m.cpu0 = sysinfo.ThreadCPUNs()
 	}
 	if !a.Surf.BeginFrame(&a.fr) {
@@ -150,6 +152,7 @@ func (a *App) drawFrame(inHandler bool, passes int) bool {
 	m.start = platform.Now()
 	if metered {
 		m.cpu1 = sysinfo.ThreadCPUNs()
+		m.c1 = ffi.ProbeCalls
 	}
 	evT, dirty := a.tr.take()
 	dt := a.frameDT(m.start)
@@ -179,6 +182,7 @@ func (a *App) drawFrame(inHandler bool, passes int) bool {
 	a.syncChrome(a.Win)
 	if metered {
 		m.cpu2 = sysinfo.ThreadCPUNs()
+		m.c2 = ffi.ProbeCalls
 	}
 
 	animating := a.UI.Animating()
@@ -186,7 +190,10 @@ func (a *App) drawFrame(inHandler bool, passes int) bool {
 	if a.dbg != nil {
 		a.debugOwed(why)
 	}
+	m.e0 = sysinfo.ThreadCPUNs()
 	a.R.Encode(a.fr.CmdBuf, a.fr.Target, a.fr.W, a.fr.H, a.cfg.Clear, &a.list)
+	m.e1 = sysinfo.ThreadCPUNs()
+	probeW, probeH = a.fr.W, a.fr.H
 	if a.dbg != nil {
 		a.dbg.mark(PhaseEncode)
 	}
@@ -199,6 +206,7 @@ func (a *App) drawFrame(inHandler bool, passes int) bool {
 	m.commit = platform.Now()
 	if metered {
 		m.cpu3 = sysinfo.ThreadCPUNs()
+		m.c3 = ffi.ProbeCalls
 	}
 	if a.dbg != nil {
 		a.debugFrameEnd()

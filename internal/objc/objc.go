@@ -71,6 +71,7 @@ func init() {
 		return p
 	}
 	MsgSend = sym("objc_msgSend")
+	ffi.ProbeMain, ffi.ProbeMsgSend = F, MsgSend
 	getClass, selRegister = sym("objc_getClass"), sym("sel_registerName")
 	allocPair, registerPair = sym("objc_allocateClassPair"), sym("objc_registerClassPair")
 	addMethod, addProtocol, getProtocol = sym("class_addMethod"), sym("class_addProtocol"), sym("objc_getProtocol")

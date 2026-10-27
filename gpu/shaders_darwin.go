@@ -64,8 +64,27 @@ vertex VOut vs_main(uint vid [[vertex_id]],
 	} else if (any(radii > 0.0)) {
 		pad = 1.0;
 	}
+	float2 lo = rect.xy - pad, hi = rect.zw + pad;
+#ifdef GNUI_CLIPGEOM
+	// Pixels outside the clip (or past the fade) shade to exactly 0: do not
+	// rasterize them. A pixel whose centre is within half a pixel of the
+	// clip's edge may have coverage, so the geometry keeps that half pixel.
+	float4 clip = quads[iid].clip;
+	if (any(clip != 0.0)) {
+		lo = max(lo, clip.xy - 0.5);
+		hi = min(hi, clip.zw + 0.5);
+	}
+	float2 fadeX = quads[iid].fadeX;
+	if (fadeX.x != 0.0 || fadeX.y != 0.0) {
+		hi.x = min(hi.x, fadeX.y + 0.5);
+	}
+	hi = max(hi, lo);
+#endif
+#ifdef GNUI_BADGEOM
+	hi -= 3.0;
+#endif
 	float2 c = float2(float(vid & 1u), float(vid >> 1));
-	float2 p = mix(rect.xy - pad, rect.zw + pad, c);
+	float2 p = mix(lo, hi, c);
 	VOut o;
 	o.pos = float4(p / viewport * float2(2.0, -2.0) + float2(-1.0, 1.0), 0.0, 1.0);
 	o.inst = iid;
@@ -169,6 +188,9 @@ fragment float4 fs_main(VOut in [[stage_in]],
                         texture2d<float> tex1 [[texture(1)]],
                         texture2d<float> tex2 [[texture(2)]],
                         sampler smp [[sampler(0)]]) {
+#ifdef GNUI_FS_CONST
+	return float4(0.5, 0.5, 0.5, 0.5);
+#endif
 	float4 rect = quads[in.inst].rect;
 	float4 clip = quads[in.inst].clip;
 	float4 uv = quads[in.inst].uv;
@@ -182,16 +204,40 @@ fragment float4 fs_main(VOut in [[stage_in]],
 	// Four-corner colour, interpolated premultiplied.
 	float2 size = max(rect.zw - rect.xy, 1e-3);
 	float2 t = clamp((p - rect.xy) / size, 0.0, 1.0);
+#ifdef GNUI_FS_ONECOLOR
+	float4 col = premul(unpack_rgba(quads[in.inst].color[0]));
+#elif defined(GNUI_FS_UNIFORMFAST)
+	uint4 cw = uint4(quads[in.inst].color);
+	float4 col;
+	if (all(cw == cw.xxxx)) {
+		col = premul(unpack_rgba(cw.x));
+	} else {
+		float4 cTL = premul(unpack_rgba(cw.x));
+		float4 cTR = premul(unpack_rgba(cw.y));
+		float4 cBL = premul(unpack_rgba(cw.z));
+		float4 cBR = premul(unpack_rgba(cw.w));
+		col = mix(mix(cTL, cTR, t.x), mix(cBL, cBR, t.x), t.y);
+	}
+#else
 	float4 cTL = premul(unpack_rgba(quads[in.inst].color[0]));
 	float4 cTR = premul(unpack_rgba(quads[in.inst].color[1]));
 	float4 cBL = premul(unpack_rgba(quads[in.inst].color[2]));
 	float4 cBR = premul(unpack_rgba(quads[in.inst].color[3]));
 	float4 col = mix(mix(cTL, cTR, t.x), mix(cBL, cBR, t.x), t.y);
+#endif
 
 	float4 res;
+#ifdef GNUI_FS_NOTEX
+	if (true) {
+#else
 	if (mode == 0u) {
+#endif
 		if (soft > 0.0) {
+#ifdef GNUI_FS_NOSHADOW
+			res = col;
+#else
 			res = col * rrect_shadow(p, rect, radii, soft);
+#endif
 		} else {
 			float sd = rrect_sdf(p, rect, radii);
 			float outer = clamp(0.5 - sd, 0.0, 1.0);
@@ -208,9 +254,13 @@ fragment float4 fs_main(VOut in [[stage_in]],
 			cov = clamp(0.5 - rrect_sdf(p, rect, radii), 0.0, 1.0);
 		}
 		float2 texel = uv.xy + (p - rect.xy) * ((uv.zw - uv.xy) / size);
+#ifdef GNUI_FS_NOYUV
+		float4 s = tex.sample(smp, texel / float2(tex.get_width(), tex.get_height()));
+#else
 		float4 s = mode == 2u && yuv.planes != 0u
 			? yuv_sample(texel, yuv, tex, tex1, tex2, smp)
 			: tex.sample(smp, texel / float2(tex.get_width(), tex.get_height()));
+#endif
 		// mode 3: a backdrop, its blurred region (uv: the texels the
 		// renderer put it at; backdrop_darwin.go), opaque; but along a fade
 		// from y = border to y = soft (set by the renderer), where the

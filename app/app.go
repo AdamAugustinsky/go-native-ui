@@ -235,6 +235,9 @@ type frameMeasure struct {
 	evT              int64 // platform time of the oldest input event behind the frame, 0 if none
 	cpu0, cpu1, cpu2 int64 // thread CPU ns: before BeginFrame, after BeginFrame, after ui.End
 	cpu3             int64 // after EndFrame
+	c0, c1, c2, c3   uint64 // probe: ffi.ProbeCalls at the same points
+	e0, e1           int64  // probe: Now around Encode
+	e2               int64  // probe: Now after EndFrame
 }
 
 // StartupReport is the startup timeline of Run (RunOptions.ExitFirst prints

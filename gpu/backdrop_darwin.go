@@ -338,6 +338,7 @@ func (r *Renderer) encodeBackdrop(cmdBuf objc.ID, target uintptr, w, h int, q *Q
 		u.fades, u.fade = 1, [2]float32{from, to}
 		inst.Border, inst.Soft = from, to
 	}
+	Probe.Backdrops++
 	r.backdropPass(cmdBuf, bd.tex[0], bd.down, objc.ID(target))
 	u.dir = [2]float32{1, 0}
 	r.backdropPass(cmdBuf, bd.tex[1], bd.blur, bd.tex[0])
@@ -351,6 +352,7 @@ func (r *Renderer) encodeBackdrop(cmdBuf objc.ID, target uintptr, w, h int, q *Q
 // backdropPass draws one of a backdrop's passes into dst, reading src.
 func (r *Renderer) backdropPass(cmdBuf, dst, pipe, src objc.ID) {
 	bd := &r.bd
+	Probe.Encoders++
 	objc.Send1(bd.color0, rsSetTexture, uintptr(dst))
 	enc := objc.Send1(cmdBuf, rsEncoder, uintptr(bd.rpd))
 	objc.Send1(enc, rsSetPipeline, uintptr(pipe))

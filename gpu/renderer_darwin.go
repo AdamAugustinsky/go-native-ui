@@ -349,11 +349,13 @@ func (r *Renderer) collect() {
 	for i := range r.slots {
 		s := &r.slots[i]
 		if s.ucb != 0 && objc.Send(s.ucb, rsStatus) >= 4 { // Completed, Error
+			probeGPU(s.ucb, &Probe.UCBSamples)
 			objc.Release(s.ucb)
 			s.ucb = 0
 			s.stageLen = 0
 		}
 		if s.cb != 0 && objc.Send(s.cb, rsStatus) >= 4 {
+			probeGPU(s.cb, &Probe.GPUSamples)
 			objc.Release(s.cb)
 			s.cb = 0
 			r.releaseLeases(s)
@@ -403,6 +405,8 @@ func (r *Renderer) Upload(t TextureID, x, y, w, h int, pixels []byte, stride int
 	}
 	// replaceRegion doesn't synchronise with the GPU: wait until frames
 	// already submitted have stopped sampling the texture.
+	Probe.Uploads++
+	Probe.UploadBytes += uint64(w * h * bpp)
 	r.waitSubmitted(i)
 	pinnedBytes = &pixels[0] // force the backing array onto the heap while C reads it
 	if stride%bpp == 0 {
@@ -458,6 +462,8 @@ func (r *Renderer) stage(t TextureID, plane uint8, x, y, w, h int, pixels []byte
 	if off+row*h > s.stageCap {
 		r.growStage(s, off+row*h)
 	}
+	Probe.Stages++
+	Probe.StageB += uint64(row * h)
 	dst := unsafe.Slice((*byte)(unsafe.Add(s.stageMem, off)), row*h)
 	for y := 0; y < h; y++ {
 		copy(dst[y*row:(y+1)*row], pixels[y*stride:])
@@ -490,6 +496,7 @@ func (r *Renderer) flushStaged(s *ringSlot) {
 	if len(s.copies) == 0 {
 		return
 	}
+	Probe.Flushes++
 	F := objc.F
 	pool := F.Call0(objc.PoolPush)
 	ucb := objc.Retain(objc.Send(r.queue, rsCommandBuf))
@@ -546,7 +553,10 @@ func (r *Renderer) waitSubmitted(i int) {
 		for _, cb := range [2]objc.ID{s.ucb, s.cb} {
 			if cb != 0 {
 				if st := objc.Send(cb, rsStatus); st >= 2 && st < 4 { // Committed, Scheduled
+					t0 := nowNs()
 					objc.Send(cb, rsWait)
+					Probe.Waits++
+					Probe.WaitNs += uint64(nowNs() - t0)
 				}
 			}
 		}
@@ -585,14 +595,19 @@ func (r *Renderer) retire(s *ringSlot) {
 		if st := objc.Send(s.ucb, rsStatus); st >= 2 && st < 4 {
 			objc.Send(s.ucb, rsWait)
 		}
+		probeGPU(s.ucb, &Probe.UCBSamples)
 		objc.Release(s.ucb)
 		s.ucb = 0
 		s.stageLen = 0
 	}
 	if s.cb != 0 {
 		if st := objc.Send(s.cb, rsStatus); st >= 2 && st < 4 { // Committed, Scheduled
+			t0 := nowNs()
 			objc.Send(s.cb, rsWait)
+			Probe.RetireWaits++
+			Probe.RetireWaitNs += uint64(nowNs() - t0)
 		}
+		probeGPU(s.cb, &Probe.GPUSamples)
 		objc.Release(s.cb)
 		s.cb = 0
 	}
@@ -648,6 +663,11 @@ func (r *Renderer) Encode(cmdBuf, target uintptr, width, height int, clear [4]fl
 	if len(quads) > 0 {
 		copy(unsafe.Slice((*Quad)(s.mem), len(quads)), quads)
 	}
+	Probe.Encodes++
+	probeMix(quads, width, height)
+	probeDump(quads, width, height)
+	Probe.Quads += uint64(len(quads))
+	Probe.InstBytes += uint64(len(quads) * quadSize)
 	s.cb = objc.Retain(objc.ID(cmdBuf))
 
 	viewportArg[0], viewportArg[1] = float32(width), float32(height)
@@ -726,6 +746,7 @@ func (r *Renderer) Encode(cmdBuf, target uintptr, width, height int, clear [4]fl
 // beginPass begins an encoder of the main pass with descriptor rpd (its
 // target set) and binds the quad pipeline and slot s's instances.
 func (r *Renderer) beginPass(cmdBuf uintptr, rpd objc.ID, s *ringSlot) objc.ID {
+	Probe.Encoders++
 	enc := objc.Send1(objc.ID(cmdBuf), rsEncoder, uintptr(rpd))
 	objc.Send1(enc, rsSetPipeline, uintptr(r.pipeline))
 	objc.Send3(enc, rsSetVBuffer, uintptr(s.buf), 0, 0)
@@ -765,6 +786,9 @@ func (r *Renderer) RenderToRGBA(width, height int, clear [4]float32, list *DrawL
 	pool := F.Call0(objc.PoolPush)
 	if r.offscreen == 0 || r.offW != width || r.offH != height {
 		r.newTarget(width, height)
+	}
+	if probeGPUTimeN > 0 {
+		probeGPUTime(r, width, height, clear, list)
 	}
 	cb := objc.Send(r.queue, rsCommandBuf)
 	r.Encode(uintptr(cb), uintptr(r.offscreen), width, height, clear, list)

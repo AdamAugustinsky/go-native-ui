@@ -297,6 +297,7 @@ func (b *benchRun) begin(a *App) {
 		runtime.ReadMemStats(&b.mem0)
 	}
 	b.cpu0, b.tcpu0 = sysinfo.CPUNs(), sysinfo.ThreadCPUNs()
+	probeBegin()
 	b.measuring = true
 }
 
@@ -321,6 +322,7 @@ func (b *benchRun) after(a *App) {
 		enc := (m.cpu1 - m.cpu0) + (m.cpu3 - m.cpu2)
 		b.sumBuild += build
 		b.sumEnc += enc
+		probeFrame(m)
 		b.frameCPU = sample(b.frameCPU, float64(build+enc)/1e3)
 		if b.prevStart != 0 {
 			b.intervals = sample(b.intervals, ms(m.start-b.prevStart))
@@ -360,6 +362,7 @@ func (b *benchRun) endWindow(a *App) {
 	}
 	runtime.ReadMemStats(&b.mem1)
 	cpu1, tcpu1 := sysinfo.CPUNs(), sysinfo.ThreadCPUNs()
+	probeEnd(b.measuredN, float64(tcpu1-b.tcpu0)/1e3/float64(max(b.measuredN, 1)), a)
 	b.measuring = false
 	if b.o.WindowEnd != nil {
 		b.o.WindowEnd()

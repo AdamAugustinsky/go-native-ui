@@ -8,6 +8,7 @@ import (
 
 	"gonativeui/internal/ffi"
 	"gonativeui/internal/objc"
+	"gonativeui/internal/sysinfo"
 )
 
 // The window registry (DECISIONS D30): every open window, in the order they
@@ -317,8 +318,38 @@ func pump(timeoutNs int64) {
 			w.exitLiveResize() // windowDidEndLiveResize: never arrived (or the resize ended inside a nested loop)
 		}
 	}
+	var pc0 int64
+	if ProbeOn {
+		pc0 = sysinfo.ThreadCPUNs()
+	}
+	first := true
 	for ev := appNextEvent(until); ev != 0; ev = appNextEvent(appObj.distantPast) {
+		if ProbeOn {
+			pc1 := sysinfo.ThreadCPUNs()
+			if first {
+				ProbeNextFirstNs += pc1 - pc0
+				ProbeNextFirstN++
+			} else {
+				ProbeNextDrainNs += pc1 - pc0
+				ProbeNextDrainN++
+			}
+			first = false
+			route(ev)
+			pc0 = sysinfo.ThreadCPUNs()
+			ProbeRouteNs += pc0 - pc1
+			continue
+		}
 		route(ev)
+	}
+	if ProbeOn {
+		pc1 := sysinfo.ThreadCPUNs()
+		if first {
+			ProbeNextFirstNs += pc1 - pc0
+			ProbeNextFirstN++
+		} else {
+			ProbeNextDrainNs += pc1 - pc0
+			ProbeNextDrainN++
+		}
 	}
 	for i := 0; i < reg.n; i++ {
 		w := reg.open[i]
@@ -474,6 +505,13 @@ func bury(obj objc.ID) {
 		graveyard = append(graveyard, obj)
 	}
 }
+
+// Throwaway perf probe.
+var (
+	ProbeOn                                                  bool
+	ProbeNextFirstNs, ProbeNextDrainNs, ProbeRouteNs         int64
+	ProbeNextFirstN, ProbeNextDrainN                         int64
+)
 
 // pumpStats count the pump's work, for a test's look at a loop that stopped
 // (DebugPumpState). Main thread.

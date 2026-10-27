@@ -265,9 +265,20 @@ func (f *Frame) push(v uintptr, size int) {
 
 // Call calls fn with the accumulated arguments and resets the cursors.
 func (f *Frame) Call(fn uintptr) *Frame {
+	ProbeCalls++
+	if f == ProbeMain {
+		ProbeMainCalls++
+	}
 	f.fn = fn
 	f.nfloat = uintptr(f.nf)
-	runtime_cgocall(callABI0, unsafe.Pointer(f))
+	if ProbeTimeOn && f == ProbeMain {
+		sel := f.ints[1]
+		t0 := probeNanotime()
+		runtime_cgocall(callABI0, unsafe.Pointer(f))
+		probeRecord(fn, sel, probeNanotime()-t0)
+	} else {
+		runtime_cgocall(callABI0, unsafe.Pointer(f))
+	}
 	f.ni, f.nf, f.nsb = 0, 0, 0
 	return f
 }
@@ -389,7 +400,10 @@ var (
 	cbTableABI0    uintptr // set in assembly
 )
 
-func cbDispatch(a *cbArgs) { handlers[a.index]((*CB)(a)) }
+func cbDispatch(a *cbArgs) { ProbeCBs++; handlers[a.index]((*CB)(a)) }
+
+// ProbeCalls and ProbeCBs count C calls and callbacks (perf survey probe, racy).
+var ProbeCalls, ProbeCBs, ProbeMainCalls uint64
 
 // NewCallback returns a C function pointer that runs h on the calling
 // thread, whichever thread C calls it on. Callbacks are never freed; register

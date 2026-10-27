@@ -3,6 +3,8 @@
 package gpu
 
 import (
+	"strings"
+	"os"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -183,7 +185,19 @@ const (
 // quadPipeline builds the quad pipeline (quadMSL, premultiplied blending
 // into BGRA8) on device, on frame fr: owned, or 0 and the step that failed.
 func quadPipeline(fr *ffi.Frame, device objc.ID, errOut *uintptr) (objc.ID, buildFail) {
-	lib := newLibrary(fr, device, quadMSL, errOut)
+	src := quadMSL
+	if probeClipGeom {
+		src = "#define GNUI_CLIPGEOM 1\n" + src
+	}
+	if d := os.Getenv("GNUI_MSLDEFS"); d != "" {
+		for _, x := range strings.Split(d, ",") {
+			src = "#define " + x + " 1\n" + src
+		}
+	}
+	if os.Getenv("GNUI_BADGEOM") != "" {
+		src = "#define GNUI_BADGEOM 1\n" + src
+	}
+	lib := newLibrary(fr, device, src, errOut)
 	if lib == 0 {
 		return 0, buildCompile
 	}
