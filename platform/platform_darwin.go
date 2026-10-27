@@ -28,8 +28,8 @@ type Native struct {
 	// NSView is the window's content NSView*, which the Metal layer is attached to.
 	NSView uintptr
 	// Transparent is set when the window has a backdrop or material regions
-	// (Options.Backdrop, Options.Materials): the Metal layer must be
-	// non-opaque, its pixels premultiplied.
+	// (Options.Backdrop, Options.Materials), or is a panel: the Metal layer
+	// must be non-opaque, its pixels premultiplied.
 	Transparent bool
 
 	w *Window // the window these are of (Window.Native); nil if made by hand
@@ -43,8 +43,10 @@ type Window struct {
 	nOut     int  // how many events that Wait handed out
 
 	app, win, view, link, wakeEv objc.ID
-	content                      objc.ID // the content view: view, or the container that holds the materials, view and the hosts (shell_darwin.go)
-	shell                                // the native shell: backdrop, materials, hosts (shell_darwin.go)
+	wc                           *winClass // win's class: windowKind, or panelKind for a panel
+	panel                        *Panel    // Options.Panel, copied; nil for an ordinary window (panel_darwin.go)
+	content                      objc.ID   // the content view: view, or the container that holds the materials, view and the hosts (shell_darwin.go)
+	shell                                  // the native shell: backdrop, materials, hosts (shell_darwin.go)
 	distantPast, distantFuture   objc.ID
 
 	wPt, hPt   float64
