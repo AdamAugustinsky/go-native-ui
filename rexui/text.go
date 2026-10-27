@@ -1,6 +1,7 @@
 package rexui
 
 import (
+	"gonativeui/text"
 	"gonativeui/theme"
 	"gonativeui/ui"
 	"gonativeui/widget/base"
@@ -62,6 +63,9 @@ type LabelOpts struct {
 	// Wrap breaks the text into lines at the width it is given (the parent's
 	// by default).
 	Wrap bool
+	// MonoPt, when set, sets the text in the monospaced face at MonoPt
+	// points on the style's line: Rex's metadata (times, sizes, paths).
+	MonoPt float32
 }
 
 // labelColor is o's colour: Label when none was set.
@@ -122,7 +126,11 @@ func labelStyle(k *base.Kit, o *LabelOpts) {
 	} else {
 		k.ApplySize(ui.TextSize(base.LabelSlack), ui.Px(st.Line))
 	}
-	c.NextFont(st.Font)
+	font := st.Font
+	if o.MonoPt > 0 {
+		font = k.TextSystem().Font(text.FontDesc{SizePt: o.MonoPt, Mono: true, Scale: k.Scale()})
+	}
+	c.NextFont(font)
 	c.NextTextColor(col)
 	c.NextAlign(k.TakeAlign(ui.AlignLeft))
 	c.NextRole(ui.RoleLabel)

@@ -1112,7 +1112,7 @@ func (c *Context) emitRichSel(l *gpu.DrawList, b *box, r *richRec, pv *text.Para
 	for _, q := range c.rects {
 		rr := [4]float32{snap(x0 + q[0]), snap(y0 + q[1]), snap(x0 + q[2]), snap(y0 + q[3])}
 		if rr[2] > rr[0] {
-			l.Add(gpu.Quad{Rect: rr, Clip: clip, Color: [4]uint32{col, col, col, col}})
+			l.Add(gpu.Quad{Rect: rr, Clip: clip, FadeX: c.emitFade, Color: [4]uint32{col, col, col, col}})
 		}
 	}
 }

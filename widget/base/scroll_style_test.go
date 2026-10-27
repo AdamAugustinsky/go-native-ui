@@ -75,3 +75,38 @@ func TestLegacyBarsBothAxes(t *testing.T) {
 		t.Fatalf("vertical overflow only: the content is %v × %v, horizontal bar %v; want 366 × 300, none", r[2]-r[0], r[3]-r[1], bars[0].On)
 	}
 }
+
+// A VList given VListBarRoom leaves a legacy bar's width at its right while
+// it overflows, as BeginScroll does, so its rows end before the bar drawn
+// over its outer box; with overlay bars it takes none.
+func TestVListLeavesRoomForALegacyBar(t *testing.T) {
+	var v VList
+	st, bars := &VListState{}, &ScrollState{}
+	ids := make([]uint64, 100)
+	for i := range ids {
+		ids[i] = uint64(i + 1)
+	}
+	st.Reset(ids)
+	g := newRig(t, 400, 300, 2, func(k *Kit) {
+		c := k.Context()
+		v = BeginVList(c, "rows", st, VListOpts{Estimate: 20, BarRoom: k.VListBarRoom("rows", bars)})
+		for i := v.First; i < v.Last; i++ {
+			v.Item(i)
+			c.NextSize(ui.Pct(1), ui.Px(40))
+			c.BoxKeyed(0, ui.HashString(c.ParentKey(), "row"), nil)
+			v.EndItem()
+		}
+		EndVList(&v)
+	})
+	g.scale = 2
+	body := func() float32 { r := g.c.Rect(v.Body); return r[2] - r[0] }
+	g.frames(3)
+	if w := body(); w != 400 {
+		t.Fatalf("overlay bars: the rows are %v wide, want 400", w)
+	}
+	pinScroller(g, theme.ScrollerLegacy)
+	g.frames(2)
+	if w := body(); w != 400-34 {
+		t.Fatalf("legacy bars: the rows are %v wide, want 366 beside a 34-px bar", w)
+	}
+}

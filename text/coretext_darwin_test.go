@@ -6,6 +6,7 @@ import (
 	"math"
 	"runtime"
 	"testing"
+	"weak"
 )
 
 func newSys(t *testing.T) *System {
@@ -526,4 +527,29 @@ func TestCoreTextClusters(t *testing.T) {
 			return s.Run(s.Shape(lf, []byte(str)))
 		},
 	})
+}
+
+// A closed System lets go of its CPU caches: the atlas pages its glyphs were
+// drawn into, and its shaped runs.
+func TestCloseReleasesTheCaches(t *testing.T) {
+	s, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := shapeStr(s, uiFont(s), "Hello")
+	s.Glyph(v.Faces[0], v.Glyphs[0], 0)
+	if s.Pages() == 0 {
+		t.Fatal("no atlas page after drawing a glyph")
+	}
+	page, runs := weak.Make(s.atlas.pages[0]), weak.Make(s.runs)
+	s.Close()
+	runtime.GC()
+	runtime.GC()
+	if page.Value() != nil || runs.Value() != nil {
+		t.Errorf("after Close: atlas page held %v, run cache held %v", page.Value() != nil, runs.Value() != nil)
+	}
+	if s.Pages() != 0 {
+		t.Errorf("a closed System reports %d atlas pages", s.Pages())
+	}
+	runtime.KeepAlive(s)
 }

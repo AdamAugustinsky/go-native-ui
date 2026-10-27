@@ -186,6 +186,21 @@ func (c *Context) NextPath(m *gpu.PathMask, p *gpu.Path) (w, h float32) {
 // NextRadius sets the same corner radius r (pixels) on all corners of the next box.
 func (c *Context) NextRadius(r float32) { c.sRadii.set([4]float32{r, r, r, r}) }
 
+// NextFadeEnd makes the next box's children fade out over its last w pixels
+// on the right, to nothing at its end: a strip that scrolls sideways fades
+// under whatever is behind it (glass included), which a gradient drawn over
+// it in a solid colour cannot do. It applies to what the children draw, not
+// to the box's own background.
+func (c *Context) NextFadeEnd(w float32) { c.nextFade = max(w, 0) }
+
+// SetFadeEnd is NextFadeEnd for box id, built this frame (a scroll view's
+// viewport, which the widget built).
+func (c *Context) SetFadeEnd(id ID, w float32) {
+	if id > 0 && int(id) < len(c.boxes) {
+		c.boxes[id].fadeEnd = max(w, 0)
+	}
+}
+
 // NextRadii sets the corner radii (pixels) of the next box: top-left, top-right, bottom-right, bottom-left.
 func (c *Context) NextRadii(tl, tr, br, bl float32) { c.sRadii.set([4]float32{tl, tr, br, bl}) }
 
@@ -376,3 +391,41 @@ func (c *Context) PopTint() { c.sTint.pop() }
 // FloatingX/FloatingY. Children of the root are positioned in window
 // coordinates.
 func (c *Context) NextPos(x, y float32) { c.nextPos, c.hasNextPos = [2]float32{x, y}, true }
+
+// NextAnchor makes the next box floating and pins it in its parent once
+// both sizes are known: at corner, edge or centre a, insetX and insetY pixels
+// in from the anchored edges (for a centred axis, an offset from the centre).
+// It is CSS's position: absolute with top/right/bottom/left; see Anchor.
+//
+//	c.NextAnchor(ui.AnchorBottomRight, e.Pt(12), e.Pt(12)) // a badge in the corner
+func (c *Context) NextAnchor(a Anchor, insetX, insetY float32) {
+	c.nextAnchor, c.nextInset = a, [2]float32{insetX, insetY}
+}
+
+// NextCenter centres the next box in its parent on both axes, floating, at
+// whatever size it takes: NextAnchor(AnchorCenter, 0, 0). An icon over a
+// round button, a spinner over an image, a play glyph over a video.
+func (c *Context) NextCenter() { c.NextAnchor(AnchorCenter, 0, 0) }
+
+// NextMinSize keeps the next box at least w by h pixels (0 on an axis: no
+// minimum): when its parent is too small it shrinks no further, as CSS's
+// min-width and min-height; it then overflows, and the layout audit says so.
+func (c *Context) NextMinSize(w, h float32) { c.nextLo = [2]float32{w, h} }
+
+// NextMaxSize keeps the next box at most w by h pixels (0 on an axis: no
+// maximum), whatever its size asks (a percentage, Grow, its children): CSS's
+// max-width and max-height. A readable column in a wide window:
+//
+//	c.NextMaxSize(e.Pt(680), 0)
+func (c *Context) NextMaxSize(w, h float32) { c.nextHi = [2]float32{w, h} }
+
+// NextAlignSelf places the next box across its parent's axis as a, in place
+// of the parent's NextCross for its children: CSS's align-self. One child at
+// the end of a row whose others are centred, without a wrapper box.
+func (c *Context) NextAlignSelf(a Cross) { c.nextSelf = a + 1 }
+
+// NextOffset moves the next box by (dx, dy) pixels from the place layout gives
+// it, with its children, and moves nothing else: CSS's position: relative
+// with left and top. For optical corrections (a play triangle a pixel right of
+// the centre), not for layout.
+func (c *Context) NextOffset(dx, dy float32) { c.nextNudge = [2]float32{dx, dy} }

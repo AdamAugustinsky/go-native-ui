@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strings"
 	"testing"
 
 	"gonativeui/internal/allocsite"
@@ -32,9 +33,12 @@ func switchPerFrame(v assertionSource) {
 	}
 }
 
-func TestAssertionCacheIsOurs(t *testing.T) {
+// The runtime builds an assertion's or a type switch's cache once in a while
+// on a miss, for its own speed: a one-off of the runtime, not the caller's
+// (a later gate window can catch it however long the warm-up).
+func TestAssertionCacheIsTheRuntimes(t *testing.T) {
 	if os.Getenv("GNUI_ASSERT_ALLOC_CHILD") == "" {
-		cmd := exec.Command(os.Args[0], "-test.run=^TestAssertionCacheIsOurs$")
+		cmd := exec.Command(os.Args[0], "-test.run=^TestAssertionCacheIsTheRuntimes$")
 		cmd.Env = append(os.Environ(), "GNUI_ASSERT_ALLOC_CHILD=1")
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("%v\n%s", err, out)
@@ -53,15 +57,14 @@ func TestAssertionCacheIsOurs(t *testing.T) {
 	}
 	runtime.GC()
 	after.Take()
-	foundAssert, foundSwitch := false, false
-	for _, site := range allocsite.Diff(&before, &after) {
-		if site.Class == allocsite.Ours && site.Objects > 0 {
-			foundAssert = foundAssert || site.Func == "gonativeui/internal/allocsite_test.assertPerFrame"
-			foundSwitch = foundSwitch || site.Func == "gonativeui/internal/allocsite_test.switchPerFrame"
-		}
+	sites := allocsite.Diff(&before, &after)
+	if n := allocsite.Objects(sites, allocsite.Ours); n != 0 {
+		var b strings.Builder
+		allocsite.Write(&b, sites)
+		t.Fatalf("assertion/switch caches charged to the caller:\n%s", b.String())
 	}
-	if !foundAssert || !foundSwitch {
-		t.Fatalf("assertion/switch cache not attributed to caller: %+v", allocsite.Diff(&before, &after))
+	if allocsite.Objects(sites, allocsite.Runtime) == 0 {
+		t.Fatal("no cache was built: the test no longer exercises it")
 	}
 }
 

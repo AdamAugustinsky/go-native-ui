@@ -331,6 +331,10 @@ type Stats struct {
 	// CPUBytes is the decoded pixels held in memory, and an estimate of what
 	// each animation keeps between frames (its file and its canvases).
 	CPUBytes int64
+	// SpareBytes is the free decode buffers kept for reuse. They count
+	// against the CPU budget with CPUBytes, and the cache keeps at most a
+	// quarter of the budget (16 MiB at most) of them.
+	SpareBytes int64
 	// Pages is the number of atlas pages.
 	Pages int
 	// Decodes and DecodeNs count the finished decodes and their worker time;
