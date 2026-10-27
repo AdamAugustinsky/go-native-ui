@@ -214,10 +214,13 @@ var (
 	// ErrInsecure means macOS refused plain http to this host (see "Plain http
 	// on macOS" in the package documentation).
 	ErrInsecure = errors.New("fetch: plain http refused by App Transport Security")
-	// ErrUnsupportedRequest is Do's error for a request it cannot make here
-	// yet: a method other than GET, a body, UploadProgress or AnyStatus,
-	// until N1 lands. It matches errors.ErrUnsupported.
-	ErrUnsupportedRequest = fmt.Errorf("fetch: methods other than GET and request bodies: %w", errors.ErrUnsupported)
+	// ErrUnsupportedRequest is Do's error for a request the systems' clients
+	// do not all make: a GET or HEAD with a body (NSURLSession refuses it).
+	// It matches errors.ErrUnsupported.
+	ErrUnsupportedRequest = fmt.Errorf("fetch: request not supported: %w", errors.ErrUnsupported)
+	// ErrBodyLength means Request.Body ended before Request.BodyLength
+	// bytes.
+	ErrBodyLength = errors.New("fetch: request body shorter than BodyLength")
 	// ErrBadMethod means Request.Method is not an HTTP method token.
 	ErrBadMethod = errors.New("fetch: not an HTTP method")
 )
@@ -243,6 +246,12 @@ func Get(ctx context.Context, rawURL string, w io.Writer, opt Options) (Response
 	if err != nil {
 		return Response{}, err
 	}
+	return run(ctx, u, &call{method: "GET", length: -1}, w, opt)
+}
+
+// run makes the call c to u: the checks and limits Get and Do share, then
+// the system's client.
+func run(ctx context.Context, u *url.URL, c *call, w io.Writer, opt Options) (Response, error) {
 	if opt.Proxy != nil {
 		if err := opt.Proxy.check(); err != nil {
 			return Response{}, err
@@ -257,12 +266,12 @@ func Get(ctx context.Context, rawURL string, w io.Writer, opt Options) (Response
 		return Response{}, wrap(u, err)
 	}
 	s := &sink{w: w, max: opt.MaxBytes, total: -1, progress: opt.Progress}
-	res, err := get(ctx, u, s, opt)
-	if err != nil && ctx.Err() != nil && !errors.Is(err, ErrTooLarge) {
+	res, err := do(ctx, u, c, s, opt)
+	if err != nil && ctx.Err() != nil && !errors.Is(err, ErrTooLarge) && !errors.Is(err, ErrBodyLength) && !c.bodyErr {
 		err = ctx.Err() // the transfer failed because we cancelled it
 	}
 	var se *StatusError
-	if err != nil && !errors.As(err, &se) && !errors.Is(err, ErrTooLarge) {
+	if err != nil && !errors.As(err, &se) && !errors.Is(err, ErrTooLarge) && !c.bodyErr {
 		err = wrap(u, err)
 	}
 	return res, err
@@ -288,7 +297,17 @@ func Bytes(ctx context.Context, rawURL string, limit int64, opt Options) ([]byte
 // arrives (nil w discards it). It returns when the body is complete, the
 // request fails, or ctx ends. A status outside 2xx is a *StatusError unless
 // opt.AnyStatus is set. Options.MaxBytes, Timeout, Progress, Headers and
-// Proxy mean what they mean for Get.
+// Proxy mean what they mean for Get; Response.Headers is filled.
+//
+// The request body is read on the calling goroutine, in pieces, as the
+// system takes them, so a file or a generated stream of any size is sent
+// in constant memory; UploadProgress follows it. An error from the body's
+// Read ends the request and is returned as it is.
+//
+// Redirects are followed: 301, 302 and 303 turn the request into a GET
+// without a body, as browsers do. A request with a body is not sent again,
+// so a 307 or 308 answer to one fails the request (a *StatusError when the
+// system hands the answer back, an error of the system's otherwise).
 func Do(ctx context.Context, req Request, w io.Writer, opt Options) (Response, error) {
 	m := req.Method
 	if m == "" {
@@ -297,16 +316,112 @@ func Do(ctx context.Context, req Request, w io.Writer, opt Options) (Response, e
 	if !methodToken(m) {
 		return Response{}, fmt.Errorf("%w: %q", ErrBadMethod, req.Method)
 	}
-	if _, err := parseURL(req.URL); err != nil {
+	u, err := parseURL(req.URL)
+	if err != nil {
 		return Response{}, err
 	}
 	if w == nil {
 		w = io.Discard
 	}
-	if m == "GET" && req.Body == nil && opt.UploadProgress == nil && !opt.AnyStatus {
-		return Get(ctx, req.URL, w, opt)
+	c := &call{method: m, headers: true, anyStatus: opt.AnyStatus, upload: opt.UploadProgress, length: -1}
+	if req.Body != nil {
+		if m == "GET" || m == "HEAD" {
+			return Response{}, fmt.Errorf("%w: a %s with a body", ErrUnsupportedRequest, m)
+		}
+		if req.BodyLength < -1 {
+			return Response{}, fmt.Errorf("fetch: BodyLength %d", req.BodyLength)
+		}
+		c.body, c.length = req.Body, req.BodyLength
 	}
-	return Response{}, ErrUnsupportedRequest // N1
+	return run(ctx, u, c, w, opt)
+}
+
+// A call is what one request asks of the system's client beyond a URL.
+type call struct {
+	method    string
+	body      io.Reader // nil: none
+	length    int64     // the body's length, -1 unknown (sent chunked)
+	headers   bool      // fill Response.Headers
+	anyStatus bool
+	upload    func(sent, total int64)
+
+	sent    int64 // body bytes handed to the system
+	bodyErr bool  // the request failed because the body's Read did
+}
+
+// hasBody reports whether the request carries a body (an empty one with a
+// known length of 0 included).
+func (c *call) hasBody() bool { return c.body != nil }
+
+// fill reads the next piece of the body into p: n > 0, or io.EOF once the
+// body is complete. A body that ends before its length is ErrBodyLength;
+// one longer than its length is read only up to it.
+func (c *call) fill(p []byte) (int, error) {
+	if c.length >= 0 {
+		rem := c.length - c.sent
+		if rem <= 0 {
+			return 0, io.EOF
+		}
+		if int64(len(p)) > rem {
+			p = p[:rem]
+		}
+	}
+	for empty := 0; ; empty++ {
+		n, err := c.body.Read(p)
+		switch {
+		case n > 0:
+			return n, nil
+		case err == io.EOF && c.length >= 0:
+			return 0, fmt.Errorf("%w: %d of %d bytes", ErrBodyLength, c.sent, c.length)
+		case err == io.EOF:
+			return 0, io.EOF
+		case err != nil:
+			c.bodyErr = true
+			return 0, err
+		case empty == 100:
+			c.bodyErr = true
+			return 0, io.ErrNoProgress
+		}
+	}
+}
+
+// advance records n body bytes taken by the system and reports progress.
+func (c *call) advance(n int) {
+	c.sent += int64(n)
+	if c.upload != nil {
+		c.upload(c.sent, c.length)
+	}
+}
+
+// accepts reports whether a response's body is delivered.
+func (c *call) accepts(status int) bool { return c.anyStatus || ok(status) }
+
+// addHeader adds a response header to h under its canonical name, joining
+// repeated ones with ", ".
+func addHeader(h map[string]string, name, value string) {
+	name = canonicalKey(name)
+	if old, ok := h[name]; ok {
+		value = old + ", " + value
+	}
+	h[name] = value
+}
+
+// canonicalKey is name with its first letter and each letter after a
+// hyphen upper case and the rest lower case ("content-type" is
+// "Content-Type"), as net/http writes header names.
+func canonicalKey(name string) string {
+	b := []byte(name)
+	upper := true
+	for i, c := range b {
+		switch {
+		case upper && 'a' <= c && c <= 'z':
+			b[i] = c - 'a' + 'A'
+		case !upper && 'A' <= c && c <= 'Z':
+			b[i] = c - 'A' + 'a'
+		}
+		upper = c == '-'
+	}
+	return string(b)
 }
 
 // methodToken reports whether m is an HTTP token (RFC 9110 §5.6.2).

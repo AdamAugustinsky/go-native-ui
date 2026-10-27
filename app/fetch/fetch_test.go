@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -313,6 +314,18 @@ func TestBadURL(t *testing.T) {
 	}
 }
 
+// The systems' clients reach HTTP proxies without TLS only (Linux's
+// net/http has the TLS kind).
+func TestHTTPSProxyUnsupported(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "windows" {
+		t.Skip("net/http has HTTPS proxies")
+	}
+	p := Proxy{Kind: ProxyHTTPS, Host: "127.0.0.1", Port: 8443}
+	if _, err := Get(context.Background(), "https://example.com/", io.Discard, Options{Proxy: &p}); !errors.Is(err, errors.ErrUnsupported) {
+		t.Errorf("error %v, want errors.ErrUnsupported", err)
+	}
+}
+
 func TestBadProxy(t *testing.T) {
 	for _, p := range []Proxy{{}, {Host: "h"}, {Host: "h", Port: 70000}, {Host: "h", Port: 1, Kind: 9}, {Host: "http://h", Port: 1}} {
 		if _, err := Get(context.Background(), "http://127.0.0.1:1/", io.Discard, Options{Proxy: &p}); err == nil {
@@ -598,7 +611,21 @@ func (s *socks5) serve(c net.Conn) {
 
 func (s *socks5) addr(t *testing.T) (string, int) { return hostPort(t, "http://"+s.l.Addr().String()) }
 
+// skipSOCKS5 skips on Windows, where WinHTTP has no SOCKS proxy, after
+// checking that the transfer says so.
+func skipSOCKS5(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		return
+	}
+	p := Proxy{Kind: ProxySOCKS5, Host: "127.0.0.1", Port: 1080}
+	if _, err := Get(context.Background(), phantom, io.Discard, Options{Proxy: &p}); !errors.Is(err, errors.ErrUnsupported) {
+		t.Errorf("SOCKS5 on Windows: %v, want errors.ErrUnsupported", err)
+	}
+	t.Skip("WinHTTP has no SOCKS proxy")
+}
+
 func TestSOCKS5Proxy(t *testing.T) {
+	skipSOCKS5(t)
 	srv := newSocks5(t, "", "")
 	host, port := srv.addr(t)
 	got, _, err := Bytes(context.Background(), phantom+":8080/socks", 1<<10, Options{Proxy: &Proxy{Kind: ProxySOCKS5, Host: host, Port: port}, Timeout: 10 * time.Second})
@@ -613,6 +640,7 @@ func TestSOCKS5Proxy(t *testing.T) {
 }
 
 func TestSOCKS5Credentials(t *testing.T) {
+	skipSOCKS5(t)
 	srv := newSocks5(t, "alice", "s3cret")
 	host, port := srv.addr(t)
 	p := Proxy{Kind: ProxySOCKS5, Host: host, Port: port, User: "alice", Password: "s3cret"}
