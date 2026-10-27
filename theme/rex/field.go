@@ -126,6 +126,68 @@ var (
 	darkModel  = model{stops: darkStops[:], fill: hx(darkGlass), alpha: darkAlpha, keep: 1 - darkAlpha, hueG: 1, hueB: 1}
 )
 
+// FieldStop is the field's colour at height Y in reference pixels (the
+// reference window is 1278 high at 2×; its top 90, the titlebar, keep their
+// size and the rest stretches with the window): Mid down the middle, Left
+// and Right at the window's edges, whose tints run in a few hundred
+// reference pixels. Colours are 0xRRGGBB.
+type FieldStop struct {
+	Y                float32
+	Mid, Left, Right uint32
+}
+
+// FieldColors recolour the window background of a theme made from Rex
+// (ThemeWithField): the light and the dark field's stops by height (nil
+// keeps Rex's), and the colour of the dark glass an unfocused surface is
+// made of (0 keeps Rex's; the light glass is white). Rex's fitted hue
+// balance of the light glass goes with its own field only.
+type FieldColors struct {
+	Light, Dark []FieldStop
+	DarkGlass   uint32
+}
+
+// look is one theme's field and glass, light and dark.
+type look struct {
+	light, dark model
+	stops       [2][nStops]bgStop // the stops of a recoloured field
+}
+
+var rexLook = &look{light: lightModel, dark: darkModel}
+
+// newLook is Rex's look recoloured by fc, its stops sampled at the mesh's
+// heights.
+func newLook(fc FieldColors) *look {
+	lk := &look{light: lightModel, dark: darkModel}
+	if len(fc.Light) > 0 {
+		lk.stops[0] = resample(fc.Light)
+		lk.light.stops = lk.stops[0][:]
+		lk.light.hueG, lk.light.hueB, lk.light.backdrop = 1, 1, false
+	}
+	if len(fc.Dark) > 0 {
+		lk.stops[1] = resample(fc.Dark)
+		lk.dark.stops = lk.stops[1][:]
+	}
+	if fc.DarkGlass != 0 {
+		lk.dark.fill = hx(fc.DarkGlass)
+	}
+	return lk
+}
+
+// resample interpolates stops at the heights of the mesh (lightStops').
+func resample(stops []FieldStop) [nStops]bgStop {
+	src := make([]bgStop, len(stops))
+	for i, s := range stops {
+		src[i] = bgStop{s.Y, hx(s.Mid), hx(s.Left), hx(s.Right)}
+	}
+	var out [nStops]bgStop
+	for i := range out {
+		y := lightStops[i].y
+		v, l, r := stopAt(src, y)
+		out[i] = bgStop{y, v, l, r}
+	}
+	return out
+}
+
 // edgeWeight is how much of the edge tint remains at distance d (reference
 // pixels) from a window edge: a fast fall-off near the edge plus a slow
 // linear one.
@@ -203,25 +265,25 @@ func (m *model) fillAt(refW, xRef, yRef float32) uint32 {
 }
 
 // fieldAt returns the field colour of the mix t of light and dark.
-func fieldAt(t, xRef, drRef, yRef float32) uint32 {
+func (lk *look) fieldAt(t, xRef, drRef, yRef float32) uint32 {
 	switch t {
 	case 0:
-		return lightModel.bgAt(xRef, drRef, yRef).rgba(255)
+		return lk.light.bgAt(xRef, drRef, yRef).rgba(255)
 	case 1:
-		return darkModel.bgAt(xRef, drRef, yRef).rgba(255)
+		return lk.dark.bgAt(xRef, drRef, yRef).rgba(255)
 	}
-	return theme.MixRGBA(lightModel.bgAt(xRef, drRef, yRef).rgba(255), darkModel.bgAt(xRef, drRef, yRef).rgba(255), t)
+	return theme.MixRGBA(lk.light.bgAt(xRef, drRef, yRef).rgba(255), lk.dark.bgAt(xRef, drRef, yRef).rgba(255), t)
 }
 
 // glassAt returns the unfocused glass colour of the mix t.
-func glassAt(t, refW, xRef, yRef float32) uint32 {
+func (lk *look) glassAt(t, refW, xRef, yRef float32) uint32 {
 	switch t {
 	case 0:
-		return lightModel.fillAt(refW, xRef, yRef)
+		return lk.light.fillAt(refW, xRef, yRef)
 	case 1:
-		return darkModel.fillAt(refW, xRef, yRef)
+		return lk.dark.fillAt(refW, xRef, yRef)
 	}
-	return theme.MixRGBA(lightModel.fillAt(refW, xRef, yRef), darkModel.fillAt(refW, xRef, yRef), t)
+	return theme.MixRGBA(lk.light.fillAt(refW, xRef, yRef), lk.dark.fillAt(refW, xRef, yRef), t)
 }
 
 const (
@@ -249,6 +311,15 @@ type Field struct {
 	nodesX, nodesY [maxNodesX]float32 // pixel positions of the mesh nodes
 	cells          [maxBGCells]bgCell
 	ncells         int
+
+	look *look // its colours, nil: Rex's
+}
+
+func (f *Field) colors() *look {
+	if f.look == nil {
+		return rexLook
+	}
+	return f.look
 }
 
 // yPx is the pixel position of a reference height: the top 90 reference
@@ -316,7 +387,7 @@ func (f *Field) Build(w, h int, k, t float32) {
 	var grid [nStops][17]uint32
 	for j := range lightStops {
 		for i := 0; i < nn; i++ {
-			grid[j][i] = fieldAt(t, nodes[i], refW-nodes[i], lightStops[j].y)
+			grid[j][i] = f.colors().fieldAt(t, nodes[i], refW-nodes[i], lightStops[j].y)
 		}
 	}
 	f.ncells = 0
@@ -341,7 +412,7 @@ func (f *Field) Build(w, h int, k, t float32) {
 
 // fillAt is the composited colour of an unfocused surface at reference (x, y).
 func (f *Field) fillAt(xRef, yRef float32) uint32 {
-	return glassAt(f.t, float32(f.w)/f.k, xRef, yRef)
+	return f.colors().glassAt(f.t, float32(f.w)/f.k, xRef, yRef)
 }
 
 // ---- unfocused surface fill mesh ----

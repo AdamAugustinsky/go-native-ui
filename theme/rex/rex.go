@@ -33,6 +33,18 @@ func Theme() *theme.Theme {
 	}
 }
 
+// ThemeWithField is Theme with its window background, and the glass of its
+// unfocused surfaces, in other colours (FieldColors).
+func ThemeWithField(fc FieldColors) *theme.Theme {
+	th := Theme()
+	lk := newLook(fc)
+	th.NewChrome = func() theme.Chrome { return &chrome{fld: Field{look: lk}} }
+	if fc.DarkGlass != 0 {
+		th.Roles[theme.Dark][theme.GlassTint] = theme.ColA(fc.DarkGlass, darkAlpha)
+	}
+	return th
+}
+
 // The palettes. Light is sampled from the reference (sRGB), and dark from
 // its dark screenshot: warm plum and umber inks with the same roles. Text is
 // at least 7:1 and TextMuted at least 4.5:1 against every surface and the
