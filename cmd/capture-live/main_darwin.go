@@ -47,6 +47,7 @@ import (
 	"gonativeui/internal/ffi"
 	"gonativeui/internal/objc"
 	"gonativeui/media/capture"
+	"gonativeui/platform"
 	"gonativeui/rexui"
 	"gonativeui/theme/rex"
 	"gonativeui/ui"
@@ -183,16 +184,23 @@ func finish(code int) {
 // view is the window: a spinner that changes every frame (window mode, so
 // the stream has frames), or a static label (display mode, so our own
 // drawing does not count against the CPU gate). It reads the recording's
-// clock in Build, as an app's bar does.
-type view struct{ k *widget.Kit }
+// clock in Build, as an app's bar does. It is a Rex window: its field, or
+// the glass under the field's scrim.
+type view struct {
+	k *widget.Kit
+	a *app.App
+}
 
 func (v *view) Init(a *app.App) error {
 	v.k = widget.NewKit(a.UI, a.Text, rex.Theme())
+	v.a = a
 	return nil
 }
 
 func (v *view) Build(c *ui.Context) {
 	v.k.Begin(c)
+	v.k.Theme().SetBackdrop(v.a.Win != nil && v.a.Win.Backdrop() != platform.BackdropNone)
+	v.k.BeginWindow()
 	rexui.Label(v.k.Kit, "media/capture live test", rexui.LabelOpts{Style: rexui.TextTitle1})
 	if !display {
 		rexui.Spinner(v.k.Kit, "Recording", rexui.SpinnerOpts{})
@@ -201,13 +209,14 @@ func (v *view) Build(c *ui.Context) {
 	if rec != nil {
 		_ = rec.Elapsed()
 	}
+	v.k.EndWindow()
 	v.k.End()
 }
 
 type live struct{ app.DefaultHandler }
 
 func (l *live) Start(a *app.App) error {
-	w, err := a.OpenWindow(app.WindowConfig{Title: "Capture live", Width: 480, Height: 320}, &view{})
+	w, err := a.OpenWindow(app.WindowConfig{Title: "Capture live", Width: 480, Height: 320, Backdrop: platform.BackdropGlass}, &view{})
 	if err != nil {
 		return err
 	}
