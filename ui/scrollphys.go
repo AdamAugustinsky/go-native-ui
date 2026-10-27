@@ -350,7 +350,10 @@ func (c *Context) scrollAt(e *ScrollEvent) (Key, ID) {
 
 // scrollPlain applies a wheel event, or precise deltas without a gesture, to
 // the box under it: hard-clamped, precise deltas at once and wheels smoothly
-// (the target moves), or at once too with WheelJumps.
+// (the target moves), or at once too with WheelJumps. An axis the box does
+// not scroll on goes to the nearest box around it that does (a vertical
+// wheel over a code block that scrolls sideways moves the transcript), as a
+// gesture's latch does.
 func (c *Context) scrollPlain(e *ScrollEvent) {
 	key, _ := c.scrollAt(e)
 	if key == 0 {
@@ -360,16 +363,23 @@ func (c *Context) scrollPlain(e *ScrollEvent) {
 	if !ok {
 		return
 	}
-	b := &c.boxes[v]
 	mul := float64(1)
 	if !e.Precise {
 		mul = float64(c.WheelStep)
 	}
 	delta := [2]float64{-float64(e.DX) * mul, -float64(e.DY) * mul}
 	for a := 0; a < 2; a++ {
-		if delta[a] == 0 || !b.scrollOn(a) {
+		if delta[a] == 0 {
 			continue
 		}
+		id := ID(v)
+		for id != 0 && !c.boxes[id].scrollOn(a) {
+			id = c.boxes[id].parent
+		}
+		if id == 0 || !c.boxes[id].scrollOn(a) {
+			continue
+		}
+		b := &c.boxes[id]
 		hi := math.Max(0, b.content[a]-float64(b.size[a]))
 		old := b.scrollTgt[a]
 		b.scrollTgt[a] = math.Min(math.Max(old+delta[a], 0), hi)
