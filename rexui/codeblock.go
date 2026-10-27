@@ -71,7 +71,7 @@ type CodeRecipe struct {
 var CodeLook = CodeRecipe{
 	Fill: OfAlpha(theme.Label, 0.035, 0.07), Rim: Of(theme.Separator), Radius: 8, PadX: 12, PadY: 9,
 	SizePt: 12, LineGap: 4,
-	Label: Of(theme.Label2), Gutter: Of(theme.Label3), LabelPt: 10, GutterPad: 12,
+	Label: Of(theme.Label2), Gutter: Of(theme.Label2), LabelPt: 10, GutterPad: 12,
 	Added: OfAlpha(theme.Green, 0.14, 0.22), Removed: OfAlpha(theme.Red, 0.13, 0.22),
 	Hunk: OfAlpha(theme.Label, 0.07, 0.11), Hit: OfAlpha(theme.Accent, 0.14, 0.24),
 }
