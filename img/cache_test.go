@@ -298,3 +298,42 @@ func TestRequestPollUseZeroAlloc(t *testing.T) {
 	}
 	t.Errorf("500 frames of 200 cached images: %d mallocs, %d bytes (sink %v)", mallocs, bytes, sink)
 }
+
+// The CPU budget is charged what a decode's buffer holds, which can be up to
+// twice its pixels when a larger free buffer is reused.
+func TestCPUBytesChargeTheBuffersCapacity(t *testing.T) {
+	c, _ := newTestCache(t, Options{CPUBytes: 64 << 20})
+	big, bigData := thumbs(t, 1, 64, 64)
+	small, smallData := thumbs(t, 1, 56, 56) // more than half of 64×64: the freed buffer fits it
+	settle(t, c, func() { c.Request(big[0], Bytes(bigData[0])) })
+	i := c.find(big[0])
+	held := c.bufs.size(c.ents[i].buf)
+	c.remove(i) // its buffer goes back to the pool, free
+	settle(t, c, func() { c.Request(small[0], Bytes(smallData[0])) })
+	j := c.find(small[0])
+	if got := c.bufs.size(c.ents[j].buf); got != held {
+		t.Fatalf("the smaller image took a %d-byte buffer, not the freed %d", got, held)
+	}
+	if s := c.Stats(); s.CPUBytes != held {
+		t.Fatalf("CPUBytes %d for a buffer of %d bytes (its pixels are %d)", s.CPUBytes, held, c.ents[j].cpuBytes())
+	}
+}
+
+// Free buffers kept for reuse are a share of the CPU budget and count
+// against it.
+func TestSpareBuffersCountAgainstTheCPUBudget(t *testing.T) {
+	const budget = 1 << 20
+	c, _ := newTestCache(t, Options{CPUBytes: budget})
+	if c.bufs.maxFree != budget/4 {
+		t.Fatalf("a %d-byte budget keeps %d spare bytes, want a quarter", budget, c.bufs.maxFree)
+	}
+	b := c.bufs.get(200<<10, c.fr)
+	c.bufs.put(b, c.fr)
+	c.cpuUsed = 900 << 10 // pixels held: the budget has 124 KiB left
+	c.trimCPU()
+	s := c.Stats()
+	c.cpuUsed = 0
+	if s.CPUBytes+s.SpareBytes > budget {
+		t.Fatalf("pixels %d and spare buffers %d exceed the budget of %d", s.CPUBytes, s.SpareBytes, budget)
+	}
+}

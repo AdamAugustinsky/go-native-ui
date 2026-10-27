@@ -45,6 +45,35 @@ func TestEmitOrderAndStyle(t *testing.T) {
 	}
 }
 
+// NextFadeEnd fades what a box's children draw over its last pixels, not
+// the box's own background, nor what is drawn after it.
+func TestEmitFadeEnd(t *testing.T) {
+	h := newHarness(t, 400, 300)
+	h.frame(func(c *Context) {
+		c.NextSize(Px(200), Px(40))
+		c.NextBG(0x101010FF)
+		c.NextFadeEnd(24)
+		c.Push(c.Box(DrawBackground|Clip, "row"))
+		c.NextSize(Px(300), Px(40))
+		c.NextBG(0xAABBCCFF)
+		c.Box(DrawBackground, "chips")
+		c.Pop()
+		c.NextSize(Px(10), Px(10))
+		c.NextBG(0x00FF00FF)
+		c.Box(DrawBackground, "after")
+	})
+	qs := quadsOf(h)
+	if len(qs) != 3 {
+		t.Fatalf("%d quads, want row, chips, after", len(qs))
+	}
+	if qs[0].FadeX != [2]float32{} || qs[2].FadeX != [2]float32{} {
+		t.Errorf("the row's own background or what follows fades: %v, %v", qs[0].FadeX, qs[2].FadeX)
+	}
+	if qs[1].FadeX != [2]float32{176, 200} {
+		t.Errorf("the chips fade over %v, want the row's last 24 px", qs[1].FadeX)
+	}
+}
+
 func TestEmitOneShotAndStacks(t *testing.T) {
 	h := newHarness(t, 400, 300)
 	h.frame(func(c *Context) {

@@ -325,8 +325,8 @@ func (a *anim) popFront() {
 // dropRing returns the decoded frames waiting in a's ring.
 func (c *Cache) dropRing(a *anim) {
 	for k := 0; k < a.nring; k++ {
+		c.cpuUsed -= c.bufs.size(a.ring[k].buf)
 		c.bufs.put(a.ring[k].buf, c.fr)
-		c.cpuUsed -= a.bytes
 		a.ring[k] = ringSlot{}
 	}
 	a.nring = 0
@@ -387,8 +387,8 @@ func (c *Cache) animTick(i int32, a *anim, p Present) (wake int64) {
 			break
 		}
 		if show >= 0 { // two frames were due: the first is skipped
+			c.cpuUsed -= c.bufs.size(show)
 			c.bufs.put(show, c.fr)
-			c.cpuUsed -= a.bytes
 		}
 		if a.stalled {
 			a.due, a.stalled = p.Now, false // it arrived late: its time starts now
@@ -428,8 +428,8 @@ func (c *Cache) showFrame(e *entry, buf int32) {
 		c.st.AnimUploads++
 	}
 	if e.buf >= 0 {
+		c.cpuUsed -= c.bufs.size(e.buf)
 		c.bufs.put(e.buf, c.fr)
-		c.cpuUsed -= e.cpuBytes()
 	}
 	e.buf = buf
 }
@@ -509,7 +509,7 @@ func (c *Cache) finishFrame(r *taskResult) {
 	}
 	a.ring[a.nring] = ringSlot{out.buf, out.seq}
 	a.nring++
-	c.cpuUsed += a.bytes
+	c.cpuUsed += c.bufs.size(out.buf)
 }
 
 // reclaimHidden returns the buffers of the frames waiting in the rings of

@@ -654,6 +654,31 @@ func TestWheelJumps(t *testing.T) {
 	}
 }
 
+// TestWheelScrollsASidewaysBox: a vertical wheel over a box that scrolls
+// only on X scrolls it on X; precise deltas keep their axis.
+func TestWheelScrollsASidewaysBox(t *testing.T) {
+	r := newGestureRig(t)
+	r.c.WheelJumps = true
+	r.build = func(c *Context) {
+		c.NextSize(Px(100), Px(100))
+		r.box = c.Open(ScrollX|Clip, "row")
+		c.NextSize(Px(1000), Px(100))
+		c.Box(0, "content")
+		c.Close()
+	}
+	r.step()
+	r.in.AddScroll(0, -2, false)
+	r.step()
+	if x, _ := r.c.Scroll(r.box); x != 96 {
+		t.Fatalf("at %v, want 96", x)
+	}
+	r.in.AddScroll(0, 5, true)
+	r.step()
+	if x, _ := r.c.Scroll(r.box); x != 96 {
+		t.Fatalf("precise Y moved the row to %v", x)
+	}
+}
+
 // TestOverflowKeepsTheGesture: a frame with more events than it holds, which
 // cross from the fingers to the momentum and from a wheel to precise deltas,
 // does what the same events do one a frame: the pull past the end is let go

@@ -395,6 +395,43 @@ func TestAuditCentre(t *testing.T) {
 	}
 }
 
+// An icon layered over a round button (a floating disc and a floating icon,
+// as a button that grows its disc on hover draws them) is checked as one in
+// its flow: placed by hand off the centre it is reported, NextCenter puts it
+// there.
+func TestAuditCentreSeesALayeredIcon(t *testing.T) {
+	h := newHarness(t, 800, 600)
+	button := func(c *Context, label string, centred bool) {
+		c.NextSize(Px(40), Px(40))
+		c.NextRole(RoleButton)
+		c.Open(Clickable, label)
+		c.NextFlags(FloatingX | FloatingY)
+		c.NextPos(0, 0)
+		c.NextSize(Px(40), Px(40))
+		c.NextRadius(20)
+		c.NextBG(0xFFFFFFFF)
+		c.Box(DrawBackground, "disc")
+		if centred {
+			c.NextCenter()
+		} else {
+			c.NextFlags(FloatingX | FloatingY)
+			c.NextPos(11, 11) // for a 18 px glyph; the real one is narrower
+		}
+		c.NextAxis(AxisX)
+		c.Open(0, "wrap")
+		c.Label("v")
+		c.Close()
+		c.Close()
+	}
+	m, fs := h.audit(func(c *Context) {
+		button(c, "by hand", false)
+		button(c, "centred", true)
+	})
+	if len(m[AuditCentre]) != 1 || m[AuditCentre][0].Delta != 5 { // an 8 px glyph from 11: 15 vs 20
+		t.Fatalf("findings %v, want one centre finding, 5 px, on the button placed by hand", fs)
+	}
+}
+
 func TestAuditAllocatesOnlyToReport(t *testing.T) {
 	h := newHarness(t, 800, 600)
 	build := func(c *Context) {

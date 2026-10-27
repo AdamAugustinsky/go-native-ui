@@ -16,10 +16,6 @@ type Uploader interface {
 
 var _ Uploader = (*gpu.Renderer)(nil)
 
-type atlasStager interface {
-	Stage(gpu.TextureID, int, int, int, int, []byte, int)
-}
-
 // AtlasSync registers u as the texture uploader of the text atlas and syncs
 // now: textures are created for atlas pages that have none and the regions
 // the shaper reports dirty are uploaded. End calls the same sync after
@@ -36,11 +32,10 @@ type atlasStager interface {
 // does not replace a live Context's renderer on resize or scale changes.
 func (c *Context) AtlasSync(u Uploader) {
 	if c.shared != nil && c.shared.up != u {
-		c.shared, c.up, c.stager = nil, nil, nil
+		c.shared, c.up = nil, nil
 	}
 	if c.up != u {
 		c.up = u
-		c.stager, _ = u.(atlasStager)
 		c.pageTex = c.pageTex[:0]
 		c.pageUploaded = c.pageUploaded[:0]
 	}
@@ -67,9 +62,6 @@ func NewSharedAtlas(u Uploader) *SharedAtlas { return &SharedAtlas{up: u} }
 // Reuse their existing s: a new SharedAtlas cannot restore pages whose dirty
 // regions were already consumed (see AtlasSync).
 func (c *Context) ShareAtlas(s *SharedAtlas) {
-	if c.up != s.up {
-		c.stager, _ = s.up.(atlasStager)
-	}
 	c.shared, c.up = s, s.up
 	c.pageTex = c.pageTex[:0]
 	c.pageUploaded = c.pageUploaded[:0]
@@ -104,6 +96,9 @@ func (c *Context) syncAtlas() {
 	if c.up == nil {
 		return
 	}
+	stager, canStage := c.up.(interface {
+		Stage(gpu.TextureID, int, int, int, int, []byte, int)
+	})
 	for p := 0; p < c.sh.Pages(); p++ {
 		t := c.pageTexture(p)
 		if x, y, w, h, pix, stride, ok := c.sh.Dirty(p); ok {
@@ -111,8 +106,8 @@ func (c *Context) syncAtlas() {
 			if c.shared != nil {
 				uploaded = c.shared.uploaded
 			}
-			if c.stager != nil && uploaded[p] {
-				c.stager.Stage(t, x, y, w, h, pix, stride)
+			if canStage && uploaded[p] {
+				stager.Stage(t, x, y, w, h, pix, stride)
 			} else {
 				c.up.Upload(t, x, y, w, h, pix, stride)
 			}
@@ -251,7 +246,7 @@ func scaleAlpha(c uint32, f float32) uint32 {
 
 // quad appends a cleared slot. Grow before taking its address: a reused slot
 // can hold any kind of quad from the previous frame.
-func quad(l *gpu.DrawList) *gpu.Quad {
+func (c *Context) quad(l *gpu.DrawList) *gpu.Quad {
 	n := len(l.Quads)
 	if n < cap(l.Quads) {
 		l.Quads = l.Quads[:n+1]
@@ -259,7 +254,7 @@ func quad(l *gpu.DrawList) *gpu.Quad {
 		l.Quads = append(l.Quads, gpu.Quad{})
 	}
 	q := &l.Quads[n]
-	*q = gpu.Quad{}
+	*q = gpu.Quad{FadeX: c.emitFade}
 	return q
 }
 
@@ -286,7 +281,7 @@ func (c *Context) emit(l *gpu.DrawList, id ID, clip [4]float32) {
 				continue
 			}
 			col := b.col(s.Color)
-			q := quad(l)
+			q := c.quad(l)
 			q.Rect, q.Clip, q.Color, q.Radii, q.Soft = sr, clip, [4]uint32{col, col, col, col}, b.radii, s.Sigma
 		}
 	}
@@ -294,7 +289,7 @@ func (c *Context) emit(l *gpu.DrawList, id ID, clip [4]float32) {
 	if sized && !empty(intersect(r, clip)) {
 		bdrop := int(b.bdrop) - 1
 		if bdrop >= 0 && bdrop < c.bd.n { // the blur, its background the fallback (NextBackdrop)
-			q := gpu.Quad{Rect: r, Clip: clip, Radii: b.radii}
+			q := gpu.Quad{Rect: r, Clip: clip, Radii: b.radii, FadeX: c.emitFade}
 			if b.flags&DrawBackground != 0 {
 				for i, bg := range b.bg {
 					q.Color[i] = b.col(bg)
@@ -322,7 +317,7 @@ func (c *Context) emit(l *gpu.DrawList, id ID, clip [4]float32) {
 				}
 			}
 			if draw {
-				q := quad(l)
+				q := c.quad(l)
 				q.Rect, q.Clip, q.Radii, q.Color = r, clip, b.radii, colors
 				if border > 0 {
 					q.Border, q.BorderColor = border, b.col(b.bd.Color)
@@ -351,6 +346,10 @@ func (c *Context) emit(l *gpu.DrawList, id ID, clip [4]float32) {
 			return
 		}
 	}
+	fade := c.emitFade
+	if b.fadeEnd > 0 {
+		c.emitFade = fadeOf(fade, [2]float32{r[2] - b.fadeEnd, r[2]})
+	}
 	for ch := b.first; ch != 0; ch = c.boxes[ch].next {
 		if c.boxes[ch].flags&floatingMask == 0 {
 			c.emit(l, ch, cclip)
@@ -361,6 +360,19 @@ func (c *Context) emit(l *gpu.DrawList, id ID, clip [4]float32) {
 			c.emit(l, ch, cclip)
 		}
 	}
+	c.emitFade = fade
+}
+
+// fadeOf is the fade of a quad under two (gpu.Quad.FadeX): the one that
+// ends first, either when the other is off.
+func fadeOf(a, b [2]float32) [2]float32 {
+	switch {
+	case a == [2]float32{}:
+		return b
+	case b == [2]float32{} || a[1] <= b[1]:
+		return a
+	}
+	return b
 }
 
 // emitSides draws the outline of b along some of its sides only (b.sides is
@@ -378,10 +390,10 @@ func (c *Context) emitSides(l *gpu.DrawList, b *box, clip [4]float32) {
 	hb := max(b.radii[3], b.radii[2], bw)
 	left, right := b.sides&SideLeft != 0, b.sides&SideRight != 0
 	if left {
-		strip(l, b, intersect([4]float32{r[0] - 1, r[1] - 1, r[0] + wl, r[3] + 1}, clip))
+		c.strip(l, b, intersect([4]float32{r[0] - 1, r[1] - 1, r[0] + wl, r[3] + 1}, clip))
 	}
 	if right {
-		strip(l, b, intersect([4]float32{r[2] - wr, r[1] - 1, r[2] + 1, r[3] + 1}, clip))
+		c.strip(l, b, intersect([4]float32{r[2] - wr, r[1] - 1, r[2] + 1, r[3] + 1}, clip))
 	}
 	xa, xb := r[0]-1, r[2]+1
 	if left {
@@ -391,18 +403,18 @@ func (c *Context) emitSides(l *gpu.DrawList, b *box, clip [4]float32) {
 		xb = r[2] - wr
 	}
 	if b.sides&SideTop != 0 {
-		strip(l, b, intersect([4]float32{xa, r[1] - 1, xb, r[1] + ht}, clip))
+		c.strip(l, b, intersect([4]float32{xa, r[1] - 1, xb, r[1] + ht}, clip))
 	}
 	if b.sides&SideBottom != 0 {
-		strip(l, b, intersect([4]float32{xa, r[3] - hb, xb, r[3] + 1}, clip))
+		c.strip(l, b, intersect([4]float32{xa, r[3] - hb, xb, r[3] + 1}, clip))
 	}
 }
 
-func strip(l *gpu.DrawList, b *box, clip [4]float32) {
+func (c *Context) strip(l *gpu.DrawList, b *box, clip [4]float32) {
 	if empty(clip) {
 		return
 	}
-	q := quad(l)
+	q := c.quad(l)
 	q.Rect, q.Clip, q.Radii = b.rect, clip, b.radii
 	q.Border, q.BorderColor = b.bd.Width, b.col(b.bd.Color)
 }
@@ -427,7 +439,7 @@ func (c *Context) emitImage(l *gpu.DrawList, b *box, clip [4]float32) {
 	if col&255 == 0 {
 		return
 	}
-	q := quad(l)
+	q := c.quad(l)
 	q.Rect, q.Clip, q.UV = [4]float32{x0, y0, x0 + w, y0 + h}, clip, uv
 	q.Color, q.Mode, q.Tex = [4]uint32{col, col, col, col}, b.img.Mode, b.img.Tex
 }
@@ -437,7 +449,7 @@ func (c *Context) overlay(l *gpu.DrawList, b *box, clip [4]float32, color uint32
 		return
 	}
 	col := b.col(scaleAlpha(color, t))
-	q := quad(l)
+	q := c.quad(l)
 	q.Rect, q.Clip, q.Color, q.Radii = b.rect, clip, [4]uint32{col, col, col, col}, b.radii
 }
 
@@ -637,7 +649,7 @@ func (c *Context) emitGlyphFade(l *gpu.DrawList, face text.FaceID, gid uint16, p
 	// Reused slots may have held shapes or shadows in the previous frame.
 	q.Radii = [4]float32{}
 	q.Border, q.BorderColor, q.Soft = 0, 0, 0
-	q.FadeX = fade
+	q.FadeX = fadeOf(fade, c.emitFade)
 	q.Mode = mode
 	q.Tex = tex
 	if c.finalPass {
