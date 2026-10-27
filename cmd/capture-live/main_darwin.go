@@ -23,7 +23,8 @@
 // ScreenCaptureKit API, so it never triggers the prompt; only -request
 // does. Output: one JSON object on stdout (the gnui run log) and in -o
 // (default $TMPDIR/gnui-capture-live.json); "pass" says whether the file
-// has the requested duration (±0.5 s), a video track and an audio track.
+// has the requested duration (±0.5 s), a video track and, when there is an
+// audio source (-display or -mic), an audio track.
 // Exit status 0 when it answered, 1 when it could not run.
 package main
 
@@ -341,7 +342,10 @@ func ended(took time.Duration) {
 		readBack(res.Path)
 	}
 	d := rep.Duration - seconds
-	rep.Pass = res.Err == nil && d > -0.5 && d < 0.5 && rep.VideoTracks >= 1 && rep.AudioTracks >= 1 && rep.Bytes > 0
+	// The window recorded is this app's own, and its audio is excluded, so a
+	// window recording has an audio source only with the microphone.
+	wantAudio := display || mic
+	rep.Pass = res.Err == nil && d > -0.5 && d < 0.5 && rep.VideoTracks >= 1 && (rep.AudioTracks >= 1 || !wantAudio) && rep.Bytes > 0
 	finish(0)
 }
 
