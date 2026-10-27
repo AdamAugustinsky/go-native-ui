@@ -63,6 +63,33 @@ func (DefaultHandler) Start(a *App) error { return nil }
 // Event is App.DefaultEvent.
 func (DefaultHandler) Event(a *App, e *Event) { a.DefaultEvent(e) }
 
+// EventHandler is optionally implemented by the Builder of a Run (and of
+// RunWith): it receives the app events as a Handler of Main does, the
+// services' among them (app/webview, app/hotkey, media/capture: EvService),
+// on the main thread, between frames, in order. Call a.DefaultEvent(e) for
+// the events it does not handle, as a Handler does: it answers the quit
+// request. Under Main the Handler receives them, not the windows' Builders.
+type EventHandler interface {
+	Event(a *App, e *Event)
+}
+
+// builderHandler is the Handler of a Run whose Builder has an Event.
+type builderHandler struct {
+	DefaultHandler
+	b EventHandler
+}
+
+func (h builderHandler) Event(a *App, e *Event) { h.b.Event(a, e) }
+
+// runHandler is the Handler of a Run of b: its Event (EventHandler), or
+// DefaultEvent.
+func runHandler(b Builder) Handler {
+	if eh, ok := b.(EventHandler); ok {
+		return builderHandler{b: eh}
+	}
+	return DefaultHandler{}
+}
+
 // CloseRequester is optionally implemented by a window's Builder: the window
 // asks it before it closes, when the user closes it and when the app is asked
 // to quit (DefaultEvent). False refuses.

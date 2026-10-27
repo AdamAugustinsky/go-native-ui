@@ -292,7 +292,10 @@ type RunResult struct {
 	InputToCommitMs Stats
 }
 
-// Run opens the window and runs the application until it is closed.
+// Run opens the window and runs the application until it is closed. The
+// app events (a web view's, a hotkey's, a dialog's answer: EvService and
+// the rest) go to b's Event if it has one (EventHandler), as they go to
+// Main's Handler, and to DefaultEvent otherwise.
 func Run(cfg Config, b Builder) error {
 	_, err := RunWith(cfg, b, RunOptions{})
 	return err
@@ -329,7 +332,7 @@ func openWindowed(cfg Config, b Builder, st *StartupReport, nativeMenus bool) (*
 	tEntry, age := platform.Now(), sysinfo.ProcessAgeNs()
 	gpu.Prewarm() // the renderer's shaders build while the window opens
 	a := newApp()
-	a.handler = DefaultHandler{}
+	a.handler = runHandler(b)
 	if err := a.bindApp(false); err != nil {
 		return nil, err
 	}

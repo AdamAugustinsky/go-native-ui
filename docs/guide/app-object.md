@@ -16,8 +16,10 @@ D30 (windows) and D37 (the app object) in [DECISIONS.md](../../DECISIONS.md).
 ## 1. Run and Main
 
 `Run(cfg, b)` is one window over the same object, with nothing to configure.
-When the program needs more than that, call `Main` with an `AppConfig` and a
-`Handler`:
+Its app events (a web view's, a hotkey's, a dialog's answer) go to the
+Builder's `Event(a, e)` if it has one (`app.EventHandler`), as they go to a
+Handler, and to `DefaultEvent` otherwise. When the program needs more than
+that, call `Main` with an `AppConfig` and a `Handler`:
 
 ```go cmd/windowsdemo/main.go
 	if err := app.Main(app.AppConfig{KeepRunning: *keep}, d); err != nil {
