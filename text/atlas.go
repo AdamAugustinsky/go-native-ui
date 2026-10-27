@@ -113,6 +113,9 @@ func (a *atlas) countKind(color bool) int {
 
 // reset clears every page and the glyph cache.
 func (a *atlas) reset() {
+	if PerfEnabled {
+		perf.AtlasReset++
+	}
 	for _, p := range a.pages {
 		clear(p.pix)
 		p.pack.reset()
@@ -162,6 +165,9 @@ func (a *atlas) alloc(color bool, w, h int) (pg, x, y int, ok bool) {
 // (x, y) and extends the page's dirty rectangle.
 func (a *atlas) write(pg, x, y, w, h int, src []byte, stride int) {
 	p := a.pages[pg]
+	if PerfEnabled {
+		perf.RasterBytes += uint64(w * h * p.bpp)
+	}
 	row := w * p.bpp
 	for r := 0; r < h; r++ {
 		d := ((y+r)*a.pageDim + x) * p.bpp
@@ -200,6 +206,11 @@ func (a *atlas) dirtyRegion(i int) (x, y, w, h int, pixels []byte, stride int, o
 
 func (a *atlas) clearDirty(i int) {
 	if i >= 0 && i < len(a.pages) {
+		if PerfEnabled && a.pages[i].dirty {
+			p := a.pages[i]
+			perf.Uploads++
+			perf.UploadBytes += uint64((p.dx1 - p.dx0) * (p.dy1 - p.dy0) * p.bpp)
+		}
 		a.pages[i].dirty = false
 	}
 }

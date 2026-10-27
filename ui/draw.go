@@ -149,6 +149,7 @@ func (c *Context) End(list *gpu.DrawList) {
 	}
 	c.keepRich()
 	c.syncAtlas()
+	text.PerfEnd()
 }
 
 // maxOverflowRepaints is how many frames in a row that dropped glyphs (atlas

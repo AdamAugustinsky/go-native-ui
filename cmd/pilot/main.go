@@ -331,7 +331,7 @@ func runBench(rows int, dir string, gate, allowUnpaced, sites bool, maxCPU float
 		b = pilot.NewSynthBench(rep.Rows)
 	}
 	defer b.Close()
-	b.UsePlatformClipboard()
+	// Survey: retain Bench's private clipboard; never overwrite the user's.
 	b.StartCounting()
 	opt := app.BenchOptions{Warm: warmFrames, PostGCWarm: postGCWarm, Windows: maxWindows, Timeout: timeout, Verbose: verbose}
 	opt.PrintAllocSites = sites

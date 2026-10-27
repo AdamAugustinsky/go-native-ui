@@ -607,6 +607,9 @@ func paraRTL(p *Para, start int) bool {
 
 // hashPara hashes everything that keys a layout.
 func hashPara(p *Para) uint64 {
+	if PerfEnabled {
+		perf.ParaHashBytes += uint64(len(p.Text))
+	}
 	h := hashBytes(p.Text, 0x9E3779B97F4A7C15)
 	for i := range p.Spans {
 		s := &p.Spans[i]

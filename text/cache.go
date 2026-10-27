@@ -99,6 +99,9 @@ func (c *runCache) reserve(runs, glyphs, textBytes int) {
 }
 
 func hashRun(font FontKey, b []byte) uint64 {
+	if PerfEnabled {
+		perf.RunHashBytes += uint64(len(b))
+	}
 	h := uint64(14695981039346656037) ^ uint64(font)
 	h *= 1099511628211
 	for _, c := range b {
@@ -115,12 +118,18 @@ func (c *runCache) lookup(font FontKey, b []byte) (RunRef, bool) {
 	for i := h & mask; ; i = (i + 1) & mask {
 		t := c.table[i]
 		if t == 0 {
+			if PerfEnabled {
+				perf.RunMiss++
+			}
 			return 0, false
 		}
 		e := &c.ents[t-1]
 		if e.hash == h && e.font == font && int(e.textLen) == len(b) &&
 			bytes.Equal(c.text[e.textOff:e.textOff+e.textLen], b) {
 			e.ref = true
+			if PerfEnabled {
+				perf.RunHit++
+			}
 			return RunRef(t), true
 		}
 	}
@@ -180,6 +189,9 @@ func (c *runCache) rehash(size int) {
 }
 
 func (c *runCache) evict() {
+	if PerfEnabled {
+		perf.RunEvict++
+	}
 	c.gen++
 	keepGlyphs, keepText, keep := 0, 0, 0
 	for i := range c.ents {

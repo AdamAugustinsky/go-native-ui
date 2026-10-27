@@ -401,6 +401,9 @@ func (s *System) Font(d FontDesc) FontKey {
 	pool := s.poolPush()
 	defer s.poolPop(pool)
 	pt := float64(d.SizePt)
+	if PerfEnabled {
+		perf.FontNew++
+	}
 	font := s.createFont(d, pt)
 	if font == 0 {
 		font = s.fr.Reset().Arg32(uiFontSystem).ArgF64(pt).Arg(0).Call(sy.ctFontCreateUIFontForLanguage).R0()
@@ -566,6 +569,9 @@ func (s *System) faceFor(font uintptr, scale float32) FaceID {
 		}
 	}
 	ps := s.fr.Call1(sy.ctFontCopyPostScriptName, font)
+	if PerfEnabled {
+		perf.FaceSlow++
+	}
 	s.name = s.name[:0]
 	if ps != 0 {
 		if s.fr.Reset().Arg(ps).ArgPtr(unsafe.Pointer(&s.cstr[0])).Arg(uintptr(len(s.cstr))).Arg32(encUTF8).Call(sy.cfStringGetCString).Bool() {
@@ -811,6 +817,9 @@ func (s *System) Glyph(face FaceID, gid uint16, sub uint8) GlyphEntry {
 	}
 	key := glyphKey(face, gid, sub|smooth<<smoothShift)
 	if e, ok := s.atlas.glyphs.lookup(key); ok {
+		if PerfEnabled {
+			perf.GlyphHit++
+		}
 		return e
 	}
 	e := s.rasterize(face, gid, sub, smooth)
@@ -903,6 +912,9 @@ func (s *System) AtlasGeneration() uint32 { return s.atlas.gen }
 // rasterize draws one glyph at quarter-pixel offset sub and, for outline
 // glyphs, with font-smoothing level smooth (SmoothLevel; 0 is none).
 func (s *System) rasterize(face FaceID, gid uint16, sub, smooth uint8) GlyphEntry {
+	if PerfEnabled {
+		perf.Raster++
+	}
 	pool := s.poolPush()
 	defer s.poolPop(pool)
 	fc := &s.faces[face]
@@ -1027,6 +1039,8 @@ func (s *System) ClearDirty(p int) { s.atlas.clearDirty(p) }
 // Close releases every CoreText/CoreGraphics object. The System must not be
 // used afterwards.
 func (s *System) Close() {
+	perfMemory(s)
+	defer perfDump()
 	if s.closed {
 		return
 	}

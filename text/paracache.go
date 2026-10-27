@@ -291,6 +291,9 @@ func (c *paraCache) reserve(b ParaBudget, declare bool) bool {
 // lookup returns the cached layout of p (hash h). It does not allocate.
 func (c *paraCache) lookup(p *Para, h uint64) (ParaRef, bool) {
 	if c.overOK && c.over.matches(&c.overE, p, h) {
+		if PerfEnabled {
+			perf.ParaHit++
+		}
 		c.hits++
 		c.overE.ref, c.overAge = true, 0
 		return overRef, true
@@ -299,10 +302,16 @@ func (c *paraCache) lookup(p *Para, h uint64) (ParaRef, bool) {
 	for i := h & mask; ; i = (i + 1) & mask {
 		t := c.table[i]
 		if t == 0 {
+			if PerfEnabled {
+				perf.ParaMiss++
+			}
 			c.misses++
 			return 0, false
 		}
 		if e := &c.ents[t-1]; c.slabs.matches(e, p, h) {
+			if PerfEnabled {
+				perf.ParaHit++
+			}
 			e.ref = true
 			c.hits++
 			return ParaRef(t), true
@@ -394,6 +403,9 @@ func (c *paraCache) releaseOver() {
 }
 
 func (c *paraCache) evict() {
+	if PerfEnabled {
+		perf.ParaEvict++
+	}
 	if c.overOK {
 		if !c.overE.ref {
 			c.releaseOver()
