@@ -169,7 +169,11 @@ func (p *panel) Build(c *ui.Context) {
 	p.shown = true
 	k := p.k
 	k.Begin(c)
+	// The material is the panel's field (rex.md §2); a square field or scrim
+	// would square the panel's corners, so only -noglass paints its shape.
+	k.Theme().SetBackdrop(p.glass && p.a.Win != nil && p.a.Win.Backdrop() != platform.BackdropNone)
 	if !p.glass {
+		c.NextFlags(ui.DrawBackground) // a Row or Column draws no background of its own
 		c.NextBG(k.Theme().Role(theme.Window))
 		c.NextRadius(p.radius)
 	}
@@ -187,15 +191,17 @@ func (p *panel) Build(c *ui.Context) {
 		for _, r := range results {
 			rexui.Label(k, r, rexui.LabelOpts{Style: rexui.TextHeadline})
 		}
-		k.Spacer()
-		rexui.Label(k, p.d.hint(), rexui.LabelOpts{Style: rexui.TextFootnote, Color: rexui.Tint{Role: theme.Label2}})
+		c.NextSize(ui.Pct(1), ui.Grow(1)) // the hint at the bottom
+		c.Box(0, "spacer")
+		rexui.Label(k, p.d.hint(), rexui.LabelOpts{Style: rexui.TextFootnote, Color: rexui.Of(theme.Label2), MonoPt: 10})
 		k.EndColumn()
 	} else {
 		k.NextPadding(18, 0, 8, 0)
 		k.NextGap(10)
 		k.Row("bar")
-		rexui.Label(k, "● Recording  0:42", rexui.LabelOpts{Style: rexui.TextHeadline})
-		k.Spacer()
+		rexui.Label(k, "● Recording", rexui.LabelOpts{Style: rexui.TextHeadline})
+		k.NextWidth(ui.Grow(1)) // the time takes the room, Stop sits at the end
+		rexui.Label(k, "0:42", rexui.LabelOpts{Style: rexui.TextHeadline, Color: rexui.Of(theme.Label2), MonoPt: 12})
 		if rexui.Button(k, "Stop", rexui.ButtonOpts{}).Clicked {
 			p.a.Quit()
 		}
