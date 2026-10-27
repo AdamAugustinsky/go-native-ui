@@ -56,12 +56,14 @@ type CodeRecipe struct {
 	// SizePt is the code's type size and LineGap the space added to the mono
 	// font's line height, in points.
 	SizePt, LineGap float32
-	// Label is the colour of the header's language label; Gutter of the line
-	// numbers and GutterPad the space after them, in points.
-	Label, Gutter Tint
-	GutterPad     float32
+	// Label is the colour of the header's language label and LabelPt its
+	// monospaced size (Rex's metadata, LabelOpts.MonoPt); Gutter is the colour
+	// of the line numbers and GutterPad the space after them, in points.
+	Label, Gutter      Tint
+	LabelPt, GutterPad float32
 	// Added, Removed, Hunk and Hit are the bands behind added, removed and
-	// hunk lines and the highlighted line.
+	// hunk lines and the highlighted line, which is a quiet tint of the
+	// accent (Rex's 14 % light, 24 % dark).
 	Added, Removed, Hunk, Hit Tint
 }
 
@@ -69,9 +71,9 @@ type CodeRecipe struct {
 var CodeLook = CodeRecipe{
 	Fill: OfAlpha(theme.Label, 0.035, 0.07), Rim: Of(theme.Separator), Radius: 8, PadX: 12, PadY: 9,
 	SizePt: 12, LineGap: 4,
-	Label: Of(theme.Label2), Gutter: Of(theme.Label3), GutterPad: 12,
+	Label: Of(theme.Label2), Gutter: Of(theme.Label3), LabelPt: 10, GutterPad: 12,
 	Added: OfAlpha(theme.Green, 0.14, 0.22), Removed: OfAlpha(theme.Red, 0.13, 0.22),
-	Hunk: OfAlpha(theme.Blue, 0.09, 0.16), Hit: OfAlpha(theme.FindHighlight, 0.45, 0.35),
+	Hunk: OfAlpha(theme.Blue, 0.09, 0.16), Hit: OfAlpha(theme.Accent, 0.14, 0.24),
 }
 
 // CodeColor is the colour of a highlight role on the Rex code palette (the
@@ -180,7 +182,6 @@ func CodeBlock(k *base.Kit, key ui.Key, src []byte, o CodeOpts) CodeSignal {
 	if !o.NoHeader {
 		c.NextSize(ui.Pct(1), ui.Children(1))
 		c.NextAxis(ui.AxisX)
-		c.NextJustify(ui.JustifySpaceBetween)
 		c.NextCross(ui.CrossCenter)
 		c.NextPadding(pt(sc, rc.PadX), pt(sc, 3), pt(sc, 4), 0)
 		c.Push(c.BoxKeyed(0, ui.KeyN(key, 1), nil))
@@ -188,9 +189,13 @@ func CodeBlock(k *base.Kit, key ui.Key, src []byte, o CodeOpts) CodeSignal {
 		if label == "" && o.Lang != highlight.Plain {
 			label = o.Lang.String()
 		}
+		// the label takes the room the Copy button leaves (fading if it is
+		// longer), so the button sits at the end
 		if label != "" {
-			Label(k, label, LabelOpts{Style: TextCaption, Color: rc.Label})
+			k.NextWidth(ui.Grow(1))
+			Label(k, label, LabelOpts{Style: TextCaption, Color: rc.Label, MonoPt: rc.LabelPt})
 		} else {
+			c.NextSize(ui.Grow(1), ui.Px(0))
 			c.Box(0, "lang")
 		}
 		if Button(k, "Copy", ButtonOpts{Variant: ButtonPlain, Size: theme.SizeSmall}).Clicked {
