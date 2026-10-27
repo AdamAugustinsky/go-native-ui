@@ -370,6 +370,7 @@ On both OSes, the app's own audio is excluded from the system-audio track (`excl
 
 - **T1. `gnui package -target windows`** (D77): the `.syso` writer, `-H windowsgui`, signing hooks, the zip; `gnui.json` gains `windows` (publisher, AUMID override) fields. *Tests:* the resources read back from the built file (`FindResourceW` on Windows, our PE reader elsewhere); the manifest's DPI setting effective (`GetAwarenessFromDpiAwarenessContext`). *Sonnet.* M.
 - **T2. The agent bridge on Windows.** `inspectwire.Listen` on a named pipe with a user-only DACL (as `app/instance`'s pipe is), so `gnui inspect` drives an app on the VM over SSH: `tree`, `do`, and `shot` (a WGC capture of the window, M2's code). *Sonnet.* S–M.
+- **T4. The first Developer ID release, end to end, on the MacBook.** `gnui package -identity "Developer ID Application: A3 Direct Solutions LLP (JPXN94NG33)" -notarize -notary-profile a3-notary -dmg -zip` on a3-kb, then a3-app (whose bundle nests libghostty-vt). `spctl -a -vv -t exec` must say "Notarized Developer ID", `xcrun stapler validate` must pass on the app and the DMG, `codesign -d -r-` must be keyed on the team, `selfupdate.Supported()` must say yes, and the packaged a3-app's terminal must load libghostty-vt under the hardened runtime. Then turn `docs/guide/packaging.md` §5 from "untested" into the tested procedure, and make `gnui doctor` check that a `-notary-profile` exists. It needs the MacBook prerequisites under "What needs you". *Opus* (first contact with Apple's service). S.
 - **T3. `tools/winvm`**: cross-compile on the Mac mini, copy to the VM over SSH, run a test or an app with the bridge, fetch results and captures; `docs/measurements/phase8-windows.md` and `phase8-macos.md` filled from it. *Sonnet.* S.
 
 ## Budgets
@@ -464,8 +465,12 @@ wave 4   H2 WebView2 (after W3)   S2 (only if asked)
 - **D63** (Linux waits) and the rest of D66–D78, at review.
 - **The Windows VM** on the a3-box, and a Windows licence after the 90-day evaluation.
 - **A Windows PC for an afternoon** per Windows checkpoint, for gated numbers and the IME, voice typing and microphone checks.
-- **A Windows code-signing identity** (an OV certificate, or Azure Trusted Signing): SmartScreen reputation for first downloads, and the same-signer update rule (D76). Until then both apps update on the unsigned path.
-- **The Apple Developer ID** still missing since phase 6: notarisation, and D61's same-signer updates for real releases of both apps.
+- **Azure Trusted Signing** for Windows: **not yet obtained.** It gives SmartScreen reputation for first downloads and the same-signer update rule (D76). Until it exists, Windows builds stay on CI and are not released (decision above). T1's hook then calls `jsign --storetype TRUSTEDSIGNING` (or `signtool` with the Trusted Signing dlib on a Windows runner).
+- **The Apple Developer ID: issued (2026-10-27).** `Developer ID Application: A3 Direct Solutions LLP (JPXN94NG33)`, valid until 2027-11-26. The signer is A3 Direct Solutions LLP, not "A3 Lab". It and its private key are in the **MacBook's** login keychain only (a test executable was signed and verified there); the Mac mini does not have it. **The key is not exported or moved without Adam**, so release packaging runs on the MacBook. Still needed there before T4:
+  - Go 1.27 and Bun. Neither is installed (checked over SSH; `notarytool` 1.1.3 is).
+  - A notarytool profile `a3-notary`, from an App Store Connect API key (recommended) or an Apple ID with an app-specific password. Adam creates it.
+  - Keychain access for the signing session. Over SSH the login keychain refuses ("User interaction is not allowed"), so either Adam runs releases in a Terminal on the MacBook, or Adam approves opening the key to `codesign` (`security set-key-partition-list`).
+  - Renewal before 2027-11-26. Timestamped releases stay valid, and a renewed certificate from the same team keeps the designated requirement, so D61's updates continue.
 - **One-time grants** on the Mac mini for the `gnui-dev` identity: Screen Recording and Microphone (P9, M1).
 
 ## Risks
@@ -488,5 +493,5 @@ wave 4   H2 WebView2 (after W3)   S2 (only if asked)
 1. ~~a3-app's browser session~~ **Settled at reconciliation (2026-10-27):** a3-app keeps parity with Electron's `persist:a3-browser` and uses a named persistent profile, isolated from the app. The framework default stays non-persistent.
 2. **Windows 10:** a3-kb's .NET updater will push the Go exe to every installed copy, Windows 10 ones included, so dropping 10 needs a manifest gate there. support it (toasts, capture and WebView2 differ there; corners are square), or Windows 11 only? The framework's floor is Windows 10 (D1); a3-kb's C# app targets 10 2004+.
 3. **Linux** after this phase, or UIA first?
-4. **Signing on Windows:** an OV certificate or Azure Trusted Signing, and under which entity (A3 Lab)?
+4. ~~**Signing on Windows**~~: decided as Azure Trusted Signing, not yet obtained. The Apple certificate's entity is A3 Direct Solutions LLP, so Trusted Signing's identity validation would presumably use the same entity. Adam confirms that when enrolling.
 5. **The VM:** may agents create it on the a3-box and use the evaluation licence?
