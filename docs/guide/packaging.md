@@ -62,6 +62,7 @@ version, a minimum system and a login agent.
 | `icon` | a square PNG, 1024 px recommended, made into an `.icns` | none |
 | `minimumSystem` | `LSMinimumSystemVersion` | `14.0` |
 | `resources`, `frameworks` | files copied into `Contents/Resources` and `Contents/Frameworks` (and signed, nested items first) | none |
+| `nativeLibs` | per-platform library directories (`<dir>/darwin-arm64/*.dylib`, as `tools/libghostty` lays them out): copied into `Contents/Frameworks`, signed with the app, licence into `Contents/Resources/Licenses` | none |
 | `urlSchemes`, `documentTypes`, `exportedTypes` | the URLs and documents the app opens, which arrive as `EvOpenURLs` and `EvOpenFiles` | none |
 | `usage` | the `NS…UsageDescription` texts that the system shows when asking for the camera, microphone, location… | none |
 | `entitlements` | written to a generated entitlements plist and applied to the main bundle | none |

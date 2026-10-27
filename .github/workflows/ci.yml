@@ -156,6 +156,24 @@ jobs:
           fi
           exit "$status"
           EOF
+      - name: libghostty-vt cache (D74; artifacts are built, never committed)
+        uses: actions/cache@v4
+        with:
+          path: .cache/libghostty-vt
+          key: libghostty-vt-${{ hashFiles('internal/ghosttyvt/ghosttyvt.go', 'tools/libghostty/*.go') }}-darwin-arm64
+      - name: libghostty-vt (Zig 0.17.0 and Ghostty at the pinned commit)
+        run: |
+          if ! go run ./tools/libghostty -check -targets darwin/arm64; then
+            commit=$(go run ./tools/libghostty -print-commit)
+            curl -sSfL -o "$RUNNER_TEMP/zig.tar.xz" https://ziglang.org/download/0.17.0/zig-aarch64-macos-0.17.0.tar.xz
+            echo "b607e9b9234790a008116ae5bdb71c6243b84b9fb42a53a9e70fde41c06c536a  $RUNNER_TEMP/zig.tar.xz" | shasum -a 256 -c -
+            tar -xf "$RUNNER_TEMP/zig.tar.xz" -C "$RUNNER_TEMP"
+            git init -q "$RUNNER_TEMP/ghostty"
+            git -C "$RUNNER_TEMP/ghostty" fetch -q --depth 1 https://github.com/ghostty-org/ghostty "$commit"
+            git -C "$RUNNER_TEMP/ghostty" checkout -q FETCH_HEAD
+            go run ./tools/libghostty -src "$RUNNER_TEMP/ghostty" -zig "$RUNNER_TEMP/zig-aarch64-macos-0.17.0/zig" -targets darwin/arm64
+          fi
+          echo "GNUI_REQUIRE_LIBGHOSTTY=1" >> "$GITHUB_ENV"
       - name: test (arm64)
         run: |
           GNUI_FS_REPORT=$RUNNER_TEMP/fs-report.txt go test -count=1 -skip "$QUARANTINE" $(go list $PKGS | grep -v -E "$PKGS_EXCLUDE")

@@ -36,7 +36,9 @@
 //
 //   - No callbacks. A Go function is never passed to C, and a library that
 //     calls back into Go is not supported.
-//   - No structs by value, as arguments or results. Pass a pointer.
+//   - Structs by value as arguments only, and only of integers, pointers
+//     and bools ([Call.Struct], which applies each ABI's rule), plus a pair
+//     of floats ([Call.Float32x2]). No struct results: pass a pointer.
 //   - No variadic functions (printf-style "..."): their conventions differ.
 //   - Integer and pointer arguments travel in 8 registers on arm64 and 6 on
 //     amd64, float arguments in 8; up to 12 more arguments of any kind go on
@@ -96,8 +98,14 @@
 //
 // # Platforms
 //
-// macOS on Apple silicon (arm64), and Linux on arm64 and amd64. On other
-// systems, Windows and Intel Macs included, [Open] returns [ErrUnsupported].
+// macOS on Apple silicon (arm64), Linux on arm64 and amd64, and Windows on
+// amd64 and arm64. On Windows a call is the standard library's
+// syscall.SyscallN (D2: no x/sys): [Open] is LoadLibraryExW with
+// LOAD_WITH_ALTERED_SEARCH_PATH, so a DLL beside the executable finds its
+// dependencies beside itself. Float arguments and results work on amd64;
+// on arm64 a call with a float argument panics in [Call.Do], and float
+// results read as 0. On other systems, Intel Macs included, [Open] returns
+// [ErrUnsupported].
 //
 // # Lifetime
 //
