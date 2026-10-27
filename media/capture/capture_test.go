@@ -9,19 +9,11 @@ import (
 	"gonativeui/platform"
 )
 
-// TestContract is the wave-0 behaviour: every entry point is unsupported
-// until M1 and M2, and the typed errors stay distinct.
-func TestContract(t *testing.T) {
-	if _, err := capture.Pick(nil, capture.Options{}); !errors.Is(err, errors.ErrUnsupported) {
-		t.Fatalf("Pick = %v", err)
-	}
-	if _, err := capture.Start(capture.Target{Kind: capture.Display}, capture.Options{Microphone: true}); !errors.Is(err, errors.ErrUnsupported) {
-		t.Fatalf("Start = %v", err)
-	}
-	if _, err := capture.Targets(capture.Window); !errors.Is(err, errors.ErrUnsupported) {
-		t.Fatalf("Targets = %v", err)
-	}
-	typed := []error{capture.ErrPermissionDenied, capture.ErrPickerCancelled, capture.ErrNoEncoder, capture.ErrDiskFull, capture.ErrBusy, capture.ErrTargetGone}
+// TestTypedErrors: the typed errors stay distinct, and none is
+// ErrUnsupported.
+func TestTypedErrors(t *testing.T) {
+	typed := []error{capture.ErrPermissionDenied, capture.ErrPickerCancelled, capture.ErrNoEncoder, capture.ErrDiskFull,
+		capture.ErrBusy, capture.ErrTargetGone, capture.ErrNotRecording}
 	for i, a := range typed {
 		if errors.Is(a, errors.ErrUnsupported) {
 			t.Errorf("%v matches ErrUnsupported", a)
@@ -35,7 +27,7 @@ func TestContract(t *testing.T) {
 }
 
 func TestEventOf(t *testing.T) {
-	ev, ok := capture.EventOf(&app.Event{Kind: app.EvService, Source: platform.SourceCapture, ID: 4, A: int64(capture.Ended)})
+	ev, ok := capture.EventOf(&app.Event{Kind: app.EvService, Source: platform.SourceCapture, ID: 99, A: int64(capture.Ended), B: 4})
 	if !ok || ev.Kind != capture.Ended || ev.Recording != 4 {
 		t.Fatalf("EventOf = %+v %v", ev, ok)
 	}
