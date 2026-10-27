@@ -171,6 +171,58 @@ type Resolved struct {
 	materials [NumMaterials]MaterialSpec
 }
 
+// SetAccent makes the theme's accent light in light mode and dark in dark,
+// whatever the system's (SystemAccent false): a brand's colour. It sets the
+// palettes' and the roles' Accent and Selection, the focus ring's hue, and
+// what Zap's QA found an accent of one's own leaves wrong: OnAccent, white
+// where white reads on the accent at 4.5:1 and near-black where it does not
+// (WhatsApp's green takes dark text in dark mode), and Link, the accent
+// deepened in light or lifted in dark until it reads at 4.5:1 on the
+// background and the surfaces, rather than the system's blue. The roles are
+// the theme's own (Own); AccentPressed follows the accent by itself. Set an
+// app's Link again after this for surfaces it knows better (bubbles).
+func (t *Theme) SetAccent(light, dark uint32) {
+	t.SystemAccent = false
+	acc := [2]uint32{light | 0xFF, dark | 0xFF}
+	pals := [2]*Palette{&t.Light, &t.Dark}
+	for m := range t.Roles {
+		a, p := acc[m], pals[m]
+		*p = p.WithAccent(a)
+		on := uint32(0xFFFFFFFF)
+		if Contrast(on, a) < 4.5 {
+			on = 0x111111FF
+		}
+		p.OnAccent = on
+		c := &t.Roles[m]
+		c[Accent], c[Selection], c[OnAccent] = a, a, on
+		c[FocusRing] = a&^0xFF | c[FocusRing]&0xFF
+		c[Link] = readableOn(a, m == 1, [3]uint32{p.Background, p.Surface, p.SurfaceRaised})
+	}
+	for _, role := range [...]Role{Accent, Selection, FocusRing, OnAccent, Link} {
+		t.Own[role] = true
+	}
+}
+
+// readableOn is c moved toward black (toward white in dark) until it reads at
+// 4.5:1 on every colour of bgs.
+func readableOn(c uint32, dark bool, bgs [3]uint32) uint32 {
+	toward := uint32(0x000000FF)
+	if dark {
+		toward = 0xFFFFFFFF
+	}
+	for i := 0; i < 32; i++ {
+		ok := true
+		for _, bg := range bgs {
+			ok = ok && Contrast(c, bg) >= 4.5
+		}
+		if ok {
+			break
+		}
+		c = MixRGBA(c, toward, 0.05)
+	}
+	return c
+}
+
 // Resolve makes the theme ready for a window at scale pixels per point,
 // starting at mode. It creates the fonts, so call it on the thread that owns
 // ts, when the window is created and again when its scale changes; it is the
