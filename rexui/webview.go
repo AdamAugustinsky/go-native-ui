@@ -102,7 +102,7 @@ func WebView(k *base.Kit, label string, host platform.HostID, o WebViewOpts) Web
 		c.NextRadius(pt(sc, rc.Line) / 2)
 		c.NextSize(ui.Pct(min(max(o.Progress, 0.05), 1)), ui.Pct(1))
 		c.NextRole(ui.RoleProgressBar)
-		c.NextSemName("Loading")
+		c.NextSemName(str.Loading)
 		c.BoxKeyed(ui.DrawBackground, ui.KeyN(key, 2), nil)
 	}
 	c.Pop()

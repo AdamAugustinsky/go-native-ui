@@ -28,6 +28,8 @@ func TestStringsPtBR(t *testing.T) {
 		rexui.CodeBlock(k, ui.KeyN(key, 1), []byte("go test ./..."), rexui.CodeOpts{})
 		rexui.Banner(k, "Disco cheio", rexui.BannerOpts{Level: rexui.BannerWarning})
 		rexui.MessageBubble(k, ui.KeyN(key, 2), []byte("Oi"), nil, rexui.MessageOpts{BubbleOpts: rexui.BubbleOpts{Variant: rexui.BubbleOutgoing, ColumnW: 300}})
+		k.NextSize(ui.Px(300), ui.Px(120))
+		rexui.WebView(k, "Página", 0, rexui.WebViewOpts{Loading: true, Progress: 0.4})
 	}))
 	g.h = 800
 	g.settle()
@@ -35,8 +37,9 @@ func TestStringsPtBR(t *testing.T) {
 	g.node(ui.RoleGroup, "Código")
 	g.node(ui.RoleGroup, "Aviso: Disco cheio")
 	g.node(ui.RoleGroup, "Mensagem enviada")
-	for _, n := range []string{"Copy", "Code", "Warning: Disco cheio", "Sent message"} {
-		if g.has(ui.RoleButton, n) || g.has(ui.RoleGroup, n) {
+	g.node(ui.RoleProgressBar, "Carregando") // the web view's loading line
+	for _, n := range []string{"Copy", "Code", "Warning: Disco cheio", "Sent message", "Loading"} {
+		if g.has(ui.RoleButton, n) || g.has(ui.RoleGroup, n) || g.has(ui.RoleProgressBar, n) {
 			t.Errorf("%q is still in the semantic tree", n)
 		}
 	}

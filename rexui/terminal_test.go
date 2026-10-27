@@ -263,3 +263,30 @@ func TestTerminalViewLayoutAudit(t *testing.T) {
 		}
 	}
 }
+
+// In Brazilian Portuguese the scroll-to-bottom button is Rolar até o fim
+// (rexui.Strings.ScrollToBottom), and it still goes back.
+func TestTerminalScrollToBottomPtBR(t *testing.T) {
+	usePtBR(t)
+	s := newTermState(t, term.Options{Scrollback: 1000})
+	var sig rexui.TerminalSignal
+	g := termRig(t, theme.Light, s, &sig)
+	for i := range 200 {
+		s.Feed(fmt.Appendf(nil, "line %d\r\n", i))
+	}
+	g.frame()
+	g.in.MouseX, g.in.MouseY = 100, 100
+	g.in.AddScroll(0, 5, false)
+	g.settle()
+	if s.T.AtBottom() {
+		t.Fatal("the wheel did not scroll back")
+	}
+	g.c.Semantics(&g.sem)
+	if g.has(ui.RoleButton, "Scroll to bottom") {
+		t.Error("the button is still named Scroll to bottom")
+	}
+	g.click(centre(g.node(ui.RoleButton, "Rolar até o fim")))
+	if !s.T.AtBottom() {
+		t.Error("the button did not go back")
+	}
+}

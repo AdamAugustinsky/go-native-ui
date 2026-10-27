@@ -638,7 +638,7 @@ func (s *TerminalState) draw(k *base.Kit, c *ui.Context, key ui.Key, pal *termPa
 	if !s.T.AtBottom() {
 		in := k.Pt(12)
 		c.NextAnchor(ui.AnchorBottomRight, in, in)
-		if IconButton(k, icon.ChevronDown, "Scroll to bottom", IconButtonOpts{}).Clicked {
+		if IconButton(k, icon.ChevronDown, scrollBottomLabel, IconButtonOpts{}).Clicked {
 			s.T.ScrollToBottom()
 		}
 	}

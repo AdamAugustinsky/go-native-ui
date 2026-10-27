@@ -203,7 +203,8 @@ Transparency cost nothing extra. Three levels of change:
 
 **Words.** The few words the components supply themselves (a code block's
 Copy button, a banner's "Warning:", the names of the sidebar's disclosure, a
-sent message, the scroll bars) are a `rexui.Strings`, English by default.
+sent message, the scroll bars, a terminal's scroll-to-bottom button, a web
+view's loading line) are a `rexui.Strings`, English by default.
 `rexui.SetStrings(rexui.StringsPtBR)`, before the first frame, switches them
 to Brazilian Portuguese; another language is a `Strings` of the app's own,
 whose empty fields stay English. They are read as they are each frame, at no
