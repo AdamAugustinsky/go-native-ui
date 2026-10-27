@@ -350,7 +350,8 @@ func (c *Context) scrollAt(e *ScrollEvent) (Key, ID) {
 
 // scrollPlain applies a wheel event, or precise deltas without a gesture, to
 // the box under it: hard-clamped, precise deltas at once and wheels smoothly
-// (the target moves), or at once too with WheelJumps.
+// (the target moves), or at once too with WheelJumps. A vertical wheel scrolls
+// a box that scrolls only on X along X.
 func (c *Context) scrollPlain(e *ScrollEvent) {
 	key, _ := c.scrollAt(e)
 	if key == 0 {
@@ -366,6 +367,11 @@ func (c *Context) scrollPlain(e *ScrollEvent) {
 		mul = float64(c.WheelStep)
 	}
 	delta := [2]float64{-float64(e.DX) * mul, -float64(e.DY) * mul}
+	// A wheel's notches over a box that scrolls only sideways scroll it
+	// sideways: the box under the pointer takes them, and its Y would drop them.
+	if !e.Precise && delta[0] == 0 && b.flags&scrollMask == ScrollX {
+		delta = [2]float64{delta[1], 0}
+	}
 	for a := 0; a < 2; a++ {
 		if delta[a] == 0 || !b.scrollOn(a) {
 			continue

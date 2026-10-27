@@ -68,9 +68,14 @@ type boxFrame struct {
 	style
 	alignNext bool       // the alignment came from NextAlign (Audit)
 	auditOff  AuditMask  // the checks of Audit the box is exempt from (NextAuditExempt)
+	fadeEnd   float32    // its children fade out over its last fadeEnd pixels (NextFadeEnd)
 	obscured  [2]float32 // a scroll box's view covered at its top and bottom (SetObscured)
 	stopWheel bool       // the wheel over the box scrolls nothing beneath it (StopWheel)
 	fixed     [2]float32
+	anchor    Anchor     // NextAnchor: fixed holds the insets
+	lo, hi    [2]float32 // NextMinSize, NextMaxSize (0: none)
+	self      Cross      // NextAlignSelf: 1 + the Cross, 0 the parent's
+	nudge     [2]float32 // NextOffset: moved from its laid-out place
 
 	txt    core.Span // display text in the current frame's arena
 	run    text.RunRef
@@ -84,6 +89,7 @@ type boxFrame struct {
 	sem int32 // 1 + the index of its record in Context.sems, 0 without a role
 
 	flow    flowSpec // the options of a flow box (AxisFlow, flow.go)
+	grid    gridSpec // the options of a grid box (AxisGrid, grid.go)
 	prevHid bool     // the previous layout's hid: what the input checks of the build see (wasHidden)
 
 	// the paragraph of a WrapText or RichText box: lnN lines, laid out at
@@ -188,9 +194,17 @@ type Context struct {
 
 	nextPos    [2]float32
 	hasNextPos bool
+	nextAnchor Anchor
+	nextInset  [2]float32
+	nextNudge  [2]float32
+	nextLo     [2]float32
+	nextHi     [2]float32
+	nextSelf   Cross // 1 + the Cross; 0 none
 	nextFlags  Flags
-	nextAudit  AuditMask // the exemptions of the next box (NextAuditExempt)
-	bd         backdrops // this frame's backdrops and the next box's (NextBackdrop)
+	nextAudit  AuditMask  // the exemptions of the next box (NextAuditExempt)
+	nextFade   float32    // the next box's children's fade at its end (NextFadeEnd)
+	emitFade   [2]float32 // while emitting: the fade of the boxes round this one (NextFadeEnd)
+	bd         backdrops  // this frame's backdrops and the next box's (NextBackdrop)
 
 	flowHidden bool // a flow hid children this layout (flow.go)
 
@@ -346,7 +360,6 @@ type Context struct {
 	dbg *debugState // the recording of EnableDebug (debug.go); nil off
 
 	up           Uploader
-	stager       atlasStager // optional capability, resolved only when binding up
 	pageTex      []gpu.TextureID
 	pageUploaded []bool       // first upload is immediate; subsequent changes are staged
 	shared       *SharedAtlas // the page textures shared with other contexts (ShareAtlas), nil: pageTex
@@ -666,8 +679,11 @@ func (c *Context) resetStyles() {
 	c.sTint.reset()
 	c.hasNextStyle = false
 	c.hasNextPos = false
+	c.nextAnchor, c.nextInset, c.nextNudge = AnchorNone, [2]float32{}, [2]float32{}
+	c.nextLo, c.nextHi, c.nextSelf = [2]float32{}, [2]float32{}, 0
 	c.nextFlags = 0
 	c.nextAudit = 0
+	c.nextFade = 0
 	c.bd.n, c.bd.hasNext = 0, false
 	c.nextEscClr = false
 	c.nextStill = false
@@ -751,6 +767,9 @@ func (c *Context) Spacer(w, h Size) ID {
 func (c *Context) newBox(flags Flags, key Key) ID {
 	flags |= c.nextFlags
 	c.nextFlags = 0
+	if c.nextAnchor != AnchorNone {
+		flags |= floatingMask
+	}
 	var id ID
 	found := false
 	for n := uint64(0); ; n++ {
@@ -813,11 +832,19 @@ func (c *Context) newBox(flags Flags, key Key) ID {
 		c.nDragBoxes++
 	}
 	b.auditOff, c.nextAudit = c.nextAudit, 0
+	b.fadeEnd, c.nextFade = c.nextFade, 0
 	c.takeBackdrop(b)
 	if c.hasNextPos {
 		b.fixed = c.nextPos
 		c.hasNextPos = false
 	}
+	b.anchor, b.nudge = c.nextAnchor, c.nextNudge
+	if c.nextAnchor != AnchorNone {
+		b.fixed = c.nextInset
+	}
+	c.nextAnchor, c.nextNudge = AnchorNone, [2]float32{}
+	b.lo, b.hi, b.self = c.nextLo, c.nextHi, c.nextSelf
+	c.nextLo, c.nextHi, c.nextSelf = [2]float32{}, [2]float32{}, 0
 	if n := &c.semNext; n.role != RoleNone {
 		c.sems = append(c.sems, semRec{id: id, role: n.role, state: n.state, actions: n.actions, hasActions: n.hasActions,
 			name: n.name, value: n.value, rng: n.rng, hasRange: n.hasRange, pos: n.pos, hasPos: n.hasPos, level: n.level})

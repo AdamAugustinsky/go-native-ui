@@ -343,17 +343,17 @@ func TestHelpButtonAndToggleButton(t *testing.T) {
 	if helps != 1 {
 		t.Fatalf("a click on the help button gave %d clicks", helps)
 	}
-	accent := g.k.Theme().Colors[theme.Accent] >> 8
+	tint := rexui.ToggleOnLook.Fill.RGBA(g.k.Theme()) // Rex's quiet tint of the accent
 	accented := func() bool {
 		for _, q := range g.list.Quads {
-			if q.Mode == gpu.ModeShape && q.Color[0]&0xFF == 0xFF && q.Color[0]>>8 == accent {
+			if q.Mode == gpu.ModeShape && q.Color[0] == tint {
 				return true
 			}
 		}
 		return false
 	}
 	if accented() {
-		t.Fatal("a toggle button that is off is drawn in the accent")
+		t.Fatal("a toggle button that is off is drawn in the accent's tint")
 	}
 	n := g.node(ui.RoleCheckbox, "Bold")
 	g.click(centre(n))

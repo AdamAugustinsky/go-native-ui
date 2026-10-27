@@ -1,6 +1,9 @@
 // Package rexui is the Rex component library (DECISIONS D40, D52): styled
-// components in the Rex language on the metrics measured from macOS 27.2,
-// built on the headless primitives of package widget/base. It is shadcn's
+// components in the Rex language, the framework's default look
+// (docs/guide/rex.md): capsule controls and quiet tints of the accent, on the
+// metrics measured from macOS 27.2, built on the headless primitives of
+// package widget/base. UseAppKitControls switches the controls to AppKit's
+// own look. It is shadcn's
 // model without a registry: every component is one file that reads only
 // tokens, and an app that wants a component of its own copies the file into
 // its package (go run ./tools/rexui add button ./internal/ui) and edits it.

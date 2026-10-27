@@ -94,18 +94,21 @@ type ButtonRecipe struct {
 	Hover base.Hover
 }
 
-// ButtonRecipes are the variants' recipes, measured on macOS 27.2
-// (tools/appkitref, macbook-blue and macbook-system): the default button is
-// secondarySystemFill (Fill2) under labelColor, #0000002B pressed
-// (FillPressed) and #0000000A disabled with disabledControlTextColor; the
-// default button is the accent, AccentPressed while pressed. Change an entry
-// to restyle a variant across the app, or copy this file to own it.
+// ButtonRecipes are the variants' recipes: Rex's push buttons are capsules at
+// every size, as its tabs and its dialogs' buttons are, in the colours
+// measured on macOS 27.2 (tools/appkitref, macbook-blue and macbook-system):
+// the default button is secondarySystemFill (Fill2) under labelColor,
+// #0000002B pressed (FillPressed) and #0000000A disabled with
+// disabledControlTextColor; the primary button is the accent, AccentPressed
+// while pressed. Change an entry to restyle a variant across the app (Capsule
+// false gives AppKit's rounded rectangle), or copy this file to own it.
 var ButtonRecipes = [NumButtonVariants]ButtonRecipe{
 	ButtonDefault: {
 		Fill: Of(theme.Fill2), Label: Of(theme.Label), FillInactive: Of(theme.Fill2), LabelInactive: Of(theme.Label),
 		FillHover: None, FillPressed: Of(theme.FillPressed), LabelPressed: Of(theme.Label),
 		FillDisabled: Of(theme.FillDisabled), LabelDisabled: Of(theme.TextDisabled),
 		Rim: None, RimInactive: None, Highlight: None,
+		Capsule: true,
 	},
 	ButtonPrimary: {
 		Fill: Of(theme.Accent), Label: Of(theme.OnAccent), FillInactive: Of(theme.Fill2), LabelInactive: Of(theme.Label),
@@ -113,6 +116,7 @@ var ButtonRecipes = [NumButtonVariants]ButtonRecipe{
 		FillPressedInactive: Of(theme.FillPressed), LabelPressedInactive: Of(theme.Label),
 		FillDisabled: Of(theme.FillDisabled), LabelDisabled: Of(theme.TextDisabled),
 		Rim: None, RimInactive: None, Highlight: None,
+		Capsule: true,
 	},
 	// An alert's destructive button: systemRed at 25 % (#FFCDCE over white,
 	// #562728 over #1E1E1E) under a systemRed label.
@@ -121,12 +125,14 @@ var ButtonRecipes = [NumButtonVariants]ButtonRecipe{
 		FillHover: None, FillPressed: OfAlpha(theme.Red, 0.4, 0.4), LabelPressed: Of(theme.Red),
 		FillDisabled: Of(theme.FillDisabled), LabelDisabled: Of(theme.TextDisabled),
 		Rim: None, RimInactive: None, Highlight: None,
+		Capsule: true,
 	},
 	ButtonPlain: {
 		Fill: None, Label: Of(theme.Label), FillInactive: None, LabelInactive: Of(theme.Label),
 		FillHover: None, FillPressed: None, LabelPressed: Of(theme.Label2),
 		FillDisabled: None, LabelDisabled: Of(theme.TextDisabled),
 		Rim: None, RimInactive: None, Highlight: None,
+		Capsule: true,
 	},
 	ButtonToolbar: {
 		Fill: Of(theme.CapsuleFill), Label: Of(theme.Label), FillInactive: Of(theme.CapsuleFillInactive), LabelInactive: Of(theme.Label2),

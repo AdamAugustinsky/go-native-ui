@@ -110,6 +110,13 @@ type Config struct {
 	// and the materials show in their regions. Hosted native views
 	// (App.Win.NewHost, ui.Context.Host) need nothing here.
 	Materials bool
+
+	// Place, when set, runs once the window exists and before its first
+	// frame, while it is still hidden: it may move, size or zoom the window
+	// (platform.Window's SetFrameRect and Zoom), as an app that puts its
+	// window back where it was does, so that the window appears in its place
+	// rather than showing at the default one and moving there.
+	Place func(w *platform.Window)
 }
 
 // App is the running application as one window sees it: the window, the GPU
@@ -137,8 +144,6 @@ type App struct {
 	scale  float32 // pixels per point (the backing scale; zoom.go has the zoom)
 	zoom   float32 // the app zoom, 0 = 1 (zoom.go)
 	tbZoom float32 // the zoom the window's titlebar metrics were last set for, 0 = 1 (zoom.go)
-	tbWin  any
-	tbSet  titlebarSetter // optional window capability; nil is cached too
 
 	// Cursor regions and the titlebar drag map handed to the window after
 	// every frame (regions.go); the buffers are reused.
@@ -360,6 +365,9 @@ func (a *App) openWin(cfg Config, b Builder, st *StartupReport, nativeMenus bool
 	}
 	if win.HasMaterials() {
 		a.cfg.Clear = [4]float32{} // premultiplied transparent: the backdrop or the materials show
+	}
+	if cfg.Place != nil {
+		cfg.Place(win)
 	}
 	a.Win, a.req = win, win
 	if a.handle != nil && a.handle.a == a && a.handle.id == a.winID {

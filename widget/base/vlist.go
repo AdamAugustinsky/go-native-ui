@@ -58,6 +58,10 @@ type VListOpts struct {
 	Line float32
 	// W and H size the list's box; the zero Size fills the parent.
 	W, H ui.Size
+	// BarRoom is the room in pixels the list leaves at its right for a
+	// legacy scroll bar drawn over its outer box (Kit.VListBarRoom); 0
+	// leaves none.
+	BarRoom float32
 }
 
 // VList is an open variable-height list (BeginVList). Build the items First to
@@ -296,6 +300,9 @@ func BeginVList(c *ui.Context, label string, st *VListState, o VListOpts) VList 
 		h = ui.Pct(1)
 	}
 	c.NextSize(w, h)
+	if o.BarRoom > 0 {
+		c.NextPadding(0, 0, o.BarRoom, 0) // room for a legacy scroll bar
+	}
 	v.Outer = c.BoxKeyed(ui.Clip, okey, nil)
 	c.Push(v.Outer)
 	c.NextSize(ui.Pct(1), ui.Pct(1))

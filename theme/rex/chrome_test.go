@@ -349,3 +349,44 @@ func TestDrawnTrafficLightsSitAtTheSharedGeometry(t *testing.T) {
 		}
 	}
 }
+
+// A recoloured field (ThemeWithField) draws its own stops and glass, and
+// leaves Rex's as they were.
+func TestThemeWithFieldRecoloursTheField(t *testing.T) {
+	fc := FieldColors{
+		Light:     []FieldStop{{0, 0xDDEEE4, 0xDDEEE4, 0xDDEEE4}, {1278, 0xDDEEE4, 0xDDEEE4, 0xDDEEE4}},
+		Dark:      []FieldStop{{0, 0x18201D, 0x18201D, 0x18201D}},
+		DarkGlass: 0x26302C,
+	}
+	var own, stock Field
+	own.look = newLook(fc)
+	for _, m := range []struct {
+		t    float32
+		want uint32
+	}{{0, 0xDDEEE4FF}, {1, 0x18201DFF}} {
+		own.Build(800, 600, 0.5, m.t)
+		if c := own.cells[own.ncells/2].c[0]; c != m.want {
+			t.Errorf("mix %v: the recoloured field is %08X, want %08X", m.t, c, m.want)
+		}
+		stock.Build(800, 600, 0.5, m.t)
+		if c, rex := stock.cells[stock.ncells/2].c[0], rexLook.fieldAt(m.t, 0, 0, 0); c == m.want || rex == m.want {
+			t.Errorf("mix %v: Rex's own field took the recolouring", m.t)
+		}
+	}
+	// the dark glass: half the glass over the field
+	own.Build(800, 600, 0.5, 1)
+	if g, want := own.fillAt(800, 600), theme.MixRGBA(0x18201DFF, 0x26302CFF, darkAlpha); g != want {
+		t.Errorf("the dark glass is %08X, want %08X", g, want)
+	}
+	th := ThemeWithField(fc)
+	if g := th.Roles[theme.Dark][theme.GlassTint]; g != theme.ColA(0x26302C, darkAlpha) {
+		t.Errorf("GlassTint is %08X, want the dark glass", g)
+	}
+	if g := Theme().Roles[theme.Dark][theme.GlassTint]; g != theme.ColA(darkGlass, darkAlpha) {
+		t.Errorf("Rex's own GlassTint changed to %08X", g)
+	}
+	// the scrim over a backdrop: the one given, Rex's for the other mode
+	if sc := newLook(FieldColors{Scrim: [2]uint32{0xE6F2EA, 0}}).scrim; sc != [2]uint32{0xE6F2EA, scrimDark} || rexLook.scrim != [2]uint32{scrimLight, scrimDark} {
+		t.Errorf("scrims %06X, Rex's %06X", sc, rexLook.scrim)
+	}
+}
