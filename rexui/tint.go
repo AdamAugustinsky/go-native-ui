@@ -29,8 +29,9 @@ type Tint struct {
 	// Alpha is the opacity in light (0) and dark (1), 0 to 1; both zero keep
 	// the role's own, one zero is transparent in that mode.
 	Alpha [2]float32
-	// Lit is the colour (0xRRGGBBAA) of a Tint whose Role is LitRole.
-	Lit uint32
+	// Lit is the colour (0xRRGGBBAA) of a Tint whose Role is LitRole, and
+	// LitDark its colour in dark when it has one of its own (OfPair).
+	Lit, LitDark uint32
 }
 
 // Of is the Tint of role as it is.
@@ -46,6 +47,11 @@ func OfAlpha(role theme.Role, light, dark float32) Tint {
 // takes a Tint (AvatarOpts.Color) takes one of these too.
 func OfRGBA(rgba uint32) Tint { return Tint{Role: LitRole, Lit: rgba} }
 
+// OfPair is a colour of the app's own in light and another in dark
+// (0xRRGGBBAA each), crossfading with the mode: a hue a role does not reach
+// at a contrast the text needs (DangerText).
+func OfPair(light, dark uint32) Tint { return Tint{Role: LitRole, Lit: light, LitDark: dark} }
+
 // None draws nothing.
 var None = Tint{Role: NoRole}
 
@@ -54,6 +60,8 @@ var None = Tint{Role: NoRole}
 func (t Tint) RGBA(r *theme.Resolved) uint32 {
 	var c uint32
 	switch {
+	case t.Role == LitRole && t.LitDark != 0:
+		c = theme.MixRGBA(t.Lit, t.LitDark, r.T)
 	case t.Role == LitRole:
 		c = t.Lit
 	case t.Role >= theme.NumRoles:
