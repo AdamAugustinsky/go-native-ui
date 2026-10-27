@@ -26,7 +26,7 @@ const (
 	LineAdded
 	// LineRemoved is a removed line: a red band.
 	LineRemoved
-	// LineHunk is a diff's header or hunk line ("@@ -1,3 +1,4 @@"): a blue band.
+	// LineHunk is a diff's header or hunk line ("@@ -1,3 +1,4 @@"): a neutral band, so the highlighted line (the accent) stands apart.
 	LineHunk
 )
 
@@ -73,7 +73,7 @@ var CodeLook = CodeRecipe{
 	SizePt: 12, LineGap: 4,
 	Label: Of(theme.Label2), Gutter: Of(theme.Label3), LabelPt: 10, GutterPad: 12,
 	Added: OfAlpha(theme.Green, 0.14, 0.22), Removed: OfAlpha(theme.Red, 0.13, 0.22),
-	Hunk: OfAlpha(theme.Blue, 0.09, 0.16), Hit: OfAlpha(theme.Accent, 0.14, 0.24),
+	Hunk: OfAlpha(theme.Label, 0.07, 0.11), Hit: OfAlpha(theme.Accent, 0.14, 0.24),
 }
 
 // CodeColor is the colour of a highlight role on the Rex code palette (the
