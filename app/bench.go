@@ -161,6 +161,7 @@ func (r *BenchReport) OwnAllocFailure() string {
 // frame. If the script ends before the measured frames are done, Frames is
 // what was measured.
 func RunBench(cfg Config, b Builder, o BenchOptions) (BenchReport, error) {
+	defer perfCPU()()
 	if o.Warm <= 0 {
 		o.Warm = 120
 	}
@@ -179,6 +180,7 @@ func RunBench(cfg Config, b Builder, o BenchOptions) (BenchReport, error) {
 		return BenchReport{}, err
 	}
 	defer a.close()
+	perfCheckpoint(a, "before")
 	a.verbose = o.Verbose
 	if s, ok := b.(Scripter); ok {
 		a.script = s
@@ -200,6 +202,8 @@ func RunBench(cfg Config, b Builder, o BenchOptions) (BenchReport, error) {
 	if !bn.finished {
 		return BenchReport{}, errors.New("app: bench ended before its measured frames (window closed)")
 	}
+	perfCheckpoint(a, "after")
+	perfAfterIdle(a)
 	return bn.report, nil
 }
 

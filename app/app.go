@@ -290,6 +290,7 @@ func RunWith(cfg Config, b Builder, o RunOptions) (RunResult, error) {
 		return res, err
 	}
 	defer a.closeAll() // the windows OpenWindow opened too
+	perfIdle(a)
 	a.verbose = o.Verbose
 	if !o.ExitFirst {
 		a.Win.SetFrameHandler(a.frameHandler)

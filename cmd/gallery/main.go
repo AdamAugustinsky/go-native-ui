@@ -47,6 +47,7 @@ const (
 )
 
 func main() {
+	exitFirst := flag.Bool("exit-first", false, "survey only: first-frame startup timing")
 	out := flag.String("o", "", "render the offscreen scene into this PNG and exit")
 	outDark := flag.String("o-dark", "", "with -o: also render the dark mode into this PNG")
 	w := flag.Int("w", 2*gallery.WindowWidthPt, "with -o: width in pixels")
@@ -99,7 +100,7 @@ func main() {
 		case *bench:
 			err = runBench(*rows, m, *gate, *allowUnpaced, *sites, *maxCPU, *timeout, *verbose)
 		default:
-			err = runWindow(*rows, m, *window, *start, *scrolled)
+			err = runWindow(*rows, m, *window, *start, *scrolled, *exitFirst)
 		}
 	}
 	if err != nil {
@@ -166,7 +167,7 @@ func render(path, dark string, w, h int, scale float32, scene string, m theme.Pr
 	return nil
 }
 
-func runWindow(rows int, m theme.Preference, window, start string, scrolled bool) error {
+func runWindow(rows int, m theme.Preference, window, start string, scrolled, exitFirst bool) error {
 	g, err := gallery.New(gallery.Options{Rows: rows, Preference: m, Start: start, Scrolled: scrolled})
 	if err != nil {
 		return err
@@ -180,7 +181,8 @@ func runWindow(rows int, m theme.Preference, window, start string, scrolled bool
 		cfg.Width, cfg.Height = float32(w), float32(h)
 		cfg.MinWidth, cfg.MinHeight = min(cfg.MinWidth, float32(w)), min(cfg.MinHeight, float32(h))
 	}
-	_, err = app.RunWith(cfg, g, app.RunOptions{})
+	res, err := app.RunWith(cfg, g, app.RunOptions{ExitFirst: exitFirst})
+	if err == nil && exitFirst { printJSON(res.Startup) }
 	return err
 }
 

@@ -128,6 +128,7 @@ func (a *App) frameDT(now int64) float32 {
 // input and runs no Build; a paced frame (macOS) is acquired and used within
 // one tick.
 func (a *App) drawFrame(inHandler bool, passes int) bool {
+	perfFrame(a, 0)
 	metered := a.bench != nil && a.bench.measuring
 	m := frameMeasure{}
 	if metered {
@@ -137,6 +138,7 @@ func (a *App) drawFrame(inHandler bool, passes int) bool {
 		return false
 	}
 	a.inFrame = true
+	perfFrame(a, 1)
 	a.framing++            // no window's frame handler draws, and no safe point runs, inside it
 	platform.HoldApp(true) // no app-wide event is delivered inside the frame
 	if a.dbg != nil {
@@ -171,6 +173,7 @@ func (a *App) drawFrame(inHandler bool, passes int) bool {
 	for i := 0; i < passes; i++ {
 		a.build(a.fr.W, a.fr.H, dt)
 	}
+	perfFrame(a, 2)
 	a.syncRegions()
 	a.syncShell()
 	a.syncAX()
@@ -182,15 +185,18 @@ func (a *App) drawFrame(inHandler bool, passes int) bool {
 	}
 
 	animating := a.UI.Animating()
+	perfFrame(a, 3)
 	why := a.arm(inHandler, animating, dirty, m.start)
 	if a.dbg != nil {
 		a.debugOwed(why)
 	}
 	a.R.Encode(a.fr.CmdBuf, a.fr.Target, a.fr.W, a.fr.H, a.cfg.Clear, &a.list)
+	perfFrame(a, 4)
 	if a.dbg != nil {
 		a.dbg.mark(PhaseEncode)
 	}
 	a.Surf.EndFrame(&a.fr) // applies the shell changes syncShell staged, in the present's transaction
+	perfFrame(a, 5)
 	a.Win.FlushShell()     // (nothing is left; a safety net), inside the frame's pool
 	framePoolPop(pool)
 	a.inFrame = false
