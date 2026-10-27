@@ -6,6 +6,7 @@ require (
 	github.com/alecthomas/chroma/v2 v2.27.0
 	github.com/ebitengine/purego v0.12.0-alpha.1.0.20261015130536-d456b1bb95e8
 	github.com/go-text/typesetting v0.3.5
+	github.com/yuin/goldmark v1.8.6
 )
 
 require (
