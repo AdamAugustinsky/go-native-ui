@@ -73,7 +73,8 @@ type AvatarOpts struct {
 type AvatarRecipe struct {
 	// Size is the default side in points.
 	Size float32
-	// Palette is the backdrops initials take (white text on them).
+	// Palette is the backdrops initials take (white text on them), each
+	// deepened as far as white needs to read on it at 4.5:1.
 	Palette []theme.Role
 	// Presence are the dots' colours; Dot is the dot's diameter as a share
 	// of the avatar's side (at least MinDot points) and Ring the width of
@@ -229,12 +230,11 @@ func Avatar(k *base.Kit, name string, o AvatarOpts) ui.ID {
 func avatarInitials(k *base.Kit, key ui.Key, name string, side, size float32, o *AvatarOpts) {
 	c, r := k.Context(), k.Theme()
 	rc := &AvatarLook
-	col := o.Color
-	if col == (Tint{}) {
-		col = Of(rc.Palette[hashName(name)%uint32(len(rc.Palette))])
+	fg := uint32(0xFFFFFFFF)
+	fill := o.Color.RGBA(r) // the app's colour, as it gave it
+	if o.Color == (Tint{}) {
+		fill = legibleUnder(Of(rc.Palette[hashName(name)%uint32(len(rc.Palette))]).RGBA(r), fg)
 	}
-	fill := col.RGBA(r)
-	fg := r.Colors[theme.OnAccent]
 	if k.Disabled() {
 		fill, fg = r.Colors[theme.Fill1], r.Colors[theme.TextDisabled]
 	}
@@ -269,6 +269,16 @@ func avatarInitials(k *base.Kit, key ui.Key, name string, side, size float32, o 
 	c.NextTextColor(fg)
 	c.BoxKeyed(ui.DrawText, ui.KeyN(key, 2), b)
 	c.Pop()
+}
+
+// legibleUnder is fill, deepened toward black just enough that fg (white
+// initials) reads on it at 4.5:1: a green or an orange disc keeps its hue and
+// loses the brightness white text cannot stand on.
+func legibleUnder(fill, fg uint32) uint32 {
+	for i := 0; i < 16 && theme.Contrast(fg, fill) < 4.5; i++ {
+		fill = theme.MixRGBA(fill, fill&0xFF, 0.08) // toward black, keeping its alpha
+	}
+	return fill
 }
 
 // largeInitials is the initials' point size as a share of the side of an
@@ -406,11 +416,11 @@ func AvatarStack(k *base.Kit, label string, names []string, max int, o AvatarOpt
 			k.Image(uint64(i), o.Images[i], ui.FitFill, side/2, "")
 			continue
 		}
-		fill, fg := Of(rc.Palette[0]), r.Colors[theme.OnAccent]
+		fill, fg := Of(rc.Palette[0]), uint32(0xFFFFFFFF)
 		var name string
 		if i < shown {
 			name = names[i]
-			fill = Of(rc.Palette[hashName(name)%uint32(len(rc.Palette))])
+			fill = OfRGBA(legibleUnder(Of(rc.Palette[hashName(name)%uint32(len(rc.Palette))]).RGBA(r), fg))
 		} else {
 			fill, fg = Of(theme.Fill1), r.Colors[theme.Label2]
 		}
