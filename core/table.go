@@ -85,7 +85,13 @@ func (t *Table) Clear() {
 // Get returns the value stored for k.
 func (t *Table) Get(k uint64) (uint32, bool) {
 	mask := len(t.keys) - 1
+	if PerfOn {
+		PerfGets++
+	}
 	for i := t.slot(k); t.used[i]; i = (i + 1) & mask {
+		if PerfOn {
+			PerfProbes++
+		}
 		if t.keys[i] == k {
 			return t.vals[i], true
 		}

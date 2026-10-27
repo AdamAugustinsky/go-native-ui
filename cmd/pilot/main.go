@@ -127,7 +127,15 @@ func main() {
 	case *resizeTest:
 		err = runResizeTest(flag.Args(), look)
 	case *bench:
+		if os.Getenv("GNUI_PERF_SPIN") != "" {
+			go func() {
+				for {
+					perfSpin++
+				}
+			}()
+		}
 		err = runBench(*rows, *benchDir, *gate, *allowUnpaced, *sites, *maxCPU, *timeout, *verbose)
+		fmt.Fprintf(os.Stderr, "PERFFILTER slices=%d entries=%d ns=%d entries/ms=%.0f\n", pilot.PerfFilterSlices, pilot.PerfFilterEntries, pilot.PerfFilterNs, float64(pilot.PerfFilterEntries)/(float64(pilot.PerfFilterNs)/1e6))
 	default:
 		err = runWindow(flag.Args(), *exitFirst, *verbose, t0, age, look, winW, winH)
 	}
@@ -383,3 +391,5 @@ func printJSON(v any) {
 	b, _ := json.MarshalIndent(v, "", "  ")
 	fmt.Println(string(b))
 }
+
+var perfSpin uint64 // THROWAWAY

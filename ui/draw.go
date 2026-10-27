@@ -266,9 +266,9 @@ func (c *Context) emit(l *gpu.DrawList, id ID, clip [4]float32) {
 				}
 			}
 			partial := false
-			if b.flags&DrawBorder != 0 && b.borderW > 0 && b.borderColor&255 != 0 {
+			if b.flags&DrawBorder != 0 && b.bd.Width > 0 && b.bd.Color&255 != 0 {
 				if b.sides == SidesAll {
-					q.Border, q.BorderColor = b.borderW, b.col(b.borderColor)
+					q.Border, q.BorderColor = b.bd.Width, b.col(b.bd.Color)
 					draw = true
 				} else {
 					partial = b.sides&SidesAll != 0
@@ -320,8 +320,8 @@ func (c *Context) emit(l *gpu.DrawList, id ID, clip [4]float32) {
 // along the top and bottom cover only what the side strips leave.
 func (c *Context) emitSides(l *gpu.DrawList, b *box, clip [4]float32) {
 	r := b.rect
-	bw := b.borderW
-	ring := gpu.Quad{Rect: r, Radii: b.radii, Border: bw, BorderColor: b.col(b.borderColor)}
+	bw := b.bd.Width
+	ring := gpu.Quad{Rect: r, Radii: b.radii, Border: bw, BorderColor: b.col(b.bd.Color)}
 	wl := max(b.radii[0], b.radii[3], bw)
 	wr := max(b.radii[1], b.radii[2], bw)
 	ht := max(b.radii[0], b.radii[1], bw)
@@ -571,15 +571,28 @@ func (c *Context) emitGlyphFade(l *gpu.DrawList, face text.FaceID, gid uint16, p
 	if e.Color {
 		mode = gpu.ModeRGBA
 	}
-	l.Add(gpu.Quad{
-		Rect:  gr,
-		Clip:  tclip,
-		UV:    [4]float32{float32(e.X), float32(e.Y), float32(e.X) + float32(e.W), float32(e.Y) + float32(e.H)},
-		Color: [4]uint32{col, col, col, col},
-		FadeX: fade,
-		Mode:  mode,
-		Tex:   c.pageTexture(int(e.Page)),
-	})
+	var tex gpu.TextureID
+	if p := int(e.Page); c.shared == nil && p < len(c.pageTex) {
+		tex = c.pageTex[p]
+	} else {
+		tex = c.pageTexture(p)
+	}
+	n := len(l.Quads)
+	if n < cap(l.Quads) {
+		l.Quads = l.Quads[:n+1]
+	} else {
+		l.Quads = append(l.Quads, gpu.Quad{})
+	}
+	q := &l.Quads[n]
+	q.Rect = gr
+	q.Clip = tclip
+	q.UV = [4]float32{float32(e.X), float32(e.Y), float32(e.X) + float32(e.W), float32(e.Y) + float32(e.H)}
+	q.Color = [4]uint32{col, col, col, col}
+	q.Radii = [4]float32{}
+	q.Border, q.BorderColor, q.Soft = 0, 0, 0
+	q.FadeX = fade
+	q.Mode = mode
+	q.Tex = tex
 	if c.finalPass {
 		c.glyphQuads = append(c.glyphQuads, int32(len(l.Quads)-1))
 	}

@@ -293,7 +293,7 @@ func (b *box) draws() bool {
 	switch {
 	case f&DrawText != 0 && b.txt.Len > 0, f&DrawImage != 0 && b.img.Tex != 0:
 		return true
-	case f&DrawBorder != 0 && b.borderW > 0 && b.borderColor&255 != 0:
+	case f&DrawBorder != 0 && b.bd.Width > 0 && b.bd.Color&255 != 0:
 		return true
 	case f&DrawBackground != 0:
 		return b.bg[0]&255|b.bg[1]&255|b.bg[2]&255|b.bg[3]&255 != 0

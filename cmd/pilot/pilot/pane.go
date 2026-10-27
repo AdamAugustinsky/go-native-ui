@@ -449,6 +449,14 @@ func (p *pane) scanTargets(rows []uint32, base int) {
 func (p *pane) rowsStep(b *budget) {
 	v := &p.v
 	n := len(v.l.Order)
+	pos0 := p.jobPos
+	defer func() {
+		if v.filtered {
+			PerfFilterEntries += uint64(p.jobPos - pos0)
+			PerfFilterNs += uint64(time.Since(b.start))
+			PerfFilterSlices++
+		}
+	}()
 	step := chunk
 	if len(p.q) > 0 {
 		step /= 2

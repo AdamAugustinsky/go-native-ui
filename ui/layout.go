@@ -229,11 +229,9 @@ func (c *Context) sizeAxis(a int) {
 		default:
 			b.size[a] = 0
 		}
-	}
 
-	// 2. parent percentages (the parent is resolved unless it sums its children)
-	for _, id := range order {
-		b := &boxes[id]
+		// 2. parent percentages (the parent is resolved unless it sums its
+		// children): the parent comes before its children in order
 		if b.parent == 0 {
 			if b.ovRoot && b.pref[a].Kind == SizeParentPct { // an overlay's percentages are fractions of the window
 				b.size[a] = [2]float32{float32(c.w), float32(c.h)}[a] * b.pref[a].Value

@@ -298,6 +298,7 @@ func (b *benchRun) begin(a *App) {
 	}
 	b.cpu0, b.tcpu0 = sysinfo.CPUNs(), sysinfo.ThreadCPUNs()
 	b.measuring = true
+	perfBegin(a)
 }
 
 // sample appends v unless the storage made up front is full.
@@ -361,6 +362,7 @@ func (b *benchRun) endWindow(a *App) {
 	runtime.ReadMemStats(&b.mem1)
 	cpu1, tcpu1 := sysinfo.CPUNs(), sysinfo.ThreadCPUNs()
 	b.measuring = false
+	perfEnd(a, b.measuredN)
 	if b.o.WindowEnd != nil {
 		b.o.WindowEnd()
 	}
