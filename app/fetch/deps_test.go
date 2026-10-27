@@ -22,11 +22,11 @@ var noNetHTTP = []string{
 }
 
 // knownNetHTTP are the packages that still link net/http on a target, until
-// the item named moves them off it. A listed package that no longer links
-// it fails the test, so the exception is removed when the item lands.
-var knownNetHTTP = map[string]string{
-	"windows gonativeui/app/fetch": "N1 (WinHTTP)",
-}
+// the item named moves them off it ("goos importpath": "item"). A listed
+// package that no longer links it fails the test, so the exception is
+// removed when the item lands. N1 removed the last one (app/fetch on
+// Windows).
+var knownNetHTTP = map[string]string{}
 
 // TestNoNetHTTP is the CI-style check `go list -deps` of the plan's N1: no
 // net/http or crypto/tls in the dependencies on darwin/arm64, windows/amd64

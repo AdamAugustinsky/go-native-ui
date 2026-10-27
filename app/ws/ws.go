@@ -22,7 +22,18 @@
 //	err = c.WriteMessage(ws.Text, []byte(`{"type":"ping"}`)) // blocks while the socket's buffers are full
 //
 // Pings are answered by the system; there is no compression extension.
-// Messages arrive whole: fragments are joined before ReadMessage returns.
+// Messages arrive whole: fragments are joined before ReadMessage returns. A
+// message is sent as one frame.
+//
+// # Closing
+//
+// Close sends a close frame with its code and reason. When a ReadMessage
+// is pending it waits up to a second for the server's close frame, which
+// that read then returns as ErrClosed; then it releases the connection,
+// which ends a pending write too. A close the server starts ends
+// ReadMessage with a *CloseError carrying its code and reason, and a
+// connection lost without one with a *CloseError of CloseAbnormal.
+// WriteMessage then returns ErrClosed.
 //
 // # Threads
 //
@@ -39,13 +50,22 @@
 //
 // # What each OS does
 //
-//   - macOS: NSURLSessionWebSocketTask on the D60 session machinery.
+// The handshake, TLS, the trust store and the proxy are the system's, as
+// for package fetch, and Options.Proxy means what fetch's Options.Proxy
+// does (an HTTP proxy carries wss through CONNECT):
+//
+//   - macOS: NSURLSessionWebSocketTask in an ephemeral session of its own,
+//     with maximumMessageSize set to MaxMessage. App Transport Security
+//     applies to ws URLs in a bundle as it does to http ones (see fetch).
+//     A SOCKS5 proxy works; an HTTPS proxy is ErrUnsupported.
 //   - Windows: WinHTTP's WebSocket API (WinHttpWebSocketCompleteUpgrade,
-//     Send, Receive, Close), with the system's proxy and TLS.
-//   - Linux: net/http's upgrade with our own framing.
-//   - Until N2 lands, Dial returns ErrUnsupported everywhere (errors.Is
-//     errors.ErrUnsupported). This package never links net/http or
-//     crypto/tls on darwin or windows.
+//     Send, Receive, Shutdown, Close) on a synchronous session with the
+//     system's proxy settings. Only HTTP proxies: SOCKS5 and HTTPS proxies
+//     are ErrUnsupported.
+//   - Linux: net/http's upgrade with our own RFC 6455 framing, the proxy
+//     from HTTP_PROXY, HTTPS_PROXY and NO_PROXY unless Options.Proxy says.
+//
+// This package never links net/http or crypto/tls on darwin or windows.
 package ws
 
 import (
@@ -54,11 +74,13 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"gonativeui/app/fetch"
 )
 
 var (
-	// ErrUnsupported: no WebSocket client here yet. It matches
-	// errors.ErrUnsupported.
+	// ErrUnsupported is an option this system's client cannot honour (a
+	// proxy kind it lacks). It matches errors.ErrUnsupported.
 	ErrUnsupported = fmt.Errorf("ws: %w", errors.ErrUnsupported)
 	// ErrBadURL means the URL is not an absolute ws or wss URL.
 	ErrBadURL = errors.New("ws: not a ws or wss URL")
@@ -140,6 +162,9 @@ type Options struct {
 	// MaxMessage is the largest message accepted, in bytes (0:
 	// DefaultMaxMessage).
 	MaxMessage int64
+	// Proxy, if set, routes the connection through that proxy instead of
+	// the system's, or with Kind fetch.ProxyNone, through none.
+	Proxy *fetch.Proxy
 }
 
 // Conn is an open WebSocket connection.
@@ -156,10 +181,15 @@ type backend interface {
 }
 
 // Dial opens a WebSocket connection to rawURL (ws: or wss:) and completes
-// the handshake. It blocks; ctx ends the attempt.
+// the handshake. It blocks; ctx ends the attempt, and Options.Timeout
+// bounds it. Redirects are not followed. A server that answers with
+// another status than 101 gives a *HandshakeError.
 func Dial(ctx context.Context, rawURL string, o Options) (*Conn, error) {
-	if !strings.HasPrefix(rawURL, "ws://") && !strings.HasPrefix(rawURL, "wss://") {
+	if !strings.HasPrefix(rawURL, "ws://") && !strings.HasPrefix(rawURL, "wss://") || len(rawURL) == len("wss://") {
 		return nil, fmt.Errorf("%w: %q", ErrBadURL, rawURL)
+	}
+	if p := o.Proxy; p != nil && p.Kind != fetch.ProxyNone && (p.Host == "" || p.Port <= 0 || p.Port > 65535) {
+		return nil, errors.New("ws: proxy needs a host and a port")
 	}
 	if o.MaxMessage <= 0 {
 		o.MaxMessage = DefaultMaxMessage
@@ -169,8 +199,14 @@ func Dial(ctx context.Context, rawURL string, o Options) (*Conn, error) {
 		ctx, cancel = context.WithTimeout(ctx, o.Timeout)
 		defer cancel()
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	be, sub, err := osDial(ctx, rawURL, o)
 	if err != nil {
+		if ctx.Err() != nil && !errors.As(err, new(*HandshakeError)) {
+			return nil, ctx.Err()
+		}
 		return nil, err
 	}
 	return &Conn{sub: sub, be: be}, nil
@@ -185,7 +221,7 @@ func (c *Conn) Subprotocol() string { return c.sub }
 func (c *Conn) ReadMessage(buf []byte) (MessageKind, []byte, error) { return c.be.read(buf[:0]) }
 
 // WriteMessage sends one message, blocking until the system has taken it
-// (backpressure).
+// (backpressure). A Text message must be UTF-8.
 func (c *Conn) WriteMessage(kind MessageKind, data []byte) error {
 	if kind != Text && kind != Binary {
 		return errors.New("ws: unknown message kind")
@@ -194,11 +230,21 @@ func (c *Conn) WriteMessage(kind MessageKind, data []byte) error {
 }
 
 // Close sends a close frame with code and reason (at most 123 bytes), waits
-// briefly for the server's, and releases the connection. A second Close
-// does nothing.
+// briefly for the server's (see "Closing" above), and releases the
+// connection. A second Close does nothing. Code must be one an endpoint may
+// send: 1000-1003, 1007-1011, or 3000-4999.
 func (c *Conn) Close(code CloseCode, reason string) error {
 	if len(reason) > 123 {
 		reason = reason[:123]
 	}
+	if !sendable(code) {
+		c.be.close(CloseNormal, "")
+		return fmt.Errorf("ws: close code %d cannot be sent; closed with %d", code, CloseNormal)
+	}
 	return c.be.close(code, reason)
+}
+
+// sendable reports whether an endpoint may send code (RFC 6455 §7.4).
+func sendable(code CloseCode) bool {
+	return code >= 1000 && code <= 1003 || code >= 1007 && code <= 1011 || code >= 3000 && code <= 4999
 }
