@@ -297,31 +297,43 @@ func goStr(s objc.ID) string {
 
 // A text area's options (C4): MinLines holds the height up while the text is
 // shorter and MaxLines caps it, equal values fix it; ReadOnly makes the text
-// view not editable and SetOptions turns it back; EnterNewline never submits.
+// view not editable (and refuses Replace's user edit) and SetOptions turns it
+// back; EnterNewline never submits.
 func TestEditorLinesAndReadOnly(t *testing.T) {
 	withEditor(t, EditorOptions{MinLines: 3, MaxLines: 5, Enter: EnterNewline, ReadOnly: true}, func(e *Editor) {
-		e.sync()
+		e.TakeSignals()
 		line := float32(e.lineH)
-		if h := e.Height(); h != 3*line+2*float32(e.insetY) {
+		lines := func(n int) float32 { return float32(n)*line + 2*float32(e.insetY) }
+		if h := e.Height(); h != lines(3) {
 			t.Errorf("empty, MinLines 3: height %v, line %v", h, line)
 		}
 		if objc.SendBool(e.tv, objc.Sel("isEditable")) || !objc.SendBool(e.tv, objc.Sel("isSelectable")) {
 			t.Error("ReadOnly: the text view is editable or not selectable")
 		}
-		_ = e.SetText([]byte("1\n2\n3\n4\n5\n6\n7\n8"))
-		e.dirtyH = true
-		e.sync()
-		if h := e.Height(); h != 5*line+2*float32(e.insetY) {
-			t.Errorf("8 lines, MaxLines 5: height %v, want %v", h, 5*line)
+		if err := e.Replace(TextRange{}, []byte("x"), TextRange{1, 1}); err == nil || len(e.Text()) != 0 {
+			t.Errorf("a read-only editor took Replace: %v, %q", err, e.Text())
 		}
 		o := e.Options()
-		o.ReadOnly, o.MinLines, o.MaxLines = false, 4, 4
+		o.ReadOnly = false
 		e.SetOptions(o)
-		e.sync()
 		if !objc.SendBool(e.tv, objc.Sel("isEditable")) {
 			t.Error("SetOptions did not make the text view editable")
 		}
-		if h := e.Height(); h != 4*line+2*float32(e.insetY) {
+		// typed line by line, as the user edits (the layout follows each)
+		for i, want := range []int{3, 3, 4, 5, 5, 5, 5} {
+			n := len(e.Text())
+			if err := e.Replace(TextRange{n, n}, []byte("\n"), TextRange{n + 1, n + 1}); err != nil {
+				t.Fatal(err)
+			}
+			e.TakeSignals()
+			if h := e.Height(); h != lines(want) {
+				t.Errorf("%d lines (MinLines 3, MaxLines 5): height %v, want %v", i+2, h, lines(want))
+			}
+		}
+		o.MinLines, o.MaxLines = 4, 4
+		e.SetOptions(o)
+		e.TakeSignals()
+		if h := e.Height(); h != lines(4) {
 			t.Errorf("fixed at 4 lines: height %v", h)
 		}
 		for _, m := range []Mods{0, ModShift, ModSuper, ModAlt} {
