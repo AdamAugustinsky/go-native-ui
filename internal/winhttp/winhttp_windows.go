@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"syscall"
 	"unsafe"
 
@@ -222,11 +223,11 @@ func Session(agent string, p Proxy) (uintptr, error) {
 				break
 			}
 		}
-		// "<-loopback>" removes the loopback addresses from the implicit
-		// bypass list: an explicit proxy carries them too, as on macOS and
-		// Linux.
-		name, bypass := Wide(host+":"+strconv.Itoa(p.Port)), Wide("<-loopback>")
-		h, e = call(pOpen, uintptr(unsafe.Pointer(a)), accessNamedProxy, uintptr(unsafe.Pointer(name)), uintptr(unsafe.Pointer(bypass)), 0)
+		// WinHTTP sends loopback addresses past any proxy (WinINet's
+		// "<-loopback>" does not change that here; measured on both
+		// runners).
+		name := Wide(host + ":" + strconv.Itoa(p.Port))
+		h, e = call(pOpen, uintptr(unsafe.Pointer(a)), accessNamedProxy, uintptr(unsafe.Pointer(name)), 0, 0)
 	default:
 		h, e = call(pOpen, uintptr(unsafe.Pointer(a)), accessAutomaticProxy, 0, 0, 0)
 		if h == 0 && e == errInvalidParameter {
@@ -307,12 +308,20 @@ func UpgradeToWebSocket(req uintptr) error {
 }
 
 // AddHeaders adds header lines ("Name: value\r\n" each), replacing ones of
-// the same name.
+// the same name. Each line is its own call: with WINHTTP_ADDREQ_FLAG_REPLACE
+// a call takes one header.
 func AddHeaders(req uintptr, lines string) error {
-	if lines == "" {
-		return nil
+	for lines != "" {
+		line, rest, _ := strings.Cut(lines, "\r\n")
+		lines = rest
+		if line == "" {
+			continue
+		}
+		if err := boolCall("WinHttpAddRequestHeaders", pAddHeaders, req, uintptr(unsafe.Pointer(Wide(line))), uintptr(^uint32(0)), addReqFlagAdd|addReqFlagReplace); err != nil {
+			return err
+		}
 	}
-	return boolCall("WinHttpAddRequestHeaders", pAddHeaders, req, uintptr(unsafe.Pointer(Wide(lines))), uintptr(^uint32(0)), addReqFlagAdd|addReqFlagReplace)
+	return nil
 }
 
 // Send starts the request; total is the body's length when the body is
@@ -321,13 +330,34 @@ func Send(req uintptr, total uint32) error {
 	return boolCall("WinHttpSendRequest", pSendRequest, req, 0, 0, 0, 0, uintptr(total), 0)
 }
 
+// The calls on the data path (Write, Available, Read, WSSend, WSReceive)
+// call syscall.SyscallN directly with their pointers converted in its
+// argument list, which keeps them alive for the call: a variadic
+// uintptrescapes helper would heap-allocate its argument slice on every
+// call (one allocation per WebSocket message, measured on both runners).
+
+func boolResult(name string, r uintptr, e syscall.Errno) error {
+	if uint32(r) == 0 {
+		return &Error{name, e}
+	}
+	return nil
+}
+
+func dwordResult(name string, r uintptr) error {
+	if uint32(r) != 0 {
+		return &Error{name, syscall.Errno(uint32(r))}
+	}
+	return nil
+}
+
 // Write sends p of the request body; *n receives what was written.
 func Write(req uintptr, p []byte, n *uint32) error {
 	if len(p) == 0 {
 		*n = 0
 		return nil
 	}
-	return boolCall("WinHttpWriteData", pWriteData, req, uintptr(unsafe.Pointer(&p[0])), uintptr(len(p)), uintptr(unsafe.Pointer(n)))
+	r, _, e := syscall.SyscallN(pWriteData, req, uintptr(unsafe.Pointer(&p[0])), uintptr(len(p)), uintptr(unsafe.Pointer(n)))
+	return boolResult("WinHttpWriteData", r, e)
 }
 
 // Receive waits for the response's headers.
@@ -397,12 +427,14 @@ func URL(req uintptr) string {
 // its buffer is full or the body ends, so a streamed body is read as
 // Available, then Read of that many bytes (probe P8).
 func Available(req uintptr, n *uint32) error {
-	return boolCall("WinHttpQueryDataAvailable", pQueryDataAvailable, req, uintptr(unsafe.Pointer(n)))
+	r, _, e := syscall.SyscallN(pQueryDataAvailable, req, uintptr(unsafe.Pointer(n)))
+	return boolResult("WinHttpQueryDataAvailable", r, e)
 }
 
 // Read reads up to len(p) bytes of the body into p; *n is 0 at the end.
 func Read(req uintptr, p []byte, n *uint32) error {
-	return boolCall("WinHttpReadData", pReadData, req, uintptr(unsafe.Pointer(&p[0])), uintptr(len(p)), uintptr(unsafe.Pointer(n)))
+	r, _, e := syscall.SyscallN(pReadData, req, uintptr(unsafe.Pointer(&p[0])), uintptr(len(p)), uintptr(unsafe.Pointer(n)))
+	return boolResult("WinHttpReadData", r, e)
 }
 
 // CloseHandle closes a WinHTTP handle, ending a call blocked on it.
@@ -424,18 +456,20 @@ func CompleteUpgrade(req uintptr) (uintptr, error) {
 
 // WSSend sends p as one buffer of type typ.
 func WSSend(ws uintptr, typ int, p []byte) error {
-	var ptr uintptr
-	if len(p) > 0 {
-		ptr = uintptr(unsafe.Pointer(&p[0]))
+	if len(p) == 0 {
+		r, _, _ := syscall.SyscallN(pWSSend, ws, uintptr(typ), 0, 0)
+		return dwordResult("WinHttpWebSocketSend", r)
 	}
-	return dwordCall("WinHttpWebSocketSend", pWSSend, ws, uintptr(typ), ptr, uintptr(len(p)))
+	r, _, _ := syscall.SyscallN(pWSSend, ws, uintptr(typ), uintptr(unsafe.Pointer(&p[0])), uintptr(len(p)))
+	return dwordResult("WinHttpWebSocketSend", r)
 }
 
 // WSReceive reads the next piece of a message into p (len(p) > 0); *n and
 // *typ receive its length and buffer type.
 func WSReceive(ws uintptr, p []byte, n, typ *uint32) error {
-	return dwordCall("WinHttpWebSocketReceive", pWSReceive, ws, uintptr(unsafe.Pointer(&p[0])), uintptr(len(p)),
+	r, _, _ := syscall.SyscallN(pWSReceive, ws, uintptr(unsafe.Pointer(&p[0])), uintptr(len(p)),
 		uintptr(unsafe.Pointer(n)), uintptr(unsafe.Pointer(typ)))
+	return dwordResult("WinHttpWebSocketReceive", r)
 }
 
 // WSShutdown sends a close frame without waiting for the server's.

@@ -16,9 +16,9 @@
 //		AnyStatus:      true, // a 4xx's JSON body is the app's to read
 //	})
 //
-// Do is a contract in phase 8's wave 0: until N1 lands it serves only what
-// Get does (GET without a body) and returns ErrUnsupportedRequest for the
-// rest.
+// The body is read on the calling goroutine as the system takes it, so an
+// upload of any size (a file through io.SectionReader, a generated stream)
+// runs in constant memory.
 //
 //	var buf bytes.Buffer
 //	res, err := fetch.Get(ctx, "https://example.com/app-1.2.zip", f, fetch.Options{
@@ -38,9 +38,14 @@
 //     program links neither net/http nor crypto/tls (about 2.8 MB), and the
 //     transfer uses the system's trust store, its proxy settings (System
 //     Settings, PAC files, per-network rules) and its TLS fixes.
-//   - Windows and Linux: net/http. The trust store is the system's (on Linux
-//     the usual certificate directories); the proxy is the one the
-//     HTTP_PROXY, HTTPS_PROXY and NO_PROXY environment variables name.
+//   - Windows: WinHTTP (winhttp.dll), synchronous, one session per call. The
+//     program links neither net/http nor crypto/tls; TLS is SChannel with
+//     the system's trust store, and the proxy is the system's
+//     (WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY: auto-detection, PAC files and the
+//     user's settings), not the environment's.
+//   - Linux: net/http. The trust store is the usual certificate
+//     directories; the proxy is the one the HTTP_PROXY, HTTPS_PROXY and
+//     NO_PROXY environment variables name.
 //
 // Both behave the same where the API reaches: the same redirects (followed),
 // the same errors, the same limits, the body delivered as the server sent it
@@ -72,20 +77,19 @@
 //
 // # Proxies
 //
-// Without Options.Proxy, macOS uses the system's proxy settings and the
-// other systems the HTTP_PROXY, HTTPS_PROXY and NO_PROXY environment
-// variables. Options.Proxy overrides that, also for loopback addresses, and a
-// Proxy of Kind ProxyNone connects directly whatever those say. On
-// macOS the credentials of an HTTP proxy (Proxy.User) answer the proxy's 407
-// for https URLs, which go through CONNECT; the system does not turn a 407
-// for a plain http URL into a request for credentials, so that transfer
-// fails with a *StatusError with Code 407. SOCKS5 credentials work for both.
-//
-// # The plan for Windows
-//
-// N1 moves Windows from net/http to WinHTTP (the system's TLS, trust store
-// and proxy settings), so that no darwin or windows program that imports
-// this package links net/http or crypto/tls; net/http stays on Linux.
+// Without Options.Proxy, macOS and Windows use the system's proxy settings
+// and Linux the HTTP_PROXY, HTTPS_PROXY and NO_PROXY environment variables.
+// Options.Proxy overrides that, also for loopback addresses (except on
+// Windows, where WinHTTP always connects to those directly), and a Proxy of
+// Kind ProxyNone connects directly whatever those say. On macOS the
+// credentials of an HTTP proxy (Proxy.User) answer the proxy's 407 for https
+// URLs, which go through CONNECT; the system does not turn a 407 for a plain
+// http URL into a request for credentials, so that transfer fails with a
+// *StatusError with Code 407. SOCKS5 credentials work for both. Windows
+// offers the credentials of an HTTP proxy with Basic before it asks, and
+// answers its 407 once for a request without a body. WinHTTP has no SOCKS
+// and no TLS-secured proxy: ProxySOCKS5 and ProxyHTTPS fail there with an
+// error that satisfies errors.Is(err, errors.ErrUnsupported).
 //
 // # Threads
 //
@@ -161,11 +165,12 @@ const (
 	// ProxyHTTP is an HTTP proxy reached without encryption. It carries http
 	// URLs and, through CONNECT, https URLs.
 	ProxyHTTP ProxyKind = iota + 1
-	// ProxyHTTPS is an HTTP proxy reached over TLS. macOS does not offer it
-	// to NSURLSession's proxy settings: there the transfer fails with an error
-	// that satisfies errors.Is(err, errors.ErrUnsupported).
+	// ProxyHTTPS is an HTTP proxy reached over TLS. Neither NSURLSession's
+	// proxy settings nor WinHTTP offer it: on macOS and Windows the transfer
+	// fails with an error that satisfies errors.Is(err, errors.ErrUnsupported).
 	ProxyHTTPS
 	// ProxySOCKS5 is a SOCKS5 proxy; names are resolved by the proxy.
+	// WinHTTP has none: on Windows it is errors.ErrUnsupported.
 	ProxySOCKS5
 	// ProxyNone is no proxy: the transfer connects to the server directly,
 	// whatever the system's settings or the environment name (a host on the
@@ -204,7 +209,7 @@ type Response struct {
 	Headers map[string]string
 }
 
-// The errors Get and Bytes return can be matched with errors.Is and errors.As;
+// The errors Get, Bytes and Do return can be matched with errors.Is and errors.As;
 // each also carries the URL and, where there is one, the system's own message.
 var (
 	// ErrTooLarge means the body is longer than Options.MaxBytes.

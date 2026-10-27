@@ -462,21 +462,33 @@ func floodSeconds() int {
 }
 
 // N2's gate: 1,000 messages a second for 10 s, with 0 Go allocations per
-// message on the receive path. The count is the process's (the server's
-// writes allocate nothing either), after a warm-up.
+// message on the receive path. Two measurements: ReadMessage alone over a
+// burst already in the socket (testing.AllocsPerRun; the server is idle),
+// which must be exactly 0; then the paced run, counting the whole
+// process's allocations (the server's writes allocate nothing either).
 func TestReceiveAllocations(t *testing.T) {
 	if testing.Short() {
 		t.Skip("runs for 10 s")
 	}
 	secs := floodSeconds()
 	total := 1000 * secs
+	const burst = 100
 	s := newServer(t)
+	ready, paced := make(chan float64, 1), make(chan struct{})
 	s.handlers["/flood"] = func(p *peer) {
 		msg := make([]byte, 256)
+		seq := uint64(0)
+		// The burst: burst+1 messages (AllocsPerRun's warm-up included).
+		ready <- testing.AllocsPerRun(burst, func() {
+			binary.BigEndian.PutUint64(msg, seq)
+			seq++
+			p.write(Binary, msg)
+		})
+		<-paced
 		tick := time.NewTicker(time.Millisecond)
 		defer tick.Stop()
 		for i := range total {
-			binary.BigEndian.PutUint64(msg, uint64(i))
+			binary.BigEndian.PutUint64(msg, seq+uint64(i))
 			if p.write(Binary, msg) != nil {
 				return
 			}
@@ -486,6 +498,23 @@ func TestReceiveAllocations(t *testing.T) {
 	}
 	c := dial(t, s.url+"/flood", Options{})
 	buf := make([]byte, 0, 4096)
+	writeAllocs := <-ready
+	next := uint64(0)
+	read := func() {
+		kind, msg, err := c.ReadMessage(buf)
+		if err != nil || kind != Binary || len(msg) != 256 || binary.BigEndian.Uint64(msg) != next {
+			t.Fatalf("message %d: kind %d, %d bytes, %v", next, kind, len(msg), err)
+		}
+		next++
+		buf = msg
+	}
+	readAllocs := testing.AllocsPerRun(burst, read)
+	t.Logf("burst: ReadMessage %.2f allocations per message; the test server's write %.2f", readAllocs, writeAllocs)
+	if readAllocs != 0 {
+		t.Errorf("ReadMessage allocates %.2f times per message", readAllocs)
+	}
+
+	close(paced)
 	const warm = 200
 	var before, after runtime.MemStats
 	start := time.Now()
@@ -494,14 +523,7 @@ func TestReceiveAllocations(t *testing.T) {
 			runtime.GC()
 			runtime.ReadMemStats(&before)
 		}
-		kind, msg, err := c.ReadMessage(buf)
-		if err != nil {
-			t.Fatalf("message %d: %v", i, err)
-		}
-		if kind != Binary || len(msg) != 256 || binary.BigEndian.Uint64(msg) != uint64(i) {
-			t.Fatalf("message %d: kind %d, %d bytes, sequence %d", i, kind, len(msg), binary.BigEndian.Uint64(msg))
-		}
-		buf = msg
+		read()
 	}
 	runtime.ReadMemStats(&after)
 	n := total - warm
@@ -510,12 +532,12 @@ func TestReceiveAllocations(t *testing.T) {
 	t.Logf("%d messages in %v (%.0f/s); %d Go allocations in the process over the last %d: %.4f per message",
 		total, took.Round(time.Millisecond), float64(total)/took.Seconds(), allocs, n, float64(allocs)/float64(n))
 	if os.Getenv("WS_ALLOC_REPORT") != "" {
-		fmt.Fprintf(os.Stderr, "WS_ALLOCS %s/%s messages=%d allocs=%d per_message=%.4f seconds=%.2f\n",
-			runtime.GOOS, runtime.GOARCH, n, allocs, float64(allocs)/float64(n), took.Seconds())
+		fmt.Fprintf(os.Stderr, "WS_ALLOCS %s/%s burst_read=%.2f burst_server_write=%.2f paced_messages=%d paced_process_allocs=%d per_message=%.4f seconds=%.2f\n",
+			runtime.GOOS, runtime.GOARCH, readAllocs, writeAllocs, n, allocs, float64(allocs)/float64(n), took.Seconds())
 	}
-	// Zero per message: anything left is the runtime's own background
+	// Zero per message: what is left is the runtime's own background
 	// (timers, the GC), well under one per hundred messages.
 	if float64(allocs) > float64(n)/100 {
-		t.Errorf("%d allocations over %d messages: the receive path allocates", allocs, n)
+		t.Errorf("%d allocations in the process over %d messages", allocs, n)
 	}
 }

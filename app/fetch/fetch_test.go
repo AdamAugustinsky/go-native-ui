@@ -464,12 +464,15 @@ func TestHTTPProxy(t *testing.T) {
 	if len(reqs) != 1 || reqs[0] != "GET "+phantom+"/feed.json?v=2" || auth[0] != "" {
 		t.Errorf("the proxy saw %q (auth %q), want one GET of %s/feed.json?v=2", reqs, auth, phantom)
 	}
-	// An explicit proxy carries loopback addresses too.
-	if _, _, err := Bytes(context.Background(), "http://127.0.0.1:9/loop", 1<<10, Options{Proxy: &Proxy{Kind: ProxyHTTP, Host: host, Port: port}}); err != nil {
-		t.Errorf("loopback address through the proxy: %v", err)
-	}
-	if reqs, _ := s.snapshot(); len(reqs) != 2 || reqs[1] != "GET http://127.0.0.1:9/loop" {
-		t.Errorf("the proxy saw %q, want the loopback request second", reqs)
+	// An explicit proxy carries loopback addresses too, except on Windows,
+	// where WinHTTP always connects to them directly.
+	if runtime.GOOS != "windows" {
+		if _, _, err := Bytes(context.Background(), "http://127.0.0.1:9/loop", 1<<10, Options{Proxy: &Proxy{Kind: ProxyHTTP, Host: host, Port: port}}); err != nil {
+			t.Errorf("loopback address through the proxy: %v", err)
+		}
+		if reqs, _ := s.snapshot(); len(reqs) != 2 || reqs[1] != "GET http://127.0.0.1:9/loop" {
+			t.Errorf("the proxy saw %q, want the loopback request second", reqs)
+		}
 	}
 	// The zero Kind means HTTP.
 	if _, _, err := Bytes(context.Background(), phantom+"/", 1<<10, Options{Proxy: &Proxy{Host: host, Port: port}}); err != nil {
