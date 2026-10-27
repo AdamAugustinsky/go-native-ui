@@ -212,8 +212,25 @@ loop from Build does the same; an animated `zoom:` inside a nested
     transaction.
   - With the platform's handler calls disabled, both counts are 0 and the
     test fails.
-  - The test skips when the window is not visible. Under a locked screen,
-    AppKit never posts `windowDidEnterFullScreen`.
+  - It skips only on evidence that the machine can't go full screen: the
+    screen is locked (AppKit then never posts `windowDidEnterFullScreen`),
+    the window was never visible, or AppKit never began the transition.
+  - **CI flake (`p6-fsflake`, 2026-10-19).** The test failed now and then
+    on the macOS runner, for two reasons:
+    - **Frame stalls.** The exit was clicked from a frame, and the runner's
+      display sometimes stopped delivering frames after the entry, so the
+      exit was never clicked. The exit is now clicked from the run loop,
+      0.5 s after `windowDidEnterFullScreen`, and deadlines count frame
+      time.
+    - **Other apps taking the front.** When another process's window came
+      to the front during a transition, AppKit sometimes never finished
+      it. A plain AppKit app making the same clicks wedged the same way on
+      the runner, 6 times in 69 runs. Such an attempt is now rerun, up to
+      3 times.
+    - In a loop on the runner (fsloop run 39344195264), 90 of 90 runs
+      passed. Some ran alone, some with the platform tests opening windows
+      alongside, some with the whole suite in the background; 3 needed a
+      second attempt.
 - `TestFrameDrawablesBounded` checks over 600 frames that drawables are
   released, a frame makes no Go allocations, and the leak counters stay
   level. It also checks that `Present`, called with no pool of the
