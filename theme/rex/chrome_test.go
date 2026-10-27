@@ -384,5 +384,8 @@ func TestThemeWithFieldRecoloursTheField(t *testing.T) {
 	}
 	if g := Theme().Roles[theme.Dark][theme.GlassTint]; g != theme.ColA(darkGlass, darkAlpha) {
 		t.Errorf("Rex's own GlassTint changed to %08X", g)
+	}	// the scrim over a backdrop: the one given, Rex's for the other mode
+	if sc := newLook(FieldColors{Scrim: [2]uint32{0xE6F2EA, 0}}).scrim; sc != [2]uint32{0xE6F2EA, scrimDark} || rexLook.scrim != [2]uint32{scrimLight, scrimDark} {
+		t.Errorf("scrims %06X, Rex's %06X", sc, rexLook.scrim)
 	}
 }

@@ -144,20 +144,30 @@ type FieldStop struct {
 type FieldColors struct {
 	Light, Dark []FieldStop
 	DarkGlass   uint32
+	// Scrim is the light and the dark tone laid over a backdrop (a system
+	// material behind the window, theme.Resolved.Backdrop) in the field's
+	// place, 0xRRGGBB; 0 keeps Rex's.
+	Scrim [2]uint32
 }
 
 // look is one theme's field and glass, light and dark.
 type look struct {
 	light, dark model
 	stops       [2][nStops]bgStop // the stops of a recoloured field
+	scrim       [2]uint32         // the tones over a backdrop, light and dark
 }
 
-var rexLook = &look{light: lightModel, dark: darkModel}
+var rexLook = &look{light: lightModel, dark: darkModel, scrim: [2]uint32{scrimLight, scrimDark}}
 
 // newLook is Rex's look recoloured by fc, its stops sampled at the mesh's
 // heights.
 func newLook(fc FieldColors) *look {
-	lk := &look{light: lightModel, dark: darkModel}
+	lk := &look{light: lightModel, dark: darkModel, scrim: rexLook.scrim}
+	for m, c := range fc.Scrim {
+		if c != 0 {
+			lk.scrim[m] = c
+		}
+	}
 	if len(fc.Light) > 0 {
 		lk.stops[0] = resample(fc.Light)
 		lk.light.stops = lk.stops[0][:]
