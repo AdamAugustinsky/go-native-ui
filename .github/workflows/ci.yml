@@ -340,7 +340,7 @@ jobs:
   windows:
     name: Windows ${{ matrix.arch }} (D3D11, WARP on runners)
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 35
+    timeout-minutes: 45 # W1 added two two-window benches
     strategy:
       fail-fast: false
       matrix:
@@ -375,6 +375,23 @@ jobs:
           fi
           exit "$status"
           EOF
+      # windows-11-arm starts with shell surfaces over the desktop (a
+      # full-screen "Microsoft account" prompt, then Start and Search) that
+      # cover our windows and take the foreground (docs/PHASE8-PLAN.md, W4's
+      # probe note P7). The tests and benches open several windows, activate
+      # them and run a menu loop (W1), so they clear them first, as
+      # probes.yml does; a no-op on amd64.
+      - name: clear the shell surfaces over the desktop
+        shell: pwsh
+        run: |
+          foreach ($n in 'WWAHost', 'SearchHost', 'StartMenuExperienceHost') {
+            $p = Get-Process $n -ErrorAction SilentlyContinue
+            if ($p) { $p | ForEach-Object { "stopping $n $($_.Id) '$($_.MainWindowTitle)'"; Stop-Process -Id $_.Id -Force } } else { "no $n running" }
+          }
+          Start-Sleep -Seconds 3
+          (New-Object -ComObject WScript.Shell).SendKeys('{ESC}')
+          Start-Sleep -Seconds 1
+          foreach ($n in 'WWAHost', 'SearchHost', 'StartMenuExperienceHost') { "$n after: $(@(Get-Process $n -ErrorAction SilentlyContinue).Count)" }
       - name: test
         run: |
           GNUI_FS_REPORT=$RUNNER_TEMP/fs-report.txt go test -count=1 -skip "$QUARANTINE" $(go list $PKGS | grep -v -E "$PKGS_EXCLUDE")
@@ -404,11 +421,19 @@ jobs:
           ./bin/gallery.exe -o gallery-windows-${{ matrix.arch }}.png -o-dark gallery-windows-${{ matrix.arch }}-dark.png
           ./bin/gallery.exe -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 420s | tee gallery-windows-${{ matrix.arch }}.json
           { echo '```json'; cat gallery-windows-${{ matrix.arch }}.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: gallery with two windows (W1, D68; the idle one draws nothing while the bench measures)
+        run: |
+          ./bin/gallery.exe -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 420s -windows 2 | tee gallery-2w-windows-${{ matrix.arch }}.json
+          { echo '```json'; cat gallery-2w-windows-${{ matrix.arch }}.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - name: notes example (windowed bench with the allocation gate)
         run: |
           go build -trimpath -ldflags="-s -w" -o bin/notes.exe ./examples/notes
           ./bin/notes.exe -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 420s | tee notes-windows-${{ matrix.arch }}.json
           { echo '```json'; cat notes-windows-${{ matrix.arch }}.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: notes with two windows (W1, D68)
+        run: |
+          ./bin/notes.exe -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 420s -windows 2 | tee notes-2w-windows-${{ matrix.arch }}.json
+          { echo '```json'; cat notes-2w-windows-${{ matrix.arch }}.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -424,7 +449,9 @@ jobs:
             gallery-windows-${{ matrix.arch }}.json
             gallery-windows-${{ matrix.arch }}.png
             gallery-windows-${{ matrix.arch }}-dark.png
+            gallery-2w-windows-${{ matrix.arch }}.json
             notes-windows-${{ matrix.arch }}.json
+            notes-2w-windows-${{ matrix.arch }}.json
           if-no-files-found: ignore
 
   linux:

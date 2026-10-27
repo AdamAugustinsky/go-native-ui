@@ -147,8 +147,8 @@ type AppConfig struct {
 	// the bundle's CFBundleIdentifier. Services key their files and system
 	// registrations by it.
 	ID string
-	// KeepRunning keeps the app running when its last window closes (macOS;
-	// elsewhere the app ends with its last window).
+	// KeepRunning keeps the app running when its last window closes (macOS
+	// and Windows; on Linux the app ends with its last window).
 	KeepRunning bool
 	// StartHidden launches without showing a window (a login item): windows
 	// opened during Start stay hidden until EvReopen or Win.Show. The
@@ -167,13 +167,19 @@ type AppConfig struct {
 	// automatic window tabbing and the View menu's tab items). Off by
 	// default: the app's windows stay windows.
 	WindowTabbing bool
+	// QuitBlockReason is what Windows shows beside the app while a logout or
+	// shutdown waits for its answer to the quit request (QuitLogout left
+	// unanswered during EvQuitRequested): the app's own words, in the user's
+	// language ("Saving changes" when empty). Windows only.
+	QuitBlockReason string
 }
 
 // Main runs the application: it creates the application object, calls
 // h.Start, and runs the app-wide loop, which keeps running with no window
-// open. It owns the main thread until the app ends: it returns when App.Quit
-// is called or the last window closes (unless KeepRunning). After an allowed
-// quit request macOS ends the process instead, after EvWillTerminate.
+// open (macOS and Windows). It owns the main thread until the app ends: it
+// returns when App.Quit is called, the last window closes (unless
+// KeepRunning) or a quit request is allowed (on Windows; macOS ends the
+// process instead, after EvWillTerminate).
 // SIGINT and SIGTERM become quit requests (QuitSignal); a second one while
 // the first is unanswered ends the process.
 func Main(cfg AppConfig, h Handler) error {
@@ -232,7 +238,7 @@ func (a *App) bindApp(signals bool) error {
 	err := platform.StartApp(platform.AppOptions{
 		Policy:       a.appCfg.Policy,
 		QuitDeadline: a.appCfg.QuitDeadline, QuitDeadlineAction: a.appCfg.QuitDeadlineAction,
-		Signals: signals, WindowTabbing: a.appCfg.WindowTabbing,
+		Signals: signals, WindowTabbing: a.appCfg.WindowTabbing, QuitBlockReason: a.appCfg.QuitBlockReason,
 	})
 	if err != nil {
 		platform.SetAppSink(nil)
@@ -302,12 +308,14 @@ func (a *App) RequestQuit() { platform.RequestQuit(platform.QuitApp) }
 type WindowConfig = Config
 
 // ErrOneWindow is OpenWindow's error for a second window where the OS has
-// one window per app in this phase (Windows and Linux; macOS has any number,
-// DECISIONS D30). It satisfies errors.Is(err, errors.ErrUnsupported).
+// one window per app so far (Linux; macOS and Windows have any number up to
+// platform.MaxWindows, DECISIONS D30 and phase 8's D68). It satisfies
+// errors.Is(err, errors.ErrUnsupported).
 var ErrOneWindow = fmt.Errorf("app: a second window: %w", errors.ErrUnsupported)
 
-// manyWindows is whether the OS has more than one window per app.
-const manyWindows = runtime.GOOS == "darwin"
+// manyWindows is whether the OS has more than one window per app, and an
+// app that runs with none (D30, D37; D68 on Windows).
+const manyWindows = runtime.GOOS == "darwin" || runtime.GOOS == "windows"
 
 // OpenWindow opens a window with builder b and draws its first frame
 // (content-first: it appears with that frame, unless the app starts hidden).
@@ -315,8 +323,8 @@ const manyWindows = runtime.GOOS == "darwin"
 // the renderer, the text system and the glyph atlas are the app's. From
 // Start or a safe point it opens at once; asked for during an event, a frame
 // (Build) or another window's opening, it opens at the next safe point, and a
-// failure then is reported by Win.Err. On Windows and Linux a second window
-// is refused (ErrOneWindow).
+// failure then is reported by Win.Err. On Linux a second window is refused
+// (ErrOneWindow).
 func (a *App) OpenWindow(cfg WindowConfig, b Builder) (*Win, error) {
 	if err := checkPanelConfig(cfg); err != nil {
 		return nil, err
@@ -561,7 +569,7 @@ func (a *App) safePoint() {
 // idleTurn is a turn of the loop with no window open: the app-wide pump.
 func (a *App) idleTurn() {
 	a.syncAppMenuBar()
-	if a.bench != nil || runtime.GOOS != "darwin" {
+	if a.bench != nil || !manyWindows {
 		a.done = true // nothing runs without a window here
 		return
 	}

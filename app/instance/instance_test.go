@@ -595,3 +595,43 @@ func TestRacingProcesses(t *testing.T) {
 		c.wait(t)
 	}
 }
+
+// A second instance's arguments of the app's schemes are taken out of the
+// request and handed to the application object as URLs (EvOpenURLs); the
+// rest is polled as before, and a request of URLs only is not polled at all.
+// A full ring of URLs answers "busy" and stores nothing.
+func TestSchemeArgumentsBecomeOpenURLs(t *testing.T) {
+	var offered [][]string
+	refuse := false
+	old := offerURLs
+	offerURLs = func(u []string) bool {
+		if refuse {
+			return false
+		}
+		offered = append(offered, slices.Clone(u))
+		return true
+	}
+	defer func() { offerURLs = old }()
+	dir := newDir(t)
+	p, _ := acquire(t, dir, Options{Schemes: []string{"notes-dev"}, Timeout: 200 * time.Millisecond})
+	_, s := acquire(t, dir, Options{Timeout: 200 * time.Millisecond})
+	if err := s.Send([]string{"notes-dev:x"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Send([]string{"--new", "NOTES-DEV://y?z=1", "notes-devx:no", "notes-dev"}); err != nil {
+		t.Fatal(err)
+	}
+	if want := [][]string{{"notes-dev:x"}, {"NOTES-DEV://y?z=1"}}; !slices.EqualFunc(offered, want, slices.Equal) {
+		t.Errorf("offered %q, want %q", offered, want)
+	}
+	if got := argsOf(p.Poll(nil)); len(got) != 1 || !slices.Equal(got[0], []string{"--new", "notes-devx:no", "notes-dev"}) {
+		t.Errorf("polled %q, want the second request without its URL", got)
+	}
+	refuse = true
+	if err := s.Send([]string{"notes-dev:full"}); !errors.Is(err, ErrBusy) {
+		t.Errorf("a refused URL: %v, want ErrBusy", err)
+	}
+	if got := p.Poll(nil); len(got) != 0 {
+		t.Errorf("a refused request was stored: %+v", got)
+	}
+}

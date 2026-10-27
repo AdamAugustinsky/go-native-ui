@@ -99,11 +99,12 @@ func (w *Win) ToggleFullscreen() { w.command(cmdFullscreen) }
 func (w *Win) Fullscreen() bool { return w.Open() && w.a.Win.FullScreen() }
 
 // Zoomed reports whether the window is zoomed (macOS: NSWindow's isZoomed,
-// the state a maximized window restores at launch). False where the OS has no
-// such state for the app to read.
+// the state a maximized window restores at launch; Windows: maximized).
+// False where the OS has no such state for the app to read.
 func (w *Win) Zoomed() bool { return w.Open() && w.a.Win.Zoomed() }
 
-// SetZoomed zooms the window or returns it to its user size (macOS: zoom:).
+// SetZoomed zooms the window or returns it to its user size (macOS: zoom:;
+// Windows: maximize and restore).
 // It zooms only when the state differs, so it can be called every frame.
 func (w *Win) SetZoomed(on bool) {
 	if !w.Open() || (w.a.cmd&cmdZoom == 0 && w.a.Win.Zoomed() == on) {
@@ -123,9 +124,10 @@ func (w *Win) SetTitle(title string) {
 	w.command(cmdTitle)
 }
 
-// Frame is the window's frame: the whole window, title bar included, in
-// points from the top-left of the primary display, y down (the space of
-// Screens). Zero where the OS does not say (Linux).
+// Frame is the window's frame: the whole window, title bar included, from
+// the top-left of the primary display, y down, in the space of Screens
+// (points on macOS; the virtual screen's pixels on Windows). Zero where the
+// OS does not say (Linux).
 func (w *Win) Frame() (x, y, width, height float64) {
 	if !w.Open() {
 		return 0, 0, 0, 0
@@ -202,7 +204,7 @@ type winState struct {
 	told    uint32 // the id whose EvWindowClosed was delivered (announceClosed)
 	winID   uint32 // its id, 0 before it opened
 
-	waited []platform.Event // the window's events from the last pump, where the pump is its Wait (pump_other.go)
+	waited []platform.Event // the window's events from the last pump, where the pump is its Wait (Linux: pump_other.go)
 
 	cmd       cmdMask    // window commands waiting for the safe point
 	frameWant [4]float64 // SetFrame's frame
@@ -335,8 +337,8 @@ func Screens(dst []Screen) []Screen { return platform.ScreensInto(dst[:0]) }
 // released with the last.
 
 // newSurface makes a window's surface: on the app's GPU device where the OS
-// shares one between windows (macOS), else on a device of its own (the one
-// window of Windows and Linux).
+// shares one between windows (macOS, Windows), else on a device of its own
+// (the one window of Linux).
 func (a *App) newSurface(n platform.Native, w, h int32, scale float32) (*gpu.Surface, error) {
 	s := a.appObject
 	if s.dev == nil && !s.noDev {

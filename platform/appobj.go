@@ -157,7 +157,8 @@ type QuitReason int64
 const (
 	// QuitMenu is the Quit menu item or ⌘Q.
 	QuitMenu QuitReason = iota + 1
-	// QuitDock is Quit from the Dock or another app (an Apple event).
+	// QuitDock is Quit from the Dock or another app (an Apple event; on
+	// Windows WM_CLOSE sent to the app window, as taskkill without /F does).
 	QuitDock
 	// QuitLogout is a logout, restart or shutdown: answer promptly.
 	QuitLogout
@@ -211,6 +212,11 @@ type AppOptions struct {
 	// WindowTabbing lets macOS group the app's windows into tabs (its
 	// automatic window tabbing, the View menu's tab items); off by default.
 	WindowTabbing bool
+	// QuitBlockReason is what Windows shows beside the app while a logout or
+	// shutdown waits for the app's answer to its quit request
+	// (ShutdownBlockReasonCreate); "" is a short English default. Windows
+	// only.
+	QuitBlockReason string
 }
 
 // AppSink receives the application object's events, on the main thread. The
@@ -282,6 +288,7 @@ const (
 type recTable struct {
 	id      uint16
 	kind    tableKind
+	evKind  AppEventKind // a ring's events (AppEvService when 0)
 	source  Source
 	recs    []record
 	free    []atomic.Uint64 // a set bit is a free record
@@ -554,7 +561,11 @@ func (r *Ring) offer(id uint64, withID bool, a, b int64, data []byte) bool {
 	if !withID {
 		id = t.fifo.Add(1)
 	}
-	t.fill(i, gen, AppEvent{Kind: AppEvService, Source: t.source, ID: id, A: a, B: b}, data)
+	kind := t.evKind
+	if kind == AppEvNone {
+		kind = AppEvService
+	}
+	t.fill(i, gen, AppEvent{Kind: kind, Source: t.source, ID: id, A: a, B: b}, data)
 	return true
 }
 
@@ -563,6 +574,43 @@ func (r *Ring) Accepted() uint64 { return r.t.accepted.Load() }
 
 // Refused counts the offers refused because the ring was full.
 func (r *Ring) Refused() uint64 { return r.t.refused.Load() }
+
+// openURLs is the ring of URLs handed over from outside the process where the
+// OS starts a new process for them (Windows: a second instance's arguments,
+// app/instance), made with the first offer.
+var openURLs struct {
+	once sync.Once
+	r    *Ring
+}
+
+// OfferOpenURLs offers urls, received from outside the process (a second
+// instance's command line), for delivery as AppEvOpenURLs (A the count, the
+// data the URLs NUL-separated), as macOS delivers the URLs it opens with the
+// app (class 3: accepted only if a record and room for them are free; false
+// refuses, keeping nothing, so the sender can be told "busy"). Any
+// goroutine; it allocates (these offers are rare).
+func OfferOpenURLs(urls []string) bool {
+	if len(urls) == 0 {
+		return true
+	}
+	openURLs.once.Do(func() {
+		r := NewRing(SourceInstance, RingRecords, RingBytes)
+		r.t.evKind = AppEvOpenURLs
+		openURLs.r = r
+	})
+	n := len(urls) - 1
+	for _, u := range urls {
+		n += len(u)
+	}
+	data := make([]byte, 0, n)
+	for i, u := range urls {
+		if i > 0 {
+			data = append(data, 0)
+		}
+		data = append(data, u...)
+	}
+	return openURLs.r.Offer(int64(len(urls)), 0, data)
+}
 
 // ---- Class 4: observations ----
 

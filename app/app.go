@@ -785,6 +785,8 @@ func (a *App) present(inHandler bool, passes int) bool {
 		a.p.drawn(a.more)
 		if bn := a.bench; bn != nil {
 			bn.after(a)
+		} else if r := a.root; r != nil && r != a && r.bench != nil && r.bench.measuring {
+			r.bench.companion++ // a companion window drew while the bench's measured (BenchOptions.Companions)
 		}
 		return true
 	}
