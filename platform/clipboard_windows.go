@@ -91,7 +91,7 @@ func openClipboard() bool {
 		return false
 	}
 	var owner uintptr
-	if w := theWindow; w != nil {
+	if w := firstWindow(); w != nil {
 		owner = w.hwnd
 	}
 	for i := 0; i < 10; i++ {
