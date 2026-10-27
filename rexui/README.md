@@ -617,7 +617,12 @@ Tab stays inside. Its radius (26) is that of the glass frame of an alert's
 panel, read from AppKit (`sheets.alertPanelCornerRadius`; a plain titled
 window reads 16), its content is 20 pt from the sides and top and its buttons
 are the alert's 28 pt capsules with the default rightmost and 16 pt from the
-bottom. The slide is designed.
+bottom. The slide is designed. Its surface is frosted glass drawn by our
+renderer (D54): what is under it blurred (16 pt, at a quarter) under 86 % of
+the raised fill, so the window's colour shows in it but no text behind it can
+be read, transparency on or off, from the entrance's first frame; under
+Reduce Transparency, and off Metal, it is the raised fill, opaque
+(`testdata/sheet-*.png`).
 
 **Alert is `app.Alert`.** A message, an explanation, a few buttons and a
 suppression checkbox are an `NSAlert` sheet on macOS, with the system's
