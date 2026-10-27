@@ -71,6 +71,8 @@ type Kit struct {
 	scrollMaxH float32 // NextScrollMaxHeight, pixels
 	nw, nh     ui.Size // Size for the next component (NextSize)
 	hasW, hasH bool
+	passed     [2]bool     // the axes of NextSize also set on the context, for a box opened through it
+	sizeMark   ui.SizeMark // the context's mark of them (syncSize)
 	nextAlign  ui.Align
 	hasAlign   bool
 	nextMono   bool // NextMono
@@ -238,7 +240,7 @@ func (k *Kit) Begin(c *ui.Context) {
 		k.resolve(s)
 	}
 	k.nDis, k.nOff, k.force = 0, 0, 0
-	k.hasW, k.hasH, k.hasAlign, k.nextMono = false, false, false, false
+	k.hasW, k.hasH, k.hasAlign, k.nextMono, k.passed = false, false, false, false, [2]bool{}
 
 	k.target = k.fol.Update(c, &k.r)
 	k.ready = true
