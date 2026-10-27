@@ -671,7 +671,7 @@ func (c *Context) emitRich(l *gpu.DrawList, b *box, r *richRec, clip [4]float32)
 			for _, rc := range c.rects {
 				dx := x0 + alignDX(&pv, pv.LineAt(rc[1]+0.5), w, b.align)
 				rc = [4]float32{rc[0] + dx, rc[1] + y0, rc[2] + dx, rc[3] + y0}
-				l.Add(gpu.Quad{Rect: rc, Clip: clip, Border: max(c.scale, 1), BorderColor: col})
+				l.Add(gpu.Quad{Rect: rc, Clip: clip, FadeX: c.emitFade, Border: max(c.scale, 1), BorderColor: col})
 			}
 		}
 	}
@@ -694,7 +694,7 @@ func (c *Context) emitRichBG(l *gpu.DrawList, b *box, pv *text.ParaView, i int, 
 		if styles[st].BG&255 != 0 {
 			bx0, bx1 := ox+cellLeft(pv, i, g), ox+cellRight(pv, i, e-1)
 			col := b.col(styles[st].BG)
-			q := gpu.Quad{Rect: [4]float32{snap(bx0), snap(top), snap(bx1), snap(top + ln.Height)}, Clip: clip,
+			q := gpu.Quad{Rect: [4]float32{snap(bx0), snap(top), snap(bx1), snap(top + ln.Height)}, Clip: clip, FadeX: c.emitFade,
 				Color: [4]uint32{col, col, col, col}}
 			rad := styles[st].Radius
 			q.Radii = [4]float32{rad, rad, rad, rad}
@@ -709,7 +709,7 @@ func (c *Context) rule(l *gpu.DrawList, x0, x1, y, th float32, col uint32, clip 
 	if x1 <= x0 || col&255 == 0 {
 		return
 	}
-	l.Add(gpu.Quad{Rect: [4]float32{x0, y, x1, y + th}, Clip: clip, Color: [4]uint32{col, col, col, col}})
+	l.Add(gpu.Quad{Rect: [4]float32{x0, y, x1, y + th}, Clip: clip, FadeX: c.emitFade, Color: [4]uint32{col, col, col, col}})
 }
 
 // cellLeft and cellRight are the x interval of glyph g of line i (from the

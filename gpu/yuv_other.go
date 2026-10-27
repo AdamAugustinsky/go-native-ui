@@ -27,3 +27,7 @@ func (r *Renderer) Abandon(cmdBuf uintptr) {}
 
 // CollectLeases does nothing here: nothing is imported.
 func (r *Renderer) CollectLeases() {}
+
+// Collect does nothing here: nothing is imported, and freed textures go
+// with the frames that follow.
+func (r *Renderer) Collect() {}

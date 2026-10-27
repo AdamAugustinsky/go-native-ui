@@ -73,7 +73,9 @@ const (
 	// that child is an icon (an image, or text of one glyph) and the box draws
 	// no text: the icon's image box, or its glyph box (the glyph's advance by
 	// the font's ascent and descent), must have its centre on the box's centre
-	// on both axes.
+	// on both axes. With no flow child, a lone icon layered over the box
+	// (floating, through wrappers that draw nothing, beside layers that only
+	// paint) is checked the same way.
 	AuditCentre
 
 	numAuditChecks
@@ -197,7 +199,7 @@ func (c *Context) Audit(dst []Finding) []Finding {
 		if b.first == 0 {
 			continue
 		}
-		if b.axis != AxisFlow {
+		if b.axis < AxisFlow {
 			dst = c.auditOverlap(dst, id, tol)
 		}
 		dst = c.auditCovers(dst, id, 2*ptTol)
@@ -466,7 +468,7 @@ func (c *Context) auditCentre(dst []Finding, p ID, tol float32) []Finding {
 	if pb.exempt(AuditCentre) {
 		return dst
 	}
-	if pb.justify == JustifyCenter && pb.axis != AxisFlow {
+	if pb.justify == JustifyCenter && pb.axis < AxisFlow {
 		la := pb.layoutAxis()
 		lo, hi := float32(1e9), float32(-1e9)
 		for ch := pb.first; ch != 0; ch = c.boxes[ch].next {
@@ -498,6 +500,9 @@ func (c *Context) auditCentre(dst []Finding, p ID, tol float32) []Finding {
 		}
 		only = ch
 	}
+	if only == 0 {
+		only = c.floatingIcon(pb) // an icon layered over the box rather than in its flow
+	}
 	if only == 0 || c.boxes[only].first != 0 || c.boxes[only].exempt(AuditCentre) {
 		return dst
 	}
@@ -523,6 +528,46 @@ func (c *Context) auditCentre(dst []Finding, p ID, tol float32) []Finding {
 		dst = c.report(dst, AuditCentre, only, p, d)
 	}
 	return dst
+}
+
+// floatingIcon is the one icon box p's floating children hold, through
+// wrappers that draw nothing and hold one child each, beside layers that only
+// paint (a background disc, a ring); 0 when there is none, more than one, or
+// other content.
+func (c *Context) floatingIcon(pb *box) ID {
+	var icon ID
+	for ch := pb.first; ch != 0; ch = c.boxes[ch].next {
+		cb := &c.boxes[ch]
+		if cb.hid {
+			continue
+		}
+		if cb.flags&floatingMask == 0 {
+			return 0
+		}
+		id := ch
+		for {
+			b := &c.boxes[id]
+			if b.first == 0 || b.first != b.last || b.flags&(DrawText|DrawImage) != 0 {
+				break
+			}
+			id = b.first
+		}
+		b := &c.boxes[id]
+		if b.first != 0 {
+			return 0
+		}
+		if _, ok := c.iconInk(b); !ok {
+			if b.flags&(DrawText|DrawImage) != 0 {
+				return 0 // text or a picture: not a lone icon
+			}
+			continue // a layer that only paints
+		}
+		if icon != 0 {
+			return 0
+		}
+		icon = id
+	}
+	return icon
 }
 
 func abs32(v float32) float32 {

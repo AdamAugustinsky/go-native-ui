@@ -61,7 +61,7 @@ func cmdPackage(args []string, stdout, stderr io.Writer) error {
 		}
 	}
 
-	app := filepath.Join(*outDir, c.Name+".app")
+	app := filepath.Join(*outDir, c.AppFile())
 	fmt.Fprintf(stdout, "packaging %s %s (%s) -> %s\n", c.Name, c.Version, c.ID, app)
 	ent, cleanup, err := buildBundle(c, buildOptions{Tags: *tags, Ldflags: *ldflags, Out: app, Log: stdout})
 	if err != nil {

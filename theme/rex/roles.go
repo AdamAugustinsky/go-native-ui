@@ -21,7 +21,7 @@ var roles = func() [2]theme.Colors {
 	// rim while unfocused, and the unfocused glass (field.go).
 	l[theme.PaneHairline], d[theme.PaneHairline] = theme.ColA(0x5C5E60, 0.25), theme.ColA(0xFFFFFF, 0.11)
 	l[theme.PaneHighlight], d[theme.PaneHighlight] = theme.ColA(0xFFFFFF, 0.55), theme.ColA(0xFFFFFF, 0.06)
-	l[theme.GlassTint], d[theme.GlassTint] = theme.ColA(0xFFFFFF, fillAlpha), theme.ColA(0x2C2E3C, darkAlpha)
+	l[theme.GlassTint], d[theme.GlassTint] = theme.ColA(0xFFFFFF, fillAlpha), theme.ColA(darkGlass, darkAlpha)
 	l[theme.Shadow], d[theme.Shadow] = light.Shadow, dark.Shadow
 	l[theme.Scrim], d[theme.Scrim] = light.Scrim, dark.Scrim
 	return r
