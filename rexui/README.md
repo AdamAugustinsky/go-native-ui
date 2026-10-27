@@ -649,7 +649,7 @@ factor.
 
 ```sh
 go run ./tools/rexui list
-go run ./tools/rexui add button ./internal/ui     # button.go and tint.go, as package ui
+go run ./tools/rexui add button ./internal/ui     # button.go, tint.go and strings.go, as package ui
 ```
 
 `add` copies the component's file and the files it needs, rewrites the

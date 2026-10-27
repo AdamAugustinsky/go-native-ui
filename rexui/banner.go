@@ -242,7 +242,7 @@ func banner(k *base.Kit, title string, o BannerOpts, floating bool, tkey ui.Key)
 		}
 	}
 	if o.Dismissible || floating {
-		if IconButton(k, icon.Close, "Dismiss", IconButtonOpts{Variant: IconBorderless}).Clicked {
+		if IconButton(k, icon.Close, str.Dismiss, IconButtonOpts{Variant: IconBorderless}).Clicked {
 			sig.Dismissed = true
 		}
 	}
@@ -252,7 +252,7 @@ func banner(k *base.Kit, title string, o BannerOpts, floating bool, tkey ui.Key)
 
 // bannerName is "Level: title", built for the accessibility tree.
 func bannerName(c *ui.Context, lv BannerLevel, title string) string {
-	return c.Fmt().Str([...]string{"Info", "Success", "Warning", "Error"}[lv]).Str(": ").Str(title).String()
+	return c.Fmt().Str([...]string{str.BannerInfo, str.BannerSuccess, str.BannerWarning, str.BannerError}[lv]).Str(": ").Str(title).String()
 }
 
 // toastWrap is the period, in seconds, the toast keeps its last frame's time

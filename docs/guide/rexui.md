@@ -193,13 +193,22 @@ Transparency cost nothing extra. Three levels of change:
   and every button of that variant changes.
 - **A component:** copy its file into your package and edit it.
 
+**Words.** The few words the components supply themselves (a code block's
+Copy button, a banner's "Warning:", the names of the sidebar's disclosure, a
+sent message, the scroll bars) are a `rexui.Strings`, English by default.
+`rexui.SetStrings(rexui.StringsPtBR)`, before the first frame, switches them
+to Brazilian Portuguese; another language is a `Strings` of the app's own,
+whose empty fields stay English. They are read as they are each frame, at no
+cost; a label or name the app passes always wins. An app on `widget` alone
+sets the primitives' names with `base.SetStrings`.
+
 Rex is the default. `rexui.UseAppKitControls()`, called once before the first
 frame, gives the push, icon and toggle buttons and the segmented controls
 AppKit's rounded rectangles and blocks of the accent instead.
 
 ```sh
 go run ./tools/rexui list                         # every component and the files it needs
-go run ./tools/rexui add button ./internal/ui     # button.go and tint.go, as package ui
+go run ./tools/rexui add button ./internal/ui     # button.go, tint.go and strings.go, as package ui
 ```
 
 `add` copies a component's file and the files it needs, rewrites the package

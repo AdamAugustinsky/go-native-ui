@@ -174,7 +174,7 @@ func CodeBlock(k *base.Kit, key ui.Key, src []byte, o CodeOpts) CodeSignal {
 	c.NextBorder(rc.Rim.RGBA(r), r.Lines.Hairline)
 	c.NextRadius(pt(sc, rc.Radius))
 	c.NextRole(ui.RoleGroup)
-	c.NextSemName("Code")
+	c.NextSemName(str.Code)
 	id := c.BoxKeyed(ui.DrawBackground|ui.DrawBorder|ui.Clip, key, nil)
 	c.Push(id)
 	sig := CodeSignal{ID: id}
@@ -198,7 +198,7 @@ func CodeBlock(k *base.Kit, key ui.Key, src []byte, o CodeOpts) CodeSignal {
 			c.NextSize(ui.Grow(1), ui.Px(0))
 			c.Box(0, "lang")
 		}
-		if Button(k, "Copy", ButtonOpts{Variant: ButtonPlain, Size: theme.SizeSmall}).Clicked {
+		if Button(k, str.Copy, ButtonOpts{Variant: ButtonPlain, Size: theme.SizeSmall}).Clicked {
 			if c.ClipboardSet != nil {
 				c.ClipboardSet(src)
 			}
