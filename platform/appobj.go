@@ -806,7 +806,7 @@ func signalApp() {
 // SignalDispatch gives the dispatcher a turn, from any thread: it runs the
 // app's safe-point work and wakes no window (Wake hands each an EvWake, and
 // each draws). The GPU's completion handler calls it so that the safe point
-// releases what a finished frame held (gpu.Renderer.CollectLeases). On
+// releases what a finished frame held (gpu.Renderer.Collect). On
 // macOS; elsewhere the dispatcher runs with the loop's Wake.
 func SignalDispatch() { signalApp() }
 

@@ -3,8 +3,10 @@
 The guide's notes app is built from `widget`'s kit and a handful of `rexui`
 components: the toolbar, the sidebar, the scroll bars, labels. This chapter is
 about the library behind them. `rexui` is the **Rex component library**
-(D40, D52): styled components in the language of macOS 27, on measurements
-taken from the system, built on the headless primitives of `widget/base`. It
+(D40, D52): styled components in Rex, the framework's default look
+([Rex](rex.md): capsule controls, quiet tints of the accent, glass over a
+coloured field), on measurements taken from macOS 27, built on the headless
+primitives of `widget/base`. It
 is [shadcn](https://ui.shadcn.com)'s model without a registry: each component
 is one file that reads only tokens, and an app that wants a component of its
 own copies the file and edits it.
@@ -191,6 +193,10 @@ Transparency cost nothing extra. Three levels of change:
   and every button of that variant changes.
 - **A component:** copy its file into your package and edit it.
 
+Rex is the default. `rexui.UseAppKitControls()`, called once before the first
+frame, gives the push, icon and toggle buttons and the segmented controls
+AppKit's rounded rectangles and blocks of the accent instead.
+
 ```sh
 go run ./tools/rexui list                         # every component and the files it needs
 go run ./tools/rexui add button ./internal/ui     # button.go and tint.go, as package ui
@@ -218,5 +224,5 @@ one's variants, sizes and states, and how close it is to AppKit's.
 | Chat | `MessageBubble`, `ChatListRow`, `DateDivider`, `TypingIndicator`, `CompletionList` |
 
 The tests that keep it honest are in the package: `TestRecipesMatchAppKit` checks
-the measurements against AppKit's committed numbers, and
+the measurements against AppKit's committed numbers (under `UseAppKitControls`), and
 `TestNoAllocationsPerFrame` builds every component and fails on an allocation.

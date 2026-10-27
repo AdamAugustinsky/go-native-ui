@@ -10,7 +10,7 @@ import (
 //
 // The window background is a smooth field: a vertical multi-stop gradient
 // down the middle (pink-lavender at the top, neutral in the middle, warm
-// sand at the bottom in the light look; deep ink in the dark one) plus
+// sand at the bottom in the light look; warm plum to umber in the dark one) plus
 // warmer tints that run in from the left and right edges. It is drawn as a
 // mesh of four-corner quads whose corner colours are sampled from the model
 // below, so no texture or blur is needed. During a light/dark crossfade the
@@ -73,19 +73,20 @@ var lightStops = [nStops]bgStop{
 	{1278, hx(0xE7DEC3), hx(0xE7DAB2), hx(0xE7D6B5)},
 }
 
-// darkAnchors are the few stops the dark field is designed from: a violet
-// ink at the top that deepens to a neutral ink and then a warm umber at the
-// bottom, with the same left (violet-rose) and right (rose-amber) edge tints
-// as the light field, much quieter. init interpolates them at lightStops'
-// heights, so that both fields share one mesh.
+// darkAnchors are the few stops the dark field is fitted from, sampled from
+// the reference's dark screenshot (rex-screenshot-dark@2x): a warm plum at
+// the top that settles to a quiet warm ink and then umber at the bottom, the
+// edges a little rosier (left) and more amber (right) than the middle. init
+// interpolates them at lightStops' heights, so that both fields share one
+// mesh.
 var darkAnchors = [...]bgStop{
-	{0, hx(0x2E2A3C), hx(0x2E2A3C), hx(0x2E2A3C)},
-	{6, hx(0x221E31), hx(0x281F37), hx(0x281F31)},
-	{40, hx(0x1E1B2B), hx(0x251C33), hx(0x251C2E)},
-	{160, hx(0x1A1A25), hx(0x211A2B), hx(0x221A28)},
-	{520, hx(0x17181F), hx(0x1D1A25), hx(0x201A21)},
-	{900, hx(0x181A1E), hx(0x1F1B21), hx(0x221C1F)},
-	{1278, hx(0x1F1D1A), hx(0x241F1B), hx(0x262019)},
+	{0, hx(0x3A3238), hx(0x3B3035), hx(0x3B3036)},
+	{6, hx(0x342C33), hx(0x34292D), hx(0x332A30)},
+	{40, hx(0x30282E), hx(0x31262A), hx(0x30282E)},
+	{160, hx(0x2C2529), hx(0x2C2324), hx(0x2C2328)},
+	{520, hx(0x262122), hx(0x2C2220), hx(0x2C2220)},
+	{900, hx(0x23201F), hx(0x2B211E), hx(0x2A211D)},
+	{1278, hx(0x27221C), hx(0x2A221D), hx(0x27211A)},
 }
 
 var darkStops [nStops]bgStop
@@ -113,16 +114,96 @@ type model struct {
 }
 
 // fillAlpha is the opacity of the white glass of the light look; the dark
-// glass is lighter ink at darkAlpha.
+// glass is a lighter warm ink, darkGlass, at darkAlpha.
 const (
 	fillAlpha = 0.575
 	darkAlpha = 0.5
+	darkGlass = 0x362F32
 )
 
 var (
 	lightModel = model{stops: lightStops[:], fill: vec3{255, 255, 255}, alpha: fillAlpha, keep: 1 - fillAlpha, hueG: 0.5, hueB: 1.6, backdrop: true}
-	darkModel  = model{stops: darkStops[:], fill: hx(0x2C2E3C), alpha: darkAlpha, keep: 1 - darkAlpha, hueG: 1, hueB: 1}
+	darkModel  = model{stops: darkStops[:], fill: hx(darkGlass), alpha: darkAlpha, keep: 1 - darkAlpha, hueG: 1, hueB: 1}
 )
+
+// FieldStop is the field's colour at height Y in reference pixels (the
+// reference window is 1278 high at 2×; its top 90, the titlebar, keep their
+// size and the rest stretches with the window): Mid down the middle, Left
+// and Right at the window's edges, whose tints run in a few hundred
+// reference pixels. Colours are 0xRRGGBB.
+type FieldStop struct {
+	// Y is the stop's height in reference pixels.
+	Y float32
+	// Mid, Left and Right are the colours down the middle and at the left
+	// and right edges, 0xRRGGBB.
+	Mid, Left, Right uint32
+}
+
+// FieldColors recolour the window background of a theme made from Rex
+// (ThemeWithField): the light and the dark field's stops by height (nil
+// keeps Rex's), and the colour of the dark glass an unfocused surface is
+// made of (0 keeps Rex's; the light glass is white). Rex's fitted hue
+// balance of the light glass goes with its own field only.
+type FieldColors struct {
+	// Light and Dark are the light and the dark field's stops, top to
+	// bottom; nil keeps Rex's.
+	Light, Dark []FieldStop
+	// DarkGlass is the dark glass of an unfocused surface, 0xRRGGBB; 0 keeps
+	// Rex's.
+	DarkGlass uint32
+	// Scrim is the light and the dark tone laid over a backdrop (a system
+	// material behind the window, theme.Resolved.Backdrop) in the field's
+	// place, 0xRRGGBB; 0 keeps Rex's.
+	Scrim [2]uint32
+}
+
+// look is one theme's field and glass, light and dark.
+type look struct {
+	light, dark model
+	stops       [2][nStops]bgStop // the stops of a recoloured field
+	scrim       [2]uint32         // the tones over a backdrop, light and dark
+}
+
+var rexLook = &look{light: lightModel, dark: darkModel, scrim: [2]uint32{scrimLight, scrimDark}}
+
+// newLook is Rex's look recoloured by fc, its stops sampled at the mesh's
+// heights.
+func newLook(fc FieldColors) *look {
+	lk := &look{light: lightModel, dark: darkModel, scrim: rexLook.scrim}
+	for m, c := range fc.Scrim {
+		if c != 0 {
+			lk.scrim[m] = c
+		}
+	}
+	if len(fc.Light) > 0 {
+		lk.stops[0] = resample(fc.Light)
+		lk.light.stops = lk.stops[0][:]
+		lk.light.hueG, lk.light.hueB, lk.light.backdrop = 1, 1, false
+	}
+	if len(fc.Dark) > 0 {
+		lk.stops[1] = resample(fc.Dark)
+		lk.dark.stops = lk.stops[1][:]
+	}
+	if fc.DarkGlass != 0 {
+		lk.dark.fill = hx(fc.DarkGlass)
+	}
+	return lk
+}
+
+// resample interpolates stops at the heights of the mesh (lightStops').
+func resample(stops []FieldStop) [nStops]bgStop {
+	src := make([]bgStop, len(stops))
+	for i, s := range stops {
+		src[i] = bgStop{s.Y, hx(s.Mid), hx(s.Left), hx(s.Right)}
+	}
+	var out [nStops]bgStop
+	for i := range out {
+		y := lightStops[i].y
+		v, l, r := stopAt(src, y)
+		out[i] = bgStop{y, v, l, r}
+	}
+	return out
+}
 
 // edgeWeight is how much of the edge tint remains at distance d (reference
 // pixels) from a window edge: a fast fall-off near the edge plus a slow
@@ -201,25 +282,25 @@ func (m *model) fillAt(refW, xRef, yRef float32) uint32 {
 }
 
 // fieldAt returns the field colour of the mix t of light and dark.
-func fieldAt(t, xRef, drRef, yRef float32) uint32 {
+func (lk *look) fieldAt(t, xRef, drRef, yRef float32) uint32 {
 	switch t {
 	case 0:
-		return lightModel.bgAt(xRef, drRef, yRef).rgba(255)
+		return lk.light.bgAt(xRef, drRef, yRef).rgba(255)
 	case 1:
-		return darkModel.bgAt(xRef, drRef, yRef).rgba(255)
+		return lk.dark.bgAt(xRef, drRef, yRef).rgba(255)
 	}
-	return theme.MixRGBA(lightModel.bgAt(xRef, drRef, yRef).rgba(255), darkModel.bgAt(xRef, drRef, yRef).rgba(255), t)
+	return theme.MixRGBA(lk.light.bgAt(xRef, drRef, yRef).rgba(255), lk.dark.bgAt(xRef, drRef, yRef).rgba(255), t)
 }
 
 // glassAt returns the unfocused glass colour of the mix t.
-func glassAt(t, refW, xRef, yRef float32) uint32 {
+func (lk *look) glassAt(t, refW, xRef, yRef float32) uint32 {
 	switch t {
 	case 0:
-		return lightModel.fillAt(refW, xRef, yRef)
+		return lk.light.fillAt(refW, xRef, yRef)
 	case 1:
-		return darkModel.fillAt(refW, xRef, yRef)
+		return lk.dark.fillAt(refW, xRef, yRef)
 	}
-	return theme.MixRGBA(lightModel.fillAt(refW, xRef, yRef), darkModel.fillAt(refW, xRef, yRef), t)
+	return theme.MixRGBA(lk.light.fillAt(refW, xRef, yRef), lk.dark.fillAt(refW, xRef, yRef), t)
 }
 
 const (
@@ -247,6 +328,15 @@ type Field struct {
 	nodesX, nodesY [maxNodesX]float32 // pixel positions of the mesh nodes
 	cells          [maxBGCells]bgCell
 	ncells         int
+
+	look *look // its colours, nil: Rex's
+}
+
+func (f *Field) colors() *look {
+	if f.look == nil {
+		return rexLook
+	}
+	return f.look
 }
 
 // yPx is the pixel position of a reference height: the top 90 reference
@@ -314,7 +404,7 @@ func (f *Field) Build(w, h int, k, t float32) {
 	var grid [nStops][17]uint32
 	for j := range lightStops {
 		for i := 0; i < nn; i++ {
-			grid[j][i] = fieldAt(t, nodes[i], refW-nodes[i], lightStops[j].y)
+			grid[j][i] = f.colors().fieldAt(t, nodes[i], refW-nodes[i], lightStops[j].y)
 		}
 	}
 	f.ncells = 0
@@ -339,7 +429,7 @@ func (f *Field) Build(w, h int, k, t float32) {
 
 // fillAt is the composited colour of an unfocused surface at reference (x, y).
 func (f *Field) fillAt(xRef, yRef float32) uint32 {
-	return glassAt(f.t, float32(f.w)/f.k, xRef, yRef)
+	return f.colors().glassAt(f.t, float32(f.w)/f.k, xRef, yRef)
 }
 
 // ---- unfocused surface fill mesh ----

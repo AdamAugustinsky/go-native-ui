@@ -9,6 +9,7 @@ dark mode and accent colour: a compact toolbar over the system's glass, a sideba
 listing the notes in groups, the open note beside it, a text field to add a
 note, a switch for the order, a search, a menu with shortcuts and zoom, and a
 confirmation that is the system's alert. It allocates nothing while it runs.
+Its look is Rex, the framework's default ([Rex](guide/rex.md)).
 
 **Every code block is an excerpt of the example.** The fence names the file, the
 prose names the function, and a line `// …` marks lines left out. A test
@@ -22,6 +23,9 @@ rich text and services), each tested and allocating nothing in a steady frame, a
 demos that were already here (`cmd/windowsdemo`, `cmd/gallery`, `cmd/chromedemo`,
 `cmd/imgbench`):
 
+- [Rex](guide/rex.md): the default look, and the rules an app in it follows (the
+  theme in your colours, transparency, controls, layout, the app's name). Read
+  it before the first screen of a new app.
 - [The app object](guide/app-object.md): `app.Main`, the handler, windows, quitting and
   threads (`cmd/windowsdemo`).
 - [rexui](guide/rexui.md): the component library, forms, lists, system menus and
@@ -198,6 +202,27 @@ points (`r.Window.Toolbars`) and the app's own constants, times the scale, and
   `NextSize` set one property of the next widget only (`widget.Fill` takes the
   room its siblings leave, `Kit.Fixed(pt)` is a fixed size), and `NextJustify`
   and `NextCross` place children along and across the axis.
+- **The CSS you would reach for** is there, with the same meaning:
+  rows and columns with `NextJustify`, `NextCross` and `NextGap` (flexbox);
+  `ui.Grow(weight)` sizes a child from the room its siblings leave
+  (`flex: weight`; one `Grow(1)` is a spacer); `NextMinSize` and
+  `NextMaxSize` bound a box (`min-width`, `max-width`); `NextAlignSelf`
+  places one child across the axis (`align-self`); `BeginFlow` wraps
+  children onto lines (`flex-wrap`); and `BeginGrid` lays them in equal
+  columns, a fixed number or as many as fit (`grid-template-columns:
+  repeat(auto-fill, minmax(min, 1fr))`), each row as tall as its tallest
+  child. A layout that needs `TextWidth` or a division by a column count is
+  usually one of these.
+- **Things laid over others** (an icon over a round button, a badge in a
+  corner, a spinner over an image) are placed, not computed: `c.NextCenter()`
+  centres the next box in its parent at whatever size it takes, and
+  `c.NextAnchor(ui.AnchorBottomRight, x, y)` pins it to a corner or an edge
+  with insets, as CSS's `position: absolute` with `inset`; `c.NextOffset(dx, dy)`
+  nudges a box from its laid-out place without moving its siblings, as
+  `position: relative`. Arithmetic such as `theme.At(c, (d-w)/2, (d-h)/2, w, h)`
+  goes wrong as soon as `w` is not the size the box really takes; the layout
+  audit (`widgettest.AuditLayout`) reports an icon off its button's centre,
+  layered or not, and anything outside its parent.
 - **The menu bar.** Where the system draws none (Windows, Linux) the app's own
   is the window's first strip and the panes lie below it. `Kit.MenuBar` builds
   nothing on macOS.

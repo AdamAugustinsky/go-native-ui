@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"testing"
 
+	"gonativeui/platform"
 	"gonativeui/text"
 )
 
@@ -181,5 +182,25 @@ func TestColor(t *testing.T) {
 	}
 	if got := MixRGBA(0x00000000, 0xFFFFFFFF, 0); got != 0x00000000 {
 		t.Errorf("MixRGBA at 0 = %#x", got)
+	}
+}
+
+// A role the theme owns keeps the theme's value when the system's colours
+// apply; the others take the system's.
+func TestOwnRolesKeepTheThemes(t *testing.T) {
+	th := &Theme{SystemColors: true, Roles: Measured}
+	th.Roles[1][TextBackground] = 0x221D1FFF
+	th.Own[TextBackground] = true
+	r := th.Resolve(&fakeText{}, 1, Dark)
+	var sys SystemValues
+	sys.Known = true
+	sys.Colors[1][platform.ColorTextBackground] = 0x1E1E1EFF
+	sys.Colors[1][platform.ColorLabel] = 0xFFFFFFD8
+	r.SetSystem(&sys)
+	if got := r.roles[1][TextBackground]; got != 0x221D1FFF {
+		t.Errorf("owned TextBackground = %#x, want the theme's", got)
+	}
+	if got := r.roles[1][Label]; got != 0xFFFFFFD8 {
+		t.Errorf("Label = %#x, want the system's", got)
 	}
 }

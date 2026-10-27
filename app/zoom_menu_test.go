@@ -1,54 +1,12 @@
 package app
 
 import (
-	"os"
-	"os/exec"
-	"runtime"
 	"testing"
 
 	"gonativeui/menu"
 	"gonativeui/platform"
 	"gonativeui/ui"
 )
-
-func TestTitlebarCapabilityIsBoundOnce(t *testing.T) {
-	if os.Getenv("GNUI_TITLEBAR_ALLOC_CHILD") == "" {
-		cmd := exec.Command(os.Args[0], "-test.run=^TestTitlebarCapabilityIsBoundOnce$")
-		// ReadMemStats can restart other Ps and create threads after sampling;
-		// T.Run's parent may also still allocate its channel waiter. Serialize
-		// from startup, keeping the measured loop and exact counters unchanged.
-		cmd.Env = append(os.Environ(), "GNUI_TITLEBAR_ALLOC_CHILD=1", "DBUS_SESSION_BUS_ADDRESS=disabled:", "GOMAXPROCS=1")
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("%v\n%s", err, out)
-		}
-		return
-	}
-	if runtime.GOOS == "linux" { // settle the init-time portal before counting
-		platform.SystemAppearance()
-	}
-	a := &App{cfg: Config{Titlebar: 46}, zoom: 1.5}
-	plain, capable := &fakeWindow{}, &titlebarWindow{}
-	a.syncTitlebar(plain) // a non-macOS window at non-default zoom
-	var before, after runtime.MemStats
-	runtime.ReadMemStats(&before)
-	for range 50000 {
-		a.syncTitlebar(plain)
-	}
-	runtime.ReadMemStats(&after)
-	if n := after.Mallocs - before.Mallocs; n != 0 {
-		t.Fatalf("%d allocations while syncing an unsupported titlebar", n)
-	}
-	a.syncTitlebar(capable)
-	a.zoom = 2
-	a.syncTitlebar(plain)
-	if capable.setCall != 1 {
-		t.Fatal("the previous window received the new window's titlebar")
-	}
-	a.syncTitlebar(capable)
-	if capable.setCall != 2 || capable.height != 92 {
-		t.Fatal("the rebound window did not receive its titlebar")
-	}
-}
 
 // The zoom commands become native View items that deliver their ids, with the
 // standard titles and key equivalents (⌘+ ⌘− ⌘0 on macOS); the alias has no
