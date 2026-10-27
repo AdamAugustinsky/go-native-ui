@@ -41,7 +41,7 @@ var components = map[string][]string{
 	"select":      {"select.go", "button.go"},
 	"separator":   {"separator.go"},
 	"form":        {"form.go", "card.go", "text.go"},
-	"dialog":      {"dialog.go", "button.go", "text.go"},
+	"dialog":      {"dialog.go", "button.go", "text.go", "scrolledge.go", "glyph.go"},
 	"tooltip":     {"tooltip.go"},
 	"text":        {"text.go"},
 	"card":        {"card.go"},
