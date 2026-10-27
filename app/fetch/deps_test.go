@@ -18,6 +18,7 @@ var noNetHTTP = []string{
 	"gonativeui/app/hotkey",
 	"gonativeui/app/install",
 	"gonativeui/app/webview",
+	"gonativeui/media/capture",
 }
 
 // knownNetHTTP are the packages that still link net/http on a target, until
