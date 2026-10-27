@@ -271,6 +271,11 @@ func avatarInitials(k *base.Kit, key ui.Key, name string, side, size float32, o 
 	c.Pop()
 }
 
+// largeInitials is the initials' point size as a share of the side of an
+// avatar larger than 72 points (a call's), where Title2 would leave them
+// small in the disc.
+const largeInitials = 0.32
+
 // avatarStyleIndex is the text style of the initials at a side of size points.
 func avatarStyleIndex(size float32) theme.TextStyle {
 	switch {
@@ -293,13 +298,16 @@ func avatarStyleIndex(size float32) theme.TextStyle {
 func avatarStyle(k *base.Kit, size float32, o *AvatarOpts) theme.StyleFont {
 	idx := avatarStyleIndex(size)
 	st := k.Theme().Styles[idx]
-	if o.InitialsScale <= 0 && o.InitialsWeight <= 0 {
+	if o.InitialsScale <= 0 && o.InitialsWeight <= 0 && size <= 72 {
 		return st
 	}
 	spec := theme.MacText[idx]
 	pts, weight := spec.Size, spec.Weight
-	if o.InitialsScale > 0 {
+	switch {
+	case o.InitialsScale > 0:
 		pts = o.InitialsScale * size
+	case size > 72: // past the largest style the initials grow with the disc
+		pts = max(pts, largeInitials*size)
 	}
 	if o.InitialsWeight > 0 {
 		weight = o.InitialsWeight
@@ -418,6 +426,9 @@ func AvatarStack(k *base.Kit, label string, names []string, max int, o AvatarOpt
 		c.NextAxis(ui.AxisX)
 		c.NextCross(ui.CrossCenter)
 		c.NextJustify(ui.JustifyCenter)
+		if i < n-1 { // the initials centre in the part the next avatar leaves showing
+			c.NextPadding(0, 0, side-step+ring, 0)
+		}
 		c.NextAuditExempt(ui.AuditCovered.Mask()) // each lies over the one before, on purpose
 		disc := c.BoxKeyed(ui.DrawBackground|base.Floating, ui.KeyN(key, uint64(10*i+1)), nil)
 		f := c.Fmt()
