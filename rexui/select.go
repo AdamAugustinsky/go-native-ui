@@ -100,12 +100,16 @@ func Select(k *base.Kit, label string, sel *int, options []string, o SelectOpts)
 		fill = 0
 	}
 	h := theme.Snap(s.Height)
+	radius := s.Radius
+	if rc.Capsule { // the push buttons' shape: Rex's capsule
+		radius = h / 2
+	}
 	var state ui.SemState
 	if open {
 		state = ui.SemExpanded
 	}
 	c.NextBG(fill)
-	c.NextRadius(s.Radius)
+	c.NextRadius(radius)
 	c.NextAxis(ui.AxisX)
 	c.NextCross(ui.CrossCenter)
 	c.NextPadding(padX, 0, 0, 0)
@@ -134,7 +138,7 @@ func Select(k *base.Kit, label string, sel *int, options []string, o SelectOpts)
 		c.BoxKeyed(f|base.Floating, ui.KeyN(p.Key, 2), disp)
 	}
 	c.Pop()
-	k.FocusRing(id, p.Visual, s.Radius)
+	k.FocusRing(id, p.Visual, radius)
 
 	if c.NativeMenus() { // the platform's pop-up menu (N1), never the drawn popup
 		var changed bool
