@@ -330,7 +330,7 @@ func (v *MarkdownView) marker(k *base.Kit, ml *MarkdownRecipe, b *markdown.Block
 		c.NextSize(ui.Px(s), ui.Px(s))
 		c.NextRadius(pt(sc, 3))
 		c.NextRole(ui.RoleCheckbox)
-		c.NextSemName("Task")
+		c.NextSemName(str.Task)
 		if b.Flags&markdown.Checked != 0 {
 			c.NextSemState(ui.SemChecked)
 			c.NextBG(r.Colors[theme.Accent])
