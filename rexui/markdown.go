@@ -362,8 +362,8 @@ func (v *MarkdownView) marker(k *base.Kit, ml *MarkdownRecipe, b *markdown.Block
 // bullets are the markers of unordered items by depth.
 var bullets = [...]string{"•###b", "◦###b", "▪###b"}
 
-// table builds the table whose first cell is block i: a grid of rows of
-// equal columns, the header row bold on a fill. It returns the number of
+// table builds the table whose first cell is block i: rows of equal columns
+// (each cell Grow(1)), the header row bold on a fill. It returns the number of
 // cells and the next part.
 func (v *MarkdownView) table(k *base.Kit, ml *MarkdownRecipe, key ui.Key, d *markdown.Doc, i int, item uint64, part uint16, sig *MarkdownSignal) (int, uint16) {
 	c, r := k.Context(), k.Theme()
@@ -413,7 +413,7 @@ func (v *MarkdownView) table(k *base.Kit, ml *MarkdownRecipe, key ui.Key, d *mar
 			c.NextRole(ui.RoleRow)
 			c.Push(c.BoxKeyed(fl, ui.KeyN(key, 2+uint64(row)), nil))
 		}
-		c.NextSize(ui.Pct(1/float32(cols)), ui.Children(1))
+		c.NextSize(ui.Grow(1), ui.Children(1)) // equal columns: GFM pads short rows
 		c.NextPadding(pt(sc, 10), pt(sc, 5), pt(sc, 10), pt(sc, 5))
 		c.NextRole(ui.RoleCell)
 		c.Push(c.BoxKeyed(0, ui.KeyN(key, 1<<20+uint64(j)), nil))
