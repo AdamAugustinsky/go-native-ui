@@ -8,6 +8,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -18,6 +19,7 @@ import (
 	"gonativeui/internal/cf"
 	"gonativeui/internal/ffi"
 	"gonativeui/internal/objc"
+	"gonativeui/widget/widgettest"
 )
 
 // The join of a paused recording's segments, on segments written at test
@@ -354,5 +356,46 @@ func TestVideoSize(t *testing.T) {
 		if w, h := videoSize(c.w, c.h, c.maxW, c.maxH); w != c.ww || h != c.wh {
 			t.Errorf("videoSize(%v, %v, %d, %d) = %d×%d, want %d×%d", c.w, c.h, c.maxW, c.maxH, w, h, c.ww, c.wh)
 		}
+	}
+}
+
+// TestLoadAndMapNSErrors: the classes, blocks and selectors load on the
+// main thread without touching ScreenCaptureKit's capture (no grant, no
+// prompt), and real NSErrors map to the typed errors, through an
+// underlying error too.
+func TestLoadAndMapNSErrors(t *testing.T) {
+	var errs []error
+	var loadErr error
+	widgettest.OnMain(func() {
+		if loadErr = load(); loadErr != nil {
+			return
+		}
+		pool := objc.F.Call0(objc.PoolPush)
+		defer objc.F.Call1(objc.PoolPop, pool)
+		mk := func(domain uintptr, code int, userInfo objc.ID) objc.ID {
+			return objc.Send3(objc.Cls("NSError"), objc.Sel("errorWithDomain:code:userInfo:"), domain, uintptr(code), uintptr(userInfo))
+		}
+		enospc := mk(sck.domains[domPOSIX], int(syscall.ENOSPC), 0)
+		info := objc.Send2(objc.Cls("NSDictionary"), objc.Sel("dictionaryWithObject:forKey:"), uintptr(enospc), sck.underlyingKey)
+		for _, e := range []objc.ID{
+			mk(sck.domains[domAV], -11807, 0),
+			mk(sck.domains[domSC], -3801, 0),
+			mk(sck.domains[domSC], -3817, 0),
+			mk(uintptr(objc.Str("GNUITestDomain")), 5, info),
+			mk(uintptr(objc.Str("GNUITestDomain")), 7, 0),
+		} {
+			errs = append(errs, nsError(e))
+		}
+	})
+	if loadErr != nil {
+		t.Skipf("no ScreenCaptureKit recording here (macOS 14?): %v", loadErr)
+	}
+	for i, want := range []error{ErrDiskFull, ErrPermissionDenied, errStoppedByUser, ErrDiskFull} {
+		if !errors.Is(errs[i], want) {
+			t.Errorf("error %d = %v, want %v", i, errs[i], want)
+		}
+	}
+	if got := errs[4].Error(); !strings.Contains(got, "GNUITestDomain 7") {
+		t.Errorf("an unmapped error reads %q", got)
 	}
 }

@@ -13,6 +13,7 @@ import (
 
 	"gonativeui/app"
 	"gonativeui/platform"
+	"gonativeui/widget/widgettest"
 )
 
 // The events delivered, through a test sink of the app object's dispatcher.
@@ -36,7 +37,7 @@ func (testSink) AppSafePoint() {}
 
 func TestMain(m *testing.M) {
 	platform.SetAppSink(testSink{})
-	os.Exit(m.Run())
+	widgettest.RunMain(m) // the main thread for the objc tests (darwin)
 }
 
 // eventsOf is the kinds delivered for recording id so far.
