@@ -151,12 +151,17 @@ func (w *Window) IsPanel() bool { return w.panel != nil }
 // PanelState is what AppKit reports of a panel's configuration, read back
 // from the NSWindow (tests, tools).
 type PanelState struct {
-	StyleMask, CollectionBehavior uint64
-	Level, SharingType            int64
-	HidesOnDeactivate, HasShadow  bool
-	Opaque, ExcludedFromMenu      bool
-	CanBecomeKey, CanBecomeMain   bool
-	IsNSPanel                     bool
+	StyleMask          uint64 // styleMask
+	CollectionBehavior uint64 // collectionBehavior
+	Level              int64  // level
+	SharingType        int64  // sharingType (0 none, 1 read-only)
+	HidesOnDeactivate  bool   // hidesOnDeactivate
+	HasShadow          bool   // hasShadow
+	Opaque             bool   // isOpaque
+	ExcludedFromMenu   bool   // isExcludedFromWindowsMenu
+	CanBecomeKey       bool   // canBecomeKeyWindow
+	CanBecomeMain      bool   // canBecomeMainWindow
+	IsNSPanel          bool   // the window is an NSPanel
 }
 
 // DebugPanelState reads the window's panel configuration back from AppKit.
