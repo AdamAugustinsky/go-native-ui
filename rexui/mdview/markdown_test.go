@@ -124,17 +124,31 @@ func (g *mdRig) frames(n int) {
 	}
 }
 
-// settle runs frames until the highlighting worker is done (bounded).
+// settle runs frames until the list builds the same messages three frames
+// running with the highlighting worker idle after each (bounded). After a
+// resize or a scroll the list's range moves for a few frames; a message it
+// builds for the first time hands its code to the worker, and an idle worker
+// before that proves nothing: under load (CI runs every package at once) the
+// worker would still be lexing in the measured frames, and AllocsPerRun
+// counts the whole process's allocations.
 func (g *mdRig) settle() {
+	steady := 0
 	for deadline := time.Now().Add(20 * time.Second); time.Now().Before(deadline); {
-		g.frames(2)
-		if g.view.Pending() == 0 {
-			g.frames(3)
-			return
+		first, last := g.v.First, g.v.Last
+		g.frame()
+		switch {
+		case g.view.Pending() > 0:
+			steady = 0
+			time.Sleep(2 * time.Millisecond)
+		case g.v.First != first || g.v.Last != last:
+			steady = 0
+		default:
+			if steady++; steady == 3 {
+				return
+			}
 		}
-		time.Sleep(2 * time.Millisecond)
 	}
-	g.t.Fatal("highlighting never finished")
+	g.t.Fatal("the transcript never settled")
 }
 
 // node is the first node of the exported tree with the role whose name
