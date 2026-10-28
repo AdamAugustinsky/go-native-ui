@@ -248,6 +248,7 @@ type ringSlot struct {
 type retiredTex struct {
 	name   uint32
 	serial uint64 // the last frame encoded when it was freed
+	bytes  int64  // its memory, for TextureBytes
 }
 
 // Attribute layout of a Quad record (offsets checked against the struct).
@@ -258,16 +259,17 @@ var attribs = [...]struct {
 	off     uintptr
 	integer bool
 }{
-	{0, 4, glFloat, 0, false},        // Rect
-	{1, 4, glFloat, 16, false},       // Clip
-	{2, 4, glFloat, 32, false},       // UV
-	{3, 4, glUnsignedInt, 48, true},  // Color[4]
-	{4, 4, glFloat, 64, false},       // Radii
-	{5, 1, glFloat, 80, false},       // Border
-	{6, 1, glUnsignedInt, 84, true},  // BorderColor
-	{7, 1, glFloat, 88, false},       // Soft
-	{8, 2, glFloat, 92, false},       // FadeX
-	{9, 1, glUnsignedInt, 100, true}, // Mode
+	{0, 4, glFloat, 0, false},         // Rect
+	{1, 4, glFloat, 16, false},        // Clip
+	{2, 4, glFloat, 32, false},        // UV
+	{3, 4, glUnsignedInt, 48, true},   // Color[4]
+	{4, 4, glFloat, 64, false},        // Radii
+	{5, 1, glFloat, 80, false},        // Border
+	{6, 1, glUnsignedInt, 84, true},   // BorderColor
+	{7, 1, glFloat, 88, false},        // Soft
+	{8, 2, glFloat, 92, false},        // FadeX
+	{9, 1, glUnsignedInt, 100, true},  // Mode
+	{10, 1, glUnsignedInt, 104, true}, // Tex (a shape's ShapeContinuous)
 }
 
 var (
@@ -280,6 +282,7 @@ var (
 	_ = [1]struct{}{}[unsafe.Offsetof(Quad{}.Soft)-88]
 	_ = [1]struct{}{}[unsafe.Offsetof(Quad{}.FadeX)-92]
 	_ = [1]struct{}{}[unsafe.Offsetof(Quad{}.Mode)-100]
+	_ = [1]struct{}{}[unsafe.Offsetof(Quad{}.Tex)-104]
 )
 
 // Renderer draws DrawLists with OpenGL. All methods share the package's ffi
@@ -577,6 +580,7 @@ func (r *Renderer) NewTexture(kind TextureKind, w, h int) TextureID {
 		r.texH = append(r.texH, 0)
 	}
 	r.tex[i], r.kinds[i], r.texW[i], r.texH[i] = name, kind, w, h
+	r.ids.addBytes(i, texBytes(kind, w, h))
 	return id
 }
 
@@ -593,15 +597,27 @@ func (r *Renderer) FreeTexture(t TextureID) {
 	if !ok || i == 0 {
 		return
 	}
-	r.retiring = append(r.retiring, retiredTex{r.tex[i], r.serial})
+	n := r.ids.remove(i)
+	r.retiring = append(r.retiring, retiredTex{r.tex[i], r.serial, n})
 	r.tex[i] = 0
-	r.ids.remove(i)
 	r.collect()
 }
 
 // TextureCounts reports the live textures (texture 0 included) and the freed
 // ones whose deletion still waits for the GPU.
 func (r *Renderer) TextureCounts() (live, retiring int) { return r.ids.n, len(r.retiring) }
+
+// TextureBytes reports the memory of the renderer's textures: the live ones
+// (atlas pages and standalone textures) and the freed ones that wait for the
+// GPU, as width × height × bytes per texel (no mip levels, no driver padding).
+// Texture 0 (4 bytes) is counted; the renderer's own targets are not.
+func (r *Renderer) TextureBytes() int64 {
+	n := r.ids.used
+	for _, x := range r.retiring {
+		n += x.bytes
+	}
+	return n
+}
 
 // syncDone reads a sync object without waiting (a zero timeout, no flush:
 // the swap flushes). A failed wait counts as done.

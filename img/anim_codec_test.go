@@ -78,6 +78,29 @@ func TestGIFDisposal(t *testing.T) {
 	checkDisposal(t, g, []int{3, 1, 2, 0})             // out of order: replayed from the start
 }
 
+// TestTrimThenRender: a decoder that gave its canvases back (the animation was
+// built but not shown) draws the same frames when it is asked again, in order
+// or not.
+func TestTrimThenRender(t *testing.T) {
+	g, err := openGIF(animgen.GIF(8, 8, disposalFrames(), 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := openAPNG(animgen.APNG(8, 8, disposalFrames(), 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, src := range map[string]frameSource{"gif": g, "apng": a} {
+		checkDisposal(t, src, []int{0, 1, 2})
+		if kept := src.trim(); kept <= 0 || kept >= src.retained() {
+			t.Errorf("%s: trim kept %d of %d bytes", name, kept, src.retained())
+		}
+		checkDisposal(t, src, []int{3, 0, 1, 2, 3})
+		src.trim()
+		checkDisposal(t, src, []int{1, 2})
+	}
+}
+
 func TestAPNGDisposal(t *testing.T) {
 	a, err := openAPNG(animgen.APNG(8, 8, disposalFrames(), 0))
 	if err != nil {
