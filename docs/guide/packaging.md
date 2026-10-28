@@ -195,7 +195,12 @@ what was skipped and why. The other flags:
 ```text
 -c gnui.json   -o dir (default dist)   -tags list   -ldflags flags
 -notarize      -notary-profile name    -dmg         -zip         -app bundle
+-notary-keychain path
 ```
+
+`-notary-keychain` (or `$GNUI_NOTARY_KEYCHAIN`) names the keychain the profile was
+stored in with `store-credentials --keychain`, for a dedicated release keychain;
+without it notarytool reads the login keychain.
 
 `-dmg` also builds a disk image, and `-zip` the archive that `app/selfupdate`
 installs (`ditto -c -k --keepParent`, after stapling).

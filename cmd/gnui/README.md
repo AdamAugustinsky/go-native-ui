@@ -41,6 +41,7 @@ the user's Apple identity (Developer ID certificate, notarytool credentials).
 -no-timestamp         no secure timestamp (default: on for a real identity)
 -notarize             notarize with xcrun notarytool, wait, staple, check with spctl
 -notary-profile name  notarytool keychain profile ($GNUI_NOTARY_PROFILE)
+-notary-keychain path the keychain holding that profile, if not the login keychain ($GNUI_NOTARY_KEYCHAIN)
 -dmg                  also build a .dmg (signed, and notarized and stapled with -notarize,
                       when the identity is a Developer ID)
 -zip                  also write dist/<Name>-<version>.zip, the update archive app/selfupdate

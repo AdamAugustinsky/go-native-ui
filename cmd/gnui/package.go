@@ -31,6 +31,7 @@ func cmdPackage(args []string, stdout, stderr io.Writer) error {
 	noTimestamp := fs.Bool("no-timestamp", false, "do not ask Apple's server for a secure timestamp")
 	notarize := fs.Bool("notarize", false, "notarize and staple (needs a Developer ID identity and -notary-profile)")
 	profile := fs.String("notary-profile", os.Getenv("GNUI_NOTARY_PROFILE"), "notarytool keychain profile (xcrun notarytool store-credentials); default $GNUI_NOTARY_PROFILE")
+	notaryKeychain := fs.String("notary-keychain", os.Getenv("GNUI_NOTARY_KEYCHAIN"), "the keychain holding the -notary-profile, when it is not the login keychain (store-credentials --keychain); default $GNUI_NOTARY_KEYCHAIN")
 	dmg := fs.Bool("dmg", false, "also build a .dmg (signed and notarized when the identity allows)")
 	zipUpdate := fs.Bool("zip", false, "also write <Name>-<version>.zip, the update archive app/selfupdate installs (ditto -c -k --keepParent, after stapling)")
 	tags := fs.String("tags", "", "go build -tags (gnui_release is always added)")
@@ -111,7 +112,7 @@ func cmdPackage(args []string, stdout, stderr io.Writer) error {
 
 	var skipped []string
 	if *notarize {
-		if err := notarizeAndStaple(app, *profile, stdout); err != nil {
+		if err := notarizeAndStaple(app, notary{*profile, *notaryKeychain}, stdout); err != nil {
 			return err
 		}
 		if out, err := runOut("spctl", "--assess", "--type", "execute", "-vv", app); err != nil {
@@ -134,7 +135,7 @@ func cmdPackage(args []string, stdout, stderr io.Writer) error {
 	}
 
 	if *dmg {
-		path, err := buildDMG(c, app, *outDir, plan, !*noTimestamp, *notarize, *profile, stdout)
+		path, err := buildDMG(c, app, *outDir, plan, !*noTimestamp, *notarize, notary{*profile, *notaryKeychain}, stdout)
 		if err != nil {
 			return err
 		}
@@ -273,9 +274,22 @@ func resolveIdentity(spec string, ids []identityInfo) (identityInfo, error) {
 	return identityInfo{}, fmt.Errorf("%q matches %d identities; use the SHA-1 of one:\n  %s", spec, len(part), strings.Join(names, "\n  "))
 }
 
+// notary is where notarytool finds its credentials: a stored profile, and
+// the keychain it was stored in ("" for the login keychain).
+type notary struct{ profile, keychain string }
+
+// args are notarytool's options for the credentials.
+func (n notary) args() []string {
+	a := []string{"--keychain-profile", n.profile}
+	if n.keychain != "" {
+		a = append(a, "--keychain", n.keychain)
+	}
+	return a
+}
+
 // notarizeAndStaple submits path (an .app, zipped first, or a .dmg) to Apple's
 // notary service, waits, and staples the ticket.
-func notarizeAndStaple(path, profile string, out io.Writer) error {
+func notarizeAndStaple(path string, n notary, out io.Writer) error {
 	submit := path
 	if strings.HasSuffix(path, ".app") {
 		zip := path + ".zip"
@@ -286,13 +300,13 @@ func notarizeAndStaple(path, profile string, out io.Writer) error {
 		submit = zip
 	}
 	fmt.Fprintf(out, "notarizing %s (this waits for Apple)\n", filepath.Base(path))
-	text, err := runOut("xcrun", "notarytool", "submit", submit, "--keychain-profile", profile, "--wait")
+	text, err := runOut("xcrun", append(append([]string{"notarytool", "submit", submit}, n.args()...), "--wait")...)
 	fmt.Fprint(out, text)
 	if err != nil {
 		return err
 	}
 	if !strings.Contains(text, "status: Accepted") {
-		return fmt.Errorf("notarization of %s was not accepted; see `xcrun notarytool log <id> --keychain-profile %s`", filepath.Base(path), profile)
+		return fmt.Errorf("notarization of %s was not accepted; see `xcrun notarytool log <id> %s`", filepath.Base(path), strings.Join(n.args(), " "))
 	}
 	if _, err := runOut("xcrun", "stapler", "staple", path); err != nil {
 		return err
@@ -319,7 +333,7 @@ func writeUpdateZip(c *Config, app, outDir string) (string, error) {
 // buildDMG writes <Name>-<version>.dmg next to the app with the app and an
 // Applications link in it, signs it when the identity is a Developer ID, and
 // notarizes and staples it when asked.
-func buildDMG(c *Config, app, outDir string, plan signingPlan, timestamp, notarize bool, profile string, out io.Writer) (string, error) {
+func buildDMG(c *Config, app, outDir string, plan signingPlan, timestamp, notarize bool, n notary, out io.Writer) (string, error) {
 	stage, err := os.MkdirTemp("", "gnui-dmg-*")
 	if err != nil {
 		return "", err
@@ -345,7 +359,7 @@ func buildDMG(c *Config, app, outDir string, plan signingPlan, timestamp, notari
 			return "", err
 		}
 		if notarize {
-			if err := notarizeAndStaple(dmg, profile, out); err != nil {
+			if err := notarizeAndStaple(dmg, n, out); err != nil {
 				return "", err
 			}
 		}
