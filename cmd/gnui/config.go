@@ -78,6 +78,10 @@ type Config struct {
 	LoginAgents []LoginAgent `json:"loginAgents"`
 	// ExtraPlist is merged into Info.plist last and wins over everything gnui writes.
 	ExtraPlist map[string]any `json:"extraPlist"`
+	// Windows holds what only the Windows executables use (gnui package
+	// -target windows/...): the publisher, an AUMID override, the version
+	// resource's texts and the signing command.
+	Windows WindowsConfig `json:"windows"`
 
 	dir string // directory of gnui.json
 }
@@ -372,6 +376,9 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("loginAgents: duplicate name %q", a.Name)
 		}
 		seen[a.Name] = true
+	}
+	if a := c.Windows.AUMID; a != "" && (len(a) > 128 || strings.ContainsAny(a, " \t\\/") || !strings.Contains(a, ".")) {
+		return fmt.Errorf("windows.aumid %q must be at most 128 characters, dotted, with no spaces or slashes", a)
 	}
 	return nil
 }

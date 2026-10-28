@@ -1,8 +1,8 @@
-//go:build !darwin
+//go:build !darwin && !windows
 
 package login
 
-func osStatus(string) (State, error)  { return NotFound, ErrUnsupported }
-func osEnable(string) (State, error)  { return NotFound, ErrUnsupported }
-func osDisable(string) (State, error) { return NotFound, ErrUnsupported }
-func osOpenSettings() error           { return ErrUnsupported }
+func osStatusItem(Item) (State, error)  { return NotFound, ErrUnsupported }
+func osEnableItem(Item) (State, error)  { return NotFound, ErrUnsupported }
+func osDisableItem(Item) (State, error) { return NotFound, ErrUnsupported }
+func osOpenSettings() error             { return ErrUnsupported }

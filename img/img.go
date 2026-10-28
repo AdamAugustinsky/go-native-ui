@@ -45,11 +45,14 @@
 //     context, on each worker's own ffi.Frame, then turned to its EXIF
 //     orientation. JPEG, PNG, GIF, HEIC, WebP and whatever else the system
 //     decodes. The frameworks are loaded by the first worker that decodes.
-//   - Windows and Linux: the standard library's PNG, JPEG and GIF decoders,
-//     scaled by area averaging. JPEG's EXIF orientation is applied (a scan of
-//     the APP1 segment). WebP and other formats fail with ErrUnsupported.
-//     Animated GIFs and APNGs (frame chunks rebuilt into one-frame PNGs for
-//     the PNG decoder) play with the Animate flag.
+//   - Windows and Linux: the standard library's PNG, JPEG and GIF decoders
+//     and golang.org/x/image/webp (lossy, lossless and alpha), scaled by
+//     area averaging. JPEG's EXIF orientation is applied (a scan of the APP1
+//     segment). HEIC and other formats fail with ErrUnsupported. Animated
+//     GIFs, APNGs (frame chunks rebuilt into one-frame PNGs for the PNG
+//     decoder) and WebPs (each ANMF frame rebuilt into a one-frame WebP)
+//     play with the Animate flag; without it an animated WebP shows its
+//     first frame on its canvas.
 //
 // Decode decodes one image the same way outside the cache, into an
 // *image.RGBA the app owns (a cropper's source, say).
@@ -57,8 +60,8 @@
 // An image whose header gives it more than 100 megapixels fails with
 // ErrTooLarge before any pixel is decoded. A GIF without the Animate flag
 // decodes its first frame, on the image's logical screen; Info reports the
-// frame count and the first frame's delay. With the flag, GIFs, APNGs and
-// (macOS) animated HEIC, HEICS and WebP play: see Animate and the animation
+// frame count and the first frame's delay. With the flag, GIFs, APNGs,
+// animated WebPs and (macOS) animated HEIC and HEICS play: see Animate and the animation
 // section below.
 //
 // # GPU memory
@@ -76,8 +79,8 @@
 //
 // # Animated images
 //
-// Key.Flags Animate makes a GIF or an APNG an animation (animated HEIC,
-// HEICS and WebP too on macOS). Kit.Image draws the frame showing and wakes
+// Key.Flags Animate makes a GIF, an APNG or a WebP an animation (animated
+// HEIC and HEICS too on macOS). Kit.Image draws the frame showing and wakes
 // the app at each frame's deadline; Cache.Animation gives play, pause and
 // seek. Frames are decoded only while the image is in view, a few ahead, at
 // display size; a hidden window or a row scrolled out decodes and wakes
@@ -269,8 +272,8 @@ func (h Handle) gen() uint32                { return uint32(h >> 32) }
 
 // Errors reported by Err.
 var (
-	// ErrUnsupported: the format cannot be decoded on this system (WebP and
-	// HEIC off macOS).
+	// ErrUnsupported: the format cannot be decoded on this system (HEIC off
+	// macOS).
 	ErrUnsupported = errors.New("img: unsupported image format")
 	// ErrDecode: the bytes are not a valid image.
 	ErrDecode = errors.New("img: cannot decode the image")

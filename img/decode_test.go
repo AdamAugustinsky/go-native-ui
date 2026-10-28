@@ -129,12 +129,12 @@ func TestCorruptAndUnsupported(t *testing.T) {
 		{"png header then junk", append(append([]byte{}, good[:16]...), make([]byte, 64)...), []uint8{errDecode}},
 		{"empty", nil, []uint8{errDecode}},
 	}
-	if runtime.GOOS != "darwin" { // ImageIO decodes WebP
+	if runtime.GOOS != "darwin" { // a truncated WebP: ImageIO's own error on macOS
 		cases = append(cases, struct {
 			name string
 			data []byte
 			want []uint8
-		}{"webp", []byte("RIFF\x24\x00\x00\x00WEBPVP8 \x18\x00\x00\x00"), []uint8{errUnsupported}})
+		}{"truncated webp", []byte("RIFF\x24\x00\x00\x00WEBPVP8 \x18\x00\x00\x00"), []uint8{errDecode}})
 	}
 	for _, tc := range cases {
 		d := decodeNow(t, c, Bytes(tc.data), 0, 0, 0)
