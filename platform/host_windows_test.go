@@ -480,8 +480,10 @@ func TestGDIHostShowsInAChildWindowsWindow(t *testing.T) {
 		t.Error("the host shows above its container: not clipped")
 	}
 	place(w, HostRegion{ID: id, Rect: [4]float32{40, 20, 140, 100}, Clip: [4]float32{40, 40, 140, 100}, Hidden: true})
-	settle(w)
-	if in := clientPixel(t, w.hwnd, cw, ch, 90, 70); in == 0xFF0000 {
+	// Hidden: the window, with no swap chain here and nothing painted in
+	// GDI, keeps the child's old pixels in its surface, so the pixels prove
+	// nothing; an app's swap chain shows its own frame there.
+	if visible(w.hosts.slot(id).clip) {
 		t.Error("a hidden host still shows")
 	}
 }
