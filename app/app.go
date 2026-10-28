@@ -750,6 +750,10 @@ func (a *App) present(inHandler bool, passes int) bool {
 	a.flushDialogs() // dialogs asked for in Build: shown now that the frame is over
 	a.flushDrag()    // drop kinds for the window, drags out asked for in Build (drag.go)
 	now := platform.Now()
+	if a.deviceLost() { // the frame was not shown: new device, then every window repaints (devloss.go)
+		a.recoverFromLoss(now)
+		return false
+	}
 	if ok {
 		a.consecFails, a.lastDrawT = 0, now
 		a.p.drawn(a.more)

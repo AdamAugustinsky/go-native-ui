@@ -237,6 +237,13 @@ type Renderer interface {
   of a texture that frames in flight sample without waiting for them (Metal:
   a blit from a per-slot staging buffer, committed ahead of the next frame;
   D3D11 and OpenGL order uploads with draws already). See `gpu/textures.go`.
+- **Device loss.** A lost device (Direct3D 11 timeout or driver update, an
+  EGL context loss, a removed Metal device) is rebuilt between frames:
+  `Surface.Recover` and `Renderer.Rebuild` make the device objects again and
+  every live texture under the same id, empty. Atlas owners upload again from
+  the pixels they keep: the text atlas, the icon atlas, the image cache's pages
+  and widget masks (`Renderer.Epoch` tells them). See D-pending (p9-devloss)
+  and `gpu/devloss.go`.
 - **Batches** break only on texture or scissor changes; a typical frame is
   1–4 draw calls. Instance data goes into a persistently mapped ring buffer
   per frame in flight. Nothing allocates per frame.
