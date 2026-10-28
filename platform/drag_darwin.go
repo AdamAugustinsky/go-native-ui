@@ -6,7 +6,6 @@ import (
 	"context"
 	"io"
 	"os"
-	"runtime"
 	"sync"
 	"sync/atomic"
 	"unsafe"
@@ -21,22 +20,18 @@ import (
 // draggingUpdated: and draggingExited: queue EvDragEnter, EvDragMove and
 // EvDragLeave and answer the operation the handler gives.
 //
-// performDragOperation: copies the dropped data before it returns, on the main
-// thread, because the pasteboard's items go stale when the pasteboard changes
-// owner (another drag can start before a worker would read them). File URLs
-// and text are read at once, within their caps, and the EvDrop is queued. An
-// image is taken as the path of the file URL its item offers (Finder, Photos),
-// else as a copy of its bytes (dataForType:, over MaxPaste refused), and a
-// worker goroutine (decodeDrop) reads the file and decodes it (dragimg_darwin.go);
-// reapDrags (called by Wait) queues the result. A drag of our own session
+// performDragOperation: starts a worker goroutine that reads the dropped data
+// (dropread_darwin.go) and waits for it for dropSyncBudget, so that a lazy source
+// in another process cannot hold the main thread. File URLs and text are read
+// within their caps and the EvDrop is queued by the time the call returns, or
+// later by reapDrags if the source was slow. An image is taken as the path of the
+// file URL its item offers (Finder, Photos), else as a copy of its bytes
+// (dataForType:, over MaxPaste refused), and the same worker reads the file and
+// decodes it (dragimg_darwin.go); reapDrags (called by Wait) queues the result.
+// The pasteboard's changeCount, read at the start and after the read, tells a
+// read across an owner change, which is thrown away. A drag of our own session
 // (draggingSource is dragSource) is answered from the data of its DragSpec,
 // without going through the pasteboard at all.
-//
-// The residual risk: a source that provides its data lazily (a renderer in
-// another process) can hold the main thread inside dataForType: or
-// stringForType: until the system's pasteboard timeout. Reading on a worker was
-// tried and is worse (the items are not ours to keep), so this is documented
-// and tracked as a follow-up.
 //
 // A drag out runs in a loop of AppKit's (beginDraggingSession...), in which the
 // events of a drag over our own window arrive but Wait does not run: while a
@@ -153,6 +148,7 @@ var (
 
 func dragInit() {
 	dragOnce.Do(func() {
+		promiseInit()
 		pbInit()
 		dialogInit() // NSURL, NSMutableArray and the selectors the dialogs declare
 		clsNSEvent, clsNSData, clsNSImage2 = objc.Cls("NSEvent"), objc.Cls("NSData"), objc.Cls("NSImage")
@@ -214,7 +210,6 @@ type dragState struct {
 	nDone   atomic.Int32
 	mu      sync.Mutex
 	done    []dropDone
-	fr      ffi.Frame // the main thread's frame for reading drops
 
 	// Drag out.
 	own     []DragItem // the data of the session in progress, for a drop on our own window
@@ -303,7 +298,7 @@ func opToNS(op DragOp) uintptr {
 // offeredKinds is the kinds the pasteboard has types for, and how many items
 // it holds.
 func offeredKinds(pb objc.ID) (k DragKinds, items int) {
-	if objc.Send1(pb, selAvailableType, uintptr(arrFiles)) != 0 {
+	if objc.Send1(pb, selAvailableType, uintptr(arrFiles)) != 0 || hasPromises(pb) {
 		k |= DragFiles
 	}
 	if objc.Send1(pb, selAvailableType, uintptr(arrImage)) != 0 {
@@ -476,33 +471,19 @@ func (w *Window) performDrop(info objc.ID) bool {
 	// A drag of our own session is answered from its spec: nothing is asked of
 	// the pasteboard, whose data would be fulfilled through our own main thread.
 	own := d.own != nil && dragSource != 0 && objc.Send(info, selDragSource) == dragSource
-	var arr objc.ID
-	if !own {
-		if arr = objc.Send(pb, selPBItems); arr == 0 {
-			w.pushDrop(e, nil, 0, true)
-			return true
-		}
-	}
-	f := &d.fr
-	switch kind {
-	case DragFiles:
-		var paths []byte
-		var n int
-		if own {
-			paths, n = ownPaths(d.own, MaxPaste)
-		} else {
-			paths, n = readPaths(f, arr, MaxPaste)
-		}
-		w.pushDrop(e, paths, n, true)
-	case DragText:
-		if own {
+	if own {
+		switch kind {
+		case DragFiles:
+			paths, n := ownPaths(d.own, MaxPaste)
+			w.pushDrop(e, paths, n, true)
+		case DragText:
 			w.pushDrop(e, ownText(d.own, MaxPaste), 0, true)
-		} else {
-			w.pushDrop(e, readText(f, arr, MaxPaste), 0, true)
+		default:
+			w.dropOwnImage(e)
 		}
-	default:
-		w.dropImage(e, arr, own)
+		return true
 	}
+	w.readDrop(pb, e, kind)
 	return true
 }
 
@@ -534,23 +515,22 @@ type imgJob struct {
 	path    string
 }
 
-// dropImage takes the image of the drop for the worker: of an item that offers
-// one, the file it names (Finder, Photos), else a copy of its bytes.
-func (w *Window) dropImage(e Event, items objc.ID, own bool) {
-	d := &w.drag
-	fail := func() { w.pushDrop(e, nil, 0, true) }
-	if own {
-		for i := range d.own {
-			if png := d.own[i].PNG; len(png) > 0 {
-				w.pushDrop(e, png, 0, true)
-				return
-			}
+// dropOwnImage answers an image drop of our own session from its spec.
+func (w *Window) dropOwnImage(e Event) {
+	for i := range w.drag.own {
+		if png := w.drag.own[i].PNG; len(png) > 0 {
+			w.pushDrop(e, png, 0, true)
+			return
 		}
-		fail()
-		return
 	}
-	f := &d.fr
-	job := imgJob{e: e}
+	w.pushDrop(e, nil, 0, true)
+}
+
+// imageJobOf takes the image of the drop for the decoder: of an item that offers
+// one, the file it names (Finder, Photos), else a copy of its bytes. It runs on
+// a drop worker: dataForType: may wait for the source to provide the bytes.
+func imageJobOf(f *ffi.Frame, items objc.ID, e Event) (job imgJob, ok bool) {
+	job = imgJob{e: e}
 	for i, cnt := 0, int(wsend(f, items, selURLCount)); i < cnt && job.path == "" && job.encoded == nil; i++ {
 		item := wsend(f, items, selURLAt, uintptr(i))
 		typ := wsend(f, item, selAvailableType, uintptr(arrImage))
@@ -561,32 +541,19 @@ func (w *Window) dropImage(e Event, items objc.ID, own bool) {
 			job.path = string(appendCString(nil, p))
 			break
 		}
-		data := wsend(f, item, selDataForType, uintptr(typ)) // may wait for the source to provide it
+		data := wsend(f, item, selDataForType, uintptr(typ))
 		n := int(wsend(f, data, selDataLength))
 		if data == 0 || n <= 0 || n > MaxPaste {
-			fail()
-			return
+			return job, false
 		}
 		job.encoded = append([]byte(nil), unsafe.Slice((*byte)(ffi.PtrFromC(uintptr(wsend(f, data, selBytes)))), n)...)
 	}
-	if job.path == "" && job.encoded == nil {
-		fail()
-		return
-	}
-	if int(d.workers.Load()) >= maxDropWorkers {
-		fail()
-		return
-	}
-	d.workers.Add(1)
-	go d.decodeDrop(job)
+	return job, job.path != "" || job.encoded != nil
 }
 
-// decodeDrop runs on a worker goroutine: it reads the file, if the item named
-// one, decodes the image to PNG and queues the result. It holds its place in
-// workers until it ends.
-func (d *dragState) decodeDrop(j imgJob) {
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
+// decodeJob reads the file, if the item named one, decodes the image to PNG and
+// queues the result. The caller holds a place in workers, which this releases.
+func (d *dragState) decodeJob(j imgJob) {
 	encoded := j.encoded
 	if j.path != "" {
 		encoded = readImageFile(j.path)
@@ -595,11 +562,16 @@ func (d *dragState) decodeDrop(j imgJob) {
 	if len(encoded) > 0 {
 		png = imagePNG(new(ffi.Frame), encoded)
 	}
+	d.finish(dropDone{e: j.e, data: png})
+	d.workers.Add(-1)
+}
+
+// finish queues a result for reapDrags (from a worker).
+func (d *dragState) finish(r dropDone) {
 	d.mu.Lock()
-	d.done = append(d.done, dropDone{e: j.e, data: png})
+	d.done = append(d.done, r)
 	d.mu.Unlock()
 	d.nDone.Add(1)
-	d.workers.Add(-1)
 	Wake()
 }
 

@@ -1891,3 +1891,177 @@ func TestADragFromAnotherWindowOfOursDrawsTheTarget(t *testing.T) {
 		}
 	}
 }
+
+// ---- a source that fulfils lazily and slowly (#13) ----
+
+// slowTextOwner starts another process that owns a named pasteboard with a text
+// it provides after delay, and makes it the pasteboard of the rig's drags.
+func (r *dragRig) slowTextOwner(delay string) objc.ID {
+	r.t.Helper()
+	name := "dev.gonativeui.test.slow." + strconv.Itoa(os.Getpid())
+	cmd := exec.Command(os.Args[0])
+	cmd.Env = append(os.Environ(), "GNUI_PB_SLOW="+delay, "GNUI_PB_SLOW_NAME="+name)
+	out, err := cmd.StdoutPipe()
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	if err := cmd.Start(); err != nil {
+		r.t.Fatal(err)
+	}
+	r.t.Cleanup(func() { cmd.Process.Kill(); cmd.Wait() })
+	ready := make(chan string, 1)
+	go func() { l, _ := bufio.NewReader(out).ReadString('\n'); ready <- l }()
+	select {
+	case l := <-ready:
+		if strings.TrimSpace(l) != "ready" {
+			r.t.Skipf("the slow owner did not start: %q", l)
+		}
+	case <-time.After(20 * time.Second):
+		r.t.Skip("the slow owner did not start")
+	}
+	pb := objc.Retain(objc.Send1(clsPasteboard, selPBNamed, uintptr(objc.Str(name))))
+	old := fakeInfo.pb
+	fakeInfo.pb = pb
+	r.t.Cleanup(func() { fakeInfo.pb = old; objc.Release(pb) })
+	return pb
+}
+
+func shortBudget(t *testing.T, d time.Duration) {
+	old := dropSyncBudget
+	dropSyncBudget = d
+	t.Cleanup(func() { dropSyncBudget = old })
+}
+
+// A source that takes 1.5 s to provide its text does not hold the main thread:
+// the drop returns when the budget ends, and the EvDrop comes out of a later
+// Wait with the text.
+func TestSlowSourceDoesNotHoldTheMainThread(t *testing.T) {
+	r := newDragRig(t)
+	shortBudget(t, 100*time.Millisecond)
+	r.slowTextOwner("1500ms")
+	r.w.SetDropKinds(DragAny)
+	r.at(5, 5)
+	r.answer(DragAnswer{Op: DragOpCopy, Accept: DragText})
+
+	start := time.Now()
+	if !r.drop() {
+		t.Fatal("refused")
+	}
+	if took := time.Since(start); took > time.Second {
+		t.Errorf("the drop held the main thread for %v", took)
+	}
+	if ev := r.events(); len(ev) != 0 {
+		t.Fatalf("the text arrived before the source provided it: %+v", ev)
+	}
+	e := r.next()
+	if e.Kind != EvDrop || e.Flags != 0 || r.text(e) != "slow text" {
+		t.Errorf("late drop: %+v %q", e, r.text(e))
+	}
+	r.waitWorkers()
+}
+
+// The same drag, but the pasteboard changes owner (another drag starts) before
+// the slow source answers: the read is thrown away, and the drop fails rather
+// than delivering whatever the new owner holds.
+func TestSlowSourceReadAcrossAnOwnerChangeFails(t *testing.T) {
+	r := newDragRig(t)
+	shortBudget(t, 100*time.Millisecond)
+	pb := r.slowTextOwner("1500ms")
+	r.w.SetDropKinds(DragAny)
+	r.at(5, 5)
+	r.answer(DragAnswer{Op: DragOpCopy, Accept: DragText})
+	if !r.drop() {
+		t.Fatal("refused")
+	}
+	takeOver(t, pb)
+	e := r.next()
+	if e.Kind != EvDrop || e.Flags&FlagFailed == 0 || r.text(e) != "" {
+		t.Errorf("a drop across an owner change: %+v %q", e, r.text(e))
+	}
+	r.waitWorkers()
+}
+
+// ---- file promises (#13) ----
+
+// The call that starts a reception (receivePromisedFilesAtDestination:) is only
+// allowed inside a real drag's performDragOperation:, so these tests start a
+// reception by hand and call its reader block as AppKit would, from a queue of
+// its own: what they check is the bookkeeping, not AppKit.
+func TestReceptionCollectsTheFilesAndDeliversOnce(t *testing.T) {
+	r := newDragRig(t)
+	promiseInit()
+	if receiveKind == nil {
+		t.Skip("no NSFilePromiseReceiver here")
+	}
+	dir := t.TempDir()
+	files := []string{filepath.Join(dir, "a.txt"), filepath.Join(dir, "b b.txt")}
+	d := &r.w.drag
+	id, rc := newReception(d, Event{Kind: EvDrop, Code: uint32(DragFiles), SelStart: 1}, dir, 2)
+	req, err := receiveKind.New(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rc.reqs = append(rc.reqs, req)
+	call := func(path string, fail bool) {
+		pool := objc.F.Call0(objc.PoolPush)
+		defer objc.F.Call1(objc.PoolPop, pool)
+		var url, nserr uintptr
+		if fail {
+			nserr = uintptr(objc.Send(objc.Send(clsNSError, selAlloc), objc.Sel("init")))
+		} else {
+			url = uintptr(objc.Send1(clsNSURL, selFileURLPath, uintptr(objc.Str(path))))
+		}
+		done := make(chan struct{})
+		go func() { // the reader runs on the reception's queue, not the main thread
+			defer close(done)
+			objc.CallBlock(new(ffi.Frame), req.Block(), url, nserr)
+		}()
+		<-done
+	}
+	call(files[0], false)
+	if r.w.drag.nDone.Load() != 0 {
+		t.Fatal("delivered before every file arrived")
+	}
+	call(files[1], false)
+	req.Sent()
+	e := r.next()
+	if e.Kind != EvDrop || e.Flags != 0 || e.SelStart != 2 || r.text(e) != files[0]+"\x00"+files[1]+"\x00" {
+		t.Fatalf("reception: %+v %q", e, r.text(e))
+	}
+	call(files[0], false) // a late call after the delivery changes nothing
+	if r.w.drag.nDone.Load() != 0 {
+		t.Error("delivered twice")
+	}
+	r.waitWorkers()
+}
+
+// Every file failing is a failed drop, and its folder is removed.
+func TestReceptionOfNothingFails(t *testing.T) {
+	r := newDragRig(t)
+	promiseInit()
+	if receiveKind == nil {
+		t.Skip("no NSFilePromiseReceiver here")
+	}
+	dir := filepath.Join(t.TempDir(), "gnui-drop-x")
+	os.Mkdir(dir, 0o700)
+	id, _ := newReception(&r.w.drag, Event{Kind: EvDrop, Code: uint32(DragFiles)}, dir, 1)
+	req, err := receiveKind.New(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool := objc.F.Call0(objc.PoolPush)
+	nserr := uintptr(objc.Send(objc.Send(clsNSError, selAlloc), objc.Sel("init")))
+	done := make(chan struct{})
+	go func() { defer close(done); objc.CallBlock(new(ffi.Frame), req.Block(), 0, nserr) }()
+	<-done
+	req.Sent()
+	objc.F.Call1(objc.PoolPop, pool)
+	e := r.next()
+	if e.Kind != EvDrop || e.Flags&FlagFailed == 0 {
+		t.Errorf("failed reception: %+v", e)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Errorf("the empty folder is still there: %v", err)
+	}
+	r.waitWorkers()
+}
