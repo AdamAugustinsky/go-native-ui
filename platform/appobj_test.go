@@ -157,6 +157,15 @@ func TestRingAcceptsOrRefuses(t *testing.T) {
 		t.Fatal("the budget was not given back on delivery")
 	}
 	drain()
+	// OfferID names the event's object instead of numbering it.
+	s.evs = s.evs[:0]
+	if !r.OfferID(7, 1, 2, nil) || !r.Offer(3, 0, nil) {
+		t.Fatal("offers refused")
+	}
+	drain()
+	if len(s.evs) != 2 || s.evs[0].ID != 7 || s.evs[0].A != 1 || s.evs[0].B != 2 || s.evs[1].ID == 7 || s.evs[1].ID == 0 {
+		t.Fatalf("OfferID then Offer delivered %+v", s.evs)
+	}
 }
 
 func TestObservationCoalesces(t *testing.T) {
@@ -619,5 +628,21 @@ func TestNativeEventsWaitForTheFrame(t *testing.T) {
 	DispatchApp()
 	if len(s.evs) != 3 || s.evs[0].Kind != AppEvReopen || s.evs[1].Kind != AppEvOpenURLs || string(s.data[1]) != "gnui-test://held" || s.evs[2].Kind != AppEvActivated {
 		t.Fatalf("after the frame: %+v %q", s.evs, s.data)
+	}
+}
+
+// URLs handed over from outside the process (a second instance's command
+// line, app/instance) arrive as AppEvOpenURLs, A the count and the data the
+// URLs NUL-separated, as the URLs macOS opens with the app do.
+func TestOfferedURLsArriveAsOpenURLs(t *testing.T) {
+	s := &recSink{}
+	withSink(t, s)
+	if !OfferOpenURLs([]string{"notes-dev:x", "notes-dev://y?z"}) {
+		t.Fatal("refused")
+	}
+	drain()
+	if len(s.evs) != 1 || s.evs[0].Kind != AppEvOpenURLs || s.evs[0].A != 2 || s.evs[0].Source != SourceInstance ||
+		string(s.data[0]) != "notes-dev:x\x00notes-dev://y?z" {
+		t.Fatalf("delivered %+v %q", s.evs, s.data)
 	}
 }

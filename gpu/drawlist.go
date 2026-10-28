@@ -76,8 +76,9 @@ type Backdrop struct {
 	// before the backdrop drew nothing this frame, instead of the target's
 	// clear colour (a window's white in dark mode, or transparent where the
 	// system's materials show): the renderer fills the backdrop's rectangle
-	// (inside its clip) with it, opaque, before the frame's first quad (a
-	// fading one's fill fades out with it). Where no quad before the
+	// (inside its clip, rounded by its corner radii) with it, opaque, before
+	// the frame's first quad (a fading one's fill fades out with it). Where
+	// no quad before the
 	// backdrop reaches its rectangle at all, every renderer draws it flat,
 	// Over(Base), without blurring.
 	Base uint32

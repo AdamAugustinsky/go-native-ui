@@ -173,6 +173,7 @@ type Surface struct {
 	featureLvl uint32
 	desc       swapChainDesc1
 	loggedLost bool
+	counted    bool // in liveSurfaces (device_windows.go) until Destroy
 }
 
 // NewSurface creates a D3D11 device and a swap chain for the window.
@@ -180,18 +181,22 @@ type Surface struct {
 func NewSurface(n platform.Native, w, h int32, scale float32) (*Surface, error) {
 	w, h = max(w, 1), max(h, 1)
 	s := &Surface{hwnd: n.HWND, w: w, h: h}
-	if err := s.init(); err != nil {
+	if err := s.createDevice(); err != nil {
 		s.Destroy()
 		return nil, err
 	}
+	if err := s.initChain(); err != nil {
+		s.Destroy()
+		return nil, err
+	}
+	liveSurfaces.Add(1)
+	s.counted = true
 	return s, nil
 }
 
-func (s *Surface) init() error {
-	if err := s.createDevice(); err != nil {
-		return err
-	}
-
+// initChain makes the swap chain and its render target view on the surface's
+// device (its own, or the app's: NewSurfaceOn).
+func (s *Surface) initChain() error {
 	// Device → adapter → factory (IDXGIFactory2).
 	if hr := win32.QueryInterface(s.dev, &iidDXGIDevice, &s.dxgiDev); hr < 0 {
 		return hresultError("QueryInterface(IDXGIDevice)", hr)
@@ -437,7 +442,13 @@ func (s *Surface) FrameSource() uintptr { return s.waitable }
 
 // Destroy releases all resources. The platform must not wait on the
 // FrameSource handle afterwards.
-func (s *Surface) Destroy() { s.release() }
+func (s *Surface) Destroy() {
+	if s.counted {
+		s.counted = false
+		liveSurfaces.Add(-1)
+	}
+	s.release()
+}
 
 // release releases the device, the swap chain and everything made on them.
 func (s *Surface) release() {
@@ -456,17 +467,27 @@ func (s *Surface) release() {
 }
 
 // Recover makes the surface work again on its window after the device was
-// lost (DeviceLost): it releases the device, swap chain and back-buffer view
-// and creates them anew, at the size of the last Resize. d is the shared
-// device of macOS and is not used here; nil.
+// lost (DeviceLost): it releases its references to the device, the swap chain
+// and the back-buffer view and creates them anew, at the size of the last
+// Resize. d is the app's new shared device (NewDevice), which the caller
+// releases once every surface and the renderer are on it; nil makes a device
+// of the surface's own, as NewSurface did.
 //
 // The new swap chain has a new frame-latency waitable: pass FrameSource to
-// Window.SetFrameSource again. The renderer made on the old device must be
-// rebuilt on the new one (Renderer.Rebuild with Device and Queue). On an
-// error the surface stays lost, and Recover may be tried again.
+// Window.SetFrameSource again. The renderer made on the old device must drop
+// it (Renderer.DropDevice) before this, and be rebuilt on the new one
+// (Renderer.Rebuild with Device and Queue). On an error the surface stays
+// lost, and Recover may be tried again.
 func (s *Surface) Recover(d *Device) error {
 	s.release()
-	if err := s.init(); err != nil {
+	if d != nil && d.dev != 0 {
+		s.dev, s.ctx = d.dev, d.ctx
+		win32.AddRef(s.dev)
+		win32.AddRef(s.ctx)
+	} else if err := s.createDevice(); err != nil {
+		return err
+	}
+	if err := s.initChain(); err != nil {
 		s.release()
 		return err
 	}

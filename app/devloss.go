@@ -3,6 +3,7 @@ package app
 import (
 	"fmt"
 	"os"
+	"runtime"
 
 	"gonativeui/gpu"
 )
@@ -88,30 +89,28 @@ func (a *App) recoverDevice() error {
 	}
 	a.R.DropDevice() // Direct3D: the window's new swap chain needs the old device unreferenced
 	var nd *gpu.Device
-	if s.dev != nil { // macOS: one device for the windows and the renderer
+	if s.dev != nil { // the windows and the renderer share one device (macOS, Windows)
 		d, err := gpu.NewDevice()
 		if err != nil {
 			return err
 		}
-		nd = d
+		// The surfaces hold references of their own to the old device until
+		// they recover; the app's own goes now, so that nothing but them
+		// keeps it (a window's new swap chain needs that on Direct3D).
+		s.dev.Release()
+		s.dev, nd = d, d
 	}
 	for _, w := range ws {
 		if err := w.Surf.Recover(nd); err != nil {
-			nd.Release()
 			return fmt.Errorf("surface: %w", err)
 		}
-		if nd == nil { // the frame source belongs to the swap chain
+		if runtime.GOOS != "darwin" { // the frame source belongs to the swap chain (macOS: the layer, which stays)
 			w.Win.SetFrameSource(w.Surf.FrameSource())
 		}
 	}
 	surf := ws[0].Surf
 	if err := a.R.Rebuild(surf.Device(), surf.Queue()); err != nil {
-		nd.Release()
 		return fmt.Errorf("renderer: %w", err)
-	}
-	if nd != nil {
-		s.dev.Release()
-		s.dev = nd
 	}
 	// The windows share the atlas's textures (D30), so one restores them.
 	ws[0].UI.AtlasRestore()

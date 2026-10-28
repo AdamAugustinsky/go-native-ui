@@ -1,8 +1,24 @@
-// Package fetch downloads a web resource over http or https, streaming the
-// body to a writer (DECISIONS D60). It is for an app's own small network
-// jobs: a self-updater reading release metadata and downloading an archive, a
-// feed, a manifest. It is not a general HTTP client: GET only, no cookies, no
-// cache, no connection reuse between calls.
+// Package fetch makes HTTP requests over http or https through the system's
+// client, streaming the response body to a writer (DECISIONS D60; the phase
+// 8 plan's N1 and D73). Get downloads a resource: a self-updater reading
+// release metadata and downloading an archive, a feed, a manifest. Do makes
+// any request: a method, headers, a streamed request body with upload
+// progress, and a streamed response an app can read as it arrives (server-
+// sent events are the app's: a body it reads line by line). There are no
+// cookies, no cache and no connection reuse between calls.
+//
+//	res, err := fetch.Do(ctx, fetch.Request{
+//		Method: "PUT", URL: "https://agent.example/api/upload",
+//		Body: f, BodyLength: size, // -1: unknown, sent chunked
+//	}, io.Discard, fetch.Options{
+//		Headers:        map[string]string{"Authorization": "Bearer " + token},
+//		UploadProgress: func(sent, total int64) { ... },
+//		AnyStatus:      true, // a 4xx's JSON body is the app's to read
+//	})
+//
+// The body is read on the calling goroutine as the system takes it, so an
+// upload of any size (a file through io.SectionReader, a generated stream)
+// runs in constant memory.
 //
 //	var buf bytes.Buffer
 //	res, err := fetch.Get(ctx, "https://example.com/app-1.2.zip", f, fetch.Options{
@@ -22,9 +38,14 @@
 //     program links neither net/http nor crypto/tls (about 2.8 MB), and the
 //     transfer uses the system's trust store, its proxy settings (System
 //     Settings, PAC files, per-network rules) and its TLS fixes.
-//   - Windows and Linux: net/http. The trust store is the system's (on Linux
-//     the usual certificate directories); the proxy is the one the
-//     HTTP_PROXY, HTTPS_PROXY and NO_PROXY environment variables name.
+//   - Windows: WinHTTP (winhttp.dll), synchronous, one session per call. The
+//     program links neither net/http nor crypto/tls; TLS is SChannel with
+//     the system's trust store, and the proxy is the system's
+//     (WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY: auto-detection, PAC files and the
+//     user's settings), not the environment's.
+//   - Linux: net/http. The trust store is the usual certificate
+//     directories; the proxy is the one the HTTP_PROXY, HTTPS_PROXY and
+//     NO_PROXY environment variables name.
 //
 // Both behave the same where the API reaches: the same redirects (followed),
 // the same errors, the same limits, the body delivered as the server sent it
@@ -56,14 +77,19 @@
 //
 // # Proxies
 //
-// Without Options.Proxy, macOS uses the system's proxy settings and the
-// other systems the HTTP_PROXY, HTTPS_PROXY and NO_PROXY environment
-// variables. Options.Proxy overrides that, also for loopback addresses, and a
-// Proxy of Kind ProxyNone connects directly whatever those say. On
-// macOS the credentials of an HTTP proxy (Proxy.User) answer the proxy's 407
-// for https URLs, which go through CONNECT; the system does not turn a 407
-// for a plain http URL into a request for credentials, so that transfer
-// fails with a *StatusError with Code 407. SOCKS5 credentials work for both.
+// Without Options.Proxy, macOS and Windows use the system's proxy settings
+// and Linux the HTTP_PROXY, HTTPS_PROXY and NO_PROXY environment variables.
+// Options.Proxy overrides that, also for loopback addresses (except on
+// Windows, where WinHTTP always connects to those directly), and a Proxy of
+// Kind ProxyNone connects directly whatever those say. On macOS the
+// credentials of an HTTP proxy (Proxy.User) answer the proxy's 407 for https
+// URLs, which go through CONNECT; the system does not turn a 407 for a plain
+// http URL into a request for credentials, so that transfer fails with a
+// *StatusError with Code 407. SOCKS5 credentials work for both. Windows
+// offers the credentials of an HTTP proxy with Basic before it asks, and
+// answers its 407 once for a request without a body. WinHTTP has no SOCKS
+// and no TLS-secured proxy: ProxySOCKS5 and ProxyHTTPS fail there with an
+// error that satisfies errors.Is(err, errors.ErrUnsupported).
 //
 // # Threads
 //
@@ -105,6 +131,30 @@ type Options struct {
 	// Proxy, if set, routes the transfer through that proxy instead of the
 	// system's, or with Kind ProxyNone, through none.
 	Proxy *Proxy
+	// UploadProgress, if set, is called on the calling goroutine as Do sends
+	// a request body, with the bytes sent so far and Request.BodyLength (-1
+	// when unknown).
+	UploadProgress func(sent, total int64)
+	// AnyStatus makes Do deliver the response body whatever the status, with
+	// no *StatusError: an API's error responses carry a body the app reads.
+	// Get ignores it.
+	AnyStatus bool
+}
+
+// Request is one request for Do.
+type Request struct {
+	// Method is the HTTP method ("GET", "POST", "PUT", "PATCH", "DELETE",
+	// "HEAD", "OPTIONS"); "" is GET.
+	Method string
+	// URL is an absolute http or https URL.
+	URL string
+	// Body is the request body, read on the calling goroutine as it is sent;
+	// nil sends none. Do never closes it.
+	Body io.Reader
+	// BodyLength is the body's length in bytes, sent as Content-Length; -1
+	// when unknown, and the body is then sent chunked. A Body that ends
+	// before BodyLength bytes fails the request.
+	BodyLength int64
 }
 
 // ProxyKind is the protocol a proxy speaks.
@@ -115,11 +165,12 @@ const (
 	// ProxyHTTP is an HTTP proxy reached without encryption. It carries http
 	// URLs and, through CONNECT, https URLs.
 	ProxyHTTP ProxyKind = iota + 1
-	// ProxyHTTPS is an HTTP proxy reached over TLS. macOS does not offer it
-	// to NSURLSession's proxy settings: there the transfer fails with an error
-	// that satisfies errors.Is(err, errors.ErrUnsupported).
+	// ProxyHTTPS is an HTTP proxy reached over TLS. Neither NSURLSession's
+	// proxy settings nor WinHTTP offer it: on macOS and Windows the transfer
+	// fails with an error that satisfies errors.Is(err, errors.ErrUnsupported).
 	ProxyHTTPS
 	// ProxySOCKS5 is a SOCKS5 proxy; names are resolved by the proxy.
+	// WinHTTP has none: on Windows it is errors.ErrUnsupported.
 	ProxySOCKS5
 	// ProxyNone is no proxy: the transfer connects to the server directly,
 	// whatever the system's settings or the environment name (a host on the
@@ -152,9 +203,13 @@ type Response struct {
 	// it did not (the length of the body written may differ then, and also when
 	// the server's announcement was wrong).
 	ContentLength int64
+	// Headers are the final response's headers by canonical name
+	// ("Content-Type"), repeated ones joined with ", ". Do fills them; Get
+	// leaves them nil.
+	Headers map[string]string
 }
 
-// The errors Get and Bytes return can be matched with errors.Is and errors.As;
+// The errors Get, Bytes and Do return can be matched with errors.Is and errors.As;
 // each also carries the URL and, where there is one, the system's own message.
 var (
 	// ErrTooLarge means the body is longer than Options.MaxBytes.
@@ -164,6 +219,15 @@ var (
 	// ErrInsecure means macOS refused plain http to this host (see "Plain http
 	// on macOS" in the package documentation).
 	ErrInsecure = errors.New("fetch: plain http refused by App Transport Security")
+	// ErrUnsupportedRequest is Do's error for a request the systems' clients
+	// do not all make: a GET or HEAD with a body (NSURLSession refuses it).
+	// It matches errors.ErrUnsupported.
+	ErrUnsupportedRequest = fmt.Errorf("fetch: request not supported: %w", errors.ErrUnsupported)
+	// ErrBodyLength means Request.Body ended before Request.BodyLength
+	// bytes.
+	ErrBodyLength = errors.New("fetch: request body shorter than BodyLength")
+	// ErrBadMethod means Request.Method is not an HTTP method token.
+	ErrBadMethod = errors.New("fetch: not an HTTP method")
 )
 
 // StatusError is returned when the final response's status is not 2xx. The
@@ -187,6 +251,12 @@ func Get(ctx context.Context, rawURL string, w io.Writer, opt Options) (Response
 	if err != nil {
 		return Response{}, err
 	}
+	return run(ctx, u, &call{method: "GET", length: -1}, w, opt)
+}
+
+// run makes the call c to u: the checks and limits Get and Do share, then
+// the system's client.
+func run(ctx context.Context, u *url.URL, c *call, w io.Writer, opt Options) (Response, error) {
 	if opt.Proxy != nil {
 		if err := opt.Proxy.check(); err != nil {
 			return Response{}, err
@@ -201,12 +271,12 @@ func Get(ctx context.Context, rawURL string, w io.Writer, opt Options) (Response
 		return Response{}, wrap(u, err)
 	}
 	s := &sink{w: w, max: opt.MaxBytes, total: -1, progress: opt.Progress}
-	res, err := get(ctx, u, s, opt)
-	if err != nil && ctx.Err() != nil && !errors.Is(err, ErrTooLarge) {
+	res, err := do(ctx, u, c, s, opt)
+	if err != nil && ctx.Err() != nil && !errors.Is(err, ErrTooLarge) && !errors.Is(err, ErrBodyLength) && !c.bodyErr {
 		err = ctx.Err() // the transfer failed because we cancelled it
 	}
 	var se *StatusError
-	if err != nil && !errors.As(err, &se) && !errors.Is(err, ErrTooLarge) {
+	if err != nil && !errors.As(err, &se) && !errors.Is(err, ErrTooLarge) && !c.bodyErr {
 		err = wrap(u, err)
 	}
 	return res, err
@@ -226,6 +296,151 @@ func Bytes(ctx context.Context, rawURL string, limit int64, opt Options) ([]byte
 		return nil, res, err
 	}
 	return buf.Bytes(), res, nil
+}
+
+// Do makes the request req and writes the response body to w as it
+// arrives (nil w discards it). It returns when the body is complete, the
+// request fails, or ctx ends. A status outside 2xx is a *StatusError unless
+// opt.AnyStatus is set. Options.MaxBytes, Timeout, Progress, Headers and
+// Proxy mean what they mean for Get; Response.Headers is filled.
+//
+// The request body is read on the calling goroutine, in pieces, as the
+// system takes them, so a file or a generated stream of any size is sent
+// in constant memory; UploadProgress follows it. An error from the body's
+// Read ends the request and is returned as it is.
+//
+// Redirects are followed: 301, 302 and 303 turn the request into a GET
+// without a body, as browsers do. A request with a body is not sent again,
+// so a 307 or 308 answer to one fails the request (a *StatusError when the
+// system hands the answer back, an error of the system's otherwise).
+func Do(ctx context.Context, req Request, w io.Writer, opt Options) (Response, error) {
+	m := req.Method
+	if m == "" {
+		m = "GET"
+	}
+	if !methodToken(m) {
+		return Response{}, fmt.Errorf("%w: %q", ErrBadMethod, req.Method)
+	}
+	u, err := parseURL(req.URL)
+	if err != nil {
+		return Response{}, err
+	}
+	if w == nil {
+		w = io.Discard
+	}
+	c := &call{method: m, headers: true, anyStatus: opt.AnyStatus, upload: opt.UploadProgress, length: -1}
+	if req.Body != nil {
+		if m == "GET" || m == "HEAD" {
+			return Response{}, fmt.Errorf("%w: a %s with a body", ErrUnsupportedRequest, m)
+		}
+		if req.BodyLength < -1 {
+			return Response{}, fmt.Errorf("fetch: BodyLength %d", req.BodyLength)
+		}
+		c.body, c.length = req.Body, req.BodyLength
+	}
+	return run(ctx, u, c, w, opt)
+}
+
+// A call is what one request asks of the system's client beyond a URL.
+type call struct {
+	method    string
+	body      io.Reader // nil: none
+	length    int64     // the body's length, -1 unknown (sent chunked)
+	headers   bool      // fill Response.Headers
+	anyStatus bool
+	upload    func(sent, total int64)
+
+	sent    int64 // body bytes handed to the system
+	bodyErr bool  // the request failed because the body's Read did
+}
+
+// hasBody reports whether the request carries a body (an empty one with a
+// known length of 0 included).
+func (c *call) hasBody() bool { return c.body != nil }
+
+// fill reads the next piece of the body into p: n > 0, or io.EOF once the
+// body is complete. A body that ends before its length is ErrBodyLength;
+// one longer than its length is read only up to it.
+func (c *call) fill(p []byte) (int, error) {
+	if c.length >= 0 {
+		rem := c.length - c.sent
+		if rem <= 0 {
+			return 0, io.EOF
+		}
+		if int64(len(p)) > rem {
+			p = p[:rem]
+		}
+	}
+	for empty := 0; ; empty++ {
+		n, err := c.body.Read(p)
+		switch {
+		case n > 0:
+			return n, nil
+		case err == io.EOF && c.length >= 0:
+			return 0, fmt.Errorf("%w: %d of %d bytes", ErrBodyLength, c.sent, c.length)
+		case err == io.EOF:
+			return 0, io.EOF
+		case err != nil:
+			c.bodyErr = true
+			return 0, err
+		case empty == 100:
+			c.bodyErr = true
+			return 0, io.ErrNoProgress
+		}
+	}
+}
+
+// advance records n body bytes taken by the system and reports progress.
+func (c *call) advance(n int) {
+	c.sent += int64(n)
+	if c.upload != nil {
+		c.upload(c.sent, c.length)
+	}
+}
+
+// accepts reports whether a response's body is delivered.
+func (c *call) accepts(status int) bool { return c.anyStatus || ok(status) }
+
+// addHeader adds a response header to h under its canonical name, joining
+// repeated ones with ", ".
+func addHeader(h map[string]string, name, value string) {
+	name = canonicalKey(name)
+	if old, ok := h[name]; ok {
+		value = old + ", " + value
+	}
+	h[name] = value
+}
+
+// canonicalKey is name with its first letter and each letter after a
+// hyphen upper case and the rest lower case ("content-type" is
+// "Content-Type"), as net/http writes header names.
+func canonicalKey(name string) string {
+	b := []byte(name)
+	upper := true
+	for i, c := range b {
+		switch {
+		case upper && 'a' <= c && c <= 'z':
+			b[i] = c - 'a' + 'A'
+		case !upper && 'A' <= c && c <= 'Z':
+			b[i] = c - 'A' + 'a'
+		}
+		upper = c == '-'
+	}
+	return string(b)
+}
+
+// methodToken reports whether m is an HTTP token (RFC 9110 §5.6.2).
+func methodToken(m string) bool {
+	if m == "" {
+		return false
+	}
+	for i := 0; i < len(m); i++ {
+		c := m[i]
+		if c <= ' ' || c >= 0x7F || strings.IndexByte("\"(),/:;<=>?@[\\]{}", c) >= 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func parseURL(raw string) (*url.URL, error) {

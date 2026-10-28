@@ -46,3 +46,6 @@
 /textshot
 /vlistbench
 /windowsdemo
+
+# tools/libghostty: libghostty-vt builds (not committed; see DECISIONS.md D74)
+/.cache/

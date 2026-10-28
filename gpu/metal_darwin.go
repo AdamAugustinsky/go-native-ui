@@ -30,6 +30,7 @@ type Surface struct {
 	live                 bool   // layer.presentsWithTransaction is on: a live resize with a frame handler is in progress
 	frame                Frame  // Present's frame (kept here so Present doesn't allocate)
 	reveal               func() // shows the window inside the first frame's transaction (RevealOnFirstFrame)
+	traceNext            bool   // TraceNextPresent: the next frame's present feedback goes to Trace.OnGlass
 	Trace                FirstPresentTrace
 	// SyncedPresents counts the frames presented with presentsWithTransaction
 	// because the native shell's views moved with them (outside live resize
@@ -231,6 +232,16 @@ func (s *Surface) Device() uintptr { return uintptr(s.device) }
 // Queue returns the id<MTLCommandQueue>; see Device.
 func (s *Surface) Queue() uintptr { return uintptr(s.queue) }
 
+// TraceNextPresent records when the next frame drawn is shown on the display
+// in Trace.OnGlass, as the first frame's is, and sets it to 0 until then:
+// for a measurement such as a panel shown by a hotkey to its frame on
+// glass. One surface at a time (the presented handler is the process's).
+// Main thread.
+func (s *Surface) TraceNextPresent() {
+	s.Trace.OnGlass.Store(0)
+	s.traceNext = true
+}
+
 // RevealOnFirstFrame makes the first EndFrame call show (typically the
 // platform Window's Show, for a window opened with Options.Hidden) inside
 // the Core Animation transaction that presents the first frame, so the
@@ -293,10 +304,11 @@ func (s *Surface) BeginFrame(f *Frame) bool {
 	}
 	if first {
 		s.Trace.Acquired = platform.Now()
-		if presentedBlock.invoke != 0 {
-			onGlassTarget.Store(&s.Trace.OnGlass)
-			objc.Send1(f.drawable, selAddPresented, uintptr(unsafe.Pointer(&presentedBlock)))
-		}
+	}
+	if (first || s.traceNext) && presentedBlock.invoke != 0 {
+		s.traceNext = false
+		onGlassTarget.Store(&s.Trace.OnGlass)
+		objc.Send1(f.drawable, selAddPresented, uintptr(unsafe.Pointer(&presentedBlock)))
 	}
 	f.Target = uintptr(objc.Send(f.drawable, selTexture))
 	f.CmdBuf = uintptr(objc.Retain(objc.Send(s.queue, selCommandBuffer)))
