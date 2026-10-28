@@ -24,7 +24,8 @@ import (
 // (dropread_darwin.go) and waits for it for dropSyncBudget, so that a lazy source
 // in another process cannot hold the main thread. File URLs and text are read
 // within their caps and the EvDrop is queued by the time the call returns, or
-// later by reapDrags if the source was slow. An image is taken as the path of the
+// later by reapDrags if the source was slow. A link (public.url, unless it is a
+// file's), RTF and HTML are read as text (readText). An image is taken as the path of the
 // file URL its item offers (Finder, Photos), else as a copy of its bytes
 // (dataForType:, over MaxPaste refused), and the same worker reads the file and
 // decodes it (dragimg_darwin.go); reapDrags (called by Wait) queues the result.
@@ -37,6 +38,11 @@ import (
 // events of a drag over our own window arrive but Wait does not run: while a
 // session of the window is active, each draggingEntered:/Updated: asks for a
 // frame, and linkTick runs the frame handler for it, as in a live resize.
+//
+// File promises (Mail, Photos, a browser's downloads: no file URL, droppromise_darwin.go)
+// are received only with EnableFilePromises: performDrop asks the promisers to
+// write into a folder of the temporary directory and the EvDrop (DragFiles) is
+// queued by reapDrags when they have, or at the timeout.
 //
 // The view registers for dragged types only while the application has a drop
 // target (SetDropKinds), and only the types of those kinds. A hosted native
@@ -77,18 +83,17 @@ const (
 	nsOpDelete  = 32
 )
 
-// maxDropWorkers bounds the image decodes in flight; a drop past it fails.
-const maxDropWorkers = 4
-
 var (
 	dragOnce sync.Once
 
 	clsNSEvent, clsNSData, clsNSImage2, clsNSBitmapRep, clsNSDictionary   objc.ID
 	clsNSPasteboardItem, clsNSDraggingItem, clsNSFilePromise, clsNSNumber objc.ID
 	clsNSError, clsNSWorkspace, clsNSOpQueue                              objc.ID
+	clsNSAttrStr                                                          objc.ID
 
 	tFileURL, tPNG, tTIFF, tJPEG, tHEIC, tText, errDomain objc.ID
-	arrFiles, arrImage, arrText                           objc.ID // the dragged types of each kind
+	tURL, tRTF, tHTML                                     objc.ID // a link, rich text: dragged as text
+	arrFiles, arrImage, arrText, arrTextNoURL             objc.ID // the dragged types of each kind
 	dragSource                                            objc.ID // the GNUIDragSource, retained for the process
 	promiseQueue                                          objc.ID // the NSOperationQueue of the promise delegate
 
@@ -106,6 +111,8 @@ var (
 	selDragPasteboard  = objc.Sel("draggingPasteboard")
 	selDragSourceMask  = objc.Sel("draggingSourceOperationMask")
 	selDragSeq         = objc.Sel("draggingSequenceNumber")
+
+	selInitWithRTF = objc.Sel("initWithRTF:documentAttributes:")
 
 	selAvailableType  = objc.Sel("availableTypeFromArray:")
 	selPBItems        = objc.Sel("pasteboardItems")
@@ -159,6 +166,8 @@ func dragInit() {
 		keep := func(s string) objc.ID { return objc.Retain(objc.Str(s)) }
 		tFileURL, tPNG, tTIFF = keep("public.file-url"), keep("public.png"), keep("public.tiff")
 		tJPEG, tHEIC, tText = keep("public.jpeg"), keep("public.heic"), keep("public.utf8-plain-text")
+		tURL, tRTF, tHTML = keep("public.url"), keep("public.rtf"), keep("public.html")
+		clsNSAttrStr = objc.Cls("NSAttributedString")
 		errDomain = keep("dev.gonativeui.drag")
 		arr := func(ts ...objc.ID) objc.ID {
 			a := objc.Retain(objc.Send(clsNSMutableArray, selArrayClass))
@@ -167,7 +176,8 @@ func dragInit() {
 			}
 			return a
 		}
-		arrFiles, arrImage, arrText = arr(tFileURL), arr(tPNG, tTIFF, tJPEG, tHEIC), arr(tText)
+		arrFiles, arrImage, arrText = arr(tFileURL), arr(tPNG, tTIFF, tJPEG, tHEIC), arr(tText, tURL, tRTF, tHTML)
+		arrTextNoURL = arr(tText, tRTF, tHTML)
 
 		def := objc.Define("GNUIDragSource", objc.Cls("NSObject"), []string{"NSDraggingSource", "NSFilePromiseProviderDelegate"})
 		def.Method(selSrcMask, "Q@:@q", sourceMask)
@@ -227,7 +237,8 @@ type dragState struct {
 // dropDone is a decoded image on its way to the event queue, for the event e.
 type dropDone struct {
 	e    Event
-	data []byte // the PNG; empty: failed
+	data []byte // the PNG, or the paths of promised files; empty: failed
+	n    int    // the number of files, if not 0
 }
 
 // SetDragHandler sets the function that answers drags over the window (see
@@ -256,8 +267,8 @@ func (w *Window) SetDropKinds(k DragKinds) {
 	for _, p := range [...]struct {
 		k DragKinds
 		a objc.ID
-	}{{DragFiles, arrFiles}, {DragImage, arrImage}, {DragText, arrText}} {
-		if k&p.k == 0 {
+	}{{DragFiles, arrFiles}, {DragFiles, arrPromiseTypes}, {DragImage, arrImage}, {DragText, arrText}} {
+		if k&p.k == 0 || p.a == 0 || p.a == arrPromiseTypes && !EnableFilePromises {
 			continue
 		}
 		for i, n := 0, int(objc.Send(p.a, selURLCount)); i < n; i++ {
@@ -298,13 +309,20 @@ func opToNS(op DragOp) uintptr {
 // offeredKinds is the kinds the pasteboard has types for, and how many items
 // it holds.
 func offeredKinds(pb objc.ID) (k DragKinds, items int) {
-	if objc.Send1(pb, selAvailableType, uintptr(arrFiles)) != 0 || hasPromises(pb) {
+	files := objc.Send1(pb, selAvailableType, uintptr(arrFiles)) != 0
+	if files || hasPromises(pb) {
 		k |= DragFiles
 	}
 	if objc.Send1(pb, selAvailableType, uintptr(arrImage)) != 0 {
 		k |= DragImage
 	}
-	if objc.Send1(pb, selAvailableType, uintptr(arrText)) != 0 {
+	// A file's URL is also a public.url (the types conform): a link is text
+	// only when there is no file to take it for.
+	text := arrText
+	if files {
+		text = arrTextNoURL
+	}
+	if objc.Send1(pb, selAvailableType, uintptr(text)) != 0 {
 		k |= DragText
 	}
 	if arr := objc.Send(pb, selPBItems); arr != 0 {
@@ -321,17 +339,7 @@ func (w *Window) dragPoint(info objc.ID) (x, y float32) {
 }
 
 func (d *dragState) answer(x, y float32, offered DragKinds, allowed DragOp) DragAnswer {
-	if d.handler == nil {
-		return DragAnswer{Op: Pick(DragOpAll, allowed), Accept: DragAny}
-	}
-	a := d.handler(x, y, offered, allowed)
-	if a.Accept&offered == 0 {
-		return DragAnswer{}
-	}
-	if a.Op&^allowed != 0 || a.Op&(a.Op-1) != 0 { // not one of the allowed operations
-		a.Op = Pick(a.Op, allowed)
-	}
-	return a
+	return answerDrag(d.handler, x, y, offered, allowed)
 }
 
 // nudge makes a Wait that is blocked in nextEventMatchingMask return, so that
@@ -633,50 +641,6 @@ func readPaths(f *ffi.Frame, items objc.ID, limit int) (out []byte, n int) {
 	return out, n
 }
 
-// readText returns the text of the first pasteboard item that has some, nil if
-// it has none or it is over limit bytes of UTF-8.
-func readText(f *ffi.Frame, items objc.ID, limit int) []byte {
-	for i, cnt := 0, int(wsend(f, items, selURLCount)); i < cnt; i++ {
-		str := wsend(f, wsend(f, items, selURLAt, uintptr(i)), selStringForType, uintptr(tText))
-		if str == 0 {
-			continue
-		}
-		n := int(wsend(f, str, selLenBytes, 4 /* NSUTF8StringEncoding */))
-		p := uintptr(wsend(f, str, selUTF8))
-		if n <= 0 || n > limit || p == 0 {
-			return nil
-		}
-		return append([]byte(nil), unsafe.Slice((*byte)(ffi.PtrFromC(p)), n)...)
-	}
-	return nil
-}
-
-// ownPaths, ownText: what a drag of our own session carries, from its spec.
-func ownPaths(items []DragItem, limit int) (out []byte, n int) {
-	for i := range items {
-		if p := items[i].Path; p != "" {
-			if len(out)+len(p)+1 > limit {
-				return nil, 0
-			}
-			out = append(append(out, p...), 0)
-			n++
-		}
-	}
-	return out, n
-}
-
-func ownText(items []DragItem, limit int) []byte {
-	for i := range items {
-		if t := items[i].Text; t != "" {
-			if len(t) > limit {
-				return nil
-			}
-			return []byte(t)
-		}
-	}
-	return nil
-}
-
 // wsend sends sel to id with integer or pointer arguments on frame f, which
 // belongs to the calling goroutine's thread: for workers and foreign-thread
 // callbacks, which must not use objc.F.
@@ -699,7 +663,7 @@ func (w *Window) reapDrags() {
 		d.mu.Unlock()
 		d.nDone.Add(-int32(len(done)))
 		for _, r := range done {
-			w.pushDrop(r.e, r.data, 0, false)
+			w.pushDrop(r.e, r.data, r.n, false)
 		}
 	}
 	startPromises(w)

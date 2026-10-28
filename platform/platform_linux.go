@@ -68,6 +68,9 @@ type Window struct {
 
 	drags dragMap   // SetDragRegions
 	clip  clipboard // clipboard_linux.go
+	dnd   dndState  // drag and drop (drag_linux.go)
+
+	leftDown bool // the left button is held (a press reached the app and no release yet): a drag out starts from it
 
 	hidden   bool           // X11: opened unmapped, not shown yet (Options.Hidden)
 	showBy   int64          // when a hidden window is shown regardless (nanotime)
@@ -88,9 +91,9 @@ type Window struct {
 
 var theWindow Window
 
-// maxPollFDs bounds the poll set: connection, eventfd, one paste pipe and
-// maxSends clipboard writers.
-const maxPollFDs = 3 + maxSends
+// maxPollFDs bounds the poll set: connection, eventfd, one paste pipe, one
+// pipe of a drop and maxSends clipboard writers.
+const maxPollFDs = 4 + maxSends
 
 type pollfd struct {
 	fd      int32

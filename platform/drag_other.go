@@ -1,13 +1,13 @@
-//go:build !darwin
+//go:build !darwin && !windows && !linux
 
 package platform
 
 import "runtime"
 
-// Drag and drop is macOS only so far (drag.go has the contract): elsewhere the
-// window takes no drops, starts no drags, and queues none of the drag events.
-// The follow-ups are OLE IDropTarget and DoDragDrop on Windows, and XDND on X11
-// and the data-device protocol on Wayland.
+// Drag and drop is native on macOS and Windows so far (drag.go has the
+// contract): elsewhere the window takes no drops, starts no drags, and queues
+// none of the drag events. The follow-ups are XDND on X11 and the data-device
+// protocol on Wayland.
 
 // NativeDrag reports whether the OS has native drag and drop: false here.
 const NativeDrag = false

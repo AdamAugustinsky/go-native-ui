@@ -489,6 +489,7 @@ func pump(timeoutNs int64) bool {
 		var due int64 // the soonest clipboard time limit of any window
 		queued := false
 		for _, w := range openWindows() {
+			w.reapDrags()
 			if w.clipDue != 0 && now >= w.clipDue {
 				w.clipStep()
 			}
@@ -633,6 +634,7 @@ func modalTick() {
 	now := nanotime()
 	for i := 0; i < reg.n; i++ {
 		w := reg.open[i]
+		w.reapDrags()
 		if w.clipDue != 0 && now >= w.clipDue {
 			w.clipStep()
 		}

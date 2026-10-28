@@ -27,10 +27,20 @@ import (
 //
 // The EvDrop arrives when every promised file has been written, or an error was
 // reported for the rest, or receiveTimeout passed (with the files that came: no
-// file at all is FlagFailed).
+// file at all is FlagFailed). At most maxReceptions are in flight, and the
+// receptions of a window are abandoned when it closes (closeReceptions): their
+// reports are ignored from then on, the receivers are let go and no EvDrop
+// follows; the files already written stay where they are.
+//
+// This is the one receiver of file promises, and it is off unless
+// EnableFilePromises is set (see drag.go): it can only be started from inside a
+// real drag's performDragOperation:, which nothing in the tests can provide.
 
-// receiveTimeout is how long a reception waits for the promiser. A variable for
-// tests.
+// maxReceptions bounds the receptions in flight; a drop past it fails.
+const maxReceptions = 4
+
+// receiveTimeout is how long a reception waits for the promiser (Photos
+// exporting a video can be slow). A variable for tests.
 var receiveTimeout = 2 * time.Minute
 
 var (
@@ -92,16 +102,20 @@ var (
 )
 
 // newReception records a reception of want files into dir, which holds a place
-// in d.workers until it is finished.
-func newReception(d *dragState, e Event, dir string, want int) (id uintptr, rc *reception) {
-	d.workers.Add(1)
+// in d.workers until it is finished; ok is false when maxReceptions are in
+// flight.
+func newReception(d *dragState, e Event, dir string, want int) (id uintptr, rc *reception, ok bool) {
 	rc = &reception{d: d, e: e, dir: dir, want: want}
 	recMu.Lock()
+	defer recMu.Unlock()
+	if len(recs) >= maxReceptions {
+		return 0, nil, false
+	}
+	d.workers.Add(1)
 	recNext++
 	id = recNext
 	recs[id] = rc
-	recMu.Unlock()
-	return id, rc
+	return id, rc, true
 }
 
 // receivePromises starts the promisers writing the pasteboard's files; it
@@ -138,7 +152,11 @@ func receivePromises(d *dragState, pb objc.ID, e Event) bool {
 	}
 	sweepOnce.Do(sweepDrops)
 
-	id, rc := newReception(d, e, dir, want)
+	id, rc, ok := newReception(d, e, dir, want)
+	if !ok {
+		os.RemoveAll(dir)
+		return false
+	}
 
 	queue := wsend(f, wsend(f, objc.Cls("NSOperationQueue"), selAlloc), selInit)
 	wsend(f, queue, selSetMaxConcurrent, 1)
@@ -166,10 +184,10 @@ func receivePromises(d *dragState, pb objc.ID, e Event) bool {
 		started++
 	}
 	if started == 0 {
-		rc.finish(f) // delivers the failure
+		rc.finish(f, true) // delivers the failure
 		return true
 	}
-	rc.timer = time.AfterFunc(receiveTimeout, func() { rc.finish(new(ffi.Frame)) })
+	rc.arm()
 	return true
 }
 
@@ -202,13 +220,40 @@ func receiveFile(ctx uintptr, c *ffi.CB) {
 	all := !rc.done && rc.got+rc.fails >= rc.want
 	rc.mu.Unlock()
 	if all {
-		rc.finish(f)
+		rc.finish(f, true)
 	}
 }
 
-// finish delivers the EvDrop with the files that arrived, once, and lets go of
-// everything the reception held.
-func (rc *reception) finish(f *ffi.Frame) {
+// arm starts the timeout, unless the reception is over already (a report may
+// have completed it before the last request was sent).
+func (rc *reception) arm() {
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+	if !rc.done {
+		rc.timer = time.AfterFunc(receiveTimeout, func() { rc.finish(new(ffi.Frame), true) })
+	}
+}
+
+// closeReceptions abandons the receptions of the window as it closes.
+func (w *Window) closeReceptions() {
+	var drop []*reception
+	recMu.Lock()
+	for _, rc := range recs {
+		if rc.d == &w.drag {
+			drop = append(drop, rc)
+		}
+	}
+	recMu.Unlock()
+	f := new(ffi.Frame)
+	for _, rc := range drop {
+		rc.finish(f, false)
+	}
+}
+
+// finish delivers the EvDrop with the files that arrived (unless deliver is
+// false: the window is closing), once, and lets go of everything the reception
+// held.
+func (rc *reception) finish(f *ffi.Frame, deliver bool) {
 	rc.mu.Lock()
 	if rc.done {
 		rc.mu.Unlock()
@@ -227,9 +272,14 @@ func (rc *reception) finish(f *ffi.Frame) {
 	for _, id := range hold {
 		wsend(f, id, selDropRelease)
 	}
-	e := rc.e
-	e.SelStart = int32(got)
-	rc.d.finish(dropDone{e: e, data: paths})
+	if got == 0 {
+		os.RemoveAll(rc.dir) // before the EvDrop: it says the folder is gone
+	}
+	if deliver {
+		e := rc.e
+		e.SelStart = int32(got)
+		rc.d.finish(dropDone{e: e, data: paths})
+	}
 	rc.d.workers.Add(-1)
 	recMu.Lock()
 	for id, x := range recs {
@@ -238,9 +288,6 @@ func (rc *reception) finish(f *ffi.Frame) {
 		}
 	}
 	recMu.Unlock()
-	if got == 0 {
-		os.RemoveAll(rc.dir)
-	}
 }
 
 // sweepDrops removes the reception folders more than a day old.
