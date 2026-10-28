@@ -6,9 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
-	"strings"
 	"sync/atomic"
 	"syscall"
+	"unicode/utf16"
 	"unsafe"
 
 	"gonativeui/internal/win32"
@@ -226,6 +226,7 @@ type Window struct {
 
 	hwnd, hinst uintptr
 	style       uint32
+	title       []uint16 // SetTitle's UTF-16 buffer, NUL-terminated
 
 	w, h  int32   // client size, physical pixels
 	scale float32 // pixels per logical unit
@@ -550,21 +551,21 @@ func (w *Window) Close() {
 }
 
 // SetTitle sets the window's title (the title bar, the taskbar button, Alt+Tab).
-// Text from the first NUL on is dropped, as the OS reads a C string. Main
-// thread.
+// Text from the first NUL on is dropped, as the OS reads a C string. It
+// allocates only while the title outgrows the buffer it keeps. Main thread.
 func (w *Window) SetTitle(title string) {
 	if w.hwnd == 0 || pSetWindowTextW == 0 {
 		return
 	}
-	if i := strings.IndexByte(title, 0); i >= 0 {
-		title = title[:i]
+	t := w.title[:0]
+	for _, r := range title {
+		if r == 0 {
+			break
+		}
+		t = utf16.AppendRune(t, r)
 	}
-	p, err := syscall.UTF16PtrFromString(title)
-	if err != nil {
-		return
-	}
-	win32.Call(pSetWindowTextW, w.hwnd, uintptr(unsafe.Pointer(p)))
-	runtime.KeepAlive(p)
+	w.title = append(t, 0)
+	win32.Call(pSetWindowTextW, w.hwnd, uintptr(unsafe.Pointer(&w.title[0])))
 }
 
 // osWake posts a message to the window thread; safe from any thread.

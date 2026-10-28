@@ -26,6 +26,10 @@ func TestSetTitleWindows(t *testing.T) {
 			t.Errorf("SetTitle(%q): the window says %q", s, got)
 		}
 	}
+	w.SetTitle("Table")
+	if n := testing.AllocsPerRun(50, func() { w.SetTitle("Controls") }); n != 0 {
+		t.Errorf("SetTitle allocates %.1f times once its buffer has grown (the gallery sets it at each scene, inside the allocation gate)", n)
+	}
 	w.SetTitle("cut\x00here")
 	if got := title(); got != "cut" {
 		t.Errorf("a NUL in the title: %q, want it cut there", got)
