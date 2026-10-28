@@ -496,7 +496,7 @@ foreach ($n in 'A','B') {
 		}
 	})
 	if err != nil || len(thumbs) != 2 {
-		t.Skipf("cannot make and trust test certificates: %v\n%s", err, out)
+		t.Fatalf("cannot make and trust test certificates: %v\n%s", err, out)
 	}
 	return func(t *testing.T, path string, which int) {
 		t.Helper()
