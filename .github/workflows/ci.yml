@@ -172,7 +172,15 @@ jobs:
             git init -q "$RUNNER_TEMP/ghostty"
             git -C "$RUNNER_TEMP/ghostty" fetch -q --depth 1 https://github.com/ghostty-org/ghostty "$commit"
             git -C "$RUNNER_TEMP/ghostty" checkout -q FETCH_HEAD
-            go run ./tools/libghostty -src "$RUNNER_TEMP/ghostty" -zig "$RUNNER_TEMP/zig-aarch64-macos-0.17.0/zig" -targets darwin/arm64
+            # Zig fetches Ghostty's dependencies from deps.files.ghostty.org, which has
+            # failed mid-download on the runner (ReadFailed); what it fetched stays in
+            # Zig's cache, so another try picks up from there.
+            for try in 1 2 3; do
+              go run ./tools/libghostty -src "$RUNNER_TEMP/ghostty" -zig "$RUNNER_TEMP/zig-aarch64-macos-0.17.0/zig" -targets darwin/arm64 && break
+              [ "$try" = 3 ] && exit 1
+              echo "::warning::libghostty build failed (try $try of 3), trying again"
+              sleep 20
+            done
           fi
           echo "GNUI_REQUIRE_LIBGHOSTTY=1" >> "$GITHUB_ENV"
       - name: test (arm64)
