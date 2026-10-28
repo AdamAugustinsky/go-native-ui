@@ -304,6 +304,8 @@ type retiredTex struct {
 //
 // Every pointer handed to the OS lives in a field of this heap object.
 type Renderer struct {
+	lossState // DeviceLost, Epoch: see devloss.go
+
 	dev, ctx   uintptr // ID3D11Device, ID3D11DeviceContext
 	ownsDevice bool
 
@@ -395,6 +397,18 @@ func (r *Renderer) init() error {
 	r.kinds = make([]TextureKind, 0, initialTextures)
 	r.texW = make([]int, 0, initialTextures)
 	r.texH = make([]int, 0, initialTextures)
+	if err := r.build(); err != nil {
+		return err
+	}
+	// Texture 0: 1×1 white RGBA texel that shape quads bind.
+	t0 := r.NewTexture(TexRGBA8, 1, 1)
+	r.Upload(t0, 0, 0, 1, 1, []byte{255, 255, 255, 255}, 4)
+	return nil
+}
+
+// build creates what the device holds besides the textures: the pipeline, the
+// instance ring and the texture a freed id samples.
+func (r *Renderer) build() error {
 	if compilerDLL == 0 {
 		compilerDLL = win32.LoadSystem("d3dcompiler_47.dll")
 		pD3DCompile = win32.Proc(compilerDLL, "D3DCompile")
@@ -476,6 +490,7 @@ func (r *Renderer) init() error {
 		return hresultError("CreateBuffer(constants)", hr)
 	}
 	r.cbuf, r.out = r.out, 0
+	r.cbW, r.cbH = 0, 0 // the first Encode fills it
 
 	r.stride = quadSize
 	r.blendFac = [4]float32{}
@@ -483,14 +498,91 @@ func (r *Renderer) init() error {
 		return err
 	}
 
-	// Texture 0: 1×1 white RGBA texel that shape quads bind.
-	t0 := r.NewTexture(TexRGBA8, 1, 1)
-	r.Upload(t0, 0, 0, 1, 1, []byte{255, 255, 255, 255}, 4)
 	// The texture a quad naming a freed texture samples: one transparent texel.
 	r.emptyTex, r.emptySRV = r.newD3DTexture(TexRGBA8, 1, 1)
 	r.box = d3dBox{Right: 1, Bottom: 1, Back: 1}
 	win32.Com(r.ctx, vtContextUpdateSubresource, r.emptyTex, 0, uintptr(unsafe.Pointer(&r.box)), uintptr(unsafe.Pointer(&r.zero)), 4, 0)
 	return nil
+}
+
+// Rebuild makes the renderer work again after its device was lost
+// (DeviceLost): device and queue are the new ID3D11Device and its immediate
+// context (Surface.Device and Surface.Queue after Surface.Recover), which the
+// caller keeps owning. A renderer made by NewOffscreenRenderer creates a
+// device of its own again and ignores them (pass 0).
+//
+// The objects made on the old device are released and the pipeline is built
+// on the new one. Every live texture is created again under the same id, size
+// and kind, empty except for texture 0: the owners of the others upload them
+// again when Epoch changes (see devloss.go). Frames in flight on the old
+// device are gone. Draw lists still name the same ids. On an error the
+// renderer stays lost and Rebuild may be tried again.
+func (r *Renderer) Rebuild(device, queue uintptr) error {
+	if r.destroyed {
+		return errors.New("gpu: Rebuild: the renderer is destroyed")
+	}
+	err := r.rebuild(device, queue)
+	r.lost = err != nil
+	if err == nil {
+		r.epoch++
+	}
+	return err
+}
+
+func (r *Renderer) rebuild(device, queue uintptr) error {
+	r.releaseDeviceObjects()
+	if r.ownsDevice {
+		win32.Release(r.ctx)
+		win32.Release(r.dev)
+		r.ctx, r.dev = 0, 0
+		if err := createD3DDevice(&r.levels, &r.dev, &r.featureLv, &r.ctx); err != nil {
+			return fmt.Errorf("%w: %v", ErrNoDevice, err)
+		}
+	} else if r.dev, r.ctx = device, queue; device == 0 || queue == 0 {
+		return ErrNoDevice
+	}
+	if err := r.build(); err != nil {
+		return err
+	}
+	for i := range r.textures {
+		if !r.ids.live[i] {
+			continue
+		}
+		tex, srv, err := r.createTexture(r.kinds[i], r.texW[i], r.texH[i])
+		if err != nil {
+			return err
+		}
+		r.textures[i], r.srvs[i] = tex, srv
+	}
+	r.Upload(0, 0, 0, 1, 1, []byte{255, 255, 255, 255}, 4)
+	return nil
+}
+
+// releaseDeviceObjects releases everything the renderer made on its device,
+// the textures' objects too (their ids stay live), without calling the device
+// or its context: the caller may have released them already.
+func (r *Renderer) releaseDeviceObjects() {
+	for i := range r.textures {
+		win32.Release(r.srvs[i])
+		win32.Release(r.textures[i])
+		r.textures[i], r.srvs[i] = 0, 0
+	}
+	for _, x := range r.retiring {
+		win32.Release(x.srv)
+		win32.Release(x.tex)
+	}
+	clear(r.retiring)
+	r.retiring = r.retiring[:0]
+	for i := range r.fences {
+		win32.Release(r.fences[i].query)
+		r.fences[i] = frameFence{}
+	}
+	r.nextFence, r.done = 0, r.serial
+	for _, p := range [...]*uintptr{&r.offRTV, &r.offTex, &r.staging, &r.vb, &r.cbuf, &r.sampler, &r.rast, &r.blend, &r.layout, &r.ps, &r.vs, &r.emptySRV, &r.emptyTex} {
+		win32.Release(*p)
+		*p = 0
+	}
+	r.offW, r.offH = 0, 0
 }
 
 // compile compiles quadHLSL's entry point with D3DCompile and returns the
@@ -640,6 +732,15 @@ func (r *Renderer) fence() {
 }
 
 func (r *Renderer) newD3DTexture(kind TextureKind, w, h int) (tex, srv uintptr) {
+	tex, srv, err := r.createTexture(kind, w, h)
+	if err != nil {
+		panic(err)
+	}
+	return tex, srv
+}
+
+// createTexture creates a w×h texture of kind and its shader resource view.
+func (r *Renderer) createTexture(kind TextureKind, w, h int) (tex, srv uintptr, err error) {
 	format := uint32(fmtRGBA8)
 	if kind == TexR8 {
 		format = fmtR8
@@ -650,15 +751,16 @@ func (r *Renderer) newD3DTexture(kind TextureKind, w, h int) (tex, srv uintptr) 
 	}
 	r.out = 0
 	if hr := win32.HR(win32.Com(r.dev, vtDeviceCreateTexture2D, uintptr(unsafe.Pointer(&r.td)), 0, uintptr(unsafe.Pointer(&r.out)))); hr < 0 {
-		panic(hresultError("CreateTexture2D", hr))
+		return 0, 0, hresultError("CreateTexture2D", hr)
 	}
 	tex = r.out
 	r.out = 0
 	if hr := win32.HR(win32.Com(r.dev, vtDeviceCreateShaderResourceView, tex, 0, uintptr(unsafe.Pointer(&r.out)))); hr < 0 {
-		panic(hresultError("CreateShaderResourceView", hr))
+		win32.Release(tex)
+		return 0, 0, hresultError("CreateShaderResourceView", hr)
 	}
 	srv, r.out = r.out, 0
-	return tex, srv
+	return tex, srv, nil
 }
 
 // Upload copies a w×h block of pixels into texture t at (x, y). pixels[0] is

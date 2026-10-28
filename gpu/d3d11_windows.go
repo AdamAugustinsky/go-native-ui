@@ -113,6 +113,10 @@ const (
 	dxgiFlagFrameLatency  = 0x40        // DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT, dxgi.h:253
 	dxgiMWANoAltEnter     = 0x2         // dxgi.h:1796
 	dxgiStatusOccluded    = 0x087A0001  // winerror.h:4639
+	dxgiErrDeviceRemoved  = 0x887A0005  // DXGI_ERROR_DEVICE_REMOVED (winerror.h)
+	dxgiErrDeviceHung     = 0x887A0006  // DXGI_ERROR_DEVICE_HUNG
+	dxgiErrDeviceReset    = 0x887A0007  // DXGI_ERROR_DEVICE_RESET
+	dxgiErrDriverInternal = 0x887A0020  // DXGI_ERROR_DRIVER_INTERNAL_ERROR
 	eInvalidArg           = -2147024809 // 0x80070057
 )
 
@@ -145,6 +149,8 @@ var (
 // Every pointer handed to the OS lives in a field of the heap-allocated
 // Surface (or in a package variable), never in a stack local.
 type Surface struct {
+	lossState // DeviceLost, Epoch: see devloss.go
+
 	dev, ctx uintptr // ID3D11Device, ID3D11DeviceContext
 	sc       uintptr // IDXGISwapChain2 (IDXGISwapChain1 if SwapChain2 is unavailable)
 	rtv      uintptr // ID3D11RenderTargetView of back buffer 0
@@ -312,12 +318,12 @@ func (s *Surface) Resize(w, h int32, scale float32) {
 	win32.Release(s.rtv)
 	s.rtv = 0
 	win32.Com(s.ctx, vtContextFlush)
+	s.w, s.h = w, h // also when the resize fails: a recovery (Recover) creates the swap chain at this size
 	hr := win32.HR(win32.Com(s.sc, vtSwapChainResizeBuffers, 0, uintptr(w), uintptr(h), dxgiFormatUnknown, dxgiFlagFrameLatency))
 	if hr < 0 {
 		s.reportLost("IDXGISwapChain.ResizeBuffers", hr)
 		return
 	}
-	s.w, s.h = w, h
 	if err := s.createRTV(); err != nil {
 		s.reportLost("createRTV", 0)
 	}
@@ -342,12 +348,13 @@ type Frame struct {
 }
 
 // BeginFrame returns the frame's context and back-buffer view. It returns
-// false if the swap chain has no usable back buffer (a failed resize). The
+// false if the swap chain has no usable back buffer (a failed resize) or the
+// device was lost and not recovered (Recover). The
 // back buffer is not cleared; the renderer's Encode (or the caller) does
 // that. Every successful BeginFrame must be followed by EndFrame on the same
 // thread. It does not allocate.
 func (s *Surface) BeginFrame(f *Frame) bool {
-	if s.rtv == 0 || s.ctx == 0 {
+	if s.rtv == 0 || s.ctx == 0 || s.lost {
 		return false
 	}
 	if s.presented == 0 {
@@ -430,7 +437,10 @@ func (s *Surface) FrameSource() uintptr { return s.waitable }
 
 // Destroy releases all resources. The platform must not wait on the
 // FrameSource handle afterwards.
-func (s *Surface) Destroy() {
+func (s *Surface) Destroy() { s.release() }
+
+// release releases the device, the swap chain and everything made on them.
+func (s *Surface) release() {
 	if s.ctx != 0 {
 		win32.Com(s.ctx, vtContextClearState)
 		win32.Com(s.ctx, vtContextFlush)
@@ -445,14 +455,53 @@ func (s *Surface) Destroy() {
 	}
 }
 
-// reportLost logs a device error once (device removed/reset is fatal in the spike).
+// Recover makes the surface work again on its window after the device was
+// lost (DeviceLost): it releases the device, swap chain and back-buffer view
+// and creates them anew, at the size of the last Resize. d is the shared
+// device of macOS and is not used here; nil.
+//
+// The new swap chain has a new frame-latency waitable: pass FrameSource to
+// Window.SetFrameSource again. The renderer made on the old device must be
+// rebuilt on the new one (Renderer.Rebuild with Device and Queue). On an
+// error the surface stays lost, and Recover may be tried again.
+func (s *Surface) Recover(d *Device) error {
+	s.release()
+	if err := s.init(); err != nil {
+		s.release()
+		return err
+	}
+	s.lost, s.loggedLost = false, false
+	s.epoch++
+	return nil
+}
+
+// reportLost notes a failed Present or ResizeBuffers: the device is lost when
+// the call returned one of the removal codes or the device says it was
+// removed (GetDeviceRemovedReason). It logs the first failure.
 func (s *Surface) reportLost(what string, hr int32) {
+	reason := int32(0)
+	if s.dev != 0 {
+		reason = win32.HR(win32.Com(s.dev, vtDeviceGetDeviceRemovedReason))
+	}
+	if deviceLostHR(hr) || reason < 0 {
+		s.lost = true
+	}
 	if s.loggedLost {
 		return
 	}
 	s.loggedLost = true
-	reason := win32.HR(win32.Com(s.dev, vtDeviceGetDeviceRemovedReason))
 	fmt.Fprintf(os.Stderr, "gpu: %s failed: HRESULT %#08x (device removed reason %#08x)\n", what, uint32(hr), uint32(reason))
+}
+
+// deviceLostHR reports whether hr is one of the codes DXGI returns when the
+// device was removed (a driver update or a GPU switch), reset or hung (a
+// timeout detection), or its driver failed.
+func deviceLostHR(hr int32) bool {
+	switch uint32(hr) {
+	case dxgiErrDeviceRemoved, dxgiErrDeviceHung, dxgiErrDeviceReset, dxgiErrDriverInternal:
+		return true
+	}
+	return false
 }
 
 func hresultError(what string, hr int32) error {

@@ -20,6 +20,8 @@ import (
 // (Device), shared by every window's surface, and destroying a surface leaves
 // the others drawing (D30).
 type Surface struct {
+	lossState // DeviceLost, Epoch: see devloss.go
+
 	native               platform.Native // the window's handles: its drawables, live resize and shell are its own
 	device, queue, layer objc.ID         // device and queue retained, the layer owned
 	rpd, color0          objc.ID         // reused MTLRenderPassDescriptor and its colour attachment 0
@@ -516,6 +518,30 @@ func srgbColorSpace() uintptr {
 // FrameSource returns the CAMetalLayer: the platform drives frames with a
 // CAMetalDisplayLink on it, which hands over the drawable with each tick.
 func (s *Surface) FrameSource() uintptr { return uintptr(s.layer) }
+
+// Recover makes the surface draw on device d after the device it was made on
+// was lost (DeviceLost): the layer is given d's device and the surface its
+// queue. d is a new Device (NewDevice) that the caller releases once every
+// surface and the renderer have been moved to it. The renderer must be rebuilt
+// on it too (Renderer.Rebuild with Device and Queue).
+func (s *Surface) Recover(d *Device) error {
+	if s.layer == 0 {
+		return errors.New("gpu: Recover: the surface is destroyed")
+	}
+	if d == nil || d.device == 0 {
+		return errors.New("gpu: no Metal device")
+	}
+	pool := objc.F.Call0(objc.PoolPush)
+	oldDev, oldQueue := s.device, s.queue
+	s.device, s.queue = objc.Retain(d.device), objc.Retain(d.queue)
+	objc.Send1(s.layer, selSetDevice, uintptr(s.device))
+	objc.Release(oldQueue)
+	objc.Release(oldDev)
+	objc.F.Call1(objc.PoolPop, pool)
+	s.lost = false
+	s.epoch++
+	return nil
+}
 
 // Destroy releases the surface's layer and its references to the device and
 // queue; other surfaces on the same device are not affected.
