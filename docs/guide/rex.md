@@ -80,6 +80,12 @@ tokens for nothing.
 - A person is `rexui.Avatar` with a `Backdrop` role naming what it sits on
   (`theme.Field`, `theme.Window`), so the ring and the initials' contrast are
   right; a stack of people is `AvatarStack`.
+- A bare symbol button (a pane header's split, maximise, close) is
+  `IconButton` with `IconBorderless`: a quiet grey (`theme.PaneButton`) that
+  darkens under the pointer, with a chip lighting up behind it
+  (`rexui.IconButtonChip`). Give it the hit area you want with `NextSize`; the
+  chip is the button's own box. Do not draw the chip or set the greys in the
+  app.
 - Colour choices (swatches) are circles.
 - Metadata (times, sizes, counts, hints) is `LabelOpts.MonoPt`, the
   monospaced face Rex sets it in.

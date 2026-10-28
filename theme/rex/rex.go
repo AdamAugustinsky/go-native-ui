@@ -28,10 +28,21 @@ func Theme() *theme.Theme {
 		Motion:       motion,
 		SystemAccent: true,
 		Roles:        roles,
+		Text:         textStyles,
 		SystemColors: true,
 		NewChrome:    func() theme.Chrome { return &chrome{} },
 	}
 }
+
+// textStyles are Rex's text styles: macOS's (theme.MacText) with the reference's pane
+// title (12.75 pt, semibold) and tab title (14 pt, the UI font Rex's tabs are
+// set in).
+var textStyles = func() [theme.NumTextStyles]theme.TextSpec {
+	t := theme.MacText
+	t[theme.StylePaneTitle] = theme.TextSpec{Size: 12.75, Line: 16, Weight: theme.WeightSemibold}
+	t[theme.StyleTabTitle] = theme.TextSpec{Size: 14, Line: 17, Weight: theme.WeightRegular}
+	return t
+}()
 
 // ThemeWithField is Theme with its window background, and the glass of its
 // unfocused surfaces, in other colours (FieldColors).
