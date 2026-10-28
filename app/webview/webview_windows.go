@@ -306,6 +306,7 @@ type view struct {
 	blockedU string
 	navID    uint64 // the navigation in progress
 	blockID  uint64 // the last navigation refused by the scheme list
+	dlNav    uint64 // the last navigation that became a download
 	dls      []*download
 	failed   bool // the browser process ended: Reload makes a new controller
 	closed   bool
@@ -1057,7 +1058,8 @@ func (v *view) progress(p float32) {
 func (v *view) navCompleted(args uintptr) {
 	v.outU64 = 0
 	comh(args, navDoneGetID, uintptr(unsafe.Pointer(&v.outU64)))
-	if v.outU64 == v.blockID && v.blockID != 0 || v.outU64 != v.navID {
+	id := v.outU64
+	if id == v.blockID && v.blockID != 0 || id != v.navID {
 		return
 	}
 	v.outI32 = 0
@@ -1071,7 +1073,7 @@ func (v *view) navCompleted(args uintptr) {
 		v.st.Progress = 1
 		v.post(Progress, 0, 0)
 		v.post(LoadFinished, 0, 0)
-	case v.outI32 != webErrorCanceled:
+	case v.outI32 != webErrorCanceled && id != v.dlNav:
 		v.post(LoadFailed, 0, 0)
 	}
 }
@@ -1128,6 +1130,7 @@ func (v *view) permission(args uintptr) {
 // server's name made unique, with the runtime's download UI off, or cancels
 // it when there is no download folder.
 func (v *view) downloadStarting(args uintptr) {
+	v.dlNav = v.navID // its navigation ends unsuccessfully, which is no failure
 	if v.opt.DownloadDir == "" {
 		comh(args, dlStartPutCancel, 1)
 		return

@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -45,6 +46,7 @@ type harness struct {
 	do      chan func(a *app.App)
 	started chan struct{}
 	ended   chan error
+	gone    atomic.Bool // app.Main returned (a child's quit)
 
 	mu     sync.Mutex
 	events []webview.Event
@@ -117,6 +119,9 @@ func startApp(t *testing.T) *harness {
 		t.Fatal("the app did not start within 60 s")
 	}
 	t.Cleanup(func() {
+		if h.gone.Load() {
+			return
+		}
 		h.post(func(a *app.App) {
 			for _, v := range h.views {
 				v.Close()
@@ -281,7 +286,7 @@ if (window.Notification) Notification.requestPermission().then(function(p){fetch
 				return
 			}
 			w.(http.Flusher).Flush()
-			time.Sleep(40 * time.Millisecond)
+			time.Sleep(stepDelay(r))
 		}
 	})
 	mux.HandleFunc("/setcookie", func(w http.ResponseWriter, r *http.Request) {
@@ -303,6 +308,15 @@ if (window.Notification) Notification.requestPermission().then(function(p){fetch
 	p.srv = httptest.NewServer(mux)
 	t.Cleanup(p.srv.Close)
 	return p
+}
+
+// stepDelay is the pause between /big.bin's 1 MB writes: 40 ms, or the
+// request's ms parameter.
+func stepDelay(r *http.Request) time.Duration {
+	if ms, err := strconv.Atoi(r.URL.Query().Get("ms")); err == nil && ms > 0 {
+		return time.Duration(ms) * time.Millisecond
+	}
+	return 40 * time.Millisecond
 }
 
 func (p *pages) url(path string) string { return p.srv.URL + path }
@@ -382,7 +396,16 @@ func TestProfileChild(t *testing.T) {
 		time.Sleep(3 * time.Second)
 	}
 	h.post(func(a *app.App) { a.RequestQuit() })
-	time.Sleep(30 * time.Second)
+	// macOS: terminate: ends the process here. Windows: app.Main returns.
+	select {
+	case err := <-h.ended:
+		h.gone.Store(true)
+		if err != nil {
+			t.Fatalf("app.Main: %v", err)
+		}
+		return
+	case <-time.After(30 * time.Second):
+	}
 	t.Fatal("the app did not end within 30 s of an allowed quit request")
 }
 

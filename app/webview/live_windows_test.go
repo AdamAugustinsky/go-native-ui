@@ -141,7 +141,8 @@ func TestViewMatrix(t *testing.T) {
 
 	// a download of 10 MB
 	h.clear()
-	h.Do(func(*app.App) { _ = v.Navigate(p.url("/big.bin")) })
+	// Chromium reports a download's bytes about every 500 ms: 2 s of writes
+	h.Do(func(*app.App) { _ = v.Navigate(p.url("/big.bin?ms=200")) })
 	var dl webview.Download
 	h.wait("DownloadEnded", 60*time.Second, func() bool {
 		e, ok := h.saw(v, webview.DownloadEnded)
