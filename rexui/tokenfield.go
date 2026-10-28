@@ -169,7 +169,7 @@ func TokenField(k *base.Kit, label string, st *TokenFieldState, tokens *[]string
 		}
 		id := c.BoxKeyed(tf, tk, nil)
 		c.Push(id)
-		c.NextSize(ui.TextSize(base.LabelSlack), ui.Px(h))
+		c.NextSize(ui.TextSize(0), ui.Px(h))
 		c.NextFont(font)
 		c.NextTextColor(fg)
 		c.BoxKeyed(ui.DrawText, ui.KeyN(tk, 1), base.StrBytes(t))
@@ -222,7 +222,7 @@ func TokenField(k *base.Kit, label string, st *TokenFieldState, tokens *[]string
 			pc = fl.TextDisabled.RGBA(r)
 		}
 		theme.At(c, 0, 0, 0, lineH)
-		c.NextSize(ui.TextSize(base.LabelSlack), ui.Px(lineH))
+		c.NextSize(ui.TextSize(0), ui.Px(lineH))
 		c.NextFont(font)
 		c.NextTextColor(pc)
 		c.BoxKeyed(ui.DrawText|base.Floating, ui.KeyN(wkey, 2), base.StrBytes(o.Placeholder))

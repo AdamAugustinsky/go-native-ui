@@ -109,17 +109,12 @@ func (k *Kit) Text(n uint64, s string, f text.FontKey, color uint32, align ui.Al
 		return 0
 	}
 	c := k.c
-	c.NextSize(ui.TextSize(LabelSlack), ui.Px(h))
+	c.NextSize(ui.TextSize(0), ui.Px(h))
 	c.NextFont(f)
 	c.NextTextColor(color)
 	c.NextAlign(align)
 	return c.BoxKeyed(ui.DrawText|ui.FadeOverflowX, ui.KeyN(c.ParentKey(), 9020+n), StrBytes(s))
 }
-
-// LabelSlack is the pixel a text box is wider than its text: layout snaps the
-// box's edges to whole pixels, which can leave it a fraction narrower than the
-// text, and a text box narrower than its text fades out at the edge.
-const LabelSlack = 1
 
 // Icon builds the icon id of the kit's atlas in colour (RGBA; 0 takes the text
 // colour) in the box the icon needs (NextHeight makes the box taller, with the

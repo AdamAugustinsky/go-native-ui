@@ -254,16 +254,16 @@ func avatarInitials(k *base.Kit, key ui.Key, name string, side, size float32, o 
 	}
 	c.Push(disc)
 	// The text box is the whole disc with the text centred in it, on both
-	// axes by the text's own rule. A box of the text's width plus LabelSlack
-	// and the font's line height, centred, leaves the text up to a pixel off:
-	// half a slack pixel to the left, and a snapped box a half pixel low.
+	// axes by the text's own rule. A box of the text's width and the font's line
+	// height, centred, leaves the text up to a pixel off: a snapped box a half
+	// pixel low.
 	// Initials wider than the disc keep the text's own width, overflowing
 	// both sides evenly.
-	if tw := k.TextWidthBytes(st.Font, b) + base.LabelSlack; tw < side {
+	if tw := ui.CeilText(k.TextWidthBytes(st.Font, b)); tw < side {
 		c.NextSize(ui.Px(side), ui.Px(side))
 		c.NextAlign(ui.AlignCenter)
 	} else {
-		c.NextSize(ui.TextSize(base.LabelSlack), ui.Px(st.Line))
+		c.NextSize(ui.TextSize(0), ui.Px(st.Line))
 	}
 	c.NextFont(st.Font)
 	c.NextTextColor(fg)
@@ -452,7 +452,7 @@ func AvatarStack(k *base.Kit, label string, names []string, max int, o AvatarOpt
 			continue
 		}
 		c.Push(disc)
-		c.NextSize(ui.TextSize(base.LabelSlack), ui.Px(st.Line))
+		c.NextSize(ui.TextSize(0), ui.Px(st.Line))
 		c.NextFont(st.Font)
 		c.NextTextColor(fg)
 		c.BoxKeyed(ui.DrawText, ui.KeyN(key, uint64(10*i+2)), b)

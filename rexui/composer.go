@@ -961,7 +961,7 @@ func composerField(k *base.Kit, st *ComposerState, label string, look base.Look,
 			pc = rc.TextDisabled.RGBA(r)
 		}
 		theme.At(c, padL, 0, 0, h)
-		c.NextSize(ui.TextSize(base.LabelSlack), ui.Px(h))
+		c.NextSize(ui.TextSize(0), ui.Px(h))
 		c.NextFont(font)
 		c.NextTextColor(pc)
 		c.BoxKeyed(ui.DrawText|base.Floating, ui.KeyN(ti.WrapKey, 2), base.StrBytes(st.hint))
@@ -1035,7 +1035,7 @@ func composerAttachments(k *base.Kit, fieldKey ui.Key, list []ComposerAttachment
 		if a.ID != 0 { // the chip is its attachment's, wherever it sits in the row
 			ck = ui.KeyN(ui.KeyN(rowKey, 0xA8), a.ID)
 		}
-		nameW := theme.Snap(min(k.TextWidth(font, a.Name)+base.LabelSlack, pt(sc, rc.ChipMaxW)))
+		nameW := theme.Snap(min(ui.CeilText(k.TextWidth(font, a.Name)), pt(sc, rc.ChipMaxW)))
 		c.NextBG(rc.Chip.RGBA(r))
 		c.NextRadius(chipH / 2)
 		c.NextAxis(ui.AxisX)

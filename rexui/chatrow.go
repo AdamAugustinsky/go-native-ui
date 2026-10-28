@@ -138,7 +138,7 @@ func ChatListRow(k *base.Kit, label, title, preview, when string, o ChatRowOpts)
 	c.BoxKeyed(ui.DrawText|ui.FadeOverflowX, ui.KeyN(p.Key, 22), base.StrBytes(title))
 	if when != "" {
 		tm := &r.Styles[theme.StyleCaption1]
-		c.NextSize(ui.TextSize(base.LabelSlack), ui.Px(tm.Line))
+		c.NextSize(ui.TextSize(0), ui.Px(tm.Line))
 		c.NextFont(tm.Font)
 		c.NextTextColor(timeC)
 		c.BoxKeyed(ui.DrawText, ui.KeyN(p.Key, 23), base.StrBytes(when))
@@ -230,7 +230,7 @@ func DateDivider(k *base.Kit, label string, o DateDividerOpts) ui.ID {
 // dateText is the date's text of a divider.
 func dateText(k *base.Kit, key ui.Key, s string, st *theme.StyleFont) {
 	c, r := k.Context(), k.Theme()
-	c.NextSize(ui.TextSize(base.LabelSlack), ui.Px(st.Line))
+	c.NextSize(ui.TextSize(0), ui.Px(st.Line))
 	c.NextFont(k.TextSystem().Font(text.FontDesc{SizePt: 10, Weight: theme.WeightSemibold, Scale: k.Scale()}))
 	c.NextTextColor(r.Colors[theme.Label2])
 	c.BoxKeyed(ui.DrawText, ui.KeyN(key, 4), base.StrBytes(s))

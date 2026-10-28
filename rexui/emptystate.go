@@ -77,7 +77,7 @@ func EmptyState(k *base.Kit, title string, o EmptyStateOpts) EmptyStateSignal {
 		k.Icon(o.Icon, rc.Glyph.RGBA(r))
 	}
 	st := &r.Styles[theme.StyleTitle3]
-	c.NextSize(ui.TextSize(base.LabelSlack), ui.Px(st.Line))
+	c.NextSize(ui.TextSize(0), ui.Px(st.Line))
 	c.NextFont(st.Font)
 	c.NextTextColor(rc.Title.RGBA(r))
 	c.NextAlign(ui.AlignCenter)

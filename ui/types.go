@@ -285,7 +285,8 @@ const (
 	// SizePixels is Value pixels.
 	SizePixels
 	// SizeText is the extent of the display text (advance on X, line height
-	// on Y) plus the box's padding on that axis plus Value extra pixels.
+	// on Y) plus the box's padding on that axis plus Value extra pixels; on X
+	// the advance and padding are rounded up to a whole pixel first (CeilText).
 	SizeText
 	// SizeParentPct is Value (a fraction, 1 = 100 %) of the parent's content
 	// area (its size minus its padding) on that axis. A parent that sizes

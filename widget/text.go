@@ -4,13 +4,7 @@ import (
 	"gonativeui/rexui"
 	"gonativeui/theme"
 	"gonativeui/ui"
-	"gonativeui/widget/base"
 )
-
-// labelSlack is the pixel a label's box is wider than its text: layout snaps
-// the box's edges to whole pixels, which can leave it a fraction narrower than
-// the text, and a label that is narrower than its text fades out at the edge.
-const labelSlack = base.LabelSlack
 
 // TextStyle selects the font and colour of a label.
 type TextStyle uint8
