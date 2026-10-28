@@ -86,6 +86,7 @@ func (a *App) recoverDevice() error {
 		a.UI.AtlasRestore()
 		return nil
 	}
+	a.R.DropDevice() // Direct3D: the window's new swap chain needs the old device unreferenced
 	var nd *gpu.Device
 	if s.dev != nil { // macOS: one device for the windows and the renderer
 		d, err := gpu.NewDevice()

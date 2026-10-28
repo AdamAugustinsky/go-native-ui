@@ -558,6 +558,22 @@ func (r *Renderer) rebuild(device, queue uintptr) error {
 	return nil
 }
 
+// DropDevice releases what the renderer made on its device, the textures' objects
+// too (their ids stay live), without waiting for Rebuild. Call it before
+// Surface.Recover: a window's swap chain lives until everything that references
+// its device is released, and the new one cannot be made for the window before
+// (E_ACCESSDENIED). Rebuild needs no call to it first.
+func (r *Renderer) DropDevice() {
+	if r.destroyed {
+		return
+	}
+	if r.ctx != 0 {
+		win32.Com(r.ctx, vtContextClearState)
+		win32.Com(r.ctx, vtContextFlush)
+	}
+	r.releaseDeviceObjects()
+}
+
 // releaseDeviceObjects releases everything the renderer made on its device,
 // the textures' objects too (their ids stay live), without calling the device
 // or its context: the caller may have released them already.

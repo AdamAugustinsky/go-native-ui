@@ -69,6 +69,7 @@ func TestSurfaceRecoversFromDeviceLoss(t *testing.T) {
 	if surf.BeginFrame(&f) {
 		t.Error("a lost surface began a frame")
 	}
+	r.DropDevice() // nothing may reference the old device while the window's swap chain is remade
 	if err := surf.Recover(nil); err != nil {
 		t.Fatal(err)
 	}

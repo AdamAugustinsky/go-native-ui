@@ -14,6 +14,8 @@ package gpu
 //
 //   - Surface.DeviceLost and Renderer.DeviceLost say a loss was detected (or
 //     simulated, SimulateDeviceLoss). Frames drawn after it are not shown.
+//   - Renderer.DropDevice releases what the renderer made on the lost device
+//     (Direct3D needs it before the next step; elsewhere it does nothing).
 //   - Surface.Recover builds the surface's device-level objects again on the
 //     same window: the device and swap chain (Direct3D), the display,
 //     context and window surface (EGL), the device and queue the layer draws

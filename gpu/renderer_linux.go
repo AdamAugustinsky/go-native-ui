@@ -428,6 +428,10 @@ func (r *Renderer) build() error {
 	return nil
 }
 
+// DropDevice does nothing on this OS: the old device's objects are released by
+// Rebuild. (Direct3D 11 needs it before Surface.Recover.)
+func (r *Renderer) DropDevice() {}
+
 // Rebuild makes the renderer work again after its context was lost
 // (DeviceLost): device and queue are the EGLDisplay and the new EGLContext
 // (Surface.Device and Surface.Queue after Surface.Recover), which must be

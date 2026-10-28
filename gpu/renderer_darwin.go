@@ -985,6 +985,10 @@ func (r *Renderer) newTarget(w, h int) {
 	}
 }
 
+// DropDevice does nothing on this OS: the old device's objects are released by
+// Rebuild. (Direct3D 11 needs it before Surface.Recover.)
+func (r *Renderer) DropDevice() {}
+
 // Rebuild makes the renderer work again after its device was lost
 // (DeviceLost): device and queue are the new id<MTLDevice> and
 // id<MTLCommandQueue> (Surface.Device and Surface.Queue after
