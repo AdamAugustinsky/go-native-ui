@@ -80,6 +80,8 @@ const (
 	fosAllowMultiSelect   = 0x200
 	fosPathMustExist      = 0x800
 	fosFileMustExist      = 0x1000
+	wmCommand             = 0x0111
+	idCancel              = 2
 	dialogShowing         = 2 // dialogRec.state: Show is running
 	dialogQueued          = 1 // dialogRec.state: waiting for runOLE
 	maxDialogFilterTypes  = 32
@@ -411,10 +413,21 @@ func (w *Window) CancelDialog(t DialogTicket) bool {
 			return true
 		}
 		r.withdrawn = true
-		win32.Com(r.obj, vtFDClose, hrCancelled) // Show returns once its loop unwinds
+		r.end() // Show returns once its loop unwinds
 		return true
 	}
 	return false
+}
+
+// end ends a dialog on screen: IFileDialog::Close, and, should the dialog
+// not take that from outside its own callbacks, its Cancel button
+// (WM_COMMAND IDCANCEL posted to its window; harmless once it is gone).
+func (r *dialogRec) end() {
+	h := dialogHWNDOf(r)
+	win32.Com(r.obj, vtFDClose, hrCancelled)
+	if h != 0 {
+		win32.Call(pPostMessageW, h, wmCommand, idCancel, 0)
+	}
 }
 
 // abortDialogs ends the dialogs of w before its window closes: a queued one
@@ -432,7 +445,7 @@ func (w *Window) abortDialogs() {
 			r.release()
 		case !r.closed:
 			r.closed = true
-			win32.Com(r.obj, vtFDClose, hrCancelled)
+			r.end()
 		}
 	}
 }
@@ -441,19 +454,22 @@ func (w *Window) abortDialogs() {
 // 0 otherwise (tests).
 func dialogWindow(t DialogTicket) uintptr {
 	for i := range dialogs {
-		r := &dialogs[i]
-		if r.ticket != t || r.state != dialogShowing {
-			continue
+		if r := &dialogs[i]; r.ticket == t && r.state == dialogShowing {
+			return dialogHWNDOf(r)
 		}
-		if win32.QueryInterface(r.obj, &iidIOleWindow, &dialogOut2) < 0 || dialogOut2 == 0 {
-			return 0
-		}
-		ow := dialogOut2
-		dialogOut2 = 0
-		dialogHWND = 0
-		win32.Com(ow, vtOleWindowGetWindow, uintptr(unsafe.Pointer(&dialogHWND)))
-		win32.Release(ow)
-		return dialogHWND
 	}
 	return 0
+}
+
+// dialogHWNDOf is the dialog's window (IOleWindow), 0 before it has one.
+func dialogHWNDOf(r *dialogRec) uintptr {
+	if win32.QueryInterface(r.obj, &iidIOleWindow, &dialogOut2) < 0 || dialogOut2 == 0 {
+		return 0
+	}
+	ow := dialogOut2
+	dialogOut2 = 0
+	dialogHWND = 0
+	win32.Com(ow, vtOleWindowGetWindow, uintptr(unsafe.Pointer(&dialogHWND)))
+	win32.Release(ow)
+	return dialogHWND
 }

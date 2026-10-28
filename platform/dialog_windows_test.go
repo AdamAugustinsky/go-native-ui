@@ -52,28 +52,52 @@ func useDlgSink(t *testing.T) *winDlgSink {
 	return s
 }
 
+// dlgDrive is what driveDialog saw.
+type dlgDrive struct {
+	ticks   int     // ticks the app window got
+	inModal int     // of them, inside a native modal loop
+	hwnd    uintptr // the dialog's window, once IOleWindow gave one
+	visible int     // ticks with the dialog's window visible
+	acted   bool
+	rescued bool // the dialog was closed after 15 s without act
+	frames  int  // frames the window's handler drew
+}
+
 // driveDialog runs the loop until the dialog of ticket tk has been on screen
 // for a few ticks, then calls act once, and keeps pumping until done reports
 // true or the time is up. The ticks are a message a goroutine posts to the
 // app window every 20 ms, which the dialog's own loop dispatches: act runs on
 // the main thread inside it. Each tick also asks w for a frame, which the
-// modal loop draws through the frame handler. It reports whether the dialog
-// was seen on screen, and how many frames the handler drew meanwhile.
-func driveDialog(t *testing.T, w *Window, tk DialogTicket, act func(dlg uintptr), done func() bool) (seen bool, frames int) {
+// modal loop draws through the frame handler. A dialog still up after 15 s
+// is closed (rescued), so that a failure is reported, not a hung test.
+func driveDialog(t *testing.T, w *Window, tk DialogTicket, act func(dlg uintptr), done func() bool) (d dlgDrive) {
 	t.Helper()
-	n, acted := 0, false
-	w.SetFrameHandler(func() { frames++ })
+	start := time.Now()
+	w.SetFrameHandler(func() { d.frames++ })
 	defer w.SetFrameHandler(nil)
 	if err := HandleAppMessage(tickMsg(), func(uintptr, uint32, uintptr, uintptr) uintptr {
+		d.ticks++
+		if NativeLoop() {
+			d.inModal++
+		}
 		w.RequestFrame()
-		if acted {
+		if d.acted || d.rescued {
 			return 0
 		}
-		if h := dialogWindow(tk); h != 0 && win32.Bool(win32.Call(pIsWindowVisible, h)) {
-			if n++; n >= 5 {
-				acted = true
+		h := dialogWindow(tk)
+		if h != 0 {
+			d.hwnd = h
+		}
+		if h != 0 && win32.Bool(win32.Call(pIsWindowVisible, h)) {
+			if d.visible++; d.visible >= 5 {
+				d.acted = true
 				act(h)
+				return 0
 			}
+		}
+		if time.Since(start) > 15*time.Second {
+			d.rescued = true
+			closeDialog(tk)
 		}
 		return 0
 	}); err != nil {
@@ -101,7 +125,7 @@ func driveDialog(t *testing.T, w *Window, tk DialogTicket, act func(dlg uintptr)
 			break
 		}
 	}
-	return n > 0, frames
+	return d
 }
 
 var tickID uint32
@@ -124,12 +148,12 @@ func dialogsIdle() bool {
 	return true
 }
 
-// closeDialog ends a dialog as a user's Cancel does (IFileDialog::Close with
-// ERROR_CANCELLED).
+// closeDialog ends a dialog as a user's Cancel does (IFileDialog::Close, and
+// its Cancel button).
 func closeDialog(tk DialogTicket) {
 	for i := range dialogs {
 		if dialogs[i].ticket == tk && dialogs[i].obj != 0 {
-			win32.Com(dialogs[i].obj, vtFDClose, hrCancelled)
+			dialogs[i].end()
 		}
 	}
 }
@@ -159,12 +183,9 @@ func TestFileDialogsCancelledOnceEach(t *testing.T) {
 			t.Fatalf("a second dialog on the window: %v, want ErrDialogBusy", err)
 		}
 		sink.got = nil
-		seen, frames := driveDialog(t, w, tk, func(uintptr) { closeDialog(tk) }, func() bool { return len(sink.got) > 0 })
-		if !seen {
-			t.Fatalf("dialog %d never came on screen", i)
-		}
-		if frames == 0 {
-			t.Fatalf("dialog %d: the window drew no frame while it was up", i)
+		d := driveDialog(t, w, tk, func(uintptr) { closeDialog(tk) }, func() bool { return len(sink.got) > 0 })
+		if !d.acted || d.frames == 0 {
+			t.Fatalf("dialog %d: %+v (want it seen on screen, closed, and frames drawn meanwhile)", i, d)
 		}
 		Pump(int64(20 * time.Millisecond))
 		DispatchApp()
@@ -194,11 +215,11 @@ func TestSaveDialogAnswersWithThePath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	driveDialog(t, w, tk, func(h uintptr) { win32.Call(pPostMessageWT, h, wmCommandT, idOK, 0) }, func() bool { return len(sink.got) > 0 })
+	var d dlgDrive
+	d = driveDialog(t, w, tk, func(h uintptr) { win32.Call(pPostMessageWT, h, wmCommandT, idOK, 0) }, func() bool { return len(sink.got) > 0 })
 	if len(sink.got) == 0 {
 		closeDialog(tk)
-		driveDialog(t, w, tk, func(uintptr) {}, func() bool { return len(sink.got) > 0 })
-		t.Fatalf("IDOK did not answer the save dialog: %+v", sink.got)
+		t.Fatalf("IDOK did not answer the save dialog: %+v", d)
 	}
 	r := sink.got[0]
 	if r.Ticket != tk || r.Outcome != DialogAnswered || len(r.Paths) != 1 {
@@ -225,9 +246,9 @@ func TestCancelDialogDeliversNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	var withdrew bool
-	driveDialog(t, w, tk, func(uintptr) { withdrew = w.CancelDialog(tk) }, func() bool { return withdrew && dialogsIdle() })
+	d := driveDialog(t, w, tk, func(uintptr) { withdrew = w.CancelDialog(tk) }, func() bool { return withdrew && dialogsIdle() })
 	if !withdrew {
-		t.Fatal("CancelDialog of the dialog on screen = false")
+		t.Fatalf("CancelDialog of the dialog on screen = false: %+v", d)
 	}
 	for i := 0; i < 20; i++ {
 		Pump(int64(5 * time.Millisecond))
@@ -268,13 +289,13 @@ func TestWindowClosedUnderItsDialog(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The window closes from inside the dialog's loop.
-	driveDialog(t, keep, tk, func(uintptr) { w.Close() }, func() bool { return len(sink.got) > 0 })
+	d := driveDialog(t, keep, tk, func(uintptr) { w.Close() }, func() bool { return len(sink.got) > 0 })
 	for i := 0; i < 20; i++ {
 		Pump(int64(5 * time.Millisecond))
 		DispatchApp()
 	}
 	if len(sink.got) != 1 || sink.got[0].Ticket != tk || sink.got[0].Outcome != DialogCancelled {
-		t.Fatalf("results %+v, want one cancelled", sink.got)
+		t.Fatalf("results %+v, want one cancelled (%+v)", sink.got, d)
 	}
 	if liveDialogs != 0 {
 		t.Fatalf("%d dialog objects alive", liveDialogs)
