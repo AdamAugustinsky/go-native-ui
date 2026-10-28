@@ -177,6 +177,7 @@ type stagedCopy struct {
 type retiredTex struct {
 	tex    objc.ID
 	serial uint64 // the last frame encoded when it was freed
+	bytes  int64  // its memory, for TextureBytes (a YUV texture's on its first plane)
 }
 
 // Renderer draws DrawLists with Metal. All methods share objc.F, so they
@@ -309,7 +310,8 @@ const (
 // once, so creating textures in the frame path allocates on the Go heap only
 // then (Metal allocates its own memory).
 func (r *Renderer) NewTexture(kind TextureKind, w, h int) TextureID {
-	_, id := r.addTexture(r.newMTLTexture(kind, w, h), kind)
+	i, id := r.addTexture(r.newMTLTexture(kind, w, h), kind)
+	r.ids.addBytes(i, texBytes(kind, w, h))
 	return id
 }
 
@@ -343,14 +345,13 @@ func (r *Renderer) FreeTexture(t TextureID) {
 	if !ok || i == 0 || (r.kinds[i] == texYUV && !r.xtex[i].owned) { // an import is the renderer's to end
 		return
 	}
-	r.retiring = append(r.retiring, retiredTex{r.textures[i], r.serial})
+	r.retiring = append(r.retiring, retiredTex{r.textures[i], r.serial, r.ids.remove(i)})
 	for _, p := range r.xtex[i].planes {
 		if p != 0 {
-			r.retiring = append(r.retiring, retiredTex{p, r.serial})
+			r.retiring = append(r.retiring, retiredTex{p, r.serial, 0})
 		}
 	}
 	r.textures[i], r.xtex[i] = 0, xtex{}
-	r.ids.remove(i)
 	r.collect()
 }
 
@@ -358,6 +359,19 @@ func (r *Renderer) FreeTexture(t TextureID) {
 // ones whose release still waits for the GPU.
 func (r *Renderer) TextureCounts() (live, retiring int) {
 	return r.ids.n - r.ext.reserved, len(r.retiring)
+}
+
+// TextureBytes reports the memory of the renderer's textures: the live ones
+// (atlas pages and standalone textures) and the freed ones that wait for the
+// GPU, as width × height × bytes per texel (no mip levels, no driver padding).
+// Texture 0 (4 bytes) is counted; the renderer's own targets and a pixel-buffer
+// import's memory are not.
+func (r *Renderer) TextureBytes() int64 {
+	n := r.ids.used
+	for _, x := range r.retiring {
+		n += x.bytes
+	}
+	return n
 }
 
 // collect retires the ring slots whose command buffers have completed,

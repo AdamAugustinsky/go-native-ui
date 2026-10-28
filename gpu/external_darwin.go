@@ -207,6 +207,7 @@ func (r *Renderer) NewYUVTexture(f YUVFormat, w, h int, sp YUVSpace) (TextureID,
 	}
 	i, id := r.addTexture(r.newPlane(mtlR8Unorm, w, h), texYUV)
 	r.xtex[i] = x
+	r.ids.addBytes(i, int64(w)*int64(h)+2*int64(cw)*int64(ch)) // Y, and the chroma (NV12's RG8 plane or two R8 ones)
 	return id, nil
 }
 

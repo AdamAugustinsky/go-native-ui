@@ -292,7 +292,7 @@ func (r *Renderer) sizeBackdrops(w, h, tw, th int) {
 	}
 	for i, t := range bd.tex {
 		if t != 0 {
-			r.retiring = append(r.retiring, retiredTex{t, r.serial})
+			r.retiring = append(r.retiring, retiredTex{t, r.serial, 0})
 		}
 		d := objc.Send4(clsTexDesc, rsTexDesc, mtlBGRA8Unorm, uintptr(w), uintptr(h), 0)
 		objc.Send1(d, rsSetUsage, 1|4) // ShaderRead | RenderTarget
