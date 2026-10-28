@@ -4,9 +4,12 @@ package capture
 
 import (
 	"errors"
+	"fmt"
 	"math"
 	"runtime"
+	"sync"
 	"sync/atomic"
+	"time"
 	"unsafe"
 
 	"gonativeui/internal/com"
@@ -118,6 +121,9 @@ type recorder struct {
 	outTex, outView, staging     uintptr
 	nv12                         bool
 	vpErr                        error // why the video processor is not used
+	opening                      time.Time
+	traceMu                      sync.Mutex
+	trace                        []string // open's steps and their times, for a test's failure
 	wr                           *writer
 	mic, sys                     *source
 	t0, now                      int64
@@ -194,13 +200,16 @@ func (rc *recorder) run() {
 // open makes everything and starts capturing; the clock starts at the
 // first frame (or after 1 s without one).
 func (rc *recorder) open() error {
+	rc.opening = time.Now()
 	if err := rc.openDevice(); err != nil {
 		return err
 	}
+	rc.mark("device")
 	rc.w, rc.h = videoSize(float64(rc.size[0]), float64(rc.size[1]), rc.o.MaxWidth, rc.o.MaxHeight)
 	if err := rc.openCapture(); err != nil {
 		return err
 	}
+	rc.mark("capture session")
 	rc.vpErr = rc.openProcessor()
 	rc.nv12 = rc.vpErr == nil
 	if !rc.nv12 {
@@ -212,6 +221,7 @@ func (rc *recorder) open() error {
 	if hr := win32.HR(com.Call(rc.sess, vtSessionStart)); hr < 0 {
 		return permError("StartCapture", hr)
 	}
+	rc.mark("StartCapture")
 	// The first frame, before the writer: it tries the video processor on
 	// a real frame, and falls back to BGRA (the sink writer's converter)
 	// when a step fails there.
@@ -235,12 +245,14 @@ func (rc *recorder) open() error {
 			return err
 		}
 	}
+	rc.mark("first frame")
 	audio := rc.o.Microphone || rc.o.SystemAudio
 	wr, err := newWriter(rc.path, rc.w, rc.h, rc.o.FPS, rc.nv12, audio)
 	if err != nil {
 		return err
 	}
 	rc.wr = wr
+	rc.mark("sink writer")
 	if rc.o.Microphone {
 		if rc.mic, err = openDevice(1, false); err != nil { // eCapture
 			if errors.Is(err, ErrPermissionDenied) {
@@ -260,9 +272,23 @@ func (rc *recorder) open() error {
 			rc.sys, _ = openDevice(0, true) // eRender; none: the track is silent
 		}
 	}
+	rc.mark("audio")
 	rc.r.ownAudio = excluded // read on the main thread after Started (the inbox orders it)
 	win32.Call(sys.qpc, uintptr(unsafe.Pointer(&rc.t0)))
 	return nil
+}
+
+// mark records the end of one of open's steps.
+func (rc *recorder) mark(step string) {
+	rc.traceMu.Lock()
+	rc.trace = append(rc.trace, fmt.Sprintf("%s %v", step, time.Since(rc.opening).Round(time.Millisecond)))
+	rc.traceMu.Unlock()
+}
+
+func (rc *recorder) steps() []string {
+	rc.traceMu.Lock()
+	defer rc.traceMu.Unlock()
+	return append([]string(nil), rc.trace...)
 }
 
 // openDevice makes the D3D11 device (hardware, then WARP; with video

@@ -111,7 +111,8 @@ type run struct {
 	ownAudio  bool
 	stopToEnd time.Duration
 	startTook time.Duration // Start to Started
-	path      string        // the conversion: nv12 (the video processor) or bgra
+	steps     []string
+	path      string // the conversion: nv12 (the video processor) or bgra
 
 	allocsPerSec float64 // the whole process's, while recording
 }
@@ -147,12 +148,14 @@ func (ru *run) do() {
 	// the encoders: seconds on a runner busy with the whole suite.
 	t0 := time.Now()
 	if !waitFor(hwnd, 60*time.Second, started) {
-		ru.problem = "no Started in 60 s"
+		ru.problem = fmt.Sprintf("no Started in 60 s; the recorder's steps: %v", recorderSteps(r))
 		r.Stop(true)
-		waitFor(hwnd, 30*time.Second, func() bool { return r.ended })
+		ended := waitFor(hwnd, 60*time.Second, func() bool { return r.ended })
+		ru.problem += fmt.Sprintf("; after Stop(true): ended %v, steps %v", ended, recorderSteps(r))
 		return
 	}
 	ru.startTook = time.Since(t0)
+	ru.steps = recorderSteps(r)
 	if !r.ended {
 		ru.ownAudio = r.OwnAudioExcluded()
 		switch {
@@ -200,6 +203,16 @@ func (ru *run) do() {
 	ru.events = eventsOf(r.ID())
 }
 
+// recorderSteps is how far the capture thread's open got.
+func recorderSteps(r *Recording) []string {
+	if s, ok := r.be.(*session); ok {
+		if n, ok := s.n.(*wgcNative); ok && n.rec != nil {
+			return n.rec.steps()
+		}
+	}
+	return nil
+}
+
 func record(t *testing.T, ru *run) fileInfo {
 	t.Helper()
 	widgettest.OnMain(ru.do)
@@ -219,8 +232,8 @@ func record(t *testing.T, ru *run) fileInfo {
 		if st != nil {
 			size = st.Size()
 		}
-		t.Logf("result %+v; Start to Started %v; elapsed at stop %v; stop to Ended %v; %.1f Go allocations/s in the process while recording; own audio excluded %v; conversion %s; file %d bytes, %v, %dx%d, %d video and %d audio tracks, %d frames, largest gap %v (reader 0x%08X)",
-			ru.res, ru.startTook, ru.elapsed, ru.stopToEnd, ru.allocsPerSec, ru.ownAudio, ru.path, size, fi.duration, fi.size>>32, uint32(fi.size), fi.video, fi.audio, fi.frames, fi.maxGap, uint32(fi.err))
+		t.Logf("result %+v; Start to Started %v %v; elapsed at stop %v; stop to Ended %v; %.1f Go allocations/s in the process while recording; own audio excluded %v; conversion %s; file %d bytes, %v, %dx%d, %d video and %d audio tracks, %d frames, largest gap %v (reader 0x%08X)",
+			ru.res, ru.startTook, ru.steps, ru.elapsed, ru.stopToEnd, ru.allocsPerSec, ru.ownAudio, ru.path, size, fi.duration, fi.size>>32, uint32(fi.size), fi.video, fi.audio, fi.frames, fi.maxGap, uint32(fi.err))
 	}
 	return fi
 }
