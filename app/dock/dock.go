@@ -26,8 +26,10 @@
 //     policy is AppConfig.Policy; SetPolicy changes it while the app runs.
 //     Switching to PolicyRegular does not bring the app forward: show or
 //     activate the window that follows.
-//     SetProgress returns ErrUnsupported on macOS for now (a drawn
-//     progress view in the tile is S1's macOS half).
+//     SetProgress puts a content view in the tile: the app's icon with an
+//     NSProgressIndicator bar along its bottom (an indeterminate one does
+//     not animate: the Dock draws the tile when told to, not per frame);
+//     NoProgress gives the tile back to the Dock.
 //   - Windows (phase 8 S1): every window has a taskbar button, and the
 //     app's badge and progress are put on each open window's button
 //     (ITaskbarList3) and on the button of a window opened later. The badge

@@ -130,10 +130,74 @@ func osPolicy() (app.Policy, error) {
 	return app.Policy(objc.Send(a, selPolicy)), nil
 }
 
-// osSetProgress: the tile's progress view is not drawn yet (S1's macOS half).
-func osSetProgress(float64) error {
-	if nsApp() == 0 {
+// The tile's progress: a content view of our own (the app's icon in an
+// NSImageView, with an NSProgressIndicator bar along its bottom), set while
+// there is progress to show and taken off for NoProgress, so the Dock draws
+// the icon itself again. The Dock draws a tile's content view only when
+// told to (display), so an indeterminate bar does not animate there: it
+// shows as a full, striped bar.
+var prog struct {
+	view, bar objc.ID // retained while shown
+}
+
+var (
+	selSetContentView   = objc.Sel("setContentView:")
+	selDisplay          = objc.Sel("display")
+	selTileSize         = objc.Sel("size")
+	selInitWithFrame    = objc.Sel("initWithFrame:")
+	selAppIcon          = objc.Sel("applicationIconImage")
+	selSetImage         = objc.Sel("setImage:")
+	selAddSubview       = objc.Sel("addSubview:")
+	selSetStyle         = objc.Sel("setStyle:")
+	selSetMinValue      = objc.Sel("setMinValue:")
+	selSetMaxValue      = objc.Sel("setMaxValue:")
+	selSetDoubleValue   = objc.Sel("setDoubleValue:")
+	selSetIndeterminate = objc.Sel("setIndeterminate:")
+	selAlloc            = objc.Sel("alloc")
+)
+
+func osSetProgress(f float64) error {
+	a := nsApp()
+	if a == 0 {
 		return ErrNotStarted
 	}
-	return ErrUnsupported
+	if f == progress {
+		return nil
+	}
+	pool := objc.F.Call0(objc.PoolPush)
+	defer objc.F.Call1(objc.PoolPop, pool)
+	tile := objc.Send(a, selDockTile)
+	if f == NoProgress {
+		objc.Send1(tile, selSetContentView, 0)
+		objc.Release(prog.bar)
+		objc.Release(prog.view)
+		prog.view, prog.bar = 0, 0
+	} else {
+		if prog.view == 0 {
+			w, h := objc.SendPoint(tile, selTileSize)
+			prog.view = newView("NSImageView", 0, 0, w, h)
+			objc.Send1(prog.view, selSetImage, uintptr(objc.Send(a, selAppIcon)))
+			prog.bar = newView("NSProgressIndicator", w*0.1, h*0.06, w*0.8, h*0.14)
+			objc.Send1(prog.bar, selSetStyle, 0) // NSProgressIndicatorStyleBar
+			objc.F.Reset().Arg(uintptr(prog.bar)).Arg(uintptr(selSetMinValue)).ArgF64(0).Call(objc.MsgSend)
+			objc.F.Reset().Arg(uintptr(prog.bar)).Arg(uintptr(selSetMaxValue)).ArgF64(1).Call(objc.MsgSend)
+			objc.Send1(prog.view, selAddSubview, uintptr(prog.bar))
+			objc.Send1(tile, selSetContentView, uintptr(prog.view))
+		}
+		if f == Indeterminate {
+			objc.Send1(prog.bar, selSetIndeterminate, 1)
+		} else {
+			objc.Send1(prog.bar, selSetIndeterminate, 0)
+			objc.F.Reset().Arg(uintptr(prog.bar)).Arg(uintptr(selSetDoubleValue)).ArgF64(f).Call(objc.MsgSend)
+		}
+	}
+	objc.Send(tile, selDisplay)
+	progress = f
+	return nil
+}
+
+// newView is [[cls alloc] initWithFrame:], retained.
+func newView(cls string, x, y, w, h float64) objc.ID {
+	v := objc.Send(objc.Cls(cls), selAlloc)
+	return objc.ID(objc.F.Reset().Arg(uintptr(v)).Arg(uintptr(selInitWithFrame)).ArgRect(x, y, w, h).Call(objc.MsgSend).R0())
 }
