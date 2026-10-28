@@ -19,8 +19,10 @@ import (
 //
 // The icons are the PNGs of the theme "hicolor" in 16, 48 and 128 pixels
 // (and 32 at scale 2) for text-x-generic, folder and application-x-generic,
-// the SVG-only x-office-document (no PNG), and a theme "Fancy", the GTK
+// the SVG-only x-office-document (no PNG; a red square, svgSquare) and
+// text-x-script (a PNG at 48 and an SVG), and a theme "Fancy", the GTK
 // setting, that inherits hicolor and has its own 48 pixel application-pdf.
+// No session bus is reachable, so the desktop's own setting is not asked.
 func xdgTree(t testing.TB) string {
 	t.Helper()
 	root := t.TempDir()
@@ -65,6 +67,7 @@ func xdgTree(t testing.TB) string {
 50:image/png:*.PNG:cs
 50:text/x-csrc:*.[ch]
 50:application/msword:*.doc
+50:text/x-script:*.sh
 10:text/x-wrong:*.pdf
 `)
 	write("share/mime/generic-icons", "text/plain:text-x-generic\napplication/pdf:x-office-document\ninode/directory:folder\napplication/octet-stream:application-x-generic\napplication/msword:x-office-document\n")
@@ -106,7 +109,9 @@ Type=Scalable
 		}
 	}
 	icon("share/icons/hicolor/32x32@2/mimetypes/folder.png", 64)
-	write("share/icons/hicolor/scalable/mimetypes/x-office-document.svg", "<svg/>")
+	write("share/icons/hicolor/scalable/mimetypes/x-office-document.svg", svgSquare)
+	write("share/icons/hicolor/scalable/mimetypes/text-x-script.svg", svgSquare)
+	icon("share/icons/hicolor/48x48/mimetypes/text-x-script.png", 48)
 	write("share/icons/Fancy/index.theme", "[Icon Theme]\nName=Fancy\nInherits=hicolor\nDirectories=48x48/mimetypes\n\n[48x48/mimetypes]\nSize=48\nType=Fixed\n")
 	icon("share/icons/Fancy/48x48/mimetypes/application-pdf.png", 48)
 	write("config/gtk-3.0/settings.ini", "[Settings]\ngtk-icon-theme-name=Fancy\n")
@@ -115,8 +120,13 @@ Type=Scalable
 	t.Setenv("XDG_DATA_HOME", filepath.Join(root, "datahome"))
 	t.Setenv("XDG_DATA_DIRS", filepath.Join(root, "share"))
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "config"))
+	t.Setenv("DBUS_SESSION_BUS_ADDRESS", "")
+	t.Setenv("XDG_RUNTIME_DIR", filepath.Join(root, "run"))
 	return root
 }
+
+// svgSquare is a red square on a 24 unit grid, 12 units wide at the centre.
+const svgSquare = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" fill="#ff0000"/></svg>`
 
 func TestXDGMimeAndIconNames(t *testing.T) {
 	xdgTree(t)
@@ -181,14 +191,16 @@ func TestXDGLookup(t *testing.T) {
 		{"a directory", FileIcon(root), 128, "hicolor/128x128/mimetypes/folder.png", errNone},
 		{"a file", FileIcon(file), 16, "hicolor/16x16/mimetypes/text-x-generic.png", errNone},
 		{"a subclass falls back to its parent's icon", FileIcon(makefile), 16, "hicolor/16x16/mimetypes/text-x-generic.png", errNone},
-		{"an icon that is only SVG falls back to the media's", ExtensionIcon("doc"), 48, "hicolor/48x48/mimetypes/application-x-generic.png", errNone},
+		{"an icon that is only SVG", ExtensionIcon("doc"), 48, "hicolor/scalable/mimetypes/x-office-document.svg", errNone},
+		{"a PNG over an SVG at the same distance", ExtensionIcon("sh"), 48, "hicolor/48x48/mimetypes/text-x-script.png", errNone},
+		{"the SVG when its directory is nearer", ExtensionIcon("sh"), 300, "hicolor/scalable/mimetypes/text-x-script.svg", errNone},
 		{"unknown extension: the generic icon", ExtensionIcon("zzz"), 48, "hicolor/48x48/mimetypes/application-x-generic.png", errNone},
 		{"the theme's own icon over hicolor's", ExtensionIcon("pdf"), 16, "Fancy/48x48/mimetypes/application-pdf.png", errNone},
 		{"a UTI is Apple's", TypeIcon("com.adobe.pdf"), 48, "", errUnsupported},
 		{"no extension", ExtensionIcon(""), 48, "", errUnsupported},
 		{"a missing file", FileIcon(filepath.Join(root, "missing")), 48, "", errRead},
 	} {
-		got, code := db.iconPNG(tc.src, tc.size)
+		got, code := db.iconFile(tc.src, tc.size)
 		if code != tc.code {
 			t.Errorf("%s: code %d, want %d (%s)", tc.what, code, tc.code, got)
 			continue
@@ -209,10 +221,10 @@ func TestXDGWithoutDatabase(t *testing.T) {
 	t.Setenv("XDG_DATA_DIRS", filepath.Join(root, "b"))
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "c"))
 	db := xdgSystem()
-	if _, code := db.iconPNG(ExtensionIcon("txt"), 48); code != errUnsupported {
+	if _, code := db.iconFile(ExtensionIcon("txt"), 48); code != errUnsupported {
 		t.Errorf("no MIME database: code %d, want unsupported", code)
 	}
-	if _, code := db.iconPNG(FolderIcon(), 48); code != errUnsupported {
+	if _, code := db.iconFile(FolderIcon(), 48); code != errUnsupported {
 		t.Errorf("no theme: code %d, want unsupported", code)
 	}
 }
@@ -351,10 +363,10 @@ func TestXDGThemeFragmentsInOtherBases(t *testing.T) {
 	}
 	f.Close()
 	db := xdgSystem()
-	if got := db.findPNG("x-user-only", 48); got != frag {
+	if got := db.findIcon("x-user-only", 48); got != frag {
 		t.Errorf("an icon in ~/.icons/hicolor (no index there): %q, want %q", got, frag)
 	}
-	if got := db.findPNG("x-nowhere", 48); got != "" {
+	if got := db.findIcon("x-nowhere", 48); got != "" {
 		t.Errorf("a missing icon: %q", got)
 	}
 }
