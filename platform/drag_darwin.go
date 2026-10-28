@@ -82,9 +82,6 @@ const (
 	nsOpDelete  = 32
 )
 
-// maxDropWorkers bounds the image decodes in flight; a drop past it fails.
-const maxDropWorkers = 4
-
 var (
 	dragOnce sync.Once
 
@@ -326,17 +323,7 @@ func (w *Window) dragPoint(info objc.ID) (x, y float32) {
 }
 
 func (d *dragState) answer(x, y float32, offered DragKinds, allowed DragOp) DragAnswer {
-	if d.handler == nil {
-		return DragAnswer{Op: Pick(DragOpAll, allowed), Accept: DragAny}
-	}
-	a := d.handler(x, y, offered, allowed)
-	if a.Accept&offered == 0 {
-		return DragAnswer{}
-	}
-	if a.Op&^allowed != 0 || a.Op&(a.Op-1) != 0 { // not one of the allowed operations
-		a.Op = Pick(a.Op, allowed)
-	}
-	return a
+	return answerDrag(d.handler, x, y, offered, allowed)
 }
 
 // nudge makes a Wait that is blocked in nextEventMatchingMask return, so that
@@ -675,32 +662,6 @@ func readText(f *ffi.Frame, items objc.ID, limit int) []byte {
 			return nil
 		}
 		return append([]byte(nil), unsafe.Slice((*byte)(ffi.PtrFromC(p)), n)...)
-	}
-	return nil
-}
-
-// ownPaths, ownText: what a drag of our own session carries, from its spec.
-func ownPaths(items []DragItem, limit int) (out []byte, n int) {
-	for i := range items {
-		if p := items[i].Path; p != "" {
-			if len(out)+len(p)+1 > limit {
-				return nil, 0
-			}
-			out = append(append(out, p...), 0)
-			n++
-		}
-	}
-	return out, n
-}
-
-func ownText(items []DragItem, limit int) []byte {
-	for i := range items {
-		if t := items[i].Text; t != "" {
-			if len(t) > limit {
-				return nil
-			}
-			return []byte(t)
-		}
 	}
 	return nil
 }

@@ -71,8 +71,14 @@ import (
 // exactly once, on success, on failure, when the application never answers
 // (FilePromise.Timeout), and when the window closes.
 //
-// Where there is no native implementation (Windows and Linux so far,
-// NativeDrag) the calls return ErrUnsupported and no events arrive.
+// Per OS. macOS is AppKit's dragging protocols (drag_darwin.go). Windows is OLE
+// (drag_windows.go): drops through IDropTarget, from CF_HDROP, the "PNG" format
+// or CF_DIBV5 and CF_DIB (converted on a worker, so its EvDrop comes in a later
+// Wait), and CF_UNICODETEXT; drags out through DoDragDrop, which is modal, so
+// StartDrag returns when the drag is over, with EvDragEnd already queued. File
+// promises (ErrPromiseUnsupported) and the drag picture (Preview) are macOS's
+// only so far. Where there is no native implementation (NativeDrag false) the
+// calls return ErrDragUnsupported and no events arrive.
 
 // DragKinds is a set of kinds of dragged content.
 type DragKinds uint8
@@ -225,9 +231,14 @@ type DragTicket uint64
 
 var (
 	// ErrDragUnsupported is returned by the drag calls where the OS has no
-	// implementation yet (Windows, Linux); errors.Is(err, errors.ErrUnsupported)
-	// also holds.
+	// implementation (a build for another OS than macOS, Windows and Linux; on
+	// Wayland, a compositor without version 3 of wl_data_device_manager);
+	// errors.Is(err, errors.ErrUnsupported) also holds.
 	ErrDragUnsupported = fmt.Errorf("platform: drag and drop on %s: %w", runtime.GOOS, errors.ErrUnsupported)
+	// ErrPromiseUnsupported is returned by StartDrag for a spec with a
+	// FilePromise where the OS has no file promises (everywhere but macOS so
+	// far); errors.Is(err, errors.ErrUnsupported) also holds.
+	ErrPromiseUnsupported = fmt.Errorf("platform: file promises on %s: %w", runtime.GOOS, errors.ErrUnsupported)
 	// ErrNoPress is returned by StartDrag when no left-button press is being
 	// held: a drag starts from a press that reached the application.
 	ErrNoPress = errors.New("platform: no mouse press to start a drag from")

@@ -272,6 +272,8 @@ type Window struct {
 	clipDue   int64
 	clip      *clipWorker // does the clipboard operations; nil until the first request
 
+	drag dragState // drag and drop (drag_windows.go)
+
 	// Input method state (ime_windows.go): the composition is on screen, the
 	// caret rectangle the app reported, and storage the IME calls write into.
 	composing bool
@@ -540,6 +542,7 @@ func (w *Window) Close() {
 		w.clip.close()
 		w.clip = nil
 	}
+	w.dragClose()
 	hwnd := w.hwnd
 	w.hwnd = 0
 	win32.Call(pDestroyWindow, hwnd)
@@ -571,6 +574,7 @@ func (w *Window) Wait(timeoutNs int64) []Event {
 		deadline = nanotime() + timeoutNs
 	}
 	for {
+		w.reapDrags()
 		if w.clipDue != 0 && nanotime() >= w.clipDue {
 			w.clipStep()
 		}
@@ -664,6 +668,7 @@ func wndProc(hwnd, m, wp, lp uintptr) uintptr {
 	}
 	switch m {
 	case wmWake:
+		w.reapDrags()
 		if takeWake() {
 			w.q.push(Event{Kind: EvWake, Time: Now()})
 		}
@@ -725,7 +730,7 @@ func wndProc(hwnd, m, wp, lp uintptr) uintptr {
 		if wp != sizeMoveTimerID {
 			return defProc(hwnd, m, wp, lp)
 		}
-		if w.sizeMove && w.frameArmed {
+		if (w.sizeMove || w.drag.active) && w.frameArmed {
 			w.frameArmed = false
 			w.q.push(Event{Kind: EvFrame, Time: Now()})
 			w.runHandler()
