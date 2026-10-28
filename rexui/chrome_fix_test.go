@@ -8,6 +8,7 @@ import (
 	"gonativeui/rexui"
 	"gonativeui/theme"
 	"gonativeui/ui"
+	"gonativeui/widget/base"
 )
 
 // act asks for an assistive technology's action on the node with the role
@@ -411,5 +412,108 @@ func TestSidebarMultipleSelection(t *testing.T) {
 	g.frame()
 	if got := selectedRows(m); !slices.Equal(got, []uint32{4}) {
 		t.Fatalf("⌘-click without Multiple: %v", got)
+	}
+}
+
+// As the content pane narrows the title gives way before the items do: it is
+// truncated (the room the items leave it shrinks), hidden below
+// ToolbarLook.TitleMinW, and only then does the first item go into the
+// overflow menu (the title may come back in the room that frees). It never
+// lies under an item.
+func TestToolbarTitleGivesWayBeforeTheItems(t *testing.T) {
+	const title = "A rather long document title"
+	minW := rexui.ToolbarLook.TitleMinW
+	prevShown, hid, over := true, false, false
+	for w := 900; w >= 300; w -= 20 { // (steps shorter than the minimum)
+		g := openRig(t, theme.Light, nil, func(*rig) {})
+		g.w, g.h = 2*w, 400
+		ic := addChromeIcons(g)
+		var view int
+		var ov rexui.ToolbarOverflow
+		g.build = func(g *rig) {
+			o := rexui.ToolbarOpts{Style: theme.ToolbarUnified, Title: title, Panes: [2]float32{g.k.Pt(180), 0}}
+			tb := rexui.BeginToolbar(g.k, "Toolbar", o)
+			tb.Item(ic.sidebar, "Sidebar")
+			tb.NextPane()
+			tb.Nav(ic.back, ic.fwd, true, false)
+			tb.Title()
+			tb.Flexible()
+			tb.Picker("View", &view, []icon.ID{ic.grid, ic.list}, []string{"as Icons", "as List"}, true)
+			tb.Menu(ic.group, "Group", -1)
+			tb.Menu(ic.action, "Action", -1)
+			tb.SearchButton(ic.search, "Search")
+			ov = tb.End()
+		}
+		g.settle()
+		g.frames(3) // (the title shows by the room of the frame before)
+		shown := g.has(ui.RoleLabel, title)
+		if ov.N > 0 && !over && prevShown {
+			t.Fatalf("w=%d: %v went into the overflow menu while the title was still shown", w, ov.Names[:ov.N])
+		}
+		if shown && g.has(ui.RoleComboBox, "View") {
+			room := g.frameOf(ui.RoleComboBox, "View")[0] - g.frameOf(ui.RoleLabel, title)[0] - g.k.Theme().Window.Capsule.WideGap/g.scale
+			if room < minW-0.5 {
+				t.Fatalf("w=%d: the title is shown in %v pt, under its minimum %v", w, room, minW)
+			}
+		}
+		prevShown, hid, over = shown, hid || !shown, over || ov.N > 0
+	}
+	if !hid || !over {
+		t.Fatalf("the sweep never hid the title (%v) or overflowed an item (%v)", hid, over)
+	}
+}
+
+// A search field that did not fit is listed in the overflow menu, and choosing
+// it shows the field in a popover under the » button with the focus in it, as
+// NSToolbar does; typing goes to it, and Escape closes the popover.
+func TestToolbarOverflowedSearchIsShownAndFocused(t *testing.T) {
+	g := openRig(t, theme.Light, nil, func(*rig) {})
+	g.w, g.h = 2*260, 400
+	ic := addChromeIcons(g)
+	var q ui.TextBuffer
+	q.Reserve(32)
+	var ov rexui.ToolbarOverflow
+	var sig base.FieldSignal
+	g.build = func(g *rig) {
+		tb := rexui.BeginToolbar(g.k, "Toolbar", rexui.ToolbarOpts{Style: theme.ToolbarCompact, Title: "Notes"})
+		tb.Item(ic.sidebar, "Sidebar")
+		tb.Flexible()
+		sig = tb.Search("Search", &q, "Search", 0)
+		ov = tb.End()
+	}
+	g.settle()
+	i := -1
+	for j, n := range ov.Names[:ov.N] {
+		if n == "Search" {
+			i = j
+		}
+	}
+	if i < 0 {
+		t.Fatalf("the search field is not in the overflow menu %v", ov.Names[:ov.N])
+	}
+	if g.has(ui.RoleSearchField, "Search") {
+		t.Fatal("the search field is in the band and in the menu")
+	}
+	g.in.SetMenuChoice(g.node(ui.RoleButton, "Show More").Key, i, 0)
+	g.frames(3)
+	if !g.has(ui.RoleSearchField, "Search") {
+		t.Fatal("choosing the search field in the overflow menu showed nothing")
+	}
+	if g.c.FocusKey() != sig.Key {
+		t.Fatal("the search field in the popover is not focused")
+	}
+	g.typeText("abc")
+	if q.String() != "abc" {
+		t.Fatalf("typing reached %q", q.String())
+	}
+	g.frames(3)
+	if !g.has(ui.RoleSearchField, "Search") {
+		t.Fatal("the popover went away by itself")
+	}
+	g.key(ui.KeyEscape, 0) // clears the text, as in a search field
+	g.key(ui.KeyEscape, 0)
+	g.frames(2)
+	if g.has(ui.RoleSearchField, "Search") {
+		t.Error("Escape did not close the popover")
 	}
 }
