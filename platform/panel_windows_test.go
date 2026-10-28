@@ -199,7 +199,10 @@ func TestPanelShowHideLeaksNothing(t *testing.T) {
 	}
 	settle(p)
 	gdi1, user1 := guiObjects()
-	if gdi1 > gdi0 || user1 > user0 { // one fewer is the system's (a USER object the first pair made, freed)
+	// The session's own objects move the counts by one either way on the
+	// runners (41 → 40, 48 → 49 seen on windows-11-arm); a leak per Show or
+	// Hide would add about 100.
+	if gdi1 > gdi0+2 || user1 > user0+2 {
 		t.Errorf("after 100 Show/Hide pairs: GDI %d → %d, USER %d → %d", gdi0, gdi1, user0, user1)
 	}
 	if p.Visible() {
