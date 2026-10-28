@@ -310,7 +310,6 @@ const (
 	tomResume               = -9999994
 )
 
-
 // loadRichEdit loads msftedit.dll and makes the COM kinds, once.
 func loadRichEdit(hinst uintptr) error {
 	if richOnce.done {
