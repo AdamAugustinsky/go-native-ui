@@ -694,6 +694,11 @@ func (s *goSystem) Dirty(p int) (x, y, w, h int, pixels []byte, stride int, ok b
 // ClearDirty marks page p as uploaded.
 func (s *goSystem) ClearDirty(p int) { s.atlas.clearDirty(p) }
 
+// DirtyAll marks every atlas page changed in full, so the next Dirty of each
+// page returns all of it: for a renderer whose textures lost their contents
+// (a rebuilt device), which needs the clean pages uploaded again too.
+func (s *goSystem) DirtyAll() { s.atlas.markAllDirty() }
+
 // Close releases the font files and fontconfig objects. The System must not
 // be used afterwards.
 func (s *goSystem) Close() {

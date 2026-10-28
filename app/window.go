@@ -415,6 +415,10 @@ func (u *winUploader) Stage(t gpu.TextureID, x, y, w, h int, pixels []byte, stri
 	u.r.Stage(t, x, y, w, h, pixels, stride)
 }
 
+// Epoch is the renderer's: the icon atlas uploads again when it changes (a
+// rebuild after a lost device, devloss.go).
+func (u *winUploader) Epoch() uint32 { return u.r.Epoch() }
+
 // FreeTexture frees a texture the window made, for an icon atlas that grew
 // into a new one.
 func (u *winUploader) FreeTexture(t gpu.TextureID) {

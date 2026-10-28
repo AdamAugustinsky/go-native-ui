@@ -514,6 +514,7 @@ type appObject struct {
 	r      *gpu.Renderer
 	text   *text.System
 	atlas  *ui.SharedAtlas
+	lostAt int64     // platform.Now of the last failed recovery of a lost GPU device (devloss.go), 0 = none
 	scales []float32 // the scales whose fonts are alive, latest first (zoom.go)
 }
 
