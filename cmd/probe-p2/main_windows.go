@@ -61,8 +61,8 @@ type report struct {
 }
 
 var (
-	frames  = flag.Int("frames", 120, "frames of the scroll measured")
-	speed   = flag.Int("speed", 4, "pixels the list scrolls per frame")
+	frames     = flag.Int("frames", 120, "frames of the scroll measured")
+	speed      = flag.Int("speed", 4, "pixels the list scrolls per frame")
 	timeout    = flag.Duration("timeout", 60*time.Second, "give up (exit 1) after this long")
 	noRedirect = flag.Bool("noredirect", false, "create the top-level window with WS_EX_NOREDIRECTIONBITMAP (the child-process run)")
 )
