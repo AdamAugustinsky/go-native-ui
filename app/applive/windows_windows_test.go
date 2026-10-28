@@ -62,11 +62,17 @@ func (r result) int(k string) int {
 	return n
 }
 
+// activation is the tests holding the "activation" lock: a test that runs
+// several children takes it once (a second take would wait for itself).
+var activation sync.Map
+
 // child runs scenario name with env in a child process and waits for it at
 // most limit (a deadlock fails the test).
 func child(t *testing.T, name string, limit time.Duration, env ...string) result {
 	t.Helper()
-	testlock.Hold(t, "activation") // other packages' tests open windows too (in parallel processes)
+	if _, held := activation.LoadOrStore(t, true); !held {
+		testlock.Hold(t, "activation") // other packages' tests open windows too (in parallel processes); once per test
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), limit)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^$")
