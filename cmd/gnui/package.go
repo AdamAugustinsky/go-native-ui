@@ -37,18 +37,38 @@ func cmdPackage(args []string, stdout, stderr io.Writer) error {
 	tags := fs.String("tags", "", "go build -tags (gnui_release is always added)")
 	ldflags := fs.String("ldflags", "", `extra go build -ldflags ("-s -w" is always added)`)
 	appIn := fs.String("app", "", "sign, notarize and package this bundle, built earlier from the same gnui.json (on another Mac, say), instead of building one; it is changed in place")
+	target := fs.String("target", "darwin/"+darwinArch, "platforms to package, comma-separated: darwin/arm64, windows/amd64, windows/arm64 (windows means both); Windows executables build on any host")
+	winSign := fs.String("win-sign", os.Getenv("GNUI_WINDOWS_SIGN"), `the command that signs each Windows executable, {file} standing for it (gnui.json's windows.sign otherwise; default $GNUI_WINDOWS_SIGN); unsigned when none`)
 	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	if fs.NArg() != 0 {
 		return usageError{fmt.Errorf("unexpected argument %q", fs.Arg(0))}
 	}
-	if runtime.GOOS != "darwin" {
-		return errors.New("packaging and signing need macOS")
+	darwin, win, err := parseTargets(*target)
+	if err != nil {
+		return usageError{err}
+	}
+	if *appIn != "" && !darwin {
+		return usageError{errors.New("-app is a macOS bundle: add darwin/arm64 to -target")}
+	}
+	if darwin && runtime.GOOS != "darwin" {
+		return errors.New("packaging and signing need macOS (-target windows/amd64,windows/arm64 builds Windows executables on any host)")
 	}
 	c, err := LoadConfig(*cfgPath)
 	if err != nil {
 		return err
+	}
+	if len(win) > 0 {
+		if _, err := windowsVersion(c); err != nil {
+			return err
+		}
+		if err := packageWindows(c, win, *outDir, *winSign, buildOptions{Tags: *tags, Ldflags: *ldflags, Log: stdout}, stdout); err != nil {
+			return err
+		}
+		if !darwin {
+			return nil
+		}
 	}
 	plan, err := planSigning(*identity, *devCert)
 	if err != nil {
