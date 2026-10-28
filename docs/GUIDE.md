@@ -287,7 +287,8 @@ func New() (*Notes, error) {
 	n.query.Max = maxLen
 	n.query.Reserve(maxLen)
 // …
-	n.side.Sel = n.notes[n.count-1].id
+	n.side.Reserve(maxNotes)
+	n.side.Select(n.notes[n.count-1].id)
 ```
 
 `content`, the bar below the open note, holds the field and the button.
@@ -331,6 +332,10 @@ header being an item with `Header` set, and the sidebar edits the selected
 row's id in its state. A press or the keyboard (Up and Down) changes the
 selection and reports `Changed`; the sidebar takes the keyboard when it is
 pressed, and the selection is the accent while it has it and grey otherwise.
+With `Multiple`, as here, ⌘-click toggles a note, Shift-click and Shift with
+Up or Down take a range, ⌘A (the sidebar's, while it has the keyboard) takes all of
+them, and the state says which notes are selected (`Has`, `Count`); `Sel` is
+the one last chosen.
 
 `rebuild` makes the rows: the notes in the order the Switch asks for, those the
 search lets through, each group under its header. The items are views of the
@@ -369,7 +374,7 @@ the Notes scene has it.
 func (n *Notes) sidebar(tbH float32) {
 	k := n.k
 	c := k.Context()
-	s := rexui.Sidebar(k.Kit, "Notes", &n.side, n.rows, rexui.SidebarOpts{Top: tbH, RowH: 52, HeaderH: 24})
+	s := rexui.Sidebar(k.Kit, "Notes", &n.side, n.rows, rexui.SidebarOpts{Top: tbH, RowH: 52, HeaderH: 24, Multiple: true})
 	if !n.focused { // the keyboard starts in the list, as in the Notes scene
 		c.SetFocus(c.KeyOf(s.ID))
 		n.focused = true
@@ -381,10 +386,9 @@ and not by its place.
 
 ```go examples/notes/notes/notes.go
 func (n *Notes) removeSelected() {
-	i := n.find(n.side.Sel)
-	if i < 0 {
-		return
-	}
+	kept := 0
+	for i := 0; i < n.count; i++ {
+		if !n.side.Has(n.notes[i].id) {
 ```
 
 ## 6. The note, a switch and a status line
@@ -417,14 +421,14 @@ Links, mentions, selection across paragraphs and the rest of the rich text are i
 		}
 	}
 	c.Push(page)
-	if i := n.find(n.side.Sel); i >= 0 {
+	if i := n.open(); i >= 0 {
 		n.setText(&n.notes[i])
 		c.NextSize(ui.Pct(1), ui.TextSize(0))
 		c.NextTextColor(r.Colors[theme.Text])
 		c.RichText(ui.KeyN(keyText, uint64(n.textID)), n.text, n.spans, &n.styles, ui.RichOpts{})
 	} else {
 		n.textID = 0
-		rexui.Label(k.Kit, "No Note Selected", rexui.LabelOpts{Style: rexui.TextTitle1, Color: rexui.Of(theme.Label3)})
+		rexui.Label(k.Kit, n.placeholder(c), rexui.LabelOpts{Style: rexui.TextTitle1, Color: rexui.Of(theme.Label3)})
 	}
 	c.Pop()
 ```
@@ -508,7 +512,7 @@ so that Enter on a focused Cancel is Cancel's.
 ```go examples/notes/notes/notes.go
 	d := k.BeginDialog("remove", "Remove note?", &n.confirm)
 	if d.Visible {
-		k.Paragraph(c.Fmt().Str("“").Str(str(n.selectedTitle())).Str("” will be removed. This cannot be undone.").String())
+		k.Paragraph(n.removeText(c))
 		d.BeginActions()
 		d.Action("Cancel", widget.ButtonDefault)
 		if d.Action("Remove", widget.ButtonPrimary) {
