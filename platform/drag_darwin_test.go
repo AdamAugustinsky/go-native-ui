@@ -229,8 +229,8 @@ func TestDragInEnterMoveLeave(t *testing.T) {
 	}
 	r.answer(DragAnswer{Op: DragOpCopy, Accept: DragFiles})
 	r.w.SetDropKinds(DragFiles | DragText)
-	if got := objc.Send(r.view, selRegisteredType); got == 0 || int(objc.Send(got, selURLCount)) != 2 {
-		t.Fatalf("registered types: %v", got)
+	if got := strings.Join(registeredTypes(r), " "); !strings.Contains(got, "public.file-url") || !strings.Contains(got, "public.utf8-plain-text") {
+		t.Fatalf("registered types: %q", got)
 	}
 
 	r.at(10, 80) // points, origin bottom left: pixel (20, 40) from the top left at scale 2, height 100
@@ -444,9 +444,9 @@ func tiffOf(t *testing.T, pngData []byte) []byte {
 // drag types the view registers for are not theirs, and theirs are not touched.
 func TestDragTypesDoNotReachHosts(t *testing.T) {
 	var (
-		err                     error
-		ours, theirs, hostTypes int
-		isDescendant            bool
+		err                                error
+		ours, theirs, hostTypes, textTypes int
+		isDescendant                       bool
 	)
 	onMain(func() {
 		dragInit() // arrText is made here: before it, the host would register for nothing
@@ -464,6 +464,8 @@ func TestDragTypesDoNotReachHosts(t *testing.T) {
 		view := objc.ID(w.HostView(id))
 		sel := objc.Sel("isDescendantOf:")
 		// A host that registered for dragged types of its own (a text view does).
+		dragInit()
+		textTypes = int(objc.Send(arrText, selURLCount))
 		objc.Send1(view, selRegisterTypes, uintptr(arrText))
 		before := int(objc.Send(objc.Send(view, selRegisteredType), selURLCount))
 		w.SetDropKinds(DragFiles)
@@ -479,7 +481,7 @@ func TestDragTypesDoNotReachHosts(t *testing.T) {
 	if err != nil {
 		t.Skip(err)
 	}
-	if ours != 1 || theirs != hostTypes || hostTypes != 1 || isDescendant {
+	if ours != 1 || theirs != hostTypes || hostTypes != textTypes || isDescendant {
 		t.Errorf("view registered for %d types, host for %d (had %d), host under the view: %v", ours, theirs, hostTypes, isDescendant)
 	}
 }
@@ -1996,7 +1998,7 @@ func TestReceptionCollectsTheFilesAndDeliversOnce(t *testing.T) {
 	dir := t.TempDir()
 	files := []string{filepath.Join(dir, "a.txt"), filepath.Join(dir, "b b.txt")}
 	d := &r.w.drag
-	id, rc := newReception(d, Event{Kind: EvDrop, Code: uint32(DragFiles), SelStart: 1}, dir, 2)
+	id, rc, _ := newReception(d, Event{Kind: EvDrop, Code: uint32(DragFiles), SelStart: 1}, dir, 2)
 	req, err := receiveKind.New(id)
 	if err != nil {
 		t.Fatal(err)
@@ -2044,7 +2046,7 @@ func TestReceptionOfNothingFails(t *testing.T) {
 	}
 	dir := filepath.Join(t.TempDir(), "gnui-drop-x")
 	os.Mkdir(dir, 0o700)
-	id, _ := newReception(&r.w.drag, Event{Kind: EvDrop, Code: uint32(DragFiles)}, dir, 1)
+	id, _, _ := newReception(&r.w.drag, Event{Kind: EvDrop, Code: uint32(DragFiles)}, dir, 1)
 	req, err := receiveKind.New(id)
 	if err != nil {
 		t.Fatal(err)
@@ -2064,4 +2066,281 @@ func TestReceptionOfNothingFails(t *testing.T) {
 		t.Errorf("the empty folder is still there: %v", err)
 	}
 	r.waitWorkers()
+}
+
+// ---- links and rich text are text ----
+
+func TestDropLinksAndRichTextAreText(t *testing.T) {
+	r := newDragRig(t)
+	r.answer(DragAnswer{Op: DragOpCopy, Accept: DragText})
+	r.w.SetDropKinds(DragText)
+	r.at(5, 5)
+	for _, c := range []struct {
+		name string
+		item map[string][]byte
+		want string
+	}{
+		{"a link", map[string][]byte{"public.url": []byte("https://example.com/a?b=1")}, "https://example.com/a?b=1"},
+		{"RTF", map[string][]byte{"public.rtf": []byte(`{\rtf1\ansi\deff0 {\fonttbl{\f0 Helvetica;}}Hello \b world\b0 !}`)}, "Hello world!"},
+		{"HTML", map[string][]byte{"public.html": []byte("<html><body><p>Hi <b>there</b></p><script>x()</script></body></html>")}, "Hi there"},
+		{"plain text before a link", map[string][]byte{"public.utf8-plain-text": []byte("the title"), "public.url": []byte("https://example.com/")}, "the title"},
+		{"a link before rich text", map[string][]byte{"public.url": []byte("https://example.com/x"), "public.html": []byte("<b>bold</b>")}, "https://example.com/x"},
+	} {
+		r.w.q.reset()
+		r.put(c.item)
+		if !r.drop() {
+			t.Errorf("%s: refused", c.name)
+			continue
+		}
+		ev := r.next()
+		if ev.Kind != EvDrop || DragKinds(ev.Code) != DragText || ev.Flags&FlagFailed != 0 || r.text(ev) != c.want {
+			t.Errorf("%s: %+v %q, want %q", c.name, ev, r.text(ev), c.want)
+		}
+	}
+
+	// The enter names text as a kind for them.
+	r.w.q.reset()
+	r.put(map[string][]byte{"public.url": []byte("https://example.com/")})
+	r.send(selDragEntered)
+	if ev := r.events(); len(ev) != 1 || DragKinds(ev[0].Code) != DragText {
+		t.Errorf("enter events %+v, want text offered", ev)
+	}
+
+	// A file's URL, also offered as public.url, is a file and not text.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "f.txt")
+	if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r.w.q.reset()
+	r.put(map[string][]byte{"public.file-url": fileURLBytes(path), "public.url": fileURLBytes(path)})
+	if r.drop() {
+		t.Error("a file was taken as text by a window that takes only text")
+	}
+	r.answer(DragAnswer{Op: DragOpCopy, Accept: DragAny})
+	r.w.SetDropKinds(DragAny)
+	r.w.q.reset()
+	if !r.drop() {
+		t.Fatal("refused")
+	}
+	if ev := r.next(); DragKinds(ev.Code) != DragFiles || r.text(ev) != path+"\x00" {
+		t.Errorf("file drop %+v %q", ev, r.text(ev))
+	}
+}
+
+// ---- receiving file promises ----
+
+var (
+	promiseSrcOnce sync.Once
+	promiseSrcCls  objc.ID
+	promiseSrcName = []byte("promised.txt")
+	promiseSrcData = []byte("promised data")
+	promiseSrcMode atomic.Int32 // 0: write the file, 1: never answer
+	promiseSrcSeen atomic.Int32
+)
+
+// promiseSource is a source of file promises like another application's: a
+// provider whose delegate writes a file when the destination asks.
+func promiseSource(t *testing.T) objc.ID {
+	t.Helper()
+	promiseSrcOnce.Do(func() {
+		def := objc.Define("GNUIFakePromiseSource", objc.Cls("NSObject"), []string{"NSFilePromiseProviderDelegate"})
+		def.Method(selPromiseName, "@@:@@", func(c *ffi.CB) {
+			f := c.Frame()
+			alloc := wsend(f, clsNSString, selAllocStr)
+			str := wsend(f, alloc, selInitBytes, uintptr(unsafe.Pointer(&promiseSrcName[0])), uintptr(len(promiseSrcName)), 4)
+			c.Ret(uintptr(wsend(f, str, selAutorelease)))
+		})
+		def.Method(selPromiseWrit, "v@:@@@?", func(c *ffi.CB) {
+			f := c.Frame()
+			promiseSrcSeen.Add(1)
+			if promiseSrcMode.Load() == 1 {
+				return
+			}
+			path := string(appendCString(nil, uintptr(wsend(f, objc.ID(c.Int(3)), selFSRep))))
+			if err := os.WriteFile(path, promiseSrcData, 0o644); err != nil {
+				panic(err)
+			}
+			objc.CallBlock(f, objc.ID(c.Int(4)), 0)
+		})
+		def.Method(selPromiseQ, "@@:@", func(c *ffi.CB) { c.Ret(uintptr(promiseQueue)) })
+		promiseSrcCls = def.Register()
+	})
+	delegate := objc.Retain(objc.Send(objc.Send(promiseSrcCls, selAlloc), selInit))
+	prov := objc.Send(objc.Send(clsNSFilePromise, selAlloc), selInit)
+	fileType := objc.Str("public.plain-text") // (made before the call is built: they share the frame)
+	prov = objc.Send2(prov, selInitFilePromise, uintptr(fileType), uintptr(delegate))
+	return objc.Retain(prov)
+}
+
+func (r *dragRig) putProvider(prov objc.ID) {
+	r.t.Helper()
+	objc.Send(r.pb, selClearContents)
+	arr := objc.Send(clsNSMutableArray, selArrayClass)
+	objc.Send1(arr, selAddObject, uintptr(prov))
+	if !objc.SendBool1(r.pb, selWriteObjects, uintptr(arr)) {
+		r.t.Fatal("writeObjects failed")
+	}
+}
+
+// AppKit lets receivePromisedFilesAtDestination: be called only inside the
+// dragging destination methods of a real session, so the receiving itself
+// cannot be driven with a fake dragging info: it is checked by hand. What is
+// tested here is the offer, which EnableFilePromises gates, and the bookkeeping
+// that the reader block of a real receiver drives (the receptions above).
+func TestPromisedFilesAreOfferedAsFilesOnlyWhenEnabled(t *testing.T) {
+	for _, on := range []bool{false, true} {
+		t.Run(map[bool]string{false: "off", true: "on"}[on], func(t *testing.T) {
+			old := EnableFilePromises
+			EnableFilePromises = on
+			t.Cleanup(func() { EnableFilePromises = old })
+			r := newDragRig(t)
+			r.answer(DragAnswer{Op: DragOpCopy, Accept: DragFiles})
+			r.w.SetDropKinds(DragFiles)
+			r.putProvider(promiseSource(t))
+			r.at(5, 5)
+			r.send(selDragEntered)
+			ev := r.events()
+			got := strings.Join(registeredTypes(r), " ")
+			registered := strings.Contains(got, "com.apple.pasteboard.promised-file-content-type")
+			if !on {
+				if len(ev) != 0 || registered {
+					t.Errorf("promises offered with EnableFilePromises off: %+v, registered %q", ev, got)
+				}
+				return
+			}
+			if len(ev) != 1 || DragKinds(ev[0].Code) != DragFiles || ev[0].SelLen != 1 {
+				t.Fatalf("a promise is offered as one file: %+v", ev)
+			}
+			if !registered {
+				t.Errorf("the view is registered for %q, without the promise types", got)
+			}
+		})
+	}
+}
+
+// registeredTypes are the types the rig's view is registered for.
+func registeredTypes(r *dragRig) (out []string) {
+	arr := objc.Send(r.view, selRegisteredType)
+	for i, n := 0, int(objc.Send(arr, selURLCount)); i < n; i++ {
+		out = append(out, string(objc.AppendUTF8(nil, objc.Send1(arr, selURLAt, uintptr(i)))))
+	}
+	return out
+}
+
+// callReader calls a reception's reader block as AppKit would, from a queue of
+// its own, with the file at path or an error.
+func callReader(req objc.Request, path string, fail bool) {
+	pool := objc.F.Call0(objc.PoolPush)
+	defer objc.F.Call1(objc.PoolPop, pool)
+	var url, nserr uintptr
+	if fail {
+		nserr = uintptr(objc.Send(objc.Send(clsNSError, selAlloc), objc.Sel("init")))
+	} else {
+		url = uintptr(objc.Send1(clsNSURL, selFileURLPath, uintptr(objc.Str(path))))
+	}
+	done := make(chan struct{})
+	go func() { defer close(done); objc.CallBlock(new(ffi.Frame), req.Block(), url, nserr) }()
+	<-done
+}
+
+// startReception makes a reception of want files and its request, as
+// receivePromises does after it has asked the promisers.
+func startReception(t *testing.T, r *dragRig, want int) (*reception, objc.Request) {
+	t.Helper()
+	promiseInit()
+	if receiveKind == nil {
+		t.Skip("no NSFilePromiseReceiver here")
+	}
+	dir := filepath.Join(t.TempDir(), "gnui-drop-x")
+	os.Mkdir(dir, 0o700)
+	id, rc, ok := newReception(&r.w.drag, Event{Kind: EvDrop, Code: uint32(DragFiles), Tag: 4}, dir, want)
+	if !ok {
+		t.Fatal("no place for a reception")
+	}
+	req, err := receiveKind.New(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rc.reqs = append(rc.reqs, req)
+	return rc, req
+}
+
+// A file that failed counts as reported: the drop is delivered with the one that
+// came, and a report after it finds nothing.
+func TestReceptionDeliversWhatCameWhenOneFails(t *testing.T) {
+	r := newDragRig(t)
+	rc, req := startReception(t, r, 2)
+	a := filepath.Join(rc.dir, "a.txt")
+	callReader(req, a, false)
+	r.w.reapDrags()
+	if len(r.w.q.ev) != 0 {
+		t.Fatalf("the drop completed with one of two files: %+v", r.w.q.ev)
+	}
+	callReader(req, "", true)
+	ev := r.next()
+	if ev.Kind != EvDrop || DragKinds(ev.Code) != DragFiles || ev.Tag != 4 || ev.Flags&FlagFailed != 0 || ev.SelStart != 1 || r.text(ev) != a+"\x00" {
+		t.Fatalf("drop %+v %q", ev, r.text(ev))
+	}
+	if req.Live() {
+		t.Error("the request is live after the drop")
+	}
+	callReader(req, a, false)
+	r.w.reapDrags()
+	if len(r.w.q.ev) != 0 {
+		t.Fatalf("a late report made an event: %+v", r.w.q.ev)
+	}
+	r.waitWorkers()
+}
+
+func TestReceptionThatNeverArrivesFailsAtTheTimeout(t *testing.T) {
+	r := newDragRig(t)
+	old := receiveTimeout
+	receiveTimeout = 100 * time.Millisecond
+	defer func() { receiveTimeout = old }()
+	rc, _ := startReception(t, r, 1)
+	rc.arm()
+	ev := r.next()
+	if ev.Kind != EvDrop || ev.Flags&FlagFailed == 0 || ev.Text.Len != 0 {
+		t.Fatalf("drop %+v, want a failed one", ev)
+	}
+	if _, err := os.Stat(rc.dir); !os.IsNotExist(err) {
+		t.Errorf("the empty folder is still there: %v", err)
+	}
+	r.waitWorkers()
+}
+
+func TestClosingTheWindowAbandonsReceptions(t *testing.T) {
+	r := newDragRig(t)
+	rc, req := startReception(t, r, 1)
+	rc.arm()
+	r.w.closeDrag()
+	if req.Live() {
+		t.Error("the request survived the window")
+	}
+	callReader(req, filepath.Join(rc.dir, "x"), false)
+	r.w.reapDrags()
+	if len(r.w.q.ev) != 0 {
+		t.Fatalf("a report after the window closed made an event: %+v", r.w.q.ev)
+	}
+	if n := r.w.drag.workers.Load(); n != 0 {
+		t.Errorf("%d places still held", n)
+	}
+}
+
+func TestReceptionsAreBounded(t *testing.T) {
+	r := newDragRig(t)
+	for i := 0; i < maxReceptions; i++ {
+		if _, _, ok := newReception(&r.w.drag, Event{}, t.TempDir(), 1); !ok {
+			t.Fatalf("reception %d refused", i)
+		}
+	}
+	if _, _, ok := newReception(&r.w.drag, Event{}, t.TempDir(), 1); ok {
+		t.Error("a reception past maxReceptions was taken")
+	}
+	r.w.closeDrag()
+	if _, _, ok := newReception(&r.w.drag, Event{}, t.TempDir(), 1); !ok {
+		t.Error("closing the window left the receptions in place")
+	}
+	r.w.closeDrag()
 }
