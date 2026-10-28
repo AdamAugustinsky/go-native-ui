@@ -390,25 +390,27 @@ func ApplyShell() {
 }
 
 // ShellObjects counts the native shell objects alive: hosts, and the
-// applies of staged geometry (each in step with a present: Synced equals
-// Applies, since a batch is applied right after the present it was drawn
-// for).
+// applies of staged geometry to windows that have hosts (each in step with
+// a present: Synced equals Applies, since a batch is applied right after the
+// present it was drawn for).
 func ShellObjects() ShellCounts {
 	a := shellApplies.Load()
 	return ShellCounts{Hosts: liveHosts.Load(), Applies: a, Synced: a}
 }
 
-// applyHosts places, shows and hides the hosts as want says, in one
-// DeferWindowPos batch.
+// applyHosts places, shows and hides the hosts as want says. The
+// containers, children of the window, move in one DeferWindowPos batch (a
+// batch takes windows of one parent only); each view, alone in its
+// container, is placed first with SetWindowPos.
 func (w *Window) applyHosts() {
 	h := &w.hosts
 	h.dirty = false
 	h.applied++
-	shellApplies.Add(1)
 	if h.n == 0 || w.hwnd == 0 {
 		return
 	}
-	dwp := win32.Call(pBeginDeferPos, uintptr(2*h.n))
+	shellApplies.Add(1)
+	dwp := win32.Call(pBeginDeferPos, uintptr(h.n))
 	for i := range h.slots {
 		s := &h.slots[i]
 		if !s.live {
@@ -436,7 +438,7 @@ func (w *Window) applyHosts() {
 			if !s.shown || r.Clip != s.clipR || r.Rect != s.rect {
 				vx, vy := px(r.Rect[0])-cx, px(r.Rect[1])-cy
 				vw, vh := px(r.Rect[2])-px(r.Rect[0]), px(r.Rect[3])-px(r.Rect[1])
-				dwp = deferPos(dwp, s.view, vx, vy, vw, vh, swpNoZOrder|swpNoActivate)
+				win32.Call(pSetWindowPos, s.view, 0, uintptr(vx), uintptr(vy), uintptr(vw), uintptr(vh), swpNoZOrder|swpNoActivate)
 				if vw != s.lastW || vh != s.lastH {
 					s.lastW, s.lastH = vw, vh
 					if s.onSize != nil {
