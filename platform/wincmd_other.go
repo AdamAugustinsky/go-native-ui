@@ -7,6 +7,9 @@ package platform
 // the user and the OS set it, and the commands do nothing. SetTitle is
 // the exception, in platform_windows.go and platform_linux.go.
 
+// Retire does nothing here: no OS waits for a quit answer inside the pump.
+func (w *Window) Retire() {}
+
 // SetRepresentedFile does nothing here: only macOS has a proxy icon.
 func (w *Window) SetRepresentedFile(path string) {}
 

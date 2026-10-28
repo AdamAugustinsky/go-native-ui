@@ -482,11 +482,11 @@ func (a *App) close() {
 
 // closeWin closes the window for the app: it is out of the app's windows, and
 // its App holds none of its resources, at once. They are released now, unless
-// the loop is inside the pump, where AppKit's own wait for a quit answer
-// can close a window while the pump still uses the platform window below it:
-// the window is then taken off the screen and its resources wait in the
-// application object for releaseRetired, at the first safe point after the
-// pump. The renderer, the text system and the GPU device are the app's: they
+// the loop is inside AppKit's own wait for a quit answer, which the pump is
+// suspended in and still uses the platform window below it: the platform
+// window is then retired (platform.Window.Retire: off the screen, out of the
+// app's reach) and its resources wait in the application object for
+// releaseRetired, at the first safe point after the pump. The renderer, the text system and the GPU device are the app's: they
 // go with its last window (releaseShared), the renderer before that window's
 // surface, as it waits for the frames in flight.
 func (a *App) closeWin() {
@@ -496,8 +496,8 @@ func (a *App) closeWin() {
 	a.R, a.Surf, a.Win, a.Text = nil, nil, nil, nil
 	a.buttons = nil
 	s := a.appObject
-	if s != nil && s.pumping && r.win != nil {
-		r.win.Hide()
+	if s != nil && s.pumping && platform.QuitWaitNative() && r.win != nil {
+		r.win.Retire()
 		s.retired = append(s.retired, r)
 		return
 	}
@@ -759,6 +759,9 @@ func (a *App) onEvent(e *platform.Event) {
 // cleared by the inner one). What it would have handled stays queued, and
 // the next Wait delivers it.
 func (a *App) frameHandler() {
+	if a.Win == nil { // closed for the app: the wait of a quit answer it was closed in has not ended
+		return
+	}
 	if a.inFrame || a.framing > 0 { // this window's frame, or another's (D30: Build is never re-entered)
 		a.reentries++
 		return

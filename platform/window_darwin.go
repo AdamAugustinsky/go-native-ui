@@ -244,6 +244,25 @@ func (w *Window) Close() {
 	}
 }
 
+// Retire ends the window's dealings with the app while the objects stay as
+// they are, for a pump that is running on them (AppKit's own wait for the
+// answer to a terminate: someone else sent, inside Pump): the window is off
+// the screen, out of the registry (its objects find no window, its events go
+// to AppKit alone), without the app's frame handler, field keys and menus, and
+// its bar handed on. Close releases the rest, once the pump is back. Main
+// thread.
+func (w *Window) Retire() {
+	if w.buried || !w.registered {
+		return
+	}
+	w.handler, w.fieldKeys, w.menus = nil, nil, windowMenus{}
+	w.Hide()
+	rememberClosed(int(objc.Send(w.win, selWindowNumber)))
+	unregister(w)
+	forgetWindow(w)
+	adoptMenuBar()
+}
+
 // buryObjects detaches the closed window's delegate and hands Open's
 // references to its view, delegate and NSWindow to the next Pump (reap).
 func (w *Window) buryObjects() {
