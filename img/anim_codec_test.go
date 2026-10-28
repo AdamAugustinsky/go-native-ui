@@ -162,10 +162,14 @@ func TestAnimDelaysInFiles(t *testing.T) {
 // TestAnimEndToEnd: a real GIF and a real APNG through the cache and the
 // workers: the frames staged are the right colours at the display size.
 func TestAnimEndToEnd(t *testing.T) {
-	for name, data := range map[string][]byte{
+	files := map[string][]byte{
 		"gif":  animgen.GIF(32, 32, animgen.Sheet(32, 32, 6, 50), 0),
 		"apng": animgen.APNG(32, 32, animgen.Sheet(32, 32, 6, 50), 0),
-	} {
+	}
+	if runtime.GOOS != "darwin" { // x/image/webp's frames (C6); macOS's are ImageIO's, TestImageIOWebP
+		files["webp"] = webpAnimation(32, 32, 6, 50, 0)
+	}
+	for name, data := range files {
 		t.Run(name, func(t *testing.T) {
 			g := &colorGPU{animGPU: &animGPU{fakeGPU: newFakeGPU()}}
 			c := NewCache(Options{Renderer: g, Wake: func() {}})
