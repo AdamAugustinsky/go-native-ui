@@ -16,8 +16,10 @@ D30 (windows) and D37 (the app object) in [DECISIONS.md](../../DECISIONS.md).
 ## 1. Run and Main
 
 `Run(cfg, b)` is one window over the same object, with nothing to configure.
-When the program needs more than that, call `Main` with an `AppConfig` and a
-`Handler`:
+Its app events (a web view's, a hotkey's, a dialog's answer) go to the
+Builder's `Event(a, e)` if it has one (`app.EventHandler`), as they go to a
+Handler, and to `DefaultEvent` otherwise. When the program needs more than
+that, call `Main` with an `AppConfig` and a `Handler`:
 
 ```go cmd/windowsdemo/main.go
 	if err := app.Main(app.AppConfig{KeepRunning: *keep}, d); err != nil {
@@ -30,8 +32,8 @@ When the program needs more than that, call `Main` with an `AppConfig` and a
 reverse-DNS name; left empty, it is the bundle's, which is what a `gnui` bundle
 has (see [packaging](packaging.md)). Services key their files and system
 registrations by it. `KeepRunning` keeps the app running when its last window
-closes, as a macOS app does; on Windows and Linux the app ends with its last
-window.
+closes, as a macOS app does (on Windows in a hidden window of the app's, as a
+tray app runs); on Linux the app ends with its last window.
 
 ## 2. The Handler: Start and Event
 
@@ -133,10 +135,12 @@ frame costs nothing: `SetTitle`, `SetFrame`, `Show`, `Hide`, `Focus`,
 	win.SetDocumentEdited(w.edited) // unchanged, it does nothing
 ```
 
-**On Windows and Linux there is one window per app** for now. `OpenWindow`
-refuses a second with `app.ErrOneWindow`, which satisfies
-`errors.Is(err, errors.ErrUnsupported)`. The demo keeps the error and shows it
-in its window; an app that wants more than one window checks it.
+**On Linux there is one window per app** for now (macOS and Windows have up
+to `platform.MaxWindows`). `OpenWindow` refuses a second there with
+`app.ErrOneWindow`, which satisfies `errors.Is(err, errors.ErrUnsupported)`.
+The demo keeps the error and shows it in its window; an app that wants more
+than one window checks it. On Windows a frame is in the virtual screen's
+pixels, the space `app.Screens` reports there, rather than in points.
 
 ## 4. Closing and quitting
 
@@ -159,9 +163,12 @@ Every route to quitting arrives as `EvQuitRequested`: the Quit menu item, the
 Dock, a logout, `SIGTERM`, an updater, or your own `App.RequestQuit`. The
 event's `QuitReason` says which. It is answered with `App.ReplyQuit(e.ID,
 allow)`, which `DefaultEvent` does for you by asking the windows. The answer
-may come later, however long it takes; until it does, macOS waits. So **save
-before you allow**: do the durable work, then reply. `EvWillTerminate` comes
-last, and on macOS the process exits when it returns.
+may come later, however long it takes; until it does, macOS waits. Windows
+waits too at a logout, showing `AppConfig.QuitBlockReason` beside the app,
+and offers the user to end it after about 5 s. So **save before you allow**:
+do the durable work, then reply. `EvWillTerminate` comes last; on macOS the
+process exits when it returns, and on Windows `Main` returns after it (at a
+logout Windows may end the process first).
 
 `examples/services` keeps its preferences and its window frame in two files
 that `Flush` writes, and flushes both while the quit request is open:

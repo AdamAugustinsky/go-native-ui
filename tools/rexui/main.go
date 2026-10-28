@@ -1,8 +1,9 @@
 // Command rexui copies rexui's components into an app, so that the app owns
 // their code (shadcn's model: no registry, no third-party code). It copies a
-// component's file, the files it needs and the shared Tint helpers, rewrites
-// the package clause and the examples' package name, and leaves everything
-// else as it is; the copies build on widget/base and theme as rexui does.
+// component's file, the files it needs and the shared Tint helpers and
+// Strings, rewrites the package clause and the examples' package name, and
+// leaves everything else as it is; the copies build on widget/base and theme
+// as rexui does.
 //
 //	go run ./tools/rexui list
 //	go run ./tools/rexui add [-pkg name] [-f] COMPONENT... DIR
@@ -26,7 +27,7 @@ import (
 )
 
 // components are the components and the rexui files each needs, its own
-// first; tint.go comes with every one.
+// first; the shared files come with every one.
 var components = map[string][]string{
 	"button":      {"button.go"},
 	"iconbutton":  {"iconbutton.go", "button.go"},
@@ -40,7 +41,7 @@ var components = map[string][]string{
 	"select":      {"select.go", "button.go"},
 	"separator":   {"separator.go"},
 	"form":        {"form.go", "card.go", "text.go"},
-	"dialog":      {"dialog.go", "button.go", "text.go"},
+	"dialog":      {"dialog.go", "button.go", "text.go", "scrolledge.go", "glyph.go"},
 	"tooltip":     {"tooltip.go"},
 	"text":        {"text.go"},
 	"card":        {"card.go"},
@@ -60,7 +61,9 @@ var components = map[string][]string{
 	"pathbar":     {"pathbar.go", "glyph.go"},
 }
 
-const shared = "tint.go"
+// shared are the files every component needs: the Tint helpers and the
+// Strings.
+var shared = []string{"strings.go", "tint.go"}
 
 func main() {
 	if len(os.Args) < 2 {
@@ -133,7 +136,10 @@ func Add(src, dir, pkg string, force bool, comps ...string) ([]string, error) {
 	if token.IsKeyword(pkg) {
 		return nil, fmt.Errorf("package name %q is a Go keyword: name the package with -pkg", pkg)
 	}
-	want := map[string]bool{shared: true}
+	want := map[string]bool{}
+	for _, f := range shared {
+		want[f] = true
+	}
 	for _, c := range comps {
 		fs, ok := components[c]
 		if !ok {

@@ -290,14 +290,15 @@ type TabBar struct {
 }
 
 // TabCommands are the menu commands for ⌘1…⌘8 and ⌘9 with ids first,
-// first+1 … first+8, titled "Show Tab 1" … "Show Last Tab", for the app's
-// menu model (a Window menu). Set TabBar.Commands to their ids.
+// first+1 … first+8, titled "Show Tab 1" … "Show Last Tab" (Strings.ShowTab
+// and ShowLastTab, as they are when it is called), for the app's menu model
+// (a Window menu). Set TabBar.Commands to their ids.
 func TabCommands(first menu.ID) []menu.Command {
 	cmds := make([]menu.Command, 9)
 	for i := range cmds {
-		title := "Show Last Tab"
+		title := str.ShowLastTab
 		if i < 8 {
-			title = "Show Tab " + string(rune('1'+i))
+			title = str.ShowTab + " " + string(rune('1'+i))
 		}
 		cmds[i] = menu.Command{ID: first + menu.ID(i), Title: title, Shortcut: menu.Shortcut{Key: ui.KeyCode('1' + i), Primary: true}}
 	}
@@ -937,7 +938,7 @@ func (t *TabsBuild) EndTab(cell *TabCell) {
 			flags |= ui.DrawBackground
 		}
 		c.NextRole(ui.RoleButton)
-		c.NextSemName("Close Tab")
+		c.NextSemName(str.CloseTab)
 		cb := c.BoxKeyed(flags, ck, nil)
 		c.Push(cb)
 		if show > 0.004 {

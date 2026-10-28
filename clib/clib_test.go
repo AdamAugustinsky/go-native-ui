@@ -58,7 +58,10 @@ func TestArgumentLimits(t *testing.T) {
 	full(NewCall(), intArgRegs, floatArgRegs+stackArgWords)
 	refused("ints", func(c *Call) { full(c, intArgRegs+stackArgWords, 0); c.Uint8(1) })
 	refused("floats", func(c *Call) { full(c, 0, floatArgRegs+stackArgWords); c.Float32(1) })
-	refused("mixed", func(c *Call) { full(c, intArgRegs+6, floatArgRegs+6); c.Ptr(nil) })
+	refused("mixed", func(c *Call) {
+		full(c, intArgRegs+stackArgWords/2, floatArgRegs+stackArgWords-stackArgWords/2)
+		c.Ptr(nil)
+	})
 
 	// Reset after an abandoned build starts from empty registers again.
 	c := NewCall()

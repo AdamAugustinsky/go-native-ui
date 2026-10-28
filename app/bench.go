@@ -56,6 +56,15 @@ type BenchOptions struct {
 	// TestAllocEvery, if positive, makes the bench itself allocate every
 	// that many frames: a test of the allocation gate, which must fail.
 	TestAllocEvery int
+
+	// Companions are more windows, opened with the bench's Config beside its
+	// own before the warm-up, one per builder (an app's ordinary, unscripted
+	// view): they sit idle while the bench's window draws, which is activated
+	// again once they are open. The allocation figures cover them (they are
+	// the process's), and BenchReport.CompanionFrames counts what they drew
+	// during the measured windows: 0 when windows are paced on their own
+	// (D30, D68).
+	Companions []Builder
 }
 
 // CycleAligned is optionally implemented by a Builder whose Scripter repeats a
@@ -125,6 +134,11 @@ type BenchReport struct {
 	// kept running (it does not count against Timeout; see benchRun.loopTurn).
 	DisplayStallMs float64
 
+	// CompanionFrames is how many frames the companion windows
+	// (BenchOptions.Companions) drew during all the measured windows; 0
+	// without companions.
+	CompanionFrames int `json:",omitempty"`
+
 	// AllocSites attributes the allocations of the run, from the collection
 	// before the first window to the end of the last, when any window
 	// allocated (DECISIONS D27). OwnAllocObjects is how many were made by
@@ -178,7 +192,15 @@ func RunBench(cfg Config, b Builder, o BenchOptions) (BenchReport, error) {
 	if err != nil {
 		return BenchReport{}, err
 	}
-	defer a.close()
+	defer a.closeAll() // the companions too
+	for i, cb := range o.Companions {
+		if _, err := a.OpenWindow(cfg, cb); err != nil {
+			return BenchReport{}, fmt.Errorf("app: bench companion window %d: %w", i+1, err)
+		}
+	}
+	if len(o.Companions) > 0 {
+		a.Win.Activate() // the bench's window is the active one, as without companions
+	}
 	a.verbose = o.Verbose
 	if s, ok := b.(Scripter); ok {
 		a.script = s
@@ -220,6 +242,7 @@ type benchRun struct {
 	stalled, lastLoop int64
 
 	presented int // frames drawn since the bench started
+	companion int // frames the companion windows drew while measuring
 	gcDone    bool
 	gcAt      int // presented when the collection ran
 	measuredN int // frames in the current window
@@ -396,6 +419,7 @@ func (b *benchRun) endWindow(a *App) {
 		b.report = b.best
 		b.report.Windows = b.windows
 		b.report.DisplayStallMs = float64(b.stalled) / 1e6
+		b.report.CompanionFrames = b.companion
 		a.done = true
 		b.endProfiling(true)
 		return

@@ -1,0 +1,14 @@
+cell r0c0 align=1 "File"
+cell r0c1 align=3 "Lines"
+cell r0c2 align=2 "Status"
+cell r1c0 align=1 "main.go"
+	"main.go" style=4
+cell r1c1 align=3 "120"
+cell r1c2 align=2 "ok"
+	"ok" style=2
+cell r2c0 align=1 "ui/richtext.go"
+cell r2c1 align=3 "1,204"
+cell r2c2 align=2 "diff"
+	"diff" style=16 link="x"
+rule ""
+para open "Done."

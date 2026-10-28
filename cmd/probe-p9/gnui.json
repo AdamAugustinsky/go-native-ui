@@ -1,0 +1,9 @@
+{
+	"id": "dev.gonativeui.probe.p9",
+	"name": "GNUI Probe P9",
+	"version": "0.1.0",
+	"minimumSystem": "15.0",
+	"usage": {
+		"NSMicrophoneUsageDescription": "Probe P9 records the microphone only when run with -mic."
+	}
+}

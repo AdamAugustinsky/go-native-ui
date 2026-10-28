@@ -290,3 +290,29 @@ uint32_t fx_bools(int64_t r0, int64_t r1, int64_t r2, int64_t r3, int64_t r4, in
 	return (uint32_t)b0 | (uint32_t)b1 << 1 | (uint32_t)b2 << 2 | (uint32_t)b3 << 3 |
 	       (uint32_t)tail << 4 | (uint32_t)(s == 36) << 31;
 }
+
+// ---- Structs by value (Call.Struct, Call.Float32x2) ----
+
+typedef struct { int32_t tag; int64_t a, b; } fx_s24; // memory class / by reference
+typedef struct { int64_t a; int32_t b; } fx_s16;      // two integer registers
+typedef struct { uint16_t x; uint32_t y; } fx_s8;     // one integer register
+typedef struct { float x, y; } fx_pf;                 // a float pair
+
+void fx_structs(int64_t *out, fx_s24 big, fx_s16 mid, fx_s8 small, int64_t after) {
+	out[0] = big.tag; out[1] = big.a; out[2] = big.b;
+	out[3] = mid.a; out[4] = mid.b;
+	out[5] = small.x; out[6] = small.y;
+	out[7] = after;
+	big.a = -1; // the callee owns its copy
+}
+
+// Six integers first: the 16-byte struct no longer fits in the registers
+// left (one on arm64, none on amd64), so it and what follows go on the stack.
+void fx_struct_spill(int64_t *out, int64_t r1, int64_t r2, int64_t r3, int64_t r4, int64_t r5,
+                     int64_t r6, fx_s16 mid, int64_t after) {
+	out[0] = r1 + r2 + r3 + r4 + r5 + r6;
+	out[1] = mid.a; out[2] = mid.b;
+	out[3] = after;
+}
+
+float fx_f2(fx_pf p, int64_t scale, double add) { return (p.x - p.y) * (float)scale + (float)add; }

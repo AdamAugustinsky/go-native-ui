@@ -34,5 +34,11 @@ func (*Item) Visible() bool { return false }
 // Clicked decodes a click on this item.
 func (*Item) Clicked(*app.Event) (Click, bool) { return Click{}, false }
 
+// Balloon shows a balloon from the icon with title and body: the
+// notification area's own message (NIF_INFO), for when toasts are off or not
+// registered (notify.Setup's ErrNotRegistered). It returns ErrUnsupported
+// until W5 lands.
+func (*Item) Balloon(title, body string) error { return ErrUnsupported }
+
 // Remove takes the item off the status area.
 func (*Item) Remove() {}

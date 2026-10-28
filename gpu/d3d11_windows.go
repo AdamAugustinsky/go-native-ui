@@ -167,6 +167,7 @@ type Surface struct {
 	featureLvl uint32
 	desc       swapChainDesc1
 	loggedLost bool
+	counted    bool // in liveSurfaces (device_windows.go) until Destroy
 }
 
 // NewSurface creates a D3D11 device and a swap chain for the window.
@@ -174,18 +175,22 @@ type Surface struct {
 func NewSurface(n platform.Native, w, h int32, scale float32) (*Surface, error) {
 	w, h = max(w, 1), max(h, 1)
 	s := &Surface{hwnd: n.HWND, w: w, h: h}
-	if err := s.init(); err != nil {
+	if err := s.createDevice(); err != nil {
 		s.Destroy()
 		return nil, err
 	}
+	if err := s.initChain(); err != nil {
+		s.Destroy()
+		return nil, err
+	}
+	liveSurfaces.Add(1)
+	s.counted = true
 	return s, nil
 }
 
-func (s *Surface) init() error {
-	if err := s.createDevice(); err != nil {
-		return err
-	}
-
+// initChain makes the swap chain and its render target view on the surface's
+// device (its own, or the app's: NewSurfaceOn).
+func (s *Surface) initChain() error {
 	// Device → adapter → factory (IDXGIFactory2).
 	if hr := win32.QueryInterface(s.dev, &iidDXGIDevice, &s.dxgiDev); hr < 0 {
 		return hresultError("QueryInterface(IDXGIDevice)", hr)
@@ -431,6 +436,10 @@ func (s *Surface) FrameSource() uintptr { return s.waitable }
 // Destroy releases all resources. The platform must not wait on the
 // FrameSource handle afterwards.
 func (s *Surface) Destroy() {
+	if s.counted {
+		s.counted = false
+		liveSurfaces.Add(-1)
+	}
 	if s.ctx != 0 {
 		win32.Com(s.ctx, vtContextClearState)
 		win32.Com(s.ctx, vtContextFlush)

@@ -143,6 +143,9 @@ func TestLiveSecureField(t *testing.T) {
 		t.Log("the test process is not the active app: its activation was posted to secure input")
 	}
 	l.Type("hunter2")
+	// The keys are posted to the app's queue, and Type waits two frames: a
+	// loaded runner (macOS CI) built them with three of the seven typed.
+	l.Within("the typed password", 30, func() bool { return p.pw.String() == "hunter2" })
 	if got := p.pw.String(); got != "hunter2" {
 		t.Fatalf("typed: %q", got)
 	}

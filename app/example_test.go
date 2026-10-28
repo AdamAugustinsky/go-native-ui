@@ -61,8 +61,8 @@ func (n *notes) Event(a *app.App, e *app.Event) {
 	a.DefaultEvent(e) // quit requests, reopen with a hidden window
 }
 
-// openSettings opens a second window. Windows and Linux have one window per
-// app: the call fails with app.ErrOneWindow there.
+// openSettings opens a second window. Linux has one window per app so far:
+// the call fails with app.ErrOneWindow there.
 func (n *notes) openSettings(a *app.App) {
 	if n.settings != nil && n.settings.Open() {
 		n.settings.Focus()
