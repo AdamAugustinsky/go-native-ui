@@ -6,8 +6,8 @@ import (
 
 // # Animated images (C6)
 //
-// A Key with the Animate flag names an animated image (a GIF, an APNG, and
-// on macOS an animated HEIC, HEICS or WebP). The first request decodes the
+// A Key with the Animate flag names an animated image (a GIF, an APNG, an
+// animated WebP, and on macOS an animated HEIC or HEICS). The first request decodes the
 // first frame like any image, and builds the animation's decoder on the
 // worker: the file is indexed, no other frame is decoded. After that the
 // cache decodes frames only while the image is drawn in view, a few ahead of

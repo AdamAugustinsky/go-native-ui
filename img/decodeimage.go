@@ -8,7 +8,8 @@ import "image"
 // (premultiplied, sRGB, its bounds at the origin). It decodes as the cache's
 // workers do (see Decoding in the package documentation): with ImageIO on
 // macOS, so JPEG, PNG, GIF, HEIC, WebP and whatever else the system reads;
-// with the standard library's PNG, JPEG and GIF decoders elsewhere. It may
+// with the standard library's PNG, JPEG and GIF decoders and
+// golang.org/x/image/webp elsewhere. It may
 // be called from any goroutine, and blocks: call it from a worker, never
 // from the UI thread. It fails with ErrUnsupported, ErrDecode or
 // ErrTooLarge (more than 100 megapixels, or a side over 16384 pixels).
