@@ -74,6 +74,7 @@ func registerShellClasses() {
 	wd.Method(selSelectPreceding, "v@:@", windowSelectPreceding)
 	live.windowMark = countInstances(wd, &live.windows) // the open/close leak gate (windows_darwin.go)
 	windowClass, windowDef = wd.Register(), wd
+	registerPanelClass()
 }
 
 func retYes(c *ffi.CB) { c.RetBool(true) }

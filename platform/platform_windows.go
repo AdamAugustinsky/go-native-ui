@@ -296,6 +296,9 @@ type Window struct {
 
 // Open creates the window. Main thread only.
 func Open(o Options) (*Window, error) {
+	if o.Panel != nil {
+		return nil, ErrNoPanel
+	}
 	if user32 == 0 || pCreateWindowExW == 0 || pMsgWait == 0 {
 		return nil, errors.New("platform: cannot load user32.dll")
 	}

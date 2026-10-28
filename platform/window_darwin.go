@@ -51,6 +51,12 @@ func Open(o Options) (*Window, error) {
 	if reg.n >= MaxWindows {
 		return nil, errTooManyWindows
 	}
+	if o.Panel != nil {
+		if err := checkPanel(o.Panel); err != nil {
+			return nil, err
+		}
+		o.Materials, o.Backdrop, o.Titlebar, o.Buttons = true, BackdropNone, 0, nil
+	}
 	nOpenStages = 0
 	markOpen("start")
 	if err := ensureApp(); err != nil { // frameworks, classes, NSApp and its delegate (appobj_darwin.go)
@@ -75,7 +81,11 @@ func Open(o Options) (*Window, error) {
 	if o.Titlebar > 0 {
 		style |= 1 << 15 // NSWindowStyleMaskFullSizeContentView
 	}
-	w.win = objc.Send(windowClass, selAlloc) // GNUIWindow: NSWindow with the host focus hand-off (host_darwin.go)
+	class := windowClass
+	if o.Panel != nil {
+		style, class = 0, panelWindowClass // borderless
+	}
+	w.win = objc.Send(class, selAlloc) // GNUIWindow: NSWindow with the host focus hand-off (host_darwin.go)
 	w.win = objc.ID(F.Reset().Arg(uintptr(w.win)).Arg(uintptr(selInitWindow)).
 		ArgRect(0, 0, width, height).Arg(style).Arg(2 /* buffered */).ArgBool(false).Call(objc.MsgSend).R0())
 	if w.win == 0 {
@@ -107,9 +117,13 @@ func Open(o Options) (*Window, error) {
 	if o.MinWidth > 0 || o.MinHeight > 0 {
 		F.Reset().Arg(uintptr(w.win)).Arg(uintptr(selSetContentMinSize)).ArgPoint(float64(o.MinWidth), float64(o.MinHeight)).Call(objc.MsgSend)
 	}
-	objc.Send1(w.win, selSetTitle, uintptr(objc.Str(o.Title)))
-	objc.Send(w.win, selCenter)
-	w.cascade()
+	if o.Panel != nil {
+		w.initPanel(o.Panel)
+	} else {
+		objc.Send1(w.win, selSetTitle, uintptr(objc.Str(o.Title)))
+		objc.Send(w.win, selCenter)
+		w.cascade()
+	}
 	if os.Getenv("GNUI_NOANIM") != "" {
 		objc.Send1(w.win, selSetAnimBehavior, 2) // NSWindowAnimationBehaviorNone
 	}
@@ -164,6 +178,10 @@ func Open(o Options) (*Window, error) {
 // itself) it is not, and an EvFocus says so; it becomes key, with its own
 // EvFocus, once the app is activated.
 func (w *Window) Show() {
+	if w.panel.on {
+		w.showPanel() // over its parent, without activating the application
+		return
+	}
 	objc.Send1(w.win, selMakeKeyFront, 0)
 	// A process started from a background shell may not activate itself
 	// (macOS 14 cooperative activation); its window would open occluded.
@@ -223,6 +241,7 @@ func (w *Window) Close() {
 	w.SetSecureTextInput(false) // its secure field is gone
 	w.closeAux()                // sheets first: a window closed under a sheet never calls its completion
 	w.closeDrag()
+	w.detachPanel()
 	objc.Send(w.link, selInvalidate)
 	objc.Send(w.link, selReleaseObj) // Open retained the view link; attachMetalLink owns its link
 	w.link = 0

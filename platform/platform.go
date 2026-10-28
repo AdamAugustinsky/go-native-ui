@@ -427,6 +427,12 @@ type Options struct {
 	// window background behind the app's pixels, as an AppKit window's
 	// content is. macOS; ignored elsewhere (Window.HasMaterials).
 	Materials bool
+	// Panel makes the window a panel: a borderless child of Panel.Parent that
+	// can reach past the parent's edge and carries a material of its own
+	// (panel.go). macOS only (PanelSupported): elsewhere Open fails with
+	// ErrNoPanel. Experimental. Title, Titlebar, TrafficLights, MinWidth,
+	// MinHeight, Backdrop and Buttons are ignored; Materials is on.
+	Panel *PanelOptions
 }
 
 // Backdrop is a system material behind a window's content (Options.Backdrop).

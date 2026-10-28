@@ -296,6 +296,7 @@ func (w *Window) newMaterial(r *MaterialRegion, k matView) objc.ID {
 		objc.Send1(v, selSetBlendingMode, blending)
 		objc.Send1(v, selSetEffectState, 0) // follows the window's active state
 		objc.Send1(v, selSetWantsLayerV, 1)
+		w.maskMaterial(v)
 	case mvSolid:
 		if boxCls == 0 {
 			boxCls = objc.Cls("NSBox")
