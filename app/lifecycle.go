@@ -4,7 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"gonativeui/gpu"
@@ -116,7 +118,8 @@ func (a *App) windowsAgreeToClose() bool {
 // AppConfig configures the application object (Main).
 type AppConfig struct {
 	// ID is the app's reverse-DNS identifier ("dev.example.notes"). Empty:
-	// the bundle's CFBundleIdentifier. Services key their files and system
+	// the bundle's CFBundleIdentifier, and outside a bundle one made from the
+	// executable's name (App.ID). Services key their files and system
 	// registrations by it.
 	ID string
 	// KeepRunning keeps the app running when its last window closes (macOS;
@@ -241,12 +244,42 @@ func (a *App) closeAll() {
 	a.close()
 }
 
-// ID is the app's identifier: AppConfig.ID, or the bundle's.
+// ID is the app's identifier: AppConfig.ID, or the bundle's, or, for a
+// program that has neither (go run, a binary outside a bundle, Windows and
+// Linux when AppConfig.ID is empty), a development one made from the name of
+// the executable: "dev.gonativeui.notes" for ./notes or notes.exe. It is
+// always a valid directory name (paths.ValidID), so the services' files can be
+// keyed by it; two programs of the same name share it.
 func (a *App) ID() string {
 	if a.appCfg.ID != "" {
 		return a.appCfg.ID
 	}
-	return platform.BundleID()
+	if id := platform.BundleID(); id != "" {
+		return id
+	}
+	exe, _ := os.Executable()
+	return developmentID(exe)
+}
+
+// developmentID is the identifier of a program that has no bundle and was given
+// none, from the file name of its executable (exe may be empty).
+func developmentID(exe string) string {
+	name := filepath.Base(exe)
+	if exe == "" {
+		name = ""
+	}
+	name = strings.TrimSuffix(name, filepath.Ext(name))
+	name = strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
+			return r
+		}
+		return '-'
+	}, name)
+	if name = strings.Trim(name, "-"); name == "" {
+		name = "app"
+	}
+	return "dev.gonativeui." + name[:min(len(name), 100)]
 }
 
 // StartHidden reports whether the app was launched to start hidden
