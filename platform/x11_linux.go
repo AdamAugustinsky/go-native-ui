@@ -48,6 +48,9 @@ const (
 	xoMsgType   = 40
 	xoMsgFormat = 48
 	xoMsgData0  = 56
+	xoRootX     = 72 // XKeyEvent and the events like it: x_root, y_root
+	xoRootY     = 76
+	xoTime      = 56
 	xevBytes    = 192
 )
 
@@ -103,6 +106,8 @@ var xf struct {
 
 	createFontCursor, defineCursor uintptr
 
+	translateCoordinates uintptr // XDND: which window is under the pointer (dnd_x11_linux.go)
+
 	// content-first startup (startup_x11_linux.go)
 	setWindowBackgroundPixmap, defaultVisual, defaultDepth, createPixmap, freePixmap uintptr
 	createGC, freeGC, putImage, createImage                                          uintptr
@@ -116,23 +121,28 @@ var xLoaded bool
 var (
 	nameWMDelete    = cstr("WM_DELETE_WINDOW")
 	nameWMProtocols = cstr("WM_PROTOCOLS")
+	nameNetWMName   = cstr("_NET_WM_NAME")
 )
 
 type x11 struct {
-	dpy, win uintptr
-	screen   int32
-	wmDelete uintptr
-	wmProto  uintptr
-	atoms    [1]uintptr // XSetWMProtocols array
-	xev      [24]int64  // one XEvent
-	keysym   uint64     // XLookupString out parameter (KeySym is unsigned long)
-	supp     int32      // XkbSetDetectableAutoRepeat out parameter (Bool)
-	keyDown  [32]uint8  // pressed keycodes, to flag auto-repeat
-	keyBuf   [32]byte
-	utf8     [8]byte // xkb_keysym_to_utf8 output
-	title    [128]byte
-	hints    xSizeHints
+	dpy, win   uintptr
+	screen     int32
+	wmDelete   uintptr
+	wmProto    uintptr
+	atoms      [1]uintptr // XSetWMProtocols array
+	xev        [24]int64  // one XEvent
+	keysym     uint64     // XLookupString out parameter (KeySym is unsigned long)
+	supp       int32      // XkbSetDetectableAutoRepeat out parameter (Bool)
+	keyDown    [32]uint8  // pressed keycodes, to flag auto-repeat
+	keyBuf     [32]byte
+	utf8       [8]byte // xkb_keysym_to_utf8 output
+	title      []byte  // the NUL-terminated title (titleC)
+	aNetWMName uintptr // _NET_WM_NAME: the title as UTF-8, which window managers prefer to WM_NAME
+	hints      xSizeHints
 	x11Clip
+	dnd     x11Dnd
+	rootX   int32 // where the pointer was at the last pointer event, in root coordinates
+	rootY   int32
 	cursors [numShapes]uintptr // XDefineCursor cursors by shape, 0: not made yet
 }
 
@@ -176,6 +186,7 @@ func loadX11() error {
 		{"XSetErrorHandler", &xf.setErrorHandler},
 		{"XCreateFontCursor", &xf.createFontCursor},
 		{"XDefineCursor", &xf.defineCursor},
+		{"XTranslateCoordinates", &xf.translateCoordinates},
 		{"XSetWindowBackgroundPixmap", &xf.setWindowBackgroundPixmap},
 		{"XDefaultVisual", &xf.defaultVisual},
 		{"XDefaultDepth", &xf.defaultDepth},
@@ -262,8 +273,8 @@ func (w *Window) openX11(o Options) (err error) {
 	x.atoms[0] = x.wmDelete
 	fr.Call4(xf.setWMProtocols, x.dpy, x.win, uintptr(unsafe.Pointer(&x.atoms[0])), 1)
 
-	copy(x.title[:len(x.title)-1], o.Title)
-	fr.Call3(xf.storeName, x.dpy, x.win, uintptr(unsafe.Pointer(&x.title[0])))
+	x.aNetWMName = x.intern(nameNetWMName)
+	w.setTitleX11(o.Title)
 	if o.MinWidth > 0 || o.MinHeight > 0 {
 		scale := float32(w.s120) / 120
 		x.hints = xSizeHints{flags: pMinSize,
@@ -286,6 +297,19 @@ func (w *Window) openX11(o Options) (err error) {
 
 	w.pfd[0] = pollfd{fd: int32(fr.Call1(xf.connectionNumber, x.dpy)), events: pollIn}
 	return nil
+}
+
+// setTitleX11 sets WM_NAME (XStoreName: Latin-1 for old window managers) and
+// _NET_WM_NAME (UTF-8, which the ones in use read first).
+func (w *Window) setTitleX11(title string) {
+	x := &w.x
+	if x.dpy == 0 || x.win == 0 {
+		return
+	}
+	x.title = titleC(x.title, title)
+	fr.Call3(xf.storeName, x.dpy, x.win, uintptr(unsafe.Pointer(&x.title[0])))
+	x.changeBytes(x.win, x.aNetWMName, x.aUTF8, x.title[:len(x.title)-1])
+	fr.Call1(xf.flush, x.dpy)
 }
 
 func (w *Window) closeX11() {
@@ -390,6 +414,10 @@ func (w *Window) x11Event() {
 		w.mods = mods
 		n := int32(fr.Reset().Arg(uintptr(unsafe.Pointer(&x.xev))).Arg(uintptr(unsafe.Pointer(&x.keyBuf[0]))).
 			Arg32(uint32(len(x.keyBuf))).Arg(uintptr(unsafe.Pointer(&x.keysym))).Arg(0).Call(xf.lookupString).R0())
+		if down && x.dnd.src.on && uint32(x.keysym) == 0xff1b { // Escape cancels the drag out in progress
+			w.x11DndEnd(DragOpNone, true)
+			return
+		}
 		evdev := uint32(0)
 		if kc >= 8 {
 			evdev = kc - 8
@@ -449,10 +477,18 @@ func (w *Window) x11Event() {
 		down := x.i32(xoType) == xButtonPress
 		px, py := float32(x.i32(xoX)), float32(x.i32(xoY))
 		w.mods = xMods(x.u32(xoState))
+		x.rootX, x.rootY = x.i32(xoRootX), x.i32(xoRootY)
+		if x.dnd.src.on { // the drag out has the pointer: its release is the drop
+			if !down && x.u32(xoButton) == 1 {
+				w.x11DndRelease()
+			}
+			return
+		}
 		var b Button
 		switch x.u32(xoButton) {
 		case 1:
 			b = ButtonLeft
+			w.leftDown = down
 		case 2:
 			b = ButtonMiddle
 		case 3:
@@ -488,6 +524,11 @@ func (w *Window) x11Event() {
 		w.q.push(ev)
 	case xMotionNotify:
 		w.mods = xMods(x.u32(xoState))
+		x.rootX, x.rootY = x.i32(xoRootX), x.i32(xoRootY)
+		if x.dnd.src.on {
+			w.x11DndMotion(uintptr(x.i64(xoTime)))
+			return
+		}
 		w.ptrX, w.ptrY, w.ptrIn = float32(x.i32(xoX)), float32(x.i32(xoY)), true
 		w.cursorSync(false)
 		w.q.push(Event{Kind: EvPointerMove, X: float32(x.i32(xoX)), Y: float32(x.i32(xoY)), Mods: w.mods, Time: now})
@@ -511,6 +552,7 @@ func (w *Window) x11Event() {
 		if in {
 			f = FlagDown
 		} else {
+			w.leftDown = false
 			x.keyDown = [32]uint8{}
 			w.mods = 0
 		}
@@ -537,6 +579,9 @@ func (w *Window) x11Event() {
 	case xPropertyNotify:
 		w.x11PropertyNotify()
 	case xClientMessage:
+		if w.x11DndMessage() {
+			return
+		}
 		if uintptr(x.i64(xoMsgType)) == x.wmProto && x.i32(xoMsgFormat) == 32 && uintptr(x.i64(xoMsgData0)) == x.wmDelete {
 			w.q.push(Event{Kind: EvClose, Time: now})
 		}

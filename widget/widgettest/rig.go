@@ -62,8 +62,10 @@ type FakeOptions struct {
 // made on Context() with Text(), and Run starts the frames:
 //
 //	r := widgettest.NewRig(t, widgettest.FakeOptions{Width: 420, Height: 560})
-//	app.Attach(r.Context(), r.Text())
-//	r.Run(app)
+//	k := widget.NewKit(r.Context(), r.Text(), rex.Theme())
+//	r.Run(builder) // a Builder that builds its frames with k
+//
+// It takes a testing.TB, so a benchmark can make one as a test can.
 func NewRig(t testing.TB, o FakeOptions) *Rig {
 	t.Helper()
 	// the icon atlas rasterises symbols through AppKit on macOS, which wants

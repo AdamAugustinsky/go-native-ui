@@ -282,6 +282,8 @@ type Window struct {
 	clipDue   int64
 	clip      *clipWorker // does the clipboard operations; nil until the first request
 
+	drag dragState // drag and drop (drag_windows.go)
+
 	// Input method state (ime_windows.go): the composition is on screen, the
 	// caret rectangle the app reported, and storage the IME calls write into.
 	composing bool
@@ -564,6 +566,7 @@ func (w *Window) Close() {
 		w.clip.close()
 		w.clip = nil
 	}
+	w.dragClose()
 	if w.sizeMove {
 		w.sizeMove = false
 		leaveModal()

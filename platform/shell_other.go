@@ -25,6 +25,12 @@ func (w *Window) HasMaterials() bool { return false }
 // SetMaterials sets the window's material regions: a no-op here.
 func (w *Window) SetMaterials(r []MaterialRegion) {}
 
+// SetPanelOrigin moves a child panel: a no-op here, which has none.
+func (w *Window) SetPanelOrigin(x, y float32) {}
+
+// SetPanelMask shapes a panel's material: ErrNoPanels here.
+func (w *Window) SetPanelMask(png []byte) error { return ErrNoPanels }
+
 // NewHost creates a hosted native view: ErrNoHosts here.
 func (w *Window) NewHost(kind HostKind, o HostOptions) (HostID, error) { return 0, ErrNoHosts }
 

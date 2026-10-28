@@ -4,7 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"gonativeui/gpu"
@@ -144,7 +146,8 @@ func (a *App) windowsAgreeToClose() bool {
 // AppConfig configures the application object (Main).
 type AppConfig struct {
 	// ID is the app's reverse-DNS identifier ("dev.example.notes"). Empty:
-	// the bundle's CFBundleIdentifier. Services key their files and system
+	// the bundle's CFBundleIdentifier, and outside a bundle one made from the
+	// executable's name (App.ID). Services key their files and system
 	// registrations by it.
 	ID string
 	// KeepRunning keeps the app running when its last window closes (macOS
@@ -275,12 +278,42 @@ func (a *App) closeAll() {
 	a.close()
 }
 
-// ID is the app's identifier: AppConfig.ID, or the bundle's.
+// ID is the app's identifier: AppConfig.ID, or the bundle's, or, for a
+// program that has neither (go run, a binary outside a bundle, Windows and
+// Linux when AppConfig.ID is empty), a development one made from the name of
+// the executable: "dev.gonativeui.notes" for ./notes or notes.exe. It is
+// always a valid directory name (paths.ValidID), so the services' files can be
+// keyed by it; two programs of the same name share it.
 func (a *App) ID() string {
 	if a.appCfg.ID != "" {
 		return a.appCfg.ID
 	}
-	return platform.BundleID()
+	if id := platform.BundleID(); id != "" {
+		return id
+	}
+	exe, _ := os.Executable()
+	return developmentID(exe)
+}
+
+// developmentID is the identifier of a program that has no bundle and was given
+// none, from the file name of its executable (exe may be empty).
+func developmentID(exe string) string {
+	name := filepath.Base(exe)
+	if exe == "" {
+		name = ""
+	}
+	name = strings.TrimSuffix(name, filepath.Ext(name))
+	name = strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
+			return r
+		}
+		return '-'
+	}, name)
+	if name = strings.Trim(name, "-"); name == "" {
+		name = "app"
+	}
+	return "dev.gonativeui." + name[:min(len(name), 100)]
 }
 
 // StartHidden reports whether the app was launched to start hidden
@@ -448,7 +481,7 @@ type appObject struct {
 	launched    bool // the late setup ran (AppLaunched)
 	terminated  bool // EvWillTerminate was delivered
 	startHidden bool
-	pumping     bool // the loop is inside the pump or a popped-up menu: no window closes under it
+	pumping     bool // the loop is inside the pump or a popped-up menu: no window closes under it, except in AppKit's own wait for a quit answer (closeWin)
 	inSafe      bool
 	done        bool // the loop ends after this turn (Quit, the last window closing)
 	nextWinID   uint32
@@ -476,11 +509,14 @@ type appObject struct {
 
 	// What the windows draw with, made with the first window and released
 	// with the last (window.go).
+	retired []retiredWin // windows closed for the app whose platform resources wait for the pump to return (closeWin)
+
 	dev    *gpu.Device // the GPU device and queue, where the OS shares one (macOS)
 	noDev  bool        // the OS has no shared device: a surface makes its own
 	r      *gpu.Renderer
 	text   *text.System
 	atlas  *ui.SharedAtlas
+	lostAt int64     // platform.Now of the last failed recovery of a lost GPU device (devloss.go), 0 = none
 	scales []float32 // the scales whose fonts are alive, latest first (zoom.go)
 }
 
@@ -554,7 +590,12 @@ func (a *App) safePoint() {
 		w.flushDialogs()
 		w.applyCommands()
 	}
-	if a.pumping {
+	// AppKit's own wait for a quit answer (a terminate: someone else sent)
+	// runs inside the pump and the dispatcher with it: a window closes then
+	// for the app at once, and its platform resources are released when the
+	// pump is back (closeWin). Under any other part of the pump (a
+	// popped-up menu's tracking) a window waits for the loop's turn.
+	if a.pumping && !platform.QuitWaitNative() {
 		return
 	}
 	for i := 0; i < len(a.wins); {
@@ -563,6 +604,9 @@ func (a *App) safePoint() {
 			continue
 		}
 		i++
+	}
+	if !a.pumping {
+		a.releaseRetired()
 	}
 }
 

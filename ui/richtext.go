@@ -519,16 +519,21 @@ func (c *Context) richNatural(b *box, r *richRec) float32 {
 }
 
 // fitRich lays the RichText box b out at its final content width avail,
-// unless its layout at a width it was laid out at already holds for avail:
-// greedy line breaking gives the same lines for every width between the
-// widest line and the width it broke at.
+// unless its layout already is the layout at avail: the one it has was laid
+// out at that width, or avail is within the interval the layouter certifies
+// for it (text.ParaView.FitFrom). Greedy breaking gives the same lines for
+// every width between the widest line and the width it broke at only when
+// the line widths it breaks by are the ones the lines come out with, which the
+// layouter, not this function, knows.
 func (c *Context) fitRich(b *box, r *richRec, avail float32) {
 	if avail < 1 {
 		avail = 0
 	}
 	if b.paraW >= 0 && b.paraGen == c.lay.ParaGeneration() {
-		pv := c.lay.Paragraph(b.para)
-		if pv.Width <= avail+0.01 && (b.paraW == 0 && !pv.Truncated || avail <= b.paraW+0.01) {
+		if avail == b.paraW {
+			return
+		}
+		if pv := c.lay.Paragraph(b.para); avail >= pv.FitFrom && avail <= pv.FitTo {
 			return
 		}
 	}

@@ -215,6 +215,8 @@ func (w *Window) x11SelectionRequest() {
 	}
 	reply := prop
 	switch {
+	case selection == x.dnd.aSel && selection != 0:
+		reply = w.x11DndRequest(requestor, prop, target)
 	case selection != x.aClipboard || !c.owned:
 		reply = 0
 	case target == x.aTargets:
@@ -225,25 +227,32 @@ func (w *Window) x11SelectionRequest() {
 		if target == xaString {
 			data = latin1(data)
 		}
-		switch {
-		case len(data) <= x11MaxProp:
-			x.changeBytes(requestor, prop, target, data)
-		case x.nsend < maxSends:
-			// INCR: announce the size; the chunks follow as the requestor
-			// deletes the property.
-			size := uint64(len(data))
-			fr.Call3(xf.selectInput, x.dpy, requestor, xPropertyChangeMask)
-			fr.Reset().Arg(x.dpy).Arg(requestor).Arg(prop).Arg(x.aIncr).Arg(32).Arg(0).
-				Arg(uintptr(unsafe.Pointer(&size))).Arg(1).Call(xf.changeProperty)
-			x.sends[x.nsend] = x11Send{requestor: requestor, property: prop, target: target, data: data, deadline: nanotime() + clipTimeout}
-			x.nsend++
-		default:
-			reply = 0
-		}
+		reply = w.x11Reply(requestor, prop, target, data)
 	default:
 		reply = 0
 	}
 	x.notify(requestor, selection, target, reply, tm)
+}
+
+// x11Reply puts data in the requestor's property, or starts an INCR transfer
+// of it when it is large (the chunks follow as the requestor deletes the
+// property); it returns the property to report, 0 if the request is refused.
+func (w *Window) x11Reply(requestor, prop, target uintptr, data []byte) uintptr {
+	x := &w.x
+	switch {
+	case len(data) <= x11MaxProp:
+		x.changeBytes(requestor, prop, target, data)
+		return prop
+	case x.nsend < maxSends:
+		size := uint64(len(data))
+		fr.Call3(xf.selectInput, x.dpy, requestor, xPropertyChangeMask)
+		fr.Reset().Arg(x.dpy).Arg(requestor).Arg(prop).Arg(x.aIncr).Arg(32).Arg(0).
+			Arg(uintptr(unsafe.Pointer(&size))).Arg(1).Call(xf.changeProperty)
+		x.sends[x.nsend] = x11Send{requestor: requestor, property: prop, target: target, data: data, deadline: nanotime() + clipTimeout}
+		x.nsend++
+		return prop
+	}
+	return 0
 }
 
 // latin1 converts UTF-8 to ISO 8859-1, '?' for what does not fit.
@@ -281,6 +290,10 @@ func (x *x11) notify(requestor, selection, target, prop, tm uintptr) {
 func (w *Window) x11PropertyNotify() {
 	x := &w.x
 	win, atom, state := uintptr(x.i64(32)), uintptr(x.i64(40)), x.i32(56)
+	if x.dnd.in.incr && win == x.win && atom == x.dnd.aProp && state == xPropNewValue {
+		w.x11DndChunk()
+		return
+	}
 	if win == x.cur && atom == x.aProp && state == xPropNewValue && x.incr {
 		w.x11PasteChunk()
 		return
@@ -331,6 +344,11 @@ func (w *Window) x11SendDeadline() int64 {
 			d = t
 		}
 	}
+	for _, t := range [...]int64{x.dnd.in.deadline, x.dnd.src.deadline} { // a drop being received, a drop waiting to be finished
+		if t > 0 && (d < 0 || t < d) {
+			d = t
+		}
+	}
 	return d
 }
 
@@ -344,6 +362,7 @@ func (w *Window) x11PollDone() {
 			w.x11DropSend(i)
 		}
 	}
+	w.x11DndTick(now)
 	w.clipTick(now)
 }
 
@@ -388,18 +407,27 @@ func (w *Window) x11CancelPaste() {
 
 // getProp reads and deletes the paste property. The returned memory belongs
 // to Xlib (free it with freeProp).
-func (x *x11) getProp() bool {
+func (x *x11) getProp() bool { return x.getPropFrom(x.cur, x.aProp, true) }
+
+// getPropFrom reads property prop of window win, and deletes it if del (a
+// property left over MaxPaste is deleted too, so that the owner is not kept
+// waiting on it).
+func (x *x11) getPropFrom(win, prop uintptr, del bool) bool {
 	x.pData = 0
 	long := uintptr((MaxPaste+1+3)/4 + 1)
-	st := fr.Reset().Arg(x.dpy).Arg(x.cur).Arg(x.aProp).Arg(0).Arg(long).Arg(1).Arg(0).
+	d := uintptr(0)
+	if del {
+		d = 1
+	}
+	st := fr.Reset().Arg(x.dpy).Arg(win).Arg(prop).Arg(0).Arg(long).Arg(d).Arg(0).
 		Arg(uintptr(unsafe.Pointer(&x.pType))).Arg(uintptr(unsafe.Pointer(&x.pFormat))).
 		Arg(uintptr(unsafe.Pointer(&x.pItems))).Arg(uintptr(unsafe.Pointer(&x.pAfter))).
 		Arg(uintptr(unsafe.Pointer(&x.pData))).Call(xf.getWindowProperty).R0()
 	if st != 0 {
 		return false
 	}
-	if x.pAfter > 0 { // more than we take: the property stays, remove it
-		fr.Call3(xf.deleteProperty, x.dpy, x.cur, x.aProp)
+	if del && x.pAfter > 0 { // more than we take: the property stays, remove it
+		fr.Call3(xf.deleteProperty, x.dpy, win, prop)
 	}
 	return true
 }
@@ -436,6 +464,10 @@ func (w *Window) x11Append(latin bool) {
 // x11SelectionNotify handles the owner's answer to XConvertSelection.
 func (w *Window) x11SelectionNotify() {
 	x := &w.x
+	if sel := uintptr(x.i64(40)); sel == x.dnd.aSel && sel != 0 { // the data of a drop (dnd_x11_linux.go)
+		w.x11DndSelectionNotify()
+		return
+	}
 	// requestor @32, selection @40, property @56. An answer to another
 	// request than the current one reaches another window.
 	if !x.pasteWait || !w.clip.pending || uintptr(x.i64(32)) != x.cur || uintptr(x.i64(40)) != x.aClipboard {

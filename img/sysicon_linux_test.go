@@ -26,6 +26,7 @@ func TestSystemIconsLinux(t *testing.T) {
 		"txt file":    FileIcon(file),
 		"txt":         ExtensionIcon("txt"),
 		"unknown":     ExtensionIcon("zzz"),
+		"svg only":    ExtensionIcon("doc"), // drawn from the theme's SVG
 	}
 	for name, src := range srcs {
 		for _, side := range []int32{32, 64} {

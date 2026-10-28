@@ -37,7 +37,7 @@
 //	(*Window).SetTooltipRegions(r)        native tooltips by content rectangle (macOS; no-op elsewhere); diffed, cheap to call every frame
 //	(*Window).SetTooltipText(f)           where the tooltip text comes from, asked for on demand when the system shows one
 //	(*Window).SetDropKinds(k), SetDragHandler(h), StartDrag(spec)
-//	                                      drag and drop in and out (macOS; ErrDragUnsupported elsewhere), see drag.go
+//	                                      drag and drop in and out (macOS, Windows, X11 and Wayland; ErrDragUnsupported elsewhere), see drag.go
 //	DragThreshold() float32               how far a press moves before it is a drag, in logical units
 //	(*Window).SetAXSource(AXSource) error the app's semantic tree for assistive technologies (a11y.go; macOS; ErrAXUnsupported elsewhere)
 //	(*Window).SyncAX()                    after each frame's build: the bridge, once active, diffs the tree and notifies

@@ -128,6 +128,12 @@ type stager interface {
 	Stage(t gpu.TextureID, x, y, w, h int, pixels []byte, stride int)
 }
 
+// epocher is what an Uploader may also offer: gpu.Renderer.Epoch, which
+// counts the times the renderer was rebuilt after a lost device. Its textures
+// keep their ids and lose their contents, so the atlas uploads itself again
+// when the epoch changes.
+type epocher interface{ Epoch() uint32 }
+
 // retiredTex is a texture the atlas has outgrown or reset, kept until the
 // frame after the one that may have boxes naming it.
 type retiredTex struct {
@@ -176,6 +182,9 @@ type Atlas struct {
 	tex          gpu.TextureID
 	texW, texH   int // the size of tex
 	up           ui.Uploader
+	eg           epocher // up's, if it has one
+	epoch        uint32  // eg's when the texture was last filled
+	full         bool    // the next upload is in full, by Upload (a rebuilt renderer)
 }
 
 // New returns an Atlas of the standard icons followed by extra; Raster
@@ -427,6 +436,10 @@ func (a *Atlas) Attach(u ui.Uploader) {
 		return
 	}
 	a.up, a.tex = u, 0
+	a.eg, _ = u.(epocher)
+	if a.eg != nil {
+		a.epoch = a.eg.Epoch()
+	}
 	a.retired = a.retired[:0] // the old renderer's
 	a.dirty = [4]int{0, 0, a.w, a.h}
 	a.upload()
@@ -450,12 +463,20 @@ func (a *Atlas) upload() {
 		return
 	}
 	pix := a.pix[d[1]*a.w+d[0]:]
-	if st, ok := a.up.(stager); ok && !fresh {
+	if st, ok := a.up.(stager); ok && !fresh && !a.full {
 		st.Stage(a.tex, d[0], d[1], d[2]-d[0], d[3]-d[1], pix, a.w)
 	} else {
 		a.up.Upload(a.tex, d[0], d[1], d[2]-d[0], d[3]-d[1], pix, a.w)
 	}
-	a.dirty = [4]int{}
+	a.dirty, a.full = [4]int{}, false
+}
+
+// restore uploads the whole atlas again: the renderer was rebuilt after a lost
+// device, and its texture for the atlas, which kept its id, is blank.
+func (a *Atlas) restore() {
+	a.epoch = a.eg.Epoch()
+	a.dirty, a.full = [4]int{0, 0, a.w, a.h}, true
+	a.upload()
 }
 
 // retire keeps texture t, which boxes of the frame being built may name, until
@@ -538,6 +559,9 @@ func (a *Atlas) MediumWidth(id ID) float32 {
 // box of size 0.
 func (a *Atlas) Prepare(c *ui.Context, id ID, color uint32) (ui.Flags, []byte) {
 	a.frame = c.Frame()
+	if a.eg != nil && a.eg.Epoch() != a.epoch {
+		a.restore()
+	}
 	e := a.ent(id)
 	if e == nil {
 		return 0, nil

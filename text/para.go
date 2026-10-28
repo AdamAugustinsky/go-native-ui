@@ -118,6 +118,10 @@ const (
 	LineHard
 )
 
+// fitSlack is the tolerance of a line's fit: a line fits a width when it is
+// at most fitSlack wider, which ParaView.FitFrom and FitTo account for.
+const fitSlack = 0.01
+
 // ParaView is a laid-out paragraph. The slices alias cache storage: do not
 // modify or append to them; they are valid until the cache evicts (compare
 // ParaGeneration).
@@ -142,6 +146,19 @@ type ParaView struct {
 	Width, Height float32
 	// Truncated reports that text was left out (Para.MaxLines).
 	Truncated bool
+	// FitFrom and FitTo bound the widths at which a fresh layout of the same
+	// Para would be this layout: every Width from FitFrom to FitTo, both
+	// included. A caller that wants the layout of a narrower or wider box
+	// (shrink-wrapping a label) may keep this one inside the interval, and
+	// lays out again outside it. The interval is the backend's certificate:
+	// for the basic layout it comes from the measurements its line breaks
+	// were decided with, so it is exact (a layout whose runs cannot be
+	// measured has an empty one); CoreText's typesetter does not report its
+	// measurements, so its interval is the widest line to the width it was
+	// laid out at, which holds for greedy breaking by the widths of the
+	// lines it makes. Zero for a view that certifies nothing (FitFrom > FitTo
+	// at every width that matters), including the zero ParaView.
+	FitFrom, FitTo float32
 }
 
 // Style returns the style of glyph g: its span's, or 0.

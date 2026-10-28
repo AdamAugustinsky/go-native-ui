@@ -177,6 +177,13 @@ func (a *webpAnim) size() (w, h int) { return a.w, a.h }
 // retained: see gifAnim.
 func (a *webpAnim) retained() int64 { return int64(len(a.data)) + 3*4*int64(a.w)*int64(a.h) }
 func (a *webpAnim) count() int      { return len(a.frames) }
+
+// trim: see gifAnim.
+func (a *webpAnim) trim() int64 {
+	a.comp, a.buf, a.next = nil, nil, 0
+	return int64(len(a.data))
+}
+
 func (a *webpAnim) playCount() int  { return a.plays }
 func (a *webpAnim) delay(i int) int { return int(a.frames[i].delayMs) }
 
