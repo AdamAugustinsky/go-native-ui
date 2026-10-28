@@ -449,6 +449,7 @@ func TestDragTypesDoNotReachHosts(t *testing.T) {
 		isDescendant            bool
 	)
 	onMain(func() {
+		dragInit() // arrText is made here: before it, the host would register for nothing
 		w, e := Open(Options{Title: "drag hosts", Width: 300, Height: 200, Hidden: true})
 		if e != nil {
 			err = e
