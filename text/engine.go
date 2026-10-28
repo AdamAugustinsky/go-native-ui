@@ -125,7 +125,7 @@ type goSystem struct {
 	// Shaping state (shape.go). seg and para are only used for text that
 	// needs several scripts or bidirectional reordering.
 	hbuf    *harfbuzz.Buffer // reused; keeps the shape-plan cache of every face
-	shapeFn func(*harfbuzz.Buffer, *harfbuzz.Font)
+	shapeFn func(*harfbuzz.Buffer, *harfbuzz.Font, []harfbuzz.Feature)
 	langs   map[language.Script]language.Language
 	segs    []gtSeg // pieces of the level run being shaped
 	sruns   []gtSeg // script runs of the text being itemized
@@ -158,7 +158,7 @@ func newGoSystem(f fontFinder) *goSystem {
 		fb:       make(map[uint64]uint32),
 		hbuf:     harfbuzz.NewBuffer(),
 		langs:    make(map[language.Script]language.Language),
-		shapeFn:  func(b *harfbuzz.Buffer, f *harfbuzz.Font) { b.Shape(f, nil) },
+		shapeFn:  func(b *harfbuzz.Buffer, f *harfbuzz.Font, feats []harfbuzz.Feature) { b.Shape(f, feats) },
 		runs:     newRunCache(),
 		atlas:    newAtlas(),
 		gbuf:     make([]uint16, 0, 128),
@@ -693,6 +693,11 @@ func (s *goSystem) Dirty(p int) (x, y, w, h int, pixels []byte, stride int, ok b
 
 // ClearDirty marks page p as uploaded.
 func (s *goSystem) ClearDirty(p int) { s.atlas.clearDirty(p) }
+
+// DirtyAll marks every atlas page changed in full, so the next Dirty of each
+// page returns all of it: for a renderer whose textures lost their contents
+// (a rebuilt device), which needs the clean pages uploaded again too.
+func (s *goSystem) DirtyAll() { s.atlas.markAllDirty() }
 
 // Close releases the font files and fontconfig objects. The System must not
 // be used afterwards.

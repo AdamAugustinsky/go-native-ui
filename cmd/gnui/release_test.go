@@ -44,10 +44,18 @@ func TestPackagedBinaryHasNoDebugChordOrInspector(t *testing.T) {
 		t.Fatal(err)
 	}
 	needles := []string{"Toggle Overlay", "Run Layout Audit", "inspectLines", "chordCommand", "debugCommand", "startInspector", "GNUI_INSPECT"}
+	// The binaries are darwin ones, which may need modules that no test of this
+	// machine's own OS did (purego on Windows). The build reads the module cache
+	// and never the network: a flaky proxy fails nothing here. Without the
+	// modules the test skips, but not on CI, whose jobs run go mod download.
+	t.Setenv("GOPROXY", "off")
 	build := func(o buildOptions) []byte {
 		t.Helper()
 		out := filepath.Join(t.TempDir(), "probe")
 		if err := buildExecutable(c, out, o); err != nil {
+			if strings.Contains(err.Error(), "GOPROXY=off") && os.Getenv("CI") == "" {
+				t.Skipf("the modules of a darwin build are not in the module cache (run go mod download): %v", err)
+			}
 			t.Fatal(err)
 		}
 		b, err := os.ReadFile(out)

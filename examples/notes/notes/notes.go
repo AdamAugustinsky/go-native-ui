@@ -12,6 +12,7 @@ package notes
 
 import (
 	"math"
+	"strconv"
 	"time"
 	"unsafe"
 
@@ -202,7 +203,8 @@ func New() (*Notes, error) {
 	for _, s := range seeds {
 		n.put(s.group, s.title, s.when, s.line, s.body)
 	}
-	n.side.Sel = n.notes[n.count-1].id
+	n.side.Reserve(maxNotes)
+	n.side.Select(n.notes[n.count-1].id)
 	var err error
 	if n.model, err = newModel(); err != nil {
 		return nil, err
@@ -264,12 +266,24 @@ func (n *Notes) Context() *ui.Context {
 // Count is the number of notes.
 func (n *Notes) Count() int { return n.count }
 
-// Selected is the number of selected notes: the open one, or none.
+// Selected is the number of selected notes.
 func (n *Notes) Selected() int {
-	if n.find(n.side.Sel) < 0 {
-		return 0
+	sel := 0
+	for i := 0; i < n.count; i++ {
+		if n.side.Has(n.notes[i].id) {
+			sel++
+		}
 	}
-	return 1
+	return sel
+}
+
+// open is the index of the open note: the selected one when it is alone, -1
+// for none (or for several, which have no note open).
+func (n *Notes) open() int {
+	if n.Selected() != 1 {
+		return -1
+	}
+	return n.find(n.side.Sel)
 }
 
 // Text is the title of note i (in the order they were made, oldest first),
@@ -314,21 +328,23 @@ func (n *Notes) add() {
 	}
 	var clock [8]byte
 	n.put(groupToday, n.input.String(), string(time.Now().AppendFormat(clock[:0], "15:04")), "", "")
-	n.side.Sel = n.notes[n.count-1].id
+	n.side.Select(n.notes[n.count-1].id)
 	n.input.Reset()
 }
 
-// removeSelected removes the open note. The notes after it move up, which is
-// why a note is told by its id and not by its place.
+// removeSelected removes the selected notes. The notes after one move up,
+// which is why a note is told by its id and not by its place.
 func (n *Notes) removeSelected() {
-	i := n.find(n.side.Sel)
-	if i < 0 {
-		return
+	kept := 0
+	for i := 0; i < n.count; i++ {
+		if !n.side.Has(n.notes[i].id) {
+			n.notes[kept] = n.notes[i]
+			kept++
+		}
 	}
-	copy(n.notes[i:n.count], n.notes[i+1:n.count])
-	n.count--
-	n.notes[n.count] = note{}
-	n.side.Sel = 0
+	clear(n.notes[kept:n.count])
+	n.count = kept
+	n.side.Clear()
 }
 
 // rebuild sets the sidebar's rows: the notes in the order the Switch asks for
@@ -433,7 +449,7 @@ func (n *Notes) Build(c *ui.Context) {
 
 	d := k.BeginDialog("remove", "Remove note?", &n.confirm)
 	if d.Visible {
-		k.Paragraph(c.Fmt().Str("“").Str(str(n.selectedTitle())).Str("” will be removed. This cannot be undone.").String())
+		k.Paragraph(n.removeText(c))
 		d.BeginActions()
 		d.Action("Cancel", widget.ButtonDefault)
 		if d.Action("Remove", widget.ButtonPrimary) {
@@ -445,9 +461,17 @@ func (n *Notes) Build(c *ui.Context) {
 	k.End()
 }
 
+// removeText says what Remove removes: the note, by its title, or how many.
+func (n *Notes) removeText(c *ui.Context) string {
+	if sel := n.Selected(); sel > 1 {
+		return c.Fmt().Int(sel).Str(" notes will be removed. This cannot be undone.").String()
+	}
+	return c.Fmt().Str("“").Str(str(n.selectedTitle())).Str("” will be removed. This cannot be undone.").String()
+}
+
 // selectedTitle is the open note's title, empty for none.
 func (n *Notes) selectedTitle() []byte {
-	if i := n.find(n.side.Sel); i >= 0 {
+	if i := n.open(); i >= 0 {
 		return n.notes[i].titleText()
 	}
 	return nil
@@ -511,11 +535,19 @@ func (n *Notes) makeStyles(s float32) {
 func (n *Notes) sidebar(tbH float32) {
 	k := n.k
 	c := k.Context()
-	s := rexui.Sidebar(k.Kit, "Notes", &n.side, n.rows, rexui.SidebarOpts{Top: tbH, RowH: 52, HeaderH: 24})
+	s := rexui.Sidebar(k.Kit, "Notes", &n.side, n.rows, rexui.SidebarOpts{Top: tbH, RowH: 52, HeaderH: 24, Multiple: true})
 	if !n.focused { // the keyboard starts in the list, as in the Notes scene
 		c.SetFocus(c.KeyOf(s.ID))
 		n.focused = true
 	}
+}
+
+// placeholder is what the content pane says when no one note is open.
+func (n *Notes) placeholder(c *ui.Context) string {
+	if sel := n.Selected(); sel > 1 {
+		return c.Fmt().Int(sel).Str(" Notes Selected").String()
+	}
+	return "No Note Selected"
 }
 
 // The editor's text inset, in points: the text view's container inset (24,
@@ -560,14 +592,14 @@ func (n *Notes) content(w, h, top float32) {
 		}
 	}
 	c.Push(page)
-	if i := n.find(n.side.Sel); i >= 0 {
+	if i := n.open(); i >= 0 {
 		n.setText(&n.notes[i])
 		c.NextSize(ui.Pct(1), ui.TextSize(0))
 		c.NextTextColor(r.Colors[theme.Text])
 		c.RichText(ui.KeyN(keyText, uint64(n.textID)), n.text, n.spans, &n.styles, ui.RichOpts{})
 	} else {
 		n.textID = 0
-		rexui.Label(k.Kit, "No Note Selected", rexui.LabelOpts{Style: rexui.TextTitle1, Color: rexui.Of(theme.Label3)})
+		rexui.Label(k.Kit, n.placeholder(c), rexui.LabelOpts{Style: rexui.TextTitle1, Color: rexui.Of(theme.Label3)})
 	}
 	c.Pop()
 	k.CloseScrollContent(&v)
@@ -630,7 +662,7 @@ func (n *Notes) toolbar(tbH, sbW float32) {
 	}
 }
 
-// askRemove asks to remove the open note: with the system's alert, which
+// askRemove asks to remove the selected notes: with the system's alert, which
 // answers in a later frame (answers), and where there is none (or it cannot
 // be shown) with the drawn dialog.
 func (n *Notes) askRemove() {
@@ -638,10 +670,14 @@ func (n *Notes) askRemove() {
 		return
 	}
 	if !n.drawnOnly {
+		msg, info := "Remove “"+string(n.selectedTitle())+"”?", "The note will be removed. This cannot be undone."
+		if sel := n.Selected(); sel > 1 {
+			msg, info = "Remove "+strconv.Itoa(sel)+" notes?", "The notes will be removed. This cannot be undone."
+		}
 		t, err := n.a.Alert(platform.AlertSpec{
 			Style:       platform.AlertWarning,
-			Message:     "Remove “" + string(n.selectedTitle()) + "”?",
-			Info:        "The note will be removed. This cannot be undone.",
+			Message:     msg,
+			Info:        info,
 			Buttons:     []string{"Remove", "Cancel"},
 			Destructive: []int{0},
 		})

@@ -79,6 +79,11 @@ func NewOffscreen(cfg Config, wPx, hPx int, scale float32, b Builder) (*Offscree
 func (o *Offscreen) Frame() (img *image.RGBA, more bool) {
 	a := o.App
 	more = true
+	if a.deviceLost() { // a render found the device lost: a new one, and the atlas goes back to it (devloss.go)
+		if err := a.recoverDevice(); err != nil {
+			panic(fmt.Errorf("app: GPU device lost: %w", err))
+		}
+	}
 	if a.script != nil && !a.scriptDone {
 		if !a.script.Script(a.scriptFrame, &a.tr.in) {
 			a.scriptDone, more = true, false

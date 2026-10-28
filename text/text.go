@@ -68,6 +68,12 @@ type FontDesc struct {
 	Weight int     // CSS-like: 400 regular, 500 medium, 600 semibold, 700 bold
 	Italic bool    // the family's italic (oblique) face; upright when it has none
 	Scale  float32 // pixels per point (2 on Retina)
+	// TabularDigits gives every digit the same advance (OpenType tnum;
+	// CoreText's monospaced numbers; DirectWrite's tabular figures), so that
+	// sizes, dates and counters line up in columns and do not jitter as they
+	// change. A font without such a feature shapes as usual. It is part of
+	// the font: the same description with and without it caches separately.
+	TabularDigits bool
 }
 
 // Metrics are font metrics in pixels.

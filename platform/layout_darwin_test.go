@@ -70,10 +70,6 @@ func pinLayout(id string) (restore func(), ok bool) {
 	}, true
 }
 
-const (
-	ucShift = 1 << (9 - 8) // shiftKey >> 8
-)
-
 // TestShortcutCharacterThroughLayouts: the key's character for a shortcut is
 // what the layout types with ⌘ held and Shift not, translated by the layout
 // itself (UCKeyTranslate); the layouts are read without selecting them.
@@ -93,13 +89,13 @@ func TestShortcutCharacterThroughLayouts(t *testing.T) {
 		// minus position) with Shift; the ⌘ translation without Shift is [,
 		// and with Shift it would be {, which names no shortcut key.
 		{"Dvorak ⌘ at the minus position", "com.apple.keylayout.Dvorak", 0x1B, ucCmdState, '['},
-		{"Dvorak with Shift at the minus position (what charactersIgnoringModifiers gave)", "com.apple.keylayout.Dvorak", 0x1B, ucShift, '{'},
+		{"Dvorak with Shift at the minus position (what charactersIgnoringModifiers gave)", "com.apple.keylayout.Dvorak", 0x1B, ucShiftState, '{'},
 		{"Dvorak ⌘ at the equal position", "com.apple.keylayout.Dvorak", 0x18, ucCmdState, ']'},
 		{"AZERTY ⌘ at the M position types ,", "com.apple.keylayout.French", 0x2E, ucCmdState, ','},
-		{"AZERTY with Shift at the M position", "com.apple.keylayout.French", 0x2E, ucShift, '?'},
+		{"AZERTY with Shift at the M position", "com.apple.keylayout.French", 0x2E, ucShiftState, '?'},
 		{"AZERTY ⌘ at the W position types z", "com.apple.keylayout.French", 0x0D, ucCmdState, 'z'},
 		{"German ⌘ at the slash position types -", "com.apple.keylayout.German", 0x2C, ucCmdState, '-'},
-		{"German with Shift at the slash position", "com.apple.keylayout.German", 0x2C, ucShift, '_'},
+		{"German with Shift at the slash position", "com.apple.keylayout.German", 0x2C, ucShiftState, '_'},
 		{"German ⌘ at the Z position types y", "com.apple.keylayout.German", 0x06, ucCmdState, 'y'},
 		{"German ⌘ at the Y position types z", "com.apple.keylayout.German", 0x10, ucCmdState, 'z'},
 	}

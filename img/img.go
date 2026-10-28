@@ -3,6 +3,7 @@
 // D44). Chat avatars, thumbnails and media previews draw from it.
 //
 //	cache := img.NewCache(img.Options{Renderer: a.R, GPUBytes: 96 << 20})  // once, in Init
+//	k.SetImages(cache)                                                     // once, in Init: the kit (widget/base) draws images from this cache
 //
 //	if cache.Poll() {                                                      // each frame, at the start of Build
 //		c.RequestFrame()                                                   // uploads are left for the next frame

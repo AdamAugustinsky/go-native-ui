@@ -841,13 +841,13 @@ func TestWindowsShareTheRendererAndTheAtlas(t *testing.T) {
 	}
 }
 
-// The window commands reach AppKit: title, frame, document-edited mark,
-// hide and show; and Screens lists the displays without allocating.
+// The window commands reach AppKit: title, represented file and URL, frame,
+// document-edited mark, hide and show; and Screens lists the displays without allocating.
 func TestWindowCommandsAndScreens(t *testing.T) {
 	first := &mwPane{}
 	l := widgettest.StartLive(t, mwConfig("first"), first)
 	type got struct {
-		title                   string
+		title, file, url        string
 		frame                   [4]float64
 		edited, hidden, visible bool
 		screens                 int
@@ -858,6 +858,7 @@ func TestWindowCommandsAndScreens(t *testing.T) {
 	l.Do(func(a *app.App) {
 		w := a.Window()
 		w.SetTitle("renamed")
+		w.SetRepresentedFile("/tmp/gnui-represented.txt")
 		w.SetFrame(40, 80, 400, 300)
 		w.SetDocumentEdited(true)
 	})
@@ -865,6 +866,8 @@ func TestWindowCommandsAndScreens(t *testing.T) {
 	l.Do(func(a *app.App) {
 		w, nswin := a.Window(), objc.ID(a.Win.Native().NSWindow)
 		g.title = nsString(objc.Send(nswin, objc.Sel("title")))
+		g.file = nsString(objc.Send(nswin, objc.Sel("representedFilename")))
+		w.SetRepresentedURL("https://example.com/doc")
 		x, y, wd, h := w.Frame()
 		g.frame = [4]float64{x, y, wd, h}
 		g.edited = objc.SendBool(nswin, objc.Sel("isDocumentEdited"))
@@ -873,6 +876,7 @@ func TestWindowCommandsAndScreens(t *testing.T) {
 	settle()
 	l.Do(func(a *app.App) {
 		g.hidden = !objc.SendBool(objc.ID(a.Win.Native().NSWindow), objc.Sel("isVisible"))
+		g.url = nsString(objc.Send(objc.Send(objc.ID(a.Win.Native().NSWindow), objc.Sel("representedURL")), objc.Sel("absoluteString")))
 		a.Window().Show()
 	})
 	settle()
@@ -888,6 +892,12 @@ func TestWindowCommandsAndScreens(t *testing.T) {
 	})
 	if g.title != "renamed" || !g.edited || !g.hidden || !g.visible {
 		t.Errorf("title %q, edited %v, hidden after Hide %v, visible after Show %v", g.title, g.edited, g.hidden, g.visible)
+	}
+	if g.file != "/tmp/gnui-represented.txt" {
+		t.Errorf("representedFilename after SetRepresentedFile: %q", g.file)
+	}
+	if g.url != "https://example.com/doc" {
+		t.Errorf("representedURL after SetRepresentedURL: %q", g.url)
 	}
 	if g.frame != [4]float64{40, 80, 400, 300} {
 		t.Errorf("frame after SetFrame(40, 80, 400, 300): %v", g.frame)

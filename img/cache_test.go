@@ -337,3 +337,65 @@ func TestSpareBuffersCountAgainstTheCPUBudget(t *testing.T) {
 		t.Fatalf("pixels %d and spare buffers %d exceed the budget of %d", s.CPUBytes, s.SpareBytes, budget)
 	}
 }
+
+// epochGPU is a fakeGPU that counts rebuilds, as gpu.Renderer does.
+type epochGPU struct {
+	*fakeGPU
+	epoch uint32
+}
+
+func (g *epochGPU) Epoch() uint32 { return g.epoch }
+
+// TestGPULostUploadsAgain: after the renderer was rebuilt (its Epoch moved)
+// the images whose pixels are in memory go back to the GPU a few a frame; an
+// image whose pixels were dropped no longer resolves and is requested again.
+func TestGPULostUploadsAgain(t *testing.T) {
+	g := &epochGPU{fakeGPU: newFakeGPU()}
+	c, _ := newTestCache(t, Options{Renderer: g, CPUBytes: 1 << 20})
+	keys, data := thumbs(t, 3, 32, 32)
+	var hs [3]Handle
+	view := func() {
+		for i := range keys {
+			hs[i], _ = c.Request(keys[i], Bytes(data[i]))
+		}
+	}
+	settle(t, c, view)
+	for i, h := range hs {
+		if c.State(h) != Ready {
+			t.Fatalf("image %d is %v before the loss", i, c.State(h))
+		}
+	}
+	// Image 2 is a pixel-less one: only its GPU copy remains.
+	c.dropPixels(hs[2].index())
+	uploads := g.uploads
+
+	g.epoch++ // the renderer was rebuilt: every texture is blank
+	c.Poll()  // the images in view go back at once, within the frame's upload budget
+	if g.uploads == uploads {
+		t.Error("nothing went back to the GPU in the Poll that saw the new epoch")
+	}
+	if c.State(hs[2]) != Pending {
+		t.Errorf("an image with no pixels left is %v, want Pending (requested again)", c.State(hs[2]))
+	}
+	settle(t, c, view)
+	for i := range hs[:2] {
+		if c.State(hs[i]) != Ready {
+			t.Errorf("image %d is %v after the loss, want Ready", i, c.State(hs[i]))
+		}
+		if tex, _, st := c.Use(hs[i]); st != Ready || tex == 0 {
+			t.Errorf("image %d: Use gives texture %d, state %v", i, tex, st)
+		}
+	}
+	if got := g.uploads - uploads; got < 2 {
+		t.Errorf("%d uploads after the loss, want the 2 images that kept their pixels uploaded again", got)
+	}
+	if n, _ := g.live(); n == 0 {
+		t.Error("no texture live after the images were uploaded again")
+	}
+	// A cache that sees no further rebuild does not reset again.
+	frees := g.frees
+	c.Poll()
+	if g.frees != frees {
+		t.Error("a Poll without a new epoch took images off the GPU")
+	}
+}

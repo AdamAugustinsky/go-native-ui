@@ -38,8 +38,6 @@ func TestCloseDoesNotWaitForTheIconStyleRead(t *testing.T) {
 		return 7
 	}
 	t.Cleanup(func() { iconStyle = old })
-	timer := time.AfterFunc(5*time.Second, release)
-	defer timer.Stop()
 	defer release() // (before the cleanups, whatever way the test ends)
 
 	var wakes atomic.Int32
@@ -53,10 +51,15 @@ func TestCloseDoesNotWaitForTheIconStyleRead(t *testing.T) {
 	if reads.Load() == 0 {
 		t.Fatal("the style was never read")
 	}
-	t0 := time.Now()
-	pl.Close()
-	if d := time.Since(t0); d > time.Second {
-		t.Fatalf("Close took %v with the style read blocked", d)
+	// (Close may take its second to stop the icon cache's workers; what it must
+	// not do is wait for the read, which only this test ends.)
+	closed := make(chan struct{})
+	go func() { pl.Close(); close(closed) }()
+	select {
+	case <-closed:
+	case <-time.After(10 * time.Second):
+		release()
+		t.Fatal("Close did not return with the style read blocked")
 	}
 	release()
 	time.Sleep(50 * time.Millisecond)
