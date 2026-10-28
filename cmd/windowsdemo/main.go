@@ -8,8 +8,10 @@
 //	windowsdemo -n 3      start with three
 //	windowsdemo -keep     the app runs on with no window open (the Dock's icon opens one again)
 //
-// On Windows and Linux a second window is refused (app.ErrOneWindow); the
-// demo shows the error in its window.
+// On Linux a second window is refused (app.ErrOneWindow); the demo shows the
+// error in its window. On Windows -keep runs on with no window open (the
+// hidden app window), with nothing to open one again: there is no Dock icon,
+// so end it with Task Manager or a logout.
 package main
 
 import (

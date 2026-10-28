@@ -15,8 +15,10 @@ type stack[T any] struct {
 	n       int
 	next    T
 	hasNext bool
-	cur     *T    // the top's mirror in Context.cur
-	pending *bool // Context.hasNextStyle
+	cur     *T     // the top's mirror in Context.cur
+	pending *bool  // Context.hasNextStyle
+	sets    uint32 // the values set has been given, counting: the mark of the next value
+	taken   uint32 // sets when a box last took the next value (takeInto)
 }
 
 func (s *stack[T]) init(def T) { s.v[0], s.n, s.hasNext = def, 0, false }
@@ -55,12 +57,20 @@ func (s *stack[T]) peek() T {
 	return s.v[s.n]
 }
 
-func (s *stack[T]) set(x T) { s.next, s.hasNext = x, true; *s.pending = true }
+func (s *stack[T]) set(x T) { s.next, s.hasNext = x, true; s.sets++; *s.pending = true }
 
 // takeInto stores the next value in *dst, if one was set, and consumes it.
 func (s *stack[T]) takeInto(dst *T) {
 	if s.hasNext {
 		*dst, s.hasNext = s.next, false
+		s.taken = s.sets
+	}
+}
+
+// drop withdraws the next value if it is still the one set at mark.
+func (s *stack[T]) drop(mark uint32) {
+	if s.hasNext && s.sets == mark {
+		s.hasNext = false
 	}
 }
 
@@ -343,6 +353,28 @@ func (c *Context) NextHeight(s Size) { c.sH.set(s) }
 
 // NextSize sets the preferred width and height of the next box only.
 func (c *Context) NextSize(w, h Size) { c.sW.set(w); c.sH.set(h) }
+
+// SizeMark marks the preferred width and height set for the next box at one
+// moment (NextSizeMark), so that a layer that sets them on someone else's
+// behalf (the widget kit's NextWidth) can tell whether a box took them.
+type SizeMark [2]uint32
+
+// NextSizeMark is the mark of the preferred width and height set for the
+// next box now.
+func (c *Context) NextSizeMark() SizeMark { return SizeMark{c.sW.sets, c.sH.sets} }
+
+// NextSizeTaken reports, per axis, whether a box has taken the preferred
+// size that was set for the next box when m was made, as it was: false while
+// it waits for a box, and when a later NextWidth, NextHeight or NextSize
+// replaced it first.
+func (c *Context) NextSizeTaken(m SizeMark) (w, h bool) {
+	return c.sW.taken == m[0] && m[0] != 0, c.sH.taken == m[1] && m[1] != 0
+}
+
+// DropNextSize withdraws, on each axis, the preferred size set for the next
+// box when m was made, if it still waits for a box: nothing replaced it and
+// no box took it.
+func (c *Context) DropNextSize(m SizeMark) { c.sW.drop(m[0]); c.sH.drop(m[1]) }
 
 // PushWidth pushes the preferred width until PopWidth.
 func (c *Context) PushWidth(s Size) { c.sW.push(s) }

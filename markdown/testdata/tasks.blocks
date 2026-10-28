@@ -1,0 +1,9 @@
+para "Progress:"
+item depth=1 task checked "parse with goldmark"
+item depth=1 task "convert to spans"
+	"spans" style=2
+item depth=2 task "nested task"
+item depth=1 "plain item"
+para quote=1 open "Note: the quote spans two lines."
+	"Note:" style=2
+para quote=2 open "nested quote"

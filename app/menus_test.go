@@ -1,6 +1,7 @@
 package app
 
 import (
+	"slices"
 	"testing"
 
 	"gonativeui/gpu"
@@ -330,5 +331,37 @@ func TestApplicationMenuTitlesAreTheModels(t *testing.T) {
 	}
 	if s := nativeMenuSpec(nil); s.Menus[s.Bar[0]].Items[0].Title != "" {
 		t.Errorf("without a model the About item has a title: %+v", s.Menus[s.Bar[0]].Items[0])
+	}
+}
+
+// The menus the app layer adds (Edit, Window, Help, Services, Settings…)
+// are titled from menu.Strings, and the standard actions' titles go to the
+// platform with them.
+func TestNativeMenusFollowTheStrings(t *testing.T) {
+	menu.SetStrings(menu.Strings{Edit: "Editar", Window: "Janela", Help: "Ajuda", Services: "Serviços", Settings: "Ajustes…", QuitApp: "Encerrar %s"})
+	t.Cleanup(func() { menu.SetStrings(menu.StringsEnglish) })
+	m, err := menu.NewModel([]menu.Command{{ID: mcSettings, Role: menu.RoleSettings}}, []menu.Menu{{Title: "Arquivo"}}, []int{0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := nativeMenuSpec(m)
+	var titles []string
+	for _, bi := range s.Bar {
+		titles = append(titles, s.Menus[bi].Title)
+	}
+	if want := []string{"Application", "Arquivo", "Editar", "Janela", "Ajuda"}; !slices.Equal(titles, want) {
+		t.Errorf("bar %q, want %q", titles, want)
+	}
+	app := s.Menus[s.Bar[0]]
+	for _, it := range app.Items {
+		switch {
+		case it.Kind == platform.MenuItemSubmenu && s.Menus[it.Submenu].Title != "Serviços":
+			t.Errorf("Services submenu titled %q", s.Menus[it.Submenu].Title)
+		case it.ID == uint16(mcSettings) && it.Title != "Ajustes…":
+			t.Errorf("Settings titled %q", it.Title)
+		}
+	}
+	if menu.CurrentStrings().Copy != "Copy" {
+		t.Error("an empty field did not keep its English")
 	}
 }

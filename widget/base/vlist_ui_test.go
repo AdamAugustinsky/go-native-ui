@@ -40,6 +40,8 @@ type vt struct {
 	edit func()             // runs in the next Build, before BeginVList
 	// content, if set, builds the content of the items it reports it built
 	content func(id uint64) bool
+	// fixed, if set, says which items are built with ItemFixedX
+	fixed func(id uint64) bool
 }
 
 func defHeight(id uint64) float32 { return float32(20 + id%5*10) }
@@ -82,7 +84,12 @@ func (h *vt) frame() {
 	clear(h.box)
 	h.v = BeginVList(c, "list", &h.st, h.o)
 	for i := h.v.First; i < h.v.Last; i++ {
-		id := h.v.Item(i)
+		var id uint64
+		if h.fixed != nil && h.fixed(h.st.f.id(i)) {
+			id = h.v.ItemFixedX(i)
+		} else {
+			id = h.v.Item(i)
+		}
 		h.box[id] = c.Parent()
 		if h.content != nil && h.content(id) {
 			continue

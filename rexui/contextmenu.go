@@ -28,3 +28,14 @@ func OnContextMenu(k *base.Kit, id ui.ID, build func(items *[]ui.MenuItem)) (ite
 	item, out := c.ContextMenuResult(id)
 	return item, out == ui.MenuChosen
 }
+
+// ContextMenu is the one call for a context menu on a component (the phase 8
+// plan's C5): the native menu where the app has native menus (macOS), and a
+// drawn menu with the same items elsewhere, so an app writes one path. It
+// takes OnContextMenu's arguments and reports the chosen item the same way.
+//
+// Wave 0: the drawn path is C5's; until it lands ContextMenu is
+// OnContextMenu, so nothing opens where menus are drawn.
+func ContextMenu(k *base.Kit, id ui.ID, build func(items *[]ui.MenuItem)) (item int, ok bool) {
+	return OnContextMenu(k, id, build)
+}

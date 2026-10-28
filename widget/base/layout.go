@@ -15,11 +15,75 @@ func (k *Kit) Fixed(pt float32) ui.Size { return ui.Px(theme.Snap(pt * k.scale))
 // the zero ui.Size takes the component's own default.
 func (k *Kit) NextSize(w, h ui.Size) { k.NextWidth(w); k.NextHeight(h) }
 
-// NextWidth sets the width of the next component or container.
-func (k *Kit) NextWidth(w ui.Size) { k.nw, k.hasW = w, true }
+// NextWidth sets the width of the next component or container: the next box
+// the app opens through the context (ui.Context.Box) takes it as well, as
+// ui.Context.NextWidth's, and then no component does.
+func (k *Kit) NextWidth(w ui.Size) {
+	k.nw, k.hasW = w, true
+	k.pass(0, w)
+}
 
-// NextHeight sets the height of the next component or container.
-func (k *Kit) NextHeight(h ui.Size) { k.nh, k.hasH = h, true }
+// NextHeight sets the height of the next component or container, as
+// NextWidth sets its width.
+func (k *Kit) NextHeight(h ui.Size) {
+	k.nh, k.hasH = h, true
+	k.pass(1, h)
+}
+
+// pass sets size s on axis a for the next box of the context as well, so
+// that a box the app opens through it takes it (a zero size, the
+// component's default, waits for a component), and marks it, so that the
+// kit knows when a box took it (syncSize).
+func (k *Kit) pass(a int, s ui.Size) {
+	if k.c == nil {
+		return
+	}
+	if k.passed[a] && s.Kind == ui.SizeAuto { // the size it replaces is no box's either
+		var m ui.SizeMark
+		m[a] = k.sizeMark[a]
+		k.c.DropNextSize(m)
+	}
+	k.passed[a] = s.Kind != ui.SizeAuto
+	if !k.passed[a] {
+		return
+	}
+	if a == 0 {
+		k.c.NextWidth(s)
+	} else {
+		k.c.NextHeight(s)
+	}
+	k.sizeMark[a] = k.c.NextSizeMark()[a]
+}
+
+// syncSize drops the sizes NextWidth and NextHeight set that a box opened
+// through the context has taken since.
+func (k *Kit) syncSize() {
+	if !k.passed[0] && !k.passed[1] {
+		return
+	}
+	w, h := k.c.NextSizeTaken(k.sizeMark)
+	if w && k.passed[0] {
+		k.hasW, k.passed[0] = false, false
+	}
+	if h && k.passed[1] {
+		k.hasH, k.passed[1] = false, false
+	}
+}
+
+// dropSize forgets the sizes NextSize set, and withdraws from the context
+// those that no box has taken and nothing replaced.
+func (k *Kit) dropSize() {
+	if k.passed[0] || k.passed[1] {
+		var m ui.SizeMark
+		for a := range m {
+			if k.passed[a] {
+				m[a] = k.sizeMark[a]
+			}
+		}
+		k.c.DropNextSize(m)
+	}
+	k.hasW, k.hasH, k.passed = false, false, [2]bool{}
+}
 
 // NextRowHeight sets the height of the rows of the next List or Table, in
 // points, in place of the theme's. A table with compact rows (a file browser)
@@ -37,26 +101,28 @@ func (k *Kit) NextAlign(a ui.Align) { k.nextAlign, k.hasAlign = a, true }
 // what the app set with NextSize on an axis it set and a size that is not
 // auto. It consumes NextSize.
 func (k *Kit) ApplySize(defW, defH ui.Size) {
+	k.syncSize()
 	if k.hasW && k.nw.Kind != ui.SizeAuto {
 		defW = k.nw
 	}
 	if k.hasH && k.nh.Kind != ui.SizeAuto {
 		defH = k.nh
 	}
-	k.hasW, k.hasH = false, false
+	k.hasW, k.hasH, k.passed = false, false, [2]bool{}
 	k.c.NextSize(defW, defH)
 }
 
 // PendingWidth is the width NextSize or NextWidth set for the next component,
 // if one was set and has not been consumed.
-func (k *Kit) PendingWidth() (ui.Size, bool) { return k.nw, k.hasW }
+func (k *Kit) PendingWidth() (ui.Size, bool) { k.syncSize(); return k.nw, k.hasW }
 
 // PendingHeight is the height NextSize or NextHeight set for the next
 // component, if one was set and has not been consumed.
-func (k *Kit) PendingHeight() (ui.Size, bool) { return k.nh, k.hasH }
+func (k *Kit) PendingHeight() (ui.Size, bool) { k.syncSize(); return k.nh, k.hasH }
 
-// ClearSize drops what NextSize set, for a component that applied it itself.
-func (k *Kit) ClearSize() { k.hasW, k.hasH = false, false }
+// ClearSize drops what NextSize set, for a component that applied it itself
+// (or ignores it): no box takes it afterwards.
+func (k *Kit) ClearSize() { k.dropSize() }
 
 // TakeAlign is the alignment for the next text, def unless the app set one
 // with NextAlign, which it consumes.

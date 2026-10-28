@@ -1,0 +1,16 @@
+heading h2 "Plan"
+para "I'll fix the failing test in ui/richtext.go first, then check the rest."
+	"failing test" style=2
+	"ui/richtext.go" style=4
+	"check" style=1
+item depth=1 #1 "Read the test"
+item depth=1 #2 "Patch layout():"
+	"layout()" style=4
+item depth=2 "keep the cache"
+item depth=2 "drop the old path"
+	"the old path" style=8
+item depth=1 #3 "Run go test ./ui/..."
+	"go test ./ui/..." style=4
+para open "See https://github.com/yuin/goldmark and the guide."
+	"https://github.com/yuin/goldmark" style=16 link="https://github.com/yuin/goldmark"
+	"the guide" style=16 link="docs/guide/richtext.md"

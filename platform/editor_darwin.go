@@ -74,6 +74,7 @@ var (
 	selSetVResizable       = objc.Sel("setVerticallyResizable:")
 	selSetHResizable       = objc.Sel("setHorizontallyResizable:")
 	selSetRichText         = objc.Sel("setRichText:")
+	selSetEditable         = objc.Sel("setEditable:")
 	selSetImportsGraphics  = objc.Sel("setImportsGraphics:")
 	selSetAllowsUndo       = objc.Sel("setAllowsUndo:")
 	selSetFont             = objc.Sel("setFont:")
@@ -170,6 +171,7 @@ type editorNative struct {
 	lm, tc   objc.ID
 	lineH    float64 // points
 	maxLines int
+	minLines int
 	insetY   float64
 	enter    EnterPolicy
 	dirtyH   bool    // the height is to be measured again (sync)
@@ -248,10 +250,7 @@ func (w *Window) NewEditor(o EditorOptions) (*Editor, error) {
 	e := &Editor{}
 	e.w, e.slot, e.maxLen, e.enter = w, slot, o.MaxLen, o.Enter
 	e.opts = o
-	e.maxLines = o.MaxLines
-	if e.maxLines <= 0 {
-		e.maxLines = 6
-	}
+	e.maxLines, e.minLines = editorLines(o)
 	e.insetX, e.insetY = float64(o.InsetX), float64(o.InsetY)
 
 	tv := objc.Send(edTVClass, selAlloc)
@@ -272,6 +271,7 @@ func (w *Window) NewEditor(o EditorOptions) (*Editor, error) {
 	objc.Send1(tv, selSetAllowsUndo, 1)
 	objc.Send1(tv, selSetDrawsBackground, 0)
 	objc.Send1(tv, selSetContSpell, 1)
+	objc.Send1(tv, selSetEditable, uintptr(boolU(!o.ReadOnly)))
 	objc.Send1(tv, selSetVResizable, 1)
 	objc.Send1(tv, selSetHResizable, 0)
 	objc.Send1(tv, selSetAutoresizing, 2) // NSViewWidthSizable
@@ -383,10 +383,11 @@ func (e *Editor) SetOptions(o EditorOptions) {
 	was := e.opts
 	e.opts = o
 	e.maxLen, e.enter = o.MaxLen, o.Enter
-	if e.maxLines = o.MaxLines; e.maxLines <= 0 {
-		e.maxLines = 6
+	e.maxLines, e.minLines = editorLines(o)
+	relayout := o.MaxLines != was.MaxLines || o.MinLines != was.MinLines
+	if o.ReadOnly != was.ReadOnly {
+		objc.Send1(e.tv, selSetEditable, uintptr(boolU(!o.ReadOnly)))
 	}
-	relayout := o.MaxLines != was.MaxLines
 	if o.FontSize != was.FontSize {
 		objc.Release(e.font)
 		e.font = edFont(o.FontSize)
@@ -676,7 +677,7 @@ func (e *Editor) sync() {
 	if extra.H > 0 {
 		bottom = max(bottom, extra.Y+extra.H)
 	}
-	h := min(max(bottom, e.lineH), float64(e.maxLines)*e.lineH) + 2*e.insetY
+	h := min(max(bottom, float64(e.minLines)*e.lineH), float64(e.maxLines)*e.lineH) + 2*e.insetY
 	if hf := float32(h); hf != e.height {
 		e.height = hf
 		e.pend |= EditorHeightChanged
@@ -933,9 +934,22 @@ func (e *Editor) atEdge(up bool) bool {
 	return !nl && int(e.lineRng[0]+e.lineRng[1]) >= glyphs
 }
 
+// editorLines is the most and the fewest lines of options o, defaults
+// applied: MaxLines 6, MinLines 1, MinLines at most MaxLines.
+func editorLines(o EditorOptions) (maxL, minL int) {
+	maxL, minL = o.MaxLines, o.MinLines
+	if maxL <= 0 {
+		maxL = 6
+	}
+	return maxL, min(max(minL, 1), maxL)
+}
+
 // sends reports whether Enter with modifiers m submits.
 func (e *Editor) sends(m Mods) bool {
-	if e.enter == CmdEnterSends {
+	switch e.enter {
+	case EnterNewline:
+		return false
+	case CmdEnterSends:
 		return m&ModSuper != 0
 	}
 	return m&(ModShift|ModAlt|ModCtrl) == 0
@@ -968,7 +982,7 @@ func edKeyDown(c *ffi.CB) {
 	marked := objc.SendBool(self, selHasMarkedText)
 	code := uint32(objc.Send(ev, selKeyCode)) & 0xFFFF
 	m := mods(uintptr(objc.Send(ev, selModifierFlags)))
-	if (code == 0x24 || code == 0x4C) && m&ModSuper != 0 && !marked {
+	if (code == 0x24 || code == 0x4C) && m&ModSuper != 0 && !marked && (e.compl || e.enter != EnterNewline) {
 		if e.compl {
 			e.pushCommandSends(CmdAccept, true)
 			e.wake()

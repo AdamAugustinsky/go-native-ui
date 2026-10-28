@@ -95,8 +95,16 @@ func Com(obj, idx uintptr, args ...uintptr) uintptr {
 // Verified against mingw-w64 d3d11.h ID3D11DeviceChildVtbl, lines 2674-2682.
 const (
 	vtQueryInterface = 0
+	vtAddRef         = 1
 	vtRelease        = 2
 )
+
+// AddRef adds one reference. It is a no-op for a nil pointer.
+func AddRef(obj uintptr) {
+	if obj != 0 {
+		Com(obj, vtAddRef)
+	}
+}
 
 // QueryInterface asks obj for another interface. out must point to a heap
 // location that receives the interface pointer.

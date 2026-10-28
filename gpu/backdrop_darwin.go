@@ -264,6 +264,12 @@ func (r *Renderer) prepareBackdrops(target uintptr, w, h int, list *DrawList, in
 			x0, y0, x1, y1, _ := backdropRegion(q, w, h)
 			c := b.Base | 0xFF
 			pre[n] = Quad{Rect: [4]float32{float32(x0), float32(y0), float32(x1), float32(y1)}, Color: [4]uint32{c, c, c, c}}
+			if q.Radii != ([4]float32{}) {
+				// a rounded backdrop (a sheet) fills its own shape, so that
+				// nothing of the fill shows past its corners where what is
+				// over it is translucent (a window's material)
+				pre[n].Rect, pre[n].Clip, pre[n].Radii = q.Rect, q.Clip, q.Radii
+			}
 			if from, to, ok := fadeSpan(q, &b); ok {
 				fadeShape(&pre[n], from, to) // no edge where it ends and nothing is drawn
 			}

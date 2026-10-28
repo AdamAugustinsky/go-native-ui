@@ -1,10 +1,11 @@
-//go:build !darwin
+//go:build !darwin && !windows
 
 package platform
 
-// Window commands (wincmd_darwin.go) where the OS has one window per app so
-// far (D30 is built for macOS in phase 6): the window's own state stays as
-// the user and the OS set it, and the commands do nothing.
+// Window commands (wincmd_darwin.go, wincmd_windows.go) on Linux, where the
+// OS has one window per app so far (D30 and D68 are built for macOS and
+// Windows): the window's own state stays as the user and the OS set it, and
+// the commands do nothing.
 
 // SetTitle does nothing here yet.
 func (w *Window) SetTitle(title string) {}
