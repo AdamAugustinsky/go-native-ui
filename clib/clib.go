@@ -13,8 +13,8 @@ import (
 )
 
 // ErrUnsupported is returned by [Open] on systems where clib cannot load
-// libraries yet (everything but macOS on Apple silicon and Linux on arm64
-// and amd64).
+// libraries (everything but macOS on Apple silicon, Linux on arm64 and
+// amd64, and Windows on amd64 and arm64).
 // errors.Is(err, errors.ErrUnsupported) also holds.
 var ErrUnsupported = fmt.Errorf("clib: native libraries on %s/%s: %w", runtime.GOOS, runtime.GOARCH, errors.ErrUnsupported)
 

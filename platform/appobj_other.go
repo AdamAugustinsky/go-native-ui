@@ -1,11 +1,12 @@
-//go:build !darwin
+//go:build !darwin && !windows
 
 package platform
 
-// The application object outside macOS (D34): the delivery classes and the
-// quit policy work as on macOS, but the dispatcher is the main loop itself
-// (Wake, then DispatchApp after every Wait), no system delegate delivers
-// native events, and the app runs only while it has a window.
+// The application object on Linux (D34; macOS and Windows have their own
+// files): the delivery classes and the quit policy work as on macOS, but the
+// dispatcher is the main loop itself (Wake, then DispatchApp after every
+// Wait), no system delegate delivers native events, and the app runs only
+// while it has a window.
 
 // StartApp applies the options. There is no application object to create.
 func StartApp(o AppOptions) error {

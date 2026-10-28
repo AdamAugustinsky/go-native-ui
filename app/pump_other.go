@@ -1,11 +1,11 @@
-//go:build !darwin
+//go:build !darwin && !windows
 
 package app
 
 import "gonativeui/platform"
 
-// pump is the loop's wait. One window per app here (D30 is macOS-only in
-// phase 6): its Wait is the pump.
+// pump is the loop's wait. One window per app here (Linux: D30 and D68 are
+// built for macOS and Windows): its Wait is the pump.
 func (a *App) pump(timeoutNs int64) {
 	if len(a.wins) > 0 {
 		w := a.wins[0]

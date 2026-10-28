@@ -1,0 +1,74 @@
+[?1049h[24;1H[?1h=# Phase 8 plan: Windows parity, for HyperPedia and the A3 app
+
+Drafted 2026-10-27, for your approval. It answers your decision of that day: mig rate two A3 Lab desktop apps fully onto the framework with the Rex look, and "bu ild the missing Windows pieces in the framework … don't keep the old C#/Electron  builds as the Windows answer."
+
+- **a3-kb / HyperPedia** (`a3-kb/apps/mac`, Swift; `a3-kb/apps/windows`, .NET Wi nForms): a menu-bar/tray app with a global-hotkey palette, a floating recording  bar, a settings window, screen and microphone recording to MP4, tokens in the Ke ychain or Credential Manager, notifications with actions, an `a3kb:` URL scheme,  self-update from a JSON manifest, and on Windows a per-user self-install.
+- **a3-app** (`a3-app/desktop`, Electron over `ui/`, React): becomes a native ch at client for the coding agent over HTTPS and one WebSocket per window, with an  embedded browser, a terminal pane, a multi-line composer, markdown with code, no tifications, downloads, file pickers, more than one window and a local port tunn el.
+
+Each app's own plan is `docs/GNUI-MIGRATION-PLAN.md` in its repo (branch `gnui-m igration-plan`), written in parallel. This plan is the framework's part: what bo th apps need from it, on macOS and Windows.
+
+**Why phase 8.** Phases 1–6 built the framework; phase 7 is ZapFast (D33, D49–D5 [7mdocs/PHASE8-PLAN.md[27m[K[K1). The `p8-rex` branch already carries Rex-look work for apps (D62, `theme/rex`  dark fit, `ThemeWithField`, `LabelOpts.MonoPt`), which both apps use, but no pl an claims a phase 8. So this is phase 8, and its new decisions are numbered from  D63. If `p8-rex` adds entries before this plan is approved, the numbers here mo ve up.
+
+**What phase 8 does:**
+- **Ends D34 for Windows.** The services, windows and hosts phase 6 shipped for  macOS get Windows implementations: more than one window and windowless running,  tray, toasts, native file dialogs, drag and drop, hosted native views as child w indows, the multi-line composer, login items, self-update, URL schemes, single-i nstance activation, install and packaging.
+- **Adds what neither OS has yet,** on both: panel windows (the palette and the  recording bar), global hotkeys, screen and audio capture to MP4, a hosted OS bro wser view, HTTP methods with streaming bodies, a WebSocket client, a terminal em ulator widget, markdown and syntax highlighting.
+- **Makes Windows verifiable** beyond CI: a Windows VM with a desktop, the agent  bridge on Windows, and a measurement page for Windows numbers.
+
+**Linux stays where phase 6 left it** (D63): it compiles, keeps its 4 CI jobs gr een and returns `ErrUnsupported` for the new APIs.
+
+Behaviour not yet verified is marked as an assumption or tied to a named probe ( :[K[KP1–P10, under [How Windows is verified](#how-windows-is-verified)).
+
+## Scope
+
+In scope, by package (the D28/D40 layering is unchanged; new packages are import ed only by apps that use them):
+
+| Package | What changes | Status |
+|---|---|---|
+| `platform` | Windows: a window registry (D30), windowless running on a hidden  app window, window commands (title, hide, activate, frame), panel windows, child -window hosts, the RichEdit editor, `IFileDialog`, OLE drag and drop, a Rex titl ebar. macOS: panel windows | changed |
+| `app` | Windows: the multi-window pump, the app object's quit routes, `EvOpenU RLs` from a second instance | changed |
+| `app/tray`, `app/notify`, `app/login`, `app/selfupdate`, `app/dock` | Windows  implementations (`app/dock` becomes taskbar progress, overlay badge and flash on  Windows) | changed |
+| `app/hotkey` | global shortcuts, both OSes | new |
+| `app/install` | per-user install, uninstall and registration (URL schemes, AUM ID, shortcut) on Windows; reports "not needed" on macOS | new |
+| `app/fetch` | any method, request bodies with upload progress, streamed respon ses; WinHTTP on Windows instead of `net/http` | changed |
+:[K[K/[Ktt[Kee[Krr[Kmm[K[1;1H[KP1–P10, under [How Windows is verified](#how-windows-is-verified)).
+[2;1H[K
+[3;1H[K## Scope
+[4;1H[K
+[5;1H[KIn scope, by package (the D28/D40 layering is unchanged; new packages are import [6;1H[Ked only by apps that use them):
+[7;1H[K
+[8;1H[K| Package | What changes | Status |
+[9;1H[K|---|---|---|
+[10;1H[K| `platform` | Windows: a window registry (D30), windowless running on a hidden  [11;1H[Kapp window, window commands (title, hide, activate, frame), panel windows, child [12;1H[K-window hosts, the RichEdit editor, `IFileDialog`, OLE drag and drop, a Rex titl [13;1H[Kebar. macOS: panel windows | changed |
+[14;1H[K| `app` | Windows: the multi-window pump, the app object's quit routes, `EvOpenU [15;1H[KRLs` from a second instance | changed |
+[16;1H[K| `app/tray`, `app/notify`, `app/login`, `app/selfupdate`, `app/dock` | Windows  [17;1H[Kimplementations (`app/dock` becomes taskbar progress, overlay badge and flash on [18;1H[K Windows) | changed |
+[19;1H[K| `app/hotkey` | global shortcuts, both OSes | new |
+[20;1H[K| `app/install` | per-user install, uninstall and registration (URL schemes, AUM [21;1H[KID, shortcut) on Windows; reports "not needed" on macOS | new |
+[22;1H[K| `app/fetch` | any method, request bodies with upload progress, streamed respon [23;1H[Kses; WinHTTP on Windows instead of `net/http` | changed |
+[24;1H[1;1H[KP1–P10, under [How Windows is verified](#how-windows-is-verified)).
+[2;1H[K
+[3;1H[K## Scope
+[4;1H[K
+[5;1H[KIn scope, by package (the D28/D40 layering is unchanged; new packages are import [6;1H[Ked only by apps that use them):
+[7;1H[K
+[8;1H[K| Package | What changes | Status |
+[9;1H[K|---|---|---|
+[10;1H[K| `platform` | Windows: a window registry (D30), windowless running on a hidden  [11;1H[Kapp window, window commands (title, hide, activate, frame), panel windows, child [12;1H[K-window hosts, the RichEdit editor, `IFileDialog`, OLE drag and drop, a Rex titl [13;1H[Kebar. macOS: panel windows | changed |
+[14;1H[K| `app` | Windows: the multi-window pump, the app object's quit routes, `EvOpenU [15;1H[KRLs` from a second instance | changed |
+[16;1H[K| `app/tray`, `app/notify`, `app/login`, `app/selfupdate`, `app/dock` | Windows  [17;1H[Kimplementations (`app/dock` becomes taskbar progress, overlay badge and flash on [18;1H[K Windows) | changed |
+[19;1H[K| `app/hotkey` | global shortcuts, both OSes | new |
+[20;1H[K| `app/install` | per-user install, uninstall and registration (URL schemes, AUM [21;1H[KID, shortcut) on Windows; reports "not needed" on macOS | new |
+[22;1H[K| `app/fetch` | any method, request bodies with upload progress, streamed respon [23;1H[Kses; WinHTTP on Windows instead of `net/http` | changed |
+[24;1H...skipping...
+| `[7mterm[27m` | a [7mterm[27minal emulator: VT parser, screen and scrollback model, input en coding (pure Go) | new |
+| `markdown`, `highlight` | a GFM-subset parser to rich-text spans; table-driven  syntax highlighters (pure Go) | new |
+| `rexui` | `Terminal`, `Markdown`, `CodeBlock`, `WebView` (a host box with Rex  chrome) components; the composer gains the Windows editor | changed |
+| `cmd/gnui` | `package -target windows`: icon, manifest and version resources,  optional signing, a zip; the agent bridge on Windows | changed |
+| `internal/com`, `internal/win32` | COM objects implemented in Go (vtables for  callbacks), WinRT activation and `HSTRING`s | changed |
+
+## Not in this phase
+
+- **Linux parity** for any of the above (D63).
+- **UI built in HTML.** D2 still excludes it; D64 allows only hosting the OS's b rowser view as content.
+- **UI Automation** (Windows accessibility for our drawn UI). The hosted RichEdi t and WebView2 bring their own providers; the drawn UI stays unannounced to Narr ator. It is a phase of its own (the N7 bridge, ported); see Risks.
+- **A local [7mterm[27minal** (ConPTY, `forkpty`). a3-app's [7mterm[27minal is remote: bytes c ome over the agent's WebSocket. `[7mterm[27m` is the emulator only.
+- **DirectComposition.** Panels on Windows are opaque with DWM corners and shado w; hosts are child windows (D66). Transparent panels and visual-hosted WebView2  :[K[K[?1l>[?1049l

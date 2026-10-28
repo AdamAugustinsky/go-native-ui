@@ -120,8 +120,13 @@ func (w *Window) Activate() {
 }
 
 // Hide takes the window off the screen without closing it (orderOut:); Show
-// or Activate bring it back. Main thread.
-func (w *Window) Hide() { objc.Send1(w.win, selOrderOut, 0) }
+// or Activate bring it back. Its frames come from a fresh display link when
+// it shows (unlinkHidden): the first one from the layer at once, as the
+// first frame after Open does. Main thread.
+func (w *Window) Hide() {
+	objc.Send1(w.win, selOrderOut, 0)
+	w.unlinkHidden()
+}
 
 // Visible reports whether the window is on screen (ordered in, possibly
 // covered).

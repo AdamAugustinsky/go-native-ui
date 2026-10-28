@@ -1,11 +1,11 @@
-//go:build !darwin
+//go:build !darwin && !windows
 
 package platform
 
-// Window commands (wincmd_darwin.go) where the OS has one window per app so
-// far (D30 is built for macOS in phase 6): the window's own state stays as
-// the user and the OS set it, and the commands do nothing. SetTitle is
-// the exception, in platform_windows.go and platform_linux.go.
+// Window commands (wincmd_darwin.go, wincmd_windows.go) on Linux, where the
+// OS has one window per app so far (D30 and D68 are built for macOS and
+// Windows): the window's own state stays as the user and the OS set it, and
+// the commands do nothing.
 
 // Retire does nothing here: no OS waits for a quit answer inside the pump.
 func (w *Window) Retire() {}

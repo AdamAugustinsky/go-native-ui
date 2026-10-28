@@ -202,7 +202,13 @@ func (r *pbReader) loop() {
 			r.mu.Unlock()
 			r.fr.Call2(objc.MsgSend, q.pb, uintptr(selPBRelease))
 			if delivered {
-				Wake()
+				// The answer is the asking window's: only it is told (the
+				// others neither wake nor draw, D30); the pump collects it.
+				if w := q.w.Value(); w != nil {
+					w.Wake()
+				} else {
+					WakeLoop()
+				}
 			}
 		}
 	}

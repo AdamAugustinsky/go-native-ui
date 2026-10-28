@@ -122,6 +122,9 @@ func osWake() {
 // Open creates the window. Wayland is tried first, then X11. GNUI_BACKEND=
 // wayland|x11 forces one of them.
 func Open(o Options) (*Window, error) {
+	if err := checkPanel(&o); err != nil {
+		return nil, err
+	}
 	w := &theWindow
 	if w.open {
 		return nil, fmt.Errorf("platform: a second window: %w", errors.ErrUnsupported) // one window per app here so far (D30 is macOS-only in phase 6)

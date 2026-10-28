@@ -75,11 +75,14 @@ func (w *Win) Close() {
 	}
 }
 
-// Show shows the window and activates the app.
+// Show shows the window and activates the app. A panel (Config.Panel) with
+// NonActivating shows without activating the app; any other panel takes the
+// keyboard, as a palette opened from a hotkey does.
 func (w *Win) Show() { w.command(cmdShow) }
 
 // Hide takes the window off the screen without closing it (Show brings it
-// back).
+// back). A hidden panel keeps its Build state and builds nothing until it is
+// shown again.
 func (w *Win) Hide() { w.command(cmdHide) }
 
 // Focus brings the window to the front, out of the Dock if it is there, and
@@ -100,11 +103,12 @@ func (w *Win) ToggleFullscreen() { w.command(cmdFullscreen) }
 func (w *Win) Fullscreen() bool { return w.Open() && w.a.Win.FullScreen() }
 
 // Zoomed reports whether the window is zoomed (macOS: NSWindow's isZoomed,
-// the state a maximized window restores at launch). False where the OS has no
-// such state for the app to read.
+// the state a maximized window restores at launch; Windows: maximized).
+// False where the OS has no such state for the app to read.
 func (w *Win) Zoomed() bool { return w.Open() && w.a.Win.Zoomed() }
 
-// SetZoomed zooms the window or returns it to its user size (macOS: zoom:).
+// SetZoomed zooms the window or returns it to its user size (macOS: zoom:;
+// Windows: maximize and restore).
 // It zooms only when the state differs, so it can be called every frame.
 func (w *Win) SetZoomed(on bool) {
 	if !w.Open() || (w.a.cmd&cmdZoom == 0 && w.a.Win.Zoomed() == on) {
@@ -124,9 +128,10 @@ func (w *Win) SetTitle(title string) {
 	w.command(cmdTitle)
 }
 
-// Frame is the window's frame: the whole window, title bar included, in
-// points from the top-left of the primary display, y down (the space of
-// Screens). Zero where the OS does not say (Linux).
+// Frame is the window's frame: the whole window, title bar included, from
+// the top-left of the primary display, y down, in the space of Screens
+// (points on macOS; the virtual screen's pixels on Windows). Zero where the
+// OS does not say (Linux).
 func (w *Win) Frame() (x, y, width, height float64) {
 	if !w.Open() {
 		return 0, 0, 0, 0
@@ -222,7 +227,7 @@ type winState struct {
 	told    uint32 // the id whose EvWindowClosed was delivered (announceClosed)
 	winID   uint32 // its id, 0 before it opened
 
-	waited []platform.Event // the window's events from the last pump, where the pump is its Wait (pump_other.go)
+	waited []platform.Event // the window's events from the last pump, where the pump is its Wait (Linux: pump_other.go)
 
 	cmd            cmdMask    // window commands waiting for the safe point
 	frameWant      [4]float64 // SetFrame's frame
@@ -244,6 +249,12 @@ func (w *Win) command(c cmdMask) {
 	}
 	a := w.a
 	a.cmd |= c
+	if c&cmdHide != 0 && a.cfg.Panel != nil {
+		// A hidden panel builds nothing from the call: the loop's turn can
+		// draw an owed frame (the event that called Hide owes one) before the
+		// safe point takes the window off the screen.
+		a.shelve(true)
+	}
 	if a.framing > 0 || a.evDepth > 0 || a.opening > 0 {
 		platform.WakeLoop()
 		return
@@ -278,12 +289,18 @@ func (a *App) applyCommands() {
 	}
 	if c&cmdHide != 0 {
 		win.Hide()
+		if a.cfg.Panel != nil {
+			a.shelve(true)
+		}
 	}
 	if c&cmdShow != 0 {
 		win.Show()
 	}
 	if c&cmdFocus != 0 {
 		win.Activate()
+	}
+	if c&(cmdShow|cmdFocus) != 0 && a.cfg.Panel != nil {
+		a.shelve(false)
 	}
 	if c&cmdMiniaturize != 0 {
 		win.Miniaturize()
@@ -295,6 +312,25 @@ func (a *App) applyCommands() {
 		win.Zoom()
 	}
 	a.p.invalidate() // a title or a frame changes what the window shows
+}
+
+// shelve takes a panel off the loop (on) or puts it back. A shelved panel
+// keeps everything (its ui state, its last frame in the layer) and builds
+// and draws nothing: the loop does not wake for it, whatever is owed or
+// asked for (a wake, a timed frame) waits. Put back, it is visible: what is
+// owed, and a repaint, are drawn on its next frame slot.
+func (a *App) shelve(on bool) {
+	a.shelved = on
+	a.tr.in.Hidden = on
+	a.p.hide(on)
+	if !on {
+		a.p.invalidate()
+		// Draw at once, as the first frame after Open: a hidden window's
+		// display link was replaced (platform.Window.Hide), so the layer
+		// gives a drawable without a tick. Where it does not, the attempt
+		// fails and the frame waits for the next tick (pacer.failed).
+		a.p.frameReady = true
+	}
 }
 
 // Window is this App's window handle (its Win), nil for an App without a
@@ -339,8 +375,8 @@ func Screens(dst []Screen) []Screen { return platform.ScreensInto(dst[:0]) }
 // released with the last.
 
 // newSurface makes a window's surface: on the app's GPU device where the OS
-// shares one between windows (macOS), else on a device of its own (the one
-// window of Windows and Linux).
+// shares one between windows (macOS, Windows), else on a device of its own
+// (the one window of Linux).
 func (a *App) newSurface(n platform.Native, w, h int32, scale float32) (*gpu.Surface, error) {
 	s := a.appObject
 	if s.dev == nil && !s.noDev {

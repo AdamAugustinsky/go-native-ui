@@ -124,9 +124,10 @@ jobs:
   macos:
     name: macOS arm64 (Metal)
     runs-on: macos-15
-    timeout-minutes: 25
+    # phase 8's live suites (webview, panels, capture, ws) took the job to 24-25 min
+    timeout-minutes: 35
     env:
-      QUARANTINE: '^(TestGreenButtonWaitsForNativeReadiness|TestPackageWithoutAppleIdentity|TestVListEditFrameBudget|TestOtherWindows|TestDragTypesDoNotReachHosts|TestEditorNestedLoopDraws|TestEditorUndoRedo|TestEditorMarkedTextSubmission|TestMixFollowsAndDoesNotAllocate|TestStallOfAHiddenWindowSkipsAndSaysWhy|TestRunKeepsDesignatedRequirement|TestScrollEventsThroughTheQueue|TestPackagedBinaryHasNoDebugChordOrInspector)$'
+      QUARANTINE: '^(TestGreenButtonWaitsForNativeReadiness|TestPackageWithoutAppleIdentity|TestVListEditFrameBudget|TestOtherWindows|TestDragTypesDoNotReachHosts|TestEditorNestedLoopDraws|TestEditorUndoRedo|TestEditorMarkedTextSubmission|TestMixFollowsAndDoesNotAllocate|TestStallOfAHiddenWindowSkipsAndSaysWhy|TestRunKeepsDesignatedRequirement|TestScrollEventsThroughTheQueue|TestPackagedBinaryHasNoDebugChordOrInspector|TestClientClose)$'
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
@@ -156,6 +157,32 @@ jobs:
           fi
           exit "$status"
           EOF
+      - name: libghostty-vt cache (D74; artifacts are built, never committed)
+        uses: actions/cache@v4
+        with:
+          path: .cache/libghostty-vt
+          key: libghostty-vt-${{ hashFiles('internal/ghosttyvt/ghosttyvt.go', 'tools/libghostty/*.go') }}-darwin-arm64
+      - name: libghostty-vt (Zig 0.17.0 and Ghostty at the pinned commit)
+        run: |
+          if ! go run ./tools/libghostty -check -targets darwin/arm64; then
+            commit=$(go run ./tools/libghostty -print-commit)
+            curl -sSfL -o "$RUNNER_TEMP/zig.tar.xz" https://ziglang.org/download/0.17.0/zig-aarch64-macos-0.17.0.tar.xz
+            echo "b607e9b9234790a008116ae5bdb71c6243b84b9fb42a53a9e70fde41c06c536a  $RUNNER_TEMP/zig.tar.xz" | shasum -a 256 -c -
+            tar -xf "$RUNNER_TEMP/zig.tar.xz" -C "$RUNNER_TEMP"
+            git init -q "$RUNNER_TEMP/ghostty"
+            git -C "$RUNNER_TEMP/ghostty" fetch -q --depth 1 https://github.com/ghostty-org/ghostty "$commit"
+            git -C "$RUNNER_TEMP/ghostty" checkout -q FETCH_HEAD
+            # Zig fetches Ghostty's dependencies from deps.files.ghostty.org, which has
+            # failed mid-download on the runner (ReadFailed); what it fetched stays in
+            # Zig's cache, so another try picks up from there.
+            for try in 1 2 3; do
+              go run ./tools/libghostty -src "$RUNNER_TEMP/ghostty" -zig "$RUNNER_TEMP/zig-aarch64-macos-0.17.0/zig" -targets darwin/arm64 && break
+              [ "$try" = 3 ] && exit 1
+              echo "::warning::libghostty build failed (try $try of 3), trying again"
+              sleep 20
+            done
+          fi
+          echo "GNUI_REQUIRE_LIBGHOSTTY=1" >> "$GITHUB_ENV"
       - name: test (arm64)
         run: |
           GNUI_FS_REPORT=$RUNNER_TEMP/fs-report.txt go test -count=1 -skip "$QUARANTINE" $(go list $PKGS | grep -v -E "$PKGS_EXCLUDE")
@@ -322,7 +349,7 @@ jobs:
   windows:
     name: Windows ${{ matrix.arch }} (D3D11, WARP on runners)
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 35
+    timeout-minutes: 45 # W1 added two two-window benches
     strategy:
       fail-fast: false
       matrix:
@@ -357,6 +384,23 @@ jobs:
           fi
           exit "$status"
           EOF
+      # windows-11-arm starts with shell surfaces over the desktop (a
+      # full-screen "Microsoft account" prompt, then Start and Search) that
+      # cover our windows and take the foreground (docs/PHASE8-PLAN.md, W4's
+      # probe note P7). The tests and benches open several windows, activate
+      # them and run a menu loop (W1), so they clear them first, as
+      # probes.yml does; a no-op on amd64.
+      - name: clear the shell surfaces over the desktop
+        shell: pwsh
+        run: |
+          foreach ($n in 'WWAHost', 'SearchHost', 'StartMenuExperienceHost') {
+            $p = Get-Process $n -ErrorAction SilentlyContinue
+            if ($p) { $p | ForEach-Object { "stopping $n $($_.Id) '$($_.MainWindowTitle)'"; Stop-Process -Id $_.Id -Force } } else { "no $n running" }
+          }
+          Start-Sleep -Seconds 3
+          (New-Object -ComObject WScript.Shell).SendKeys('{ESC}')
+          Start-Sleep -Seconds 1
+          foreach ($n in 'WWAHost', 'SearchHost', 'StartMenuExperienceHost') { "$n after: $(@(Get-Process $n -ErrorAction SilentlyContinue).Count)" }
       - name: test
         run: |
           GNUI_FS_REPORT=$RUNNER_TEMP/fs-report.txt go test -count=1 -skip "$QUARANTINE" $(go list $PKGS | grep -v -E "$PKGS_EXCLUDE")
@@ -386,11 +430,19 @@ jobs:
           ./bin/gallery.exe -o gallery-windows-${{ matrix.arch }}.png -o-dark gallery-windows-${{ matrix.arch }}-dark.png
           ./bin/gallery.exe -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 420s | tee gallery-windows-${{ matrix.arch }}.json
           { echo '```json'; cat gallery-windows-${{ matrix.arch }}.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: gallery with two windows (W1, D68; the idle one draws nothing while the bench measures)
+        run: |
+          ./bin/gallery.exe -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 420s -windows 2 | tee gallery-2w-windows-${{ matrix.arch }}.json
+          { echo '```json'; cat gallery-2w-windows-${{ matrix.arch }}.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - name: notes example (windowed bench with the allocation gate)
         run: |
           go build -trimpath -ldflags="-s -w" -o bin/notes.exe ./examples/notes
           ./bin/notes.exe -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 420s | tee notes-windows-${{ matrix.arch }}.json
           { echo '```json'; cat notes-windows-${{ matrix.arch }}.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: notes with two windows (W1, D68)
+        run: |
+          ./bin/notes.exe -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 420s -windows 2 | tee notes-2w-windows-${{ matrix.arch }}.json
+          { echo '```json'; cat notes-2w-windows-${{ matrix.arch }}.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -406,7 +458,9 @@ jobs:
             gallery-windows-${{ matrix.arch }}.json
             gallery-windows-${{ matrix.arch }}.png
             gallery-windows-${{ matrix.arch }}-dark.png
+            gallery-2w-windows-${{ matrix.arch }}.json
             notes-windows-${{ matrix.arch }}.json
+            notes-2w-windows-${{ matrix.arch }}.json
           if-no-files-found: ignore
 
   linux:

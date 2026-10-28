@@ -1,4 +1,4 @@
-//go:build !darwin
+//go:build !darwin && !windows
 
 package gpu
 
@@ -10,9 +10,9 @@ import (
 	"gonativeui/platform"
 )
 
-// Device is the GPU device an app's windows share. Only macOS has more than
-// one window so far (D30, phase 6): elsewhere each window's surface makes its
-// own device (NewSurface), and NewDevice reports ErrUnsupported.
+// Device is the GPU device an app's windows share. Only macOS and Windows
+// have more than one window so far (D30, D68): on Linux the window's surface
+// makes its own device (NewSurface), and NewDevice reports ErrUnsupported.
 type Device struct{}
 
 var errNoSharedDevice = fmt.Errorf("gpu: a device shared by windows on %s: %w", runtime.GOOS, errors.ErrUnsupported)

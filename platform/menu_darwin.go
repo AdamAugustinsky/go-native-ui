@@ -4,6 +4,7 @@ package platform
 
 import (
 	"runtime"
+	"strings"
 	"unicode/utf8"
 	"unsafe"
 
@@ -749,9 +750,13 @@ func newNSStringBytes(b []byte) objc.ID {
 	return str
 }
 
-// standardTitle is the title of a standard action whose item has none.
+// standardTitle is the title of a standard action whose item has none: the
+// one SetMenuTitles set, else macOS's English one.
 func standardTitle(a MenuAction) string {
 	name := nativeMenus.appName
+	if int(a) < len(menuTitles) && menuTitles[a] != "" {
+		return strings.Replace(menuTitles[a], "%s", name, 1)
+	}
 	switch a {
 	case MenuAbout:
 		return "About " + name

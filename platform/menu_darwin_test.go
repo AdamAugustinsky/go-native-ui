@@ -1059,3 +1059,19 @@ func TestApplicationMenuItemTitles(t *testing.T) {
 		t.Errorf("application menu titles %q, want %q", r.titles, want)
 	}
 }
+
+// A standard item without a title takes SetMenuTitles's, with the
+// application's name for %s; an action given no title keeps the English one.
+func TestStandardTitlesFollowSetMenuTitles(t *testing.T) {
+	name := nativeMenus.appName
+	nativeMenus.appName = "Notas"
+	var tt MenuTitles
+	tt[MenuQuit], tt[MenuCopy] = "Encerrar %s", "Copiar"
+	SetMenuTitles(tt)
+	t.Cleanup(func() { SetMenuTitles(MenuTitles{}); nativeMenus.appName = name })
+	for a, want := range map[MenuAction]string{MenuQuit: "Encerrar Notas", MenuCopy: "Copiar", MenuPaste: "Paste", MenuAbout: "About Notas"} {
+		if got := standardTitle(a); got != want {
+			t.Errorf("action %d: %q, want %q", a, got, want)
+		}
+	}
+}
