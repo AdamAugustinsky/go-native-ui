@@ -153,7 +153,9 @@ func TestViewMatrix(t *testing.T) {
 	})
 	progress := h.count(v, webview.DownloadProgress)
 	_, started := h.saw(v, webview.DownloadStarted)
-	t.Logf("download: %d progress events, %+v", progress, dl)
+	var calls int
+	h.Do(func(*app.App) { calls = webview.ProgressCalls() })
+	t.Logf("download: %d progress events (%d callbacks), %+v", progress, calls, dl)
 	if !started || progress < 1 || dl.State != webview.DownloadDone || dl.Received != bigSize || dl.Total != bigSize || filepath.Base(dl.Path) != "big.bin" {
 		t.Errorf("download: started %v, %d progress events, %+v", started, progress, dl)
 	}

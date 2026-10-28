@@ -139,6 +139,8 @@ const (
 	procFailedGetKind     = 3 // ICoreWebView2ProcessFailedEventArgs
 	dlAddBytesReceived    = 3 // ICoreWebView2DownloadOperation
 	dlRemoveBytesReceived = 4
+	dlAddEndTime          = 5
+	dlRemoveEndTime       = 6
 	dlAddStateChanged     = 7
 	dlRemoveStateChanged  = 8
 	dlGetURI              = 9
@@ -201,6 +203,7 @@ var (
 	iidHandlerDOM      = win32.GUID{Data1: 0x4bac7e9c, Data2: 0x199e, Data3: 0x49ed, Data4: [8]byte{0x87, 0xed, 0x24, 0x93, 0x03, 0xac, 0xf0, 0x19}}
 	iidHandlerDLStart  = win32.GUID{Data1: 0xefedc989, Data2: 0xc396, Data3: 0x41ca, Data4: [8]byte{0x83, 0xf7, 0x07, 0xf8, 0x45, 0xa5, 0x57, 0x24}}
 	iidHandlerBytes    = win32.GUID{Data1: 0x828e8ab6, Data2: 0xd94c, Data3: 0x4264, Data4: [8]byte{0x9c, 0xef, 0x52, 0x17, 0x17, 0x0d, 0x62, 0x51}}
+	iidHandlerEndTime  = win32.GUID{Data1: 0x28f0d425, Data2: 0x93fe, Data3: 0x4e63, Data4: [8]byte{0x9f, 0x8d, 0x2a, 0xee, 0xc6, 0xd3, 0xba, 0x1e}}
 	iidHandlerDLState  = win32.GUID{Data1: 0x81336594, Data2: 0x7ede, Data3: 0x4ba9, Data4: [8]byte{0xbf, 0x71, 0xac, 0xf0, 0xa9, 0x5b, 0x58, 0xdd}}
 	iidHandlerDevTools = win32.GUID{Data1: 0x5c4889f0, Data2: 0x5ef6, Data3: 0x4c5a, Data4: [8]byte{0x95, 0x2c, 0xd8, 0xf1, 0xb9, 0x2d, 0x05, 0x74}} // ICoreWebView2CallDevToolsProtocolMethodCompletedHandler (tests)
 	iidHandlerSuspend  = win32.GUID{Data1: 0x00f206a7, Data2: 0x9d17, Data3: 0x4605, Data4: [8]byte{0x91, 0xf6, 0x4e, 0x8e, 0x4d, 0xe1, 0x92, 0xe3}}
@@ -280,6 +283,8 @@ var rt struct {
 	nextDL  uint32
 	private uint32 // non-persistent views' profiles made
 	lastDL  int64  // the time of the last DownloadProgress posted, ns
+	// bytesCalls counts the download progress callbacks (tests)
+	bytesCalls int
 
 	// loadTime is how long the first New took to find and load the runtime.
 	loadTime time.Duration
@@ -329,6 +334,7 @@ type download struct {
 	Download
 	op       uintptr // ICoreWebView2DownloadOperation (+1)
 	tokBytes int64
+	tokEnd   int64
 	tokState int64
 	ended    bool
 }
@@ -509,7 +515,7 @@ func load(o *Options) error {
 	rt.handlers = com.NewKind("webview2-handlers", 1024, []win32.GUID{
 		iidHandlerEnv, iidHandlerCtrl, iidHandlerNavStart, iidHandlerContent, iidHandlerSource, iidHandlerHistory,
 		iidHandlerNavDone, iidHandlerPerm, iidHandlerProc, iidHandlerNewWin, iidHandlerTitle, iidHandlerDOM,
-		iidHandlerDLStart, iidHandlerBytes, iidHandlerDLState, iidHandlerSuspend, iidHandlerDevTools,
+		iidHandlerDLStart, iidHandlerBytes, iidHandlerDLState, iidHandlerSuspend, iidHandlerDevTools, iidHandlerEndTime,
 	}, []com.Method{{N: 2, Fn: invoke}})
 	rt.options = newOptionsKind()
 	rt.class = wide("GNUIWebView2Host")
@@ -1164,6 +1170,10 @@ func (v *view) downloadStarting(args uintptr) {
 		comh(op, dlAddBytesReceived, h.Ptr(), uintptr(unsafe.Pointer(&d.tokBytes)))
 		h.Release()
 	}
+	if h, err := handler(d.ID, hBytes); err == nil { // the estimate moves with the bytes too
+		comh(op, dlAddEndTime, h.Ptr(), uintptr(unsafe.Pointer(&d.tokEnd)))
+		h.Release()
+	}
 	if h, err := handler(d.ID, hDLState); err == nil {
 		comh(op, dlAddStateChanged, h.Ptr(), uintptr(unsafe.Pointer(&d.tokState)))
 		h.Release()
@@ -1211,6 +1221,7 @@ func (v *view) downloadEvent(d *download, ev uint8) {
 	}
 	switch ev {
 	case hBytes:
+		rt.bytesCalls++
 		now := time.Now().UnixNano()
 		if now-rt.lastDL >= int64(50*time.Millisecond) {
 			rt.lastDL = now
@@ -1249,6 +1260,7 @@ func (v *view) endDownload(d *download, s DownloadState) {
 	}
 	d.State = s
 	com.Call(d.op, dlRemoveBytesReceived, uintptr(d.tokBytes))
+	com.Call(d.op, dlRemoveEndTime, uintptr(d.tokEnd))
 	com.Call(d.op, dlRemoveStateChanged, uintptr(d.tokState))
 	v.post(DownloadEnded, 0, d.ID)
 }

@@ -73,3 +73,6 @@ func CrashPage(v *View) {
 	comh(b.wv, 36, uintptr(unsafe.Pointer(wide("Page.crash"))), uintptr(unsafe.Pointer(wide("{}"))), h.Ptr())
 	h.Release()
 }
+
+// ProgressCalls counts the downloads' progress callbacks so far.
+func ProgressCalls() int { return rt.bytesCalls }

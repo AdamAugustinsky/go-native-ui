@@ -72,13 +72,20 @@
 //     macOS: they stay denied whatever Allow says. A profile's cookies reach
 //     the disk a moment (about 2 s) after they change.
 //   - Windows: WebView2 (the Evergreen runtime, a Windows component) as a
-//     child window in a host container (D66), loaded without
-//     WebView2Loader.dll (D65); InPrivate for a non-persistent session (H2).
-//     A missing runtime is ErrUnavailable, with RuntimeURL for the app to
-//     offer.
+//     child window the window hosts (D66), loaded without WebView2Loader.dll
+//     (D65), in one environment per process whose data is in
+//     Options.DataDir (H2). A non-persistent session is InPrivate in a
+//     profile of its own, deleted with the view; a named profile is a
+//     WebView2 profile of that name. The engine and each view start
+//     asynchronously: New returns at once, and a URL given to Navigate
+//     before the view is ready loads when it is. WebView2 reports no load
+//     progress: Progress steps through 0.1, 0.4 and 0.7 to 1 (start, content,
+//     DOMContentLoaded, done). Downloads report their bytes about every
+//     500 ms (Chromium's cadence). Location, notifications and clipboard
+//     reads reach the policy too. A missing runtime is ErrUnavailable, with
+//     RuntimeURL for the app to offer. A hidden view is suspended
+//     (TrySuspend) and resumed when shown.
 //   - Linux: ErrUnsupported (WebKitGTK would bring GTK, D2).
-//   - Until H2 lands, New returns ErrUnsupported on Windows too (errors.Is
-//     errors.ErrUnsupported).
 package webview
 
 import (
