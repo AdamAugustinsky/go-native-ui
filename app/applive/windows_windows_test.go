@@ -382,9 +382,14 @@ func TestOpenCloseCyclesLeakNothing(t *testing.T) {
 	for _, k := range []string{"gdi", "user", "textures", "surfaces"} {
 		before, after := pair(k)
 		// GDI and USER counts are the process's: the system's own objects in
-		// it may go meanwhile (USER fell by 2 on windows-2025, run
-		// 40723882357). A leak grows them.
-		if leak := after > before || (after < before && (k == "textures" || k == "surfaces")); leak || r.get(k) == "" {
+		// it come and go by one or two (USER 16 → 14 on windows-2025 in run
+		// 40723882357, 14 → 15 on windows-11-arm in 40731913400). A leak of
+		// the cycles grows them by 19 or more.
+		slack := 0
+		if k == "gdi" || k == "user" {
+			slack = 2
+		}
+		if leak := after > before+slack || after < before-slack; leak || r.get(k) == "" {
 			t.Errorf("%s: %d before 19 more cycles, %d after\n%s", k, before, after, r.out)
 		} else if after != before {
 			t.Logf("%s: %d before 19 more cycles, %d after", k, before, after)
