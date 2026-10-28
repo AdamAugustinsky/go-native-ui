@@ -21,6 +21,12 @@ const (
 	PopupContext
 	// PopupSelect is the options of a drop-down.
 	PopupSelect
+	// PopupItems is a context menu made of items the app built for the
+	// click (Kit.MenuItems), drawn where the app has no native menus
+	// (rexui.ContextMenu). Owner is the key of the box that was clicked. A
+	// frame that does not build it (KeepPopup) closes it at the next Begin,
+	// so a menu whose row went away does not stay open unseen.
+	PopupItems
 )
 
 // Popup is the one popup chain a window has open: a menu or a drop-down, and
@@ -58,6 +64,10 @@ func (p *Popup) Reset() {
 		p.Hi[i] = -1
 	}
 }
+
+// KeepPopup tells the kit that this frame built the open PopupItems menu;
+// without it the menu closes at the next Begin.
+func (k *Kit) KeepPopup() { k.popKept = true }
 
 // IsOpen reports whether a popup is open.
 func (p *Popup) IsOpen() bool { return p.Kind != PopupNone }

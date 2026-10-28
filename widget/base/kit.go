@@ -80,9 +80,10 @@ type Kit struct {
 	mouse     [2]float32 // pointer position at the previous Begin
 	mouseMove bool       // the pointer moved since then
 
-	lay layoutState
-	pop Popup
-	tip tipState
+	lay     layoutState
+	pop     Popup
+	popKept bool // the open PopupItems menu was built this frame (KeepPopup)
+	tip     tipState
 
 	// ReduceMotion makes animations that loop (an indeterminate progress bar)
 	// stand still and stop asking for frames, as the system setting for
@@ -173,6 +174,10 @@ func (k *Kit) MenuScratch() *[]ui.MenuItem {
 	return &k.ctx
 }
 
+// MenuItems are the items last put in MenuScratch: those of the open drawn
+// context menu (PopupItems), which shows them until it closes.
+func (k *Kit) MenuItems() []ui.MenuItem { return k.ctx }
+
 // Focus gives the keyboard focus to the box with the key, in the next frame
 // that builds it: the key of a text field (FieldSignal.Key, FieldKey), of a
 // list or table (TableKey), or of any focusable box. It is ui.Context.SetFocus
@@ -258,6 +263,10 @@ func (k *Kit) Begin(c *ui.Context) {
 		in.PushCommand(uint16(k.pend[i]))
 	}
 	k.npend = 0
+	if k.pop.Kind == PopupItems && !k.popKept {
+		k.pop.Reset()
+	}
+	k.popKept = false
 	if k.menu != nil {
 		k.menu.Match(c)
 	}
