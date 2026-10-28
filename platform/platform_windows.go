@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"unsafe"
@@ -167,6 +168,7 @@ var (
 	pUnregisterClassW   = win32.Proc(user32, "UnregisterClassW")
 	pCreateWindowExW    = win32.Proc(user32, "CreateWindowExW")
 	pDestroyWindow      = win32.Proc(user32, "DestroyWindow")
+	pSetWindowTextW     = win32.Proc(user32, "SetWindowTextW")
 	pShowWindow         = win32.Proc(user32, "ShowWindow")
 	pDefWindowProcW     = win32.Proc(user32, "DefWindowProcW")
 	pPeekMessageW       = win32.Proc(user32, "PeekMessageW")
@@ -545,6 +547,24 @@ func (w *Window) Close() {
 	win32.Call(pDestroyWindow, hwnd)
 	win32.Call(pUnregisterClassW, uintptr(unsafe.Pointer(classNameUTF16)), w.hinst)
 	theWindow = nil
+}
+
+// SetTitle sets the window's title (the title bar, the taskbar button, Alt+Tab).
+// Text from the first NUL on is dropped, as the OS reads a C string. Main
+// thread.
+func (w *Window) SetTitle(title string) {
+	if w.hwnd == 0 || pSetWindowTextW == 0 {
+		return
+	}
+	if i := strings.IndexByte(title, 0); i >= 0 {
+		title = title[:i]
+	}
+	p, err := syscall.UTF16PtrFromString(title)
+	if err != nil {
+		return
+	}
+	win32.Call(pSetWindowTextW, w.hwnd, uintptr(unsafe.Pointer(p)))
+	runtime.KeepAlive(p)
 }
 
 // osWake posts a message to the window thread; safe from any thread.

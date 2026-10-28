@@ -4,10 +4,14 @@ package platform
 
 // Window commands (wincmd_darwin.go) where the OS has one window per app so
 // far (D30 is built for macOS in phase 6): the window's own state stays as
-// the user and the OS set it, and the commands do nothing.
+// the user and the OS set it, and the commands do nothing. SetTitle is
+// the exception, in platform_windows.go and platform_linux.go.
 
-// SetTitle does nothing here yet.
-func (w *Window) SetTitle(title string) {}
+// SetRepresentedFile does nothing here: only macOS has a proxy icon.
+func (w *Window) SetRepresentedFile(path string) {}
+
+// SetRepresentedURL does nothing here: only macOS has a proxy icon.
+func (w *Window) SetRepresentedURL(url string) {}
 
 // FrameRect reports no frame here yet (all zero).
 func (w *Window) FrameRect() (x, y, width, height float64) { return 0, 0, 0, 0 }

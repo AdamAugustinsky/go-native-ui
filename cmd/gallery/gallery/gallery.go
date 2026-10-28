@@ -359,6 +359,11 @@ func (g *Gallery) Build(c *ui.Context) {
 	sc = g.scene() // the sidebar may have changed it
 	if sc != g.shown {
 		g.shown = sc
+		if g.a != nil { // the window's title is the toolbar's: Mission Control, the Window menu, a taskbar
+			if w := g.a.Window(); w != nil {
+				w.SetTitle(defs[sc].title)
+			}
+		}
 		if g.opt.Scrolled { // a script that walks to the scene gets it scrolled too
 			g.scrolled = 4
 		}

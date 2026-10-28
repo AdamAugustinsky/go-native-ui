@@ -14,6 +14,8 @@ var (
 	selSetFrameDisplay   = objc.Sel("setFrame:display:")
 	selToggleFullScreen  = objc.Sel("toggleFullScreen:")
 	selSetDocumentEdited = objc.Sel("setDocumentEdited:")
+	selSetRepFilename    = objc.Sel("setRepresentedFilename:")
+	selSetRepURL         = objc.Sel("setRepresentedURL:")
 	selRequestAttention  = objc.Sel("requestUserAttention:")
 	selCancelAttention   = objc.Sel("cancelUserAttentionRequest:")
 	selDeminiaturize     = objc.Sel("deminiaturize:")
@@ -37,6 +39,28 @@ func primaryTop() float64 {
 func (w *Window) SetTitle(title string) {
 	pool := objc.F.Call0(objc.PoolPush)
 	objc.Send1(w.win, selSetTitle, uintptr(objc.Str(title)))
+	objc.F.Call1(objc.PoolPop, pool)
+}
+
+// SetRepresentedFile makes the window stand for a file: its title bar shows
+// the file's icon (the proxy icon), which can be dragged out and ⌘-clicked
+// for the path menu. "" clears it. Main thread.
+func (w *Window) SetRepresentedFile(path string) {
+	pool := objc.F.Call0(objc.PoolPush)
+	objc.Send1(w.win, selSetRepFilename, uintptr(objc.Str(path)))
+	objc.F.Call1(objc.PoolPop, pool)
+}
+
+// SetRepresentedURL makes the window stand for a URL (a file: URL as a file
+// does, any other as the web page's proxy icon). "" clears it, and so does a
+// string that is not a URL. Main thread.
+func (w *Window) SetRepresentedURL(url string) {
+	pool := objc.F.Call0(objc.PoolPush)
+	var u objc.ID
+	if url != "" {
+		u = objc.Send1(objc.Cls("NSURL"), selURLWithString, uintptr(objc.Str(url)))
+	}
+	objc.Send1(w.win, selSetRepURL, uintptr(u))
 	objc.F.Call1(objc.PoolPop, pool)
 }
 

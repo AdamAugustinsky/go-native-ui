@@ -117,7 +117,9 @@ and the glyph atlas are shared. `Win` has the window commands, each of which
 is kept as state and applied at the next safe point, so that asking every
 frame costs nothing: `SetTitle`, `SetFrame`, `Show`, `Hide`, `Focus`,
 `Miniaturize`, `ToggleFullscreen`, `SetZoomed`, `SetDocumentEdited`,
-`RequestAttention` and `Close`.
+`SetRepresentedFile`, `SetRepresentedURL`, `RequestAttention` and `Close`.
+`SetTitle` changes the native title on every OS (macOS, Windows, and X11 and
+Wayland on Linux); the represented file or URL is macOS's proxy icon.
 
 ```go cmd/windowsdemo/main.go
 	if k.Button("Rename").Clicked {

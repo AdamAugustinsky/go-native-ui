@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"sync/atomic"
 	"syscall"
+	"unicode/utf8"
 	"unsafe"
 
 	"github.com/ebitengine/purego"
@@ -354,6 +356,40 @@ func cstrIs(a uintptr, s string) bool {
 
 // cstr returns a NUL-terminated copy of s (setup paths only).
 func cstr(s string) []byte { return append([]byte(s), 0) }
+
+// maxTitle bounds the title sent to the server, in bytes: a Wayland message
+// holds 4096 in all, and no title bar shows more.
+const maxTitle = 1024
+
+// titleC returns s as a C string in dst's storage (grown when short): cut at
+// the first NUL, which a C string ends at, and at maxTitle bytes, not inside
+// a rune.
+func titleC(dst []byte, s string) []byte {
+	if i := strings.IndexByte(s, 0); i >= 0 {
+		s = s[:i]
+	}
+	if len(s) > maxTitle {
+		n := maxTitle
+		for n > 0 && !utf8.RuneStart(s[n]) {
+			n--
+		}
+		s = s[:n]
+	}
+	return append(append(dst[:0], s...), 0)
+}
+
+// SetTitle sets the window's title (the title bar, the task switcher, the
+// panel's window list). Main thread.
+func (w *Window) SetTitle(title string) {
+	if !w.open {
+		return
+	}
+	if w.wl {
+		w.setTitleWayland(title)
+	} else {
+		w.setTitleX11(title)
+	}
+}
 
 func dlopen(names ...string) (uintptr, error) {
 	var last error
