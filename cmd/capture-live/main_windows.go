@@ -96,7 +96,9 @@ func now() measure {
 	var c, e, k, u syscall.Filetime
 	h, _ := syscall.GetCurrentProcess()
 	getProcessTimes.Call(uintptr(h), uintptr(unsafe.Pointer(&c)), uintptr(unsafe.Pointer(&e)), uintptr(unsafe.Pointer(&k)), uintptr(unsafe.Pointer(&u)))
-	ft := func(f syscall.Filetime) time.Duration { return time.Duration(int64(f.HighDateTime)<<32|int64(f.LowDateTime)) * 100 }
+	ft := func(f syscall.Filetime) time.Duration {
+		return time.Duration(int64(f.HighDateTime)<<32|int64(f.LowDateTime)) * 100
+	}
 	var ms runtime.MemStats
 	runtime.ReadMemStats(&ms)
 	return measure{at: time.Now(), cpu: ft(k) + ft(u), mallocs: ms.Mallocs}
