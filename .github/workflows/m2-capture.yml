@@ -31,3 +31,10 @@ jobs:
           go-version-file: go.mod
       - name: test
         run: go test -count=1 -v -timeout 10m ./media/capture
+      - name: capture-live in the app's loop
+        if: always()
+        run: |
+          go build -o cl.exe ./cmd/capture-live
+          ./cl.exe || true
+          ./cl.exe -pause || true
+          ./cl.exe -display || true
