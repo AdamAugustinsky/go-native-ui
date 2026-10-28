@@ -914,3 +914,46 @@ func TestLookupCloseRace(t *testing.T) {
 		t.Fatalf("lookup after Close = %v, want the closed error", err)
 	}
 }
+
+// TestStructs passes structs by value of each class the ABIs distinguish: a
+// 24-byte one (on the stack on amd64 Linux, by reference elsewhere), a
+// 16-byte and an 8-byte one in registers, then one that spills to the stack
+// with the arguments after it, and a pair of floats.
+func TestStructs(t *testing.T) {
+	type s24 struct {
+		Tag  int32
+		A, B int64
+	}
+	type s16 struct {
+		A int64
+		B int32
+	}
+	type s8 struct {
+		X uint16
+		Y uint32
+	}
+	out := new([8]int64)
+	big := &s24{Tag: -7, A: 1 << 40, B: -3}
+	mid := &s16{A: -(1 << 50), B: 77}
+	small := &s8{X: 65000, Y: 4000000000}
+	NewCall().Ptr(unsafe.Pointer(out)).Struct(unsafe.Pointer(big), unsafe.Sizeof(*big)).
+		Struct(unsafe.Pointer(mid), unsafe.Sizeof(*mid)).Struct(unsafe.Pointer(small), unsafe.Sizeof(*small)).
+		Int(123456789).Do(fn(t, "fx_structs"))
+	if want := [8]int64{-7, 1 << 40, -3, -(1 << 50), 77, 65000, 4000000000, 123456789}; *out != want {
+		t.Fatalf("fx_structs received %v, want %v", *out, want)
+	}
+
+	spill := new([4]int64)
+	c := NewCall().Ptr(unsafe.Pointer(spill))
+	for i := int64(1); i <= 6; i++ {
+		c.Int(i)
+	}
+	c.Struct(unsafe.Pointer(mid), unsafe.Sizeof(*mid)).Int(-99).Do(fn(t, "fx_struct_spill"))
+	if want := [4]int64{21, -(1 << 50), 77, -99}; *spill != want {
+		t.Fatalf("fx_struct_spill received %v, want %v", *spill, want)
+	}
+
+	if got := NewCall().Float32x2(5.5, 1.25).Int(2).Float64(0.5).Do(fn(t, "fx_f2")).Float32(); got != 9 {
+		t.Fatalf("fx_f2 = %v, want 9", got)
+	}
+}

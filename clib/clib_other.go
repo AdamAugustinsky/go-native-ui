@@ -1,4 +1,4 @@
-//go:build !((darwin && arm64) || (linux && (arm64 || amd64)))
+//go:build !((darwin && arm64) || (linux && (arm64 || amd64)) || (windows && (amd64 || arm64)))
 
 package clib
 
@@ -20,6 +20,9 @@ func (*frame) Arg32(uint32)          {}
 func (*frame) ArgNarrow(uint32, int) {}
 func (*frame) ArgF32(float32)        {}
 func (*frame) ArgF64(float64)        {}
+func (*frame) ArgStack(uintptr)      {}
+func (*frame) FillIntRegs()          {}
+func (*frame) FillFloatRegs()        {}
 func (*frame) Call(uintptr)          { panic(ErrUnsupported) }
 func (*frame) R0() uintptr           { return 0 }
 func (*frame) F64(int) float64       { return 0 }

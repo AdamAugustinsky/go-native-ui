@@ -1,0 +1,158 @@
+=== checkpoint 1 at byte 981 of 7855 ===
+  1 // Package term is a terminal emulator without a terminal: a VT parser, a
+  2 // screen and scrollback model, and an input encoder, in pure Go (the phase
+  3 // 8 plan's C1 and D74). a3-app's terminal pane is remote: the bytes of a
+  4 // pseudo-terminal on the agent's machine arrive over a WebSocket and go
+  5 // into Write; the keys the user types come out of EncodeKey and go back.
+  6 // rexui.Terminal draws a Terminal.
+  7 //
+  8 //      t := term.New(term.Options{Cols: 120, Rows: 40})
+  9 //      t.Write(chunk) // any chunki
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+"term/term.go" 340L, 11158B
+=== checkpoint 2 at byte 1963 of 7855 ===
+  1 // Package term is a terminal emulator without a terminal: a VT parser, a
+  2 // screen and scrollback model, and an input encoder, in pure Go (the phase
+  3 // 8 plan's C1 and D74). a3-app's terminal pane is remote: the bytes of a
+  4 // pseudo-terminal on the agent's machine arrive over a WebSocket and go
+  5 // into Write; the keys the user types come out of EncodeKey and go back.
+  6 // rexui.Terminal draws a Terminal.
+  7 //
+  8 //      t := term.New(term.Options{Cols: 120, Rows: 40})
+  9 //      t.Write(chunk) // any chunking: a sequence split across writes is ke    pt
+ 10 //
+ 11 //      // draw: rows from the top of the scrollback (-t.Scrollback()) to th    e
+ 12 //      // bottom of the screen (rows-1), each a []Cell of Cols cells
+ 13 //      for y := lo; y <= hi; y++ {
+ 14 //              for _, cell := range t.Row(y) {
+ 15 //                      st := t.Style(cell.Style) // colours, bold, underlin    e, hyperlink
+ 16 //              }
+ 17 //      }
+ 18 //      if lo, hi, ok := t.Damage(); ok { /* rows that changed */ t.ClearDam    age() }
+ 19 //
+"term/term.go" 340L, 11158B                                          j
+=== checkpoint 3 at byte 2945 of 7855 ===
+321 func (t *Terminal) Ta from the top of the scrollback (-t.Scrollback()) to th
+    e
+ 12 //      // bottom of the screen (rows-1), each a []Cell of Cols cells
+ 13 //      for y := lo; y <= hi; y++ {
+ 14 //              for _, cell := range t.Row(y) {
+ 15 //                      st := t.Style(cell.Style) // colours, bold, underlin
+    e, hyperlink
+ 16 //              }
+ 17 //      }
+ 18 //      if lo, hi, ok := t.Damage(); ok { /* rows that changed */ t.ClearDam
+    age() }
+ 19 //
+ 20 //      out = t.EncodeKey(out[:0], term.KeyUp, 0, 0) // "\x1b[A", or "\x1bOA    " in application cursor mode
+ 21 //      out = t.EncodePaste(out[:0], clip)          // bracketed when the pr    ogram asked for it
+ 22 //      out = t.TakeReplies(out)                    // answers to the progra    m's queries (DA, DSR)
+ 23 //
+ 24 // # What it emulates
+ 25 //
+ 26 // xterm's common subset, as the programs of an agent's session use it
+ 27 // (vim, less, htop, git, tmux and Claude Code's TUI): the DEC/ANSI state
+
+=== checkpoint 4 at byte 3927 of 7855 ===
+321 func (t *Terminal) TakeReplies(dst []byte) []byte { return dst }
+322
+323 // TakeClipboard returns an OSC 52 clipboard write the program asked for
+324 // since the last call (decoded from base64), for the app to allow or not.
+325 func (t *Terminal) TakeClipboard(dst []byte) ([]byte, bool) { return dst, fa    lse }
+326
+327 // TakeBells is the number of bells since the last call.
+328 func (t *Terminal) TakeBells() int { return 0 }
+329
+330 // AppendText appends the text between from and to (inclusive, in reading
+331 // order), joining soft-wrapped lines and ending hard lines with "\n": a
+ 20 //      out = t.EncodeKey(out[:0], term.KeyUp, 0, 0) // "\x1b[A", or "\x1bOA    " in application cursor mode
+ 21 //      out = t.EncodePaste(out[:0], clip)          // bracketed when the pr    ogram asked for it
+ 22 //      out = t.TakeReplies(out)                    // answers to the progra    m's queries (DA, DSR)
+ 23 //
+ 24 // # What it emulates
+ 25 //
+ 26 // xterm's common subset, as the programs of an agent's session use it
+ 27 // (vim, less, htop, git, tmux and Claude Code's TUI): the DEC/ANSI state
+
+=== checkpoint 5 at byte 4909 of 7855 ===
+  1 // Package term is a terminal emulator without a terminal: a VT parser, a
+  2
+323 // TakeClipboard returns an OSC 52 clipboard write the program asked for
+324 // since the last call (decoded from base64), for the app to allow or not.
+325 func (t *Terminal) TakeClipboard(dst []byte) ([]byte, bool) { return dst, fa    lse }
+326
+327 // TakeBells is the number of bells since the last call.
+328 func (t *Terminal) TakeBells() int { return 0 }
+329
+330 // AppendText appends the text between from and to (inclusive, in reading
+331 // order), joining soft-wrapped lines and ending hard lines with "\n": a
+332 // selection's copy.
+333 func (t *Terminal) AppendText(dst []byte, from, to Pos) []byte { return dst     }
+334
+335 // Find searches for needle (plain text) from pos, forward or backward
+336 // through the screen and the scrollback, and returns the match's first and
+337 // last cells.
+338 func (t *Terminal) Find(needle []byte, from Pos, backward bool) (start, end     Pos, ok bool) {
+339         return Pos{}, Pos{}, false
+340 }
+
+=== checkpoint 6 at byte 5891 of 7855 ===
+  1 // Package term is a terminal emulator without a terminal: a VT parser, a
+  2 // screen and scrollback model, and an input encoder, in pure Go (the phase
+  3 // 8 plan's C1 and D74). a3-app's terminal pane is remote: the bytes of a
+  4 // pseudo-terminal on the agent's machine arrive over a WebSocket and go
+  5 // into Write; the keys the user types come out of EncodeKey and go back.
+  6 // rexui.Terminal draws a Terminal.
+  7 //
+  8 //      t := term.New(term.Options{Cols: 120, Rows: 40})
+  9 //      t.Write(chunk) // any chunking: a sequence split across writes is ke    pt
+ 10 //
+ 11 //      // draw: rows from the top of the scrollback (-t.Scrollback()) to th    e
+ 12 //      // bottom oAppendText(dst []byte, from, to Pos) []byte { return dst     }
+334
+335 // Find searches for needle (plain text) from pos, forward or backward
+336 // through the screen and the scrollback, and returns the match's first and
+337 // last cells.
+338 func (t *Terminal) Find(needle []byte, from Pos, backward bool) (start, end     Pos, ok bool) {
+339         return Pos{}, Pos{}, false
+340 }
+
+=== checkpoint 7 at byte 6873 of 7855 ===
+ 11 //      // draw: rows from the top of the scrollback (-t.Scrollback()) to th
+    e
+ 12 //      // bottom of the screen (rows-1), each a []Cell of Cols cells
+ 13 //      for y := lo; y <= hi; y++ {
+ 14 //              for _, cell := range t.Row(y) {
+ 15 //                      st := t.Style(cell.Style) // colours, bold, underlin
+    e, hyperlink
+ 16 //              }
+ 17 //      }
+ 18 //      if lo, hi, ok := t.Damage(); ok { /* rows that changed */ t.ClearDam
+    age() }
+ 19 //
+ 20 //      out = t.EncodeKey(out[:0], term.KeyUp, 0, 0) // "\x1b[A", or "\x1bOA    " in application cursor mode
+ 21 //      out = t.EncodePaste(out[
+
+
+
+
+
+
+
+
+
+=== checkpoint 8 at byte 7855 of 7855 ===
+

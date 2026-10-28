@@ -1,0 +1,7 @@
+{
+	"id": "dev.gonativeui.termdemo",
+	"name": "Terminal Demo",
+	"executable": "termdemo",
+	"version": "0.1.0",
+	"nativeLibs": ["../../.cache/libghostty-vt/4a4fc0179"]
+}

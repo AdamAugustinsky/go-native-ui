@@ -1,0 +1,46 @@
+[?1049h[24;1H[?1h=[33mcommit b1481708bd18a8b2aa7c7f41e1802d05eca0e2a2[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mp8-term[m[33m, [m[1;31morigin/p8-cont[m [33m[m[33m[m[1;36m[m[33m[m[1;32m[m[33m[m[1;31mracts[m[33m, [m[1;32mp8-panels-hotkeys-mac[m[33m, [m[1;32mp8-contracts[m[33m, [m[1;32mp8-capture-mac[m[33m)[m[m
+Merge: fe73b73 5ff9cbb[m
+Author: xxxx xxxx xxxxxxxxxxx <xxxxxxxxxxxxx@example.com>[m
+Date:   Tue Oct 27 13:50:58 2026 -0300[m
+[m
+    Merge branch 'a3-apps-plan' into p8-contracts[m
+[m
+[33mcommit fe73b7333452562786ca986b9ae5fc564997c95b[m[m
+Author: xxxx xxxx xxxxxxxxxxx <xxxxxxxxxxxxx@example.com>[m
+Date:   Tue Oct 27 13:50:08 2026 -0300[m
+[m
+    docs: phase 8 wave 0 notes on the contracts, the probes and sizes[m
+    [m
+    Each contract's choices where the plan left room (panel as a pointer,[m
+    hotkey and capture events as EvService sources, Pick returning a[m
+    Recording, declarative webview policy, fetch.AnyStatus, no proxy in ws),[m
+    P10's result, P9's status and run instructions, and the gallery's size[m
+    before and after. Also documents term.Pos's fields and gofmts highlight.[m
+    [m
+    Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>[m
+[m
+[33mcommit 9daf10556fd243a0ec101391e8b806081cb40693[m[m
+:[K[KAuthor: xxxx xxxx xxxxxxxxxxx <xxxxxxxxxxxxx@example.com>[m
+Date:   Tue Oct 27 13:45:24 2026 -0300[m
+[m
+    rexui: the TextArea and ContextMenu contracts (phase 8 C4, C5)[m
+    [m
+    TextAreaSetup, TextAreaState, TextArea and TextAreaSignal: until C4 hosts[m
+    platform.Editor, the composer's drawn single-line fallback (read-only shown[m
+    disabled). ContextMenu takes OnContextMenu's arguments; until C5 adds the[m
+    drawn path it is OnContextMenu.[m
+    [m
+    Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>[m
+[m
+[33mcommit bf25214573c1550d8219ea7db8fc28b3ac36e659[m[m
+Author: xxxx xxxx xxxxxxxxxxx <xxxxxxxxxxxxx@example.com>[m
+Date:   Tue Oct 27 13:43:45 2026 -0300[m
+[m
+    highlight: the syntax highlighting contract (phase 8 C3, D75)[m
+    [m
+    Lang and LangOf (fence names and file names), Role, pointer-free Token,[m
+    State carried across lines, Line and Supported; until C3 every language is[m
+    highlighted as Plain, one Text token per line.[m
+    [m
+    Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>[m
+:[K[K[?1l>[?1049l

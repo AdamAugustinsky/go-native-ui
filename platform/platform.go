@@ -427,6 +427,11 @@ type Options struct {
 	// window background behind the app's pixels, as an AppKit window's
 	// content is. macOS; ignored elsewhere (Window.HasMaterials).
 	Materials bool
+
+	// Panel, when set, makes the window a panel: borderless, floating, kept
+	// out of the Dock, the taskbar and the app switcher (see Panel). Open
+	// fails with ErrNoPanels where the OS has none yet (PanelsSupported).
+	Panel *Panel
 }
 
 // Backdrop is a system material behind a window's content (Options.Backdrop).

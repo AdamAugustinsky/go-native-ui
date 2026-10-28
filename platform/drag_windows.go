@@ -15,8 +15,8 @@ import (
 // Drag and drop on Windows (the contract is drag.go): OLE, from Go, with no cgo.
 //
 // In. Once the application declares a target (SetDropKinds) the window is
-// registered with RegisterDragDrop, after OleInitialize on the main thread
-// (OLE needs a single-threaded apartment; a thread that is an MTA already gets
+// registered with RegisterDragDrop, on a thread that is an OLE single-threaded
+// apartment (StartApp makes the main thread one; a thread that is an MTA gets
 // no drops). The IDropTarget is an object of ours whose methods are
 // syscall.NewCallback functions in a vtable made at start. OLE calls them on
 // the main thread, from inside the message dispatch of Wait (or of the
@@ -54,15 +54,15 @@ const NativeDrag = true
 const smCXDrag = 68 // SM_CXDRAG
 
 var (
-	ole32   = win32.LoadSystem("ole32.dll")
+	oleDLL  = win32.LoadSystem("ole32.dll") // (appobj_windows.go's ole32 is loaded by StartApp)
 	shell32 = win32.LoadSystem("shell32.dll")
 
-	pOleInitialize         = win32.Proc(ole32, "OleInitialize")
-	pOleUninitialize       = win32.Proc(ole32, "OleUninitialize")
-	pRegisterDragDrop      = win32.Proc(ole32, "RegisterDragDrop")
-	pRevokeDragDrop        = win32.Proc(ole32, "RevokeDragDrop")
-	pDoDragDrop            = win32.Proc(ole32, "DoDragDrop")
-	pReleaseStgMedium      = win32.Proc(ole32, "ReleaseStgMedium")
+	pOleInit               = win32.Proc(oleDLL, "OleInitialize")
+	pOleUninitialize       = win32.Proc(oleDLL, "OleUninitialize")
+	pRegisterDragDrop      = win32.Proc(oleDLL, "RegisterDragDrop")
+	pRevokeDragDrop        = win32.Proc(oleDLL, "RevokeDragDrop")
+	pDoDragDrop            = win32.Proc(oleDLL, "DoDragDrop")
+	pReleaseStgMedium      = win32.Proc(oleDLL, "ReleaseStgMedium")
 	pSHCreateStdEnumFmtEtc = win32.Proc(shell32, "SHCreateStdEnumFmtEtc")
 	pGetSystemMetrics      = win32.Proc(user32, "GetSystemMetrics")
 )
@@ -138,8 +138,23 @@ type stgMedium struct {
 	unkFree uintptr
 }
 
-// oleObj is a COM object of ours: its first word is its vtable.
-type oleObj struct{ vtbl uintptr }
+// oleObj is a COM object of ours: its first word is its vtable (all COM reads),
+// the next the window it belongs to, which a method finds from its this
+// pointer: each window has objects of its own, as each is registered with
+// OLE by itself (D68).
+type oleObj struct {
+	vtbl uintptr
+	w    *Window
+}
+
+// oleWindow is the window of the object this points to (nil for one that
+// belongs to none).
+func oleWindow(this uintptr) *Window {
+	if this == 0 {
+		return nil
+	}
+	return (*oleObj)(win32.Ptr(this)).w
+}
 
 // dropDone is a converted image on its way to the event queue, for the event e.
 type dropDone struct {
@@ -152,8 +167,9 @@ type dragState struct {
 	handler DragHandler
 	kinds   DragKinds // what the window is registered for
 
-	oleInit    bool // OleInitialize succeeded: Close balances it
-	oleFailed  bool // it did not (the thread is an MTA): not tried again
+	oleInit    bool // the objects are set up and the thread is an OLE apartment
+	oleOwn     bool // the window made it one (OleInitialize): Close balances it
+	oleFailed  bool // it could not (the thread is an MTA): not tried again
 	registered bool // RegisterDragDrop is in force
 
 	// The objects OLE is given. They are in the Window, in the heap, so that
@@ -216,25 +232,25 @@ var (
 var dropTargetVtbl = [7]uintptr{
 	comQI(&iidDropTarget), cbAddRef, cbRelease,
 	syscall.NewCallback(func(this, obj, keys, pt, eff uintptr) uintptr {
-		if w := theWindow; w != nil {
+		if w := oleWindow(this); w != nil {
 			w.dragEnter(obj, keys, pt, eff)
 		}
 		return 0
 	}),
 	syscall.NewCallback(func(this, keys, pt, eff uintptr) uintptr {
-		if w := theWindow; w != nil {
+		if w := oleWindow(this); w != nil {
 			w.dragOver(keys, pt, eff)
 		}
 		return 0
 	}),
 	syscall.NewCallback(func(this uintptr) uintptr {
-		if w := theWindow; w != nil {
+		if w := oleWindow(this); w != nil {
 			w.dragLeft()
 		}
 		return 0
 	}),
 	syscall.NewCallback(func(this, obj, keys, pt, eff uintptr) uintptr {
-		if w := theWindow; w != nil {
+		if w := oleWindow(this); w != nil {
 			w.dragDrop(obj, keys, pt, eff)
 		}
 		return 0
@@ -262,14 +278,14 @@ var dropSourceVtbl = [5]uintptr{
 var dataObjectVtbl = [12]uintptr{
 	comQI(&iidDataObject), cbAddRef, cbRelease,
 	syscall.NewCallback(func(this, pfe, pmed uintptr) uintptr {
-		if w := theWindow; w != nil {
+		if w := oleWindow(this); w != nil {
 			return w.drag.getData((*formatEtc)(win32.Ptr(pfe)), (*stgMedium)(win32.Ptr(pmed)))
 		}
 		return hrFail
 	}),
 	cbNotImpl,
 	syscall.NewCallback(func(this, pfe uintptr) uintptr {
-		if w := theWindow; w != nil {
+		if w := oleWindow(this); w != nil {
 			return w.drag.queryGetData((*formatEtc)(win32.Ptr(pfe)))
 		}
 		return hrFail
@@ -280,7 +296,7 @@ var dataObjectVtbl = [12]uintptr{
 	}),
 	syscall.NewCallback(func(this, pfe, pmed, release uintptr) uintptr { return hrNotImpl }),
 	syscall.NewCallback(func(this, dir, ppenum uintptr) uintptr {
-		if w := theWindow; w != nil && dir == dataDirGet {
+		if w := oleWindow(this); w != nil && dir == dataDirGet {
 			return w.drag.enumFormats(ppenum)
 		}
 		return hrNotImpl
@@ -321,8 +337,11 @@ func (w *Window) SetDropKinds(k DragKinds) {
 	}
 }
 
-// oleSetup starts OLE on the main thread and points the objects at their
-// vtables. It reports false where OLE cannot be used (the thread is an MTA).
+// oleSetup makes sure the window's thread is an OLE apartment and points the
+// objects at their vtables. StartApp makes the main thread one (D68, rule 1:
+// reg.app.oleThread), and then the window has nothing to start or balance; a
+// window of a thread that is not one starts OLE itself and ends it in Close.
+// It reports false where OLE cannot be used (the thread is an MTA).
 func (w *Window) oleSetup() bool {
 	d := &w.drag
 	if d.oleInit {
@@ -332,16 +351,19 @@ func (w *Window) oleSetup() bool {
 		return false
 	}
 	d.oleFailed = true
-	if pOleInitialize == 0 || pRegisterDragDrop == 0 || pDoDragDrop == 0 {
+	if pOleInit == 0 || pRegisterDragDrop == 0 || pDoDragDrop == 0 {
 		return false
 	}
-	if com.HR(win32.Call(pOleInitialize, 0)) < 0 { // S_OK or S_FALSE both need an OleUninitialize
-		return false
+	if tid := uint32(win32.Call(pGetCurrentThreadID)); reg.app.oleThread == 0 || reg.app.oleThread != tid {
+		if com.HR(win32.Call(pOleInit, 0)) < 0 { // S_OK or S_FALSE both need an OleUninitialize
+			return false
+		}
+		d.oleOwn = true
 	}
 	d.oleInit, d.oleFailed = true, false
-	d.target.vtbl = uintptr(unsafe.Pointer(&dropTargetVtbl[0]))
-	d.source.vtbl = uintptr(unsafe.Pointer(&dropSourceVtbl[0]))
-	d.data.vtbl = uintptr(unsafe.Pointer(&dataObjectVtbl[0]))
+	d.target = oleObj{vtbl: uintptr(unsafe.Pointer(&dropTargetVtbl[0])), w: w}
+	d.source = oleObj{vtbl: uintptr(unsafe.Pointer(&dropSourceVtbl[0])), w: w}
+	d.data = oleObj{vtbl: uintptr(unsafe.Pointer(&dataObjectVtbl[0])), w: w}
 	return true
 }
 
@@ -354,10 +376,11 @@ func (w *Window) dragClose() {
 	}
 	w.dragLeft()
 	d.kinds = 0
-	if d.oleInit {
+	if d.oleOwn {
 		win32.Call(pOleUninitialize)
-		d.oleInit = false
+		d.oleOwn = false
 	}
+	d.oleInit = false
 }
 
 // ---- the target ----
@@ -693,10 +716,10 @@ func (w *Window) StartDrag(s *DragSpec) (DragTicket, error) {
 	d.nTicket++
 	ticket := DragTicket(d.nTicket)
 	d.active, d.own, d.effect = true, s.Items, effectNone
-	win32.Call(pSetTimer, w.hwnd, sizeMoveTimerID, sizeMoveTimerMs, 0)
+	enterModal() // DoDragDrop is a native modal loop: the app's windows keep drawing (modalTick) and its wakes are dispatched
 	hr := uint32(win32.Call(pDoDragDrop, uintptr(unsafe.Pointer(&d.data)), uintptr(unsafe.Pointer(&d.source)),
 		uintptr(effectsOfOps(ops)), uintptr(unsafe.Pointer(&d.effect))))
-	win32.Call(pKillTimer, w.hwnd, sizeMoveTimerID)
+	leaveModal()
 	d.active, d.own = false, nil
 	// The release of the button went to OLE, not to us.
 	w.buttons = 0

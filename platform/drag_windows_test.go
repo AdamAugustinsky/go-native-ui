@@ -77,7 +77,7 @@ func TestOLEDropTargetTakesFilesTextAndImages(t *testing.T) {
 	}
 	png, _ := testPNG(t, 8, 6)
 	w.drag.own = []DragItem{{Path: `C:\tmp\a b.txt`}, {Path: `C:\tmp\é.png`}, {Text: "line1\nline2"}, {PNG: png}}
-	testSource.vtbl = uintptr(unsafe.Pointer(&dataObjectVtbl[0]))
+	testSource = oleObj{vtbl: uintptr(unsafe.Pointer(&dataObjectVtbl[0])), w: w}
 	src := uintptr(unsafe.Pointer(&testSource))
 	enter := func() {
 		testEffect = effectCopy | effectMove
@@ -258,6 +258,36 @@ func TestStartDragRefusals(t *testing.T) {
 	if _, err := w.StartDrag(promise); !errors.Is(err, ErrPromiseUnsupported) || !errors.Is(err, errors.ErrUnsupported) {
 		t.Errorf("a promise: %v", err)
 	}
+}
+
+// TestOLEDropTargetsAreEachWindows: with two windows registered, a drag over
+// one is that window's alone, and the objects find their own window.
+func TestOLEDropTargetsAreEachWindows(t *testing.T) {
+	a := openDragWindow(t)
+	b := openDragWindow(t)
+	for _, w := range []*Window{a, b} {
+		w.SetDragHandler(func(x, y float32, k DragKinds, allowed DragOp) DragAnswer {
+			return DragAnswer{Op: DragOpCopy, Accept: DragAny}
+		})
+		w.SetDropKinds(DragText)
+		if !w.drag.registered {
+			t.Skip("OLE cannot be used on this thread")
+		}
+	}
+	if oleWindow(uintptr(unsafe.Pointer(&a.drag.target))) != a || oleWindow(uintptr(unsafe.Pointer(&b.drag.data))) != b {
+		t.Fatal("an object does not find its window")
+	}
+	b.drag.own = []DragItem{{Text: "hello"}}
+	testSource = oleObj{vtbl: uintptr(unsafe.Pointer(&dataObjectVtbl[0])), w: b}
+	testEffect = effectCopy
+	dragCall(b, 3, uintptr(unsafe.Pointer(&testSource)), 0, packPoint(10, 10), uintptr(unsafe.Pointer(&testEffect)))
+	if ev := eventsOf(a, EvDragEnter, EvDragMove, EvDragLeave); len(ev) != 0 {
+		t.Errorf("the other window saw %+v", ev)
+	}
+	if ev := eventsOf(b, EvDragEnter); len(ev) != 1 {
+		t.Errorf("the window dragged over saw %+v", ev)
+	}
+	dragCall(b, 5) // DragLeave
 }
 
 // TestLiveDoDragDrop runs a real DoDragDrop with no button held: OLE asks the

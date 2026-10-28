@@ -361,6 +361,21 @@ func (c *Context) AnchorScroll(id ID, x, y float64) {
 	b.scroll, b.scrollTgt = [2]float64{x, y}, [2]float64{x, y}
 }
 
+// SetScrollY is SetScroll on the vertical axis alone: the horizontal offset,
+// its target and a stretch along it stay (a list that scrolls sideways as
+// well as by its anchor, base.VListOpts.ContentW).
+func (c *Context) SetScrollY(id ID, y float64) {
+	b := &c.boxes[id]
+	b.scroll[1], b.scrollTgt[1] = y, y
+	c.unstretch(b.key, 2)
+}
+
+// AnchorScrollY is AnchorScroll on the vertical axis alone, as SetScrollY.
+func (c *Context) AnchorScrollY(id ID, y float64) {
+	b := &c.boxes[id]
+	b.scroll[1], b.scrollTgt[1] = y, y
+}
+
 // ScrollTo sets the scroll target of id; the offset approaches it. The target
 // is clamped to the content when the frame is laid out (End), and End marks the
 // frame animating if the offset is not there yet, so a frame loop that draws
