@@ -99,6 +99,7 @@ type wayland struct {
 	offers       [maxOffers]wlOffer
 	sel          int    // index of the selection's offer in offers, or -1
 	serial       uint32 // serial of the latest input event, for set_selection
+	dnd          wlDnd  // drag and drop (dnd_wl_linux.go)
 
 	surface, xdgSurface, toplevel uintptr
 	deco, frac, viewport          uintptr
@@ -612,6 +613,8 @@ func (w *Window) wlEvent(proxy uintptr, op uint32, a unsafe.Pointer) {
 		w.onDataDevice(op, a)
 	case y.src:
 		w.onDataSource(op, a)
+	case y.dnd.src:
+		w.onDndSource(op, a)
 	default:
 		if !w.onOffer(proxy, op, a) {
 			w.onOutput(proxy, op, a)
@@ -901,6 +904,12 @@ func (w *Window) onPointer(op uint32, a unsafe.Pointer) {
 		if st == 0 && b == ButtonLeft && y.swallowRelease {
 			y.swallowRelease = false
 			return
+		}
+		if b == ButtonLeft { // a drag out starts from this press
+			w.leftDown = st != 0
+			if st != 0 {
+				y.dnd.pressSerial = serial
+			}
 		}
 		ev := Event{Kind: EvPointerButton, Button: b, X: w.ptrX, Y: w.ptrY, Mods: w.mods, Time: now}
 		if st != 0 {

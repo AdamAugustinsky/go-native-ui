@@ -89,9 +89,9 @@ type Window struct {
 
 var theWindow Window
 
-// maxPollFDs bounds the poll set: connection, eventfd, one paste pipe and
-// maxSends clipboard writers.
-const maxPollFDs = 3 + maxSends
+// maxPollFDs bounds the poll set: connection, eventfd, one paste pipe, one
+// pipe of a drop and maxSends clipboard writers.
+const maxPollFDs = 4 + maxSends
 
 type pollfd struct {
 	fd      int32

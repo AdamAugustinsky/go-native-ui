@@ -76,8 +76,9 @@ import (
 // or CF_DIBV5 and CF_DIB (converted on a worker, so its EvDrop comes in a later
 // Wait), and CF_UNICODETEXT; drags out through DoDragDrop, which is modal, so
 // StartDrag returns when the drag is over, with EvDragEnd already queued. Linux
-// is XDND on X11 (dnd_x11_linux.go; drag_linux.go has what the two Linux back
-// ends share), with the gtk-dnd-drag-threshold setting for DragThreshold: files
+// is XDND on X11 (dnd_x11_linux.go) and the wl_data_device protocol on Wayland
+// (dnd_wl_linux.go, version 3 of the manager for a drag out; drag_linux.go has
+// what the two share), with the gtk-dnd-drag-threshold setting for DragThreshold: files
 // are text/uri-list, an image image/png, text UTF8_STRING and its relatives,
 // read like a paste (INCR included), and a drag out proposes the action the
 // modifier keys name. File promises (ErrPromiseUnsupported) and the drag
