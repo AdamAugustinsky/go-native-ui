@@ -1011,3 +1011,8 @@ func ArmOnWake() bool { return true }
 // answer (NSTerminateLater): not for a quit decided without terminate:,
 // during which the app's loop runs on.
 func quitWaitNative() bool { return QuitPending() && !appObj.quitOutside }
+
+// QuitWaitNative reports whether AppKit runs a wait of its own for the answer
+// to a quit request (NSTerminateLater after a terminate: someone else sent),
+// inside the app's pump. Main thread.
+func QuitWaitNative() bool { return quitWaitNative() }

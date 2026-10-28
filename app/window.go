@@ -62,8 +62,12 @@ func (w *Win) App() *App {
 
 // Close closes the window at the next safe point, without asking its
 // CloseRequester: between frames, at the loop's turn or the application
-// object's dispatch (which also runs while a quit answer is pending). The app
-// ends with its last window unless it keeps running.
+// object's dispatch (which also runs while a quit answer is pending). While
+// AppKit waits inside the loop's pump for the answer to a terminate: someone
+// else sent, the window is closed for the app at once (Open is false, it is
+// off the screen, draws and gets no events) and its platform window is
+// released when the wait is over. The app ends with its last window unless it
+// keeps running.
 func (w *Win) Close() {
 	if w.Open() {
 		w.a.closing = true
