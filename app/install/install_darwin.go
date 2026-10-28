@@ -4,6 +4,7 @@ package install
 // bundle's Info.plist (gnui.json's urlSchemes).
 
 func osSupported() error            { return ErrNotNeeded }
+func osDefaults(o Options) Options  { return o }
 func osInstalled() (string, bool)   { return "", false }
 func osInstall(Options) error       { return ErrNotNeeded }
 func osUninstall(Options) error     { return ErrNotNeeded }

@@ -26,6 +26,13 @@ var (
 )
 
 func TestMain(m *testing.M) {
+	if os.Getenv(fakeSignEnv) == "1" && len(os.Args) == 2 { // the stand-in signing tool (windows_test.go)
+		if err := fakeSign(os.Args[1]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
 	code := m.Run()
 	if addedToSearchList {
 		removeFromSearchList()
