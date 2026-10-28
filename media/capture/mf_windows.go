@@ -86,7 +86,8 @@ func loadMF() error {
 	sys.mfCreateSample = win32.Proc(sys.mfplat, "MFCreateSample")
 	sys.mfCreateSinkWriter = win32.Proc(sys.mfrw, "MFCreateSinkWriterFromURL")
 	sys.mfCreateSourceReader = win32.Proc(sys.mfrw, "MFCreateSourceReaderFromURL")
-	if sys.mfStartup == 0 || sys.mfCreateSinkWriter == 0 || sys.mfCreateSample == 0 {
+	sys.mfCreateFile = win32.Proc(sys.mfplat, "MFCreateFile")
+	if sys.mfStartup == 0 || sys.mfCreateSinkWriter == 0 || sys.mfCreateSample == 0 || sys.mfCreateFile == 0 {
 		// a Windows N edition without the Media Feature Pack
 		return ErrNoEncoder
 	}
@@ -143,7 +144,7 @@ const (
 
 // writer is the sink writer of one recording (the capture thread's).
 type writer struct {
-	sw         uintptr
+	sw, file   uintptr // the sink writer, and its byte stream
 	vidx, aidx uint32
 	audio      bool
 	nv12       bool
@@ -165,9 +166,20 @@ func newWriter(path string, w, h, fps int, nv12, audio bool) (*writer, error) {
 	}
 	com.Call(attrs, vtAttrSetUINT32, uintptr(unsafe.Pointer(&mfReadwriteHW)), 1)
 	com.Call(attrs, vtAttrSetUINT32, uintptr(unsafe.Pointer(&mfMoovBeforeMdat)), 1) // fast start (Windows 8+)
-	hr := win32.HR(call(sys.mfCreateSinkWriter, uintptr(unsafe.Pointer(p)), 0, attrs, uintptr(unsafe.Pointer(&wr.sw))))
+	// Our own byte stream, readable: the MPEG-4 sink's fast start rewrites
+	// the file at Finalize to put the moov box first, which a stream made
+	// from the URL (write only) refuses with E_ACCESSDENIED.
+	const readWrite, deleteIfExist = 3, 4 // MF_ACCESSMODE_READWRITE, MF_OPENMODE_DELETE_IF_EXIST
+	hr := win32.HR(call(sys.mfCreateFile, readWrite, deleteIfExist, 0, uintptr(unsafe.Pointer(p)), uintptr(unsafe.Pointer(&wr.file))))
+	if hr < 0 {
+		win32.Release(attrs)
+		return nil, hrError("MFCreateFile", hr)
+	}
+	ext, _ := syscall.UTF16PtrFromString(".mp4")
+	hr = win32.HR(call(sys.mfCreateSinkWriter, uintptr(unsafe.Pointer(ext)), wr.file, attrs, uintptr(unsafe.Pointer(&wr.sw))))
 	win32.Release(attrs)
 	if hr < 0 {
+		wr.release()
 		return nil, hrError("MFCreateSinkWriterFromURL", hr)
 	}
 	if err := wr.streams(); err != nil {
@@ -249,7 +261,8 @@ func noEncoder(step string, hr int32) error {
 
 func (wr *writer) release() {
 	win32.Release(wr.sw)
-	wr.sw = 0
+	win32.Release(wr.file) // closes the file
+	wr.sw, wr.file = 0, 0
 }
 
 // fileInfo is what readFile found in an MP4.

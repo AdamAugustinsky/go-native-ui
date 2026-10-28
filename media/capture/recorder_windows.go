@@ -234,7 +234,7 @@ func (rc *recorder) open() error {
 	}
 	rc.r.ownAudio = excluded // read on the main thread after Started (the inbox orders it)
 	if hr := win32.HR(com.Call(rc.sess, vtSessionStart)); hr < 0 {
-		return hrError("StartCapture", hr)
+		return permError("StartCapture", hr)
 	}
 	rc.bufSize = rc.w * rc.h * 3 / 2
 	if !rc.nv12 {
@@ -314,7 +314,7 @@ func (rc *recorder) openCapture() error {
 		return hrError("CreateFreeThreaded", hr)
 	}
 	if hr := win32.HR(cm(rc.pool, vtPoolCreateSession, rc.item, uintptr(unsafe.Pointer(&rc.sess)))); hr < 0 {
-		return hrError("CreateCaptureSession", hr)
+		return permError("CreateCaptureSession", hr)
 	}
 	if win32.QueryInterface(rc.sess, &iidSession2, &rc.sess2) >= 0 {
 		cursor := uintptr(0)

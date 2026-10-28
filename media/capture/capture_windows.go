@@ -119,12 +119,11 @@ const (
 )
 
 // hrError maps a failed HRESULT of step to a typed error when it is one of
-// ours, keeping the step and the code.
+// ours, keeping the step and the code. E_ACCESSDENIED is a permission only
+// where permError says so (a file or a stream refuses it too).
 func hrError(step string, hr int32) error {
 	var kind error
 	switch hr {
-	case hrAccessDenied:
-		kind = ErrPermissionDenied
 	case hrDiskFull, hrHandleDiskFull:
 		kind = ErrDiskFull
 	case hrCodecNotFound:
@@ -134,6 +133,15 @@ func hrError(step string, hr int32) error {
 		return fmt.Errorf("%w: %s (0x%08X)", kind, step, uint32(hr))
 	}
 	return fmt.Errorf("capture: %s failed (0x%08X)", step, uint32(hr))
+}
+
+// permError is hrError for a step where E_ACCESSDENIED is the user's
+// setting (the microphone's privacy switch, a capture the system refuses).
+func permError(step string, hr int32) error {
+	if hr == hrAccessDenied {
+		return fmt.Errorf("%w: %s (0x%08X)", ErrPermissionDenied, step, uint32(hr))
+	}
+	return hrError(step, hr)
 }
 
 // cm calls vtable slot idx of obj, and call calls fn, moving what a pointer
@@ -179,7 +187,7 @@ var sys struct {
 	coCreate, coTaskMemFree, activateAudioAsync                uintptr
 	mfStartup, mfCreateAttributes, mfCreateMediaType           uintptr
 	mfCreateMemoryBuffer, mfCreateSample                       uintptr
-	mfCreateSinkWriter, mfCreateSourceReader                   uintptr
+	mfCreateSinkWriter, mfCreateSourceReader, mfCreateFile     uintptr
 
 	qpcFreq int64
 }

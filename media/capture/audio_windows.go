@@ -92,7 +92,7 @@ func openDevice(flow uintptr, loopback bool) (*source, error) {
 	}
 	defer win32.Release(dev)
 	if hr := win32.HR(cm(dev, vtDeviceActivate, uintptr(unsafe.Pointer(&iidAudioClient)), clsctxAll, 0, uintptr(unsafe.Pointer(&client)))); hr < 0 {
-		return nil, hrError("IMMDevice::Activate", hr)
+		return nil, permError("IMMDevice::Activate", hr)
 	}
 	flags := uintptr(streamAutoConvert | streamSRCQuality)
 	if loopback {
@@ -171,7 +171,7 @@ func startSource(client uintptr, flags uintptr) (*source, error) {
 	s.client = client
 	if hr := win32.HR(cm(client, vtACInitialize, 0, flags, bufferDuration, 0, uintptr(unsafe.Pointer(&floatFormat)), 0)); hr < 0 {
 		s.close()
-		return nil, hrError("IAudioClient::Initialize", hr)
+		return nil, permError("IAudioClient::Initialize", hr)
 	}
 	if flags&streamEvent != 0 {
 		s.event = win32.Call(sys.createEvent, 0, 0, 0, 0)
