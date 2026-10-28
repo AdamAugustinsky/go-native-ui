@@ -194,11 +194,22 @@ what was skipped and why. The other flags:
 
 ```text
 -c gnui.json   -o dir (default dist)   -tags list   -ldflags flags
--notarize      -notary-profile name    -dmg         -zip
+-notarize      -notary-profile name    -dmg         -zip         -app bundle
 ```
 
 `-dmg` also builds a disk image, and `-zip` the archive that `app/selfupdate`
 installs (`ditto -c -k --keepParent`, after stapling).
+
+`-app X.app` signs a bundle that was built earlier from the same `gnui.json`,
+in place, then notarizes and packages it as above, without building. Use it
+when the release identity lives on a Mac other than the one that builds:
+copy the bundle, the `gnui.json` and a `gnui` binary there, and run
+`gnui package -c gnui.json -app Zap.app -identity "Developer ID Application: …" -notarize -notary-profile <profile> -dmg -zip`.
+The bundle's identifier and version must match the `gnui.json`'s. The
+entitlements come from the `gnui.json`, so a `gnui-dev` bundle loses
+`disable-library-validation` when a Developer ID signs it again. Sign from a
+Terminal on that Mac: over SSH its login keychain is locked, and `codesign`
+fails with `errSecInternalComponent`.
 
 ## 5. Notarisation is untested
 

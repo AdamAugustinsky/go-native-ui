@@ -35,6 +35,7 @@ func cmdPackage(args []string, stdout, stderr io.Writer) error {
 	zipUpdate := fs.Bool("zip", false, "also write <Name>-<version>.zip, the update archive app/selfupdate installs (ditto -c -k --keepParent, after stapling)")
 	tags := fs.String("tags", "", "go build -tags (gnui_release is always added)")
 	ldflags := fs.String("ldflags", "", `extra go build -ldflags ("-s -w" is always added)`)
+	appIn := fs.String("app", "", "sign, notarize and package this bundle, built earlier from the same gnui.json (on another Mac, say), instead of building one; it is changed in place")
 	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
@@ -62,12 +63,33 @@ func cmdPackage(args []string, stdout, stderr io.Writer) error {
 	}
 
 	app := filepath.Join(*outDir, c.AppFile())
-	fmt.Fprintf(stdout, "packaging %s %s (%s) -> %s\n", c.Name, c.Version, c.ID, app)
-	ent, cleanup, err := buildBundle(c, buildOptions{Tags: *tags, Ldflags: *ldflags, Out: app, Log: stdout})
-	if err != nil {
-		return err
+	var ent string
+	if *appIn != "" {
+		app = *appIn
+		fmt.Fprintf(stdout, "signing %s %s (%s): %s\n", c.Name, c.Version, c.ID, app)
+		if err := checkBuiltApp(c, app); err != nil {
+			return err
+		}
+		tmp, err := os.MkdirTemp("", "gnui-sign-")
+		if err != nil {
+			return err
+		}
+		defer os.RemoveAll(tmp)
+		if ent, err = writeEntitlements(c, tmp); err != nil {
+			return err
+		}
+		if err := os.MkdirAll(*outDir, 0o755); err != nil {
+			return err
+		}
+	} else {
+		fmt.Fprintf(stdout, "packaging %s %s (%s) -> %s\n", c.Name, c.Version, c.ID, app)
+		var cleanup func()
+		ent, cleanup, err = buildBundle(c, buildOptions{Tags: *tags, Ldflags: *ldflags, Out: app, Log: stdout})
+		if err != nil {
+			return err
+		}
+		defer cleanup()
 	}
-	defer cleanup()
 
 	opts := signOptions{
 		Spec:         plan.Spec,
@@ -401,3 +423,23 @@ func hdiutilBusy(err error) bool {
 
 // hdiutilRun runs the tool (a test replaces it).
 var hdiutilRun = runOut
+
+// checkBuiltApp refuses a bundle -app was given that is not this
+// configuration's app: its identifier and version must be the gnui.json's,
+// so the entitlements and the archives' names match what is signed.
+func checkBuiltApp(c *Config, app string) error {
+	info := filepath.Join(app, "Contents", "Info.plist")
+	if _, err := os.Stat(info); err != nil {
+		return fmt.Errorf("-app %s: not an app bundle: %w", app, err)
+	}
+	for key, want := range map[string]string{"CFBundleIdentifier": c.ID, "CFBundleShortVersionString": c.Version} {
+		got, err := runOut("/usr/libexec/PlistBuddy", "-c", "Print :"+key, info)
+		if err != nil {
+			return fmt.Errorf("-app %s: reading %s: %w", app, key, err)
+		}
+		if got = strings.TrimSpace(got); got != want {
+			return fmt.Errorf("-app %s: %s is %q, and %s says %q", app, key, got, "gnui.json", want)
+		}
+	}
+	return nil
+}

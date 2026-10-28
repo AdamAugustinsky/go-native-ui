@@ -219,20 +219,29 @@ func buildBundle(c *Config, o buildOptions) (entitlements string, cleanup func()
 	}
 
 	// 6. entitlements, outside the bundle
-	if ent := entitlementsPlist(c); ent != nil {
-		data, err := encodePlist(ent)
-		if err != nil {
-			return "", cleanup, fmt.Errorf("entitlements: %w", err)
-		}
-		entitlements = filepath.Join(tmp, "entitlements.plist")
-		if err := os.WriteFile(entitlements, data, 0o644); err != nil {
-			return "", cleanup, err
-		}
-		if err := lintPlist(entitlements); err != nil {
-			return "", cleanup, err
-		}
+	entitlements, err = writeEntitlements(c, tmp)
+	return entitlements, cleanup, err
+}
+
+// writeEntitlements writes the configuration's entitlements into dir and
+// returns the file's path ("" when it has none).
+func writeEntitlements(c *Config, dir string) (string, error) {
+	ent := entitlementsPlist(c)
+	if ent == nil {
+		return "", nil
 	}
-	return entitlements, cleanup, nil
+	data, err := encodePlist(ent)
+	if err != nil {
+		return "", fmt.Errorf("entitlements: %w", err)
+	}
+	path := filepath.Join(dir, "entitlements.plist")
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return "", err
+	}
+	if err := lintPlist(path); err != nil {
+		return "", err
+	}
+	return path, nil
 }
 
 // lintPlist runs plutil -lint where plutil exists (macOS).
