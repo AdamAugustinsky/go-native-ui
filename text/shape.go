@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-text/typesetting/bidi"
 	"github.com/go-text/typesetting/di"
+	ot "github.com/go-text/typesetting/font/opentype"
 	"github.com/go-text/typesetting/harfbuzz"
 	"github.com/go-text/typesetting/language"
 	"github.com/go-text/typesetting/shaping"
@@ -31,6 +32,9 @@ import (
 //
 // What still allocates inside harfbuzz.Buffer.Shape depends on the font: see
 // the ShapeAllocs numbers in engine_alloc_test.go.
+
+// tabularDigits is FontDesc.TabularDigits as HarfBuzz features.
+var tabularDigits = []harfbuzz.Feature{{Tag: ot.MustNewTag("tnum"), Value: 1, Start: harfbuzz.FeatureGlobalStart, End: harfbuzz.FeatureGlobalEnd}}
 
 // gtSeg is a span of runes shaped with one face, script and language.
 type gtSeg struct {
@@ -367,7 +371,11 @@ func (s *goSystem) shapePiece(f FontKey, p gtSeg, rtl bool, pen float32) float32
 	}
 	b.Props.Language = p.lang
 	b.Props.Script = p.script
-	s.shapeFn(b, fc.hb)
+	var feats []harfbuzz.Feature
+	if fe.desc.TabularDigits {
+		feats = tabularDigits
+	}
+	s.shapeFn(b, fc.hb, feats)
 
 	for i := range b.Info {
 		gid := uint16(0xFFFF)

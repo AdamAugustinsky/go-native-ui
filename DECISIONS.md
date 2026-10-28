@@ -1211,3 +1211,15 @@ Live microphone capture was not run: access cannot be granted headlessly, so tha
 - Not exercised with a real removed device: Windows CI runs the surface test with a simulated loss on WARP (a real TDR needs hardware), Linux has the offscreen path and the error classification, and the windowed app path (macOS shared device, Windows swap chain) has no live test; `go test ./app` covers the offscreen recovery only.
 - Textures an owner has no pixels for come back blank: a paused video's poster (`media`) and a YUV texture until it is staged again. Images whose decoded pixels were dropped (`Options.CPUBytes`) are requested again, so they flash.
 - Metal's removal is rare on Apple silicon (one built-in GPU, D55); an eGPU-less Mac practically never takes this path.
+
+## D-pending (p9-text). A paragraph layout says at which widths it holds; tabular digits are a font feature (2026-10-28)
+
+**Decision.** `text.ParaView` carries `FitFrom` and `FitTo`: the widths at which a fresh layout of the same `Para` would be this layout. `ui.fitRich` keeps a shrink-wrapped paragraph's layout only at the width it was laid out at or inside that interval, and lays out again otherwise. `BasicLayouter` (Windows, Linux) computes the interval exactly: every comparison that decided a break or the ellipsis cut (`measure <= width + 0.01`) records its measurement, the widest that fitted bounds the interval from below and the narrowest that did not from above, with a 0.002 px margin against rounding. A layout whose runs cannot be measured, or one cut by `MaxLines` without a width, certifies nothing. The CoreText typesetter reports no measurements; its interval stays the old premise (the widest line to the width laid out at), which passed a sampled sweep and is not proved. This answers #35, whose reproduction (an Arabic paragraph at 13 pt, scale 2, laid out at 61.5 px, widest line 59.17 px, twelve lines fresh at that width) is `ui.TestFitRichBasicLayoutRenderedWidth`.
+
+`text.FontDesc.TabularDigits` gives every digit one width: CoreText's number-spacing feature on the font's descriptor (as `NSFont.monospacedDigitSystemFont`), DirectWrite's `tnum` tabular figures passed to `GetGlyphs` and `GetGlyphPlacements`, HarfBuzz's `tnum` on Linux. It is part of `FontDesc`, so fonts with and without it cache apart. Pilot's size column uses it in place of a box per digit (#27).
+
+**Reasoning:** the alternative the issue lists, recording the break measurements in the layouter, is the only way to know the interval; deriving it from rendered widths is what failed. A `FontDesc` flag follows the existing description-keyed font cache with no new key type.
+
+**Not done:** an exact interval for CoreText; the Windows tabular path and its test are compiled and vetted here, run by CI only.
+
+**Also (#6):** `text` opens AppKit before its first CTFont (b6d90c5), which is the root cause fix for a CoreText system font made before the first window; the hidden-window workaround in `cmd/shelldemo` is gone.
