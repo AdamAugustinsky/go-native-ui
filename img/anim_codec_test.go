@@ -78,6 +78,41 @@ func TestGIFDisposal(t *testing.T) {
 	checkDisposal(t, g, []int{3, 1, 2, 0})             // out of order: replayed from the start
 }
 
+// TestTrimThenRender: a decoder that gave its canvases back (the animation was
+// built but not shown) draws the same frames when it is asked again, in order
+// or not.
+func TestTrimThenRender(t *testing.T) {
+	g, err := openGIF(animgen.GIF(8, 8, disposalFrames(), 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := openAPNG(animgen.APNG(8, 8, disposalFrames(), 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	srcs := map[string]frameSource{"gif": g, "apng": a}
+	webpTrimSource(t, srcs)
+	for name, src := range srcs {
+		if name == "webp" { // its frames are a sheet's colours, not disposalFrames
+			src.frame(1)
+			if kept := src.trim(); kept <= 0 || kept >= src.retained() {
+				t.Errorf("webp: trim kept %d of %d bytes", kept, src.retained())
+			}
+			if _, err := src.frame(2); err != nil {
+				t.Errorf("webp: frame 2 after a trim: %v", err)
+			}
+			continue
+		}
+		checkDisposal(t, src, []int{0, 1, 2})
+		if kept := src.trim(); kept <= 0 || kept >= src.retained() {
+			t.Errorf("%s: trim kept %d of %d bytes", name, kept, src.retained())
+		}
+		checkDisposal(t, src, []int{3, 0, 1, 2, 3})
+		src.trim()
+		checkDisposal(t, src, []int{1, 2})
+	}
+}
+
 func TestAPNGDisposal(t *testing.T) {
 	a, err := openAPNG(animgen.APNG(8, 8, disposalFrames(), 0))
 	if err != nil {

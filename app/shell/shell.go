@@ -225,10 +225,23 @@ func Reveal(paths []string) error {
 // On a file system or a kernel without it Trash fails with an error that is errors.ErrUnsupported and
 // leaves the file where it is: the trash cannot move that file safely there. There
 // is no fallback, because every one (a check and a rename, a hard link and an
-// unlink) can replace or delete a file that someone else put in the way. On macOS and Windows the system
-// moves a file given by its path (NSFileManager, SHFileOperation), so the check
-// before the call is by identity but cannot be tied to the call: a folder on the
-// path swapped by someone who can write to it in that instant is not caught.
+// unlink) can replace or delete a file that someone else put in the way.
+//
+// On macOS and Windows the system moves a file given by its path (NSFileManager,
+// SHFileOperation), and neither takes a descriptor, so the check cannot be made
+// atomic with the move. Trash narrows the window and closes it after the fact:
+// it opens the entry itself (a link is not followed) and checks that handle
+// against the home folder and the root; it gives the system the real path the
+// handle has now, not the path it was called with; and after the move it asks
+// where the handle's file is. If the system moved some other file, because
+// someone who can write to a folder on the path swapped it in the instant
+// between, Trash returns an error. On macOS it also puts that file back where it
+// was, if the place is still free (renamex_np with RENAME_EXCL, which replaces
+// nothing); on Windows it says the file is in the Recycle Bin, because the shell
+// does not say where in the bin. What is left is that instant: the wrong file
+// can still reach the trash, and be reported and (on macOS) restored, but not
+// stopped. A Trash on another macOS volume (a copy, not a rename) is not
+// verified after the move.
 func Trash(path string) error {
 	abs, err := existing("trash", path)
 	if err != nil {

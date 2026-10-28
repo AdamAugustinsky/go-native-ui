@@ -461,6 +461,35 @@ func TestAfterCloseChangesStayInMemory(t *testing.T) {
 	}
 }
 
+// Close can be called again, and at the same time from several goroutines: each
+// returns after the first one's save is done, with its result.
+func TestCloseIsIdempotent(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "p.json")
+	s, _ := Open(p, defaults, Options{Debounce: time.Hour})
+	s.Set(settings{Theme: "closed"})
+	var wg sync.WaitGroup
+	errs := make([]error, 8)
+	for i := range errs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs[i] = s.Close()
+			if b, err := os.ReadFile(p); err != nil || !strings.Contains(string(b), `"closed"`) {
+				t.Errorf("Close %d returned before the pending change was written: %q, %v", i, b, err)
+			}
+		}()
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("Close %d: %v", i, err)
+		}
+	}
+	if err := s.Close(); err != nil {
+		t.Errorf("a later Close: %v", err)
+	}
+}
+
 func TestConcurrentUse(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "p.json")
 	s, _ := Open(p, defaults, Options{Debounce: time.Millisecond})

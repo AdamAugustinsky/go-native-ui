@@ -245,6 +245,18 @@ const (
 	// SidebarSearchFillInactive is that fill in an inactive window (measured
 	// #E5E5E5 / #464646).
 	SidebarSearchFillInactive
+	// PaneButton is a borderless icon button's symbol (rexui.IconBorderless;
+	// Rex's pane-header buttons): secondaryLabelColor's value here, in Rex a
+	// quiet grey (#96999B in light, #8A8EA1 in dark) that darkens under the
+	// pointer.
+	PaneButton
+	// PaneButtonHover is that symbol under the pointer and pressed: labelColor
+	// here, #3F4246 / #ECEDF3 in Rex.
+	PaneButtonHover
+	// PaneButtonChip is the colour of the chip a borderless icon button lights
+	// up behind its symbol under the pointer (rexui.IconButtonChip gives the
+	// strength): the label's black or white here, #2A2030 / white in Rex.
+	PaneButtonChip
 
 	// NumRoles is the number of roles.
 	NumRoles
@@ -366,6 +378,7 @@ var roleNames = [NumRoles]string{
 	"TitleText", "TitleTextInactive", "CapsuleFill", "CapsuleFillInactive", "CapsuleRim", "CapsuleRimInactive", "CapsuleHighlight",
 	"ScrollEdgeBar", "ScrollEdgeBarInactive", "ScrollEdgeLine", "AccessoryLine", "GroupBox",
 	"ControlText", "Knob", "FieldOutline", "ToolbarSymbolInactive", "SelectedRowTextInactive", "SidebarDetail", "SidebarSearchFill", "SidebarSearchFillInactive",
+	"PaneButton", "PaneButtonHover", "PaneButtonChip",
 }
 
 // Colors holds a colour per role, 0xRRGGBBAA, indexed by Role.
@@ -416,6 +429,7 @@ var Measured = [2]Colors{
 		GroupBox:              0xF7F7F7FF,
 		ToolbarSymbolInactive: 0xA6A6A6FF, SelectedRowTextInactive: 0x676767FF, SidebarDetail: 0x0000006E,
 		SidebarSearchFill: 0xEAEAEAFF, SidebarSearchFillInactive: 0xE5E5E5FF,
+		PaneButton: 0x0000007F, PaneButtonHover: 0x000000D8, PaneButtonChip: 0x000000FF,
 	},
 	{
 		Window: 0x1E1E1EFF, UnderPage: 0x282828FF, ControlBackground: 0x1E1E1EFF, TextBackground: 0x1E1E1EFF,
@@ -442,6 +456,7 @@ var Measured = [2]Colors{
 		GroupBox:              0x252525FF,
 		ToolbarSymbolInactive: 0x666666FF, SelectedRowTextInactive: 0x999999FF, SidebarDetail: 0xFFFFFF5C,
 		SidebarSearchFill: 0x4E4E4EFF, SidebarSearchFillInactive: 0x464646FF,
+		PaneButton: 0xFFFFFF8C, PaneButtonHover: 0xFFFFFFD8, PaneButtonChip: 0xFFFFFFFF,
 	},
 }
 

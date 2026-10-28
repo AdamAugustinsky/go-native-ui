@@ -85,6 +85,9 @@ type Store[T any] struct {
 	timer  *time.Timer
 
 	saveMu sync.Mutex // one save at a time, in the order they were asked for
+
+	closing  chan struct{} // made by the first Close, closed when its save is done
+	closeErr error         // the result of that Close, set before closing is closed
 }
 
 // encode is the file's canonical form of v.
@@ -288,21 +291,25 @@ func (s *Store[T]) Err() error {
 // Close stops the store and writes any pending change: once it returns, no save
 // is running or will start, and later changes stay in memory. A save that was
 // already running finishes first. It blocks on the disk, like Flush. Calling it
-// again waits for the first and returns the same result. A store with
+// again, also from another goroutine at the same time, waits for the first
+// to finish and returns the same result. A store with
 // ErrNotLoaded writes nothing and returns that error.
 func (s *Store[T]) Close() error {
 	s.mu.Lock()
 	if s.closed {
+		done := s.closing
 		s.mu.Unlock()
-		s.saveMu.Lock() // the first Close's final save may still be running
-		s.saveMu.Unlock()
-		return s.Err()
+		<-done // the first Close's final save may still be running
+		return s.closeErr
 	}
 	s.closed = true
+	s.closing = make(chan struct{})
 	if s.armed {
 		s.armed = false
 		s.timer.Stop()
 	}
 	s.mu.Unlock()
-	return s.save(true)
+	s.closeErr = s.save(true)
+	close(s.closing)
+	return s.closeErr
 }

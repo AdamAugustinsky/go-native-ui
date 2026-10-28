@@ -34,23 +34,30 @@ import (
 // for DragText UTF-8. Of the kinds a drag offers, the one delivered is the
 // first of files, image, text that the target accepts (DragAnswer.Accept).
 //
-// The data is copied during performDragOperation: on the main thread, before
-// it returns, because the pasteboard's items go stale when the pasteboard
-// changes owner (another drag can start first). File URLs and text are read at
-// once, within their caps, and their EvDrop is queued at once. An image is
-// taken as the file its item names (Finder and Photos offer one) or as a copy of
-// its encoded bytes (over MaxPaste is refused), and decoded to PNG on a worker:
-// its EvDrop arrives in a later Wait. The worker never touches the pasteboard.
-// An image is checked from its header before it is decoded: image 0 only, over
-// MaxImagePixels pixels, or more decoded bytes than MaxConvertBytes, fails; the
-// PNG it is encoded to is bounded by MaxPaste, the encoder failing past it.
+// The data is read on a worker goroutine while performDragOperation waits for it
+// on the main thread, for up to dropSyncBudget (250 ms). A source that answers
+// in that time (all but a lazy provider in another process) gives its EvDrop
+// before the drop returns, as always; a slower one no longer holds the main
+// thread, performDragOperation returns, and the EvDrop arrives in a later Wait
+// when the data does. The pasteboard's items go stale when it changes owner
+// (another drag can start first), so the worker compares the pasteboard's change
+// count before and after its read: a read across a change is thrown away and the
+// EvDrop is FlagFailed, never another owner's data. File URLs and text are read
+// within their caps. An image is taken as the file its item names (Finder and
+// Photos offer one) or as a copy of its encoded bytes (over MaxPaste is
+// refused), and decoded to PNG by the same worker: its EvDrop arrives in a later
+// Wait. An image is checked from its header before it is decoded: image 0 only,
+// over MaxImagePixels pixels, or more decoded bytes than MaxConvertBytes, fails;
+// the PNG it is encoded to is bounded by MaxPaste, the encoder failing past it.
 // A drag from our own session (StartDrag) is answered from the spec's data and
 // not through the pasteboard.
 //
-// Known risk: a source that provides its data lazily (a renderer in another
-// process) can hold the main thread inside the copy until the system's
-// pasteboard timeout. That is documented, not worked around (reading on a
-// worker would read items that may be stale), and tracked as a follow-up.
+// A drag whose items are only file promises (NSFilePromiseReceiver: Mail
+// attachments, Safari images, Photos exports) offers no kind unless
+// EnableFilePromises is set: the promisers are then asked to write the files
+// into a folder of ours (receivePromisedFilesAtDestination:) and the EvDrop
+// (DragFiles) comes when they have, or after two minutes with the ones that did.
+// A link (public.url), RTF and HTML are read as text.
 //
 // The system asks synchronously, at every enter and move, which operation the
 // window answers, so that it can show the right cursor: the handler of
@@ -71,8 +78,35 @@ import (
 // exactly once, on success, on failure, when the application never answers
 // (FilePromise.Timeout), and when the window closes.
 //
-// Where there is no native implementation (Windows and Linux so far,
-// NativeDrag) the calls return ErrUnsupported and no events arrive.
+// Per OS. macOS is AppKit's dragging protocols (drag_darwin.go; the files a
+// drag promises are received by droppromise_darwin.go when EnableFilePromises
+// is set, into a folder of the temporary directory, and delivered as DragFiles
+// once written; a web link and rich text (RTF, HTML) are offered and delivered
+// as DragText, droptext_darwin.go). Windows is OLE
+// (drag_windows.go): drops through IDropTarget, from CF_HDROP, the "PNG" format
+// or CF_DIBV5 and CF_DIB (converted on a worker, so its EvDrop comes in a later
+// Wait), and CF_UNICODETEXT; drags out through DoDragDrop, which is modal, so
+// StartDrag returns when the drag is over, with EvDragEnd already queued. Linux
+// is XDND on X11 (dnd_x11_linux.go) and the wl_data_device protocol on Wayland
+// (dnd_wl_linux.go, version 3 of the manager for a drag out; drag_linux.go has
+// what the two share), with the gtk-dnd-drag-threshold setting for DragThreshold: files
+// are text/uri-list, an image image/png, text UTF8_STRING and its relatives,
+// read like a paste (INCR included), and a drag out proposes the action the
+// modifier keys name. File promises (ErrPromiseUnsupported) and the drag
+// picture (Preview) are macOS's only so far (receiving a promise is macOS's
+// only too). Where there is no native
+// implementation (NativeDrag false) the calls return ErrDragUnsupported and no
+// events arrive.
+
+// EnableFilePromises turns on the receiving of file promises: a drag that offers
+// only promises is then offered as DragFiles, and its files are written into a
+// folder of ours. Off by default, because AppKit throws (and the process ends) if
+// receivePromisedFilesAtDestination: is called outside a real drag's
+// performDragOperation:, and nothing in the tests can start a real drag from
+// another application: the reception's bookkeeping is tested with the reader
+// block called by hand, and the call into AppKit has been read, not run. Set it
+// before the first window opens, then try a drag from Mail, Safari and Photos.
+var EnableFilePromises bool
 
 // DragKinds is a set of kinds of dragged content.
 type DragKinds uint8
@@ -225,9 +259,14 @@ type DragTicket uint64
 
 var (
 	// ErrDragUnsupported is returned by the drag calls where the OS has no
-	// implementation yet (Windows, Linux); errors.Is(err, errors.ErrUnsupported)
-	// also holds.
+	// implementation (a build for another OS than macOS, Windows and Linux; on
+	// Wayland, a compositor without version 3 of wl_data_device_manager);
+	// errors.Is(err, errors.ErrUnsupported) also holds.
 	ErrDragUnsupported = fmt.Errorf("platform: drag and drop on %s: %w", runtime.GOOS, errors.ErrUnsupported)
+	// ErrPromiseUnsupported is returned by StartDrag for a spec with a
+	// FilePromise where the OS has no file promises (everywhere but macOS so
+	// far); errors.Is(err, errors.ErrUnsupported) also holds.
+	ErrPromiseUnsupported = fmt.Errorf("platform: file promises on %s: %w", runtime.GOOS, errors.ErrUnsupported)
 	// ErrNoPress is returned by StartDrag when no left-button press is being
 	// held: a drag starts from a press that reached the application.
 	ErrNoPress = errors.New("platform: no mouse press to start a drag from")

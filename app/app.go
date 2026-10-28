@@ -497,41 +497,75 @@ func uiDefaults(c *ui.Context) { c.WheelJumps = runtime.GOOS == "darwin" }
 // again.
 func (a *App) close() {
 	a.closeWin()
+	a.releaseRetired()
 	if !a.mainApp {
 		a.unbindApp()
 	}
 }
 
-// closeWin releases the window and its surface. The renderer, the text
-// system and the GPU device are the app's: they go with its last window
-// (releaseShared), the renderer before that window's surface, as it waits
-// for the frames in flight.
+// closeWin closes the window for the app: it is out of the app's windows, and
+// its App holds none of its resources, at once. They are released now, unless
+// the loop is inside AppKit's own wait for a quit answer, which the pump is
+// suspended in and still uses the platform window below it: the platform
+// window is then retired (platform.Window.Retire: off the screen, out of the
+// app's reach) and its resources wait in the application object for
+// releaseRetired, at the first safe point after the pump. The renderer, the text system and the GPU device are the app's: they
+// go with its last window (releaseShared), the renderer before that window's
+// surface, as it waits for the frames in flight.
 func (a *App) closeWin() {
+	a.forget() // out of the app's windows (window.go)
+	r := retiredWin{a.Win, a.Surf, a.ownTex}
+	a.ownTex = nil
+	a.R, a.Surf, a.Win, a.Text = nil, nil, nil, nil
+	a.buttons = nil
+	s := a.appObject
+	if s != nil && s.pumping && platform.QuitWaitNative() && r.win != nil {
+		r.win.Retire()
+		s.retired = append(s.retired, r)
+		return
+	}
+	a.releaseWin(r)
+}
+
+// retiredWin is a closed window's platform window, surface and textures.
+type retiredWin struct {
+	win  *platform.Window
+	surf *gpu.Surface
+	tex  *winUploader
+}
+
+// releaseWin releases a closed window's resources, and the shared ones with
+// the last window.
+func (a *App) releaseWin(r retiredWin) {
 	pool := framePoolPush() // what releasing the window's objects autoreleases
 	defer framePoolPop(pool)
-	a.forget() // out of the app's windows (window.go)
 	last := len(a.wins) == 0
-	if a.ownTex != nil {
-		if !last {
-			a.ownTex.free() // the last window's go with the renderer
-		}
-		a.ownTex = nil
+	if r.tex != nil && !last {
+		r.tex.free() // the last window's go with the renderer
 	}
-	if last && a.R != nil {
-		a.R.Destroy()
+	if last && a.r != nil {
+		a.r.Destroy()
 		a.r = nil
 	}
-	if a.Surf != nil {
-		a.Surf.Destroy()
+	if r.surf != nil {
+		r.surf.Destroy()
 	}
-	if a.Win != nil {
-		a.Win.Close()
+	if r.win != nil {
+		r.win.Close()
 	}
 	if last {
 		a.releaseShared()
 	}
-	a.R, a.Surf, a.Win, a.Text = nil, nil, nil, nil
-	a.buttons = nil
+}
+
+// releaseRetired releases the resources of the windows closeWin held back.
+func (a *App) releaseRetired() {
+	for len(a.retired) > 0 {
+		r := a.retired[0]
+		a.retired = a.retired[1:]
+		a.releaseWin(r)
+	}
+	a.retired = nil
 }
 
 // loop is the event loop of the app and all its windows (D30). See pacer for
@@ -786,6 +820,9 @@ func personInput(k platform.EventKind) bool {
 // cleared by the inner one). What it would have handled stays queued, and
 // the next Wait delivers it.
 func (a *App) frameHandler() {
+	if a.Win == nil { // closed for the app: the wait of a quit answer it was closed in has not ended
+		return
+	}
 	if a.inFrame || a.framing > 0 { // this window's frame, or another's (D30: Build is never re-entered)
 		a.reentries++
 		return
@@ -811,6 +848,10 @@ func (a *App) present(inHandler bool, passes int) bool {
 	a.flushDialogs() // dialogs asked for in Build: shown now that the frame is over
 	a.flushDrag()    // drop kinds for the window, drags out asked for in Build (drag.go)
 	now := platform.Now()
+	if a.deviceLost() { // the frame was not shown: new device, then every window repaints (devloss.go)
+		a.recoverFromLoss(now)
+		return false
+	}
 	if ok {
 		a.consecFails, a.lastDrawT = 0, now
 		a.p.drawn(a.more)

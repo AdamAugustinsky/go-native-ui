@@ -217,7 +217,7 @@ func TestHostFocusHandOffAndCommands(t *testing.T) {
 		vk  uintptr
 		key Key
 	}{{vkTab, KeyTab}, {vkEscape, KeyEscape}, {vkReturn, KeyEnter}} {
-		win32.Call(pPostMessageW, edit, wmKeyDown, k.vk, 1)
+		postKey(edit, k.vk)
 		got = pumpEvents([]*Window{w}, time.Second, func(g [][]Event) bool { return hasKind(g[0], EvHostCommand) })[0]
 		e := lastOf(got, EvHostCommand)
 		if e.Kind != EvHostCommand || HostID(e.Tag) != id || e.Key != k.key {
@@ -283,7 +283,7 @@ func TestHostControlKeepsTheKeysItWants(t *testing.T) {
 	w.FocusHost(id)
 	settle(w)
 	w.Events()
-	win32.Call(pPostMessageW, edit, wmKeyDown, vkReturn, 1)
+	postKey(edit, vkReturn)
 	got := pumpEvents([]*Window{w}, 300*time.Millisecond, func([][]Event) bool { return false })[0]
 	if hasKind(got, EvHostCommand) {
 		t.Errorf("Enter a multi-line EDIT wants came back: %+v", got)
@@ -484,4 +484,13 @@ func TestGDIHostShowsInAChildWindowsWindow(t *testing.T) {
 	if in := clientPixel(t, w.hwnd, cw, ch, 90, 70); in == 0xFF0000 {
 		t.Error("a hidden host still shows")
 	}
+}
+
+// postKey posts a key press as the keyboard delivers it: WM_KEYDOWN with
+// the key's scan code, which TranslateMessage turns into its WM_CHAR, and
+// WM_KEYUP.
+func postKey(hwnd, vk uintptr) {
+	scan := win32.Call(pMapVirtualKeyW, vk, 0 /* MAPVK_VK_TO_VSC */)
+	win32.Call(pPostMessageW, hwnd, wmKeyDown, vk, 1|scan<<16)
+	win32.Call(pPostMessageW, hwnd, wmKeyUp, vk, 1|scan<<16|3<<30)
 }

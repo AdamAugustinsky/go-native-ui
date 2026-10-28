@@ -44,8 +44,10 @@ const maxOffers = 4
 
 // wlOffer is a wl_data_offer proxy and which of wlMimes it lists.
 type wlOffer struct {
-	proxy uintptr
-	mimes uint8
+	proxy      uintptr
+	mimes      uint8
+	dnd        bool   // the offer of a drag over the window (dnd_wl_linux.go), not the selection
+	srcActions uint32 // wl_data_offer.source_actions: what the source allows
 }
 
 // wlInitDataDevice creates the seat's data device once both globals are bound.
@@ -75,16 +77,21 @@ func (w *Window) onDataDevice(op uint32, a unsafe.Pointer) {
 				break
 			}
 		}
-		if slot < 0 { // evict the oldest that is not the selection
+		if slot < 0 { // evict the oldest that is not the selection or a drag's
 			for i := range y.offers {
-				if i != y.sel {
+				if i != y.sel && !y.offers[i].dnd {
 					slot = i
 					break
 				}
 			}
+			if slot < 0 {
+				slot = 0
+			}
 			w.release(y.offers[slot].proxy, 2, 1) // wl_data_offer.destroy
 		}
 		y.offers[slot] = wlOffer{proxy: p}
+	case 1, 2, 3, 4: // enter, leave, motion, drop: a drag over the window
+		w.onDndEvent(op, a)
 	case 5: // selection(id): the clipboard changed; id may be null
 		p := argP(a, 0)
 		y.sel = -1
@@ -95,6 +102,9 @@ func (w *Window) onDataDevice(op uint32, a unsafe.Pointer) {
 			}
 			if o.proxy == p {
 				y.sel = i
+				continue
+			}
+			if o.dnd { // a drag over the window keeps its offer
 				continue
 			}
 			w.release(o.proxy, 2, 1)
@@ -112,13 +122,16 @@ func (w *Window) onOffer(proxy uintptr, op uint32, a unsafe.Pointer) bool {
 		if o.proxy != proxy {
 			continue
 		}
-		if op == 0 { // offer(mime_type)
+		switch op {
+		case 0: // offer(mime_type)
 			m := argP(a, 0)
 			for k, name := range wlMimes {
 				if cstrIs(m, string(name[:len(name)-1])) {
 					o.mimes |= 1 << k
 				}
 			}
+		case 1: // source_actions(actions), since 3
+			o.srcActions = argU(a, 0)
 		}
 		return true
 	}
@@ -253,6 +266,9 @@ func (w *Window) wlDropSend(i int) {
 func (w *Window) wlSendDeadline() int64 {
 	c := &w.clip
 	d := int64(-1)
+	if dd := &w.wy.dnd; dd.recv {
+		d = dd.deadline
+	}
 	for i := 0; i < c.nsend; i++ {
 		if t := c.sends[i].deadline; d < 0 || t < d {
 			d = t
@@ -364,6 +380,7 @@ func (w *Window) wlReadPaste() {
 
 func (w *Window) wlPollFDs() {
 	c := &w.clip
+	w.wlDndPollFD()
 	c.pollRead = -1
 	if c.rfd >= 0 {
 		w.pfd[w.npfd] = pollfd{fd: c.rfd, events: pollIn}
@@ -382,6 +399,7 @@ func (w *Window) wlPollFDs() {
 func (w *Window) wlPollDone() {
 	c := &w.clip
 	now := nanotime()
+	w.wlDndPollDone(now)
 	if c.pollRead >= 0 && w.pfd[c.pollRead].revents&(pollIn|pollHup|pollErr) != 0 {
 		w.wlReadPaste()
 	}
@@ -414,6 +432,12 @@ func (w *Window) wlClipClose() {
 	}
 	w.release(y.src, 1, 1)
 	y.src = 0
+	if y.dnd.recv {
+		syscall.Close(int(y.dnd.rfd))
+		y.dnd.recv = false
+	}
+	w.release(y.dnd.src, 1, 1)
+	y.dnd.src = 0
 	w.release(y.dd, 2, 2) // wl_data_device.release (v2)
 	y.dd = 0
 	w.release(y.ddm, 0, 99) // no destructor

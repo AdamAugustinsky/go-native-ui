@@ -246,6 +246,7 @@ func (w *Window) Close() {
 	w.SetSecureTextInput(false) // its secure field is gone
 	w.closeAux()                // sheets first: a window closed under a sheet never calls its completion
 	w.closeDrag()
+	w.detachPanel()
 	objc.Send(w.link, selInvalidate)
 	objc.Send(w.link, selReleaseObj) // Open retained the view link; attachMetalLink owns its link
 	w.link = 0
@@ -265,6 +266,25 @@ func (w *Window) Close() {
 	if secure.want && reg.n == 0 {
 		SetSecureInput(false) // the field that wanted it is gone; activation must not bring it back
 	}
+}
+
+// Retire ends the window's dealings with the app while the objects stay as
+// they are, for a pump that is running on them (AppKit's own wait for the
+// answer to a terminate: someone else sent, inside Pump): the window is off
+// the screen, out of the registry (its objects find no window, its events go
+// to AppKit alone), without the app's frame handler, field keys and menus, and
+// its bar handed on. Close releases the rest, once the pump is back. Main
+// thread.
+func (w *Window) Retire() {
+	if w.buried || !w.registered {
+		return
+	}
+	w.handler, w.fieldKeys, w.menus = nil, nil, windowMenus{}
+	w.Hide()
+	rememberClosed(int(objc.Send(w.win, selWindowNumber)))
+	unregister(w)
+	forgetWindow(w)
+	adoptMenuBar()
 }
 
 // buryObjects detaches the closed window's delegate and hands Open's

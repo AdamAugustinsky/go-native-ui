@@ -470,6 +470,7 @@ func finishPromise(r *promiseRec, err error) {
 // of a promise is called exactly once, also on cancel), and the writers'
 // context is cancelled.
 func (w *Window) closeDrag() {
+	w.closeReceptions()
 	d := &w.drag
 	promiseMu.Lock()
 	d.closed = true

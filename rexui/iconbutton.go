@@ -15,8 +15,9 @@ const (
 	// secondary fill in Rex's capsule (the size's radius, AppKit's
 	// icon-rounded, under UseAppKitControls).
 	IconBordered IconButtonVariant = iota
-	// IconBorderless is a bare symbol in secondary label colour that
-	// darkens under the pointer (icon-borderless; rexlook's pane buttons).
+	// IconBorderless is a bare symbol in a quiet grey that darkens under the
+	// pointer, on a chip that lights up behind it (icon-borderless; Rex's
+	// pane-header buttons: IconButtonRecipes, IconButtonChip).
 	IconBorderless
 	// IconToolbar is a toolbar item: a glass capsule the toolbar's item
 	// size (36 × 36 in a unified toolbar at the extra-large size, 28 × 24 in a
@@ -52,9 +53,9 @@ type IconButtonOpts struct {
 var IconButtonRecipes = [NumIconButtonVariants]ButtonRecipe{
 	IconBordered: ButtonRecipes[ButtonDefault],
 	IconBorderless: {
-		Fill: None, Label: Of(theme.Label2), FillInactive: None, LabelInactive: Of(theme.Label3),
-		FillHover: None, FillPressed: None, LabelPressed: Of(theme.Label),
-		FillDisabled: None, LabelDisabled: Of(theme.Label4),
+		Fill: None, Label: Of(theme.PaneButton), FillInactive: None, LabelInactive: Of(theme.PaneButton),
+		FillHover: None, FillPressed: None, LabelPressed: Of(theme.PaneButtonHover),
+		FillDisabled: None, LabelDisabled: OfAlpha(theme.PaneButton, 0.4, 0.4),
 		Rim: None, RimInactive: None, Highlight: None,
 		Hover: base.HoverOn,
 	},
@@ -65,7 +66,28 @@ var IconButtonRecipes = [NumIconButtonVariants]ButtonRecipe{
 
 // IconButtonHoverLabel is the icon colour of a hovered borderless icon
 // button, toward which Label is mixed by hover.
-var IconButtonHoverLabel = Of(theme.Label)
+var IconButtonHoverLabel = Of(theme.PaneButtonHover)
+
+// IconChip is the chip a borderless icon button lights up behind its symbol
+// (Rex's pane-header buttons): the button's box, rounded, in Tint at the
+// alpha Hover while the pointer is over it and Hover+Press while it is
+// pressed. The zero value draws none.
+type IconChip struct {
+	// Tint is the chip's colour (its alpha is Hover and Press's).
+	Tint Tint
+	// Hover and Press are the chip's alpha under the pointer, and the alpha
+	// that pressing adds.
+	Hover, Press float32
+	// Radius is the corner radius, in points.
+	Radius float32
+}
+
+// IconButtonChip is the borderless icon button's chip, as Rex's pane headers
+// have it: PaneButtonChip at 8 % under the pointer and 15 % pressed, on a
+// box with 6-pt corners; a disabled button has none. The box is the button's
+// own, so a button with a hit area larger than its symbol is given its size
+// with Kit.NextSize. UseAppKitControls clears it.
+var IconButtonChip = IconChip{Tint: Of(theme.PaneButtonChip), Hover: 0.08, Press: 0.07, Radius: 6}
 
 // IconButton builds a button that shows only the icon ic. name is its
 // accessible name (and what a tooltip should say); it follows ui's label
@@ -91,6 +113,12 @@ func IconButton(k *base.Kit, ic icon.ID, name string, o IconButtonOpts) base.Sig
 	case IconBorderless:
 		w, h = max(theme.Snap(s.Icon), iw), max(theme.Snap(s.Icon), ih)
 		fg = mix(fg, IconButtonHoverLabel.RGBA(r), p.Hot*(1-p.Down))
+		if ch := &IconButtonChip; !p.Disabled && ch.Tint != (Tint{}) {
+			if a := ch.Hover*p.Hot + ch.Press*p.Down; a > 0 {
+				fill = theme.ColA(ch.Tint.RGBA(r)>>8, a)
+				radius = k.Pt(ch.Radius)
+			}
+		}
 	case IconToolbar:
 		tb := &r.Window.Toolbars[theme.ToolbarCompact]
 		if o.Size == theme.SizeXLarge {
