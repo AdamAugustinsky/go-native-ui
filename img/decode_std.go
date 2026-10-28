@@ -12,6 +12,8 @@ import (
 	_ "image/jpeg" // registers the JPEG decoder
 	_ "image/png"  // registers the PNG decoder
 	"os"
+
+	_ "golang.org/x/image/webp" // registers the WebP decoder (lossy, lossless, alpha; C6)
 )
 
 // osDecoder holds what the system icons need (Windows); the standard
@@ -34,7 +36,7 @@ func (w *worker) decode(c *Cache, j *job, data []byte) result {
 		return fail(errDecode)
 	}
 	format := sniff(data)
-	if format == "webp" || format == "heif" {
+	if format == "heif" {
 		return fail(errUnsupported)
 	}
 	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
@@ -48,20 +50,21 @@ func (w *worker) decode(c *Cache, j *job, data []byte) result {
 		return fail(errTooLarge)
 	}
 	if j.frame != 0 {
-		return fail(errDecode) // later frames come with the animation work (C6)
-	}
-	m, _, err := image.Decode(bytes.NewReader(data))
-	if err != nil {
-		return fail(errDecode)
+		return fail(errDecode) // later frames are the animation's (anim_job.go)
 	}
 	frames, delay := int32(1), int32(0)
+	m, code := decodeFirst(data, format, cfg)
+	if code != errNone {
+		return fail(code)
+	}
 	orient := 1
 	switch format {
 	case "jpeg":
 		orient = Orientation(data)
 	case "gif":
 		frames, delay = gifFrames(data)
-		m = onCanvas(m, cfg.Width, cfg.Height, data)
+	case "webp":
+		frames, delay = webpFrames(data)
 	}
 	sw, sh := int32(m.Bounds().Dx()), int32(m.Bounds().Dy())
 	ow, oh := sw, sh
@@ -84,6 +87,48 @@ func (w *worker) decode(c *Cache, j *job, data []byte) result {
 		padEdges(pix, int(tw), int(th))
 	}
 	return result{buf: buf, w: tw, h: th, pad: pad, frames: frames, dlay: delay}
+}
+
+// decodeFirst decodes the first frame of data, of the sniffed format and
+// configuration cfg, at the size of its canvas: a GIF's first frame on its
+// logical screen; an animated WebP's first frame composited on its canvas
+// (x/image/webp decodes only stills).
+func decodeFirst(data []byte, format string, cfg image.Config) (image.Image, uint8) {
+	if format == "webp" && webpAnimated(data) {
+		a, err := openWebP(data)
+		if err != nil {
+			if errors.Is(err, errAnimLarge) {
+				return nil, errTooLarge
+			}
+			return nil, errDecode
+		}
+		m, err := a.frame(0)
+		if err != nil {
+			return nil, errDecode
+		}
+		return m, errNone
+	}
+	m, _, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		return nil, errDecode
+	}
+	if format == "gif" {
+		m = onCanvas(m, cfg.Width, cfg.Height, data)
+	}
+	return m, errNone
+}
+
+// webpFrames is the frame count and the first frame's delay of a WebP: 1
+// and 0 for a still one.
+func webpFrames(data []byte) (frames, delay int32) {
+	if !webpAnimated(data) {
+		return 1, 0
+	}
+	a, err := openWebP(data)
+	if err != nil {
+		return 1, 0
+	}
+	return int32(a.count()), int32(a.delay(0))
 }
 
 // onCanvas places a GIF's first frame, decoded with the frame's own bounds,
@@ -109,7 +154,7 @@ func onCanvas(m image.Image, w, h int, gif []byte) image.Image {
 // size), with a JPEG's EXIF orientation applied.
 func decodeImage(data []byte, limit int32) (*image.RGBA, uint8) {
 	format := sniff(data)
-	if format == "webp" || format == "heif" {
+	if format == "heif" {
 		return nil, errUnsupported
 	}
 	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
@@ -122,16 +167,13 @@ func decodeImage(data []byte, limit int32) (*image.RGBA, uint8) {
 	if cfg.Width <= 0 || cfg.Height <= 0 || int64(cfg.Width)*int64(cfg.Height) > maxPixels {
 		return nil, errTooLarge
 	}
-	m, _, err := image.Decode(bytes.NewReader(data))
-	if err != nil {
-		return nil, errDecode
+	m, code := decodeFirst(data, format, cfg)
+	if code != errNone {
+		return nil, code
 	}
 	orient := 1
-	switch format {
-	case "jpeg":
+	if format == "jpeg" {
 		orient = Orientation(data)
-	case "gif":
-		m = onCanvas(m, cfg.Width, cfg.Height, data)
 	}
 	sw, sh := int32(m.Bounds().Dx()), int32(m.Bounds().Dy())
 	ow, oh := sw, sh
