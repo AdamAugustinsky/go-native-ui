@@ -24,14 +24,30 @@
 //   - writes the Start-menu shortcut (IShellLinkW, with System.AppUserModel.ID
 //     set to Options.ID through IPropertyStore), so toasts carry the app's
 //     name and icon (app/notify on Windows, D71);
-//   - registers the AUMID (HKCU\Software\Classes\AppUserModelId\<ID>), each
-//     URL scheme (HKCU\Software\Classes\<scheme>, URL Protocol, its
-//     shell\open\command), and the uninstall entry
-//     (HKCU\…\CurrentVersion\Uninstall\<ID>, run with UninstallArg);
+//   - registers the AUMID (HKCU\Software\Classes\AppUserModelId\<ID>, its
+//     DisplayName), each URL scheme (HKCU\Software\Classes\<scheme>, URL
+//     Protocol, its shell\open\command `"<exe>" "%1"`), and the uninstall
+//     entry (HKCU\…\CurrentVersion\Uninstall\<ID>, run with UninstallArg);
 //   - relaunches the installed copy when Options.Relaunch is set.
 //
-// Uninstall removes all of it and the folder; the running executable is
-// deleted by a helper copy in %TEMP% after the process exits.
+// The installed executable keeps the file name gnui package gave it (the
+// version resource's OriginalFilename), so a download the browser renamed
+// "App (1).exe" installs as App.exe. Installing over a running copy renames
+// that copy aside, as Windows allows, and removes it on a later install.
+//
+// Uninstall removes all of it and the folder: the shortcut, the AUMID key,
+// each scheme that still opens this app (another app may have taken one
+// since), the uninstall entry, and the folder Install made. When the running
+// executable is in that folder, a copy of it in %TEMP% (started with a
+// private argument that this package's init recognises, before the app's
+// main runs) waits for the app to exit, removes the folder, and leaves
+// cmd.exe to remove the copy's own folder.
+//
+// Options left empty are read, on Windows, from the executable's version
+// resource as gnui package writes it: ID from AppUserModelID (gnui.json's
+// id, or windows.aumid), Name from ProductName, Publisher from CompanyName,
+// Version from ProductVersion. A packaged app can call
+// Install(Options{Schemes: …, Relaunch: true}).
 //
 // # Threads
 //
@@ -40,8 +56,7 @@
 //
 // # What each OS does
 //
-//   - Windows: as above (W10). Until W10 lands every call returns
-//     ErrUnsupported.
+//   - Windows: as above (W10).
 //   - macOS: Supported returns ErrNotNeeded (a bundle is installed by being
 //     copied, and its URL schemes come from gnui.json); the rest return it
 //     too.
@@ -102,12 +117,16 @@ type Options struct {
 func Supported() error { return osSupported() }
 
 // Installed reports whether the running executable is the installed copy,
-// and the installed executable's path when there is one.
+// and the installed executable's path when there is one. On Windows it looks
+// through the current user's uninstall entries that Install wrote: the
+// running executable's own, or else one whose executable has the same file
+// name (a downloaded copy of an app that is installed).
 func Installed() (path string, ok bool) { return osInstalled() }
 
 // Install installs the running executable as o describes. An app already
 // installed is updated in place (its registration refreshed).
 func Install(o Options) error {
+	o = osDefaults(o)
 	if err := o.check(); err != nil {
 		return err
 	}
@@ -116,6 +135,7 @@ func Install(o Options) error {
 
 // Uninstall removes what Install wrote for o.ID, the folder included.
 func Uninstall(o Options) error {
+	o = osDefaults(o)
 	if o.ID == "" {
 		return fmt.Errorf("%w: no ID", ErrOptions)
 	}
