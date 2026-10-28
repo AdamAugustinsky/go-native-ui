@@ -209,6 +209,32 @@ func (rc *recorder) open() error {
 			return err
 		}
 	}
+	if hr := win32.HR(com.Call(rc.sess, vtSessionStart)); hr < 0 {
+		return permError("StartCapture", hr)
+	}
+	// The first frame, before the writer: it tries the video processor on
+	// a real frame, and falls back to BGRA (the sink writer's converter)
+	// when a step fails there.
+	rc.setBufSize()
+	for i := 0; i < 200 && rc.lastBuf == 0; i++ {
+		rc.takeFrame()
+		if rc.nv12 && rc.vpErr != nil {
+			rc.nv12 = false
+			rc.releaseProcessor()
+			if err := rc.openStaging(formatBGRA); err != nil {
+				return err
+			}
+			rc.setBufSize()
+		}
+		if rc.lastBuf == 0 {
+			win32.Call(sys.waitOne, rc.stopEv, 5)
+		}
+	}
+	if rc.lastBuf == 0 {
+		if err := rc.blackBuffer(); err != nil {
+			return err
+		}
+	}
 	audio := rc.o.Microphone || rc.o.SystemAudio
 	wr, err := newWriter(rc.path, rc.w, rc.h, rc.o.FPS, rc.nv12, audio)
 	if err != nil {
@@ -235,24 +261,6 @@ func (rc *recorder) open() error {
 		}
 	}
 	rc.r.ownAudio = excluded // read on the main thread after Started (the inbox orders it)
-	if hr := win32.HR(com.Call(rc.sess, vtSessionStart)); hr < 0 {
-		return permError("StartCapture", hr)
-	}
-	rc.bufSize = rc.w * rc.h * 3 / 2
-	if !rc.nv12 {
-		rc.bufSize = rc.w * rc.h * 4
-	}
-	for i := 0; i < 200 && rc.lastBuf == 0; i++ {
-		rc.takeFrame()
-		if rc.lastBuf == 0 {
-			win32.Call(sys.waitOne, rc.stopEv, 5)
-		}
-	}
-	if rc.lastBuf == 0 {
-		if err := rc.blackBuffer(); err != nil {
-			return err
-		}
-	}
 	win32.Call(sys.qpc, uintptr(unsafe.Pointer(&rc.t0)))
 	return nil
 }
@@ -383,6 +391,14 @@ func (rc *recorder) releaseProcessor() {
 	for _, p := range []*uintptr{&rc.staging, &rc.outView, &rc.outTex, &rc.vp, &rc.vpEnum, &rc.vctx, &rc.vdev} {
 		win32.Release(*p)
 		*p = 0
+	}
+}
+
+// setBufSize is a video buffer's size: NV12, or BGRA.
+func (rc *recorder) setBufSize() {
+	rc.bufSize = rc.w * rc.h * 3 / 2
+	if !rc.nv12 {
+		rc.bufSize = rc.w * rc.h * 4
 	}
 }
 
@@ -557,7 +573,12 @@ func (rc *recorder) convert() {
 	cw, ch := min(rc.content[0], rc.poolSize[0]), min(rc.content[1], rc.poolSize[1])
 	if cw > 0 && ch > 0 {
 		if rc.nv12 {
-			rc.process(cw, ch)
+			if err := rc.process(cw, ch); err != nil {
+				if rc.wr == nil {
+					rc.vpErr = err // still opening: open falls back to BGRA
+				}
+				cw = 0 // keep the last frame
+			}
 		} else {
 			rc.box = [6]uint32{0, 0, 0, uint32(min(int(cw), rc.w)), uint32(min(int(ch), rc.h)), 1}
 			com.Call(rc.ctx, vtContextCopyRegion, rc.staging, 0, 0, 0, 0, rc.tex, 0, uintptr(unsafe.Pointer(&rc.box)))
@@ -576,10 +597,10 @@ func (rc *recorder) convert() {
 
 // process scales the content (cw×ch at the texture's top left) into the
 // video, letterboxed, as NV12.
-func (rc *recorder) process(cw, ch int32) {
+func (rc *recorder) process(cw, ch int32) error {
 	rc.inView = 0
-	if win32.HR(com.Call(rc.vdev, vtVDCreateInputView, rc.tex, rc.vpEnum, uintptr(unsafe.Pointer(&rc.viewDesc)), uintptr(unsafe.Pointer(&rc.inView)))) < 0 {
-		return
+	if hr := win32.HR(com.Call(rc.vdev, vtVDCreateInputView, rc.tex, rc.vpEnum, uintptr(unsafe.Pointer(&rc.viewDesc)), uintptr(unsafe.Pointer(&rc.inView)))); hr < 0 {
+		return hrError("CreateVideoProcessorInputView", hr)
 	}
 	rc.src = rect{0, 0, cw, ch}
 	scale := math.Min(float64(rc.w)/float64(cw), float64(rc.h)/float64(ch))
@@ -589,10 +610,14 @@ func (rc *recorder) process(cw, ch int32) {
 	com.Call(rc.vctx, vtVCStreamSourceRect, rc.vp, 0, 1, uintptr(unsafe.Pointer(&rc.src)))
 	com.Call(rc.vctx, vtVCStreamDestRect, rc.vp, 0, 1, uintptr(unsafe.Pointer(&rc.dst)))
 	rc.stream.input = rc.inView
-	com.Call(rc.vctx, vtVCBlt, rc.vp, rc.outView, 0, 1, uintptr(unsafe.Pointer(&rc.stream)))
+	hr := win32.HR(com.Call(rc.vctx, vtVCBlt, rc.vp, rc.outView, 0, 1, uintptr(unsafe.Pointer(&rc.stream))))
 	rc.stream.input = 0
 	win32.Release(rc.inView)
+	if hr < 0 {
+		return hrError("VideoProcessorBlt", hr)
+	}
 	com.Call(rc.ctx, vtContextCopyResource, rc.staging, rc.outTex)
+	return nil
 }
 
 // readBack copies the staging texture into a new Media Foundation buffer,
