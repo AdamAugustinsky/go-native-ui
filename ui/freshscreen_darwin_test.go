@@ -6,9 +6,11 @@ import (
 	"os"
 	"runtime"
 	"slices"
+	"strings"
 	"testing"
 
 	"gonativeui/gpu"
+	"gonativeui/internal/allocsite"
 	"gonativeui/internal/sysinfo"
 	"gonativeui/text"
 )
@@ -177,6 +179,15 @@ func TestFreshScreenOfWrappedMessagesFitsTheFrame(t *testing.T) {
 				s.jump()
 				s.frame()
 			}
+			// The Go runtime's own allocations (a new thread, its timers)
+			// are not the frame's: the gates pass over them (DECISIONS D27).
+			// macOS CI's whole run, every package at once, had one.
+			restore := allocsite.Enable()
+			var s0, s1 allocsite.Snapshot
+			s0.Take() // the storage, before the collection
+			s1.Take()
+			runtime.GC()
+			s0.Take()
 			var m0, m1 runtime.MemStats
 			runtime.ReadMemStats(&m0)
 			for i := 0; i < 300; i++ {
@@ -185,8 +196,18 @@ func TestFreshScreenOfWrappedMessagesFitsTheFrame(t *testing.T) {
 			}
 			runtime.ReadMemStats(&m1)
 			if d := m1.Mallocs - m0.Mallocs; d != 0 {
-				t.Errorf("%d allocations over 300 frames of fresh messages", d)
+				runtime.GC()
+				s1.Take()
+				sites := allocsite.Diff(&s0, &s1)
+				var b strings.Builder
+				allocsite.Write(&b, sites)
+				if n := allocsite.Objects(sites, allocsite.Ours) + allocsite.Objects(sites, allocsite.Other); n != 0 {
+					t.Errorf("%d allocations over 300 frames of fresh messages (%d in the process):\n%s", n, d, b.String())
+				} else {
+					t.Logf("%d allocations of the Go runtime's own over the 300 frames, not counted:\n%s", d, b.String())
+				}
 			}
+			restore()
 			us := s.measure(300)
 			p50, p99, mx := pct(us, 0.5), pct(us, 0.99), pct(us, 1)
 			st := s.ts.ParaStats()

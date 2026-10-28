@@ -685,8 +685,10 @@ func (a *App) onEvent(e *platform.Event) {
 		a.tr.in.Hidden = e.Flags&platform.FlagDown == 0
 		if a.cfg.Panel != nil && a.Win != nil {
 			// AppKit hides a HideOnDeactivate panel when the app deactivates
-			// and shows it again when the app comes back.
-			a.shelved = a.tr.in.Hidden && !a.Win.Visible()
+			// and shows it again when the app comes back. A panel off the
+			// screen stays shelved whatever the occlusion state says, and so
+			// does one whose Hide waits for the safe point.
+			a.shelved = !a.Win.Visible() || a.cmd&cmdHide != 0
 		}
 		// Hidden, timed wakes wait and a failed attempt parks the loop
 		// (pacer); shown again, what was skipped is owed. A bench draws

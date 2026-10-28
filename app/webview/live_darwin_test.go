@@ -50,6 +50,7 @@ type harness struct {
 
 	mu     sync.Mutex
 	events []webview.Event
+	kinds  []app.EventKind // every app event's kind, in order (the idle gate)
 	views  []*webview.View
 	frames atomic.Int64
 	// atStart and afterOpen: WebKit was loaded when Start began, and once
@@ -70,6 +71,9 @@ func (h *harness) Start(a *app.App) error {
 }
 
 func (h *harness) Event(a *app.App, e *app.Event) {
+	h.mu.Lock()
+	h.kinds = append(h.kinds, e.Kind)
+	h.mu.Unlock()
 	if e.Kind == app.EvPost && e.Source == srcDo {
 		for {
 			select {
@@ -378,9 +382,24 @@ func TestViewMatrix(t *testing.T) {
 
 	// navigation, events and history
 	h.navigate(v, p.url("/a"), "Page A")
-	for _, k := range []webview.EventKind{webview.TitleChanged, webview.URLChanged, webview.LoadStarted, webview.LoadFinished} {
+	// The state changes at once (KVO), its events reach the app through the
+	// views' ring, after the harness's own post may have: the title can be
+	// there before its event (macOS CI, under the load of the whole run).
+	kinds := []webview.EventKind{webview.TitleChanged, webview.URLChanged, webview.LoadStarted, webview.LoadFinished}
+	allSeen := func() bool {
+		for _, k := range kinds {
+			if _, ok := h.saw(v, k); !ok {
+				return false
+			}
+		}
+		return true
+	}
+	for end := time.Now().Add(5 * time.Second); !allSeen() && time.Now().Before(end); {
+		time.Sleep(20 * time.Millisecond)
+	}
+	for _, k := range kinds {
 		if _, ok := h.saw(v, k); !ok {
-			t.Errorf("no event of kind %d for the first page", k)
+			t.Errorf("no event of kind %d for the first page within 5 s of its title", k)
 		}
 	}
 	h.Do(func(*app.App) {
@@ -502,10 +521,30 @@ func TestViewMatrix(t *testing.T) {
 	// idle: once loaded, the view adds no frames
 	h.Do(func(*app.App) {})
 	time.Sleep(500 * time.Millisecond)
+	h.mu.Lock()
+	k0 := len(h.kinds)
+	h.mu.Unlock()
 	f0 := h.frames.Load()
 	time.Sleep(3 * time.Second)
 	idle := h.frames.Load() - f0
-	t.Logf("gate: an idle view, 3 s: %d frames (presents)", idle)
+	h.mu.Lock()
+	during := append([]app.EventKind(nil), h.kinds[k0:]...)
+	h.mu.Unlock()
+	t.Logf("gate: an idle view, 3 s: %d frames (presents); app events %v", idle, during)
+	// An app event draws what the Handler may have changed (D37). The
+	// system's own (another app took the activation or gave it back, the
+	// screens changed: a hosted runner's session does both) are not the
+	// view's doing, as widgettest/live's idle test has it.
+	outside := 0
+	for _, k := range during {
+		if k == app.EvActivated || k == app.EvDeactivated || k == app.EvScreensChanged {
+			outside++
+		}
+	}
+	if idle != 0 && outside > 0 && outside == len(during) {
+		t.Logf("the idle frames follow %d of the system's app events: not counted", outside)
+		idle = 0
+	}
 	for pid, p := range webKitProcesses() {
 		if _, ok := before[pid]; !ok {
 			t.Logf("reported, not budgeted: WebKit process %s started with the views: %s", pid, p)

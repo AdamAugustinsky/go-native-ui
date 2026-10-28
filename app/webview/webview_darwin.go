@@ -83,6 +83,7 @@ var wk struct {
 	next    uint32
 	nextDL  uint32
 	paths   [len(kvoPaths)]objc.ID // retained key paths
+	stores  map[string]objc.ID     // a profile's data store (+1), kept for the process (dataStore)
 	lastDL  atomic.Int64           // the time of the last DownloadProgress posted, ns
 	// loadTime is how long loading WebKit and registering the classes took
 	// (the first New), for the gate's report.
@@ -309,12 +310,20 @@ func osNew(w *platform.Window, o *Options) (backend, platform.HostID, uint32, er
 	return v, host, v.id, nil
 }
 
-// dataStore is a fresh non-persistent store (profile "") or the persistent
-// store of the profile, autoreleased.
+// dataStore is a fresh non-persistent store (profile "", autoreleased) or
+// the persistent store of the profile. A profile's store is made once and
+// kept for the process: WebKit holds a store only while something uses it,
+// and one made again for the identifier after the last view of the profile
+// closed may start from what is on disk, without a cookie set a moment
+// before (macOS 15: a new view of the profile read no cookie where the
+// closed one had set it; the cookie was on disk by the next launch).
 func dataStore(profile string) (objc.ID, error) {
 	cls := objc.Cls("WKWebsiteDataStore")
 	if profile == "" {
 		return objc.Send(cls, selNonPersistent), nil
+	}
+	if s, ok := wk.stores[profile]; ok {
+		return s, nil
 	}
 	if !objc.SendBool1(cls, selRespondsTo, uintptr(selStoreForID)) {
 		return 0, errNoDataStoreForName
@@ -322,7 +331,15 @@ func dataStore(profile string) (objc.ID, error) {
 	u := profileUUID(profile)
 	id := objc.Send1(objc.Send(objc.Cls("NSUUID"), selAlloc), selInitUUIDBytes, uintptr(unsafe.Pointer(&u)))
 	defer objc.Release(id)
-	return objc.Send1(cls, selStoreForID, uintptr(id)), nil
+	s := objc.Retain(objc.Send1(cls, selStoreForID, uintptr(id)))
+	if s == 0 {
+		return 0, fmt.Errorf("%w: no data store for the profile", ErrRuntime)
+	}
+	if wk.stores == nil {
+		wk.stores = map[string]objc.ID{}
+	}
+	wk.stores[profile] = s
+	return s, nil
 }
 
 // profileUUID is the identifier of a profile's data store: a version 8

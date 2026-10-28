@@ -47,7 +47,7 @@ var sys struct {
 
 	selReceive, selSend, selType, selData, selString, selDataEnc, selLength, selBytes     uintptr
 	selAlloc, selInitData, selInitString, selInitBytesNoCopy, selInitStrBytes, selRelease uintptr
-	selCloseCode, selCloseReason                                                          uintptr
+	selCloseCode, selCloseReason, selPing                                                 uintptr
 }
 
 // conns is the table a block's context (slot | generation<<32) indexes.
@@ -166,6 +166,7 @@ func loadOnce() error {
 		{&sys.selInitBytesNoCopy, "initWithBytesNoCopy:length:freeWhenDone:"},
 		{&sys.selInitStrBytes, "initWithBytes:length:encoding:"}, {&sys.selRelease, "release"},
 		{&sys.selCloseCode, "closeCode"}, {&sys.selCloseReason, "closeReason"},
+		{&sys.selPing, "sendPingWithPongReceiveHandler:"},
 	} {
 		*s.p = cf.Sel(fr, s.name)
 	}
@@ -288,6 +289,31 @@ func onSend(ctx uintptr, cb *ffi.CB) {
 }
 
 // ---- The connection ----
+
+// settle waits, up to closeWait, for the pong of a ping, unless a write is in
+// flight (it holds wmu, and its frames went out after the handshake). A task
+// cancelled with a close code just after didOpenWithProtocol: may drop the
+// close frame and end the TCP connection without it (the server sees 1006):
+// measured on an M-series Mac under CPU load, about 1 % of Dial-then-Close,
+// none once a ping had its pong, none 50 ms after the open.
+func (c *darwinConn) settle(fr *ffi.Frame) {
+	if !c.wmu.TryLock() {
+		return
+	}
+	defer c.wmu.Unlock()
+	req, err := sys.sendKind.New(ctxOf(c))
+	if err != nil {
+		return
+	}
+	fr.Reset().Arg(c.task).Arg(sys.selPing).Arg(uintptr(req.Block())).Call(cf.MsgAddr())
+	req.Sent()
+	t := time.NewTimer(closeWait)
+	select {
+	case <-c.sent: // the pong, or the error of a connection already gone
+	case <-t.C:
+	}
+	t.Stop()
+}
 
 func osDial(ctx context.Context, rawURL string, o Options) (backend, string, error) {
 	var px *nsurl.Proxy
@@ -552,6 +578,7 @@ func (c *darwinConn) close(code CloseCode, reason string) error {
 		c.closing.Store(true)
 		fr := cf.Acquire()
 		defer cf.Release(fr)
+		c.settle(fr)
 		pop := cf.Pool(fr)
 		d := uintptr(0)
 		if reason != "" {

@@ -224,6 +224,12 @@ func (w *Win) command(c cmdMask) {
 	}
 	a := w.a
 	a.cmd |= c
+	if c&cmdHide != 0 && a.cfg.Panel != nil {
+		// A hidden panel builds nothing from the call: the loop's turn can
+		// draw an owed frame (the event that called Hide owes one) before the
+		// safe point takes the window off the screen.
+		a.shelve(true)
+	}
 	if a.framing > 0 || a.evDepth > 0 || a.opening > 0 {
 		platform.WakeLoop()
 		return

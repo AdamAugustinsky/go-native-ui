@@ -5,6 +5,7 @@ package hotkey
 import (
 	"bufio"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"runtime"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"gonativeui/app"
+	"gonativeui/internal/allocsite"
 	"gonativeui/internal/childapp"
 	"gonativeui/ui"
 )
@@ -78,8 +80,17 @@ func (s *scene) run() {
 	must(len(s.presses) == 1 && s.presses[0] == 1, "presses after one Simulate: %v", s.presses)
 	must(Simulate(2) != nil, "Simulate of an ID not registered")
 
-	// Presses allocate nothing (the handler and the delivery).
+	// Presses allocate nothing (the handler and the delivery). The Go
+	// runtime's own allocations (a new thread, its timers) are not the
+	// presses': the gates pass over them (DECISIONS D27); macOS CI's whole
+	// run had a few.
 	s.presses = make([]ID, 0, 2000)
+	restore := allocsite.Enable()
+	var s0, s1 allocsite.Snapshot
+	s0.Take() // the storage, before the collection
+	s1.Take()
+	runtime.GC()
+	s0.Take()
 	var m0, m1 runtime.MemStats
 	runtime.ReadMemStats(&m0)
 	t0 := time.Now()
@@ -89,7 +100,18 @@ func (s *scene) run() {
 	el := time.Since(t0)
 	runtime.ReadMemStats(&m1)
 	must(len(s.presses) == 1000, "%d of 1000 presses delivered", len(s.presses))
-	childapp.Say("mallocs_per_press=%.3f ns_per_press=%d", float64(m1.Mallocs-m0.Mallocs)/1000, el.Nanoseconds()/1000)
+	own := int64(0)
+	if d := m1.Mallocs - m0.Mallocs; d != 0 {
+		runtime.GC()
+		s1.Take()
+		sites := allocsite.Diff(&s0, &s1)
+		own = allocsite.Objects(sites, allocsite.Ours) + allocsite.Objects(sites, allocsite.Other)
+		var b strings.Builder
+		allocsite.Write(&b, sites)
+		fmt.Printf("%d allocations in the process over the presses:\n%s", d, b.String())
+	}
+	restore()
+	childapp.Say("mallocs_per_press=%.3f ns_per_press=%d", float64(own)/1000, el.Nanoseconds()/1000)
 
 	// A new chord for an ID releases the old one; Unregister releases it.
 	must(Register(1, chordB) == nil, "Register(1, ⌃⌥⇧⌘F18)")
@@ -123,7 +145,7 @@ func TestLiveHotkeys(t *testing.T) {
 	}
 	t.Logf("mallocs per press %s, ns per press %s", r.KV["mallocs_per_press"], r.KV["ns_per_press"])
 	if r.KV["mallocs_per_press"] != "0.000" {
-		t.Errorf("a press allocates: %s Go objects", r.KV["mallocs_per_press"])
+		t.Errorf("a press allocates: %s Go objects of ours\n%s", r.KV["mallocs_per_press"], r.Out)
 	}
 }
 
