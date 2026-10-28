@@ -117,6 +117,7 @@ type recorder struct {
 	vdev, vctx, vpEnum, vp       uintptr
 	outTex, outView, staging     uintptr
 	nv12                         bool
+	vpErr                        error // why the video processor is not used
 	wr                           *writer
 	mic, sys                     *source
 	t0, now                      int64
@@ -200,7 +201,8 @@ func (rc *recorder) open() error {
 	if err := rc.openCapture(); err != nil {
 		return err
 	}
-	rc.nv12 = rc.openProcessor() == nil
+	rc.vpErr = rc.openProcessor()
+	rc.nv12 = rc.vpErr == nil
 	if !rc.nv12 {
 		rc.releaseProcessor()
 		if err := rc.openStaging(formatBGRA); err != nil {

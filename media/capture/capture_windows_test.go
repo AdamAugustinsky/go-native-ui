@@ -186,7 +186,7 @@ func (ru *run) do() {
 	ru.res = r.Result()
 	if s, ok := r.be.(*session); ok {
 		if n, ok := s.n.(*wgcNative); ok && n.rec != nil {
-			ru.path = "bgra"
+			ru.path = fmt.Sprintf("bgra (%v)", n.rec.vpErr)
 			if n.rec.nv12 {
 				ru.path = "nv12"
 			}
