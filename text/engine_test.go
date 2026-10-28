@@ -19,6 +19,8 @@ import (
 	"testing"
 
 	"github.com/go-text/typesetting/font"
+	ot "github.com/go-text/typesetting/font/opentype"
+	"github.com/go-text/typesetting/harfbuzz"
 )
 
 // These tests drive the engine with a fake fontFinder and the fonts that ship
@@ -906,4 +908,34 @@ func TestEngineClusters(t *testing.T) {
 		shape: func(str string) RunView { return eShape(s, f, str) },
 		rtl:   true,
 	})
+}
+
+// TabularDigits reaches HarfBuzz as the tnum feature, for that font only, and
+// the font caches apart from the same description without it.
+func TestEngineTabularDigits(t *testing.T) {
+	s, _ := newEngine(t)
+	d := FontDesc{SizePt: 13, Scale: 2, Weight: 400}
+	dt := d
+	dt.TabularDigits = true
+	plain, tab := s.Font(d), s.Font(dt)
+	if plain == tab || s.Font(dt) != tab || s.Font(d) != plain {
+		t.Fatalf("fonts %d (plain) and %d (tabular) are not two cached fonts", plain, tab)
+	}
+	var got []harfbuzz.Feature
+	real := s.shapeFn
+	s.shapeFn = func(b *harfbuzz.Buffer, f *harfbuzz.Font, feats []harfbuzz.Feature) {
+		got = feats
+		real(b, f, feats)
+	}
+	eShape(s, plain, "12:34")
+	if len(got) != 0 {
+		t.Errorf("a font without TabularDigits shaped with %v", got)
+	}
+	v := eShape(s, tab, "12:34")
+	if len(got) != 1 || got[0].Tag != ot.MustNewTag("tnum") || got[0].Value != 1 || got[0].End != harfbuzz.FeatureGlobalEnd {
+		t.Errorf("tabular font shaped with %+v, want tnum=1 over the whole text", got)
+	}
+	if len(v.Glyphs) != 5 || v.Advance <= 0 {
+		t.Errorf("shaped %d glyphs, advance %v", len(v.Glyphs), v.Advance)
+	}
 }

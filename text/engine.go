@@ -125,7 +125,7 @@ type goSystem struct {
 	// Shaping state (shape.go). seg and para are only used for text that
 	// needs several scripts or bidirectional reordering.
 	hbuf    *harfbuzz.Buffer // reused; keeps the shape-plan cache of every face
-	shapeFn func(*harfbuzz.Buffer, *harfbuzz.Font)
+	shapeFn func(*harfbuzz.Buffer, *harfbuzz.Font, []harfbuzz.Feature)
 	langs   map[language.Script]language.Language
 	segs    []gtSeg // pieces of the level run being shaped
 	sruns   []gtSeg // script runs of the text being itemized
@@ -158,7 +158,7 @@ func newGoSystem(f fontFinder) *goSystem {
 		fb:       make(map[uint64]uint32),
 		hbuf:     harfbuzz.NewBuffer(),
 		langs:    make(map[language.Script]language.Language),
-		shapeFn:  func(b *harfbuzz.Buffer, f *harfbuzz.Font) { b.Shape(f, nil) },
+		shapeFn:  func(b *harfbuzz.Buffer, f *harfbuzz.Font, feats []harfbuzz.Feature) { b.Shape(f, feats) },
 		runs:     newRunCache(),
 		atlas:    newAtlas(),
 		gbuf:     make([]uint16, 0, 128),
