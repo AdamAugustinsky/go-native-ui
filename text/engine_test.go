@@ -939,3 +939,8 @@ func TestEngineTabularDigits(t *testing.T) {
 		t.Errorf("shaped %d glyphs, advance %v", len(v.Glyphs), v.Advance)
 	}
 }
+
+func TestEngineParaFit(t *testing.T) {
+	s, _ := newEngine(t)
+	checkParaFit(t, s, ui(s))
+}
