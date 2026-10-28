@@ -256,6 +256,13 @@ type Window struct {
 	mi         monitorInfo
 	flash      flashWInfo
 
+	// Panels and the drawn titlebar (panel_windows.go, chrome_windows.go).
+	exStyle uintptr
+	panel   *Panel // Options.Panel, copied; nil: an ordinary window
+	ps      panelState
+	drags   dragMap // SetDragRegions: what moves a panel or a drawn titlebar's window
+	chrome  chromeState
+
 	handler   func() // SetFrameHandler
 	inHandler bool
 	sizeMove  bool // inside the size/move modal loop (WM_ENTERSIZEMOVE .. WM_EXITSIZEMOVE)
@@ -326,6 +333,7 @@ func Open(o Options) (*Window, error) {
 	}
 
 	w := &Window{q: newEventQueue(), opening: true, style: wsOverlappedWindow, rscale: 1, minW: o.MinWidth, minH: o.MinHeight}
+	w.frameKind(&o) // a panel's styles, a drawn titlebar
 	w.hinst = win32.Call(pGetModuleHandleW, 0)
 
 	w.cursors = [numCursors]uintptr{
@@ -367,7 +375,7 @@ func Open(o Options) (*Window, error) {
 	// surface blue saw blue there instead). Nothing here draws with GDI.
 	reg.creating = w // wndProc runs inside CreateWindowExW, before the HWND is known
 	hwnd := win32.Call(pCreateWindowExW,
-		wsExNoRedirectionBitmap, uintptr(unsafe.Pointer(classNameUTF16)), uintptr(unsafe.Pointer(title)), uintptr(w.style),
+		w.exStyle, uintptr(unsafe.Pointer(classNameUTF16)), uintptr(unsafe.Pointer(title)), uintptr(w.style),
 		cwUseDefault, cwUseDefault, uintptr(ow), uintptr(oh), 0, 0, w.hinst, 0)
 	runtime.KeepAlive(title)
 	reg.creating = nil
@@ -389,12 +397,13 @@ func Open(o Options) (*Window, error) {
 		}
 	}
 	w.scale = float32(dpi) / defaultDPI
+	w.frameSetup() // DWM's corners and shadow, capture, a panel's place, the frame without its caption
 
 	if o.Hidden { // content-first: shown, but cloaked until the first frame is presented
 		w.cloaked = w.setCloak(true)
 		markOpen("cloak")
 	}
-	win32.Call(pShowWindow, w.hwnd, swShowNormal)
+	win32.Call(pShowWindow, w.hwnd, w.showCmd())
 	markOpen("shown")
 	w.updateClientSize()
 	w.rw, w.rh, w.rscale = w.w, w.h, w.scale
@@ -415,6 +424,9 @@ func (w *Window) outerSize(lw, lh int, dpi uint32) (int32, int32) {
 		win32.Call(pAdjustRectExForDpi, uintptr(unsafe.Pointer(&w.rc)), uintptr(w.style), 0, 0, uintptr(dpi))
 	} else {
 		win32.Call(pAdjustWindowRectEx, uintptr(unsafe.Pointer(&w.rc)), uintptr(w.style), 0, 0)
+	}
+	if w.chrome.on {
+		w.rc.top = 0 // the caption is the app's: the client reaches the window's top (chrome_windows.go)
 	}
 	return w.rc.right - w.rc.left, w.rc.bottom - w.rc.top
 }
@@ -512,8 +524,11 @@ func (w *Window) applyCursor() {
 	}
 }
 
-// SetDragRegions is a no-op on Windows: the window keeps its system titlebar.
-func (w *Window) SetDragRegions([]DragRegion) {}
+// SetDragRegions sets the window drag map (see DragRegion): a left press in
+// a drag area moves the window (WM_NCHITTEST answers HTCAPTION there). Only a
+// panel and a window with a drawn titlebar (Options.Titlebar) use it; any
+// other keeps the system's caption. Main thread.
+func (w *Window) SetDragRegions(r []DragRegion) { w.drags.set(r) }
 
 // Text returns the UTF-8 bytes of an EvText event.
 func (w *Window) Text(r TextRef) []byte { return w.q.textOf(r) }
@@ -627,6 +642,11 @@ func wndProc(hwnd, m, wp, lp uintptr) uintptr {
 			return defProc(hwnd, m, wp, lp)
 		}
 		w.hwnd = hwnd
+	}
+	if w.panel != nil || w.chrome.on {
+		if r, done := w.frameMsg(hwnd, m, wp, lp); done { // panel_windows.go, chrome_windows.go
+			return r
+		}
 	}
 	switch m {
 	case wmClip:

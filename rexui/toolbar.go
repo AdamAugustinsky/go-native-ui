@@ -395,17 +395,26 @@ func BeginToolbar(k *base.Kit, label string, o ToolbarOpts) Toolbar {
 	if o.Traffic {
 		tb.trafficLights()
 	}
+	CaptionButtons(k) // Windows' minimise, maximise and close, when the band is the app's there
 
 	// the first pane starts after the traffic lights: FirstGap after the
 	// zoom button (the system's, when it is further right than the style's)
 	sp := r.Window.TrafficSpacing
 	zoom := tb.spec.Traffic[0] + 2*sp + r.Window.TrafficD/2
-	if sb := c.SystemButtons(); sb[2] > zoom {
-		zoom = sb[2]
-	}
+	sb := c.SystemButtons()
 	first := tb.spec.FirstGap
 	if first == 0 {
 		first = r.Window.Capsule.WideGap
+	}
+	if c.Decorations().Caption {
+		// Windows: no buttons on the left; the items end WideGap before the
+		// caption buttons at the band's right end
+		zoom = 0
+		if sb[2] > sb[0] {
+			tb.w = theme.Snap(sb[0] - r.Window.Capsule.WideGap)
+		}
+	} else if sb[2] > zoom {
+		zoom = sb[2]
 	}
 	tb.beginPane(0, theme.Snap(zoom+first), 0)
 	return tb
