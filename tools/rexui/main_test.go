@@ -27,7 +27,7 @@ func TestAddedComponentsBuild(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
-		if len(files) != len(components[name])+1 {
+		if len(files) != len(components[name])+len(shared) {
 			t.Fatalf("%s: wrote %v, want its files and %s", name, files, shared)
 		}
 		for _, f := range files {
@@ -68,7 +68,7 @@ func TestAddLeavesExistingFiles(t *testing.T) {
 // still rewritten.
 func TestAddCRLF(t *testing.T) {
 	src, dir := t.TempDir(), t.TempDir()
-	for _, f := range []string{"button.go", shared} {
+	for _, f := range append([]string{"button.go"}, shared...) {
 		b, err := os.ReadFile(filepath.Join(sourceDir(), f))
 		if err != nil {
 			t.Fatal(err)

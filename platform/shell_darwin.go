@@ -198,8 +198,10 @@ func (w *Window) makeBackdrop(kind Backdrop, width, height float64) {
 	objc.Send(effect, selReleaseObj) // the container owns it now; w.effect does not
 	liveMaterials.Add(1)
 	objc.Send1(w.win, selSetOpaqueWin, 0)
-	clear := objc.F.Reset().Arg(uintptr(objc.Cls("NSColor"))).Arg(uintptr(selColorWhiteAlpha)).ArgF64(1).ArgF64(0.001).Call(objc.MsgSend).R0()
-	objc.Send1(w.win, selSetBGColor, clear)
+	if w.panel == nil { // a panel's background stays clear: its corners outside the glass are not the window's
+		clear := objc.F.Reset().Arg(uintptr(objc.Cls("NSColor"))).Arg(uintptr(selColorWhiteAlpha)).ArgF64(1).ArgF64(0.001).Call(objc.MsgSend).R0()
+		objc.Send1(w.win, selSetBGColor, clear)
+	}
 	w.effect, w.backdrop = effect, got
 	w.glassRadius = -1 // not set yet: the glass view's own default is not the window's
 }
@@ -222,6 +224,10 @@ func newViewOf(cls objc.ID, x, y, width, height float64) objc.ID {
 // Open, on every resize and around full screen, and sends nothing while the
 // radius is unchanged.
 func (w *Window) fitBackdrop() {
+	if w.effect != 0 && w.panel != nil {
+		w.fitPanelBackdrop() // Panel.Radius, public on glass (panel_darwin.go)
+		return
+	}
 	if w.effect == 0 || w.backdrop == BackdropWindow {
 		return
 	}

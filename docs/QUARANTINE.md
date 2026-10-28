@@ -9,7 +9,7 @@ How it works, in `.github/workflows/ci.yml`:
 
 - A job with tests quarantined has a `QUARANTINE` regexp; its `go test` steps
   pass it as `-skip "$QUARANTINE"`. A test is skipped only on the jobs that list
-  it. Only the macOS test job has one now; the Windows and Linux jobs run
+  it. Only the macOS test job has one now (`TestGreenButtonWaitsForNativeReadiness` and `TestClientClose`); the Windows and Linux jobs run
   everything (an empty regexp would skip every test, so they have none).
 - The bench steps named below run through `stallgate.sh`: when the bench fails
   with a display-link stall message (`bench stalled`, `bench timed out`,
@@ -20,6 +20,7 @@ How it works, in `.github/workflows/ci.yml`:
 | Job | Test or gate | Symptom | Issue |
 |---|---|---|---|
 | macOS arm64 (test job) | `TestGreenButtonWaitsForNativeReadiness` (app) | `stalled in phase 1; ~6250 ms of frame time, ~7170 ms of clock`: AppKit sent willEnterFullScreen but never didEnterFullScreen, while the loop kept drawing 60 frames/ticks a second (runs [39735370966](https://github.com/AdamAugustinsky/go-native-ui/actions/runs/39735370966/job/119679698082), [39846637201](https://github.com/AdamAugustinsky/go-native-ui/actions/runs/39846637201/job/120061540012)); not reproduced in a 12/12 controlled hosted experiment (39738443438). Possibly the hosted runner's transition, possibly the pump: needs a real-hardware check. Still runs locally | [#38](https://github.com/AdamAugustinsky/go-native-ui/issues/38), [#34](https://github.com/AdamAugustinsky/go-native-ui/issues/34) |
+| macOS arm64 (test job) | `TestClientClose` (app/ws) | `no pending read: the server saw close 0` / 1006: NSURLSession drops the close frame of a task cancelled just after it opens; Close now waits for a pong first (ae4a96f), which took it from ~1 % to 3 in 1500 under heavy load, but it still failed on the loaded runner (p8-land 40619444296). network.yml still runs the ws suite on macOS on its own | [#34](https://github.com/AdamAugustinsky/go-native-ui/issues/34) |
 | Windows (amd64, arm64) benches | spike gate: stall patterns | display-link stall; warns instead of failing (the 16-byte animated-frame allocation is no longer excused: p6-flakes 141b484, 542f3e8) | [#34](https://github.com/AdamAugustinsky/go-native-ui/issues/34) |
 | Linux (all 4 jobs) | spike gate: vsync pacing (`no frame callbacks`) and stalls | warns instead of failing | [#34](https://github.com/AdamAugustinsky/go-native-ui/issues/34) |
 | macOS arm64 benches | benches: spike, listbench, pilot (both), gallery (both), notes, imgbench | `bench stalled` / `bench timed out` / `no frame callbacks` (display-link stall, `drawable=0`); warns instead of failing. Allocation and CPU gates stay blocking | [#34](https://github.com/AdamAugustinsky/go-native-ui/issues/34) |

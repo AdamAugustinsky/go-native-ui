@@ -94,6 +94,11 @@ func cmdDoctor(args []string, stdout, stderr io.Writer) error {
 					d.fail("framework %s: %v", f, err)
 				}
 			}
+			for _, l := range c.NativeLibs {
+				if _, err := nativeLibs(c.Path(l)); err != nil {
+					d.fail("%v", err)
+				}
+			}
 			for _, w := range c.Warnings() {
 				d.warn("%s", w)
 			}

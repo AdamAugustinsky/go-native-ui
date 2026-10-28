@@ -70,7 +70,7 @@ func searchDecor(k *base.Kit, ti *base.TextInput, buf *ui.TextBuffer, h, clearW 
 	x := k.FieldWidth(ti) - clearW
 	theme.At(c, theme.Snap(x), theme.Snap((h-ch)/2), cw, ch)
 	c.NextRole(ui.RoleButton)
-	c.NextSemName("Clear")
+	c.NextSemName(str.Clear)
 	cb := c.BoxKeyed(flags, key, nil)
 	c.Push(cb)
 	if f, disp := k.Icons().Prepare(c, icon.ClearField, col); f != 0 {

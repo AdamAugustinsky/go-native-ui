@@ -178,11 +178,31 @@ func (tol Tolerance) resolved() Tolerance {
 // testdata/failed/<name>.png, and a picture of where it differs, the pixels
 // beyond the tolerance in red over a faded copy of the golden image, to
 // testdata/failed/<name>.diff.png.
+//
+// A golden image is one machine's pixels: its GPU, its fonts and its OS
+// version. In CI (CI set) the comparison is skipped and logged, since a
+// runner draws with other fonts and another rasteriser (WARP, llvmpipe); the
+// tree goldens and the layout audit are what CI checks. GNUI_CI_IMAGES=1
+// compares there too.
 func AssertImage(t testing.TB, name string, img image.Image, tol Tolerance) {
 	t.Helper()
+	if skipImageInCI(t, name) {
+		return
+	}
 	if err := assertImage(goldenDir, name, img, tol, updating()); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// skipImageInCI reports, and logs, that golden image name is not compared:
+// in CI unless GNUI_CI_IMAGES=1 (see AssertImage).
+func skipImageInCI(t testing.TB, name string) bool {
+	t.Helper()
+	if os.Getenv("CI") == "" || os.Getenv("GNUI_CI_IMAGES") == "1" || updating() {
+		return false
+	}
+	t.Logf("widgettest: %s.png not compared in CI (a golden image is the machine it was made on; GNUI_CI_IMAGES=1 compares)", name)
+	return true
 }
 
 // AssertImageRect is AssertImage for the part of img inside r (in img's
@@ -191,6 +211,9 @@ func AssertImage(t testing.TB, name string, img image.Image, tol Tolerance) {
 // Tolerance).
 func AssertImageRect(t testing.TB, name string, img image.Image, r image.Rectangle, tol Tolerance) {
 	t.Helper()
+	if skipImageInCI(t, name) {
+		return // before the crop: a rectangle measured on the golden's machine may not fit another's image
+	}
 	crop, err := Crop(img, r)
 	if err != nil {
 		t.Fatal(err)

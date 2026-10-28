@@ -308,6 +308,10 @@ func (t *Item) Clicked(e *app.Event) (Click, bool) {
 	return Click{Right: e.B&1 != 0}, true
 }
 
+// Balloon shows a balloon from the icon (Windows' NIF_INFO). macOS has
+// none: it returns ErrNoBalloon; post a notification (app/notify).
+func (t *Item) Balloon(title, body string) error { return ErrNoBalloon }
+
 // Remove takes the item off the status bar and frees it. Later calls return
 // ErrRemoved; a second Remove does nothing.
 func (t *Item) Remove() {
@@ -402,7 +406,7 @@ func specOf(m *menu.Model) platform.MenuSpec {
 				}
 				title := cmd.Title
 				if title == "" {
-					title = roleTitle(cmd.Role)
+					title = menu.RoleTitle(cmd.Role)
 				}
 				if title == "" {
 					continue
@@ -416,17 +420,4 @@ func specOf(m *menu.Model) platform.MenuSpec {
 		spec.Menus = append(spec.Menus, platform.Menu{Title: mm.Title, Items: items})
 	}
 	return spec
-}
-
-// roleTitle is the title of a command that has a role and no title of its own.
-func roleTitle(r menu.Role) string {
-	switch r {
-	case menu.RoleAbout:
-		return "About"
-	case menu.RoleQuit:
-		return "Quit"
-	case menu.RoleSettings:
-		return "Settings…"
-	}
-	return ""
 }

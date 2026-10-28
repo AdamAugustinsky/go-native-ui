@@ -47,6 +47,10 @@ import (
 
 var (
 	advapi32 = syscall.NewLazyDLL("advapi32.dll")
+	user32   = syscall.NewLazyDLL("user32.dll")
+
+	getNamedPipeServerPID = kernel32.NewProc("GetNamedPipeServerProcessId")
+	allowSetForeground    = user32.NewProc("AllowSetForegroundWindow")
 
 	createNamedPipeW    = kernel32.NewProc("CreateNamedPipeW")
 	connectNamedPipe    = kernel32.NewProc("ConnectNamedPipe")
@@ -663,12 +667,33 @@ func dial(addr string, timeout time.Duration) (conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := checkServer(c.(*pipeConn)); err != nil {
+	pc := c.(*pipeConn)
+	if err := checkServer(pc); err != nil {
 		c.Close()
 		return nil, err
 	}
+	letServerToFront(pc.h)
 	return c, nil
 }
+
+// letServerToFront lets the process at the other end of the pipe (checked to
+// be this user's) take the foreground (AllowSetForegroundWindow), so the
+// primary can bring its window to the front for the request (D68): Windows
+// grants the foreground only to the process the user works with, which is
+// this one. A process id is used here only for that right, which the
+// process the user launched may give; a failure changes nothing else.
+func letServerToFront(h syscall.Handle) {
+	var pid uint32
+	if r, _, _ := getNamedPipeServerPID.Call(uintptr(h), uintptr(unsafe.Pointer(&pid))); r == 0 || pid == 0 {
+		return
+	}
+	foregroundGiven.Store(pid)
+	allowSetForeground.Call(uintptr(pid))
+}
+
+// foregroundGiven is the last process id letServerToFront gave the
+// foreground right to (tests).
+var foregroundGiven atomic.Uint32
 
 func checkServer(c *pipeConn) error {
 	owner, err := pipeOwnerSID(c.h)

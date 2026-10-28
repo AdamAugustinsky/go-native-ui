@@ -13,6 +13,12 @@ This project depends on:
   Copyright the go-text authors. Used through the patched copy below.
 - golang.org/x/image — BSD-3-Clause, Copyright The Go Authors (indirect,
   through go-text).
+- github.com/alecthomas/chroma/v2 v2.27.0 — MIT, Copyright (C) 2017 Alec
+  Thomas. Syntax highlighting (package highlight).
+- github.com/dlclark/regexp2/v2 — MIT, Copyright (c) Doug Clark (through
+  chroma).
+- github.com/yuin/goldmark v1.8.6 — MIT, Copyright (c) 2019 Yusuke Inuzuka.
+  Markdown parsing (package markdown).
 
 Third-party source copied into this repository:
 
@@ -22,5 +28,18 @@ Third-party source copied into this repository:
   DECISIONS.md D23).
 - text/delims.go: a copy of go-text/typesetting shaping/paired_delims_table.go
   (v0.3.5), Unlicense OR BSD-3-Clause.
+- highlight/internal/lexers/: 14 XML lexers and the Go and Markdown lexer
+  rules of github.com/alecthomas/chroma/v2 v2.27.0 (MIT; its LICENSE file is
+  alongside), registered on their own instead of chroma's full set.
 - text/unidata.go: a copy of go-text/typesetting's internal/unicodedata
   grapheme property tables (v0.3.5), Unlicense OR BSD-3-Clause.
+
+Native library bundled with applications that use the terminal (not part of
+the Go binary; built from source, not committed):
+
+- libghostty-vt, from Ghostty (https://github.com/ghostty-org/ghostty) at
+  commit 4a4fc017940bec38c93b278c10c6a18c591f3e63 — MIT License,
+  Copyright (c) 2024 Mitchell Hashimoto, Ghostty contributors. Built by
+  tools/libghostty, which writes Ghostty's LICENSE beside the libraries;
+  `gnui package` copies it into Contents/Resources/Licenses. term/ and
+  rexui/terminal.go are our own code calling its C API.

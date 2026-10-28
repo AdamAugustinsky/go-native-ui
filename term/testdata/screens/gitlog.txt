@@ -1,0 +1,409 @@
+=== checkpoint 1 at byte 1053 of 8424 ===
+*   b148170 (HEAD -> p8-term, origin/p8-contracts, p8-panels-hotkeys-mac, p8-contracts, p8-capture-mac) Merge branch 'a3-apps-plan' into p8-contracts
+|\
+| * 5ff9cbb (a3-apps-plan) docs: record Adam's phase 8 decisions
+* | fe73b73 docs: phase 8 wave 0 notes on the contracts, the probes and sizes
+* | 9daf105 rexui: the TextArea and ContextMenu contracts (phase 8 C4, C5)
+* | bf25214 highlight: the syntax highlighting contract (phase 8 C3, D75)
+* | c53aa7c term, markdown: the terminal emulator and Markdown contracts (phase 8 C1, C2, D74, D75)
+* | 21407be cmd/probe-p9: SCRecordingOutput through internal/objc with a window filter (phase 8 P9)
+* | 6a0596a media/capture: the screen and audio capture contract (phase 8 M1, M2, D72)
+* | ab172ec cmd/
+=== checkpoint 2 at byte 2106 of 8424 ===
+*   b148170 (HEAD -> p8-term, origin/p8-contracts, p8-panels-hotkeys-mac, p8-contracts, p8-capture-mac) Merge branch 'a3-apps-plan' into p8-contracts
+|\
+| * 5ff9cbb (a3-apps-plan) docs: record Adam's phase 8 decisions
+* | fe73b73 docs: phase 8 wave 0 notes on the contracts, the probes and sizes
+* | 9daf105 rexui: the TextArea and ContextMenu contracts (phase 8 C4, C5)
+* | bf25214 highlight: the syntax highlighting contract (phase 8 C3, D75)
+* | c53aa7c term, markdown: the terminal emulator and Markdown contracts (phase 8 C1, C2, D74, D75)
+* | 21407be cmd/probe-p9: SCRecordingOutput through internal/objc with a window filter (phase 8 P9)
+* | 6a0596a media/capture: the screen and audio capture contract (phase 8 M1, M2, D72)
+* | ab172ec cmd/probe-p1..p8: the Windows probes of phase 8 wave 0, and their workflow
+* | f8f04bb app/webview: the hosted browser view contract (phase 8 H1, H2, D64, D65)
+* | 28666f6 app/fetch, app/ws: fetch.Do and the WebSocket client contract (phase 8 N1, N2, D73)
+* | d396bd0 app/tray, app/install: Balloon and the per-user installer contract (phase 8 W5, W10, D76)
+* | e9c70e6 app/hotkey: the global hotkey contract (phase 8 W7, D70); probe P10
+* | b666225 platform: the Windows window registry types (phase 8 W1, D68)
+* | 0df6fe1 platform, app: the panel window contract (phase 8 W2, D69)
+* | 9d89f7e internal/win32, internal/com: WinRT helpers and the COM-object table (phase 8 wave 0)
+|/
+* 5f655bb docs: phase 8 plan, Windows parity for HyperPedia and the A3 app
+*   693d3b3 (origin/main, origin/HEAD, main) Merge commit 'a26d8e90da7100c43937c
+=== checkpoint 3 at byte 3159 of 8424 ===
+*   b148170 (HEAD -> p8-term, origin/p8-contracts, p8-panels-hotkeys-mac, p8-contracts, p8-capture-mac) Merge branch 'a3-apps-plan' into p8-contracts
+|\
+| * 5ff9cbb (a3-apps-plan) docs: record Adam's phase 8 decisions
+* | fe73b73 docs: phase 8 wave 0 notes on the contracts, the probes and sizes
+* | 9daf105 rexui: the TextArea and ContextMenu contracts (phase 8 C4, C5)
+* | bf25214 highlight: the syntax highlighting contract (phase 8 C3, D75)
+* | c53aa7c term, markdown: the terminal emulator and Markdown contracts (phase 8 C1, C2, D74, D75)
+* | 21407be cmd/probe-p9: SCRecordingOutput through internal/objc with a window filter (phase 8 P9)
+* | 6a0596a media/capture: the screen and audio capture contract (phase 8 M1, M2, D72)
+* | ab172ec cmd/probe-p1..p8: the Windows probes of phase 8 wave 0, and their workflow
+* | f8f04bb app/webview: the hosted browser view contract (phase 8 H1, H2, D64, D65)
+* | 28666f6 app/fetch, app/ws: fetch.Do and the WebSocket client contract (phase 8 N1, N2, D73)
+* | d396bd0 app/tray, app/install: Balloon and the per-user installer contract (phase 8 W5, W10, D76)
+* | e9c70e6 app/hotkey: the global hotkey contract (phase 8 W7, D70); probe P10
+* | b666225 platform: the Windows window registry types (phase 8 W1, D68)
+* | 0df6fe1 platform, app: the panel window contract (phase 8 W2, D69)
+* | 9d89f7e internal/win32, internal/com: WinRT helpers and the COM-object table (phase 8 wave 0)
+|/
+* 5f655bb docs: phase 8 plan, Windows parity for HyperPedia and the A3 app
+*   693d3b3 (origin/main, origin/HEAD, main) Merge commit 'a26d8e90da7100c43937c8a651d6345841adf9a6'
+|\
+| * a26d8e9 (origin/p6-tooltip-recovery, p6-tooltip-recovery) fix(ui): recover parent tooltips when inner boxes are removed
+| * f807c54 fix(ui): request parent tooltip recovery after declaration removal
+|/
+*   9b536de Merge commit 'e9656ede64fcb795acbe88744596b22be01975a9'
+|\
+| * e9656ed (origin/p6-videopaused, p6-videopaused) test(media): measure paused video idle across stable visibility
+|/
+*   ca4b2a0 Merge remote-tracking branch 'origin/p6-cascade'
+|\
+| * 502e942 (origin/p6-cascade, p6-cascade) test(platform): compare standalone placement with the current native centre
+* |   1496089 Merge remote-tracking branch 'origin/p6-wintex'
+|\ \
+|
+=== checkpoint 4 at byte 4212 of 8424 ===
+*   b148170 (HEAD -> p8-term, origin/p8-contracts, p8-panels-hotkeys-mac, p8-contracts, p8-capture-mac) Merge branch 'a3-apps-plan' into p8-contracts
+|\
+| * 5ff9cbb (a3-apps-plan) docs: record Adam's phase 8 decisions
+* | fe73b73 docs: phase 8 wave 0 notes on the contracts, the probes and sizes
+* | 9daf105 rexui: the TextArea and ContextMenu contracts (phase 8 C4, C5)
+* | bf25214 highlight: the syntax highlighting contract (phase 8 C3, D75)
+* | c53aa7c term, markdown: the terminal emulator and Markdown contracts (phase 8 C1, C2, D74, D75)
+* | 21407be cmd/probe-p9: SCRecordingOutput through internal/objc with a window filter (phase 8 P9)
+* | 6a0596a media/capture: the screen and audio capture contract (phase 8 M1, M2, D72)
+* | ab172ec cmd/probe-p1..p8: the Windows probes of phase 8 wave 0, and their workflow
+* | f8f04bb app/webview: the hosted browser view contract (phase 8 H1, H2, D64, D65)
+* | 28666f6 app/fetch, app/ws: fetch.Do and the WebSocket client contract (phase 8 N1, N2, D73)
+* | d396bd0 app/tray, app/install: Balloon and the per-user installer contract (phase 8 W5, W10, D76)
+* | e9c70e6 app/hotkey: the global hotkey contract (phase 8 W7, D70); probe P10
+* | b666225 platform: the Windows window registry types (phase 8 W1, D68)
+* | 0df6fe1 platform, app: the panel window contract (phase 8 W2, D69)
+* | 9d89f7e internal/win32, internal/com: WinRT helpers and the COM-object table (phase 8 wave 0)
+|/
+* 5f655bb docs: phase 8 plan, Windows parity for HyperPedia and the A3 app
+*   693d3b3 (origin/main, origin/HEAD, main) Merge commit 'a26d8e90da7100c43937c8a651d6345841adf9a6'
+|\
+| * a26d8e9 (origin/p6-tooltip-recovery, p6-tooltip-recovery) fix(ui): recover parent tooltips when inner boxes are removed
+| * f807c54 fix(ui): request parent tooltip recovery after declaration removal
+|/
+*   9b536de Merge commit 'e9656ede64fcb795acbe88744596b22be01975a9'
+|\
+| * e9656ed (origin/p6-videopaused, p6-videopaused) test(media): measure paused video idle across stable visibility
+|/
+*   ca4b2a0 Merge remote-tracking branch 'origin/p6-cascade'
+|\
+| * 502e942 (origin/p6-cascade, p6-cascade) test(platform): compare standalone placement with the current native centre
+* |   1496089 Merge remote-tracking branch 'origin/p6-wintex'
+|\ \
+| * | 2de6f1a (origin/p6-wintex, p6-wintex) test(pilot): exclude mock result dispatch from refresh allocation measurement
+| * | ff101be gpu: reserve texture metadata and prime Pilot glyph rasters before measurement
+* | | 24bd220 ci: re-quarantine media TestVideoInWindow on macOS (#34)
+* | | 6606287 ci: count cached .debs without ls, which exits 2 on an empty cache (pipefail)
+| |/
+|/|
+* |   24c35da Merge remote-tracking branch 'origin/p6-seekpause'
+|\ \
+| * | 87325ea (origin/p6-seekpause, p6-seekpause) media: preserve paused audio through the native end boundary
+| |/
+* |   8c9b17d Merge remote-tracking branch 'origin/p6-prefs-safe'
+|\
+=== checkpoint 5 at byte 5265 of 8424 ===
+*   b148170 (HEAD -> p8-term, origin/p8-contracts, p8-panels-hotkeys-mac, p8-contracts, p8-capture-mac) Merge branch 'a3-apps-plan' into p8-contracts
+|\
+| * 5ff9cbb (a3-apps-plan) docs: record Adam's phase 8 decisions
+* | fe73b73 docs: phase 8 wave 0 notes on the contracts, the probes and sizes
+* | 9daf105 rexui: the TextArea and ContextMenu contracts (phase 8 C4, C5)
+* | bf25214 highlight: the syntax highlighting contract (phase 8 C3, D75)
+* | c53aa7c term, markdown: the terminal emulator and Markdown contracts (phase 8 C1, C2, D74, D75)
+* | 21407be cmd/probe-p9: SCRecordingOutput through internal/objc with a window filter (phase 8 P9)
+* | 6a0596a media/capture: the screen and audio capture contract (phase 8 M1, M2, D72)
+* | ab172ec cmd/probe-p1..p8: the Windows probes of phase 8 wave 0, and their workflow
+* | f8f04bb app/webview: the hosted browser view contract (phase 8 H1, H2, D64, D65)
+* | 28666f6 app/fetch, app/ws: fetch.Do and the WebSocket client contract (phase 8 N1, N2, D73)
+* | d396bd0 app/tray, app/install: Balloon and the per-user installer contract (phase 8 W5, W10, D76)
+* | e9c70e6 app/hotkey: the global hotkey contract (phase 8 W7, D70); probe P10
+* | b666225 platform: the Windows window registry types (phase 8 W1, D68)
+* | 0df6fe1 platform, app: the panel window contract (phase 8 W2, D69)
+* | 9d89f7e internal/win32, internal/com: WinRT helpers and the COM-object table (phase 8 wave 0)
+|/
+* 5f655bb docs: phase 8 plan, Windows parity for HyperPedia and the A3 app
+*   693d3b3 (origin/main, origin/HEAD, main) Merge commit 'a26d8e90da7100c43937c8a651d6345841adf9a6'
+|\
+| * a26d8e9 (origin/p6-tooltip-recovery, p6-tooltip-recovery) fix(ui): recover parent tooltips when inner boxes are removed
+| * f807c54 fix(ui): request parent tooltip recovery after declaration removal
+|/
+*   9b536de Merge commit 'e9656ede64fcb795acbe88744596b22be01975a9'
+|\
+| * e9656ed (origin/p6-videopaused, p6-videopaused) test(media): measure paused video idle across stable visibility
+|/
+*   ca4b2a0 Merge remote-tracking branch 'origin/p6-cascade'
+|\
+| * 502e942 (origin/p6-cascade, p6-cascade) test(platform): compare standalone placement with the current native centre
+* |   1496089 Merge remote-tracking branch 'origin/p6-wintex'
+|\ \
+| * | 2de6f1a (origin/p6-wintex, p6-wintex) test(pilot): exclude mock result dispatch from refresh allocation measurement
+| * | ff101be gpu: reserve texture metadata and prime Pilot glyph rasters before measurement
+* | | 24bd220 ci: re-quarantine media TestVideoInWindow on macOS (#34)
+* | | 6606287 ci: count cached .debs without ls, which exits 2 on an empty cache (pipefail)
+| |/
+|/|
+* |   24c35da Merge remote-tracking branch 'origin/p6-seekpause'
+|\ \
+| * | 87325ea (origin/p6-seekpause, p6-seekpause) media: preserve paused audio through the native end boundary
+| |/
+* |   8c9b17d Merge remote-tracking branch 'origin/p6-prefs-safe'
+|\ \
+| * | d87b538 (origin/p6-prefs-safe, p6-prefs-safe) prefs: block saves when preserving corrupt file fails
+| * | 014c0de prefs: refuse saves after unreadable files and support keeping corrupt files
+| |/
+* | 51dda69 ci: quarantine platform TestWindowsOpenCascaded on macOS (#34)
+* | 433a9a4 ci: Linux apt install prefers archive.ubuntu.com and caches its .debs
+* | 6b5ce92 ci: quarantine internal/ffi TestZeroAlloc on Linux only (#34)
+* | 4e629c8 ci: bound and retry the Linux apt install, switching to archive.ubuntu.com on a retry
+|/
+* 047c52c ci: quarantine media TestPlayerSeekAndPause on macOS and internal/ffi TestColdThreadAttach on Linux (#34)
+*   e74b70b Merge commit '0824d155f064ed220d28a7ef0c0404ec65049a97'
+|\
+| * 0824d15 (origin/p6
+=== checkpoint 6 at byte 6318 of 8424 ===
+*   b148170 (HEAD -> p8-term, origin/p8-contracts, p8-panels-hotkeys-mac, p8-contracts, p8-capture-mac) Merge branch 'a3-apps-plan' into p8-contracts
+|\
+| * 5ff9cbb (a3-apps-plan) docs: record Adam's phase 8 decisions
+* | fe73b73 docs: phase 8 wave 0 notes on the contracts, the probes and sizes
+* | 9daf105 rexui: the TextArea and ContextMenu contracts (phase 8 C4, C5)
+* | bf25214 highlight: the syntax highlighting contract (phase 8 C3, D75)
+* | c53aa7c term, markdown: the terminal emulator and Markdown contracts (phase 8 C1, C2, D74, D75)
+* | 21407be cmd/probe-p9: SCRecordingOutput through internal/objc with a window filter (phase 8 P9)
+* | 6a0596a media/capture: the screen and audio capture contract (phase 8 M1, M2, D72)
+* | ab172ec cmd/probe-p1..p8: the Windows probes of phase 8 wave 0, and their workflow
+* | f8f04bb app/webview: the hosted browser view contract (phase 8 H1, H2, D64, D65)
+* | 28666f6 app/fetch, app/ws: fetch.Do and the WebSocket client contract (phase 8 N1, N2, D73)
+* | d396bd0 app/tray, app/install: Balloon and the per-user installer contract (phase 8 W5, W10, D76)
+* | e9c70e6 app/hotkey: the global hotkey contract (phase 8 W7, D70); probe P10
+* | b666225 platform: the Windows window registry types (phase 8 W1, D68)
+* | 0df6fe1 platform, app: the panel window contract (phase 8 W2, D69)
+* | 9d89f7e internal/win32, internal/com: WinRT helpers and the COM-object table (phase 8 wave 0)
+|/
+* 5f655bb docs: phase 8 plan, Windows parity for HyperPedia and the A3 app
+*   693d3b3 (origin/main, origin/HEAD, main) Merge commit 'a26d8e90da7100c43937c8a651d6345841adf9a6'
+|\
+| * a26d8e9 (origin/p6-tooltip-recovery, p6-tooltip-recovery) fix(ui): recover parent tooltips when inner boxes are removed
+| * f807c54 fix(ui): request parent tooltip recovery after declaration removal
+|/
+*   9b536de Merge commit 'e9656ede64fcb795acbe88744596b22be01975a9'
+|\
+| * e9656ed (origin/p6-videopaused, p6-videopaused) test(media): measure paused video idle across stable visibility
+|/
+*   ca4b2a0 Merge remote-tracking branch 'origin/p6-cascade'
+|\
+| * 502e942 (origin/p6-cascade, p6-cascade) test(platform): compare standalone placement with the current native centre
+* |   1496089 Merge remote-tracking branch 'origin/p6-wintex'
+|\ \
+| * | 2de6f1a (origin/p6-wintex, p6-wintex) test(pilot): exclude mock result dispatch from refresh allocation measurement
+| * | ff101be gpu: reserve texture metadata and prime Pilot glyph rasters before measurement
+* | | 24bd220 ci: re-quarantine media TestVideoInWindow on macOS (#34)
+* | | 6606287 ci: count cached .debs without ls, which exits 2 on an empty cache (pipefail)
+| |/
+|/|
+* |   24c35da Merge remote-tracking branch 'origin/p6-seekpause'
+|\ \
+| * | 87325ea (origin/p6-seekpause, p6-seekpause) media: preserve paused audio through the native end boundary
+| |/
+* |   8c9b17d Merge remote-tracking branch 'origin/p6-prefs-safe'
+|\ \
+| * | d87b538 (origin/p6-prefs-safe, p6-prefs-safe) prefs: block saves when preserving corrupt file fails
+| * | 014c0de prefs: refuse saves after unreadable files and support keeping corrupt files
+| |/
+* | 51dda69 ci: quarantine platform TestWindowsOpenCascaded on macOS (#34)
+* | 433a9a4 ci: Linux apt install prefers archive.ubuntu.com and caches its .debs
+* | 6b5ce92 ci: quarantine internal/ffi TestZeroAlloc on Linux only (#34)
+* | 4e629c8 ci: bound and retry the Linux apt install, switching to archive.ubuntu.com on a retry
+|/
+* 047c52c ci: quarantine media TestPlayerSeekAndPause on macOS and internal/ffi TestColdThreadAttach on Linux (#34)
+*   e74b70b Merge commit '0824d155f064ed220d28a7ef0c0404ec65049a97'
+|\
+| * 0824d15 (origin/p6-tooltip-nested, p6-tooltip-nested) Resolve nested tooltips from the winning descendant hit
+* | 18a0a18 ci: quarantine TestGreenButtonWaitsForNativeReadiness on macOS (#34, #38)
+|/
+*   c1338f1 Merge commit '20afb306fb4dae7817b419a02de89f15474fb936'
+|\
+| * 20afb30 (origin/p6-richlink-focus, p6-richlink-focus) ui: preserve deferred field focus during rich-link cleanup
+| * 1e04d5e ui: make rich-text link spans keyboard focus targets
+* |   b6bfc9d Merge commit '73a1c5684acaacdb3cee1ebeb2b407d0c187489c'
+|\ \
+| * | 73a1c56 (origin/p6-player-final, p6-player-final) test(media): keep allocation fixture alive across delayed sampling
+|/ /
+* |   6cf2e9c Merge commit 'c4672d188f47bf62349e13b0257f3b5c951953e3'
+=== checkpoint 7 at byte 7371 of 8424 ===
+*   b148170 (HEAD -> p8-term, origin/p8-contracts, p8-panels-hotkeys-mac, p8-contracts, p8-capture-mac) Merge branch 'a3-apps-plan' into p8-contracts
+|\
+| * 5ff9cbb (a3-apps-plan) docs: record Adam's phase 8 decisions
+* | fe73b73 docs: phase 8 wave 0 notes on the contracts, the probes and sizes
+* | 9daf105 rexui: the TextArea and ContextMenu contracts (phase 8 C4, C5)
+* | bf25214 highlight: the syntax highlighting contract (phase 8 C3, D75)
+* | c53aa7c term, markdown: the terminal emulator and Markdown contracts (phase 8 C1, C2, D74, D75)
+* | 21407be cmd/probe-p9: SCRecordingOutput through internal/objc with a window filter (phase 8 P9)
+* | 6a0596a media/capture: the screen and audio capture contract (phase 8 M1, M2, D72)
+* | ab172ec cmd/probe-p1..p8: the Windows probes of phase 8 wave 0, and their workflow
+* | f8f04bb app/webview: the hosted browser view contract (phase 8 H1, H2, D64, D65)
+* | 28666f6 app/fetch, app/ws: fetch.Do and the WebSocket client contract (phase 8 N1, N2, D73)
+* | d396bd0 app/tray, app/install: Balloon and the per-user installer contract (phase 8 W5, W10, D76)
+* | e9c70e6 app/hotkey: the global hotkey contract (phase 8 W7, D70); probe P10
+* | b666225 platform: the Windows window registry types (phase 8 W1, D68)
+* | 0df6fe1 platform, app: the panel window contract (phase 8 W2, D69)
+* | 9d89f7e internal/win32, internal/com: WinRT helpers and the COM-object table (phase 8 wave 0)
+|/
+* 5f655bb docs: phase 8 plan, Windows parity for HyperPedia and the A3 app
+*   693d3b3 (origin/main, origin/HEAD, main) Merge commit 'a26d8e90da7100c43937c8a651d6345841adf9a6'
+|\
+| * a26d8e9 (origin/p6-tooltip-recovery, p6-tooltip-recovery) fix(ui): recover parent tooltips when inner boxes are removed
+| * f807c54 fix(ui): request parent tooltip recovery after declaration removal
+|/
+*   9b536de Merge commit 'e9656ede64fcb795acbe88744596b22be01975a9'
+|\
+| * e9656ed (origin/p6-videopaused, p6-videopaused) test(media): measure paused video idle across stable visibility
+|/
+*   ca4b2a0 Merge remote-tracking branch 'origin/p6-cascade'
+|\
+| * 502e942 (origin/p6-cascade, p6-cascade) test(platform): compare standalone placement with the current native centre
+* |   1496089 Merge remote-tracking branch 'origin/p6-wintex'
+|\ \
+| * | 2de6f1a (origin/p6-wintex, p6-wintex) test(pilot): exclude mock result dispatch from refresh allocation measurement
+| * | ff101be gpu: reserve texture metadata and prime Pilot glyph rasters before measurement
+* | | 24bd220 ci: re-quarantine media TestVideoInWindow on macOS (#34)
+* | | 6606287 ci: count cached .debs without ls, which exits 2 on an empty cache (pipefail)
+| |/
+|/|
+* |   24c35da Merge remote-tracking branch 'origin/p6-seekpause'
+|\ \
+| * | 87325ea (origin/p6-seekpause, p6-seekpause) media: preserve paused audio through the native end boundary
+| |/
+* |   8c9b17d Merge remote-tracking branch 'origin/p6-prefs-safe'
+|\ \
+| * | d87b538 (origin/p6-prefs-safe, p6-prefs-safe) prefs: block saves when preserving corrupt file fails
+| * | 014c0de prefs: refuse saves after unreadable files and support keeping corrupt files
+| |/
+* | 51dda69 ci: quarantine platform TestWindowsOpenCascaded on macOS (#34)
+* | 433a9a4 ci: Linux apt install prefers archive.ubuntu.com and caches its .debs
+* | 6b5ce92 ci: quarantine internal/ffi TestZeroAlloc on Linux only (#34)
+* | 4e629c8 ci: bound and retry the Linux apt install, switching to archive.ubuntu.com on a retry
+|/
+* 047c52c ci: quarantine media TestPlayerSeekAndPause on macOS and internal/ffi TestColdThreadAttach on Linux (#34)
+*   e74b70b Merge commit '0824d155f064ed220d28a7ef0c0404ec65049a97'
+|\
+| * 0824d15 (origin/p6-tooltip-nested, p6-tooltip-nested) Resolve nested tooltips from the winning descendant hit
+* | 18a0a18 ci: quarantine TestGreenButtonWaitsForNativeReadiness on macOS (#34, #38)
+|/
+*   c1338f1 Merge commit '20afb306fb4dae7817b419a02de89f15474fb936'
+|\
+| * 20afb30 (origin/p6-richlink-focus, p6-richlink-focus) ui: preserve deferred field focus during rich-link cleanup
+| * 1e04d5e ui: make rich-text link spans keyboard focus targets
+* |   b6bfc9d Merge commit '73a1c5684acaacdb3cee1ebeb2b407d0c187489c'
+|\ \
+| * | 73a1c56 (origin/p6-player-final, p6-player-final) test(media): keep allocation fixture alive across delayed sampling
+|/ /
+* |   6cf2e9c Merge commit 'c4672d188f47bf62349e13b0257f3b5c951953e3'
+|\ \
+| * | c4672d1 (origin/p6-disabledtip, p6-disabledtip) Show tooltips for disabled controls without enabling interaction
+* | |   74cf63c Merge commit '11acddd'
+|\ \ \
+| * | | 11acddd (origin/p6-fullscreen-ready, p6-fullscreen-ready) test(app): match idle drawable samples to the latest frame's trim
+| * | | 3367e56 test: wait for native fullscreen readiness and completion
+* | | |   05f2a50 Merge commit '201a4807e30a67bed827d3af60904a685270008b'
+|\ \ \ \
+| |/ / /
+|/| | |
+| * | | 201a480 (origin/p6-titlebaralloc,
+=== checkpoint 8 at byte 8424 of 8424 ===
+*   b148170 (HEAD -> p8-term, origin/p8-contracts, p8-panels-hotkeys-mac, p8-contracts, p8-capture-mac) Merge branch 'a3-apps-plan' into p8-contracts
+|\
+| * 5ff9cbb (a3-apps-plan) docs: record Adam's phase 8 decisions
+* | fe73b73 docs: phase 8 wave 0 notes on the contracts, the probes and sizes
+* | 9daf105 rexui: the TextArea and ContextMenu contracts (phase 8 C4, C5)
+* | bf25214 highlight: the syntax highlighting contract (phase 8 C3, D75)
+* | c53aa7c term, markdown: the terminal emulator and Markdown contracts (phase 8 C1, C2, D74, D75)
+* | 21407be cmd/probe-p9: SCRecordingOutput through internal/objc with a window filter (phase 8 P9)
+* | 6a0596a media/capture: the screen and audio capture contract (phase 8 M1, M2, D72)
+* | ab172ec cmd/probe-p1..p8: the Windows probes of phase 8 wave 0, and their workflow
+* | f8f04bb app/webview: the hosted browser view contract (phase 8 H1, H2, D64, D65)
+* | 28666f6 app/fetch, app/ws: fetch.Do and the WebSocket client contract (phase 8 N1, N2, D73)
+* | d396bd0 app/tray, app/install: Balloon and the per-user installer contract (phase 8 W5, W10, D76)
+* | e9c70e6 app/hotkey: the global hotkey contract (phase 8 W7, D70); probe P10
+* | b666225 platform: the Windows window registry types (phase 8 W1, D68)
+* | 0df6fe1 platform, app: the panel window contract (phase 8 W2, D69)
+* | 9d89f7e internal/win32, internal/com: WinRT helpers and the COM-object table (phase 8 wave 0)
+|/
+* 5f655bb docs: phase 8 plan, Windows parity for HyperPedia and the A3 app
+*   693d3b3 (origin/main, origin/HEAD, main) Merge commit 'a26d8e90da7100c43937c8a651d6345841adf9a6'
+|\
+| * a26d8e9 (origin/p6-tooltip-recovery, p6-tooltip-recovery) fix(ui): recover parent tooltips when inner boxes are removed
+| * f807c54 fix(ui): request parent tooltip recovery after declaration removal
+|/
+*   9b536de Merge commit 'e9656ede64fcb795acbe88744596b22be01975a9'
+|\
+| * e9656ed (origin/p6-videopaused, p6-videopaused) test(media): measure paused video idle across stable visibility
+|/
+*   ca4b2a0 Merge remote-tracking branch 'origin/p6-cascade'
+|\
+| * 502e942 (origin/p6-cascade, p6-cascade) test(platform): compare standalone placement with the current native centre
+* |   1496089 Merge remote-tracking branch 'origin/p6-wintex'
+|\ \
+| * | 2de6f1a (origin/p6-wintex, p6-wintex) test(pilot): exclude mock result dispatch from refresh allocation measurement
+| * | ff101be gpu: reserve texture metadata and prime Pilot glyph rasters before measurement
+* | | 24bd220 ci: re-quarantine media TestVideoInWindow on macOS (#34)
+* | | 6606287 ci: count cached .debs without ls, which exits 2 on an empty cache (pipefail)
+| |/
+|/|
+* |   24c35da Merge remote-tracking branch 'origin/p6-seekpause'
+|\ \
+| * | 87325ea (origin/p6-seekpause, p6-seekpause) media: preserve paused audio through the native end boundary
+| |/
+* |   8c9b17d Merge remote-tracking branch 'origin/p6-prefs-safe'
+|\ \
+| * | d87b538 (origin/p6-prefs-safe, p6-prefs-safe) prefs: block saves when preserving corrupt file fails
+| * | 014c0de prefs: refuse saves after unreadable files and support keeping corrupt files
+| |/
+* | 51dda69 ci: quarantine platform TestWindowsOpenCascaded on macOS (#34)
+* | 433a9a4 ci: Linux apt install prefers archive.ubuntu.com and caches its .debs
+* | 6b5ce92 ci: quarantine internal/ffi TestZeroAlloc on Linux only (#34)
+* | 4e629c8 ci: bound and retry the Linux apt install, switching to archive.ubuntu.com on a retry
+|/
+* 047c52c ci: quarantine media TestPlayerSeekAndPause on macOS and internal/ffi TestColdThreadAttach on Linux (#34)
+*   e74b70b Merge commit '0824d155f064ed220d28a7ef0c0404ec65049a97'
+|\
+| * 0824d15 (origin/p6-tooltip-nested, p6-tooltip-nested) Resolve nested tooltips from the winning descendant hit
+* | 18a0a18 ci: quarantine TestGreenButtonWaitsForNativeReadiness on macOS (#34, #38)
+|/
+*   c1338f1 Merge commit '20afb306fb4dae7817b419a02de89f15474fb936'
+|\
+| * 20afb30 (origin/p6-richlink-focus, p6-richlink-focus) ui: preserve deferred field focus during rich-link cleanup
+| * 1e04d5e ui: make rich-text link spans keyboard focus targets
+* |   b6bfc9d Merge commit '73a1c5684acaacdb3cee1ebeb2b407d0c187489c'
+|\ \
+| * | 73a1c56 (origin/p6-player-final, p6-player-final) test(media): keep allocation fixture alive across delayed sampling
+|/ /
+* |   6cf2e9c Merge commit 'c4672d188f47bf62349e13b0257f3b5c951953e3'
+|\ \
+| * | c4672d1 (origin/p6-disabledtip, p6-disabledtip) Show tooltips for disabled controls without enabling interaction
+* | |   74cf63c Merge commit '11acddd'
+|\ \ \
+| * | | 11acddd (origin/p6-fullscreen-ready, p6-fullscreen-ready) test(app): match idle drawable samples to the latest frame's trim
+| * | | 3367e56 test: wait for native fullscreen readiness and completion
+* | | |   05f2a50 Merge commit '201a4807e30a67bed827d3af60904a685270008b'
+|\ \ \ \
+| |/ / /
+|/| | |
+| * | | 201a480 (origin/p6-titlebaralloc, p6-titlebaralloc) Remove temporary allocator probes after Linux titlebar proof
+| * | | bbc2931 diagnostic: include allocation-counter boundary stacks and setup control
+| * | | 6bf3bcf diagnostic: prove serialized titlebar gate and restored-assertion fault
+| * | | a4a5108 test(app): serialize titlebar allocation subprocess from startup
+| * | | cd704bf diagnostic: capture frame-scoped titlebar allocations on Linux
+|/ / /
+* | |   25294a3 (p6-timeralloc) Merge commit '6c370d24f5e2de9a67b69fbe12bc13c7768b96a1'
+|\ \ \
+| * | | 6c370d2 (origin/p6-drawable-final, p6-drawable-final) test(app): synchronize idle drawable retention snapshots
+| |/ /

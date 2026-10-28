@@ -1,0 +1,4 @@
+<!doctype html>
+<div class="card" id=x><a href="/x">link</a></div>
+<style>.card { color: red; }</style>
+<script>let a = 1;</script>

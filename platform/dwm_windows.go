@@ -33,11 +33,16 @@ func (w *Window) setCloak(on bool) bool {
 }
 
 // Show uncloaks a window opened with Options.Hidden (typically called by the
-// GPU surface after its first present: Surface.RevealOnFirstFrame). It does
-// nothing for a window that is already on the screen. Main thread.
+// GPU surface after its first present: Surface.RevealOnFirstFrame), and shows
+// one that Hide took off the screen (activating it, as Windows does). It
+// does nothing for a window that is already on the screen. Main thread.
 func (w *Window) Show() {
 	if w.cloaked {
 		w.cloaked = false
 		w.setCloak(false)
+	}
+	if w.hidden && w.hwnd != 0 {
+		w.hidden = false
+		win32.Call(pShowWindow, w.hwnd, swShow)
 	}
 }

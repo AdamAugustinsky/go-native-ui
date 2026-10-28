@@ -1,11 +1,11 @@
-//go:build darwin
+//go:build darwin || windows
 
 package app
 
 import "gonativeui/platform"
 
 // pump is the loop's wait: the app-wide pump, which hands every window its
-// events (D30).
+// events (D30; on Windows D68).
 func (a *App) pump(timeoutNs int64) { platform.Pump(timeoutNs) }
 
 // windowEvents is the window's events from the last pump.

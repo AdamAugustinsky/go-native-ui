@@ -34,6 +34,7 @@ func (k *Kit) Images() *img.Cache { return k.imgs }
 // placeholder.
 func (k *Kit) Image(n uint64, h img.Handle, fit ui.ImageFit, radius float32, alt string) ui.ID {
 	c := k.c
+	k.syncSize()
 	if k.hasW || k.hasH {
 		k.ApplySize(ui.Size{}, ui.Size{})
 	}
@@ -64,6 +65,7 @@ func (k *Kit) Image(n uint64, h img.Handle, fit ui.ImageFit, radius float32, alt
 // ImageShown(n) before pulling a frame for it.
 func (k *Kit) ExternalImage(n uint64, tex gpu.TextureID, w, h int, fit ui.ImageFit, radius float32, alt string) ui.ID {
 	c := k.c
+	k.syncSize()
 	if k.hasW || k.hasH {
 		k.ApplySize(ui.Size{}, ui.Size{})
 	}

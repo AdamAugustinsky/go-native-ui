@@ -162,6 +162,12 @@ var ButtonRecipes = [NumButtonVariants]ButtonRecipe{
 // itself is 3.6:1 on white.
 var DangerText = OfPair(0xB3141FFF, 0xFF8A87FF)
 
+// SuccessText is green text that reads at 4.5:1 or better on the window, a
+// pane, the raised surface, the field and a code block (an added line's band
+// included), in light (#137333) and dark (#6EDB8F): an added line, a
+// success, a passing check. systemGreen itself is 2.2:1 on white.
+var SuccessText = OfPair(0x137333FF, 0x6EDB8FFF)
+
 // Button builds a push button with a text label and reports its signal
 // (Clicked on a click, Enter or Space with the focus, or an accessibility
 // press). The label follows ui's rules ("Name###id" shows Name). It is as

@@ -175,6 +175,28 @@ func buildBundle(c *Config, o buildOptions) (entitlements string, cleanup func()
 		}
 	}
 
+	for _, d := range c.NativeLibs {
+		libs, err := nativeLibs(c.Path(d))
+		if err != nil {
+			return "", cleanup, err
+		}
+		fw := filepath.Join(contents, "Frameworks")
+		if err := os.MkdirAll(fw, 0o755); err != nil {
+			return "", cleanup, err
+		}
+		for _, l := range libs {
+			name := filepath.Base(l)
+			if err := copyInto(fw, name, l); err != nil {
+				return "", cleanup, fmt.Errorf("native library %s: %w", l, err)
+			}
+			if lic := filepath.Join(c.Path(d), "LICENSE"); isFile(lic) {
+				if err := copyInto(resources, filepath.Join("Licenses", strings.TrimSuffix(name, ".dylib")+".txt"), lic); err != nil {
+					return "", cleanup, err
+				}
+			}
+		}
+	}
+
 	// 5. login agents
 	if len(c.LoginAgents) > 0 {
 		dir := filepath.Join(contents, "Library", "LaunchAgents")
@@ -378,4 +400,20 @@ func copyFile(src, dst string, perm fs.FileMode) error {
 		return err
 	}
 	return out.Close()
+}
+
+// nativeLibs lists the macOS libraries of a nativeLibs directory: the
+// .dylib files in its darwin-arm64 subdirectory, at least one.
+func nativeLibs(dir string) ([]string, error) {
+	sub := filepath.Join(dir, "darwin-"+darwinArch)
+	libs, _ := filepath.Glob(filepath.Join(sub, "*.dylib"))
+	if len(libs) == 0 {
+		return nil, fmt.Errorf("native libraries: no .dylib in %s (build them: go run ./tools/libghostty)", sub)
+	}
+	return libs, nil
+}
+
+func isFile(p string) bool {
+	fi, err := os.Stat(p)
+	return err == nil && fi.Mode().IsRegular()
 }
