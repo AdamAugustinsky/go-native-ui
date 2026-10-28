@@ -1,12 +1,14 @@
 package rexui_test
 
 import (
+	"slices"
 	"testing"
 
 	"gonativeui/icon"
 	"gonativeui/rexui"
 	"gonativeui/theme"
 	"gonativeui/ui"
+	"gonativeui/widget/base"
 )
 
 // act asks for an assistive technology's action on the node with the role
@@ -331,5 +333,187 @@ func TestSidebarLegacyScroller(t *testing.T) {
 	g.settle()
 	if right := g.nodeAt(ui.RoleListItem, 0).Bounds[2] / g.scale; right <= 180-17+0.5 {
 		t.Errorf("with overlay scrollers a row still ends at %v", right)
+	}
+}
+
+// selectedRows are the IDs the sidebar model has selected, in order.
+func selectedRows(m *sidebarModel) []uint32 { return m.st.AppendSelected(nil) }
+
+// A sidebar with Multiple selects a set of rows: ⌘-click toggles one, Shift-click
+// takes the rows from the last chosen to the one clicked (skipping a hidden
+// row), Shift+Down extends, ⌘A selects every row, and a plain press or Down
+// goes back to one. Sel is the row last chosen, and each selected row is
+// selected in the semantic tree.
+func TestSidebarMultipleSelection(t *testing.T) {
+	g, m := newSidebarRig(t)
+	m.o.Multiple = true
+	prim := ui.PrimaryMod()
+	clickWith := func(mods ui.Mods, name string) {
+		g.in.Mods = mods
+		g.click(centre(g.node(ui.RoleListItem, name)))
+		g.in.Mods = 0
+	}
+	want := func(what string, sel uint32, rows ...uint32) {
+		t.Helper()
+		g.frame()
+		if got := selectedRows(m); !slices.Equal(got, rows) || m.st.Sel != sel || m.st.Count() != len(rows) {
+			t.Fatalf("%s: rows %v with Sel %d (%d), want %v with %d", what, got, m.st.Sel, m.st.Count(), rows, sel)
+		}
+	}
+	clickWith(0, "Documents")
+	want("a press", 2, 2)
+	clickWith(prim, "Rex")
+	want("⌘-click", 4, 2, 4)
+	for name, on := range map[string]bool{"Documents": true, "Rex": true, "Projects": false} {
+		if g.node(ui.RoleListItem, name).State&ui.SemSelected != 0 != on {
+			t.Errorf("%s: selected in the tree is %v, want %v", name, !on, on)
+		}
+	}
+	clickWith(ui.ModShift, "Red")
+	want("Shift-click from the last chosen", 6, 4, 6)
+	clickWith(prim, "Projects")
+	want("⌘-click on", 3, 3, 4, 6)
+	clickWith(prim, "Rex")
+	want("⌘-click off", 3, 3, 6)
+	clickWith(prim, "Projects")
+	want("⌘-click off the primary row", 6, 6)
+	g.key(ui.KeyUp, ui.ModShift)
+	want("Shift+Up", 4, 4, 6)
+	g.key(ui.KeyUp, ui.ModShift)
+	want("Shift+Up again", 3, 3, 4, 6)
+	g.key(ui.KeyDown, ui.ModShift)
+	want("Shift+Down shrinks it", 4, 4, 6)
+	g.key('A', prim)
+	want("⌘A", 4, 2, 3, 4, 6)
+	g.key(ui.KeyDown, 0)
+	want("Down", 6, 6)
+
+	// the set keeps up with the rows: one that goes is dropped, and the app
+	// setting Sel makes it the one row
+	m.st.SelectAll(m.items)
+	m.items = slices.Delete(m.items, 5, 6) // Red goes
+	g.frame()
+	if got := selectedRows(m); !slices.Equal(got, []uint32{2, 3, 4}) {
+		t.Fatalf("after Red went: %v", got)
+	}
+	m.st.Sel = 6 // (a row outside the set)
+	if got := selectedRows(m); !slices.Equal(got, []uint32{6}) || m.st.Has(3) {
+		t.Fatalf("after the app set Sel: %v", got)
+	}
+	m.st.SelectAll(m.items)
+	m.st.Select(3)
+	if got := selectedRows(m); !slices.Equal(got, []uint32{3}) || m.st.Sel != 3 {
+		t.Fatalf("after Select: %v", got)
+	}
+
+	// without Multiple a modifier changes nothing
+	m.o.Multiple = false
+	clickWith(prim, "Rex")
+	g.frame()
+	if got := selectedRows(m); !slices.Equal(got, []uint32{4}) {
+		t.Fatalf("⌘-click without Multiple: %v", got)
+	}
+}
+
+// As the content pane narrows the title gives way before the items do: it is
+// truncated (the room the items leave it shrinks), hidden below
+// ToolbarLook.TitleMinW, and only then does the first item go into the
+// overflow menu (the title may come back in the room that frees). It never
+// lies under an item.
+func TestToolbarTitleGivesWayBeforeTheItems(t *testing.T) {
+	const title = "A rather long document title"
+	minW := rexui.ToolbarLook.TitleMinW
+	prevShown, hid, over := true, false, false
+	for w := 900; w >= 300; w -= 20 { // (steps shorter than the minimum)
+		g := openRig(t, theme.Light, nil, func(*rig) {})
+		g.w, g.h = 2*w, 400
+		ic := addChromeIcons(g)
+		var view int
+		var ov rexui.ToolbarOverflow
+		g.build = func(g *rig) {
+			o := rexui.ToolbarOpts{Style: theme.ToolbarUnified, Title: title, Panes: [2]float32{g.k.Pt(180), 0}}
+			tb := rexui.BeginToolbar(g.k, "Toolbar", o)
+			tb.Item(ic.sidebar, "Sidebar")
+			tb.NextPane()
+			tb.Nav(ic.back, ic.fwd, true, false)
+			tb.Title()
+			tb.Flexible()
+			tb.Picker("View", &view, []icon.ID{ic.grid, ic.list}, []string{"as Icons", "as List"}, true)
+			tb.Menu(ic.group, "Group", -1)
+			tb.Menu(ic.action, "Action", -1)
+			tb.SearchButton(ic.search, "Search")
+			ov = tb.End()
+		}
+		g.settle()
+		g.frames(3) // (the title shows by the room of the frame before)
+		shown := g.has(ui.RoleLabel, title)
+		if ov.N > 0 && !over && prevShown {
+			t.Fatalf("w=%d: %v went into the overflow menu while the title was still shown", w, ov.Names[:ov.N])
+		}
+		if shown && g.has(ui.RoleComboBox, "View") {
+			room := g.frameOf(ui.RoleComboBox, "View")[0] - g.frameOf(ui.RoleLabel, title)[0] - g.k.Theme().Window.Capsule.WideGap/g.scale
+			if room < minW-0.5 {
+				t.Fatalf("w=%d: the title is shown in %v pt, under its minimum %v", w, room, minW)
+			}
+		}
+		prevShown, hid, over = shown, hid || !shown, over || ov.N > 0
+	}
+	if !hid || !over {
+		t.Fatalf("the sweep never hid the title (%v) or overflowed an item (%v)", hid, over)
+	}
+}
+
+// A search field that did not fit is listed in the overflow menu, and choosing
+// it shows the field in a popover under the » button with the focus in it, as
+// NSToolbar does; typing goes to it, and Escape closes the popover.
+func TestToolbarOverflowedSearchIsShownAndFocused(t *testing.T) {
+	g := openRig(t, theme.Light, nil, func(*rig) {})
+	g.w, g.h = 2*260, 400
+	ic := addChromeIcons(g)
+	var q ui.TextBuffer
+	q.Reserve(32)
+	var ov rexui.ToolbarOverflow
+	var sig base.FieldSignal
+	g.build = func(g *rig) {
+		tb := rexui.BeginToolbar(g.k, "Toolbar", rexui.ToolbarOpts{Style: theme.ToolbarCompact, Title: "Notes"})
+		tb.Item(ic.sidebar, "Sidebar")
+		tb.Flexible()
+		sig = tb.Search("Search", &q, "Search", 0)
+		ov = tb.End()
+	}
+	g.settle()
+	i := -1
+	for j, n := range ov.Names[:ov.N] {
+		if n == "Search" {
+			i = j
+		}
+	}
+	if i < 0 {
+		t.Fatalf("the search field is not in the overflow menu %v", ov.Names[:ov.N])
+	}
+	if g.has(ui.RoleSearchField, "Search") {
+		t.Fatal("the search field is in the band and in the menu")
+	}
+	g.in.SetMenuChoice(g.node(ui.RoleButton, "Show More").Key, i, 0)
+	g.frames(3)
+	if !g.has(ui.RoleSearchField, "Search") {
+		t.Fatal("choosing the search field in the overflow menu showed nothing")
+	}
+	if g.c.FocusKey() != sig.Key {
+		t.Fatal("the search field in the popover is not focused")
+	}
+	g.typeText("abc")
+	if q.String() != "abc" {
+		t.Fatalf("typing reached %q", q.String())
+	}
+	g.frames(3)
+	if !g.has(ui.RoleSearchField, "Search") {
+		t.Fatal("the popover went away by itself")
+	}
+	g.key(ui.KeyEscape, 0) // clears the text, as in a search field
+	g.key(ui.KeyEscape, 0)
+	g.frames(2)
+	if g.has(ui.RoleSearchField, "Search") {
+		t.Error("Escape did not close the popover")
 	}
 }

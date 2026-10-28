@@ -61,6 +61,13 @@ type Panel struct {
 	// shadow follows it). On Windows the corners are DWM's: round on
 	// Windows 11 when Radius > 0, square on Windows 10.
 	Radius float32
+	// Parent, when set, makes the panel a child of that window (macOS): it is
+	// ordered over the parent, moves with it, closes with it, and sits at
+	// (X, Y), logical units from the parent's content top-left, which may be
+	// negative or past the parent's size. A popover that reaches past its
+	// window's edge is such a panel (#14). SetPanelOrigin moves it.
+	Parent *Window
+	X, Y   float32
 }
 
 // ErrNoPanels is Open's error for Options.Panel where the OS has no panel
@@ -79,3 +86,13 @@ func checkPanel(o *Options) error {
 	}
 	return nil
 }
+
+// A panel that is a popover or a menu gets its translucency from a material of
+// its own (Options.Materials with SetMaterials, AreaPopover: NSVisualEffectView,
+// popover material, over the whole panel; or Options.Backdrop) and its shape
+// from SetPanelMask: the alpha of a PNG the size of the panel, in pixels, is
+// where the material shows (an arrow joined to a rounded body is one outline),
+// and the window's shadow is recomputed from it. Under Reduce Transparency the
+// material is made opaque by the system and the fallback is the caller's: it
+// draws its opaque shape itself on the panel's transparent surface and sets no
+// material. rexui.Popover does not use panels yet (#14).

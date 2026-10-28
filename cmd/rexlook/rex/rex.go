@@ -131,16 +131,15 @@ func New(ts TextSystem, scale float32) *Rex {
 // once the text system and the renderer exist; set Traffic before that if the
 // scene draws the traffic lights itself.
 func NewApp() *Rex {
-	setHeaderRecipe()
 	r := &Rex{nextUID: 1}
-	r.k = base.NewKit(nil, nil, headerTheme()) // holds the preference until Init makes the real one
+	r.k = base.NewKit(nil, nil, rextheme.Theme()) // holds the preference until Init makes the real one
 	return r
 }
 
 func (r *Rex) init(ts TextSystem, scale float32) {
 	r.ts = ts
 	pref := r.k.Preference()
-	r.k = base.NewKit(nil, ts, headerTheme())
+	r.k = base.NewKit(nil, ts, rextheme.Theme())
 	r.k.SetPreference(pref)
 	for i := range iconSpecs {
 		r.k.AddIcon(iconSpecs[i]) // the scene's icons follow the standard ones, as iconID says

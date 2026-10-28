@@ -7,23 +7,35 @@ import (
 	"image"
 	"image/png"
 	"os"
+	"strings"
 )
 
 // iconDecoder has no state on Linux.
 type iconDecoder struct{}
 
-// decodeIcon decodes the icon theme's PNG for the icon src names (the
-// lookup is in sysicon_xdg.go); a system without a MIME database, a theme
-// or a PNG for it fails with ErrUnsupported.
+// decodeIcon decodes the icon theme's PNG, or draws its SVG (sysicon_svg.go),
+// for the icon src names (the lookup is in sysicon_xdg.go); a system without
+// a MIME database, a theme or an icon for it fails with ErrUnsupported.
 func (w *worker) decodeIcon(c *Cache, j *job) result {
 	fail := func(code uint8) result { return result{buf: -1, err: code} }
 	side, code := iconSide(j.w, j.h, j.flags)
 	if code != errNone {
 		return fail(code)
 	}
-	path, code := xdgSystem().iconPNG(j.src, int(side))
+	path, code := xdgSystem().iconFile(j.src, int(side))
 	if code != errNone {
 		return fail(code)
+	}
+	if strings.HasSuffix(path, ".svg") {
+		data, ok := readLimited(path, maxSVGBytes)
+		if !ok {
+			return fail(errRead)
+		}
+		m, code := rasterSVG(data, int(side))
+		if code != errNone {
+			return fail(code)
+		}
+		return w.iconFromImage(c, m, side)
 	}
 	f, err := os.Open(path)
 	if err != nil {

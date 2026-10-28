@@ -41,8 +41,7 @@ const (
 )
 
 var (
-	pGetSystemMetrics       = win32.Proc(user32, "GetSystemMetrics")
-	pGetSystemMetricsForDpi = win32.Proc(user32, "GetSystemMetricsForDpi") // Windows 10 1607+
+	pGetSystemMetricsForDpi = win32.Proc(user32, "GetSystemMetricsForDpi") // Windows 10 1607+ (GetSystemMetrics: drag_windows.go)
 )
 
 // chromeState is a drawn titlebar's state (Options.Titlebar).

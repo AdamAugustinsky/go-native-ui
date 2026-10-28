@@ -34,7 +34,7 @@ func TestRoleNumbersAreStable(t *testing.T) {
 			t.Errorf("%v is role %d, it was %d", p.role, int(p.role), p.n)
 		}
 	}
-	for _, r := range [...]Role{ControlText, Knob, FieldOutline, ToolbarSymbolInactive, SelectedRowTextInactive, SidebarDetail, SidebarSearchFill, SidebarSearchFillInactive} {
+	for _, r := range [...]Role{ControlText, Knob, FieldOutline, ToolbarSymbolInactive, SelectedRowTextInactive, SidebarDetail, SidebarSearchFill, SidebarSearchFillInactive, PaneButton, PaneButtonHover, PaneButtonChip} {
 		if int(r) < len(pinned) {
 			t.Errorf("%v is role %d, inside the first %d", r, int(r), len(pinned))
 		}

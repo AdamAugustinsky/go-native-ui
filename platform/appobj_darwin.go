@@ -635,7 +635,10 @@ func deliverScratch(kind AppEventKind, count int64, buf []byte) {
 // are dispatched.
 func appPerform(*ffi.CB) {
 	pumpStats.performs++
-	if giveWakes() {
+	// Fired outside the app's own wait (appNextEvent), the run loop runs in a
+	// loop of AppKit's (NSCorrectionPanel's, a control's tracking): the app's
+	// loop is suspended in it and the wake's frame is drawn by the ticks.
+	if giveWakes(inNext == 0) {
 		pushWake()
 	}
 	DispatchApp()
@@ -707,7 +710,7 @@ func WaitApp(timeoutNs int64) bool {
 	}
 	for ev := appNextEvent(until); ev != 0; ev = appNextEvent(appObj.distantPast) {
 		if uintptr(objc.Send(ev, selType)) == 15 && uintptr(objc.Send(ev, selSubtype))&0xFFFF == wakeSubtype {
-			if giveWakes() {
+			if giveWakes(false) {
 				appObj.woke = true
 			}
 			continue
@@ -721,8 +724,16 @@ func WaitApp(timeoutNs int64) bool {
 }
 
 func appNextEvent(until objc.ID) objc.ID {
-	return objc.Send4(appObj.app, selNextEvent, ^uintptr(0), uintptr(until), uintptr(defaultMode), 1)
+	inNext++
+	ev := objc.Send4(appObj.app, selNextEvent, ^uintptr(0), uintptr(until), uintptr(defaultMode), 1)
+	inNext--
+	return ev
 }
+
+// inNext is how many appNextEvent calls are on the stack: the run loop runs
+// for the app's pump while there is one, and for a loop of someone else's
+// (a nested one, whose caller the app's loop is waiting for) when none is.
+var inNext int
 
 // Terminate asks the app to quit for reason through the quit policy
 // (AppEvQuitRequested), as ⌘Q does; for a quit already allowed (committed)
@@ -1000,3 +1011,8 @@ func ArmOnWake() bool { return true }
 // answer (NSTerminateLater): not for a quit decided without terminate:,
 // during which the app's loop runs on.
 func quitWaitNative() bool { return QuitPending() && !appObj.quitOutside }
+
+// QuitWaitNative reports whether AppKit runs a wait of its own for the answer
+// to a quit request (NSTerminateLater after a terminate: someone else sent),
+// inside the app's pump. Main thread.
+func QuitWaitNative() bool { return quitWaitNative() }

@@ -461,6 +461,7 @@ func TestEncodeZeroAlloc(t *testing.T) {
 func TestFreeTextureWaitsForUncommittedFrame(t *testing.T) {
 	r := newTestRenderer(t)
 	r.newTarget(2, 1)
+	base := r.TextureBytes()
 	tex := texel(r, 255, 0, 0, 255)
 	F := objc.F
 	pool := F.Call0(objc.PoolPush)
@@ -473,6 +474,9 @@ func TestFreeTextureWaitsForUncommittedFrame(t *testing.T) {
 	if _, retiring := r.TextureCounts(); retiring != 1 {
 		t.Fatalf("%d textures retiring right after the free, want 1 (the frame is not committed)", retiring)
 	}
+	if b := r.TextureBytes(); b != base+4 {
+		t.Fatalf("%d texture bytes while the 1×1 RGBA texture retires, want %d", b, base+4)
+	}
 	time.Sleep(20 * time.Millisecond) // time passing releases nothing
 	r.collect()
 	if _, retiring := r.TextureCounts(); retiring != 1 {
@@ -483,6 +487,9 @@ func TestFreeTextureWaitsForUncommittedFrame(t *testing.T) {
 	r.collect()
 	if _, retiring := r.TextureCounts(); retiring != 0 {
 		t.Fatalf("%d textures retiring after the frame completed, want 0", retiring)
+	}
+	if b := r.TextureBytes(); b != base {
+		t.Fatalf("%d texture bytes after the frame completed, want %d", b, base)
 	}
 	m := img{2, 1, make([]byte, 8)}
 	r.readTarget(m.pix)

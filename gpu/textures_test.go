@@ -57,6 +57,37 @@ func TestFreeTextureGenerations(t *testing.T) {
 	near(t, "unknown id draws nothing", render(r, 1, 1, black, rgbaQuad(0, 0xFFFF)).at(0, 0), [4]int{0, 0, 0, 255}, 0)
 }
 
+// TestTextureBytes: the bytes follow the live textures (width × height × the
+// texel size of the kind), and a freed texture's stay counted until the
+// frames that may sample it have finished.
+func TestTextureBytes(t *testing.T) {
+	r := newTestRenderer(t)
+	base := r.TextureBytes()
+	a := r.NewTexture(TexRGBA8, 8, 4)
+	b := r.NewTexture(TexR8, 5, 3)
+	if got, want := r.TextureBytes()-base, int64(8*4*4+5*3); got != want {
+		t.Fatalf("%d bytes for an 8×4 RGBA and a 5×3 R8 texture, want %d", got, want)
+	}
+	r.FreeTexture(a)
+	r.FreeTexture(a) // a second free counts nothing
+	r.FreeTexture(0)
+	_, retiring := r.TextureCounts()
+	if got, want := r.TextureBytes()-base, int64(5*3); retiring == 0 && got != want {
+		t.Errorf("%d bytes after freeing the RGBA texture, want %d", got, want)
+	} else if retiring > 0 && got != int64(8*4*4+5*3) {
+		t.Errorf("%d bytes with the freed texture still retiring, want both", got)
+	}
+	r.FreeTexture(b)
+	render(r, 1, 1, black) // the frames that may sample them are done
+	r.FreeTexture(r.NewTexture(TexR8, 1, 1))
+	if _, retiring := r.TextureCounts(); retiring != 0 {
+		t.Fatalf("%d textures still retiring", retiring)
+	}
+	if got := r.TextureBytes(); got != base {
+		t.Errorf("%d bytes with every texture freed, want %d", got, base)
+	}
+}
+
 // TestFreeTextureGenerationsExhausted: an index freed under its last
 // generation is never reused, so no id comes back, and a stale id held all
 // along still draws, uploads and frees nothing.

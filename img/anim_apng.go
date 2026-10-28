@@ -187,6 +187,13 @@ func (a *apngAnim) size() (w, h int) { return a.w, a.h }
 // retained: see gifAnim.
 func (a *apngAnim) retained() int64 { return int64(len(a.data)) + 3*4*int64(a.w)*int64(a.h) }
 func (a *apngAnim) count() int      { return len(a.frames) }
+
+// trim: see gifAnim.
+func (a *apngAnim) trim() int64 {
+	a.comp, a.buf, a.idat, a.next = nil, nil, nil, 0
+	return int64(len(a.data))
+}
+
 func (a *apngAnim) playCount() int  { return a.plays }
 func (a *apngAnim) delay(i int) int { return int(a.frames[i].delayMs) }
 

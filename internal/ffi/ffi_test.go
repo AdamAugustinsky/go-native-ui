@@ -6,7 +6,10 @@ import (
 	"math"
 	"runtime"
 	"slices"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 	"unsafe"
 
 	"github.com/ebitengine/purego"
@@ -23,7 +26,41 @@ var (
 	sink                                               uintptr
 )
 
+var timerRoom sync.Once
+
+// makeTimerRoom gives every P's timer heap room for several timers. The
+// runtime's scavenger sleeps on a timer in the heap of whichever P it last ran
+// on, and the first time that P's heap has to grow is an append: a 16 or 32
+// byte allocation that none of our calls made, which landed in a window of
+// TestZeroAlloc or TestColdThreadAttach now and then on Linux (found by
+// sampling every allocation: runtime.(*scavengerState).sleep, via
+// (*timers).addHeap). Once each P has the room, the scavenger never allocates.
+func makeTimerRoom() {
+	n := runtime.GOMAXPROCS(0)
+	var here, added, wg = new(atomic.Int32), new(atomic.Int32), new(sync.WaitGroup)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			// Each goroutine spins until all have arrived, so that they run on n
+			// different Ps and each one's timers go into its own P's heap.
+			here.Add(1)
+			for here.Load() < int32(n) {
+			}
+			for k := 0; k < 8; k++ {
+				time.AfterFunc(time.Millisecond, func() {})
+			}
+			added.Add(1)
+			for added.Load() < int32(n) {
+			}
+		}()
+	}
+	wg.Wait()
+	time.Sleep(50 * time.Millisecond) // the timers fire and leave the heaps empty
+}
+
 func lib(t testing.TB) {
+	timerRoom.Do(makeTimerRoom)
 	if fnLabs != 0 {
 		return
 	}

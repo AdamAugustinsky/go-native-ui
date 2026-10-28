@@ -18,7 +18,8 @@ var appKitToggleOn = ButtonRecipe{
 // UseAppKitControls restyles the push, icon and toggle buttons and segmented
 // controls as macOS 27.2 draws them (the measurements of tools/appkitref):
 // rounded rectangles of the size's radius, a toggle that is on or a chosen
-// segment in the accent under a white label, and systemRed destructive labels. Rex's capsules and quiet
+// segment in the accent under a white label, systemRed destructive labels and
+// borderless icon buttons without a chip. Rex's capsules and quiet
 // tints are the default; an app that wants AppKit's controls instead calls
 // this once, before its first frame.
 func UseAppKitControls() {
@@ -31,6 +32,13 @@ func UseAppKitControls() {
 	for _, rc := range [...]*ButtonRecipe{&ButtonRecipes[ButtonDestructive], &IconButtonRecipes[IconDestructive]} {
 		rc.Label, rc.LabelInactive, rc.LabelPressed = Of(theme.Red), Of(theme.Red), Of(theme.Red)
 	}
+	// a bare symbol in the secondary label colour, darkening under the pointer
+	// with no chip behind it
+	rc := &IconButtonRecipes[IconBorderless]
+	rc.Label, rc.LabelInactive, rc.LabelPressed = Of(theme.Label2), Of(theme.Label3), Of(theme.Label)
+	rc.LabelDisabled = Of(theme.Label4)
+	IconButtonHoverLabel = Of(theme.Label)
+	IconButtonChip = IconChip{}
 	ToggleOnLook = appKitToggleOn
 	SegmentedLook.Capsule = false
 	SegmentedLook.Selected, SegmentedLook.SelectedLabel = Of(theme.Accent), Of(theme.OnAccent)

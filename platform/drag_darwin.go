@@ -6,7 +6,6 @@ import (
 	"context"
 	"io"
 	"os"
-	"runtime"
 	"sync"
 	"sync/atomic"
 	"unsafe"
@@ -21,27 +20,29 @@ import (
 // draggingUpdated: and draggingExited: queue EvDragEnter, EvDragMove and
 // EvDragLeave and answer the operation the handler gives.
 //
-// performDragOperation: copies the dropped data before it returns, on the main
-// thread, because the pasteboard's items go stale when the pasteboard changes
-// owner (another drag can start before a worker would read them). File URLs
-// and text are read at once, within their caps, and the EvDrop is queued. An
-// image is taken as the path of the file URL its item offers (Finder, Photos),
-// else as a copy of its bytes (dataForType:, over MaxPaste refused), and a
-// worker goroutine (decodeDrop) reads the file and decodes it (dragimg_darwin.go);
-// reapDrags (called by Wait) queues the result. A drag of our own session
+// performDragOperation: starts a worker goroutine that reads the dropped data
+// (dropread_darwin.go) and waits for it for dropSyncBudget, so that a lazy source
+// in another process cannot hold the main thread. File URLs and text are read
+// within their caps and the EvDrop is queued by the time the call returns, or
+// later by reapDrags if the source was slow. A link (public.url, unless it is a
+// file's), RTF and HTML are read as text (readText). An image is taken as the path of the
+// file URL its item offers (Finder, Photos), else as a copy of its bytes
+// (dataForType:, over MaxPaste refused), and the same worker reads the file and
+// decodes it (dragimg_darwin.go); reapDrags (called by Wait) queues the result.
+// The pasteboard's changeCount, read at the start and after the read, tells a
+// read across an owner change, which is thrown away. A drag of our own session
 // (draggingSource is dragSource) is answered from the data of its DragSpec,
 // without going through the pasteboard at all.
-//
-// The residual risk: a source that provides its data lazily (a renderer in
-// another process) can hold the main thread inside dataForType: or
-// stringForType: until the system's pasteboard timeout. Reading on a worker was
-// tried and is worse (the items are not ours to keep), so this is documented
-// and tracked as a follow-up.
 //
 // A drag out runs in a loop of AppKit's (beginDraggingSession...), in which the
 // events of a drag over our own window arrive but Wait does not run: while a
 // session of the window is active, each draggingEntered:/Updated: asks for a
 // frame, and linkTick runs the frame handler for it, as in a live resize.
+//
+// File promises (Mail, Photos, a browser's downloads: no file URL, droppromise_darwin.go)
+// are received only with EnableFilePromises: performDrop asks the promisers to
+// write into a folder of the temporary directory and the EvDrop (DragFiles) is
+// queued by reapDrags when they have, or at the timeout.
 //
 // The view registers for dragged types only while the application has a drop
 // target (SetDropKinds), and only the types of those kinds. A hosted native
@@ -82,18 +83,17 @@ const (
 	nsOpDelete  = 32
 )
 
-// maxDropWorkers bounds the image decodes in flight; a drop past it fails.
-const maxDropWorkers = 4
-
 var (
 	dragOnce sync.Once
 
 	clsNSEvent, clsNSData, clsNSImage2, clsNSBitmapRep, clsNSDictionary   objc.ID
 	clsNSPasteboardItem, clsNSDraggingItem, clsNSFilePromise, clsNSNumber objc.ID
 	clsNSError, clsNSWorkspace, clsNSOpQueue                              objc.ID
+	clsNSAttrStr                                                          objc.ID
 
 	tFileURL, tPNG, tTIFF, tJPEG, tHEIC, tText, errDomain objc.ID
-	arrFiles, arrImage, arrText                           objc.ID // the dragged types of each kind
+	tURL, tRTF, tHTML                                     objc.ID // a link, rich text: dragged as text
+	arrFiles, arrImage, arrText, arrTextNoURL             objc.ID // the dragged types of each kind
 	dragSource                                            objc.ID // the GNUIDragSource, retained for the process
 	promiseQueue                                          objc.ID // the NSOperationQueue of the promise delegate
 
@@ -111,6 +111,8 @@ var (
 	selDragPasteboard  = objc.Sel("draggingPasteboard")
 	selDragSourceMask  = objc.Sel("draggingSourceOperationMask")
 	selDragSeq         = objc.Sel("draggingSequenceNumber")
+
+	selInitWithRTF = objc.Sel("initWithRTF:documentAttributes:")
 
 	selAvailableType  = objc.Sel("availableTypeFromArray:")
 	selPBItems        = objc.Sel("pasteboardItems")
@@ -153,6 +155,7 @@ var (
 
 func dragInit() {
 	dragOnce.Do(func() {
+		promiseInit()
 		pbInit()
 		dialogInit() // NSURL, NSMutableArray and the selectors the dialogs declare
 		clsNSEvent, clsNSData, clsNSImage2 = objc.Cls("NSEvent"), objc.Cls("NSData"), objc.Cls("NSImage")
@@ -163,6 +166,8 @@ func dragInit() {
 		keep := func(s string) objc.ID { return objc.Retain(objc.Str(s)) }
 		tFileURL, tPNG, tTIFF = keep("public.file-url"), keep("public.png"), keep("public.tiff")
 		tJPEG, tHEIC, tText = keep("public.jpeg"), keep("public.heic"), keep("public.utf8-plain-text")
+		tURL, tRTF, tHTML = keep("public.url"), keep("public.rtf"), keep("public.html")
+		clsNSAttrStr = objc.Cls("NSAttributedString")
 		errDomain = keep("dev.gonativeui.drag")
 		arr := func(ts ...objc.ID) objc.ID {
 			a := objc.Retain(objc.Send(clsNSMutableArray, selArrayClass))
@@ -171,7 +176,8 @@ func dragInit() {
 			}
 			return a
 		}
-		arrFiles, arrImage, arrText = arr(tFileURL), arr(tPNG, tTIFF, tJPEG, tHEIC), arr(tText)
+		arrFiles, arrImage, arrText = arr(tFileURL), arr(tPNG, tTIFF, tJPEG, tHEIC), arr(tText, tURL, tRTF, tHTML)
+		arrTextNoURL = arr(tText, tRTF, tHTML)
 
 		def := objc.Define("GNUIDragSource", objc.Cls("NSObject"), []string{"NSDraggingSource", "NSFilePromiseProviderDelegate"})
 		def.Method(selSrcMask, "Q@:@q", sourceMask)
@@ -214,7 +220,6 @@ type dragState struct {
 	nDone   atomic.Int32
 	mu      sync.Mutex
 	done    []dropDone
-	fr      ffi.Frame // the main thread's frame for reading drops
 
 	// Drag out.
 	own     []DragItem // the data of the session in progress, for a drop on our own window
@@ -232,7 +237,8 @@ type dragState struct {
 // dropDone is a decoded image on its way to the event queue, for the event e.
 type dropDone struct {
 	e    Event
-	data []byte // the PNG; empty: failed
+	data []byte // the PNG, or the paths of promised files; empty: failed
+	n    int    // the number of files, if not 0
 }
 
 // SetDragHandler sets the function that answers drags over the window (see
@@ -261,8 +267,8 @@ func (w *Window) SetDropKinds(k DragKinds) {
 	for _, p := range [...]struct {
 		k DragKinds
 		a objc.ID
-	}{{DragFiles, arrFiles}, {DragImage, arrImage}, {DragText, arrText}} {
-		if k&p.k == 0 {
+	}{{DragFiles, arrFiles}, {DragFiles, arrPromiseTypes}, {DragImage, arrImage}, {DragText, arrText}} {
+		if k&p.k == 0 || p.a == 0 || p.a == arrPromiseTypes && !EnableFilePromises {
 			continue
 		}
 		for i, n := 0, int(objc.Send(p.a, selURLCount)); i < n; i++ {
@@ -303,13 +309,20 @@ func opToNS(op DragOp) uintptr {
 // offeredKinds is the kinds the pasteboard has types for, and how many items
 // it holds.
 func offeredKinds(pb objc.ID) (k DragKinds, items int) {
-	if objc.Send1(pb, selAvailableType, uintptr(arrFiles)) != 0 {
+	files := objc.Send1(pb, selAvailableType, uintptr(arrFiles)) != 0
+	if files || hasPromises(pb) {
 		k |= DragFiles
 	}
 	if objc.Send1(pb, selAvailableType, uintptr(arrImage)) != 0 {
 		k |= DragImage
 	}
-	if objc.Send1(pb, selAvailableType, uintptr(arrText)) != 0 {
+	// A file's URL is also a public.url (the types conform): a link is text
+	// only when there is no file to take it for.
+	text := arrText
+	if files {
+		text = arrTextNoURL
+	}
+	if objc.Send1(pb, selAvailableType, uintptr(text)) != 0 {
 		k |= DragText
 	}
 	if arr := objc.Send(pb, selPBItems); arr != 0 {
@@ -326,17 +339,7 @@ func (w *Window) dragPoint(info objc.ID) (x, y float32) {
 }
 
 func (d *dragState) answer(x, y float32, offered DragKinds, allowed DragOp) DragAnswer {
-	if d.handler == nil {
-		return DragAnswer{Op: Pick(DragOpAll, allowed), Accept: DragAny}
-	}
-	a := d.handler(x, y, offered, allowed)
-	if a.Accept&offered == 0 {
-		return DragAnswer{}
-	}
-	if a.Op&^allowed != 0 || a.Op&(a.Op-1) != 0 { // not one of the allowed operations
-		a.Op = Pick(a.Op, allowed)
-	}
-	return a
+	return answerDrag(d.handler, x, y, offered, allowed)
 }
 
 // nudge makes a Wait that is blocked in nextEventMatchingMask return, so that
@@ -476,33 +479,19 @@ func (w *Window) performDrop(info objc.ID) bool {
 	// A drag of our own session is answered from its spec: nothing is asked of
 	// the pasteboard, whose data would be fulfilled through our own main thread.
 	own := d.own != nil && dragSource != 0 && objc.Send(info, selDragSource) == dragSource
-	var arr objc.ID
-	if !own {
-		if arr = objc.Send(pb, selPBItems); arr == 0 {
-			w.pushDrop(e, nil, 0, true)
-			return true
-		}
-	}
-	f := &d.fr
-	switch kind {
-	case DragFiles:
-		var paths []byte
-		var n int
-		if own {
-			paths, n = ownPaths(d.own, MaxPaste)
-		} else {
-			paths, n = readPaths(f, arr, MaxPaste)
-		}
-		w.pushDrop(e, paths, n, true)
-	case DragText:
-		if own {
+	if own {
+		switch kind {
+		case DragFiles:
+			paths, n := ownPaths(d.own, MaxPaste)
+			w.pushDrop(e, paths, n, true)
+		case DragText:
 			w.pushDrop(e, ownText(d.own, MaxPaste), 0, true)
-		} else {
-			w.pushDrop(e, readText(f, arr, MaxPaste), 0, true)
+		default:
+			w.dropOwnImage(e)
 		}
-	default:
-		w.dropImage(e, arr, own)
+		return true
 	}
+	w.readDrop(pb, e, kind)
 	return true
 }
 
@@ -534,23 +523,22 @@ type imgJob struct {
 	path    string
 }
 
-// dropImage takes the image of the drop for the worker: of an item that offers
-// one, the file it names (Finder, Photos), else a copy of its bytes.
-func (w *Window) dropImage(e Event, items objc.ID, own bool) {
-	d := &w.drag
-	fail := func() { w.pushDrop(e, nil, 0, true) }
-	if own {
-		for i := range d.own {
-			if png := d.own[i].PNG; len(png) > 0 {
-				w.pushDrop(e, png, 0, true)
-				return
-			}
+// dropOwnImage answers an image drop of our own session from its spec.
+func (w *Window) dropOwnImage(e Event) {
+	for i := range w.drag.own {
+		if png := w.drag.own[i].PNG; len(png) > 0 {
+			w.pushDrop(e, png, 0, true)
+			return
 		}
-		fail()
-		return
 	}
-	f := &d.fr
-	job := imgJob{e: e}
+	w.pushDrop(e, nil, 0, true)
+}
+
+// imageJobOf takes the image of the drop for the decoder: of an item that offers
+// one, the file it names (Finder, Photos), else a copy of its bytes. It runs on
+// a drop worker: dataForType: may wait for the source to provide the bytes.
+func imageJobOf(f *ffi.Frame, items objc.ID, e Event) (job imgJob, ok bool) {
+	job = imgJob{e: e}
 	for i, cnt := 0, int(wsend(f, items, selURLCount)); i < cnt && job.path == "" && job.encoded == nil; i++ {
 		item := wsend(f, items, selURLAt, uintptr(i))
 		typ := wsend(f, item, selAvailableType, uintptr(arrImage))
@@ -561,32 +549,19 @@ func (w *Window) dropImage(e Event, items objc.ID, own bool) {
 			job.path = string(appendCString(nil, p))
 			break
 		}
-		data := wsend(f, item, selDataForType, uintptr(typ)) // may wait for the source to provide it
+		data := wsend(f, item, selDataForType, uintptr(typ))
 		n := int(wsend(f, data, selDataLength))
 		if data == 0 || n <= 0 || n > MaxPaste {
-			fail()
-			return
+			return job, false
 		}
 		job.encoded = append([]byte(nil), unsafe.Slice((*byte)(ffi.PtrFromC(uintptr(wsend(f, data, selBytes)))), n)...)
 	}
-	if job.path == "" && job.encoded == nil {
-		fail()
-		return
-	}
-	if int(d.workers.Load()) >= maxDropWorkers {
-		fail()
-		return
-	}
-	d.workers.Add(1)
-	go d.decodeDrop(job)
+	return job, job.path != "" || job.encoded != nil
 }
 
-// decodeDrop runs on a worker goroutine: it reads the file, if the item named
-// one, decodes the image to PNG and queues the result. It holds its place in
-// workers until it ends.
-func (d *dragState) decodeDrop(j imgJob) {
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
+// decodeJob reads the file, if the item named one, decodes the image to PNG and
+// queues the result. The caller holds a place in workers, which this releases.
+func (d *dragState) decodeJob(j imgJob) {
 	encoded := j.encoded
 	if j.path != "" {
 		encoded = readImageFile(j.path)
@@ -595,11 +570,16 @@ func (d *dragState) decodeDrop(j imgJob) {
 	if len(encoded) > 0 {
 		png = imagePNG(new(ffi.Frame), encoded)
 	}
+	d.finish(dropDone{e: j.e, data: png})
+	d.workers.Add(-1)
+}
+
+// finish queues a result for reapDrags (from a worker).
+func (d *dragState) finish(r dropDone) {
 	d.mu.Lock()
-	d.done = append(d.done, dropDone{e: j.e, data: png})
+	d.done = append(d.done, r)
 	d.mu.Unlock()
 	d.nDone.Add(1)
-	d.workers.Add(-1)
 	Wake()
 }
 
@@ -661,50 +641,6 @@ func readPaths(f *ffi.Frame, items objc.ID, limit int) (out []byte, n int) {
 	return out, n
 }
 
-// readText returns the text of the first pasteboard item that has some, nil if
-// it has none or it is over limit bytes of UTF-8.
-func readText(f *ffi.Frame, items objc.ID, limit int) []byte {
-	for i, cnt := 0, int(wsend(f, items, selURLCount)); i < cnt; i++ {
-		str := wsend(f, wsend(f, items, selURLAt, uintptr(i)), selStringForType, uintptr(tText))
-		if str == 0 {
-			continue
-		}
-		n := int(wsend(f, str, selLenBytes, 4 /* NSUTF8StringEncoding */))
-		p := uintptr(wsend(f, str, selUTF8))
-		if n <= 0 || n > limit || p == 0 {
-			return nil
-		}
-		return append([]byte(nil), unsafe.Slice((*byte)(ffi.PtrFromC(p)), n)...)
-	}
-	return nil
-}
-
-// ownPaths, ownText: what a drag of our own session carries, from its spec.
-func ownPaths(items []DragItem, limit int) (out []byte, n int) {
-	for i := range items {
-		if p := items[i].Path; p != "" {
-			if len(out)+len(p)+1 > limit {
-				return nil, 0
-			}
-			out = append(append(out, p...), 0)
-			n++
-		}
-	}
-	return out, n
-}
-
-func ownText(items []DragItem, limit int) []byte {
-	for i := range items {
-		if t := items[i].Text; t != "" {
-			if len(t) > limit {
-				return nil
-			}
-			return []byte(t)
-		}
-	}
-	return nil
-}
-
 // wsend sends sel to id with integer or pointer arguments on frame f, which
 // belongs to the calling goroutine's thread: for workers and foreign-thread
 // callbacks, which must not use objc.F.
@@ -727,7 +663,7 @@ func (w *Window) reapDrags() {
 		d.mu.Unlock()
 		d.nDone.Add(-int32(len(done)))
 		for _, r := range done {
-			w.pushDrop(r.e, r.data, 0, false)
+			w.pushDrop(r.e, r.data, r.n, false)
 		}
 	}
 	startPromises(w)
