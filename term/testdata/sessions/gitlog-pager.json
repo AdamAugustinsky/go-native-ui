@@ -1,0 +1,1 @@
+{"cols":80,"rows":24,"cmd":"PAGER=less LESS=R git -c core.pager=less log --color=always -n 40","recorded":"2026-10-27","host":"Mac mini, macOS","notes":"less on the alternate screen with raw colour SGR; keys: space, q. Scrubbed: author name and email replaced with same-length placeholders."}

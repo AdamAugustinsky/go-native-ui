@@ -867,9 +867,9 @@ func sidebarChevron(k *base.Kit, rkey, root ui.Key, open *bool, x, dy, h float32
 	theme.At(c, x, theme.Snap((h-side)/2+dy), side, side)
 	c.NextRole(ui.RoleButton)
 	if header {
-		c.NextSemName("Show or Hide")
+		c.NextSemName(str.ShowOrHide)
 	} else {
-		c.NextSemName("Disclosure")
+		c.NextSemName(str.Disclosure)
 	}
 	var state ui.SemState
 	if *open {

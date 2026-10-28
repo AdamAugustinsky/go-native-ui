@@ -18,6 +18,7 @@ How it works, in `.github/workflows/ci.yml`:
 
 | Job | Test or gate | Symptom | Issue |
 |---|---|---|---|
+| macOS | `TestClientClose` (app/ws) | `no pending read: the server saw close 0` / 1006: NSURLSession drops the close frame of a task cancelled just after it opens; Close now waits for a pong first (ae4a96f), which took it from ~1 % to 3 in 1500 under heavy load, but it still failed on the loaded runner (p8-land 40619444296). network.yml still runs the ws suite on macOS on its own | [#34](https://github.com/AdamAugustinsky/go-native-ui/issues/34) |
 | Windows (amd64, arm64) | `TestEvictionSkipsReplacedNotes` (app/notify) | `evicted n0,x, want n0,n1`; 4 times across branches on Windows amd64 and arm64 (e.g. p6-c7 39551142037, main 39583048063) | [#34](https://github.com/AdamAugustinsky/go-native-ui/issues/34) |
 | Windows (amd64, arm64) | `TestSystemIconsWindowsConcurrent` (img) | `icon 3 failed when decoded concurrently`; possibly a real COM concurrency bug | [#34](https://github.com/AdamAugustinsky/go-native-ui/issues/34) |
 | Windows (amd64, arm64) | `TestCloseDoesNotWaitForTheIconStyleRead`, `TestOffscreenRunsLeaveNoWorkersOrHandles` (cmd/pilot/pilot) | timing assertions fail on the loaded arm64 runner (`a read that returned after Close published 7 (want 0)`; the package takes 270-310 s there) | [#34](https://github.com/AdamAugustinsky/go-native-ui/issues/34) |

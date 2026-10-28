@@ -200,7 +200,8 @@ points (`r.Window.Toolbars`) and the app's own constants, times the scale, and
 - **Inside the panes** the widgets flow: `Row`, `Column` and `Container` stack
   children along an axis with the theme's gap and padding, `NextWidth` and
   `NextSize` set one property of the next widget only (`widget.Fill` takes the
-  room its siblings leave, `Kit.Fixed(pt)` is a fixed size), and `NextJustify`
+  room its siblings leave, `Kit.Fixed(pt)` is a fixed size; a box opened
+  with `c.Box` is the next widget too, and takes it), and `NextJustify`
   and `NextCross` place children along and across the axis.
 - **The CSS you would reach for** is there, with the same meaning:
   rows and columns with `NextJustify`, `NextCross` and `NextGap` (flexbox);

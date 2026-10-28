@@ -49,7 +49,11 @@
 //   - macOS: NSStatusItem in the system status bar, with an NSMenu built as the
 //     menu bar's are. A symbol is an SF Symbol; an image is drawn as a template
 //     (tinted for light and dark menu bars) when Template is set.
-//   - Windows and Linux: not yet; New returns ErrUnsupported (errors.Is
+//   - Windows (phase 8 W5): Shell_NotifyIconW with a native popup menu; the
+//     title becomes the tooltip (the notification area shows no text), and
+//     Balloon is the fallback for toasts (NIF_INFO). Until W5 lands New
+//     returns ErrUnsupported.
+//   - Linux: not yet; New returns ErrUnsupported (errors.Is
 //     errors.ErrUnsupported).
 package tray
 
@@ -73,6 +77,9 @@ var (
 	// ErrMenu: the menu index is out of range, or the menu has nothing to
 	// show.
 	ErrMenu = errors.New("tray: the menu cannot be used")
+	// ErrNoBalloon: the OS shows no balloon from a status item (macOS: post
+	// a notification with app/notify instead).
+	ErrNoBalloon = fmt.Errorf("tray: balloons: %w", errors.ErrUnsupported)
 )
 
 // DefaultSize is the height in points a PNG icon is drawn at when Icon.Size

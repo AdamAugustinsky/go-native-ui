@@ -303,7 +303,7 @@ func (k *Kit) NextDivider(s *Splitter, d *Divider) {
 		c.NextFlags(ui.Focusable | ui.FocusAnimation)
 	}
 	c.NextRole(ui.RoleSplitter)
-	c.NextSemName("Divider")
+	c.NextSemName(words.Divider)
 	c.NextSemRange(0, 1, float64(s.st.Ratio[d.Index]), 0.01)
 	c.NextSemPos(d.Index, s.st.N-1)
 }

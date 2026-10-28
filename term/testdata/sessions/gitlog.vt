@@ -1,0 +1,88 @@
+*   [33mb148170[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mp8-term[m[33m, [m[1;31morigin/p8-contracts[m[33m, [m[1;32mp8-panels-hotkeys-mac[m[33m, [m[1;32mp8-contracts[m[33m, [m[1;32mp8-capture-mac[m[33m)[m Merge branch 'a3-apps-plan' into p8-contracts
+[31m|[m[32m\[m  
+[31m|[m * [33m5ff9cbb[m[33m ([m[1;32ma3-apps-plan[m[33m)[m docs: record Adam's phase 8 decisions
+* [32m|[m [33mfe73b73[m docs: phase 8 wave 0 notes on the contracts, the probes and sizes
+* [32m|[m [33m9daf105[m rexui: the TextArea and ContextMenu contracts (phase 8 C4, C5)
+* [32m|[m [33mbf25214[m highlight: the syntax highlighting contract (phase 8 C3, D75)
+* [32m|[m [33mc53aa7c[m term, markdown: the terminal emulator and Markdown contracts (phase 8 C1, C2, D74, D75)
+* [32m|[m [33m21407be[m cmd/probe-p9: SCRecordingOutput through internal/objc with a window filter (phase 8 P9)
+* [32m|[m [33m6a0596a[m media/capture: the screen and audio capture contract (phase 8 M1, M2, D72)
+* [32m|[m [33mab172ec[m cmd/probe-p1..p8: the Windows probes of phase 8 wave 0, and their workflow
+* [32m|[m [33mf8f04bb[m app/webview: the hosted browser view contract (phase 8 H1, H2, D64, D65)
+* [32m|[m [33m28666f6[m app/fetch, app/ws: fetch.Do and the WebSocket client contract (phase 8 N1, N2, D73)
+* [32m|[m [33md396bd0[m app/tray, app/install: Balloon and the per-user installer contract (phase 8 W5, W10, D76)
+* [32m|[m [33me9c70e6[m app/hotkey: the global hotkey contract (phase 8 W7, D70); probe P10
+* [32m|[m [33mb666225[m platform: the Windows window registry types (phase 8 W1, D68)
+* [32m|[m [33m0df6fe1[m platform, app: the panel window contract (phase 8 W2, D69)
+* [32m|[m [33m9d89f7e[m internal/win32, internal/com: WinRT helpers and the COM-object table (phase 8 wave 0)
+[32m|[m[32m/[m  
+* [33m5f655bb[m docs: phase 8 plan, Windows parity for HyperPedia and the A3 app
+*   [33m693d3b3[m[33m ([m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m, [m[1;32mmain[m[33m)[m Merge commit 'a26d8e90da7100c43937c8a651d6345841adf9a6'
+[33m|[m[34m\[m  
+[33m|[m * [33ma26d8e9[m[33m ([m[1;31morigin/p6-tooltip-recovery[m[33m, [m[1;32mp6-tooltip-recovery[m[33m)[m fix(ui): recover parent tooltips when inner boxes are removed
+[33m|[m * [33mf807c54[m fix(ui): request parent tooltip recovery after declaration removal
+[33m|[m[33m/[m  
+*   [33m9b536de[m Merge commit 'e9656ede64fcb795acbe88744596b22be01975a9'
+[35m|[m[36m\[m  
+[35m|[m * [33me9656ed[m[33m ([m[1;31morigin/p6-videopaused[m[33m, [m[1;32mp6-videopaused[m[33m)[m test(media): measure paused video idle across stable visibility
+[35m|[m[35m/[m  
+*   [33mca4b2a0[m Merge remote-tracking branch 'origin/p6-cascade'
+[1;31m|[m[1;32m\[m  
+[1;31m|[m * [33m502e942[m[33m ([m[1;31morigin/p6-cascade[m[33m, [m[1;32mp6-cascade[m[33m)[m test(platform): compare standalone placement with the current native centre
+* [1;32m|[m   [33m1496089[m Merge remote-tracking branch 'origin/p6-wintex'
+[1;33m|[m[1;34m\[m [1;32m\[m  
+[1;33m|[m * [1;32m|[m [33m2de6f1a[m[33m ([m[1;31morigin/p6-wintex[m[33m, [m[1;32mp6-wintex[m[33m)[m test(pilot): exclude mock result dispatch from refresh allocation measurement
+[1;33m|[m * [1;32m|[m [33mff101be[m gpu: reserve texture metadata and prime Pilot glyph rasters before measurement
+* [1;34m|[m [1;32m|[m [33m24bd220[m ci: re-quarantine media TestVideoInWindow on macOS (#34)
+* [1;34m|[m [1;32m|[m [33m6606287[m ci: count cached .debs without ls, which exits 2 on an empty cache (pipefail)
+[1;32m|[m [1;34m|[m[1;32m/[m  
+[1;32m|[m[1;32m/[m[1;34m|[m   
+* [1;34m|[m   [33m24c35da[m Merge remote-tracking branch 'origin/p6-seekpause'
+[1;35m|[m[1;36m\[m [1;34m\[m  
+[1;35m|[m * [1;34m|[m [33m87325ea[m[33m ([m[1;31morigin/p6-seekpause[m[33m, [m[1;32mp6-seekpause[m[33m)[m media: preserve paused audio through the native end boundary
+[1;35m|[m [1;34m|[m[1;34m/[m  
+* [1;34m|[m   [33m8c9b17d[m Merge remote-tracking branch 'origin/p6-prefs-safe'
+[31m|[m[32m\[m [1;34m\[m  
+[31m|[m * [1;34m|[m [33md87b538[m[33m ([m[1;31morigin/p6-prefs-safe[m[33m, [m[1;32mp6-prefs-safe[m[33m)[m prefs: block saves when preserving corrupt file fails
+[31m|[m * [1;34m|[m [33m014c0de[m prefs: refuse saves after unreadable files and support keeping corrupt files
+[31m|[m [1;34m|[m[1;34m/[m  
+* [1;34m|[m [33m51dda69[m ci: quarantine platform TestWindowsOpenCascaded on macOS (#34)
+* [1;34m|[m [33m433a9a4[m ci: Linux apt install prefers archive.ubuntu.com and caches its .debs
+* [1;34m|[m [33m6b5ce92[m ci: quarantine internal/ffi TestZeroAlloc on Linux only (#34)
+* [1;34m|[m [33m4e629c8[m ci: bound and retry the Linux apt install, switching to archive.ubuntu.com on a retry
+[1;34m|[m[1;34m/[m  
+* [33m047c52c[m ci: quarantine media TestPlayerSeekAndPause on macOS and internal/ffi TestColdThreadAttach on Linux (#34)
+*   [33me74b70b[m Merge commit '0824d155f064ed220d28a7ef0c0404ec65049a97'
+[33m|[m[34m\[m  
+[33m|[m * [33m0824d15[m[33m ([m[1;31morigin/p6-tooltip-nested[m[33m, [m[1;32mp6-tooltip-nested[m[33m)[m Resolve nested tooltips from the winning descendant hit
+* [34m|[m [33m18a0a18[m ci: quarantine TestGreenButtonWaitsForNativeReadiness on macOS (#34, #38)
+[34m|[m[34m/[m  
+*   [33mc1338f1[m Merge commit '20afb306fb4dae7817b419a02de89f15474fb936'
+[35m|[m[36m\[m  
+[35m|[m * [33m20afb30[m[33m ([m[1;31morigin/p6-richlink-focus[m[33m, [m[1;32mp6-richlink-focus[m[33m)[m ui: preserve deferred field focus during rich-link cleanup
+[35m|[m * [33m1e04d5e[m ui: make rich-text link spans keyboard focus targets
+* [36m|[m   [33mb6bfc9d[m Merge commit '73a1c5684acaacdb3cee1ebeb2b407d0c187489c'
+[1;31m|[m[1;32m\[m [36m\[m  
+[1;31m|[m * [36m|[m [33m73a1c56[m[33m ([m[1;31morigin/p6-player-final[m[33m, [m[1;32mp6-player-final[m[33m)[m test(media): keep allocation fixture alive across delayed sampling
+[1;31m|[m[1;31m/[m [36m/[m  
+* [36m|[m   [33m6cf2e9c[m Merge commit 'c4672d188f47bf62349e13b0257f3b5c951953e3'
+[1;33m|[m[1;34m\[m [36m\[m  
+[1;33m|[m * [36m|[m [33mc4672d1[m[33m ([m[1;31morigin/p6-disabledtip[m[33m, [m[1;32mp6-disabledtip[m[33m)[m Show tooltips for disabled controls without enabling interaction
+* [1;34m|[m [36m|[m   [33m74cf63c[m Merge commit '11acddd'
+[1;35m|[m[1;36m\[m [1;34m\[m [36m\[m  
+[1;35m|[m * [1;34m|[m [36m|[m [33m11acddd[m[33m ([m[1;31morigin/p6-fullscreen-ready[m[33m, [m[1;32mp6-fullscreen-ready[m[33m)[m test(app): match idle drawable samples to the latest frame's trim
+[1;35m|[m * [1;34m|[m [36m|[m [33m3367e56[m test: wait for native fullscreen readiness and completion
+* [1;36m|[m [1;34m|[m [36m|[m   [33m05f2a50[m Merge commit '201a4807e30a67bed827d3af60904a685270008b'
+[1;36m|[m[32m\[m [1;36m\[m [1;34m\[m [36m\[m  
+[1;36m|[m [32m|[m[1;36m/[m [1;34m/[m [36m/[m  
+[1;36m|[m[1;36m/[m[32m|[m [1;34m|[m [36m|[m   
+[1;36m|[m * [1;34m|[m [36m|[m [33m201a480[m[33m ([m[1;31morigin/p6-titlebaralloc[m[33m, [m[1;32mp6-titlebaralloc[m[33m)[m Remove temporary allocator probes after Linux titlebar proof
+[1;36m|[m * [1;34m|[m [36m|[m [33mbbc2931[m diagnostic: include allocation-counter boundary stacks and setup control
+[1;36m|[m * [1;34m|[m [36m|[m [33m6bf3bcf[m diagnostic: prove serialized titlebar gate and restored-assertion fault
+[1;36m|[m * [1;34m|[m [36m|[m [33ma4a5108[m test(app): serialize titlebar allocation subprocess from startup
+[1;36m|[m * [1;34m|[m [36m|[m [33mcd704bf[m diagnostic: capture frame-scoped titlebar allocations on Linux
+[1;36m|[m[1;36m/[m [1;34m/[m [36m/[m  
+* [1;34m|[m [36m|[m   [33m25294a3[m[33m ([m[1;32mp6-timeralloc[m[33m)[m Merge commit '6c370d24f5e2de9a67b69fbe12bc13c7768b96a1'
+[33m|[m[34m\[m [1;34m\[m [36m\[m  
+[33m|[m * [1;34m|[m [36m|[m [33m6c370d2[m[33m ([m[1;31morigin/p6-drawable-final[m[33m, [m[1;32mp6-drawable-final[m[33m)[m test(app): synchronize idle drawable retention snapshots
+[33m|[m [1;34m|[m[1;34m/[m [36m/[m  

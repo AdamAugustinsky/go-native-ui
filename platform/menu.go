@@ -171,6 +171,19 @@ const (
 // MenuSelectAll.
 func (a MenuAction) IsEdit() bool { return a >= MenuUndo && a <= MenuSelectAll }
 
+// MenuTitles are the titles of the standard actions, by MenuAction, that an
+// item without a Title of its own shows; %s in one is the application's name
+// ("Quit %s"). An empty one keeps macOS's English title.
+type MenuTitles [MenuFullScreen + 1]string
+
+// menuTitles are the titles SetMenuTitles set.
+var menuTitles MenuTitles
+
+// SetMenuTitles sets the titles of the standard actions of the native menus
+// built from now on (menu.SetStrings calls it, to translate them). Call it on
+// the main thread, before the menus are built.
+func SetMenuTitles(t MenuTitles) { menuTitles = t }
+
 // Key equivalents that are not printable characters (MenuItem.Key).
 const (
 	MenuKeyEnter     rune = '\r'

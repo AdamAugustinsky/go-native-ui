@@ -1,0 +1,55 @@
+=== checkpoint 1 at byte 67 of 541 ===
+CJK: 日本語 中文 한국어
+Emoji: 😀 👍🏽 👨‍👩
+=== checkpoint 2 at byte 135 of 541 ===
+CJK: 日本語 中文 한국어
+Emoji: 😀 👍🏽 👨‍👩‍👧 🇧🇷 🇯🇵
+Comb: é ä ñ Z͑
+┌──┬──
+=== checkpoint 3 at byte 202 of 541 ===
+CJK: 日本語 中文 한국어
+Emoji: 😀 👍🏽 👨‍👩‍👧 🇧🇷 🇯🇵
+Comb: é ä ñ Z͑
+┌──┬──┐ ╔══╗ ▀▄█░▒▓
+└──┴──┘ ╚══
+=== checkpoint 4 at byte 270 of 541 ===
+CJK: 日本語 中文 한국어
+Emoji: 😀 👍🏽 👨‍👩‍👧 🇧🇷 🇯🇵
+Comb: é ä ñ Z͑
+┌──┬──┐ ╔══╗ ▀▄█░▒▓
+└──┴──┘ ╚══╝ ⣿⠿ ▏▕
+196046021
+=== checkpoint 5 at byte 338 of 541 ===
+CJK: 日本語 中文 한국어
+Emoji: 😀 👍🏽 👨‍👩‍👧 🇧🇷 🇯🇵
+Comb: é ä ñ Z͑
+┌──┬──┐ ╔══╗ ▀▄█░▒▓
+└──┴──┘ ╚══╝ ⣿⠿ ▏▕
+196046021226bg TC
+=== checkpoint 6 at byte 405 of 541 ===
+CJK: 日本語 中文 한국어
+Emoji: 😀 👍🏽 👨‍👩‍👧 🇧🇷 🇯🇵
+Comb: é ä ñ Z͑
+┌──┬──┐ ╔══╗ ▀▄█░▒▓
+└──┴──┘ ╚══╝ ⣿⠿ ▏▕
+196046021226bg TCbg
+B I U S R D
+=== checkpoint 7 at byte 473 of 541 ===
+CJK: 日本語 中文 한국어
+Emoji: 😀 👍🏽 👨‍👩‍👧 🇧🇷 🇯🇵
+Comb: é ä ñ Z͑
+┌──┬──┐ ╔══╗ ▀▄█░▒▓
+└──┴──┘ ╚══╝ ⣿⠿ ▏▕
+196046021226bg TCbg
+B I U S R D BIU curly
+Long: the quick brown fox jumps over
+=== checkpoint 8 at byte 541 of 541 ===
+CJK: 日本語 中文 한국어
+Emoji: 😀 👍🏽 👨‍👩‍👧 🇧🇷 🇯🇵
+Comb: é ä ñ Z͑
+┌──┬──┐ ╔══╗ ▀▄█░▒▓
+└──┴──┘ ╚══╝ ⣿⠿ ▏▕
+196046021226bg TCbg
+B I U S R D BIU curly
+Long: the quick brown fox jumps over the lazy dog, 0123456789 and wraps 日本語テキスト too.
+end

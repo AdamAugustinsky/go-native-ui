@@ -519,3 +519,59 @@ func TestHeaderFocusByKeyboard(t *testing.T) {
 		t.Fatalf("second Tab: headers' focus %v, %v", hc[0].Focus, hc[1].Focus)
 	}
 }
+
+// A size set on the kit (NextWidth, NextHeight) is the next box's, whether
+// the app opens it through the context or a component of the kit's: a box
+// opened with c.Box takes it, and the component after it keeps its own size.
+// A component that opens boxes of its own size before taking the kit's
+// (a dialog's backdrop) still takes it, and ClearSize, or a zero size in
+// its place, drops it for both.
+func TestKitNextSizeIsTheNextBoxs(t *testing.T) {
+	var box, col, outer, inner, after, auto ui.ID
+	g := newRig(t, 400, 300, 1, func(k *Kit) {
+		c := k.Context()
+		k.NextWidth(ui.Px(120))
+		k.NextHeight(ui.Px(30))
+		box = c.Box(0, "box")
+		col = k.BeginContainer(ui.AxisY, ui.CrossStart, "col", ui.Px(50), ui.Px(20), 0)
+		k.EndContainer()
+
+		k.NextWidth(ui.Px(140))
+		c.NextSize(ui.Px(300), ui.Px(60)) // the component's own box, sized
+		outer = c.Box(0, "outer")
+		c.Push(outer)
+		inner = k.BeginContainer(ui.AxisY, ui.CrossStart, "inner", ui.Px(50), ui.Px(20), 0)
+		k.EndContainer()
+		c.Pop()
+
+		k.NextSize(ui.Px(10), ui.Px(10))
+		k.ClearSize()
+		c.NextHeight(ui.Px(5))
+		after = c.Box(0, "after")
+
+		k.NextWidth(ui.Px(77))
+		k.NextWidth(ui.Size{}) // the component's default: no box's
+		c.NextHeight(ui.Px(5))
+		auto = c.Box(0, "auto")
+	})
+	g.frames(2)
+	size := func(id ui.ID) [2]float32 { r := g.c.Rect(id); return [2]float32{r[2] - r[0], r[3] - r[1]} }
+	if s := size(box); s != [2]float32{120, 30} {
+		t.Errorf("the context's box is %v, want the kit's 120×30", s)
+	}
+	if s := size(col); s != [2]float32{50, 20} {
+		t.Errorf("the container after it is %v, want its own 50×20", s)
+	}
+	if s := size(outer); s != [2]float32{300, 60} {
+		t.Errorf("a component's sized box is %v, want its own 300×60", s)
+	}
+	if s := size(inner); s != [2]float32{140, 20} {
+		t.Errorf("the component's container is %v, want the kit's width, 140×20", s)
+	}
+	if s := size(after); s[0] == 10 || s[1] != 5 {
+		t.Errorf("a box after ClearSize is %v: the cleared size reached it", s)
+	}
+	if s := size(auto); s[0] == 77 {
+		t.Errorf("a box after a zero NextWidth is %v: the replaced width reached it", s)
+	}
+}

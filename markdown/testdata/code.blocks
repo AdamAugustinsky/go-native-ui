@@ -1,0 +1,6 @@
+para "Run this:"
+code info="go" "func main() {\n\tfmt.Println(\"hi <b>\")\n}"
+code info="" "indented code\nblock"
+code info="" "no info"
+para open "Then x := 1 and a very long line that keeps going and going and going and going and going and going and going and going and going and going and going and going and going past any width."
+	"x := 1" style=4

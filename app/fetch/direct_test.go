@@ -44,8 +44,8 @@ func TestProxyNone(t *testing.T) {
 	}
 }
 
-// ProxyNone overrides the environment's proxy (Windows and Linux; macOS
-// takes the system's settings, which a test cannot set): with HTTP_PROXY
+// ProxyNone overrides the environment's proxy (Linux; macOS and Windows
+// take the system's settings, which a test cannot set): with HTTP_PROXY
 // naming a proxy, a transfer to a name only it can resolve goes through it,
 // and the same with ProxyNone never reaches it. The transfers run in a child
 // process, where net/http reads the environment afresh.
@@ -56,8 +56,8 @@ func TestProxyNoneOverridesTheEnvironment(t *testing.T) {
 		fmt.Printf("CHILD env=%v direct=%v\n", viaEnv == nil, direct == nil)
 		return
 	}
-	if runtime.GOOS == "darwin" {
-		t.Skip("macOS takes the system's proxy settings, not the environment's")
+	if runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
+		t.Skip("macOS and Windows take the system's proxy settings, not the environment's")
 	}
 	var s seen
 	proxy := serve(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
