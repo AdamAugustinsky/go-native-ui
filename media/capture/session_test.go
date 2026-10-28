@@ -268,6 +268,7 @@ func TestSessionFailureKeepsTheFile(t *testing.T) {
 func TestSessionJoinFailureKeepsSegments(t *testing.T) {
 	s, f := recording(t, Options{})
 	f.joinErr = errors.New("no export")
+	time.Sleep(20 * time.Millisecond) // more than a tick of a coarse clock (Windows: 15.6 ms)
 	s.r.Pause()
 	s.r.Resume()
 	s.r.Stop(false)
