@@ -137,7 +137,7 @@ func (s *panelScene) Event(a *App, e *Event) {
 		s.wakes(15, 300*time.Millisecond, 3)
 	case 3: // hidden again, woken 15 times
 		if w.Win.Visible() || s.b.builds != s.hidden {
-			s.fail("hidden: visible %v, built %d times", w.Win.Visible(), s.b.builds-s.hidden)
+			s.fail("hidden: visible %v, built %d times; %s", w.Win.Visible(), s.b.builds-s.hidden, w.StateLine(nil, platform.Now()))
 		}
 		s.objects = platform.LiveWindowObjects()
 		Post(Event{ID: 4}, nil)
