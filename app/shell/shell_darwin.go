@@ -3,9 +3,11 @@
 package shell
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"sync"
+	"unsafe"
 
 	"gonativeui/fs"
 	"gonativeui/internal/cf"
@@ -113,10 +115,9 @@ const (
 	nsFileWriteVolumeReadOnlyCode = 642
 )
 
-func (osSystem) trash(p string) error {
-	if err := ready(); err != nil {
-		return err
-	}
+// trashURL asks NSFileManager to move the item at p to the Trash and returns
+// the path it has there.
+func trashURL(p string) (string, error) {
 	fr := cf.Acquire()
 	defer cf.Release(fr)
 	defer cf.Pool(fr)()
@@ -126,27 +127,31 @@ func (osSystem) trash(p string) error {
 	cf.CFRelease(fr, s)
 	fm := cf.Msg(fr, cf.Cls(fr, "NSFileManager"), cf.Sel(fr, "defaultManager"))
 	if url == 0 || fm == 0 {
-		return &os.PathError{Op: "trash", Path: p, Err: ErrUnavailable}
+		return "", ErrUnavailable
 	}
-	out := cf.Out(fr)
-	// trashItemAtURL:resultingItemURL:error: (the resulting URL is not wanted).
-	if cf.MsgBool(fr, fm, cf.Sel(fr, "trashItemAtURL:resultingItemURL:error:"), url, 0, uintptr(out)) {
-		return nil
+	// The resulting URL and the error are two words of the frame's scratch.
+	scratch := fr.Scratch()
+	scratch[0], scratch[1] = 0, 0
+	resulting, out := unsafe.Pointer(&scratch[0]), unsafe.Pointer(&scratch[1])
+	if cf.MsgBool(fr, fm, cf.Sel(fr, "trashItemAtURL:resultingItemURL:error:"), url, uintptr(resulting), uintptr(out)) {
+		if u := scratch[0]; u != 0 { // autoreleased, valid until the pool pops
+			if path := cf.GoString(fr, cf.Msg(fr, u, cf.Sel(fr, "path"))); path != "" {
+				return path, nil
+			}
+		}
+		return "", errors.New("the system did not say where the file went")
 	}
-	nserr := cf.Word(fr) // autoreleased, valid until the pool pops
+	nserr := scratch[1]
 	if nserr == 0 {
-		return &os.PathError{Op: "trash", Path: p, Err: fmt.Errorf("the system refused without saying why")}
+		return "", fmt.Errorf("the system refused without saying why")
 	}
 	code := int(cf.Msg(fr, nserr, cf.Sel(fr, "code")))
 	desc := cf.GoString(fr, cf.Msg(fr, nserr, cf.Sel(fr, "localizedDescription")))
-	var cause error
 	switch code {
 	case nsFileNoSuchFileError, nsFileReadNoSuchFileError:
-		cause = os.ErrNotExist
+		return "", os.ErrNotExist
 	case nsFileWriteNoPermissionError, nsFileWriteVolumeReadOnlyCode:
-		cause = os.ErrPermission
-	default:
-		cause = fmt.Errorf("%s (Cocoa error %d)", desc, code)
+		return "", os.ErrPermission
 	}
-	return &os.PathError{Op: "trash", Path: p, Err: cause}
+	return "", fmt.Errorf("%s (Cocoa error %d)", desc, code)
 }
