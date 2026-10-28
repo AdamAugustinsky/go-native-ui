@@ -1188,3 +1188,15 @@ Live microphone capture was not run: access cannot be granted headlessly, so tha
 **Reasoning:** ZapFast's move to Rex (Zap) set exactly these recipes in the app, and every one was a correction Adam asked for: controls that read as an older macOS beside Rex's tabs and dialogs, a toggle shouting in the accent. A framework whose components default to AppKit's look makes each app repeat that work, and the next app repeats the mistakes first. Rex is the look the framework is for (D17, D40); the measurements still hold for the colours and sizes, and `TestRecipesMatchAppKit` checks them under the opt-in.
 
 **Kept:** the toolbar's and Liquid Glass buttons' recipes, which were already capsules or AppKit's glass; the colours of every recipe.
+
+## D-pending (p9-drag-trash-glass). Trash is checked and verified around the move; drops are read off the main thread; panels are a platform piece (2026-10-28)
+
+**Decision.** Three changes that close or narrow issues #1, #13 and #14, none of which changes an API's contract for code that already works.
+
+- **Trash (#1).** On macOS and Windows the system moves a file given by its path, and no call takes a descriptor or handle, so the identity check cannot be made atomic with the move. `shell.Trash` opens the entry itself without following a link, checks that handle against the home folder and the root, gives the system the real path the handle has now, and afterwards asks the handle where its file is. A different file moved is an error; on macOS it is also put back with `renamex_np(RENAME_EXCL)`. The window that remains is between reading the path and the move.
+- **Drops (#13).** `performDragOperation:` starts a worker that reads the pasteboard, and waits for it for 250 ms. A slower source no longer holds the main thread; its EvDrop comes later. The worker compares the pasteboard's change count before and after, so a read across an owner change fails rather than delivering another owner's data. File promises are received too (`NSFilePromiseReceiver`), but behind `platform.EnableFilePromises`, off, because AppKit throws if the request is made outside a real drag and no test here can start one from another application.
+- **Panels (#14).** `platform.Options.Panel` opens a borderless child window with a clear background, a shadow, and a material and outline of its own (`SetMaterials`, `SetPanelMask`). rexui's Popover does not use it yet.
+
+**Reasoning:** the first two remove a documented hazard without waiting for an API the OS does not have; the third is the part of the popover that needs the platform and can be built and tested alone.
+
+**Not done:** rexui Popover on a panel (the content needs its own `app` window, a `ui.Context` and a surface, event routing and dismissal across windows; unmeasured against NSPopover's behaviour); enabling file promises by default; Windows and Linux drag-in; the Windows check has run only in CI.
