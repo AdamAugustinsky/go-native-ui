@@ -565,9 +565,13 @@ var pumpMsg msg
 // window's procedure (wndProc routes by HWND).
 func dispatchMessages() {
 	for win32.Bool(win32.Call(pPeekMessageW, uintptr(unsafe.Pointer(&pumpMsg)), 0, 0, 0, pmRemove)) {
+		if hostKey(&pumpMsg) { // Tab, Escape, Enter a hosted control hands back (host_windows.go)
+			continue
+		}
 		win32.Call(pTranslateMessage, uintptr(unsafe.Pointer(&pumpMsg)))
 		win32.Call(pDispatchMessageW, uintptr(unsafe.Pointer(&pumpMsg)))
 	}
+	syncHostFocus()
 }
 
 func anyQueued() bool {

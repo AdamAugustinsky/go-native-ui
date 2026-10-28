@@ -219,7 +219,8 @@ func mustUTF16(s string) *uint16 {
 // Window is one top-level window of the app (registry_windows.go has them
 // all).
 type Window struct {
-	q eventQueue
+	q       eventQueue
+	hostWin // hosted views and the focus state (host_windows.go)
 
 	hwnd, hinst uintptr
 	style       uint32
@@ -365,9 +366,13 @@ func Open(o Options) (*Window, error) {
 	// on the screen for one pass (TestFirstFrameIsContent on the runners,
 	// about 1 in 100 fresh processes under load; a probe that painted the
 	// surface blue saw blue there instead). Nothing here draws with GDI.
+	exStyle := uintptr(wsExNoRedirectionBitmap)
+	if o.ChildWindows { // GDI children draw into the window's surface (host_windows.go)
+		exStyle, w.gdiSurface = 0, true
+	}
 	reg.creating = w // wndProc runs inside CreateWindowExW, before the HWND is known
 	hwnd := win32.Call(pCreateWindowExW,
-		wsExNoRedirectionBitmap, uintptr(unsafe.Pointer(classNameUTF16)), uintptr(unsafe.Pointer(title)), uintptr(w.style),
+		exStyle, uintptr(unsafe.Pointer(classNameUTF16)), uintptr(unsafe.Pointer(title)), uintptr(w.style|wsClipChildren), // hosts are child windows (D66)
 		cwUseDefault, cwUseDefault, uintptr(ow), uintptr(oh), 0, 0, w.hinst, 0)
 	runtime.KeepAlive(title)
 	reg.creating = nil
@@ -567,6 +572,7 @@ func (w *Window) Close() {
 		w.menuLoop = false
 		leaveModal()
 	}
+	w.releaseAllHosts()
 	hwnd := w.hwnd
 	w.hwnd = 0
 	w.frameArmed, w.waitable = false, 0
@@ -718,6 +724,9 @@ func wndProc(hwnd, m, wp, lp uintptr) uintptr {
 		return defProc(hwnd, m, wp, lp)
 
 	case wmSetCursor:
+		if wp != hwnd {
+			return 0 // over a hosted child window: its own cursor
+		}
 		if uint32(lp&0xFFFF) == htClient {
 			x, y, ok := w.pointerNow(hwnd)
 			w.shown = w.curs.pointerShape(x, y, ok, w.ptrX, w.ptrY)
@@ -749,17 +758,17 @@ func wndProc(hwnd, m, wp, lp uintptr) uintptr {
 		w.emitResize()
 		return 0
 
-	case wmSetFocus:
-		reg.focus = w
-		t := Now()
-		w.q.push(Event{Kind: EvFocus, Flags: FlagDown, Time: t})
-		focusModifiers(&w.q, &w.lastMods, currentMods(), t) // keys pressed while another window had the focus
+	case wmSetFocus: // EvFocus, and EvHostFocus when the focus came back from a host
+		w.syncFocus(hwnd)
 		return 0
-	case wmKillFocus:
-		t := Now()
-		w.q.push(Event{Kind: EvFocus, Time: t})
-		focusModifiers(&w.q, &w.lastMods, 0, t) // a release elsewhere never arrives
+	case wmKillFocus: // the same with the window that takes the focus: a host of ours keeps it in the window
+		w.syncFocus(wp)
 		return 0
+	case wmActivate:
+		if w.onActivate(wp) { // the host that had the focus gets it back
+			return 0
+		}
+		return defProc(hwnd, m, wp, lp)
 
 	case wmKeyDown, wmKeyUp, wmSysKeyDown, wmSysKeyUp:
 		var f Flags
