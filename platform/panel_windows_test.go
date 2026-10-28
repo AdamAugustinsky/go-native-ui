@@ -7,6 +7,7 @@ import (
 	"time"
 	"unsafe"
 
+	"gonativeui/internal/testlock"
 	"gonativeui/internal/win32"
 )
 
@@ -43,6 +44,7 @@ func hitTest(w *Window, x, y int32) uintptr {
 // or skips the test where the session does not allow it.
 func foreground(t *testing.T) *Window {
 	t.Helper()
+	testlock.Hold(t, "activation")
 	w := openW(t, "main")
 	w.Show()
 	w.Activate()
@@ -197,7 +199,7 @@ func TestPanelShowHideLeaksNothing(t *testing.T) {
 	}
 	settle(p)
 	gdi1, user1 := guiObjects()
-	if gdi1 != gdi0 || user1 != user0 {
+	if gdi1 > gdi0 || user1 > user0 { // one fewer is the system's (a USER object the first pair made, freed)
 		t.Errorf("after 100 Show/Hide pairs: GDI %d → %d, USER %d → %d", gdi0, gdi1, user0, user1)
 	}
 	if p.Visible() {

@@ -7,6 +7,7 @@ import (
 	"time"
 	"unsafe"
 
+	"gonativeui/internal/testlock"
 	"gonativeui/internal/win32"
 )
 
@@ -141,6 +142,7 @@ func TestChromeFrameAndHitTest(t *testing.T) {
 // Restored, the client's top is the window's again.
 func TestChromeMaximizeKeepsTheClientOnTheMonitor(t *testing.T) {
 	lockThread(t)
+	testlock.Hold(t, "activation") // the maximized window covers the screen
 	w := openChrome(t, 46)
 	_, y0, _, _ := w.FrameRect()
 	w.ToggleMaximize()
@@ -210,22 +212,40 @@ func TestChromeCaptionButtonsGetThePointer(t *testing.T) {
 	}
 }
 
-// The caption buttons are as wide as the system's: DWM's caption button
-// bounds of an ordinary window, a third each, against CaptionButtonW at the
-// window's scale.
+// The caption buttons are as wide as the system's: an ordinary window's
+// caption, hit-tested pixel by pixel along its middle (DefWindowProc's
+// HTMINBUTTON, HTMAXBUTTON and HTCLOSE, what the user's pointer finds), gives
+// each button's width, against CaptionButtonW at the window's scale. DWM's
+// DWMWA_CAPTION_BUTTON_BOUNDS is logged: it includes a margin (146 px for
+// three 46-px buttons at 100 % on the runners).
 func TestCaptionMetricsMatchTheSystem(t *testing.T) {
 	lockThread(t)
 	w := openW(t, "system caption")
 	w.Show()
 	settle(w)
 	var r rect
-	if hr := win32.HR(win32.Call(pDwmGetWindowAttrW, w.hwnd, dwmaCaptionButtonBounds, uintptr(unsafe.Pointer(&r)), unsafe.Sizeof(r))); hr < 0 {
-		t.Skipf("DWMWA_CAPTION_BUTTON_BOUNDS: %#x", uint32(hr))
+	if hr := win32.HR(win32.Call(pDwmGetWindowAttrW, w.hwnd, dwmaCaptionButtonBounds, uintptr(unsafe.Pointer(&r)), unsafe.Sizeof(r))); hr >= 0 {
+		t.Logf("DWM's caption button bounds (window coordinates): %v", r)
 	}
-	each := float32(r.right-r.left) / 3
-	want := float32(int32(CaptionButtonW*w.scale + 0.5))
-	t.Logf("the system's caption buttons: %v, %.1f×%d each at scale %v (ours %v×band)", r, each, r.bottom-r.top, w.scale, want)
-	if d := each - want; d < -2 || d > 2 {
-		t.Errorf("the system's caption button is %.1f px wide, ours %v", each, want)
+	x, y, ww, _ := w.FrameRect()
+	o := clientOrigin(w)
+	mid := (int32(y) + o.y) / 2 // the caption's middle, between the window's top and the client's
+	var n [3]int
+	for sx := int32(x); sx < int32(x+ww); sx++ {
+		switch screenHit(w, sx, mid) {
+		case htMinButton:
+			n[0]++
+		case htMaxButton:
+			n[1]++
+		case htClose:
+			n[2]++
+		}
+	}
+	want := int(int32(CaptionButtonW*w.scale + 0.5))
+	t.Logf("the system's caption buttons at scale %v, caption %d px: %v px wide (ours %d × the band)", w.scale, o.y-int32(y), n, want)
+	for i, c := range n {
+		if c < want-2 || c > want+2 {
+			t.Errorf("the system's button %d is %d px wide, ours %d", i, c, want)
+		}
 	}
 }

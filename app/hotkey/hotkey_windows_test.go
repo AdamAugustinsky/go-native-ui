@@ -17,6 +17,7 @@ import (
 	"gonativeui/app"
 	"gonativeui/internal/allocsite"
 	"gonativeui/internal/childapp"
+	"gonativeui/internal/testlock"
 	"gonativeui/internal/win32"
 	"gonativeui/platform"
 	"gonativeui/ui"
@@ -243,6 +244,7 @@ func (s *scene) run() {
 }
 
 func TestLiveHotkeys(t *testing.T) {
+	testlock.Hold(t, "activation") // it types: the keys reach the foreground window, maybe another test's
 	r := childapp.Run(t, "hotkeys", 60*time.Second)
 	if r.KV["done"] != "1" {
 		t.Fatalf("the scenario did not finish\n%s", r.Out)
@@ -435,6 +437,7 @@ func (p *palette) Event(a *app.App, e *app.Event) {
 }
 
 func TestLivePalette(t *testing.T) {
+	testlock.Hold(t, "activation") // it types and takes the foreground
 	r := childapp.Run(t, "palette", 60*time.Second)
 	if r.KV["done"] != "1" {
 		t.Fatalf("the scenario did not finish\n%s", r.Out)
