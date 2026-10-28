@@ -56,8 +56,8 @@ ships". The band has shipped; this is that decision.
      renders and Windows/Linux fall back to option 1, so there are two looks to
      keep right.
 
-3. **Glass capsules in a child panel** (new since #14: `platform.Options.Panel`
-   is a borderless child window with a clear background and a material). The
+3. **Glass capsules in a child panel** (main's panel windows, W2/D69, with the
+   `Panel.Parent` child-window addition from #14). The
    panel sits over the band with behind-window blending, which blurs whatever is
    behind that window on screen, our Metal pixels included, and its own
    transparent Metal surface carries the glyphs, so it takes its own clicks.

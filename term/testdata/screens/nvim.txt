@@ -1,0 +1,199 @@
+=== checkpoint 1 at byte 1674 of 13394 ===
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+=== checkpoint 2 at byte 3348 of 13394 ===
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+E
+=== checkpoint 3 at byte 5022 of 13394 ===
+  1 // Package term is a terminal emulator without a terminal: a VT parser, a
+  2 // screen and scrollback model, and an input encoder, in pure Go (the phase
+  3 // 8 plan's C1 and D74). a3-app's terminal pane is remote: the bytes of a
+  4 // pseudo-terminal on the agent's machine arrive over a WebSocket and go
+  5 // into Write; the keys the user types come out of EncodeKey and go back.
+  6 // rexui.Terminal draws a Terminal.
+  7 //
+  8 //      t := term.New(term.Options{Cols: 120, Rows: 40})
+  9 //      t.Write(chunk) // any chunking: a sequence split across writes is kept
+ 10 //
+ 11 //      // draw: rows from the top of the scrollback (-t.Scrollback()) to the
+ 12 //      // bottom of the screen (rows-1), each a []Cell of Cols cells
+ 13 //      for y := lo; y <= hi; y++ {
+ 14 //              for _, cell := range t.Row(y) {
+ 15 //                      st := t.Style(cell.Style) // colours, bold, underline, hyperlink
+ 16 //              }
+ 17 //      }
+ 18 //      if lo, hi, ok := t.Damage(); ok { /* rows that changed */ t.ClearDamage() }
+ 19 //
+ 20 //      out = t.EncodeKey(out[:0], term.KeyUp, 0, 0) // "\x1b[A", or "\x1bOA" in application cur    sor mode
+ 21 //      out = t.EncodePaste(out[:0], clip)          // bracketed when the program asked for it
+ 22 //      out = t.TakeReplies(out)                    // answers to the program's queries (DA, DSR    )
+ 23 //
+ 24 // # What it emulates
+ 25 //
+ 26 // xterm's common subset, as the programs o
+
+E1568: Terminal did not respond to DSR request for 'background' color. Startup may be slower. :help
+=== checkpoint 4 at byte 6697 of 13394 ===
+  1 // Package term is a terminal emulator without a terminal: a VT parser, a
+  2 // screen and scrollback model, and an input encoder, in pure Go (the phase
+  3 // 8 plan's C1 and D74). a3-app's terminal pane is remote: the bytes of a
+  4 // pseudo-terminal on the agent's machine arrive over a WebSocket and go
+  5 // into Write; the keys the user types come out of EncodeKey and go back.
+  6 // rexui.Terminal draws a Terminal.
+  7 //
+  8 //      t := term.New(term.Options{Cols: 120, Rows: 40})
+  9 //      t.Write(chunk) // any chunking: a sequence split across writes is kept
+ 10 //
+ 11 //      // draw: rows from the top of the scrollback (-t.Scrollback()) to the
+ 12 //      // bottom of the screen (rows-1), each a []Cell of Cols cells
+ 13 //      for y := lo; y <= hi; y++ {
+ 14 //              for _, cell := range t.Row(y) {
+ 15 //                      st := t.Style(cell.Style) // colours, bold, underline, hyperlink
+ 16 //              }
+ 17 //      }
+ 18 //      if lo, hi, ok := t.Damage(); ok { /* rows that changed */ t.ClearDamage() }
+ 19 //
+ 20 //      out = t.EncodeKey(out[:0], term.KeyUp, 0, 0) // "\x1b[A", or "\x1bOA" in application cur    sor mode
+ 21 //      out = t.EncodePaste(out[:0], clip)          // bracketed when the program asked for it
+ 22 //      out = t.TakeReplies(out)                    // answers to the program's queries (DA, DSR    )
+ 23 //
+ 24 // # What it emulates
+ 25 //
+ 26 // xterm's common subset, as the programs of an agent's session use it
+term/term.go                                                                      1,1            Top
+E1568: Terminal did not respond to DSR request for 'background' color. Startup may be slower. :help
+=== checkpoint 5 at byte 8371 of 13394 ===
+313 func (t *Terminal) Damage() (lo, hi int, ok bool) { rcolours, bold, underline, hyperlink
+ 16 //              }
+ 17 //      }
+ 18 //      if lo, hi, ok := t.Damage(); ok { /* rows that changed */ t.ClearDamage() }
+ 19 //
+ 20 //      out = t.EncodeKey(out[:0], term.KeyUp, 0, 0) // "\x1b[A", or "\x1bOA" in application cur
+    sor mode
+ 21 //      out = t.EncodePaste(out[:0], clip)          // bracketed when the program asked for it
+ 22 //      out = t.TakeReplies(out)                    // answers to the program's queries (DA, DSR
+    )
+ 23 //
+ 24 // # What it emulates
+ 25 //
+ 26 // xterm's common subset, as the programs of an agent's session use it
+ 27 // (vim, less, htop, git, tmux and Claude Code's TUI): the DEC/ANSI state
+ 28 // machine (Paul Williams' diagram), cursor movement and editing, scroll
+ 29 // regions, the alternate screen, tab stops, origin and wrap modes, SGR with
+ 30 // 16, 256 and 24-bit colour and underline styles, wide and combining
+ 31 // characters, OSC 0/2 titles, OSC 8 hyperlinks, OSC 52 clipboard writes
+ 32 // (handed to the app, which decides: TakeClipboard), bracketed paste, mouse
+ 33 // modes 1000, 1002 and 1006, application cursor and keypad keys, DECSCUSR
+ 34 // cursor shapes, and reflow on resize.
+ 35 //
+ 36 // # Memory and allocation
+ 37 //
+ 38 // Cells are 8 bytes and pointer-free; rows are offsets into a ring;
+ 39 // graphemes of more than one rune, styles and hyperlinks live in interned
+ 40 // side tables with budgets. Write allocates nothing per byte, and drawing
+term/term.go                                                                      19,1            4%
+E1568: Terminal did not respond to DSR request for 'background' color. Startup may be slo
+=== checkpoint 6 at byte 10045 of 13394 ===
+313 func (t *Terminal) Damage() (lo, hi int, ok bool) { return 0, 0, false }
+314
+315 // ClearDamage marks every row drawn.
+316 func (t *Terminal) ClearDamage() {}
+317
+318 // TakeReplies appends the bytes the terminal owes the program (answers to
+319 // device attribute and status queries) to dst and forgets them; the app
+320 // sends them as input.
+321 func (t *Terminal) TakeReplies(dst []byte) []byte { return dst }
+322
+323 // TakeClipboard returns an OSC 52 clipboard write the program asked for
+324 // since the last call (decoded from base64), for the app to allow or not.
+325 func (t *Terminal) TakeClipboard(dst []byte) ([]byte, bool) { return dst, false }
+326
+327 // TakeBells is the number of bells since the last call.
+328 func (t *Terminal) TakeBells() int { return 0 }
+329
+330 // AppendText appends the text between from and to (inclusive, in reading
+331 // order), joining soft-wrapped lines and ending hard lines with "\n": a
+332 // selection's copy.
+333 func (t *Terminal) AppendText(dst []byte, from, to Pos) []byte { return dst }
+334
+335 // Find searches for needle (plain text) from pos, forward or backward
+336 // through the screen and the scrollback, and returns the match's first and
+337 // last cells.
+338 func (t *Terminal) Find(needle []byte, from Pos, backward bool) (start, end Pos, ok bool) {
+339         return Pos{}, Pos{}, false
+340 }
+term/term.go                                                                      340,1          Bot
+E1568: Terminal did not respond to DSR request for 'background' color. Startup may be slo
+=== checkpoint 7 at byte 11719 of 13394 ===
+  1 // Package term is a terminal emulator without a terminal: a VT parser, a
+  2 // screen and scrollback model, and an input encoder, in pure Go (the phase
+  3 // 8 plan's C1 and D74). a3-app's terminal pane is remote: the bytes of a
+  4 // pseudo-terminal on the agent's machine arrive over a WebSocket and go
+  5 // into Write; the keys the user types come out of EncodeKey and go back.
+  6 // rexui.Terminal draws a Terminal.
+  7 //
+  8 //      t := term.New(term.Options{Cols: 120, Rows: 40})
+  9 //      t.Write(chunk) // any chunking: a sequence split across writes is kept
+ 10 //
+ 11 //      // draw: rows from the top of the scrollback (-t.Scrollback()) to the
+ 12 //      // bottom of the screen (rows-1), each a []Cell of Cols cells
+ 13 //      for y := lo; y <= hi; y++ {
+ 14 //              for _, cell := range t.Row(y) {
+ 15 //                      st := t.Style(cell.Style) // colours, bold, underline, hyperlink
+ 16 //              }
+ 17 //      }
+ 18 //      if lo, hi, ok := t.Damage(); ok { /* rows that changed */ t.ClearDamage() }
+ 19 //
+ 20 //      out = t.EncodeKey(out[:0], term.KeyUp, 0, 0) // "\x1b[A", or "\x1bOA" in application cur    sor mode
+ 21 //      out = t.EncodePaste(out[:0], clip)          // bracketed when the program asked for it
+ 22 //      out = t.TakeReplies(out)                    // answers to the program's queries (DA, DSR    )
+ 23 //
+ 24 // # What it emulates
+ 25 //
+ 26 // xterm's common subset, as the programs of an agent's session use it
+term/term.go                                                                      1,1            Top
+E1568: Terminal did not respond to DSR request for 'background' color. Startup may be slo
+=== checkpoint 8 at byte 13394 of 13394 ===
+

@@ -1,0 +1,7 @@
+@dataclass
+class Point:
+    """A point."""
+    x: int = 0
+
+    def norm(self) -> float:
+        return (self.x ** 2) ** 0.5  # length

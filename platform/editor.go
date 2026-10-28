@@ -51,6 +51,9 @@ const (
 	EnterSends EnterPolicy = iota
 	// CmdEnterSends: Enter adds a line and ⌘Enter submits.
 	CmdEnterSends
+	// EnterNewline: Enter adds a line and nothing submits (a text area,
+	// rexui.TextArea).
+	EnterNewline
 )
 
 // EditorOptions configure NewEditor.
@@ -66,6 +69,12 @@ type EditorOptions struct {
 	// MaxLines is how many lines the editor grows to before it scrolls
 	// (Height); 0 means 6.
 	MaxLines int
+	// MinLines is how many lines high the editor is when it holds fewer
+	// (Height); 0 means 1. Equal to MaxLines, the height is fixed.
+	MinLines int
+	// ReadOnly shows the text selectable but not editable: typing, pasting
+	// and dropping change nothing (SetText and Replace still do).
+	ReadOnly bool
 	// FontSize is the text's size in points; 0 means the system's 13.
 	FontSize float32
 	// InsetX and InsetY are the space between the view's edges and the text,

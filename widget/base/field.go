@@ -64,6 +64,7 @@ type TextInput struct {
 func (k *Kit) BeginTextInput(label string, h float32, hover Hover) TextInput {
 	c := k.c
 	display, ident := ui.SplitLabel(label)
+	k.syncSize()
 	if k.hasH && k.nh.Kind == ui.SizePixels { // NextHeight with a fixed height
 		h = k.nh.Value
 	}

@@ -32,13 +32,16 @@ You must approve, before it happens:
 - dropping a platform.
 
 On Linux, system libraries are loaded with `dlopen` at runtime and never
-bundled. GTK, Qt, webviews, Electron/Wails, GLFW, SDL and libdecor are
+bundled. **One bundled C library is approved** (Adam, 2026-10-27, phase 8
+D74): libghostty-vt, for the terminal, loaded at runtime with no cgo and
+shipped beside the apps that use it; nothing else is bundled. GTK, Qt, webviews, Electron/Wails, GLFW, SDL and libdecor are
 excluded.
 
 | Dependency | Why | Size cost (stripped) | cgo | License |
 |---|---|---|---|---|
 | `github.com/ebitengine/purego` | `Dlopen`/`Dlsym`; the `fakecgo` runtime bootstrap that makes C calls and callbacks legal without cgo (sets `runtime.iscgo`, creates threads with `pthread_create`, provides `crosscall2`); Objective-C class registration at startup. darwin + linux only. | +236 KB (Dlopen + 1 call), +509 KB with `objc` on darwin/arm64; +131–180 KB on linux | no | Apache-2.0 (some files BSD-3 from Go) |
 | `github.com/go-text/typesetting` | Linux text shaping, bidi and segmentation (**D9 option B, chosen**). Linux builds only. To be added in phase 2. | +2.1–3.4 MB (probe) | no | Unlicense OR BSD-3; `harfbuzz/` is MIT |
+| libghostty-vt (Ghostty, `4a4fc0179`), **draft, phase 8 D74** | The terminal emulator under `term` and `rexui.Terminal`: parser, screen, scrollback, render state, input encoders, selection, search. Built by `tools/libghostty` with Zig 0.17.0, not committed; bundled only with apps that use the terminal (`gnui.json` `nativeLibs`). Not a Go module: a native library loaded at runtime through `clib` (`dlopen`, `LoadLibraryExW`). | not in the Go binary: a separate file of 2.06 MB (darwin/arm64), 2.35 MB (windows/amd64), 1.95 MB (windows/arm64), 2.26 MB (linux/amd64), 2.00 MB (linux/arm64), ReleaseFast, stripped | no | MIT, Copyright (c) 2024 Mitchell Hashimoto, Ghostty contributors |
 
 **Phase 1: `golang.org/x/sys` dropped.** It was planned for Windows DLL
 loading and Linux syscalls. The Windows and Linux backends ended up needing
@@ -746,6 +749,8 @@ The whole UI is rewritten in Go on the framework with the Rex design system, mac
 - **Errors come back in the same call.** Consecutive calls may run on different OS threads, so thread-local error state (`errno`, `dlerror`, a library's "last error") cannot be read after a call. Libraries designed for `clib` return errors through caller-owned storage in the call itself (ZapFast's `zf_err`, D49). `Open` and `Func` read `dlerror` with the thread pinned for that one call; a caller that must read a thread-local error from an existing library pins the thread around the call and the read.
 - A library's own threads must coexist with Go's signal handling under fakecgo: tested with a fixture library whose threads spin and block while Go runs under `SIGPROF` and async preemption.
 
+**Amended in phase 8 (2026-10-27, for D74's libghostty-vt):** `clib` passes **structs by value** (`Call.Struct`, up to 96 bytes, by each ABI's rules: AAPCS64, SysV and Win64 tested against a fixture library) and a float pair (`Call.Float32x2`), and runs on **Windows amd64 and arm64** through `syscall.SyscallN` with `LoadLibraryExW` (`LOAD_WITH_ALTERED_SEARCH_PATH`). On windows/arm64 float arguments are not supported (SyscallN has no float registers there): such a call panics. Callbacks stay internal (`term` uses `internal/ffi`'s directly).
+
 ## D36. The Objective-C runtime grows (phase 6, 2026-10-18; revised by F1, 2026-10-19)
 
 **Decision.**
@@ -916,6 +921,8 @@ reordering spans needs the app's care; no automatic scroll-to-focus. See
 **Evidence:** Gio's `layout.List` position model (`go-and-others.md` §3.4), egui's heterogeneous rows (`egui.md` §2.4), ZapFast's height cache (`zapfast/src/ui/conversation.rs:2289-2300`). ZapFast deletes messages for everyone, backfills history mid-list and reorders its chat list, so these rules are fixed before the interface freezes.
 
 **Constraints:** 0 allocations, edits included within `Reserve`; under 4 ms of CPU per frame scrolling 1M mixed-height items.
+
+**Sideways (2026-10-27):** a list of rows wider than itself (a file or a diff as `mdview.CodeLine` rows) scrolls sideways as one: `VListOpts.ContentW` makes every item at least that wide and the body scroll on both axes, so ui's own wheel, trackpad, rubber band and bars move all rows by one offset, and a wheel's notches over it still scroll it vertically (the sideways-only rule of `scrollPlain` does not apply to a box that scrolls on Y). The pile above the anchor floats on Y only, so the offset moves it with the flow; restating the anchor sets Y alone (`ui.Context.SetScrollY`, `AnchorScrollY`). `mdview.CodeWidth(k, mdview.CodeColumns(src), opts)` is the width of a file's longest line. A row that must stay in view across (a diff's file header, its counts at the right) is built with `v.ItemFixedX(i)` instead of `Item`: it floats on X only (`ui.FloatingX` at the body's left, which the sideways offset does not move), stays in the flow on Y, and is as wide as the view; in the pile, which moves across with the items, it undoes the body's sideways offset and stretch as the pile undoes the vertical stretch, at the last layout's view width. No allocation, no new state. Rejected: a shared offset applied row by row (each row a sideways-only box would turn the wheel sideways), and a horizontal scroll view around the list (its vertical bar would scroll away).
 
 ## D44. Images (phase 6, 2026-10-18)
 
@@ -1195,8 +1202,8 @@ Live microphone capture was not run: access cannot be granted headlessly, so tha
 
 - **Trash (#1).** On macOS and Windows the system moves a file given by its path, and no call takes a descriptor or handle, so the identity check cannot be made atomic with the move. `shell.Trash` opens the entry itself without following a link, checks that handle against the home folder and the root, gives the system the real path the handle has now, and afterwards asks the handle where its file is. A different file moved is an error; on macOS it is also put back with `renamex_np(RENAME_EXCL)`. The window that remains is between reading the path and the move.
 - **Drops (#13).** `performDragOperation:` starts a worker that reads the pasteboard, and waits for it for 250 ms. A slower source no longer holds the main thread; its EvDrop comes later. The worker compares the pasteboard's change count before and after, so a read across an owner change fails rather than delivering another owner's data. File promises are received too (`NSFilePromiseReceiver`), but behind `platform.EnableFilePromises`, off, because AppKit throws if the request is made outside a real drag and no test here can start one from another application.
-- **Panels (#14).** `platform.Options.Panel` opens a borderless child window with a clear background, a shadow, and a material and outline of its own (`SetMaterials`, `SetPanelMask`). rexui's Popover does not use it yet.
+- **Panels (#14).** Main's panel contract (W2, D69, `platform.Panel`) is kept; the popover's needs are additions to it: `Panel.Parent`, `X`, `Y` (a child panel ordered over its parent at an offset, which may lie past the parent's edge), `SetPanelOrigin`, and `SetPanelMask` (the alpha of a PNG outlines the panel's material and shadow). The material is the panel's own (`Options.Materials` with `AreaPopover`, or `Options.Backdrop`). rexui's Popover does not use panels yet.
 
 **Reasoning:** the first two remove a documented hazard without waiting for an API the OS does not have; the third is the part of the popover that needs the platform and can be built and tested alone.
 
-**Not done:** rexui Popover on a panel (the content needs its own `app` window, a `ui.Context` and a surface, event routing and dismissal across windows; unmeasured against NSPopover's behaviour); enabling file promises by default; Windows and Linux drag-in; the Windows check has run only in CI.
+**Not done:** rexui Popover on a panel (its content is built inside the host window's `ui` tree by `BeginPopover`/`EndPopover`; on a panel it needs its own `app` window, `ui.Context` and surface, and event routing and dismissal across windows); enabling file promises by default; Windows and Linux drag-in; the Windows check has run only in CI.

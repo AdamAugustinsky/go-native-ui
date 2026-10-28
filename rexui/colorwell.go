@@ -70,14 +70,11 @@ var ColorWellLook = ColorWellRecipe{
 	Width: 216, SwatchD: 24, Gap: 8, PerRow: 6,
 }
 
-// pickerColors are the system colours the drawn picker offers, with their names
-// for assistive technologies.
-var pickerColors = [...]struct {
-	role theme.Role
-	name string
-}{
-	{theme.Red, "Red"}, {theme.Orange, "Orange"}, {theme.Yellow, "Yellow"}, {theme.Green, "Green"}, {theme.Mint, "Mint"}, {theme.Teal, "Teal"},
-	{theme.Cyan, "Cyan"}, {theme.Blue, "Blue"}, {theme.Indigo, "Indigo"}, {theme.Purple, "Purple"}, {theme.Pink, "Pink"}, {theme.Brown, "Brown"},
+// pickerColors are the system colours the drawn picker offers; their names
+// for assistive technologies are Strings.Colors, in the same order.
+var pickerColors = [len(Strings{}.Colors)]theme.Role{
+	theme.Red, theme.Orange, theme.Yellow, theme.Green, theme.Mint, theme.Teal,
+	theme.Cyan, theme.Blue, theme.Indigo, theme.Purple, theme.Pink, theme.Brown,
 }
 
 // ColorWellSignal is what a colour well reports.
@@ -162,7 +159,7 @@ func ColorWell(k *base.Kit, label string, st *ColorWellState, rgba *uint32, o Co
 	}
 	if st.Open && !panel && !p.Disabled {
 		anchor := c.Rect(id)
-		pop := BeginPopover(k, "picker", anchor, PopoverOpts{Width: rc.Width, Label: "Colour"})
+		pop := BeginPopover(k, "picker", anchor, PopoverOpts{Width: rc.Width, Label: str.Colour})
 		if colorPicker(k, st, rgba) {
 			sig.Changed = true
 		}
@@ -209,9 +206,8 @@ func colorPicker(k *base.Kit, st *ColorWellState, rgba *uint32) (changed bool) {
 		k.NextGap(rc.Gap)
 		k.Row(c.Fmt().Str("row").Int(row).String())
 		for i := row * rc.PerRow; i < min((row+1)*rc.PerRow, len(pickerColors)); i++ {
-			pc := &pickerColors[i]
-			col := r.Colors[pc.role] | 0xFF
-			p := k.PressState(pc.name, base.HoverOff)
+			col := r.Colors[pickerColors[i]] | 0xFF
+			p := k.PressState(str.Colors[i], base.HoverOff)
 			selected := *rgba>>8 == col>>8
 			c.NextBG(col)
 			c.NextRadius(d / 2)
@@ -234,7 +230,7 @@ func colorPicker(k *base.Kit, st *ColorWellState, rgba *uint32) (changed bool) {
 		k.EndRow()
 	}
 	k.NextWidth(ui.Pct(1))
-	fs := TextField(k, "Hex", &st.Hex, "#RRGGBB", FieldOpts{Size: theme.SizeSmall})
+	fs := TextField(k, str.Hex, &st.Hex, "#RRGGBB", FieldOpts{Size: theme.SizeSmall})
 	if fs.Submitted {
 		if v, ok := parseHex(st.Hex.Bytes()); ok && v != *rgba {
 			*rgba = v

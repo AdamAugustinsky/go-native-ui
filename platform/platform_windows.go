@@ -4,7 +4,6 @@ package platform
 
 import (
 	"errors"
-	"fmt"
 	"runtime"
 	"sync/atomic"
 	"syscall"
@@ -76,12 +75,12 @@ const (
 	idcSizeAll              = 32646
 	idcHand                 = 32649
 	htClient                = 1
-	sizeMoveTimerID         = 1
-	sizeMoveTimerMs         = 16 // USER_TIMER_MINIMUM is 10; ~60 Hz is plenty for requested frames
 
+	swpNoSize     = 0x0001
 	swpNoMove     = 0x0002
 	swpNoZOrder   = 0x0004
 	swpNoActivate = 0x0010
+	wsVisible     = 0x10000000
 
 	pmRemove = 0x0001
 
@@ -204,8 +203,7 @@ var (
 	pImmNotifyIME       = win32.Proc(imm32, "ImmNotifyIME")
 	classNameUTF16      = mustUTF16("GoNativeUIWindow")
 	wndProcCallback     = syscall.NewCallback(wndProc) // created once
-	theWindow           *Window                        // the single window; read by wndProc
-	wakeHWND            atomic.Uintptr                 // HWND for osWake, 0 when no window
+	windowClass         wndClassEx                     // registered with the first window, for the process's life
 )
 
 func mustUTF16(s string) *uint16 {
@@ -218,7 +216,8 @@ func mustUTF16(s string) *uint16 {
 
 // ---- Window -------------------------------------------------------------------
 
-// Window is the single top-level window.
+// Window is one top-level window of the app (registry_windows.go has them
+// all).
 type Window struct {
 	q eventQueue
 
@@ -235,7 +234,7 @@ type Window struct {
 	rscale float32
 
 	opening   bool   // inside Open: WM_SIZE etc. update state but push no events
-	delivered bool   // q holds events already returned by Wait
+	returned  bool   // q holds events already returned by Events or Wait
 	nOut      int    // how many of them
 	visible   bool   // last reported visibility
 	cloaked   bool   // opened with Options.Hidden and not yet shown (dwm_windows.go)
@@ -246,11 +245,21 @@ type Window struct {
 
 	frameArmed bool
 	waitable   uintptr
-	handles    [1]uintptr
+	wakeMark   atomic.Bool // Window.Wake: an EvWake for this window at the next pump
+
+	// Window commands (wincmd_windows.go).
+	hidden     bool    // Hide took it off the screen (SW_HIDE)
+	fullScreen bool    // ToggleFullScreen: covers its monitor
+	saveStyle  uintptr // the style full screen restores
+	titleBuf   []uint16
+	place      windowPlacement // the placement full screen restores
+	mi         monitorInfo
+	flash      flashWInfo
 
 	handler   func() // SetFrameHandler
 	inHandler bool
 	sizeMove  bool // inside the size/move modal loop (WM_ENTERSIZEMOVE .. WM_EXITSIZEMOVE)
+	menuLoop  bool // inside the window menu's loop (WM_ENTERMENULOOP .. WM_EXITMENULOOP)
 
 	curs    cursorMap // cursor regions and override (SetCursorRegions)
 	shown   Cursor    // the shape last applied with SetCursor
@@ -287,27 +296,29 @@ type Window struct {
 
 	// Syscall argument and result storage; kept in the heap-allocated Window
 	// so no pointer to a stack local ever reaches the OS.
-	msg msg
 	rc  rect
 	pt  point
 	tme trackMouseEvent
-	wc  wndClassEx
 }
 
-// Open creates the window. Main thread only.
+// Open creates a window; up to MaxWindows can be open at once (D30, D68).
+// The first one (or StartApp) also makes the hidden app window. Main thread
+// only: every window and the app window belong to the thread that made
+// them.
 func Open(o Options) (*Window, error) {
-	if o.Panel != nil {
-		return nil, ErrNoPanel
-	}
 	if user32 == 0 || pCreateWindowExW == 0 || pMsgWait == 0 {
 		return nil, errors.New("platform: cannot load user32.dll")
 	}
-	if theWindow != nil {
-		return nil, fmt.Errorf("platform: a second window: %w", errors.ErrUnsupported) // one window per app here so far (D30 is macOS-only in phase 6)
+	if err := checkPanel(&o); err != nil {
+		return nil, err
+	}
+	if reg.n == MaxWindows {
+		return nil, errTooManyWindows
 	}
 	nOpenStages = 0
 	markOpen("start")
 	setDPIAwareness()
+	ensureAppWindow()
 
 	title, err := syscall.UTF16PtrFromString(o.Title)
 	if err != nil {
@@ -316,7 +327,6 @@ func Open(o Options) (*Window, error) {
 
 	w := &Window{q: newEventQueue(), opening: true, style: wsOverlappedWindow, rscale: 1, minW: o.MinWidth, minH: o.MinHeight}
 	w.hinst = win32.Call(pGetModuleHandleW, 0)
-	theWindow = w // WndProc runs inside CreateWindowExW
 
 	w.cursors = [numCursors]uintptr{
 		CursorArrow:      win32.Call(pLoadCursorW, 0, idcArrow),
@@ -329,16 +339,18 @@ func Open(o Options) (*Window, error) {
 		CursorGrab:       win32.Call(pLoadCursorW, 0, idcHand), // Windows has no hand that grabs
 		CursorGrabbing:   win32.Call(pLoadCursorW, 0, idcSizeAll),
 	}
-	w.wc = wndClassEx{
-		size:      uint32(unsafe.Sizeof(w.wc)),
-		wndProc:   wndProcCallback,
-		instance:  w.hinst,
-		cursor:    w.cursors[CursorArrow],
-		className: classNameUTF16,
-	}
-	if win32.Call(pRegisterClassExW, uintptr(unsafe.Pointer(&w.wc)))&0xFFFF == 0 {
-		theWindow = nil
-		return nil, errors.New("platform: RegisterClassExW failed")
+	if windowClass.size == 0 {
+		windowClass = wndClassEx{
+			size:      uint32(unsafe.Sizeof(windowClass)),
+			wndProc:   wndProcCallback,
+			instance:  w.hinst,
+			cursor:    w.cursors[CursorArrow],
+			className: classNameUTF16,
+		}
+		if win32.Call(pRegisterClassExW, uintptr(unsafe.Pointer(&windowClass)))&0xFFFF == 0 {
+			windowClass = wndClassEx{}
+			return nil, errors.New("platform: RegisterClassExW failed")
+		}
 	}
 
 	dpi := uint32(defaultDPI)
@@ -353,14 +365,19 @@ func Open(o Options) (*Window, error) {
 	// on the screen for one pass (TestFirstFrameIsContent on the runners,
 	// about 1 in 100 fresh processes under load; a probe that painted the
 	// surface blue saw blue there instead). Nothing here draws with GDI.
-	w.hwnd = win32.Call(pCreateWindowExW,
+	reg.creating = w // wndProc runs inside CreateWindowExW, before the HWND is known
+	hwnd := win32.Call(pCreateWindowExW,
 		wsExNoRedirectionBitmap, uintptr(unsafe.Pointer(classNameUTF16)), uintptr(unsafe.Pointer(title)), uintptr(w.style),
 		cwUseDefault, cwUseDefault, uintptr(ow), uintptr(oh), 0, 0, w.hinst, 0)
 	runtime.KeepAlive(title)
-	if w.hwnd == 0 {
-		win32.Call(pUnregisterClassW, uintptr(unsafe.Pointer(classNameUTF16)), w.hinst)
-		theWindow = nil
+	reg.creating = nil
+	if hwnd == 0 {
 		return nil, errors.New("platform: CreateWindowExW failed")
+	}
+	w.hwnd = hwnd
+	if _, ok := reg.add(w); !ok {
+		win32.Call(pDestroyWindow, hwnd)
+		return nil, errTooManyWindows
 	}
 	markOpen("window")
 	// The window may have landed on a monitor with a different DPI.
@@ -382,13 +399,9 @@ func Open(o Options) (*Window, error) {
 	w.updateClientSize()
 	w.rw, w.rh, w.rscale = w.w, w.h, w.scale
 	w.opening = false
-	wakeHWND.Store(w.hwnd)
 
 	w.visible = true
 	w.q.push(Event{Kind: EvVisible, Flags: FlagDown, Time: Now()})
-	if takeWake() { // a Wake before Open found no window to post to
-		w.q.push(Event{Kind: EvWake, Time: Now()})
-	}
 	return w, nil
 }
 
@@ -433,12 +446,10 @@ func (w *Window) emitResize() {
 func (w *Window) SetFrameHandler(fn func()) { w.handler = fn }
 
 // Pending returns and clears the events queued so far without pumping
-// messages. The slice is valid until the next Pending or Wait call.
+// messages. The slice is valid until the next Pending, Events, Pump or Wait
+// call.
 func (w *Window) Pending() []Event {
-	if w.delivered {
-		w.q.dropFirst(w.nOut)
-		w.delivered = false
-	}
+	w.release()
 	return w.q.takePending()
 }
 
@@ -534,98 +545,43 @@ func (w *Window) SetFrameSource(h uintptr) {
 // first), sends no message, and publishes no copy: it checks that under its
 // lock before SetClipboardData. A stale handle can at worst make an open that
 // was already under way fail or be closed unused.
+//
+// The window leaves the registry first, so nothing routes to it any more; a
+// native modal loop of its own that the close ends (its size/move loop) is
+// counted out.
 func (w *Window) Close() {
 	if w.hwnd == 0 {
 		return
 	}
-	wakeHWND.Store(0)
+	reg.remove(w)
+	w.wakeMark.Store(false)
 	if w.clip != nil { // ends now, or when the native call it may be in returns; publishes nothing either way
 		w.clip.close()
 		w.clip = nil
 	}
+	if w.sizeMove {
+		w.sizeMove = false
+		leaveModal()
+	}
+	if w.menuLoop {
+		w.menuLoop = false
+		leaveModal()
+	}
 	hwnd := w.hwnd
 	w.hwnd = 0
+	w.frameArmed, w.waitable = false, 0
 	win32.Call(pDestroyWindow, hwnd)
-	win32.Call(pUnregisterClassW, uintptr(unsafe.Pointer(classNameUTF16)), w.hinst)
-	theWindow = nil
 }
 
-// osWake posts a message to the window thread; safe from any thread.
-func osWake() {
-	h := wakeHWND.Load()
-	if h == 0 {
-		return // Open picks up the pending wake
-	}
-	if !win32.Bool(win32.Call(pPostMessageW, h, wmWake, 0, 0)) {
-		takeWake() // don't leave the coalescing flag stuck
-	}
-}
-
-// Wait blocks until at least one event is available, a wake or frame slot
-// arrives, or the timeout elapses (negative = no timeout, 0 = poll). The
-// returned slice is valid until the next Wait.
+// Wait blocks until an event, a wake, a frame slot or the timeout
+// (negative = no timeout, 0 = poll), and returns the window's events. It is
+// the app-wide Pump followed by Events: the events of the app's other
+// windows wait in their own queues, and it may return with none of this
+// window's when another window or the app window got something. The
+// returned slice is valid until the next Wait, Pump, Events or Pending.
 func (w *Window) Wait(timeoutNs int64) []Event {
-	if w.delivered {
-		w.q.dropFirst(w.nOut) // what the app asked for since (RequestPaste) stays
-		w.delivered = false
-	}
-	var deadline int64
-	if timeoutNs > 0 {
-		deadline = nanotime() + timeoutNs
-	}
-	for {
-		if w.clipDue != 0 && nanotime() >= w.clipDue {
-			w.clipStep()
-		}
-		if w.frameArmed && w.waitable == 0 {
-			w.frameArmed = false
-			w.q.push(Event{Kind: EvFrame, Time: Now()})
-		}
-
-		ms := uintptr(infinite)
-		switch {
-		case timeoutNs == 0 || len(w.q.ev) > 0:
-			ms = 0
-		case timeoutNs > 0:
-			ms = 0
-			if rem := deadline - nanotime(); rem > 0 {
-				ms = uintptr(min((rem+999_999)/1_000_000, infinite-1))
-			}
-		}
-		if w.clipDue != 0 { // do not sleep past the next try at the clipboard
-			d := uintptr(0)
-			if rem := w.clipDue - nanotime(); rem > 0 {
-				d = uintptr((rem + 999_999) / 1_000_000)
-			}
-			ms = min(ms, d)
-		}
-		n := uintptr(0)
-		if w.frameArmed {
-			w.handles[0] = w.waitable
-			n = 1
-		}
-		r := uint32(win32.Call(pMsgWait, n, uintptr(unsafe.Pointer(&w.handles[0])), ms, qsAllInput, mwmoInputAvail))
-		if n == 1 {
-			switch r {
-			case waitObject0:
-				w.frameArmed = false
-				w.q.push(Event{Kind: EvFrame, Time: Now()})
-			case waitFailed:
-				w.waitable = 0 // bad handle: fall back to immediate frames
-			}
-		}
-
-		for win32.Bool(win32.Call(pPeekMessageW, uintptr(unsafe.Pointer(&w.msg)), 0, 0, 0, pmRemove)) {
-			win32.Call(pTranslateMessage, uintptr(unsafe.Pointer(&w.msg)))
-			win32.Call(pDispatchMessageW, uintptr(unsafe.Pointer(&w.msg)))
-		}
-
-		if len(w.q.ev) > 0 || timeoutNs == 0 || (timeoutNs > 0 && nanotime() >= deadline) {
-			break
-		}
-	}
-	w.delivered, w.nOut = true, len(w.q.ev)
-	return w.q.ev
+	Pump(timeoutNs)
+	return w.Events()
 }
 
 // ---- Window procedure ---------------------------------------------------------
@@ -660,18 +616,19 @@ func defProc(hwnd, m, wp, lp uintptr) uintptr {
 	return win32.Call(pDefWindowProcW, hwnd, m, wp, lp)
 }
 
+// wndProc is the procedure of every window of ours: it finds the window by
+// HWND, so each window's messages become its own events (D68).
 func wndProc(hwnd, m, wp, lp uintptr) uintptr {
-	w := theWindow
+	w := reg.byHWND(hwnd)
 	if w == nil {
-		return defProc(hwnd, m, wp, lp)
+		// The window inside its CreateWindowExW takes the first HWND it is
+		// sent; any other is a window that closed.
+		if w = reg.creating; w == nil || (w.hwnd != 0 && w.hwnd != hwnd) {
+			return defProc(hwnd, m, wp, lp)
+		}
+		w.hwnd = hwnd
 	}
 	switch m {
-	case wmWake:
-		if takeWake() {
-			w.q.push(Event{Kind: EvWake, Time: Now()})
-		}
-		return 0
-
 	case wmClip:
 		w.clipCollect()
 		return 0
@@ -690,6 +647,21 @@ func wndProc(hwnd, m, wp, lp uintptr) uintptr {
 			w.q.push(Event{Kind: EvVisible, Flags: FlagDown, Time: Now()})
 		}
 		return 0
+
+	case wmShowWindow:
+		// ShowWindow's own changes (Hide, Show); minimizing is WM_SIZE's.
+		if w.opening || lp != 0 {
+			return defProc(hwnd, m, wp, lp)
+		}
+		if on := wp != 0; on != w.visible && !w.minimized {
+			w.visible = on
+			f := Flags(0)
+			if on {
+				f = FlagDown
+			}
+			w.q.push(Event{Kind: EvVisible, Flags: f, Time: Now()})
+		}
+		return defProc(hwnd, m, wp, lp)
 
 	case wmSize:
 		if wp == sizeMinimized {
@@ -715,25 +687,35 @@ func wndProc(hwnd, m, wp, lp uintptr) uintptr {
 		return 0
 
 	case wmEnterSizeMove:
-		w.sizeMove = true
-		win32.Call(pSetTimer, hwnd, sizeMoveTimerID, sizeMoveTimerMs, 0)
+		// The size/move loop runs until WM_EXITSIZEMOVE: every window draws
+		// through its frame handler meanwhile (modalTick), this one also in
+		// step with its size (WM_SIZE above).
+		if !w.sizeMove {
+			w.sizeMove = true
+			enterModal()
+		}
 		return 0
 
 	case wmExitSizeMove:
-		w.sizeMove = false
-		win32.Call(pKillTimer, hwnd, sizeMoveTimerID)
+		if w.sizeMove {
+			w.sizeMove = false
+			leaveModal()
+		}
 		return 0
 
-	case wmTimer:
-		if wp != sizeMoveTimerID {
-			return defProc(hwnd, m, wp, lp)
+	case wmEnterMenuLoop: // the window menu (Alt+Space, a click on the icon)
+		if !w.menuLoop {
+			w.menuLoop = true
+			enterModal()
 		}
-		if w.sizeMove && w.frameArmed {
-			w.frameArmed = false
-			w.q.push(Event{Kind: EvFrame, Time: Now()})
-			w.runHandler()
+		return defProc(hwnd, m, wp, lp)
+
+	case wmExitMenuLoop:
+		if w.menuLoop {
+			w.menuLoop = false
+			leaveModal()
 		}
-		return 0
+		return defProc(hwnd, m, wp, lp)
 
 	case wmSetCursor:
 		if uint32(lp&0xFFFF) == htClient {
@@ -768,6 +750,7 @@ func wndProc(hwnd, m, wp, lp uintptr) uintptr {
 		return 0
 
 	case wmSetFocus:
+		reg.focus = w
 		t := Now()
 		w.q.push(Event{Kind: EvFocus, Flags: FlagDown, Time: t})
 		focusModifiers(&w.q, &w.lastMods, currentMods(), t) // keys pressed while another window had the focus

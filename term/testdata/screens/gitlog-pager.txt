@@ -1,0 +1,173 @@
+=== checkpoint 1 at byte 307 of 2461 ===
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+commit b1481708bd18a8b2aa7c7f41e1802d05eca0e2a2 (HEAD -> p8-term, origin/p8-contracts, p8-panels-hotkeys-mac, p8-contracts
+=== checkpoint 2 at byte 615 of 2461 ===
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+commit b1481708bd18a8b2aa7c7f41e1802d05eca0e2a2 (HEAD -> p8-term, origin/p8-contracts, p8-panels-hotkeys-mac, p8-contracts, p8-capture-mac)
+Merge: fe73b73 5ff9cbb
+Author: xxxx xxxx xxxxxxxxxxx <xxxxxxxxxxxxx@example.com>
+Date:   Tue Oct 27 13:50:58 2026 -0300
+
+    Merge branch 'a3-apps-plan' into p8-contracts
+
+commit fe73b7333452562786ca986b9ae5fc564997c95b
+Auth
+=== checkpoint 3 at byte 922 of 2461 ===
+
+
+
+
+
+
+
+
+commit b1481708bd18a8b2aa7c7f41e1802d05eca0e2a2 (HEAD -> p8-term, origin/p8-contracts, p8-panels-hotkeys-mac, p8-contracts, p8-capture-mac)
+Merge: fe73b73 5ff9cbb
+Author: xxxx xxxx xxxxxxxxxxx <xxxxxxxxxxxxx@example.com>
+Date:   Tue Oct 27 13:50:58 2026 -0300
+
+    Merge branch 'a3-apps-plan' into p8-contracts
+
+commit fe73b7333452562786ca986b9ae5fc564997c95b
+Author: xxxx xxxx xxxxxxxxxxx <xxxxxxxxxxxxx@example.com>
+Date:   Tue Oct 27 13:50:08 2026 -0300
+
+    docs: phase 8 wave 0 notes on the contracts, the probes and sizes
+
+    Each contract's choices where the plan left room (panel as a pointer,
+    hotkey and capture events as EvServi
+=== checkpoint 4 at byte 1230 of 2461 ===
+
+
+
+commit b1481708bd18a8b2aa7c7f41e1802d05eca0e2a2 (HEAD -> p8-term, origin/p8-contracts, p8-panels-hotkeys-mac, p8-contracts, p8-capture-mac)
+Merge: fe73b73 5ff9cbb
+Author: xxxx xxxx xxxxxxxxxxx <xxxxxxxxxxxxx@example.com>
+Date:   Tue Oct 27 13:50:58 2026 -0300
+
+    Merge branch 'a3-apps-plan' into p8-contracts
+
+commit fe73b7333452562786ca986b9ae5fc564997c95b
+Author: xxxx xxxx xxxxxxxxxxx <xxxxxxxxxxxxx@example.com>
+Date:   Tue Oct 27 13:50:08 2026 -0300
+
+    docs: phase 8 wave 0 notes on the contracts, the probes and sizes
+
+    Each contract's choices where the plan left room (panel as a pointer,
+    hotkey and capture events as EvService sources, Pick returning a
+    Recording, declarative webview policy, fetch.AnyStatus, no proxy in ws),
+    P10's result, P9's status and run instructions, and the gallery's size
+    before and after. Also documents term.Pos's fields and gofmts highlight.
+
+    Co-Authored-By: Claud
+=== checkpoint 5 at byte 1538 of 2461 ===
+
+    Merge branch 'a3-apps-plan' into p8-contracts
+
+commit fe73b7333452562786ca986b9ae5fc564997c95b
+Author: xxxx xxxx xxxxxxxxxxx <xxxxxxxxxxxxx@example.com>
+Date:   Tue Oct 27 13:50:08 2026 -0300
+
+    docs: phase 8 wave 0 notes on the contracts, the probes and sizes
+
+    Each contract's choices where the plan left room (panel as a pointer,
+    hotkey and capture events as EvService sources, Pick returning a
+    Recording, declarative webview policy, fetch.AnyStatus, no proxy in ws),
+    P10's result, P9's status and run instructions, and the gallery's size
+    before and after. Also documents term.Pos's fields and gofmts highlight.
+
+    Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+commit 9daf10556fd243a0ec101391e8b806081cb40693
+Author: xxxx xxxx xxxxxxxxxxx <xxxxxxxxxxxxx@example.com>
+Date:   Tue Oct 27 13:45:24 2026 -0300
+
+    rexui: the TextArea and ContextMenu contracts (phase 8 C4, C5)
+
+    Te
+=== checkpoint 6 at byte 1845 of 2461 ===
+Date:   Tue Oct 27 13:50:08 2026 -0300
+
+    docs: phase 8 wave 0 notes on the contracts, the probes and sizes
+
+    Each contract's choices where the plan left room (panel as a pointer,
+    hotkey and capture events as EvService sources, Pick returning a
+    Recording, declarative webview policy, fetch.AnyStatus, no proxy in ws),
+    P10's result, P9's status and run instructions, and the gallery's size
+    before and after. Also documents term.Pos's fields and gofmts highlight.
+
+    Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+commit 9daf10556fd243a0ec101391e8b806081cb40693
+Author: xxxx xxxx xxxxxxxxxxx <xxxxxxxxxxxxx@example.com>
+Date:   Tue Oct 27 13:45:24 2026 -0300
+
+    rexui: the TextArea and ContextMenu contracts (phase 8 C4, C5)
+
+    TextAreaSetup, TextAreaState, TextArea and TextAreaSignal: until C4 hosts
+    platform.Editor, the composer's drawn single-line fallback (read-only shown
+    disabled). ContextMenu takes OnContextMenu's arguments; until C5 adds the
+    drawn path it is OnContextMenu.
+
+    Co-Authored-
+=== checkpoint 7 at byte 2153 of 2461 ===
+    before and after. Also documents term.Pos's fields and gofmts highlight.
+
+    Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+commit 9daf10556fd243a0ec101391e8b806081cb40693
+Author: xxxx xxxx xxxxxxxxxxx <xxxxxxxxxxxxx@example.com>
+Date:   Tue Oct 27 13:45:24 2026 -0300
+
+    rexui: the TextArea and ContextMenu contracts (phase 8 C4, C5)
+
+    TextAreaSetup, TextAreaState, TextArea and TextAreaSignal: until C4 hosts
+    platform.Editor, the composer's drawn single-line fallback (read-only shown
+    disabled). ContextMenu takes OnContextMenu's arguments; until C5 adds the
+    drawn path it is OnContextMenu.
+
+    Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+commit bf25214573c1550d8219ea7db8fc28b3ac36e659
+Author: xxxx xxxx xxxxxxxxxxx <xxxxxxxxxxxxx@example.com>
+Date:   Tue Oct 27 13:43:45 2026 -0300
+
+    highlight: the syntax highlighting contract (phase 8 C3, D75)
+
+    La
+=== checkpoint 8 at byte 2461 of 2461 ===
+

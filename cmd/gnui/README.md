@@ -41,6 +41,7 @@ the user's Apple identity (Developer ID certificate, notarytool credentials).
 -no-timestamp         no secure timestamp (default: on for a real identity)
 -notarize             notarize with xcrun notarytool, wait, staple, check with spctl
 -notary-profile name  notarytool keychain profile ($GNUI_NOTARY_PROFILE)
+-notary-keychain path the keychain holding that profile, if not the login keychain ($GNUI_NOTARY_KEYCHAIN)
 -dmg                  also build a .dmg (signed, and notarized and stapled with -notarize,
                       when the identity is a Developer ID)
 -zip                  also write dist/<Name>-<version>.zip, the update archive app/selfupdate
@@ -134,6 +135,7 @@ are required.
 | `icon` | square PNG (1024 px recommended) → `AppIcon.icns` with 16…512@2x entries; sizes above the source are left out | none |
 | `resources` | files/directories copied to `Contents/Resources`; `to` is a relative path inside it with no `.` or `..` components (default: the base name of `from`, so `from: "."` needs a `to`). Symbolic links in a copied directory are kept only if they are relative and stay inside it (`Versions/Current -> A` does, `/etc` or `../x` is an error), and a destination is refused if any existing component of it is a link | none |
 | `frameworks` | `.framework` directories and `.dylib` files copied to `Contents/Frameworks` (same link rules) and signed, nested items first. Each nested item keeps the entitlements and identifier it already has (`--preserve-metadata=entitlements,identifier`); `entitlements` below are written to the main bundle only | none |
+| `nativeLibs` | directories of runtime-loaded native libraries laid out `<dir>/<goos>-<goarch>/` (the cache `go run ./tools/libghostty` writes, D2): the `darwin-arm64` `.dylib` files go to `Contents/Frameworks` and are signed with the app; `<dir>/LICENSE` goes to `Contents/Resources/Licenses/<library>.txt`. `term` finds the library there. A hardened bundle loads it only with the same Team ID as the app (a Developer ID identity); with the self-signed `-dev-cert` identity, add the `com.apple.security.cs.disable-library-validation` entitlement (`gnui run` signs without the hardened runtime and needs nothing) | none |
 | `urlSchemes` | `CFBundleURLTypes` | none |
 | `documentTypes` | `CFBundleDocumentTypes`; role Editor/Viewer/Shell/None, rank Owner/Default/Alternate/None. A `utis` entry that is not `public.…` or `com.apple.…` must be declared below, or macOS does not know it (`gnui doctor` warns) | none |
 | `exportedTypes` | `UTExportedTypeDeclarations`: type identifiers this app owns, each with `identifier`, `description`, `conformsTo` (default `["public.data"]`) and the `extensions` and `mimeTypes` that map to it. Identifiers under `public.` and `com.apple.` cannot be exported. LaunchServices learns a new type when the app is launched | none |

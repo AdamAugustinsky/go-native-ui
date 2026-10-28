@@ -120,8 +120,8 @@ func osWake() {
 // Open creates the window. Wayland is tried first, then X11. GNUI_BACKEND=
 // wayland|x11 forces one of them.
 func Open(o Options) (*Window, error) {
-	if o.Panel != nil {
-		return nil, ErrNoPanel
+	if err := checkPanel(&o); err != nil {
+		return nil, err
 	}
 	w := &theWindow
 	if w.open {

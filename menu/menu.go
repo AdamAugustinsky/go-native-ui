@@ -14,8 +14,8 @@
 //
 //	if m.Match(c); m.Fired(cmdSave) { save() }
 //
-// The package imports only ui and the standard library. Matching allocates
-// nothing.
+// The package imports only ui, platform (SetStrings hands the native menus
+// their titles) and the standard library. Matching allocates nothing.
 package menu
 
 import (

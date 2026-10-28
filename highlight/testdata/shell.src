@@ -1,0 +1,5 @@
+#!/bin/sh
+for f in *.go; do
+  echo "file: $f" | grep -v test > /dev/null
+done
+export PATH="$HOME/bin:$PATH"

@@ -378,13 +378,15 @@ func (k *Kit) BeginScrollBar(b *ScrollBar) ui.ID {
 	}
 	c.NextRole(ui.RoleScrollBar)
 	c.NextSemRange(0, b.Max, b.Pos, float64(k.Pt(48)))
-	c.NextSemName(scrollName[b.Axis])
+	name := words.HorizontalScrollBar
+	if b.Axis == 1 {
+		name = words.VerticalScrollBar
+	}
+	c.NextSemName(name)
 	track := c.BoxKeyed(flags, b.Key, nil)
 	c.Push(track)
 	return track
 }
-
-var scrollName = [2]string{"Horizontal scroll bar", "Vertical scroll bar"}
 
 // barGeom is the geometry of the bar on axis a (0 horizontal, 1 vertical)
 // of a view; ok is false when the content fits and there is no bar.

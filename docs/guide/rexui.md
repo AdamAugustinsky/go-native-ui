@@ -161,6 +161,18 @@ builds the rows between `l.First` and `l.Last`:
 	rexui.EndList(k, &l)
 ```
 
+A file or a diff of thousands of lines is a `base.VList` of `mdview.CodeLine`
+rows (package `rexui/mdview`, section 8).
+`VListOpts.ContentW = mdview.CodeWidth(k, mdview.CodeColumns(src), opts)`
+(once per file) makes every row as wide as the longest line, so the bands
+span it, and the list scroll sideways to its end, all rows by one offset: a
+wheel still scrolls it up and down, Shift with the wheel or a trackpad
+sideways. Its horizontal bar comes from `Body` as the vertical one does
+(`base.ScrollBoth`). A row that should not move sideways, a diff's file
+header with its counts at the right, is built with `v.ItemFixedX(i)` instead
+of `v.Item(i)`: as wide as the view, it stays put across while the lines
+under it scroll.
+
 ## 6. System menus
 
 On macOS a `Select`, a `MenuButton` and a context menu open the **system's**
@@ -193,13 +205,27 @@ Transparency cost nothing extra. Three levels of change:
   and every button of that variant changes.
 - **A component:** copy its file into your package and edit it.
 
+**Words.** The few words the components supply themselves (a code block's
+Copy button, a banner's "Warning:", the names of the sidebar's disclosure, a
+sent message, the scroll bars, a terminal's scroll-to-bottom button, a web
+view's loading line) are a `rexui.Strings`, English by default.
+`rexui.SetStrings(rexui.StringsPtBR)`, before the first frame, switches them
+to Brazilian Portuguese; another language is a `Strings` of the app's own,
+whose empty fields stay English. They are read as they are each frame, at no
+cost; a label or name the app passes always wins. `Strings.Menu` titles the
+standard commands and menus a command with a role and no title of its own
+gets ("Copiar", "Encerrar %s", "Editar", "Janela"), in drawn menus, the tray
+and the native menu bar, which takes them when it is next built. An app on
+`widget` alone sets the primitives' names with `base.SetStrings` and the
+menus' with `menu.SetStrings`.
+
 Rex is the default. `rexui.UseAppKitControls()`, called once before the first
 frame, gives the push, icon and toggle buttons and the segmented controls
 AppKit's rounded rectangles and blocks of the accent instead.
 
 ```sh
 go run ./tools/rexui list                         # every component and the files it needs
-go run ./tools/rexui add button ./internal/ui     # button.go and tint.go, as package ui
+go run ./tools/rexui add button ./internal/ui     # button.go, tint.go and strings.go, as package ui
 ```
 
 `add` copies a component's file and the files it needs, rewrites the package
@@ -222,6 +248,11 @@ one's variants, sizes and states, and how close it is to AppKit's.
 | Chrome | `Toolbar`, `Sidebar`, `ScrollBars`, `PathBar` |
 | Lists | `List`, `Table`, `Outline` |
 | Chat | `MessageBubble`, `ChatListRow`, `DateDivider`, `TypingIndicator`, `CompletionList` |
+| Markdown and code (`rexui/mdview`) | `Markdown`, `CodeBlock`, `CodeLine` |
+
+Markdown and code live in `rexui/mdview`, a package of their own: goldmark,
+chroma and its regexp engine add 1.0 to 1.2 MB to a program that links them,
+so an app that shows neither imports `rexui` alone and does not pay for them.
 
 The tests that keep it honest are in the package: `TestRecipesMatchAppKit` checks
 the measurements against AppKit's committed numbers (under `UseAppKitControls`), and
