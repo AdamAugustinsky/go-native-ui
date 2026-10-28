@@ -85,6 +85,8 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"gonativeui/app"
@@ -178,6 +180,13 @@ type Options struct {
 	// CornerRadius rounds the view's corners, in points, so that it sits in
 	// a rounded pane (rexui.WebView's: rexui.WebViewLook.ContentRadius).
 	CornerRadius float32
+	// DataDir is where the engine keeps its data on Windows (WebView2's user
+	// data folder, shared by the process's views: the first New's is used);
+	// "" is WebView2 in the cache folder named for the executable
+	// (app/paths.Cache). An app passes its own, filepath.Join of
+	// paths.Cache(a.ID()) and "WebView2". macOS ignores it: WebKit keeps a
+	// profile's data under ~/Library/WebKit/<bundle id>/.
+	DataDir string
 }
 
 // State is what the view shows now. Its strings are valid until the next
@@ -431,4 +440,46 @@ func validProfile(p string) bool {
 		}
 	}
 	return true
+}
+
+// uniquePath is a file in dir for suggested, unused on disk and not taken by
+// the view's other downloads: "name.ext", then "name (2).ext" …
+func uniquePath(dir, suggested string, taken func(path string) bool) (string, error) {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	name := cleanName(suggested)
+	ext := filepath.Ext(name)
+	stem := strings.TrimSuffix(name, ext)
+	for i := 1; i < 10000; i++ {
+		p := filepath.Join(dir, name)
+		if i > 1 {
+			p = filepath.Join(dir, fmt.Sprintf("%s (%d)%s", stem, i, ext))
+		}
+		if _, err := os.Lstat(p); err == nil {
+			continue
+		}
+		if !taken(p) {
+			return p, nil
+		}
+	}
+	return "", os.ErrExist
+}
+
+// cleanName is a server's file name made safe to create: its last element,
+// no separators or control characters, not hidden; "download" if nothing is
+// left.
+func cleanName(s string) string {
+	s = filepath.Base(strings.ReplaceAll(s, "\\", "/"))
+	s = strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7F || r == '/' || r == ':' {
+			return '_'
+		}
+		return r
+	}, s)
+	s = strings.TrimLeft(strings.TrimSpace(s), ".")
+	if s == "" {
+		return "download"
+	}
+	return s
 }

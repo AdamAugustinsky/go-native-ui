@@ -1,0 +1,50 @@
+name: h2 dev (temporary; removed before landing)
+
+# The WebView2 package's tests alone on the Windows runners, on pushes to the
+# H2 development branch.
+
+on:
+  push:
+    branches: [p8-webview2]
+
+permissions:
+  contents: read
+
+env:
+  CGO_ENABLED: "0"
+
+jobs:
+  windows:
+    name: app/webview on Windows ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: amd64, runner: windows-2025 }
+          - { arch: arm64, runner: windows-11-arm }
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: clear the shell surfaces over the desktop
+        shell: pwsh
+        run: |
+          foreach ($n in 'WWAHost', 'SearchHost', 'StartMenuExperienceHost') {
+            $p = Get-Process $n -ErrorAction SilentlyContinue
+            if ($p) { $p | ForEach-Object { Stop-Process -Id $_.Id -Force } }
+          }
+          Start-Sleep -Seconds 3
+          (New-Object -ComObject WScript.Shell).SendKeys('{ESC}')
+      - name: test
+        run: go test -count=1 -v -timeout 15m ./app/webview ./internal/com 2>&1 | tee webview-${{ matrix.arch }}.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: webview-${{ matrix.arch }}
+          path: webview-${{ matrix.arch }}.txt
