@@ -242,7 +242,7 @@ type Renderer interface {
   `Surface.Recover` and `Renderer.Rebuild` make the device objects again and
   every live texture under the same id, empty. Atlas owners upload again from
   the pixels they keep: the text atlas, the icon atlas, the image cache's pages
-  and widget masks (`Renderer.Epoch` tells them). See D-pending (p9-devloss)
+  and widget masks (`Renderer.Epoch` tells them). See D80
   and `gpu/devloss.go`.
 - **Batches** break only on texture or scissor changes; a typical frame is
   1–4 draw calls. Instance data goes into a persistently mapped ring buffer

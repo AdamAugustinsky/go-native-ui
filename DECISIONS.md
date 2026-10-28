@@ -41,7 +41,7 @@ excluded.
 |---|---|---|---|---|
 | `github.com/ebitengine/purego` | `Dlopen`/`Dlsym`; the `fakecgo` runtime bootstrap that makes C calls and callbacks legal without cgo (sets `runtime.iscgo`, creates threads with `pthread_create`, provides `crosscall2`); Objective-C class registration at startup. darwin + linux only. | +236 KB (Dlopen + 1 call), +509 KB with `objc` on darwin/arm64; +131–180 KB on linux | no | Apache-2.0 (some files BSD-3 from Go) |
 | `github.com/go-text/typesetting` | Linux text shaping, bidi and segmentation (**D9 option B, chosen**). Linux builds only. To be added in phase 2. | +2.1–3.4 MB (probe) | no | Unlicense OR BSD-3; `harfbuzz/` is MIT |
-| `github.com/srwiley/oksvg`, `github.com/srwiley/rasterx` | Linux system icons drawn from SVG (D-pending (p9-dnd-linux-win)). Linux builds only. | +356 KB (linux/amd64 gallery, with the two rows below) | no | BSD-3 |
+| `github.com/srwiley/oksvg`, `github.com/srwiley/rasterx` | Linux system icons drawn from SVG (D85). Linux builds only. | +356 KB (linux/amd64 gallery, with the two rows below) | no | BSD-3 |
 | `golang.org/x/net` (`html/charset`), `golang.org/x/text` | oksvg's character-set decoding of the XML prolog; pulled in by it, not called by us. Linux builds only. | in the row above | no | BSD-3 |
 | libghostty-vt (Ghostty, `4a4fc0179`), **draft, phase 8 D74** | The terminal emulator under `term` and `rexui.Terminal`: parser, screen, scrollback, render state, input encoders, selection, search. Built by `tools/libghostty` with Zig 0.17.0, not committed; bundled only with apps that use the terminal (`gnui.json` `nativeLibs`). Not a Go module: a native library loaded at runtime through `clib` (`dlopen`, `LoadLibraryExW`). | not in the Go binary: a separate file of 2.06 MB (darwin/arm64), 2.35 MB (windows/amd64), 1.95 MB (windows/arm64), 2.26 MB (linux/amd64), 2.00 MB (linux/arm64), ReleaseFast, stripped | no | MIT, Copyright (c) 2024 Mitchell Hashimoto, Ghostty contributors |
 
@@ -1198,7 +1198,7 @@ Live microphone capture was not run: access cannot be granted headlessly, so tha
 
 **Kept:** the toolbar's and Liquid Glass buttons' recipes, which were already capsules or AppKit's glass; the colours of every recipe.
 
-## D-pending (p9-devloss). A lost GPU device is rebuilt in place (2026-10-28)
+## D80. A lost GPU device is rebuilt in place (2026-10-28)
 
 **Decision.** A renderer and its surface recover from a lost device between frames; the app and its windows do not notice, beyond one repaint. `gpu.Surface` and `gpu.Renderer` report `DeviceLost` (Direct3D 11: `DXGI_ERROR_DEVICE_REMOVED`, `_RESET`, `_HUNG` or `_DRIVER_INTERNAL_ERROR` from `Present` or `ResizeBuffers`, or `GetDeviceRemovedReason`; EGL: `EGL_CONTEXT_LOST`, `EGL_BAD_CONTEXT`, `EGL_BAD_DISPLAY` or `EGL_NOT_INITIALIZED` after a failed make-current or swap; Metal: a command buffer that failed with `MTLCommandBufferErrorDeviceRemoved`). `Surface.Recover` makes the device level again on the same window (Direct3D: device, swap chain and back-buffer view; EGL: display, context and window surface; Metal: the layer's device and the queue) and `Renderer.Rebuild` builds the pipeline on it and makes every live texture again under the **same id, size and kind**, empty. `SimulateDeviceLoss` marks either lost, so each backend's path is tested without a GPU reset.
 - **Owners refill, not the renderer.** The texture ids survive, so the text atlas's `SharedAtlas`, the icon atlas's texture, the image cache's pages and widget masks keep working; each uploads again from the pixels it keeps in memory. The text atlas does it through `ui.Context.AtlasRestore` (the shaper marks every page dirty in full: `text.System.DirtyAll`), the others when the renderer's `Epoch` (rebuilds so far) differs from the one they last filled at: `icon.Atlas` at its next `Prepare`, `img.Cache` at its next `Poll` (it takes every image off the GPU and queues those whose pixels it has, a few a frame like new decodes; the others are requested again), `gpu.PathMask` at its next `Mask`. `Context.AtlasSync` with a new uploader and the first `ShareAtlas` of an atlas with no textures also upload clean pages in full now.
@@ -1213,7 +1213,7 @@ Live microphone capture was not run: access cannot be granted headlessly, so tha
 - Textures an owner has no pixels for come back blank: a paused video's poster (`media`) and a YUV texture until it is staged again. Images whose decoded pixels were dropped (`Options.CPUBytes`) are requested again, so they flash.
 - Metal's removal is rare on Apple silicon (one built-in GPU, D55); an eGPU-less Mac practically never takes this path.
 
-## D-pending (p9-text). A paragraph layout says at which widths it holds; tabular digits are a font feature (2026-10-28)
+## D81. A paragraph layout says at which widths it holds; tabular digits are a font feature (2026-10-28)
 
 **Decision.** `text.ParaView` carries `FitFrom` and `FitTo`: the widths at which a fresh layout of the same `Para` would be this layout. `ui.fitRich` keeps a shrink-wrapped paragraph's layout only at the width it was laid out at or inside that interval, and lays out again otherwise. `BasicLayouter` (Windows, Linux) computes the interval exactly: every comparison that decided a break or the ellipsis cut (`measure <= width + 0.01`) records its measurement, the widest that fitted bounds the interval from below and the narrowest that did not from above, with a 0.002 px margin against rounding. A layout whose runs cannot be measured, or one cut by `MaxLines` without a width, certifies nothing. The CoreText typesetter reports no measurements; its interval stays the old premise (the widest line to the width laid out at), which passed a sampled sweep and is not proved. This answers #35, whose reproduction (an Arabic paragraph at 13 pt, scale 2, laid out at 61.5 px, widest line 59.17 px, twelve lines fresh at that width) is `ui.TestFitRichBasicLayoutRenderedWidth`.
 
@@ -1225,7 +1225,7 @@ Live microphone capture was not run: access cannot be granted headlessly, so tha
 
 **Also (#6):** `text` opens AppKit before its first CTFont (b6d90c5), which is the root cause fix for a CoreText system font made before the first window; the hidden-window workaround in `cmd/shelldemo` is gone.
 
-## D-pending (p9-appkit-metrics). Continuous corners are an option of the rounded-rect primitive; Rex stays circular (2026-10-28)
+## D82. Continuous corners are an option of the rounded-rect primitive; Rex stays circular (2026-10-28)
 
 **Decision.** A shape quad can ask for macOS's continuous corner (a squircle) with `gpu.ShapeContinuous` in its `Tex` (shape quads name no texture, so the 108-byte record is unchanged; the Metal, Direct3D and GLSL shaders each add `crect_sdf` and read it, the GLSL one through a new instance attribute for `Tex`). The corner of radius r reaches 1.52 r along both edges, no further than half the rect's smaller side, and follows a superellipse of exponent 3.3, with the distance taken as the norm's first-order estimate. `ui.Theme.ContinuousCorners` makes every box's fill, border and hover overlay ask for it; `theme.Theme.Corners` sets it (`CornersDefault` is continuous on macOS and circular elsewhere). Shadows stay circular. `rex.Theme` sets `CornersCircular`.
 
@@ -1233,7 +1233,7 @@ Live microphone capture was not run: access cannot be granted headlessly, so tha
 
 **Limits:** the Direct3D and OpenGL shaders are the same maths as the Metal one but were not run (no Windows or Linux GPU here; CI compiles them with the rest). Radii above 30 pt and capsules (the reach is clamped to half the height) are approximate; Core Animation's curve is not exactly a superellipse (the error grows with the radius). The Rex reference was measured at one corner of one screenshot.
 
-## D-pending (p9-rexui). rexui: Sidebar sets of rows, an overflowed search popover, the title yields, Rex's pane buttons (2026-10-28)
+## D83. rexui: Sidebar sets of rows, an overflowed search popover, the title yields, Rex's pane buttons (2026-10-28)
 
 **Decision (issues #15, #16, #20, #22, #23).**
 - `SidebarOpts.Multiple` makes a sidebar select sets of rows. `SidebarState.Sel` stays the row last chosen and is always one of the selected rows; the set (`Has`, `Count`, `AppendSelected`, `Select`, `SelectAll`) is a sorted slice of row IDs, empty while `Sel` stands alone, so the usual single selection costs nothing and an app that sets `Sel` itself has that row alone selected. ⌘-click toggles, Shift-click and Shift+Up/Down take a range from the last plain or ⌘-chosen row over the visible rows, and the primary chord with A (or the app's Select All command, `SelectAll`) takes all of them. Each selected row is `SemSelected`, which the accessibility bridge already reports as the list's selected rows (N7). A bitset (`base.Selection`) was rejected: row IDs are the app's `uint32`s, and a hashed ID would cost 512 MB.
@@ -1244,7 +1244,7 @@ Live microphone capture was not run: access cannot be granted headlessly, so tha
 
 **Not measured:** `TitleMinW`, the order of title and items and what NSToolbar does when the item that went frees room for the title, were not measured against AppKit (the screen was locked: tools/appkitscenes at narrow widths is owed); the popover for an overflowed search field is drawn by us (Popover), not NSToolbar's. A pasted "a,b,c" leaves c to be typed on, as typing does; NSTokenField's handling of the last piece was not measured. A run of selected sidebar rows is drawn as separate rounded rows, not one block (AppKit's grouping unmeasured).
 
-## D-pending (p9-drag-trash-glass). Trash is checked and verified around the move; drops are read off the main thread; panels are a platform piece (2026-10-28)
+## D84. Trash is checked and verified around the move; drops are read off the main thread; panels are a platform piece (2026-10-28)
 
 **Decision.** Three changes that close or narrow issues #1, #13 and #14, none of which changes an API's contract for code that already works.
 
@@ -1256,7 +1256,7 @@ Live microphone capture was not run: access cannot be granted headlessly, so tha
 
 **Not done:** rexui Popover on a panel (its content is built inside the host window's `ui` tree by `BeginPopover`/`EndPopover`; on a panel it needs its own `app` window, `ui.Context` and surface, and event routing and dismissal across windows); enabling file promises by default; the Windows check has run only in CI. Windows and Linux drag-in is p9-dnd-linux-win's.
 
-## D-pending (p9-dnd-linux-win). Drag and drop on Windows and Linux; macOS takes links and rich text as text; Linux system icons draw SVG with oksvg and rasterx (2026-10-28)
+## D85. Drag and drop on Windows and Linux; macOS takes links and rich text as text; Linux system icons draw SVG with oksvg and rasterx (2026-10-28)
 
 **Drag and drop.** Windows takes drops through OLE (`IDropTarget`) and Linux through XDND on X11 and `wl_data_device` on Wayland, with the contract of `drag.go`; a drag out is Windows' `DoDragDrop` (modal) and Wayland's manager version 3. On macOS, a web link, RTF and HTML are offered and delivered as DragText (a file's own `public.url` is not text), read on the same budgeted worker as every other drop (see p9-drag-trash-glass, which owns that read path and the single file-promise receiver, off by default behind `EnableFilePromises`). A file-promise drag out stays macOS's (`ErrPromiseUnsupported` elsewhere), and so does receiving promises.
 
