@@ -110,7 +110,8 @@ type run struct {
 	problem   string
 	ownAudio  bool
 	stopToEnd time.Duration
-	path      string // the conversion: nv12 (the video processor) or bgra
+	startTook time.Duration // Start to Started
+	path      string        // the conversion: nv12 (the video processor) or bgra
 
 	allocsPerSec float64 // the whole process's, while recording
 }
@@ -142,12 +143,16 @@ func (ru *run) do() {
 		return
 	}
 	started := func() bool { return slices.Contains(eventsOf(r.ID()), Started) || r.ended }
-	if !waitFor(hwnd, 15*time.Second, started) {
-		ru.problem = "no Started in 15 s"
+	// The first recording of a process loads D3D11, Media Foundation and
+	// the encoders: seconds on a runner busy with the whole suite.
+	t0 := time.Now()
+	if !waitFor(hwnd, 60*time.Second, started) {
+		ru.problem = "no Started in 60 s"
 		r.Stop(true)
-		waitFor(hwnd, 15*time.Second, func() bool { return r.ended })
+		waitFor(hwnd, 30*time.Second, func() bool { return r.ended })
 		return
 	}
+	ru.startTook = time.Since(t0)
 	if !r.ended {
 		ru.ownAudio = r.OwnAudioExcluded()
 		switch {
@@ -177,7 +182,7 @@ func (ru *run) do() {
 			r.Stop(ru.discard)
 		}
 	}
-	t0 := time.Now()
+	t0 = time.Now()
 	if !waitFor(hwnd, 30*time.Second, func() bool { return r.ended }) {
 		ru.problem = "no Ended in 30 s after the stop"
 		return
@@ -214,8 +219,8 @@ func record(t *testing.T, ru *run) fileInfo {
 		if st != nil {
 			size = st.Size()
 		}
-		t.Logf("result %+v; elapsed at stop %v; stop to Ended %v; %.1f Go allocations/s in the process while recording; own audio excluded %v; conversion %s; file %d bytes, %v, %dx%d, %d video and %d audio tracks, %d frames, largest gap %v (reader 0x%08X)",
-			ru.res, ru.elapsed, ru.stopToEnd, ru.allocsPerSec, ru.ownAudio, ru.path, size, fi.duration, fi.size>>32, uint32(fi.size), fi.video, fi.audio, fi.frames, fi.maxGap, uint32(fi.err))
+		t.Logf("result %+v; Start to Started %v; elapsed at stop %v; stop to Ended %v; %.1f Go allocations/s in the process while recording; own audio excluded %v; conversion %s; file %d bytes, %v, %dx%d, %d video and %d audio tracks, %d frames, largest gap %v (reader 0x%08X)",
+			ru.res, ru.startTook, ru.elapsed, ru.stopToEnd, ru.allocsPerSec, ru.ownAudio, ru.path, size, fi.duration, fi.size>>32, uint32(fi.size), fi.video, fi.audio, fi.frames, fi.maxGap, uint32(fi.err))
 	}
 	return fi
 }
@@ -384,7 +389,7 @@ func TestWindowsBusy(t *testing.T) {
 			return
 		}
 		_, err2 = Start(Target{Kind: Window, ID: uint64(hwnd)}, Options{})
-		waitFor(hwnd, 15*time.Second, func() bool { return slices.Contains(eventsOf(r.ID()), Started) || r.ended })
+		waitFor(hwnd, 60*time.Second, func() bool { return slices.Contains(eventsOf(r.ID()), Started) || r.ended })
 		r.Stop(true)
 		waitFor(hwnd, 30*time.Second, func() bool { return r.ended })
 	})
