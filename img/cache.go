@@ -584,6 +584,9 @@ func (c *Cache) trimCPU() {
 	for i := c.tail; i >= 0 && c.cpuUsed > c.cpuBudget; {
 		prev := c.ents[i].prev
 		e := &c.ents[i]
+		if a := c.anims[i]; a != nil && a.hidden && c.inUse(e) && !a.inflight && c.trimHidden(a) {
+			break // (built but not shown, clipped or scrolled out: its canvases go, and come back when it is shown)
+		}
 		switch {
 		case c.anims[i] != nil && !c.inUse(e) && !c.animBusy(i): // an animation that is not shown goes whole: its decoder, canvases and frames
 			if e.stage == stGPU {
