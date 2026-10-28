@@ -21,6 +21,7 @@ import (
 	"unsafe"
 
 	"gonativeui/app"
+	"gonativeui/internal/testlock"
 	"gonativeui/internal/win32"
 	"gonativeui/menu"
 	"gonativeui/platform"
@@ -168,6 +169,7 @@ func testPNG() []byte {
 }
 
 func TestTrayLive(t *testing.T) {
+	testlock.Hold(t, "activation") // its windows, menu or toasts take the foreground from other packages' tests
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^$")

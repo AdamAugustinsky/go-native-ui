@@ -21,6 +21,7 @@ import (
 	"gonativeui/app"
 	"gonativeui/app/instance"
 	"gonativeui/gpu"
+	"gonativeui/internal/testlock"
 	"gonativeui/platform"
 	"gonativeui/ui"
 )
@@ -65,6 +66,7 @@ func (r result) int(k string) int {
 // most limit (a deadlock fails the test).
 func child(t *testing.T, name string, limit time.Duration, env ...string) result {
 	t.Helper()
+	testlock.Hold(t, "activation") // other packages' tests open windows too (in parallel processes)
 	ctx, cancel := context.WithTimeout(context.Background(), limit)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^$")

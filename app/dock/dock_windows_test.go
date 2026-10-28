@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"gonativeui/app"
+	"gonativeui/internal/testlock"
 	"gonativeui/internal/win32"
 	"gonativeui/platform"
 	"gonativeui/ui"
@@ -110,6 +111,7 @@ func TestBadgeIcon(t *testing.T) {
 }
 
 func TestTaskbarLive(t *testing.T) {
+	testlock.Hold(t, "activation") // its windows, menu or toasts take the foreground from other packages' tests
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^$")

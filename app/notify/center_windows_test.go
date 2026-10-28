@@ -17,6 +17,7 @@ import (
 	"unsafe"
 
 	"gonativeui/internal/com"
+	"gonativeui/internal/testlock"
 	"gonativeui/internal/win32"
 	"gonativeui/platform"
 )
@@ -76,6 +77,7 @@ func TestLiveToasts(t *testing.T) {
 	if os.Getenv("GNUI_TOAST_CHILD") != "" {
 		t.Skip("the child runs TestLiveToastsChild")
 	}
+	testlock.Hold(t, "activation") // its windows, menu or toasts take the foreground from other packages' tests
 	cmd := exec.Command(os.Args[0], "-test.run=^TestLiveToastsChild$", "-test.v", "-test.count=1")
 	cmd.Env = append(os.Environ(), "GNUI_TOAST_CHILD=1")
 	out, err := cmd.CombinedOutput()
