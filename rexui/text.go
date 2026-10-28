@@ -124,7 +124,7 @@ func labelStyle(k *base.Kit, o *LabelOpts) {
 	if o.Wrap {
 		k.ApplySize(ui.Pct(1), ui.TextSize(0))
 	} else {
-		k.ApplySize(ui.TextSize(0), ui.Px(st.Line))
+		k.ApplySize(ui.TextSize(0), ui.Px(st.Cell))
 	}
 	font := st.Font
 	if o.MonoPt > 0 {

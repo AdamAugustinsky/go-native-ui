@@ -25,7 +25,7 @@ type appkitRef struct {
 	} `json:"system"`
 	Colors     map[string]map[string]string `json:"colors"`
 	TextStyles map[string]struct {
-		Size, Line, Weight float64
+		Size, Line, Cell, Weight float64
 	} `json:"textStyles"`
 	Fonts struct {
 		TitleBar, Menu, ToolTips float64
@@ -214,6 +214,15 @@ func TestTextStylesAreAppKits(t *testing.T) {
 		got := MacText[style]
 		if !near(got.Size, w.Size, 0) || !near(got.Line, w.Line, 0) || got.Weight != weightOf[w.Weight] {
 			t.Errorf("%s: %+v, AppKit size %v line %v weight %v", name, got, w.Size, w.Line, w.Weight)
+		}
+		// a single-line label's height (NSTextField's intrinsic height): Line
+		// unless the style has a cell of its own
+		cell := got.Cell
+		if cell == 0 {
+			cell = got.Line
+		}
+		if !near(cell, w.Cell, 0) {
+			t.Errorf("%s: label cell %v pt, AppKit %v", name, cell, w.Cell)
 		}
 	}
 	for _, c := range []struct {
