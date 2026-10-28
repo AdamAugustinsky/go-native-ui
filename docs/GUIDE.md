@@ -332,8 +332,9 @@ row's id in its state. A press or the keyboard (Up and Down) changes the
 selection and reports `Changed`; the sidebar takes the keyboard when it is
 pressed, and the selection is the accent while it has it and grey otherwise.
 With `Multiple`, as here, ⌘-click toggles a note, Shift-click and Shift with
-Up or Down take a range, and the state says which notes are selected (`Has`,
-`Count`); `Sel` is the one last chosen.
+Up or Down take a range, ⌘A (the sidebar's, while it has the keyboard) takes all of
+them, and the state says which notes are selected (`Has`, `Count`); `Sel` is
+the one last chosen.
 
 `rebuild` makes the rows: the notes in the order the Switch asks for, those the
 search lets through, each group under its header. The items are views of the
@@ -540,7 +541,6 @@ func newModel() (*menu.Model, error) {
 	cmds := []menu.Command{
 		{ID: cmdNew, Title: "New Note", Shortcut: primary('N', 0)},
 		{ID: cmdRemove, Title: "Remove…", Shortcut: primary(ui.KeyBackspace, 0)},
-		{ID: cmdSelectAll, Title: "Select All", Role: menu.RoleSelectAll, Shortcut: primary('A', 0)},
 		{ID: cmdNewest, Title: "Newest First", Shortcut: primary('N', ui.ModShift)},
 		menu.StandardCommand(cmdZoomIn, menu.RoleZoomIn),
 		menu.StandardCommand(cmdZoomOut, menu.RoleZoomOut),
@@ -548,7 +548,7 @@ func newModel() (*menu.Model, error) {
 	}
 	item := func(id menu.ID) menu.Item { return menu.Item{Kind: menu.ItemCommand, Command: id} }
 	menus := []menu.Menu{
-		{Title: "Note", Items: []menu.Item{item(cmdNew), item(cmdRemove), {Kind: menu.ItemSeparator}, item(cmdSelectAll)}},
+		{Title: "Note", Items: []menu.Item{item(cmdNew), item(cmdRemove)}},
 		{Title: "View", Items: []menu.Item{item(cmdNewest), {Kind: menu.ItemSeparator}, item(cmdZoomIn), item(cmdZoomOut), item(cmdActualSize)}},
 	}
 	return menu.NewModel(cmds, menus, []int{0, 1})

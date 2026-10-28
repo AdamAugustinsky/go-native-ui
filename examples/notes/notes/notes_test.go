@@ -8,7 +8,6 @@ import (
 	"gonativeui/platform"
 	"gonativeui/theme"
 	"gonativeui/ui"
-	"gonativeui/widget/script"
 	"gonativeui/widget/widgettest"
 )
 
@@ -190,8 +189,7 @@ func TestSeveralNotesSelected(t *testing.T) {
 			t.Errorf("%q is still there", gone)
 		}
 	}
-	// the Select All command, which the menu's chord takes from the list
-	r.play(click(ui.RoleListItem, "Quotes"), script.Command(uint16(cmdSelectAll)))
+	r.play(click(ui.RoleListItem, "Quotes"), key('A', prim))
 	if d.Selected() != 8 {
 		t.Fatalf("Select All: %d selected, want 8", d.Selected())
 	}

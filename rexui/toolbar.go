@@ -1205,8 +1205,8 @@ func (tb *Toolbar) Title() {
 	room := c.Rect(box)
 	shown := true
 	switch {
-	case room[2] <= room[0]:
-		c.RequestFrame() // not laid out yet
+	case room[3] <= room[1]:
+		c.RequestFrame() // not laid out yet (a title squeezed to nothing is as high as the band)
 	default:
 		need := min(theme.Snap(k.Pt(tb.rc.TitleMinW)), theme.Snap(k.TextWidth(st.Font, tb.o.Title)+k.Pt(tb.rc.TitleTextX)))
 		shown = room[2]-room[0] >= need-0.5

@@ -75,7 +75,6 @@ const (
 	cmdZoomIn
 	cmdZoomOut
 	cmdActualSize
-	cmdSelectAll
 )
 
 // The text of the open note: its title and body as the text view shows them,
@@ -220,7 +219,6 @@ func newModel() (*menu.Model, error) {
 	cmds := []menu.Command{
 		{ID: cmdNew, Title: "New Note", Shortcut: primary('N', 0)},
 		{ID: cmdRemove, Title: "Remove…", Shortcut: primary(ui.KeyBackspace, 0)},
-		{ID: cmdSelectAll, Title: "Select All", Role: menu.RoleSelectAll, Shortcut: primary('A', 0)},
 		{ID: cmdNewest, Title: "Newest First", Shortcut: primary('N', ui.ModShift)},
 		menu.StandardCommand(cmdZoomIn, menu.RoleZoomIn),
 		menu.StandardCommand(cmdZoomOut, menu.RoleZoomOut),
@@ -228,7 +226,7 @@ func newModel() (*menu.Model, error) {
 	}
 	item := func(id menu.ID) menu.Item { return menu.Item{Kind: menu.ItemCommand, Command: id} }
 	menus := []menu.Menu{
-		{Title: "Note", Items: []menu.Item{item(cmdNew), item(cmdRemove), {Kind: menu.ItemSeparator}, item(cmdSelectAll)}},
+		{Title: "Note", Items: []menu.Item{item(cmdNew), item(cmdRemove)}},
 		{Title: "View", Items: []menu.Item{item(cmdNewest), {Kind: menu.ItemSeparator}, item(cmdZoomIn), item(cmdZoomOut), item(cmdActualSize)}},
 	}
 	return menu.NewModel(cmds, menus, []int{0, 1})
@@ -718,9 +716,6 @@ func (n *Notes) commands() {
 	}
 	if k.Command(cmdRemove) {
 		n.askRemove()
-	}
-	if k.Command(cmdSelectAll) { // (the menu's chord takes ⌘A from the list)
-		n.side.SelectAll(n.rows)
 	}
 	n.model.SetEnabled(cmdRemove, n.Selected() > 0)
 	n.model.SetChecked(cmdNewest, n.newest)
