@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -167,17 +168,35 @@ func (h *handler) Event(a *app.App, e *app.Event) {
 	}
 }
 
-// after posts the next step d from now, from a timer's goroutine.
+// after posts the next step d from now, from the poster's thread.
 func after(d time.Duration) { afterFor(d, 0) }
 
 // afterFor is after with the post for window win: only that window draws for
 // it (0: every window).
 func afterFor(d time.Duration, win uint32) {
-	time.AfterFunc(d, func() {
+	posterOnce.Do(func() { go poster() })
+	time.AfterFunc(d, func() { posts <- win })
+}
+
+// posts carries the steps' posts to poster, a goroutine on an OS thread of
+// its own. app.Post calls PostMessageW, and the first user32 call of a
+// thread makes it a GUI thread with a default input context: a USER object
+// it keeps while it lives. Posted from the timers' goroutines, which run on
+// whichever of the runtime's threads is free, the posts made more threads
+// GUI threads as the scenario went on, and the process's USER count grew
+// with them (cycles: one input context per thread that had posted).
+var (
+	posts      = make(chan uint32, 16)
+	posterOnce sync.Once
+)
+
+func poster() {
+	runtime.LockOSThread()
+	for win := range posts {
 		for !app.Post(app.Event{Source: platform.SourceApp, Window: win}, nil) {
 			time.Sleep(time.Millisecond)
 		}
-	})
+	}
 }
 
 var cfg = app.WindowConfig{Title: "applive", Width: 320, Height: 220}
@@ -275,11 +294,18 @@ func TestTwoWindowsPacedIndependentlyAndClosingOneKeepsTheOther(t *testing.T) {
 // cycles: with one window open throughout (the shared renderer stays), a
 // second is opened and closed 20 times; the windows, surfaces, textures,
 // hosts and GDI and USER objects come back to where they were.
+//
+// Both counts are read a second after a close. While windows open and close
+// the process has a USER timer more, which goes 300-450 ms after the last
+// close on the runners: the first count, read 350 ms after one, had it, and
+// the last, 330 ms after, did not.
 func init() {
 	scenarios["cycles"] = func() {
+		const settle = time.Second
 		anchor := &counter{}
 		var gdi0, user0, tex0 int
 		var surf0 int64
+		counted := false
 		n := 0
 		h := &handler{}
 		h.start = func(a *app.App) error {
@@ -307,14 +333,20 @@ func init() {
 						gdi0, g, user0, u, tex0, live, surf0, gpu.LiveSurfaces(), platform.OpenCount(), sc.Hosts)
 					a.Quit()
 				})
-				after(300 * time.Millisecond)
+				after(settle)
 				return
 			}
-			if n == 1 { // after a first cycle: the class and what the first window loads once
-				root := a.Windows(nil)[0].App()
-				tex0, _ = root.R.TextureCounts()
-				gdi0, user0 = guiObjects()
-				surf0 = gpu.LiveSurfaces()
+			if n == 1 && !counted { // after a first cycle: the class and what the first window loads once
+				counted = true
+				h.steps = append(h.steps, func(a *app.App) {
+					root := a.Windows(nil)[0].App()
+					tex0, _ = root.R.TextureCounts()
+					gdi0, user0 = guiObjects()
+					surf0 = gpu.LiveSurfaces()
+					cycle(a)
+				})
+				after(settle)
+				return
 			}
 			n++
 			var err error
