@@ -127,12 +127,27 @@ func TestIdleWindowlessAppGetsTheWake(t *testing.T) {
 }
 
 // Win.Close while a quit answer is pending closes the window then, not after
-// the quit is decided.
+// the quit is decided: for the Dock's Quit, which the app's loop decides while
+// it runs on, and for a terminate: sent by someone else, during which AppKit
+// runs a wait of its own inside the loop's pump (NSTerminateLater): the window
+// is gone for the app at once (not open, not on screen) and its platform
+// objects are released after the wait.
 func TestCloseDuringAPendingQuit(t *testing.T) {
-	t.Parallel()
-	r := child(t, "closequit", 60*time.Second)
-	if r.code != 0 || r.get("closed") != "true" || r.get("visible") != "0" || r.get("pending") != "true" || r.get("terminated") != "1" {
-		t.Fatalf("exit %d, results %v\n%s", r.code, r.kv, r.out)
+	for _, via := range []string{"dock", "terminate"} {
+		t.Run(via, func(t *testing.T) {
+			t.Parallel()
+			r := child(t, "closequit", 60*time.Second, "VIA="+via)
+			if r.code != 0 || r.get("closed") != "true" || r.get("visible") != "0" || r.get("pending") != "true" || r.get("terminated") != "1" {
+				t.Fatalf("exit %d, results %v\n%s", r.code, r.kv, r.out)
+			}
+		})
+		t.Run(via+"/refused", func(t *testing.T) {
+			t.Parallel()
+			r := child(t, "closequit", 60*time.Second, "VIA="+via, "MODE=refuse")
+			if r.code != 0 || r.get("closed") != "true" || r.get("visible") != "0" || r.get("open_after") != "0" || r.get("builds_after") != "0" {
+				t.Fatalf("exit %d, results %v\n%s", r.code, r.kv, r.out)
+			}
+		})
 	}
 }
 
@@ -452,14 +467,18 @@ func init() {
 		app.Main(app.AppConfig{KeepRunning: true}, h)
 	}
 
-	// closequit: the window is closed (Win.Close) while the Dock's Quit
-	// waits for its answer, which then allows it.
+	// closequit: the window is closed (Win.Close) while the Dock's Quit (or
+	// VIA=terminate: a terminate: someone else sent, during which AppKit
+	// waits inside the pump) waits for its answer. MODE=refuse answers no and
+	// looks at the window afterwards; else the answer allows the quit.
 	scenarios["closequit"] = func() {
 		var w *app.Win
+		v := &view{}
+		var builds int64
 		h := &handler{}
 		h.start = func(a *app.App) error {
 			var ok bool
-			if w, ok = openWindows(a, 1, &view{}); !ok {
+			if w, ok = openWindows(a, 1, v); !ok {
 				os.Exit(0)
 			}
 			after(400*time.Millisecond, 1)
@@ -473,8 +492,18 @@ func init() {
 				w.Close()
 				after(600*time.Millisecond, 2)
 			case e.Kind == app.EvPost && e.ID == 2:
+				builds = v.builds.Load()
 				say("closed=%v visible=%d pending=%v", !w.Open(), visibleWindows(), a.QuitPending())
+				if os.Getenv("MODE") == "refuse" {
+					a.ReplyQuit(quitID, false)
+					after(400*time.Millisecond, 3)
+					break
+				}
 				a.ReplyQuit(quitID, true)
+			case e.Kind == app.EvPost && e.ID == 3:
+				// The window's platform resources went with the wait, and it drew nothing since it closed.
+				say("open_after=%d builds_after=%d", platform.OpenCount(), v.builds.Load()-builds)
+				a.Quit()
 			default:
 				return false
 			}
