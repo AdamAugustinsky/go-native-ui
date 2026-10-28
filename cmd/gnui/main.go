@@ -5,6 +5,7 @@
 //
 //	gnui package [-c gnui.json] [-o dir] [-identity id] [-dev-cert]
 //	             [-no-hardened] [-notarize -notary-profile name] [-dmg] [-zip] [-tags list]
+//	             [-target darwin/arm64,windows/amd64,windows/arm64] [-win-sign command]
 //	gnui run     [-c gnui.json] [-env KEY=VAL] [-detach] [-adhoc] [-tags list] [-- app arguments]
 //	gnui sign    [-identity id|-dev|-adhoc] [-hardened] [-entitlements file] path.app
 //	gnui doctor  [-c gnui.json] [-setup-dev-cert]
@@ -14,7 +15,10 @@
 // silicon, DECISIONS.md D55), Info.plist, an .icns icon, resources, nested
 // frameworks signed inside out, generated entitlements and the hardened
 // runtime; notarizing, stapling and the signed disk image need a Developer ID
-// identity and say so when they do not have one.
+// identity and say so when they do not have one. With -target windows/amd64
+// or windows/arm64 it builds, from any host, a GUI-subsystem executable with
+// the icon, manifest and version resource linked in (D77), signs it when a
+// signing command is configured, and zips it.
 //
 // run builds a development bundle (bundle id plus ".dev") at
 // .gnui/dev/<Name>.app, signs it with the stable gnui-dev identity, launches
@@ -41,7 +45,7 @@ import (
 const usage = `gnui - build, sign, run and check Go Native UI applications (macOS)
 
 usage:
-  gnui package [flags]    build a release .app (and optionally notarize, staple, .dmg)
+  gnui package [flags]    build a release .app (and optionally notarize, staple, .dmg), or Windows .exe files (-target)
   gnui run [flags] [-- args]
                           build a development bundle, sign it with gnui-dev, launch it
   gnui sign [flags] app   sign an existing bundle (the tool apps) with gnui-dev or another identity

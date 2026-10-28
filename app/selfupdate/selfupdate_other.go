@@ -1,4 +1,4 @@
-//go:build !darwin
+//go:build !darwin && !windows
 
 package selfupdate
 
@@ -8,6 +8,11 @@ func Supported() error { return ErrUnsupported }
 
 // Prepare returns ErrUnsupported on this system.
 func Prepare(archive string) (*Staged, error) { return nil, ErrUnsupported }
+
+// PrepareSHA256 returns ErrUnsupported on this system.
+func PrepareSHA256(archive string, sum [32]byte) (*Staged, error) { return nil, ErrUnsupported }
+
+type winStaged struct{}
 
 // InstallAndRelaunch returns ErrUnsupported on this system.
 func (s *Staged) InstallAndRelaunch(args []string) error { return ErrUnsupported }
