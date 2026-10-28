@@ -161,9 +161,7 @@ func TestViewMatrix(t *testing.T) {
 		t.Errorf("the downloaded file: %v %v", fi, err)
 	}
 	if _, failed := h.saw(v, webview.LoadFailed); failed {
-		var tr []string
-		h.Do(func(*app.App) { tr = webview.Trace(v) })
-		t.Errorf("the navigation that became a download reported LoadFailed: %q", tr)
+		t.Error("the navigation that became a download reported LoadFailed")
 	}
 
 	// permissions: denied by default, granted when allowed
@@ -222,6 +220,13 @@ func TestViewMatrix(t *testing.T) {
 	np2 := h.openReady(webview.Options{})
 	h.navigate(np2, p.url("/cookie"), "cookie:none")
 	h.close(np2)
+
+	// the page's process ends: ProcessFailed; Reload brings the page back
+	h.clear()
+	h.Do(func(*app.App) { webview.CrashPage(v) })
+	h.wait("ProcessFailed", 20*time.Second, func() bool { _, ok := h.saw(v, webview.ProcessFailed); return ok })
+	h.Do(func(*app.App) { v.Reload() })
+	h.wait("the page after Reload", 20*time.Second, func() bool { _, ok := h.saw(v, webview.LoadFinished); return ok })
 
 	// hidden: suspended within 1 s; shown: resumed
 	h.Do(func(*app.App) { webview.ShowView(v, false) })

@@ -61,5 +61,15 @@ func Rounded(v *View) bool {
 	return call(pGetWindowRgnBox, v.be.(*view).hwnd, uintptr(unsafe.Pointer(&rgnBx))) == 3
 }
 
-// Trace is v's debug trace.
-func Trace(v *View) []string { return v.be.(*view).trace }
+// CrashPage ends v's renderer process with the DevTools protocol's
+// Page.crash (ICoreWebView2::CallDevToolsProtocolMethod, slot 36), as a
+// crash of the page would.
+func CrashPage(v *View) {
+	b := v.be.(*view)
+	h, err := handler(0, hSuspend) // a completion nobody reads
+	if err != nil || b.wv == 0 {
+		return
+	}
+	comh(b.wv, 36, uintptr(unsafe.Pointer(wide("Page.crash"))), uintptr(unsafe.Pointer(wide("{}"))), h.Ptr())
+	h.Release()
+}

@@ -171,6 +171,7 @@ const (
 	procRenderExited  = 1
 
 	webErrorCanceled = 14 // COREWEBVIEW2_WEB_ERROR_STATUS_OPERATION_CANCELED
+	webErrorAborted  = 9  // COREWEBVIEW2_WEB_ERROR_STATUS_CONNECTION_ABORTED
 
 	focusProgrammatic = 0 // COREWEBVIEW2_MOVE_FOCUS_REASON
 )
@@ -201,6 +202,7 @@ var (
 	iidHandlerDLStart  = win32.GUID{Data1: 0xefedc989, Data2: 0xc396, Data3: 0x41ca, Data4: [8]byte{0x83, 0xf7, 0x07, 0xf8, 0x45, 0xa5, 0x57, 0x24}}
 	iidHandlerBytes    = win32.GUID{Data1: 0x828e8ab6, Data2: 0xd94c, Data3: 0x4264, Data4: [8]byte{0x9c, 0xef, 0x52, 0x17, 0x17, 0x0d, 0x62, 0x51}}
 	iidHandlerDLState  = win32.GUID{Data1: 0x81336594, Data2: 0x7ede, Data3: 0x4ba9, Data4: [8]byte{0xbf, 0x71, 0xac, 0xf0, 0xa9, 0x5b, 0x58, 0xdd}}
+	iidHandlerDevTools = win32.GUID{Data1: 0x5c4889f0, Data2: 0x5ef6, Data3: 0x4c5a, Data4: [8]byte{0x95, 0x2c, 0xd8, 0xf1, 0xb9, 0x2d, 0x05, 0x74}} // ICoreWebView2CallDevToolsProtocolMethodCompletedHandler (tests)
 	iidHandlerSuspend  = win32.GUID{Data1: 0x00f206a7, Data2: 0x9d17, Data3: 0x4605, Data4: [8]byte{0x91, 0xf6, 0x4e, 0x8e, 0x4d, 0xe1, 0x92, 0xe3}}
 )
 
@@ -306,8 +308,6 @@ type view struct {
 	blockedU string
 	navID    uint64 // the navigation in progress
 	blockID  uint64 // the last navigation refused by the scheme list
-	dlNav    uint64 // the last navigation that became a download
-	trace    []string
 	dls      []*download
 	failed   bool // the browser process ended: Reload makes a new controller
 	closed   bool
@@ -509,7 +509,7 @@ func load(o *Options) error {
 	rt.handlers = com.NewKind("webview2-handlers", 1024, []win32.GUID{
 		iidHandlerEnv, iidHandlerCtrl, iidHandlerNavStart, iidHandlerContent, iidHandlerSource, iidHandlerHistory,
 		iidHandlerNavDone, iidHandlerPerm, iidHandlerProc, iidHandlerNewWin, iidHandlerTitle, iidHandlerDOM,
-		iidHandlerDLStart, iidHandlerBytes, iidHandlerDLState, iidHandlerSuspend,
+		iidHandlerDLStart, iidHandlerBytes, iidHandlerDLState, iidHandlerSuspend, iidHandlerDevTools,
 	}, []com.Method{{N: 2, Fn: invoke}})
 	rt.options = newOptionsKind()
 	rt.class = wide("GNUIWebView2Host")
@@ -1055,7 +1055,9 @@ func (v *view) progress(p float32) {
 }
 
 // navCompleted ends the navigation in progress: LoadFinished, or LoadFailed
-// unless it was cancelled (stopped, replaced, turned into a download).
+// unless it was cancelled or aborted: a navigation stopped or replaced, and
+// one that became a download, which completes as CONNECTION_ABORTED before
+// DownloadStarting arrives (seen on both runners).
 func (v *view) navCompleted(args uintptr) {
 	v.outU64 = 0
 	comh(args, navDoneGetID, uintptr(unsafe.Pointer(&v.outU64)))
@@ -1069,13 +1071,12 @@ func (v *view) navCompleted(args uintptr) {
 	v.outI32 = 0
 	comh(args, navDoneErrorStatus, uintptr(unsafe.Pointer(&v.outI32)))
 	v.st.Loading = false
-	v.trace = append(v.trace, fmt.Sprintf("completed id=%d ok=%v status=%d dlNav=%d", id, ok, v.outI32, v.dlNav))
 	switch {
 	case ok:
 		v.st.Progress = 1
 		v.post(Progress, 0, 0)
 		v.post(LoadFinished, 0, 0)
-	case v.outI32 != webErrorCanceled && id != v.dlNav:
+	case v.outI32 != webErrorCanceled && v.outI32 != webErrorAborted:
 		v.post(LoadFailed, 0, 0)
 	}
 }
@@ -1132,8 +1133,6 @@ func (v *view) permission(args uintptr) {
 // server's name made unique, with the runtime's download UI off, or cancels
 // it when there is no download folder.
 func (v *view) downloadStarting(args uintptr) {
-	v.trace = append(v.trace, fmt.Sprintf("downloadStarting navID=%d", v.navID))
-	v.dlNav = v.navID // its navigation ends unsuccessfully, which is no failure
 	if v.opt.DownloadDir == "" {
 		comh(args, dlStartPutCancel, 1)
 		return
