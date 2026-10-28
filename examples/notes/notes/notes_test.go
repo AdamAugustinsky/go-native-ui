@@ -2,11 +2,13 @@ package notes
 
 import (
 	"runtime"
+	"slices"
 	"testing"
 
 	"gonativeui/platform"
 	"gonativeui/theme"
 	"gonativeui/ui"
+	"gonativeui/widget/script"
 	"gonativeui/widget/widgettest"
 )
 
@@ -150,6 +152,48 @@ func TestAddSelectAndRemove(t *testing.T) {
 	}
 	if _, ok := r.has(ui.RoleLabel, "No Note Selected"); !ok {
 		t.Error("the editor does not say that no note is open")
+	}
+}
+
+// ⌘-click and Shift-click select several notes, ⌘A all of them, and Remove
+// removes the ones selected, after saying how many.
+func TestSeveralNotesSelected(t *testing.T) {
+	r := newRig(t, false)
+	d := r.d
+	prim := ui.PrimaryMod()
+	r.play(click(ui.RoleListItem, "Grocery list"), click(ui.RoleListItem, "Garden").With(prim))
+	if d.Selected() != 2 {
+		t.Fatalf("⌘-click: %d selected, want 2", d.Selected())
+	}
+	if _, ok := r.has(ui.RoleLabel, "2 Notes Selected"); !ok {
+		t.Error("the content pane does not say that two notes are selected")
+	}
+	r.play(click(ui.RoleListItem, "Launch meeting"), click(ui.RoleListItem, "Quotes").With(ui.ModShift))
+	if d.Selected() != 10 {
+		t.Fatalf("Shift-click from the first note to the last: %d selected, want 10", d.Selected())
+	}
+	r.play(click(ui.RoleListItem, "Launch meeting"), key('A', prim))
+	if d.Selected() != 10 {
+		t.Fatalf("⌘A: %d selected, want all 10", d.Selected())
+	}
+	r.play(click(ui.RoleListItem, "Grocery list"), click(ui.RoleListItem, "Garden").With(prim))
+	r.play(click(ui.RoleButton, "Remove…"), waitFor(ui.RoleDialog, ""))
+	if _, ok := r.has(ui.RoleLabel, "2 notes will be removed. This cannot be undone."); !ok {
+		t.Error("the dialog does not say that two notes will be removed")
+	}
+	r.play(click(ui.RoleButton, "Remove"), waitGone(ui.RoleDialog, ""))
+	if d.Count() != 8 || d.Selected() != 0 {
+		t.Fatalf("after removing two: %d notes, %d selected", d.Count(), d.Selected())
+	}
+	for _, gone := range []string{"Grocery list", "Garden"} {
+		if slices.Contains(r.texts(), gone) {
+			t.Errorf("%q is still there", gone)
+		}
+	}
+	// the Select All command, which the menu's chord takes from the list
+	r.play(click(ui.RoleListItem, "Quotes"), script.Command(uint16(cmdSelectAll)))
+	if d.Selected() != 8 {
+		t.Fatalf("Select All: %d selected, want 8", d.Selected())
 	}
 }
 
