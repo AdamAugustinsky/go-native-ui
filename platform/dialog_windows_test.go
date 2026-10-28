@@ -57,6 +57,7 @@ type dlgDrive struct {
 	ticks   int     // ticks the app window got
 	inModal int     // of them, inside a native modal loop
 	hwnd    uintptr // the dialog's window, once IOleWindow gave one
+	since   int     // ticks since it had one
 	visible int     // ticks with the dialog's window visible
 	acted   bool
 	rescued bool // the dialog was closed after 15 s without act
@@ -87,13 +88,17 @@ func driveDialog(t *testing.T, w *Window, tk DialogTicket, act func(dlg uintptr)
 		h := dialogWindow(tk)
 		if h != 0 {
 			d.hwnd = h
-		}
-		if h != 0 && win32.Bool(win32.Call(pIsWindowVisible, h)) {
-			if d.visible++; d.visible >= 5 {
-				d.acted = true
-				act(h)
-				return 0
+			d.since++
+			if win32.Bool(win32.Call(pIsWindowVisible, h)) {
+				d.visible++
 			}
+		}
+		// On screen for a few ticks; on windows-2025 the dialog's window can
+		// read as not visible all along, so a second after it exists will do.
+		if d.visible >= 5 || d.since >= 50 {
+			d.acted = true
+			act(h)
+			return 0
 		}
 		if time.Since(start) > 15*time.Second {
 			d.rescued = true

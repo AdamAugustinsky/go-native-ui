@@ -235,7 +235,9 @@ func TestOpenCloseLeaksNoWindowObjects(t *testing.T) {
 		cycle()
 	}
 	gdi1, user1 := guiObjects()
-	if gdi1 != gdi0 || user1 != user0 {
+	// Fewer is not a leak: what an earlier test made (a file dialog's shell
+	// windows) can be freed by the system during the cycles.
+	if gdi1 > gdi0 || user1 > user0 {
 		t.Errorf("after 20 open/close cycles: GDI %d → %d, USER %d → %d", gdi0, gdi1, user0, user1)
 	}
 	if OpenCount() != 0 {
