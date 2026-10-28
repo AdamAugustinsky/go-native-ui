@@ -223,6 +223,16 @@ func (s *System) layoutCT(p *Para) {
 		start = end
 	}
 	pl.b.height = top
+	// CoreText does not report the measurements its breaks were decided with:
+	// the layout holds from the widest line it made to the width it was made
+	// for, or to any larger width when it was unbounded and nothing was left
+	// out (ParaView.FitFrom).
+	switch {
+	case p.Width >= 1:
+		pl.b.fitLo, pl.b.fitHi = pl.b.width-fitSlack, p.Width+fitSlack
+	case !pl.b.truncated:
+		pl.b.fitLo, pl.b.fitHi = pl.b.width-fitSlack, float32(math.Inf(1))
+	}
 }
 
 // ctLine sets the line of UTF-16 units [u0, u0+cnt) and appends its glyphs.
