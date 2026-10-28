@@ -78,10 +78,12 @@
 //
 // # The helper
 //
-// InstallAndRelaunch copies the running executable into the staging folder,
-// under its own name, and starts the copy with a private argument, then
-// returns so that the app can quit. The copy, outside the bundle it replaces,
-// is the helper. It
+// InstallAndRelaunch copies the running bundle whole into the staging folder
+// (helper/<Name>.app: an APFS clone, without extended attributes, so without
+// quarantine), starts the copy's executable with a private argument, waits
+// for it to take the job (an error when it does not, say because the system
+// stopped it at launch), then returns so that the app can quit. That process,
+// outside the bundle it replaces, is the helper. It
 //
 //  1. waits for the app to exit (Options.QuitTimeout, default 60 s);
 //  2. checks that the bundle is still the one the app ran from, and verifies
@@ -112,9 +114,12 @@
 // lock or set up the app's log first. It is not wired into app.Run, which
 // starts after the app's own setup.
 //
-// Because the helper is the main executable run from outside its bundle, an
-// app whose entitlements need an embedded provisioning profile cannot use it
-// (the system refuses to start the copy). The framework's apps need none.
+// The helper runs from a whole copy of the bundle, not from a copy of the
+// executable alone: a Developer ID signature binds the bundle's Info.plist,
+// and macOS kills an executable copied out of its bundle at exec ("invalid
+// Info.plist"; an ad hoc signature does not show it). The copy validates as
+// the bundle does, and has the app's identifier and team, which App
+// Management requires of a process that modifies the bundle.
 //
 // # Started and LastResult
 //

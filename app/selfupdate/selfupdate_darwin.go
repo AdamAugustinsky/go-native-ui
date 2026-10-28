@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"log/slog"
 	"os"
@@ -485,8 +484,9 @@ type job struct {
 	AnyVersion    bool          `json:"anyVersion"` // Options.AllowDowngrade, as Prepare used it
 }
 
-// InstallAndRelaunch hands the staged update to the helper and returns; the
-// app must then quit. The helper swaps the update in once the app has
+// InstallAndRelaunch hands the staged update to the helper and returns once
+// the helper has taken it (it fails if the helper does not start); the app
+// must then quit. The helper swaps the update in once the app has
 // exited, launches it with args, and rolls back if it does not call Started
 // in time (see the package comment). A Staged is installed once.
 func (s *Staged) InstallAndRelaunch(args []string) error {
@@ -513,17 +513,22 @@ func (s *Staged) InstallAndRelaunch(args []string) error {
 	if err != nil {
 		return err
 	}
-	// The copy keeps the executable's name (what Activity Monitor shows, and
-	// what tells a test binary's copy for one, internal/launchguard).
+	// The helper runs from a copy of the whole bundle, not of the executable
+	// alone: a Developer ID signature binds the bundle's Info.plist, and the
+	// system kills the bare executable at exec ("invalid Info.plist"). The
+	// copy keeps the bundle's and the executable's names (what Activity
+	// Monitor shows, and what tells a test binary's copy for one,
+	// internal/launchguard).
 	helperDir := filepath.Join(s.dir, "helper")
 	if err := os.Mkdir(helperDir, 0o700); err != nil {
 		return fmt.Errorf("selfupdate: cannot copy the helper: %w", err)
 	}
-	helper := filepath.Join(helperDir, filepath.Base(cur.exe))
-	if err := copyExecutable(cur.exe, helper); err != nil {
-		os.Remove(helperDir)
+	helperApp := filepath.Join(helperDir, filepath.Base(cur.bundle))
+	if err := copyBundle(cur.bundle, helperApp); err != nil {
+		os.RemoveAll(helperDir)
 		return fmt.Errorf("selfupdate: cannot copy the helper: %w", err)
 	}
+	helper := filepath.Join(helperApp, "Contents", "MacOS", filepath.Base(cur.exe))
 	nonce := make([]byte, 16)
 	if _, err := rand.Read(nonce); err != nil {
 		return err
@@ -543,11 +548,28 @@ func (s *Staged) InstallAndRelaunch(args []string) error {
 		os.RemoveAll(helperDir)
 		return err
 	}
+	readyR, readyW, err := os.Pipe()
+	if err != nil {
+		os.RemoveAll(helperDir)
+		os.Remove(jobPath)
+		return err
+	}
+	defer readyR.Close()
 	cmd := exec.Command(helper, helperFlag, jobPath)
 	cmd.Dir = "/"
-	cmd.ExtraFiles = []*os.File{s.lock}                  // fd 3: the staging folder's lock, held from Prepare to the helper's end
+	cmd.ExtraFiles = []*os.File{s.lock, readyW}          // fd 3: the staging folder's lock, held from Prepare to the helper's end; fd 4: readyFD
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true} // outlives the app's terminal session, if any
-	if err := cmd.Start(); err != nil {
+	err = cmd.Start()
+	readyW.Close()
+	if err == nil {
+		// A helper the system kills at exec still "starts": wait for it to
+		// say it took the job, so that the app does not quit for nothing.
+		if err = waitReady(readyR, helperStartTimeout); err != nil {
+			cmd.Process.Kill()
+			cmd.Wait()
+		}
+	}
+	if err != nil {
 		os.RemoveAll(helperDir)
 		os.Remove(jobPath)
 		return fmt.Errorf("selfupdate: cannot start the helper: %w", err)
@@ -575,28 +597,56 @@ func (s *Staged) Discard() error {
 	return err
 }
 
-// copyExecutable copies the running executable (its embedded signature
-// included) to a new file only the user can run.
-func copyExecutable(src, dst string) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return err
+// copyBundle copies the running bundle, as its signature sealed it, to dst,
+// which must not exist: ditto, which clones the files on APFS (the staging
+// folder is on the bundle's volume), without extended attributes (a bundle's
+// signature is in its files) or ACLs. ditto quarantines the copy when the
+// bundle is quarantined, without the user's approval the bundle has: that
+// is removed.
+func copyBundle(src, dst string) error {
+	if _, err := os.Lstat(dst); err == nil {
+		return fmt.Errorf("%s already exists", dst)
 	}
-	defer in.Close()
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o700)
-	if err != nil {
-		return err
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "/usr/bin/ditto", "--noextattr", "--noacl", src, dst)
+	cmd.Env = []string{"PATH=/usr/bin:/bin", "LC_ALL=C"}
+	if out, err := cmd.CombinedOutput(); err != nil {
+		os.RemoveAll(dst)
+		msg := strings.TrimSpace(string(out))
+		if len(msg) > 2000 {
+			msg = msg[:2000]
+		}
+		return fmt.Errorf("ditto: %v: %s", err, msg)
 	}
-	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
-		os.Remove(dst)
-		return err
-	}
-	if err := out.Close(); err != nil {
-		os.Remove(dst)
+	if err := unquarantine(dst); err != nil {
+		os.RemoveAll(dst)
 		return err
 	}
 	return nil
+}
+
+// helperStartTimeout bounds how long InstallAndRelaunch waits for the helper
+// to take the job: the first run of a new copy may be scanned by the system.
+const helperStartTimeout = 20 * time.Second
+
+// readyFD is the pipe the helper writes one byte to once it has taken the
+// job; a helper that refuses the job, or is stopped, ends without writing.
+const readyFD = 4
+
+// waitReady waits for the helper's byte on r.
+func waitReady(r *os.File, timeout time.Duration) error {
+	r.SetReadDeadline(time.Now().Add(timeout))
+	var b [1]byte
+	n, err := r.Read(b[:])
+	switch {
+	case n == 1:
+		return nil
+	case errors.Is(err, os.ErrDeadlineExceeded):
+		return fmt.Errorf("it did not start within %v", timeout)
+	default:
+		return errors.New("it ended before it took the update (stopped at launch, or it refused the job)")
+	}
 }
 
 // writeNew writes a file that must not exist yet, readable by the user only.
