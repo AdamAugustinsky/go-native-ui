@@ -362,6 +362,7 @@ type palette struct {
 	presses     int
 	built       int // builds before the press
 	waited      int
+	retries     int // presses again because Windows refused the foreground
 }
 
 func (p *palette) Start(a *app.App) error {
@@ -411,8 +412,19 @@ func (p *palette) Event(a *app.App, e *app.Event) {
 		must(p.b.builds > p.built, "the shown panel built nothing")
 		p.later(300, 3)
 	case 3:
-		childapp.Say("press_to_build_ms=%.2f key=%v", p.b.ms, pw.KeyWindow())
-		must(pw.KeyWindow(), "the palette shown from the hotkey is not the foreground window")
+		if !pw.KeyWindow() && p.retries < 3 {
+			// windows-11-arm's shell takes the foreground now and then, and
+			// Windows refuses SetForegroundWindow meanwhile; a new press (new
+			// input) gives the app the right again, as a user pressing again
+			// would.
+			p.retries++
+			childapp.Say("retry=%d", p.retries)
+			typeChord(chordA)
+			p.later(400, 3)
+			return
+		}
+		childapp.Say("press_to_build_ms=%.2f key=%v retries=%d", p.b.ms, pw.KeyWindow(), p.retries)
+		must(pw.KeyWindow(), "the palette shown from the hotkey is not the foreground window after %d presses", p.retries+1)
 		p.main.Focus()
 		p.waited = 0
 		p.later(100, 4)
