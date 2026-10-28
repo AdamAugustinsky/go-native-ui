@@ -175,6 +175,7 @@ type xsess struct {
 	w      *Window
 	p      *xpeer
 	pastes []xpaste
+	drags  []xdrag // the drag events the window gave (dnd_x11_linux_test.go)
 }
 
 type xpaste struct {
@@ -194,6 +195,7 @@ func (s *xsess) step() {
 		if e.Kind == EvPaste {
 			s.pastes = append(s.pastes, xpaste{e.Tag, string(s.w.Text(e.Text)), e.Flags&FlagFailed != 0})
 		}
+		s.noteDrag(e)
 	}
 	s.p.poll()
 }

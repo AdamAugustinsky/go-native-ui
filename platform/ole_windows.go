@@ -9,30 +9,23 @@ import (
 	"gonativeui/internal/win32"
 )
 
-// What the file dialogs (dialog_windows.go) and OLE drag and drop
-// (drag_windows.go) share: the main thread as an OLE apartment, the app
-// window message that runs their native modal loops, and OLE's data
-// structures.
+// What the file dialogs (dialog_windows.go) need of OLE: the main thread as
+// an OLE apartment and the app window message that runs their native modal
+// loops. (Drag and drop, drag_windows.go, sets up OLE per window itself.)
 //
-// A file dialog's Show and DoDragDrop are modal: each runs a message loop of
-// its own until the user is done. The contract (dialog.go, drag.go) wants
-// the call to return at once, so OpenPanel, SavePanel and StartDrag prepare
-// everything, post oleRunMsg to the app window and return; the pump hands
-// the message to runOLE, which runs the loop inside enterModal/leaveModal
-// (the windows keep drawing through their frame handlers, the dispatcher
-// runs on wakes) and queues the answer when it returns. One such loop runs
-// at a time: a message that arrives while one runs is taken up when it
-// ends.
+// A file dialog's Show is modal: it runs a message loop of its own until the
+// user is done. The contract (dialog.go) wants the call to return at once, so
+// OpenPanel and SavePanel prepare everything, post oleRunMsg to the app
+// window and return; the pump hands the message to runOLE, which runs the
+// loop inside enterModal/leaveModal (the windows keep drawing through their
+// frame handlers, the dispatcher runs on wakes) and queues the answer when it
+// returns. One such loop runs at a time: a message that arrives while one
+// runs is taken up when it ends.
 
 var (
-	pCoCreateInstance   uintptr
-	pCoTaskMemFree      uintptr
-	pReleaseStgMedium   uintptr
-	pRegisterDragDrop   uintptr
-	pRevokeDragDrop     uintptr
-	pDoDragDrop         uintptr
-	pSHCreateItem       uintptr
-	pSHCreateEnumFmtEtc uintptr
+	pCoCreateInstance uintptr
+	pCoTaskMemFree    uintptr
+	pSHCreateItem     uintptr
 
 	oleThreads [8]uint32 // the threads OleInitialize succeeded on (tests run on several)
 	oleMsg     uint32    // oleRunMsg's id, registered once
@@ -41,45 +34,17 @@ var (
 
 const (
 	clsctxInprocServer = 1
-	dvaspectContent    = 1
-	tymedHGlobal       = 1
 
-	sOK             = 0
-	sFalse          = 1
-	eNotImpl        = 0x80004001
-	eInvalidArg     = 0x80070057
-	ePointer        = 0x80004003
-	dvEFormatEtc    = 0x80040064
-	oleEAdviseNotSu = 0x80040003
-	dataSSameFmtEtc = 0x00040130
-	hrCancelled     = 0x800704C7 // HRESULT_FROM_WIN32(ERROR_CANCELLED)
+	hrCancelled = 0x800704C7 // HRESULT_FROM_WIN32(ERROR_CANCELLED)
 
 	// oleRunMsg's wParam.
 	oleRunDialogs = 1
-	oleRunDrag    = 2
-	oleRunDrops   = 3
 )
-
-// formatEtc is FORMATETC (objidl.h): 32 bytes on 64-bit Windows.
-type formatEtc struct {
-	cf     uint16
-	ptd    uintptr
-	aspect uint32
-	lindex int32
-	tymed  uint32
-}
-
-// stgMedium is STGMEDIUM with an HGLOBAL: 24 bytes on 64-bit Windows.
-type stgMedium struct {
-	tymed   uint32
-	data    uintptr
-	release uintptr // pUnkForRelease
-}
 
 // ensureOLE makes the calling thread (the main thread) an OLE
 // single-threaded apartment if it is not one of ours yet: StartApp does it
 // for the app, and a program or test that opens windows without the app
-// object gets it at its first dialog or drop target. It loads the OLE entry
+// object gets it at its first dialog. It loads the OLE entry
 // points and registers oleRunMsg. It reports false when OLE is unavailable
 // (the thread is already a multithreaded apartment).
 func ensureOLE() bool {
@@ -92,12 +57,7 @@ func ensureOLE() bool {
 		}
 		pCoCreateInstance = win32.Proc(ole, "CoCreateInstance")
 		pCoTaskMemFree = win32.Proc(ole, "CoTaskMemFree")
-		pReleaseStgMedium = win32.Proc(ole, "ReleaseStgMedium")
-		pRegisterDragDrop = win32.Proc(ole, "RegisterDragDrop")
-		pRevokeDragDrop = win32.Proc(ole, "RevokeDragDrop")
-		pDoDragDrop = win32.Proc(ole, "DoDragDrop")
 		pSHCreateItem = win32.Proc(shell, "SHCreateItemFromParsingName")
-		pSHCreateEnumFmtEtc = win32.Proc(shell, "SHCreateStdEnumFmtEtc")
 	}
 	if oleMsg == 0 {
 		name := mustUTF16("GoNativeUI.OLEModal")
@@ -137,19 +97,14 @@ func postOLE(what uintptr) {
 	}
 }
 
-// runOLE is oleRunMsg's handler on the app window: it runs the dialogs and
-// the drag that are waiting, one modal loop at a time, and queues the
-// decoded image drops. Main thread.
+// runOLE is oleRunMsg's handler on the app window: it runs the dialogs that
+// are waiting, one modal loop at a time. Main thread.
 func runOLE(hwnd uintptr, msg uint32, wp, lp uintptr) uintptr {
-	if wp == oleRunDrops {
-		reapDrops()
-		return 0
-	}
 	if oleRunning {
 		return 0 // the loop that runs takes it up when it ends
 	}
 	oleRunning = true
-	for runNextDialog() || runPendingDrag() {
+	for runNextDialog() {
 	}
 	oleRunning = false
 	return 0
@@ -185,5 +140,3 @@ func pwstrString(p uintptr) string {
 	}
 	return syscall.UTF16ToString(unsafe.Slice((*uint16)(win32.Ptr(p)), n))
 }
-
-func hresultOf(hr uint32) uintptr { return uintptr(hr) }

@@ -199,6 +199,61 @@ func TestTokenFieldFromMacEditActions(t *testing.T) {
 	}
 }
 
+// pasteTo pastes s into the focused field: the paste request of one frame is
+// answered by the platform in the next.
+func pasteTo(g *rig, s string) {
+	g.in.PushEdit(ui.EditPaste)
+	g.frame()
+	tag, ok := g.c.PasteRequest()
+	if !ok {
+		g.t.Fatal("no paste request")
+	}
+	g.in.SetPaste(tag, []byte(s), true)
+	g.frame()
+}
+
+// Pasted text is tokenised at the commas as typed text is: "a,b,c" is the
+// tokens a and b, and c stays to be typed on.
+func TestTokenFieldPasteIsSplit(t *testing.T) {
+	g, st, toks := tokenRig(t)
+	pasteTo(g, "a, b,c")
+	if got := *toks; len(got) != 2 || got[0] != "a" || got[1] != "b" || st.Input.String() != "c" {
+		t.Fatalf("tokens %q, input %q", got, st.Input.String())
+	}
+}
+
+// With a token selected, Backspace and Delete remove it wherever the caret is
+// in the text, and the text stays (NSTokenField's selection is the token).
+func TestTokenFieldDeletesTheSelectedTokenMidText(t *testing.T) {
+	for _, edit := range []ui.EditAction{ui.EditDeleteBackward, ui.EditDeleteForward} {
+		g, st, toks := tokenRig(t)
+		*toks = []string{"ada", "alan"}
+		st.Input.SetString("xyz")
+		st.Input.SetCaret(1)
+		st.Sel, st.HasSel = 0, true
+		g.frames(2)
+		g.in.PushEdit(edit)
+		g.frame()
+		if got := *toks; len(got) != 1 || got[0] != "alan" {
+			t.Fatalf("edit %d: tokens %q", edit, got)
+		}
+		if st.Input.String() != "xyz" {
+			t.Fatalf("edit %d: the text became %q", edit, st.Input.String())
+		}
+	}
+	// no token selected, the caret inside the text: the text is deleted
+	g, st, toks := tokenRig(t)
+	*toks = []string{"ada"}
+	st.Input.SetString("xyz")
+	st.Input.SetCaret(1)
+	g.frames(2)
+	g.in.PushEdit(ui.EditDeleteBackward)
+	g.frame()
+	if len(*toks) != 1 || st.HasSel || st.Input.String() != "yz" {
+		t.Fatalf("Backspace in the text: tokens %q, selected %v, input %q", *toks, st.HasSel, st.Input.String())
+	}
+}
+
 // The outline sits just outside the field's body, whatever the body's parent.
 func TestTokenFieldOutlineIsAroundTheBody(t *testing.T) {
 	var st rexui.TokenFieldState

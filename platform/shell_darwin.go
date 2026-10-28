@@ -87,8 +87,9 @@ type shell struct {
 	materials   bool           // Options.Materials: the surface is transparent over an opaque window
 	delegate    objc.ID        // the window delegate, the native buttons' target
 
-	mat   matState  // material regions (material_darwin.go)
-	hosts hostState // hosted views (host_darwin.go)
+	child panelChild // a panel with a Parent: where it is, its outline (panelchild_darwin.go)
+	mat   matState   // material regions (material_darwin.go)
+	hosts hostState  // hosted views (host_darwin.go)
 }
 
 // Live native shell objects in the process, and applies (ShellObjects).

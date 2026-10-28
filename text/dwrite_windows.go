@@ -141,6 +141,20 @@ type glyphRun struct {
 // glyphOffset is DWRITE_GLYPH_OFFSET (dwrite.h:587).
 type glyphOffset struct{ AdvanceOffset, AscenderOffset float32 }
 
+// fontFeature is DWRITE_FONT_FEATURE and typographicFeatures is
+// DWRITE_TYPOGRAPHIC_FEATURES (dwrite.h): the features GetGlyphs and
+// GetGlyphPlacements apply to ranges of the text.
+type fontFeature struct{ NameTag, Parameter uint32 }
+
+type typographicFeatures struct {
+	Features *fontFeature
+	Count    uint32
+}
+
+// dwFeatureTabularFigures is DWRITE_FONT_FEATURE_TAG_TABULAR_FIGURES: 'tnum',
+// the tag's four characters in little-endian order.
+const dwFeatureTabularFigures = 't' | 'n'<<8 | 'u'<<16 | 'm'<<24
+
 // scriptAnalysis is DWRITE_SCRIPT_ANALYSIS (dwrite.h:706): UINT16 script and
 // a 32-bit enum.
 type scriptAnalysis struct {
@@ -289,6 +303,14 @@ type System struct {
 	u16b                      []uint32 // byte offset in the source of each UTF-16 unit of u16
 	ic                        []uint32 // cluster (byte offset) per glyph of ig, in logical order
 	sa                        scriptAnalysis
+	tabular                   bool // the font being shaped has FontDesc.TabularDigits
+
+	// FontDesc.TabularDigits as the features argument of shaping: one
+	// feature set for one range, as long as the item shaped (tnumLen).
+	tnumFeature [1]fontFeature
+	tnumSet     [1]typographicFeatures
+	tnumPtr     [1]*typographicFeatures
+	tnumLen     [1]uint32
 
 	// Out parameters and small buffers the OS reads or writes through
 	// pointers.
@@ -332,6 +354,9 @@ func New() (*System, error) {
 		runs:      newRunCache(),
 		atlas:     newAtlas(),
 	}
+	s.tnumFeature[0] = fontFeature{NameTag: dwFeatureTabularFigures, Parameter: 1}
+	s.tnumSet[0] = typographicFeatures{Features: &s.tnumFeature[0], Count: 1}
+	s.tnumPtr[0] = &s.tnumSet[0]
 	s.src = comObject{vtbl: uintptr(unsafe.Pointer(&srcVtbl[0])), sys: s}
 	s.sink = comObject{vtbl: uintptr(unsafe.Pointer(&sinkVtbl[0])), sys: s}
 	for i, c := range "en-us" {
@@ -949,6 +974,11 @@ func (s *System) Dirty(p int) (x, y, w, h int, pixels []byte, stride int, ok boo
 
 // ClearDirty marks page p as uploaded.
 func (s *System) ClearDirty(p int) { s.atlas.clearDirty(p) }
+
+// DirtyAll marks every atlas page changed in full, so the next Dirty of each
+// page returns all of it: for a renderer whose textures lost their contents
+// (a rebuilt device), which needs the clean pages uploaded again too.
+func (s *System) DirtyAll() { s.atlas.markAllDirty() }
 
 // Close releases every DirectWrite object. The System must not be used
 // afterwards.

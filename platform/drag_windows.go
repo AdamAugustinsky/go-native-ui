@@ -3,307 +3,389 @@
 package platform
 
 import (
-	"fmt"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"unsafe"
 
 	"gonativeui/internal/com"
 	"gonativeui/internal/win32"
 )
 
-// OLE drag and drop (the phase 8 plan's W8; drag.go has the contract).
+// Drag and drop on Windows (the contract is drag.go): OLE, from Go, with no cgo.
 //
-// In: a window that takes drops (SetDropKinds with some kinds) registers an
-// IDropTarget, implemented in Go with internal/com's object table, with
-// RegisterDragDrop; none revokes it. OLE calls its DragEnter, DragOver,
-// DragLeave and Drop on the main thread (an OLE apartment, ensureOLE): from
-// the pump for a drag from another process, from inside DoDragDrop's loop
-// for one of ours. They queue EvDragEnter, EvDragMove, EvDragLeave and
-// EvDrop and answer the effect the handler gives. The offered kinds come
-// from QueryGetData: CF_HDROP is files, the registered "PNG" format,
-// CF_DIBV5 and CF_DIB an image, CF_UNICODETEXT text. Drop copies the data
-// before it returns: paths and text at once, a PNG as it is; a DIB is
-// converted to PNG on a worker, and its EvDrop arrives in a later pump
-// (runOLE's oleRunDrops). A child window that registers a target of its own
-// (a hosted RichEdit) keeps its drops; OLE looks for the target from the
-// window under the pointer up through its parents.
+// In. Once the application declares a target (SetDropKinds) the window is
+// registered with RegisterDragDrop, on a thread that is an OLE single-threaded
+// apartment (StartApp makes the main thread one; a thread that is an MTA gets
+// no drops). The IDropTarget is an object of ours whose methods are
+// syscall.NewCallback functions in a vtable made at start. OLE calls them on
+// the main thread, from inside the message dispatch of Wait (or of the
+// DoDragDrop loop of a drag of our own): DragEnter and DragOver ask the
+// handler (SetDragHandler) which operation the window answers, synchronously,
+// and queue EvDragEnter and EvDragMove; DragLeave queues EvDragLeave; Drop
+// reads the data and queues the EvDrop.
 //
-// Modifiers follow Windows' convention: Ctrl offers copy only, Shift move
-// only, Ctrl+Shift and Alt link only (when the source allows it).
+// The data is copied inside Drop, before it returns, because the IDataObject
+// belongs to the source and is not ours afterwards. Of what the drag offers, a
+// file list is CF_HDROP, text is CF_UNICODETEXT, and an image is the registered
+// "PNG" format as it is, else CF_DIBV5 or CF_DIB, copied and converted to PNG on
+// a worker goroutine (the EvDrop arrives in a later Wait, like macOS's decoded
+// images). Like macOS, a source that renders its data lazily can hold the main
+// thread inside GetData until OLE's own timeout.
 //
-// Out: StartDrag builds an IDataObject (CF_HDROP for paths, CF_UNICODETEXT
-// for text, "PNG" for an image) and an IDropSource, both ours, and posts
-// oleRunMsg; the pump runs DoDragDrop inside enterModal/leaveModal, so the
-// windows keep drawing (a drop target of ours highlights as the drag moves
-// over it), and queues EvDragEnd when it returns. Not on Windows: file
-// promises (StartDrag refuses them, errors.ErrUnsupported) and the drag
-// preview picture (the system's cursor shows the effect).
+// Out. StartDrag calls DoDragDrop with an IDataObject and an IDropSource of
+// ours, from the press that is being held. The call is modal: it returns when
+// the drag is over, so StartDrag returns after the drop, the EvDragEnd already
+// queued (macOS returns at once and reports the end from Wait). While it runs
+// the window's own messages still arrive, a timer runs the frame handler for a
+// frame that was asked for (as in the size/move loop), and a drag over our own
+// window is answered from the spec and not through GetData. The data object
+// offers the files as CF_HDROP, text as CF_UNICODETEXT and an image as "PNG"
+// and CF_DIBV5. File promises are not offered here (the virtual-file formats
+// need the size up front or an IStream): ErrPromiseUnsupported. The drag
+// picture is not drawn either: Windows shows its cursor only.
+//
+// The pointer position OLE passes is in screen coordinates, packed in the one
+// register a POINTL by value takes on amd64 and arm64.
 
 // NativeDrag reports whether the OS has native drag and drop: true here.
 const NativeDrag = true
 
-// DragThreshold is how far the pointer moves with the button held before a
-// press becomes a drag, in logical units: Windows' default (SM_CXDRAG).
-func DragThreshold() float32 { return dragThresholdWindows }
+const smCXDrag = 68 // SM_CXDRAG
 
+var (
+	oleDLL  = win32.LoadSystem("ole32.dll") // (appobj_windows.go's ole32 is loaded by StartApp)
+	shell32 = win32.LoadSystem("shell32.dll")
+
+	pOleInit               = win32.Proc(oleDLL, "OleInitialize")
+	pOleUninitialize       = win32.Proc(oleDLL, "OleUninitialize")
+	pRegisterDragDrop      = win32.Proc(oleDLL, "RegisterDragDrop")
+	pRevokeDragDrop        = win32.Proc(oleDLL, "RevokeDragDrop")
+	pDoDragDrop            = win32.Proc(oleDLL, "DoDragDrop")
+	pReleaseStgMedium      = win32.Proc(oleDLL, "ReleaseStgMedium")
+	pSHCreateStdEnumFmtEtc = win32.Proc(shell32, "SHCreateStdEnumFmtEtc")
+	pGetSystemMetrics      = win32.Proc(user32, "GetSystemMetrics")
+)
+
+// DragThreshold is how far the pointer moves with the button held before a
+// press becomes a drag, in logical units: SM_CXDRAG, which the system gives in
+// pixels at its own DPI.
+func DragThreshold() float32 {
+	var px int32
+	if pGetSystemMetrics != 0 {
+		px = int32(win32.Call(pGetSystemMetrics, smCXDrag))
+	}
+	if px <= 0 {
+		return dragThresholdWindows
+	}
+	dpi := float32(defaultDPI)
+	if pGetDpiForSystem != 0 {
+		if d := uint32(win32.Call(pGetDpiForSystem)); d != 0 {
+			dpi = float32(d)
+		}
+	}
+	return float32(px) * defaultDPI / dpi
+}
+
+// OLE's constants.
 const (
-	mkLButton = 0x1
-	mkShift   = 0x4
+	tymedHGlobal    = 1 // TYMED_HGLOBAL
+	dvAspectContent = 1 // DVASPECT_CONTENT
+	dataDirGet      = 1 // DATADIR_GET
+
+	mkShift   = 0x04 // MK_SHIFT, MK_ALT and MK_LBUTTON of a drag's key state (MK_CONTROL is in keys_win.go)
+	mkLButton = 0x01
 	mkAlt     = 0x20
 
-	dropEffectCopy = 1
-	dropEffectMove = 2
-	dropEffectLink = 4
-
-	dragdropSDrop     = 0x00040100
-	dragdropSCancel   = 0x00040101
-	dragdropSDefCurs  = 0x00040102
-	datadirGet        = 1
-	maxDropWorkersWin = 4
+	vtGetData       = 3 // IDataObject, from <objidl.h>: IUnknown's three, then GetData
+	vtQueryGetData  = 5
+	vtAddRef        = 1
+	vtRelease       = 2
+	hrDragDropDrop  = 0x00040100 // DRAGDROP_S_DROP
+	hrDragDropStop  = 0x00040101 // DRAGDROP_S_CANCEL
+	hrUseDefCursors = 0x00040102 // DRAGDROP_S_USEDEFAULTCURSORS
+	hrSameFormat    = 0x00040130 // DATA_S_SAMEFORMATETC
+	hrNotImpl       = 0x80004001
+	hrNoInterface   = 0x80004002
+	hrFail          = 0x80004005
+	hrOutOfMemory   = 0x8007000E
+	hrAdviseNoSup   = 0x80040003 // OLE_E_ADVISENOTSUPPORTED
+	hrFormatEtc     = 0x80040064 // DV_E_FORMATETC
+	hrDvAspect      = 0x80040065 // DV_E_DVASPECT
+	hrTymed         = 0x80040069 // DV_E_TYMED
 )
 
 var (
-	iidIDropTarget = win32.GUID{Data1: 0x00000122, Data4: [8]byte{0xC0, 0, 0, 0, 0, 0, 0, 0x46}}
-	iidIDataObject = win32.GUID{Data1: 0x0000010E, Data4: [8]byte{0xC0, 0, 0, 0, 0, 0, 0, 0x46}}
-	iidIDropSource = win32.GUID{Data1: 0x00000121, Data4: [8]byte{0xC0, 0, 0, 0, 0, 0, 0, 0x46}}
-
-	dragOnce                             sync.Once
-	dropTargetKind, dataKind, sourceKind *com.Kind
-
-	oleWins [MaxWindows]oleWin
-
-	dropFmt   formatEtc // the format of the data being read (heap: OLE reads it)
-	dropMed   stgMedium // and its medium
-	dropBuf   []byte    // a block copied off a drop
-	dropPt    point
-	dropOut   []byte
-	dropSeq   uint64
-	dropDoneQ struct {
-		mu   sync.Mutex
-		done []winDropDone
-	}
-	dropWorkers atomic.Int32
-
-	dragOut     dragOutData
-	dragGen     uint64
-	dragEffect  uint32
-	dragTickets uint64
+	iidUnknown    = win32.GUID{Data1: 0x00000000, Data2: 0, Data3: 0, Data4: [8]byte{0xC0, 0, 0, 0, 0, 0, 0, 0x46}}
+	iidDataObject = win32.GUID{Data1: 0x0000010E, Data2: 0, Data3: 0, Data4: [8]byte{0xC0, 0, 0, 0, 0, 0, 0, 0x46}}
+	iidDropSource = win32.GUID{Data1: 0x00000121, Data2: 0, Data3: 0, Data4: [8]byte{0xC0, 0, 0, 0, 0, 0, 0, 0x46}}
+	iidDropTarget = win32.GUID{Data1: 0x00000122, Data2: 0, Data3: 0, Data4: [8]byte{0xC0, 0, 0, 0, 0, 0, 0, 0x46}}
 )
 
-// oleWin is a window's drag and drop state; Value of its drop target is
-// its index + 1.
-type oleWin struct {
-	w       *Window
-	handler DragHandler
-	kinds   DragKinds
-	target  *com.Object // the IDropTarget while registered
+// formatEtc is FORMATETC and stgMedium STGMEDIUM, with the layout the C
+// compiler gives them on 64-bit Windows.
+type formatEtc struct {
+	cfFormat uint16
+	ptd      uintptr
+	dwAspect uint32
+	lindex   int32
+	tymed    uint32
+}
 
+type stgMedium struct {
+	tymed   uint32
+	hglobal uintptr // the union: the handle, for TYMED_HGLOBAL
+	unkFree uintptr
+}
+
+// oleObj is a COM object of ours: its first word is its vtable (all COM reads),
+// the next the window it belongs to, which a method finds from its this
+// pointer: each window has objects of its own, as each is registered with
+// OLE by itself (D68).
+type oleObj struct {
+	vtbl uintptr
+	w    *Window
+}
+
+// oleWindow is the window of the object this points to (nil for one that
+// belongs to none).
+func oleWindow(this uintptr) *Window {
+	if this == 0 {
+		return nil
+	}
+	return (*oleObj)(win32.Ptr(this)).w
+}
+
+// dropDone is a converted image on its way to the event queue, for the event e.
+type dropDone struct {
+	e    Event
+	data []byte // the PNG; empty: failed
+}
+
+// dragState is the window's drag and drop state.
+type dragState struct {
+	handler DragHandler
+	kinds   DragKinds // what the window is registered for
+
+	oleInit    bool // the objects are set up and the thread is an OLE apartment
+	oleOwn     bool // the window made it one (OleInitialize): Close balances it
+	oleFailed  bool // it could not (the thread is an MTA): not tried again
+	registered bool // RegisterDragDrop is in force
+
+	// The objects OLE is given. They are in the Window, in the heap, so that
+	// their addresses hold.
+	target, source, data oleObj
+
+	// The drag in progress over the window.
 	inside  bool
-	seq     uint64
+	nDrags  uint64 // drags seen, which numbers them
+	seq     uint64 // the number of the current one: the Tag of its events
 	offered DragKinds
 	allowed DragOp
 	items   int
+	obj     uintptr // its IDataObject, referenced; 0 for a drag of our own session
+
+	// Storage for the calls that write through pointers.
+	fe     formatEtc
+	sm     stgMedium
+	locked bool // sm.hglobal is locked
+	fmts   [4]formatEtc
+	nfmts  int
+
+	// Image drops being converted by workers (each holds one place until its
+	// goroutine ends), and their results.
+	workers atomic.Int32
+	nDone   atomic.Int32
+	mu      sync.Mutex
+	done    []dropDone
+
+	// Drag out.
+	active  bool
+	nTicket uint64
+	own     []DragItem // the data of the session in progress
+	effect  uint32     // DoDragDrop's out parameter
 }
 
-// winDropDone is a decoded image on its way to window w's queue.
-type winDropDone struct {
-	w    *Window
-	e    Event
-	data []byte
-}
+// ---- the vtables ----
 
-// dragOutData is the drag out in progress: one at a time.
-type dragOutData struct {
-	gen      uint64 // the data object's Value; 0: none
-	w        *Window
-	ticket   DragTicket
-	ops      DragOp
-	queued   bool // StartDrag posted it; runOLE has not started it
-	running  bool // DoDragDrop is running
-	paths    []string
-	text     string
-	png      []byte
-	data     *com.Object
-	src      *com.Object
-	fmts     [3]formatEtc
-	nf       int
-	dropFile []byte
-}
-
-func dragInit() {
-	dragOnce.Do(func() {
-		dropTargetKind = com.NewKind("IDropTarget", MaxWindows, []win32.GUID{iidIDropTarget}, []com.Method{
-			{N: 4, Fn: targetDragEnter},
-			{N: 3, Fn: targetDragOver},
-			{N: 0, Fn: targetDragLeave},
-			{N: 4, Fn: targetDrop},
-		})
-		dataKind = com.NewKind("IDataObject", 4, []win32.GUID{iidIDataObject}, []com.Method{
-			{N: 2, Fn: dataGetData},
-			{N: 2, Fn: func(*com.Object, com.Args) uintptr { return hresultOf(dvEFormatEtc) }}, // GetDataHere
-			{N: 1, Fn: dataQueryGetData},
-			{N: 2, Fn: dataCanonical},
-			{N: 3, Fn: func(*com.Object, com.Args) uintptr { return hresultOf(eNotImpl) }}, // SetData
-			{N: 2, Fn: dataEnumFormats},
-			{N: 4, Fn: func(*com.Object, com.Args) uintptr { return hresultOf(oleEAdviseNotSu) }}, // DAdvise
-			{N: 1, Fn: func(*com.Object, com.Args) uintptr { return hresultOf(oleEAdviseNotSu) }}, // DUnadvise
-			{N: 1, Fn: func(*com.Object, com.Args) uintptr { return hresultOf(oleEAdviseNotSu) }}, // EnumDAdvise
-		})
-		sourceKind = com.NewKind("IDropSource", 4, []win32.GUID{iidIDropSource}, []com.Method{
-			{N: 2, Fn: sourceQueryContinue},
-			{N: 1, Fn: func(*com.Object, com.Args) uintptr { return dragdropSDefCurs }}, // GiveFeedback
-		})
+func comQI(want *win32.GUID) uintptr {
+	return syscall.NewCallback(func(this, riid, ppv uintptr) uintptr {
+		out := (*uintptr)(win32.Ptr(ppv))
+		if g := (*win32.GUID)(win32.Ptr(riid)); *g == iidUnknown || *g == *want {
+			*out = this
+			return 0
+		}
+		*out = 0
+		return hrNoInterface
 	})
 }
 
-// oleOf is w's drag state, made when create is set; nil otherwise.
-func (w *Window) oleOf(create bool) *oleWin {
-	free := -1
-	for i := range oleWins {
-		if oleWins[i].w == w {
-			return &oleWins[i]
+// The reference count is not kept: the objects are the window's and live as
+// long as it does.
+var (
+	cbAddRef  = syscall.NewCallback(func(this uintptr) uintptr { return 1 })
+	cbRelease = syscall.NewCallback(func(this uintptr) uintptr { return 1 })
+	cbNotImpl = syscall.NewCallback(func(this, a, b uintptr) uintptr { return hrNotImpl })
+)
+
+// IDropTarget: QueryInterface, AddRef, Release, DragEnter, DragOver, DragLeave, Drop.
+var dropTargetVtbl = [7]uintptr{
+	comQI(&iidDropTarget), cbAddRef, cbRelease,
+	syscall.NewCallback(func(this, obj, keys, pt, eff uintptr) uintptr {
+		if w := oleWindow(this); w != nil {
+			w.dragEnter(obj, keys, pt, eff)
 		}
-		if oleWins[i].w == nil && free < 0 {
-			free = i
+		return 0
+	}),
+	syscall.NewCallback(func(this, keys, pt, eff uintptr) uintptr {
+		if w := oleWindow(this); w != nil {
+			w.dragOver(keys, pt, eff)
 		}
-	}
-	if !create || free < 0 {
-		return nil
-	}
-	oleWins[free] = oleWin{w: w}
-	return &oleWins[free]
+		return 0
+	}),
+	syscall.NewCallback(func(this uintptr) uintptr {
+		if w := oleWindow(this); w != nil {
+			w.dragLeft()
+		}
+		return 0
+	}),
+	syscall.NewCallback(func(this, obj, keys, pt, eff uintptr) uintptr {
+		if w := oleWindow(this); w != nil {
+			w.dragDrop(obj, keys, pt, eff)
+		}
+		return 0
+	}),
 }
+
+// IDropSource: QueryInterface, AddRef, Release, QueryContinueDrag, GiveFeedback.
+var dropSourceVtbl = [5]uintptr{
+	comQI(&iidDropSource), cbAddRef, cbRelease,
+	syscall.NewCallback(func(this, escape, keys uintptr) uintptr {
+		switch {
+		case uint32(escape) != 0:
+			return hrDragDropStop
+		case keys&mkLButton == 0:
+			return hrDragDropDrop
+		}
+		return 0
+	}),
+	syscall.NewCallback(func(this, effect uintptr) uintptr { return hrUseDefCursors }),
+}
+
+// IDataObject: QueryInterface, AddRef, Release, GetData, GetDataHere,
+// QueryGetData, GetCanonicalFormatEtc, SetData, EnumFormatEtc, DAdvise,
+// DUnadvise, EnumDAdvise.
+var dataObjectVtbl = [12]uintptr{
+	comQI(&iidDataObject), cbAddRef, cbRelease,
+	syscall.NewCallback(func(this, pfe, pmed uintptr) uintptr {
+		if w := oleWindow(this); w != nil {
+			return w.drag.getData((*formatEtc)(win32.Ptr(pfe)), (*stgMedium)(win32.Ptr(pmed)))
+		}
+		return hrFail
+	}),
+	cbNotImpl,
+	syscall.NewCallback(func(this, pfe uintptr) uintptr {
+		if w := oleWindow(this); w != nil {
+			return w.drag.queryGetData((*formatEtc)(win32.Ptr(pfe)))
+		}
+		return hrFail
+	}),
+	syscall.NewCallback(func(this, pin, pout uintptr) uintptr {
+		(*formatEtc)(win32.Ptr(pout)).ptd = 0
+		return hrSameFormat
+	}),
+	syscall.NewCallback(func(this, pfe, pmed, release uintptr) uintptr { return hrNotImpl }),
+	syscall.NewCallback(func(this, dir, ppenum uintptr) uintptr {
+		if w := oleWindow(this); w != nil && dir == dataDirGet {
+			return w.drag.enumFormats(ppenum)
+		}
+		return hrNotImpl
+	}),
+	syscall.NewCallback(func(this, pfe, advf, sink, conn uintptr) uintptr { return hrAdviseNoSup }),
+	syscall.NewCallback(func(this, conn uintptr) uintptr { return hrAdviseNoSup }),
+	syscall.NewCallback(func(this, ppenum uintptr) uintptr { return hrAdviseNoSup }),
+}
+
+// ---- setup ----
 
 // SetDragHandler sets the function that answers drags over the window (see
 // DragHandler). Without one the window accepts every kind with the first
 // operation the source allows. Main thread.
-func (w *Window) SetDragHandler(h DragHandler) {
-	if s := w.oleOf(h != nil); s != nil {
-		s.handler = h
-	}
-}
+func (w *Window) SetDragHandler(h DragHandler) { w.drag.handler = h }
 
-// SetDropKinds sets the kinds of drag the window takes: it registers its
-// drop target for some, revokes it for none. The window takes no drag until
-// it is called; calling it every frame with the same set costs a
-// comparison. Main thread.
+// SetDropKinds sets the kinds of drag the window takes: it is registered as a
+// drop target for any, and revoked for none. The window takes no drag until it
+// is called; calling it every frame with the same set costs a comparison. Main
+// thread.
 func (w *Window) SetDropKinds(k DragKinds) {
 	k &= DragAny
-	s := w.oleOf(k != 0)
-	if s == nil || s.kinds == k || w.hwnd == 0 {
+	d := &w.drag
+	if k == d.kinds || w.hwnd == 0 {
 		return
 	}
-	s.kinds = k
-	if k == 0 {
-		s.revoke()
-		return
-	}
-	if s.target != nil || !ensureOLE() || pRegisterDragDrop == 0 {
-		return
-	}
-	dragInit()
-	o, _, err := dropTargetKind.New(uintptr(s.index() + 1))
-	if err != nil {
-		return
-	}
-	if win32.HR(win32.Call(pRegisterDragDrop, w.hwnd, o.Ptr())) < 0 {
-		o.Release()
-		return
-	}
-	s.target = o
-}
-
-func (s *oleWin) index() int {
-	return int((uintptr(unsafe.Pointer(s)) - uintptr(unsafe.Pointer(&oleWins[0]))) / unsafe.Sizeof(oleWins[0]))
-}
-
-// revoke takes the window's drop target back from OLE.
-func (s *oleWin) revoke() {
-	if s.target == nil {
-		return
-	}
-	if s.w.hwnd != 0 {
-		win32.Call(pRevokeDragDrop, s.w.hwnd)
-	}
-	s.target.Release()
-	s.target = nil
-	s.inside = false
-}
-
-// closeOLE ends the window's dialogs, drop target and drag before its
-// window is destroyed (Window.Close).
-func (w *Window) closeOLE() {
-	w.abortDialogs()
-	if s := w.oleOf(false); s != nil {
-		s.revoke()
-		*s = oleWin{}
-	}
-	if dragOut.w == w {
-		dragOut.w = nil // a DoDragDrop that runs ends without an EvDragEnd
-		if dragOut.queued {
-			dragOut.queued = false
-			dragOut.release()
+	if k != 0 && !d.registered {
+		if !w.oleSetup() || com.HR(win32.Call(pRegisterDragDrop, w.hwnd, uintptr(unsafe.Pointer(&d.target)))) < 0 {
+			return
 		}
+		d.registered = true
+	}
+	d.kinds = k
+	if k == 0 && d.registered {
+		win32.Call(pRevokeDragDrop, w.hwnd)
+		d.registered = false
+		w.dragLeft()
 	}
 }
 
-// ---- the drop target ----
-
-func targetWin(o *com.Object) *oleWin {
-	i := int(o.Value()) - 1
-	if i < 0 || i >= len(oleWins) || oleWins[i].target != o || oleWins[i].w == nil || oleWins[i].w.hwnd == 0 {
-		return nil
+// oleSetup makes sure the window's thread is an OLE apartment and points the
+// objects at their vtables. StartApp makes the main thread one (D68, rule 1:
+// reg.app.oleThread), and then the window has nothing to start or balance; a
+// window of a thread that is not one starts OLE itself and ends it in Close.
+// It reports false where OLE cannot be used (the thread is an MTA).
+func (w *Window) oleSetup() bool {
+	d := &w.drag
+	if d.oleInit {
+		return true
 	}
-	return &oleWins[i]
+	if d.oleFailed {
+		return false
+	}
+	d.oleFailed = true
+	if pOleInit == 0 || pRegisterDragDrop == 0 || pDoDragDrop == 0 {
+		return false
+	}
+	if tid := uint32(win32.Call(pGetCurrentThreadID)); reg.app.oleThread == 0 || reg.app.oleThread != tid {
+		if com.HR(win32.Call(pOleInit, 0)) < 0 { // S_OK or S_FALSE both need an OleUninitialize
+			return false
+		}
+		d.oleOwn = true
+	}
+	d.oleInit, d.oleFailed = true, false
+	d.target = oleObj{vtbl: uintptr(unsafe.Pointer(&dropTargetVtbl[0])), w: w}
+	d.source = oleObj{vtbl: uintptr(unsafe.Pointer(&dropSourceVtbl[0])), w: w}
+	d.data = oleObj{vtbl: uintptr(unsafe.Pointer(&dataObjectVtbl[0])), w: w}
+	return true
 }
 
-func effectToOp(e uint32) (op DragOp) {
-	if e&dropEffectCopy != 0 {
-		op |= DragOpCopy
+// dragClose ends the window's part in OLE, before it is destroyed.
+func (w *Window) dragClose() {
+	d := &w.drag
+	if d.registered {
+		win32.Call(pRevokeDragDrop, w.hwnd)
+		d.registered = false
 	}
-	if e&dropEffectLink != 0 {
-		op |= DragOpLink
+	w.dragLeft()
+	d.kinds = 0
+	if d.oleOwn {
+		win32.Call(pOleUninitialize)
+		d.oleOwn = false
 	}
-	if e&dropEffectMove != 0 {
-		op |= DragOpMove
-	}
-	return op
+	d.oleInit = false
 }
 
-func opToEffect(op DragOp) uint32 {
-	switch op {
-	case DragOpCopy:
-		return dropEffectCopy
-	case DragOpLink:
-		return dropEffectLink
-	case DragOpMove:
-		return dropEffectMove
-	}
-	return 0
-}
+// ---- the target ----
 
-// keyOps masks the operations a source allows by the modifier keys, as
-// Windows' convention has them; a mask that leaves none is not applied.
-func keyOps(allowed DragOp, keys uint32) DragOp {
-	var want DragOp
-	switch {
-	case keys&mkControl != 0 && keys&mkShift != 0, keys&mkAlt != 0:
-		want = DragOpLink
-	case keys&mkControl != 0:
-		want = DragOpCopy
-	case keys&mkShift != 0:
-		want = DragOpMove
-	default:
-		return allowed
-	}
-	if allowed&want != 0 {
-		return want
-	}
-	return allowed
-}
-
-func keyMods(keys uint32) (m Mods) {
+func dragMods(keys uintptr) (m Mods) {
 	if keys&mkShift != 0 {
 		m |= ModShift
 	}
@@ -316,517 +398,428 @@ func keyMods(keys uint32) (m Mods) {
 	return m
 }
 
-// at converts a POINTL passed by value (one word: x low, y high) in screen
-// pixels to the window's client pixels.
-func (s *oleWin) at(pt uintptr) (x, y float32) {
-	dropPt = point{int32(uint32(pt)), int32(uint32(pt >> 32))}
-	win32.Call(pScreenToClient, s.w.hwnd, uintptr(unsafe.Pointer(&dropPt)))
-	return float32(dropPt.x), float32(dropPt.y)
+// dragPoint is where the drag is, in pixels from the content's top-left: pt is
+// the POINTL in screen coordinates, both halves in one register.
+func (w *Window) dragPoint(pt uintptr) (x, y float32) {
+	w.pt = point{int32(uint32(pt)), int32(uint32(pt >> 32))}
+	win32.Call(pScreenToClient, w.hwnd, uintptr(unsafe.Pointer(&w.pt)))
+	return float32(w.pt.x), float32(w.pt.y)
 }
 
-func (s *oleWin) answer(x, y float32, offered DragKinds, allowed DragOp) DragAnswer {
-	if s.handler == nil {
-		return DragAnswer{Op: Pick(DragOpAll, allowed), Accept: DragAny}
-	}
-	a := s.handler(x, y, offered, allowed)
-	if a.Accept&offered == 0 {
-		return DragAnswer{}
-	}
-	if a.Op&^allowed != 0 || a.Op&(a.Op-1) != 0 {
-		a.Op = Pick(a.Op, allowed)
-	}
-	return a
-}
+func (d *dragState) ownObject() uintptr { return uintptr(unsafe.Pointer(&d.data)) }
 
-func setEffect(p uintptr, e uint32) {
-	if p != 0 {
-		*(*uint32)(win32.Ptr(p)) = e
-	}
-}
-
-func getEffect(p uintptr) uint32 {
-	if p == 0 {
-		return 0
-	}
-	return *(*uint32)(win32.Ptr(p))
-}
-
-// targetDragEnter is IDropTarget::DragEnter(pDataObj, grfKeyState, pt,
-// pdwEffect).
-func targetDragEnter(o *com.Object, a com.Args) uintptr {
-	s := targetWin(o)
-	if s == nil || s.kinds == 0 {
-		setEffect(a[3], 0)
-		return sOK
-	}
-	dropSeq++
-	s.seq = dropSeq
-	s.inside = false
-	s.offered, s.items = offeredKinds(a[0])
-	s.moved(uint32(a[1]), a[2], a[3], true)
-	return sOK
-}
-
-// targetDragOver is IDropTarget::DragOver(grfKeyState, pt, pdwEffect).
-func targetDragOver(o *com.Object, a com.Args) uintptr {
-	s := targetWin(o)
-	if s == nil || s.kinds == 0 {
-		setEffect(a[2], 0)
-		return sOK
-	}
-	s.moved(uint32(a[0]), a[1], a[2], false)
-	return sOK
-}
-
-// moved answers a drag at pt and queues its EvDragEnter or EvDragMove.
-func (s *oleWin) moved(keys uint32, pt, pEffect uintptr, enter bool) {
-	if s.offered&s.kinds == 0 {
-		s.left()
-		setEffect(pEffect, 0)
-		return
-	}
-	x, y := s.at(pt)
-	s.allowed = keyOps(effectToOp(getEffect(pEffect)), keys)
-	ans := s.answer(x, y, s.offered, s.allowed)
-	kind := EvDragMove
-	if enter || !s.inside {
-		kind = EvDragEnter
-	}
-	s.inside = true
-	s.w.q.push(Event{Kind: kind, X: x, Y: y, Code: uint32(s.offered), SelStart: int32(s.allowed), SelLen: int32(s.items),
-		Mods: keyMods(keys), Tag: s.seq, Time: Now()})
-	if NativeLoop() {
-		s.w.RequestFrame() // our own drag, or a dialog's loop: the frame handler draws the highlight
-	}
-	setEffect(pEffect, opToEffect(ans.Op))
-}
-
-// left ends the drag over the window, if one is in progress.
-func (s *oleWin) left() {
-	if !s.inside {
-		return
-	}
-	s.inside = false
-	s.w.q.push(Event{Kind: EvDragLeave, Tag: s.seq, Time: Now()})
-	if NativeLoop() {
-		s.w.RequestFrame()
-	}
-}
-
-// targetDragLeave is IDropTarget::DragLeave().
-func targetDragLeave(o *com.Object, _ com.Args) uintptr {
-	if s := targetWin(o); s != nil {
-		s.left()
-	}
-	return sOK
-}
-
-// targetDrop is IDropTarget::Drop(pDataObj, grfKeyState, pt, pdwEffect): it
-// takes the drop if the handler does and copies its data before it
-// returns.
-func targetDrop(o *com.Object, a com.Args) uintptr {
-	s := targetWin(o)
-	if s == nil || s.kinds == 0 {
-		setEffect(a[3], 0)
-		return sOK
-	}
-	obj, keys := a[0], uint32(a[1])
-	offered, items := offeredKinds(obj)
-	x, y := s.at(a[2])
-	allowed := keyOps(effectToOp(getEffect(a[3])), keys)
-	ans := s.answer(x, y, offered, allowed)
-	take := offered & ans.Accept & s.kinds
-	if ans.Op == DragOpNone || take == 0 {
-		s.left()
-		setEffect(a[3], 0)
-		return sOK
-	}
-	s.inside = false // the drop ends the drag over the window; no EvDragLeave follows
-	e := Event{Kind: EvDrop, X: x, Y: y, SelStart: int32(items), Tag: ans.Target, Mods: keyMods(keys), Time: Now()}
-	switch {
-	case take&DragFiles != 0:
-		e.Code = uint32(DragFiles)
-		paths, n := readDropFiles(obj)
-		s.w.pushDrop(e, paths, n)
-	case take&DragImage != 0:
-		e.Code = uint32(DragImage)
-		s.dropImage(e, obj)
-	default:
-		e.Code = uint32(DragText)
-		s.w.pushDrop(e, readDropText(obj), 0)
-	}
-	if NativeLoop() {
-		s.w.RequestFrame()
-	}
-	setEffect(a[3], opToEffect(ans.Op))
-	return sOK
-}
-
-// pushDrop queues e with data (a failed drop when there is none); n, if not
-// zero, is the number of items.
-func (w *Window) pushDrop(e Event, data []byte, n int) {
-	q := &w.q
-	if n != 0 {
-		e.SelStart = int32(n)
-	}
-	if len(data) == 0 || len(data) > MaxPaste {
-		e.Flags |= FlagFailed
-	} else {
-		off := len(q.text)
-		q.text = append(q.text, data...)
-		e.Text = TextRef{uint32(off), uint32(len(data))}
-	}
-	q.push(e)
-}
-
-// hasFormat reports whether data object obj offers format cf in an HGLOBAL.
-func hasFormat(obj uintptr, cf uint32) bool {
-	dropFmt = formatEtc{cf: uint16(cf), aspect: dvaspectContent, lindex: -1, tymed: tymedHGlobal}
-	return win32.HR(win32.Com(obj, 5 /* QueryGetData */, uintptr(unsafe.Pointer(&dropFmt)))) == sOK
-}
-
-// readDropFormat copies format cf of obj into dropBuf, at most limit bytes; false
-// when it has none, it is not an HGLOBAL, or it is bigger.
-func readDropFormat(obj uintptr, cf uint32, limit int) bool {
-	dropFmt = formatEtc{cf: uint16(cf), aspect: dvaspectContent, lindex: -1, tymed: tymedHGlobal}
-	dropMed = stgMedium{}
-	if win32.HR(win32.Com(obj, 3 /* GetData */, uintptr(unsafe.Pointer(&dropFmt)), uintptr(unsafe.Pointer(&dropMed)))) < 0 {
+// has reports whether the data object offers format cf as global memory.
+func (d *dragState) has(obj uintptr, cf uint32) bool {
+	if cf == 0 {
 		return false
 	}
-	ok := false
-	if dropMed.tymed == tymedHGlobal && dropMed.data != 0 {
-		n := int(win32.Call(pGlobalSize, dropMed.data))
-		if p := win32.Call(pGlobalLock, dropMed.data); p != 0 {
-			if n <= limit {
-				dropBuf = append(dropBuf[:0], unsafe.Slice((*byte)(win32.Ptr(p)), n)...)
-				ok = true
-			}
-			win32.Call(pGlobalUnlock, dropMed.data)
-		}
-	}
-	win32.Call(pReleaseStgMedium, uintptr(unsafe.Pointer(&dropMed)))
-	return ok
+	d.fe = formatEtc{cfFormat: uint16(cf), dwAspect: dvAspectContent, lindex: -1, tymed: tymedHGlobal}
+	return uint32(com.Call(obj, vtQueryGetData, uintptr(unsafe.Pointer(&d.fe)))) == 0
 }
 
-// offeredKinds is the kinds a data object offers, and how many items (the
-// files of a CF_HDROP, else 1).
-func offeredKinds(obj uintptr) (k DragKinds, items int) {
-	if obj == 0 {
-		return 0, 0
+// fetch asks the data object for format cf and returns its memory, locked, or
+// nil. dispose ends the use of it.
+func (d *dragState) fetch(obj uintptr, cf uint32) []byte {
+	d.fe = formatEtc{cfFormat: uint16(cf), dwAspect: dvAspectContent, lindex: -1, tymed: tymedHGlobal}
+	d.sm = stgMedium{}
+	if com.HR(com.Call(obj, vtGetData, uintptr(unsafe.Pointer(&d.fe)), uintptr(unsafe.Pointer(&d.sm)))) < 0 {
+		return nil
 	}
+	if d.sm.tymed != tymedHGlobal || d.sm.hglobal == 0 {
+		d.dispose()
+		return nil
+	}
+	p := win32.Call(pGlobalLock, d.sm.hglobal)
+	if p == 0 {
+		d.dispose()
+		return nil
+	}
+	d.locked = true
+	return unsafe.Slice((*byte)(win32.Ptr(p)), int(win32.Call(pGlobalSize, d.sm.hglobal)))
+}
+
+// dispose releases the medium of the last fetch; the slice it returned is dead.
+func (d *dragState) dispose() {
+	if d.locked {
+		win32.Call(pGlobalUnlock, d.sm.hglobal)
+		d.locked = false
+	}
+	win32.Call(pReleaseStgMedium, uintptr(unsafe.Pointer(&d.sm)))
+	d.sm = stgMedium{}
+}
+
+// offeredKinds is the kinds the data object offers, and how many files it holds
+// (1 for the other kinds).
+func (d *dragState) offeredKinds(obj uintptr) (k DragKinds, items int) {
 	f := clipFormats()
 	items = 1
-	if hasFormat(obj, cfHDrop) {
+	if d.has(obj, cfHDrop) {
 		k |= DragFiles
-		if readDropFormat(obj, cfHDrop, maxDropBlock) {
-			if out, n, ok := appendDropFiles(dropOut[:0], dropBuf, MaxPaste, acpToUTF8); ok && n > 0 {
-				items = n
-				dropOut = out[:0]
+		if blk := d.fetch(obj, cfHDrop); blk != nil {
+			if len(blk) <= maxDropBlock {
+				if _, n, _ := appendDropFiles(nil, blk, MaxPaste, acpToUTF8); n > 0 {
+					items = n
+				}
 			}
+			d.dispose()
 		}
 	}
-	if hasFormat(obj, f.png) || hasFormat(obj, cfDIBV5) || hasFormat(obj, cfDIB) {
+	if d.has(obj, f.png) || d.has(obj, cfDIBV5) || d.has(obj, cfDIB) {
 		k |= DragImage
 	}
-	if hasFormat(obj, cfUnicodeText) {
+	if d.has(obj, cfUnicodeText) {
 		k |= DragText
 	}
 	return k, items
 }
 
-// readDropFiles returns the paths of obj's CF_HDROP, each ended by a NUL,
-// and how many; nil when they are over MaxPaste.
-func readDropFiles(obj uintptr) ([]byte, int) {
-	if !readDropFormat(obj, cfHDrop, maxDropBlock) {
-		return nil, 0
-	}
-	out, n, ok := appendDropFiles(nil, dropBuf, MaxPaste, acpToUTF8)
-	if !ok {
-		return nil, 0
-	}
-	return out, n
-}
-
-// readDropText returns obj's CF_UNICODETEXT as UTF-8; nil over MaxPaste.
-func readDropText(obj uintptr) []byte {
-	if !readDropFormat(obj, cfUnicodeText, 2*MaxPaste+2) {
-		return nil
-	}
-	u := unsafe.Slice((*uint16)(unsafe.Pointer(unsafe.SliceData(dropBuf))), len(dropBuf)/2)
-	out, ok := utf16Decode(nil, u, MaxPaste)
-	if !ok {
-		return nil
-	}
-	return out
-}
-
-// dropImage takes the image of the drop: a PNG as it is, a DIB converted on a
-// worker (its EvDrop arrives later).
-func (s *oleWin) dropImage(e Event, obj uintptr) {
-	if f := clipFormats(); readDropFormat(obj, f.png, maxClipSource) {
-		if n := pngEnd(dropBuf); n > 0 && n <= MaxPaste {
-			s.w.pushDrop(e, dropBuf[:n], 0)
-			return
-		}
-	}
-	for _, cf := range [...]uint32{cfDIBV5, cfDIB} {
-		if !readDropFormat(obj, cf, maxClipSource) || len(dropBuf) < 40 {
-			continue
-		}
-		if dropWorkers.Load() >= maxDropWorkersWin {
-			break
-		}
-		dropWorkers.Add(1)
-		dib := append([]byte(nil), dropBuf...)
-		go decodeDIBDrop(s.w, e, dib)
+// dragEnter is IDropTarget::DragEnter: obj is the IDataObject, keys the key
+// state, pt the position and eff the effects the source allows, which the
+// call replaces with the one the window answers.
+func (w *Window) dragEnter(obj, keys, pt, eff uintptr) {
+	d := &w.drag
+	e := (*uint32)(win32.Ptr(eff))
+	allowed := opsOfEffects(*e)
+	*e = effectNone
+	d.releaseObj()
+	if d.kinds == 0 {
 		return
 	}
-	s.w.pushDrop(e, nil, 0)
+	var offered DragKinds
+	items := 1
+	if obj == d.ownObject() {
+		offered, items = specKinds(d.own), len(d.own)
+	} else {
+		offered, items = d.offeredKinds(obj)
+	}
+	if offered&d.kinds == 0 {
+		return
+	}
+	if obj != d.ownObject() {
+		com.Call(obj, vtAddRef)
+		d.obj = obj
+	}
+	d.nDrags++
+	d.seq, d.inside = d.nDrags, true
+	d.offered, d.allowed, d.items = offered, allowed, items
+	w.dragMoved(keys, pt, e, EvDragEnter)
 }
 
-// decodeDIBDrop runs on a worker goroutine: it converts the DIB to PNG and
-// hands the result to the pump (reapDrops).
-func decodeDIBDrop(w *Window, e Event, dib []byte) {
+// dragOver is IDropTarget::DragOver.
+func (w *Window) dragOver(keys, pt, eff uintptr) {
+	d := &w.drag
+	e := (*uint32)(win32.Ptr(eff))
+	if !d.inside {
+		*e = effectNone
+		return
+	}
+	d.allowed = opsOfEffects(*e)
+	w.dragMoved(keys, pt, e, EvDragMove)
+}
+
+// dragMoved answers the drag at pt and queues kind.
+func (w *Window) dragMoved(keys, pt uintptr, eff *uint32, kind EventKind) {
+	d := &w.drag
+	x, y := w.dragPoint(pt)
+	ans := answerDrag(d.handler, x, y, d.offered, d.allowed)
+	*eff = effectsOfOps(ans.Op)
+	w.q.push(Event{Kind: kind, X: x, Y: y, Code: uint32(d.offered), SelStart: int32(d.allowed), SelLen: int32(d.items),
+		Mods: dragMods(keys), Tag: d.seq, Time: Now()})
+	if d.active { // our own session runs a loop of OLE's: the timer hands the frame to the frame handler
+		w.RequestFrame()
+	}
+}
+
+// dragLeft ends the drag over the window, if one is in progress (IDropTarget::DragLeave).
+func (w *Window) dragLeft() {
+	d := &w.drag
+	if d.inside {
+		d.inside = false
+		w.q.push(Event{Kind: EvDragLeave, Tag: d.seq, Time: Now()})
+		if d.active {
+			w.RequestFrame() // a frame that clears the highlight
+		}
+	}
+	d.releaseObj()
+}
+
+// releaseObj lets go of the data object of the drag over the window.
+func (d *dragState) releaseObj() {
+	if d.obj != 0 {
+		com.Call(d.obj, vtRelease)
+		d.obj = 0
+	}
+}
+
+// dragDrop is IDropTarget::Drop: it takes the drop if the handler does and
+// copies the data before it returns.
+func (w *Window) dragDrop(obj, keys, pt, eff uintptr) {
+	d := &w.drag
+	e := (*uint32)(win32.Ptr(eff))
+	allowed := opsOfEffects(*e)
+	*e = effectNone
+	if !d.inside {
+		return
+	}
+	x, y := w.dragPoint(pt)
+	ans := answerDrag(d.handler, x, y, d.offered, allowed)
+	take := d.offered & ans.Accept
+	if ans.Op == DragOpNone || take == 0 {
+		w.dragLeft()
+		return
+	}
+	d.inside = false // the drop ends the drag over the window; no EvDragLeave follows
+	kind := dropKind(take)
+	ev := Event{Kind: EvDrop, X: x, Y: y, Code: uint32(kind), SelStart: int32(d.items), Tag: ans.Target, Mods: dragMods(keys), Time: Now()}
+	*e = effectsOfOps(ans.Op)
+	own := obj == d.ownObject()
+	switch kind {
+	case DragFiles:
+		var paths []byte
+		n := 0
+		if own {
+			paths, n = ownPaths(d.own, MaxPaste)
+		} else if blk := d.fetch(obj, cfHDrop); blk != nil {
+			if len(blk) <= maxDropBlock {
+				var ok bool
+				if paths, n, ok = appendDropFiles(nil, blk, MaxPaste, acpToUTF8); !ok {
+					paths, n = nil, 0
+				}
+			}
+			d.dispose()
+		}
+		w.q.pushDropData(ev, paths, n)
+	case DragText:
+		var txt []byte
+		if own {
+			txt = ownText(d.own, MaxPaste)
+		} else if blk := d.fetch(obj, cfUnicodeText); blk != nil {
+			u := unsafe.Slice((*uint16)(unsafe.Pointer(unsafe.SliceData(blk))), len(blk)/2)
+			var ok bool
+			if txt, ok = utf16Decode(nil, u, MaxPaste); !ok {
+				txt = nil
+			}
+			d.dispose()
+		}
+		w.q.pushDropData(ev, txt, 0)
+	default:
+		w.dropImage(ev, obj, own)
+	}
+	d.releaseObj()
+}
+
+// dropImage takes the image of the drop: the PNG as it is, else a copy of the
+// DIB for a worker to convert.
+func (w *Window) dropImage(ev Event, obj uintptr, own bool) {
+	d := &w.drag
+	if own {
+		w.q.pushDropData(ev, ownPNG(d.own), 0)
+		return
+	}
+	if f := clipFormats(); d.has(obj, f.png) {
+		if blk := d.fetch(obj, f.png); blk != nil {
+			n := pngEnd(blk)
+			if n > 0 && n <= MaxPaste {
+				w.q.pushDropData(ev, blk[:n], 0)
+				d.dispose()
+				return
+			}
+			d.dispose()
+			if n > MaxPaste {
+				w.q.pushDropData(ev, nil, 0)
+				return
+			}
+		}
+	}
+	for _, format := range [...]uint32{cfDIBV5, cfDIB} {
+		if !d.has(obj, format) {
+			continue
+		}
+		blk := d.fetch(obj, format)
+		if len(blk) < 40 || len(blk) > maxClipSource {
+			d.dispose()
+			continue
+		}
+		dib := append([]byte(nil), blk...)
+		d.dispose()
+		if int(d.workers.Load()) >= maxDropWorkers {
+			break
+		}
+		d.workers.Add(1)
+		go d.convertDIB(ev, dib)
+		return
+	}
+	w.q.pushDropData(ev, nil, 0)
+}
+
+// convertDIB runs on a worker goroutine: it converts the bitmap to PNG and
+// queues the result for the event e.
+func (d *dragState) convertDIB(e Event, dib []byte) {
 	png, err := dibToPNG(nil, dib, MaxPaste)
 	if err != nil {
 		png = nil
 	}
-	dropDoneQ.mu.Lock()
-	dropDoneQ.done = append(dropDoneQ.done, winDropDone{w: w, e: e, data: png})
-	dropDoneQ.mu.Unlock()
-	dropWorkers.Add(-1)
-	postOLE(oleRunDrops)
+	d.mu.Lock()
+	d.done = append(d.done, dropDone{e: e, data: png})
+	d.mu.Unlock()
+	d.nDone.Add(1)
+	d.workers.Add(-1)
+	Wake()
 }
 
-// reapDrops queues the images the workers converted, to windows still open.
-func reapDrops() {
-	dropDoneQ.mu.Lock()
-	done := dropDoneQ.done
-	dropDoneQ.done = nil
-	dropDoneQ.mu.Unlock()
-	for _, d := range done {
-		if d.w.hwnd != 0 && reg.byHWND(d.w.hwnd) == d.w {
-			d.w.pushDrop(d.e, d.data, 0)
-		}
+// reapDrags queues the images the workers converted. It runs on the main
+// thread, from a wake and from Wait.
+func (w *Window) reapDrags() {
+	d := &w.drag
+	if d.nDone.Load() == 0 {
+		return
+	}
+	d.mu.Lock()
+	done := d.done
+	d.done = nil
+	d.mu.Unlock()
+	d.nDone.Add(-int32(len(done)))
+	for _, r := range done {
+		w.q.pushDropData(r.e, r.data, 0)
 	}
 }
 
-// ---- the drag out ----
+// ---- the source ----
 
-var errNoPromises = fmt.Errorf("platform: file promises: %w", ErrDragUnsupported)
-
-// StartDrag starts a drag out of the window from the left-button press being
-// held: the paths, text and image of the spec go into an IDataObject, and
-// DoDragDrop runs at the pump's next turn. EvDragEnd reports the end with
-// the ticket returned. File promises are refused (errors.ErrUnsupported) and
-// the preview is not shown. Main thread, at a safe point.
-func (w *Window) StartDrag(spec *DragSpec) (DragTicket, error) {
-	if err := spec.Validate(); err != nil {
+// StartDrag starts a drag out from the press that is being held. On Windows
+// the call returns when the drag is over (see the overview), with EvDragEnd
+// queued.
+func (w *Window) StartDrag(s *DragSpec) (DragTicket, error) {
+	if w.hwnd == 0 {
+		return 0, ErrDragSpec
+	}
+	if err := s.Validate(); err != nil {
 		return 0, err
 	}
-	for i := range spec.Items {
-		if spec.Items[i].Promise != nil {
-			return 0, errNoPromises
-		}
+	if specHasPromise(s) {
+		return 0, ErrPromiseUnsupported
 	}
-	switch {
-	case w.hwnd == 0:
-		return 0, ErrDragSpec
-	case dragOut.gen != 0:
+	d := &w.drag
+	if d.active {
 		return 0, ErrDragBusy
-	case w.buttons&(1<<ButtonLeft) == 0:
+	}
+	if w.buttons&(1<<ButtonLeft) == 0 {
 		return 0, ErrNoPress
 	}
-	if !ensureOLE() || pDoDragDrop == 0 {
+	if !w.oleSetup() {
 		return 0, ErrDragRefused
 	}
-	dragInit()
-	if err := dragOut.fill(w, spec); err != nil {
-		return 0, err
+	ops := s.Ops
+	if ops == DragOpNone {
+		ops = DragOpCopy
 	}
-	dragOut.queued = true
-	postOLE(oleRunDrag)
-	return dragOut.ticket, nil
-}
-
-// fill makes the data object and the source of a drag out of w.
-func (d *dragOutData) fill(w *Window, spec *DragSpec) error {
-	dragGen++
-	dragTickets++
-	*d = dragOutData{gen: dragGen, w: w, ticket: DragTicket(dragTickets), ops: spec.Ops, fmts: d.fmts}
-	if d.ops == 0 {
-		d.ops = DragOpCopy
+	d.nTicket++
+	ticket := DragTicket(d.nTicket)
+	d.active, d.own, d.effect = true, s.Items, effectNone
+	enterModal() // DoDragDrop is a native modal loop: the app's windows keep drawing (modalTick) and its wakes are dispatched
+	hr := uint32(win32.Call(pDoDragDrop, uintptr(unsafe.Pointer(&d.data)), uintptr(unsafe.Pointer(&d.source)),
+		uintptr(effectsOfOps(ops)), uintptr(unsafe.Pointer(&d.effect))))
+	leaveModal()
+	d.active, d.own = false, nil
+	// The release of the button went to OLE, not to us.
+	w.buttons = 0
+	win32.Call(pReleaseCapture)
+	if int32(hr) < 0 {
+		return 0, ErrDragRefused
 	}
-	for i := range spec.Items {
-		it := &spec.Items[i]
-		switch {
-		case it.Path != "":
-			d.paths = append(d.paths, it.Path)
-		case it.Text != "" && d.text == "":
-			d.text = it.Text
-		case len(it.PNG) > 0 && d.png == nil:
-			d.png = append([]byte(nil), it.PNG...)
+	op := DragOpNone
+	if hr == hrDragDropDrop {
+		op = Pick(opsOfEffects(d.effect), DragOpAll)
+		if d.effect == effectNone {
+			op = DragOpNone
 		}
 	}
-	d.nf = 0
-	add := func(cf uint32) {
-		d.fmts[d.nf] = formatEtc{cf: uint16(cf), aspect: dvaspectContent, lindex: -1, tymed: tymedHGlobal}
-		d.nf++
-	}
-	if len(d.paths) > 0 {
-		add(cfHDrop)
-		d.dropFile = buildDropFiles(nil, d.paths)
-	}
-	if d.png != nil {
-		add(clipFormats().png)
-	}
-	if d.text != "" {
-		add(cfUnicodeText)
-	}
-	var err error
-	if d.data, _, err = dataKind.New(uintptr(d.gen)); err != nil {
-		*d = dragOutData{}
-		return ErrDragBusy
-	}
-	if d.src, _, err = sourceKind.New(uintptr(d.gen)); err != nil {
-		d.data.Release()
-		*d = dragOutData{}
-		return ErrDragBusy
-	}
-	return nil
+	w.q.push(Event{Kind: EvDragEnd, Tag: uint64(ticket), Code: uint32(op), Time: Now()})
+	return ticket, nil
 }
 
-// release drops our references to the drag's objects and ends it.
-func (d *dragOutData) release() {
-	if d.data != nil {
-		d.data.Release()
-	}
-	if d.src != nil {
-		d.src.Release()
-	}
-	*d = dragOutData{fmts: d.fmts}
-}
+// ---- the data object of a drag of ours ----
 
-// runPendingDrag runs the drag StartDrag posted, if any: DoDragDrop, then
-// EvDragEnd. Called by runOLE.
-func runPendingDrag() bool {
-	d := &dragOut
-	if !d.queued {
+// supports reports whether the session's data object offers format cf.
+func (d *dragState) supports(cf uint32) bool {
+	if cf == 0 {
 		return false
 	}
-	d.queued, d.running = false, true
-	w := d.w
-	enterModal()
-	dragEffect = 0
-	hr := uint32(win32.Call(pDoDragDrop, d.data.Ptr(), d.src.Ptr(), uintptr(opToEffect(d.ops&DragOpCopy)|opToEffect(d.ops&DragOpLink)|opToEffect(d.ops&DragOpMove)),
-		uintptr(unsafe.Pointer(&dragEffect))))
-	leaveModal()
-	op := DragOpNone
-	if hr == dragdropSDrop {
-		op = effectToOp(dragEffect)
-		if op&(op-1) != 0 { // more than one: a target that answered a set
-			op = Pick(op, op)
-		}
+	k := specKinds(d.own)
+	f := clipFormats()
+	switch cf {
+	case cfHDrop:
+		return k&DragFiles != 0
+	case cfUnicodeText:
+		return k&DragText != 0
+	case f.png, cfDIBV5:
+		return k&DragImage != 0
 	}
-	if w = d.w; w != nil && w.hwnd != 0 {
-		w.q.push(Event{Kind: EvDragEnd, Tag: uint64(d.ticket), Code: uint32(op), Time: Now()})
-		w.buttons &^= 1 << ButtonLeft // the release went to DoDragDrop's loop
-	}
-	d.release()
-	return true
+	return false
 }
 
-// sourceQueryContinue is IDropSource::QueryContinueDrag(fEscapePressed,
-// grfKeyState).
-func sourceQueryContinue(o *com.Object, a com.Args) uintptr {
+// queryGetData is IDataObject::QueryGetData.
+func (d *dragState) queryGetData(fe *formatEtc) uintptr {
 	switch {
-	case uint32(a[0]) != 0:
-		return dragdropSCancel
-	case uint32(a[1])&mkLButton == 0:
-		return dragdropSDrop
+	case fe.dwAspect != dvAspectContent:
+		return hrDvAspect
+	case !d.supports(uint32(fe.cfFormat)):
+		return hrFormatEtc
+	case fe.tymed&tymedHGlobal == 0:
+		return hrTymed
 	}
-	return sOK
+	return 0
 }
 
-// dataOf reports whether o is the data object of the drag in progress.
-func dataOf(o *com.Object) bool { return dragOut.gen != 0 && o.Value() == uintptr(dragOut.gen) }
-
-// dataFormat is the index in dragOut.fmts of the format FORMATETC p asks
-// for, -1 if none.
-func dataFormat(p uintptr) int {
-	if p == 0 {
-		return -1
-	}
-	f := (*formatEtc)(win32.Ptr(p))
-	if f.tymed&tymedHGlobal == 0 || f.aspect != dvaspectContent || (f.lindex != -1 && f.lindex != 0) {
-		return -1
-	}
-	for i := 0; i < dragOut.nf; i++ {
-		if dragOut.fmts[i].cf == f.cf {
-			return i
-		}
-	}
-	return -1
-}
-
-// dataGetData is IDataObject::GetData(pformatetcIn, pmedium): a new HGLOBAL
-// the receiver frees (ReleaseStgMedium).
-func dataGetData(o *com.Object, a com.Args) uintptr {
-	if a[1] == 0 {
-		return hresultOf(ePointer)
-	}
-	i := dataFormat(a[0])
-	if !dataOf(o) || i < 0 {
-		return hresultOf(dvEFormatEtc)
+// getData is IDataObject::GetData: the data in global memory, which the caller
+// releases.
+func (d *dragState) getData(fe *formatEtc, sm *stgMedium) uintptr {
+	if hr := d.queryGetData(fe); hr != 0 {
+		return hr
 	}
 	var mem uintptr
-	switch uint32(dragOut.fmts[i].cf) {
+	switch cf, f := uint32(fe.cfFormat), clipFormats(); cf {
 	case cfHDrop:
-		mem = allocClipboardBytes(dragOut.dropFile)
+		mem = allocClipboardBytes(buildDropFiles(ownFilePaths(d.own)))
 	case cfUnicodeText:
-		mem = allocClipboardText([]byte(dragOut.text))
-	default:
-		mem = allocClipboardBytes(dragOut.png)
+		mem = allocClipboardText(ownText(d.own, MaxPaste))
+	case f.png:
+		mem = allocClipboardBytes(ownPNG(d.own))
+	case cfDIBV5:
+		if dib, err := pngToDIBV5(nil, ownPNG(d.own)); err == nil {
+			mem = allocClipboardBytes(dib)
+		}
 	}
 	if mem == 0 {
-		return hresultOf(0x8007000E) // E_OUTOFMEMORY
+		return hrOutOfMemory
 	}
-	m := (*stgMedium)(win32.Ptr(a[1]))
-	*m = stgMedium{tymed: tymedHGlobal, data: mem}
-	return sOK
+	*sm = stgMedium{tymed: tymedHGlobal, hglobal: mem}
+	return 0
 }
 
-// dataQueryGetData is IDataObject::QueryGetData(pformatetc).
-func dataQueryGetData(o *com.Object, a com.Args) uintptr {
-	if !dataOf(o) || dataFormat(a[0]) < 0 {
-		return hresultOf(dvEFormatEtc)
+// enumFormats is IDataObject::EnumFormatEtc for DATADIR_GET: the shell's
+// standard enumerator over the formats the session offers.
+func (d *dragState) enumFormats(ppenum uintptr) uintptr {
+	if pSHCreateStdEnumFmtEtc == 0 {
+		return hrNotImpl
 	}
-	return sOK
-}
-
-// dataCanonical is IDataObject::GetCanonicalFormatEtc(in, out): the same
-// format.
-func dataCanonical(o *com.Object, a com.Args) uintptr {
-	if a[1] == 0 {
-		return hresultOf(ePointer)
+	d.nfmts = 0
+	add := func(cf uint32) {
+		if cf != 0 {
+			d.fmts[d.nfmts] = formatEtc{cfFormat: uint16(cf), dwAspect: dvAspectContent, lindex: -1, tymed: tymedHGlobal}
+			d.nfmts++
+		}
 	}
-	out := (*formatEtc)(win32.Ptr(a[1]))
-	if a[0] != 0 {
-		*out = *(*formatEtc)(win32.Ptr(a[0]))
+	k := specKinds(d.own)
+	if k&DragFiles != 0 {
+		add(cfHDrop)
 	}
-	out.ptd = 0
-	return dataSSameFmtEtc
-}
-
-// dataEnumFormats is IDataObject::EnumFormatEtc(dwDirection, ppenum): the
-// shell's enumerator over the formats.
-func dataEnumFormats(o *com.Object, a com.Args) uintptr {
-	if a[1] == 0 {
-		return hresultOf(ePointer)
+	if k&DragImage != 0 {
+		add(clipFormats().png)
+		add(cfDIBV5)
 	}
-	*(*uintptr)(win32.Ptr(a[1])) = 0
-	if uint32(a[0]) != datadirGet || !dataOf(o) || pSHCreateEnumFmtEtc == 0 {
-		return hresultOf(eNotImpl)
+	if k&DragText != 0 {
+		add(cfUnicodeText)
 	}
-	return win32.Call(pSHCreateEnumFmtEtc, uintptr(dragOut.nf), uintptr(unsafe.Pointer(&dragOut.fmts[0])), a[1])
+	return win32.Call(pSHCreateStdEnumFmtEtc, uintptr(d.nfmts), uintptr(unsafe.Pointer(&d.fmts[0])), ppenum)
 }

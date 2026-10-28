@@ -6,8 +6,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"image"
-	"image/png"
+	"os"
+	"runtime"
 	"testing"
 	"time"
 	"unsafe"
@@ -16,347 +16,362 @@ import (
 	"gonativeui/internal/win32"
 )
 
-// OLE drag and drop on Windows (W8). A drop is simulated by calling the
-// window's IDropTarget through its vtable, as OLE does, with our own
-// IDataObject (the one a drag out offers); a real drag out runs DoDragDrop
-// over our own window with the mouse driven by SendInput.
-
+// The test drives the window's IDropTarget through its vtable, as OLE does,
+// with a data object that is a second object of ours (so the drop reads it
+// through GetData like any foreign source). Memory OLE-style calls write
+// through is in package variables, as internal/com requires.
 var (
-	pClientToScreenT  = win32.Proc(user32, "ClientToScreen")
-	pSendInputT       = win32.Proc(user32, "SendInput")
-	pGetSystemMetricT = win32.Proc(user32, "GetSystemMetrics")
-
-	tEffect uint32
-	tPt     point
-	tEnum   uintptr
-	tFmts   [4]formatEtc
-	tGot    uint32
-	tInput  mouseInput
+	testEffect uint32
+	testSource oleObj // a foreign IDataObject: the vtable of ours, another address
+	testFE     formatEtc
+	testSM     stgMedium
 )
 
-// mouseInput is INPUT with a MOUSEINPUT (40 bytes on 64-bit Windows).
-type mouseInput struct {
-	typ               uint32
-	_                 uint32
-	dx, dy            int32
-	data, flags, time uint32
-	_                 uint32
-	extra             uintptr
-}
-
-// IDropTarget's methods after IUnknown.
-const (
-	vtDTEnter = 3
-	vtDTOver  = 4
-	vtDTLeave = 5
-	vtDTDrop  = 6
-)
-
-// screenPt is the POINTL word OLE passes for client point (x, y) of w.
-func screenPt(w *Window, x, y int32) uintptr {
-	tPt = point{x, y}
-	win32.Call(pClientToScreenT, w.hwnd, uintptr(unsafe.Pointer(&tPt)))
-	return uintptr(uint32(tPt.x)) | uintptr(uint32(tPt.y))<<32
-}
-
-// dropTargetOf is w's registered IDropTarget, or 0.
-func dropTargetOf(w *Window) uintptr {
-	if s := w.oleOf(false); s != nil && s.target != nil {
-		return s.target.Ptr()
-	}
-	return 0
-}
-
-// newTestData makes the data object a drag of spec would offer (dragOut);
-// release it with dragOut.release.
-func newTestData(t *testing.T, w *Window, spec *DragSpec) uintptr {
+func openDragWindow(t *testing.T) *Window {
 	t.Helper()
-	if !ensureOLE() {
-		t.Skip("no OLE apartment")
+	runtime.LockOSThread()
+	t.Cleanup(runtime.UnlockOSThread)
+	w, err := Open(Options{Title: "gnui drag test", Width: 320, Height: 200, Hidden: true})
+	if err != nil {
+		t.Skipf("no window: %v", err)
 	}
-	dragInit()
-	if err := dragOut.fill(w, spec); err != nil {
-		t.Fatal(err)
-	}
-	return dragOut.data.Ptr()
+	t.Cleanup(w.Close)
+	return w
 }
 
-func takeEvents(w *Window) []Event {
-	Pump(0)
-	return append([]Event(nil), w.Events()...)
+func packPoint(x, y int32) uintptr { return uintptr(uint32(x)) | uintptr(uint32(y))<<32 }
+
+// drag calls IDropTarget slot with the source and the effects.
+func dragCall(w *Window, slot uintptr, args ...uintptr) {
+	com.Call(uintptr(unsafe.Pointer(&w.drag.target)), slot, args...)
 }
 
-// A simulated drop: enter, move and drop through the window's IDropTarget
-// queue EvDragEnter, EvDragMove and EvDrop with the client positions, the
-// kinds offered, the items, the handler's target and the paths; the effect
-// answered is the handler's. Leave, a refused drag and a text-only window
-// follow.
-func TestDropThroughIDropTarget(t *testing.T) {
-	lockThread(t)
-	w := openW(t, "drop")
-	var asked []DragKinds
-	w.SetDragHandler(func(x, y float32, offered DragKinds, allowed DragOp) DragAnswer {
-		asked = append(asked, offered)
-		if x < 10 {
-			return DragAnswer{} // a strip that takes nothing
+func eventsOf(w *Window, kinds ...EventKind) []Event {
+	var out []Event
+	for _, e := range w.Pending() {
+		for _, k := range kinds {
+			if e.Kind == k {
+				out = append(out, e)
+			}
 		}
-		return DragAnswer{Op: DragOpCopy, Accept: DragAny, Target: 77}
+	}
+	return out
+}
+
+func TestDragThresholdFromTheSystem(t *testing.T) {
+	if got := DragThreshold(); got < 1 || got > 64 {
+		t.Fatalf("DragThreshold() = %v", got)
+	}
+}
+
+func TestOLEDropTargetTakesFilesTextAndImages(t *testing.T) {
+	w := openDragWindow(t)
+	var offered DragKinds
+	w.SetDragHandler(func(x, y float32, k DragKinds, allowed DragOp) DragAnswer {
+		offered = k
+		return DragAnswer{Op: DragOpCopy, Accept: DragAny, Target: 7}
 	})
-	w.SetDropKinds(DragAny)
-	target := dropTargetOf(w)
-	if target == 0 {
-		t.Fatal("no drop target registered")
+	w.SetDropKinds(DragFiles | DragText | DragImage)
+	if !w.drag.registered {
+		t.Skip("OLE cannot be used on this thread")
 	}
-	paths := []string{`C:\Users\runner\a b.txt`, `C:\tmp\ünï.png`}
-	data := newTestData(t, w, &DragSpec{Items: []DragItem{{Path: paths[0]}, {Path: paths[1]}, {Text: "hello"}}})
-	defer dragOut.release()
-
-	tEffect = dropEffectCopy | dropEffectMove
-	win32.Com(target, vtDTEnter, data, 0, screenPt(w, 30, 40), uintptr(unsafe.Pointer(&tEffect)))
-	if tEffect != dropEffectCopy {
-		t.Fatalf("enter effect %#x, want copy", tEffect)
-	}
-	tEffect = dropEffectCopy | dropEffectMove
-	win32.Com(target, vtDTOver, mkShift, screenPt(w, 50, 60), uintptr(unsafe.Pointer(&tEffect)))
-	if tEffect != 0 { // Shift asks to move; the handler copies only
-		t.Fatalf("over effect with Shift %#x, want none", tEffect)
-	}
-	tEffect = dropEffectCopy | dropEffectMove | dropEffectLink
-	win32.Com(target, vtDTDrop, data, 0, screenPt(w, 70, 80), uintptr(unsafe.Pointer(&tEffect)))
-	if tEffect != dropEffectCopy {
-		t.Fatalf("drop effect %#x, want copy", tEffect)
-	}
-	evs := takeEvents(w)
-	var enter, move, drop *Event
-	for i := range evs {
-		switch evs[i].Kind {
-		case EvDragEnter:
-			enter = &evs[i]
-		case EvDragMove:
-			move = &evs[i]
-		case EvDrop:
-			drop = &evs[i]
-		case EvDragLeave:
-			t.Fatal("EvDragLeave after a drop")
-		}
-	}
-	if enter == nil || move == nil || drop == nil {
-		t.Fatalf("events %+v", evs)
-	}
-	if enter.X != 30 || enter.Y != 40 || DragKinds(enter.Code) != DragFiles|DragText || enter.SelLen != 2 || DragOp(enter.SelStart) != DragOpCopy|DragOpMove || enter.Tag == 0 {
-		t.Fatalf("EvDragEnter %+v", *enter)
-	}
-	if move.X != 50 || move.Y != 60 || DragOp(move.SelStart) != DragOpMove || move.Mods != ModShift || move.Tag != enter.Tag {
-		t.Fatalf("EvDragMove %+v", *move)
-	}
-	want := []byte(paths[0] + "\x00" + paths[1] + "\x00")
-	if drop.X != 70 || drop.Y != 80 || DragKinds(drop.Code) != DragFiles || drop.SelStart != 2 || drop.Tag != 77 || drop.Flags&FlagFailed != 0 || !bytes.Equal(w.Text(drop.Text), want) {
-		t.Fatalf("EvDrop %+v %q", *drop, w.Text(drop.Text))
+	png, _ := testPNG(t, 8, 6)
+	w.drag.own = []DragItem{{Path: `C:\tmp\a b.txt`}, {Path: `C:\tmp\é.png`}, {Text: "line1\nline2"}, {PNG: png}}
+	testSource = oleObj{vtbl: uintptr(unsafe.Pointer(&dataObjectVtbl[0])), w: w}
+	src := uintptr(unsafe.Pointer(&testSource))
+	enter := func() {
+		testEffect = effectCopy | effectMove
+		dragCall(w, 3, src, 0, packPoint(10, 10), uintptr(unsafe.Pointer(&testEffect)))
 	}
 
-	// Over the strip that takes nothing: no effect, and leaving ends it.
-	tEffect = dropEffectCopy
-	win32.Com(target, vtDTEnter, data, 0, screenPt(w, 5, 5), uintptr(unsafe.Pointer(&tEffect)))
-	if tEffect != 0 {
-		t.Fatalf("refused enter effect %#x", tEffect)
+	enter()
+	if testEffect != effectCopy {
+		t.Fatalf("DragEnter answered effect %d, want copy", testEffect)
 	}
-	win32.Com(target, vtDTLeave)
-	evs = takeEvents(w)
-	if countKind(evs, EvDragEnter) != 1 || countKind(evs, EvDragLeave) != 1 {
-		t.Fatalf("enter and leave: %+v", evs)
+	ev := eventsOf(w, EvDragEnter, EvDragMove, EvDragLeave)
+	if len(ev) != 1 || ev[0].Kind != EvDragEnter || DragKinds(ev[0].Code) != DragAny || ev[0].SelStart != int32(DragOpCopy|DragOpMove) || ev[0].SelLen != 2 {
+		t.Fatalf("enter events %+v (offered %d)", ev, offered)
+	}
+	tag := ev[0].Tag
+
+	testEffect = effectCopy
+	dragCall(w, 4, mkShift, packPoint(12, 11), uintptr(unsafe.Pointer(&testEffect)))
+	ev = eventsOf(w, EvDragMove)
+	if len(ev) != 1 || ev[0].Tag != tag || ev[0].Mods != ModShift {
+		t.Fatalf("move events %+v", ev)
 	}
 
-	// A window that takes text only gets the text of the same drag.
+	dragCall(w, 5)
+	if ev = eventsOf(w, EvDragLeave); len(ev) != 1 || ev[0].Tag != tag {
+		t.Fatalf("leave events %+v", ev)
+	}
+
+	// Dropped as it stands: the files come first.
+	enter()
+	w.Pending()
+	testEffect = effectCopy | effectMove
+	dragCall(w, 6, src, 0, packPoint(10, 10), uintptr(unsafe.Pointer(&testEffect)))
+	if testEffect != effectCopy {
+		t.Fatalf("Drop answered effect %d", testEffect)
+	}
+	ev = eventsOf(w, EvDrop)
+	if len(ev) != 1 || DragKinds(ev[0].Code) != DragFiles || ev[0].Flags&FlagFailed != 0 || ev[0].Tag != 7 || ev[0].SelStart != 2 {
+		t.Fatalf("drop events %+v", ev)
+	}
+	if got := string(w.Text(ev[0].Text)); got != "C:\\tmp\\a b.txt\x00C:\\tmp\\é.png\x00" {
+		t.Fatalf("paths %q", got)
+	}
+
+	// A handler that takes text only gets the text, with its line ends as \n.
+	w.SetDragHandler(func(float32, float32, DragKinds, DragOp) DragAnswer {
+		return DragAnswer{Op: DragOpCopy, Accept: DragText}
+	})
+	enter()
+	w.Pending()
+	testEffect = effectCopy
+	dragCall(w, 6, src, 0, packPoint(10, 10), uintptr(unsafe.Pointer(&testEffect)))
+	ev = eventsOf(w, EvDrop)
+	if len(ev) != 1 || DragKinds(ev[0].Code) != DragText || string(w.Text(ev[0].Text)) != "line1\nline2" {
+		t.Fatalf("text drop %+v", ev)
+	}
+
+	// An image is the PNG.
+	w.SetDragHandler(func(float32, float32, DragKinds, DragOp) DragAnswer {
+		return DragAnswer{Op: DragOpCopy, Accept: DragImage}
+	})
+	enter()
+	w.Pending()
+	testEffect = effectCopy
+	dragCall(w, 6, src, 0, packPoint(10, 10), uintptr(unsafe.Pointer(&testEffect)))
+	ev = eventsOf(w, EvDrop)
+	if len(ev) != 1 || DragKinds(ev[0].Code) != DragImage || !bytes.Equal(w.Text(ev[0].Text), png) {
+		t.Fatalf("image drop %+v", ev)
+	}
+
+	// A refusal leaves nothing behind: the effect is none and a leave is queued.
+	w.SetDragHandler(func(float32, float32, DragKinds, DragOp) DragAnswer { return DragAnswer{} })
+	enter()
+	w.Pending()
+	if testEffect != effectNone {
+		t.Fatalf("a refusing handler answered effect %d", testEffect)
+	}
+	testEffect = effectCopy
+	dragCall(w, 6, src, 0, packPoint(10, 10), uintptr(unsafe.Pointer(&testEffect)))
+	if ev = eventsOf(w, EvDrop); len(ev) != 0 || testEffect != effectNone {
+		t.Fatalf("a refused drop: %+v, effect %d", ev, testEffect)
+	}
+
+	// Kinds the window does not take are not entered at all.
 	w.SetDropKinds(DragText)
-	tEffect = dropEffectCopy
-	win32.Com(target, vtDTEnter, data, 0, screenPt(w, 20, 20), uintptr(unsafe.Pointer(&tEffect)))
-	win32.Com(target, vtDTDrop, data, 0, screenPt(w, 20, 20), uintptr(unsafe.Pointer(&tEffect)))
-	evs = takeEvents(w)
-	got := false
-	for _, e := range evs {
-		if e.Kind == EvDrop {
-			got = DragKinds(e.Code) == DragText && string(w.Text(e.Text)) == "hello"
-		}
-	}
-	if !got {
-		t.Fatalf("text drop: %+v", evs)
-	}
-	if len(asked) == 0 || asked[0] != DragFiles|DragText {
-		t.Fatalf("the handler was asked %v", asked)
+	w.drag.own = []DragItem{{Path: `C:\x`}}
+	enter()
+	if testEffect != effectNone || len(eventsOf(w, EvDragEnter)) != 0 {
+		t.Fatalf("a files-only drag entered a text-only window (effect %d)", testEffect)
 	}
 }
 
-// An image dragged as PNG arrives as the same PNG.
-func TestDropOfAnImage(t *testing.T) {
-	lockThread(t)
-	w := openW(t, "image drop")
-	w.SetDropKinds(DragImage)
-	var buf bytes.Buffer
-	if err := png.Encode(&buf, image.NewRGBA(image.Rect(0, 0, 3, 2))); err != nil {
-		t.Fatal(err)
+func TestDataObjectOfASession(t *testing.T) {
+	w := openDragWindow(t)
+	if !w.oleSetup() {
+		t.Skip("OLE cannot be used on this thread")
 	}
-	img := buf.Bytes()
-	data := newTestData(t, w, &DragSpec{Items: []DragItem{{PNG: img}}})
-	defer dragOut.release()
-	target := dropTargetOf(w)
-	tEffect = dropEffectCopy
-	win32.Com(target, vtDTEnter, data, 0, screenPt(w, 10, 10), uintptr(unsafe.Pointer(&tEffect)))
-	win32.Com(target, vtDTDrop, data, 0, screenPt(w, 10, 10), uintptr(unsafe.Pointer(&tEffect)))
-	for _, e := range takeEvents(w) {
-		if e.Kind == EvDrop {
-			if DragKinds(e.Code) != DragImage || !bytes.Equal(w.Text(e.Text), img) {
-				t.Fatalf("image drop %+v %q", e, w.Text(e.Text))
-			}
-			return
+	png, _ := testPNG(t, 8, 6)
+	w.drag.own = []DragItem{{Path: `C:\one.txt`}, {Text: "héllo\nworld"}, {PNG: png}}
+	obj := uintptr(unsafe.Pointer(&w.drag.data))
+	get := func(cf uint32) (uintptr, []byte) {
+		testFE = formatEtc{cfFormat: uint16(cf), dwAspect: dvAspectContent, lindex: -1, tymed: tymedHGlobal}
+		testSM = stgMedium{}
+		if hr := uint32(com.Call(obj, vtGetData, uintptr(unsafe.Pointer(&testFE)), uintptr(unsafe.Pointer(&testSM)))); hr != 0 {
+			return uintptr(hr), nil
 		}
+		p := win32.Call(pGlobalLock, testSM.hglobal)
+		out := append([]byte(nil), unsafe.Slice((*byte)(win32.Ptr(p)), int(win32.Call(pGlobalSize, testSM.hglobal)))...)
+		win32.Call(pGlobalUnlock, testSM.hglobal)
+		win32.Call(pReleaseStgMedium, uintptr(unsafe.Pointer(&testSM)))
+		return 0, out
 	}
-	t.Fatal("no EvDrop")
-}
 
-// Our IDataObject answers QueryGetData, GetData and EnumFormatEtc for the
-// formats of its items.
-func TestDragDataObjectFormats(t *testing.T) {
-	lockThread(t)
-	w := openW(t, "data")
-	data := newTestData(t, w, &DragSpec{Items: []DragItem{{Path: `C:\x\y.txt`}, {Text: "line one\nline two"}}})
-	defer dragOut.release()
-	if !hasFormat(data, cfHDrop) || !hasFormat(data, cfUnicodeText) || hasFormat(data, clipFormats().png) {
-		t.Fatal("QueryGetData answers the wrong formats")
+	hr, blk := get(cfHDrop)
+	if hr != 0 {
+		t.Fatalf("GetData(CF_HDROP) = %#x", hr)
 	}
-	if p, n := readDropFiles(data); n != 1 || string(p) != "C:\\x\\y.txt\x00" {
-		t.Fatalf("CF_HDROP: %q (%d)", p, n)
+	if got, n, ok := appendDropFiles(nil, blk, MaxPaste, nil); !ok || n != 1 || string(got) != "C:\\one.txt\x00" {
+		t.Fatalf("CF_HDROP holds %q (%d)", got, n)
 	}
-	if s := readDropText(data); string(s) != "line one\nline two" {
-		t.Fatalf("CF_UNICODETEXT: %q", s)
+	if hr, blk = get(cfUnicodeText); hr != 0 {
+		t.Fatalf("GetData(CF_UNICODETEXT) = %#x", hr)
 	}
-	if hr := win32.HR(win32.Com(data, 8 /* EnumFormatEtc */, datadirGet, uintptr(unsafe.Pointer(&tEnum)))); hr < 0 || tEnum == 0 {
-		t.Fatalf("EnumFormatEtc = %#x", uint32(hr))
+	u := unsafe.Slice((*uint16)(unsafe.Pointer(unsafe.SliceData(blk))), len(blk)/2)
+	if got, _ := utf16Decode(nil, u, 100); string(got) != "héllo\nworld" {
+		t.Fatalf("CF_UNICODETEXT holds %q", got)
 	}
-	win32.Com(tEnum, 3 /* Next */, uintptr(len(tFmts)), uintptr(unsafe.Pointer(&tFmts[0])), uintptr(unsafe.Pointer(&tGot)))
-	win32.Release(tEnum)
-	tEnum = 0
-	if tGot != 2 || uint32(tFmts[0].cf) != cfHDrop || uint32(tFmts[1].cf) != cfUnicodeText {
-		t.Fatalf("enumerated %d formats: %+v", tGot, tFmts[:tGot])
+	if hr, blk = get(clipFormats().png); hr != 0 || pngEnd(blk) != len(png) {
+		t.Fatalf("PNG: %#x, %d bytes", hr, len(blk))
 	}
-}
+	if hr, blk = get(cfDIBV5); hr != 0 || len(blk) < 40 {
+		t.Fatalf("CF_DIBV5: %#x, %d bytes", hr, len(blk))
+	}
+	if out, err := dibToPNG(nil, blk, MaxPaste); err != nil || pngEnd(out) == 0 {
+		t.Fatalf("the DIBV5 does not convert back: %v", err)
+	}
+	if hr, _ = get(cfDIB); hr != hrFormatEtc {
+		t.Fatalf("GetData(CF_DIB) = %#x, want DV_E_FORMATETC", hr)
+	}
 
-// Twenty registrations, drops and revocations leave no COM object alive.
-func TestDropsLeakNothing(t *testing.T) {
-	lockThread(t)
-	w := openW(t, "drop leaks")
-	if !ensureOLE() {
-		t.Skip("no OLE apartment")
+	// QueryGetData agrees; a stream is not offered.
+	testFE = formatEtc{cfFormat: cfHDrop, dwAspect: dvAspectContent, lindex: -1, tymed: 4 /* TYMED_ISTREAM */}
+	if hr := uint32(com.Call(obj, vtQueryGetData, uintptr(unsafe.Pointer(&testFE)))); hr != hrTymed {
+		t.Fatalf("QueryGetData(stream) = %#x, want DV_E_TYMED", hr)
 	}
-	dragInit()
-	before := com.Leaks()
-	for i := 0; i < 20; i++ {
-		w.SetDropKinds(DragAny)
-		target := dropTargetOf(w)
-		if target == 0 {
-			t.Fatalf("drop %d: no target", i)
-		}
-		data := newTestData(t, w, &DragSpec{Items: []DragItem{{Text: "x"}}})
-		tEffect = dropEffectCopy
-		win32.Com(target, vtDTEnter, data, 0, screenPt(w, 10, 10), uintptr(unsafe.Pointer(&tEffect)))
-		win32.Com(target, vtDTDrop, data, 0, screenPt(w, 10, 10), uintptr(unsafe.Pointer(&tEffect)))
-		dragOut.release()
-		w.SetDropKinds(0)
-		if dropTargetOf(w) != 0 {
-			t.Fatalf("drop %d: target still registered", i)
-		}
-		takeEvents(w)
+
+	// EnumFormatEtc lists the four formats the session offers.
+	var enum uintptr
+	hrEnum := win32.HR(com.Call(obj, 8, dataDirGet, uintptr(unsafe.Pointer(&enum))))
+	if hrEnum != 0 || enum == 0 {
+		t.Fatalf("EnumFormatEtc = %#x", hrEnum)
 	}
-	if got := com.Leaks(); got.Live != before.Live || got.Stale != before.Stale {
-		t.Fatalf("COM objects: before %+v after %+v", before, got)
+	defer com.Release(enum)
+	n := 0
+	var fetched uint32
+	for ; n < 8; n++ {
+		testFE = formatEtc{}
+		fetched = 0
+		if com.Call(enum, 3 /* Next */, 1, uintptr(unsafe.Pointer(&testFE)), uintptr(unsafe.Pointer(&fetched))) != 0 || fetched != 1 {
+			break
+		}
+	}
+	if n != 4 {
+		t.Fatalf("EnumFormatEtc lists %d formats, want 4 (files, PNG, DIBV5, text)", n)
 	}
 }
 
-// StartDrag needs a press and refuses file promises; a drag out over our own
-// window, driven by SendInput, drops its text there and ends with EvDragEnd.
-func TestDragOutToOurOwnWindow(t *testing.T) {
-	lockThread(t)
-	if _, err := (&Window{}).StartDrag(&DragSpec{Items: []DragItem{{Promise: &FilePromise{Name: "a"}}}}); err == nil {
-		t.Fatal("an invalid spec started")
+func TestStartDragRefusals(t *testing.T) {
+	w := openDragWindow(t)
+	spec := &DragSpec{Items: []DragItem{{Text: "x"}}}
+	if _, err := w.StartDrag(&DragSpec{}); !errors.Is(err, ErrDragSpec) {
+		t.Errorf("an empty spec: %v", err)
 	}
-	w, err := Open(Options{Title: "drag out", Width: 400, Height: 300})
-	if err != nil {
-		t.Skip(err)
+	if _, err := w.StartDrag(spec); !errors.Is(err, ErrNoPress) {
+		t.Errorf("no press held: %v", err)
 	}
-	defer w.Close()
-	if _, err := w.StartDrag(&DragSpec{Items: []DragItem{{Text: "x"}}}); !errors.Is(err, ErrNoPress) {
-		t.Fatalf("StartDrag with no press: %v", err)
+	promise := &DragSpec{Items: []DragItem{{Promise: &FilePromise{Name: "a.txt", Write: func(context.Context, string) error { return nil }}}}}
+	if _, err := w.StartDrag(promise); !errors.Is(err, ErrPromiseUnsupported) || !errors.Is(err, errors.ErrUnsupported) {
+		t.Errorf("a promise: %v", err)
 	}
-	if _, err := w.StartDrag(&DragSpec{Items: []DragItem{{Promise: &FilePromise{Name: "a.txt", Write: func(context.Context, string) error { return nil }}}}}); !errors.Is(err, errors.ErrUnsupported) {
-		t.Fatalf("a file promise: %v", err)
+}
+
+// TestOLEDropTargetsAreEachWindows: with two windows registered, a drag over
+// one is that window's alone, and the objects find their own window.
+func TestOLEDropTargetsAreEachWindows(t *testing.T) {
+	a := openDragWindow(t)
+	b := openDragWindow(t)
+	for _, w := range []*Window{a, b} {
+		w.SetDragHandler(func(x, y float32, k DragKinds, allowed DragOp) DragAnswer {
+			return DragAnswer{Op: DragOpCopy, Accept: DragAny}
+		})
+		w.SetDropKinds(DragText)
+		if !w.drag.registered {
+			t.Skip("OLE cannot be used on this thread")
+		}
 	}
-	w.SetDropKinds(DragText)
-	win32.Call(pSetForegroundWindow, w.hwnd)
-	for i := 0; i < 20; i++ {
-		takeEvents(w)
+	if oleWindow(uintptr(unsafe.Pointer(&a.drag.target))) != a || oleWindow(uintptr(unsafe.Pointer(&b.drag.data))) != b {
+		t.Fatal("an object does not find its window")
 	}
-	if win32.Call(pGetForegroundWindow) != w.hwnd {
-		t.Skip("the window is not in the foreground: SendInput would go elsewhere")
+	b.drag.own = []DragItem{{Text: "hello"}}
+	testSource = oleObj{vtbl: uintptr(unsafe.Pointer(&dataObjectVtbl[0])), w: b}
+	testEffect = effectCopy
+	dragCall(b, 3, uintptr(unsafe.Pointer(&testSource)), 0, packPoint(10, 10), uintptr(unsafe.Pointer(&testEffect)))
+	if ev := eventsOf(a, EvDragEnter, EvDragMove, EvDragLeave); len(ev) != 0 {
+		t.Errorf("the other window saw %+v", ev)
 	}
-	sw, sh := int32(win32.Call(pGetSystemMetricT, 0)), int32(win32.Call(pGetSystemMetricT, 1))
-	send := func(x, y int32, flags uint32) {
-		screenPt(w, x, y)
-		tInput = mouseInput{dx: tPt.x * 65535 / max(sw-1, 1), dy: tPt.y * 65535 / max(sh-1, 1), flags: flags | 0x8001 /* MOVE|ABSOLUTE */}
-		win32.Call(pSendInputT, 1, uintptr(unsafe.Pointer(&tInput)), unsafe.Sizeof(tInput))
+	if ev := eventsOf(b, EvDragEnter); len(ev) != 1 {
+		t.Errorf("the window dragged over saw %+v", ev)
 	}
-	send(60, 60, 0)
-	send(60, 60, 0x2) // left down
-	var evs []Event
-	for end := time.Now().Add(3 * time.Second); w.buttons&(1<<ButtonLeft) == 0 && time.Now().Before(end); {
-		evs = append(evs, takeEvents(w)...)
+	dragCall(b, 5) // DragLeave
+}
+
+// TestLiveDoDragDrop runs a real DoDragDrop with no button held: OLE asks the
+// source at once and drops where the pointer is. It is off by default, because
+// a pointer over some other window would drop there.
+func TestLiveDoDragDrop(t *testing.T) {
+	if os.Getenv("GNUI_LIVE_DRAG") == "" {
+		t.Skip("set GNUI_LIVE_DRAG=1 to run a real DoDragDrop")
 	}
-	if w.buttons&(1<<ButtonLeft) == 0 {
-		send(60, 60, 0x4)
-		t.Skipf("the press did not arrive: %+v", evs)
-	}
-	tk, err := w.StartDrag(&DragSpec{Items: []DragItem{{Text: "dragged"}}})
-	if err != nil {
-		send(60, 60, 0x4)
-		t.Fatal(err)
-	}
+	w := openDragWindow(t)
+	w.buttons = 1 << ButtonLeft
 	done := make(chan struct{})
-	go func() { // SendInput from any thread: DoDragDrop's loop has the mouse
-		defer close(done)
-		time.Sleep(300 * time.Millisecond)
-		for i := int32(1); i <= 10; i++ {
-			send(60+i*15, 60+i*10, 0)
-			time.Sleep(30 * time.Millisecond)
+	go func() {
+		select {
+		case <-done:
+		case <-time.After(20 * time.Second):
+			panic("DoDragDrop did not return")
 		}
-		time.Sleep(100 * time.Millisecond)
-		send(210, 160, 0x4) // left up: the drop
 	}()
-	evs = nil
-	var dropped string
-	for end := time.Now().Add(10 * time.Second); time.Now().Before(end) && countKind(evs, EvDragEnd) == 0; {
-		Pump(int64(10 * time.Millisecond))
-		for _, e := range w.Events() {
-			if e.Kind == EvDrop {
-				dropped = string(w.Text(e.Text))
-			}
-			evs = append(evs, e)
+	ticket, err := w.StartDrag(&DragSpec{Items: []DragItem{{Text: "x"}}})
+	close(done)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ev := eventsOf(w, EvDragEnd); len(ev) != 1 || ev[0].Tag != uint64(ticket) {
+		t.Fatalf("EvDragEnd: %+v (ticket %d)", ev, ticket)
+	}
+}
+
+// A foreign data object (the shell's, from SHCreateDataObject, holding text)
+// dropped 20 times, with the target registered and revoked around each drop,
+// keeps no reference of ours, and the window's own objects stay as they were
+// (W8's gate: 20 drops leak no COM object).
+var (
+	leakFE  formatEtc
+	leakSM  stgMedium
+	leakObj uintptr
+)
+
+func TestTwentyForeignDropsLeakNothing(t *testing.T) {
+	w := openDragWindow(t)
+	pCreate := win32.Proc(shell32, "SHCreateDataObject")
+	if pCreate == 0 {
+		t.Skip("no SHCreateDataObject")
+	}
+	if !w.oleSetup() {
+		t.Skip("OLE cannot be used on this thread")
+	}
+	if hr := com.HR(win32.Call(pCreate, 0, 0, 0, 0, uintptr(unsafe.Pointer(&iidDataObject)), uintptr(unsafe.Pointer(&leakObj)))); hr < 0 || leakObj == 0 {
+		t.Skipf("SHCreateDataObject: %#x", uint32(hr))
+	}
+	defer win32.Release(leakObj)
+	leakFE = formatEtc{cfFormat: cfUnicodeText, dwAspect: 1, lindex: -1, tymed: tymedHGlobal}
+	leakSM = stgMedium{tymed: tymedHGlobal, hglobal: allocClipboardText([]byte("dropped"))}
+	if hr := com.HR(com.Call(leakObj, 7, uintptr(unsafe.Pointer(&leakFE)), uintptr(unsafe.Pointer(&leakSM)), 1)); hr < 0 { // SetData, the object owns the memory
+		t.Skipf("IDataObject.SetData: %#x", uint32(hr))
+	}
+	refs := func() uintptr { win32.AddRef(leakObj); return com.Call(leakObj, 2) } // Release returns the count left
+	before, gdi0, user0 := refs(), uintptr(0), uintptr(0)
+	w.SetDragHandler(func(float32, float32, DragKinds, DragOp) DragAnswer {
+		return DragAnswer{Op: DragOpCopy, Accept: DragText}
+	})
+	for i := 0; i < 20; i++ {
+		w.SetDropKinds(DragText)
+		if !w.drag.registered {
+			t.Fatalf("drop %d: the window did not register", i)
+		}
+		testEffect = effectCopy
+		dragCall(w, 3, leakObj, 0, packPoint(10, 10), uintptr(unsafe.Pointer(&testEffect)))
+		testEffect = effectCopy
+		dragCall(w, 6, leakObj, 0, packPoint(10, 10), uintptr(unsafe.Pointer(&testEffect)))
+		ev := eventsOf(w, EvDrop)
+		if len(ev) != 1 || string(w.Text(ev[0].Text)) != "dropped" {
+			t.Fatalf("drop %d: %+v", i, ev)
+		}
+		w.SetDropKinds(0)
+		if i == 0 {
+			gdi0, user0 = guiObjects()
 		}
 	}
-	<-done
-	var drop, endEv *Event
-	for i := range evs {
-		switch evs[i].Kind {
-		case EvDrop:
-			drop = &evs[i]
-		case EvDragEnd:
-			endEv = &evs[i]
-		}
+	if after := refs(); after != before {
+		t.Errorf("the data object's references: %d before the drops, %d after", before, after)
 	}
-	if endEv == nil || endEv.Tag != uint64(tk) {
-		t.Fatalf("no EvDragEnd for %d: %+v", tk, evs)
-	}
-	if drop == nil || dropped != "dragged" || DragOp(endEv.Code) != DragOpCopy {
-		t.Fatalf("drop %+v, end %+v", drop, *endEv)
-	}
-	if dragOut.gen != 0 {
-		t.Fatal("the drag's objects are still held")
+	if gdi1, user1 := guiObjects(); gdi1 > gdi0 || user1 > user0 {
+		t.Errorf("after 20 drops: GDI %d → %d, USER %d → %d", gdi0, gdi1, user0, user1)
 	}
 }

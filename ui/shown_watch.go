@@ -15,12 +15,11 @@ type shownWatch struct {
 // After this frame's layout, a box whose visibility is not what it was built
 // with makes the context ask for another frame (Animating), so that it is
 // built again with the new answer; a box that stays as it was costs nothing.
-// Call it every frame the box is built; at most 64 boxes are watched in a
-// frame (the rest are not).
+// Call it every frame the box is built; every box is watched, however many
+// (the list keeps its capacity from frame to frame, so a steady state does not
+// allocate).
 func (c *Context) WatchShown(key Key, shown bool) {
-	if len(c.shownWatch) < 64 {
-		c.shownWatch = append(c.shownWatch, shownWatch{key, shown})
-	}
+	c.shownWatch = append(c.shownWatch, shownWatch{key, shown})
 }
 
 // checkShownWatch compares the watched boxes with the layout just done.

@@ -8,7 +8,6 @@ import (
 	"image/draw"
 	"image/png"
 	"slices"
-	"unicode/utf16"
 	"unicode/utf8"
 )
 
@@ -147,22 +146,6 @@ func unhex(c byte) int {
 }
 
 // ---- CF_HDROP (Windows) ----
-
-// buildDropFiles appends to dst a DROPFILES block (CF_HDROP) of paths: the
-// 20-byte header with fWide set, then each path in UTF-16 ended by a NUL
-// unit, then an empty path.
-func buildDropFiles(dst []byte, paths []string) []byte {
-	dst = binary.LittleEndian.AppendUint32(dst, 20) // pFiles
-	dst = append(dst, make([]byte, 12)...)          // pt, fNC
-	dst = binary.LittleEndian.AppendUint32(dst, 1)  // fWide
-	for _, p := range paths {
-		for _, u := range utf16.Encode([]rune(p)) {
-			dst = binary.LittleEndian.AppendUint16(dst, u)
-		}
-		dst = append(dst, 0, 0)
-	}
-	return append(dst, 0, 0)
-}
 
 // appendDropFiles appends to dst the paths of a DROPFILES block (CF_HDROP),
 // as UTF-8, each ended by a NUL, and returns how many. max bounds the

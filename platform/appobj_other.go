@@ -64,3 +64,6 @@ func NativeLoop() bool { return false }
 // ArmOnWake reports whether what reaches the app outside its loop asks for
 // the frame that draws it; here only inside a native loop (NativeLoop).
 func ArmOnWake() bool { return NativeLoop() }
+
+// QuitWaitNative is false here: no OS runs a wait of its own for a quit answer.
+func QuitWaitNative() bool { return false }

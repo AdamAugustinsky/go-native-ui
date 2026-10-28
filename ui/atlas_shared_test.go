@@ -223,3 +223,53 @@ func TestAtlasStagesOnlyInitializedPages(t *testing.T) {
 		})
 	}
 }
+
+// dirtyAllShaper is pagedShaper that can mark its pages dirty in full, as
+// text.System can.
+type dirtyAllShaper struct{ *pagedShaper }
+
+func (d dirtyAllShaper) DirtyAll() {
+	for i := 0; i < d.pages; i++ {
+		d.dirty[i] = true
+	}
+}
+
+// A new uploader's textures are blank: its pages are uploaded in full, clean
+// ones included. A rebuilt renderer keeps its texture ids and loses their
+// contents: AtlasRestore uploads every page again, through the shared
+// textures too, with Upload (a Stage into a blank texture would be a copy of
+// nothing to a frame in flight).
+func TestAtlasRestoreUploadsCleanPages(t *testing.T) {
+	for _, shared := range []bool{false, true} {
+		t.Run(fmt.Sprint(shared), func(t *testing.T) {
+			sh := dirtyAllShaper{&pagedShaper{fakeShaper: newFake(), pages: 2, dirty: [2]bool{true, true}, seen: map[uint16]bool{}}}
+			up := &stagingUploader{texUploader: texUploader{uploads: map[gpu.TextureID]int{}}}
+			c := New(sh)
+			if shared {
+				c.ShareAtlas(NewSharedAtlas(up))
+			} else {
+				c.AtlasSync(up)
+			}
+			if up.total() != 2 || up.stages != 0 {
+				t.Fatalf("first sync: uploads=%d stages=%d, want 2 and 0", up.total(), up.stages)
+			}
+			sh.dirty = [2]bool{} // both pages clean: nothing for a sync to do
+			c.syncAtlas()
+			if up.total() != 2 {
+				t.Fatalf("a clean sync uploaded: uploads=%d", up.total())
+			}
+			c.AtlasRestore()
+			if up.total() != 4 || up.stages != 0 {
+				t.Fatalf("AtlasRestore: uploads=%d stages=%d, want 4 and 0 (both pages, in full)", up.total(), up.stages)
+			}
+
+			// A new uploader on clean pages gets them in full.
+			sh.dirty = [2]bool{}
+			next := &stagingUploader{texUploader: texUploader{uploads: map[gpu.TextureID]int{}}}
+			c.AtlasSync(next)
+			if next.total() != 2 || next.made != 2 {
+				t.Fatalf("a new uploader: %d textures and %d uploads, want 2 and 2", next.made, next.total())
+			}
+		})
+	}
+}

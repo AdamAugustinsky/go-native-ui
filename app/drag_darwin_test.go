@@ -164,7 +164,7 @@ func runDragInChild() {
 	if err := a.loop(); err != nil {
 		fmt.Println("loop:", err)
 	}
-	ok := res.registeredBefore == 2 && res.registeredAfter == 2 /* the first frame registered the kinds of its target: files and text */ && res.enterOp == 1 && res.outsideOp == 0 && res.accepted &&
+	ok := res.registeredBefore >= 2 && res.registeredAfter == res.registeredBefore /* the first frame registered the kinds of its target: files (the file URL and the promise types) and text (plain, link, RTF, HTML) */ && res.enterOp == 1 && res.outsideOp == 0 && res.accepted &&
 		b.over > 0 && b.op == ui.DropCopy && b.pos == [2]float32{40, 40} && b.drop == 1 && b.text == "from another app" && res.step == 3
 	if ok {
 		fmt.Printf("dragin: ok, registered types %d -> %d, hover frames %d, drop frames %d\n", res.registeredBefore, res.registeredAfter, b.over, b.drop)
