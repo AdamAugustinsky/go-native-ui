@@ -22,6 +22,7 @@ type fakeDec struct {
 	rend   *atomic.Int32
 	closes *atomic.Int32
 	mem    int64 // what retained reports
+	trims  *atomic.Int32
 }
 
 func (f *fakeDec) size() (int, int) { return f.w, f.h }
@@ -29,6 +30,10 @@ func (f *fakeDec) count() int       { return len(f.delays) }
 func (f *fakeDec) playCount() int   { return f.plays }
 func (f *fakeDec) delay(i int) int  { return f.delays[i] }
 func (f *fakeDec) retained() int64  { return f.mem }
+func (f *fakeDec) trim(*cframe) int64 {
+	f.trims.Add(1)
+	return 0
+}
 func (f *fakeDec) close(fr *cframe) { f.closes.Add(1) }
 func (f *fakeDec) render(_ *worker, i int, tw, th, pad int32, pix []byte, bw int) error {
 	if f.block != nil {
@@ -42,8 +47,8 @@ func (f *fakeDec) render(_ *worker, i int, tw, th, pad int32, pix []byte, bw int
 }
 
 type fakeSet struct {
-	opens, renders, closes atomic.Int32
-	mk                     func() *fakeDec
+	opens, renders, closes, trims atomic.Int32
+	mk                            func() *fakeDec
 }
 
 // useFake makes Animate requests of the bytes "FAKE" decode with decoders from mk.
@@ -51,7 +56,7 @@ func useFake(t testing.TB, mk func(fs *fakeSet) *fakeDec) *fakeSet {
 	fs := &fakeSet{}
 	fs.mk = func() *fakeDec {
 		d := mk(fs)
-		d.rend, d.closes = &fs.renders, &fs.closes
+		d.rend, d.closes, d.trims = &fs.renders, &fs.closes, &fs.trims
 		return d
 	}
 	openAnimHook = func(data []byte) (animDecoder, error) {

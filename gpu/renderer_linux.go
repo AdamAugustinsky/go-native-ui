@@ -248,6 +248,7 @@ type ringSlot struct {
 type retiredTex struct {
 	name   uint32
 	serial uint64 // the last frame encoded when it was freed
+	bytes  int64  // its memory, for TextureBytes
 }
 
 // Attribute layout of a Quad record (offsets checked against the struct).
@@ -577,6 +578,7 @@ func (r *Renderer) NewTexture(kind TextureKind, w, h int) TextureID {
 		r.texH = append(r.texH, 0)
 	}
 	r.tex[i], r.kinds[i], r.texW[i], r.texH[i] = name, kind, w, h
+	r.ids.addBytes(i, texBytes(kind, w, h))
 	return id
 }
 
@@ -593,15 +595,27 @@ func (r *Renderer) FreeTexture(t TextureID) {
 	if !ok || i == 0 {
 		return
 	}
-	r.retiring = append(r.retiring, retiredTex{r.tex[i], r.serial})
+	n := r.ids.remove(i)
+	r.retiring = append(r.retiring, retiredTex{r.tex[i], r.serial, n})
 	r.tex[i] = 0
-	r.ids.remove(i)
 	r.collect()
 }
 
 // TextureCounts reports the live textures (texture 0 included) and the freed
 // ones whose deletion still waits for the GPU.
 func (r *Renderer) TextureCounts() (live, retiring int) { return r.ids.n, len(r.retiring) }
+
+// TextureBytes reports the memory of the renderer's textures: the live ones
+// (atlas pages and standalone textures) and the freed ones that wait for the
+// GPU, as width × height × bytes per texel (no mip levels, no driver padding).
+// Texture 0 (4 bytes) is counted; the renderer's own targets are not.
+func (r *Renderer) TextureBytes() int64 {
+	n := r.ids.used
+	for _, x := range r.retiring {
+		n += x.bytes
+	}
+	return n
+}
 
 // syncDone reads a sync object without waiting (a zero timeout, no flush:
 // the swap flushes). A failed wait counts as done.

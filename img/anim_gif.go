@@ -153,6 +153,13 @@ func (g *gifAnim) size() (w, h int) { return g.w, g.h }
 // and the converted frame (three canvases at most).
 func (g *gifAnim) retained() int64 { return int64(len(g.data)) + 3*4*int64(g.w)*int64(g.h) }
 func (g *gifAnim) count() int      { return len(g.frames) }
+
+// trim drops the canvases; frame makes them again, from the first frame.
+func (g *gifAnim) trim() int64 {
+	g.comp, g.mini, g.next = nil, nil, 0
+	return int64(len(g.data))
+}
+
 func (g *gifAnim) playCount() int  { return g.plays }
 func (g *gifAnim) delay(i int) int { return int(g.frames[i].delayMs) }
 
