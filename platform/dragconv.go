@@ -2,6 +2,8 @@ package platform
 
 import (
 	"encoding/binary"
+	"strconv"
+	"strings"
 	"unicode/utf16"
 )
 
@@ -227,4 +229,40 @@ func ownFilePaths(items []DragItem) (paths []string) {
 		}
 	}
 	return paths
+}
+
+// dndActionFor is the operation a drag out proposes, of the ops its source
+// allows, from the modifier keys held: Shift moves, Control copies, both link
+// (as GTK and Qt do), and with none the first of copy, link and move.
+func dndActionFor(ops DragOp, mods Mods) DragOp {
+	switch {
+	case mods&ModShift != 0 && mods&ModCtrl != 0 && ops&DragOpLink != 0:
+		return DragOpLink
+	case mods&ModShift != 0 && ops&DragOpMove != 0:
+		return DragOpMove
+	case mods&ModCtrl != 0 && ops&DragOpCopy != 0:
+		return DragOpCopy
+	}
+	return Pick(ops, ops)
+}
+
+// gtkSettingInt reads an integer setting of the [Settings] group of a GTK
+// settings.ini (key=value lines); ok is false when it is not there or not a
+// number.
+func gtkSettingInt(ini, key string) (n int, ok bool) {
+	in := false
+	for _, line := range strings.Split(ini, "\n") {
+		line = strings.TrimSpace(line)
+		switch {
+		case line == "" || line[0] == '#' || line[0] == ';':
+		case line[0] == '[':
+			in = line == "[Settings]"
+		case in:
+			if k, v, found := strings.Cut(line, "="); found && strings.TrimSpace(k) == key {
+				n, err := strconv.Atoi(strings.TrimSpace(v))
+				return n, err == nil
+			}
+		}
+	}
+	return 0, false
 }

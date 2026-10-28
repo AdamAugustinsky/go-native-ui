@@ -119,3 +119,35 @@ func TestPushDropData(t *testing.T) {
 		t.Error("an empty or oversized drop is failed")
 	}
 }
+
+func TestDndActionFor(t *testing.T) {
+	for _, c := range []struct {
+		ops  DragOp
+		mods Mods
+		want DragOp
+	}{
+		{DragOpAll, 0, DragOpCopy},
+		{DragOpMove | DragOpLink, 0, DragOpLink},
+		{DragOpAll, ModShift, DragOpMove},
+		{DragOpAll, ModCtrl, DragOpCopy},
+		{DragOpAll, ModShift | ModCtrl, DragOpLink},
+		{DragOpCopy, ModShift, DragOpCopy}, // a modifier for what the source does not allow
+		{DragOpMove, ModCtrl, DragOpMove},
+	} {
+		if got := dndActionFor(c.ops, c.mods); got != c.want {
+			t.Errorf("ops %d mods %d: %d, want %d", c.ops, c.mods, got, c.want)
+		}
+	}
+}
+
+func TestGTKSettingInt(t *testing.T) {
+	ini := "# a comment\n[Other]\ngtk-dnd-drag-threshold=99\n[Settings]\ngtk-theme-name=Adwaita\n gtk-dnd-drag-threshold = 12 \n"
+	if n, ok := gtkSettingInt(ini, "gtk-dnd-drag-threshold"); !ok || n != 12 {
+		t.Errorf("got %d, %v; want 12 (the [Settings] group's)", n, ok)
+	}
+	for _, bad := range []string{"", "[Settings]\ngtk-dnd-drag-threshold=lots\n", "gtk-dnd-drag-threshold=5\n", "[Settings]\nother=5\n"} {
+		if n, ok := gtkSettingInt(bad, "gtk-dnd-drag-threshold"); ok {
+			t.Errorf("%q read as %d", bad, n)
+		}
+	}
+}

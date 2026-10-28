@@ -66,6 +66,9 @@ type Window struct {
 
 	drags dragMap   // SetDragRegions
 	clip  clipboard // clipboard_linux.go
+	dnd   dndState  // drag and drop (drag_linux.go)
+
+	leftDown bool // the left button is held (a press reached the app and no release yet): a drag out starts from it
 
 	hidden   bool           // X11: opened unmapped, not shown yet (Options.Hidden)
 	showBy   int64          // when a hidden window is shown regardless (nanotime)
