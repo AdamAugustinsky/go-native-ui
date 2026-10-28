@@ -161,7 +161,9 @@ func TestViewMatrix(t *testing.T) {
 		t.Errorf("the downloaded file: %v %v", fi, err)
 	}
 	if _, failed := h.saw(v, webview.LoadFailed); failed {
-		t.Error("the navigation that became a download reported LoadFailed")
+		var tr []string
+		h.Do(func(*app.App) { tr = webview.Trace(v) })
+		t.Errorf("the navigation that became a download reported LoadFailed: %q", tr)
 	}
 
 	// permissions: denied by default, granted when allowed

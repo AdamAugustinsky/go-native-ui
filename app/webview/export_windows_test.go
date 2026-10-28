@@ -60,3 +60,6 @@ func Suspended(v *View) bool {
 func Rounded(v *View) bool {
 	return call(pGetWindowRgnBox, v.be.(*view).hwnd, uintptr(unsafe.Pointer(&rgnBx))) == 3
 }
+
+// Trace is v's debug trace.
+func Trace(v *View) []string { return v.be.(*view).trace }
