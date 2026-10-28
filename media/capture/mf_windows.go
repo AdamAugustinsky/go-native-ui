@@ -54,7 +54,8 @@ var (
 
 // Vtable slots (mfobjects.h, mfreadwrite.h).
 const (
-	vtAttrGetGUID            = 10 // IMFAttributes (IMFMediaType, IMFSample derive from it)
+	vtAttrGetUINT64          = 8  // IMFAttributes
+	vtAttrGetGUID            = 10 // (IMFMediaType, IMFSample derive from it)
 	vtAttrSetUINT32          = 21
 	vtAttrSetUINT64          = 22
 	vtAttrSetGUID            = 24
@@ -268,8 +269,9 @@ func (wr *writer) release() {
 // fileInfo is what readFile found in an MP4.
 type fileInfo struct {
 	duration     time.Duration
-	video, audio int // streams
-	frames       int // video samples (count set)
+	video, audio int    // streams
+	frames       int    // video samples (count set)
+	size         uint64 // the video's MF_MT_FRAME_SIZE: width<<32 | height
 	maxGap       time.Duration
 	err          int32
 }
@@ -318,16 +320,17 @@ func readFileMTA(path string, count bool) fileInfo {
 			break // MF_E_INVALIDSTREAMNUMBER past the last
 		}
 		com.Call(o.mt, vtMediaTypeGetMajorType, uintptr(unsafe.Pointer(&o.major)))
-		win32.Release(o.mt)
 		switch o.major {
 		case mfMediaTypeVideo:
 			if fi.video == 0 {
 				o.firstVideoIndex = int(i)
+				com.Call(o.mt, vtAttrGetUINT64, uintptr(unsafe.Pointer(&mfMTFrameSize)), uintptr(unsafe.Pointer(&fi.size)))
 			}
 			fi.video++
 		case mfMediaTypeAudio:
 			fi.audio++
 		}
+		win32.Release(o.mt)
 	}
 	if !count || o.firstVideoIndex < 0 {
 		return fi

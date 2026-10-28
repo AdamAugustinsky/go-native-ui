@@ -110,6 +110,7 @@ type run struct {
 	problem   string
 	ownAudio  bool
 	stopToEnd time.Duration
+	path      string // the conversion: nv12 (the video processor) or bgra
 
 	allocsPerSec float64 // the whole process's, while recording
 }
@@ -183,6 +184,14 @@ func (ru *run) do() {
 	}
 	ru.stopToEnd = time.Since(t0)
 	ru.res = r.Result()
+	if s, ok := r.be.(*session); ok {
+		if n, ok := s.n.(*wgcNative); ok && n.rec != nil {
+			ru.path = "bgra"
+			if n.rec.nv12 {
+				ru.path = "nv12"
+			}
+		}
+	}
 	ru.events = eventsOf(r.ID())
 }
 
@@ -205,8 +214,8 @@ func record(t *testing.T, ru *run) fileInfo {
 		if st != nil {
 			size = st.Size()
 		}
-		t.Logf("result %+v; elapsed at stop %v; stop to Ended %v; %.1f Go allocations/s in the process while recording; own audio excluded %v; file %d bytes, %v, %d video and %d audio tracks, %d frames, largest gap %v (reader 0x%08X)",
-			ru.res, ru.elapsed, ru.stopToEnd, ru.allocsPerSec, ru.ownAudio, size, fi.duration, fi.video, fi.audio, fi.frames, fi.maxGap, uint32(fi.err))
+		t.Logf("result %+v; elapsed at stop %v; stop to Ended %v; %.1f Go allocations/s in the process while recording; own audio excluded %v; conversion %s; file %d bytes, %v, %dx%d, %d video and %d audio tracks, %d frames, largest gap %v (reader 0x%08X)",
+			ru.res, ru.elapsed, ru.stopToEnd, ru.allocsPerSec, ru.ownAudio, ru.path, size, fi.duration, fi.size>>32, uint32(fi.size), fi.video, fi.audio, fi.frames, fi.maxGap, uint32(fi.err))
 	}
 	return fi
 }
@@ -234,12 +243,15 @@ func checkFile(t *testing.T, ru *run, fi fileInfo, want time.Duration) {
 	if audio := ru.opt.Microphone || ru.opt.SystemAudio; audio && fi.audio != 1 || !audio && fi.audio != 0 {
 		t.Errorf("%d audio tracks", fi.audio)
 	}
-	fps := float64(max(ru.opt.FPS, 30))
+	fps := 30.0
+	if ru.opt.FPS > 0 {
+		fps = float64(ru.opt.FPS)
+	}
 	frames := fi.duration.Seconds() * fps
 	if math.Abs(float64(fi.frames)-frames) > 0.05*frames {
 		t.Errorf("%d frames in %v, want %.0f ± 5 %%", fi.frames, fi.duration, frames)
 	}
-	if limit := time.Duration(2 * float64(time.Second) / fps); fi.maxGap > limit {
+	if limit := time.Duration(1.5 * float64(time.Second) / fps); fi.maxGap > limit {
 		t.Errorf("a gap of %v between frames (limit %v)", fi.maxGap, limit)
 	}
 	if _, err := os.Stat(ru.res.Path + ".part0.mp4"); err == nil {
@@ -270,6 +282,9 @@ func TestWindowsVideoOnlyScaled(t *testing.T) {
 	ru := &run{opt: Options{MaxWidth: 320, FPS: 15}, total: 2 * time.Second}
 	fi := record(t, ru)
 	checkFile(t, ru, fi, 2*time.Second)
+	if w := fi.size >> 32; w != 320 {
+		t.Errorf("the video is %d wide, want 320 (MaxWidth)", w)
+	}
 }
 
 // TestWindowsDiscard: Stop(true) leaves no file.
