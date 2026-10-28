@@ -178,3 +178,37 @@ func TestPathMaskKeepsItsTexture(t *testing.T) {
 		t.Error("an empty path has a texture")
 	}
 }
+
+// epochUp is a fakeUp that counts rebuilds, as Renderer does.
+type epochUp struct {
+	fakeUp
+	epoch uint32
+}
+
+func (u *epochUp) Epoch() uint32 { return u.epoch }
+
+// A rebuilt renderer keeps the mask's texture id and blanks it: the mask fills
+// it again from its pixels, once per rebuild, without allocating.
+func TestPathMaskFillsAgainAfterARebuild(t *testing.T) {
+	var p Path
+	p.MoveTo(0, 0)
+	p.LineTo(10, 0)
+	p.QuadTo(10, 10, 0, 12)
+	p.Close()
+	var m PathMask
+	u := &epochUp{}
+	tex, _, _ := m.Mask(u, &p)
+	if u.made != 1 || u.uploads != 1 {
+		t.Fatalf("first mask: %d made, %d uploads", u.made, u.uploads)
+	}
+	u.epoch++
+	if again, _, _ := m.Mask(u, &p); again != tex {
+		t.Errorf("the texture changed from %d to %d", tex, again)
+	}
+	if u.made != 1 || u.uploads != 2 {
+		t.Errorf("after a rebuild: %d made, %d uploads, want 1 and 2", u.made, u.uploads)
+	}
+	if n := testing.AllocsPerRun(100, func() { m.Mask(u, &p) }); n != 0 || u.uploads != 2 {
+		t.Errorf("an unchanged mask allocates %v times, %d uploads", n, u.uploads)
+	}
+}
