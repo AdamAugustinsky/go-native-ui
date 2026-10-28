@@ -16,6 +16,11 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      only:
+        description: "run only this OS's job (macos, windows, linux); empty runs all"
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -123,6 +128,7 @@ jobs:
 
   macos:
     name: macOS arm64 (Metal)
+    if: inputs.only == '' || inputs.only == 'macos'
     runs-on: macos-15
     # phase 8's live suites (webview, panels, capture, ws) took the job to 24-25 min
     timeout-minutes: 35
@@ -348,6 +354,7 @@ jobs:
 
   windows:
     name: Windows ${{ matrix.arch }} (D3D11, WARP on runners)
+    if: inputs.only == '' || inputs.only == 'windows'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45 # W1 added two two-window benches
     strategy:
@@ -465,6 +472,7 @@ jobs:
 
   linux:
     name: Linux ${{ matrix.arch }} ${{ matrix.backend }} (EGL, Mesa llvmpipe)
+    if: inputs.only == '' || inputs.only == 'linux'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 25
     strategy:
