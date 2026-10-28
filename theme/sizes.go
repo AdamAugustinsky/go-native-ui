@@ -188,6 +188,11 @@ type Lines struct {
 	// the slot it moves in) and its track's sides and ends (3 at every
 	// size: an 11-pt knob in a 17-pt scroller, 7 in 13).
 	ScrollerKnobInset float32
+	// ScrollerKnobMin is the shortest knob of a regular legacy scroller (20);
+	// ScrollerKnobMinSmall of a small or mini one (16); ScrollerKnobMinOverlay
+	// of an overlay one at any size (26). Longer content does not shrink the
+	// knob below them.
+	ScrollerKnobMin, ScrollerKnobMinSmall, ScrollerKnobMinOverlay float32
 }
 
 // MacLines are AppKit's on macOS 27.2.
@@ -196,10 +201,11 @@ var MacLines = Lines{
 	RowH: 24, HeaderH: 28, Indent: 13,
 	MenuItemH: 24, MenuPadY: 5, MenuSeparatorH: 11,
 	Scroller: 17, ScrollerSmall: 15, ScrollerSmallLegacy: 13, ScrollerKnobInset: 3,
+	ScrollerKnobMin: 20, ScrollerKnobMinSmall: 16, ScrollerKnobMinOverlay: 26,
 }
 
 func (l Lines) scaled(k float32) Lines {
-	for _, p := range [...]*float32{&l.FocusOutset, &l.FocusWidth, &l.RowH, &l.HeaderH, &l.Indent, &l.MenuItemH, &l.MenuPadY, &l.MenuSeparatorH, &l.Scroller, &l.ScrollerSmall, &l.ScrollerSmallLegacy, &l.ScrollerKnobInset} {
+	for _, p := range [...]*float32{&l.FocusOutset, &l.FocusWidth, &l.RowH, &l.HeaderH, &l.Indent, &l.MenuItemH, &l.MenuPadY, &l.MenuSeparatorH, &l.Scroller, &l.ScrollerSmall, &l.ScrollerSmallLegacy, &l.ScrollerKnobInset, &l.ScrollerKnobMin, &l.ScrollerKnobMinSmall, &l.ScrollerKnobMinOverlay} {
 		*p *= k
 	}
 	l.Hairline = 1
