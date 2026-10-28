@@ -88,9 +88,12 @@ var (
 	clsNSEvent, clsNSData, clsNSImage2, clsNSBitmapRep, clsNSDictionary   objc.ID
 	clsNSPasteboardItem, clsNSDraggingItem, clsNSFilePromise, clsNSNumber objc.ID
 	clsNSError, clsNSWorkspace, clsNSOpQueue                              objc.ID
+	clsNSPromiseRecv, clsNSAttrStr                                        objc.ID
 
 	tFileURL, tPNG, tTIFF, tJPEG, tHEIC, tText, errDomain objc.ID
-	arrFiles, arrImage, arrText                           objc.ID // the dragged types of each kind
+	tURL, tRTF, tHTML                                     objc.ID // a link, rich text: dragged as text
+	arrFiles, arrImage, arrText, arrTextNoURL             objc.ID // the dragged types of each kind
+	arrPromise                                            objc.ID // the types of a file promise, 0 where there are none
 	dragSource                                            objc.ID // the GNUIDragSource, retained for the process
 	promiseQueue                                          objc.ID // the NSOperationQueue of the promise delegate
 
@@ -108,6 +111,12 @@ var (
 	selDragPasteboard  = objc.Sel("draggingPasteboard")
 	selDragSourceMask  = objc.Sel("draggingSourceOperationMask")
 	selDragSeq         = objc.Sel("draggingSequenceNumber")
+
+	selReadObjects     = objc.Sel("readObjectsForClasses:options:")
+	selFileNames       = objc.Sel("fileNames")
+	selReceivePromised = objc.Sel("receivePromisedFilesAtDestination:options:operationQueue:reader:")
+	selReadableTypes   = objc.Sel("readableDraggedTypes")
+	selInitWithRTF     = objc.Sel("initWithRTF:documentAttributes:")
 
 	selAvailableType  = objc.Sel("availableTypeFromArray:")
 	selPBItems        = objc.Sel("pasteboardItems")
@@ -160,6 +169,8 @@ func dragInit() {
 		keep := func(s string) objc.ID { return objc.Retain(objc.Str(s)) }
 		tFileURL, tPNG, tTIFF = keep("public.file-url"), keep("public.png"), keep("public.tiff")
 		tJPEG, tHEIC, tText = keep("public.jpeg"), keep("public.heic"), keep("public.utf8-plain-text")
+		tURL, tRTF, tHTML = keep("public.url"), keep("public.rtf"), keep("public.html")
+		clsNSPromiseRecv, clsNSAttrStr = objc.Cls("NSFilePromiseReceiver"), objc.Cls("NSAttributedString")
 		errDomain = keep("dev.gonativeui.drag")
 		arr := func(ts ...objc.ID) objc.ID {
 			a := objc.Retain(objc.Send(clsNSMutableArray, selArrayClass))
@@ -168,7 +179,12 @@ func dragInit() {
 			}
 			return a
 		}
-		arrFiles, arrImage, arrText = arr(tFileURL), arr(tPNG, tTIFF, tJPEG, tHEIC), arr(tText)
+		arrFiles, arrImage, arrText = arr(tFileURL), arr(tPNG, tTIFF, tJPEG, tHEIC), arr(tText, tURL, tRTF, tHTML)
+		arrTextNoURL = arr(tText, tRTF, tHTML)
+		if clsNSPromiseRecv != 0 {
+			arrPromise = objc.Retain(objc.Send(clsNSPromiseRecv, selReadableTypes))
+		}
+		recvInit()
 
 		def := objc.Define("GNUIDragSource", objc.Cls("NSObject"), []string{"NSDraggingSource", "NSFilePromiseProviderDelegate"})
 		def.Method(selSrcMask, "Q@:@q", sourceMask)
@@ -229,7 +245,8 @@ type dragState struct {
 // dropDone is a decoded image on its way to the event queue, for the event e.
 type dropDone struct {
 	e    Event
-	data []byte // the PNG; empty: failed
+	data []byte // the PNG, or the paths of promised files; empty: failed
+	n    int    // the number of files, if not 0
 }
 
 // SetDragHandler sets the function that answers drags over the window (see
@@ -258,8 +275,8 @@ func (w *Window) SetDropKinds(k DragKinds) {
 	for _, p := range [...]struct {
 		k DragKinds
 		a objc.ID
-	}{{DragFiles, arrFiles}, {DragImage, arrImage}, {DragText, arrText}} {
-		if k&p.k == 0 {
+	}{{DragFiles, arrFiles}, {DragFiles, arrPromise}, {DragImage, arrImage}, {DragText, arrText}} {
+		if k&p.k == 0 || p.a == 0 {
 			continue
 		}
 		for i, n := 0, int(objc.Send(p.a, selURLCount)); i < n; i++ {
@@ -300,13 +317,20 @@ func opToNS(op DragOp) uintptr {
 // offeredKinds is the kinds the pasteboard has types for, and how many items
 // it holds.
 func offeredKinds(pb objc.ID) (k DragKinds, items int) {
-	if objc.Send1(pb, selAvailableType, uintptr(arrFiles)) != 0 {
+	files := objc.Send1(pb, selAvailableType, uintptr(arrFiles)) != 0
+	if files || arrPromise != 0 && objc.Send1(pb, selAvailableType, uintptr(arrPromise)) != 0 {
 		k |= DragFiles
 	}
 	if objc.Send1(pb, selAvailableType, uintptr(arrImage)) != 0 {
 		k |= DragImage
 	}
-	if objc.Send1(pb, selAvailableType, uintptr(arrText)) != 0 {
+	// A file's URL is also a public.url (the types conform): a link is text
+	// only when there is no file to take it for.
+	text := arrText
+	if files {
+		text = arrTextNoURL
+	}
+	if objc.Send1(pb, selAvailableType, uintptr(text)) != 0 {
 		k |= DragText
 	}
 	if arr := objc.Send(pb, selPBItems); arr != 0 {
@@ -479,6 +503,9 @@ func (w *Window) performDrop(info objc.ID) bool {
 			paths, n = ownPaths(d.own, MaxPaste)
 		} else {
 			paths, n = readPaths(f, arr, MaxPaste)
+			if n == 0 && w.receivePromised(e, pb) { // promised files: the EvDrop comes when they are written
+				return true
+			}
 		}
 		w.pushDrop(e, paths, n, true)
 	case DragText:
@@ -648,24 +675,6 @@ func readPaths(f *ffi.Frame, items objc.ID, limit int) (out []byte, n int) {
 	return out, n
 }
 
-// readText returns the text of the first pasteboard item that has some, nil if
-// it has none or it is over limit bytes of UTF-8.
-func readText(f *ffi.Frame, items objc.ID, limit int) []byte {
-	for i, cnt := 0, int(wsend(f, items, selURLCount)); i < cnt; i++ {
-		str := wsend(f, wsend(f, items, selURLAt, uintptr(i)), selStringForType, uintptr(tText))
-		if str == 0 {
-			continue
-		}
-		n := int(wsend(f, str, selLenBytes, 4 /* NSUTF8StringEncoding */))
-		p := uintptr(wsend(f, str, selUTF8))
-		if n <= 0 || n > limit || p == 0 {
-			return nil
-		}
-		return append([]byte(nil), unsafe.Slice((*byte)(ffi.PtrFromC(p)), n)...)
-	}
-	return nil
-}
-
 // wsend sends sel to id with integer or pointer arguments on frame f, which
 // belongs to the calling goroutine's thread: for workers and foreign-thread
 // callbacks, which must not use objc.F.
@@ -688,7 +697,7 @@ func (w *Window) reapDrags() {
 		d.mu.Unlock()
 		d.nDone.Add(-int32(len(done)))
 		for _, r := range done {
-			w.pushDrop(r.e, r.data, 0, false)
+			w.pushDrop(r.e, r.data, r.n, false)
 		}
 	}
 	startPromises(w)

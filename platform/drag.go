@@ -71,7 +71,11 @@ import (
 // exactly once, on success, on failure, when the application never answers
 // (FilePromise.Timeout), and when the window closes.
 //
-// Per OS. macOS is AppKit's dragging protocols (drag_darwin.go). Windows is OLE
+// Per OS. macOS is AppKit's dragging protocols (drag_darwin.go, and
+// dragrecv_darwin.go for the files a drag promises, which a drop receives into
+// a folder of the temporary directory and delivers as DragFiles once written;
+// a web link and rich text (RTF, HTML) are offered and delivered as DragText).
+// Windows is OLE
 // (drag_windows.go): drops through IDropTarget, from CF_HDROP, the "PNG" format
 // or CF_DIBV5 and CF_DIB (converted on a worker, so its EvDrop comes in a later
 // Wait), and CF_UNICODETEXT; drags out through DoDragDrop, which is modal, so
@@ -82,7 +86,8 @@ import (
 // are text/uri-list, an image image/png, text UTF8_STRING and its relatives,
 // read like a paste (INCR included), and a drag out proposes the action the
 // modifier keys name. File promises (ErrPromiseUnsupported) and the drag
-// picture (Preview) are macOS's only so far. Where there is no native
+// picture (Preview) are macOS's only so far (receiving a promise is macOS's
+// only too). Where there is no native
 // implementation (NativeDrag false) the calls return ErrDragUnsupported and no
 // events arrive.
 

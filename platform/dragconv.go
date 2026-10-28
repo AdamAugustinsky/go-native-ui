@@ -2,9 +2,11 @@ package platform
 
 import (
 	"encoding/binary"
+	"html"
 	"strconv"
 	"strings"
 	"unicode/utf16"
+	"unicode/utf8"
 )
 
 // The parts of drag and drop that no OS owns (the contract is drag.go). They
@@ -265,4 +267,78 @@ func gtkSettingInt(ini, key string) (n int, ok bool) {
 		}
 	}
 	return 0, false
+}
+
+// htmlToText is the plain text of an HTML fragment, for a drag that offers
+// rich text and no plain text: tags dropped (script and style with their
+// contents), block ends and <br> as line breaks, entities decoded, runs of
+// white space collapsed. It is not a renderer; what a page shows is more than
+// its markup says.
+func htmlToText(b []byte) []byte {
+	var out []byte
+	s := string(b)
+	skip := ""
+	lastSpace := true
+	space := func() {
+		if !lastSpace {
+			out = append(out, ' ')
+			lastSpace = true
+		}
+	}
+	newline := func() {
+		for len(out) > 0 && out[len(out)-1] == ' ' {
+			out = out[:len(out)-1]
+		}
+		if len(out) > 0 && out[len(out)-1] != '\n' {
+			out = append(out, '\n')
+		}
+		lastSpace = true
+	}
+	for len(s) > 0 {
+		lt := strings.IndexByte(s, '<')
+		if lt < 0 {
+			lt = len(s)
+		}
+		if text := s[:lt]; skip == "" && text != "" {
+			for _, r := range html.UnescapeString(text) {
+				if r == ' ' || r == '\t' || r == '\n' || r == '\r' || r == 0xA0 {
+					space()
+					continue
+				}
+				out = utf8.AppendRune(out, r)
+				lastSpace = false
+			}
+		}
+		if lt == len(s) {
+			break
+		}
+		s = s[lt:]
+		gt := strings.IndexByte(s, '>')
+		if gt < 0 {
+			break
+		}
+		tag := strings.ToLower(strings.TrimSpace(s[1:gt]))
+		s = s[gt+1:]
+		name := strings.TrimPrefix(tag, "/")
+		if i := strings.IndexAny(name, " \t\r\n/"); i >= 0 {
+			name = name[:i]
+		}
+		switch {
+		case skip != "":
+			if tag == "/"+skip {
+				skip = ""
+			}
+		case name == "script" || name == "style" || name == "head":
+			if !strings.HasPrefix(tag, "/") {
+				skip = name
+			}
+		case name == "br" || name == "p" || name == "div" || name == "li" || name == "tr" ||
+			name == "h1" || name == "h2" || name == "h3" || name == "h4" || name == "h5" || name == "h6":
+			newline()
+		}
+	}
+	for len(out) > 0 && (out[len(out)-1] == ' ' || out[len(out)-1] == '\n') {
+		out = out[:len(out)-1]
+	}
+	return out
 }

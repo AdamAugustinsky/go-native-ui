@@ -151,3 +151,22 @@ func TestGTKSettingInt(t *testing.T) {
 		}
 	}
 }
+
+func TestHTMLToText(t *testing.T) {
+	for _, c := range []struct{ in, want string }{
+		{"plain", "plain"},
+		{"<b>bold</b> and <i>italic</i>", "bold and italic"},
+		{"<p>one</p><p>two &amp; three</p>", "one\ntwo & three"},
+		{"a<br>b<br/>c", "a\nb\nc"},
+		{"<html><head><title>t</title><style>p{x:y}</style></head><body><script>var a = '<b>';</script>text&nbsp;here</body></html>", "text here"},
+		{"  spaced \n\t out  ", "spaced out"},
+		{"<ul><li>x</li><li>y</li></ul>", "x\ny"},
+		{"é &eacute; &#x263A;", "é é ☺"},
+		{"unclosed <b", "unclosed"},
+		{"", ""},
+	} {
+		if got := string(htmlToText([]byte(c.in))); got != c.want {
+			t.Errorf("htmlToText(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
