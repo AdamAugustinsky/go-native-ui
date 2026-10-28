@@ -481,7 +481,7 @@ type appObject struct {
 	launched    bool // the late setup ran (AppLaunched)
 	terminated  bool // EvWillTerminate was delivered
 	startHidden bool
-	pumping     bool // the loop is inside the pump or a popped-up menu: no window closes under it
+	pumping     bool // the loop is inside the pump or a popped-up menu: no window closes under it, except in AppKit's own wait for a quit answer (closeWin)
 	inSafe      bool
 	done        bool // the loop ends after this turn (Quit, the last window closing)
 	nextWinID   uint32
@@ -509,6 +509,8 @@ type appObject struct {
 
 	// What the windows draw with, made with the first window and released
 	// with the last (window.go).
+	retired []retiredWin // windows closed for the app whose platform resources wait for the pump to return (closeWin)
+
 	dev    *gpu.Device // the GPU device and queue, where the OS shares one (macOS)
 	noDev  bool        // the OS has no shared device: a surface makes its own
 	r      *gpu.Renderer
@@ -588,7 +590,12 @@ func (a *App) safePoint() {
 		w.flushDialogs()
 		w.applyCommands()
 	}
-	if a.pumping {
+	// AppKit's own wait for a quit answer (a terminate: someone else sent)
+	// runs inside the pump and the dispatcher with it: a window closes then
+	// for the app at once, and its platform resources are released when the
+	// pump is back (closeWin). Under any other part of the pump (a
+	// popped-up menu's tracking) a window waits for the loop's turn.
+	if a.pumping && !platform.QuitWaitNative() {
 		return
 	}
 	for i := 0; i < len(a.wins); {
@@ -597,6 +604,9 @@ func (a *App) safePoint() {
 			continue
 		}
 		i++
+	}
+	if !a.pumping {
+		a.releaseRetired()
 	}
 }
 

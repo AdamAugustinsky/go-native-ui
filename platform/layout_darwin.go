@@ -17,13 +17,17 @@ import (
 // QWERTY ⌘" changes, and what AppKit matches key equivalents by), and without
 // Shift, which is a modifier of the shortcut of its own: ⌘⇧[ is the [ key
 // with Shift, not the { key. The layout's own UCKeyTranslate gives that
-// character for a virtual key code with just ⌘ in the modifier state. The
+// character for a virtual key code with just ⌘ in the modifier state. A menu
+// item is the exception: AppKit matches its key equivalent against the
+// event's charactersIgnoringModifiers, which keeps Shift, so an item for
+// ⇧⌘[ must say "{" (shiftedChar). The
 // layout data comes from the Text Input Sources (TIS) API, is kept until the
 // user selects another layout (a distributed notification), and is read on
 // the main thread only, so the per-key path allocates nothing.
 
 const (
 	ucCmdState           = 1 << (8 - 8) // cmdKey >> 8: the modifier state UCKeyTranslate takes
+	ucShiftState         = 1 << (9 - 8) // shiftKey >> 8
 	ucNoDeadKeys         = 1 << 0       // kUCKeyTranslateNoDeadKeysBit
 	ucLayoutChangedNn    = "com.apple.Carbon.TISNotifySelectedKeyboardInputSourceChanged"
 	ucTextInputChangedNn = "NSTextInputContextKeyboardSelectionDidChangeNotification"
@@ -89,7 +93,7 @@ func initLayout() {
 	// cached (the next key reads the new layout).
 	sel := objc.Sel("gnuiLayoutChanged:")
 	def := objc.Define("GNUILayoutObserver", objc.Cls("NSObject"), nil)
-	def.Method(sel, "v@:@", func(*ffi.CB) { dropLayout() })
+	def.Method(sel, "v@:@", func(*ffi.CB) { dropLayout(); refreshShiftedKeys() })
 	obs := objc.Send(objc.Send(def.Register(), selAlloc), selInitPlain)
 	layout.observer, layout.changed = obs, sel
 	dc := objc.Send(objc.Cls("NSDistributedNotificationCenter"), objc.Sel("defaultCenter"))
@@ -141,19 +145,52 @@ func loadLayout() {
 // then the physical key, as AppKit does). ok is false when the system's
 // layout data cannot be read at all.
 func layoutChar(code uint32) (r rune, ok bool) {
+	if !haveLayout() {
+		return 0, false
+	}
+	return shortcutRune(ucRune(layout.uchr, layout.kbd, code, ucCmdState)), true
+}
+
+// haveLayout loads the selected layout's data if it is not cached, and
+// reports whether there is any.
+func haveLayout() bool {
 	if !layout.inited {
 		initLayout()
 	}
 	if layout.failed {
-		return 0, false
+		return false
 	}
 	if !layout.valid {
 		loadLayout()
 	}
-	if layout.uchr == 0 {
-		return 0, false
+	return layout.uchr != 0
+}
+
+// lastMainKey is the last virtual key code of the main block (kVK_ANSI_Grave,
+// 0x32): the letter, digit and punctuation keys, the ISO section key (0x0A)
+// among them, and not the keypad, whose keys type the same characters.
+const lastMainKey = 0x32
+
+// shiftedChar is the character the key that types key for a shortcut
+// (layoutChar) types with Shift held: what an event's
+// charactersIgnoringModifiers is for ⇧⌘ plus that key, and so what an NSMenu
+// item's key equivalent must be to match it ({ for the [ key on a US layout,
+// # for 3, and what the layout makes of them elsewhere). 0 when no key of the
+// layout types key with ⌘ held or its Shift character is not printable ASCII;
+// the item then keeps key. Main thread.
+func shiftedChar(key rune) rune {
+	if !haveLayout() {
+		return 0
 	}
-	return shortcutRune(ucRune(layout.uchr, layout.kbd, code, ucCmdState)), true
+	for code := uint32(0); code <= lastMainKey; code++ {
+		if shortcutRune(ucRune(layout.uchr, layout.kbd, code, ucCmdState)) != key {
+			continue
+		}
+		if r := ucRune(layout.uchr, layout.kbd, code, ucShiftState); r > 0x20 && r <= 0x7e {
+			return r
+		}
+	}
+	return 0
 }
 
 // ucRune translates virtual key code code through the UCKeyboardLayout uchr

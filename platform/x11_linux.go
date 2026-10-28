@@ -116,22 +116,24 @@ var xLoaded bool
 var (
 	nameWMDelete    = cstr("WM_DELETE_WINDOW")
 	nameWMProtocols = cstr("WM_PROTOCOLS")
+	nameNetWMName   = cstr("_NET_WM_NAME")
 )
 
 type x11 struct {
-	dpy, win uintptr
-	screen   int32
-	wmDelete uintptr
-	wmProto  uintptr
-	atoms    [1]uintptr // XSetWMProtocols array
-	xev      [24]int64  // one XEvent
-	keysym   uint64     // XLookupString out parameter (KeySym is unsigned long)
-	supp     int32      // XkbSetDetectableAutoRepeat out parameter (Bool)
-	keyDown  [32]uint8  // pressed keycodes, to flag auto-repeat
-	keyBuf   [32]byte
-	utf8     [8]byte // xkb_keysym_to_utf8 output
-	title    [128]byte
-	hints    xSizeHints
+	dpy, win   uintptr
+	screen     int32
+	wmDelete   uintptr
+	wmProto    uintptr
+	atoms      [1]uintptr // XSetWMProtocols array
+	xev        [24]int64  // one XEvent
+	keysym     uint64     // XLookupString out parameter (KeySym is unsigned long)
+	supp       int32      // XkbSetDetectableAutoRepeat out parameter (Bool)
+	keyDown    [32]uint8  // pressed keycodes, to flag auto-repeat
+	keyBuf     [32]byte
+	utf8       [8]byte // xkb_keysym_to_utf8 output
+	title      []byte  // the NUL-terminated title (titleC)
+	aNetWMName uintptr // _NET_WM_NAME: the title as UTF-8, which window managers prefer to WM_NAME
+	hints      xSizeHints
 	x11Clip
 	cursors [numShapes]uintptr // XDefineCursor cursors by shape, 0: not made yet
 }
@@ -262,8 +264,8 @@ func (w *Window) openX11(o Options) (err error) {
 	x.atoms[0] = x.wmDelete
 	fr.Call4(xf.setWMProtocols, x.dpy, x.win, uintptr(unsafe.Pointer(&x.atoms[0])), 1)
 
-	copy(x.title[:len(x.title)-1], o.Title)
-	fr.Call3(xf.storeName, x.dpy, x.win, uintptr(unsafe.Pointer(&x.title[0])))
+	x.aNetWMName = x.intern(nameNetWMName)
+	w.setTitleX11(o.Title)
 	if o.MinWidth > 0 || o.MinHeight > 0 {
 		scale := float32(w.s120) / 120
 		x.hints = xSizeHints{flags: pMinSize,
@@ -286,6 +288,19 @@ func (w *Window) openX11(o Options) (err error) {
 
 	w.pfd[0] = pollfd{fd: int32(fr.Call1(xf.connectionNumber, x.dpy)), events: pollIn}
 	return nil
+}
+
+// setTitleX11 sets WM_NAME (XStoreName: Latin-1 for old window managers) and
+// _NET_WM_NAME (UTF-8, which the ones in use read first).
+func (w *Window) setTitleX11(title string) {
+	x := &w.x
+	if x.dpy == 0 || x.win == 0 {
+		return
+	}
+	x.title = titleC(x.title, title)
+	fr.Call3(xf.storeName, x.dpy, x.win, uintptr(unsafe.Pointer(&x.title[0])))
+	x.changeBytes(x.win, x.aNetWMName, x.aUTF8, x.title[:len(x.title)-1])
+	fr.Call1(xf.flush, x.dpy)
 }
 
 func (w *Window) closeX11() {

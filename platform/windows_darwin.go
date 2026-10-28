@@ -336,7 +336,7 @@ func route(ev objc.ID) {
 	pumpStats.routed++
 	if uintptr(objc.Send(ev, selType)) == 15 && uintptr(objc.Send(ev, selSubtype))&0xFFFF == wakeSubtype {
 		pumpStats.wakeEvents++
-		giveWakes()
+		giveWakes(false)
 		return // also used to unblock the loop after a display-link tick
 	}
 	if w := eventWindow(ev); w != nil {
@@ -389,14 +389,20 @@ func (w *Window) Wake() {
 // for every window, a window's own Wake for it. The woken windows ask for a
 // frame (ArmOnWake): inside a loop of AppKit's the pump that would take the
 // wake is suspended, and the frame's tick draws it through the frame handler.
-// It reports whether any wake was pending.
-func giveWakes() bool {
+// nested says the wake was found inside such a loop, so the windows woken are
+// marked as in one at once (the ticks would take it for one only after a
+// frame waited nestedAfter for the app). It reports whether any wake was
+// pending.
+func giveWakes(nested bool) bool {
 	all := takeWake()
 	any := loopWake.Swap(false) || all
 	for _, w := range openWindows() {
 		if w.wakeMark.Swap(false) || all {
 			any = true
 			w.q.push(Event{Kind: EvWake, Time: Now()})
+			if nested {
+				w.nested = true
+			}
 			w.RequestFrame()
 		}
 	}

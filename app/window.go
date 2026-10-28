@@ -62,8 +62,12 @@ func (w *Win) App() *App {
 
 // Close closes the window at the next safe point, without asking its
 // CloseRequester: between frames, at the loop's turn or the application
-// object's dispatch (which also runs while a quit answer is pending). The app
-// ends with its last window unless it keeps running.
+// object's dispatch (which also runs while a quit answer is pending). While
+// AppKit waits inside the loop's pump for the answer to a terminate: someone
+// else sent, the window is closed for the app at once (Open is false, it is
+// off the screen, draws and gets no events) and its platform window is
+// released when the wait is over. The app ends with its last window unless it
+// keeps running.
 func (w *Win) Close() {
 	if w.Open() {
 		w.a.closing = true
@@ -155,6 +159,24 @@ func (w *Win) SetDocumentEdited(edited bool) {
 	w.command(cmdEdited)
 }
 
+// SetRepresentedFile makes the window stand for a file (macOS: the proxy icon
+// in the title bar, which can be dragged out and ⌘-clicked for the path
+// menu); "" clears it. Unchanged, it does nothing, so it can be called every
+// frame. It does nothing where the OS has no such icon.
+func (w *Win) SetRepresentedFile(path string) { w.represent(path, false) }
+
+// SetRepresentedURL makes the window stand for a URL, as SetRepresentedFile
+// does for a file; "" clears it.
+func (w *Win) SetRepresentedURL(url string) { w.represent(url, true) }
+
+func (w *Win) represent(s string, isURL bool) {
+	if !w.Open() || (s == w.a.represented && isURL == w.a.representedURL && w.a.cmd&cmdRepresented == 0) {
+		return
+	}
+	w.a.represented, w.a.representedURL = s, isURL
+	w.command(cmdRepresented)
+}
+
 // AttentionID identifies a RequestAttention, for CancelAttention; 0 is none.
 type AttentionID int
 
@@ -189,6 +211,7 @@ const (
 	cmdTitle cmdMask = 1 << iota
 	cmdFrame
 	cmdEdited
+	cmdRepresented
 	cmdShow
 	cmdHide
 	cmdFocus
@@ -206,10 +229,12 @@ type winState struct {
 
 	waited []platform.Event // the window's events from the last pump, where the pump is its Wait (Linux: pump_other.go)
 
-	cmd       cmdMask    // window commands waiting for the safe point
-	frameWant [4]float64 // SetFrame's frame
-	edited    bool       // SetDocumentEdited's state
-	zoomWant  bool       // SetZoomed's state
+	cmd            cmdMask    // window commands waiting for the safe point
+	frameWant      [4]float64 // SetFrame's frame
+	edited         bool       // SetDocumentEdited's state
+	represented    string     // SetRepresentedFile's path, or SetRepresentedURL's URL
+	representedURL bool
+	zoomWant       bool // SetZoomed's state
 
 	ownTex *winUploader // the textures the window's widgets made on the shared renderer
 
@@ -250,6 +275,13 @@ func (a *App) applyCommands() {
 	}
 	if c&cmdEdited != 0 {
 		win.SetDocumentEdited(a.edited)
+	}
+	if c&cmdRepresented != 0 {
+		if a.representedURL {
+			win.SetRepresentedURL(a.represented)
+		} else {
+			win.SetRepresentedFile(a.represented)
+		}
 	}
 	if c&cmdFrame != 0 {
 		f := a.frameWant
