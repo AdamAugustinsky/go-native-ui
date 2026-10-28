@@ -310,14 +310,6 @@ const (
 	tomResume               = -9999994
 )
 
-// formatEtc is FORMATETC.
-type formatEtc struct {
-	cf     uint16
-	ptd    uintptr
-	aspect uint32
-	lindex int32
-	tymed  uint32
-}
 
 // loadRichEdit loads msftedit.dll and makes the COM kinds, once.
 func loadRichEdit(hinst uintptr) error {
@@ -1650,7 +1642,7 @@ func oleCallbackMethods() []com.Method {
 
 // hasFormat asks data object d for clipboard format cf on an HGLOBAL.
 func hasFormat(d uintptr, cf uint16) bool {
-	rich.fe = formatEtc{cf: cf, aspect: 1, lindex: -1, tymed: 1 /* TYMED_HGLOBAL */}
+	rich.fe = formatEtc{cfFormat: cf, dwAspect: 1, lindex: -1, tymed: 1 /* TYMED_HGLOBAL */}
 	if cf == cfBitmapFmt {
 		rich.fe.tymed = 16 // TYMED_GDI
 	}

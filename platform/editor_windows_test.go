@@ -62,10 +62,7 @@ func utf16Of(s string) []uint16 {
 	return u
 }
 
-func pressKey(e *Editor, vk uintptr) {
-	win32.Call(pPostMessageW, e.hwnd, wmKeyDown, vk, 1)
-	win32.Call(pPostMessageW, e.hwnd, wmKeyUp, vk, 1|3<<30)
-}
+func pressKey(e *Editor, vk uintptr) { postKey(e.hwnd, vk) }
 
 // pumpSignals pumps until the editor reports something matching want (or d
 // passes) and returns everything it reported.
