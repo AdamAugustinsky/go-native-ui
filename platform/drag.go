@@ -34,23 +34,29 @@ import (
 // for DragText UTF-8. Of the kinds a drag offers, the one delivered is the
 // first of files, image, text that the target accepts (DragAnswer.Accept).
 //
-// The data is copied during performDragOperation: on the main thread, before
-// it returns, because the pasteboard's items go stale when the pasteboard
-// changes owner (another drag can start first). File URLs and text are read at
-// once, within their caps, and their EvDrop is queued at once. An image is
-// taken as the file its item names (Finder and Photos offer one) or as a copy of
-// its encoded bytes (over MaxPaste is refused), and decoded to PNG on a worker:
-// its EvDrop arrives in a later Wait. The worker never touches the pasteboard.
-// An image is checked from its header before it is decoded: image 0 only, over
-// MaxImagePixels pixels, or more decoded bytes than MaxConvertBytes, fails; the
-// PNG it is encoded to is bounded by MaxPaste, the encoder failing past it.
+// The data is read on a worker goroutine while performDragOperation waits for it
+// on the main thread, for up to dropSyncBudget (250 ms). A source that answers
+// in that time (all but a lazy provider in another process) gives its EvDrop
+// before the drop returns, as always; a slower one no longer holds the main
+// thread, performDragOperation returns, and the EvDrop arrives in a later Wait
+// when the data does. The pasteboard's items go stale when it changes owner
+// (another drag can start first), so the worker compares the pasteboard's change
+// count before and after its read: a read across a change is thrown away and the
+// EvDrop is FlagFailed, never another owner's data. File URLs and text are read
+// within their caps. An image is taken as the file its item names (Finder and
+// Photos offer one) or as a copy of its encoded bytes (over MaxPaste is
+// refused), and decoded to PNG by the same worker: its EvDrop arrives in a later
+// Wait. An image is checked from its header before it is decoded: image 0 only,
+// over MaxImagePixels pixels, or more decoded bytes than MaxConvertBytes, fails;
+// the PNG it is encoded to is bounded by MaxPaste, the encoder failing past it.
 // A drag from our own session (StartDrag) is answered from the spec's data and
 // not through the pasteboard.
 //
-// Known risk: a source that provides its data lazily (a renderer in another
-// process) can hold the main thread inside the copy until the system's
-// pasteboard timeout. That is documented, not worked around (reading on a
-// worker would read items that may be stale), and tracked as a follow-up.
+// Not received: a drag whose items are only file promises (NSFilePromiseReceiver:
+// Mail attachments, Safari images, Photos exports) offers no kind this window
+// takes. Receiving them means asking the promiser to write the files into a
+// directory of ours (receivePromisedFilesAtDestination:), which is the next step
+// for the worker above and is tracked in #13.
 //
 // The system asks synchronously, at every enter and move, which operation the
 // window answers, so that it can show the right cursor: the handler of
@@ -73,6 +79,16 @@ import (
 //
 // Where there is no native implementation (Windows and Linux so far,
 // NativeDrag) the calls return ErrUnsupported and no events arrive.
+
+// EnableFilePromises turns on the receiving of file promises: a drag that offers
+// only promises is then offered as DragFiles, and its files are written into a
+// folder of ours. Off by default, because AppKit throws (and the process ends) if
+// receivePromisedFilesAtDestination: is called outside a real drag's
+// performDragOperation:, and nothing in the tests can start a real drag from
+// another application: the reception's bookkeeping is tested with the reader
+// block called by hand, and the call into AppKit has been read, not run. Set it
+// before the first window opens, then try a drag from Mail, Safari and Photos.
+var EnableFilePromises bool
 
 // DragKinds is a set of kinds of dragged content.
 type DragKinds uint8

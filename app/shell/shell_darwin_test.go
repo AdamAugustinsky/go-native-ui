@@ -100,3 +100,96 @@ func TestRevealPlumbingDarwin(t *testing.T) {
 		t.Errorf("NSURL path = %q", got)
 	}
 }
+
+// A folder swapped for another between the check and the move: the Trash takes
+// the one that was swapped in, and Trash notices (the item in the Trash is not
+// the one that was opened), puts it back and reports the error. Here the folder
+// swapped in is the user's home.
+func TestTrashSwapIsUndoneDarwin(t *testing.T) {
+	base := t.TempDir()
+	victim := filepath.Join(base, uniqueName("gonativeui-shell-home-"))
+	target := filepath.Join(base, uniqueName("gonativeui-shell-target-"))
+	write := func(p, s string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(s), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(filepath.Join(victim, "precious"), "the user's files")
+	write(filepath.Join(target, "note"), "an ordinary folder")
+	t.Setenv("HOME", victim)
+	if home, err := os.UserHomeDir(); err != nil || home != victim {
+		t.Fatalf("home = %q, %v", home, err)
+	}
+	// Probe: can this session use the Trash at all?
+	probe := filepath.Join(base, uniqueName("gonativeui-shell-probe-")+".txt")
+	write(probe, "x")
+	if _, err := trashURL(probe); err != nil {
+		t.Skipf("this session cannot use the Trash: %v", err)
+	}
+
+	beforeMove = func() {
+		os.Rename(target, target+".aside")
+		os.Rename(victim, target) // the home folder is now where the folder was
+	}
+	t.Cleanup(func() { beforeMove = func() {} })
+
+	err := (osSystem{}).trash(target)
+	if err == nil {
+		t.Fatal("a swapped path was trashed without an error")
+	}
+	if got, rerr := os.ReadFile(filepath.Join(target, "precious")); rerr != nil || string(got) != "the user's files" {
+		t.Fatalf("the swapped-in folder was not put back: %q, %v (trash error: %v)", got, rerr, err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(target+".aside", "note")); string(got) != "an ordinary folder" {
+		t.Errorf("the folder that was checked changed: %q", got)
+	}
+}
+
+// Without a swap, what the path names after links are resolved is what moves,
+// and a link in the path is not followed past what was checked.
+func TestTrashThroughALinkDarwin(t *testing.T) {
+	base := t.TempDir()
+	real := filepath.Join(base, "real")
+	os.MkdirAll(real, 0o700)
+	if err := os.Symlink(real, filepath.Join(base, "alias")); err != nil {
+		t.Fatal(err)
+	}
+	name := uniqueName("gonativeui-shell-via-link-") + ".txt"
+	f := filepath.Join(real, name)
+	os.WriteFile(f, []byte("x"), 0o600)
+	if home, err := os.UserHomeDir(); err == nil {
+		t.Cleanup(func() { os.Remove(filepath.Join(home, ".Trash", name)) })
+	}
+	if err := Trash(filepath.Join(base, "alias", name)); err != nil {
+		t.Skipf("this session cannot use the Trash: %v", err)
+	}
+	if _, err := os.Lstat(f); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the file is still there: %v", err)
+	}
+}
+
+// A link is trashed as a link; what it points to stays.
+func TestTrashLinkNotTargetDarwin(t *testing.T) {
+	base := t.TempDir()
+	target := filepath.Join(base, "target.txt")
+	os.WriteFile(target, []byte("keep"), 0o600)
+	name := uniqueName("gonativeui-shell-link-")
+	link := filepath.Join(base, name)
+	os.Symlink(target, link)
+	if home, err := os.UserHomeDir(); err == nil {
+		t.Cleanup(func() { os.Remove(filepath.Join(home, ".Trash", name)) })
+	}
+	if err := Trash(link); err != nil {
+		t.Skipf("this session cannot use the Trash: %v", err)
+	}
+	if b, err := os.ReadFile(target); err != nil || string(b) != "keep" {
+		t.Errorf("the link's target changed: %q, %v", b, err)
+	}
+	if _, err := os.Lstat(link); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the link is still there: %v", err)
+	}
+}
