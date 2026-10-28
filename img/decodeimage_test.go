@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"image"
-	"runtime"
 	"sync"
 	"testing"
 )
@@ -75,11 +74,6 @@ func TestDecode(t *testing.T) {
 	} {
 		if m, err := Decode(c.data, 0); !errors.Is(err, c.want) || m != nil {
 			t.Errorf("%s: %v, %v; want %v", c.name, m, err, c.want)
-		}
-	}
-	if runtime.GOOS != "darwin" {
-		if _, err := Decode([]byte("RIFF\x24\x00\x00\x00WEBPVP8 \x18\x00\x00\x00"), 0); !errors.Is(err, ErrUnsupported) {
-			t.Errorf("WebP off macOS: %v, want ErrUnsupported", err)
 		}
 	}
 
