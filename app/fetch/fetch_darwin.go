@@ -322,6 +322,7 @@ func do(ctx context.Context, u *url.URL, c *call, s *sink, opt Options) (Respons
 	}()
 
 	res := Response{ContentLength: -1}
+	var reported int64 // the last count UploadProgress was given
 	handle := func(e event) (bool, error) {
 		switch e.kind {
 		case evResponse:
@@ -344,10 +345,17 @@ func do(ctx context.Context, u *url.URL, c *call, s *sink, opt Options) (Respons
 		case evSent:
 			if c.upload != nil {
 				c.upload(e.sent, c.length)
+				reported = e.sent
 			}
 		case evDone:
 			if e.err != nil {
 				return true, e.err
+			}
+			// NSURLSession may end the task before it reports the last of
+			// the body (seen on a loaded runner at 93 % of 1 GiB): the
+			// bytes all went, so the progress ends where the body did.
+			if c.upload != nil && c.sent > reported {
+				c.upload(c.sent, c.length)
 			}
 			return true, nil
 		}
