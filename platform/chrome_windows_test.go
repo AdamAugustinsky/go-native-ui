@@ -212,24 +212,24 @@ func TestChromeCaptionButtonsGetThePointer(t *testing.T) {
 	}
 }
 
-// The caption buttons are as wide as the system's: an ordinary window's
-// caption, hit-tested pixel by pixel along its middle (DefWindowProc's
-// HTMINBUTTON, HTMAXBUTTON and HTCLOSE, what the user's pointer finds), gives
-// each button's width, against CaptionButtonW at the window's scale. DWM's
-// DWMWA_CAPTION_BUTTON_BOUNDS is logged: it includes a margin (146 px for
-// three 46-px buttons at 100 % on the runners).
+// The caption buttons take the room the system's do: DWM's
+// DWMWA_CAPTION_BUTTON_BOUNDS of an ordinary window (146 × 30 px at 100 % on
+// the runners) holds three CaptionButtonW buttons at the window's scale with
+// at most 8 px to spare per 100 %. DefWindowProc's own hit test of that
+// caption is logged: it still answers with the legacy metrics (33–35 px a
+// button), not what DWM draws, so it is no reference.
 func TestCaptionMetricsMatchTheSystem(t *testing.T) {
 	lockThread(t)
 	w := openW(t, "system caption")
 	w.Show()
 	settle(w)
 	var r rect
-	if hr := win32.HR(win32.Call(pDwmGetWindowAttrW, w.hwnd, dwmaCaptionButtonBounds, uintptr(unsafe.Pointer(&r)), unsafe.Sizeof(r))); hr >= 0 {
-		t.Logf("DWM's caption button bounds (window coordinates): %v", r)
+	if hr := win32.HR(win32.Call(pDwmGetWindowAttrW, w.hwnd, dwmaCaptionButtonBounds, uintptr(unsafe.Pointer(&r)), unsafe.Sizeof(r))); hr < 0 {
+		t.Skipf("DWMWA_CAPTION_BUTTON_BOUNDS: %#x", uint32(hr))
 	}
 	x, y, ww, _ := w.FrameRect()
 	o := clientOrigin(w)
-	mid := (int32(y) + o.y) / 2 // the caption's middle, between the window's top and the client's
+	mid := (int32(y) + o.y) / 2
 	var n [3]int
 	for sx := int32(x); sx < int32(x+ww); sx++ {
 		switch screenHit(w, sx, mid) {
@@ -241,11 +241,10 @@ func TestCaptionMetricsMatchTheSystem(t *testing.T) {
 			n[2]++
 		}
 	}
-	want := int(int32(CaptionButtonW*w.scale + 0.5))
-	t.Logf("the system's caption buttons at scale %v, caption %d px: %v px wide (ours %d × the band)", w.scale, o.y-int32(y), n, want)
-	for i, c := range n {
-		if c < want-2 || c > want+2 {
-			t.Errorf("the system's button %d is %d px wide, ours %d", i, c, want)
-		}
+	ours := 3 * int32(CaptionButtonW*w.scale+0.5)
+	spare := int32(8*w.scale + 0.5)
+	t.Logf("scale %v: DWM's caption buttons %v (%d×%d), DefWindowProc's hit test %v px a button; ours %d in all", w.scale, r, r.right-r.left, r.bottom-r.top, n, ours)
+	if d := r.right - r.left - ours; d < 0 || d > spare {
+		t.Errorf("DWM's caption buttons are %d px wide, ours %d: want ours within %d px of them", r.right-r.left, ours, spare)
 	}
 }
