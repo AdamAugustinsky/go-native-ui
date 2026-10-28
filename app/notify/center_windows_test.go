@@ -162,7 +162,7 @@ func TestLiveToastsChild(t *testing.T) {
 	if !Available() {
 		t.Fatal("not Available after Setup")
 	}
-	drain()
+	waitUntil(t, "the launch's listing", func() bool { return len(s.results()) > 0 })
 	if r := s.results(); len(r) != 1 || r[0].Kind != ResultRestored || r[0].Restored != 0 {
 		t.Fatalf("after Setup: %+v, want one empty ResultRestored", r)
 	}

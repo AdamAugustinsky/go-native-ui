@@ -67,8 +67,8 @@ func checkBadge(icon uintptr, n int) error {
 			return fmt.Errorf("corner %v is not transparent (alpha %d)", c, a)
 		}
 	}
-	if a, r, g, b := at(n/8+1, n/2); a < 200 || r < 180 || g > 120 {
-		return fmt.Errorf("the disc's left edge is %d,%d,%d alpha %d, want badge red", r, g, b, a)
+	if a, r, g, b := at(n/2, n/8); a < 200 || r < 180 || g > 120 {
+		return fmt.Errorf("the disc's top is %d,%d,%d alpha %d, want badge red", r, g, b, a)
 	}
 	white := 0
 	for y := n / 4; y < 3*n/4; y++ {
@@ -85,6 +85,8 @@ func checkBadge(icon uintptr, n int) error {
 }
 
 func TestBadgeIcon(t *testing.T) {
+	warm, _ := drawBadge("0", 16) // GDI's own first-use objects (the font's) are not ours
+	win32.DestroyIcon(warm)
 	gdi0, user0 := guiObjects()
 	for _, n := range []int{16, 20, 24, 32} {
 		for _, label := range []string{"7", "42", "999+", "!"} {
