@@ -4,9 +4,11 @@ import (
 	"image"
 	"os"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
+	"gonativeui/app/paths"
 	"gonativeui/text"
 	"gonativeui/ui"
 )
@@ -301,5 +303,24 @@ func TestSetKeepRunningChangesWhatTheLastCloseDoes(t *testing.T) {
 	a.closeRequested()
 	if !a.done {
 		t.Error("after SetKeepRunning(false) the last window's close did not end the app")
+	}
+}
+
+func TestDevelopmentID(t *testing.T) {
+	for exe, want := range map[string]string{
+		"/tmp/go-build123/b001/exe/notes": "dev.gonativeui.notes",
+		"/x/Pilot Tool.exe":               "dev.gonativeui.Pilot-Tool",
+		"/x/my app.v2":                    "dev.gonativeui.my-app",
+		"/x/.hidden":                      "dev.gonativeui.app",
+		"":                                "dev.gonativeui.app",
+		"/x/" + strings.Repeat("n", 300):  "dev.gonativeui." + strings.Repeat("n", 100),
+	} {
+		got := developmentID(exe)
+		if got != want {
+			t.Errorf("developmentID(%q) = %q, want %q", exe, got, want)
+		}
+		if !paths.ValidID(got) {
+			t.Errorf("developmentID(%q) = %q is not a valid directory name", exe, got)
+		}
 	}
 }

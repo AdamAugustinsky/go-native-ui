@@ -198,3 +198,7 @@ func NativeLoop() bool { return reg.app.modal > 0 }
 // the frame that draws it: inside a native modal loop, whose tick draws only
 // the windows that asked for a frame.
 func ArmOnWake() bool { return NativeLoop() }
+
+// QuitWaitNative is false here: Windows runs no wait of its own for a quit
+// answer inside the pump.
+func QuitWaitNative() bool { return false }

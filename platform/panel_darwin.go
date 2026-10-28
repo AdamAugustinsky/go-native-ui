@@ -103,6 +103,7 @@ func (w *Window) configurePanel() {
 
 // showPanel is Show for a panel.
 func (w *Window) showPanel() {
+	w.attachPanel() // a child panel: placed and ordered over its parent
 	if w.panel.NonActivating {
 		objc.Send(w.win, selOrderFrontRegardless)
 	} else {

@@ -99,6 +99,7 @@ type wayland struct {
 	offers       [maxOffers]wlOffer
 	sel          int    // index of the selection's offer in offers, or -1
 	serial       uint32 // serial of the latest input event, for set_selection
+	dnd          wlDnd  // drag and drop (dnd_wl_linux.go)
 
 	surface, xdgSurface, toplevel uintptr
 	deco, frac, viewport          uintptr
@@ -153,7 +154,7 @@ type wayland struct {
 	axisNotched uint8
 
 	args   [8]uint64 // union wl_argument array for marshal calls
-	title  [128]byte
+	title  []byte    // the NUL-terminated title (titleC)
 	keyBuf [32]byte
 }
 
@@ -269,6 +270,19 @@ func (w *Window) bind(name uint32, iface, ifaceName uintptr, v uint32) uintptr {
 	return p
 }
 
+// setTitleWayland sends xdg_toplevel.set_title (2); the compositor takes it
+// with the next state it shows.
+func (w *Window) setTitleWayland(title string) {
+	y := &w.wy
+	if y.toplevel == 0 {
+		return
+	}
+	y.title = titleC(y.title, title)
+	y.args[0] = uint64(uintptr(unsafe.Pointer(&y.title[0])))
+	w.req(y.toplevel, 2, 0, y.toplevelV, 0)
+	fr.Call1(wlf.flush, y.display)
+}
+
 // ---- Open / Close ----
 
 func (w *Window) openWayland(o Options) (err error) {
@@ -286,7 +300,7 @@ func (w *Window) openWayland(o Options) (err error) {
 
 	w.lw, w.lh, w.s120 = int32(o.Width), int32(o.Height), 120
 	w.pw, w.ph = w.physical(w.lw), w.physical(w.lh)
-	copy(y.title[:len(y.title)-1], o.Title)
+	y.title = titleC(y.title, o.Title)
 
 	y.display = fr.Call1(wlf.connect, 0)
 	if y.display == 0 {
@@ -612,6 +626,8 @@ func (w *Window) wlEvent(proxy uintptr, op uint32, a unsafe.Pointer) {
 		w.onDataDevice(op, a)
 	case y.src:
 		w.onDataSource(op, a)
+	case y.dnd.src:
+		w.onDndSource(op, a)
 	default:
 		if !w.onOffer(proxy, op, a) {
 			w.onOutput(proxy, op, a)
@@ -901,6 +917,12 @@ func (w *Window) onPointer(op uint32, a unsafe.Pointer) {
 		if st == 0 && b == ButtonLeft && y.swallowRelease {
 			y.swallowRelease = false
 			return
+		}
+		if b == ButtonLeft { // a drag out starts from this press
+			w.leftDown = st != 0
+			if st != 0 {
+				y.dnd.pressSerial = serial
+			}
 		}
 		ev := Event{Kind: EvPointerButton, Button: b, X: w.ptrX, Y: w.ptrY, Mods: w.mods, Time: now}
 		if st != 0 {

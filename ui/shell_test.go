@@ -189,6 +189,13 @@ func TestAvoidHostsOverlay(t *testing.T) {
 	if r.ovRect[2] > r.ovRect[0] {
 		t.Errorf("the popup over the host has a rectangle %v: it should be left out", r.ovRect)
 	}
+	// an owner that cannot place it clear is asked once, not every frame
+	for i := 0; i < 3; i++ {
+		r.frame(r.build)
+		if r.c.Animating() {
+			t.Fatalf("a popup pinned over a host still asks for a frame (frame %d after the extra one)", i)
+		}
+	}
 	r.popupAt = [4]float32{10, 250, 60, 250} // clear of the host
 	r.frame(r.build)
 	r.frame(r.build)

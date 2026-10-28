@@ -50,10 +50,20 @@ type texTable struct {
 	live []bool
 	free []int32 // freed indices, reused last-in first-out
 	n    int     // live textures
+	size []int64 // the bytes of each live texture (setBytes), 0 for a freed one
+	used int64   // the sum of size
+}
+
+// texBytes is the memory of a w×h texture of kind (no mip levels).
+func texBytes(kind TextureKind, w, h int) int64 {
+	if kind == TexR8 {
+		return int64(w) * int64(h)
+	}
+	return int64(w) * int64(h) * 4
 }
 
 func newTexTable() texTable {
-	return texTable{gen: make([]uint32, 0, initialTextures), live: make([]bool, 0, initialTextures), free: make([]int32, 0, initialTextures)}
+	return texTable{gen: make([]uint32, 0, initialTextures), live: make([]bool, 0, initialTextures), free: make([]int32, 0, initialTextures), size: make([]int64, 0, initialTextures)}
 }
 
 // add takes an index for a new texture (a setup path: the table may grow)
@@ -70,10 +80,17 @@ func (t *texTable) add() (int, TextureID) {
 		}
 		t.gen = append(t.gen, 0)
 		t.live = append(t.live, false)
+		t.size = append(t.size, 0)
 	}
 	t.live[i] = true
 	t.n++
 	return i, TextureID(uint32(i) | t.gen[i]<<texIndexBits)
+}
+
+// addBytes counts n more bytes for live index i.
+func (t *texTable) addBytes(i int, n int64) {
+	t.size[i] += n
+	t.used += n
 }
 
 // lookup returns the index of a live texture's id; false for a freed or
@@ -88,8 +105,12 @@ func (t *texTable) lookup(id TextureID) (int, bool) {
 
 // remove frees index i: its id stops resolving and the index may be reused.
 // An index whose generations are used up is retired for good instead: a new
-// generation would repeat an old id, which might still be held.
-func (t *texTable) remove(i int) {
+// generation would repeat an old id, which might still be held. It returns
+// the bytes the texture held, which the caller moves to its retiring list.
+func (t *texTable) remove(i int) (bytes int64) {
+	bytes = t.size[i]
+	t.used -= bytes
+	t.size[i] = 0
 	t.live[i] = false
 	t.n--
 	if t.gen[i] == texGenMask {
@@ -97,4 +118,5 @@ func (t *texTable) remove(i int) {
 	}
 	t.gen[i]++
 	t.free = append(t.free, int32(i))
+	return bytes
 }

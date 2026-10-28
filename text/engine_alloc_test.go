@@ -123,7 +123,7 @@ func (l *listRows) frames(count int, shape func(FontKey, []byte)) {
 
 // stubShape stands in for Buffer.Shape: positions every character with a
 // fixed advance, allocation free after the buffer has grown.
-func stubShape(b *harfbuzz.Buffer, _ *harfbuzz.Font) {
+func stubShape(b *harfbuzz.Buffer, _ *harfbuzz.Font, _ []harfbuzz.Feature) {
 	b.Pos = b.Pos[:0]
 	for i := range b.Info {
 		b.Info[i].Glyph = 1 + b.Info[i].Glyph%200

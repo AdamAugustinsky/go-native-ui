@@ -5,6 +5,7 @@ package platform
 import (
 	"bufio"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"hash/fnv"
 	"io"
@@ -88,6 +89,7 @@ type fakeComp struct {
 	mainSurf, xdgSurf, toplevel, deco *fobj
 	cursorSurf                        *fobj
 	clientSrc                         *fobj // the client's selection source
+	dragSrc                           *fobj // the client's drag source (start_drag)
 	extOffer                          *fobj
 	extText                           []byte
 	extStall                          bool
@@ -543,6 +545,8 @@ func (s *fakeComp) request(o *fobj, name string, a []farg) {
 		}
 		s.clientSrc = src
 		s.extOffer = nil
+	case "wl_data_device.start_drag":
+		s.dragSrc = s.objs[a[0].v]
 	case "wl_data_offer.receive":
 		if o.ext {
 			go s.serveExt(a[0].s, a[1].fd)
@@ -745,7 +749,49 @@ func (s *fakeComp) command(line string) {
 			s.event(s.dd, "selection", nid(0))
 		}
 	case "paste": // another application pastes from the client's selection
-		s.pasteFromClient(arg)
+		s.pasteFromClient(s.clientSrc, arg)
+	case "dnd-enter": // x y mimes (comma separated) source-actions text: another application's drag enters the window
+		p := strings.SplitN(arg, " ", 5)
+		if s.dd == nil || len(p) < 5 {
+			return
+		}
+		// The data: text with \r and \n spelled out, "hex:" and hex digits, or STALL (a source that never finishes).
+		s.extText, s.extStall = []byte(strings.NewReplacer(`\r`, "\r", `\n`, "\n").Replace(p[4])), p[4] == "STALL"
+		if h, ok := strings.CutPrefix(p[4], "hex:"); ok {
+			s.extText, _ = hex.DecodeString(h)
+		}
+		off := s.newObj(s.byName["wl_data_offer"], 3)
+		off.ext = true
+		s.event(s.dd, "data_offer", off)
+		for _, m := range strings.Split(p[2], ",") {
+			s.event(off, "offer", m)
+		}
+		s.event(off, "source_actions", uint32(num(3)))
+		s.event(s.dd, "enter", s.nextSerial(), s.mainSurface(), fx(num(0)), fx(num(1)), off)
+	case "dnd-motion": // x y
+		if s.dd != nil {
+			s.event(s.dd, "motion", uint32(0), fx(num(0)), fx(num(1)))
+		}
+	case "dnd-drop":
+		if s.dd != nil {
+			s.event(s.dd, "drop")
+		}
+	case "dnd-leave":
+		if s.dd != nil {
+			s.event(s.dd, "leave")
+		}
+	case "drag-target": // mime: the target accepts it
+		s.event(s.dragSrc, "target", arg)
+	case "drag-action": // n: the action the target chose
+		s.event(s.dragSrc, "action", uint32(num(0)))
+	case "drag-send": // mime: a target asks for the data
+		s.pasteFromClient(s.dragSrc, arg)
+	case "drag-drop":
+		s.event(s.dragSrc, "dnd_drop_performed")
+	case "drag-finish":
+		s.event(s.dragSrc, "dnd_finished")
+	case "drag-cancel":
+		s.event(s.dragSrc, "cancelled")
 	case "deco": // mode arg: client or server; then a configure
 		s.decoMode = map[string]uint32{"client": 1, "server": 2}[arg]
 		if s.deco != nil {
@@ -790,8 +836,8 @@ func (s *fakeComp) offerExt() {
 
 // pasteFromClient asks the client's source for mime (default
 // text/plain;charset=utf-8) and reports what it wrote.
-func (s *fakeComp) pasteFromClient(mime string) {
-	if s.clientSrc == nil {
+func (s *fakeComp) pasteFromClient(src *fobj, mime string) {
+	if src == nil {
 		s.say("PASTED none")
 		return
 	}
@@ -803,7 +849,7 @@ func (s *fakeComp) pasteFromClient(mime string) {
 		s.say("WARN pipe: %v", err)
 		return
 	}
-	s.event(s.clientSrc, "send", mime, fdv(p[1]))
+	s.event(src, "send", mime, fdv(p[1]))
 	syscall.Close(p[1])
 	go func() {
 		f := os.NewFile(uintptr(p[0]), "r")

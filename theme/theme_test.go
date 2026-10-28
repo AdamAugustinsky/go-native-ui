@@ -121,10 +121,20 @@ func TestMixFollowsAndDoesNotAllocate(t *testing.T) {
 	if r.T != 1 || r.Pal != th.Dark {
 		t.Errorf("Mix(7) did not clamp to dark: T %v", r.T)
 	}
-	tt := float32(0)
-	if n := testing.AllocsPerRun(100, func() { tt += 0.01; r.Mix(tt) }); n != 0 {
-		t.Errorf("Mix allocates %v times", n)
+	// The counter is the process's, so an allocation of another goroutine in
+	// the runtime or the test binary can land in a window (seen on CI runners,
+	// not here). One of Mix's own shows in every window, so it takes three
+	// windows and the quietest decides; all three are reported.
+	var tt float32
+	var windows []float64
+	for len(windows) < 3 {
+		tt = 0
+		n := testing.AllocsPerRun(100, func() { tt += 0.01; r.Mix(tt) })
+		if windows = append(windows, n); n == 0 {
+			return
+		}
 	}
+	t.Errorf("Mix allocates %v times per call (three windows)", windows)
 }
 
 func TestAccent(t *testing.T) {

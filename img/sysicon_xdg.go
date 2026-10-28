@@ -11,8 +11,8 @@ import (
 )
 
 // Freedesktop icon lookup: the shared-mime-info type of a name, then the
-// icon theme specification's search for a PNG at the nearest size, with no
-// third-party code and no SVG rendering. It reads the files of the XDG
+// icon theme specification's search for a PNG or SVG at the nearest size
+// (the SVG is drawn by sysicon_svg.go). It reads the files of the XDG
 // directories, so it is plain Go and builds everywhere; Linux uses it
 // (sysicon_linux.go) and the tests run it on every OS against a theme they
 // make.
@@ -27,13 +27,17 @@ import (
 //   - Icon names: the type with "/" as "-" (application-pdf), its generic
 //     icon (x-office-document), the same for the parent types, then
 //     "<media>-x-generic". A directory is inode/directory, icon "folder".
-//   - Themes: the GTK setting gtk-icon-theme-name of gtk-3.0 and gtk-4.0
-//     (the file settings.ini; the desktop's dconf is not read), then
-//     Adwaita, each with its Inherits, and hicolor last. A theme is the
+//   - Themes: the desktop's icon-theme setting (GSettings' org.gnome.desktop.
+//     interface, which is what dconf holds, asked of the desktop portal:
+//     sysicon_theme.go), else the GTK setting gtk-icon-theme-name of
+//     gtk-3.0 and gtk-4.0 (the file settings.ini), then Adwaita, each with
+//     its Inherits, and hicolor last. A theme is the
 //     index.theme found first in ~/.icons, $XDG_DATA_HOME/icons and each
 //     $XDG_DATA_DIRS/icons; its directories are searched in all of them.
 //   - Size: the directory (of Type Fixed, Scalable or Threshold) whose size
-//     is nearest to the one asked for, the larger on a tie; PNG files only.
+//     is nearest to the one asked for; on a tie a PNG before an SVG, then the
+//     larger. In a directory, name.png before name.svg (svgz and xpm are not
+//     read).
 type xdgDB struct {
 	sig   string
 	home  string
@@ -44,6 +48,10 @@ type xdgDB struct {
 	generic map[string]string
 	parent  map[string][]string
 	config  []string // gtk settings files
+
+	// desktopTheme is the desktop's icon theme setting, "" if it has none or
+	// cannot be asked (nil: not asked).
+	desktopTheme func() string
 
 	mu     sync.Mutex
 	themes map[string]*xdgTheme
@@ -98,7 +106,8 @@ func xdgSystem() *xdgDB {
 	if configHome == "" {
 		configHome = filepath.Join(home, ".config")
 	}
-	sig := home + "\x00" + dataHome + "\x00" + dataDirs + "\x00" + configHome
+	// (The bus is part of the signature: the desktop's theme comes from it.)
+	sig := home + "\x00" + dataHome + "\x00" + dataDirs + "\x00" + configHome + "\x00" + os.Getenv("DBUS_SESSION_BUS_ADDRESS") + "\x00" + os.Getenv("XDG_RUNTIME_DIR")
 	xdgCache.mu.Lock()
 	defer xdgCache.mu.Unlock()
 	if xdgCache.db == nil || xdgCache.db.sig != sig {
@@ -140,7 +149,7 @@ func readLimited(path string, max int64) ([]byte, bool) {
 }
 
 func newXDG(sig, home, dataHome string, dataDirs []string, configHome string) *xdgDB {
-	db := &xdgDB{sig: sig, home: home, themes: map[string]*xdgTheme{}}
+	db := &xdgDB{sig: sig, home: home, themes: map[string]*xdgTheme{}, desktopTheme: desktopIconTheme}
 	db.data = append(db.data, dataHome)
 	for _, d := range dataDirs {
 		if d != "" {
@@ -445,11 +454,18 @@ func (db *xdgDB) themeChain() []string {
 	}
 	db.mu.Unlock()
 	var roots []string
-	for _, f := range db.config {
-		if b, ok := readLimited(f, maxSettingsBytes); ok {
-			if n := iniSections(string(b))["Settings"]["gtk-icon-theme-name"]; n != "" {
-				roots = append(roots, strings.Trim(n, `"'`))
-				break
+	if db.desktopTheme != nil {
+		if n := db.desktopTheme(); n != "" {
+			roots = append(roots, n)
+		}
+	}
+	if len(roots) == 0 {
+		for _, f := range db.config {
+			if b, ok := readLimited(f, maxSettingsBytes); ok {
+				if n := iniSections(string(b))["Settings"]["gtk-icon-theme-name"]; n != "" {
+					roots = append(roots, strings.Trim(n, `"'`))
+					break
+				}
 			}
 		}
 	}
@@ -484,24 +500,30 @@ func (db *xdgDB) themeChain() []string {
 	return chain
 }
 
-// findPNG is the PNG file of the icon called name nearest to size pixels in
-// the theme chain ("" if there is none).
-func (db *xdgDB) findPNG(name string, size int) string {
+// findIcon is the PNG or SVG file of the icon called name nearest to size
+// pixels in the theme chain ("" if there is none).
+func (db *xdgDB) findIcon(name string, size int) string {
 	for _, tn := range db.themeChain() {
 		t := db.theme(tn)
-		best, bestDist, bestSize := "", 0, 0
+		best, bestDist, bestSize, bestSVG := "", 0, 0, false
 		for i := range t.dirs {
 			d := &t.dirs[i]
 			dist := d.distance(size)
-			if best != "" && (dist > bestDist || dist == bestDist && d.pixelSize <= bestSize) {
+			if best != "" && dist > bestDist {
 				continue
 			}
 			for _, base := range t.bases {
-				p := filepath.Join(base, t.name, d.path, name+".png")
-				if st, err := os.Stat(p); err == nil && st.Mode().IsRegular() {
-					best, bestDist, bestSize = p, dist, d.pixelSize
-					break
+				p, svg := findInDir(filepath.Join(base, t.name, d.path), name)
+				if p == "" {
+					continue
 				}
+				// Nearer wins; at the same distance a PNG over an SVG
+				// (drawn by the designer for the size), then the larger.
+				if best == "" || dist < bestDist ||
+					bestSVG && !svg || bestSVG == svg && d.pixelSize > bestSize {
+					best, bestDist, bestSize, bestSVG = p, dist, d.pixelSize, svg
+				}
+				break
 			}
 		}
 		if best != "" {
@@ -511,9 +533,21 @@ func (db *xdgDB) findPNG(name string, size int) string {
 	return ""
 }
 
-// iconPNG is the PNG file for the system icon src names, at about size
+// findInDir is the file of the icon called name in dir: name.png, else
+// name.svg (svg says which).
+func findInDir(dir, name string) (path string, svg bool) {
+	for _, ext := range [...]string{".png", ".svg"} {
+		p := filepath.Join(dir, name+ext)
+		if st, err := os.Stat(p); err == nil && st.Mode().IsRegular() {
+			return p, ext == ".svg"
+		}
+	}
+	return "", false
+}
+
+// iconFile is the PNG or SVG file for the system icon src names, at about size
 // pixels, or the error code. It never reads an image.
-func (db *xdgDB) iconPNG(src Source, size int) (string, uint8) {
+func (db *xdgDB) iconFile(src Source, size int) (string, uint8) {
 	mime := ""
 	switch src.kind {
 	case srcIconFolder:
@@ -549,12 +583,12 @@ func (db *xdgDB) iconPNG(src Source, size int) (string, uint8) {
 		return "", errUnsupported // no MIME database
 	}
 	for _, n := range db.iconNames(mime) {
-		if p := db.findPNG(n, size); p != "" {
+		if p := db.findIcon(n, size); p != "" {
 			return p, errNone
 		}
 	}
 	if mime == "inode/directory" {
-		if p := db.findPNG("folder", size); p != "" {
+		if p := db.findIcon("folder", size); p != "" {
 			return p, errNone
 		}
 	}

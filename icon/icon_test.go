@@ -1,6 +1,7 @@
 package icon
 
 import (
+	"bytes"
 	"image"
 	"image/png"
 	"os"
@@ -426,5 +427,56 @@ func TestKeptIconsArePreparedAtRaster(t *testing.T) {
 	}
 	if w1, _ := a.Size(x + 1); w1 <= 0 {
 		t.Error("a kept icon has no size")
+	}
+}
+
+// sheetWithText is a sheet with a line of text over it.
+type sheetWithText struct{ *sheet }
+
+func (s sheetWithText) Build(c *ui.Context) {
+	s.sheet.Build(c)
+	c.NextPos(4, 4)
+	c.NextSize(ui.Px(200), ui.Px(24))
+	c.NextFont(s.a.ts.Font(text.FontDesc{SizePt: 14, Weight: 400, Scale: 1}))
+	c.NextTextColor(0x000000FF)
+	c.BoxKeyed(ui.DrawText|ui.FloatingX|ui.FloatingY, ui.KeyN(2, 0), []byte("Device lost"))
+}
+
+// After a lost device the renderer is rebuilt in place: the atlas keeps its
+// texture id and the texture loses its pixels. The icons, the text icons'
+// glyphs and the text must draw as they did.
+func TestIconsComeBackAfterADeviceLoss(t *testing.T) {
+	g := newRig(t, 6*40, 4*40)
+	a := New(g.ts)
+	a.Raster(1)
+	a.Attach(g.r)
+	s := &sheet{a: a, ids: allIDs(a), color: 0xCC1100FF, cell: 40, cols: 6}
+	withText := sheetWithText{s}
+	g.frame(withText, 1)
+	g.frame(withText, 1)
+	before := g.pixels()
+	inked := 0
+	for i := range s.ids {
+		n, _, _ := inkIn(g, before, s, i)
+		inked += n
+	}
+	if inked == 0 {
+		t.Fatal("the icons draw nothing before the loss")
+	}
+
+	g.r.SimulateDeviceLoss()
+	if err := g.r.Rebuild(0, 0); err != nil {
+		t.Fatal(err)
+	}
+	g.c.AtlasRestore()   // the app does this for the text
+	g.frame(withText, 1) // the icon atlas notices the new epoch in Prepare
+	if after := g.pixels(); !bytes.Equal(before, after) {
+		diff := 0
+		for i := range before {
+			if before[i] != after[i] {
+				diff++
+			}
+		}
+		t.Errorf("the icons differ after the device was rebuilt: %d of %d bytes", diff, len(before))
 	}
 }

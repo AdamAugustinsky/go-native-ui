@@ -171,6 +171,10 @@ func endListing() {
 	}
 }
 
+// postClock is when a post is stamped (ns since 1970); tests replace it by a
+// clock as coarse as Windows'.
+var postClock = func() int64 { return time.Now().UnixNano() }
+
 // takeSlot gives a free slot to post gen of id: the record tk and its key,
 // the thread and when it was posted. It returns -1, cancelling tk, if no
 // slot is free (it cannot happen: see the overview).
@@ -253,7 +257,10 @@ func victimSlot(id string) int {
 		} else if c, ok := e.current(); !ok || c.gen != s.gen {
 			continue
 		}
-		if best < 0 || s.seq < slots.s[best].seq {
+		// Equal times happen (Windows' clock ticks about every 0.5 ms or
+		// more, and posts come faster): the earlier post is the one with the
+		// smaller gen.
+		if best < 0 || s.seq < slots.s[best].seq || s.seq == slots.s[best].seq && s.gen < slots.s[best].gen {
 			best = i
 		}
 	}
@@ -539,7 +546,7 @@ func retryParked(ended chan struct{}) {
 // (platform.OnLastDrain): while the gate is open they are stored as the
 // drain frees records, so they are delivered before EvWillTerminate; once it
 // has closed (final) those left are given up, and the retry goroutine is
-// stopped and waited for. It reports whether any is still parked.
+// stopped and waited for, answers included. It reports whether any is still parked.
 func lastDrain(final bool) bool {
 	parking.mu.Lock()
 	done, lost := storeParked(final)
@@ -547,10 +554,14 @@ func lastDrain(final bool) bool {
 	running, ended := parking.running, parking.ended
 	parking.mu.Unlock()
 	answer(done, lost)
-	if final && running {
-		select {
-		case parking.wake <- struct{}{}:
-		default:
+	if final && ended != nil {
+		// Also when it has found the list empty (running is false then) and is
+		// still answering what it stored: the drain ends after the answers.
+		if running {
+			select {
+			case parking.wake <- struct{}{}:
+			default:
+			}
 		}
 		<-ended
 	}

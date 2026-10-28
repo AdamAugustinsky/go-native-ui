@@ -43,11 +43,13 @@ func TestFieldCommanderTakesTheMacEditPath(t *testing.T) {
 	if r.state() != "|ab" {
 		t.Errorf("a handled command moved or deleted: %q", r.state())
 	}
-	// Not at the start: Backspace is the field's, not offered.
+	// Inside the text Backspace is offered too (a selected token is deleted
+	// from anywhere); a pass is the field's.
 	l.got = nil
+	l.handle[FieldDeleteBackward] = false
 	r.buf.SetCaret(1)
 	r.edit(EditDeleteBackward)
-	if len(l.got) != 0 || r.state() != "|b" {
+	if want := []FieldCommand{FieldDeleteBackward}; !slices.Equal(l.got, want) || r.state() != "|b" {
 		t.Errorf("Backspace inside the text: offered %v, state %q", l.got, r.state())
 	}
 	// A pass is the field's: the same command acts.
@@ -159,5 +161,25 @@ func TestFieldCommanderSeparators(t *testing.T) {
 	}
 	if want := []rune{',', ',', ';', ','}; !slices.Equal(l.seps, want) {
 		t.Errorf("separators offered %q, want %q", string(l.seps), string(want))
+	}
+}
+
+// Pasted text is split at the separators as typed text is, each undoable on
+// its own; a commander that passes leaves the separator in the text.
+func TestFieldCommanderSeparatorsInAPaste(t *testing.T) {
+	r := newRig(t, true)
+	var done []string
+	l := &cmdLog{buf: &r.buf}
+	l.onSep = func(l *cmdLog, sep rune) bool {
+		done = append(done, l.buf.String())
+		l.buf.Remove(0, l.buf.Caret())
+		return true
+	}
+	r.cmdr, r.seps = l, ","
+	r.focus()
+	r.clip = "a,b,c"
+	r.key('V', ModSuper)
+	if want := []string{"a", "b"}; !slices.Equal(done, want) || r.state() != "c|" {
+		t.Fatalf("pasted a,b,c: tokens %q, state %q", done, r.state())
 	}
 }
