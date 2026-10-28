@@ -141,9 +141,7 @@ type Pilot struct {
 	// state, the disclosure of its groups, the dir of the active pane its
 	// selection was last set for, and whether rows are under the toolbar
 	sidebar    bool
-	scrollDone bool         // Options.ScrollLeft has been applied
-	digitFont  text.FontKey // the font digitW is the widest digit of
-	digitW     float32
+	scrollDone bool // Options.ScrollLeft has been applied
 	side       rexui.SidebarState
 	places     []place
 	items      []rexui.SidebarItem
