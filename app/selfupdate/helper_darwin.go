@@ -263,8 +263,12 @@ func loadJob(jobPath string) (job, error) {
 	if err != nil {
 		return j, err
 	}
+	// exe is staging/helper/X.app/Contents/MacOS/x: the copy of the bundle
+	// InstallAndRelaunch made.
+	helperApp := filepath.Dir(filepath.Dir(filepath.Dir(exe)))
 	switch {
-	case filepath.Dir(filepath.Dir(exe)) != j.Staging || filepath.Base(filepath.Dir(exe)) != "helper" ||
+	case filepath.Dir(filepath.Dir(helperApp)) != j.Staging || filepath.Base(filepath.Dir(helperApp)) != "helper" ||
+		!strings.HasSuffix(helperApp, ".app") || filepath.Base(filepath.Dir(exe)) != "MacOS" ||
 		jdir != j.Staging || !isStaging(j.Staging):
 		return j, errors.New("the job is not in this helper's staging folder")
 	case filepath.Dir(filepath.Dir(j.Staged)) != j.Staging || filepath.Base(filepath.Dir(j.Staged)) != "new" ||
@@ -326,6 +330,18 @@ func takeLock(staging string) (*os.File, error) {
 	return os.NewFile(3, "lock"), nil
 }
 
+// signalReady tells InstallAndRelaunch that the helper took the job: one
+// byte on readyFD, which it then closes, so that no process it starts
+// inherits it. A descriptor that is not a pipe is left alone.
+func signalReady() {
+	var st syscall.Stat_t
+	if syscall.Fstat(readyFD, &st) != nil || st.Mode&syscall.S_IFMT != syscall.S_IFIFO {
+		return
+	}
+	syscall.Write(readyFD, []byte{1})
+	syscall.Close(readyFD)
+}
+
 func (h *helper) run() {
 	j := h.j
 	lock, err := takeLock(j.Staging)
@@ -334,6 +350,7 @@ func (h *helper) run() {
 		return
 	}
 	defer lock.Close()
+	signalReady()
 	h.rec = record{Bundle: j.Bundle, Dev: j.Dev, OldIno: j.Ino, From: j.From, To: j.To, Nonce: j.Nonce, Staging: j.Staging}
 
 	h.lg.Info("selfupdate helper: waiting for the app to quit", "pid", j.Parent, "from", j.From, "to", j.To)
