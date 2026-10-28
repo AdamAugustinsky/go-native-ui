@@ -550,3 +550,23 @@ func TestFreeTextureAfterFence(t *testing.T) {
 		t.Fatalf("%d live, %d retiring after the frames finished; want 1, 0 (done %d, serial %d)", live, retiring, r.done, r.serial)
 	}
 }
+
+// The EGL errors that mean the context is gone, and only those.
+func TestEGLLostErrors(t *testing.T) {
+	for _, c := range []struct {
+		code uint32
+		lost bool
+	}{
+		{0x300E, true},  // EGL_CONTEXT_LOST
+		{0x3006, true},  // EGL_BAD_CONTEXT
+		{0x3008, true},  // EGL_BAD_DISPLAY
+		{0x3001, true},  // EGL_NOT_INITIALIZED
+		{0x3000, false}, // EGL_SUCCESS
+		{0x3009, false}, // EGL_BAD_MATCH
+		{0x300B, false}, // EGL_BAD_NATIVE_WINDOW
+	} {
+		if got := eglLostError(c.code); got != c.lost {
+			t.Errorf("eglLostError(%#x) = %v, want %v", c.code, got, c.lost)
+		}
+	}
+}
