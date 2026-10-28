@@ -171,6 +171,37 @@ func TestPackageHelloBundle(t *testing.T) {
 	if _, err := runOut(exe); err != nil {
 		t.Errorf("the packaged executable does not run: %v", err)
 	}
+
+	// -app signs that bundle again, as the Mac that holds the release
+	// identity does, without building: here ad-hoc, in place.
+	log = mustGnui(t, "package", "-c", helloConfig, "-o", t.TempDir(), "-app", app, "-identity", "-")
+	if !strings.HasPrefix(log, "signing ") || strings.Contains(log, "packaging ") {
+		t.Errorf("-app built the bundle again:\n%s", log)
+	}
+	if _, err := runOut("codesign", "--verify", "--deep", "--strict", app); err != nil {
+		t.Fatal(err)
+	}
+	if info := codesignInfo(t, app); !strings.Contains(info, "Signature=adhoc") || strings.Contains(info, "Authority=gnui-dev") {
+		t.Errorf("-app did not sign the bundle again:\n%s", info)
+	}
+}
+
+func TestPackageAppMustMatchItsConfig(t *testing.T) {
+	needMac(t)
+	app := filepath.Join(t.TempDir(), "Other.app")
+	if err := os.MkdirAll(filepath.Join(app, "Contents"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	plist := `<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict>` +
+		`<key>CFBundleIdentifier</key><string>com.example.other</string>` +
+		`<key>CFBundleShortVersionString</key><string>1.0</string></dict></plist>`
+	if err := os.WriteFile(filepath.Join(app, "Contents", "Info.plist"), []byte(plist), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, o, e := gnui(t, "package", "-c", helloConfig, "-o", t.TempDir(), "-app", app, "-identity", "-")
+	if code == 0 || !strings.Contains(e, "CFBundleIdentifier") {
+		t.Errorf("-app took another app's bundle: exit %d\n%s%s", code, o, e)
+	}
 }
 
 func TestPackageWithoutAppleIdentity(t *testing.T) {
