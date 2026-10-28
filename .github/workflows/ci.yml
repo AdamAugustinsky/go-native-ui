@@ -361,16 +361,6 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-      - name: keep Defender off the build cache, the module cache and temp files
-        # Real-time scanning of the thousands of small files that go build and the
-        # fs and img tests write is a large share of this job's time. A failure
-        # to set the exclusion costs only time.
-        continue-on-error: true
-        shell: pwsh
-        run: |
-          $dirs = @($env:RUNNER_TEMP, $env:TEMP, $env:GITHUB_WORKSPACE, (go env GOCACHE), (go env GOMODCACHE))
-          Add-MpPreference -ExclusionPath $dirs
-          Get-MpPreference | Select-Object -ExpandProperty ExclusionPath
       - name: download the modules
         # cmd/gnui's tests build for darwin, which needs modules (purego) that no
         # test of this OS does; those tests read the module cache, never the network.
@@ -404,16 +394,6 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-      - name: keep Defender off the build cache, the module cache and temp files
-        # Real-time scanning of the thousands of small files that go build and the
-        # fs and img tests write is a large share of this job's time. A failure
-        # to set the exclusion costs only time.
-        continue-on-error: true
-        shell: pwsh
-        run: |
-          $dirs = @($env:RUNNER_TEMP, $env:TEMP, $env:GITHUB_WORKSPACE, (go env GOCACHE), (go env GOMODCACHE))
-          Add-MpPreference -ExclusionPath $dirs
-          Get-MpPreference | Select-Object -ExpandProperty ExclusionPath
       - name: stall gate wrapper (display-link stalls warn instead of failing, docs/QUARANTINE.md)
         run: |
           # stallgate.sh <regexp> command...: runs the command; when it fails and
