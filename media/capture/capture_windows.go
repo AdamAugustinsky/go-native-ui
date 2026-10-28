@@ -228,29 +228,39 @@ func loadWindows() error {
 		sys.qpcFreq = 10_000_000
 	}
 	// Windows.Graphics.Capture: Windows 10 1803 for the API, 2004 for
-	// CreateFreeThreaded and window capture without a border opt-out.
+	// CreateFreeThreaded. The factories need an apartment: asked on a
+	// thread of the multithreaded one, whatever the caller's thread.
 	if !win32.WinRTAvailable() || sys.d3d11Create == 0 || sys.deviceFromDXGI == 0 {
-		return ErrUnsupported
+		return fmt.Errorf("%w: no WinRT or D3D11", ErrUnsupported)
 	}
+	var err error
+	inMTA(func() { err = checkWGC() })
+	if err != nil {
+		return err
+	}
+	if err := loadMF(); err != nil {
+		return err
+	}
+	makeKinds()
+	return nil
+}
+
+func checkWGC() error {
 	var statics uintptr
-	if win32.RoGetActivationFactory("Windows.Graphics.Capture.GraphicsCaptureSession", &iidSessionStatics, &statics) < 0 {
-		return ErrUnsupported
+	if hr := win32.RoGetActivationFactory("Windows.Graphics.Capture.GraphicsCaptureSession", &iidSessionStatics, &statics); hr < 0 {
+		return fmt.Errorf("%w: no Windows.Graphics.Capture (0x%08X)", ErrUnsupported, uint32(hr))
 	}
 	var ok uint8
 	hr := win32.HR(cm(statics, vtSessionStaticsIsSupported, uintptr(unsafe.Pointer(&ok))))
 	win32.Release(statics)
 	if hr < 0 || ok == 0 {
-		return ErrUnsupported
+		return fmt.Errorf("%w: GraphicsCaptureSession.IsSupported is false (0x%08X)", ErrUnsupported, uint32(hr))
 	}
 	var ps uintptr
-	if win32.RoGetActivationFactory("Windows.Graphics.Capture.Direct3D11CaptureFramePool", &iidPoolStatics2, &ps) < 0 {
-		return ErrUnsupported // before 2004: no free-threaded pool
+	if hr := win32.RoGetActivationFactory("Windows.Graphics.Capture.Direct3D11CaptureFramePool", &iidPoolStatics2, &ps); hr < 0 {
+		return fmt.Errorf("%w: no free-threaded frame pool before Windows 10 2004 (0x%08X)", ErrUnsupported, uint32(hr))
 	}
 	win32.Release(ps)
-	if err := loadMF(); err != nil {
-		return err
-	}
-	makeKinds()
 	return nil
 }
 
@@ -383,7 +393,8 @@ func begin(r *Recording, t *Target, owner uintptr) error {
 	if out == "" {
 		out = filepath.Join(os.TempDir(), fmt.Sprintf("gnui-capture-%d-%d.mp4", os.Getpid(), r.id))
 	}
-	if out, err := filepath.Abs(out); err == nil {
+	if abs, err := filepath.Abs(out); err == nil {
+		out = abs
 		dir, _ := syscall.UTF16PtrFromString(filepath.Dir(out))
 		var free uint64
 		if win32.Bool(call(sys.diskFree, uintptr(unsafe.Pointer(dir)), uintptr(unsafe.Pointer(&free)), 0, 0)) && free < minFree {

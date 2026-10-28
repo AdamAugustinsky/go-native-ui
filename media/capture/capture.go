@@ -45,7 +45,10 @@
 // and show nothing, so the app asks with perm.Request first, or records
 // without it. On macOS, Pick's picker needs no Screen Recording permission;
 // Targets and Start do (ErrPermissionDenied), and never trigger the
-// system's prompt.
+// system's prompt. On Windows, app/perm has no microphone status: Pick and
+// Start go ahead, and a microphone turned off in Settings ends the
+// recording at its start with ErrPermissionDenied (Ended); nothing else
+// needs a permission.
 //
 // # Events
 //
@@ -73,10 +76,18 @@
 //     passthrough export (AVMutableComposition, AVAssetExportSession) on a
 //     worker. Level is always 0 (no Go on the stream's audio queue). macOS
 //     14: ErrUnsupported.
-//   - Windows 10 2004 and later: Windows.Graphics.Capture, the D3D11 video
-//     processor to NV12, WASAPI microphone and loopback, and a Media
-//     Foundation sink writer with the system's H.264 and AAC encoders (M2).
-//     Until M2 lands, Pick and Start return ErrUnsupported.
+//   - Windows 10 2004 and later: GraphicsCapturePicker (on Pick's window)
+//     or a Target from Targets (an HMONITOR or HWND), which need no
+//     permission; Windows.Graphics.Capture into a free-threaded frame pool,
+//     the D3D11 video processor to NV12, WASAPI for the microphone and the
+//     system's audio (a process loopback that leaves out our process tree,
+//     or the render endpoint's loopback where the build has none), and a
+//     Media Foundation sink writer with the system's H.264 and AAC encoders,
+//     hardware ones allowed. The recording runs on a capture thread of its
+//     own that pulls frames and audio at the frame rate; Pause offsets the
+//     later timestamps, so the file is one and there is no join. Level is
+//     the microphone's peak. A microphone turned off in Settings (Privacy)
+//     ends the recording at its start with ErrPermissionDenied.
 //   - Linux: ErrUnsupported (D63).
 package capture
 
@@ -95,11 +106,13 @@ import (
 // The typed failures, so an app shows the right message (in a3-kb's case,
 // in Portuguese). They arrive as Result.Err, or from Pick and Start.
 var (
-	// ErrUnsupported: no capture on this OS or version (macOS 14, Linux,
-	// and Windows until M2). It matches errors.ErrUnsupported.
+	// ErrUnsupported: no capture on this OS or version (macOS 14, Windows
+	// before 10 2004, Linux). It matches errors.ErrUnsupported.
 	ErrUnsupported = fmt.Errorf("capture: %w", errors.ErrUnsupported)
 	// ErrPermissionDenied: the user has not granted Screen Recording (macOS,
-	// for Targets and Start) or the microphone (app/perm asks first).
+	// for Targets and Start) or the microphone (app/perm asks first on
+	// macOS; on Windows the Privacy setting, reported when the recording
+	// starts).
 	ErrPermissionDenied = errors.New("capture: permission denied")
 	// ErrPickerCancelled: the user closed the system's picker without
 	// choosing.
@@ -184,7 +197,7 @@ type Result struct {
 	Discarded bool
 	// Segments are the segment files of a paused recording that could not
 	// be joined, in order, kept so nothing recorded is lost (macOS; Err
-	// says why). The app owns them.
+	// says why; Windows writes one file). The app owns them.
 	Segments []string
 	// Err is why it ended early or never started (the typed errors above),
 	// nil after a Stop.
