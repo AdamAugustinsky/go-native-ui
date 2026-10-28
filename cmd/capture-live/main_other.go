@@ -1,4 +1,4 @@
-//go:build !darwin
+//go:build !darwin && !windows
 
 package main
 
@@ -8,6 +8,6 @@ import (
 )
 
 func main() {
-	fmt.Fprintln(os.Stderr, "capture-live: macOS only")
+	fmt.Fprintln(os.Stderr, "capture-live: macOS and Windows only")
 	os.Exit(2)
 }
