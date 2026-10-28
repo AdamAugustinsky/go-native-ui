@@ -1,10 +1,11 @@
-package rexui
+package mdview
 
 import (
 	"strconv"
 
 	"gonativeui/highlight"
 	"gonativeui/markdown"
+	"gonativeui/rexui"
 	"gonativeui/text"
 	"gonativeui/theme"
 	"gonativeui/ui"
@@ -75,18 +76,18 @@ type MarkdownRecipe struct {
 	Gap, ItemGap, HeadGap, Indent float32
 	// Code is the fill of inline code; Quote the bar of a block quote, QuoteW
 	// its width in points; Rule a table's lines; Header a table header's fill.
-	Code, Quote, Rule, Header Tint
+	Code, Quote, Rule, Header rexui.Tint
 	QuoteW                    float32
 	// QuoteText is the colour of quoted text.
-	QuoteText Tint
+	QuoteText rexui.Tint
 }
 
 // MarkdownLook is Markdown's recipe: the a3 app's reading text, in Rex.
 var MarkdownLook = MarkdownRecipe{
 	SizePt: 13, Heads: [3]float32{20, 16, 14},
 	Gap: 10, ItemGap: 3, HeadGap: 8, Indent: 20,
-	Code: OfAlpha(theme.Label, 0.07, 0.12), Quote: Of(theme.Separator), Rule: Of(theme.Separator),
-	Header: OfAlpha(theme.Label, 0.035, 0.07), QuoteW: 3, QuoteText: Of(theme.Label2),
+	Code: rexui.OfAlpha(theme.Label, 0.07, 0.12), Quote: rexui.Of(theme.Separator), Rule: rexui.Of(theme.Separator),
+	Header: rexui.OfAlpha(theme.Label, 0.035, 0.07), QuoteW: 3, QuoteText: rexui.Of(theme.Label2),
 }
 
 // prepare makes the style tables when the scale, the light/dark mix or the
@@ -176,7 +177,7 @@ type MarkdownSignal struct {
 // in the selection scope the document is built in, so a drag selects across
 // blocks and messages.
 //
-//	sig := rexui.Markdown(k, ui.KeyN(c.ParentKey(), id), doc, rexui.MarkdownOpts{Item: id, View: view})
+//	sig := mdview.Markdown(k, ui.KeyN(c.ParentKey(), id), doc, mdview.MarkdownOpts{Item: id, View: view})
 //	if sig.Link != 0 { open(doc.LinkDest(sig.Link)) }
 //
 // Parse on a worker or when the message changes (markdown.Parser), never in
@@ -280,7 +281,7 @@ func Markdown(k *base.Kit, key ui.Key, d *markdown.Doc, o MarkdownOpts) Markdown
 			c.NextPadding(indent, pt(sc, 4), 0, pt(sc, 4))
 			c.NextSize(ui.Pct(1), ui.Children(1))
 			c.Push(c.BoxKeyed(0, bk, nil))
-			Separator(k, SeparatorOpts{})
+			rexui.Separator(k, rexui.SeparatorOpts{})
 			c.Pop()
 		case markdown.TableCell:
 			var n int
@@ -330,7 +331,7 @@ func (v *MarkdownView) marker(k *base.Kit, ml *MarkdownRecipe, b *markdown.Block
 		c.NextSize(ui.Px(s), ui.Px(s))
 		c.NextRadius(pt(sc, 3))
 		c.NextRole(ui.RoleCheckbox)
-		c.NextSemName(str.Task)
+		c.NextSemName(rexui.CurrentStrings().Task)
 		if b.Flags&markdown.Checked != 0 {
 			c.NextSemState(ui.SemChecked)
 			c.NextBG(r.Colors[theme.Accent])

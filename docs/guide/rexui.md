@@ -161,8 +161,9 @@ builds the rows between `l.First` and `l.Last`:
 	rexui.EndList(k, &l)
 ```
 
-A file or a diff of thousands of lines is a `base.VList` of `rexui.CodeLine`
-rows. `VListOpts.ContentW = rexui.CodeWidth(k, rexui.CodeColumns(src), opts)`
+A file or a diff of thousands of lines is a `base.VList` of `mdview.CodeLine`
+rows (package `rexui/mdview`, section 8).
+`VListOpts.ContentW = mdview.CodeWidth(k, mdview.CodeColumns(src), opts)`
 (once per file) makes every row as wide as the longest line, so the bands
 span it, and the list scroll sideways to its end, all rows by one offset: a
 wheel still scrolls it up and down, Shift with the wheel or a trackpad
@@ -247,6 +248,11 @@ one's variants, sizes and states, and how close it is to AppKit's.
 | Chrome | `Toolbar`, `Sidebar`, `ScrollBars`, `PathBar` |
 | Lists | `List`, `Table`, `Outline` |
 | Chat | `MessageBubble`, `ChatListRow`, `DateDivider`, `TypingIndicator`, `CompletionList` |
+| Markdown and code (`rexui/mdview`) | `Markdown`, `CodeBlock`, `CodeLine` |
+
+Markdown and code live in `rexui/mdview`, a package of their own: goldmark,
+chroma and its regexp engine add 1.0 to 1.2 MB to a program that links them,
+so an app that shows neither imports `rexui` alone and does not pay for them.
 
 The tests that keep it honest are in the package: `TestRecipesMatchAppKit` checks
 the measurements against AppKit's committed numbers (under `UseAppKitControls`), and

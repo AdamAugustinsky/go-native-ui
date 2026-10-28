@@ -1,4 +1,4 @@
-package rexui_test
+package mdview_test
 
 import (
 	"fmt"
@@ -10,7 +10,7 @@ import (
 	"gonativeui/highlight"
 	"gonativeui/internal/fakeui"
 	"gonativeui/markdown"
-	"gonativeui/rexui"
+	"gonativeui/rexui/mdview"
 	"gonativeui/text"
 	"gonativeui/theme"
 	"gonativeui/theme/rex"
@@ -28,6 +28,13 @@ func agentReply(i int) string {
 		"```go\nfunc step%d() error {\n\treturn nil // done\n}\n```\n\n```diff\n@@ -1 +1 @@\n-old()\n+new()\n```\n", i, i, i)
 }
 
+// layText is the fake text system with a paragraph layouter, as rich text
+// needs.
+type layText struct {
+	*fakeui.Text
+	*text.BasicLayouter
+}
+
 // mdRig is a transcript of n Markdown messages in a virtual list under one
 // selection scope, on the fake text system with a paragraph layouter.
 type mdRig struct {
@@ -39,10 +46,10 @@ type mdRig struct {
 	st    base.VListState
 	v     base.VList
 	sc    ui.SelectionScope
-	view  rexui.MarkdownView
+	view  mdview.MarkdownView
 	docs  []markdown.Doc
 	ids   []uint64
-	sigs  map[uint64]rexui.MarkdownSignal
+	sigs  map[uint64]mdview.MarkdownSignal
 	clip  string
 	time  int64
 	w, h  int
@@ -55,7 +62,7 @@ func newMDRig(t *testing.T, n int) *mdRig {
 	l := text.NewBasicLayouter(ft)
 	l.ReserveParas(text.ParaBudget{Paras: 4096, Glyphs: 1 << 18, Text: 1 << 18})
 	ts := layText{ft, l}
-	g := &mdRig{t: t, c: ui.New(ts), sigs: map[uint64]rexui.MarkdownSignal{}, w: 900, h: 700}
+	g := &mdRig{t: t, c: ui.New(ts), sigs: map[uint64]mdview.MarkdownSignal{}, w: 900, h: 700}
 	g.c.Reserve(1 << 14)
 	g.c.AtlasSync(&fakeui.Uploader{})
 	g.k = base.NewKit(g.c, ts, rex.Theme())
@@ -80,7 +87,7 @@ func newMDRig(t *testing.T, n int) *mdRig {
 
 // AppendSelected is the model's text of a copy (ui.SelectionText).
 func (g *mdRig) AppendSelected(dst []byte, id uint64, fp uint16, fo uint32, tp uint16, to uint32) []byte {
-	return rexui.MarkdownSelected(dst, &g.docs[id], 0, fp, fo, tp, to)
+	return mdview.MarkdownSelected(dst, &g.docs[id], 0, fp, fo, tp, to)
 }
 
 func (g *mdRig) frame() {
@@ -97,7 +104,7 @@ func (g *mdRig) frame() {
 		c.NextPadding(24, 12, 24, 12)
 		c.NextSize(ui.Pct(1), ui.Children(1))
 		c.Push(c.BoxKeyed(0, ui.KeyN(c.ParentKey(), 1), nil))
-		sig := rexui.Markdown(k, ui.KeyN(c.ParentKey(), 0), &g.docs[id], rexui.MarkdownOpts{Item: id, View: &g.view})
+		sig := mdview.Markdown(k, ui.KeyN(c.ParentKey(), 0), &g.docs[id], mdview.MarkdownOpts{Item: id, View: &g.view})
 		c.Pop()
 		g.sigs[id] = sig
 		if sig.Link != 0 {
@@ -117,17 +124,31 @@ func (g *mdRig) frames(n int) {
 	}
 }
 
-// settle runs frames until the highlighting worker is done (bounded).
+// settle runs frames until the list builds the same messages three frames
+// running with the highlighting worker idle after each (bounded). After a
+// resize or a scroll the list's range moves for a few frames; a message it
+// builds for the first time hands its code to the worker, and an idle worker
+// before that proves nothing: under load (CI runs every package at once) the
+// worker would still be lexing in the measured frames, and AllocsPerRun
+// counts the whole process's allocations.
 func (g *mdRig) settle() {
+	steady := 0
 	for deadline := time.Now().Add(20 * time.Second); time.Now().Before(deadline); {
-		g.frames(2)
-		if g.view.Pending() == 0 {
-			g.frames(3)
-			return
+		first, last := g.v.First, g.v.Last
+		g.frame()
+		switch {
+		case g.view.Pending() > 0:
+			steady = 0
+			time.Sleep(2 * time.Millisecond)
+		case g.v.First != first || g.v.Last != last:
+			steady = 0
+		default:
+			if steady++; steady == 3 {
+				return
+			}
 		}
-		time.Sleep(2 * time.Millisecond)
 	}
-	g.t.Fatal("highlighting never finished")
+	g.t.Fatal("the transcript never settled")
 }
 
 // node is the first node of the exported tree with the role whose name
@@ -207,7 +228,7 @@ func TestMarkdownBlocks(t *testing.T) {
 		}
 	}
 	// a highlighted code line: its keyword in the keyword colour
-	kw := rexui.CodeColor(highlight.Keyword, 0)
+	kw := mdview.CodeColor(highlight.Keyword, 0)
 	found := false
 	for _, q := range g.dl.Quads {
 		if q.Color[0] == kw {
@@ -219,7 +240,7 @@ func TestMarkdownBlocks(t *testing.T) {
 		t.Error("no glyph drawn in the keyword colour: the code is not highlighted")
 	}
 	// the diff's bands
-	added := rexui.CodeLook.Added.RGBA(g.k.Theme())
+	added := mdview.CodeLook.Added.RGBA(g.k.Theme())
 	found = false
 	for _, q := range g.dl.Quads {
 		if q.Color[0] == added {

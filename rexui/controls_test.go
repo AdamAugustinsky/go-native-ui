@@ -6,6 +6,7 @@ import (
 	"gonativeui/gpu"
 	"gonativeui/highlight"
 	"gonativeui/rexui"
+	"gonativeui/rexui/mdview"
 	"gonativeui/theme"
 	"gonativeui/ui"
 )
@@ -647,7 +648,7 @@ func TestReadableGreenAndRed(t *testing.T) {
 		g := newRig(t, m, nil, column(func(g *rig) {}))
 		g.settle()
 		r := g.k.Theme()
-		code := theme.Over(rexui.CodeLook.Fill.RGBA(r), r.Colors[theme.Pane])
+		code := theme.Over(mdview.CodeLook.Fill.RGBA(r), r.Colors[theme.Pane])
 		surfaces := map[string]uint32{"code": code}
 		for _, role := range []theme.Role{theme.Window, theme.Pane, theme.Raised, theme.Field, theme.TextBackground, theme.ControlBackground} {
 			surfaces[role.String()] = theme.Over(r.Colors[role], r.Colors[theme.Window])
@@ -655,7 +656,7 @@ func TestReadableGreenAndRed(t *testing.T) {
 		for name, tc := range map[string]struct {
 			tint rexui.Tint
 			band rexui.Tint
-		}{"SuccessText": {rexui.SuccessText, rexui.CodeLook.Added}, "DangerText": {rexui.DangerText, rexui.CodeLook.Removed}} {
+		}{"SuccessText": {rexui.SuccessText, mdview.CodeLook.Added}, "DangerText": {rexui.DangerText, mdview.CodeLook.Removed}} {
 			fg := tc.tint.RGBA(r)
 			for s, bg := range surfaces {
 				if c := theme.Contrast(fg, bg); c < 4.5 {
@@ -666,7 +667,7 @@ func TestReadableGreenAndRed(t *testing.T) {
 				t.Errorf("%v: %s on its line's band is %.2f:1", m, name, theme.Contrast(fg, band))
 			}
 		}
-		if got := rexui.CodeColor(highlight.Inserted, r.T); got != rexui.SuccessText.RGBA(r) {
+		if got := mdview.CodeColor(highlight.Inserted, r.T); got != rexui.SuccessText.RGBA(r) {
 			t.Errorf("%v: an insertion is %08X, want SuccessText", m, got)
 		}
 	}

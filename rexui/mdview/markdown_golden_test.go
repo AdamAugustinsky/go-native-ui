@@ -1,4 +1,4 @@
-package rexui_test
+package mdview_test
 
 import (
 	"bytes"
@@ -11,6 +11,7 @@ import (
 	"gonativeui/highlight"
 	"gonativeui/markdown"
 	"gonativeui/rexui"
+	"gonativeui/rexui/mdview"
 	"gonativeui/text"
 	"gonativeui/theme"
 	"gonativeui/theme/rex"
@@ -43,7 +44,7 @@ const goldenDiff = "@@ -40,7 +40,8 @@ func (c *Cache) Layout(p *Para, w float32)
 type goldenScene struct {
 	k        *base.Kit
 	mode     theme.Mode
-	view     rexui.MarkdownView
+	view     mdview.MarkdownView
 	doc      markdown.Doc
 	diff     []byte
 	codeRect [4]float32
@@ -72,10 +73,10 @@ func (s *goldenScene) Build(c *ui.Context) {
 	c.NextGap(k.Pt(16))
 	c.NextPad(k.Pt(20))
 	c.Push(c.Box(ui.DrawBackground, "window"))
-	rexui.Markdown(k, ui.HashString(0, "msg"), &s.doc, rexui.MarkdownOpts{View: &s.view})
+	mdview.Markdown(k, ui.HashString(0, "msg"), &s.doc, mdview.MarkdownOpts{View: &s.view})
 	key := ui.HashString(0, "diff")
 	toks := s.view.Tokens(c, key, highlight.Go, s.diff)
-	sig := rexui.CodeBlock(k, key, s.diff, rexui.CodeOpts{
+	sig := mdview.CodeBlock(k, key, s.diff, mdview.CodeOpts{
 		Lang: highlight.Go, Tokens: toks, Label: "layout.go", Gutter: true, FirstLine: 40, Hit: 43, Diff: true, View: &s.view,
 	})
 	s.codeRect = c.Rect(sig.ID)
@@ -121,7 +122,7 @@ func TestMarkdownGolden(t *testing.T) {
 type codeListScene struct {
 	k     *base.Kit
 	mode  theme.Mode
-	view  rexui.MarkdownView
+	view  mdview.MarkdownView
 	st    base.VListState
 	lines [][]byte
 	toks  [][]highlight.Token
@@ -187,13 +188,13 @@ func (s *codeListScene) Build(c *ui.Context) {
 	c.NextSize(ui.Px(float32(w)), ui.Px(float32(h)))
 	c.NextBG(r.Colors[theme.Pane])
 	c.Push(c.Box(ui.DrawBackground, "window"))
-	o := rexui.CodeLineOpts{GutterDigits: 2, View: &s.view}
+	o := mdview.CodeLineOpts{GutterDigits: 2, View: &s.view}
 	if s.cw == 0 {
 		cols := 0
 		for _, l := range s.lines {
-			cols = max(cols, rexui.CodeColumns(l))
+			cols = max(cols, mdview.CodeColumns(l))
 		}
-		s.cw = rexui.CodeWidth(k, cols, o)
+		s.cw = mdview.CodeWidth(k, cols, o)
 	}
 	v := base.BeginVList(c, "file", &s.st, base.VListOpts{Estimate: 18, ContentW: s.cw})
 	if s.sideX > 0 {
@@ -210,8 +211,8 @@ func (s *codeListScene) Build(c *ui.Context) {
 			continue
 		}
 		n := v.Item(i)
-		o.Number, o.Kind, o.Item, o.Part = int(n)+1, rexui.DiffKind(s.lines[n]), n, 0
-		rexui.CodeLine(k, ui.KeyN(c.ParentKey(), 1), s.lines[n], s.toks[n], o)
+		o.Number, o.Kind, o.Item, o.Part = int(n)+1, mdview.DiffKind(s.lines[n]), n, 0
+		mdview.CodeLine(k, ui.KeyN(c.ParentKey(), 1), s.lines[n], s.toks[n], o)
 		s.rows = append(s.rows, c.Rect(c.Parent()))
 	}
 	base.EndVList(&v)
