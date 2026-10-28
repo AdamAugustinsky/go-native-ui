@@ -370,7 +370,7 @@ func TestGPULostUploadsAgain(t *testing.T) {
 	uploads := g.uploads
 
 	g.epoch++ // the renderer was rebuilt: every texture is blank
-	c.Poll() // the images in view go back at once, within the frame's upload budget
+	c.Poll()  // the images in view go back at once, within the frame's upload budget
 	if g.uploads == uploads {
 		t.Error("nothing went back to the GPU in the Poll that saw the new epoch")
 	}
