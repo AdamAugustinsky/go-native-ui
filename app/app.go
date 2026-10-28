@@ -734,6 +734,9 @@ func (a *App) onEvent(e *platform.Event) {
 			a.onMediaPaste(e, a.Win.Text(e.Text))
 			return
 		}
+		if a.bench != nil && a.script != nil && !a.scriptDone && personInput(e.Kind) {
+			return // the bench's scripted session is the window's only input (personInput)
+		}
 		var txt []byte
 		if e.Kind == platform.EvText || e.Kind == platform.EvPreedit || e.Kind == platform.EvPaste {
 			txt = a.Win.Text(e.Text)
@@ -742,6 +745,28 @@ func (a *App) onEvent(e *platform.Event) {
 			a.p.invalidate()
 		}
 	}
+}
+
+// personInput reports whether events of kind k are what a person does with
+// the pointer, the keyboard and the window's focus. A bench whose Builder is
+// a Scripter takes none of them while its session plays: the script is the
+// window's input, and the desk's would change what it means. A window under
+// a cursor that never moves still gets pointer moves at that cursor, and
+// focus changes, whenever other windows come and go: on windows-11-arm,
+// once the shell surfaces that covered the desktop are cleared, the bench's
+// window loses and regains the foreground about every 30 s. A move that
+// lands between a scripted press and its release moves the release off the
+// target, and a focus loss there cancels the press: the click is lost, and
+// the step that waits for its effect fails. The answers the app asked for
+// (EvPaste, EvColor) and the window's own events still arrive.
+func personInput(k platform.EventKind) bool {
+	switch k {
+	case platform.EvPointerMove, platform.EvPointerButton, platform.EvPointerLeave, platform.EvScroll,
+		platform.EvKey, platform.EvText, platform.EvPreedit, platform.EvModifiers, platform.EvEdit,
+		platform.EvFocus, platform.EvMagnify, platform.EvSmartMagnify, platform.EvRotate:
+		return true
+	}
+	return false
 }
 
 // frameHandler runs inside OS modal loops (live resize), where Wait does not
