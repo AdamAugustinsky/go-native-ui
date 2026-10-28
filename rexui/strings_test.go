@@ -5,6 +5,7 @@ import (
 
 	"gonativeui/menu"
 	"gonativeui/rexui"
+	"gonativeui/rexui/mdview"
 	"gonativeui/theme"
 	"gonativeui/ui"
 	"gonativeui/widget/base"
@@ -25,7 +26,7 @@ func TestStringsPtBR(t *testing.T) {
 	g := newRig(t, theme.Light, nil, column(func(g *rig) {
 		k := g.k
 		key := k.Context().ParentKey()
-		rexui.CodeBlock(k, ui.KeyN(key, 1), []byte("go test ./..."), rexui.CodeOpts{})
+		mdview.CodeBlock(k, ui.KeyN(key, 1), []byte("go test ./..."), mdview.CodeOpts{})
 		rexui.Banner(k, "Disco cheio", rexui.BannerOpts{Level: rexui.BannerWarning})
 		rexui.MessageBubble(k, ui.KeyN(key, 2), []byte("Oi"), nil, rexui.MessageOpts{BubbleOpts: rexui.BubbleOpts{Variant: rexui.BubbleOutgoing, ColumnW: 300}})
 		k.NextSize(ui.Px(300), ui.Px(120))

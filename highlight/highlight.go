@@ -8,7 +8,7 @@
 //	lang := highlight.LangOf("ts") // a fence's info string or a file name
 //	toks = highlight.Tokens(lang, src, toks[:0])
 //	for _, t := range toks {
-//		// src[t.Off : t.Off+t.Len] in the colour of t.Role (rexui.CodeBlock maps roles to Rex code colours)
+//		// src[t.Off : t.Off+t.Len] in the colour of t.Role (rexui/mdview.CodeBlock maps roles to Rex code colours)
 //	}
 //
 // Tokens works on a whole block or file: chroma's lexers keep a stack of

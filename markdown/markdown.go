@@ -1,6 +1,6 @@
 // Package markdown parses the GitHub-flavoured Markdown a chat transcript
 // shows into pointer-free blocks and rich-text spans (the phase 8 plan's C2
-// and D75), for rexui.Markdown to draw with ui.RichText.
+// and D75), for rexui/mdview.Markdown to draw with ui.RichText.
 //
 //	var p markdown.Parser
 //	doc := p.Parse(msg) // a finished message

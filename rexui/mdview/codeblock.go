@@ -1,4 +1,4 @@
-package rexui
+package mdview
 
 import (
 	"bytes"
@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	"gonativeui/highlight"
+	"gonativeui/rexui"
 	"gonativeui/text"
 	"gonativeui/theme"
 	"gonativeui/theme/rex"
@@ -51,34 +52,34 @@ func DiffKind(line []byte) LineKind {
 type CodeRecipe struct {
 	// Fill is the block's fill, Rim its outline (a hairline), Radius its
 	// corner radius and PadX, PadY the code's padding, in points.
-	Fill, Rim          Tint
+	Fill, Rim          rexui.Tint
 	Radius, PadX, PadY float32
 	// SizePt is the code's type size and LineGap the space added to the mono
 	// font's line height, in points.
 	SizePt, LineGap float32
 	// Label is the colour of the header's language label and LabelPt its
-	// monospaced size (Rex's metadata, LabelOpts.MonoPt); Gutter is the colour
+	// monospaced size (Rex's metadata, rexui.LabelOpts.MonoPt); Gutter is the colour
 	// of the line numbers and GutterPad the space after them, in points.
-	Label, Gutter      Tint
+	Label, Gutter      rexui.Tint
 	LabelPt, GutterPad float32
 	// Added, Removed, Hunk and Hit are the bands behind added, removed and
 	// hunk lines and the highlighted line, which is a quiet tint of the
 	// accent (Rex's 14 % light, 24 % dark).
-	Added, Removed, Hunk, Hit Tint
+	Added, Removed, Hunk, Hit rexui.Tint
 }
 
 // CodeLook is the code blocks' recipe.
 var CodeLook = CodeRecipe{
-	Fill: OfAlpha(theme.Label, 0.035, 0.07), Rim: Of(theme.Separator), Radius: 8, PadX: 12, PadY: 9,
+	Fill: rexui.OfAlpha(theme.Label, 0.035, 0.07), Rim: rexui.Of(theme.Separator), Radius: 8, PadX: 12, PadY: 9,
 	SizePt: 12, LineGap: 4,
-	Label: Of(theme.Label2), Gutter: Of(theme.Label2), LabelPt: 10, GutterPad: 12,
-	Added: OfAlpha(theme.Green, 0.14, 0.22), Removed: OfAlpha(theme.Red, 0.13, 0.22),
-	Hunk: OfAlpha(theme.Label, 0.07, 0.11), Hit: OfAlpha(theme.Accent, 0.14, 0.24),
+	Label: rexui.Of(theme.Label2), Gutter: rexui.Of(theme.Label2), LabelPt: 10, GutterPad: 12,
+	Added: rexui.OfAlpha(theme.Green, 0.14, 0.22), Removed: rexui.OfAlpha(theme.Red, 0.13, 0.22),
+	Hunk: rexui.OfAlpha(theme.Label, 0.07, 0.11), Hit: rexui.OfAlpha(theme.Accent, 0.14, 0.24),
 }
 
 // CodeColor is the colour of a highlight role on the Rex code palette (the
 // terminal colours of theme/rex, focused) at the light/dark mix t; a
-// diff's insertions are SuccessText.
+// diff's insertions are rexui.SuccessText.
 func CodeColor(role highlight.Role, t float32) uint32 {
 	p := rex.TerminalAt(t, 1)
 	var c uint32
@@ -92,7 +93,7 @@ func CodeColor(role highlight.Role, t float32) uint32 {
 	case highlight.String:
 		c = p.Green
 	case highlight.Inserted: // a diff's added line, on its green band: the terminal green reads 3.7:1 there in light
-		return theme.MixRGBA(SuccessText.Lit, SuccessText.LitDark, t)
+		return theme.MixRGBA(rexui.SuccessText.Lit, rexui.SuccessText.LitDark, t)
 	case highlight.Comment:
 		c = p.Dim
 	case highlight.Operator, highlight.Punctuation:
@@ -157,7 +158,7 @@ type CodeSignal struct {
 // selects across lines and blocks.
 //
 //	toks := view.Tokens(c, key, lang, src) // highlighted on a worker; nil until it is done
-//	sig := rexui.CodeBlock(k, key, src, rexui.CodeOpts{Lang: lang, Tokens: toks, View: view})
+//	sig := mdview.CodeBlock(k, key, src, mdview.CodeOpts{Lang: lang, Tokens: toks, View: view})
 //
 // A file of thousands of lines belongs in a virtual list of CodeLine rows,
 // which this builds one by one.
@@ -177,7 +178,7 @@ func CodeBlock(k *base.Kit, key ui.Key, src []byte, o CodeOpts) CodeSignal {
 	c.NextBorder(rc.Rim.RGBA(r), r.Lines.Hairline)
 	c.NextRadius(pt(sc, rc.Radius))
 	c.NextRole(ui.RoleGroup)
-	c.NextSemName(str.Code)
+	c.NextSemName(rexui.CurrentStrings().Code)
 	id := c.BoxKeyed(ui.DrawBackground|ui.DrawBorder|ui.Clip, key, nil)
 	c.Push(id)
 	sig := CodeSignal{ID: id}
@@ -196,12 +197,12 @@ func CodeBlock(k *base.Kit, key ui.Key, src []byte, o CodeOpts) CodeSignal {
 		// longer), so the button sits at the end
 		if label != "" {
 			k.NextWidth(ui.Grow(1))
-			Label(k, label, LabelOpts{Style: TextCaption, Color: rc.Label, MonoPt: rc.LabelPt})
+			rexui.Label(k, label, rexui.LabelOpts{Style: rexui.TextCaption, Color: rc.Label, MonoPt: rc.LabelPt})
 		} else {
 			c.NextSize(ui.Grow(1), ui.Px(0))
 			c.Box(0, "lang")
 		}
-		if Button(k, str.Copy, ButtonOpts{Variant: ButtonPlain, Size: theme.SizeSmall}).Clicked {
+		if rexui.Button(k, rexui.CurrentStrings().Copy, rexui.ButtonOpts{Variant: rexui.ButtonPlain, Size: theme.SizeSmall}).Clicked {
 			if c.ClipboardSet != nil {
 				c.ClipboardSet(src)
 			}
@@ -323,11 +324,11 @@ type CodeLineOpts struct {
 // longest line, every row is that wide, so the bands span it, and the list
 // scrolls sideways to the end of it, all rows by one offset:
 //
-//	cw := rexui.CodeWidth(k, rexui.CodeColumns(src), opts) // once per file
+//	cw := mdview.CodeWidth(k, mdview.CodeColumns(src), opts) // once per file
 //	v := base.BeginVList(c, "file", &st, base.VListOpts{Estimate: 18, ContentW: cw})
 //	for i := v.First; i < v.Last; i++ {
 //		n := v.Item(i)
-//		rexui.CodeLine(k, ui.KeyN(c.ParentKey(), 1), lines[n], toks[n], opts)
+//		mdview.CodeLine(k, ui.KeyN(c.ParentKey(), 1), lines[n], toks[n], opts)
 //	}
 //	base.EndVList(&v)
 func CodeLine(k *base.Kit, key ui.Key, line []byte, toks []highlight.Token, o CodeLineOpts) {

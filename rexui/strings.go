@@ -20,7 +20,7 @@ type Strings struct {
 	// Edit, Window), drawn, in the tray and native (menu.SetStrings).
 	Menu menu.Strings
 
-	// Copy is a code block's copy button; Code names the block.
+	// Copy is a code block's copy button; Code names the block (package mdview).
 	Copy, Code string
 	// ShowOrHide names a sidebar section's disclosure; Disclosure, a row's.
 	ShowOrHide, Disclosure string
@@ -48,7 +48,7 @@ type Strings struct {
 	// the attachment's name, names a chip's remove button; Send, the send
 	// button.
 	MessageField, Attachments, Suggestions, Remove, Send string
-	// Task names a markdown task-list checkbox.
+	// Task names a markdown task-list checkbox (package mdview).
 	Task string
 	// CloseTab names a tab's close button; ShowTab (followed by a space and
 	// the number) and ShowLastTab title TabCommands.
