@@ -1,6 +1,8 @@
 package rexui
 
 import (
+	"slices"
+
 	"gonativeui/icon"
 	"gonativeui/theme"
 	"gonativeui/ui"
@@ -51,10 +53,248 @@ type SidebarItem struct {
 
 // SidebarState is the state of a sidebar, owned by the app.
 type SidebarState struct {
-	// Sel is the selected row's ID (0: none).
+	// Sel is the selected row's ID (0: none). With SidebarOpts.Multiple it is
+	// the primary row among several selected: the one last chosen, which the
+	// keys move from, and always one of the selected rows. An app that sets
+	// it to a row outside them has that row alone selected; Select does the
+	// same for any row.
 	Sel uint32
 	// Scroll is the scroll view's state.
 	Scroll base.ScrollState
+
+	anchor, anchSel uint32   // the row a Shift range extends from, and the Sel it was set for
+	picked          []uint32 // the selected rows' IDs, ascending; empty: Sel alone
+}
+
+// Reserve makes room for n selected rows, so that selecting does not allocate.
+func (s *SidebarState) Reserve(n int) {
+	if cap(s.picked) < n {
+		s.picked = append(make([]uint32, 0, n), s.picked...)
+	}
+}
+
+// sync drops the selected rows when the app has set Sel to a row outside
+// them (or to 0): Sel is the truth then.
+func (s *SidebarState) sync() {
+	if len(s.picked) == 0 {
+		return
+	}
+	if _, ok := slices.BinarySearch(s.picked, s.Sel); !ok || s.Sel == 0 {
+		s.picked = s.picked[:0]
+	}
+}
+
+// Has reports whether the row id is selected.
+func (s *SidebarState) Has(id uint32) bool {
+	s.sync()
+	if len(s.picked) == 0 {
+		return id != 0 && id == s.Sel
+	}
+	_, ok := slices.BinarySearch(s.picked, id)
+	return ok
+}
+
+// Count is the number of selected rows.
+func (s *SidebarState) Count() int {
+	s.sync()
+	switch {
+	case len(s.picked) > 0:
+		return len(s.picked)
+	case s.Sel != 0:
+		return 1
+	}
+	return 0
+}
+
+// AppendSelected appends the selected rows' IDs, in increasing order, to dst.
+func (s *SidebarState) AppendSelected(dst []uint32) []uint32 {
+	s.sync()
+	if len(s.picked) > 0 {
+		return append(dst, s.picked...)
+	}
+	if s.Sel != 0 {
+		dst = append(dst, s.Sel)
+	}
+	return dst
+}
+
+// Select selects the row id alone (0: none).
+func (s *SidebarState) Select(id uint32) {
+	s.picked = s.picked[:0]
+	s.Sel = id
+	s.anchor, s.anchSel = id, id
+}
+
+// Clear deselects every row.
+func (s *SidebarState) Clear() { s.Select(0) }
+
+// SelectAll selects every row a click could select: the rows of items that are
+// not headers and not hidden under a closed row. It is the Select All command
+// of a sidebar with Multiple; the sidebar takes the primary key chord itself
+// while it has the keyboard, but an app with a menu command gets the command
+// instead, and calls this.
+func (s *SidebarState) SelectAll(items []SidebarItem) {
+	s.sync()
+	s.picked = s.picked[:0]
+	w := sidebarWalk{hide: -1}
+	for i := range items {
+		if w.row(&items[i]) {
+			s.picked = append(s.picked, items[i].ID)
+		}
+	}
+	slices.Sort(s.picked)
+	s.settle(s.anchorRow())
+}
+
+// settle ends a change of the selected rows: with one left it is Sel; Sel is
+// one of them, else the last; anchor is where a Shift range will start.
+func (s *SidebarState) settle(anchor uint32) {
+	switch n := len(s.picked); {
+	case n == 0:
+		s.Sel = 0
+	case n == 1:
+		s.Sel = s.picked[0]
+		s.picked = s.picked[:0]
+	default:
+		if _, ok := slices.BinarySearch(s.picked, s.Sel); !ok || s.Sel == 0 {
+			s.Sel = s.picked[n-1]
+		}
+	}
+	if anchor == 0 {
+		anchor = s.Sel
+	}
+	s.anchor, s.anchSel = anchor, s.Sel
+}
+
+// anchorRow is the row a range extends from: where the last plain or ⌘-click,
+// or the key, chose, else Sel (the app may have moved Sel since).
+func (s *SidebarState) anchorRow() uint32 {
+	if s.anchSel == s.Sel && s.anchor != 0 {
+		return s.anchor
+	}
+	return s.Sel
+}
+
+// toggle flips the row id, as ⌘-click does.
+func (s *SidebarState) toggle(id uint32) {
+	was := s.Has(id)
+	if len(s.picked) == 0 && s.Sel != 0 && !was {
+		s.picked = append(s.picked, s.Sel)
+	}
+	if was {
+		if len(s.picked) == 0 {
+			s.Sel = 0
+		} else if i, ok := slices.BinarySearch(s.picked, id); ok {
+			s.picked = slices.Delete(s.picked, i, i+1)
+		}
+		s.settle(0)
+		return
+	}
+	if len(s.picked) == 0 && s.Sel == 0 {
+		s.Sel = id
+	} else {
+		i, _ := slices.BinarySearch(s.picked, id)
+		s.picked = slices.Insert(s.picked, i, id)
+		s.Sel = id
+	}
+	s.settle(id)
+}
+
+// press applies a press on the row id with the modifiers held, and reports
+// whether the selection changed.
+func (s *SidebarState) press(items []SidebarItem, id uint32, mods, primary ui.Mods) bool {
+	switch {
+	case mods&ui.ModShift != 0:
+		s.selectRange(items, s.anchorRow(), id)
+	case mods&primary != 0:
+		s.toggle(id)
+	default:
+		if s.Count() == 1 && s.Sel == id {
+			return false
+		}
+		s.Select(id)
+	}
+	return true
+}
+
+// selectRange selects the rows from a to b (IDs, in either order), as
+// Shift-click does; the cursor, Sel, goes to b and the anchor stays at a.
+func (s *SidebarState) selectRange(items []SidebarItem, a, b uint32) {
+	ia, ib := -1, -1
+	w := sidebarWalk{hide: -1}
+	for i := range items {
+		if !w.row(&items[i]) {
+			continue
+		}
+		if items[i].ID == a {
+			ia = i
+		}
+		if items[i].ID == b {
+			ib = i
+		}
+	}
+	if ia < 0 || ib < 0 {
+		s.Select(b)
+		return
+	}
+	lo, hi := min(ia, ib), max(ia, ib)
+	s.picked = s.picked[:0]
+	w = sidebarWalk{hide: -1}
+	for i := 0; i <= hi; i++ {
+		if w.row(&items[i]) && i >= lo {
+			s.picked = append(s.picked, items[i].ID)
+		}
+	}
+	slices.Sort(s.picked)
+	s.Sel = b
+	s.settle(a)
+}
+
+// prune drops selected rows that are no longer among the items.
+func (s *SidebarState) prune(items []SidebarItem) {
+	s.sync()
+	if len(s.picked) == 0 {
+		return
+	}
+	n := 0
+	for i := range items {
+		if !items[i].Header {
+			if _, ok := slices.BinarySearch(s.picked, items[i].ID); ok {
+				n++
+			}
+		}
+	}
+	if n == len(s.picked) {
+		return
+	}
+	// (a row went: rare, so a search of the items for each selected row)
+	s.picked = slices.DeleteFunc(s.picked, func(id uint32) bool {
+		return !slices.ContainsFunc(items, func(it SidebarItem) bool { return it.ID == id && !it.Header })
+	})
+	s.settle(s.anchorRow())
+}
+
+// sidebarWalk goes through the items in order and says which rows are visible
+// and selectable: not a header, and not under a closed row or a hidden group.
+type sidebarWalk struct{ hide int } // hide: rows deeper than this level are hidden (-1: none; -2: to the next header)
+
+// row reports whether it is such a row; call it for every item in order.
+func (w *sidebarWalk) row(it *SidebarItem) bool {
+	if it.Header {
+		w.hide = -1
+		if it.Open != nil && !*it.Open {
+			w.hide = -2
+		}
+		return false
+	}
+	if w.hide == -2 || (w.hide >= 0 && int(it.Level) > w.hide) {
+		return false
+	}
+	w.hide = -1
+	if it.Open != nil && !*it.Open {
+		w.hide = int(it.Level)
+	}
+	return true
 }
 
 // SidebarOpts are a sidebar's options, passed by value.
@@ -72,6 +312,13 @@ type SidebarOpts struct {
 	// body text, as a list of notes does.
 	RowH, HeaderH float32
 	BodyHeaders   bool
+	// Multiple allows several rows to be selected, as in Notes and Finder's
+	// sidebar: ⌘-click (the platform's primary modifier) toggles a row,
+	// Shift-click selects the rows from the last chosen to the one clicked,
+	// Shift with Up or Down extends the selection and the primary modifier
+	// with A selects every row. SidebarState says which rows are selected;
+	// Sel is the one last chosen.
+	Multiple bool
 }
 
 // SidebarSignal is what a sidebar reports for a frame.
@@ -204,7 +451,9 @@ func SidebarTileSymbol(symbol string, fallback rune) icon.Spec {
 // parent's size unless the kit's NextSize says otherwise) that edits st.Sel.
 // A press selects a row; with the keyboard (the sidebar takes the focus when
 // pressed) Up and Down move the selection, Left and Right close and open a
-// row's children. Changed is set in the frame the selection changed.
+// row's children. Changed is set in the frame the selection changed. With
+// SidebarOpts.Multiple a press with a modifier edits a set of rows instead
+// (SidebarState.Has, Count and AppendSelected read it).
 //
 //	s := rexui.Sidebar(k, "Sidebar", &v.side, v.places, rexui.SidebarOpts{Top: tb.Height()})
 //	if s.Changed { v.open(v.side.Sel) }
@@ -237,8 +486,13 @@ func Sidebar(k *base.Kit, label string, st *SidebarState, items []SidebarItem, o
 
 	// the keyboard, before the rows show the selection
 	var changed, keyed bool
+	if o.Multiple {
+		st.prune(items)
+	} else if len(st.picked) > 0 {
+		st.picked = st.picked[:0] // (from a time it had Multiple)
+	}
 	if focused {
-		changed, res.Toggled = sidebarKeys(c, st, items)
+		changed, res.Toggled = sidebarKeys(c, st, items, o.Multiple)
 		keyed = changed
 	}
 
@@ -286,9 +540,16 @@ func Sidebar(k *base.Kit, label string, st *SidebarState, items []SidebarItem, o
 			}
 			continue
 		}
-		pressed, toggled, rh := sidebarRow(k, key, it, st.Sel == it.ID, emph, rc, &o, room)
-		if pressed && st.Sel != it.ID {
-			st.Sel, changed = it.ID, true
+		pressed, toggled, rh := sidebarRow(k, key, it, st.Has(it.ID), emph, rc, &o, room)
+		switch {
+		case pressed && o.Multiple:
+			if st.press(items, it.ID, c.Input().Mods, ui.PrimaryMod()) {
+				changed = true
+				c.RequestFrame() // the rows built before this one show the new selection
+			}
+		case pressed && st.Sel != it.ID:
+			st.Select(it.ID)
+			changed = true
 		}
 		if keyed && st.Sel == it.ID { // a row the keyboard selected comes into view
 			c.ScrollIntoView(v.Inner, [4]float32{0, y, 1, y + rh})
@@ -635,28 +896,19 @@ func sidebarChevron(k *base.Kit, rkey, root ui.Key, open *bool, x, dy, h float32
 }
 
 // sidebarKeys applies the arrow keys to the selection and the disclosures
-// of the visible rows; it reports a changed selection and a toggled row.
-func sidebarKeys(c *ui.Context, st *SidebarState, items []SidebarItem) (changed bool, toggled uint32) {
+// of the visible rows, and with multi Shift+arrow extends the selection and
+// the primary modifier with A selects every row; it reports a changed
+// selection and a toggled row.
+func sidebarKeys(c *ui.Context, st *SidebarState, items []SidebarItem, multi bool) (changed bool, toggled uint32) {
 	// the visible, selectable rows in order
 	var vis [256]int16
 	n := 0
 	cur := -1
-	hide := -1
+	w := sidebarWalk{hide: -1}
 	for i := range items {
 		it := &items[i]
-		if it.Header {
-			hide = -1
-			if it.Open != nil && !*it.Open {
-				hide = -2
-			}
+		if !w.row(it) {
 			continue
-		}
-		if hide == -2 || (hide >= 0 && int(it.Level) > hide) {
-			continue
-		}
-		hide = -1
-		if it.Open != nil && !*it.Open {
-			hide = int(it.Level)
 		}
 		if n < len(vis) {
 			if it.ID == st.Sel {
@@ -669,7 +921,11 @@ func sidebarKeys(c *ui.Context, st *SidebarState, items []SidebarItem) (changed 
 	if n == 0 {
 		return false, 0
 	}
-	to := -1
+	if multi && c.TakeKey('A', ui.PrimaryMod()) {
+		st.SelectAll(items)
+		return true, 0
+	}
+	to, extend := -1, false
 	switch {
 	case c.TakeKey(ui.KeyDown, 0):
 		to = min(cur+1, n-1)
@@ -678,6 +934,13 @@ func sidebarKeys(c *ui.Context, st *SidebarState, items []SidebarItem) (changed 
 		}
 	case c.TakeKey(ui.KeyUp, 0):
 		to = max(cur-1, 0)
+	case multi && c.TakeKey(ui.KeyDown, ui.ModShift):
+		to, extend = min(cur+1, n-1), true
+		if cur < 0 {
+			to = 0
+		}
+	case multi && c.TakeKey(ui.KeyUp, ui.ModShift):
+		to, extend = max(cur-1, 0), true
 	case cur >= 0 && c.TakeKey(ui.KeyRight, 0):
 		if it := &items[vis[cur]]; it.Open != nil && !*it.Open {
 			*it.Open, toggled = true, it.ID
@@ -695,8 +958,13 @@ func sidebarKeys(c *ui.Context, st *SidebarState, items []SidebarItem) (changed 
 			}
 		}
 	}
-	if to >= 0 && to != cur {
-		st.Sel = items[vis[to]].ID
+	if to >= 0 && (to != cur || extend && st.Count() > 1) {
+		id := items[vis[to]].ID
+		if extend {
+			st.selectRange(items, st.anchorRow(), id)
+		} else {
+			st.Select(id)
+		}
 		return true, toggled
 	}
 	return false, toggled

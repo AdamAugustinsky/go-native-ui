@@ -1,6 +1,7 @@
 package rexui_test
 
 import (
+	"slices"
 	"testing"
 
 	"gonativeui/icon"
@@ -331,5 +332,84 @@ func TestSidebarLegacyScroller(t *testing.T) {
 	g.settle()
 	if right := g.nodeAt(ui.RoleListItem, 0).Bounds[2] / g.scale; right <= 180-17+0.5 {
 		t.Errorf("with overlay scrollers a row still ends at %v", right)
+	}
+}
+
+// selectedRows are the IDs the sidebar model has selected, in order.
+func selectedRows(m *sidebarModel) []uint32 { return m.st.AppendSelected(nil) }
+
+// A sidebar with Multiple selects a set of rows: ⌘-click toggles one, Shift-click
+// takes the rows from the last chosen to the one clicked (skipping a hidden
+// row), Shift+Down extends, ⌘A selects every row, and a plain press or Down
+// goes back to one. Sel is the row last chosen, and each selected row is
+// selected in the semantic tree.
+func TestSidebarMultipleSelection(t *testing.T) {
+	g, m := newSidebarRig(t)
+	m.o.Multiple = true
+	prim := ui.PrimaryMod()
+	clickWith := func(mods ui.Mods, name string) {
+		g.in.Mods = mods
+		g.click(centre(g.node(ui.RoleListItem, name)))
+		g.in.Mods = 0
+	}
+	want := func(what string, sel uint32, rows ...uint32) {
+		t.Helper()
+		g.frame()
+		if got := selectedRows(m); !slices.Equal(got, rows) || m.st.Sel != sel || m.st.Count() != len(rows) {
+			t.Fatalf("%s: rows %v with Sel %d (%d), want %v with %d", what, got, m.st.Sel, m.st.Count(), rows, sel)
+		}
+	}
+	clickWith(0, "Documents")
+	want("a press", 2, 2)
+	clickWith(prim, "Rex")
+	want("⌘-click", 4, 2, 4)
+	for name, on := range map[string]bool{"Documents": true, "Rex": true, "Projects": false} {
+		if g.node(ui.RoleListItem, name).State&ui.SemSelected != 0 != on {
+			t.Errorf("%s: selected in the tree is %v, want %v", name, !on, on)
+		}
+	}
+	clickWith(ui.ModShift, "Red")
+	want("Shift-click from the last chosen", 6, 4, 6)
+	clickWith(prim, "Projects")
+	want("⌘-click on", 3, 3, 4, 6)
+	clickWith(prim, "Rex")
+	want("⌘-click off", 3, 3, 6)
+	clickWith(prim, "Projects")
+	want("⌘-click off the primary row", 6, 6)
+	g.key(ui.KeyUp, ui.ModShift)
+	want("Shift+Up", 4, 4, 6)
+	g.key(ui.KeyUp, ui.ModShift)
+	want("Shift+Up again", 3, 3, 4, 6)
+	g.key(ui.KeyDown, ui.ModShift)
+	want("Shift+Down shrinks it", 4, 4, 6)
+	g.key('A', prim)
+	want("⌘A", 4, 2, 3, 4, 6)
+	g.key(ui.KeyDown, 0)
+	want("Down", 6, 6)
+
+	// the set keeps up with the rows: one that goes is dropped, and the app
+	// setting Sel makes it the one row
+	m.st.SelectAll(m.items)
+	m.items = slices.Delete(m.items, 5, 6) // Red goes
+	g.frame()
+	if got := selectedRows(m); !slices.Equal(got, []uint32{2, 3, 4}) {
+		t.Fatalf("after Red went: %v", got)
+	}
+	m.st.Sel = 6 // (a row outside the set)
+	if got := selectedRows(m); !slices.Equal(got, []uint32{6}) || m.st.Has(3) {
+		t.Fatalf("after the app set Sel: %v", got)
+	}
+	m.st.SelectAll(m.items)
+	m.st.Select(3)
+	if got := selectedRows(m); !slices.Equal(got, []uint32{3}) || m.st.Sel != 3 {
+		t.Fatalf("after Select: %v", got)
+	}
+
+	// without Multiple a modifier changes nothing
+	m.o.Multiple = false
+	clickWith(prim, "Rex")
+	g.frame()
+	if got := selectedRows(m); !slices.Equal(got, []uint32{4}) {
+		t.Fatalf("⌘-click without Multiple: %v", got)
 	}
 }
