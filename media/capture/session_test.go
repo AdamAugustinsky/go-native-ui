@@ -218,6 +218,40 @@ func TestSessionOneSegmentIsRenamed(t *testing.T) {
 	}
 }
 
+// TestSessionOneFilePauseResume: a oneFile session (Windows) pauses and
+// resumes in segment 0 and renames it, without a join.
+func TestSessionOneFilePauseResume(t *testing.T) {
+	f := &fakeNative{}
+	r := newRecording(Options{})
+	s := newSession(r, f, filepath.Join(t.TempDir(), "rec.mp4"), func() {})
+	s.oneFile = true
+	if err := s.reserve(0); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.begin(); err != nil {
+		t.Fatal(err)
+	}
+	s.send(msg{kind: mChosen}, msg{kind: mStarted})
+	for range 2 {
+		if err := r.Pause(); err != nil {
+			t.Fatal(err)
+		}
+		if err := r.Resume(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r.Stop(false)
+	s.send(msg{kind: mSegFinished, seg: 0}, msg{kind: mCaptureStopped})
+	res := waitEnded(t, s)
+	if res.Err != nil || res.Path != s.out || !exists(s.out) || exists(s.segPath(0)) || f.joined != nil || len(s.segs) != 1 {
+		t.Fatalf("result %+v, segments %v, joined %v", res, s.segs, f.joined)
+	}
+	want := []string{"choose", "chosen", "start", "detach", "attach 0", "detach", "attach 0", "stopCapture"}
+	if !slices.Equal(f.calls, want) {
+		t.Fatalf("calls %v, want %v", f.calls, want)
+	}
+}
+
 func TestSessionPickerCancelled(t *testing.T) {
 	s, f := newTestSession(t, Options{})
 	if err := s.r.Pause(); !errors.Is(err, ErrNotRecording) {
