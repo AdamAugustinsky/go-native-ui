@@ -45,6 +45,14 @@ type DialogRecipe struct {
 	SlideY float32
 	// Fill is the sheet's fill; Title colours the title.
 	Fill, Title Tint
+	// Blur is the sheet's frosted glass: what is under the sheet blurred
+	// (ui.Context.NextBackdrop, D54) and covered by its tint, so the
+	// window's content keeps its colour in the sheet but none of its text
+	// can be read through it, with the window's transparency on or off. It
+	// comes in with the sheet: its blur and tint grow with the sheet's
+	// opacity as it opens. Under Reduce Transparency, and where a renderer
+	// has no blur, the sheet is Fill, opaque.
+	Blur BackdropRecipe
 	// Elevation is the sheet's elevation (theme.ElevModal: its edge and
 	// shadow).
 	Elevation theme.Elevation
@@ -56,6 +64,8 @@ var DialogLook = DialogRecipe{
 	PadX:  20, PadTop: 20, PadBottom: 16, TitleGap: 10, ActionsGap: 16,
 	ButtonGap: 8, ButtonSize: theme.SizeLarge, SlideY: 12,
 	Fill: Of(theme.Raised), Title: Of(theme.Label),
+	Blur: BackdropRecipe{Sigma: 16, Down: 4, Tint: Of(theme.Raised), Mix: [2]float32{0.86, 0.86},
+		Saturation: [2]float32{1.4, 1.2}},
 	Elevation: theme.ElevModal,
 }
 
@@ -172,6 +182,15 @@ func BeginDialog(k *base.Kit, label string, open *bool, o DialogOpts) Dialog {
 		flags |= ui.DrawBorder
 	}
 	c.NextBG(rc.Fill.RGBA(r))
+	if !r.Settings.ReduceTransparency {
+		// the glass grows with the sheet, never sharper than one texel of
+		// its scaled-down copy, so it does not appear in blocks
+		b := rc.Blur.Backdrop(k)
+		b.Sigma = max(b.Sigma*t, b.Down)
+		b.Mix *= t
+		b.Base = rc.Fill.RGBA(r) | 0xFF // what it sees over a window's material
+		c.NextBackdrop(b)
+	}
 	c.NextRadius(r.Radii.Sheet)
 	k.NextPadding(rc.PadX, rc.PadTop, rc.PadX, rc.PadBottom)
 	k.NextGap(r.Space.ControlGap / k.Scale())

@@ -126,11 +126,12 @@ func (k *Kit) Icon(id icon.ID, color uint32) ui.ID {
 	}
 	c := k.c
 	flags, disp := k.icons.Prepare(c, id, color)
+	k.syncSize()
 	if k.hasH && flags != 0 { // a height set with NextHeight: the glyph stays centred in it
 		w, _ := k.icons.Size(id)
 		c.NextSize(ui.Px(w), k.nh)
 	}
-	k.hasW, k.hasH = false, false // whether or not the icon is ready: NextSize is the icon's, not the next box's
+	k.ClearSize() // whether or not the icon is ready: NextSize is the icon's, not the next box's
 	c.NextRole(ui.RoleImage)
 	return c.BoxKeyed(flags, ui.KeyN(c.ParentKey(), 7000+uint64(id)), disp)
 }

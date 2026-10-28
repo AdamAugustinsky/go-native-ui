@@ -141,6 +141,12 @@ const (
 	SourceTask
 	// SourceTray is a status item's click (app/tray).
 	SourceTray
+	// SourceHotkey is a global hotkey's press (app/hotkey).
+	SourceHotkey
+	// SourceCapture is screen capture's events (media/capture).
+	SourceCapture
+	// SourceWebView is a hosted browser view's events (app/webview).
+	SourceWebView
 	// SourceApp is the first source free for the app's own producers.
 	SourceApp Source = 256
 )
@@ -151,7 +157,8 @@ type QuitReason int64
 const (
 	// QuitMenu is the Quit menu item or ⌘Q.
 	QuitMenu QuitReason = iota + 1
-	// QuitDock is Quit from the Dock or another app (an Apple event).
+	// QuitDock is Quit from the Dock or another app (an Apple event; on
+	// Windows WM_CLOSE sent to the app window, as taskkill without /F does).
 	QuitDock
 	// QuitLogout is a logout, restart or shutdown: answer promptly.
 	QuitLogout
@@ -205,6 +212,11 @@ type AppOptions struct {
 	// WindowTabbing lets macOS group the app's windows into tabs (its
 	// automatic window tabbing, the View menu's tab items); off by default.
 	WindowTabbing bool
+	// QuitBlockReason is what Windows shows beside the app while a logout or
+	// shutdown waits for the app's answer to its quit request
+	// (ShutdownBlockReasonCreate); "" is a short English default. Windows
+	// only.
+	QuitBlockReason string
 }
 
 // AppSink receives the application object's events, on the main thread. The
@@ -276,6 +288,7 @@ const (
 type recTable struct {
 	id      uint16
 	kind    tableKind
+	evKind  AppEventKind // a ring's events (AppEvService when 0)
 	source  Source
 	recs    []record
 	free    []atomic.Uint64 // a set bit is a free record
@@ -510,7 +523,13 @@ func NewRing(src Source, n, budget int) *Ring {
 // when the ring is full. Any goroutine. Accepted data allocates the first
 // time a record holds that much; the records keep their buffers between uses
 // up to the ring's byte budget in all, so a steady flow does not allocate.
-func (r *Ring) Offer(a, b int64, data []byte) bool {
+func (r *Ring) Offer(a, b int64, data []byte) bool { return r.offer(0, false, a, b, data) }
+
+// OfferID is Offer with the event's ID set to id instead of a sequence
+// number: a producer whose events name their object (a view) in the ID.
+func (r *Ring) OfferID(id uint64, a, b int64, data []byte) bool { return r.offer(id, true, a, b, data) }
+
+func (r *Ring) offer(id uint64, withID bool, a, b int64, data []byte) bool {
 	t := r.t
 	if !enterGate() {
 		t.refused.Add(1)
@@ -539,7 +558,14 @@ func (r *Ring) Offer(a, b int64, data []byte) bool {
 	rec.word.Store(uint64(gen)<<32 | stWriting)
 	rec.cost = n
 	t.accepted.Add(1)
-	t.fill(i, gen, AppEvent{Kind: AppEvService, Source: t.source, ID: t.fifo.Add(1), A: a, B: b}, data)
+	if !withID {
+		id = t.fifo.Add(1)
+	}
+	kind := t.evKind
+	if kind == AppEvNone {
+		kind = AppEvService
+	}
+	t.fill(i, gen, AppEvent{Kind: kind, Source: t.source, ID: id, A: a, B: b}, data)
 	return true
 }
 
@@ -548,6 +574,43 @@ func (r *Ring) Accepted() uint64 { return r.t.accepted.Load() }
 
 // Refused counts the offers refused because the ring was full.
 func (r *Ring) Refused() uint64 { return r.t.refused.Load() }
+
+// openURLs is the ring of URLs handed over from outside the process where the
+// OS starts a new process for them (Windows: a second instance's arguments,
+// app/instance), made with the first offer.
+var openURLs struct {
+	once sync.Once
+	r    *Ring
+}
+
+// OfferOpenURLs offers urls, received from outside the process (a second
+// instance's command line), for delivery as AppEvOpenURLs (A the count, the
+// data the URLs NUL-separated), as macOS delivers the URLs it opens with the
+// app (class 3: accepted only if a record and room for them are free; false
+// refuses, keeping nothing, so the sender can be told "busy"). Any
+// goroutine; it allocates (these offers are rare).
+func OfferOpenURLs(urls []string) bool {
+	if len(urls) == 0 {
+		return true
+	}
+	openURLs.once.Do(func() {
+		r := NewRing(SourceInstance, RingRecords, RingBytes)
+		r.t.evKind = AppEvOpenURLs
+		openURLs.r = r
+	})
+	n := len(urls) - 1
+	for _, u := range urls {
+		n += len(u)
+	}
+	data := make([]byte, 0, n)
+	for i, u := range urls {
+		if i > 0 {
+			data = append(data, 0)
+		}
+		data = append(data, u...)
+	}
+	return openURLs.r.Offer(int64(len(urls)), 0, data)
+}
 
 // ---- Class 4: observations ----
 
@@ -1048,8 +1111,20 @@ func deliverApp(s AppSink, e *AppEvent, data []byte) {
 // loop the frame's own code runs must not run the app's handler inside
 // Build. EvWillTerminate is never held (the process ends after it).
 func deliverNow(kind AppEventKind, id uint64, a, b int64, data []byte) {
-	e := AppEvent{Kind: kind, ID: id, A: a, B: b}
-	if dispatch.held && kind != AppEvWillTerminate {
+	deliverEventNow(AppEvent{Kind: kind, ID: id, A: a, B: b}, data)
+}
+
+// DeliverService delivers an AppEvService from src synchronously, as a
+// main-thread native event (D37 class 1): a global hotkey's press, from the
+// OS's handler on the main thread. While a frame holds dispatch it is kept
+// for the frame's end, so it never reaches the app inside Build. Main
+// thread; it allocates nothing once the held list has grown.
+func DeliverService(src Source, id uint64, a, b int64) {
+	deliverEventNow(AppEvent{Kind: AppEvService, Source: src, ID: id, A: a, B: b}, nil)
+}
+
+func deliverEventNow(e AppEvent, data []byte) {
+	if dispatch.held && e.Kind != AppEvWillTerminate {
 		natives.evs = append(natives.evs, nativeEv{ev: e, off: len(natives.data), n: len(data)})
 		natives.data = append(natives.data, data...)
 		dispatch.missed = true

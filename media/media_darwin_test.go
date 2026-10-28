@@ -305,23 +305,34 @@ func TestPlayerRates(t *testing.T) {
 
 func TestPlayerPauseNearEnd(t *testing.T) {
 	f := Format{48000, 1, Int16}
-	p := openPlayer(t, sine(f, time.Second, 440), f)
-	onMain(func() { p.Seek(600 * time.Millisecond) })
-	start := play(t, p)
+	var p *Player
+	var start time.Time
 	var before, held time.Duration
 	var playing bool
-	onMain(func() {
-		// Delay Pause into the final output buffer, without a handoff between
-		// observing that position and pausing. Never wait past two seconds.
-		deadline := time.Now().Add(2 * time.Second)
-		for p.Position() < 970*time.Millisecond && time.Now().Before(deadline) {
-			time.Sleep(time.Millisecond)
+	// The window is the last 30 ms of the clip, polled every millisecond on
+	// the main thread: a loaded runner (macOS CI) can hold the poll past the
+	// end, which tests nothing, so such a try is made once more on a new
+	// player. A pause that misses the end it saw fails.
+	for try := 0; try < 2; try++ {
+		p = openPlayer(t, sine(f, time.Second, 440), f)
+		onMain(func() { p.Seek(600 * time.Millisecond) })
+		start = play(t, p)
+		onMain(func() {
+			// Delay Pause into the final output buffer, without a handoff between
+			// observing that position and pausing. Never wait past two seconds.
+			deadline := time.Now().Add(2 * time.Second)
+			for p.Position() < 970*time.Millisecond && time.Now().Before(deadline) {
+				time.Sleep(time.Millisecond)
+			}
+			before = p.Position()
+			p.Pause()
+			held, playing = p.Position(), p.Playing()
+		})
+		t.Logf("Pause after %v: before=%v held=%v playing=%v", time.Since(start), before, held, playing)
+		if before < time.Second {
+			break
 		}
-		before = p.Position()
-		p.Pause()
-		held, playing = p.Position(), p.Playing()
-	})
-	t.Logf("Pause after %v: before=%v held=%v playing=%v", time.Since(start), before, held, playing)
+	}
 	if before < 970*time.Millisecond || held >= time.Second || !near(held, before, 2*time.Millisecond) || playing {
 		t.Fatal("did not pause before the end")
 	}

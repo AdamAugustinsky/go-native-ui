@@ -3,6 +3,9 @@ package app
 import (
 	"strings"
 	"testing"
+
+	"gonativeui/platform"
+	"gonativeui/ui"
 )
 
 // cycler is a CycleAligned session of n frames.
@@ -180,5 +183,37 @@ func TestBenchMinWindows(t *testing.T) {
 	}
 	if bn.bestIdx != 0 {
 		t.Errorf("the report is of window %d, want the first clean one", bn.bestIdx)
+	}
+}
+
+// scriptStub is a Scripter that plays nothing.
+type scriptStub struct{}
+
+func (scriptStub) Script(int, *ui.Input) bool { return true }
+
+// While a bench's session plays, the desk's pointer and focus do not reach
+// the window: a move at the real cursor or a focus loss between a scripted
+// press and its release would lose the click (windows-11-arm). Without a
+// bench (the agent bridge's steps in a live window) they still do.
+func TestBenchSessionIgnoresTheDesksInput(t *testing.T) {
+	for _, bench := range []bool{true, false} {
+		_, a := newBenchRig(t, BenchOptions{}, &cycler{n: 10})
+		if !bench {
+			a.bench = nil
+		}
+		a.script = scriptStub{}
+		in := &a.tr.in
+		in.MouseX, in.MouseY, in.Inside = 108, 409, true
+		in.SetButton(ui.ButtonLeft, true, 1) // the scripted press
+		in.ClearFrame()                      // its frame is over; the release is the next one's
+		a.onEvent(&platform.Event{Kind: platform.EvPointerMove, X: 504, Y: 344})
+		a.onEvent(&platform.Event{Kind: platform.EvFocus})
+		moved, cancelled := in.MouseX != 108, in.Cancelled[ui.ButtonLeft]
+		if bench && (moved || cancelled) {
+			t.Errorf("bench: the desk's input reached the scripted window: moved %v, cancelled %v", moved, cancelled)
+		}
+		if !bench && (!moved || !cancelled) {
+			t.Errorf("no bench: the OS input must apply: moved %v, cancelled %v", moved, cancelled)
+		}
 	}
 }

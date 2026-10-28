@@ -46,6 +46,24 @@
 // requests" class (D37 class 3), accepted into the same reserved ring and
 // delivered as an event; Poll stays as the poll form.
 //
+// # URLs
+//
+// Where the OS starts a new process for a URL of the app's scheme (Windows:
+// the registered command line, a3kb:… as an argument), the URL reaches the
+// running copy as a second instance's argument. With Options.Schemes set,
+// the arguments of those schemes are taken out of the request and delivered
+// to the app's handler as app.EvOpenURLs, as macOS delivers the URLs it
+// opens with the app (the phase 8 plan's W1); the request is answered
+// "busy" when the app's ring of them is full. A request with nothing else
+// in it is not stored for Poll.
+//
+// # The foreground
+//
+// On Windows, Send lets the primary take the foreground
+// (AllowSetForegroundWindow on the pipe server's process) before it sends,
+// so a primary that shows a window for the request can bring it to the
+// front; Windows refuses that to a process the user is not working with.
+//
 // # Lost answers
 //
 // Every Send gives its request an ID and repeats the same ID in its retries.
@@ -122,6 +140,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -172,6 +191,11 @@ type Options struct {
 	// app.Post of an event of the app's own, and the handler then calls Poll.
 	// It must not block, and may run on several goroutines at once.
 	Notify func()
+	// Schemes are the app's URL schemes ("notes-dev"), as registered with
+	// the OS: arguments that are URLs of one of them ("notes-dev:x", the
+	// scheme matched without regard to case) arrive as app.EvOpenURLs
+	// rather than through Poll (see the package comment).
+	Schemes []string
 }
 
 // Request is one accepted request from a secondary instance.
@@ -275,7 +299,7 @@ func AcquireWith(id string, o Options) (*Primary, *Secondary, error) {
 		return nil, nil, fmt.Errorf("instance: listening on %s: %w", addr, err)
 	}
 	p := &Primary{ln: ln, lk: lk, addr: addr, notify: o.Notify, ring: make([]Request, 0, o.Queue), limit: o.Queue,
-		seen: make(map[string]*seenEntry, dedupSize)}
+		seen: make(map[string]*seenEntry, dedupSize), schemes: o.Schemes}
 	p.wg.Add(1)
 	go p.serve()
 	return p, nil, nil
@@ -286,8 +310,9 @@ type Primary struct {
 	ln   listener
 	lk   lock
 	addr string
-	// notify is Options.Notify.
-	notify func()
+	// notify is Options.Notify, schemes Options.Schemes.
+	notify  func()
+	schemes []string
 
 	mu     sync.Mutex
 	ring   []Request    // accepted, not yet polled; never grows past limit
@@ -414,11 +439,21 @@ func (p *Primary) offer(id string, r Request) byte {
 		p.order[0] = nil
 		p.order = p.order[1:]
 	}
+	urls, rest := splitURLs(r.Args, p.schemes)
+	if len(urls) > 0 && !offerURLs(urls) {
+		p.mu.Unlock()
+		return replyBusy // the app's ring of URLs is full: nothing is taken
+	}
 	e := &seenEntry{id: id, at: now}
 	p.seen[id] = e
 	p.order = append(p.order, e)
-	p.ring = append(p.ring, r)
-	p.ringE = append(p.ringE, e)
+	if len(urls) > 0 && len(rest) == 0 {
+		e.polled = true // delivered as EvOpenURLs: nothing for Poll
+	} else {
+		r.Args = rest
+		p.ring = append(p.ring, r)
+		p.ringE = append(p.ringE, e)
+	}
 	p.mu.Unlock()
 	p.serial.Add(1)
 	wake()
@@ -426,6 +461,37 @@ func (p *Primary) offer(id string, r Request) byte {
 		p.notify()
 	}
 	return replyAccepted
+}
+
+// offerURLs hands URLs to the application object (platform.OfferOpenURLs);
+// tests replace it.
+var offerURLs = platform.OfferOpenURLs
+
+// splitURLs separates the arguments that are URLs of one of schemes from the
+// others. With no schemes every argument is rest.
+func splitURLs(args, schemes []string) (urls, rest []string) {
+	if len(schemes) == 0 {
+		return nil, args
+	}
+	for _, a := range args {
+		if hasScheme(a, schemes) {
+			urls = append(urls, a)
+		} else {
+			rest = append(rest, a)
+		}
+	}
+	return urls, rest
+}
+
+// hasScheme reports whether arg starts with "<scheme>:" for one of schemes,
+// the scheme compared without regard to ASCII case.
+func hasScheme(arg string, schemes []string) bool {
+	for _, s := range schemes {
+		if len(arg) > len(s) && arg[len(s)] == ':' && strings.EqualFold(arg[:len(s)], s) {
+			return true
+		}
+	}
+	return false
 }
 
 // Poll appends the accepted requests that have not been collected yet to dst,

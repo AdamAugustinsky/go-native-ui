@@ -350,8 +350,11 @@ func (c *Context) scrollAt(e *ScrollEvent) (Key, ID) {
 
 // scrollPlain applies a wheel event, or precise deltas without a gesture, to
 // the box under it: hard-clamped, precise deltas at once and wheels smoothly
-// (the target moves), or at once too with WheelJumps. A vertical wheel scrolls
-// a box that scrolls only on X along X.
+// (the target moves), or at once too with WheelJumps. A wheel's notches over
+// a box that scrolls only on X scroll it along X. Otherwise an axis the box
+// does not scroll on goes to the nearest box around it that does (precise
+// vertical deltas over a code block that scrolls sideways move the
+// transcript), as a gesture's latch does.
 func (c *Context) scrollPlain(e *ScrollEvent) {
 	key, _ := c.scrollAt(e)
 	if key == 0 {
@@ -361,7 +364,6 @@ func (c *Context) scrollPlain(e *ScrollEvent) {
 	if !ok {
 		return
 	}
-	b := &c.boxes[v]
 	mul := float64(1)
 	if !e.Precise {
 		mul = float64(c.WheelStep)
@@ -369,13 +371,21 @@ func (c *Context) scrollPlain(e *ScrollEvent) {
 	delta := [2]float64{-float64(e.DX) * mul, -float64(e.DY) * mul}
 	// A wheel's notches over a box that scrolls only sideways scroll it
 	// sideways: the box under the pointer takes them, and its Y would drop them.
-	if !e.Precise && delta[0] == 0 && b.flags&scrollMask == ScrollX {
+	if !e.Precise && delta[0] == 0 && c.boxes[ID(v)].flags&scrollMask == ScrollX {
 		delta = [2]float64{delta[1], 0}
 	}
 	for a := 0; a < 2; a++ {
-		if delta[a] == 0 || !b.scrollOn(a) {
+		if delta[a] == 0 {
 			continue
 		}
+		id := ID(v)
+		for id != 0 && !c.boxes[id].scrollOn(a) {
+			id = c.boxes[id].parent
+		}
+		if id == 0 || !c.boxes[id].scrollOn(a) {
+			continue
+		}
+		b := &c.boxes[id]
 		hi := math.Max(0, b.content[a]-float64(b.size[a]))
 		old := b.scrollTgt[a]
 		b.scrollTgt[a] = math.Min(math.Max(old+delta[a], 0), hi)

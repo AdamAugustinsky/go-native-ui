@@ -111,6 +111,14 @@ type Config struct {
 	// (App.Win.NewHost, ui.Context.Host) need nothing here.
 	Materials bool
 
+	// Panel makes the window a panel (platform.Panel, the phase 8 plan's
+	// D69): borderless, out of the Dock, the taskbar and the app switcher,
+	// floating, non-activating or hidden on deactivation as its fields say.
+	// Win.Show and Win.Hide show and hide it, keeping its state; a hidden
+	// panel builds nothing. OpenWindow fails with platform.ErrNoPanels where
+	// the OS has no panels yet (platform.PanelsSupported).
+	Panel *platform.Panel
+
 	// Place, when set, runs once the window exists and before its first
 	// frame, while it is still hidden: it may move, size or zoom the window
 	// (platform.Window's SetFrameRect and Zoom), as an app that puts its
@@ -176,6 +184,7 @@ type App struct {
 	scriptFrame int
 	scriptDone  bool
 
+	shelved     bool  // a panel the app hid, or AppKit on deactivation: it builds and draws nothing until shown (shelve)
 	frames      int   // frames presented
 	inFrame     bool  // between BeginFrame and EndFrame (drawFrame)
 	reentries   int   // frame handler calls refused because a frame was in progress
@@ -284,7 +293,10 @@ type RunResult struct {
 	InputToCommitMs Stats
 }
 
-// Run opens the window and runs the application until it is closed.
+// Run opens the window and runs the application until it is closed. The
+// app events (a web view's, a hotkey's, a dialog's answer: EvService and
+// the rest) go to b's Event if it has one (EventHandler), as they go to
+// Main's Handler, and to DefaultEvent otherwise.
 func Run(cfg Config, b Builder) error {
 	_, err := RunWith(cfg, b, RunOptions{})
 	return err
@@ -321,7 +333,7 @@ func openWindowed(cfg Config, b Builder, st *StartupReport, nativeMenus bool) (*
 	tEntry, age := platform.Now(), sysinfo.ProcessAgeNs()
 	gpu.Prewarm() // the renderer's shaders build while the window opens
 	a := newApp()
-	a.handler = DefaultHandler{}
+	a.handler = runHandler(b)
 	if err := a.bindApp(false); err != nil {
 		return nil, err
 	}
@@ -359,12 +371,16 @@ func (a *App) openWin(cfg Config, b Builder, st *StartupReport, nativeMenus bool
 		MinWidth: int(cfg.MinWidth + 0.5), MinHeight: int(cfg.MinHeight + 0.5),
 		Titlebar: cfg.Titlebar, TrafficLights: cfg.TrafficLights, PublicAPIOnly: cfg.PublicAPIOnly,
 		Backdrop: cfg.Backdrop, Buttons: cfg.Buttons, Materials: cfg.Materials,
+		Panel: cfg.Panel,
 	})
 	if err != nil {
 		return fmt.Errorf("app: open window: %w", err)
 	}
-	if win.HasMaterials() {
-		a.cfg.Clear = [4]float32{} // premultiplied transparent: the backdrop or the materials show
+	if win.HasMaterials() || cfg.Panel != nil && runtime.GOOS == "darwin" {
+		// premultiplied transparent: the backdrop or the materials show, or
+		// (a panel on macOS, whose window is transparent) the desktop where
+		// the builder draws nothing: the builder draws the panel's shape
+		a.cfg.Clear = [4]float32{}
 	}
 	if cfg.Place != nil {
 		cfg.Place(win)
@@ -388,7 +404,7 @@ func (a *App) openWin(cfg Config, b Builder, st *StartupReport, nativeMenus bool
 	}
 	a.Surf = surf
 	win.SetFrameSource(surf.FrameSource())
-	if !a.startHidden || a.started {
+	if cfg.Panel == nil && (!a.startHidden || a.started) {
 		surf.RevealOnFirstFrame(win.Show) // content-first: the window appears with its first frame
 	}
 	t1 := platform.Now()
@@ -432,6 +448,9 @@ func (a *App) openWin(cfg Config, b Builder, st *StartupReport, nativeMenus bool
 		st.ExecToFirstPresentMs = ms(t5 - execNs)
 	}
 	a.execNs = execNs
+	if cfg.Panel != nil {
+		a.shelve(true) // a panel opens hidden, its first frame drawn: Win.Show shows it
+	}
 	a.wins = append(a.wins, a) // open: the loop serves it from now on
 	return nil
 }
@@ -604,6 +623,9 @@ func (a *App) waitTimeout(now int64) int64 {
 // wake (held while the window is hidden), then the pacer's verdict. It requests a frame if the pacer says so
 // and reports whether to draw now.
 func (a *App) turn(now int64) (draw bool) {
+	if a.shelved {
+		return false // a hidden panel builds nothing (shelve)
+	}
 	if a.wakeAt != 0 && now >= a.wakeAt && !a.p.hidden {
 		a.wakeAt = 0
 		a.p.invalidate() // a text field's caret blink is due
@@ -626,6 +648,9 @@ func (a *App) turn(now int64) (draw bool) {
 // A hidden window does not wake for the UI's timed requests (a caret blink,
 // a spinner's next step): nothing would be drawn.
 func (a *App) timeout(now int64) int64 {
+	if a.shelved && a.bench == nil {
+		return -1 // nothing to draw until Show
+	}
 	t := a.p.timeout(now)
 	if a.wakeAt != 0 && !a.p.hidden { // the UI asked for a frame at a time (WakeAfter)
 		if d := max(a.wakeAt-now, 0); t < 0 || d < t {
@@ -658,6 +683,13 @@ func (a *App) onEvent(e *platform.Event) {
 		}
 	case platform.EvVisible:
 		a.tr.in.Hidden = e.Flags&platform.FlagDown == 0
+		if a.cfg.Panel != nil && a.Win != nil {
+			// AppKit hides a HideOnDeactivate panel when the app deactivates
+			// and shows it again when the app comes back. A panel off the
+			// screen stays shelved whatever the occlusion state says, and so
+			// does one whose Hide waits for the safe point.
+			a.shelved = !a.Win.Visible() || a.cmd&cmdHide != 0
+		}
 		// Hidden, timed wakes wait and a failed attempt parks the loop
 		// (pacer); shown again, what was skipped is owed. A bench draws
 		// regardless: it measures frames, and a machine with its display
@@ -702,6 +734,9 @@ func (a *App) onEvent(e *platform.Event) {
 			a.onMediaPaste(e, a.Win.Text(e.Text))
 			return
 		}
+		if a.bench != nil && a.script != nil && !a.scriptDone && personInput(e.Kind) {
+			return // the bench's scripted session is the window's only input (personInput)
+		}
 		var txt []byte
 		if e.Kind == platform.EvText || e.Kind == platform.EvPreedit || e.Kind == platform.EvPaste {
 			txt = a.Win.Text(e.Text)
@@ -710,6 +745,28 @@ func (a *App) onEvent(e *platform.Event) {
 			a.p.invalidate()
 		}
 	}
+}
+
+// personInput reports whether events of kind k are what a person does with
+// the pointer, the keyboard and the window's focus. A bench whose Builder is
+// a Scripter takes none of them while its session plays: the script is the
+// window's input, and the desk's would change what it means. A window under
+// a cursor that never moves still gets pointer moves at that cursor, and
+// focus changes, whenever other windows come and go: on windows-11-arm,
+// once the shell surfaces that covered the desktop are cleared, the bench's
+// window loses and regains the foreground about every 30 s. A move that
+// lands between a scripted press and its release moves the release off the
+// target, and a focus loss there cancels the press: the click is lost, and
+// the step that waits for its effect fails. The answers the app asked for
+// (EvPaste, EvColor) and the window's own events still arrive.
+func personInput(k platform.EventKind) bool {
+	switch k {
+	case platform.EvPointerMove, platform.EvPointerButton, platform.EvPointerLeave, platform.EvScroll,
+		platform.EvKey, platform.EvText, platform.EvPreedit, platform.EvModifiers, platform.EvEdit,
+		platform.EvFocus, platform.EvMagnify, platform.EvSmartMagnify, platform.EvRotate:
+		return true
+	}
+	return false
 }
 
 // frameHandler runs inside OS modal loops (live resize), where Wait does not
@@ -755,6 +812,8 @@ func (a *App) present(inHandler bool, passes int) bool {
 		a.p.drawn(a.more)
 		if bn := a.bench; bn != nil {
 			bn.after(a)
+		} else if r := a.root; r != nil && r != a && r.bench != nil && r.bench.measuring {
+			r.bench.companion++ // a companion window drew while the bench's measured (BenchOptions.Companions)
 		}
 		return true
 	}

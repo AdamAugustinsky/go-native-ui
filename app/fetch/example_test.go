@@ -1,6 +1,7 @@
 package fetch_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -34,4 +35,33 @@ func Example() {
 
 	manifest, res, err := fetch.Bytes(ctx, "https://example.com/latest.json", 1<<20, fetch.Options{})
 	_, _, _ = manifest, res, err
+}
+
+// Uploading a file with a known length and progress, and reading an API's
+// JSON answer whatever its status.
+func ExampleDo() {
+	f, err := os.Open("recording.mp4")
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return
+	}
+	var answer bytes.Buffer
+	res, err := fetch.Do(context.Background(), fetch.Request{
+		Method:     "PUT",
+		URL:        "https://kb.example/api/v1/recordings/a1/parts/1",
+		Body:       f, // read in pieces as it is sent: constant memory
+		BodyLength: st.Size(),
+	}, &answer, fetch.Options{
+		Headers:        map[string]string{"Authorization": "Bearer token", "Content-Type": "application/octet-stream"},
+		UploadProgress: func(sent, total int64) {}, // post to the UI, never block here
+		AnyStatus:      true,                       // a 4xx's JSON body is ours to read
+		Timeout:        120 * time.Second,
+	})
+	if err == nil && res.Status >= 400 {
+		// answer holds {"message": ...}
+	}
 }

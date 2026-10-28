@@ -1,8 +1,10 @@
 package app
 
 import (
+	"errors"
 	"testing"
 
+	"gonativeui/platform"
 	"gonativeui/ui"
 )
 
@@ -72,5 +74,20 @@ func TestSystemButtonsAreScaledToPixels(t *testing.T) {
 	}
 	if n := testing.AllocsPerRun(100, func() { a.syncWindowFrom(w, w) }); n != 0 {
 		t.Errorf("%v allocations per frame", n)
+	}
+}
+
+// TestPanelUnsupported is the contract of Config.Panel where the OS has no
+// panels (Windows until W2's Windows half, Linux): a panel is refused with
+// platform.ErrNoPanels, before any window is made.
+func TestPanelUnsupported(t *testing.T) {
+	if platform.PanelsSupported() {
+		t.Skip("panels are implemented here")
+	}
+	if err := checkPanelConfig(Config{Panel: &platform.Panel{Floating: true}}); !errors.Is(err, platform.ErrNoPanels) || !errors.Is(err, errors.ErrUnsupported) {
+		t.Fatalf("a panel where there are none: %v", err)
+	}
+	if err := checkPanelConfig(Config{}); err != nil {
+		t.Fatalf("an ordinary window: %v", err)
 	}
 }

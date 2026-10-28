@@ -38,7 +38,8 @@ accent": text over a photo, a video or a dark plate is literal white
 (`rexui.OfRGBA(0xFFFFFFFF)`), and text on a tint of the accent is the
 label's colour. Red text someone reads (a destructive label, a missed
 call, an error) is `rexui.DangerText`, not `theme.Red`, which is 3.6:1 on
-white. Then recolour the recipes that
+white; green text (an added line, a success) is `rexui.SuccessText`, not
+`theme.Green`, which is 2.2:1. Then recolour the recipes that
 carry Rex's lilac to the field's hue: `rexui.TabsRecipes[rexui.TabsRex]` (the
 capsule, its pill, the separators). Zap's `gnui/theme/rexlook.go` does all of
 this for WhatsApp's green in about a hundred lines.

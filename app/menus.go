@@ -208,7 +208,8 @@ func nativeMenuSpec(m *menu.Model) platform.MenuSpec {
 	var settings *menu.Command
 	var appCmds [platform.MenuQuit + 1]*menu.Command // the model's commands of the application menu's standard items
 	hasEdit, hasWindow, hasHelp := false, false, false
-	servicesTitle := "Services"
+	str := menu.CurrentStrings()
+	servicesTitle := str.Services
 	for i := range menus {
 		s.Menus = append(s.Menus, platform.Menu{Title: menus[i].Title, Items: nativeItems(m, menus[i].Items)})
 		switch menus[i].Role {
@@ -261,7 +262,7 @@ func nativeMenuSpec(m *menu.Model) platform.MenuSpec {
 	if settings != nil {
 		it := commandItem(settings)
 		if it.Title == "" {
-			it.Title = "Settings…"
+			it.Title = str.Settings
 		}
 		if it.Key == 0 && it.Mods == 0 {
 			it.Key, it.Mods = ',', platform.ModSuper
@@ -274,7 +275,7 @@ func nativeMenuSpec(m *menu.Model) platform.MenuSpec {
 
 	edit := -1
 	if !hasEdit {
-		edit = add(platform.Menu{Title: "Edit", Items: []platform.MenuItem{act(platform.MenuUndo), act(platform.MenuRedo), sep,
+		edit = add(platform.Menu{Title: str.Edit, Items: []platform.MenuItem{act(platform.MenuUndo), act(platform.MenuRedo), sep,
 			act(platform.MenuCut), act(platform.MenuCopy), act(platform.MenuPaste), act(platform.MenuPasteAndMatchStyle), act(platform.MenuDelete), act(platform.MenuSelectAll)}})
 	}
 	for k, bi := range bar {
@@ -288,7 +289,7 @@ func nativeMenuSpec(m *menu.Model) platform.MenuSpec {
 		s.Bar = append(s.Bar, edit)
 	}
 	if !hasWindow { // before the Help menu
-		w := add(platform.Menu{Title: "Window", Role: platform.MenuRoleWindow, Items: []platform.MenuItem{
+		w := add(platform.Menu{Title: str.Window, Role: platform.MenuRoleWindow, Items: []platform.MenuItem{
 			act(platform.MenuMinimize), act(platform.MenuZoom), sep, act(platform.MenuBringAllToFront)}})
 		at := len(s.Bar)
 		for k, bi := range s.Bar {
@@ -300,7 +301,7 @@ func nativeMenuSpec(m *menu.Model) platform.MenuSpec {
 		s.Bar = append(s.Bar[:at], append([]int{w}, s.Bar[at:]...)...)
 	}
 	if !hasHelp {
-		s.Bar = append(s.Bar, add(platform.Menu{Title: "Help", Role: platform.MenuRoleHelp}))
+		s.Bar = append(s.Bar, add(platform.Menu{Title: str.Help, Role: platform.MenuRoleHelp}))
 	}
 	return s
 }

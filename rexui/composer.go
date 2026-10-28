@@ -782,7 +782,7 @@ func Composer(k *base.Kit, label string, st *ComposerState, o ComposerOpts) Comp
 			lo := CompletionOpts{Exclude: ex, Above: above, MaxRows: rows}
 			name := o.CompletionLabel
 			if name == "" {
-				name = "Suggestions"
+				name = str.Suggestions
 			}
 			cs := CompletionList(k, name, o.Completion, o.Items, caret, lo)
 			sig.Chosen, sig.Dismissed = cs.Chosen, cs.Dismissed
@@ -1006,7 +1006,7 @@ func composerStatic(k *base.Kit, st *ComposerState, rc *ComposerRecipe) ui.ID {
 	c.NextFont(s.Font.Font)
 	c.NextTextColor(rc.TextDisabled.RGBA(r))
 	c.NextRole(ui.RoleTextField)
-	c.NextSemName("Message")
+	c.NextSemName(str.MessageField)
 	c.NextSemValueBytes(st.ed.Text())
 	return c.BoxKeyed(ui.DrawText|ui.WrapText, ui.HashString(c.ParentKey(), "static"), txt)
 }
@@ -1026,7 +1026,7 @@ func composerAttachments(k *base.Kit, fieldKey ui.Key, list []ComposerAttachment
 	c.NextPadding(pt(sc, rc.AttachPad), pt(sc, rc.AttachPad/2), pt(sc, rc.AttachPad), 0)
 	c.NextSize(ui.Pct(1), ui.Children(1))
 	c.NextRole(ui.RoleList)
-	c.NextSemName("Attachments")
+	c.NextSemName(str.Attachments)
 	row := c.BoxKeyed(ui.ScrollX|ui.Clip, rowKey, nil) // a row longer than the field scrolls sideways
 	c.Push(row)
 	for i := range list {
@@ -1070,7 +1070,7 @@ func composerAttachments(k *base.Kit, fieldKey ui.Key, list []ComposerAttachment
 		c.NextJustify(ui.JustifyCenter)
 		c.NextRadius(side / 2)
 		c.NextRole(ui.RoleButton)
-		c.NextSemNameBytes(c.Fmt().Str("Remove ").Str(a.Name).Bytes())
+		c.NextSemNameBytes(c.Fmt().Str(str.Remove).Byte(' ').Str(a.Name).Bytes())
 		rm := c.BoxKeyed(k.InteractFlags(base.HoverOn), rk, nil)
 		c.Push(rm)
 		if f, disp := k.Icons().Prepare(c, icon.Close, col); f != 0 {
@@ -1094,9 +1094,9 @@ func composerSend(k *base.Kit, o ComposerOpts, rc *ComposerRecipe, canSend bool)
 	c, r := k.Context(), k.Theme()
 	sc := k.Scale()
 	prc := &ButtonRecipes[ButtonPrimary]
-	name := "Send###send"
+	name := sendLabels[0]
 	if o.Sending { // a send in flight: the neutral button with a spinner, which does nothing
-		name = "Sending###send"
+		name = sendLabels[1]
 		prc = &ButtonRecipes[ButtonDefault]
 		canSend = false
 	}
@@ -1111,7 +1111,7 @@ func composerSend(k *base.Kit, o ComposerOpts, rc *ComposerRecipe, canSend bool)
 	c.NextJustify(ui.JustifyCenter)
 	k.BeginPress(&p, ui.RoleButton, ui.Px(side), ui.Px(side), ui.DrawBackground, nil)
 	if o.Sending {
-		Spinner(k, "Sending", SpinnerOpts{Size: theme.SizeSmall, Still: o.Still})
+		Spinner(k, str.Sending, SpinnerOpts{Size: theme.SizeSmall, Still: o.Still})
 	} else {
 		ic := icon.ChevronUp
 		if o.HasSendIcon {

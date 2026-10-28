@@ -870,15 +870,15 @@ func (tb *Toolbar) Nav(back, forward icon.ID, canBack, canForward bool) (b, f ba
 	c, r := k.Context(), k.Theme()
 	h := tb.capsuleH()
 	w := theme.Snap(r.Window.Capsule.NavW)
-	if hidden, picked := tb.overflows(tbCapsule, w, "Back"); hidden {
-		_, pf := tb.overflows(tbCapsule, w, "Forward")
+	if hidden, picked := tb.overflows(tbCapsule, w, str.Back); hidden {
+		_, pf := tb.overflows(tbCapsule, w, str.Forward)
 		return base.Signal{Clicked: picked && canBack}, base.Signal{Clicked: pf && canForward}
 	}
 	tb.gap(tbCapsule)
 	flags := tb.capsuleLook(base.Visual{Inactive: k.Inactive()}, h)
 	c.NextAxis(ui.AxisX)
 	c.NextRole(ui.RoleGroup)
-	c.NextSemName("Back/Forward")
+	c.NextSemName(str.BackForward)
 	tb.n++
 	gkey := ui.KeyN(tb.key, 2000+tb.n)
 	g := c.BoxKeyed(flags, gkey, nil)
@@ -886,9 +886,9 @@ func (tb *Toolbar) Nav(back, forward icon.ID, canBack, canForward bool) (b, f ba
 	c.Push(g)
 	half := theme.Snap(w / 2)
 	for i, ic := range [2]icon.ID{back, forward} {
-		name, can := "Back", canBack
+		name, can := str.Back, canBack
 		if i == 1 {
-			name, can = "Forward", canForward
+			name, can = str.Forward, canForward
 		}
 		k.BeginDisabled(!can)
 		p := k.PressState(name, base.HoverOn)
@@ -1271,7 +1271,7 @@ func (tb *Toolbar) overflowButton() ToolbarOverflow {
 	tb.space(tb.gapW(tbCapsule))
 	h := tb.capsuleH()
 	w := tb.overflowW()
-	p := base.Press{Key: tb.ovKey, Name: "Show More", Hover: base.HoverOn, Visual: k.VisualOf(tb.ovKey, base.HoverOn)}
+	p := base.Press{Key: tb.ovKey, Name: str.ShowMore, Hover: base.HoverOn, Visual: k.VisualOf(tb.ovKey, base.HoverOn)}
 	flags := tb.capsuleLook(p.Visual, h)
 	k.BeginPress(&p, ui.RoleButton, ui.Px(w), ui.Px(h), flags, nil)
 	tb.glass(p.ID)

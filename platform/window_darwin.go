@@ -48,6 +48,9 @@ var (
 // (MaxWindows), each with its own event queue, display link and frame
 // handler, served by one pump (Pump, Wait). Main thread only.
 func Open(o Options) (*Window, error) {
+	if err := checkPanel(&o); err != nil {
+		return nil, err
+	}
 	if reg.n >= MaxWindows {
 		return nil, errTooManyWindows
 	}
@@ -75,15 +78,24 @@ func Open(o Options) (*Window, error) {
 	if o.Titlebar > 0 {
 		style |= 1 << 15 // NSWindowStyleMaskFullSizeContentView
 	}
-	w.win = objc.Send(windowClass, selAlloc) // GNUIWindow: NSWindow with the host focus hand-off (host_darwin.go)
+	w.wc = &windowKind // GNUIWindow: NSWindow with the host focus hand-off (host_darwin.go)
+	if o.Panel != nil {
+		p := *o.Panel
+		w.panel, w.wc, style = &p, &panelKind, panelStyle // GNUIPanel (panel_darwin.go)
+		o.Titlebar = 0
+	}
+	w.win = objc.Send(w.wc.cls, selAlloc)
 	w.win = objc.ID(F.Reset().Arg(uintptr(w.win)).Arg(uintptr(selInitWindow)).
 		ArgRect(0, 0, width, height).Arg(style).Arg(2 /* buffered */).ArgBool(false).Call(objc.MsgSend).R0())
 	if w.win == 0 {
 		return nil, errors.New("platform: NSWindow init failed")
 	}
 	objc.Send1(w.win, selSetReleased, 0)
-	mark(live.windowMark, w.win, &live.windows)
+	mark(w.wc.mark, w.win, &live.windows)
 	w.publicOnly = o.PublicAPIOnly
+	if w.panel != nil {
+		w.configurePanel()
+	}
 	if o.Titlebar > 0 {
 		w.titlebar, w.lights = float64(o.Titlebar), o.TrafficLights
 		objc.Send1(w.win, selSetTitlebarClear, 1)
@@ -109,7 +121,9 @@ func Open(o Options) (*Window, error) {
 	}
 	objc.Send1(w.win, selSetTitle, uintptr(objc.Str(o.Title)))
 	objc.Send(w.win, selCenter)
-	w.cascade()
+	if w.panel == nil {
+		w.cascade()
+	}
 	if os.Getenv("GNUI_NOANIM") != "" {
 		objc.Send1(w.win, selSetAnimBehavior, 2) // NSWindowAnimationBehaviorNone
 	}
@@ -163,7 +177,16 @@ func Open(o Options) (*Window, error) {
 // opened in the background (open -g, or a launch that may not activate
 // itself) it is not, and an EvFocus says so; it becomes key, with its own
 // EvFocus, once the app is activated.
+//
+// A panel (Options.Panel) shows on the active Space; a NonActivating one is
+// ordered front without activating the app or becoming key, so the window
+// the user types in keeps the keyboard, and any other panel activates the
+// app and becomes key, as a palette does.
 func (w *Window) Show() {
+	if w.panel != nil {
+		w.showPanel()
+		return
+	}
 	objc.Send1(w.win, selMakeKeyFront, 0)
 	// A process started from a background shell may not activate itself
 	// (macOS 14 cooperative activation); its window would open occluded.
@@ -208,7 +231,7 @@ func (w *Window) Size() (int32, int32, float32) { return w.wPx, w.hPx, w.scale }
 
 // Native returns the AppKit handles.
 func (w *Window) Native() Native {
-	return Native{NSWindow: uintptr(w.win), NSView: uintptr(w.view), Transparent: w.HasMaterials(), w: w}
+	return Native{NSWindow: uintptr(w.win), NSView: uintptr(w.view), Transparent: w.HasMaterials() || w.panel != nil, w: w}
 }
 
 // Close closes the window. A second Close does nothing.

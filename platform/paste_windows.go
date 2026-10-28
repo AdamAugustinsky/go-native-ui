@@ -43,8 +43,8 @@ func (w *Window) clipWorkerFor() *clipWorker {
 
 // SetClipboardText replaces the system clipboard with a copy of the plain
 // text b (UTF-8; invalid sequences become U+FFFD). b may be reused after the
-// call. It needs the open window, which owns what it puts on the clipboard;
-// without one it does nothing. It returns at once: the clipboard worker writes
+// call. It needs an open window (the one focused last), which owns what it
+// puts on the clipboard; without one it does nothing. It returns at once: the clipboard worker writes
 // the text, and a paste requested afterwards reads it. A copy that has not been
 // written clipTimeoutNs later (another process keeps the clipboard open, or
 // the previous owner does not answer EmptyClipboard) does not happen; and
@@ -58,7 +58,7 @@ func SetClipboardText(b []byte) { SetClipboardTextWith(b, ClipOptions{}) }
 // CanIncludeInClipboardHistory = 0 and CanUploadToCloudClipboard = 0. Main
 // thread.
 func SetClipboardTextWith(b []byte, o ClipOptions) {
-	w := theWindow
+	w := firstWindow()
 	if w == nil || pOpenClipboard == 0 {
 		return
 	}
@@ -70,7 +70,7 @@ func SetClipboardTextWith(b []byte, o ClipOptions) {
 // paste.go). The clipboard worker writes it as the registered "PNG" format
 // and as CF_DIBV5 (an image of more than 32 million pixels only as PNG), with
 // ClipOptions.Concealed also the formats that keep it out of history and
-// sync. Like SetClipboardText it needs the open window, which owns what it
+// sync. Like SetClipboardText it needs an open window, which owns what it
 // puts on the clipboard (ErrNoClipboard without one), returns at once, and
 // does not happen if the clipboard stays busy for clipTimeoutNs. Main thread.
 func SetClipboardImage(png []byte, opts ...ClipOptions) error {
@@ -78,7 +78,7 @@ func SetClipboardImage(png []byte, opts ...ClipOptions) error {
 	if err != nil {
 		return err
 	}
-	w := theWindow
+	w := firstWindow()
 	if w == nil || pOpenClipboard == 0 {
 		return ErrNoClipboard
 	}
@@ -109,7 +109,7 @@ func (w *Window) RequestPaste(tag uint64) { w.RequestPasteKinds(tag, WantText) }
 // answer, and FlagFailed|FlagTooBig for data over MaxPaste. Main thread.
 func (w *Window) RequestPasteKinds(tag uint64, kinds PasteKinds) {
 	from := 0
-	if w.delivered {
+	if w.returned {
 		from = w.nOut // the events before it are already with the app
 	}
 	w.q.dropQueuedPaste(from)

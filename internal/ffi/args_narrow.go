@@ -26,3 +26,26 @@ func (f *Frame) ArgNarrow(v uint32, size int) *Frame {
 	f.push(uintptr(v), size)
 	return f
 }
+
+// ArgStack appends an 8-byte word on the stack whatever registers remain:
+// a word of a struct the ABI passes in memory (SysV's MEMORY class, or an
+// AAPCS64 composite that no longer fits in the registers).
+func (f *Frame) ArgStack(v uintptr) *Frame {
+	f.push(v, 8)
+	return f
+}
+
+// FillIntRegs marks every integer register used, so that later integer
+// arguments go on the stack: AAPCS64 rule C.11, after a composite that did
+// not fit in the registers left went to the stack.
+func (f *Frame) FillIntRegs() *Frame {
+	f.ni = numIntRegs
+	return f
+}
+
+// FillFloatRegs marks every float register used (AAPCS64 rule C.3, after a
+// homogeneous float aggregate went to the stack).
+func (f *Frame) FillFloatRegs() *Frame {
+	f.nf = numFloatRegs
+	return f
+}

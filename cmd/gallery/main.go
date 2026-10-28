@@ -19,6 +19,8 @@
 //	                           allocations, CPU per frame and pacing
 //	gallery -bench -gate       also exit with status 3 unless there were 0 allocations, main-thread CPU
 //	                           within budget and frames were paced (-allow-unpaced: a sleeping display)
+//	gallery -bench -windows 2  the same with a second, idle gallery window open beside the bench's: the gate
+//	                           also fails if the idle one drew a frame while the bench measured (D30, D68)
 package main
 
 import (
@@ -70,6 +72,7 @@ func main() {
 	legacy := flag.Bool("legacy", false, "with -o or -measure: render legacy scroll bars (a window follows the system's style)")
 	window := flag.String("window", "", "in a window: its size in points as WxH (820x620 is System Settings'), instead of the default")
 	verbose := flag.Bool("v", false, "in a window or bench: print a state line every second while frames stop coming")
+	windows := flag.Int("windows", 1, "with -bench: how many windows are open, the bench's and idle ones beside it")
 	flag.Parse()
 
 	m, err := parseMode(*mode)
@@ -97,7 +100,7 @@ func main() {
 			}
 			err = render(*out, *outDark, *w, *h, float32(*scale), *scene, m, *rows, *scrolled, *inactive, *legacy)
 		case *bench:
-			err = runBench(*rows, m, *gate, *allowUnpaced, *sites, *maxCPU, *timeout, *verbose)
+			err = runBench(*rows, m, *gate, *allowUnpaced, *sites, *maxCPU, *timeout, *verbose, *windows)
 		default:
 			err = runWindow(*rows, m, *window, *start, *scrolled)
 		}
@@ -192,17 +195,28 @@ type report struct {
 	WindowPx      [2]int // the window's size at the end
 	WindowScale   float32
 	SessionCycles int      // times the session ran through (warm-up and measured frames)
+	OpenWindows   int      // the bench's window and its idle companions (-windows)
 	GateFailures  []string `json:",omitempty"`
 }
 
-func runBench(rows int, m theme.Preference, gate, allowUnpaced, sites bool, maxCPU float64, timeout time.Duration, verbose bool) error {
+func runBench(rows int, m theme.Preference, gate, allowUnpaced, sites bool, maxCPU float64, timeout time.Duration, verbose bool, windows int) error {
+	if windows < 1 {
+		return fmt.Errorf("-windows %d: want at least 1", windows)
+	}
 	b, err := gallery.NewBench(gallery.Options{Rows: rows, Preference: m})
 	if err != nil {
 		return err
 	}
-	rep := report{OS: runtime.GOOS, Arch: runtime.GOARCH, Rows: rows}
+	rep := report{OS: runtime.GOOS, Arch: runtime.GOARCH, Rows: rows, OpenWindows: windows}
 	opt := app.BenchOptions{Warm: warmFrames, PostGCWarm: postGCWarm, Windows: maxWindows, Timeout: timeout, Verbose: verbose}
 	opt.PrintAllocSites = sites
+	for range windows - 1 { // idle windows beside the bench's (D68)
+		g, err := gallery.New(gallery.Options{Rows: rows, Preference: m})
+		if err != nil {
+			return err
+		}
+		opt.Companions = append(opt.Companions, g)
+	}
 	br, err := app.RunBench(gallery.Config(), b, opt)
 	if serr := b.Err(); serr != nil { // a step that failed ends the run: say which
 		w, h, sc := b.WindowPx()
@@ -242,6 +256,9 @@ func gateFailures(r report, allowUnpaced bool, maxCPU float64) []string {
 	}
 	if !r.Paced && !allowUnpaced {
 		f = append(f, fmt.Sprintf("%d frames were not paced (no frame events); -allow-unpaced accepts a sleeping display", r.UnpacedFrames))
+	}
+	if r.CompanionFrames != 0 {
+		f = append(f, fmt.Sprintf("the idle windows drew %d frames while the bench's window was measured, want 0", r.CompanionFrames))
 	}
 	return f
 }

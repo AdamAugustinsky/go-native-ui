@@ -157,7 +157,7 @@ func Combobox(k *base.Kit, label string, st *ComboState, buf *ui.TextBuffer, ite
 		c.NextCross(ui.CrossCenter)
 		c.NextJustify(ui.JustifyCenter)
 		c.NextRole(ui.RoleButton)
-		c.NextSemName("Show options")
+		c.NextSemName(str.ShowOptions)
 		b := c.BoxKeyed(flags|ui.DrawBackground, bkey, nil)
 		c.Push(b)
 		k.Icon(icon.PullDown, fg)
@@ -180,7 +180,7 @@ func Combobox(k *base.Kit, label string, st *ComboState, buf *ui.TextBuffer, ite
 	}
 	if st.Open && n > 0 && !ti.Disabled {
 		anchor := c.RectOf(ti.WrapKey)
-		cs := completion(k, "Options", &st.List, nil, items, anchor, CompletionOpts{Width: (anchor[2] - anchor[0]) / sc}, ui.DismissSemitransient)
+		cs := completion(k, str.Options, &st.List, nil, items, anchor, CompletionOpts{Width: (anchor[2] - anchor[0]) / sc}, ui.DismissSemitransient)
 		if cs.Chosen >= 0 {
 			out.Chosen = cs.Chosen
 		}

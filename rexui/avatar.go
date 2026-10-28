@@ -205,7 +205,7 @@ func Avatar(k *base.Kit, name string, o AvatarOpts) ui.ID {
 		c.NextSemName(name)
 	}
 	if o.Presence != PresenceNone && o.Presence < numPresence {
-		c.NextSemValueBytes(base.StrBytes([...]string{"", "Online", "Away", "Busy"}[o.Presence]))
+		c.NextSemValueBytes(base.StrBytes([...]string{"", str.Online, str.Away, str.Busy}[o.Presence]))
 	}
 	c.NextAuditExempt(ui.AuditOverflow.Mask() | ui.AuditCovered.Mask()) // the ring and the cut lie over their neighbour on purpose // the presence dot sits on the corner
 	id := c.BoxKeyed(flags, key, nil)

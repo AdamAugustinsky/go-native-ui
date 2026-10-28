@@ -1,0 +1,9 @@
+{
+	"id": "dev.gonativeui.webdemo",
+	"name": "GNUI Web Demo",
+	"version": "0.1.0",
+	"usage": {
+		"NSCameraUsageDescription": "Web pages may ask for the camera; the demo's browser denies them.",
+		"NSMicrophoneUsageDescription": "Web pages may ask for the microphone; the demo's browser denies them."
+	}
+}

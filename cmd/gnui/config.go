@@ -52,6 +52,12 @@ type Config struct {
 	// Frameworks are .framework directories and .dylib files copied into
 	// Contents/Frameworks and signed, nested items first.
 	Frameworks []string `json:"frameworks"`
+	// NativeLibs are directories of runtime-loaded native libraries laid
+	// out per platform as <dir>/<goos>-<goarch>/ (tools/libghostty's cache,
+	// D2): the darwin-arm64 .dylib files are copied into
+	// Contents/Frameworks and signed with the app, and <dir>/LICENSE, when
+	// present, into Contents/Resources/Licenses/<library>.txt.
+	NativeLibs []string `json:"nativeLibs"`
 	// URLSchemes are the custom URL schemes the application handles.
 	URLSchemes []string `json:"urlSchemes"`
 	// DocumentTypes are the file types the application opens.
@@ -281,6 +287,11 @@ func (c *Config) Validate() error {
 		}
 		if err := checkRelPath(filepath.Base(filepath.Clean(f))); err != nil {
 			return fmt.Errorf("frameworks[%d]: %w", i, err)
+		}
+	}
+	for i, d := range c.NativeLibs {
+		if d == "" {
+			return fmt.Errorf("nativeLibs[%d]: empty", i)
 		}
 	}
 	for _, s := range c.URLSchemes {

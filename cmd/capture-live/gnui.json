@@ -1,0 +1,9 @@
+{
+	"id": "dev.gonativeui.capture.live",
+	"name": "GNUI Capture Live",
+	"version": "0.1.0",
+	"minimumSystem": "15.0",
+	"usage": {
+		"NSMicrophoneUsageDescription": "The capture live test records the microphone only when run with -mic."
+	}
+}

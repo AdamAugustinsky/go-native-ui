@@ -55,9 +55,12 @@ directly with `k.Kit`, or copies a component and owns it.
 | `Combobox` | — | small … large | NSComboBox: a text field and a 23.5 × 17.5 button holding a chevron; a `CompletionList` below it, Down opens it and Up/Down/Enter/Escape drive it. |
 | `ColorWell` | the system's colour panel, or `Drawn` for its own picker | — | NSColorWell's 48 × 24 bezel and inset swatch; a popover of the system colours and a hex field. |
 | `MessageBubble`, `BeginBubble` / `EndBubble` | incoming, outgoing, system; sent, sending, failed | — | C2 rich text in a bubble, emoji-only messages large and bubble-less, selectable across bubbles in a `VList` under one selection scope (C4). The app's fill or vertical gradient (`Fill`, `FillBottom`), its own `Look` or `FindMix`, and Messages' curled tail (`Curl`, a filled `gpu.Path`). |
+| `mdview.Markdown`, `mdview.CodeBlock`, `mdview.CodeLine` | — | — | A parsed `markdown.Doc` (headings, lists with markers and task boxes, quotes, tables, rules, links as link spans) and code coloured by `highlight` tokens made on a worker (`MarkdownView`), with a language label, Copy, sideways scrolling, a line-number gutter, a highlighted line and diff bands; every text is a selection part (`MarkdownSelected`). In package `rexui/mdview`, so that an app without Markdown or code does not link goldmark and chroma (1.0–1.2 MB stripped on the gallery and the notes example). Phase 8 C2/C3. |
 | `ChatListRow`, `DateDivider`, `TypingIndicator` | compact; pill; inline | — | A 56 pt conversation row (avatar, title, two-line preview, time, unread count); a hairline-flanked date; three dots that pulse only while visible. |
 | `CompletionList`, `CompletionState` | — | — | The completion popup of a text box: the contract the composer and the combo box share (its doc comment). |
 | `Composer`, `NewComposer` | default (1 → 6 lines), expanded (3 → 8) | empty, typing, attachments, sending, disabled | The chat composer (D7b): a rounded field (the text field's fill and outline) holding an attachments row, the text and a 28 pt send button. The text is a hosted `NSTextView` on macOS (spell check, autocorrect, dictation, emoji palette, Writing Tools) that grows with its `Height` signal, and a drawn single-line field elsewhere and offscreen. The send button needs text or an attachment and no send in flight (Enter is reported as `SendKey` either way); the list is a `CompletionList` above the field, never over the hosted view. |
+| `TextArea`, `NewTextArea` | fixed or growing lines (3 → 10 by default), read-only | empty, typing, read-only, disabled | A multi-line field for settings and instructions (C4): the text field's fill and outline at radius 8 around the composer's hosted `NSTextView` with no send policy (Enter adds a line), growing from `MinLines` to `MaxLines`; a drawn single-line field on Windows until W4, on Linux and offscreen. |
+| `WebView` | — | loading, notice, danger notice, no view | The pane of a hosted browser view (`app/webview`, H1): a rounded pane with a hairline edge whose top edge is the loading line, the page (`webview.Options.CornerRadius` = `WebViewLook.ContentRadius`), and a notice line under it in Label2 or `DangerText`; centred Label2 text when there is no view. |
 
 Every component is keyboard-operable and records its semantics. Its focus
 ring sits outside the shape, shows for keyboard focus only (the text-entry
@@ -619,7 +622,12 @@ Tab stays inside. Its radius (26) is that of the glass frame of an alert's
 panel, read from AppKit (`sheets.alertPanelCornerRadius`; a plain titled
 window reads 16), its content is 20 pt from the sides and top and its buttons
 are the alert's 28 pt capsules with the default rightmost and 16 pt from the
-bottom. The slide is designed.
+bottom. The slide is designed. Its surface is frosted glass drawn by our
+renderer (D54): what is under it blurred (16 pt, at a quarter) under 86 % of
+the raised fill, so the window's colour shows in it but no text behind it can
+be read, transparency on or off, from the entrance's first frame; under
+Reduce Transparency, and off Metal, it is the raised fill, opaque
+(`testdata/sheet-*.png`).
 
 **Alert is `app.Alert`.** A message, an explanation, a few buttons and a
 suppression checkbox are an `NSAlert` sheet on macOS, with the system's
@@ -653,7 +661,7 @@ factor.
 
 ```sh
 go run ./tools/rexui list
-go run ./tools/rexui add button ./internal/ui     # button.go and tint.go, as package ui
+go run ./tools/rexui add button ./internal/ui     # button.go, tint.go and strings.go, as package ui
 ```
 
 `add` copies the component's file and the files it needs, rewrites the

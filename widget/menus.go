@@ -32,49 +32,6 @@ func (k *Kit) contextMenu() {
 	}
 }
 
-// roleTitle is the title a drawn menu gives a command that has only a role.
-func roleTitle(r menu.Role) string {
-	switch r {
-	case menu.RoleAbout:
-		return "About"
-	case menu.RoleQuit:
-		return "Quit"
-	case menu.RoleHide:
-		return "Hide"
-	case menu.RoleHideOthers:
-		return "Hide Others"
-	case menu.RoleShowAll:
-		return "Show All"
-	case menu.RoleUndo:
-		return "Undo"
-	case menu.RoleRedo:
-		return "Redo"
-	case menu.RoleCut:
-		return "Cut"
-	case menu.RoleCopy:
-		return "Copy"
-	case menu.RolePaste:
-		return "Paste"
-	case menu.RolePasteAndMatchStyle:
-		return "Paste and Match Style"
-	case menu.RoleSelectAll:
-		return "Select All"
-	case menu.RoleDelete:
-		return "Delete"
-	case menu.RoleMinimize:
-		return "Minimize"
-	case menu.RoleZoom:
-		return "Zoom"
-	case menu.RoleCloseWindow:
-		return "Close Window"
-	case menu.RoleFullScreen:
-		return "Enter Full Screen"
-	case menu.RoleSettings:
-		return "Settings…"
-	}
-	return ""
-}
-
 // itemTitle is the text of a menu item.
 func (k *Kit) itemTitle(it menu.Item) (title string, cmd menu.Command) {
 	m := k.Menu()
@@ -88,7 +45,7 @@ func (k *Kit) itemTitle(it menu.Item) (title string, cmd menu.Command) {
 		cmd, _ = m.Command(it.Command)
 		title = cmd.Title
 		if title == "" {
-			title = roleTitle(cmd.Role)
+			title = menu.RoleTitle(cmd.Role)
 		}
 	}
 	return title, cmd

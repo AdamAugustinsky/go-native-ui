@@ -1,0 +1,164 @@
+[?1049h[?1h=[H[2J[?2004h[?69$p[?2026$p[?2027$p[?2031$p[?2048$p[0m[4:3mP$qm\[?u[c]11;?[5n[?25h]11;?[5n[?25l(B[m[H                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    [1 q[?1002h[?1006h[H[?25h[?25l[?1004h[?25hP+q5463;524742;73657472676266;73657472676262\[0m[48;2;1;2;3mP$qm\[c[?25l(B[m[29B[J[93mE1568: Terminal did not respond to DSR request for 'background' color. Startup may be slower. :help [H(B[m  1 // Package term is a terminal emulator without a terminal: a VT parser, a[K
+  2 // screen and scrollback model, and an input encoder, in pure Go (the phase[K
+  3 // 8 plan's C1 and D74). a3-app's terminal pane is remote: the bytes of a[K
+  4 // pseudo-terminal on the agent's machine arrive over a WebSocket and go[K
+  5 // into Write; the keys the user types come out of EncodeKey and go back.[K
+  6 // rexui.Terminal draws a Terminal.[K
+  7 //[K
+  8 //      t := term.New(term.Options{Cols: 120, Rows: 40})[K
+  9 //      t.Write(chunk) // any chunking: a sequence split across writes is kept[K
+ 10 //[K
+ 11 //      // draw: rows from the top of the scrollback (-t.Scrollback()) to the[K
+ 12 //      // bottom of the screen (rows-1), each a []Cell of Cols cells[K
+ 13 //      for y := lo; y <= hi; y++ {[K
+ 14 //              for _, cell := range t.Row(y) {[K
+ 15 //                      st := t.Style(cell.Style) // colours, bold, underline, hyperlink[K
+ 16 //              }[K
+ 17 //      }[K
+ 18 //      if lo, hi, ok := t.Damage(); ok { /* rows that changed */ t.ClearDamage() }[K
+ 19 //[K
+ 20 //      out = t.EncodeKey(out[:0], term.KeyUp, 0, 0) // "\x1b[A", or "\x1bOA" in application cur    sor mode[K
+ 21 //      out = t.EncodePaste(out[:0], clip)          // bracketed when the program asked for it[K
+ 22 //      out = t.TakeReplies(out)                    // answers to the program's queries (DA, DSR    )[K
+ 23 //[K
+ 24 // # What it emulates[K
+ 25 //[K
+ 26 // xterm's common subset, as the programs of an agent's session use it[K
+(B[0;7mterm/term.go                                                                      1,1            Top[2 q[2 q[H(B[m  1 // Package term is a terminal emulator without a terminal: a VT parser, a[K
+  2 // screen and scrollback model, and an input encoder, in pure Go (the phase[K
+  3 // 8 plan's C1 and D74). a3-app's terminal pane is remote: the bytes of a[K
+  4 // pseudo-terminal on the agent's machine arrive over a WebSocket and go[K
+  5 // into Write; the keys the user types come out of EncodeKey and go back.[K
+  6 // rexui.Terminal draws a Terminal.[K
+  7 //[K
+  8 //      t := term.New(term.Options{Cols: 120, Rows: 40})[K
+  9 //      t.Write(chunk) // any chunking: a sequence split across writes is kept[K
+ 10 //[K
+ 11 //      // draw: rows from the top of the scrollback (-t.Scrollback()) to the[K
+ 12 //      // bottom of the screen (rows-1), each a []Cell of Cols cells[K
+ 13 //      for y := lo; y <= hi; y++ {[K
+ 14 //              for _, cell := range t.Row(y) {[K
+ 15 //                      st := t.Style(cell.Style) // colours, bold, underline, hyperlink[K
+ 16 //              }[K
+ 17 //      }[K
+ 18 //      if lo, hi, ok := t.Damage(); ok { /* rows that changed */ t.ClearDamage() }[K
+ 19 //[K
+ 20 //      out = t.EncodeKey(out[:0], term.KeyUp, 0, 0) // "\x1b[A", or "\x1bOA" in application cur
+    sor mode[K
+ 21 //      out = t.EncodePaste(out[:0], clip)          // bracketed when the program asked for it[K
+ 22 //      out = t.TakeReplies(out)                    // answers to the program's queries (DA, DSR
+    )[K
+ 23 //[K
+ 24 // # What it emulates[K
+ 25 //[K
+ 26 // xterm's common subset, as the programs of an agent's session use it[K
+(B[0;7mterm/term.go                                                                      1,1            Top
+(B[m[93mE1568: Terminal did not respond to DSR request for 'background' color. Startup may be slower. :help[K[1;5H[?25h[?25l[30;90H(B[mj         [1;5H[?25h[?25l[30;90H [29;83H(B[0;7m2[2;5H[?25h[?25l[29;83H34[30;90H(B[mj[4;5H[?25h[?25l[30;90H [29;83H(B[0;7m5[5;5H[?25h[?25l[30;90H(B[m^D[5;5H[?25h[?25l[30;90H  [1;28r[H[14M[r[15;1H 27 // (vim, less, htop, git, tmux and Claude Code's TUI): the DEC/ANSI state[K
+ 28 // machine (Paul Williams' diagram), cursor movement and editing, scroll[K
+ 29 // regions, the alternate screen, tab stops, origin and wrap modes, SGR with[K
+ 30 // 16, 256 and 24-bit colour and underline styles, wide and combining[K
+ 31 // characters, OSC 0/2 titles, OSC 8 hyperlinks, OSC 52 clipboard writes[K
+ 32 // (handed to the app, which decides: TakeClipboard), bracketed paste, mouse[K
+ 33 // modes 1000, 1002 and 1006, application cursor and keypad keys, DECSCUSR[K
+ 34 // cursor shapes, and reflow on resize.[K
+ 35 //[K
+ 36 // # Memory and allocation[K
+ 37 //[K
+ 38 // Cells are 8 bytes and pointer-free; rows are offsets into a ring;[K
+ 39 // graphemes of more than one rune, styles and hyperlinks live in interned[K
+ 40 // side tables with budgets. Write allocates nothing per byte, and drawing[K[29;83H(B[0;7m19,1            4%[5;5H[?25h[?25l[30;90H(B[mG[5;5H[?25h[?25l[30;90H [H313 (B[0;1mfunc(B[m (t *Terminal) Damage() (lo, hi int, ok bool) { (B[0;1mreturn(B[m 0, 0, false }[16X
+314 [17X
+315 // ClearDamage marks every row drawn.
+316 (B[0;1mfunc(B[m (t *Terminal) ClearDamage() {}[48X
+317   
+318 // TakeReplies appends the bytes the terminal owes the program (answers to[K
+319 // device attribute and status queries) to dst and forgets them; the app
+320 // sends them as input.[71X
+321 (B[0;1mfunc(B[m (t *Terminal) TakeReplies(dst []byte) []byte { (B[0;1mreturn(B[m dst }[K
+322  
+323 // TakeClipboard returns an OSC 52 clipboard write the program asked for
+324 // since the last call (decoded from base64), for the app to allow or not.
+325 (B[0;1mfunc(B[m (t *Terminal) TakeClipboard(dst []byte) ([]byte, bool) { (B[0;1mreturn(B[m dst, false }
+326 [70X
+327 // TakeBells is the number of bells since the last call.[17X
+328 (B[0;1mfunc(B[m (t *Terminal) TakeBells() int { (B[0;1mreturn(B[m 0 }[25X
+329 [76X
+330 // AppendText appends the text between from and to (inclusive, in reading
+331 // order), joining soft-wrapped lines and ending hard lines with "\n": a
+332 // selection's copy.[56X
+333 (B[0;1mfunc(B[m (t *Terminal) AppendText(dst []byte, from, to Pos) []byte { (B[0;1mreturn(B[m dst }
+334 [39X
+335 // Find searches for needle (plain text) from pos, forward or backward
+336 // through the screen and the scrollback, and returns the match's first and
+337 // last cells.
+338 (B[0;1mfunc(B[m (t *Terminal) Find(needle []byte, from Pos, backward bool) (start, end Pos, ok bool) (B[0;1;4m{
+(B[m339         (B[0;1mreturn(B[m Pos{}, Pos{}, false[40X
+340 (B[0;1;4m}(B[m[73X[29;83H(B[0;7m340,1          Bot[28;5H[?25h[?25l[30;90H(B[mgg[28;5H[?25h[?25l[30;90H  [H  1 // Package term is a terminal emulator without a terminal: a VT parser, a
+  2 // screen and scrollback model, and an input encoder, in pure Go (the phase
+  3 // 8 plan's C1 and D74). a3-app's terminal pane is remote: the bytes of a
+  4 // pseudo-terminal on the agent's machine arrive over a WebSocket and go
+  5 // into Write; the keys the user types come out of EncodeKey and go back.
+  6 // rexui.Terminal draws a Terminal.[39X
+  7 //[70X
+  8 //      t := term.New(term.Options{Cols: 120, Rows: 40})
+  9 //      t.Write(chunk) // any chunking: a sequence split across writes is kept
+ 10 //
+ 11 //      // draw: rows from the top of the scrollback (-t.Scrollback()) to the
+ 12 //      // bottom of the screen (rows-1), each a []Cell of Cols cells[5X
+ 13 //      for y := lo; y <= hi; y++ {[46X
+ 14 //              for _, cell := range t.Row(y) {
+ 15 //                      st := t.Style(cell.Style) // colours, bold, underline, hyperlink
+ 16 //              }[30X
+ 17 //      }
+ 18 //      if lo, hi, ok := t.Damage(); ok { /* rows that changed */ t.ClearDamage() }
+ 19 //[70X
+ 20 //      out = t.EncodeKey(out[:0], term.KeyUp, 0, 0) // "\x1b[A", or "\x1bOA" in application cur    sor mode[69X
+ 21 //      out = t.EncodePaste(out[:0], clip)          // bracketed when the program asked for it
+ 22 //      out = t.TakeReplies(out)                    // answers to the program's queries (DA, DSR    )[74X
+ 23 //[12X
+ 24 // # What it emulates[70X
+ 25 //[32X
+ 26 // xterm's common subset, as the programs of an agent's session use it[29;83H(B[0;7m1,1            Top[1;5H[?25h[?25l[30;90H(B[m^D[1;5H[?25h[?25l[30;90H  [1;28r[H[14M[r[15;1H 27 // (vim, less, htop, git, tmux and Claude Code's TUI): the DEC/ANSI state[K
+ 28 // machine (Paul Williams' diagram), cursor movement and editing, scroll[K
+ 29 // regions, the alternate screen, tab stops, origin and wrap modes, SGR with[K
+ 30 // 16, 256 and 24-bit colour and underline styles, wide and combining[K
+ 31 // characters, OSC 0/2 titles, OSC 8 hyperlinks, OSC 52 clipboard writes[K
+ 32 // (handed to the app, which decides: TakeClipboard), bracketed paste, mouse[K
+ 33 // modes 1000, 1002 and 1006, application cursor and keypad keys, DECSCUSR[K
+ 34 // cursor shapes, and reflow on resize.[K
+ 35 //[K
+ 36 // # Memory and allocation[K
+ 37 //[K
+ 38 // Cells are 8 bytes and pointer-free; rows are offsets into a ring;[K
+ 39 // graphemes of more than one rune, styles and hyperlinks live in interned[K
+ 40 // side tables with budgets. Write allocates nothing per byte, and drawing[K[29;84H(B[0;7m5,1            4%[1;5H[?25h[?25l[2;28r[2;1H(B[m[L[r[2;1H 16 // replay fixture line[K[3;3H7[4;3H8[5;3H9[6;2H20[7;3H1[9;3H2[10;3H3[12;3H4[13;3H5[14;3H6[15;3H7[16;3H8[17;3H9[18;2H30[19;3H1[20;3H2[21;3H3[22;3H4[23;3H5[24;3H6[25;3H7[26;3H8[27;3H9[28;2H40[29;14H(B[0;7m[+]                                                                  16,23
+(B[m[92m-- INSERT --(B[m[K[6 q[2;27H[?25h[?25l[28B[12X[29;87H(B[0;7m2[2 q[2;26H[?25h[?25l[28B(B[m:q![2 q[?1002l[?1006l[30;1H[?25h[?25l[2 q[?1002h[?1006h[?25h[?25l[2 q[?1002l[?1006l(B[m[?25h[0 q[?1l>[>4;0m[?2004l[?1004l[c[?25h[?25l[?1049l[?25h
