@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"runtime"
 	"testing"
 
 	"gonativeui/internal/appkitref"
@@ -780,5 +781,19 @@ func TestCheckboxChromeIsAppKits(t *testing.T) {
 	r := (&Theme{}).Resolve(&fakeText{}, 2, Light)
 	if r.Sizes[SizeSmall].CheckGap != 8 {
 		t.Errorf("the gap does not scale: %v at 2x", r.Sizes[SizeSmall].CheckGap)
+	}
+}
+
+// Corners follow the platform (continuous on macOS) unless the theme says
+// which, and reach the UI as ui.Theme.ContinuousCorners.
+func TestCornerCurve(t *testing.T) {
+	for _, c := range []struct {
+		corners CornerCurve
+		want    bool
+	}{{CornersDefault, runtime.GOOS == "darwin"}, {CornersCircular, false}, {CornersContinuous, true}} {
+		r := (&Theme{Corners: c.corners}).Resolve(&fakeText{}, 2, Light)
+		if r.Continuous != c.want || r.UITheme().ContinuousCorners != c.want {
+			t.Errorf("Corners %d: continuous %v, want %v", c.corners, r.Continuous, c.want)
+		}
 	}
 }

@@ -395,10 +395,15 @@ type Tint struct {
 	T float32
 }
 
-// Theme holds the colours of the built-in hover/press overlay.
+// Theme holds the colours of the built-in hover/press overlay and the shape
+// of rounded corners.
 type Theme struct {
 	HotOverlay    uint32 // RGBA8; alpha is multiplied by hot_t
 	ActiveOverlay uint32 // RGBA8; alpha is multiplied by active_t
+	// ContinuousCorners rounds the corners of boxes (their fill, border and
+	// hover overlay) with the continuous curve macOS draws, a squircle,
+	// instead of circular arcs (gpu.ShapeContinuous). Shadows stay circular.
+	ContinuousCorners bool
 }
 
 // Rates are the animation rates k in rate = 1−2^(−k·dt), per second.
