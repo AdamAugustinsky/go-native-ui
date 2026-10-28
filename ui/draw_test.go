@@ -344,3 +344,32 @@ func (r *resettingShaper) Glyph(f text.FaceID, gid uint16, sub uint8) text.Glyph
 	}
 	return r.fakeShaper.Glyph(f, gid, sub)
 }
+
+// With Theme.ContinuousCorners a rounded box's fill and border ask for the
+// continuous curve (gpu.ShapeContinuous in the quad's Tex); a square box, a
+// shadow and the default theme do not.
+func TestContinuousCornersAreAskedFor(t *testing.T) {
+	for _, on := range []bool{false, true} {
+		h := newHarness(t, 200, 100)
+		h.c.Theme.ContinuousCorners = on
+		h.frame(func(c *Context) {
+			c.NextSize(Px(100), Px(60))
+			c.NextBG(0xFF0000FF)
+			c.NextRadius(8)
+			c.NextShadows(Shadow{OffY: 4, Sigma: 6, Color: 0x00000080}, Shadow{})
+			c.Open(DrawShadow|DrawBackground, "round")
+			c.NextSize(Px(10), Px(10))
+			c.NextBG(0x00FF00FF)
+			c.Box(DrawBackground, "square")
+			c.Close()
+		})
+		want := gpu.TextureID(0)
+		if on {
+			want = gpu.ShapeContinuous
+		}
+		qs := quadsOf(h)
+		if len(qs) != 3 || qs[0].Tex != 0 || qs[1].Tex != want || qs[2].Tex != 0 {
+			t.Errorf("continuous %v: tex of the shadow, round box and square box %v %v %v, want 0 %v 0", on, qs[0].Tex, qs[1].Tex, qs[2].Tex, want)
+		}
+	}
+}

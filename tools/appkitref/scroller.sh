@@ -2,7 +2,7 @@
 # Build AppKitScroller (scroller.m) and print NSScroller's widths, knob slots
 # and knobs per control size and style as JSON.
 #
-#	sh tools/appkitref/scroller.sh [-machine]      # -machine: only where it ran
+#	sh tools/appkitref/scroller.sh [-machine | -knobs]      # -machine: only where it ran; -knobs: knob lengths
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 sdk=${SDKROOT:-/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk}

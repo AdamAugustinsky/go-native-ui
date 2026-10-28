@@ -1164,7 +1164,7 @@ func (tb *Toolbar) Title() {
 	// the title's text field, its text TitleTextX inside it
 	tx := k.Pt(tb.rc.TitleTextX)
 	theme.At(c, 0, top, 0, st.Line)
-	c.NextSize(ui.TextSize(base.LabelSlack+tx), ui.Px(st.Line))
+	c.NextSize(ui.TextSize(tx), ui.Px(st.Line))
 	c.NextPadding(tx, 0, 0, 0)
 	c.NextFont(st.Font)
 	c.NextTextColor(col)
@@ -1177,7 +1177,7 @@ func (tb *Toolbar) Title() {
 			sc = tb.rc.TitleInactive.RGBA(r)
 		}
 		theme.At(c, 0, top+st.Line, 0, sub.Line)
-		c.NextSize(ui.TextSize(base.LabelSlack+tx), ui.Px(sub.Line))
+		c.NextSize(ui.TextSize(tx), ui.Px(sub.Line))
 		c.NextPadding(tx, 0, 0, 0)
 		c.NextFont(sub.Font)
 		c.NextTextColor(sc)

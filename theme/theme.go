@@ -32,6 +32,8 @@
 package theme
 
 import (
+	"runtime"
+
 	"gonativeui/text"
 	"gonativeui/ui"
 )
@@ -69,6 +71,8 @@ type Theme struct {
 	// SystemAccent says the theme takes the system accent colour when the
 	// platform supplies one (Resolved.SetAccent); otherwise it ignores it.
 	SystemAccent bool
+	// Corners is the shape of rounded corners; zero is the platform's.
+	Corners CornerCurve
 
 	// Roles are the colour roles of the light (0) and the dark (1) mode,
 	// indexed by Role (tokens v2, D39); zero takes Measured. The System roles'
@@ -103,6 +107,22 @@ type Theme struct {
 	NewChrome func() Chrome
 }
 
+// CornerCurve is the shape of a rounded rectangle's corners.
+type CornerCurve uint8
+
+const (
+	// CornersDefault is the platform's: continuous on macOS, where every
+	// system control, selection, popover and window has them (CALayer's
+	// cornerCurve .continuous), circular elsewhere.
+	CornersDefault CornerCurve = iota
+	// CornersCircular are circular arcs.
+	CornersCircular
+	// CornersContinuous are macOS's squircle (gpu.ShapeContinuous): the
+	// corner runs 1.52 times its radius along each edge, with curvature
+	// easing in, instead of a circle's abrupt start.
+	CornersContinuous
+)
+
 // Resolved is a Theme for one window: metrics in pixels at the window's scale,
 // fonts created in its text system, and the palette for the current mix of
 // light and dark.
@@ -124,6 +144,9 @@ type Resolved struct {
 	// the System roles are the system's colours once the Follower has read
 	// them (SetSystem), and the theme's fallbacks until then.
 	Colors Colors
+	// Continuous says the corners are continuous, not circular (Theme.Corners
+	// resolved).
+	Continuous bool
 	// Styles holds the text styles' fonts, indexed by TextStyle.
 	Styles [NumTextStyles]StyleFont
 	// Sizes holds the control sizes in pixels, indexed by Size.
@@ -253,6 +276,7 @@ func (t *Theme) Resolve(ts TextSystem, scale float32, mode Mode) Resolved {
 // macOS ones, lengths are scaled to pixels and the fonts created.
 func (t *Theme) resolveTokens(r *Resolved, ts TextSystem, scale float32) {
 	r.rolesBase, r.followSys, r.own, r.motion = t.Roles, t.SystemColors, t.Own, t.Motion
+	r.Continuous = t.Corners == CornersContinuous || t.Corners == CornersDefault && runtime.GOOS == "darwin"
 	if r.rolesBase[0] == (Colors{}) && r.rolesBase[1] == (Colors{}) {
 		r.rolesBase = Measured
 	}
@@ -421,5 +445,5 @@ func (r *Resolved) Met(f text.FontKey) FontMet {
 
 // UITheme returns the hover and press overlay colours for ui.Context.Theme.
 func (r *Resolved) UITheme() ui.Theme {
-	return ui.Theme{HotOverlay: r.Pal.HoverOverlay, ActiveOverlay: r.Pal.PressOverlay}
+	return ui.Theme{HotOverlay: r.Pal.HoverOverlay, ActiveOverlay: r.Pal.PressOverlay, ContinuousCorners: r.Continuous}
 }

@@ -259,16 +259,17 @@ var attribs = [...]struct {
 	off     uintptr
 	integer bool
 }{
-	{0, 4, glFloat, 0, false},        // Rect
-	{1, 4, glFloat, 16, false},       // Clip
-	{2, 4, glFloat, 32, false},       // UV
-	{3, 4, glUnsignedInt, 48, true},  // Color[4]
-	{4, 4, glFloat, 64, false},       // Radii
-	{5, 1, glFloat, 80, false},       // Border
-	{6, 1, glUnsignedInt, 84, true},  // BorderColor
-	{7, 1, glFloat, 88, false},       // Soft
-	{8, 2, glFloat, 92, false},       // FadeX
-	{9, 1, glUnsignedInt, 100, true}, // Mode
+	{0, 4, glFloat, 0, false},         // Rect
+	{1, 4, glFloat, 16, false},        // Clip
+	{2, 4, glFloat, 32, false},        // UV
+	{3, 4, glUnsignedInt, 48, true},   // Color[4]
+	{4, 4, glFloat, 64, false},        // Radii
+	{5, 1, glFloat, 80, false},        // Border
+	{6, 1, glUnsignedInt, 84, true},   // BorderColor
+	{7, 1, glFloat, 88, false},        // Soft
+	{8, 2, glFloat, 92, false},        // FadeX
+	{9, 1, glUnsignedInt, 100, true},  // Mode
+	{10, 1, glUnsignedInt, 104, true}, // Tex (a shape's ShapeContinuous)
 }
 
 var (
@@ -281,6 +282,7 @@ var (
 	_ = [1]struct{}{}[unsafe.Offsetof(Quad{}.Soft)-88]
 	_ = [1]struct{}{}[unsafe.Offsetof(Quad{}.FadeX)-92]
 	_ = [1]struct{}{}[unsafe.Offsetof(Quad{}.Mode)-100]
+	_ = [1]struct{}{}[unsafe.Offsetof(Quad{}.Tex)-104]
 )
 
 // Renderer draws DrawLists with OpenGL. All methods share the package's ffi

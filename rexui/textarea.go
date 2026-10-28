@@ -276,7 +276,7 @@ func textAreaPlaceholder(k *base.Kit, hint string, col Tint, disabled bool) {
 		pc = rc.TextDisabled.RGBA(r)
 	}
 	c.NextPos(pt(sc, rc.InsetX), pt(sc, rc.InsetY))
-	c.NextSize(ui.TextSize(base.LabelSlack), ui.Px(s.Line))
+	c.NextSize(ui.TextSize(0), ui.Px(s.Line))
 	c.NextFont(s.Font)
 	c.NextTextColor(pc)
 	c.BoxKeyed(ui.DrawText|ui.FadeOverflowX|base.Floating, ui.KeyN(c.ParentKey(), 2), base.StrBytes(hint))

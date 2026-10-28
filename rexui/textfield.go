@@ -155,7 +155,7 @@ func field(k *base.Kit, label string, buf *ui.TextBuffer, placeholder string, o 
 			pc = rc.TextDisabled.RGBA(r)
 		}
 		theme.At(c, padL, 0, 0, h)
-		c.NextSize(ui.TextSize(base.LabelSlack), ui.Px(h))
+		c.NextSize(ui.TextSize(0), ui.Px(h))
 		c.NextFont(font)
 		c.NextTextColor(pc)
 		c.BoxKeyed(ui.DrawText|base.Floating, ui.KeyN(ti.WrapKey, 2), base.StrBytes(placeholder))

@@ -129,7 +129,7 @@ func BeginCard(k *base.Kit, label string, o CardOpts) Card {
 		c.NextSize(ui.Pct(1), ui.Px(theme.Snap(k.Pt(rc.TitleH))))
 		c.BoxKeyed(0, ui.KeyN(cd.key, 5), nil)
 		c.NextPos(k.Pt(rc.TitleX), 0)
-		c.NextSize(ui.TextSize(base.LabelSlack), ui.Px(st.Line))
+		c.NextSize(ui.TextSize(0), ui.Px(st.Line))
 		c.NextFont(st.Font)
 		c.NextTextColor(rc.Title.RGBA(r))
 		c.NextRole(ui.RoleLabel)

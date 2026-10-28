@@ -101,7 +101,7 @@ func (k *Kit) BeginDialog(label, title string, open *bool) Dialog {
 	}
 	panel := c.Box(ui.DrawBackground|ui.DrawBorder|ui.DrawShadow, "panel")
 	c.Push(panel)
-	k.size(ui.TextSize(labelSlack), ui.TextSize(0))
+	k.size(ui.TextSize(0), ui.TextSize(0))
 	c.NextFont(k.r.Font.UISemi)
 	c.NextTextColor(p.Text)
 	c.NextSemName(title)

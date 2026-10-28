@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"runtime"
 	"testing"
 
 	"gonativeui/internal/appkitref"
@@ -25,7 +26,7 @@ type appkitRef struct {
 	} `json:"system"`
 	Colors     map[string]map[string]string `json:"colors"`
 	TextStyles map[string]struct {
-		Size, Line, Weight float64
+		Size, Line, Cell, Weight float64
 	} `json:"textStyles"`
 	Fonts struct {
 		TitleBar, Menu, ToolTips float64
@@ -214,6 +215,15 @@ func TestTextStylesAreAppKits(t *testing.T) {
 		got := MacText[style]
 		if !near(got.Size, w.Size, 0) || !near(got.Line, w.Line, 0) || got.Weight != weightOf[w.Weight] {
 			t.Errorf("%s: %+v, AppKit size %v line %v weight %v", name, got, w.Size, w.Line, w.Weight)
+		}
+		// a single-line label's height (NSTextField's intrinsic height): Line
+		// unless the style has a cell of its own
+		cell := got.Cell
+		if cell == 0 {
+			cell = got.Line
+		}
+		if !near(cell, w.Cell, 0) {
+			t.Errorf("%s: label cell %v pt, AppKit %v", name, cell, w.Cell)
 		}
 	}
 	for _, c := range []struct {
@@ -771,5 +781,19 @@ func TestCheckboxChromeIsAppKits(t *testing.T) {
 	r := (&Theme{}).Resolve(&fakeText{}, 2, Light)
 	if r.Sizes[SizeSmall].CheckGap != 8 {
 		t.Errorf("the gap does not scale: %v at 2x", r.Sizes[SizeSmall].CheckGap)
+	}
+}
+
+// Corners follow the platform (continuous on macOS) unless the theme says
+// which, and reach the UI as ui.Theme.ContinuousCorners.
+func TestCornerCurve(t *testing.T) {
+	for _, c := range []struct {
+		corners CornerCurve
+		want    bool
+	}{{CornersDefault, runtime.GOOS == "darwin"}, {CornersCircular, false}, {CornersContinuous, true}} {
+		r := (&Theme{Corners: c.corners}).Resolve(&fakeText{}, 2, Light)
+		if r.Continuous != c.want || r.UITheme().ContinuousCorners != c.want {
+			t.Errorf("Corners %d: continuous %v, want %v", c.corners, r.Continuous, c.want)
+		}
 	}
 }
