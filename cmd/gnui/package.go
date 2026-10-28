@@ -446,7 +446,9 @@ func checkBuiltApp(c *Config, app string) error {
 	if _, err := os.Stat(info); err != nil {
 		return fmt.Errorf("-app %s: not an app bundle: %w", app, err)
 	}
-	for key, want := range map[string]string{"CFBundleIdentifier": c.ID, "CFBundleShortVersionString": c.Version} {
+	// the identifier first: another app's bundle is the mistake to name, whatever its version
+	for _, kv := range [...][2]string{{"CFBundleIdentifier", c.ID}, {"CFBundleShortVersionString", c.Version}} {
+		key, want := kv[0], kv[1]
 		got, err := runOut("/usr/libexec/PlistBuddy", "-c", "Print :"+key, info)
 		if err != nil {
 			return fmt.Errorf("-app %s: reading %s: %w", app, key, err)
