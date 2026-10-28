@@ -319,12 +319,13 @@ func TestEditorIMEComposition(t *testing.T) {
 	typeText(e, "x")
 	pumpSignals(w, e, time.Second, EditorChanged)
 	comp := []uint16{0x3042, 0}
-	win32.Call(win32.Proc(imm, "ImmSetCompositionStringW"), h, 9 /* SCS_SETSTR */, uintptr(unsafe.Pointer(&comp[0])), 2, 0, 0)
+	set := win32.Call(win32.Proc(imm, "ImmSetCompositionStringW"), h, 9 /* SCS_SETSTR */, uintptr(unsafe.Pointer(&comp[0])), 2, 0, 0)
 	got := pumpSignals(w, e, 2*time.Second, EditorComposing)
 	mr, marked := e.Marked()
 	if !marked || got&EditorComposing == 0 || string(e.Text()[mr.Start:mr.End]) != "あ" {
-		t.Fatalf("composing: signals %b, marked %v %+v, text %q, IME messages %d, focus %#x (editor %#x): want あ marked",
-			got, marked, mr, e.Text(), e.imeMsgs, win32.Call(pGetFocus), e.hwnd)
+		n := int32(win32.Call(pImmGetCompStringW, h, gcsCompStr, 0, 0))
+		t.Fatalf("composing: signals %b, marked %v %+v, text %q, ImmSetCompositionStringW %d, comp bytes %d, IME messages %d %x, focus %#x (editor %#x): want あ marked",
+			got, marked, mr, e.Text(), set, n, e.imeMsgs, e.imeLog[:min(e.imeMsgs, len(e.imeLog))], win32.Call(pGetFocus), e.hwnd)
 	}
 	e.SetCompletionActive(true)
 	if e.CompletionActive() {

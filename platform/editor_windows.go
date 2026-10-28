@@ -203,7 +203,8 @@ type editorNative struct {
 	// Escape), whose WM_CHAR TranslateMessage queued: dropped in order.
 	eat     [8]uint16
 	nEat    int
-	imeMsgs int // WM_IME_* messages seen (tests)
+	imeMsgs int           // WM_IME_* messages seen (tests)
+	imeLog  [8][4]uintptr // the first WM_IME_* messages: message, wParam, lParam, TxSendMessage's HRESULT (tests)
 	focused bool
 	// The caret RichEdit asks for (TxCreateCaret, TxSetCaretPos,
 	// TxShowCaret), drawn by render; blinkOn is its blink phase.
@@ -1240,15 +1241,12 @@ func editorWndProc(hwnd, m, wp, lp uintptr) uintptr {
 		// RichEdit draws the composition in its text; the system's IME
 		// window must still be told of the context (DefWindowProc), or the
 		// input method never composes here.
-		e.imeMsgs++
 		e.send(uint32(m), wp, lp)
 		return win32.Call(pDefWindowProcW, hwnd, m, wp, lp&^iscShowCompWindow)
 	case wmImeStartComp:
-		e.imeMsgs++
 		e.ime = true
 		return e.forward(hwnd, m, wp, lp)
 	case wmImeComp:
-		e.imeMsgs++
 		e.ime = true
 		r := e.forward(hwnd, m, wp, lp)
 		e.compositionMoved()
@@ -1281,7 +1279,14 @@ func editorWndProc(hwnd, m, wp, lp uintptr) uintptr {
 // forward hands a message to the text services, and to DefWindowProc when
 // they leave it (S_FALSE): an input method's UI, Alt+F4.
 func (e *Editor) forward(hwnd, m, wp, lp uintptr) uintptr {
-	if e.send(uint32(m), wp, lp) == 1 {
+	hr := e.send(uint32(m), wp, lp)
+	if m >= wmImeStartComp && m <= wmImeComp || m >= 0x0281 && m <= 0x0291 {
+		if i := e.imeMsgs; i < len(e.imeLog) {
+			e.imeLog[i] = [4]uintptr{m, wp, lp, uintptr(uint32(hr))}
+		}
+		e.imeMsgs++
+	}
+	if hr == 1 {
 		return win32.Call(pDefWindowProcW, hwnd, m, wp, lp)
 	}
 	return e.lres
@@ -1585,9 +1590,9 @@ func textHostMethods() []com.Method {
 		}),
 		ed(0, func(e *Editor, a com.Args) uintptr { win32.Call(rich.pSetForeground, e.w.hwnd); return 0 }), // TxSetForegroundWindow
 		com.Method{N: 0, Fn: func(*com.Object, com.Args) uintptr { return 0 }},                             // TxGetPalette
-		notImpl(1), // TxGetEastAsianFlags
-		ed(2, func(e *Editor, a com.Args) uintptr { return win32.Call(pSetCursor, a[0]) }), // TxSetCursor2
-		com.Method{N: 0, Fn: func(*com.Object, com.Args) uintptr { return 0 }},             // TxFreeTextServicesNotification
+		com.Method{N: 1, Fn: func(_ *com.Object, a com.Args) uintptr { setL(a[0], 0); return 0 }},          // TxGetEastAsianFlags: IME allowed (E_NOTIMPL would turn it off)
+		ed(2, func(e *Editor, a com.Args) uintptr { return win32.Call(pSetCursor, a[0]) }),                 // TxSetCursor2
+		com.Method{N: 0, Fn: func(*com.Object, com.Args) uintptr { return 0 }},                             // TxFreeTextServicesNotification
 		notImpl(2), // TxGetEditStyle
 		com.Method{N: 2, Fn: func(_ *com.Object, a com.Args) uintptr { // TxGetWindowStyles
 			setL(a[0], int32(uint32(wsChild|wsVisible)))
