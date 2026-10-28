@@ -887,6 +887,10 @@ func wndProc(hwnd, m, wp, lp uintptr) uintptr {
 		w.q.push(e)
 		return 0
 	}
+	if m >= 0xC000 && uint32(m) == taskbar.buttonMsg {
+		taskbarButtonCreated(hwnd)
+		return 0
+	}
 	return defProc(hwnd, m, wp, lp)
 }
 

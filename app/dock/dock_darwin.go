@@ -129,3 +129,11 @@ func osPolicy() (app.Policy, error) {
 	}
 	return app.Policy(objc.Send(a, selPolicy)), nil
 }
+
+// osSetProgress: the tile's progress view is not drawn yet (S1's macOS half).
+func osSetProgress(float64) error {
+	if nsApp() == 0 {
+		return ErrNotStarted
+	}
+	return ErrUnsupported
+}

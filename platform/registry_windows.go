@@ -77,6 +77,8 @@ type appWindow struct {
 	oleThread      uint32 // the thread OleInitialize succeeded on (0: none)
 	got            bool   // it handled something the app's loop must see: the pump returns
 	modal          int    // native modal loops running now (enterModal)
+	menuLoop       bool   // a menu the app window owns is tracking (a tray menu, W5)
+	started        bool   // StartApp ran (AppStarted)
 	pumps, wakes   uint64 // PumpStats
 	wc             wndClassEx
 	reasonText     []uint16 // the shutdown block reason, NUL-terminated (kept for the call)
@@ -362,6 +364,18 @@ func appWndProc(hwnd, m, wp, lp uintptr) uintptr {
 			win32.Call(pDestroyWindow, hwnd)
 		}
 		return 0
+	case wmEnterMenuLoop: // a menu the app window owns (a tray icon's, W5)
+		if !reg.app.menuLoop {
+			reg.app.menuLoop = true
+			enterModal()
+		}
+		return defProc(hwnd, m, wp, lp)
+	case wmExitMenuLoop:
+		if reg.app.menuLoop {
+			reg.app.menuLoop = false
+			leaveModal()
+		}
+		return defProc(hwnd, m, wp, lp)
 	case wmQueryEndSess:
 		return queryEndSession(lp)
 	case wmEndSession:

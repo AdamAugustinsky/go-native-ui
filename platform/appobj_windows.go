@@ -38,6 +38,7 @@ var (
 // (phase 8's standing rules; P1 measured about 2 ms cold).
 func StartApp(o AppOptions) error {
 	startCommon(o)
+	reg.app.started = true
 	setDPIAwareness()
 	if !ensureAppWindow() {
 		return errors.New("platform: cannot create the app window")

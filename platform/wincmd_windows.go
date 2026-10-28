@@ -220,10 +220,3 @@ func (w *Window) Visible() bool {
 
 // SetDocumentEdited does nothing on Windows (the caption has no such mark).
 func (w *Window) SetDocumentEdited(edited bool) {}
-
-// RequestAttention does nothing here yet and returns 0 (the taskbar flash is
-// phase 8's S1).
-func RequestAttention(critical bool) int { return 0 }
-
-// CancelAttention does nothing here yet.
-func CancelAttention(id int) {}

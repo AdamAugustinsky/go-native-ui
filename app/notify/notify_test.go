@@ -1211,7 +1211,7 @@ func TestCutUTF8(t *testing.T) {
 
 // Without a notification center the calls fail cleanly: ErrUnsupported
 // where the OS has none here, ErrUnavailable on macOS outside a bundle (a
-// test binary), never a crash.
+// test binary), ErrNotRegistered on Windows without an AUMID, never a crash.
 func TestWithoutACenter(t *testing.T) {
 	svc.setupMu.Lock()
 	prevOn := svc.on.Load()
@@ -1235,6 +1235,13 @@ func TestWithoutACenter(t *testing.T) {
 	case "darwin":
 		if !errors.Is(err, ErrUnavailable) {
 			t.Fatalf("Setup: %v, want ErrUnavailable", err)
+		}
+		if _, err := Post(Note{Title: "x"}); !errors.Is(err, ErrNotSetUp) {
+			t.Fatalf("Post: %v", err)
+		}
+	case "windows": // no AUMID in a test binary
+		if !errors.Is(err, ErrNotRegistered) {
+			t.Fatalf("Setup: %v, want ErrNotRegistered", err)
 		}
 		if _, err := Post(Note{Title: "x"}); !errors.Is(err, ErrNotSetUp) {
 			t.Fatalf("Post: %v", err)

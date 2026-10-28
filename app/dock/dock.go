@@ -1,7 +1,9 @@
-// Package dock controls the app's Dock tile: the badge (an unread count), a
-// bounce that asks for attention, and whether the app is in the Dock at all.
+// Package dock controls the app's Dock tile, or its taskbar buttons on
+// Windows: the badge (an unread count), a progress bar, a bounce that asks
+// for attention, and whether the app is in the Dock at all.
 //
 //	dock.SetBadgeCount(unread)        // "3"; 0 clears it
+//	dock.SetProgress(0.4)             // a long task 40 % done; dock.Indeterminate, dock.NoProgress
 //	id, _ := dock.Bounce(false)       // one bounce; true bounces until the app is active
 //	dock.CancelBounce(id)
 //
@@ -24,13 +26,26 @@
 //     policy is AppConfig.Policy; SetPolicy changes it while the app runs.
 //     Switching to PolicyRegular does not bring the app forward: show or
 //     activate the window that follows.
-//   - Windows and Linux: not yet; every call returns ErrUnsupported (errors.Is
+//     SetProgress returns ErrUnsupported on macOS for now (a drawn
+//     progress view in the tile is S1's macOS half).
+//   - Windows (phase 8 S1): every window has a taskbar button, and the
+//     app's badge and progress are put on each open window's button
+//     (ITaskbarList3) and on the button of a window opened later. The badge
+//     is an overlay icon drawn at the small-icon size (a red disc with the
+//     label in white; a long label is drawn smaller), described by the label
+//     for screen readers. SetProgress is ITaskbarList3's progress bar.
+//     Bounce flashes the buttons (FlashWindowEx): once, the button staying
+//     highlighted until the app is activated, or, critical, until it is;
+//     with no window open there is nothing to flash and the id is 0. The
+//     policy cannot change (SetPolicy and Policy return ErrUnsupported).
+//   - Linux: not yet; every call returns ErrUnsupported (errors.Is
 //     errors.ErrUnsupported).
 package dock
 
 import (
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 
 	"gonativeui/app"
@@ -46,6 +61,17 @@ var (
 	// ErrPolicy: the system refused the activation policy, or it is not one
 	// the Dock offers (PolicyProhibited).
 	ErrPolicy = errors.New("dock: the activation policy cannot be set")
+	// ErrProgress: SetProgress was given NaN or a negative value other than
+	// Indeterminate and NoProgress.
+	ErrProgress = errors.New("dock: the progress is not a fraction, Indeterminate or NoProgress")
+)
+
+// The values of SetProgress besides a fraction from 0 to 1.
+const (
+	// NoProgress removes the progress bar.
+	NoProgress = -1.0
+	// Indeterminate shows a busy bar with no amount done.
+	Indeterminate = -2.0
 )
 
 // Attention names one request for the user's attention (a bounce). 0 is no
@@ -76,6 +102,26 @@ func BadgeLabel(n int) string {
 
 // Badge is the label the Dock icon shows now, "" for none.
 func Badge() string { return osBadge() }
+
+// SetProgress shows how much of a long task is done on the app's icon: a
+// fraction from 0 to 1 (more is 1), Indeterminate, or NoProgress to remove
+// the bar. It is the app's (one bar for the app), not a window's.
+func SetProgress(fraction float64) error {
+	switch {
+	case math.IsNaN(fraction), fraction < 0 && fraction != NoProgress && fraction != Indeterminate:
+		return fmt.Errorf("%w: %v", ErrProgress, fraction)
+	case fraction > 1:
+		fraction = 1
+	}
+	return osSetProgress(fraction)
+}
+
+// Progress is what SetProgress last set: a fraction, Indeterminate or
+// NoProgress.
+func Progress() float64 { return progress }
+
+// progress is the last value SetProgress applied. Main thread.
+var progress = NoProgress
 
 // Bounce makes the Dock icon bounce. critical bounces until the user
 // activates the app; otherwise it bounces once. The result names the request
