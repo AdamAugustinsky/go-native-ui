@@ -199,8 +199,12 @@ type editorNative struct {
 	changed  bool // EN_CHANGE since the last after
 	selMoved bool // EN_SELCHANGE since the last after
 	ime      bool // between WM_IME_STARTCOMPOSITION and WM_IME_ENDCOMPOSITION
-	eatChar  uint16
-	focused  bool
+	// eat are the characters of keys the editor took (Enter, Tab,
+	// Escape), whose WM_CHAR TranslateMessage queued: dropped in order.
+	eat     [8]uint16
+	nEat    int
+	imeMsgs int // WM_IME_* messages seen (tests)
+	focused bool
 	// The caret RichEdit asks for (TxCreateCaret, TxSetCaretPos,
 	// TxShowCaret), drawn by render; blinkOn is its blink phase.
 	caretX, caretY, caretW, caretH int32
@@ -1221,21 +1225,30 @@ func editorWndProc(hwnd, m, wp, lp uintptr) uintptr {
 		}
 		return e.forward(hwnd, m, wp, lp)
 	case wmChar:
-		if e.eatChar != 0 && uint16(wp) == e.eatChar {
-			e.eatChar = 0
+		if e.nEat > 0 && uint16(wp) == e.eat[0] {
+			copy(e.eat[:], e.eat[1:e.nEat])
+			e.nEat--
 			return 0
 		}
-		e.eatChar = 0
 		if !e.fits(uint16(wp)) {
 			win32.Call(rich.pMessageBeep, 0xFFFFFFFF)
 			return 0
 		}
 		e.send(uint32(m), wp, lp)
 		return 0
+	case wmImeSetContext:
+		// RichEdit draws the composition in its text; the system's IME
+		// window must still be told of the context (DefWindowProc), or the
+		// input method never composes here.
+		e.imeMsgs++
+		e.send(uint32(m), wp, lp)
+		return win32.Call(pDefWindowProcW, hwnd, m, wp, lp&^iscShowCompWindow)
 	case wmImeStartComp:
+		e.imeMsgs++
 		e.ime = true
 		return e.forward(hwnd, m, wp, lp)
 	case wmImeComp:
+		e.imeMsgs++
 		e.ime = true
 		r := e.forward(hwnd, m, wp, lp)
 		e.compositionMoved()
@@ -1245,7 +1258,7 @@ func editorWndProc(hwnd, m, wp, lp uintptr) uintptr {
 		e.ime = false
 		e.compositionMoved()
 		return r
-	case wmImeSetContext, wmImeNotify, wmImeRequest, wmImeChar, wmInputLangChange, wmKeyUp, wmSysKeyUp:
+	case wmImeNotify, wmImeRequest, wmImeChar, wmInputLangChange, wmKeyUp, wmSysKeyUp:
 		return e.forward(hwnd, m, wp, lp)
 	case wmMouseWheel, wmMouseHWheel:
 		if e.send(uint32(m), wp, lp) == 0 && e.lres == 0 && int32(e.maxLines)*e.lineH < e.contentH {
@@ -1345,9 +1358,10 @@ func (e *Editor) key(vk uintptr) bool {
 				e.send(emReplaceSel, 1, uintptr(unsafe.Pointer(&e.u16[0])))
 			}
 		}
-		e.eatChar = '\r'
 		if mods&ModCtrl != 0 {
-			e.eatChar = '\n' // Ctrl+Enter's character is LF
+			e.eatNext('\n') // Ctrl+Enter's character is LF
+		} else {
+			e.eatNext('\r')
 		}
 		return true
 	case vkTab:
@@ -1360,7 +1374,7 @@ func (e *Editor) key(vk uintptr) bool {
 		default:
 			e.w.hostCommand(i, KeyTab, mods&ModShift)
 		}
-		e.eatChar = '\t'
+		e.eatNext('\t')
 		return true
 	case vkEscape:
 		if e.compl {
@@ -1370,7 +1384,7 @@ func (e *Editor) key(vk uintptr) bool {
 			e.wake()
 			e.w.hostCommand(int(e.host&0xFF)-1, KeyEscape, 0)
 		}
-		e.eatChar = 0x1B
+		e.eatNext(0x1B)
 		return true
 	case vkUp, vkDown:
 		up := vk == vkUp
@@ -1392,6 +1406,14 @@ func (e *Editor) key(vk uintptr) bool {
 		}
 	}
 	return false
+}
+
+// eatNext drops the next WM_CHAR of c (the key's, which the editor took).
+func (e *Editor) eatNext(c uint16) {
+	if e.nEat < len(e.eat) {
+		e.eat[e.nEat] = c
+		e.nEat++
+	}
 }
 
 // atEdge reports whether the caret, with nothing selected, is on the text's

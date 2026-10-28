@@ -432,6 +432,31 @@ func redChild(t *testing.T) uintptr {
 	return h
 }
 
+// clientPixels reads the window's client area as DWM composes it, as
+// 0xRRGGBB pixels, row by row (cw wide): one PrintWindow.
+func clientPixels(t *testing.T, hwnd uintptr, cw, ch int32) []uint32 {
+	t.Helper()
+	htBMI = [11]uint32{40, uint32(cw), uint32(-ch), 1 | 32<<16}
+	dc := win32.Call(htCreateDC, 0)
+	defer win32.Call(htDeleteDC, dc)
+	bmp := win32.Call(htCreateDIB, dc, uintptr(unsafe.Pointer(&htBMI)), 0, uintptr(unsafe.Pointer(&htBits)), 0, 0)
+	if bmp == 0 {
+		t.Fatal("CreateDIBSection failed")
+	}
+	defer win32.Call(htDeleteObject, bmp)
+	old := win32.Call(htSelectObject, dc, bmp)
+	defer win32.Call(htSelectObject, dc, old)
+	if !win32.Bool(win32.Call(htPrintWindow, hwnd, dc, 3)) {
+		t.Skip("PrintWindow failed")
+	}
+	win32.Call(htGdiFlush)
+	out := make([]uint32, int(cw*ch))
+	for i, p := range unsafe.Slice((*uint32)(win32.Ptr(htBits)), int(cw*ch)) {
+		out[i] = p & 0xFFFFFF
+	}
+	return out
+}
+
 // clientPixel reads pixel (x, y) of the window's client area as DWM
 // composes it (PrintWindow with PW_CLIENTONLY | PW_RENDERFULLCONTENT), as
 // 0xRRGGBB.

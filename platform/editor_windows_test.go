@@ -323,7 +323,8 @@ func TestEditorIMEComposition(t *testing.T) {
 	got := pumpSignals(w, e, 2*time.Second, EditorComposing)
 	mr, marked := e.Marked()
 	if !marked || got&EditorComposing == 0 || string(e.Text()[mr.Start:mr.End]) != "あ" {
-		t.Fatalf("composing: signals %b, marked %v %+v, text %q: want あ marked", got, marked, mr, e.Text())
+		t.Fatalf("composing: signals %b, marked %v %+v, text %q, IME messages %d, focus %#x (editor %#x): want あ marked",
+			got, marked, mr, e.Text(), e.imeMsgs, win32.Call(pGetFocus), e.hwnd)
 	}
 	e.SetCompletionActive(true)
 	if e.CompletionActive() {
@@ -379,17 +380,21 @@ func TestEditorDrawsColourEmoji(t *testing.T) {
 	e.SetText([]byte("😀"))
 	settle(w)
 	cw, ch, _ := w.Size()
+	px := clientPixels(t, w.hwnd, cw, ch)
 	yellow := 0
-	for y := int32(20); y < 220; y += 2 {
-		for x := int32(20); x < 380; x += 2 {
-			c := clientPixel(t, w.hwnd, cw, ch, x, y)
+	for y := int32(20); y < min(220, ch); y++ {
+		for x := int32(20); x < min(380, cw); x++ {
+			c := px[y*cw+x]
 			r, g, b := c>>16&0xFF, c>>8&0xFF, c&0xFF
 			if r > 200 && g > 150 && b < 100 {
 				yellow++
 			}
 		}
 	}
-	t.Logf("yellow samples: %d (frames presented %d)", yellow, e.surf.frames)
+	t.Logf("yellow pixels: %d (frames presented %d)", yellow, e.surf.frames)
+	if e.surf.frames == 0 {
+		t.Error("the editor presented no frame")
+	}
 	if yellow == 0 {
 		t.Error("no yellow under the emoji: it is not drawn in colour, or the editor's swap chain does not show")
 	}
