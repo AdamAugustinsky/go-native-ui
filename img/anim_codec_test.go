@@ -90,7 +90,19 @@ func TestTrimThenRender(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for name, src := range map[string]frameSource{"gif": g, "apng": a} {
+	srcs := map[string]frameSource{"gif": g, "apng": a}
+	webpTrimSource(t, srcs)
+	for name, src := range srcs {
+		if name == "webp" { // its frames are a sheet's colours, not disposalFrames
+			src.frame(1)
+			if kept := src.trim(); kept <= 0 || kept >= src.retained() {
+				t.Errorf("webp: trim kept %d of %d bytes", kept, src.retained())
+			}
+			if _, err := src.frame(2); err != nil {
+				t.Errorf("webp: frame 2 after a trim: %v", err)
+			}
+			continue
+		}
 		checkDisposal(t, src, []int{0, 1, 2})
 		if kept := src.trim(); kept <= 0 || kept >= src.retained() {
 			t.Errorf("%s: trim kept %d of %d bytes", name, kept, src.retained())
