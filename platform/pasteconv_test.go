@@ -362,3 +362,13 @@ func TestDIBTrueColorWithColorTable(t *testing.T) {
 		}
 	}
 }
+
+// A DROPFILES block built for a drag out reads back as the same paths.
+func TestBuildDropFilesRoundTrip(t *testing.T) {
+	paths := []string{`C:\a b\c.txt`, `D:\ünï\😀.png`}
+	blk := buildDropFiles(nil, paths)
+	out, n, ok := appendDropFiles(nil, blk, 1<<20, nil)
+	if !ok || n != 2 || string(out) != paths[0]+"\x00"+paths[1]+"\x00" {
+		t.Fatalf("read back %q (%d, %v)", out, n, ok)
+	}
+}

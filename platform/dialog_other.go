@@ -1,15 +1,17 @@
-//go:build !darwin
+//go:build !darwin && !windows
 
 package platform
 
-// Native alerts and file panels exist on macOS only so far (dialog_darwin.go).
-// Elsewhere the calls return ErrUnsupported and the app shows its drawn dialog
-// (widget.Dialog). A native Windows TaskDialogIndirect or IFileDialog is not
-// built: both need COM vtable calls without cgo, which is not cheap.
+// Native alerts and file panels exist on macOS (dialog_darwin.go), and native
+// file panels on Windows (dialog_windows.go). Here the calls return
+// ErrUnsupported and the app shows its drawn dialog (widget.Dialog).
 
-// NativeDialogs reports whether the OS has native alert and file panel sheets:
-// false here.
+// NativeDialogs reports whether the OS has native alerts: false here.
 const NativeDialogs = false
+
+// NativeFilePanels reports whether OpenPanel and SavePanel are native: false
+// here.
+const NativeFilePanels = false
 
 // Alert is not available here: it returns ErrUnsupported.
 func (w *Window) Alert(AlertSpec) (DialogTicket, error) { return 0, ErrUnsupported }

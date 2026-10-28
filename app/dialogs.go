@@ -19,10 +19,12 @@ import (
 // shown at the next safe point (after the frame in which the call was made
 // has ended, or after the event that made it), never from inside Build. The
 // specs are copied at the call, so the caller may reuse its slices. The ticket is the app's own;
-// the results carry it. Where the OS has no native dialogs (Windows and Linux
-// so far) the calls fail at once with an error that satisfies
-// errors.Is(err, errors.ErrUnsupported), and the app shows its drawn dialog
-// (widget.Dialog) instead. A dialog that cannot be shown after all (the window
+// the results carry it. Where the OS has no native dialogs (alerts on
+// Windows, everything on Linux so far; platform.NativeDialogs and
+// platform.NativeFilePanels) the calls fail at once with an error that
+// satisfies errors.Is(err, errors.ErrUnsupported), and the app shows its
+// drawn dialog (widget.Dialog) instead. On Windows the file panels are
+// native and an alert is drawn. A dialog that cannot be shown after all (the window
 // already has one open) comes back as a cancelled result with Err set.
 
 // maxDialogResults bounds the unread dialog results. A window has one dialog
@@ -59,7 +61,7 @@ func (a *App) dialogWin() dialogTarget {
 	if a.dlgT != nil {
 		return a.dlgT
 	}
-	if a.Win == nil || !platform.NativeDialogs {
+	if a.Win == nil || !platform.NativeDialogs && !platform.NativeFilePanels {
 		return nil
 	}
 	return a.Win
@@ -86,6 +88,9 @@ func (a *App) enqueueDialog(d pendingDialog) (platform.DialogTicket, error) {
 func (a *App) Alert(s platform.AlertSpec) (platform.DialogTicket, error) {
 	if err := s.Validate(); err != nil {
 		return 0, err
+	}
+	if a.dlgT == nil && !platform.NativeDialogs {
+		return 0, platform.ErrUnsupported // the file panels may be native, the alert is not (Windows)
 	}
 	s.Buttons, s.Destructive = slices.Clone(s.Buttons), slices.Clone(s.Destructive)
 	return a.enqueueDialog(pendingDialog{kind: platform.DialogAlert, alert: s})

@@ -71,8 +71,10 @@ import (
 // exactly once, on success, on failure, when the application never answers
 // (FilePromise.Timeout), and when the window closes.
 //
-// Where there is no native implementation (Windows and Linux so far,
-// NativeDrag) the calls return ErrUnsupported and no events arrive.
+// On Windows (drag_windows.go) drops go through an OLE IDropTarget and a drag
+// out through DoDragDrop; file promises and the preview are not supported
+// there. Where there is no native implementation (Linux so far, NativeDrag)
+// the calls return ErrUnsupported and no events arrive.
 
 // DragKinds is a set of kinds of dragged content.
 type DragKinds uint8
@@ -225,8 +227,8 @@ type DragTicket uint64
 
 var (
 	// ErrDragUnsupported is returned by the drag calls where the OS has no
-	// implementation yet (Windows, Linux); errors.Is(err, errors.ErrUnsupported)
-	// also holds.
+	// implementation yet (Linux; file promises on Windows); errors.Is(err,
+	// errors.ErrUnsupported) also holds.
 	ErrDragUnsupported = fmt.Errorf("platform: drag and drop on %s: %w", runtime.GOOS, errors.ErrUnsupported)
 	// ErrNoPress is returned by StartDrag when no left-button press is being
 	// held: a drag starts from a press that reached the application.
