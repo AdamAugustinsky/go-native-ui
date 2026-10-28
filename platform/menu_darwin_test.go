@@ -3,6 +3,7 @@
 package platform
 
 import (
+	"strings"
 	"testing"
 
 	"gonativeui/internal/objc"
@@ -782,6 +783,86 @@ func TestShiftKeyEquivalentsMatchTheRealChord(t *testing.T) {
 		if r := got[i]; r.keys != 0 || len(r.cmds) != 1 || r.cmds[0] != c.want {
 			t.Errorf("⇧⌘ event %q/%q: %d key-downs and commands %v, want none and [%d]", c.chars, c.ignoring, r.keys, r.cmds, c.want)
 		}
+	}
+}
+
+// A key equivalent with Shift on a key that is not a letter is what the key
+// types with Shift on the selected layout, since that is what the event's
+// charactersIgnoringModifiers says for the chord ("{" for ⇧⌘[): the item "["
+// with Shift in its mask never matched. The layout is read through
+// UCKeyTranslate (the layouts are pinned, not selected), the item follows a
+// change of layout, and the chord's key-down fires the command.
+func TestShiftedPunctuationKeyEquivalents(t *testing.T) {
+	const tcPrev, tcNext, tcComma = 51, 52, 53
+	spec := &MenuSpec{
+		Menus: []Menu{
+			0: {Title: "App", Role: MenuRoleApp, Items: []MenuItem{{Action: MenuQuit}}},
+			1: {Title: "View", Items: []MenuItem{
+				{ID: tcPrev, Title: "Show Previous Tab", Key: '[', Mods: ModSuper | ModShift},
+				{ID: tcNext, Title: "Show Next Tab", Key: ']', Mods: ModSuper | ModShift},
+				{ID: tcComma, Title: "Comma", Key: ',', Mods: ModSuper | ModShift},
+				{Title: "Digit", Key: '3', Mods: ModSuper | ModShift, ID: 54},
+				{Title: "Plain", Key: '[', Mods: ModSuper, ID: 55},
+			}},
+		},
+		Bar: []int{0, 1},
+	}
+	keys := func(w *Window) (k [5]string) {
+		sub := objc.Send(itemAt(objc.Send(w.app, objc.Sel("mainMenu")), 1), selSubmenu)
+		for i := range k {
+			k[i] = str(objc.Send(itemAt(sub, i), objc.Sel("keyEquivalent")))
+		}
+		return k
+	}
+	var errs []string
+	var skip string
+	var fired []uint64
+	onMain(func() {
+		pool := objc.F.Call0(objc.PoolPush)
+		defer objc.F.Call1(objc.PoolPop, pool)
+		restoreUS, ok := pinLayout("com.apple.keylayout.US")
+		if !ok {
+			skip = "the US layout is not installed"
+			return
+		}
+		defer restoreUS()
+		rig, why := openMenuRig(spec, true)
+		if why != "" {
+			skip = why
+			return
+		}
+		defer rig.w.Close()
+		if got, want := keys(rig.w), [5]string{"{", "}", "<", "#", "["}; got != want {
+			errs = append(errs, "US: "+strings.Join(got[:], " ")+", want "+strings.Join(want[:], " "))
+		}
+		// The chord as AppKit makes its event on the US layout: the key-down of
+		// ⇧⌘[ fires the item.
+		rig.w.q.reset()
+		rig.w.handle(nsKey(rig.w, 10, "[", "{", 1<<20|1<<17, 0x21, 1))
+		_, fired, _ = countEvents(rig.w.q.ev)
+		rig.w.q.reset()
+		// Another layout selected: the bar's items follow it. The M key of the
+		// French layout types , with ⌘ and ? with Shift.
+		if restoreFR, ok := pinLayout("com.apple.keylayout.French"); ok {
+			refreshShiftedKeys()
+			if got := keys(rig.w)[2]; got != "?" {
+				errs = append(errs, "after a change to French the comma item is "+got+", want ?")
+			}
+			restoreFR()
+			refreshShiftedKeys()
+			if got := keys(rig.w)[2]; got != "<" {
+				errs = append(errs, "after a change back to US the comma item is "+got+", want <")
+			}
+		}
+	})
+	if skip != "" {
+		t.Skip(skip)
+	}
+	for _, e := range errs {
+		t.Error(e)
+	}
+	if len(fired) != 1 || fired[0] != tcPrev {
+		t.Errorf("⇧⌘[ on the US layout fired %v, want [%d]", fired, tcPrev)
 	}
 }
 

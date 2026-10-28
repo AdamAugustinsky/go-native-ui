@@ -42,6 +42,7 @@ var (
 	selSeparatorItem       = objc.Sel("separatorItem")
 	selSetSubmenu          = objc.Sel("setSubmenu:")
 	selSetKeyMask          = objc.Sel("setKeyEquivalentModifierMask:")
+	selSetKeyEquiv         = objc.Sel("setKeyEquivalent:")
 	selSetState            = objc.Sel("setState:")
 	selState               = objc.Sel("state")
 	selAction              = objc.Sel("action")
@@ -128,11 +129,23 @@ var nativeMenus struct {
 	root     objc.ID // the menu PopUpMenu shows, while it does
 	services objc.ID // the Services menu every bar shares (servicesMenu), retained
 	popups   []popupMenu
-	owner    *Window // the window whose bar is installed (SetMenuBar): the bar's commands are its; nil: the app's
-	model    any     // the model the installed bar was built from (SetWindowMenus), nil: none known
-	popup    *Window // the window PopUpMenu shows a menu over, while it does
-	picked   bool    // an item without a command was chosen in this PopUpMenu,
-	choice   int     // and its tag
+	// The bar's items whose key equivalent is a shifted character (shiftedChar),
+	// with the key they were made for, so that a change of layout can give them
+	// the new layout's (refreshShiftedKeys); recording while the bar is built.
+	shifted   []shiftedItem
+	recording bool
+	owner     *Window // the window whose bar is installed (SetMenuBar): the bar's commands are its; nil: the app's
+	model     any     // the model the installed bar was built from (SetWindowMenus), nil: none known
+	popup     *Window // the window PopUpMenu shows a menu over, while it does
+	picked    bool    // an item without a command was chosen in this PopUpMenu,
+	choice    int     // and its tag
+}
+
+// shiftedItem is a menu item of the bar whose key equivalent is key's shifted
+// character on the selected layout.
+type shiftedItem struct {
+	item objc.ID
+	key  rune
 }
 
 // popupMenu is a cached menu tree for PopUpMenu: the tree built for menu idx
@@ -298,6 +311,8 @@ func setMenuBar(app objc.ID, spec *MenuSpec, state MenuState) {
 	pool := objc.F.Call0(objc.PoolPush)
 	defer objc.F.Call1(objc.PoolPop, pool)
 	bar := objc.Send(objc.Send(clsMenu, selAlloc), selInitPlain)
+	nativeMenus.shifted, nativeMenus.recording = nativeMenus.shifted[:0], true
+	defer func() { nativeMenus.recording = false }()
 	var windows, help objc.ID
 	for _, bi := range spec.Bar {
 		if bi < 0 || bi >= len(spec.Menus) {
@@ -639,14 +654,21 @@ func actionItem(it *MenuItem) objc.ID {
 func newMenuItem(title string, sel objc.SEL, key rune, mods Mods) objc.ID {
 	t := newNSString(title)
 	kn := 0
+	orig := key
+	shifted := false
 	if key != 0 {
-		// A letter with Shift is the uppercase one, as AppKit's own Redo is
-		// ("Z"): NSMenu matches an item "z" with Shift only against an event
-		// whose charactersIgnoringModifiers is "z", and an uppercase item
-		// against both "Z" and "z" (what a key with Shift types depends on the
-		// layout and on how the event was made).
-		if mods&ModShift != 0 && key >= 'a' && key <= 'z' {
-			key -= 'a' - 'A'
+		// A key with Shift is what the event's charactersIgnoringModifiers
+		// says, which NSMenu matches the item's key equivalent against: a
+		// letter is the uppercase one, as AppKit's own Redo is ("Z"; an item
+		// "z" matches only an event that says "z", an uppercase item both),
+		// and anything else is what the key types with Shift on the selected
+		// layout ("{" for ⇧⌘[, "#" for ⇧⌘3: shiftedChar).
+		if mods&ModShift != 0 {
+			if key >= 'a' && key <= 'z' {
+				key -= 'a' - 'A'
+			} else if r := shiftedChar(key); r != 0 {
+				key, shifted = r, true
+			}
 		}
 		kn = utf8.EncodeRune(keyBuf[:], key)
 	}
@@ -658,7 +680,30 @@ func newMenuItem(title string, sel objc.SEL, key rune, mods Mods) objc.ID {
 	if key != 0 {
 		objc.Send1(item, selSetKeyMask, keyMask(mods))
 	}
+	if shifted && nativeMenus.recording {
+		nativeMenus.shifted = append(nativeMenus.shifted, shiftedItem{item, orig})
+	}
 	return item
+}
+
+// refreshShiftedKeys gives the bar's items that have a shifted character for a
+// key equivalent the one of the layout selected now, after a change of layout.
+func refreshShiftedKeys() {
+	if len(nativeMenus.shifted) == 0 {
+		return
+	}
+	pool := objc.F.Call0(objc.PoolPush)
+	defer objc.F.Call1(objc.PoolPop, pool)
+	for _, s := range nativeMenus.shifted {
+		r := shiftedChar(s.key)
+		if r == 0 {
+			r = s.key
+		}
+		n := utf8.EncodeRune(keyBuf[:], r)
+		k := newNSStringBytes(keyBuf[:n])
+		objc.Send1(s.item, selSetKeyEquiv, uintptr(k))
+		objc.Release(k)
+	}
 }
 
 // keyMask is the NSEventModifierFlags of mods.
