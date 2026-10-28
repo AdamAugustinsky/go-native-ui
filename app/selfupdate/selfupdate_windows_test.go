@@ -95,11 +95,19 @@ func makeExe(t *testing.T, path string, v variant) {
 	t.Helper()
 	b := bytes.Clone(appBytes(t))
 	le := binary.LittleEndian
-	sig := []byte{0xBD, 0x04, 0xEF, 0xFE}
-	i := bytes.Index(b, sig)
-	if i < 0 || bytes.Index(b[i+4:], sig) >= 0 {
-		t.Fatal("the version resource's signature is not found exactly once")
+	// The fixed file info, found through the resource (the signature's bytes
+	// also occur in winres's code on amd64).
+	pf, err := winres.Read(bytes.NewReader(b), int64(len(b)))
+	if err != nil {
+		t.Fatal(err)
 	}
+	vr, ok := winres.Find(pf.Resources, winres.TypeVersion, 1)
+	at := bytes.Index(b, vr.Data)
+	sig := bytes.Index(vr.Data, []byte{0xBD, 0x04, 0xEF, 0xFE})
+	if !ok || at < 0 || sig < 0 {
+		t.Fatal("the version resource is not found")
+	}
+	i := at + sig
 	q := v.version
 	le.PutUint32(b[i+8:], uint32(q[0])<<16|uint32(q[1]))
 	le.PutUint32(b[i+12:], uint32(q[2])<<16|uint32(q[3]))
