@@ -159,7 +159,7 @@ func TestNonActivatingPanelLeavesTheKeyWindowKey(t *testing.T) {
 func TestPanelHidesOnDeactivate(t *testing.T) {
 	testlock.Hold(t, "activation")
 	var why string
-	var key, active, hidden, back bool
+	var key, active, hidden, stillActive, back bool
 	onMain(func() {
 		pool := objc.F.Call0(objc.PoolPush)
 		defer objc.F.Call1(objc.PoolPop, pool)
@@ -177,6 +177,7 @@ func TestPanelHidesOnDeactivate(t *testing.T) {
 		}
 		objc.Send(p.app, objc.Sel("deactivate"))
 		hidden = pumpPanelUntil(func() bool { return !p.Visible() })
+		stillActive = objc.SendBool(p.app, selIsActiveApp)
 		p.Show()
 		back = pumpPanelUntil(func() bool { return p.Visible() && p.KeyWindow() })
 	})
@@ -186,8 +187,14 @@ func TestPanelHidesOnDeactivate(t *testing.T) {
 	if !active {
 		t.Skip("the app cannot become active here")
 	}
+	if !hidden && stillActive {
+		// deactivate gives the activation to another app; where none takes
+		// it (a CI runner's session) the app stays active and AppKit has no
+		// deactivation to hide the panel on
+		t.Skipf("the app is still active 3 s after deactivate (key when shown %v, shown and key again %v)", key, back)
+	}
 	if !key || !hidden || !back {
-		t.Fatalf("palette: key when shown %v, hidden on deactivation %v, shown and key again %v", key, hidden, back)
+		t.Fatalf("palette: key when shown %v, hidden on deactivation %v (the app active %v), shown and key again %v", key, hidden, stillActive, back)
 	}
 }
 
