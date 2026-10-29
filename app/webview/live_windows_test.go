@@ -43,14 +43,6 @@ func engineProcesses() map[string]string {
 	return m
 }
 
-// openReady opens a view and waits for its controller.
-func (h *harness) openReady(o webview.Options) *webview.View {
-	h.t.Helper()
-	v := h.open(o)
-	h.wait("the view's controller", 60*time.Second, func() bool { return webview.Ready(v) })
-	return v
-}
-
 // H2's matrix: the runtime loads at the first New, not before; navigation
 // with title, URL and load events; back and forward; a blocked scheme; a
 // refused popup and one loaded in place; a 10 MB download with progress;

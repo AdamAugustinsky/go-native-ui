@@ -250,6 +250,15 @@ func (h *harness) clear() {
 }
 
 // navigate loads url in v and waits for the title.
+// openReady opens a view and waits for it to be ready: the first in a
+// process creates the WebView2 environment, slow on a busy runner.
+func (h *harness) openReady(o webview.Options) *webview.View {
+	h.t.Helper()
+	v := h.open(o)
+	h.wait("the view's controller", 60*time.Second, func() bool { return webview.Ready(v) })
+	return v
+}
+
 func (h *harness) navigate(v *webview.View, url, title string) {
 	h.t.Helper()
 	var err error
@@ -386,7 +395,7 @@ func TestProfileChild(t *testing.T) {
 	base, val := os.Getenv("GNUI_WEBVIEW_URL"), os.Getenv("GNUI_WEBVIEW_COOKIE")
 	h := startApp(t)
 	read := func(o webview.Options) string {
-		v := h.open(o)
+		v := h.openReady(o)
 		var title string
 		h.Do(func(*app.App) { _ = v.Navigate(base + "/cookie") })
 		h.wait("the cookie page", 20*time.Second, func() bool {
@@ -398,7 +407,7 @@ func TestProfileChild(t *testing.T) {
 	}
 	one, two := webview.Options{Profile: "gnui-webview-test-1"}, webview.Options{Profile: "gnui-webview-test-2"}
 	if phase == "set" {
-		v := h.open(one)
+		v := h.openReady(one)
 		h.navigate(v, base+"/setcookie?v="+val, "set")
 		h.close(v)
 		fmt.Printf("R private=%s\n", read(webview.Options{}))
