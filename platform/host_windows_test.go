@@ -176,6 +176,25 @@ func TestHostButtonIsRefusedAndTheTableIsBounded(t *testing.T) {
 // keyboard: EvHostFocus without EvFocus, keys typed reach the control and not
 // ui, Tab and Escape and Enter it does not want come back as host commands,
 // and the focus comes back.
+// focusChange fails the test when a hand-off of the focus between the window
+// and its hosts reported a change of the window's focus (EvFocus), unless
+// the window had lost the focus before it (lost): a window of another
+// process takes the foreground on the runners now and then, which the
+// activation lock does not keep away, and the hand-off then brings the focus
+// back into the window ("focus back from a host reported the window's focus
+// change", EvFocus gained, p8-windows-flakes 40838768865 arm64).
+func focusChange(t *testing.T, what string, got []Event, lost bool) {
+	t.Helper()
+	if !hasKind(got, EvFocus) {
+		return
+	}
+	if lost {
+		t.Logf("%s: the window had lost the focus to another window (the foreground is %s), and got it back", what, windowOwner(win32.Call(pGetForegroundWindow)))
+		return
+	}
+	t.Errorf("%s reported the window's focus change: %+v", what, got)
+}
+
 func TestHostFocusHandOffAndCommands(t *testing.T) {
 	lockThread(t)
 	w := openW(t, "host focus")
@@ -202,14 +221,13 @@ func TestHostFocusHandOffAndCommands(t *testing.T) {
 	settle(w)
 	w.Events()
 
+	lost := !w.kbd
 	w.FocusHost(id)
 	got := pumpEvents([]*Window{w}, time.Second, func(g [][]Event) bool { return hasKind(g[0], EvHostFocus) })[0]
 	if e := lastOf(got, EvHostFocus); e.Kind != EvHostFocus || HostID(e.Tag) != id {
 		t.Fatalf("FocusHost: no EvHostFocus for %#x: %+v", id, got)
 	}
-	if hasKind(got, EvFocus) {
-		t.Errorf("focus into a host reported the window's focus change: %+v", got)
-	}
+	focusChange(t, "focus into a host", got, lost)
 	if !w.hostFocused() || win32.Call(pGetFocus) != edit {
 		t.Fatalf("the EDIT does not have the focus (GetFocus %#x)", win32.Call(pGetFocus))
 	}
@@ -241,14 +259,13 @@ func TestHostFocusHandOffAndCommands(t *testing.T) {
 	}
 
 	// Back to the window.
+	lost = !w.kbd
 	w.FocusHost(0)
 	got = pumpEvents([]*Window{w}, time.Second, func(g [][]Event) bool { return hasKind(g[0], EvHostFocus) })[0]
 	if e := lastOf(got, EvHostFocus); e.Kind != EvHostFocus || e.Tag != 0 {
 		t.Errorf("FocusHost(0): no EvHostFocus(0): %+v", got)
 	}
-	if hasKind(got, EvFocus) {
-		t.Errorf("focus back from a host reported the window's focus change: %+v", got)
-	}
+	focusChange(t, "focus back from a host", got, lost)
 
 	// A move the window is not told about (SetFocus from host to host) is
 	// found after the pump's dispatch.
