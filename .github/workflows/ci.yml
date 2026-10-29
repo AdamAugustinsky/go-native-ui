@@ -419,13 +419,21 @@ jobs:
           foreach ($n in 'WWAHost', 'SearchHost', 'StartMenuExperienceHost') { "$n after: $(@(Get-Process $n -ErrorAction SilentlyContinue).Count)" }
       - name: test
         run: |
-          GNUI_FS_REPORT=$RUNNER_TEMP/fs-report.txt go test -json -count=1 $(go list $PKGS | grep -v -E "$PKGS_EXCLUDE") | go run ./tools/testtimes -title "Windows ${{ matrix.arch }}" -raw test-windows-${{ matrix.arch }}.json
+          GNUI_FS_REPORT=$RUNNER_TEMP/fs-report.txt go test -json -count=1 $(go list $PKGS | grep -v -E "$PKGS_EXCLUDE|/app/webview$") | go run ./tools/testtimes -title "Windows ${{ matrix.arch }}" -raw test-windows-${{ matrix.arch }}.json
           { echo '```'; cat $RUNNER_TEMP/fs-report.txt || true; echo '```'; } | tee -a "$GITHUB_STEP_SUMMARY"
+      # app/webview alone, after the rest: WebView2's engine (a browser and
+      # its renderer, GPU and utility processes) and its focused page beside
+      # the other packages' desktop tests came with their foreground, focus
+      # and clipboard tests failing, a different one each run, on no other
+      # branch as often (H2), so it runs with nothing else on the desktop.
+      - name: test app/webview (alone)
+        if: ${{ !cancelled() }}
+        run: go test -json -count=1 ./app/webview | go run ./tools/testtimes -title "Windows ${{ matrix.arch }}, app/webview" -raw test-windows-webview-${{ matrix.arch }}.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: tests-windows-${{ matrix.arch }}
-          path: test-windows-${{ matrix.arch }}.json
+          path: test-windows-*${{ matrix.arch }}.json
           if-no-files-found: ignore
 
   windows-bench:
