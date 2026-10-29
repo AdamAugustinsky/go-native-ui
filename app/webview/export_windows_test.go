@@ -3,7 +3,6 @@
 package webview
 
 import (
-	"syscall"
 	"time"
 	"unsafe"
 
@@ -11,41 +10,44 @@ import (
 )
 
 var (
-	pGetWindowRgnBox = win32.Proc(user32, "GetWindowRgnBox")
-	pGetWindowRect   = win32.Proc(user32, "GetWindowRect")
-	pGetDC           = win32.Proc(user32, "GetDC")
-	pReleaseDC       = win32.Proc(user32, "ReleaseDC")
-	pGetPixel        = win32.Proc(gdi32, "GetPixel")
-	pWindowFromPoint = win32.Proc(user32, "WindowFromPoint")
-	pGetAncestor     = win32.Proc(user32, "GetAncestor")
-	pSetWindowPos    = win32.Proc(user32, "SetWindowPos")
-	pGetClassName    = win32.Proc(user32, "GetClassNameW")
-	rgnBx, winRect   [4]int32
-	className        [64]uint16
+	pGetWindowRgnBox       = win32.Proc(user32, "GetWindowRgnBox")
+	pGetWindowRect         = win32.Proc(user32, "GetWindowRect")
+	pGetAncestor           = win32.Proc(user32, "GetAncestor")
+	pPrintWindow           = win32.Proc(user32, "PrintWindow")
+	pGetDC                 = win32.Proc(user32, "GetDC")
+	pReleaseDC             = win32.Proc(user32, "ReleaseDC")
+	pCreateCompatibleDC    = win32.Proc(gdi32, "CreateCompatibleDC")
+	pCreateCompatibleBitmp = win32.Proc(gdi32, "CreateCompatibleBitmap")
+	pSelectObject          = win32.Proc(gdi32, "SelectObject")
+	pDeleteObject          = win32.Proc(gdi32, "DeleteObject")
+	pDeleteDC              = win32.Proc(gdi32, "DeleteDC")
+	pGetPixel              = win32.Proc(gdi32, "GetPixel")
+	rgnBx, winRect, topR   [4]int32
 )
 
-// ScreenPixel is the screen's colour (0xRRGGBB) at the centre of v's window:
-// what the page shows there, composed. Test packages run side by side on
-// one desktop, so it puts v's top-level window above the others while it reads; when
-// another program's window still covers the point, covered is that window's
-// class.
-func ScreenPixel(v *View) (px uint32, covered string) {
+// ScreenPixel is the colour (0xRRGGBB) at the centre of v's window as the
+// compositor shows it: v's top-level window printed with its DirectComposition
+// content (PrintWindow, PW_RENDERFULLCONTENT), so windows of test packages
+// running beside it neither cover the point nor are moved.
+func ScreenPixel(v *View) uint32 {
 	hwnd := v.be.(*view).hwnd
-	const gaRoot, swpNoSizeMoveActivate = 2, 0x1 | 0x2 | 0x10
+	const gaRoot, pwRenderFullContent = 2, 2
 	root := call(pGetAncestor, hwnd, gaRoot)
-	call(pSetWindowPos, root, ^uintptr(0), 0, 0, 0, 0, swpNoSizeMoveActivate) // HWND_TOPMOST
+	call(pGetWindowRect, root, uintptr(unsafe.Pointer(&topR)))
 	call(pGetWindowRect, hwnd, uintptr(unsafe.Pointer(&winRect)))
-	x, y := (winRect[0]+winRect[2])/2, (winRect[1]+winRect[3])/2
-	if at := call(pWindowFromPoint, uintptr(uint32(x))|uintptr(uint32(y))<<32); call(pGetAncestor, at, gaRoot) != root {
-		n := call(pGetClassName, at, uintptr(unsafe.Pointer(&className[0])), uintptr(len(className)))
-		covered = syscall.UTF16ToString(className[:n])
-	}
-	dc := call(pGetDC, 0)
+	w, h := topR[2]-topR[0], topR[3]-topR[1]
+	x, y := (winRect[0]+winRect[2])/2-topR[0], (winRect[1]+winRect[3])/2-topR[1]
+	screen := call(pGetDC, 0)
+	dc := call(pCreateCompatibleDC, screen)
+	bm := call(pCreateCompatibleBitmp, screen, uintptr(w), uintptr(h))
+	call(pReleaseDC, 0, screen)
+	old := call(pSelectObject, dc, bm)
+	call(pPrintWindow, root, dc, pwRenderFullContent)
 	c := uint32(call(pGetPixel, dc, uintptr(x), uintptr(y)))
-	call(pReleaseDC, 0, dc)
-	// HWND_NOTOPMOST: not over other packages' windows
-	call(pSetWindowPos, root, ^uintptr(1), 0, 0, 0, 0, swpNoSizeMoveActivate)
-	return c&0xFF<<16 | c&0xFF00 | c>>16&0xFF, covered // COLORREF is 0x00BBGGRR
+	call(pSelectObject, dc, old)
+	call(pDeleteObject, bm)
+	call(pDeleteDC, dc)
+	return c&0xFF<<16 | c&0xFF00 | c>>16&0xFF // COLORREF is 0x00BBGGRR
 }
 
 // HostWindow is v's window, the host's view (platform.Window.HostView).
