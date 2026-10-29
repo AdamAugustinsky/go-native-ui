@@ -83,6 +83,28 @@ func pumpFor(hwnd uintptr, d time.Duration) {
 	}
 }
 
+// endWait bounds the wait for Ended after a stop, and liveStopTimeout is the
+// session's stopTimeout in these tests. On a runner busy with the whole suite
+// the capture thread falls seconds behind (WriteSample waits for the software
+// encoder) and drains its backlog after the stop: stop to Ended took 5.6 s,
+// 19.6 s and 20 s on 2026-10-28 and 29 (p8-webview2 40816023392,
+// 40797829935), past the session's 15 s, which then ended the recording with
+// a file not finalized (80 bytes, no track), or left it running past the
+// tests' 30 s, so that every later test's Start failed with ErrBusy
+// (40797451836, 40808701648). The tests wait for the file instead; the
+// recorder's steps say where a recording that does not end is.
+const (
+	endWait         = 4 * time.Minute
+	liveStopTimeout = 3 * time.Minute
+)
+
+// longStop gives the session liveStopTimeout for the rest of t.
+func longStop(t *testing.T) {
+	old := stopTimeout
+	stopTimeout = liveStopTimeout
+	t.Cleanup(func() { stopTimeout = old })
+}
+
 // waitFor pumps until cond or the timeout.
 func waitFor(hwnd uintptr, timeout time.Duration, cond func() bool) bool {
 	for end := time.Now().Add(timeout); !cond(); {
@@ -186,11 +208,12 @@ func (ru *run) do() {
 		}
 	}
 	t0 = time.Now()
-	if !waitFor(hwnd, 30*time.Second, func() bool { return r.ended }) {
-		ru.problem = "no Ended in 30 s after the stop"
+	if !waitFor(hwnd, endWait, func() bool { return r.ended }) {
+		ru.problem = fmt.Sprintf("no Ended in %v after the stop; the recorder's steps: %v", endWait, recorderSteps(r))
 		return
 	}
 	ru.stopToEnd = time.Since(t0)
+	ru.steps = recorderSteps(r)
 	ru.res = r.Result()
 	if s, ok := r.be.(*session); ok {
 		if n, ok := s.n.(*wgcNative); ok && n.rec != nil {
@@ -203,7 +226,7 @@ func (ru *run) do() {
 	ru.events = eventsOf(r.ID())
 }
 
-// recorderSteps is how far the capture thread's open got.
+// recorderSteps is how far the capture thread's open and finish got.
 func recorderSteps(r *Recording) []string {
 	if s, ok := r.be.(*session); ok {
 		if n, ok := s.n.(*wgcNative); ok && n.rec != nil {
@@ -215,6 +238,7 @@ func recorderSteps(r *Recording) []string {
 
 func record(t *testing.T, ru *run) fileInfo {
 	t.Helper()
+	longStop(t)
 	widgettest.OnMain(ru.do)
 	if ru.problem != "" {
 		t.Fatal(ru.problem)
@@ -232,7 +256,7 @@ func record(t *testing.T, ru *run) fileInfo {
 		if st != nil {
 			size = st.Size()
 		}
-		t.Logf("result %+v; Start to Started %v %v; elapsed at stop %v; stop to Ended %v; %.1f Go allocations/s in the process while recording; own audio excluded %v; conversion %s; file %d bytes, %v, %dx%d, %d video and %d audio tracks, %d frames, largest gap %v (reader 0x%08X)",
+		t.Logf("result %+v; Start to Started %v; steps %v; elapsed at stop %v; stop to Ended %v; %.1f Go allocations/s in the process while recording; own audio excluded %v; conversion %s; file %d bytes, %v, %dx%d, %d video and %d audio tracks, %d frames, largest gap %v (reader 0x%08X)",
 			ru.res, ru.startTook, ru.steps, ru.elapsed, ru.stopToEnd, ru.allocsPerSec, ru.ownAudio, ru.path, size, fi.duration, fi.size>>32, uint32(fi.size), fi.video, fi.audio, fi.frames, fi.maxGap, uint32(fi.err))
 	}
 	return fi
@@ -391,6 +415,7 @@ func TestWindowsBusy(t *testing.T) {
 	if load() != nil {
 		t.Skip("no capture on this Windows")
 	}
+	longStop(t)
 	var err1, err2 error
 	var r *Recording
 	widgettest.OnMain(func() {
@@ -404,7 +429,7 @@ func TestWindowsBusy(t *testing.T) {
 		_, err2 = Start(Target{Kind: Window, ID: uint64(hwnd)}, Options{})
 		waitFor(hwnd, 60*time.Second, func() bool { return slices.Contains(eventsOf(r.ID()), Started) || r.ended })
 		r.Stop(true)
-		waitFor(hwnd, 30*time.Second, func() bool { return r.ended })
+		waitFor(hwnd, endWait, func() bool { return r.ended })
 	})
 	if err1 != nil {
 		t.Fatal(err1)

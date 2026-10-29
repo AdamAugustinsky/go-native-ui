@@ -12,6 +12,7 @@ import (
 	"os"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -516,28 +517,98 @@ func TestReceiveAllocations(t *testing.T) {
 
 	close(paced)
 	const warm = 200
-	var before, after runtime.MemStats
+	// The paced run counts allocations by cause: every allocation is
+	// profiled, and those whose stack passes through the module's own code
+	// (outside a _test.go file, so neither this loop nor the test server)
+	// are the receive path's. The rest, the runtime's and the test server's,
+	// come with time, not messages: on a loaded Windows runner the 1 ms
+	// ticker paced 250-400 messages a second, the run took 25-42 s instead
+	// of 10, and the process's 3 or so background allocations a second came
+	// to 1.0-1.3 per hundred messages (p8-webview2 40797829935, 40816023392).
+	oldRate := runtime.MemProfileRate
+	runtime.MemProfileRate = 1
+	defer func() { runtime.MemProfileRate = oldRate }()
+	var before map[[32]uintptr]int64
+	var msBefore, msAfter runtime.MemStats
 	start := time.Now()
 	for i := range total {
 		if i == warm {
-			runtime.GC()
-			runtime.ReadMemStats(&before)
+			before = allocProfile()
+			runtime.ReadMemStats(&msBefore)
 		}
 		read()
 	}
-	runtime.ReadMemStats(&after)
-	n := total - warm
-	allocs := after.Mallocs - before.Mallocs
+	runtime.ReadMemStats(&msAfter)
 	took := time.Since(start)
-	t.Logf("%d messages in %v (%.0f/s); %d Go allocations in the process over the last %d: %.4f per message",
-		total, took.Round(time.Millisecond), float64(total)/took.Seconds(), allocs, n, float64(allocs)/float64(n))
+	n := total - warm
+	ours, others, sites := allocsByCause(before, allocProfile())
+	process := msAfter.Mallocs - msBefore.Mallocs
+	t.Logf("%d messages in %v (%.0f/s); %d Go allocations in the process over the last %d, %d of them through the module's code (%.4f per message), %d elsewhere (the runtime's, the test's)",
+		total, took.Round(time.Millisecond), float64(total)/took.Seconds(), process, n, ours, float64(ours)/float64(n), others)
 	if os.Getenv("WS_ALLOC_REPORT") != "" {
-		fmt.Fprintf(os.Stderr, "WS_ALLOCS %s/%s burst_read=%.2f burst_server_write=%.2f paced_messages=%d paced_process_allocs=%d per_message=%.4f seconds=%.2f\n",
-			runtime.GOOS, runtime.GOARCH, readAllocs, writeAllocs, n, allocs, float64(allocs)/float64(n), took.Seconds())
+		fmt.Fprintf(os.Stderr, "WS_ALLOCS %s/%s burst_read=%.2f burst_server_write=%.2f paced_messages=%d paced_process_allocs=%d paced_module_allocs=%d per_message=%.4f seconds=%.2f\n",
+			runtime.GOOS, runtime.GOARCH, readAllocs, writeAllocs, n, process, ours, float64(ours)/float64(n), took.Seconds())
 	}
-	// Zero per message: what is left is the runtime's own background
-	// (timers, the GC), well under one per hundred messages.
-	if float64(allocs) > float64(n)/100 {
-		t.Errorf("%d allocations in the process over %d messages", allocs, n)
+	// Zero per message; one per hundred leaves room for one-offs (a buffer
+	// grown once, a thread's first callback).
+	if float64(ours) > float64(n)/100 {
+		t.Errorf("%d allocations through the module's code over %d messages; their stacks:\n%s", ours, n, sites)
 	}
+}
+
+// allocProfile is the process's allocation profile (objects allocated so
+// far, by stack) after two GCs, which publish it.
+func allocProfile() map[[32]uintptr]int64 {
+	runtime.GC()
+	runtime.GC()
+	recs := make([]runtime.MemProfileRecord, 1024)
+	n, ok := runtime.MemProfile(recs, true)
+	for !ok {
+		recs = make([]runtime.MemProfileRecord, n+256)
+		n, ok = runtime.MemProfile(recs, true)
+	}
+	m := make(map[[32]uintptr]int64, n)
+	for _, r := range recs[:n] {
+		m[r.Stack0] += r.AllocObjects
+	}
+	return m
+}
+
+// allocsByCause sorts the allocations made between two profiles into those
+// whose stack has a frame of the module outside a _test.go file (ours, whose
+// stacks it describes in sites) and the rest.
+func allocsByCause(before, after map[[32]uintptr]int64) (ours, others int64, sites string) {
+	var sb strings.Builder
+	for stk, n := range after {
+		if n -= before[stk]; n <= 0 {
+			continue
+		}
+		pcs := stk[:]
+		for i, pc := range pcs {
+			if pc == 0 {
+				pcs = pcs[:i]
+				break
+			}
+		}
+		var stack strings.Builder
+		mine := false
+		frames := runtime.CallersFrames(pcs)
+		for {
+			fr, more := frames.Next()
+			fmt.Fprintf(&stack, "    %s:%d\n", fr.Function, fr.Line)
+			if strings.HasPrefix(fr.Function, "gonativeui/") && !strings.HasSuffix(fr.File, "_test.go") {
+				mine = true
+			}
+			if !more {
+				break
+			}
+		}
+		if !mine {
+			others += n
+			continue
+		}
+		ours += n
+		fmt.Fprintf(&sb, "  %d object(s):\n%s", n, stack.String())
+	}
+	return ours, others, sb.String()
 }

@@ -109,6 +109,7 @@ type recorder struct {
 	paused   atomic.Bool
 	offset   atomic.Int64 // QPC ticks paused in total
 	pausedAt atomic.Int64 // QPC at the pause
+	stopAt   atomic.Int64 // QPC at the stop (0: not stopped); the clock stands there
 	mainQPC  int64        // the main thread's QPC out parameter
 
 	// The capture thread's, from here on.
@@ -123,7 +124,7 @@ type recorder struct {
 	vpErr                        error // why the video processor is not used
 	opening                      time.Time
 	traceMu                      sync.Mutex
-	trace                        []string // open's steps and their times, for a test's failure
+	trace                        []string // open's and finish's steps and their times, for a test's failure
 	wr                           *writer
 	mic, sys                     *source
 	t0, now                      int64
@@ -172,7 +173,13 @@ func (rc *recorder) resume() {
 	rc.paused.Store(false)
 }
 
+// stop also stops the clock: a capture thread that is behind (a loaded
+// machine: WriteSample waits for the encoder) finishes the file at the time
+// of the stop, not at the time it gets to it, which made a 5 s recording a
+// 14.7 s file on a CI runner (p8-webview2 40797829935).
 func (rc *recorder) stop() {
+	win32.Call(sys.qpc, uintptr(unsafe.Pointer(&rc.mainQPC)))
+	rc.stopAt.Store(rc.mainQPC)
 	rc.stopping.Store(true)
 	win32.Call(sys.setEvent, rc.stopEv)
 }
@@ -429,14 +436,18 @@ func (rc *recorder) setBufSize() {
 }
 
 // clock is the recorded time in 100-ns units: since the start, pauses
-// excluded (a paused recording's clock stands at the pause).
+// excluded (a paused recording's clock stands at the pause, a stopped one's
+// at the stop).
 func (rc *recorder) clock() int64 {
 	if rc.paused.Load() {
 		rc.now = rc.pausedAt.Load()
 	} else {
 		win32.Call(sys.qpc, uintptr(unsafe.Pointer(&rc.now)))
 	}
-	d := rc.now - rc.t0 - rc.offset.Load()
+	if s := rc.stopAt.Load(); s != 0 && s < rc.now {
+		rc.now = s
+	}
+	d := max(0, rc.now-rc.t0-rc.offset.Load())
 	f := sys.qpcFreq
 	return d/f*ticks + d%f*ticks/f
 }
@@ -476,6 +487,7 @@ func (rc *recorder) loop() {
 // mStreamStopped first when it stopped by itself, then the segment's
 // message and mCaptureStopped.
 func (rc *recorder) finish() {
+	rc.mark("loop ended")
 	fatal := rc.fatal
 	if fatal == nil && rc.gone.Load() && !rc.stopping.Load() {
 		fatal = ErrTargetGone
@@ -498,7 +510,9 @@ func (rc *recorder) finish() {
 	if rc.wr.audio && rc.audioFrames == 0 {
 		rc.writeAudio(rc.frameTime(1))
 	}
+	rc.mark(fmt.Sprintf("last samples (%d frames)", rc.frames))
 	hr := win32.HR(com.Call(rc.wr.sw, vtSWFinalize))
+	rc.mark("finalized")
 	rc.close()
 	if hr < 0 {
 		rc.s.post(msg{kind: mSegFailed, seg: 0, err: hrError("the sink writer's Finalize", hr)})
