@@ -1,10 +1,8 @@
-//go:build !darwin
+//go:build !darwin && !windows
 
 package hotkey
 
-// No global hotkeys here yet: W7 brings RegisterHotKey on Windows in wave 2;
-// Linux waits (D63). When Windows lands this file becomes
-// //go:build !darwin && !windows.
+// No global hotkeys on Linux in phase 8 (D63).
 
 func osRegister(ID, Shortcut) error    { return ErrUnsupported }
 func osUnregister(ID)                  {}

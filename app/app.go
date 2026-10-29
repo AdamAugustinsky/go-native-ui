@@ -89,7 +89,7 @@ type Config struct {
 	Width, Height float32 // content size in points
 	MinWidth      float32 // smallest content size the user can resize to, in points; 0: no limit
 	MinHeight     float32
-	Titlebar      float32    // macOS custom titlebar height (pt); ignored elsewhere
+	Titlebar      float32    // custom titlebar height (pt): macOS; Windows, where the app draws the caption buttons too (ui.Decorations.Caption); ignored on Linux
 	TrafficLights [2]float32 // macOS close-button centre (pt); ignored elsewhere
 	PublicAPIOnly bool       // no private system interfaces at run time (a store build uses the gnui_publicapi tag); see platform.Options.PublicAPIOnly
 	Clear         [4]float32 // clear colour, with the semantics of gpu.Renderer.Encode's clear

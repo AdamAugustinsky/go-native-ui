@@ -23,13 +23,14 @@ import (
 //     and draws the panel's shape, or asks for Options.Backdrop, whose glass
 //     gets the corner Radius. Package app opens a panel hidden: Win.Show
 //     shows it.
-//   - Windows: WS_POPUP with WS_EX_TOOLWINDOW, WS_EX_TOPMOST for Floating and
-//     WS_EX_NOACTIVATE for NonActivating; SetWindowDisplayAffinity for
-//     ExcludeFromCapture; DWM's rounded corners (Windows 11) and shadow. The
-//     swap chain stays opaque, so the corners are DWM's, and Radius is not
-//     honoured exactly.
-//   - Until W2 lands on Windows, and on Linux (D63): Open fails with
-//     ErrNoPanels.
+//   - Windows: WS_POPUP with WS_EX_TOOLWINDOW, WS_EX_TOPMOST for Floating
+//     and StatusBar, and WS_EX_NOACTIVATE for NonActivating; the drag
+//     regions answer WM_NCHITTEST with HTCAPTION; SetWindowDisplayAffinity
+//     for ExcludeFromCapture; DWM's rounded corners (Windows 11) and, for
+//     Shadow, its shadow; HideOnDeactivate on WM_ACTIVATE (panel_windows.go).
+//     The swap chain stays opaque, so the corners are DWM's, and Radius is
+//     not honoured exactly.
+//   - Linux (D63): Open fails with ErrNoPanels.
 type Panel struct {
 	// Floating keeps the panel above ordinary windows (NSFloatingWindowLevel;
 	// WS_EX_TOPMOST).
@@ -70,12 +71,12 @@ type Panel struct {
 }
 
 // ErrNoPanels is Open's error for Options.Panel where the OS has no panel
-// windows yet (until W2 lands; Linux in phase 8, D63). errors.Is(err,
+// windows (Linux in phase 8, D63). errors.Is(err,
 // errors.ErrUnsupported) holds.
 var ErrNoPanels = fmt.Errorf("platform: panel windows on %s: %w", runtime.GOOS, errors.ErrUnsupported)
 
 // PanelsSupported reports whether Open makes panel windows here: on macOS
-// (W2); on Windows once W2's Windows half lands; never on Linux in phase 8.
+// and Windows (W2); never on Linux in phase 8.
 func PanelsSupported() bool { return panelsSupported }
 
 // checkPanel is Open's check of Options.Panel.

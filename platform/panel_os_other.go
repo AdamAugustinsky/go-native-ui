@@ -1,5 +1,5 @@
-//go:build !darwin
+//go:build !darwin && !windows
 
 package platform
 
-const panelsSupported = false // Windows: W2's Windows half (wave 2); Linux: D63
+const panelsSupported = false // Linux: D63
