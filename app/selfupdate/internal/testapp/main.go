@@ -19,6 +19,9 @@
 //	SUTEST_REQUIREMENT     the code requirement; "self" for the app's own
 //	                       designated requirement; unset for the tests' identifier
 //	SUTEST_ALLOW_DOWNGRADE "1": selfupdate.Options.AllowDowngrade
+//	SUTEST_REVOKE_INHERITED "1": in the helper, the descriptors it inherited
+//	                       to files are revoked first, as syspolicyd did to
+//	                       one in the field (revoke_darwin.go)
 package main
 
 import (
@@ -62,6 +65,9 @@ func main() {
 		AllowDowngrade: os.Getenv("SUTEST_ALLOW_DOWNGRADE") == "1"})
 	r := report{Pid: os.Getpid(), Args: os.Args[1:], Version: resource("version"), Behavior: resource("behavior")}
 	write(r, "start")
+	if os.Getenv("SUTEST_REVOKE_INHERITED") == "1" && len(os.Args) == 3 && os.Args[1] == "-gnui-selfupdate-helper" {
+		revokeInherited()
+	}
 	selfupdate.RunHelperIfAsked()
 
 	if len(r.Args) == 2 && r.Args[0] == "report-to" { // opened by Launch Services, which passes no environment
