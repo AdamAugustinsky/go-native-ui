@@ -43,7 +43,8 @@ func ScreenPixel(v *View) (px uint32, covered string) {
 	dc := call(pGetDC, 0)
 	c := uint32(call(pGetPixel, dc, uintptr(x), uintptr(y)))
 	call(pReleaseDC, 0, dc)
-	call(pSetWindowPos, root, ^uintptr(1), 0, 0, 0, 0, swpNoSizeMoveActivate) // HWND_NOTOPMOST: not over other packages' windows
+	// HWND_NOTOPMOST: not over other packages' windows
+	call(pSetWindowPos, root, ^uintptr(1), 0, 0, 0, 0, swpNoSizeMoveActivate)
 	return c&0xFF<<16 | c&0xFF00 | c>>16&0xFF, covered // COLORREF is 0x00BBGGRR
 }
 
