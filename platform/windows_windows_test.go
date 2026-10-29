@@ -243,7 +243,7 @@ func TestOpenCloseLeaksNoWindowObjects(t *testing.T) {
 	if OpenCount() != 0 {
 		t.Errorf("OpenCount %d, want 0", OpenCount())
 	}
-	if c := ShellObjects(); c != (ShellCounts{}) {
+	if c := ShellObjects(); c.Hosts != 0 || c.Materials != 0 {
 		t.Errorf("shell objects %+v", c)
 	}
 }

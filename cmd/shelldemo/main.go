@@ -208,6 +208,8 @@ func config() app.Config {
 		Title: "Documents", Width: winW, Height: winH, MinWidth: 760, MinHeight: 400,
 		Titlebar: toolbarH, TrafficLights: theme.TrafficCentre(theme.ToolbarUnified),
 		Materials: true,
+		// Windows: the text field is a Win32 EDIT, which draws with GDI.
+		ChildWindows: true,
 	}
 }
 

@@ -516,6 +516,11 @@ jobs:
         run: |
           ./bin/notes.exe -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 420s -windows 2 | tee notes-2w-windows-${{ matrix.arch }}.json
           { echo '```json'; cat notes-2w-windows-${{ matrix.arch }}.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: shelldemo (W3, D66; hosts as child windows moved, hidden and shown every frame, with the allocation gate)
+        run: |
+          go build -trimpath -ldflags="-s -w" -o bin/shelldemo.exe ./cmd/shelldemo
+          ./bin/shelldemo.exe -bench -gate | tee shelldemo-windows-${{ matrix.arch }}.json
+          { echo '```json'; cat shelldemo-windows-${{ matrix.arch }}.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -534,6 +539,7 @@ jobs:
             gallery-2w-windows-${{ matrix.arch }}.json
             notes-windows-${{ matrix.arch }}.json
             notes-2w-windows-${{ matrix.arch }}.json
+            shelldemo-windows-${{ matrix.arch }}.json
           if-no-files-found: ignore
 
 
