@@ -704,3 +704,75 @@ func TestToolbarHeaderInAPane(t *testing.T) {
 		}
 	}
 }
+
+// A window whose titlebar and caption buttons are the app's
+// (ui.Decorations.Caption: Windows with app.Config.Titlebar) gets the
+// minimise, maximise (restore) and close buttons from the toolbar, where the
+// window reports them (SystemButtons) and hit-tests them; a click asks the
+// window for its action. The items start at the band's left, with no room
+// for traffic lights, and end before the buttons. The frames allocate
+// nothing.
+func TestToolbarDrawsTheCaptionButtons(t *testing.T) {
+	build := func(caption, maximized bool) (*rig, *ui.WindowAction) {
+		g := openRig(t, theme.Light, nil, func(*rig) {})
+		g.w, g.h = 1600, 400
+		ic := addChromeIcons(g)
+		var act ui.WindowAction
+		if caption {
+			g.c.SetDecorations(ui.Decorations{Caption: true, Maximized: maximized})
+			g.c.SetSystemButtons([4]float32{1600 - 3*92, 0, 1600, 92})
+		}
+		g.build = func(g *rig) {
+			tb := rexui.BeginToolbar(g.k, "Toolbar", rexui.ToolbarOpts{Style: theme.ToolbarUnified, Title: "Notes"})
+			tb.Item(ic.sidebar, "Sidebar")
+			tb.Title()
+			tb.Flexible()
+			tb.Item(ic.action, "Action")
+			tb.End()
+			if a := g.c.TakeWindowAction(); a != ui.ActionNone {
+				act = a
+			}
+		}
+		g.settle()
+		return g, &act
+	}
+	g, act := build(true, false)
+	names := [3]string{"Minimize", "Maximize", "Close"}
+	for i, n := range names {
+		f := g.frameOf(ui.RoleButton, n)
+		if want := [4]float32{(1600 - 3*92 + float32(i)*92) / 2, 0, (1600 - 3*92 + float32(i+1)*92) / 2, 46}; f != want {
+			t.Errorf("%s at %v, want %v", n, f, want)
+		}
+	}
+	if a := g.frameOf(ui.RoleButton, "Action"); a[2] > (1600-3*92)/2 {
+		t.Errorf("the last item ends at %v, over the caption buttons from %v", a[2], (1600-3*92)/2)
+	}
+	sideCaption := g.frameOf(ui.RoleButton, "Sidebar")
+	g.click(centre(g.node(ui.RoleButton, "Close")))
+	if *act != ui.ActionClose {
+		t.Errorf("a click on Close asked for %v", *act)
+	}
+	g.click(centre(g.node(ui.RoleButton, "Maximize")))
+	if *act != ui.ActionToggleMaximise {
+		t.Errorf("a click on Maximize asked for %v", *act)
+	}
+	g.in.MouseX, g.in.MouseY = centre(g.node(ui.RoleButton, "Minimize"))
+	g.frames(5)
+	if n := testing.AllocsPerRun(50, g.frame); n != 0 {
+		t.Errorf("%.1f allocations per frame with the caption buttons", n)
+	}
+
+	g, _ = build(true, true)
+	g.node(ui.RoleButton, "Restore") // maximized: maximise restores
+
+	g, _ = build(false, false)
+	g.c.Semantics(&g.sem)
+	for _, n := range g.sem.Nodes {
+		if n.Role == ui.RoleButton && string(g.sem.Text(n.Name)) == "Close" {
+			t.Error("a window with the system's caption got drawn caption buttons")
+		}
+	}
+	if side := g.frameOf(ui.RoleButton, "Sidebar"); sideCaption[0] >= side[0]-40 {
+		t.Errorf("with drawn caption buttons the first item starts at %v, with traffic lights at %v: want the band's left", sideCaption[0], side[0])
+	}
+}

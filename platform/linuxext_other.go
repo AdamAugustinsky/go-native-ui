@@ -33,21 +33,6 @@ type ResizeRegion struct {
 // SetResizeRegions does nothing off Linux.
 func (w *Window) SetResizeRegions([]ResizeRegion) {}
 
-// ClientDecorations is always false off Linux: the OS draws the decorations.
-func (w *Window) ClientDecorations() bool { return false }
-
-// Maximized is not tracked off Linux and reports false.
-func (w *Window) Maximized() bool { return false }
-
-// Minimize does nothing off Linux.
-func (w *Window) Minimize() {}
-
-// ToggleMaximize does nothing off Linux.
-func (w *Window) ToggleMaximize() {}
-
-// RequestClose does nothing off Linux.
-func (w *Window) RequestClose() {}
-
 // SetShadowInsets does nothing off Linux.
 func (w *Window) SetShadowInsets(left, top, right, bottom float32) {}
 

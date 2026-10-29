@@ -532,6 +532,10 @@ type windowSource interface {
 	RequestClose()
 }
 
+// captionSource is the part of the window that says whether the app draws
+// its caption buttons (Windows with Config.Titlebar).
+type captionSource interface{ DrawnCaption() bool }
+
 // buttonsSource is the part of the window that knows where the system draws
 // the window buttons over the content (macOS with a custom titlebar), in
 // points.
@@ -544,8 +548,10 @@ type buttonsSource interface{ SystemButtons() [4]float32 }
 //   - ui.Context.SetSystemButtons: where the OS draws the window buttons over
 //     the content (in pixels; empty where it draws none there), so that a
 //     titlebar leaves them room;
-//   - ui.Context.SetDecorations: whether the app has to draw the titlebar and
-//     whether the window is maximized (Wayland client-side decorations);
+//   - ui.Context.SetDecorations: whether the app has to draw the titlebar
+//     (Wayland client-side decorations) or the caption buttons in its own
+//     band (Windows with Config.Titlebar), and whether the window is
+//     maximized;
 //   - ui.Context.SetWindowTitle: Config.Title, for that titlebar;
 //   - the window action a titlebar button requested (close, minimise,
 //     maximise), which asked for the frame it is carried out in.
@@ -569,7 +575,11 @@ func (a *App) syncWindowFrom(win windowSource, b buttonsSource) {
 		win.ToggleMaximize()
 	}
 	a.syncTitlebar(win)
-	a.UI.SetDecorations(ui.Decorations{Client: win.ClientDecorations(), Maximized: win.Maximized()})
+	deco := ui.Decorations{Client: win.ClientDecorations(), Maximized: win.Maximized()}
+	if cs, ok := win.(captionSource); ok {
+		deco.Caption = cs.DrawnCaption()
+	}
+	a.UI.SetDecorations(deco)
 	a.UI.SetWindowTitle(a.cfg.Title)
 	var r [4]float32
 	if b != nil {
