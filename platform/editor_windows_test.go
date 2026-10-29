@@ -326,6 +326,12 @@ func TestEditorPasteRouting(t *testing.T) {
 // A real composition through IMM with Microsoft's Japanese IME (P5): marked
 // text while composing, then committed.
 func TestEditorIMEComposition(t *testing.T) {
+	// A composition lasts while the editor has the focus: another process's
+	// window taking the foreground commits it at once ("marked false",
+	// "xあ", focus 0x0, 40835027812 attempt 1 on amd64). The test holds the
+	// activation and tries the composition again, up to three times, only
+	// when the editor lost the focus meanwhile.
+	testlock.Hold(t, "activation")
 	w, e := newTestEditor(t, EditorOptions{})
 	user := win32.LoadSystem("user32.dll")
 	imm := win32.LoadSystem("imm32.dll")
@@ -345,9 +351,26 @@ func TestEditorIMEComposition(t *testing.T) {
 	typeText(e, "x")
 	pumpSignals(w, e, time.Second, EditorChanged)
 	comp := []uint16{0x3042, 0}
-	set := win32.Call(win32.Proc(imm, "ImmSetCompositionStringW"), h, 9 /* SCS_SETSTR */, uintptr(unsafe.Pointer(&comp[0])), 2, 0, 0)
-	got := pumpSignals(w, e, 2*time.Second, EditorComposing)
-	mr, marked := e.Marked()
+	var set uintptr
+	var got EditorSignals
+	var mr TextRange
+	var marked bool
+	for try := 1; ; try++ {
+		set = win32.Call(win32.Proc(imm, "ImmSetCompositionStringW"), h, 9 /* SCS_SETSTR */, uintptr(unsafe.Pointer(&comp[0])), 2, 0, 0)
+		got = pumpSignals(w, e, 2*time.Second, EditorComposing)
+		mr, marked = e.Marked()
+		lost := win32.Call(pGetFocus) != e.hwnd
+		if marked || !lost || try == 3 {
+			break
+		}
+		t.Logf("try %d: the editor lost the focus to another window (text %q); again", try, e.Text())
+		win32.Call(pImmNotifyIME, h, niCompStr, cpsCancel, 0)
+		e.SetText([]byte("x"))
+		e.SetSelection(TextSelection{1, 1})
+		e.Focus()
+		settle(w)
+		e.TakeSignals()
+	}
 	if !marked || got&EditorComposing == 0 || string(e.Text()[mr.Start:mr.End]) != "あ" {
 		n := int32(win32.Call(pImmGetCompStringW, h, gcsCompStr, 0, 0))
 		t.Fatalf("composing: signals %b, marked %v %+v, text %q, ImmSetCompositionStringW %d, comp bytes %d, IME messages %d %x, focus %#x (editor %#x): want あ marked",

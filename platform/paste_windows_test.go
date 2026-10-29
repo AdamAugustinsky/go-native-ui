@@ -60,8 +60,13 @@ func settleCopy(w *Window) {
 }
 
 // paste requests a paste and waits for its answer.
+//
+// It waits at least 5 s, whatever wait says: an answer is looked for until
+// then, and a loaded arm64 runner gave none within 1 s
+// (TestSetClipboardTextAndRequestPaste, main 40832829558).
 func pasteOf(t *testing.T, w *Window, tag uint64, wait time.Duration) (Event, string) {
 	t.Helper()
+	wait = max(wait, 5*time.Second)
 	w.RequestPaste(tag)
 	end := time.Now().Add(wait)
 	for {

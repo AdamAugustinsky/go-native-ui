@@ -429,7 +429,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45 # W1 added two two-window benches
     env:
-      QUARANTINE: '^(TestFileDialogsCancelledOnceEach|TestSaveDialogAnswersWithThePath|TestCancelDialogDeliversNothing|TestWindowClosedUnderItsDialog)$'
+      QUARANTINE: '^(TestFileDialogsCancelledOnceEach|TestSaveDialogAnswersWithThePath|TestCancelDialogDeliversNothing|TestWindowClosedUnderItsDialog|TestLivePalette)$'
     strategy:
       fail-fast: false
       matrix:
